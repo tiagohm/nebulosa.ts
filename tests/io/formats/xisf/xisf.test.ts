@@ -15,6 +15,14 @@ test('is xisf', async () => {
 	expect(isXisf(buffer)).toBeTrue()
 })
 
+test('is xisf rejects non-XISF and too-short buffers', () => {
+	expect(isXisf(Buffer.from('XISF0100'))).toBeTrue()
+	expect(isXisf(Buffer.from('XISF0099'))).toBeFalse()
+	expect(isXisf(Buffer.from('not xisf'))).toBeFalse()
+	expect(isXisf(Buffer.from('XISF'))).toBeFalse()
+	expect(isXisf(Buffer.alloc(0))).toBeFalse()
+})
+
 describe('parse header', () => {
 	test('single image', () => {
 		const XML = `<xisf version="1.0"><Image geometry="1037:706:1" sampleFormat="Float64" bounds="0:1" colorSpace="Gray" location="attachment:8192:5856976"></Image></xisf>`

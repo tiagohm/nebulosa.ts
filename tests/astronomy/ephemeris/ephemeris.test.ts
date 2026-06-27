@@ -30,6 +30,32 @@ test('circular orbit after a quarter revolution', () => {
 	expect(v[2]).toBeCloseTo(0, 14)
 })
 
+// Eccentric planar orbit with the pericenter on the +x axis (K=e, H=Q=P=0).
+// a=2, e=0.5, n=0.5: pericenter distance a(1-e)=1, apocenter distance a(1+e)=3,
+// and the vis-viva speeds n*a*sqrt((1+e)/(1-e)) and n*a*sqrt((1-e)/(1+e)).
+const ECCENTRIC = [0, 0, 0.5, 0, 0, 0] as const
+
+test('eccentric orbit at pericenter', () => {
+	const [p, v] = ellipticToRectangular(2, 0.5, ECCENTRIC, 0)
+
+	expect(p[0]).toBeCloseTo(1, 14)
+	expect(p[1]).toBeCloseTo(0, 14)
+	expect(p[2]).toBeCloseTo(0, 14)
+	expect(v[0]).toBeCloseTo(0, 14)
+	expect(v[1]).toBeCloseTo(Math.sqrt(3), 14)
+	expect(v[2]).toBeCloseTo(0, 14)
+})
+
+test('eccentric orbit at apocenter', () => {
+	// L advances by PI (half a mean revolution) to reach apocenter on the -x axis.
+	const [p, v] = ellipticToRectangular(2, 0.5, ECCENTRIC, 2 * PI)
+
+	expect(p[0]).toBeCloseTo(-3, 13)
+	expect(p[1]).toBeCloseTo(0, 13)
+	expect(v[0]).toBeCloseTo(0, 13)
+	expect(v[1]).toBeCloseTo(-Math.sqrt(1 / 3), 13)
+})
+
 test('the N and A entry points reconstruct the same a and n', () => {
 	// mu chosen so that a=2, n=0.5 are mutually consistent (mu = a^3 * n^2 = 2).
 	const byN = ellipticToRectangularN(2, [0.5, 0, 0, 0, 0, 0], 0)

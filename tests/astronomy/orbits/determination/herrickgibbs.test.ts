@@ -65,6 +65,14 @@ test('reports non-increasing time order and can throw on invalid input', () => {
 	expect(() => herrickGibbs(r1, r2, r3, t2, t1, t3, MU, { throwOnInvalid: true })).toThrow('NON_INCREASING_TIME')
 })
 
+test('throwOnInvalid does not throw for a valid short arc', () => {
+	const { r1, r2, r3, t1, t2, t3 } = sampleCircular()
+	const result = herrickGibbs(r1, r2, r3, t1, t2, t3, MU, { throwOnInvalid: true })
+
+	expect(result.diagnostics.reliable).toBeTrue()
+	expect(result.v.every(Number.isFinite)).toBeTrue()
+})
+
 test('reports invalid position norms for zero, NaN, and infinite vectors', () => {
 	const { r1, r2, r3, t1, t2, t3 } = sampleCircular()
 	const cases = [

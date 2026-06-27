@@ -16,3 +16,10 @@ test('toKilometerPerSecond', () => {
 test('toMeterPerSecond', () => {
 	expect(toMeterPerSecond(0.00045)).toBe(779.1555765625)
 })
+
+test('conversions round-trip and stay mutually consistent', () => {
+	expect(toKilometerPerSecond(kilometerPerSecond(29.78))).toBeCloseTo(29.78, 12)
+	expect(toMeterPerSecond(meterPerSecond(343))).toBeCloseTo(343, 9)
+	// One km/s is a thousand m/s.
+	expect(kilometerPerSecond(1)).toBeCloseTo(meterPerSecond(1000), 15)
+})

@@ -29,6 +29,19 @@ test('radial velocity correction equals the observer speed along its own directi
 	expect(radialVelocityCorrection(ra + PI, -dec, TIME, BARYCENTRIC, LOCATION)).toBeCloseTo(-speed, 12)
 })
 
+// Without a location the geocenter is used, so observerState returns the Earth
+// state itself; adding a site shifts the position by about one Earth radius.
+test('observerState falls back to the geocenter when no location is given', () => {
+	const geocentric = observerState(TIME, BARYCENTRIC, undefined)
+	expect(geocentric).toBe(BARYCENTRIC)
+
+	const topocentric = observerState(TIME, BARYCENTRIC, LOCATION)
+	const offset = vecLength([topocentric[0][0] - BARYCENTRIC[0][0], topocentric[0][1] - BARYCENTRIC[0][1], topocentric[0][2] - BARYCENTRIC[0][2]])
+	// La Silla sits ~6378 km from the geocenter, i.e. ~4.3e-5 AU.
+	expect(offset).toBeGreaterThan(3e-5)
+	expect(offset).toBeLessThan(5e-5)
+})
+
 // Same projection identity for the light-travel time using the observer
 // position instead of its velocity.
 test('light travel time equals the observer distance along its own direction', () => {

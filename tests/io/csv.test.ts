@@ -202,6 +202,14 @@ describe('quoted edge cases', () => {
 	test('quote can be disabled', () => {
 		expect(readCsv(`name\n"a""b"`, { skipFirstLine: false, quote: false })).toEqual([['name'], ['"a""b"']])
 	})
+
+	test('delimiter inside a quoted field is preserved', () => {
+		expect(readCsv(`"a,b","c"`, { skipFirstLine: false })).toEqual([['a,b', 'c']])
+	})
+
+	test('empty input yields no rows', () => {
+		expect(readCsv('', { skipFirstLine: false })).toEqual([])
+	})
 })
 
 test('IAU-CSN', async () => {

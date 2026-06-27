@@ -22,6 +22,27 @@ describe('del property', () => {
 		return device
 	}
 
+	test('add registers a device for lookup and close clears it', () => {
+		const manager = new CameraManager()
+		const device = setupDevice(structuredClone(DEFAULT_CAMERA))
+
+		let added: Device | undefined
+		let removed: Device | undefined
+		manager.addHandler({ added: (d) => (added = d), removed: (d) => (removed = d), updated: () => {} })
+
+		manager.add(device)
+
+		expect(manager).toHaveLength(1)
+		expect(manager.get(client, device.name)).toBe(device)
+		expect(added).toBe(device)
+
+		manager.close(client, true)
+
+		expect(manager).toHaveLength(0)
+		expect(manager.get(client, device.name)).toBeUndefined()
+		expect(removed).toBe(device)
+	})
+
 	test('CameraManager resets deleted INDI properties to defaults', () => {
 		const manager = new CameraManager()
 		const device = setupDevice(structuredClone(DEFAULT_CAMERA))

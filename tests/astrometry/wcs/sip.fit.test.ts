@@ -131,6 +131,14 @@ describe('SIP terms', () => {
 		}
 	})
 
+	test('lists the three quadratic terms for order 2', () => {
+		expect(listSipTerms(2)).toEqual([
+			{ i: 2, j: 0 },
+			{ i: 1, j: 1 },
+			{ i: 0, j: 2 },
+		])
+	})
+
 	test('uses deterministic increasing total degree order', () => {
 		expect(listSipTerms(3)).toEqual([
 			{ i: 2, j: 0 },
@@ -297,6 +305,13 @@ describe('SIP FITS header', () => {
 })
 
 describe('SIP evaluation', () => {
+	test('produces no correction at the reference pixel', () => {
+		// At CRPIX the centered coordinates are zero, so every degree>=2 term vanishes.
+		const correction = evaluateSipCorrection(WCS.CRPIX1, WCS.CRPIX2, TRUE_MODEL, WCS)
+		expect(correction.dx).toBeCloseTo(0, 14)
+		expect(correction.dy).toBeCloseTo(0, 14)
+	})
+
 	test('evaluates and applies expected correction', () => {
 		const x = 620
 		const y = 410

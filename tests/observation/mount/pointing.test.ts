@@ -105,6 +105,21 @@ test('empirical fit recovers synthetic coefficients and serialization preserves 
 	expect(prediction.dy).toBeCloseTo(roundtripPrediction.dy, 12)
 })
 
+test('an unfitted MountPointing predicts zero error and leaves coordinates unchanged', () => {
+	const pointing = new MountPointing()
+	const input = { rightAscension: hour(3), declination: deg(15), time: TIME, latitude: LATITUDE, longitude: LONGITUDE, pierSide: 'NEITHER' } as const
+
+	expect(pointing.export()).toBeUndefined()
+
+	const prediction = pointing.predictError(input)
+	expect(prediction.dx).toBe(0)
+	expect(prediction.dy).toBe(0)
+
+	const corrected = pointing.correctCoordinate(input)
+	expect(corrected.rightAscension).toBe(input.rightAscension)
+	expect(corrected.declination).toBe(input.declination)
+})
+
 test('robust empirical fit outperforms plain least squares on outlier-contaminated data', () => {
 	const featureNames = buildEmpiricalPointingFeatureNames(FEATURE_CONFIGURATION)
 	const dx = coefficientsByName(featureNames, { bias: arcmin(2), sinHA: arcmin(-1.2), cosHA: arcmin(0.7), pierSide: arcmin(0.9) })

@@ -312,6 +312,18 @@ test('natural cubic LUT interpolates exact control-point samples', () => {
 	expect(lut[64]).toBeCloseTo(0, 15)
 })
 
+test('every interpolating spline reproduces a straight line', () => {
+	const x = [0, 1, 2, 3, 4]
+	const y = x.map((xi) => 2 * xi + 1)
+
+	for (const make of [cubicHermiteSpline, akimaSpline, catmullRomSpline, naturalCubicSpline, pchip]) {
+		const s = make(x, y)
+		for (const probe of [0.5, 1.5, 2.5, 3.5]) {
+			expect(s.compute(probe)).toBeCloseTo(2 * probe + 1, 10)
+		}
+	}
+})
+
 test('invalid input', () => {
 	expect(() => spline(1, 1, [2])).toThrow('spline interval must have a finite non-zero width')
 	expect(() => spline(0, 1, [])).toThrow('spline requires at least one coefficient')

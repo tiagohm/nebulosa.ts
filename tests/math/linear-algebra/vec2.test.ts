@@ -61,6 +61,18 @@ test('longitude', () => {
 	expect(vec2Longitude([0, -1])).toBeCloseTo((3 * PI) / 2, 15)
 })
 
+test('arithmetic operations write into and return the output vector', () => {
+	const o: MutVec2 = [0, 0]
+
+	expect(vec2Plus([2, 3], [4, 5], o)).toBe(o)
+	expect(o).toEqual([6, 8])
+
+	const a: MutVec2 = [2, 3]
+	// In-place accumulation: output aliasing the first input must be correct.
+	vec2Mul(a, [2, 2], a)
+	expect(a).toEqual([4, 6])
+})
+
 test('rotate', () => {
 	const v = vec2Rot([0, 1], PI)
 	expect(v[0]).toBeCloseTo(0, 15)

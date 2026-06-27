@@ -12,6 +12,23 @@ test('is leap year', () => {
 	expect(isLeapYear(2400)).toBeTrue()
 })
 
+test('days in month', () => {
+	expect(daysInMonth(2024, 2)).toBe(29)
+	expect(daysInMonth(2023, 2)).toBe(28)
+	expect(daysInMonth(1900, 2)).toBe(28)
+	expect(daysInMonth(2000, 2)).toBe(29)
+	expect(daysInMonth(2025, 1)).toBe(31)
+	expect(daysInMonth(2025, 4)).toBe(30)
+	expect(daysInMonth(2025, 12)).toBe(31)
+})
+
+test('format and parse round-trip', () => {
+	const pattern = 'YYYY-MM-DD HH:mm:ss.SSS'
+	for (const ms of [1709210096000, 1756510498123, 0]) {
+		expect(parseTemporal(formatTemporal(ms, pattern), pattern)).toBe(ms)
+	}
+})
+
 test('temporal from date', () => {
 	expect(temporalFromDate(1970, 1, 1, 0, 0, 0, 0)).toBe(0)
 	expect(temporalFromDate(1970, 1, 1, 0, 0, 0, 1)).toBe(1)

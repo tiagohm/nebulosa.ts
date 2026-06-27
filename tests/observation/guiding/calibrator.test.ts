@@ -214,6 +214,18 @@ test('tolerates one bad frame and resumes with the same pending pulse', () => {
 	expect(step.diagnostics.raSteps).toBe(1)
 })
 
+test('fails after exceeding the bad-frame limit', () => {
+	const calibrator = new GuidingCalibrator(calibrationConfig({ maxBadFrames: 1 }))
+	expect(calibrator.processFrame(guideFrame(BASE_STARS, 0, 0)).pulse?.ra.duration).toBe(100)
+
+	// First unusable frame is tolerated; the second exceeds maxBadFrames and fails.
+	expect(calibrator.processFrame(guideFrame([], 1000, 1)).failure).toBeUndefined()
+	const step = calibrator.processFrame(guideFrame([], 2000, 2))
+
+	expect(step.failure).toBeDefined()
+	expect(step.failure!.code).toBe('bad_frame')
+})
+
 test('fails at startup when the selected guide star is too close to the edge', () => {
 	const calibrator = new GuidingCalibrator(calibrationConfig())
 	const edgeStars = starList(5, (value, index) => (index === 0 ? { ...value, x: 9, y: 9 } : value))

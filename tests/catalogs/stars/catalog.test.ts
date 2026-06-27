@@ -40,6 +40,19 @@ test('query polygon filters a convex polygon exactly', async () => {
 	expect(idsOf(await catalog.queryPolygon(polygon))).toEqual(['polygon-inside'])
 })
 
+test('query region dispatches by query kind', async () => {
+	expect(idsOf(await catalog.queryRegion({ kind: 'cone', centerRA: deg(120), centerDEC: 0, radius: deg(10) }))).toEqual(['cone-center', 'cone-edge'])
+	expect(idsOf(await catalog.queryRegion({ kind: 'box', minRA: deg(359.7), maxRA: deg(0.3), minDEC: deg(-0.1), maxDEC: deg(10) }))).toEqual(['box-east', 'box-west'])
+})
+
+test('stream region yields the same matches as the query helpers', async () => {
+	const streamed: string[] = []
+	for await (const entry of catalog.streamRegion({ kind: 'cone', centerRA: deg(120), centerDEC: 0, radius: deg(10) })) {
+		streamed.push(entry.id)
+	}
+	expect(streamed.sort()).toEqual(['cone-center', 'cone-edge'])
+})
+
 export type MockCatalogEntry = (typeof FIXTURE_STARS)[number]
 
 // Keeps the generic catalog tests focused on normalized preselection boxes.

@@ -139,3 +139,12 @@ test('uses requested velocity method and favors Herrick-Gibbs automatically for 
 	expect(herrickResult.diagnostics.methodForVelocity).toBe('herrick-gibbs')
 	expect(automaticResult.diagnostics.methodForVelocity).toBe('herrick-gibbs')
 })
+
+test('automatically selects Gibbs for long arcs', () => {
+	// An 8-day interval exceeds the Herrick-Gibbs window, so the automatic method must fall back to Gibbs.
+	const [obs1, obs2, obs3] = observations(8)
+	const automaticResult = gauss(obs1, obs2, obs3, { mu: MU })
+
+	expectFiniteState(automaticResult)
+	expect(automaticResult.diagnostics.methodForVelocity).toBe('gibbs')
+})

@@ -144,10 +144,14 @@ const isCloseTo = (decimalPlaces: number) => (a: number, b: number) => roundToNt
 const TEST_OPTIONS: TestOptions = { retry: 5, timeout: 60000 }
 
 // ASCOM Omni-Simulators
-describe.skipIf(process.platform !== 'win32' || process.env.ALPACA !== 'true')('client', async () => {
+const ALPACA_CLIENT_ENABLED = process.platform === 'win32' && process.env.ALPACA === 'true'
+
+describe.skipIf(!ALPACA_CLIENT_ENABLED)('client', async () => {
 	const client = new AlpacaClient('http://localhost:32323', { handler }, deviceProvider)
 
-	if (!(await client.start())) return
+	// Avoid the network start() when the suite is skipped; otherwise it logs a
+	// ConnectionRefused even though no tests run.
+	if (!ALPACA_CLIENT_ENABLED || !(await client.start())) return
 
 	test(
 		'camera',

@@ -186,6 +186,23 @@ test('bayer', () => {
 	expect(image!.raw).toEqual(new Float32Array([0.1, 0.5, 0.7, 0.11, 0.14, 0.18, 0.2, 0.24]))
 })
 
+test('clone produces an independent pixel buffer', () => {
+	const image: Image = {
+		header: { NAXIS: 2 },
+		metadata: { width: 2, height: 2, channels: 1, stride: 2, pixelCount: 4, strideInBytes: 8, pixelSizeInBytes: 4, bitpix: Bitpix.FLOAT, bayer: undefined },
+		raw: new Float32Array([0.1, 0.2, 0.3, 0.4]),
+	}
+
+	const copy = clone(image)
+
+	expect(copy.raw).not.toBe(image.raw)
+	expect(copy.raw).toEqual(image.raw)
+
+	// Mutating the clone must not affect the original.
+	copy.raw[0] = 0.9
+	expect(image.raw[0]).toBeCloseTo(0.1, 8)
+})
+
 test('stf', () => readImageTransformAndSave((i) => stf(i, 0.005), 'stf', '82161af2eac053ad688a161d4e1fc6da'), 5000)
 
 test('auto stf', () => readImageTransformAndSave((i) => stf(i, ...adf(i)), 'stf-auto', 'c89314c7f303599568199398d7312372'), 5000)

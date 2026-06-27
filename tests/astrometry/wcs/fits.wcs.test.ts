@@ -247,4 +247,36 @@ describe('tan unproject', () => {
 	test('matches the native WCS inverse projection for SIP headers', () => {
 		expectTanMatchesNativeUnproject(TAN_SIP_HEADER, 255, 255, 10)
 	})
+
+	test('rejects non-TAN axis types', () => {
+		expect(tanUnproject({ ...TAN_HEADER, CTYPE2: 'DEC--SIN' }, TAN_HEADER.CRPIX1, TAN_HEADER.CRPIX2)).toBeUndefined()
+	})
+
+	test('returns no result for a singular CD matrix', () => {
+		expect(tanUnproject({ ...TAN_HEADER, CD1_1: 1e-3, CD1_2: 2e-3, CD2_1: 1e-3, CD2_2: 2e-3 }, 100, 100)).toBeUndefined()
+	})
+})
+
+describe('tan project/unproject round-trip', () => {
+	// project(unproject(x, y)) must recover the original pixel without relying on the native binding.
+	const cases = [
+		{ name: 'direct CD', header: TAN_HEADER, x: 512.25, y: 180.75, precision: 9 },
+		{ name: 'PC plus CDELT', header: TAN_PC_HEADER, x: 620.25, y: 455.75, precision: 9 },
+		{ name: 'CROTA2', header: TAN_CROTA_HEADER, x: 7012.5, y: 3101.25, precision: 8 },
+		// SIP round-trip is limited by the AP/BP coefficients only approximating the A/B forward inverse.
+		{ name: 'SIP', header: TAN_SIP_HEADER, x: 200.5, y: 210.25, precision: 3 },
+	] as const
+
+	for (const entry of cases) {
+		test(entry.name, () => {
+			const sky = tanUnproject(entry.header, entry.x, entry.y)
+			expect(sky).toBeDefined()
+			if (!sky) return
+			const pixel = tanProject(entry.header, sky[0], sky[1])
+			expect(pixel).toBeDefined()
+			if (!pixel) return
+			expect(pixel[0]).toBeCloseTo(entry.x, entry.precision)
+			expect(pixel[1]).toBeCloseTo(entry.y, entry.precision)
+		})
+	}
 })

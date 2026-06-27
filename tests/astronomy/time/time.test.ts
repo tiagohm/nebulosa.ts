@@ -128,6 +128,23 @@ test('time convert to tcb', () => {
 	expectTimeClose(timeConvert(t, Timescale.TCB), tcb(t))
 })
 
+test('time convert dispatches to the matching scale converter', () => {
+	const t = timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.TT)
+	const converters = [
+		[Timescale.UT1, ut1],
+		[Timescale.UTC, utc],
+		[Timescale.TAI, tai],
+		[Timescale.TT, tt],
+		[Timescale.TCG, tcg],
+		[Timescale.TDB, tdb],
+		[Timescale.TCB, tcb],
+	] as const
+
+	for (const [scale, converter] of converters) {
+		expectTimeClose(timeConvert(t, scale), converter(t))
+	}
+})
+
 test('to date', () => {
 	expect(timeToDate(timeYMDHMS(2020, 1, 1, 12, 0, 0))).toEqual([2020, 1, 1, 12, 0, 0, 0])
 	expect(timeToDate(timeYMDHMS(2020, 1, 1, 23, 59, 59))).toEqual([2020, 1, 1, 23, 59, 59, 0])

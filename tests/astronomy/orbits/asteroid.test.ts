@@ -122,6 +122,17 @@ test('hyperbolic mean anomaly', () => {
 	expect(() => KeplerOrbit.trueAnomaly(1.5, 1.5, 0.2, 0.3, 0.4, 2 * Math.PI - 0.2, t)).not.toThrow()
 })
 
+test('elliptic eccentric and mean anomaly conversions are consistent', () => {
+	const e = 0.3
+	const E = 0.7
+	// True anomaly corresponding to eccentric anomaly E for an ellipse.
+	const v = 2 * Math.atan2(Math.sqrt(1 + e) * Math.sin(E / 2), Math.sqrt(1 - e) * Math.cos(E / 2))
+
+	expect(eccentricAnomaly(v, e)).toBeCloseTo(E, 13)
+	// Kepler's equation for the elliptic case: M = E - e*sin(E).
+	expect(meanAnomaly(E, e)).toBeCloseTo(E - e * Math.sin(E), 14)
+})
+
 test('parabolic mean anomaly', () => {
 	const p = 2
 	const v = 1.2

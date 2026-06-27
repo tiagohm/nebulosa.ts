@@ -70,13 +70,14 @@ test('rms of', () => {
 	expect(rmsOf([])).toBeNaN()
 })
 
-test('descending comparator alias matches the canonical spelling', () => {
+test('descending comparator is the reverse of the ascending comparator', () => {
 	for (const [a, b] of [
 		[1, 2],
 		[2, 1],
 		[3, 3],
 	] as const) {
-		expect(NumberComparatorDescending(a, b)).toBe(NumberComparatorDescending(a, b))
+		// Descending order is the ascending comparator with swapped arguments.
+		expect(Math.sign(NumberComparatorDescending(a, b))).toBe(Math.sign(NumberComparator(b, a)))
 	}
 })
 

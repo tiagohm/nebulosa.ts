@@ -3,8 +3,10 @@ import { AlpacaApi } from '../../../src/devices/alpaca/api'
 
 const alpaca = new AlpacaApi('http://localhost:32323')
 
-const configuredDevices = await alpaca.management.configuredDevices()
+// Only reach the network when explicitly enabled; otherwise a missing server
+// would throw a ConnectionRefused at import and pollute the test run.
 const isAlpacaTestEnabled = process.env.ALPACA === 'true'
+const configuredDevices = isAlpacaTestEnabled ? await alpaca.management.configuredDevices() : undefined
 const filterWheel = isAlpacaTestEnabled && configuredDevices?.find((e) => e.DeviceType === 'filterwheel')
 const focuser = isAlpacaTestEnabled && configuredDevices?.find((e) => e.DeviceType === 'focuser')
 const coverCalibrator = isAlpacaTestEnabled && configuredDevices?.find((e) => e.DeviceType === 'covercalibrator')

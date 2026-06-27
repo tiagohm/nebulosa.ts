@@ -189,6 +189,15 @@ test('matrix vector products validate vector length', () => {
 	expect(() => m.mulTransposedVec([1])).toThrow('vector length must match matrix rows')
 })
 
+test('matrix vector products compute the expected results', () => {
+	const m = new Matrix(2, 3, [1, 2, 3, 4, 5, 6])
+
+	// M·v with v in column space (length 3).
+	expect(Array.from(m.mulVec([1, 2, 3]))).toEqual([14, 32])
+	// Mᵀ·v with v in row space (length 2): column sums weighted by v.
+	expect(Array.from(m.mulTransposedVec([1, 1]))).toEqual([5, 7, 9])
+})
+
 test('symmetric', () => {
 	const a = Matrix.square(3, [1, 2, 3, 2, 4, 5, 3, 5, 6])
 	const b = a.transposed

@@ -71,6 +71,19 @@ test('interpolates RA wrap through zero without crossing pi', () => {
 	expect(Math.min(sky[0], TAU - sky[0])).toBeLessThan(deg(0.1))
 })
 
+test('interpolation passes exactly through interior grid nodes', () => {
+	// Node (col, row) maps to pixel (col*scaleX, row*scaleY); a smooth interpolator
+	// must reproduce the sampled value there for both bilinear and Catmull-Rom.
+	const { ra, dec } = makeGrid(4, 4, (col, row) => [deg(10 + col), deg(-5 + row)])
+
+	for (const interpolation of ['bilinear', 'catmullRom'] as const) {
+		const interpolator = new AstrometricInterpolator(ra, dec, 4, 4, 10, 20, { interpolation })
+		const sky = interpolator.pixelToSky(20, 40) // node col=2, row=2
+		expect(sky[0]).toBeCloseTo(deg(12), 12)
+		expect(sky[1]).toBeCloseTo(deg(-3), 12)
+	}
+})
+
 test('border queries clamp instead of extrapolating', () => {
 	const { ra, dec } = makeGrid(3, 3, (col, row) => [deg(20 + 10 * col), deg(-10 + 5 * row)])
 	const interpolator = new AstrometricInterpolator(ra, dec, 3, 3, 10, 10, { interpolation: 'nearest' })

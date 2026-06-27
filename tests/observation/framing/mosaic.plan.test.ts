@@ -85,6 +85,12 @@ test('single panel is centered and footprint uses the shared plane', () => {
 	expectPlanePointClose(projectToPlane(basis, plan.panels[0].footprint.bottomLeft), -halfWidth, -halfHeight)
 })
 
+test('overlap defaults to zero when omitted', () => {
+	const plan = planMosaic(defaultInput())
+	expect(plan.overlap.x).toBe(0)
+	expect(plan.overlap.y).toBe(0)
+})
+
 test('overlap determines counts and coverage on the shared plane', () => {
 	const plan = planMosaic(defaultInput({ region: { width: deg(4), height: deg(2) }, overlap: { x: 0.1, y: 0.1 } }))
 	const coverageWidth = planeSize(plan.coverage.width)

@@ -1,6 +1,22 @@
 import { expect, test } from 'bun:test'
 import { PI, TAU } from '../../../src/core/constants'
-import { amod, divmod, floorDiv, fract, inverseLerp, isNearlyEqual, pmod, remap, roundToNearestWholeNumber, roundToNthDecimal, signed8, signed16, smoothstep, twoProduct, twoSum } from '../../../src/math/numerical/math'
+import { amod, clamp, divmod, floorDiv, fract, inverseLerp, isNearlyEqual, lerp, pmod, remap, roundToNearestWholeNumber, roundToNthDecimal, signed8, signed16, smoothstep, twoProduct, twoSum } from '../../../src/math/numerical/math'
+
+test('clamp', () => {
+	expect(clamp(5, 0, 10)).toBe(5)
+	expect(clamp(-1, 0, 10)).toBe(0)
+	expect(clamp(11, 0, 10)).toBe(10)
+	expect(clamp(0, 0, 10)).toBe(0)
+	expect(clamp(10, 0, 10)).toBe(10)
+})
+
+test('lerp', () => {
+	expect(lerp(10, 20, 0)).toBe(10)
+	expect(lerp(10, 20, 1)).toBe(20)
+	expect(lerp(10, 20, 0.5)).toBeCloseTo(15, 15)
+	// inverseLerp is the inverse of lerp.
+	expect(inverseLerp(10, 20, lerp(10, 20, 0.25))).toBeCloseTo(0.25, 15)
+})
 
 test('pmod', () => {
 	expect(pmod(3.16, PI)).toBeCloseTo(0.018407346410207026, 15)

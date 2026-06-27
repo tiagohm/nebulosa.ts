@@ -182,6 +182,18 @@ describe('generate astronomical image noise', () => {
 		expect(ra.stats).toEqual(rb.stats)
 	})
 
+	test('different seeds produce different noise realizations', () => {
+		const width = 32
+		const height = 32
+		const a = new Float64Array(width * height)
+		const b = new Float64Array(width * height)
+
+		generateNoiseImage(a, width, height, 1, baseConfig({ seed: 1, sensor: { readNoise: 3 } }))
+		generateNoiseImage(b, width, height, 1, baseConfig({ seed: 2, sensor: { readNoise: 3 } }))
+
+		expect(a).not.toEqual(b)
+	})
+
 	test('validates the buffer length against dimensions and layout', () => {
 		expect(() => generateNoiseImage(new Float64Array(3), 2, 2, 1, baseConfig())).toThrow()
 		expect(() => generateNoiseImage(new Float64Array(4), 2, 2, 3, { ...baseConfig() })).toThrow()

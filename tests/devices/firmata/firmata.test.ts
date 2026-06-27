@@ -458,6 +458,15 @@ describe('command encoding', () => {
 	})
 })
 
+test('packed 7-bit encoding round-trips arbitrary byte payloads', () => {
+	for (const data of [Buffer.from([]), Buffer.from([0x00]), Buffer.from([0xff]), Buffer.from([0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0]), Buffer.from(Array.from({ length: 33 }, (_, i) => (i * 37 + 11) & 0xff))]) {
+		const encoded = encodePacked7Bit(data)
+		// Each encoded byte must fit in 7 bits (MSB clear) to be MIDI/Firmata-safe.
+		for (const byte of encoded) expect(byte & 0x80).toBe(0)
+		expect(decodePacked7Bit(Buffer.from(encoded), 0, encoded.length)).toEqual(data)
+	}
+})
+
 test('BMP180 calculate true temperature & pressure', () => {
 	const bmp180 = new BMP180(undefined as never, 0)
 	expect(bmp180.calculateTrueTemperature(27898)).toBe(15)

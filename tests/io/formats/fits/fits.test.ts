@@ -16,6 +16,15 @@ test('is fits', async () => {
 	expect(isFits(buffer)).toBeTrue()
 })
 
+test('is fits rejects non-FITS and too-short buffers', () => {
+	// Recognized by the SIMPLE magic.
+	expect(isFits(Buffer.from('SIMPLE'))).toBeTrue()
+	// Wrong magic, shorter than the magic, and empty are all rejected.
+	expect(isFits(Buffer.from('this is not a fits file at all really'))).toBeFalse()
+	expect(isFits(Buffer.from('SIMPL'))).toBeFalse()
+	expect(isFits(Buffer.alloc(0))).toBeFalse()
+})
+
 describe('read', () => {
 	for (const bitpix of BITPIXES) {
 		for (const channel of CHANNELS) {

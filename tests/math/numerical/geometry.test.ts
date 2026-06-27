@@ -63,6 +63,15 @@ test('intersect line and sphere', () => {
 
 	// A degenerate zero-length endpoint has no direction.
 	expect(intersectLineAndSphere([0, 0, 0], [0, 0, 0], 1)).toBeFalse()
+
+	// A ray running parallel to the x-axis but offset beyond the radius never reaches the sphere.
+	expect(intersectLineAndSphere([1, 0, 0], [0, 5, 0], 1)).toBeFalse()
+
+	// A tangent ray touches the sphere at a single (doubled) distance.
+	const tangent = intersectLineAndSphere([1, 0, 0], [0, 1, 0], 1)
+	expect(tangent).not.toBeFalse()
+	tangent && expect(tangent[0]).toBeCloseTo(0, 12)
+	tangent && expect(tangent[1]).toBeCloseTo(0, 12)
 })
 
 test('spherical separation stays stable near the pole', () => {

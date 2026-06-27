@@ -76,6 +76,7 @@ test('computes guide-assistant motion metrics and arc-second conversions', () =>
 	expect(result.motion.totalRmsArcsec).toBeCloseTo(result.motion.totalRmsPx * 2, 8)
 	expect(result.meanSnr).toBeCloseTo(20, 8)
 	expect(result.meanStarMass).toBeCloseTo(3000, 8)
+	expect(result.meanHfd).toBeCloseTo(3, 8)
 })
 
 test('uses calibrated axis errors when image motion is in a rotated frame', () => {

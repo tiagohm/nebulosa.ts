@@ -146,6 +146,12 @@ class FakeImu extends FakeListenable<FakeImu> implements Accelerometer, Gyroscop
 	gz = 0
 }
 
+class FakePureAccelerometer extends FakeListenable<FakePureAccelerometer> implements Accelerometer {
+	ax = 0
+	ay = 0
+	az = 0
+}
+
 class FakeMagnetometer extends FakeListenable<FakeMagnetometer> implements Magnetometer {
 	x = 0
 	y = 0
@@ -511,6 +517,22 @@ describe('firmata indi client', () => {
 		mag.z = 0.4
 		await client.createPeripheral(mag).connect()
 		expect(events.find((e) => e.tag === 'defNumber' && e.device === 'HMC5883L' && e.name === 'MAGNETIC_FIELD')?.value).toBe(0.2)
+	})
+
+	test('a pure accelerometer exposes only ACCELERATION', async () => {
+		const firmata = new FakeFirmata()
+		const { events, handler } = createRecorder()
+		using client = new FirmataIndiClient(firmata as never, 'Board', { handler })
+
+		const accel = new FakePureAccelerometer('ADXL345', firmata as never)
+		accel.ax = 9.81
+		const device = client.createPeripheral(accel)
+		await device.connect()
+
+		const defs = events.filter((e) => e.tag === 'defNumber' && e.device === 'ADXL345').map((e) => e.name)
+		expect(defs).toContain('ACCELERATION')
+		expect(defs).not.toContain('ANGULAR_VELOCITY')
+		expect(events.find((e) => e.tag === 'defNumber' && e.device === 'ADXL345' && e.name === 'ACCELERATION')?.value).toBe(9.81)
 	})
 
 	test('real-time clock publishes a writable TIME vector and routes writes to update/sync', async () => {

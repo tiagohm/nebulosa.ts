@@ -68,6 +68,12 @@ test('transpose', () => {
 	expect(n).toEqual([1, 3, 2, 4])
 })
 
+test('transpose in place swaps the off-diagonal without corruption', () => {
+	const m: MutMat2 = [1, 2, 3, 4]
+	expect(mat2Transpose(m, m)).toBe(m)
+	expect(m).toEqual([1, 3, 2, 4])
+})
+
 test('flip x', () => {
 	const m = [1, 2, 3, 4] as const
 	const n = mat2FlipX(m)

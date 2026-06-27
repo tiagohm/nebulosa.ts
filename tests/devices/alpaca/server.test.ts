@@ -7,6 +7,22 @@ import { saveAndCompareHash } from '../../util/image.util'
 
 await downloadPerTag('alpaca.server')
 
+test('image bytes metadata header encodes version, rank, and dimensions', async () => {
+	// Mono (NAXIS3 absent) -> rank 2, third dimension 0; color -> rank 3, third dimension 3.
+	for (const channel of [1, 3]) {
+		const buffer = await Bun.file(`data/NGC3372-16.${channel}.fit`).arrayBuffer()
+		const bytes = makeImageBytesFromFits(Buffer.from(buffer))
+
+		expect(bytes.readInt32LE(0)).toBe(1) // metadata version
+		expect(bytes.readInt32LE(4)).toBe(0) // error number
+		expect(bytes.readInt32LE(16)).toBe(44) // data start offset (44 for 16-bit)
+		expect(bytes.readInt32LE(28)).toBe(channel === 1 ? 2 : 3) // rank
+		expect(bytes.readInt32LE(32)).toBe(1037) // first dimension
+		expect(bytes.readInt32LE(36)).toBe(706) // second dimension
+		expect(bytes.readInt32LE(40)).toBe(channel === 1 ? 0 : 3) // third dimension
+	}
+})
+
 test('make image bytes from fits', async () => {
 	const jpeg = new Jpeg()
 	const output = Buffer.allocUnsafe(jpeg.estimateBufferSize(706, 1037, '4:4:4'))

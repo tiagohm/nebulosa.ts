@@ -31,6 +31,8 @@ test('recovers the middle velocity for a circular orbit', () => {
 	expect(vecDistance(result.v, expected)).toBeLessThan(1e-14)
 	expect(result.diagnostics.reliability).toBe('good')
 	expect(result.diagnostics.warnings).toHaveLength(0)
+	// A perfectly coplanar circular arc must report a negligible coplanarity error.
+	expect(result.diagnostics.coplanarityError).toBeLessThan(1e-12)
 })
 
 test('recovers the middle velocity for an elliptical orbit sample', () => {

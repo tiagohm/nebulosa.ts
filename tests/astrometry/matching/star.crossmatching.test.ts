@@ -252,6 +252,45 @@ describe('image-based star crossmatching', () => {
 		expect(result.solution?.fieldRadius).toBeGreaterThan(0)
 	})
 
+	test('fails explicitly when there are no detected stars', async () => {
+		const camera = { width: 1200, height: 900 }
+		const result = await crossMatchStars([], new MockCatalog([{ id: 0, epoch: 2000, rightAscension: deg(10), declination: deg(10), magnitude: 8 }]), { centerRA: deg(10), centerDEC: deg(10), radius: deg(1), camera })
+
+		expect(result.success).toBeFalse()
+		expect(result.failureReason).toBe('no detected stars')
+		expect(result.matches).toHaveLength(0)
+		expect(result.summary.totalDetected).toBe(0)
+		expect(result.summary.matchedCount).toBe(0)
+	})
+
+	test('rejects invalid right ascension, declination, radius, and camera geometry', () => {
+		const catalog = new MockCatalog([])
+		const camera = { width: 1200, height: 900 }
+		const detectedStars: readonly DetectedStar[] = [{ x: 200, y: 250, flux: 2000, snr: 20, hfd: 2.2 }]
+
+		expect(crossMatchStars(detectedStars, catalog, { centerRA: Number.NaN, centerDEC: deg(10), radius: deg(1), camera })).rejects.toThrow()
+		expect(crossMatchStars(detectedStars, catalog, { centerRA: deg(10), centerDEC: deg(120), radius: deg(1), camera })).rejects.toThrow()
+		expect(crossMatchStars(detectedStars, catalog, { centerRA: deg(10), centerDEC: deg(10), radius: 0, camera })).rejects.toThrow()
+		expect(crossMatchStars(detectedStars, catalog, { centerRA: deg(10), centerDEC: deg(10), radius: deg(120), camera })).rejects.toThrow()
+		expect(crossMatchStars(detectedStars, catalog, { centerRA: deg(10), centerDEC: deg(10), radius: deg(1), camera: { width: 0, height: 900 } })).rejects.toThrow()
+		expect(crossMatchStars(detectedStars, catalog, { centerRA: deg(10), centerDEC: deg(10), radius: deg(1), camera: { width: 1200, height: 900, pixelSize: -1, focalLength: 400 } })).rejects.toThrow()
+	})
+
+	test('non-mirrored geometry reports mirrored as false with consistent summary counts', async () => {
+		const scenario = createScenario({ seed: 11, centerRA: deg(75), centerDEC: deg(-30), queryOffset: arcsec(160), queryOffsetAngle: 1.1 })
+		const result = await crossMatchStars(scenario.detectedStars, new MockCatalog(scenario.catalogStars), { centerRA: scenario.queryCenterRA, centerDEC: scenario.queryCenterDEC, radius: scenario.queryRadius, camera: scenario.camera })
+
+		expect(result.success).toBeTrue()
+		expect(result.solution?.mirrored).toBeFalse()
+		expect(result.solution!.scale).toBeGreaterThan(0)
+		expect(result.solution!.rotation).toBeGreaterThanOrEqual(-Math.PI)
+		expect(result.solution!.rotation).toBeLessThanOrEqual(Math.PI)
+		expect(result.summary.totalDetected).toBe(scenario.detectedStars.length)
+		expect(result.summary.matchedCount + result.summary.unmatchedCount).toBe(result.summary.totalDetected)
+		expect(result.summary.inlierCount).toBeGreaterThan(0)
+		expect(result.summary.catalogCount).toBe(scenario.catalogStars.length)
+	})
+
 	test('fails explicitly when the catalog query is empty', async () => {
 		const camera = { width: 1200, height: 900 }
 		const detectedStars: readonly DetectedStar[] = [{ x: 200, y: 250, flux: 2000, snr: 20, hfd: 2.2 }]

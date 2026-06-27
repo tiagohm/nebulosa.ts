@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test'
 import { PI, PIOVERTWO } from '../../../src/core/constants'
 import { deg } from '../../../src/math/units/angle'
 // oxfmt-ignore
-import { type MutVec3, type Vec3, vecAngle, vecCross, vecDiv, vecDivScalar, vecDot, vecLatitude, vecLongitude, vecMinus, vecMinusScalar, vecMul, vecMulScalar, vecNegate, vecNormalize, vecNormalizeMut, vecPlane, vecPlus, vecPlusScalar, vecPolarAngle, vecRotateByRodrigues, vecRotX, vecRotY, vecRotZ, vecXAxis, vecYAxis, vecZAxis } from '../../../src/math/linear-algebra/vec3'
+import { type MutVec3, type Vec3, vecAngle, vecCross, vecDistance, vecDiv, vecDivScalar, vecDot, vecLatitude, vecLength, vecLongitude, vecMinus, vecMinusScalar, vecMul, vecMulScalar, vecNegate, vecNormalize, vecNormalizeMut, vecPlane, vecPlus, vecPlusScalar, vecPolarAngle, vecRotateByRodrigues, vecRotX, vecRotY, vecRotZ, vecXAxis, vecYAxis, vecZAxis } from '../../../src/math/linear-algebra/vec3'
 
 test('angle', () => {
 	expect(vecAngle(vecXAxis(), vecYAxis())).toBe(PIOVERTWO)
@@ -28,6 +28,18 @@ test('normalize', () => {
 	expect(v[0]).toBeCloseTo(0.6)
 	expect(v[1]).toBeCloseTo(0.8)
 	expect(v[2]).toBeCloseTo(0)
+})
+
+test('length', () => {
+	expect(vecLength([3, 4, 0])).toBeCloseTo(5, 15)
+	expect(vecLength([0, 0, 0])).toBe(0)
+	expect(vecLength([2, 3, 6])).toBeCloseTo(7, 15)
+})
+
+test('distance', () => {
+	expect(vecDistance([0, 0, 0], [3, 4, 0])).toBeCloseTo(5, 15)
+	expect(vecDistance([1, 2, 3], [1, 2, 3])).toBe(0)
+	expect(vecDistance([1, 0, 0], [-1, 0, 0])).toBeCloseTo(2, 15)
 })
 
 test('plus', () => {

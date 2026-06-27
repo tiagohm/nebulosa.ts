@@ -26,6 +26,24 @@ test('histogram maximum returns the last populated bin', () => {
 	expect(hist.maximum).toEqual([1, 5])
 })
 
+test('histogram minimum reports the first populated bin count before the maximum', () => {
+	const hist = new Histogram([0, 3, 5], 2)
+	// Value component is the first populated bin's count; its position precedes the maximum's.
+	expect(hist.minimum[1]).toBe(3)
+	expect(hist.maximum[1]).toBe(5)
+	expect(hist.minimum[0]).toBeLessThan(hist.maximum[0])
+})
+
+test('histogram cdf is monotonically non-decreasing', () => {
+	const hist = new Histogram([2, 1, 3, 0, 4], 2)
+	let previous = -1
+	for (let q = 0; q <= 1.0001; q += 0.05) {
+		const value = hist.cdf(q)
+		expect(value).toBeGreaterThanOrEqual(previous)
+		previous = value
+	}
+})
+
 test('empty histogram statistics fall back to zero', () => {
 	const hist = new Histogram([], 0)
 	expect(hist.mode).toEqual([0, 0])

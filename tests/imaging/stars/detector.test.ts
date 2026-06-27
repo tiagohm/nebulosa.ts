@@ -121,6 +121,15 @@ test('measure star photometry from image aperture', () => {
 	expect(measureStarPhotometry(image, x, y, 0)).toEqual([0, 0, 0, 0])
 })
 
+test('detect stars finds nothing in a flat image', () => {
+	const width = 128
+	const height = 128
+	const raw = new Float32Array(width * height).fill(0.1)
+	const image: Image = { raw, header: {}, metadata: { width, height, channels: 1, pixelCount: width * height, pixelSizeInBytes: 4, bitpix: -32, stride: width, strideInBytes: width * 4, bayer: undefined } }
+
+	expect(detectStars(image, { maxStars: 100 })).toHaveLength(0)
+})
+
 describe('detect stars I', () => {
 	const width = 400
 	const height = 200

@@ -16,3 +16,15 @@ test('toFahrenheit', () => {
 test('toKelvin', () => {
 	expect(toKelvin(81.5)).toBe(354.65)
 })
+
+test('known reference points', () => {
+	// 0 °C is 32 °F and 273.15 K; -40 °C equals -40 °F.
+	expect(toFahrenheit(0)).toBeCloseTo(32, 12)
+	expect(toKelvin(0)).toBeCloseTo(273.15, 12)
+	expect(toFahrenheit(-40)).toBeCloseTo(-40, 12)
+})
+
+test('conversions round-trip', () => {
+	expect(fahrenheit(toFahrenheit(21.3))).toBeCloseTo(21.3, 12)
+	expect(kelvin(toKelvin(21.3))).toBeCloseTo(21.3, 12)
+})

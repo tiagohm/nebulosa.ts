@@ -57,6 +57,24 @@ test('comet', () => {
 	expect(halley!.perihelionDayFraction).toBeCloseTo(0.8266, 14)
 })
 
+test('empty lines yield no orbit', () => {
+	expect(mpcorb('')).toBeUndefined()
+	expect(mpcorbComet('')).toBeUndefined()
+})
+
+test('pack and unpack date round-trip', () => {
+	for (const [year, month, day] of [
+		[1996, 1, 1],
+		[1996, 9, 30],
+		[1996, 10, 1],
+		[2001, 10, 22],
+		[2024, 12, 31],
+		[2055, 5, 5],
+	] as const) {
+		expect(unpackDate(packDate(year, month, day))).toEqual([year, month, day])
+	}
+})
+
 test('unpack date', () => {
 	expect(unpackDate('J9611')).toEqual([1996, 1, 1])
 	expect(unpackDate('J961A')).toEqual([1996, 1, 10])
