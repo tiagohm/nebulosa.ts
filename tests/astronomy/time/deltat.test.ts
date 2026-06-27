@@ -66,3 +66,20 @@ test('espenak-meeus 2006', () => {
 	expect(deltaTByEspenakMeeus2006(2150)).toBeCloseTo(-20 + 32 * 3.3 * 3.3, 6)
 	expect(deltaTByEspenakMeeus2006(-700)).toBeCloseTo(-20 + 32 * ((-700 - 1820) / 100) ** 2, 6)
 })
+
+test('espenak-meeus 2006 has only small jumps across every segment boundary', () => {
+	// The piecewise polynomials nearly join at each boundary year; the published fit
+	// leaves only sub-second discontinuities. This exercises all 14 segments and
+	// guards against a wrong coefficient producing a large jump.
+	const boundaries = [-500, 500, 1600, 1700, 1800, 1860, 1900, 1920, 1941, 1961, 1986, 2005, 2050, 2150]
+	const epsilon = 1e-4
+
+	for (const boundary of boundaries) {
+		const left = deltaTByEspenakMeeus2006(boundary - epsilon)
+		const right = deltaTByEspenakMeeus2006(boundary + epsilon)
+		expect(Number.isFinite(left)).toBeTrue()
+		expect(Number.isFinite(right)).toBeTrue()
+		// The largest published join discontinuity is ~0.25 s near year 1600.
+		expect(Math.abs(left - right)).toBeLessThan(0.3)
+	}
+})
