@@ -327,6 +327,56 @@ describe('transform fitting', () => {
 	})
 })
 
+describe('transform helper edge cases', () => {
+	test('inverting a degenerate transform returns undefined', () => {
+		expect(invertSimilarityTransform(similarity(0, 0, 10, 20))).toBeUndefined()
+		expect(invertTransform(similarity(0, 0, 10, 20))).toBeUndefined()
+		// Singular affine (both rows collinear -> zero determinant).
+		expect(invertTransform(affine(2, 1, 5, 4, 2, 7))).toBeUndefined()
+	})
+
+	test('fits reject mismatched lengths and insufficient point counts', () => {
+		const a = [
+			{ x: 0, y: 0 },
+			{ x: 10, y: 0 },
+		]
+		const b = [{ x: 0, y: 0 }]
+		expect(fitSimilarityTransform(a, b)).toBeUndefined()
+		expect(fitSimilarityTransform([a[0]], [b[0]])).toBeUndefined()
+		expect(fitAffineTransform([a[0], a[1]], [a[0], a[1]])).toBeUndefined()
+	})
+
+	test('affine fit of perfectly collinear correspondences is rejected', () => {
+		const collinear = [
+			{ x: 0, y: 0 },
+			{ x: 10, y: 0 },
+			{ x: 20, y: 0 },
+			{ x: 30, y: 0 },
+		]
+		expect(fitAffineTransform(collinear, collinear)).toBeUndefined()
+	})
+
+	test('applyTransformToStars preserves non-positional star metadata', () => {
+		const stars: readonly SyntheticStar[] = [{ id: 7, x: 12, y: 34, snr: 19, flux: 4200, hfd: 2.6 }]
+		const moved = applyTransformToStars(stars, similarity(1, 0, 100, -50))
+		expect(moved[0].x).toBeCloseTo(112, 10)
+		expect(moved[0].y).toBeCloseTo(-16, 10)
+		expect(moved[0].id).toBe(7)
+		expect(moved[0].snr).toBe(19)
+		expect(moved[0].flux).toBe(4200)
+		expect(moved[0].hfd).toBe(2.6)
+	})
+
+	test('matchStars reports failure when there are too few prepared stars', () => {
+		const reference: readonly DetectedStar[] = [{ x: 10, y: 10, snr: 10, flux: 1000, hfd: 2 }]
+		const current: readonly DetectedStar[] = [{ x: 20, y: 20, snr: 10, flux: 1000, hfd: 2 }]
+		const result = matchStars(reference, current, { minStars: 3 })
+		expect(result.success).toBeFalse()
+		expect(result.failureReason).toBeDefined()
+		expect(resultTransform(result)).toBeUndefined()
+	})
+})
+
 describe('star matching synthetic registration', () => {
 	test('recovers pure translation', () => {
 		const scenario = generateScenario({ seed: 1, transform: similarity(1, 0, 48, -26), noiseStd: 0.08 })
