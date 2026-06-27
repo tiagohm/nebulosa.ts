@@ -75,6 +75,14 @@ test('cross', () => {
 
 	expect(vecDot(vecCross([1, 0, 0], [0, 1, 0]), [1, 0, 0])).toBe(0)
 	expect(vecDot(vecCross([1, 0, 0], [0, 1, 0]), [0, 1, 0])).toBe(0)
+
+	const a: MutVec3 = [1, 0, 0]
+	expect(vecCross(a, [0, 1, 0], a)).toBe(a)
+	expect(a).toEqual([0, 0, 1])
+
+	const b: MutVec3 = [0, 1, 0]
+	expect(vecCross([1, 0, 0], b, b)).toBe(b)
+	expect(b).toEqual([0, 0, 1])
 })
 
 test('vecPolarAngle', () => {
