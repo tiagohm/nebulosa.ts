@@ -25,6 +25,11 @@ test('icrs defaults to a one-kiloparsec distance', () => {
 	expect(vecLength(p)).toBeCloseTo(ONE_KILOPARSEC, 8)
 })
 
+test('icrs to fk5 preserves vector length', () => {
+	const p = icrs(deg(10.625), deg(41.2), 3)
+	expect(vecLength(icrsToFk5(p))).toBeCloseTo(vecLength(p), 14)
+})
+
 test('icrs to fk5 and back round-trips', () => {
 	const original = icrs(deg(10.625), deg(41.2), 1)
 	const back = fk5ToIcrs(icrsToFk5(original))
