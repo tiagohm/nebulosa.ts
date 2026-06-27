@@ -293,6 +293,17 @@ test('regression score', () => {
 	expect(score.rmsd).toBeLessThan(1)
 })
 
+test('regression score is perfect for an exact linear fit', () => {
+	const x = [0, 1, 2, 3, 4]
+	const y = x.map((xi) => 3 * xi + 1)
+	const regression = simpleLinearRegression(x, y)
+	const score = regressionScore(regression)
+
+	expect(score.r).toBeCloseTo(1, 12)
+	expect(score.r2).toBeCloseTo(1, 12)
+	expect(score.rmsd).toBeCloseTo(0, 12)
+})
+
 test('chebyshev least squares fits basis coefficients', () => {
 	const expected = new Float64Array([1.25, -0.5, 0.125, 0.2])
 	const x = new Float64Array([-1, -0.7, -0.2, 0.15, 0.55, 1])
