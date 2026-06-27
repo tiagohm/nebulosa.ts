@@ -28,6 +28,11 @@ test('compress/decompress supports empty arrays', () => {
 	expect(decompressRice(compressed, decompressed)).toBe(decompressed)
 })
 
+test('rejects non-positive Rice block sizes', () => {
+	expect(() => compressRice(new Int16Array([1]), 0)).toThrow('block size must be a positive integer')
+	expect(() => decompressRice(new Uint8Array([0, 0, 0]), new Int16Array(1), 0)).toThrow('block size must be a positive integer')
+})
+
 test('matches low-entropy 8-bit reference bytes', () => {
 	const input = new Int8Array([5, 5, 5, 5])
 	const compressed = compressRice(input)
