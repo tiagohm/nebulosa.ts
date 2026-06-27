@@ -92,6 +92,34 @@ test('sets target coordinates and uses them for sync and goto', async () => {
 	expect(slewed[0][1]).toBeCloseTo(dms(-4, 5, 6), 12)
 })
 
+test('keeps the previous target coordinates after invalid coordinate writes', async () => {
+	const synced: number[][] = []
+	const slewed: number[][] = []
+
+	await withLx200Server(
+		async (client) => {
+			const response = readUntil(client, (value) => value === '111100')
+
+			client.write('#:Sr01:02:03##:Sd-04*05:06##:Srxx##:Sdxx##:CM##:MS#', 'ascii')
+
+			expect(await response).toBe('111100')
+		},
+		makeHandler({
+			sync: (server, rightAscension, declination) => {
+				synced.push([rightAscension, declination])
+			},
+			goto: (server, rightAscension, declination) => {
+				slewed.push([rightAscension, declination])
+			},
+		}),
+	)
+
+	expect(synced[0][0]).toBeCloseTo(hms(1, 2, 3), 12)
+	expect(synced[0][1]).toBeCloseTo(dms(-4, 5, 6), 12)
+	expect(slewed[0][0]).toBeCloseTo(hms(1, 2, 3), 12)
+	expect(slewed[0][1]).toBeCloseTo(dms(-4, 5, 6), 12)
+})
+
 test('sets site longitude and latitude', async () => {
 	const longitudes: number[] = []
 	const latitudes: number[] = []
