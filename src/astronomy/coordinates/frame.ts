@@ -1,7 +1,7 @@
 import { EARTH_DRDT_TIMES_RT_MATRIX, ECLIPTIC_B1950_MATRIX, ECLIPTIC_J2000_MATRIX, FK4_MATRIX, FK5_MATRIX, GALACTIC_MATRIX, ICRS_MATRIX, MEAN_EQUATOR_AND_EQUINOX_AT_B1950_MATRIX, SUPERGALACTIC_MATRIX } from '../../core/constants'
 import { type Mat3, matIdentity, matMul, matMulTranspose, matMulVec, type MutMat3, matRotX, matRotZ, matTransposeMulVec } from '../../math/linear-algebra/mat3'
 import { type MutVec3, type Vec3, vecMinus, vecPlus } from '../../math/linear-algebra/vec3'
-import { cirsRotationMatrix, gcrsToItrsRotationMatrix, greenwichApparentSiderealTime, greenwichMeanSiderealTime, instantaneousEarthRotationMatrix, pmMatrix, precessionNutationMatrix, type Time, Timescale, timeJulianYear, trueObliquity, tt } from '../time/time'
+import { cirsRotationMatrix, gcrsToItrsRotationMatrix, greenwichApparentSiderealTime, greenwichMeanSiderealTime, instantaneousEarthRotationMatrix, meanObliquity, pmMatrix, precessionNutationMatrix, type Time, Timescale, timeJulianYear, trueObliquity, tt } from '../time/time'
 import type { PositionAndVelocity } from './astrometry'
 import type { CartesianCoordinate } from './coordinate'
 import { eraBp06 } from './erfa/erfa'
@@ -88,6 +88,17 @@ export const MEAN_EQUATOR_AND_EQUINOX_OF_DATE: Frame = {
 	rotationAt: (time) => {
 		const t = tt(time)
 		return eraBp06(t.day, t.fraction)[2]
+	},
+}
+
+// Mean ecliptic and equinox of date: the mean equator/equinox of date rotated by
+// the mean obliquity, i.e. precession only and no nutation. This is the mean
+// counterpart of ECLIPTIC (which is the true ecliptic of date).
+export const MEAN_ECLIPTIC_OF_DATE: Frame = {
+	rotationAt: (time) => {
+		const t = tt(time)
+		const m = matRotX(meanObliquity(time))
+		return matMul(m, eraBp06(t.day, t.fraction)[2], m)
 	},
 }
 

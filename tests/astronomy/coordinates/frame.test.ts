@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test'
 import type { PositionAndVelocity } from '../../../src/astronomy/coordinates/astrometry'
 import { eraC2s, eraS2c } from '../../../src/astronomy/coordinates/erfa/erfa'
 // oxfmt-ignore
-import { CIRS, ecliptic, ECLIPTIC_J2000, eclipticJ2000, FK5, frameAt, frameRotationAt, frameToBase, frameToFrame, GALACTIC, galactic, ICRS, ITRS, ITRS_INSTANTANEOUS, itrfToTeme, itrfToTemeByGmst, MEAN_EQUATOR_AND_EQUINOX_OF_DATE, precessionMatrixCapitaine, supergalactic, TEME, temeToItrf, temeToItrfByGmst, TIRS, TRUE_EQUATOR_AND_EQUINOX_OF_DATE } from '../../../src/astronomy/coordinates/frame'
+import { CIRS, ecliptic, ECLIPTIC_J2000, eclipticJ2000, FK5, frameAt, frameRotationAt, frameToBase, frameToFrame, GALACTIC, galactic, ICRS, ITRS, ITRS_INSTANTANEOUS, itrfToTeme, itrfToTemeByGmst, MEAN_ECLIPTIC_OF_DATE, MEAN_EQUATOR_AND_EQUINOX_OF_DATE, precessionMatrixCapitaine, supergalactic, TEME, temeToItrf, temeToItrfByGmst, TIRS, TRUE_EQUATOR_AND_EQUINOX_OF_DATE } from '../../../src/astronomy/coordinates/frame'
 import { Timescale, timeYMDHMS } from '../../../src/astronomy/time/time'
 import { ANGVEL_PER_DAY } from '../../../src/core/constants'
 import { type Mat3, matMul, matMulTranspose, matMulVec, matRotX, matRotZ } from '../../../src/math/linear-algebra/mat3'
@@ -312,4 +312,20 @@ test('TEME frame reproduces temeToItrf and round trips', () => {
 		expect(back[0][i]).toBeCloseTo(pv[0][i], 9)
 		expect(back[1][i]).toBeCloseTo(pv[1][i], 9)
 	}
+})
+
+test('mean and true ecliptic of date differ only by nutation', () => {
+	expectOrthonormal(MEAN_ECLIPTIC_OF_DATE.rotationAt(TIME))
+
+	// Round trip through the new frame.
+	const back = frameToFrame(frameToFrame(XYZ, ICRS, MEAN_ECLIPTIC_OF_DATE, TIME), MEAN_ECLIPTIC_OF_DATE, ICRS, TIME)
+	for (let i = 0; i < 3; i++) expect(back[i]).toBeCloseTo(XYZ[i], 12)
+
+	// The mean (precession-only) and true (precession+nutation) ecliptics of date
+	// must agree to well under the ~20 arcsec nutation scale, but not be equal.
+	const mean = eraC2s(...frameToFrame(XYZ, ICRS, MEAN_ECLIPTIC_OF_DATE, TIME))
+	const trueOfDate = eraC2s(...ecliptic(XYZ, TIME))
+	const separation = Math.abs(mean[0] - trueOfDate[0]) + Math.abs(mean[1] - trueOfDate[1])
+	expect(separation).toBeGreaterThan(0)
+	expect(separation).toBeLessThan(2e-4) // ~40 arcsec
 })
