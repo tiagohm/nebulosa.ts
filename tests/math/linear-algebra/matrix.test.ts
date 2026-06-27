@@ -106,6 +106,13 @@ describe('determinant', () => {
 	})
 })
 
+test('invert supports output aliasing the source matrix', () => {
+	const m = new Matrix(2, 2, [1, 2, 3, 4])
+
+	expect(m.invert(m)).toBe(m)
+	expect(m.toArray()).toEqual([-2, 1, 1.5, -0.5])
+})
+
 test('negate', () => {
 	const m = Matrix.square(3, [1, 2, 3, 4, 5, 6, 7, 8, 9])
 	expect(m.negate().toArray()).toEqual([-1, -2, -3, -4, -5, -6, -7, -8, -9])
