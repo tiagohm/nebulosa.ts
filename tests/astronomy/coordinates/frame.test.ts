@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test'
 import type { PositionAndVelocity } from '../../../src/astronomy/coordinates/astrometry'
 import { eraC2s, eraS2c } from '../../../src/astronomy/coordinates/erfa/erfa'
 // oxfmt-ignore
-import { CIRS, ecliptic, ECLIPTIC_J2000, eclipticJ2000, FK5, frameAt, frameRotationAt, frameToBase, frameToFrame, GALACTIC, galactic, ICRS, ITRS, ITRS_INSTANTANEOUS, itrfToTeme, itrfToTemeByGmst, MEAN_EQUATOR_AND_EQUINOX_OF_DATE, precessionMatrixCapitaine, supergalactic, temeToItrf, temeToItrfByGmst, TIRS, TRUE_EQUATOR_AND_EQUINOX_OF_DATE } from '../../../src/astronomy/coordinates/frame'
+import { CIRS, ecliptic, ECLIPTIC_J2000, eclipticJ2000, FK5, frameAt, frameRotationAt, frameToBase, frameToFrame, GALACTIC, galactic, ICRS, ITRS, ITRS_INSTANTANEOUS, itrfToTeme, itrfToTemeByGmst, MEAN_EQUATOR_AND_EQUINOX_OF_DATE, precessionMatrixCapitaine, supergalactic, TEME, temeToItrf, temeToItrfByGmst, TIRS, TRUE_EQUATOR_AND_EQUINOX_OF_DATE } from '../../../src/astronomy/coordinates/frame'
 import { Timescale, timeYMDHMS } from '../../../src/astronomy/time/time'
 import { ANGVEL_PER_DAY } from '../../../src/core/constants'
 import { type Mat3, matMul, matMulTranspose, matMulVec, matRotX, matRotZ } from '../../../src/math/linear-algebra/mat3'
@@ -291,5 +291,25 @@ test('ITRS_INSTANTANEOUS matches ITRS closely but uses the exact drift term', ()
 	for (let i = 0; i < 3; i++) {
 		expect(back[0][i]).toBeCloseTo(state[0][i], 12)
 		expect(back[1][i]).toBeCloseTo(state[1][i], 12)
+	}
+})
+
+test('TEME frame reproduces temeToItrf and round trips', () => {
+	const pv: PositionAndVelocity = [
+		[4123, -5234, 3045],
+		[2.1, 3.4, -1.2],
+	]
+
+	// The position must match the trusted temeToItrf chain (same Rz(GMST)·PM rotation).
+	const viaFrame = frameToFrame(pv, TEME, ITRS, TIME)
+	const viaFn = temeToItrf(pv, TIME)
+	for (let i = 0; i < 3; i++) expect(viaFrame[0][i]).toBeCloseTo(viaFn[0][i], 6)
+
+	// TEME is a valid orientation and the state round trips through it.
+	expectOrthonormal(TEME.rotationAt(TIME))
+	const back = frameToFrame(frameToFrame(pv, TEME, ITRS, TIME), ITRS, TEME, TIME)
+	for (let i = 0; i < 3; i++) {
+		expect(back[0][i]).toBeCloseTo(pv[0][i], 9)
+		expect(back[1][i]).toBeCloseTo(pv[1][i], 9)
 	}
 })

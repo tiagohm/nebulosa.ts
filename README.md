@@ -554,7 +554,7 @@ fk5ToIcrs(pv) // Convert FK5 (J2000) to ICRS by removing the frame bias
 
 // Centralized frames (all implement the Frame interface):
 // ICRS, FK4, FK5, fk5Frame(equinox), GALACTIC, SUPERGALACTIC,
-// ECLIPTIC, ECLIPTIC_J2000, ECLIPTIC_B1950, CIRS, TIRS, ITRS,
+// ECLIPTIC, ECLIPTIC_J2000, ECLIPTIC_B1950, CIRS, TIRS, TEME, ITRS,
 // ITRS_INSTANTANEOUS (exact velocity drag term),
 // MEAN_EQUATOR_AND_EQUINOX_OF_DATE, TRUE_EQUATOR_AND_EQUINOX_OF_DATE,
 // MEAN_EQUATOR_AND_EQUINOX_AT_B1950

@@ -111,6 +111,21 @@ export const TIRS: Frame = {
 	},
 }
 
+// The True Equator, Mean Equinox (TEME) frame used by the SGP4 satellite model.
+// It shares the true equator of date but uses the mean (not true) equinox, so it
+// differs from TRUE_EQUATOR_AND_EQUINOX_OF_DATE by the equation of the equinoxes
+// (GAST − GMST) about the pole:  base → TEME = Rz(GAST − GMST) · PN. TEME is
+// quasi-inertial (it does not rotate with the Earth) so there is no velocity drag
+// term. Convert an SGP4 state to ITRS with frameToFrame(pv, TEME, ITRS, time) —
+// which reproduces temeToItrf — or to GCRS with frameToFrame(pv, TEME, ICRS, time).
+export const TEME: Frame = {
+	rotationAt: (time) => {
+		// Equation of the equinoxes folds the mean equinox into the true-of-date frame.
+		const m = matRotZ(greenwichApparentSiderealTime(time) - greenwichMeanSiderealTime(time))
+		return matMul(m, precessionNutationMatrix(time), m)
+	},
+}
+
 // Computes the precession matrix from one time to another, per IAU 2006.
 export function precessionMatrixCapitaine(from: Time, to: Time) {
 	const t0 = tt(from)
