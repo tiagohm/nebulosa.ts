@@ -561,6 +561,19 @@ fk5ToIcrs(pv) // Convert FK5 (J2000) to ICRS by removing the frame bias
 frameToFrame(icrs(ra, dec), ICRS, GALACTIC, time)
 ```
 
+### Affine Frame ![](bun.webp) ![](browser.webp)
+
+```ts
+// Frames with a shifted/moving origin (require absolute AU positions, not directions)
+affineFromBase(pv, frame, time, o?) // base -> affine: p_f = R · (p − O), v_f = R · (v − Ȯ)
+affineToBase(pv, frame, time, o?) // inverse of affineFromBase
+affineToAffine(pv, from, to, time, o?) // compose through the base (reduces to frameToFrame with no origin)
+
+BARYCENTRIC_ECLIPTIC // = ECLIPTIC_J2000 as an AffineFrame (origin at the barycenter)
+const helio = heliocentricEclipticFrame((time) => sun(time)) // origin at the Sun (inject the ephemeris)
+const [p, v] = affineToAffine(icrs, ICRS, helio, time)
+```
+
 ### Geometry ![](bun.webp) ![](browser.webp)
 
 ```ts
