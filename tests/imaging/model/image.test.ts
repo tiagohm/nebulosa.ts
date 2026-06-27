@@ -40,6 +40,24 @@ test('reads a color JPEG as luminance when no pixel format is given', () => {
 	}
 })
 
+test('reads a JPEG into an explicit 64-bit raw buffer', () => {
+	const width = 4
+	const height = 4
+	const gray = new Uint8Array(width * height)
+	for (let i = 0; i < gray.length; i++) gray[i] = i * 16
+	const jpeg = new Jpeg().compress(gray, width, height, 'GRAY', 100, 'GRAY')!
+
+	const image = readImageFromJpeg(jpeg, 64)!
+
+	expect(image.raw).toBeInstanceOf(Float64Array)
+	expect(image.raw.length).toBe(width * height)
+	expect(image.metadata).toMatchObject({ width, height, channels: 1, pixelCount: width * height, bitpix: 8 })
+	for (const value of image.raw) {
+		expect(value).toBeGreaterThanOrEqual(0)
+		expect(value).toBeLessThanOrEqual(1)
+	}
+})
+
 test('read image from fits', async () => {
 	for (const bitpix of BITPIXES) {
 		for (const channel of CHANNELS) {
