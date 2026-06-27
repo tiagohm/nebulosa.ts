@@ -97,6 +97,24 @@ test('mt19937', () => {
 	expect(random()).toBeCloseTo(0.566655429778620601, 14)
 })
 
+test('every PRNG yields values within [0, 1)', () => {
+	for (const { name, random } of makeRandomCases(12345)) {
+		for (let i = 0; i < 5000; i++) {
+			const value = random()
+			expect(value, name).toBeGreaterThanOrEqual(0)
+			expect(value, name).toBeLessThan(1)
+		}
+	}
+})
+
+test('a seeded PRNG reproduces its sequence', () => {
+	for (const seed of [0, 1, 1066, 0x7fffffff]) {
+		const a = mt19937(seed)
+		const b = mt19937(seed)
+		for (let i = 0; i < 100; i++) expect(a()).toBe(b())
+	}
+})
+
 test('uniform', () => {
 	expectMean((random) => uniform(random), 0.5)
 })
