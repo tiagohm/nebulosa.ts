@@ -321,3 +321,7 @@ test('chebyshev least squares fits basis coefficients', () => {
 
 	expect(regression.predict(0.37)).toBeCloseTo(chebyshevSeries(0.37, expected), 12)
 })
+
+test('chebyshev least squares rejects undersampled fits', () => {
+	expect(() => chebyshevLeastSquares(new Float64Array([-1, 1]), new Float64Array([0, 1]), 2)).toThrow('chebyshev fit requires at least 3 samples')
+})
