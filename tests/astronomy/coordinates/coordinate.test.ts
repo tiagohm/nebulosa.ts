@@ -59,6 +59,14 @@ test('equatorial to ecliptic', () => {
 	expect(formatDEC(latitude)).toBe('-39 36 39.12')
 })
 
+test('current equatorial and ecliptic coordinates round-trip', () => {
+	const [longitude, latitude] = equatorialToEcliptic(...SIRIUS, TIME)
+	const [rightAscension, declination] = eclipticToEquatorial(longitude, latitude, TIME)
+
+	expect(formatRA(rightAscension)).toBe(formatRA(SIRIUS[0]))
+	expect(formatDEC(declination)).toBe(formatDEC(SIRIUS[1]))
+})
+
 test('ecliptic to equatorial', () => {
 	const [rightAscension, declination] = eclipticToEquatorial(parseAngle('284 35 58.8')!, parseAngle('-00 00 02.1')!, TIME) // Sun
 
