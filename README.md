@@ -572,6 +572,9 @@ affineToAffine(pv, from, to, time, o?) // compose through the base (reduces to f
 BARYCENTRIC_ECLIPTIC // = ECLIPTIC_J2000 as an AffineFrame (origin at the barycenter)
 const helio = heliocentricEclipticFrame((time) => sun(time)) // origin at the Sun (inject the ephemeris)
 const [p, v] = affineToAffine(icrs, ICRS, helio, time)
+
+const gc = galactocentricFrame() // GALACTOCENTRIC_DEFAULTS (Astropy 'latest' parameters)
+const galactocentric = affineFromBase(icrs, gc, time) // origin at the Galactic center
 ```
 
 ### Geometry ![](bun.webp) ![](browser.webp)

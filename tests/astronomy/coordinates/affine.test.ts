@@ -1,8 +1,10 @@
 import { expect, test } from 'bun:test'
-import { affineFromBase, affineToAffine, affineToBase, type AffineFrame, BARYCENTRIC_ECLIPTIC, heliocentricEclipticFrame } from '../../../src/astronomy/coordinates/affine'
+import { affineFromBase, affineToAffine, affineToBase, type AffineFrame, BARYCENTRIC_ECLIPTIC, galactocentricFrame, GALACTOCENTRIC_DEFAULTS, heliocentricEclipticFrame } from '../../../src/astronomy/coordinates/affine'
 import type { PositionAndVelocity } from '../../../src/astronomy/coordinates/astrometry'
+import { eraS2p } from '../../../src/astronomy/coordinates/erfa/erfa'
 import { ECLIPTIC_J2000, frameToFrame, GALACTIC, ICRS } from '../../../src/astronomy/coordinates/frame'
 import { Timescale, timeYMDHMS } from '../../../src/astronomy/time/time'
+import { ONE_KILOPARSEC } from '../../../src/core/constants'
 import { type MutVec3, vecMinus } from '../../../src/math/linear-algebra/vec3'
 
 const TIME = timeYMDHMS(2025, 9, 28, 12, 0, 0, Timescale.UTC)
@@ -102,5 +104,61 @@ test('affine transforms write into an output parameter and run in place', () => 
 	for (let i = 0; i < 3; i++) {
 		expect(inPlace[0][i]).toBeCloseTo(fresh[0][i], 15)
 		expect(inPlace[1][i]).toBeCloseTo(fresh[1][i], 15)
+	}
+})
+
+// Reference values from Astropy 7.x (galactocentric_frame_defaults 'latest'):
+// ICRS cartesian (kpc) -> Galactocentric cartesian (kpc). See scripts in commit
+// message; parameters: galcen (266.4051, -28.936175) deg, distance 8.122 kpc,
+// z_sun 20.8 pc, roll 0, roll0 58.5986320306 deg.
+const GALACTOCENTRIC_CASES: ReadonlyArray<readonly [icrs: readonly [number, number, number], gc: readonly [number, number, number]]> = [
+	[
+		[0, 0, 0],
+		[-8.1219733661223, 0, 0.020800000000000003],
+	],
+	[
+		[1, 2, 3],
+		[-11.374949439876023, 1.8453994199476227, 0.1332617465754201],
+	],
+	[
+		[-5, 0.5, 8],
+		[-12.134790609735038, 3.2828875918419254, 7.918264582300739],
+	],
+	[
+		[8, -1, 0.2],
+		[-7.801331481981943, 4.547111112291164, -6.63209180090982],
+	],
+	[
+		[-2.5, -7, 4],
+		[-3.7923054921705672, 4.866451274989415, 5.389377846080299],
+	],
+]
+
+test('galactocentric frame matches Astropy reference values', () => {
+	const gc = galactocentricFrame()
+	for (const [icrsKpc, expectedKpc] of GALACTOCENTRIC_CASES) {
+		const icrs: MutVec3 = [icrsKpc[0] * ONE_KILOPARSEC, icrsKpc[1] * ONE_KILOPARSEC, icrsKpc[2] * ONE_KILOPARSEC]
+		const out = affineFromBase(icrs, gc, TIME)
+		for (let i = 0; i < 3; i++) expect(out[i] / ONE_KILOPARSEC).toBeCloseTo(expectedKpc[i], 9)
+	}
+})
+
+test('galactocentric maps the Galactic center to the origin and round trips', () => {
+	const gc = galactocentricFrame()
+
+	// A point at the Galactic center direction and distance lands at the origin.
+	const atCenter = eraS2p(GALACTOCENTRIC_DEFAULTS.galcen[0], GALACTOCENTRIC_DEFAULTS.galcen[1], GALACTOCENTRIC_DEFAULTS.galcenDistance)
+	const origin = affineFromBase(atCenter, gc, TIME)
+	for (let i = 0; i < 3; i++) expect(origin[i] / ONE_KILOPARSEC).toBeCloseTo(0, 9)
+
+	// Full state round trip (position only; velocity zero is fine for orientation).
+	const s: PositionAndVelocity = [
+		[3 * ONE_KILOPARSEC, -4 * ONE_KILOPARSEC, 2 * ONE_KILOPARSEC],
+		[1e-6, -2e-6, 3e-6],
+	]
+	const back = affineToAffine(affineToAffine(s, ICRS, gc, TIME), gc, ICRS, TIME)
+	for (let i = 0; i < 3; i++) {
+		expect(back[0][i] / ONE_KILOPARSEC).toBeCloseTo(s[0][i] / ONE_KILOPARSEC, 9)
+		expect(back[1][i]).toBeCloseTo(s[1][i], 12)
 	}
 })

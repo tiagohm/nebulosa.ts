@@ -1,7 +1,11 @@
-import { matMulVec, matTransposeMulVec } from '../../math/linear-algebra/mat3'
+import { ONE_KILOPARSEC, ONE_PARSEC } from '../../core/constants'
+import { type Mat3, matMul, matMulVec, matRotX, matRotY, matRotZ, matTransposeMulVec } from '../../math/linear-algebra/mat3'
 import { type MutVec3, type Vec3, vecMinus, vecPlus } from '../../math/linear-algebra/vec3'
+import { type Angle, deg } from '../../math/units/angle'
+import type { Distance } from '../../math/units/distance'
 import type { Time } from '../time/time'
 import type { PositionAndVelocity } from './astrometry'
+import { eraS2p } from './erfa/erfa'
 import { ECLIPTIC_J2000, type Frame } from './frame'
 
 // A frame that may sit at a shifted, possibly moving origin relative to the
@@ -123,4 +127,47 @@ export function heliocentricEclipticFrame(sunAt: (time: Time) => Readonly<Positi
 		originAt: (time) => sunAt(time)[0],
 		originVelocityAt: (time) => sunAt(time)[1],
 	}
+}
+
+// The roll that aligns the Galactic plane with the Galactocentric x-z plane,
+// matching Astropy's Galactocentric.get_roll0 (Reid & Brunthaler 2004).
+const GALACTOCENTRIC_ROLL0 = deg(58.5986320306)
+
+// Parameters defining the Galactocentric frame. Angles are radians; distances AU.
+export interface GalactocentricParameters {
+	// ICRS right ascension and declination of the Galactic center.
+	galcen: readonly [Angle, Angle]
+	// Distance from the Sun to the Galactic center.
+	galcenDistance: Distance
+	// Height of the Sun above the Galactic midplane (positive toward the north pole).
+	zSun: Distance
+	// Extra roll about the Sun–Galactic-center line.
+	roll: Angle
+}
+
+// Astropy "latest" (v4.0) Galactocentric defaults: GRAVITY Collaboration 2018
+// distance, Reid & Brunthaler 2004 Galactic-center direction, and Bennett & Bovy
+// 2019 Sun height.
+export const GALACTOCENTRIC_DEFAULTS: GalactocentricParameters = {
+	galcen: [deg(266.4051), deg(-28.936175)],
+	galcenDistance: 8.122 * ONE_KILOPARSEC,
+	zSun: 20.8 * ONE_PARSEC,
+	roll: 0,
+}
+
+// Builds the Galactocentric frame: origin at the Galactic center, x toward the
+// center, z toward the north Galactic pole. The construction mirrors Astropy:
+// rotate ICRS so x lines up with the center (Rz(ra) then Ry(−dec)), roll about
+// that axis, then tilt about y by arcsin(zSun/distance) for the Sun's height.
+// Requires absolute AU positions, as with every affine frame. Constant in time.
+export function galactocentricFrame(params: GalactocentricParameters = GALACTOCENTRIC_DEFAULTS): AffineFrame {
+	const [ra, dec] = params.galcen
+	const d = params.galcenDistance
+	// ICRS -> Galactic-aligned axes, with the extra roll about the center line.
+	const r = matMul(matMul(matRotX(GALACTOCENTRIC_ROLL0 - params.roll), matRotY(-dec)), matRotZ(ra))
+	// Tilt for the Sun's height above the midplane.
+	const a: Mat3 = matMul(matRotY(-Math.asin(params.zSun / d)), r)
+	// Galactic center position in the base (ICRS) frame: distance along its direction.
+	const origin = eraS2p(ra, dec, d)
+	return { rotationAt: () => a, originAt: () => origin }
 }
