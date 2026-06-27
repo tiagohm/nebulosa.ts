@@ -558,6 +558,11 @@ describe('lock position without frames', () => {
 		expect(harness.client.findStar()).toBeUndefined()
 	})
 
+	test('getStarImage returns undefined while no frame has been decoded', () => {
+		connect(harness)
+		expect(harness.client.getStarImage()).toBeUndefined()
+	})
+
 	test('setLockPosition rejects non-finite coordinates', () => {
 		connect(harness)
 		expect(harness.client.setLockPosition(Number.NaN, 10)).toBeFalse()
