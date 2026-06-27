@@ -371,6 +371,24 @@ test('ellipsoidal projection options select the eccentricity model and inverse t
 	expect(unprojected.y).toBeCloseTo(latitude, 12)
 })
 
+test('project and unproject reuse the provided output point', () => {
+	const projection = new Gnomonic(deg(10), deg(-20))
+	const projectOut: Point = { x: 0, y: 0 }
+	const projected = projection.project(deg(11.5), deg(-19.25), projectOut)
+
+	expect(projected).toBe(projectOut)
+	if (projected === undefined) return
+
+	const unprojectOut: Point = { x: 0, y: 0 }
+	const unprojected = projection.unproject(projected.x, projected.y, unprojectOut)
+
+	expect(unprojected).toBe(unprojectOut)
+	if (unprojected === undefined) return
+
+	expect(unprojected.x).toBeCloseTo(deg(11.5), 11)
+	expect(unprojected.y).toBeCloseTo(deg(-19.25), 11)
+})
+
 test('batch projection reuses the provided output buffer', () => {
 	const out: Point[] = []
 	const projected = projectMany(
