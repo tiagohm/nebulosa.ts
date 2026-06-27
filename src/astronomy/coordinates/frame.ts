@@ -1,10 +1,10 @@
 import { EARTH_DRDT_TIMES_RT_MATRIX, ECLIPTIC_B1950_MATRIX, ECLIPTIC_J2000_MATRIX, FK4_MATRIX, FK5_MATRIX, GALACTIC_MATRIX, ICRS_MATRIX, MEAN_EQUATOR_AND_EQUINOX_AT_B1950_MATRIX, SUPERGALACTIC_MATRIX } from '../../core/constants'
 import { type Mat3, matIdentity, matMul, matMulTranspose, matMulVec, matRotX, matRotZ, matTransposeMulVec } from '../../math/linear-algebra/mat3'
 import { type MutVec3, type Vec3, vecMinus, vecPlus } from '../../math/linear-algebra/vec3'
-import { gcrsToItrsRotationMatrix, greenwichMeanSiderealTime, pmMatrix, precessionNutationMatrix, type Time, Timescale, timeJulianYear, trueObliquity, tt } from '../time/time'
+import { gcrsToItrsRotationMatrix, greenwichApparentSiderealTime, greenwichMeanSiderealTime, pmMatrix, precessionNutationMatrix, type Time, Timescale, timeJulianYear, trueObliquity, tt } from '../time/time'
 import type { PositionAndVelocity } from './astrometry'
 import type { CartesianCoordinate } from './coordinate'
-import { eraBp06 } from './erfa/erfa'
+import { eraBp06, eraC2i06a } from './erfa/erfa'
 
 export type CoordinateFrame = CartesianCoordinate
 
@@ -78,6 +78,42 @@ export const ECLIPTIC: Frame = {
 		const m = matIdentity()
 		return matMul(matRotX(trueObliquity(time), m), precessionNutationMatrix(time), m)
 	},
+}
+
+// The dynamical frame of the Earth's mean equator and equinox of date
+// (precession only, no nutation), measured from the base via the IAU 2006
+// bias-precession matrix (eraBp06 rbp). Use TRUE_EQUATOR_AND_EQUINOX_OF_DATE
+// when nutation is required.
+export const MEAN_EQUATOR_AND_EQUINOX_OF_DATE: Frame = {
+	rotationAt: (time) => {
+		const t = tt(time)
+		return eraBp06(t.day, t.fraction)[2]
+	},
+}
+
+// The Celestial Intermediate Reference System (CIRS): the geometric, CIO-based
+// equator-of-date frame, given by the celestial-to-intermediate rotation
+// (eraC2i06a). This is the pure rotation from the base to CIRS and does NOT
+// include aberration, light deflection, parallax, or refraction; for the
+// apparent place use the transforms in astrometry.ts.
+export const CIRS: Frame = {
+	rotationAt: (time) => {
+		const t = tt(time)
+		return eraC2i06a(t.day, t.fraction)
+	},
+}
+
+// Computes the TIRS rotation matrix at time.
+export function tirsRotationAt(time: Time) {
+	const m = matRotZ(greenwichApparentSiderealTime(time))
+	return matMul(m, precessionNutationMatrix(time), m)
+}
+
+// The Terrestrial Intermediate Reference System (TIRS): Earth-fixed apart from
+// polar motion (true equator and equinox of date rotated by GAST about the
+// pole). ITRS adds the polar-motion wobble on top of this.
+export const TIRS: Frame = {
+	rotationAt: tirsRotationAt,
 }
 
 // Computes the precession matrix from one time to another, per IAU 2006.
@@ -165,6 +201,42 @@ export function frameAt<T extends Readonly<PositionAndVelocity> | Vec3>(pv: T, f
 
 		return [p, v] as never
 	}
+}
+
+// Rotates a position (and optional velocity) from `frame` back into the base
+// (GCRS/ICRS-oriented) frame. This is the exact inverse of `frameAt`.
+//
+// For position:  p_base = Rᵀ · p_frame.
+// For a rotating frame (R = R(t)) the velocity must undo the drag term first:
+//   v_frame = R · v_base + (dR/dt) · p_base = R · v_base + W · p_frame,
+//   so v_base = Rᵀ · (v_frame − W · p_frame),  with W = dRdtTimesRtAt.
+// Returns a freshly allocated vector/state; the inputs are not mutated.
+export function frameToBase<T extends Readonly<PositionAndVelocity> | Vec3>(pv: T, frame: Frame, time: Time): T extends Vec3 ? Vec3 : PositionAndVelocity {
+	const r = frame.rotationAt(time)
+
+	if (pv.length === 3) {
+		return matTransposeMulVec(r, pv) as never
+	}
+
+	const p = matTransposeMulVec(r, pv[0])
+
+	if (frame.dRdtTimesRtAt) {
+		// Undo the rotating-frame drag term before removing the rotation.
+		const v = vecMinus(pv[1], matMulVec(frame.dRdtTimesRtAt(time), pv[0]))
+		return [p, matTransposeMulVec(r, v, v)] as never
+	}
+
+	return [p, matTransposeMulVec(r, pv[1])] as never
+}
+
+// Transforms a position (and optional velocity) from one frame into another,
+// composing through the common base:  pv_to = R_to · R_fromᵀ · pv_from.
+// Rotating frames (e.g. ITRS) contribute their angular-velocity term on both
+// legs. Handles only orientation; origin shifts (barycentric/geocentric/
+// topocentric) and the non-linear apparent-place transforms (aberration, light
+// deflection, refraction) are not frame rotations and live elsewhere.
+export function frameToFrame<T extends Readonly<PositionAndVelocity> | Vec3>(pv: T, from: Frame, to: Frame, time: Time): T extends Vec3 ? Vec3 : PositionAndVelocity {
+	return frameAt(frameToBase(pv, from, time), to, time) as never
 }
 
 const NO_TIME: Time = { day: 0, fraction: 0, scale: 0 }

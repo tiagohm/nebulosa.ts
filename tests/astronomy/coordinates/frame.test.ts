@@ -1,10 +1,31 @@
 import { expect, test } from 'bun:test'
 import type { PositionAndVelocity } from '../../../src/astronomy/coordinates/astrometry'
 import { eraC2s, eraS2c } from '../../../src/astronomy/coordinates/erfa/erfa'
-import { ecliptic, eclipticJ2000, galactic, itrfToTeme, itrfToTemeByGmst, precessionMatrixCapitaine, supergalactic, temeToItrf, temeToItrfByGmst } from '../../../src/astronomy/coordinates/frame'
+import {
+	CIRS,
+	ecliptic,
+	ECLIPTIC_J2000,
+	eclipticJ2000,
+	frameAt,
+	frameToBase,
+	frameToFrame,
+	GALACTIC,
+	galactic,
+	ICRS,
+	ITRS,
+	itrfToTeme,
+	itrfToTemeByGmst,
+	MEAN_EQUATOR_AND_EQUINOX_OF_DATE,
+	precessionMatrixCapitaine,
+	supergalactic,
+	temeToItrf,
+	temeToItrfByGmst,
+	TIRS,
+	TRUE_EQUATOR_AND_EQUINOX_OF_DATE,
+} from '../../../src/astronomy/coordinates/frame'
 import { Timescale, timeYMDHMS } from '../../../src/astronomy/time/time'
 import { ANGVEL_PER_DAY } from '../../../src/core/constants'
-import { matMul, matRotX, matRotZ } from '../../../src/math/linear-algebra/mat3'
+import { type Mat3, matMul, matMulTranspose, matRotX, matRotZ } from '../../../src/math/linear-algebra/mat3'
 import type { MutVec3, Vec3 } from '../../../src/math/linear-algebra/vec3'
 import { formatAZ, normalizeAngle, parseAngle } from '../../../src/math/units/angle'
 
@@ -124,4 +145,77 @@ test('teme<->itrf state round trip through time with earth rotation', () => {
 		expect(back[0][i]).toBeCloseTo(pv[0][i], 9)
 		expect(back[1][i]).toBeCloseTo(pv[1][i], 9)
 	}
+})
+
+// Asserts that a rotation matrix is orthonormal (R · Rᵀ = I), i.e. a valid frame.
+function expectOrthonormal(r: Mat3) {
+	const i = matMulTranspose(r, r)
+	const identity = [1, 0, 0, 0, 1, 0, 0, 0, 1]
+	for (let k = 0; k < 9; k++) expect(i[k]).toBeCloseTo(identity[k], 12)
+}
+
+test('frameToFrame from the base matches the dedicated wrappers', () => {
+	// ICRS is the identity base, so frameToFrame(.., ICRS, F) must equal frameAt(.., F).
+	const fromGraph = eraC2s(...frameToFrame(XYZ, ICRS, GALACTIC, TIME))
+	const fromWrapper = eraC2s(...galactic(XYZ))
+	expect(fromGraph[0]).toBeCloseTo(fromWrapper[0], 15)
+	expect(fromGraph[1]).toBeCloseTo(fromWrapper[1], 15)
+
+	const ecl = frameToFrame(XYZ, ICRS, ECLIPTIC_J2000, TIME)
+	const eclWrapper = eclipticJ2000(XYZ)
+	for (let i = 0; i < 3; i++) expect(ecl[i]).toBeCloseTo(eclWrapper[i], 15)
+})
+
+test('frameToBase is the exact inverse of frameAt for a constant frame', () => {
+	const velocity: MutVec3 = [0.0021, -0.0034, 0.0012]
+	const state: PositionAndVelocity = [[...XYZ], velocity]
+	const back = frameToBase(galactic(state), GALACTIC, TIME)
+	for (let i = 0; i < 3; i++) {
+		expect(back[0][i]).toBeCloseTo(state[0][i], 15)
+		expect(back[1][i]).toBeCloseTo(state[1][i], 15)
+	}
+})
+
+test('frameToBase undoes the rotating-frame drag term for ITRS', () => {
+	// ITRS carries dRdtTimesRtAt, so the velocity inverse must remove the
+	// earth-rotation term, not just transpose the rotation.
+	const state: PositionAndVelocity = [
+		[0.4, -0.6, 0.3],
+		[1e-4, 2e-4, -3e-4],
+	]
+	const back = frameToBase(frameAt(state, ITRS, TIME), ITRS, TIME)
+	for (let i = 0; i < 3; i++) {
+		expect(back[0][i]).toBeCloseTo(state[0][i], 12)
+		expect(back[1][i]).toBeCloseTo(state[1][i], 12)
+	}
+})
+
+test('frameToFrame round trips through a rotating frame with velocity', () => {
+	const state: PositionAndVelocity = [
+		[0.4, -0.6, 0.3],
+		[1e-4, 2e-4, -3e-4],
+	]
+	const back = frameToFrame(frameToFrame(state, ICRS, ITRS, TIME), ITRS, ICRS, TIME)
+	for (let i = 0; i < 3; i++) {
+		expect(back[0][i]).toBeCloseTo(state[0][i], 12)
+		expect(back[1][i]).toBeCloseTo(state[1][i], 12)
+	}
+})
+
+test('new rotation frames are orthonormal and round trip', () => {
+	for (const frame of [CIRS, MEAN_EQUATOR_AND_EQUINOX_OF_DATE, TIRS, TRUE_EQUATOR_AND_EQUINOX_OF_DATE]) {
+		expectOrthonormal(frame.rotationAt(TIME))
+		const back = frameToFrame(frameToFrame(XYZ, ICRS, frame, TIME), frame, ICRS, TIME)
+		for (let i = 0; i < 3; i++) expect(back[i]).toBeCloseTo(XYZ[i], 12)
+	}
+})
+
+test('mean and true equator of date differ only by nutation', () => {
+	// The mean (precession-only) and true (precession+nutation) equators of date
+	// must agree to well under the ~20 arcsec scale of nutation, but not be equal.
+	const mean = eraC2s(...frameToFrame(XYZ, ICRS, MEAN_EQUATOR_AND_EQUINOX_OF_DATE, TIME))
+	const trueOfDate = eraC2s(...frameToFrame(XYZ, ICRS, TRUE_EQUATOR_AND_EQUINOX_OF_DATE, TIME))
+	const separation = Math.abs(mean[0] - trueOfDate[0]) + Math.abs(mean[1] - trueOfDate[1])
+	expect(separation).toBeGreaterThan(0)
+	expect(separation).toBeLessThan(2e-4) // ~40 arcsec
 })

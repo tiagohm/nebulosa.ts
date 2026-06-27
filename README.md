@@ -542,11 +542,21 @@ precessFk5ToJ2000(frame, equinox) // Precess the FK5 coordinate from equinox to 
 
 ```ts
 precessionMatrixCapitaine(from, to) // Precession matrix using Capitaine et al. 2003
-frameAt(pv, frame, time) // Apply frame rotation to position and velocity at time
+frameAt(pv, frame, time) // Apply a frame rotation (base -> frame) to position and velocity at time
+frameToBase(pv, frame, time) // Inverse of frameAt (frame -> base)
+frameToFrame(pv, from, to, time) // Transform a state from one frame to another, composed through the base
+tirsRotationAt(time) // TIRS rotation matrix at time
 galactic(pv)
 supergalactic(pv)
 eclipticJ2000(pv)
 ecliptic(pv, time)
+
+// Centralized frames (all implement the Frame interface):
+// ICRS, FK4, FK5, fk5Frame(equinox), GALACTIC, SUPERGALACTIC,
+// ECLIPTIC, ECLIPTIC_J2000, ECLIPTIC_B1950, CIRS, TIRS, ITRS,
+// MEAN_EQUATOR_AND_EQUINOX_OF_DATE, TRUE_EQUATOR_AND_EQUINOX_OF_DATE,
+// MEAN_EQUATOR_AND_EQUINOX_AT_B1950
+frameToFrame(icrs(ra, dec), ICRS, GALACTIC, time)
 ```
 
 ### Geometry ![](bun.webp) ![](browser.webp)
@@ -1367,12 +1377,6 @@ precessionNutationMatrix(time) // Precession-Nutation matrix at time
 equationOfOrigins(time) // Equation of Origins matrix at time
 pmAngles(time) // Polar Motion angles at time
 pmMatrix(time) // Polar Motion matrix at time
-```
-
-### TIRS ![](bun.webp) ![](browser.webp)
-
-```ts
-tirsRotationAt(time) // TIRS rotation matrix at time
 ```
 
 ### UCAC4 ![](bun.webp)
