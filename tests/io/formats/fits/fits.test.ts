@@ -178,6 +178,21 @@ test('read all skips blank cards inside the header', () => {
 	expect(header.BITPIX).toBe(16)
 })
 
+test('read all accumulates repeated history cards', () => {
+	const source = Buffer.alloc(FITS_HEADER_CARD_SIZE * 4, 32)
+
+	source.write('SIMPLE  =                    T                                                  ', 0, 'ascii')
+	source.write('HISTORY first processing step                                                   ', 80, 'ascii')
+	source.write('HISTORY second processing step                                                  ', 160, 'ascii')
+	source.write('END                                                                             ', 240, 'ascii')
+
+	const reader = new FitsKeywordReader()
+	const header = reader.readAll(source)
+
+	expect(header.SIMPLE).toBeTrue()
+	expect(header.HISTORY).toBe('first processing step\nsecond processing step')
+})
+
 test('write keyword', () => {
 	const writer = new FitsKeywordWriter()
 	const buffer = Buffer.allocUnsafe(FITS_BLOCK_SIZE)
