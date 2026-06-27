@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { DEG2RAD } from '../../../src/core/constants'
-import { DEFAULT_GUIDING_CALIBRATOR_CONFIG, type GuidingCalibrationConfig, type GuidingCalibrationPhase, GuidingCalibrator } from '../../../src/observation/guiding/calibrator'
+import { DEFAULT_GUIDING_CALIBRATOR_CONFIG, flipGuidingCalibration, type GuidingCalibrationConfig, type GuidingCalibrationPhase, GuidingCalibrator } from '../../../src/observation/guiding/calibrator'
 import type { CalibrationMatrix, GuideFrame, GuideStar } from '../../../src/observation/guiding/guider'
 
 const WIDTH = 800
@@ -148,6 +148,25 @@ test('completes RA clear and DEC backlash calibration with invertible matrix', (
 	expect(completed.backlash).toBe(200)
 
 	const product = multiply2x2(completed.imageMotion, completed.imageToAxis)
+	expect(product[0]).toBeCloseTo(1, 6)
+	expect(product[1]).toBeCloseTo(0, 6)
+	expect(product[2]).toBeCloseTo(0, 6)
+	expect(product[3]).toBeCloseTo(1, 6)
+})
+
+test('flips calibration matrices and reverses DEC output direction', () => {
+	const simulation = runCalibration({}, { raVector: [0.8, 0.2], decVector: [-0.15, 0.75], decBacklashSteps: 2 })
+	const completed = simulation.step.completed!
+	const flipped = flipGuidingCalibration(completed, true)
+
+	expect(flipped.ra.direction).toBe(completed.ra.direction)
+	expect(flipped.dec.direction).toBe('south')
+	expect(flipped.ra.unitX).toBeCloseTo(-completed.ra.unitX, 8)
+	expect(flipped.ra.unitY).toBeCloseTo(-completed.ra.unitY, 8)
+	expect(flipped.dec.unitX).toBeCloseTo(completed.dec.unitX, 8)
+	expect(flipped.dec.unitY).toBeCloseTo(completed.dec.unitY, 8)
+
+	const product = multiply2x2(flipped.imageMotion, flipped.imageToAxis)
 	expect(product[0]).toBeCloseTo(1, 6)
 	expect(product[1]).toBeCloseTo(0, 6)
 	expect(product[2]).toBeCloseTo(0, 6)
