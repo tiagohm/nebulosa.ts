@@ -104,7 +104,7 @@ test('iers clamps queries outside the tabulated range to the endpoints', () => {
 	expectXY(iers.xy(t), arcsec(2), arcsec(4))
 })
 
-test('iersAB prefers B in range and falls back to A outside B coverage', () => {
+test('iersAB prefers B in range and otherwise picks the nearest edge table', () => {
 	const a = new IersATest()
 	const b = new IersBTest()
 	a.set([60002, 60003], [2, 2], [3, 3], [4, 4])
@@ -113,6 +113,10 @@ test('iersAB prefers B in range and falls back to A outside B coverage', () => {
 	const iers = new IersAB(a, b)
 
 	let t = timeMJD(60000, Timescale.UTC)
+	expectDut1(iers.dut1(t), 0)
+	expectXY(iers.xy(t), 0, 0)
+
+	t = timeMJD(59999, Timescale.UTC)
 	expectDut1(iers.dut1(t), 0)
 	expectXY(iers.xy(t), 0, 0)
 
