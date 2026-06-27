@@ -1,5 +1,5 @@
 import { EARTH_DRDT_TIMES_RT_MATRIX, ECLIPTIC_B1950_MATRIX, ECLIPTIC_J2000_MATRIX, FK4_MATRIX, FK5_MATRIX, GALACTIC_MATRIX, ICRS_MATRIX, MEAN_EQUATOR_AND_EQUINOX_AT_B1950_MATRIX, SUPERGALACTIC_MATRIX } from '../../core/constants'
-import { type Mat3, matIdentity, matMul, matMulTranspose, matMulVec, matRotX, matRotZ, matTransposeMulVec } from '../../math/linear-algebra/mat3'
+import { type Mat3, matIdentity, matMul, matMulTranspose, matMulVec, type MutMat3, matRotX, matRotZ, matTransposeMulVec } from '../../math/linear-algebra/mat3'
 import { type MutVec3, type Vec3, vecMinus, vecPlus } from '../../math/linear-algebra/vec3'
 import { gcrsToItrsRotationMatrix, greenwichApparentSiderealTime, greenwichMeanSiderealTime, pmMatrix, precessionNutationMatrix, type Time, Timescale, timeJulianYear, trueObliquity, tt } from '../time/time'
 import type { PositionAndVelocity } from './astrometry'
@@ -266,6 +266,16 @@ export function frameToFrame<T extends Readonly<PositionAndVelocity> | Vec3>(pv:
 	// Stage the intermediate base state in `o` (when given), then rotate in place.
 	const base = frameToBase(pv, from, time, o)
 	return frameAt(base, to, time, o as never) as never
+}
+
+// Computes the single orientation matrix that maps `from` into `to` at time:
+// R = R_to · R_fromᵀ. Apply it with `matMulVec` to transform many vectors
+// between the same pair at one instant without recomputing the rotations.
+// This is the rotation only; for rotating frames (e.g. ITRS) the velocity drag
+// term is not captured, so use it for position, or for the velocity of
+// non-rotating (inertial) frame pairs. Pass `o` to avoid allocation.
+export function frameRotationAt(from: Frame, to: Frame, time: Time, o?: MutMat3): Mat3 {
+	return matMulTranspose(to.rotationAt(time), from.rotationAt(time), o)
 }
 
 const NO_TIME: Time = { day: 0, fraction: 0, scale: 0 }

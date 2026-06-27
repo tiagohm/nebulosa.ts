@@ -2,10 +2,10 @@ import { expect, test } from 'bun:test'
 import type { PositionAndVelocity } from '../../../src/astronomy/coordinates/astrometry'
 import { eraC2s, eraS2c } from '../../../src/astronomy/coordinates/erfa/erfa'
 // oxfmt-ignore
-import { CIRS, ecliptic, ECLIPTIC_J2000, eclipticJ2000, frameAt, frameToBase, frameToFrame, GALACTIC, galactic, ICRS, ITRS, itrfToTeme, itrfToTemeByGmst, MEAN_EQUATOR_AND_EQUINOX_OF_DATE, precessionMatrixCapitaine, supergalactic, temeToItrf, temeToItrfByGmst, TIRS, TRUE_EQUATOR_AND_EQUINOX_OF_DATE } from '../../../src/astronomy/coordinates/frame'
+import { CIRS, ecliptic, ECLIPTIC_J2000, eclipticJ2000, FK5, frameAt, frameRotationAt, frameToBase, frameToFrame, GALACTIC, galactic, ICRS, ITRS, itrfToTeme, itrfToTemeByGmst, MEAN_EQUATOR_AND_EQUINOX_OF_DATE, precessionMatrixCapitaine, supergalactic, temeToItrf, temeToItrfByGmst, TIRS, TRUE_EQUATOR_AND_EQUINOX_OF_DATE } from '../../../src/astronomy/coordinates/frame'
 import { Timescale, timeYMDHMS } from '../../../src/astronomy/time/time'
 import { ANGVEL_PER_DAY } from '../../../src/core/constants'
-import { type Mat3, matMul, matMulTranspose, matRotX, matRotZ } from '../../../src/math/linear-algebra/mat3'
+import { type Mat3, matMul, matMulTranspose, matMulVec, matRotX, matRotZ } from '../../../src/math/linear-algebra/mat3'
 import type { MutVec3, Vec3 } from '../../../src/math/linear-algebra/vec3'
 import { formatAZ, normalizeAngle, parseAngle } from '../../../src/math/units/angle'
 
@@ -236,5 +236,34 @@ test('frameToFrame supports an in-place state transform through a rotating frame
 	for (let i = 0; i < 3; i++) {
 		expect(inPlace[0][i]).toBeCloseTo(expected[0][i], 15)
 		expect(inPlace[1][i]).toBeCloseTo(expected[1][i], 15)
+	}
+})
+
+test('frameRotationAt matches frameToFrame for the position rotation', () => {
+	// The composed matrix applied to a vector must equal the per-call transform,
+	// for both an inertial pair (FK5 -> GALACTIC) and a time-dependent one
+	// (ICRS -> CIRS).
+	for (const [from, to] of [
+		[FK5, GALACTIC],
+		[ICRS, CIRS],
+	] as const) {
+		const r = frameRotationAt(from, to, TIME)
+		const viaMatrix = matMulVec(r, XYZ)
+		const viaFrame = frameToFrame(XYZ, from, to, TIME)
+		for (let i = 0; i < 3; i++) expect(viaMatrix[i]).toBeCloseTo(viaFrame[i], 15)
+	}
+})
+
+test('frameRotationAt transforms the velocity of an inertial frame pair', () => {
+	// Both ICRS and GALACTIC are non-rotating, so the same matrix rotates the
+	// velocity; the matrix path must agree with the full state transform.
+	const state: PositionAndVelocity = [[...XYZ], [0.0021, -0.0034, 0.0012]]
+	const r = frameRotationAt(ICRS, GALACTIC, TIME)
+	const [position, velocity] = frameToFrame(state, ICRS, GALACTIC, TIME)
+	const rp = matMulVec(r, state[0])
+	const rv = matMulVec(r, state[1])
+	for (let i = 0; i < 3; i++) {
+		expect(rp[i]).toBeCloseTo(position[i], 15)
+		expect(rv[i]).toBeCloseTo(velocity[i], 15)
 	}
 })
