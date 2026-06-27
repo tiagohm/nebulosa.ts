@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { Image } from '../../../src/imaging/model/types'
-import { applyCalibration, estimateTranslation, filterGuideStars, type GuideFrame, Guider, type GuiderConfig, type GuideStar, invertCalibration, selectGuideStar, validateCalibration } from '../../../src/observation/guiding/guider'
+import { applyCalibration, applyDeadband, estimateTranslation, filterGuideStars, type GuideFrame, Guider, type GuiderConfig, type GuideStar, invertCalibration, selectGuideStar, validateCalibration } from '../../../src/observation/guiding/guider'
 
 const WIDTH = 800
 const HEIGHT = 600
@@ -185,6 +185,12 @@ test('bad calibration sign flips correction direction', () => {
 })
 
 describe('math and calibration foundations', () => {
+	test('deadband preserves values at the configured threshold', () => {
+		expect(applyDeadband(0.19, 0.2)).toBe(0)
+		expect(applyDeadband(0.2, 0.2)).toBe(0.2)
+		expect(applyDeadband(-0.2, 0.2)).toBe(-0.2)
+	})
+
 	test('applies 2x2 calibration matrix with axis-aligned and mixed terms', () => {
 		const table = [
 			{ calibration: [1, 0, 0, 1], dx: 2, dy: -3, expectedRa: 2, expectedDec: -3 },
