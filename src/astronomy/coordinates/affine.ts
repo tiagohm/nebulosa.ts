@@ -1,8 +1,9 @@
-import { ONE_KILOPARSEC, ONE_PARSEC } from '../../core/constants'
+import { GALACTIC_MATRIX, ICRS_MATRIX, ONE_KILOPARSEC, ONE_PARSEC } from '../../core/constants'
 import { type Mat3, matMul, matMulVec, matRotX, matRotY, matRotZ, matTransposeMulVec } from '../../math/linear-algebra/mat3'
-import { type MutVec3, type Vec3, vecMinus, vecPlus } from '../../math/linear-algebra/vec3'
+import { type MutVec3, type Vec3, vecMinus, vecNegate, vecPlus } from '../../math/linear-algebra/vec3'
 import { type Angle, deg } from '../../math/units/angle'
 import type { Distance } from '../../math/units/distance'
+import { kilometerPerSecond } from '../../math/units/velocity'
 import type { Time } from '../time/time'
 import type { PositionAndVelocity } from './astrometry'
 import { eraS2p } from './erfa/erfa'
@@ -170,4 +171,20 @@ export function galactocentricFrame(params: GalactocentricParameters = GALACTOCE
 	// Galactic center position in the base (ICRS) frame: distance along its direction.
 	const origin = eraS2p(ra, dec, d)
 	return { rotationAt: () => a, originAt: () => origin }
+}
+
+// The Sun's peculiar velocity relative to the Local Standard of Rest, as the
+// Galactic Cartesian (U, V, W) components in AU/day. Default from Schönrich,
+// Binney & Dehnen (2010): (11.1, 12.24, 7.25) km/s.
+export const LSR_DEFAULT_SOLAR_VELOCITY: Vec3 = [kilometerPerSecond(11.1), kilometerPerSecond(12.24), kilometerPerSecond(7.25)]
+
+// Builds the Local Standard of Rest frame: same orientation and origin as ICRS,
+// but a velocity offset so that a star's LSR velocity is its barycentric
+// velocity plus the Sun's peculiar motion. `solarVelocity` is the Sun's peculiar
+// velocity relative to the LSR in Galactic Cartesian (U, V, W), AU/day. Positions
+// are unchanged; only velocities are affected.
+export function lsrFrame(solarVelocity: Vec3 = LSR_DEFAULT_SOLAR_VELOCITY): AffineFrame {
+	// v_lsr = v_icrs + v_bary, so the origin velocity is −v_bary expressed in ICRS.
+	const offset = vecNegate(matTransposeMulVec(GALACTIC_MATRIX, solarVelocity))
+	return { rotationAt: () => ICRS_MATRIX, originVelocityAt: () => offset }
 }

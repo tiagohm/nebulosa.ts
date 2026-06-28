@@ -575,6 +575,9 @@ const [p, v] = affineToAffine(icrs, ICRS, helio, time)
 
 const gc = galactocentricFrame() // GALACTOCENTRIC_DEFAULTS (Astropy 'latest' parameters)
 const galactocentric = affineFromBase(icrs, gc, time) // origin at the Galactic center
+
+const lsr = lsrFrame() // Local Standard of Rest: velocity offset only (LSR_DEFAULT_SOLAR_VELOCITY)
+const [, vLsr] = affineFromBase(icrsState, lsr, time) // v_lsr = v_icrs + solar peculiar motion
 ```
 
 ### Geometry ![](bun.webp) ![](browser.webp)

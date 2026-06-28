@@ -1,11 +1,12 @@
 import { expect, test } from 'bun:test'
-import { affineFromBase, affineToAffine, affineToBase, type AffineFrame, BARYCENTRIC_ECLIPTIC, galactocentricFrame, GALACTOCENTRIC_DEFAULTS, heliocentricEclipticFrame } from '../../../src/astronomy/coordinates/affine'
+import { affineFromBase, affineToAffine, affineToBase, type AffineFrame, BARYCENTRIC_ECLIPTIC, galactocentricFrame, GALACTOCENTRIC_DEFAULTS, heliocentricEclipticFrame, lsrFrame } from '../../../src/astronomy/coordinates/affine'
 import type { PositionAndVelocity } from '../../../src/astronomy/coordinates/astrometry'
 import { eraS2p } from '../../../src/astronomy/coordinates/erfa/erfa'
 import { ECLIPTIC_J2000, frameToFrame, GALACTIC, ICRS } from '../../../src/astronomy/coordinates/frame'
 import { Timescale, timeYMDHMS } from '../../../src/astronomy/time/time'
-import { ONE_KILOPARSEC } from '../../../src/core/constants'
+import { ONE_KILOPARSEC, ONE_PARSEC } from '../../../src/core/constants'
 import { type MutVec3, vecMinus } from '../../../src/math/linear-algebra/vec3'
+import { kilometerPerSecond, toKilometerPerSecond } from '../../../src/math/units/velocity'
 
 const TIME = timeYMDHMS(2025, 9, 28, 12, 0, 0, Timescale.UTC)
 
@@ -160,5 +161,37 @@ test('galactocentric maps the Galactic center to the origin and round trips', ()
 	for (let i = 0; i < 3; i++) {
 		expect(back[0][i] / ONE_KILOPARSEC).toBeCloseTo(s[0][i] / ONE_KILOPARSEC, 9)
 		expect(back[1][i]).toBeCloseTo(s[1][i], 12)
+	}
+})
+
+// Reference values from Astropy 7.x LSR (Schönrich, Binney & Dehnen 2010 solar
+// motion v_bary = (11.1, 12.24, 7.25) km/s in Galactic UVW). ICRS cartesian
+// (position pc, velocity km/s) -> LSR. Position is unchanged; velocity gains the
+// barycentric motion. Generated via uv run --with astropy.
+const LSR_CASES: ReadonlyArray<readonly [velKms: readonly [number, number, number], lsrVelKms: readonly [number, number, number]]> = [
+	[
+		[10, -20, 5],
+		[9.14820021332169, -36.57592050970972, 12.078375264084205],
+	],
+	[
+		[0, 0, 0],
+		[-0.8517997866783104, -16.575920509709718, 7.0783752640842055],
+	],
+	[
+		[-12, 30, -7],
+		[-12.85179978667831, 13.424079490290282, 0.07837526408420548],
+	],
+]
+
+test('LSR frame matches Astropy: position fixed, velocity gains the solar motion', () => {
+	const lsr = lsrFrame()
+	const pos: MutVec3 = [100 * ONE_PARSEC, 200 * ONE_PARSEC, 50 * ONE_PARSEC]
+	for (const [velKms, expectedKms] of LSR_CASES) {
+		const s: PositionAndVelocity = [[...pos], [kilometerPerSecond(velKms[0]), kilometerPerSecond(velKms[1]), kilometerPerSecond(velKms[2])]]
+		const [p, v] = affineFromBase(s, lsr, TIME)
+		// Position is unchanged by the LSR.
+		for (let i = 0; i < 3; i++) expect(p[i] / ONE_PARSEC).toBeCloseTo(pos[i] / ONE_PARSEC, 9)
+		// Velocity gains the barycentric solar motion.
+		for (let i = 0; i < 3; i++) expect(toKilometerPerSecond(v[i])).toBeCloseTo(expectedKms[i], 8)
 	}
 })
