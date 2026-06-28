@@ -7,7 +7,7 @@ import { kilometerPerSecond } from '../../math/units/velocity'
 import type { Time } from '../time/time'
 import type { PositionAndVelocity } from './astrometry'
 import { eraS2p } from './erfa/erfa'
-import { ECLIPTIC_J2000, type Frame } from './frame'
+import { ECLIPTIC_J2000, type CoordinateFrame, type CoordinateFrameOutput, type Frame } from './frame'
 
 // A frame that may sit at a shifted, possibly moving origin relative to the
 // base (GCRS/ICRS-oriented) frame. It inherits the orientation members from
@@ -34,7 +34,7 @@ export interface AffineFrame extends Frame {
 //   v_f = R · (v − Ȯ) + W · p_f      (W = dRdtTimesRtAt, only for rotating frames)
 //
 // O is originAt, Ȯ is originVelocityAt; both default to zero when absent.
-export function affineFromBase<T extends Readonly<PositionAndVelocity> | Vec3>(pv: T, frame: AffineFrame, time: Time, o?: T extends Vec3 ? MutVec3 : PositionAndVelocity): T extends Vec3 ? Vec3 : PositionAndVelocity {
+export function affineFromBase<T extends CoordinateFrame>(pv: T, frame: AffineFrame, time: Time, o?: CoordinateFrameOutput<T>): CoordinateFrameOutput<T> {
 	const r = frame.rotationAt(time)
 	const origin = frame.originAt?.(time)
 
@@ -72,7 +72,7 @@ export function affineFromBase<T extends Readonly<PositionAndVelocity> | Vec3>(p
 //
 //   p = Rᵀ · p_f + O
 //   v = Rᵀ · (v_f − W · p_f) + Ȯ
-export function affineToBase<T extends Readonly<PositionAndVelocity> | Vec3>(pv: T, frame: AffineFrame, time: Time, o?: T extends Vec3 ? MutVec3 : PositionAndVelocity): T extends Vec3 ? Vec3 : PositionAndVelocity {
+export function affineToBase<T extends CoordinateFrame>(pv: T, frame: AffineFrame, time: Time, o?: CoordinateFrameOutput<T>): CoordinateFrameOutput<T> {
 	const r = frame.rotationAt(time)
 	const origin = frame.originAt?.(time)
 
@@ -106,7 +106,7 @@ export function affineToBase<T extends Readonly<PositionAndVelocity> | Vec3>(pv:
 // composing through the common base. Accepts plain Frames too, since every Frame
 // is an AffineFrame with no origin; when neither frame has an origin or velocity
 // offset this reduces exactly to frameToFrame. Pass `o` to avoid allocation.
-export function affineToAffine<T extends Readonly<PositionAndVelocity> | Vec3>(pv: T, from: AffineFrame, to: AffineFrame, time: Time, o?: T extends Vec3 ? MutVec3 : PositionAndVelocity): T extends Vec3 ? Vec3 : PositionAndVelocity {
+export function affineToAffine<T extends CoordinateFrame>(pv: T, from: AffineFrame, to: AffineFrame, time: Time, o?: CoordinateFrameOutput<T>): CoordinateFrameOutput<T> {
 	// Stage the intermediate base state in `o` (when given), then transform in place.
 	const base = affineToBase(pv, from, time, o)
 	return affineFromBase(base, to, time, o as never) as never
@@ -122,7 +122,7 @@ export const BARYCENTRIC_ECLIPTIC: AffineFrame = ECLIPTIC_J2000
 // so this module stays in the coordinates layer without importing ephemerides;
 // `sunAt` must return the Sun's barycentric position (AU) and velocity (AU/day)
 // in the base (ICRS/BCRS) frame at time.
-export function heliocentricEclipticFrame(sunAt: (time: Time) => Readonly<PositionAndVelocity>): AffineFrame {
+export function heliocentricEclipticFrame(sunAt: (time: Time) => readonly [Vec3, Vec3]): AffineFrame {
 	return {
 		rotationAt: ECLIPTIC_J2000.rotationAt,
 		originAt: (time) => sunAt(time)[0],

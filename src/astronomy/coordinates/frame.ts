@@ -2,11 +2,15 @@ import { EARTH_DRDT_TIMES_RT_MATRIX, ECLIPTIC_B1950_MATRIX, ECLIPTIC_J2000_MATRI
 import { type Mat3, matIdentity, matMul, matMulTranspose, matMulVec, type MutMat3, matRotX, matRotZ, matTransposeMulVec } from '../../math/linear-algebra/mat3'
 import { type MutVec3, type Vec3, vecMinus, vecPlus } from '../../math/linear-algebra/vec3'
 import { cirsRotationMatrix, gcrsToItrsRotationMatrix, greenwichApparentSiderealTime, greenwichMeanSiderealTime, instantaneousEarthRotationMatrix, meanObliquity, pmMatrix, precessionNutationMatrix, type Time, Timescale, timeJulianYear, trueObliquity, tt } from '../time/time'
-import type { PositionAndVelocity } from './astrometry'
-import type { CartesianCoordinate } from './coordinate'
 import { eraBp06 } from './erfa/erfa'
 
-export type CoordinateFrame = CartesianCoordinate
+export type CoordinateFrame = Vec3 | readonly [Vec3, Vec3]
+
+export type MutCoordinateFrame = MutVec3 | readonly [MutVec3, MutVec3]
+
+export type CoordinateFrameInput<T extends CoordinateFrame> = T extends Vec3 ? Vec3 : readonly [Vec3, Vec3]
+
+export type CoordinateFrameOutput<T extends CoordinateFrame> = T extends Vec3 ? MutVec3 : [MutVec3, MutVec3]
 
 export interface Frame {
 	readonly rotationAt: (time: Time) => Mat3
@@ -172,7 +176,7 @@ export const ITRS_INSTANTANEOUS: Frame = {
 }
 
 // Applies a TEME-to-ITRF rotation using a supplied GMST angle and optional polar-motion matrix.
-export function temeToItrfByGmst<T extends Readonly<PositionAndVelocity> | Vec3>(pv: T, gmst: number, polarMotion?: Mat3): T extends Vec3 ? Vec3 : PositionAndVelocity {
+export function temeToItrfByGmst<T extends CoordinateFrame>(pv: T, gmst: number, polarMotion?: Mat3): CoordinateFrameOutput<T> {
 	const r = matRotZ(gmst)
 
 	if (pv.length === 3) {
@@ -192,7 +196,7 @@ export function temeToItrfByGmst<T extends Readonly<PositionAndVelocity> | Vec3>
 }
 
 // Applies an ITRF-to-TEME rotation using a supplied GMST angle and optional polar-motion matrix.
-export function itrfToTemeByGmst<T extends Readonly<PositionAndVelocity> | Vec3>(pv: T, gmst: number, polarMotion?: Mat3): T extends Vec3 ? Vec3 : PositionAndVelocity {
+export function itrfToTemeByGmst<T extends CoordinateFrame>(pv: T, gmst: number, polarMotion?: Mat3): CoordinateFrameOutput<T> {
 	const r = matRotZ(gmst)
 
 	if (pv.length === 3) {
@@ -207,26 +211,26 @@ export function itrfToTemeByGmst<T extends Readonly<PositionAndVelocity> | Vec3>
 }
 
 // Converts a TEME vector or state into ITRF at the requested time.
-export function temeToItrf<T extends Readonly<PositionAndVelocity> | Vec3>(pv: T, time: Time, polarMotion: boolean = true): T extends Vec3 ? Vec3 : PositionAndVelocity {
+export function temeToItrf<T extends CoordinateFrame>(pv: T, time: Time, polarMotion: boolean = true) {
 	return temeToItrfByGmst(pv, greenwichMeanSiderealTime(time), polarMotion ? pmMatrix(time) : undefined)
 }
 
 // Converts an ITRF vector or state into TEME at the requested time.
-export function itrfToTeme<T extends Readonly<PositionAndVelocity> | Vec3>(pv: T, time: Time, polarMotion: boolean = true): T extends Vec3 ? Vec3 : PositionAndVelocity {
+export function itrfToTeme<T extends CoordinateFrame>(pv: T, time: Time, polarMotion: boolean = true) {
 	return itrfToTemeByGmst(pv, greenwichMeanSiderealTime(time), polarMotion ? pmMatrix(time) : undefined)
 }
 
 // Applies a frame rotation (base -> frame) to a position or full state at time.
 // Pass `o` to write the result into an existing vector or state and avoid
 // allocation; `o` may alias `pv` for an in-place transform.
-export function frameAt<T extends Readonly<PositionAndVelocity> | Vec3>(pv: T, frame: Frame, time: Time, o?: T extends Vec3 ? MutVec3 : PositionAndVelocity): T extends Vec3 ? Vec3 : PositionAndVelocity {
+export function frameAt<T extends CoordinateFrame>(pv: T, frame: Frame, time: Time, o?: CoordinateFrameOutput<T>): CoordinateFrameOutput<T> {
 	const r = frame.rotationAt(time)
 
 	if (pv.length === 3) {
 		return matMulVec(r, pv, o as MutVec3 | undefined) as never
 	}
 
-	const out = o as PositionAndVelocity | undefined
+	const out = o as [MutVec3, MutVec3] | undefined
 	const p = matMulVec(r, pv[0], out?.[0])
 	const v = matMulVec(r, pv[1], out?.[1])
 
@@ -252,14 +256,14 @@ export function frameAt<T extends Readonly<PositionAndVelocity> | Vec3>(pv: T, f
 // For a rotating frame (R = R(t)) the velocity must undo the drag term first:
 //   v_frame = R · v_base + (dR/dt) · p_base = R · v_base + W · p_frame,
 //   so v_base = Rᵀ · (v_frame − W · p_frame),  with W = dRdtTimesRtAt.
-export function frameToBase<T extends Readonly<PositionAndVelocity> | Vec3>(pv: T, frame: Frame, time: Time, o?: T extends Vec3 ? MutVec3 : PositionAndVelocity): T extends Vec3 ? Vec3 : PositionAndVelocity {
+export function frameToBase<T extends CoordinateFrame>(pv: T, frame: Frame, time: Time, o?: CoordinateFrameOutput<T>): CoordinateFrameOutput<T> {
 	const r = frame.rotationAt(time)
 
 	if (pv.length === 3) {
 		return matTransposeMulVec(r, pv, o as MutVec3 | undefined) as never
 	}
 
-	const out = o as PositionAndVelocity | undefined
+	const out = o as [MutVec3, MutVec3] | undefined
 
 	if (frame.dRdtTimesRtAt) {
 		// Build the drag-corrected velocity from the original position first, since
@@ -297,10 +301,10 @@ export function frameToBase<T extends Readonly<PositionAndVelocity> | Vec3>(pv: 
 // (aberration, light deflection, refraction) are not frame rotations and live
 // elsewhere. To transform many states between the same pair at one time,
 // precompute the matrix once with `frameRotationAt`.
-export function frameToFrame<T extends Readonly<PositionAndVelocity> | Vec3>(pv: T, from: Frame, to: Frame, time: Time, o?: T extends Vec3 ? MutVec3 : PositionAndVelocity): T extends Vec3 ? Vec3 : PositionAndVelocity {
+export function frameToFrame<T extends CoordinateFrame>(pv: T, from: Frame, to: Frame, time: Time, o?: CoordinateFrameOutput<T>) {
 	// Stage the intermediate base state in `o` (when given), then rotate in place.
 	const base = frameToBase(pv, from, time, o)
-	return frameAt(base, to, time, o as never) as never
+	return frameAt(base, to, time, o as never)
 }
 
 // Computes the single orientation matrix that maps `from` into `to` at time:
@@ -309,37 +313,89 @@ export function frameToFrame<T extends Readonly<PositionAndVelocity> | Vec3>(pv:
 // This is the rotation only; for rotating frames (e.g. ITRS) the velocity drag
 // term is not captured, so use it for position, or for the velocity of
 // non-rotating (inertial) frame pairs. Pass `o` to avoid allocation.
-export function frameRotationAt(from: Frame, to: Frame, time: Time, o?: MutMat3): Mat3 {
+export function frameRotationAt(from: Frame, to: Frame, time: Time, o?: MutMat3) {
 	return matMulTranspose(to.rotationAt(time), from.rotationAt(time), o)
 }
 
 const NO_TIME: Time = { day: 0, fraction: 0, scale: 0 }
 
-export function galactic<T extends Readonly<PositionAndVelocity> | Vec3>(pv: T): T extends Vec3 ? Vec3 : PositionAndVelocity {
-	return frameAt(pv, GALACTIC, NO_TIME)
+export function meanEquatorAndEquinoxAtB1950<T extends CoordinateFrame>(pv: T, o?: CoordinateFrameOutput<T>) {
+	return frameAt(pv, MEAN_EQUATOR_AND_EQUINOX_AT_B1950, NO_TIME, o)
 }
 
-export function supergalactic<T extends Readonly<PositionAndVelocity> | Vec3>(pv: T): T extends Vec3 ? Vec3 : PositionAndVelocity {
-	return frameAt(pv, SUPERGALACTIC, NO_TIME)
+export function eclipticB1950<T extends CoordinateFrame>(pv: T, o?: CoordinateFrameOutput<T>) {
+	return frameAt(pv, ECLIPTIC_B1950, NO_TIME, o)
 }
 
-export function eclipticJ2000<T extends Readonly<PositionAndVelocity> | Vec3>(pv: T): T extends Vec3 ? Vec3 : PositionAndVelocity {
-	return frameAt(pv, ECLIPTIC_J2000, NO_TIME)
+export function eclipticJ2000<T extends CoordinateFrame>(pv: T, o?: CoordinateFrameOutput<T>) {
+	return frameAt(pv, ECLIPTIC_J2000, NO_TIME, o)
 }
 
-export function ecliptic<T extends Readonly<PositionAndVelocity> | Vec3>(pv: T, time: Time): T extends Vec3 ? Vec3 : PositionAndVelocity {
-	return frameAt(pv, ECLIPTIC, time)
+export function fk4<T extends CoordinateFrame>(pv: T, o?: CoordinateFrameOutput<T>) {
+	return frameAt(pv, FK4, NO_TIME, o)
+}
+
+export function fk5<T extends CoordinateFrame>(pv: T, o?: CoordinateFrameOutput<T>) {
+	return frameAt(pv, FK5, NO_TIME, o)
+}
+
+export function galactic<T extends CoordinateFrame>(pv: T, o?: CoordinateFrameOutput<T>) {
+	return frameAt(pv, GALACTIC, NO_TIME, o)
+}
+
+export function supergalactic<T extends CoordinateFrame>(pv: T, o?: CoordinateFrameOutput<T>) {
+	return frameAt(pv, SUPERGALACTIC, NO_TIME, o)
+}
+
+export function trueEquatorAndEquinoxOfDate<T extends CoordinateFrame>(pv: T, o?: CoordinateFrameOutput<T>) {
+	return frameAt(pv, TRUE_EQUATOR_AND_EQUINOX_OF_DATE, NO_TIME, o)
+}
+
+export function icrs<T extends CoordinateFrame>(pv: T, o?: CoordinateFrameOutput<T>) {
+	return frameAt(pv, ICRS, NO_TIME, o)
+}
+
+export function ecliptic<T extends CoordinateFrame>(pv: T, time: Time, o?: CoordinateFrameOutput<T>) {
+	return frameAt(pv, ECLIPTIC, time, o)
+}
+
+export function meanEquatorAndEquinoxOfDate<T extends CoordinateFrame>(pv: T, o?: CoordinateFrameOutput<T>) {
+	return frameAt(pv, MEAN_EQUATOR_AND_EQUINOX_OF_DATE, NO_TIME, o)
+}
+
+export function meanEclipticOfDate<T extends CoordinateFrame>(pv: T, o?: CoordinateFrameOutput<T>) {
+	return frameAt(pv, MEAN_ECLIPTIC_OF_DATE, NO_TIME, o)
+}
+
+export function cirs<T extends CoordinateFrame>(pv: T, o?: CoordinateFrameOutput<T>) {
+	return frameAt(pv, CIRS, NO_TIME, o)
+}
+
+export function tirs<T extends CoordinateFrame>(pv: T, o?: CoordinateFrameOutput<T>) {
+	return frameAt(pv, TIRS, NO_TIME, o)
+}
+
+export function teme<T extends CoordinateFrame>(pv: T, o?: CoordinateFrameOutput<T>) {
+	return frameAt(pv, TEME, NO_TIME, o)
+}
+
+export function itrs<T extends CoordinateFrame>(pv: T, o?: CoordinateFrameOutput<T>) {
+	return frameAt(pv, ITRS, NO_TIME, o)
+}
+
+export function itrsInstantaneous<T extends CoordinateFrame>(pv: T, o?: CoordinateFrameOutput<T>) {
+	return frameAt(pv, ITRS_INSTANTANEOUS, NO_TIME, o)
 }
 
 // Converts an ICRS cartesian coordinate (or state) to FK5 (J2000) by applying
 // the constant frame bias.
-export function icrsToFk5<T extends Readonly<PositionAndVelocity> | Vec3>(pv: T): T extends Vec3 ? Vec3 : PositionAndVelocity {
+export function icrsToFk5<T extends CoordinateFrame>(pv: T) {
 	return frameToFrame(pv, ICRS, FK5, NO_TIME)
 }
 
 // Converts an FK5 (J2000) cartesian coordinate (or state) to ICRS by removing
 // the constant frame bias. Precess to J2000 first for coordinates at another
 // equinox.
-export function fk5ToIcrs<T extends Readonly<PositionAndVelocity> | Vec3>(pv: T): T extends Vec3 ? Vec3 : PositionAndVelocity {
+export function fk5ToIcrs<T extends CoordinateFrame>(pv: T) {
 	return frameToFrame(pv, FK5, ICRS, NO_TIME)
 }
