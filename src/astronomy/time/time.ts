@@ -176,8 +176,8 @@ export function pmAngles(time: Time, pm?: PolarMotion): readonly [Angle, Angle, 
 	const [x, y] = polarMotion(time)
 	const a: [Angle, Angle, Angle] = [sprime, x, y]
 	const c = cache(time)
-	c.pmAngles = a
-	c.pmAnglesPolarMotion = polarMotion
+	cacheKey(c, 'pmAngles', a)
+	cacheKey(c, 'pmAnglesPolarMotion', polarMotion)
 	return a
 }
 
@@ -188,8 +188,8 @@ export function pmMatrix(time: Time, pm?: PolarMotion): Mat3 {
 	const [sprime, x, y] = pmAngles(time, polarMotion)
 	const m = time.providers?.pom?.(x, y, sprime) ?? eraPom00(x, y, sprime)
 	const c = cache(time)
-	c.pmMatrix = m
-	c.pmMatrixPolarMotion = polarMotion
+	cacheKey(c, 'pmMatrix', m)
+	cacheKey(c, 'pmMatrixPolarMotion', polarMotion)
 	return m
 }
 
@@ -377,13 +377,13 @@ export function timeAtJulianDay(reference: Time, julianDay: number) {
 function timescale(target: Time, source: Time) {
 	const c = cache(target, source.cache)
 
-	if (source.scale === Timescale.UT1) c.ut1 = source
-	else if (source.scale === Timescale.UTC) c.utc = source
-	else if (source.scale === Timescale.TAI) c.tai = source
-	else if (source.scale === Timescale.TT) c.tt = source
-	else if (source.scale === Timescale.TCG) c.tcg = source
-	else if (source.scale === Timescale.TDB) c.tdb = source
-	else if (source.scale === Timescale.TCB) c.tcb = source
+	if (source.scale === Timescale.UT1) cacheKey(c, 'ut1', source)
+	else if (source.scale === Timescale.UTC) cacheKey(c, 'utc', source)
+	else if (source.scale === Timescale.TAI) cacheKey(c, 'tai', source)
+	else if (source.scale === Timescale.TT) cacheKey(c, 'tt', source)
+	else if (source.scale === Timescale.TCG) cacheKey(c, 'tcg', source)
+	else if (source.scale === Timescale.TDB) cacheKey(c, 'tdb', source)
+	else if (source.scale === Timescale.TCB) cacheKey(c, 'tcb', source)
 
 	if (source.location) target.location = source.location
 }
@@ -391,6 +391,18 @@ function timescale(target: Time, source: Time) {
 // Returns the cache object, creating it if necessary.
 export function cache(target: Time, cache?: TimeCache) {
 	return (target.cache ??= cache ?? {})
+}
+
+// Set of non-serializable Time cache keys.
+const NON_ENUMERABLE_TIME_CACHE_KEYS = new Set<keyof TimeCache>(['ut1', 'utc', 'tai', 'tt', 'tcb', 'tcg', 'tdb', 'pmAnglesPolarMotion', 'pmMatrixPolarMotion'])
+
+// Makes some Time cache keys non-serializable.
+function cacheKey<K extends keyof TimeCache>(c: TimeCache, key: K, value: TimeCache[K]) {
+	if (Object.hasOwn(c, key)) {
+		c[key] = value
+	} else {
+		Object.defineProperty(c, key, { value, enumerable: !NON_ENUMERABLE_TIME_CACHE_KEYS.has(key), writable: true })
+	}
 }
 
 // Converts the given time to the specified scale.
@@ -587,7 +599,7 @@ export function greenwichApparentSiderealTime(time: Time): Angle {
 	const u = ut1(time)
 	const t = tt(time)
 	const gast = time.providers?.gast?.(u, t) ?? eraGst06a(u.day, u.fraction, t.day, t.fraction)
-	cache(time).gast = gast
+	cacheKey(cache(time), 'gast', gast)
 	return gast
 }
 
@@ -598,7 +610,7 @@ export function greenwichMeanSiderealTime(time: Time): Angle {
 	const u = ut1(time)
 	const t = tt(time)
 	const gmst = time.providers?.gmst?.(u, t) ?? eraGmst06(u.day, u.fraction, t.day, t.fraction)
-	cache(time).gmst = gmst
+	cacheKey(cache(time), 'gmst', gmst)
 	return gmst
 }
 
@@ -608,7 +620,7 @@ export function earthRotationAngle(time: Time): Angle {
 	if (cached !== undefined) return cached
 	const u = ut1(time)
 	const era = time.providers?.era?.(u) ?? eraEra00(u.day, u.fraction)
-	cache(time).era = era
+	cacheKey(cache(time), 'era', era)
 	return era
 }
 
@@ -618,7 +630,7 @@ export function meanObliquity(time: Time): Angle {
 	if (cached !== undefined) return cached
 	const t = tt(time)
 	const meanObliquity = time.providers?.obl?.(t) ?? eraObl06(t.day, t.fraction)
-	cache(time).meanObliquity = meanObliquity
+	cacheKey(cache(time), 'meanObliquity', meanObliquity)
 	return meanObliquity
 }
 
@@ -637,7 +649,7 @@ export function nutationAngles(time: Time): readonly [Angle, Angle] {
 	if (time.cache?.nutation !== undefined) return time.cache.nutation
 	const t = tt(time)
 	const nutation = time.providers?.nut?.(t) ?? eraNut06a(t.day, t.fraction)
-	cache(time).nutation = nutation
+	cacheKey(cache(time), 'nutation', nutation)
 	return nutation
 }
 
@@ -646,7 +658,7 @@ export function precessionMatrix(time: Time): Mat3 {
 	if (time.cache?.precession !== undefined) return time.cache.precession
 	const t = tt(time)
 	const precession = time.providers?.pmat?.(t) ?? eraPmat06(t.day, t.fraction)
-	cache(time).precession = precession
+	cacheKey(cache(time), 'precession', precession)
 	return precession
 }
 
@@ -655,7 +667,7 @@ export function precessionNutationMatrix(time: Time): Mat3 {
 	if (time.cache?.precessionNutation !== undefined) return time.cache.precessionNutation
 	const t = tt(time)
 	const precessionNutation = time.providers?.pnm?.(t) ?? eraPnm06a(t.day, t.fraction)
-	cache(time).precessionNutation = precessionNutation
+	cacheKey(cache(time), 'precessionNutation', precessionNutation)
 	return precessionNutation
 }
 
@@ -669,7 +681,7 @@ export function cirsRotationMatrix(time: Time): Mat3 {
 	if (time.cache?.cirsRotation !== undefined) return time.cache.cirsRotation
 	const t = tt(time)
 	const cirsRotation = eraC2i06a(t.day, t.fraction)
-	cache(time).cirsRotation = cirsRotation
+	cacheKey(cache(time), 'cirsRotation', cirsRotation)
 	return cirsRotation
 }
 
@@ -678,7 +690,7 @@ export function equationOfOrigins(time: Time): Mat3 {
 	if (time.cache?.equationOfOrigins !== undefined) return time.cache.equationOfOrigins
 	const equationOfOrigins = matIdentity()
 	matMul(matRotZ(greenwichApparentSiderealTime(time) - earthRotationAngle(time), equationOfOrigins), precessionNutationMatrix(time), equationOfOrigins)
-	cache(time).equationOfOrigins = equationOfOrigins
+	cacheKey(cache(time), 'equationOfOrigins', equationOfOrigins)
 	return equationOfOrigins
 }
 
@@ -686,7 +698,7 @@ export function equationOfOrigins(time: Time): Mat3 {
 export function gcrsToItrsRotationMatrix(time: Time) {
 	if (time.cache?.gcrsToItrsRotationMatrix !== undefined) return time.cache.gcrsToItrsRotationMatrix
 	const gcrsToItrsRotationMatrix = eraC2teqx(precessionNutationMatrix(time), greenwichApparentSiderealTime(time), pmMatrix(time))
-	cache(time).gcrsToItrsRotationMatrix = gcrsToItrsRotationMatrix
+	cacheKey(cache(time), 'gcrsToItrsRotationMatrix', gcrsToItrsRotationMatrix)
 	return gcrsToItrsRotationMatrix
 }
 
@@ -704,7 +716,7 @@ export function instantaneousEarthRotationMatrix(time: Time): Mat3 {
 	const d = matMinus(rp, rm, rp as MutMat3)
 	matMulScalar(d, 0.5 / ONE_SECOND, d)
 	const instantaneousEarthRotationMatrix = matMulTranspose(d, r, d) // w = dR/dt * R^T
-	cache(time).instantaneousEarthRotationMatrix = instantaneousEarthRotationMatrix
+	cacheKey(cache(time), 'instantaneousEarthRotationMatrix', instantaneousEarthRotationMatrix)
 	return instantaneousEarthRotationMatrix
 }
 
@@ -721,7 +733,7 @@ export function instantaneousEarthAngularVelocity(time: Time): Vec3 {
 
 	// ω = -axial(W): each component is half the difference of the symmetric-position pair of W.
 	const instantaneousEarthAngularVelocity = [(d[5] - d[7]) * 0.5, (d[6] - d[2]) * 0.5, (d[1] - d[3]) * 0.5] as const
-	cache(time).instantaneousEarthAngularVelocity = instantaneousEarthAngularVelocity
+	cacheKey(cache(time), 'instantaneousEarthAngularVelocity', instantaneousEarthAngularVelocity)
 	return instantaneousEarthAngularVelocity
 }
 
@@ -744,7 +756,7 @@ export const dut1: TimeDelta = (time) => {
 		dt = ut1MinusUtc({ day: a[0], fraction: a[1], scale: Timescale.UTC })
 	}
 
-	cache(time).ut1MinusUtc = dt
+	cacheKey(cache(time), 'ut1MinusUtc', dt)
 
 	return dt
 }
@@ -777,7 +789,7 @@ export const tdbMinusTt: TimeDelta = (time) => {
 			dt = eraDtDb(day, fraction, ut)
 		}
 
-		cache(time).tdbMinusTt = dt
+		cacheKey(cache(time), 'tdbMinusTt', dt)
 
 		return dt
 	}
@@ -814,7 +826,7 @@ export const taiMinusUtc: TimeDelta = (time) => {
 	if (cached !== undefined) return cached
 	const cal = eraJdToCal(time.day, time.fraction)
 	const dt = eraDat(cal[0], cal[1], cal[2], cal[3])
-	cache(time).taiMinusUtc = dt
+	cacheKey(cache(time), 'taiMinusUtc', dt)
 	return dt
 }
 
@@ -826,7 +838,7 @@ export const ut1MinusTai: TimeDelta = (time) => {
 	const dat = eraDat(cal[0], cal[1], cal[2], cal[3])
 	const ut1MinusUtc = (time.providers?.dut1 ?? dut1)(time)
 	const dt = ut1MinusUtc - dat
-	cache(time).ut1MinusTai = dt
+	cacheKey(cache(time), 'ut1MinusTai', dt)
 	return dt
 }
 

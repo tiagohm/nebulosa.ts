@@ -625,3 +625,58 @@ test('delta T', () => {
 	const b = ut1(a)
 	expect((a.day - b.day + (a.fraction - b.fraction)) * DAYSEC).toBeCloseTo(69, 0)
 })
+
+test('time is serializable', () => {
+	const converters = [ut1, utc, tai, tt, tcg, tdb, tcb] as const
+
+	const count = [0, 0, 0]
+
+	for (let scale = 0; scale < converters.length; scale++) {
+		const time = timeYMDHMS(2020, 10, 7, 12, 0, 0, scale)
+
+		for (let k = 0; k < converters.length; k++) {
+			const a = converters[k](time)
+			const json = JSON.stringify(a)
+
+			expect(json).toContain(`"day":${a.day}`)
+			expect(json).toContain(`"fraction":${a.fraction}`)
+			expect(json).toContain(`"scale":${a.scale}`)
+
+			const b = JSON.parse(json) as Time
+			console.info(json)
+
+			expect(b.day).toBe(a.day)
+			expect(b.fraction).toBe(a.fraction)
+			expect(b.scale).toBe(a.scale)
+
+			if (a.cache !== undefined && 'ut1MinusUtc' in a.cache) {
+				count[0]++
+				expect(a.cache.ut1MinusUtc).toBeDefined()
+				expect(a.cache.ut1MinusUtc).not.toBe(0)
+				expect(b.cache!.ut1MinusUtc).toBe(a.cache.ut1MinusUtc)
+			}
+			if (a.cache !== undefined && 'ut1MinusTai' in a.cache) {
+				count[1]++
+				expect(a.cache.ut1MinusTai).toBeDefined()
+				expect(a.cache.ut1MinusTai).not.toBe(0)
+				expect(b.cache!.ut1MinusTai).toBe(a.cache.ut1MinusTai)
+			}
+			if (a.cache !== undefined && 'tdbMinusTt' in a.cache) {
+				count[2]++
+				expect(a.cache.tdbMinusTt).toBeDefined()
+				expect(a.cache.tdbMinusTt).not.toBe(0)
+				expect(b.cache!.tdbMinusTt).toBe(a.cache.tdbMinusTt)
+			}
+
+			const c = converters[time.scale](b)
+
+			expect(c.day).toBe(time.day)
+			expect(c.fraction).toBeCloseTo(time.fraction, 15)
+			expect(c.scale).toBe(time.scale)
+		}
+
+		expect(count[0]).toBeGreaterThan(0)
+		expect(count[1]).toBeGreaterThan(0)
+		expect(count[2]).toBeGreaterThan(0)
+	}
+})
