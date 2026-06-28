@@ -1,12 +1,18 @@
 // oxfmt-ignore
 import type { AlpacaAxisRate, AlpacaCameraSensorType, AlpacaCameraState, AlpacaConfiguredDevice, AlpacaGuideDirection, AlpacaResponse, AlpacaStateItem, AlpacaTelescopeAlignmentMode, AlpacaTelescopeAxis, AlpacaTelescopeEquatorialCoordinateType, AlpacaTelescopePierSide, AlpacaTelescopeTrackingRate } from './types'
 
+// Thin typed HTTP client for the ASCOM Alpaca REST API. Each class wraps one device type and exposes a
+// method per Alpaca property/operation; the methods are intentionally one-line mappings onto the shared
+// request() helper, so they are self-documenting and not individually commented. Values are passed
+// through unchanged (units follow the Alpaca spec). See the class comments for per-device scope.
 // https://ascom-standards.org/api/
 
+// Accept header that requests the binary ImageBytes encoding for camera image downloads.
 const IMAGE_ARRAY_HEADERS: HeadersInit = {
 	Accept: 'application/imagebytes',
 }
 
+// Aggregate client bundling one API wrapper per Alpaca device type, all sharing the same base URL.
 export class AlpacaApi {
 	readonly management: AlpacaManagementApi
 	readonly telescope: AlpacaTelescopeApi
@@ -27,9 +33,11 @@ export class AlpacaApi {
 	}
 }
 
+// Alpaca management API: server-wide endpoints not tied to a single device.
 export class AlpacaManagementApi {
 	constructor(readonly url: string | URL) {}
 
+	// Lists the devices the server exposes, normalizing DeviceType to lowercase to match AlpacaDeviceType.
 	async configuredDevices() {
 		const devices = await request<readonly AlpacaConfiguredDevice[]>(this.url, 'management/v1/configureddevices', 'GET')
 		if (devices) for (const device of devices) (device as unknown as Record<string, string>).DeviceType = device.DeviceType.toLowerCase()
@@ -37,6 +45,7 @@ export class AlpacaManagementApi {
 	}
 }
 
+// Base class with the connection endpoints common to every Alpaca device type.
 export class AlpacaDeviceApi {
 	constructor(readonly url: string | URL) {}
 
@@ -57,6 +66,7 @@ export class AlpacaDeviceApi {
 	}
 }
 
+// Camera device endpoints (binning, cooling, gain/offset, subframe, exposure, image download).
 export class AlpacaCameraApi extends AlpacaDeviceApi {
 	constructor(url: string | URL) {
 		super(new URL('/api/v1/camera/', url))
@@ -198,6 +208,8 @@ export class AlpacaCameraApi extends AlpacaDeviceApi {
 		return request<number>(this.url, `${id}/heatsinktemperature`, 'GET')
 	}
 
+	// Downloads the last exposure as a raw ImageBytes ArrayBuffer (binary, not JSON). Returns undefined on
+	// failure. Decoding the header/pixels is the caller's responsibility.
 	async getImageArray(id: number) {
 		const response = await fetch(new URL(`${id}/imagearray`, this.url), { headers: IMAGE_ARRAY_HEADERS })
 
@@ -355,6 +367,7 @@ export class AlpacaCameraApi extends AlpacaDeviceApi {
 	}
 }
 
+// Telescope/mount device endpoints (coordinates, rates, parking, slewing, syncing, pulse guiding).
 export class AlpacaTelescopeApi extends AlpacaDeviceApi {
 	constructor(url: string | URL) {
 		super(new URL('/api/v1/telescope/', url))
@@ -681,6 +694,7 @@ export class AlpacaTelescopeApi extends AlpacaDeviceApi {
 	}
 }
 
+// Filter-wheel device endpoints (slot names, focus offsets, position).
 export class AlpacaFilterWheelApi extends AlpacaDeviceApi {
 	constructor(url: string | URL) {
 		super(new URL('/api/v1/filterwheel/', url))
@@ -703,6 +717,7 @@ export class AlpacaFilterWheelApi extends AlpacaDeviceApi {
 	}
 }
 
+// Focuser device endpoints (absolute/relative move, limits, temperature compensation).
 export class AlpacaFocuserApi extends AlpacaDeviceApi {
 	constructor(url: string | URL) {
 		super(new URL('/api/v1/focuser/', url))
@@ -757,6 +772,7 @@ export class AlpacaFocuserApi extends AlpacaDeviceApi {
 	}
 }
 
+// Cover-calibrator device endpoints (cover open/close, calibrator brightness on/off).
 export class AlpacaCoverCalibratorApi extends AlpacaDeviceApi {
 	constructor(url: string | URL) {
 		super(new URL('/api/v1/covercalibrator/', url))
@@ -807,6 +823,7 @@ export class AlpacaCoverCalibratorApi extends AlpacaDeviceApi {
 	}
 }
 
+// Rotator device endpoints (mechanical/sky position, reverse, absolute/relative/mechanical move, sync).
 export class AlpacaRotatorApi extends AlpacaDeviceApi {
 	constructor(url: string | URL) {
 		super(new URL('/api/v1/rotator/', url))
@@ -865,8 +882,11 @@ export class AlpacaRotatorApi extends AlpacaDeviceApi {
 	}
 }
 
+// Per-process client identifier sent with every request, derived from the start time (positive int32).
 const CLIENT_ID = (Date.now() & 0x7fffffff).toFixed(0)
 
+// Encodes PUT parameters as Alpaca form data: booleans become 'True'/'False', numbers are stringified,
+// and the ClientID/ClientTransactionID fields are appended. Mutates and returns the params as a query.
 function makeFormDataFromParams(params: Record<string, string | number | boolean>) {
 	for (const key in params) {
 		const value = params[key]
@@ -882,6 +902,8 @@ function makeFormDataFromParams(params: Record<string, string | number | boolean
 	return new URLSearchParams(params as never)
 }
 
+// Performs one Alpaca REST call and unwraps the AlpacaResponse envelope. Returns the Value on success
+// (or defaultValue when Value is null), and undefined on any HTTP, transport, or Alpaca error (logged).
 async function request<T>(url: string | URL, path: string, method: 'GET' | 'PUT', body?: Record<string, string | number | boolean>, headers?: HeadersInit, defaultValue?: T) {
 	url = new URL(path, url)
 

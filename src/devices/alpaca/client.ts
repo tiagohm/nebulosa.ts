@@ -15,13 +15,24 @@ import { formatTemporal, TIMEZONE } from '../../astronomy/time/temporal'
 import { type Time, timeNow } from '../../astronomy/time/time'
 import { roundToNthDecimal } from '../../math/numerical/math'
 
+// Alpaca-to-INDI client adapter: polls an ASCOM Alpaca server over HTTP and presents each device to the
+// rest of the app through the same INDI Client/handler interface used by native INDI. Each Alpaca device
+// type maps to a device class that translates polled Alpaca state into INDI property vectors and routes
+// INDI commands back to Alpaca REST calls. Also converts ImageBytes downloads into FITS.
+
+// Marker handler type; the Alpaca client reuses the INDI client handler contract unchanged.
 export interface AlpacaClientHandler extends IndiClientHandler {}
 
+// Options for constructing an AlpacaClient.
 export interface AlpacaClientOptions {
+	// Receiver of the synthesized INDI property events.
 	handler: AlpacaClientHandler
+	// Polling period in milliseconds (clamped to a 1000 ms minimum). Misspelled to match existing API.
 	poolingInterval?: number
 }
 
+// Top-level Alpaca connection: discovers the server's configured devices, builds a device wrapper for
+// each, and drives them on a fixed polling interval while exposing the INDI Client surface.
 export class AlpacaClient implements Client {
 	readonly type = 'ALPACA'
 	readonly id: string
@@ -47,6 +58,7 @@ export class AlpacaClient implements Client {
 		this.remotePort = +port || (protocol === 'http:' ? 80 : 443)
 	}
 
+	// INDI getProperties: replays the definitions of one device (or all) to the handler.
 	getProperties(command?: GetProperties) {
 		if (command?.device) {
 			this.#devices.get(command.device)?.sendProperties(command.name)
@@ -55,8 +67,10 @@ export class AlpacaClient implements Client {
 		}
 	}
 
+	// Alpaca has no BLOB streaming; nothing to enable.
 	enableBlob(command: EnableBlob) {}
 
+	// Routes an INDI text/number/switch command to the addressed device wrapper.
 	sendText(vector: NewTextVector) {
 		this.#devices.get(vector.device)?.sendText(vector)
 	}
@@ -69,6 +83,8 @@ export class AlpacaClient implements Client {
 		this.#devices.get(vector.device)?.sendSwitch(vector)
 	}
 
+	// Queries the server's configured devices and begins polling. Returns false if already started or the
+	// server reports no devices.
 	async start() {
 		if (this.#timer) return false
 		const configuredDevices = await this.#management.configuredDevices()
@@ -77,6 +93,7 @@ export class AlpacaClient implements Client {
 		return true
 	}
 
+	// Builds a wrapper for each new device, initializes it, and (re)starts the polling timer.
 	#initialize(configuredDevices: readonly AlpacaConfiguredDevice[]) {
 		for (const configuredDevice of configuredDevices) {
 			let device = this.#devices.get(configuredDevice.DeviceName)
@@ -110,10 +127,13 @@ export class AlpacaClient implements Client {
 		this.#update()
 	}
 
+	// One polling tick: advances every device wrapper.
 	#update() {
 		for (const device of this.#devices) device[1].update()
 	}
 
+	// Stops polling, closes and clears all devices, and notifies the handler. `server` flags whether the
+	// stop originated from a server-side disconnect.
 	stop(server: boolean = false) {
 		if (this.#timer) {
 			clearInterval(this.#timer)
@@ -131,6 +151,8 @@ export class AlpacaClient implements Client {
 	}
 }
 
+// INDI DRIVER_INTERFACE bitmask (as a string) advertised for each Alpaca device type, so INDI clients
+// recognize the device class. Empty string for types without a corresponding INDI interface bit.
 const DRIVER_INTERFACES: Readonly<Record<Uppercase<AlpacaDeviceType>, string>> = {
 	SWITCH: '65536',
 	CAMERA: '2',
@@ -145,29 +167,45 @@ const DRIVER_INTERFACES: Readonly<Record<Uppercase<AlpacaDeviceType>, string>> =
 	VIDEO: '',
 }
 
+// INDI property group label for the primary controls tab.
 const MAIN_CONTROL = 'Main Control'
+// INDI property group label for the read-only driver/general info tab.
 const GENERAL_INFO = 'General Info'
 
+// Minimal polled state shared by every device: connection flag, optional bulk DeviceState, and the
+// step counter that sequences the initial endpoint-enable handshake.
 interface AlpacaClientDeviceState {
 	readonly Connected: boolean
 	DeviceState?: readonly AlpacaStateItem[]
 	Step: number
 }
 
+// Base class for all Alpaca device wrappers. Owns the INDI property vectors (connection, driver info,
+// snooped devices), the endpoint runner that polls the Alpaca REST API, and the connect/disconnect
+// handshake. Subclasses declare their device-specific endpoints and translate polled state into property
+// updates via handleEndpointsAfterRun.
 abstract class AlpacaDevice {
+	// Alpaca device number used in REST paths.
 	readonly id: number
 
+	// Schedules and runs the polled REST endpoints.
 	protected readonly runner = new AlpacaApiRunner()
+	// All INDI property vectors currently defined for this device.
 	protected readonly properties = new Set<DefVector & { readonly type: Uppercase<VectorType> }>()
 
+	// REST API wrapper for this device type.
 	protected abstract readonly api: AlpacaDeviceApi
+	// Mutable polled-state bag populated by the runner endpoints.
 	protected abstract readonly state: AlpacaClientDeviceState
 	protected abstract readonly initialEndpoints: readonly string[] // Endpoints used by step 1
 	protected abstract readonly deviceStateEndpoints: readonly string[] // Used when DeviceState is not supported
 	protected readonly runningEndpoints: readonly string[] = [] // Endpoints should run on each update
 
+	// Read-only driver/identification property.
 	protected readonly driverInfo = makeTextVector('', 'DRIVER_INFO', 'Driver Info', GENERAL_INFO, 'ro', ['DRIVER_INTERFACE', 'Interface', ''], ['DRIVER_EXEC', 'Exec', ''], ['DRIVER_VERSION', 'Version', '1.0'], ['DRIVER_NAME', 'Name', ''])
+	// Connect/disconnect switch property.
 	protected readonly connection = makeSwitchVector('', 'CONNECTION', 'Connection', MAIN_CONTROL, 'OneOfMany', 'rw', ['CONNECT', 'Connect', false], ['DISCONNECT', 'Disconnect', true])
+	// Names of related devices this one snoops (mount/focuser/wheel/rotator) for cross-device data.
 	protected readonly snoopDevices = makeTextVector('', 'ACTIVE_DEVICES', 'Snoop devices', MAIN_CONTROL, 'rw', ['ACTIVE_TELESCOPE', 'Mount', ''], ['ACTIVE_FOCUSER', 'Focuser', ''], ['ACTIVE_FILTER', 'Filter Wheel', ''], ['ACTIVE_ROTATOR', 'Rotator', ''])
 
 	#hasDeviceState: 0 | boolean = 0 // 0 = not checked yet
@@ -190,10 +228,12 @@ abstract class AlpacaDevice {
 		this.runner.registerHandler(this.handleEndpointsAfterRun.bind(this))
 	}
 
+	// True when the connection switch reports the device as connected.
 	get isConnected() {
 		return this.connection.elements.CONNECT.value === true
 	}
 
+	// Resolves the currently snooped mount/wheel/focuser/rotator device, or undefined when unset.
 	get activeMount() {
 		if (!this.snoopDevices.elements.ACTIVE_TELESCOPE.value) return undefined
 		return this.client.provider.get(this.client, this.snoopDevices.elements.ACTIVE_TELESCOPE.value, 'mount') as Mount | undefined
@@ -214,6 +254,7 @@ abstract class AlpacaDevice {
 		return this.client.provider.get(this.client, this.snoopDevices.elements.ACTIVE_ROTATOR.value, 'rotator') as Rotator | undefined
 	}
 
+	// Emits an INDI def* event for a property (dispatching by vector type) and tracks it as defined.
 	protected sendDefProperty(message: DefVector & { type: Uppercase<VectorType> }) {
 		if (message.type[0] === 'S') handleDefSwitchVector(this.client, this.handler, message as never)
 		else if (message.type[0] === 'N') handleDefNumberVector(this.client, this.handler, message as never)
@@ -222,12 +263,14 @@ abstract class AlpacaDevice {
 		this.properties.add(message)
 	}
 
+	// Emits an INDI set* (value/state update) event for a property, dispatching by vector type.
 	protected sendSetProperty(message: DefVector & { type: Uppercase<VectorType> }) {
 		if (message.type[0] === 'S') handleSetSwitchVector(this.client, this.handler, message as never)
 		else if (message.type[0] === 'N') handleSetNumberVector(this.client, this.handler, message as never)
 		else handleSetTextVector(this.client, this.handler, message as never)
 	}
 
+	// Emits an INDI delProperty event for each currently-defined property and forgets it.
 	protected sendDelProperty(...messages: DefVector[]) {
 		for (const message of messages) {
 			if (this.properties.delete(message as never)) {
@@ -236,6 +279,7 @@ abstract class AlpacaDevice {
 		}
 	}
 
+	// Updates a property's state in place if it changed; returns whether a change occurred.
 	protected updatePropertyState(property: DefVector, state: PropertyState | undefined) {
 		if (state !== undefined && property.state !== state) {
 			property.state = state
@@ -245,6 +289,8 @@ abstract class AlpacaDevice {
 		return false
 	}
 
+	// Updates one element's value if changed. For OneOf* switches, setting an element true clears the
+	// siblings. Returns whether a change occurred; undefined/null values are ignored.
 	protected updatePropertyValue<T extends Uppercase<VectorType>>(property: DefVector & { type: T }, name: string, value?: T extends 'SWITCH' ? boolean : T extends 'NUMBER' ? number : string) {
 		if (value === undefined || value === null) return false
 
@@ -272,6 +318,7 @@ abstract class AlpacaDevice {
 		return false
 	}
 
+	// Re-sends def + set for every property (or just the named one) to replay current state to a client.
 	sendProperties(name?: string) {
 		for (const property of this.properties) {
 			if (!name || property.name === name) {
@@ -281,6 +328,7 @@ abstract class AlpacaDevice {
 		}
 	}
 
+	// Defines the baseline properties and registers the connection/device-state polling endpoints.
 	onInit() {
 		this.sendDefProperty(this.driverInfo)
 		this.sendDefProperty(this.connection)
@@ -289,16 +337,19 @@ abstract class AlpacaDevice {
 		this.runner.registerEndpoint('DeviceState', this.api.deviceState.bind(this.api, this.id), false)
 	}
 
+	// Clears the handshake step and cached DeviceState so the init sequence runs again.
 	protected reset() {
 		this.state.Step = 0
 		this.#hasDeviceState = 0
 		this.state.DeviceState = undefined
 	}
 
+	// Hook run when the device transitions to connected; subclasses may extend.
 	protected onConnect() {
 		this.reset()
 	}
 
+	// Hook run on disconnect: resets state, disables all endpoints, and deletes published properties.
 	protected onDisconnect() {
 		this.reset()
 		this.disableEndpoints('DeviceState')
@@ -308,12 +359,18 @@ abstract class AlpacaDevice {
 		this.sendDelProperty(...this.properties)
 	}
 
+	// One polling tick: runs the enabled endpoints, which then invoke handleEndpointsAfterRun.
 	update() {
 		void this.runner.run(this.state as never)
 	}
 
+	// Hook called once the device is found not to support the bulk DeviceState endpoint; subclasses may
+	// enable per-property fallbacks.
 	protected deviceStateHasBeenDisabled() {}
 
+	// Post-poll reconciliation: applies the connection transition, runs the staged init handshake (step 0
+	// probes DeviceState support, step 1 enables the device endpoints), and spreads bulk DeviceState into
+	// the state bag. Returns true once steady-state polling should proceed for this tick.
 	protected handleEndpointsAfterRun() {
 		const { Connected, Step } = this.state
 
@@ -370,6 +427,7 @@ abstract class AlpacaDevice {
 		return false
 	}
 
+	// Enables the named endpoints and clears their cached state values so the next poll refetches them.
 	protected enableEndpoints(...keys: string[]) {
 		for (const key of keys) {
 			;(this.state as unknown as Record<string, undefined>)[key] = undefined
@@ -377,10 +435,12 @@ abstract class AlpacaDevice {
 		}
 	}
 
+	// Disables the named endpoints so the runner stops polling them.
 	protected disableEndpoints(...keys: string[]) {
 		for (const key of keys) this.runner.toggleEndpoint(key, false)
 	}
 
+	// Handles an inbound INDI text command. The base only updates the snooped-device names.
 	sendText(vector: NewTextVector) {
 		switch (vector.name) {
 			case 'ACTIVE_DEVICES':
@@ -393,8 +453,10 @@ abstract class AlpacaDevice {
 		}
 	}
 
+	// Handles an inbound INDI number command. The base device has no numeric controls.
 	sendNumber(vector: NewNumberVector) {}
 
+	// Handles an inbound INDI switch command. The base only acts on the connection switch.
 	sendSwitch(vector: NewSwitchVector) {
 		switch (vector.name) {
 			case 'CONNECTION':
@@ -406,6 +468,7 @@ abstract class AlpacaDevice {
 		}
 	}
 
+	// Issues the Alpaca connect/disconnect call, reflecting Busy → Idle/Alert in the connection property.
 	async #handleConnection(mode: 'connect' | 'disconnect') {
 		this.connection.state = 'Busy'
 		this.sendSetProperty(this.connection)
@@ -415,11 +478,14 @@ abstract class AlpacaDevice {
 		this.sendSetProperty(this.connection)
 	}
 
+	// Releases device-specific resources on shutdown; the base has none.
 	close() {}
 }
 
 // https://github.com/indilib/indi/blob/master/libs/indibase/indiccd.cpp
 
+// Polled camera state. Fields mirror Alpaca camera properties; optional ones are absent until first
+// fetched, mutable ones are written by inbound commands or per-frame logic.
 interface AlpacaClientCameraState extends AlpacaClientDeviceState {
 	readonly CameraState: AlpacaCameraState
 	readonly CCDTemperature: number
@@ -465,6 +531,8 @@ interface AlpacaClientCameraState extends AlpacaClientDeviceState {
 	LastCameraState: number
 }
 
+// Camera device wrapper: exposes the standard INDI CCD properties (frame, binning, gain/offset, cooler,
+// exposure, guiding, image BLOB) and maps polled Alpaca camera state onto them.
 class AlpacaCamera extends AlpacaDevice {
 	protected readonly api: AlpacaCameraApi
 	// https://ascom-standards.org/newdocs/camera.html#Camera.DeviceState
@@ -559,10 +627,14 @@ class AlpacaCamera extends AlpacaDevice {
 		this.api = api
 	}
 
+	// True when the selected frame type is a light frame.
 	get isLight() {
 		return this.#frameType.elements.FRAME_LIGHT?.value === true
 	}
 
+	// Reconciles polled camera state into the INDI CCD properties: dimensions/pixel size, cooler and
+	// temperature, gain/offset/readout ranges, binning, subframe, and exposure progress, emitting the
+	// image BLOB and FITS when a frame completes. Returns false until the device is fully initialized.
 	protected handleEndpointsAfterRun() {
 		if (!super.handleEndpointsAfterRun()) return false
 
@@ -776,6 +848,7 @@ class AlpacaCamera extends AlpacaDevice {
 		return true
 	}
 
+	// Handles camera switch commands (cooler on/off, readout-mode selection, abort, frame type).
 	sendSwitch(vector: NewSwitchVector) {
 		super.sendSwitch(vector)
 
@@ -815,6 +888,8 @@ class AlpacaCamera extends AlpacaDevice {
 		}
 	}
 
+	// Handles camera number commands: starts/aborts exposures, sets gain/offset/temperature, subframe,
+	// binning, and timed pulse-guide pulses. Guide durations are milliseconds.
 	sendNumber(vector: NewNumberVector) {
 		super.sendNumber(vector)
 
@@ -888,6 +963,7 @@ class AlpacaCamera extends AlpacaDevice {
 		}
 	}
 
+	// Called when an exposure completes: downloads the image, emits it, and returns the exposure to Ok.
 	async #handleImageReady() {
 		this.#exposure.state = 'Busy'
 		this.#exposure.elements.CCD_EXPOSURE_VALUE.value = 0
@@ -900,6 +976,8 @@ class AlpacaCamera extends AlpacaDevice {
 		this.sendSetProperty(this.#exposure)
 	}
 
+	// Downloads the ImageBytes buffer, converts it to FITS (stamping camera/mount/etc. metadata), and
+	// publishes it through the CCD1 BLOB property.
 	async #readImageDataAsFits() {
 		const buffer = await this.api.getImageArray(this.id)
 
@@ -920,6 +998,8 @@ class AlpacaCamera extends AlpacaDevice {
 
 // https://github.com/indilib/indi/blob/master/libs/indibase/inditelescope.cpp
 
+// Polled mount state mirroring Alpaca telescope properties (capabilities, coordinates, tracking, park,
+// pier side, site location, guide rates). Coordinates are stored in Alpaca units (RA hours, Dec degrees).
 interface AlpacaClientTelescopeState extends AlpacaClientDeviceState {
 	readonly CanHome: boolean
 	readonly CanPark: boolean
@@ -952,6 +1032,9 @@ interface AlpacaClientTelescopeState extends AlpacaClientDeviceState {
 	LastDeclination?: number
 }
 
+// Mount device wrapper: exposes the standard INDI telescope properties (coordinates, slew/sync, tracking,
+// motion, park/home, site/time, pier side, guiding) and maps polled Alpaca telescope state onto them.
+// Converts between the mount's J2000/JNOW equatorial frames as needed.
 class AlpacaTelescope extends AlpacaDevice {
 	protected readonly api: AlpacaTelescopeApi
 	// https://ascom-standards.org/newdocs/telescope.html#Telescope.DeviceState
@@ -1036,6 +1119,9 @@ class AlpacaTelescope extends AlpacaDevice {
 		this.api = api
 	}
 
+	// Reconciles polled mount state into the INDI telescope properties: capabilities, equatorial
+	// coordinates (converted to JNOW), tracking mode/state, park/home, pier side, site location, UTC time,
+	// and guide rates. Returns false until the device is fully initialized.
 	protected handleEndpointsAfterRun() {
 		if (!super.handleEndpointsAfterRun()) return false
 
@@ -1192,6 +1278,8 @@ class AlpacaTelescope extends AlpacaDevice {
 		return true
 	}
 
+	// Handles mount switch commands: slew rate, slew/sync mode, abort, track mode/state, home, axis
+	// motion, and park/unpark.
 	sendSwitch(vector: NewSwitchVector) {
 		super.sendSwitch(vector)
 
@@ -1272,6 +1360,8 @@ class AlpacaTelescope extends AlpacaDevice {
 		}
 	}
 
+	// Handles mount number commands: slew/sync to equatorial target, timed pulse guiding (milliseconds),
+	// guide-rate changes, and site location/elevation updates.
 	sendNumber(vector: NewNumberVector) {
 		super.sendNumber(vector)
 
@@ -1323,6 +1413,7 @@ class AlpacaTelescope extends AlpacaDevice {
 		}
 	}
 
+	// Handles mount text commands: sets the mount's UTC date/time and offset.
 	sendText(vector: NewTextVector) {
 		super.sendText(vector)
 
@@ -1342,6 +1433,8 @@ class AlpacaTelescope extends AlpacaDevice {
 
 	close() {}
 
+	// Slews or syncs to the requested equatorial target (RA hours, Dec degrees). Converts JNOW input to
+	// J2000 when the mount reports a JNOW equatorial system; the slew/sync choice follows ON_COORD_SET.
 	async #moveToTarget(rightAscension?: number, declination?: number) {
 		if (rightAscension !== undefined && declination !== undefined) {
 			if (this.state.EquatorialSystem === 2) [rightAscension, declination] = equatorialToJ2000(rightAscension, declination, this.#now)
@@ -1353,11 +1446,14 @@ class AlpacaTelescope extends AlpacaDevice {
 
 // https://github.com/indilib/indi/blob/master/libs/indibase/indifilterinterface.cpp
 
+// Polled filter-wheel state: current slot (0-based, -1 while moving) and the slot names.
 interface AlpacaClientFilterWheelState extends AlpacaClientDeviceState {
 	readonly Position: number
 	readonly Names?: string[]
 }
 
+// Filter-wheel device wrapper: exposes INDI FILTER_SLOT/FILTER_NAME and maps slot position (Alpaca is
+// 0-based; INDI is 1-based) and names from polled state.
 class AlpacaFilterWheel extends AlpacaDevice {
 	readonly #position = makeNumberVector('', 'FILTER_SLOT', 'Position', MAIN_CONTROL, 'rw', ['FILTER_SLOT_VALUE', 'Slot', 1, 1, 1, 1, '%.0f'])
 	readonly #names = makeTextVector('', 'FILTER_NAME', 'Filter', MAIN_CONTROL, 'ro')
@@ -1382,6 +1478,8 @@ class AlpacaFilterWheel extends AlpacaDevice {
 		this.api = api
 	}
 
+	// Defines the slot/name properties once names are known (step 1), then publishes the current slot
+	// (converted to 1-based, Busy while the wheel is moving) each tick. Returns false until initialized.
 	protected handleEndpointsAfterRun() {
 		if (!super.handleEndpointsAfterRun()) return false
 
@@ -1415,6 +1513,7 @@ class AlpacaFilterWheel extends AlpacaDevice {
 		return true
 	}
 
+	// Handles the slot-selection command, converting the 1-based INDI slot back to Alpaca's 0-based index.
 	sendNumber(vector: NewNumberVector) {
 		super.sendNumber(vector)
 
@@ -1427,6 +1526,8 @@ class AlpacaFilterWheel extends AlpacaDevice {
 
 // https://github.com/indilib/indi/blob/master/libs/indibase/indifocuserinterface.cpp
 
+// Polled focuser state: motion flag, current position (steps), optional temperature, absolute-vs-relative
+// capability, and travel range.
 interface AlpacaClientFocuserState extends AlpacaClientDeviceState {
 	readonly IsMoving: boolean
 	readonly Position: number
@@ -1435,6 +1536,8 @@ interface AlpacaClientFocuserState extends AlpacaClientDeviceState {
 	readonly MaxStep: number
 }
 
+// Focuser device wrapper: exposes INDI absolute/relative position, direction, temperature, and abort,
+// adapting relative moves on absolute-only Alpaca focusers.
 class AlpacaFocuser extends AlpacaDevice {
 	readonly #absolutePosition = makeNumberVector('', 'ABS_FOCUS_POSITION', 'Absolute Position', MAIN_CONTROL, 'rw', ['FOCUS_ABSOLUTE_POSITION', 'Position', 0, 0, 0, 1, '%.0f'])
 	readonly #relativePosition = makeNumberVector('', 'REL_FOCUS_POSITION', 'Relative Position', MAIN_CONTROL, 'rw', ['FOCUS_RELATIVE_POSITION', 'Steps', 0, 0, 0, 1, '%.0f'])
@@ -1470,18 +1573,24 @@ class AlpacaFocuser extends AlpacaDevice {
 		this.api = api
 	}
 
+	// True when the active position property is the absolute one.
 	get isAbsolute() {
 		return this.#position === this.#absolutePosition
 	}
 
+	// True when the selected relative-move direction is inward.
 	get isFocusIn() {
 		return this.#direction.elements.FOCUS_INWARD.value === true
 	}
 
+	// True when the selected relative-move direction is outward.
 	get isFocusOut() {
 		return this.#direction.elements.FOCUS_OUTWARD.value === true
 	}
 
+	// Defines the position/direction/temperature/abort properties (choosing absolute vs relative from the
+	// device's capability) at step 1, then publishes position (Busy while moving) and temperature each
+	// tick. Returns false until initialized.
 	protected handleEndpointsAfterRun() {
 		if (!super.handleEndpointsAfterRun()) return false
 
@@ -1527,6 +1636,7 @@ class AlpacaFocuser extends AlpacaDevice {
 		return true
 	}
 
+	// Handles focuser switch commands: abort motion and select the relative-move direction.
 	sendSwitch(vector: NewSwitchVector) {
 		super.sendSwitch(vector)
 
@@ -1541,6 +1651,8 @@ class AlpacaFocuser extends AlpacaDevice {
 		}
 	}
 
+	// Handles focuser move commands: relative steps (signed by direction) on relative focusers, or an
+	// absolute target on absolute focusers.
 	sendNumber(vector: NewNumberVector) {
 		super.sendNumber(vector)
 
@@ -1558,6 +1670,7 @@ class AlpacaFocuser extends AlpacaDevice {
 // https://github.com/indilib/indi/blob/master/libs/indibase/indidustcapinterface.cpp
 // https://github.com/indilib/indi/blob/master/libs/indibase/indilightboxinterface.cpp
 
+// Polled cover-calibrator state: cover open/close state and motion, calibrator state, and brightness.
 interface AlpacaClientCoverCalibratorState extends AlpacaClientDeviceState {
 	readonly CoverState: number
 	readonly CoverMoving: boolean
@@ -1566,6 +1679,8 @@ interface AlpacaClientCoverCalibratorState extends AlpacaClientDeviceState {
 	readonly MaxBrightness?: number
 }
 
+// Cover-calibrator (dust cap + flat panel) device wrapper: exposes INDI light/brightness and cap
+// park/abort properties, mapping the Alpaca cover and calibrator states onto them.
 class AlpacaCoverCalibrator extends AlpacaDevice {
 	protected readonly api: AlpacaCoverCalibratorApi
 
@@ -1599,6 +1714,9 @@ class AlpacaCoverCalibrator extends AlpacaDevice {
 		this.api = api
 	}
 
+	// Detects whether the device is a cover, a calibrator, or both, defines the matching properties at
+	// step 1 (adjusting DRIVER_INTERFACE), then publishes cover park state and calibrator on/off and
+	// brightness each tick. Alpaca state codes: 0 not present, 1 closed/off, 2 moving, 3 open/on.
 	protected handleEndpointsAfterRun() {
 		if (!super.handleEndpointsAfterRun()) return false
 
@@ -1658,6 +1776,8 @@ class AlpacaCoverCalibrator extends AlpacaDevice {
 		return true
 	}
 
+	// Handles cover-calibrator switch commands: abort cover motion, park/unpark (close/open) the cover, and
+	// turn the calibrator light on/off.
 	sendSwitch(vector: NewSwitchVector) {
 		super.sendSwitch(vector)
 
@@ -1676,6 +1796,7 @@ class AlpacaCoverCalibrator extends AlpacaDevice {
 		}
 	}
 
+	// Handles the calibrator brightness command: positive values turn the light on at that level, zero off.
 	sendNumber(vector: NewNumberVector) {
 		super.sendNumber(vector)
 
@@ -1690,6 +1811,7 @@ class AlpacaCoverCalibrator extends AlpacaDevice {
 
 // https://github.com/indilib/indi/blob/master/libs/indibase/indirotatorinterface.cpp
 
+// Polled rotator state: motion flag, mechanical angle (degrees), and reverse capability/state.
 interface AlpacaClientRotatorState extends AlpacaClientDeviceState {
 	readonly IsMoving: boolean
 	readonly Position: number
@@ -1697,6 +1819,8 @@ interface AlpacaClientRotatorState extends AlpacaClientDeviceState {
 	readonly IsReverse: boolean
 }
 
+// Rotator device wrapper: exposes INDI goto/sync angle, reverse, and abort, mapping the polled rotator
+// position (degrees) and reverse flag.
 class AlpacaRotator extends AlpacaDevice {
 	protected readonly api: AlpacaRotatorApi
 
@@ -1729,6 +1853,8 @@ class AlpacaRotator extends AlpacaDevice {
 		this.api = api
 	}
 
+	// Defines the goto/abort/sync/reverse properties at step 1, then publishes the mechanical angle (Busy
+	// while moving) and reverse state each tick. Returns false until initialized.
 	protected handleEndpointsAfterRun() {
 		if (!super.handleEndpointsAfterRun()) return false
 
@@ -1761,6 +1887,7 @@ class AlpacaRotator extends AlpacaDevice {
 		return true
 	}
 
+	// Handles rotator switch commands: toggle reverse direction and abort motion.
 	sendSwitch(vector: NewSwitchVector) {
 		super.sendSwitch(vector)
 
@@ -1777,6 +1904,7 @@ class AlpacaRotator extends AlpacaDevice {
 		}
 	}
 
+	// Handles rotator number commands: absolute goto and sync to a mechanical angle (degrees).
 	sendNumber(vector: NewNumberVector) {
 		super.sendNumber(vector)
 
@@ -1791,14 +1919,17 @@ class AlpacaRotator extends AlpacaDevice {
 	}
 }
 
+// Wraps a longitude in degrees to the range (-180, 180].
 function normalizeLongitude(angle: number) {
 	angle = angle % 360
 	if (angle > 180) angle -= 360
 	return angle
 }
 
+// Converts an Alpaca ImageBytes binary buffer into an in-memory FITS, stamping observation metadata
+// (J2000 coordinates from the mount, filter, focuser, rotator, exposure). `time` is used for the JNOW→
+// J2000 conversion and `lastExposureDuration` is in seconds. Disconnected devices are ignored.
 // https://github.com/ASCOMInitiative/ASCOMRemote/blob/main/Documentation/AlpacaImageBytes.pdf
-
 export function makeFitsFromImageBytes(data: ArrayBuffer, time?: Time, camera?: Camera, mount?: Mount, wheel?: Wheel, focuser?: Focuser, rotator?: Rotator, lastExposureDuration: number = 0) {
 	const metadataArray = new Int32Array(data, 0, 44)
 	const metadata: ImageBytesMetadata = {
@@ -1918,10 +2049,16 @@ export function makeFitsFromImageBytes(data: ArrayBuffer, time?: Time, camera?: 
 	return output.subarray(0, size)
 }
 
+// A named, awaitable REST call scheduled by the runner.
 type AlpacaApiRunnerEndpoint = () => PromiseLike<unknown>
 
+// Callback invoked once after each polling cycle's results have been applied to the state bag.
 type AlpacaApiRunnerHandlerAfterRun = () => void
 
+// Polling scheduler backing each device wrapper. Holds a set of named endpoints in parallel arrays
+// (key/endpoint/enabled/interval/count/result), runs the enabled ones each tick subject to their
+// per-endpoint interval, writes their results into the device state bag, and then fires the after-run
+// handlers. Parallel arrays keep object shapes stable and avoid per-tick allocations.
 class AlpacaApiRunner {
 	readonly #keys: string[] = []
 	readonly #endpoints: AlpacaApiRunnerEndpoint[] = []
@@ -1931,6 +2068,8 @@ class AlpacaApiRunner {
 	readonly #result: (PromiseLike<unknown> | undefined)[] = []
 	readonly #handlers = new Set<AlpacaApiRunnerHandlerAfterRun>()
 
+	// Registers or replaces an endpoint under `key`. `enabled` sets initial polling; `interval` polls
+	// every Nth tick (1 = every tick).
 	registerEndpoint(key: string, endpoint: AlpacaApiRunnerEndpoint, enabled: boolean, interval: number = 1) {
 		const index = this.#keys.indexOf(key)
 
@@ -1949,6 +2088,7 @@ class AlpacaApiRunner {
 		}
 	}
 
+	// Removes the endpoint registered under `key`, if any.
 	unregisterEndpoint(key: string) {
 		const index = this.#keys.indexOf(key)
 
@@ -1962,6 +2102,8 @@ class AlpacaApiRunner {
 		}
 	}
 
+	// Enables/disables an endpoint (or toggles when `force` is omitted), resetting its tick counter when
+	// enabled so it polls immediately.
 	toggleEndpoint(key: string, force?: boolean) {
 		const index = this.#keys.indexOf(key)
 		if (index >= 0) this.#enabled[index] = force ?? !this.#enabled[index]
@@ -1969,19 +2111,24 @@ class AlpacaApiRunner {
 		if (index >= 0 && this.#enabled[index]) this.#count[index] = 0
 	}
 
+	// Returns whether the named endpoint exists and is currently enabled.
 	isEndpointEnabled(key: string) {
 		const index = this.#keys.indexOf(key)
 		return index >= 0 && this.#enabled[index]
 	}
 
+	// Registers an after-run handler invoked once per cycle.
 	registerHandler(handler: AlpacaApiRunnerHandlerAfterRun) {
 		this.#handlers.add(handler)
 	}
 
+	// Removes a previously registered after-run handler.
 	unregisterHandler(handler: AlpacaApiRunnerHandlerAfterRun) {
 		this.#handlers.delete(handler)
 	}
 
+	// One polling cycle: fires the due endpoints (respecting their intervals), then applies results and
+	// runs the handlers. Returns the promise that resolves once results are applied.
 	run(state: Record<string, ValueType>) {
 		const n = this.#keys.length
 
@@ -1998,6 +2145,8 @@ class AlpacaApiRunner {
 		return this.#handleEndpointsAfterRun(state)
 	}
 
+	// Awaits all in-flight endpoint results, writes each enabled endpoint's value into the state bag under
+	// its key, then invokes the after-run handlers.
 	async #handleEndpointsAfterRun(state: Record<string, ValueType>) {
 		// oxlint-disable-next-line typescript/await-thenable
 		const result = await Promise.all(this.#result)

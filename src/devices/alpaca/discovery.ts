@@ -3,16 +3,28 @@ import { type NetworkInterfaceInfo, networkInterfaces } from 'node:os'
 import { AlpacaManagementApi } from './api'
 import type { AlpacaConfiguredDevice } from './types'
 
+// ASCOM Alpaca UDP discovery: a server that answers discovery probes with its management ports, and a
+// client that broadcasts probes and collects responding servers (optionally fetching their device list).
+// Implements the Alpaca Discovery v1 protocol over IPv4 broadcast and IPv6 multicast.
+
+// UDP port on which Alpaca discovery probes and responses are exchanged.
 export const ALPACA_DISCOVERY_PORT = 32227
+// Fixed probe payload a client broadcasts; servers reply only to this exact string.
 export const ALPACA_DISCOVERY_DATA = 'alpacadiscovery1'
+// Link-scoped IPv6 multicast group reserved for Alpaca discovery.
 export const ALPACA_DISCOVERY_IPV6_GROUP = 'ff12::a1:9aca'
 
+// Options for the discovery server.
 export interface AlpacaDiscoveryServerOptions {
+	// Ignore probes originating from loopback addresses (default true).
 	ignoreLocalhost?: boolean
 }
 
+// UDP responder that announces a set of Alpaca management ports to discovery clients.
 export class AlpacaDiscoveryServer {
+	// Bound UDP socket, undefined while stopped.
 	#socket?: DgramSocket
+	// Management ports announced in discovery responses.
 	readonly #ports = new Set<number>()
 
 	constructor(readonly options?: AlpacaDiscoveryServerOptions) {}
@@ -288,21 +300,30 @@ function joinBunIpv6MulticastGroup(socket: Bun.udp.Socket<'buffer'>, ignoreLocal
 	}
 }
 
+// Options controlling a discovery broadcast.
 export interface AlpacaDiscoveryOptions {
+	// IP family to probe (IPv4 broadcast or IPv6 multicast).
 	family?: NetworkInterfaceInfo['family']
+	// Destination discovery port.
 	port?: number
+	// Local bind address.
 	host?: string
+	// How long to listen for responses before auto-closing, milliseconds (0 disables the timeout).
 	timeout?: number // ms
+	// Whether to fetch each responder's configured-device list via the management API.
 	fetch?: boolean
+	// If true, resolve the discovery() promise only after the listen window closes.
 	wait?: boolean
 }
 
+// One discovered Alpaca server and, when fetched, its configured devices.
 export interface AlpacaDeviceServer {
 	readonly address: string
 	readonly port: number
 	readonly devices: readonly AlpacaConfiguredDevice[]
 }
 
+// Default discovery options: IPv4 broadcast, standard port, 15 s window, fetch devices, no wait.
 const DEFAULT_ALPACA_DISCOVERY_OPTIONS: Required<AlpacaDiscoveryOptions> = {
 	family: 'IPv4',
 	port: ALPACA_DISCOVERY_PORT,
@@ -312,9 +333,13 @@ const DEFAULT_ALPACA_DISCOVERY_OPTIONS: Required<AlpacaDiscoveryOptions> = {
 	wait: false,
 }
 
+// Broadcasts discovery probes and reports responding Alpaca servers. Disposable to release its socket.
 export class AlpacaDiscoveryClient implements Disposable {
+	// Bun UDP socket used for the probe/response exchange.
 	#socket?: Bun.udp.Socket<'buffer'>
+	// Auto-close timer for the listen window.
 	#timeout?: NodeJS.Timeout
+	// Resolver backing the optional wait-until-closed promise.
 	#wait?: PromiseWithResolvers<boolean>
 
 	// Broadcasts an Alpaca discovery probe and reports every valid server response.

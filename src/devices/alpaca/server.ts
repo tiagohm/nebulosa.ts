@@ -12,11 +12,18 @@ import { type GeographicCoordinate, localSiderealTime } from '../../astronomy/ob
 import { type Time, timeNow } from '../../astronomy/time/time'
 import type { CameraManager, CoverManager, DeviceHandler, DeviceManager, FlatPanelManager, FocuserManager, GuideOutputManager, MountManager, RotatorManager, WheelManager } from '../indi/manager'
 
+// Embedded ASCOM Alpaca server: exposes the app's INDI devices (camera, mount, focuser, wheel, rotator,
+// cover/calibrator) over the Alpaca REST API so external Alpaca clients can control them. Subscribes to
+// the device managers to track devices, maintains per-device Alpaca state, and serves the management and
+// per-device endpoints via Bun.serve. Internal radians/AU/etc. are converted to the Alpaca spec units.
+
+// Notification hooks fired when a device is registered with or removed from the server.
 export interface AlpacaServerHandler {
 	readonly deviceAdded?: (server: AlpacaServer, device: Device, configuredDevice: AlpacaConfiguredDevice) => void
 	readonly deviceRemoved?: (server: AlpacaServer, device: Device, configuredDevice: AlpacaConfiguredDevice) => void
 }
 
+// Server configuration: identity strings plus the device managers to expose (at least one required).
 export interface AlpacaServerOptions {
 	name?: string
 	version?: string
@@ -29,10 +36,13 @@ export interface AlpacaServerOptions {
 	flatPanel?: FlatPanelManager
 	cover?: CoverManager
 	guideOutput?: GuideOutputManager
+	// Strategy for assigning Alpaca device numbers; defaults to a stable hash of type+name.
 	deviceNumberProvider?: AlpacaDeviceNumberProvider
 	handler?: AlpacaServerHandler
 }
 
+// Per-device server-side state cache holding pending async tasks and the latest Alpaca-facing values.
+// Extends geographic + equatorial coordinates; comments group the fields by device type.
 interface AlpacaDeviceState extends GeographicCoordinate, EquatorialCoordinate {
 	// Device
 	tasks: Partial<Record<'connect' | 'position', ReturnType<typeof promiseWithTimeout>>>
@@ -51,12 +61,14 @@ interface AlpacaDeviceState extends GeographicCoordinate, EquatorialCoordinate {
 	lst: Angle
 }
 
+// One device registered with the server: the underlying INDI device, its Alpaca descriptor, and state.
 interface AlpacaRegisteredDevice<D extends Device = Device> {
 	readonly device: D
 	readonly configuredDevice: AlpacaConfiguredDevice
 	readonly state: AlpacaDeviceState
 }
 
+// Initial values copied into each device's state on registration.
 const DEFAULT_ALPACA_DEVICE_STATE: AlpacaDeviceState = {
 	tasks: {},
 	lastExposureDuration: 0,
@@ -74,9 +86,15 @@ const DEFAULT_ALPACA_DEVICE_STATE: AlpacaDeviceState = {
 	lst: 0,
 }
 
+// Alpaca REST server over the app's INDI device managers. Subscribes to device add/update/remove events
+// per device type, maps each device to an Alpaca registration, and serves the management and per-device
+// endpoints. The many per-property #<type>GetX/#<type>SetX route handlers are self-describing thin
+// adapters between INDI device properties and AlpacaResponse envelopes, so they are not commented
+// individually; the non-trivial lifecycle, lookup, and conversion helpers are.
 export class AlpacaServer {
 	#server?: Bun.Server<undefined>
 
+	// Registered devices grouped by Alpaca device type.
 	readonly #equipment = {
 		camera: new Map<Device, AlpacaRegisteredDevice<Camera>>(),
 		telescope: new Map<Device, AlpacaRegisteredDevice<Mount>>(),
@@ -95,6 +113,8 @@ export class AlpacaServer {
 	readonly #deviceNumberProvider: AlpacaDeviceNumberProvider
 	#timer?: NodeJS.Timeout
 
+	// Subscriptions to each device manager that register/unregister devices and mirror property changes
+	// (connection, frame, position, geographic coordinate, BLOB) into the per-device state.
 	readonly #cameraHandler: DeviceHandler<Camera> = {
 		added: (device: Camera) => {
 			this.#makeConfiguredDeviceFromDevice(device, 'camera')
@@ -210,18 +230,22 @@ export class AlpacaServer {
 		this.#deviceNumberProvider = options.deviceNumberProvider ?? defaultDeviceNumberProvider
 	}
 
+	// Bound HTTP port, or -1 when stopped.
 	get port() {
 		return this.#server?.port ?? -1
 	}
 
+	// Bound hostname, or undefined when stopped.
 	get host() {
 		return this.#server?.hostname
 	}
 
+	// Whether the HTTP server is currently listening.
 	get running() {
 		return !!this.#server
 	}
 
+	// Bun route table mapping Alpaca management and per-device REST paths to the corresponding handlers.
 	readonly routes: Readonly<Bun.Serve.Routes<undefined, string>> = {
 		// https://ascom-standards.org/api/?urls.primaryName=ASCOM+Alpaca+Management+API
 		'/management/apiversions': { GET: () => this.#apiVersions() },
@@ -398,6 +422,8 @@ export class AlpacaServer {
 		'/api/v1/covercalibrator/:id/opencover': { PUT: (req) => this.#coverCalibratorOpen(+req.params.id) },
 	}
 
+	// Starts the HTTP server on the given host/port (0 = ephemeral) and begins listening for devices.
+	// Returns false if already started.
 	start(hostname: string = '0.0.0.0', port: number = 0, options?: AlpacaServerStartOptions) {
 		if (this.#server) return false
 
@@ -423,6 +449,8 @@ export class AlpacaServer {
 		return true
 	}
 
+	// Subscribes to all configured device managers, seeds the current devices, and starts the 30 s tick
+	// that refreshes mount time/LST.
 	listen() {
 		this.options.camera?.addHandler(this.#cameraHandler)
 		this.options.wheel?.addHandler(this.#wheelHandler)
@@ -438,6 +466,7 @@ export class AlpacaServer {
 		this.#tick()
 	}
 
+	// Unsubscribes from the device managers, clears all registrations, and stops the tick.
 	unlisten() {
 		this.options.camera?.removeHandler(this.#cameraHandler)
 		this.options.wheel?.removeHandler(this.#wheelHandler)
@@ -462,6 +491,7 @@ export class AlpacaServer {
 		this.#timer = undefined
 	}
 
+	// Stops the HTTP server and unsubscribes from device managers.
 	stop() {
 		if (this.#server) {
 			void this.#server.stop(true)
@@ -471,6 +501,7 @@ export class AlpacaServer {
 		this.unlisten()
 	}
 
+	// Periodic refresh of each mount's current time and apparent local sidereal time.
 	#tick() {
 		// Mount
 		const time = timeNow(true)
@@ -481,12 +512,15 @@ export class AlpacaServer {
 		}
 	}
 
+	// Resolves a registered device by INDI device instance or by Alpaca device number, optionally
+	// filtering by INDI device subtype. Returns undefined (cast) when not found.
 	#device<D extends Device>(key: Device | number, type: AlpacaDeviceType, deviceType?: DeviceType): AlpacaRegisteredDevice<D> {
 		if (typeof key === 'object') return this.#equipment[type].get(key)! as never
 		else for (const item of this.#equipment[type].values()) if (item.configuredDevice.DeviceNumber === key && (!deviceType || item.device.type === deviceType)) return item as never
 		return undefined as never
 	}
 
+	// Typed device lookups by Alpaca type (covercalibrator splits into cover and flat-panel subtypes).
 	#camera(key: Device | number) {
 		return this.#device<Camera>(key, 'camera')
 	}
@@ -515,6 +549,8 @@ export class AlpacaServer {
 		return this.#device<GuideOutput>(key, type)
 	}
 
+	// Resolves a pending connect/disconnect task when the device's connection state changes, waiting
+	// briefly after a connect so the device's properties are fully populated first.
 	#handleConnectedEvent(device: Device, type: AlpacaDeviceType) {
 		const task = this.#device(device, type).state.tasks.connect
 
@@ -534,14 +570,18 @@ export class AlpacaServer {
 
 	// Management API
 
+	// Supported Alpaca API versions.
 	#apiVersions() {
 		return makeAlpacaResponse([1])
 	}
 
+	// Server identity for the management description endpoint.
 	#apiDescription() {
 		return makeAlpacaResponse({ ServerName: this.options.name || 'Nebulosa', Manufacturer: this.options.manufacturer || 'Tiago Melo', ManufacturerVersion: this.options.version || '1.0.0', Location: 'None' })
 	}
 
+	// Builds and returns the deduplicated set of configured devices across all managers, registering any
+	// not yet known. Also called on listen() to seed registrations.
 	configuredDevices() {
 		const deviceNumbers = new Set<string>()
 		const configuredDevices = new Set<AlpacaConfiguredDevice>()
@@ -590,6 +630,8 @@ export class AlpacaServer {
 		return makeAlpacaResponse(this.#device(id, type).device.driver.version)
 	}
 
+	// Connects or disconnects the device, coalescing concurrent requests onto one pending task and timing
+	// out after 10 s. Returns the Alpaca response once the connection state settles.
 	async #deviceConnect(id: number, type: AlpacaDeviceType, data: { Connected: string }) {
 		const { state, device } = this.#device(id, type)
 
@@ -637,6 +679,7 @@ export class AlpacaServer {
 		return makeAlpacaResponse([])
 	}
 
+	// Dispatches a vendor-specific Alpaca action to the device; returns ActionNotImplemented otherwise.
 	#deviceAction(id: number, type: AlpacaDeviceType, data: { Action: string; Parameters: string }) {
 		const { device } = this.#device(id, type)
 		const action = data.Action.toLowerCase() as Lowercase<AlpacaFocuserAction | AlpacaWheelAction>
@@ -745,6 +788,8 @@ export class AlpacaServer {
 		return makeAlpacaResponse(this.#camera(id).device.coolerPower)
 	}
 
+	// Bulk DeviceState array for a camera: operational state, temperatures, image-ready, guiding, and
+	// exposure progress (PercentCompleted derived from remaining vs. total exposure time).
 	#cameraGetDeviceState(id: number) {
 		const { state, device } = this.#camera(id)
 		const res = new Array<AlpacaStateItem>(8)
@@ -832,6 +877,8 @@ export class AlpacaServer {
 		return makeAlpacaResponse(this.#camera(id).device.bin.y.max)
 	}
 
+	// Updates the cached subframe [startX, startY, width, height] with whichever fields are provided and
+	// applies the combined frame to the device. Shared by the StartX/StartY/NumX/NumY setters.
 	#cameraSetFrame(id: number, data: { NumX?: string; NumY?: string; StartX?: string; StartY?: string }) {
 		const { state, device } = this.#camera(id)
 		const { frame } = state
@@ -961,6 +1008,8 @@ export class AlpacaServer {
 		return makeAlpacaResponse(undefined)
 	}
 
+	// Starts an exposure: enables the BLOB channel, sets the frame type, records the duration, and triggers
+	// capture. Duration is seconds; non-positive durations are ignored.
 	#cameraStart(id: number, data: { Duration: string; Light: string }) {
 		const { device, state } = this.#camera(id)
 		const { camera } = this.options
@@ -976,6 +1025,8 @@ export class AlpacaServer {
 		return makeAlpacaResponse(undefined)
 	}
 
+	// Returns the last captured frame as Alpaca ImageBytes (only the binary encoding is supported; the JSON
+	// array form is rejected). Always clears the buffered image and disables the BLOB channel afterward.
 	#cameraGetImageArray(id: number, accept?: string | null) {
 		const { state, device } = this.#camera(id)
 
@@ -997,6 +1048,7 @@ export class AlpacaServer {
 
 	// Filter Wheel API
 
+	// Bulk DeviceState array for a filter wheel: current slot position.
 	#wheelGetDeviceState(id: number) {
 		const { device } = this.#wheel(id)
 		const res = new Array<AlpacaStateItem>(2)
@@ -1022,6 +1074,7 @@ export class AlpacaServer {
 		return makeAlpacaResponse(device.moving ? -1 : device.position)
 	}
 
+	// Moves the wheel to the requested slot and awaits the position-reached event (or a timeout).
 	async #wheelSetPosition(id: number, data: { Position: string }) {
 		const { state, device } = this.#wheel(id)
 		state.position = +data.Position
@@ -1142,6 +1195,8 @@ export class AlpacaServer {
 		return makeAlpacaErrorResponse(AlpacaException.MethodOrPropertyNotImplemented, 'Telescope does not have declination rate')
 	}
 
+	// Bulk DeviceState array for a mount: park/home, equatorial coordinates (RA hours, Dec degrees), pier
+	// side, slewing/tracking/guiding flags, and UTC time. Altitude/azimuth/sidereal time are placeholders.
 	#mountGetDeviceState(id: number) {
 		const { device } = this.#telescope(id)
 		const res = new Array<AlpacaStateItem>(13)
@@ -1332,6 +1387,7 @@ export class AlpacaServer {
 		return makeAlpacaResponse(this.#telescope(id).device.canMove)
 	}
 
+	// Predicts the pier side the mount would adopt for its current coordinates given the local sidereal time.
 	#mountGetDestinationSideOfPier(id: number) {
 		const { state, device } = this.#telescope(id)
 		const pierSide = expectedPierSide(device.equatorialCoordinate.rightAscension, device.equatorialCoordinate.declination, state.lst)
@@ -1343,6 +1399,8 @@ export class AlpacaServer {
 		return makeAlpacaResponse(undefined)
 	}
 
+	// Starts or stops slewing on one axis. Rate sign chooses direction (primary: east/west, secondary:
+	// north/south); rate 0 stops both directions on that axis.
 	#mountMoveAxis(id: number, data: { Axis: string; Rate: string }) {
 		const rate = +data.Rate
 		const isPrimaryAxis = +data.Axis === 0
@@ -1385,6 +1443,8 @@ export class AlpacaServer {
 		return this.#mountSlewToAltAzAsync(id, data)
 	}
 
+	// Slews to an alt/az target by converting observed horizontal coordinates (degrees) to CIRS RA/Dec,
+	// applying refraction only when the device has it enabled.
 	#mountSlewToAltAzAsync(id: number, data: { Azimuth: string; Altitude: string }) {
 		const { state, device } = this.#telescope(id)
 		const [rightAscension, declination] = observedToCirs(deg(+data.Azimuth), deg(+data.Altitude), state.time!, state.doesRefraction ? undefined : false, state)
@@ -1435,6 +1495,7 @@ export class AlpacaServer {
 		return makeAlpacaResponse(this.#focuser(id).device.canAbsoluteMove)
 	}
 
+	// Bulk DeviceState array for a focuser: motion flag, position (0 for relative-only focusers), and temp.
 	#focuserGetDeviceState(id: number) {
 		const { device } = this.#focuser(id)
 		const res = new Array<AlpacaStateItem>(4)
@@ -1486,6 +1547,7 @@ export class AlpacaServer {
 		return makeAlpacaResponse(undefined)
 	}
 
+	// Moves the focuser: absolute target for absolute focusers, otherwise relative in/out steps by sign.
 	#focuserMove(id: number, data: { Position: string }) {
 		const { device } = this.#focuser(id)
 		const position = +data.Position
@@ -1530,6 +1592,7 @@ export class AlpacaServer {
 		return makeAlpacaResponse(mapToCoverState(this.#cover(id)?.device))
 	}
 
+	// Bulk DeviceState array for a cover-calibrator: brightness, calibrator state, and cover state/motion.
 	#coverCalibratorGetDeviceState(id: number) {
 		const cover = this.#cover(id)?.device
 		const flatPanel = this.#flatPanel(id)?.device
@@ -1575,6 +1638,8 @@ export class AlpacaServer {
 		return makeAlpacaResponse(undefined)
 	}
 
+	// Registers a device (idempotently) under its Alpaca type: assigns a device number, seeds its state
+	// from the device (frame for cameras, coordinates for mounts), stores it, and fires deviceAdded.
 	#makeConfiguredDeviceFromDevice(device: Device, DeviceType: AlpacaDeviceType): AlpacaRegisteredDevice {
 		const type = DeviceType.toLowerCase() as AlpacaDeviceType
 
@@ -1602,6 +1667,7 @@ export class AlpacaServer {
 		return registeredDevice
 	}
 
+	// Unregisters a device from its Alpaca type bucket and fires deviceRemoved if it was present.
 	#removeConfiguredDevice(device: Device, DeviceType: AlpacaDeviceType) {
 		const type = DeviceType.toLowerCase() as AlpacaDeviceType
 		const registeredDevice = this.#equipment[type].get(device)
@@ -1613,6 +1679,7 @@ export class AlpacaServer {
 	}
 }
 
+// Merges path params with any form-urlencoded body fields into a single record for a PUT handler.
 async function params<T extends Record<string, string | number | boolean | undefined>>(req: Bun.BunRequest) {
 	const data = req.headers.get('Content-Type')?.startsWith('application/x-www-form-urlencoded') ? await req.formData() : undefined
 	const res: Record<string, string> = req.params
@@ -1620,6 +1687,9 @@ async function params<T extends Record<string, string | number | boolean | undef
 	return res as T
 }
 
+// Creates a resolvable task that auto-fails with the given Alpaca error after `delay` ms. Exposes
+// resolve(), the settled promise (mapping false/rejection to an AlpacaError), running/completed flags,
+// and a clear() to cancel the timeout. Used to await device connect/move completion via events.
 function promiseWithTimeout(code: AlpacaException, message: string, delay: number = 30000) {
 	const { promise, resolve } = Promise.withResolvers<AlpacaError | boolean>()
 
@@ -1656,8 +1726,11 @@ function promiseWithTimeout(code: AlpacaException, message: string, delay: numbe
 	} as const
 }
 
+// Encodes an in-memory FITS image into the Alpaca ImageBytes binary format: writes the 44/48-byte
+// metadata header then the pixel data transposed into Alpaca's column-major [x][y][channel] order and
+// rebiased to unsigned (BZERO) values. Big-endian FITS samples are byte-swapped around the copy. The
+// transmitted element type is forced to a 32-bit width to satisfy clients like MaxIm DL.
 // https://github.com/ASCOMInitiative/ASCOMRemote/blob/main/Documentation/AlpacaImageBytes.pdf
-
 export function makeImageBytesFromFits(source: Buffer<ArrayBuffer>) {
 	const reader = new FitsKeywordReader()
 	let position = 0
@@ -1728,50 +1801,62 @@ export function makeImageBytesFromFits(source: Buffer<ArrayBuffer>) {
 	return output
 }
 
+// Case-insensitive boolean parse of an Alpaca 'True'/'False' form value.
 function isTrue(value: string) {
 	return value.toLowerCase() === 'true'
 }
 
+// Wraps a value in the Alpaca JSON response envelope.
 function makeAlpacaResponse(data: unknown, code: AlpacaException | 0 = 0, message: string = '') {
 	return Response.json({ Value: data, ClientTransactionID: 0, ServerTransactionID: 0, ErrorNumber: code, ErrorMessage: message })
 }
 
+// Builds an Alpaca error response (no value, with code and message).
 function makeAlpacaErrorResponse(code: AlpacaException, message: string) {
 	return makeAlpacaResponse(undefined, code, message)
 }
 
+// Converts a settled task result into a success or error Alpaca response.
 function makeResponseForTask(result: true | AlpacaError) {
 	return result === true ? makeAlpacaResponse(undefined) : makeAlpacaErrorResponse(result.code, result.message)
 }
 
+// Pier side → Alpaca enum: EAST=0, WEST=1, unknown=-1.
 function mapPierSideToAlpacaEnum(value: PierSide) {
 	return value === 'EAST' ? 0 : value === 'WEST' ? 1 : -1
 }
 
+// Guide direction → Alpaca enum: NORTH=0, SOUTH=1, EAST=2, WEST=3.
 function mapGuideDirectionToAlpacaEnum(value: GuideDirection) {
 	return value === 'NORTH' ? 0 : value === 'SOUTH' ? 1 : value === 'EAST' ? 2 : 3
 }
 
+// Alpaca enum → guide direction (inverse of mapGuideDirectionToAlpacaEnum).
 function mapAlpacaEnumToGuideDirection(value: number): GuideDirection {
 	return value === 0 ? 'NORTH' : value === 1 ? 'SOUTH' : value === 2 ? 'EAST' : 'WEST'
 }
 
+// Track mode → Alpaca enum: SIDEREAL=0, LUNAR=1, SOLAR=2, KING=3.
 function mapTrackModeToAlpacaEnum(value: TrackMode) {
 	return value === 'SIDEREAL' ? 0 : value === 'LUNAR' ? 1 : value === 'SOLAR' ? 2 : 3
 }
 
+// Alpaca enum → track mode (inverse of mapTrackModeToAlpacaEnum).
 function mapAlpacaEnumToTrackMode(value: number): TrackMode {
 	return value === 0 ? 'SIDEREAL' : value === 1 ? 'LUNAR' : value === 2 ? 'SOLAR' : 'KING'
 }
 
+// Represents each named slew rate as a unit Alpaca axis rate keyed by its 1-based index.
 function mapSlewRateToAlpacaAxisRate(rate: NameAndLabel, index: number): AlpacaAxisRate {
 	return { Minimum: index + 1, Maximum: index + 1 }
 }
 
+// Flat panel → Alpaca calibrator state: 0 not present, 3 ready.
 function mapToCalibratorState(device?: FlatPanel) {
 	return device === undefined ? 0 : device.intensity.max !== 0 ? 3 : 0 // 0 = Not present, 3 = Ready
 }
 
+// Cover → Alpaca cover state: 0 not present, 1 closed, 2 moving, 3 open.
 function mapToCoverState(device?: Cover) {
 	return device === undefined ? 0 : !device.canPark ? 0 : device.parking ? 2 : device.parked ? 1 : 3 // 0 = Not Present, 1 = Closed, 2 = Moving, 3 = Open
 }
