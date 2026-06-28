@@ -14,6 +14,13 @@ import type { CylindricalProjection, ProjectionOptions, RaAxisDirection } from '
 import { deltaT } from '../../time/deltat'
 import { precessionNutationMatrix, timeShift, tt, type Time } from '../../time/time'
 
+// Shared geometry foundation for solar/lunar eclipse computation and mapping. Provides the apparent
+// geocentric Sun/Moon position sampler (light-time + aberration + precession/nutation), the oblate
+// Earth-limb ellipse machinery in the Besselian fundamental plane (intersections, extremes, signed
+// distance, flattening scale and its derivative), robust root helpers, hour-angle/longitude
+// conversions, and antimeridian-aware geographic line/polygon splitting and SVG serialization.
+// Distances are Earth equatorial radii in the fundamental plane; angles are radians.
+
 // Earth polar/equatorial radius ratio (1 - flattening).
 export const F = 1 - WGS84_FLATTENING
 // Reciprocal of F, used by the geographic-latitude conversion.
@@ -24,6 +31,8 @@ export const EARTH_E2 = 1 - F * F
 // DELTA_T_LONGITUDE_FACTOR * deltaT; elements with UT-based mu (this module's own) use 0.
 export const DELTA_T_LONGITUDE_FACTOR = 0.00417807 * DEG2RAD
 
+// One astronomical unit expressed in Earth equatorial radii; converts body distances into the
+// fundamental-plane unit.
 const AU_IN_EARTH_RADII = AU_KM / EARTH_RADIUS_KM
 // Light travel time per AU in days, used to retard body positions to their emission epoch.
 const LIGHT_TIME_DAYS_PER_AU = LIGHT_TIME_AU / DAYSEC
@@ -52,8 +61,10 @@ export type EclipseGeoPoint<T extends Record<string, unknown> = {}> = T & {
 	readonly jd?: number
 }
 
+// One connected geographic branch (polyline or ring): an ordered list of geo points.
 export type EclipseGeoBranch<P extends EclipseGeoPoint = EclipseGeoPoint> = P[]
 
+// A geographic curve made of one or more disjoint branches.
 export type EclipseGeoCurve<P extends EclipseGeoPoint = EclipseGeoPoint> = EclipseGeoBranch<P>[]
 
 // Apparent or geocentric Sun and Moon position sample used to generate Besselian elements.
@@ -164,17 +175,20 @@ export function computeSunMoonPositionAt(time: Time, sun: PositionAndVelocityOve
 	}
 }
 
+// Barycentric Earth position and velocity (AU, AU/day) from the VSOP-based eraEpv00 at TT.
 function earth(time: Time) {
 	const { day, fraction } = tt(time)
 	return eraEpv00(day, fraction)[0]
 }
 
+// Barycentric Sun position and velocity (AU, AU/day): Earth barycentric minus heliocentric, at TT.
 function sun(time: Time): PositionAndVelocity {
 	const { day, fraction } = tt(time)
 	const [pvb, pvh] = eraEpv00(day, fraction)
 	return [vecMinus(pvb[0], pvh[0]), vecMinus(pvb[1], pvh[1])]
 }
 
+// Geocentric Moon position and velocity (AU, AU/day) from the ERFA Meeus theory eraMoon98.
 function moon(time: Time) {
 	return eraMoon98(time.day, time.fraction) as PositionAndVelocity
 }
@@ -184,8 +198,10 @@ export function sunMoonPosition(time: Time) {
 	return computeSunMoonPositionAt(time, sun, earth, moon)
 }
 
+// Root-finding tolerance shared by the bisection and Brent helpers.
 const BISECT_ROOT_OPTIONS: RootFindingOptions = { tolerance: 1e-8 }
 
+// Bisects f on [min, max] for a sign-change root; returns undefined if the bracket is invalid.
 export function bisectRoot(f: (x: number) => number, min: number, max: number) {
 	try {
 		return bisection(f, min, max, BISECT_ROOT_OPTIONS).root
@@ -231,6 +247,7 @@ export function limbDistanceSquaredFromCosSin(cos: number, sin: number, cx: numb
 	return dx * dx + dy * dy
 }
 
+// Orders intersection points by descending y (fundamental-plane north first).
 function EarthLimbCircleIntersectionPointComparator(a: readonly [number, number], b: readonly [number, number]) {
 	return b[1] - a[1]
 }
@@ -240,6 +257,7 @@ export function earthLimbPoint(theta: number, omega: number) {
 	return [Math.cos(theta), Math.sin(theta) / omega] as const
 }
 
+// Squared distance from the limb-ellipse point at parameter `theta` to (cx, cy), in Earth equatorial radii.
 export function earthLimbDistanceSquared(theta: number, cx: number, cy: number, omega: number) {
 	const dx = Math.cos(theta) - cx
 	const dy = Math.sin(theta) / omega - cy
@@ -300,6 +318,8 @@ export function earthLimbCircleIntersections(cx: number, cy: number, omega: numb
 	return points
 }
 
+// Finds the nearest and farthest points of the Earth-limb ellipse to (cx, cy) and whether (cx, cy)
+// lies inside it, by scanning the theta grid and refining each extremum. Distances in Earth equatorial radii.
 export function earthLimbExtremes(cx: number, cy: number, omega: number): EarthLimbExtremes {
 	const step = TAU / LIMB_SCAN_STEPS
 	let minTheta = 0
@@ -436,6 +456,7 @@ export function longitudeFromHourAngle(hourAngle: Angle, mu: Angle, correction: 
 	return normalizeLongitude(hourAngle - mu + correction)
 }
 
+// Wraps a longitude to (-PI, PI], but preserves an exact +-PI value so the two antimeridian edges stay distinct.
 export function normalizeLongitude(longitude: Angle) {
 	return longitude === PI || longitude === -PI ? longitude : normalizePI(longitude)
 }
@@ -445,6 +466,7 @@ export function hourAngleFromLongitude(longitude: Angle, mu: Angle, correction: 
 	return longitude + mu - correction
 }
 
+// True when two geo points coincide in longitude, latitude, and (optional) jd within tolerance.
 function samePoint(a: EclipseGeoPoint, b: EclipseGeoPoint) {
 	return Math.abs(a.x - b.x) < 1e-9 && Math.abs(a.y - b.y) < 1e-9 && Math.abs((a.jd ?? 0) - (b.jd ?? 0)) < 1e-10
 }
@@ -459,6 +481,9 @@ export function splitPolygonAtAntimeridian(ring: EclipseGeoBranch) {
 	return splitGeoLineAtAntimeridian(ring, true)
 }
 
+// Splits a geographic line (or ring when `close`) into segments that never cross the +-180 seam,
+// inserting the exact crossing point on each edge whose longitude jump exceeds PI. For closed rings,
+// the opening and closing arcs in the start hemisphere are rejoined so the ring closes along the seam.
 export function splitGeoLineAtAntimeridian(line: EclipseGeoBranch, close: boolean) {
 	if (line.length < 2) return []
 
