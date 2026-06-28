@@ -1,6 +1,12 @@
 import { gaussianElimination, Matrix } from '../linear-algebra/matrix'
 import type { NumberArray } from './math'
 
+// Derivative-free numerical optimization: scalar root finders (bisection, Brent, secant, Illinois
+// false-position), scalar minimizers (golden-section, Brent), multivariate minimizers (Nelder-Mead,
+// coordinate descent, Powell), and a Levenberg-Marquardt non-linear least-squares fitter. Bracketed
+// methods require endpoints with opposite signs (roots) or a valid bracket (minimizers); each returns a
+// result reporting the estimate, function value, iteration count, and whether tolerance was reached.
+
 export interface RootFindingOptions {
 	// Maximum solver iterations.
 	readonly maxIterations?: number
@@ -85,16 +91,23 @@ export interface LevenbergMarquardtOptions {
 	tolerance?: number
 }
 
+// Finite-difference step used to numerically approximate the Levenberg-Marquardt Jacobian.
 const LEVENBERG_MARQUARDT_DELTA = 1e-8
+// Default iteration cap and convergence tolerances for the scalar root finders.
 const DEFAULT_ROOT_ITERATIONS = 100
 const DEFAULT_ROOT_TOLERANCE = 1e-12
 const DEFAULT_FUNCTION_TOLERANCE = 1e-12
+// Default iteration cap and bracket tolerance for the scalar minimizers.
 const DEFAULT_SCALAR_ITERATIONS = 100
 const DEFAULT_SCALAR_TOLERANCE = 1e-10
+// Default iteration cap and tolerance for the multivariate minimizers.
 const DEFAULT_MULTIVARIATE_ITERATIONS = 500
 const DEFAULT_MULTIVARIATE_TOLERANCE = 1e-8
+// Default initial step for simplex vertices and line searches.
 const DEFAULT_INITIAL_STEP = 1
+// Golden ratio φ, used to expand line-search brackets.
 const GOLDEN_RATIO = 1.618033988749895
+// Golden-section fraction (2 - φ), the interior sampling ratio for golden-section search.
 const GOLDEN_SECTION = 0.3819660112501051
 
 // Finds a bracketed scalar root using bisection.

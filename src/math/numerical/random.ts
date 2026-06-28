@@ -1,14 +1,26 @@
 import { TAU } from '../../core/constants'
 import type { NumberArray } from './math'
 
+// Seedable pseudorandom generators (mulberry32, xorshift32, splitmix32, sfc32, MT19937) and samplers
+// for common probability distributions (uniform, Bernoulli, Weibull, exponential, geometric, Pareto,
+// normal/Gaussian, triangular, Rayleigh, log-normal, Cauchy) plus an in-place Fisher-Yates shuffle.
+// Base generators return a `Random` producing values in [0, 1); distribution helpers wrap one and
+// return a new `Random` sampling that distribution. Degenerate parameters collapse to constant samplers.
+
+// A pseudorandom source returning a double in the [0, 1) interval on each call.
 export type Random = () => number
 
 // https://stackoverflow.com/questions/521295/seeding-the-random-number-generator-in-javascript
 
+// 2^32, the size of the 32-bit output space used to scale integers into [0, 1).
 const MAX_INT = 0x100000000
+// Reciprocal of MAX_INT, multiplied with a 32-bit integer to map it into [0, 1).
 const INV_MAX_INT = 1 / MAX_INT
+// SplitMix32 step constant (the golden-ratio increment 0x9e3779b9).
 const SPLITMIX32_INCREMENT = 0x9e3779b9
+// Largest double strictly below 1, used to keep samples in a half-open interval.
 const UNIT_MAX_EXCLUSIVE = 1 - Number.EPSILON
+// Smallest positive double, used as the open-interval lower bound.
 const UNIT_MIN_EXCLUSIVE = Number.MIN_VALUE
 
 // Returns a constant zero sampler for degenerate distribution parameters.

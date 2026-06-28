@@ -1,10 +1,21 @@
 import type { NumberArray } from './math'
 
+// Polynomial and piecewise interpolating splines: a single-interval polynomial spline (with derivative
+// and integral) and the cubic Hermite family of interpolators over ordered control points - linear,
+// shape-preserving monotone (Fritsch-Carlson) cubic Hermite, PCHIP, Akima, Catmull-Rom, and natural
+// cubic - plus dense look-up-table samplers. Control points must be finite with strictly increasing x.
+// Evaluation caches the last segment for fast monotonic query streams; call reset() before random access.
+
+// Single coefficient of a constant zero polynomial, returned as the derivative of a constant spline.
 const ZERO_POLYNOMIAL = [0] as const
 
+// A polynomial spline defined over one [lower, upper] interval evaluated in normalized coordinates.
 export interface Spline {
+	// Lower bound of the interval (maps to normalized t = 0).
 	readonly lower: number
+	// Upper bound of the interval (maps to normalized t = 1).
 	readonly upper: number
+	// Polynomial coefficients in descending power (Horner) order over the normalized parameter.
 	readonly coefficients: Readonly<NumberArray>
 	// Computes the spline value through Horner evaluation in normalized coordinates.
 	readonly compute: (value: number) => number
@@ -14,8 +25,11 @@ export interface Spline {
 	readonly integral: (constant?: number) => Spline
 }
 
+// A piecewise interpolant sampled at the control points (x, y).
 export interface PiecewiseSpline {
+	// Strictly increasing knot abscissae.
 	readonly x: Readonly<NumberArray>
+	// Knot ordinates aligned with `x`.
 	readonly y: Readonly<NumberArray>
 	// Computes the interpolated value on the piecewise spline.
 	readonly compute: (value: number) => number
@@ -23,29 +37,42 @@ export interface PiecewiseSpline {
 	readonly reset: () => void
 }
 
+// A piecewise interpolant that also exposes its per-knot first derivatives (slopes).
 export interface InterpolatingSpline extends PiecewiseSpline {
+	// First derivative at each knot used to build the cubic Hermite segments.
 	readonly slopes: Readonly<NumberArray>
 }
 
+// Options shared by the interpolating-spline builders.
 export interface SplineOptions {
+	// When true, queries outside [x[0], x[last]] extrapolate the endpoint segment instead of clamping.
 	readonly extrapolate?: boolean
 }
 
+// Out-of-range query behavior for PCHIP: clamp to the endpoint value, extrapolate, or throw.
 export type PchipOutOfRange = 'clamp' | 'extrapolate' | 'throw'
 
+// Options for the PCHIP interpolator.
 export interface PchipOptions extends SplineOptions {
+	// Behavior when a query falls outside the sampled range; defaults to 'clamp'.
 	readonly outOfRange?: PchipOutOfRange
 }
 
-// Piecewise Cubic Hermite Interpolating Polynomial
+// Piecewise Cubic Hermite Interpolating Polynomial, exposing its precomputed segment data.
 export interface PchipSpline extends InterpolatingSpline {
+	// Knot abscissae (alias of `x`).
 	readonly knots: Readonly<NumberArray>
+	// Knot ordinates (alias of `y`).
 	readonly values: Readonly<NumberArray>
+	// Shape-preserving nodal derivatives (alias of `slopes`).
 	readonly derivatives: Readonly<NumberArray>
+	// Per-segment interval widths x[i+1] - x[i].
 	readonly widths: Readonly<NumberArray>
+	// Per-segment secant slopes (y[i+1] - y[i]) / width.
 	readonly secants: Readonly<NumberArray>
 }
 
+// Precomputed PCHIP state: knot data plus the per-segment Horner coefficients a + b·dx + c·dx² + d·dx³.
 interface PchipData {
 	readonly knots: Float64Array
 	readonly values: Float64Array
@@ -58,6 +85,7 @@ interface PchipData {
 	readonly d: Float64Array
 }
 
+// Per-segment cubic Horner coefficients evaluated as a + b·dx + c·dx² + d·dx³ with dx = value - x[i].
 interface CubicSegmentCoefficients {
 	readonly a: Float64Array
 	readonly b: Float64Array
@@ -65,6 +93,7 @@ interface CubicSegmentCoefficients {
 	readonly d: Float64Array
 }
 
+// Natural cubic segment coefficients together with the derived per-knot slopes.
 interface NaturalCubicCoefficients extends CubicSegmentCoefficients {
 	readonly slopes: Float64Array
 }

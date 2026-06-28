@@ -4,44 +4,72 @@ import { type MutVec3, type Vec3, vecCross, vecDot, vecFill, vecNormalize, vecNo
 import { normalizeAngle } from '../units/angle'
 import { clamp } from './math'
 
+// Planar geometry (points, sizes, axis-aligned rectangles) plus spherical/celestial geometry on the
+// unit sphere: orthonormal tangent bases, gnomonic tangent-plane projection, great-circle separation,
+// position angle, destination and interpolation, equatorial-mount frames, and line-sphere intersection.
+// Spherical inputs/outputs are radians; sky directions are 3D unit vectors (east-of-north position angles).
+// Helpers follow the `out`/`o?` convention: they fill a provided output object/vector and return it,
+// otherwise allocate a new one.
+
+// A 2D point with generic component type (number by default).
 export interface Point<T = number> {
+	// Horizontal coordinate.
 	x: T
+	// Vertical coordinate.
 	y: T
 }
 
+// A 2D size with generic component type (number by default).
 export interface Size<T = number> {
+	// Extent along x.
 	width: T
+	// Extent along y.
 	height: T
 }
 
+// An axis-aligned rectangle given by its four edges, generic component type (number by default).
 export interface Rect<T = number> {
+	// Left edge coordinate (minimum x for a normalized rect).
 	left: T
+	// Top edge coordinate (minimum y for a normalized rect).
 	top: T
+	// Right edge coordinate (maximum x for a normalized rect).
 	right: T
+	// Bottom edge coordinate (maximum y for a normalized rect).
 	bottom: T
 }
 
 // Local orthonormal basis around one sky direction on the celestial sphere.
 export interface SphericalTangentBasis {
+	// Unit vector of the tangent-point sky direction.
 	readonly origin: MutVec3
+	// Unit tangent vector pointing east (increasing longitude).
 	readonly east: MutVec3
+	// Unit tangent vector pointing north (increasing latitude).
 	readonly north: MutVec3
 }
 
 // Local gnomonic projection coordinates around one spherical tangent point.
 export interface SphericalTangentOffset extends Point {
+	// Dot product direction·origin used as the projection denominator; positive only on the visible hemisphere.
 	denominator: number
 }
 
 // Local equatorial-mount frame around one sky direction and one polar axis.
 export interface SphericalMountBasis {
+	// Unit vector of the pointing direction.
 	readonly origin: MutVec3
+	// Unit vector of the mount polar (right-ascension) axis.
 	readonly polarAxis: MutVec3
+	// Unit vector of the declination axis (origin × polarAxis).
 	readonly declinationAxis: MutVec3
+	// Unit tangent along increasing hour angle.
 	readonly hourAngleTangent: MutVec3
+	// Unit tangent along increasing declination.
 	readonly declinationTangent: MutVec3
 }
 
+// Canonical celestial pole direction (+z), the default mount polar axis.
 const SPHERICAL_POLE_AXIS: Vec3 = [0, 0, 1]
 
 // Fills or creates a new point with x and y values

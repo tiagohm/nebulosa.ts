@@ -1,8 +1,15 @@
+// Low-level scalar numeric utilities: exact/error-free transforms (twoSum/twoProduct/split) for
+// compensated arithmetic, Euclidean modulo/divmod, rounding helpers that stay safe past 2^52,
+// bit-width sign extension, tolerant equality, and interpolation/remapping (lerp, smoothstep, ...).
+
+// Any contiguous numeric storage accepted by the array helpers: a typed array or a plain number[].
 export type NumberArray = Float16Array | Float32Array | Float64Array | Int32Array | Uint32Array | Int16Array | Uint16Array | Int8Array | Uint8Array | Uint8ClampedArray | number[]
 
+// Dekker splitting constant 2^27 + 1, used to break a double into two non-overlapping halves.
 const SPLITTER = 134217729
 
-// Adds a and b exactly, returning the result as two 64-bit floats.
+// Adds a and b exactly, returning [sum, error] such that sum + error == a + b with no rounding loss.
+// Writes into `out` (indices 0 and 1) when provided and returns it; otherwise allocates a 2-element array.
 export function twoSum(a: number, b: number, out?: NumberArray) {
 	const x = a + b
 	let eb = x - a
@@ -86,6 +93,8 @@ export function floorDiv(x: number, y: number) {
 
 const TWO_POW_52 = 4503599627370496 // 2 ** 52
 
+// Rounds to the nearest integer with ties going away from zero, leaving non-finite values and values
+// at/above 2^52 (which are already integral) untouched.
 export function roundToNearestWholeNumber(a: number) {
 	if (!Number.isFinite(a)) return a
 
@@ -100,6 +109,9 @@ export function roundToNearestWholeNumber(a: number) {
 	return a < 0 ? Math.ceil(a - 0.5) : Math.floor(a + 0.5)
 }
 
+// Rounds `a` to `n` decimal places (ties away from zero), with an epsilon-tolerant half check to
+// counter binary representation error. `n` is truncated to an integer; non-finite or precision-exhausted
+// inputs are returned unscaled.
 export function roundToNthDecimal(a: number, n: number) {
 	if (!Number.isFinite(a)) return a
 	if (!Number.isInteger(n)) n = Math.trunc(n)

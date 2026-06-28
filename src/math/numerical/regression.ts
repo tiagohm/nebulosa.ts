@@ -5,60 +5,99 @@ import type { Point } from './geometry'
 import type { NumberArray } from './math'
 import { levenbergMarquardt } from './optimization'
 
+// Curve-fitting regressions over paired (x, y) samples: linear (ordinary least squares and robust
+// Theil-Sen), polynomial/quadratic, exponential, power, hyperbolic (V-curve via Levenberg-Marquardt),
+// piecewise trend-line, and Chebyshev-basis least squares. Each fit returns a `predict` closure plus
+// the fitted parameters; `regressionScore` reports goodness of fit and `intersect` finds line crossings.
+// Hyperbolic/quadratic fits also expose the curve minimum, used by autofocus V-curve analysis.
+
+// Slope estimator used by the piecewise trend-line fit: ordinary least squares or robust Theil-Sen.
 export type TrendLineRegressionMethod = 'simple' | 'theil-sen'
 
+// Common shape of a fitted model that can predict y from x.
 export interface Regression {
+	// Sample abscissae the model was fitted on.
 	readonly xPoints: Readonly<NumberArray>
+	// Sample ordinates the model was fitted on.
 	readonly yPoints: Readonly<NumberArray>
+	// Predicts y for a given x.
 	readonly predict: (x: number) => number
 }
 
+// A model that can also be inverted to solve x from y.
 export interface InverseRegression {
+	// Solves x for a given y (the inverse of `predict`).
 	readonly x: (y: number) => number
 }
 
+// A model that exposes the location of its curve minimum.
 export interface MinimumPointRegression {
+	// Point (x, y) of the fitted curve's minimum.
 	readonly minimum: Readonly<Point>
 }
 
+// Goodness-of-fit metrics for a regression against a sample set.
 export interface RegressionScore {
+	// Pearson correlation coefficient.
 	readonly r: number
+	// Coefficient of determination (r²).
 	readonly r2: number
+	// Residual sum of squares.
 	readonly rss: number
+	// Root-mean-square deviation of the residuals.
 	readonly rmsd: number
 }
 
+// A straight-line fit y = slope·x + intercept.
 export interface LinearRegression extends Regression, InverseRegression {
+	// Line slope.
 	readonly slope: number
+	// Line y-intercept.
 	readonly intercept: number
 }
 
+// A polynomial fit with coefficients in ascending power order.
 export interface PolynomialRegression extends Regression {
+	// Polynomial coefficients indexed by power (coefficients[k] multiplies x^k, or the k-th requested power).
 	readonly coefficients: number[]
 }
 
+// A degree-2 polynomial fit that also reports its vertex minimum.
 export interface QuadraticRegression extends PolynomialRegression, MinimumPointRegression {}
 
+// An exponential fit y = b·exp(a·x) (also used for power fits y = a·x^b).
 export interface ExponentialRegression extends Regression, InverseRegression {
+	// First fitted parameter (exponential rate `a`, or scale `A` for power fits).
 	readonly a: number
+	// Second fitted parameter (exponential scale `b`, or exponent `B` for power fits).
 	readonly b: number
 }
 
+// A hyperbolic (V-curve) fit y = b·sqrt(1 + ((x - c) / a)²).
 export interface HyperbolicRegression extends Regression, InverseRegression, MinimumPointRegression {
+	// Half-width scale of the hyperbola.
 	readonly a: number
+	// Minimum y value (focus depth at best focus).
 	readonly b: number
+	// x location of the minimum (best-focus position).
 	readonly c: number
 }
 
+// A piecewise-linear trend line: a falling branch left of the minimum and a rising branch to its right.
 export interface TrendLineRegression extends Regression, MinimumPointRegression {
+	// Linear fit of the descending (left) branch.
 	readonly left: LinearRegression
+	// Linear fit of the ascending (right) branch.
 	readonly right: LinearRegression
 	// Intersection of the left and right trend lines, or null when they are parallel or degenerate.
 	readonly intersection: Readonly<Point> | null
 }
 
+// A least-squares fit in the Chebyshev polynomial basis T_0..T_degree.
 export interface ChebyshevRegression extends Regression {
+	// Degree of the highest Chebyshev term.
 	readonly degree: number
+	// Fitted Chebyshev coefficients, evaluated with Clenshaw recurrence.
 	readonly coefficients: Readonly<NumberArray>
 }
 

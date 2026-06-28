@@ -1,5 +1,12 @@
 import type { NumberArray } from './math'
 
+// Histogram-backed image statistics. A Histogram wraps a bin-count array and exposes lazily-computed,
+// cached descriptors (mode, mean, variance, median/quantiles, entropy, skewness, kurtosis, extrema).
+// Bin positions are normalized by `max` so results lie on a 0..1 intensity scale; reset() invalidates
+// the cache after the underlying bins change.
+
+// Memoized statistics for a Histogram; each field is undefined until first computed. Tuple fields hold
+// the documented [position, count] or [total, max] pairs.
 interface HistogramCache {
 	mode: readonly [number, number] | undefined // [pixel, count]
 	count: readonly [number, number] | undefined // [total, max]
@@ -14,6 +21,7 @@ interface HistogramCache {
 	maximum: readonly [number, number] | undefined // [pixel, count]
 }
 
+// Computes cached descriptive statistics over a fixed array of histogram bin counts.
 export class Histogram {
 	readonly #cache: HistogramCache = {
 		mode: undefined,
@@ -29,7 +37,9 @@ export class Histogram {
 		maximum: undefined,
 	}
 
-	// Stores histogram bins and their normalization scale.
+	// Wraps the bin-count array `histogram` (index = intensity bin, value = sample count) with the
+	// normalization scale `max` (the maximum bin index, dividing positions onto 0..1) and its square
+	// `maxSq` (defaulting to max², used to normalize variance).
 	constructor(
 		readonly histogram: Readonly<NumberArray>,
 		readonly max: number,

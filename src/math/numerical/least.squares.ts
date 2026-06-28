@@ -2,6 +2,13 @@ import { medianOf } from '../../core/util'
 import { gaussianElimination, Matrix, QrDecomposition } from '../linear-algebra/matrix'
 import type { NumberArray } from './math'
 
+// Linear least-squares solvers operating on a row-major design matrix (array of feature rows): a
+// weighted/ridge-regularized fit (QR with a normal-equation fallback) and a robust IRLS variant
+// (Huber/Tukey) that downweights outliers. Reports fitted values, residuals, an estimated condition
+// number, and rank-deficiency flag. Internal helpers build the weighted normal system and estimate
+// conditioning via symmetric Jacobi eigenvalues.
+
+// Robust loss used for IRLS reweighting: 'none' (ordinary least squares), Huber, or Tukey biweight.
 export type RobustRegressionMethod = 'none' | 'huber' | 'tukey'
 
 export interface LinearLeastSquaresOptions {
@@ -44,9 +51,13 @@ export interface RobustLinearLeastSquaresResult extends LinearLeastSquaresResult
 	readonly scale: number
 }
 
+// Φ⁻¹(3/4): scales the median absolute deviation into a consistent standard-deviation estimate for normal data.
 const ROBUST_MAD_SCALE = 0.6744897501960817
+// Ridge added to the normal-equation diagonal in the rank-deficient fallback, for numerical stability.
 const DEFAULT_RIDGE = 1e-12
+// Default Huber tuning constant (1.345 gives ~95% efficiency under normal errors).
 const DEFAULT_ROBUST_TUNING = 1.345
+// Default maximum IRLS iterations and coefficient/weight convergence tolerance.
 const DEFAULT_ROBUST_ITERATIONS = 25
 const DEFAULT_ROBUST_TOLERANCE = 1e-9
 
