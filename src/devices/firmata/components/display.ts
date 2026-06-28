@@ -1,21 +1,35 @@
 import { type FirmataClient, PinMode } from '../firmata'
 import { type Display, type IOExpander, PeripheralBase } from '../peripheral'
 
+// Driver for an HD44780 character LCD wired through an I2C I/O expander backpack (e.g. PCF8574). Drives
+// the controller in 4-bit mode following the standard LiquidCrystal power-on sequence and command set,
+// translating each LCD operation into expander port writes with the required enable pulses.
+
+// Character cell size: 5×8 or 5×10 dots.
 export type HD44780CharSize = '5x8' | '5x10'
 
+// Mapping of the controller's control/data lines to expander pin indices, plus backlight configuration.
 export interface HD44780Options {
+	// Register-select line pin.
 	readonly rsPin?: number
+	// Read/write line pin (optional; tied low when absent).
 	readonly rwPin?: number
+	// Enable strobe pin.
 	readonly enablePin?: number
+	// Data bus pins for the high nibble (D4..D7).
 	readonly data4Pin?: number
 	readonly data5Pin?: number
 	readonly data6Pin?: number
 	readonly data7Pin?: number
+	// Backlight control pin (optional).
 	readonly backlightPin?: number
+	// Initial backlight state.
 	readonly backlight?: boolean
+	// Backlight active level (true = active high).
 	readonly backlightPolarity?: boolean
 }
 
+// Default pin map for a common PCF8574 LCD backpack.
 export const DEFAULT_HD44780_OPTIONS: Required<HD44780Options> = {
 	rsPin: 0,
 	rwPin: 1,
@@ -34,10 +48,12 @@ function pinMask(pin: number | undefined) {
 	return pin === undefined ? 0 : 1 << pin
 }
 
+// HD44780 character LCD over an I2C expander backpack.
 // https://cdn.sparkfun.com/assets/9/5/f/7/b/HD44780.pdf
 // https://github.com/arduino-libraries/LiquidCrystal/blob/master/src/LiquidCrystal.cpp
-
 export class HD44780 extends PeripheralBase<HD44780> implements Display {
+	// HD44780 instruction opcodes and the flag bits for entry mode, display/cursor/blink control, cursor/
+	// display shift, and the function set (bus width, line count, dot size). See the datasheet.
 	static readonly CLEAR_DISPLAY = 0x01
 	static readonly RETURN_HOME = 0x02
 	static readonly ENTRY_MODE_SET = 0x04
@@ -71,18 +87,21 @@ export class HD44780 extends PeripheralBase<HD44780> implements Display {
 	static readonly FIVE_BY_TEN_DOTS = 0x04
 	static readonly FIVE_BY_EIGHT_DOTS = 0x00
 
+	// Geometry, per-row DDRAM base addresses, and the cached function/control/entry-mode register state.
 	#columns = 0
 	#rows = 0
 	#rowOffsets = [0x00, 0x40, 0x00, 0x40]
 	#displayFunction = HD44780.FOUR_BIT_MODE | HD44780.ONE_LINE | HD44780.FIVE_BY_EIGHT_DOTS
 	#displayControl = HD44780.DISPLAY_ON | HD44780.CURSOR_OFF | HD44780.BLINK_OFF
 	#displayMode = HD44780.ENTRY_LEFT | HD44780.ENTRY_SHIFT_DECREMENT
+	// Last expander port byte written (-1 = unknown), and one-time configure/begin guards.
 	#portState = -1
 	#configured = false
 	#begun = false
 	#backlightEnabled: boolean
 
 	readonly name = 'HD44780'
+	// Expander bit masks for each control/data/backlight line, the list of used pins, and backlight polarity.
 	readonly #rsMask: number
 	readonly #rwMask: number
 	readonly #enableMask: number
@@ -122,10 +141,12 @@ export class HD44780 extends PeripheralBase<HD44780> implements Display {
 		this.#backlightPolarity = options.backlightPolarity ?? DEFAULT_HD44780_OPTIONS.backlightPolarity
 	}
 
+	// Starts the underlying expander.
 	start() {
 		this.expander.start()
 	}
 
+	// Stops the underlying expander.
 	stop() {
 		this.expander.stop()
 	}

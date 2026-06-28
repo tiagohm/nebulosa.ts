@@ -1,9 +1,13 @@
 import type { FirmataClient } from '../firmata'
 import { PeripheralBase, type RealTimeClock } from '../peripheral'
 
-// https://www.analog.com/media/en/technical-documentation/data-sheets/ds3231.pdf
+// Real-time clock drivers over I2C: the DS3231 (with a century bit) and the DS1307. Both poll the BCD
+// calendar registers, decode them into broken-down date/time fields, and support setting the clock.
 
+// DS3231 temperature-compensated real-time clock.
+// https://www.analog.com/media/en/technical-documentation/data-sheets/ds3231.pdf
 export class DS3231 extends PeripheralBase<DS3231> implements RealTimeClock {
+	// Latest decoded calendar fields (dayOfWeek is 0-based; millisecond is always 0 — no sub-second reg).
 	year = 0
 	month = 0
 	day = 0
@@ -13,6 +17,7 @@ export class DS3231 extends PeripheralBase<DS3231> implements RealTimeClock {
 	second = 0
 	millisecond = 0
 
+	// I2C address, clock-register block, and bit masks for 12-hour/PM/century encoding.
 	static readonly ADDRESS = 0x68
 	static readonly TIME_REG = 0x00
 	static readonly TIME_BYTES = 7
@@ -98,9 +103,10 @@ export class DS3231 extends PeripheralBase<DS3231> implements RealTimeClock {
 	}
 }
 
+// DS1307 real-time clock.
 // https://www.analog.com/media/en/technical-documentation/data-sheets/ds1307.pdf
-
 export class DS1307 extends PeripheralBase<DS1307> implements RealTimeClock {
+	// Latest decoded calendar fields (dayOfWeek is 0-based; millisecond is always 0 — no sub-second reg).
 	year = 0
 	month = 0
 	day = 0
@@ -110,6 +116,7 @@ export class DS1307 extends PeripheralBase<DS1307> implements RealTimeClock {
 	second = 0
 	millisecond = 0
 
+	// I2C address, clock-register block, and bit masks for 12-hour/PM encoding.
 	static readonly ADDRESS = 0x68
 	static readonly TIME_REG = 0x00
 	static readonly TIME_BYTES = 7

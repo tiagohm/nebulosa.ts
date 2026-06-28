@@ -2,19 +2,28 @@ import { clamp } from '../../../math/numerical/math'
 import type { FirmataClient } from '../firmata'
 import { PeripheralBase } from '../peripheral'
 
+// Driver for the MCP4725 12-bit I2C DAC over Firmata. Writes the analog output code with the fast-mode
+// command, supports power-down modes, and can persist the current code/mode to the chip's EEPROM.
+
+// Output power-down mode: active ('normal') or high-impedance through a pull-down resistor (1k/100k/500k).
 export type MCP4725PowerDownMode = 'normal' | '1k' | '100k' | '500k'
 
+// Initial DAC state.
 export interface MCP4725Options {
+	// Initial 12-bit DAC code (0..4095).
 	readonly value?: number
 	readonly powerDownMode?: MCP4725PowerDownMode
 }
 
+// Default MCP4725 state: zero output, normal (active) mode.
 export const DEFAULT_MCP4725_OPTIONS: Required<MCP4725Options> = {
 	value: 0,
 	powerDownMode: 'normal',
 }
 
+// MCP4725 12-bit I2C digital-to-analog converter.
 export class MCP4725 extends PeripheralBase<MCP4725> {
+	// I2C addresses, the 12-bit full-scale code, the EEPROM write command, and power-down bit shifts.
 	static readonly ADDRESS = 0x62
 	static readonly ALTERNATIVE_ADDRESS = 0x63
 	static readonly MAX_VALUE = 0x0fff
@@ -22,6 +31,7 @@ export class MCP4725 extends PeripheralBase<MCP4725> {
 	static readonly WRITE_DAC_EEPROM_CMD = 0x60
 	static readonly EEPROM_POWER_DOWN_SHIFT = 1
 
+	// Current 12-bit code, power-down mode, and started flag.
 	#value: number
 	#powerDownMode: MCP4725PowerDownMode
 	#started = false

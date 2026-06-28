@@ -2,24 +2,38 @@ import { clamp } from '../../../math/numerical/math'
 import type { FirmataClient } from '../firmata'
 import { DEFAULT_POLLING_INTERVAL, PeripheralBase, type RadioTransmitter, type RadioTuner, type RadioTunerSeekDirection } from '../peripheral'
 
+// FM radio chip drivers over I2C: the TEA5767 and RDA5807 receivers (tuning, seek, mute, RSSI/stereo
+// status) and the KT0803L transmitter. Frequencies are MHz on the public API; the per-chip register
+// layouts and band/spacing/clock options follow each datasheet.
+
+// RDA5807 band selection.
 export type RDA5807Band = 'usEurope' | 'japanWide' | 'world' | 'eastEurope'
 
+// RDA5807 inter-channel spacing, in kHz.
 export type RDA5807ChannelSpacing = 25 | 50 | 100 | 200 // kHz
 
+// RDA5807 east-Europe sub-band selection.
 export type RDA5807EastEuropeMode = '65_76' | '50_65'
 
+// TEA5767 band selection.
 export type TEA5767Band = 'usEurope' | 'japan'
 
+// FM de-emphasis time constant, in microseconds.
 export type TEA5767DeEmphasis = 50 | 75 // us
 
+// TEA5767 reference clock frequency, in Hz.
 export type TEA5767ReferenceClock = 32768 | 6500000 | 13000000 // Hz
 
+// TEA5767 search stop (signal-strength) threshold.
 export type TEA5767SearchStopLevel = 'low' | 'mid' | 'high'
 
+// KT0803L bass-boost level, in dB.
 export type KT0803LBassBoost = 0 | 5 | 11 | 17 // dB
 
+// KT0803L FM frequency deviation, in kHz.
 export type KT0803LFrequencyDeviation = 75 | 112.5 // kHz
 
+// RDA5807 receiver configuration. Frequency in MHz; field units noted inline.
 export interface RDA5807Options {
 	readonly frequency?: number // MHz
 	readonly volume?: number
@@ -34,6 +48,7 @@ export interface RDA5807Options {
 	readonly wrap?: boolean
 }
 
+// TEA5767 receiver configuration. Frequency in MHz; field units noted inline.
 export interface TEA5767Options {
 	readonly frequency?: number // MHz
 	readonly muted?: boolean
@@ -49,6 +64,7 @@ export interface TEA5767Options {
 	readonly wrap?: boolean
 }
 
+// KT0803L transmitter configuration. Frequency in MHz; field units noted inline.
 export interface KT0803LOptions {
 	readonly frequency?: number // MHz
 	readonly muted?: boolean
@@ -65,6 +81,7 @@ export interface KT0803LOptions {
 	readonly audioEnhancement?: boolean
 }
 
+// Decoded RDA5807 status registers: RDS/seek flags, tuned channel index, RSSI, and validity flags.
 interface RDA5807Status {
 	readonly rdsReady: boolean
 	readonly seekTuneComplete: boolean
@@ -76,6 +93,7 @@ interface RDA5807Status {
 	readonly ready: boolean
 }
 
+// Decoded TEA5767 status bytes: ready/band-limit flags, PLL word, stereo flag, IF counter, and level.
 interface TEA5767Status {
 	readonly ready: boolean
 	readonly bandLimit: boolean
@@ -85,8 +103,10 @@ interface TEA5767Status {
 	readonly level: number
 }
 
+// Scales the chip's 0..15 volume code to the public 0..100 percent range.
 const RDA5807_VOLUME_FACTOR = 100 / 15
 
+// Default RDA5807 configuration.
 export const DEFAULT_RDA5807_OPTIONS: Required<RDA5807Options> = {
 	frequency: 87,
 	volume: 100,
@@ -101,6 +121,7 @@ export const DEFAULT_RDA5807_OPTIONS: Required<RDA5807Options> = {
 	wrap: true,
 }
 
+// Default TEA5767 configuration.
 export const DEFAULT_TEA5767_OPTIONS: Required<TEA5767Options> = {
 	frequency: 87.5,
 	muted: false,
@@ -116,6 +137,7 @@ export const DEFAULT_TEA5767_OPTIONS: Required<TEA5767Options> = {
 	wrap: true,
 }
 
+// Default KT0803L configuration.
 export const DEFAULT_KT0803L_OPTIONS: Required<KT0803LOptions> = {
 	frequency: 89.7,
 	muted: false,
@@ -132,9 +154,10 @@ export const DEFAULT_KT0803L_OPTIONS: Required<KT0803LOptions> = {
 	audioEnhancement: false,
 }
 
+// TEA5767 FM radio receiver.
 // https://cdn.sparkfun.com/assets/4/5/f/a/d/TEA5767.pdf
-
 export class TEA5767 extends PeripheralBase<TEA5767> implements RadioTuner {
+	// Current tuning/audio state and the last decoded seek/station/RSSI values exposed via getters.
 	#frequency: number
 	#muted: boolean
 	#stereo: boolean
@@ -146,6 +169,8 @@ export class TEA5767 extends PeripheralBase<TEA5767> implements RadioTuner {
 	#station = false
 	#rssi = 0
 
+	// I2C address and frame/tuning constants: status-frame length, 100 kHz tuning step, intermediate
+	// frequency, level/RSSI scales, and the valid IF-counter window used to qualify a found station.
 	static readonly ADDRESS = 0x60
 	static readonly STATUS_BYTES = 5
 	static readonly FREQUENCY_STEP_KHZ = 100
@@ -155,6 +180,7 @@ export class TEA5767 extends PeripheralBase<TEA5767> implements RadioTuner {
 	static readonly IF_VALID_MIN = 0x29
 	static readonly IF_VALID_MAX = 0x7f
 
+	// Write-register (BYTE1..BYTE5) and status-register bit masks/shifts per the datasheet.
 	static readonly BYTE1_MUTE = 1 << 7
 	static readonly BYTE1_SEARCH = 1 << 6
 	static readonly BYTE3_SEARCH_UP = 1 << 7
@@ -176,6 +202,8 @@ export class TEA5767 extends PeripheralBase<TEA5767> implements RadioTuner {
 	static readonly STATUS_STEREO = 1 << 7
 	static readonly STATUS_LEVEL_SHIFT = 4
 
+	// Precomputed per-option register bits and band limits (kHz), reference divider, search-stop bits, and
+	// seek wrap behavior derived once from the constructor options.
 	readonly #bandStartKHz: number
 	readonly #bandEndKHz: number
 	readonly #bandBits: number
@@ -186,6 +214,7 @@ export class TEA5767 extends PeripheralBase<TEA5767> implements RadioTuner {
 	readonly #searchStopBits: number
 	readonly #wrapAround: boolean
 
+	// Live tuning frequency (kHz) and seek/run state.
 	#frequencyKHz: number
 	#started = false
 	#seeking = false
@@ -575,9 +604,10 @@ export class TEA5767 extends PeripheralBase<TEA5767> implements RadioTuner {
 	}
 }
 
+// RDA5807 FM radio receiver.
 // https://cdn-shop.adafruit.com/product-files/5651/5651_tuner84_RDA5807M_datasheet_v1.pdf
-
 export class RDA5807 extends PeripheralBase<RDA5807> implements RadioTuner {
+	// Current tuning/audio state and the last decoded seek/stereo/RSSI/station values exposed via getters.
 	#frequency: number
 	#volume: number
 	#muted: boolean
@@ -590,6 +620,8 @@ export class RDA5807 extends PeripheralBase<RDA5807> implements RadioTuner {
 
 	static readonly ADDRESS = 0x11
 
+	// Register addresses (REG00..REG0A) and the per-register bit masks/shifts for control, tuning, audio,
+	// system, band, and status/signal registers, per the datasheet.
 	static readonly DEVICE_ID_REG = 0x00
 	static readonly CONTROL_REG = 0x02
 	static readonly TUNING_REG = 0x03
@@ -633,6 +665,7 @@ export class RDA5807 extends PeripheralBase<RDA5807> implements RadioTuner {
 	static readonly SIGNAL_STATION = 1 << 8
 	static readonly SIGNAL_READY = 1 << 7
 
+	// Precomputed band limits (kHz), band/spacing register bits, channel spacing, and wrap behavior.
 	readonly #bandStartKHz: number
 	readonly #bandEndKHz: number
 	readonly #bandBits: number
@@ -640,6 +673,7 @@ export class RDA5807 extends PeripheralBase<RDA5807> implements RadioTuner {
 	readonly #spacingBits: number
 	readonly #wrapAround: boolean
 
+	// Live frequency (kHz), run/seek state, and the cached writable register words.
 	#frequencyKHz: number
 	#started = false
 	#seeking = false
@@ -820,6 +854,7 @@ export class RDA5807 extends PeripheralBase<RDA5807> implements RadioTuner {
 		if (this.#started) this.#writeRegister(RDA5807.CONTROL_REG, this.#reg02 & ~RDA5807.REG02_SEEK)
 	}
 
+	// Whether the audio output is configured as high-impedance.
 	get audioOutputHighZ() {
 		return this.#audioOutputHighZ
 	}
@@ -841,6 +876,7 @@ export class RDA5807 extends PeripheralBase<RDA5807> implements RadioTuner {
 		this.muted = false
 	}
 
+	// Whether the last seek ended without finding a station.
 	get seekFailed() {
 		return this.#seekFailed
 	}
@@ -950,15 +986,19 @@ export class RDA5807 extends PeripheralBase<RDA5807> implements RadioTuner {
 	}
 }
 
+// KT0803L FM stereo transmitter.
 // https://www.radiolocman.com/datasheet/pdf.html?di=186075
-
 export class KT0803L extends PeripheralBase<KT0803L> implements RadioTransmitter {
+	// I2C address and channel scale: frequency is encoded as MHz × 20 (CHANNELS_PER_MHZ), bounded by the
+	// 70–108 MHz min/max channel values.
 	static readonly ADDRESS = 0x3e
 	static readonly MIN_CHANNEL = 1400 // 70.0 MHz * 20
 	static readonly MAX_CHANNEL = 2160 // 108.0 MHz * 20
 	static readonly DEFAULT_CHANNEL = 1720 // 86.0 MHz * 20
 	static readonly CHANNELS_PER_MHZ = 20
 
+	// Register addresses and per-register bit masks/shifts for channel, gain, mute, pre-emphasis, ALC,
+	// standby/auto-power-down, PA bias, deviation, and audio enhancement, per the datasheet.
 	static readonly REG00 = 0x00
 	static readonly REG01 = 0x01
 	static readonly REG02 = 0x02
@@ -993,6 +1033,7 @@ export class KT0803L extends PeripheralBase<KT0803L> implements RadioTransmitter
 	static readonly REG17_DEVIATION_112_5_KHZ = 1 << 6
 	static readonly REG17_AUDIO_ENHANCEMENT = 1 << 5
 
+	// Current transmitter state: encoded channel and all configurable audio/RF parameters.
 	#channel: number
 	#muted: boolean
 	#stereo: boolean
