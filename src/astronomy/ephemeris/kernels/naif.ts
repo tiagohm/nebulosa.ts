@@ -1,3 +1,9 @@
+// NAIF integer body codes used by SPICE/SPK kernels and the helpers that build the synthetic
+// codes JPL assigns to numbered/provisional asteroids. The enum groups barycenters, planets and
+// satellites, comets, and asteroids; the functions reproduce the SPK ID-encoding formulas.
+
+// NAIF/SPICE integer identifiers for solar-system bodies (barycenters, planets, satellites,
+// comets, and asteroids). Values match the official NAIF code assignments.
 export enum Naif {
 	// Barycenters
 	// SOLAR_SYSTEM_BARYCENTER = 0,
@@ -355,28 +361,34 @@ export enum Naif {
 	DIDYMOS = 920065803,
 }
 
-// DEPRECATED!
+// NAIF code for a numbered asteroid under the original (pre-2021) scheme: 2000000 + number.
+// DEPRECATED! Superseded by the extended scheme; kept for old kernels.
 export function originalPermanentAsteroidNumber(number: number): number {
 	return 2000000 + number
 }
 
+// NAIF code for a numbered asteroid under the extended scheme: 20000000 + number.
 export function extendedPermanentAsteroidNumber(number: number): number {
 	return 20000000 + number
 }
 
+// NAIF code for the primary body of a numbered asteroid system: 920000000 + number.
 export function extendedPrimaryBodyOfPermanentAsteroidNumber(number: number): number {
 	return 920000000 + number
 }
 
+// NAIF code for a satellite (1-based) of a numbered asteroid: satellite*1e8 + 20000000 + number.
 export function extendedSatelliteOfPermanentAsteroidNumber(number: number, satellite: number): number {
 	return satellite * 100000000 + 20000000 + number
 }
 
-// DEPRECATED!
+// NAIF code for a provisional-designation asteroid under the original scheme: 3000000 + number.
+// DEPRECATED! Superseded by the extended scheme; kept for old kernels.
 export function originalProvisionalAsteroidNumber(number: number): number {
 	return 3000000 + number
 }
 
+// NAIF code for a provisional-designation asteroid under the extended scheme: 50000000 + number.
 export function extendedProvisionalAsteroidNumber(number: number): number {
 	return 50000000 + number
 }

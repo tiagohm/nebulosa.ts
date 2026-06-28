@@ -4,6 +4,11 @@ import type { Angle } from '../../math/units/angle'
 import type { Distance } from '../../math/units/distance'
 import type { PositionAndVelocity } from '../coordinates/astrometry'
 
+// Conversion from elliptic orbital elements to rectangular position and velocity, used by the
+// analytical satellite/planet theories. The shared solver takes the equinoctial-style element
+// set below; the N/A wrappers derive the semi-major axis or mean motion from the gravitational
+// parameter mu. Positions are AU and velocities AU/day.
+
 // https://github.com/Stellarium/stellarium/blob/v25.3/src/core/planetsephems/elliptic_to_rectangular.c
 // https://ftp.imcce.fr/pub/ephem/satel/
 
@@ -93,12 +98,16 @@ export function ellipticToRectangular(a: Distance, n: Angle, elem: Readonly<Numb
 	return o ?? [p, v]
 }
 
+// Variant where elem[0] is the mean motion n (rad/day); derives the semi-major axis
+// from mu = G*(m1+m2) via a = cbrt(mu/n^2). Optionally writes into `o`, which is returned.
 export function ellipticToRectangularN(mu: number, elem: Readonly<NumberArray>, dt: number, o?: PositionAndVelocity) {
 	const n = elem[0]
 	const a = Math.cbrt(mu / (n * n))
 	return ellipticToRectangular(a, n, elem, dt, o)
 }
 
+// Variant where elem[0] is the semi-major axis a (AU); derives the mean motion
+// from mu = G*(m1+m2) via n = sqrt(mu/a^3). Optionally writes into `o`, which is returned.
 export function ellipticToRectangularA(mu: number, elem: Readonly<NumberArray>, dt: number, o?: PositionAndVelocity) {
 	const a = elem[0]
 	const n = Math.sqrt(mu / (a * a * a)) // mean motion

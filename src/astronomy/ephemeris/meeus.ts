@@ -3,6 +3,10 @@ import type { NumberArray } from '../../math/numerical/math'
 import type { Angle } from '../../math/units/angle'
 import type { Distance } from '../../math/units/distance'
 
+// Small port of selected Meeus-based "astronomia" helpers: standard epochs and constants, light
+// time, illuminated fraction, illuminated-limb position angle, and Horner polynomial evaluation.
+// Grouped into namespaces mirroring the source chapters. Angles are radians, distances AU.
+
 // https://github.com/commenthol/astronomia/blob/master/src/
 
 // Base: Functions and other definitions useful with multiple packages.
@@ -16,18 +20,20 @@ export namespace Base {
 	// Julian days of Besselian epoch 1950
 	export const B1950 = 2433282.4235
 
+	// Computes the light travel time, in days, for a distance in AU.
 	export function lightTime(dist: Distance) {
 		// Formula given as (33.3) p. 224.
 		return 0.0057755183 * dist
 	}
 
-	// Computes the illuminated fraction of a body's disk.
+	// Computes the illuminated fraction (0..1) of a body's disk from the phase angle `i` (radians).
 	export function illuminated(i: Angle) {
 		// (41.1) p. 283, also (48.1) p. 345.
 		return (1 + Math.cos(i)) * 0.5
 	}
 
-	// Computes position angle of the midpoint of an illuminated limb.
+	// Computes the position angle (radians, 0..TAU) of the midpoint of a body's illuminated limb.
+	// `bra`/`bdec` are the body's right ascension/declination and `sra`/`sdec` the Sun's, all radians.
 	export function limb(bra: Angle, bdec: Angle, sra: Angle, sdec: Angle): Angle {
 		// Mentioned in ch 41, p. 283.  Formula (48.5) p. 346
 		const sδ = Math.sin(bdec)

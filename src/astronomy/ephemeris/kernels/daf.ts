@@ -1,30 +1,54 @@
 import { readUntil, type Seekable, type Source } from '../../../io/io'
 
+// Reader for NAIF DAF (Double precision Array File) containers, the binary layout underlying SPK
+// ephemeris kernels. Parses the file record (endianness, summary layout, FTP validation string),
+// walks the summary record chain, and exposes a random-access float64 reader. Handles both
+// big-endian and little-endian files and validates against truncation.
+
+// One array summary: a named segment with its descriptor doubles and ints.
 export interface Summary {
+	// Trimmed ASCII name of the segment.
 	readonly name: string
+	// Double-precision descriptor components (e.g. segment start/stop epochs).
 	readonly doubles: Float64Array
+	// Integer descriptor components (e.g. target/center IDs, data type, address range).
 	readonly ints: Int32Array
 }
 
+// A parsed DAF file: its segment summaries plus a random-access float64 reader.
 export interface Daf {
+	// All array summaries found in the summary record chain.
 	readonly summaries: Summary[]
+	// Reads the inclusive 1-based double-word range [start, end] from the file.
 	readonly read: (start: number, end: number) => Promise<Float64Array> | Float64Array
 }
 
+// Metadata from the DAF file record describing byte order and summary layout.
 export interface DafRecord {
+	// True when the file stores numbers big-endian.
 	readonly be: boolean
+	// Number of double-precision components in each summary (ND).
 	readonly nd: number
+	// Number of integer components in each summary (NI).
 	readonly ni: number
+	// Record number of the first summary record (forward pointer).
 	readonly fward: number
+	// Record number of the last summary record (backward pointer).
 	readonly bward: number
 }
 
-const FTPSTR = Buffer.from('FTPSTR:\r:\n:\r\n:\r\u0000:\u0081:\u0010\u00CE:ENDFTP', 'ascii')
+const FTPSTR = Buffer.from('FTPSTR:\r:\n:\r\n:\r\u0000:\u0081:\u0010\u00CE:ENDFTP', 'ascii') // FTP validation byte string embedded in valid DAF files; corruption is detected by comparison.
+// Byte offset of the FTP validation string within the file record.
 const FTPSTR_OFFSET = 699
+// Length of the FTP validation string, in bytes.
 const FTPSTR_LENGTH = 28
+// Size of one DAF physical record, in bytes.
 const RECORD_SIZE = 1024
+// Size of a double-precision word, in bytes.
 const FLOAT64_BYTES = 8
+// Size of a 32-bit integer word, in bytes.
 const INT32_BYTES = 4
+// Whether the host CPU is little-endian; selects the zero-copy read fast path.
 const HOST_LITTLE_ENDIAN = new Uint8Array(new Uint16Array([1]).buffer)[0] === 1
 
 // https://naif.jpl.nasa.gov/pub/naif/toolkit_docs/C/req/daf.html

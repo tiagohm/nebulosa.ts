@@ -4,29 +4,48 @@ import type { PositionAndVelocity } from '../../coordinates/astrometry'
 import { type Time, tdb } from '../../time/time'
 import type { Daf, Summary } from './daf'
 
+// Reader and evaluator for SPK (Spacecraft and Planet Kernel) ephemerides stored in DAF files.
+// Builds a center->target segment lookup and decodes the supported binary data types (2/3
+// Chebyshev, 9 Lagrange, 21 extended modified difference arrays), returning BCRS-frame position
+// (AU) and velocity (AU/day) at a requested time. Records are cached per segment; epochs are
+// handled as ephemeris seconds past J2000 (TDB).
+
 // https://naif.jpl.nasa.gov/pub/naif/toolkit_docs/FORTRAN/req/spk.html
 // https://naif.jpl.nasa.gov/pub/naif/misc/toolkit_docs_N0067/C/req/spk.html
 
+// Kilometers to astronomical units.
 const KM_TO_AU = 1 / AU_KM
+// Kilometers per second to AU per day.
 const KM_PER_SECOND_TO_AU_PER_DAY = DAYSEC / AU_KM
 
+// A parsed SPK file: all segments plus a center/target segment lookup.
 export interface Spk {
+	// All segments as [center, target, segment] triples in file order.
 	readonly segments: readonly [number, number, SpkSegment][]
+	// Resolves the segment giving the target's state relative to the center, if present.
 	readonly segment: (center: number, target: number) => SpkSegment | undefined
 }
 
+// One SPK segment: the state of `target` relative to `center` over [start, end].
 export interface SpkSegment {
 	// readonly daf: Daf
 	// readonly source: string
+	// Segment coverage start, in ephemeris seconds past J2000 (TDB).
 	readonly start: number
+	// Segment coverage end, in ephemeris seconds past J2000 (TDB).
 	readonly end: number
+	// NAIF code of the center body.
 	readonly center: number
+	// NAIF code of the target body.
 	readonly target: number
 	// readonly frame: number
 	// readonly type: number
+	// First DAF word index of the segment data (1-based).
 	readonly startIndex: number
+	// Last DAF word index of the segment data (1-based).
 	readonly endIndex: number
 
+	// Evaluates the target's position (AU) and velocity (AU/day) at `time`.
 	readonly at: (time: Time) => Promise<PositionAndVelocity>
 }
 
@@ -134,15 +153,25 @@ function makeSegment(summary: Summary, daf: Daf): SpkSegment {
 
 // More info about spk types: https://spiceypy.readthedocs.io/en/latest/spk.html
 
+// Decoded Chebyshev record for a type 2/3 segment.
 interface Type2And3Coefficient {
+	// Midpoint epoch of the record, in ephemeris seconds past J2000.
 	readonly mid: number
+	// Half-length of the record interval, in seconds; normalizes time into [-1, 1].
 	readonly radius: number
+	// Chebyshev coefficients for the x position component.
 	readonly x: Float64Array
+	// Chebyshev coefficients for the y position component.
 	readonly y: Float64Array
+	// Chebyshev coefficients for the z position component.
 	readonly z: Float64Array
+	// Chebyshev coefficients for the x velocity component (type 3 only).
 	readonly vx?: Float64Array
+	// Chebyshev coefficients for the y velocity component (type 3 only).
 	readonly vy?: Float64Array
+	// Chebyshev coefficients for the z velocity component (type 3 only).
 	readonly vz?: Float64Array
+	// Number of coefficients per component.
 	readonly count: number
 }
 
@@ -491,13 +520,21 @@ export class Type9Segment implements SpkSegment {
 	}
 }
 
+// Decoded extended modified-difference-array record for a type 21 segment.
 interface Type21Coefficient {
+	// Reference epoch of the record, in ephemeris seconds past J2000.
 	readonly tl: number
+	// Stepsize function vector.
 	readonly g: Float64Array
+	// Reference position vector (km), one entry per axis.
 	readonly p: Float64Array
+	// Reference velocity vector (km/s), one entry per axis.
 	readonly v: Float64Array
+	// Modified divided differences, laid out 3 axes per order.
 	readonly dt: Float64Array
+	// Maximum difference-table order plus one.
 	readonly kqmax1: number
+	// Per-axis difference-table order actually used.
 	readonly kq: Int32Array
 }
 
@@ -708,6 +745,9 @@ export class Type21Segment implements SpkSegment {
 	}
 }
 
+// Aggregates several segments for the same center/target whose coverage windows may overlap,
+// presenting them as a single segment. Its bounds are the union of the children, and lookups
+// pick the highest-priority (latest in file order) child covering the requested epoch.
 export class MultipleSpkSegment implements SpkSegment {
 	readonly start: number
 	readonly end: number
