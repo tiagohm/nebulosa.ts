@@ -6,14 +6,28 @@ import type { ImageRawType } from '../model/types'
 import type { DetectedStar } from '../stars/detector'
 import { type PlotStarOptions, plotStar } from '../stars/generator'
 
+// Physically motivated synthetic astronomical-image generator: renders stars and then injects a full
+// noise/signal chain — sky background and gradients, moonlight, light pollution, atmospheric effects,
+// sensor terms (read/dark/bias noise, amp glow), and structured artifacts (fixed-pattern, banding,
+// hot/warm/dead pixels) — at a configurable realism level, before optional quantization and clamping.
+// Signal is modeled in electrons internally and emitted into the normalized [0, 1] raw buffer; the
+// generation is fully seeded/deterministic. Angles are radians, times seconds, rates electrons/pixel/second.
+
+// Realism/performance tier of the noise model.
 export type AstronomicalImageNoiseQuality = 'fast' | 'balanced' | 'high-realism'
 
+// How out-of-range output values are handled.
 export type AstronomicalImageClampMode = 'clamp' | 'normalize' | 'none'
 
+// Location of the amp-glow region on the sensor.
 export type AmpGlowPosition = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right' | 'left' | 'right' | 'top' | 'bottom'
 
+// Top-level configuration for the synthetic image generator; every section is optional and merged
+// with the defaults.
 export interface AstronomicalImageNoiseConfig {
+	// PRNG seed for deterministic output.
 	seed?: number
+	// Realism tier.
 	quality?: AstronomicalImageNoiseQuality
 	readonly exposure?: AstronomicalExposureConfig
 	readonly sky?: AstronomicalSkyConfig
@@ -134,26 +148,41 @@ export interface AstronomicalOutputConfig {
 	quantize?: boolean
 }
 
+// Diagnostic statistics returned after generation.
 export interface AstronomicalImageNoiseStats {
+	// Seed actually used.
 	readonly seed: number
+	// Expected raw-buffer length (width*height*channels).
 	readonly expectedLength: number
+	// Electron level at which a pixel saturates.
 	readonly saturationElectrons: number
+	// Scale applied when normalizing the output.
 	readonly normalizationScale: number
+	// Maximum pixel value before the output clamp/normalize step.
 	readonly maxValueBeforeOutput: number
+	// Number of saturated pixels.
 	readonly saturatedPixels: number
+	// Number of injected hot pixels.
 	readonly hotPixelCount: number
+	// Number of injected warm pixels.
 	readonly warmPixelCount: number
+	// Number of injected dead pixels.
 	readonly deadPixelCount: number
 }
 
+// Result of a generation pass.
 export interface AstronomicalImageNoiseResult {
 	readonly stats: AstronomicalImageNoiseStats
 }
 
+// A star to render, with an optional B-V color index.
 export interface AstronomicalImageStar extends DetectedStar {
 	readonly colorIndex?: number
 }
 
+// Fully resolved, flattened, precomputed form of the public config consumed by the per-pixel loops
+// (trig of directions cached, channel arrays filled, derived gain/saturation terms computed). Each
+// field mirrors a public AstronomicalImageNoiseConfig setting or a value derived from it.
 interface ResolvedAstronomicalImageNoiseConfig {
 	readonly width: number
 	readonly height: number
@@ -244,17 +273,21 @@ interface ResolvedAstronomicalImageNoiseConfig {
 	readonly lowFrequencyPhase3: number
 }
 
+// State for the Box-Muller Gaussian sampler, caching the second variate between calls.
 interface GaussianSamplerState {
 	spare: number
 	hasSpare: boolean
 }
 
+// A per-pixel sensor defect (hot/warm/dead): its signal scale, extra electrons, and kind tag
+// (0 none, 1 hot, 2 warm, 3 dead).
 interface SensorDefect {
 	signalScale: number
 	extraSignalElectrons: number
 	kind: 0 | 1 | 2 | 3
 }
 
+// Spatially varying background electron contributions evaluated at one pixel.
 interface SkySpatialFields {
 	sharedSkyElectrons: number
 	lightPollutionElectrons: number
@@ -262,8 +295,10 @@ interface SkySpatialFields {
 	ampGlowElectrons: number
 }
 
+// Neutral (white) RGB multiplier.
 const DEFAULT_RGB: readonly [number, number, number] = [1, 1, 1]
 
+// Fully populated default configuration; user configs are merged over this.
 export const DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG: Readonly<DeepRequired<AstronomicalImageNoiseConfig>> = {
 	seed: 0x5f3759df,
 	quality: 'balanced',

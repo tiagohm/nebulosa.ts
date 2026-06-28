@@ -3,35 +3,61 @@ import { clamp } from '../../math/numerical/math'
 import type { Image } from '../model/types'
 import { clone, grayscale, mean3x3, psf } from '../processing/transformation'
 
+// Star detection and photometry for an image. Median-filters out hot pixels, runs a PSF-matched
+// response to find candidate peaks, then measures each star's flux, SNR, half-flux diameter (HFD),
+// and FWHM via integral-image aperture/annulus photometry. Coordinates are pixels; intensities use
+// the normalized [0, 1] pixel scale. Also provides utilities to merge close detections and to clip
+// stars to a central search region.
+
+// A detected star: its pixel position plus measured photometry.
 export interface DetectedStar extends Readonly<Point> {
+	// Half-flux diameter, pixels.
 	readonly hfd: number
+	// Full width at half maximum, pixels (when estimable).
 	readonly fwhm?: number
+	// Signal-to-noise ratio.
 	readonly snr: number
+	// Integrated flux above background.
 	readonly flux: number
 }
 
+// Options controlling star detection.
 export interface DetectStarOptions {
+	// Maximum number of stars to return (brightest kept).
 	readonly maxStars: number
+	// Optional central square region (half-size, pixels) to restrict detection to.
 	readonly searchRegion?: number
+	// Minimum SNR a star must reach to be kept.
 	readonly minSNR?: number
 }
 
+// Integral images for fast box statistics: [running sum, running sum of squares, padded width].
 type IntegralImages = readonly [Float64Array, Float64Array, number] // sum, sumSq, width
+// Measured photometry of one star as [flux, snr, hfd, fwhm].
 export type StarPhotometry = readonly [number, number, number, number] // flux, snr, hfd, fwhm
 
+// Aperture radius (pixels) over which a star's signal flux is integrated.
 const STAR_SIGNAL_RADIUS = 4
+// Inner radius (pixels) of the background-estimation annulus.
 const STAR_BACKGROUND_INNER_RADIUS = 5
+// Outer radius (pixels) of the background-estimation annulus.
 const STAR_BACKGROUND_OUTER_RADIUS = 7
+// Border margin (pixels) excluded after PSF convolution to avoid edge artifacts.
 const STAR_CONVOLVED_MARGIN = 4
+// Minimum acceptable HFD (pixels); smaller measurements are treated as noise/hot pixels.
 const STAR_MIN_HFD = 1
+// Ratio between a peak's score and its neighborhood used to accept it as a distinct star.
 const STAR_SCORE_GAP_RATIO = 4
 
+// Default star-detection options.
 const DEFAULT_DETECT_STARS_OPTIONS: Readonly<DetectStarOptions> = {
 	maxStars: 500,
 	searchRegion: 0,
 	minSNR: 0,
 }
 
+// Detects stars in an image and returns them sorted by descending flux (up to maxStars), filtered by
+// minSNR and optionally restricted to a central search region.
 export function detectStars(image: Image, { maxStars = 500, searchRegion = 0, minSNR = 0 }: Partial<DetectStarOptions> = DEFAULT_DETECT_STARS_OPTIONS): DetectedStar[] {
 	image = grayscale(image)
 
@@ -326,6 +352,7 @@ function localStatistics(image: IntegralImages, left: number, top: number, right
 	return [mean, Math.sqrt(variance)] as const
 }
 
+// Removes duplicate detections that lie within sqrt(minLimitSq) pixels of an earlier star (in place).
 export function mergeVeryCloseStars(stars: StarList, minLimitSq: number = 25) {
 	if (stars.size <= 0) return
 
@@ -356,6 +383,8 @@ export function mergeVeryCloseStars(stars: StarList, minLimitSq: number = 25) {
 	}
 }
 
+// Removes pairs of stars that fall within `searchRegion` (plus a safety margin) of each other in both
+// axes, unless one is much brighter than the other (so a dim star cannot eliminate a bright one).
 export function excludeStarsFitWithinRegion(stars: StarList, searchRegion: number) {
 	if (stars.size <= 0) return
 
@@ -400,18 +429,29 @@ export function excludeStarsFitWithinRegion(stars: StarList, searchRegion: numbe
 	}
 }
 
+// Internal doubly linked-list node for a candidate star during detection.
 interface Star {
+	// Pixel x coordinate.
 	readonly x: number
+	// Pixel y coordinate.
 	readonly y: number
+	// Peak height (brightness) of the candidate.
 	readonly h: number
+	// Measured flux, when computed.
 	readonly flux?: number
+	// Signal-to-noise ratio, when computed.
 	readonly snr?: number
+	// Half-flux diameter, when computed.
 	readonly hfd?: number
+	// FWHM, when computed.
 	readonly fwhm?: number
+	// Next node in the list.
 	next?: this
+	// Previous node in the list.
 	prev?: this
 }
 
+// Intrusive doubly linked list of candidate stars, supporting in-place pruning during detection.
 export class StarList implements Iterable<Star, Star | undefined, Star> {
 	#head?: Star
 	#tail?: Star
@@ -424,6 +464,7 @@ export class StarList implements Iterable<Star, Star | undefined, Star> {
 		return this.#head
 	}
 
+	// Appends a star at the tail (brightest end).
 	addLast(x: number, y: number, h: number, flux?: number, snr?: number, hfd?: number, fwhm?: number) {
 		const star: Star = { x, y, h, flux, snr, hfd, fwhm }
 
@@ -439,6 +480,7 @@ export class StarList implements Iterable<Star, Star | undefined, Star> {
 		this.size++
 	}
 
+	// Prepends a star at the head (dimmest end).
 	addFirst(x: number, y: number, h: number, flux?: number, snr?: number, hfd?: number, fwhm?: number) {
 		const star: Star = { x, y, h, flux, snr, hfd, fwhm }
 
@@ -454,6 +496,8 @@ export class StarList implements Iterable<Star, Star | undefined, Star> {
 		this.size++
 	}
 
+	// Inserts a star keeping the list sorted by ascending height, searching from the nearer end, and
+	// evicts the dimmest star (head) when the capacity is exceeded.
 	add(x: number, y: number, h: number, flux?: number, snr?: number, hfd?: number, fwhm?: number) {
 		if (!this.#head || h <= this.#head.h) {
 			if (this.size < this.capacity) this.addFirst(x, y, h, flux, snr, hfd, fwhm)
@@ -498,6 +542,7 @@ export class StarList implements Iterable<Star, Star | undefined, Star> {
 		}
 	}
 
+	// Removes the head (dimmest) star; returns false when the list is empty.
 	deleteFirst() {
 		if (!this.#head) return false
 
@@ -528,17 +573,20 @@ export class StarList implements Iterable<Star, Star | undefined, Star> {
 		return true
 	}
 
+	// Removes a specific star node from the list.
 	delete(s: Star) {
 		if (this.#head && s === this.#head) return this.deleteFirst()
 		return s.prev ? this.deleteAfter(s.prev) : false
 	}
 
+	// Empties the list.
 	clear() {
 		this.#head = undefined
 		this.#tail = undefined
 		this.size = 0
 	}
 
+	// Materializes the list into an array (head-to-tail, dim-to-bright order).
 	array() {
 		const n = this.size
 		const data = new Array<Star>(n)
@@ -546,6 +594,7 @@ export class StarList implements Iterable<Star, Star | undefined, Star> {
 		return data
 	}
 
+	// Returns a forward iterator over the stars.
 	iterator(): Iterator<Star, Star | undefined> {
 		let current = this.#head
 

@@ -1,50 +1,93 @@
 import { clamp, lerp } from '../../math/numerical/math'
 import type { ImageRawType } from '../model/types'
 
+// Synthetic star renderer: plots a realistic stellar profile into a raw pixel buffer, modeling the
+// point-spread function (Gaussian or Moffat), elongation/orientation, defocus, an optional halo, sub-
+// pixel jitter, color (from a B-V style color index), gain, and saturation. Intensities use the
+// normalized [0, 1] pixel scale; geometry is in pixels. Used by the synthetic image generator.
+
+// Point-spread-function shape used to render a star.
 export type StarPsfModel = 'gaussian' | 'moffat'
 
+// Options controlling how a single star is plotted.
 export interface PlotStarOptions {
+	// Background level added under the star, 0..1.
 	readonly background?: number
+	// Pixel value at which the star saturates (clips), 0..1.
 	readonly saturationLevel?: number
+	// Current focuser position; combined with bestFocus to defocus the star.
 	readonly focusStep?: number
+	// Focuser position of best focus.
 	readonly bestFocus?: number
+	// Focuser travel over which the star fully defocuses.
 	readonly maxFocusStep?: number
+	// Multiplier on the star's peak intensity.
 	readonly peakScale?: number
+	// Elongation (0 = round, toward 1 = elongated).
 	readonly ellipticity?: number
+	// Orientation of the elongation, radians.
 	readonly theta?: number
+	// Soft-core radius flattening the very center, pixels.
 	readonly softCore?: number
+	// PSF model selector.
 	readonly psfModel?: StarPsfModel
+	// Moffat beta parameter (wing steepness).
 	readonly beta?: number
+	// Strength of the optional extended halo, 0..1.
 	readonly haloStrength?: number
+	// Radial scale of the halo relative to the core.
 	readonly haloScale?: number
+	// Sub-pixel centroid offset in x, pixels.
 	readonly jitterX?: number
+	// Sub-pixel centroid offset in y, pixels.
 	readonly jitterY?: number
+	// Multiplicative gain applied to the rendered flux.
 	readonly gain?: number
+	// Gamma applied to the color weights, or false to skip color compensation.
 	readonly gammaCompensation?: number | false
+	// Hint of the additive noise level, used to taper the faint wings.
 	readonly additiveNoiseHint?: number
+	// Minimum plotted box half-width, pixels.
 	readonly minPlotRadius?: number
+	// Maximum plotted box half-width, pixels.
 	readonly maxPlotRadius?: number
+	// Plot cutoff in sigma units beyond which pixels are skipped.
 	readonly cutoffSigma?: number
 }
 
+// sqrt(2 ln 2): half-width-at-half-maximum factor relating FWHM and Gaussian sigma.
 const SQRT_TWO_LN_TWO = 1.1774100225154747
+// Converts a half-flux diameter to the equivalent Gaussian sigma.
 const HFD_TO_SIGMA = 1 / (2 * SQRT_TWO_LN_TWO)
+// Default B-V color index (Sun-like) when none is supplied.
 const DEFAULT_COLOR_INDEX = 0.65
+// Minimum half-flux diameter, pixels.
 const MIN_HFD = 0.35
+// Minimum Gaussian sigma, pixels.
 const MIN_SIGMA = 0.18
+// Minimum minor/major axis ratio (caps elongation).
 const MIN_AXIS_RATIO = 0.2
+// Default Moffat beta parameter.
 const DEFAULT_BETA = 2.5
+// Default halo radial scale.
 const DEFAULT_HALO_SCALE = 2.8
+// Default minimum plot box half-width, pixels.
 const DEFAULT_MIN_RADIUS = 2
+// Default maximum plot box half-width, pixels.
 const DEFAULT_MAX_RADIUS = 24
+// Default plot cutoff, in sigma units.
 const DEFAULT_CUTOFF_SIGMA = 4.25
+// Below this ellipticity the round (faster) rendering path is used.
 const FAST_PATH_ELLIPTICITY_EPSILON = 1e-6
+// Upper bound on focuser travel used in defocus computations.
 const MAX_FOCUS_STEP = 100000
 // Maximum half-width of the plotted box, in units of the steepest Gaussian scale. Beyond this the
 // incremental exp() recurrence seed exp(-0.5 * n^2) underflows (n^2 / 2 > ~745) and the row march
 // breaks down; the dropped pixels carry less than exp(-648) of the star flux, so capping is lossless.
 const SAFE_RADIUS_SIGMA = 36
 
+// Lookup table mapping a B-V color index to [colorIndex, redWeight, greenWeight, blueWeight];
+// interpolated to convert star color into RGB channel scaling.
 const COLOR_INDEX_LUT = [
 	[-0.4, 0.72, 0.86, 1.42],
 	[0, 0.9, 0.98, 1.12],
@@ -798,14 +841,17 @@ function moffatDiscreteSum(minX: number, maxX: number, minY: number, maxY: numbe
 	return sum
 }
 
+// Returns `value` when it is finite and positive, otherwise `fallback`.
 function sanitizePositive(value: number | undefined, fallback: number) {
 	return Number.isFinite(value) && value! > 0 ? value! : fallback
 }
 
+// Returns `value` when it is finite (any sign), otherwise `fallback`.
 function sanitizeSigned(value: number | undefined, fallback: number) {
 	return Number.isFinite(value) ? value! : fallback
 }
 
+// Returns `value` (or `fallback` if non-finite) clamped to [min, max].
 function clampFinite(value: number | undefined, fallback: number, min: number, max: number) {
 	return clamp(sanitizeSigned(value, fallback), min, max)
 }
