@@ -40,6 +40,10 @@ import { DAYSPERJY, J2000 } from '../../../core/constants'
 import type { MutVec3 } from '../../../math/linear-algebra/vec3'
 import type { PositionAndVelocity } from '../astrometry'
 
+// Port of ERFA's eraEpv00: the simplified VSOP2000-based Earth heliocentric and barycentric position
+// and velocity in the BCRS. The bulk of this file is the harmonic coefficient tables documented in the
+// header above (amplitude/phase/frequency triplets per term); the function evaluating them is at the end.
+
 // Sun-to-Earth, T^0, X
 const E0X = [
 	0.9998292878132, 0.1753485171504e1, 0.6283075850446e1, 0.8352579567414e-2, 0.1710344404582e1, 0.1256615170089e2, 0.5611445335148e-2, 0, 0, 0.1046664295572e-3, 0.166722541677e1, 0.1884922755134e2, 0.3110842534677e-4, 0.6687513390251, 0.8399684731857e2, 0.255241350355e-4, 0.5830637358413, 0.5296909721118,

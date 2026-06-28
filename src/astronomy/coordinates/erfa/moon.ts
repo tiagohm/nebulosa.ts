@@ -3,6 +3,10 @@ import { matMulVec, matRotX, matRotZ } from '../../../math/linear-algebra/mat3'
 import { normalizeAngle } from '../../../math/units/angle'
 import { eraPfw06, eraS2pv } from './erfa'
 
+// Port of ERFA's eraMoon98: the approximate geocentric position and velocity of the Moon (ICRS-aligned)
+// from the lunar theory of Meeus' "Astronomical Algorithms" (ELP-based). The mean-element constants and
+// the periodic-term tables below feed the evaluator at the end of the file.
+
 // Moon's mean longitude (wrt mean equinox and ecliptic of date)
 const ELP0 = 218.31665436 * DEG2RAD // Simon et al. (1994)
 const ELP1 = 481267.88123421 * DEG2RAD
