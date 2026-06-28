@@ -216,6 +216,7 @@ export class FirmataIndiClient implements Client {
 		return this.options?.handler ?? EMPTY_HANDLER
 	}
 
+	// INDI getProperties: replays one device's definitions (or all) to the handler.
 	getProperties(command?: GetProperties) {
 		if (command?.device) {
 			this.#devices.get(command.device)?.sendProperties(command.name)
@@ -227,6 +228,7 @@ export class FirmataIndiClient implements Client {
 	// BLOBs are not produced by sensor peripherals; documented no-op required to satisfy `Client`.
 	enableBlob(command: EnableBlob) {}
 
+	// Routes an INDI text/number/switch command to the addressed virtual device.
 	sendText(vector: NewTextVector) {
 		this.#devices.get(vector.device)?.sendText(vector)
 	}
@@ -374,6 +376,7 @@ class FirmataVirtualDevice<D extends ListenablePeripheral<D>> {
 		}
 	}
 
+	// The INDI handler to publish events to, inherited from the owning client.
 	get handler() {
 		return this.client.handler
 	}
@@ -386,6 +389,7 @@ class FirmataVirtualDevice<D extends ListenablePeripheral<D>> {
 		handleDefSwitchVector(this.client, this.handler, this.#connection)
 	}
 
+	// Whether the virtual device's connection switch reports it as connected.
 	get isConnected() {
 		return this.#connection.elements.CONNECT.value === true
 	}
@@ -414,6 +418,7 @@ class FirmataVirtualDevice<D extends ListenablePeripheral<D>> {
 	// The initial sensors are read-only; unsupported writes are ignored. Override for writable ones.
 	sendNumber(vector: NewNumberVector) {}
 
+	// Handles the connection switch, routing CONNECT/DISCONNECT to connect()/disconnect().
 	sendSwitch(vector: NewSwitchVector) {
 		switch (vector.name) {
 			case 'CONNECTION':
@@ -657,14 +662,17 @@ class RealTimeClockVirtualDevice<D extends ListenablePeripheral<D>> extends Firm
 		return this.measurements[0].vector
 	}
 
+	// Defines the TIME_SYNC switch once the clock is connected.
 	protected onConnect() {
 		handleDefSwitchVector(this.client, this.handler, this.#sync)
 	}
 
+	// Deletes the TIME_SYNC switch on disconnect.
 	protected onDisconnect() {
 		this.handler.delProperty?.(this.client, { device: this.name, name: this.#sync.name })
 	}
 
+	// Re-emits the TIME_SYNC switch from getProperties while connected.
 	protected sendExtraProperties(name?: string) {
 		if (!name || name === this.#sync.name) handleDefSwitchVector(this.client, this.handler, this.#sync)
 	}
