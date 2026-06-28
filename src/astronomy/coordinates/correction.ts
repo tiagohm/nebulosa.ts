@@ -9,6 +9,12 @@ import type { PositionAndVelocity } from './astrometry'
 import { eraS2c } from './erfa/erfa'
 import { itrs } from './itrs'
 
+// Observer-state and time/velocity corrections for precise timing and spectroscopy: the observer's
+// barycentric/heliocentric position and velocity (adding the topocentric offset and diurnal rotation
+// when a location is given), the radial-velocity correction projected onto a source direction, and the
+// light-travel-time correction for barycentric/heliocentric date (BJD/HJD). Positions are AU, velocities
+// AU/day, in ICRS/BCRS axes. The corrections are first-order (Newtonian), not fully relativistic.
+
 // Earth's nominal rotation rate in rad/day (ANGVEL is rad/s).
 const ANGVEL_PER_DAY = ANGVEL * DAYSEC
 

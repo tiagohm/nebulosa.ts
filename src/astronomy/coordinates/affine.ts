@@ -9,6 +9,12 @@ import type { PositionAndVelocity } from './astrometry'
 import { eraS2p } from './erfa/erfa'
 import { ECLIPTIC_J2000, type CoordinateFrame, type CoordinateFrameOutput, type Frame } from './frame'
 
+// Affine coordinate frames: rotations plus a possibly moving origin, extending the pure-rotation `Frame`
+// with origin position/velocity so absolute positions and full [p, v] states can be shifted between
+// barycentric, heliocentric, Galactocentric, and Local-Standard-of-Rest (LSR/LSRK/LSRD/GalacticLSR)
+// frames. Positions are AU and velocities AU/day in the base (ICRS/BCRS) frame. Unlike rotations, affine
+// transforms are meaningful only on real positions with distance — never on normalized direction vectors.
+
 // A frame that may sit at a shifted, possibly moving origin relative to the
 // base (GCRS/ICRS-oriented) frame. It inherits the orientation members from
 // Frame and adds the origin position and velocity, both optional, so every

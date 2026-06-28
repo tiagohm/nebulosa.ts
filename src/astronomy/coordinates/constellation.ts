@@ -4,13 +4,23 @@ import { type Time, Timescale, timeBesselianYear, timeJulianYear } from '../time
 import { eraC2s } from './erfa/erfa'
 import { fk5, precessFk5 } from './fk5'
 
+// Identifies the IAU constellation containing a sky position. Uses the official Delporte boundary table
+// (defined on the B1875 equinox): a position is precessed to B1875, then a binary search over the RA/Dec
+// boundary grid yields the constellation. Also exposes the constellation metadata table (name, IAU
+// abbreviation, genitive, description).
+
+// Three-letter uppercase constellation key (e.g. 'AND').
 export type Constellation = keyof typeof CONSTELLATIONS
 
+// IAU mixed-case constellation abbreviation (e.g. 'And').
 export type ConstellationIAU = (typeof CONSTELLATIONS)[Constellation]['iau']
 
+// J2000.0 epoch in TT (default input equinox).
 const J2000 = timeJulianYear(2000, Timescale.TT)
+// B1875.0 epoch in TT, the equinox the official constellation boundaries are defined on.
 const B1875 = timeBesselianYear(1875, Timescale.TT)
 
+// Binary-search options returning the insertion index, used to locate the boundary cell.
 const BINARY_SEARCH_OPTIONS: BinarySearchOptions = { positive: true }
 
 // Returns the constellation for a given right ascension and declination at a specific epoch.
@@ -25,6 +35,8 @@ export function constellation(ra: Angle, dec: Angle, equinox: Time | false = J20
 	return CONSTELLATION_LIST[p]
 }
 
+// The 88 IAU constellations keyed by their three-letter code, each with display name, IAU abbreviation,
+// Latin genitive, and a short description.
 export const CONSTELLATIONS = {
 	AND: { name: 'Andromeda', iau: 'And', genitive: 'Andromedae', description: 'Princess of Ethiopia' },
 	ANT: { name: 'Antlia', iau: 'Ant', genitive: 'Antliae', description: 'Air pump' },
@@ -116,8 +128,10 @@ export const CONSTELLATIONS = {
 	VUL: { name: 'Vulpecula', iau: 'Vul', genitive: 'Vulpeculae', description: 'Fox' },
 } as const
 
+// Constellation keys in declaration order; the boundary index tables map into this list.
 export const CONSTELLATION_LIST = Object.keys(CONSTELLATIONS) as Constellation[]
 
+// Sorted right-ascension boundary edges (hours) of the Delporte grid columns.
 const RA = [
 	0.06666666666666667, 0.14166666666666666, 0.16666666666666666, 0.3333333333333333, 0.7166666666666667, 0.75, 0.85, 0.8666666666666667, 1.1166666666666667, 1.3333333333333333, 1.3666666666666667, 1.4083333333333334, 1.5833333333333333, 1.6666666666666667, 1.7, 1.8333333333333333, 1.9083333333333334,
 	1.9166666666666667, 2, 2.0416666666666665, 2.1666666666666665, 2.3333333333333335, 2.4166666666666665, 2.433333333333333, 2.5166666666666666, 2.566666666666667, 2.65, 2.6666666666666665, 2.716666666666667, 3, 3.1, 3.1666666666666665, 3.2, 3.283333333333333, 3.3333333333333335, 3.3666666666666667,
@@ -132,6 +146,7 @@ const RA = [
 	20.566666666666666, 20.6, 20.666666666666668, 20.833333333333332, 20.875, 20.916666666666668, 21, 21.05, 21.116666666666667, 21.25, 21.333333333333332, 21.416666666666668, 21.466666666666665, 21.666666666666668, 21.733333333333334, 21.866666666666667, 21.875, 21.908333333333335, 21.966666666666665, 22,
 	22.133333333333333, 22.316666666666666, 22.75, 22.816666666666666, 22.866666666666667, 23, 23.166666666666668, 23.333333333333332, 23.5, 23.583333333333332, 23.75, 23.833333333333332,
 ]
+// Sorted declination boundary edges (degrees) of the Delporte grid rows.
 const DEC = [
 	-85, -82.5, -76, -75, -70, -67.5, -65, -64, -63.583333333333336, -61, -60, -59, -58.5, -58, -57.5, -57, -56.5, -55, -54.5, -54, -53.5, -53.166666666666664, -53, -52.5, -51.5, -51, -50.75, -50, -49, -48.166666666666664, -48, -46.5, -46, -45.5, -44, -43, -42, -40, -39.75, -39.583333333333336, -37, -36.75, -36, -35,
 	-33, -31.166666666666668, -30, -29.5, -29.166666666666668, -28, -27.25, -26.5, -25.5, -24.583333333333332, -24.5, -24.383333333333333, -24, -22, -20, -19.25, -19, -18.25, -17, -16, -15, -14.5, -12.033333333333333, -11.666666666666666, -11, -10, -9, -8, -7, -6, -4, -3.25, -1.75, 0, 1.5, 1.75, 2, 2.75, 3, 4, 4.5,
@@ -139,6 +154,7 @@ const DEC = [
 	25.5, 26, 27, 27.25, 27.5, 28, 28.5, 29, 30, 30.666666666666668, 30.75, 31.333333333333332, 32, 32.083333333333336, 33, 33.5, 34, 34.5, 35, 35.5, 36, 36.5, 36.75, 39.75, 40, 42, 43.5, 43.75, 44, 44.5, 45, 46, 47, 47.5, 48, 48.5, 50, 50.5, 51.5, 52.5, 52.75, 53, 54, 54.833333333333336, 55, 55.5, 56, 56.25, 57, 57.5,
 	58, 58.5, 59.083333333333336, 59.5, 60, 60.916666666666664, 61.5, 62, 63, 64, 66, 66.5, 67, 68, 70, 73.5, 75, 77, 80, 82, 85, 86, 86.16666666666667, 86.5, 88,
 ]
+// Flattened RA-by-Dec grid (row stride 202) mapping each boundary cell to a CONSTELLATION_LIST index.
 const RA_TO_INDEX = [
 	57, 57, 42, 42, 81, 81, 81, 81, 81, 81, 81, 81, 81, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 70, 70, 70, 70, 70, 70, 70, 70, 70, 70, 70, 70, 70, 70, 70, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 66, 66, 66, 66, 66, 66,
 	66, 66, 66, 66, 66, 66, 66, 66, 66, 66, 66, 66, 66, 66, 66, 66, 66, 66, 66, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 16, 16, 16, 16, 16, 16,
