@@ -1,11 +1,11 @@
-import { ELLIPSOID_PARAMETERS, ONE_SECOND } from '../../core/constants'
-import { type Mat3, type MutMat3, matFlipX, matMinus, matMul, matMulScalar, matMulVec, matRotX, matRotY, matRotZ } from '../../math/linear-algebra/mat3'
+import { ELLIPSOID_PARAMETERS } from '../../core/constants'
+import { type Mat3, matFlipX, matMul, matMulVec, matRotX, matRotY, matRotZ } from '../../math/linear-algebra/mat3'
 import type { Vec3 } from '../../math/linear-algebra/vec3'
 import { type Angle, normalizeAngle, normalizePI } from '../../math/units/angle'
 import type { Distance } from '../../math/units/distance'
 import { eraGc2Gde, eraSp00 } from '../coordinates/erfa/erfa'
 import type { Frame } from '../coordinates/frame'
-import { gcrsToItrsRotationMatrix, greenwichApparentSiderealTime, greenwichMeanSiderealTime, pmAngles, type Time, timeShift, tt } from '../time/time'
+import { gcrsToItrsRotationMatrix, greenwichApparentSiderealTime, greenwichMeanSiderealTime, instantaneousEarthAngularVelocity, pmAngles, type Time, tt } from '../time/time'
 
 // An Earth ellipsoid that maps latitudes and longitudes to |xyz| positions.
 export enum Ellipsoid {
@@ -92,28 +92,6 @@ export function gcrsRotationAt(location: GeographicPosition, time: Time) {
 	// (instantaneousEarthAngularVelocity and other consumers read it afterwards).
 	const m = gcrsToItrsRotationMatrix(time)
 	return matMul(rLatLon(location), m)
-}
-
-const CENTRAL_DIFFERENCE_SCALE = 0.5 / ONE_SECOND
-const ANGULAR_VELOCITY_SCALE = 0.5
-
-function instantaneousEarthAngularVelocity(time: Time): Vec3 {
-	const r = gcrsToItrsRotationMatrix(time)
-	const rp = gcrsToItrsRotationMatrix(timeShift(time, ONE_SECOND))
-	const rm = gcrsToItrsRotationMatrix(timeShift(time, -ONE_SECOND))
-
-	const d = matMinus(rp, rm, rp as MutMat3)
-	matMulScalar(d, CENTRAL_DIFFERENCE_SCALE, d)
-
-	// w = dR/dt * R^T
-	const w12 = d[3] * r[6] + d[4] * r[7] + d[5] * r[8]
-	const w21 = d[6] * r[3] + d[7] * r[4] + d[8] * r[5]
-	const w20 = d[6] * r[0] + d[7] * r[1] + d[8] * r[2]
-	const w02 = d[0] * r[6] + d[1] * r[7] + d[2] * r[8]
-	const w01 = d[0] * r[3] + d[1] * r[4] + d[2] * r[5]
-	const w10 = d[3] * r[0] + d[4] * r[1] + d[5] * r[2]
-
-	return [(w12 - w21) * ANGULAR_VELOCITY_SCALE, (w20 - w02) * ANGULAR_VELOCITY_SCALE, (w01 - w10) * ANGULAR_VELOCITY_SCALE]
 }
 
 // The Geocentric Celestial Reference System (GCRS) at location.

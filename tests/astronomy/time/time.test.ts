@@ -1,10 +1,10 @@
 import { expect, test, describe } from 'bun:test'
 import { Ellipsoid, geodeticLocation } from '../../../src/astronomy/observer/location'
-import { DAYSEC, J2000 } from '../../../src/core/constants'
+import { ANGVEL_PER_DAY, DAYSEC, J2000 } from '../../../src/core/constants'
 import { deg, hour } from '../../../src/math/units/angle'
 import { meter } from '../../../src/math/units/distance'
 // oxfmt-ignore
-import { earthRotationAngle, equationOfOrigins, greenwichApparentSiderealTime, greenwichMeanSiderealTime, meanObliquity, nutationAngles, pmAngles, pmMatrix, type PolarMotion, precessionMatrix, precessionNutationMatrix, type Time, Timescale, tai, tcb, tcg, tdb, tdbMinusTtByFairheadAndBretagnon1990, time, timeBesselianYear, timeConvert, timeGPS, timeJulianYear, timeMJD, timeNormalize, timeSubtract, timeToDate, timeToUnix, timeToUnixMillis, timeUnix, timeYMD, timeYMDHMS, toJulianDay, tt, ut1, utc, DEFAULT_TIME_PROVIDERS, dut1 } from '../../../src/astronomy/time/time'
+import { earthRotationAngle, equationOfOrigins, greenwichApparentSiderealTime, greenwichMeanSiderealTime, instantaneousEarthAngularVelocity, instantaneousEarthRotationMatrix, meanObliquity, nutationAngles, pmAngles, pmMatrix, type PolarMotion, precessionMatrix, precessionNutationMatrix, type Time, Timescale, tai, tcb, tcg, tdb, tdbMinusTtByFairheadAndBretagnon1990, time, timeBesselianYear, timeConvert, timeGPS, timeJulianYear, timeMJD, timeNormalize, timeSubtract, timeToDate, timeToUnix, timeToUnixMillis, timeUnix, timeYMD, timeYMDHMS, toJulianDay, tt, ut1, utc, DEFAULT_TIME_PROVIDERS, dut1 } from '../../../src/astronomy/time/time'
 import { downloadPerTag } from '../../download'
 
 await downloadPerTag('time')
@@ -586,6 +586,38 @@ test('equation of origins', () => {
 	const t = timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.UTC)
 	expect(equationOfOrigins(t)).toBe(t.cache!.equationOfOrigins!)
 	expect(t.cache?.equationOfOrigins).toEqual([0.9999980342134646, 0.000000011522914443798382, -0.001982818500615607, -0.00000001742012200722093, 0.9999999999955772, -0.0000029741367242157103, 0.001982818500572567, 0.0000029741654186676847, 0.9999980342090419])
+})
+
+test('instantaneous Earth rotation matrix', () => {
+	const t = timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.UTC)
+	const w = instantaneousEarthRotationMatrix(t)
+	expect(w).toBe(t.cache!.instantaneousEarthRotationMatrix!)
+	// W = dR/dt · Rᵀ must be antisymmetric with zero diagonal.
+	expect(w[0]).toBeCloseTo(0, 9)
+	expect(w[4]).toBeCloseTo(0, 9)
+	expect(w[8]).toBeCloseTo(0, 9)
+	expect(w[1]).toBeCloseTo(-w[3], 9)
+	expect(w[2]).toBeCloseTo(-w[6], 9)
+	expect(w[5]).toBeCloseTo(-w[7], 9)
+	// Dominant term is the mean sidereal rate on the (0,1)/(1,0) pair.
+	expect(w[1]).toBeCloseTo(ANGVEL_PER_DAY, 5)
+	expect(w[3]).toBeCloseTo(-ANGVEL_PER_DAY, 5)
+})
+
+test('instantaneous Earth angular velocity', () => {
+	const t = timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.UTC)
+	const v = instantaneousEarthAngularVelocity(t)
+	expect(v).toBe(t.cache!.instantaneousEarthAngularVelocity!)
+	// Physical Earth rotation vector: ≈ +ANGVEL_PER_DAY pointing to the celestial pole (z),
+	// with only tiny (~1e-5 rad/day) precession/nutation/polar-motion terms on x and y.
+	expect(v[0]).toBeCloseTo(0, 4)
+	expect(v[1]).toBeCloseTo(0, 4)
+	expect(v[2]).toBeCloseTo(ANGVEL_PER_DAY, 5)
+	// Consistent with the off-diagonal pairs of the drift matrix W.
+	const w = instantaneousEarthRotationMatrix(t)
+	expect(v[0]).toBeCloseTo((w[5] - w[7]) * 0.5, 15)
+	expect(v[1]).toBeCloseTo((w[6] - w[2]) * 0.5, 15)
+	expect(v[2]).toBeCloseTo((w[1] - w[3]) * 0.5, 15)
 })
 
 test('delta T', () => {

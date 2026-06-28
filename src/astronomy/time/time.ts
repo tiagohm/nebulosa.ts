@@ -3,6 +3,7 @@ import type { Angle } from '../../math/units/angle'
 // oxfmt-ignore
 import { eraC2i06a, eraC2teqx, eraCalToJd, eraDat, eraDtDb, eraEra00, eraGmst06, eraGst06a, eraJdToCal, eraNut06a, eraObl06, eraPmat06, eraPnm06a, eraPom00, eraSp00, eraTaiTt, eraTaiUt1, eraTaiUtc, eraTcbTdb, eraTcgTt, eraTdbTcb, eraTdbTt, eraTtTai, eraTtTcg, eraTtTdb, eraUt1Tai, eraUt1Utc, eraUtcTai, eraUtcUt1 } from '../coordinates/erfa/erfa'
 import { type Mat3, matClone, matIdentity, matMinus, matMul, matMulScalar, matMulTranspose, type MutMat3, matRotX, matRotZ } from '../../math/linear-algebra/mat3'
+import type { Vec3 } from '../../math/linear-algebra/vec3'
 import { twoProduct, twoSum, type NumberArray } from '../../math/numerical/math'
 import { itrs } from '../coordinates/itrs'
 import type { GeographicPosition } from '../observer/location'
@@ -47,6 +48,8 @@ export interface TimeCache {
 	pmMatrixPolarMotion?: PolarMotion
 	equationOfOrigins?: Mat3
 	gcrsToItrsRotationMatrix?: Mat3
+	instantaneousEarthRotationMatrix?: Mat3
+	instantaneousEarthAngularVelocity?: Vec3
 }
 
 export interface TimeProviders {
@@ -624,15 +627,35 @@ export function gcrsToItrsRotationMatrix(time: Time) {
 // where R is the GCRS->ITRS rotation and the derivative is in per-day units. W is
 // the (antisymmetric) angular-velocity operator the rotating-frame velocity term
 // uses, evaluated exactly by central difference over ±1 second rather than with
-// the constant mean-rate approximation. Pass `o` to avoid allocation.
-export function instantaneousEarthRotationMatrix(time: Time, o?: MutMat3): Mat3 {
+// the constant mean-rate approximation. Cached on the time instance.
+export function instantaneousEarthRotationMatrix(time: Time): Mat3 {
+	if (time.cache?.instantaneousEarthRotationMatrix !== undefined) return time.cache.instantaneousEarthRotationMatrix
 	const r = gcrsToItrsRotationMatrix(time)
 	const rp = gcrsToItrsRotationMatrix(timeShift(time, ONE_SECOND))
 	const rm = gcrsToItrsRotationMatrix(timeShift(time, -ONE_SECOND))
 	// Central difference dR/dt with step ±1 second expressed in days.
-	const d = matMinus(rp, rm)
+	const d = matMinus(rp, rm, rp as MutMat3)
 	matMulScalar(d, 0.5 / ONE_SECOND, d)
-	return matMulTranspose(d, r, o ?? d)
+	const instantaneousEarthRotationMatrix = matMulTranspose(d, r, d) // w = dR/dt * R^T
+	cache(time).instantaneousEarthRotationMatrix = instantaneousEarthRotationMatrix
+	return instantaneousEarthRotationMatrix
+}
+
+// Computes Earth's instantaneous angular-velocity vector ω in the ITRS frame, in rad/day,
+// extracted from the antisymmetric drift matrix W = dR/dt · Rᵀ (instantaneousEarthRotationMatrix).
+// W acts as W·v = ω × v, so ω is recovered from the off-diagonal pairs. The sign is the physical
+// Earth rotation vector (≈ +ANGVEL_PER_DAY on z, pointing to the celestial pole), i.e. the negative
+// of the standard axial vector of W; this convention is what location.ts rebuilds the per-location
+// drift matrix from, where the improper (det = -1) altaz transform flips the sign back. Cached on
+// the time instance.
+export function instantaneousEarthAngularVelocity(time: Time): Vec3 {
+	if (time.cache?.instantaneousEarthAngularVelocity !== undefined) return time.cache.instantaneousEarthAngularVelocity
+	const d = instantaneousEarthRotationMatrix(time)
+
+	// ω = -axial(W): each component is half the difference of the symmetric-position pair of W.
+	const instantaneousEarthAngularVelocity = [(d[5] - d[7]) * 0.5, (d[6] - d[2]) * 0.5, (d[1] - d[3]) * 0.5] as const
+	cache(time).instantaneousEarthAngularVelocity = instantaneousEarthAngularVelocity
+	return instantaneousEarthAngularVelocity
 }
 
 // Computes UT1 - UTC in seconds at time.
