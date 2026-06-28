@@ -9,18 +9,34 @@ import { itrs } from '../coordinates/itrs'
 import type { GeographicPosition } from '../observer/location'
 import * as iers from './iers'
 
-// The specification for measuring time.
+// Core astronomical time representation and scale conversions. A `Time` is a high-precision instant
+// stored as an integer `day` (Julian Date) plus a `fraction` in (-0.5, 0.5], tagged with a `Timescale`,
+// with results memoized on an attached `cache`. Provides conversions among UT1/UTC/TAI/TT/TCG/TDB/TCB
+// (via ERFA), sidereal time and Earth-rotation angle, precession/nutation and GCRS<->ITRS rotation
+// matrices, polar motion, and the ΔT-style scale offsets, all overridable through pluggable providers.
+
+// The specification for measuring time (reference scale of a Time instant).
 export enum Timescale {
+	// Universal Time (Earth-rotation based).
 	UT1,
+	// Coordinated Universal Time (UTC, with leap seconds).
 	UTC,
+	// International Atomic Time.
 	TAI,
+	// Terrestrial Time.
 	TT,
+	// Geocentric Coordinate Time.
 	TCG,
+	// Barycentric Dynamical Time.
 	TDB,
+	// Barycentric Coordinate Time.
 	TCB,
 }
 
+// Per-instant memoization of derived quantities, attached to a Time as `cache`. Each field holds the
+// result of the matching conversion/derivation so repeated calls reuse it.
 export interface TimeCache {
+	// The same instant expressed in each timescale, once computed.
 	ut1?: Time
 	utc?: Time
 	tai?: Time
@@ -29,63 +45,105 @@ export interface TimeCache {
 	tdb?: Time
 	tcb?: Time
 
+	// Cached scale offsets in seconds.
 	ut1MinusUtc?: number
 	ut1MinusTai?: number
 	taiMinusUtc?: number
 	tdbMinusTt?: number
 
+	// Greenwich apparent sidereal time (radians).
 	gast?: Angle
+	// Greenwich mean sidereal time (radians).
 	gmst?: Angle
+	// Earth rotation angle (radians).
 	era?: Angle
+	// Mean obliquity of the ecliptic (radians).
 	meanObliquity?: Angle
+	// Nutation in longitude and obliquity (radians).
 	nutation?: readonly [Angle, Angle]
+	// Precession matrix.
 	precession?: Mat3
+	// Precession-nutation matrix (including frame bias).
 	precessionNutation?: Mat3
+	// CIO-based GCRS->CIRS rotation matrix.
 	cirsRotation?: Mat3
+	// Polar-motion angles (s', x, y) in radians.
 	pmAngles?: readonly [Angle, Angle, Angle] // sprime, x, y
+	// Polar-motion provider the cached pmAngles were computed with (cache key).
 	pmAnglesPolarMotion?: PolarMotion
+	// Polar-motion rotation matrix.
 	pmMatrix?: Mat3
+	// Polar-motion provider the cached pmMatrix was computed with (cache key).
 	pmMatrixPolarMotion?: PolarMotion
+	// Equation-of-origins rotation matrix.
 	equationOfOrigins?: Mat3
+	// Full GCRS->ITRS rotation matrix.
 	gcrsToItrsRotationMatrix?: Mat3
+	// Instantaneous Earth-rotation drift matrix W = dR/dt·Rᵀ (per day).
 	instantaneousEarthRotationMatrix?: Mat3
+	// Instantaneous Earth angular-velocity vector in ITRS (rad/day).
 	instantaneousEarthAngularVelocity?: Vec3
 }
 
+// Pluggable models overriding the default ERFA-based Earth-orientation and scale-offset computations.
+// Any omitted provider falls back to the library default.
 export interface TimeProviders {
+	// Polar motion (x, y) provider.
 	pm?: PolarMotion
+	// UT1 - UTC provider, in seconds.
 	dut1?: TimeDelta // UT1 - UTC
 
+	// TDB - TT provider, in seconds.
 	tdbMinusTt?: TimeDelta
 	// taiMinusUtc?: TimeDelta
+	// UT1 - TAI provider, in seconds.
 	ut1MinusTai?: TimeDelta
 
+	// Greenwich apparent sidereal time provider.
 	gast?: (ut1: Time, tt: Time) => Angle
+	// Greenwich mean sidereal time provider.
 	gmst?: (ut1: Time, tt: Time) => Angle
+	// Earth rotation angle provider.
 	era?: (ut1: Time) => Angle
+	// Mean obliquity provider.
 	obl?: (tt: Time) => Angle
+	// Nutation angles provider.
 	nut?: (tt: Time) => [Angle, Angle]
+	// Precession matrix provider.
 	pmat?: (tt: Time) => Mat3
+	// Precession-nutation matrix provider.
 	pnm?: (tt: Time) => Mat3
+	// TIO locator s' provider.
 	sp?: (tt: Time) => Angle
+	// Polar-motion matrix provider.
 	pom?: (x: Angle, y: Angle, s: Angle) => Mat3
 }
 
-// Represents and manipulates an instant of time for astronomy.
+// An instant of time for astronomy: integer `day` plus normalized `fraction` in a given `scale`.
 export interface Time {
+	// Integer Julian Date day number.
 	readonly day: number
+	// Fractional day in (-0.5, 0.5].
 	readonly fraction: number
+	// Timescale this instant is expressed in.
 	readonly scale: Timescale
 
+	// Optional Earth-orientation/scale-offset provider overrides.
 	providers?: TimeProviders
 
+	// Optional observer location used for topocentric TDB-TT.
 	location?: GeographicPosition
+	// Memoized derived quantities.
 	cache?: TimeCache
 }
 
+// Julian Day at which a date switches from the Julian to the Gregorian calendar.
 export enum JulianCalendarCutOff {
+	// Never switch (proleptic).
 	None = 0,
+	// Standard Gregorian reform (1582-10-15).
 	GregorianStart = 2299161,
+	// British adoption (1752-09-14).
 	GregorianStartEngland = 2361222,
 }
 
@@ -95,10 +153,13 @@ export type TimeDelta = (time: Time) => number
 // The displaced angles (longitude and latitude) of rotation of the Earth's spin axis about its geographic axis.
 export type PolarMotion = (time: Time) => [Angle, Angle]
 
+// Polar-motion provider that assumes a perfectly aligned rotation axis (no polar motion).
 export const NO_POLAR_MOTION: PolarMotion = () => [0, 0]
 
+// Julian Date day number of the Unix epoch (1970-01-01) and its half-day fraction offset.
 const UNIX_EPOCH_DAY = 2440588
 const UNIX_EPOCH_FRACTION = -0.5
+// Milliseconds per day.
 const DAYSEC_MS = DAYSEC * 1000
 
 // Returns the polar motion provider used for this computation.
@@ -132,6 +193,7 @@ export function pmMatrix(time: Time, pm?: PolarMotion): Mat3 {
 	return m
 }
 
+// Creates a Time from a Julian Date split into `day` and `fraction`, normalized into the canonical form.
 export function time(day: number, fraction: number = 0, scale: Timescale = Timescale.UTC) {
 	return timeNormalize(day, fraction, 0, scale)
 }
@@ -214,8 +276,12 @@ export function timeGPS(seconds: number) {
 	return timeFromEpoch(seconds, DAYSEC, 2444245, -0.4997800925925926, Timescale.TAI)
 }
 
+// Reusable [sum, error] scratch buffer for the compensated day/fraction normalization (avoids allocation).
 const NORMALIZED_TIME = new Float64Array(2)
 
+// Splits day + fraction into a canonical [day, fraction] pair with the fraction in [-0.5, 0.5), using
+// error-free transforms so no precision is lost. When `divisor` is nonzero the value is first reduced
+// modulo the divisor. Writes [day, fraction] into `out` and returns it.
 function normalizeDayAndFraction(day: number, fraction: number, divisor: number, out: NumberArray) {
 	if ((day === 0 && fraction === 0) || (divisor === 0 && Number.isInteger(day) && fraction >= -0.5 && fraction < 0.5)) {
 		out[0] = day
@@ -340,6 +406,7 @@ export function timeConvert(time: Time, scale: Timescale) {
 	return time
 }
 
+// Reusable [day, fraction] scratch buffer for the ERFA scale-conversion routines (avoids allocation).
 const DAY_FRACTION: [number, number] = [0, 0]
 
 // Converts the given time to UT1 Time.
@@ -763,6 +830,8 @@ export const ut1MinusTai: TimeDelta = (time) => {
 	return dt
 }
 
+// Default Earth-orientation and scale-offset providers: IERS tables for polar motion and UT1, and the
+// IAU 2006/2000A ERFA models for sidereal time, obliquity, nutation, precession, and polar-motion matrices.
 export const DEFAULT_TIME_PROVIDERS: Required<Readonly<TimeProviders>> = {
 	pm: iers.xy,
 	dut1: iers.dut1,

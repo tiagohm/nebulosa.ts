@@ -1,30 +1,44 @@
 import { pmod } from '../../math/numerical/math'
 import { type Time, timeToUnixMillis } from './time'
 
-// gv-IM, mg-MG, sn-ZW, zu-ZA
+// Lightweight UTC timestamp ('Temporal' = Unix milliseconds) arithmetic, field access, and pattern-based
+// parsing/formatting, independent of the Date object and timezone database. Calendar math uses the
+// proleptic Gregorian calendar. Format/parse patterns use fixed-width tokens (YYYY, MM, DD, HH, mm, ss,
+// SSS, plus month/weekday names); the `Time` astronomical scale lives in time.ts, this is wall-clock UTC.
+
+// Default date pattern (YYYY-MM-DD). gv-IM, mg-MG, sn-ZW, zu-ZA
 export const DATE_FORMAT = 'YYYY-MM-DD'
+// Default time-of-day pattern (HH:mm:ss.SSS).
 export const TIME_FORMAT = 'HH:mm:ss.SSS'
+// Default combined date-time pattern.
 export const DATE_TIME_FORMAT = 'YYYY-MM-DD HH:mm:ss.SSS'
 // The trailing `Z` is a literal UTC designator, not an offset token: the pattern language has no
 // timezone field. Always format with `timezone = 0`, otherwise the rendered wall-clock time is
 // shifted into the given offset while still being tagged `Z`, mislabeling local time as UTC.
 export const ISO8601_FORMAT = 'YYYY-MM-DDTHH:mm:ss.SSSZ'
 
+// Days in each month for a common (non-leap) year, January first.
 const DAYS_IN_MONTH = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+// Cumulative days before the start of each month in a common year.
 const DAYS_UNTIL_MONTH = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334]
 
+// Millisecond magnitudes of the fixed-size time units.
 const DAYS = 86400000
 const HOURS = 3600000
 const MINUTES = 60000
 const SECONDS = 1000
 const WEEK = DAYS * 7
 
+// A UTC timestamp expressed as Unix milliseconds.
 export type Temporal = number
 
+// Full names of the supported time units.
 export type TemporalUnit = 'millisecond' | 'second' | 'minute' | 'hour' | 'day' | 'week' | 'month' | 'year'
 
+// Short aliases of the supported time units.
 export type TemporalUnitShort = 'ms' | 's' | 'm' | 'h' | 'd' | 'w' | 'mo' | 'y'
 
+// Broken-down calendar fields: [year, month, day, hour, minute, second, millisecond].
 export type TemporalDate = [number, number, number, number, number, number, number]
 
 // Returns the current timestamp in milliseconds.
@@ -190,6 +204,8 @@ export function formatTemporal(temporal: Temporal, format: Intl.DateTimeFormat |
 	return typeof format === 'string' ? formatTemporalFromPattern(temporal, format, timezone) : format.format(temporal)
 }
 
+// Month and weekday display names (and lowercase short month names for case-insensitive parsing), plus
+// the set of pattern letters and a tokenized-pattern cache.
 const SHORT_MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 const LOWERCASE_SHORT_MONTH_NAMES = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec']
 const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
@@ -276,6 +292,7 @@ export function parseTemporal(input: string, pattern: string): Temporal {
 	return temporalFromDate(...date)
 }
 
+// Local timezone offset from UTC in minutes (east-positive), captured once at module load.
 export const TIMEZONE = -new Date().getTimezoneOffset()
 
 // Formats a UTC timestamp using a fixed-width pattern.
@@ -360,10 +377,15 @@ export function formatTemporalFromPattern(temporal: Temporal, pattern: string, t
 	return output.join('')
 }
 
+// One segment of a tokenized format pattern.
 interface PatternToken {
+	// Start index of the segment within the pattern.
 	readonly start: number
+	// Exclusive end index of the segment.
 	readonly end: number
+	// Literal text or pattern token of the segment.
 	readonly text: string
+	// True when the segment is a recognized pattern token (otherwise a literal).
 	readonly found: boolean
 }
 
@@ -410,6 +432,8 @@ export function daysInMonth(year: number, month: number) {
 	return month === 2 && isLeapYear(year) ? 29 : DAYS_IN_MONTH[month - 1]
 }
 
+// Precomputed days-from-epoch (proleptic Gregorian day number) at January 1st for years 1970..2100,
+// indexed by year - 1970; a fast path for the common range avoiding the general formula.
 const DAYS_UNTIL_YEAR = [
 	719162, 719527, 719892, 720258, 720623, 720988, 721353, 721719, 722084, 722449, 722814, 723180, 723545, 723910, 724275, 724641, 725006, 725371, 725736, 726102, 726467, 726832, 727197, 727563, 727928, 728293, 728658, 729024, 729389, 729754, 730119, 730485, 730850, 731215, 731580, 731946, 732311, 732676, 733041,
 	733407, 733772, 734137, 734502, 734868, 735233, 735598, 735963, 736329, 736694, 737059, 737424, 737790, 738155, 738520, 738885, 739251, 739616, 739981, 740346, 740712, 741077, 741442, 741807, 742173, 742538, 742903, 743268, 743634, 743999, 744364, 744729, 745095, 745460, 745825, 746190, 746556, 746921, 747286,

@@ -5,13 +5,25 @@ import type { NumberArray } from '../../math/numerical/math'
 import { type Angle, arcsec } from '../../math/units/angle'
 import type { PolarMotion, Time, TimeDelta } from './time'
 
+// Earth Orientation Parameters (EOP) from the IERS: UT1-UTC (dut1) and polar motion (x, y), linearly
+// interpolated from the tabulated finals2000A (IERS A) and eopc04 (IERS B) data files. Provides loaders
+// for each file format, a combined source (IERS B preferred where it covers the date, falling back to
+// IERS A), and shared module-level instances feeding the time module. Values outside the table clamp to
+// the nearest edge; missing data yields 0. This is a runtime module (reads from an io Source).
+
+// Reusable empty backing table.
 const EMPTY_TABLE = new Float64Array(0)
 
+// Provider of Earth Orientation Parameters for a given time.
 export interface Iers {
+	// UT1 - UTC in seconds at the given time.
 	readonly dut1: TimeDelta
+	// Polar motion (x, y) angles at the given time.
 	readonly xy: PolarMotion
 
+	// Loads and replaces the EOP table from a data source.
 	readonly load: (source: Source) => Promise<void>
+	// Discards the loaded table.
 	readonly clear: () => void
 }
 
@@ -74,18 +86,25 @@ function interpolateColumn(bracket: EopInterpolation, data: NumberArray) {
 	return a + bracket.t * (data[bracket.hi] - a)
 }
 
+// Common EOP table storage and linear-interpolation logic; subclasses implement file-format parsing.
 export abstract class IersBase implements Iers {
+	// Sorted Modified Julian Dates of the table rows.
 	protected mjd: NumberArray = EMPTY_TABLE
+	// Polar motion x component per row, in arcseconds.
 	protected pmX: NumberArray = EMPTY_TABLE
+	// Polar motion y component per row, in arcseconds.
 	protected pmY: NumberArray = EMPTY_TABLE
+	// UT1 - UTC per row, in seconds.
 	protected ut1MinusUtc: NumberArray = EMPTY_TABLE
 
+	// UT1 - UTC in seconds interpolated at `time` (0 when unavailable).
 	dut1(time: Time): number {
 		const bracket = interpolationAt(time, this.mjd)
 		const dut1 = bracket === undefined ? Number.NaN : interpolateColumn(bracket, this.ut1MinusUtc)
 		return Number.isFinite(dut1) ? dut1 : 0
 	}
 
+	// Polar motion (x, y) in radians interpolated at `time` ([0, 0] when unavailable).
 	xy(time: Time): [Angle, Angle] {
 		// Resolve the bracketing rows once and reuse it for both polar-motion columns.
 		const bracket = interpolationAt(time, this.mjd)
@@ -138,6 +157,8 @@ export abstract class IersBase implements Iers {
 	}
 }
 
+// IERS Bulletin A (finals2000A) loader: parses the fixed-width columns, preferring the more accurate
+// Bulletin B values where present and falling back to the rapid/predicted columns otherwise.
 // https://datacenter.iers.org/data/9/finals2000A.all
 // https://maia.usno.navy.mil/ser7/readme.finals2000A
 export class IersA extends IersBase {
@@ -165,6 +186,7 @@ export class IersA extends IersBase {
 	}
 }
 
+// IERS EOP 14 C04 (eopc04) loader: parses the fixed-width final EOP series, skipping comment lines.
 // https://hpiers.obspm.fr/iers/eop/eopc04/eopc04.1962-now
 // https://hpiers.obspm.fr/eoppc/eop/eopc04/eopc04.txt
 export class IersB extends IersBase {
@@ -194,6 +216,8 @@ export class IersB extends IersBase {
 	}
 }
 
+// Combined provider that prefers IERS B where it covers the date (more accurate, final values) and
+// otherwise uses IERS A (which extends into the recent past and future predictions).
 export class IersAB implements Iers {
 	constructor(
 		readonly a: IersA,
@@ -225,11 +249,15 @@ export class IersAB implements Iers {
 	}
 }
 
+// Shared IERS Bulletin A provider instance.
 export const iersa = new IersA()
+// Shared IERS C04 (Bulletin B) provider instance.
 export const iersb = new IersB()
+// Shared combined provider used by the time module.
 export const iersab = new IersAB(iersa, iersb)
 
-// Computes UT1 - UTC in seconds
+// Computes UT1 - UTC in seconds at the given time, using the shared combined IERS provider.
 export const dut1: TimeDelta = (time) => iersab.dut1(time)
 
+// Computes polar motion (x, y) in radians at the given time, using the shared combined IERS provider.
 export const xy: PolarMotion = (time) => iersab.xy(time)

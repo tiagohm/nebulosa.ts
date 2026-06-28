@@ -1,5 +1,9 @@
 import { spline } from '../../math/numerical/spline'
 
+// Delta T (TT - UT1) models in seconds as a function of decimal calendar year. Combines the Espenak-Meeus
+// 2006 piecewise polynomials, the Stephenson-Morrison long-term parabolas, and the S15 cubic-spline fit;
+// `deltaT` selects the most reliable model per era. Used to relate Terrestrial Time to Universal Time.
+
 // Computes Delta T (TT - UT1) in seconds from the Espenak and Meeus 2006 polynomial expressions.
 // The piecewise fit spans roughly -1999 to +3000; beyond +2150 and before -500 it reduces to the
 // long-term parabola, so the function stays finite and monotonic for any year.
@@ -61,6 +65,8 @@ export const parabolaOfStephensonMorrison2004 = spline(1820, 1920, [0, 32, 0, -2
 // Evaluates the Stephenson, Morrison and Hohenkerk 2016 parabola outside the spline interval.
 export const parabolaOfStephensonMorrisonHohenkerk2016 = spline(1825, 1925, [0, 31.4, 0, -10])
 
+// S15 spline tables (Stephenson, Morrison & Hohenkerk 2016): per-segment lower/upper year bounds and the
+// cubic coefficients A, B, C, D evaluated as A·t³ + B·t² + C·t + D over each normalized segment.
 const S15_LOWER = [
 	-720, -100, 400, 1000, 1150, 1300, 1500, 1600, 1650, 1720, 1800, 1810, 1820, 1830, 1840, 1850, 1855, 1860, 1865, 1870, 1875, 1880, 1885, 1890, 1895, 1900, 1905, 1910, 1915, 1920, 1925, 1930, 1935, 1940, 1945, 1950, 1953, 1956, 1959, 1962, 1965, 1968, 1971, 1974, 1977, 1980, 1983, 1986, 1989, 1992, 1995, 1998, 2001,
 	2004, 2007, 2010, 2013, 2016,
