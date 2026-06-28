@@ -3,10 +3,15 @@ import type { Client } from './device'
 import type { DefBlob, DefBlobVector, DefLight, DefLightVector, DefNumber, DefNumberVector, DefSwitch, DefSwitchVector, DefText, DefTextVector, DefVector, DelProperty, EnableBlob, GetProperties, Message, NewNumberVector, NewSwitchVector, NewTextVector, OneBlob, OneLight, OneNumber, OneSwitch, OneText, SetBlobVector, SetLightVector, SetNumberVector, SetSwitchVector, SetTextVector, SetVector, SwitchRule, VectorType } from './types'
 import { SimpleXmlParser, type XmlNode } from '../../io/xml'
 
+// INDI protocol client over a TCP socket: parses the streamed XML messages into typed property vectors,
+// dispatches them to a handler, and serializes outgoing getProperties/enableBLOB/newXXX commands.
 // A simple XML-like communications protocol is described for
 // interactive and automated remote control of diverse instrumentation.
 // http://www.clearskyinstitute.com/INDI/INDI.pdf
 
+// Optional callbacks for received INDI messages. Each property kind can be observed at several
+// granularities (per-tag def*/set*, per-type *Vector, generic def/set/vector); a handler subscribes to
+// whichever level it needs and the dispatch helpers invoke every matching callback.
 export interface IndiClientHandler {
 	readonly message?: (client: Client, message: Message) => void
 	readonly delProperty?: (client: Client, message: DelProperty) => void
@@ -31,12 +36,16 @@ export interface IndiClientHandler {
 	readonly close?: (client: Client, server: boolean) => void
 }
 
+// Options for an IndiClient.
 export interface IndiClientOptions {
 	handler?: IndiClientHandler
 }
 
+// Default INDI server TCP port.
 export const DEFAULT_INDI_PORT = 7624
 
+// INDI client connected to an `indiserver` over TCP. Streams and parses INDI XML, exposes the standard
+// Client send* commands, and reports an MD5 identity derived from the remote endpoint.
 export class IndiClient implements Client {
 	readonly type = 'INDI'
 
@@ -44,34 +53,43 @@ export class IndiClient implements Client {
 
 	readonly #parser = new SimpleXmlParser()
 	#socket?: Bun.Socket
+	// Cached [id, remoteHost, remotePort] populated on connect.
 	readonly #metadata: [string?, string?, number?] = []
 
 	constructor(readonly options?: IndiClientOptions) {}
 
+	// Stable MD5 identity derived from the remote endpoint (set on connect).
 	get id() {
 		return this.#metadata[0]!
 	}
 
+	// Hostname passed to connect().
 	get remoteHost() {
 		return this.#metadata[1]
 	}
 
+	// Remote TCP port.
 	get remotePort() {
 		return this.#metadata[2]
 	}
 
+	// Resolved remote IP address of the socket.
 	get remoteIp() {
 		return this.#socket?.remoteAddress
 	}
 
+	// Local TCP port of the socket.
 	get localPort() {
 		return this.#socket?.localPort
 	}
 
+	// Whether the socket is currently connected.
 	get connected() {
 		return !!this.#socket
 	}
 
+	// Connects to the INDI server, wiring socket events into the parser and requesting all properties on
+	// open. Returns false if already connected.
 	async connect(hostname: string, port: number = DEFAULT_INDI_PORT, options?: Omit<Bun.TCPSocketConnectOptions, 'hostname' | 'port' | 'socket' | 'data'>) {
 		if (this.#socket) return false
 
@@ -120,6 +138,7 @@ export class IndiClient implements Client {
 		return true
 	}
 
+	// Terminates the connection.
 	close() {
 		this.#socket?.terminate()
 		this.#socket = undefined
@@ -129,12 +148,15 @@ export class IndiClient implements Client {
 		this.close()
 	}
 
+	// Feeds received bytes through the XML parser and dispatches each completed node.
 	parse(data: Buffer) {
 		for (const node of this.#parser.parse(data)) {
 			this.#processNode(node)
 		}
 	}
 
+	// Parses a defXXXVector XML node into a typed DefVector (with element definitions and, for switches,
+	// the selection rule).
 	parseDefVector(node: XmlNode) {
 		const message = {
 			device: node.attributes.device,
@@ -186,6 +208,8 @@ export class IndiClient implements Client {
 		return message
 	}
 
+	// Parses a setXXXVector XML node into a typed SetVector. Number elements may carry an updated
+	// min/max/step range (INDI's IUUpdateMinMax), which is preserved.
 	parseSetVector(node: XmlNode) {
 		const message = {
 			device: node.attributes.device,
@@ -235,6 +259,8 @@ export class IndiClient implements Client {
 		return message
 	}
 
+	// Dispatches one parsed XML node to the appropriate handler callbacks, parsing vectors lazily only
+	// when a relevant handler is registered. newXXX tags (client→device) are ignored on the client side.
 	#processNode(node: XmlNode) {
 		const a = node.attributes
 		const handler = this.options?.handler
@@ -311,6 +337,8 @@ export class IndiClient implements Client {
 		}
 	}
 
+	// Sends a getProperties request (optionally scoped to a device/property) to ask the server to define
+	// its properties.
 	getProperties(command?: GetProperties) {
 		let message = '<getProperties version="1.7"'
 		if (command?.device) message += ` device="${escapeXmlAttribute(command.device)}"`
@@ -318,12 +346,15 @@ export class IndiClient implements Client {
 		this.#writeXml(`${message}></getProperties>`)
 	}
 
+	// Sets the BLOB delivery policy for a device/property channel (Never/Also/Only).
 	enableBlob(command: EnableBlob) {
 		let message = `<enableBLOB device="${escapeXmlAttribute(command.device)}"`
 		if (command.name) message += ` name="${escapeXmlAttribute(command.name)}"`
 		this.#writeXml(`${message}>${escapeXmlText(command.value)}</enableBLOB>`)
 	}
 
+	// Sends new target values for a text/number/switch property (newXXXVector). Switch values are encoded
+	// as On/Off.
 	sendText(vector: NewTextVector) {
 		let message = `<newTextVector device="${escapeXmlAttribute(vector.device)}" name="${escapeXmlAttribute(vector.name)}"`
 		if (vector.timestamp !== undefined) message += ` timestamp="${escapeXmlAttribute(vector.timestamp)}"`
@@ -360,6 +391,7 @@ export class IndiClient implements Client {
 		this.#writeXml(`${message}</newSwitchVector>`)
 	}
 
+	// Writes a serialized XML message to the socket and flushes, no-op when disconnected.
 	#writeXml(message: string) {
 		if (!this.#socket) return
 		this.#socket.write(message)
@@ -367,6 +399,8 @@ export class IndiClient implements Client {
 	}
 }
 
+// A set of handlers that is itself a handler: each callback fans out to every member. Lets multiple
+// consumers observe the same client.
 export class IndiClientHandlerSet extends Set<IndiClientHandler> implements IndiClientHandler {
 	message(client: Client, message: Message) {
 		for (const handler of this) handler.message?.(client, message)
@@ -453,6 +487,9 @@ export class IndiClientHandlerSet extends Set<IndiClientHandler> implements Indi
 	}
 }
 
+// Dispatch helpers: each invokes every handler callback that applies to a given def*/set* vector, from
+// the most specific (per-tag) down to the generic (defVector/setVector and vector). Reused by both the
+// client's parser and the other backends so handlers see a uniform event stream regardless of source.
 export function handleDefVector(client: Client, handler: IndiClientHandler, message: DefVector, tag: `def${VectorType}Vector`) {
 	handler.defVector?.(client, message, tag)
 	handler.vector?.(client, message, tag)
@@ -523,6 +560,7 @@ export function handleSetBlobVector(client: Client, handler: IndiClientHandler, 
 	handleSetVector(client, handler, message, 'setBLOBVector')
 }
 
+// Notifies the handler of a property (or device) deletion for each supplied vector.
 export function handleDelProperty(client: Client, handler: IndiClientHandler, ...messages: DefVector[]) {
 	if (handler.delProperty) {
 		for (const message of messages) {
@@ -531,10 +569,12 @@ export function handleDelProperty(client: Client, handler: IndiClientHandler, ..
 	}
 }
 
+// Creates a prototype-less record for element maps so element names never collide with Object members.
 function createElementRecord<T>() {
 	return Object.create(null) as Record<string, T>
 }
 
+// XML-escapes a value for use in an attribute (escapes quotes) or text content (does not).
 function escapeXmlAttribute(value: string | number | boolean) {
 	return escapeXml(value, true)
 }
@@ -543,6 +583,8 @@ function escapeXmlText(value: string | number | boolean) {
 	return escapeXml(value, false)
 }
 
+// Escapes &, <, > (and " in attribute mode) in a single pass, returning the original string unchanged
+// when nothing needed escaping.
 function escapeXml(value: string | number | boolean, attribute: boolean) {
 	const text = String(value)
 	let escaped = ''

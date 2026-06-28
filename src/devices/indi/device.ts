@@ -6,34 +6,54 @@ import type { Point } from '../../math/numerical/geometry'
 import { type Angle, normalizeAngle, toHour } from '../../math/units/angle'
 import type { DefBlobVector, DefLightVector, DefNumber, DefNumberVector, DefSwitchVector, DefTextVector, EnableBlob, GetProperties, NewNumberVector, NewSwitchVector, NewTextVector, PropertyState } from './types'
 
+// Device model shared across all client backends (INDI, Alpaca, simulator, Firmata): the device-type
+// union, per-device-type interfaces (camera, mount, focuser, etc.) describing their capabilities and
+// state, default-value templates, and type-guard/geometry helpers. Angles are radians; temperature is
+// degrees Celsius.
+
+// Logical device category.
 export type DeviceType = 'camera' | 'mount' | 'wheel' | 'focuser' | 'rotator' | 'gps' | 'dome' | 'guideOutput' | 'flatPanel' | 'cover' | 'power' | 'thermometer' | 'dewHeater'
 
+// A defined property vector tagged with its concrete type.
 export type DeviceProperty = (DefTextVector & { type: 'TEXT' }) | (DefNumberVector & { type: 'NUMBER' }) | (DefSwitchVector & { type: 'SWITCH' }) | (DefLightVector & { type: 'LIGHT' }) | (DefBlobVector & { type: 'BLOB' })
 
+// Discriminant tag of a DeviceProperty.
 export type DevicePropertyType = DeviceProperty['type']
 
+// A device's properties keyed by property name.
 export type DeviceProperties = Record<string, DeviceProperty>
 
+// Exposure frame intent.
 export type FrameType = 'LIGHT' | 'DARK' | 'FLAT' | 'BIAS'
 
+// Image transfer/storage format requested from a camera.
 export type CameraTransferFormat = 'FITS' | 'XISF' | 'NATIVE'
 
+// Side of the pier a German equatorial mount is on (NEITHER = unknown/not applicable).
 export type PierSide = 'EAST' | 'WEST' | 'NEITHER'
 
+// Mount mechanical type.
 export type MountType = 'ALTAZ' | 'EQ_FORK' | 'EQ_GEM'
 
+// Sidereal/solar/lunar/King/custom tracking rate selector.
 export type TrackMode = 'SIDEREAL' | 'SOLAR' | 'LUNAR' | 'KING' | 'CUSTOM'
 
+// Coordinate frame a mount target is expressed in.
 export type MountTargetCoordinateType = 'J2000' | 'JNOW' | 'ALTAZ' | 'ECLIPTIC' | 'GALACTIC'
 
+// A mount target point in one or more frames, tagged with the primary frame.
 export type MountTargetCoordinate<T = string> = Partial<Record<MountTargetCoordinateType, Point<T>>> & { type: MountTargetCoordinateType }
 
+// Pulse-guide direction.
 export type GuideDirection = 'NORTH' | 'SOUTH' | 'WEST' | 'EAST'
 
+// A numeric property reduced to its value and min/max/step range.
 export type MinMaxValueProperty = Pick<DefNumber, 'min' | 'max' | 'value' | 'step'>
 
+// Backend that owns a device.
 export type ClientType = 'INDI' | 'ALPACA' | 'SIMULATOR' | 'FIRMATA'
 
+// INDI DRIVER_INTERFACE capability bitmask. Values match the INDI library; combine with bitwise OR.
 export enum DeviceInterfaceType {
 	TELESCOPE = 0x0001, // Telescope interface, must subclass INDI::Telescope.
 	CCD = 0x0002, // CCD interface, must subclass INDI::CCD.
@@ -57,11 +77,13 @@ export enum DeviceInterfaceType {
 	SENSOR = SPECTROGRAPH | DETECTOR | CORRELATOR,
 }
 
+// Minimal identity of the owning client.
 export interface ClientInfo {
 	readonly type: ClientType
 	readonly id: string
 }
 
+// Backend-agnostic client contract used to drive devices: query properties and send new target values.
 export interface Client extends ClientInfo, Disposable {
 	readonly description: string
 	readonly getProperties: (command?: GetProperties) => void
@@ -71,13 +93,16 @@ export interface Client extends ClientInfo, Disposable {
 	readonly sendSwitch: (vector: NewSwitchVector) => void
 }
 
+// Driver identification reported by a device.
 export interface DriverInfo {
 	readonly executable: string
 	readonly version: string
 }
 
+// Hidden property key carrying the owning Client instance on a device object.
 export const CLIENT = Symbol('CLIENT')
 
+// Common base shared by every device: identity, type, connection state, and driver/client metadata.
 export interface Device {
 	id: string // MD5(client ip address + client port + type + name)
 	readonly parentId?: string
@@ -89,20 +114,24 @@ export interface Device {
 	readonly [CLIENT]?: Client
 }
 
+// A device that is a sub-interface of a parent device (e.g. a guide output on a camera).
 export type SubDevice<D extends Device, P extends Device> = D & {
 	readonly parent: P
 }
 
+// Wall-clock time as epoch milliseconds plus a UTC offset in minutes.
 export interface UTCTime {
 	utc: number // milliseconds since epoch
 	offset: number // minutes
 }
 
+// A switch/option identified by machine name and human label.
 export interface NameAndLabel {
 	name: string
 	label: string
 }
 
+// Pulse-guiding capability, optionally with a settable guide rate (radians/second).
 export interface GuideOutput extends Device {
 	readonly type: 'guideOutput' | 'mount' | 'camera'
 	canPulseGuide: boolean
@@ -112,12 +141,15 @@ export interface GuideOutput extends Device {
 	readonly guideRate: EquatorialCoordinate
 }
 
+// Temperature-sensing capability; temperature in degrees Celsius.
 export interface Thermometer extends Device {
 	readonly type: 'thermometer' | 'camera' | 'focuser'
 	hasThermometer: boolean
 	temperature: number
 }
 
+// Camera device: cooling, frame format/type, subframe, binning, gain/offset, exposure, plus the guide
+// and thermometer capabilities. Pixel sizes are micrometres; temperatures are degrees Celsius.
 export interface Camera extends GuideOutput, Thermometer {
 	readonly type: 'camera'
 	hasCoolerControl: boolean
@@ -158,6 +190,7 @@ export interface Camera extends GuideOutput, Thermometer {
 	}
 }
 
+// GPS/site capability: geographic location (radians/metres) and device clock.
 export interface GPS extends Device {
 	readonly type: 'gps' | 'mount'
 	hasGPS: boolean
@@ -165,6 +198,7 @@ export interface GPS extends Device {
 	readonly time: UTCTime
 }
 
+// Parking capability shared by mounts, covers, and similar mechanisms.
 export interface Parkable {
 	canPark: boolean
 	canSetPark: boolean
@@ -172,6 +206,8 @@ export interface Parkable {
 	parked: boolean
 }
 
+// Mount/telescope device: slew/sync/goto/track/park/home capabilities, slew rates, track modes, pier
+// side, and the current equatorial coordinate (radians). Also a guide output and GPS/site source.
 export interface Mount extends GuideOutput, GPS, Parkable {
 	readonly type: 'mount'
 	slewing: boolean
@@ -197,6 +233,7 @@ export interface Mount extends GuideOutput, GPS, Parkable {
 	readonly equatorialCoordinate: EquatorialCoordinate
 }
 
+// Filter-wheel device: slot count, filter names, and current 0-based slot position.
 export interface Wheel extends Device {
 	readonly type: 'wheel'
 	count: number
@@ -206,6 +243,8 @@ export interface Wheel extends Device {
 	position: number
 }
 
+// Focuser device: absolute/relative move, reverse, sync, backlash, and position (steps); also a
+// thermometer.
 export interface Focuser extends Device, Thermometer {
 	readonly type: 'focuser'
 	moving: boolean
@@ -219,23 +258,27 @@ export interface Focuser extends Device, Thermometer {
 	hasBacklash: boolean
 }
 
+// Dew-heater capability with a duty-cycle property (percent).
 export interface DewHeater extends Device {
 	readonly type: 'dewHeater' | 'camera' | 'cover'
 	hasDewHeater: boolean
 	readonly dutyCycle: MinMaxValueProperty
 }
 
+// Telescope cover/dust cap: parkable (open/close) with an optional dew heater.
 export interface Cover extends Device, Parkable, DewHeater {
 	readonly type: 'cover'
 	canAbort: boolean
 }
 
+// Flat-field light panel with an intensity property.
 export interface FlatPanel extends Device {
 	readonly type: 'flatPanel'
 	enabled: boolean
 	readonly intensity: MinMaxValueProperty
 }
 
+// Field rotator: angle (degrees), reverse, sync, home, and backlash compensation.
 export interface Rotator extends Device {
 	readonly type: 'rotator'
 	moving: boolean
@@ -248,8 +291,10 @@ export interface Rotator extends Device {
 	hasBacklashCompensation: boolean
 }
 
+// Category of a power-distribution channel.
 export type PowerChannelType = 'dc' | 'dew' | 'variableVoltage' | 'autoDew' | 'usb'
 
+// One power-distribution output channel with its value/range and enabled state.
 export interface PowerChannel extends MinMaxValueProperty {
 	readonly type: PowerChannelType
 	name: string
@@ -257,6 +302,7 @@ export interface PowerChannel extends MinMaxValueProperty {
 	enabled: boolean
 }
 
+// Power-distribution device: aggregate voltage/current/power plus the per-type channel lists.
 export interface Power extends Device, Record<PowerChannelType, PowerChannel[]> {
 	readonly type: 'power'
 	readonly voltage: MinMaxValueProperty
@@ -265,20 +311,24 @@ export interface Power extends Device, Record<PowerChannelType, PowerChannel[]> 
 	hasPowerCycle: boolean
 }
 
+// Tests whether an interface bitmask includes a given DeviceInterfaceType bit.
 export function isInterfaceType(value: number, type: DeviceInterfaceType): value is DeviceInterfaceType {
 	return (value & type) !== 0
 }
 
+// Empty driver-info template.
 export const DEFAULT_DRIVER_INFO: DriverInfo = {
 	executable: '',
 	version: '',
 }
 
+// Default client-info template (INDI, empty id).
 export const DEFAULT_CLIENT_INFO: ClientInfo = {
 	type: 'INDI',
 	id: '',
 }
 
+// Zeroed numeric value/range template.
 export const DEFAULT_MIN_MAX_VALUE_PROPERTY: MinMaxValueProperty = {
 	value: 0,
 	min: 0,
@@ -286,6 +336,8 @@ export const DEFAULT_MIN_MAX_VALUE_PROPERTY: MinMaxValueProperty = {
 	step: 0,
 }
 
+// Default, fully-disconnected templates for each device type, used to seed device state before the
+// driver reports its real capabilities.
 export const DEFAULT_CAMERA: Camera = {
 	hasCoolerControl: false,
 	coolerPower: 0,
@@ -532,6 +584,7 @@ export const DEFAULT_DEW_HEATER: DewHeater = {
 	client: structuredClone(DEFAULT_CLIENT_INFO),
 }
 
+// Type guards narrowing a Device by its discrete `type`.
 export function isCamera(device: Device): device is Camera {
 	return device.type === 'camera'
 }
@@ -564,6 +617,8 @@ export function isPower(device: Device): device is Power {
 	return device.type === 'power'
 }
 
+// Capability guards narrowing by the presence of a sub-interface marker rather than the device type, so
+// composite devices (e.g. a camera that is also a thermometer/guide output) are recognized.
 export function isThermometer(device: Device): device is Thermometer {
 	return 'hasThermometer' in device && device.hasThermometer !== undefined
 }
@@ -580,6 +635,9 @@ export function isGPS(device: Device): device is GPS {
 	return device.type === 'gps' || ('hasGPS' in device && device.hasGPS !== undefined)
 }
 
+// Predicts the pier side a German equatorial mount would use for the given coordinates and local
+// sidereal time. RA, Dec, and LST are radians. Returns NEITHER at the celestial poles where it is
+// undefined; otherwise WEST when the target is east of the meridian (hour angle in [0,12)h), else EAST.
 export function expectedPierSide(rightAscension: Angle, declination: Angle, lst: Angle): PierSide {
 	if (Math.abs(declination) === Math.PI / 2) return 'NEITHER'
 	return (toHour(rightAscension - lst) + 24) % 24 < 12 ? 'WEST' : 'EAST'

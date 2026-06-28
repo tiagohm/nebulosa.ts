@@ -1,13 +1,23 @@
+// INDI protocol message and property type definitions plus helpers to build property vectors. Mirrors
+// the INDI wire model: devices define (defXXX) and update (setXXX) typed property vectors; clients send
+// new target values (newXXX). See https://docs.indilib.org/protocol/ for the protocol semantics.
+
+// Lifecycle/health state of a property vector.
 export type PropertyState = 'Idle' | 'Ok' | 'Busy' | 'Alert'
 
+// GUI selection rule for a switch vector (exactly one, at most one, or any number of members on).
 export type SwitchRule = 'OneOfMany' | 'AtMostOne' | 'AnyOfMany'
 
+// Access permission for a property: read-only, write-only, or read-write.
 export type PropertyPermission = 'ro' | 'wo' | 'rw'
 
+// BLOB delivery policy for a client channel.
 export type BlobEnable = 'Never' | 'Also' | 'Only'
 
+// Property vector kind.
 export type VectorType = 'Text' | 'Number' | 'Switch' | 'Light' | 'BLOB'
 
+// Scalar value carried by a property element.
 export type ValueType = string | number | boolean
 
 // Commands from Device to Client:
@@ -313,30 +323,38 @@ export type SwitchElement = OneSwitch | DefSwitch
 export type LightElement = OneLight | DefLight
 export type BlobElement = OneBlob | DefBlob
 
+// Builds a switch vector from [name, label, value] tuples. Defaults to Idle state and a 60 s timeout.
 export function makeSwitchVector(device: string, name: string, label: string, group: string, rule: SwitchRule, permission: PropertyPermission, ...properties: readonly [string, string, boolean][]): DefSwitchVector & SetSwitchVector & { type: 'SWITCH' } {
 	const elements: Record<string, DefSwitch> = {}
 	for (const [name, label, value] of properties) elements[name] = { name, label, value }
 	return { type: 'SWITCH', device, name, label, group, permission, rule, state: 'Idle', timeout: 60, elements }
 }
 
+// Builds a number vector from [name, label, value, min, max, step, format] tuples. Defaults to Idle and
+// a 60 s timeout.
 export function makeNumberVector(device: string, name: string, label: string, group: string, permission: PropertyPermission, ...properties: readonly [string, string, number, number, number, number, string][]): DefNumberVector & SetNumberVector & { type: 'NUMBER' } {
 	const elements: Record<string, DefNumber> = {}
 	for (const [name, label, value, min, max, step, format] of properties) elements[name] = { name, label, value, min, max, step, format }
 	return { type: 'NUMBER', device, name, label, group, permission, state: 'Idle', timeout: 60, elements }
 }
 
+// Builds a text vector from [name, label, value] tuples. Defaults to Idle state and a 60 s timeout.
 export function makeTextVector(device: string, name: string, label: string, group: string, permission: PropertyPermission, ...properties: readonly [string, string, string][]): DefTextVector & SetTextVector & { type: 'TEXT' } {
 	const elements: Record<string, DefText> = {}
 	for (const [name, label, value] of properties) elements[name] = { name, label, value }
 	return { type: 'TEXT', device, name, label, group, permission, state: 'Idle', timeout: 60, elements }
 }
 
+// Builds a BLOB vector from [name, label] tuples (elements start empty, format 'fits'). Defaults to Idle
+// and a 60 s timeout.
 export function makeBlobVector(device: string, name: string, label: string, group: string, permission: PropertyPermission, ...properties: readonly [string, string][]): Omit<DefBlobVector, 'elements'> & SetBlobVector & { type: 'BLOB' } {
 	const elements: Record<string, Omit<DefBlob, 'value'> & OneBlob> = {}
 	for (const [name, label] of properties) elements[name] = { name, label, size: '0', format: 'fits', value: '' }
 	return { type: 'BLOB', device, name, label, group, permission, state: 'Idle', timeout: 60, elements }
 }
 
+// Returns the names of the switch members that are currently on. Handles both def/set (object) and new
+// (boolean) element shapes.
 export function findOnSwitch(vector: SwitchVector) {
 	const { elements } = vector
 
@@ -347,6 +365,8 @@ export function findOnSwitch(vector: SwitchVector) {
 	})
 }
 
+// Turns on the named switch member, enforcing the vector's rule (OneOfMany clears the siblings; AtMostOne
+// is left to the caller and treated as a no-op here). Returns whether a change occurred.
 export function selectOnSwitch(vector: SetSwitchVector & DefSwitchVector, name: string) {
 	if (vector.rule === 'AtMostOne') return false
 
