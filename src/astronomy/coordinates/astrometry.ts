@@ -9,25 +9,47 @@ import { pmAngles, type Time, tt, ut1 } from '../time/time'
 import type { CartesianCoordinate, EquatorialCoordinate, SphericalCoordinate } from './coordinate'
 import { type EraAstrom, eraApci13, eraApco13, eraApio13, eraAtciqz, eraAticq, eraAtioq, eraAtoiq, eraC2s, eraP2s, eraRefco } from './erfa/erfa'
 
+// High-level astrometric place transforms built on the ERFA "apc/atio" pipeline: ICRS<->CIRS,
+// CIRS<->observed (azimuth/altitude), and ICRS->observed, plus the scalar helpers (distance,
+// light time, equatorial coordinates, parallactic angle, angular separation, and atmospheric
+// refraction). Positions are AU and angles are radians unless noted; refraction uses pressure
+// in hPa and temperature in Celsius. The observed transforms require an EOP-aware Time and an
+// observing location, and share ERFA's bounded refraction model so forward/inverse round trips
+// stay consistent.
+
+// Barycentric/heliocentric position (AU) and velocity (AU/day) pair, in ICRS/BCRS axes.
 export type PositionAndVelocity = [MutVec3, MutVec3]
 
-// Computes the position at time.
+// Sampler returning the position and velocity of a body at the given time.
 export type PositionAndVelocityOverTime = (time: Time) => PositionAndVelocity
 
+// Atmospheric conditions feeding the refraction model. All fields are optional;
+// missing fields fall back to DEFAULT_REFRACTION_PARAMETERS.
 export interface RefractionParameters {
+	// Ambient pressure at the observer, in millibar (hPa). Zero disables refraction.
 	pressure?: Pressure
+	// Ambient temperature at the observer, in degrees Celsius.
 	temperature?: Temperature
+	// Relative humidity as a fraction in 0..1.
 	relativeHumidity?: number
+	// Effective observing wavelength, in micrometers.
 	wl?: number
 }
 
+// Observed (topocentric) place of a source, combining horizontal and equatorial angles.
 export interface Observed extends Readonly<EquatorialCoordinate> {
+	// Azimuth measured from north through east, in radians (0..TAU).
 	readonly azimuth: Angle
+	// Altitude above the horizon, in radians (negative below the horizon).
 	readonly altitude: Angle
+	// Local hour angle of the source, in radians.
 	readonly hourAngle: Angle
+	// Equation of the origins (CIRS-to-equinox offset), in radians.
 	readonly equationOfOrigins: Angle
 }
 
+// Standard temperature and pressure defaults for refraction, plus mid humidity and
+// visible wavelength. Pressure in hPa, temperature in Celsius, wavelength in micrometers.
 // https://en.wikipedia.org/wiki/Standard_temperature_and_pressure
 export const DEFAULT_REFRACTION_PARAMETERS: Readonly<Required<RefractionParameters>> = {
 	pressure: 1013.25,
