@@ -13,18 +13,32 @@ import { ellipticToRectangularA } from '../../ephemeris'
 
 // Based on https://github.com/Stellarium/stellarium/blob/v25.3/src/core/planetsephems/marssat.c
 
+// MARSSAT theory (Lainey) of Phobos and Deimos: Marscentric position (AU) and velocity (AU/day).
+// Trigonometric series perturb the equinoctial elements, which are converted to rectangular
+// coordinates and rotated through the slowly precessing Laplace-plane node/inclination into the
+// equatorial frame. Time argument is days from JD 2445063.5 (TT).
+
+// One periodic term as [phase, frequency, amplitude]; phase in radians, frequency in rad/day.
 export type MarsSatTerm = readonly [number, number, number] // phase, frequency, amplitude
 
+// A list of periodic terms contributing to one element.
 export type MarsSatTermList = readonly MarsSatTerm[]
 
+// One Martian satellite's mass parameter, secular terms, base elements, and periodic series.
 export interface MarsSatBody {
+	// Gravitational parameter mu = G*(m_Mars + m_satellite) in AU^3/day^2.
 	readonly mu: number
+	// Mean-longitude rate (rad/day).
 	readonly l: number
+	// Secular acceleration of the mean longitude (rad/day^2).
 	readonly acc: number
+	// Base equinoctial elements before periodic perturbations are added.
 	readonly constants: number[]
+	// Periodic series per element slot (semi-major axis, mean longitude, then k/h and q/p pairs).
 	readonly list: readonly MarsSatTermList[]
 }
 
+// Per-satellite, per-element MARSSAT periodic-term tables; treated as data.
 const PHOBOS_0: MarsSatTermList = [
 	[5.013490350126586, 2.715567382195733e1, 4.537539999999999e-9],
 	[6.83991059078e-1, 1.969446151585829e1, 7.312e-10],
@@ -250,6 +264,7 @@ const DEIMOS_3: MarsSatTermList = [
 	[1.680391963791, 9.076040299352415e-3, 1.6524166e-7],
 ]
 
+// Assembled satellite definitions binding the per-element term lists with their secular constants.
 const PHOBOS: MarsSatBody = {
 	mu: 9.549547741038312e-11,
 	l: 1.97020556283139e1,
@@ -266,11 +281,16 @@ const DEIMOS: MarsSatBody = {
 	list: [DEIMOS_0, DEIMOS_1, DEIMOS_2, DEIMOS_3],
 }
 
+// The two satellites in index order, matching the public phobos/deimos wrappers.
 const BODIES = [PHOBOS, DEIMOS] as const
 
+// Laplace-plane node longitude at epoch (radians).
 const OME0 = 47.68143 * DEG2RAD
+// Laplace-plane inclination at epoch (radians).
 const INC0 = 37.1135 * DEG2RAD
+// Secular rate of the node longitude (radians per Julian century).
 const DOME = -0.1061 * DEG2RAD
+// Secular rate of the inclination (radians per Julian century).
 const DINC = 0.0609 * DEG2RAD
 
 // Computes the position and velocity of Phobos at given time using the MARSSAT model
@@ -283,7 +303,8 @@ export function deimos(time: Time) {
 	return marssat(time, 1)
 }
 
-// Computes the position and velocity of a given Mars' moon at given time using the MARSSAT model
+// Computes the equatorial position (AU) and velocity (AU/day) of a Martian satellite using MARSSAT.
+// `index` selects the body (0 Phobos, 1 Deimos). Returned vectors alias the internal conversion buffers.
 export function marssat(time: Time, index: number) {
 	time = tt(time)
 	const t = time.day - (2451545 - 6491.5) + time.fraction

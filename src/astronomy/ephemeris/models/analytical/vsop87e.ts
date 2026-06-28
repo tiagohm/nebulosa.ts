@@ -5,6 +5,11 @@ import type { PositionAndVelocity } from '../../../coordinates/astrometry'
 import { type Time, tt } from '../../../time/time'
 import { VSOP87E_EARTH_DATA, VSOP87E_JUPITER_DATA, VSOP87E_MARS_DATA, VSOP87E_MERCURY_DATA, VSOP87E_NEPTUNE_DATA, VSOP87E_SATURN_DATA, VSOP87E_SUN_DATA, VSOP87E_URANUS_DATA, VSOP87E_VENUS_DATA } from './vsop87e.data'
 
+// VSOP87 version E analytical theory: barycentric rectangular position (AU) and velocity (AU/day)
+// of the Sun and the eight planets. Per body, a per-coordinate, per-power table of (amplitude,
+// phase, frequency) terms is summed and its time derivative formed, then rotated from the J2000
+// dynamical ecliptic frame to the ICRF equatorial frame. Time argument is millennia from J2000 (TT).
+
 // https://vizier.cfa.harvard.edu/ftp/cats/6/81/vsop87.txt
 
 // Computes the barycentric position and velocity of the Sun.
@@ -69,10 +74,17 @@ export function neptune(time: Time) {
 
 // with: e = 23° 26' 21.41136" et φ = -0.05188"
 
+// Cosine of the small frame-tie angle phi = -0.05188" between the VSOP2013 dynamical equinox and ICRF.
 const COSQ = 0.999999999999968368508326
+// Sine of the same frame-tie angle phi.
 const SINQ = -0.000000251521337759624621
+// Row-major 3x3 rotation from the J2000 dynamical ecliptic frame to the ICRF equatorial frame,
+// combining the obliquity rotation with the phi frame-tie.
 const REFERENCE_FRAME_MATRIX = [COSQ, -SINQ * COS_OBL_J2000, SINQ * SIN_OBL_J2000, SINQ, COSQ * COS_OBL_J2000, -COSQ * SIN_OBL_J2000, 0, SIN_OBL_J2000, COS_OBL_J2000] as const
 
+// Sums the VSOP87E series in `data` (indexed [coordinate][power] -> flat amplitude/phase/frequency
+// triples) at `time`, forms the analytic velocity, and rotates both into the ICRF equatorial frame.
+// Returns position (AU) and velocity (AU/day); both vectors alias the internal buffers.
 function compute(time: Time, data: readonly number[][][]): PositionAndVelocity {
 	const t = tt(time)
 

@@ -11,17 +11,31 @@ import { type Time, tt } from '../../../time/time'
 
 // Based on https://github.com/Stellarium/stellarium/blob/v25.3/src/core/planetsephems/l12.c
 
+// L1.2 theory of the four Galilean satellites: Jovicentric position (AU) and velocity (AU/day).
+// Per body, trigonometric series build the equinoctial elements (semi-major axis, mean longitude,
+// k/h eccentricity vector, q/p inclination vector); Kepler's equation is solved and the result
+// rotated into the J2000 equatorial frame. Time argument is days from JD 2433282.5 (TT).
+
+// One periodic term as [amplitude, phase, frequency]; phase in radians, frequency in rad/day.
 export type L12Term = readonly [number, number, number] // amplitude, phase, frequency
 
+// One Galilean satellite's mass parameter and equinoctial-element series.
 export interface L12Body {
+	// Gravitational parameter mu = G*(m_Jupiter + m_satellite) in AU^3/day^2.
 	readonly mu: number
+	// Linear mean-longitude terms [phase, rate] (radians, radians/day).
 	readonly al: readonly [number, number]
+	// Semi-major-axis series (cosine terms), AU.
 	readonly a: readonly L12Term[]
+	// Mean-longitude series (sine terms), radians.
 	readonly l: readonly L12Term[]
+	// Eccentricity-vector (k, h) series.
 	readonly z: readonly L12Term[]
+	// Inclination-vector (q, p) series.
 	readonly zeta: readonly L12Term[]
 }
 
+// Per-satellite L1.2 series (mass parameter plus trigonometric element tables); treated as data.
 const IO: L12Body = {
 	mu: 0.282489428433814e-6,
 	al: [0.1446213296021224e1, 0.35515522861824e1],
@@ -564,9 +578,11 @@ const CALLISTO: L12Body = {
 	],
 }
 
+// The four satellites in index order, matching the public io/europa/ganymede/callisto wrappers.
 const BODIES = [IO, EUROPA, GANYMEDE, CALLISTO] as const
 
 // const VSOP87 = [9.994327815023905713e-1, 3.039550993390781261e-2, -1.449924943755843383e-2, -3.08977044222367188e-2, 9.988822846893227815e-1, -3.577028369016394015e-2, 1.339578739122566807e-2, 3.619798764705610479e-2, 9.992548516622136737e-1] as const
+// Row-major 3x3 rotation from the L1.2 Jovicentric frame to the J2000 equatorial frame.
 const J2000 = [0.9994327730319685, 0.030395736820722188, -0.01449935766698494, -0.033676879155137895, 0.9020579145791894, -0.43029918261067407, -3.689877119128493e-10, 0.43054339842595357, 0.9025698765590566] as const
 
 // Computes the position and velocity of Io at given time using the L1 theory
@@ -589,7 +605,9 @@ export function callisto(time: Time) {
 	return compute(time, 3)
 }
 
-// Computes the position and velocity of a given Jupiter's moon at given time using the L1 theory
+// Computes the J2000-equatorial position (AU) and velocity (AU/day) of a Galilean satellite using
+// L1.2. `index` selects the body (0 Io, 1 Europa, 2 Ganymede, 3 Callisto). Solves Kepler's equation
+// to a 1e-12 tolerance. Returned vectors alias the internal conversion buffers.
 export function compute(time: Time, index: number): PositionAndVelocity {
 	time = tt(time)
 	const t = time.day - 2433282 + (time.fraction - 0.5)

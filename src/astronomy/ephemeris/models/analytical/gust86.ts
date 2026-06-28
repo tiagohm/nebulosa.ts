@@ -11,23 +11,42 @@ import { ellipticToRectangularN } from '../../ephemeris'
 
 // Based on https://github.com/Stellarium/stellarium/blob/v25.3/src/core/planetsephems/gust86.c
 
+// GUST86 theory of the five major Uranian satellites: Uranicentric position (AU) and velocity
+// (AU/day). Each body builds equinoctial elements from the shared fundamental arguments (mean
+// longitude, eccentricity, inclination phasors), converts to rectangular coordinates, and rotates
+// into the J2000 equatorial frame. Time argument is days from the GUST86 epoch JD 2444239.5 (TT).
+
+// One Uranian satellite: its mass parameter and the element-series evaluator.
 export interface Gust87Body {
+	// Gravitational parameter mu = G*(m_Uranus + m_satellite) in AU^3/day^2.
 	readonly rmu: number
+	// Fills `elem` (6 equinoctial elements) at time `t` (days from epoch) from the fundamental
+	// argument arrays `an` (mean longitude), `ae` (eccentricity), `ai` (inclination).
 	readonly compute: (t: number, elem: NumberArray, an: Readonly<NumberArray>, ae: Readonly<NumberArray>, ai: Readonly<NumberArray>) => void
 }
 
+// Degrees per Julian year converted to radians per day; scales the per-year frequencies below.
 const D2RPERJY = DEG2RAD / DAYSPERJY
 
+// Mean-motion frequencies (rad/day) of the five satellites' fundamental arguments.
 const FQN = [4.44519055, 2.492952519, 1.516148111, 0.721718509, 0.46669212] as const
+// Eccentricity-argument frequencies (rad/day).
 const FQE = [20.082 * D2RPERJY, 6.217 * D2RPERJY, 2.865 * D2RPERJY, 2.078 * D2RPERJY, 0.386 * D2RPERJY] as const
+// Inclination-argument frequencies (rad/day).
 const FQI = [-20.309 * D2RPERJY, -6.288 * D2RPERJY, -2.836 * D2RPERJY, -1.843 * D2RPERJY, -0.259 * D2RPERJY] as const
+// Mean-longitude argument phases at epoch (rad).
 const PHN = [-0.238051, 3.098046, 2.285402, 0.856359, -0.915592] as const
+// Eccentricity-argument phases at epoch (rad).
 const PHE = [0.611392, 2.408974, 2.067774, 0.735131, 0.426767] as const
+// Inclination-argument phases at epoch (rad).
 const PHI = [5.702313, 0.395757, 0.589326, 1.746237, 4.206896] as const
 
 // const VSOP87 = [9.753206632086812015e-1, 6.194425668001473004e-2, 2.119257251551559653e-1, -2.006444610981783542e-1, -1.519328516640849367e-1, 9.678110398294910731e-1, 9.214881523275189928e-2, -9.864478281437795399e-1, -1.357544776485127136e-1] as const
+// Row-major 3x3 rotation from the GUST86 Uranicentric frame to the J2000 equatorial frame.
 const J2000 = [9.753205572598290957e-1, 6.194437810676107434e-2, 2.11926177258362903e-1, -2.207428547845518695e-1, 2.52990533699299528e-1, 9.41949245936377315e-1, 4.733143558215848563e-3, -9.654836528287313313e-1, 2.604206471702025216e-1] as const
 
+// Per-satellite element series (amplitude/argument trigonometric tables from GUST86), one entry
+// per body. Treated as data; the surrounding evaluator drives them through `compute`.
 const ARIEL: Gust87Body = {
 	rmu: 1.291910570526396e-8,
 	compute: (t: number, elem: NumberArray, an: Readonly<NumberArray>, ae: Readonly<NumberArray>, ai: Readonly<NumberArray>) => {
@@ -289,6 +308,7 @@ const MIRANDA: Gust87Body = {
 	},
 }
 
+// The five satellites in index order, matching the public ariel/umbriel/.../miranda wrappers.
 const BODIES = [ARIEL, UMBRIEL, TITANIA, OBERON, MIRANDA] as const
 
 // Computes the position and velocity of Ariel at given time
@@ -316,7 +336,9 @@ export function miranda(time: Time) {
 	return gust86(time, 4)
 }
 
-// Computes the position and velocity of a given Uranus' moon at given time using the GUST86 model
+// Computes the J2000-equatorial position (AU) and velocity (AU/day) of a Uranian satellite at the
+// given time using GUST86. `index` selects the body (0 Ariel, 1 Umbriel, 2 Titania, 3 Oberon,
+// 4 Miranda). Returned vectors alias the internal conversion buffers.
 export function gust86(time: Time, index: number): PositionAndVelocity {
 	time = tt(time)
 	const td = time.day - 2444239.5 + time.fraction

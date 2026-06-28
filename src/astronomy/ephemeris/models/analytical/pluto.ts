@@ -5,8 +5,14 @@ import { matTransposeMulVec } from '../../../../math/linear-algebra/mat3'
 import { eraS2p } from '../../../coordinates/erfa/erfa'
 import { type Time, tt } from '../../../time/time'
 
+// Meeus' short Pluto theory (Astronomical Algorithms, chap. 37): heliocentric ICRF position (AU)
+// from 43 periodic terms in the mean longitudes of Jupiter, Saturn, and Pluto. Accurate to ~0.07"
+// in longitude over 1885-2099; the spherical ecliptic result is rotated to the ICRF equatorial frame.
+
+// Number of periodic terms in the Pluto series (table 37.A).
 const COEFFS = 43
 
+// Integer multipliers [J, S, P] of the Jupiter/Saturn/Pluto mean longitudes for each term's argument.
 const ARGUMENT = [
 	[0, 0, 1],
 	[0, 0, 2],
@@ -53,6 +59,7 @@ const ARGUMENT = [
 	[3, 0, 0],
 ] as const
 
+// Per-term [sine, cosine] longitude amplitudes, in units of 1e-6 degree.
 const LONGITUDE = [
 	[-19799805, 19850055],
 	[897144, -4954829],
@@ -99,6 +106,7 @@ const LONGITUDE = [
 	[0, 0],
 ] as const
 
+// Per-term [sine, cosine] latitude amplitudes, in units of 1e-6 degree.
 const LATITUDE = [
 	[-5452852, -14974862],
 	[3527812, 1672790],
@@ -145,6 +153,7 @@ const LATITUDE = [
 	[1, 0],
 ] as const
 
+// Per-term [sine, cosine] radius amplitudes, in units of 1e-7 AU.
 const RADIUS = [
 	[66865439, 68951812],
 	[-11827535, -332538],

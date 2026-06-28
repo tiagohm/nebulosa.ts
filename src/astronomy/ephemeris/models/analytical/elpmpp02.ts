@@ -5,6 +5,11 @@ import type { PositionAndVelocity } from '../../../coordinates/astrometry'
 import { type Time, tt } from '../../../time/time'
 import { ELPMPP02_MAIN, ELPMPP02_PERT } from './elpmpp02.data'
 
+// ELP/MPP02 lunar theory: geocentric rectangular position (AU) and velocity (AU/day) of the Moon.
+// Sums the main-problem and perturbation series (data tables) for ecliptic longitude, latitude, and
+// distance, adds the secular Moon-angle polynomials, applies the Laskar precession P/Q rotation, and
+// ties the result into the ICRF equatorial frame. Time argument is centuries from J2000 (TT).
+
 // Éphéméride Lunaire Parisienne is a lunar theory developed by Jean Chapront, Michelle Chapront-Touzé,
 // and others at the Bureau des Longitudes in the 1970s to 1990s.
 
@@ -59,7 +64,9 @@ const Q3 = 0.1265417e-8
 const Q4 = -0.1371808e-11
 const Q5 = -0.320334e-14
 
+// Ratio of the ELP reference distance to the constant used in the series; scales the distance term.
 const RA0 = 384747.961370173 / 384747.980674318
+// Row-major 3x3 rotation from the ELP J2000 ecliptic frame to the ICRF equatorial frame.
 const REFERENCE_FRAME = [1, 0.00000044036, -0.000000190919, -0.000000479966, 0.917482137087, -0.397776982902, 0, 0.397776982902, 0.917482137087] as const
 
 // Geocentric cartesian position & velocity of Moon.

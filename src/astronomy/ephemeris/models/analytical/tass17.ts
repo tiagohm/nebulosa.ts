@@ -8,22 +8,39 @@ import { ellipticToRectangularN } from '../../ephemeris'
 
 // Based on https://github.com/Stellarium/stellarium/blob/v25.3/src/core/planetsephems/tass17.c
 
+// TASS 1.7 theory of the eight major Saturnian satellites (including Hyperion): Saturnicentric
+// position (AU) and velocity (AU/day). The shared satellite longitudes are evaluated first, then
+// each body's element series (semi-major axis, mean longitude, k/h, q/p) are summed using integer
+// combinations of those longitudes, converted to rectangular coordinates, and rotated into the
+// J2000 equatorial frame. Time argument is days from JD 2444240.0 (TT).
+
+// One periodic term as [amplitude, phase, frequency]; phase in radians, frequency in rad/day.
 export type Tass17Term = readonly [number, number, number]
 
+// A series for one element: a list of multi-terms, each keyed by a satellite-longitude combination.
 export type Tass17Series = readonly Tass17MultiTerm[]
 
+// A block of terms sharing one integer combination of the satellite mean longitudes.
 export interface Tass17MultiTerm {
+	// Integer multipliers of the seven satellite longitudes forming this block's argument.
 	readonly i: readonly number[]
+	// Periodic terms summed with the shared longitude combination.
 	readonly terms: readonly Tass17Term[]
 }
 
+// One Saturnian satellite's mass parameter, mean motion, base elements, and element series.
 export interface Tass17Body {
+	// Gravitational parameter mu = G*(m_Saturn + m_satellite) in AU^3/day^2.
 	readonly mu: number
+	// Adopted mean motion (rad/day).
 	readonly aam: number
+	// Base equinoctial elements (6 items) before periodic perturbations.
 	readonly s0: readonly number[] // 6 items
+	// Element series (4 items: semi-major axis, mean longitude, k/h, q/p).
 	readonly series: readonly Tass17Series[] // 4 items
 }
 
+// Per-satellite, per-element TASS 1.7 periodic-term tables; treated as data.
 const MIMAS_0_0: readonly Tass17Term[] = [
 	[2.76076380005454e-5, 6.863463000141887e-1, 2.437929552050393e-4],
 	[9.34731399369388e-6, 2.209688858348459, 2.791965241219151e-2],
@@ -2315,11 +2332,15 @@ const HYPERION: Tass17Body = {
 	series: [HYPERION_0, HYPERION_1, HYPERION_2, HYPERION_3],
 }
 
+// The eight satellites in index order, matching the public mimas/.../hyperion wrappers.
 const BODIES = [MIMAS, ENCELADUS, TETHYS, DIONE, RHEA, TITAN, IAPETUS, HYPERION] as const
 
 // const VSOP87 = [-9.833473364922412278e-1, -1.603871593615649693e-1, 8.546329577978411975e-2, 1.817361158757799129e-1, -8.678312794665074866e-1, 4.624292968291581735e-1, 0, 4.70260384777893601e-1, 8.82527716566764523e-1] as const
+// Row-major 3x3 rotation from the TASS Saturnicentric frame to the J2000 equatorial frame.
 const J2000 = [-9.833472564628459035e-1, -1.603876313013248428e-1, 8.546333092352678089e-2, 1.667401119524148001e-1, -9.832783769705406668e-1, 7.322136606398094752e-2, 7.229044385733251626e-2, 8.625219479949252372e-2, 9.936471459321866589e-1] as const
 
+// Evaluates the mean longitude perturbation of the first seven satellites at time `t` (days from
+// epoch), used as the shared argument basis for every body's series. Returns a 7-element array.
 function computeLongitude(t: number) {
 	const longitude = new Float64Array(7)
 
@@ -2331,6 +2352,8 @@ function computeLongitude(t: number) {
 	return longitude
 }
 
+// Sums the four element series for body `index` at time `t` (days from epoch) using the shared
+// satellite `longitude` basis, returning the 6 equinoctial elements (a, mean longitude, k, h, q, p).
 function compute(t: number, longitude: Float64Array, index: number) {
 	const body = BODIES[index]
 	const elem = new Float64Array(body.s0)
@@ -2423,7 +2446,8 @@ export function hyperion(time: Time) {
 	return tass17(time, 7)
 }
 
-// Computes the position and velocity of a given Saturn's moon at given time using the TASS87 model
+// Computes the J2000-equatorial position (AU) and velocity (AU/day) of a Saturnian satellite using
+// TASS 1.7. `index` selects the body (0 Mimas ... 7 Hyperion). Returned vectors alias the internal buffers.
 export function tass17(time: Time, index: number) {
 	time = tt(time)
 	const t0 = time.day - 2444240 + time.fraction
