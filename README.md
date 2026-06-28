@@ -578,6 +578,10 @@ const galactocentric = affineFromBase(icrs, gc, time) // origin at the Galactic 
 
 const lsr = lsrFrame() // Local Standard of Rest: velocity offset only (LSR_DEFAULT_SOLAR_VELOCITY)
 const [, vLsr] = affineFromBase(icrsState, lsr, time) // v_lsr = v_icrs + solar peculiar motion
+
+lsrkFrame() // Kinematic LSR (standard solar-apex motion, ICRS orientation)
+lsrdFrame() // Dynamical LSR (Delhaye 1965 (9, 12, 7) km/s, ICRS orientation)
+galacticLsrFrame() // LSR in Galactic axes (galactic orientation + LSR velocity offset)
 ```
 
 ### Geometry ![](bun.webp) ![](browser.webp)

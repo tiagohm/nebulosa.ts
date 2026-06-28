@@ -188,3 +188,34 @@ export function lsrFrame(solarVelocity: Vec3 = LSR_DEFAULT_SOLAR_VELOCITY): Affi
 	const offset = vecNegate(matTransposeMulVec(GALACTIC_MATRIX, solarVelocity))
 	return { rotationAt: () => ICRS_MATRIX, originVelocityAt: () => offset }
 }
+
+// Kinematic LSR (LSRK) solar motion as ICRS Cartesian components, AU/day. This is
+// the standard ~20 km/s solar-apex motion; the value matches Astropy's LSRK and
+// is kept in ICRS axes because the apex is not a round Galactic-UVW triple.
+export const LSRK_SOLAR_VELOCITY_ICRS: Vec3 = [kilometerPerSecond(0.28999706839034606), kilometerPerSecond(-17.317264789717928), kilometerPerSecond(10.00141199546947)]
+
+// The kinematic Local Standard of Rest (LSRK): ICRS orientation and origin, with
+// the standard solar-apex velocity offset. Positions are unchanged.
+export function lsrkFrame(): AffineFrame {
+	const offset = vecNegate(LSRK_SOLAR_VELOCITY_ICRS)
+	return { rotationAt: () => ICRS_MATRIX, originVelocityAt: () => offset }
+}
+
+// Dynamical LSR (LSRD) solar motion as Galactic Cartesian (U, V, W), AU/day.
+// Delhaye (1965): (9, 12, 7) km/s.
+export const LSRD_SOLAR_VELOCITY: Vec3 = [kilometerPerSecond(9), kilometerPerSecond(12), kilometerPerSecond(7)]
+
+// The dynamical Local Standard of Rest (LSRD): like lsrFrame but with the
+// Delhaye (1965) solar motion. ICRS orientation and origin; positions unchanged.
+export function lsrdFrame(): AffineFrame {
+	return lsrFrame(LSRD_SOLAR_VELOCITY)
+}
+
+// The Local Standard of Rest expressed in Galactic axes (GalacticLSR): Galactic
+// orientation with the same velocity offset as the LSR. `solarVelocity` is the
+// Sun's peculiar velocity in Galactic Cartesian (U, V, W), AU/day. Positions are
+// rotated into Galactic axes; velocities also gain the solar motion.
+export function galacticLsrFrame(solarVelocity: Vec3 = LSR_DEFAULT_SOLAR_VELOCITY): AffineFrame {
+	const offset = vecNegate(matTransposeMulVec(GALACTIC_MATRIX, solarVelocity))
+	return { rotationAt: () => GALACTIC_MATRIX, originVelocityAt: () => offset }
+}

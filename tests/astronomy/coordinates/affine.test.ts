@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { affineFromBase, affineToAffine, affineToBase, type AffineFrame, BARYCENTRIC_ECLIPTIC, galactocentricFrame, GALACTOCENTRIC_DEFAULTS, heliocentricEclipticFrame, lsrFrame } from '../../../src/astronomy/coordinates/affine'
+import { affineFromBase, affineToAffine, affineToBase, type AffineFrame, BARYCENTRIC_ECLIPTIC, galacticLsrFrame, galactocentricFrame, GALACTOCENTRIC_DEFAULTS, heliocentricEclipticFrame, lsrdFrame, lsrFrame, lsrkFrame } from '../../../src/astronomy/coordinates/affine'
 import type { PositionAndVelocity } from '../../../src/astronomy/coordinates/astrometry'
 import { eraS2p } from '../../../src/astronomy/coordinates/erfa/erfa'
 import { ECLIPTIC_J2000, frameToFrame, GALACTIC, ICRS } from '../../../src/astronomy/coordinates/frame'
@@ -193,5 +193,84 @@ test('LSR frame matches Astropy: position fixed, velocity gains the solar motion
 		for (let i = 0; i < 3; i++) expect(p[i] / ONE_PARSEC).toBeCloseTo(pos[i] / ONE_PARSEC, 9)
 		// Velocity gains the barycentric solar motion.
 		for (let i = 0; i < 3; i++) expect(toKilometerPerSecond(v[i])).toBeCloseTo(expectedKms[i], 8)
+	}
+})
+
+// LSR variants vs Astropy 7.x. LSRK/LSRD keep ICRS orientation (position fixed,
+// velocity gains the solar motion); GalacticLSR rotates into Galactic axes and
+// adds the LSR solar motion. ICRS cartesian (pos pc, vel km/s) -> frame.
+test('LSRK variant matches Astropy', () => {
+	const lsrk = lsrkFrame()
+	const pos: MutVec3 = [100 * ONE_PARSEC, 200 * ONE_PARSEC, 50 * ONE_PARSEC]
+	const cases: ReadonlyArray<readonly [readonly [number, number, number], readonly [number, number, number]]> = [
+		[
+			[0, 0, 0],
+			[0.28999706839034606, -17.317264789717928, 10.00141199546947],
+		],
+		[
+			[10, -20, 5],
+			[10.289997068390345, -37.317264789717925, 15.00141199546947],
+		],
+	]
+	for (const [velKms, expectedKms] of cases) {
+		const s: PositionAndVelocity = [[...pos], [kilometerPerSecond(velKms[0]), kilometerPerSecond(velKms[1]), kilometerPerSecond(velKms[2])]]
+		const [p, v] = affineFromBase(s, lsrk, TIME)
+		for (let i = 0; i < 3; i++) expect(p[i] / ONE_PARSEC).toBeCloseTo(pos[i] / ONE_PARSEC, 9)
+		for (let i = 0; i < 3; i++) expect(toKilometerPerSecond(v[i])).toBeCloseTo(expectedKms[i], 8)
+	}
+})
+
+test('LSRD variant matches Astropy', () => {
+	const lsrd = lsrdFrame()
+	const pos: MutVec3 = [100 * ONE_PARSEC, 200 * ONE_PARSEC, 50 * ONE_PARSEC]
+	const cases: ReadonlyArray<readonly [readonly [number, number, number], readonly [number, number, number]]> = [
+		[
+			[0, 0, 0],
+			[-0.6382306360182073, -14.585424483191094, 7.8011572411006815],
+		],
+		[
+			[10, -20, 5],
+			[9.361769363981793, -34.58542448319109, 12.801157241100682],
+		],
+	]
+	for (const [velKms, expectedKms] of cases) {
+		const s: PositionAndVelocity = [[...pos], [kilometerPerSecond(velKms[0]), kilometerPerSecond(velKms[1]), kilometerPerSecond(velKms[2])]]
+		const [p, v] = affineFromBase(s, lsrd, TIME)
+		for (let i = 0; i < 3; i++) expect(p[i] / ONE_PARSEC).toBeCloseTo(pos[i] / ONE_PARSEC, 9)
+		for (let i = 0; i < 3; i++) expect(toKilometerPerSecond(v[i])).toBeCloseTo(expectedKms[i], 8)
+	}
+})
+
+test('GalacticLSR variant matches Astropy (galactic orientation plus LSR offset)', () => {
+	const glsr = galacticLsrFrame()
+	const cases: ReadonlyArray<readonly [pos: readonly [number, number, number], vel: readonly [number, number, number], expectedPos: readonly [number, number, number], expectedVel: readonly [number, number, number]]> = [
+		[
+			[100, 200, 50],
+			[0, 0, 0],
+			[-204.36672984321808, -2.205891326052992, -103.58269052620079],
+			[11.1, 12.24, 7.25],
+		],
+		[
+			[100, 200, 50],
+			[10, -20, 5],
+			[-204.36672984321808, -2.205891326052992, -103.58269052620079],
+			[25.600809093902818, 29.81259971632651, 4.8147844382999425],
+		],
+		[
+			[-300, 40, 120],
+			[-12, 30, -7],
+			[-76.53499359845298, -76.38815792834971, 307.09484541945346],
+			[-11.057758150800362, -12.263080170918249, 8.527816836714761],
+		],
+	]
+	for (const [posPc, velKms, expectedPosPc, expectedVelKms] of cases) {
+		const s: PositionAndVelocity = [
+			[posPc[0] * ONE_PARSEC, posPc[1] * ONE_PARSEC, posPc[2] * ONE_PARSEC],
+			[kilometerPerSecond(velKms[0]), kilometerPerSecond(velKms[1]), kilometerPerSecond(velKms[2])],
+		]
+		const [p, v] = affineFromBase(s, glsr, TIME)
+		// Position precision is limited by the galactic-matrix source difference vs Astropy (~1e-10 pc).
+		for (let i = 0; i < 3; i++) expect(p[i] / ONE_PARSEC).toBeCloseTo(expectedPosPc[i], 8)
+		for (let i = 0; i < 3; i++) expect(toKilometerPerSecond(v[i])).toBeCloseTo(expectedVelKms[i], 8)
 	}
 })
