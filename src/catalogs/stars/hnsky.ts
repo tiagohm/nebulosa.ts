@@ -3,22 +3,42 @@ import { PIOVERTWO, TAU } from '../../core/constants'
 import { type Angle, normalizeAngle, normalizePI } from '../../math/units/angle'
 import { BaseStarCatalog, type NormalizedStarCatalogQuery, type StarCatalogEntry, type StarCatalogRaDecBox } from './catalog'
 
+// Reader and star-catalog adapter for HNSKY ".290" tiled binary star archives. The sky is split into
+// 290 declination-band areas; this module decodes the per-area packed records (variable record sizes,
+// header-relative magnitude/declination deltas), resolves which tiles a query touches, and exposes the
+// data through both a direct field search and the generic BaseStarCatalog contract. Angles are J2000
+// radians; record numbers are synthetic per-tile identifiers.
+
+// Size of the shared 110-byte per-tile header.
 const HNSKY_290_HEADER_SIZE = 110
+// Scale from the packed 24-bit right ascension to radians (full circle over 2^24-1).
 const HNSKY_290_RA_SCALE = TAU / 0xffffff
+// Scale from the packed signed 24-bit declination to radians (PI/2 over 2^23-1).
 const HNSKY_290_DEC_SCALE = PIOVERTWO / 0x7fffff
+// Bias subtracted from a header record's packed magnitude byte.
 const HNSKY_290_HEADER_MAG_OFFSET = 16
+// Bias subtracted from a header record's packed declination high byte.
 const HNSKY_290_HEADER_DEC_OFFSET = 128
+// Minimum overlap fraction for a tile to be considered touched by a square field query.
 const HNSKY_290_MIN_AREA_FRACTION = 0.01
+// Read-buffer size, in bytes.
 const HNSKY_290_BUFFER_SIZE = 1024 * 64
+// Catalog epoch for all HNSKY entries (J2000).
 const HNSKY_EPOCH = 2000
+// Full-circle angle (TAU), for whole-band tiles.
 const FULL_CIRCLE = TAU
+// Angular tolerance for tile/box intersection tests, radians.
 const GEOMETRY_EPSILON = 1e-12
+// Total number of .290 sky areas.
 const HNSKY_290_AREA_COUNT = 290
 
+// Number of RA cells (tiles) in each of the 18 declination bands.
 const HNSKY_290_RING_COUNTS = [1, 4, 8, 12, 16, 20, 24, 28, 32, 32, 28, 24, 20, 16, 12, 8, 4, 1] as const
 
+// Cumulative area-number offset at the start of each declination band.
 const HNSKY_290_AREA_OFFSETS = [0, 1, 5, 13, 25, 41, 61, 85, 113, 145, 177, 205, 229, 249, 265, 277, 285, 289] as const
 
+// Declination boundaries (radians) between the 18 bands, from the south to the north pole.
 export const HNSKY_290_DEC_BOUNDARIES = [
 	-PIOVERTWO,
 	-1.4875825298262766,
@@ -41,57 +61,89 @@ export const HNSKY_290_DEC_BOUNDARIES = [
 	PIOVERTWO,
 ] as const satisfies readonly Angle[]
 
+// Precomputed area descriptors (ring/index/file name) for all 290 tiles.
 const HNSKY_290_AREAS = buildHnsky290Areas()
+// Precomputed coarse RA/Dec bounds for all 290 tiles.
 const HNSKY_290_AREA_BOUNDS = buildHnsky290AreaBounds()
 
+// Supported HNSKY database families (limiting magnitude G14 or G16).
 export type Hnsky290Database = 'g14' | 'g16'
 
+// A single .290 archive member: a File-like or a raw buffer source.
 export type Hnsky290File = Pick<File, 'arrayBuffer'> | Bun.BufferSource
 
+// A collection of .290 archive members keyed by database-prefixed file name.
 export type Hnsky290Files = Map<string, Hnsky290File> | Record<string, Hnsky290File>
 
+// Allowed per-record byte sizes in a .290 tile.
 export type HnskyRecordSize = 5 | 6 | 7 | 9 | 10 | 11
 
+// Parsed header of one .290 tile.
 export interface Hnsky290FileHeader {
+	// Free-text tile description.
 	readonly description: string
+	// Bytes per star record in this tile.
 	readonly recordSize: HnskyRecordSize
 }
 
+// Descriptor of one .290 sky area (tile).
 export interface Hnsky290Area {
+	// 1-based area number.
 	readonly area: number
+	// 1-based declination band (ring) number.
 	readonly ring: number
+	// 1-based RA cell index within the ring.
 	readonly index: number
+	// File name of the tile (without the database prefix).
 	readonly fileName: string
+	// Fraction of the query field this tile covers (0 when not part of a query).
 	readonly fraction: number
 }
 
+// A square-field region query around a center.
 export interface Hnsky290RegionQuery extends EquatorialCoordinate {
+	// Half-field size (square half-width), radians.
 	radius: Angle
+	// Optional faintest magnitude to include.
 	magnitudeLimit?: number
 }
 
+// A typed catalog designation decoded from a packed .290 identifier.
 export interface Hnsky290Designation {
+	// Raw packed value.
 	readonly value: number
+	// Source catalog the identifier belongs to.
 	readonly catalog: 'TYC' | 'UCAC4'
+	// Catalog region/zone number.
 	readonly region: number
+	// Star number within the region.
 	readonly star: number
+	// Tycho component (1/2/3), when applicable.
 	readonly component?: 1 | 2 | 3
+	// Human-readable label.
 	readonly label: string
 }
 
+// One star decoded from a .290 tile.
 export interface Hnsky290Star extends Readonly<EquatorialCoordinate> {
+	// Area (tile) the star belongs to.
 	readonly area: number
+	// Magnitude.
 	readonly magnitude: number
+	// Gaia BP-RP color index, when present.
 	readonly bpRp?: number
+	// Decoded catalog designation, when present.
 	readonly designation?: Hnsky290Designation
 }
 
+// Result of a field search: the touched areas, their headers, and the merged star list.
 export interface Hnsky290SearchResult {
 	readonly areas: readonly Hnsky290Area[]
 	readonly headers: readonly (Hnsky290FileHeader & Hnsky290Area)[]
 	readonly stars: readonly Hnsky290Star[]
 }
 
+// A star exposed through the generic catalog contract, carrying its tile and record number.
 export interface HnskyCatalogEntry extends StarCatalogEntry {
 	readonly area: number
 	readonly recordNumber: number
@@ -100,18 +152,25 @@ export interface HnskyCatalogEntry extends StarCatalogEntry {
 	readonly designation?: Hnsky290Designation
 }
 
+// Internal: a tile plus the distances from a query point to its band/cell borders.
 interface Hnsky290BandArea {
 	readonly area: number
+	// Angular space (radians) to the eastern cell border.
 	readonly spaceEast: number
+	// Angular space (radians) to the western cell border.
 	readonly spaceWest: number
+	// Angular space (radians) to the northern band border.
 	readonly spaceNorth: number
+	// Angular space (radians) to the southern band border.
 	readonly spaceSouth: number
 }
 
+// Internal: a decoded star retaining its 1-based record number within the tile.
 interface DecodedHnsky290Star extends Hnsky290Star {
 	readonly recordNumber: number
 }
 
+// Internal: a lazily loaded tile with its parsed header and raw buffer.
 interface Hnsky290LoadedArea extends Hnsky290Area {
 	readonly header: Hnsky290FileHeader
 	readonly buffer: Buffer
@@ -122,6 +181,7 @@ export function hnsky290AreaFile(area: number): Hnsky290Area {
 	return { ...lookupHnsky290Area(area) }
 }
 
+// Returns the descriptor for a 1-based area number, throwing if out of range.
 function lookupHnsky290Area(area: number) {
 	if (!Number.isInteger(area) || area < 1 || area > HNSKY_290_AREA_COUNT) {
 		throw new RangeError(`invalid HNSKY .290 area: ${area}`)
@@ -130,6 +190,7 @@ function lookupHnsky290Area(area: number) {
 	return HNSKY_290_AREAS[area - 1]
 }
 
+// Builds the 290 area descriptors (ring, index, file name) by walking the band ring counts.
 function buildHnsky290Areas(): readonly Hnsky290Area[] {
 	const areas: Hnsky290Area[] = []
 	let offset = 0
@@ -149,6 +210,7 @@ function buildHnsky290Areas(): readonly Hnsky290Area[] {
 	return areas
 }
 
+// Builds the coarse RA/Dec bounding box of every tile from its band and RA-cell position.
 function buildHnsky290AreaBounds(): readonly StarCatalogRaDecBox[] {
 	return HNSKY_290_AREAS.map((file) => {
 		const band = file.ring - 1
@@ -429,6 +491,7 @@ export class HnskyCatalog extends BaseStarCatalog<HnskyCatalogEntry> {
 	}
 }
 
+// Normalizes any supported .290 file source (Buffer, File-like, or BufferSource) into a Buffer.
 async function bufferFromHnsky290File(file: Hnsky290File) {
 	return Buffer.isBuffer(file) ? file : 'arrayBuffer' in file ? Buffer.from(await file.arrayBuffer()) : ArrayBuffer.isView(file) ? Buffer.from(file.buffer, file.byteOffset, file.byteLength) : Buffer.from(file)
 }

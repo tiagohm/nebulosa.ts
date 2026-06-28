@@ -2,18 +2,30 @@ import { HealpixIndex, type HealpixIndexOptions } from '../../astronomy/sky/spat
 import type { Source } from '../../io/io'
 import type { StarCatalogEntry } from './catalog'
 
+// Streaming reader and HEALPix-indexed catalog for the SAO star catalog binary format. Parses the
+// fixed binary header to learn the per-entry layout, then yields each star as a StarCatalogEntry.
+// Positions are B1950 radians; proper motions are stored directly as dα/dt and dδ/dt (no cosδ factor).
+
 // http://tdc-www.harvard.edu/catalogs/sao.html
 
+// Catalog epoch tag for all SAO entries.
 const SAO_EPOCH = 'B1950'
+// Parser read-buffer size, in bytes.
 const SAO_CATALOG_BUFFER_SIZE = 64 * 1024
 
+// One parsed SAO catalog star.
 export interface SaoCatalogEntry extends Omit<StarCatalogEntry, 'epoch' | 'magnitude'> {
+	// SAO catalog number (sequence number derived from the header offset).
 	readonly id: number
+	// Fixed catalog epoch (B1950).
 	readonly epoch: 'B1950'
+	// Visual magnitude.
 	readonly magnitude: number
+	// Two-character spectral type code.
 	readonly spType: string
 }
 
+// Streams SAO catalog stars from a binary `source`. `bigEndian` selects the byte order of the file.
 export async function* readSaoCatalog(source: Source, bigEndian: boolean): AsyncIterable<SaoCatalogEntry> {
 	const buffer = Buffer.allocUnsafe(SAO_CATALOG_BUFFER_SIZE)
 	let position = 0
@@ -69,6 +81,7 @@ export async function* readSaoCatalog(source: Source, bigEndian: boolean): Async
 		return value
 	}
 
+	// Reads the SAO file header into the layout flags (star numbering, proper motion, magnitudes, entry size).
 	function readHeader() {
 		star0 = readInt()
 		star1 = readInt()
@@ -114,11 +127,13 @@ export async function* readSaoCatalog(source: Source, bigEndian: boolean): Async
 	}
 }
 
+// HEALPix spatial index over SAO entries, queryable by region. Default NSIDE 8.
 export class SaoCatalog extends HealpixIndex<SaoCatalogEntry> {
 	constructor({ nside = 8, ordering }: Partial<HealpixIndexOptions> = {}) {
 		super({ nside, ordering })
 	}
 
+	// Streams the SAO binary from `source` (`bigEndian` byte order) and indexes every entry.
 	async load(source: Source, bigEndian: boolean) {
 		for await (const entry of readSaoCatalog(source, bigEndian)) {
 			this.add(entry.id, entry.rightAscension, entry.declination, entry)

@@ -14,26 +14,53 @@ import { BaseStarCatalog, type NormalizedStarCatalogQuery, type StarCatalogEntry
 // sorted by declination. Each zone is 0.2 degree wide, beginning with z001
 // at the south celestial pole. Stars are sorted by RA inside a zone file.
 
+// Reader and star-catalog adapter for the native UCAC4 binary zone files. Lazily resolves and reads
+// 78-byte records from the per-declination zone files, optionally using the u4index.unf quarter-degree
+// RA index to narrow each zone to the candidate record ranges, and exposes them through the generic
+// BaseStarCatalog contract. Proper motion is stored as μα·cosδ and converted to ERFA's dα/dt; angles
+// are J2000 radians (positions stored as milliarcseconds internally).
+
+// Bytes per UCAC4 star record.
 const UCAC4_RECORD_SIZE = 78
+// Number of declination zones (z001..z900).
 const UCAC4_ZONE_COUNT = 900
+// Declination height of one zone, radians (0.2 deg).
 const UCAC4_ZONE_HEIGHT = 0.2 * DEG2RAD
+// Number of RA index bins per zone in the native index.
 const UCAC4_INDEX_BIN_COUNT = 1440
+// RA width of one index bin, radians (0.25 deg).
 const UCAC4_INDEX_BIN_SIZE = 0.25 * DEG2RAD
+// Total number of (zone, bin) entries in the native index.
 const UCAC4_INDEX_VALUE_COUNT = UCAC4_ZONE_COUNT * UCAC4_INDEX_BIN_COUNT
+// Size of a 32-bit integer, in bytes.
 const INT32_BYTES = 4
+// South-pole-distance offset (mas) subtracted to recover declination.
 const UCAC4_SPD_OFFSET_MAS = 324000000
+// Millimag sentinel marking a missing magnitude.
 const UCAC4_MISSING_MAG_MMAG = 20000
+// Sentinel marking a missing magnitude error.
 const UCAC4_MISSING_MAG_ERROR = 99
+// Tenths-of-mas/yr sentinel marking a missing proper-motion component.
 const UCAC4_PM_SENTINEL = 32767
+// Byte value marking missing proper-motion error data.
 const UCAC4_PM_NO_DATA = 255
+// Records read per I/O block when streaming a zone range.
 const UCAC4_BLOCK_RECORD_COUNT = 512
+// Milliarcseconds per degree.
 const MAS_PER_DEG = 3600000
+// Angular tolerance for zone/box intersection tests, radians.
 const GEOMETRY_EPSILON = 1e-12
+// Full circle expressed in milliarcseconds; bounds the stored RA.
 const FULL_CIRCLE_MAS = 360 * MAS_PER_DEG
+// Whether the host CPU is little-endian; enables zero-copy index views.
 const IS_LITTLE_ENDIAN = new Uint8Array(new Uint32Array([1]).buffer)[0] === 1
 
+// One parsed UCAC4 star exposed through the generic contract, tagged with its native location.
+// Many additional native fields are decoded but commented out below; the public shape stays minimal.
 export interface Ucac4CatalogEntry extends StarCatalogEntry {
+	// Native zone number (1..900).
 	readonly zone: number
+	// 1-based record number within the zone.
 	readonly recordNumber: number
 	// readonly modelMagnitudeMillimag: number
 	// readonly apertureMagnitudeMillimag: number
@@ -66,9 +93,13 @@ export interface Ucac4CatalogEntry extends StarCatalogEntry {
 	// readonly ucac2RecordNumber: number
 }
 
+// Parsed native u4index.unf: per-(zone, bin) starting record and count, plus the index base offset.
 interface Ucac4Index {
+	// First record number of each (zone, bin) cell.
 	readonly starts: Int32Array
+	// Star count of each (zone, bin) cell.
 	readonly counts: Int32Array
+	// Whether record numbering in the index is 0- or 1-based.
 	readonly base: 0 | 1
 }
 
@@ -641,6 +672,7 @@ function zoneIntersectsDecBox(zone: number, minDec: Angle, maxDec: Angle) {
 	return decRangesIntersect(zoneMinDec, zoneMaxDec, minDec, maxDec)
 }
 
+// True when two declination intervals overlap within the geometry tolerance.
 function decRangesIntersect(zoneMinDec: Angle, zoneMaxDec: Angle, minDec: Angle, maxDec: Angle) {
 	return maxDec >= zoneMinDec - GEOMETRY_EPSILON && minDec <= zoneMaxDec + GEOMETRY_EPSILON
 }

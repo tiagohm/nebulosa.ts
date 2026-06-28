@@ -5,31 +5,52 @@ import { clamp } from '../../math/numerical/math'
 import { type Angle, normalizeAngle } from '../../math/units/angle'
 import type { Velocity } from '../../math/units/velocity'
 
+// Generic star-catalog query model and base implementation: defines the public catalog interface and
+// entry shape, the cone/triangle/box/polygon query union, and the normalization that turns each query
+// into coarse RA/Dec preselection boxes plus an exact membership test. BaseStarCatalog drives the
+// shared stream/filter flow; concrete providers supply only the candidate stream. Angles are radians,
+// RA normalized to [0, TAU); polygon/triangle tests use a tangent-plane projection centered on the region.
+
+// Minimum declination (south pole), radians.
 const MIN_DEC = -PIOVERTWO
+// Maximum declination (north pole), radians.
 const MAX_DEC = PIOVERTWO
+// Tangent-plane span (radians) above which polygon queries are less accurate; large fields are allowed but flagged.
 const TANGENT_POLYGON_RECOMMENDED_SPAN = 20 * DEG2RAD
 
+// A sky vertex as [right ascension, declination], radians.
 export type Vertex = readonly [Angle, Angle]
 
+// Supported query region shapes.
 export type StarCatalogQueryKind = 'cone' | 'triangle' | 'box' | 'polygon'
 
+// Exact-membership test strategy: full spherical geometry or a tangent-plane projection.
 export type StarCatalogGeometryMode = 'spherical' | 'planarTangent'
 
+// A catalog star: an equatorial position plus optional epoch, photometry, and motion.
 export interface StarCatalogEntry extends Readonly<EquatorialCoordinate> {
+	// Catalog epoch as a Julian year number or a Besselian "B1950"-style string.
 	readonly epoch?: number | `B${number}`
+	// Apparent magnitude.
 	readonly magnitude?: number
 	readonly pmRA?: Angle // per year
 	readonly pmDEC?: Angle // per year
+	// Radial velocity.
 	readonly rv?: Velocity
 }
 
+// A circular (cone) region query around a center.
 export interface StarCatalogConeQuery {
 	readonly kind: 'cone'
+	// Cone center right ascension, radians.
 	readonly centerRA: Angle
+	// Cone center declination, radians.
 	readonly centerDEC: Angle
+	// Angular radius, radians (0..PI).
 	readonly radius: Angle
 }
 
+// A spherical-triangle region query.
 export interface StarCatalogTriangleQuery {
 	readonly kind: 'triangle'
 	readonly a: Vertex
@@ -37,6 +58,7 @@ export interface StarCatalogTriangleQuery {
 	readonly c: Vertex
 }
 
+// An RA/Dec rectangular region query (may wrap across RA=0).
 export interface StarCatalogBoxQuery {
 	readonly kind: 'box'
 	readonly minRA: Angle
@@ -45,13 +67,16 @@ export interface StarCatalogBoxQuery {
 	readonly maxDEC: Angle
 }
 
+// A convex-polygon region query.
 export interface StarCatalogPolygonQuery {
 	readonly kind: 'polygon'
 	readonly vertices: readonly Vertex[]
 }
 
+// Union of all public query shapes.
 export type StarCatalogQuery = StarCatalogConeQuery | StarCatalogTriangleQuery | StarCatalogBoxQuery | StarCatalogPolygonQuery
 
+// Public catalog interface: region queries (sync or async) plus a streaming variant.
 export interface StarCatalog<T extends StarCatalogEntry = StarCatalogEntry> {
 	readonly queryRegion: (query: StarCatalogQuery) => Promise<readonly T[]> | readonly T[]
 	readonly queryCone: (centerRA: Angle, centerDEC: Angle, radius: Angle) => Promise<readonly T[]> | readonly T[]
@@ -61,6 +86,7 @@ export interface StarCatalog<T extends StarCatalogEntry = StarCatalogEntry> {
 	readonly streamRegion: (query: StarCatalogQuery) => AsyncIterable<T> | Iterable<T>
 }
 
+// A non-wrapping RA/Dec box used as a coarse provider preselection window.
 export interface StarCatalogRaDecBox {
 	readonly minRA: Angle
 	readonly maxRA: Angle
@@ -68,16 +94,25 @@ export interface StarCatalogRaDecBox {
 	readonly maxDEC: Angle
 }
 
+// Shared fields of a normalized query: filters, geometry mode, and coarse preselection metadata.
 interface NormalizedQueryBase {
+	// Lower magnitude bound, if filtering by brightness.
 	readonly magnitudeMin?: number
+	// Upper magnitude bound, if filtering by brightness.
 	readonly magnitudeMax?: number
+	// Maximum number of results to materialize.
 	readonly limit?: number
+	// Exact-test strategy.
 	readonly geometryMode: StarCatalogGeometryMode
+	// True when the region wraps across RA=0 (split into multiple boxes).
 	readonly wrapAround: boolean
+	// Coarse RA/Dec boxes a provider can use to preselect candidates.
 	readonly preselectionBoxes: readonly StarCatalogRaDecBox[]
+	// Optional anchor (region center) for result ordering.
 	readonly sortAnchor?: Vertex
 }
 
+// Normalized cone query with cached center trig.
 interface NormalizedConeQuery extends NormalizedQueryBase {
 	readonly kind: 'cone'
 	readonly centerRA: Angle
@@ -88,29 +123,40 @@ interface NormalizedConeQuery extends NormalizedQueryBase {
 	readonly cosCenterDEC: number
 }
 
+// Normalized triangle query with its tangent-plane projection.
 interface NormalizedTriangleQuery extends NormalizedQueryBase {
 	readonly kind: 'triangle'
+	// Triangle vertices projected onto the tangent plane.
 	readonly projectedVertices: readonly Vertex[]
+	// Tangent-plane center right ascension, radians.
 	readonly tangentCenterRA: Angle
+	// Tangent-plane center declination, radians.
 	readonly tangentCenterDEC: Angle
 	// Cached cos of the tangent center declination, reused when projecting each candidate.
 	readonly cosTangentCenterDEC: number
 }
 
+// Normalized box query with its exact non-wrapping pieces.
 interface NormalizedBoxQuery extends NormalizedQueryBase {
 	readonly kind: 'box'
+	// Exact RA/Dec boxes the entry must fall inside.
 	readonly boxes: readonly StarCatalogRaDecBox[]
 }
 
+// Normalized polygon query with its tangent-plane projection.
 interface NormalizedPolygonQuery extends NormalizedQueryBase {
 	readonly kind: 'polygon'
+	// Polygon vertices projected onto the tangent plane.
 	readonly projectedVertices: readonly Vertex[]
+	// Tangent-plane center right ascension, radians.
 	readonly tangentCenterRA: Angle
+	// Tangent-plane center declination, radians.
 	readonly tangentCenterDEC: Angle
 	// Cached cos of the tangent center declination, reused when projecting each candidate.
 	readonly cosTangentCenterDEC: number
 }
 
+// Union of all normalized query shapes.
 export type NormalizedStarCatalogQuery = NormalizedConeQuery | NormalizedTriangleQuery | NormalizedBoxQuery | NormalizedPolygonQuery
 
 // Implements the generic query, filtering, projection, and propagation flow for concrete catalogs.
