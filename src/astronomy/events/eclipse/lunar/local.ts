@@ -812,6 +812,7 @@ export interface LocalLunarEclipseSvgPolygon {
 	readonly points: readonly Point[]
 }
 
+// Any one drawable Local View shape.
 export type LocalLunarEclipseSvgShape = LocalLunarEclipseSvgCircle | LocalLunarEclipseSvgLine | LocalLunarEclipseSvgPath | LocalLunarEclipseSvgPolygon
 
 // Serializable Local View geometry: plain shapes only, no text and no UI.

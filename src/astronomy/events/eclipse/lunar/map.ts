@@ -182,6 +182,7 @@ export interface LunarEclipseMapSvgPaths {
 	readonly sublunarPoints: LunarEclipseMapPoints
 }
 
+// Default SVG rendering options: stroke-only output, below-horizon region, 2-decimal coordinates.
 const DEFAULT_LUNAR_ECLIPSE_MAP_SVG_OPTIONS: LunarEclipseMapSvgOptions = {
 	fill: false,
 	fillRegion: 'belowHorizon',
@@ -397,6 +398,7 @@ function projectRingPieces(ring: EclipseGeoBranch, projection: CylindricalProjec
 	return pieces
 }
 
+// The four geographic corners of the whole-world rectangle (+-PI longitude, +-PI/2 latitude), radians.
 const WORLD_RECT_BORDERS = [
 	[-PI, -PIOVERTWO],
 	[PI, -PIOVERTWO],
@@ -416,6 +418,7 @@ function projectedWorldRect(projection: CylindricalProjection, options: Projecti
 	return rect
 }
 
+// Orders geo points by ascending longitude (x).
 function ringPointComparatorByX(a: EclipseGeoPoint, b: EclipseGeoPoint) {
 	return a.x - b.x
 }
