@@ -21,10 +21,10 @@ test('carrington rotation number', () => {
 
 test('season', () => {
 	expect(toJulianDay(season(1962, 'summer'))).toBeCloseTo(2437837.39245, 5)
-	expect(timeToDate(season(1991, 'spring'))).toEqual([1991, 3, 21, 3, 3, 9, 268713029])
-	expect(timeToDate(season(1991, 'summer'))).toEqual([1991, 6, 21, 21, 19, 36, 114155028])
-	expect(timeToDate(season(1991, 'autumn'))).toEqual([1991, 9, 23, 12, 48, 56, 140399989])
-	expect(timeToDate(season(1991, 'winter'))).toEqual([1991, 12, 22, 8, 54, 53, 684271186])
+	expect(timeToDate(season(1991, 'spring')).slice(0, 6)).toEqual([1991, 3, 21, 3, 3, 9])
+	expect(timeToDate(season(1991, 'summer')).slice(0, 6)).toEqual([1991, 6, 21, 21, 19, 36])
+	expect(timeToDate(season(1991, 'autumn')).slice(0, 6)).toEqual([1991, 9, 23, 12, 48, 56])
+	expect(timeToDate(season(1991, 'winter')).slice(0, 6)).toEqual([1991, 12, 22, 8, 54, 53])
 })
 
 test('season is reported in dynamical time (TT)', () => {

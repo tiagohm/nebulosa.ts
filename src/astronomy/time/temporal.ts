@@ -161,6 +161,31 @@ export function temporalDayOfWeek(temporal: Temporal) {
 	return pmod(Math.floor(temporal / DAYS) + 4, 7)
 }
 
+// Returns the day of week from year/month/day tuple using Zeller’s Congruence, where 0 is Sunday.
+export function zellersCongruence(year: number | readonly [number, number, number, ...number[]], month: number = 1, day: number = 1) {
+	if (typeof year !== 'number') {
+		month = year[1]
+		day = year[2]
+		year = year[0]
+	}
+
+	// Adjust Jan and Feb to months 13 and 14 of the previous year
+	if (month < 3) {
+		month += 12
+		year -= 1
+	}
+
+	// Extract year part (k) and century (j)
+	const k = year % 100
+	const j = Math.floor(year / 100)
+
+	// Gregorian calendar formula
+	// 0=Saturday, 1=Sunday, ..., 6=Friday
+	const h = (day + Math.floor((13 * (month + 1)) / 5) + k + Math.floor(k / 4) + Math.floor(j / 4) + 5 * j) % 7
+
+	return (h + 6) % 7
+}
+
 // Reads a single UTC calendar or time field.
 export function temporalGet(temporal: Temporal, unit: TemporalUnit | TemporalUnitShort) {
 	const [, time] = splitTemporalDay(temporal)
@@ -200,8 +225,8 @@ export function temporalSet(temporal: Temporal, value: number, unit: TemporalUni
 }
 
 // Formats a timestamp with either a custom pattern or Intl.DateTimeFormat.
-export function formatTemporal(temporal: Temporal, format: Intl.DateTimeFormat | string = DATE_TIME_FORMAT, timezone: number = TIMEZONE) {
-	return typeof format === 'string' ? formatTemporalFromPattern(temporal, format, timezone) : format.format(temporal)
+export function formatTemporal(temporal: Temporal | ReturnType<typeof temporalToDate>, format: Intl.DateTimeFormat | string = DATE_TIME_FORMAT, timezone: number = TIMEZONE) {
+	return typeof format === 'string' ? formatTemporalFromPattern(temporal, format, timezone) : format.format(typeof temporal === 'number' ? temporal : Date.UTC(...temporal))
 }
 
 // Month and weekday display names (and lowercase short month names for case-insensitive parsing), plus
@@ -296,14 +321,17 @@ export function parseTemporal(input: string, pattern: string): Temporal {
 export const TIMEZONE = -new Date().getTimezoneOffset()
 
 // Formats a UTC timestamp using a fixed-width pattern.
-export function formatTemporalFromPattern(temporal: Temporal, pattern: string, timezone: number = TIMEZONE) {
+export function formatTemporalFromPattern(temporal: Temporal | ReturnType<typeof temporalToDate>, pattern: string, timezone: number = TIMEZONE) {
 	const tokens = tokenizePattern(pattern)
 	const output: string[] = []
 
-	if (timezone) temporal += timezone * MINUTES
+	if (timezone !== 0) {
+		if (typeof temporal !== 'number') temporal = temporalFromDate(...temporal)
+		temporal += timezone * MINUTES
+	}
 
-	const [year, month, day, hour, minute, second, millisecond] = temporalToDate(temporal)
-	const weekday = temporalDayOfWeek(temporal)
+	const [year, month, day, hour, minute, second, millisecond] = typeof temporal === 'number' ? temporalToDate(temporal) : temporal
+	const weekday = typeof temporal === 'number' ? temporalDayOfWeek(temporal) : zellersCongruence(temporal)
 
 	for (const { found, text } of tokens) {
 		if (found) {

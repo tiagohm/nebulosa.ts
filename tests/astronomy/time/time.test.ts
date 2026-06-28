@@ -154,9 +154,9 @@ test('time convert returns the same object for an unchanged scale', () => {
 test('to date', () => {
 	expect(timeToDate(timeYMDHMS(2020, 1, 1, 12, 0, 0))).toEqual([2020, 1, 1, 12, 0, 0, 0])
 	expect(timeToDate(timeYMDHMS(2020, 1, 1, 23, 59, 59))).toEqual([2020, 1, 1, 23, 59, 59, 0])
-	expect(timeToDate(timeYMDHMS(2020, 1, 1, 23, 59, 59.5))).toEqual([2020, 1, 1, 23, 59, 59, 500000000])
-	expect(timeToDate(time(2460677, 0.503116, 0))).toEqual([2025, 1, 2, 0, 4, 29, 222400000])
-	expect(timeToDate(time(2460678, -0.496884, 0))).toEqual([2025, 1, 2, 0, 4, 29, 222400000])
+	expect(timeToDate(timeYMDHMS(2020, 1, 1, 23, 59, 59.5))).toEqual([2020, 1, 1, 23, 59, 59, 500])
+	expect(timeToDate(time(2460677, 0.503116, 0))).toEqual([2025, 1, 2, 0, 4, 29, 222])
+	expect(timeToDate(time(2460678, -0.496884, 0))).toEqual([2025, 1, 2, 0, 4, 29, 222])
 	expect(timeToDate(timeJulianYear(2000))).toEqual([2000, 1, 1, 12, 0, 0, 0])
 })
 
@@ -643,7 +643,6 @@ test('time is serializable', () => {
 			expect(json).toContain(`"scale":${a.scale}`)
 
 			const b = JSON.parse(json) as Time
-			console.info(json)
 
 			expect(b.day).toBe(a.day)
 			expect(b.fraction).toBe(a.fraction)

@@ -340,8 +340,8 @@ export function timeToDate(time: Time): [number, number, number, number, number,
 	const hour = fraction * 24
 	const minute = ((hour - Math.trunc(hour)) * 60) % 60
 	const second = ((minute - Math.trunc(minute)) * 60) % 60
-	const nano = (second - Math.trunc(second)) * 1000000000
-	return [year, month, day, Math.trunc(hour), Math.trunc(minute), Math.trunc(second), Math.trunc(nano)]
+	const milli = (second - Math.trunc(second)) * 1000 // 000000
+	return [year, month, day, Math.trunc(hour), Math.trunc(minute), Math.trunc(second), Math.trunc(milli)]
 }
 
 // Converts the time to Unix timestamp.

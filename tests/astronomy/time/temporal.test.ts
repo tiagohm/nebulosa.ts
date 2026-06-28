@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 // oxfmt-ignore
-import { DATE_FORMAT, daysInMonth, formatTemporal, formatTemporalFromPattern, isLeapYear, parseTemporal, TIME_FORMAT, temporalAdd, temporalDayOfWeek, temporalEndOfDay, temporalFromDate, temporalFromFractionOfYear, temporalFromTime, temporalGet, temporalSet, temporalStartOfDay, temporalSubtract, temporalToDate } from '../../../src/astronomy/time/temporal'
-import { timeYMDHMS } from '../../../src/astronomy/time/time'
+import { DATE_FORMAT, daysInMonth, formatTemporal, formatTemporalFromPattern, isLeapYear, parseTemporal, TIME_FORMAT, temporalAdd, temporalDayOfWeek, temporalEndOfDay, temporalFromDate, temporalFromFractionOfYear, temporalFromTime, temporalGet, temporalSet, temporalStartOfDay, temporalSubtract, temporalToDate, zellersCongruence } from '../../../src/astronomy/time/temporal'
+import { timeToDate, timeYMDHMS } from '../../../src/astronomy/time/time'
 
 test('is leap year', () => {
 	expect(isLeapYear(2020)).toBeTrue()
@@ -202,6 +202,15 @@ test('day of week', () => {
 	expect(temporalDayOfWeek(1756510498123)).toBe(5)
 })
 
+test('day of week using zellersCongruence', () => {
+	expect(zellersCongruence(2024, 2, 29)).toBe(4)
+	expect(zellersCongruence([2025, 8, 29])).toBe(5)
+	expect(zellersCongruence(1776, 7, 4)).toBe(4)
+	expect(zellersCongruence(2017, 10, 22)).toBe(0)
+	expect(zellersCongruence(2026, 6, 26)).toBe(5)
+	expect(zellersCongruence([2000, 1, 1])).toBe(6)
+})
+
 test('get', () => {
 	expect(temporalGet(1709210096000, 'y')).toBe(2024)
 	expect(temporalGet(1709210096000, 'mo')).toBe(2)
@@ -267,6 +276,13 @@ describe('format', () => {
 		expect(formatTemporal(1756510498123, 'YYYY-MM-DD HH:mm:ss', 180)).toEqual('2025-08-30 02:34:58')
 		expect(formatTemporal(1756510498123, 'YYYY-MM-DD HH:mm:ss', -180)).toEqual('2025-08-29 20:34:58')
 		expect(formatTemporal(1756510498123, 'YYYY-MM-DD HH:mm:ss')).toEqual('2025-08-29 23:34:58')
+	})
+
+	test('date array', () => {
+		expect(formatTemporal([2025, 8, 29, 23, 34, 58, 123], 'YYYY-MM-DD HH:mm:ss', -180)).toEqual('2025-08-29 20:34:58')
+		expect(formatTemporal([2025, 8, 29, 23, 34, 58, 123], 'YYYY-MM-DD HH:mm:ss')).toEqual('2025-08-29 23:34:58')
+		expect(formatTemporal(timeToDate(timeYMDHMS(2025, 8, 29, 23, 34, 58.123)), undefined, -180)).toEqual('2025-08-29 20:34:58.123')
+		expect(formatTemporal(timeToDate(timeYMDHMS(2025, 8, 29, 23, 34, 58.123)))).toEqual('2025-08-29 23:34:58.123')
 	})
 })
 
