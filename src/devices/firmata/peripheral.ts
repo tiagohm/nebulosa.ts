@@ -4,10 +4,17 @@ import type { Pressure } from '../../math/units/pressure'
 import type { Temperature } from '../../math/units/temperature'
 import { type FirmataClient, type FirmataClientHandler, type Pin, PinMode } from './firmata'
 
+// Peripheral abstractions for Firmata-attached hardware: the common Peripheral contract, sensor/actuator
+// interfaces (thermometer, barometer, radio, RTC, display, I/O expander, etc.) with their measurement
+// units, and base classes that manage listeners, first-read delivery, and queued I2C register reads.
+
+// Callback invoked with the peripheral whenever it produces a new reading.
 export type PeripheralListener<D extends Peripheral> = (device: D) => void
 
+// Seek direction for a radio tuner.
 export type RadioTunerSeekDirection = 'up' | 'down'
 
+// Base contract for every Firmata peripheral: identity, owning client, and start/stop lifecycle.
 export interface Peripheral extends Disposable {
 	readonly name: string
 	readonly client: FirmataClient
@@ -15,53 +22,64 @@ export interface Peripheral extends Disposable {
 	readonly stop: () => void
 }
 
+// A peripheral that emits change notifications to attached listeners.
 export interface ListenablePeripheral<D extends Peripheral = never> extends Peripheral {
 	readonly addListener: (listener: PeripheralListener<D>) => void
 	readonly removeListener: (listener: PeripheralListener<D>) => void
 }
 
+// Temperature sensor; temperature in degrees Celsius.
 export interface Thermometer extends Peripheral {
 	readonly temperature: Temperature
 }
 
+// Relative-humidity sensor; humidity in percent (0..100).
 export interface Hygrometer extends Peripheral {
 	readonly humidity: number
 }
 
+// Pressure sensor; pressure in millibar (hPa).
 export interface Barometer extends Peripheral {
 	readonly pressure: Pressure
 }
 
+// Altitude estimator derived from pressure; altitude in metres.
 export interface Altimeter extends Peripheral {
 	readonly altitude: Distance
 }
 
+// Ambient-light sensor; illuminance in lux.
 export interface Luxmeter extends Peripheral {
 	readonly lux: number
 }
 
+// Current sensor; current in amperes.
 export interface Ammeter extends Peripheral {
 	readonly current: number // A
 }
 
+// Three-axis accelerometer; components in m/s^2.
 export interface Accelerometer extends Peripheral {
 	readonly ax: number // m/s^2
 	readonly ay: number // m/s^2
 	readonly az: number // m/s^2
 }
 
+// Three-axis gyroscope; angular rates in radians per second.
 export interface Gyroscope extends Peripheral {
 	readonly gx: Angle // rad/s
 	readonly gy: Angle // rad/s
 	readonly gz: Angle // rad/s
 }
 
+// Three-axis magnetometer; field components in gauss.
 export interface Magnetometer extends Peripheral {
 	readonly x: number // gauss
 	readonly y: number // gauss
 	readonly z: number // gauss
 }
 
+// FM radio receiver: tuning, volume, mute/stereo flags, seek, and signal-quality readouts.
 export interface RadioTuner extends Peripheral {
 	frequency: number // MHz
 	volume: number // 0..100
@@ -79,6 +97,7 @@ export interface RadioTuner extends Peripheral {
 	readonly seek: (direction: RadioTunerSeekDirection, wrap: boolean) => void
 }
 
+// FM radio transmitter: carrier frequency (MHz) plus mute/stereo control.
 export interface RadioTransmitter extends Peripheral {
 	frequency: number // MHz
 	muted: boolean
@@ -89,6 +108,7 @@ export interface RadioTransmitter extends Peripheral {
 	readonly unmute: () => void
 }
 
+// Real-time clock: broken-down date/time fields plus update (set fields) and sync (set from a Date).
 export interface RealTimeClock extends Peripheral {
 	readonly year: number
 	readonly month: number
@@ -102,6 +122,7 @@ export interface RealTimeClock extends Peripheral {
 	readonly sync: (date?: Date) => void
 }
 
+// I2C/SPI I/O expander exposing additional digital pins with per-pin mode/read/write and a flush.
 export interface IOExpander extends Peripheral {
 	readonly pinMode: (pin: number, mode: PinMode) => void
 	readonly pinRead: (pin: number) => number | boolean
@@ -109,6 +130,7 @@ export interface IOExpander extends Peripheral {
 	readonly flush: () => void
 }
 
+// Character LCD display (HD44780-style) control surface.
 export interface Display extends Peripheral {
 	readonly begin: (columns: number, rows: number) => void
 	readonly clear: () => void
@@ -133,14 +155,19 @@ export interface Display extends Peripheral {
 	readonly print: (text: string | number | boolean | bigint) => number
 }
 
+// One outstanding I2C register read awaiting its Firmata reply, with its resolve/reject and timeout.
 interface PendingTwoWireRead {
 	readonly reject: (error: Error) => void
 	readonly resolve: (data: Buffer) => void
 	readonly timer: NodeJS.Timeout
 }
 
+// Default polling period in milliseconds for peripherals that sample on a timer.
 export const DEFAULT_POLLING_INTERVAL = 5000
 
+// Base implementation shared by all peripherals: manages listeners, guarantees a first reading to each
+// new listener (even when the value is unchanged), and provides a promise-based queue for I2C register
+// reads keyed by address+register. Subclasses implement start/stop and call commit/fire on new data.
 export abstract class PeripheralBase<D extends Peripheral = never> implements FirmataClientHandler {
 	readonly #listeners = new Set<PeripheralListener<D>>()
 	// Listeners that have not yet received a completed read. Tracked per listener so a listener attached
@@ -172,11 +199,13 @@ export abstract class PeripheralBase<D extends Peripheral = never> implements Fi
 		}
 	}
 
+	// Detaches a listener and drops any pending first-read owed to it.
 	removeListener(listener: PeripheralListener<D>) {
 		this.#listeners.delete(listener)
 		this.#pendingFirstRead.delete(listener)
 	}
 
+	// Notifies all listeners unconditionally and marks every first-read satisfied.
 	protected fire() {
 		this.#pendingFirstRead.clear()
 		for (const listener of this.#listeners) listener(this as never)
@@ -257,14 +286,19 @@ export abstract class PeripheralBase<D extends Peripheral = never> implements Fi
 		return `ADDR:0x${address.toString(16).padStart(2, '0')}:REG:0x${register.toString(16).padStart(2, '0')}`
 	}
 
+	// Firmata close hook: stops the peripheral when its own client disconnects.
 	close(client: FirmataClient) {
 		if (this.client === client) this.stop()
 	}
 }
 
+// Base class for peripherals read from a single analog (ADC) pin. Subclasses provide the pin and a
+// calculate() that converts a raw ADC value into the derived reading, returning whether it changed.
 export abstract class ADCPeripheral<D extends Peripheral = never> extends PeripheralBase<D> {
+	// Analog pin this peripheral reads.
 	abstract readonly pin: number
 
+	// Converts a raw ADC sample into the derived value(s); returns whether the reading changed.
 	abstract calculate(value: number): boolean
 
 	// Enables analog reporting for the configured pin and delivers an initial sample.
@@ -287,6 +321,7 @@ export abstract class ADCPeripheral<D extends Peripheral = never> extends Periph
 		this.client.requestAnalogPinReport(this.pin, false)
 	}
 
+	// Firmata analog-report hook: recomputes and commits the reading when the watched pin changes.
 	pinChange(client: FirmataClient, pin: Pin) {
 		if (this.client === client && pin.id === this.pin) {
 			this.commit(this.calculate(pin.value))

@@ -2,29 +2,42 @@ import { clamp } from '../../math/numerical/math'
 import { type FirmataClient, PinMode } from './firmata'
 import { DEFAULT_POLLING_INTERVAL, type IOExpander, PeripheralBase } from './peripheral'
 
+// Driver for the PCF8574 8-bit I2C I/O expander over Firmata. The chip is quasi-bidirectional: a pin is
+// "input" by writing it high (released) and read back, "output" by driving it low/high. This class
+// stages an output byte plus an input mask, writes the effective port byte, and polls the port snapshot.
+
+// Initial port configuration for a PCF8574.
 export interface PCF8574Options {
+	// Initial output byte (1 = high). Each set bit drives the corresponding pin high.
 	readonly output?: number
+	// Bitmask of pins treated as inputs (1 = input, released high for reading).
 	readonly inputMask?: number
 }
 
+// Default configuration: all pins high and treated as inputs.
 export const DEFAULT_PCF8574_OPTIONS: Required<PCF8574Options> = {
 	output: 0xff,
 	inputMask: 0xff,
 }
 
+// PCF8574 8-bit I2C I/O expander peripheral.
 // https://www.ti.com/lit/ds/symlink/pcf8574.pdf
-
 export class PCF8574 extends PeripheralBase<PCF8574> implements IOExpander {
+	// Default I2C address and the valid address ranges (standard 0x20–0x27, PCF8574A 0x38–0x3F).
 	static readonly ADDRESS = 0x20
 	static readonly MIN_ADDRESS = 0x20
 	static readonly MAX_ADDRESS = 0x27
 	static readonly ALTERNATIVE_MIN_ADDRESS = 0x38
 	static readonly ALTERNATIVE_MAX_ADDRESS = 0x3f
+	// Full 8-bit port mask and the number of pins.
 	static readonly PORT_MASK = 0xff
 	static readonly PIN_COUNT = 8
 
+	// Latest port snapshot read from the chip.
 	#state: number
+	// Staged output bits.
 	#output: number
+	// Pins currently treated as inputs (released high).
 	#inputMask: number
 	#started = false
 	#timer?: NodeJS.Timeout

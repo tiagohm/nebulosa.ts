@@ -1,35 +1,54 @@
 import type { NumberArray } from '../../math/numerical/math'
 
+// Firmata protocol implementation: a byte-stream state machine (FSM) that parses incoming Firmata/sysex
+// messages, and a FirmataClient that encodes outgoing commands (pin control, I2C/two-wire, 1-Wire) over a
+// pluggable transport. Mirrors the reference protocol; 7-bit packing helpers handle the wire encoding.
 // https://github.com/firmata/protocol/blob/master/protocol.md
 
+// Mapping from analog channel index to its underlying pin id, as reported by the board.
 export type AnalogMapping = Record<number, number>
 
+// Whether an I2C transaction releases the bus ('stop') or issues a repeated start ('restart').
 export type TwoWireAutoRestartMode = 'stop' | 'restart'
 
+// I2C address width in bits.
 export type TwoWireAddressMode = 7 | 10
 
+// I2C transaction kind selecting the two-wire request sub-command.
 export type TwoWireOperationMode = 'write' | 'read' | 'readContinuously' | 'stop'
 
+// 1-Wire bus power scheme: externally powered ('normal') or parasitic.
 export type OneWirePowerMode = 'normal' | 'parasitic'
 
+// 1-Wire search scope: all devices or only those signalling an alarm.
 export type OneWireSearchMode = 'all' | 'alarms'
 
+// Options assembling a single 1-Wire command (reset/skip/select prefixes, optional write/read/delay).
 export interface OneWireCommandOptions {
+	// Issue a bus reset before the command.
 	readonly reset?: boolean
+	// Use SKIP ROM instead of addressing a specific device.
 	readonly skip?: boolean
+	// 8-byte ROM address to SELECT (when not skipping).
 	readonly address?: Readonly<NumberArray> | Buffer
+	// Number of bytes to read after the write.
 	readonly bytesToRead?: number
+	// Correlation id echoed in the read reply.
 	readonly correlationId?: number
+	// Microsecond delay inserted before reading.
 	readonly delay?: number
+	// Bytes to write to the bus.
 	readonly data?: Readonly<NumberArray> | Buffer
 }
 
+// Byte-stream transport abstraction (TCP, serial, etc.) used to send/receive Firmata bytes.
 export interface Transport {
 	readonly write: (data: string | Bun.BufferSource, byteOffset?: number, byteLength?: number) => void
 	readonly flush: () => void
 	readonly close: () => void
 }
 
+// Board capability description: pin-classification predicates and per-mode channel-index conversions.
 export interface Board {
 	readonly name: string
 	readonly isPinLED: (pin: number) => boolean
@@ -46,6 +65,7 @@ export interface Board {
 	readonly pinToServo: (pin: number) => number
 }
 
+// Runtime state of one board pin: its id, supported modes, current mode, and last value.
 export interface Pin {
 	readonly id: number
 	readonly modes: Set<PinMode>
@@ -53,6 +73,8 @@ export interface Pin {
 	value: number
 }
 
+// Optional callbacks for Firmata events. Every method is optional so handlers subscribe only to the
+// messages they care about; each receives the originating client. Mirrors the protocol message set.
 export interface FirmataClientHandler {
 	readonly ready?: (client: FirmataClient) => void
 	readonly pinChange?: (client: FirmataClient, pin: Pin) => void
@@ -76,10 +98,13 @@ export interface FirmataClientHandler {
 	readonly close?: (client: FirmataClient) => void
 }
 
+// One state of the parser FSM: consumes a byte and may transition the machine.
 export interface FirmataFsmState {
 	readonly process: (byte: number, fsm: FirmataFsm) => void
 }
 
+// Firmata pin modes (values match the protocol). Extended modes follow the standard set; UNSUPPORTED and
+// IGNORED are sentinel values from capability reports.
 export enum PinMode {
 	INPUT,
 	OUTPUT,
@@ -102,6 +127,7 @@ export enum PinMode {
 	IGNORED = 127,
 }
 
+// Default 1-Wire command options: no reset, address a specific device (no skip).
 export const DEFAULT_ONE_WIRE_COMMAND_OPTIONS: OneWireCommandOptions = {
 	reset: false,
 	skip: false,
@@ -109,12 +135,15 @@ export const DEFAULT_ONE_WIRE_COMMAND_OPTIONS: OneWireCommandOptions = {
 
 // PROTOCOL
 
+// Maps a raw protocol mode byte to a PinMode, folding the ignore sentinel and out-of-range values to
+// IGNORED/UNSUPPORTED respectively.
 function resolvePinMode(mode: number) {
 	if (mode === PIN_MODE_IGNORE) return PinMode.IGNORED
 	else if (mode >= TOTAL_PIN_MODES) return PinMode.UNSUPPORTED
 	else return mode as PinMode
 }
 
+// Thin adapter feeding an incoming byte buffer into the parser FSM one byte at a time.
 export class FirmataParser {
 	readonly #fsm: FirmataFsm
 
@@ -122,12 +151,14 @@ export class FirmataParser {
 		this.#fsm = fsm
 	}
 
+	// Processes every byte of a chunk through the FSM.
 	process(data: Buffer) {
 		for (let i = 0; i < data.byteLength; i++) {
 			this.processByte(data[i])
 		}
 	}
 
+	// Processes a single byte through the FSM.
 	processByte(b: number) {
 		this.#fsm.process(b)
 	}
@@ -209,15 +240,18 @@ const ONE_WIRE_WRITE_REQUEST_BIT = 0x20
 const MIN_SAMPLING_INTERVAL = 1
 const MAX_SAMPLING_INTERVAL = 16383
 
+// Decodes one byte from the two-7-bit-bytes layout (LSB nibble then MSB bit) at `offset`.
 export function decodeByteAs7Bit(input: Readonly<NumberArray> | Buffer, offset: number) {
 	return (input[offset] & 0x7f) | ((input[offset + 1] & 0x01) << 7)
 }
 
+// Encodes one byte as two 7-bit bytes (low 7 bits, then bit 7) into `output` at `offset`.
 export function encodeByteAs7Bit(data: number, output: NumberArray | Buffer, offset: number = 0) {
 	output[offset++] = data & 0x7f
 	output[offset] = (data >>> 7) & 1
 }
 
+// Unpacks a densely packed 7-bit byte stream (8 data bytes per 7 wire bytes) back into raw bytes.
 export function decodePacked7Bit(input: Readonly<NumberArray> | Buffer, offset: number = 0, length: number = input.length - offset) {
 	const output = Buffer.alloc(Math.floor(Math.max(0, length) * 0.875))
 
@@ -233,6 +267,7 @@ export function decodePacked7Bit(input: Readonly<NumberArray> | Buffer, offset: 
 	return output
 }
 
+// Packs raw bytes into the dense 7-bit wire encoding (inverse of decodePacked7Bit).
 export function encodePacked7Bit(input: Readonly<NumberArray> | Buffer, offset: number = 0, length: number = input.length - offset) {
 	const output = Buffer.alloc(Math.ceil((Math.max(0, length) << 3) / 7))
 
@@ -248,6 +283,7 @@ export function encodePacked7Bit(input: Readonly<NumberArray> | Buffer, offset: 
 	return output
 }
 
+// Parses the two-byte protocol version (major, minor) and emits a version event.
 class ParsingVersionMessageState implements FirmataFsmState {
 	process(b: number, fsm: FirmataFsm) {
 		if (fsm.offset === 0) {
@@ -261,6 +297,7 @@ class ParsingVersionMessageState implements FirmataFsmState {
 
 const PARSING_VERSION_MESSAGE_STATE = new ParsingVersionMessageState()
 
+// Buffers an unrecognized sysex payload until END_SYSEX and emits it as a custom message.
 class ParsingCustomSysexMessageState implements FirmataFsmState {
 	process(b: number, fsm: FirmataFsm) {
 		if (b === END_SYSEX) {
@@ -274,6 +311,7 @@ class ParsingCustomSysexMessageState implements FirmataFsmState {
 
 const PARSING_CUSTOM_SYSEX_MESSAGE_STATE = new ParsingCustomSysexMessageState()
 
+// Parses the firmware report (version bytes plus name) and emits a firmwareMessage event.
 class ParsingFirmwareMessageState implements FirmataFsmState {
 	process(b: number, fsm: FirmataFsm) {
 		if (b === END_SYSEX) {
@@ -287,6 +325,7 @@ class ParsingFirmwareMessageState implements FirmataFsmState {
 
 const PARSING_FIRMWARE_MESSAGE_STATE = new ParsingFirmwareMessageState()
 
+// Parses an extended (multi-byte) analog value for one pin and emits an analogMessage event.
 class ParsingExtendedAnalogMessageState implements FirmataFsmState {
 	process(b: number, fsm: FirmataFsm) {
 		if (b === END_SYSEX) {
@@ -307,6 +346,8 @@ class ParsingExtendedAnalogMessageState implements FirmataFsmState {
 
 const PARSING_EXTENDED_ANALOG_MESSAGE_STATE = new ParsingExtendedAnalogMessageState()
 
+// Parses the per-pin capability report (mode/resolution pairs terminated by 127), emitting a
+// pinCapability event per pin and pinCapabilitiesFinished at the end.
 class ParsingCapabilityResponseState implements FirmataFsmState {
 	process(b: number, fsm: FirmataFsm) {
 		if (b === END_SYSEX) {
@@ -334,6 +375,7 @@ class ParsingCapabilityResponseState implements FirmataFsmState {
 
 const PARSING_CAPABILITY_RESPONSE_STATE = new ParsingCapabilityResponseState()
 
+// Parses the analog-mapping report (analog channel per pin, 127 = none) and emits an analogMapping event.
 class ParsingAnalogMappingState implements FirmataFsmState {
 	process(b: number, fsm: FirmataFsm) {
 		if (b === END_SYSEX) {
@@ -355,6 +397,7 @@ class ParsingAnalogMappingState implements FirmataFsmState {
 
 const PARSING_ANALOG_MAPPING_STATE = new ParsingAnalogMappingState()
 
+// Parses a pin-state response (pin, mode, multi-byte value) and emits a pinState event.
 class PinStateParsingState implements FirmataFsmState {
 	process(b: number, fsm: FirmataFsm) {
 		if (b === END_SYSEX) {
@@ -374,6 +417,7 @@ class PinStateParsingState implements FirmataFsmState {
 
 const PIN_STATE_PARSING_STATE = new PinStateParsingState()
 
+// Parses a string-data sysex payload and emits a textMessage event.
 class ParsingStringMessageState implements FirmataFsmState {
 	process(b: number, fsm: FirmataFsm) {
 		if (b === END_SYSEX) {
@@ -387,6 +431,7 @@ class ParsingStringMessageState implements FirmataFsmState {
 
 const PARSING_STRING_MESSAGE_STATE = new ParsingStringMessageState()
 
+// Parses an I2C reply (address, register, 7-bit-encoded data bytes) and emits a twoWireMessage event.
 class ParsingTwoWireMessageState implements FirmataFsmState {
 	process(b: number, fsm: FirmataFsm) {
 		if (b === END_SYSEX) {
@@ -405,6 +450,8 @@ class ParsingTwoWireMessageState implements FirmataFsmState {
 
 const PARSING_TWO_WIRE_MESSAGE_STATE = new ParsingTwoWireMessageState()
 
+// Parses 1-Wire replies: search/alarm results (8-byte ROM addresses) emit oneWireSearchReply; read
+// results (correlation id + data) emit oneWireReadReply. Payloads are densely 7-bit packed.
 class ParsingOneWireMessageState implements FirmataFsmState {
 	process(b: number, fsm: FirmataFsm) {
 		if (b === END_SYSEX) {
@@ -439,6 +486,8 @@ class ParsingOneWireMessageState implements FirmataFsmState {
 
 const PARSING_ONE_WIRE_MESSAGE_STATE = new ParsingOneWireMessageState()
 
+// Dispatches the first byte after START_SYSEX to the matching sub-parser state, falling back to the
+// custom-sysex parser for unknown commands.
 class ParsingSysexMessageState implements FirmataFsmState {
 	process(b: number, fsm: FirmataFsm) {
 		let next: FirmataFsmState | undefined
@@ -464,6 +513,7 @@ class ParsingSysexMessageState implements FirmataFsmState {
 
 const PARSING_SYSEX_MESSAGE_STATE = new ParsingSysexMessageState()
 
+// Parses a digital port message (one bit per pin in an 8-pin port) and emits a digitalMessage per pin.
 class ParsingDigitalMessageState implements FirmataFsmState {
 	constructor(readonly portId: number) {}
 
@@ -483,6 +533,7 @@ class ParsingDigitalMessageState implements FirmataFsmState {
 	}
 }
 
+// Parses a two-byte analog channel value and emits an analogMessage event.
 class ParsingAnalogMessageState implements FirmataFsmState {
 	constructor(readonly portId: number) {}
 
@@ -498,6 +549,8 @@ class ParsingAnalogMessageState implements FirmataFsmState {
 	}
 }
 
+// Idle FSM state: classifies the leading command byte and transitions to the matching parser, or emits
+// systemReset/error for control tokens.
 class WaitingForMessageState implements FirmataFsmState {
 	process(b: number, fsm: FirmataFsm) {
 		// First byte may contain not only command but additional information as well.
@@ -529,9 +582,13 @@ class WaitingForMessageState implements FirmataFsmState {
 
 const WAITING_FOR_MESSAGE_STATE = new WaitingForMessageState()
 
+// The parser state machine: holds the active state, a scratch byte buffer, and the set of handlers.
+// Parser states call its write/read helpers to accumulate bytes and its event methods to broadcast a
+// decoded message to every registered handler.
 export class FirmataFsm {
 	readonly #handlers = new Set<FirmataClientHandler>()
 
+	// Scratch accumulation buffer for the message currently being parsed, and the write cursor into it.
 	readonly #buffer = Buffer.alloc(256)
 	#offset = 0
 	#state: FirmataFsmState
@@ -543,14 +600,17 @@ export class FirmataFsm {
 		this.#state = state
 	}
 
+	// Number of bytes accumulated for the current message.
 	get offset() {
 		return this.#offset
 	}
 
+	// View of the bytes accumulated so far for the current message.
 	get buffer() {
 		return this.#buffer.subarray(0, this.#offset)
 	}
 
+	// Registers/unregisters an event handler.
 	addHandler(handler: FirmataClientHandler) {
 		this.#handlers.add(handler)
 	}
@@ -559,27 +619,33 @@ export class FirmataFsm {
 		this.#handlers.delete(handler)
 	}
 
+	// Feeds one byte into the active state.
 	process(byte: number) {
 		this.#state.process(byte, this)
 	}
 
+	// Switches to a new state and resets the accumulation cursor.
 	transitTo(state: FirmataFsmState) {
 		this.#offset = 0
 		this.#state = state
 	}
 
+	// Appends one byte to the accumulation buffer.
 	write(b: number) {
 		this.#buffer.writeUInt8(b, this.#offset++)
 	}
 
+	// Reads the raw byte at an offset in the accumulation buffer.
 	read(offset: number) {
 		return this.#buffer.readUInt8(offset)
 	}
 
+	// Reads a value stored as two 7-bit bytes at an offset.
 	read7Bit(offset: number) {
 		return decodeByteAs7Bit(this.#buffer, offset)
 	}
 
+	// Decodes a 7-bit-encoded text payload (two wire bytes per character) into a string in place.
 	readText(offset: number = 0, encoding?: BufferEncoding) {
 		const length = this.#offset - offset
 		let n = 0
@@ -591,6 +657,7 @@ export class FirmataFsm {
 		return this.#buffer.toString(encoding, offset, offset + n)
 	}
 
+	// Event broadcasters: each forwards a decoded message to every registered handler.
 	ready() {
 		for (const handler of this.#handlers) handler.ready?.(this.client)
 	}
@@ -670,10 +737,15 @@ export function writeValueAsTwo7bitBytes(data: Uint8Array, offset: number, value
 	data[offset + 1] = (value >> 7) & 0x7f
 }
 
+// Pre-encoded sysex query messages reused for the firmware/capability/analog-mapping handshake.
 const REQUEST_FIRMWARE_DATA = new Uint8Array([START_SYSEX, REPORT_FIRMWARE, END_SYSEX])
 const REQUEST_PIN_CAPABILITY_DATA = new Uint8Array([START_SYSEX, CAPABILITY_QUERY, END_SYSEX])
 const REQUEST_ANALOG_MAPPING_DATA = new Uint8Array([START_SYSEX, ANALOG_MAPPING_QUERY, END_SYSEX])
 
+// High-level Firmata client over a Transport. Drives the startup handshake (firmware → pin capabilities →
+// per-pin state → analog mapping → ready), tracks pin state, and encodes outgoing commands. The encode-
+// side command methods (request*, pinMode, digitalWrite, twoWire*, oneWire*) are self-describing wrappers
+// that frame and send the corresponding protocol message; only the non-obvious ones are commented.
 export class FirmataClient implements Disposable {
 	readonly #fsm: FirmataFsm
 	readonly #parser: FirmataParser
@@ -692,6 +764,9 @@ export class FirmataClient implements Disposable {
 	// analog-mapping step resolves it once, so without re-arming it would stay resolved one-shot.
 	#initialization = Promise.withResolvers<boolean>()
 
+	// Internal handler implementing the startup handshake and pin-state bookkeeping: chains firmware →
+	// capability → pin-state → analog-mapping requests, resolves initialization, and updates cached pins
+	// on analog reports.
 	readonly #handler: FirmataClientHandler = {
 		customMessage: (client: FirmataClient, data: Buffer) => {
 			//
@@ -776,18 +851,22 @@ export class FirmataClient implements Disposable {
 		this.disconnect()
 	}
 
+	// Number of pins discovered during the capability handshake.
 	get pinCount() {
 		return this.#pinMap.size
 	}
 
+	// Iterator over the known pins.
 	get pins(): MapIterator<Readonly<Pin>> {
 		return this.#pinMap.values()
 	}
 
+	// Returns the pin state for an id, or undefined if unknown.
 	pinAt(id: number): Readonly<Pin> | undefined {
 		return this.#pinMap.get(id)
 	}
 
+	// Registers/unregisters an external event handler.
 	addHandler(handler: FirmataClientHandler) {
 		this.#fsm.addHandler(handler)
 	}
@@ -796,11 +875,13 @@ export class FirmataClient implements Disposable {
 		this.#fsm.removeHandler(handler)
 	}
 
+	// Closes the transport and resets parser/handshake state.
 	disconnect() {
 		this.#transport.close()
 		this.reset()
 	}
 
+	// Feeds received bytes into the parser.
 	process(data: Buffer) {
 		this.#parser.process(data)
 	}
@@ -809,6 +890,7 @@ export class FirmataClient implements Disposable {
 		this.#parser.processByte(b)
 	}
 
+	// Resolves once the startup handshake completes (ready), or false after `timeout` ms (0 = no timeout).
 	ensureInitializationIsDone(timeout: number) {
 		const timer = timeout > 0 ? setTimeout(this.#initialization.resolve, timeout, false) : undefined
 		void this.#initialization.promise.then(clearTimeout.bind(undefined, timer))
@@ -892,6 +974,8 @@ export class FirmataClient implements Disposable {
 		this.send(new Uint8Array([SET_DIGITAL_PIN_VALUE, pin, value ? 1 : 0]))
 	}
 
+	// Writes a PWM/analog value using the extended-analog sysex, choosing the shortest 7-bit encoding for
+	// the value (clamped to 28 bits).
 	analogWrite(pin: number, value: number) {
 		const data = Math.max(0, Math.min(0x0fffffff, Math.trunc(value)))
 
@@ -921,6 +1005,8 @@ export class FirmataClient implements Disposable {
 		this.send(message)
 	}
 
+	// Sends one I2C transaction. Packs the address, the operation/address-mode/auto-restart flags into the
+	// control byte, and any payload as 7-bit pairs. Underlies twoWireRead/Write/Stop.
 	twoWireReadWrite(address: number, operationMode: TwoWireOperationMode, data?: Readonly<NumberArray> | Buffer, addressMode: TwoWireAddressMode = 7, autoRestart: TwoWireAutoRestartMode = 'stop') {
 		const message = Buffer.alloc(5 + (data !== undefined ? data.length * 2 : 0))
 
@@ -953,6 +1039,7 @@ export class FirmataClient implements Disposable {
 		this.twoWireReadWrite(address, 'stop', undefined, addressMode)
 	}
 
+	// Returns a fresh 16-bit correlation id for matching 1-Wire read requests to their replies.
 	#nextOneWireCorrelationId() {
 		const correlationId = this.#oneWireCorrelationId
 		this.#oneWireCorrelationId = (this.#oneWireCorrelationId + 1) & 0xffff
@@ -967,6 +1054,9 @@ export class FirmataClient implements Disposable {
 		this.send(new Uint8Array([START_SYSEX, ONE_WIRE_DATA, mode === 'alarms' ? ONE_WIRE_SEARCH_ALARMS_REQUEST : ONE_WIRE_SEARCH_REQUEST, pin, END_SYSEX]))
 	}
 
+	// Assembles and sends one 1-Wire command on a pin: sets the reset/skip/select/read/delay/write bits,
+	// builds the (7-bit packed) payload, and returns the read correlation id when a read was requested.
+	// Throws if both skip-ROM and a specific ROM address are requested, or the address is not 8 bytes.
 	oneWireCommand(pin: number, options: OneWireCommandOptions = DEFAULT_ONE_WIRE_COMMAND_OPTIONS) {
 		const { reset = false, skip = false, address, bytesToRead, correlationId, delay, data } = options
 
@@ -1049,6 +1139,7 @@ export class FirmataClient implements Disposable {
 		return this.oneWireCommand(pin, { reset: true, skip: address === undefined, address, bytesToRead, correlationId, data })
 	}
 
+	// Emits the close event to handlers and re-arms initialization for a possible reconnect.
 	close() {
 		this.#fsm.close()
 		// Re-arm initialization so a reconnect on the same client handshakes and becomes ready again.
@@ -1056,6 +1147,8 @@ export class FirmataClient implements Disposable {
 	}
 }
 
+// FirmataClient bound to a Bun TCP socket. Connects, pumps received bytes into the parser, and triggers
+// the firmware request once connected.
 export class FirmataClientOverTcp extends FirmataClient {
 	#socket?: Bun.Socket
 
@@ -1076,6 +1169,8 @@ export class FirmataClientOverTcp extends FirmataClient {
 		)
 	}
 
+	// Opens the TCP connection and starts the handshake by requesting firmware. Returns false if already
+	// connected.
 	async connect(hostname: string, port: number, options?: Omit<Bun.TCPSocketConnectOptions, 'hostname' | 'port' | 'socket'>) {
 		if (this.#socket) return false
 
@@ -1117,6 +1212,7 @@ export class FirmataClientOverTcp extends FirmataClient {
 		return true
 	}
 
+	// Closes and clears the underlying socket.
 	close() {
 		this.#socket?.close()
 		this.#socket = undefined
