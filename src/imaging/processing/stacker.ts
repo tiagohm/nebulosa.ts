@@ -7,22 +7,36 @@ import { clamp } from '../../math/numerical/math'
 import type { Image, ImageRawType, SigmaClipCenterMethod, SigmaClipDispersionMethod } from '../model/types'
 import type { DetectedStar } from '../stars/detector'
 
+// Image stacking pipeline: registers a set of frames to a reference using star matching, normalizes
+// and weights them, then combines the aligned pixels with a selectable rejection method (average,
+// median, sigma-clip, min/max, winsorized mean, percentile clip). Produces the stacked image plus
+// per-frame acceptance diagnostics, coverage, and combination statistics. Pixel values are in [0, 1].
+
+// Pixel-combination algorithm applied across the aligned frame stack.
 export type StackingCombinationMethod = 'sum' | 'average' | 'weighted-average' | 'median' | 'sigma-clip' | 'min-max-average' | 'winsorized-mean' | 'percentile-clip-average'
 
+// Resampling kernel used when warping a frame onto the reference grid.
 export type StackingInterpolationMode = 'nearest' | 'bilinear' | 'bicubic'
 
+// Output extent: the union (full coverage) or intersection (common area) of the frames.
 export type StackingCropMode = 'union' | 'intersection'
 
+// Per-frame normalization strategy applied before combination.
 export type StackingNormalizationMode = 'none' | 'scale' | 'background-scale' | 'percentile'
 
+// Per-frame weighting strategy in weighted combinations.
 export type StackingWeightingMode = 'none' | 'snr' | 'inverse-hfd' | 'stars' | 'quality'
 
+// How color images are combined: each channel independently or via a shared luminance alignment.
 export type StackingColorHandlingMode = 'per-channel' | 'luminance'
 
+// How the reference frame for a batch is chosen.
 export type BatchReferenceSelectionMode = 'first-accepted' | 'best-quality' | 'index'
 
+// Reason a frame was rejected from the stack.
 export type FrameRejectionReason = 'combination-method-not-supported-in-live-mode' | 'invalid-image-shape' | 'channel-mismatch' | 'too-few-stars' | 'reference-has-no-stars' | 'match-failed' | 'invalid-transform' | 'transform-error-too-high' | 'transform-out-of-bounds' | 'no-overlap' | 'insufficient-overlap'
 
+// One input frame: its image, detected stars, and optional identity/weight.
 export interface StackingFrame {
 	readonly image: Image
 	readonly stars: readonly DetectedStar[]
@@ -30,11 +44,15 @@ export interface StackingFrame {
 	readonly weight?: number
 }
 
+// Selection of the batch reference frame.
 export interface BatchReferenceSelection {
+	// Selection strategy.
 	readonly mode?: BatchReferenceSelectionMode
+	// Explicit frame index when mode is 'index'.
 	readonly index?: number
 }
 
+// Sigma-clip rejection parameters for the 'sigma-clip' combination.
 export interface SigmaClipStackingOptions {
 	readonly sigmaLower?: number
 	readonly sigmaUpper?: number
@@ -43,65 +61,88 @@ export interface SigmaClipStackingOptions {
 	readonly dispersionMethod?: SigmaClipDispersionMethod
 }
 
+// Min/max rejection counts (number of lowest/highest samples discarded per pixel).
 export interface MinMaxRejectionOptions {
 	readonly low?: number
 	readonly high?: number
 }
 
+// Lower/upper percentile fractions (0..1) for winsorization or percentile clipping.
 export interface PercentileRangeOptions {
 	readonly lower?: number
 	readonly upper?: number
 }
 
+// Summary of the geometric transform aligning a frame to the reference.
 export interface StackingTransformSummary {
+	// Transform family that was fitted.
 	readonly model: 'identity' | 'similarity' | 'affine'
 	readonly translationX: number
 	readonly translationY: number
 	readonly scaleX: number
 	readonly scaleY: number
+	// Rotation, radians.
 	readonly rotation: number
 	readonly shear: number
+	// True when the transform includes a reflection.
 	readonly mirrored: boolean
+	// Number of star matches kept as inliers.
 	readonly inlierCount: number
+	// RMS residual of the inlier matches, pixels.
 	readonly rmsError: number
 }
 
+// Quality metrics estimated for one frame.
 export interface StackingFrameQualityMetrics {
 	readonly starCount: number
+	// Median signal-to-noise of the detected stars.
 	readonly medianSNR: number
+	// Median half-flux diameter (focus sharpness), pixels.
 	readonly medianHFD: number
+	// Combined quality score used for weighting/reference selection.
 	readonly qualityScore: number
+	// Estimated sky background level, 0..1.
 	readonly estimatedBackground: number
 }
 
+// Per-channel normalization scales/offsets and the resulting frame weight.
 export interface FrameNormalizationSummary {
 	readonly scales: readonly number[]
 	readonly offsets: readonly number[]
 	readonly weight: number
 }
 
+// Acceptance outcome and diagnostics for one frame.
 export interface FrameAcceptanceResult {
 	readonly accepted: boolean
 	readonly frameIndex: number
 	readonly frameId?: string | number
+	// Rejection reason when not accepted.
 	readonly reason?: FrameRejectionReason
 	readonly transform?: StackingTransformSummary
+	// Fraction of the reference area the frame covers.
 	readonly overlapFraction: number
 	readonly quality: StackingFrameQualityMetrics
 	readonly normalization?: FrameNormalizationSummary
 }
 
+// Pixel bounds of the stacked output (a rectangle with its size).
 export interface StackBounds extends Readonly<Rect>, Readonly<Size> {}
 
+// Summary statistics of the combination step.
 export interface StackCombinationStatisticsSummary {
 	readonly method: StackingCombinationMethod
 	readonly normalizationMode: StackingNormalizationMode
 	readonly weightingMode: StackingWeightingMode
+	// True when an exact (non-incremental) live combination was used.
 	readonly liveExact: boolean
+	// Sum of accepted frame weights.
 	readonly acceptedWeightSum: number
+	// Minimum per-pixel frame coverage required to keep an output pixel.
 	readonly minimumCoverage: number
 }
 
+// Full result of a stack: the image, counts, crop, per-frame diagnostics, and optional coverage maps.
 export interface StackResult {
 	readonly finalImage?: Image
 	readonly acceptedFrames: number
@@ -110,10 +151,13 @@ export interface StackResult {
 	readonly effectiveCropBounds?: StackBounds
 	readonly diagnostics: readonly FrameAcceptanceResult[]
 	readonly statistics: StackCombinationStatisticsSummary
+	// Per-pixel count of contributing frames, when requested.
 	readonly coverageMap?: Uint32Array
+	// Per-pixel validity mask of the output, when requested.
 	readonly validityMask?: Uint8Array
 }
 
+// Public stacking configuration; omitted fields use the module defaults.
 export interface StackingOptions {
 	readonly combinationMethod?: StackingCombinationMethod
 	readonly batchReference?: BatchReferenceSelection
@@ -122,26 +166,36 @@ export interface StackingOptions {
 	readonly minMaxRejection?: MinMaxRejectionOptions
 	readonly winsorization?: PercentileRangeOptions
 	readonly percentileClip?: PercentileRangeOptions
+	// Minimum detected stars for a frame to be eligible.
 	readonly minAcceptedStars?: number
+	// Minimum inlier matches for an accepted registration.
 	readonly minAcceptedInliers?: number
+	// Maximum RMS registration error, pixels.
 	readonly maxAcceptedTransformError?: number
+	// Minimum overlap fraction with the reference.
 	readonly minOverlapFraction?: number
 	readonly cropMode?: StackingCropMode
+	// Minimum per-pixel coverage to keep an output pixel.
 	readonly minimumCoverage?: number
 	readonly normalizationMode?: StackingNormalizationMode
 	readonly weightingMode?: StackingWeightingMode
 	readonly colorHandlingMode?: StackingColorHandlingMode
+	// Retain per-pixel coverage/validity statistics in the result.
 	readonly keepPerPixelStatistics?: boolean
+	// Allow a reference frame with no detected stars.
 	readonly allowStarlessReference?: boolean
+	// Registration sanity bounds (translation pixels, rotation radians, scale, shear).
 	readonly maxTranslation?: number
 	readonly maxRotation?: number
 	readonly minScale?: number
 	readonly maxScale?: number
 	readonly maxShear?: number
+	// Accumulator precision for the combination.
 	readonly samplePrecision?: 32 | 64
 	readonly matchStarsConfig?: StarMatchingConfig
 }
 
+// StackingOptions with every field resolved to a concrete value.
 interface ResolvedStackingOptions extends Required<Omit<StackingOptions, 'sigmaClip' | 'minMaxRejection' | 'winsorization' | 'percentileClip' | 'batchReference' | 'matchStarsConfig'>> {
 	readonly sigmaClip: Required<SigmaClipStackingOptions>
 	readonly minMaxRejection: Required<MinMaxRejectionOptions>
@@ -151,6 +205,7 @@ interface ResolvedStackingOptions extends Required<Omit<StackingOptions, 'sigmaC
 	readonly matchStarsConfig: StarMatchingConfig
 }
 
+// Flattened 2x3 affine transform coefficients (row-major) plus its summary.
 interface ResolvedTransform {
 	readonly m00: number
 	readonly m01: number
@@ -161,6 +216,7 @@ interface ResolvedTransform {
 	readonly summary: StackingTransformSummary
 }
 
+// One frame after warping onto the reference grid: its resampled pixels, validity, and per-frame metadata.
 interface AlignedFrame {
 	readonly raw: ImageRawType
 	readonly valid: Uint8Array
@@ -173,6 +229,7 @@ interface AlignedFrame {
 	readonly transform: StackingTransformSummary
 }
 
+// Default resolved stacking options.
 const DEFAULT_STACKING_OPTIONS: ResolvedStackingOptions = {
 	combinationMethod: 'average',
 	batchReference: { mode: 'first-accepted', index: 0 },
@@ -207,8 +264,11 @@ const DEFAULT_STACKING_OPTIONS: ResolvedStackingOptions = {
 	matchStarsConfig: {},
 }
 
+// Small epsilon guarding divisions and degeneracy tests.
 const FLOAT_EPSILON = 1e-12
+// Maximum pixels sampled when estimating a frame's background level.
 const BACKGROUND_SAMPLE_LIMIT = 1024
+// Maximum pixels sampled when estimating normalization scale/offset.
 const NORMALIZATION_SAMPLE_LIMIT = 8192
 
 // Resolves caller overrides into deterministic internal defaults.

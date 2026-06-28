@@ -3,10 +3,18 @@ import { Histogram } from '../../math/numerical/statistics'
 import { truncatePixel } from '../model/image'
 import { type AdaptiveDisplayFunctionOptions, channelIndex, DEFAULT_ADAPTIVE_DISPLAY_FUNCTION_OPTIONS, DEFAULT_HISTOGRAM_OPTIONS, DEFAULT_SIGMA_CLIP_OPTIONS, grayscaleFromChannel, type HistogramOptions, type Image, type SigmaClipOptions } from '../model/types'
 
+// Pixel statistics for images: histogram, median, (normalized) median absolute deviation, iterative
+// sigma clipping, the PixInsight adaptive display function (auto-stretch parameters), and background
+// level estimators. Operates over a chosen channel/grayscale and optional region of interest; pixel
+// values are in [0, 1] and binned at the requested bit depth.
+
+// Median pixel value of the selected channel/region.
 export function median(image: Image, options: Partial<HistogramOptions> = DEFAULT_HISTOGRAM_OPTIONS) {
 	return histogram(image, options).median
 }
 
+// Median absolute deviation about `m`. When `normalized`, scales by the Gaussian-consistency factor so
+// the result is comparable to a standard deviation.
 export function medianAbsoluteDeviation(image: Image, m: number, normalized: boolean = false, options: Partial<HistogramOptions> = DEFAULT_HISTOGRAM_OPTIONS) {
 	const transform = options.transform ?? DEFAULT_HISTOGRAM_OPTIONS.transform
 	const mad = median(image, { ...options, transform: (p, i) => Math.abs(transform(p, i) - m) })
@@ -15,6 +23,8 @@ export function medianAbsoluteDeviation(image: Image, m: number, normalized: boo
 
 // Adaptive Display Function Algorithm
 // https://pixinsight.com/doc/docs/XISF-1.0-spec/XISF-1.0-spec.html#__XISF_Data_Objects_:_XISF_Image_:_Adaptive_Display_Function_Algorithm__
+// Computes an auto-stretch midtone/shadow/highlight triple from the image's median and MAD.
+// Returns [midtone, shadow, highlight], all in [0, 1], suitable for a screen transfer function.
 export function adf(image: Image, options: Partial<AdaptiveDisplayFunctionOptions> = DEFAULT_ADAPTIVE_DISPLAY_FUNCTION_OPTIONS) {
 	const bits = options.bits === undefined || typeof options.bits === 'number' ? new Int32Array(1 << (options.bits ?? 16)) : options.bits
 	options = { ...options, bits }
@@ -31,6 +41,9 @@ export function adf(image: Image, options: Partial<AdaptiveDisplayFunctionOption
 	return [midtone, shadow, highlight] as const
 }
 
+// Builds a Histogram of the selected channel/grayscale over the optional region, applying the pixel
+// transform and skipping sigma-clip-masked pixels. Color channels are combined by the grayscale weights
+// when no single channel is requested.
 export function histogram(image: Image, options: Partial<HistogramOptions> = DEFAULT_HISTOGRAM_OPTIONS) {
 	const channel = options.channel
 	const area = options.area
@@ -84,6 +97,9 @@ export function histogram(image: Image, options: Partial<HistogramOptions> = DEF
 	return new Histogram(h, max)
 }
 
+// Iteratively rejects outlier pixels beyond [center - sigmaLower*disp, center + sigmaUpper*disp],
+// recomputing center and dispersion each pass until convergence, no new rejections, or maxIterations.
+// Returns the rejection mask (1 = rejected); for color the whole pixel is rejected on a grayscale clip.
 export function sigmaClip(image: Image, options: Partial<SigmaClipOptions> = DEFAULT_SIGMA_CLIP_OPTIONS) {
 	const { channel, centerMethod, dispersionMethod, sigmaLower, sigmaUpper, tolerance, maxIterations } = Object.assign({}, DEFAULT_SIGMA_CLIP_OPTIONS, options)
 
@@ -168,10 +184,12 @@ export function sigmaClip(image: Image, options: Partial<SigmaClipOptions> = DEF
 	return mask
 }
 
+// Estimates the sky background as the median of the sigma-clipped (median/MAD) pixels.
 export function estimateBackground(image: Image, options?: Partial<Omit<SigmaClipOptions, 'centerMethod' | 'dispersionMethod'>>) {
 	return median(image, { ...options, sigmaClip: sigmaClip(image, { ...options, centerMethod: 'median', dispersionMethod: 'mad' }) })
 }
 
+// Estimates the background using the empirical mode approximation 2.5*median - 1.5*mean.
 export function estimateBackgroundUsingMode(image: Image, options?: Partial<HistogramOptions>) {
 	const { mean, median } = histogram(image, options)
 	return 2.5 * median - 1.5 * mean

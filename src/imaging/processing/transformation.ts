@@ -8,6 +8,13 @@ import { meanOf, medianOf, STANDARD_DEVIATION_SCALE } from '../../core/util'
 import { clamp, type NumberArray } from '../../math/numerical/math'
 import { akimaSplineLUT, catmullRomSplineLUT, cubicHermiteSplineLUT, naturalCubicSplineLUT } from '../../math/numerical/spline'
 
+// In-place image transformations operating on the normalized [0, 1] raw buffer: tone/stretch
+// operations (screen transfer function, arcsinh, curves, background neutralization, brightness/
+// contrast/gamma), color operations (SCNR, saturation, debayering), spatial filters (convolution
+// kernels, mean/blur/sharpen/edges, Gaussian blur, multiscale median transform, FFT band filtering,
+// guider PSF), and pixel arithmetic plus frame calibration. Most operations mutate and return the
+// input image; a few build fresh buffers (clone, debayer).
+
 // Apply Screen Transfer Function to image.
 // https://pixinsight.com/doc/docs/XISF-1.0-spec/XISF-1.0-spec.html#__XISF_Data_Objects_:_XISF_Image_:_Display_Function__
 // https://pixinsight.com/tutorials/24-bit-stf/
@@ -380,13 +387,16 @@ export function backgroundNeutralization(image: Image, options: Partial<Backgrou
 	return image
 }
 
+// A user curve resolved to typed arrays with endpoints injected and an identity flag.
 interface ResolvedCurvesTransformationCurve {
 	readonly channel: ImageChannelOrGray
 	readonly x: Float64Array
 	readonly y: Float64Array
+	// True when the curve maps every value to itself (can be skipped).
 	readonly identity: boolean
 }
 
+// Control points of the identity mapping (input equals output at 0 and 1).
 const IDENTITY_CURVES_TRANSFORMATION = new Float64Array([0, 1])
 
 // Resolves one user curve, injects missing end points, and detects identity mappings.
@@ -503,6 +513,8 @@ export function curvesTransformation(image: Image, options: Partial<CurvesTransf
 	return image
 }
 
+// Per-Bayer-pattern 2x2 channel-index maps: two rows of [evenCol, oddCol] color indices
+// (0 red, 1 green, 2 blue) used to route each mosaic pixel to its color channel during debayering.
 const CFA_PATTERNS: Record<CfaPattern, Uint8Array[]> = {
 	RGGB: [new Uint8Array([0, 1]), new Uint8Array([1, 2])],
 	BGGR: [new Uint8Array([2, 1]), new Uint8Array([1, 0])],
@@ -746,6 +758,7 @@ export function scnrMinimumNeutral(a: number, b: number, c: number, amount: numb
 	return Math.min(a, m)
 }
 
+// Lookup from an SCNR protection method to its per-pixel correction kernel.
 const SCNR_ALGORITHMS: Readonly<Record<SCNRProtectionMethod, SCNRAlgorithm>> = {
 	MAXIMUM_MASK: scnrMaximumMask,
 	ADDITIVE_MASK: scnrAdditiveMask,
@@ -978,6 +991,8 @@ export function convolution(image: Image, kernel: ConvolutionKernel, { dynamicDi
 	return image
 }
 
+// Prebuilt convolution kernels for the named filters below (edge detection, emboss, mean/box blur,
+// sharpen, and pyramid blur), each with its normalization divisor.
 const EDGES = convolutionKernel(new Int8Array([0, -1, 0, -1, 4, -1, 0, -1, 0]), 3, 3, 0)
 const EMBOSS = convolutionKernel(new Int8Array([-1, 0, 0, 0, 0, 0, 0, 0, 1]), 3, 3, 0)
 const MEAN_3x3 = convolutionKernel(new Int8Array([1, 1, 1, 1, 1, 1, 1, 1, 1]), 3, 3, 9)
@@ -1123,11 +1138,17 @@ export function gaussianBlur(image: Image, options: Partial<GaussianBlurConvolut
 	return convolution(image, gaussianBlurKernel(options.sigma, options.size), options)
 }
 
+// Quantization bit depth of the sliding-median histogram used by the multiscale median transform.
 const MMT_MEDIAN_HISTOGRAM_BITS = 14
+// Number of fine histogram bins (2^bits).
 const MMT_MEDIAN_HISTOGRAM_SIZE = 1 << MMT_MEDIAN_HISTOGRAM_BITS
+// Index of the last fine bin.
 const MMT_MEDIAN_HISTOGRAM_LAST = MMT_MEDIAN_HISTOGRAM_SIZE - 1
+// Bits grouping fine bins into the coarse (two-level) histogram for fast selection.
 const MMT_MEDIAN_HISTOGRAM_GROUP_BITS = 6
+// Fine bins per coarse group (2^groupBits).
 const MMT_MEDIAN_HISTOGRAM_GROUP_SIZE = 1 << MMT_MEDIAN_HISTOGRAM_GROUP_BITS
+// Number of coarse groups.
 const MMT_MEDIAN_HISTOGRAM_GROUP_COUNT = MMT_MEDIAN_HISTOGRAM_SIZE >> MMT_MEDIAN_HISTOGRAM_GROUP_BITS
 
 // Tracks the quantization range for one image channel.
@@ -1350,13 +1371,19 @@ export function multiscaleMedianTransform(image: Image, options: Partial<Multisc
 	return image
 }
 
+// Precomputed radix-2 FFT plan for a given transform length.
 interface FFTPlan {
+	// Transform length (a power of two).
 	readonly size: number
+	// Bit-reversal permutation table.
 	readonly bitReversed: Uint32Array
+	// Real parts of the twiddle factors.
 	readonly twiddleReal: Float64Array
+	// Imaginary parts of the twiddle factors.
 	readonly twiddleImag: Float64Array
 }
 
+// Cached radial frequency-domain mask, keyed by dimensions, cutoff, and filter type.
 interface FFTMaskCache {
 	width: number
 	height: number
@@ -1706,6 +1733,8 @@ export function fft(image: Image, workspace: FFTWorkspace, filterType: FFTFilter
 
 // https://github.com/KDE/kstars/blob/master/kstars/ekos/guide/internalguide/guidealgorithms.cpp
 
+// KStars guider point-spread-function weights, one per concentric ring (A center .. D3 outermost),
+// applied over the 9x9 grid shown below.
 //                              A      B1     B2     C1    C2      C3     D1       D2     D3
 const PSF = new Float32Array([0.906, 0.584, 0.365, 0.117, 0.049, -0.05, -0.064, -0.074, -0.094])
 
