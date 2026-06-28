@@ -1,11 +1,22 @@
 import type { NumberArray } from '../math/numerical/math'
 
+// Generic numeric-array utilities: array-type detection, single-pass reducers (min/max/mean/median/
+// standard deviation/percentile/RMS), binary search variants, and numeric comparators. Reducers
+// operate on plain arrays or typed arrays; functions documented as requiring a sorted input must be
+// given one. Most reducers return NaN for empty input to stay composable.
+
+// Options controlling the search window and miss behavior of the binary-search helpers.
 export interface BinarySearchOptions {
+	// Inclusive lower bound of the search range; defaults to 0.
 	from?: number
+	// Exclusive upper bound of the search range; defaults to the array length.
 	to?: number
+	// When true, a miss returns the insertion index instead of the negative encoding -(insertion + 1).
 	positive?: boolean
 }
 
+// Scale factor 1/Φ⁻¹(3/4) that converts a median absolute deviation into a consistent estimator of
+// the standard deviation for normally distributed data.
 export const STANDARD_DEVIATION_SCALE = 1.482602218505602
 
 // Checks if the input is a number array.
@@ -14,8 +25,8 @@ export function isNumberArray(a: unknown): a is NumberArray {
 	return a instanceof Float64Array || a instanceof Float32Array || a instanceof Float16Array || a instanceof Int32Array || a instanceof Uint32Array || a instanceof Int16Array || a instanceof Uint16Array || a instanceof Int8Array || a instanceof Uint8Array || a instanceof Uint8ClampedArray
 }
 
-// Finds the minimum value  and its index in an numeric array.
-// If the array is empty, it returns [NaN, -1].
+// Finds the minimum value and its index in a numeric array, returned as [value, index].
+// NaN entries are skipped. If the array is empty (or all NaN), it returns [NaN, -1].
 export function minOf(a: Readonly<NumberArray>): readonly [number, number] {
 	const n = a.length
 	if (n === 0) return [Number.NaN, -1]
@@ -35,8 +46,8 @@ export function minOf(a: Readonly<NumberArray>): readonly [number, number] {
 	return index < 0 ? [Number.NaN, -1] : [value, index]
 }
 
-// Finds the maximum value and its index in an numeric array.
-// If the array is empty, it returns [NaN, -1].
+// Finds the maximum value and its index in a numeric array, returned as [value, index].
+// NaN entries are skipped. If the array is empty (or all NaN), it returns [NaN, -1].
 export function maxOf(a: Readonly<NumberArray>): readonly [number, number] {
 	const n = a.length
 	if (n === 0) return [Number.NaN, -1]
@@ -77,7 +88,8 @@ export function meanOf(a: Readonly<NumberArray>) {
 	return (sum + compensation) / n
 }
 
-// Computes the median value of a sorted numeric array.
+// Computes the median value of a sorted numeric array. Input must be ascending-sorted.
+// `count` optionally restricts the median to the first `count` elements; returns NaN when count is 0.
 export function medianOf(a: Readonly<NumberArray>, count: number = a.length) {
 	if (count === 0) return Number.NaN
 	else if (count === 1) return a[0]
@@ -88,7 +100,9 @@ export function medianOf(a: Readonly<NumberArray>, count: number = a.length) {
 	return count % 2 === 1 ? a[mid] : (a[mid - 1] + a[mid]) * 0.5
 }
 
-// Computes median absolute deviation of a sorted numeric array.
+// Computes the median absolute deviation of a numeric array about a given `median`.
+// `normalized` scales the result by STANDARD_DEVIATION_SCALE to estimate the standard deviation.
+// `count` restricts the computation to the first `count` elements. Allocates a temporary buffer that is sorted in place.
 export function medianAbsoluteDeviationOf(a: Readonly<NumberArray>, median: number, normalized: boolean, count: number = a.length) {
 	const abs = new Float64Array(count)
 	for (let i = 0; i < count; i++) abs[i] = Math.abs(a[i] - median)
@@ -114,7 +128,9 @@ export function standardDeviationOf(a: Readonly<NumberArray>) {
 	return Math.sqrt(sumSquared / n)
 }
 
-// Computes a percentile from a sorted numeric array.
+// Computes a percentile from an ascending-sorted numeric array using linear interpolation between ranks.
+// `percentile` is a fraction in [0, 1]; values outside that range are clamped to the first/last element.
+// Returns NaN for an empty array.
 export function percentileOf(values: Readonly<NumberArray>, percentile: number) {
 	const n = values.length
 	if (n === 0) return Number.NaN
@@ -144,7 +160,9 @@ export function rmsOf(values: Readonly<NumberArray>) {
 	return Math.sqrt(sumSquares / n)
 }
 
-// Searches in the specified input using the range [from, to) for the specified key.
+// Binary-searches the ascending-sorted range [from, to) of `a` for `key`.
+// On a hit, returns the matching index. On a miss, returns the insertion index when `positive` is set,
+// otherwise the standard negative encoding -(insertion + 1). Requires the range to be sorted ascending.
 export function binarySearch(a: Readonly<NumberArray>, key: number, { from = 0, to = a.length, positive }: BinarySearchOptions = {}) {
 	let right = to - 1
 
@@ -164,9 +182,12 @@ export function binarySearch(a: Readonly<NumberArray>, key: number, { from = 0, 
 	return positive ? from : -(from + 1)
 }
 
+// Comparator returning <0 when the target ordered before `value`, >0 when after, and 0 on a match.
 export type BinarySearchComparator<T> = (value: T) => number
 
-// Searches in the specified input using the range [from, to) by the specified comparator.
+// Binary-searches the range [from, to) of `a` using `comparator` to locate the target element.
+// The array must be ordered consistently with the comparator. Miss behavior matches `binarySearch`:
+// the insertion index when `positive` is set, otherwise -(insertion + 1).
 export function binarySearchWithComparator<T>(a: readonly T[], comparator: BinarySearchComparator<T>, { from = 0, to = a.length, positive }: BinarySearchOptions = {}) {
 	let right = to - 1
 
@@ -186,12 +207,12 @@ export function binarySearchWithComparator<T>(a: readonly T[], comparator: Binar
 	return positive ? from : -(from + 1)
 }
 
-// Sorts numeric identifiers in ascending order.
+// Array.sort comparator ordering numbers or bigints ascending.
 export function NumberComparator<T extends number | bigint>(left: T, right: T) {
 	return left < right ? -1 : left > right ? 1 : 0
 }
 
-// Sorts numeric identifiers in descending order.
+// Array.sort comparator ordering numbers or bigints descending.
 export function NumberComparatorDescending<T extends number | bigint>(left: T, right: T) {
 	return left < right ? 1 : left > right ? -1 : 0
 }

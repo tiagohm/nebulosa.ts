@@ -1,3 +1,6 @@
+// Temperature type and conversions. The canonical `Temperature` is degrees Celsius; helpers convert
+// to/from Fahrenheit and Kelvin.
+
 // Represents a temperature quantity in celsius.
 export type Temperature = number
 

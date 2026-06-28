@@ -2,10 +2,15 @@ import { AU_KM, AU_M, ONE_ATM, ONE_PARSEC, SPEED_OF_LIGHT } from '../../core/con
 import type { Pressure } from './pressure'
 import { type Temperature, toKelvin } from './temperature'
 
+// Distance type and conversions. The canonical `Distance` is AU; helpers build distances from meters,
+// kilometers, light years and parsecs and convert back, plus a barometric pressure-to-altitude estimate.
+
 // Represents a distance value in AU.
 export type Distance = number
 
+// Seconds in a Julian year (365.25 days), used to define the light year.
 const JULIAN_YEAR_SECONDS = 31557600
+// One light year expressed in AU.
 const LIGHT_YEAR_AU = (SPEED_OF_LIGHT * JULIAN_YEAR_SECONDS) / AU_M
 
 // Creates a new Distance from meters.

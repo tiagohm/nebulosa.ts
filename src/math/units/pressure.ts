@@ -2,6 +2,9 @@ import { G, ONE_ATM } from '../../core/constants'
 import { type Distance, toMeter } from './distance'
 import { type Temperature, toKelvin } from './temperature'
 
+// Pressure type and conversions. The canonical `Pressure` is hPa (millibar); helpers convert to/from
+// Pascal and ATM, plus a two-layer (troposphere/stratosphere) barometric altitude-to-pressure model.
+
 // Represents a pressure quantity in (hPa = millibar).
 export type Pressure = number
 

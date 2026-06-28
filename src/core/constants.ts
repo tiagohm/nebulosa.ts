@@ -1,5 +1,11 @@
 import type { Ellipsoid, EllipsoidParameters } from '../astronomy/observer/location'
 
+// Shared physical, astronomical, and unit-conversion constants used across the library.
+// Angles are radians, distances AU, times days/seconds, and the rotation matrices are row-major
+// 3x3 frame transforms (stored as flat length-9 tuples) expressed in the convention of mat3.ts.
+// Values are sourced from IAU/IERS standards and named reference ephemerides; the source is noted
+// next to each block when relevant. Treat every export as an immutable compile-time constant.
+
 // The number π. This is the ratio of the circumference of a circle to its diameter.
 export const PI = Math.PI
 
@@ -174,37 +180,57 @@ export const COS_OBL_J2000 = 0.917482132728603919223615
 // Sine of obliquity of the Ecliptic at J2000.
 export const SIN_OBL_J2000 = 0.397776992954309036773996
 
+// Solar gravitational parameter (GM_Sun) in km³/s², from Pitjeva (2005).
 export const GM_SUN_PITJEVA_2005_KM3_S2 = 1.3271244004193938e11
+// Solar gravitational parameter (GM_Sun) in AU³/day², from Pitjeva (2005).
 export const GM_SUN_PITJEVA_2005 = (GM_SUN_PITJEVA_2005_KM3_S2 * DAYSEC * DAYSEC) / AU_KM / AU_KM / AU_KM // AU³/day²
+// Conversion factor for a gravitational parameter from km³/s² to AU³/day².
 export const MU_KM3_S2_TO_AU3_D2 = (DAYSEC * DAYSEC) / AU_KM / AU_KM / AU_KM
+// Conversion factor for a gravitational parameter from AU³/day² to km³/s².
 export const MU_AU3_D2_TO_KM3_S2 = (AU_KM * AU_KM * AU_KM) / (DAYSEC * DAYSEC)
 
 // Heliocentric gravitational constant in meters^3 / second^2, from DE-405.
 export const GS = 1.32712440017987e20
 
+// Apparent sidereal motion rate in arcseconds per mean solar second (≈15.041"/s).
 export const SIDEREAL_ARCSEC_PER_SECOND = 15.041
 
+// Identity rotation (ICRS to ICRS), as a row-major flat 3x3 matrix.
 export const ICRS_MATRIX = [1, 0, 0, 0, 1, 0, 0, 0, 1] as const
+// Rotation from ICRS to the mean equator and equinox of B1950, as a row-major flat 3x3 matrix.
 export const MEAN_EQUATOR_AND_EQUINOX_AT_B1950_MATRIX = [0.99992570795236291, 0.011178938126427691, 0.0048590038414544293, -0.011178938137770135, 0.9999375133499887, -2.715792625851078e-5, -0.0048590038153592712, -2.7162594714247048e-5, 0.9999881946023742] as const
+// Rotation from ICRS to the B1950 ecliptic frame, as a row-major flat 3x3 matrix.
 export const ECLIPTIC_B1950_MATRIX = [0.99992570795236291, 0.011178938126427691, 0.0048590038414544293, -0.012189277138214926, 0.91736881787898283, 0.39785157220522011, -9.9405009203520217e-6, -0.3978812427417045, 0.91743692784599817] as const
+// Rotation from the J2000 equator to the J2000 ecliptic (rotation by the mean obliquity), row-major flat 3x3 matrix.
 export const ECLIPTIC_J2000_MATRIX = [1, 0, 0, 0, COS_OBL_J2000, SIN_OBL_J2000, 0, -SIN_OBL_J2000, COS_OBL_J2000] as const
+// Rotation from ICRS to the FK4 (B1950) frame, as a row-major flat 3x3 matrix.
 export const FK4_MATRIX = [0.9999256809514446605, 0.011181371756303229, 0.0048589607363144413, -0.011181372206268162, 0.999937486137318374, -0.000027073328547607, -0.0048589597008613673, -0.0000272585320447865, 0.9999881948141177111] as const
+// Rotation from ICRS to the FK5 (J2000) frame, as a row-major flat 3x3 matrix (a sub-milliarcsecond frame bias).
 export const FK5_MATRIX = [0.9999999999999928638, -0.0000001110223329741, -0.000000044118044981, 0.0000001110223372305, 0.9999999999999891831, 0.0000000964779225408, 0.0000000441180342698, -0.0000000964779274389, 0.9999999999999943728] as const
+// Rotation from ICRS to galactic coordinates, as a row-major flat 3x3 matrix.
 export const GALACTIC_MATRIX = [-0.0548756577126196781, -0.8734370519557791298, -0.4838350736164183803, 0.4941094371971076412, -0.4448297212220537635, 0.7469821839845094133, -0.8676661375571625615, -0.1980763372750705946, 0.4559838136911523476] as const
+// Rotation from ICRS to supergalactic coordinates, as a row-major flat 3x3 matrix.
 export const SUPERGALACTIC_MATRIX = [0.3750155557060191496, 0.3413588718572082374, 0.8618801851666388868, -0.8983204377254853439, -0.0957271002509969235, 0.4287851600069993011, 0.2288749093788964371, -0.9350456902643365859, 0.2707504994914917474] as const
 
+// GRS80 reference ellipsoid equatorial radius (AU) and flattening (dimensionless).
 export const GRS80_RADIUS = 6378137 / AU_M
 export const GRS80_FLATTENING = 1 / 298.257222101
 
+// WGS72 reference ellipsoid equatorial radius (AU) and flattening (dimensionless).
 export const WGS72_RADIUS = 6378135 / AU_M
 export const WGS72_FLATTENING = 1 / 298.26
 
+// WGS84 reference ellipsoid equatorial radius (AU) and flattening (dimensionless).
 export const WGS84_RADIUS = 6378137 / AU_M
 export const WGS84_FLATTENING = 1 / 298.257223563
 
+// IERS 2010 reference ellipsoid equatorial radius (AU) and flattening (dimensionless).
 export const IERS2010_RADIUS = 6378136.6 / AU_M
 export const IERS2010_FLATTENING = 1 / 298.25642
 
+// Geodetic parameters for each supported reference ellipsoid, keyed by the `Ellipsoid` enum.
+// `oneMinusFlattening` (1 - f) is precomputed because it is the recurring factor in geodetic-to-geocentric
+// conversions; radii are in AU and flattening is dimensionless.
 export const ELLIPSOID_PARAMETERS: Readonly<Record<Ellipsoid, EllipsoidParameters>> = {
 	0: {
 		radius: GRS80_RADIUS,

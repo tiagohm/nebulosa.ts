@@ -1,5 +1,8 @@
 import { AU_KM, AU_M, DAYSEC } from '../../core/constants'
 
+// Velocity type and conversions. The canonical `Velocity` is AU/day; helpers convert to/from
+// kilometers-per-second and meters-per-second.
+
 // Represents a velocity quantity in AU/day.
 export type Velocity = number
 

@@ -1,6 +1,11 @@
 import { AMIN2RAD, ASEC2RAD, DEG2RAD, HOUR2RAD, MILLIASEC2RAD, PI, RAD2DEG, RAD2HOUR, TAU } from '../../core/constants'
 import { pmod } from '../numerical/math'
 
+// Angle type and conversions. The canonical `Angle` is radians; helpers build angles from degrees,
+// hours, arcmin/arcsec/mas or sexagesimal components and convert back, plus wrap-safe normalization
+// and sexagesimal parsing/formatting. Functions that normalize state their target range explicitly.
+
+// Fallback values applied per-field when formatAngle is called without the corresponding option.
 const DEFAULT_FORMAT_ANGLE_OPTIONS: Required<FormatAngleOptions> = {
 	isHour: false,
 	noSign: false,
@@ -15,19 +20,31 @@ const DEFAULT_FORMAT_ANGLE_OPTIONS: Required<FormatAngleOptions> = {
 // Represents an angle in radians.
 export type Angle = number
 
+// Options controlling how a string/number is interpreted by parseAngle.
 export interface ParseAngleOptions {
+	// When true, a bare numeric input is read as hours instead of degrees.
 	isHour?: boolean
+	// Angle (radians) returned when the input is empty, non-finite, or unparseable.
 	defaultValue?: Angle
 }
 
+// Options controlling sexagesimal formatting in formatAngle.
 export interface FormatAngleOptions {
+	// Format as hours:minutes:seconds instead of degrees:arcmin:arcsec.
 	isHour?: boolean
+	// Omit the leading sign entirely (otherwise a non-negative value gets `plusSign`).
 	noSign?: boolean
+	// Drop the seconds field, rounding into minutes.
 	noSecond?: boolean
+	// Number of fractional digits on the seconds field.
 	fractionDigits?: number
+	// Separators between the three fields; a single string applies to all, an array sets them individually.
 	separators?: string[] | string
+	// String used for the negative sign.
 	minusSign?: string
+	// String used for the positive sign when signs are shown.
 	plusSign?: string
+	// Zero-pad width of the leading (degrees/hours) field.
 	padLength?: number
 }
 
@@ -106,7 +123,9 @@ export function toMas(angle: Angle): number {
 	return angle / MILLIASEC2RAD
 }
 
-// Extracts the degrees, minutes and seconds from the angle.
+// Splits the angle into sexagesimal degrees as [degrees, minutes, seconds, sign], where degrees and
+// minutes are non-negative integers, seconds is fractional, and sign is Math.sign(angle) (-1, 0 or 1).
+// The angle is not normalized; magnitudes above 360° are kept as-is.
 export function toDms(angle: Angle): [number, number, number, number] {
 	const d = Math.abs(toDeg(angle))
 	const m = ((d - Math.trunc(d)) * 60) % 60
@@ -114,7 +133,8 @@ export function toDms(angle: Angle): [number, number, number, number] {
 	return [Math.abs(Math.trunc(d)), Math.trunc(m), s, Math.sign(angle)]
 }
 
-// Extracts the hours, minutes and seconds from the angle.
+// Splits the angle into sexagesimal hours as [hours, minutes, seconds]. The angle is first normalized
+// to [0, TAU), so the result is always non-negative with hours in [0, 24).
 export function toHms(angle: Angle): [number, number, number] {
 	const h = toHour(normalizeAngle(angle))
 	const m = ((h - Math.trunc(h)) * 60) % 60
@@ -231,6 +251,8 @@ export function parseAngle(input?: string | number, options?: ParseAngleOptions 
 	return defaultValue
 }
 
+// Propagates a minutes overflow (>= 60) into the leading field after seconds were rounded up.
+// Wraps the leading field back to 0 at 24 when formatting hours. Mutates `hdms` in place.
 function carryMinute(hdms: number[], isHour: boolean) {
 	if (hdms[1] >= 60) {
 		hdms[1] = 0
@@ -287,6 +309,8 @@ export function formatAngle(angle: Angle, options?: FormatAngleOptions) {
 	return `${sign}${d}${sa}${m}${sb}${s}${sc}`
 }
 
+// Preset FormatAngleOptions for the common astronomical notations (HH:MM:SS, DMS, RA/Dec, azimuth/altitude).
+// Each `*_NO_FRACTION` variant drops the fractional seconds; RA/Dec/AZ/ALT variants use space separators.
 export const DEFAULT_HMS_FORMAT: FormatAngleOptions = { isHour: true, separators: ':', noSign: true }
 export const DEFAULT_HMS_NO_FRACTION_FORMAT: FormatAngleOptions = { ...DEFAULT_HMS_FORMAT, fractionDigits: 0 }
 export const DEFAULT_DMS_FORMAT: FormatAngleOptions = { noSign: true, separators: 'dms' }
