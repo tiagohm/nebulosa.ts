@@ -6,56 +6,88 @@ import { type Angle, normalizeAngle } from '../../../math/units/angle'
 import type { EquatorialCoordinate } from '../../coordinates/coordinate'
 import { eraS2c } from '../../coordinates/erfa/erfa'
 
+// HEALPix spherical pixelization and spatial index for equatorial coordinates. Provides pixel/coord
+// conversions in both nested and ring orderings, conservative cone/triangle/polygon/box covers, and a
+// HealpixIndex that buckets objects by pixel for fast region queries. Angles are radians; pixel
+// geometry follows the standard 12-base-face HEALPix scheme (NSIDE a power of two).
+
+// Maximum supported NSIDE (2^24); bounds pixel indices to safe integer range.
 const HEALPIX_MAX_NSIDE = 2 ** 24
+// Number of HEALPix base faces.
 const HEALPIX_FACE_COUNT = 12
+// |sin(dec)| boundary between the equatorial belt and the polar caps (z = 2/3).
 const EQUATORIAL_Z_LIMIT = 2 / 3
+// Multiplier converting a face cell's edge span into an angular radius bound for cover tests.
 const COVER_BOUND_FACTOR = PI / 2
+// General angular/geometry tolerance, radians.
 const EPSILON = 1e-14
+// Tolerance for RA/Dec box edge comparisons, radians.
 const BOX_EPSILON = 1e-12
+// Tolerance for treating two vertices as the same spherical point, radians.
 const VERTEX_EPSILON = 1e-12
 
+// Per-face j-row offsets used by the ring/face conversions (standard HEALPix constants).
 const JRLL = [2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4] as const
+// Per-face j-phi offsets used by the ring/face conversions (standard HEALPix constants).
 const JPLL = [1, 3, 5, 7, 0, 2, 4, 6, 1, 3, 5, 7] as const
 
+// Identifier for an indexed object (numeric, string, or bigint key).
 export type HealpixId = number | string | bigint
 
+// Pixel numbering scheme: nested (hierarchical) or ring (iso-latitude).
 export type HealpixOrdering = 'nested' | 'ring'
 
+// Options controlling a region-to-pixels cover.
 export interface HealpixCoverOptions {
+	// NSIDE at which to compute the cover; defaults to the caller's NSIDE.
 	readonly targetNside?: number
+	// Maximum recursion depth (cover resolution); defaults to the full order.
 	readonly maxDepth?: number
+	// Output ordering of the returned pixels.
 	readonly ordering?: HealpixOrdering
 	// Conservative covers are always used to avoid missing intersecting pixels.
 	readonly conservative?: boolean
 }
 
+// Construction options for a HealpixIndex.
 export interface HealpixIndexOptions {
+	// Index resolution; must be a power of two in [1, HEALPIX_MAX_NSIDE].
 	readonly nside: number
+	// Pixel ordering used internally; defaults to 'nested'.
 	readonly ordering?: HealpixOrdering
 }
 
+// An object to insert into the index: an equatorial position with an id and optional metadata.
 export interface HealpixInsertObject<M = unknown> extends EquatorialCoordinate {
 	readonly id: HealpixId
 	metadata?: M
 }
 
+// Internal precomputed convex spherical region: ordered vertices plus inward edge-plane normals.
 interface HealpixRegion {
 	readonly vertices: readonly Vec3[]
 	readonly edgeNormals: readonly Vec3[]
 }
 
+// Internal stored object: the insert data plus its cached unit vector and bucket location.
 interface HealpixObject<M> extends HealpixInsertObject<M> {
+	// Cached unit direction vector for the object's coordinates.
 	readonly vector: MutVec3
+	// Pixel index the object currently lives in.
 	pixel: number
+	// Position of the object within its pixel bucket (for swap-remove).
 	bucketIndex: number
 }
 
+// Internal mutable state threaded through the recursive face cover.
 interface HealpixCoverState {
 	readonly nside: number
 	readonly order: number
 	readonly maxDepth: number
 	readonly pixels: number[]
+	// Reusable scratch vector for the current cell center.
 	readonly center: MutVec3
+	// Predicate testing whether a cap of angular radius `bound` around `center` meets the region.
 	readonly intersects: (center: Vec3, bound: number) => boolean
 }
 

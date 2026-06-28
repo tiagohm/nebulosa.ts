@@ -4,43 +4,82 @@ import { euclideanDistance, fillPoint, type Point } from '../../math/numerical/g
 import { clamp } from '../../math/numerical/math'
 import { normalizeAngle, normalizePI, type Angle } from '../../math/units/angle'
 
+// Map projections between spherical coordinates (longitude/latitude or RA/Dec, radians) and planar
+// x/y, plus polyline/polygon helpers that split at antimeridian wraps and projection singularities.
+// Provides azimuthal projections (gnomonic, stereographic, orthographic, Lambert equal-area,
+// equidistant) sharing one spherical core, and a family of cylindrical projections (Mercator and
+// variants, equal-area, stereographic, equidistant). A shared linear plane transform applies scale,
+// radius, false easting/northing, and y-axis direction; options also control longitude wrap, RA-axis
+// handedness, latitude clamping, and the ellipsoid. project/unproject return undefined off-domain.
+
+// How a projected longitude delta is wrapped: to (-PI, PI], to [0, TAU), or left unwrapped.
 export type LongitudeWrapMode = 'pi' | 'tau' | 'none'
 
+// Whether right ascension increases to the east (right) or west (left, mirrored).
 export type RaAxisDirection = 'east' | 'west'
 
+// Whether the planar y-axis points up toward the north or the south.
 export type YAxisDirection = 'northUp' | 'southUp'
 
+// Shared options controlling the spherical-to-planar transform and domain handling for a projection.
 export interface ProjectionOptions {
+	// Central meridian / reference longitude subtracted before projecting, radians.
 	readonly centralMeridian?: number
+	// Linear scale factor applied to the normalized plane coordinates.
 	readonly scale?: number
+	// Sphere/ellipsoid radius multiplier applied with the scale.
 	readonly radius?: number
+	// Constant added to the projected x (false easting).
 	readonly falseEasting?: number
+	// Constant added to the projected y (false northing).
 	readonly falseNorthing?: number
+	// First eccentricity of the ellipsoid (0 for a sphere); overrides flattening when set.
 	readonly eccentricity?: number
+	// Flattening of the ellipsoid, used to derive eccentricity when eccentricity is unset.
 	readonly flattening?: number
+	// When true, force the spherical (eccentricity 0) form regardless of ellipsoid options.
 	readonly sphericalOnly?: boolean
+	// When true, clamp latitudes beyond maxLatitude instead of returning undefined.
 	readonly clampLatitude?: boolean
+	// Maximum |latitude| accepted/clamped, radians.
 	readonly maxLatitude?: number
+	// Longitude wrap convention; defaults to 'pi'.
 	readonly longitudeWrapMode?: LongitudeWrapMode
+	// RA-axis handedness; defaults to 'east'.
 	readonly raAxisDirection?: RaAxisDirection
+	// y-axis direction; defaults to 'northUp'.
 	readonly yAxisDirection?: YAxisDirection
+	// Numerical tolerance for domain checks and iteration; defaults to GEOMETRY_EPSILON.
 	readonly epsilon?: number
+	// Iteration cap for iterative inverse solvers (e.g. ellipsoidal Mercator).
 	readonly maxIterations?: number
 }
 
+// Options for polyline/polygon projection, adding the criteria for splitting a path.
 export interface ProjectionPolylineOptions extends ProjectionOptions {
+	// Planar distance between consecutive projected points that forces a split (singularity/jump).
 	readonly discontinuityThreshold?: number
+	// Maximum angular length of a segment before it is densified, radians.
 	readonly maxSegmentRadians?: number
+	// Longitude delta between consecutive points that forces a split (antimeridian wrap), radians.
 	readonly splitLongitudeGap?: number
 }
 
+// A forward/inverse projection between spherical (radians) and planar coordinates.
 export interface Projection {
+	// Projects (longitude, latitude) to a planar point; undefined if outside the projection domain.
 	readonly project: (longitude: Angle, latitude: Angle, out?: Point, options?: ProjectionOptions) => Point | undefined
+	// Inverts a planar (x, y) back to (longitude, latitude); undefined if outside the valid range.
 	readonly unproject: (x: number, y: number, out?: Point, options?: ProjectionOptions) => Point | undefined
 }
 
+// Base class for azimuthal (planar) projections tangent at a center point. Subclasses supply only the
+// radial mapping between the angular distance from the center and the plane radius; this class handles
+// the shared spherical geometry, RA-axis mirroring, and the linear plane transform.
 export abstract class AzimuthalProjection implements Projection {
+	// Sine of the center latitude, cached for the spherical formulas.
 	readonly #sCenterLatitude: number
+	// Cosine of the center latitude, cached for the spherical formulas.
 	readonly #cCenterLatitude: number
 
 	constructor(
@@ -52,8 +91,12 @@ export abstract class AzimuthalProjection implements Projection {
 		this.#cCenterLatitude = Math.cos(centerLatitude)
 	}
 
+	// Maps the angular distance c from the center (given as sin c, cos c) to the plane radius rho;
+	// returns false when the point is outside this projection's visible hemisphere/domain.
 	protected abstract radialDistance(sinC: number, cosC: number): number | false
 
+	// Inverse of radialDistance: maps a plane radius rho back to the angular distance c (radians);
+	// returns false when rho lies outside the projection's representable range.
 	protected abstract angularDistance(rho: number): number | false
 
 	project(longitude: Angle, latitude: Angle, out?: Point, options?: ProjectionOptions) {
@@ -113,6 +156,7 @@ export abstract class AzimuthalProjection implements Projection {
 	}
 }
 
+// Gnomonic projection: great circles map to straight lines; shows less than one hemisphere.
 export class Gnomonic extends AzimuthalProjection {
 	protected radialDistance(sinC: number, cosC: number) {
 		return cosC <= 0 ? false : sinC / cosC
@@ -123,6 +167,7 @@ export class Gnomonic extends AzimuthalProjection {
 	}
 }
 
+// Stereographic projection: conformal (angle-preserving); the antipode maps to infinity.
 export class Stereographic extends AzimuthalProjection {
 	protected radialDistance(sinC: number, cosC: number) {
 		const denominator = 1 + cosC
@@ -134,6 +179,7 @@ export class Stereographic extends AzimuthalProjection {
 	}
 }
 
+// Orthographic projection: the view of a globe from infinite distance; one hemisphere only.
 export class Orthographic extends AzimuthalProjection {
 	protected radialDistance(sinC: number, cosC: number) {
 		return cosC < 0 ? false : sinC
@@ -144,6 +190,7 @@ export class Orthographic extends AzimuthalProjection {
 	}
 }
 
+// Lambert azimuthal equal-area projection: preserves area; can show the whole sphere.
 export class LambertAzimuthalEqualArea extends AzimuthalProjection {
 	protected radialDistance(sinC: number, cosC: number) {
 		const denominator = 1 + cosC
@@ -155,6 +202,7 @@ export class LambertAzimuthalEqualArea extends AzimuthalProjection {
 	}
 }
 
+// Azimuthal equidistant projection: distances from the center are true to scale; covers the sphere.
 export class AzimuthalEquidistant extends AzimuthalProjection {
 	protected radialDistance(sinC: number, cosC: number) {
 		return sinC <= GEOMETRY_EPSILON && cosC < 0 ? false : Math.atan2(sinC, cosC)
@@ -165,6 +213,8 @@ export class AzimuthalEquidistant extends AzimuthalProjection {
 	}
 }
 
+// Base class for cylindrical projections, which map longitude linearly to x and a per-projection
+// function of latitude to y. Subclasses implement the latitude mapping and its inverse.
 export abstract class CylindricalProjection implements Projection {
 	constructor(readonly options?: ProjectionOptions) {}
 
@@ -173,6 +223,7 @@ export abstract class CylindricalProjection implements Projection {
 	abstract unproject(x: number, y: number, out?: Point, options?: ProjectionOptions): Point | undefined
 }
 
+// Mercator projection: conformal; y = asinh(tan(lat)). Latitudes near the poles diverge.
 export class Mercator extends CylindricalProjection {
 	project(lambda: Angle, phi: Angle, out?: Point, options?: ProjectionOptions) {
 		const longitude = longitudeFromLambda(lambda, options, this.options)
@@ -192,6 +243,7 @@ export class Mercator extends CylindricalProjection {
 // The Web Mercator limit maps to y = +/-PI in normalized projection units.
 export const WEB_MERCATOR_MAX_LATITUDE = Math.atan(Math.sinh(PI))
 
+// Web Mercator: Mercator clamped to +/-WEB_MERCATOR_MAX_LATITUDE to yield the square web-map tile.
 export class WebMercator extends Mercator {
 	constructor(options?: ProjectionOptions) {
 		super({ ...options, clampLatitude: true, maxLatitude: WEB_MERCATOR_MAX_LATITUDE })
@@ -205,6 +257,8 @@ export class WebMercator extends Mercator {
 	}
 }
 
+// Inverts the ellipsoidal Mercator northing `y` to geodetic latitude (radians) by Newton iteration on
+// the isometric-latitude equation. Returns undefined if it fails to converge within maxIterations.
 function ellipsoidalMercatorInverseLatitude(y: number, eccentricity: number, maxIterations: number, epsilon: number) {
 	if (eccentricity === 0) return Math.atan(Math.sinh(y))
 
@@ -229,6 +283,7 @@ function ellipsoidalMercatorInverseLatitude(y: number, eccentricity: number, max
 	return undefined
 }
 
+// Ellipsoidal Mercator: conformal projection of the ellipsoid, using the configured eccentricity.
 export class EllipsoidalMercator extends CylindricalProjection {
 	private readonly eccentricity: number
 
@@ -257,6 +312,7 @@ export class EllipsoidalMercator extends CylindricalProjection {
 	}
 }
 
+// Miller cylindrical projection: a Mercator variant that compresses latitude to keep the poles finite.
 export class Miller extends CylindricalProjection {
 	project(lambda: Angle, phi: Angle, out?: Point, options?: ProjectionOptions) {
 		const longitude = longitudeFromLambda(lambda, options, this.options)
@@ -273,6 +329,7 @@ export class Miller extends CylindricalProjection {
 	}
 }
 
+// Central cylindrical projection: perspective from the globe center onto a tangent cylinder; y = tan(lat).
 export class CentralCylindrical extends CylindricalProjection {
 	project(lambda: Angle, phi: Angle, out?: Point, options?: ProjectionOptions) {
 		const longitude = longitudeFromLambda(lambda, options, this.options)
@@ -288,7 +345,9 @@ export class CentralCylindrical extends CylindricalProjection {
 	}
 }
 
+// Cylindrical equal-area projection with a configurable standard parallel; preserves area.
 export class CylindricalEqualArea extends CylindricalProjection {
+	// Cosine of the standard parallel; sets the aspect ratio of the equal-area mapping.
 	protected readonly cosStandardParallel: number
 
 	constructor(
@@ -315,43 +374,51 @@ export class CylindricalEqualArea extends CylindricalProjection {
 	}
 }
 
+// Lambert cylindrical equal-area: standard parallel at the equator (0 deg).
 export class LambertCylindricalEqualArea extends CylindricalEqualArea {
 	constructor(latitudeOfOrigin: Angle = 0) {
 		super(0, latitudeOfOrigin)
 	}
 }
 
+// Behrmann equal-area: standard parallel at 30 deg.
 export class Behrmann extends CylindricalEqualArea {
 	constructor(latitudeOfOrigin: Angle = 0) {
 		super(PI / 6, latitudeOfOrigin)
 	}
 }
 
+// Gall-Peters equal-area: standard parallel at 45 deg.
 export class GallPeters extends CylindricalEqualArea {
 	constructor(latitudeOfOrigin: Angle = 0) {
 		super(PI / 4, latitudeOfOrigin)
 	}
 }
 
+// Hobo-Dyer equal-area: standard parallel at 37.5 deg.
 export class HoboDyer extends CylindricalEqualArea {
 	constructor(latitudeOfOrigin: Angle = 0) {
 		super(37.5 * DEG2RAD, latitudeOfOrigin)
 	}
 }
 
+// Balthasart equal-area: standard parallel at 50 deg.
 export class Balthasart extends CylindricalEqualArea {
 	constructor(latitudeOfOrigin: Angle = 0) {
 		super(50 * DEG2RAD, latitudeOfOrigin)
 	}
 }
 
+// Trystan Edwards equal-area: standard parallel at 37.4 deg.
 export class TrystanEdwards extends CylindricalEqualArea {
 	constructor(latitudeOfOrigin: Angle = 0) {
 		super(37.4 * DEG2RAD, latitudeOfOrigin)
 	}
 }
 
+// Cylindrical stereographic projection with a configurable standard parallel.
 export class CylindricalStereographic extends CylindricalProjection {
+	// Cosine of the standard parallel; sets the vertical scaling.
 	protected readonly cosStandardParallel: number
 
 	constructor(standardParallel: Angle = 0, options?: ProjectionOptions) {
@@ -386,19 +453,23 @@ export class CylindricalStereographic extends CylindricalProjection {
 	}
 }
 
+// Gall stereographic: cylindrical stereographic with standard parallel at 45 deg.
 export class Gall extends CylindricalStereographic {
 	constructor() {
 		super(PI / 4)
 	}
 }
 
+// Braun stereographic: cylindrical stereographic with standard parallel at the equator.
 export class Braun extends CylindricalStereographic {
 	constructor() {
 		super(0)
 	}
 }
 
+// Cylindrical equidistant (equirectangular) projection with a configurable standard parallel.
 export class CylindricalEquidistant extends CylindricalProjection {
+	// Cosine of the standard parallel; sets the longitude scaling.
 	protected readonly cosStandardParallel: number
 
 	constructor(
@@ -426,6 +497,7 @@ export class CylindricalEquidistant extends CylindricalProjection {
 	}
 }
 
+// Plate carree (equirectangular with standard parallel at the equator): x = longitude, y = latitude.
 export class PlateCarree extends CylindricalEquidistant {
 	constructor(
 		readonly latitudeOfOrigin: Angle = 0,
@@ -435,6 +507,7 @@ export class PlateCarree extends CylindricalEquidistant {
 	}
 }
 
+// Returns `num` if it is a finite number, otherwise `fallback`.
 function numberFrom(num: number | undefined | null, fallback: number) {
 	return num !== undefined && num !== null && Number.isFinite(num) ? num : fallback
 }
@@ -465,6 +538,8 @@ function normalizeLongitudeByMode(longitude: number, mode: LongitudeWrapMode) {
 	return longitude
 }
 
+// Computes the wrapped longitude delta from the central meridian for a forward projection, honoring
+// the RA-axis direction and wrap mode. Returns undefined for non-finite input.
 function longitudeFromLambda(lambda: number, a?: ProjectionOptions, b?: ProjectionOptions) {
 	const centralMeridian = centralMeridianFrom(a, b)
 	const mode = longitudeWrapModeFrom(a, b)
@@ -476,6 +551,8 @@ function longitudeFromLambda(lambda: number, a?: ProjectionOptions, b?: Projecti
 	return normalizeLongitudeByMode(delta, mode)
 }
 
+// Recovers the absolute longitude from a delta during an inverse projection (the inverse of
+// longitudeFromLambda), honoring the RA-axis direction and wrap mode.
 function longitudeFromDelta(delta: number, a?: ProjectionOptions, b?: ProjectionOptions) {
 	const centralMeridian = centralMeridianFrom(a, b)
 	const mode = longitudeWrapModeFrom(a, b)
@@ -492,6 +569,8 @@ function maxLatitudeFrom(a?: ProjectionOptions, b?: ProjectionOptions, fallback:
 	return Number.isFinite(maxLatitude) && maxLatitude > 0 && maxLatitude <= PIOVERTWO ? maxLatitude : undefined
 }
 
+// Validates and conditions an input latitude `phi`: rejects values outside +/-PI/2 (within epsilon),
+// then either clamps to maxLatitude (when clamping is enabled) or returns undefined when beyond it.
 function latitudeFromPhi(latitude: number, a?: ProjectionOptions, b?: ProjectionOptions, maxLatitudeFallback: Angle = PIOVERTWO, clampFallback: boolean = false) {
 	const epsilon = epsilonFrom(a, b)
 	const maxLatitude = maxLatitudeFrom(a, b, maxLatitudeFallback)
@@ -510,6 +589,8 @@ function latitudeFromPhi(latitude: number, a?: ProjectionOptions, b?: Projection
 	return value
 }
 
+// Validates a recovered (inverse) latitude against the projection's max latitude, clamping within
+// epsilon and returning undefined when out of range or undefined on input.
 function latitudeInRange(latitude: number | undefined, a?: ProjectionOptions, b?: ProjectionOptions, maxLatitudeFallback: Angle = PIOVERTWO) {
 	if (latitude === undefined) return undefined
 
@@ -522,6 +603,7 @@ function latitudeInRange(latitude: number | undefined, a?: ProjectionOptions, b?
 	return clamp(latitude, -maxLatitude, maxLatitude)
 }
 
+// Returns cos of a validated standard parallel; throws if it is non-finite or within epsilon of +/-PI/2.
 function cosStandardParallelFrom(standardParallel: Angle, options?: ProjectionOptions) {
 	const epsilon = epsilonFrom(options)
 	if (!Number.isFinite(standardParallel) || standardParallel <= -PIOVERTWO + epsilon || standardParallel >= PIOVERTWO - epsilon) throw new TypeError('invalid standardParallel')
@@ -532,6 +614,8 @@ function sphericalOnlyFrom(a?: ProjectionOptions, b?: ProjectionOptions, fallbac
 	return a?.sphericalOnly ?? b?.sphericalOnly ?? fallback
 }
 
+// Resolves the ellipsoid eccentricity: 0 when spherical-only, the explicit eccentricity if valid,
+// otherwise derived from flattening. Throws when the supplied flattening is out of range.
 function eccentricityFrom(a?: ProjectionOptions, b?: ProjectionOptions) {
 	if (sphericalOnlyFrom(a, b)) return 0
 
@@ -549,9 +633,13 @@ function maxIterationsFrom(a?: ProjectionOptions, b?: ProjectionOptions) {
 	return a?.maxIterations ?? b?.maxIterations ?? 12
 }
 
+// Default sphere radius multiplier.
 const DEFAULT_RADIUS = 1
+// Default linear scale factor.
 const DEFAULT_SCALE = 1
+// Default false easting/northing offset.
 const DEFAULT_FALSE_OFFSET = 0
+// Default latitude cap for Mercator-family projections, just shy of the pole to avoid divergence.
 const DEFAULT_MAX_MERCATOR_LATITUDE = PIOVERTWO - GEOMETRY_EPSILON
 
 function radiusFrom(a?: ProjectionOptions, b?: ProjectionOptions, fallback: number = DEFAULT_RADIUS) {
@@ -562,6 +650,7 @@ function scaleFrom(a?: ProjectionOptions, b?: ProjectionOptions, fallback: numbe
 	return numberFrom(a?.scale ?? b?.scale, fallback)
 }
 
+// Combined linear scale (radius * scale); undefined if either is non-finite or non-positive.
 function realScaleFrom(a?: ProjectionOptions, b?: ProjectionOptions) {
 	const radius = radiusFrom(a, b)
 	const scale = scaleFrom(a, b)
@@ -581,6 +670,8 @@ function yAxisDirectionFrom(a?: ProjectionOptions, b?: ProjectionOptions) {
 	return a?.yAxisDirection ?? b?.yAxisDirection ?? 'northUp'
 }
 
+// Applies the shared forward plane transform to normalized coordinates: scale by radius*scale, add
+// false easting/northing, and flip y for 'southUp'. Returns undefined for non-finite or invalid scale.
 function projectPoint(out: Point | undefined, x: number, y: number, a?: ProjectionOptions, b?: ProjectionOptions) {
 	const scale = realScaleFrom(a, b)
 	const falseEasting = falseEastingFrom(a, b)
@@ -593,6 +684,7 @@ function projectPoint(out: Point | undefined, x: number, y: number, a?: Projecti
 	return fillPoint(out, falseEasting + x * scale, falseNorthing + y * ySign * scale)
 }
 
+// Inverse of projectPoint: removes the false offsets, undoes the scale, and restores the y sign.
 function unprojectPoint(out: Point | undefined, x: number, y: number, a?: ProjectionOptions, b?: ProjectionOptions) {
 	const scale = realScaleFrom(a, b)
 	const falseEasting = falseEastingFrom(a, b)
@@ -605,6 +697,8 @@ function unprojectPoint(out: Point | undefined, x: number, y: number, a?: Projec
 	return fillPoint(out, (x - falseEasting) / scale, ((y - falseNorthing) / scale) * ySign)
 }
 
+// Decides whether the longitude jump between two consecutive points exceeds the split threshold
+// (an antimeridian crossing). Returns undefined when the inputs are invalid.
 function shouldSplitLongitude(a: Point, b: Point, options?: ProjectionPolylineOptions, defaults?: ProjectionOptions) {
 	const splitLongitudeGap = options?.splitLongitudeGap ?? PI
 	const aDelta = longitudeFromLambda(a.x, options, defaults)
@@ -615,6 +709,8 @@ function shouldSplitLongitude(a: Point, b: Point, options?: ProjectionPolylineOp
 	return Math.abs(bDelta - aDelta) > splitLongitudeGap
 }
 
+// Linearly interpolates the `step`/`steps` fraction between spherical points a and b, taking the
+// shortest longitude path. Writes into `out`, which is returned.
 function densifiedPoint(a: Point, b: Point, step: number, steps: number, out?: Point) {
 	const dLongitude = normalizePI(b.x - a.x)
 	const t = step / steps
