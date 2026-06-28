@@ -3,23 +3,37 @@ import { type CsvRow, type ReadCsvOptions, readCsv, TSV_DELIMITER } from '../../
 import { type Angle, deg, mas, toDeg } from '../../math/units/angle'
 import { kilometerPerSecond } from '../../math/units/velocity'
 
+// SIMBAD TAP/ADQL catalog adapter: runs ADQL queries against the SIMBAD sync TAP endpoint (returning
+// parsed TSV rows), exposes the SIMBAD object-type taxonomy with id/code lookups, and implements the
+// generic StarCatalog contract over SIMBAD's `basic`/`allfluxes` tables. Positions are J2000; proper
+// motion is converted from μα·cosδ to ERFA's dα/dt; angles are radians on the public surface.
+
 // https://simbad.cds.unistra.fr/simbad/sim-tap/
 
+// Primary SIMBAD host.
 export const SIMBAD_URL = 'https://simbad.cds.unistra.fr/'
+// Mirror SIMBAD host.
 export const SIMBAD_ALTERNATIVE_URL = 'https://simbad.u-strasbg.fr/'
 
+// Path of the synchronous TAP query endpoint.
 const SIMBAD_QUERY_PATH = 'simbad/sim-tap/sync'
 
+// Options for a SIMBAD query: fetch options plus CSV/TSV parsing options.
 export interface SimbadQueryOptions extends Omit<RequestInit, 'method' | 'body'>, ReadCsvOptions {
+	// Override SIMBAD host base URL.
 	baseUrl?: string
+	// Request timeout, milliseconds.
 	timeout?: number
 }
 
+// Default SIMBAD query options.
 const DEFAULT_SIMBAD_QUERY_OPTIONS: SimbadQueryOptions = {
 	baseUrl: SIMBAD_URL,
 	timeout: 60000,
 }
 
+// Runs an ADQL `query` against the SIMBAD TAP endpoint and returns the parsed TSV rows, or undefined
+// on an error response. Performs a network request.
 export async function simbadQuery(query: string, { baseUrl, timeout = 60000, signal, ...options }: Readonly<SimbadQueryOptions> = DEFAULT_SIMBAD_QUERY_OPTIONS): Promise<string[][] | undefined> {
 	const uri = `${baseUrl || SIMBAD_URL}${SIMBAD_QUERY_PATH}`
 	signal ??= timeout ? AbortSignal.timeout(timeout) : undefined
@@ -38,6 +52,9 @@ export async function simbadQuery(query: string, { baseUrl, timeout = 60000, sig
 
 // https://vizier.cds.unistra.fr/cgi-bin/OType
 
+// The full SIMBAD object-type taxonomy: maps each named type to its numeric id, human description,
+// broad classification, and the SIMBAD short codes that denote it (the '?' codes mark candidates).
+// Ids are grouped by classification (see the ranges noted below the table).
 export const SIMBAD_OBJECT_TYPES = {
 	ACTIVE_GALAXY_NUCLEUS: { id: 200, description: 'Active Galaxy Nucleus', classification: 'GALAXY', codes: ['AGN', 'AG?'] },
 	ALPHA2_CVN_VARIABLE: { id: 0, description: 'alpha2 CVn Variable', classification: 'STAR', codes: ['a2*', 'a2?'] },
@@ -203,12 +220,16 @@ export const SIMBAD_OBJECT_TYPES = {
 // GRAVITATION: 600 - 699
 // OTHER: 700 - 799
 
+// One of the named SIMBAD object types.
 export type SimbadObjectType = keyof typeof SIMBAD_OBJECT_TYPES
 
+// Broad classification group of an object type.
 export type SimbadObjectClassification = (typeof SIMBAD_OBJECT_TYPES)[SimbadObjectType]['classification']
 
+// A SIMBAD short object-type code.
 export type SimbadObjectCode = (typeof SIMBAD_OBJECT_TYPES)[SimbadObjectType]['codes'][number]
 
+// Resolved metadata for one object type.
 export interface SimbadObjectTypeInfo {
 	readonly id: number
 	readonly description: string
@@ -216,8 +237,11 @@ export interface SimbadObjectTypeInfo {
 	readonly codes: readonly SimbadObjectCode[]
 }
 
+// All object-type info objects.
 const SIMBAD_OBJECT_TYPE_VALUES = Object.values(SIMBAD_OBJECT_TYPES)
+// Object-type lookup by numeric id.
 const SIMBAD_OBJECT_TYPE_BY_ID = new Map<number, SimbadObjectTypeInfo>()
+// Object-type lookup by short code.
 const SIMBAD_OBJECT_TYPE_BY_CODE = new Map<SimbadObjectCode, SimbadObjectTypeInfo>()
 
 for (const info of SIMBAD_OBJECT_TYPE_VALUES) {
@@ -228,27 +252,39 @@ for (const info of SIMBAD_OBJECT_TYPE_VALUES) {
 	}
 }
 
+// Looks up an object type by its numeric id.
 export function findSimbadObjectTypeInfoById(id: number) {
 	return SIMBAD_OBJECT_TYPE_BY_ID.get(id)
 }
 
+// Looks up an object type by its short code.
 export function findSimbadObjectTypeInfoByCode(code: SimbadObjectCode) {
 	return SIMBAD_OBJECT_TYPE_BY_CODE.get(code)
 }
 
+// Columns selected from the SIMBAD basic/allfluxes tables for catalog queries.
 const SIMBAD_COLUMNS = 'b.oid, b.otype, b.ra, b.dec, f.V, b.pmra, b.pmdec, b.plx_value, b.rvz_radvel'
+// Catalog epoch for all SIMBAD entries (J2000).
 const SIMBAD_EPOCH = 2000
+// |cos(dec)| floor when converting μα·cosδ to dα/dt near the pole.
 const SIMBAD_PM_COS_DEC_EPSILON = 1e-12
+// Pattern validating a SIMBAD object id (digits only).
 const SIMBAD_OBJECT_ID_REGEX = /^\d+$/
 
+// One parsed SIMBAD catalog star.
 export interface SimbadCatalogEntry extends Omit<StarCatalogEntry, 'epoch' | 'magnitude'> {
 	readonly id: number // The max id in the Simbad is 28400265 (bigint is unnecessary)
+	// Fixed catalog epoch (J2000).
 	readonly epoch: 2000
+	// Visual (V) magnitude.
 	readonly magnitude: number
+	// Parallax, radians.
 	readonly parallax?: number
+	// SIMBAD short object-type code, when present.
 	readonly type?: SimbadObjectCode
 }
 
+// StarCatalog implementation backed by remote SIMBAD ADQL queries.
 export class SimbadCatalog extends BaseStarCatalog<SimbadCatalogEntry> {
 	readonly options: SimbadQueryOptions
 

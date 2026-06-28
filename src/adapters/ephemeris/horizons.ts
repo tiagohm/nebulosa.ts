@@ -4,57 +4,88 @@ import { type ReadCsvOptions, readCsv } from '../../io/csv'
 import { type Angle, toDeg } from '../../math/units/angle'
 import { type Distance, toKilometer } from '../../math/units/distance'
 
+// Client for the JPL Horizons ephemeris API: builds and submits observer, vector, osculating-element,
+// and SPK-file requests for a named target or user-supplied osculating elements / TLE, and parses the
+// returned CSV ephemeris table. The interfaces mirror the Horizons query parameters (most properties
+// carry the manual's per-parameter notes inline). Angles are radians on the public surface and
+// formatted into the API's degree/HMS conventions in the request.
+
 // https://ssd.jpl.nasa.gov/horizons/manual.html
 // https://ssd-api.jpl.nasa.gov/doc/horizons.html
 
+// Horizons API endpoint URL.
 export const HORIZONS_BASE_URL = 'https://ssd.jpl.nasa.gov/api/horizons.api'
 
+// Boolean-as-string toggle expected by the API.
 export type YesNo = 'NO' | 'YES'
 
+// Response encoding requested from the API.
 export type OutputFormat = 'json' | 'text'
 
 // https://ssd.jpl.nasa.gov/horizons/manual.html#center
+// Observing-site center code for observer/vector ephemerides.
 export type ObserverSiteCenter = `coord@${number}` | 'coord' | `${string}@${number}` | 'geo' | '@TLE'
+// Center body code for element ephemerides.
 export type BodyCenter = 'geo' | `500@${number}`
 
+// Observing-site coordinates as [longitude, latitude, elevation], a comma string, or a falsy default.
 export type ObserverSiteCoord = readonly [Angle, Angle, Distance] | `${number},${number},${number}` | 0 | false | undefined
 
+// Reference plane for the ephemeris frame.
 export type ReferencePlane = 'ECLIPTIC' | 'FRAME' | 'BODY_EQUATOR'
 
+// User coordinate type for the observing site.
 export type CoordinateType = 'GEODETIC' | 'CILINDRICAL'
 
+// Kind of ephemeris to generate.
 export type EphemerisType = 'OBSERVER' | 'VECTOR' | 'ELEMENTS' | 'SPK'
 
+// Output time precision.
 export type TimeDigitPrecision = 'MINUTES' | 'SECONDS' | 'FRACSEC'
 
+// Input/output timescale.
 export type TimeType = 'UT' | 'TT' | 'TDB'
 
+// Reference frame for geometric/astrometric quantities.
 export type ReferenceSystem = 'ICRF' | 'B1950'
 
+// Reference ecliptic frame of user osculating elements.
 export type ReferenceEclipticFrame = 'J2000' | 'B1950'
 
+// Output units for distance and time.
 export type OutputUnits = 'KM-S' | 'AU-D' | 'KM-D'
 
+// Light-time/aberration correction level for vector output.
 export type VectorCorrection = 'NONE' | 'LT' | 'LT+S'
 
+// Date output format.
 export type CalendarFormat = 'CAL' | 'JD' | 'BOTH'
 
+// Calendar system for date input/output.
 export type CalendarType = 'GREGORIAN' | 'MIXED'
 
+// RA/Dec output format.
 export type AngleFormat = 'HMS' | 'DEG'
 
+// Refraction handling for apparent coordinates.
 export type RefractionCorrection = 'AIRLESS' | 'REFRACTED'
 
+// Units for range quantities.
 export type RangeUnit = 'AU' | 'KM'
 
+// Whether the returned time of periapsis is absolute or relative.
 export type TimeOfPeriapsisType = 'ABSOLUTE' | 'RELATIVE'
 
+// Unit suffix for the ephemeris step size.
 export type StepSizeUnit = 'd' | 'm' | 'h' | 'y' | 'mo' | 'days' | 'minutes' | 'hours' | 'years' | 'months' | 'unitless'
 
+// Union of all valid Horizons query parameter keys.
 export type HorizonsQueryParameterKey = keyof HorizonsEphemerisSpecificParameters | keyof HorizonsSpkFileParameters | keyof HorizonsHeliocentricEclipticOsculatingElementParameters | keyof HorizonsTLEParameters
 
+// A bag of Horizons query parameters keyed by parameter name.
 export type HorizonsQueryParameters = Record<HorizonsQueryParameterKey, unknown>
 
+// High-level options shared by the observer/vector/elements helpers, mapped into Horizons parameters.
 export interface ObserverVectorElementsOptions extends Pick<ReadCsvOptions, 'skipFirstLine'> {
 	stepSize?: number
 	stepSizeUnit?: StepSizeUnit
@@ -76,21 +107,26 @@ export interface ObserverVectorElementsOptions extends Pick<ReadCsvOptions, 'ski
 	timeOfPeriapsisType?: TimeOfPeriapsisType
 }
 
+// Orbit anomaly specified by perihelion distance and time.
 export interface PerihelionDistanceAndTime {
 	qr: Distance // perihelionDistance
 	tp: number // perihelionTime in TDB
 }
 
+// Orbit anomaly specified by mean anomaly and semi-major axis.
 export interface MeanAnomalyAndSemiMajorAxis {
 	ma: Angle // meanAnomaly
 	a: Distance // semiMajorAxis
 }
 
+// Orbit anomaly specified by mean anomaly and mean motion.
 export interface MeanAnomalyAndMeanMotion {
 	ma: Angle // meanAnomaly
 	n: Angle // meanMotion in rad/day
 }
 
+// User-supplied osculating elements (with optional small-body/non-gravitational parameters) to define
+// a target instead of a name lookup.
 export interface ObserverWithOsculatingElements {
 	epoch: number
 	referenceEclipticFrame?: ReferenceEclipticFrame
@@ -124,12 +160,14 @@ export interface ObserverWithOsculatingElements {
 	amrat?: number // Solar pressure model, area/mass ratio, m^2/kg
 }
 
+// User-supplied two-line element set defining an Earth-satellite target.
 export interface ObserverWithTLE {
 	line1: string
 	line2: string
 	name?: string
 }
 
+// Horizons query parameters common to every ephemeris type.
 export interface HorizonsCommonParameters {
 	COMMAND?: string // target search, selection, or enter user-input object mode
 	OBJ_DATA?: YesNo // [YES]: toggles return of object summary data
@@ -139,6 +177,7 @@ export interface HorizonsCommonParameters {
 	STOP_TIME?: string // specifies ephemeris stop time
 }
 
+// Horizons query parameters for observer/vector/element ephemeris requests.
 export interface HorizonsEphemerisSpecificParameters extends HorizonsCommonParameters {
 	CENTER?: string // [OVE]: selects coordinate origin (observing site)
 	REF_PLANE?: ReferencePlane // [VE] [ECLIPTIC]: Ephemeris reference plane
@@ -174,8 +213,10 @@ export interface HorizonsEphemerisSpecificParameters extends HorizonsCommonParam
 	R_T_S_ONLY?: YesNo // [O] [NO]: toggles output only at target rise/transit/set
 }
 
+// Horizons query parameters for an SPK-file request (no extra fields beyond the common ones).
 export interface HorizonsSpkFileParameters extends HorizonsCommonParameters {}
 
+// Heliocentric ecliptic osculating-element parameters, supplied directly when COMMAND=';'.
 // can be specified by users when COMMAND=';'
 export interface HorizonsHeliocentricEclipticOsculatingElementParameters extends HorizonsCommonParameters {
 	OBJECT?: string // Name of user input object
@@ -212,15 +253,18 @@ export interface HorizonsHeliocentricEclipticOsculatingElementParameters extends
 	AMRAT?: number // Solar pressure model, area/mass ratio, m^2/kg
 }
 
+// Horizons query parameters carrying a user-supplied TLE block.
 export interface HorizonsTLEParameters extends HorizonsCommonParameters {
 	TLE: string // must be supplied in standard format with starting and ending quote marks enclosing the entire block and encoding new-line and spaces
 }
 
+// Result of an SPK-file request: the base64 SPK content or an error message.
 export interface SpkFile {
 	readonly spk?: string
 	readonly error?: string
 }
 
+// Observer-table output quantity codes (the QUANTITIES parameter); each selects one column group.
 export enum Quantity {
 	ASTROMETRIC_RA_DEC = 1, // Astrometric RA & DEC
 	NORTH_POLE_POSITION_ANGLE_DISTANCE = 17, // North Pole position angle & distance
@@ -272,8 +316,10 @@ export enum Quantity {
 	LUNAR_SKY_BRIGHTNESS_SKY_SNR = 48, // Lunar sky-brightness & sky SNR
 }
 
+// Default observer-table quantities requested when the caller does not specify any.
 const DEFAULT_QUANTITIES: Quantity[] = [1, 9, 20, 23, 24, 47, 48]
 
+// Default observer/vector/elements options.
 const DEFAULT_OVE_OPTIONS: Required<ObserverVectorElementsOptions> = {
 	stepSize: 60,
 	stepSizeUnit: 'm',
@@ -296,6 +342,8 @@ const DEFAULT_OVE_OPTIONS: Required<ObserverVectorElementsOptions> = {
 	timeOfPeriapsisType: 'ABSOLUTE',
 }
 
+// Requests an observer-table ephemeris (apparent/astrometric quantities) for `input` (a target name,
+// osculating elements, or TLE) over [startTime, endTime] and returns the parsed CSV rows.
 export async function observer(input: string | ObserverWithOsculatingElements | ObserverWithTLE, center: ObserverSiteCenter, coord: ObserverSiteCoord, startTime: Temporal | Time, endTime: Temporal | Time, quantities: Quantity[] = DEFAULT_QUANTITIES, options: ObserverVectorElementsOptions = DEFAULT_OVE_OPTIONS) {
 	const parameters = structuredClone(DEFAULT_OBSERVER_PARAMETERS) as HorizonsQueryParameters
 	makeParametersFromInput(parameters, input)
@@ -308,6 +356,7 @@ export async function observer(input: string | ObserverWithOsculatingElements | 
 	return parseCsvTable(await response.text(), options)
 }
 
+// Requests a state-vector ephemeris for `input` over [startTime, endTime] and returns the parsed CSV rows.
 export async function vector(input: string | ObserverWithOsculatingElements | ObserverWithTLE, center: ObserverSiteCenter, coord: ObserverSiteCoord, startTime: Temporal | Time, endTime: Temporal | Time, options: ObserverVectorElementsOptions = DEFAULT_OVE_OPTIONS) {
 	const parameters = structuredClone(DEFAULT_VECTOR_PARAMETERS) as HorizonsQueryParameters
 	makeParametersFromInput(parameters, input)
@@ -319,6 +368,7 @@ export async function vector(input: string | ObserverWithOsculatingElements | Ob
 	return parseCsvTable(await response.text(), options)
 }
 
+// Requests an osculating-elements ephemeris for `input` over [startTime, endTime] and returns the parsed CSV rows.
 export async function elements(input: string | ObserverWithOsculatingElements | ObserverWithTLE, center: BodyCenter, startTime: Temporal | Time, endTime: Temporal | Time, options: ObserverVectorElementsOptions = DEFAULT_OVE_OPTIONS) {
 	const parameters = structuredClone(DEFAULT_ELEMENTS_PARAMETERS) as HorizonsQueryParameters
 	makeParametersFromInput(parameters, input)
@@ -330,6 +380,7 @@ export async function elements(input: string | ObserverWithOsculatingElements | 
 	return parseCsvTable(await response.text(), options)
 }
 
+// Requests an SPK binary kernel for the small body designation `id` over [startTime, endTime].
 export async function spkFile(id: number, startTime: Temporal | Time, endTime: Temporal | Time) {
 	const parameters = structuredClone(DEFAULT_SPK_PARAMETERS) as HorizonsQueryParameters
 	parameters.COMMAND = `DES=${id};`
@@ -338,6 +389,7 @@ export async function spkFile(id: number, startTime: Temporal | Time, endTime: T
 	return (await response.json()) as SpkFile
 }
 
+// Sets the COMMAND/target parameters from a target name, TLE, or osculating-element input.
 function makeParametersFromInput(parameters: HorizonsQueryParameters, input: string | ObserverWithOsculatingElements | ObserverWithTLE) {
 	// Ephemeris
 	if (typeof input === 'string') {
@@ -406,6 +458,7 @@ function makeParametersFromStartAndStopTime(parameters: HorizonsQueryParameters,
 	}
 }
 
+// Sets the CENTER and, for coordinate centers, the SITE_COORD/COORD_TYPE parameters.
 function makeParametersFromCenterAndCoordinates(parameters: HorizonsQueryParameters, center: ObserverSiteCenter, coord?: ObserverSiteCoord, options?: ObserverVectorElementsOptions) {
 	parameters.CENTER = center
 
@@ -415,6 +468,7 @@ function makeParametersFromCenterAndCoordinates(parameters: HorizonsQueryParamet
 	}
 }
 
+// Maps the high-level options onto the per-ephemeris-type Horizons output parameters.
 function makeParametersFromOptions(parameters: HorizonsQueryParameters, options?: ObserverVectorElementsOptions) {
 	if (options && parameters.EPHEM_TYPE !== 'SPK') {
 		const isObserver = parameters.EPHEM_TYPE === 'OBSERVER'
@@ -441,16 +495,19 @@ function makeParametersFromOptions(parameters: HorizonsQueryParameters, options?
 	}
 }
 
+// Sets the QUANTITIES parameter for observer ephemerides from the requested quantity codes.
 function makeParametersFromQuantities(parameters: HorizonsQueryParameters, quantities?: Quantity[]) {
 	if (quantities?.length && parameters.EPHEM_TYPE === 'OBSERVER') {
 		parameters.QUANTITIES = quantities.join(',')
 	}
 }
 
+// URL-encodes and single-quotes one parameter value as Horizons expects.
 function formatQueryParameterValue(value: unknown) {
 	return `'${encodeURIComponent(`${value}`)}'`
 }
 
+// Joins the defined parameters into a Horizons query string, dropping empty/undefined values.
 function makeQueryFromParameters(parameters: HorizonsQueryParameters) {
 	return Object.entries(parameters)
 		.filter((e) => e[1] !== undefined && e[1] !== null && e[1] !== '')
@@ -463,6 +520,7 @@ function formatStepSize(stepSize: number = DEFAULT_OVE_OPTIONS.stepSize, unit: S
 	return unit === 'unitless' ? stepSize.toFixed(0) : `${stepSize.toFixed(0)} ${unit}`
 }
 
+// Formats a UTC offset in minutes as a "+HH:MM" / "-HH:MM" time-zone string.
 function formatTimeZone(minutes: number) {
 	const sign = minutes >= 0 ? '+' : '-'
 	const m = Math.abs(minutes)
@@ -470,14 +528,18 @@ function formatTimeZone(minutes: number) {
 	return `${sign}${h.toFixed(0).padStart(2, '0')}:${(m % 60).toFixed(0).padStart(2, '0')}`
 }
 
+// Builds the request URL from the parameters and fetches the response in the given format.
 function makeRequestAndGetResponse(parameters: HorizonsQueryParameters, format: OutputFormat) {
 	const query = makeQueryFromParameters(parameters)
 	return fetch(`${HORIZONS_BASE_URL}?format=${format}&${query}`)
 }
 
+// Marker line beginning the ephemeris data block in the text response.
 const START_TABLE_PREFIX = '$$SOE'
+// Marker line ending the ephemeris data block.
 const END_TABLE_PREFIX = '$$EOE'
 
+// Extracts the CSV rows between the $$SOE/$$EOE markers (with their header) from a Horizons text response.
 function parseCsvTable(text: string, options: ObserverVectorElementsOptions) {
 	const lines = text.split('\n')
 	const start = lines.findIndex((e) => e.startsWith(START_TABLE_PREFIX))
@@ -495,27 +557,32 @@ function parseCsvTable(text: string, options: ObserverVectorElementsOptions) {
 	return lines.length <= 1 ? [] : readCsv(lines, options)
 }
 
+// Base parameters shared by every request (generate ephemeris, no object summary).
 const DEFAULT_COMMON_PARAMETERS: HorizonsCommonParameters = {
 	MAKE_EPHEM: 'YES',
 	OBJ_DATA: 'NO',
 }
 
+// Default parameters for an observer-table request.
 const DEFAULT_OBSERVER_PARAMETERS: HorizonsCommonParameters = {
 	...DEFAULT_COMMON_PARAMETERS,
 	EPHEM_TYPE: 'OBSERVER',
 }
 
+// Default parameters for a state-vector request.
 const DEFAULT_VECTOR_PARAMETERS: HorizonsCommonParameters = {
 	...DEFAULT_COMMON_PARAMETERS,
 	EPHEM_TYPE: 'VECTOR',
 }
 
+// Default parameters for an osculating-elements request (ecliptic reference plane).
 const DEFAULT_ELEMENTS_PARAMETERS: HorizonsEphemerisSpecificParameters = {
 	...DEFAULT_COMMON_PARAMETERS,
 	EPHEM_TYPE: 'ELEMENTS',
 	REF_PLANE: 'ECLIPTIC',
 }
 
+// Default parameters for an SPK-file request.
 const DEFAULT_SPK_PARAMETERS: HorizonsCommonParameters = {
 	EPHEM_TYPE: 'SPK',
 }

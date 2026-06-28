@@ -3,20 +3,35 @@ import { type CsvRow, type ReadCsvOptions, readCsv, TSV_DELIMITER } from '../../
 import { type Angle, deg, mas, toDeg } from '../../math/units/angle'
 import { kilometerPerSecond } from '../../math/units/velocity'
 
+// VizieR TAP/ADQL catalog adapter: runs ADQL queries against the VizieR sync TAP endpoint and
+// implements the generic StarCatalog contract over the Gaia DR3 table (I/355/gaiadr3). Positions are
+// J2000; proper motion is converted from μα·cosδ to ERFA's dα/dt; angles are radians on the public API.
+
+// VizieR TAP host.
 export const VIZIER_URL = 'http://tapvizier.cds.unistra.fr/'
 
+// Path of the synchronous TAP query endpoint.
 const VIZIER_QUERY_PATH = 'TAPVizieR/tap/sync'
+// Quoted VizieR table name for Gaia DR3.
 const VIZIER_GAIA_DR3_TABLE = '"I/355/gaiadr3"'
+// Columns selected from the Gaia DR3 table.
 const VIZIER_GAIA_DR3_COLUMNS = 'Source, RAJ2000, DEJ2000, Gmag, pmRA, pmDE, RV'
+// Catalog epoch for Gaia DR3 entries (J2000).
 const VIZIER_GAIA_DR3_EPOCH = 2000
+// |cos(dec)| floor when converting μα·cosδ to dα/dt near the pole.
 const VIZIER_GAIA_DR3_PM_COS_DEC_EPSILON = 1e-12
+// Pattern validating a Gaia source id (digits only).
 const VIZIER_GAIA_SOURCE_ID_REGEX = /^\d+$/
 
+// Options for a VizieR query: CSV/TSV parsing options plus fetch options.
 export interface VizierQueryOptions extends ReadCsvOptions, Omit<RequestInit, 'method' | 'body'> {
+	// Override VizieR host base URL.
 	baseUrl?: string
+	// Request timeout, milliseconds.
 	timeout?: number
 }
 
+// Default VizieR query options.
 const DEFAULT_VIZIER_QUERY_OPTIONS: VizierQueryOptions = {
 	baseUrl: VIZIER_URL,
 	timeout: 60000,
@@ -39,12 +54,17 @@ export async function vizierQuery(query: string, { baseUrl, timeout = 60000, sig
 	return readCsv(text, { ...options, delimiter: TSV_DELIMITER })
 }
 
+// One parsed Gaia DR3 catalog star.
 export interface VizierGaiaCatalogEntry extends Omit<StarCatalogEntry, 'epoch' | 'magnitude'> {
+	// Gaia source id (kept as a string to preserve full precision).
 	readonly id: string
+	// Fixed catalog epoch (J2000).
 	readonly epoch: 2000
+	// Gaia G magnitude.
 	readonly magnitude: number
 }
 
+// StarCatalog implementation backed by remote VizieR Gaia DR3 ADQL queries.
 export class VizierGaiaCatalog extends BaseStarCatalog<VizierGaiaCatalogEntry> {
 	readonly options: VizierQueryOptions
 

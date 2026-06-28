@@ -2,40 +2,69 @@ import { DEG2RAD } from '../../core/constants'
 import type { BitpixOrZero } from '../../io/formats/fits/fits'
 import { type Angle, toDeg } from '../../math/units/angle'
 
+// Client for the CDS hips2fits service: extracts a cutout image (FITS/JPG/PNG) from a Hierarchical
+// Progressive Survey (HiPS) for a given center, field of view, and projection, and lists available
+// HiPS surveys. Angles are radians on the API surface and converted to degrees in the request URLs.
+
 // https://www.ivoa.net/documents/HiPS/20170406/PR-HIPS-1.0-20170406.pdf
 
+// Primary hips2fits/MocServer host.
 export const HIPS2FITS_BASE_URL = 'https://alasky.cds.unistra.fr/'
+// Mirror host used as a fallback.
 export const HIPS2FITS_ALTERNATIVE_URL = 'http://alaskybis.cds.unistra.fr/'
 
+// Coordinate system of the requested cutout.
 export type CoordinateFrameType = 'icrs' | 'galactic'
 
+// Output image encoding.
 export type ImageFormatType = 'fits' | 'jpg' | 'png'
 
+// WCS projection code for the cutout.
 export type ProjectionType = 'AZP' | 'SZP' | 'TAN' | 'STG' | 'SIN' | 'ARC' | 'ZEA' | 'AIR' | 'CYP' | 'CEA' | 'CAR' | 'MER' | 'SFL' | 'PAR' | 'MOL' | 'AIT' | 'TSC' | 'CSC' | 'QSC' | 'HPX' | 'XPH'
 
+// Observational wavelength regime of a survey.
 export type HipsSurveyRegime = 'infrared' | 'uv' | 'radio' | 'optical' | 'gamma-ray' | 'x-ray'
 
+// Native sky frame of a survey.
 export type HipsSurveyFrame = 'equatorial' | 'galactic'
 
+// Options for a hips2fits cutout request.
 export interface Hips2FitsOptions {
+	// Override host base URL.
 	baseUrl?: string
+	// Output width, pixels.
 	width?: number
+	// Output height, pixels.
 	height?: number
+	// Image rotation angle, radians.
 	rotation?: Angle
+	// Field of view, radians.
 	fov?: Angle
+	// WCS projection.
 	projection?: ProjectionType
+	// Coordinate system of `ra`/`dec`.
 	coordSystem?: CoordinateFrameType
+	// Output format.
 	format?: ImageFormatType
+	// Request timeout, milliseconds.
 	timeout?: number
 }
 
+// Metadata describing one HiPS survey.
 export interface HipsSurvey {
+	// Survey identifier.
 	readonly id: string
+	// Client category path.
 	readonly category: string
+	// Native sky frame.
 	readonly frame: HipsSurveyFrame
+	// Wavelength regime.
 	readonly regime: HipsSurveyRegime
+	// Pixel BITPIX (0 when unknown).
 	readonly bitpix: BitpixOrZero
+	// Native pixel scale, degrees/pixel.
 	readonly pixelScale: number
+	// Fraction of the sky covered, 0..1.
 	readonly skyFraction: number
 }
 
@@ -57,6 +86,7 @@ export async function hipsSurveys(minSkyFraction: number = 0.99, baseUrl?: strin
 	return mapHipsSurveys(await response.json())
 }
 
+// Maps raw MocServer survey records into typed HipsSurvey objects.
 function mapHipsSurveys(survey: Record<string, unknown>[]) {
 	return survey.map(
 		(survey) =>
