@@ -7,9 +7,17 @@ import { eraGc2Gde, eraSp00 } from '../coordinates/erfa/erfa'
 import type { Frame } from '../coordinates/frame'
 import { gcrsToItrsRotationMatrix, greenwichApparentSiderealTime, greenwichMeanSiderealTime, instantaneousEarthAngularVelocity, pmAngles, type Time, tt } from '../time/time'
 
+// Observer location on the Earth and the geodetic geometry around it: building a position from geodetic
+// (lat/lon/elevation) or geocentric Cartesian coordinates on a reference ellipsoid, the GCRS->altazimuth
+// rotation and its rotating-frame velocity operator, local sidereal time, the parallax terms rho·cos φ
+// and rho·sin φ, and the sub-point beneath a celestial direction. Angles are radians, distances AU.
+// Geometry derived per position (ITRS vector, rotation matrices, parallax terms) is memoized on it.
+
 // An Earth ellipsoid that maps latitudes and longitudes to |xyz| positions.
 export enum Ellipsoid {
+	// Geodetic Reference System 1980.
 	GRS80,
+	// World Geodetic System 1972.
 	WGS72,
 	// World Geodetic System 1984. Used by the GPS system.
 	WGS84,
@@ -17,25 +25,40 @@ export enum Ellipsoid {
 	IERS2010,
 }
 
+// Geometric parameters of a reference ellipsoid.
 export interface EllipsoidParameters {
+	// Equatorial radius in AU.
 	readonly radius: Distance
+	// Flattening f (dimensionless).
 	readonly flattening: number
+	// Precomputed 1 - f, the recurring factor in geodetic conversions.
 	readonly oneMinusFlattening: number
 }
 
+// Geodetic coordinates, generic over the angle and distance representations.
 export interface GeographicCoordinate<T = Angle, D = Distance> {
+	// Geodetic latitude (radians by default), north-positive.
 	latitude: T
+	// Geodetic longitude (radians by default), east-positive.
 	longitude: T
+	// Height above the ellipsoid (AU by default).
 	elevation: D
 }
 
+// A resolved observer position on a specific ellipsoid, with memoized derived geometry.
 export interface GeographicPosition extends Readonly<GeographicCoordinate> {
+	// Reference ellipsoid the coordinates are defined on.
 	readonly ellipsoid: Ellipsoid
 
+	// Cached geocentric ITRS position vector (AU).
 	itrs?: Vec3
+	// Cached latitude rotation (ITRS axes to local meridian).
 	rLat?: Mat3
+	// Cached combined latitude+longitude rotation to the local altazimuth axes.
 	rLatLon?: Mat3
+	// Cached rho·cos φ parallax term.
 	rhoCosPhi?: number
+	// Cached rho·sin φ parallax term.
 	rhoSinPhi?: number
 }
 
@@ -51,6 +74,7 @@ export function geocentricLocation(x: number, y: number, z: number, ellipsoid: E
 	return { longitude, latitude, elevation, ellipsoid }
 }
 
+// Latitude rotation taking ITRS axes to a meridian-aligned frame; memoized on the location.
 function rLat(location: GeographicPosition) {
 	if (location.rLat) return location.rLat
 	const m = matRotY(-location.latitude)
@@ -58,6 +82,7 @@ function rLat(location: GeographicPosition) {
 	return location.rLat
 }
 
+// Combined longitude-then-latitude rotation to the local altazimuth axes; memoized on the location.
 function rLatLon(location: GeographicPosition) {
 	if (location.rLatLon) return location.rLatLon
 	const m = matRotZ(location.longitude)

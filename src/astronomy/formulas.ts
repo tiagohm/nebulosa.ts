@@ -3,8 +3,17 @@ import { validateDeclination, validateFinite, validateInRange, validateNonNegati
 import type { Angle } from '../math/units/angle'
 import type { Distance } from '../math/units/distance'
 
+// Observation-planning formulas for telescopes, cameras, and imaging: optics (magnification, focal
+// length/ratio, resolving limits, exit pupil, fields of view), sampling and pixel scale, exposure and
+// SNR/dynamic-range estimates, star-trail limits, airmass/extinction/refraction, dew point, and target
+// magnitudes. These are first-order planning estimates, not high-precision physical models. Inputs are
+// validated and units are stated per function (mm, microns, arcseconds, electrons, radians, Celsius).
+
+// Arcseconds per radian divided by 1000: converts (pixel size in microns / focal length in mm) to arcsec/pixel.
 const ARCSECONDS_PER_PIXEL_FACTOR = ARCSEC_PER_RADIAN / 1000
+// cos(declination) below this is treated as the pole, where the max-exposure denominator becomes unstable.
 const MAX_EXPOSURE_COSINE_EPSILON = 1e-12
+// Magnus formula coefficients for the dew-point approximation over water (dimensionless a, b in °C).
 const MAGNUS_A_WATER = 17.625
 const MAGNUS_B_CELSIUS = 243.04
 
