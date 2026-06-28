@@ -4,21 +4,37 @@ import { type MutVec3, type Vec3, vecMinus, vecPlus } from '../../math/linear-al
 import { cirsRotationMatrix, gcrsToItrsRotationMatrix, greenwichApparentSiderealTime, greenwichMeanSiderealTime, instantaneousEarthRotationMatrix, meanObliquity, pmMatrix, precessionNutationMatrix, type Time, Timescale, timeJulianYear, trueObliquity, tt } from '../time/time'
 import { eraBp06 } from './erfa/erfa'
 
+// Reference-frame orientations and the rotations between them. A `Frame` is defined relative to the base
+// (GCRS/ICRS-oriented) frame by its base->frame rotation matrix at a time, plus an optional angular-
+// velocity operator W = dR/dt·Rᵀ for rotating frames (e.g. ITRS) so full position+velocity states
+// transform correctly. Covers ICRS/FK4/FK5, ecliptic and galactic systems, equator/equinox-of-date,
+// CIRS/TIRS/ITRS/TEME, IAU 2006 precession, and helpers to rotate a position or [p, v] state between any
+// pair. Handles orientation only; origin shifts and apparent-place corrections live in other modules.
+
+// A position vector, or a [position, velocity] state pair, to be rotated between frames.
 export type CoordinateFrame = Vec3 | readonly [Vec3, Vec3]
 
+// Mutable form of CoordinateFrame.
 export type MutCoordinateFrame = MutVec3 | readonly [MutVec3, MutVec3]
 
+// Input type matching the shape (vector vs state) of a CoordinateFrame T.
 export type CoordinateFrameInput<T extends CoordinateFrame> = T extends Vec3 ? Vec3 : readonly [Vec3, Vec3]
 
+// Mutable output type matching the shape (vector vs state) of a CoordinateFrame T.
 export type CoordinateFrameOutput<T extends CoordinateFrame> = T extends Vec3 ? MutVec3 : [MutVec3, MutVec3]
 
+// A reference frame defined by its rotation from the base frame, plus an optional rotating-frame term.
 export interface Frame {
+	// Base->frame rotation matrix at the given time.
 	readonly rotationAt: (time: Time) => Mat3
+	// Optional angular-velocity operator W = dR/dt·Rᵀ (per day), present for frames that rotate with time.
 	readonly dRdtTimesRtAt?: (time: Time) => Mat3
 }
 
+// J2000.0 epoch in TT, the reference equinox for FK5 precession.
 const EQUINOX_J2000 = timeJulianYear(2000, Timescale.TT)
 
+// Builds a fixed frame by precessing `m` from one equinox to another (IAU 2006/Capitaine).
 function equinoxFrameByCapitaine(m: Mat3, from: Time, to: Time): Frame {
 	const a = precessionMatrixCapitaine(from, to)
 	matMul(a, m, a)
@@ -317,7 +333,12 @@ export function frameRotationAt(from: Frame, to: Frame, time: Time, o?: MutMat3)
 	return matMulTranspose(to.rotationAt(time), from.rotationAt(time), o)
 }
 
+// Placeholder time for time-independent (fixed) frame rotations.
 const NO_TIME: Time = { day: 0, fraction: 0, scale: 0 }
+
+// Convenience wrappers that rotate a position or [p, v] state from the base frame into the named frame
+// (the inverse direction is available via frameToBase/frameToFrame). Each delegates to frameAt with the
+// matching Frame; the time-independent ones pass NO_TIME. Pass `o` to write in place and avoid allocation.
 
 export function meanEquatorAndEquinoxAtB1950<T extends CoordinateFrame>(pv: T, o?: CoordinateFrameOutput<T>) {
 	return frameAt(pv, MEAN_EQUATOR_AND_EQUINOX_AT_B1950, NO_TIME, o)

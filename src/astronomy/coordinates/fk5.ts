@@ -8,6 +8,11 @@ import type { CartesianCoordinate } from './coordinate'
 import { eraS2p } from './erfa/erfa'
 import { precessionMatrixCapitaine } from './frame'
 
+// FK5 coordinate helpers: build an FK5 Cartesian position from spherical (RA, Dec, distance) and precess
+// FK5 Cartesian positions between equinoxes using the IAU 2006 precession model. Angles are radians,
+// distances AU. For the FK5<->ICRS frame bias see frame.ts.
+
+// J2000.0 epoch in TT, the reference equinox for FK5 precession.
 const J2000 = timeJulianYear(2000, Timescale.TT)
 
 // Convert the FK5 spherical coordinate to FK5 cartesian coordinate.

@@ -7,6 +7,12 @@ import { localSiderealTime } from '../observer/location'
 import { precessionNutationMatrix, type Time, timeNow, trueObliquity } from '../time/time'
 import { eraC2s, eraS2c } from './erfa/erfa'
 
+// Spherical/Cartesian coordinate types and conversions among the common astronomical systems: equatorial
+// (current and J2000), horizontal (azimuth/altitude), ecliptic, and galactic, plus angular separation
+// and a few special directions (zenith, meridian intersections, equinox node). Angles are radians;
+// azimuth is measured from north and normalized to [0, TAU). Conversions that need orientation of date
+// take a Time (defaulting to now).
+
 // Representation of points in 3D spherical coordinates.
 export type SphericalCoordinate = Vec3
 
@@ -15,21 +21,27 @@ export type CartesianCoordinate = Vec3
 
 // Right ascension and declination in the current equatorial frame.
 export interface EquatorialCoordinate {
+	// Right ascension (radians).
 	rightAscension: Angle
+	// Declination (radians).
 	declination: Angle
 	distance?: number // AU, km, Earth radii, etc
 }
 
 // Right ascension and declination in the J2000 equatorial frame.
 export interface EquatorialCoordinateJ2000 {
+	// J2000 right ascension (radians).
 	rightAscensionJ2000: Angle
+	// J2000 declination (radians).
 	declinationJ2000: Angle
 	distance?: number // AU, km, Earth radii, etc
 }
 
 // Local azimuth and altitude.
 export interface HorizontalCoordinate {
+	// Azimuth (radians), measured from north and normalized to [0, TAU).
 	azimuth: Angle
+	// Altitude above the horizon (radians).
 	altitude: Angle
 }
 
