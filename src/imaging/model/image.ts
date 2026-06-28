@@ -8,10 +8,17 @@ import { bufferSink, bufferSource, fileHandleSource, readRemaining, readUntil, t
 import { clamp } from '../../math/numerical/math'
 import { DEFAULT_WRITE_IMAGE_TO_FORMAT_OPTIONS, type Image, type ImageFormat, type ImageRawType, type WriteImageToFormatOptions } from './types'
 
+// Image input/output for the imaging model: reads FITS, XISF, and JPEG sources (auto-detected) into a
+// normalized in-memory Image whose pixels are scaled into [0, 1], and writes an Image back out to
+// JPEG, FITS, or XISF. The `raw` argument selects the backing precision (Float32 32 / Float64 64) or
+// reuses a caller-provided buffer; 'auto' picks 32-bit for 8-bit sources and 64-bit otherwise.
+
+// Predicate selecting a Rice-compressed image HDU.
 function findCompressedImageHdu(hdu: FitsHdu) {
 	return isRiceCompressedImageHeader(hdu.header)
 }
 
+// Predicate selecting an uncompressed image HDU with positive dimensions.
 function findUncompressedImageHdu(hdu: FitsHdu) {
 	return widthKeyword(hdu.header, 0) > 0 && heightKeyword(hdu.header, 0) > 0
 }
@@ -42,6 +49,7 @@ export async function readImageFromFits(fits: Fits | FitsHdu, source: Source & S
 	return { header, raw, metadata: { width, height, channels, pixelCount, pixelSizeInBytes, strideInBytes, stride, bitpix, bayer } } satisfies Image as Image
 }
 
+// Reads an image from a parsed XISF file or image into a normalized Image.
 export async function readImageFromXisf(xisf: Xisf | XisfImage, source: Source & Seekable, raw: ImageRawType | 32 | 64 | 'auto' = 'auto') {
 	const image = 'images' in xisf ? xisf.images[0] : xisf
 	const { bitpix, geometry, header } = image
@@ -63,6 +71,7 @@ export async function readImageFromXisf(xisf: Xisf | XisfImage, source: Source &
 	return { header, raw, metadata: { width, height, channels, pixelCount, pixelSizeInBytes, strideInBytes, stride, bitpix, bayer } } satisfies Image as Image
 }
 
+// Decodes a JPEG buffer into a single-channel (luminance) normalized Image, or undefined if not JPEG.
 export function readImageFromJpeg(buffer: Buffer, raw: ImageRawType | 32 | 64 | 'auto' = 'auto', format?: PixelFormat): Image | undefined {
 	if (!isJpeg(buffer)) return undefined
 
@@ -85,6 +94,7 @@ export function readImageFromJpeg(buffer: Buffer, raw: ImageRawType | 32 | 64 | 
 	return { header, raw, metadata: { width, height, channels: 1, pixelCount, pixelSizeInBytes: 1, strideInBytes: width, stride: width, bitpix: 8, bayer: undefined } } satisfies Image as Image
 }
 
+// Reads an image from a seekable source, auto-detecting FITS, then XISF, then JPEG.
 export async function readImageFromSource(source: Source & Seekable, raw: ImageRawType | 32 | 64 | 'auto' = 'auto') {
 	const { position } = source
 
@@ -106,20 +116,25 @@ export async function readImageFromSource(source: Source & Seekable, raw: ImageR
 	return readImageFromJpeg(await readRemaining(source), raw)
 }
 
+// Reads an image from an in-memory buffer.
 export async function readImageFromBuffer(buffer: Buffer, raw: ImageRawType | 32 | 64 | 'auto' = 'auto') {
 	return await readImageFromSource(bufferSource(buffer), raw)
 }
 
+// Reads an image from an open file handle.
 export async function readImageFromFileHandle(handle: FileHandle, raw: ImageRawType | 32 | 64 | 'auto' = 'auto') {
 	await using source = fileHandleSource(handle)
 	return await readImageFromSource(source, raw)
 }
 
+// Opens a file path and reads an image from it.
 export async function readImageFromPath(path: PathLike, raw: ImageRawType | 32 | 64 | 'auto' = 'auto') {
 	await using handle = await fs.open(path, 'r')
 	return await readImageFromFileHandle(handle, raw)
 }
 
+// Encodes an Image to an in-memory format buffer (currently JPEG); returns undefined for other formats.
+// Pixel values in [0, 1] are scaled to 0..255 before compression.
 export function writeImageToFormat(image: Image, format: Exclude<ImageFormat, 'fits' | 'xisf'> = 'jpeg', options: Partial<WriteImageToFormatOptions> = DEFAULT_WRITE_IMAGE_TO_FORMAT_OPTIONS) {
 	const { raw, metadata } = image
 	const { width, height, channels } = metadata
@@ -135,20 +150,25 @@ export function writeImageToFormat(image: Image, format: Exclude<ImageFormat, 'f
 	return undefined
 }
 
+// Writes an Image to a FITS file via a buffer or sink.
 export function writeImageToFits(image: Image, output: Buffer | Sink) {
 	if (Buffer.isBuffer(output)) output = bufferSink(output)
 	return writeFits(output, [image])
 }
 
+// Writes an Image to an XISF file via a buffer or sink.
 export function writeImageToXisf(image: Image, output: Buffer | Sink, format?: XisfWriteFormat) {
 	if (Buffer.isBuffer(output)) output = bufferSink(output)
 	return writeXisf(output, [image], format)
 }
 
+// Scales a normalized pixel `p` (0..1) to an integer 0..max, truncating and clamping.
 export function truncatePixel(p: number, max: number) {
 	return clamp(Math.trunc(p * max), 0, max)
 }
 
+// Rescales the raw buffer into [0, 1] in place when its values fall outside that range; a flat image
+// (range below 1e-12) is zeroed.
 function normalize(raw: ImageRawType) {
 	const n = raw.length
 	let min = raw[0]
