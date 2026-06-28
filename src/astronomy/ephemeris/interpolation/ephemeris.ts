@@ -5,70 +5,120 @@ import { normalizeAngle, type Angle } from '../../../math/units/angle'
 import type { EquatorialCoordinate } from '../../coordinates/coordinate'
 import { type Time, Timescale, timeConvert } from '../../time/time'
 
+// Time-series interpolation of precomputed apparent/topocentric RA and Dec samples. Supports
+// linear, spline (several cubic variants), and Chebyshev least-squares strategies behind a common
+// interpolator interface, with configurable out-of-range handling and optional RMS diagnostics.
+// RA is unwrapped before fitting to avoid the 0/TAU discontinuity and re-normalized on output;
+// sample times are shifted by the first sample (TT) to keep the interpolation argument small.
+
+// Selectable interpolation algorithm family.
 export type EphemerisInterpolationStrategy = 'linear' | 'spline' | 'chebyshev'
 
+// Behavior when a query time falls outside the sample interval.
 export type EphemerisInterpolationOutOfRange = 'clamp' | 'extrapolate' | 'throw'
 
+// Cubic spline slope/segment construction variant.
 export type SplineEphemerisInterpolationType = 'naturalCubic' | 'cubicHermite' | 'pchip' | 'akima' | 'catmullRom'
 
+// One ephemeris sample: an equatorial position tagged with its instant.
 export interface EphemerisPoint extends Readonly<EquatorialCoordinate> {
+	// Instant of the sample (converted internally to TT).
 	readonly time: Time
 }
 
+// Optional knobs controlling interpolation behavior and diagnostics.
 export interface EphemerisInterpolationOptions {
+	// Out-of-range handling; defaults to 'clamp'.
 	outOfRange?: EphemerisInterpolationOutOfRange
+	// When true, compute RMS/max residuals at the sample times.
 	computeRmsError?: boolean
+	// When true, repeated sample times overwrite instead of throwing.
 	allowDuplicateTimes?: boolean
 }
 
+// Residual statistics of the fit against the input samples, in radians.
 export interface EphemerisInterpolationDiagnostics {
+	// Root-mean-square RA residual.
 	rmsRA: number
+	// Root-mean-square Dec residual.
 	rmsDEC: number
+	// Maximum absolute RA residual.
 	maxAbsRA: number
+	// Maximum absolute Dec residual.
 	maxAbsDEC: number
 }
 
+// Common interface for all RA/Dec interpolators.
 export interface EphemerisInterpolator {
+	// Which strategy this interpolator implements.
 	readonly strategy: EphemerisInterpolationStrategy
+	// First sample instant as a TT day number.
 	readonly startTime: number
+	// Last sample instant as a TT day number.
 	readonly endTime: number
+	// Number of unique samples used.
 	readonly sampleCount: number
+	// Fit residuals, present only when computeRmsError was requested.
 	readonly diagnostics?: EphemerisInterpolationDiagnostics
+	// Interpolates [RA, Dec] (radians) at a time, allocating the result.
 	readonly compute: (time: Time) => [Angle, Angle]
+	// Interpolates into a caller-provided [RA, Dec] buffer, which is returned.
 	readonly computeInto: (time: Time, out: [Angle, Angle]) => [Angle, Angle]
+	// Evaluates the fit at many times, returning ephemeris points.
 	readonly resample: (times: readonly Time[]) => EphemerisPoint[]
 }
 
+// Interpolator that can be rebuilt in place from a new sample set.
 export interface UpdatableEphemerisInterpolator extends EphemerisInterpolator {
 	// Rebuilds all precomputed interpolation state; the shape leaves room for true incremental updates later.
 	readonly update: (points: readonly EphemerisPoint[]) => void
 }
 
+// Internal sortable view of a sample, retaining original index for stable ordering.
 interface SortableEphemerisPoint {
+	// Numeric TT instant (day + fraction) used as the sort key.
 	time: number
+	// Integer TT day part.
 	day: number
+	// TT day fraction part.
 	fraction: number
+	// Right ascension, radians.
 	rightAscension: number
+	// Declination, radians.
 	declination: number
+	// Original input index, breaks ties to keep the sort stable.
 	order: number
 }
 
+// Internal sorted, de-duplicated, RA-unwrapped sample arrays ready for fitting.
 interface PreparedEphemerisSamples {
+	// Numeric TT instants per sample.
 	times: Float64Array
+	// Instants shifted to start at zero (days from the first sample).
 	normalizedTimes: Float64Array
+	// Unwrapped right ascension per sample, radians.
 	rightAscension: Float64Array
+	// Declination per sample, radians.
 	declination: Float64Array
+	// First sample instant.
 	startTime: number
+	// Last sample instant.
 	endTime: number
+	// Integer TT day of the first sample.
 	startDay: number
+	// TT day fraction of the first sample.
 	startFraction: number
 }
 
+// Internal scalar fit over normalized time, evaluated per output component.
 interface ScalarInterpolator {
+	// Evaluates the fit at normalized argument x.
 	readonly compute: (x: number) => number
+	// Clears any cached per-stream lookup state.
 	readonly reset: () => void
 }
 
+// Default out-of-range policy when none is supplied.
 const DEFAULT_OUT_OF_RANGE: EphemerisInterpolationOutOfRange = 'clamp'
 
 // Creates a linear ephemeris interpolator for apparent/topocentric RA and Dec samples.
