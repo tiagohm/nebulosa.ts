@@ -71,6 +71,14 @@ Additional rules:
 - Do not introduce another test runner unless the task explicitly requires it.
 - Do not use `bun run compile` as a fallback for linting or type-checking.
 
+### Python fixtures and reference values
+
+- Use `uv` to run Python scripts that generate fixtures or reference values, for example with Astropy, ERFA, NumPy, or Skyfield. Do not invoke `python`, `pip`, or a manually managed virtualenv directly.
+- Run one-off scripts with `uv run script.py` and declare their dependencies inline with PEP 723 metadata so `uv` resolves them automatically, for example `uv run --with astropy --with numpy script.py`.
+- Use these scripts to cross-check TypeScript results against a trusted reference (Astropy/ERFA) and to produce expected values for tests; paste the resulting numbers into the test as literals rather than depending on Python at test time.
+- Keep generated values reproducible: pin the timescale, epoch, location, and ellipsoid in the script, and note the reference library and version in a comment near the generated fixture or expected value.
+- Do not add Python to the project's runtime or test path. `uv` is a local fixture-generation tool only; Bun remains the sole runtime for the library and its tests.
+
 ## Formatting And TypeScript Style
 
 - Follow OXC formatting: tabs, single quotes, no semicolons, trailing commas, and the configured long line width.
