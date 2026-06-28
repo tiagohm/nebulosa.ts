@@ -9,77 +9,135 @@ import type { CartesianCoordinate, EquatorialCoordinate } from '../coordinates/c
 import type { Time } from '../time/time'
 import { KeplerOrbit } from './asteroid'
 
+// Differential-correction orbit fitting: refines a six-element Cartesian two-body state to weighted
+// astrometric RA/Dec observations using a Levenberg-Marquardt least-squares loop with a finite-
+// difference Jacobian, Cholesky-solved normal equations, and an optional parameter covariance.
+// State units follow `mu` (positions/velocities share its length/time units); angles are radians.
+
+// Number of fitted state parameters (3 position + 3 velocity).
 const PARAMETER_COUNT = 6
+// Default cap on Levenberg-Marquardt iterations.
 const DEFAULT_MAX_ITERATIONS = 50
+// Default relative chi-squared improvement tolerance for convergence.
 const DEFAULT_TOLERANCE = 1e-12
+// Default relative parameter-step tolerance for convergence.
 const DEFAULT_PARAMETER_TOLERANCE = 1e-12
+// Default tolerance on the max gradient component for convergence.
 const DEFAULT_GRADIENT_TOLERANCE = 1e-10
+// Default initial Levenberg-Marquardt damping factor.
 const DEFAULT_INITIAL_DAMPING = 1e-3
+// Default smallest acceptable topocentric distance before the model is rejected.
 const DEFAULT_MIN_TOPOCENTRIC_DISTANCE = 1e-12
+// Default absolute finite-difference step for position parameters.
 const DEFAULT_POSITION_STEP = 1e-7
+// Default absolute finite-difference step for velocity parameters.
 const DEFAULT_VELOCITY_STEP = 1e-8
+// Default relative finite-difference step (scaled by the parameter magnitude).
 const DEFAULT_RELATIVE_STEP = 1e-6
+// Default upper bound on any finite-difference step.
 const DEFAULT_MAX_STEP = 1e-2
+// Maximum damping increases attempted within one iteration before giving up.
 const MAX_DAMPING_ATTEMPTS = 16
+// Lower clamp on the damping factor.
 const MIN_DAMPING = 1e-30
+// Upper clamp on the damping factor.
 const MAX_DAMPING = 1e30
+// Maximum squared Cholesky condition number before the covariance is deemed unreliable.
 const COVARIANCE_CONDITION_LIMIT = 1e24
+// Identity rotation passed to KeplerOrbit so the fit works directly in the input frame.
 const IDENTITY_ROTATION = matIdentity()
 
 // Astrometric observation in the same inertial frame and distance units as the fitted state.
 export interface OrbitFitObservation extends Readonly<EquatorialCoordinate> {
+	// Epoch of the observation.
 	readonly time: Time
+	// 1-sigma right-ascension uncertainty, radians; falls back to the default when omitted.
 	readonly raErr?: Angle
+	// 1-sigma declination uncertainty, radians; falls back to the default when omitted.
 	readonly decErr?: Angle
+	// Observer position vector at the observation epoch, same frame/units as the state.
 	readonly observerPosition: Vec3
 }
 
+// Optional controls for fitOrbit(); omitted fields use the module defaults.
 export interface OrbitFitOptions {
+	// Gravitational parameter, in units consistent with the state vectors.
 	readonly mu?: number
+	// Default RA uncertainty (radians) for observations without raErr.
 	readonly defaultRaErr?: Angle
+	// Default Dec uncertainty (radians) for observations without decErr.
 	readonly defaultDecErr?: Angle
+	// Iteration cap.
 	readonly maxIterations?: number
+	// Relative chi-squared improvement tolerance.
 	readonly tolerance?: number
+	// Relative parameter-step tolerance.
 	readonly parameterTolerance?: number
+	// Gradient-norm tolerance.
 	readonly gradientTolerance?: number
+	// Initial damping factor.
 	readonly initialDamping?: number
+	// Smallest acceptable topocentric distance.
 	readonly minTopocentricDistance?: number
+	// Absolute finite-difference step for position parameters.
 	readonly finiteDifferencePositionStep?: number
+	// Absolute finite-difference step for velocity parameters.
 	readonly finiteDifferenceVelocityStep?: number
+	// Relative finite-difference step.
 	readonly relativeFiniteDifferenceStep?: number
+	// Upper bound on any finite-difference step.
 	readonly maxFiniteDifferenceStep?: number
+	// When not false, compute the parameter covariance.
 	readonly computeCovariance?: boolean
+	// When true, reject steps whose trial state cannot be evaluated.
 	readonly rejectInvalidSteps?: boolean
 }
 
+// Per-observation angular residual between observed and modeled positions.
 export interface OrbitFitAngularResidual {
+	// Observation epoch.
 	readonly time: Time
+	// Residual in right ascension, cos(dec)-weighted, radians.
 	readonly dRA: Angle
+	// Residual in declination, radians.
 	readonly dDEC: Angle
+	// Total angular residual (hypot of dRA and dDEC), radians.
 	readonly total: Angle
 }
 
+// Fitted Cartesian state at the solution epoch.
 export interface OrbitFitCartesianState {
 	readonly epoch: Time
 	readonly position: CartesianCoordinate
 	readonly velocity: CartesianCoordinate
 }
 
+// Full output of an orbit fit: state, derived orbit, residuals, fit statistics, and convergence flags.
 export interface OrbitFitResult {
+	// Fitted Cartesian state.
 	readonly state: OrbitFitCartesianState
+	// KeplerOrbit derived from the fitted state.
 	readonly orbit: KeplerOrbit
+	// Parameter covariance (6x6), present when requested and well-conditioned.
 	readonly covariance?: Matrix
+	// Residuals: normalized (sigma units) and angular (radians).
 	readonly residuals: {
 		readonly normalized: readonly number[]
 		readonly angular: readonly OrbitFitAngularResidual[]
 	}
+	// Chi-squared of the final fit.
 	readonly chi2: number
+	// Reduced chi-squared (chi2 / degrees of freedom); NaN when dof <= 0.
 	readonly reducedChi2: number
+	// RMS total angular residual, radians.
 	readonly rms: Angle
+	// Number of accepted iterations performed.
 	readonly iterations: number
+	// True if the loop reached a convergence criterion.
 	readonly converged: boolean
 }
 
+// OrbitFitOptions with all fields resolved to concrete values.
 interface ResolvedOrbitFitOptions {
 	readonly mu: number
 	readonly defaultRaErr: Angle
@@ -98,15 +156,20 @@ interface ResolvedOrbitFitOptions {
 	readonly rejectInvalidSteps: boolean
 }
 
+// Internal bundle returned by evaluateResiduals: the candidate orbit plus its residuals and chi2.
 interface ResidualEvaluation {
 	readonly orbit: KeplerOrbit
 	readonly state: OrbitFitCartesianState
+	// Residuals in sigma units, ordered [RA0, Dec0, RA1, Dec1, ...].
 	readonly normalized: Float64Array
 	readonly angular: readonly OrbitFitAngularResidual[]
 	readonly chi2: number
 }
 
-// Fits a Cartesian two-body state to weighted astrometric RA/Dec observations.
+// Fits a Cartesian two-body state to weighted astrometric RA/Dec observations by Levenberg-Marquardt
+// differential correction, starting from the given `epoch` state guess. Requires at least 3
+// observations (6 parameters). Returns the refined state, derived orbit, residuals, fit statistics,
+// and optional covariance. Throws if the initial or final state cannot be evaluated.
 export function fitOrbit(observations: readonly OrbitFitObservation[], epoch: Time, position: Vec3, velocity: Vec3, options?: OrbitFitOptions): OrbitFitResult {
 	const config = resolveFitOptions(options)
 	validateInput(observations, epoch, position, velocity, config)
@@ -279,10 +342,12 @@ function validateInput(observations: readonly OrbitFitObservation[], epoch: Time
 	}
 }
 
+// Packs a position/velocity pair into the 6-element parameter vector.
 function stateToParams(position: CartesianCoordinate, velocity: CartesianCoordinate): Float64Array {
 	return Float64Array.of(position[0], position[1], position[2], velocity[0], velocity[1], velocity[2])
 }
 
+// Unpacks the parameter vector back into a Cartesian state; undefined if not finite/sized.
 function paramsToState(params: Readonly<Float64Array>, epoch: Time): OrbitFitCartesianState | undefined {
 	if (params.length !== PARAMETER_COUNT || !allFinite(params)) return undefined
 
@@ -292,6 +357,8 @@ function paramsToState(params: Readonly<Float64Array>, epoch: Time): OrbitFitCar
 	return { epoch, position, velocity }
 }
 
+// Propagates the candidate state to each observation, forms the cos(dec)-weighted RA/Dec residuals,
+// and accumulates chi-squared. Returns undefined if the orbit or any model position is non-finite.
 function evaluateResiduals(params: Readonly<Float64Array>, observations: readonly OrbitFitObservation[], epoch: Time, options: ResolvedOrbitFitOptions): ResidualEvaluation | undefined {
 	const state = paramsToState(params, epoch)
 
@@ -344,6 +411,8 @@ function evaluateNormalizedResiduals(params: Readonly<Float64Array>, observation
 	return evaluateResiduals(params, observations, epoch, options)?.normalized
 }
 
+// Computes the modeled topocentric RA/Dec (radians) and range for one observation by propagating the
+// orbit and subtracting the observer position. Returns undefined if the geometry is degenerate.
 function computeModelRaDec(orbit: KeplerOrbit, observation: OrbitFitObservation, minTopocentricDistance: number) {
 	let position: Vec3
 
@@ -365,6 +434,8 @@ function computeModelRaDec(orbit: KeplerOrbit, observation: OrbitFitObservation,
 	return { rightAscension: normalizeAngle(Math.atan2(y, x)), declination: Math.asin(clamp(z / range, -1, 1)), range } as const
 }
 
+// Builds the residual Jacobian by central finite differences, falling back to one-sided differences
+// when a perturbed state fails to evaluate. Returns undefined if any column cannot be formed.
 function numericalJacobian(f: (params: Readonly<Float64Array>) => Float64Array | undefined, params: Readonly<Float64Array>, baseResiduals: Readonly<Float64Array>, options: ResolvedOrbitFitOptions) {
 	const rows = baseResiduals.length
 	const jacobian = new Matrix(rows, PARAMETER_COUNT)
@@ -412,12 +483,15 @@ function numericalJacobian(f: (params: Readonly<Float64Array>) => Float64Array |
 	return jacobian
 }
 
+// Chooses the finite-difference step for parameter `index`: the larger of the absolute (position vs
+// velocity) and relative steps, clamped to the configured maximum.
 function finiteDifferenceStep(value: number, index: number, options: ResolvedOrbitFitOptions) {
 	const absolute = index < 3 ? options.finiteDifferencePositionStep : options.finiteDifferenceVelocityStep
 	const relative = Math.abs(value) * options.relativeFiniteDifferenceStep
 	return Math.min(Math.max(relative, absolute), options.maxFiniteDifferenceStep)
 }
 
+// Forms the normal-equation matrix J^T J and gradient J^T r from the Jacobian and residuals.
 function normalEquations(jacobian: Matrix, residuals: Readonly<Float64Array>): { jtj: Float64Array; gradient: Float64Array } {
 	const rows = jacobian.rows
 	const data = jacobian.data
@@ -447,6 +521,8 @@ function normalEquations(jacobian: Matrix, residuals: Readonly<Float64Array>): {
 	return { jtj, gradient }
 }
 
+// Solves the damped normal equations (J^T J + lambda*diag) dx = -gradient for the LM step; undefined
+// if the damped matrix is not positive definite.
 function solveLevenbergMarquardtStep(jtj: Readonly<Float64Array>, gradient: Readonly<Float64Array>, damping: number) {
 	const lhs = new Float64Array(jtj)
 	const rhs = new Float64Array(PARAMETER_COUNT)
@@ -461,6 +537,7 @@ function solveLevenbergMarquardtStep(jtj: Readonly<Float64Array>, gradient: Read
 	return choleskySolve(lhs, rhs)
 }
 
+// Solves A x = b for a symmetric positive-definite A via Cholesky factorization; undefined if A is not SPD.
 function choleskySolve(a: Readonly<Float64Array>, b: Readonly<Float64Array>) {
 	const lower = choleskyDecompose(a)
 
@@ -495,6 +572,8 @@ function choleskySolve(a: Readonly<Float64Array>, b: Readonly<Float64Array>) {
 	return x
 }
 
+// Cholesky factorization A = L L^T of the row-major PARAMETER_COUNT^2 matrix; undefined if not SPD
+// (pivot at or below a scaled tolerance). Returns the lower factor L stored row-major.
 function choleskyDecompose(a: Readonly<Float64Array>) {
 	const lower = new Float64Array(PARAMETER_COUNT * PARAMETER_COUNT)
 	let maxDiagonal = 0
@@ -527,6 +606,8 @@ function choleskyDecompose(a: Readonly<Float64Array>) {
 	return lower
 }
 
+// Forms the parameter covariance as reducedChi2 * (J^T J)^-1 by inverting via the Cholesky factor,
+// one column at a time. Returns undefined when the system is ill-conditioned beyond the limit.
 function covarianceFromJacobian(jacobian: Matrix, reducedChi2: number) {
 	if (!Number.isFinite(reducedChi2)) return undefined
 
@@ -556,6 +637,7 @@ function covarianceFromJacobian(jacobian: Matrix, reducedChi2: number) {
 	return covariance
 }
 
+// Solves L L^T x = b from a precomputed lower Cholesky factor (forward then back substitution).
 function choleskySolveFromFactor(lower: Readonly<Float64Array>, b: Readonly<Float64Array>) {
 	const y = new Float64Array(PARAMETER_COUNT)
 
@@ -586,6 +668,7 @@ function choleskySolveFromFactor(lower: Readonly<Float64Array>, b: Readonly<Floa
 	return x
 }
 
+// Estimates the squared condition number from the ratio of largest to smallest Cholesky diagonal.
 function choleskyCondition(lower: Readonly<Float64Array>) {
 	let min = Number.POSITIVE_INFINITY
 	let max = 0
@@ -599,6 +682,7 @@ function choleskyCondition(lower: Readonly<Float64Array>) {
 	return min > 0 ? (max / min) ** 2 : Number.POSITIVE_INFINITY
 }
 
+// Averages each off-diagonal pair in place to enforce exact symmetry of the covariance matrix.
 function symmetrize(matrix: Matrix) {
 	for (let row = 0; row < PARAMETER_COUNT; row++) {
 		for (let col = row + 1; col < PARAMETER_COUNT; col++) {
@@ -609,16 +693,19 @@ function symmetrize(matrix: Matrix) {
 	}
 }
 
+// Returns params + step as a new parameter vector.
 function addStep(params: Readonly<Float64Array>, step: Readonly<Float64Array>) {
 	const candidate = new Float64Array(PARAMETER_COUNT)
 	for (let i = 0; i < PARAMETER_COUNT; i++) candidate[i] = params[i] + step[i]
 	return candidate
 }
 
+// Increases the damping factor (x10), clamped to the maximum, after a rejected step.
 function nextDamping(damping: number) {
 	return Math.min(MAX_DAMPING, damping * 10)
 }
 
+// Root-mean-square of the total angular residuals (radians).
 function angularRms(residuals: readonly OrbitFitAngularResidual[]) {
 	let sum = 0
 	for (let i = 0; i < residuals.length; i++) sum += residuals[i].total * residuals[i].total

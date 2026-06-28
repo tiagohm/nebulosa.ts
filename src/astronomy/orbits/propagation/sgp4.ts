@@ -6,15 +6,32 @@ import type { PositionAndVelocity } from '../../coordinates/astrometry'
 import { isLeapYear } from '../../time/temporal'
 import { greenwichMeanSiderealTime, type Time, Timescale, timeSubtract, timeYMDHMS } from '../../time/time'
 
+// SGP4/SDP4 satellite orbit propagator: a TypeScript port of David Vallado's reference C++
+// implementation. Parses TLE and OMM element sets, initializes the near-Earth or deep-space model,
+// and propagates to a given time, returning the TEME-frame position (AU) and velocity (AU/day) via
+// the public sgp4() entry point. Internal subroutines (dpper, dscom, dsInit, dspace, initl) keep
+// Vallado's original names and comments; their scalar option fields mirror that algorithm state.
+// The WGS-72 gravity model is used throughout. Angles are radians; mean motion is radians/minute.
+
+// Earth gravitational parameter (WGS-72), km^3/s^2.
 const MU = 398600.8 // in km3 / s2
+// sqrt(GM) in earth-radii^1.5 per minute; the SGP4 reciprocal-time normalization constant.
 const XKE = 60 / Math.sqrt((EARTH_RADIUS_KM * EARTH_RADIUS_KM * EARTH_RADIUS_KM) / MU)
+// Conversion from earth-radii-per-minute to km/s.
 const VKMPERSEC = (EARTH_RADIUS_KM * XKE) / 60
+// Minutes per canonical time unit (1/XKE).
 const tumin = 1 / XKE
+// Second zonal harmonic of the WGS-72 geopotential.
 const J2 = 0.001082616
+// Third zonal harmonic of the WGS-72 geopotential.
 const J3 = -0.00000253881
+// Fourth zonal harmonic of the WGS-72 geopotential.
 const J4 = -0.00000165597
+// Ratio J3/J2, used in the long-period periodic terms.
 const J3OJ2 = J3 / J2
+// Constant 2/3, the exponent linking mean motion and semi-major axis.
 const X2O3 = 2 / 3
+// Revolutions/day to radians/minute conversion (DAYMIN/TAU).
 const XPDOTP = DAYMIN / TAU // 229.1831180523293
 
 // Represents a parsed Two-Line Element set.
@@ -376,14 +393,17 @@ export function sgp4(time: Time, source: TLE | OMM | SatRec, meanElements?: Mean
 	]
 }
 
+// Narrows a propagation source to a parsed TLE.
 function isTLE(source: TLE | OMM | SatRec): source is TLE {
 	return 'line1' in source && 'line2' in source
 }
 
+// Narrows a propagation source to an already-initialized SGP4 record.
 function isSatRec(source: TLE | OMM | SatRec): source is SatRec {
 	return 'epoch' in source && 'method' in source
 }
 
+// Parses a TLE assumed-decimal exponential field (e.g. "-11606-4" -> -0.11606e-4).
 function parseTleExponent(input: string) {
 	const trimmed = input.trim()
 
@@ -395,6 +415,7 @@ function parseTleExponent(input: string) {
 	return +`${sign}0.${mantissaDigits}e${exponent}`
 }
 
+// Converts a 1-based fractional day-of-year into [month, day, hour, minute, second] for the given year.
 function daysToMonthDayHourMinuteSecond(year: number, days: number) {
 	const monthLength = [31, isLeapYear(year) ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
 	const dayOfYear = Math.floor(days)
@@ -415,8 +436,10 @@ function daysToMonthDayHourMinuteSecond(year: number, days: number) {
 	return [month, day, hour, minute, second] as const
 }
 
+// Matches an ISO-8601 OMM epoch "YYYY-MM-DDThh:mm:ss[.sss][Z]" and captures its components.
 const OMM_EPOCH_REGEX = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2}(?:\.\d+)?)(?:Z)?$/
 
+// Parses an OMM epoch string into its year, 1-based day-of-year, and UTC Julian date.
 function parseOmmEpoch(input: string) {
 	const match = OMM_EPOCH_REGEX.exec(input.trim())
 
@@ -438,6 +461,8 @@ function parseOmmEpoch(input: string) {
 	} as const
 }
 
+// Inputs to dpper: the init flag, ops mode, and the mean elements (ep, inclp, nodep, argpp, mp) the
+// long-period periodics are applied to.
 export interface DpperOptions {
 	readonly init: 'y' | 'n'
 	readonly opsmode: 'a' | 'i'
@@ -579,6 +604,8 @@ export default function dpper(satrec: SatRec, options: DpperOptions) {
 	return { ep, inclp, nodep, argpp, mp } as const
 }
 
+// Inputs to dscom: the epoch (day/fraction), time-since-epoch tc, and the perturbed elements used to
+// build the common solar/lunar terms shared by the deep-space secular and periodic routines.
 export interface DscomOptions {
 	readonly epochday: number
 	readonly epochfrac: number
@@ -908,6 +935,8 @@ function dscom(options: DscomOptions) {
 	}
 }
 
+// Inputs to dsInit: the solar/lunar coefficients from dscom plus orbital state, from which the
+// geopotential resonance terms and deep-space integrator seeds are computed.
 export interface DsInitOptions {
 	readonly cosim: number
 	readonly emsq: number
@@ -1223,6 +1252,8 @@ function dsInit(options: DsInitOptions) {
 	} as const
 }
 
+// Inputs to dspace: the resonance terms and integrator state from dsInit plus the current
+// time-since-epoch, used to advance the resonant mean elements.
 export interface DspaceOptions {
 	readonly irez: number
 	readonly d2201: number
@@ -1393,6 +1424,8 @@ function dspace(options: DspaceOptions) {
 	return { atime, em, argpm, inclm, xli, mm, xni, nodem, dndt, nm } as const
 }
 
+// Inputs to initl: ops mode, eccentricity, epoch (day/fraction), inclination, and mean motion, from
+// which the un-kozai'd mean motion, semi-major axis, and Greenwich sidereal time are derived.
 export interface InitlOptions {
 	readonly opsmode: 'a' | 'i'
 	readonly ecco: number
@@ -1795,6 +1828,9 @@ function sgp4Propagate(satrec: SatRec, tsince: number, meanElements?: MeanElemen
 	return { position, velocity, meanElements } as const
 }
 
+// Inputs to sgp4Init: ops mode, satellite number, epoch (days/fraction since 1949-12-31 0h UTC), and
+// the raw orbital elements (B*, eccentricity, argument of perigee, inclination, mean anomaly, mean
+// motion in radians/minute, and node). The `x`-prefixed fields follow Vallado's naming.
 export interface Sgp4InitOptions {
 	readonly opsmode: 'a' | 'i'
 	readonly satn: string
@@ -2284,4 +2320,5 @@ function sgp4Init(satrecInit: SatRecInit, options: Sgp4InitOptions): asserts sat
 	satrec.init = 'n'
 }
 
+// Internal subroutines exposed only for unit testing against Vallado's reference values.
 export const internal = { initl, dsInit }
