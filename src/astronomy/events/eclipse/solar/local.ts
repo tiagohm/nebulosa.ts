@@ -272,8 +272,10 @@ export interface LocalSolarEclipseViewOptions {
 	readonly horizonBandPaddingPx?: number
 }
 
+// Any one drawable Local View shape.
 export type LocalSolarEclipseSvgShape = LocalSolarEclipseSvgCircle | LocalSolarEclipseSvgLine | LocalSolarEclipseSvgPath | LocalSolarEclipseSvgPolygon
 
+// A circle primitive (Sun/Moon disk or limb), in SVG pixel coordinates.
 export interface LocalSolarEclipseSvgCircle {
 	readonly kind: 'circle'
 	// Semantic role of this circle.
@@ -289,6 +291,7 @@ export interface LocalSolarEclipseSvgCircle {
 	readonly r: number
 }
 
+// A line primitive (horizon or trajectory), in SVG pixel coordinates.
 export interface LocalSolarEclipseSvgLine {
 	readonly kind: 'line'
 	// Semantic role of this line.
@@ -299,6 +302,7 @@ export interface LocalSolarEclipseSvgLine {
 	readonly y2: number
 }
 
+// A path primitive (the curved Sun trajectory), as an SVG path data string.
 export interface LocalSolarEclipseSvgPath {
 	readonly kind: 'path'
 	// Semantic role of this path.
@@ -307,6 +311,7 @@ export interface LocalSolarEclipseSvgPath {
 	readonly d: string
 }
 
+// A filled polygon primitive (the below-horizon band), in SVG pixel coordinates.
 export interface LocalSolarEclipseSvgPolygon {
 	readonly kind: 'polygon'
 	// Semantic role of this polygon.
@@ -357,6 +362,7 @@ export interface SolarEclipseExtremeCircumstances {
 	readonly kind: SolarEclipseGeoPoint['kind'] | null
 }
 
+// Default circumstances options (all fields fall back to their per-field defaults).
 const DEFAULT_LOCAL_SOLAR_ECLIPSE_CIRCUMSTANCES_OPTIONS: LocalSolarEclipseCircumstancesOptions = {}
 
 // Default Local View options.
@@ -567,6 +573,8 @@ function isLocalViewAngleUndefined(state: LocalFundamentalState) {
 	return state.distance / solarRadius < ANGLE_UNDEFINED_SEPARATION_SOLAR_RADII
 }
 
+// Computes the topocentric aspect (position and zenith angles of the contact point on the solar disk,
+// plus the parallactic angle) for one local contact `kind` at the given time and observer location.
 function computeLocalTopocentricAspect(kind: LocalEclipseContactKind, state: LocalFundamentalState, time: Time, longitude: Angle, latitude: Angle, position: SunMoonPosition | undefined): LocalTopocentricAspect {
 	const q = computeSolarParallacticAngle(time, longitude, latitude, state, position)
 
@@ -663,6 +671,7 @@ function buildLocalEvent(kind: LocalEclipseContactKind, jd: number, pbe: Polynom
 	}
 }
 
+// Root-finding tolerance (days) for refining contact instants.
 const CONTACT_TOLERANCE_ROOT_FIND_OPTIONS: RootFindingOptions = { tolerance: CONTACT_TOLERANCE_DAYS }
 
 // Refines a bracketed contact root, returning undefined when the bracket is rejected.
@@ -741,6 +750,7 @@ function pushUniqueRoot(roots: number[], root: number) {
 	roots.push(root)
 }
 
+// Ascending numeric sort comparator.
 function NumberComparator(a: number, b: number) {
 	return a - b
 }
@@ -933,6 +943,7 @@ function findLocalEclipseMaximumJd(pbe: PolynomialBesselianElements, longitude: 
 	return maximumJd
 }
 
+// Shared frozen "no contacts" event set, returned when the eclipse is not visible at the location.
 const EMPTY_LOCAL_ECLIPSE_EVENTS: LocalSolarEclipseCircumstances['events'] = Object.freeze({ C1: null, C2: null, MAX: null, C3: null, C4: null })
 
 // Resolves the local C1/C2/MAX/C3/C4 events. C2/C3 are only sought when the local maximum is central, so
