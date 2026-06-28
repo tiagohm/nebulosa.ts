@@ -4,8 +4,15 @@ import { isWcsFitsKeyword } from '../../astrometry/wcs/fits.wcs'
 import { type FitsHeader, FitsKeywordWriter } from '../../io/formats/fits/fits'
 import { type Angle, deg, toDeg } from '../../math/units/angle'
 
+// FFI binding to WCSLIB (libwcs) via bun:ffi. Parses the WCS keywords of a FITS header into a native
+// wcsprm struct and exposes pixel↔sky transforms. Sky angles are radians on the public API and
+// converted to/from the degrees WCSLIB uses. Native memory is owned by the Wcs class (Disposable).
+
+// Resolved type of the dlopen handle returned by open(); used to type the cached library instance.
 export type LibWcs = ReturnType<typeof open>
 
+// Opens the WCSLIB shared library and declares the parse/transform/free symbols used here. Returns a
+// fresh dlopen handle each call; prefer load() for the cached one.
 export function open() {
 	return dlopen(path, {
 		wcspih: { args: ['buffer', 'int', 'int', 'int', 'ptr', 'ptr', 'ptr'], returns: 'int' },
@@ -17,27 +24,36 @@ export function open() {
 	})
 }
 
+// Process-wide cached library handle, opened on first load() and cleared by unload().
 let libwcs: LibWcs | undefined
 
+// Returns the cached native symbol table, opening the library on first use.
 export function load() {
 	return (libwcs ??= open()).symbols
 }
 
+// Closes and clears the cached library handle. Safe to call when nothing is loaded.
 export function unload() {
 	libwcs?.close()
 	libwcs = undefined
 }
 
+// Owns a single native wcsprm parsed from a FITS header and provides pixel↔sky conversions. Disposable
+// because it holds native memory; reusable via load(), which replaces any previously held solution.
 export class Wcs implements Disposable {
+	// Native wcsprm pointer; undefined until a header is loaded or after disposal.
 	#pointer?: Pointer
 	readonly #lib = load()
 
+	// Optionally parses a header immediately. Throws if the header has no usable single WCS solution.
 	constructor(header?: FitsHeader) {
 		if (header && !this.load(header)) {
 			throw new Error('failed to initialize WCS from header')
 		}
 	}
 
+	// Parses the WCS keywords of `header` into a native wcsprm, replacing any previous solution. Returns
+	// true only when exactly one WCS is found; other counts are freed and false is returned.
 	load(header: FitsHeader) {
 		const [buffer, n] = bufferFromHeader(header)
 
@@ -63,6 +79,8 @@ export class Wcs implements Disposable {
 		return false
 	}
 
+	// Transforms a pixel coordinate (x, y), 1-based FITS convention, to sky [RA, Dec] in radians. Returns
+	// undefined if no WCS is loaded or the native transform fails.
 	pixToSky(x: number, y: number): [Angle, Angle] | undefined {
 		if (this.#pointer) {
 			const mem = Buffer.allocUnsafe(8 * 8 + 4)
@@ -88,6 +106,8 @@ export class Wcs implements Disposable {
 		return undefined
 	}
 
+	// Transforms sky coordinates (RA, Dec in radians) to a pixel coordinate [x, y], 1-based FITS
+	// convention. Returns undefined if no WCS is loaded or the native transform fails.
 	skyToPix(ra: Angle, dec: Angle): [number, number] | undefined {
 		if (this.#pointer) {
 			const mem = Buffer.allocUnsafe(8 * 8 + 4)
@@ -113,6 +133,7 @@ export class Wcs implements Disposable {
 		return undefined
 	}
 
+	// Releases the native wcsprm (internals plus the calloc'd array container) and clears the pointer.
 	[Symbol.dispose]() {
 		if (this.#pointer) {
 			// Free both the wcsprm internals and the calloc'd array container from wcspih. nwcs is 1
@@ -127,6 +148,8 @@ export class Wcs implements Disposable {
 	}
 }
 
+// Serializes the WCS-relevant keywords of a header into a packed buffer of 80-byte FITS card images,
+// the format wcspih expects. Returns the buffer and the number of cards written.
 function bufferFromHeader(header: FitsHeader) {
 	const writer = new FitsKeywordWriter()
 	const keys = Object.keys(header).filter(isWcsFitsKeyword)
