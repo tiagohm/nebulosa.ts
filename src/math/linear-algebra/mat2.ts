@@ -1,6 +1,12 @@
 import type { Angle } from '../units/angle'
 import { type MutVec2, type Vec2, vec2Fill } from './vec2'
 
+// 2x2 matrix math. Matrices are stored row-major as a flat length-4 tuple [m00,m01, m10,m11].
+// Provides constructors (zero/identity/rotation), element-wise arithmetic, transpose/flip, the fused
+// product variants, and matrix-vector products. Rotation angles are radians. As in mat3.ts, an optional
+// output `o?: MutMat2` (or `m?` for the rotation builder) is written in place and returned when supplied,
+// otherwise a new matrix is allocated; passing `m` to mat2Rot returns the product R·m.
+
 // Mutable rectangular array of numbers with two rows and two columns.
 export type MutMat2 = [number, number, number, number]
 

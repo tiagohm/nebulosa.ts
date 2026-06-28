@@ -1,6 +1,14 @@
 import type { Angle } from '../units/angle'
 import { type MutVec3, type Vec3, vecFill } from './vec3'
 
+// 3x3 matrix math used for coordinate-frame rotations. Matrices are stored row-major as a flat length-9
+// tuple [m00,m01,m02, m10,m11,m12, m20,m21,m22]. Provides constructors (zero/identity/axis rotations/
+// Rodrigues), element-wise arithmetic, transpose/flip, and the fused product variants
+// (matMul/matTransposeMul/matMulTranspose/...) plus matrix-vector products that avoid an explicit transpose.
+// Rotation angles are radians. Convention: an optional output `o?: MutMat3` (or `m?` for the rotation
+// builders) is written in place and returned when supplied; passing the existing matrix `m` to a rotation
+// builder returns the product R·m, otherwise a fresh matrix is allocated.
+
 // Mutable rectangular array of numbers with three rows and three columns.
 export type MutMat3 = [number, number, number, number, number, number, number, number, number]
 

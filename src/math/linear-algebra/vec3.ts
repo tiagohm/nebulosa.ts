@@ -1,5 +1,11 @@
 import { type Angle, normalizeAngle } from '../units/angle'
 
+// Three-component vector math: dot/cross products, length/distance, normalization, scalar and
+// element-wise arithmetic, axis and Rodrigues rotations, and spherical extraction (latitude/longitude/
+// colatitude). Components are plain numbers in whatever unit the caller uses; angle outputs are radians.
+// Convention: many helpers take an optional output `o?: MutVec3`; when supplied the result is written
+// into `o` and `o` is returned (it may alias an input), otherwise a freshly allocated vector is returned.
+
 // Mutable vector of numbers with three axis.
 export type MutVec3 = [number, number, number]
 
@@ -109,12 +115,13 @@ export function vecPolarAngle(v: Vec3): Angle {
 	return Math.atan2(Math.hypot(v[0], v[1]), v[2])
 }
 
-// Computes the latitude of the vector.
+// Computes the latitude of the vector: the angle of v above the xy-plane, in radians [-PI/2, PI/2].
+// Uses atan2 so it is stable at the poles and does not require a unit vector.
 export function vecLatitude(v: Vec3): Angle {
 	return Math.atan2(v[2], Math.hypot(v[0], v[1]))
 }
 
-// Computes the longitude of the vector.
+// Computes the longitude of the vector: the azimuth of v in the xy-plane, normalized to [0, TAU) radians.
 export function vecLongitude(v: Vec3) {
 	return normalizeAngle(Math.atan2(v[1], v[0]))
 }
@@ -190,7 +197,8 @@ export function vecNormalizeMut(v: MutVec3): MutVec3 {
 	return vecNormalize(v, v)
 }
 
-// Efficient algorithm for rotating a vector in space, given an axis and angle of rotation.
+// Rotates `v` about `axis` by `angle` (radians) using Rodrigues' rotation formula.
+// `axis` need not be normalized; it is normalized internally. A zero-length axis returns a copy of `v` unchanged.
 export function vecRotateByRodrigues(v: Vec3, axis: Vec3, angle: Angle, o?: MutVec3): MutVec3 {
 	const ax = axis[0]
 	const ay = axis[1]

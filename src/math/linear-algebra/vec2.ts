@@ -1,5 +1,11 @@
 import { type Angle, normalizeAngle } from '../units/angle'
 
+// Two-component vector math: dot product, the scalar 2D cross product, length/distance, normalization,
+// scalar and element-wise arithmetic, planar rotation, and azimuth extraction. Components are plain
+// numbers in the caller's unit; angle outputs are radians. As in vec3.ts, helpers take an optional
+// output `o?: MutVec2`: when given, the result is written into `o` (which may alias an input) and
+// returned; otherwise a new vector is allocated.
+
 // Mutable vector of numbers with two axis.
 export type MutVec2 = [number, number]
 

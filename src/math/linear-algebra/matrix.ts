@@ -1,8 +1,20 @@
 import type { NumberArray } from '../numerical/math'
 
+// General dense matrix of arbitrary shape backed by a flat row-major Float64Array, plus the LU and QR
+// decompositions and a standalone Gaussian-elimination solver. Use the fixed-size mat2.ts/mat3.ts
+// helpers for hot 2x2/3x3 paths; this module is for linear-algebra needs of arbitrary dimension
+// (least squares, general inverses, solving systems). Most arithmetic methods accept an optional output
+// matrix `o` of the correct shape and return it; otherwise a new matrix is allocated.
+
+// Dense matrix stored row-major in a Float64Array (`data`), indexed as data[row * cols + col].
 export class Matrix {
+	// Row-major backing storage; length is rows * cols.
 	readonly data: NumberArray
 
+	// Builds a `rows`x`cols` matrix. When `data` is omitted the storage is zero-filled. When provided it
+	// must have length rows * cols; `copy` (default true) clones it into a new Float64Array, while `copy`
+	// = false adopts the array by reference so external mutations are reflected (only honored for plain
+	// NumberArray inputs, not readonly ones).
 	constructor(
 		readonly rows: number,
 		readonly cols: number,
@@ -73,6 +85,7 @@ export class Matrix {
 		return true
 	}
 
+	// Checks if the matrix is square and equal to its own transpose.
 	get isSymmetric() {
 		if (!this.isSquare) return false
 
@@ -139,6 +152,7 @@ export class Matrix {
 		return new Matrix(this.rows, this.cols, this.data)
 	}
 
+	// Copies this matrix's data into `m`, which must have the same shape. Returns `m`.
 	copyInto(m: Matrix) {
 		checkMatrixShape(m, this.rows, this.cols)
 		for (let i = 0; i < this.size; i++) m.data[i] = this.data[i]
@@ -424,6 +438,7 @@ export class Matrix {
 		return o
 	}
 
+	// Computes the matrix-vector product M·v. `v` length must equal `cols`; returns a new length-`rows` Float64Array.
 	mulVec(v: NumberArray) {
 		if (v.length !== this.cols) {
 			throw new Error('vector length must match matrix columns')
@@ -444,6 +459,7 @@ export class Matrix {
 		return result
 	}
 
+	// Computes the transposed matrix-vector product Mᵀ·v. `v` length must equal `rows`; returns a new length-`cols` Float64Array.
 	mulTransposedVec(v: NumberArray) {
 		if (v.length !== this.rows) {
 			throw new Error('vector length must match matrix rows')
@@ -515,6 +531,7 @@ export class Matrix {
 		return m
 	}
 
+	// Creates a square matrix of the given `size`, optionally seeded with `data` (which must have at least size² entries).
 	static square(size: number, data?: NumberArray) {
 		if (data && data.length < size * size) {
 			throw new Error(`data length must be ${size * size} for a square matrix of size ${size}`)
@@ -523,22 +540,27 @@ export class Matrix {
 		return new Matrix(size, size, data)
 	}
 
-	// Creates a row matrix from an array.
+	// Creates a 1xN row matrix. A number argument allocates an empty row of that width; an array is used as the row data.
 	static row(data: NumberArray | number) {
 		return typeof data === 'number' ? new Matrix(1, data, undefined) : new Matrix(1, data.length, data)
 	}
 
-	// Creates a column matrix from an array.
+	// Creates an Nx1 column matrix. A number argument allocates an empty column of that height; an array is used as the column data.
 	static column(data: NumberArray | number) {
 		return typeof data === 'number' ? new Matrix(data, 1, undefined) : new Matrix(data.length, 1, data)
 	}
 }
 
-// https://en.wikipedia.org/wiki/LU_decomposition
+// LU decomposition with partial (row) pivoting of a square matrix, used for determinant, singularity
+// test, inversion, and solving linear systems. The factorization is computed once in the constructor
+// and reused. https://en.wikipedia.org/wiki/LU_decomposition
 export class LuDecomposition {
+	// Combined L\U factors stored in a single matrix (unit-diagonal L below, U on and above the diagonal).
 	readonly #A: Matrix
+	// Row permutation: #P[i] is the source row mapped to row i; #P[n] counts the pivot swaps for the determinant sign.
 	readonly #P: Int32Array
 
+	// Factorizes `matrix` in place on a clone; throws if it is not square.
 	constructor(matrix: Matrix) {
 		if (!matrix.isSquare) throw new Error('matrix is not square')
 
@@ -604,6 +626,7 @@ export class LuDecomposition {
 		this.#P = P
 	}
 
+	// True when any U pivot is exactly zero, i.e. the matrix is singular and cannot be inverted/solved.
 	get isSingular() {
 		const n = this.#A.rows
 		const data = this.#A.data
@@ -617,6 +640,7 @@ export class LuDecomposition {
 		return false
 	}
 
+	// Determinant as the product of the U pivots, sign-corrected by the parity of the pivot swaps.
 	get determinant() {
 		const n = this.#A.rows
 		const data = this.#A.data
@@ -625,6 +649,8 @@ export class LuDecomposition {
 		return (this.#P[n] - n) % 2 === 0 ? det : -det
 	}
 
+	// Computes the matrix inverse by forward/back substitution against the permuted identity.
+	// Writes into `o` (allocated when omitted) and returns it; throws if the matrix is singular.
 	invert(o?: Matrix) {
 		const n = this.#A.rows
 		const aData = this.#A.data
@@ -693,11 +719,16 @@ export class LuDecomposition {
 	}
 }
 
+// Householder QR decomposition, used to solve least-squares / full-rank linear systems for matrices
+// that may be tall (rows >= cols). Factorization is computed once in the constructor.
 // https://github.com/mljs/matrix/blob/main/src/dc/qr.js
 export class QrDecomposition {
+	// Packed Householder vectors and the strict upper triangle of R.
 	readonly #QR: Matrix
+	// Diagonal of R kept separately (the QR storage holds the Householder reflectors on its diagonal).
 	readonly #rdiag: Float64Array
 
+	// Factorizes a clone of `matrix` (rows >= cols expected) into packed Householder form.
 	constructor(matrix: Matrix) {
 		const QR = matrix.clone()
 		const rdiag = new Float64Array(matrix.cols)
@@ -742,6 +773,7 @@ export class QrDecomposition {
 		this.#rdiag = rdiag
 	}
 
+	// True when no R diagonal entry is zero, i.e. the system has a unique least-squares solution.
 	get isFullRank() {
 		return !this.#rdiag.includes(0)
 	}
@@ -784,6 +816,7 @@ export class QrDecomposition {
 	}
 }
 
+// Computes sqrt(a² + b²) without intermediate overflow/underflow by factoring out the larger magnitude.
 function hypotenuse(a: number, b: number) {
 	const aa = Math.abs(a)
 	const ab = Math.abs(b)
