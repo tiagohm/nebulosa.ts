@@ -1,28 +1,48 @@
 import type { Source } from './io'
 
+// CSV/TSV parsing with configurable delimiters, comment markers, and quoting. `CsvLineParser` parses one
+// logical line into columns (handling quoted fields with escaped doubled quotes and embedded newlines);
+// `readCsv` parses an in-memory string/array, and `readCsvStream` decodes and parses a byte Source
+// incrementally as an async generator of rows.
+
+// A single parsed CSV field.
 export type CsvColumn = string
 
+// A parsed CSV record (one row of fields).
 export type CsvRow = CsvColumn[]
 
+// Field delimiter for comma-separated values.
 export const CSV_DELIMITER = ','
+// Field delimiter for tab-separated values.
 export const TSV_DELIMITER = '\t'
 
+// Options controlling how a line is split into columns.
 export interface CsvLineParserOptions {
+	// Field delimiter(s); a single character or a set of accepted characters.
 	delimiter?: string | string[]
+	// Line-comment marker(s); a line starting with one is skipped.
 	comment?: string | string[]
+	// Quote character(s), or false to disable quoting entirely.
 	quote?: string | string[] | false
+	// When true, trims whitespace even inside quoted fields.
 	forceTrim?: boolean
 }
 
+// Options for parsing a full CSV input.
 export interface ReadCsvOptions extends CsvLineParserOptions {
+	// When true, the first (header) row is parsed but not emitted.
 	skipFirstLine?: boolean
 }
 
+// Options for streaming CSV parsing from a byte Source.
 export interface ReadCsvStreamOptions extends ReadCsvOptions, TextDecoderOptions {
+	// Text encoding passed to the TextDecoder (default 'utf-8').
 	encoding?: string
+	// Read buffer size in bytes for each source chunk.
 	bufferSize?: number
 }
 
+// Default options for CSV parsing: comma-delimited, '#' comments, '"' quoting, header skipped, UTF-8.
 export const DEFAULT_READ_CSV_STREAM_OPTIONS: Readonly<Required<ReadCsvStreamOptions>> = {
 	delimiter: CSV_DELIMITER,
 	comment: '#',
@@ -35,13 +55,17 @@ export const DEFAULT_READ_CSV_STREAM_OPTIONS: Readonly<Required<ReadCsvStreamOpt
 	forceTrim: true,
 }
 
+// Mutable cursor state threaded through the column parser: current scan offset and whether the last
+// field parsed was quoted.
 interface ParseColumnInfo {
 	offset: number
 	quoted: boolean
 }
 
+// Characters treated as trimmable whitespace (a delimiter is never treated as whitespace).
 const WHITESPACE = ' \t\r\n'
 
+// Stateless (per-call) parser that splits one logical CSV line into fields per the configured options.
 export class CsvLineParser {
 	readonly #comment: string | string[]
 	readonly #isDelimiter: (c: string) => boolean
@@ -66,6 +90,8 @@ export class CsvLineParser {
 		this.#isWhitespace = (c) => !this.#isDelimiter(c) && WHITESPACE.includes(c)
 	}
 
+	// Parses `line` (from `offset`) into fields appended to `row` (created if omitted). Returns the row,
+	// or false for an empty or comment line. Quoted fields keep embedded delimiters and doubled quotes.
 	parse(line: string, offset: number = 0, row?: CsvRow) {
 		const info: ParseColumnInfo = { offset, quoted: false }
 
@@ -151,6 +177,9 @@ export class CsvLineParser {
 		return text
 	}
 
+	// Scans for the next record-terminating newline starting at `offset`, honoring quoted regions so
+	// newlines inside quotes are not treated as breaks. Returns [breakIndex, nextOffset, stillQuoted];
+	// breakIndex is -1 when none is found (quoted carries the open-quote state to the next chunk).
 	scanLineBreak(line: string, offset: number = 0, quoted: boolean = false) {
 		let i = offset
 
@@ -197,6 +226,8 @@ export class CsvLineParser {
 	}
 }
 
+// Parses an entire CSV document (a string, or an array of lines joined with '\n') into rows.
+// Empty and comment lines are skipped; quoted fields may span multiple physical lines.
 export function readCsv(input: string | string[], options: string | string[] | ReadCsvOptions = DEFAULT_READ_CSV_STREAM_OPTIONS): CsvRow[] {
 	input = Array.isArray(input) ? input.join('\n') : input
 
@@ -228,10 +259,13 @@ export function readCsv(input: string | string[], options: string | string[] | R
 	return rows
 }
 
+// Decode options keeping multibyte sequences intact across chunk boundaries.
 const STREAM_TEXT_DECODE_OPTIONS: TextDecodeOptions = {
 	stream: true,
 }
 
+// Streams CSV rows from a byte `source`, reading and decoding in chunks and yielding each parsed row as
+// it becomes available. Fields and quoted regions spanning chunk boundaries are reassembled.
 export async function* readCsvStream(source: Source, options: string | string[] | ReadCsvStreamOptions = DEFAULT_READ_CSV_STREAM_OPTIONS) {
 	const parser = new CsvLineParser(options)
 

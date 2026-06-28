@@ -1,14 +1,26 @@
 // https://x.com/i/grok/share/3i6xCCEtUvQWeNnbiVMaermCl
 
+// Minimal streaming XML parser, sufficient for the simple element/attribute/text documents the library
+// consumes (e.g. XISF headers, INDI/Alpaca payloads). `SimpleXmlParser` is a byte-fed state machine that
+// emits each top-level node once it closes; it does not handle DTDs, namespaces beyond `:` in names,
+// entity references, CDATA, or processing instructions.
+
+// XML element attributes as a name -> value map.
 export type XmlNodeAttributes = Record<string, string>
 
+// A parsed XML element node.
 export interface XmlNode {
+	// Tag name.
 	name: string
+	// Attribute name/value pairs (valueless attributes map to '').
 	attributes: XmlNodeAttributes
+	// Child element nodes in document order.
 	children: XmlNode[]
+	// Concatenated trimmed text content directly inside this element.
 	text: string
 }
 
+// Internal tokenizer states of the byte-level XML state machine.
 enum XmlState {
 	START,
 	TAG_OPEN,
@@ -20,6 +32,7 @@ enum XmlState {
 	SELF_CLOSE,
 }
 
+// ASCII byte codes recognized by the tokenizer (whitespace, structural punctuation, and name-character ranges).
 const WHITESPACE = 32
 const TAB = 9
 const LINE_FEED = 10
@@ -40,6 +53,8 @@ const DASH = 45
 const DOT = 46
 const UNDERSCORE = 95
 
+// Reusable geometric-growth byte buffer that accumulates token bytes and decodes them to text on demand,
+// avoiding per-token allocations. An optional max byte length caps growth for the text buffer.
 class InternalBuffer {
 	readonly #decoder = new TextDecoder()
 	readonly #maxByteLength: number
@@ -85,6 +100,8 @@ class InternalBuffer {
 	}
 }
 
+// Incremental XML parser. Feed bytes/strings via parse(); it returns any top-level nodes that completed
+// during that call and retains partial state between calls. Throws on malformed input (and resets).
 export class SimpleXmlParser {
 	#state = XmlState.START
 	readonly #tag = new InternalBuffer(256)
@@ -97,6 +114,7 @@ export class SimpleXmlParser {
 	#closeTagSealed = false
 	readonly #encoder = new TextEncoder()
 
+	// Feeds a chunk of XML (string or bytes) and returns the top-level nodes that completed in this chunk.
 	parse(input: string | Buffer | Uint8Array): XmlNode[] {
 		if (typeof input === 'string') {
 			return this.parse(this.#encoder.encode(input))
@@ -113,6 +131,7 @@ export class SimpleXmlParser {
 		}
 	}
 
+	// Clears all parser state, discarding any partially parsed node and the open-element stack.
 	reset() {
 		this.#state = XmlState.START
 		this.#tag.reset()
@@ -294,10 +313,12 @@ export class SimpleXmlParser {
 	}
 }
 
+// True for the four XML whitespace byte codes (space, tab, LF, CR).
 function isWhitespace(code: number) {
 	return code === WHITESPACE || code === TAB || code === LINE_FEED || code === CARRIAGE_RETURN
 }
 
+// True for byte codes allowed in tag/attribute names (alphanumerics plus ':', '-', '.', '_').
 function isNameChar(code: number) {
 	return (code >= ZERO && code <= NINE) || (code >= A_UPPER && code <= Z_UPPER) || (code >= A_LOWER && code <= Z_LOWER) || code === COLON || code === DASH || code === DOT || code === UNDERSCORE
 }

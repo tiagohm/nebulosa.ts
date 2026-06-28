@@ -1,35 +1,54 @@
 import type { FileHandle } from 'fs/promises'
 
+// Byte-stream I/O abstractions used across the library's readers and writers. Defines the `Sink`/`Source`
+// contracts and concrete adapters over Buffers, file handles, readable streams, HTTP range requests, and
+// streaming Base64, plus line/region readers, a source-to-sink pump, and a growable write buffer. Sinks
+// and sources are sequential and track a byte `position`; seekable ones support repositioning. This is a
+// Bun/Node runtime module: it uses Buffer, fetch, and fs/promises.
+
+// A target that can flush buffered output.
 export interface Flushable {
+	// Flushes any buffered bytes to the underlying target.
 	readonly flush: () => void
 }
 
+// Runtime type guard for Flushable.
 export function isFlushable(o: object): o is Flushable {
 	return 'flush' in o && o.flush instanceof Function
 }
 
+// A stream that reports when no more data remains.
 export interface Exhaustible {
+	// True once the stream has been fully consumed.
 	readonly exhausted: boolean
 }
 
+// Runtime type guard for Exhaustible.
 export function isExhaustible(o: object): o is Exhaustible {
 	return 'exhausted' in o && typeof o.exhausted === 'boolean'
 }
 
+// A stream whose read/write cursor can be repositioned.
 export interface Seekable {
+	// Current byte offset of the cursor.
 	readonly position: number
 
+	// Moves the cursor to `position` (negative offsets count from the end where supported); returns false if rejected.
 	readonly seek: (position: number) => boolean
 }
 
+// Runtime type guard for Seekable.
 export function isSeekable(o: object): o is Seekable {
 	return 'seek' in o
 }
 
+// A sequential byte target. Returns the number of bytes actually written (possibly as a promise).
 export interface Sink {
+	// Writes `size` bytes of `chunk` starting at `offset`, decoding strings with `encoding`; returns the byte count written.
 	readonly write: (chunk: string | Buffer, offset?: number, size?: number, encoding?: BufferEncoding) => Promise<number> | number
 }
 
+// A seekable sink that writes into a fixed Buffer; supports negative seek offsets (from the end).
 export class BufferSink implements Sink, Seekable, Exhaustible {
 	position = 0
 
@@ -68,6 +87,7 @@ export function bufferSink(buffer: Buffer) {
 	return new BufferSink(buffer)
 }
 
+// A seekable sink writing to an fs/promises FileHandle; closes the handle on async disposal.
 export class FileHandleSink implements Sink, Seekable, AsyncDisposable {
 	position = 0
 
@@ -102,10 +122,13 @@ export function fileHandleSink(handle: FileHandle) {
 	return new FileHandleSink(handle)
 }
 
+// A sequential byte source. Returns the number of bytes actually read (0 at end of input).
 export interface Source {
+	// Reads up to `size` bytes into `buffer` at `offset`; returns the byte count read (0 when exhausted).
 	readonly read: (buffer: Buffer, offset?: number, size?: number) => Promise<number> | number
 }
 
+// A seekable source reading from a fixed Buffer; supports negative seek offsets (from the end).
 export class BufferSource implements Source, Seekable {
 	position = 0
 
@@ -137,6 +160,7 @@ export function bufferSource(buffer: Buffer) {
 	return new BufferSource(buffer)
 }
 
+// A seekable source reading from an fs/promises FileHandle; closes the handle on async disposal.
 export class FileHandleSource implements Source, Seekable, AsyncDisposable {
 	position = 0
 
@@ -164,6 +188,7 @@ export function fileHandleSource(handle: FileHandle) {
 	return new FileHandleSource(handle)
 }
 
+// A non-seekable source adapting a web ReadableStream of byte chunks; cancels the stream on disposal.
 export class ReadableStreamSource implements Source, AsyncDisposable {
 	readonly #reader: ReadableStreamDefaultReader<Uint8Array>
 	#buffer?: Buffer
@@ -204,6 +229,8 @@ export function readableStreamSource(stream: ReadableStream<Uint8Array>) {
 	return new ReadableStreamSource(stream)
 }
 
+// A seekable source that fetches byte ranges from an HTTP(S) URL via Range requests, so large remote
+// files can be read incrementally without downloading them whole. Requires a server honoring Range.
 export class RangeHttpSource implements Source, Seekable {
 	position = 0
 
@@ -247,8 +274,12 @@ export function rangeHttpSource(uri: string | URL) {
 	return new RangeHttpSource(uri)
 }
 
+// Selects the standard ('+/') or URL-safe ('-_') Base64 alphabet.
 export type Base64Alphabet = 'base64' | 'base64url'
 
+// A seekable source that streams Base64-decoded bytes from an underlying byte Source or string. Decodes
+// incrementally, tolerating whitespace and either alphabet, and keeps a partial 4-char group across reads;
+// seeks align to 3-byte/4-char group boundaries and discard the intra-group remainder.
 export class Base64Source implements Source, Seekable {
 	readonly #buffer = Buffer.allocUnsafe(1024)
 	readonly #decoded = [-1, -1, -1] // current decoded base64 bytes
@@ -447,13 +478,19 @@ export function base64Source(source: Source | string) {
 	return new Base64Source(source)
 }
 
+// Standard Base64 encoding alphabet (index -> character).
 const BASE64_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+// URL-safe Base64 encoding alphabet ('+/' replaced by '-_').
 const BASE64_URL_SAFE_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'
 
+// ASCII code of the '=' padding character.
 const TRAILING = 61 // =
 
+// Flush threshold for the internal Base64 output buffer, in encoded bytes.
 const BASE64_ENCODED_BUFFER_SIZE = 128
 
+// A sink that Base64-encodes written bytes and forwards the encoded text to an underlying Sink.
+// Call end() to emit the final padded group after all input has been written.
 export class Base64Sink implements Sink {
 	readonly #map: Buffer
 	readonly #buffer = Buffer.allocUnsafe(3)
@@ -581,6 +618,7 @@ export async function readUntil(source: Source, buffer: Buffer, size: number = b
 	return size - remaining
 }
 
+// Reads the source to exhaustion and returns all remaining bytes as a single Buffer.
 export async function readRemaining(source: Source) {
 	const chunks: Buffer[] = []
 	const buffer = Buffer.allocUnsafe(65536)
@@ -598,11 +636,16 @@ export async function readRemaining(source: Source) {
 	return Buffer.concat(chunks, total)
 }
 
+// Options for readLines.
 export interface ReadLinesOptions {
+	// Text encoding used to decode each line; defaults to the Buffer default (utf8).
 	encoding?: 'ascii' | 'utf8' | 'utf-8'
+	// Whether to yield empty lines; defaults to true.
 	emptyLines?: boolean
 }
 
+// Asynchronously yields newline-delimited lines from `source`, reading in `chunkSize`-byte blocks.
+// Lines are split on LF (0x0A); a trailing CR is left intact. Lines spanning chunk boundaries are reassembled.
 export async function* readLines(source: Source, chunkSize: number, options?: ReadLinesOptions) {
 	const buffer = Buffer.allocUnsafe(chunkSize)
 	const emptyLines = options?.emptyLines ?? true
@@ -661,6 +704,8 @@ export async function* readLines(source: Source, chunkSize: number, options?: Re
 	}
 }
 
+// Pumps all bytes from `source` into `sink` using a reusable transfer buffer (a byte count, or a
+// caller-provided Buffer), stopping when the source is exhausted or the sink stops accepting. Returns total bytes read.
 export async function sourceTransferToSink(source: Source, sink: Sink, size: number | Buffer = 1024) {
 	const buffer = Buffer.isBuffer(size) ? size : Buffer.allocUnsafe(size)
 	let read = 0
@@ -675,10 +720,14 @@ export async function sourceTransferToSink(source: Source, sink: Sink, size: num
 	return read
 }
 
+// An auto-resizing write buffer with typed integer writers (8/16/32-bit, LE and BE). Capacity doubles
+// as needed; `reset` rewinds without freeing, and `toString`/`toBuffer` expose the written region with
+// optional whitespace trimming. Useful for assembling small binary records without preallocating.
 export class GrowableBuffer {
 	#position = 0
 	#buffer: Buffer
 
+	// Creates a buffer with the given initial capacity in bytes (minimum 1).
 	constructor(size: number = 1024) {
 		this.#buffer = Buffer.allocUnsafe(Math.max(1, size))
 	}

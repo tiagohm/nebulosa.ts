@@ -1,29 +1,37 @@
 import type { InputType as ZLibInputType, ZlibOptions } from 'zlib'
 import { signed8, signed16 } from '../math/numerical/math'
 
-// The Rice algorithm is simple and very fast. It requires only enough memory to hold a single block of 16 or 32 pixels at a time.
-// It codes the pixels in small blocks and so is able to adapt very quickly to changes in the input image statistics.
+// FITS-style Rice (sub-block adaptive Golomb-Rice) compression and decompression for 8/16/32-bit integer
+// pixel data, matching CFITSIO's bit stream, plus thin async wrappers over Node's zlib inflate/deflate.
+// Rice encodes per-pixel differences in small blocks and adapts the Golomb parameter per block, so it
+// needs only one block of working memory and reacts quickly to changes in image statistics.
 
+// Integer pixel arrays supported by the Rice codec (signedness inferred from the array type).
 export type RiceCompressionTypedArray = Int8Array | Uint8Array | Int16Array | Uint16Array | Int32Array | Uint32Array
 
+// Lookup table: NONZERO_COUNT[b] is the bit position (1-based) of the highest set bit of byte b.
 const NONZERO_COUNT = new Uint8Array(256)
 
 for (let i = 1; i < NONZERO_COUNT.length; i++) {
 	NONZERO_COUNT[i] = 32 - Math.clz32(i)
 }
 
+// Low-bit masks: MASKS[n] has the lowest n bits set, used to extract/append n-bit fields.
 const MASKS = new Uint32Array(33)
 
 for (let i = 1; i < MASKS.length; i++) {
 	MASKS[i] = i === 32 ? 0xffffffff : (1 << i) - 1
 }
 
+// Per-sample-size Rice parameters keyed by bytes-per-pixel: bit width (bbits), value mask, the
+// field-size code width (fsbits), and the maximum field size (fsmax) above which pixels are stored raw.
 const SAMPLE_FORMAT = {
 	1: { bytesPerPixel: 1, fsbits: 3, fsmax: 6, bbits: 8, mask: 0xff },
 	2: { bytesPerPixel: 2, fsbits: 4, fsmax: 14, bbits: 16, mask: 0xffff },
 	4: { bytesPerPixel: 4, fsbits: 5, fsmax: 25, bbits: 32, mask: 0xffffffff },
 } as const
 
+// Growable MSB-first bit stream writer used to emit the Rice-encoded output.
 class BitWriter {
 	#buffer: Uint8Array
 	#length = 0
@@ -46,11 +54,13 @@ class BitWriter {
 		this.#buffer = grown
 	}
 
+	// Appends one raw byte, growing the buffer as needed.
 	writeByte(byte: number) {
 		this.#ensure(1)
 		this.#buffer[this.#length++] = byte & 0xff
 	}
 
+	// Appends the low `n` bits of `bits`, MSB first.
 	writeBits(bits: number, n: number) {
 		let lbitBuffer = this.#bitBuffer
 		let lbitsToGo = this.#bitsToGo
@@ -78,6 +88,9 @@ class BitWriter {
 		this.#bitsToGo = lbitsToGo
 	}
 
+	// Emits one block of `count` zig-zag differences using field size `fs`: the fsbits-wide size code
+	// followed by each value's unary high part and fs-bit low part. When fs >= fsmax the values are
+	// stored raw (bbits each) instead.
 	writeRiceBlock(diff: Uint32Array, count: number, fs: number, fsbits: number, fsmax: number, bbits: number) {
 		if (fs >= fsmax) {
 			this.writeBits(fsmax + 1, fsbits)
@@ -162,6 +175,7 @@ class BitWriter {
 		this.#bitsToGo = lbitsToGo
 	}
 
+	// Flushes any partial byte (zero-padded) and returns a copy of the written bytes.
 	finalize() {
 		if (this.#bitsToGo < 8) {
 			this.writeByte(this.#bitBuffer << this.#bitsToGo)
@@ -171,15 +185,21 @@ class BitWriter {
 	}
 }
 
+// Zig-zag maps a signed difference to an unsigned value (0,-1,1,-2,2,... -> 0,1,2,3,4,...) so small
+// magnitudes of either sign get short Rice codes.
 function mapDiff(delta: number) {
 	return (delta < 0 ? ~(delta << 1) : delta << 1) >>> 0
 }
 
+// Estimates a safe output capacity (bytes) for the worst case, avoiding reallocation during encoding.
 function estimateCapacity(inputLengthBytes: number, bytesPerPixel: number, blockSize: number) {
 	const blocks = Math.ceil(inputLengthBytes / bytesPerPixel / blockSize)
 	return inputLengthBytes + bytesPerPixel + Math.ceil(inputLengthBytes / 100) + blocks * 2 + 16
 }
 
+// Rice-compresses an integer pixel array into a byte stream. `blockSize` is the pixels-per-block (16 or
+// 32 typical); `initialCapacity` optionally pre-sizes or supplies the BitWriter. Element byte size must
+// be 1, 2, or 4. Returns the encoded bytes.
 export function compressRice(input: Readonly<RiceCompressionTypedArray>, blockSize: number = 32, initialCapacity?: number | BitWriter) {
 	if (blockSize < 1) throw new Error('block size must be a positive integer')
 
@@ -266,10 +286,14 @@ export function compressRice(input: Readonly<RiceCompressionTypedArray>, blockSi
 	return writer.finalize()
 }
 
+// Guards against reading past the end of the compressed stream.
 function checkBufferBounds(offset: number, limit: number) {
 	if (offset >= limit) throw new Error('hit end of compressed byte stream')
 }
 
+// Rice-decompresses `compressed` into the preallocated `output` array (its length sets the pixel count
+// and its element byte size selects the format). `blockSize` must match the value used when encoding.
+// Returns `output`.
 export function decompressRice<T extends RiceCompressionTypedArray>(compressed: Uint8Array, output: T, blockSize: number = 32) {
 	if (blockSize < 1) throw new Error('block size must be a positive integer')
 
@@ -379,6 +403,7 @@ export function decompressRice<T extends RiceCompressionTypedArray>(compressed: 
 	return output
 }
 
+// Asynchronously zlib-inflates `input`, resolving to the decompressed Buffer. Lazily imports node:zlib.
 export async function inflate(input: ZLibInputType) {
 	const { promise, resolve, reject } = Promise.withResolvers<Buffer>()
 	const { inflate } = await import('zlib')
@@ -391,6 +416,7 @@ export async function inflate(input: ZLibInputType) {
 	return promise
 }
 
+// Asynchronously zlib-deflates `input` at the given compression `level`, resolving to the compressed Buffer.
 export async function deflate(input: ZLibInputType, options: Pick<ZlibOptions, 'level'>) {
 	const { promise, resolve, reject } = Promise.withResolvers<Buffer>()
 	const { deflate } = await import('zlib')

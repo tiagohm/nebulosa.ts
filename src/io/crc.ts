@@ -1,5 +1,12 @@
+// Configurable table-driven CRC implementation supporting widths from 1 to 32 bits, reflected and
+// non-reflected registers, initial/final-xor values, and optional output byte reordering. The `CRC`
+// class builds a 256-entry lookup table per configuration (bit-by-bit for sub-byte widths) and exposes
+// the standard catalogued algorithms as lazily-instantiated, cached static getters.
+
+// Byte-oriented inputs accepted by CRC.compute.
 export type CRCArrayType = Buffer | Uint8Array | Uint8ClampedArray | DataView
 
+// Names of every catalogued CRC algorithm exposed as a static getter on CRC.
 // oxfmt-ignore
 export const CRC_ALGORITHMS = [
 	'crc3gsm', 'crc4itu', 'crc4interlaken', 'crc5epc', 'crc5itu', 'crc5usb', 'crc6cdma2000a', 'crc6cdma2000b',
@@ -14,15 +21,24 @@ export const CRC_ALGORITHMS = [
 	'crc32d', 'crc32mpeg2', 'crc32posix', 'crc32q', 'crc32jamcrc', 'crc32xfer',
 ] as const
 
+// One of the catalogued CRC algorithm names.
 export type CRCAlgorithm = (typeof CRC_ALGORITHMS)[number]
 
+// A table-driven CRC calculator for one fixed configuration (width, polynomial, init, reflect, final xor).
 export class CRC {
+	// Precomputed 256-entry byte lookup table (empty for sub-byte widths handled bit-by-bit).
 	readonly #table: Uint32Array
+	// Register width in bits (1..32).
 	readonly #bit: number
+	// Generator polynomial, already reflected/normalized for the configured register order.
 	readonly #polynomial: number
+	// Initial register value, reflected/normalized as needed.
 	readonly #initial: number
+	// Value xored into the register to produce the final checksum.
 	readonly #finalXor: number
+	// Whether the register processes bits least-significant-first (reflected algorithms).
 	readonly #reflect: boolean
+	// Whether the output bytes are reversed for big-endian numeric consumers.
 	readonly #reorder: boolean
 
 	static #crc3gsm?: CRC
@@ -104,6 +120,9 @@ export class CRC {
 	static #crc32jamcrc?: CRC
 	static #crc32xfer?: CRC
 
+	// Configures a CRC. `bit` is the width in [1, 32]; `polynomial`, `initial`, and `finalXor` are given
+	// in normal (non-reflected) form and are internally reflected when `reflect` is true; `reorder`
+	// reverses the output byte order. Throws RangeError when the width is out of range.
 	constructor(bit: number, polynomial: number, initial: number, reflect: boolean, finalXor: number, reorder: boolean = false) {
 		if (bit < 1 || bit > 32) {
 			throw new RangeError('crc bit width must be in range [1..32]')
@@ -176,6 +195,8 @@ export class CRC {
 		return finalizeCrc(value, bit, this.#finalXor, this.#reorder)
 	}
 
+	// Catalogued CRC presets. Each getter lazily builds and caches a CRC configured with this algorithm's
+	// standard (width, polynomial, init, reflect, final xor) parameters. See https://reveng.sourceforge.io/crc-catalogue/.
 	static get crc3gsm() {
 		return (CRC.#crc3gsm ??= new CRC(3, 0x3, 0x0, false, 0x7))
 	}
