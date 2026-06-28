@@ -13,23 +13,34 @@ import { type Time, timeNow } from '../../astronomy/time/time'
 import type { PickByValue } from '../../core/types'
 import type { DefBlobVector, DefElement, DefNumber, DefNumberVector, DefSwitch, DefSwitchVector, DefTextVector, DefVector, DelProperty, OneNumber, PropertyState, SetBlobVector, SetNumberVector, SetSwitchVector, SetTextVector, SetVector, ValueType } from './types'
 
+// Device managers that turn the raw INDI property stream into typed device state. A DeviceManager per
+// device type consumes def*/set* vectors as an IndiClientHandler, maintains the device objects, applies
+// each relevant property to the device's fields (with unit conversions), and notifies DeviceHandlers of
+// add/update/remove/BLOB events. Shared low-level value/range/parking helpers live at the bottom.
+
+// Subscriber to device lifecycle events for a device type.
 export interface DeviceHandler<D extends Device> {
 	readonly added: (device: D) => void
+	// Notified when a device property field changes; `property` is the device field name.
 	readonly updated?: (device: D, property: keyof D & string, state?: PropertyState) => void
 	readonly removed: (device: D) => void
+	// Notified when an image/data BLOB arrives for the device.
 	readonly blobReceived?: (device: D, data: string | Buffer<ArrayBuffer>) => void
 }
 
+// Subscriber to raw INDI property add/update/remove events for a device type.
 export interface DevicePropertyHandler<D extends Device> {
 	readonly added: (device: D, property: DeviceProperty) => void
 	readonly updated: (device: D, property: DeviceProperty) => void
 	readonly removed: (device: D, property: DeviceProperty) => void
 }
 
+// Resolves a device by client and id (optionally constrained to a type).
 export interface DeviceProvider<D extends Device> {
 	readonly get: (client: Client | string | undefined, id: string, type?: DeviceType) => D | undefined
 }
 
+// Maps an INDI DRIVER_INTERFACE bit to the default device template used to seed a newly seen device.
 const DEVICES = {
 	[DeviceInterfaceType.TELESCOPE]: DEFAULT_MOUNT,
 	[DeviceInterfaceType.CCD]: DEFAULT_CAMERA,
@@ -41,16 +52,20 @@ const DEVICES = {
 	[DeviceInterfaceType.POWER]: DEFAULT_POWER,
 } as const
 
+// Tracks the raw INDI property vectors per device and notifies property-level handlers on
+// define/update/delete. Backs each DeviceManager's `properties` view.
 export class DevicePropertyManager<D extends Device> implements IndiClientHandler, DevicePropertyHandler<D> {
 	readonly #properties = new Map<Device, DeviceProperties>()
 	readonly #handlers = new Set<DevicePropertyHandler<D>>()
 
 	constructor(readonly deviceProvider: DeviceProvider<D>) {}
 
+	// Number of devices currently holding properties.
 	get length() {
 		return this.#properties.size
 	}
 
+	// Registers/unregisters a property-event handler.
 	addHandler(handler: DevicePropertyHandler<D>) {
 		this.#handlers.add(handler)
 	}
@@ -59,6 +74,7 @@ export class DevicePropertyManager<D extends Device> implements IndiClientHandle
 		this.#handlers.delete(handler)
 	}
 
+	// Fan-out of property add/update/remove events to all registered handlers.
 	added(device: D, property: DeviceProperty) {
 		for (const e of this.#handlers) e.added(device, property)
 	}
@@ -71,14 +87,19 @@ export class DevicePropertyManager<D extends Device> implements IndiClientHandle
 		for (const e of this.#handlers) e.removed(device, property)
 	}
 
+	// Returns the property map for a device, if any.
 	get(device: D) {
 		return this.#properties.get(device)
 	}
 
+	// Whether the device has any tracked properties.
 	has(device: D) {
 		return this.#properties.has(device) === true
 	}
 
+	// Applies a def*/set* vector: a def tags and stores the property (added); a set merges changed state
+	// and element values into the existing property (updated). BLOB vectors are skipped here. Returns
+	// whether anything changed.
 	vector(client: Client, message: DefVector | SetVector, tag: string) {
 		const device = this.deviceProvider.get(client, message.device)
 
@@ -140,6 +161,7 @@ export class DevicePropertyManager<D extends Device> implements IndiClientHandle
 		return false
 	}
 
+	// Removes one named property (or all of a device's properties when no name is given) and notifies.
 	delProperty(client: Client, message: DelProperty) {
 		const device = this.deviceProvider.get(client, message.device)
 
@@ -170,6 +192,7 @@ export class DevicePropertyManager<D extends Device> implements IndiClientHandle
 		return false
 	}
 
+	// Drops all properties belonging to a disconnected client.
 	close(client: Client, server: boolean) {
 		for (const device of this.#properties.keys()) {
 			if (device[CLIENT] === client) {
@@ -179,17 +202,23 @@ export class DevicePropertyManager<D extends Device> implements IndiClientHandle
 	}
 }
 
+// Base class for per-type device managers. As an IndiClientHandler it ingests the property stream, owns
+// the device objects of its type, exposes them as a DeviceProvider, and re-emits typed lifecycle events
+// to DeviceHandlers. Subclasses implement the per-type vector handling that maps properties to fields.
 export abstract class DeviceManager<D extends Device> implements IndiClientHandler, DeviceProvider<D>, DeviceHandler<D> {
 	readonly #clients = new Map<string, Client>()
 	readonly #devices = new Map<string, D>()
 	readonly #handlers = new Set<DeviceHandler<D>>()
 
+	// Per-device raw property view.
 	readonly properties = new DevicePropertyManager(this)
 
+	// Number of managed devices.
 	get length() {
 		return this.#devices.size
 	}
 
+	// Registers/unregisters a device lifecycle handler.
 	addHandler(handler: DeviceHandler<D>) {
 		this.#handlers.add(handler)
 	}
@@ -198,6 +227,7 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 		this.#handlers.delete(handler)
 	}
 
+	// Fan-out of device lifecycle events to all registered handlers.
 	added(device: D) {
 		for (const handler of this.#handlers) handler.added(device)
 	}
@@ -214,6 +244,7 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 		for (const handler of this.#handlers) handler.blobReceived?.(device, data)
 	}
 
+	// Lists managed devices, optionally filtered to a single client.
 	list(client?: Client | string) {
 		const devices = new Set<D>()
 
@@ -226,6 +257,7 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 		return devices
 	}
 
+	// Resolves a managed device by id or, scoped to a client, by name.
 	get(client: Client | string | undefined, id: string) {
 		client = typeof client === 'string' ? this.#clients.get(client) : client
 
@@ -237,14 +269,17 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 		return undefined
 	}
 
+	// Whether a matching device exists.
 	has(client: Client | string | undefined, id: string) {
 		return this.get(client, id) !== undefined
 	}
 
+	// Requests (re)definition of a device's properties from its client.
 	ask(device: D, name?: string, client = device[CLIENT]!) {
 		client.getProperties({ device: device.name, name })
 	}
 
+	// Enables/disables BLOB delivery for a device.
 	enableBlob(device: D, client = device[CLIENT]!) {
 		client.enableBlob({ device: device.name, value: 'Also' })
 	}
@@ -253,6 +288,7 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 		client.enableBlob({ device: device.name, value: 'Never' })
 	}
 
+	// Connects/disconnects a device via its CONNECTION switch (no-op if already in the target state).
 	connect(device: D, client = device[CLIENT]!) {
 		if (!device.connected) {
 			client.sendSwitch({ device: device.name, name: 'CONNECTION', elements: { CONNECT: true } })
@@ -265,10 +301,13 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 		}
 	}
 
+	// Toggles a driver's SIMULATION switch.
 	simulation(device: D, enable: boolean, client = device[CLIENT]!) {
 		client.sendSwitch({ device: device.name, name: 'SIMULATION', elements: { [enable ? 'ENABLE' : 'DISABLE']: true } })
 	}
 
+	// Base switch handling: applies the CONNECTION switch. Subclasses override to add device-specific
+	// switch properties and call super.
 	switchVector(client: Client, message: DefSwitchVector | SetSwitchVector, tag: string) {
 		const device = this.get(client, message.device)
 
@@ -282,6 +321,8 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 		}
 	}
 
+	// Removes the device when an unnamed delProperty arrives (whole-device deletion); always forwards to
+	// the property manager.
 	delProperty(client: Client, message: DelProperty) {
 		this.properties.delProperty(client, message)
 
@@ -294,10 +335,12 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 		}
 	}
 
+	// Forwards every vector to the property manager; subclasses override to additionally apply fields.
 	vector(client: Client, message: DefVector | SetVector, tag: string) {
 		this.properties.vector(client, message, tag)
 	}
 
+	// Applies the CONNECTION switch to the device's `connected` flag, asking for properties on connect.
 	protected handleConnection(device: D, message: DefSwitchVector | SetSwitchVector, client = device[CLIENT]!) {
 		const connected = message.elements.CONNECT?.value === true
 
@@ -309,6 +352,9 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 		return false
 	}
 
+	// Creates the device from its DRIVER_INFO when the driver advertises the manager's interface bit
+	// (seeding from the matching default template and a stable MD5 id), or removes it if the interface is
+	// no longer present.
 	protected handleDriverInfo(client: Client, message: DefTextVector | SetTextVector, interfaceType: DeviceInterfaceType) {
 		const { elements } = message
 		const type = +elements.DRIVER_INTERFACE.value
@@ -329,6 +375,7 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 		}
 	}
 
+	// Registers a new device and emits `added`; no-op if already present.
 	add(device: D, client = device[CLIENT]!) {
 		if (!this.has(client, device.id)) {
 			this.#devices.set(device.id, device)
@@ -340,6 +387,7 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 		}
 	}
 
+	// Unregisters a device and emits `removed`.
 	remove(device: D) {
 		if (this.#devices.delete(device.id)) {
 			this.removed(device)
@@ -349,6 +397,7 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 		}
 	}
 
+	// Drops all devices/properties of a disconnected client.
 	close(client: Client, server: boolean) {
 		this.properties.close(client, server)
 		const devices = this.list(client)
@@ -357,11 +406,14 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 	}
 }
 
+// Manager for stand-alone or embedded guide outputs. Command methods send pulse-guide (durations in
+// milliseconds) and guide-rate commands; property handling reflects pulse-guiding capability/state.
 export class GuideOutputManager extends DeviceManager<GuideOutput> {
 	constructor(readonly provider: DeviceProvider<GuideOutput>) {
 		super()
 	}
 
+	// Issues a timed pulse-guide in one direction; duration is milliseconds. No-op without the capability.
 	pulseNorth(device: GuideOutput, duration: number, client = device[CLIENT]!) {
 		if (device.canPulseGuide) {
 			client.sendNumber({ device: device.name, name: 'TELESCOPE_TIMED_GUIDE_NS', elements: { TIMED_GUIDE_N: duration } })
@@ -412,6 +464,8 @@ export class GuideOutputManager extends DeviceManager<GuideOutput> {
 		return device
 	}
 
+	// Forwards only the vectors relevant to a guide output (driver/connection and the timed-guide/guide-
+	// rate properties) to the base property tracking.
 	vector(client: Client, message: DefVector | SetVector, tag: string) {
 		switch (message.name) {
 			case 'DRIVER_INFO':
@@ -423,6 +477,8 @@ export class GuideOutputManager extends DeviceManager<GuideOutput> {
 		}
 	}
 
+	// Applies the timed-guide (pulsing state) and guide-rate number vectors, lazily creating a guide-output
+	// proxy over a parent mount/camera that advertises pulse-guiding.
 	numberVector(client: Client, message: DefNumberVector | SetNumberVector, tag: string) {
 		switch (message.name) {
 			case 'TELESCOPE_TIMED_GUIDE_NS':
@@ -516,6 +572,7 @@ export class GuideOutputManager extends DeviceManager<GuideOutput> {
 	}
 }
 
+// Manager for temperature sensors; reflects the device temperature (degrees Celsius) from its properties.
 export class ThermometerManager extends DeviceManager<Thermometer> {
 	constructor(readonly provider: DeviceProvider<Thermometer>) {
 		super()
@@ -534,6 +591,7 @@ export class ThermometerManager extends DeviceManager<Thermometer> {
 		return device
 	}
 
+	// Forwards only the driver/connection and temperature vectors to the base property tracking.
 	vector(client: Client, message: DefVector | SetVector, tag: string) {
 		switch (message.name) {
 			case 'DRIVER_INFO':
@@ -544,6 +602,8 @@ export class ThermometerManager extends DeviceManager<Thermometer> {
 		}
 	}
 
+	// Applies the camera/focuser temperature vectors (degrees Celsius), lazily creating a thermometer proxy
+	// over a parent camera/focuser that reports a temperature.
 	numberVector(client: Client, message: DefNumberVector | SetNumberVector, tag: string) {
 		switch (message.name) {
 			case 'CCD_TEMPERATURE':
@@ -599,6 +659,9 @@ export class ThermometerManager extends DeviceManager<Thermometer> {
 
 // https://github.com/indilib/indi/blob/master/libs/indibase/indiccd.cpp
 
+// Manager for cameras. Command methods drive exposure, cooling, frame/subframe, binning, gain/offset and
+// frame type; property handling maps the corresponding INDI vectors (including the CCD image BLOB) onto
+// the Camera state. Temperatures are degrees Celsius, exposures seconds, pixel sizes micrometres.
 export class CameraManager extends DeviceManager<Camera> {
 	readonly #gain = new WeakMap<Camera, readonly [string, string]>()
 	readonly #offset = new WeakMap<Camera, readonly [string, string]>()
@@ -676,6 +739,7 @@ export class CameraManager extends DeviceManager<Camera> {
 		camera[CLIENT]!.sendText({ device: camera.name, name: 'ACTIVE_DEVICES', elements: { ACTIVE_TELESCOPE: mount?.name ?? '', ACTIVE_ROTATOR: rotator?.name ?? '', ACTIVE_FOCUSER: focuser?.name ?? '', ACTIVE_FILTER: wheel?.name ?? '' } })
 	}
 
+	// Applies camera switch vectors: cooler on/off, capture/readout format, abort exposure, and frame type.
 	switchVector(client: Client, message: DefSwitchVector | SetSwitchVector, tag: string) {
 		const device = this.get(client, message.device)
 
@@ -731,6 +795,8 @@ export class CameraManager extends DeviceManager<Camera> {
 		}
 	}
 
+	// Applies camera number vectors: sensor/pixel info, exposure progress, cooler power and temperature,
+	// subframe, binning, controls, and gain/offset.
 	numberVector(client: Client, message: DefNumberVector | SetNumberVector, tag: string) {
 		const device = this.get(client, message.device)
 
@@ -853,6 +919,7 @@ export class CameraManager extends DeviceManager<Camera> {
 		}
 	}
 
+	// Creates/updates the camera from DRIVER_INFO and applies the color-filter-array (Bayer) text vector.
 	textVector(client: Client, message: DefTextVector | SetTextVector, tag: string) {
 		if (message.name === 'DRIVER_INFO') {
 			return this.handleDriverInfo(client, message, DeviceInterfaceType.CCD)
@@ -871,6 +938,7 @@ export class CameraManager extends DeviceManager<Camera> {
 		}
 	}
 
+	// Receives the CCD image BLOB and forwards its data to handlers.
 	blobVector(client: Client, message: DefBlobVector | SetBlobVector, tag: string) {
 		const device = this.get(client, message.device)
 
@@ -960,6 +1028,9 @@ export class CameraManager extends DeviceManager<Camera> {
 
 // https://github.com/indilib/indi/blob/master/libs/indibase/inditelescope.cpp
 
+// Manager for mounts/telescopes. Command methods slew/sync/goto (converting target frames to the mount's
+// equatorial frame), track, park/home, move axes, and pulse-guide; property handling maps coordinate,
+// tracking, pier-side, site/time, and capability vectors onto the Mount state. Angles are radians.
 export class MountManager extends DeviceManager<Mount> {
 	tracking(mount: Mount, enable: boolean, client = mount[CLIENT]!) {
 		client.sendSwitch({ device: mount.name, name: 'TELESCOPE_TRACK_STATE', elements: { [enable ? 'TRACK_ON' : 'TRACK_OFF']: true } })
@@ -1101,6 +1172,8 @@ export class MountManager extends DeviceManager<Mount> {
 		}
 	}
 
+	// Applies mount switch vectors: slew rate, track mode/state, pier side, park/park-option, abort, home,
+	// slew-vs-sync mode, and axis motion.
 	switchVector(client: Client, message: DefSwitchVector | SetSwitchVector, tag: string) {
 		const device = this.get(client, message.device)
 
@@ -1266,6 +1339,8 @@ export class MountManager extends DeviceManager<Mount> {
 		}
 	}
 
+	// Applies mount number vectors: the equatorial (JNOW) coordinate and slewing state, and the site
+	// geographic coordinate.
 	numberVector(client: Client, message: DefNumberVector | SetNumberVector, tag: string) {
 		const device = this.get(client, message.device)
 
@@ -1302,6 +1377,7 @@ export class MountManager extends DeviceManager<Mount> {
 		}
 	}
 
+	// Creates/updates the mount from DRIVER_INFO and applies its UTC time/offset text vector.
 	textVector(client: Client, message: DefTextVector | SetTextVector, tag: string) {
 		if (message.name === 'DRIVER_INFO') {
 			return this.handleDriverInfo(client, message, DeviceInterfaceType.TELESCOPE)
@@ -1395,6 +1471,7 @@ export class MountManager extends DeviceManager<Mount> {
 
 // https://github.com/indilib/indi/blob/master/libs/indibase/indifilterwheel.cpp
 
+// Manager for filter wheels; moves to a slot and edits filter names, reflecting slot count/position.
 export class WheelManager extends DeviceManager<Wheel> {
 	moveTo(wheel: Wheel, slot: number, client = wheel[CLIENT]!) {
 		client.sendNumber({ device: wheel.name, name: 'FILTER_SLOT', elements: { FILTER_SLOT_VALUE: slot + 1 } })
@@ -1406,6 +1483,8 @@ export class WheelManager extends DeviceManager<Wheel> {
 		client.sendText({ device: wheel.name, name: 'FILTER_NAME', elements })
 	}
 
+	// Applies the filter-slot number vector: slot count, current position (converted to 0-based), and
+	// moving state.
 	numberVector(client: Client, message: DefNumberVector | SetNumberVector, tag: string) {
 		const device = this.get(client, message.device)
 
@@ -1429,6 +1508,7 @@ export class WheelManager extends DeviceManager<Wheel> {
 		}
 	}
 
+	// Creates/updates the wheel from DRIVER_INFO and applies its filter-name list text vector.
 	textVector(client: Client, message: DefTextVector | SetTextVector, tag: string) {
 		if (message.name === 'DRIVER_INFO') {
 			return this.handleDriverInfo(client, message, DeviceInterfaceType.FILTER)
@@ -1480,6 +1560,8 @@ export class WheelManager extends DeviceManager<Wheel> {
 
 // https://github.com/indilib/indi/blob/master/libs/indibase/indifocuserinterface.cpp
 
+// Manager for focusers; absolute/relative move, sync, reverse, and abort, reflecting position (steps),
+// motion, and temperature.
 export class FocuserManager extends DeviceManager<Focuser> {
 	stop(focuser: Focuser, client = focuser[CLIENT]!) {
 		if (focuser.canAbort) {
@@ -1519,6 +1601,7 @@ export class FocuserManager extends DeviceManager<Focuser> {
 		}
 	}
 
+	// Applies focuser switch vectors: abort capability and reverse capability/state.
 	switchVector(client: Client, message: DefSwitchVector | SetSwitchVector, tag: string) {
 		const device = this.get(client, message.device)
 
@@ -1548,6 +1631,8 @@ export class FocuserManager extends DeviceManager<Focuser> {
 		}
 	}
 
+	// Applies focuser number vectors: sync/relative/absolute capabilities, the absolute position (steps),
+	// and moving state.
 	numberVector(client: Client, message: DefNumberVector | SetNumberVector, tag: string) {
 		const device = this.get(client, message.device)
 
@@ -1591,6 +1676,7 @@ export class FocuserManager extends DeviceManager<Focuser> {
 		}
 	}
 
+	// Creates/updates the focuser from DRIVER_INFO.
 	textVector(client: Client, message: DefTextVector | SetTextVector, tag: string) {
 		if (message.name === 'DRIVER_INFO') {
 			return this.handleDriverInfo(client, message, DeviceInterfaceType.FOCUSER)
@@ -1631,6 +1717,7 @@ export class FocuserManager extends DeviceManager<Focuser> {
 
 // https://github.com/indilib/indi/blob/master/libs/indibase/indidustcapinterface.cpp
 
+// Manager for telescope covers/dust caps; park (close)/unpark (open) and abort, reflecting cover state.
 export class CoverManager extends DeviceManager<Cover> {
 	unpark(cover: Cover, client = cover[CLIENT]!) {
 		if (cover.canPark) {
@@ -1650,6 +1737,7 @@ export class CoverManager extends DeviceManager<Cover> {
 		}
 	}
 
+	// Applies cover switch vectors: park (open/close) state and abort capability.
 	switchVector(client: Client, message: DefSwitchVector | SetSwitchVector, tag: string) {
 		const device = this.get(client, message.device)
 
@@ -1668,6 +1756,7 @@ export class CoverManager extends DeviceManager<Cover> {
 		}
 	}
 
+	// Creates/updates the cover from DRIVER_INFO.
 	textVector(client: Client, message: DefTextVector | SetTextVector, tag: string) {
 		if (message.name === 'DRIVER_INFO') {
 			return this.handleDriverInfo(client, message, DeviceInterfaceType.DUSTCAP)
@@ -1697,6 +1786,7 @@ export class CoverManager extends DeviceManager<Cover> {
 
 // https://github.com/indilib/indi/blob/master/libs/indibase/indirotatorinterface.cpp
 
+// Manager for field rotators; goto/sync angle (degrees), reverse, home, and abort, reflecting angle/motion.
 export class RotatorManager extends DeviceManager<Rotator> {
 	moveTo(rotator: Rotator, angle: number, client = rotator[CLIENT]!) {
 		client.sendNumber({ device: rotator.name, name: 'ABS_ROTATOR_ANGLE', elements: { ANGLE: angle } })
@@ -1726,6 +1816,7 @@ export class RotatorManager extends DeviceManager<Rotator> {
 		}
 	}
 
+	// Applies rotator switch vectors: abort, home, and reverse capabilities/state, and backlash compensation.
 	switchVector(client: Client, message: DefSwitchVector | SetSwitchVector, tag: string) {
 		const device = this.get(client, message.device)
 
@@ -1769,6 +1860,7 @@ export class RotatorManager extends DeviceManager<Rotator> {
 		}
 	}
 
+	// Applies rotator number vectors: the absolute angle (degrees)/moving state and sync capability.
 	numberVector(client: Client, message: DefNumberVector | SetNumberVector, tag: string) {
 		const device = this.get(client, message.device)
 
@@ -1794,6 +1886,7 @@ export class RotatorManager extends DeviceManager<Rotator> {
 		}
 	}
 
+	// Creates/updates the rotator from DRIVER_INFO.
 	textVector(client: Client, message: DefTextVector | SetTextVector, tag: string) {
 		if (message.name === 'DRIVER_INFO') {
 			return this.handleDriverInfo(client, message, DeviceInterfaceType.ROTATOR)
@@ -1833,6 +1926,7 @@ export class RotatorManager extends DeviceManager<Rotator> {
 	}
 }
 
+// Manager for dew heaters; sets and reflects the heater duty cycle (percent).
 export class DewHeaterManager extends DeviceManager<DewHeater> {
 	readonly #pwm = new WeakMap<DewHeater, readonly [string, string]>()
 
@@ -1863,6 +1957,7 @@ export class DewHeaterManager extends DeviceManager<DewHeater> {
 		return device
 	}
 
+	// Forwards only the driver/connection and heater vectors to the base property tracking.
 	vector(client: Client, message: DefVector | SetVector, tag: string) {
 		switch (message.name) {
 			case 'DRIVER_INFO':
@@ -1872,6 +1967,8 @@ export class DewHeaterManager extends DeviceManager<DewHeater> {
 		}
 	}
 
+	// Applies the heater duty-cycle number vector, lazily creating a dew-heater proxy over a parent device
+	// that exposes a heater channel.
 	numberVector(client: Client, message: DefNumberVector | SetNumberVector, tag: string) {
 		switch (message.name) {
 			// WandererCover V4 EC
@@ -1927,6 +2024,7 @@ export class DewHeaterManager extends DeviceManager<DewHeater> {
 
 // https://github.com/indilib/indi/blob/master/libs/indibase/indilightboxinterface.cpp
 
+// Manager for flat-field light panels; enable/disable and set intensity, reflecting panel state.
 export class FlatPanelManager extends DeviceManager<FlatPanel> {
 	intensity(panel: FlatPanel, value: number, client = panel[CLIENT]!) {
 		client.sendNumber({ device: panel.name, name: 'FLAT_LIGHT_INTENSITY', elements: { FLAT_LIGHT_INTENSITY_VALUE: value } })
@@ -1944,6 +2042,7 @@ export class FlatPanelManager extends DeviceManager<FlatPanel> {
 		panel.enabled ? this.disable(panel, client) : this.enable(panel, client)
 	}
 
+	// Applies the flat-panel light on/off switch vector (enabled state).
 	switchVector(client: Client, message: DefSwitchVector | SetSwitchVector, tag: string) {
 		const device = this.get(client, message.device)
 
@@ -1959,6 +2058,7 @@ export class FlatPanelManager extends DeviceManager<FlatPanel> {
 		}
 	}
 
+	// Applies the flat-panel brightness/intensity number vector.
 	numberVector(client: Client, message: DefNumberVector | SetNumberVector, tag: string) {
 		const device = this.get(client, message.device)
 
@@ -1972,6 +2072,7 @@ export class FlatPanelManager extends DeviceManager<FlatPanel> {
 		}
 	}
 
+	// Creates/updates the flat panel from DRIVER_INFO.
 	textVector(client: Client, message: DefTextVector | SetTextVector, tag: string) {
 		if (message.name === 'DRIVER_INFO') {
 			return this.handleDriverInfo(client, message, DeviceInterfaceType.LIGHTBOX)
@@ -1999,6 +2100,8 @@ export class FlatPanelManager extends DeviceManager<FlatPanel> {
 
 // https://github.com/indilib/indi/blob/master/libs/indibase/indipowerinterface.cpp
 
+// Manager for power-distribution devices; toggles/sets DC, dew, variable-voltage, USB, and auto-dew
+// channels and reflects aggregate voltage/current/power plus per-channel state.
 export class PowerManager extends DeviceManager<Power> {
 	toggle(power: Power, channel: PowerChannel, value: boolean, client = power[CLIENT]!) {
 		const name = channel.type === 'dc' ? 'POWER_CHANNELS' : channel.type === 'dew' ? 'DEW_CHANNELS' : channel.type === 'autoDew' ? 'AUTO_DEW_CONTROL' : channel.type === 'usb' ? 'USB_PORTS' : 'VARIABLE_CHANNELS'
@@ -2015,6 +2118,8 @@ export class PowerManager extends DeviceManager<Power> {
 		client.sendNumber({ device: power.name, name: 'DEW_DUTY_CYCLES', elements: { [channel.name]: value } })
 	}
 
+	// Applies power switch vectors: per-channel enabled state for DC/dew/auto-dew/variable/USB channels and
+	// the power-cycle capability.
 	switchVector(client: Client, message: DefSwitchVector | SetSwitchVector, tag: string) {
 		const device = this.get(client, message.device)
 
@@ -2047,6 +2152,8 @@ export class PowerManager extends DeviceManager<Power> {
 		}
 	}
 
+	// Applies power number vectors: aggregate voltage/current/power sensors and per-channel current/duty
+	// values for DC/dew/auto-dew/variable channels.
 	numberVector(client: Client, message: DefNumberVector | SetNumberVector, tag: string) {
 		const device = this.get(client, message.device)
 
@@ -2082,6 +2189,7 @@ export class PowerManager extends DeviceManager<Power> {
 		}
 	}
 
+	// Creates/updates the power device from DRIVER_INFO and applies the per-channel label text vectors.
 	textVector(client: Client, message: DefTextVector | SetTextVector, tag: string) {
 		if (message.name === 'DRIVER_INFO') {
 			return this.handleDriverInfo(client, message, DeviceInterfaceType.POWER)
@@ -2142,6 +2250,7 @@ export class PowerManager extends DeviceManager<Power> {
 	}
 }
 
+// Resets a device field to a default (deep-cloned) value and notifies, when it actually differs.
 function resetDeviceValue<D extends Device, K extends keyof D & string>(manager: DeviceManager<D>, device: D, property: K, value: D[K]) {
 	if (!isSamePropertyValue(device[property], value)) {
 		device[property] = structuredClone(value)
@@ -2149,12 +2258,17 @@ function resetDeviceValue<D extends Device, K extends keyof D & string>(manager:
 	}
 }
 
+// Cheap equality check used before a reset: identity only, treating any object as different to avoid
+// expensive deep comparisons (drivers usually send fresh objects anyway).
 function isSamePropertyValue(left: unknown, right: unknown): boolean {
 	if (Object.is(left, right)) return true
 	// Don't look deeper if the value is an object, since in most cases the driver will send a new object, and we want to avoid expensive deep comparisons
 	return false
 }
 
+// Reconciles one power-channel list (dc/dew/usb/variable) against an incoming vector: updates each
+// channel's label/value/enabled or min/max range, appends new channels, trims removed ones, and notifies
+// on any change. Returns whether anything changed.
 function handlePowerChannel(manager: DeviceManager<Power>, device: Power, message: DefVector | SetVector, tag: string, type: PowerChannelType, property: keyof Omit<PowerChannel, 'type'>, client = device[CLIENT]!) {
 	const entries = Object.entries(message.elements) as readonly [string, DefElement][]
 	const channels = device[type]
@@ -2193,6 +2307,8 @@ function handlePowerChannel(manager: DeviceManager<Power>, device: Power, messag
 	return updated
 }
 
+// Applies a PARK switch vector to a parkable device's canPark/parking/parked fields and notifies on each
+// change. `parking` is inferred from a Busy state.
 function handleParkable<D extends Device & Parkable>(manager: DeviceManager<D>, device: D, message: DefSwitchVector | SetSwitchVector, tag: string) {
 	if (tag[0] === 'd') {
 		if (handleSwitchValue<Device & Parkable>(device, 'canPark', (message as DefSwitchVector).permission !== 'ro')) {
@@ -2209,6 +2325,8 @@ function handleParkable<D extends Device & Parkable>(manager: DeviceManager<D>, 
 	}
 }
 
+// Assigns a scalar field on a device when it changed. Returns true on change, or when the state is Alert
+// (so callers still re-notify on error states even without a value change). Underlies the typed helpers.
 function handlePropertyValue<D, T extends string | number | boolean>(device: D, property: keyof PickByValue<D, T>, value: T, state?: PropertyState) {
 	if (device[property] !== value) {
 		device[property] = value as never
@@ -2218,6 +2336,8 @@ function handlePropertyValue<D, T extends string | number | boolean>(device: D, 
 	return state === 'Alert'
 }
 
+// Typed wrappers over handlePropertyValue: switch coerces undefined to false; number applies an optional
+// transform (e.g. unit conversion) and ignores undefined; text ignores empty/undefined values.
 function handleSwitchValue<D>(device: D, property: keyof PickByValue<D, boolean>, value?: boolean, state?: PropertyState) {
 	return handlePropertyValue<D, boolean>(device, property, value === true, state)
 }
@@ -2230,6 +2350,9 @@ function handleTextValue<D>(device: D, property: keyof PickByValue<D, string>, v
 	return value && handlePropertyValue<D, string>(device, property, value, state)
 }
 
+// Applies a number element to a value+range property: updates min/max/step when a real range is present
+// (def vectors, or set vectors carrying IUUpdateMinMax bounds with max !== 0) and the value, clamping it
+// only once a meaningful range is known. Returns whether anything changed.
 function handleMinMaxValue(property: MinMaxValueProperty, element: DefNumber | OneNumber | undefined, tag: string) {
 	if (element === undefined) return false
 
@@ -2258,6 +2381,7 @@ function handleMinMaxValue(property: MinMaxValueProperty, element: DefNumber | O
 	return update
 }
 
+// Parses an INDI UTC offset string ("HH" or "HH:MM") into minutes.
 function parseUTCOffset(text: string) {
 	const parts = text.split(':')
 	const hour = +parts[0] * 60
@@ -2265,6 +2389,9 @@ function parseUTCOffset(text: string) {
 	return hour + minute
 }
 
+// Wraps a parent device in a proxy presenting a distinct id/type and a `parent`/`parentId` link, so a
+// sub-interface (e.g. a guide output of a mount) appears as its own device while sharing the parent's
+// fields. parentId is made enumerable so it survives Object.keys()/JSON.stringify.
 function proxyDevice<D extends Device>(parent: D, id: string, type: DeviceType) {
 	return new Proxy(parent, {
 		get(target, prop) {
