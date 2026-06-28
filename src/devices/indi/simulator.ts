@@ -22,12 +22,23 @@ import { type Client, DeviceInterfaceType, type DeviceType, expectedPierSide, ty
 import type { FocuserManager, GuideOutputManager, MountManager, RotatorManager, WheelManager } from './manager'
 import { type DefNumberVector, type DefSwitchVector, type DefTextVector, type EnableBlob, findOnSwitch, type GetProperties, makeBlobVector, makeNumberVector, makeSwitchVector, makeTextVector, type NewNumberVector, type NewSwitchVector, type NewTextVector, selectOnSwitch } from './types'
 
+// In-process simulators of INDI devices (mount, focuser, wheel, rotator, cover, flat panel, camera).
+// Each subclass owns its INDI property vectors, advances state on a fixed tick, and emits def*/set*
+// events through a ClientSimulator so the device managers see it as a real device. The camera renders
+// synthetic FITS/XISF frames from the simulated mount/focuser/wheel state. Angles are radians, times
+// seconds, temperatures degrees Celsius unless noted.
+
+// Simulation tick period, milliseconds.
 const TICK_INTERVAL_MS = 100
+// Tracking drift rates (radians/second) for each track mode: sidereal, solar, lunar, and King.
 const SIDEREAL_DRIFT_RATE = TAU / SIDEREAL_DAYSEC
 const SOLAR_DRIFT_RATE = TAU / (365.2422 * DAYSEC)
 const LUNAR_DRIFT_RATE = TAU / (MOON_SIDEREAL_DAYS * DAYSEC)
 const KING_DRIFT_RATE = (SIDEREAL_RATE - 15.0369) * ASEC2RAD
+// Maximum guide rate as a fraction of sidereal.
 const MAX_GUIDE_RATE = 1
+// Simulated camera sensor geometry and limits: pixels, pixel size (µm), max binning, exposure bounds (s),
+// ambient/default temperatures (°C), the deterministic scene RNG seed, and BLOB padding (bytes).
 const CAMERA_SENSOR_WIDTH = 1280
 const CAMERA_SENSOR_HEIGHT = 1024
 const CAMERA_PIXEL_SIZE = 5.2
@@ -38,6 +49,8 @@ const CAMERA_AMBIENT_TEMPERATURE = 18
 const CAMERA_DEFAULT_TARGET_TEMPERATURE = 0
 const CAMERA_SCENE_SEED = 0x1d0f3a57
 const CAMERA_BLOB_PADDING = 16384
+// Simulated focuser: travel range and initial position (steps), move rate (steps/second), and the
+// temperature model (amplitude °C, period s) plus temperature-compensation gain (steps) and hysteresis (°C).
 const FOCUSER_MAX_POSITION = 100000
 const FOCUSER_INITIAL_POSITION = 50000
 const FOCUSER_MOVE_RATE = 20000
@@ -45,12 +58,16 @@ const FOCUSER_TEMPERATURE_AMPLITUDE = 4
 const FOCUSER_TEMPERATURE_PERIOD_SECONDS = 40
 const FOCUSER_TEMPERATURE_COMPENSATION_STEPS = -250
 const FOCUSER_TEMPERATURE_COMPENSATION_HYSTERESIS = 0.05
+// Simulated filter wheel slot labels and per-slot move time (ms).
 const FILTER_WHEEL_SLOT_NAMES = ['L', 'R', 'G', 'B', 'Ha', 'SII', 'OIII', 'Dark'] as const
 const FILTER_WHEEL_MOVE_TIME_MS = 250
+// Simulated rotator slew rate (degrees/second).
 const ROTATOR_MOVE_RATE = 90
+// Simulated cover open/close time (ms) and flat-panel maximum intensity.
 const COVER_MOVE_TIME_MS = 500
 const PANEL_MAX_INTENSITY = 255
 
+// Mount slew-rate presets (name/label and angular speed in radians/second).
 const SLEW_RATES = [
 	{ name: 'SPEED_1', label: ' 0.5°', speed: 0.5 * DEG2RAD },
 	{ name: 'SPEED_2', label: ' 1.0°', speed: 1 * DEG2RAD },
@@ -61,29 +78,41 @@ const SLEW_RATES = [
 	{ name: 'SPEED_7', label: '32.0°', speed: 32 * DEG2RAD },
 ] as const
 
+// Whether an On Coord Set selects a slew-to or sync-to operation.
 type CoordSetMode = 'SLEW' | 'SYNC'
 
+// Kind of automatic slew in progress.
 type SlewMode = 'GOTO' | 'HOME' | 'PARK'
 
+// Manual-motion direction on one axis (-1, 0, +1).
 type AxisDirection = -1 | 0 | 1
 
+// Image transfer/storage format produced by the camera simulator.
 export type TransferFormat = 'FITS' | 'XISF'
 
+// Camera readout mode: monochrome or colour.
 export type ReadoutMode = 'MONO' | 'RGB'
 
+// Star-field source for synthetic frames: the built-in 'RANDOM' generator or a named catalog source.
 type CatalogSourceType = 'RANDOM' | (string & {})
 
+// Any property vector a simulator can own.
 export type SimulatorProperty = ReturnType<typeof makeNumberVector> | ReturnType<typeof makeSwitchVector> | ReturnType<typeof makeTextVector> | ReturnType<typeof makeBlobVector>
 
+// A catalog star with sky coordinates instead of pixel coordinates.
 export type CatalogSourceStar = Omit<AstronomicalImageStar, 'x' | 'y'> & Readonly<EquatorialCoordinate>
 
+// Provides stars within a cone (RA, Dec, radius in radians) to render into a synthetic frame.
 export type CatalogSource = (rightAscension: Angle, declination: Angle, radius: Angle) => PromiseLike<readonly CatalogSourceStar[]> | readonly CatalogSourceStar[]
 
+// Persistence hooks shared by all simulators for saving/loading property snapshots.
 export interface DeviceSimulatorOptions {
 	readonly save?: (name: string, properties: readonly SimulatorProperty[]) => void
 	readonly load?: (name: string) => PromiseLike<readonly SimulatorProperty[]> | readonly SimulatorProperty[]
 }
 
+// Camera simulator options: star catalog sources plus the related device managers used to read the
+// simulated mount/guider/focuser/rotator/wheel state when rendering a frame.
 export interface CameraSimulatorOptions extends DeviceSimulatorOptions {
 	readonly catalogSources?: Record<string, CatalogSource | undefined | null>
 	readonly mountManager?: MountManager
@@ -93,6 +122,8 @@ export interface CameraSimulatorOptions extends DeviceSimulatorOptions {
 	readonly wheelManager?: WheelManager
 }
 
+// Minimal in-process Client that routes manager commands to the registered device simulators by name and
+// owns their lifecycle. Property definitions are pushed by the simulators rather than pulled.
 // Routes MountManager commands back into the simulator.
 export class ClientSimulator implements Client {
 	readonly type = 'SIMULATOR'
@@ -105,10 +136,13 @@ export class ClientSimulator implements Client {
 		readonly description: string = 'Client Simulator',
 	) {}
 
+	// Simulators push their definitions; there is nothing to pull.
 	getProperties(command?: GetProperties) {}
 
+	// BLOB streaming is always on in the simulator.
 	enableBlob(command: EnableBlob) {}
 
+	// Routes a text/number/switch command to the matching device simulator by name.
 	sendText(vector: NewTextVector) {
 		for (const device of this.#devices.values()) device.name === vector.device && device.sendText(vector)
 	}
@@ -121,6 +155,7 @@ export class ClientSimulator implements Client {
 		for (const device of this.#devices.values()) device.name === vector.device && device.sendSwitch(vector)
 	}
 
+	// Registers/unregisters a device simulator under its name.
 	register(device: DeviceSimulator) {
 		this.#devices.set(device.name, device)
 	}
@@ -135,18 +170,24 @@ export class ClientSimulator implements Client {
 	}
 }
 
+// INDI property group labels.
 const MAIN_CONTROL = 'Main Control'
 const GENERAL_INFO = 'General Info'
 const SIMULATION = 'Simulation'
 
+// Base class for all device simulators. Owns the common driver-info/connection/snoop/config vectors and
+// the connect/disconnect, property save/load, and notify plumbing; subclasses add their own properties
+// and tick logic. Disposable to detach from the client.
 export abstract class DeviceSimulator implements Disposable {
 	abstract readonly type: DeviceType
 
+	// Driver/connection/snoop/config property vectors common to every simulated device.
 	protected readonly driverInfo = makeTextVector('', 'DRIVER_INFO', 'Driver Info', GENERAL_INFO, 'ro', ['DRIVER_INTERFACE', 'Interface', ''], ['DRIVER_EXEC', 'Exec', ''], ['DRIVER_VERSION', 'Version', '1.0'], ['DRIVER_NAME', 'Name', ''])
 	protected readonly connection = makeSwitchVector('', 'CONNECTION', 'Connection', MAIN_CONTROL, 'OneOfMany', 'rw', ['CONNECT', 'Connect', false], ['DISCONNECT', 'Disconnect', true])
 	protected readonly snoopDevices = makeTextVector('', 'ACTIVE_DEVICES', 'Snoop devices', MAIN_CONTROL, 'rw', ['ACTIVE_TELESCOPE', 'Mount', ''], ['ACTIVE_FOCUSER', 'Focuser', ''], ['ACTIVE_FILTER', 'Filter Wheel', ''], ['ACTIVE_ROTATOR', 'Rotator', ''])
 	protected readonly config = makeSwitchVector('', 'CONFIG', 'Config', MAIN_CONTROL, 'AtMostOne', 'rw', ['LOAD', 'Load', false], ['SAVE', 'Save', false])
 
+	// Subclass-supplied: all owned properties, those excluded from persistence, and the persistence hooks.
 	protected abstract readonly properties: readonly SimulatorProperty[]
 	protected abstract readonly propertiesToNotSave: readonly SimulatorProperty[]
 	protected abstract readonly options?: DeviceSimulatorOptions
@@ -171,10 +212,12 @@ export abstract class DeviceSimulator implements Disposable {
 		handleDefSwitchVector(client, handler, this.config)
 	}
 
+	// Whether the simulated device's connection switch is on.
 	get isConnected() {
 		return this.connection.elements.CONNECT.value
 	}
 
+	// Base text handling: updates the snooped-device names. Subclasses override and call super.
 	sendText(vector: NewTextVector) {
 		switch (vector.name) {
 			case 'ACTIVE_DEVICES':
@@ -184,6 +227,7 @@ export abstract class DeviceSimulator implements Disposable {
 
 	abstract sendNumber(vector: NewNumberVector): void
 
+	// Base switch handling: the CONFIG load/save action. Subclasses override and call super.
 	sendSwitch(vector: NewSwitchVector) {
 		switch (vector.name) {
 			case 'CONFIG':
@@ -192,6 +236,7 @@ export abstract class DeviceSimulator implements Disposable {
 		}
 	}
 
+	// Deletes the device's properties and unregisters from the client.
 	dispose() {
 		this.handler.delProperty?.(this.client, { device: this.name })
 		this.client.unregister(this)
@@ -220,6 +265,7 @@ export abstract class DeviceSimulator implements Disposable {
 		}
 	}
 
+	// Emits a set* event for a property, dispatching by its vector type.
 	protected notify(message: SimulatorProperty) {
 		const type = message.type[0]
 
@@ -228,6 +274,7 @@ export abstract class DeviceSimulator implements Disposable {
 		else if (type === 'T') handleSetTextVector(this.client, this.handler, message as never)
 	}
 
+	// Persists the savable properties via the save hook, if provided.
 	saveProperties() {
 		if (this.options?.save) {
 			const properties = this.properties.filter((e) => !this.propertiesToNotSave.includes(e))
@@ -235,6 +282,8 @@ export abstract class DeviceSimulator implements Disposable {
 		}
 	}
 
+	// Loads persisted property values via the load hook and applies any that changed, skipping
+	// non-persisted properties.
 	async loadProperties() {
 		if (this.options?.load) {
 			const properties = await this.options.load(this.name)
@@ -265,6 +314,9 @@ export abstract class DeviceSimulator implements Disposable {
 	}
 }
 
+// Simulated equatorial mount. Models tracking drift per track mode, manual axis motion, slew/sync/goto,
+// park/home, pier side, site location and time, and pulse guiding, advancing the equatorial coordinate
+// on each tick and emitting the corresponding INDI vectors.
 export class MountSimulator extends DeviceSimulator {
 	readonly type = 'mount'
 	readonly #trackModes = ['SIDEREAL', 'SOLAR', 'LUNAR', 'KING'] as const
@@ -346,6 +398,7 @@ export class MountSimulator extends DeviceSimulator {
 		this.driverInfo.elements.DRIVER_EXEC.value = 'mount.simulator'
 	}
 
+	// Current equatorial coordinate (radians) decoded from the RA-hours/Dec-degrees property.
 	get rightAscension() {
 		return hour(this.#equatorialCoordinate.elements.RA.value)
 	}
@@ -354,6 +407,7 @@ export class MountSimulator extends DeviceSimulator {
 		return deg(this.#equatorialCoordinate.elements.DEC.value)
 	}
 
+	// Park/track/home/slew/pulse/parking state flags derived from the corresponding property values/states.
 	get isParked() {
 		return this.#park.elements.PARK.value
 	}
@@ -378,11 +432,13 @@ export class MountSimulator extends DeviceSimulator {
 		return this.#park.state === 'Busy'
 	}
 
+	// Selected tracking mode.
 	get trackMode(): TrackMode {
 		const { TRACK_SIDEREAL, TRACK_SOLAR, TRACK_LUNAR } = this.#trackMode.elements
 		return TRACK_SIDEREAL.value ? 'SIDEREAL' : TRACK_SOLAR.value ? 'SOLAR' : TRACK_LUNAR.value ? 'LUNAR' : 'KING'
 	}
 
+	// Site geographic coordinate components (longitude/latitude in radians, elevation in metres).
 	get longitude() {
 		return deg(this.#geographicCoordinate.elements.LONG.value)
 	}
@@ -395,6 +451,7 @@ export class MountSimulator extends DeviceSimulator {
 		return meter(this.#geographicCoordinate.elements.ELEV.value)
 	}
 
+	// Guide rates (fraction of sidereal) for the RA/Dec axes.
 	get guideRateRightAscension() {
 		return this.#guideRate.elements.GUIDE_RATE_WE.value
 	}
@@ -403,14 +460,17 @@ export class MountSimulator extends DeviceSimulator {
 		return this.#guideRate.elements.GUIDE_RATE_NS.value
 	}
 
+	// Name of the selected slew-rate preset.
 	get slewRate() {
 		return findOnSwitch(this.#slewRate)[0]
 	}
 
+	// Current pier side derived from the pier-side property.
 	get pierSide(): PierSide {
 		return this.#pierSide.elements.PIER_EAST.value ? 'EAST' : this.#pierSide.elements.PIER_WEST.value ? 'WEST' : 'NEITHER'
 	}
 
+	// Handles mount text commands: the UTC time/offset property.
 	sendText(vector: NewTextVector) {
 		super.sendText(vector)
 
@@ -424,6 +484,8 @@ export class MountSimulator extends DeviceSimulator {
 		}
 	}
 
+	// Handles mount number commands: slew/sync to equatorial target, site geographic coordinate, guide
+	// rate, and timed pulse-guiding (milliseconds).
 	sendNumber(vector: NewNumberVector) {
 		switch (vector.name) {
 			case 'EQUATORIAL_EOD_COORD': {
@@ -454,6 +516,8 @@ export class MountSimulator extends DeviceSimulator {
 		}
 	}
 
+	// Handles mount switch commands: connection, slew/sync mode, abort, track mode/state, home, park,
+	// axis motion, and slew-rate selection.
 	sendSwitch(vector: NewSwitchVector) {
 		super.sendSwitch(vector)
 
@@ -956,6 +1020,7 @@ export class MountSimulator extends DeviceSimulator {
 		}
 	}
 
+	// Sets the pulse-guiding Busy/Idle state on the timed-guide vectors and notifies on change.
 	#setPulsing(pulsing: boolean) {
 		if (this.isPulsing === pulsing) return
 		this.#guideNS.state = pulsing ? 'Busy' : 'Idle'
@@ -972,6 +1037,8 @@ export class MountSimulator extends DeviceSimulator {
 	}
 }
 
+// Simulated focuser. Models absolute/relative moves at a fixed rate, reverse, a sinusoidal temperature,
+// and temperature compensation, advancing the position each tick.
 export class FocuserSimulator extends DeviceSimulator {
 	readonly type = 'focuser'
 
@@ -1008,22 +1075,27 @@ export class FocuserSimulator extends DeviceSimulator {
 		this.driverInfo.elements.DRIVER_EXEC.value = 'focuser.simulator'
 	}
 
+	// Current absolute position (steps).
 	get position() {
 		return this.#position.elements.FOCUS_ABSOLUTE_POSITION.value
 	}
 
+	// Whether a move is in progress.
 	get isMoving() {
 		return this.#position.state === 'Busy'
 	}
 
+	// Whether temperature compensation is enabled.
 	get isTemperatureCompensationEnabled() {
 		return this.#temperatureCompensation.elements.INDI_ENABLED.value
 	}
 
+	// Current temperature (degrees Celsius).
 	get temperature() {
 		return this.#temperature.elements.TEMPERATURE.value
 	}
 
+	// Handles focuser number commands: absolute/relative move and sync to a position.
 	sendNumber(vector: NewNumberVector) {
 		switch (vector.name) {
 			case 'ABS_FOCUS_POSITION':
@@ -1037,6 +1109,8 @@ export class FocuserSimulator extends DeviceSimulator {
 		}
 	}
 
+	// Handles focuser switch commands: connection, motion direction, abort, reverse, and temperature
+	// compensation toggle.
 	sendSwitch(vector: NewSwitchVector) {
 		super.sendSwitch(vector)
 
@@ -1239,6 +1313,7 @@ export class FocuserSimulator extends DeviceSimulator {
 	}
 }
 
+// Simulated filter wheel with a fixed set of slots; models a timed move between slots.
 export class WheelSimulator extends DeviceSimulator {
 	readonly type = 'wheel'
 
@@ -1265,6 +1340,7 @@ export class WheelSimulator extends DeviceSimulator {
 		this.driverInfo.elements.DRIVER_EXEC.value = 'filterwheel.simulator'
 	}
 
+	// Handles the filter-name text command (renaming slots).
 	sendText(vector: NewTextVector) {
 		super.sendText(vector)
 
@@ -1273,12 +1349,14 @@ export class WheelSimulator extends DeviceSimulator {
 		}
 	}
 
+	// Handles the filter-slot number command (move to slot).
 	sendNumber(vector: NewNumberVector) {
 		if (vector.name === 'FILTER_SLOT' && vector.elements.FILTER_SLOT_VALUE !== undefined) {
 			this.moveTo(vector.elements.FILTER_SLOT_VALUE)
 		}
 	}
 
+	// Handles the connection switch.
 	sendSwitch(vector: NewSwitchVector) {
 		super.sendSwitch(vector)
 
@@ -1336,6 +1414,7 @@ export class WheelSimulator extends DeviceSimulator {
 	}
 }
 
+// Simulated field rotator; slews to a target angle at a fixed rate, with reverse, sync, and home.
 export class RotatorSimulator extends DeviceSimulator {
 	readonly type = 'rotator'
 
@@ -1369,14 +1448,17 @@ export class RotatorSimulator extends DeviceSimulator {
 		this.driverInfo.elements.DRIVER_EXEC.value = 'rotator.simulator'
 	}
 
+	// Current mechanical angle (degrees).
 	get angle() {
 		return this.#angle.elements.ANGLE.value
 	}
 
+	// Whether a rotation is in progress.
 	get isMoving() {
 		return this.#angle.state === 'Busy'
 	}
 
+	// Handles rotator number commands: goto and sync to an angle (degrees).
 	sendNumber(vector: NewNumberVector) {
 		switch (vector.name) {
 			case 'ABS_ROTATOR_ANGLE':
@@ -1387,6 +1469,7 @@ export class RotatorSimulator extends DeviceSimulator {
 		}
 	}
 
+	// Handles rotator switch commands: connection, home, abort, reverse, and backlash toggle.
 	sendSwitch(vector: NewSwitchVector) {
 		super.sendSwitch(vector)
 
@@ -1536,6 +1619,7 @@ export class RotatorSimulator extends DeviceSimulator {
 	}
 }
 
+// Simulated flat-field light panel with an enable switch and adjustable intensity.
 export class FlatPanelSimulator extends DeviceSimulator {
 	readonly type = 'flatPanel'
 
@@ -1560,12 +1644,14 @@ export class FlatPanelSimulator extends DeviceSimulator {
 		this.driverInfo.elements.DRIVER_EXEC.value = 'lightbox.simulator'
 	}
 
+	// Handles the panel brightness/intensity number command.
 	sendNumber(vector: NewNumberVector) {
 		if (vector.name === 'FLAT_LIGHT_INTENSITY' && applyNumberVectorValues(this.#intensity, vector.elements)) {
 			this.notify(this.#intensity)
 		}
 	}
 
+	// Handles flat-panel switch commands: connection and light on/off.
 	sendSwitch(vector: NewSwitchVector) {
 		super.sendSwitch(vector)
 
@@ -1586,6 +1672,7 @@ export class FlatPanelSimulator extends DeviceSimulator {
 	}
 }
 
+// Simulated telescope cover/dust cap; models a timed open (unpark)/close (park) with abort.
 export class CoverSimulator extends DeviceSimulator {
 	readonly type = 'cover'
 
@@ -1612,8 +1699,10 @@ export class CoverSimulator extends DeviceSimulator {
 		this.driverInfo.elements.DRIVER_EXEC.value = 'dustcap.simulator'
 	}
 
+	// The cover has no number properties.
 	sendNumber(vector: NewNumberVector) {}
 
+	// Handles cover switch commands: connection, park (close)/unpark (open), and abort.
 	sendSwitch(vector: NewSwitchVector) {
 		super.sendSwitch(vector)
 
@@ -1692,6 +1781,9 @@ export class CoverSimulator extends DeviceSimulator {
 	}
 }
 
+// Simulated camera. Models cooling toward a target temperature, frame/subframe/binning/gain/offset, and
+// timed exposures that render a synthetic star field (from the snooped mount/focuser/wheel/rotator state
+// and a catalog or random source) into a FITS/XISF BLOB. Also exposes a pulse-guide output.
 export class CameraSimulator extends DeviceSimulator {
 	readonly type = 'camera'
 
@@ -1895,6 +1987,7 @@ export class CameraSimulator extends DeviceSimulator {
 		return this.#telescopeInfo.elements.APERTURE.value
 	}
 
+	// Handles camera text commands: snooped-device changes invalidate the cached star catalog.
 	sendText(vector: NewTextVector) {
 		super.sendText(vector)
 
@@ -1903,6 +1996,8 @@ export class CameraSimulator extends DeviceSimulator {
 		}
 	}
 
+	// Handles camera number commands: start exposure, set CCD temperature, subframe, binning, gain/offset,
+	// guide rate, timed pulse-guiding, and the synthetic-scene/noise parameters.
 	sendNumber(vector: NewNumberVector) {
 		switch (vector.name) {
 			case 'CCD_EXPOSURE':
@@ -1975,6 +2070,8 @@ export class CameraSimulator extends DeviceSimulator {
 		}
 	}
 
+	// Handles camera switch commands: connection, cooler, capture/transfer format, abort, frame type, and
+	// the synthetic-scene/noise toggles.
 	sendSwitch(vector: NewSwitchVector) {
 		super.sendSwitch(vector)
 
@@ -2617,6 +2714,7 @@ export class CameraSimulator extends DeviceSimulator {
 	}
 
 	// Updates the guide-pulse busy state.
+	// Sets the pulse-guiding Busy/Idle state on the timed-guide vectors and notifies on change.
 	#setPulsing(pulsing: boolean) {
 		if (this.isPulsing === pulsing) return
 		this.#guideNS.state = pulsing ? 'Busy' : 'Idle'
@@ -2727,6 +2825,7 @@ export class CameraSimulator extends DeviceSimulator {
 	}
 }
 
+// Emits the def* event for a property, dispatching by type. BLOB vectors are not defined this way.
 function sendDefinition(client: ClientSimulator, handler: IndiClientHandler, property: SimulatorProperty) {
 	if (property.type === 'NUMBER') handleDefNumberVector(client, handler, property)
 	else if (property.type === 'SWITCH') handleDefSwitchVector(client, handler, property)
@@ -2734,6 +2833,7 @@ function sendDefinition(client: ClientSimulator, handler: IndiClientHandler, pro
 	// Don't handle DefBlobVector
 }
 
+// Applies inbound text element values to a vector, returning whether anything changed.
 function applyTextVectorValues(vector: DefTextVector, elements: Record<string, string>) {
 	let updated = false
 
@@ -2751,6 +2851,8 @@ function applyTextVectorValues(vector: DefTextVector, elements: Record<string, s
 	return updated
 }
 
+// Applies inbound number element values to a vector, clamping each to its range and ignoring non-finite
+// values. Returns whether anything changed.
 function applyNumberVectorValues(vector: DefNumberVector, elements: Record<string, number>) {
 	let updated = false
 
@@ -2768,6 +2870,8 @@ function applyNumberVectorValues(vector: DefNumberVector, elements: Record<strin
 	return updated
 }
 
+// Applies inbound switch values for an exclusive (OneOfMany) vector: turns on the selected member and
+// clears the rest. Returns whether anything changed.
 function applyExclusiveSwitchValues(vector: DefSwitchVector, elements: Record<string, boolean>) {
 	let updated = false
 
@@ -2780,6 +2884,8 @@ function applyExclusiveSwitchValues(vector: DefSwitchVector, elements: Record<st
 	return updated
 }
 
+// Applies inbound switch values for a non-exclusive vector, setting each member independently. Returns
+// whether anything changed.
 function applyMultiSwitchValues(vector: DefSwitchVector, elements: Record<string, boolean>) {
 	let updated = false
 
@@ -2793,11 +2899,13 @@ function applyMultiSwitchValues(vector: DefSwitchVector, elements: Record<string
 	return updated
 }
 
+// Normalizes a rotator angle to [0, 360) degrees.
 function wrapRotatorAngle(value: number) {
 	value %= 360
 	return value < 0 ? value + 360 : value
 }
 
+// Returns the shortest signed angular delta (degrees, in (-180, 180]) from current to target.
 function shortestRotatorDelta(target: number, current: number) {
 	let delta = target - current
 
@@ -2807,6 +2915,7 @@ function shortestRotatorDelta(target: number, current: number) {
 	return delta
 }
 
+// Rotates a pixel point in place about (centerX, centerY) using precomputed sin/cos of the angle.
 function rotateImageCoordinate(point: { x: number; y: number }, centerX: number, centerY: number, sinAngle: number, cosAngle: number) {
 	const dx = point.x - centerX
 	const dy = point.y - centerY
@@ -2814,6 +2923,8 @@ function rotateImageCoordinate(point: { x: number; y: number }, centerX: number,
 	point.y = centerY + dx * sinAngle + dy * cosAngle
 }
 
+// Fills a raw image buffer with a deterministic flat-field illumination (gentle vignetting plus a slight
+// gradient), scaled by exposure time relative to the reference exposure. `channels` is 1 (mono) or 3 (RGB).
 function fillFlatField(raw: ImageRawType, width: number, height: number, channels: 1 | 3, exposureTime: number, referenceExposureTime: number) {
 	const invWidth = width > 1 ? 2 / (width - 1) : 0
 	const invHeight = height > 1 ? 2 / (height - 1) : 0
@@ -2840,6 +2951,7 @@ function fillFlatField(raw: ImageRawType, width: number, height: number, channel
 	}
 }
 
+// Clamps a declination to [-π/2, π/2] radians.
 function clampDeclination(value: number) {
 	return clamp(value, -PIOVERTWO, PIOVERTWO)
 }
