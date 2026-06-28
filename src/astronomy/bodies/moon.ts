@@ -3,34 +3,64 @@ import { type Angle, arcsec, deg } from '../../math/units/angle'
 import { type Distance, kilometer } from '../../math/units/distance'
 import { type Time, Timescale, time, timeNormalize, toJulianDay, tt } from '../time/time'
 
+// Lunar almanac helpers from Meeus' "Astronomical Algorithms": Moon parallax and semi-diameter,
+// lunation numbering across calendar systems, Saros number, nearest lunar phase, nearest lunar
+// eclipse with full contact circumstances, and nearest perigee/apogee with parallax-derived
+// distance. Distances are AU (or km internally), angles radians, and all derived times are TT.
+
+// Classification of a lunar eclipse by how deeply the Moon enters Earth's shadow.
 export type LunarEclipseType = 'TOTAL' | 'PARTIAL' | 'PENUMBRAL'
 
+// Lunation-numbering convention; each shifts Meeus' index k by a constant offset.
 export type LunationSystem = 'BROWN' | 'MEEUS' | 'GOLDSTINE' | 'HEBREW' | 'ISLAMIC' | 'THAI'
 
+// The four principal lunar phases.
 export type LunarPhase = 'NEW' | 'FIRST_QUARTER' | 'FULL' | 'LAST_QUARTER'
 
+// The two lunar apsides (closest/farthest points of the Moon's orbit).
 export type LunarApsis = 'PERIGEE' | 'APOGEE'
 
+// Circumstances of a lunar eclipse, including the standard contact instants (all in TT).
 export interface LunarEclipse {
+	// Meeus lunation index of the eclipse full moon.
 	lunation: number
+	// Geometric type of the eclipse.
 	type: LunarEclipseType
-	maximalTime: Time // Instant of maximal eclipse
-	firstContactPenumbraTime: Time // P1
-	firstContactUmbraTime: Time // U1
-	totalBeginTime: Time // U2
-	totalEndTime: Time // U3
-	lastContactUmbraTime: Time // U4
-	lastContactPenumbraTime: Time // P4
+	// Instant of maximal eclipse.
+	maximalTime: Time
+	// First contact with the penumbra (P1).
+	firstContactPenumbraTime: Time
+	// First contact with the umbra (U1); unset when there is no umbral phase.
+	firstContactUmbraTime: Time
+	// Beginning of totality (U2); unset unless total.
+	totalBeginTime: Time
+	// End of totality (U3); unset unless total.
+	totalEndTime: Time
+	// Last contact with the umbra (U4); unset when there is no umbral phase.
+	lastContactUmbraTime: Time
+	// Last contact with the penumbra (P4).
+	lastContactPenumbraTime: Time
+	// Eclipse magnitude (umbral if positive type, else penumbral); dimensionless.
 	magnitude: number
-	sigma: number // Radius of umbra, in equatorial Earth radii, at eclipse plane
-	gamma: number // Least distance from the center of the Moon to the axis of the Earth shadow, in units of equatorial radius of the Earth.
-	rho: number // Radius of penumbra, in equatorial Earth radii, at eclipse plane
-	u: number // Radius of the Earth umbral cone in the eclipse plane, in units of equatorial radius of the Earth.
+	// Radius of umbra, in equatorial Earth radii, at eclipse plane.
+	sigma: number
+	// Least distance from the center of the Moon to the axis of the Earth shadow,
+	// in units of equatorial radius of the Earth.
+	gamma: number
+	// Radius of penumbra, in equatorial Earth radii, at eclipse plane.
+	rho: number
+	// Radius of the Earth umbral cone in the eclipse plane,
+	// in units of equatorial radius of the Earth.
+	u: number
 }
 
+// Sentinel TT instant used to initialize the LunarEclipse contact times.
 const DEFAULT_MINIMAL_LUNAR_ECLIPSE_TIME = time(0, 0, Timescale.TT)
+// |gamma| boundary (Earth radii) for an umbral (partial/total) eclipse versus penumbral-only.
 const LUNAR_ECLIPSE_UMBRA_LIMIT = 1.0128
+// |gamma| boundary (Earth radii) beyond which not even the penumbra is touched: no eclipse.
 const LUNAR_ECLIPSE_PENUMBRA_LIMIT = 1.5573
+// Half-width of the shadow magnitude scale (Earth radii); divides the gamma margin into magnitude.
 const LUNAR_ECLIPSE_MAGNITUDE_DENOMINATOR = 0.545
 
 // Computes the parallax of the Moon at a given distance
@@ -64,6 +94,7 @@ export function lunarSaros(time: Time) {
 	return SNL < 0 ? SNL + 223 : SNL
 }
 
+// Converts a Time to the fractional Julian year used to seed Meeus' k indices.
 function timeToMeeusApproxYear(time: Time) {
 	return 2000 + (time.day - J2000 + time.fraction) / DAYSPERJY
 }
@@ -445,7 +476,9 @@ export function nearestLunarEclipse(time: Time, next: boolean): Readonly<LunarEc
 	return eclipse
 }
 
-// Computes the nearest lunar apsis for a given time
+// Computes the nearest (previous or next) lunar perigee or apogee for a given time.
+// Returns the instant (TT), the geocentric Earth-Moon distance (AU), and the Moon's
+// apparent diameter (radians) at that apsis.
 export function nearestLunarApsis(time: Time, apsis: LunarApsis, next: boolean): readonly [Time, Distance, Angle] {
 	time = tt(time)
 	const jd = toJulianDay(time)

@@ -8,6 +8,12 @@ import type { EquatorialCoordinate } from '../coordinates/coordinate'
 import { eraAtco13, eraStarpm, eraStarpmpv, eraStarpv } from '../coordinates/erfa/erfa'
 import { pmAngles, type Time, Timescale, timeJulianYear, tt, ut1 } from '../time/time'
 
+// Star astrometry built on ERFA's starpv/atco pipeline: turns catalog data (position, proper
+// motion, parallax, radial velocity) into a BCRS position+velocity, propagates space motion to
+// another epoch, and computes the observed place for a given time and Earth ephemeris. Catalog
+// data is referenced to J2000.0; a non-J2000.0 epoch is propagated first.
+
+// Default catalog epoch (J2000.0) on the TDB scale.
 const DEFAULT_EPOCH = timeJulianYear(2000, Timescale.TDB)
 
 // J2000.0 expressed on the TT scale. `eraAtco13` measures its internal
@@ -15,18 +21,27 @@ const DEFAULT_EPOCH = timeJulianYear(2000, Timescale.TDB)
 // epoch differs from J2000.0 must first be propagated to this reference.
 const J2000_TT = tt(DEFAULT_EPOCH)
 
+// Catalog data for a star, referenced to its epoch (default J2000.0).
 export interface Star extends Readonly<EquatorialCoordinate> {
+	// Proper motion in right ascension, dα/dt (not μα·cosδ), in radians/year.
 	readonly pmRA: Angle
+	// Proper motion in declination, in radians/year.
 	readonly pmDEC: Angle
+	// Annual parallax, in radians.
 	readonly parallax: Angle
+	// Radial velocity (positive receding), in AU/day.
 	readonly rv: Velocity
 }
 
+// A Star carrying its computed BCRS position+velocity tuple and the epoch they refer to.
 export type StarPositionAndVelocity = (Star & PositionAndVelocity) & {
+	// Reference epoch of the catalog data and the position/velocity.
 	readonly epoch: Time
 }
 
+// Observed place of a star, carrying the originating catalog data alongside the angles.
 export interface ObservedStar<T extends Star | StarPositionAndVelocity> extends Observed {
+	// The star whose observed place this describes.
 	readonly star: T
 }
 

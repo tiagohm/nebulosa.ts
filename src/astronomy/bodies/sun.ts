@@ -4,13 +4,25 @@ import type { Distance } from '../../math/units/distance'
 import { type Time, Timescale, time, timeNormalize, toJulianDay, tt } from '../time/time'
 import { lunation } from './moon'
 
+// Solar geometry and almanac helpers from Meeus' "Astronomical Algorithms": Sun parallax and
+// semi-diameter, Carrington rotation number, astronomical season instants, and the solar-eclipse
+// circumstances (Saros number, nearest eclipse, magnitude/type classification). Distances are AU,
+// angles radians, and eclipse-derived times are tagged TT (dynamical) per Meeus.
+
+// The four astronomical seasons, used to select the season-start polynomial.
 export type Season = 'spring' | 'summer' | 'autumn' | 'winter'
 
+// Classification of a solar eclipse by shadow geometry.
 export type SolarEclipseType = 'total' | 'partial' | 'annular' | 'hybrid'
 
+// Circumstances of a solar eclipse computed from Meeus' eclipse method.
 export interface SolarEclipse {
+	// Meeus lunation index k of the eclipse new moon.
 	lunation: number
-	maximalTime: Time // Instant of maximal eclipse
+	// Instant of maximal eclipse, in TT.
+	maximalTime: Time
+	// Greatest-eclipse magnitude (Moon/Sun apparent-diameter ratio for central eclipses,
+	// partial coverage fraction otherwise); dimensionless.
 	magnitude: number
 	// Least distance from the axis of the Moon's shadow to the center of the Earth,
 	// in units of equatorial radius of the Earth.
@@ -18,13 +30,19 @@ export interface SolarEclipse {
 	// Radius of the Moon's umbral cone in the fundamental plane,
 	// in units of equatorial radius of the Earth.
 	u: number
+	// Geometric type of the eclipse.
 	type: SolarEclipseType
 }
 
+// Sentinel TT instant used to initialize SolarEclipse.maximalTime before it is computed.
 const DEFAULT_MINIMAL_SOLAR_ECLIPSE_TIME = time(0, 0, Timescale.TT)
+// |gamma| below this (Earth radii) means the shadow axis reaches Earth: a central eclipse.
 const SOLAR_ECLIPSE_CENTRAL_LIMIT = 0.9972
+// |gamma| above this (plus u) means no eclipse touches the Earth surface at all.
 const SOLAR_ECLIPSE_SURFACE_LIMIT = 1.5433
+// Distance-independent l1-l2 term (~2 lunar radii) used as the magnitude denominator base.
 const SOLAR_ECLIPSE_PARTIAL_DENOMINATOR = 0.5461
+// Umbral-radius threshold (Earth radii) separating hybrid from annular near gamma=0.
 const SOLAR_ECLIPSE_HYBRID_LIMIT = 0.00464
 // Sine of the Moon's mean horizontal parallax (mean Earth-Moon distance ~60.27 equatorial radii). Lifts
 // the geocentric Moon/Sun diameter ratio to the topocentric magnitude an observer at greatest eclipse
