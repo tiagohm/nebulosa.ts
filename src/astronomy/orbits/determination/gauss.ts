@@ -8,64 +8,107 @@ import { type Time, timeSubtract } from '../../time/time'
 import { gibbs, type GibbsWarning } from './gibbs'
 import { herrickGibbs, type HerrickGibbsWarning } from './herrickgibbs'
 
+// Classical Gauss method of initial orbit determination: from exactly three angles-only astrometric
+// observations (with known observer positions), solves the eighth-degree scalar range equation for
+// the middle distance, reconstructs the three position vectors, and estimates the middle velocity via
+// Gibbs or Herrick-Gibbs. Robustness machinery brackets and refines every positive polynomial root,
+// scores candidates by two-body smoothness, and surfaces geometry/convergence warnings. Units follow
+// the supplied `mu` (positions and velocities share its length and time units); angles are radians.
+
+// Smallest positive topocentric range (rho) accepted as physical.
 const DEFAULT_MIN_POSITIVE_RHO = 1e-12
+// Default iteration cap for the root-bracketing/refinement loops.
 const DEFAULT_MAX_ITERATIONS = 96
+// Default absolute tolerance for root finding and degeneracy tests.
 const DEFAULT_TOLERANCE = 1e-12
+// Angular separation (radians) below which line-of-sight geometry is flagged as ill-conditioned.
 const MIN_ANGULAR_SEPARATION = 1e-7
+// Maximum arc (theta13, radians) for which Herrick-Gibbs is auto-selected over Gibbs.
 const HERRICK_GIBBS_MAX_ARC = 5 * DEG2RAD
+// Maximum time span (days) for which Herrick-Gibbs is auto-selected over Gibbs.
 const HERRICK_GIBBS_MAX_INTERVAL = 5
+// Number of logarithmic samples used when scanning for sign changes of the range polynomial.
 const MAX_ROOT_SCAN_STEPS = 256
+// Multiplier setting the upper bound of the root scan relative to the geometry scale.
 const ROOT_SCAN_EXPANSION = 1e6
+// Relative spacing below which two roots are treated as the same.
 const ROOT_UNIQUENESS_TOLERANCE = 1e-8
 
+// Method used to recover the middle velocity once positions are known.
 export type GaussVelocityMethod = 'gibbs' | 'herrick-gibbs'
+// Condition flags raised during a Gauss solution, including those propagated from the velocity step.
 export type GaussWarning = GibbsWarning | HerrickGibbsWarning | 'WEAK_D0_GEOMETRY' | 'MULTIPLE_POSITIVE_ROOTS' | 'NON_POSITIVE_RANGE' | 'ROOT_RECONSTRUCTION_MISMATCH' | 'SMALL_ANGULAR_SEPARATION' | 'POSSIBLE_COPLANARITY_PROBLEM' | 'LARGE_HERRICK_GIBBS_ARC'
 
+// One angles-only observation: an epoch, a line-of-sight direction, and the observer's position.
 export interface GaussObservation {
+	// Epoch of the observation.
 	readonly time: Time
+	// Right ascension of the target, radians.
 	readonly rightAscension: Angle
+	// Declination of the target, radians.
 	readonly declination: Angle
+	// Observer position vector in the same frame/units as `mu`.
 	readonly observer: Vec3
 }
 
+// Inputs to gauss(): the gravitational parameter and optional solver controls.
 export interface GaussOptions {
+	// Gravitational parameter, in units consistent with the observer positions.
 	readonly mu: number
+	// Forces the velocity method; auto-selected from geometry when omitted.
 	readonly method?: GaussVelocityMethod
+	// Smallest positive range accepted as physical.
 	readonly minPositiveRho?: number
+	// Iteration cap for root finding.
 	readonly maxIterations?: number
+	// Absolute tolerance for root finding and degeneracy tests.
 	readonly tolerance?: number
 }
 
+// The estimated middle state vector.
 export interface GaussState {
+	// Position vector at the middle epoch.
 	readonly r: CartesianCoordinate
+	// Velocity vector at the middle epoch.
 	readonly v: CartesianCoordinate
 }
 
+// Full output of a Gauss solution: state, reconstructed positions, ranges, and diagnostics.
 export interface GaussResult {
+	// Estimated middle state.
 	readonly state: GaussState
+	// Reconstructed position vectors at the three epochs.
 	readonly positions: {
 		readonly r1: CartesianCoordinate
 		readonly r2: CartesianCoordinate
 		readonly r3: CartesianCoordinate
 	}
+	// Topocentric ranges (observer-to-target distances) at the three epochs.
 	readonly ranges: {
 		readonly rho1: number
 		readonly rho2: number
 		readonly rho3: number
 	}
+	// Solver provenance and quality information.
 	readonly diagnostics: {
+		// |r2| root chosen for the solution.
 		readonly selectedRoot: number
+		// All positive real roots found for |r2|.
 		readonly candidateRoots: readonly number[]
+		// Line-of-sight angular separations, radians.
 		readonly angles: {
 			readonly theta12: Angle
 			readonly theta23: Angle
 			readonly theta13: Angle
 		}
+		// Method actually used for the velocity estimate.
 		readonly methodForVelocity: GaussVelocityMethod
+		// Condition flags raised.
 		readonly warnings: readonly GaussWarning[]
 	}
 }
 
+// GaussOptions with all fields resolved to concrete values.
 interface ResolvedGaussOptions {
 	readonly mu: number
 	readonly method?: GaussVelocityMethod
@@ -74,6 +117,8 @@ interface ResolvedGaussOptions {
 	readonly tolerance: number
 }
 
+// The ten scalar determinants of the Gauss formulation. D0 is the line-of-sight triple product;
+// Dij are the projections of observer position i onto the cross products of the sight lines.
 interface Determinants {
 	readonly D0: number
 	readonly D11: number
@@ -87,15 +132,21 @@ interface Determinants {
 	readonly D33: number
 }
 
+// A candidate solution built from one positive range root, with its quality score and warnings.
 interface Candidate {
+	// |r2| root that generated this candidate.
 	readonly root: number
+	// Topocentric ranges at the three epochs.
 	readonly rho1: number
 	readonly rho2: number
 	readonly rho3: number
+	// Reconstructed position vectors.
 	readonly r1: MutVec3
 	readonly r2: MutVec3
 	readonly r3: MutVec3
+	// Lower-is-better quality score favoring the smooth two-body branch.
 	readonly score: number
+	// Condition flags raised while building this candidate.
 	readonly warnings: readonly GaussWarning[]
 }
 
@@ -198,10 +249,12 @@ function validateObservation(observation: GaussObservation, name: string) {
 	validateVector(observation.observer)
 }
 
+// Unit line-of-sight direction from RA/Dec (radians).
 function lineOfSight(rightAscension: Angle, declination: Angle) {
 	return vecNormalizeMut(eraS2c(rightAscension, declination))
 }
 
+// Builds the ten Gauss determinants from the three observer positions and sight-line directions.
 function computeDeterminants(R1: Vec3, R2: Vec3, R3: Vec3, rhoHat1: Vec3, rhoHat2: Vec3, rhoHat3: Vec3): Determinants {
 	const p1 = vecCross(rhoHat2, rhoHat3)
 	const p2 = vecCross(rhoHat1, rhoHat3)
@@ -221,6 +274,8 @@ function computeDeterminants(R1: Vec3, R2: Vec3, R3: Vec3, rhoHat1: Vec3, rhoHat
 	}
 }
 
+// Forms the coefficients of the Gauss scalar range equation x^8 + a x^6 + b x^3 + c = 0 (x = |r2|),
+// along with the A and B range-linearization constants. tau1/tau3/tau are signed time spans (days).
 function gaussPolynomialCoefficients(D: Determinants, R2: Vec3, rhoHat2: Vec3, tau1: number, tau3: number, tau: number, mu: number) {
 	const A = (-D.D12 * (tau3 / tau) + D.D22 + D.D32 * (tau1 / tau)) / D.D0
 	const B = (D.D12 * (tau3 * tau3 - tau * tau) * (tau3 / tau) + D.D32 * (tau * tau - tau1 * tau1) * (tau1 / tau)) / (6 * D.D0)
@@ -236,6 +291,9 @@ function gaussPolynomialCoefficients(D: Determinants, R2: Vec3, rhoHat2: Vec3, t
 	return { A, B, a, b, c }
 }
 
+// Finds all positive real roots of the range polynomial by scanning a logarithmically spaced grid
+// for sign changes and exact-zero touches, refining each with bisection/Newton, and de-duplicating.
+// Expands the search above the initial upper bound when no root is bracketed. Returns them sorted.
 function positivePolynomialRoots(a: number, b: number, c: number, scale: number, config: ResolvedGaussOptions) {
 	const roots: number[] = []
 	const lower = Math.max(Number.MIN_VALUE, scale * 1e-12, config.minPositiveRho * 1e-3)
@@ -292,6 +350,7 @@ function positivePolynomialRoots(a: number, b: number, c: number, scale: number,
 	return roots.filter((root) => Number.isFinite(root) && root > 0).sort((x, y) => x - y)
 }
 
+// Evaluates the Gauss range polynomial x^8 + a x^6 + b x^3 + c.
 function polynomial(x: number, a: number, b: number, c: number) {
 	const x2 = x * x
 	const x3 = x2 * x
@@ -340,6 +399,7 @@ function refineRootNear(x: number, a: number, b: number, c: number, scale: numbe
 	return center
 }
 
+// Evaluates the derivative of the Gauss range polynomial: 8 x^7 + 6 a x^5 + 3 b x^2.
 function polynomialDerivative(x: number, a: number, b: number) {
 	const x2 = x * x
 	const x3 = x2 * x
@@ -399,6 +459,9 @@ function buildCandidates(roots: readonly number[], D: Determinants, A: number, B
 	return candidates
 }
 
+// Builds a full candidate from one |r2| root: the three ranges and positions via the f/g series,
+// a reprojection-consistency check, and a score blending warnings, range spread, and the implied
+// two-body eccentricity. Returns undefined when the root yields non-physical or inconsistent geometry.
 function buildCandidate(root: number, D: Determinants, A: number, B: number, R1: Vec3, R2: Vec3, R3: Vec3, rhoHat1: Vec3, rhoHat2: Vec3, rhoHat3: Vec3, tau1: number, tau3: number, tau: number, angles: GaussResult['diagnostics']['angles'], config: ResolvedGaussOptions): Candidate | undefined {
 	const warnings: GaussWarning[] = []
 	const x3 = root * root * root
@@ -488,14 +551,18 @@ function buildCandidate(root: number, D: Determinants, A: number, B: number, R1:
 	}
 }
 
+// Reconstructs an inertial position r = observer + rho * rhoHat from a range and sight line.
 function reconstructPosition(observer: Vec3, rho: number, rhoHat: Vec3): MutVec3 {
 	return [observer[0] + rho * rhoHat[0], observer[1] + rho * rhoHat[1], observer[2] + rho * rhoHat[2]]
 }
 
+// Recovers the middle velocity from the Lagrange f/g coefficients: v2 = (f1*r3 - f3*r1) / (f1 g3 - f3 g1).
 function centralVelocityFromFG(r1: Vec3, r3: Vec3, f1: number, f3: number, denominator: number): MutVec3 {
 	return [(f1 * r3[0] - f3 * r1[0]) / denominator, (f1 * r3[1] - f3 * r1[1]) / denominator, (f1 * r3[2] - f3 * r1[2]) / denominator]
 }
 
+// Two-body orbital eccentricity implied by a state (r, v) and mu; Infinity for degenerate input.
+// Used only to score candidates, not as a published element.
 function stateEccentricity(r: Vec3, v: Vec3, mu: number) {
 	const rNorm = vecLength(r)
 	const vSquared = vecDot(v, v)
@@ -512,6 +579,7 @@ function stateEccentricity(r: Vec3, v: Vec3, mu: number) {
 	return Math.hypot(ex, ey, ez)
 }
 
+// Picks the lowest-scoring candidate, breaking ties toward the smaller range root.
 function selectCandidate(candidates: readonly Candidate[]) {
 	let best = candidates[0]
 
@@ -547,12 +615,16 @@ function hasSmallAngle(angles: GaussResult['diagnostics']['angles']) {
 	return angles.theta12 < MIN_ANGULAR_SEPARATION || angles.theta23 < MIN_ANGULAR_SEPARATION || angles.theta13 < MIN_ANGULAR_SEPARATION
 }
 
+// Chooses the velocity method: honors an explicit request, else uses Herrick-Gibbs for short, narrow
+// arcs (within HERRICK_GIBBS_MAX_INTERVAL days and HERRICK_GIBBS_MAX_ARC radians) and Gibbs otherwise.
 function selectVelocityMethod(requested: GaussVelocityMethod | undefined, angles: GaussResult['diagnostics']['angles'], tau1: number, tau3: number): GaussVelocityMethod {
 	if (requested) return requested
 	const maxInterval = Math.max(Math.abs(tau1), Math.abs(tau3))
 	return maxInterval <= HERRICK_GIBBS_MAX_INTERVAL && angles.theta13 <= HERRICK_GIBBS_MAX_ARC ? 'herrick-gibbs' : 'gibbs'
 }
 
+// Estimates the middle velocity for the selected candidate via Gibbs or Herrick-Gibbs, propagating
+// any sub-method warnings into `warnings`. Returns the velocity vector (NaN components on failure).
 function estimateVelocity(candidate: Candidate, t1: Time, t2: Time, t3: Time, method: GaussVelocityMethod, mu: number, warnings: GaussWarning[]): MutVec3 {
 	if (method === 'herrick-gibbs') {
 		const result = herrickGibbs(candidate.r1, candidate.r2, candidate.r3, t1, t2, t3, mu)

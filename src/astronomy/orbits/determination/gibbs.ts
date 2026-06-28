@@ -3,45 +3,83 @@ import { type MutVec3, type Vec3, vecAngleUnit, vecCross, vecCrossLength, vecLen
 import type { Angle } from '../../../math/units/angle'
 import type { CartesianCoordinate } from '../../coordinates/coordinate'
 
+// Classical Gibbs method of orbit determination: recovers the middle velocity from three coplanar
+// position vectors of a body under two-body motion, with extensive degeneracy/quality diagnostics
+// (coplanarity, angular separations, near-colinearity, vanishing auxiliary vectors). Unit-agnostic
+// as long as positions and `mu` share consistent units; the geometry must already be reduced to
+// central-body position vectors, not raw RA/Dec observations.
+
+// Smallest acceptable position-vector magnitude before a norm is treated as invalid.
 const DEFAULT_MIN_POSITION_NORM = 1e-15
+// Default upper bound on the normalized coplanarity error (dimensionless) before flagging.
 const DEFAULT_COPLANARITY_TOLERANCE = 1e-5
+// Default minimum angular separation between positions (radians); below this geometry is ill-conditioned.
 const DEFAULT_MIN_ANGULAR_SEPARATION = DEG2RAD
+// Default maximum angular separation between adjacent positions (radians).
 const DEFAULT_MAX_ANGULAR_SEPARATION = 60 * DEG2RAD
+// Default relative tolerance for declaring auxiliary vectors (D, N) or cross products degenerate.
 const DEFAULT_DEGENERACY_TOLERANCE = 1e-12
 
+// Overall quality verdict for a Gibbs solution.
 export type GibbsReliability = 'good' | 'warning' | 'bad'
+// Individual condition flags raised during a Gibbs solution.
 export type GibbsWarning = 'INVALID_POSITION_NORM' | 'INVALID_GRAVITATIONAL_PARAMETER' | 'ANGULAR_SEPARATION_TOO_SMALL' | 'ANGULAR_SEPARATION_TOO_LARGE' | 'POOR_COPLANARITY' | 'NEAR_COLINEAR_POSITIONS' | 'NEAR_ZERO_D_VECTOR' | 'NEAR_ZERO_N_VECTOR' | 'INVALID_GIBBS_SCALE' | 'NON_FINITE_VELOCITY'
 
+// Quality metrics computed alongside a Gibbs velocity estimate.
 export interface GibbsDiagnostics {
+	// Normalized coplanarity error of the three positions (dimensionless).
 	readonly coplanarityError: number
+	// Angular separation between positions 1 and 2 (radians).
 	readonly angle12: Angle
+	// Angular separation between positions 2 and 3 (radians).
 	readonly angle23: Angle
+	// Angular separation between positions 1 and 3 (radians).
 	readonly angle13: Angle
+	// Magnitude of position vector 1.
 	readonly normR1: number
+	// Magnitude of position vector 2.
 	readonly normR2: number
+	// Magnitude of position vector 3.
 	readonly normR3: number
+	// Magnitude of the auxiliary N vector.
 	readonly normN: number
+	// Magnitude of the auxiliary D vector.
 	readonly normD: number
+	// Magnitude of the auxiliary S vector.
 	readonly normS: number
+	// Overall reliability verdict.
 	readonly reliability: GibbsReliability
+	// All condition flags raised.
 	readonly warnings: readonly GibbsWarning[]
 }
 
+// Output of a Gibbs solution: the middle state vector plus diagnostics.
 export interface GibbsResult {
+	// Middle position vector (copy of the input r2).
 	readonly r: CartesianCoordinate
+	// Estimated middle velocity; NaN components if the solution was rejected.
 	readonly v: CartesianCoordinate
+	// Quality metrics and warnings.
 	readonly diagnostics: GibbsDiagnostics
 }
 
+// Optional thresholds and behavior for gibbs(); omitted fields use the module defaults.
 export interface GibbsOptions {
+	// Upper bound on normalized coplanarity error before flagging.
 	readonly coplanarityTolerance?: number
+	// Minimum acceptable angular separation between positions (radians).
 	readonly minAngularSeparation?: Angle
+	// Maximum acceptable angular separation between positions (radians).
 	readonly maxAngularSeparation?: Angle
+	// Relative tolerance for degeneracy of auxiliary vectors.
 	readonly degeneracyTolerance?: number
+	// Smallest acceptable position-vector magnitude.
 	readonly minPositionNorm?: number
+	// When true, return a 'bad' solution instead of throwing.
 	readonly allowUnreliable?: boolean
 }
 
+// GibbsOptions with all fields resolved to concrete values.
 interface ResolvedGibbsOptions {
 	readonly coplanarityTolerance: number
 	readonly minAngularSeparation: Angle
@@ -195,10 +233,12 @@ function normalizedCoplanarity(r1: Vec3, r2: Vec3, r3: Vec3, r1mag: number, cros
 	return Math.abs(vecTripleProduct(r1, r2, r3)) / denominator
 }
 
+// Gibbs auxiliary vector N = R1*(r2xr3) + R2*(r3xr1) + R3*(r1xr2).
 function auxiliaryN(C12: Vec3, C23: Vec3, C31: Vec3, R1: number, R2: number, R3: number): MutVec3 {
 	return [R1 * C23[0] + R2 * C31[0] + R3 * C12[0], R1 * C23[1] + R2 * C31[1] + R3 * C12[1], R1 * C23[2] + R2 * C31[2] + R3 * C12[2]]
 }
 
+// Gibbs auxiliary vector S = (R2-R3)*r1 + (R3-R1)*r2 + (R1-R2)*r3.
 function auxiliaryS(r1: Vec3, r2: Vec3, r3: Vec3, R1: number, R2: number, R3: number): MutVec3 {
 	return [(R2 - R3) * r1[0] + (R3 - R1) * r2[0] + (R1 - R2) * r3[0], (R2 - R3) * r1[1] + (R3 - R1) * r2[1] + (R1 - R2) * r3[1], (R2 - R3) * r1[2] + (R3 - R1) * r2[2] + (R1 - R2) * r3[2]]
 }
@@ -233,6 +273,7 @@ function canEstimateVelocity(warnings: readonly GibbsWarning[]) {
 	return !warnings.some((warning) => warning === 'INVALID_POSITION_NORM' || warning === 'INVALID_GRAVITATIONAL_PARAMETER' || warning === 'NEAR_COLINEAR_POSITIONS' || warning === 'NEAR_ZERO_D_VECTOR' || warning === 'NEAR_ZERO_N_VECTOR' || warning === 'INVALID_GIBBS_SCALE')
 }
 
+// Forms the Gibbs middle velocity v2 = sqrt(mu/(|N||D|)) * ((DxR2)/R2 + S).
 function estimateVelocity(D: Vec3, r2: Vec3, S: Vec3, R2: number, mu: number, normN: number, normD: number): MutVec3 {
 	const B = vecCross(D, r2)
 	const L = Math.sqrt(mu / (normN * normD))

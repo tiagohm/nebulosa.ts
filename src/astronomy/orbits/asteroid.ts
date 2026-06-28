@@ -9,10 +9,21 @@ import type { CartesianCoordinate } from '../coordinates/coordinate'
 import { type Time, Timescale, tdb, time, timeSubtract, timeYMD } from '../time/time'
 import { type MPCOrbit, type MPCOrbitComet, unpackDate } from './mpcorb'
 
+// Keplerian two-body orbit modeling for asteroids and comets: builds a KeplerOrbit from classical
+// elements (or MPCORB records), lazily derives the full osculating element set, and propagates the
+// state vector with a universal-variable (Stumpff-function) Kepler solver valid for elliptic,
+// parabolic, and hyperbolic orbits. Distances are AU, velocities AU/day, angles radians; the default
+// frame rotates the heliocentric ecliptic J2000 elements into equatorial J2000.
+
+// Default rotation applied to propagated state: ecliptic-J2000 to equatorial-J2000.
 const REFERENCE_FRAME = matTranspose(ECLIPTIC_J2000_MATRIX)
+// Geometric tolerance for treating vectors/eccentricity as zero (degenerate orbits).
 const ORBIT_EPSILON = 1e-15
+// Squared geometric tolerance, compared against squared magnitudes.
 const ORBIT_EPSILON_SQUARED = ORBIT_EPSILON * ORBIT_EPSILON
+// Convergence tolerance for the Newton iteration solving Kepler's equation, in radians.
 const KEPLER_EPSILON = 1e-14
+// Safety cap on Kepler-equation iterations; valid inputs converge far sooner.
 const KEPLER_MAX_ITERATIONS = 100
 
 // Glossary
@@ -38,43 +49,68 @@ const KEPLER_MAX_ITERATIONS = 100
 // w = argument of periapsis (rad)
 // lp = longitude of periapsis (rad)
 
+// The four Stumpff functions c0..c3 evaluated at a single argument.
 export type StumpffOutput = [number, number, number, number]
 
+// Precomputed quantities for the universal-variable Kepler propagation of one orbit.
 interface PropagationParameters {
-	readonly f: number
+	readonly f: number // 1 - eccentricity; sign selects the elliptic/parabolic vs hyperbolic branch
 	readonly hv: Vec3 // cross product between position & velocity
 	readonly hvl: number // length of hv
 	readonly r0: number // length of position vector
 	readonly v0: number // length of velocity vector
 	readonly rv: number // dot product between position & velocity
-	readonly br0: number
-	readonly b2rv: number
-	readonly bq: number
-	readonly qovr0: number
-	readonly maxc: number
+	readonly br0: number // b * r0, where b = sqrt(periapsis distance / mu)
+	readonly b2rv: number // b^2 * rv
+	readonly bq: number // b * periapsis distance
+	readonly qovr0: number // periapsis distance / r0
+	readonly maxc: number // largest magnitude among br0, b2rv, bq, qovr0; bounds the universal anomaly
 }
 
+// Full set of osculating Keplerian elements derived from a state vector. Distances are AU,
+// angles radians, mean motion radians/day, period days.
 export interface OsculatingElements {
+	// Apoapsis distance; Infinity for parabolic/hyperbolic orbits.
 	readonly apoapsisDistance: Distance
+	// Argument of latitude (argument of periapsis + true anomaly).
 	readonly argumentOfLatitude: Angle
+	// Argument of periapsis.
 	readonly argumentOfPeriapsis: Angle
+	// Eccentric anomaly.
 	readonly eccentricAnomaly: Angle
+	// Eccentricity vector (points to periapsis, magnitude = eccentricity).
 	readonly eccentricityVector: Vec3
+	// Orbital eccentricity.
 	readonly eccentricity: number
+	// Inclination.
 	readonly inclination: Angle
+	// Longitude of the ascending node.
 	readonly longitudeOfAscendingNode: Angle
+	// Longitude of periapsis (node longitude + argument of periapsis).
 	readonly longitudeOfPeriapsis: Angle
+	// Mean anomaly at epoch.
 	readonly meanAnomaly: Angle
+	// Mean longitude (node + argument of periapsis + mean anomaly).
 	readonly meanLongitude: Angle
+	// Mean motion, radians per day.
 	readonly meanMotionPerDay: Angle
+	// Node vector (unit vector toward the ascending node, or zero if undefined).
 	readonly nodeVector: Vec3
+	// Periapsis distance.
 	readonly periapsisDistance: Distance
+	// Time of periapsis passage.
 	readonly periapsisTime: Time
+	// Orbital period in days; Infinity for open orbits.
 	readonly periodInDays: number
+	// Semi-latus rectum.
 	readonly semiLatusRectum: Distance
+	// Semi-major axis; Infinity for parabolic orbits.
 	readonly semiMajorAxis: Distance
+	// Semi-minor axis (0 for parabolic orbits).
 	readonly semiMinorAxis: Distance
+	// True anomaly.
 	readonly trueAnomaly: Angle
+	// True longitude (node + argument of periapsis + true anomaly).
 	readonly trueLongitude: Angle
 }
 
@@ -249,6 +285,8 @@ export class KeplerOrbit implements OsculatingElements {
 		return this.#oe.trueLongitude
 	}
 
+	// Propagates the orbit to `time`, returning position (AU) and velocity (AU/day) in the
+	// configured output frame. Returned vectors are freshly allocated.
 	at(time: Time) {
 		const pv = propagate(this.position, this.velocity, this.epoch, time, this.#propagation)
 
@@ -374,10 +412,15 @@ function computePositionAndVelocityFromOrbitalElements(p: Distance, e: number, i
 	return [position, velocity]
 }
 
+// ln(1.5), used when bounding the universal anomaly for elliptic/parabolic orbits.
 const LN_1_5 = 0.4054651081081644
+// ln of half the largest finite double; caps the hyperbolic-branch argument against overflow.
 const LN_HALF_DOUBLE_MAX = 709.0895657128241
+// ln of the largest finite double; caps the elliptic-branch argument against overflow.
 const LN_DOUBLE_MAX = 709.782712893384
 
+// Precomputes the universal-variable propagation parameters from a state vector and mu.
+// Throws when the angular momentum is zero (rectilinear, non-conical motion).
 function propagationParameters(position: CartesianCoordinate, velocity: CartesianCoordinate, mu: number = GM_SUN_PITJEVA_2005): PropagationParameters {
 	const hv = vecCross(position, velocity)
 	const h2 = vecDot(hv, hv)
@@ -506,7 +549,9 @@ function propagate(position: CartesianCoordinate, velocity: CartesianCoordinate,
 	return [p, v]
 }
 
+// Reciprocal factorial-pair coefficients (2k)(2k-1) for the c2 Stumpff series expansion.
 const C2_DIV = [1 * 2, 3 * 4, 5 * 6, 7 * 8, 9 * 10, 11 * 12, 13 * 14, 15 * 16, 17 * 18].map((e) => 1 / e)
+// Reciprocal factorial-pair coefficients (2k+1)(2k) for the c3 Stumpff series expansion.
 const C3_DIV = [2 * 3, 4 * 5, 6 * 7, 8 * 9, 10 * 11, 12 * 13, 14 * 15, 16 * 17, 18 * 19].map((e) => 1 / e)
 
 // Computes Stumpff functions.
@@ -545,14 +590,18 @@ export function stumpff(x: number, o?: StumpffOutput) {
 	return c
 }
 
+// Apoapsis distance (AU) from semi-latus rectum `p` and eccentricity `e`; Infinity for e >= 1.
 export function apoapsisDistance(p: Distance, e: number): Distance {
 	return e >= 1 ? Infinity : p / (1 - e)
 }
 
+// Argument of latitude (radians, 0..TAU) from argument of periapsis `w` and true anomaly `v`.
 export function argumentOfLatitude(w: Angle, v: Angle) {
 	return normalizeAngle(w + v)
 }
 
+// Argument of periapsis (radians) from the eccentricity vector `ev`, node vector `nv`, and angular
+// momentum `hv`. Returns 0 for circular orbits; handles the equatorial (undefined node) case.
 export function argumentOfPeriapsis(ev: Vec3, nv: Vec3, hv: Vec3): Angle {
 	// Circular
 	if (vecLength(ev) < ORBIT_EPSILON) return 0
@@ -568,12 +617,16 @@ export function argumentOfPeriapsis(ev: Vec3, nv: Vec3, hv: Vec3): Angle {
 	return ev[2] > 0 ? a : normalizeAngle(-a)
 }
 
+// Eccentric anomaly (radians) from true anomaly `v` and eccentricity `e`. Elliptic and hyperbolic
+// (returns the hyperbolic anomaly) branches; returns 0 for the parabolic case (e == 1).
 export function eccentricAnomaly(v: number, e: number) {
 	if (e < 1) return 2 * Math.atan(Math.sqrt((1 - e) / (1 + e)) * Math.tan(v / 2))
 	else if (e > 1) return 2 * Math.atanh(Math.tan(v / 2) / Math.sqrt((e + 1) / (e - 1)))
 	else return 0
 }
 
+// Eccentricity vector from `position` (AU) and `velocity` (AU/day) and `mu`. Points toward periapsis
+// with magnitude equal to the eccentricity. Writes into `o` when given, which is returned.
 export function eccentricityVector(position: CartesianCoordinate, velocity: CartesianCoordinate, mu: number, o?: MutVec3): Vec3 {
 	const r = vecLength(position)
 	const v = vecLength(velocity)
@@ -588,15 +641,20 @@ export function inclination(hv: Vec3) {
 	return Math.atan2(Math.hypot(hv[0], hv[1]), hv[2])
 }
 
+// Longitude of the ascending node (radians, 0..TAU) from angular momentum `hv` and inclination `i`.
+// Returns 0 for equatorial orbits where the node is undefined.
 export function longitudeOfAscendingNode(hv: Vec3, i: Angle): Angle {
 	const hxy2 = hv[0] * hv[0] + hv[1] * hv[1]
 	return hxy2 > vecDot(hv, hv) * ORBIT_EPSILON_SQUARED && i !== 0 ? normalizeAngle(Math.atan2(hv[0], -hv[1])) : 0
 }
 
+// Longitude of periapsis (radians, 0..TAU) from node longitude `om` and argument of periapsis `w`.
 export function longitudeOfPeriapsis(om: Angle, w: Angle) {
 	return normalizeAngle(om + w)
 }
 
+// Mean anomaly (radians) from eccentric anomaly `E` and eccentricity `e`. Elliptic result is
+// normalized to 0..TAU; the hyperbolic result is wrapped to -PI..PI only when `norm` is true.
 export function meanAnomaly(E: Angle, e: number, norm: boolean = e < 1) {
 	if (e < 1) return normalizeAngle(E - e * Math.sin(E))
 	else if (e > 1) {
@@ -605,40 +663,53 @@ export function meanAnomaly(E: Angle, e: number, norm: boolean = e < 1) {
 	} else return 0
 }
 
+// Mean longitude (radians, 0..TAU) from node longitude `om`, argument of periapsis `w`, and mean
+// (or true) anomaly `M`. Reused for true longitude by passing the true anomaly.
 export function meanLongitude(om: Angle, w: Angle, M: Angle) {
 	return normalizeAngle(om + w + M)
 }
 
+// Mean motion (radians/day) from semi-major axis `a` (AU) and `mu`. Uses |a| so it is finite for
+// hyperbolic orbits.
 export function meanMotion(a: Distance, mu: number): Angle {
 	return Math.sqrt(mu / Math.abs(a) ** 3)
 }
 
+// Unit node vector toward the ascending node from angular momentum `hv`; zero vector when the orbit
+// is equatorial and the node is undefined.
 export function nodeVector(hv: Vec3) {
 	const nv = [-hv[1], hv[0], 0] as const
 	const hxy2 = nv[0] * nv[0] + nv[1] * nv[1]
 	return hxy2 > vecDot(hv, hv) * ORBIT_EPSILON_SQUARED ? vecNormalize(nv, nv as never) : ([0, 0, 0] as const)
 }
 
+// Periapsis distance (AU) from semi-latus rectum `p` and eccentricity `e`.
 export function periapsisDistance(p: Distance, e: number): Distance {
 	return p / (1 + e)
 }
 
+// Orbital period (days) from semi-major axis `a` (AU) and `mu`; Infinity for open orbits (a <= 0).
 export function period(a: Distance, mu: number) {
 	return a > 0 ? TAU * Math.sqrt(a ** 3 / mu) : Infinity
 }
 
+// Semi-latus rectum (AU) from `position` (AU), `velocity` (AU/day), and `mu`.
 export function semiLatusRectum(position: CartesianCoordinate, velocity: CartesianCoordinate, mu: number) {
 	return vecCrossLength(position, velocity) ** 2 / mu
 }
 
+// Semi-major axis (AU) from semi-latus rectum `p` and eccentricity `e`; Infinity for parabolic (e == 1).
 export function semiMajorAxis(p: Distance, e: number) {
 	return e !== 1 ? p / (1 - e ** 2) : Infinity
 }
 
+// Semi-minor axis (AU) from semi-latus rectum `p` and eccentricity `e`; 0 for parabolic orbits.
 export function semiMinorAxis(p: Distance, e: number) {
 	return e < 1 ? p / Math.sqrt((1 - e) * (1 + e)) : e > 1 ? p / Math.sqrt((e - 1) * (e + 1)) : 0
 }
 
+// Time since periapsis (days) from mean anomaly `M`, mean motion `n`, true anomaly `v`, semi-latus
+// rectum `p`, and `mu`. Falls back to Barker's parabolic equation when the mean motion is ~0.
 export function timeSincePeriapsis(M: Angle, n: Angle, v: Angle, p: Distance, mu: number) {
 	if (n >= 8.64e-15) {
 		return M / n
@@ -648,6 +719,8 @@ export function timeSincePeriapsis(M: Angle, n: Angle, v: Angle, p: Distance, mu
 	}
 }
 
+// True anomaly (radians) from eccentricity vector `ev`, `position`, `velocity`, and node vector `nv`.
+// Handles circular and equatorial degeneracies; near-parabolic results are wrapped to -PI..PI.
 export function trueAnomaly(ev: Vec3, position: CartesianCoordinate, velocity: CartesianCoordinate, nv: Vec3) {
 	const evl = vecLength(ev)
 	let v = 0

@@ -2,6 +2,10 @@ import { DEG2RAD } from '../../core/constants'
 import type { Angle } from '../../math/units/angle'
 import type { Distance } from '../../math/units/distance'
 
+// Parsers for the Minor Planet Center fixed-width orbit formats (MPCORB asteroid lines and CometEls
+// comet lines) and the MPC packed-date codec. Angles are converted to radians on parse; distances
+// are AU. The structured records feed the KeplerOrbit builders in asteroid.ts.
+
 // https://www.minorplanetcenter.net/iau/info/MPOrbitFormat.html
 
 // MPC comet orbit type marker (CometEls column 5): P periodic, C non-periodic, D defunct/disappeared,
@@ -9,47 +13,85 @@ import type { Distance } from '../../math/units/distance'
 // I interstellar object.
 export type CometOrbitType = 'P' | 'C' | 'D' | 'X' | 'A' | 'I'
 
+// Parsed asteroid orbit record from one MPCORB line.
 export interface MPCOrbit {
+	// Packed MPC designation.
 	readonly designationPacked: string
+	// Absolute magnitude H, in mag.
 	readonly magnitudeH: number
+	// Slope parameter G (dimensionless).
 	readonly magnitudeG: number
+	// Packed epoch of the osculating elements.
 	readonly epochPacked: string
+	// Mean anomaly at epoch, radians.
 	readonly meanAnomaly: Angle
+	// Argument of perihelion, radians.
 	readonly argumentOfPerihelion: Angle
+	// Longitude of the ascending node, radians.
 	readonly longitudeOfAscendingNode: Angle
+	// Inclination, radians.
 	readonly inclination: Angle
+	// Orbital eccentricity.
 	readonly eccentricity: number
+	// Mean daily motion, degrees/day (as published).
 	readonly meanDailyMotion: number
+	// Semi-major axis, AU.
 	readonly semiMajorAxis: Distance
+	// Orbit uncertainty parameter U code.
 	readonly uncertainty: string
+	// Reference for the orbit.
 	readonly reference: string
+	// Number of observations used.
 	readonly observations: number
+	// Number of oppositions.
 	readonly oppositions: number
+	// Observation arc descriptor (years or day count).
 	readonly observationPeriod: string
+	// RMS residual of the fit, arcseconds.
 	readonly rmsResidual: number
+	// Coarse indicator of perturbers.
 	readonly coarsePerturbers: string
+	// Precise indicator of perturbers.
 	readonly precisePerturbers: string
+	// Name of the computing program/author.
 	readonly computerName: string
+	// 4-hex-digit flags field.
 	readonly hexFlags: string
+	// Readable designation/name.
 	readonly designation: string
+	// Date of the last observation included.
 	readonly lastObservationDate: string
 }
 
+// Parsed comet orbit record from one CometEls line.
 export interface MPCOrbitComet {
+	// Periodic-comet number, if assigned.
 	readonly number?: number
+	// Orbit type marker.
 	readonly orbitType: CometOrbitType
+	// Packed MPC designation.
 	readonly designationPacked: string
+	// Perihelion passage year.
 	readonly perihelionYear: number
+	// Perihelion passage month (1..12).
 	readonly perihelionMonth: number
+	// Perihelion passage day (1..31).
 	readonly perihelionDay: number
+	// Fractional part of the perihelion day.
 	readonly perihelionDayFraction: number
+	// Perihelion distance, AU.
 	readonly perihelionDistance: Distance
+	// Orbital eccentricity.
 	readonly eccentricity: number
+	// Argument of perihelion, radians.
 	readonly argumentOfPerihelion: Angle
+	// Longitude of the ascending node, radians.
 	readonly longitudeOfAscendingNode: Angle
+	// Inclination, radians.
 	readonly inclination: Angle
 	readonly magnitudeG: number // Absolute magnitude
 	readonly magnitudeK: number // slope parameter
+	// Readable designation/name.
 	readonly designation: string
 	// readonly reference: string
 }
@@ -112,9 +154,12 @@ export function mpcorbComet(line: string): MPCOrbitComet | undefined {
 
 // https://www.minorplanetcenter.net/iau/info/PackedDates.html
 
+// Base-32 alphabet (0-9 then A-V) used by the MPC packed-date encoding.
 const PACKED_DATE_CHARS = '0123456789ABCDEFGHIJKLMNOPQRSTUV'
+// Number of characters in a packed date (century/decade/year, month, day).
 const PACKED_DATE_LENGTH = 5
 
+// Decodes an MPC packed date into [year, month, day]. Throws on malformed input or out-of-range parts.
 export function unpackDate(epoch: string) {
 	if (epoch.length !== PACKED_DATE_LENGTH) {
 		throw new RangeError(`invalid packed date "${epoch}"`)
@@ -130,6 +175,7 @@ export function unpackDate(epoch: string) {
 	return [year, month, day] as const
 }
 
+// Encodes a Gregorian [year, month, day] into a 5-character MPC packed date. Throws on out-of-range parts.
 export function packDate(year: number, month: number, day: number) {
 	validatePackedDatePart(year, 0, 3199, `${year}`)
 	validatePackedDatePart(month, 1, 12, `${month}`)
