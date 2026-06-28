@@ -1,7 +1,7 @@
-import { GALACTIC_MATRIX, ICRS_MATRIX, ONE_KILOPARSEC, ONE_PARSEC } from '../../core/constants'
+import { DEG2RAD, GALACTIC_MATRIX, ICRS_MATRIX, ONE_KILOPARSEC, ONE_PARSEC } from '../../core/constants'
 import { type Mat3, matMul, matMulVec, matRotX, matRotY, matRotZ, matTransposeMulVec } from '../../math/linear-algebra/mat3'
 import { type MutVec3, type Vec3, vecMinus, vecNegate, vecPlus } from '../../math/linear-algebra/vec3'
-import { type Angle, deg } from '../../math/units/angle'
+import type { Angle } from '../../math/units/angle'
 import type { Distance } from '../../math/units/distance'
 import { kilometerPerSecond } from '../../math/units/velocity'
 import type { Time } from '../time/time'
@@ -132,7 +132,7 @@ export function heliocentricEclipticFrame(sunAt: (time: Time) => Readonly<Positi
 
 // The roll that aligns the Galactic plane with the Galactocentric x-z plane,
 // matching Astropy's Galactocentric.get_roll0 (Reid & Brunthaler 2004).
-const GALACTOCENTRIC_ROLL0 = deg(58.5986320306)
+const GALACTOCENTRIC_ROLL0 = 58.5986320306 * DEG2RAD
 
 // Parameters defining the Galactocentric frame. Angles are radians; distances AU.
 export interface GalactocentricParameters {
@@ -150,7 +150,7 @@ export interface GalactocentricParameters {
 // distance, Reid & Brunthaler 2004 Galactic-center direction, and Bennett & Bovy
 // 2019 Sun height.
 export const GALACTOCENTRIC_DEFAULTS: GalactocentricParameters = {
-	galcen: [deg(266.4051), deg(-28.936175)],
+	galcen: [266.4051 * DEG2RAD, -28.936175 * DEG2RAD],
 	galcenDistance: 8.122 * ONE_KILOPARSEC,
 	zSun: 20.8 * ONE_PARSEC,
 	roll: 0,
@@ -193,12 +193,12 @@ export function lsrFrame(solarVelocity: Vec3 = LSR_DEFAULT_SOLAR_VELOCITY): Affi
 // the standard ~20 km/s solar-apex motion; the value matches Astropy's LSRK and
 // is kept in ICRS axes because the apex is not a round Galactic-UVW triple.
 export const LSRK_SOLAR_VELOCITY_ICRS: Vec3 = [kilometerPerSecond(0.28999706839034606), kilometerPerSecond(-17.317264789717928), kilometerPerSecond(10.00141199546947)]
+const LSRK_SOLAR_VELOCITY_ICRS_OFFSET = vecNegate(LSRK_SOLAR_VELOCITY_ICRS)
 
 // The kinematic Local Standard of Rest (LSRK): ICRS orientation and origin, with
 // the standard solar-apex velocity offset. Positions are unchanged.
 export function lsrkFrame(): AffineFrame {
-	const offset = vecNegate(LSRK_SOLAR_VELOCITY_ICRS)
-	return { rotationAt: () => ICRS_MATRIX, originVelocityAt: () => offset }
+	return { rotationAt: () => ICRS_MATRIX, originVelocityAt: () => LSRK_SOLAR_VELOCITY_ICRS_OFFSET }
 }
 
 // Dynamical LSR (LSRD) solar motion as Galactic Cartesian (U, V, W), AU/day.
