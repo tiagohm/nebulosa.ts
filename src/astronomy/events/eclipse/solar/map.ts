@@ -30,8 +30,11 @@ import { timeAtJulianDay, timeShift, timeSubtract, toJulianDay, tt, type Time } 
 //   - Delta T in seconds; times as Time or Julian Day; distances in Earth equatorial radii;
 //   - longitude is east-positive in [-PI, PI].
 
+// Default longitude sampling step (radians) for meridian-scanned curves.
 const DEFAULT_LONGITUDE_STEP = 1 * DEG2RAD
+// Default maximum angular spacing (radians) between consecutive curve points before densification.
 const DEFAULT_MAX_ANGULAR_STEP = 1 * DEG2RAD
+// Default time step (seconds) when tracing the rise/set curves through the eclipse.
 const DEFAULT_RISE_SET_STEP_SECONDS = 30
 // Default half-width of the contact/endpoint root search window, in seconds. The external penumbral
 // contacts P1/P4 (the global start/end of the partial eclipse) sit near the edge of the 6 h (t0 +- 3 h)
@@ -70,6 +73,7 @@ function greatestEclipseSearchMaxSpan(deltaT: number) {
 const CONTACT_SEARCH_EXPANSION_STEP_SECONDS = 15 * 60
 // Root tolerance for contact and central-endpoint instants, in days (~1 ms, affordable because the iterations converge quadratically).
 const CONTACT_TOLERANCE_DAYS = 1e-8
+// Iteration cap for the coupled latitude/time Newton solver used to trace eclipse curves.
 const SOLVER_MAX_ITERATIONS = 50
 // Per-iteration cap on the curve solver's latitude Newton step, in radians. Near a grazing high-latitude
 // partial limit (e.g. the shallow 7662-04-28 partial, magnitude 0.22) the coupled Newton step can be tens of
@@ -123,6 +127,7 @@ const CURVE_TIME_EPSILON_DAYS = 1e-6
 // non-central and hybrid families are not missed by a single shadow-side seed.
 // The poleward seeds stay short of +-90 deg to keep tan(phi) finite.
 const CURVE_SEED_LATITUDES = [0, 30 * DEG2RAD, -30 * DEG2RAD, 60 * DEG2RAD, -60 * DEG2RAD, 80 * DEG2RAD, -80 * DEG2RAD, 89.5 * DEG2RAD, -89.5 * DEG2RAD] as const
+// Cached length of CURVE_SEED_LATITUDES, hoisted out of the scan loops.
 const CURVE_SEED_LATITUDES_LENGTH = CURVE_SEED_LATITUDES.length
 // Fixed-seed fallback rows at or beyond this latitude are scanned densely: documented orphaned arcs occur
 // at near-polar folds, where a missed row can detach U/P contacts from their limit branch.
@@ -231,8 +236,11 @@ export type RefractionMode = 'none' | 'empirical'
 // Default refraction model: the empirical horizon lift, matching the published refracted references.
 const DEFAULT_REFRACTION_MODE: RefractionMode = 'empirical'
 
+// A geographic eclipse point optionally tagged with its hybrid (total/annular) character.
 export type SolarEclipseGeoPoint = EclipseGeoPoint<{ kind?: HybridEclipseKind }>
+// One connected branch of solar-eclipse geographic points.
 export type SolarEclipseGeoBranch = EclipseGeoBranch<SolarEclipseGeoPoint>
+// A solar-eclipse geographic curve made of one or more branches.
 export type SolarEclipseGeoCurve = EclipseGeoCurve<SolarEclipseGeoPoint>
 
 // Named eclipse contact and central-path endpoints.
@@ -339,6 +347,9 @@ export interface SolarEclipseMapSvgProjectionOptions {
 	readonly projectionOptions?: ProjectionOptions | undefined
 }
 
+// Projected pixel coordinates of the named eclipse points, when each is present on the map: external
+// (P1..P4) and internal (U1..U4) contacts, central-line ends (C1/C2), greatest eclipse (Max), and the
+// north/south curve-junction points (N1/N2/S1/S2).
 export interface SolarEclipseMapPoints {
 	readonly P1?: Point
 	readonly P2?: Point
@@ -375,15 +386,18 @@ export interface SolarEclipseMapSvgPaths {
 	readonly points: SolarEclipseMapPoints
 }
 
+// Default SVG projection options: 2-decimal coordinate precision and no extra projection options.
 const DEFAULT_SOLAR_ECLIPSE_MAP_SVG_PROJECTION_OPTIONS: SolarEclipseMapSvgProjectionOptions = {
 	precision: 2,
 	projectionOptions: undefined,
 }
 
+// Type guard: true when a geo point exists and both coordinates are finite.
 function finitePoint(point: EclipseGeoPoint | undefined): point is EclipseGeoPoint {
 	return !!point && Number.isFinite(point.x) && Number.isFinite(point.y) && point.y >= -PIOVERTWO && point.y <= PIOVERTWO && point.x >= -PI && point.x <= PI
 }
 
+// True when two geo points coincide in longitude, latitude, and (optional) jd within tolerance.
 function samePoint(a: EclipseGeoPoint, b: EclipseGeoPoint) {
 	return Math.abs(a.x - b.x) < 1e-9 && Math.abs(a.y - b.y) < 1e-9 && Math.abs((a.jd ?? 0) - (b.jd ?? 0)) < 1e-10
 }
@@ -395,23 +409,28 @@ function sameGeoPoint(a: EclipseGeoPoint, b: EclipseGeoPoint) {
 	return angularDistance(a, b) < 1e-9
 }
 
+// Appends a finite point to a branch, skipping it if it duplicates the current last point.
 function pushDistinct(points: EclipseGeoBranch, point: EclipseGeoPoint | undefined) {
 	if (!finitePoint(point)) return
 	if (points.length === 0 || !samePoint(points.at(-1)!, point)) points.push(point)
 }
 
+// Evaluates a polynomial with ascending-power `coefficients` at `t` (Horner's method).
 function evaluatePolynomial(coefficients: Readonly<NumberArray>, t: number) {
 	let value = 0
 	for (let i = coefficients.length - 1; i >= 0; i--) value = value * t + coefficients[i]
 	return value
 }
 
+// Evaluates the derivative of a polynomial with ascending-power `coefficients` at `t`.
 function evaluatePolynomialDerivative(coefficients: Readonly<NumberArray>, t: number) {
 	let value = 0
 	for (let i = coefficients.length - 1; i >= 1; i--) value = value * t + i * coefficients[i]
 	return value
 }
 
+// Unwraps a sequence of angles in place so successive values never jump by more than PI (removes
+// 2*PI discontinuities before polynomial fitting).
 function unwrapAngles(values: NumberArray) {
 	let offset = 0
 	let previous = values[0]
@@ -435,30 +454,39 @@ function unwrapAngles(values: NumberArray) {
 	return values
 }
 
+// Least-squares cubic fit, returning the four ascending-power coefficients.
 function fitCubic(x: Readonly<NumberArray>, y: Readonly<NumberArray>) {
 	return polynomialRegression(x, y, 3).coefficients
 }
 
+// Great-circle angular separation (radians) between two geo points.
 function angularDistance(a: EclipseGeoPoint, b: EclipseGeoPoint) {
 	return sphericalSeparation(a.x, a.y, b.x, b.y)
 }
 
+// Shortest longitude difference (radians, 0..PI) between two geo points, across the antimeridian.
 function longitudeGap(a: EclipseGeoPoint, b: EclipseGeoPoint) {
 	const gap = Math.abs(a.x - b.x)
 	return gap > PI ? TAU - gap : gap
 }
 
+// Whether two consecutive curve points are far enough apart to need densification, accounting for the
+// extra longitude-gap check that applies near the poles.
 function curveGapNeedsRefinement(a: EclipseGeoPoint, b: EclipseGeoPoint, maxAngularStep: Angle) {
 	if (angularDistance(a, b) > maxAngularStep) return true
 	if (Math.max(Math.abs(a.y), Math.abs(b.y)) <= CURVE_POLAR_LONGITUDE_REFINEMENT_LATITUDE) return false
 	return Math.hypot(longitudeGap(a, b), a.y - b.y) > maxAngularStep
 }
 
+// Like curveGapNeedsRefinement but with a tighter polar threshold, used when bridging a gap between
+// two curve branches so the connecting arc stays smooth near the poles.
 function curveBridgeGapNeedsRefinement(a: EclipseGeoPoint, b: EclipseGeoPoint, maxAngularStep: Angle) {
 	if (curveGapNeedsRefinement(a, b, maxAngularStep)) return true
 	return Math.max(Math.abs(a.y), Math.abs(b.y)) > CURVE_POLAR_LONGITUDE_REFINEMENT_LATITUDE && Math.hypot(longitudeGap(a, b), a.y - b.y) > maxAngularStep * 0.25
 }
 
+// Interpolates a point a `fraction` of the way along the great circle from a to b, interpolating jd
+// linearly when both endpoints carry one.
 function interpolateGreatCirclePoint(a: EclipseGeoPoint, b: EclipseGeoPoint, fraction: number): EclipseGeoPoint {
 	const [longitude, latitude] = sphericalInterpolate(a.x, a.y, b.x, b.y, fraction)
 
@@ -469,6 +497,7 @@ function interpolateGreatCirclePoint(a: EclipseGeoPoint, b: EclipseGeoPoint, fra
 	}
 }
 
+// Returns `value` when it is a finite positive step, otherwise the `fallback`.
 function validStep(value: number | undefined, fallback: number) {
 	return value !== undefined && Number.isFinite(value) && value > 0 ? value : fallback
 }
@@ -559,6 +588,7 @@ function evaluateBesselianSample(pbe: PolynomialBesselianElements, time: Time): 
 	}
 }
 
+// Evaluates the Besselian element positions (no velocity derivatives) at a Julian Day.
 export function besselianSampleAtJulianDay(pbe: PolynomialBesselianElements, jd: number) {
 	return evaluateBesselianSample(pbe, timeAtJulianDay(pbe.time0, jd))
 }
@@ -767,6 +797,7 @@ export function projectClosestEarthLimbPoint(be: BesselianSample, x: number, y: 
 
 // C. CONTACTS AND CENTRAL ENDPOINTS
 
+// Ascending numeric sort comparator.
 function NumberComparator(a: number, b: number) {
 	return a - b
 }
@@ -1104,6 +1135,8 @@ export function findCentralLineExtremePoint(pbe: PolynomialBesselianElements, be
 	return jd === undefined ? undefined : projectCentralAxisPoint(pbe, jd)
 }
 
+// Projects the shadow-axis point onto Earth at a Julian Day, falling back to the nearest limb point at
+// the tangential C1/C2 endpoints where the axis grazes just outside the limb.
 function projectCentralAxisPoint(pbe: PolynomialBesselianElements, jd: number) {
 	const be = besselianSampleAtJulianDay(pbe, jd)
 	// At the C1/C2 endpoints the axis is tangent to the limb and converges a hair (~1e-7) outside it, so
@@ -1126,6 +1159,7 @@ interface CurveIterationState {
 	residual: number
 }
 
+// Shared reusable curve-iteration scratch state, avoiding per-iteration allocation in the solver.
 const CURVE_ITERATION_STATE: CurveIterationState = { tau: 0, deltaPhi: 0, h: 0, residual: 0 }
 
 // Evaluates the Newton step (tau, deltaPhi) and the physical diagnostics (solar altitude h, eclipse
@@ -1334,6 +1368,9 @@ function bridgeCurveGap(out: EclipseGeoBranch, pbe: PolynomialBesselianElements,
 // a bridgeable cusp.
 const MIDPOINT_BALANCE = 0.75
 
+// Solves for a curve point near the great-circle midpoint of a and b, accepting it only when it
+// roughly bisects the gap (per MIDPOINT_BALANCE); returns undefined when the midpoint hugs one endpoint
+// (a silent arc switch rather than a continuous, bridgeable cusp).
 function solveCurveMidpointBetween(pbe: PolynomialBesselianElements, a: EclipseGeoPoint, b: EclipseGeoPoint, i: -1 | 0 | 1, G: number, refractionMode: RefractionMode) {
 	const ab = angularDistance(a, b)
 	const limit = MIDPOINT_BALANCE * ab
@@ -1490,13 +1527,17 @@ function cleanCurveBranch(branch: EclipseGeoBranch) {
 	return out
 }
 
+// Shared empty branch sentinel returned when no points exist.
 const EMPTY_GEO_POINTS: EclipseGeoBranch = []
+// The two branch endpoint indices (0 = first point, 1 = last point).
 const BRANCH_ENDPOINTS = [0, 1] as const
 
+// Appends a point to a branch, skipping it when it spatially coincides with the current last point.
 function pushCleanCurvePoint(out: EclipseGeoBranch, point: EclipseGeoPoint) {
 	if (out.length === 0 || !sameGeoPoint(out.at(-1)!, point)) out.push(point)
 }
 
+// Appends all points of `branch` to `out`, in forward or reverse order, de-duplicating coincidences.
 function appendBranchPoints(out: EclipseGeoBranch, branch: EclipseGeoBranch, reverse: boolean) {
 	if (reverse) {
 		for (let k = branch.length - 1; k >= 0; k--) pushCleanCurvePoint(out, branch[k])
@@ -1505,6 +1546,8 @@ function appendBranchPoints(out: EclipseGeoBranch, branch: EclipseGeoBranch, rev
 	}
 }
 
+// Joins two branches into one at a cusp via a connecting `bridge`, orienting each branch so its joint
+// endpoint (endpointA/endpointB) meets the bridge. Returns the merged branch.
 function mergeBranchesAtCusp(a: EclipseGeoBranch, b: EclipseGeoBranch, bridge: EclipseGeoBranch, endpointA: 0 | 1, endpointB: 0 | 1) {
 	const out: EclipseGeoBranch = []
 	appendBranchPoints(out, a, endpointA === 0)
@@ -1559,17 +1602,22 @@ const CUSP_RECONNECT_OVERLAP_ARC = 10 * DEG2RAD
 // cap can zigzag across the seam. The gate is local to the proposed bridge: a branch may later reach the
 // polar cap and still be reconnected through a lower-latitude endpoint.
 const CUSP_RECONNECT_POLE_LATITUDE = 85 * DEG2RAD
+// Longitude jump (radians) inside the polar cap that flags a bridge step as a seam-crossing zigzag.
 const CUSP_RECONNECT_POLAR_LONGITUDE_LIMIT = 30 * DEG2RAD
 
+// True when a point lies within the high-latitude cap where cusp reconnection degenerates.
 function pointInReconnectPolarCap(point: EclipseGeoPoint) {
 	return Math.abs(point.y) > CUSP_RECONNECT_POLE_LATITUDE
 }
 
+// True when any bridge point falls inside the reconnect polar cap.
 function bridgeEntersReconnectPolarCap(bridge: EclipseGeoBranch) {
 	for (const point of bridge) if (pointInReconnectPolarCap(point)) return true
 	return false
 }
 
+// True when any consecutive bridge step (including the ends a and b) makes a large longitude jump while
+// both points sit in the polar cap, signalling a seam-crossing zigzag that must not be drawn.
 function bridgeHasLargePolarLongitudeStep(a: EclipseGeoPoint, b: EclipseGeoPoint, bridge: EclipseGeoBranch) {
 	let previous = a
 
@@ -1581,6 +1629,8 @@ function bridgeHasLargePolarLongitudeStep(a: EclipseGeoPoint, b: EclipseGeoPoint
 	return Math.min(Math.abs(previous.y), Math.abs(b.y)) > CUSP_RECONNECT_POLE_LATITUDE && longitudeGap(previous, b) > CUSP_RECONNECT_POLAR_LONGITUDE_LIMIT
 }
 
+// Whether a cusp reconnection between a and b through `bridge` is safe near the poles: trivially true
+// away from the cap, otherwise it must stay within the drawable gap and avoid a large polar longitude step.
 function canReconnectPolarCusp(a: EclipseGeoPoint, b: EclipseGeoPoint, bridge: EclipseGeoBranch, gap: Angle, maxDrawableGap: Angle) {
 	if (!pointInReconnectPolarCap(a) && !pointInReconnectPolarCap(b) && !bridgeEntersReconnectPolarCap(bridge)) return true
 	return (gap <= maxDrawableGap || bridge.length > 0) && !bridgeHasLargePolarLongitudeStep(a, b, bridge)
@@ -1827,6 +1877,7 @@ function overhangArcLength(branch: EclipseGeoBranch, from: number, to: number) {
 	return arc
 }
 
+// Sorts branches by descending point count (longest first).
 function BranchComparatorByLengthDescending(a: EclipseGeoBranch, b: EclipseGeoBranch) {
 	return b.length - a.length
 }
@@ -2018,6 +2069,8 @@ function findFixedSeedCurveArcs(pbe: PolynomialBesselianElements, i: -1 | 0 | 1,
 	return branches
 }
 
+// Solves the eclipse-curve points at a given longitude and returns the one nearest the `anchor`,
+// used to extend or close a curve at a meridian boundary.
 function findNearestCurvePointAtLongitude(pbe: PolynomialBesselianElements, longitude: Angle, anchor: EclipseGeoPoint, i: -1 | 0 | 1, G: number, refractionMode: RefractionMode) {
 	let best: EclipseGeoPoint | undefined
 	let bestDistance = Infinity
@@ -2099,20 +2152,24 @@ function appendRefinedSegment(points: EclipseGeoBranch, pbe: PolynomialBesselian
 	appendRefinedSegment(points, pbe, mid, b, i, G, maxAngularStep, refractionMode, depth + 1)
 }
 
+// Returns a copy of the branch with consecutive duplicate points removed.
 function deduplicatePoints(points: EclipseGeoBranch) {
 	const out: EclipseGeoBranch = []
 	for (const point of points) pushDistinct(out, point)
 	return out
 }
 
+// Sorts geo points by ascending Julian Day (assumes each has a jd).
 function GeoPointComparatorByJDAscending(a: EclipseGeoPoint, b: EclipseGeoPoint) {
 	return a.jd! - b.jd!
 }
 
+// Sorts geo points by ascending longitude, then latitude.
 function GeoPointComparatorByXOrYAscending(a: EclipseGeoPoint, b: EclipseGeoPoint) {
 	return a.x - b.x || a.y - b.y
 }
 
+// Orders a curve's points into a drawable sequence: by time when every point has a jd, else spatially.
 function orderCurvePoints(points: EclipseGeoBranch) {
 	if (points.length <= 2) return points
 
@@ -2223,6 +2280,8 @@ function splitBranchesAtMaxAbsLatitude(branches: EclipseGeoCurve) {
 	return out
 }
 
+// Rejoins curve branches that were split apart at a vertical-tangent cusp, by re-solving a continuous
+// bridge across each candidate gap (deduplicating first). Returns the reconnected curve.
 function reconnectSplitCurveCusps(branches: EclipseGeoCurve, pbe: PolynomialBesselianElements, i: -1 | 0 | 1, G: number, maxAngularStep: Angle, refractionMode: RefractionMode) {
 	const maxDrawableGap = Math.max(BRANCH_MAX_DRAWABLE_GAP, maxAngularStep * CURVE_GAP_SPLIT_FACTOR)
 	const reconnected = reconnectBranchCusps(deduplicateBranches(branches, maxAngularStep), pbe, i, G, maxAngularStep, maxDrawableGap, refractionMode, false)
@@ -2265,6 +2324,7 @@ function nearestCurveSample(point: EclipseGeoPoint, branches: readonly EclipseGe
 	return undefined
 }
 
+// The four internal (umbral) contact point names, in order.
 const UMBRA_CONTACT_POINTS = ['U1', 'U2', 'U3', 'U4'] as const
 
 // Branch endpoint nearest in time to a contact, within timeTolerance (days), or undefined when none is.
@@ -2382,10 +2442,12 @@ function riseSetCrossings(pbe: PolynomialBesselianElements, jd: number) {
 	return points
 }
 
+// Type guard: true when a value is a finite geo point that also carries a Julian Day.
 function isGeoPoint(point?: Point | EclipseGeoPoint): point is EclipseGeoPoint {
 	return finitePoint(point) && point.jd !== undefined
 }
 
+// Sorts rise/set branches by descending starting latitude (northernmost first).
 function RiseSetBranchComparatorByHigherLatitude(a: RiseSetBranch, b: RiseSetBranch) {
 	return b.points[0].y - a.points[0].y
 }
@@ -2616,6 +2678,7 @@ function nearestContactByJd(jd: number | undefined, contacts: EclipseGeoBranch, 
 	return best
 }
 
+// Largest gap (radians) across which a rise/set cusp point may be inserted into a curve.
 const RISE_SET_CUSP_INSERT_MAX_GAP = DEFAULT_MAX_ANGULAR_STEP * CURVE_GAP_SPLIT_FACTOR
 
 // Maximum detour (radians) a cusp insertion may add to a rise/set curve. A penumbral-limit terminator cusp
@@ -2625,6 +2688,8 @@ const RISE_SET_CUSP_INSERT_MAX_GAP = DEFAULT_MAX_ANGULAR_STEP * CURVE_GAP_SPLIT_
 // spike from the curve up to the cusp. Such an insertion is rejected; the cusp remains a marker only.
 const RISE_SET_CUSP_MAX_DETOUR = DEFAULT_MAX_ANGULAR_STEP
 
+// Splices each terminator cusp into the nearest rise/set curve when the insertion barely bends it,
+// rejecting cusps that would draw a spurious spike (a different limb crossing). Returns the new curves.
 function insertRiseSetCuspPoints(curves: EclipseGeoCurve, cusps: readonly (EclipseGeoPoint | undefined)[]) {
 	const out: EclipseGeoCurve = []
 	for (const curve of curves) out.push(curve.slice())
