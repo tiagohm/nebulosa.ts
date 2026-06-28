@@ -1,14 +1,21 @@
 import type { FirmataClient } from '../firmata'
 import { DEFAULT_POLLING_INTERVAL, type Hygrometer, PeripheralBase, type Thermometer } from '../peripheral'
 
-// https://cdn-shop.adafruit.com/product-files/3721/AM2320.pdf
+// I2C humidity+temperature sensor drivers over Firmata: AM2320 (Modbus-style holding registers with a
+// wake-up sequence) and SHT21 (hold-master register reads). Both poll on a timer and report humidity in
+// percent and temperature in degrees Celsius.
 
+// AM2320 combined humidity/temperature sensor.
+// https://cdn-shop.adafruit.com/product-files/3721/AM2320.pdf
 export class AM2320 extends PeripheralBase<AM2320> implements Hygrometer, Thermometer {
+	// Latest humidity (percent) and temperature (degrees Celsius).
 	humidity = 0
 	temperature = 0
 
 	static readonly ADDRESS = 0x5c
 
+	// Protocol constants: wake/measurement delays (ms), read-registers command, register range, and the
+	// expected reply frame length.
 	static readonly WAKE_UP_DELAY_MS = 2
 	static readonly MEASUREMENT_DELAY_MS = 2
 	static readonly READ_HOLDING_REGISTERS_CMD = 0x03
@@ -28,6 +35,7 @@ export class AM2320 extends PeripheralBase<AM2320> implements Hygrometer, Thermo
 		super()
 	}
 
+	// Enables I2C and starts periodic measurement.
 	start() {
 		if (this.#timer === undefined) {
 			this.client.addHandler(this)
@@ -37,6 +45,7 @@ export class AM2320 extends PeripheralBase<AM2320> implements Hygrometer, Thermo
 		}
 	}
 
+	// Stops polling and detaches the handler.
 	stop() {
 		this.client.removeHandler(this)
 		clearInterval(this.#timer)
@@ -44,6 +53,8 @@ export class AM2320 extends PeripheralBase<AM2320> implements Hygrometer, Thermo
 		this.#reading = false
 	}
 
+	// Wakes the sensor, requests the humidity/temperature holding registers, and triggers the frame read.
+	// Guards against overlapping reads.
 	async #readMeasurement() {
 		if (this.#reading) return
 
@@ -59,6 +70,7 @@ export class AM2320 extends PeripheralBase<AM2320> implements Hygrometer, Thermo
 		}
 	}
 
+	// Decodes the AM2320 reply frame: humidity (0.1%/LSB) and signed temperature (0.1 °C/LSB), then commits.
 	twoWireMessage(client: FirmataClient, address: number, register: number, data: Buffer) {
 		if (client !== this.client || address !== AM2320.ADDRESS || data.byteLength !== AM2320.FRAME_SIZE) return
 		if (data[0] !== AM2320.READ_HOLDING_REGISTERS_CMD || data[1] !== AM2320.REGISTER_COUNT) return
@@ -78,19 +90,22 @@ export class AM2320 extends PeripheralBase<AM2320> implements Hygrometer, Thermo
 	}
 }
 
+// SHT21 combined humidity/temperature sensor.
 // https://sensirion.com/media/documents/120BBE4C/63500094/Sensirion_Datasheet_Humidity_Sensor_SHT21.pdf
-
 export class SHT21 extends PeripheralBase<SHT21> implements Hygrometer, Thermometer {
+	// Latest humidity (percent) and temperature (degrees Celsius).
 	humidity = 0
 	temperature = 0
 
 	static readonly ADDRESS = 0x40
 
+	// Hold-master read commands for temperature/humidity and the soft-reset command.
 	static readonly #READ_TEMP_HOLD_CMD = 0xe3
 	static readonly #READ_HUM_HOLD_CMD = 0xe5
 	static readonly #SOFT_RESET_CMD = 0xfe
 
 	#timer?: NodeJS.Timeout
+	// Tracks a temperature change so a paired humidity reading also fires when only temperature moved.
 	#temperatureChanged = false
 
 	readonly name = 'SHT21'
@@ -102,11 +117,13 @@ export class SHT21 extends PeripheralBase<SHT21> implements Hygrometer, Thermome
 		super()
 	}
 
+	// Requests the temperature and humidity registers.
 	#readMeasurement() {
 		this.client.twoWireRead(SHT21.ADDRESS, SHT21.#READ_TEMP_HOLD_CMD, 2)
 		this.client.twoWireRead(SHT21.ADDRESS, SHT21.#READ_HUM_HOLD_CMD, 2)
 	}
 
+	// Enables I2C and starts periodic measurement.
 	start() {
 		if (this.#timer === undefined) {
 			this.client.addHandler(this)
@@ -116,16 +133,20 @@ export class SHT21 extends PeripheralBase<SHT21> implements Hygrometer, Thermome
 		}
 	}
 
+	// Stops polling and detaches the handler.
 	stop() {
 		this.client.removeHandler(this)
 		clearInterval(this.#timer)
 		this.#timer = undefined
 	}
 
+	// Issues a soft reset to the sensor.
 	reset() {
 		this.client.twoWireWrite(SHT21.ADDRESS, [SHT21.#SOFT_RESET_CMD])
 	}
 
+	// Decodes temperature (-46.85 + 175.72·S/2^16 °C) and humidity (-6 + 125·S/2^16 %) register replies,
+	// masking the status bits, and commits once both have been applied.
 	twoWireMessage(client: FirmataClient, address: number, register: number, data: Buffer) {
 		if (address !== SHT21.ADDRESS || data.byteLength < 1) return
 

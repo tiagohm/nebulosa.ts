@@ -2,23 +2,31 @@ import { DEG2RAD, G } from '../../../core/constants'
 import type { FirmataClient } from '../firmata'
 import { type Accelerometer, DEFAULT_POLLING_INTERVAL, type Gyroscope, PeripheralBase } from '../peripheral'
 
+// Driver for the MPU6050 6-axis IMU over I2C: configures the accelerometer/gyroscope full-scale ranges,
+// burst-reads the 14-byte sensor block, and reports acceleration in m/s^2 and angular velocity in rad/s.
+
+// Accelerometer full-scale range, in g.
 export type MPU6050AccelerometerRange = 2 | 4 | 8 | 16 // g
 
+// Gyroscope full-scale range, in degrees per second.
 export type MPU6050GyroscopeRange = 250 | 500 | 1000 | 2000 // deg/s
 
+// Full-scale range selection for the MPU6050.
 export interface MPU6050Options {
 	readonly accelerometerRange?: MPU6050AccelerometerRange // g
 	readonly gyroscopeRange?: MPU6050GyroscopeRange // deg/s
 }
 
+// Default MPU6050 ranges: ±2 g and ±250 deg/s (most sensitive).
 export const DEFAULT_MPU6050_OPTIONS: Required<MPU6050Options> = {
 	accelerometerRange: 2,
 	gyroscopeRange: 250,
 }
 
+// MPU6050 6-axis accelerometer + gyroscope.
 // https://invensense.tdk.com/products/motion-tracking/6-axis/mpu-6050/
-
 export class MPU6050 extends PeripheralBase<MPU6050> implements Accelerometer, Gyroscope {
+	// Latest acceleration (m/s^2) and angular velocity (rad/s) per axis.
 	ax = 0
 	ay = 0
 	az = 0
@@ -26,6 +34,7 @@ export class MPU6050 extends PeripheralBase<MPU6050> implements Accelerometer, G
 	gy = 0
 	gz = 0
 
+	// I2C addresses and register/command constants (power management, config, sensor data start, wake).
 	static readonly ADDRESS = 0x68
 	static readonly ALTERNATIVE_ADDRESS = 0x69
 	static readonly PWR_MGMT_1_REG = 0x6b
@@ -35,6 +44,7 @@ export class MPU6050 extends PeripheralBase<MPU6050> implements Accelerometer, G
 	static readonly WAKE_UP = 0x00
 
 	#timer?: NodeJS.Timeout
+	// Per-count scale factors (to m/s^2 and rad/s) and the config-register bytes for the chosen ranges.
 	readonly #accelerometerScale: number
 	readonly #gyroscopeScale: number
 	readonly #accelerometerConfig: number

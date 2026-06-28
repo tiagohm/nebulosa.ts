@@ -1,26 +1,36 @@
 import type { FirmataClient } from '../firmata'
 import { ADCPeripheral, DEFAULT_POLLING_INTERVAL, type Luxmeter, PeripheralBase } from '../peripheral'
 
+// Ambient-light (lux) sensor drivers over Firmata: the I2C BH1750, TSL2561, and MAX44009, plus the
+// analog TEMT6000. Each applies its datasheet conversion to report illuminance in lux.
+
+// BH1750 measurement mode (continuous/one-time × high/high2/low resolution).
 export type BH1750Mode = 'continuousHighResolution' | 'continuousHighResolution2' | 'continuousLowResolution' | 'oneTimeHighResolution' | 'oneTimeHighResolution2' | 'oneTimeLowResolution'
 
+// TSL2561 analog gain multiplier.
 export type TSL2561Gain = 1 | 16
 
+// TSL2561 ADC integration time, in milliseconds.
 export type TSL2561IntegrationTime = 13.7 | 101 | 402 // ms
 
+// BH1750 configuration: mode and MTreg measurement time.
 export interface BH1750Options {
 	readonly mode?: BH1750Mode
 	readonly measurementTime?: number
 }
 
+// TSL2561 configuration: gain and integration time.
 export interface TSL2561Options {
 	readonly gain?: TSL2561Gain
 	readonly integrationTime?: TSL2561IntegrationTime // ms
 }
 
+// MAX44009 configuration: whether to run in continuous mode.
 export interface MAX44009Options {
 	readonly continuousMode?: boolean
 }
 
+// TEMT6000 analog front-end parameters used to convert ADC counts to lux.
 export interface TEMT6000Options {
 	readonly aref?: number // volts
 	readonly loadResistance?: number // ohms
@@ -28,20 +38,24 @@ export interface TEMT6000Options {
 	readonly microampsPerLux?: number
 }
 
+// Default BH1750 options: continuous high-resolution mode, default MTreg.
 export const DEFAULT_BH1750_OPTIONS: Required<BH1750Options> = {
 	mode: 'continuousHighResolution',
 	measurementTime: 69,
 }
 
+// Default TSL2561 options: 1× gain, 402 ms integration.
 export const DEFAULT_TSL2561_OPTIONS: Required<TSL2561Options> = {
 	gain: 1,
 	integrationTime: 402,
 }
 
+// Default MAX44009 options: one-shot (non-continuous) mode.
 export const DEFAULT_MAX44009_OPTIONS: Required<MAX44009Options> = {
 	continuousMode: false,
 }
 
+// Default TEMT6000 front-end: 5 V reference, 10 kΩ load, 10-bit ADC, 0.5 µA/lux.
 export const DEFAULT_TEMT6000_OPTIONS: Required<TEMT6000Options> = {
 	aref: 5,
 	loadResistance: 10000,
@@ -49,15 +63,17 @@ export const DEFAULT_TEMT6000_OPTIONS: Required<TEMT6000Options> = {
 	microampsPerLux: 0.5,
 }
 
+// BH1750 digital ambient-light sensor.
 // https://www.rohm.com/products/sensor/ambient-light-sensor-ics/bh1750fvi-product
-
 export class BH1750 extends PeripheralBase<BH1750> implements Luxmeter {
+	// Latest illuminance (lux) and the raw 16-bit register value.
 	lux = 0
 	raw = 0
 
 	static readonly ADDRESS = 0x23
 	static readonly ALTERNATIVE_ADDRESS = 0x5c
 
+	// Power/reset/mode command bytes, MTreg change commands, and the MTreg default/min/max.
 	static readonly POWER_DOWN_CMD = 0x00
 	static readonly POWER_ON_CMD = 0x01
 	static readonly RESET_CMD = 0x07
@@ -75,6 +91,8 @@ export class BH1750 extends PeripheralBase<BH1750> implements Luxmeter {
 
 	#timer?: NodeJS.Timeout
 	#reading = false
+	// Selected mode command, MTreg value and derived conversion delay (ms), and mode flags (one-time and
+	// half-lux high-resolution variant).
 	readonly #modeCommand: number
 	readonly #measurementTime: number
 	readonly #measurementDelayMs: number
@@ -190,9 +208,10 @@ export class BH1750 extends PeripheralBase<BH1750> implements Luxmeter {
 	}
 }
 
+// TSL2561 broadband + infrared light-to-digital sensor.
 // https://www.mouser.com/datasheet/2/588/TSL2561_DS000110_3_00-2066792.pdf
-
 export class TSL2561 extends PeripheralBase<TSL2561> implements Luxmeter {
+	// Latest illuminance (lux) and the raw broadband/infrared channel counts.
 	lux = 0
 	broadband = 0
 	infrared = 0
@@ -201,6 +220,8 @@ export class TSL2561 extends PeripheralBase<TSL2561> implements Luxmeter {
 	static readonly LOW_ADDRESS = 0x29
 	static readonly HIGH_ADDRESS = 0x49
 
+	// Command/register bits and addresses, power-up value, and the per-integration-time scale and
+	// saturation (clip) thresholds from the datasheet.
 	static readonly COMMAND_BIT = 0x80
 	static readonly BLOCK_BIT = 0x10
 
@@ -216,6 +237,7 @@ export class TSL2561 extends PeripheralBase<TSL2561> implements Luxmeter {
 	static readonly CLIP_402_MS = 65535
 
 	#timer?: NodeJS.Timeout
+	// Timing-register byte and the precomputed gain/integration scales, clip threshold, and minimum poll.
 	readonly #timing: number
 	readonly #gainScale: number
 	readonly #integrationScale: number
@@ -306,14 +328,16 @@ export class TSL2561 extends PeripheralBase<TSL2561> implements Luxmeter {
 	}
 }
 
+// MAX44009 low-power ambient-light sensor.
 // https://www.analog.com/media/en/technical-documentation/data-sheets/max44009.pdf
-
 export class MAX44009 extends PeripheralBase<MAX44009> implements Luxmeter {
+	// Latest illuminance, lux.
 	lux = 0
 
 	static readonly ADDRESS = 0x4a
 	static readonly ALTERNATIVE_ADDRESS = 0x4b
 
+	// Config/lux register addresses, default config, continuous-mode bit, and the full-scale lux value.
 	static readonly CONFIGURATION_REG = 0x02
 	static readonly LUX_HIGH_REG = 0x03
 	static readonly LUX_LOW_REG = 0x04
@@ -322,6 +346,7 @@ export class MAX44009 extends PeripheralBase<MAX44009> implements Luxmeter {
 	static readonly MAX_LUX = 188006.4
 
 	#timer?: NodeJS.Timeout
+	// Precomputed configuration-register byte.
 	readonly #configuration: number
 
 	readonly name = 'MAX44009'
@@ -338,6 +363,7 @@ export class MAX44009 extends PeripheralBase<MAX44009> implements Luxmeter {
 		this.#configuration = (continuousMode ? MAX44009.CONTINUOUS_MODE_BIT : 0) | MAX44009.DEFAULT_CONFIGURATION
 	}
 
+	// Enables I2C, writes the configuration register, and starts periodic measurement.
 	start() {
 		if (this.#timer === undefined) {
 			this.client.addHandler(this)
@@ -348,12 +374,14 @@ export class MAX44009 extends PeripheralBase<MAX44009> implements Luxmeter {
 		}
 	}
 
+	// Stops polling and detaches the handler.
 	stop() {
 		this.client.removeHandler(this)
 		clearInterval(this.#timer)
 		this.#timer = undefined
 	}
 
+	// Decodes the high/low lux registers and commits the new reading.
 	twoWireMessage(client: FirmataClient, address: number, register: number, data: Buffer) {
 		if (client !== this.client || address !== this.address || register !== MAX44009.LUX_HIGH_REG || data.byteLength !== 2) return
 
@@ -375,16 +403,19 @@ export class MAX44009 extends PeripheralBase<MAX44009> implements Luxmeter {
 		return 2 ** exponent * mantissa * 0.045
 	}
 
+	// Reads the high+low lux registers in one transaction (repeated start, no register auto-increment).
 	#readMeasurement() {
 		this.client.twoWireRead(this.address, MAX44009.LUX_HIGH_REG, 2, false, 7, 'restart')
 	}
 }
 
+// TEMT6000 analog ambient-light sensor read on an ADC pin.
 // https://www.alldatasheet.com/html-pdf/117488/VISHAY/TEMT6000/440/2/TEMT6000.html
-
 export class TEMT6000 extends ADCPeripheral<TEMT6000> implements Luxmeter {
+	// Latest illuminance, lux.
 	lux = 0
 
+	// Precomputed lux per ADC step from the configured front-end parameters.
 	readonly #luxPerStep: number
 
 	readonly name = 'TEMPT6000'

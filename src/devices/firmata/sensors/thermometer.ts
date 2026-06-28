@@ -3,22 +3,34 @@ import type { NumberArray } from '../../../math/numerical/math'
 import type { FirmataClient, OneWirePowerMode } from '../firmata'
 import { ADCPeripheral, DEFAULT_POLLING_INTERVAL, PeripheralBase, type Thermometer } from '../peripheral'
 
+// Thermometer drivers: the LM35 analog temperature sensor (read on an ADC pin) and the DS18B20 1-Wire
+// digital sensor (addressed/searched on the bus, with selectable resolution and CRC-validated readout).
+
+// DS18B20 conversion resolution in bits; higher resolution means longer conversion time.
 export type DS18B20Resolution = 9 | 10 | 11 | 12
 
+// DS18B20 configuration: optional fixed ROM address, skip-ROM flag, resolution, and bus power mode.
 export interface DS18B20Options {
+	// 8-byte 1-Wire ROM address; when omitted the bus is searched.
 	readonly address?: Readonly<NumberArray> | Buffer
+	// Use SKIP ROM instead of searching/addressing (only valid with a single device on the bus).
 	readonly skip?: boolean
+	// Conversion resolution, bits.
 	readonly resolution?: DS18B20Resolution
+	// Bus power scheme.
 	readonly powerMode?: OneWirePowerMode
 }
 
+// Default DS18B20 options: 12-bit resolution, externally powered, no skip-ROM.
 export const DEFAULT_DS18B20_OPTIONS: Required<Omit<DS18B20Options, 'address'>> = {
 	resolution: 12,
 	powerMode: 'normal',
 	skip: false, // true for skip search ROM address when address is not provided
 }
 
+// LM35 analog temperature sensor (10 mV/°C) read on an ADC pin.
 export class LM35 extends ADCPeripheral<LM35> implements Thermometer {
+	// Latest temperature, degrees Celsius.
 	temperature = 0
 
 	readonly name = 'LM35'
@@ -31,6 +43,7 @@ export class LM35 extends ADCPeripheral<LM35> implements Thermometer {
 		super()
 	}
 
+	// Converts the ADC sample to degrees Celsius (10 mV/°C against a 10-bit ADC at `aref`).
 	calculate(value: number) {
 		const temperature = (this.aref * 100 * value) / 1023
 
@@ -43,11 +56,14 @@ export class LM35 extends ADCPeripheral<LM35> implements Thermometer {
 	}
 }
 
+// DS18B20 1-Wire digital thermometer.
 // https://www.analog.com/media/en/technical-documentation/data-sheets/ds18b20.pdf
-
 export class DS18B20 extends PeripheralBase<DS18B20> implements Thermometer {
+	// Latest temperature, degrees Celsius.
 	temperature = 0
 
+	// 1-Wire command bytes and constants (Convert T, Read/Write Scratchpad, family code, alarm defaults,
+	// scratchpad length).
 	static readonly CONVERT_T_CMD = [0x44] as const
 	static readonly READ_SCRATCHPAD_CMD = [0xbe] as const
 	static readonly WRITE_SCRATCHPAD_CMD = 0x4e
@@ -57,12 +73,16 @@ export class DS18B20 extends PeripheralBase<DS18B20> implements Thermometer {
 	static readonly SCRATCHPAD_SIZE = 9
 
 	#timer?: NodeJS.Timeout
+	// Guards a conversion in progress and the id of the outstanding scratchpad read.
 	#reading = false
 	#pendingReadCorrelationId?: number
+	// Resolved ROM address (from options or bus search).
 	#address?: Buffer
 	readonly #skip: boolean = false
 	readonly #powerMode: OneWirePowerMode
+	// Conversion wait time for the configured resolution, milliseconds.
 	readonly #conversionDelayMs: number
+	// Write-scratchpad command that sets a non-default resolution, if any.
 	readonly #resolutionCommand?: readonly number[]
 
 	readonly name = 'DS18B20'
@@ -96,6 +116,8 @@ export class DS18B20 extends PeripheralBase<DS18B20> implements Thermometer {
 		}
 	}
 
+	// Configures the 1-Wire bus and either searches for the sensor (when no address is set and not
+	// skipping) or starts periodic measurement immediately.
 	start() {
 		if (this.#timer === undefined) {
 			this.client.addHandler(this)
@@ -113,6 +135,7 @@ export class DS18B20 extends PeripheralBase<DS18B20> implements Thermometer {
 		}
 	}
 
+	// Detaches the handler and clears the timer and pending-read state.
 	stop() {
 		this.client.removeHandler(this)
 		clearInterval(this.#timer)
@@ -121,6 +144,8 @@ export class DS18B20 extends PeripheralBase<DS18B20> implements Thermometer {
 		this.#pendingReadCorrelationId = undefined
 	}
 
+	// Handles a scratchpad read reply for our pending request: validates the CRC, decodes the 16-bit
+	// temperature (0.0625 °C/LSB), and commits the reading.
 	oneWireReadReply(client: FirmataClient, pin: number, correlationId: number, data: Buffer) {
 		if (client !== this.client || pin !== this.pin || correlationId !== this.#pendingReadCorrelationId) return
 
@@ -134,6 +159,7 @@ export class DS18B20 extends PeripheralBase<DS18B20> implements Thermometer {
 		this.commit(changed)
 	}
 
+	// Handles a bus-search reply: adopts the first DS18B20-family address found and begins measuring.
 	oneWireSearchReply(client: FirmataClient, pin: number, addresses: readonly Buffer[], alarms: boolean) {
 		if (client !== this.client || pin !== this.pin || alarms || this.#address !== undefined) return
 
@@ -147,18 +173,22 @@ export class DS18B20 extends PeripheralBase<DS18B20> implements Thermometer {
 		this.#startMeasurement()
 	}
 
+	// Applies the resolution setting, takes a first reading, and starts the polling timer.
 	#startMeasurement() {
 		this.#configureResolution()
 		void this.#readMeasurement()
 		this.#timer ??= setInterval(this.#readMeasurement.bind(this), Math.max(1000, this.pollingInterval))
 	}
 
+	// Writes the scratchpad to set a non-default resolution, if one was configured.
 	#configureResolution() {
 		if (this.#resolutionCommand !== undefined) {
 			this.client.oneWireWrite(this.pin, this.#resolutionCommand, this.#address)
 		}
 	}
 
+	// Triggers a temperature conversion, waits the conversion delay, then requests the scratchpad. Guards
+	// against overlapping reads and missing addressing.
 	async #readMeasurement() {
 		if (this.#reading || this.#pendingReadCorrelationId !== undefined) return
 		if (this.#address === undefined && !this.#skip) return
@@ -173,6 +203,7 @@ export class DS18B20 extends PeripheralBase<DS18B20> implements Thermometer {
 		}
 	}
 
+	// Validates a 9-byte scratchpad by checking its Maxim/Dallas CRC-8 over the first 8 bytes.
 	static isScratchpadValid(data: Buffer) {
 		if (data.byteLength < DS18B20.SCRATCHPAD_SIZE) return false
 		return CRC.crc8maxim.compute(data, undefined, 0, 8) === data[8]

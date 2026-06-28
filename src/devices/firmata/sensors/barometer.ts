@@ -3,14 +3,23 @@ import { pascal } from '../../../math/units/pressure'
 import type { FirmataClient } from '../firmata'
 import { type Altimeter, type Barometer, DEFAULT_POLLING_INTERVAL, PeripheralBase, type Thermometer } from '../peripheral'
 
+// Barometric pressure sensor drivers over I2C: BMP180 and BMP280. Both read the chip's factory
+// calibration coefficients, apply the datasheet compensation formulas, and report pressure (millibar),
+// temperature (degrees Celsius), and a pressure-derived altitude (metres).
+
+// BMP280 power mode: sleep, single forced measurement, or continuous normal mode.
 export type BMP280OperatingMode = 'sleep' | 'forced' | 'normal'
 
+// Oversampling setting for temperature/pressure (skip or 1×..16×).
 export type BMP280Sampling = 'skip' | 'x1' | 'x2' | 'x4' | 'x8' | 'x16'
 
+// IIR filter coefficient for the BMP280 output.
 export type BMP280Filter = 'off' | 'x2' | 'x4' | 'x8' | 'x16'
 
+// Standby period between measurements in normal mode, in milliseconds.
 export type BMP280StandbyDuration = 0.5 | 62.5 | 125 | 250 | 500 | 1000 | 2000 | 4000 // ms
 
+// BMP280 measurement configuration.
 export interface BMP280Options {
 	readonly mode?: BMP280OperatingMode
 	readonly temperatureSampling?: BMP280Sampling // Reduces noise and increases the output resolution by one bit
@@ -19,6 +28,7 @@ export interface BMP280Options {
 	readonly standbyDuration?: BMP280StandbyDuration // Standby period between two measurement cycles in normal mode
 }
 
+// BMP180 oversampling mode; comments give the corresponding conversion time.
 export enum BMP180Mode {
 	ULTRA_LOW_POWER, // 5 ms
 	STANDARD, // 8 ms
@@ -26,6 +36,7 @@ export enum BMP180Mode {
 	ULTRA_HIGH_RESOLUTION, // 26 ms
 }
 
+// Default BMP280 config: normal mode, 1× oversampling, filter off, 1 s standby.
 export const DEFAULT_BMP280_OPTIONS: Required<BMP280Options> = {
 	mode: 'normal',
 	temperatureSampling: 'x1',
@@ -34,13 +45,15 @@ export const DEFAULT_BMP280_OPTIONS: Required<BMP280Options> = {
 	standbyDuration: 1000,
 }
 
+// BMP180 barometric pressure/temperature sensor.
 // https://cdn-shop.adafruit.com/datasheets/BST-BMP180-DS000-09.pdf
-
 export class BMP180 extends PeripheralBase<BMP180> implements Barometer, Altimeter, Thermometer {
+	// Latest pressure (millibar), altitude (metres), and temperature (degrees Celsius).
 	pressure = 0
 	altitude = 0
 	temperature = 0
 
+	// Factory calibration coefficients (overwritten from the chip on start; defaults are datasheet values).
 	// Initial values from datasheet (for test only)
 	#AC1 = 408
 	#AC2 = -72
@@ -60,6 +73,7 @@ export class BMP180 extends PeripheralBase<BMP180> implements Barometer, Altimet
 
 	static readonly ADDRESS = 0x77
 
+	// Calibration/control/data register addresses and the temperature/pressure conversion commands.
 	static readonly COEFFICIENTS_REG = 0xaa
 	static readonly CONTROL_REG = 0xf4
 	static readonly TEMP_DATA_REG = 0xf6
@@ -69,6 +83,7 @@ export class BMP180 extends PeripheralBase<BMP180> implements Barometer, Altimet
 	static readonly READ_PRES_CMD = 0x34
 
 	#timer?: NodeJS.Timeout
+	// Whether calibration data has been read, and which conversion (temp/pressure) is currently in flight.
 	#initialized = false
 	#command = BMP180.READ_TEMP_CMD
 
@@ -82,6 +97,9 @@ export class BMP180 extends PeripheralBase<BMP180> implements Barometer, Altimet
 		super()
 	}
 
+	// Drives the BMP180 read sequence: first ingests the 22-byte calibration block and starts polling,
+	// then alternates uncompensated temperature and pressure reads, computing the compensated values and
+	// firing on each completed pressure reading.
 	twoWireMessage(client: FirmataClient, address: number, register: number, data: Buffer) {
 		if (address !== BMP180.ADDRESS) return
 
@@ -126,6 +144,7 @@ export class BMP180 extends PeripheralBase<BMP180> implements Barometer, Altimet
 		}
 	}
 
+	// Enables I2C and kicks off the read by requesting the calibration coefficients.
 	start() {
 		if (this.#timer === undefined) {
 			this.#command = BMP180.READ_TEMP_CMD
@@ -135,28 +154,34 @@ export class BMP180 extends PeripheralBase<BMP180> implements Barometer, Altimet
 		}
 	}
 
+	// Stops polling and detaches the handler.
 	stop() {
 		this.client.removeHandler(this)
 		clearInterval(this.#timer)
 		this.#timer = undefined
 	}
 
+	// Requests the 22-byte factory calibration block.
 	#readCalibrationData() {
 		this.client.twoWireRead(BMP180.ADDRESS, BMP180.COEFFICIENTS_REG, 22)
 	}
 
+	// Triggers a temperature conversion, waits the fixed conversion time, then reads the raw value.
 	async #readUncompensatedTemperature() {
 		this.client.twoWireWrite(BMP180.ADDRESS, [BMP180.CONTROL_REG, BMP180.READ_TEMP_CMD])
 		await Bun.sleep(5)
 		this.client.twoWireRead(BMP180.ADDRESS, BMP180.TEMP_DATA_REG, 2)
 	}
 
+	// Triggers a pressure conversion at the configured oversampling, waits, then reads the raw value.
 	async #readUncompensatedPressure() {
 		this.client.twoWireWrite(BMP180.ADDRESS, [BMP180.CONTROL_REG, BMP180.READ_PRES_CMD | (this.mode << 6)])
 		await Bun.sleep(30)
 		this.client.twoWireRead(BMP180.ADDRESS, BMP180.PRES_DATA_REG, 3)
 	}
 
+	// Datasheet temperature compensation; returns degrees Celsius and updates the shared B5 term used by
+	// the pressure calculation.
 	calculateTrueTemperature(UT: number) {
 		const X1 = ((UT - this.#AC6) * this.#AC5) >> 15
 		const X2 = Math.round((this.#MC << 11) / (X1 + this.#MD))
@@ -164,6 +189,7 @@ export class BMP180 extends PeripheralBase<BMP180> implements Barometer, Altimet
 		return ((this.#B5 + 8) >> 4) / 10
 	}
 
+	// Datasheet pressure compensation; returns pascals (depends on the B5 term from the last temperature).
 	calculateTruePressure(UP: number) {
 		const B6 = this.#B5 - 4000
 		const K = (B6 * B6) >> 12
@@ -182,9 +208,10 @@ export class BMP180 extends PeripheralBase<BMP180> implements Barometer, Altimet
 	}
 }
 
+// BMP280 barometric pressure/temperature sensor.
 // https://www.bosch-sensortec.com/media/boschsensortec/downloads/datasheets/bst-bmp280-ds001.pdf
-
 export class BMP280 extends PeripheralBase<BMP280> implements Barometer, Altimeter, Thermometer {
+	// Latest pressure (millibar), altitude (metres), and temperature (degrees Celsius).
 	pressure = 0
 	altitude = 0
 	temperature = 0
@@ -192,11 +219,13 @@ export class BMP280 extends PeripheralBase<BMP280> implements Barometer, Altimet
 	static readonly ADDRESS = 0x76
 	static readonly ALTERNATIVE_ADDRESS = 0x77
 
+	// Calibration, data, control-measurement, and config register addresses.
 	static readonly CALIBRATION_REG = 0x88
 	static readonly DATA_REG = 0xf7
 	static readonly CTRL_MEAS_REG = 0xf4
 	static readonly CONFIG_REG = 0xf5
 
+	// Factory calibration coefficients (overwritten from the chip on start; defaults are datasheet values).
 	// Initial values from datasheet (for test only)
 	#T1 = 27504
 	#T2 = 26435
@@ -210,10 +239,12 @@ export class BMP280 extends PeripheralBase<BMP280> implements Barometer, Altimet
 	#P7 = 15500
 	#P8 = -14600
 	#P9 = 6000
+	// Fine temperature term shared between temperature and pressure compensation.
 	#tFine = 0
 
 	#initialized = false
 	#timer?: NodeJS.Timeout
+	// Precomputed control-measurement and config register bytes for the chosen options.
 	readonly #ctrlMeasValue: number
 	readonly #configValue: number
 
@@ -243,6 +274,7 @@ export class BMP280 extends PeripheralBase<BMP280> implements Barometer, Altimet
 		this.#configValue = (standbyBits << 5) | (filterBits << 2)
 	}
 
+	// Enables I2C, writes the config/control-measurement registers, and requests the calibration block.
 	start() {
 		if (this.#timer === undefined) {
 			this.client.addHandler(this)
@@ -253,12 +285,15 @@ export class BMP280 extends PeripheralBase<BMP280> implements Barometer, Altimet
 		}
 	}
 
+	// Stops polling and detaches the handler.
 	stop() {
 		this.client.removeHandler(this)
 		clearInterval(this.#timer)
 		this.#timer = undefined
 	}
 
+	// Ingests the 24-byte calibration block (starting polling once valid), then decodes each 6-byte data
+	// frame into compensated temperature, pressure, and altitude and commits on change.
 	twoWireMessage(client: FirmataClient, address: number, register: number, data: Buffer) {
 		if (address !== this.address) return
 
@@ -307,14 +342,17 @@ export class BMP280 extends PeripheralBase<BMP280> implements Barometer, Altimet
 		this.commit(changed)
 	}
 
+	// Requests the 24-byte factory calibration block.
 	#readCalibrationData() {
 		this.client.twoWireRead(this.address, BMP280.CALIBRATION_REG, 24)
 	}
 
+	// Requests one 6-byte pressure+temperature data frame.
 	#readMeasurement() {
 		this.client.twoWireRead(this.address, BMP280.DATA_REG, 6)
 	}
 
+	// Datasheet (floating-point) temperature compensation; returns degrees Celsius and updates tFine.
 	compensateTemperature(adcT: number) {
 		const var1 = (adcT / 16384 - this.#T1 / 1024) * this.#T2
 		const var2 = (adcT / 131072 - this.#T1 / 8192) * (adcT / 131072 - this.#T1 / 8192) * this.#T3
@@ -322,6 +360,8 @@ export class BMP280 extends PeripheralBase<BMP280> implements Barometer, Altimet
 		return this.#tFine / 5120
 	}
 
+	// Datasheet (floating-point) pressure compensation; returns pascals (depends on tFine). Returns the
+	// last pressure if the intermediate divisor is zero.
 	compensatePressure(adcP: number) {
 		let var1 = this.#tFine / 2 - 64000
 		let var2 = (var1 * var1 * this.#P6) / 32768
