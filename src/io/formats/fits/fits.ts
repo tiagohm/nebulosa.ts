@@ -7,27 +7,49 @@ import type { Image, ImageRawType } from '../../../imaging/model/types'
 import type { NumberArray } from '../../../math/numerical/math'
 import { readUntil, type Seekable, type Sink, type Source } from '../../io'
 
+// FITS container reading and writing: parses an HDU list (header keyword cards plus data segment
+// offsets/sizes) from a seekable source and writes image HDUs back, including optional Rice tile
+// compression. Provides the 80-byte card reader/writer (FitsKeywordReader/FitsKeywordWriter) honoring
+// CONTINUE long strings and commentary cards, and the pixel reader/writer (FitsImageReader/
+// FitsImageWriter) that convert between FITS planar big-endian storage and the library's interleaved
+// image buffers, applying the BZERO/BSCALE scaling convention. This is a Bun/Node runtime module (Buffer).
+
+// A FITS header keyword name.
 export type FitsHeaderKey = string
+// A FITS header value: string, number, logical, or undefined (valueless card).
 export type FitsHeaderValue = string | number | boolean | undefined
+// An optional FITS header card comment.
 export type FitsHeaderComment = string | undefined
+// A parsed header card as [keyword, value?, comment?].
 export type FitsHeaderCard = [FitsHeaderKey, FitsHeaderValue?, FitsHeaderComment?]
+// A header as a flat keyword -> value map (commentary keywords hold newline-joined text).
 export type FitsHeader = Record<FitsHeaderKey, FitsHeaderValue>
 
+// Location of an HDU data segment within the file.
 export interface FitsData {
+	// Data segment length in bytes (excluding block padding).
 	readonly size: number
+	// Byte offset of the data segment from the start of the file.
 	readonly offset: number
 }
 
+// A single Header-Data Unit: its header and the location of its data.
 export interface FitsHdu {
+	// Byte offset of the HDU's first header card from the start of the file.
 	readonly offset?: number
+	// Parsed header keyword map.
 	readonly header: FitsHeader
+	// Location of the HDU's data segment.
 	readonly data: FitsData
 }
 
+// A parsed FITS file as its ordered list of HDUs.
 export interface Fits {
+	// Header-Data Units in file order (primary HDU first).
 	readonly hdus: readonly FitsHdu[]
 }
 
+// FITS pixel data type code (BITPIX): positive values are integers, negative are IEEE floats.
 export enum Bitpix {
 	BYTE = 8, // unsigned 8-bit integer
 	SHORT = 16, // signed 16-bit integer
@@ -37,23 +59,35 @@ export enum Bitpix {
 	DOUBLE = -64, // IEEE 64-bit floating point
 }
 
+// A Bitpix value or 0 meaning "no data / unset".
 export type BitpixOrZero = Bitpix | 0
 
+// FITS block size in bytes; headers and data are padded to a multiple of this.
 export const FITS_BLOCK_SIZE = 2880
+// Length of one header card in bytes.
 export const FITS_HEADER_CARD_SIZE = 80
+// Maximum keyword name length in bytes.
 export const FITS_MAX_KEYWORD_LENGTH = 8
+// Maximum value field length in bytes.
 export const FITS_MAX_VALUE_LENGTH = 70
+// Minimum byte position (1-based 20) before which a single-record string value's closing quote should not fall.
 export const FITS_MIN_STRING_END = 19
 
+// Standard MIME types for FITS files.
 export const FITS_IMAGE_MIME_TYPE = 'image/fits'
 export const FITS_APPLICATION_MIME_TYPE = 'application/fits'
 
+// First keyword of a valid primary header; used as the file's magic signature.
 export const MAGIC_BYTES = 'SIMPLE'
 
+// ASCII space byte value used to pad header blocks.
 const FITS_HEADER_PADDING = 32
+// Zero byte value used to pad data blocks.
 const FITS_DATA_PADDING = 0
+// Error message thrown when the header write buffer must grow.
 const FITS_HEADER_BUFFER_TOO_SMALL = 'FITS header buffer too small'
 
+// Returns true when the input begins with the FITS 'SIMPLE' magic signature.
 export function isFits(input: ArrayBufferLike | Buffer) {
 	if (input.byteLength < 6) return false
 
@@ -66,19 +100,27 @@ export function isFits(input: ArrayBufferLike | Buffer) {
 	return true
 }
 
+// Returns the number of padding bytes needed to round `size` up to a full FITS block.
 export function computeRemainingBytes(size: number) {
 	const remaining = size % FITS_BLOCK_SIZE
 	return remaining === 0 ? 0 : FITS_BLOCK_SIZE - remaining
 }
 
+// Tile-compression algorithm names recognized in the ZCMPTYPE keyword.
 export type FitsCompressionType = 'GZIP_1' | 'RICE_1' | 'PLIO_1' | 'HCOMPRESS_1'
 
+// Options controlling tile compression when writing an image HDU.
 export interface FitsCompressionOptions {
+	// Compression algorithm to apply, or false to write uncompressed (only RICE_1 is implemented).
 	readonly type?: FitsCompressionType | false
+	// Tile height in rows for tiled compression.
 	readonly tileHeight?: number
+	// Rice block size in pixels.
 	readonly blockSize?: number
 }
 
+// Parses a FITS file from a seekable source into its HDU list, recording each HDU's header and the
+// offset/size of its data segment (which is skipped, not read). Returns undefined when the input is not FITS.
 export async function readFits(source: Source & Seekable): Promise<Fits | undefined> {
 	const buffer = Buffer.allocUnsafe(FITS_HEADER_CARD_SIZE)
 	const reader = new FitsKeywordReader()
@@ -155,8 +197,10 @@ export async function readFits(source: Source & Seekable): Promise<Fits | undefi
 	return { hdus }
 }
 
+// Default Rice block size in pixels when none is specified.
 const RICE_DEFAULT_BLOCK_SIZE = 32
 
+// Minimal empty primary header written before compressed-image binary-table extensions.
 const COMPRESSION_PRIMARY_HEADER: readonly FitsHeaderCard[] = [
 	['SIMPLE', true],
 	['BITPIX', 8],
@@ -164,6 +208,8 @@ const COMPRESSION_PRIMARY_HEADER: readonly FitsHeaderCard[] = [
 	['EXTEND', true],
 ]
 
+// Structural keywords regenerated per HDU; excluded when copying a source header into a new image or
+// compressed-table extension so stale dimension/table cards are not duplicated.
 const COMPRESSION_EXTENSION_EXCLUDED_KEYS = new Set([
 	'SIMPLE',
 	'XTENSION',
@@ -243,6 +289,9 @@ function shouldUseRiceCompression(header: Readonly<FitsHeader>, compression: Fit
 	return isRiceCompressedImageHeader(header)
 }
 
+// Converts the library's channel-interleaved image into FITS planar (channel-major) storage, applying
+// the inverse BZERO/BSCALE scaling: floats are mapped to the integer range and the unsigned zero-point
+// is subtracted so unsigned samples are stored as signed integers per the FITS convention.
 function writeInterleavedToPlanar(input: ImageRawType, output: NumberArray, header: Readonly<FitsHeader>, bitpix: BitpixOrZero, width: number, height: number, channels: number) {
 	const numberOfPixels = width * height
 	const zero = numericKeyword(header, 'BZERO', bitpix === 16 ? 32768 : bitpix === 32 ? 2147483648 : 0)
@@ -256,6 +305,9 @@ function writeInterleavedToPlanar(input: ImageRawType, output: NumberArray, head
 	}
 }
 
+// Rice-compresses an image into a BINTABLE extension: builds the per-tile compressed heap plus the
+// descriptor rows and the ZIMAGE/ZCMPTYPE/ZTILE compression keyword cards. Returns the cards and payload
+// (descriptor table followed by the compressed heap). Supports BITPIX 8/16/32 only.
 async function buildRiceCompressedImage(header: Readonly<FitsHeader>, raw: ImageRawType, options: Readonly<FitsCompressionOptions>) {
 	const bitpix = uncompressedBitpixKeyword(header, 0)
 	const width = uncompressedWidthKeyword(header, 0)
@@ -357,6 +409,9 @@ async function buildRiceCompressedImage(header: Readonly<FitsHeader>, raw: Image
 	return { cards, payload }
 }
 
+// Writes a sequence of image HDUs to `sink`, padding each header and data segment to FITS block
+// boundaries. The first HDU becomes the primary HDU; when compression is requested each image is written
+// as a Rice-compressed BINTABLE extension preceded once by an empty primary header.
 export async function writeFits(sink: Sink & Partial<Seekable>, hdus: readonly Readonly<Pick<Image, 'header' | 'raw'>>[], options: FitsCompressionOptions = {}) {
 	let buffer = Buffer.allocUnsafe(FITS_BLOCK_SIZE * 4)
 	const headerWriter = new FitsKeywordWriter()
@@ -410,11 +465,13 @@ export async function writeFits(sink: Sink & Partial<Seekable>, hdus: readonly R
 	}
 }
 
+// ASCII byte codes used while scanning header cards (space, ', /, =).
 const WHITESPACE = 32
 const SINGLE_QUOTE = 39
 const SLASH = 47
 const EQUAL = 61
 
+// Matches a FITS real value (allowing the Fortran 'D' exponent marker) and a plain integer, respectively.
 const DECIMAL_REGEX = /^[+-]?\d+(\.\d*)?([dDeE][+-]?\d+)?$/
 const INT_REGEX = /^[+-]?\d+$/
 
@@ -422,7 +479,10 @@ const INT_REGEX = /^[+-]?\d+$/
 // Registered Conventions: https://fits.gsfc.nasa.gov/registry/ https://fits.gsfc.nasa.gov/fits_registry.html
 // https://github.com/nom-tam-fits/nom-tam-fits/blob/master/src/main/java/nom/tam/fits/HeaderCardParser.java
 
+// Parses 80-byte FITS header cards into [keyword, value, comment] tuples, inferring the value type and
+// handling quoted strings with doubled-quote escaping.
 export class FitsKeywordReader {
+	// Parses one 80-byte card starting at `offset`, returning [keyword, typed value, trimmed comment].
 	read(line: Buffer, offset: number = 0): FitsHeaderCard {
 		const position = new Position(offset)
 		const key = this.#parseKey(line, position)
@@ -431,6 +491,8 @@ export class FitsKeywordReader {
 		return [key, this.#parseValueType(value, quoted), comment?.trim()]
 	}
 
+	// Parses successive cards into a header map until END, joining CONTINUE long strings and accumulating
+	// commentary (COMMENT/HISTORY) cards as newline-separated text.
 	readAll(buffer: Buffer, offset: number = 0): FitsHeader {
 		const header: FitsHeader = {}
 		let prev: FitsHeaderCard | undefined
@@ -611,6 +673,8 @@ const LONG_COMMENT_PREFIX = ' /'
 
 // https://github.com/nom-tam-fits/nom-tam-fits/blob/master/src/main/java/nom/tam/fits/HeaderCardFormatter.java
 
+// Mutable cursor tracking the absolute byte `offset`, the number of bytes consumed (`size`), and the
+// card `start`, threaded through the card reader/writer.
 class Position {
 	constructor(
 		public offset: number,
@@ -673,11 +737,17 @@ function imageBufferView(buffer: Buffer | undefined, size: number, bitpix: Bitpi
 	return Buffer.allocUnsafe(size)
 }
 
+// The terminating END card.
 const END_CARD: FitsHeaderCard = ['END']
 
+// Formats header cards into their fixed 80-byte FITS representation: value alignment, default comments
+// from the keyword dictionary, commentary cards, and CONTINUE-based long-string splitting. Throws
+// FITS_HEADER_BUFFER_TOO_SMALL when the output buffer cannot hold a card, signaling the caller to grow it.
 export class FitsKeywordWriter {
+	// Keyword metadata dictionary used to supply default comments.
 	static keywords: Readonly<Record<string, FitsKeyword>> = KEYWORDS
 
+	// Writes one card (or several, for multi-line COMMENT or continued long strings) at `offset`; returns bytes written, or 0 if no room.
 	write(card: Readonly<FitsHeaderCard>, output: Buffer, offset: number = 0) {
 		if (output.byteLength - offset < FITS_HEADER_CARD_SIZE) return 0
 
@@ -714,6 +784,7 @@ export class FitsKeywordWriter {
 		return position.size
 	}
 
+	// Writes every card of a header map or card array (stopping at END); returns total bytes written.
 	writeAll(header: Readonly<FitsHeader> | readonly Readonly<FitsHeaderCard>[], output: Buffer, offset: number = 0) {
 		let size = 0
 
@@ -757,6 +828,7 @@ export class FitsKeywordWriter {
 		return size
 	}
 
+	// Writes the terminating END card; returns bytes written.
 	writeEnd(output: Buffer, offset: number = 0) {
 		const size = this.write(END_CARD, output, offset)
 
@@ -956,6 +1028,8 @@ export class FitsKeywordWriter {
 	}
 }
 
+// Reads the Rice block size from the ZNAMEn/ZVALn compression parameters (or a BLOCKSIZE fallback),
+// defaulting to RICE_DEFAULT_BLOCK_SIZE when absent or invalid.
 function riceBlockSizeFromHeader(header: Readonly<FitsHeader>) {
 	for (let i = 1; i <= 16; i++) {
 		const name = textKeyword(header, `ZNAME${i}`, '').trim().toUpperCase()
@@ -970,6 +1044,8 @@ function riceBlockSizeFromHeader(header: Readonly<FitsHeader>) {
 	return Number.isFinite(fallback) && fallback > 0 ? Math.trunc(fallback) : RICE_DEFAULT_BLOCK_SIZE
 }
 
+// Converts FITS planar (channel-major) pixel data into the library's channel-interleaved image, applying
+// the BZERO/BSCALE scaling: the unsigned zero-point is added back and integer values are mapped to floats in [0, 1].
 function writePlanarToInterleaved(data: NumberArray, output: ImageRawType, header: Readonly<FitsHeader>, bitpix: BitpixOrZero, width: number, height: number, channels: number) {
 	const numberOfPixels = width * height
 	const scale = numericKeyword(header, 'BSCALE', 1)
@@ -983,11 +1059,14 @@ function writePlanarToInterleaved(data: NumberArray, output: ImageRawType, heade
 	}
 }
 
+// Reads an image HDU's pixels into a channel-interleaved buffer, transparently handling both plain
+// big-endian images and Rice-compressed tile (ZIMAGE) extensions.
 export class FitsImageReader {
 	readonly #compressed: boolean
 	readonly #buffer: Buffer
 	readonly #data: NumberArray
 
+	// Prepares to read `hdu`; an optional caller `buffer` is reused as scratch storage when alignment allows.
 	constructor(
 		readonly hdu: FitsHdu,
 		buffer?: Buffer,
@@ -1029,6 +1108,8 @@ export class FitsImageReader {
 		return true
 	}
 
+	// Reads and Rice-decompresses a tiled compressed image, reassembling tiles into the planar buffer
+	// before converting to interleaved output. Validates the tile table and heap offsets.
 	async #readRiceCompressed(source: Source & Seekable, output: ImageRawType) {
 		const { header } = this.hdu
 		const bitpix = uncompressedBitpixKeyword(header, 0)
@@ -1138,10 +1219,12 @@ export class FitsImageReader {
 	}
 }
 
+// Writes a channel-interleaved image to a sink as a plain (uncompressed) big-endian FITS data segment.
 export class FitsImageWriter {
 	readonly #buffer: Buffer
 	readonly #data: NumberArray
 
+	// Prepares to write an image of the dimensions/BITPIX declared in `header`; an optional caller `buffer` is reused when aligned.
 	constructor(
 		readonly header: FitsHeader,
 		buffer?: Buffer,

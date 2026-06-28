@@ -1,7 +1,16 @@
+// Dictionary of known FITS header keywords with their value type and a standard comment string.
+// Each exported keyword constant carries its own descriptive `comment`, so they serve as the
+// documentation for that keyword; the grouped maps below are aggregated into `KEYWORDS`. Sourced from
+// the FITS Standard, the common usage dictionary, and the MaxIm DL keyword set (see the section links).
+
+// Value type a FITS keyword carries: text, integer, logical (T/F), real, valueless (COMMENT/HISTORY/END), or unconstrained.
 export type FitsKeywordType = 'STRING' | 'INTEGER' | 'LOGICAL' | 'REAL' | 'NONE' | 'ANY'
 
+// Metadata describing a single FITS keyword.
 export interface FitsKeyword {
+	// Expected value type of the keyword.
 	readonly type: FitsKeywordType
+	// Standard human-readable comment written into the header card.
 	readonly comment?: string
 }
 
@@ -122,6 +131,7 @@ export const PIXSIZE1: FitsKeyword = { type: 'REAL', comment: 'Unbinned X pixel 
 export const PIXSIZE2: FitsKeyword = { type: 'REAL', comment: 'Unbinned Y pixel size of the sensor in microns' }
 export const SITEELEV: FitsKeyword = { type: 'REAL', comment: 'Elevation at observing site in m' }
 
+// Keywords defined by the FITS Standard.
 export const STANDARD_KEYWORDS = {
 	AUTHOR,
 	BITPIX,
@@ -165,6 +175,7 @@ export const STANDARD_KEYWORDS = {
 	XTENSION,
 } as const
 
+// Common observation keywords widely used in the astronomical community.
 export const OBSERVATION_KEYWORDS = {
 	AIRMASS,
 	DEC,
@@ -177,10 +188,12 @@ export const OBSERVATION_KEYWORDS = {
 	SUNANGLE,
 } as const
 
+// Instrument-related keywords.
 export const INSTRUMENT_KEYWORDS = {
 	FILTER,
 } as const
 
+// Keywords added or read by MaxIm DL; some carry hyphenated header names (e.g. CCD-TEMP, DATE-OBS).
 const MAXIMDL_KEYWORDS = {
 	APTDIA,
 	APTAREA,
@@ -227,11 +240,13 @@ const MAXIMDL_KEYWORDS = {
 	YPIXSZ,
 }
 
+// Exposure/observation duration keywords.
 export const DURATION_KEYWORDS = {
 	'DATE-END': DATE_END,
 	EXPOSURE,
 } as const
 
+// Additional non-standard keywords used by various capture software.
 export const OTHER_KEYWORDS = {
 	FRAME,
 	GAIN,
@@ -241,6 +256,8 @@ export const OTHER_KEYWORDS = {
 	SITEELEV,
 } as const
 
+// Union of every known keyword group, keyed by the exact header name.
 export const KEYWORDS = { ...STANDARD_KEYWORDS, ...OBSERVATION_KEYWORDS, ...INSTRUMENT_KEYWORDS, ...MAXIMDL_KEYWORDS, ...DURATION_KEYWORDS, ...OTHER_KEYWORDS } as const
 
+// Every recognized header keyword name.
 export type FitsKeywords = keyof typeof KEYWORDS

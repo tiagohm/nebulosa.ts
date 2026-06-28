@@ -9,26 +9,43 @@ import { bitpixInBytes, formatFitsHeaderValue, unescapeQuotedText } from '../fit
 
 // https://pixinsight.com/doc/docs/XISF-1.0-spec/XISF-1.0-spec.html
 
+// XISF reader/writer for the monolithic format: parses the XML header and attached image data blocks
+// into FITS-compatible headers plus pixel buffers, and serializes images back out. Supports planar and
+// normal pixel storage, big/little byte order, optional zlib/zstd compression with byte-shuffling, and
+// 8/16/32-bit unsigned integer and 32/64-bit float samples. This is a Bun/Node runtime module (Buffer,
+// Bun.zstd*), and relies on fast-xml-parser for header parsing.
+
+// XISF pixel sample data type.
 export type XisfSampleFormat = 'UInt8' | 'UInt16' | 'UInt32' | 'UInt64' | 'Float32' | 'Float64'
 
+// Image color space (only Gray and RGB are handled by the reader).
 export type XisfColorSpace = 'Gray' | 'RGB' | 'CIELab'
 
+// Channel memory layout: Planar (channel-major) or Normal (pixel-interleaved).
 export type XisfPixelStorageModel = 'Planar' | 'Normal'
 
+// Semantic frame type declared by the image.
 export type XisfImageType = 'Bias' | 'Dark' | 'Flat' | 'Light' | 'MasterBias' | 'MasterDark' | 'MasterFlat' | 'MasterLight' | 'DefectMap' | 'RejectionMapHigh' | 'RejectionMapLow' | 'BinaryRejectionMapHigh' | 'BinaryRejectionMapLow' | 'SlopeMap' | 'WeightMap'
 
+// Supported compression codec name (only zlib and zstd are implemented for read/write).
 export type XisfCompressionFormat = 'zlib' | 'lz4' | 'lz4hc' | 'zstd'
 
+// Compression codec name with the '+sh' byte-shuffling suffix.
 export type XisfShuffledCompressionFormat = `${XisfCompressionFormat}+sh`
 
+// Byte order of multibyte samples in the data block.
 export type XisfByteOrder = 'big' | 'little'
 
+// Checksum algorithm names allowed by the spec.
 export type XisfChecksumAlgorithm = 'sha-1' | 'sha-256' | 'sha-512' | 'sha3-256' | 'sha3-512' | 'sha1' | 'sha256' | 'sha512'
 
+// Scalar property value type used in XISF property elements.
 export type XisfPropertyType = 'UInt8' | 'UInt16' | 'UInt32' | 'UInt64' | 'Float32' | 'Float64' | 'Int8' | 'Int16' | 'Int32' | 'Int64' | 'Boolean' | 'String'
 
+// Magic signature at the start of a monolithic XISF file.
 export const XISF_SIGNATURE = 'XISF0100'
 
+// Returns true when the input begins with the XISF0100 signature.
 export function isXisf(input: ArrayBufferLike | Buffer) {
 	if (input.byteLength < XISF_SIGNATURE.length) return false
 
@@ -41,70 +58,115 @@ export function isXisf(input: ArrayBufferLike | Buffer) {
 	return true
 }
 
+// A parsed XISF file as its list of supported images.
 export interface Xisf {
+	// Images decoded from the header, in document order.
 	readonly images: readonly XisfImage[]
 }
 
+// A resolved XISF image: FITS-compatible header plus the data block location and decoding parameters.
 export interface XisfImage extends Required<Pick<XisfParsedImage, 'byteOrder' | 'colorSpace' | 'imageType' | 'pixelStorage' | 'sampleFormat'>> {
+	// FITS-style header synthesized from the image geometry and FITSKeyword elements.
 	readonly header: FitsHeader
+	// Offset/size of the attached pixel data block.
 	readonly location: XisfLocation
+	// Image dimensions and channel count.
 	readonly geometry: XisfGeometry
+	// Compression descriptor, present only when the block is compressed.
 	readonly compression?: XisfCompression
+	// Equivalent FITS BITPIX code for the sample format.
 	readonly bitpix: Bitpix
 }
 
+// Compression descriptor parsed from an image's `compression` attribute.
 export interface XisfCompression {
+	// Codec used.
 	readonly format: XisfCompressionFormat
+	// Whether byte-shuffling was applied before compression.
 	readonly shuffled: boolean
+	// Size in bytes of the uncompressed data block.
 	readonly uncompressedSize: number
+	// Element size in bytes used by byte-shuffling (0 when not shuffled).
 	readonly itemSize: number
 }
 
+// Compression options requested when writing.
 export interface XisfWriteCompression {
+	// Codec to use (only zlib and zstd are implemented).
 	readonly format: XisfCompressionFormat
+	// Whether to byte-shuffle multibyte samples before compressing.
 	readonly shuffled?: boolean
+	// Codec compression level.
 	readonly level?: number
 }
 
+// Output format options for writeXisf.
 export interface XisfWriteFormat {
+	// Byte order for multibyte samples (default little).
 	readonly byteOrder?: XisfByteOrder
+	// Channel storage layout (default Planar).
 	readonly pixelStorage?: XisfPixelStorageModel
+	// Compression settings, or false for uncompressed output.
 	readonly compression?: false | XisfWriteCompression
 }
 
+// Byte offset and length of an attached data block within the file.
 export interface XisfLocation {
+	// Byte offset of the data block from the start of the file.
 	readonly offset: number
+	// Length of the data block in bytes (compressed size when compressed).
 	readonly size: number
 }
 
+// Image dimensions: width/height from Size plus channel count.
 export interface XisfGeometry extends Readonly<Size> {
+	// Number of channels (1 for gray, 3 for RGB).
 	readonly channels: number
 }
 
+// Raw <Image> element as produced by the XML parser, with attributes as colon-delimited strings.
 export interface XisfParsedImage {
+	// Embedded FITS keyword element(s).
 	readonly FITSKeyword?: XisfParsedFitsKeyword | readonly XisfParsedFitsKeyword[]
+	// "width:height:channels" geometry string.
 	readonly geometry: `${number}:${number}:${number}`
+	// Sample data type.
 	readonly sampleFormat: XisfSampleFormat
+	// "low:high" sample value bounds (for floating-point images).
 	readonly bounds: `${number}:${number}`
+	// Color space name.
 	readonly colorSpace: XisfColorSpace
+	// "attachment:offset:size" data block location.
 	readonly location: `attachment:${number}:${number}`
+	// Channel storage layout.
 	readonly pixelStorage?: XisfPixelStorageModel
+	// Semantic frame type.
 	readonly imageType?: XisfImageType
+	// Byte order of multibyte samples.
 	readonly byteOrder?: XisfByteOrder
+	// "algorithm:digest" checksum of the data block.
 	readonly checksum?: `${XisfChecksumAlgorithm}:${string}`
+	// "format:uncompressedSize[:itemSize]" compression descriptor.
 	readonly compression?: `${XisfCompressionFormat | XisfShuffledCompressionFormat}:${string}`
 }
 
+// Raw <FITSKeyword> element from the XML header.
 export interface XisfParsedFitsKeyword {
+	// Keyword name.
 	readonly name: string
+	// Keyword value (still a raw string from XML).
 	readonly value: FitsHeaderValue
+	// Keyword comment.
 	readonly comment: string
 }
 
+// Root <xisf> element as parsed, holding one or more images.
 export interface XisfParsedHeader {
+	// Parsed image element(s), if any.
 	readonly Image?: XisfParsedImage | readonly XisfParsedImage[]
 }
 
+// fast-xml-parser configuration: keep attributes (unprefixed) and read element text into a `value` field.
 const XML_PARSE_OPTIONS: X2jOptions = {
 	ignoreAttributes: false,
 	attributeNamePrefix: '',
@@ -112,6 +174,8 @@ const XML_PARSE_OPTIONS: X2jOptions = {
 	textNodeName: 'value',
 }
 
+// Reads an XISF file from a seekable source: validates the signature, reads the XML header of the
+// declared length, and parses it into images (data blocks are not read here). Returns undefined for non-XISF input.
 export async function readXisf(source: Source & Seekable): Promise<Xisf | undefined> {
 	const signatureData = Buffer.allocUnsafe(16)
 	if ((await readUntil(source, signatureData, 16)) !== 16 || !isXisf(signatureData)) return undefined
@@ -125,9 +189,13 @@ export async function readXisf(source: Source & Seekable): Promise<Xisf | undefi
 	return { images }
 }
 
+// FITS keywords that XISF encodes structurally; they are not re-emitted as FITSKeyword elements.
 const RESERVED_FITS_KEYS = new Set(['SIMPLE', 'BITPIX', 'NAXIS', 'NAXIS1', 'NAXIS2', 'NAXIS3'])
+// Default write format: little-endian, planar, uncompressed.
 const DEFAULT_WRITE_XISF_FORMAT: Required<XisfWriteFormat> = { byteOrder: 'little', pixelStorage: 'Planar', compression: false }
 
+// Per-image working state accumulated while writing: dimensions, declared format, FITSKeyword XML
+// fragments, and the encoded data block.
 interface XisfWriteEntry {
 	readonly bitpix: Bitpix
 	readonly width: number
@@ -139,6 +207,7 @@ interface XisfWriteEntry {
 	readonly encoded: XisfEncodedBlock
 }
 
+// An encoded image data block plus its compression descriptor (absent when stored uncompressed).
 interface XisfEncodedBlock {
 	readonly data: Buffer
 	readonly compression?: XisfCompression
@@ -188,6 +257,7 @@ function xisfBufferView(buffer: Buffer | undefined, size: number, bitpix: Bitpix
 	return Buffer.allocUnsafe(size)
 }
 
+// Maps a FITS BITPIX code to the corresponding XISF sample format (unsigned integers / IEEE floats).
 function sampleFormatFromBitpix(bitpix: Bitpix): XisfSampleFormat {
 	switch (bitpix) {
 		case 8:
@@ -207,24 +277,31 @@ function sampleFormatFromBitpix(bitpix: Bitpix): XisfSampleFormat {
 	}
 }
 
+// Type guard for sample formats the reader can decode.
 function isSupportedSampleFormat(sampleFormat: string): sampleFormat is XisfSampleFormat {
 	return sampleFormat === 'UInt8' || sampleFormat === 'UInt16' || sampleFormat === 'UInt32' || sampleFormat === 'UInt64' || sampleFormat === 'Float32' || sampleFormat === 'Float64'
 }
 
+// Type guard for recognized compression codec names.
 function isSupportedCompressionFormat(format: string): format is XisfCompressionFormat {
 	return format === 'zlib' || format === 'lz4' || format === 'lz4hc' || format === 'zstd'
 }
 
+// Compresses a buffer with the requested codec (zstd or zlib), or undefined for unsupported codecs.
 function compress(input: ArrayBuffer | Buffer | NodeJS.TypedArray, compression: XisfWriteCompression) {
 	if (compression.format === 'zstd') return Bun.zstdCompress(input, compression)
 	else if (compression.format === 'zlib') return deflate(input, compression)
 	return undefined
 }
 
+// Escapes the five XML special characters for safe inclusion in attribute values.
 function escapeXml(text: string) {
 	return text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&apos;')
 }
 
+// Writes images to `sink` as a monolithic XISF file: encodes each image's data block, then builds the
+// XML header (iterating until the data offsets stabilize), and writes signature, header, and blocks.
+// Returns total bytes written.
 export async function writeXisf(sink: Sink, images: readonly Readonly<Pick<Image, 'header' | 'raw'>>[], format: XisfWriteFormat = DEFAULT_WRITE_XISF_FORMAT) {
 	const options = { ...DEFAULT_WRITE_XISF_FORMAT, ...format }
 	const entries: XisfWriteEntry[] = []
@@ -292,8 +369,12 @@ export async function writeXisf(sink: Sink, images: readonly Readonly<Pick<Image
 	return size
 }
 
+// Shared XML parser instance for XISF headers.
 const XML_PARSER = new XMLParser(XML_PARSE_OPTIONS)
 
+// Parses the XISF XML header buffer into the list of supported images, skipping any image whose location
+// is not an attachment, whose color space is not Gray/RGB, whose sample format is unsupported, or whose
+// geometry/location/compression metadata is invalid.
 export function parseXisfHeader(data: Buffer) {
 	const parsedHeader = XML_PARSER.parse(data)?.xisf as XisfParsedHeader | undefined
 	if (!parsedHeader?.Image) return []
@@ -331,6 +412,8 @@ export function parseXisfHeader(data: Buffer) {
 // writer wraps in `'...'`) from being misread as numbers.
 const NUMERIC_VALUE_REGEX = /^[-+]?([0-9]*\.[0-9]+|[0-9]+)([eE][-+]?[0-9]+)?$/
 
+// Builds a FITS-style header from a parsed image: synthesizes the structural keywords from the geometry
+// and merges the FITSKeyword elements, inferring each value's type (logical, quoted string, number, or text).
 function makeFitsHeaderFromParsedImage(image: XisfParsedImage, geometry: XisfGeometry = parseGeometry(image.geometry)!) {
 	const header: FitsHeader = { SIMPLE: true, BITPIX: bitpixFromSampleFormat(image.sampleFormat), NAXIS: geometry.channels >= 3 ? 3 : 2, NAXIS1: geometry.width, NAXIS2: geometry.height }
 
@@ -356,6 +439,7 @@ function makeFitsHeaderFromParsedImage(image: XisfParsedImage, geometry: XisfGeo
 	return header
 }
 
+// Parses an "attachment:offset:size" location string into offset/size, or undefined when malformed.
 function parseLocation(location: XisfParsedImage['location']): XisfLocation | undefined {
 	const start = location.indexOf(':')
 	const end = location.indexOf(':', start + 1)
@@ -369,6 +453,7 @@ function parseLocation(location: XisfParsedImage['location']): XisfLocation | un
 	return { offset, size }
 }
 
+// Parses a "width:height:channels" geometry string into positive integers, or undefined when malformed.
 function parseGeometry(geometry: XisfParsedImage['geometry']): XisfGeometry | undefined {
 	const first = geometry.indexOf(':')
 	const second = geometry.indexOf(':', first + 1)
@@ -383,6 +468,7 @@ function parseGeometry(geometry: XisfParsedImage['geometry']): XisfGeometry | un
 	return { width, height, channels }
 }
 
+// Parses a "format[+sh]:uncompressedSize[:itemSize]" compression string into a descriptor, or undefined when malformed.
 function parseCompression(compression: NonNullable<XisfParsedImage['compression']>): XisfCompression | undefined {
 	const first = compression.indexOf(':')
 	if (first <= 0) return undefined
@@ -402,11 +488,13 @@ function parseCompression(compression: NonNullable<XisfParsedImage['compression'
 	return { format, shuffled, uncompressedSize, itemSize }
 }
 
+// Serializes a compression descriptor back into its XISF attribute string form.
 function formatCompression(compression: XisfCompression) {
 	if (compression.shuffled) return `${compression.format}+sh:${compression.uncompressedSize}:${compression.itemSize}`
 	return `${compression.format}:${compression.uncompressedSize}`
 }
 
+// Maps an XISF sample format to the equivalent FITS BITPIX code.
 export function bitpixFromSampleFormat(sampleFormat: XisfSampleFormat): Bitpix {
 	switch (sampleFormat) {
 		case 'UInt8':
@@ -426,17 +514,21 @@ export function bitpixFromSampleFormat(sampleFormat: XisfSampleFormat): Bitpix {
 	}
 }
 
+// Decompresses a buffer with the given codec (zstd or zlib), or undefined for unsupported codecs.
 function decompress(input: ArrayBuffer | Buffer | NodeJS.TypedArray, format: XisfCompressionFormat) {
 	if (format === 'zstd') return Bun.zstdDecompress(input)
 	else if (format === 'zlib') return inflate(input)
 	return undefined
 }
 
+// Reads an XISF image's pixel data block into a channel-interleaved buffer, handling decompression,
+// byte-unshuffling, byte-order swapping, planar/normal layout, and normalizing integers to floats in [0, 1].
 export class XisfImageReader {
 	readonly #buffer: Buffer
 	readonly #compressed?: Buffer
 	readonly #data: NumberArray
 
+	// Prepares to read `image`; an optional caller `buffer` is reused as scratch storage when alignment allows.
 	constructor(
 		readonly image: Pick<XisfImage, 'bitpix' | 'location' | 'compression' | 'byteOrder' | 'pixelStorage' | 'geometry'>,
 		buffer?: Buffer,
@@ -502,11 +594,14 @@ export class XisfImageReader {
 	}
 }
 
+// Encodes a channel-interleaved image into an XISF data block: lays it out per the pixel-storage model,
+// maps floats to the integer range, swaps byte order, and optionally byte-shuffles and compresses it.
 export class XisfImageWriter {
 	readonly #buffer: Buffer
 	readonly #shuffled?: Buffer
 	readonly #data: NumberArray
 
+	// Prepares to encode an image of the given format; an optional caller `buffer` is reused when aligned.
 	constructor(
 		readonly xisf: Pick<XisfImage, 'byteOrder' | 'bitpix' | 'geometry' | 'pixelStorage' | 'compression'>,
 		readonly compression: XisfWriteFormat['compression'] = xisf.compression,
@@ -587,6 +682,9 @@ export class XisfImageWriter {
 // compression ratios by increasing data locality, i.e. by redistributing the
 // sequence such that similar byte values tend to be placed close together.
 
+// Reversibly reorders the bytes of fixed-size items so the i-th byte of every item is grouped together,
+// improving compression locality. `itemSize` is bytes per sample; trailing bytes that do not fill a full
+// item are copied verbatim. Writes into `output` (must be at least input length).
 export function byteShuffle(input: Int8Array | Uint8Array | Buffer, output: Int8Array | Uint8Array | Buffer, itemSize: number) {
 	const inputSize = input.byteLength
 	if (!Number.isInteger(itemSize) || itemSize <= 0) throw new Error('invalid byte shuffle item size')
@@ -608,6 +706,7 @@ export function byteShuffle(input: Int8Array | Uint8Array | Buffer, output: Int8
 	if (copyLength > 0) output.set(input.subarray(numberOfItems * itemSize, inputSize), s)
 }
 
+// Inverse of byteShuffle: restores the original interleaved byte layout of fixed-size items.
 export function byteUnshuffle(input: Int8Array | Uint8Array | Buffer, output: Int8Array | Uint8Array | Buffer, itemSize: number) {
 	const inputSize = input.byteLength
 	if (!Number.isInteger(itemSize) || itemSize <= 0) throw new Error('invalid byte shuffle item size')
