@@ -2,6 +2,13 @@ import { PIOVERTWO } from '../../core/constants'
 import type { PierSide } from '../../devices/indi/device'
 import { type Angle, normalizeAngle, normalizePI } from '../../math/units/angle'
 
+// Pure, side-effect-free meridian-flip decision engine for German equatorial mounts. Given a policy
+// (hour-angle prepare/flip/latest thresholds and expected pier sides), a runtime telemetry snapshot,
+// and a persisted lifecycle state, it returns the recommended phase/action/reason plus the next state
+// to persist, and applies externally-verified events as a validated state machine. All angles are
+// radians; hour angle is normalized to (-PI, PI] and assumed near the upper meridian. The module holds
+// no device handles — the caller performs the slews, exposures, and guiding and feeds back events.
+
 // Logical Meridian Flip lifecycle phase, including the non-persisted disabled decision phase.
 export type MeridianFlipPhase = 'DISABLED' | 'WAITING' | 'PREPARING' | 'READY' | 'FLIPPING' | 'VERIFYING_PIER_SIDE' | 'RECENTERING' | 'SETTLING' | 'COMPLETED' | 'FAILED'
 

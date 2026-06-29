@@ -11,38 +11,71 @@ import { linearLeastSquares, predictLinearLeastSquares, type RobustRegressionMet
 import type { NumberArray } from '../../math/numerical/math'
 import { type Angle, normalizePI } from '../../math/units/angle'
 
+// Telescope mount pointing-model fitting and correction. Takes commanded vs plate-solved sky samples
+// and fits the systematic pointing error as a local tangent-plane offset (dx east, dy north, radians)
+// using three strategies: a linear empirical feature model, a semi-physical TPOINT-style parameter
+// model (IH/ID/MA/ME/NPAE/CONE/FLEXURE), or a hybrid (physical + empirical residual). Provides sample
+// validation, robust (IRLS) fitting, sky-coverage diagnostics, and forward correction of new targets.
+
+// Fitting strategy: 'empirical' linear features only, 'semiPhysical' TPOINT-style parameters only,
+// 'hybrid' semi-physical model plus an empirical residual correction.
 export type PointingModelStrategy = 'empirical' | 'semiPhysical' | 'hybrid'
 
+// How the angular pointing error is expressed: full gnomonic tangent-plane projection, or a linearized
+// small-angle (`dRA·cosDec`, `dDec`) approximation.
 export type PointingErrorRepresentation = 'vectorTangent' | 'smallAngle'
 
+// Names of the semi-physical (TPOINT-like) parameters: index/collimation, polar-axis misalignment in
+// azimuth/elevation, non-perpendicularity, optical-axis cone error, and tube flexure.
 export type SemiPhysicalParameterName = 'IH' | 'ID' | 'MA' | 'ME' | 'NPAE' | 'CONE' | 'FLEXURE'
 
+// One commanded-vs-solved calibration point used to fit the model.
 export interface PointingSample {
+	// Commanded target right ascension (radians).
 	targetRightAscension: Angle
+	// Commanded target declination (radians).
 	targetDeclination: Angle
+	// Plate-solved actual right ascension (radians).
 	solvedRightAscension: Angle
+	// Plate-solved actual declination (radians).
 	solvedDeclination: Angle
+	// Observation time, required to derive hour angle and altitude context.
 	time?: Time
+	// Observing-site geodetic latitude (radians), required for altitude and semi-physical terms.
 	latitude?: Angle
+	// Observing-site longitude (radians, positive east), required for local sidereal time.
 	longitude?: Angle
+	// Mount pier side at the time of the sample.
 	pierSide?: PierSide
 }
 
+// A coordinate plus optional context to evaluate or correct with a fitted model.
 export interface PointingModelInput extends EquatorialCoordinate {
+	// Time used to derive hour angle and altitude (radians via LST).
 	time?: Time
+	// Site latitude (radians).
 	latitude?: Angle
+	// Site longitude (radians, positive east).
 	longitude?: Angle
+	// Mount pier side.
 	pierSide?: PierSide
 }
 
+// A local tangent-plane offset in radians: dx toward east, dy toward north.
 export interface PointingOffset {
+	// East-positive tangent offset (radians).
 	readonly dx: number
+	// North-positive tangent offset (radians).
 	readonly dy: number
 }
 
+// A computed pointing error with its great-circle separation and the representation actually used.
 export interface PointingError extends PointingOffset {
+	// Great-circle separation between target and solved positions (radians).
 	readonly angularSeparation: Angle
+	// Representation actually applied; falls back to 'smallAngle' when the tangent projection is singular.
 	readonly representationUsed: PointingErrorRepresentation
+	// Both representations of the same error, for comparison/diagnostics (radians).
 	readonly comparison?: {
 		readonly smallAngleDx: number
 		readonly smallAngleDy: number
@@ -51,91 +84,154 @@ export interface PointingError extends PointingOffset {
 	}
 }
 
+// Toggles for which empirical basis terms enter the design matrix.
 export interface PointingFeatureConfiguration {
+	// Include a constant bias term.
 	readonly includeBias?: boolean
+	// Include sin/cos of hour angle.
 	readonly includeHourAngleTerms?: boolean
+	// Include sin/cos of declination.
 	readonly includeDeclinationTerms?: boolean
+	// Include sin/cos of altitude.
 	readonly includeAltitudeTerms?: boolean
+	// Include hour-angle×declination and altitude×declination cross terms.
 	readonly includeCrossTerms?: boolean
+	// Include pier-side terms (and pier-side×angle cross terms when cross terms are enabled).
 	readonly includePierSideTerms?: boolean
+	// Include normalized-angle polynomial terms.
 	readonly includePolynomialTerms?: boolean
 }
 
+// Feature configuration with all flags resolved to concrete booleans.
 export type ResolvedPointingFeatureConfiguration = Required<PointingFeatureConfiguration>
 
+// Thresholds controlling which samples are accepted before fitting.
 export interface PointingValidationOptions {
+	// Reject samples below this altitude (radians).
 	readonly minimumAltitude?: Angle
+	// Reject samples whose target-to-solved separation exceeds this (radians).
 	readonly maximumSampleSeparation?: Angle
+	// Reject same-pier-side samples closer than this to an accepted target (radians).
 	readonly duplicateTolerance?: Angle
+	// Recommended minimum accepted-sample count; below it a warning is emitted.
 	readonly minimumSamples?: number
 }
 
+// Validation options with all thresholds resolved to concrete values.
 export type ResolvedPointingValidationOptions = Required<PointingValidationOptions>
 
+// Robust iteratively-reweighted least-squares configuration.
 export interface PointingRobustFitConfiguration {
+	// Weighting method; 'none' disables robust reweighting.
 	readonly method?: RobustRegressionMethod
+	// Maximum IRLS iterations.
 	readonly maxIterations?: number
+	// Convergence tolerance on the maximum weight change between iterations.
 	readonly tolerance?: number
+	// Tuning constant scaling the robust influence function.
 	readonly tuning?: number
 }
 
+// Robust configuration with all fields resolved to concrete values.
 export type ResolvedPointingRobustFitConfiguration = Required<PointingRobustFitConfiguration>
 
+// Top-level options controlling a model fit.
 export interface PointingFitOptions {
+	// Model strategy (default 'hybrid').
 	strategy?: PointingModelStrategy
+	// Error representation (default 'vectorTangent').
 	errorRepresentation?: PointingErrorRepresentation
+	// Tikhonov ridge regularization applied to the normal equations.
 	ridge?: number
+	// Empirical feature toggles.
 	featureConfiguration?: PointingFeatureConfiguration
+	// Sample validation thresholds.
 	validation?: PointingValidationOptions
+	// Robust fitting configuration.
 	robust?: PointingRobustFitConfiguration
 }
 
+// Documents the fixed sign and correction conventions of the produced model.
 export interface PointingSignConvention {
+	// Positive dx points east.
 	readonly dxPositive: 'east'
+	// Positive dy points north.
 	readonly dyPositive: 'north'
+	// Correction subtracts the predicted local error from the requested coordinate.
 	readonly correctionDirection: 'subtract-predicted-local-error'
 }
 
+// Summary of the sky/site region spanned by the training samples.
 export interface PointingCoverageSummary {
+	// [min, max] hour angle of the samples (radians).
 	readonly hourAngleRange?: readonly [Angle, Angle]
+	// [min, max] declination of the samples (radians).
 	readonly declinationRange?: readonly [Angle, Angle]
+	// [min, max] altitude of the samples (radians).
 	readonly altitudeRange?: readonly [Angle, Angle]
+	// [min, max] site latitude across samples (radians).
 	readonly latitudeRange?: readonly [Angle, Angle]
+	// [min, max] site longitude across samples (radians).
 	readonly longitudeRange?: readonly [Angle, Angle]
+	// Number of occupied HA×Dec coverage bins.
 	readonly occupiedSkyBins: number
+	// Total available coverage bins.
 	readonly totalSkyBins: number
+	// Occupied/total bin ratio in [0, 1].
 	readonly skyCoverageRatio: number
 }
 
+// Post-fit residual statistics and quality flags.
 export interface PointingDiagnostics {
+	// Total submitted samples.
 	readonly totalSamples: number
+	// Samples that passed validation.
 	readonly validSamples: number
+	// Samples rejected during validation.
 	readonly rejectedSamples: number
+	// RMS of east residuals (radians).
 	readonly rmsDx: number
+	// RMS of north residuals (radians).
 	readonly rmsDy: number
+	// RMS of radial residuals (radians).
 	readonly angularRms: Angle
+	// Median radial residual (radians).
 	readonly medianResidual: Angle
+	// Radial residual percentiles (radians).
 	readonly residualPercentiles: {
 		readonly p50: Angle
 		readonly p90: Angle
 		readonly p95: Angle
 	}
+	// Dominant design-matrix condition number for the selected strategy.
 	readonly conditionNumber: number
+	// Sky/site coverage summary.
 	readonly skyCoverage: PointingCoverageSummary
+	// Accepted-sample count per pier side.
 	readonly perPierSideSampleCounts: Readonly<Record<PierSide, number>>
+	// Human-readable warnings about fit quality.
 	readonly warnings: readonly string[]
+	// Count of rejected samples by reason.
 	readonly rejectedReasonCounts: Readonly<Record<string, number>>
 }
 
+// Indicates how trustworthy a single prediction is relative to the training coverage.
 export interface PointingPredictionQuality {
+	// True when the requested point lies inside the sampled HA/Dec/altitude ranges.
 	readonly insideCoverage: boolean
+	// True when the requested pier side was represented during training.
 	readonly pierSideCovered: boolean
+	// Number of training samples backing the model.
 	readonly support: number
+	// Per-prediction warnings.
 	readonly warnings: readonly string[]
 }
 
+// A predicted error broken down into its model components plus a quality assessment.
 export interface PredictedPointingError extends PointingError {
+	// Trust assessment for this prediction.
 	readonly quality: PointingPredictionQuality
+	// Individual contributions from each model component (radians).
 	readonly components: {
 		readonly physical?: PointingOffset
 		readonly empirical?: PointingOffset
@@ -143,105 +239,171 @@ export interface PredictedPointingError extends PointingError {
 	}
 }
 
+// A corrected coordinate together with the error that was applied.
 export interface CorrectionResult extends Readonly<EquatorialCoordinate> {
+	// The predicted local error subtracted to produce this coordinate.
 	readonly predictedError: PredictedPointingError
 }
 
+// A computed empirical feature row plus the context it was derived from.
 export interface PointingFeatureVector {
+	// Ordered feature names matching `values`.
 	readonly names: readonly string[]
+	// Feature values aligned with `names`.
 	readonly values: Readonly<Float64Array>
+	// Geometric context used to build the features.
 	readonly context: PointingContext
 }
 
+// An orthonormal local tangent-plane basis at a sky position.
 export interface PointingTangentBasis {
+	// Unit position vector at the tangent point.
 	readonly origin: Vec3
+	// East-pointing unit basis vector.
 	readonly east: Vec3
+	// North-pointing unit basis vector.
 	readonly north: Vec3
 }
 
+// A tangent-plane projection result that also exposes the gnomonic denominator (for singularity checks).
 export interface TangentPlaneProjection extends PointingOffset {
+	// Gnomonic projection denominator; near zero indicates a degenerate projection.
 	readonly denominator: number
 }
 
+// Geometric state derived from a coordinate and observing context, shared by all model components.
 export interface PointingContext extends Readonly<EquatorialCoordinate> {
+	// Observation time, when available.
 	readonly time?: Time
+	// Normalized pier side ('EAST' | 'WEST' | 'NEITHER').
 	readonly pierSide: PierSide
+	// Numeric pier-side encoding: +1 east, -1 west, 0 neither.
 	readonly pierSideValue: number
+	// Local apparent sidereal time (radians), when derivable.
 	readonly lst?: Angle
+	// Hour angle (radians, normalized to -PI..PI), when derivable.
 	readonly hourAngle?: Angle
+	// Altitude above the horizon (radians), when derivable.
 	readonly altitude?: Angle
+	// Azimuth (radians), when derivable.
 	readonly azimuth?: Angle
+	// Site latitude (radians).
 	readonly latitude?: Angle
+	// Site longitude (radians, positive east).
 	readonly longitude?: Angle
 }
 
+// Fitted empirical model: separate dx/dy linear coefficients over the feature basis.
 export interface EmpiricalPointingModel {
+	// Feature names matching the coefficient order.
 	readonly featureNames: readonly string[]
+	// Linear coefficients predicting the east offset.
 	readonly coefficientsDx: Readonly<NumberArray>
+	// Linear coefficients predicting the north offset.
 	readonly coefficientsDy: Readonly<NumberArray>
+	// Condition number of the dx normal equations.
 	readonly conditionNumberDx: number
+	// Condition number of the dy normal equations.
 	readonly conditionNumberDy: number
+	// True when the dx fit was rank-deficient.
 	readonly rankDeficientDx: boolean
+	// True when the dy fit was rank-deficient.
 	readonly rankDeficientDy: boolean
+	// Ridge regularization used.
 	readonly ridge: number
+	// Robust method used.
 	readonly robustMethod: RobustRegressionMethod
 }
 
+// Fitted semi-physical model: shared TPOINT-style parameters driving both dx and dy.
 export interface SemiPhysicalPointingModel {
+	// Parameter names (IH/ID/MA/ME/NPAE/CONE/FLEXURE).
 	readonly parameterNames: readonly string[]
+	// Fitted parameter values aligned with `parameterNames`.
 	readonly parameters: Readonly<NumberArray>
+	// Condition number of the stacked dx/dy normal equations.
 	readonly conditionNumber: number
+	// True when the fit was rank-deficient.
 	readonly rankDeficient: boolean
+	// Ridge regularization used.
 	readonly ridge: number
+	// Robust method used.
 	readonly robustMethod: RobustRegressionMethod
 }
 
+// Complete fitted model: strategy, configuration snapshot, coverage, diagnostics, and component models.
 export interface FittedPointingModel {
+	// Serialization version of this model structure.
 	readonly version: number
+	// Strategy used to fit the model.
 	readonly strategy: PointingModelStrategy
+	// Error representation used during fitting.
 	readonly errorRepresentation: PointingErrorRepresentation
+	// Sign/correction conventions of the model.
 	readonly signConvention: PointingSignConvention
+	// Resolved feature configuration used.
 	readonly featureConfiguration: ResolvedPointingFeatureConfiguration
+	// Resolved validation thresholds used.
 	readonly validation: ResolvedPointingValidationOptions
+	// Resolved robust configuration used.
 	readonly robust: ResolvedPointingRobustFitConfiguration
+	// Ridge regularization used.
 	readonly ridge: number
+	// Number of accepted training samples.
 	readonly trainingSampleCount: number
+	// Sky/site coverage of the training set.
 	readonly coverage: PointingCoverageSummary
+	// Residual diagnostics.
 	readonly diagnostics: PointingDiagnostics
+	// Empirical component, present for 'empirical' strategy.
 	readonly empirical?: EmpiricalPointingModel
+	// Semi-physical component, present for 'semiPhysical' and 'hybrid'.
 	readonly physical?: SemiPhysicalPointingModel
+	// Empirical residual component, present for 'hybrid'.
 	readonly residual?: EmpiricalPointingModel
 }
 
+// Snapshot of a MountPointing instance's collection and fit state.
 export interface MountPointingState {
+	// Number of stored samples.
 	readonly sampleCount: number
+	// Latest fitted model, if any.
 	readonly fittedModel?: FittedPointingModel
+	// Latest diagnostics.
 	readonly diagnostics: PointingDiagnostics
+	// True when samples changed since the last fit.
 	readonly dirty: boolean
 }
 
+// Options for adding a sample and optionally refitting in one call.
 export interface PointingModelUpdateOptions {
+	// Refit immediately after adding the sample.
 	fit?: boolean
+	// Options forwarded to the fit.
 	fitOptions?: PointingFitOptions
 }
 
+// An accepted sample paired with its derived context and computed error.
 interface PreparedPointingSample {
 	readonly sample: Readonly<PointingSample>
 	readonly context: PointingContext
 	readonly error: PointingError
 }
 
+// A rejected sample together with the rejection reason.
 interface RejectedPointingSample {
 	readonly sample: Readonly<PointingSample>
 	readonly reason: string
 }
 
+// Result of validating and preparing the full sample set for fitting.
 interface PreparedPointingSamples {
 	readonly accepted: readonly PreparedPointingSample[]
 	readonly rejected: readonly RejectedPointingSample[]
 	readonly warnings: readonly string[]
 }
 
+// Fully resolved fit options with all defaults applied.
 interface ResolvedPointingFitOptions {
 	readonly strategy: PointingModelStrategy
 	readonly errorRepresentation: PointingErrorRepresentation
@@ -251,8 +413,11 @@ interface ResolvedPointingFitOptions {
 	readonly robust: ResolvedPointingRobustFitConfiguration
 }
 
+// Current model-structure serialization version.
 const POINTING_MODEL_VERSION = 1
+// Default Tikhonov ridge applied to the normal equations for numerical stability.
 const DEFAULT_RIDGE = 1e-6
+// Default empirical feature set: all geometric terms on, polynomial terms off.
 const DEFAULT_FEATURE_CONFIGURATION: ResolvedPointingFeatureConfiguration = {
 	includeBias: true,
 	includeHourAngleTerms: true,
@@ -262,26 +427,32 @@ const DEFAULT_FEATURE_CONFIGURATION: ResolvedPointingFeatureConfiguration = {
 	includePierSideTerms: true,
 	includePolynomialTerms: false,
 }
+// Default sample-validation thresholds: 10° minimum altitude, 5° max separation, 5′ duplicate radius,
+// and a recommended minimum of 12 samples.
 const DEFAULT_VALIDATION_OPTIONS: ResolvedPointingValidationOptions = {
 	minimumAltitude: 10 * DEG2RAD,
 	maximumSampleSeparation: 5 * DEG2RAD,
 	duplicateTolerance: 5 * AMIN2RAD,
 	minimumSamples: 12,
 }
+// Default robust-fit settings: Huber weighting with the standard 1.345 tuning constant.
 const DEFAULT_ROBUST_CONFIGURATION: ResolvedPointingRobustFitConfiguration = {
 	method: 'huber',
 	maxIterations: 25,
 	tolerance: 1e-9,
 	tuning: 1.345,
 }
+// Fixed sign and correction conventions stamped onto every fitted model.
 const DEFAULT_SIGN_CONVENTION: PointingSignConvention = {
 	dxPositive: 'east',
 	dyPositive: 'north',
 	correctionDirection: 'subtract-predicted-local-error',
 }
 
+// Ordered semi-physical parameter names; the basis builder relies on these fixed indices.
 export const SEMI_PHYSICAL_PARAMETER_NAMES = ['IH', 'ID', 'MA', 'ME', 'NPAE', 'CONE', 'FLEXURE'] as const
 
+// Number of HA×Dec coverage bins (6 hour-angle × 4 declination) used for the sky-coverage ratio.
 const TOTAL_SKY_BINS = 24
 
 // Extracts the geometric context needed by the empirical and semi-physical models.

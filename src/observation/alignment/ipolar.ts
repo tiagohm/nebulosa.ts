@@ -13,102 +13,180 @@ import { type Vec3, vecAngle, vecDot, vecMinus, vecMulScalar, vecNormalizeMut } 
 import { euclideanDistance, type Point } from '../../math/numerical/geometry'
 import { type Angle, normalizePI } from '../../math/units/angle'
 
+// iPolar-style camera-based polar alignment driven by plate solutions. The user captures two frames
+// separated by an RA-only rotation; the mount's rotation axis is recovered as the image-space fixed
+// point of the WCS transform between the frames (refined with optional star matching), converted to an
+// inertial J2000 direction, and compared to the true celestial pole. The engine is a finite-state
+// machine that, on each new frame, reports the residual polar error split into altitude/azimuth
+// components plus on-screen guidance arrows. All angles are radians; pixel points use the image
+// convention of the supplied plate solution.
+
+// Lifecycle stage of the alignment session.
 export type IPolarPolarAlignmentStage = 'WAITING_FOR_POSITION_1' | 'WAITING_FOR_POSITION_2' | 'INITIAL_AXIS_ESTIMATION' | 'REFINEMENT' | 'COMPLETE' | 'FAILED'
 
+// Machine-friendly next action recommended to the operator or automation.
 export type IPolarPolarAlignmentAction = 'WAIT_FOR_POSITION_1' | 'ROTATE_RA_TO_POSITION_2' | 'ADJUST_ALTITUDE_POSITIVE' | 'ADJUST_ALTITUDE_NEGATIVE' | 'ADJUST_AZIMUTH_POSITIVE' | 'ADJUST_AZIMUTH_NEGATIVE' | 'ALIGNMENT_COMPLETE' | 'INVALID_FRAME'
 
+// Which method produced the axis fixed-point estimate, recorded for diagnostics.
 export type IPolarPolarAlignmentSolverMethod = 'gauss-newton' | 'coordinate-search' | 'similarity-only'
 
+// Observing site and refraction model used to locate the true celestial pole.
 export interface IPolarPolarAlignmentObserverContext {
+	// Geodetic observing-site position.
 	readonly location: GeographicPosition
+	// Refraction parameters, or false to disable refraction in pole placement.
 	readonly refraction?: RefractionParameters | false
 }
 
+// Tunable thresholds controlling acquisition, convergence, and validation.
 export interface IPolarPolarAlignmentConfig {
+	// Minimum RA rotation between the two calibration frames to trust the axis estimate (radians).
 	readonly minimumAcceptedRaRotation?: Angle
+	// Preferred RA-rotation window; values outside it produce a warning (radians).
 	readonly preferredRaRotationRange?: readonly [Angle, Angle]
+	// Minimum detected stars required for star-matching validation.
 	readonly minimumStars?: number
+	// Total-error threshold below which alignment is considered complete (radians).
 	readonly completionThreshold?: Angle
+	// Acceptable fixed-point solver residual, in pixels.
 	readonly fixedPointTolerance?: number
+	// Maximum residual accepted by star matching, in pixels.
 	readonly maxStarMatchResidual?: number
+	// Refraction parameters, or false to disable refraction.
 	readonly refraction?: RefractionParameters | false
+	// Whether per-frame pole placement compensates for Earth rotation over time.
 	readonly compensateEarthRotation?: boolean
+	// Whether to cross-check the axis estimate with star matching when stars are available.
 	readonly useStarMatchingValidation?: boolean
+	// Extra configuration forwarded to the star-matching routine.
 	readonly starMatchingConfig?: StarMatchingConfig
 }
 
+// One solved frame fed to the engine.
 export interface IPolarPolarAlignmentFrameInput {
+	// Capture time of the frame.
 	readonly time: Time
+	// Plate solution providing WCS and frame geometry.
 	readonly solution: PlateSolution
+	// Optional detected stars enabling star-matching validation.
 	readonly stars?: readonly DetectedStar[]
 }
 
+// A guidance marker in image space plus its on-screen-clamped position and direction arrow.
 export interface IPolarPolarAlignmentGuidePoint extends Readonly<Point> {
+	// Whether the unclamped point lies within the (margin-inset) frame.
 	readonly onScreen: boolean
+	// Point clamped to the frame border for drawing when off-screen.
 	readonly clamped: Readonly<Point>
+	// Unit direction from frame center toward the point (zero when on-screen).
 	readonly arrow: Readonly<Point>
+	// Original, unclamped point.
 	readonly unclamped: Readonly<Point>
 }
 
+// The residual polar error split into its angular components (radians).
 export interface IPolarPolarAlignmentErrorMetrics {
+	// Total angular separation between the mount axis and the true pole (radians).
 	readonly totalError: Angle
+	// Altitude-direction component of the error (radians).
 	readonly altitudeError: Angle
+	// Azimuth-direction component of the error (radians).
 	readonly azimuthError: Angle
 }
 
+// Diagnostic detail about the most recent calibration/measurement.
 export interface IPolarPolarAlignmentDiagnostics {
+	// Solver method that produced the axis fixed point.
 	readonly solver?: IPolarPolarAlignmentSolverMethod
+	// Iterations the solver took.
 	readonly solverIterations?: number
+	// Final solver residual, in pixels.
 	readonly residual?: number
+	// RA rotation accepted between calibration frames (radians).
 	readonly acceptedRaRotation?: Angle
+	// Configured preferred RA-rotation window (radians).
 	readonly preferredRaRotationRange: readonly [Angle, Angle]
+	// Star-matching result when validation ran.
 	readonly starMatch?: StarMatchingResult
+	// Whether refraction was applied.
 	readonly refractionEnabled: boolean
+	// Whether Earth-rotation compensation is enabled.
 	readonly earthRotationCompensated: boolean
+	// Accumulated non-fatal warnings.
 	readonly warnings: readonly string[]
 }
 
+// Full per-frame result returned by the engine, including error metrics and drawing guidance.
 export interface IPolarPolarAlignmentResult extends IPolarPolarAlignmentErrorMetrics {
+	// Lifecycle stage after processing the frame.
 	readonly stage: IPolarPolarAlignmentStage
+	// Marker for the mount rotation axis in this frame.
 	readonly currentPoint: IPolarPolarAlignmentGuidePoint
+	// Marker for the true celestial pole in this frame.
 	readonly targetPoint: IPolarPolarAlignmentGuidePoint
+	// Whether the axis marker is on-screen.
 	readonly onScreenCurrent: boolean
+	// Whether the pole marker is on-screen.
 	readonly onScreenTarget: boolean
+	// Recommended next action.
 	readonly action: IPolarPolarAlignmentAction
+	// Whether the error is below the completion threshold.
 	readonly convergence: boolean
+	// Diagnostics for this frame.
 	readonly diagnostics: IPolarPolarAlignmentDiagnostics
 }
 
+// Immutable snapshot of the engine's internal state.
 export interface IPolarPolarAlignmentState {
+	// Current lifecycle stage.
 	readonly stage: IPolarPolarAlignmentStage
+	// Fully resolved configuration in effect.
 	readonly config: Readonly<Required<IPolarPolarAlignmentConfig>>
+	// Observer context.
 	readonly observer: IPolarPolarAlignmentObserverContext
+	// First (reference) calibration frame.
 	readonly referenceFrame?: IPolarPolarAlignmentFrameInput
+	// Second calibration frame.
 	readonly secondFrame?: IPolarPolarAlignmentFrameInput
+	// Calibrated mount-axis pixel location.
 	readonly axisPixel?: Readonly<Point>
+	// Mount-axis direction as an inertial unit vector.
 	readonly axisVector?: Vec3
+	// True celestial pole as an inertial unit vector.
 	readonly targetVector?: Vec3
+	// Most recent result.
 	readonly latestResult?: IPolarPolarAlignmentResult
+	// Most recent diagnostics.
 	readonly latestDiagnostics?: IPolarPolarAlignmentDiagnostics
 }
 
+// A fixed-point solver candidate: the trial point, its mapped image, and the residual distance.
 interface FixedPointCandidate extends Readonly<Point> {
+	// Distance in pixels between the point and its mapped image.
 	readonly residual: number
+	// Image of the point under the inter-frame WCS transform.
 	readonly mapped: Readonly<Point>
 }
 
+// A converged fixed-point solution with solver provenance.
 interface FixedPointSolution {
 	readonly x: number
 	readonly y: number
+	// Final residual, in pixels.
 	readonly residual: number
+	// Iteration count.
 	readonly iterations: number
+	// Solver that produced this solution.
 	readonly solver: IPolarPolarAlignmentSolverMethod
 }
 
+// Closed-form similarity-transform fixed point with the linear-system determinant for stability checks.
 interface SimilarityFixedPoint extends Readonly<Point> {
+	// Determinant of the solved 2×2 system; near zero indicates degenerate geometry.
 	readonly determinant: number
 }
 
+// Internal mutable mirror of IPolarPolarAlignmentState used by the engine.
 interface PolarAlignmentMutableState {
 	stage: IPolarPolarAlignmentStage
 	config: Required<IPolarPolarAlignmentConfig>
@@ -122,6 +200,7 @@ interface PolarAlignmentMutableState {
 	latestDiagnostics?: IPolarPolarAlignmentDiagnostics
 }
 
+// Default tuning: ~10′ minimum / 30′–2° preferred RA rotation, 6-star minimum, 30″ completion.
 const DEFAULT_POLAR_ALIGNMENT_CONFIG: Readonly<Required<IPolarPolarAlignmentConfig>> = {
 	minimumAcceptedRaRotation: 600 * ASEC2RAD,
 	preferredRaRotationRange: [1800 * ASEC2RAD, 7200 * ASEC2RAD],

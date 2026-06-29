@@ -18,14 +18,23 @@ import { type Angle, normalizePI } from '../../math/units/angle'
 
 // Thanks to Codex!
 
+// Result of a three-point polar alignment, with the mount pole in horizontal coordinates and the
+// signed azimuth/altitude errors and applied adjustments. All angles are radians.
 export interface ThreePointPolarAlignmentResult extends Readonly<HorizontalCoordinate> {
+	// Mount-pole azimuth error relative to the true pole (radians); positive sense per hemisphere.
 	readonly azimuthError: Angle
+	// Mount-pole altitude error relative to the refracted celestial-pole altitude (radians).
 	readonly altitudeError: Angle
-	readonly pole: Vec3 // Normal vector of the plane defined by the three points
+	// Unit normal of the plane through the three ICRF reference points, i.e. the mount pole direction.
+	readonly pole: Vec3
+	// Azimuth knob delta inferred from the last correction step (radians); 0 on initial estimate.
 	readonly azimuthAdjustment: Angle
+	// Altitude knob delta inferred from the last correction step (radians); 0 on initial estimate.
 	readonly altitudeAdjustment: Angle
 }
 
+// Altitude (radians) of the true celestial pole as the alignment target: the absolute latitude,
+// optionally raised by atmospheric refraction so it matches the observed pole position.
 function referencePoleAltitude(location: GeographicPosition, refraction: RefractionParameters | false) {
 	return refraction === false ? Math.abs(location.latitude) : refractedAltitude(Math.abs(location.latitude), refraction)
 }
@@ -47,6 +56,10 @@ export function polarAlignmentError(rightAscension: Angle, declination: Angle, l
 	return [rightAscension - dRA, declination + dDEC]
 }
 
+// Computes the initial polar-alignment error from three plate-solved ICRF points (each [RA, Dec] in
+// radians) captured while slewing only in RA. The three points define a small circle whose plane
+// normal is the mount's rotation axis; comparing that axis to the true pole yields the azimuth and
+// altitude errors. The geometry is done in ICRF and converted to observed coordinates only at the end.
 export function threePointPolarAlignmentError(p1: readonly [Angle, Angle], p2: readonly [Angle, Angle], p3: readonly [Angle, Angle], time: Time, refraction: RefractionParameters | false = DEFAULT_REFRACTION_PARAMETERS, location: GeographicPosition = time.location!): ThreePointPolarAlignmentResult {
 	const isNorthern = location.latitude > 0
 
@@ -151,15 +164,24 @@ export function solveAzAltAdjustment(from: Vec3, to: Vec3, upAxis: Vec3, eastAxi
 	return { azimuthAdjustment, altitudeAdjustment } as const
 }
 
+// Stateful driver for an interactive three-point polar alignment session: collect the first three
+// plate solves to seed the error, then feed each subsequent solve to refine it after the user adjusts
+// the mount knobs.
 export class ThreePointPolarAlignment {
+	// The three seed reference points ([RA, Dec] in radians).
 	readonly #points = new Array<readonly [Angle, Angle]>(3)
 
+	// Count of points added so far; the first three seed the estimate, later ones refine it.
 	#position = 0
+	// Last solved point used as the "from" reference for the next adjustment step, or false before seeding.
 	#referencePoint: readonly [Angle, Angle] | false = false
+	// Most recent alignment result, or false until three points are collected.
 	#currentError: ThreePointPolarAlignmentResult | false = false
 
 	constructor(readonly refraction: RefractionParameters | false = DEFAULT_REFRACTION_PARAMETERS) {}
 
+	// Adds a plate-solved point ([RA, Dec] radians) at the given time and returns the current alignment
+	// result, or false while fewer than three points have been collected.
 	add(rightAscension: Angle, declination: Angle, time: Time) {
 		const point = [rightAscension, declination] as const
 
@@ -182,6 +204,7 @@ export class ThreePointPolarAlignment {
 		return this.#currentError
 	}
 
+	// Clears all collected points and results to start a fresh alignment session.
 	reset() {
 		this.#position = 0
 		this.#referencePoint = false
@@ -194,11 +217,15 @@ export class ThreePointPolarAlignment {
 // and 1 arcmin = 2.9089e-4 rad, so 15.041 · 2.9089e-4 ≈ 0.004375. Used only as a visibility
 // threshold for DARV exposure estimation, not as a precise drift model.
 export const DRIFT_ARCSEC_PER_SECOND_PER_ARCMIN = 0.004375
+// Minimum |cos(declination)| for a usable DARV target; below it RA motion is too small near the pole.
 export const MIN_RA_COS_DECLINATION = 1e-3
+// Minimum DEC drift rate (arcsec/s) below which a visible DARV separation cannot be estimated.
 export const MIN_DRIFT_RATE_ARCSEC_PER_SECOND = 1e-9
 
+// Which mount axis is being refined during a DARV run; selects the DEC-drift geometry factor.
 export type DarvExposureMode = 'azimuth' | 'altitude'
 
+// Built-in DARV preset selector trading visibility speed against the smallest resolvable polar error.
 export type DarvExposurePresetMode = 'coarse' | 'medium' | 'fine'
 
 // DARV exposure preset values used to estimate the visibility threshold.
@@ -237,6 +264,7 @@ export const FINE_DARV_EXPOSURE_PRESET: Readonly<DarvExposurePreset> = {
 	guideRateSidereal: 0.5,
 }
 
+// Lookup of the built-in DARV presets by mode name.
 export const DARV_EXPOSURE_PRESETS = {
 	coarse: COARSE_DARV_EXPOSURE_PRESET,
 	medium: MEDIUM_DARV_EXPOSURE_PRESET,
@@ -279,6 +307,7 @@ export interface DarvExposureEstimate {
 	readonly recommendedExposure: number
 }
 
+// Validates that all preset fields are positive and finite; returns the preset unchanged.
 function validateDarvExposurePreset(preset: DarvExposureInput['preset']): DarvExposurePreset {
 	validatePositiveFinite(preset.targetTrail)
 	validatePositiveFinite(preset.detectableSeparation)
@@ -287,12 +316,16 @@ function validateDarvExposurePreset(preset: DarvExposureInput['preset']): DarvEx
 	return preset
 }
 
+// DEC-drift geometry factor for the alignment mode: azimuth errors scale by cos(latitude), altitude
+// errors by 1.
 function computeDarvGeometryFactor(mode: DarvExposureMode, latitude: Angle) {
 	if (mode === 'azimuth') return Math.abs(Math.cos(latitude))
 	if (mode === 'altitude') return 1
 	throw new TypeError('DARV exposure mode must be azimuth or altitude')
 }
 
+// Usable RA trail speed magnitude (arcsec/s) = sidereal rate × guide multiple × |cos(declination)|.
+// Throws when the target is too close to the pole for meaningful RA motion.
 function computeDarvRaVelocity(declination: Angle, guideRateSidereal: number) {
 	const cosDeclination = Math.abs(Math.cos(declination))
 
@@ -302,6 +335,8 @@ function computeDarvRaVelocity(declination: Angle, guideRateSidereal: number) {
 	return SIDEREAL_RATE * guideRateSidereal * cosDeclination
 }
 
+// Expected DEC drift rate (arcsec/s) from the target polar error and mode geometry. Throws when the
+// drift would be too small to produce a visible separation.
 function computeDarvDriftDec(targetPolarErrorArcmin: number, geometryFactor: number) {
 	const driftDec = DRIFT_ARCSEC_PER_SECOND_PER_ARCMIN * targetPolarErrorArcmin * geometryFactor
 	if (driftDec <= MIN_DRIFT_RATE_ARCSEC_PER_SECOND) throw new RangeError('DARV DEC drift is too small to estimate a visible separation for this alignment geometry')
