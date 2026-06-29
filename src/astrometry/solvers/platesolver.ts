@@ -4,29 +4,53 @@ import { heightKeyword, numericKeyword, widthKeyword } from '../../io/formats/fi
 import { type Angle, deg } from '../../math/units/angle'
 import { cdMatrix } from '../wcs/fits.wcs'
 
+// Shared plate-solving contract: the common PlateSolver function signature, the request/result shapes
+// used by every solver backend (ASTAP, astrometry.net), and plateSolutionFrom, which distills a solved
+// FITS WCS header into a compact PlateSolution (center, scale, field size, orientation, parity). Angles
+// are radians.
+
+// Image handedness relative to the sky: NORMAL keeps east-left, FLIPPED is mirror-imaged.
 export type Parity = 'NORMAL' | 'FLIPPED'
 
+// Common solver signature: takes an input image path, optional hints, and an abort signal, and returns
+// a solution or undefined when solving fails.
 export type PlateSolver = (input: string, options?: PlateSolveOptions, signal?: AbortSignal) => PlateSolution | undefined
 
+// Optional hints passed to a solver to constrain and speed up the search.
 export interface PlateSolveOptions {
+	// Search-center right ascension hint (radians).
 	rightAscension?: Angle
+	// Search-center declination hint (radians).
 	declination?: Angle
+	// Search radius around the center hint (radians).
 	radius?: Angle
+	// Image downsampling factor applied before solving.
 	downsample?: number
+	// Maximum solve time, in milliseconds.
 	timeout?: number
 }
 
+// A solved field. Extends the source FITS header with derived geometry; angles are radians.
 export interface PlateSolution extends Readonly<FitsHeader>, Readonly<EquatorialCoordinate> {
+	// Field rotation from the WCS CD matrix (radians).
 	readonly orientation: Angle
+	// Geometric-mean plate scale, in radians per pixel.
 	readonly scale: Angle
+	// Field width (radians).
 	readonly width: Angle
+	// Field height (radians).
 	readonly height: Angle
+	// Image parity.
 	readonly parity: Parity
+	// Half-diagonal field radius (radians).
 	readonly radius: Angle
+	// Image width, in pixels.
 	readonly widthInPixels: number
+	// Image height, in pixels.
 	readonly heightInPixels: number
 }
 
+// Zeroed plate solution used as a neutral default before solving.
 export const EMPTY_PLATE_SOLUTION: Readonly<PlateSolution> = {
 	orientation: 0,
 	scale: 0,

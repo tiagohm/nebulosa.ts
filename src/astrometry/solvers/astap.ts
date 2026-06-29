@@ -7,22 +7,39 @@ import { type Angle, normalizeAngle, toDeg, toHour } from '../../math/units/angl
 import { isWcsFitsKeyword } from '../wcs/fits.wcs'
 import { type PlateSolveOptions, plateSolutionFrom } from './platesolver'
 
+// ASTAP command-line solver integration: spawns the local `astap` binary to detect stars (via its
+// CSV output) and to plate-solve images (writing a WCS .ini that is parsed into a PlateSolution). All
+// process I/O uses Bun; angles in options are radians and converted to ASTAP's degree/hour conventions.
+
+// Options for ASTAP-based star detection.
 export interface AstapStarDetectionOptions {
+	// Path to the ASTAP executable; resolved per-platform when omitted.
 	executable?: string
+	// Minimum star SNR passed to ASTAP's `-extract`.
 	minSNR?: number
+	// Keep only the brightest `maxStars` detections (0 = unlimited).
 	maxStars?: number
+	// Directory for ASTAP's CSV output; defaults to the input file's directory.
 	outputDirectory?: string
+	// Process timeout, in milliseconds.
 	timeout?: number
 }
 
+// Options for ASTAP-based plate solving.
 export interface AstapPlateSolveOptions extends PlateSolveOptions {
+	// Path to the ASTAP executable; resolved per-platform when omitted.
 	executable?: string
+	// Field-of-view hint (radians); 0 lets ASTAP auto-detect.
 	fov?: Angle
+	// Whether to enable SIP distortion terms (`-sip`).
 	sip?: boolean
 }
 
-const DEFAULT_TIMEOUT = 300000 // 5 minutes
+// Default process timeout: 5 minutes, in milliseconds.
+const DEFAULT_TIMEOUT = 300000
 
+// Detects stars by running ASTAP's `-extract` and parsing its CSV (x, y, hfd, snr, flux). Returns the
+// detections sorted/truncated to `maxStars` by SNR, or an empty array on failure or missing input.
 export async function astapDetectStars(input: string, { minSNR = 0, maxStars = 0, outputDirectory, executable, timeout }: Readonly<AstapStarDetectionOptions> = {}, signal?: AbortSignal): Promise<DetectedStar[]> {
 	if (!input || !(await Bun.file(input).exists())) {
 		console.error('invalid input or input file does not exists')
@@ -77,6 +94,9 @@ export async function astapDetectStars(input: string, { minSNR = 0, maxStars = 0
 	return []
 }
 
+// Plate-solves an image with ASTAP, optionally constrained by an RA/Dec/radius hint and FOV, then
+// parses the emitted WCS .ini into a PlateSolution. Returns undefined when ASTAP fails to solve.
+// RA hint is converted to hours and declination to south-polar-distance per ASTAP's CLI.
 export async function astapPlateSolve(input: string, { fov = 0, downsample = 0, timeout = 300000, rightAscension = 0, declination = 0, radius = 0, executable, sip = true }: AstapPlateSolveOptions = {}, signal?: AbortSignal) {
 	fov = Math.max(0, Math.min(toDeg(fov), 360)) // Specify 0 for auto
 	const ini = Bun.file(join(tmpdir(), `${Bun.randomUUIDv7()}.ini`))
@@ -128,6 +148,7 @@ export async function astapPlateSolve(input: string, { fov = 0, downsample = 0, 
 	return undefined
 }
 
+// Returns the default ASTAP executable path/name for the current platform.
 function executableForCurrentPlatform() {
 	switch (process.platform) {
 		case 'win32':

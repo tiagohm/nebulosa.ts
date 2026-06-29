@@ -9,11 +9,23 @@ import { clamp } from '../../math/numerical/math'
 import { type Angle, normalizeAngle } from '../../math/units/angle'
 import { type AffineTransform, applyTransformToPoint, matchStars, type SimilarityTransform, type StarMatchingConfig, type StarMatchingResult } from './star.matching'
 
+// Image-to-catalog crossmatching: given detected image stars, a star catalog, and an approximate
+// pointing, it queries a catalog cone, projects those catalog stars into an image-like tangent plane,
+// runs the geometric triangle/RANSAC matcher against the detections, and iteratively refines the
+// projection center to recover an approximate plate solution (image-center RA/Dec, scale, rotation,
+// parity, field radius) plus per-detection catalog associations. Angles are radians; pixel positions
+// follow the image convention with y increasing downward.
+
+// Iterative refinement stops once the recovered center moves within 1 arcsec of the projection center.
 const DEFAULT_CENTER_TOLERANCE = 1 * ASEC2RAD
+// Cap on the number of catalog stars kept (brightest first) for the geometric match.
 const DEFAULT_MAX_CATALOG_STARS = 256
+// Multiplier on the larger image dimension giving the off-frame margin for accepted projected stars.
 const DEFAULT_PROJECTION_PADDING_FACTOR = 1
+// Tolerance used to guard inverse-trig domains and near-degenerate geometry.
 const GEOMETRY_EPSILON = 1e-12
 
+// Geometric-matcher defaults tuned for projected-catalog vs detected-star crossmatching.
 const DEFAULT_STAR_CROSSMATCH_CONFIG: Required<StarMatchingConfig> = {
 	maxStars: DEFAULT_MAX_CATALOG_STARS,
 	minStars: 6,
@@ -41,67 +53,116 @@ const DEFAULT_STAR_CROSSMATCH_CONFIG: Required<StarMatchingConfig> = {
 	maxHypotheses: 128,
 }
 
+// Whether a detection was associated with a catalog star.
 export type StarCrossmatchStatus = 'matched' | 'unmatched'
 
+// Camera geometry used to size the tangent-plane projection and derive the nominal plate scale.
 export interface StarCrossmatchCameraInfo extends Readonly<Size> {
-	readonly pixelSize?: number // µm
-	readonly focalLength?: number // mm
+	// Pixel pitch in micrometers; combined with focalLength to derive the nominal scale.
+	readonly pixelSize?: number
+	// Focal length in millimeters; combined with pixelSize to derive the nominal scale.
+	readonly focalLength?: number
 }
 
+// Inputs controlling a crossmatch run.
 export interface StarCrossmatchOptions {
+	// Approximate field-center right ascension (radians).
 	readonly centerRA: Angle
+	// Approximate field-center declination (radians).
 	readonly centerDEC: Angle
+	// Catalog cone-query radius around the center (radians).
 	readonly radius: Angle
+	// Camera geometry.
 	readonly camera: StarCrossmatchCameraInfo
+	// Maximum projection-center refinement iterations (default 2).
 	readonly refinementIterations?: number
+	// Convergence tolerance on the refined center offset (radians).
 	readonly centerTolerance?: Angle
+	// Maximum brightest catalog stars retained for matching.
 	readonly maxCatalogStars?: number
+	// Off-frame acceptance margin as a factor of the larger image dimension.
 	readonly projectionPaddingFactor?: number
+	// Overrides for the geometric star matcher.
 	readonly matchingConfig?: StarMatchingConfig
 }
 
+// Approximate plate solution recovered from a successful crossmatch.
 export interface StarCrossmatchSolution {
+	// Image-center right ascension (radians).
 	readonly rightAscension: Angle
+	// Image-center declination (radians).
 	readonly declination: Angle
-	readonly scale: Angle // radians per pixel
+	// Angular plate scale, in radians per pixel.
+	readonly scale: Angle
+	// Field rotation angle (radians).
 	readonly rotation: Angle
+	// Whether the fit includes a parity flip.
 	readonly mirrored: boolean
+	// Half-diagonal field radius (radians).
 	readonly fieldRadius: Angle
 }
 
+// One detected star and its catalog association (when matched).
 export interface StarCrossmatchRecord<S extends StarCatalogEntry> {
+	// The detected image star.
 	readonly detectedStar: DetectedStar
+	// Index of the detection in the input array.
 	readonly detectedIndex: number
+	// Whether this detection was matched.
 	readonly status: StarCrossmatchStatus
+	// Matched catalog star, when matched.
 	readonly catalogStar?: S
+	// Index of the matched catalog star in the query result, when matched.
 	readonly catalogIndex?: number
-	readonly residual?: number // px
+	// Image-plane residual of the match, in pixels.
+	readonly residual?: number
+	// Great-circle separation between the detection's solved position and the catalog star (radians).
 	readonly skySeparation?: Angle
 }
 
+// Aggregate residual and separation statistics for a crossmatch.
 export interface StarCrossmatchSummary {
+	// Total detected stars.
 	readonly totalDetected: number
+	// Number of matched detections.
 	readonly matchedCount: number
+	// Number of unmatched detections.
 	readonly unmatchedCount: number
+	// Catalog stars returned by the cone query.
 	readonly catalogCount: number
+	// Catalog stars that projected onto (or near) the frame.
 	readonly projectedCatalogCount: number
+	// RANSAC inlier count of the winning match.
 	readonly inlierCount: number
+	// Mean match residual, in pixels.
 	readonly averageResidual?: number
+	// Median match residual, in pixels.
 	readonly medianResidual?: number
+	// Mean sky separation (radians).
 	readonly averageSkySeparation?: Angle
+	// Median sky separation (radians).
 	readonly medianSkySeparation?: Angle
 }
 
+// Full crossmatch result, including the solution, per-detection records, and diagnostics.
 export interface StarCrossmatchResult<S extends StarCatalogEntry> {
+	// Whether a geometric match was found.
 	readonly success: boolean
+	// Recovered approximate solution, when successful.
 	readonly solution?: StarCrossmatchSolution
+	// Catalog stars returned by the cone query.
 	readonly catalogStars: readonly S[]
+	// Per-detection association records.
 	readonly matches: readonly StarCrossmatchRecord<S>[]
+	// Aggregate statistics.
 	readonly summary: StarCrossmatchSummary
+	// Underlying geometric-matcher result, when one ran successfully.
 	readonly starMatch?: StarMatchingResult
+	// Explanation when no match was found.
 	readonly failureReason?: string
 }
 
+// Validated and defaulted crossmatch options with derived projection scale and padding.
 interface ResolvedStarCrossmatchOptions {
 	readonly centerRA: Angle
 	readonly centerDEC: Angle
@@ -110,20 +171,28 @@ interface ResolvedStarCrossmatchOptions {
 	readonly refinementIterations: number
 	readonly centerTolerance: Angle
 	readonly maxCatalogStars: number
+	// Off-frame acceptance margin in pixels.
 	readonly projectionPadding: number
+	// Nominal tangent-plane scale, in pixels per radian.
 	readonly nominalPixelsPerRadian: number
 	readonly matchingConfig: Required<StarMatchingConfig>
 }
 
+// A catalog star projected into the image-like tangent plane, carrying both plane and pixel positions.
 interface ProjectedCatalogStar<S extends StarCatalogEntry> {
 	readonly catalogStar: S
 	readonly catalogIndex: number
+	// Synthetic detection (pixel position + photometry) fed to the matcher.
 	readonly detectedStar: DetectedStar
+	// Tangent-plane x (radians).
 	readonly planeX: number
+	// Tangent-plane y (radians).
 	readonly planeY: number
+	// Radial distance from the projection center in the plane (radians).
 	readonly projectedRadius: number
 }
 
+// One geometric match attempt around a given projection center, plus its derived solution.
 interface MatchAttempt<S extends StarCatalogEntry> {
 	readonly projectionCenterRA: Angle
 	readonly projectionCenterDEC: Angle
@@ -136,6 +205,7 @@ interface MatchAttempt<S extends StarCatalogEntry> {
 	readonly solution: StarCrossmatchSolution
 }
 
+// Outcome of one match attempt: how many catalog stars projected, and the attempt if it succeeded.
 interface MatchAttemptResolution<S extends StarCatalogEntry> {
 	readonly projectedCatalogCount: number
 	readonly attempt?: MatchAttempt<S>
