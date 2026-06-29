@@ -1,3 +1,10 @@
+import type { EquatorialCoordinate } from '../../astronomy/coordinates/coordinate'
+import { eraS2c } from '../../astronomy/coordinates/erfa/erfa'
+import { AMIN2RAD, DEG2RAD, PI, PIOVERTWO, TAU } from '../../core/constants'
+import type { MutVec3 } from '../../math/linear-algebra/vec3'
+import { clamp } from '../../math/numerical/math'
+import { type Angle, normalizeAngle } from '../../math/units/angle'
+
 // Deterministic selection of the minimum practical set of Astrometry.net index files
 // required to plate-solve an image. This module only computes index-file descriptors:
 // it never downloads, reads, or otherwise touches the filesystem or network.
@@ -12,46 +19,31 @@
 // It must NOT be replaced by a standard HEALPix RING or NESTED identifier: the 5200 filename
 // suffix is the XY tile id, which differs from RING/NESTED ids for the same coordinate.
 
-import type { EquatorialCoordinate } from '../../astronomy/coordinates/coordinate'
-import { eraS2c } from '../../astronomy/coordinates/erfa/erfa'
-import { AMIN2RAD, DEG2RAD, PI, PIOVERTWO, TAU } from '../../core/constants'
-import type { MutVec3 } from '../../math/linear-algebra/vec3'
-import { clamp } from '../../math/numerical/math'
-import { type Angle, normalizeAngle } from '../../math/units/angle'
-
 // Request describing the imaging system and the desired quad-diameter window.
 export interface AstrometryNetIndexRequest {
 	// Effective focal length in millimetres, including every optical multiplier
 	// (reducers, extenders, Barlows). Must be finite and greater than zero.
 	focalLength: number
-
 	// Effective physical pixel pitch in micrometres, including binning
 	// (2x2 binning uses twice the native pitch). Must be finite and greater than zero.
 	pixelPitch: number
-
 	// Active image width in pixels. Must be a positive safe integer.
 	width: number
-
 	// Active image height in pixels. Must be a positive safe integer.
 	height: number
-
 	// Optional approximate optical-axis coordinate, in the same inertial frame as the
 	// selected index catalogue. Both components are radians. When supplied it lets the
 	// selector reduce the tiled 5200-series files to those overlapping the search disc.
 	center?: EquatorialCoordinate
-
 	// Maximum angular error of `center`, in radians. Applied only when `center` is supplied.
 	// Must be finite and non-negative when provided. Default: 0.
 	pointingUncertainty?: Angle
-
 	// Additional conservative allowance for metadata, mount, optical-model, and numerical
 	// boundary error, in radians. Applied only when `center` is supplied. Must be finite and
 	// non-negative when provided. Default: 0.25 degrees.
 	safetyMargin?: Angle
-
 	// Minimum accepted quad diameter as a fraction of the largest image axis. Default: 0.10.
 	minQuadFraction?: number
-
 	// Maximum accepted quad diameter as a fraction of the largest image axis. Default: 1.00.
 	maxQuadFraction?: number
 }
@@ -62,19 +54,14 @@ export type AstrometryNetIndexFamily = '5200' | '4100'
 export interface AstrometryNetIndexScale {
 	// Zero-based scale index into the supported manifest (0..19).
 	scale: number
-
 	// Index family: spatially tiled '5200' or all-sky '4100'.
 	family: AstrometryNetIndexFamily
-
 	// Numeric index identifier used in filenames (e.g. 5203, 4107).
 	indexNumber: number
-
 	// Minimum quad diameter represented by the index, in radians.
 	minimumQuadDiameter: Angle
-
 	// Maximum quad diameter represented by the index, in radians.
 	maximumQuadDiameter: Angle
-
 	// HEALPix resolution (Nside) for tiled families only. Present for 5200-series entries
 	// and absent for all-sky 4100-series entries.
 	tileResolution?: number
@@ -87,19 +74,14 @@ export type AstrometryNetIndexFileReason = 'no-field-center' | 'all-sky-index' |
 export interface AstrometryNetIndexFile {
 	// Index filename without any directory or URL prefix.
 	filename: string
-
 	// Index family of the originating scale.
 	family: AstrometryNetIndexFamily
-
 	// Numeric index identifier of the originating scale.
 	indexNumber: number
-
 	// Zero-based scale index of the originating scale.
 	scale: number
-
 	// Astrometry.net internal HEALPix XY tile id. Present only for tiled 5200-series files.
 	tileId?: number
-
 	// Reason the file was selected.
 	reason: AstrometryNetIndexFileReason
 }
@@ -112,10 +94,8 @@ export interface AstrometryNetIndexCoverage {
 	// 'partial': at least one scale overlaps, but part of the requested interval is outside it.
 	// 'none': no supported scale overlaps the requested interval.
 	status: AstrometryNetIndexCoverageStatus
-
 	// Lowest quad diameter represented by the supported manifest, in radians.
 	supportedMinimum: Angle
-
 	// Highest quad diameter represented by the supported manifest, in radians.
 	supportedMaximum: Angle
 }
@@ -124,46 +104,33 @@ export interface AstrometryNetIndexCoverage {
 export interface AstrometryNetIndexPlan {
 	// Central pixel angular scale, in radians per pixel.
 	pixelScale: Angle
-
 	// Sensor width in millimetres.
 	sensorWidth: number
-
 	// Sensor height in millimetres.
 	sensorHeight: number
-
 	// Horizontal rectilinear field of view, in radians.
 	fieldWidth: Angle
-
 	// Vertical rectilinear field of view, in radians.
 	fieldHeight: Angle
-
 	// Largest horizontal or vertical field dimension, in radians. Intentionally the largest
 	// image axis, not the diagonal, following Astrometry.net's 10%-to-100%-of-image convention.
 	largestFieldDimension: Angle
-
 	// Exact angular distance from the optical axis to an image corner, in radians. Used only
 	// for conservative spatial-tile filtering.
 	fieldCornerRadius: Angle
-
 	// Normalized center used for spatial filtering. Absent when no center was supplied.
 	center?: EquatorialCoordinate
-
 	// Radius of the conservative search disc, in radians and clamped to PI. Absent when no
 	// center was supplied.
 	tileSearchRadius?: Angle
-
 	// Lower endpoint of the requested quad-diameter interval, in radians.
 	minimumRequiredQuadDiameter: Angle
-
 	// Upper endpoint of the requested quad-diameter interval, in radians.
 	maximumRequiredQuadDiameter: Angle
-
 	// Coverage status of the requested interval against the supported manifest.
 	coverage: AstrometryNetIndexCoverage
-
 	// Selected supported scales in ascending scale order.
 	scales: readonly AstrometryNetIndexScale[]
-
 	// Selected index files in deterministic order.
 	files: readonly AstrometryNetIndexFile[]
 }
