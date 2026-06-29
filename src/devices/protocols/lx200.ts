@@ -2,14 +2,21 @@ import type { Socket, TCPSocketListener } from 'bun'
 import { formatTemporal, type Temporal, type TemporalDate, temporalAdd, temporalFromDate } from '../../astronomy/time/temporal'
 import { type Angle, parseAngle, toDms, toHms } from '../../math/units/angle'
 
+// Server implementing the Meade LX200 serial command protocol over TCP, so LX200-speaking clients (e.g.
+// planetarium apps) can drive a mount. Parses the '#'-framed ASCII commands, delegates reads/actions to a
+// handler, and writes the protocol's ASCII responses. Coordinates exchanged with the handler are J2000.
 // http://www.company7.com/library/meade/LX200CommandSet.pdf
 // https://soundstepper.sourceforge.net/LX200_Compatible_Commands.html
 // https://www.cloudynights.com/topic/72166-lx-200-gps-serial-commands/
 
+// Manual-slew direction.
 export type MoveDirection = 'NORTH' | 'SOUTH' | 'EAST' | 'WEST'
 
+// Slew-rate preset (centering, guiding, finding, max).
 export type SlewRate = 'CENTER' | 'GUIDE' | 'FIND' | 'MAX'
 
+// Callbacks the server uses to read mount state and perform actions. Read coordinates are J2000 radians;
+// optional action callbacks may be omitted for read-only mounts.
 export interface Lx200ProtocolHandler {
 	readonly connect?: (server: Lx200ProtocolServer) => void
 	readonly rightAscension: (server: Lx200ProtocolServer) => Angle // J2000
@@ -28,26 +35,31 @@ export interface Lx200ProtocolHandler {
 	readonly disconnect?: (server: Lx200ProtocolServer) => void
 }
 
+// Server options: the handler plus the product name/firmware version reported to clients.
 export interface Lx200ProtocolServerOptions {
 	handler: Lx200ProtocolHandler
 	name?: string
 	version?: string
 }
 
+// Single-byte protocol responses (ACK 'G', success '1', failure '0') and the alignment-query request byte.
 const ACK = Buffer.from([71]) // G
 const ONE = Buffer.from([49]) // 1
 const ZERO = Buffer.from([48]) // 0
 const ACK_REQUEST = '\u0006'
 
+// Date/time response formats used by the protocol.
 const DATE_FORMAT = 'MM/DD/YY'
 const TIME_FORMAT = 'HH:mm:ss'
 
 // Meade Telescope Serial Command Protocol Server.
 export class Lx200ProtocolServer {
 	readonly #sockets: Socket<unknown>[] = []
+	// Per-socket accumulation of the partially-received command string.
 	readonly #commands = new Map<Socket<unknown>, string>()
 	#server?: TCPSocketListener
 
+	// Staged target coordinates (radians) and the date/time/offset assembled across the set-time sequence.
 	readonly #coordinates: [Angle, Angle] = [0, 0]
 	readonly #utc: TemporalDate = [2025, 1, 1, 0, 0, 0, 0]
 	#utcOffset = 0
@@ -55,6 +67,7 @@ export class Lx200ProtocolServer {
 
 	constructor(readonly options: Readonly<Lx200ProtocolServerOptions>) {}
 
+	// Bound hostname/port, or undefined/-1 when stopped.
 	get hostname() {
 		return this.#server?.hostname
 	}
@@ -63,6 +76,8 @@ export class Lx200ProtocolServer {
 		return this.#server?.port ?? -1
 	}
 
+	// Starts the TCP listener, seeding the staged coordinates from the handler on connect. Returns false if
+	// already started.
 	start(hostname: string, port: number) {
 		if (this.#server) return false
 
@@ -104,6 +119,7 @@ export class Lx200ProtocolServer {
 		return true
 	}
 
+	// Stops the listener and drops all client/command state.
 	stop() {
 		this.#server?.stop(true)
 		this.#server = undefined
@@ -111,6 +127,8 @@ export class Lx200ProtocolServer {
 		this.#commands.clear()
 	}
 
+	// Accumulates received bytes into '#'-framed commands per socket, answering bare ACK requests
+	// immediately and dispatching each complete command.
 	#processData(socket: Socket<unknown>, data: Buffer) {
 		let command = this.#commands.get(socket) ?? ''
 
@@ -135,6 +153,9 @@ export class Lx200ProtocolServer {
 		else this.#commands.set(socket, command)
 	}
 
+	// Decodes one complete LX200 command and writes its response. Get* commands read via the handler;
+	// Set* commands stage target/site/time values; motion/slew commands invoke the handler actions. The
+	// per-case comments name each command.
 	#processCommand(socket: Socket<unknown>, command: string) {
 		// console.debug('command received', command)
 
@@ -265,10 +286,12 @@ export class Lx200ProtocolServer {
 		}
 	}
 
+	// Writes the alignment-query ACK byte ('G' = German equatorial).
 	#ack(socket: Socket<unknown>) {
 		socket.write(ACK)
 	}
 
+	// Writes the success ('1') / failure ('0') status byte.
 	#one(socket: Socket<unknown>) {
 		socket.write(ONE)
 	}
@@ -277,10 +300,13 @@ export class Lx200ProtocolServer {
 		socket.write(ZERO)
 	}
 
+	// Writes an ASCII text response.
 	#text(socket: Socket<unknown>, value: string) {
 		socket.write(Buffer.from(value, 'ascii'))
 	}
 
+	// Commits the staged date/time to the handler once all three of the date/time/offset set-commands have
+	// arrived (LX200 sends them separately), converting local time + offset to UTC.
 	#handleDateTimeAndOffset() {
 		this.#utcStep++
 
@@ -290,12 +316,14 @@ export class Lx200ProtocolServer {
 		}
 	}
 
+	// Writes the RA as HH:MM:SS#.
 	#rightAscension(socket: Socket<unknown>) {
 		const [h, m, s] = roundSexagesimal(...toHms(this.options.handler.rightAscension(this)), 24)
 		const command = `${formatNumber(h)}:${formatNumber(m)}:${formatNumber(s)}#`
 		this.#text(socket, command)
 	}
 
+	// Writes the declination as sDD*MM:SS#.
 	#declination(socket: Socket<unknown>) {
 		const [d, m, s, neg] = toDms(this.options.handler.declination(this))
 		const [dd, mm, ss] = roundSexagesimal(d, m, s)
@@ -303,6 +331,7 @@ export class Lx200ProtocolServer {
 		this.#text(socket, command)
 	}
 
+	// Writes the site longitude as sDDD*MM# (sign inverted to LX200's west-positive convention).
 	#longitude(socket: Socket<unknown>) {
 		const [d, m, s, neg] = toDms(this.options.handler.longitude(this))
 		const [dd, mm] = roundDegreeMinute(d, m, s, 360)
@@ -310,6 +339,7 @@ export class Lx200ProtocolServer {
 		this.#text(socket, command)
 	}
 
+	// Writes the site latitude as sDD*MM#.
 	#latitude(socket: Socket<unknown>) {
 		const [d, m, s, neg] = toDms(this.options.handler.latitude(this))
 		const [dd, mm] = roundDegreeMinute(d, m, s)
@@ -317,22 +347,26 @@ export class Lx200ProtocolServer {
 		this.#text(socket, command)
 	}
 
+	// Writes the local date as MM/DD/YY#.
 	#date(socket: Socket<unknown>) {
 		const command = `${formatTemporal(this.options.handler.dateTime(this)[0], DATE_FORMAT, 0)}#`
 		this.#text(socket, command)
 	}
 
+	// Writes the local time as HH:MM:SS#.
 	#time(socket: Socket<unknown>) {
 		const command = `${formatTemporal(this.options.handler.dateTime(this)[0], TIME_FORMAT, 0)}#`
 		this.#text(socket, command)
 	}
 
+	// Writes the UTC offset in hours as sHH.H# (sign inverted to LX200's hours-to-add convention).
 	#zoneOffset(socket: Socket<unknown>) {
 		const [, offset] = this.options.handler.dateTime(this)
 		const command = `${offset < 0 ? '+' : '-'}${formatNumber(Math.abs(offset) / 60, 4, 1)}#`
 		this.#text(socket, command)
 	}
 
+	// Writes the scope status string: alignment type, tracking (T/N), and parked/home (P/H).
 	#status(socket: Socket<unknown>, type: string = 'G') {
 		const a = this.options.handler.tracking(this)
 		const b = this.options.handler.parked(this)
@@ -340,6 +374,7 @@ export class Lx200ProtocolServer {
 		this.#text(socket, command)
 	}
 
+	// Writes a slewing indicator: a bar while slewing, empty when settled.
 	#slewing(socket: Socket<unknown>) {
 		const s = this.options.handler.slewing(this)
 		const command = `${s ? '|' : ''}#`
@@ -347,10 +382,13 @@ export class Lx200ProtocolServer {
 	}
 }
 
+// Zero-pads a number to a minimum width with optional fractional digits.
 function formatNumber(value: number, maxLength: number = 2, fractionDigits: number = 0) {
 	return value.toFixed(fractionDigits).padStart(maxLength, '0')
 }
 
+// Rounds an HMS/DMS triple to integer seconds, carrying into minutes/primary and optionally wrapping the
+// primary field (e.g. 24 h or 360°).
 function roundSexagesimal(primary: number, minutes: number, seconds: number, wrapPrimary?: number): readonly [number, number, number] {
 	let p = primary
 	let m = minutes
@@ -373,6 +411,7 @@ function roundSexagesimal(primary: number, minutes: number, seconds: number, wra
 	return [p, m, s] as const
 }
 
+// Rounds a DMS triple to degrees and integer minutes, carrying and optionally wrapping the degree field.
 function roundDegreeMinute(degrees: number, minutes: number, seconds: number, wrapDegrees?: number): readonly [number, number] {
 	let d = degrees
 	let m = Math.round(minutes + seconds / 60)

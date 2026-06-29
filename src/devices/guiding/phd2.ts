@@ -3,10 +3,15 @@ import type { ImageRawType } from '../../imaging/model/types'
 import type { Point, Size } from '../../math/numerical/geometry'
 import type { GuidingAssistantResult } from '../../observation/guiding/assistant'
 
+// Client for PHD2's TCP event-monitoring / JSON-RPC interface. Defines the PHD2 event and result types
+// and a PHD2Client that issues RPC commands (each a thin wrapper over send()) and dispatches async events
+// and command replies to a handler. Field names mirror the PHD2 protocol.
+
+// Default PHD2 server TCP port.
 export const DEFAULT_PHD2_PORT = 4400
 
+// Names of the asynchronous events PHD2 emits.
 // https://github.com/OpenPHDGuiding/phd2/wiki/EventMonitoring
-
 export type PHD2EventType =
 	| 'Alert'
 	| 'AppState'
@@ -39,22 +44,31 @@ export type PHD2EventType =
 	| 'StartGuiding'
 	| 'Version'
 
+// PHD2 application/guiding state.
 export type PHD2AppState = 'Stopped' | 'Selected' | 'Calibrating' | 'Guiding' | 'LostLock' | 'Paused' | 'Looping'
 
+// Severity of an Alert event.
 export type PHD2AlertType = 'Info' | 'Question' | 'Warning' | 'Error'
 
+// Guide pulse direction.
 export type PHD2GuideDirection = 'North' | 'South' | 'West' | 'East'
 
+// Target of a mount-related command: the mount, the adaptive optics, or both.
 export type PHD2WhichMount = 'MOUNT' | 'AO' | 'BOTH'
 
+// Declination guiding mode.
 export type PHD2DeclinationGuideMode = 'Off' | 'Auto' | 'North' | 'South'
 
+// Units for a lock-shift rate.
 export type PHD2RateUnit = 'arcsec/hr' | 'pixels/hr'
 
+// Axes a lock-shift rate is expressed in.
 export type PHD2ShiftAxis = 'RA/Dec' | 'X/Y'
 
+// Guide algorithm axis selector.
 export type PHD2GuideAxis = 'RA' | 'DEC'
 
+// Event aliases for events that carry only the common base fields.
 export type PHD2ConfigurationChangeEvent = PHD2Event<'ConfigurationChange'>
 
 export type PHD2GuidingStoppedEvent = PHD2Event<'GuidingStopped'>
@@ -73,8 +87,10 @@ export type PHD2SettleBeginEvent = PHD2Event<'SettleBegin'>
 
 export type PHD2StartGuidingEvent = PHD2Event<'StartGuiding'>
 
+// Outcome of an RPC command: a typed result on success, or an error/timeout on failure.
 export type PHD2CommandResult<T> = { success: false; error: PHD2Error | 'timeout'; result?: never } | { success: true; result: T }
 
+// Common fields on every PHD2 event: the event name, timestamp, host, and instance number.
 export interface PHD2Event<E extends PHD2EventType> {
 	readonly Event: E
 	readonly Timestamp: number
@@ -82,6 +98,10 @@ export interface PHD2Event<E extends PHD2EventType> {
 	readonly Inst: number
 }
 
+// Event-specific payloads. Each interface adds the fields PHD2 sends for that event to the common base;
+// field names follow the PHD2 protocol.
+
+// PHD2 version/capability announcement sent on connect.
 export interface PHD2VersionEvent extends PHD2Event<'Version'> {
 	readonly PHD2Version: string
 	readonly PHD2Subver: string
@@ -89,15 +109,18 @@ export interface PHD2VersionEvent extends PHD2Event<'Version'> {
 	readonly MsgVersion: number
 }
 
+// User-facing alert message with a severity.
 export interface PHD2AlertEvent extends PHD2Event<'Alert'> {
 	readonly Msg: string
 	readonly Type: PHD2AlertType
 }
 
+// Current application/guiding state.
 export interface PHD2AppStateEvent extends PHD2Event<'AppState'> {
 	readonly State: PHD2AppState
 }
 
+// One calibration step with its direction, distance, and offsets.
 export interface PHD2CalibratingEvent extends PHD2Event<'Calibrating'> {
 	readonly Mount: string
 	readonly dir: string
@@ -109,23 +132,28 @@ export interface PHD2CalibratingEvent extends PHD2Event<'Calibrating'> {
 	readonly State: string
 }
 
+// Calibration finished for the named mount.
 export interface PHD2CalibrationCompleteEvent extends PHD2Event<'CalibrationComplete'> {
 	readonly Mount: string
 }
 
+// Calibration data was flipped (e.g. after a meridian flip).
 export interface PHD2CalibrationDataFlippedEvent extends PHD2Event<'CalibrationDataFlipped'> {
 	readonly Mount: string
 }
 
+// Calibration failed, with a reason.
 export interface PHD2CalibrationFailedEvent extends PHD2Event<'CalibrationFailed'> {
 	readonly Reason: string
 }
 
+// A guide-algorithm parameter changed.
 export interface PHD2GuideParamChangeEvent extends PHD2Event<'GuideParamChange'> {
 	readonly Name: string
 	readonly Value?: unknown
 }
 
+// One guide-frame correction: raw/guided distances, pulse durations/directions, star metrics, and limits.
 export interface PHD2GuideStepEvent extends PHD2Event<'GuideStep'> {
 	readonly Frame: number
 	readonly Time: number
@@ -149,6 +177,7 @@ export interface PHD2GuideStepEvent extends PHD2Event<'GuideStep'> {
 	readonly ErrorCode: number
 }
 
+// Guiding Assistant lifecycle events, each carrying the latest measurement result.
 export interface PHD2GuidingAssistantStartedEvent extends PHD2Event<'GuidingAssistantStarted'> {
 	readonly Result: GuidingAssistantResult
 }
@@ -165,16 +194,19 @@ export interface PHD2GuidingAssistantFailedEvent extends PHD2Event<'GuidingAssis
 	readonly Result: GuidingAssistantResult
 }
 
+// A dither was applied, with its pixel offset.
 export interface PHD2GuidingDitheredEvent extends PHD2Event<'GuidingDithered'> {
 	readonly dx: number
 	readonly dy: number
 }
 
+// The lock position was set to pixel (X, Y).
 export interface PHD2LockPositionSetEvent extends PHD2Event<'LockPositionSet'> {
 	readonly X: number
 	readonly Y: number
 }
 
+// One looping (non-guiding) exposure with its star metrics.
 export interface PHD2LoopingExposuresEvent extends PHD2Event<'LoopingExposures'> {
 	readonly Frame: number
 	readonly StarMass: number
@@ -182,6 +214,7 @@ export interface PHD2LoopingExposuresEvent extends PHD2Event<'LoopingExposures'>
 	readonly HFD: number
 }
 
+// Settling finished, with the frame totals and optional error.
 export interface PHD2SettleDoneEvent extends PHD2Event<'SettleDone'> {
 	readonly Status: number
 	readonly TotalFrames: number
@@ -189,6 +222,7 @@ export interface PHD2SettleDoneEvent extends PHD2Event<'SettleDone'> {
 	readonly Error?: string
 }
 
+// Settling progress: current distance, elapsed/required time, and whether the star is locked.
 export interface PHD2SettlingEvent extends PHD2Event<'Settling'> {
 	readonly Distance: number
 	readonly Time: number
@@ -196,6 +230,7 @@ export interface PHD2SettlingEvent extends PHD2Event<'Settling'> {
 	readonly StarLocked: boolean
 }
 
+// The guide star was lost, with the frame metrics and error/status.
 export interface PHD2StarLostEvent extends PHD2Event<'StarLost'> {
 	readonly Frame: number
 	readonly Time: number
@@ -206,15 +241,18 @@ export interface PHD2StarLostEvent extends PHD2Event<'StarLost'> {
 	readonly Status: string
 }
 
+// A star was selected at pixel (X, Y).
 export interface PHD2StarSelectedEvent extends PHD2Event<'StarSelected'> {
 	readonly X: number
 	readonly Y: number
 }
 
+// Calibration started for the named mount.
 export interface PHD2StartCalibrationEvent extends PHD2Event<'StartCalibration'> {
 	readonly Mount: string
 }
 
+// Maps each event name to its concrete event interface.
 export interface PHD2EventMap {
 	readonly Version: PHD2VersionEvent
 	readonly Alert: PHD2AlertEvent
@@ -248,11 +286,13 @@ export interface PHD2EventMap {
 	readonly StartGuiding: PHD2StartGuidingEvent
 }
 
+// JSON-RPC error returned for a failed command.
 export interface PHD2Error {
 	readonly code: number
 	readonly message: string
 }
 
+// A JSON-RPC reply correlating to a sent command by id.
 export interface PHD2JsonRpcEvent {
 	readonly jsonrpc: string
 	readonly id: string
@@ -260,6 +300,7 @@ export interface PHD2JsonRpcEvent {
 	readonly error?: PHD2Error
 }
 
+// Discriminated union of all concrete event payloads.
 export type PHD2Events =
 	| PHD2AlertEvent
 	| PHD2AppStateEvent
@@ -292,17 +333,20 @@ export type PHD2Events =
 	| PHD2StartGuidingEvent
 	| PHD2VersionEvent
 
+// An outgoing JSON-RPC command: unique id, method name, and optional positional/named params.
 export interface PHD2Command {
 	readonly id: string
 	readonly method: string
 	readonly params?: Readonly<Record<string, unknown> | unknown[]>
 }
 
+// A connected PHD2 equipment device by name.
 export interface PHD2Device {
 	readonly name: string
 	readonly connected: boolean
 }
 
+// The currently selected PHD2 equipment profile devices.
 export interface PHD2Equipment {
 	readonly camera?: PHD2Device
 	readonly mount?: PHD2Device
@@ -311,12 +355,14 @@ export interface PHD2Equipment {
 	readonly rotator?: PHD2Device
 }
 
+// Settle criteria: settle tolerance (pixels), required settle time (s), and overall timeout (s).
 export interface PHD2Settle {
 	pixels: number
 	time: number
 	timeout: number
 }
 
+// Calibration geometry per axis: angle, rate, and parity.
 export interface PHD2CalibrationData {
 	readonly calibrated: boolean
 	readonly xAngle: number
@@ -327,6 +373,7 @@ export interface PHD2CalibrationData {
 	readonly yParity: '+' | '-'
 }
 
+// Lock-position shift parameters: enabled flag, [x, y] rate, units, and axes.
 export interface PHD2LockShiftParams {
 	readonly enabled: boolean
 	readonly rate: readonly [number, number]
@@ -334,28 +381,33 @@ export interface PHD2LockShiftParams {
 	readonly axes: PHD2ShiftAxis
 }
 
+// A PHD2 equipment profile.
 export interface PHD2Profile {
 	readonly id: number
 	readonly name: string
 	readonly selected: boolean
 }
 
+// A guide-star thumbnail: frame number, star position, and pixel data (base64 string or raw array).
 export interface PHD2StarImage<P extends string | ImageRawType> extends Readonly<Size> {
 	readonly frame: number
 	readonly star_pos: Readonly<Point>
 	readonly pixels: P
 }
 
+// Options for a PHD2Client.
 export interface PHD2ClientOptions {
 	handler?: PHD2ClientHandler
 }
 
+// Callbacks for PHD2 events, command replies, and connection close.
 export interface PHD2ClientHandler {
 	readonly event?: (client: PHD2Client, event: PHD2Events) => void
 	readonly command?: (client: PHD2Client, command: PHD2Command, success: boolean, result: unknown) => void
 	readonly close?: (client: PHD2Client, error?: Error) => void
 }
 
+// Empty region-of-interest (no subframe).
 export const DEFAULT_ROI: Readonly<Point & Size> = {
 	x: 0,
 	y: 0,
@@ -363,18 +415,23 @@ export const DEFAULT_ROI: Readonly<Point & Size> = {
 	height: 0,
 }
 
+// Default settle criteria: 1.5 px within 10 s, timing out after 30 s.
 export const DEFAULT_PHD2_SETTLE: Readonly<PHD2Settle> = {
 	pixels: 1.5, // px
 	time: 10, // s
 	timeout: 30, // s
 }
 
+// An in-flight command awaiting its JSON-RPC reply, with its resolver, timeout, and original command.
 interface PendingPHD2Command<T> {
 	readonly promise: PromiseWithResolvers<PHD2CommandResult<T>>
 	readonly timer: ReturnType<typeof setTimeout>
 	readonly command: PHD2Command
 }
 
+// PHD2 JSON-RPC client over TCP. Connects to PHD2, sends commands and correlates their replies by id,
+// and dispatches asynchronous events to the handler. The command methods below are thin, self-describing
+// wrappers over send(); only the connection/transport internals are commented in detail.
 export class PHD2Client implements Disposable {
 	readonly #commands = new Map<string, PendingPHD2Command<unknown>>()
 	#socket?: Bun.Socket
@@ -382,6 +439,8 @@ export class PHD2Client implements Disposable {
 
 	constructor(readonly options?: PHD2ClientOptions) {}
 
+	// Connects to the PHD2 server, wiring socket events into the line parser. Returns false if already
+	// connected.
 	async connect(hostname: string, port: number = DEFAULT_PHD2_PORT) {
 		if (this.#socket) return false
 
@@ -409,6 +468,7 @@ export class PHD2Client implements Disposable {
 		return true
 	}
 
+	// Closes the socket and clears all pending commands and their timers.
 	close() {
 		this.#socket?.close()
 		this.#socket = undefined
@@ -424,6 +484,8 @@ export class PHD2Client implements Disposable {
 		this.close()
 	}
 
+	// Sends a JSON-RPC command and awaits its reply, returning the typed result or undefined on
+	// timeout/error (logged). Each command is tracked by a generated id until its reply arrives.
 	async send<T>(method: string, params?: Record<string, unknown> | unknown[], timeout: number = 15000) {
 		if (!this.#socket) return undefined
 
@@ -446,6 +508,7 @@ export class PHD2Client implements Disposable {
 		return undefined
 	}
 
+	// RPC command wrappers. Each maps to a PHD2 method of the same intent and returns the typed result.
 	findStar(roi: Partial<Point & Size> = DEFAULT_ROI) {
 		const { x, y, width, height } = Object.assign({}, DEFAULT_ROI, roi)
 		const subframe = width && height ? [x, y, width, height] : undefined
@@ -643,6 +706,8 @@ export class PHD2Client implements Disposable {
 		return this.send<number>('shutdown')
 	}
 
+	// Buffers incoming bytes and parses complete JSON lines (PHD2 sends newline-delimited JSON), keeping
+	// any partial trailing line for the next chunk.
 	#processData(data: Buffer) {
 		const buffer = this.#buffer === undefined ? data : Buffer.concat([this.#buffer, data])
 
@@ -660,6 +725,8 @@ export class PHD2Client implements Disposable {
 		}
 	}
 
+	// Routes a parsed message: a JSON-RPC reply resolves the matching pending command (and fires the
+	// command handler); anything else is delivered as an asynchronous event.
 	#processEvent(event: PHD2Events | PHD2JsonRpcEvent) {
 		if ('jsonrpc' in event) {
 			const { id, error, result } = event

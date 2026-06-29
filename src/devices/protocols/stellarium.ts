@@ -7,25 +7,33 @@ import type { Source } from '../../io/io'
 import { type Angle, deg, mas, normalizeAngle } from '../../math/units/angle'
 import { type Distance, parsec } from '../../math/units/distance'
 
+// Server for Stellarium's telescope-control TCP protocol (lets Stellarium send goto targets and show the
+// current position), plus readers for Stellarium's binary deep-sky catalog (catalog.dat) and name
+// (names.dat) files and a HEALPix-indexed catalog built from them. Coordinates are radians.
+
+// Callbacks the Stellarium server uses: connect/disconnect notifications and the goto target (radians).
 export interface StellariumProtocolHandler {
 	readonly connect?: (server: StellariumProtocolServer) => void
 	readonly goto?: (server: StellariumProtocolServer, ra: Angle, dec: Angle) => void
 	readonly disconnect?: (server: StellariumProtocolServer) => void
 }
 
+// Server options: the handler.
 export interface StellariumProtocolServerOptions {
 	handler: StellariumProtocolHandler
 }
 
+// TCP server speaking the Stellarium telescope protocol. Decodes goto requests and broadcasts the
+// current coordinates as the protocol's 24-byte position messages.
 // https://free-astro.org/images/b/b7/Stellarium_telescope_protocol.txt
 // https://github.com/Stellarium/stellarium/blob/master/plugins/TelescopeControl/src/TelescopeClient.cpp
-
 export class StellariumProtocolServer {
 	readonly #sockets: Socket<unknown>[] = []
 	#server?: TCPSocketListener
 
 	constructor(readonly options: Readonly<StellariumProtocolServerOptions>) {}
 
+	// Bound hostname/port, or undefined/-1 when stopped.
 	get hostname() {
 		return this.#server?.hostname
 	}
@@ -34,6 +42,7 @@ export class StellariumProtocolServer {
 		return this.#server?.port ?? -1
 	}
 
+	// Starts the TCP listener. Returns false if already started.
 	start(hostname: string, port: number) {
 		if (this.#server) return false
 
@@ -71,12 +80,15 @@ export class StellariumProtocolServer {
 		return true
 	}
 
+	// Stops the listener and drops all clients.
 	stop() {
 		this.#server?.stop(true)
 		this.#server = undefined
 		this.#sockets.length = 0
 	}
 
+	// Broadcasts the current position to all connected Stellarium clients, encoding RA/Dec (radians) as
+	// the protocol's signed fixed-point values in a 24-byte message.
 	send(ra: Angle, dec: Angle) {
 		if (this.#sockets.length > 0) {
 			const buffer = Buffer.allocUnsafe(24)
@@ -96,6 +108,8 @@ export class StellariumProtocolServer {
 		}
 	}
 
+	// Decodes an inbound goto message, converting the fixed-point RA/Dec back to radians and invoking the
+	// handler.
 	#processData(buffer: Buffer) {
 		if (buffer.byteLength >= 20 && this.options.handler.goto) {
 			const ra = normalizeAngle((buffer.readUInt32LE(12) * PI) / 0x80000000)
@@ -105,6 +119,8 @@ export class StellariumProtocolServer {
 	}
 }
 
+// One deep-sky object from Stellarium's catalog: position/magnitude, morphology (axes, orientation,
+// redshift, parallax, distance), and cross-catalog identifiers (NGC/IC/Messier and many others).
 export interface StellariumCatalogEntry extends StarCatalogEntry {
 	readonly id: number
 	readonly type: StellariumObjectType
@@ -146,6 +162,7 @@ export interface StellariumCatalogEntry extends StarCatalogEntry {
 	readonly vdbha: number
 }
 
+// Deep-sky object classification used by Stellarium's catalog.
 export enum StellariumObjectType {
 	UNKNOWN,
 	GALAXY,
@@ -186,11 +203,14 @@ export enum StellariumObjectType {
 	REGION_OF_THE_SKY,
 }
 
+// Parser buffer size and the offset at which it is refilled (leaving room for the largest record).
 // https://github.com/Stellarium/stellarium/blob/master/nebulae/default/catalog.dat
-
 const STELLARIUM_CATALOG_BUFFER_SIZE = 64 * 1024
 const STELLARIUM_CATALOG_REFILL_THRESHOLD = STELLARIUM_CATALOG_BUFFER_SIZE - 1024
 
+// Streams deep-sky objects from a Stellarium binary catalog.dat source. Big-endian records carry
+// position (radians), photometry, morphology, and many cross-catalog ids; values are converted to the
+// library's units (degrees→radians, mas, parsec→AU). Magnitude falls back from V to B when V is absent.
 export async function* readCatalogDat(source: Source): AsyncIterable<StellariumCatalogEntry> {
 	const buffer = Buffer.allocUnsafe(STELLARIUM_CATALOG_BUFFER_SIZE)
 	let position = 0
@@ -207,12 +227,14 @@ export async function* readCatalogDat(source: Source): AsyncIterable<StellariumC
 		return size > 0
 	}
 
+	// Reads a big-endian uint32 and advances the cursor.
 	function readInt() {
 		const value = buffer.readUint32BE(position)
 		position += 4
 		return value
 	}
 
+	// Reads a big-endian double and advances the cursor.
 	function readDouble() {
 		const value = buffer.readDoubleBE(position)
 		position += 8
@@ -221,6 +243,7 @@ export async function* readCatalogDat(source: Source): AsyncIterable<StellariumC
 
 	const decoder = new TextDecoder('utf-16be', { ignoreBOM: true })
 
+	// Reads a length-prefixed UTF-16BE string and advances the cursor.
 	function readText() {
 		const n = readInt()
 
@@ -296,21 +319,28 @@ export async function* readCatalogDat(source: Source): AsyncIterable<StellariumC
 	}
 }
 
+// One common-name record from names.dat: catalog prefix, object id, and the human-readable name.
 export interface StellariumNameEntry {
 	readonly prefix: string
 	readonly id: string
 	readonly name: string
 }
 
+// Extracts the translatable name from a `_("...")` line, plus the names-parser buffer size and refill
+// threshold.
 const NAME_FORMAT_REGEX = /^_\("([^"]+)"\).*$/
 const STELLARIUM_NAMES_BUFFER_SIZE = 1024
 const STELLARIUM_NAMES_REFILL_THRESHOLD = 300
 
+// Streams common-name entries from a Stellarium names.dat text source, skipping comments and lines
+// without a parseable name. Each line packs a fixed-width prefix/id followed by the `_("name")` form.
 export async function* readNamesDat(source: Source) {
 	const buffer = Buffer.allocUnsafe(STELLARIUM_NAMES_BUFFER_SIZE)
 	let position = 0
 	let size = 0
 
+	// Compacts unconsumed bytes to the front of the buffer and refills the tail from the source.
+	// Returns false once the source is exhausted and nothing remains buffered.
 	async function read() {
 		const remaining = size - position
 
@@ -321,6 +351,7 @@ export async function* readNamesDat(source: Source) {
 		return size > 0
 	}
 
+	// Ensures at least `n` bytes remain buffered ahead of the cursor, refilling if needed.
 	async function checkAvailableSpaceToRead(n: number) {
 		if (position > size - n) {
 			if (!(await read())) return false
@@ -329,6 +360,7 @@ export async function* readNamesDat(source: Source) {
 		return true
 	}
 
+	// Returns the next newline-terminated line, or false at end of input.
 	async function readLine() {
 		if (!(await checkAvailableSpaceToRead(STELLARIUM_NAMES_REFILL_THRESHOLD))) return false
 
@@ -361,11 +393,14 @@ export async function* readNamesDat(source: Source) {
 	}
 }
 
+// HEALPix-indexed deep-sky catalog built from a Stellarium catalog.dat source, enabling spatial
+// cone/neighbour queries over the loaded entries. Default nside=8 trades resolution for memory.
 export class StellariumCatalog extends HealpixIndex<StellariumCatalogEntry> {
 	constructor({ nside = 8, ordering }: Partial<HealpixIndexOptions> = {}) {
 		super({ nside, ordering })
 	}
 
+	// Streams every entry from `source` and indexes it by HEALPix cell using its RA/dec (radians).
 	async load(source: Source) {
 		for await (const entry of readCatalogDat(source)) {
 			this.add(entry.id, entry.rightAscension, entry.declination, entry)
