@@ -1,6 +1,13 @@
 import type { CalibrationPulseCommand } from './calibrator'
 import { type GuideCommand, type GuideDirectionDEC, type GuideFrame, type GuidingMode, NO_PULSE, oppositeDEC } from './guider'
 
+// PHD2-style "guiding assistant": passively analyzes a stream of accepted guide frames to characterize
+// mount/seeing behavior and produce actionable recommendations (exposure range, RA/DEC min-move,
+// polar-alignment error, focus/star advice) without any UI or device coupling. It estimates per-axis
+// high-frequency RMS and drift via linear fits, derives seeing from drift-corrected DEC windows, and
+// optionally drives a DEC backlash test by emitting calibration-style pulses the caller executes.
+// Displacements are mount-axis pixels; durations are milliseconds; angles are radians.
+
 // Minimum sampling interval used by PHD2 before final recommendations are trusted, in seconds.
 const DEFAULT_MIN_SAMPLING_SECONDS = 120
 
@@ -455,6 +462,8 @@ export class GuidingAssistant {
 		return this.#status === 'backlash'
 	}
 
+	// Advances the DEC backlash state machine for one sample, returning the next pulse or undefined when
+	// the test terminates. North leg pushes past the target; south leg counts no-motion time as backlash.
 	#advanceBacklash(sample: GuidingAssistantSample): CalibrationPulseCommand | undefined {
 		const state = this.#backlash
 
@@ -514,6 +523,8 @@ export class GuidingAssistant {
 		return undefined
 	}
 
+	// Builds one DEC backlash test pulse, tallies it against the north or south pulse count, and records
+	// it as the last pulse for backlash timing.
 	#makeBacklashPulse(direction: GuideDirectionDEC): CalibrationPulseCommand {
 		if (direction === this.config.backlashNorthDirection) {
 			this.#backlash.northPulses++
@@ -527,6 +538,8 @@ export class GuidingAssistant {
 	}
 }
 
+// Normalizes one accepted guide frame/command into an assistant sample, preferring calibrated axis
+// errors and falling back to raw image deltas. Returns null for non-guiding, bad, or unusable frames.
 function makeSample(frame: GuideFrame, command: GuideCommand, startTime: number): GuidingAssistantSample | null {
 	if (command.state !== 'guiding' || command.diagnostics.badFrame) return null
 
@@ -598,6 +611,8 @@ function computeMotionMetrics(samples: readonly GuidingAssistantSample[], config
 	}
 }
 
+// Recommends RA/DEC min-move (pixels) from the DEC seeing estimate, scaled by image-scale-dependent
+// multipliers, floored, sanity-checked against arc-second limits, and reduced for multi-star guiding.
 function computeMinMove(samples: readonly GuidingAssistantSample[], config: GuidingAssistantConfig, seeingPx = bestDecSeeingEstimate(samples)) {
 	const multiplierDec = (config.imageScale ?? Number.POSITIVE_INFINITY) < config.fineScaleThreshold ? config.fineScaleDecMultiplier : config.coarseScaleDecMultiplier
 	const multiStarMeasured = config.multiStar && samples.length > 0 && samples.every((sample) => sample.modeUsed === 'multi-star')
@@ -661,6 +676,8 @@ function makeRecommendations(
 	return recommendations
 }
 
+// Recommends a min/max guide exposure range (seconds) bounded by encoder-class ideals and the
+// drift-limiting exposure (RA min-move divided by the maximum RA drift rate).
 function exposureRange(config: GuidingAssistantConfig, metrics: GuidingAssistantMotionMetrics, raMinMovePx: number) {
 	const idealMin = config.hasHighPrecisionEncoders ? 4 : 2
 	const idealMax = config.hasHighPrecisionEncoders ? 8 : 4
@@ -671,6 +688,8 @@ function exposureRange(config: GuidingAssistantConfig, metrics: GuidingAssistant
 	return { min, max }
 }
 
+// Estimates seeing as the smallest drift-removed DEC RMS over overlapping two-minute windows; for short
+// runs it falls back to a single fit over all samples.
 function bestDecSeeingEstimate(samples: readonly GuidingAssistantSample[]) {
 	if (samples.length <= 1) return 0
 
@@ -699,6 +718,8 @@ function bestDecSeeingEstimate(samples: readonly GuidingAssistantSample[]) {
 	return Number.isFinite(best) ? best : linearFit(samples, 'decPx').residualRms
 }
 
+// Least-squares fit of one axis vs elapsed time, returning slope (px/s), intercept, and residual RMS
+// (the drift-removed high-frequency motion).
 function linearFit(samples: readonly GuidingAssistantSample[], key: 'raPx' | 'decPx'): LinearFit {
 	if (samples.length === 0) return { slope: 0, intercept: 0, residualRms: 0 }
 	if (samples.length === 1) return { slope: 0, intercept: samples[0][key], residualRms: 0 }
@@ -733,6 +754,7 @@ function linearFit(samples: readonly GuidingAssistantSample[], key: 'raPx' | 'de
 	}
 }
 
+// Maximum absolute displacement of one axis from its first sample, in pixels.
 function peakFromOrigin(samples: readonly GuidingAssistantSample[], key: 'raPx' | 'decPx') {
 	if (samples.length === 0) return 0
 
@@ -746,6 +768,7 @@ function peakFromOrigin(samples: readonly GuidingAssistantSample[], key: 'raPx' 
 	return peak
 }
 
+// Peak-to-peak (max minus min) excursion of one axis, in pixels.
 function peakToPeak(samples: readonly GuidingAssistantSample[], key: 'raPx' | 'decPx') {
 	if (samples.length === 0) return 0
 
@@ -760,6 +783,7 @@ function peakToPeak(samples: readonly GuidingAssistantSample[], key: 'raPx' | 'd
 	return max - min
 }
 
+// Largest absolute rate of change between consecutive samples for one axis, in pixels per second.
 function maxAdjacentRate(samples: readonly GuidingAssistantSample[], key: 'raPx' | 'decPx') {
 	let maxRate = 0
 
@@ -771,6 +795,8 @@ function maxAdjacentRate(samples: readonly GuidingAssistantSample[], key: 'raPx'
 	return maxRate
 }
 
+// Polar-alignment error in arc-minutes from DEC drift via PHD2's Barrett factor, scaled by image scale
+// and 1/|cos(dec)|. Returns null without image scale/declination or too close to the pole.
 function computePolarAlignmentError(decDriftPxPerMinute: number, config: GuidingAssistantConfig) {
 	if (!hasPositiveScale(config) || config.declination === undefined || !Number.isFinite(config.declination)) return null
 
@@ -779,6 +805,8 @@ function computePolarAlignmentError(decDriftPxPerMinute: number, config: Guiding
 	return (POLAR_ALIGNMENT_DRIFT_FACTOR * Math.abs(decDriftPxPerMinute) * config.imageScale!) / Math.abs(cosDec)
 }
 
+// Assembles a backlash result and derives the recommended DEC compensation (floored to 10 ms) when the
+// measured backlash is within the compensable range.
 function makeBacklashResult(phase: GuidingAssistantBacklashPhase, backlashMs: number | null, northDistancePx: number, southDistancePx: number, northPulses: number, southPulses: number, message: string): GuidingAssistantBacklashResult {
 	const compensable = backlashMs !== null && backlashMs >= SMALL_BACKLASH_MS && backlashMs <= MAX_BACKLASH_COMPENSATION_MS
 	const compensation = compensable ? Math.floor(backlashMs / 10) * 10 : null
@@ -790,6 +818,7 @@ function makeBacklashResultFromState(phase: GuidingAssistantBacklashPhase, state
 	return makeBacklashResult(phase, null, state.northDistancePx, state.southDistancePx, state.northPulses, state.southPulses, message)
 }
 
+// Fresh, zeroed backlash state machine.
 function makeBacklashState(): BacklashState {
 	return {
 		phase: 'idle',
@@ -814,6 +843,7 @@ function elapsedSecondsOf(samples: readonly GuidingAssistantSample[], timestamp:
 	return Math.max(0, (timestamp - startTime) / 1000)
 }
 
+// Arithmetic mean of one numeric sample field, or 0 when there are no samples.
 function meanOf(samples: readonly GuidingAssistantSample[], key: 'snr' | 'starMass' | 'hfd') {
 	if (samples.length === 0) return 0
 
@@ -824,30 +854,38 @@ function meanOf(samples: readonly GuidingAssistantSample[], key: 'snr' | 'starMa
 	return sum / samples.length
 }
 
+// Converts a pixel value to arc-seconds, or null when no image scale is available.
 function scaleValue(value: number, scale: number | null) {
 	return scale === null ? null : value * scale
 }
 
+// Returns the positive image scale (arc-sec/px) or null when unavailable.
 function scaleOrNull(config: GuidingAssistantConfig) {
 	return hasPositiveScale(config) ? config.imageScale! : null
 }
 
+// True when the config has a finite, positive image scale.
 function hasPositiveScale(config: GuidingAssistantConfig) {
 	return config.imageScale !== undefined && Number.isFinite(config.imageScale) && config.imageScale > 0
 }
 
+// Rounds a value up to the next multiple of `unit`, never returning less than one unit.
 function roundUpToUnit(value: number, unit: number) {
 	return Math.max(unit, Math.ceil(value / unit) * unit)
 }
 
+// Returns the value when finite, otherwise 0.
 function finiteOrZero(value: number | undefined) {
 	return value !== undefined && Number.isFinite(value) ? value : 0
 }
 
+// True when the value is defined and finite.
 function isFiniteNumber(value: number | undefined) {
 	return value !== undefined && Number.isFinite(value)
 }
 
+// Signed DEC displacement (pixels) toward `direction`, positive when motion follows the commanded
+// direction relative to the positive-DEC convention.
 function decSignedDistance(direction: GuideDirectionDEC, decPositiveDirection: GuideDirectionDEC, from: number, to: number) {
 	const sign = direction === decPositiveDirection ? 1 : -1
 	return (to - from) * sign

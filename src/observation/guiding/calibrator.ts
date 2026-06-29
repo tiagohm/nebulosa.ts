@@ -3,8 +3,17 @@ import { clamp } from '../../math/numerical/math'
 import type { Angle } from '../../math/units/angle'
 import { type AxisPulse, type CalibrationMatrix, DEFAULT_GUIDER_CONFIG, type FilteredStars, filterGuideStars, type GuideDirectionDEC, type GuideDirectionRA, type GuideFrame, type GuideStar, oppositeDEC, oppositeRA, type StarFilterConfig } from './guider'
 
+// Frame-by-frame autoguider calibration. The GuidingCalibrator state machine issues RA and DEC pulses,
+// tracks the resulting star displacement across frames, and solves the image-motion and inverse
+// (image-to-axis) 2×2 calibration matrices used by the Guider. It handles RA forward travel, an optional
+// clearing move back toward the origin, DEC backlash absorption, and rejects frames that are noisy,
+// edge-clipped, or show impossible jumps. Positions/distances are pixels; pulse durations are
+// milliseconds; angles are radians.
+
+// Phase of the calibration state machine.
 export type GuidingCalibrationPhase = 'idle' | 'precheck' | 'acquireLock' | 'raForwardPulse' | 'raForwardMeasure' | 'raForwardComplete' | 'raClearPulse' | 'raClearMeasure' | 'decForwardPulse' | 'decForwardMeasure' | 'decBacklashClearing' | 'decForwardComplete' | 'solving' | 'validating' | 'completed' | 'failed'
 
+// Reason a calibration run aborted.
 export type GuidingCalibrationFailureCode =
 	| 'invalid_config'
 	| 'no_usable_star'
@@ -22,92 +31,167 @@ export type GuidingCalibrationFailureCode =
 	| 'axes_too_parallel'
 	| 'matrix_singular'
 
+// A pulse pair issued for one calibration step; only the active axis is non-zero.
 export interface CalibrationPulseCommand {
+	// RA-axis pulse.
 	readonly ra: AxisPulse
+	// DEC-axis pulse.
 	readonly dec: AxisPulse
 }
 
+// Calibration tuning. Positions/distances are pixels; pulses are milliseconds; angles are radians.
 export interface GuidingCalibrationConfig {
-	readonly raPulse: number // ms
-	readonly decPulse: number // ms
+	// RA calibration pulse duration, in milliseconds.
+	readonly raPulse: number
+	// DEC calibration pulse duration, in milliseconds.
+	readonly decPulse: number
+	// RA pulse direction used for the forward leg.
 	readonly raDirection: GuideDirectionRA
+	// DEC pulse direction used for the forward leg.
 	readonly decDirection: GuideDirectionDEC
+	// Maximum RA forward steps before aborting.
 	readonly maxRaSteps: number
+	// Maximum DEC forward steps before aborting.
 	readonly maxDecSteps: number
+	// Allowed consecutive RA steps without measurable motion.
 	readonly maxRaNoMotionSteps: number
+	// Allowed consecutive DEC steps without measurable motion (backlash window).
 	readonly maxDecNoMotionSteps: number
+	// Minimum per-step displacement to count as motion, in pixels.
 	readonly minMovePerStepPx: number
+	// Required net RA travel before solving, in pixels.
 	readonly minNetRaTravelPx: number
+	// Required net DEC travel before solving, in pixels.
 	readonly minNetDecTravelPx: number
+	// Maximum allowed per-frame star jump, in pixels.
 	readonly maxFrameJumpPx: number
+	// Allowed consecutive bad frames before aborting.
 	readonly maxBadFrames: number
+	// Frames to skip after a pulse to let the mount settle.
 	readonly settleFramesAfterMove: number
+	// Whether to perform the RA clearing move back toward the origin.
 	readonly clearingMoveEnabled: boolean
+	// Clearing steps as a fraction of the RA forward steps.
 	readonly clearingMoveFraction: number
+	// Maximum clearing steps.
 	readonly maxClearingSteps: number
+	// Maximum residual offset from origin to consider clearing complete, in pixels.
 	readonly maxClearingOffsetPx: number
+	// Minimum RA/DEC axis separation angle to accept the solve, in radians.
 	readonly minAxisSeparation: Angle
+	// Minimum acceptable image-motion matrix determinant.
 	readonly minDeterminant: number
+	// Maximum nearest-star match distance during tracking, in pixels.
 	readonly maxMatchDistancePx: number
+	// Edge exclusion margin, in pixels.
 	readonly edgeMarginPx: number
+	// Minimum acceptable frame quality in [0, 1].
 	readonly minFrameQuality: number
+	// Minimum accepted axis rate, in pixels per millisecond.
 	readonly minRatePxPerMs: number
+	// Maximum accepted axis rate, in pixels per millisecond.
 	readonly maxRatePxPerMs: number
+	// Star filtering thresholds.
 	readonly filter: StarFilterConfig
 }
 
+// One recorded calibration measurement for a single pulse step.
 export interface GuidingCalibrationSample {
+	// 1-based step index within its leg.
 	readonly step: number
-	readonly pulse: number // ms
+	// Pulse duration applied for this step, in milliseconds.
+	readonly pulse: number
+	// Pulse direction applied for this step.
 	readonly pulseDirection: GuideDirectionRA | GuideDirectionDEC
+	// Measured star X, in pixels.
 	readonly x: number
+	// Measured star Y, in pixels.
 	readonly y: number
+	// Displacement from the previous sample along X, in pixels.
 	readonly deltaX: number
+	// Displacement from the previous sample along Y, in pixels.
 	readonly deltaY: number
+	// Net X offset from the leg origin, in pixels.
 	readonly netX: number
+	// Net Y offset from the leg origin, in pixels.
 	readonly netY: number
+	// Magnitude of this step's displacement, in pixels.
 	readonly stepDistance: number
+	// Magnitude of the net offset from origin, in pixels.
 	readonly netDistance: number
+	// Displacement projected onto the expected axis direction, in pixels.
 	readonly projectedDistance: number
+	// Net offset projected onto the axis-orthogonal seed direction, in pixels.
 	readonly orthogonalDistance: number
+	// Frame identifier, if available.
 	readonly frameId?: number
+	// Frame timestamp, in milliseconds, if available.
 	readonly timestamp?: number
 }
 
+// Solved axis geometry: unit direction, rate, travel, and residual diagnostics.
 export interface GuidingCalibrationAxisSolution {
+	// Unit axis direction X component (image space).
 	readonly unitX: number
+	// Unit axis direction Y component (image space).
 	readonly unitY: number
+	// Axis motion rate, in pixels per millisecond.
 	readonly ratePxPerMs: number
+	// Total projected travel, in pixels.
 	readonly totalTravelPx: number
+	// Total pulse time accumulated, in milliseconds.
 	readonly totalPulse: number
+	// Axis angle in image space, in radians.
 	readonly angle: Angle
+	// RMS of the orthogonal residuals, in pixels.
 	readonly rmsOrthogonalResidualPx: number
+	// Count of steps that projected opposite to the axis direction.
 	readonly negativeProjectionCount: number
 }
 
+// An axis solution tagged with its commanded direction.
 export interface GuidingCalibrationAxisSolutionForDirection<D> extends GuidingCalibrationAxisSolution {
+	// Commanded direction this solution corresponds to.
 	readonly direction: D
 }
 
+// Structured calibration failure with the phase and frame where it occurred.
 export interface GuidingCalibrationFailure {
+	// Machine-readable failure code.
 	readonly code: GuidingCalibrationFailureCode
+	// Phase active when the failure occurred.
 	readonly phase: GuidingCalibrationPhase
+	// Human-readable explanation.
 	readonly message: string
+	// Frame identifier where the failure occurred, if available.
 	readonly frameId?: number
 }
 
+// Completed calibration: both axis solutions and the derived calibration matrices.
 export interface GuidingCalibrationResult {
+	// Solved RA axis with its direction.
 	readonly ra: GuidingCalibrationAxisSolutionForDirection<GuideDirectionRA>
+	// Solved DEC axis with its direction.
 	readonly dec: GuidingCalibrationAxisSolutionForDirection<GuideDirectionDEC>
+	// Forward (axis-to-image) motion matrix.
 	readonly imageMotion: CalibrationMatrix
+	// Inverse (image-to-axis) matrix used by the guider.
 	readonly imageToAxis: CalibrationMatrix
+	// Determinant of the image-motion matrix.
 	readonly determinant: number
-	readonly backlash: number // ms
+	// Estimated DEC backlash, in milliseconds.
+	readonly backlash: number
+	// RA leg origin X, in pixels.
 	readonly startX: number
+	// RA leg origin Y, in pixels.
 	readonly startY: number
+	// DEC leg origin X, in pixels.
 	readonly decStartX: number
+	// DEC leg origin Y, in pixels.
 	readonly decStartY: number
+	// Number of clearing steps performed.
 	readonly clearingSteps: number
+	// Non-fatal warnings raised during the solve.
 	readonly warnings: readonly string[]
 }
 
@@ -137,45 +221,81 @@ export function flipGuidingCalibration(calibration: GuidingCalibrationResult, re
 	}
 }
 
+// Per-step diagnostics snapshot for monitoring and tests. Distances are pixels; backlash is milliseconds.
 export interface GuidingCalibrationDiagnostics {
+	// Current phase.
 	readonly phase: GuidingCalibrationPhase
+	// Frame identifier, if available.
 	readonly frameId?: number
+	// Total detected stars.
 	readonly totalStars: number
+	// Stars accepted after filtering.
 	readonly acceptedStars: number
+	// Accepted/total ratio in [0, 1].
 	readonly qualityScore: number
+	// Count of rejected stars by reason.
 	readonly rejectedReasons: Readonly<Record<string, number>>
+	// Calibration origin X, in pixels.
 	readonly startX?: number
+	// Calibration origin Y, in pixels.
 	readonly startY?: number
+	// Current tracked X, in pixels.
 	readonly currentX?: number
+	// Current tracked Y, in pixels.
 	readonly currentY?: number
+	// DEC leg origin X, in pixels.
 	readonly decStartX?: number
+	// DEC leg origin Y, in pixels.
 	readonly decStartY?: number
+	// RA forward steps taken.
 	readonly raSteps: number
+	// DEC forward steps taken.
 	readonly decSteps: number
+	// Clearing steps taken.
 	readonly clearingSteps: number
+	// Net RA travel, in pixels.
 	readonly raNetDistancePx: number
+	// Net DEC travel, in pixels.
 	readonly decNetDistancePx: number
+	// Distance from origin during/after clearing, in pixels.
 	readonly clearingDistancePx: number
+	// Consecutive bad frames.
 	readonly badFrames: number
+	// Estimated DEC backlash, in milliseconds.
 	readonly backlash: number
+	// Whether DEC motion has been detected past the backlash.
 	readonly decMotionDetected: boolean
+	// Pulse queued for the caller to execute, if any.
 	readonly pendingPulse?: CalibrationPulseCommand
+	// Accumulated non-fatal warnings.
 	readonly warnings: readonly string[]
+	// Free-form per-step notes.
 	readonly notes: readonly string[]
+	// Ordered phase transition history.
 	readonly phaseHistory: readonly GuidingCalibrationPhase[]
+	// Recorded RA forward samples.
 	readonly raSamples: readonly GuidingCalibrationSample[]
+	// Recorded DEC samples.
 	readonly decSamples: readonly GuidingCalibrationSample[]
+	// Recorded clearing samples.
 	readonly clearingSamples: readonly GuidingCalibrationSample[]
 }
 
+// Outcome of one processFrame call: phase, optional pulse to execute, terminal result, and diagnostics.
 export interface CalibrationStepResult {
+	// Phase after processing the frame.
 	readonly phase: GuidingCalibrationPhase
+	// Pulse the caller should execute before the next frame, if any.
 	readonly pulse?: CalibrationPulseCommand
+	// Final calibration result once completed.
 	readonly completed?: GuidingCalibrationResult
+	// Failure detail once failed.
 	readonly failure?: GuidingCalibrationFailure
+	// Diagnostics for this step.
 	readonly diagnostics: GuidingCalibrationDiagnostics
 }
 
+// Internal mutable state of the calibration state machine.
 interface GuidingCalibratorState {
 	phase: GuidingCalibrationPhase
 	startX: number
@@ -211,13 +331,17 @@ interface GuidingCalibratorState {
 	lastDiagnostics: GuidingCalibrationDiagnostics
 }
 
+// A configuration-validation problem: which key failed and why.
 interface GuidingCalibrationConfigIssue {
 	readonly key: string
 	readonly reason: string
 }
 
+// Sentinel pulse representing no motion on an axis.
 const NO_PULSE: AxisPulse = { direction: null, duration: 0 }
 
+// Default calibration tuning: ~650 ms pulses, west/north legs, RA clearing enabled, 12° minimum
+// axis separation.
 export const DEFAULT_GUIDING_CALIBRATOR_CONFIG: Readonly<GuidingCalibrationConfig> = {
 	raPulse: 650,
 	decPulse: 650,
@@ -247,6 +371,7 @@ export const DEFAULT_GUIDING_CALIBRATOR_CONFIG: Readonly<GuidingCalibrationConfi
 	filter: DEFAULT_GUIDER_CONFIG.filter,
 }
 
+// Pristine diagnostics snapshot for the idle state.
 const EMPTY_DIAGNOSTICS: Readonly<GuidingCalibrationDiagnostics> = {
 	phase: 'idle',
 	totalStars: 0,
@@ -270,6 +395,7 @@ const EMPTY_DIAGNOSTICS: Readonly<GuidingCalibrationDiagnostics> = {
 	clearingSamples: [],
 }
 
+// Pristine internal state cloned on construction and reset.
 const EMPTY_GUIDING_CALIBRATOR_STATE: Readonly<GuidingCalibratorState> = {
 	phase: 'idle',
 	startX: 0,

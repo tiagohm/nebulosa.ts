@@ -12,9 +12,19 @@ import { GuidingAssistant, type GuidingAssistantConfig, type GuidingAssistantRes
 import { type CalibrationPulseCommand, flipGuidingCalibration, type GuidingCalibrationDiagnostics, type GuidingCalibrationResult, GuidingCalibrator } from './calibrator'
 import { type AxisPulse, type DeclinationGuideMode, type GuideCommand, type GuideFrame, Guider, type GuideStar } from './guider'
 
+// Local autoguiding orchestrator exposing a PHD2-compatible API over INDI camera and guide-output
+// devices. It decodes each camera BLOB, detects stars, drives the GuidingCalibrator and Guider state
+// machines, and reproduces PHD2 behaviors — app-state lifecycle, lock position, dithering (random and
+// spiral), lock-shift drift compensation, settle tracking, meridian-flip calibration flip, and the
+// guiding assistant — while emitting PHD2-shaped events. Distances are pixels; pulse durations and
+// timing are milliseconds; pixel scale is arcsec/pixel.
+
+// Default guide exposure when none has been set, in seconds.
 const DEFAULT_GUIDER_EXPOSURE = 1
+// Default star-image search-region side, in pixels.
 const DEFAULT_SEARCH_REGION = 64
 
+// Placeholder calibration data returned before any calibration is solved.
 const EMPTY_CALIBRATION_DATA: Readonly<PHD2CalibrationData> = {
 	calibrated: false,
 	xAngle: 0,
@@ -25,6 +35,7 @@ const EMPTY_CALIBRATION_DATA: Readonly<PHD2CalibrationData> = {
 	yParity: '+',
 }
 
+// Default lock-shift parameters: drift compensation disabled, zero rate, image X/Y axes.
 const DEFAULT_LOCK_SHIFT_PARAMS: Readonly<PHD2LockShiftParams> = {
 	enabled: false,
 	rate: [0, 0],
@@ -35,14 +46,21 @@ const DEFAULT_LOCK_SHIFT_PARAMS: Readonly<PHD2LockShiftParams> = {
 // PHD2 dither patterns: independent per-axis uniform random, or an expanding lattice spiral.
 export type GuiderDitherMode = 'random' | 'spiral'
 
+// Construction options for a GuiderClient.
 export interface GuiderClientOptions {
+	// Optional event handler receiving PHD2-shaped notifications.
 	readonly handler?: GuiderClientHandler
+	// Whether to reverse DEC output after flipping the calibration on a meridian flip.
 	readonly reverseDecOutputAfterMeridianFlip?: boolean
-	readonly searchRegion?: number // pixels
+	// Star-image search-region side, in pixels (clamped to [16, 128]).
+	readonly searchRegion?: number
+	// Whether to preserve the exact lock position across guider re-initialization.
 	readonly stickyLockPosition?: boolean
+	// Dither pattern used by dither().
 	readonly ditherMode?: GuiderDitherMode
 }
 
+// Optics parameters supplied at connect time to derive the guider pixel scale.
 export interface GuiderClientConnectOptions {
 	readonly focalLength?: number // Optical focal length in mm; takes precedence over aperture-derived focal length.
 	readonly aperture?: number // Optical aperture in mm, used together with focalRatio when focalLength is unavailable.
@@ -50,7 +68,9 @@ export interface GuiderClientConnectOptions {
 	readonly pixelSize?: number // Unbinned guider pixel size in um; camera metadata is used when omitted.
 }
 
+// Callbacks for observing client activity.
 export interface GuiderClientHandler {
+	// Invoked for every emitted PHD2-shaped event.
 	readonly event?: (client: GuiderClient, event: PHD2Events) => void
 }
 

@@ -4,135 +4,243 @@ import type { DetectedStar } from '../../imaging/stars/detector'
 import { Matrix } from '../../math/linear-algebra/matrix'
 import { clamp } from '../../math/numerical/math'
 
+// Self-contained autoguiding controller. Given a stream of star-detection frames and a calibration
+// matrix mapping image pixels to mount RA/DEC axes, the Guider averages a lock reference, measures
+// per-frame translation (single- or multi-star with robust outlier rejection), rejects bad/dropped
+// frames, and emits RA/DEC pulse commands using deadband, hysteresis smoothing, cadence-aware gain,
+// and DEC backlash/reversal handling. Also provides standalone star filtering and guide-star selection.
+// Image coordinates are pixels; pulse durations are milliseconds; calibration is dimensionless.
+
+// RA correction direction.
 export type GuideDirectionRA = 'west' | 'east'
 
+// DEC correction direction.
 export type GuideDirectionDEC = 'north' | 'south'
 
+// DEC guiding policy; restricts or disables corrections to manage backlash.
 export type DeclinationGuideMode = 'auto' | 'north-only' | 'south-only' | 'off'
 
+// Whether translation is measured from one star or many.
 export type GuidingMode = 'single-star' | 'multi-star'
 
+// A detected star augmented with optional guiding-quality attributes.
 export interface GuideStar extends DetectedStar {
+	// Whether the detector flagged the star as usable.
 	readonly valid?: boolean
+	// Whether the star is saturated.
 	readonly saturated?: boolean
+	// Peak pixel value sampled around the centroid.
 	readonly peak?: number
+	// Shape ellipticity in [0, 1); higher means more elongated.
 	readonly ellipticity?: number
+	// Full width at half maximum, in pixels.
 	readonly fwhm?: number
 }
 
+// One guide-camera frame of detected stars.
 export interface GuideFrame {
+	// Stars detected in this frame.
 	readonly stars: readonly GuideStar[]
+	// Frame width, in pixels.
 	readonly width: number
+	// Frame height, in pixels.
 	readonly height: number
-	readonly timestamp?: number // ms
+	// Capture timestamp, in milliseconds; enables cadence and dropped-frame detection.
+	readonly timestamp?: number
+	// Optional monotonic frame identifier.
 	readonly frameId?: number
 }
 
+// A commanded pulse on one mount axis.
 export interface AxisPulse {
+	// Pulse direction, or null for no motion.
 	readonly direction: GuideDirectionRA | GuideDirectionDEC | null
-	readonly duration: number // ms
+	// Pulse duration, in milliseconds.
+	readonly duration: number
 }
 
+// Result of processing one frame: the resulting state and per-axis pulses with diagnostics.
 export interface GuideCommand {
+	// Guider state after this frame.
 	readonly state: GuiderState
+	// RA-axis pulse.
 	readonly ra: AxisPulse
+	// DEC-axis pulse.
 	readonly dec: AxisPulse
+	// Detailed diagnostics for this frame.
 	readonly diagnostics: GuideDiagnostics
 }
 
+// Detailed per-frame telemetry for monitoring and testing.
 export interface GuideDiagnostics {
+	// Frame identifier, if provided.
 	readonly frameId?: number
+	// Total detected stars.
 	readonly totalStars: number
+	// Stars accepted after filtering.
 	readonly acceptedStars: number
+	// Accepted/total ratio in [0, 1].
 	readonly qualityScore: number
+	// Measurement mode actually used, or null when no measurement was made.
 	readonly modeUsed: GuidingMode | null
+	// Measured guide-star X, in pixels.
 	readonly measurementX?: number
+	// Measured guide-star Y, in pixels.
 	readonly measurementY?: number
+	// Reference lock X, in pixels.
 	readonly referenceX?: number
+	// Reference lock Y, in pixels.
 	readonly referenceY?: number
+	// Target (reference + dither) X, in pixels.
 	readonly targetX?: number
+	// Target (reference + dither) Y, in pixels.
 	readonly targetY?: number
-	readonly dx?: number // px
-	readonly dy?: number // px
+	// Image-space error along X, in pixels.
+	readonly dx?: number
+	// Image-space error along Y, in pixels.
+	readonly dy?: number
+	// Calibrated RA-axis error.
 	readonly axisErrorRA?: number
+	// Calibrated DEC-axis error.
 	readonly axisErrorDEC?: number
+	// Hysteresis-filtered RA error.
 	readonly filteredRA?: number
+	// Hysteresis-filtered DEC error.
 	readonly filteredDEC?: number
+	// Count of rejected stars by reason.
 	readonly rejectedReasons: Readonly<Record<string, number>>
+	// Whether this frame was rejected.
 	readonly badFrame: boolean
+	// Consecutive bad-frame count.
 	readonly lostFrames: number
+	// Whether the guider has entered the lost state.
 	readonly lost: boolean
+	// Whether dithering is active.
 	readonly ditherActive: boolean
+	// Whether this frame was classified as dropped by cadence.
 	readonly droppedFrame: boolean
+	// Free-form per-frame notes.
 	readonly notes: readonly string[]
 }
 
+// Row-major 2×2 image-to-axis calibration matrix [a, b, c, d].
 export type CalibrationMatrix = readonly [number, number, number, number]
 
+// Quality and geometry thresholds used to accept or reject guide stars.
 export interface StarFilterConfig {
+	// Minimum signal-to-noise ratio.
 	readonly minStarSnr: number
+	// Minimum integrated flux.
 	readonly minFlux: number
+	// Maximum half-flux diameter, in pixels.
 	readonly maxHfd: number
+	// Border exclusion margin, in pixels.
 	readonly borderMarginPx: number
+	// Maximum allowed ellipticity in [0, 1).
 	readonly maxEllipticity: number
+	// Maximum allowed FWHM, in pixels.
 	readonly maxFwhm?: number
+	// Peak value at/above which a star is treated as saturated.
 	readonly saturationPeak?: number
 }
 
+// Full guider configuration. All position fields are pixels; pulse durations are milliseconds.
 export interface GuiderConfig {
+	// Single- or multi-star measurement mode.
 	readonly mode: GuidingMode
+	// Image-to-axis calibration matrix.
 	readonly calibration: CalibrationMatrix
-	readonly referencePosition?: readonly [number, number] // px
-	readonly initialPosition?: readonly [number, number] // px
+	// Optional fixed lock reference, in pixels; overrides the averaged reference.
+	readonly referencePosition?: readonly [number, number]
+	// Optional preferred initial lock-star position, in pixels.
+	readonly initialPosition?: readonly [number, number]
+	// Number of frames averaged to establish the lock reference.
 	readonly lockAveragingFrames: number
+	// Maximum nearest-neighbor match distance, in pixels.
 	readonly maxMatchDistancePx: number
+	// Maximum per-frame centroid jump before rejecting the frame, in pixels.
 	readonly maxFrameJumpPx: number
+	// Sigma multiplier for translation outlier rejection.
 	readonly outlierSigma: number
+	// Minimum acceptable frame quality score in [0, 1].
 	readonly minFrameQuality: number
+	// Consecutive bad frames before declaring the star lost.
 	readonly lostStarFrameCount: number
-	readonly nominalCadence: number // ms
+	// Expected frame cadence, in milliseconds.
+	readonly nominalCadence: number
+	// Cadence multiple above which a frame is treated as dropped.
 	readonly droppedFrameFactor: number
+	// RA deadband; errors below this produce no pulse.
 	readonly minMoveRA: number
+	// DEC deadband; errors below this produce no pulse.
 	readonly minMoveDEC: number
+	// RA proportional gain in [0, 1].
 	readonly aggressivenessRA: number
+	// DEC proportional gain in [0, 1].
 	readonly aggressivenessDEC: number
+	// RA hysteresis smoothing factor in [0, 1].
 	readonly hysteresisRA: number
+	// DEC hysteresis smoothing factor in [0, 1].
 	readonly hysteresisDEC: number
+	// Milliseconds of RA pulse per unit of axis error.
 	readonly msPerRAUnit: number
+	// Milliseconds of DEC pulse per unit of axis error.
 	readonly msPerDECUnit: number
+	// Minimum RA pulse, in milliseconds.
 	readonly minPulseMsRA: number
+	// Maximum RA pulse, in milliseconds.
 	readonly maxPulseMsRA: number
+	// Minimum DEC pulse, in milliseconds.
 	readonly minPulseMsDEC: number
+	// Maximum DEC pulse, in milliseconds.
 	readonly maxPulseMsDEC: number
+	// Direction corresponding to a positive RA error.
 	readonly raPositiveDirection: GuideDirectionRA
+	// Direction corresponding to a positive DEC error.
 	readonly decPositiveDirection: GuideDirectionDEC
+	// DEC guiding policy.
 	readonly decMode: DeclinationGuideMode
+	// Minimum magnitude to permit a DEC direction reversal.
 	readonly decReversalThreshold: number
+	// Accumulated opposite-direction error needed before resuming DEC pulses after a reversal.
 	readonly decBacklashAccumThreshold: number
+	// Star filtering thresholds.
 	readonly filter: StarFilterConfig
 }
 
+// Output of star filtering: accepted stars plus rejection statistics.
 export interface FilteredStars {
+	// Stars that passed the filter.
 	readonly accepted: GuideStar[]
+	// Count of rejected stars by reason.
 	readonly rejectedReasons: Record<string, number>
+	// Accepted/total ratio in [0, 1].
 	readonly qualityScore: number
 }
 
+// Estimated guide-star position with the mode and match count that produced it.
 export interface TranslationMeasurement {
+	// Measured X, in pixels.
 	readonly x: number
+	// Measured Y, in pixels.
 	readonly y: number
+	// Mode used for this measurement.
 	readonly usedMode: GuidingMode
+	// Number of star matches contributing to the estimate.
 	readonly matches: number
 }
 
+// High-level guider lifecycle state.
 export type GuiderState = 'idle' | 'initializing' | 'guiding' | 'lost'
 
+// One averaged lock-acquisition sample.
 interface LockSample {
 	readonly x: number
 	readonly y: number
 	readonly stars: readonly GuideStar[]
 }
 
+// Internal mutable runtime state of the guider.
 interface GuiderInternalState {
 	state: GuiderState
 	lockSamples: LockSample[]
@@ -156,6 +264,7 @@ interface GuiderInternalState {
 	lastDiagnostics: GuideDiagnostics
 }
 
+// Measurement payload passed to diagnostics assembly (pixels and calibrated axis errors).
 export interface DiagnosticMeasurement {
 	measurementX: number
 	measurementY: number
@@ -169,19 +278,27 @@ export interface DiagnosticMeasurement {
 	notes: readonly string[]
 }
 
+// A configuration-validation problem: which key failed and why.
 export interface ConfigIssue {
 	readonly key: string
 	readonly reason: string
 }
 
+// Resolved configuration for guide-star selection (filter plus isolation/alternative rules).
 export interface GuideStarSelectionConfig {
+	// Star filtering thresholds.
 	readonly filter: StarFilterConfig
+	// Absolute minimum neighbor separation, in pixels.
 	readonly minNeighborDistancePx: number
+	// Neighbor separation as a multiple of HFD.
 	readonly minNeighborDistanceHfdRatio: number
+	// Minimum spacing between chosen alternatives, in pixels.
 	readonly alternativeSeparationPx: number
+	// Maximum number of alternative stars to return.
 	readonly maxAlternatives: number
 }
 
+// Optional overrides for guide-star selection; unset fields fall back to defaults.
 export interface GuideStarSelectionOptions {
 	readonly filter?: Partial<StarFilterConfig>
 	readonly minNeighborDistancePx?: number
@@ -190,22 +307,35 @@ export interface GuideStarSelectionOptions {
 	readonly maxAlternatives?: number
 }
 
+// A guide star scored and annotated for selection.
 export interface SelectedGuideStar extends GuideStar {
+	// Composite selection score; higher is better.
 	readonly score: number
+	// Distance to the nearest frame edge, in pixels.
 	readonly edgeDistance: number
+	// Distance to the optical center, in pixels.
 	readonly centerDistance: number
+	// Distance to the nearest neighbor star, in pixels.
 	readonly nearestNeighborDistance: number
+	// Whether the star is close to saturation.
 	readonly nearSaturation: boolean
 }
 
+// Outcome of guide-star selection: the primary pick, spaced alternatives, and all candidates.
 export interface GuideStarSelection {
+	// Best guide star, if any qualified.
 	readonly primary?: SelectedGuideStar
+	// Spaced alternative guide stars.
 	readonly alternatives: SelectedGuideStar[]
+	// All scored candidates in ranked order.
 	readonly candidates: SelectedGuideStar[]
+	// Count of rejected stars by reason.
 	readonly rejectedReasons: Record<string, number>
+	// Accepted/total ratio in [0, 1].
 	readonly qualityScore: number
 }
 
+// Default guider tuning: multi-star, identity calibration, conservative gains and pulse limits.
 export const DEFAULT_GUIDER_CONFIG: Readonly<GuiderConfig> = {
 	mode: 'multi-star',
 	calibration: [1, 0, 0, 1],
@@ -245,6 +375,7 @@ export const DEFAULT_GUIDER_CONFIG: Readonly<GuiderConfig> = {
 	},
 }
 
+// Default guide-star selection tuning, reusing the default filter and isolation/alternative spacing.
 export const DEFAULT_GUIDE_STAR_SELECTION_CONFIG: Readonly<GuideStarSelectionConfig> = {
 	filter: DEFAULT_GUIDER_CONFIG.filter,
 	minNeighborDistancePx: 12,
@@ -649,6 +780,7 @@ export function applyDeadband(error: number, minMove: number) {
 // Sentinel axis pulse representing no commanded motion on one axis.
 export const NO_PULSE: AxisPulse = { direction: null, duration: 0 }
 
+// Pristine internal state cloned on construction and reset; all counters and filters start cleared.
 const EMPTY_STATE: Readonly<GuiderInternalState> = {
 	state: 'idle',
 	lockSamples: [],
