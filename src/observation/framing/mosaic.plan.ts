@@ -1,6 +1,13 @@
 import { PI, PIOVERTWO } from '../../core/constants'
 import { type Angle, normalizeAngle, normalizePI } from '../../math/units/angle'
 
+// Rectangular mosaic planner for wide-field imaging. Given a center, per-panel field of view, requested
+// coverage, overlap, and position angle, it lays out a grid of panels on a single shared gnomonic
+// tangent plane centered on the target and inverse-projects each panel center and footprint back to
+// equatorial coordinates. Panel counts are rounded up so coverage spans the request; capture order
+// follows row-major or serpentine traversal. All angular inputs/outputs are radians; sizes are handled
+// internally as tangent-plane extents (2·tan(angle/2)) so panel spacing is correct across the field.
+
 // Maximum sparse-array length accepted by JavaScript engines.
 const MAX_ARRAY_LENGTH = 0xffffffff
 

@@ -1,35 +1,62 @@
 import { midPoint, type Point } from '../../math/numerical/geometry'
 import { type HyperbolicRegression, hyperbolicRegression, type QuadraticRegression, quadraticRegression, type Regression, regressionScore, type TrendLineRegression, trendLineRegression } from '../../math/numerical/regression'
 
+// Camera-based autofocus routine driven by half-flux-diameter (HFD) measurements. The AutoFocus state
+// machine samples HFD across a range of focuser positions, fits a V-curve (trend lines, parabola,
+// hyperbola, or a blend), and returns the best-focus position; callers issue one capture per returned
+// MOVE step. BacklashCompensator converts a target position into the moves needed to absorb mechanical
+// backlash. Positions are focuser steps (integer-like); HFD is in pixels, with 0 used as the
+// invalid-sample sentinel.
+
+// V-curve fitting strategy used to locate best focus.
 export type AutoFocusFittingMode = 'TRENDLINES' | 'PARABOLIC' | 'TREND_PARABOLIC' | 'HYPERBOLIC' | 'TREND_HYPERBOLIC'
 
+// Backlash handling: none, absolute offset accumulation, or overshoot-and-return.
 export type BacklashCompensationMode = 'NONE' | 'ABSOLUTE' | 'OVERSHOOT'
 
+// Last focuser travel direction used for backlash decisions; NONE before any move.
 export type OvershootDirection = 'NONE' | 'IN' | 'OUT'
 
+// Kind of step returned by the autofocus state machine.
 export type AutoFocusStepType = 'MOVE' | 'FAILED' | 'COMPLETED'
 
+// Mechanical backlash parameters for a focuser.
 export interface BacklashCompensation {
+	// Active compensation strategy.
 	mode: BacklashCompensationMode
+	// Backlash absorbed when reversing into the IN direction, in steps.
 	backlashIn: number
+	// Backlash absorbed when reversing into the OUT direction, in steps.
 	backlashOut: number
 }
 
+// One command emitted by the autofocus state machine; exactly one of relative/absolute is set for MOVE.
 export interface AutoFocusStep {
+	// Step kind.
 	type: AutoFocusStepType
+	// Relative move in steps (signed).
 	relative?: number
+	// Absolute target position in steps.
 	absolute?: number
 }
 
+// Configuration for an autofocus run.
 export interface AutoFocusOptions {
+	// Number of step offsets to scan on each side of the starting position.
 	initialOffsetSteps: number
+	// Focuser step size between samples.
 	stepSize: number
+	// V-curve fitting strategy.
 	fittingMode: AutoFocusFittingMode
+	// Optional max acceptable RMSD/HFD ratio; fits above it are rejected (0 disables the check).
 	rmsdThreshold?: number
+	// Reverses the scan direction for focusers that move opposite to the default convention.
 	reversed: boolean
+	// Maximum reachable focuser position; 0 disables the upper bound.
 	maxPosition: number
 }
 
+// HFD sentinel marking an invalid or rejected measurement.
 const INVALID_HFD = 0
 
 // Sorts measured focus points by absolute focuser position.
@@ -47,7 +74,10 @@ function isValidFocusPoint(point: Point) {
 	return Number.isFinite(point.x) && point.y > INVALID_HFD
 }
 
+// Autofocus state machine. Feed it one (position, HFD) sample per capture via add(); it returns the
+// next MOVE, or a terminal COMPLETED/FAILED step once the V-curve is sufficiently sampled and fit.
 export class AutoFocus {
+	// Internal phase: 0 idle, 1 curve fitting.
 	#state = 0
 	#initialFocusPosition = 0
 	#remainingSteps = 0
@@ -364,8 +394,12 @@ export class AutoFocus {
 	}
 }
 
+// Translates a desired focuser target into the move(s) needed to absorb mechanical backlash, using
+// either an accumulated absolute offset or an overshoot-then-return pair, depending on the mode.
 export class BacklashCompensator {
+	// Accumulated absolute-mode position offset, in steps.
 	#offset = 0
+	// Direction of the last applied move, used to detect reversals.
 	#lastDirection: OvershootDirection = 'NONE'
 
 	// Stores backlash parameters and the focuser travel limit.
