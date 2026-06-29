@@ -4,12 +4,23 @@ import { hasKeyword, numericKeyword, textKeyword } from '../../io/formats/fits/u
 import { clamp } from '../../math/numerical/math'
 import { type Angle, deg, normalizeAngle, normalizePI } from '../../math/units/angle'
 
+// FITS WCS handling for the gnomonic (TAN / TAN-SIP) projection. Reads the CD/PC/CDELT+CROTA keyword
+// variants into a unified row-major CD matrix, builds a compact tangent-plane descriptor (tanHeader),
+// and provides forward/inverse sky↔pixel transforms (tanProject/tanUnproject) including SIP distortion
+// polynomials. Angles are radians; FITS keyword values are in degrees and converted on read.
+
+// Matches direct CD-matrix keywords (CDi_j).
 const DIRECT_CD_KEY_PATTERN = /^CD\d+_\d+$/
+// Matches PC-matrix keywords (PCi_j).
 const PC_KEY_PATTERN = /^PC\d+_\d+$/
+// Matches every WCS keyword (including SIP terms) handled by this module.
 const WCS_FITS_KEY_PATTERN = /^(?:WCSAXES|CUNIT\d+|CTYPE\d+|CRPIX\d+|CRVAL\d+|PS\d+_\d+|PV\d+_\d+|CD\d+_\d+|PC\d+_\d+|CDELT\d+|CROTA\d+|RADESYS|LONPOLE|LATPOLE|EQUINOX|A_\d+_\d+|AP_\d+_\d+|B_\d+_\d+|BP_\d+_\d+|A_ORDER|AP_ORDER|B_ORDER|BP_ORDER|A_DMAX|B_DMAX)$/
+// Iteration cap for the Newton inversion of the forward SIP polynomial.
 const SIP_MAX_ITERATIONS = 20
+// Pixel convergence tolerance for the SIP inversion.
 const SIP_TOLERANCE = 1e-9
 
+// Union of FITS WCS keyword names recognized by this module.
 export type WcsFitsKeywords =
 	| 'WCSAXES'
 	| `CUNIT${number}`
@@ -37,17 +48,24 @@ export type WcsFitsKeywords =
 	| 'A_DMAX'
 	| 'B_DMAX'
 
+// Flat, precomputed tangent-plane descriptor packed for hot-path projection. Tuple order:
+// crpix1, crpix2, crval1, crval2 (radians), cd11, cd12, cd21, cd22, determinant,
+// cosPoleRotation, sinPoleRotation, aOrder, bOrder, apOrder, bpOrder.
 export type TanHeader = readonly [number, number, number, number, number, number, number, number, number, number, number, number, number, number, number] // crpix1, crpix2, crval1, crval2, cd11, cd12, cd21, cd22, determinant, cosPoleRotation, sinPoleRotation, aOrder, bOrder, apOrder, bpOrder
 
+// Row-major 2x2 CD matrix [cd11, cd12, cd21, cd22] in degrees per pixel.
 export type CDMatrix = readonly [number, number, number, number]
 
+// Which keyword convention supplies the linear transform: direct CD, PC+CDELT, CDELT+CROTA, or none.
 export type CDMatrixKind = 'cd' | 'pc' | 'crota' | 'none'
 
+// Returns true when the header has any defined keyword matching the pattern.
 function hasMatchingKeyword(header: FitsHeader, pattern: RegExp) {
 	for (const key in header) if (header[key] !== undefined && pattern.test(key)) return true
 	return false
 }
 
+// Detects which CD-matrix convention the header uses, preferring direct CD, then PC, then CROTA.
 export function matrixKind(header: FitsHeader): CDMatrixKind {
 	if (hasMatchingKeyword(header, DIRECT_CD_KEY_PATTERN)) return 'cd'
 	const hasScale = hasKeyword(header, 'CDELT1') && hasKeyword(header, 'CDELT2')
@@ -56,35 +74,45 @@ export function matrixKind(header: FitsHeader): CDMatrixKind {
 	return 'none'
 }
 
+// Reads a PCi_j element, defaulting to the identity (1 on the diagonal, 0 off it).
 function pcKeyword(header: FitsHeader, i: number, j: number) {
 	return numericKeyword(header, `PC${i}_${j}`, i === j ? 1 : 0)
 }
 
+// Returns the trimmed, upper-cased CTYPE axis-type string.
 function tanAxisType(header: FitsHeader, key: 'CTYPE1' | 'CTYPE2') {
 	return textKeyword(header, key, '').trim().toUpperCase()
 }
 
+// CTYPE value for a plain gnomonic right-ascension axis.
 export const RA_TAN = 'RA---TAN'
+// CTYPE value for a gnomonic right-ascension axis with SIP distortion.
 export const RA_TAN_SIP = 'RA---TAN-SIP'
+// CTYPE value for a plain gnomonic declination axis.
 export const DEC_TAN = 'DEC--TAN'
+// CTYPE value for a gnomonic declination axis with SIP distortion.
 export const DEC_TAN_SIP = 'DEC--TAN-SIP'
 
+// Returns true when both axes are gnomonic (TAN or TAN-SIP), treating empty CTYPEs as acceptable.
 function hasTanAxes(header: FitsHeader) {
 	const ctype1 = tanAxisType(header, 'CTYPE1')
 	const ctype2 = tanAxisType(header, 'CTYPE2')
 	return (!ctype1 || ctype1 === RA_TAN || ctype1 === RA_TAN_SIP) && (!ctype2 || ctype2 === DEC_TAN || ctype2 === DEC_TAN_SIP)
 }
 
+// Returns true when both axes declare SIP distortion (TAN-SIP).
 function hasSipAxes(header: FitsHeader) {
 	return tanAxisType(header, 'CTYPE1') === RA_TAN_SIP && tanAxisType(header, 'CTYPE2') === DEC_TAN_SIP
 }
 
+// Reads a SIP polynomial order keyword as a non-negative integer.
 function sipOrder(header: FitsHeader, key: 'A_ORDER' | 'B_ORDER' | 'AP_ORDER' | 'BP_ORDER') {
 	return Math.trunc(numericKeyword(header, key, 0))
 }
 
 // https://fits.gsfc.nasa.gov/registry/sip/SIP_distortion_v1_0.pdf
 
+// Evaluates a SIP distortion polynomial sum(coeff_pq · u^p · v^q) for p+q ≤ order at pixel offset (u, v).
 function sipPolynomial(header: FitsHeader, prefix: 'A_' | 'B_' | 'AP_' | 'BP_', order: number, u: number, v: number) {
 	if (order <= 0) return 0
 
@@ -105,14 +133,18 @@ function sipPolynomial(header: FitsHeader, prefix: 'A_' | 'B_' | 'AP_' | 'BP_', 
 	return value
 }
 
+// Applies the forward SIP correction, mapping raw pixel offsets (u, v) to distortion-corrected (U, V).
 function forwardSip(header: FitsHeader, u: number, v: number, aOrder: number, bOrder: number) {
 	return [u + sipPolynomial(header, 'A_', aOrder, u, v), v + sipPolynomial(header, 'B_', bOrder, u, v)] as const
 }
 
+// Applies the inverse SIP polynomials (AP/BP), mapping corrected (U, V) back to raw pixel offsets.
 function inverseSip(header: FitsHeader, U: number, V: number, apOrder: number, bpOrder: number) {
 	return [U + sipPolynomial(header, 'AP_', apOrder, U, V), V + sipPolynomial(header, 'BP_', bpOrder, U, V)] as const
 }
 
+// Inverts the forward SIP map by fixed-point iteration when no AP/BP inverse polynomials are present.
+// Returns undefined on non-finite iterates; otherwise stops at SIP_TOLERANCE or SIP_MAX_ITERATIONS.
 function invertForwardSip(header: FitsHeader, U: number, V: number, aOrder: number, bOrder: number) {
 	let u = U
 	let v = V
@@ -131,6 +163,9 @@ function invertForwardSip(header: FitsHeader, U: number, V: number, aOrder: numb
 	return [u, v] as const
 }
 
+// Builds the packed tangent-plane descriptor from a FITS header, or undefined when the axes are not
+// gnomonic or the CD matrix is missing/degenerate. Reference values are converted to radians and the
+// LONPOLE-derived pole rotation is precomputed for the projection hot path.
 export function tanHeader(header: FitsHeader): TanHeader | undefined {
 	if (!hasTanAxes(header)) return undefined
 

@@ -6,23 +6,45 @@ import { Matrix, QrDecomposition } from '../../math/linear-algebra/matrix'
 import type { NumberArray } from '../../math/numerical/math'
 import { DEC_TAN, DEC_TAN_SIP, RA_TAN, RA_TAN_SIP } from './fits.wcs'
 
+// Fits forward SIP (Simple Imaging Polynomial) distortion coefficients from matched measured/reference
+// pixel pairs. Solves separable weighted least-squares for the A and B polynomials in centered pixel
+// coordinates (u = x − CRPIX1, v = y − CRPIX2) via column-scaled QR, with iterative sigma clipping,
+// condition-number and spatial-distribution guards, and rich residual diagnostics. Also writes the
+// fitted model back into a FITS header and evaluates/applies the correction. All coordinates are pixels.
+
+// Minimum supported SIP polynomial total order.
 const MIN_SIP_ORDER = 2
+// Maximum supported SIP polynomial total order.
 const MAX_SIP_ORDER = 5
+// Default maximum sigma-clipping iterations.
 const DEFAULT_MAX_ITERATIONS = 5
+// Default sigma-clip threshold in robust-scatter units.
 const DEFAULT_SIGMA_CLIP = 3
+// Default recommended stars-per-coefficient ratio for a stable fit.
 const DEFAULT_RECOMMENDED_STAR_RATIO = 2
+// Default spatial occupancy grid side (per axis).
 const DEFAULT_SPATIAL_GRID_SIZE = 2
+// Default minimum occupied grid cells required for an acceptable distribution.
 const DEFAULT_MIN_OCCUPIED_CELLS = 3
+// Default minimum occupied image quadrants required for an acceptable distribution.
 const DEFAULT_MIN_OCCUPIED_QUADRANTS = 3
+// Default maximum acceptable design-matrix condition number.
 const DEFAULT_MAX_CONDITION_NUMBER = 1e12
+// Scatter values at or below this are treated as effectively zero (converged).
 const MIN_SCATTER = 1e-12
+// Matches SIP coefficient/order/dmax header keywords for removal before rewriting.
 const SIP_HEADER_KEY_PATTERN = /^(?:A|B|AP|BP)(?:_ORDER|_DMAX|_\d+_\d+)$/
 
+// Categorized failure reasons thrown as SipFitError.
 export type SipErrorCode = 'invalidOrder' | 'invalidCoordinate' | 'invalidWeight' | 'invalidOption' | 'insufficientStars' | 'poorSpatialDistribution' | 'singularMatrix' | 'illConditionedFit' | 'excessiveOutlierRejection'
+// Weighting policy: derive from star weights when present ('auto'), force per-star, or unweighted.
 export type SipWeightingMode = 'auto' | 'none' | 'star'
+// Robust ('mad') vs classical ('standardDeviation') residual-scatter estimator for sigma clipping.
 export type SipScatterMode = 'mad' | 'standardDeviation'
+// How a poor spatial distribution is handled: ignored, warned, or treated as a hard failure.
 export type SipSpatialDistributionMode = 'off' | 'warn' | 'fail'
 
+// One matched star: measured pixel (x, y), reference pixel (xRef, yRef), and optional fit weight.
 export interface MatchedStar {
 	readonly x: number
 	readonly y: number
@@ -31,76 +53,123 @@ export interface MatchedStar {
 	readonly weight?: number
 }
 
+// Minimal WCS inputs needed for SIP fitting: the reference pixel and optional image size.
 export interface SipFitsHeader {
+	// Reference pixel x (CRPIX1).
 	readonly crpix1: number
+	// Reference pixel y (CRPIX2).
 	readonly crpix2: number
+	// Image width in pixels, used for spatial-distribution checks.
 	readonly width?: number
+	// Image height in pixels, used for spatial-distribution checks.
 	readonly height?: number
 }
 
+// Options controlling the SIP fit and its acceptance/robustness guards.
 export interface SipFitOptions {
+	// Total polynomial order (2..5).
 	readonly order: number
+	// Maximum sigma-clipping iterations.
 	readonly maxIterations?: number
+	// Sigma-clip threshold in scatter units.
 	readonly sigmaClip?: number
+	// Hard minimum star count (defaults to coefficients + 1).
 	readonly minStars?: number
+	// Recommended stars-per-coefficient ratio.
 	readonly minStarRatio?: number
+	// Whether to fail (rather than warn) when below the recommended star count.
 	readonly requireRecommendedStarCount?: boolean
+	// Weighting policy.
 	readonly weighting?: SipWeightingMode
+	// Residual-scatter estimator.
 	readonly scatter?: SipScatterMode
+	// Spatial-distribution enforcement policy.
 	readonly spatialDistribution?: SipSpatialDistributionMode
+	// Convenience flag mapping to 'warn' instead of the default 'fail'.
 	readonly allowPoorDistribution?: boolean
+	// Occupancy grid side per axis.
 	readonly spatialGridSize?: number
+	// Minimum occupied grid cells required.
 	readonly minOccupiedCells?: number
+	// Minimum occupied quadrants required.
 	readonly minOccupiedQuadrants?: number
+	// Image width in pixels (overrides header width).
 	readonly width?: number
+	// Image height in pixels (overrides header height).
 	readonly height?: number
+	// Maximum acceptable design-matrix condition number.
 	readonly maxConditionNumber?: number
 }
 
+// One SIP polynomial term exponent pair u^i · v^j.
 export interface SipTerm {
 	readonly i: number
 	readonly j: number
 }
 
+// Map from coefficient keyword (e.g. 'A_2_0') to its value.
 export type SipCoefficientMap = Readonly<Record<string, number>>
 
+// A fitted forward SIP model: per-axis coefficient maps plus the term list and orders.
 export interface SipModel {
 	readonly order: number
 	readonly A_ORDER: number
 	readonly B_ORDER: number
+	// x-correction polynomial coefficients keyed by 'A_i_j'.
 	readonly A: SipCoefficientMap
+	// y-correction polynomial coefficients keyed by 'B_i_j'.
 	readonly B: SipCoefficientMap
 	readonly terms: readonly SipTerm[]
 }
 
+// The unweighted least-squares design system for a SIP fit (one row per star).
 export interface SipDesignMatrix {
+	// Design matrix of term values per star.
 	readonly matrix: Matrix
 	readonly terms: readonly SipTerm[]
+	// Target x corrections (xRef − x).
 	readonly residualX: Float64Array
+	// Target y corrections (yRef − y).
 	readonly residualY: Float64Array
+	// Centered pixel x offsets (u).
 	readonly centeredX: Float64Array
+	// Centered pixel y offsets (v).
 	readonly centeredY: Float64Array
 }
 
+// Per-star residual record after a fit; all positions and residuals are pixels.
 export interface SipResidual {
+	// Original index in the input star array.
 	readonly index: number
 	readonly x: number
 	readonly y: number
 	readonly xRef: number
 	readonly yRef: number
+	// Target correction along x (xRef − x).
 	readonly dx: number
+	// Target correction along y (yRef − y).
 	readonly dy: number
+	// Model-predicted x correction.
 	readonly predDx: number
+	// Model-predicted y correction.
 	readonly predDy: number
+	// x residual (dx − predDx).
 	readonly rx: number
+	// y residual (dy − predDy).
 	readonly ry: number
+	// Residual magnitude hypot(rx, ry).
 	readonly r: number
+	// Whether the star was used in the final fit.
 	readonly used: boolean
+	// Whether the star was rejected by sigma clipping.
 	readonly rejected: boolean
+	// Iteration at which the star was rejected, when applicable.
 	readonly rejectedIteration?: number
 }
 
+// Spatial-distribution check results.
 export interface SipSpatialDiagnostics {
+	// Whether the check actually ran (needs image size and a non-'off' mode).
 	readonly checked: boolean
 	readonly width?: number
 	readonly height?: number
@@ -111,22 +180,34 @@ export interface SipSpatialDiagnostics {
 	readonly minOccupiedQuadrants?: number
 }
 
+// Diagnostic summary of a completed fit.
 export interface SipFitDiagnostics {
+	// Number of polynomial coefficients per axis.
 	readonly coefficientCount: number
+	// Sigma-clipping iterations performed.
 	readonly iterations: number
+	// Final robust scatter estimate.
 	readonly scatter: number
 	readonly scatterMode: SipScatterMode
+	// Estimated design-matrix condition number.
 	readonly conditionNumber: number
+	// Whether weighting was applied.
 	readonly weighted: boolean
+	// Total RMS of the raw (pre-fit) residuals, in pixels.
 	readonly rawRmsTotal: number
+	// Median used-residual magnitude, in pixels.
 	readonly medianResidual: number
+	// 90th-percentile used residual, in pixels.
 	readonly p90Residual: number
+	// 95th-percentile used residual, in pixels.
 	readonly p95Residual: number
+	// Maximum used residual, in pixels.
 	readonly maxResidual: number
 	readonly spatialDistribution?: SipSpatialDiagnostics
 	readonly warnings: readonly string[]
 }
 
+// Complete result of fitSipDistortion: the model, RMS metrics, star accounting, residuals, diagnostics.
 export interface SipFitResult {
 	readonly order: number
 	readonly A_ORDER: number
@@ -134,38 +215,54 @@ export interface SipFitResult {
 	readonly A: SipCoefficientMap
 	readonly B: SipCoefficientMap
 	readonly model: SipModel
+	// Combined RMS residual, in pixels.
 	readonly rmsTotal: number
+	// x RMS residual, in pixels.
 	readonly rmsX: number
+	// y RMS residual, in pixels.
 	readonly rmsY: number
+	// Number of input stars.
 	readonly inputStarCount: number
+	// Number of stars used in the final fit.
 	readonly usedStarCount: number
+	// Number of stars rejected by clipping.
 	readonly rejectedStarCount: number
+	// Indices of rejected stars.
 	readonly rejectedStarIndices: readonly number[]
 	readonly residuals: readonly SipResidual[]
 	readonly diagnostics: SipFitDiagnostics
 }
 
+// One input star prepared for fitting: centered pixel coordinates, target deltas, and resolved weight.
 interface PreparedStar {
 	readonly index: number
 	readonly star: MatchedStar
+	// Centered pixel x offset (x − CRPIX1).
 	readonly u: number
+	// Centered pixel y offset (y − CRPIX2).
 	readonly v: number
+	// Target x correction (xRef − x).
 	readonly dx: number
+	// Target y correction (yRef − y).
 	readonly dy: number
 	readonly weight: number
 }
 
+// Solved coefficient vectors for the A and B polynomials plus the design condition number.
 interface FitState {
 	readonly a: Float64Array
 	readonly b: Float64Array
 	readonly conditionNumber: number
 }
 
+// Fully resolved and validated fit options used internally.
 interface RuntimeOptions {
 	readonly order: number
 	readonly maxIterations: number
 	readonly sigmaClip: number
+	// Hard minimum star count below which the fit fails.
 	readonly hardMinStars: number
+	// Recommended star count below which a warning (or failure) is raised.
 	readonly recommendedMinStars: number
 	readonly requireRecommendedStarCount: boolean
 	readonly weighted: boolean
@@ -182,6 +279,7 @@ interface RuntimeOptions {
 // Fits use direct SIP coordinates u = x - CRPIX1 and v = y - CRPIX2. Matrix columns
 // are scaled only inside the QR solve and coefficients are unscaled before return.
 
+// Error thrown for any SIP-fit failure, carrying a machine-readable code and optional context details.
 export class SipFitError extends Error {
 	constructor(
 		readonly code: SipErrorCode,
@@ -385,6 +483,7 @@ export function sipModelIntoFitsHeader(sipModel: SipModel, header: FitsHeader) {
 	return header
 }
 
+// Promotes a plain TAN CTYPE to its TAN-SIP form in place, leaving other values untouched.
 function setSipAxisType(header: FitsHeader, key: 'CTYPE1' | 'CTYPE2', tan: string, sip: string) {
 	const value = header[key]
 	if (typeof value !== 'string') return
@@ -422,15 +521,19 @@ export function applySipCorrection(x: number, y: number, sipModel: SipModel, wcs
 	return { x: x + correction.dx, y: y + correction.dy } as const
 }
 
+// Type guard distinguishing a pre-extracted SipFitsHeader from a raw FITS header.
 function isSipFitsHeader(header: object): header is SipFitsHeader {
 	return 'crpix1' in header && 'crpix2' in header
 }
 
+// Normalizes either input form into a SipFitsHeader, reading CRPIX/size keywords from a raw FITS header.
 function extractSipInputWcsFromFitsHeader(header: SipFitsHeader | FitsHeader): SipFitsHeader {
 	if (isSipFitsHeader(header)) return header
 	return { crpix1: numericKeyword(header, 'CRPIX1', Number.NaN), crpix2: numericKeyword(header, 'CRPIX2', Number.NaN), width: widthKeyword(header, undefined), height: heightKeyword(header, undefined) }
 }
 
+// Validates and defaults all fit options into RuntimeOptions, deriving the weighting decision and the
+// recommended minimum star count from the coefficient count.
 function normalizeOptions(matchedStars: readonly MatchedStar[], wcs: SipFitsHeader, options: SipFitOptions, coefficientCount: number): RuntimeOptions {
 	const maxIterations = optionalInteger('maxIterations', options.maxIterations, DEFAULT_MAX_ITERATIONS, 1)
 	const sigmaClip = optionalPositiveNumber('sigmaClip', options.sigmaClip, DEFAULT_SIGMA_CLIP)
@@ -473,6 +576,7 @@ function normalizeOptions(matchedStars: readonly MatchedStar[], wcs: SipFitsHead
 	}
 }
 
+// Validates that the SIP order is an integer within [MIN_SIP_ORDER, MAX_SIP_ORDER]; returns it.
 function validateSipOrder(order: number) {
 	if (!Number.isInteger(order)) throw new SipFitError('invalidOrder', 'SIP order must be an integer')
 	if (order < MIN_SIP_ORDER) throw new SipFitError('invalidOrder', `SIP order must be at least ${MIN_SIP_ORDER}`)
@@ -480,6 +584,7 @@ function validateSipOrder(order: number) {
 	return order
 }
 
+// Validates that the WCS has finite reference pixels and valid optional image dimensions.
 function validateSipFitsHeader(wcs: SipFitsHeader) {
 	if (!wcs) throw new SipFitError('invalidCoordinate', 'basic WCS is required')
 
@@ -489,24 +594,29 @@ function validateSipFitsHeader(wcs: SipFitsHeader) {
 	optionalImageSize('height', wcs.height)
 }
 
+// Validates an optional positive-finite image dimension; undefined passes through.
 function optionalImageSize(name: string, value: number | undefined) {
 	if (value === undefined) return undefined
 	if (!Number.isFinite(value) || !(value > 0)) throw new SipFitError('invalidOption', `${name} must be a positive finite number`)
 	return value
 }
 
+// Returns an optional integer option (>= min) or the default when undefined.
 function optionalInteger(name: string, value: number | undefined, defaultValue: number, min: number) {
 	if (value === undefined) return defaultValue
 	if (!Number.isInteger(value) || value < min) throw new SipFitError('invalidOption', `${name} must be an integer greater than or equal to ${min}`)
 	return value
 }
 
+// Returns an optional positive-finite number option or the default when undefined.
 function optionalPositiveNumber(name: string, value: number | undefined, defaultValue: number) {
 	if (value === undefined) return defaultValue
 	if (!Number.isFinite(value) || !(value > 0)) throw new SipFitError('invalidOption', `${name} must be a positive finite number`)
 	return value
 }
 
+// Validates each star and centers it to (u, v) with target deltas and a resolved weight (1 when
+// unweighted), producing the PreparedStar list consumed by the solver.
 function prepareStars(stars: readonly MatchedStar[], wcs: SipFitsHeader, weighted: boolean) {
 	if (!Array.isArray(stars)) throw new SipFitError('insufficientStars', 'matchedStars must be an array')
 
@@ -541,6 +651,7 @@ function prepareStars(stars: readonly MatchedStar[], wcs: SipFitsHeader, weighte
 	return prepared
 }
 
+// Throws unless there are strictly more stars than coefficients and at least the hard minimum.
 function validateStarCount(stars: number, coefficientCount: number, hardMinStars: number) {
 	if (stars <= coefficientCount) {
 		throw new SipFitError('insufficientStars', 'SIP fitting requires more stars than coefficients', { stars, coefficients: coefficientCount })
@@ -551,6 +662,8 @@ function validateStarCount(stars: number, coefficientCount: number, hardMinStars
 	}
 }
 
+// Checks that used stars occupy enough grid cells and quadrants; warns or throws per the configured
+// mode. Returns the diagnostics, or { checked: false } when the check is disabled or size is unknown.
 function validateSpatialDistribution(stars: readonly PreparedStar[], options: RuntimeOptions, warnings: string[]): SipSpatialDiagnostics | undefined {
 	if (options.spatialDistribution === 'off') return { checked: false }
 	if (options.width === undefined || options.height === undefined) return { checked: false }
@@ -591,12 +704,15 @@ function validateSpatialDistribution(stars: readonly PreparedStar[], options: Ru
 	return diagnostics
 }
 
+// Maps a pixel coordinate to its grid-cell index along one axis, clamped to [0, gridSize − 1].
 function clampCell(value: number, size: number, gridSize: number) {
 	if (value <= 0) return 0
 	if (value >= size) return gridSize - 1
 	return Math.min(gridSize - 1, Math.floor((value / size) * gridSize))
 }
 
+// Solves the weighted, column-scaled least-squares system for both A and B coefficient vectors via QR,
+// guarding against ill-conditioning and rank deficiency, then unscales the coefficients before return.
 function solveSipCoefficients(stars: readonly PreparedStar[], usedIndices: readonly number[], terms: readonly SipTerm[], options: RuntimeOptions): FitState {
 	const rows = usedIndices.length
 	const cols = terms.length
@@ -643,6 +759,8 @@ function solveSipCoefficients(stars: readonly PreparedStar[], usedIndices: reado
 	}
 }
 
+// Scales each column to unit max-abs magnitude in place, returning the per-column scale factors; throws
+// on a zero column. Improves conditioning of the QR solve.
 function scaleColumns(matrix: Matrix) {
 	const scales = new Float64Array(matrix.cols)
 	const data = matrix.data
@@ -668,6 +786,8 @@ function scaleColumns(matrix: Matrix) {
 	return scales
 }
 
+// Estimates the design matrix's condition number as sqrt(‖AᵀA‖₁ · ‖(AᵀA)⁻¹‖₁); returns +Infinity when
+// the Gram matrix is singular.
 function estimateConditionNumber(matrix: Matrix) {
 	const cols = matrix.cols
 	const gram = new Matrix(cols, cols)
@@ -694,6 +814,7 @@ function estimateConditionNumber(matrix: Matrix) {
 	}
 }
 
+// Returns the 1-norm (maximum absolute column sum) of a matrix.
 function norm1(matrix: Matrix) {
 	let norm = 0
 
@@ -710,12 +831,14 @@ function norm1(matrix: Matrix) {
 	return norm
 }
 
+// Collects the indices currently flagged as used (not yet sigma-clipped).
 function collectUsedIndices(used: readonly boolean[]) {
 	const indices: number[] = []
 	for (let i = 0; i < used.length; i++) if (used[i]) indices.push(i)
 	return indices
 }
 
+// Writes one design-matrix row: each term's u^i·v^j value (optionally times a row weight) at offset.
 function writeTermValues(output: NumberArray, offset: number, terms: readonly SipTerm[], u: number, v: number, scale: number = 1) {
 	let maxOrder = 0
 	for (const term of terms) maxOrder = Math.max(maxOrder, term.i + term.j)
@@ -727,6 +850,7 @@ function writeTermValues(output: NumberArray, offset: number, terms: readonly Si
 	}
 }
 
+// Precomputes the power tables [u^0..u^order] and [v^0..v^order] for fast term evaluation.
 function termPowers(order: number, u: number, v: number) {
 	const up = new Float64Array(order + 1)
 	const vp = new Float64Array(order + 1)
@@ -742,6 +866,7 @@ function termPowers(order: number, u: number, v: number) {
 	return { u: up, v: vp }
 }
 
+// Assembles a SipModel by keying the solved coefficient vectors into A_i_j / B_i_j maps.
 function createSipModel(order: number, terms: readonly SipTerm[], a: Float64Array, b: Float64Array): SipModel {
 	const A: Record<string, number> = {}
 	const B: Record<string, number> = {}
@@ -755,6 +880,8 @@ function createSipModel(order: number, terms: readonly SipTerm[], a: Float64Arra
 	return { order, A_ORDER: order, B_ORDER: order, A, B, terms }
 }
 
+// Computes per-star residuals from the raw coefficient vectors during the clipping loop (centered-
+// coordinate evaluation, cheaper than reconstructing the model each iteration).
 function computeArrayResiduals(stars: readonly PreparedStar[], used: readonly boolean[], terms: readonly SipTerm[], a: Float64Array, b: Float64Array) {
 	const residuals = new Array<SipResidual>(stars.length)
 
@@ -785,6 +912,8 @@ function computeArrayResiduals(stars: readonly PreparedStar[], used: readonly bo
 	return residuals
 }
 
+// Computes final per-star residuals from the assembled model, tagging used/rejected status and the
+// rejection iteration for diagnostics.
 function computeModelResiduals(stars: readonly PreparedStar[], used: readonly boolean[], rejectedIteration: Int32Array, model: SipModel, wcs: SipFitsHeader) {
 	const residuals = new Array<SipResidual>(stars.length)
 
@@ -817,6 +946,7 @@ function computeModelResiduals(stars: readonly PreparedStar[], used: readonly bo
 	return residuals
 }
 
+// Evaluates the (dx, dy) correction at centered offset (u, v) directly from coefficient vectors.
 function evaluateArrayCorrection(u: number, v: number, terms: readonly SipTerm[], a: Float64Array, b: Float64Array) {
 	let maxOrder = 0
 	for (const term of terms) maxOrder = Math.max(maxOrder, term.i + term.j)
@@ -834,6 +964,9 @@ function evaluateArrayCorrection(u: number, v: number, terms: readonly SipTerm[]
 	return { dx, dy }
 }
 
+// Estimates the residual center and scatter for sigma clipping. MAD mode returns the median and
+// 1.4826·MAD (falling back to std-dev when MAD is ~0); std-dev mode returns the mean and population
+// standard deviation.
 function residualScatter(residuals: readonly SipResidual[], mode: SipScatterMode) {
 	const values = residuals.map((residual) => residual.r).sort((a, b) => a - b)
 	if (values.length === 0) return { center: 0, scatter: 0 }
@@ -859,6 +992,7 @@ function residualScatter(residuals: readonly SipResidual[], mode: SipScatterMode
 	return { center, scatter } as const
 }
 
+// Computes per-axis and combined RMS of the given residuals, in pixels.
 function residualRms(residuals: readonly SipResidual[]) {
 	if (residuals.length === 0) return { x: 0, y: 0, total: 0 } as const
 
@@ -873,6 +1007,7 @@ function residualRms(residuals: readonly SipResidual[]) {
 	return { x: Math.sqrt(x / residuals.length), y: Math.sqrt(y / residuals.length), total: Math.sqrt((x + y) / residuals.length) } as const
 }
 
+// Computes the total RMS of the raw target deltas (pre-fit distortion magnitude), in pixels.
 function rawResidualRms(stars: readonly PreparedStar[]) {
 	if (stars.length === 0) return 0
 

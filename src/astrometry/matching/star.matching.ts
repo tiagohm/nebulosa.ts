@@ -20,120 +20,195 @@ import { type Angle, normalizePI } from '../../math/units/angle'
 // local neighborhoods limit pattern growth, descriptor lookup is bucketed, and hypothesis evaluation is capped by ransacIterations/maxHypotheses.
 // Known limitation: the implementation is triangle-based only.
 
+// Geometric model fitted between two star frames: rotation+uniform-scale(+flip), or full affine.
 export type StarMatchingModel = 'similarity' | 'affine'
 
+// Local-pattern primitive used for descriptors; only triangles are implemented.
 export type StarMatchingPatternType = 'triangle' | 'quad'
 
+// A 2D similarity transform (rotation, uniform scale, optional mirror, translation) in image pixels.
+// Forward map: non-mirrored (x',y') = (a·x − b·y + tx, b·x + a·y + ty); mirrored flips the y-row sign.
 export interface SimilarityTransform {
+	// cos·scale term.
 	readonly a: number
+	// sin·scale term.
 	readonly b: number
+	// x translation (pixels).
 	readonly tx: number
+	// y translation (pixels).
 	readonly ty: number
+	// Whether the transform includes a parity flip.
 	readonly mirrored: boolean
 }
 
+// A 2D affine transform in image pixels: (x',y') = (m00·x + m01·y + tx, m10·x + m11·y + ty).
 export interface AffineTransform {
 	readonly m00: number
 	readonly m01: number
+	// x translation (pixels).
 	readonly tx: number
 	readonly m10: number
 	readonly m11: number
+	// y translation (pixels).
 	readonly ty: number
 }
 
+// Tunable parameters for the triangle-pattern matcher; all distances are pixels and angles radians.
 export interface StarMatchingConfig {
+	// Maximum stars kept per frame (brightest first).
 	readonly maxStars?: number
+	// Minimum usable stars required in each frame.
 	readonly minStars?: number
 	// readonly patternType?: StarMatchingPatternType
+	// Whether to consider mirrored (parity-flipped) solutions.
 	readonly allowMirror?: boolean
-	readonly initialMatchRadius?: number // px
-	readonly finalMatchRadius?: number // px
+	// Initial star-match radius for refinement, in pixels.
+	readonly initialMatchRadius?: number
+	// Final (tightest) star-match radius after refinement, in pixels.
+	readonly finalMatchRadius?: number
+	// Maximum accepted scale ratio between frames.
 	readonly maxScaleRatio?: number
+	// Minimum accepted scale ratio between frames.
 	readonly minScaleRatio?: number
+	// Maximum accepted rotation magnitude (radians), or null to allow any.
 	readonly maxRotation?: Angle | null
+	// Cap on RANSAC-style hypothesis iterations.
 	readonly ransacIterations?: number
+	// Minimum inliers required to accept a transform.
 	readonly minInliers?: number
+	// Maximum accepted per-pair residual, in pixels.
 	readonly maxResidual?: number
+	// Whether to weight the least-squares fit by star quality.
 	readonly useWeightedFit?: boolean
+	// Iterative rematch/refit passes per hypothesis.
 	readonly refineIterations?: number
+	// Descriptor-space matching tolerance (also sets the bucket size).
 	readonly descriptorTolerance?: number
+	// Number of nearest neighbors used to form local triangles.
 	readonly localNeighborCount?: number
+	// Whether to prefer compact (small-radius) triangles in ranking.
 	readonly preferCompactPatterns?: boolean
+	// Preferred output model when both fit comparably.
 	readonly modelPreference?: StarMatchingModel
+	// Whether an affine upgrade may replace the similarity solution.
 	readonly allowAffineFallback?: boolean
-	readonly dedupeDistance?: number // px
-	readonly minPatternSide?: number // px
+	// Minimum separation to treat two detections as distinct, in pixels.
+	readonly dedupeDistance?: number
+	// Minimum longest-side length for a usable triangle, in pixels.
+	readonly minPatternSide?: number
+	// Minimum triangle area relative to its longest side squared.
 	readonly minPatternAreaRatio?: number
+	// Minimum normalized side-length gap rejecting near-degenerate/symmetric triangles.
 	readonly symmetricPatternTolerance?: number
+	// Maximum descriptor matches kept per current pattern.
 	readonly maxPatternMatchesPerPattern?: number
+	// Maximum whole-frame hypotheses evaluated.
 	readonly maxHypotheses?: number
 }
 
+// A single accepted correspondence, referencing original caller star indices.
 export interface StarMatch {
+	// Index into the current (query) star array.
 	readonly currentIndex: number
+	// Index into the reference star array.
 	readonly referenceIndex: number
+	// Image-plane residual of the match, in pixels.
 	readonly residual: number
 }
 
+// Full match result: the chosen model, fitted transform(s), correspondences, and quality metrics.
 export interface StarMatchingResult {
+	// Whether a confident transform was found.
 	readonly success: boolean
+	// Model of the chosen transform.
 	readonly model?: StarMatchingModel
+	// Similarity solution with derived scale and rotation (radians), when chosen.
 	readonly similarity?: SimilarityTransform & {
 		readonly scale: number
 		readonly rotation: Angle
 	}
+	// Affine solution, when chosen.
 	readonly affine?: AffineTransform
+	// Accepted correspondences.
 	readonly matches: readonly StarMatch[]
+	// Number of inlier correspondences.
 	readonly inlierCount: number
-	readonly rmsError?: number // px
-	readonly medianError?: number // px
+	// RMS residual of inliers, in pixels.
+	readonly rmsError?: number
+	// Median residual of inliers, in pixels.
+	readonly medianError?: number
+	// Composite hypothesis score.
 	readonly score: number
+	// Explanation when no confident match was found.
 	readonly failureReason?: string
 }
 
+// A canonicalized local triangle: its star indices, scale/rotation-invariant descriptor, and quality.
 export interface TrianglePattern {
+	// Indices of the three stars, ordered by descending opposite-side length.
 	readonly starIndices: Vec3
+	// Invariant descriptor [shortest/longest, middle/longest, area ratio].
 	readonly descriptor: Vec3
+	// Triangle chirality (+1 or −1), kept separately for mirror detection.
 	readonly chirality: 1 | -1
+	// Centroid x (pixels).
 	readonly centroidX: number
+	// Centroid y (pixels).
 	readonly centroidY: number
+	// Maximum vertex distance from the centroid, in pixels.
 	readonly maxRadius: number
+	// Normalized triangle area used as a stability score.
 	readonly areaScore: number
+	// Compactness weight favoring small triangles when enabled.
 	readonly compactness: number
+	// Combined ranking score from star quality, compactness, and area.
 	readonly qualityScore: number
 }
 
+// A detected star augmented with its original index and quality ranking score.
 interface RankedStar extends DetectedStar {
 	readonly index: number
 	readonly qualityScore: number
 }
 
+// A candidate descriptor match between a reference and a current triangle pattern.
 interface PatternMatchCandidate {
 	readonly referencePatternIndex: number
 	readonly currentPatternIndex: number
+	// Descriptor-space distance between the two patterns.
 	readonly descriptorDistance: number
+	// Aggregated star-pair vote support across all pattern matches.
 	readonly pairVoteScore: number
 }
 
+// One matched star pair with its residual and fit weight.
 interface MatchPair {
 	readonly currentStar: RankedStar
 	readonly referenceStar: RankedStar
+	// Residual distance, in pixels.
 	readonly residual: number
+	// Least-squares weight.
 	readonly weight: number
 }
 
+// A scored whole-frame hypothesis with its fitted transform and inlier pairs.
 interface HypothesisScore {
 	readonly model: StarMatchingModel
+	// Composite score (higher is better).
 	readonly score: number
 	readonly inlierCount: number
-	readonly rmsError: number // px
-	readonly medianError: number // px
+	// RMS residual, in pixels.
+	readonly rmsError: number
+	// Median residual, in pixels.
+	readonly medianError: number
+	// Spatial spread of inliers in [0, 1]; penalizes tight clusters.
 	readonly spreadScore: number
 	readonly similarity?: SimilarityTransform
 	readonly affine?: AffineTransform
 	readonly matches: readonly MatchPair[]
 }
 
+// Default matcher tuning for the tens-to-few-hundred-star regime; similarity preferred, affine fallback.
 const DEFAULT_STAR_MATCHING_CONFIG: Required<StarMatchingConfig> = {
 	maxStars: 96,
 	minStars: 6,
@@ -405,6 +480,7 @@ function RankedStarComparator(a: RankedStar, b: RankedStar) {
 	return a.index - b.index
 }
 
+// Orders triangle patterns by descending quality, then compactness, area, and star indices.
 function TrianglePatternsFromRankedComparator(a: TrianglePattern, b: TrianglePattern) {
 	if (a.qualityScore !== b.qualityScore) return b.qualityScore - a.qualityScore
 	if (a.compactness !== b.compactness) return b.compactness - a.compactness
@@ -445,6 +521,7 @@ function buildTrianglePatternsFromRanked(stars: readonly RankedStar[], config: R
 	return patterns
 }
 
+// Orders neighbor candidates by ascending squared distance, then index for determinism.
 function NearestNeighborDistanceComparator<T extends { index: number; distanceSq: number }>(a: T, b: T) {
 	if (a.distanceSq !== b.distanceSq) return a.distanceSq - b.distanceSq
 	return a.index - b.index
@@ -483,6 +560,7 @@ function triangleKey(a: number, b: number, c: number) {
 	return `${x}|${y}|${z}`
 }
 
+// Orders triangle sides by ascending length.
 function SideLengthComparator<T extends { length: number }>(u: T, v: T) {
 	return u.length - v.length
 }
@@ -541,12 +619,14 @@ function canonicalizeTriangle(a: Point, b: Point, c: Point, ia: number, ib: numb
 	return { starIndices: [i0, i1, i2], descriptor: [shortest / longest, middle / longest, areaScore], chirality: twiceArea >= 0 ? 1 : -1, centroidX, centroidY, maxRadius, areaScore, compactness, qualityScore: (w0 + w1 + w2) * compactness * (1 + areaScore) }
 }
 
+// Orders raw candidates by ascending descriptor distance, then pattern indices.
 function PatternMatchCandidateComparator(a: PatternMatchCandidate, b: PatternMatchCandidate) {
 	if (a.descriptorDistance !== b.descriptorDistance) return a.descriptorDistance - b.descriptorDistance
 	if (a.referencePatternIndex !== b.referencePatternIndex) return a.referencePatternIndex - b.referencePatternIndex
 	return a.currentPatternIndex - b.currentPatternIndex
 }
 
+// Orders rescored candidates by descending pair-vote support, then descriptor distance and indices.
 function PatternMatchCandidateRescoredComparator(a: PatternMatchCandidate, b: PatternMatchCandidate) {
 	if (a.pairVoteScore !== b.pairVoteScore) return b.pairVoteScore - a.pairVoteScore
 	if (a.descriptorDistance !== b.descriptorDistance) return a.descriptorDistance - b.descriptorDistance
@@ -691,6 +771,7 @@ function refineSimilarityHypothesis(transform: SimilarityTransform, referenceSta
 	return best
 }
 
+// Orders projected-star candidates by ascending squared residual, then indices for greedy assignment.
 function CandidateStarsByTransformComparator<T extends { currentIndex: number; referenceIndex: number; residualSq: number }>(a: T, b: T) {
 	if (a.residualSq !== b.residualSq) return a.residualSq - b.residualSq
 	if (a.currentIndex !== b.currentIndex) return a.currentIndex - b.currentIndex
@@ -1034,6 +1115,7 @@ function affinePlausible(transform: AffineTransform, config: ReturnType<typeof r
 	return shear < 0.45
 }
 
+// Orders final matches by current then reference index for a stable output.
 function StarMatchComparator(a: StarMatch, b: StarMatch) {
 	if (a.currentIndex !== b.currentIndex) return a.currentIndex - b.currentIndex
 	return a.referenceIndex - b.referenceIndex
