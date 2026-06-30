@@ -82,12 +82,15 @@ Additional rules:
 ## Formatting And TypeScript Style
 
 - Follow OXC formatting: tabs, single quotes, no semicolons, trailing commas, and the configured long line width.
+- For intentionally long imports, add `// oxfmt-ignore` immediately above the import declaration and restore it to a single line when OXC formats it across multiple lines.
 - Preserve existing `// oxfmt-ignore` comments when they protect intentional formatting, especially long grouped imports.
 - Always type function and method parameters.
 - Avoid `any`. Use `unknown` when a value cannot be expressed more precisely.
+- Prefer `undefined` over `null` for absent, unavailable, or not-yet-computed values. Use `null` only when it has a distinct documented semantic meaning or an external contract requires it.
 - Prefer inference for primitive and tuple return types unless an explicit return type improves the public contract or protects a branded primitive.
 - Declare explicit return types for structured objects, exported public interfaces, and functions whose inferred type would be unclear or unstable.
 - Prefer `interface` for structured public shapes.
+- Prefer string-literal union types with `camelCase` values, such as `'notStarted' | 'inProgress'`, over enums for finite internal value sets unless a runtime enum or external API contract requires one.
 - Use `readonly` where it communicates API intent without fighting existing mutable-output patterns.
 - Use tuple aliases and readonly aliases for low-level numeric structures such as vectors and matrices.
 
@@ -142,7 +145,7 @@ Use concise, Claude-style documentation comments: explain intent, units, constra
 - Clamp inputs before inverse trig when rounding error may push values slightly outside the valid domain.
 - Normalize vectors explicitly when required, using `vecNormalize` or `vecNormalizeMut`.
 - Preserve angle wrap behavior deliberately. Document whether a returned angle is normalized to `0..TAU`, `-PI..PI`, or left unwrapped.
-- Represent undefined directions explicitly, usually with `null`, when the geometry is singular or separation is too small.
+- Represent undefined directions explicitly, usually with `undefined`, when the geometry is singular or separation is too small.
 - Guard divisions by small values when valid inputs can approach zero.
 - Do not allow `NaN` or `Infinity` to leak into public geometry, time, coordinate, or SVG/image outputs.
 
@@ -188,170 +191,7 @@ Before finishing a change:
 - Commit only touched changes after relevant checks are green.
 - If network access, missing fixtures, or environment limitations prevent full verification, state that explicitly with the exact command that could not be completed.
 
-## Performance Review Checklist
-
-When reviewing or before commiting TypeScript changes, check for avoidable performance issues, especially in hot paths, numerical code, rendering loops, data-processing pipelines, and frequently called functions.
-
-Prefer readable code by default, but avoid unnecessary allocations, copies, callbacks, and repeated work when the code is performance-sensitive.
-
-### Arrays and collections
-
-- Avoid `.slice()` when no real copy is needed.
-- Avoid `[...array]` when the array is only being iterated, passed through, or defensively copied without a clear reason.
-- Avoid `target.push(...source)` for large arrays. Prefer an indexed loop to avoid argument-spread overhead and stack limits.
-- Avoid repeated `concat()` inside loops.
-- Avoid chaining `.filter().map().reduce()` in hot paths when a single loop can do the same work without intermediate arrays.
-- Avoid `.find()` inside loops. Build a `Map` when repeated lookup by key is needed.
-- Avoid `.includes()` on large arrays when repeated membership checks are needed. Use a `Set`.
-- Preallocate arrays when the final size is known.
-- Avoid `Array.from()` in hot paths when a simple loop is cheaper.
-
-### Object copies and allocations
-
-- Avoid object spread inside loops unless a copy is required.
-- Avoid array spread inside loops.
-- Avoid creating temporary objects in functions called very frequently.
-- Avoid creating closures, lambdas, or bound functions inside hot loops.
-- Avoid `JSON.parse(JSON.stringify(...))` for cloning.
-- Avoid `structuredClone()` unless a deep copy is explicitly required and acceptable for the path.
-- Reuse temporary objects or output buffers when the function is called repeatedly.
-- Avoid repeatedly creating `Date`, `RegExp`, `Intl.*`, `URL`, `TextEncoder`, or `TextDecoder` instances in hot paths. Hoist or cache them when possible.
-
-### Strings
-
-- Avoid incremental string concatenation for large outputs inside loops. Collect parts and use `.join("")`.
-- Avoid `.split()` when only a prefix, suffix, or single separator lookup is needed. Prefer `indexOf()`, `startsWith()`, `endsWith()`, or direct slicing.
-- Avoid repeated `.toLowerCase()` / `.toUpperCase()` on the same value. Normalize once and reuse.
-- Avoid building expensive log messages when the log level may be disabled.
-
-### Loops and algorithms
-
-- Check for accidental `O(n²)` behavior from nested loops, repeated `.find()`, repeated `.filter()`, or repeated scans.
-- Use `Map`, `Set`, indexing, bucketing, spatial grids, or caches when repeated lookup is required.
-- Move loop-invariant calculations outside the loop.
-- Avoid repeated unit conversions inside loops.
-- Avoid `try/catch` inside hot loops. Put error handling outside the loop when possible.
-- Avoid unnecessary function calls inside tight numerical loops when inlining or direct operations would be clearer and faster.
-- Avoid logging inside high-volume loops.
-
-### Math and numerical code
-
-- Avoid `Math.pow(x, 2)` for squaring. Use `x * x`.
-- Avoid `Math.sqrt()` when only comparing distances. Compare squared distances instead.
-- Reuse expensive trigonometric results such as `sin`, `cos`, `tan`, `atan2`, and `sqrt` when possible.
-- Precompute constants such as degree/radian conversion factors.
-- Avoid formatting numbers or converting them to strings inside computational paths.
-
-### Typed arrays and buffers
-
-- Use `Float32Array`, `Float64Array`, `Uint8Array`, or other typed arrays for large numeric datasets.
-- Avoid converting typed arrays to regular arrays unless required.
-- Prefer `typedArray.subarray(start, end)` when a view is enough.
-- Use `typedArray.slice(start, end)` only when a real copy is required.
-- Reuse buffers for repeated computations.
-- Avoid creating typed-array views repeatedly inside tight loops.
-- For large numeric structures, consider separate typed arrays instead of arrays of objects when memory layout and throughput matter.
-
-### Async and promises
-
-- Avoid marking functions as `async` when they do not await or need to return a promise.
-- Avoid unnecessary manual `new Promise(...)` wrappers.
-- Avoid sequential `await` inside loops when operations are independent.
-- Use `Promise.all` only when unbounded parallelism is safe.
-- Use concurrency limits for large batches of async work.
-- Batch I/O operations when possible.
-
-### Maps, sets, and caches
-
-- Use `Map` for repeated key-based lookup.
-- Use `Set` for repeated membership checks.
-- Avoid recreating `Map` or `Set` inside functions called frequently when the source data is stable.
-- Do not add unbounded caches without an eviction or size policy.
-- Avoid memoizing cheap computations.
-- Avoid using newly created objects as cache keys when their identity changes on every call.
-
-### Object shapes and JIT friendliness
-
-- Keep object shapes stable.
-- Initialize all expected properties when creating objects or class instances.
-- Avoid adding properties dynamically after object creation in hot paths.
-- Avoid mixing different value types in the same property.
-- Avoid heterogeneous arrays in performance-critical code.
-- Avoid sparse arrays and large index gaps.
-
-### Immutability
-
-- Avoid blind immutability in hot paths.
-- Avoid repeated `{ ...state }` or `[...items]` patterns when local mutation would be safe and contained.
-- Prefer controlled local mutation for temporary data that does not escape the function.
-- Keep immutable patterns where they improve correctness, but do not use them automatically in high-volume code without considering allocation cost.
-
-### Backend code
-
-- Avoid blocking the event loop with heavy CPU work.
-- Move heavy CPU-bound work to worker threads, queues, or separate processes when needed.
-- Avoid reading large files fully into memory when streaming is suitable.
-- Avoid parsing the same large JSON payload repeatedly.
-- Reuse clients, pools, and long-lived resources instead of recreating them per operation.
-- Avoid excessive synchronous logging in high-throughput paths.
-
-### Validation and errors
-
-- Avoid using exceptions as normal control flow.
-- Validate at system boundaries instead of repeatedly validating the same trusted data deep inside hot paths.
-- Avoid repeated deep validation of objects that were already validated.
-- Avoid constructing expensive error messages unless they are actually needed.
-- Use the most performant formula instead of the most readable or usual one.
-
-### Approval rule
-
-Before accepting a performance-sensitive change, verify:
-
-- The algorithmic complexity is appropriate.
-- There are no avoidable array or object copies.
-- There are no avoidable allocations inside critical loops.
-- Repeated lookups use the right data structure.
-- Buffers are reused where appropriate.
-- Async work is not accidentally serialized.
-- Parallel async work has a safe concurrency limit when needed.
-- Numerical code avoids unnecessary expensive operations.
-- The implementation remains readable enough to maintain.
-- Any performance-motivated complexity is justified by the code path.
-
-## Commit Message Guidelines
-
-Commit messages must be precise, English, and easy to scan.
-
-- Use lowercase text, except for acronyms, proper nouns, package names, and file names.
-- Start the subject directly with a present-tense imperative verb such as `implement`, `fix`, `improve`, `update`, `use`, `remove`, `rename`, or `refactor`.
-- Do not prefix the subject with Conventional Commit-style labels such as `feat:`, `fix:`, `perf:`, `docs:`, `refactor:`, `test:`, or scoped variants such as `feat(image):`.
-- Keep the subject concise and specific; prefer 72 characters or fewer when practical.
-- Do not end the subject with a period.
-- Describe the user-visible or technical effect, not the amount of work.
-- Prefer one logical change per commit.
-- Avoid vague subjects such as `fix bug`, `update code`, `changes`, `misc`, `cleanup`, `final`, or `wip`.
-- Do not mention implementation noise unless it is relevant to the change.
-- Add a commit body when the reason, trade-off, migration step, or behavior change is not obvious from the subject.
-- In the body, explain why the change was made and mention important side effects, limitations, or follow-up work.
-- Reference issues, tickets, or follow-up tasks when applicable.
-- Mention breaking changes explicitly.
-
-## After Finishing
-
-After the change is complete:
-
-- Always create a commit for the completed task unless the user explicitly asks not to commit.
-- Commit only the changes made for the current task.
-- Do not include unrelated edits, incidental formatting, generated files, debug logs, temporary files, or local-only configuration.
-- Inspect the final state with `git status --short` before staging.
-- Review the final diff with `git diff` and confirm every changed line belongs to the task.
-- Stage files explicitly by path. Avoid broad staging commands such as `git add .` unless every changed file has been reviewed and belongs to the task.
-- Before committing, inspect staged changes with `git diff --staged`.
-- Do not amend, squash, rebase, or rewrite existing commits unless the task explicitly requests it.
-- If verification could not be fully completed because of environment limits, the commit message may still be created for the finished change, but the final response must list the skipped or failed verification command and the reason.
-- If unresolved errors remain, do not commit. Explain what is blocking the commit and which files are affected.
-
-## Code Review Mode
+## Code Review
 
 When asked to review changes, use a strictly limited correctness scope. Report only findings that are actionable, supported by code evidence, and tied to a concrete correctness, numerical, algorithmic, performance, or memory issue in changed code or directly affected code.
 
@@ -439,7 +279,7 @@ Report:
 - precision loss near poles, horizon, limb contact, or near-perfect alignment;
 - inconsistent angle normalization or wrong `atan2` argument order.
 
-Undefined directions should be represented explicitly, usually as `null`, when the geometry is singular or separation is too small.
+Undefined directions should be represented explicitly, usually as `undefined`, when the geometry is singular or separation is too small.
 
 #### Concrete bugs
 
@@ -458,6 +298,136 @@ Report concrete logic and implementation bugs, including:
 - inconsistent output metadata, such as reporting one selected event while drawing another.
 
 If a helper is exported, review it as public correctness surface even if the main call path passes safe arguments.
+
+### Performance Checklist
+
+When reviewing or before committing TypeScript changes, check for avoidable performance issues, especially in hot paths, numerical code, rendering loops, data-processing pipelines, and frequently called functions.
+
+Prefer readable code by default, but avoid unnecessary allocations, copies, callbacks, and repeated work when the code is performance-sensitive.
+
+#### Arrays and collections
+
+- Avoid `.slice()` when no real copy is needed.
+- Avoid `[...array]` when the array is only being iterated, passed through, or defensively copied without a clear reason.
+- Avoid `target.push(...source)` for large arrays. Prefer an indexed loop to avoid argument-spread overhead and stack limits.
+- Avoid repeated `concat()` inside loops.
+- Avoid chaining `.filter().map().reduce()` in hot paths when a single loop can do the same work without intermediate arrays.
+- Avoid `.find()` inside loops. Build a `Map` when repeated lookup by key is needed.
+- Avoid `.includes()` on large arrays when repeated membership checks are needed. Use a `Set`.
+- Preallocate arrays when the final size is known.
+- Avoid `Array.from()` in hot paths when a simple loop is cheaper.
+
+#### Object copies and allocations
+
+- Avoid object spread inside loops unless a copy is required.
+- Avoid array spread inside loops.
+- Avoid creating temporary objects in functions called very frequently.
+- Avoid creating closures, lambdas, or bound functions inside hot loops.
+- Avoid `JSON.parse(JSON.stringify(...))` for cloning.
+- Avoid `structuredClone()` unless a deep copy is explicitly required and acceptable for the path.
+- Reuse temporary objects or output buffers when the function is called repeatedly.
+- Avoid repeatedly creating `Date`, `RegExp`, `Intl.*`, `URL`, `TextEncoder`, or `TextDecoder` instances in hot paths. Hoist or cache them when possible.
+
+#### Strings
+
+- Avoid incremental string concatenation for large outputs inside loops. Collect parts and use `.join("")`.
+- Avoid `.split()` when only a prefix, suffix, or single separator lookup is needed. Prefer `indexOf()`, `startsWith()`, `endsWith()`, or direct slicing.
+- Avoid repeated `.toLowerCase()` / `.toUpperCase()` on the same value. Normalize once and reuse.
+- Avoid building expensive log messages when the log level may be disabled.
+
+#### Loops and algorithms
+
+- Check for accidental `O(n²)` behavior from nested loops, repeated `.find()`, repeated `.filter()`, or repeated scans.
+- Use `Map`, `Set`, indexing, bucketing, spatial grids, or caches when repeated lookup is required.
+- Move loop-invariant calculations outside the loop.
+- Avoid repeated unit conversions inside loops.
+- Avoid `try/catch` inside hot loops. Put error handling outside the loop when possible.
+- Avoid unnecessary function calls inside tight numerical loops when inlining or direct operations would be clearer and faster.
+- Avoid logging inside high-volume loops.
+
+#### Math and numerical code
+
+- Avoid `Math.pow(x, 2)` for squaring. Use `x * x`.
+- Avoid `Math.sqrt()` when only comparing distances. Compare squared distances instead.
+- Reuse expensive trigonometric results such as `sin`, `cos`, `tan`, `atan2`, and `sqrt` when possible.
+- Precompute constants such as degree/radian conversion factors.
+- Avoid formatting numbers or converting them to strings inside computational paths.
+
+#### Typed arrays and buffers
+
+- Use `Float32Array`, `Float64Array`, `Uint8Array`, or other typed arrays for large numeric datasets.
+- Avoid converting typed arrays to regular arrays unless required.
+- Prefer `typedArray.subarray(start, end)` when a view is enough.
+- Use `typedArray.slice(start, end)` only when a real copy is required.
+- Reuse buffers for repeated computations.
+- Avoid creating typed-array views repeatedly inside tight loops.
+- For large numeric structures, consider separate typed arrays instead of arrays of objects when memory layout and throughput matter.
+
+#### Async and promises
+
+- Avoid marking functions as `async` when they do not await or need to return a promise.
+- Avoid unnecessary manual `new Promise(...)` wrappers.
+- Avoid sequential `await` inside loops when operations are independent.
+- Use `Promise.all` only when unbounded parallelism is safe.
+- Use concurrency limits for large batches of async work.
+- Batch I/O operations when possible.
+
+#### Maps, sets, and caches
+
+- Use `Map` for repeated key-based lookup.
+- Use `Set` for repeated membership checks.
+- Avoid recreating `Map` or `Set` inside functions called frequently when the source data is stable.
+- Do not add unbounded caches without an eviction or size policy.
+- Avoid memoizing cheap computations.
+- Avoid using newly created objects as cache keys when their identity changes on every call.
+
+#### Object shapes and JIT friendliness
+
+- Keep object shapes stable.
+- Initialize all expected properties when creating objects or class instances.
+- Avoid adding properties dynamically after object creation in hot paths.
+- Avoid mixing different value types in the same property.
+- Avoid heterogeneous arrays in performance-critical code.
+- Avoid sparse arrays and large index gaps.
+
+#### Immutability
+
+- Avoid blind immutability in hot paths.
+- Avoid repeated `{ ...state }` or `[...items]` patterns when local mutation would be safe and contained.
+- Prefer controlled local mutation for temporary data that does not escape the function.
+- Keep immutable patterns where they improve correctness, but do not use them automatically in high-volume code without considering allocation cost.
+
+#### Backend code
+
+- Avoid blocking the event loop with heavy CPU work.
+- Move heavy CPU-bound work to worker threads, queues, or separate processes when needed.
+- Avoid reading large files fully into memory when streaming is suitable.
+- Avoid parsing the same large JSON payload repeatedly.
+- Reuse clients, pools, and long-lived resources instead of recreating them per operation.
+- Avoid excessive synchronous logging in high-throughput paths.
+
+#### Validation and errors
+
+- Avoid using exceptions as normal control flow.
+- Validate at system boundaries instead of repeatedly validating the same trusted data deep inside hot paths.
+- Avoid repeated deep validation of objects that were already validated.
+- Avoid constructing expensive error messages unless they are actually needed.
+- Use the most performant formula instead of the most readable or usual one.
+
+#### Approval Rule
+
+Before accepting a performance-sensitive change, verify:
+
+- The algorithmic complexity is appropriate.
+- There are no avoidable array or object copies.
+- There are no avoidable allocations inside critical loops.
+- Repeated lookups use the right data structure.
+- Buffers are reused where appropriate.
+- Async work is not accidentally serialized.
+- Parallel async work has a safe concurrency limit when needed.
+- Numerical code avoids unnecessary expensive operations.
+- The implementation remains readable enough to maintain.
+- Any performance-motivated complexity is justified by the code path.
 
 ### Reporting Rules
 
@@ -486,3 +456,36 @@ Do not report:
 - harmless micro-optimizations;
 - known deliberate trade-offs already documented by the project;
 - issues that require changing the documented contract without a correctness bug.
+
+## Commit Message Guidelines
+
+Commit messages must be precise, English, and easy to scan.
+
+- Use lowercase text, except for acronyms, proper nouns, package names, and file names.
+- Start the subject directly with a present-tense imperative verb such as `implement`, `fix`, `improve`, `update`, `use`, `remove`, `rename`, or `refactor`.
+- Do not prefix the subject with Conventional Commit-style labels such as `feat:`, `fix:`, `perf:`, `docs:`, `refactor:`, `test:`, or scoped variants such as `feat(image):`.
+- Keep the subject concise and specific; prefer 72 characters or fewer when practical.
+- Do not end the subject with a period.
+- Describe the user-visible or technical effect, not the amount of work.
+- Prefer one logical change per commit.
+- Avoid vague subjects such as `fix bug`, `update code`, `changes`, `misc`, `cleanup`, `final`, or `wip`.
+- Do not mention implementation noise unless it is relevant to the change.
+- Add a commit body when the reason, trade-off, migration step, or behavior change is not obvious from the subject.
+- In the body, explain why the change was made and mention important side effects, limitations, or follow-up work.
+- Reference issues, tickets, or follow-up tasks when applicable.
+- Mention breaking changes explicitly.
+
+## After Finishing
+
+After the change is complete:
+
+- Always create a commit for the completed task unless the user explicitly asks not to commit.
+- Commit only the changes made for the current task.
+- Do not include unrelated edits, incidental formatting, generated files, debug logs, temporary files, or local-only configuration.
+- Inspect the final state with `git status --short` before staging.
+- Review the final diff with `git diff` and confirm every changed line belongs to the task.
+- Stage files explicitly by path. Avoid broad staging commands such as `git add .` unless every changed file has been reviewed and belongs to the task.
+- Before committing, inspect staged changes with `git diff --staged`.
+- Do not amend, squash, rebase, or rewrite existing commits unless the task explicitly requests it.
+- If verification could not be fully completed because of environment limits, the commit message may still be created for the finished change, but the final response must list the skipped or failed verification command and the reason.
+- If unresolved errors remain, do not commit. Explain what is blocking the commit and which files are affected.

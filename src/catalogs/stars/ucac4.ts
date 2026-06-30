@@ -327,7 +327,7 @@ export class Ucac4Catalog extends BaseStarCatalog<Ucac4CatalogEntry> {
 	// Resolves a zone file path across the common UCAC4 directory layouts.
 	async #resolveZonePath(zone: number): Promise<string | undefined> {
 		const cached = this.#zonePaths.get(zone)
-		if (cached !== undefined) return cached || undefined
+		if (cached !== undefined) return cached ?? undefined
 
 		const fileName = `z${`${zone}`.padStart(3, '0')}`
 		const candidates = [join(this.#root, fileName), join(this.#root, 'u4b', fileName), join(this.#root, 'u4s', fileName), join(this.#root, 'u4n', fileName)]

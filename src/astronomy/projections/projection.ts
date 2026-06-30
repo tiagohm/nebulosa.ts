@@ -508,8 +508,8 @@ export class PlateCarree extends CylindricalEquidistant {
 }
 
 // Returns `num` if it is a finite number, otherwise `fallback`.
-function numberFrom(num: number | undefined | null, fallback: number) {
-	return num !== undefined && num !== null && Number.isFinite(num) ? num : fallback
+function numberFrom(num: number | undefined, fallback: number) {
+	return num !== undefined && Number.isFinite(num) ? num : fallback
 }
 
 function epsilonFrom(a?: ProjectionOptions, b?: ProjectionOptions, fallback: number = GEOMETRY_EPSILON) {

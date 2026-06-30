@@ -350,7 +350,7 @@ describe('star filtering and star matching', () => {
 		expect(ok).toBeDefined()
 		expect(ok!.matches).toBe(2)
 		const far = shiftStars(reference, 20, 20, (value) => ({ ...value }))
-		expect(estimateTranslation(reference, far, 3, 2)).toBeNull()
+		expect(estimateTranslation(reference, far, 3, 2)).toBeUndefined()
 	})
 })
 

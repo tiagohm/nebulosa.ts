@@ -129,9 +129,9 @@ test('hour angle at altitude matches the standard semidiurnal arc', () => {
 	expect(hourAngleAtAltitude(declination, latitude, 0)).toBeCloseTo(Math.acos(-Math.tan(latitude) * Math.tan(declination)), 12)
 })
 
-test('hour angle at altitude returns null for circumpolar and never-rising bodies', () => {
+test('hour angle at altitude returns undefined for circumpolar and never-rising bodies', () => {
 	// High-declination star at a high latitude never sets (always above h0 = 0).
-	expect(hourAngleAtAltitude(80 * DEG2RAD, 80 * DEG2RAD, 0)).toBeNull()
+	expect(hourAngleAtAltitude(80 * DEG2RAD, 80 * DEG2RAD, 0)).toBeUndefined()
 	// Its southern counterpart never rises above h0 = 0.
-	expect(hourAngleAtAltitude(-80 * DEG2RAD, 80 * DEG2RAD, 0)).toBeNull()
+	expect(hourAngleAtAltitude(-80 * DEG2RAD, 80 * DEG2RAD, 0)).toBeUndefined()
 })

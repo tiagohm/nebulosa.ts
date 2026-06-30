@@ -1,7 +1,7 @@
 import type { Point } from '../../math/numerical/geometry'
 import { clamp } from '../../math/numerical/math'
 import type { Angle } from '../../math/units/angle'
-import { type AxisPulse, type CalibrationMatrix, DEFAULT_GUIDER_CONFIG, type FilteredStars, filterGuideStars, type GuideDirectionDEC, type GuideDirectionRA, type GuideFrame, type GuideStar, oppositeDEC, oppositeRA, type StarFilterConfig } from './guider'
+import { type AxisPulse, type CalibrationMatrix, DEFAULT_GUIDER_CONFIG, type FilteredStars, filterGuideStars, type GuideDirectionDEC, type GuideDirectionRA, type GuideFrame, type GuideStar, NO_PULSE, oppositeDEC, oppositeRA, type StarFilterConfig } from './guider'
 
 // Frame-by-frame autoguider calibration. The GuidingCalibrator state machine issues RA and DEC pulses,
 // tracks the resulting star displacement across frames, and solves the image-motion and inverse
@@ -313,8 +313,8 @@ interface GuidingCalibratorState {
 	clearingSteps: number
 	plannedClearingSteps: number
 	settleFramesRemaining: number
-	pendingPulseAxis: 'ra' | 'dec' | null
-	pendingPulseDirection: GuideDirectionRA | GuideDirectionDEC | null
+	pendingPulseAxis?: 'ra' | 'dec'
+	pendingPulseDirection?: GuideDirectionRA | GuideDirectionDEC
 	pendingPulseMs: number
 	raSamples: GuidingCalibrationSample[]
 	decSamples: GuidingCalibrationSample[]
@@ -336,9 +336,6 @@ interface GuidingCalibrationConfigIssue {
 	readonly key: string
 	readonly reason: string
 }
-
-// Sentinel pulse representing no motion on an axis.
-const NO_PULSE: AxisPulse = { direction: null, duration: 0 }
 
 // Default calibration tuning: ~650 ms pulses, west/north legs, RA clearing enabled, 12° minimum
 // axis separation.
@@ -413,8 +410,8 @@ const EMPTY_GUIDING_CALIBRATOR_STATE: Readonly<GuidingCalibratorState> = {
 	clearingSteps: 0,
 	plannedClearingSteps: 0,
 	settleFramesRemaining: 0,
-	pendingPulseAxis: null,
-	pendingPulseDirection: null,
+	pendingPulseAxis: undefined,
+	pendingPulseDirection: undefined,
 	pendingPulseMs: 0,
 	raSamples: [],
 	decSamples: [],
@@ -473,7 +470,7 @@ export class GuidingCalibrator {
 			return this.#makeStepResult(undefined, frame, ['terminal_state'])
 		}
 
-		if (this.state.pendingPulseAxis === null) {
+		if (this.state.pendingPulseAxis === undefined) {
 			return this.#fail('bad_frame', 'no pending calibration pulse to measure', frame, ['missing_pending_pulse'])
 		}
 
@@ -794,8 +791,8 @@ export class GuidingCalibrator {
 		this.state.currentY = point.y
 		this.state.lastX = point.x
 		this.state.lastY = point.y
-		this.state.pendingPulseAxis = null
-		this.state.pendingPulseDirection = null
+		this.state.pendingPulseAxis = undefined
+		this.state.pendingPulseDirection = undefined
 		this.state.pendingPulseMs = 0
 	}
 

@@ -42,25 +42,25 @@ function localView(c: LocalSolarEclipseCircumstances, options?: Partial<LocalSol
 	return computeLocalSolarEclipseViewGeometry(c, options)
 }
 
-function expectContactKind(event: LocalSolarEclipseEvent | null, kind: string) {
-	expect(event).not.toBeNull()
+function expectContactKind(event: LocalSolarEclipseEvent | undefined, kind: string) {
+	expect(event).toBeDefined()
 	expect(event!.kind).toBe(kind as LocalSolarEclipseEvent['kind'])
 }
 
 describe('local circumstances', () => {
 	test('point outside the eclipse region has no events and is not visible', () => {
 		const c = localCircumstances(total2024.pbe, 115, -32) // Perth: nowhere near the 2024 penumbra.
-		expect(c.events.C1).toBeNull()
-		expect(c.events.C2).toBeNull()
-		expect(c.events.MAX).toBeNull()
-		expect(c.events.C3).toBeNull()
-		expect(c.events.C4).toBeNull()
+		expect(c.events.C1).toBeUndefined()
+		expect(c.events.C2).toBeUndefined()
+		expect(c.events.MAX).toBeUndefined()
+		expect(c.events.C3).toBeUndefined()
+		expect(c.events.C4).toBeUndefined()
 		expect(c.visibility.kind).toBe('notVisible')
 		expect(c.visibility.hasGeometricEclipse).toBe(false)
-		expect(c.details.maximalMagnitude).toBeNull()
-		expect(c.details.partialPhaseDuration).toBeNull()
-		expect(c.details.centralPhaseDuration).toBeNull()
-		expect(c.details.shadowPathWidthKm).toBeNull()
+		expect(c.details.maximalMagnitude).toBeUndefined()
+		expect(c.details.partialPhaseDuration).toBeUndefined()
+		expect(c.details.centralPhaseDuration).toBeUndefined()
+		expect(c.details.shadowPathWidthKm).toBeUndefined()
 	})
 
 	test('partial-only location resolves C1/MAX/C4 but no central contacts', () => {
@@ -68,15 +68,15 @@ describe('local circumstances', () => {
 		expectContactKind(c.events.C1, 'C1')
 		expectContactKind(c.events.MAX, 'MAX')
 		expectContactKind(c.events.C4, 'C4')
-		expect(c.events.C2).toBeNull()
-		expect(c.events.C3).toBeNull()
+		expect(c.events.C2).toBeUndefined()
+		expect(c.events.C3).toBeUndefined()
 		expect(c.events.MAX!.centralPhaseKind).toBe('none')
 		expect(c.events.MAX!.magnitude).toBeGreaterThan(0)
 		expect(c.events.MAX!.magnitude).toBeLessThan(1)
 		// Partial duration is C4 - C1 and is several thousand seconds; the central duration is undefined.
 		expect(c.details.partialPhaseDuration).toBeCloseTo((c.events.C4!.jd - c.events.C1!.jd) * 86400, 6)
 		expect(c.details.partialPhaseDuration!).toBeGreaterThan(3600)
-		expect(c.details.centralPhaseDuration).toBeNull()
+		expect(c.details.centralPhaseDuration).toBeUndefined()
 	})
 
 	test('total location resolves all five contacts with magnitude above one', () => {
@@ -109,7 +109,7 @@ describe('local circumstances', () => {
 
 	test('an eclipse whose maximum is below the horizon stays geometric but not observable', () => {
 		const c = localCircumstances(total2024.pbe, -0.13, 51.5) // London: a small partial at/after sunset.
-		expect(c.events.MAX).not.toBeNull()
+		expect(c.events.MAX).toBeDefined()
 		expect(c.events.MAX!.sunAltitude).toBeLessThan(0)
 		expect(c.events.MAX!.observable).toBe(false)
 		expect(c.events.MAX!.visibility).toBe('belowHorizon')
@@ -176,9 +176,9 @@ describe('local circumstances', () => {
 
 	test('a partial-only eclipse has no central shadow-path width', () => {
 		const c = localCircumstances(total2024.pbe, -74, 40.71) // New York: partial only.
-		expect(c.events.MAX).not.toBeNull()
+		expect(c.events.MAX).toBeDefined()
 		expect(c.events.MAX!.centralPhaseKind).toBe('none')
-		expect(c.details.shadowPathWidthKm).toBeNull()
+		expect(c.details.shadowPathWidthKm).toBeUndefined()
 	})
 
 	test('observability of every event matches its solar altitude against the horizon', () => {
@@ -186,10 +186,10 @@ describe('local circumstances', () => {
 		for (const kind of ['C1', 'C2', 'MAX', 'C3', 'C4'] as const) {
 			const event = c.events[kind]!
 			expect(event.observable).toBe(event.sunAltitude >= 0)
-			expect(event.positionAngleP!).toBeGreaterThanOrEqual(0)
-			expect(event.positionAngleP!).toBeLessThan(TAU)
-			expect(event.zenithAngleZ!).toBeGreaterThanOrEqual(0)
-			expect(event.zenithAngleZ!).toBeLessThan(TAU)
+			expect(event.positionAngle!).toBeGreaterThanOrEqual(0)
+			expect(event.positionAngle!).toBeLessThan(TAU)
+			expect(event.zenithAngle!).toBeGreaterThanOrEqual(0)
+			expect(event.zenithAngle!).toBeLessThan(TAU)
 		}
 	})
 })
@@ -252,11 +252,11 @@ describe('local view geometry', () => {
 		const firstGhost = view.shapes.find((s): s is Extract<(typeof view.shapes)[number], { kind: 'circle' }> => s.role === 'ghostMoonDisk')!
 
 		// C1 ghost drawn in the MAX zenith frame: angle = centerP(C1) - q(MAX).
-		const primaryFrameAngle = normalizeAngle(c1.localViewState!.centerPositionAngleP! - max.localViewState!.parallacticAngle!)
+		const primaryFrameAngle = normalizeAngle(c1.localViewState!.centerPositionAngle! - max.localViewState!.parallacticAngle!)
 		expect(firstGhost.cx).toBeCloseTo(sunCx + sep * Math.sin(primaryFrameAngle), 6)
 		expect(firstGhost.cy).toBeCloseTo(sunCy - sep * Math.cos(primaryFrameAngle), 6)
 		// It is NOT the C1 own-frame position (centerZenithAngleZ = centerP(C1) - q(C1)).
-		const ownFrameAngle = c1.localViewState!.centerZenithAngleZ!
+		const ownFrameAngle = c1.localViewState!.centerZenithAngle!
 		expect(Math.abs(firstGhost.cx - (sunCx + sep * Math.sin(ownFrameAngle)))).toBeGreaterThan(1)
 	})
 
@@ -307,7 +307,7 @@ describe('local view geometry', () => {
 	test('a location with no eclipse produces an empty Local View', () => {
 		const c = localCircumstances(total2024.pbe, 115, -32) // Perth: no eclipse.
 		const view = computeLocalSolarEclipseViewGeometry(c, viewOptions())
-		expect(view.selectedEvent).toBeNull()
+		expect(view.selectedEvent).toBeUndefined()
 		expect(view.shapes).toHaveLength(0)
 	})
 })
@@ -341,16 +341,16 @@ describe('local view topocentric invariants', () => {
 		// Total C2/C3: the last solar sliver is on the far limb, so contact = center + PI.
 		for (const k of ['C2', 'C3'] as const) {
 			const e = total.events[k]!
-			expect(wrap(e.positionAngleP! - e.localViewState!.centerPositionAngleP!)).toBeCloseTo(PI, 6)
+			expect(wrap(e.positionAngle! - e.localViewState!.centerPositionAngle!)).toBeCloseTo(PI, 6)
 		}
 		// Annular C2/C3 and all C1/MAX/C4: contact coincides with the lunar center.
 		for (const k of ['C2', 'C3'] as const) {
 			const e = annular.events[k]!
-			expect(wrap(e.positionAngleP! - e.localViewState!.centerPositionAngleP!)).toBeCloseTo(0, 6)
+			expect(wrap(e.positionAngle! - e.localViewState!.centerPositionAngle!)).toBeCloseTo(0, 6)
 		}
 		for (const k of ['C1', 'MAX', 'C4'] as const) {
 			const e = total.events[k]!
-			expect(wrap(e.positionAngleP! - e.localViewState!.centerPositionAngleP!)).toBeCloseTo(0, 6)
+			expect(wrap(e.positionAngle! - e.localViewState!.centerPositionAngle!)).toBeCloseTo(0, 6)
 		}
 	})
 })
@@ -369,14 +369,14 @@ describe('local view horizon geometry', () => {
 			time: total2024.eclipse.maximalTime,
 			jd: 0,
 			sunAltitude,
-			positionAngleP: 0,
-			zenithAngleZ: 0,
+			positionAngle: 0,
+			zenithAngle: 0,
 			visibility: 'aboveHorizon',
 			observable: true,
 			magnitude: 1,
 			moonSunDiameterRatio: 1,
 			centralPhaseKind: 'total',
-			localViewState: { separationSolarRadii: 0, centerPositionAngleP: 0, centerZenithAngleZ: 0, parallacticAngle, sunAltitude, solarAngularRadius },
+			localViewState: { separationSolarRadii: 0, centerPositionAngle: 0, centerZenithAngle: 0, parallacticAngle, sunAltitude, solarAngularRadius },
 		}
 	}
 
@@ -469,7 +469,7 @@ describe('local view robustness', () => {
 		const c = localCircumstances(total2024.pbe, -104.13, 25.28)
 		expect(c.events.MAX!.centralPhaseKind).toBe('total')
 		expect(c.events.MAX!.localViewState!.separationSolarRadii).toBeLessThan(0.05)
-		expect(c.details.shadowPathWidthKm).not.toBeNull()
+		expect(c.details.shadowPathWidthKm).toBeDefined()
 		expect(c.details.shadowPathWidthKm!).toBeGreaterThan(0)
 	})
 
@@ -642,9 +642,9 @@ describe('greatest eclipse and greatest duration circumstances', () => {
 		// Greatest eclipse still resolves a point for a partial eclipse, but without central path/duration.
 		const partialGe = computeGreatestEclipseCircumstances(partialPbe)!
 		expect(partialGe).toBeDefined()
-		expect(partialGe.centralDuration).toBeNull()
-		expect(partialGe.pathWidthKm).toBeNull()
-		expect(partialGe.kind).toBeNull()
+		expect(partialGe.centralDuration).toBeUndefined()
+		expect(partialGe.pathWidthKm).toBeUndefined()
+		expect(partialGe.kind).toBeUndefined()
 	})
 })
 

@@ -16,7 +16,7 @@ import { timeAtJulianDay, timeShift, timeSubtract, toJulianDay, tt, type Time } 
 // Solar eclipse map geometry engine. The module is layered as:
 //   A. Besselian elements (polynomial fit, instant elements, evaluation).
 //   B. Projection and Earth geometry (fundamental plane -> geographic).
-//   C. Contacts and central endpoints (P1..P4, U1..U4, C1/C2, Max).
+//   C. Contacts and central endpoints (P1..P4, U1..U4, C1/C2, MAX).
 //   D. Curve solver (findEclipseCurvePoint / findCurvePoints and splitters).
 //   E. Rise/set curves (Earth limb x penumbral circle intersections).
 //   F. Public assembly and optional SVG serialization.
@@ -267,7 +267,7 @@ export interface SolarEclipseContactPoints {
 	// Last central-line contact with Earth (the shadow axis grazes the limb where the central line ends).
 	readonly C2?: SolarEclipseGeoPoint
 	// Greatest eclipse point.
-	readonly Max?: SolarEclipseGeoPoint
+	readonly MAX?: SolarEclipseGeoPoint
 	// Northern penumbral-limit extreme. Informational only: it never controls the penumbra-limit
 	// polylines. When both penumbral limits reach Earth, N1/N2 are the northern limit's two terminator
 	// cusps ordered chronologically; for a grazing partial, N1 is the earlier cusp of the single limit
@@ -348,7 +348,7 @@ export interface SolarEclipseMapSvgProjectionOptions {
 }
 
 // Projected pixel coordinates of the named eclipse points, when each is present on the map: external
-// (P1..P4) and internal (U1..U4) contacts, central-line ends (C1/C2), greatest eclipse (Max), and the
+// (P1..P4) and internal (U1..U4) contacts, central-line ends (C1/C2), greatest eclipse (MAX), and the
 // north/south curve-junction points (N1/N2/S1/S2).
 export interface SolarEclipseMapPoints {
 	readonly P1?: Point
@@ -361,7 +361,7 @@ export interface SolarEclipseMapPoints {
 	readonly U4?: Point
 	readonly C1?: Point
 	readonly C2?: Point
-	readonly Max?: Point
+	readonly MAX?: Point
 	readonly N1?: Point
 	readonly N2?: Point
 	readonly S1?: Point
@@ -2831,7 +2831,7 @@ export function splitCentralLineByKind(centerLine: SolarEclipseGeoBranch, pbe?: 
 // penumbra limits exist for every eclipse.
 export function computeSolarEclipseMapGeometry(eclipse: SolarEclipse, pbe: PolynomialBesselianElements, options?: SolarEclipseMapGeometryOptions): SolarEclipseMapGeometry {
 	const contacts = findPenumbraContactPoints(pbe)
-	const points: Writable<SolarEclipseContactPoints> = { ...contacts, Max: findMaximumPoint(pbe) }
+	const points: Writable<SolarEclipseContactPoints> = { ...contacts, MAX: findMaximumPoint(pbe) }
 	const longitudeStep = validStep(options?.longitudeStep, DEFAULT_LONGITUDE_STEP)
 	const maxAngularStep = validStep(options?.maxAngularStep, DEFAULT_MAX_ANGULAR_STEP)
 	const refractionMode = options?.refractionMode ?? DEFAULT_REFRACTION_MODE
@@ -3054,7 +3054,7 @@ export function solarEclipseMapToSvgPaths(geometry: SolarEclipseMapGeometry, pro
 			U4: projectPoint(points.U4),
 			C1: projectPoint(points.C1),
 			C2: projectPoint(points.C2),
-			Max: projectPoint(points.Max),
+			MAX: projectPoint(points.MAX),
 			N1: projectPoint(points.N1),
 			N2: projectPoint(points.N2),
 			S1: projectPoint(points.S1),

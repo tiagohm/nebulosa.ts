@@ -39,7 +39,7 @@ if (!Number.isFinite(FROM_YEAR) || !Number.isFinite(TO_YEAR)) {
 	process.exit(1)
 }
 
-function marker(point: Point | undefined | null, label: string, color: string) {
+function marker(point: Point | undefined, label: string, color: string) {
 	return point ? `<circle cx="${point.x.toFixed(2)}" cy="${point.y.toFixed(2)}" r="3" fill="${color}"/><text x="${(point.x + 5).toFixed(2)}" y="${(point.y - 5).toFixed(2)}">${label}</text>` : ''
 }
 

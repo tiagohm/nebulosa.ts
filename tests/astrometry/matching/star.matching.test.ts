@@ -530,13 +530,13 @@ describe('real stars dataset', async () => {
 				name: 'similarity ninety degrees',
 				model: 'similarity',
 				transform: similarity(1, Math.PI / 2, 42, 18),
-				config: { allowAffineFallback: false, maxRotation: null },
+				config: { allowAffineFallback: false, maxRotation: undefined },
 			},
 			{
 				name: 'similarity one eighty degrees',
 				model: 'similarity',
 				transform: similarity(1, Math.PI, -16, 28),
-				config: { allowAffineFallback: false, maxRotation: null },
+				config: { allowAffineFallback: false, maxRotation: undefined },
 			},
 			{
 				name: 'similarity scaled rotated',
