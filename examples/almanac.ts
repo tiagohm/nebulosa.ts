@@ -13,6 +13,7 @@ import fs from 'fs/promises'
 import { matchStars } from '../src/astrometry/matching/star.matching'
 import { crescentWidth, moonParallax, moonSemidiameter, nearestLunarApsis, nearestLunarEclipse, nearestLunarPhase } from '../src/astronomy/bodies/moon'
 import { JUPITER_ROTATION, MARS_ROTATION, MOON_ROTATION, positionAngleOfPole, SATURN_ROTATION, subObserverPoint as bodySubObserver, subSolarPoint as bodySubSolar, SUN_ROTATION } from '../src/astronomy/bodies/orientation'
+import { Planet, planetMagnitude } from '../src/astronomy/bodies/photometry'
 import { spaceMotion, star } from '../src/astronomy/bodies/star'
 import { carringtonRotationNumber, equationOfTime, nearestSolarEclipse, season } from '../src/astronomy/bodies/sun'
 import { cirsToObserved, distance as vectorDistance, equatorial as vectorToEquatorial, icrsToCirs, icrsToObserved, parallacticAngle, phaseAngle, refractedAltitude, relativePositionAndVelocity, separationFrom, unrefractedAltitude, type PositionAndVelocityOverTime } from '../src/astronomy/coordinates/astrometry'
@@ -684,14 +685,12 @@ function planetaryAngularDiameter() {
 	console.info('Jupiter angular diameter (arcsec):', toArcsec(objectAngularDiameter(JUPITER_DIAMETER_KM, distanceKm)))
 }
 
-// Planetary Visual Magnitude.
-// TODO(almanac): the library has no planetary photometric model (the Astronomical
-// Almanac / Mallama polynomials in distance and phase angle). cometMagnitudeEstimate
-// and asteroidMagnitudeEstimate exist for small bodies, but planets need their own
-// per-planet coefficients. A `planetMagnitude(body, r, delta, phaseAngle)` should be
-// added to formulas.ts using the Mallama 2018 coefficients.
+// Planetary Visual Magnitude: the Mallama & Hilton (2018) photometric model, from the
+// heliocentric and geocentric vectors (and the year for Neptune's secular term).
 function planetaryVisualMagnitude() {
-	console.info('Planetary visual magnitude: not implemented; add Mallama 2018 polynomials to formulas.ts.')
+	const year = toJulianEpoch(NOW)
+	const magnitude = (planet: Planet, body: PositionAndVelocityOverTime) => planetMagnitude(planet, vecMinus(body(NOW)[0], sun(NOW)[0]), vecMinus(body(NOW)[0], earth(NOW)[0]), { year })
+	console.info('Visual magnitude V (Venus, Mars, Jupiter, Saturn):', magnitude(Planet.VENUS, venus).toFixed(2), magnitude(Planet.MARS, mars).toFixed(2), magnitude(Planet.JUPITER, jupiter).toFixed(2), magnitude(Planet.SATURN, saturn).toFixed(2))
 }
 
 // Planetary Heliocentric Longitude: ecliptic longitude of the heliocentric position.
