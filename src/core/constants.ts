@@ -60,6 +60,11 @@ export const MJD1977 = 43144
 // Length of tropical year B1900 (days).
 export const DAYSPERTY = 365.242198781
 
+// Length of the sidereal year at J2000 (days): one revolution of the Earth
+// relative to the fixed stars, slightly longer than the tropical year because
+// of the precession of the equinoxes.
+export const DAYSPERSY = 365.256363004
+
 // Period that takes the Moon to return to a similar position among the stars, in days.
 export const MOON_SIDEREAL_DAYS = 27.321661
 

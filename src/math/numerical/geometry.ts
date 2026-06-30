@@ -466,3 +466,34 @@ export function sphericalInterpolate(longitudeA: number, latitudeA: number, long
 
 	return [normalizeAngle(Math.atan2(y, x)), Math.atan2(z, Math.hypot(x, y))] as const
 }
+
+// Computes the area of a spherical triangle on the unit sphere, in steradians.
+// The three vertices are longitude/latitude pairs (radians). The area equals the
+// spherical excess E = A + B + C - PI of the interior angles, evaluated here with
+// L'Huilier's theorem from the three side lengths so it stays numerically stable
+// for small triangles where the angle-sum form loses precision. The result is
+// non-negative, independent of vertex order and winding, and clamped at zero to
+// absorb rounding on degenerate (collinear or coincident) triangles. Multiply by
+// R^2 for a sphere of radius R.
+export function sphericalTriangleArea(longitudeA: number, latitudeA: number, longitudeB: number, latitudeB: number, longitudeC: number, latitudeC: number) {
+	const a = sphericalSeparation(longitudeB, latitudeB, longitudeC, latitudeC)
+	const b = sphericalSeparation(longitudeA, latitudeA, longitudeC, latitudeC)
+	const c = sphericalSeparation(longitudeA, latitudeA, longitudeB, latitudeB)
+	const s = (a + b + c) / 2
+	const t = Math.tan(s / 2) * Math.tan((s - a) / 2) * Math.tan((s - b) / 2) * Math.tan((s - c) / 2)
+	return 4 * Math.atan(Math.sqrt(Math.max(0, t)))
+}
+
+// Computes the area enclosed by a spherical polygon on the unit sphere, in
+// steradians. Vertices are longitude/latitude pairs (radians) in boundary order;
+// the polygon is closed implicitly (the last vertex connects back to the first).
+// The area is summed from a fan triangulation rooted at the first vertex via
+// sphericalTriangleArea, so the polygon must be simple (non-self-intersecting)
+// and star-shaped about that vertex for every fan triangle to lie inside the
+// boundary. Returns 0 for fewer than three vertices. Multiply by R^2 for a
+// sphere of radius R.
+export function sphericalPolygonArea(vertices: readonly (readonly [number, number])[]) {
+	let area = 0
+	for (let i = 1; i + 1 < vertices.length; i++) area += sphericalTriangleArea(vertices[0][0], vertices[0][1], vertices[i][0], vertices[i][1], vertices[i + 1][0], vertices[i + 1][1])
+	return area
+}

@@ -41,9 +41,9 @@ import { iersab, iersb } from '../src/astronomy/time/iers'
 import { fileHandleSource } from '../src/io/io'
 // oxfmt-ignore
 import { Timescale, dut1 as dut1FromTime, earthRotationAngle, greenwichApparentSiderealTime, greenwichMeanSiderealTime, nutationAngles, pmAngles, pmMatrix, tai, taiMinusUtc, tcb, tdb, time, timeBesselianYear, timeJulianYear, timeMJD, timeSubtract, timeToDate, timeUnix, timeYMDHMS, toJulianDay, tt, ut1, utc } from '../src/astronomy/time/time'
-import { DAYSPERJY, GM_SUN_PITJEVA_2005, J2000, PI, SPEED_OF_LIGHT_AU_DAY, TAU } from '../src/core/constants'
-import { type Vec3, vecCross, vecDot, vecLatitude, vecLength, vecLongitude, vecMinus, vecMulScalar, vecNormalize } from '../src/math/linear-algebra/vec3'
-import { sphericalDestination, sphericalInterpolate, sphericalPositionAngle, sphericalProjectTangentPlane, sphericalSeparation, sphericalUnprojectTangentPlane } from '../src/math/numerical/geometry'
+import { DAYSPERJY, DAYSPERSY, GM_SUN_PITJEVA_2005, J2000, PI, SPEED_OF_LIGHT_AU_DAY, TAU } from '../src/core/constants'
+import { type Vec3, vecAngle, vecCross, vecDot, vecLatitude, vecLength, vecLongitude, vecMinus, vecMulScalar, vecNormalize } from '../src/math/linear-algebra/vec3'
+import { sphericalDestination, sphericalInterpolate, sphericalPolygonArea, sphericalPositionAngle, sphericalProjectTangentPlane, sphericalSeparation, sphericalTriangleArea, sphericalUnprojectTangentPlane } from '../src/math/numerical/geometry'
 import { arcmin, arcsec, deg, formatAZ, formatHMS, formatSignedDMS, hms, hour, normalizeAngle, normalizePI, toArcsec, toDeg, toHour } from '../src/math/units/angle'
 import { kilometer, toKilometer } from '../src/math/units/distance'
 import { toKilometerPerSecond } from '../src/math/units/velocity'
@@ -200,15 +200,9 @@ function tropicalYearLength() {
 	console.info('Tropical year length (days):', 365.242198781)
 }
 
-// Sidereal Year Length.
-// TODO(almanac): the library exposes DAYSPERJY (Julian year) and DAYSPERTY
-// (tropical year) but no dedicated sidereal-year constant. The sidereal year
-// (one revolution relative to the fixed stars) is ~365.256363004 days at J2000;
-// a `DAYSPERSY` constant should be added to `core/constants.ts` alongside the
-// other year-length constants.
+// Sidereal Year Length: one revolution of the Earth relative to the fixed stars.
 function siderealYearLength() {
-	const DAYS_PER_SIDEREAL_YEAR = 365.256363004
-	console.info('Sidereal year length (days):', DAYS_PER_SIDEREAL_YEAR)
+	console.info('Sidereal year length (days):', DAYSPERSY)
 }
 
 // ##### Coordinate Systems and Geometry #####
@@ -335,39 +329,20 @@ function greatCircleMidpoint() {
 	console.info('Midpoint RA/DEC:', formatHMS(normalizeAngle(lon)), formatSignedDMS(lat))
 }
 
-// Spherical Polygon Area.
-// TODO(almanac): there is no dedicated spherical-polygon area helper. It can be
-// implemented from the existing primitives via L'Huilier's theorem applied to a
-// fan triangulation, or with the spherical excess of the signed angles. The
-// snippet below fan-triangulates a polygon using sphericalTriangleArea (defined
-// in the next example) once that helper exists.
-function sphericalPolygonArea() {
+// Spherical Polygon Area: spherical excess of the boundary, in steradians.
+function sphericalPolygonAreaExample() {
 	const vertices: [number, number][] = [
 		[deg(0), deg(0)],
 		[deg(10), deg(0)],
 		[deg(10), deg(10)],
 		[deg(0), deg(10)],
 	]
-	let area = 0
-	for (let i = 1; i + 1 < vertices.length; i++) area += sphericalTriangleAreaOf(vertices[0], vertices[i], vertices[i + 1])
-	console.info('Spherical polygon area (steradians):', area)
+	console.info('Spherical polygon area (steradians):', sphericalPolygonArea(vertices))
 }
 
 // Spherical Triangle Area: spherical excess E = A + B + C - PI (steradians).
-// TODO(almanac): not exported by the library. Implemented here from the sides
-// (computed with sphericalSeparation) using L'Huilier's theorem. Consider adding
-// `sphericalTriangleArea` to `math/numerical/geometry.ts`.
-function sphericalTriangleAreaOf(a: [number, number], b: [number, number], c: [number, number]) {
-	const sa = sphericalSeparation(b[0], b[1], c[0], c[1])
-	const sb = sphericalSeparation(a[0], a[1], c[0], c[1])
-	const sc = sphericalSeparation(a[0], a[1], b[0], b[1])
-	const s = (sa + sb + sc) / 2
-	const t = Math.tan(s / 2) * Math.tan((s - sa) / 2) * Math.tan((s - sb) / 2) * Math.tan((s - sc) / 2)
-	return 4 * Math.atan(Math.sqrt(Math.max(0, t)))
-}
-
-function sphericalTriangleArea() {
-	const area = sphericalTriangleAreaOf([deg(0), deg(0)], [deg(10), deg(0)], [deg(0), deg(10)])
+function sphericalTriangleAreaExample() {
+	const area = sphericalTriangleArea(deg(0), deg(0), deg(10), deg(0), deg(0), deg(10))
 	console.info('Spherical triangle area (steradians):', area)
 }
 
@@ -992,12 +967,7 @@ function lunarAltitudeAndAzimuth() {
 function computeLunarPhaseAngle(t = NOW) {
 	const m = moonGeocentric(t)[0]
 	const s = geocentricSun(t)
-	return vecAngleBetween(vecMulScalar(m, -1), vecMinus(s, m))
-}
-
-// Angle between two vectors (radians) – small local helper.
-function vecAngleBetween(a: Vec3, b: Vec3) {
-	return Math.acos(Math.max(-1, Math.min(1, vecDot(a, b) / (vecLength(a) * vecLength(b)))))
+	return vecAngle(vecMulScalar(m, -1), vecMinus(s, m))
 }
 
 // Lunar Phase Angle.
@@ -1587,7 +1557,7 @@ function asteroidPhaseAngle() {
 	const earthHelio = vecMinus(earth(NOW)[0], sun(NOW)[0])
 	const astToSun = vecMulScalar(helio, -1)
 	const astToEarth = vecMinus(earthHelio, helio)
-	console.info('Asteroid phase angle (deg):', toDeg(vecAngleBetween(astToSun, astToEarth)))
+	console.info('Asteroid phase angle (deg):', toDeg(vecAngle(astToSun, astToEarth)))
 }
 
 // Asteroid Magnitude Estimate (H-G system).
@@ -1745,7 +1715,7 @@ function satelliteAngularSpeed() {
 	const a = temeToItrf(sgp4(SAT_TIME, rec)[0], SAT_TIME)
 	const t2 = timeShiftSeconds(SAT_TIME, 1)
 	const b = temeToItrf(sgp4(t2, rec)[0], t2)
-	console.info('ISS angular speed (deg/s):', toDeg(vecAngleBetween(a, b)))
+	console.info('ISS angular speed (deg/s):', toDeg(vecAngle(a, b)))
 }
 
 // Shift a Time by whole seconds (small local helper).
@@ -1837,8 +1807,8 @@ function run() {
 	greatCircleDistance()
 	greatCircleBearing()
 	greatCircleMidpoint()
-	sphericalPolygonArea()
-	sphericalTriangleArea()
+	sphericalPolygonAreaExample()
+	sphericalTriangleAreaExample()
 	sphericalTriangleAngles()
 	tangentPlaneProjection()
 	inverseTangentPlaneProjection()

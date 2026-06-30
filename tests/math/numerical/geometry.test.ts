@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test'
 import { eraC2s, eraS2c, eraS2p } from '../../../src/astronomy/coordinates/erfa/erfa'
 import { arcmin, deg, hour } from '../../../src/math/units/angle'
 // oxfmt-ignore
-import { intersectLineAndSphere, midPoint, rectIntersection, type SphericalMountBasis, type SphericalTangentBasis, sphericalCoordinateBasis, sphericalDestination, sphericalDirectionVector, sphericalGreatCirclePole, sphericalInterpolate, sphericalMountBasis, sphericalMountDeclinationAxisVector, sphericalMountPolarAxisVector, sphericalOffsetVector, sphericalPoleVector, sphericalPositionAngle, sphericalProjectTangentPlane, sphericalSeparation, sphericalTangentBasis, sphericalUnprojectTangentPlane } from '../../../src/math/numerical/geometry'
+import { intersectLineAndSphere, midPoint, rectIntersection, type SphericalMountBasis, type SphericalTangentBasis, sphericalCoordinateBasis, sphericalDestination, sphericalDirectionVector, sphericalGreatCirclePole, sphericalInterpolate, sphericalMountBasis, sphericalMountDeclinationAxisVector, sphericalMountPolarAxisVector, sphericalOffsetVector, sphericalPoleVector, sphericalPolygonArea, sphericalPositionAngle, sphericalProjectTangentPlane, sphericalSeparation, sphericalTangentBasis, sphericalTriangleArea, sphericalUnprojectTangentPlane } from '../../../src/math/numerical/geometry'
 import { type Vec3, vecCross, vecDot, vecLength, vecNormalize } from '../../../src/math/linear-algebra/vec3'
 
 // Checks a vector with one tolerance per component.
@@ -275,4 +275,49 @@ test('spherical mount basis falls back deterministically at the pole and zero ve
 	expectVectorClose(zeroBasis.declinationAxis, [0, -1, 0], 14)
 	expectVectorClose(zeroBasis.hourAngleTangent, [0, 1, 0], 14)
 	expectVectorClose(zeroBasis.declinationTangent, [-1, 0, 0], 14)
+})
+
+test('spherical triangle area returns the exact octant excess', () => {
+	// Vertices at the equator (lon 0), the equator (lon 90 deg) and the north pole
+	// span one octant of the unit sphere: area = 4*PI / 8 = PI / 2 steradians.
+	const area = sphericalTriangleArea(deg(0), deg(0), deg(90), deg(0), deg(0), deg(90))
+	expect(area).toBeCloseTo(Math.PI / 2, 12)
+})
+
+test('spherical triangle area is independent of vertex order', () => {
+	const a = sphericalTriangleArea(deg(0), deg(0), deg(30), deg(10), deg(15), deg(40))
+	const b = sphericalTriangleArea(deg(15), deg(40), deg(0), deg(0), deg(30), deg(10))
+	const c = sphericalTriangleArea(deg(30), deg(10), deg(15), deg(40), deg(0), deg(0))
+	expect(a).toBeGreaterThan(0)
+	expect(b).toBeCloseTo(a, 14)
+	expect(c).toBeCloseTo(a, 14)
+})
+
+test('spherical triangle area is zero for a degenerate triangle', () => {
+	// Coincident vertices.
+	expect(sphericalTriangleArea(deg(20), deg(5), deg(20), deg(5), deg(20), deg(5))).toBeCloseTo(0, 14)
+	// Collinear vertices along the equator.
+	expect(sphericalTriangleArea(deg(0), deg(0), deg(20), deg(0), deg(40), deg(0))).toBeCloseTo(0, 12)
+})
+
+test('spherical polygon area sums fan triangles', () => {
+	// Two octants sharing the north pole cover a quarter of the sphere: PI steradians.
+	const vertices: [number, number][] = [
+		[deg(0), deg(0)],
+		[deg(90), deg(0)],
+		[deg(0), deg(90)],
+		[deg(-90), deg(0)],
+	]
+	expect(sphericalPolygonArea(vertices)).toBeCloseTo(Math.PI, 12)
+})
+
+test('spherical polygon area is zero for fewer than three vertices', () => {
+	expect(sphericalPolygonArea([])).toBe(0)
+	expect(sphericalPolygonArea([[deg(0), deg(0)]])).toBe(0)
+	expect(
+		sphericalPolygonArea([
+			[deg(0), deg(0)],
+			[deg(10), deg(0)],
+		]),
+	).toBe(0)
 })
