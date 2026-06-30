@@ -1,5 +1,6 @@
+import { DEG2RAD, ONE_SECOND } from '../../core/constants'
 import type { Vec3 } from '../../math/linear-algebra/vec3'
-import { type Angle, deg } from '../../math/units/angle'
+import type { Angle } from '../../math/units/angle'
 import { equatorial } from '../coordinates/astrometry'
 import { equatorialFromJ2000, equatorialToHorizontal } from '../coordinates/coordinate'
 import { type GeographicPosition, localSiderealTime } from '../observer/location'
@@ -24,24 +25,24 @@ import { searchExtrema, searchRoots, type TimeSearchOptions } from './search'
 // horizon raised by the Moon's horizontal parallax (≈ +0.7275·π − 34′).
 
 // Standard horizon altitude for a point source: -34′ of mean atmospheric refraction at the sea horizon.
-export const STANDARD_HORIZON: Angle = deg(-34 / 60)
+export const STANDARD_HORIZON: Angle = (-34 / 60) * DEG2RAD
 // Horizon altitude for the Sun's upper limb: -34′ refraction minus the ~16′ solar semidiameter.
-export const SUN_HORIZON: Angle = deg(-50 / 60)
+export const SUN_HORIZON: Angle = (-50 / 60) * DEG2RAD
 // Sun centre depression marking the limit of civil twilight.
-export const CIVIL_TWILIGHT: Angle = deg(-6)
+export const CIVIL_TWILIGHT: Angle = -6 * DEG2RAD
 // Sun centre depression marking the limit of nautical twilight.
-export const NAUTICAL_TWILIGHT: Angle = deg(-12)
+export const NAUTICAL_TWILIGHT: Angle = -12 * DEG2RAD
 // Sun centre depression marking the limit of astronomical twilight.
-export const ASTRONOMICAL_TWILIGHT: Angle = deg(-18)
+export const ASTRONOMICAL_TWILIGHT: Angle = -18 * DEG2RAD
 
 // Rise, transit and set circumstances over a one-day window.
 export interface RiseTransitSet {
-	// Instant the body rises through the horizon, or null when it does not rise in the window.
-	readonly rise: Time | null
-	// Instant of upper transit (altitude maximum), or null when no culmination falls in the window.
-	readonly transit: Time | null
-	// Instant the body sets through the horizon, or null when it does not set in the window.
-	readonly set: Time | null
+	// Instant the body rises through the horizon, or undefined when it does not rise in the window.
+	readonly rise?: Time
+	// Instant of upper transit (altitude maximum), or undefined when no culmination falls in the window.
+	readonly transit?: Time
+	// Instant the body sets through the horizon, or undefined when it does not set in the window.
+	readonly set?: Time
 	// Geometric altitude at upper transit (radians); the day's maximum altitude.
 	readonly transitAltitude: Angle
 	// True when the body stays above the horizon for the whole window (circumpolar).
@@ -58,9 +59,6 @@ export interface RiseTransitSetOptions extends TimeSearchOptions {
 	// Length of the search window in days, starting at the supplied time. Defaults to one day.
 	readonly window?: number
 }
-
-// One second expressed in days, used to probe the altitude slope at a crossing.
-const ONE_SECOND = 1 / 86400
 
 // Computes the geometric geocentric altitude of a direction at a time and observer location.
 //
@@ -80,7 +78,7 @@ function altitudeOf(direction: Vec3, time: Time, location: GeographicPosition): 
 // `moonGeocentric(t)[0]` or the geocentric Sun vector); only its direction is used. `location` is the
 // observer, `time` is the window start (typically local or UT midnight). The transit is the upper
 // culmination found as the altitude maximum; rise and set are the standard-horizon crossings bounding
-// that culmination. When the body never crosses the horizon, rise and set are null and exactly one of
+// that culmination. When the body never crosses the horizon, rise and set are undefined and exactly one of
 // alwaysUp/alwaysDown is set. transit is still reported (as the culmination instant) even below the
 // horizon, so callers can distinguish the geometry from the visibility.
 export function riseTransitSet(directionAt: (time: Time) => Vec3, location: GeographicPosition, time: Time, { horizon = STANDARD_HORIZON, window = 1, step, tolerance }: RiseTransitSetOptions = {}): RiseTransitSet {
@@ -89,8 +87,9 @@ export function riseTransitSet(directionAt: (time: Time) => Vec3, location: Geog
 
 	// Upper transit: the highest-altitude maximum in the window.
 	const extrema = searchExtrema(altAt, time, stop, { step, tolerance })
-	let transit: Time | null = null
+	let transit: Time | undefined
 	let transitAltitude = Number.NEGATIVE_INFINITY
+
 	for (const e of extrema) {
 		if (e.kind === 'maximum' && e.value > transitAltitude) {
 			transit = e.time
@@ -104,15 +103,15 @@ export function riseTransitSet(directionAt: (time: Time) => Vec3, location: Geog
 	if (crossings.length === 0) {
 		// No crossing: the body is wholly above or wholly below the horizon for the window. Decide from
 		// the transit altitude when available, otherwise from the window-start altitude.
-		const reference = transit !== null ? transitAltitude : altAt(time)
+		const reference = transit !== undefined ? transitAltitude : altAt(time)
 		const up = reference > horizon
-		return { rise: null, transit, set: null, transitAltitude: transit !== null ? transitAltitude : reference, alwaysUp: up, alwaysDown: !up }
+		return { rise: undefined, transit, set: undefined, transitAltitude: transit !== undefined ? transitAltitude : reference, alwaysUp: up, alwaysDown: !up }
 	}
 
-	const transitOffset = transit !== null ? timeSubtract(transit, time) : 0.5 * window
+	const transitOffset = transit !== undefined ? timeSubtract(transit, time) : 0.5 * window
 
-	let rise: Time | null = null
-	let set: Time | null = null
+	let rise: Time | undefined
+	let set: Time | undefined
 	let riseGap = Number.POSITIVE_INFINITY
 	let setGap = Number.POSITIVE_INFINITY
 
@@ -124,12 +123,14 @@ export function riseTransitSet(directionAt: (time: Time) => Vec3, location: Geog
 		if (rising) {
 			// Prefer the rising crossing closest before the transit; fall back to the nearest otherwise.
 			const gap = offset <= transitOffset ? transitOffset - offset : window + (transitOffset - offset)
+
 			if (gap < riseGap) {
 				riseGap = gap
 				rise = crossing
 			}
 		} else {
 			const gap = offset >= transitOffset ? offset - transitOffset : window + (offset - transitOffset)
+
 			if (gap < setGap) {
 				setGap = gap
 				set = crossing

@@ -13,7 +13,7 @@ import fs from 'fs/promises'
 import { matchStars } from '../src/astrometry/matching/star.matching'
 import { crescentWidth, moonParallax, moonSemidiameter, nearestLunarApsis, nearestLunarEclipse, nearestLunarPhase } from '../src/astronomy/bodies/moon'
 import { JUPITER_ROTATION, MARS_ROTATION, MOON_ROTATION, positionAngleOfPole, SATURN_ROTATION, subObserverPoint as bodySubObserver, subSolarPoint as bodySubSolar, SUN_ROTATION } from '../src/astronomy/bodies/orientation'
-import { Planet, planetMagnitude } from '../src/astronomy/bodies/photometry'
+import { planetMagnitude, type Planet } from '../src/astronomy/bodies/photometry'
 import { spaceMotion, star } from '../src/astronomy/bodies/star'
 import { carringtonRotationNumber, equationOfTime, nearestSolarEclipse, season } from '../src/astronomy/bodies/sun'
 import { cirsToObserved, distance as vectorDistance, equatorial as vectorToEquatorial, icrsToCirs, icrsToObserved, parallacticAngle, phaseAngle, refractedAltitude, relativePositionAndVelocity, separationFrom, unrefractedAltitude, type PositionAndVelocityOverTime } from '../src/astronomy/coordinates/astrometry'
@@ -49,7 +49,7 @@ import { formatTemporal, temporalFromTime } from '../src/astronomy/time/temporal
 import { AU_KM, DAYSEC, DAYSPERSY, DAYSPERTY, EARTH_RADIUS_KM, GM_SUN_PITJEVA_2005, PI, TAU } from '../src/core/constants'
 import { type Vec3, vecAngle, vecCross, vecLatitude, vecLength, vecLongitude, vecMinus, vecMulScalar, vecNormalize } from '../src/math/linear-algebra/vec3'
 import { sphericalDestination, sphericalInterpolate, sphericalPolygonArea, sphericalPositionAngle, sphericalProjectTangentPlane, sphericalSeparation, sphericalTriangleAngles, sphericalTriangleArea, sphericalUnprojectTangentPlane } from '../src/math/numerical/geometry'
-import { type Angle, arcmin, arcsec, deg, formatAZ, formatHMS, formatSignedDMS, hms, hour, normalizeAngle, normalizePI, toArcsec, toDeg, toHour } from '../src/math/units/angle'
+import { type Angle, arcsec, deg, formatAZ, formatHMS, formatSignedDMS, hms, hour, normalizeAngle, normalizePI, toArcsec, toDeg, toHour } from '../src/math/units/angle'
 import { kilometer, toKilometer } from '../src/math/units/distance'
 import { toKilometerPerSecond } from '../src/math/units/velocity'
 
@@ -690,7 +690,7 @@ function planetaryAngularDiameter() {
 function planetaryVisualMagnitude() {
 	const year = toJulianEpoch(NOW)
 	const magnitude = (planet: Planet, body: PositionAndVelocityOverTime) => planetMagnitude(planet, vecMinus(body(NOW)[0], sun(NOW)[0]), vecMinus(body(NOW)[0], earth(NOW)[0]), { year })
-	console.info('Visual magnitude V (Venus, Mars, Jupiter, Saturn):', magnitude(Planet.VENUS, venus).toFixed(2), magnitude(Planet.MARS, mars).toFixed(2), magnitude(Planet.JUPITER, jupiter).toFixed(2), magnitude(Planet.SATURN, saturn).toFixed(2))
+	console.info('Visual magnitude V (Venus, Mars, Jupiter, Saturn):', magnitude('venus', venus), magnitude('mars', mars), magnitude('jupiter', jupiter), magnitude('saturn', saturn))
 }
 
 // Planetary Heliocentric Longitude: ecliptic longitude of the heliocentric position.

@@ -13,16 +13,7 @@ import { clamp } from '../../math/numerical/math'
 // correction (+/-0.06 mag) is not modelled, matching the common implementations.
 
 // Planet selector for planetMagnitude.
-export enum Planet {
-	MERCURY,
-	VENUS,
-	EARTH,
-	MARS,
-	JUPITER,
-	SATURN,
-	URANUS,
-	NEPTUNE,
-}
+export type Planet = 'mercury' | 'venus' | 'earth' | 'mars' | 'jupiter' | 'saturn' | 'uranus' | 'neptune'
 
 // Options for the planets whose magnitude needs more than r, delta and the phase angle.
 export interface PlanetMagnitudeOptions {
@@ -46,51 +37,51 @@ const URANUS_POLE: Vec3 = [-0.21199958, -0.94155916, -0.26176809]
 // delta and the phase angle follow from them. Returns the apparent magnitude, or NaN where the model
 // is undefined (Saturn with rings beyond a 6.5 deg phase angle, or Neptune beyond 1.9 deg before the
 // year 2000).
-export function planetMagnitude(planet: Planet, sunToPlanet: Vec3, observerToPlanet: Vec3, options: PlanetMagnitudeOptions = {}): number {
+export function planetMagnitude(planet: Planet, sunToPlanet: Vec3, observerToPlanet: Vec3, options: PlanetMagnitudeOptions = {}) {
 	const r = vecLength(sunToPlanet)
 	const delta = vecLength(observerToPlanet)
 	const phaseAngle = RAD2DEG * Math.acos(clamp(vecDot(sunToPlanet, observerToPlanet) / (r * delta), -1, 1))
 
 	switch (planet) {
-		case Planet.MERCURY:
+		case 'mercury':
 			return mercuryMagnitude(r, delta, phaseAngle)
-		case Planet.VENUS:
+		case 'venus':
 			return venusMagnitude(r, delta, phaseAngle)
-		case Planet.EARTH:
+		case 'earth':
 			return earthMagnitude(r, delta, phaseAngle)
-		case Planet.MARS:
+		case 'mars':
 			return marsMagnitude(r, delta, phaseAngle)
-		case Planet.JUPITER:
+		case 'jupiter':
 			return jupiterMagnitude(r, delta, phaseAngle)
-		case Planet.SATURN:
+		case 'saturn':
 			return saturnMagnitude(r, delta, phaseAngle, subLatitude(SATURN_POLE, sunToPlanet), subLatitude(SATURN_POLE, observerToPlanet), options.rings ?? true)
-		case Planet.URANUS:
+		case 'uranus':
 			return uranusMagnitude(r, delta, phaseAngle, subLatitude(URANUS_POLE, sunToPlanet), subLatitude(URANUS_POLE, observerToPlanet))
-		case Planet.NEPTUNE:
+		case 'neptune':
 			return neptuneMagnitude(r, delta, phaseAngle, options.year ?? 2000)
 	}
 }
 
 // Sub-point latitude (degrees) of a direction relative to a unit pole: 90 deg minus the angle between
 // the pole and the body-to-source direction, i.e. the latitude of the point facing the source.
-function subLatitude(pole: Vec3, toBody: Vec3): number {
+function subLatitude(pole: Vec3, toBody: Vec3) {
 	const cosAngle = clamp(vecDot(pole, toBody) / vecLength(toBody), -1, 1)
 	return RAD2DEG * Math.acos(cosAngle) - 90
 }
 
 // Distance modulus 5*log10(r*delta) shared by most of the planet models.
-function distanceModulus(r: number, delta: number): number {
+function distanceModulus(r: number, delta: number) {
 	return 5 * Math.log10(r * delta)
 }
 
 // Mercury (valid for phase angles 2 deg to 170 deg).
-function mercuryMagnitude(r: number, delta: number, phase: number): number {
+function mercuryMagnitude(r: number, delta: number, phase: number) {
 	const f = 6.328e-2 * phase - 1.6336e-3 * phase ** 2 + 3.3644e-5 * phase ** 3 - 3.4265e-7 * phase ** 4 + 1.6893e-9 * phase ** 5 - 3.0334e-12 * phase ** 6
 	return -0.613 + distanceModulus(r, delta) + f
 }
 
 // Venus, with separate coefficients below and above a 163.7 deg phase angle.
-function venusMagnitude(r: number, delta: number, phase: number): number {
+function venusMagnitude(r: number, delta: number, phase: number) {
 	const low = phase < 163.7
 	const a0 = low ? 0 : 236.05828 + 4.384
 	const a1 = low ? -1.044e-3 : -2.81914
@@ -102,13 +93,13 @@ function venusMagnitude(r: number, delta: number, phase: number): number {
 }
 
 // Earth.
-function earthMagnitude(r: number, delta: number, phase: number): number {
+function earthMagnitude(r: number, delta: number, phase: number) {
 	return -3.99 + distanceModulus(r, delta) + (-1.06e-3 * phase + 2.054e-4 * phase ** 2)
 }
 
 // Mars, with separate coefficients below and above a 50 deg phase angle. The rotation and orbital
 // (season) corrections are not modelled, which can introduce an error up to ~0.06 mag.
-function marsMagnitude(r: number, delta: number, phase: number): number {
+function marsMagnitude(r: number, delta: number, phase: number) {
 	const low = phase <= 50
 	const a = low ? 2.267e-2 : -0.02573
 	const b = low ? -1.302e-4 : 3.445e-4
@@ -117,10 +108,8 @@ function marsMagnitude(r: number, delta: number, phase: number): number {
 }
 
 // Jupiter, with separate coefficients below and above a 12 deg phase angle.
-function jupiterMagnitude(r: number, delta: number, phase: number): number {
-	if (phase <= 12) {
-		return -9.395 + distanceModulus(r, delta) + (6.16e-4 * phase - 3.7e-4) * phase
-	}
+function jupiterMagnitude(r: number, delta: number, phase: number) {
+	if (phase <= 12) return -9.395 + distanceModulus(r, delta) + (6.16e-4 * phase - 3.7e-4) * phase
 	const p = phase / 180
 	const f = -2.5 * Math.log10(((((-1.876 * p + 2.809) * p - 0.062) * p - 0.363) * p - 1.507) * p + 1)
 	return -9.428 + distanceModulus(r, delta) + f
@@ -129,7 +118,7 @@ function jupiterMagnitude(r: number, delta: number, phase: number): number {
 // Saturn, including the ring contribution. `sunSubLat` and `earthSubLat` are saturnicentric latitudes
 // (degrees) of the Sun and the observer. Returns NaN where the ringed model is undefined (phase angle
 // beyond 6.5 deg with the rings included).
-function saturnMagnitude(r: number, delta: number, phase: number, sunSubLat: number, earthSubLat: number, rings: boolean): number {
+function saturnMagnitude(r: number, delta: number, phase: number, sunSubLat: number, earthSubLat: number, rings: boolean) {
 	// Geometric mean of the sub-latitudes, zero when the Sun and the observer face opposite ring faces.
 	const product = sunSubLat * earthSubLat
 	const subLatGeoc = product >= 0 ? Math.sqrt(product) : 0
@@ -142,6 +131,7 @@ function saturnMagnitude(r: number, delta: number, phase: number, sunSubLat: num
 			const sinLat = Math.sin(subLatGeoc * DEG2RAD)
 			return -8.914 - 1.825 * sinLat + 0.026 * phase - 0.378 * sinLat * Math.exp(-2.25 * phase) + modulus
 		}
+
 		return -8.95 - 3.7e-4 * phase + 6.16e-4 * phase ** 2 + modulus
 	}
 
@@ -154,7 +144,7 @@ function saturnMagnitude(r: number, delta: number, phase: number, sunSubLat: num
 
 // Uranus, with a polar-aspect term from the mean of the absolute sub-solar and sub-Earth planetographic
 // latitudes (degrees) and a phase term beyond a 3.1 deg phase angle.
-function uranusMagnitude(r: number, delta: number, phase: number, sunSubLat: number, earthSubLat: number): number {
+function uranusMagnitude(r: number, delta: number, phase: number, sunSubLat: number, earthSubLat: number) {
 	const subLat = (Math.abs(sunSubLat) + Math.abs(earthSubLat)) / 2
 	let mag = -7.11 + distanceModulus(r, delta) - 0.00084 * subLat
 	if (phase > 3.1) mag += (1.045e-4 * phase + 6.587e-3) * phase
@@ -163,11 +153,13 @@ function uranusMagnitude(r: number, delta: number, phase: number, sunSubLat: num
 
 // Neptune. `year` is the Julian year; the unit-distance brightness fades secularly and the phase term
 // (beyond 1.9 deg) is only defined from the year 2000 onward, returning NaN before then.
-function neptuneMagnitude(r: number, delta: number, phase: number, year: number): number {
+function neptuneMagnitude(r: number, delta: number, phase: number, year: number) {
 	let mag = clamp(-6.89 - 0.0054 * (year - 1980), -7, -6.89) + distanceModulus(r, delta)
+
 	if (phase > 1.9) {
 		if (year < 2000) return Number.NaN
 		mag += 7.944e-3 * phase + 9.617e-5 * phase ** 2
 	}
+
 	return mag
 }

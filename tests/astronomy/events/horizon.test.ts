@@ -21,8 +21,8 @@ function sunDirection(time: Time) {
 const SIRIUS = icrs(hms(6, 45, 8.917), deg(-16.716116))
 
 // Reference values from Astropy (geometric AltAz, pressure=0) for the same site and day.
-function utcMinute(time: Time | null) {
-	return time === null ? null : timeToDate(utc(time)).slice(0, 5)
+function utcMinute(time?: Time) {
+	return time && timeToDate(utc(time)).slice(0, 5)
 }
 
 test('riseTransitSet of the Sun matches the Astropy almanac to the minute', () => {
@@ -58,10 +58,10 @@ test('a south-circumpolar star never sets at a southern site', () => {
 	const rts = riseTransitSet(() => icrs(deg(90), deg(-85)), SITE, DAY, { horizon: STANDARD_HORIZON })
 	expect(rts.alwaysUp).toBeTrue()
 	expect(rts.alwaysDown).toBeFalse()
-	expect(rts.rise).toBeNull()
-	expect(rts.set).toBeNull()
+	expect(rts.rise).toBeUndefined()
+	expect(rts.set).toBeUndefined()
 	// The culmination is still reported, above the horizon.
-	expect(rts.transit).not.toBeNull()
+	expect(rts.transit).toBeDefined()
 	expect(rts.transitAltitude).toBeGreaterThan(STANDARD_HORIZON)
 })
 
@@ -70,7 +70,7 @@ test('a far-northern star never rises at a southern site', () => {
 	const rts = riseTransitSet(() => icrs(deg(90), deg(85)), SITE, DAY, { horizon: STANDARD_HORIZON })
 	expect(rts.alwaysDown).toBeTrue()
 	expect(rts.alwaysUp).toBeFalse()
-	expect(rts.rise).toBeNull()
-	expect(rts.set).toBeNull()
+	expect(rts.rise).toBeUndefined()
+	expect(rts.set).toBeUndefined()
 	expect(rts.transitAltitude).toBeLessThan(STANDARD_HORIZON)
 })
