@@ -256,6 +256,12 @@ export function timeJulianYear(epoch: number, scale: Timescale = Timescale.TT) {
 	return time(J2000 + (epoch - 2000) * DAYSPERJY, 0, scale)
 }
 
+// Julian epoch year of the given time (e.g. 2026.5 for J2026.5), the inverse of
+// timeJulianYear. Computed from the Julian Date in TT: 2000 + (JD_TT - J2000) / 365.25.
+export function toJulianEpoch(time: Time): number {
+	return 2000 + (toJulianDay(tt(time)) - J2000) / DAYSPERJY
+}
+
 // Besselian epoch year as floating point value like 1950.0.
 export function timeBesselianYear(epoch: number, scale: Timescale = Timescale.TT) {
 	return timeMJD(15019.81352 + (epoch - 1900) * DAYSPERTY, scale)

@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import type { CartesianCoordinate } from '../../../src/astronomy/coordinates/coordinate'
-import { KeplerOrbit, eccentricAnomaly, meanAnomaly, mpcAsteroid, mpcComet, stumpff, timeSincePeriapsis, trueAnomalyHyperbolic, trueAnomalyParabolic } from '../../../src/astronomy/orbits/asteroid'
+import { KeplerOrbit, eccentricAnomaly, meanAnomaly, mpcAsteroid, mpcComet, stumpff, timeSincePeriapsis, tisserandParameter, trueAnomalyHyperbolic, trueAnomalyParabolic } from '../../../src/astronomy/orbits/asteroid'
 import { mpcorb, mpcorbComet } from '../../../src/astronomy/orbits/mpcorb'
 import { Timescale, time, timeYMDHMS } from '../../../src/astronomy/time/time'
 import { GM_SUN_PITJEVA_2005 } from '../../../src/core/constants'
@@ -164,4 +164,18 @@ test('circular equatorial true anomaly', () => {
 	expect(prograde.trueAnomaly).toBeCloseTo(Math.PI / 2, 14)
 	expect(prograde.trueLongitude).toBeCloseTo(Math.PI / 2, 14)
 	expect(retrograde.trueAnomaly).toBeCloseTo(Math.PI / 2, 14)
+})
+
+test('tisserand parameter is 3 for a circular coplanar orbit at the perturber distance', () => {
+	// a = a_p, e = 0, i = 0 -> T = 1 + 2*sqrt(1) = 3 exactly.
+	expect(tisserandParameter(5.2044, 0, 0, 5.2044)).toBeCloseTo(3, 12)
+	// Synthetic interior circular coplanar orbit: T = a_p/a + 2*sqrt(a/a_p).
+	expect(tisserandParameter(2, 0, 0, 5.2044)).toBeCloseTo(3.8420229, 6)
+})
+
+test('tisserand parameter is above 3 for a main-belt asteroid', () => {
+	// Ceres-like elements relative to Jupiter (a_p = 5.2044 AU).
+	const t = tisserandParameter(2.7658, 0.0785, 0.184899, 5.2044)
+	expect(t).toBeCloseTo(3.3103, 3)
+	expect(t).toBeGreaterThan(3)
 })

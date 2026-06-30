@@ -19,7 +19,7 @@ import { angularDistance, eclipticToEquatorial, equatorialFromJ2000, equatorialT
 import { annualAberration, lightTravelTime, observerState, radialVelocityCorrection } from '../src/astronomy/coordinates/correction'
 import { eraAnpm, eraC2s, eraLdSun, eraPmpx, eraS2c, eraSeps, eraStarpm, eraStarpv } from '../src/astronomy/coordinates/erfa/erfa'
 import { precessFk5FromJ2000 } from '../src/astronomy/coordinates/fk5'
-import { GALACTIC, ICRS, SUPERGALACTIC, fk5ToIcrs, frameToFrame, icrsToFk5, temeToItrf } from '../src/astronomy/coordinates/frame'
+import { GALACTIC, SUPERGALACTIC, fk5ToIcrs, frameToFrame, icrsToFk5, temeToItrf } from '../src/astronomy/coordinates/frame'
 import { icrs as icrsVector } from '../src/astronomy/coordinates/icrs'
 import { itrs } from '../src/astronomy/coordinates/itrs'
 import { Base as Meeus } from '../src/astronomy/ephemeris/meeus'
@@ -31,7 +31,7 @@ import { computeGreatestEclipseCircumstances, computeLocalSolarEclipseCircumstan
 import { computePolynomialBesselianElements } from '../src/astronomy/events/eclipse/solar/map'
 import { airmass, airmassKastenYoung, altitudeAtTransit, asteroidMagnitudeEstimate, atmosphericRefraction, cometMagnitudeEstimate, hourAngleAtAltitude, objectAngularDiameter } from '../src/astronomy/formulas'
 import { Ellipsoid, geodeticLocation, localSiderealTime, rhoCosPhi, subpoint } from '../src/astronomy/observer/location'
-import { KeplerOrbit, asteroid, comet, meanMotion, period, trueAnomalyClosed, trueAnomalyHyperbolic } from '../src/astronomy/orbits/asteroid'
+import { KeplerOrbit, asteroid, comet, meanMotion, period, tisserandParameter, trueAnomalyClosed, trueAnomalyHyperbolic } from '../src/astronomy/orbits/asteroid'
 import { gibbs } from '../src/astronomy/orbits/determination/gibbs'
 import { herrickGibbs } from '../src/astronomy/orbits/determination/herrickgibbs'
 import { parseTLE, recordFromTLE, sgp4 } from '../src/astronomy/orbits/propagation/sgp4'
@@ -40,9 +40,9 @@ import { deltaT } from '../src/astronomy/time/deltat'
 import { iersab, iersb } from '../src/astronomy/time/iers'
 import { fileHandleSource } from '../src/io/io'
 // oxfmt-ignore
-import { Timescale, dut1 as dut1FromTime, earthRotationAngle, equationOfEquinoxes, greenwichApparentSiderealTime, greenwichMeanSiderealTime, nutationAngles, pmAngles, pmMatrix, tai, taiMinusUtc, tcb, tdb, time, timeBesselianYear, timeJulianYear, timeMJD, timeSubtract, timeToDate, timeUnix, timeYMDHMS, toJulianDay, tt, ut1, utc } from '../src/astronomy/time/time'
+import { Timescale, dut1 as dut1FromTime, earthRotationAngle, equationOfEquinoxes, greenwichApparentSiderealTime, greenwichMeanSiderealTime, nutationAngles, pmAngles, pmMatrix, tai, taiMinusUtc, tcb, tdb, timeBesselianYear, timeJulianYear, timeMJD, timeShift, timeSubtract, timeToDate, timeUnix, timeYMDHMS, toJulianDay, toJulianEpoch, tt, ut1, utc, type Time } from '../src/astronomy/time/time'
 import { formatTemporal, temporalFromTime } from '../src/astronomy/time/temporal'
-import { DAYSEC, DAYSPERJY, DAYSPERSY, DAYSPERTY, GM_SUN_PITJEVA_2005, J2000, PI, TAU } from '../src/core/constants'
+import { DAYSEC, DAYSPERSY, DAYSPERTY, EARTH_RADIUS_KM, GM_SUN_PITJEVA_2005, PI, TAU } from '../src/core/constants'
 import { type Vec3, vecAngle, vecCross, vecLatitude, vecLength, vecLongitude, vecMinus, vecMulScalar, vecNormalize } from '../src/math/linear-algebra/vec3'
 import { sphericalDestination, sphericalInterpolate, sphericalPolygonArea, sphericalPositionAngle, sphericalProjectTangentPlane, sphericalSeparation, sphericalTriangleAngles, sphericalTriangleArea, sphericalUnprojectTangentPlane } from '../src/math/numerical/geometry'
 import { arcmin, arcsec, deg, formatAZ, formatHMS, formatSignedDMS, hms, hour, normalizeAngle, normalizePI, toArcsec, toDeg, toHour } from '../src/math/units/angle'
@@ -65,6 +65,7 @@ NOW.location = SITE
 // A bright reference star (Sirius, ICRS J2000) reused across the coordinate examples.
 const SIRIUS_RA = hms(6, 45, 8.917)
 const SIRIUS_DEC = deg(-16.716116)
+const SIRIUS_ICRF = icrsVector(SIRIUS_RA, SIRIUS_DEC)
 
 // ##### Time and Earth Orientation #####
 
@@ -183,8 +184,7 @@ function earthOrientationInterpolation() {
 // Julian Epoch Conversion: Time <-> Julian epoch year (J2026.5).
 function julianEpochConversion() {
 	const t = timeJulianYear(2026.5, Timescale.TT)
-	const epoch = 2000 + (toJulianDay(tt(t)) - J2000) / DAYSPERJY
-	console.info('Round-trip Julian epoch:', epoch)
+	console.info('Round-trip Julian epoch:', toJulianEpoch(t))
 }
 
 // Besselian Epoch Conversion: Time from a Besselian epoch year (B1950).
@@ -213,30 +213,29 @@ function sphericalToCartesian() {
 
 // Cartesian to Spherical Coordinates: recover angles from a unit vector.
 function cartesianToSpherical() {
-	const v = eraS2c(SIRIUS_RA, SIRIUS_DEC)
-	const [theta, phi] = eraC2s(v[0], v[1], v[2])
+	const [theta, phi] = eraC2s(...SIRIUS_ICRF)
 	console.info('Recovered RA/DEC:', formatHMS(normalizeAngle(theta)), formatSignedDMS(phi))
 }
 
 // Right Ascension and Declination to Vector: ICRS direction with a distance.
 function raDecToVector() {
-	console.info('ICRS position vector (AU):', icrsVector(SIRIUS_RA, SIRIUS_DEC, kilometer(1)))
+	console.info('ICRS position vector (AU):', SIRIUS_ICRF)
 }
 
 // Vector to Right Ascension and Declination.
 function vectorToRaDec() {
-	const v = icrsVector(SIRIUS_RA, SIRIUS_DEC)
+	const v = SIRIUS_ICRF
 	console.info('RA:', formatHMS(normalizeAngle(vecLongitude(v))), 'DEC:', formatSignedDMS(vecLatitude(v)))
 }
 
 // ICRS to FK5 Transformation (apply the frame bias).
 function icrsToFk5Transformation() {
-	console.info('FK5 vector:', icrsToFk5(icrsVector(SIRIUS_RA, SIRIUS_DEC)))
+	console.info('FK5 vector:', icrsToFk5(SIRIUS_ICRF))
 }
 
 // FK5 to ICRS Transformation (remove the frame bias).
 function fk5ToIcrsTransformation() {
-	console.info('ICRS vector:', fk5ToIcrs(icrsVector(SIRIUS_RA, SIRIUS_DEC)))
+	console.info('ICRS vector:', fk5ToIcrs(SIRIUS_ICRF))
 }
 
 // ICRS to Galactic Transformation.
@@ -265,11 +264,9 @@ function eclipticToIcrs() {
 
 // Galactic to Supergalactic Transformation (through the ICRS base frame).
 function galacticToSupergalactic() {
-	const direction = icrsVector(SIRIUS_RA, SIRIUS_DEC)
+	const direction = SIRIUS_ICRF
 	const sg = frameToFrame(direction, GALACTIC, SUPERGALACTIC, NOW)
 	console.info('Supergalactic SGL/SGB (deg):', toDeg(normalizeAngle(vecLongitude(sg))), toDeg(vecLatitude(sg)))
-	// Demonstrate the ICRS->Galactic edge as well to exercise both frames.
-	void frameToFrame(direction, ICRS, GALACTIC, NOW)
 }
 
 // Equatorial to Horizontal Coordinates: azimuth/altitude from the hour angle.
@@ -304,7 +301,7 @@ function greatCircleDistance() {
 	console.info('Great-circle distance (deg):', toDeg(d))
 	// angularDistance / eraSeps compute the same quantity.
 	console.info('Same via eraSeps (deg):', toDeg(eraSeps(SIRIUS_RA, SIRIUS_DEC, deg(101.287), deg(-16.716))))
-	void angularDistance
+	console.info('Same via angularDistance (deg):', toDeg(angularDistance(SIRIUS_RA, SIRIUS_DEC, deg(101.287), deg(-16.716))))
 }
 
 // Great Circle Bearing: initial position angle from A to B.
@@ -392,29 +389,28 @@ function zenithDistance() {
 // ##### Shared ephemeris helpers (used by Sections 3-5) #####
 
 // Heliocentric position of the Earth (AU), i.e. Earth minus Sun.
-function earthHeliocentric(t = NOW) {
-	return relativePositionAndVelocity(earth, sun, t)[0]
+function earthHeliocentric(time: Time = NOW) {
+	return relativePositionAndVelocity(earth, sun, time)[0]
 }
 
 // Geocentric astrometric direction toward a barycentric body (AU). No light-time
 // iteration: good enough for demonstrations but not for sub-arcsecond ephemerides.
-function geocentricDirection(body: PositionAndVelocityOverTime, t = NOW) {
-	return relativePositionAndVelocity(body, earth, t)[0]
+function geocentricDirection(body: PositionAndVelocityOverTime, time: Time = NOW) {
+	return relativePositionAndVelocity(body, earth, time)[0]
 }
 
 // Observe an ICRS direction (or AU vector) from the site, applying frame bias,
 // precession-nutation, aberration and refraction through the ERFA pipeline.
-function observeDirection(direction: Vec3, t = NOW) {
-	const [ep, ev] = earth(t)
-	return icrsToObserved(direction, t, [ep, ev], earthHeliocentric(t))
+function observeDirection(direction: Vec3, time: Time = NOW) {
+	const [ep, ev] = earth(time)
+	return icrsToObserved(direction, time, [ep, ev], earthHeliocentric(time))
 }
 
 // ##### Astrometric Corrections and Stellar Motion #####
 
 // Precession Transformation: precess an FK5 direction from J2000 to the epoch of date.
 function precessionTransformation() {
-	const j2000 = icrsVector(SIRIUS_RA, SIRIUS_DEC)
-	const ofDate = precessFk5FromJ2000(j2000, NOW)
+	const ofDate = precessFk5FromJ2000(SIRIUS_ICRF, NOW)
 	console.info('Precessed RA/DEC of date:', formatHMS(normalizeAngle(vecLongitude(ofDate))), formatSignedDMS(vecLatitude(ofDate)))
 }
 
@@ -426,7 +422,7 @@ function nutationCorrection() {
 
 // Annual Aberration: stellar aberration from the Earth's orbital velocity.
 function annualAberrationComputation() {
-	const natural = vecNormalize(icrsVector(SIRIUS_RA, SIRIUS_DEC))
+	const natural = vecNormalize(SIRIUS_ICRF)
 	// Pass the Earth's barycentric velocity (AU/day) and observer-Sun distance (AU).
 	const proper = annualAberration(natural, earth(NOW)[1], vecLength(earthHeliocentric(NOW)))
 	console.info('Aberration shift (arcsec):', toArcsec(eraSeps(vecLongitude(natural), vecLatitude(natural), vecLongitude(proper), vecLatitude(proper))))
@@ -445,7 +441,7 @@ function diurnalAberration() {
 
 // Solar Gravitational Deflection: bending of starlight grazing the Sun (ERFA eraLdSun).
 function solarGravitationalDeflection() {
-	const natural = vecNormalize(icrsVector(SIRIUS_RA, SIRIUS_DEC))
+	const natural = vecNormalize(SIRIUS_ICRF)
 	const eSun = vecMulScalar(earthHeliocentric(NOW), -1) // Earth -> Sun direction
 	const em = vecLength(eSun)
 	const deflected = eraLdSun(natural, vecNormalize(eSun), em)
@@ -657,8 +653,8 @@ function planetaryPhaseAngle() {
 }
 
 // Sun-planet-Earth angle at the planet (radians).
-function planetPhaseAngle(body: PositionAndVelocityOverTime, t = NOW) {
-	return phaseAngle(body(t)[0], sun(t)[0], earth(t)[0])
+function planetPhaseAngle(body: PositionAndVelocityOverTime, time: Time = NOW) {
+	return phaseAngle(body(time)[0], sun(time)[0], earth(time)[0])
 }
 
 // Planetary Illuminated Fraction: from the phase angle (Meeus).
@@ -669,7 +665,7 @@ function planetaryIlluminatedFraction() {
 // Planetary Angular Diameter: physical diameter over geocentric distance.
 function planetaryAngularDiameter() {
 	const distanceKm = toKilometer(vectorDistance(geocentricDirection(jupiter)))
-	const JUPITER_DIAMETER_KM = 142_984
+	const JUPITER_DIAMETER_KM = 142984
 	console.info('Jupiter angular diameter (arcsec):', toArcsec(objectAngularDiameter(JUPITER_DIAMETER_KM, distanceKm)))
 }
 
@@ -734,6 +730,7 @@ function planetaryGreatestElongation() {
 function planetaryOpposition() {
 	console.info('Planetary opposition: root-find elongation - PI over the synodic period.')
 }
+
 function planetaryConjunction() {
 	console.info('Planetary conjunction: root-find elongation = 0 over the synodic period.')
 }
@@ -744,6 +741,7 @@ function planetaryConjunction() {
 function inferiorConjunction() {
 	console.info('Inferior conjunction: conjunction with the planet nearer than the Sun (geocentric distance < 1 AU).')
 }
+
 function superiorConjunction() {
 	console.info('Superior conjunction: conjunction with the planet beyond the Sun.')
 }
@@ -752,7 +750,7 @@ function superiorConjunction() {
 function perihelionAndAphelion() {
 	const [bp, bv] = mars(NOW)
 	const [sp, sv] = sun(NOW)
-	const orbit = new KeplerOrbit(vecMinus(bp, sp), vecMinus(bv, sv), NOW, GM_SUN_PITJEVA_2005)
+	const orbit = new KeplerOrbit(vecMinus(bp, sp), vecMinus(bv, sv), NOW)
 	console.info('Mars perihelion/aphelion (AU):', orbit.periapsisDistance, orbit.apoapsisDistance)
 }
 
@@ -760,7 +758,7 @@ function perihelionAndAphelion() {
 function ascendingAndDescendingNode() {
 	const [bp, bv] = mars(NOW)
 	const [sp, sv] = sun(NOW)
-	const orbit = new KeplerOrbit(vecMinus(bp, sp), vecMinus(bv, sv), NOW, GM_SUN_PITJEVA_2005)
+	const orbit = new KeplerOrbit(vecMinus(bp, sp), vecMinus(bv, sv), NOW)
 	console.info('Mars ascending node longitude (deg):', toDeg(normalizeAngle(orbit.longitudeOfAscendingNode)))
 }
 
@@ -803,18 +801,18 @@ function jupiterGreatRedSpotTransit() {
 const MU_EARTH = 8.997011e-10
 
 // Geocentric direction toward the Sun (AU).
-function geocentricSun(t = NOW) {
-	return vecMinus(sun(t)[0], earth(t)[0])
+function geocentricSun(time: Time = NOW) {
+	return vecMinus(sun(time)[0], earth(time)[0])
 }
 
 // Apparent geocentric equatorial coordinates of the Sun.
-function sunEquatorial(t = NOW) {
-	return vectorToEquatorial(geocentricSun(t))
+function sunEquatorial(time: Time = NOW) {
+	return vectorToEquatorial(geocentricSun(time))
 }
 
 // Apparent geocentric equatorial coordinates of the Moon.
-function moonEquatorial(t = NOW) {
-	return vectorToEquatorial(moonGeocentric(t)[0])
+function moonEquatorial(time: Time = NOW) {
+	return vectorToEquatorial(moonGeocentric(time)[0])
 }
 
 // ##### Sun and Moon #####
@@ -943,9 +941,9 @@ function lunarAltitudeAndAzimuth() {
 }
 
 // Sun-Moon-Earth phase angle at the Moon (radians).
-function computeLunarPhaseAngle(t = NOW) {
-	const m = moonGeocentric(t)[0]
-	const s = geocentricSun(t)
+function computeLunarPhaseAngle(time: Time = NOW) {
+	const m = moonGeocentric(time)[0]
+	const s = geocentricSun(time)
 	return vecAngle(vecMulScalar(m, -1), vecMinus(s, m))
 }
 
@@ -1043,7 +1041,9 @@ function lunarAscendingAndDescendingNodes() {
 // Lunar Perigee and Apogee.
 function lunarPerigeeAndApogee() {
 	const [perigeeTime, perigeeDistance] = nearestLunarApsis(NOW, 'PERIGEE', true)
-	console.info('Next perigee:', timeToDate(perigeeTime).slice(0, 5).join('-'), 'distance (km):', toKilometer(perigeeDistance))
+	const [apogeeTime, apogeeDistance] = nearestLunarApsis(NOW, 'APOGEE', true)
+	console.info('Next perigee:', formatTemporal(temporalFromTime(perigeeTime)), 'distance (km):', toKilometer(perigeeDistance))
+	console.info('Next apogee:', formatTemporal(temporalFromTime(apogeeTime)), 'distance (km):', toKilometer(apogeeDistance))
 }
 
 // Lunar Standstill Extremes (major/minor standstill).
@@ -1070,8 +1070,6 @@ function crescentMoonWidth() {
 function crescentMoonVisibility() {
 	console.info('Crescent Moon visibility: not implemented; add the Yallop/Odeh q-test.')
 }
-
-// ##### Visibility and Almanac Events helpers #####
 
 // ##### Visibility and Almanac Events #####
 
@@ -1199,13 +1197,13 @@ function targetMeridianWindow() {
 // TODO(almanac): no scanner; current separation shown. A window would scan the
 // night and bracket where separation exceeds a threshold.
 function targetMoonSeparationWindow() {
-	const sep = separationFrom(icrsVector(SIRIUS_RA, SIRIUS_DEC), moonGeocentric(NOW)[0])
+	const sep = separationFrom(SIRIUS_ICRF, moonGeocentric(NOW)[0])
 	console.info('Current target-Moon separation (deg):', toDeg(sep))
 }
 
 // Target Sun Separation Window.
 function targetSunSeparationWindow() {
-	const sep = separationFrom(icrsVector(SIRIUS_RA, SIRIUS_DEC), geocentricSun())
+	const sep = separationFrom(SIRIUS_ICRF, geocentricSun())
 	console.info('Current target-Sun separation (deg):', toDeg(sep))
 }
 
@@ -1477,15 +1475,7 @@ function orbitClassification() {
 // Osculating Elements: full set from the instantaneous state.
 function osculatingElements() {
 	const orbit = new KeplerOrbit(...asteroidKeplerOrbit().at(NOW), NOW)
-	console.info(
-		'Osculating: a, e, i, Omega, w, M (deg):',
-		orbit.semiMajorAxis.toFixed(4),
-		orbit.eccentricity.toFixed(4),
-		toDeg(orbit.inclination).toFixed(2),
-		toDeg(normalizeAngle(orbit.longitudeOfAscendingNode)).toFixed(2),
-		toDeg(normalizeAngle(orbit.argumentOfPeriapsis)).toFixed(2),
-		toDeg(normalizeAngle(orbit.meanAnomaly)).toFixed(2),
-	)
+	console.info('Osculating: a, e, i, Omega, w, M (deg):', orbit.semiMajorAxis, orbit.eccentricity, toDeg(orbit.inclination), toDeg(normalizeAngle(orbit.longitudeOfAscendingNode)), toDeg(normalizeAngle(orbit.argumentOfPeriapsis)), toDeg(normalizeAngle(orbit.meanAnomaly)))
 }
 
 // Heliocentric Minor Body Position.
@@ -1565,11 +1555,10 @@ function minimumOrbitIntersectionDistance() {
 }
 
 // Tisserand Parameter (relative to Jupiter).
-function tisserandParameter() {
+function tisserandParameterComputation() {
 	const orbit = new KeplerOrbit(...asteroidKeplerOrbit().at(NOW), NOW)
-	const aJ = 5.2044
-	const a = orbit.semiMajorAxis
-	const T = aJ / a + 2 * Math.cos(orbit.inclination) * Math.sqrt((a / aJ) * (1 - orbit.eccentricity ** 2))
+	const JUPITER_SEMI_MAJOR_AXIS = 5.2044 // AU
+	const T = tisserandParameter(orbit.semiMajorAxis, orbit.eccentricity, orbit.inclination, JUPITER_SEMI_MAJOR_AXIS)
 	console.info('Tisserand parameter w.r.t. Jupiter:', T)
 }
 
@@ -1638,9 +1627,6 @@ function closeApproachBPlane() {
 const ISS_TLE = parseTLE('1 25544U 98067A   20330.54791667  .00016717  00000-0  10270-3 0  9000', '2 25544  51.6442  21.4611 0001363  85.7790 274.3535 15.49180547 25697', 'ISS (ZARYA)')
 const SAT_TIME = ISS_TLE.epoch
 
-// Earth equatorial radius (km) used to convert ECEF AU vectors into Earth radii.
-const EARTH_RADIUS_KM_LOCAL = 6378.135
-
 // TLE Propagation: TEME position (AU -> km) and velocity (AU/day -> km/s) at the epoch.
 function tlePropagation() {
 	const [p, v] = sgp4(SAT_TIME, recordFromTLE(ISS_TLE))
@@ -1670,7 +1656,7 @@ function satelliteGroundTrack() {
 	const [p] = sgp4(SAT_TIME, recordFromTLE(ISS_TLE))
 	const ecef = temeToItrf(p, SAT_TIME)
 	// subpoint expects a geocentric vector in Earth radii.
-	const sub = subpoint([toKilometer(ecef[0]) / EARTH_RADIUS_KM_LOCAL, toKilometer(ecef[1]) / EARTH_RADIUS_KM_LOCAL, toKilometer(ecef[2]) / EARTH_RADIUS_KM_LOCAL], SAT_TIME)
+	const sub = subpoint([toKilometer(ecef[0]) / EARTH_RADIUS_KM, toKilometer(ecef[1]) / EARTH_RADIUS_KM, toKilometer(ecef[2]) / EARTH_RADIUS_KM], SAT_TIME)
 	console.info('ISS sub-point lon/lat (deg):', toDeg(sub.longitude), toDeg(sub.latitude))
 }
 
@@ -1693,14 +1679,9 @@ function satelliteShadowEntryAndExit() {
 function satelliteAngularSpeed() {
 	const rec = recordFromTLE(ISS_TLE)
 	const a = temeToItrf(sgp4(SAT_TIME, rec)[0], SAT_TIME)
-	const t2 = timeShiftSeconds(SAT_TIME, 1)
+	const t2 = timeShift(SAT_TIME, 1 / DAYSEC)
 	const b = temeToItrf(sgp4(t2, rec)[0], t2)
 	console.info('ISS angular speed (deg/s):', toDeg(vecAngle(a, b)))
-}
-
-// Shift a Time by whole seconds (small local helper).
-function timeShiftSeconds(t: typeof NOW, seconds: number) {
-	return time(t.day, t.fraction + seconds / DAYSEC, t.scale)
 }
 
 // Satellite Visual Magnitude Estimate.
@@ -1957,7 +1938,7 @@ function run() {
 	asteroidMagnitudeEstimation()
 	minorPlanetClosestApproach()
 	minimumOrbitIntersectionDistance()
-	tisserandParameter()
+	tisserandParameterComputation()
 	gaussInitialOrbitDetermination()
 	gibbsOrbitDetermination()
 	herrickGibbsOrbitDetermination()

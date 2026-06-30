@@ -693,6 +693,19 @@ export function period(a: Distance, mu: number) {
 	return a > 0 ? TAU * Math.sqrt(a ** 3 / mu) : Infinity
 }
 
+// Tisserand parameter of a small body relative to a perturbing planet, dimensionless.
+// T = a_p/a + 2*cos(i)*sqrt((a/a_p)*(1 - e^2)), from the small body's osculating
+// semi-major axis `a` (AU), eccentricity `e` and inclination `i` (radians, referred
+// to the perturber's orbital plane, usually the ecliptic), and the perturber's
+// semi-major axis `perturberSemiMajorAxis` (AU; Jupiter ~5.204 AU). It is nearly
+// conserved across close encounters with that planet, so it classifies orbits:
+// T > 3 is typically asteroidal, 2 < T < 3 a Jupiter-family comet, and T < 2 a
+// nearly isotropic / Halley-type orbit. Assumes a bound small-body orbit (a > 0)
+// and a positive perturber semi-major axis.
+export function tisserandParameter(a: Distance, e: number, i: Angle, perturberSemiMajorAxis: Distance): number {
+	return perturberSemiMajorAxis / a + 2 * Math.cos(i) * Math.sqrt((a / perturberSemiMajorAxis) * (1 - e * e))
+}
+
 // Semi-latus rectum (AU) from `position` (AU), `velocity` (AU/day), and `mu`.
 export function semiLatusRectum(position: CartesianCoordinate, velocity: CartesianCoordinate, mu: number) {
 	return vecCrossLength(position, velocity) ** 2 / mu
