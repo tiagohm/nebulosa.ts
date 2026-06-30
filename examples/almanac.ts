@@ -12,7 +12,7 @@
 import fs from 'fs/promises'
 import { matchStars } from '../src/astrometry/matching/star.matching'
 import { crescentWidth, moonParallax, moonSemidiameter, nearestLunarApsis, nearestLunarEclipse, nearestLunarPhase } from '../src/astronomy/bodies/moon'
-import { JUPITER_ROTATION, MARS_ROTATION, positionAngleOfPole, SATURN_ROTATION, subObserverPoint as bodySubObserver, subSolarPoint as bodySubSolar, SUN_ROTATION } from '../src/astronomy/bodies/orientation'
+import { JUPITER_ROTATION, MARS_ROTATION, MOON_ROTATION, positionAngleOfPole, SATURN_ROTATION, subObserverPoint as bodySubObserver, subSolarPoint as bodySubSolar, SUN_ROTATION } from '../src/astronomy/bodies/orientation'
 import { spaceMotion, star } from '../src/astronomy/bodies/star'
 import { carringtonRotationNumber, equationOfTime, nearestSolarEclipse, season } from '../src/astronomy/bodies/sun'
 import { cirsToObserved, distance as vectorDistance, equatorial as vectorToEquatorial, icrsToCirs, icrsToObserved, parallacticAngle, phaseAngle, refractedAltitude, relativePositionAndVelocity, separationFrom, unrefractedAltitude, type PositionAndVelocityOverTime } from '../src/astronomy/coordinates/astrometry'
@@ -1018,36 +1018,51 @@ function lunarHorizontalParallax() {
 	console.info('Moon horizontal parallax (arcmin):', toArcsec(moonParallax(vecLength(moonGeocentric(NOW)[0]))) / 60)
 }
 
-// Lunar Libration (optical libration in longitude/latitude).
-// TODO(almanac): selenographic optical libration (l, b) and the position angle of
-// the axis need the Moon's physical/mean orientation model (Meeus ch. 53). Not
-// implemented; add `lunarLibration(time)` returning (l, b, P).
+// Geocentric direction from the Moon centre to the Earth (AU): the Moon's geocentric
+// position negated, which feeds the lunar sub-observer/libration geometry.
+function moonToEarth(time: Time = NOW) {
+	return vecMulScalar(moonGeocentric(time)[0], -1)
+}
+
+// Geocentric direction from the Moon centre to the Sun (AU).
+function moonToSun(time: Time = NOW) {
+	return vecMinus(geocentricSun(time), moonGeocentric(time)[0])
+}
+
+// Lunar Libration: the selenographic longitude/latitude of the sub-Earth point (the
+// optical+physical libration in longitude l and latitude b) and the position angle of
+// the lunar axis P, from the IAU lunar rotation model.
 function lunarLibration() {
-	console.info('Lunar libration (l, b): not implemented; needs the lunar orientation model.')
+	const toEarth = moonToEarth()
+	const disk = bodySubObserver(MOON_ROTATION, NOW, toEarth)
+	const p = positionAngleOfPole(MOON_ROTATION, NOW, toEarth)
+	console.info('Lunar libration l, b, P (deg):', toDeg(normalizePI(disk.longitude)).toFixed(2), toDeg(disk.latitude).toFixed(2), toDeg(p).toFixed(2))
 }
 
-// Lunar Colongitude (selenographic colongitude of the morning terminator).
-// TODO(almanac): depends on the Sun's selenographic longitude; same prerequisite
-// as libration. Not implemented.
+// Lunar Colongitude: the selenographic colongitude of the Sun, 90deg minus the
+// sub-solar selenographic longitude. It locates the morning terminator (0deg near first
+// quarter, 90deg near full, 180deg near last quarter, 270deg near new).
 function lunarColongitude() {
-	console.info('Lunar colongitude: not implemented; needs selenographic Sun longitude.')
+	const sub = bodySubSolar(MOON_ROTATION, NOW, moonToEarth(), moonToSun())
+	console.info('Lunar (Sun) colongitude (deg):', toDeg(normalizeAngle(deg(90) - sub.longitude)).toFixed(2))
 }
 
-// Lunar Terminator Position.
-// TODO(almanac): the terminator is the great circle 90deg from the sub-solar
-// selenographic point; needs the lunar orientation model. Not implemented.
+// Lunar Terminator Position: the morning terminator is the meridian 90deg west of the
+// sub-solar point, i.e. its selenographic longitude equals the colongitude.
 function lunarTerminatorPosition() {
-	console.info('Lunar terminator position: not implemented; needs the sub-solar selenographic point.')
+	const sub = bodySubSolar(MOON_ROTATION, NOW, moonToEarth(), moonToSun())
+	console.info('Lunar morning terminator selenographic longitude (deg):', toDeg(normalizeAngle(deg(90) - sub.longitude)).toFixed(2))
 }
 
-// Lunar Sub-Solar / Sub-Observer Point (selenographic).
-// TODO(almanac): both need the Moon's IAU rotation elements. Not implemented.
+// Lunar Sub-Solar / Sub-Observer Point (selenographic east longitude, latitude).
 function lunarSubSolarPoint() {
-	console.info('Lunar sub-solar point: not implemented; needs the lunar orientation model.')
+	const sub = bodySubSolar(MOON_ROTATION, NOW, moonToEarth(), moonToSun())
+	console.info('Lunar sub-solar (east lon, lat deg):', toDeg(sub.longitude).toFixed(2), toDeg(sub.latitude).toFixed(2))
 }
 
 function lunarSubObserverPoint() {
-	console.info('Lunar sub-observer point: not implemented; needs the lunar orientation model.')
+	const obs = bodySubObserver(MOON_ROTATION, NOW, moonToEarth())
+	console.info('Lunar sub-observer (east lon, lat deg):', toDeg(obs.longitude).toFixed(2), toDeg(obs.latitude).toFixed(2))
 }
 
 // Lunar Ascending and Descending Nodes: a node passage is where the Moon's geocentric

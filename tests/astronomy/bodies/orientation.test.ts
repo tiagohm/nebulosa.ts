@@ -1,9 +1,10 @@
 import { expect, test } from 'bun:test'
-import { bodyFixedMatrix, JUPITER_ROTATION, MARS_ROTATION, orientation, positionAngleOfPole, SATURN_ROTATION, subObserverPoint, subSolarPoint, SUN_ROTATION, VENUS_ROTATION } from '../../../src/astronomy/bodies/orientation'
+import { bodyFixedMatrix, JUPITER_ROTATION, MARS_ROTATION, MOON_ROTATION, orientation, positionAngleOfPole, SATURN_ROTATION, subObserverPoint, subSolarPoint, SUN_ROTATION, VENUS_ROTATION } from '../../../src/astronomy/bodies/orientation'
+import { moon } from '../../../src/astronomy/ephemeris/models/analytical/elpmpp02'
 import { earth, jupiter, mars, saturn, sun } from '../../../src/astronomy/ephemeris/models/analytical/vsop87e'
 import { Timescale, type Time, timeShift, timeYMDHMS } from '../../../src/astronomy/time/time'
 import { matMulVec } from '../../../src/math/linear-algebra/mat3'
-import { vecMinus, type Vec3 } from '../../../src/math/linear-algebra/vec3'
+import { vecMinus, vecMulScalar, type Vec3 } from '../../../src/math/linear-algebra/vec3'
 import { normalizeAngle, toDeg } from '../../../src/math/units/angle'
 
 // J2000.0 epoch (TT) and a shared observation instant.
@@ -83,6 +84,26 @@ test('sub-observer and sub-solar points for Mars and Jupiter', () => {
 	const jupiterObs = subObserverPoint(JUPITER_ROTATION, NOW, toEarth(jupiter))
 	expect(toDeg(jupiterObs.longitude)).toBeCloseTo(95.6065, 3)
 	expect(toDeg(jupiterObs.latitude)).toBeCloseTo(0.9432, 3)
+})
+
+test('Moon libration, sub-solar point and pole angle match JPL Horizons', () => {
+	// Geocentric vectors at NOW: Moon -> Earth and Moon -> Sun.
+	const moonGeocentric = moon(NOW)[0]
+	const toEarth = vecMulScalar(moonGeocentric, -1)
+	const toSun = vecMinus(vecMinus(sun(NOW)[0], earth(NOW)[0]), moonGeocentric)
+
+	// JPL Horizons (geocentric, 2026-06-29 00:00 UTC): ObsSub 359.874/6.049, SunSub 10.718/1.318,
+	// north-pole position angle 2.256 deg. The ~0.003 deg residual is the ELP/MPP02 vs DE440 ephemeris
+	// difference plus the neglected aberration.
+	const obs = subObserverPoint(MOON_ROTATION, NOW, toEarth)
+	expect(toDeg(obs.longitude)).toBeCloseTo(359.874, 2)
+	expect(toDeg(obs.latitude)).toBeCloseTo(6.049, 2)
+
+	const sub = subSolarPoint(MOON_ROTATION, NOW, toEarth, toSun)
+	expect(toDeg(sub.longitude)).toBeCloseTo(10.718, 2)
+	expect(toDeg(sub.latitude)).toBeCloseTo(1.318, 2)
+
+	expect(toDeg(positionAngleOfPole(MOON_ROTATION, NOW, toEarth))).toBeCloseTo(2.256, 2)
 })
 
 test('light-time retards the central meridian of a fast rotator', () => {

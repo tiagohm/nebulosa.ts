@@ -1,5 +1,6 @@
+import { DAYSPERJC } from '../../core/constants'
 import { deg } from '../../math/units/angle'
-import type { RotationElements } from './orientation'
+import type { PeriodicTerm, RotationElements } from './orientation'
 
 // IAU WGCCRE rotation elements for the Sun and the planets, as published in the 2009/2015 reports of
 // the IAU Working Group on Cartographic Coordinates and Rotational Elements. Each body's north-pole
@@ -101,6 +102,44 @@ export const URANUS_ROTATION: RotationElements = {
 	poleDec: [deg(-15.175)],
 	primeMeridian: deg(203.81),
 	rotationRate: deg(-501.1600928),
+}
+
+// Moon auxiliary arguments E1..E13 as [constant (rad), rate (rad per Julian century)]. The IAU tables
+// give the rates per day; multiplying by DAYSPERJC keeps them exact in the T-based evaluator, since
+// argConstant + (rate*DAYSPERJC)*T = argConstant + rate*d.
+const MOON_E: readonly (readonly [number, number])[] = [
+	[deg(125.045), deg(-0.0529921) * DAYSPERJC],
+	[deg(250.089), deg(-0.1059842) * DAYSPERJC],
+	[deg(260.008), deg(13.0120009) * DAYSPERJC],
+	[deg(176.625), deg(13.3407154) * DAYSPERJC],
+	[deg(357.529), deg(0.9856003) * DAYSPERJC],
+	[deg(311.589), deg(26.4057084) * DAYSPERJC],
+	[deg(134.963), deg(13.064993) * DAYSPERJC],
+	[deg(276.617), deg(0.3287146) * DAYSPERJC],
+	[deg(34.226), deg(1.7484877) * DAYSPERJC],
+	[deg(15.134), deg(-0.1589763) * DAYSPERJC],
+	[deg(119.743), deg(0.0036096) * DAYSPERJC],
+	[deg(239.961), deg(0.1643573) * DAYSPERJC],
+	[deg(25.053), deg(12.9590088) * DAYSPERJC],
+]
+
+// Builds a Moon periodic term referencing the i-th (1-based) auxiliary argument.
+function moonTerm(i: number, amplitudeDeg: number, cosine: boolean): PeriodicTerm {
+	const [argConstant, argRate] = MOON_E[i - 1]
+	return { amplitude: deg(amplitudeDeg), argConstant, argRate, cosine }
+}
+
+// Moon (IAU 2009/2015). The pole and prime meridian carry the E1..E13 physical-libration terms (their
+// arguments are linear in d). The tiny -1.4e-12 d^2 term in W (< 2e-4 deg over the modern era) is
+// omitted; the periodic arguments are evaluated through the T equivalence above.
+export const MOON_ROTATION: RotationElements = {
+	poleRa: [deg(269.9949), deg(0.0031)],
+	poleDec: [deg(66.5392), deg(0.013)],
+	primeMeridian: deg(38.3213),
+	rotationRate: deg(13.17635815),
+	poleRaTerms: [moonTerm(1, -3.8787, false), moonTerm(2, -0.1204, false), moonTerm(3, 0.07, false), moonTerm(4, -0.0172, false), moonTerm(6, 0.0072, false), moonTerm(10, -0.0052, false), moonTerm(13, 0.0043, false)],
+	poleDecTerms: [moonTerm(1, 1.5419, true), moonTerm(2, 0.0239, true), moonTerm(3, -0.0278, true), moonTerm(4, 0.0068, true), moonTerm(6, -0.0029, true), moonTerm(7, 0.0009, true), moonTerm(10, 0.0008, true), moonTerm(13, -0.0009, true)],
+	primeMeridianTerms: [moonTerm(1, 3.561, false), moonTerm(2, 0.1208, false), moonTerm(3, -0.0642, false), moonTerm(4, 0.0158, false), moonTerm(5, 0.0252, false), moonTerm(6, -0.0066, false), moonTerm(7, -0.0047, false), moonTerm(8, -0.0046, false), moonTerm(9, 0.0028, false), moonTerm(10, 0.0052, false), moonTerm(11, 0.004, false), moonTerm(12, 0.0019, false), moonTerm(13, -0.0044, false)],
 }
 
 // Neptune. The N precession angle modulates both the pole and the prime meridian.
