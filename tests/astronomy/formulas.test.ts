@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 // oxfmt-ignore
-import { asteroidMagnitudeEstimate, airmass, airmassKastenYoung, airyDiskInPixels, airyDiskSize, altitudeAtTransit, atmosphericExtinction, atmosphericRefraction, cometMagnitudeEstimate, criticalFocusZone, dawesLimit, dewPoint, dynamicRange, dynamicRangeInStops, effectiveApertureWithObstruction, exitPupil, exitPupilFromApertureAndMagnification, exitPupilFromEyepieceAndFocalRatio, eyepieceTrueFovViaFieldStop, eyepieceView, focalLength, focalRatio, guidingErrorInPixels, lightGraspRatio, limitingMagnitude, magnification, maxExposureBeforeTrail, mosaicPanelCount, objectAngularDiameter, obstructionRatio, periodicErrorInPixels, pixelScale, plateScale, rayleighLimit, recommendedFocalLength, requiredSubframeCount, samplingRatio, saturationTime, sensorDiagonalFov, sensorFieldOfView, signalToNoiseRatio, skyLimitedExposure, stackingMagnitudeGain, stackingSnrGain, starTrailLength, subframeCount, surfaceBrightness, totalIntegrationTime } from '../../src/astronomy/formulas'
+import { asteroidMagnitudeEstimate, airmass, airmassKastenYoung, airyDiskInPixels, airyDiskSize, altitudeAtTransit, atmosphericExtinction, atmosphericRefraction, cometMagnitudeEstimate, criticalFocusZone, dawesLimit, dewPoint, dynamicRange, dynamicRangeInStops, effectiveApertureWithObstruction, exitPupil, exitPupilFromApertureAndMagnification, exitPupilFromEyepieceAndFocalRatio, eyepieceTrueFovViaFieldStop, eyepieceView, focalLength, focalRatio, guidingErrorInPixels, hourAngleAtAltitude, lightGraspRatio, limitingMagnitude, magnification, maxExposureBeforeTrail, mosaicPanelCount, objectAngularDiameter, obstructionRatio, periodicErrorInPixels, pixelScale, plateScale, rayleighLimit, recommendedFocalLength, requiredSubframeCount, samplingRatio, saturationTime, sensorDiagonalFov, sensorFieldOfView, signalToNoiseRatio, skyLimitedExposure, stackingMagnitudeGain, stackingSnrGain, starTrailLength, subframeCount, surfaceBrightness, totalIntegrationTime } from '../../src/astronomy/formulas'
 import { DEG2RAD, RAD2DEG } from '../../src/core/constants'
 
 test('visual astronomy and optical planning formulas return expected values', () => {
@@ -114,4 +114,24 @@ test('formulas reject invalid inputs and denominators consistently', () => {
 	expect(() => surfaceBrightness(10, 0)).toThrow('value must be positive')
 	expect(() => cometMagnitudeEstimate(8, 0, 1.2, 10)).toThrow('value must be positive')
 	expect(() => asteroidMagnitudeEstimate(12, 1.5, 0, 0.3)).toThrow('value must be positive')
+})
+
+test('hour angle at altitude gives a six-hour arc for a body on the celestial equator', () => {
+	// A declination-zero body is up exactly half the day at any latitude: H = 90 deg.
+	expect(hourAngleAtAltitude(0, 45 * DEG2RAD, 0)).toBeCloseTo(Math.PI / 2, 12)
+	expect(hourAngleAtAltitude(0, 0, 0)).toBeCloseTo(Math.PI / 2, 12)
+})
+
+test('hour angle at altitude matches the standard semidiurnal arc', () => {
+	// cos(H) = -tan(lat) * tan(dec) for h0 = 0.
+	const declination = 20 * DEG2RAD
+	const latitude = 45 * DEG2RAD
+	expect(hourAngleAtAltitude(declination, latitude, 0)).toBeCloseTo(Math.acos(-Math.tan(latitude) * Math.tan(declination)), 12)
+})
+
+test('hour angle at altitude returns null for circumpolar and never-rising bodies', () => {
+	// High-declination star at a high latitude never sets (always above h0 = 0).
+	expect(hourAngleAtAltitude(80 * DEG2RAD, 80 * DEG2RAD, 0)).toBeNull()
+	// Its southern counterpart never rises above h0 = 0.
+	expect(hourAngleAtAltitude(-80 * DEG2RAD, 80 * DEG2RAD, 0)).toBeNull()
 })

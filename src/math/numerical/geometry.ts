@@ -497,3 +497,27 @@ export function sphericalPolygonArea(vertices: readonly (readonly [number, numbe
 	for (let i = 1; i + 1 < vertices.length; i++) area += sphericalTriangleArea(vertices[0][0], vertices[0][1], vertices[i][0], vertices[i][1], vertices[i + 1][0], vertices[i + 1][1])
 	return area
 }
+
+// Computes the three interior angles of a spherical triangle on the unit sphere,
+// in radians. The vertices are longitude/latitude pairs (radians) and the
+// returned tuple lists the angles at A, B and C respectively. Each angle is
+// recovered from the three side lengths (great-circle separations) with the
+// spherical law of cosines, clamped into the valid acos domain to absorb
+// rounding. A vertex whose two adjacent sides collapse (a degenerate or
+// coincident triangle) yields 0 for that angle. The angles sum to PI plus the
+// spherical excess returned by sphericalTriangleArea.
+export function sphericalTriangleAngles(longitudeA: number, latitudeA: number, longitudeB: number, latitudeB: number, longitudeC: number, latitudeC: number): readonly [number, number, number] {
+	const a = sphericalSeparation(longitudeB, latitudeB, longitudeC, latitudeC)
+	const b = sphericalSeparation(longitudeA, latitudeA, longitudeC, latitudeC)
+	const c = sphericalSeparation(longitudeA, latitudeA, longitudeB, latitudeB)
+	return [sphericalInteriorAngle(a, b, c), sphericalInteriorAngle(b, a, c), sphericalInteriorAngle(c, a, b)] as const
+}
+
+// Interior spherical angle opposite side `opposite`, between the two adjacent
+// sides `x` and `y` (all radians), via the spherical law of cosines. Returns 0
+// when an adjacent side vanishes so the angle is undefined.
+function sphericalInteriorAngle(opposite: number, x: number, y: number) {
+	const denominator = Math.sin(x) * Math.sin(y)
+	if (denominator <= 0) return 0
+	return Math.acos(clamp((Math.cos(opposite) - Math.cos(x) * Math.cos(y)) / denominator, -1, 1))
+}

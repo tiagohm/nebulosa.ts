@@ -1,12 +1,12 @@
 import { expect, test } from 'bun:test'
-import { lightTravelTime, observerState, radialVelocityCorrection } from '../../../src/astronomy/coordinates/correction'
+import { annualAberration, lightTravelTime, observerState, radialVelocityCorrection } from '../../../src/astronomy/coordinates/correction'
 import { eraEpv00 } from '../../../src/astronomy/coordinates/erfa/earth'
-import { eraC2s } from '../../../src/astronomy/coordinates/erfa/erfa'
+import { eraAb, eraC2s } from '../../../src/astronomy/coordinates/erfa/erfa'
 import { geodeticLocation } from '../../../src/astronomy/observer/location'
 import { tdb, Timescale, timeYMDHMS } from '../../../src/astronomy/time/time'
-import { PI } from '../../../src/core/constants'
-import { vecLength } from '../../../src/math/linear-algebra/vec3'
-import { deg, hour } from '../../../src/math/units/angle'
+import { PI, SPEED_OF_LIGHT_AU_DAY } from '../../../src/core/constants'
+import { vecAngle, vecLength, vecNormalize } from '../../../src/math/linear-algebra/vec3'
+import { deg, hour, toArcsec } from '../../../src/math/units/angle'
 import { meter } from '../../../src/math/units/distance'
 import { toKilometerPerSecond } from '../../../src/math/units/velocity'
 
@@ -95,4 +95,25 @@ test('heliocentric and barycentric corrections differ', () => {
 	expect(bary).not.toBe(helio)
 	expect(Number.isFinite(bary)).toBe(true)
 	expect(Number.isFinite(helio)).toBe(true)
+})
+
+// annualAberration wraps eraAb, deriving v/c and the Lorentz factor from the
+// physical velocity, and must reproduce a direct eraAb call exactly.
+test('annual aberration matches a direct eraAb call and stays within ~20.5 arcsec', () => {
+	const direction = vecNormalize([1, 0.5, 0.2])
+	const velocity = BARYCENTRIC[1]
+	const sunDistance = vecLength(HELIOCENTRIC[0])
+
+	const proper = annualAberration(direction, velocity, sunDistance)
+
+	const vOverC: [number, number, number] = [velocity[0] / SPEED_OF_LIGHT_AU_DAY, velocity[1] / SPEED_OF_LIGHT_AU_DAY, velocity[2] / SPEED_OF_LIGHT_AU_DAY]
+	const bm1 = Math.sqrt(1 - (vOverC[0] * vOverC[0] + vOverC[1] * vOverC[1] + vOverC[2] * vOverC[2]))
+	const expected = eraAb(direction, vOverC, sunDistance, bm1)
+
+	expect(proper[0]).toBeCloseTo(expected[0], 15)
+	expect(proper[1]).toBeCloseTo(expected[1], 15)
+	expect(proper[2]).toBeCloseTo(expected[2], 15)
+
+	// The annual aberration shift never exceeds the aberration constant ~20.5 arcsec.
+	expect(toArcsec(vecAngle(direction, proper))).toBeLessThan(20.6)
 })

@@ -84,6 +84,33 @@ export function separationFrom(a: CartesianCoordinate, b: CartesianCoordinate): 
 	return vecAngle(a, b)
 }
 
+// Computes the relative position (AU) and velocity (AU/day) of a target body with
+// respect to an origin body, both sampled at the same time. This is the geometric
+// difference target - origin in the shared BCRS/ICRS axes, with no light-time or
+// aberration correction, suitable for forming heliocentric states (origin = Sun),
+// geocentric states (origin = Earth) or any body-to-body vector. The returned
+// vectors are freshly allocated; pass the resulting position to icrsToObserved or
+// equatorial as needed.
+export function relativePositionAndVelocity(target: PositionAndVelocityOverTime, origin: PositionAndVelocityOverTime, time: Time): PositionAndVelocity {
+	const [tp, tv] = target(time)
+	const [op, ov] = origin(time)
+	return [
+		[tp[0] - op[0], tp[1] - op[1], tp[2] - op[2]],
+		[tv[0] - ov[0], tv[1] - ov[1], tv[2] - ov[2]],
+	]
+}
+
+// Computes the phase angle of a body: the Sun-body-observer angle measured at the
+// body, in radians (0 at "full" illumination, PI at "new"). All three positions
+// are given in the same frame and origin (typically barycentric AU); the result
+// only depends on the directions from the body toward the Sun and toward the
+// observer, so any common origin and any consistent length unit work.
+export function phaseAngle(body: CartesianCoordinate, sun: CartesianCoordinate, observer: CartesianCoordinate): Angle {
+	const toSun: Vec3 = [sun[0] - body[0], sun[1] - body[1], sun[2] - body[2]]
+	const toObserver: Vec3 = [observer[0] - body[0], observer[1] - body[1], observer[2] - body[2]]
+	return vecAngle(toSun, toObserver)
+}
+
 // Computes CIRS coordinates from ICRS cartesian/spherical coordinates (assuming zero parallax and proper motion).
 export function icrsToCirs(icrs: Vec3 | readonly [Angle, Angle], time: Time, ebpv: readonly [Vec3, Vec3], ehp: Vec3 = ebpv[0], astrom?: EraAstrom) {
 	const a = tt(time)

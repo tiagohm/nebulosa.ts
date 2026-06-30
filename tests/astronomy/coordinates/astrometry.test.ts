@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test'
-import { distance, equatorial, lightTime, parallacticAngle, refractedAltitude, separationFrom } from '../../../src/astronomy/coordinates/astrometry'
+import { distance, equatorial, lightTime, parallacticAngle, phaseAngle, type PositionAndVelocity, refractedAltitude, relativePositionAndVelocity, separationFrom } from '../../../src/astronomy/coordinates/astrometry'
+import { Timescale, timeYMDHMS } from '../../../src/astronomy/time/time'
 import { PIOVERTWO } from '../../../src/core/constants'
 import { deg, toArcsec, toDeg } from '../../../src/math/units/angle'
 
@@ -93,4 +94,30 @@ test('no refraction model below the horizon', () => {
 test('zero pressure disables atmospheric refraction', () => {
 	const altitude = deg(35)
 	expect(refractedAltitude(altitude, { pressure: 0 })).toBeCloseTo(altitude, 15)
+})
+
+test('relativePositionAndVelocity differences the two body states', () => {
+	const time = timeYMDHMS(2026, 6, 29, 0, 0, 0, Timescale.UTC)
+	const target = () =>
+		[
+			[3, 4, 5],
+			[6, 7, 8],
+		] as PositionAndVelocity
+	const origin = () =>
+		[
+			[1, 1, 1],
+			[1, 1, 1],
+		] as PositionAndVelocity
+	const [position, velocity] = relativePositionAndVelocity(target, origin, time)
+	expect(position).toEqual([2, 3, 4])
+	expect(velocity).toEqual([5, 6, 7])
+})
+
+test('phaseAngle is the Sun-body-observer angle at the body', () => {
+	// Sun and observer at right angles as seen from the body.
+	expect(toDeg(phaseAngle([1, 0, 0], [2, 0, 0], [1, 1, 0]))).toBeCloseTo(90, 12)
+	// Observer between the body and the Sun: fully illuminated ("full" phase).
+	expect(phaseAngle([1, 0, 0], [3, 0, 0], [2, 0, 0])).toBeCloseTo(0, 12)
+	// Observer opposite the Sun: "new" phase.
+	expect(toDeg(phaseAngle([1, 0, 0], [2, 0, 0], [0, 0, 0]))).toBeCloseTo(180, 12)
 })

@@ -1,7 +1,7 @@
-import { ASEC2RAD, DAYSPERJC, DEG2RAD, J2000 } from '../../core/constants'
-import { deg } from '../../math/units/angle'
+import { ASEC2RAD, DAYSPERJC, DEG2RAD, J2000, TAU } from '../../core/constants'
+import { type Angle, deg, normalizePI } from '../../math/units/angle'
 import type { Distance } from '../../math/units/distance'
-import { type Time, Timescale, time, timeNormalize, toJulianDay, tt } from '../time/time'
+import { greenwichApparentSiderealTime, type Time, Timescale, time, timeNormalize, toJulianDay, tt, ut1 } from '../time/time'
 import { lunation } from './moon'
 
 // Solar geometry and almanac helpers from Meeus' "Astronomical Algorithms": Sun parallax and
@@ -62,6 +62,27 @@ export function sunSemidiameter(distance: Distance) {
 // Computes the Carrington rotation number for a given time
 export function carringtonRotationNumber(time: Time) {
 	return Math.round((time.day - 2398140.10155 + time.fraction) / 27.2752316 - 0.5)
+}
+
+// Computes the equation of time at a given instant, in radians: the hour-angle
+// difference apparent solar time minus mean solar time, i.e. the offset between a
+// sundial and a clock. It is the apparent Sun's Greenwich hour angle (GAST minus
+// the apparent right ascension) minus the mean Sun's Greenwich hour angle
+// (UT1 fraction of a day expressed as an angle, since the Julian Date fraction is
+// zero at noon).
+//
+// The caller supplies `apparentSunRightAscension`, the apparent geocentric right
+// ascension of the Sun in radians. It MUST be referred to the true equator and
+// equinox of date (the same reference as GAST), not to ICRS/J2000: precess and
+// nutate the Sun direction to the epoch of date first (e.g. equatorialFromJ2000),
+// otherwise the result carries a spurious precession term of ~50 arcsec per year
+// (~1.4 minutes of time by 2026). Keeping the RA as an argument leaves this
+// independent of the ephemeris model used.
+//
+// The result is normalized to [-PI, PI]; multiply by RAD2DEG * 4 for minutes of
+// time (1 hour = 15 deg). It stays within roughly +-16 minutes over a year.
+export function equationOfTime(time: Time, apparentSunRightAscension: Angle): Angle {
+	return normalizePI(greenwichApparentSiderealTime(time) - apparentSunRightAscension - ut1(time).fraction * TAU)
 }
 
 // Computes instant of beginning of astronomical season for given year [1000...3000]

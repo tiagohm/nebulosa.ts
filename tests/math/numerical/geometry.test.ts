@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test'
 import { eraC2s, eraS2c, eraS2p } from '../../../src/astronomy/coordinates/erfa/erfa'
 import { arcmin, deg, hour } from '../../../src/math/units/angle'
 // oxfmt-ignore
-import { intersectLineAndSphere, midPoint, rectIntersection, type SphericalMountBasis, type SphericalTangentBasis, sphericalCoordinateBasis, sphericalDestination, sphericalDirectionVector, sphericalGreatCirclePole, sphericalInterpolate, sphericalMountBasis, sphericalMountDeclinationAxisVector, sphericalMountPolarAxisVector, sphericalOffsetVector, sphericalPoleVector, sphericalPolygonArea, sphericalPositionAngle, sphericalProjectTangentPlane, sphericalSeparation, sphericalTangentBasis, sphericalTriangleArea, sphericalUnprojectTangentPlane } from '../../../src/math/numerical/geometry'
+import { intersectLineAndSphere, midPoint, rectIntersection, type SphericalMountBasis, type SphericalTangentBasis, sphericalCoordinateBasis, sphericalDestination, sphericalDirectionVector, sphericalGreatCirclePole, sphericalInterpolate, sphericalMountBasis, sphericalMountDeclinationAxisVector, sphericalMountPolarAxisVector, sphericalOffsetVector, sphericalPoleVector, sphericalPolygonArea, sphericalPositionAngle, sphericalProjectTangentPlane, sphericalSeparation, sphericalTangentBasis, sphericalTriangleAngles, sphericalTriangleArea, sphericalUnprojectTangentPlane } from '../../../src/math/numerical/geometry'
 import { type Vec3, vecCross, vecDot, vecLength, vecNormalize } from '../../../src/math/linear-algebra/vec3'
 
 // Checks a vector with one tolerance per component.
@@ -320,4 +320,31 @@ test('spherical polygon area is zero for fewer than three vertices', () => {
 			[deg(10), deg(0)],
 		]),
 	).toBe(0)
+})
+
+test('spherical triangle angles are all right angles for an octant', () => {
+	// The octant (equator, equator+90deg, north pole) is tri-rectangular.
+	const [a, b, c] = sphericalTriangleAngles(deg(0), deg(0), deg(90), deg(0), deg(0), deg(90))
+	expect(a).toBeCloseTo(Math.PI / 2, 12)
+	expect(b).toBeCloseTo(Math.PI / 2, 12)
+	expect(c).toBeCloseTo(Math.PI / 2, 12)
+})
+
+test('spherical triangle angles sum to PI plus the spherical excess', () => {
+	const lonA = deg(5)
+	const latA = deg(10)
+	const lonB = deg(35)
+	const latB = deg(8)
+	const lonC = deg(20)
+	const latC = deg(38)
+	const [a, b, c] = sphericalTriangleAngles(lonA, latA, lonB, latB, lonC, latC)
+	const excess = sphericalTriangleArea(lonA, latA, lonB, latB, lonC, latC)
+	expect(a + b + c - Math.PI).toBeCloseTo(excess, 12)
+})
+
+test('spherical triangle angles are zero for a degenerate triangle', () => {
+	const [a, b, c] = sphericalTriangleAngles(deg(20), deg(5), deg(20), deg(5), deg(20), deg(5))
+	expect(a).toBe(0)
+	expect(b).toBe(0)
+	expect(c).toBe(0)
 })

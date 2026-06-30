@@ -2,7 +2,7 @@ import { ECLIPTIC_J2000_MATRIX, GALACTIC_MATRIX, PI, PIOVERTWO, TAU } from '../.
 import { matMulVec, matRotX, matTransposeMulVec } from '../../math/linear-algebra/mat3'
 import type { Vec3 } from '../../math/linear-algebra/vec3'
 import { clamp } from '../../math/numerical/math'
-import { normalizePI, type Angle } from '../../math/units/angle'
+import { type Angle, normalizeAngle, normalizePI } from '../../math/units/angle'
 import { localSiderealTime } from '../observer/location'
 import { precessionNutationMatrix, type Time, timeNow, trueObliquity } from '../time/time'
 import { eraC2s, eraS2c } from './erfa/erfa'
@@ -110,6 +110,25 @@ export function equatorialToHorizontal(rightAscension: Angle, declination: Angle
 	const azimuth = Math.atan2(y, x)
 	if (azimuth >= 0) return [azimuth, altitude]
 	return [azimuth + TAU, altitude]
+}
+
+// Converts horizontal coordinates (azimuth and altitude) back to equatorial coordinates (right ascension and declination) using just trigonometry (no refraction).
+// `azimuth` is measured from north through east, `latitude` is the observer's geodetic latitude and `lst` is the local apparent sidereal time, all in radians.
+// It is the exact inverse of equatorialToHorizontal: the hour angle is recovered first, then right ascension follows from ra = lst - ha, normalized to [0, TAU).
+export function horizontalToEquatorial(azimuth: Angle, altitude: Angle, latitude: Angle, lst: Angle): [Angle, Angle] {
+	const sinAlt = Math.sin(altitude)
+	const cosAlt = Math.cos(altitude)
+	const sinLat = Math.sin(latitude)
+	const cosLat = Math.cos(latitude)
+	const cosAz = Math.cos(azimuth)
+	const sinAz = Math.sin(azimuth)
+	const sinDec = sinAlt * sinLat + cosAlt * cosLat * cosAz
+	const declination = Math.asin(clamp(sinDec, -1, 1))
+	// Resolve the hour angle with atan2 so zenith and pole cases stay finite.
+	const y = -cosAlt * sinAz
+	const x = sinAlt * cosLat - cosAlt * sinLat * cosAz
+	const ha = Math.atan2(y, x)
+	return [normalizeAngle(lst - ha), declination]
 }
 
 // Converts J2000 equatorial coordinates to J2000 ecliptic coordinates.

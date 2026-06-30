@@ -1,5 +1,5 @@
 import { DAYSEC, DAYSPERJC, DAYSPERJY, DAYSPERTY, J2000, MJD0, ONE_SECOND } from '../../core/constants'
-import type { Angle } from '../../math/units/angle'
+import { type Angle, normalizePI } from '../../math/units/angle'
 // oxfmt-ignore
 import { eraC2i06a, eraC2teqx, eraCalToJd, eraDat, eraDtDb, eraEra00, eraGmst06, eraGst06a, eraJdToCal, eraNut06a, eraObl06, eraPmat06, eraPnm06a, eraPom00, eraSp00, eraTaiTt, eraTaiUt1, eraTaiUtc, eraTcbTdb, eraTcgTt, eraTdbTcb, eraTdbTt, eraTtTai, eraTtTcg, eraTtTdb, eraUt1Tai, eraUt1Utc, eraUtcTai, eraUtcUt1 } from '../coordinates/erfa/erfa'
 import { type Mat3, matClone, matIdentity, matMinus, matMul, matMulScalar, matMulTranspose, type MutMat3, matRotX, matRotZ } from '../../math/linear-algebra/mat3'
@@ -612,6 +612,15 @@ export function greenwichMeanSiderealTime(time: Time): Angle {
 	const gmst = time.providers?.gmst?.(u, t) ?? eraGmst06(u.day, u.fraction, t.day, t.fraction)
 	cacheKey(cache(time), 'gmst', gmst)
 	return gmst
+}
+
+// Computes the equation of the equinoxes (GAST - GMST) at given time, in radians.
+// This is the nutation of the equinox along the equator (dominated by the nutation
+// in longitude projected through the obliquity); it is the small offset that turns
+// mean sidereal time into apparent sidereal time. Normalized to [-PI, PI] so the
+// arcsecond-scale result stays signed across the 0/TAU wrap of GAST and GMST.
+export function equationOfEquinoxes(time: Time): Angle {
+	return normalizePI(greenwichApparentSiderealTime(time) - greenwichMeanSiderealTime(time))
 }
 
 // Computes the Earth rotation angle (IAU 2000 model) at given time.

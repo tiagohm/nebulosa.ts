@@ -2,11 +2,12 @@ import { ANGVEL, DAYSEC, SPEED_OF_LIGHT_AU_DAY } from '../../core/constants'
 import { matTransposeMulVec } from '../../math/linear-algebra/mat3'
 import { type MutVec3, type Vec3, vecCross, vecDot, vecPlus } from '../../math/linear-algebra/vec3'
 import type { Angle } from '../../math/units/angle'
+import type { Distance } from '../../math/units/distance'
 import type { Velocity } from '../../math/units/velocity'
 import type { GeographicPosition } from '../observer/location'
 import { gcrsToItrsRotationMatrix, type Time } from '../time/time'
 import type { PositionAndVelocity } from './astrometry'
-import { eraS2c } from './erfa/erfa'
+import { eraAb, eraS2c } from './erfa/erfa'
 import { itrs } from './itrs'
 
 // Observer-state and time/velocity corrections for precise timing and spectroscopy: the observer's
@@ -42,6 +43,26 @@ export function observerState(time: Time, earth: PositionAndVelocity, location: 
 	const diurnal = vecCross(omegaGcrs, rGcrs)
 
 	return [vecPlus(earth[0], rGcrs), vecPlus(earth[1], diurnal)]
+}
+
+// Applies stellar aberration to a natural source direction, returning the proper
+// (aberrated) direction as a fresh unit vector. This is the ERFA `eraAb`
+// special-relativistic model: the apparent shift of a source caused by the
+// observer's motion, including annual aberration from the Earth's orbit and, when
+// `observerVelocity` includes the diurnal term, diurnal aberration too.
+//
+// `direction` is a unit vector toward the source in ICRS/BCRS axes; passing the
+// observer's full barycentric velocity in `observerVelocity` (AU/day) makes this
+// the complete aberration correction. `sunDistance` is the observer-Sun distance
+// in AU, used only for the tiny gravitational-light-bending companion term inside
+// the model. The internal Lorentz factor bm1 = sqrt(1 - |v/c|^2) is derived from
+// the velocity, so the caller supplies physical quantities only.
+export function annualAberration(direction: Vec3, observerVelocity: Vec3, sunDistance: Distance): MutVec3 {
+	const vx = observerVelocity[0] / SPEED_OF_LIGHT_AU_DAY
+	const vy = observerVelocity[1] / SPEED_OF_LIGHT_AU_DAY
+	const vz = observerVelocity[2] / SPEED_OF_LIGHT_AU_DAY
+	const bm1 = Math.sqrt(1 - (vx * vx + vy * vy + vz * vz))
+	return eraAb(direction, [vx, vy, vz], sunDistance, bm1)
 }
 
 // Computes the barycentric/heliocentric radial-velocity correction (AU/day)

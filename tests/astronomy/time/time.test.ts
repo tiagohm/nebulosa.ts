@@ -4,7 +4,7 @@ import { ANGVEL_PER_DAY, DAYSEC, J2000 } from '../../../src/core/constants'
 import { deg, hour } from '../../../src/math/units/angle'
 import { meter } from '../../../src/math/units/distance'
 // oxfmt-ignore
-import { earthRotationAngle, equationOfOrigins, greenwichApparentSiderealTime, greenwichMeanSiderealTime, instantaneousEarthAngularVelocity, instantaneousEarthRotationMatrix, meanObliquity, nutationAngles, pmAngles, pmMatrix, type PolarMotion, precessionMatrix, precessionNutationMatrix, type Time, Timescale, tai, tcb, tcg, tdb, tdbMinusTtByFairheadAndBretagnon1990, time, timeBesselianYear, timeConvert, timeGPS, timeJulianYear, timeMJD, timeNormalize, timeSubtract, timeToDate, timeToUnix, timeToUnixMillis, timeUnix, timeYMD, timeYMDHMS, toJulianDay, tt, ut1, utc, DEFAULT_TIME_PROVIDERS, dut1 } from '../../../src/astronomy/time/time'
+import { earthRotationAngle, equationOfEquinoxes, equationOfOrigins, greenwichApparentSiderealTime, greenwichMeanSiderealTime, instantaneousEarthAngularVelocity, instantaneousEarthRotationMatrix, meanObliquity, nutationAngles, pmAngles, pmMatrix, type PolarMotion, precessionMatrix, precessionNutationMatrix, type Time, Timescale, tai, tcb, tcg, tdb, tdbMinusTtByFairheadAndBretagnon1990, time, timeBesselianYear, timeConvert, timeGPS, timeJulianYear, timeMJD, timeNormalize, timeSubtract, timeToDate, timeToUnix, timeToUnixMillis, timeUnix, timeYMD, timeYMDHMS, toJulianDay, tt, ut1, utc, DEFAULT_TIME_PROVIDERS, dut1 } from '../../../src/astronomy/time/time'
 import { downloadPerTag } from '../../download'
 
 await downloadPerTag('time')
@@ -678,4 +678,13 @@ test('time is serializable', () => {
 		expect(count[1]).toBeGreaterThan(0)
 		expect(count[2]).toBeGreaterThan(0)
 	}
+})
+
+test('equation of the equinoxes is GAST minus GMST and stays within a few arcseconds', () => {
+	const t = timeYMDHMS(2026, 6, 29, 0, 0, 0, Timescale.UTC)
+	const eqeq = equationOfEquinoxes(t)
+	// GAST and GMST differ only by the equation of the equinoxes, so no wrap occurs.
+	expect(eqeq).toBeCloseTo(greenwichApparentSiderealTime(t) - greenwichMeanSiderealTime(t), 14)
+	// The equation of the equinoxes never exceeds ~1.2 s of time (~18 arcsec ~ 8.7e-5 rad).
+	expect(Math.abs(eqeq)).toBeLessThan(1e-4)
 })

@@ -1,7 +1,12 @@
 import { describe, expect, test } from 'bun:test'
-import { carringtonRotationNumber, nearestSolarEclipse, season, solarSaros, sunParallax, sunSemidiameter } from '../../../src/astronomy/bodies/sun'
-import { time, Timescale, timeToDate, timeYMD, timeYMDHMS, toJulianDay, utc } from '../../../src/astronomy/time/time'
-import { arcsec } from '../../../src/math/units/angle'
+import { carringtonRotationNumber, equationOfTime, nearestSolarEclipse, season, solarSaros, sunParallax, sunSemidiameter } from '../../../src/astronomy/bodies/sun'
+import { equatorial } from '../../../src/astronomy/coordinates/astrometry'
+import { equatorialFromJ2000 } from '../../../src/astronomy/coordinates/coordinate'
+import { earth, sun } from '../../../src/astronomy/ephemeris/models/analytical/vsop87e'
+import { greenwichApparentSiderealTime, time, Timescale, timeToDate, timeYMD, timeYMDHMS, toJulianDay, ut1, utc } from '../../../src/astronomy/time/time'
+import { TAU } from '../../../src/core/constants'
+import { vecMinus } from '../../../src/math/linear-algebra/vec3'
+import { arcsec, deg, normalizePI, toDeg } from '../../../src/math/units/angle'
 
 test('parallax', () => {
 	expect(sunParallax(1)).toBeCloseTo(arcsec(8.794), 7)
@@ -115,4 +120,32 @@ describe('nearest solar eclipse', () => {
 		expect(eclipse.type).toBe('annular')
 		expect(timeToDate(utc(nearestSolarEclipse(timeYMDHMS(2024, 10, 2, 18, 46), true).maximalTime)).slice(0, 5)).toEqual([2025, 3, 29, 10, 48])
 	})
+})
+
+test('equation of time follows GAST minus apparent RA minus the mean Sun hour angle', () => {
+	const t = timeYMDHMS(2026, 6, 29, 0, 0, 0, Timescale.UTC)
+	const apparentSunRightAscension = deg(98)
+	expect(equationOfTime(t, apparentSunRightAscension)).toBeCloseTo(normalizePI(greenwichApparentSiderealTime(t) - apparentSunRightAscension - ut1(t).fraction * TAU), 14)
+	// Setting the RA to the mean Sun's hour angle makes the equation of time vanish.
+	const meanSunRightAscension = greenwichApparentSiderealTime(t) - ut1(t).fraction * TAU
+	expect(equationOfTime(t, meanSunRightAscension)).toBeCloseTo(0, 12)
+})
+
+test('equation of time matches the analemma for the real Sun', () => {
+	// Reference minutes from Astropy (true-equinox-of-date Sun RA + GAST), 12:00 UTC.
+	const reference: readonly [number, number, number, number][] = [
+		[2026, 2, 11, -14.17],
+		[2026, 5, 14, 3.67],
+		[2026, 7, 26, -6.57],
+		[2026, 9, 1, -0.01],
+		[2026, 11, 3, 16.45],
+	]
+	for (const [year, month, day, expectedMinutes] of reference) {
+		const t = timeYMDHMS(year, month, day, 12, 0, 0, Timescale.UTC)
+		// equationOfTime needs the apparent RA of date, so precess+nutate the ICRS Sun direction.
+		const [ra, dec] = equatorial(vecMinus(sun(t)[0], earth(t)[0]))
+		const [raOfDate] = equatorialFromJ2000(ra, dec, t)
+		const minutes = toDeg(equationOfTime(t, raOfDate)) * 4
+		expect(minutes).toBeCloseTo(expectedMinutes, 1)
+	}
 })

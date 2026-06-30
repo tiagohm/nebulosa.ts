@@ -12,6 +12,7 @@ import {
 	equatorialToHorizontal,
 	equatorialToJ2000,
 	galacticToEquatorial,
+	horizontalToEquatorial,
 	meridianEcliptic,
 	meridianEquator,
 	zenith,
@@ -161,4 +162,27 @@ test('equatorial to horizontal handles a north-pole observer', () => {
 
 	expect(azimuth).toBeCloseTo(deg(270), 15)
 	expect(altitude).toBeCloseTo(0, 15)
+})
+
+test('horizontal to equatorial inverts equatorial to horizontal', () => {
+	const latitude = deg(-23.55)
+	const lst = deg(140)
+	const rightAscension = deg(95)
+	const declination = deg(-16.7)
+	const [azimuth, altitude] = equatorialToHorizontal(rightAscension, declination, latitude, lst)
+	const [ra, dec] = horizontalToEquatorial(azimuth, altitude, latitude, lst)
+	expect(ra).toBeCloseTo(rightAscension, 12)
+	expect(dec).toBeCloseTo(declination, 12)
+})
+
+test('horizontal to equatorial round-trips an object below the horizon', () => {
+	const latitude = deg(40)
+	const lst = deg(10)
+	const rightAscension = deg(210)
+	const declination = deg(-50)
+	const [azimuth, altitude] = equatorialToHorizontal(rightAscension, declination, latitude, lst)
+	expect(altitude).toBeLessThan(0)
+	const [ra, dec] = horizontalToEquatorial(azimuth, altitude, latitude, lst)
+	expect(ra).toBeCloseTo(rightAscension, 12)
+	expect(dec).toBeCloseTo(declination, 12)
 })

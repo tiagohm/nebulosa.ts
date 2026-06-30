@@ -13,11 +13,11 @@ import fs from 'fs/promises'
 import { matchStars } from '../src/astrometry/matching/star.matching'
 import { moonParallax, moonSemidiameter, nearestLunarApsis, nearestLunarEclipse, nearestLunarPhase } from '../src/astronomy/bodies/moon'
 import { spaceMotion, star } from '../src/astronomy/bodies/star'
-import { carringtonRotationNumber, nearestSolarEclipse, season } from '../src/astronomy/bodies/sun'
-import { cirsToObserved, distance as vectorDistance, equatorial as vectorToEquatorial, icrsToCirs, icrsToObserved, parallacticAngle, refractedAltitude, separationFrom, type PositionAndVelocityOverTime } from '../src/astronomy/coordinates/astrometry'
-import { angularDistance, eclipticToEquatorial, equatorialToEcliptic, equatorialToGalatic, equatorialToHorizontal, galacticToEquatorial, zenith } from '../src/astronomy/coordinates/coordinate'
-import { lightTravelTime, observerState, radialVelocityCorrection } from '../src/astronomy/coordinates/correction'
-import { eraAb, eraAnpm, eraC2s, eraLdSun, eraPmpx, eraS2c, eraSeps, eraStarpm, eraStarpv } from '../src/astronomy/coordinates/erfa/erfa'
+import { carringtonRotationNumber, equationOfTime, nearestSolarEclipse, season } from '../src/astronomy/bodies/sun'
+import { cirsToObserved, distance as vectorDistance, equatorial as vectorToEquatorial, icrsToCirs, icrsToObserved, parallacticAngle, phaseAngle, refractedAltitude, relativePositionAndVelocity, separationFrom, type PositionAndVelocityOverTime } from '../src/astronomy/coordinates/astrometry'
+import { angularDistance, eclipticToEquatorial, equatorialFromJ2000, equatorialToEcliptic, equatorialToGalatic, equatorialToHorizontal, galacticToEquatorial, horizontalToEquatorial, zenith } from '../src/astronomy/coordinates/coordinate'
+import { annualAberration, lightTravelTime, observerState, radialVelocityCorrection } from '../src/astronomy/coordinates/correction'
+import { eraAnpm, eraC2s, eraLdSun, eraPmpx, eraS2c, eraSeps, eraStarpm, eraStarpv } from '../src/astronomy/coordinates/erfa/erfa'
 import { precessFk5FromJ2000 } from '../src/astronomy/coordinates/fk5'
 import { GALACTIC, ICRS, SUPERGALACTIC, fk5ToIcrs, frameToFrame, icrsToFk5, temeToItrf } from '../src/astronomy/coordinates/frame'
 import { icrs as icrsVector } from '../src/astronomy/coordinates/icrs'
@@ -29,7 +29,7 @@ import { sunMoonPosition } from '../src/astronomy/events/eclipse/eclipse'
 import { computeLocalLunarEclipseCircumstances } from '../src/astronomy/events/eclipse/lunar/local'
 import { computeGreatestEclipseCircumstances, computeLocalSolarEclipseCircumstances } from '../src/astronomy/events/eclipse/solar/local'
 import { computePolynomialBesselianElements } from '../src/astronomy/events/eclipse/solar/map'
-import { airmass, airmassKastenYoung, altitudeAtTransit, asteroidMagnitudeEstimate, atmosphericRefraction, cometMagnitudeEstimate } from '../src/astronomy/formulas'
+import { airmass, airmassKastenYoung, altitudeAtTransit, asteroidMagnitudeEstimate, atmosphericRefraction, cometMagnitudeEstimate, hourAngleAtAltitude, objectAngularDiameter } from '../src/astronomy/formulas'
 import { Ellipsoid, geodeticLocation, localSiderealTime, rhoCosPhi, subpoint } from '../src/astronomy/observer/location'
 import { KeplerOrbit, asteroid, comet, meanMotion, period, trueAnomalyClosed, trueAnomalyHyperbolic } from '../src/astronomy/orbits/asteroid'
 import { gibbs } from '../src/astronomy/orbits/determination/gibbs'
@@ -40,11 +40,11 @@ import { deltaT } from '../src/astronomy/time/deltat'
 import { iersab, iersb } from '../src/astronomy/time/iers'
 import { fileHandleSource } from '../src/io/io'
 // oxfmt-ignore
-import { Timescale, dut1 as dut1FromTime, earthRotationAngle, greenwichApparentSiderealTime, greenwichMeanSiderealTime, nutationAngles, pmAngles, pmMatrix, tai, taiMinusUtc, tcb, tdb, time, timeBesselianYear, timeJulianYear, timeMJD, timeSubtract, timeToDate, timeUnix, timeYMDHMS, toJulianDay, tt, ut1, utc } from '../src/astronomy/time/time'
+import { Timescale, dut1 as dut1FromTime, earthRotationAngle, equationOfEquinoxes, greenwichApparentSiderealTime, greenwichMeanSiderealTime, nutationAngles, pmAngles, pmMatrix, tai, taiMinusUtc, tcb, tdb, time, timeBesselianYear, timeJulianYear, timeMJD, timeSubtract, timeToDate, timeUnix, timeYMDHMS, toJulianDay, tt, ut1, utc } from '../src/astronomy/time/time'
 import { formatTemporal, temporalFromTime } from '../src/astronomy/time/temporal'
-import { DAYSEC, DAYSPERJY, DAYSPERSY, DAYSPERTY, GM_SUN_PITJEVA_2005, J2000, PI, SPEED_OF_LIGHT_AU_DAY, TAU } from '../src/core/constants'
-import { type Vec3, vecAngle, vecCross, vecDot, vecLatitude, vecLength, vecLongitude, vecMinus, vecMulScalar, vecNormalize } from '../src/math/linear-algebra/vec3'
-import { sphericalDestination, sphericalInterpolate, sphericalPolygonArea, sphericalPositionAngle, sphericalProjectTangentPlane, sphericalSeparation, sphericalTriangleArea, sphericalUnprojectTangentPlane } from '../src/math/numerical/geometry'
+import { DAYSEC, DAYSPERJY, DAYSPERSY, DAYSPERTY, GM_SUN_PITJEVA_2005, J2000, PI, TAU } from '../src/core/constants'
+import { type Vec3, vecAngle, vecCross, vecLatitude, vecLength, vecLongitude, vecMinus, vecMulScalar, vecNormalize } from '../src/math/linear-algebra/vec3'
+import { sphericalDestination, sphericalInterpolate, sphericalPolygonArea, sphericalPositionAngle, sphericalProjectTangentPlane, sphericalSeparation, sphericalTriangleAngles, sphericalTriangleArea, sphericalUnprojectTangentPlane } from '../src/math/numerical/geometry'
 import { arcmin, arcsec, deg, formatAZ, formatHMS, formatSignedDMS, hms, hour, normalizeAngle, normalizePI, toArcsec, toDeg, toHour } from '../src/math/units/angle'
 import { kilometer, toKilometer } from '../src/math/units/distance'
 import { toKilometerPerSecond } from '../src/math/units/velocity'
@@ -137,17 +137,17 @@ function leapSecondLookup() {
 }
 
 // Earth Rotation Angle: ERA from the IAU 2000 definition.
-function earthRotationAngleExample() {
+function earthRotationAngleComputation() {
 	console.info('Earth Rotation Angle:', formatHMS(earthRotationAngle(NOW)))
 }
 
 // Greenwich Mean Sidereal Time.
-function greenwichMeanSiderealTimeExample() {
+function greenwichMeanSiderealTimeComputation() {
 	console.info('GMST:', formatHMS(greenwichMeanSiderealTime(NOW)))
 }
 
 // Greenwich Apparent Sidereal Time (GMST + equation of the equinoxes).
-function greenwichApparentSiderealTimeExample() {
+function greenwichApparentSiderealTimeComputation() {
 	console.info('GAST:', formatHMS(greenwichApparentSiderealTime(NOW)))
 }
 
@@ -163,8 +163,7 @@ function localApparentSiderealTime() {
 
 // Equation of the Equinoxes: GAST - GMST.
 function equationOfTheEquinoxes() {
-	const eqeq = normalizeAngle(greenwichApparentSiderealTime(NOW) - greenwichMeanSiderealTime(NOW))
-	console.info('Equation of the equinoxes (arcsec):', toArcsec(normalizeAngle(eqeq + PI) - PI))
+	console.info('Equation of the equinoxes (arcsec):', toArcsec(equationOfEquinoxes(NOW)))
 }
 
 // Polar Motion Matrix: rotation accounting for the wandering of the pole.
@@ -274,25 +273,16 @@ function galacticToSupergalactic() {
 }
 
 // Equatorial to Horizontal Coordinates: azimuth/altitude from the hour angle.
-function equatorialToHorizontalExample() {
+function equatorialToHorizontalComputation() {
 	const lst = localSiderealTime(NOW, SITE, false)
 	const [az, alt] = equatorialToHorizontal(SIRIUS_RA, SIRIUS_DEC, SITE.latitude, lst)
 	console.info('Azimuth:', formatAZ(az), 'Altitude:', formatSignedDMS(alt))
 }
 
-// Horizontal to Equatorial Coordinates.
-// The library converts equatorial->horizontal directly; the inverse is the same
-// spherical rotation, so we reuse equatorialToHorizontal by swapping latitude
-// sign conventions: given az/alt, hour angle and declination follow from the
-// standard transform. We compute it explicitly here.
-function horizontalToEquatorial() {
-	const lat = SITE.latitude
-	const az = deg(120)
-	const alt = deg(35)
-	const sinDec = Math.sin(alt) * Math.sin(lat) + Math.cos(alt) * Math.cos(lat) * Math.cos(az)
-	const dec = Math.asin(Math.max(-1, Math.min(1, sinDec)))
-	const ha = Math.atan2(-Math.sin(az) * Math.cos(alt), Math.sin(alt) * Math.cos(lat) - Math.cos(alt) * Math.sin(lat) * Math.cos(az))
-	const ra = normalizeAngle(localSiderealTime(NOW, SITE, false) - ha)
+// Horizontal to Equatorial Coordinates: the exact inverse of equatorialToHorizontal.
+function horizontalToEquatorialComputation() {
+	const lst = localSiderealTime(NOW, SITE, false)
+	const [ra, dec] = horizontalToEquatorial(deg(120), deg(35), SITE.latitude, lst)
 	console.info('Recovered RA/DEC:', formatHMS(ra), formatSignedDMS(dec))
 }
 
@@ -330,7 +320,7 @@ function greatCircleMidpoint() {
 }
 
 // Spherical Polygon Area: spherical excess of the boundary, in steradians.
-function sphericalPolygonAreaExample() {
+function sphericalPolygonAreaComputation() {
 	const vertices: [number, number][] = [
 		[deg(0), deg(0)],
 		[deg(10), deg(0)],
@@ -341,23 +331,15 @@ function sphericalPolygonAreaExample() {
 }
 
 // Spherical Triangle Area: spherical excess E = A + B + C - PI (steradians).
-function sphericalTriangleAreaExample() {
+function sphericalTriangleAreaComputation() {
 	const area = sphericalTriangleArea(deg(0), deg(0), deg(10), deg(0), deg(0), deg(10))
 	console.info('Spherical triangle area (steradians):', area)
 }
 
 // Spherical Triangle Angles: interior angles from the three vertices.
-// TODO(almanac): no dedicated helper; derived here from the side lengths with
-// the spherical law of cosines.
-function sphericalTriangleAngles() {
-	const A: [number, number] = [deg(0), deg(0)]
-	const B: [number, number] = [deg(40), deg(0)]
-	const C: [number, number] = [deg(0), deg(40)]
-	const a = sphericalSeparation(B[0], B[1], C[0], C[1])
-	const b = sphericalSeparation(A[0], A[1], C[0], C[1])
-	const c = sphericalSeparation(A[0], A[1], B[0], B[1])
-	const angle = (opp: number, x: number, y: number) => Math.acos(Math.max(-1, Math.min(1, (Math.cos(opp) - Math.cos(x) * Math.cos(y)) / (Math.sin(x) * Math.sin(y)))))
-	console.info('Interior angles (deg):', toDeg(angle(a, b, c)), toDeg(angle(b, a, c)), toDeg(angle(c, a, b)))
+function sphericalTriangleAnglesComputation() {
+	const [a, b, c] = sphericalTriangleAngles(deg(0), deg(0), deg(40), deg(0), deg(0), deg(40))
+	console.info('Interior angles (deg):', toDeg(a), toDeg(b), toDeg(c))
 }
 
 // Tangent Plane Projection (gnomonic): project a direction about a tangent point.
@@ -411,13 +393,13 @@ function zenithDistance() {
 
 // Heliocentric position of the Earth (AU), i.e. Earth minus Sun.
 function earthHeliocentric(t = NOW) {
-	return vecMinus(earth(t)[0], sun(t)[0])
+	return relativePositionAndVelocity(earth, sun, t)[0]
 }
 
 // Geocentric astrometric direction toward a barycentric body (AU). No light-time
 // iteration: good enough for demonstrations but not for sub-arcsecond ephemerides.
 function geocentricDirection(body: PositionAndVelocityOverTime, t = NOW) {
-	return vecMinus(body(t)[0], earth(t)[0])
+	return relativePositionAndVelocity(body, earth, t)[0]
 }
 
 // Observe an ICRS direction (or AU vector) from the site, applying frame bias,
@@ -442,14 +424,11 @@ function nutationCorrection() {
 	console.info('Nutation Δψ, Δε (arcsec):', toArcsec(dpsi), toArcsec(deps))
 }
 
-// Annual Aberration: stellar aberration from the Earth's orbital velocity (ERFA eraAb).
-function annualAberration() {
-	const [, ev] = earth(NOW)
-	const vOverC = vecMulScalar(ev, 1 / SPEED_OF_LIGHT_AU_DAY)
-	const s = vecLength(earthHeliocentric(NOW))
-	const bm1 = Math.sqrt(1 - vecDot(vOverC, vOverC))
+// Annual Aberration: stellar aberration from the Earth's orbital velocity.
+function annualAberrationComputation() {
 	const natural = vecNormalize(icrsVector(SIRIUS_RA, SIRIUS_DEC))
-	const proper = eraAb(natural, vOverC, s, bm1)
+	// Pass the Earth's barycentric velocity (AU/day) and observer-Sun distance (AU).
+	const proper = annualAberration(natural, earth(NOW)[1], vecLength(earthHeliocentric(NOW)))
 	console.info('Aberration shift (arcsec):', toArcsec(eraSeps(vecLongitude(natural), vecLatitude(natural), vecLongitude(proper), vecLatitude(proper))))
 }
 
@@ -566,7 +545,7 @@ function apparentToObservedPlace() {
 }
 
 // Atmospheric Refraction: raise the apparent altitude of a low object.
-function atmosphericRefractionExample() {
+function atmosphericRefractionComputation() {
 	const trueAltitude = deg(10)
 	// atmosphericRefraction returns the refraction in arcminutes (Bennett's formula).
 	console.info('Refraction at 10deg altitude (arcmin):', atmosphericRefraction(trueAltitude))
@@ -679,9 +658,7 @@ function planetaryPhaseAngle() {
 
 // Sun-planet-Earth angle at the planet (radians).
 function planetPhaseAngle(body: PositionAndVelocityOverTime, t = NOW) {
-	const planetToSun = vecMinus(sun(t)[0], body(t)[0])
-	const planetToEarth = vecMinus(earth(t)[0], body(t)[0])
-	return separationFrom(planetToSun, planetToEarth)
+	return phaseAngle(body(t)[0], sun(t)[0], earth(t)[0])
 }
 
 // Planetary Illuminated Fraction: from the phase angle (Meeus).
@@ -693,7 +670,7 @@ function planetaryIlluminatedFraction() {
 function planetaryAngularDiameter() {
 	const distanceKm = toKilometer(vectorDistance(geocentricDirection(jupiter)))
 	const JUPITER_DIAMETER_KM = 142_984
-	console.info('Jupiter angular diameter (arcsec):', toArcsec(2 * Math.atan(JUPITER_DIAMETER_KM / 2 / distanceKm)))
+	console.info('Jupiter angular diameter (arcsec):', toArcsec(objectAngularDiameter(JUPITER_DIAMETER_KM, distanceKm)))
 }
 
 // Planetary Visual Magnitude.
@@ -858,10 +835,11 @@ function solarAltitudeAndAzimuth() {
 
 // Solar Equation of Time: apparent minus mean solar time, at Greenwich.
 function solarEquationOfTime() {
-	const alpha = sunEquatorial()[0]
-	const haApparent = greenwichApparentSiderealTime(NOW) - alpha
-	const haMean = utc(NOW).fraction * TAU // mean sun hour angle at Greenwich (JD .0 = noon)
-	const eot = normalizePI(haApparent - haMean)
+	// equationOfTime needs the apparent RA of date (true equinox), so precess and
+	// nutate the ICRS Sun direction to the epoch of date first.
+	const eq = sunEquatorial()
+	const [raOfDate] = equatorialFromJ2000(eq[0], eq[1], NOW)
+	const eot = equationOfTime(NOW, raOfDate)
 	console.info('Equation of time (minutes):', toDeg(eot) * 4)
 }
 
@@ -896,7 +874,7 @@ function solarDiskOrientation() {
 }
 
 // Carrington Rotation Number.
-function carringtonRotationNumberExample() {
+function carringtonRotationNumberComputation() {
 	console.info('Carrington rotation number:', carringtonRotationNumber(NOW))
 }
 
@@ -1094,15 +1072,6 @@ function crescentMoonVisibility() {
 }
 
 // ##### Visibility and Almanac Events helpers #####
-
-// Hour angle (radians, 0..PI) at which a body of declination `dec` reaches
-// altitude `h0` for an observer at latitude `lat`. Returns null when the body
-// never reaches that altitude (always above or always below the horizon).
-function hourAngleAtAltitude(dec: number, lat: number, h0: number) {
-	const cosH = (Math.sin(h0) - Math.sin(lat) * Math.sin(dec)) / (Math.cos(lat) * Math.cos(dec))
-	if (cosH < -1 || cosH > 1) return null
-	return Math.acos(cosH)
-}
 
 // ##### Visibility and Almanac Events #####
 
@@ -1476,7 +1445,7 @@ function orbitalPeriod() {
 }
 
 // Mean Motion.
-function meanMotionExample() {
+function meanMotionComputation() {
 	console.info('Mean motion (deg/day):', toDeg(meanMotion(2.7691651, GM_SUN_PITJEVA_2005)))
 }
 
@@ -1554,7 +1523,7 @@ function cometSolarElongation() {
 }
 
 // Comet Magnitude Estimate.
-function cometMagnitudeEstimateExample() {
+function cometMagnitudeEstimation() {
 	const helio = cometKeplerOrbit().at(NOW)[0]
 	const r = vecLength(helio)
 	const geocentric = vecMinus(helio, vecMinus(earth(NOW)[0], sun(NOW)[0]))
@@ -1572,7 +1541,7 @@ function asteroidPhaseAngle() {
 }
 
 // Asteroid Magnitude Estimate (H-G system).
-function asteroidMagnitudeEstimateExample() {
+function asteroidMagnitudeEstimation() {
 	const helio = asteroidKeplerOrbit().at(NOW)[0]
 	const r = vecLength(helio)
 	const geocentric = vecMinus(helio, vecMinus(earth(NOW)[0], sun(NOW)[0]))
@@ -1786,9 +1755,9 @@ function run() {
 	deltaTEstimation()
 	dut1Interpolation()
 	leapSecondLookup()
-	earthRotationAngleExample()
-	greenwichMeanSiderealTimeExample()
-	greenwichApparentSiderealTimeExample()
+	earthRotationAngleComputation()
+	greenwichMeanSiderealTimeComputation()
+	greenwichApparentSiderealTimeComputation()
 	localMeanSiderealTime()
 	localApparentSiderealTime()
 	equationOfTheEquinoxes()
@@ -1811,16 +1780,16 @@ function run() {
 	icrsToEcliptic()
 	eclipticToIcrs()
 	galacticToSupergalactic()
-	equatorialToHorizontalExample()
-	horizontalToEquatorial()
+	equatorialToHorizontalComputation()
+	horizontalToEquatorialComputation()
 	hourAngleCalculation()
 	parallacticAngleCalculation()
 	greatCircleDistance()
 	greatCircleBearing()
 	greatCircleMidpoint()
-	sphericalPolygonAreaExample()
-	sphericalTriangleAreaExample()
-	sphericalTriangleAngles()
+	sphericalPolygonAreaComputation()
+	sphericalTriangleAreaComputation()
+	sphericalTriangleAnglesComputation()
 	tangentPlaneProjection()
 	inverseTangentPlaneProjection()
 	positionAngleBetween()
@@ -1832,7 +1801,7 @@ function run() {
 	// Astrometric Corrections and Stellar Motion
 	precessionTransformation()
 	nutationCorrection()
-	annualAberration()
+	annualAberrationComputation()
 	diurnalAberration()
 	solarGravitationalDeflection()
 	planetaryGravitationalDeflection()
@@ -1846,7 +1815,7 @@ function run() {
 	heliocentricRadialVelocityCorrection()
 	astrometricToApparentPlace()
 	apparentToObservedPlace()
-	atmosphericRefractionExample()
+	atmosphericRefractionComputation()
 	inverseAtmosphericRefraction()
 	differentialAtmosphericRefraction()
 	catalogCrossMatch()
@@ -1890,7 +1859,7 @@ function run() {
 	solarHourAngle()
 	solarNoon()
 	solarDiskOrientation()
-	carringtonRotationNumberExample()
+	carringtonRotationNumberComputation()
 	solarAnalemmaPoint()
 	solarShadowLength()
 	solarShadowDirection()
@@ -1973,7 +1942,7 @@ function run() {
 	universalVariablePropagation()
 	twoBodyOrbitPropagation()
 	orbitalPeriod()
-	meanMotionExample()
+	meanMotionComputation()
 	periapsisAndApoapsisDistance()
 	orbitalEnergy()
 	angularMomentumVector()
@@ -1983,9 +1952,9 @@ function run() {
 	geocentricMinorBodyPosition()
 	apparentCometPosition()
 	cometSolarElongation()
-	cometMagnitudeEstimateExample()
+	cometMagnitudeEstimation()
 	asteroidPhaseAngle()
-	asteroidMagnitudeEstimateExample()
+	asteroidMagnitudeEstimation()
 	minorPlanetClosestApproach()
 	minimumOrbitIntersectionDistance()
 	tisserandParameter()

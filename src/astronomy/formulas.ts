@@ -366,6 +366,24 @@ export function altitudeAtTransit(latitude: Angle, declination: Angle) {
 	return PIOVERTWO - Math.abs(validateInRange(latitude, -PIOVERTWO, PIOVERTWO) - validateDeclination(declination))
 }
 
+// Hour Angle at Altitude. Geometric formula cos(H) = (sin(h0) - sin(lat) * sin(dec)) / (cos(lat) * cos(dec)).
+// Parameters: declination and latitude are within [-pi/2, pi/2] radians; targetAltitude is the altitude
+// h0 (radians) the body should reach. For rise/set use a small negative h0 that folds in refraction and
+// semidiameter, e.g. about -0.5667 deg for the solar/lunar upper limb or -0.8333 deg for the Sun's center.
+// Returns: the non-negative hour angle in radians at which the body crosses h0; the body is at that
+// altitude at hour angle -H (rising, east of the meridian) and +H (setting, west). Returns null when the
+// body never reaches h0 (it stays above it, i.e. circumpolar, or stays below it), and at the geographic
+// poles, where the diurnal circle is a parallel of altitude and the formula is degenerate.
+export function hourAngleAtAltitude(declination: Angle, latitude: Angle, targetAltitude: Angle): Angle | null {
+	declination = validateDeclination(declination)
+	latitude = validateInRange(latitude, -PIOVERTWO, PIOVERTWO)
+	const denominator = Math.cos(latitude) * Math.cos(declination)
+	if (denominator === 0) return null
+	const cosHourAngle = (Math.sin(validateFinite(targetAltitude)) - Math.sin(latitude) * Math.sin(declination)) / denominator
+	if (cosHourAngle < -1 || cosHourAngle > 1) return null
+	return Math.acos(cosHourAngle)
+}
+
 // Object Angular Diameter. Planning formula theta = 2 * atan(diameter / (2 * distance)).
 // Parameters: objectDiameter and distance are positive lengths in the same unit.
 // Returns: angular diameter in radians.
