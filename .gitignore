@@ -6,3 +6,8 @@ __pycache__/
 *.shared
 .dist/
 *.exe
+
+# Claude Code
+.claude/settings.local.json
+CLAUDE.local.md
+/memory

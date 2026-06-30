@@ -1,0 +1,188 @@
+import { expect, test } from 'bun:test'
+import {
+	angularDistance,
+	angularDistanceHaversine,
+	eclipticJ2000ToEquatorial,
+	eclipticToEquatorial,
+	equatorEcliptic,
+	equatorialFromJ2000,
+	equatorialToEcliptic,
+	equatorialToEclipticJ2000,
+	equatorialToGalatic,
+	equatorialToHorizontal,
+	equatorialToJ2000,
+	galacticToEquatorial,
+	horizontalToEquatorial,
+	meridianEcliptic,
+	meridianEquator,
+	zenith,
+} from '../../../src/astronomy/coordinates/coordinate'
+import { timeNormalize, timeYMDHMS } from '../../../src/astronomy/time/time'
+import { deg, formatDEC, formatRA, normalizeAngle, parseAngle } from '../../../src/math/units/angle'
+
+const TIME = timeYMDHMS(2026, 1, 4, 23, 30, 0)
+const SIRIUS_J2000 = [parseAngle('06h 45 09.22')!, parseAngle('-16 43 30.49')!] as const
+const SIRIUS = [parseAngle('06h 46 19.27')!, parseAngle('-16 45 06.3')!] as const
+
+test('equatorial to J2000', () => {
+	const [rightAscension, declination] = equatorialToJ2000(...SIRIUS, TIME)
+
+	expect(formatRA(rightAscension)).toBe('06 45 09.23')
+	expect(formatDEC(declination)).toBe('-16 43 30.44')
+})
+
+test('equatorial from J2000', () => {
+	const [rightAscension, declination] = equatorialFromJ2000(...SIRIUS_J2000, TIME)
+
+	expect(formatRA(rightAscension)).toBe('06 46 19.26')
+	expect(formatDEC(declination)).toBe('-16 45 06.35')
+})
+
+test('equatorial J2000 to ecliptic J2000', () => {
+	const [longitude, latitude] = equatorialToEclipticJ2000(...SIRIUS_J2000)
+
+	expect(formatDEC(longitude)).toBe('+104 05 03.86')
+	expect(formatDEC(latitude)).toBe('-39 36 50.73')
+})
+
+test('ecliptic J2000 to equatorial J2000 round-trips', () => {
+	const [longitude, latitude] = equatorialToEclipticJ2000(...SIRIUS_J2000)
+	const [rightAscension, declination] = eclipticJ2000ToEquatorial(longitude, latitude)
+
+	expect(formatRA(rightAscension)).toBe(formatRA(SIRIUS_J2000[0]))
+	expect(formatDEC(declination)).toBe(formatDEC(SIRIUS_J2000[1]))
+})
+
+test('equatorial to ecliptic', () => {
+	const [longitude, latitude] = equatorialToEcliptic(...SIRIUS, TIME)
+
+	expect(formatDEC(longitude)).toBe('+104 26 55.06')
+	expect(formatDEC(latitude)).toBe('-39 36 39.12')
+})
+
+test('current equatorial and ecliptic coordinates round-trip', () => {
+	const [longitude, latitude] = equatorialToEcliptic(...SIRIUS, TIME)
+	const [rightAscension, declination] = eclipticToEquatorial(longitude, latitude, TIME)
+
+	expect(formatRA(rightAscension)).toBe(formatRA(SIRIUS[0]))
+	expect(formatDEC(declination)).toBe(formatDEC(SIRIUS[1]))
+})
+
+test('ecliptic to equatorial', () => {
+	const [rightAscension, declination] = eclipticToEquatorial(parseAngle('284 35 58.8')!, parseAngle('-00 00 02.1')!, TIME) // Sun
+
+	expect(formatRA(rightAscension)).toBe('19 03 23.82')
+	expect(formatDEC(declination)).toBe('-22 38 20.70')
+})
+
+test('equatorial to galatic', () => {
+	const [longitude, latitude] = equatorialToGalatic(...SIRIUS_J2000)
+
+	expect(formatDEC(normalizeAngle(longitude))).toBe('+227 14 20.56')
+	expect(formatDEC(latitude)).toBe('-08 53 35.22')
+})
+
+test('galatic to equatorial', () => {
+	const [rightAscension, declination] = galacticToEquatorial(parseAngle('+227 14 20.56')!, parseAngle('-08 53 35.22')!)
+
+	expect(formatRA(rightAscension)).toBe('06 45 09.22')
+	expect(formatDEC(declination)).toBe('-16 43 30.49')
+})
+
+test('zenith', () => {
+	const [rightAscension, declination] = zenith(deg(-45), deg(-22), TIME)
+
+	expect(formatRA(rightAscension, false)).toBe('03 28 20')
+	expect(formatDEC(declination, false)).toBe('-22 00 00')
+})
+
+test('meridian - equator', () => {
+	const [rightAscension, declination] = meridianEquator(deg(-45), TIME)
+
+	expect(formatRA(rightAscension, false)).toBe('03 28 20')
+	expect(formatDEC(declination, false)).toBe('+00 00 00')
+})
+
+test('meridian - ecliptic', () => {
+	const [rightAscension, declination] = meridianEcliptic(deg(-45), TIME)
+
+	expect(formatRA(rightAscension, false)).toBe('03 28 20')
+	expect(formatDEC(declination, false)).toBe('+18 52 53')
+})
+
+test('equator - ecliptic', () => {
+	let [rightAscension, declination] = equatorEcliptic(deg(-45), TIME)
+
+	expect(formatRA(rightAscension)).toBe('00 00 00.00')
+	expect(formatDEC(declination)).toBe('+00 00 00.00')
+
+	;[rightAscension, declination] = equatorEcliptic(deg(-45), timeNormalize(2461045, 0.58473)) // after P2 rising
+
+	expect(formatRA(rightAscension)).toBe('12 00 00.00')
+	expect(formatDEC(declination)).toBe('+00 00 00.00')
+
+	;[rightAscension, declination] = equatorEcliptic(deg(-45), timeNormalize(2461045, 0.58403)) // before P2 rising
+
+	expect(formatRA(rightAscension)).toBe('00 00 00.00')
+	expect(formatDEC(declination)).toBe('+00 00 00.00')
+})
+
+test('angular distance is zero for identical coordinates', () => {
+	expect(angularDistance(deg(15), deg(-22), deg(15), deg(-22))).toBeCloseTo(0, 15)
+	expect(angularDistanceHaversine(deg(15), deg(-22), deg(15), deg(-22))).toBeCloseTo(0, 15)
+})
+
+test('angular distance is ninety degrees for equatorial quadrature', () => {
+	expect(angularDistance(0, 0, deg(90), 0)).toBeCloseTo(deg(90), 15)
+	expect(angularDistanceHaversine(0, 0, deg(90), 0)).toBeCloseTo(deg(90), 15)
+})
+
+test('angular distance handles RA wrap-around near zero', () => {
+	expect(angularDistance(deg(359.5), 0, deg(0.5), 0)).toBeCloseTo(deg(1), 14)
+	expect(angularDistanceHaversine(deg(359.5), 0, deg(0.5), 0)).toBeCloseTo(deg(1), 14)
+})
+
+test('angular distance is invariant to RA at the celestial pole', () => {
+	expect(angularDistance(0, deg(90), deg(137), deg(90))).toBeCloseTo(0, 15)
+	expect(angularDistanceHaversine(0, deg(90), deg(137), deg(90))).toBeCloseTo(0, 15)
+})
+
+test('angular distance is one hundred eighty degrees for antipodal poles', () => {
+	expect(angularDistance(0, deg(90), deg(13), deg(-90))).toBeCloseTo(Math.PI, 15)
+	expect(angularDistanceHaversine(0, deg(90), deg(13), deg(-90))).toBeCloseTo(Math.PI, 15)
+})
+
+test('angular distance preserves tiny separations', () => {
+	expect(angularDistance(0, 0, 1e-9, 0)).toBeCloseTo(1e-9, 15)
+	expect(angularDistanceHaversine(0, 0, 1e-9, 0)).toBeCloseTo(1e-9, 15)
+})
+
+test('equatorial to horizontal handles a north-pole observer', () => {
+	const [azimuth, altitude] = equatorialToHorizontal(0, 0, deg(90), deg(90))
+
+	expect(azimuth).toBeCloseTo(deg(270), 15)
+	expect(altitude).toBeCloseTo(0, 15)
+})
+
+test('horizontal to equatorial inverts equatorial to horizontal', () => {
+	const latitude = deg(-23.55)
+	const lst = deg(140)
+	const rightAscension = deg(95)
+	const declination = deg(-16.7)
+	const [azimuth, altitude] = equatorialToHorizontal(rightAscension, declination, latitude, lst)
+	const [ra, dec] = horizontalToEquatorial(azimuth, altitude, latitude, lst)
+	expect(ra).toBeCloseTo(rightAscension, 12)
+	expect(dec).toBeCloseTo(declination, 12)
+})
+
+test('horizontal to equatorial round-trips an object below the horizon', () => {
+	const latitude = deg(40)
+	const lst = deg(10)
+	const rightAscension = deg(210)
+	const declination = deg(-50)
+	const [azimuth, altitude] = equatorialToHorizontal(rightAscension, declination, latitude, lst)
+	expect(altitude).toBeLessThan(0)
+	const [ra, dec] = horizontalToEquatorial(azimuth, altitude, latitude, lst)
+	expect(ra).toBeCloseTo(rightAscension, 12)
+	expect(dec).toBeCloseTo(declination, 12)
+})

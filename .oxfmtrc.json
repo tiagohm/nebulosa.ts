@@ -6,5 +6,8 @@
 	"useTabs": true,
 	"tabWidth": 4,
 	"endOfLine": "lf",
-	"insertFinalNewline": true
+	"insertFinalNewline": true,
+	"sortImports": {
+		"newlinesBetween": false
+	}
 }

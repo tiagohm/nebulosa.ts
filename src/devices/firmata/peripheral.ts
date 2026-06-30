@@ -1,0 +1,330 @@
+import type { Angle } from '../../math/units/angle'
+import type { Distance } from '../../math/units/distance'
+import type { Pressure } from '../../math/units/pressure'
+import type { Temperature } from '../../math/units/temperature'
+import { type FirmataClient, type FirmataClientHandler, type Pin, PinMode } from './firmata'
+
+// Peripheral abstractions for Firmata-attached hardware: the common Peripheral contract, sensor/actuator
+// interfaces (thermometer, barometer, radio, RTC, display, I/O expander, etc.) with their measurement
+// units, and base classes that manage listeners, first-read delivery, and queued I2C register reads.
+
+// Callback invoked with the peripheral whenever it produces a new reading.
+export type PeripheralListener<D extends Peripheral> = (device: D) => void
+
+// Seek direction for a radio tuner.
+export type RadioTunerSeekDirection = 'up' | 'down'
+
+// Base contract for every Firmata peripheral: identity, owning client, and start/stop lifecycle.
+export interface Peripheral extends Disposable {
+	readonly name: string
+	readonly client: FirmataClient
+	readonly start: () => void
+	readonly stop: () => void
+}
+
+// A peripheral that emits change notifications to attached listeners.
+export interface ListenablePeripheral<D extends Peripheral = never> extends Peripheral {
+	readonly addListener: (listener: PeripheralListener<D>) => void
+	readonly removeListener: (listener: PeripheralListener<D>) => void
+}
+
+// Temperature sensor; temperature in degrees Celsius.
+export interface Thermometer extends Peripheral {
+	readonly temperature: Temperature
+}
+
+// Relative-humidity sensor; humidity in percent (0..100).
+export interface Hygrometer extends Peripheral {
+	readonly humidity: number
+}
+
+// Pressure sensor; pressure in millibar (hPa).
+export interface Barometer extends Peripheral {
+	readonly pressure: Pressure
+}
+
+// Altitude estimator derived from pressure; altitude in metres.
+export interface Altimeter extends Peripheral {
+	readonly altitude: Distance
+}
+
+// Ambient-light sensor; illuminance in lux.
+export interface Luxmeter extends Peripheral {
+	readonly lux: number
+}
+
+// Current sensor; current in amperes.
+export interface Ammeter extends Peripheral {
+	readonly current: number // A
+}
+
+// Three-axis accelerometer; components in m/s^2.
+export interface Accelerometer extends Peripheral {
+	readonly ax: number // m/s^2
+	readonly ay: number // m/s^2
+	readonly az: number // m/s^2
+}
+
+// Three-axis gyroscope; angular rates in radians per second.
+export interface Gyroscope extends Peripheral {
+	readonly gx: Angle // rad/s
+	readonly gy: Angle // rad/s
+	readonly gz: Angle // rad/s
+}
+
+// Three-axis magnetometer; field components in gauss.
+export interface Magnetometer extends Peripheral {
+	readonly x: number // gauss
+	readonly y: number // gauss
+	readonly z: number // gauss
+}
+
+// FM radio receiver: tuning, volume, mute/stereo flags, seek, and signal-quality readouts.
+export interface RadioTuner extends Peripheral {
+	frequency: number // MHz
+	volume: number // 0..100
+	muted: boolean
+	stereo: boolean
+	readonly seekFailed?: boolean
+	readonly rssi?: number // 0..127 logarithmic RSSI scale
+	readonly station?: boolean
+	readonly frequencyUp: () => void
+	readonly frequencyDown: () => void
+	readonly volumeUp: () => void
+	readonly volumeDown: () => void
+	readonly mute: () => void
+	readonly unmute: () => void
+	readonly seek: (direction: RadioTunerSeekDirection, wrap: boolean) => void
+}
+
+// FM radio transmitter: carrier frequency (MHz) plus mute/stereo control.
+export interface RadioTransmitter extends Peripheral {
+	frequency: number // MHz
+	muted: boolean
+	stereo: boolean
+	readonly frequencyUp: () => void
+	readonly frequencyDown: () => void
+	readonly mute: () => void
+	readonly unmute: () => void
+}
+
+// Real-time clock: broken-down date/time fields plus update (set fields) and sync (set from a Date).
+export interface RealTimeClock extends Peripheral {
+	readonly year: number
+	readonly month: number
+	readonly day: number
+	readonly dayOfWeek: number
+	readonly hour: number
+	readonly minute: number
+	readonly second: number
+	readonly millisecond: number
+	readonly update: (year?: number, month?: number, day?: number, dayOfWeek?: number, hour?: number, minute?: number, second?: number, millisecond?: number) => void
+	readonly sync: (date?: Date) => void
+}
+
+// I2C/SPI I/O expander exposing additional digital pins with per-pin mode/read/write and a flush.
+export interface IOExpander extends Peripheral {
+	readonly pinMode: (pin: number, mode: PinMode) => void
+	readonly pinRead: (pin: number) => number | boolean
+	readonly pinWrite: (pin: number, value: number | boolean, flush?: boolean) => void
+	readonly flush: () => void
+}
+
+// Character LCD display (HD44780-style) control surface.
+export interface Display extends Peripheral {
+	readonly begin: (columns: number, rows: number) => void
+	readonly clear: () => void
+	readonly home: () => void
+	readonly setCursor: (column: number, row: number) => void
+	readonly noBacklight: () => void
+	readonly backlight: () => void
+	readonly noDisplay: () => void
+	readonly display: () => void
+	readonly noBlink: () => void
+	readonly blink: () => void
+	readonly noCursor: () => void
+	readonly cursor: () => void
+	readonly scrollDisplayLeft: () => void
+	readonly scrollDisplayRight: () => void
+	readonly leftToRight: () => void
+	readonly rightToLeft: () => void
+	readonly autoscroll: () => void
+	readonly noAutoscroll: () => void
+	readonly createChar: (location: number, charmap: ArrayLike<number>) => void
+	readonly write: (value: number) => number
+	readonly print: (text: string | number | boolean | bigint) => number
+}
+
+// One outstanding I2C register read awaiting its Firmata reply, with its resolve/reject and timeout.
+interface PendingTwoWireRead {
+	readonly reject: (error: Error) => void
+	readonly resolve: (data: Buffer) => void
+	readonly timer: NodeJS.Timeout
+}
+
+// Default polling period in milliseconds for peripherals that sample on a timer.
+export const DEFAULT_POLLING_INTERVAL = 5000
+
+// Base implementation shared by all peripherals: manages listeners, guarantees a first reading to each
+// new listener (even when the value is unchanged), and provides a promise-based queue for I2C register
+// reads keyed by address+register. Subclasses implement start/stop and call commit/fire on new data.
+export abstract class PeripheralBase<D extends Peripheral = never> implements FirmataClientHandler {
+	readonly #listeners = new Set<PeripheralListener<D>>()
+	// Listeners that have not yet received a completed read. Tracked per listener so a listener attached
+	// after the peripheral was already sampled still receives a first reading even when the value is
+	// unchanged. A shared flag would suppress that for the newcomer (and is wrong when listeners differ).
+	readonly #pendingFirstRead = new Set<PeripheralListener<D>>()
+	readonly #pendingTwoWireReads = new Map<string, PendingTwoWireRead[]>()
+
+	abstract readonly client: FirmataClient
+
+	abstract start(): void
+	abstract stop(): void
+
+	[Symbol.dispose]() {
+		this.stop()
+	}
+
+	// Whether every attached listener has received at least one completed reading.
+	get initialized() {
+		return this.#listeners.size > 0 && this.#pendingFirstRead.size === 0
+	}
+
+	addListener(listener: PeripheralListener<D>) {
+		// Only owe a first read to a genuinely new listener. Re-adding an already-registered one must not
+		// re-arm it, which would flip `initialized` back and emit a duplicate first-read on the next read.
+		if (!this.#listeners.has(listener)) {
+			this.#listeners.add(listener)
+			this.#pendingFirstRead.add(listener)
+		}
+	}
+
+	// Detaches a listener and drops any pending first-read owed to it.
+	removeListener(listener: PeripheralListener<D>) {
+		this.#listeners.delete(listener)
+		this.#pendingFirstRead.delete(listener)
+	}
+
+	// Notifies all listeners unconditionally and marks every first-read satisfied.
+	protected fire() {
+		this.#pendingFirstRead.clear()
+		for (const listener of this.#listeners) listener(this as never)
+	}
+
+	// Notifies listeners when a reading changed; otherwise delivers the first completed read to any
+	// listener that has not received one yet, even if the value equals the previous/default one. This
+	// lets a consumer settle an initial pending state for sensors whose first hardware sample happens to
+	// match their constructor default (for example a DS18B20 reading exactly 0 C, which would otherwise
+	// never fire on change alone), including a listener attached after an earlier one already initialized.
+	protected commit(changed: boolean) {
+		if (changed) {
+			this.fire()
+		} else if (this.#pendingFirstRead.size > 0) {
+			const pending = Array.from(this.#pendingFirstRead)
+			this.#pendingFirstRead.clear()
+			for (const listener of pending) listener(this as never)
+		}
+	}
+
+	// Resolves one queued I2C register read for the current device instance.
+	protected resolvePendingTwoWireRead(client: FirmataClient, address: number, register: number, data: Buffer) {
+		if (client !== this.client) return false
+
+		const requests = this.#pendingTwoWireReads.get(this.#pendingTwoWireReadKey(address, register))
+		if (requests === undefined || requests.length === 0) return false
+
+		const request = requests.shift()
+		if (requests.length === 0) this.#pendingTwoWireReads.delete(this.#pendingTwoWireReadKey(address, register))
+		if (request === undefined) return false
+
+		clearTimeout(request.timer)
+		request.resolve(Buffer.from(data))
+		return true
+	}
+
+	// Queues one I2C register read and resolves when Firmata returns the matching reply.
+	protected readTwoWireRegister(address: number, register: number, bytesToRead: number, timeoutMs: number = 1000): Promise<Buffer> {
+		return new Promise((resolve, reject) => {
+			const timer = setTimeout(() => {
+				const requests = this.#pendingTwoWireReads.get(this.#pendingTwoWireReadKey(address, register))
+
+				if (requests !== undefined) {
+					const index = requests.findIndex((request) => request.timer === timer)
+					if (index >= 0) requests.splice(index, 1)
+					if (requests.length === 0) this.#pendingTwoWireReads.delete(this.#pendingTwoWireReadKey(address, register))
+				}
+
+				reject(new Error(`${this.constructor.name} register 0x${register.toString(16).padStart(2, '0')} read timed out.`))
+			}, timeoutMs)
+
+			const requests = this.#pendingTwoWireReads.get(this.#pendingTwoWireReadKey(address, register))
+			const request = { resolve, reject, timer }
+
+			if (requests === undefined) this.#pendingTwoWireReads.set(this.#pendingTwoWireReadKey(address, register), [request])
+			else requests.push(request)
+
+			this.client.twoWireRead(address, register, bytesToRead)
+		})
+	}
+
+	// Rejects any queued I2C register reads when the device shuts down.
+	protected clearPendingTwoWireReads(error: Error | string) {
+		const reason = typeof error === 'string' ? new Error(error) : error
+
+		for (const [key, requests] of this.#pendingTwoWireReads) {
+			for (const request of requests) {
+				clearTimeout(request.timer)
+				request.reject(new Error(`${reason.message} (${key})`))
+			}
+		}
+
+		this.#pendingTwoWireReads.clear()
+	}
+
+	// Builds a stable map key for one I2C address/register pair.
+	#pendingTwoWireReadKey(address: number, register: number) {
+		return `ADDR:0x${address.toString(16).padStart(2, '0')}:REG:0x${register.toString(16).padStart(2, '0')}`
+	}
+
+	// Firmata close hook: stops the peripheral when its own client disconnects.
+	close(client: FirmataClient) {
+		if (this.client === client) this.stop()
+	}
+}
+
+// Base class for peripherals read from a single analog (ADC) pin. Subclasses provide the pin and a
+// calculate() that converts a raw ADC value into the derived reading, returning whether it changed.
+export abstract class ADCPeripheral<D extends Peripheral = never> extends PeripheralBase<D> {
+	// Analog pin this peripheral reads.
+	abstract readonly pin: number
+
+	// Converts a raw ADC sample into the derived value(s); returns whether the reading changed.
+	abstract calculate(value: number): boolean
+
+	// Enables analog reporting for the configured pin and delivers an initial sample.
+	start() {
+		this.client.addHandler(this)
+		this.client.pinMode(this.pin, PinMode.ANALOG)
+		this.client.requestAnalogPinReport(this.pin, true)
+
+		// The board only emits an analogMessage (and thus pinChange) when the pin's cached value changes,
+		// so a pin already sitting at its value (for example 0) would never produce a first reading.
+		// Deliver an initial sample from the pin's currently cached value so a consumer awaiting a first
+		// read can settle even when the first hardware report equals the cached value.
+		const pin = this.client.pinAt(this.pin)
+		if (pin !== undefined) this.commit(this.calculate(pin.value))
+	}
+
+	// Disables analog reporting and detaches the Firmata handler.
+	stop() {
+		this.client.removeHandler(this)
+		this.client.requestAnalogPinReport(this.pin, false)
+	}
+
+	// Firmata analog-report hook: recomputes and commits the reading when the watched pin changes.
+	pinChange(client: FirmataClient, pin: Pin) {
+		if (this.client === client && pin.id === this.pin) {
+			this.commit(this.calculate(pin.value))
+		}
+	}
+}

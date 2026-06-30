@@ -1,0 +1,263 @@
+import { MJD0 } from '../../core/constants'
+import { binarySearch } from '../../core/util'
+import { readLines, type Source } from '../../io/io'
+import type { NumberArray } from '../../math/numerical/math'
+import { type Angle, arcsec } from '../../math/units/angle'
+import type { PolarMotion, Time, TimeDelta } from './time'
+
+// Earth Orientation Parameters (EOP) from the IERS: UT1-UTC (dut1) and polar motion (x, y), linearly
+// interpolated from the tabulated finals2000A (IERS A) and eopc04 (IERS B) data files. Provides loaders
+// for each file format, a combined source (IERS B preferred where it covers the date, falling back to
+// IERS A), and shared module-level instances feeding the time module. Values outside the table clamp to
+// the nearest edge; missing data yields 0. This is a runtime module (reads from an io Source).
+
+// Reusable empty backing table.
+const EMPTY_TABLE = new Float64Array(0)
+
+// Provider of Earth Orientation Parameters for a given time.
+export interface Iers {
+	// UT1 - UTC in seconds at the given time.
+	readonly dut1: TimeDelta
+	// Polar motion (x, y) angles at the given time.
+	readonly xy: PolarMotion
+
+	// Loads and replaces the EOP table from a data source.
+	readonly load: (source: Source) => Promise<void>
+	// Discards the loaded table.
+	readonly clear: () => void
+}
+
+// Parses one fixed-width numeric field and preserves blanks as NaN.
+function parseNumber(line: string, start: number, end: number) {
+	const value = line.slice(start, end).trim()
+	return value ? +value : Number.NaN
+}
+
+// Returns the preferred finite value without treating zero as missing.
+function selectFinite(value: number, fallback: number) {
+	return Number.isFinite(value) ? value : fallback
+}
+
+// Computes the MJD value represented by the given time sample.
+function modifiedJulianDate(time: Time) {
+	return time.day - MJD0 + time.fraction
+}
+
+// Bracketing samples and linear weight for one time within an EOP table; lo === hi marks a clamped edge.
+interface EopInterpolation {
+	readonly lo: number
+	readonly hi: number
+	readonly t: number
+}
+
+// Locates the bracketing rows and linear weight for the given time so the lookup can be shared across
+// columns. Clamps to the nearest edge outside the tabulated range and returns undefined for an empty table.
+function interpolationAt(time: Time, input: NumberArray): EopInterpolation | undefined {
+	const n = input.length
+
+	if (!n) return undefined
+
+	const mjd = modifiedJulianDate(time)
+	const day = Math.floor(mjd)
+	const i = binarySearch(input, day)
+
+	if (i < 0) {
+		const k = -(i + 1)
+
+		// Do not extrapolate outside range, instead just propagate edge values.
+		if (k <= 0) return { lo: 0, hi: 0, t: 0 }
+		if (k >= n) return { lo: n - 1, hi: n - 1, t: 0 }
+
+		const t0 = input[k - 1]
+		return { lo: k - 1, hi: k, t: (mjd - t0) / (input[k] - t0) }
+	}
+
+	// Exact hits on the final row must clamp to the last known value.
+	if (i >= n - 1) return { lo: n - 1, hi: n - 1, t: 0 }
+
+	const t0 = input[i]
+	return { lo: i, hi: i + 1, t: (mjd - t0) / (input[i + 1] - t0) }
+}
+
+// Applies a precomputed bracket to one EOP column with linear interpolation; clamped edges return the edge value.
+function interpolateColumn(bracket: EopInterpolation, data: NumberArray) {
+	const a = data[bracket.lo]
+	if (bracket.lo === bracket.hi) return a
+	return a + bracket.t * (data[bracket.hi] - a)
+}
+
+// Common EOP table storage and linear-interpolation logic; subclasses implement file-format parsing.
+export abstract class IersBase implements Iers {
+	// Sorted Modified Julian Dates of the table rows.
+	protected mjd: NumberArray = EMPTY_TABLE
+	// Polar motion x component per row, in arcseconds.
+	protected pmX: NumberArray = EMPTY_TABLE
+	// Polar motion y component per row, in arcseconds.
+	protected pmY: NumberArray = EMPTY_TABLE
+	// UT1 - UTC per row, in seconds.
+	protected ut1MinusUtc: NumberArray = EMPTY_TABLE
+
+	// UT1 - UTC in seconds interpolated at `time` (0 when unavailable).
+	dut1(time: Time): number {
+		const bracket = interpolationAt(time, this.mjd)
+		const dut1 = bracket === undefined ? Number.NaN : interpolateColumn(bracket, this.ut1MinusUtc)
+		return Number.isFinite(dut1) ? dut1 : 0
+	}
+
+	// Polar motion (x, y) in radians interpolated at `time` ([0, 0] when unavailable).
+	xy(time: Time): [Angle, Angle] {
+		// Resolve the bracketing rows once and reuse it for both polar-motion columns.
+		const bracket = interpolationAt(time, this.mjd)
+
+		if (bracket !== undefined) {
+			const x = interpolateColumn(bracket, this.pmX)
+			const y = interpolateColumn(bracket, this.pmY)
+
+			if (Number.isFinite(x) && Number.isFinite(y)) {
+				return [arcsec(x), arcsec(y)]
+			}
+		}
+
+		return [0, 0]
+	}
+
+	abstract load(source: Source): Promise<void>
+
+	// Checks whether the requested time lies inside this table coverage range.
+	covers(time: Time) {
+		const n = this.mjd.length
+		if (!n) return false
+		const mjd = modifiedJulianDate(time)
+		return mjd >= this.mjd[0] && mjd <= this.mjd[n - 1]
+	}
+
+	// Computes the distance in days from this table coverage interval.
+	distance(time: Time) {
+		const n = this.mjd.length
+		if (!n) return Number.POSITIVE_INFINITY
+		const mjd = modifiedJulianDate(time)
+		if (mjd < this.mjd[0]) return this.mjd[0] - mjd
+		if (mjd > this.mjd[n - 1]) return mjd - this.mjd[n - 1]
+		return 0
+	}
+
+	// Replaces the active EOP table with compact numeric arrays.
+	protected setTable(mjd: number[], pmX: number[], pmY: number[], ut1MinusUtc: number[]) {
+		this.mjd = Float64Array.from(mjd)
+		this.pmX = Float64Array.from(pmX)
+		this.pmY = Float64Array.from(pmY)
+		this.ut1MinusUtc = Float64Array.from(ut1MinusUtc)
+	}
+
+	clear() {
+		this.mjd = EMPTY_TABLE
+		this.pmX = EMPTY_TABLE
+		this.pmY = EMPTY_TABLE
+		this.ut1MinusUtc = EMPTY_TABLE
+	}
+}
+
+// IERS Bulletin A (finals2000A) loader: parses the fixed-width columns, preferring the more accurate
+// Bulletin B values where present and falling back to the rapid/predicted columns otherwise.
+// https://datacenter.iers.org/data/9/finals2000A.all
+// https://maia.usno.navy.mil/ser7/readme.finals2000A
+export class IersA extends IersBase {
+	async load(source: Source) {
+		const mjd: number[] = []
+		const pmX: number[] = []
+		const pmY: number[] = []
+		const ut1MinusUtc: number[] = []
+
+		for await (const line of readLines(source, 188)) {
+			const epoch = parseNumber(line, 7, 15)
+			const x = selectFinite(parseNumber(line, 134, 144), parseNumber(line, 18, 27))
+			const y = selectFinite(parseNumber(line, 144, 154), parseNumber(line, 37, 46))
+			const dut1 = selectFinite(parseNumber(line, 154, 165), parseNumber(line, 58, 68))
+
+			if (Number.isFinite(epoch) && Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(dut1)) {
+				mjd.push(epoch)
+				pmX.push(x)
+				pmY.push(y)
+				ut1MinusUtc.push(dut1)
+			}
+		}
+
+		this.setTable(mjd, pmX, pmY, ut1MinusUtc)
+	}
+}
+
+// IERS EOP 14 C04 (eopc04) loader: parses the fixed-width final EOP series, skipping comment lines.
+// https://hpiers.obspm.fr/iers/eop/eopc04/eopc04.1962-now
+// https://hpiers.obspm.fr/eoppc/eop/eopc04/eopc04.txt
+export class IersB extends IersBase {
+	async load(source: Source) {
+		const mjd: number[] = []
+		const pmX: number[] = []
+		const pmY: number[] = []
+		const ut1MinusUtc: number[] = []
+
+		for await (const line of readLines(source, 219)) {
+			if (line.startsWith('#')) continue
+
+			const epoch = parseNumber(line, 16, 26)
+			const x = parseNumber(line, 26, 38)
+			const y = parseNumber(line, 38, 50)
+			const dut1 = parseNumber(line, 50, 62)
+
+			if (Number.isFinite(epoch) && Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(dut1)) {
+				mjd.push(epoch)
+				pmX.push(x)
+				pmY.push(y)
+				ut1MinusUtc.push(dut1)
+			}
+		}
+
+		this.setTable(mjd, pmX, pmY, ut1MinusUtc)
+	}
+}
+
+// Combined provider that prefers IERS B where it covers the date (more accurate, final values) and
+// otherwise uses IERS A (which extends into the recent past and future predictions).
+export class IersAB implements Iers {
+	constructor(
+		readonly a: IersA,
+		readonly b: IersB,
+	) {}
+
+	// Picks the highest-priority table that covers this time, otherwise the nearest edge table.
+	#table(time: Time) {
+		if (this.b.covers(time)) return this.b
+		if (this.a.covers(time)) return this.a
+		return this.b.distance(time) <= this.a.distance(time) ? this.b : this.a
+	}
+
+	dut1(time: Time): number {
+		return this.#table(time).dut1(time)
+	}
+
+	xy(time: Time): [Angle, Angle] {
+		return this.#table(time).xy(time)
+	}
+
+	load(source: Source): Promise<void> {
+		throw new Error('not supported')
+	}
+
+	clear() {
+		this.a.clear()
+		this.b.clear()
+	}
+}
+
+// Shared IERS Bulletin A provider instance.
+export const iersa = new IersA()
+// Shared IERS C04 (Bulletin B) provider instance.
+export const iersb = new IersB()
+// Shared combined provider used by the time module.
+export const iersab = new IersAB(iersa, iersb)
+
+// Computes UT1 - UTC in seconds at the given time, using the shared combined IERS provider.
+export const dut1: TimeDelta = (time) => iersab.dut1(time)
+
+// Computes polar motion (x, y) in radians at the given time, using the shared combined IERS provider.
+export const xy: PolarMotion = (time) => iersab.xy(time)

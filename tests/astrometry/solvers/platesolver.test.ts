@@ -1,0 +1,164 @@
+import { expect, test } from 'bun:test'
+import { plateSolutionFrom } from '../../../src/astrometry/solvers/platesolver'
+import { DEC_TAN_SIP, RA_TAN_SIP } from '../../../src/astrometry/wcs/fits.wcs'
+import type { FitsHeader } from '../../../src/io/formats/fits/fits'
+import { toArcsec, toDeg } from '../../../src/math/units/angle'
+
+// https://nova.astrometry.net/user_images/12367041
+test('M101', () => {
+	const header: FitsHeader = {
+		SIMPLE: true,
+		BITPIX: 8,
+		NAXIS: 0,
+		WCSAXES: 2,
+		CTYPE1: RA_TAN_SIP,
+		CTYPE2: DEC_TAN_SIP,
+		EQUINOX: 2000,
+		LONPOLE: 180,
+		LATPOLE: 0,
+		CRVAL1: 211.789996831,
+		CRVAL2: 54.3250783745,
+		CRPIX1: 6844.54215495,
+		CRPIX2: 2924.71455892,
+		CUNIT1: 'deg',
+		CUNIT2: 'deg',
+		CD1_1: 0.00024098759167,
+		CD1_2: -5.0386872296e-5,
+		CD2_1: 5.05049438425e-5,
+		CD2_2: 0.000241100662196,
+		IMAGEW: 9176,
+		IMAGEH: 6870,
+		A_ORDER: 2,
+		A_0_0: 0,
+		A_0_1: 0,
+		A_0_2: -1.19977665955e-8,
+		A_1_0: 0,
+		A_1_1: 3.64583422462e-7,
+		A_2_0: 4.56030084803e-8,
+		B_ORDER: 2,
+		B_0_0: 0,
+		B_0_1: 0,
+		B_0_2: 6.99507235566e-8,
+		B_1_0: 0,
+		B_1_1: 1.19143632657e-7,
+		B_2_0: -1.51089049833e-8,
+		AP_ORDER: 2,
+		AP_0_0: 0.00125507380633,
+		AP_0_1: 5.41386160049e-7,
+		AP_0_2: 1.1640011409e-8,
+		AP_1_0: 8.29305028907e-7,
+		AP_1_1: -3.64848349812e-7,
+		AP_2_0: -4.55456767661e-8,
+		BP_ORDER: 2,
+		BP_0_0: 0.000512324546753,
+		BP_0_1: 2.3090891984e-7,
+		BP_0_2: -7.00930378576e-8,
+		BP_1_0: 2.92061162221e-7,
+		BP_1_1: -1.19102625774e-7,
+		BP_2_0: 1.51337539596e-8,
+	}
+
+	const solution = plateSolutionFrom(header)
+
+	expect(180 - toDeg(solution!.orientation)).toBeCloseTo(191.8, 1)
+	expect(toArcsec(solution!.scale)).toBeCloseTo(0.887, 3)
+	expect(toDeg(solution!.rightAscension)).toBeCloseTo(211.79, 3)
+	expect(toDeg(solution!.declination)).toBeCloseTo(54.325, 3)
+	expect(toDeg(solution!.width)).toBeCloseTo(2.26, 2)
+	expect(toDeg(solution!.height)).toBeCloseTo(1.69, 2)
+	expect(toDeg(solution!.radius)).toBeCloseTo(1.411, 3)
+	expect(solution!.parity).toBe('NORMAL')
+	expect(solution!.widthInPixels).toBe(9176)
+	expect(solution!.heightInPixels).toBe(6870)
+
+	for (const key in header) {
+		expect(solution![key]).toBe(header[key])
+	}
+})
+
+test('anisotropic cd matrix', () => {
+	const header = plateHeaderFromCd(0.008660254037844387, 0.01, -0.004999999999999999, 0.017320508075688773)
+	const solution = plateSolutionFrom(header)
+
+	expect(solution).toBeDefined()
+	expect(toDeg(solution!.orientation)).toBeCloseTo(30, 12)
+	expect(toDeg(solution!.scale)).toBeCloseTo(Math.SQRT2 / 100, 12)
+	expect(toDeg(solution!.width)).toBeCloseTo(1, 12)
+	expect(toDeg(solution!.height)).toBeCloseTo(1, 12)
+	expect(toDeg(solution!.radius)).toBeCloseTo(Math.SQRT2 / 2, 12)
+	expect(solution!.parity).toBe('NORMAL')
+	expect(solution!.widthInPixels).toBe(100)
+	expect(solution!.heightInPixels).toBe(50)
+})
+
+test('90 degree cd matrix', () => {
+	const header = plateHeaderFromCd(0, 0.02, -0.01, 0)
+	const solution = plateSolutionFrom(header)
+
+	expect(solution).toBeDefined()
+	expect(toDeg(solution!.orientation)).toBeCloseTo(90, 12)
+	expect(toDeg(solution!.scale)).toBeCloseTo(Math.SQRT2 / 100, 12)
+	expect(toDeg(solution!.width)).toBeCloseTo(1, 12)
+	expect(toDeg(solution!.height)).toBeCloseTo(1, 12)
+	expect(toDeg(solution!.radius)).toBeCloseTo(Math.SQRT2 / 2, 12)
+	expect(solution!.parity).toBe('NORMAL')
+})
+
+test('singular cd matrix', () => {
+	const header = plateHeaderFromCd(0.01, 0.02, 0.01, 0.02)
+
+	expect(plateSolutionFrom(header)).toBeUndefined()
+})
+
+test('flipped parity cd matrix', () => {
+	// Negative determinant flips parity; orientation negates cd22 before atan2.
+	const header = plateHeaderFromCd(0.01, 0, 0, -0.01)
+	const solution = plateSolutionFrom(header)
+
+	expect(solution).toBeDefined()
+	expect(solution!.parity).toBe('FLIPPED')
+	expect(toDeg(solution!.orientation)).toBeCloseTo(0, 12)
+	expect(toDeg(solution!.scale)).toBeCloseTo(0.01, 12)
+	expect(toDeg(solution!.width)).toBeCloseTo(1, 12)
+	expect(toDeg(solution!.height)).toBeCloseTo(0.5, 12)
+})
+
+test('cdelt and crota keywords', () => {
+	const header: FitsHeader = { CRVAL1: 42, CRVAL2: -17, CDELT1: 0.02, CDELT2: 0.01, CROTA2: 30, IMAGEW: 100, IMAGEH: 50 }
+	const solution = plateSolutionFrom(header)
+
+	expect(solution).toBeDefined()
+	expect(toDeg(solution!.orientation)).toBeCloseTo(-30, 12)
+	expect(toDeg(solution!.scale)).toBeCloseTo(Math.SQRT2 / 100, 12)
+	expect(toDeg(solution!.width)).toBeCloseTo(2, 12)
+	expect(toDeg(solution!.height)).toBeCloseTo(0.5, 12)
+	expect(solution!.parity).toBe('NORMAL')
+})
+
+test('pc and cdelt keywords', () => {
+	const header: FitsHeader = { CRVAL1: 42, CRVAL2: -17, CDELT1: 0.02, CDELT2: 0.01, PC1_1: 0, PC1_2: -1, PC2_1: 1, PC2_2: 0, IMAGEW: 100, IMAGEH: 50 }
+	const solution = plateSolutionFrom(header)
+
+	expect(solution).toBeDefined()
+	expect(toDeg(solution!.orientation)).toBeCloseTo(-90, 12)
+	expect(toDeg(solution!.scale)).toBeCloseTo(Math.SQRT2 / 100, 12)
+	expect(toDeg(solution!.width)).toBeCloseTo(1, 12)
+	expect(toDeg(solution!.height)).toBeCloseTo(1, 12)
+	expect(solution!.parity).toBe('NORMAL')
+})
+
+test('missing reference coordinate keywords yield no solution', () => {
+	const base = plateHeaderFromCd(0.01, 0, 0, 0.01)
+	const noRa = { ...base }
+	delete noRa.CRVAL1
+	const noDec = { ...base }
+	delete noDec.CRVAL2
+
+	expect(plateSolutionFrom(noRa)).toBeUndefined()
+	expect(plateSolutionFrom(noDec)).toBeUndefined()
+})
+
+// Builds a minimal TAN-like header around a custom CD matrix.
+function plateHeaderFromCd(cd11: number, cd12: number, cd21: number, cd22: number): FitsHeader {
+	return { CRVAL1: 42, CRVAL2: -17, CD1_1: cd11, CD1_2: cd12, CD2_1: cd21, CD2_2: cd22, IMAGEW: 100, IMAGEH: 50 }
+}

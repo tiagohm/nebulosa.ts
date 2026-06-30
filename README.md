@@ -137,6 +137,12 @@ localAstrometryNetPlateSolve(input, options)
 libAstrometryNetPlateSolve(stars, width, height, options)
 ```
 
+### Astrometry.net Index ![](bun.webp) ![](browser.webp)
+
+```ts
+selectAstrometryIndexes(request) // Compute the minimal set of index-file descriptors to plate-solve an image
+```
+
 ### AutoFocus ![](bun.webp) ![](browser.webp)
 
 ```ts
@@ -176,6 +182,14 @@ zenith(longitude, latitude, time) // Current equatorial coordinates of the local
 meridianEquator(longitude, time) // Current equatorial coordinates where the meridian crosses the celestial equator
 meridianEcliptic(longitude, time) // Current equatorial coordinates where the meridian crosses the ecliptic
 equatorEcliptic(longitude, time) // Nearer equinox node where the equator crosses the ecliptic
+```
+
+### Correction ![](bun.webp) ![](browser.webp)
+
+```ts
+observerState(time, pv, location) // Observer BCRS position (AU) & velocity (AU/day) referred to the barycenter or Sun
+radialVelocityCorrection(ra, dec, time, pv, location) // Barycentric/heliocentric radial-velocity correction in AU/day
+lightTravelTime(ra, dec, time, pv, location) // Light-travel-time correction in days to add to an observed time
 ```
 
 ### CRC ![](bun.webp) ![](browser.webp)
@@ -518,7 +532,6 @@ sipModelIntoFitsHeader(model, header)
 
 ```ts
 fk5(ra, dec, distance) // FK5 coordinate from given spherical coordinate
-fk5ToIcrs(frame) // Convert FK5 coordinate to ICRS coordinate
 precessFk5(frame, from, to) // Precess the FK5 coordinate from equinox to other
 precessFk5FromJ2000(frame, equinox) // Precess the FK5 coordinate from J2000 to equinox
 precessFk5ToJ2000(frame, equinox) // Precess the FK5 coordinate from equinox to J2000
@@ -528,11 +541,47 @@ precessFk5ToJ2000(frame, equinox) // Precess the FK5 coordinate from equinox to 
 
 ```ts
 precessionMatrixCapitaine(from, to) // Precession matrix using Capitaine et al. 2003
-frameAt(pv, frame, time) // Apply frame rotation to position and velocity at time
+frameAt(pv, frame, time, o?) // Apply a frame rotation (base -> frame) to position and velocity at time
+frameToBase(pv, frame, time, o?) // Inverse of frameAt (frame -> base)
+frameToFrame(pv, from, to, time, o?) // Transform a state from one frame to another, composed through the base
+frameRotationAt(from, to, time, o?) // Composed orientation matrix (R_to · R_fromᵀ) for transforming many vectors
 galactic(pv)
 supergalactic(pv)
 eclipticJ2000(pv)
 ecliptic(pv, time)
+icrsToFk5(pv) // Convert ICRS to FK5 (J2000) by applying the frame bias
+fk5ToIcrs(pv) // Convert FK5 (J2000) to ICRS by removing the frame bias
+
+// Centralized frames (all implement the Frame interface):
+// ICRS, FK4, FK5, fk5Frame(equinox), GALACTIC, SUPERGALACTIC,
+// ECLIPTIC, ECLIPTIC_J2000, ECLIPTIC_B1950, MEAN_ECLIPTIC_OF_DATE,
+// CIRS, TIRS, TEME, ITRS, ITRS_INSTANTANEOUS (exact velocity drag term),
+// MEAN_EQUATOR_AND_EQUINOX_OF_DATE, TRUE_EQUATOR_AND_EQUINOX_OF_DATE,
+// MEAN_EQUATOR_AND_EQUINOX_AT_B1950
+frameToFrame(icrs(ra, dec), ICRS, GALACTIC, time)
+```
+
+### Affine Frame ![](bun.webp) ![](browser.webp)
+
+```ts
+// Frames with a shifted/moving origin (require absolute AU positions, not directions)
+affineFromBase(pv, frame, time, o?) // base -> affine: p_f = R · (p − O), v_f = R · (v − Ȯ)
+affineToBase(pv, frame, time, o?) // inverse of affineFromBase
+affineToAffine(pv, from, to, time, o?) // compose through the base (reduces to frameToFrame with no origin)
+
+BARYCENTRIC_ECLIPTIC // = ECLIPTIC_J2000 as an AffineFrame (origin at the barycenter)
+const helio = heliocentricEclipticFrame((time) => sun(time)) // origin at the Sun (inject the ephemeris)
+const [p, v] = affineToAffine(icrs, ICRS, helio, time)
+
+const gc = galactocentricFrame() // GALACTOCENTRIC_DEFAULTS (Astropy 'latest' parameters)
+const galactocentric = affineFromBase(icrs, gc, time) // origin at the Galactic center
+
+const lsr = lsrFrame() // Local Standard of Rest: velocity offset only (LSR_DEFAULT_SOLAR_VELOCITY)
+const [, vLsr] = affineFromBase(icrsState, lsr, time) // v_lsr = v_icrs + solar peculiar motion
+
+lsrkFrame() // Kinematic LSR (standard solar-apex motion, ICRS orientation)
+lsrdFrame() // Dynamical LSR (Delhaye 1965 (9, 12, 7) km/s, ICRS orientation)
+galacticLsrFrame() // LSR in Galactic axes (galactic orientation + LSR velocity offset)
 ```
 
 ### Geometry ![](bun.webp) ![](browser.webp)
@@ -567,11 +616,20 @@ calibrator.reset()
 calibrator.lastDiagnostics()
 calibrator.currentState
 
+const assistant = new GuidingAssistant(config)
+assistant.start()
+assistant.addSample(frame, command)
+assistant.startBacklashTest()
+assistant.complete()
+
 const client = new GuiderClient(cameraManager, guideOutputManager, options)
 client.connect(camera, guideOutput, connectOptions)
 client.findStar()
 client.startCapture(exposure)
 client.guide(recalibrate, settle)
+client.startGuidingAssistant(config)
+client.stopGuidingAssistant()
+client.guidingAssistantResult()
 client.dither(amount, raOnly, settle)
 client.flipCalibration()
 client.stopCapture()
@@ -636,7 +694,6 @@ const rows = await readHygDatabase(source) // Read HYG star database from source
 
 ```ts
 icrs(ra, dec, distance) // ICRS coordinate from given spherical coordinate
-icrsToFk5(frame) // Convert ICRS coordinate to FK5 coordinate
 ```
 
 ### IERS ![](bun.webp) ![](browser.webp)
@@ -749,6 +806,9 @@ const interpolator = splineInterpolator(points, 'pchip', options)
 const interpolator = chebyshevInterpolator(points, degree, options)
 
 const [ra, dec] = interpolator.compute(time)
+
+const interpolator = new AstrometricInterpolator(ra, dec, width, height, stepX, stepY, options)
+const [ra, dec] = interpolator.pixelToSky(x, y)
 ```
 
 ### IO ![](bun.webp)
@@ -804,6 +864,14 @@ io(time) // Compute position and velocity of Io at given time
 europa(time) // Compute position and velocity of Europa at given time
 ganymede(time) // Compute position and velocity of Ganymede at given time
 callisto(time) // Compute position and velocity of Calisto at given time
+```
+
+### Least Squares ![](bun.webp) ![](browser.webp)
+
+```ts
+const fit = linearLeastSquares(design, target, { weights, ridge }) // Solve weighted linear least squares
+const fit = robustLinearLeastSquares(design, target, { method, tuning }) // Solve robust IRLS least squares
+const value = predictLinearLeastSquares(fit.coefficients, features) // Evaluate a fitted linear model
 ```
 
 ### Location ![](bun.webp) ![](browser.webp)
@@ -919,6 +987,19 @@ Base.limb(bodyRa, bodyDec, sunRa, sunDec) // Position angle of the bright limb m
 Base.horner(x, coefficients) // Polynomial evaluation with Horner's method
 ```
 
+### Lunar Eclipse Map ![](bun.webp) ![](browser.webp)
+
+```ts
+const events = lunarEclipseEvents(eclipse) // Contact sequence (P1, U1, U2, MAX, U3, U4, P4) by eclipse type
+const geometry = computeLunarEclipseMapGeometry(eclipse, getSunMoonPosition, options) // Per-contact Moon rise/set horizon curves
+const paths = lunarEclipseMapToSvgPaths(geometry, projection, options) // Project and serialize the curves to SVG path data
+const filled = lunarEclipseMapToSvgPaths(geometry, projection, { fill: true, fillRegion: 'belowHorizon' }) // Closed region polygons (moonRiseSetFill) for shading/gradients
+
+const local = computeLocalLunarEclipseCircumstances(eclipse, longitude, latitude, getSunMoonPosition, options) // Alt/Az, P/Z angles, magnitudes, visibility
+const view = computeLocalLunarEclipseViewGeometry(local, eclipse, options) // Local View shapes: umbra/penumbra rings, Moon disks, horizon
+const list = listLocalLunarEclipses(longitude, latitude, startTime, endTime, getSunMoonPosition, options) // Eclipses observable from a location in a date range, with their local circumstances
+```
+
 ### Moon ![](bun.webp) ![](browser.webp)
 
 ```ts
@@ -961,6 +1042,21 @@ packDate(year, month, day) // year-month-day to packed date format
 
 ```ts
 const result = fitOrbit(observations, epoch, position, velocity, options)
+```
+
+### Optimization ![](bun.webp) ![](browser.webp)
+
+```ts
+const root = brentRoot((x) => Math.cos(x) - x, 0, 1) // Find a bracketed scalar root
+const root = bisection((x) => x * x - 2, 0, 2) // Find a bracketed scalar root by bisection
+const root = secantRoot((x) => x * x * x - 8, 1, 3) // Find a scalar root without a bracket
+const root = falsePositionRoot((x) => Math.exp(x) - 3, 0, 2) // Find a bracketed scalar root by false position
+const min = brentMinimize((x) => (x - 3) ** 2, -4, 8) // Minimize a scalar function
+const min = goldenSectionSearch((x) => (x - 3) ** 2, -4, 8) // Minimize a scalar function by golden-section search
+const min = nelderMead((params) => loss(params), [a0, b0]) // Minimize a multivariate function without derivatives
+const min = coordinateDescent((params) => loss(params), [a0, b0]) // Minimize a multivariate function by coordinate passes
+const min = powell((params) => loss(params), [a0, b0]) // Minimize a multivariate function by Powell direction-set search
+const [a, b, c] = levenbergMarquardt(x, y, model, [a0, b0, c0]) // Compute Levenberg-Marquardt parameters
 ```
 
 ### PHD2 ![](bun.webp)
@@ -1095,8 +1191,6 @@ const regression = hyperbolicRegression(x, y) // Compute hyperbolic regression f
 const y = regression.predict(x) // Compute y at x
 
 const { r, r2, chi2, rmsd } = regressionScore(regression, x, y)
-
-const [a, b, c] = levenbergMarquardt(x, y, model, [a0, b0, c0]) // Compute Levenberg-Marquardt regression coefficents
 ```
 
 ### SAO ![](bun.webp) ![](browser.webp)
@@ -1127,6 +1221,16 @@ const pv = sgp4(time, source)
 
 ```ts
 const [header, ...data] = simbadQuery(query, options) // Search on Simbad TAP service
+```
+
+### Solar Eclipse Map ![](bun.webp) ![](browser.webp)
+
+```ts
+const geometry = computeSolarEclipseMapGeometry(eclipse, pbe, options)
+const paths = solarEclipseMapToSvgPaths(geometry, projection, options)
+const { total, annular } = splitCentralLineByKind(geometry.lines.centerLine, pbe) // Per-character hybrid segments
+const greatestEclipse = computeGreatestEclipseCircumstances(pbe) // Time (TD/UT1), location, Sun altitude/azimuth, path width, central duration
+const greatestDuration = computeGreatestDurationCircumstances(pbe) // Same circumstances at the point of longest central phase
 ```
 
 ### Spk ![](bun.webp) ![](browser.webp)
@@ -1299,12 +1403,6 @@ pmAngles(time) // Polar Motion angles at time
 pmMatrix(time) // Polar Motion matrix at time
 ```
 
-### TIRS ![](bun.webp) ![](browser.webp)
-
-```ts
-tirsRotationAt(time) // TIRS rotation matrix at time
-```
-
 ### UCAC4 ![](bun.webp)
 
 ```ts
@@ -1320,7 +1418,6 @@ await catalog.close()
 ### Util ![](bun.webp) ![](browser.webp)
 
 ```ts
-angularSizeOfPixel(focalLength, pixelSize) // CCD Resolution in arcsec/pixel
 minOf(array) // Minimum value of the array
 maxOf(array) // Maximum value of the array
 meanOf(array) // Mean value of the array
@@ -1342,6 +1439,7 @@ vecDistance(v, u) // Distance between vectors
 vecAngle(v, u) // Angle between vectors
 vecDot(v, u) // Dot product between vectors
 vecCross(v, u) // Cross product between vectors
+vecPolarAngle(v)
 vecLatitude(v)
 vecLongitude(v)
 vecNegate(v) // Negate the vector

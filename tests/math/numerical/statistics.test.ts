@@ -1,0 +1,121 @@
+import { expect, test } from 'bun:test'
+import { Histogram } from '../../../src/math/numerical/statistics'
+
+// Verifies all cached histogram statistics against expected values.
+function histogram(data: number[], mode: readonly [number, number], count: readonly [number, number], mean: number, variance: number, stdev: number, median: number) {
+	const hist = new Histogram(data, 0)
+
+	expect(hist.mode).toEqual(mode)
+	expect(hist.count[0]).toBeCloseTo(count[0], 4)
+	expect(hist.count[1]).toBeCloseTo(count[1], 4)
+	expect(hist.mean).toBeCloseTo(mean, 4)
+	expect(hist.variance).toBeCloseTo(variance, 4)
+	expect(hist.standardDeviation).toBeCloseTo(stdev, 4)
+	expect(hist.median).toBeCloseTo(median, 4)
+}
+
+test('histogram', () => {
+	histogram([5, 8, 12, 10], [2, 12], [35, 12], 1.7714, 1.03346, 1.01659, 2.375)
+	histogram([2, 2], [0, 2], [4, 2], 0.5, 0.25, 0.5, 1)
+	histogram([2, 0, 2], [0, 2], [4, 2], 1, 1, 1, 1)
+	histogram([5, 0, 0, 0, 0, 0, 0, 10], [7, 10], [15, 10], 4.66666, 10.88888, 3.29983, 7.25)
+})
+
+test('histogram maximum returns the last populated bin', () => {
+	const hist = new Histogram([2, 0, 5], 2)
+	expect(hist.maximum).toEqual([1, 5])
+})
+
+test('histogram minimum reports the first populated bin count before the maximum', () => {
+	const hist = new Histogram([0, 3, 5], 2)
+	// Value component is the first populated bin's count; its position precedes the maximum's.
+	expect(hist.minimum[1]).toBe(3)
+	expect(hist.maximum[1]).toBe(5)
+	expect(hist.minimum[0]).toBeLessThan(hist.maximum[0])
+})
+
+test('histogram cdf is monotonically non-decreasing', () => {
+	const hist = new Histogram([2, 1, 3, 0, 4], 2)
+	let previous = -1
+	for (let q = 0; q <= 1.0001; q += 0.05) {
+		const value = hist.cdf(q)
+		expect(value).toBeGreaterThanOrEqual(previous)
+		previous = value
+	}
+})
+
+test('histogram reset clears a selected cached statistic', () => {
+	const data = [1, 0, 0]
+	const hist = new Histogram(data, 2)
+
+	expect(hist.mean).toBe(0)
+	data[2] = 1
+	expect(hist.mean).toBe(0)
+	hist.reset('mean')
+	expect(hist.mean).toBe(1)
+})
+
+test('empty histogram statistics fall back to zero', () => {
+	const hist = new Histogram([], 0)
+	expect(hist.mode).toEqual([0, 0])
+	expect(hist.count).toEqual([0, 0])
+	expect(hist.mean).toBe(0)
+	expect(hist.variance).toBe(0)
+	expect(hist.standardDeviation).toBe(0)
+	expect(hist.median).toBe(0)
+	expect(hist.quantile(0.25)).toBe(0)
+	expect(hist.cdf(0.25)).toBe(0)
+	expect(hist.entropy).toBe(0)
+	expect(hist.skewness).toBe(0)
+	expect(hist.kurtosis).toBe(0)
+	expect(hist.minimum).toEqual([0, 0])
+	expect(hist.maximum).toEqual([0, 0])
+
+	hist.reset()
+
+	expect(hist.mean).toBe(0)
+	expect(hist.median).toBe(0)
+})
+
+test('all-zero histogram statistics fall back to zero', () => {
+	const hist = new Histogram([0, 0, 0], 2)
+	expect(hist.mode).toEqual([0, 0])
+	expect(hist.count).toEqual([0, 0])
+	expect(hist.mean).toBe(0)
+	expect(hist.variance).toBe(0)
+	expect(hist.standardDeviation).toBe(0)
+	expect(hist.median).toBe(0)
+	expect(hist.quantile(0.75)).toBe(0)
+	expect(hist.cdf(1)).toBe(0)
+	expect(hist.entropy).toBe(0)
+	expect(hist.skewness).toBe(0)
+	expect(hist.kurtosis).toBe(0)
+	expect(hist.minimum).toEqual([0, 0])
+	expect(hist.maximum).toEqual([0, 0])
+})
+
+test('histogram quantile and cdf interpolate within bins', () => {
+	const hist = new Histogram([2, 0, 2], 2)
+	expect(hist.quantile(0)).toBe(0)
+	expect(hist.quantile(0.25)).toBeCloseTo(0.25, 12)
+	expect(hist.quantile(0.5)).toBeCloseTo(0.5, 12)
+	expect(hist.quantile(0.75)).toBe(1)
+	expect(hist.quantile(1)).toBe(1)
+	expect(hist.cdf(0)).toBe(0)
+	expect(hist.cdf(0.25)).toBeCloseTo(0.25, 12)
+	expect(hist.cdf(0.5)).toBeCloseTo(0.5, 12)
+	expect(hist.cdf(0.75)).toBeCloseTo(0.5, 12)
+	expect(hist.cdf(1)).toBe(1)
+})
+
+test('histogram entropy and shape statistics', () => {
+	const uniform = new Histogram([1, 1, 1, 1], 3)
+	expect(uniform.entropy).toBeCloseTo(2, 12)
+	expect(uniform.skewness).toBeCloseTo(0, 12)
+	expect(uniform.kurtosis).toBeCloseTo(-1.36, 12)
+
+	const rightSkewed = new Histogram([8, 4, 2, 1], 3)
+	expect(rightSkewed.entropy).toBeGreaterThan(0)
+	expect(rightSkewed.skewness).toBeGreaterThan(0)
+	expect(rightSkewed.kurtosis).toBeGreaterThan(-3)
+})
