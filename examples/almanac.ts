@@ -41,7 +41,8 @@ import { iersab, iersb } from '../src/astronomy/time/iers'
 import { fileHandleSource } from '../src/io/io'
 // oxfmt-ignore
 import { Timescale, dut1 as dut1FromTime, earthRotationAngle, greenwichApparentSiderealTime, greenwichMeanSiderealTime, nutationAngles, pmAngles, pmMatrix, tai, taiMinusUtc, tcb, tdb, time, timeBesselianYear, timeJulianYear, timeMJD, timeSubtract, timeToDate, timeUnix, timeYMDHMS, toJulianDay, tt, ut1, utc } from '../src/astronomy/time/time'
-import { DAYSPERJY, DAYSPERSY, GM_SUN_PITJEVA_2005, J2000, PI, SPEED_OF_LIGHT_AU_DAY, TAU } from '../src/core/constants'
+import { formatTemporal, temporalFromTime } from '../src/astronomy/time/temporal'
+import { DAYSEC, DAYSPERJY, DAYSPERSY, DAYSPERTY, GM_SUN_PITJEVA_2005, J2000, PI, SPEED_OF_LIGHT_AU_DAY, TAU } from '../src/core/constants'
 import { type Vec3, vecAngle, vecCross, vecDot, vecLatitude, vecLength, vecLongitude, vecMinus, vecMulScalar, vecNormalize } from '../src/math/linear-algebra/vec3'
 import { sphericalDestination, sphericalInterpolate, sphericalPolygonArea, sphericalPositionAngle, sphericalProjectTangentPlane, sphericalSeparation, sphericalTriangleArea, sphericalUnprojectTangentPlane } from '../src/math/numerical/geometry'
 import { arcmin, arcsec, deg, formatAZ, formatHMS, formatSignedDMS, hms, hour, normalizeAngle, normalizePI, toArcsec, toDeg, toHour } from '../src/math/units/angle'
@@ -81,8 +82,7 @@ function modifiedJulianDateConversion() {
 
 // Julian Date to Calendar Date: decompose a Time into Y/M/D/h/m/s/ns.
 function julianDateToCalendarDate() {
-	const [y, mo, d, h, mi, s] = timeToDate(NOW)
-	console.info('Calendar date of NOW:', { y, mo, d, h, mi, s })
+	console.info('Calendar date of NOW:', formatTemporal(temporalFromTime(NOW)))
 }
 
 // Unix Time Conversion: build a Time from Unix seconds.
@@ -197,7 +197,7 @@ function besselianEpochConversion() {
 // Tropical Year Length: time for the Sun to return to the same equinox.
 function tropicalYearLength() {
 	// DAYSPERTY is the B1900 tropical-year length; the value drifts slowly.
-	console.info('Tropical year length (days):', 365.242198781)
+	console.info('Tropical year length (days):', DAYSPERTY)
 }
 
 // Sidereal Year Length: one revolution of the Earth relative to the fixed stars.
@@ -547,7 +547,7 @@ function barycentricRadialVelocityCorrection() {
 // small (Sun's barycentric motion), shown below via the light-travel-time analog.
 function heliocentricRadialVelocityCorrection() {
 	const ltt = lightTravelTime(SIRIUS_RA, SIRIUS_DEC, NOW, earth(NOW), SITE)
-	console.info('Light-travel-time correction to barycenter (s):', ltt * 86400)
+	console.info('Light-travel-time correction to barycenter (s):', ltt * DAYSEC)
 }
 
 // Astrometric to Apparent Place: ICRS -> CIRS (apparent equator/equinox of date).
@@ -801,6 +801,7 @@ function planetaryCentralMeridian() {
 function subObserverPoint() {
 	console.info('Sub-observer point: needs IAU pole/rotation model; not implemented.')
 }
+
 function subSolarPoint() {
 	console.info('Sub-solar point: needs IAU pole/rotation model; not implemented.')
 }
@@ -936,7 +937,7 @@ function earthPerihelionAndAphelion() {
 // Equinox and Solstice Times.
 function equinoxAndSolsticeTimes() {
 	const t = season(2026, 'winter')
-	console.info('2026 December solstice:', timeToDate(t).slice(0, 6).join('-'))
+	console.info('2026 December solstice:', formatTemporal(temporalFromTime(t)))
 }
 
 // Lunar Geocentric Position: apparent RA/DEC and geocentric distance.
@@ -1047,6 +1048,7 @@ function lunarTerminatorPosition() {
 function lunarSubSolarPoint() {
 	console.info('Lunar sub-solar point: not implemented; needs the lunar orientation model.')
 }
+
 function lunarSubObserverPoint() {
 	console.info('Lunar sub-observer point: not implemented; needs the lunar orientation model.')
 }
@@ -1115,6 +1117,7 @@ function objectRiseTime() {
 	if (h0 === null) return console.info('Object never crosses the horizon (circumpolar or never rises).')
 	console.info('Rise LST:', formatHMS(normalizeAngle(SIRIUS_RA - h0)))
 }
+
 function objectSetTime() {
 	const h0 = hourAngleAtAltitude(SIRIUS_DEC, SITE.latitude, 0)
 	if (h0 === null) return console.info('Object never crosses the horizon.')
@@ -1125,6 +1128,7 @@ function objectSetTime() {
 function objectUpperTransit() {
 	console.info('Upper transit at LST:', formatHMS(normalizeAngle(SIRIUS_RA)))
 }
+
 function objectLowerTransit() {
 	console.info('Lower transit at LST:', formatHMS(normalizeAngle(SIRIUS_RA + PI)))
 }
@@ -1167,10 +1171,7 @@ function airmassTimeSeries() {
 		const sinAlt = Math.sin(SITE.latitude) * Math.sin(SIRIUS_DEC) + Math.cos(SITE.latitude) * Math.cos(SIRIUS_DEC) * Math.cos(ha)
 		series.push(sinAlt > 0 ? airmassKastenYoung(Math.asin(sinAlt)) : Number.POSITIVE_INFINITY)
 	}
-	console.info(
-		'Airmass at HA -3h..+3h:',
-		series.map((x) => x.toFixed(2)),
-	)
+	console.info('Airmass at HA -3h..+3h:', series)
 }
 
 // Astronomical / Nautical / Civil Twilight: Sun at -18deg, -12deg, -6deg.
@@ -1179,14 +1180,17 @@ function twilightAt(depressionDeg: number) {
 	const h0 = hourAngleAtAltitude(eq[1], SITE.latitude, deg(-depressionDeg))
 	return h0 === null ? null : normalizeAngle(eq[0] + h0)
 }
+
 function astronomicalTwilight() {
 	const lst = twilightAt(18)
 	console.info('Astronomical dusk (Sun at -18deg) LST:', lst === null ? 'does not occur' : formatHMS(lst))
 }
+
 function nauticalTwilight() {
 	const lst = twilightAt(12)
 	console.info('Nautical dusk (Sun at -12deg) LST:', lst === null ? 'does not occur' : formatHMS(lst))
 }
+
 function civilTwilight() {
 	const lst = twilightAt(6)
 	console.info('Civil dusk (Sun at -6deg) LST:', lst === null ? 'does not occur' : formatHMS(lst))
@@ -1251,12 +1255,15 @@ function targetAirmassWindow() {
 function heliacalRising() {
 	console.info('Heliacal rising: first dawn visibility (object rises just before the Sun); needs an arcus-visionis model. Not implemented.')
 }
+
 function heliacalSetting() {
 	console.info('Heliacal setting: last dusk visibility (object sets just after the Sun); needs an arcus-visionis model. Not implemented.')
 }
+
 function acronychalRising() {
 	console.info('Acronychal rising: object rises at sunset (opposition-like); needs the same visibility model. Not implemented.')
 }
+
 function cosmicalSetting() {
 	console.info('Cosmical setting: object sets at sunrise; needs the same visibility model. Not implemented.')
 }
@@ -1373,9 +1380,11 @@ function lunarEclipseDanjonEstimate() {
 function stellarOccultationCircumstances() {
 	console.info('Stellar occultation: predict from the occulter shadow path vs the observer; not implemented.')
 }
+
 function asteroidOccultationPrediction() {
 	console.info('Asteroid occultation: project the asteroid shadow onto the Earth; not implemented.')
 }
+
 function lunarOccultationPrediction() {
 	console.info('Lunar occultation: compare the Moon topocentric limb with the star; not implemented.')
 }
@@ -1386,9 +1395,11 @@ function lunarOccultationPrediction() {
 function planetaryTransitPrediction() {
 	console.info('Planetary transit: solve inner-planet conjunction with |ecliptic latitude| < Sun radius; not implemented.')
 }
+
 function mercuryTransitCircumstances() {
 	console.info('Mercury transit circumstances: needs a transit module (Besselian-style); not implemented.')
 }
+
 function venusTransitCircumstances() {
 	console.info('Venus transit circumstances: needs a transit module (Besselian-style); not implemented.')
 }
@@ -1720,7 +1731,7 @@ function satelliteAngularSpeed() {
 
 // Shift a Time by whole seconds (small local helper).
 function timeShiftSeconds(t: typeof NOW, seconds: number) {
-	return time(t.day, t.fraction + seconds / 86400, t.scale)
+	return time(t.day, t.fraction + seconds / DAYSEC, t.scale)
 }
 
 // Satellite Visual Magnitude Estimate.
