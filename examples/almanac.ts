@@ -12,7 +12,7 @@
 import fs from 'fs/promises'
 import { matchStars } from '../src/astrometry/matching/star.matching'
 import { crescentWidth, moonParallax, moonSemidiameter, nearestLunarApsis, nearestLunarEclipse, nearestLunarPhase } from '../src/astronomy/bodies/moon'
-import { JUPITER_ROTATION, MARS_ROTATION, SATURN_ROTATION, subObserverPoint as bodySubObserver, subSolarPoint as bodySubSolar } from '../src/astronomy/bodies/orientation'
+import { JUPITER_ROTATION, MARS_ROTATION, positionAngleOfPole, SATURN_ROTATION, subObserverPoint as bodySubObserver, subSolarPoint as bodySubSolar, SUN_ROTATION } from '../src/astronomy/bodies/orientation'
 import { spaceMotion, star } from '../src/astronomy/bodies/star'
 import { carringtonRotationNumber, equationOfTime, nearestSolarEclipse, season } from '../src/astronomy/bodies/sun'
 import { cirsToObserved, distance as vectorDistance, equatorial as vectorToEquatorial, icrsToCirs, icrsToObserved, parallacticAngle, phaseAngle, refractedAltitude, relativePositionAndVelocity, separationFrom, unrefractedAltitude, type PositionAndVelocityOverTime } from '../src/astronomy/coordinates/astrometry'
@@ -882,13 +882,15 @@ function solarNoon() {
 	console.info('Solar noon (local):', transit ? formatTemporal(temporalFromTime(utc(transit))) : 'no transit in the window')
 }
 
-// Solar Disk Orientation (P, B0, L0).
-// TODO(almanac): the position angle of the solar rotation axis (P) and the
-// heliographic latitude/longitude of the disk center (B0, L0) need the Sun's
-// rotation elements. carringtonRotationNumber exists, but P/B0/L0 do not. Add a
-// `solarDiskOrientation(time)` returning (P, B0, L0).
+// Solar Disk Orientation (P, B0, L0): the position angle of the rotation axis and the
+// heliographic latitude/longitude of the disk centre, from the IAU solar rotation model.
+// The Sun's IAU prime meridian is the Carrington meridian, so the sub-observer longitude
+// is L0 directly and the sub-observer latitude is B0.
 function solarDiskOrientation() {
-	console.info('Solar disk orientation (P, B0, L0): not implemented; needs solar rotation elements.')
+	const toEarth = vecMinus(earth(NOW)[0], sun(NOW)[0])
+	const disk = bodySubObserver(SUN_ROTATION, NOW, toEarth)
+	const p = positionAngleOfPole(SUN_ROTATION, NOW, toEarth)
+	console.info('Solar disk orientation P, B0, L0 (deg):', toDeg(p).toFixed(2), toDeg(disk.latitude).toFixed(2), toDeg(disk.longitude).toFixed(2))
 }
 
 // Carrington Rotation Number.

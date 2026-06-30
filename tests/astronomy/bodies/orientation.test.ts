@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { bodyFixedMatrix, JUPITER_ROTATION, MARS_ROTATION, orientation, SATURN_ROTATION, subObserverPoint, subSolarPoint, SUN_ROTATION, VENUS_ROTATION } from '../../../src/astronomy/bodies/orientation'
+import { bodyFixedMatrix, JUPITER_ROTATION, MARS_ROTATION, orientation, positionAngleOfPole, SATURN_ROTATION, subObserverPoint, subSolarPoint, SUN_ROTATION, VENUS_ROTATION } from '../../../src/astronomy/bodies/orientation'
 import { earth, jupiter, mars, saturn, sun } from '../../../src/astronomy/ephemeris/models/analytical/vsop87e'
 import { Timescale, type Time, timeShift, timeYMDHMS } from '../../../src/astronomy/time/time'
 import { matMulVec } from '../../../src/math/linear-algebra/mat3'
@@ -56,6 +56,13 @@ test("the Sun's sub-Earth latitude is the heliographic B0", () => {
 	// B0 on 2026-06-29 is about +2.6 deg (B0 crosses zero on ~June 5 and peaks +7.25 deg in early Sept).
 	const b0 = subObserverPoint(SUN_ROTATION, NOW, toEarth(sun))
 	expect(toDeg(b0.latitude)).toBeCloseTo(2.6155, 3)
+})
+
+test("the Sun's pole position angle matches the solar P angle", () => {
+	// SunPy (P, B0, L0) for 2026-06-29 00:00 UTC gives P = -3.6151 deg; the ~0.002 deg residual is the
+	// neglected aberration of the disk-centre direction.
+	const p = positionAngleOfPole(SUN_ROTATION, NOW, toEarth(sun))
+	expect(toDeg(p)).toBeCloseTo(-3.615, 2)
 })
 
 test("Saturn's sub-Earth latitude is the ring opening angle", () => {

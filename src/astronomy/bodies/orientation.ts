@@ -2,8 +2,8 @@ import { DAYSPERJC, J2000, PIOVERTWO, SPEED_OF_LIGHT_AU_DAY } from '../../core/c
 import { type Mat3, matMulVec, matRotX, matRotZ } from '../../math/linear-algebra/mat3'
 import { type Vec3, vecLength } from '../../math/linear-algebra/vec3'
 import { clamp } from '../../math/numerical/math'
-import { type Angle, normalizeAngle } from '../../math/units/angle'
-import { type Time, timeShift, toJulianDay, tdb } from '../time/time'
+import { type Angle, normalizeAngle, normalizePI } from '../../math/units/angle'
+import { precessionNutationMatrix, type Time, timeShift, toJulianDay, tdb } from '../time/time'
 
 // Body orientation from the IAU WGCCRE rotation elements (phase C1: Sun and planets). The rotation
 // elements give the north-pole direction and the prime-meridian angle as functions of time; from them
@@ -144,6 +144,44 @@ export function subObserverPoint(elements: RotationElements, time: Time, bodyToO
 export function subSolarPoint(elements: RotationElements, time: Time, bodyToObserver: Vec3, bodyToSun: Vec3): SurfacePoint {
 	const emitted = timeShift(time, -lightDelay(vecLength(bodyToObserver)))
 	return project(bodyFixedMatrix(elements, emitted), bodyToSun)
+}
+
+// Computes the position angle of a body's north pole projected onto the sky plane.
+//
+// The angle is measured at the body's apparent disk centre from celestial north (the direction of
+// increasing declination) toward east (increasing right ascension), normalized to (-PI, PI]. For the
+// Sun this is the classical position angle P of the rotation axis (about +/-26 deg over the year);
+// for a planet it is the tilt of the apparent disk's polar axis. `bodyToObserver` is the vector from
+// the body centre to the observer (ICRF, AU): its direction sets the disk-centre line of sight and its
+// length the light-time delay used to evaluate the pole.
+//
+// Position angle is referred to the true equator and equinox of date, so both the pole and the
+// line of sight are precessed and nutated from J2000 before the sky-plane north is taken; annual
+// aberration of the disk-centre direction (~20 arcsec) is neglected.
+export function positionAngleOfPole(elements: RotationElements, time: Time, bodyToObserver: Vec3): Angle {
+	const emitted = timeShift(time, -lightDelay(vecLength(bodyToObserver)))
+	const { poleRa, poleDec } = orientation(elements, emitted)
+
+	const cosPoleDec = Math.cos(poleDec)
+	const pole: Vec3 = [cosPoleDec * Math.cos(poleRa), cosPoleDec * Math.sin(poleRa), Math.sin(poleDec)]
+
+	// Rotate the pole and the disk-centre direction (observer -> body) to the true equator of date.
+	const pnm = precessionNutationMatrix(time)
+	const [px, py, pz] = matMulVec(pnm, pole)
+	const [ox, oy, oz] = matMulVec(pnm, [-bodyToObserver[0], -bodyToObserver[1], -bodyToObserver[2]])
+
+	const ra = Math.atan2(oy, ox)
+	const dec = Math.atan2(oz, Math.sqrt(ox * ox + oy * oy))
+	const sinRa = Math.sin(ra)
+	const cosRa = Math.cos(ra)
+	const sinDec = Math.sin(dec)
+	const cosDec = Math.cos(dec)
+
+	// Sky-plane basis at the disk centre: north = increasing Dec, east = increasing RA.
+	const northDot = -px * sinDec * cosRa - py * sinDec * sinRa + pz * cosDec
+	const eastDot = -px * sinRa + py * cosRa
+
+	return normalizePI(Math.atan2(eastDot, northDot))
 }
 
 export { EARTH_ROTATION, JUPITER_ROTATION, MARS_ROTATION, MERCURY_ROTATION, NEPTUNE_ROTATION, SATURN_ROTATION, SUN_ROTATION, URANUS_ROTATION, VENUS_ROTATION } from './orientation.data'
