@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { lunarSaros, lunation, moonParallax, moonSemidiameter, nearestLunarApsis, nearestLunarEclipse, nearestLunarPhase } from '../../../src/astronomy/bodies/moon'
+import { crescentWidth, lunarSaros, lunation, moonParallax, moonSemidiameter, nearestLunarApsis, nearestLunarEclipse, nearestLunarPhase } from '../../../src/astronomy/bodies/moon'
 import { time, timeToDate, timeYMD, timeYMDHMS, utc } from '../../../src/astronomy/time/time'
 import { deg, toArcsec } from '../../../src/math/units/angle'
 import { kilometer, toKilometer } from '../../../src/math/units/distance'
@@ -158,4 +158,13 @@ describe('nearest lunar apsis', () => {
 		expect(timeToDate(c[0]).slice(0, 5)).toEqual([2026, 1, 29, 21, 53])
 		expect(toKilometer(c[1])).toBeCloseTo(365876.6, 0)
 	})
+})
+
+test('crescent width scales with semidiameter and illuminated fraction', () => {
+	// Full disk: width equals the full diameter.
+	expect(crescentWidth(deg(0.25), 1)).toBeCloseTo(deg(0.5), 15)
+	// New moon: zero width.
+	expect(crescentWidth(deg(0.25), 0)).toBe(0)
+	// Half illuminated: width is the semidiameter.
+	expect(crescentWidth(deg(0.25), 0.5)).toBeCloseTo(deg(0.25), 15)
 })

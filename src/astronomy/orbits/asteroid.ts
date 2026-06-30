@@ -625,6 +625,37 @@ export function eccentricAnomaly(v: number, e: number) {
 	else return 0
 }
 
+// Solves Kepler's equation for the eccentric anomaly (radians) from mean anomaly `M` (radians) and
+// eccentricity `e`, the inverse of meanAnomaly. Newton-Raphson on the elliptic branch (e < 1) solves
+// E - e*sin(E) = M with M wrapped to -PI..PI, and on the hyperbolic branch (e > 1) solves
+// e*sinh(H) - H = M, returning the hyperbolic anomaly H. Returns 0 for the parabolic case (e == 1),
+// matching eccentricAnomaly. Converges to double precision; the iteration is capped for safety.
+export function eccentricAnomalyFromMean(M: Angle, e: number): Angle {
+	if (e === 1) return 0
+
+	if (e < 1) {
+		// Solve on the wrapped anomaly for robust convergence, then restore the revolution of M.
+		const m = normalizePI(M)
+		// Near-parabolic ellipses converge faster starting from the apsis side of the wrapped anomaly.
+		let E = e < 0.8 ? m : m < 0 ? -Math.PI : Math.PI
+		for (let i = 0; i < 30; i++) {
+			const delta = (E - e * Math.sin(E) - m) / (1 - e * Math.cos(E))
+			E -= delta
+			if (Math.abs(delta) < 1e-14) break
+		}
+		// M - m is a whole multiple of TAU, so adding it keeps E - e*sin(E) = M with E near M.
+		return E + (M - m)
+	}
+
+	let H = Math.asinh(M / e)
+	for (let i = 0; i < 50; i++) {
+		const delta = (e * Math.sinh(H) - H - M) / (e * Math.cosh(H) - 1)
+		H -= delta
+		if (Math.abs(delta) < 1e-14) break
+	}
+	return H
+}
+
 // Eccentricity vector from `position` (AU) and `velocity` (AU/day) and `mu`. Points toward periapsis
 // with magnitude equal to the eccentricity. Writes into `o` when given, which is returned.
 export function eccentricityVector(position: CartesianCoordinate, velocity: CartesianCoordinate, mu: number, o?: MutVec3): Vec3 {

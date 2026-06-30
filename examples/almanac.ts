@@ -11,13 +11,13 @@
 
 import fs from 'fs/promises'
 import { matchStars } from '../src/astrometry/matching/star.matching'
-import { moonParallax, moonSemidiameter, nearestLunarApsis, nearestLunarEclipse, nearestLunarPhase } from '../src/astronomy/bodies/moon'
+import { crescentWidth, moonParallax, moonSemidiameter, nearestLunarApsis, nearestLunarEclipse, nearestLunarPhase } from '../src/astronomy/bodies/moon'
 import { spaceMotion, star } from '../src/astronomy/bodies/star'
 import { carringtonRotationNumber, equationOfTime, nearestSolarEclipse, season } from '../src/astronomy/bodies/sun'
-import { cirsToObserved, distance as vectorDistance, equatorial as vectorToEquatorial, icrsToCirs, icrsToObserved, parallacticAngle, phaseAngle, refractedAltitude, relativePositionAndVelocity, separationFrom, type PositionAndVelocityOverTime } from '../src/astronomy/coordinates/astrometry'
+import { cirsToObserved, distance as vectorDistance, equatorial as vectorToEquatorial, icrsToCirs, icrsToObserved, parallacticAngle, phaseAngle, refractedAltitude, relativePositionAndVelocity, separationFrom, unrefractedAltitude, type PositionAndVelocityOverTime } from '../src/astronomy/coordinates/astrometry'
 import { angularDistance, eclipticToEquatorial, equatorialFromJ2000, equatorialToEcliptic, equatorialToGalatic, equatorialToHorizontal, galacticToEquatorial, horizontalToEquatorial, zenith } from '../src/astronomy/coordinates/coordinate'
-import { annualAberration, lightTravelTime, observerState, radialVelocityCorrection } from '../src/astronomy/coordinates/correction'
-import { eraAnpm, eraC2s, eraLdSun, eraPmpx, eraS2c, eraSeps, eraStarpm, eraStarpv } from '../src/astronomy/coordinates/erfa/erfa'
+import { annualAberration, observerState, radialVelocityCorrection } from '../src/astronomy/coordinates/correction'
+import { eraAnpm, eraC2s, eraLd, eraLdSun, eraPmpx, eraS2c, eraSeps, eraStarpm, eraStarpv } from '../src/astronomy/coordinates/erfa/erfa'
 import { precessFk5FromJ2000 } from '../src/astronomy/coordinates/fk5'
 import { GALACTIC, SUPERGALACTIC, fk5ToIcrs, frameToFrame, icrsToFk5, temeToItrf } from '../src/astronomy/coordinates/frame'
 import { icrs as icrsVector } from '../src/astronomy/coordinates/icrs'
@@ -30,8 +30,8 @@ import { computeLocalLunarEclipseCircumstances } from '../src/astronomy/events/e
 import { computeGreatestEclipseCircumstances, computeLocalSolarEclipseCircumstances } from '../src/astronomy/events/eclipse/solar/local'
 import { computePolynomialBesselianElements } from '../src/astronomy/events/eclipse/solar/map'
 import { airmass, airmassKastenYoung, altitudeAtTransit, asteroidMagnitudeEstimate, atmosphericRefraction, cometMagnitudeEstimate, hourAngleAtAltitude, objectAngularDiameter } from '../src/astronomy/formulas'
-import { Ellipsoid, geodeticLocation, localSiderealTime, rhoCosPhi, subpoint } from '../src/astronomy/observer/location'
-import { KeplerOrbit, asteroid, comet, meanMotion, period, tisserandParameter, trueAnomalyClosed, trueAnomalyHyperbolic } from '../src/astronomy/orbits/asteroid'
+import { Ellipsoid, geodeticLocation, localSiderealTime, subpoint } from '../src/astronomy/observer/location'
+import { KeplerOrbit, asteroid, comet, eccentricAnomalyFromMean, meanMotion, period, tisserandParameter, trueAnomalyClosed, trueAnomalyHyperbolic } from '../src/astronomy/orbits/asteroid'
 import { gibbs } from '../src/astronomy/orbits/determination/gibbs'
 import { herrickGibbs } from '../src/astronomy/orbits/determination/herrickgibbs'
 import { parseTLE, recordFromTLE, sgp4 } from '../src/astronomy/orbits/propagation/sgp4'
@@ -42,7 +42,7 @@ import { fileHandleSource } from '../src/io/io'
 // oxfmt-ignore
 import { Timescale, dut1 as dut1FromTime, earthRotationAngle, equationOfEquinoxes, greenwichApparentSiderealTime, greenwichMeanSiderealTime, nutationAngles, pmAngles, pmMatrix, tai, taiMinusUtc, tcb, tdb, timeBesselianYear, timeJulianYear, timeMJD, timeShift, timeSubtract, timeToDate, timeUnix, timeYMDHMS, toJulianDay, toJulianEpoch, tt, ut1, utc, type Time } from '../src/astronomy/time/time'
 import { formatTemporal, temporalFromTime } from '../src/astronomy/time/temporal'
-import { DAYSEC, DAYSPERSY, DAYSPERTY, EARTH_RADIUS_KM, GM_SUN_PITJEVA_2005, PI, TAU } from '../src/core/constants'
+import { AU_KM, DAYSEC, DAYSPERSY, DAYSPERTY, EARTH_RADIUS_KM, GM_SUN_PITJEVA_2005, PI, TAU } from '../src/core/constants'
 import { type Vec3, vecAngle, vecCross, vecLatitude, vecLength, vecLongitude, vecMinus, vecMulScalar, vecNormalize } from '../src/math/linear-algebra/vec3'
 import { sphericalDestination, sphericalInterpolate, sphericalPolygonArea, sphericalPositionAngle, sphericalProjectTangentPlane, sphericalSeparation, sphericalTriangleAngles, sphericalTriangleArea, sphericalUnprojectTangentPlane } from '../src/math/numerical/geometry'
 import { arcmin, arcsec, deg, formatAZ, formatHMS, formatSignedDMS, hms, hour, normalizeAngle, normalizePI, toArcsec, toDeg, toHour } from '../src/math/units/angle'
@@ -429,14 +429,16 @@ function annualAberrationComputation() {
 }
 
 // Diurnal Aberration: the small extra aberration from the observer's daily rotation.
-// TODO(almanac): no dedicated helper. observerState() returns the observer's full
-// barycentric velocity (orbital + diurnal); the diurnal part is the difference
-// between the topocentric and geocentric velocities. Here we report its magnitude.
+// The diurnal velocity is the observer's topocentric velocity (from observerState)
+// minus the geocentric (Earth) velocity; feeding it to annualAberration gives the
+// diurnal-only shift (~0.3" at the equator).
 function diurnalAberration() {
-	// The diurnal aberration constant is ~0.3200" at the equator, scaled by the
-	// observer's geocentric radius projected onto the equatorial plane (rho*cos(phi)).
-	const amplitude = 0.32 * rhoCosPhi(SITE)
-	console.info('Diurnal aberration amplitude (arcsec):', amplitude)
+	const earthState = earth(NOW)
+	const [, topocentricVelocity] = observerState(NOW, earthState, SITE)
+	const diurnalVelocity: Vec3 = [topocentricVelocity[0] - earthState[1][0], topocentricVelocity[1] - earthState[1][1], topocentricVelocity[2] - earthState[1][2]]
+	const natural = vecNormalize(SIRIUS_ICRF)
+	const proper = annualAberration(natural, diurnalVelocity, vecLength(earthHeliocentric(NOW)))
+	console.info('Diurnal aberration shift (arcsec):', toArcsec(eraSeps(vecLongitude(natural), vecLatitude(natural), vecLongitude(proper), vecLatitude(proper))))
 }
 
 // Solar Gravitational Deflection: bending of starlight grazing the Sun (ERFA eraLdSun).
@@ -448,13 +450,21 @@ function solarGravitationalDeflection() {
 	console.info('Solar deflection (arcsec):', toArcsec(eraSeps(vecLongitude(natural), vecLatitude(natural), vecLongitude(deflected), vecLatitude(deflected))))
 }
 
-// Planetary Gravitational Deflection: light bending by a massive planet (Jupiter).
-// TODO(almanac): use eraLd / eraLdn with the planet body list. The dominant
-// planetary term is Jupiter (~0.017" at the limb); it is negligible far from the
-// planet, so a full pipeline would pass all major bodies to eraLdn. Demonstrated
-// here as the magnitude of Jupiter's contribution near our test star.
+// Planetary Gravitational Deflection: light bending by a massive planet (Jupiter),
+// computed with ERFA eraLd for a star grazing Jupiter's limb (~0.017"). For a full
+// pipeline, pass all major bodies to eraLdn instead.
 function planetaryGravitationalDeflection() {
-	console.info('Planetary deflection: dominated by Jupiter (<=0.017" at limb); use eraLdn with the body list for a rigorous result.')
+	const jupiterGeo = geocentricDirection(jupiter) // observer -> Jupiter (AU)
+	const em = vecLength(jupiterGeo) // observer-Jupiter distance (AU)
+	const jupiterToObserver = vecNormalize(vecMulScalar(jupiterGeo, -1))
+	// Place the star at Jupiter's limb: offset Jupiter's direction by its angular radius.
+	const angularRadius = Math.asin(71492 / AU_KM / em)
+	const [lon, lat] = sphericalDestination(vecLongitude(jupiterGeo), vecLatitude(jupiterGeo), 0, angularRadius)
+	const star = eraS2c(lon, lat)
+	const JUPITER_MASS_IN_SOLAR_MASSES = 1 / 1047.348644
+	// Small deflection limiter so the grazing-limb geometry is not clamped (Jupiter subtends far less than the Sun).
+	const deflected = eraLd(JUPITER_MASS_IN_SOLAR_MASSES, star, star, jupiterToObserver, em, 1e-9 / Math.max(1, em * em))
+	console.info('Jupiter limb deflection (arcsec):', toArcsec(eraSeps(vecLongitude(star), vecLatitude(star), vecLongitude(deflected), vecLatitude(deflected))))
 }
 
 // Annual Parallax: yearly ellipse from the Earth's barycentric displacement (ERFA eraPmpx).
@@ -515,14 +525,14 @@ function barycentricRadialVelocityCorrection() {
 	console.info('Barycentric RV correction (km/s):', rv * 1731.4568) // AU/day -> km/s
 }
 
-// Heliocentric Radial Velocity Correction.
-// TODO(almanac): radialVelocityCorrection / observerState are referred to the
-// solar-system barycenter. A heliocentric variant would reference the Sun's
-// center instead (subtract the Sun's barycentric velocity). The difference is
-// small (Sun's barycentric motion), shown below via the light-travel-time analog.
+// Heliocentric Radial Velocity Correction: reference the Sun's center instead of
+// the barycenter by passing the heliocentric Earth state (Earth minus Sun) to the
+// same radialVelocityCorrection; the difference from the barycentric value is the
+// Sun's barycentric motion projected onto the line of sight.
 function heliocentricRadialVelocityCorrection() {
-	const ltt = lightTravelTime(SIRIUS_RA, SIRIUS_DEC, NOW, earth(NOW), SITE)
-	console.info('Light-travel-time correction to barycenter (s):', ltt * DAYSEC)
+	const heliocentricEarth = relativePositionAndVelocity(earth, sun, NOW)
+	const rv = radialVelocityCorrection(SIRIUS_RA, SIRIUS_DEC, NOW, heliocentricEarth, SITE)
+	console.info('Heliocentric RV correction (km/s):', toKilometerPerSecond(rv))
 }
 
 // Astrometric to Apparent Place: ICRS -> CIRS (apparent equator/equinox of date).
@@ -548,14 +558,11 @@ function atmosphericRefractionComputation() {
 	console.info('Refracted altitude (deg):', toDeg(refractedAltitude(trueAltitude)))
 }
 
-// Inverse Atmospheric Refraction: recover the true altitude from an observed one.
-// TODO(almanac): observedToCirs inverts the full pipeline; for the altitude-only
-// case we invert the Bennett formula by one fixed-point iteration here.
+// Inverse Atmospheric Refraction: recover the true altitude from an observed one,
+// the ERFA-consistent inverse of refractedAltitude.
 function inverseAtmosphericRefraction() {
 	const observed = deg(10)
-	let trueAlt = observed
-	for (let i = 0; i < 3; i++) trueAlt = observed - arcmin(atmosphericRefraction(trueAlt))
-	console.info('Recovered true altitude (deg):', toDeg(trueAlt))
+	console.info('Recovered true altitude (deg):', toDeg(unrefractedAltitude(observed)))
 }
 
 // Differential Atmospheric Refraction: refraction difference across a field's extent.
@@ -1055,11 +1062,9 @@ function lunarStandstillExtremes() {
 }
 
 // Crescent Moon Width: angular width of the illuminated crescent at its midpoint.
-// TODO(almanac): no dedicated helper; approximated from the semidiameter and the
-// illuminated fraction (width ~ diameter * illuminatedFraction near new moon).
 function crescentMoonWidth() {
 	const sd = moonSemidiameter(vecLength(moonGeocentric(NOW)[0]))
-	const width = 2 * sd * Meeus.illuminated(computeLunarPhaseAngle())
+	const width = crescentWidth(sd, Meeus.illuminated(computeLunarPhaseAngle()))
 	console.info('Crescent width (arcmin):', toArcsec(width) / 60)
 }
 
@@ -1399,16 +1404,9 @@ function stateVectorToKeplerianElements() {
 	console.info('a, e, i (AU, -, deg):', orbit.semiMajorAxis, orbit.eccentricity, toDeg(orbit.inclination))
 }
 
-// Mean Anomaly to Eccentric Anomaly (Kepler's equation).
-// TODO(almanac): the public surface exposes eccentricAnomaly(trueAnomaly, e) (the
-// inverse direction). Solving Kepler's equation M -> E is done internally by the
-// propagator; we Newton-iterate here to demonstrate the forward solution.
+// Mean Anomaly to Eccentric Anomaly (Kepler's equation), solved by eccentricAnomalyFromMean.
 function meanAnomalyToEccentricAnomaly() {
-	const M = deg(120)
-	const e = 0.2
-	let E = M
-	for (let i = 0; i < 8; i++) E -= (E - e * Math.sin(E) - M) / (1 - e * Math.cos(E))
-	console.info('Eccentric anomaly E (deg):', toDeg(E))
+	console.info('Eccentric anomaly E (deg):', toDeg(eccentricAnomalyFromMean(deg(120), 0.2)))
 }
 
 // Eccentric Anomaly to True Anomaly.

@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import type { CartesianCoordinate } from '../../../src/astronomy/coordinates/coordinate'
-import { KeplerOrbit, eccentricAnomaly, meanAnomaly, mpcAsteroid, mpcComet, stumpff, timeSincePeriapsis, tisserandParameter, trueAnomalyHyperbolic, trueAnomalyParabolic } from '../../../src/astronomy/orbits/asteroid'
+import { KeplerOrbit, eccentricAnomaly, eccentricAnomalyFromMean, meanAnomaly, mpcAsteroid, mpcComet, stumpff, timeSincePeriapsis, tisserandParameter, trueAnomalyHyperbolic, trueAnomalyParabolic } from '../../../src/astronomy/orbits/asteroid'
 import { mpcorb, mpcorbComet } from '../../../src/astronomy/orbits/mpcorb'
 import { Timescale, time, timeYMDHMS } from '../../../src/astronomy/time/time'
 import { GM_SUN_PITJEVA_2005 } from '../../../src/core/constants'
@@ -178,4 +178,26 @@ test('tisserand parameter is above 3 for a main-belt asteroid', () => {
 	const t = tisserandParameter(2.7658, 0.0785, 0.184899, 5.2044)
 	expect(t).toBeCloseTo(3.3103, 3)
 	expect(t).toBeGreaterThan(3)
+})
+
+test('eccentricAnomalyFromMean inverts meanAnomaly across the elliptic range', () => {
+	for (const e of [0, 0.1, 0.5, 0.9, 0.99]) {
+		for (const Mdeg of [0, 30, 90, 175, 270, 359]) {
+			const M = (Mdeg * Math.PI) / 180
+			const E = eccentricAnomalyFromMean(M, e)
+			// Kepler's equation must hold and round-trip through meanAnomaly.
+			expect(E - e * Math.sin(E)).toBeCloseTo(M, 11)
+			expect(meanAnomaly(E, e)).toBeCloseTo(M, 11)
+		}
+	}
+})
+
+test('eccentricAnomalyFromMean solves the hyperbolic branch', () => {
+	const e = 1.5
+	for (const M of [-3, -0.5, 0.5, 2, 8]) {
+		const H = eccentricAnomalyFromMean(M, e)
+		expect(e * Math.sinh(H) - H).toBeCloseTo(M, 10)
+	}
+	// Parabolic case is undefined and returns 0, matching eccentricAnomaly.
+	expect(eccentricAnomalyFromMean(1, 1)).toBe(0)
 })

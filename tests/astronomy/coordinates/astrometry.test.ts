@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { distance, equatorial, lightTime, parallacticAngle, phaseAngle, type PositionAndVelocity, refractedAltitude, relativePositionAndVelocity, separationFrom } from '../../../src/astronomy/coordinates/astrometry'
+import { distance, equatorial, lightTime, parallacticAngle, phaseAngle, type PositionAndVelocity, refractedAltitude, relativePositionAndVelocity, separationFrom, unrefractedAltitude } from '../../../src/astronomy/coordinates/astrometry'
 import { Timescale, timeYMDHMS } from '../../../src/astronomy/time/time'
 import { PIOVERTWO } from '../../../src/core/constants'
 import { deg, toArcsec, toDeg } from '../../../src/math/units/angle'
@@ -120,4 +120,19 @@ test('phaseAngle is the Sun-body-observer angle at the body', () => {
 	expect(phaseAngle([1, 0, 0], [3, 0, 0], [2, 0, 0])).toBeCloseTo(0, 12)
 	// Observer opposite the Sun: "new" phase.
 	expect(toDeg(phaseAngle([1, 0, 0], [2, 0, 0], [0, 0, 0]))).toBeCloseTo(180, 12)
+})
+
+test('unrefractedAltitude inverts refractedAltitude', () => {
+	const refraction = { pressure: 1005, temperature: 7, relativeHumidity: 0.8, wl: 0.574 }
+	for (const trueDeg of [5, 10, 20, 45, 70, 89]) {
+		const trueAltitude = deg(trueDeg)
+		const apparent = refractedAltitude(trueAltitude, refraction)
+		expect(apparent).toBeGreaterThan(trueAltitude)
+		// Recovering the true altitude from the apparent one must round-trip.
+		expect(unrefractedAltitude(apparent, refraction)).toBeCloseTo(trueAltitude, 9)
+	}
+})
+
+test('unrefractedAltitude leaves below-horizon altitudes unchanged', () => {
+	expect(unrefractedAltitude(deg(-1))).toBe(deg(-1))
 })

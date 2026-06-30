@@ -73,6 +73,16 @@ export function moonSemidiameter(distance: Distance) {
 	return ((358473400 / AU_KM) * ASEC2RAD) / distance
 }
 
+// Computes the angular width of the illuminated lunar crescent (radians): the span
+// from the bright limb to the terminator across the disk along the line through both
+// cusps' midpoint, width = diameter * k = 2 * semidiameter * k. `semidiameter` is the
+// Moon's angular radius (radians) and `illuminatedFraction` k is in [0, 1] (e.g. from
+// Meeus' illuminated()). First-order geometric estimate, most accurate for the thin
+// crescent near new moon.
+export function crescentWidth(semidiameter: Angle, illuminatedFraction: number) {
+	return 2 * semidiameter * illuminatedFraction
+}
+
 // Computes the lunation number for a given time and system
 export function lunation(time: Time, system: LunationSystem = 'BROWN') {
 	// The first New Moon of 2000 (6th January, ~ 18:14 UTC)

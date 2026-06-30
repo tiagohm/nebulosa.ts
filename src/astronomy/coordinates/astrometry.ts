@@ -233,3 +233,23 @@ export function refractedAltitude(altitude: Angle, refraction?: RefractionParame
 	const del = ((refa + w) * tz) / (1 + (refa + 3 * w) / (z * z))
 	return altitude + del
 }
+
+// Computes the geometric (true) altitude from the apparent (refracted) altitude,
+// in radians; the inverse of refractedAltitude using the same ERFA-consistent
+// bounded refraction model. Refraction lifts an object, so the returned true
+// altitude is the smaller value. The model is monotonic and slowly varying, so a
+// few fixed-point iterations (true <- apparent - refraction(true)) converge to
+// the level where refractedAltitude(unrefractedAltitude(a)) round-trips back to
+// `apparentAltitude`. Below the horizon (apparentAltitude < 0) refraction is not
+// applied and the input is returned unchanged.
+export function unrefractedAltitude(apparentAltitude: Angle, refraction?: RefractionParameters): Angle {
+	if (apparentAltitude < 0) return apparentAltitude
+
+	let trueAltitude = apparentAltitude
+	for (let i = 0; i < 4; i++) {
+		// refractedAltitude(trueAltitude) - trueAltitude is the refraction at that level.
+		trueAltitude = apparentAltitude - (refractedAltitude(trueAltitude, refraction) - trueAltitude)
+	}
+
+	return trueAltitude
+}
