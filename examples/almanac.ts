@@ -12,6 +12,7 @@
 import fs from 'fs/promises'
 import { matchStars } from '../src/astrometry/matching/star.matching'
 import { crescentWidth, moonParallax, moonSemidiameter, nearestLunarApsis, nearestLunarEclipse, nearestLunarPhase } from '../src/astronomy/bodies/moon'
+import { JUPITER_ROTATION, MARS_ROTATION, SATURN_ROTATION, subObserverPoint as bodySubObserver, subSolarPoint as bodySubSolar } from '../src/astronomy/bodies/orientation'
 import { spaceMotion, star } from '../src/astronomy/bodies/star'
 import { carringtonRotationNumber, equationOfTime, nearestSolarEclipse, season } from '../src/astronomy/bodies/sun'
 import { cirsToObserved, distance as vectorDistance, equatorial as vectorToEquatorial, icrsToCirs, icrsToObserved, parallacticAngle, phaseAngle, refractedAltitude, relativePositionAndVelocity, separationFrom, unrefractedAltitude, type PositionAndVelocityOverTime } from '../src/astronomy/coordinates/astrometry'
@@ -24,7 +25,7 @@ import { icrs as icrsVector } from '../src/astronomy/coordinates/icrs'
 import { itrs } from '../src/astronomy/coordinates/itrs'
 import { Base as Meeus } from '../src/astronomy/ephemeris/meeus'
 import { moon as moonGeocentric } from '../src/astronomy/ephemeris/models/analytical/elpmpp02'
-import { earth, jupiter, mars, sun, venus } from '../src/astronomy/ephemeris/models/analytical/vsop87e'
+import { earth, jupiter, mars, saturn, sun, venus } from '../src/astronomy/ephemeris/models/analytical/vsop87e'
 import { sunMoonPosition } from '../src/astronomy/events/eclipse/eclipse'
 import { computeLocalLunarEclipseCircumstances } from '../src/astronomy/events/eclipse/lunar/local'
 import { computeGreatestEclipseCircumstances, computeLocalSolarEclipseCircumstances } from '../src/astronomy/events/eclipse/solar/local'
@@ -786,30 +787,31 @@ function ascendingAndDescendingNode() {
 	console.info('Mars ascending node longitude (deg):', toDeg(normalizeAngle(orbit.longitudeOfAscendingNode)))
 }
 
-// Planetary Central Meridian.
-// TODO(almanac): requires a body-orientation model (IAU rotation elements W0, Wdot
-// and pole RA/DEC). Not present in the library; add an `orientation(body, time)`
-// helper returning the sub-observer longitude (central meridian).
+// Planetary Central Meridian: the sub-observer longitude from the IAU rotation model.
+// subObserverPoint returns planetocentric east longitude; the System III longitude that
+// observers quote increases westward, so it is 360deg minus the east value.
 function planetaryCentralMeridian() {
-	console.info('Planetary central meridian: needs IAU rotation elements (W, pole); not implemented.')
+	const sub = bodySubObserver(JUPITER_ROTATION, NOW, vecMinus(earth(NOW)[0], jupiter(NOW)[0]))
+	console.info('Jupiter central meridian System III (deg, west):', toDeg(normalizeAngle(-sub.longitude)).toFixed(2))
 }
 
-// Sub-Observer Point / Sub-Solar Point.
-// TODO(almanac): same prerequisite as the central meridian; the sub-observer and
-// sub-solar planetographic coordinates need the IAU pole and rotation model.
+// Sub-Observer Point / Sub-Solar Point: the body-fixed longitude/latitude beneath the
+// observer and beneath the Sun, from the IAU rotation model (light-time corrected).
 function subObserverPoint() {
-	console.info('Sub-observer point: needs IAU pole/rotation model; not implemented.')
+	const o = bodySubObserver(MARS_ROTATION, NOW, vecMinus(earth(NOW)[0], mars(NOW)[0]))
+	console.info('Mars sub-observer (east lon, lat deg):', toDeg(o.longitude).toFixed(2), toDeg(o.latitude).toFixed(2))
 }
 
 function subSolarPoint() {
-	console.info('Sub-solar point: needs IAU pole/rotation model; not implemented.')
+	const s = bodySubSolar(MARS_ROTATION, NOW, vecMinus(earth(NOW)[0], mars(NOW)[0]), vecMinus(sun(NOW)[0], mars(NOW)[0]))
+	console.info('Mars sub-solar (east lon, lat deg):', toDeg(s.longitude).toFixed(2), toDeg(s.latitude).toFixed(2))
 }
 
-// Saturn Ring Opening Angle.
-// TODO(almanac): the ring tilt (B) follows from Saturn's pole orientation and the
-// Saturn-Earth vector; needs the IAU pole model for Saturn. Not implemented.
+// Saturn Ring Opening Angle: the ring tilt B equals the sub-Earth planetocentric
+// latitude in Saturn's body frame (negative when the south face is toward the Earth).
 function saturnRingOpeningAngle() {
-	console.info('Saturn ring opening angle: needs Saturn pole orientation; not implemented.')
+	const b = bodySubObserver(SATURN_ROTATION, NOW, vecMinus(earth(NOW)[0], saturn(NOW)[0]))
+	console.info('Saturn ring opening angle B (deg):', toDeg(b.latitude).toFixed(3))
 }
 
 // Jupiter Great Red Spot Transit.
