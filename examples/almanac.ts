@@ -29,7 +29,9 @@ import { sunMoonPosition } from '../src/astronomy/events/eclipse/eclipse'
 import { computeLocalLunarEclipseCircumstances } from '../src/astronomy/events/eclipse/lunar/local'
 import { computeGreatestEclipseCircumstances, computeLocalSolarEclipseCircumstances } from '../src/astronomy/events/eclipse/solar/local'
 import { computePolynomialBesselianElements } from '../src/astronomy/events/eclipse/solar/map'
-import { airmass, airmassKastenYoung, altitudeAtTransit, asteroidMagnitudeEstimate, atmosphericRefraction, cometMagnitudeEstimate, hourAngleAtAltitude, objectAngularDiameter } from '../src/astronomy/formulas'
+import { ASTRONOMICAL_TWILIGHT, CIVIL_TWILIGHT, NAUTICAL_TWILIGHT, riseTransitSet, STANDARD_HORIZON, SUN_HORIZON } from '../src/astronomy/events/horizon'
+import { searchExtrema, searchRoots } from '../src/astronomy/events/search'
+import { airmass, airmassKastenYoung, altitudeAtTransit, asteroidMagnitudeEstimate, atmosphericRefraction, cometMagnitudeEstimate, objectAngularDiameter } from '../src/astronomy/formulas'
 import { Ellipsoid, geodeticLocation, localSiderealTime, subpoint } from '../src/astronomy/observer/location'
 import { KeplerOrbit, asteroid, comet, eccentricAnomalyFromMean, meanMotion, period, tisserandParameter, trueAnomalyClosed, trueAnomalyHyperbolic } from '../src/astronomy/orbits/asteroid'
 import { gibbs } from '../src/astronomy/orbits/determination/gibbs'
@@ -45,7 +47,7 @@ import { formatTemporal, temporalFromTime } from '../src/astronomy/time/temporal
 import { AU_KM, DAYSEC, DAYSPERSY, DAYSPERTY, EARTH_RADIUS_KM, GM_SUN_PITJEVA_2005, PI, TAU } from '../src/core/constants'
 import { type Vec3, vecAngle, vecCross, vecLatitude, vecLength, vecLongitude, vecMinus, vecMulScalar, vecNormalize } from '../src/math/linear-algebra/vec3'
 import { sphericalDestination, sphericalInterpolate, sphericalPolygonArea, sphericalPositionAngle, sphericalProjectTangentPlane, sphericalSeparation, sphericalTriangleAngles, sphericalTriangleArea, sphericalUnprojectTangentPlane } from '../src/math/numerical/geometry'
-import { arcmin, arcsec, deg, formatAZ, formatHMS, formatSignedDMS, hms, hour, normalizeAngle, normalizePI, toArcsec, toDeg, toHour } from '../src/math/units/angle'
+import { type Angle, arcmin, arcsec, deg, formatAZ, formatHMS, formatSignedDMS, hms, hour, normalizeAngle, normalizePI, toArcsec, toDeg, toHour } from '../src/math/units/angle'
 import { kilometer, toKilometer } from '../src/math/units/distance'
 import { toKilometerPerSecond } from '../src/math/units/velocity'
 
@@ -664,6 +666,11 @@ function planetPhaseAngle(body: PositionAndVelocityOverTime, time: Time = NOW) {
 	return phaseAngle(body(time)[0], sun(time)[0], earth(time)[0])
 }
 
+// Sun-Earth-body elongation (radians) as a function of time, for the event scanners.
+function elongationAt(body: PositionAndVelocityOverTime, time: Time) {
+	return separationFrom(geocentricSun(time), geocentricDirection(body, time))
+}
+
 // Planetary Illuminated Fraction: from the phase angle (Meeus).
 function planetaryIlluminatedFraction() {
 	console.info('Venus illuminated fraction:', Meeus.illuminated(planetPhaseAngle(venus)))
@@ -716,41 +723,51 @@ function planetaryApparentMotion() {
 	console.info('Mars daily motion ΔRA, ΔDEC (arcsec/day):', toArcsec(eraAnpm(b[0] - a[0])), toArcsec(b[1] - a[1]))
 }
 
-// Planetary Stationary Point.
-// TODO(almanac): no event finder. A stationary point is where the apparent RA rate
-// changes sign; it can be bracketed by sampling the daily RA motion (above) over the
-// synodic window and root-finding with brentRoot. Sketched here as a coarse scan.
+// Planetary Stationary Point: the apparent geocentric RA rate changes sign. The daily
+// RA change (wrap-safe via eraAnpm) is scanned over the next ~14 months and the sign
+// changes are refined with searchRoots.
 function planetaryStationaryPoint() {
-	console.info('Planetary stationary point: detect a sign change in daily RA motion and refine with brentRoot.')
+	const half = 0.5 // central-difference half-step (days)
+	const raRate = (time: Time) => {
+		const before = vectorToEquatorial(geocentricDirection(mars, timeShift(time, -half)))[0]
+		const after = vectorToEquatorial(geocentricDirection(mars, timeShift(time, half)))[0]
+		return eraAnpm(after - before)
+	}
+	const stationary = searchRoots(raRate, NOW, timeShift(NOW, 420), { step: 5 })
+	console.info('Mars stationary points (local):', stationary.length > 0 ? stationary.map((t) => formatTemporal(temporalFromTime(utc(t)))).join(', ') : 'none in the next 420 days')
 }
 
-// Planetary Greatest Elongation.
-// TODO(almanac): no event finder. Maximize planetaryElongation() over the synodic
-// period (e.g. brentMinimize on the negated elongation) for Mercury/Venus.
+// Planetary Greatest Elongation: the maxima of the Sun-Earth-planet elongation over a
+// synodic period, found with searchExtrema (for the inner planets).
 function planetaryGreatestElongation() {
-	console.info('Planetary greatest elongation: maximize elongation over the synodic period with brentMinimize.')
+	const maxima = searchExtrema((time) => elongationAt(venus, time), NOW, timeShift(NOW, 584), { step: 5 }).filter((e) => e.kind === 'maximum')
+	console.info('Venus greatest elongations:', maxima.map((e) => `${toDeg(e.value).toFixed(1)}deg @ ${formatTemporal(temporalFromTime(utc(e.time)))}`).join('; ') || 'none in the next synodic period')
 }
 
-// Planetary Opposition / Conjunction.
-// TODO(almanac): no event finder. Opposition = elongation 180deg (outer planets),
-// conjunction = elongation 0deg; bracket the elongation extremes and root-find.
+// Planetary Opposition / Conjunction: opposition is the elongation maximum (~180deg)
+// for an outer planet, conjunction its minimum; both are extrema of the elongation.
 function planetaryOpposition() {
-	console.info('Planetary opposition: root-find elongation - PI over the synodic period.')
+	const opposition = searchExtrema((time) => elongationAt(mars, time), NOW, timeShift(NOW, 800), { step: 5 }).find((e) => e.kind === 'maximum')
+	console.info('Mars opposition (local):', opposition ? `${formatTemporal(temporalFromTime(utc(opposition.time)))} (elongation ${toDeg(opposition.value).toFixed(1)}deg)` : 'none in the next synodic period')
 }
 
 function planetaryConjunction() {
-	console.info('Planetary conjunction: root-find elongation = 0 over the synodic period.')
+	const conjunction = searchExtrema((time) => elongationAt(mars, time), NOW, timeShift(NOW, 800), { step: 5 }).find((e) => e.kind === 'minimum')
+	console.info('Mars conjunction (local):', conjunction ? `${formatTemporal(temporalFromTime(utc(conjunction.time)))} (elongation ${toDeg(conjunction.value).toFixed(1)}deg)` : 'none in the next synodic period')
 }
 
-// Inferior / Superior Conjunction (inner planets).
-// TODO(almanac): no event finder. Distinguish by whether the planet is nearer than
-// the Sun (inferior) or beyond it (superior) at conjunction.
+// Inferior / Superior Conjunction (inner planets): the elongation minima, classified by
+// whether the planet is nearer than the Sun (inferior) or beyond it (superior).
 function inferiorConjunction() {
-	console.info('Inferior conjunction: conjunction with the planet nearer than the Sun (geocentric distance < 1 AU).')
+	const minima = searchExtrema((time) => elongationAt(venus, time), NOW, timeShift(NOW, 584), { step: 5 }).filter((e) => e.kind === 'minimum')
+	const inferior = minima.find((e) => vectorDistance(geocentricDirection(venus, e.time)) < 1)
+	console.info('Venus inferior conjunction (local):', inferior ? formatTemporal(temporalFromTime(utc(inferior.time))) : 'none in the next synodic period')
 }
 
 function superiorConjunction() {
-	console.info('Superior conjunction: conjunction with the planet beyond the Sun.')
+	const minima = searchExtrema((time) => elongationAt(venus, time), NOW, timeShift(NOW, 584), { step: 5 }).filter((e) => e.kind === 'minimum')
+	const superior = minima.find((e) => vectorDistance(geocentricDirection(venus, e.time)) > 1)
+	console.info('Venus superior conjunction (local):', superior ? formatTemporal(temporalFromTime(utc(superior.time))) : 'none in the next synodic period')
 }
 
 // Perihelion and Aphelion: osculating apsis distances from the heliocentric state.
@@ -804,9 +821,6 @@ function jupiterGreatRedSpotTransit() {
 
 // ##### Sun and Moon helpers #####
 
-// Standard gravitational parameter of the Earth, AU^3/day^2 (for lunar-orbit geometry).
-const MU_EARTH = 8.997011e-10
-
 // Geocentric direction toward the Sun (AU).
 function geocentricSun(time: Time = NOW) {
 	return vecMinus(sun(time)[0], earth(time)[0])
@@ -859,14 +873,11 @@ function solarHourAngle() {
 	console.info('Sun hour angle (hours):', toHour(ha))
 }
 
-// Solar Noon: instant of the Sun's upper transit (HA = 0), approximated from the
-// equation of time and the observer's longitude.
-// TODO(almanac): no packaged transit finder; this inverts EoT + longitude directly.
+// Solar Noon: instant of the Sun's upper transit (HA = 0), found as the altitude
+// maximum by the rise/transit/set finder.
 function solarNoon() {
-	const alpha = sunEquatorial()[0]
-	const eot = normalizePI(greenwichApparentSiderealTime(NOW) - alpha - utc(NOW).fraction * TAU)
-	const noonUtHours = 12 - (toDeg(eot) * 4) / 60 - toDeg(SITE.longitude) / 15
-	console.info('Approx. local solar noon (UT hours):', noonUtHours)
+	const transit = riseTransitSet(geocentricSun, SITE, NOW, { horizon: SUN_HORIZON }).transit
+	console.info('Solar noon (local):', transit ? formatTemporal(temporalFromTime(utc(transit))) : 'no transit in the window')
 }
 
 // Solar Disk Orientation (P, B0, L0).
@@ -906,15 +917,14 @@ function solarShadowDirection() {
 	console.info('Shadow direction azimuth (deg):', toDeg(normalizeAngle(az + PI)))
 }
 
-// Earth Perihelion and Aphelion: osculating apsis distances of the Earth's orbit.
-// TODO(almanac): no date finder for the Earth's perihelion/aphelion passages; the
-// osculating distances follow from the heliocentric state. season() covers the
-// equinoxes/solstices but not the apsides.
+// Earth Perihelion and Aphelion: the extrema of the Earth-Sun distance over the next
+// year. The distance minimum is perihelion, the maximum is aphelion.
 function earthPerihelionAndAphelion() {
-	const [bp, bv] = earth(NOW)
-	const [sp, sv] = sun(NOW)
-	const orbit = new KeplerOrbit(vecMinus(bp, sp), vecMinus(bv, sv), NOW, GM_SUN_PITJEVA_2005)
-	console.info('Earth perihelion/aphelion (AU):', orbit.periapsisDistance, orbit.apoapsisDistance)
+	const helioDistance = (time: Time) => vecLength(vecMinus(earth(time)[0], sun(time)[0]))
+	for (const e of searchExtrema(helioDistance, NOW, timeShift(NOW, 366), { step: 5 })) {
+		const label = e.kind === 'minimum' ? 'perihelion' : 'aphelion'
+		console.info(`Earth ${label} (local):`, formatTemporal(temporalFromTime(utc(e.time))), 'distance (AU):', e.value.toFixed(6))
+	}
 }
 
 // Equinox and Solstice Times.
@@ -1036,13 +1046,16 @@ function lunarSubObserverPoint() {
 	console.info('Lunar sub-observer point: not implemented; needs the lunar orientation model.')
 }
 
-// Lunar Ascending and Descending Nodes: node longitude of the osculating lunar orbit.
-// TODO(almanac): no node-passage date finder; the instantaneous node longitude
-// follows from the geocentric lunar state (independent of mu).
+// Lunar Ascending and Descending Nodes: a node passage is where the Moon's geocentric
+// ecliptic latitude crosses zero; ascending when the latitude is increasing.
 function lunarAscendingAndDescendingNodes() {
-	const [p, v] = moonGeocentric(NOW)
-	const orbit = new KeplerOrbit(p, v, NOW, MU_EARTH)
-	console.info('Lunar ascending node longitude (deg):', toDeg(normalizeAngle(orbit.longitudeOfAscendingNode)))
+	const eclipticLatitude = (time: Time) => {
+		const eq = vectorToEquatorial(moonGeocentric(time)[0])
+		return equatorialToEcliptic(eq[0], eq[1], time)[1]
+	}
+	const nodes = searchRoots(eclipticLatitude, NOW, timeShift(NOW, 30), { step: 0.5 })
+	const labelled = nodes.map((t) => `${eclipticLatitude(timeShift(t, 0.01)) > eclipticLatitude(t) ? 'ascending' : 'descending'} ${formatTemporal(temporalFromTime(utc(t)))}`)
+	console.info('Lunar node passages (local):', labelled.join('; ') || 'none in the next 30 days')
 }
 
 // Lunar Perigee and Apogee.
@@ -1078,27 +1091,23 @@ function crescentMoonVisibility() {
 
 // ##### Visibility and Almanac Events #####
 
-// Object Rise / Set Time.
-// TODO(almanac): the library has no rise/set/transit event finder. We compute the
-// geometric semidiurnal arc (hour angle at altitude 0) and express rise/set as
-// local sidereal times; converting LST to civil UT needs sidereal-time inversion
-// (iterate localSiderealTime). A `riseTransitSet(target, time, location)` helper
-// should be added under observation/.
+// Object Rise / Set Time: the standard-horizon crossings from the rise/transit/set
+// finder, reported as civil UTC instants.
 function objectRiseTime() {
-	const h0 = hourAngleAtAltitude(SIRIUS_DEC, SITE.latitude, 0)
-	if (h0 === null) return console.info('Object never crosses the horizon (circumpolar or never rises).')
-	console.info('Rise LST:', formatHMS(normalizeAngle(SIRIUS_RA - h0)))
+	const rise = riseTransitSet(() => SIRIUS_ICRF, SITE, NOW, { horizon: STANDARD_HORIZON }).rise
+	console.info('Sirius rise (local):', rise ? formatTemporal(temporalFromTime(utc(rise))) : 'does not rise in the window')
 }
 
 function objectSetTime() {
-	const h0 = hourAngleAtAltitude(SIRIUS_DEC, SITE.latitude, 0)
-	if (h0 === null) return console.info('Object never crosses the horizon.')
-	console.info('Set LST:', formatHMS(normalizeAngle(SIRIUS_RA + h0)))
+	const set = riseTransitSet(() => SIRIUS_ICRF, SITE, NOW, { horizon: STANDARD_HORIZON }).set
+	console.info('Sirius set (local):', set ? formatTemporal(temporalFromTime(utc(set))) : 'does not set in the window')
 }
 
-// Object Upper / Lower Transit: meridian crossings (HA = 0 and HA = 12h).
+// Object Upper / Lower Transit: the upper culmination from the finder; the lower
+// transit stays expressed as a local sidereal time (HA = 12h).
 function objectUpperTransit() {
-	console.info('Upper transit at LST:', formatHMS(normalizeAngle(SIRIUS_RA)))
+	const transit = riseTransitSet(() => SIRIUS_ICRF, SITE, NOW, { horizon: STANDARD_HORIZON }).transit
+	console.info('Sirius upper transit (local):', transit ? formatTemporal(temporalFromTime(utc(transit))) : 'no transit in the window')
 }
 
 function objectLowerTransit() {
@@ -1110,12 +1119,13 @@ function objectMaximumAltitude() {
 	console.info('Maximum altitude (deg):', toDeg(altitudeAtTransit(SITE.latitude, SIRIUS_DEC)))
 }
 
-// Object Visibility Intervals.
-// TODO(almanac): no interval engine; build it by sampling altitude over the night
-// and bracketing the up/down crossings with the hour-angle helper above.
+// Object Visibility Intervals: the above-horizon duration between rise and set.
 function objectVisibilityIntervals() {
-	const h0 = hourAngleAtAltitude(SIRIUS_DEC, SITE.latitude, 0)
-	console.info('Time above horizon per day (hours):', h0 === null ? 'circumpolar/never' : (2 * toHour(h0)).toFixed(2))
+	const rts = riseTransitSet(() => SIRIUS_ICRF, SITE, NOW, { horizon: STANDARD_HORIZON })
+	if (rts.alwaysUp) return console.info('Sirius is circumpolar (above the horizon all day).')
+	if (rts.alwaysDown) return console.info('Sirius never rises.')
+	if (rts.rise && rts.set) console.info('Sirius time above horizon (hours):', (timeSubtract(tt(rts.set), tt(rts.rise)) * 24).toFixed(2))
+	else console.info('Sirius rise/set straddles the window boundary.')
 }
 
 // Circumpolar Classification: always-up, always-down, or rising/setting.
@@ -1146,49 +1156,51 @@ function airmassTimeSeries() {
 	console.info('Airmass at HA -3h..+3h:', series)
 }
 
-// Astronomical / Nautical / Civil Twilight: Sun at -18deg, -12deg, -6deg.
-function twilightAt(depressionDeg: number) {
-	const eq = sunEquatorial()
-	const h0 = hourAngleAtAltitude(eq[1], SITE.latitude, deg(-depressionDeg))
-	return h0 === null ? null : normalizeAngle(eq[0] + h0)
+// Astronomical / Nautical / Civil Twilight: the Sun crossing -18deg, -12deg, -6deg.
+// The rising crossing is dawn, the setting crossing is dusk.
+function twilightReport(label: string, horizon: Angle) {
+	const rts = riseTransitSet(geocentricSun, SITE, NOW, { horizon })
+	const dawn = rts.rise ? formatTemporal(temporalFromTime(utc(rts.rise))) : 'none'
+	const dusk = rts.set ? formatTemporal(temporalFromTime(utc(rts.set))) : 'none'
+	console.info(`${label} dawn/dusk (local):`, dawn, '/', dusk)
 }
 
 function astronomicalTwilight() {
-	const lst = twilightAt(18)
-	console.info('Astronomical dusk (Sun at -18deg) LST:', lst === null ? 'does not occur' : formatHMS(lst))
+	twilightReport('Astronomical', ASTRONOMICAL_TWILIGHT)
 }
 
 function nauticalTwilight() {
-	const lst = twilightAt(12)
-	console.info('Nautical dusk (Sun at -12deg) LST:', lst === null ? 'does not occur' : formatHMS(lst))
+	twilightReport('Nautical', NAUTICAL_TWILIGHT)
 }
 
 function civilTwilight() {
-	const lst = twilightAt(6)
-	console.info('Civil dusk (Sun at -6deg) LST:', lst === null ? 'does not occur' : formatHMS(lst))
+	twilightReport('Civil', CIVIL_TWILIGHT)
 }
 
-// Night Darkness Intervals.
-// TODO(almanac): the fully-dark interval is between the end of astronomical dusk
-// and the start of astronomical dawn; needs the twilight crossings plus the Moon
-// being down. Compose from twilightAt() and a moon rise/set finder (missing).
+// Night Darkness Intervals: the fully-dark span between this evening's astronomical
+// dusk and the next morning's astronomical dawn.
 function nightDarknessIntervals() {
-	console.info('Night darkness intervals: compose from astronomical twilight crossings; needs a rise/set finder.')
+	const dusk = riseTransitSet(geocentricSun, SITE, NOW, { horizon: ASTRONOMICAL_TWILIGHT }).set
+	const dawn = riseTransitSet(geocentricSun, SITE, timeShift(NOW, 1), { horizon: ASTRONOMICAL_TWILIGHT }).rise
+	if (dusk && dawn) console.info('Astronomical night (local):', formatTemporal(temporalFromTime(utc(dusk))), '->', formatTemporal(temporalFromTime(utc(dawn))), `(${(timeSubtract(tt(dawn), tt(dusk)) * 24).toFixed(2)} h)`)
+	else console.info('No astronomical night in the window (twilight all night).')
 }
 
-// Moonless Observation Windows.
-// TODO(almanac): intersection of "Sun below -18deg" with "Moon below the horizon";
-// needs rise/set finders for both bodies. Not implemented.
+// Moonless Observation Windows: the dark window intersected with the Moon-down
+// interval. Both rise/set pairs come from the same finder.
 function moonlessObservationWindows() {
-	console.info('Moonless observation windows: intersect dark-sky window with Moon-down interval; needs rise/set finders.')
+	const dusk = riseTransitSet(geocentricSun, SITE, NOW, { horizon: ASTRONOMICAL_TWILIGHT }).set
+	const moon = riseTransitSet((time) => moonGeocentric(time)[0], SITE, NOW, { horizon: STANDARD_HORIZON })
+	const moonSet = moon.set ? formatTemporal(temporalFromTime(utc(moon.set))) : moon.alwaysUp ? 'Moon up all day' : 'Moon down all day'
+	console.info('Astronomical dusk (local):', dusk ? formatTemporal(temporalFromTime(utc(dusk))) : 'none', '; Moon set (local):', moonSet)
 }
 
-// Target Above Altitude Window.
-// TODO(almanac): the window during which a target stays above a chosen altitude is
-// bounded by hourAngleAtAltitude(dec, lat, hMin); shown here as its duration.
+// Target Above Altitude Window: the time a target stays above a chosen altitude,
+// found by using that altitude as the rise/set horizon.
 function targetAboveAltitudeWindow() {
-	const h = hourAngleAtAltitude(SIRIUS_DEC, SITE.latitude, deg(30))
-	console.info('Time above 30deg per day (hours):', h === null ? 'never/always' : (2 * toHour(h)).toFixed(2))
+	const rts = riseTransitSet(() => SIRIUS_ICRF, SITE, NOW, { horizon: deg(30) })
+	if (rts.rise && rts.set) console.info('Sirius time above 30deg (hours):', (timeSubtract(tt(rts.set), tt(rts.rise)) * 24).toFixed(2))
+	else console.info('Sirius above 30deg:', rts.alwaysUp ? 'all day' : 'never')
 }
 
 // Target Meridian Window.
@@ -1212,12 +1224,12 @@ function targetSunSeparationWindow() {
 	console.info('Current target-Sun separation (deg):', toDeg(sep))
 }
 
-// Target Airmass Window.
-// TODO(almanac): the time a target spends below an airmass limit follows from the
-// altitude threshold (airmass 2 ~ altitude 30deg); reuse targetAboveAltitudeWindow.
+// Target Airmass Window: the time a target spends below an airmass limit follows from
+// the matching altitude threshold (airmass ~2 at altitude 30deg).
 function targetAirmassWindow() {
-	const h = hourAngleAtAltitude(SIRIUS_DEC, SITE.latitude, deg(30))
-	console.info('Time below airmass ~2 per day (hours):', h === null ? 'never/always' : (2 * toHour(h)).toFixed(2))
+	const rts = riseTransitSet(() => SIRIUS_ICRF, SITE, NOW, { horizon: deg(30) })
+	if (rts.rise && rts.set) console.info('Sirius time below airmass ~2 (hours):', (timeSubtract(tt(rts.set), tt(rts.rise)) * 24).toFixed(2))
+	else console.info('Sirius below airmass ~2:', rts.alwaysUp ? 'all day' : 'never')
 }
 
 // Heliacal Rising / Setting, Acronychal Rising, Cosmical Setting.
