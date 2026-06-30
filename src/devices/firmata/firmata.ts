@@ -137,10 +137,10 @@ export const DEFAULT_ONE_WIRE_COMMAND_OPTIONS: OneWireCommandOptions = {
 
 // Maps a raw protocol mode byte to a PinMode, folding the ignore sentinel and out-of-range values to
 // IGNORED/UNSUPPORTED respectively.
-function resolvePinMode(mode: number) {
+function resolvePinMode(mode: number): PinMode {
 	if (mode === PIN_MODE_IGNORE) return PinMode.IGNORED
 	else if (mode >= TOTAL_PIN_MODES) return PinMode.UNSUPPORTED
-	else return mode as PinMode
+	else return mode
 }
 
 // Thin adapter feeding an incoming byte buffer into the parser FSM one byte at a time.

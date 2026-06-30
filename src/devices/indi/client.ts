@@ -1,6 +1,6 @@
 import type { Client } from './device'
 // oxfmt-ignore
-import type { DefBlob, DefBlobVector, DefLight, DefLightVector, DefNumber, DefNumberVector, DefSwitch, DefSwitchVector, DefText, DefTextVector, DefVector, DelProperty, EnableBlob, GetProperties, Message, NewNumberVector, NewSwitchVector, NewTextVector, OneBlob, OneLight, OneNumber, OneSwitch, OneText, SetBlobVector, SetLightVector, SetNumberVector, SetSwitchVector, SetTextVector, SetVector, SwitchRule, VectorType } from './types'
+import type { DefBlob, DefBlobVector, DefLight, DefLightVector, DefNumber, DefNumberVector, DefSwitch, DefSwitchVector, DefText, DefTextVector, DefVector, DelProperty, EnableBlob, GetProperties, Message, NewNumberVector, NewSwitchVector, NewTextVector, OneBlob, OneLight, OneNumber, OneSwitch, OneText, PropertyState, SetBlobVector, SetLightVector, SetNumberVector, SetSwitchVector, SetTextVector, SetVector, SwitchRule, VectorType } from './types'
 import { SimpleXmlParser, type XmlNode } from '../../io/xml'
 
 // INDI protocol client over a TCP socket: parses the streamed XML messages into typed property vectors,
@@ -224,13 +224,13 @@ export class IndiClient implements Client {
 		for (const child of node.children) {
 			switch (child.name) {
 				case 'oneText': {
-					const element = { name: child.attributes.name, value: child.text } as OneText
+					const element: OneText = { name: child.attributes.name, value: child.text }
 					;(message as SetTextVector).elements[element.name] = element
 					break
 				}
 				case 'oneNumber': {
 					const a = child.attributes
-					const element = { name: a.name, value: +child.text } as OneNumber
+					const element: OneNumber = { name: a.name, value: +child.text }
 					// INDI's IUUpdateMinMax updates a number's range through a set vector; keep it.
 					if (a.min !== undefined) element.min = +a.min
 					if (a.max !== undefined) element.max = +a.max
@@ -239,12 +239,12 @@ export class IndiClient implements Client {
 					break
 				}
 				case 'oneSwitch': {
-					const element = { name: child.attributes.name, value: child.text === 'On' } as OneSwitch
+					const element: OneSwitch = { name: child.attributes.name, value: child.text === 'On' }
 					;(message as SetSwitchVector).elements[element.name] = element
 					break
 				}
 				case 'oneLight': {
-					const element = { name: child.attributes.name, value: child.text } as OneLight
+					const element: OneLight = { name: child.attributes.name, value: child.text as PropertyState }
 					;(message as SetLightVector).elements[element.name] = element
 					break
 				}

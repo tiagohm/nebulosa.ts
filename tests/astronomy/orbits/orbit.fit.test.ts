@@ -111,7 +111,7 @@ test('uses the short residual across the RA wrap boundary', () => {
 	const orbit = new KeplerOrbit(p, v, EPOCH, undefined, IDENTITY_ROTATION)
 	const observerPosition: Vec3 = [0, 0, 0]
 	const model = modelRaDec(orbit, EPOCH, observerPosition)
-	const observations = Array.from({ length: 3 }, () => <OrbitFitObservation>{ time: EPOCH, rightAscension: normalizeAngle(model.rightAscension - 3e-6), declination: model.declination, raErr: ASEC2RAD, decErr: ASEC2RAD, observerPosition })
+	const observations = Array.from({ length: 3 }, () => ({ time: EPOCH, rightAscension: normalizeAngle(model.rightAscension - 3e-6), declination: model.declination, raErr: ASEC2RAD, decErr: ASEC2RAD, observerPosition }))
 
 	const result = fitOrbit(observations, EPOCH, p, v, { maxIterations: 0, computeCovariance: false })
 
@@ -157,7 +157,7 @@ test('rejects fewer than three observations', () => {
 })
 
 test('rejects an invalid topocentric model gracefully', () => {
-	const observations = Array.from({ length: 3 }, () => <OrbitFitObservation>{ time: EPOCH, rightAscension: 0, declination: 0, observerPosition: TRUE_ORBIT.position })
+	const observations = Array.from({ length: 3 }, () => ({ time: EPOCH, rightAscension: 0, declination: 0, observerPosition: TRUE_ORBIT.position }))
 
 	expect(() => fitOrbit(observations, EPOCH, TRUE_ORBIT.position, TRUE_ORBIT.velocity)).toThrow('initial orbit state cannot be evaluated')
 })

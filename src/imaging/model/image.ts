@@ -91,7 +91,7 @@ export function readImageFromJpeg(buffer: Buffer, raw: ImageRawType | 32 | 64 | 
 	for (let i = 0; i < pixelCount; i++) raw[i] = data[i] / 255
 
 	const header = { BITPIX: 8, NAXIS: 2, NAXIS1: width, NAXIS2: height }
-	return { header, raw, metadata: { width, height, channels: 1, pixelCount, pixelSizeInBytes: 1, strideInBytes: width, stride: width, bitpix: 8, bayer: undefined } } satisfies Image as Image
+	return { header, raw, metadata: { width, height, channels: 1, pixelCount, pixelSizeInBytes: 1, strideInBytes: width, stride: width, bitpix: 8, bayer: undefined } }
 }
 
 // Reads an image from a seekable source, auto-detecting FITS, then XISF, then JPEG.
