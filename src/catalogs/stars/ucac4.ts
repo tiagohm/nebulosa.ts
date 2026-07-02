@@ -3,8 +3,8 @@ import fs, { type FileHandle } from 'fs/promises'
 import { join } from 'path'
 import { DEG2RAD, PIOVERTWO } from '../../core/constants'
 import { NumberComparator } from '../../core/util'
-import { type Angle, mas } from '../../math/units/angle'
-import { BaseStarCatalog, type NormalizedStarCatalogQuery, type StarCatalogEntry, type Vertex } from './catalog'
+import { type Angle, mas, toMas } from '../../math/units/angle'
+import { BaseStarCatalog, type NormalizedStarCatalogQuery, type StarCatalogEntry, type StarCatalogRaDecBox, type Vertex } from './catalog'
 
 // https://cdsarc.cds.unistra.fr/ftp/I/322A/UCAC4/
 // https://irsa.ipac.caltech.edu/data/USNO/UCAC4/ucac4.html
@@ -52,6 +52,13 @@ const MAS_PER_DEG = 3600000
 const GEOMETRY_EPSILON = 1e-12
 // Full circle expressed in milliarcseconds; bounds the stored RA.
 const FULL_CIRCLE_MAS = 360 * MAS_PER_DEG
+// Coarse preselection slack, in milliarcseconds. The raw RA/Dec prefilter is intentionally permissive by
+// this margin so it can never drop a star that the exact geometry test would accept; survivors are always
+// re-checked exactly by BaseStarCatalog. One mas is far below UCAC4's positional resolution.
+const UCAC4_PRESELECTION_TOLERANCE_MAS = 1
+// Offset-encoded byte marking a missing proper-motion error. Error bytes are stored as value-128, so the
+// decoded no-data sentinel (255) corresponds to a raw stored byte of 127.
+const UCAC4_PM_ERROR_NO_DATA_RAW = UCAC4_PM_NO_DATA - 128
 // Whether the host CPU is little-endian; enables zero-copy index views.
 const IS_LITTLE_ENDIAN = new Uint8Array(new Uint32Array([1]).buffer)[0] === 1
 
@@ -117,7 +124,9 @@ export async function openUcac4Catalog(source: string) {
 // Reads native UCAC4 zone files lazily and exposes them through the generic catalog contract.
 export class Ucac4Catalog extends BaseStarCatalog<Ucac4CatalogEntry> {
 	readonly #zonePaths = new Map<number, string | null>()
-	readonly #zoneHandles = new Map<number, FileHandle>()
+	// Cached open handles keyed by zone. Stores the in-flight open promise so concurrent reads of the same
+	// zone share one descriptor; a failed open is evicted so it is not cached and can be retried.
+	readonly #zoneHandles = new Map<number, Promise<FileHandle>>()
 	readonly #zoneRecordCounts = new Int32Array(UCAC4_ZONE_COUNT)
 
 	#root = ''
@@ -169,7 +178,11 @@ export class Ucac4Catalog extends BaseStarCatalog<Ucac4CatalogEntry> {
 		this.#opened = false
 
 		for (const handle of handles) {
-			await handle.close()
+			try {
+				await (await handle).close()
+			} catch {
+				// A handle whose open rejected has nothing to close.
+			}
 		}
 	}
 
@@ -206,47 +219,26 @@ export class Ucac4Catalog extends BaseStarCatalog<Ucac4CatalogEntry> {
 		return parseUcac4Record(buffer, zone, recordNumber)
 	}
 
-	// Streams candidate entries from the zone files touched by the coarse preselection boxes.
+	// Streams candidate entries from the zone files touched by the coarse preselection boxes. Records are
+	// prefiltered against the preselection boxes on their raw milliarcsecond coordinates, so a full record
+	// is parsed and allocated only for candidates that survive the coarse RA/Dec test.
 	protected async *streamCandidateEntries(query: NormalizedStarCatalogQuery) {
 		this.#assertOpen()
 
-		const zoneNumbers = touchedZones(query)
+		const masBoxes = toMasBoxes(query.preselectionBoxes)
+		// One reusable read block per query. It never escapes this query and ranges are consumed serially,
+		// so a single buffer is safe and avoids a ~40 KiB allocation per range.
+		const block = Buffer.allocUnsafe(UCAC4_BLOCK_RECORD_COUNT * UCAC4_RECORD_SIZE)
 
-		for (const zone of zoneNumbers) {
+		for (const zone of touchedZones(query)) {
 			const ranges = await this.#zoneRangesForQuery(zone, query)
 
 			if (ranges.length === 0) continue
 
 			for (const [startRecord, endRecord] of ranges) {
-				yield* this.#streamZoneRange(zone, startRecord, endRecord)
+				yield* this.#streamZoneRange(zone, startRecord, endRecord, block, masBoxes)
 			}
 		}
-	}
-
-	// Estimates candidate counts using the native index when available.
-	protected async estimateCandidateCount(query: NormalizedStarCatalogQuery): Promise<number | undefined> {
-		this.#assertOpen()
-
-		let total = 0
-
-		for (const zone of touchedZones(query)) {
-			const recordCount = await this.#ensureZoneRecordCount(zone)
-			if (recordCount <= 0) continue
-
-			if (!this.#index) {
-				if (zoneIntersectsQuery(zone, query)) {
-					total += recordCount
-				}
-
-				continue
-			}
-
-			for (const [startRecord, endRecord] of await this.#zoneRangesForQuery(zone, query, recordCount)) {
-				total += endRecord - startRecord + 1
-			}
-		}
-
-		return total
 	}
 
 	// Ensures the catalog has been opened before any I/O starts.
@@ -378,27 +370,39 @@ export class Ucac4Catalog extends BaseStarCatalog<Ucac4CatalogEntry> {
 		return count
 	}
 
-	// Opens a zone file lazily and caches the handle for future reads.
-	async #openZoneHandle(zone: number): Promise<FileHandle> {
+	// Opens a zone file lazily and caches the in-flight open promise so concurrent reads of the same zone
+	// share one descriptor instead of racing to open (and leak) duplicates. A failed open is evicted.
+	#openZoneHandle(zone: number): Promise<FileHandle> {
 		const cached = this.#zoneHandles.get(zone)
-		if (cached) return cached
+		if (cached !== undefined) return cached
 
+		const promise = this.#openZoneHandleUncached(zone)
+		this.#zoneHandles.set(zone, promise)
+		promise.catch(() => {
+			if (this.#zoneHandles.get(zone) === promise) {
+				this.#zoneHandles.delete(zone)
+			}
+		})
+
+		return promise
+	}
+
+	// Resolves a zone path and opens its file handle for reading.
+	async #openZoneHandleUncached(zone: number): Promise<FileHandle> {
 		const zonePath = await this.#resolveZonePath(zone)
 		if (!zonePath) {
 			throw new Error(`missing UCAC4 zone file for zone ${zone}`)
 		}
 
 		try {
-			const handle = await fs.open(zonePath, 'r')
-			this.#zoneHandles.set(zone, handle)
-			return handle
+			return await fs.open(zonePath, 'r')
 		} catch (cause) {
 			throw new Error(`unable to open UCAC4 zone file: ${zonePath}`, { cause })
 		}
 	}
 
 	// Computes the candidate record ranges touched by a query inside a single zone.
-	async #zoneRangesForQuery(zone: number, query: NormalizedStarCatalogQuery, knownRecordCount?: number): Promise<readonly Vertex[]> {
+	async #zoneRangesForQuery(zone: number, query: NormalizedStarCatalogQuery): Promise<readonly Vertex[]> {
 		const zoneMinDec = -PIOVERTWO + (zone - 1) * UCAC4_ZONE_HEIGHT
 		const zoneMaxDec = zone === UCAC4_ZONE_COUNT ? PIOVERTWO : zoneMinDec + UCAC4_ZONE_HEIGHT
 		const index = this.#index
@@ -445,7 +449,7 @@ export class Ucac4Catalog extends BaseStarCatalog<Ucac4CatalogEntry> {
 
 		if (!intersects || (index && ranges.length === 0)) return []
 
-		const recordCount = knownRecordCount ?? (await this.#ensureZoneRecordCount(zone))
+		const recordCount = await this.#ensureZoneRecordCount(zone)
 		if (recordCount <= 0) return []
 
 		if (!index) {
@@ -455,10 +459,11 @@ export class Ucac4Catalog extends BaseStarCatalog<Ucac4CatalogEntry> {
 		return mergeRanges(ranges, recordCount)
 	}
 
-	// Streams a contiguous zone-record range in fixed-size blocks.
-	async *#streamZoneRange(zone: number, startRecord: number, endRecord: number) {
+	// Streams a contiguous zone-record range in fixed-size blocks, reusing the caller's read buffer. Each
+	// record's raw RA/south-pole-distance is validated and coarse-tested against the preselection boxes
+	// before a full record is parsed, so rejected records cost only two int reads and no allocation.
+	async *#streamZoneRange(zone: number, startRecord: number, endRecord: number, block: Buffer, masBoxes: readonly Ucac4MasBox[]) {
 		const handle = await this.#openZoneHandle(zone)
-		const block = Buffer.allocUnsafe(UCAC4_BLOCK_RECORD_COUNT * UCAC4_RECORD_SIZE)
 
 		while (startRecord <= endRecord) {
 			const batchCount = Math.min(UCAC4_BLOCK_RECORD_COUNT, endRecord - startRecord + 1)
@@ -477,7 +482,14 @@ export class Ucac4Catalog extends BaseStarCatalog<Ucac4CatalogEntry> {
 			}
 
 			for (let offset = 0; offset < bytesRead; offset += UCAC4_RECORD_SIZE) {
-				yield parseUcac4Record(block, zone, startRecord, offset)
+				const raMas = block.readInt32LE(offset)
+				const southPoleDistanceMas = block.readInt32LE(offset + 4)
+				validateUcac4Coordinates(raMas, southPoleDistanceMas, zone, startRecord)
+
+				if (matchesMasBoxes(raMas, southPoleDistanceMas, masBoxes)) {
+					yield parseUcac4Record(block, zone, startRecord, offset)
+				}
+
 				startRecord++
 			}
 		}
@@ -488,23 +500,26 @@ export class Ucac4Catalog extends BaseStarCatalog<Ucac4CatalogEntry> {
 function parseUcac4Record(buffer: Buffer, zone: number, recordNumber: number, offset: number = 0): Ucac4CatalogEntry {
 	const raMas = buffer.readInt32LE(offset)
 	const southPoleDistanceMas = buffer.readInt32LE(offset + 4)
-
-	if (raMas < 0 || raMas >= FULL_CIRCLE_MAS || southPoleDistanceMas < 0 || southPoleDistanceMas > 2 * UCAC4_SPD_OFFSET_MAS) {
-		throw new Error(`invalid UCAC4 coordinates in zone ${zone}, record ${recordNumber}`)
-	}
+	validateUcac4Coordinates(raMas, southPoleDistanceMas, zone, recordNumber)
 
 	// const mergedCatalogFlags = decodeMergedCatalogFlags(buffer.readInt32LE(offset + 62))
 	const declination = mas(southPoleDistanceMas - UCAC4_SPD_OFFSET_MAS)
-	const cosDec = Math.cos(declination)
 	const pmRaCosDecMasYrTenth = buffer.readInt16LE(offset + 24)
 	const pmDecMasYrTenth = buffer.readInt16LE(offset + 26)
-	const pmRaErrorMasYr = decodeProperMotionError(decodeOffsetByte(buffer.readInt8(offset + 28)))
-	const pmDecErrorMasYr = decodeProperMotionError(decodeOffsetByte(buffer.readInt8(offset + 29)))
-	const rawPmRaCosDecMasYr = pmRaCosDecMasYrTenth === UCAC4_PM_SENTINEL ? undefined : pmRaCosDecMasYrTenth / 10
-	const rawPmDecMasYr = pmDecMasYrTenth === UCAC4_PM_SENTINEL ? undefined : pmDecMasYrTenth / 10
-	const hasPm = pmRaErrorMasYr !== undefined && pmDecErrorMasYr !== undefined && rawPmRaCosDecMasYr !== undefined && rawPmDecMasYr !== undefined
-	const pmRA = hasPm && Math.abs(cosDec) > 1e-9 ? mas(rawPmRaCosDecMasYr / cosDec) : undefined
-	const pmDEC = hasPm ? mas(rawPmDecMasYr) : undefined
+
+	// Proper motion is present only when both components and both error bytes hold real data. The error
+	// bytes are offset-encoded (value-128), so the raw no-data byte is 127. The errors themselves are not
+	// exposed, so they are never decoded to numbers, and cos(dec) is computed only when it is actually used.
+	const hasPm = pmRaCosDecMasYrTenth !== UCAC4_PM_SENTINEL && pmDecMasYrTenth !== UCAC4_PM_SENTINEL && buffer[offset + 28] !== UCAC4_PM_ERROR_NO_DATA_RAW && buffer[offset + 29] !== UCAC4_PM_ERROR_NO_DATA_RAW
+	let pmRA: Angle | undefined
+	let pmDEC: Angle | undefined
+
+	if (hasPm) {
+		const cosDec = Math.cos(declination)
+		pmRA = Math.abs(cosDec) > 1e-9 ? mas(pmRaCosDecMasYrTenth / 10 / cosDec) : undefined
+		pmDEC = mas(pmDecMasYrTenth / 10)
+	}
+
 	const modelMagnitudeMillimag = buffer.readInt16LE(offset + 8)
 	const apertureMagnitudeMillimag = buffer.readInt16LE(offset + 10)
 	const twoMassMagnitudeMillimagJ = buffer.readInt16LE(offset + 34)
@@ -581,19 +596,48 @@ function pickPrimaryMagnitude(apertureMagnitudeMillimag: number, modelMagnitudeM
 	return undefined
 }
 
-// Decodes an offset-encoded signed byte stored as value-128.
-function decodeOffsetByte(value: number) {
-	return value + 128
+// Validates the packed RA and south-pole distance of a record, throwing on out-of-range coordinates.
+function validateUcac4Coordinates(raMas: number, southPoleDistanceMas: number, zone: number, recordNumber: number) {
+	if (raMas < 0 || raMas >= FULL_CIRCLE_MAS || southPoleDistanceMas < 0 || southPoleDistanceMas > 2 * UCAC4_SPD_OFFSET_MAS) {
+		throw new Error(`invalid UCAC4 coordinates in zone ${zone}, record ${recordNumber}`)
+	}
 }
 
-// Decodes a proper-motion error byte into mas/yr or no-data.
-function decodeProperMotionError(value: number) {
-	if (value === UCAC4_PM_NO_DATA) return undefined
-	if (value === 251) return 27.5
-	if (value === 252) return 32.5
-	if (value === 253) return 37.5
-	if (value === 254) return 45
-	return value / 10
+// A preselection box expressed in the record's native units: RA in milliarcseconds and declination as a
+// south-pole distance in milliarcseconds, matching the packed record fields so the coarse test is integer.
+interface Ucac4MasBox {
+	readonly minRaMas: number
+	readonly maxRaMas: number
+	readonly minSpdMas: number
+	readonly maxSpdMas: number
+}
+
+// Converts the normalized preselection boxes (radians) into native milliarcsecond boxes once per query.
+function toMasBoxes(boxes: readonly StarCatalogRaDecBox[]): Ucac4MasBox[] {
+	const result: Ucac4MasBox[] = []
+
+	for (const box of boxes) {
+		result.push({
+			minRaMas: toMas(box.minRA),
+			maxRaMas: toMas(box.maxRA),
+			minSpdMas: toMas(box.minDEC) + UCAC4_SPD_OFFSET_MAS,
+			maxSpdMas: toMas(box.maxDEC) + UCAC4_SPD_OFFSET_MAS,
+		})
+	}
+
+	return result
+}
+
+// Coarse membership test on native coordinates: true when the record falls inside any preselection box,
+// with a small permissive slack so no star the exact test would accept is dropped.
+function matchesMasBoxes(raMas: number, southPoleDistanceMas: number, boxes: readonly Ucac4MasBox[]) {
+	for (const box of boxes) {
+		if (raMas >= box.minRaMas - UCAC4_PRESELECTION_TOLERANCE_MAS && raMas <= box.maxRaMas + UCAC4_PRESELECTION_TOLERANCE_MAS && southPoleDistanceMas >= box.minSpdMas - UCAC4_PRESELECTION_TOLERANCE_MAS && southPoleDistanceMas <= box.maxSpdMas + UCAC4_PRESELECTION_TOLERANCE_MAS) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // Decodes a millimag field into magnitudes while preserving missing sentinels.
@@ -658,18 +702,6 @@ function touchedZones(query: NormalizedStarCatalogQuery) {
 	}
 
 	return [...zones].sort(NumberComparator)
-}
-
-// Checks whether any part of a zone overlaps the query declination boxes.
-function zoneIntersectsQuery(zone: number, query: NormalizedStarCatalogQuery) {
-	return query.preselectionBoxes.some((box) => zoneIntersectsDecBox(zone, box.minDEC, box.maxDEC))
-}
-
-// Checks whether a zone overlaps a declination interval.
-function zoneIntersectsDecBox(zone: number, minDec: Angle, maxDec: Angle) {
-	const zoneMinDec = -PIOVERTWO + (zone - 1) * UCAC4_ZONE_HEIGHT
-	const zoneMaxDec = zone === UCAC4_ZONE_COUNT ? PIOVERTWO : zoneMinDec + UCAC4_ZONE_HEIGHT
-	return decRangesIntersect(zoneMinDec, zoneMaxDec, minDec, maxDec)
 }
 
 // True when two declination intervals overlap within the geometry tolerance.
