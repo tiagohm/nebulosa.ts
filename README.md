@@ -63,6 +63,8 @@ formatALT(PI) // Format the angle in degrees as +00 00 00.00
 ```ts
 const stars = astapDetectStars(path, options) // Detect stars on image using astap
 const solution = astapPlateSolve(path, options) // Plate solve the image using astap
+const catalog = openAstapCatalog(files, database) // Open the ASTAP .1476 star database (d05/d20/...)
+const region = await findAstap1476Stars(files, database, query) // Read stars from a square field
 ```
 
 ### Asteroid ![](bun.webp) ![](browser.webp)
