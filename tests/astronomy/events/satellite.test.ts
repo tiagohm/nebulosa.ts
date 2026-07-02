@@ -3,11 +3,11 @@ import { equatorial } from '../../../src/astronomy/coordinates/astrometry'
 import { eraS2p } from '../../../src/astronomy/coordinates/erfa/erfa'
 import { linearInterpolator, type EphemerisPoint } from '../../../src/astronomy/ephemeris/interpolation/ephemeris'
 import { earth, sun } from '../../../src/astronomy/ephemeris/models/analytical/vsop87e'
-import { isSatelliteSunlit, satelliteEclipses, satelliteLookAngles, satelliteMagnitude, satellitePasses, satelliteShadowState } from '../../../src/astronomy/events/satellite'
+import { isSatelliteSunlit, satelliteConjunctions, satelliteEclipses, satelliteLookAngles, satelliteMagnitude, satellitePasses, satelliteShadowState } from '../../../src/astronomy/events/satellite'
 import { geodeticLocation } from '../../../src/astronomy/observer/location'
 import { parseTLE, recordFromTLE } from '../../../src/astronomy/orbits/propagation/sgp4'
 import { type Time, Timescale, timeShift, timeSubtract, tt } from '../../../src/astronomy/time/time'
-import { AU_KM, ONE_SECOND } from '../../../src/core/constants'
+import { AU_KM, DAYSEC, ONE_SECOND } from '../../../src/core/constants'
 import { type Vec3, vecAngle, vecLength, vecMinus } from '../../../src/math/linear-algebra/vec3'
 import { clamp } from '../../../src/math/numerical/math'
 import { linearSpline } from '../../../src/math/numerical/spline'
@@ -21,6 +21,11 @@ import { deg, toArcsec, toDeg, type Angle } from '../../../src/math/units/angle'
 const TLE = parseTLE('1 25544U 98067A   20330.54791667  .00016717  00000-0  10270-3 0  9000', '2 25544  51.6442  21.4611 0001363  85.7790 274.3535 15.49180547 25697', 'ISS')
 const ISS = recordFromTLE(TLE)
 const EPOCH = TLE.epoch
+
+// A synthetic co-inclined companion for the conjunction test: the same ISS elements with the ascending
+// node shifted +10 deg, so the two orbital planes cross and the separation dips through two minima per
+// revolution. The pair only exercises the screening geometry; it is not a real close approach.
+const COMPANION = recordFromTLE(parseTLE('1 25545U 98067A   20330.54791667  .00016717  00000-0  10270-3 0  9000', '2 25545  51.6442  31.4611 0001363  85.7790 274.3535 15.49180547 25697', 'COMPANION'))
 
 // São Paulo ground site (geodetic, IERS2010 ellipsoid, sea level).
 const SITE = geodeticLocation(deg(-46.6361), deg(-23.5475), 0)
@@ -189,4 +194,31 @@ test('the penumbra brackets the umbra', () => {
 	expect(minutesAfterEpoch(penumbra[1].entry!)).toBeLessThan(minutesAfterEpoch(umbra[1].entry!))
 	expect(minutesAfterEpoch(penumbra[1].exit!)).toBeGreaterThan(minutesAfterEpoch(umbra[1].exit!))
 	expect(penumbra[1].duration).toBeGreaterThan(umbra[1].duration)
+})
+
+test('conjunction screening finds the separation minima', () => {
+	// Independent Skyfield propagation of both TLEs at 1 s over 100 min finds two separation minima:
+	// +23.183 min at 734.698 km (relative speed 1.33588 km/s) and +69.633 min at 736.167 km.
+	const conjunctions = satelliteConjunctions(ISS, COMPANION, EPOCH, timeShift(EPOCH, 100 / 1440))
+	expect(conjunctions.length).toBe(2)
+
+	const first = conjunctions[0]
+	expect(minutesAfterEpoch(first.time)).toBeCloseTo(23.18, 1)
+	expect(first.distance * AU_KM).toBeCloseTo(734.698, 0)
+	expect((first.relativeSpeed * AU_KM) / DAYSEC).toBeCloseTo(1.336, 2)
+
+	const second = conjunctions[1]
+	expect(minutesAfterEpoch(second.time)).toBeCloseTo(69.63, 1)
+	expect(second.distance * AU_KM).toBeCloseTo(736.167, 0)
+
+	// Conjunctions are chronological, and the first is the global minimum of the window.
+	expect(minutesAfterEpoch(second.time)).toBeGreaterThan(minutesAfterEpoch(first.time))
+	expect(first.distance).toBeLessThan(second.distance)
+})
+
+test('the threshold rejects the more distant approach', () => {
+	// A 735 km ceiling keeps the 734.698 km minimum but drops the 736.167 km one.
+	const conjunctions = satelliteConjunctions(ISS, COMPANION, EPOCH, timeShift(EPOCH, 100 / 1440), { threshold: 735 / AU_KM })
+	expect(conjunctions.length).toBe(1)
+	expect(conjunctions[0].distance * AU_KM).toBeCloseTo(734.698, 0)
 })

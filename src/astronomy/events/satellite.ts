@@ -10,7 +10,7 @@ import { itrs } from '../coordinates/itrs'
 import type { GeographicPosition } from '../observer/location'
 import { sgp4, type SatRec } from '../orbits/propagation/sgp4'
 import { type Time, timeShift, timeSubtract } from '../time/time'
-import { searchRoots, type TimeSearchOptions } from './search'
+import { searchExtrema, searchRoots, type TimeSearchOptions } from './search'
 
 // Ground-station and shadow events for an SGP4 satellite, layered on the SGP4 propagator, the observer
 // transforms and the time-domain event scanner. Two families of events are provided: topocentric passes
@@ -345,4 +345,70 @@ export function satelliteMagnitude(satrec: SatRec, location: GeographicPosition,
 	const illuminated = classifyShadow(satellite, sun) !== 'umbra'
 
 	return { magnitude, phaseAngle, range, illuminated }
+}
+
+// A close approach between two satellites: the time of closest approach and the geometry there.
+export interface SatelliteConjunction {
+	// Instant of closest approach (the local minimum of the inter-satellite range).
+	readonly time: Time
+	// Minimum separation between the two satellites at that instant, in AU.
+	readonly distance: Distance
+	// Relative speed of the two satellites at closest approach, in AU/day; at a true minimum the relative
+	// velocity is perpendicular to the separation, so this is the rate the objects sweep past each other.
+	readonly relativeSpeed: number
+}
+
+// Options for the conjunction screener.
+export interface SatelliteConjunctionOptions extends TimeSearchOptions {
+	// Only report approaches whose minimum separation is at or below this distance (AU). Defaults to
+	// Number.POSITIVE_INFINITY, which returns every separation minimum in the window.
+	readonly threshold?: Distance
+}
+
+// Squared inter-satellite distance is cheaper to sample than the distance and shares its extrema, so the
+// coarse sieve minimizes it; the distance itself is taken only at the refined closest-approach instants.
+function separationSquaredAt(a: SatRec, b: SatRec, time: Time): number {
+	const pa = sgp4(time, a)[0]
+	const pb = sgp4(time, b)[0]
+	const dx = pa[0] - pb[0]
+	const dy = pa[1] - pb[1]
+	const dz = pa[2] - pb[2]
+	return dx * dx + dy * dy + dz * dz
+}
+
+// Screens two satellites for close approaches over a time window.
+//
+// Both objects are propagated with SGP4 in the shared TEME frame, so their separation is the direct
+// difference of the two position vectors and needs no frame conversion. The squared separation is sampled
+// at the coarse step, its local minima are bracketed by the shared time-domain scanner and refined with
+// Brent's minimizer (the sieve-and-refine screening the almanac calls for), and each refined minimum is
+// reported as a conjunction with its true separation and the relative speed there. Only minima at or below
+// `threshold` are returned; conjunctions are chronological.
+//
+// SGP4 is only valid near each TLE epoch, so `start`/`stop` should stay within a few days of both epochs.
+// The coarse `step` must be finer than the approach it should catch: a deep, brief minimum between two
+// coarse samples can be missed, so tighten `step` when screening for very close, high-relative-velocity
+// passes.
+export function satelliteConjunctions(a: SatRec, b: SatRec, start: Time, stop: Time, { threshold = Number.POSITIVE_INFINITY, step = DEFAULT_STEP, tolerance }: SatelliteConjunctionOptions = {}): SatelliteConjunction[] {
+	const extrema = searchExtrema((time) => separationSquaredAt(a, b, time), start, stop, { step, tolerance })
+	const conjunctions: SatelliteConjunction[] = []
+
+	for (const extremum of extrema) {
+		if (extremum.kind !== 'minimum') continue
+
+		const distance = Math.sqrt(extremum.value)
+		if (distance > threshold) continue
+
+		// Relative speed from the SGP4 velocities at closest approach (AU/day).
+		const va = sgp4(extremum.time, a)[1]
+		const vb = sgp4(extremum.time, b)[1]
+		const dvx = va[0] - vb[0]
+		const dvy = va[1] - vb[1]
+		const dvz = va[2] - vb[2]
+		const relativeSpeed = Math.sqrt(dvx * dvx + dvy * dvy + dvz * dvz)
+
+		conjunctions.push({ time: extremum.time, distance, relativeSpeed })
+	}
+
+	return conjunctions
 }

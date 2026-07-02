@@ -32,7 +32,7 @@ import { computeLocalLunarEclipseCircumstances } from '../src/astronomy/events/e
 import { computeGreatestEclipseCircumstances, computeLocalSolarEclipseCircumstances } from '../src/astronomy/events/eclipse/solar/local'
 import { computePolynomialBesselianElements } from '../src/astronomy/events/eclipse/solar/map'
 import { ASTRONOMICAL_TWILIGHT, CIVIL_TWILIGHT, NAUTICAL_TWILIGHT, riseTransitSet, STANDARD_HORIZON, SUN_HORIZON } from '../src/astronomy/events/horizon'
-import { satelliteEclipses, satelliteMagnitude, satellitePasses, satelliteShadowState } from '../src/astronomy/events/satellite'
+import { satelliteConjunctions, satelliteEclipses, satelliteMagnitude, satellitePasses, satelliteShadowState } from '../src/astronomy/events/satellite'
 import { searchExtrema, searchRoots } from '../src/astronomy/events/search'
 import { airmass, airmassKastenYoung, altitudeAtTransit, asteroidMagnitudeEstimate, atmosphericRefraction, cometMagnitudeEstimate, objectAngularDiameter } from '../src/astronomy/formulas'
 import { Ellipsoid, geodeticLocation, localSiderealTime, subpoint } from '../src/astronomy/observer/location'
@@ -1738,11 +1738,14 @@ function satelliteLunarAvoidanceAngle() {
 	console.info('Satellite-Moon separation (deg):', toDeg(separationFrom(p, moonGeocentric(SAT_TIME)[0])))
 }
 
-// Satellite Conjunction Screening.
-// TODO(almanac): screening two TLEs for close approach needs propagating both and
-// minimizing their separation over time (a smart-sieve + fine search). Not provided.
+// Satellite Conjunction Screening: satelliteConjunctions propagates both objects and refines the minima
+// of their separation over the window. Here the ISS is screened against a co-inclined companion (its
+// elements with the node shifted +10 deg) so the demonstration has real separation minima to report.
 function satelliteConjunctionScreening() {
-	console.info('Satellite conjunction screening: propagate both objects and minimize range over the window; not implemented.')
+	const companion = recordFromTLE(parseTLE('1 25545U 98067A   20330.54791667  .00016717  00000-0  10270-3 0  9000', '2 25545  51.6442  31.4611 0001363  85.7790 274.3535 15.49180547 25697', 'COMPANION'))
+	const [closest] = satelliteConjunctions(recordFromTLE(ISS_TLE), companion, SAT_TIME, timeShift(SAT_TIME, 100 / 1440))
+	if (closest === undefined) return console.info('Satellite conjunction screening: no separation minimum in the window.')
+	console.info('Closest approach (km):', toKilometer(closest.distance), 'relative speed (km/s):', toKilometerPerSecond(closest.relativeSpeed))
 }
 
 // Geostationary Satellite Longitude: the sub-point longitude (ground track latitude ~0).
