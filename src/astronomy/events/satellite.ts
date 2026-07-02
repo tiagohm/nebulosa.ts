@@ -5,7 +5,7 @@ import { clamp } from '../../math/numerical/math'
 import { brentMinimize } from '../../math/numerical/optimization'
 import { type Angle, normalizeAngle } from '../../math/units/angle'
 import type { Distance } from '../../math/units/distance'
-import { frameToFrame, ICRS, TEME, temeToItrf } from '../coordinates/frame'
+import { frameToFrame, ICRS, ITRS, TEME, temeToItrf } from '../coordinates/frame'
 import { itrs } from '../coordinates/itrs'
 import type { GeographicPosition } from '../observer/location'
 import { sgp4, type SatRec } from '../orbits/propagation/sgp4'
@@ -209,19 +209,26 @@ function shadowGeometry(satellite: Vec3, sun: Vec3): { sunApparentRadius: Angle;
 	return { sunApparentRadius, earthApparentRadius, separation } as const
 }
 
-// Classifies the illumination state of a satellite relative to the Earth's shadow at an instant.
+// Classifies the illumination state from a satellite and Sun geocentric position pair (AU, ICRS).
 //
-// `sunAt` returns the geocentric Sun position (AU, ICRS) at a time, e.g. `sun(t)[0] - earth(t)[0]` from
-// the VSOP87E ephemeris. The satellite is 'umbra' when the solar disk is fully occulted by the Earth,
-// 'penumbra' when it is partly occulted, and 'sunlit' otherwise. For Earth-orbiting satellites the
-// Earth's apparent radius exceeds the Sun's, so an annular geometry never occurs; when it would (very
-// distant orbits where the Earth appears smaller than the Sun) the state is reported as 'penumbra'.
-export function satelliteShadowState(satrec: SatRec, sunAt: (time: Time) => Vec3, time: Time): SatelliteShadowState {
-	const { sunApparentRadius, earthApparentRadius, separation } = shadowGeometry(satelliteGeocentric(satrec, time), sunAt(time))
+// The satellite is 'umbra' when the solar disk is fully occulted by the Earth, 'penumbra' when it is
+// partly occulted, and 'sunlit' otherwise. For Earth-orbiting satellites the Earth's apparent radius
+// exceeds the Sun's, so an annular geometry never occurs; when it would (very distant orbits where the
+// Earth appears smaller than the Sun) the state is reported as 'penumbra'.
+function classifyShadow(satellite: Vec3, sun: Vec3): SatelliteShadowState {
+	const { sunApparentRadius, earthApparentRadius, separation } = shadowGeometry(satellite, sun)
 
 	if (separation >= sunApparentRadius + earthApparentRadius) return 'sunlit'
 	if (earthApparentRadius > sunApparentRadius && separation <= earthApparentRadius - sunApparentRadius) return 'umbra'
 	return 'penumbra'
+}
+
+// Classifies the illumination state of a satellite relative to the Earth's shadow at an instant.
+//
+// `sunAt` returns the geocentric Sun position (AU, ICRS) at a time, e.g. `sun(t)[0] - earth(t)[0]` from
+// the VSOP87E ephemeris. See classifyShadow for the umbra/penumbra/sunlit definition.
+export function satelliteShadowState(satrec: SatRec, sunAt: (time: Time) => Vec3, time: Time): SatelliteShadowState {
+	return classifyShadow(satelliteGeocentric(satrec, time), sunAt(time))
 }
 
 // True when the satellite's solar disk is unobscured by the Earth at an instant. See satelliteShadowState.
@@ -273,4 +280,69 @@ export function satelliteEclipses(satrec: SatRec, sunAt: (time: Time) => Vec3, s
 	}
 
 	return eclipses
+}
+
+// Apparent visual magnitude of a satellite and the geometry it was computed from.
+export interface SatelliteMagnitude {
+	// Apparent visual magnitude (smaller is brighter). Only physically meaningful while `illuminated`.
+	readonly magnitude: number
+	// Solar phase angle at the satellite: the Sun-satellite-observer angle, radians in [0, PI]. Zero is
+	// full phase (Sun behind the observer), PI is a thin crescent (satellite between observer and Sun).
+	readonly phaseAngle: Angle
+	// Observer-to-satellite slant range in AU.
+	readonly range: Distance
+	// False when the satellite is inside the Earth's umbra, where it reflects no sunlight and the
+	// magnitude is not meaningful.
+	readonly illuminated: boolean
+}
+
+// Reference-magnitude offset for the standard-magnitude photometric model. A "standard magnitude" is
+// defined at a range of 1000 km and half illumination (phase angle 90 deg); the constant -15.75 makes
+// the apparent magnitude reduce to the standard magnitude at that reference (2.5*log10(1000^2/0.5) =
+// 15.75). See Molczan/McCants standard magnitudes.
+const STANDARD_MAGNITUDE_OFFSET = -15.75
+
+// Estimates the apparent visual magnitude of a satellite for a ground observer at an instant.
+//
+// Uses the Molczan/McCants standard-magnitude model: apparent magnitude = standardMagnitude - 15.75 +
+// 2.5*log10(range_km^2 / fractionIlluminated), where fractionIlluminated = (1 + cos(phaseAngle)) / 2 is
+// the illuminated fraction of a diffuse sphere and the phase angle is the Sun-satellite-observer angle.
+// `standardMagnitude` is the satellite's intrinsic brightness at 1000 km range and 90 deg phase (e.g.
+// about -1.8 for the ISS); it is an empirical per-object constant. `sunAt` returns the geocentric Sun
+// position (AU, ICRS) at a time. The reported magnitude is only meaningful while `illuminated` is true;
+// inside the Earth's umbra the satellite is dark. Refraction, atmospheric extinction near the horizon
+// and specular flares are not modelled.
+export function satelliteMagnitude(satrec: SatRec, location: GeographicPosition, sunAt: (time: Time) => Vec3, time: Time, standardMagnitude: number): SatelliteMagnitude {
+	const satellite = satelliteGeocentric(satrec, time)
+	const sun = sunAt(time)
+	// Observer geocentric position rotated from the Earth-fixed ITRS into the same ICRS frame as the
+	// satellite and the Sun, so the phase angle and range are formed from a consistent triple.
+	const observer = frameToFrame(itrs(location), ITRS, ICRS, time)
+
+	// Directions from the satellite to the observer and to the Sun.
+	const ox = observer[0] - satellite[0]
+	const oy = observer[1] - satellite[1]
+	const oz = observer[2] - satellite[2]
+	const sx = sun[0] - satellite[0]
+	const sy = sun[1] - satellite[1]
+	const sz = sun[2] - satellite[2]
+
+	const range = Math.sqrt(ox * ox + oy * oy + oz * oz)
+
+	// Phase angle from a stable atan2 of the cross-product magnitude over the dot product.
+	const cx = oy * sz - oz * sy
+	const cy = oz * sx - ox * sz
+	const cz = ox * sy - oy * sx
+	const cross = Math.sqrt(cx * cx + cy * cy + cz * cz)
+	const dot = ox * sx + oy * sy + oz * sz
+	const phaseAngle = Math.atan2(cross, dot)
+
+	// Illuminated fraction of a diffuse sphere at this phase.
+	const fractionIlluminated = 0.5 * (1 + Math.cos(phaseAngle))
+	const rangeKm = range * AU_KM
+	const magnitude = standardMagnitude + STANDARD_MAGNITUDE_OFFSET + 2.5 * Math.log10((rangeKm * rangeKm) / fractionIlluminated)
+
+	const illuminated = classifyShadow(satellite, sun) !== 'umbra'
+
+	return { magnitude, phaseAngle, range, illuminated }
 }

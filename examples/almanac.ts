@@ -32,7 +32,7 @@ import { computeLocalLunarEclipseCircumstances } from '../src/astronomy/events/e
 import { computeGreatestEclipseCircumstances, computeLocalSolarEclipseCircumstances } from '../src/astronomy/events/eclipse/solar/local'
 import { computePolynomialBesselianElements } from '../src/astronomy/events/eclipse/solar/map'
 import { ASTRONOMICAL_TWILIGHT, CIVIL_TWILIGHT, NAUTICAL_TWILIGHT, riseTransitSet, STANDARD_HORIZON, SUN_HORIZON } from '../src/astronomy/events/horizon'
-import { satelliteEclipses, satellitePasses, satelliteShadowState } from '../src/astronomy/events/satellite'
+import { satelliteEclipses, satelliteMagnitude, satellitePasses, satelliteShadowState } from '../src/astronomy/events/satellite'
 import { searchExtrema, searchRoots } from '../src/astronomy/events/search'
 import { airmass, airmassKastenYoung, altitudeAtTransit, asteroidMagnitudeEstimate, atmosphericRefraction, cometMagnitudeEstimate, objectAngularDiameter } from '../src/astronomy/formulas'
 import { Ellipsoid, geodeticLocation, localSiderealTime, subpoint } from '../src/astronomy/observer/location'
@@ -1715,11 +1715,15 @@ function satelliteAngularSpeed() {
 	console.info('ISS angular speed (deg/s):', toDeg(vecAngle(a, b)))
 }
 
-// Satellite Visual Magnitude Estimate.
-// TODO(almanac): a standard-magnitude + phase-angle photometric model (like the
-// McCants/standard-magnitude approach) is not provided. Not implemented.
+// Satellite Visual Magnitude Estimate: satelliteMagnitude applies the Molczan/McCants standard-magnitude
+// model (phase-angle + range) for a sunlit satellite over the observer. The ISS standard magnitude is
+// about -1.8; the estimate is only meaningful while the satellite is illuminated.
 function satelliteVisualMagnitudeEstimate() {
-	console.info('Satellite visual magnitude: needs a standard-magnitude + phase-angle model; not implemented.')
+	const rec = recordFromTLE(ISS_TLE)
+	const [pass] = satellitePasses(rec, SITE, SAT_TIME, timeShift(SAT_TIME, 1))
+	if (pass === undefined) return console.info('ISS visual magnitude: no pass in the window.')
+	const mag = satelliteMagnitude(rec, SITE, geocentricSun, pass.culmination.time, -1.8)
+	console.info('ISS magnitude at culmination:', mag.illuminated ? mag.magnitude : 'eclipsed', 'phase (deg):', toDeg(mag.phaseAngle))
 }
 
 // Satellite Sun / Lunar Avoidance Angle: separation between the satellite and the

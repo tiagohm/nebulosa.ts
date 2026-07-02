@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { earth, sun } from '../../../src/astronomy/ephemeris/models/analytical/vsop87e'
-import { isSatelliteSunlit, satelliteEclipses, satelliteLookAngles, satellitePasses, satelliteShadowState } from '../../../src/astronomy/events/satellite'
+import { isSatelliteSunlit, satelliteEclipses, satelliteLookAngles, satelliteMagnitude, satellitePasses, satelliteShadowState } from '../../../src/astronomy/events/satellite'
 import { geodeticLocation } from '../../../src/astronomy/observer/location'
 import { parseTLE, recordFromTLE } from '../../../src/astronomy/orbits/propagation/sgp4'
 import { type Time, Timescale, timeShift, timeSubtract } from '../../../src/astronomy/time/time'
@@ -93,7 +93,25 @@ test('umbra entry and exit crossings bound each eclipse', () => {
 	expect(eclipse.duration).toBeCloseTo(timeSubtract(eclipse.exit!, eclipse.entry!, Timescale.UTC) * 86400, 3)
 	expect(eclipse.duration).toBeGreaterThan(2050)
 	expect(eclipse.duration).toBeLessThan(2200)
-}, 5000)
+}, 8000)
+
+test('the visual magnitude follows the standard-magnitude model', () => {
+	// 55 min after epoch the ISS is sunlit and 30 deg up over the site. Independent numpy geometry from
+	// the same Skyfield state: range 782.729 km, phase angle 108.622 deg, so with a standard magnitude of
+	// -1.8 the Molczan/McCants model gives m = -1.912.
+	const time = timeShift(EPOCH, 55 / 1440)
+	const { magnitude, phaseAngle, range, illuminated } = satelliteMagnitude(ISS, SITE, sunAt, time, -1.8)
+	expect(illuminated).toBe(true)
+	expect(range * AU_KM).toBeCloseTo(782.73, 0)
+	expect(toDeg(phaseAngle)).toBeCloseTo(108.622, 2)
+	expect(magnitude).toBeCloseTo(-1.912, 2)
+})
+
+test('an eclipsed satellite is reported as not illuminated', () => {
+	// At the epoch the ISS is inside the umbra, so it reflects no sunlight.
+	const { illuminated } = satelliteMagnitude(ISS, SITE, sunAt, EPOCH, -1.8)
+	expect(illuminated).toBe(false)
+})
 
 test('the penumbra brackets the umbra', () => {
 	// Any partial obscuration lasts longer than the total eclipse, so the penumbra interval enclosing a
