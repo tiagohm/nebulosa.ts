@@ -1,0 +1,108 @@
+import { expect, test } from 'bun:test'
+import { earth, sun } from '../../../src/astronomy/ephemeris/models/analytical/vsop87e'
+import { isSatelliteSunlit, satelliteEclipses, satelliteLookAngles, satellitePasses, satelliteShadowState } from '../../../src/astronomy/events/satellite'
+import { geodeticLocation } from '../../../src/astronomy/observer/location'
+import { parseTLE, recordFromTLE } from '../../../src/astronomy/orbits/propagation/sgp4'
+import { type Time, Timescale, timeShift, timeSubtract } from '../../../src/astronomy/time/time'
+import { AU_KM } from '../../../src/core/constants'
+import { type Vec3, vecMinus } from '../../../src/math/linear-algebra/vec3'
+import { deg, toDeg } from '../../../src/math/units/angle'
+
+// Reference values come from Skyfield 1.49 with the same ISS TLE (epoch 2020-11-25 13:09:00 UTC), the
+// same WGS84 ground site, its SGP4 + TEME->ITRF pipeline, its find_events pass finder and its is_sunlit
+// shadow test against DE421. Sub-arcsecond look-angle residuals are the polar-motion/GAST-vs-GMST
+// differences; the ~5 s shadow-timing residuals are the conical umbra (this module) versus Skyfield's
+// cylindrical Earth-shadow plus the VSOP87E-vs-DE421 Sun.
+const TLE = parseTLE('1 25544U 98067A   20330.54791667  .00016717  00000-0  10270-3 0  9000', '2 25544  51.6442  21.4611 0001363  85.7790 274.3535 15.49180547 25697', 'ISS')
+const ISS = recordFromTLE(TLE)
+const EPOCH = TLE.epoch
+
+// São Paulo ground site (geodetic, IERS2010 ellipsoid, sea level).
+const SITE = geodeticLocation(deg(-46.6361), deg(-23.5475), 0)
+
+// Geocentric ICRS Sun direction (AU) from VSOP87E, the illumination-state light source.
+function sunAt(time: Time): Vec3 {
+	return vecMinus(sun(time)[0], earth(time)[0])
+}
+
+// Minutes elapsed from the TLE epoch, the reference clock for the Skyfield comparisons.
+function minutesAfterEpoch(time: Time): number {
+	return timeSubtract(time, EPOCH, Timescale.UTC) * 1440
+}
+
+test('topocentric look angles match Skyfield at the TLE epoch', () => {
+	// Skyfield: alt = -75.888555 deg, az = 148.015731 deg, range = 12806.473898 km.
+	const { azimuth, altitude, range } = satelliteLookAngles(ISS, SITE, EPOCH)
+	expect(toDeg(altitude)).toBeCloseTo(-75.8886, 2)
+	expect(toDeg(azimuth)).toBeCloseTo(148.0157, 2)
+	expect(range * AU_KM).toBeCloseTo(12806.47, 0)
+})
+
+test('the pass finder reproduces the Skyfield rise/culmination/set circumstances', () => {
+	const passes = satellitePasses(ISS, SITE, EPOCH, timeShift(EPOCH, 1))
+	expect(passes.length).toBe(6)
+
+	// First pass (Skyfield): rise +50.25 min, culmination +55.533 min at alt 32.065 deg / az 226.277 deg,
+	// set +60.883 min.
+	const first = passes[0]
+	expect(minutesAfterEpoch(first.rise.time)).toBeCloseTo(50.25, 1)
+	expect(minutesAfterEpoch(first.culmination.time)).toBeCloseTo(55.533, 1)
+	expect(toDeg(first.culmination.altitude)).toBeCloseTo(32.065, 1)
+	expect(toDeg(first.culmination.azimuth)).toBeCloseTo(226.277, 1)
+	expect(minutesAfterEpoch(first.set.time)).toBeCloseTo(60.883, 1)
+	// The rise and set sit on the horizon, and the culmination is the highest point of the pass.
+	expect(toDeg(first.rise.altitude)).toBeCloseTo(0, 3)
+	expect(toDeg(first.set.altitude)).toBeCloseTo(0, 3)
+	expect(first.culmination.altitude).toBeGreaterThan(first.rise.altitude)
+
+	// The highest pass of the day (Skyfield): culmination altitude 38.774 deg.
+	expect(toDeg(passes[3].culmination.altitude)).toBeCloseTo(38.774, 1)
+})
+
+test('a raised horizon rejects the low passes', () => {
+	// Only the two passes that climb above 30 deg survive a 30 deg minimum-elevation constraint.
+	const passes = satellitePasses(ISS, SITE, EPOCH, timeShift(EPOCH, 1), { minAltitude: deg(30) })
+	expect(passes.length).toBe(2)
+	for (const pass of passes) expect(toDeg(pass.culmination.altitude)).toBeGreaterThan(30)
+})
+
+test('the illumination state tracks the Earth shadow', () => {
+	// Skyfield reports the ISS unlit at the epoch (inside the umbra) and sunlit again after +28.8 min.
+	expect(satelliteShadowState(ISS, sunAt, EPOCH)).toBe('umbra')
+	expect(isSatelliteSunlit(ISS, sunAt, EPOCH)).toBe(false)
+	expect(isSatelliteSunlit(ISS, sunAt, timeShift(EPOCH, 40 / 1440))).toBe(true)
+})
+
+test('umbra entry and exit crossings bound each eclipse', () => {
+	const eclipses = satelliteEclipses(ISS, sunAt, EPOCH, timeShift(EPOCH, 1))
+	// The ISS is eclipsed roughly once per ~93 min orbit, so ~15-16 shadow intervals fall in one day.
+	expect(eclipses.length).toBeGreaterThanOrEqual(15)
+
+	// The window opens inside the umbra, so the first interval has no entry and exits at ~+28.8 min
+	// (Skyfield cylinder 28.825 min; the conical umbra exits a few seconds earlier).
+	const opening = eclipses[0]
+	expect(opening.entry).toBeUndefined()
+	expect(opening.exit).toBeDefined()
+	expect(Math.abs(minutesAfterEpoch(opening.exit!) - 28.825)).toBeLessThan(0.15)
+
+	// The first complete interior eclipse (Skyfield: entry +86.14 min, exit +121.79 min, ~35.6 min long).
+	const eclipse = eclipses[1]
+	expect(minutesAfterEpoch(eclipse.entry!)).toBeGreaterThan(minutesAfterEpoch(opening.exit!))
+	expect(Math.abs(minutesAfterEpoch(eclipse.entry!) - 86.14)).toBeLessThan(0.15)
+	expect(Math.abs(minutesAfterEpoch(eclipse.exit!) - 121.79)).toBeLessThan(0.15)
+	expect(eclipse.duration).toBeCloseTo(timeSubtract(eclipse.exit!, eclipse.entry!, Timescale.UTC) * 86400, 3)
+	expect(eclipse.duration).toBeGreaterThan(2050)
+	expect(eclipse.duration).toBeLessThan(2200)
+}, 5000)
+
+test('the penumbra brackets the umbra', () => {
+	// Any partial obscuration lasts longer than the total eclipse, so the penumbra interval enclosing a
+	// given umbra crossing starts earlier and ends later.
+	const umbra = satelliteEclipses(ISS, sunAt, EPOCH, timeShift(EPOCH, 0.25), { boundary: 'umbra' })
+	const penumbra = satelliteEclipses(ISS, sunAt, EPOCH, timeShift(EPOCH, 0.25), { boundary: 'penumbra' })
+	expect(penumbra.length).toBe(umbra.length)
+	// Compare the first complete interior interval of each (index 1; index 0 is open at the window start).
+	expect(minutesAfterEpoch(penumbra[1].entry!)).toBeLessThan(minutesAfterEpoch(umbra[1].entry!))
+	expect(minutesAfterEpoch(penumbra[1].exit!)).toBeGreaterThan(minutesAfterEpoch(umbra[1].exit!))
+	expect(penumbra[1].duration).toBeGreaterThan(umbra[1].duration)
+})

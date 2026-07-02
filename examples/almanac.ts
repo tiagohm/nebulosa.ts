@@ -32,6 +32,7 @@ import { computeLocalLunarEclipseCircumstances } from '../src/astronomy/events/e
 import { computeGreatestEclipseCircumstances, computeLocalSolarEclipseCircumstances } from '../src/astronomy/events/eclipse/solar/local'
 import { computePolynomialBesselianElements } from '../src/astronomy/events/eclipse/solar/map'
 import { ASTRONOMICAL_TWILIGHT, CIVIL_TWILIGHT, NAUTICAL_TWILIGHT, riseTransitSet, STANDARD_HORIZON, SUN_HORIZON } from '../src/astronomy/events/horizon'
+import { satelliteEclipses, satellitePasses, satelliteShadowState } from '../src/astronomy/events/satellite'
 import { searchExtrema, searchRoots } from '../src/astronomy/events/search'
 import { airmass, airmassKastenYoung, altitudeAtTransit, asteroidMagnitudeEstimate, atmosphericRefraction, cometMagnitudeEstimate, objectAngularDiameter } from '../src/astronomy/formulas'
 import { Ellipsoid, geodeticLocation, localSiderealTime, subpoint } from '../src/astronomy/observer/location'
@@ -1668,15 +1669,18 @@ function satelliteTopocentricPosition() {
 	console.info('ISS ECEF position (km):', ecef.map(toKilometer))
 }
 
-// Satellite Pass Prediction / Rise, Culmination, Set.
-// TODO(almanac): no pass finder. A pass is bracketed where the topocentric altitude
-// crosses 0; culmination is the altitude maximum. Build by sampling sgp4 + the
-// observer transform over the visibility window and root-finding. Not implemented.
+// Satellite Pass Prediction / Rise, Culmination, Set: satellitePasses brackets the topocentric-altitude
+// crossings of the horizon over the visibility window and refines the culmination between them.
 function satellitePassPrediction() {
-	console.info('Satellite pass prediction: sample topocentric altitude from sgp4 and bracket the 0deg crossings; not implemented.')
+	const passes = satellitePasses(recordFromTLE(ISS_TLE), SITE, SAT_TIME, timeShift(SAT_TIME, 1))
+	console.info('ISS passes in the next day:', passes.length)
 }
+
 function satelliteRiseCulminationSet() {
-	console.info('Satellite rise/culmination/set: altitude 0-crossings and the altitude maximum from the sampled pass; not implemented.')
+	const rec = recordFromTLE(ISS_TLE)
+	const [pass] = satellitePasses(rec, SITE, SAT_TIME, timeShift(SAT_TIME, 1))
+	if (pass === undefined) return console.info('ISS rise/culmination/set: no pass in the window.')
+	console.info('ISS culmination altitude (deg):', toDeg(pass.culmination.altitude), 'azimuth (deg):', toDeg(pass.culmination.azimuth), 'range (km):', toKilometer(pass.culmination.range))
 }
 
 // Satellite Ground Track: sub-satellite geographic point.
@@ -1688,19 +1692,18 @@ function satelliteGroundTrack() {
 	console.info('ISS sub-point lon/lat (deg):', toDeg(sub.longitude), toDeg(sub.latitude))
 }
 
-// Satellite Illumination State.
-// TODO(almanac): determining sunlit vs eclipsed needs the satellite position vs the
-// Earth's cylindrical/conical shadow (Sun direction from VSOP). The geometry inputs
-// exist; the shadow test is not packaged. Not implemented.
+// Satellite Illumination State: satelliteShadowState classifies the satellite against the Earth's
+// conical umbra/penumbra using the geocentric Sun direction.
 function satelliteIlluminationState() {
-	console.info('Satellite illumination: test the satellite against the Earth umbra/penumbra using the Sun direction; not implemented.')
+	console.info('ISS illumination at epoch:', satelliteShadowState(recordFromTLE(ISS_TLE), geocentricSun, SAT_TIME))
 }
 
-// Satellite Shadow Entry and Exit.
-// TODO(almanac): the umbra entry/exit times are the shadow-boundary crossings along
-// the orbit; needs the shadow model above plus root-finding. Not implemented.
+// Satellite Shadow Entry and Exit: satelliteEclipses root-finds the umbra-boundary crossings that bound
+// each eclipse over the window.
 function satelliteShadowEntryAndExit() {
-	console.info('Satellite shadow entry/exit: root-find the umbra-boundary crossings; not implemented.')
+	const eclipses = satelliteEclipses(recordFromTLE(ISS_TLE), geocentricSun, SAT_TIME, timeShift(SAT_TIME, 1))
+	const eclipse = eclipses.find((e) => e.entry !== undefined && e.exit !== undefined)
+	console.info('ISS umbra entry:', eclipse?.entry, 'exit:', eclipse?.exit)
 }
 
 // Satellite Angular Speed: topocentric angular rate (finite difference).
@@ -1743,11 +1746,11 @@ function geostationarySatelliteLongitude() {
 	console.info('Geostationary longitude: equals the satellite sub-point longitude (see satelliteGroundTrack); near-constant for a GEO TLE.')
 }
 
-// Satellite Eclipse Duration.
-// TODO(almanac): the time spent in the Earth's shadow per orbit; needs the shadow
-// model and entry/exit crossings (above). Not implemented.
+// Satellite Eclipse Duration: the seconds each satelliteEclipses interval spends inside the umbra.
 function satelliteEclipseDuration() {
-	console.info('Satellite eclipse duration: integrate the in-shadow arc per orbit; needs the shadow model; not implemented.')
+	const eclipses = satelliteEclipses(recordFromTLE(ISS_TLE), geocentricSun, SAT_TIME, timeShift(SAT_TIME, 1))
+	const complete = eclipses.find((e) => e.entry !== undefined && e.exit !== undefined)
+	console.info('ISS eclipse duration (s):', complete?.duration)
 }
 
 function run() {
