@@ -337,16 +337,23 @@ export async function findHnsky290Region(files: Hnsky290Files, database: Hnsky29
 
 	const get = files instanceof Map ? (key: string) => files.get(key) : (key: string) => files[key]
 
-	for (const area of areas) {
-		const file = get(`${database}_${area.fileName}`)
+	// Resolve and parse every intersecting tile in parallel so a first query does not serialize File I/O.
+	// A square field touches at most four tiles, so the fan-out is bounded and needs no concurrency limit.
+	const loaded = await Promise.all(
+		areas.map(async (area) => {
+			const file = get(`${database}_${area.fileName}`)
+			if (file === undefined) return undefined
+			const buffer = await bufferFromHnsky290File(file)
+			return { area, header: readHnsky290Header(buffer), buffer }
+		}),
+	)
 
-		if (file === undefined) continue
+	for (const tile of loaded) {
+		if (tile === undefined) continue
 
-		const buffer = await bufferFromHnsky290File(file)
-		const header = readHnsky290Header(buffer)
-		headers.push(Object.assign(header, area))
+		headers.push(Object.assign(tile.header, tile.area))
 
-		for (const star of readHnsky290Area(header, buffer, area.area, query)) {
+		for (const star of readHnsky290Area(tile.header, tile.buffer, tile.area.area, query)) {
 			stars.push(star)
 		}
 	}
@@ -369,7 +376,10 @@ export function openHnskyCatalog(files: Hnsky290Files, database: Hnsky290Databas
 
 // Exposes HNSKY .290 archives through the generic star catalog contract.
 export class HnskyCatalog extends BaseStarCatalog<HnskyCatalogEntry> {
-	readonly #areas = new Map<number, Hnsky290LoadedArea | null>()
+	// Per-area load cache keyed by area number. Stores the in-flight (or settled) load promise so that
+	// concurrent requests for the same tile share one read and one parse. A resolved `undefined` is a
+	// cached negative result (the tile file is absent); a rejected promise is evicted so a retry is possible.
+	readonly #areas = new Map<number, Promise<Hnsky290LoadedArea | undefined>>()
 
 	#files?: Hnsky290Files
 	#database: Hnsky290Database = 'g14'
@@ -462,23 +472,33 @@ export class HnskyCatalog extends BaseStarCatalog<HnskyCatalogEntry> {
 		return false
 	}
 
-	// Loads and caches one .290 tile lazily.
-	async loadArea(area: number): Promise<Hnsky290LoadedArea | undefined> {
+	// Loads and caches one .290 tile lazily. Concurrent calls for the same area share a single in-flight
+	// promise, so the tile is read and parsed only once. A rejected load is evicted so a later call can retry.
+	loadArea(area: number): Promise<Hnsky290LoadedArea | undefined> {
 		const cached = this.#areas.get(area)
-		if (cached !== undefined) return cached ?? undefined
+		if (cached !== undefined) return cached
 
+		const promise = this.#readArea(area)
+		this.#areas.set(area, promise)
+		promise.catch(() => {
+			// Drop a failed load so the failure is not cached permanently.
+			if (this.#areas.get(area) === promise) {
+				this.#areas.delete(area)
+			}
+		})
+
+		return promise
+	}
+
+	// Resolves and parses one tile buffer, returning undefined when the tile file is absent.
+	async #readArea(area: number): Promise<Hnsky290LoadedArea | undefined> {
 		const file = lookupHnsky290Area(area)
 		const source = this.#resolveFile(`${this.#database}_${file.fileName}`)
 
-		if (source === undefined) {
-			this.#areas.set(area, null)
-			return undefined
-		}
+		if (source === undefined) return undefined
 
 		const buffer = await bufferFromHnsky290File(source)
-		const loaded = { ...file, header: readHnsky290Header(buffer), buffer }
-		this.#areas.set(area, loaded)
-		return loaded
+		return { ...file, header: readHnsky290Header(buffer), buffer }
 	}
 
 	// Resolves one archive member by its expected database-prefixed key.
