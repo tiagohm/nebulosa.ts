@@ -170,6 +170,28 @@ interface DecodedHnsky290Star extends Hnsky290Star {
 	readonly recordNumber: number
 }
 
+// Internal: a reusable scan cursor holding one record's packed fields. It is mutated in place while a tile
+// is scanned so per-record decoding allocates nothing; a star object is created only when one is emitted.
+// The `has*` flags mark which optional fields the record format actually carries.
+interface Hnsky290RawRecord {
+	// 1-based physical record index within the tile (header records included in the count).
+	recordNumber: number
+	// Packed 24-bit right ascension, range [0, 2^24).
+	raRaw: number
+	// Packed signed 24-bit declination.
+	decRaw: number
+	// Magnitude in magnitude units.
+	magnitude: number
+	// Packed catalog designation identifier; meaningful only when hasDesignation is true.
+	designationValue: number
+	// True when the record format carries a catalog designation.
+	hasDesignation: boolean
+	// Gaia BP-RP color index; meaningful only when hasBpRp is true.
+	bpRp: number
+	// True when the record format carries a color index.
+	hasBpRp: boolean
+}
+
 // Internal: a lazily loaded tile with its parsed header and raw buffer.
 interface Hnsky290LoadedArea extends Hnsky290Area {
 	readonly header: Hnsky290FileHeader
@@ -264,15 +286,20 @@ export function* readHnsky290Area(header: Hnsky290FileHeader, buffer: Buffer, ar
 	const { rightAscension, declination, radius, magnitudeLimit } = query
 	const cosDeclination = Math.cos(declination)
 	const maxMagnitude = Number.isFinite(magnitudeLimit) ? magnitudeLimit! : Number.POSITIVE_INFINITY
+	const cursor = createHnsky290RawRecord()
 
-	for (const star of decodeHnsky290AreaRecords(header, buffer, area)) {
-		if (star.magnitude > maxMagnitude) break
+	for (const record of scanHnsky290Records(header, buffer, cursor)) {
+		// Records are stored in ascending magnitude order, so once the limit is exceeded none remain.
+		if (record.magnitude > maxMagnitude) break
 
-		const deltaRa = Math.abs(normalizePI(star.rightAscension - rightAscension))
+		const rightAscensionOfStar = record.raRaw * HNSKY_290_RA_SCALE
+		const declinationOfStar = record.decRaw * HNSKY_290_DEC_SCALE
+		const deltaRa = Math.abs(normalizePI(rightAscensionOfStar - rightAscension))
 
-		// Match the original square-field visibility test used by HNSKY.
-		if (Math.abs(deltaRa * cosDeclination) < radius && Math.abs(star.declination - declination) < radius) {
-			yield star
+		// Match the original square-field visibility test used by HNSKY. Materialize (and decode the
+		// designation) only for a star that actually falls inside the field.
+		if (Math.abs(deltaRa * cosDeclination) < radius && Math.abs(declinationOfStar - declination) < radius) {
+			yield materializeHnsky290Star(area, record)
 		}
 	}
 }
@@ -423,9 +450,12 @@ export class HnskyCatalog extends BaseStarCatalog<HnskyCatalogEntry> {
 		const loaded = await this.loadArea(area)
 		if (!loaded) return undefined
 
-		for (const star of decodeHnsky290AreaRecords(loaded.header, loaded.buffer, area)) {
-			if (star.recordNumber === recordNumber) {
-				return toHnskyCatalogEntry(star)
+		const cursor = createHnsky290RawRecord()
+
+		// Walk records tracking only the raw cursor; materialize a single entry for the matching record.
+		for (const record of scanHnsky290Records(loaded.header, loaded.buffer, cursor)) {
+			if (record.recordNumber === recordNumber) {
+				return materializeHnskyCatalogEntry(area, record)
 			}
 		}
 
@@ -436,13 +466,19 @@ export class HnskyCatalog extends BaseStarCatalog<HnskyCatalogEntry> {
 	protected async *streamCandidateEntries(query: NormalizedStarCatalogQuery) {
 		this.#assertOpen()
 
+		const cursor = createHnsky290RawRecord()
+
 		for (const area of touchedHnsky290Areas(query)) {
 			const loaded = await this.loadArea(area)
 			if (!loaded) continue
 
-			for (const star of decodeHnsky290AreaRecords(loaded.header, loaded.buffer, area)) {
-				if (!matchesPreselectionBoxes(star.rightAscension, star.declination, query.preselectionBoxes)) continue
-				yield toHnskyCatalogEntry(star)
+			for (const record of scanHnsky290Records(loaded.header, loaded.buffer, cursor)) {
+				const rightAscension = record.raRaw * HNSKY_290_RA_SCALE
+				const declination = record.decRaw * HNSKY_290_DEC_SCALE
+
+				// Reject on raw-derived coordinates before allocating; only survivors become entries.
+				if (!matchesPreselectionBoxes(rightAscension, declination, query.preselectionBoxes)) continue
+				yield materializeHnskyCatalogEntry(area, record)
 			}
 		}
 	}
@@ -563,92 +599,188 @@ function areaAndBoundaries(rightAscension: Angle, declination: Angle): Hnsky290B
 	}
 }
 
-// Decodes a compact record that inherits declination high bits and magnitude from a header record.
-function decodeCompactStar(area: number, recordNumber: number, raRaw: number, decLow: number, decMid: number, decHigh: number, magnitude: number, bpRp?: number, designationValue?: number): DecodedHnsky290Star {
-	return decodeStar(area, recordNumber, raRaw, decodeSigned24(decLow, decMid, decHigh), magnitude, bpRp, designationValue)
+// Creates a fresh, fully-initialized scan cursor. A stable object shape keeps the reused cursor
+// monomorphic for the JIT while it is mutated in place across every record of a tile.
+function createHnsky290RawRecord(): Hnsky290RawRecord {
+	return { recordNumber: 0, raRaw: 0, decRaw: 0, magnitude: 0, designationValue: 0, hasDesignation: false, bpRp: 0, hasBpRp: false }
 }
 
-// Decodes a full record that stores the complete three-byte declination in the record itself.
-function decodeFullStar(area: number, recordNumber: number, raRaw: number, decLow: number, decMid: number, decHigh: number, magnitude: number, bpRp?: number, designationValue?: number): DecodedHnsky290Star {
-	return decodeStar(area, recordNumber, raRaw, decodeSigned24(decLow, decMid, decHigh), magnitude, bpRp, designationValue)
+// Selects the format-specialized record scanner once per tile, avoiding a per-record recordSize switch.
+// Each scanner yields the shared `out` cursor filled with the current record's packed fields; the cursor
+// is reused across yields, so callers must materialize a star before advancing the iterator.
+function scanHnsky290Records(header: Hnsky290FileHeader, buffer: Buffer, out: Hnsky290RawRecord): Generator<Hnsky290RawRecord, void> {
+	switch (header.recordSize) {
+		case 5:
+			return scanHnsky290Records5(buffer, out)
+		case 6:
+			return scanHnsky290Records6(buffer, out)
+		case 7:
+			return scanHnsky290Records7(buffer, out)
+		case 9:
+			return scanHnsky290Records9(buffer, out)
+		case 10:
+			return scanHnsky290Records10(buffer, out)
+		case 11:
+			return scanHnsky290Records11(buffer, out)
+	}
 }
 
-// Converts the packed .290 coordinates into an equatorial star entry.
-function decodeStar(area: number, recordNumber: number, raRaw: number, decRaw: number, magnitude: number, bpRp?: number, designationValue?: number): DecodedHnsky290Star {
-	const rightAscension = raRaw * HNSKY_290_RA_SCALE
-	const declination = decRaw * HNSKY_290_DEC_SCALE
-	const designation = designationValue === undefined ? undefined : decodeHnsky290Designation(designationValue)
-	return { area, recordNumber, rightAscension, declination, magnitude, bpRp, designation }
+// Reads a packed unsigned 24-bit little-endian value with direct indexed byte access.
+function readUint24(buffer: Buffer, offset: number) {
+	return buffer[offset] | (buffer[offset + 1] << 8) | (buffer[offset + 2] << 16)
 }
 
-// Decodes all star records from one tile while preserving their raw record numbers.
-function* decodeHnsky290AreaRecords(header: Hnsky290FileHeader, buffer: Buffer, area: number): Generator<DecodedHnsky290Star, void> {
-	const { recordSize } = header
-	let start = HNSKY_290_HEADER_SIZE
-	// Largest offset at which a full record still fits; inclusive so the final record is not dropped.
-	const end = buffer.byteLength - recordSize
+// Reads a signed 8-bit value with direct indexed byte access.
+function readInt8(buffer: Buffer, offset: number) {
+	return (buffer[offset] << 24) >> 24
+}
+
+// Reads a signed 32-bit little-endian value with direct indexed byte access.
+function readInt32(buffer: Buffer, offset: number) {
+	return buffer[offset] | (buffer[offset + 1] << 8) | (buffer[offset + 2] << 16) | (buffer[offset + 3] << 24)
+}
+
+// Scans 5-byte compact records: RA at +0, declination low/mid at +3/+4, magnitude and dec-high inherited
+// from the preceding 0xffffff header record. No color or designation.
+function* scanHnsky290Records5(buffer: Buffer, out: Hnsky290RawRecord): Generator<Hnsky290RawRecord, void> {
+	const end = buffer.byteLength - 5
 	let recordNumber = 1
-	let currentMagnitude = Number.NaN
-	let currentDecHigh = 0
+	let magnitude = Number.NaN
+	let decHigh = 0
+	out.hasDesignation = false
+	out.hasBpRp = false
 
-	while (start <= end) {
-		const offset = start
-		const currentRecordNumber = recordNumber
-		const raRaw = buffer.readUIntLE(offset + (recordSize >= 9 ? 4 : 0), 3)
-		let star: DecodedHnsky290Star | undefined
+	for (let offset = HNSKY_290_HEADER_SIZE; offset <= end; offset += 5, recordNumber++) {
+		const raRaw = readUint24(buffer, offset)
 
-		start += recordSize
-		recordNumber++
-
-		switch (recordSize) {
-			case 5:
-				if (raRaw === 0xffffff) {
-					currentDecHigh = buffer[offset + 3] - HNSKY_290_HEADER_DEC_OFFSET
-					currentMagnitude = (buffer[offset + 4] - HNSKY_290_HEADER_MAG_OFFSET) / 10
-				} else {
-					star = decodeCompactStar(area, currentRecordNumber, raRaw, buffer[offset + 3], buffer[offset + 4], currentDecHigh, currentMagnitude)
-				}
-
-				break
-			case 6:
-				if (raRaw === 0xffffff) {
-					currentDecHigh = buffer[offset + 3] - HNSKY_290_HEADER_DEC_OFFSET
-					currentMagnitude = (buffer[offset + 4] - HNSKY_290_HEADER_MAG_OFFSET) / 10
-				} else {
-					star = decodeCompactStar(area, currentRecordNumber, raRaw, buffer[offset + 3], buffer[offset + 4], currentDecHigh, currentMagnitude, buffer.readInt8(offset + 5) / 10)
-				}
-
-				break
-			case 7: {
-				star = decodeFullStar(area, currentRecordNumber, raRaw, buffer[offset + 3], buffer[offset + 4], buffer.readInt8(offset + 5), buffer.readInt8(offset + 6) / 10)
-				break
-			}
-			case 9:
-				if (raRaw === 0xffffff) {
-					currentDecHigh = buffer[offset + 7] - HNSKY_290_HEADER_DEC_OFFSET
-					currentMagnitude = (buffer[offset + 8] - HNSKY_290_HEADER_MAG_OFFSET) / 10
-				} else {
-					star = decodeCompactStar(area, currentRecordNumber, raRaw, buffer[offset + 7], buffer[offset + 8], currentDecHigh, currentMagnitude, undefined, buffer.readInt32LE(offset))
-				}
-
-				break
-			case 10:
-				if (raRaw === 0xffffff) {
-					currentMagnitude = buffer.readInt8(offset + 9) / 10
-				} else {
-					star = decodeFullStar(area, currentRecordNumber, raRaw, buffer[offset + 7], buffer[offset + 8], buffer.readInt8(offset + 9), currentMagnitude, undefined, buffer.readInt32LE(offset))
-				}
-
-				break
-			case 11: {
-				star = decodeFullStar(area, currentRecordNumber, raRaw, buffer[offset + 7], buffer[offset + 8], buffer.readInt8(offset + 9), buffer.readInt8(offset + 10) / 10, undefined, buffer.readInt32LE(offset))
-				break
-			}
+		if (raRaw === 0xffffff) {
+			decHigh = buffer[offset + 3] - HNSKY_290_HEADER_DEC_OFFSET
+			magnitude = (buffer[offset + 4] - HNSKY_290_HEADER_MAG_OFFSET) / 10
+			continue
 		}
 
-		if (!star) continue
+		out.recordNumber = recordNumber
+		out.raRaw = raRaw
+		out.decRaw = decodeSigned24(buffer[offset + 3], buffer[offset + 4], decHigh)
+		out.magnitude = magnitude
+		yield out
+	}
+}
 
-		yield star
+// Scans 6-byte compact records: like the 5-byte format plus a signed color byte at +5 (BP-RP / 10).
+function* scanHnsky290Records6(buffer: Buffer, out: Hnsky290RawRecord): Generator<Hnsky290RawRecord, void> {
+	const end = buffer.byteLength - 6
+	let recordNumber = 1
+	let magnitude = Number.NaN
+	let decHigh = 0
+	out.hasDesignation = false
+	out.hasBpRp = true
+
+	for (let offset = HNSKY_290_HEADER_SIZE; offset <= end; offset += 6, recordNumber++) {
+		const raRaw = readUint24(buffer, offset)
+
+		if (raRaw === 0xffffff) {
+			decHigh = buffer[offset + 3] - HNSKY_290_HEADER_DEC_OFFSET
+			magnitude = (buffer[offset + 4] - HNSKY_290_HEADER_MAG_OFFSET) / 10
+			continue
+		}
+
+		out.recordNumber = recordNumber
+		out.raRaw = raRaw
+		out.decRaw = decodeSigned24(buffer[offset + 3], buffer[offset + 4], decHigh)
+		out.magnitude = magnitude
+		out.bpRp = readInt8(buffer, offset + 5) / 10
+		yield out
+	}
+}
+
+// Scans 7-byte full records: RA at +0, full signed declination at +3/+4/+5, magnitude at +6. Every record
+// is a star (no inherited header records).
+function* scanHnsky290Records7(buffer: Buffer, out: Hnsky290RawRecord): Generator<Hnsky290RawRecord, void> {
+	const end = buffer.byteLength - 7
+	let recordNumber = 1
+	out.hasDesignation = false
+	out.hasBpRp = false
+
+	for (let offset = HNSKY_290_HEADER_SIZE; offset <= end; offset += 7, recordNumber++) {
+		out.recordNumber = recordNumber
+		out.raRaw = readUint24(buffer, offset)
+		out.decRaw = decodeSigned24(buffer[offset + 3], buffer[offset + 4], readInt8(buffer, offset + 5))
+		out.magnitude = readInt8(buffer, offset + 6) / 10
+		yield out
+	}
+}
+
+// Scans 9-byte compact records: signed designation at +0, RA at +4, declination low/mid at +7/+8, with
+// magnitude and dec-high inherited from the preceding 0xffffff header record.
+function* scanHnsky290Records9(buffer: Buffer, out: Hnsky290RawRecord): Generator<Hnsky290RawRecord, void> {
+	const end = buffer.byteLength - 9
+	let recordNumber = 1
+	let magnitude = Number.NaN
+	let decHigh = 0
+	out.hasDesignation = true
+	out.hasBpRp = false
+
+	for (let offset = HNSKY_290_HEADER_SIZE; offset <= end; offset += 9, recordNumber++) {
+		const raRaw = readUint24(buffer, offset + 4)
+
+		if (raRaw === 0xffffff) {
+			decHigh = buffer[offset + 7] - HNSKY_290_HEADER_DEC_OFFSET
+			magnitude = (buffer[offset + 8] - HNSKY_290_HEADER_MAG_OFFSET) / 10
+			continue
+		}
+
+		out.recordNumber = recordNumber
+		out.raRaw = raRaw
+		out.decRaw = decodeSigned24(buffer[offset + 7], buffer[offset + 8], decHigh)
+		out.magnitude = magnitude
+		out.designationValue = readInt32(buffer, offset)
+		yield out
+	}
+}
+
+// Scans 10-byte full records: signed designation at +0, RA at +4, full signed declination at +7/+8/+9.
+// The magnitude is inherited from a preceding 0xffffff magnitude-section header record (which does not
+// carry a dec-high update).
+function* scanHnsky290Records10(buffer: Buffer, out: Hnsky290RawRecord): Generator<Hnsky290RawRecord, void> {
+	const end = buffer.byteLength - 10
+	let recordNumber = 1
+	let magnitude = Number.NaN
+	out.hasDesignation = true
+	out.hasBpRp = false
+
+	for (let offset = HNSKY_290_HEADER_SIZE; offset <= end; offset += 10, recordNumber++) {
+		const raRaw = readUint24(buffer, offset + 4)
+
+		if (raRaw === 0xffffff) {
+			magnitude = readInt8(buffer, offset + 9) / 10
+			continue
+		}
+
+		out.recordNumber = recordNumber
+		out.raRaw = raRaw
+		out.decRaw = decodeSigned24(buffer[offset + 7], buffer[offset + 8], readInt8(buffer, offset + 9))
+		out.magnitude = magnitude
+		out.designationValue = readInt32(buffer, offset)
+		yield out
+	}
+}
+
+// Scans 11-byte full records: signed designation at +0, RA at +4, full signed declination at +7/+8/+9,
+// magnitude at +10. Every record is a star (no inherited header records).
+function* scanHnsky290Records11(buffer: Buffer, out: Hnsky290RawRecord): Generator<Hnsky290RawRecord, void> {
+	const end = buffer.byteLength - 11
+	let recordNumber = 1
+	out.hasDesignation = true
+	out.hasBpRp = false
+
+	for (let offset = HNSKY_290_HEADER_SIZE; offset <= end; offset += 11, recordNumber++) {
+		out.recordNumber = recordNumber
+		out.raRaw = readUint24(buffer, offset + 4)
+		out.decRaw = decodeSigned24(buffer[offset + 7], buffer[offset + 8], readInt8(buffer, offset + 9))
+		out.magnitude = readInt8(buffer, offset + 10) / 10
+		out.designationValue = readInt32(buffer, offset)
+		yield out
 	}
 }
 
@@ -657,17 +789,32 @@ function decodeSigned24(low: number, middle: number, high: number) {
 	return (high << 16) | (middle << 8) | low
 }
 
-// Maps a decoded tile star into the generic star catalog shape.
-function toHnskyCatalogEntry(star: DecodedHnsky290Star): HnskyCatalogEntry {
+// Materializes a public tile star from the raw scan cursor, converting packed coordinates to J2000
+// radians and decoding the catalog designation only when the record format carries one.
+function materializeHnsky290Star(area: number, record: Hnsky290RawRecord): DecodedHnsky290Star {
+	return {
+		area,
+		recordNumber: record.recordNumber,
+		rightAscension: record.raRaw * HNSKY_290_RA_SCALE,
+		declination: record.decRaw * HNSKY_290_DEC_SCALE,
+		magnitude: record.magnitude,
+		bpRp: record.hasBpRp ? record.bpRp : undefined,
+		designation: record.hasDesignation ? decodeHnsky290Designation(record.designationValue) : undefined,
+	}
+}
+
+// Materializes a generic catalog entry from the raw scan cursor, decoding the designation lazily. Used by
+// the streaming/query path so a candidate is turned into an object exactly once, only when it is emitted.
+function materializeHnskyCatalogEntry(area: number, record: Hnsky290RawRecord): HnskyCatalogEntry {
 	return {
 		epoch: HNSKY_EPOCH,
-		recordNumber: star.recordNumber,
-		area: star.area,
-		rightAscension: star.rightAscension,
-		declination: star.declination,
-		magnitude: star.magnitude,
-		bpRp: star.bpRp,
-		designation: star.designation,
+		recordNumber: record.recordNumber,
+		area,
+		rightAscension: record.raRaw * HNSKY_290_RA_SCALE,
+		declination: record.decRaw * HNSKY_290_DEC_SCALE,
+		magnitude: record.magnitude,
+		bpRp: record.hasBpRp ? record.bpRp : undefined,
+		designation: record.hasDesignation ? decodeHnsky290Designation(record.designationValue) : undefined,
 	}
 }
 
