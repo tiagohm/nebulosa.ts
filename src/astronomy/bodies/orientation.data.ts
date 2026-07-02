@@ -87,6 +87,33 @@ export const JUPITER_ROTATION: RotationElements = {
 	],
 }
 
+// Jupiter atmospheric rotation Systems I and II, used for central-meridian longitude. They share
+// Jupiter's IAU pole (the System III pole above, with its Ja..Je periodic terms) but turn at the
+// conventional System I (equatorial) and System II (temperate) rates. The prime-meridian offsets W0 are
+// calibrated so that the sub-observer west longitude reproduces the standard central-meridian longitude;
+// they match PyEphem's Jupiter cmlI/cmlII to ~0.001 deg over the modern era. The System II frame is the
+// one the Great Red Spot longitude is conventionally quoted in.
+
+// Jupiter System I (equatorial jet), rotation rate 877.90003539 deg/day.
+export const JUPITER_SYSTEM_I: RotationElements = {
+	poleRa: JUPITER_ROTATION.poleRa,
+	poleDec: JUPITER_ROTATION.poleDec,
+	poleRaTerms: JUPITER_ROTATION.poleRaTerms,
+	poleDecTerms: JUPITER_ROTATION.poleDecTerms,
+	primeMeridian: 65.911 * DEG2RAD,
+	rotationRate: 877.90003539 * DEG2RAD,
+}
+
+// Jupiter System II (temperate latitudes), rotation rate 870.27003539 deg/day.
+export const JUPITER_SYSTEM_II: RotationElements = {
+	poleRa: JUPITER_ROTATION.poleRa,
+	poleDec: JUPITER_ROTATION.poleDec,
+	poleRaTerms: JUPITER_ROTATION.poleRaTerms,
+	poleDecTerms: JUPITER_ROTATION.poleDecTerms,
+	primeMeridian: 42.167 * DEG2RAD,
+	rotationRate: 870.27003539 * DEG2RAD,
+}
+
 // Saturn. W is System III rotation.
 export const SATURN_ROTATION: RotationElements = {
 	poleRa: [40.589 * DEG2RAD, -0.036 * DEG2RAD],

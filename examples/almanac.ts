@@ -32,6 +32,7 @@ import { computeLocalLunarEclipseCircumstances } from '../src/astronomy/events/e
 import { computeGreatestEclipseCircumstances, computeLocalSolarEclipseCircumstances } from '../src/astronomy/events/eclipse/solar/local'
 import { computePolynomialBesselianElements } from '../src/astronomy/events/eclipse/solar/map'
 import { ASTRONOMICAL_TWILIGHT, CIVIL_TWILIGHT, NAUTICAL_TWILIGHT, riseTransitSet, STANDARD_HORIZON, SUN_HORIZON } from '../src/astronomy/events/horizon'
+import { greatRedSpotTransits, jupiterCentralMeridian } from '../src/astronomy/events/jupiter'
 import { satelliteConjunctions, satelliteEclipses, satelliteMagnitude, satellitePasses, satelliteShadowState } from '../src/astronomy/events/satellite'
 import { searchExtrema, searchRoots } from '../src/astronomy/events/search'
 import { airmass, airmassKastenYoung, altitudeAtTransit, asteroidMagnitudeEstimate, atmosphericRefraction, cometMagnitudeEstimate, objectAngularDiameter } from '../src/astronomy/formulas'
@@ -814,11 +815,15 @@ function saturnRingOpeningAngle() {
 	console.info('Saturn ring opening angle B (deg):', toDeg(b.latitude).toFixed(3))
 }
 
-// Jupiter Great Red Spot Transit.
-// TODO(almanac): requires System II longitude (rotation model) plus a GRS drift
-// table. Not present; add a Jupiter rotation model and a GRS reference longitude.
+// Jupiter Great Red Spot Transit: jupiterCentralMeridian gives the System II central meridian and
+// greatRedSpotTransits finds when the spot (at its observed System II longitude, supplied by the caller
+// from the ALPO/JUPOS bulletins) crosses it.
 function jupiterGreatRedSpotTransit() {
-	console.info('Jupiter GRS transit: needs System II rotation model and GRS drift; not implemented.')
+	const jupiterToObserver = (time: Time) => vecMinus(earth(time)[0], jupiter(time)[0])
+	const grsLongitude = deg(52) // observed System II longitude of the Great Red Spot
+	const cm = toDeg(jupiterCentralMeridian('II', NOW, jupiterToObserver(NOW)))
+	const [next] = greatRedSpotTransits(grsLongitude, jupiterToObserver, NOW, timeShift(NOW, 1))
+	console.info('Jupiter System II central meridian (deg):', cm, 'next GRS transit:', next)
 }
 
 // ##### Sun and Moon helpers #####
