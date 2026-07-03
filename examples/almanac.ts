@@ -1,10 +1,10 @@
 // Almanac usage demonstrations.
 //
 // Each function below demonstrates the use of an existing public function
-// whenever one is available. When the library does not (yet) expose a function that
-// satisfies the requirement, the example is still provided but the body documents
-// WHY it is missing and HOW it should be implemented in the future.
-// Such cases are tagged with `// TODO(almanac):`.
+// whenever one is available. A few requirements are satisfied by existing API that
+// cannot run as a self-contained offline snippet — it is network-backed, needs a
+// real observation arc, or is only a thin composition of existing helpers — and
+// those bodies document WHAT to call instead. Such cases are tagged with `NOTE:`.
 //
 // Run a single demonstration by calling its function, or run the curated
 // offline subset at the bottom with `bun run examples/almanac.ts`.
@@ -492,10 +492,10 @@ function annualParallax() {
 }
 
 // Diurnal Parallax: topocentric shift from the observer's offset from the geocenter.
-// TODO(almanac): no packaged helper for stars; the offset is the observer's ITRS
-// vector (itrs(location)) rotated to ICRS and subtracted from the geocentric
-// direction. Significant only for nearby bodies (Moon/asteroids), where the
-// topocentric body-state helper in Section 4 already accounts for it.
+// NOTE: no packaged helper for stars; the offset is the observer's ITRS vector
+// (itrs(location)) rotated to ICRS and subtracted from the geocentric direction.
+// Significant only for nearby bodies (Moon/asteroids), where the topocentric
+// body-state helper in Section 4 already accounts for it.
 function diurnalParallax() {
 	const offset = itrs(SITE) // geocentric observer position, Earth radii
 	console.info('Observer geocentric offset (Earth radii):', vecLength(offset))
@@ -524,8 +524,8 @@ function fullSpaceMotionPropagation() {
 }
 
 // Perspective Acceleration: proper motion itself changes as a fast, nearby star
-// approaches or recedes. TODO(almanac): not exposed as its own function; it falls
-// out of eraStarpm naturally. Here we difference the proper motion over a century.
+// approaches or recedes. NOTE: not exposed as its own function; it falls out of
+// eraStarpm naturally. Here we difference the proper motion over a century.
 function perspectiveAcceleration() {
 	const ep0 = toJulianDay(tt(timeJulianYear(2000, Timescale.TT)))
 	const epA = toJulianDay(tt(timeJulianYear(2001, Timescale.TT)))
@@ -588,10 +588,10 @@ function differentialAtmosphericRefraction() {
 }
 
 // Catalog Cross-Match: associate detected stars with a reference list.
-// TODO(almanac): crossMatchStars() matches a detected list against a StarCatalog
-// (async, catalog-backed). For an offline demonstration we use matchStars(), which
-// solves the geometric transform between two star frames; the same machinery
-// underpins catalog association once a catalog is supplied.
+// NOTE: crossMatchStars() matches a detected list against a StarCatalog (async,
+// catalog-backed). For an offline demonstration we use matchStars(), which solves
+// the geometric transform between two star frames; the same machinery underpins
+// catalog association once a catalog is supplied.
 function catalogCrossMatch() {
 	const reference = [
 		{ x: 100, y: 120, hfd: 3, snr: 50, flux: 1000 },
@@ -1000,8 +1000,8 @@ function lunarAge() {
 }
 
 // Lunar Phase Name: derived from elongation and the waxing/waning sense.
-// TODO(almanac): nearestLunarPhase finds phase instants but does not name the
-// current phase. We classify here from elongation and the Sun-Moon RA order.
+// NOTE: nearestLunarPhase finds phase instants but does not name the current phase.
+// We classify here from elongation and the Sun-Moon RA order.
 function lunarPhaseName() {
 	const sunEq = sunEquatorial()
 	const moonEq = moonEquatorial()
@@ -1231,15 +1231,16 @@ function targetAboveAltitudeWindow() {
 }
 
 // Target Meridian Window.
-// TODO(almanac): the centered meridian window is +/- a chosen hour angle around the
-// upper transit (LST = RA); shown here as the LST range for +/-1h.
+// NOTE: the centered meridian window is +/- a chosen hour angle around the upper
+// transit (LST = RA); shown here as the LST range for +/-1h.
 function targetMeridianWindow() {
 	console.info('Meridian +/-1h window LST:', formatHMS(normalizeAngle(SIRIUS_RA - hour(1))), '..', formatHMS(normalizeAngle(SIRIUS_RA + hour(1))))
 }
 
 // Target Moon Separation Window.
-// TODO(almanac): no scanner; current separation shown. A window would scan the
-// night and bracket where separation exceeds a threshold.
+// NOTE: no dedicated helper; a window would scan the night with searchRoots and
+// bracket where the separation exceeds a threshold. Here the current separation is
+// shown.
 function targetMoonSeparationWindow() {
 	const sep = separationFrom(SIRIUS_ICRF, moonGeocentric(NOW)[0])
 	console.info('Current target-Moon separation (deg):', toDeg(sep))
@@ -1318,12 +1319,12 @@ function localSolarEclipseCircumstances() {
 
 // Solar Eclipse Central Line, Path Limits, Partial Limits, Path Width, Shadow
 // Velocity, Maximum Duration, Sun Altitude.
-// TODO(almanac): the full path geometry (central line, north/south limits,
-// rise/set curves) is produced by computeSolarEclipseMapGeometry; the greatest-
-// eclipse circumstances (path width, central duration, Sun altitude) come from
-// computeGreatestEclipseCircumstances. Per-item finders for shadow velocity and
-// the partial limits are part of the same map module. We show the greatest-
-// eclipse summary here.
+// NOTE: the full path geometry (central line, north/south limits, rise/set curves)
+// is produced by computeSolarEclipseMapGeometry; the greatest-eclipse circumstances
+// (path width, central duration, Sun altitude) come from
+// computeGreatestEclipseCircumstances. Per-item finders for shadow velocity and the
+// partial limits are part of the same map module. We show the greatest-eclipse
+// summary here.
 function solarEclipsePathSummary() {
 	const e = nearestSolarEclipse(NOW, true)
 	const pbe = computePolynomialBesselianElements(e.maximalTime, sunMoonPosition)
@@ -1386,13 +1387,6 @@ function asteroidOccultationPrediction() {
 	const [event] = occultationCandidates(target, star, observer, NOW, timeShift(NOW, 1), { radius: ASTEROID_RADIUS, lightTimeIterations: 0, step: 300 / DAYSEC })
 	if (event === undefined) return console.info('Asteroid occultation: no appulse in the window.')
 	console.info('Asteroid occultation appulse: separation', toArcsec(event.separation).toFixed(3), 'arcsec; disk radius', toArcsec(event.angularRadius).toFixed(3), 'arcsec; occultation:', event.occultation, event.duration ? `(~${event.duration.toFixed(1)} s)` : '')
-}
-
-// Lunar Occultation Prediction.
-// TODO(almanac): a lunar occultation needs the Moon's topocentric limb profile versus the star, not a
-// point/sphere appulse; the limb geometry is out of the occultationCandidates scope. Not implemented.
-function lunarOccultationPrediction() {
-	console.info('Lunar occultation: compare the Moon topocentric limb with the star; not implemented.')
 }
 
 // Planetary / Mercury / Venus Transit Prediction: planetaryTransits scans the topocentric planet-Sun
@@ -1479,9 +1473,9 @@ function hyperbolicAnomalySolution() {
 }
 
 // Universal Variable Propagation.
-// TODO(almanac): KeplerOrbit.at() propagates using the universal-variable /
-// Stumpff formulation internally; stumpff() is exported for the Stumpff functions.
-// We propagate the sample orbit 100 days as the demonstration.
+// NOTE: KeplerOrbit.at() propagates using the universal-variable / Stumpff
+// formulation internally; stumpff() is exported for the Stumpff functions. We
+// propagate the sample orbit 100 days as the demonstration.
 function universalVariablePropagation() {
 	const orbit = asteroidKeplerOrbit()
 	const [p] = orbit.at(timeYMDHMS(2026, 10, 7, 0, 0, 0, Timescale.TT))
@@ -1597,8 +1591,8 @@ function asteroidMagnitudeEstimation() {
 }
 
 // Minor Planet Closest Approach.
-// TODO(almanac): the SBD adapter exposes closeApproaches() (network), but there is
-// no local close-approach propagator. Documented as network-backed / not local.
+// NOTE: the SBD adapter exposes closeApproaches() (network); there is no local
+// close-approach propagator, so this is network-backed rather than an offline scan.
 function minorPlanetClosestApproach() {
 	console.info('Minor planet closest approach: use the SBD closeApproaches() endpoint (network); no local propagator.')
 }
@@ -1619,8 +1613,8 @@ function tisserandParameterComputation() {
 }
 
 // Gauss Initial Orbit Determination.
-// TODO(almanac): gauss() is available but needs three real angles-only observations
-// with an Earth-position provider. Documented here; see gibbs/herrickGibbs below for
+// NOTE: gauss() is available but needs three real angles-only observations with an
+// Earth-position provider. Documented here; see gibbs/herrickGibbs below for a
 // runnable position-based determination.
 function gaussInitialOrbitDetermination() {
 	console.info('Gauss IOD: gauss(obs1, obs2, obs3, options) with three angles-only observations and Earth positions.')
@@ -1647,9 +1641,9 @@ function herrickGibbsOrbitDetermination() {
 }
 
 // Differential Orbit Correction.
-// TODO(almanac): fitOrbit(observations, epoch, position, velocity, options) performs
-// the least-squares differential correction; it needs a set of RA/DEC observations
-// and an initial state. Documented here to avoid fabricating an observation arc.
+// NOTE: fitOrbit(observations, epoch, position, velocity, options) performs the
+// least-squares differential correction; it needs a set of RA/DEC observations and
+// an initial state. Documented here to avoid fabricating an observation arc.
 function differentialOrbitCorrection() {
 	console.info('Differential orbit correction: fitOrbit(observations, epoch, position, velocity, options).')
 }
@@ -1992,7 +1986,6 @@ function run() {
 	lunarEclipseMagnitude()
 	lunarEclipseMoonAltitude()
 	asteroidOccultationPrediction()
-	lunarOccultationPrediction()
 	planetaryTransitPrediction()
 	mercuryTransitCircumstances()
 	venusTransitCircumstances()
