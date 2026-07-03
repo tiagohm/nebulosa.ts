@@ -32,6 +32,7 @@ import { sunMoonPosition } from '../src/astronomy/events/eclipse/eclipse'
 import { computeLocalLunarEclipseCircumstances } from '../src/astronomy/events/eclipse/lunar/local'
 import { computeGreatestEclipseCircumstances, computeLocalSolarEclipseCircumstances } from '../src/astronomy/events/eclipse/solar/local'
 import { computePolynomialBesselianElements } from '../src/astronomy/events/eclipse/solar/map'
+import { heliacalPhases } from '../src/astronomy/events/heliacal'
 import { ASTRONOMICAL_TWILIGHT, CIVIL_TWILIGHT, NAUTICAL_TWILIGHT, riseTransitSet, STANDARD_HORIZON, SUN_HORIZON } from '../src/astronomy/events/horizon'
 import { greatRedSpotTransits, jupiterCentralMeridian } from '../src/astronomy/events/jupiter'
 import { galileanMutualEvents, saturnianMutualEvents } from '../src/astronomy/events/mutual'
@@ -1256,24 +1257,16 @@ function targetAirmassWindow() {
 	else console.info('Sirius below airmass ~2:', rts.alwaysUp ? 'all day' : 'never')
 }
 
-// Heliacal Rising / Setting, Acronychal Rising, Cosmical Setting.
-// TODO(almanac): these classical first/last-visibility events depend on the Sun's
-// depression, the object's altitude and an arcus-visionis criterion. No finder is
-// provided. Documented as not implemented.
-function heliacalRising() {
-	console.info('Heliacal rising: first dawn visibility (object rises just before the Sun); needs an arcus-visionis model. Not implemented.')
-}
-
-function heliacalSetting() {
-	console.info('Heliacal setting: last dusk visibility (object sets just after the Sun); needs an arcus-visionis model. Not implemented.')
-}
-
-function acronychalRising() {
-	console.info('Acronychal rising: object rises at sunset (opposition-like); needs the same visibility model. Not implemented.')
-}
-
-function cosmicalSetting() {
-	console.info('Cosmical setting: object sets at sunrise; needs the same visibility model. Not implemented.')
+// Heliacal Rising / Setting, Acronychal Rising, Cosmical Setting: heliacalPhases scans the year for the four
+// classical first/last-visibility transitions of an object, testing the Sun's depression at each rise/set
+// against an arc of vision (11 deg for a first-magnitude star). Here Sirius is screened from the site over a
+// year; the coarse step keeps the day scan quick.
+function heliacalPhaseEvents() {
+	const phases = heliacalPhases(() => SIRIUS_ICRF, geocentricSun, SITE, NOW, timeShift(NOW, 366), { step: 1 / 6 })
+	if (phases.length === 0) return console.info('Heliacal phases: Sirius shows no phase transitions from this site in the window.')
+	for (const phase of phases) {
+		console.info(`${phase.kind}:`, formatTemporal(temporalFromTime(utc(phase.time))), `(arc of vision ${toDeg(phase.arcusVisionis).toFixed(1)}deg)`)
+	}
 }
 
 // Field Rotation Angle: the parallactic angle (alt-az field orientation).
@@ -1961,10 +1954,7 @@ function run() {
 	targetMoonSeparationWindow()
 	targetSunSeparationWindow()
 	targetAirmassWindow()
-	heliacalRising()
-	heliacalSetting()
-	acronychalRising()
-	cosmicalSetting()
+	heliacalPhaseEvents()
 	fieldRotationAngle()
 	fieldRotationRate()
 	parallacticAngleTimeSeries()

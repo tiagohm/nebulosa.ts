@@ -65,7 +65,7 @@ export interface RiseTransitSetOptions extends TimeSearchOptions {
 // `direction` is the J2000/ICRS geocentric position vector toward the body (its length is irrelevant).
 // It is precessed and nutated to the equator of date before the hour angle is formed against Greenwich
 // apparent sidereal time. The returned altitude is in radians and ignores refraction and parallax.
-function altitudeOf(direction: Vec3, time: Time, location: GeographicPosition): Angle {
+export function altitudeOf(direction: Vec3, time: Time, location: GeographicPosition): Angle {
 	const [ra2000, dec2000] = equatorial(direction)
 	const [rightAscension, declination] = equatorialFromJ2000(ra2000, dec2000, time)
 	const lst = localSiderealTime(time, location, false)
