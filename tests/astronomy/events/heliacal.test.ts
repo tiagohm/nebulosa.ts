@@ -43,7 +43,7 @@ test('computes the four heliacal phases of Sirius in chronological order', () =>
 		expect(toDeg(altitudeOf(SIRIUS, phase.time, CAIRO))).toBeCloseTo(-0.567, 1) // STANDARD_HORIZON
 		expect(toDeg(altitudeOf(sunDirection(phase.time), phase.time, CAIRO))).toBeCloseTo(-toDeg(phase.arcusVisionis), 3)
 	}
-}, 30000)
+}, 10000)
 
 test('matches the heliacal (Sothic) rising date of Sirius', () => {
 	const rising = heliacalPhases(siriusDirection, sunDirection, CAIRO, RISING_START, RISING_STOP, { step: STEP }).find((p) => p.kind === 'heliacalRising')!
@@ -57,20 +57,20 @@ test('matches the heliacal (Sothic) rising date of Sirius', () => {
 	// Independent Skyfield geometry at the same instant (baked literals).
 	expect(toDeg(altitudeOf(sunDirection(rising.time), rising.time, CAIRO))).toBeCloseTo(-11.193, 1)
 	expect(toDeg(altitudeOf(SIRIUS, rising.time, CAIRO))).toBeCloseTo(-0.574, 1)
-}, 15000)
+}, 3000)
 
 test('a larger arc of vision delays the heliacal rising', () => {
 	const at11 = heliacalPhases(siriusDirection, sunDirection, CAIRO, RISING_START, RISING_STOP, { arcusVisionis: deg(11), step: STEP }).find((p) => p.kind === 'heliacalRising')!
 	const at13 = heliacalPhases(siriusDirection, sunDirection, CAIRO, RISING_START, RISING_STOP, { arcusVisionis: deg(13), step: STEP }).find((p) => p.kind === 'heliacalRising')!
 	// A fainter-object (deeper) arc of vision needs the Sun further down, reached later in the season.
 	expect(timeToDate(utc(at13.time))[2]).toBeGreaterThan(timeToDate(utc(at11.time))[2])
-}, 15000)
+}, 6000)
 
 test('a circumpolar object has no heliacal phases', () => {
 	// A star near the north celestial pole never sets from Cairo, so it has no rise/set crossings.
 	const polar: Vec3 = icrs(hms(2, 0, 0), deg(85))
 	expect(heliacalPhases(() => polar, sunDirection, CAIRO, RISING_START, RISING_STOP, { step: STEP }).length).toBe(0)
-}, 15000)
+}, 3000)
 
 test('does not report a phase whose crossing falls after stop', () => {
 	// The heliacal rising crossing is 2026-08-05 02:24 UTC; a window ending 01:00 UTC that day must not report
@@ -83,7 +83,7 @@ test('does not report a phase whose crossing falls after stop', () => {
 		expect(timeSubtract(phase.time, RISING_START)).toBeGreaterThanOrEqual(0)
 		expect(timeSubtract(stop, phase.time)).toBeGreaterThanOrEqual(0)
 	}
-}, 15000)
+}, 3000)
 
 test('an empty window yields no phases', () => {
 	expect(heliacalPhases(siriusDirection, sunDirection, CAIRO, STOP, START, { step: STEP }).length).toBe(0)

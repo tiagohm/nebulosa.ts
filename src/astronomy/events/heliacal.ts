@@ -112,6 +112,10 @@ function lastOffset(samples: readonly CrossingSample[]): CrossingSample | undefi
 	return undefined
 }
 
+function HeliacalPhaseComparator(a: HeliacalPhase, b: HeliacalPhase) {
+	return timeSubtract(a.time, b.time)
+}
+
 // Computes the four classical heliacal phenomena of an object over a time window, from one observer.
 //
 // `body` and `sun` return the geocentric J2000/ICRS direction toward the object and the Sun at a time (the
@@ -135,9 +139,11 @@ export function heliacalPhases(body: (time: Time) => Vec3, sun: (time: Time) => 
 	const eveningSet: CrossingSample[] = []
 
 	const days = Math.ceil(span)
+	const riseTransitSetOptions = { horizon, step, tolerance }
+
 	for (let d = 0; d < days; d++) {
 		const dayStart = timeShift(start, d)
-		const rts = riseTransitSet(body, location, dayStart, { horizon, step, tolerance })
+		const rts = riseTransitSet(body, location, dayStart, riseTransitSetOptions)
 
 		const rise = classifyCrossing(sun, location, rts.rise, arcusVisionis)
 		const set = classifyCrossing(sun, location, rts.set, arcusVisionis)
@@ -150,7 +156,8 @@ export function heliacalPhases(body: (time: Time) => Vec3, sun: (time: Time) => 
 	}
 
 	const phases: HeliacalPhase[] = []
-	const add = (kind: HeliacalPhaseKind, sample: CrossingSample | undefined) => {
+
+	function add(kind: HeliacalPhaseKind, sample: CrossingSample | undefined) {
 		// The last scanned day's rise/set window can extend past `stop`; drop a transition whose crossing falls
 		// outside the requested window so only in-window phases are returned.
 		if (sample?.time === undefined || timeSubtract(sample.time, start) < 0 || timeSubtract(stop, sample.time) < 0) return
@@ -162,6 +169,7 @@ export function heliacalPhases(body: (time: Time) => Vec3, sun: (time: Time) => 
 	add('acronychalRising', lastOffset(eveningRise))
 	add('heliacalSetting', lastOffset(eveningSet))
 
-	phases.sort((a, b) => timeSubtract(a.time, b.time))
+	phases.sort(HeliacalPhaseComparator)
+
 	return phases
 }
