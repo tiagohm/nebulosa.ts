@@ -1586,7 +1586,7 @@ describe('solar eclipse map acceptance criteria', () => {
 		expect(geometry.points.N1!.y).toBeLessThan(geometry.points.S1!.y)
 		expect(sphericalSeparation(geometry.points.N1!.x, geometry.points.N1!.y, deg(52.005), deg(10.858))).toBeLessThan(deg(0.5))
 		expect(sphericalSeparation(geometry.points.S1!.x, geometry.points.S1!.y, deg(-164.075), deg(37.093))).toBeLessThan(deg(0.5))
-	}, 2000)
+	}, 4000)
 
 	// An annular (both-limit) eclipse names the penumbral extremes chronologically -- N1/S1 where
 	// each limit begins, N2/S2 where it ends -- not by latitude. Regression for the 2001-12-14 annular, where

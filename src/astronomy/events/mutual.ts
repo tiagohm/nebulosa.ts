@@ -1,4 +1,4 @@
-import { AU_KM, SPEED_OF_LIGHT_AU_DAY } from '../../core/constants'
+import { AU_KM, SPEED_OF_LIGHT_AU_DAY, SUN_RADIUS_AU } from '../../core/constants'
 import { type Vec3, vecAngle, vecDot, vecLength, vecMinus, vecMulScalar, vecNormalize, vecPlus } from '../../math/linear-algebra/vec3'
 import { brentRoot } from '../../math/numerical/optimization'
 import { callisto, europa, ganymede, io } from '../ephemeris/models/analytical/l12'
@@ -48,9 +48,6 @@ interface MutualSystem<M extends string> {
 	// The moons in orbital order, enumerated pairwise.
 	readonly order: readonly M[]
 }
-
-// Solar photospheric radius in AU (IAU 2015 nominal radius 695700 km), for the penumbral shadow cone.
-const SUN_RADIUS_AU = 695700 / AU_KM
 
 // Default coarse sampling step for the separation-minimum search: 10 minutes, in days. A conjunction
 // valley is tens of minutes to hours wide, so this brackets every separation minimum, including the fast

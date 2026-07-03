@@ -58,7 +58,7 @@ import { Matrix } from '../src/math/linear-algebra/matrix'
 // oxfmt-ignore
 import { Timescale, dut1 as dut1FromTime, earthRotationAngle, equationOfEquinoxes, greenwichApparentSiderealTime, greenwichMeanSiderealTime, nutationAngles, pmAngles, pmMatrix, tai, taiMinusUtc, tcb, tdb, timeBesselianYear, timeJulianYear, timeMJD, timeShift, timeSubtract, timeToDate, timeUnix, timeYMDHMS, toJulianDay, toJulianEpoch, tt, ut1, utc, type Time } from '../src/astronomy/time/time'
 import { formatTemporal, temporalFromTime } from '../src/astronomy/time/temporal'
-import { AU_KM, DAYSEC, DAYSPERSY, DAYSPERTY, EARTH_RADIUS_KM, GM_SUN_PITJEVA_2005, PI, TAU } from '../src/core/constants'
+import { AU_KM, DAYSEC, DAYSPERSY, DAYSPERTY, EARTH_RADIUS_KM, GM_SUN_PITJEVA_2005, PI, SUN_RADIUS_AU, TAU } from '../src/core/constants'
 import { type Vec3, vecAngle, vecCross, vecLatitude, vecLength, vecLongitude, vecMinus, vecMulScalar, vecNormalize } from '../src/math/linear-algebra/vec3'
 import { sphericalDestination, sphericalInterpolate, sphericalPolygonArea, sphericalPositionAngle, sphericalProjectTangentPlane, sphericalSeparation, sphericalTriangleAngles, sphericalTriangleArea, sphericalUnprojectTangentPlane } from '../src/math/numerical/geometry'
 import { type Angle, arcsec, deg, formatAZ, formatHMS, formatSignedDMS, hms, hour, normalizeAngle, normalizePI, toArcsec, toDeg, toHour } from '../src/math/units/angle'
@@ -1400,13 +1400,12 @@ function lunarOccultationPrediction() {
 // difference (interior II/III) of the angular radii, with the limb position angles and the I->IV duration.
 // This is the per-site question, without any Besselian path engine. Windows are set at the actual transit
 // dates: the next Mercury transit is 2032-11-13, the next Venus transit 2117-12-11.
-const SUN_RADIUS = kilometer(695700) // Sun physical radius, AU
 
 // Screens one planetary transit from SITE and prints its circumstances (existence, exterior contacts, chord
 // depth, and contact position angles).
 function reportTransit(label: string, planet: PositionAndVelocityOverTime, planetRadiusKm: number, start: Time, stop: Time) {
 	const observer = (time: Time): PositionAndVelocity => observerState(time, earth(time), SITE) as PositionAndVelocity
-	const [transit] = planetaryTransits(planet, sun, observer, start, stop, { sunRadius: SUN_RADIUS, planetRadius: kilometer(planetRadiusKm) })
+	const [transit] = planetaryTransits(planet, sun, observer, start, stop, { sunRadius: SUN_RADIUS_AU, planetRadius: kilometer(planetRadiusKm) })
 	if (transit === undefined) return console.info(`${label}: no transit visible from the site in the window.`)
 	const contact = (t?: Time) => (t ? formatTemporal(temporalFromTime(utc(t))) : 'outside window')
 	const pa = (a?: Angle) => (a === undefined ? 'n/a' : `${toDeg(a).toFixed(1)}deg`)

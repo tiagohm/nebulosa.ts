@@ -119,6 +119,15 @@ export const SPEED_OF_LIGHT_AU_DAY = (SPEED_OF_LIGHT * DAYSEC) / AU_M
 // Earth radius in km
 export const EARTH_RADIUS_KM = 6378.135
 
+// Earth equatorial radius in AU, used both as the ITRS scale and as the occulting-disk radius.
+export const EARTH_RADIUS_AU = EARTH_RADIUS_KM / AU_KM
+
+// Solar photospheric radius in km (IAU 2015 nominal radius).
+export const SUN_RADIUS_KM = 695700
+
+// Solar photospheric radius in AU (IAU 2015 nominal radius).
+export const SUN_RADIUS_AU = SUN_RADIUS_KM / AU_KM
+
 // Radians to degrees.
 export const RAD2DEG = 180 / PI
 

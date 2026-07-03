@@ -1,4 +1,4 @@
-import { AU_KM, DAYSEC, EARTH_RADIUS_KM, ONE_SECOND } from '../../core/constants'
+import { AU_KM, DAYSEC, EARTH_RADIUS_AU, ONE_SECOND, SUN_RADIUS_AU } from '../../core/constants'
 import type { Writable } from '../../core/types'
 import type { Vec3 } from '../../math/linear-algebra/vec3'
 import { clamp } from '../../math/numerical/math'
@@ -26,10 +26,6 @@ import { searchExtrema, searchRoots, type TimeSearchOptions } from './search'
 // Sun share the Earth-centred origin, using the apparent angular radii of the Sun and the Earth as seen
 // from the satellite (the conical umbra/penumbra model of Montenbruck & Gill).
 
-// Earth equatorial radius in AU, used both as the ITRS scale and as the occulting-disk radius.
-const EARTH_RADIUS_AU: Distance = EARTH_RADIUS_KM / AU_KM
-// Solar photospheric radius in AU (IAU 2015 nominal radius 695700 km), the light-source disk radius.
-const SUN_RADIUS_AU: Distance = 695700 / AU_KM
 // Default coarse sampling step for the satellite scanners: 30 s. Fine enough to bracket every low-Earth
 // pass and every shadow crossing without missing a short grazing pass between two samples.
 const DEFAULT_STEP = 30 * ONE_SECOND
