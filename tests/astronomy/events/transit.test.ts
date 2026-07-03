@@ -83,7 +83,7 @@ test('reports no transit for a window with no inferior conjunction crossing', ()
 	expect(transits.length).toBe(0)
 })
 
-test('leaves ingress contacts undefined when the window opens mid-transit', () => {
+test('leaves ingress contacts undefined when the window opens after ingress', () => {
 	const observer = observerAt(GREENWICH)
 	// Window opens at 07:30, after both ingress contacts (06:41, 06:44) but before mid-transit (08:55): the
 	// appulse and both egress contacts are in-window, the ingress contacts and the I->IV duration are not.
@@ -95,6 +95,30 @@ test('leaves ingress contacts undefined when the window opens mid-transit', () =
 	expect(transit.duration).toBeUndefined()
 	expect(contactError(transit.interiorEgress, 2463549.963249)).toBeLessThan(2)
 	expect(contactError(transit.exteriorEgress, 2463549.964686)).toBeLessThan(2)
+})
+
+test('leaves egress contacts undefined when the window closes before egress', () => {
+	const observer = observerAt(GREENWICH)
+	// Window closes at 09:00, after mid-transit (08:55) but before the egress contacts: the appulse and both
+	// ingress contacts are in-window, the egress contacts and the I->IV duration are not. Truncation is
+	// symmetric with the opens-after-ingress case above.
+	const [transit] = planetaryTransits(mercury, sun, observer, timeYMDHMS(2032, 11, 13, 5, 0, 0, Timescale.UTC), timeYMDHMS(2032, 11, 13, 9, 0, 0, Timescale.UTC), { sunRadius: SUN_RADIUS, planetRadius: MERCURY_RADIUS })
+	expect(transit).toBeDefined()
+	expect(transit.full).toBe(true)
+	expect(transit.exteriorEgress).toBeUndefined()
+	expect(transit.interiorEgress).toBeUndefined()
+	expect(transit.duration).toBeUndefined()
+	expect(contactError(transit.exteriorIngress, 2463549.779682)).toBeLessThan(2)
+	expect(contactError(transit.interiorIngress, 2463549.781121)).toBeLessThan(2)
+})
+
+test('reports no transit when the window opens after mid-transit', () => {
+	const observer = observerAt(GREENWICH)
+	// Detection anchors on the appulse: a window from 09:30 (after mid-transit at 08:55) to 12:00 excludes the
+	// closest approach, so no transit is reported even though the egress contacts (11:06, 11:08) are still
+	// ahead. The window must bracket the mid-transit instant.
+	const transits = planetaryTransits(mercury, sun, observer, timeYMDHMS(2032, 11, 13, 9, 30, 0, Timescale.UTC), timeYMDHMS(2032, 11, 13, 12, 0, 0, Timescale.UTC), { sunRadius: SUN_RADIUS, planetRadius: MERCURY_RADIUS })
+	expect(transits.length).toBe(0)
 })
 
 test('an empty window yields no transits', () => {

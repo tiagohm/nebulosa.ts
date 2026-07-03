@@ -135,8 +135,15 @@ function lastRootBefore(f: (time: Time) => number, from: Time, to: Time, step: n
 // impact parameter, its exterior contacts (I, IV) are the crossings of the radius sum on either side, and its
 // interior contacts (II, III) — present only for a full, non-grazing transit — are the crossings of the
 // radius difference. Contacts carry their limb position angle (north through east) and the total I->IV
-// duration. Give a window that fully brackets the transit; a contact left outside the window is reported as
-// undefined (the transit was already underway at the boundary). Results are chronological.
+// duration.
+//
+// Detection anchors on the mid-transit appulse, so the window must contain the instant of least separation: a
+// transit whose closest approach lies outside the window is not reported at all (open the window before
+// mid-transit to catch an event already in progress). Once the appulse is in-window the truncation is
+// symmetric — any exterior or interior contact that itself falls outside the window is returned as undefined
+// (the transit was already underway at that boundary), and the I->IV duration is undefined unless both
+// exterior contacts are in-window — so a window that brackets the appulse but clips an ingress or egress still
+// yields the event with its in-window contacts. Results are chronological.
 export function planetaryTransits(planet: PositionAndVelocityOverTime, sun: PositionAndVelocityOverTime, observer: PositionAndVelocityOverTime, start: Time, stop: Time, { sunRadius, planetRadius, lightTimeIterations = 2, step = DEFAULT_STEP, tolerance }: PlanetaryTransitOptions): PlanetaryTransit[] {
 	const span = timeSubtract(stop, start)
 	if (span <= 0) return []
