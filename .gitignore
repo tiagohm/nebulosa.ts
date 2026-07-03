@@ -6,6 +6,7 @@ __pycache__/
 *.shared
 .dist/
 *.exe
+/coverage
 
 # Claude Code
 .claude/settings.local.json
