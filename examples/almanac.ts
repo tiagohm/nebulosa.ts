@@ -11,7 +11,7 @@
 
 import fs from 'fs/promises'
 import { matchStars } from '../src/astrometry/matching/star.matching'
-import { crescentWidth, moonParallax, moonSemidiameter, nearestLunarApsis, nearestLunarEclipse, nearestLunarPhase } from '../src/astronomy/bodies/moon'
+import { crescentWidth, moonParallax, moonSemidiameter, nearestLunarApsis, nearestLunarEclipse, nearestLunarPhase, nearestLunarStandstill } from '../src/astronomy/bodies/moon'
 import { JUPITER_ROTATION, MARS_ROTATION, MOON_ROTATION, positionAngleOfPole, SATURN_ROTATION, subObserverPoint as bodySubObserver, subSolarPoint as bodySubSolar, SUN_ROTATION } from '../src/astronomy/bodies/orientation'
 import { planetMagnitude, type Planet } from '../src/astronomy/bodies/photometry'
 import { spaceMotion, star } from '../src/astronomy/bodies/star'
@@ -1099,12 +1099,13 @@ function lunarPerigeeAndApogee() {
 	console.info('Next apogee:', formatTemporal(temporalFromTime(apogeeTime)), 'distance (km):', toKilometer(apogeeDistance))
 }
 
-// Lunar Standstill Extremes (major/minor standstill).
-// TODO(almanac): standstills depend on the 18.6-year regression of the lunar
-// node and require scanning the Moon's monthly declination extremes across that
-// cycle. No finder is provided. Not implemented.
+// Lunar Standstill Extremes: the next major and minor standstills, when the Moon's monthly declination extreme
+// reaches the largest (~28.6 deg) or smallest (~18.3 deg) amplitude of the 18.6-year nodal cycle.
 function lunarStandstillExtremes() {
-	console.info('Lunar standstill extremes: not implemented; needs an 18.6-year declination-extreme scan.')
+	const [majorTime, majorDec] = nearestLunarStandstill(NOW, 'MAJOR', 'NORTH', true)
+	const [minorTime, minorDec] = nearestLunarStandstill(NOW, 'MINOR', 'NORTH', true)
+	console.info('Next major standstill:', formatTemporal(temporalFromTime(majorTime)), 'northern declination (deg):', toDeg(majorDec))
+	console.info('Next minor standstill:', formatTemporal(temporalFromTime(minorTime)), 'northern declination (deg):', toDeg(minorDec))
 }
 
 // Crescent Moon Width: angular width of the illuminated crescent at its midpoint.

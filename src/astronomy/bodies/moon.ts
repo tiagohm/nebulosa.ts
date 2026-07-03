@@ -1,7 +1,7 @@
 import { ASEC2RAD, AU_KM, DAYSPERJY, DEG2RAD, EARTH_RADIUS_KM, J2000, MOON_SYNODIC_DAYS, PI } from '../../core/constants'
 import { type Angle, arcsec, deg } from '../../math/units/angle'
 import { type Distance, kilometer } from '../../math/units/distance'
-import { type Time, Timescale, time, timeNormalize, toJulianDay, tt } from '../time/time'
+import { type Time, Timescale, time, timeNormalize, timeShift, toJulianDay, tt } from '../time/time'
 
 // Lunar almanac helpers from Meeus' "Astronomical Algorithms": Moon parallax and semi-diameter,
 // lunation numbering across calendar systems, Saros number, nearest lunar phase, nearest lunar
@@ -21,6 +21,11 @@ export type LunarPhase = 'NEW' | 'FIRST_QUARTER' | 'FULL' | 'LAST_QUARTER'
 export type LunarApsis = 'PERIGEE' | 'APOGEE'
 
 export type LunarDeclination = 'NORTH' | 'SOUTH'
+
+// Classification of a lunar standstill by the amplitude of the Moon's monthly declination extremes over the
+// 18.6-year nodal cycle: a major standstill is the phase of largest monthly maxima (~28.6 deg), a minor
+// standstill the phase of smallest ones (~18.3 deg).
+export type LunarStandstill = 'MAJOR' | 'MINOR'
 
 // Circumstances of a lunar eclipse, including the standard contact instants (all in TT).
 export interface LunarEclipse {
@@ -836,4 +841,93 @@ export function nearestMaxDeclination(time: Time, declination: LunarDeclination,
 
 	// Southern maxima are the Moon's most southerly declination, reported as a negative angle.
 	return [timeNormalize(jdDay, jdFraction, 0, Timescale.TT), deg(isNorthern ? delta : -delta)] as const
+}
+
+// Nodal regression period of the Moon's orbit, days (~18.61 years): the interval between successive major
+// (or minor) standstills.
+const NODAL_PERIOD_DAYS = 6798.383
+
+// Mean regression rate of the ascending node, degrees per day (1934.1362891 deg/century divided by 36525):
+// the node longitude decreases at this rate, used to place the node crossing that anchors a standstill season.
+const NODE_RATE_DEG_PER_DAY = 1934.1362891 / 36525
+
+// Days used to hop just past a monthly declination maximum before searching for the following one of the same
+// hemisphere. Consecutive same-hemisphere maxima are one draconic month (~27.3 days) apart, so a few days is
+// enough to clear the current extremum without skipping the next.
+const MAX_DECLINATION_STEP_DAYS = 5
+
+// Half-width, in days, of the search window centered on the node crossing. Wider than half the ~206-day
+// semiannual modulation of the monthly declination extremes (~103 days), so the window always contains the
+// cycle's extreme monthly maximum, yet far shorter than the nodal period so it never reaches the neighboring
+// standstill.
+const STANDSTILL_WINDOW_DAYS = 150
+
+// Mean longitude of the Moon's ascending node (Meeus 47.7), degrees reduced to [0, 360), from Julian centuries
+// T (TT) since J2000. Used only to locate the standstill season (its node crossing), so the leading terms
+// suffice; not accurate enough for a precise node position.
+function meanAscendingNode(T: number): number {
+	const T2 = T * T
+	const T3 = T2 * T
+	const T4 = T3 * T
+	const omega = 125.0445479 - 1934.1362891 * T + 0.0020754 * T2 + T3 / 467441 - T4 / 60616000
+	return ((omega % 360) + 360) % 360
+}
+
+// Finds the extreme monthly maximum declination of one hemisphere within +/- STANDSTILL_WINDOW_DAYS of
+// `center`, walking the same-hemisphere monthly maxima and keeping the largest |declination| (`major` = true,
+// a major standstill) or the smallest (`major` = false, a minor standstill). Returns the instant (TT) and
+// signed declination (radians). Because the window brackets the extreme of the slow nodal envelope, the picked
+// value is the cycle's true extreme despite the superimposed semiannual wobble.
+function extremeMonthlyMaximum(center: Time, declination: LunarDeclination, major: boolean): readonly [Time, Angle] {
+	const stop = toJulianDay(timeShift(center, STANDSTILL_WINDOW_DAYS))
+	let cursor = nearestMaxDeclination(timeShift(center, -STANDSTILL_WINDOW_DAYS), declination, true)
+	let best = cursor
+
+	while (toJulianDay(cursor[0]) <= stop) {
+		if (major ? Math.abs(cursor[1]) > Math.abs(best[1]) : Math.abs(cursor[1]) < Math.abs(best[1])) best = cursor
+		cursor = nearestMaxDeclination(timeShift(cursor[0], MAX_DECLINATION_STEP_DAYS), declination, true)
+	}
+
+	return best
+}
+
+// Finds the nearest (previous or next) major or minor lunar standstill for one hemisphere, searching forward
+// (`next` = true) or backward (`next` = false) from `time`.
+//
+// A standstill is the extreme of the ~18.6-year envelope of the Moon's monthly declination extremes: at a
+// major standstill the monthly maxima reach their largest amplitude (~28.6 deg, obliquity plus lunar orbital
+// inclination), at a minor standstill their smallest (~18.3 deg, obliquity minus inclination). The season is
+// anchored by the ascending node: the major standstill occurs with the node at the vernal equinox (node = 0),
+// the minor with the node at the autumnal equinox (node = 180). This locates that node crossing, then returns
+// the cycle's extreme same-hemisphere monthly maximum in a window around it -- a robust global extremum rather
+// than a local one, since the monthly maxima carry a ~206-day wobble on top of the slow nodal envelope.
+//
+// Returns the instant (TT) and the signed geocentric declination (radians) at that standstill: positive for
+// `declination` = 'NORTH', negative for 'SOUTH'. Northern and southern standstills of the same cycle fall a
+// couple of weeks apart, so query each hemisphere separately. Accuracy follows `nearestMaxDeclination` (mean
+// geocentric, a few arcminutes; no nutation or topocentric parallax).
+export function nearestLunarStandstill(time: Time, standstill: LunarStandstill, declination: LunarDeclination, next: boolean): readonly [Time, Angle] {
+	time = tt(time)
+	const jd = toJulianDay(time)
+	const major = standstill === 'MAJOR'
+	// Node longitude that anchors the season: vernal equinox for a major standstill, autumnal for a minor one.
+	const target = major ? 0 : 180
+
+	// Signed node offset reduced to (-180, 180]; positive means the node still has to regress (the crossing lies
+	// ahead in time) to reach the target.
+	const node = meanAscendingNode((jd - 2451545) / 36525)
+	const offset = ((((node - target + 180) % 360) + 360) % 360) - 180
+
+	// Node crossing nearest `time`, then the cycle's extreme monthly maximum around it.
+	let crossing = timeShift(time, offset / NODE_RATE_DEG_PER_DAY)
+	let best = extremeMonthlyMaximum(crossing, declination, major)
+
+	// When the nearest standstill lands on the wrong side of `time` for the requested direction, step one nodal
+	// period so `next`/previous select strictly by the standstill instant.
+	if (next ? toJulianDay(best[0]) <= jd : toJulianDay(best[0]) >= jd) {
+		crossing = timeShift(crossing, next ? NODAL_PERIOD_DAYS : -NODAL_PERIOD_DAYS)
+		best = extremeMonthlyMaximum(crossing, declination, major)
+	}
+
+	return best
 }

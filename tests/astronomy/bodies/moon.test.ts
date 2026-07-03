@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { crescentWidth, lunarSaros, lunation, moonParallax, moonSemidiameter, nearestLunarApsis, nearestLunarEclipse, nearestLunarPhase, nearestMaxDeclination } from '../../../src/astronomy/bodies/moon'
+import { crescentWidth, lunarSaros, lunation, moonParallax, moonSemidiameter, nearestLunarApsis, nearestLunarEclipse, nearestLunarPhase, nearestLunarStandstill, nearestMaxDeclination } from '../../../src/astronomy/bodies/moon'
 import { time, timeToDate, timeYMD, timeYMDHMS, utc } from '../../../src/astronomy/time/time'
 import { deg, toArcsec, toDeg } from '../../../src/math/units/angle'
 import { kilometer, toKilometer } from '../../../src/math/units/distance'
@@ -201,6 +201,54 @@ describe('nearest maximum declination', () => {
 		const south = nearestMaxDeclination(timeYMDHMS(2015, 9, 1), 'SOUTH', true)[1]
 		expect(toDeg(north)).toBeCloseTo(18.16, 1)
 		expect(toDeg(south)).toBeCloseTo(-18.15, 1)
+	})
+})
+
+describe('nearest lunar standstill', () => {
+	// Cross-checked against Skyfield (DE440, apparent declination of date): the standstill is the extreme of the
+	// 18.6-year envelope, i.e. the largest (major) or smallest (minor) monthly declination maximum of the cycle.
+	// The node-anchored search recovers it despite the ~206-day wobble; times are TT, within ~20 minutes and
+	// declinations within ~0.02 deg of Skyfield.
+	test('major standstill has the largest monthly maxima on both sides', () => {
+		// Skyfield: north 2025-03-07 15:46 TT +28.7167 deg, south 2025-03-22 06:39 TT -28.7257 deg.
+		const north = nearestLunarStandstill(timeYMDHMS(2024, 1, 1), 'MAJOR', 'NORTH', true)
+		expect(timeToDate(north[0]).slice(0, 3)).toEqual([2025, 3, 7])
+		expect(toDeg(north[1])).toBeCloseTo(28.7167, 1)
+		expect(north[1]).toBeGreaterThan(0)
+
+		const south = nearestLunarStandstill(timeYMDHMS(2024, 1, 1), 'MAJOR', 'SOUTH', true)
+		expect(timeToDate(south[0]).slice(0, 3)).toEqual([2025, 3, 22])
+		expect(toDeg(south[1])).toBeCloseTo(-28.7257, 1)
+		expect(south[1]).toBeLessThan(0)
+	})
+
+	test('minor standstill has the smallest monthly maxima on both sides', () => {
+		// Skyfield: north 2015-10-03 23:56 TT +18.1399 deg, south 2015-09-21 12:03 TT -18.1332 deg.
+		const north = nearestLunarStandstill(timeYMDHMS(2014, 1, 1), 'MINOR', 'NORTH', true)
+		expect(timeToDate(north[0]).slice(0, 3)).toEqual([2015, 10, 3])
+		expect(toDeg(north[1])).toBeCloseTo(18.1399, 1)
+
+		const south = nearestLunarStandstill(timeYMDHMS(2014, 1, 1), 'MINOR', 'SOUTH', true)
+		expect(timeToDate(south[0]).slice(0, 3)).toEqual([2015, 9, 21])
+		expect(toDeg(south[1])).toBeCloseTo(-18.1332, 1)
+	})
+
+	test('previous selects the standstill of the current cycle', () => {
+		// Skyfield: previous major standstill 2006-09-15 01:30 TT, +28.7227 deg.
+		const [t, dec] = nearestLunarStandstill(timeYMDHMS(2010, 1, 1), 'MAJOR', 'NORTH', false)
+		expect(timeToDate(t).slice(0, 3)).toEqual([2006, 9, 15])
+		expect(toDeg(dec)).toBeCloseTo(28.7227, 1)
+	})
+
+	test('next and previous select adjacent nodal cycles across a standstill', () => {
+		// From just after the 2025-03-07 major standstill, previous returns it and next jumps a full nodal
+		// period to 2043-09-25 (Skyfield 14:13 TT, +28.7195 deg).
+		const previous = nearestLunarStandstill(timeYMDHMS(2025, 4, 1), 'MAJOR', 'NORTH', false)
+		expect(timeToDate(previous[0]).slice(0, 3)).toEqual([2025, 3, 7])
+
+		const next = nearestLunarStandstill(timeYMDHMS(2025, 4, 1), 'MAJOR', 'NORTH', true)
+		expect(timeToDate(next[0]).slice(0, 3)).toEqual([2043, 9, 25])
+		expect(toDeg(next[1])).toBeCloseTo(28.7195, 1)
 	})
 })
 
