@@ -151,7 +151,10 @@ export function heliacalPhases(body: (time: Time) => Vec3, sun: (time: Time) => 
 
 	const phases: HeliacalPhase[] = []
 	const add = (kind: HeliacalPhaseKind, sample: CrossingSample | undefined) => {
-		if (sample?.time !== undefined) phases.push({ kind, time: sample.time, arcusVisionis: sample.depression })
+		// The last scanned day's rise/set window can extend past `stop`; drop a transition whose crossing falls
+		// outside the requested window so only in-window phases are returned.
+		if (sample?.time === undefined || timeSubtract(sample.time, start) < 0 || timeSubtract(stop, sample.time) < 0) return
+		phases.push({ kind, time: sample.time, arcusVisionis: sample.depression })
 	}
 
 	add('heliacalRising', firstOnset(morningRise))

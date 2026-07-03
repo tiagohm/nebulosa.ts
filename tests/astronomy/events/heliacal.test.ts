@@ -4,7 +4,7 @@ import { earth, sun } from '../../../src/astronomy/ephemeris/models/analytical/v
 import { heliacalPhases } from '../../../src/astronomy/events/heliacal'
 import { altitudeOf } from '../../../src/astronomy/events/horizon'
 import { Ellipsoid, geodeticLocation } from '../../../src/astronomy/observer/location'
-import { type Time, Timescale, timeToDate, timeYMDHMS, utc } from '../../../src/astronomy/time/time'
+import { type Time, Timescale, timeSubtract, timeToDate, timeYMDHMS, utc } from '../../../src/astronomy/time/time'
 import { type Vec3, vecMinus } from '../../../src/math/linear-algebra/vec3'
 import { deg, hms, toDeg } from '../../../src/math/units/angle'
 import { kilometer } from '../../../src/math/units/distance'
@@ -70,6 +70,19 @@ test('a circumpolar object has no heliacal phases', () => {
 	// A star near the north celestial pole never sets from Cairo, so it has no rise/set crossings.
 	const polar: Vec3 = icrs(hms(2, 0, 0), deg(85))
 	expect(heliacalPhases(() => polar, sunDirection, CAIRO, RISING_START, RISING_STOP, { step: STEP }).length).toBe(0)
+}, 15000)
+
+test('does not report a phase whose crossing falls after stop', () => {
+	// The heliacal rising crossing is 2026-08-05 02:24 UTC; a window ending 01:00 UTC that day must not report
+	// it even though the last scanned day's rise/set window extends past stop.
+	const stop = timeYMDHMS(2026, 8, 5, 1, 0, 0, Timescale.UTC)
+	const phases = heliacalPhases(siriusDirection, sunDirection, CAIRO, RISING_START, stop, { step: STEP })
+	expect(phases.some((p) => p.kind === 'heliacalRising')).toBe(false)
+	// Every reported phase lies within the requested window.
+	for (const phase of phases) {
+		expect(timeSubtract(phase.time, RISING_START)).toBeGreaterThanOrEqual(0)
+		expect(timeSubtract(stop, phase.time)).toBeGreaterThanOrEqual(0)
+	}
 }, 15000)
 
 test('an empty window yields no phases', () => {
