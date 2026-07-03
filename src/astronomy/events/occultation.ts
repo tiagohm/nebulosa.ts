@@ -4,7 +4,7 @@ import { clamp } from '../../math/numerical/math'
 import type { Angle } from '../../math/units/angle'
 import type { Distance } from '../../math/units/distance'
 import { lightTime, type PositionAndVelocityOverTime, separationFrom } from '../coordinates/astrometry'
-import { type Time, timeShift } from '../time/time'
+import { type Time, timeShift, timeSubtract } from '../time/time'
 import { searchExtrema, type TimeSearchOptions } from './search'
 
 // Stellar and asteroidal occultation prediction for a single observer, without any shadow-path geometry.
@@ -71,6 +71,10 @@ const DERIVATIVE_STEP = ONE_SECOND
 // Default coarse sampling step: 1 min. Fine enough to bracket the appulse of a fast near-Earth asteroid,
 // whose approach inside a degree can last only a few minutes; widen it for slow, distant bodies.
 const DEFAULT_STEP = 60 * ONE_SECOND
+// Minimum number of coarse intervals across the window. searchExtrema needs a sample on each side of a
+// minimum to bracket it, so a window shorter than a few steps would otherwise return nothing; the effective
+// step is capped at span / this so even a sub-step window is sampled densely enough to catch its appulse.
+const MIN_INTERVALS = 4
 
 // Topocentric direction from the observer to the body at reception time `time`, light-time corrected.
 //
@@ -107,7 +111,11 @@ function topocentricDirection(target: PositionAndVelocityOverTime, observer: Pos
 // Candidates are chronological. The coarse `step` must be finer than the approach it should catch.
 export function occultationCandidates(target: PositionAndVelocityOverTime, star: Vec3, observer: PositionAndVelocityOverTime, start: Time, stop: Time, { radius = 0, maxSeparation = Number.POSITIVE_INFINITY, lightTimeIterations = 2, step = DEFAULT_STEP, tolerance }: OccultationOptions = {}): OccultationCandidate[] {
 	const separationAt = (time: Time) => separationFrom(topocentricDirection(target, observer, time, lightTimeIterations), star)
-	const extrema = searchExtrema(separationAt, start, stop, { step, tolerance })
+	// Cap the step so a short window still gets MIN_INTERVALS samples; otherwise searchExtrema cannot bracket
+	// an appulse centered in a window shorter than one step and would miss it entirely.
+	const span = timeSubtract(stop, start)
+	const effectiveStep = span > 0 ? Math.min(step, span / MIN_INTERVALS) : step
+	const extrema = searchExtrema(separationAt, start, stop, { step: effectiveStep, tolerance })
 	const candidates: OccultationCandidate[] = []
 
 	for (const extremum of extrema) {

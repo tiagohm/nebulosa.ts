@@ -6,7 +6,7 @@ import { occultationCandidates } from '../../../src/astronomy/events/occultation
 import { Ellipsoid, geodeticLocation } from '../../../src/astronomy/observer/location'
 import { KeplerOrbit } from '../../../src/astronomy/orbits/asteroid'
 import { type Time, Timescale, time, timeShift, timeSubtract } from '../../../src/astronomy/time/time'
-import { AU_M, DAYSEC, GM_SUN_PITJEVA_2005, SPEED_OF_LIGHT } from '../../../src/core/constants'
+import { AU_M, DAYSEC, GM_SUN_PITJEVA_2005, ONE_SECOND, SPEED_OF_LIGHT } from '../../../src/core/constants'
 import { matIdentity } from '../../../src/math/linear-algebra/mat3'
 import type { Vec3 } from '../../../src/math/linear-algebra/vec3'
 import { deg, toArcsec } from '../../../src/math/units/angle'
@@ -83,6 +83,17 @@ test('maxSeparation filters appulses wider than the limit', () => {
 	expect(occultationCandidates(driftingBody, STAR, fixedObserver, start, stop, { lightTimeIterations: 0, maxSeparation: IMPACT / RANGE / 2 }).length).toBe(0)
 	// Above it: the appulse is reported.
 	expect(occultationCandidates(driftingBody, STAR, fixedObserver, start, stop, { lightTimeIterations: 0, maxSeparation: (IMPACT / RANGE) * 2 }).length).toBe(1)
+})
+
+test('finds an appulse centered in a window shorter than the default step', () => {
+	// A 20 s window is far shorter than the 60 s default step; the effective step must be capped so the
+	// in-window appulse is still bracketed instead of returning nothing.
+	const start = timeShift(CROSSING, -10 * ONE_SECOND)
+	const stop = timeShift(CROSSING, 10 * ONE_SECOND)
+	const candidates = occultationCandidates(driftingBody, STAR, fixedObserver, start, stop, { radius: BODY_RADIUS, lightTimeIterations: 0 })
+	expect(candidates.length).toBe(1)
+	expect(candidates[0].occultation).toBe(true)
+	expect(timeSubtract(candidates[0].time, CROSSING) * DAYSEC).toBeCloseTo(0, 1)
 })
 
 test('the light-time correction retards the body and shifts the appulse later by the travel time', () => {
