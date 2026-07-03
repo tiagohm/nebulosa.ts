@@ -41,11 +41,14 @@ import { Ellipsoid, geodeticLocation, localSiderealTime, subpoint } from '../src
 import { KeplerOrbit, asteroid, comet, eccentricAnomalyFromMean, meanMotion, period, tisserandParameter, trueAnomalyClosed, trueAnomalyHyperbolic } from '../src/astronomy/orbits/asteroid'
 import { gibbs } from '../src/astronomy/orbits/determination/gibbs'
 import { herrickGibbs } from '../src/astronomy/orbits/determination/herrickgibbs'
+import { ephemerisUncertaintyEllipse as skyUncertaintyEllipse, propagateStateCovariance } from '../src/astronomy/orbits/orbit.covariance'
 import { parseTLE, recordFromTLE, sgp4 } from '../src/astronomy/orbits/propagation/sgp4'
 import { HealpixIndex } from '../src/astronomy/sky/spatial/healpix'
 import { deltaT } from '../src/astronomy/time/deltat'
 import { iersab, iersb } from '../src/astronomy/time/iers'
 import { fileHandleSource } from '../src/io/io'
+import { matIdentity } from '../src/math/linear-algebra/mat3'
+import { Matrix } from '../src/math/linear-algebra/matrix'
 // oxfmt-ignore
 import { Timescale, dut1 as dut1FromTime, earthRotationAngle, equationOfEquinoxes, greenwichApparentSiderealTime, greenwichMeanSiderealTime, nutationAngles, pmAngles, pmMatrix, tai, taiMinusUtc, tcb, tdb, timeBesselianYear, timeJulianYear, timeMJD, timeShift, timeSubtract, timeToDate, timeUnix, timeYMDHMS, toJulianDay, toJulianEpoch, tt, ut1, utc, type Time } from '../src/astronomy/time/time'
 import { formatTemporal, temporalFromTime } from '../src/astronomy/time/temporal'
@@ -1637,19 +1640,42 @@ function differentialOrbitCorrection() {
 	console.info('Differential orbit correction: fitOrbit(observations, epoch, position, velocity, options).')
 }
 
-// Orbit Covariance Propagation.
-// TODO(almanac): fitOrbit returns a state covariance at the epoch; propagating it to
-// another epoch needs the state-transition matrix, which is not exposed. Not
-// implemented beyond the epoch covariance from fitOrbit.
-function orbitCovariancePropagation() {
-	console.info('Orbit covariance propagation: fitOrbit yields the epoch covariance; STM-based propagation is not exposed.')
+// Sample uncertain orbit for the covariance demos: a main-belt asteroid in the identity (ICRF equatorial)
+// state frame, so its state, covariance and sky projection share one frame.
+function uncertainOrbit() {
+	return KeplerOrbit.meanAnomaly(2.5 * (1 - 0.15 * 0.15), 0.15, deg(8), deg(100), deg(60), deg(30), timeJulianYear(2026, Timescale.TDB), GM_SUN_PITJEVA_2005, matIdentity())
 }
 
-// Ephemeris Uncertainty Ellipse.
-// TODO(almanac): the sky-plane error ellipse is the projection of the propagated
-// covariance onto (RA, DEC); needs covariance propagation (above). Not implemented.
+// Its epoch state covariance: a diagonal 1e-6 AU (~150 km) position and 1e-8 AU/day velocity 1-sigma,
+// standing in for the covariance fitOrbit returns.
+function epochStateCovariance() {
+	const covariance = new Matrix(6, 6)
+	for (let k = 0; k < 3; k++) {
+		covariance.set(k, k, 1e-6 * 1e-6)
+		covariance.set(k + 3, k + 3, 1e-8 * 1e-8)
+	}
+	return covariance
+}
+
+// Orbit Covariance Propagation: propagateStateCovariance carries the epoch state covariance forward via
+// the two-body state-transition matrix, C(t) = Phi C0 Phi^T.
+function orbitCovariancePropagation() {
+	const orbit = uncertainOrbit()
+	const covariance = propagateStateCovariance(orbit, epochStateCovariance(), timeShift(orbit.epoch, 180))
+	console.info(
+		'Position 1-sigma 180 d after epoch (km):',
+		[0, 1, 2].map((k) => toKilometer(Math.sqrt(covariance.get(k, k)))),
+	)
+}
+
+// Ephemeris Uncertainty Ellipse: ephemerisUncertaintyEllipse projects the propagated position covariance
+// onto the plane of sky at the object's geocentric direction.
 function ephemerisUncertaintyEllipse() {
-	console.info('Ephemeris uncertainty ellipse: project the propagated covariance onto the sky plane; not implemented.')
+	const orbit = uncertainOrbit()
+	const time = timeShift(orbit.epoch, 180)
+	const covariance = propagateStateCovariance(orbit, epochStateCovariance(), time)
+	const ellipse = skyUncertaintyEllipse(covariance, vecMinus(orbit.at(time)[0], earth(time)[0]), { sigma: 3 })
+	console.info('3-sigma sky ellipse (arcsec):', toArcsec(ellipse.semiMajor), 'x', toArcsec(ellipse.semiMinor), 'PA (deg):', toDeg(ellipse.positionAngle))
 }
 
 // Close Approach B-Plane.
