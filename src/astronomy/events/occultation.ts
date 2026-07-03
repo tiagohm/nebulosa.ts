@@ -111,15 +111,20 @@ function topocentricDirection(target: PositionAndVelocityOverTime, observer: Pos
 // Candidates are chronological. The coarse `step` must be finer than the approach it should catch.
 export function occultationCandidates(target: PositionAndVelocityOverTime, star: Vec3, observer: PositionAndVelocityOverTime, start: Time, stop: Time, { radius = 0, maxSeparation = Number.POSITIVE_INFINITY, lightTimeIterations = 2, step = DEFAULT_STEP, tolerance }: OccultationOptions = {}): OccultationCandidate[] {
 	const separationAt = (time: Time) => separationFrom(topocentricDirection(target, observer, time, lightTimeIterations), star)
-	// Cap the step so a short window still gets MIN_INTERVALS samples; otherwise searchExtrema cannot bracket
-	// an appulse centered in a window shorter than one step and would miss it entirely.
 	const span = timeSubtract(stop, start)
-	const effectiveStep = span > 0 ? Math.min(step, span / MIN_INTERVALS) : step
-	const extrema = searchExtrema(separationAt, start, stop, { step: effectiveStep, tolerance })
+	if (span <= 0) return []
+
+	// Cap the step so a short window still gets MIN_INTERVALS samples, and scan one step beyond each end so an
+	// appulse in the first or last interval — which searchExtrema cannot bracket from an endpoint sample — is
+	// straddled and refined. Refined minima that land in the padding outside the window are dropped below.
+	const effectiveStep = Math.min(step, span / MIN_INTERVALS)
+	const extrema = searchExtrema(separationAt, timeShift(start, -effectiveStep), timeShift(stop, effectiveStep), { step: effectiveStep, tolerance })
 	const candidates: OccultationCandidate[] = []
 
 	for (const extremum of extrema) {
 		if (extremum.kind !== 'minimum') continue
+		// Keep only appulses inside the requested window; the one-step padding may bracket minima just outside.
+		if (timeSubtract(extremum.time, start) < 0 || timeSubtract(stop, extremum.time) < 0) continue
 
 		const separation = extremum.value
 		if (separation > maxSeparation) continue

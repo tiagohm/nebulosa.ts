@@ -85,15 +85,27 @@ test('maxSeparation filters appulses wider than the limit', () => {
 	expect(occultationCandidates(driftingBody, STAR, fixedObserver, start, stop, { lightTimeIterations: 0, maxSeparation: (IMPACT / RANGE) * 2 }).length).toBe(1)
 })
 
-test('finds an appulse centered in a window shorter than the default step', () => {
-	// A 20 s window is far shorter than the 60 s default step; the effective step must be capped so the
-	// in-window appulse is still bracketed instead of returning nothing.
-	const start = timeShift(CROSSING, -10 * ONE_SECOND)
-	const stop = timeShift(CROSSING, 10 * ONE_SECOND)
+test('finds an appulse anywhere in a window shorter than the default step', () => {
+	// A 20 s window is far shorter than the 60 s default step, so the effective step must be capped and the
+	// window padded, otherwise searchExtrema returns nothing. The appulse is caught whether it sits at the
+	// centre or hard against either boundary (the first/last coarse interval an endpoint scan cannot bracket).
+	for (const offset of [-10, -9, 0, 9, 10]) {
+		const start = timeShift(CROSSING, (offset - 10) * ONE_SECOND)
+		const stop = timeShift(CROSSING, (offset + 10) * ONE_SECOND)
+		const candidates = occultationCandidates(driftingBody, STAR, fixedObserver, start, stop, { radius: BODY_RADIUS, lightTimeIterations: 0 })
+		expect(candidates.length).toBe(1)
+		expect(candidates[0].occultation).toBe(true)
+		expect(timeSubtract(candidates[0].time, CROSSING) * DAYSEC).toBeCloseTo(0, 1)
+	}
+})
+
+test('does not report an appulse whose minimum lies outside the window', () => {
+	// The crossing is 2 s before the window opens, inside the one-step padding, so it gets bracketed and
+	// refined; the in-window filter must then drop it.
+	const start = timeShift(CROSSING, 2 * ONE_SECOND)
+	const stop = timeShift(CROSSING, 22 * ONE_SECOND)
 	const candidates = occultationCandidates(driftingBody, STAR, fixedObserver, start, stop, { radius: BODY_RADIUS, lightTimeIterations: 0 })
-	expect(candidates.length).toBe(1)
-	expect(candidates[0].occultation).toBe(true)
-	expect(timeSubtract(candidates[0].time, CROSSING) * DAYSEC).toBeCloseTo(0, 1)
+	expect(candidates.length).toBe(0)
 })
 
 test('the light-time correction retards the body and shifts the appulse later by the travel time', () => {
