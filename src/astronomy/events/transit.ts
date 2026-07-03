@@ -1,10 +1,11 @@
 import { DAYSEC, ONE_SECOND } from '../../core/constants'
 import type { Vec3 } from '../../math/linear-algebra/vec3'
 import { clamp } from '../../math/numerical/math'
+import { brentMinimize } from '../../math/numerical/optimization'
 import { type Angle, normalizeAngle, normalizePI } from '../../math/units/angle'
 import type { Distance } from '../../math/units/distance'
 import { equatorial, type PositionAndVelocityOverTime, separationFrom, topocentricDirection } from '../coordinates/astrometry'
-import { type Time, timeSubtract } from '../time/time'
+import { type Time, timeShift, timeSubtract } from '../time/time'
 import { searchExtrema, searchRoots, type TimeSearchOptions } from './search'
 
 // Planetary transit prediction for a single observer, without any Besselian shadow-path engine.
@@ -112,6 +113,26 @@ function contactPositionAngle(sunDirection: Vec3, planetDirection: Vec3): Angle 
 	return normalizeAngle(Math.atan2(Math.sin(deltaRa), Math.cos(sunDec) * Math.tan(planetDec) - Math.sin(sunDec) * Math.cos(deltaRa)))
 }
 
+// An appulse candidate: the refined mid-transit instant and the centre-to-centre separation there.
+interface SeparationMinimum {
+	readonly time: Time
+	readonly value: number
+}
+
+// Refines a separation minimum in a boundary interval [from, to] that searchExtrema cannot bracket from its
+// endpoint sample, mirroring occultationCandidates. `outerValue` is the separation at the interval's outer
+// window endpoint, which the caller has already found to be at or below the inner sample; that gate also keeps
+// searchExtrema (which brackets with a strict inequality) from firing on the inner sample, so no duplicate is
+// produced. Returns the interior minimum only when the interval genuinely dips below the outer endpoint — a
+// monotonic slope toward the endpoint means the appulse sits at or beyond the boundary, not in-window.
+// Evaluates the separation only within [from, to].
+function boundaryMinimum(separationAt: (time: Time) => number, from: Time, to: Time, outerValue: number, tolerance: number | undefined): SeparationMinimum | undefined {
+	const width = timeSubtract(to, from)
+	const result = brentMinimize((x) => separationAt(timeShift(from, x)), 0, width, { tolerance })
+	if (!(result.value < outerValue)) return undefined
+	return { time: timeShift(from, result.minimum), value: result.value }
+}
+
 // First root of `f` in (from, to], or undefined when the interval has none. Used for the egress contacts,
 // which are the earliest threshold crossing after mid-transit.
 function firstRootAfter(f: (time: Time) => number, from: Time, to: Time, step: number, tolerance: number | undefined): Time | undefined {
@@ -164,22 +185,44 @@ export function planetaryTransits(planet: PositionAndVelocityOverTime, sun: Posi
 		return g.separation - (g.sunAngularRadius - g.planetAngularRadius)
 	}
 
-	const transits: PlanetaryTransit[] = []
+	// Collect candidate appulse minima in chronological order. searchExtrema covers the interior, but cannot
+	// bracket a minimum sitting in the first or last coarse interval next to a window endpoint; those are
+	// probed with an in-window bounded minimization when the outer endpoint is the lower coarse sample (mirrors
+	// occultationCandidates), so an appulse just inside either boundary is still caught.
+	const minima: SeparationMinimum[] = []
+
+	const startValue = separationAt(start)
+	const firstInner = timeShift(start, effectiveStep)
+	if (startValue <= separationAt(firstInner)) {
+		const first = boundaryMinimum(separationAt, start, firstInner, startValue, tolerance)
+		if (first) minima.push(first)
+	}
 
 	for (const extremum of searchExtrema(separationAt, start, stop, { step: effectiveStep, tolerance })) {
-		if (extremum.kind !== 'minimum') continue
+		if (extremum.kind === 'minimum') minima.push({ time: extremum.time, value: extremum.value })
+	}
 
-		const mid = geometryAt(extremum.time)
+	const stopValue = separationAt(stop)
+	const lastInner = timeShift(stop, -effectiveStep)
+	if (stopValue <= separationAt(lastInner)) {
+		const last = boundaryMinimum(separationAt, lastInner, stop, stopValue, tolerance)
+		if (last) minima.push(last)
+	}
+
+	const transits: PlanetaryTransit[] = []
+
+	for (const minimum of minima) {
+		const mid = geometryAt(minimum.time)
 		// A separation minimum that never reaches the radius sum is only an appulse near the Sun, not a transit.
-		if (extremum.value >= mid.sunAngularRadius + mid.planetAngularRadius) continue
+		if (minimum.value >= mid.sunAngularRadius + mid.planetAngularRadius) continue
 		// A full transit dips below the radius difference (planet wholly inside); otherwise it merely grazes.
-		const full = extremum.value < mid.sunAngularRadius - mid.planetAngularRadius
+		const full = minimum.value < mid.sunAngularRadius - mid.planetAngularRadius
 
 		// Exterior contacts bracket the appulse; interior contacts exist only for a full transit.
-		const exteriorIngress = lastRootBefore(exteriorGap, start, extremum.time, effectiveStep, tolerance)
-		const exteriorEgress = firstRootAfter(exteriorGap, extremum.time, stop, effectiveStep, tolerance)
-		const interiorIngress = full ? lastRootBefore(interiorGap, start, extremum.time, effectiveStep, tolerance) : undefined
-		const interiorEgress = full ? firstRootAfter(interiorGap, extremum.time, stop, effectiveStep, tolerance) : undefined
+		const exteriorIngress = lastRootBefore(exteriorGap, start, minimum.time, effectiveStep, tolerance)
+		const exteriorEgress = firstRootAfter(exteriorGap, minimum.time, stop, effectiveStep, tolerance)
+		const interiorIngress = full ? lastRootBefore(interiorGap, start, minimum.time, effectiveStep, tolerance) : undefined
+		const interiorEgress = full ? firstRootAfter(interiorGap, minimum.time, stop, effectiveStep, tolerance) : undefined
 
 		// Limb position angles at the exterior contacts, and the total I->IV duration.
 		let ingressPositionAngle: Angle | undefined
@@ -195,8 +238,8 @@ export function planetaryTransits(planet: PositionAndVelocityOverTime, sun: Posi
 		const duration = exteriorIngress !== undefined && exteriorEgress !== undefined ? timeSubtract(exteriorEgress, exteriorIngress) * DAYSEC : undefined
 
 		transits.push({
-			time: extremum.time,
-			minSeparation: extremum.value,
+			time: minimum.time,
+			minSeparation: minimum.value,
 			sunAngularRadius: mid.sunAngularRadius,
 			planetAngularRadius: mid.planetAngularRadius,
 			full,

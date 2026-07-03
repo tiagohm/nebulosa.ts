@@ -112,6 +112,39 @@ test('leaves egress contacts undefined when the window closes before egress', ()
 	expect(contactError(transit.interiorIngress, 2463549.781121)).toBeLessThan(2)
 })
 
+test('catches an appulse in the last interval when the window ends just after mid-transit', () => {
+	const observer = observerAt(GREENWICH)
+	// Window ends at 08:55, ~12 s after mid-transit (08:54:48): the appulse sits in the last coarse interval,
+	// which searchExtrema cannot bracket, so it is recovered by the in-window boundary minimization.
+	const [transit, ...rest] = planetaryTransits(mercury, sun, observer, timeYMDHMS(2032, 11, 13, 5, 0, 0, Timescale.UTC), timeYMDHMS(2032, 11, 13, 8, 55, 0, Timescale.UTC), { sunRadius: SUN_RADIUS, planetRadius: MERCURY_RADIUS })
+	expect(rest.length).toBe(0)
+	expect(transit).toBeDefined()
+	expect(transit.full).toBe(true)
+	// The true impact parameter is recovered (not a boundary-value artifact).
+	expect(toArcsec(transit.minSeparation)).toBeCloseTo(569.44, 1)
+	// Ingress contacts are in-window; egress contacts and the I->IV duration are not.
+	expect(contactError(transit.exteriorIngress, 2463549.779682)).toBeLessThan(2)
+	expect(contactError(transit.interiorIngress, 2463549.781121)).toBeLessThan(2)
+	expect(transit.exteriorEgress).toBeUndefined()
+	expect(transit.interiorEgress).toBeUndefined()
+	expect(transit.duration).toBeUndefined()
+})
+
+test('catches an appulse in the first interval when the window starts just before mid-transit', () => {
+	const observer = observerAt(GREENWICH)
+	// Window starts at 08:54:30, ~18 s before mid-transit: the appulse sits in the first coarse interval, again
+	// recovered by the boundary minimization. Egress contacts are in-window, ingress contacts are not.
+	const [transit, ...rest] = planetaryTransits(mercury, sun, observer, timeYMDHMS(2032, 11, 13, 8, 54, 30, Timescale.UTC), timeYMDHMS(2032, 11, 13, 12, 0, 0, Timescale.UTC), { sunRadius: SUN_RADIUS, planetRadius: MERCURY_RADIUS })
+	expect(rest.length).toBe(0)
+	expect(transit).toBeDefined()
+	expect(transit.full).toBe(true)
+	expect(toArcsec(transit.minSeparation)).toBeCloseTo(569.44, 1)
+	expect(transit.exteriorIngress).toBeUndefined()
+	expect(transit.interiorIngress).toBeUndefined()
+	expect(contactError(transit.interiorEgress, 2463549.963249)).toBeLessThan(2)
+	expect(contactError(transit.exteriorEgress, 2463549.964686)).toBeLessThan(2)
+})
+
 test('reports no transit when the window opens after mid-transit', () => {
 	const observer = observerAt(GREENWICH)
 	// Detection anchors on the appulse: a window from 09:30 (after mid-transit at 08:55) to 12:00 excludes the
