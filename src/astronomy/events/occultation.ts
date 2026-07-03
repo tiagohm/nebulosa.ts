@@ -107,11 +107,12 @@ interface SeparationMinimum {
 
 // Refines a separation minimum in a boundary interval [from, to] that searchExtrema cannot bracket from its
 // endpoint sample. `outerValue` is the separation at the interval's outer window endpoint, which the caller
-// has already found to be the lower of the two ends; probing only in that case also guarantees searchExtrema
-// does not fire on the inner sample, so no duplicate is produced. Returns the interior minimum only when the
-// interval genuinely dips below the outer endpoint — a monotonic slope toward the endpoint is the appulse
-// peak sitting at or beyond the boundary, not an in-window event. Evaluates the separation only within
-// [from, to], so a bounded/interpolated sampler is never queried outside the requested window.
+// has already found to be at or below the inner sample; probing only in that case also guarantees searchExtrema
+// (which brackets with a strict inequality) does not fire on the inner sample, so no duplicate is produced.
+// Returns the interior minimum only when the interval genuinely dips below the outer endpoint — a monotonic
+// slope toward the endpoint is the appulse peak sitting at or beyond the boundary, not an in-window event.
+// Evaluates the separation only within [from, to], so a bounded/interpolated sampler is never queried outside
+// the requested window.
 function boundaryMinimum(separationAt: (time: Time) => number, from: Time, to: Time, outerValue: number, tolerance: number | undefined): SeparationMinimum | undefined {
 	const width = timeSubtract(to, from)
 	const result = brentMinimize((x) => separationAt(timeShift(from, x)), 0, width, { tolerance })
@@ -148,13 +149,15 @@ export function occultationCandidates(target: PositionAndVelocityOverTime, star:
 	const effectiveStep = Math.min(step, span / MIN_INTERVALS)
 
 	// Collect separation minima in chronological order. The first interval is probed when its outer endpoint
-	// (start) is the lower coarse sample, then the scanner covers the interior, then the last interval is
-	// probed when its outer endpoint (stop) is the lower sample.
+	// (start) is at or below the inner coarse sample, then the scanner covers the interior, then the last
+	// interval is probed when its outer endpoint (stop) is at or below its inner sample. The comparison is
+	// non-strict so an appulse sitting midway through a boundary interval, whose two endpoint samples tie, is
+	// still probed; the scanner's strict bracketing keeps it from also firing on the inner sample.
 	const minima: SeparationMinimum[] = []
 
 	const startValue = separationAt(start)
 	const firstInner = timeShift(start, effectiveStep)
-	if (startValue < separationAt(firstInner)) {
+	if (startValue <= separationAt(firstInner)) {
 		const first = boundaryMinimum(separationAt, start, firstInner, startValue, tolerance)
 		if (first) minima.push(first)
 	}
@@ -165,7 +168,7 @@ export function occultationCandidates(target: PositionAndVelocityOverTime, star:
 
 	const stopValue = separationAt(stop)
 	const lastInner = timeShift(stop, -effectiveStep)
-	if (stopValue < separationAt(lastInner)) {
+	if (stopValue <= separationAt(lastInner)) {
 		const last = boundaryMinimum(separationAt, lastInner, stop, stopValue, tolerance)
 		if (last) minima.push(last)
 	}

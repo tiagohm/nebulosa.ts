@@ -99,6 +99,25 @@ test('finds an interior appulse anywhere in a window shorter than the default st
 	}
 })
 
+test('catches a boundary appulse sitting exactly midway through the first or last interval', () => {
+	// With a 20 s window the effective step is span / 4 = 5 s, so the first and last coarse intervals are 5 s
+	// wide. An appulse exactly 2.5 s inside a boundary sits at that interval's midpoint, where both endpoint
+	// samples tie: the scanner cannot bracket it (it needs a strictly lower interior sample) and a strict
+	// endpoint comparison would skip the bounded probe. The non-strict boundary comparison must still catch it,
+	// exactly once (no duplicate from the scanner).
+	const firstMidStart = timeShift(CROSSING, -2.5 * ONE_SECOND)
+	const first = occultationCandidates(driftingBody, STAR, fixedObserver, firstMidStart, timeShift(firstMidStart, 20 * ONE_SECOND), { radius: BODY_RADIUS, lightTimeIterations: 0 })
+	expect(first.length).toBe(1)
+	expect(first[0].occultation).toBe(true)
+	expect(timeSubtract(first[0].time, CROSSING) * DAYSEC).toBeCloseTo(0, 1)
+
+	const lastMidStop = timeShift(CROSSING, 2.5 * ONE_SECOND)
+	const last = occultationCandidates(driftingBody, STAR, fixedObserver, timeShift(lastMidStop, -20 * ONE_SECOND), lastMidStop, { radius: BODY_RADIUS, lightTimeIterations: 0 })
+	expect(last.length).toBe(1)
+	expect(last[0].occultation).toBe(true)
+	expect(timeSubtract(last[0].time, CROSSING) * DAYSEC).toBeCloseTo(0, 1)
+})
+
 test('with light time disabled, never samples the observer or body outside the requested window', () => {
 	// A boundary appulse (crossing 1 s after start) still must not drive any evaluation before start or after
 	// stop, so bounded/interpolated samplers stay valid over exactly [start, stop] when light time is off.
