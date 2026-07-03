@@ -54,6 +54,10 @@ const DEFAULT_VELOCITY_FLOOR = 1e-11
 // covariance, regardless of the orbit's own output rotation.
 const STATE_FRAME = matIdentity()
 
+// Fractional distance below which the object is treated as being at a celestial pole, where right
+// ascension is undefined and the East/North basis is replaced by a fixed tangent basis.
+const POLE_TOLERANCE = 1e-8
+
 // Propagates a raw six-element state to `time` in the state frame (no output rotation), returning the
 // propagated [x, y, z, vx, vy, vz].
 function propagateState(state: readonly number[], epoch: Time, mu: number, time: Time): number[] {
@@ -121,13 +125,24 @@ export function ephemerisUncertaintyEllipse(covariance: Matrix, geocentric: Vec3
 	const distance = Math.sqrt(x * x + y * y + z * z)
 	const horizontal = Math.sqrt(x * x + y * y)
 
-	// Sky-plane unit vectors at the object's direction.
-	const sinRa = y / horizontal
-	const cosRa = x / horizontal
-	const sinDec = z / distance
-	const cosDec = horizontal / distance
-	const east: Vec3 = [-sinRa, cosRa, 0]
-	const north: Vec3 = [-sinDec * cosRa, -sinDec * sinRa, cosDec]
+	// Sky-plane East/North unit vectors at the object's direction. Right ascension is undefined within a
+	// hair of a celestial pole (horizontal ~ 0), so there fall back to a fixed orthonormal tangent basis
+	// perpendicular to the line of sight (the ellipse shape is well defined; only its position angle,
+	// itself meaningless at the pole, is arbitrary).
+	let east: Vec3
+	let north: Vec3
+	if (horizontal < POLE_TOLERANCE * distance) {
+		const sign = z >= 0 ? 1 : -1
+		east = [1, 0, 0]
+		north = [0, sign, 0]
+	} else {
+		const sinRa = y / horizontal
+		const cosRa = x / horizontal
+		const sinDec = z / distance
+		const cosDec = horizontal / distance
+		east = [-sinRa, cosRa, 0]
+		north = [-sinDec * cosRa, -sinDec * sinRa, cosDec]
+	}
 
 	// Angular covariance J C J^T with J = (1/distance) [east; north]. Form C·east and C·north once.
 	const cEast = covariance3MulVec(covariance, east)

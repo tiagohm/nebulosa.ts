@@ -114,6 +114,23 @@ test('the uncertainty ellipse of a diagonal covariance is analytic', () => {
 	expect(ellipse.positionAngle).toBeCloseTo(Math.PI / 2, 10)
 })
 
+test('the uncertainty ellipse is finite for a pole direction', () => {
+	// Looking straight along +z (the north celestial pole) the horizontal component vanishes and RA is
+	// undefined; the ellipse must still be finite, using the x/y position spread projected onto the sky.
+	const distance = 2
+	const covariance = new Matrix(6, 6)
+	covariance.set(0, 0, 4e-6 * 4e-6)
+	covariance.set(1, 1, 1e-6 * 1e-6)
+	covariance.set(2, 2, 9e-6 * 9e-6)
+	const ellipse = ephemerisUncertaintyEllipse(covariance, [0, 0, distance])
+
+	expect(Number.isFinite(ellipse.semiMajor)).toBe(true)
+	expect(Number.isFinite(ellipse.positionAngle)).toBe(true)
+	// The line-of-sight (z) variance drops out; the axes come from the 4e-6 and 1e-6 in-plane spreads.
+	expect(ellipse.semiMajor).toBeCloseTo(4e-6 / distance, 12)
+	expect(ellipse.semiMinor).toBeCloseTo(1e-6 / distance, 12)
+})
+
 test('the ellipse matches the sky-plane scatter of the propagated covariance', () => {
 	const time = timeShift(EPOCH, 40)
 	const propagated = propagateStateCovariance(ORBIT, epochCovariance(), time)
