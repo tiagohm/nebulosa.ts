@@ -1111,14 +1111,6 @@ function crescentMoonWidth() {
 	console.info('Crescent width (arcmin):', toArcsec(width) / 60)
 }
 
-// Crescent Moon Visibility (first-visibility criterion).
-// TODO(almanac): the Yallop/Odeh first-visibility criteria (q-test) combine the
-// Moon-Sun altitude difference, the crescent width and the arc of vision. Not
-// implemented; add a `crescentVisibility(time, location)` returning the q-value.
-function crescentMoonVisibility() {
-	console.info('Crescent Moon visibility: not implemented; add the Yallop/Odeh q-test.')
-}
-
 // ##### Visibility and Almanac Events #####
 
 // Object Rise / Set Time: the standard-horizon crossings from the rise/transit/set
@@ -1304,14 +1296,6 @@ function parallacticAngleTimeSeries() {
 	console.info('Parallactic angle at HA -3h..+3h (deg):', series)
 }
 
-// Horizon Mask Crossing.
-// TODO(almanac): with a custom horizon profile (azimuth -> altitude), rise/set
-// occur where the object's altitude crosses the local mask; needs sampling and an
-// interpolated horizon. No horizon-mask utility is provided. Not implemented.
-function horizonMaskCrossing() {
-	console.info('Horizon mask crossing: compare object altitude against an azimuth->altitude mask; needs a horizon-profile utility. Not implemented.')
-}
-
 // ##### Eclipses, Occultations, and Transits #####
 
 // Solar Eclipse Classification: the type of the next solar eclipse.
@@ -1376,14 +1360,6 @@ function lunarEclipseMoonAltitude() {
 	const lst = localSiderealTime(e.maximalTime, SITE, false)
 	const [, alt] = equatorialToHorizontal(eq[0], eq[1], SITE.latitude, normalizeAngle(lst - eq[0]) + eq[0])
 	console.info('Moon altitude at eclipse maximum (deg):', toDeg(alt))
-}
-
-// Lunar Eclipse Danjon Estimate.
-// TODO(almanac): the Danjon L-value (0-4 brightness/colour scale) is an empirical
-// visual estimate, not a computed quantity; the library models the geometry but
-// not the atmosphere/colour. Not implemented.
-function lunarEclipseDanjonEstimate() {
-	console.info('Lunar eclipse Danjon L-value: empirical visual scale; not computed by the library.')
 }
 
 // Stellar / Asteroid / Lunar Occultation Prediction.
@@ -1943,7 +1919,6 @@ function run() {
 	lunarPerigeeAndApogee()
 	lunarStandstillExtremes()
 	crescentMoonWidth()
-	crescentMoonVisibility()
 
 	// Visibility and Almanac Events
 	objectRiseTime()
@@ -1972,7 +1947,6 @@ function run() {
 	fieldRotationAngle()
 	fieldRotationRate()
 	parallacticAngleTimeSeries()
-	horizonMaskCrossing()
 
 	// Eclipses, Occultations, and Transits
 	solarEclipseClassification()
@@ -1983,7 +1957,6 @@ function run() {
 	localLunarEclipseCircumstances()
 	lunarEclipseMagnitude()
 	lunarEclipseMoonAltitude()
-	lunarEclipseDanjonEstimate()
 	stellarOccultationCircumstances()
 	asteroidOccultationPrediction()
 	lunarOccultationPrediction()
