@@ -194,6 +194,11 @@ export const MU_KM3_S2_TO_AU3_D2 = (DAYSEC * DAYSEC) / AU_KM / AU_KM / AU_KM
 // Conversion factor for a gravitational parameter from AU³/day² to km³/s².
 export const MU_AU3_D2_TO_KM3_S2 = (AU_KM * AU_KM * AU_KM) / (DAYSEC * DAYSEC)
 
+// Earth gravitational parameter (GM_Earth) in km³/s², from JPL DE440.
+export const GM_EARTH_KM3_S2 = 398600.435436
+// Earth gravitational parameter (GM_Earth) in AU³/day², from JPL DE440.
+export const GM_EARTH = GM_EARTH_KM3_S2 * MU_KM3_S2_TO_AU3_D2
+
 // Heliocentric gravitational constant in meters^3 / second^2, from DE-405.
 export const GS = 1.32712440017987e20
 

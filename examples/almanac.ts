@@ -41,6 +41,7 @@ import { Ellipsoid, geodeticLocation, localSiderealTime, subpoint } from '../src
 import { KeplerOrbit, asteroid, comet, eccentricAnomalyFromMean, meanMotion, period, tisserandParameter, trueAnomalyClosed, trueAnomalyHyperbolic } from '../src/astronomy/orbits/asteroid'
 import { gibbs } from '../src/astronomy/orbits/determination/gibbs'
 import { herrickGibbs } from '../src/astronomy/orbits/determination/herrickgibbs'
+import { closeApproachBPlane as computeBPlane } from '../src/astronomy/orbits/orbit.bplane'
 import { ephemerisUncertaintyEllipse as skyUncertaintyEllipse, propagateStateCovariance } from '../src/astronomy/orbits/orbit.covariance'
 import { parseTLE, recordFromTLE, sgp4 } from '../src/astronomy/orbits/propagation/sgp4'
 import { HealpixIndex } from '../src/astronomy/sky/spatial/healpix'
@@ -1678,11 +1679,14 @@ function ephemerisUncertaintyEllipse() {
 	console.info('3-sigma sky ellipse (arcsec):', toArcsec(ellipse.semiMajor), 'x', toArcsec(ellipse.semiMinor), 'PA (deg):', toDeg(ellipse.positionAngle))
 }
 
-// Close Approach B-Plane.
-// TODO(almanac): the b-plane (target plane) coordinates of a planetary encounter
-// need a hyperbolic-flyby reduction relative to the planet. Not implemented.
+// Close Approach B-Plane: computeBPlane reduces a planetocentric hyperbolic flyby to its target-plane
+// coordinates. Here the Apophis 2029 Earth encounter (geocentric state from JPL Horizons) reproduces the
+// ~38000 km closest approach.
 function closeApproachBPlane() {
-	console.info('Close approach b-plane: reduce the hyperbolic flyby to target-plane (xi, zeta); not implemented.')
+	const position: Vec3 = [-3.739382606686898e-4, 6.252835449470995e-5, -1.687341276876984e-5]
+	const velocity: Vec3 = [3.04338798147783e-3, 1.743343223811018e-3, 1.940149213856787e-3]
+	const bplane = computeBPlane(position, velocity)
+	console.info('Apophis 2029 b-plane: closest approach (km):', toKilometer(bplane.periapsisDistance), 'v_infinity (km/s):', toKilometerPerSecond(bplane.vInfinity), 'B_T/B_R (km):', toKilometer(bplane.bt), toKilometer(bplane.br))
 }
 
 // ##### Artificial Satellites #####
