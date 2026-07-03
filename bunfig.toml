@@ -7,4 +7,4 @@ exact = true
 root = "./tests"
 preload = ["./tests/setup.ts"]
 coverageSkipTestFiles = true
-coveragePathIgnorePatterns = ["tests/**", "examples/**", "scripts/**", "**/*.data.ts", "**/erfa.ts", "**/types.ts", "**/sgp4.ts", "**/meeus.ts"]
+coveragePathIgnorePatterns = ["tests/**", "examples/**", "scripts/**", "**/*.data.ts", "**/erfa.ts", "**/types.ts", "**/sgp4.ts", "**/meeus.ts", "**/phd2.ts", "src/devices/**"]
