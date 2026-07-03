@@ -412,6 +412,14 @@ function computePositionAndVelocityFromOrbitalElements(p: Distance, e: number, i
 	return [position, velocity]
 }
 
+// Position (AU) on an orbit at a given true anomaly, in the orbit's output frame. This is purely
+// geometric: it traces the orbit as a curve, independent of the epoch and mean anomaly. `trueAnomaly` is
+// radians; the result is a freshly allocated vector.
+export function positionAtTrueAnomaly(orbit: KeplerOrbit, trueAnomaly: Angle): MutVec3 {
+	const [position] = computePositionAndVelocityFromOrbitalElements(orbit.semiLatusRectum, orbit.eccentricity, orbit.inclination, orbit.longitudeOfAscendingNode, orbit.argumentOfPeriapsis, trueAnomaly, orbit.mu)
+	return matMulVec(orbit.rotation, position, position)
+}
+
 // ln(1.5), used when bounding the universal anomaly for elliptic/parabolic orbits.
 const LN_1_5 = 0.4054651081081644
 // ln of half the largest finite double; caps the hyperbolic-branch argument against overflow.

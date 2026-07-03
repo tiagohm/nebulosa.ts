@@ -43,6 +43,7 @@ import { gibbs } from '../src/astronomy/orbits/determination/gibbs'
 import { herrickGibbs } from '../src/astronomy/orbits/determination/herrickgibbs'
 import { closeApproachBPlane as computeBPlane } from '../src/astronomy/orbits/orbit.bplane'
 import { ephemerisUncertaintyEllipse as skyUncertaintyEllipse, propagateStateCovariance } from '../src/astronomy/orbits/orbit.covariance'
+import { moid } from '../src/astronomy/orbits/orbit.moid'
 import { parseTLE, recordFromTLE, sgp4 } from '../src/astronomy/orbits/propagation/sgp4'
 import { HealpixIndex } from '../src/astronomy/sky/spatial/healpix'
 import { deltaT } from '../src/astronomy/time/deltat'
@@ -1589,12 +1590,11 @@ function minorPlanetClosestApproach() {
 	console.info('Minor planet closest approach: use the SBD closeApproaches() endpoint (network); no local propagator.')
 }
 
-// Minimum Orbit Intersection Distance (MOID).
-// TODO(almanac): no MOID solver. It minimizes the distance between two orbits over
-// both true anomalies (Gronchi's algebraic method or a sampled minimization). Not
-// implemented.
+// Minimum Orbit Intersection Distance (MOID): moid minimizes the inter-orbit distance over both true
+// anomalies. Here the sample asteroid is screened against Earth's osculating heliocentric orbit.
 function minimumOrbitIntersectionDistance() {
-	console.info('MOID: minimize inter-orbit distance over both true anomalies; not implemented.')
+	const earthOrbit = new KeplerOrbit(vecMinus(earth(NOW)[0], sun(NOW)[0]), vecMinus(earth(NOW)[1], sun(NOW)[1]), NOW, GM_SUN_PITJEVA_2005, matIdentity())
+	console.info('Sample asteroid Earth MOID (AU):', moid(asteroidKeplerOrbit(), earthOrbit).distance)
 }
 
 // Tisserand Parameter (relative to Jupiter).
