@@ -98,6 +98,34 @@ test('ring ordering returns the same circle matches as nested ordering', () => {
 	}
 })
 
+test('ring-ordered index exposes pixel helpers and streaming region queries', () => {
+	const index = new HealpixIndex<string>({ nside: 4, ordering: 'ring' })
+	index.add('a', deg(12), deg(35))
+	index.add('b', deg(180), deg(-20))
+
+	const pixel = index.coordToPixel(deg(12), deg(35))
+	expect(pixel).toBe(coordToPixel(4, deg(12), deg(35), 'ring'))
+	expect(index.pixelToCenter(pixel)).toEqual(pixelToCenter(4, pixel, 'ring'))
+	expect(index.pixelToBoundary(pixel)).toEqual(pixelToBoundary(4, pixel, 'ring'))
+
+	const query = { kind: 'box', minRA: deg(10), maxRA: deg(14), minDEC: deg(34), maxDEC: deg(36) } as const
+	expect(idsOf([...index.streamRegion(query)])).toEqual(['a'])
+	expect(index.queryRegion({ kind: 'unsupported' } as never)).toEqual([])
+})
+
+test('ring pixel centers cover north, equatorial, and south zones', () => {
+	const nside = 4
+	const pixels = [0, 2 * nside * (nside - 1), 12 * nside * nside - 1]
+
+	for (const pixel of pixels) {
+		const center = pixelToCenter(nside, pixel, 'ring')
+		expect(center[0]).toBeGreaterThanOrEqual(0)
+		expect(center[0]).toBeLessThanOrEqual(2 * PI)
+		expect(center[1]).toBeGreaterThanOrEqual(-PIOVERTWO)
+		expect(center[1]).toBeLessThanOrEqual(PIOVERTWO)
+	}
+})
+
 test('circle query is boundary inclusive', () => {
 	const index = new HealpixIndex<string>({ nside: 16 })
 	const radius = deg(12)
@@ -208,6 +236,7 @@ test('rejects invalid NSIDE, pixel indices, and radii', () => {
 	// Radius must be a finite value in [0, PI].
 	expect(() => circleToPixels(8, 0, 0, -1)).toThrow('invalid spherical radius')
 	expect(() => circleToPixels(8, 0, 0, PI + 0.1)).toThrow('invalid spherical radius')
+	expect(() => circleToPixels(8, 0, 0, deg(1), { maxDepth: -1 })).toThrow('invalid HEALPix cover maxDepth')
 })
 
 test('supports bigint identifiers', () => {

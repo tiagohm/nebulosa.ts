@@ -2,8 +2,8 @@ import { expect, test } from 'bun:test'
 import type { PositionAndVelocity } from '../../../src/astronomy/coordinates/astrometry'
 import { eraC2s, eraS2c } from '../../../src/astronomy/coordinates/erfa/erfa'
 // oxfmt-ignore
-import { CIRS, ecliptic, ECLIPTIC_J2000, eclipticJ2000, FK5, frameAt, frameRotationAt, frameToBase, frameToFrame, GALACTIC, galactic, ICRS, ITRS, ITRS_INSTANTANEOUS, itrfToTeme, itrfToTemeByGmst, MEAN_ECLIPTIC_OF_DATE, MEAN_EQUATOR_AND_EQUINOX_OF_DATE, precessionMatrixCapitaine, supergalactic, TEME, temeToItrf, temeToItrfByGmst, TIRS, TRUE_EQUATOR_AND_EQUINOX_OF_DATE } from '../../../src/astronomy/coordinates/frame'
-import { Timescale, timeYMDHMS } from '../../../src/astronomy/time/time'
+import { CIRS, cirs, ecliptic, ECLIPTIC_B1950, eclipticB1950, ECLIPTIC_J2000, eclipticJ2000, FK4, fk4, FK5, fk5, fk5Frame, fk5ToIcrs, frameAt, frameRotationAt, frameToBase, frameToFrame, GALACTIC, galactic, ICRS, icrs, icrsToFk5, ITRS, itrs, ITRS_INSTANTANEOUS, itrsInstantaneous, itrfToTeme, itrfToTemeByGmst, MEAN_ECLIPTIC_OF_DATE, meanEclipticOfDate, MEAN_EQUATOR_AND_EQUINOX_AT_B1950, meanEquatorAndEquinoxAtB1950, MEAN_EQUATOR_AND_EQUINOX_OF_DATE, meanEquatorAndEquinoxOfDate, precessionMatrixCapitaine, supergalactic, SUPERGALACTIC, TEME, teme, temeToItrf, temeToItrfByGmst, TIRS, tirs, TRUE_EQUATOR_AND_EQUINOX_OF_DATE, trueEquatorAndEquinoxOfDate } from '../../../src/astronomy/coordinates/frame'
+import { type Time, Timescale, timeYMDHMS } from '../../../src/astronomy/time/time'
 import { ANGVEL_PER_DAY } from '../../../src/core/constants'
 import { type Mat3, matMul, matMulTranspose, matMulVec, matRotX, matRotZ } from '../../../src/math/linear-algebra/mat3'
 import type { MutVec3, Vec3 } from '../../../src/math/linear-algebra/vec3'
@@ -33,6 +33,7 @@ const RA = parseAngle('14h 39 20.75')!
 const DEC = parseAngle('-60 49 57.9')!
 const XYZ = eraS2c(RA, DEC)
 const TIME = timeYMDHMS(2025, 9, 28, 12, 0, 0, Timescale.UTC)
+const NO_TIME: Time = { day: 0, fraction: 0, scale: 0 }
 
 test('galactic', () => {
 	const [lng, lat] = eraC2s(...galactic(XYZ))
@@ -75,6 +76,53 @@ test('galactic transforms a state by rotating both position and velocity', () =>
 		expect(position[i]).toBeCloseTo(positionOnly[i], 15)
 		expect(transformedVelocity[i]).toBeCloseTo(velocityOnly[i], 15)
 	}
+})
+
+test('frame convenience wrappers delegate to their matching frames', () => {
+	const fixedCases = [
+		{ wrapper: meanEquatorAndEquinoxAtB1950, frame: MEAN_EQUATOR_AND_EQUINOX_AT_B1950 },
+		{ wrapper: eclipticB1950, frame: ECLIPTIC_B1950 },
+		{ wrapper: eclipticJ2000, frame: ECLIPTIC_J2000 },
+		{ wrapper: fk4, frame: FK4 },
+		{ wrapper: fk5, frame: FK5 },
+		{ wrapper: galactic, frame: GALACTIC },
+		{ wrapper: supergalactic, frame: SUPERGALACTIC },
+		{ wrapper: icrs, frame: ICRS },
+	] as const
+
+	for (const { wrapper, frame } of fixedCases) {
+		const direct = wrapper(XYZ)
+		const generic = frameAt(XYZ, frame, NO_TIME)
+		for (let i = 0; i < 3; i++) expect(direct[i]).toBeCloseTo(generic[i], 15)
+	}
+
+	const timeDependentCases = [
+		{ wrapper: trueEquatorAndEquinoxOfDate, frame: TRUE_EQUATOR_AND_EQUINOX_OF_DATE },
+		{ wrapper: meanEquatorAndEquinoxOfDate, frame: MEAN_EQUATOR_AND_EQUINOX_OF_DATE },
+		{ wrapper: meanEclipticOfDate, frame: MEAN_ECLIPTIC_OF_DATE },
+		{ wrapper: cirs, frame: CIRS },
+		{ wrapper: tirs, frame: TIRS },
+		{ wrapper: teme, frame: TEME },
+		{ wrapper: itrs, frame: ITRS },
+		{ wrapper: itrsInstantaneous, frame: ITRS_INSTANTANEOUS },
+	] as const
+
+	for (const { wrapper, frame } of timeDependentCases) {
+		const direct = wrapper(XYZ)
+		const generic = frameAt(XYZ, frame, NO_TIME)
+		for (let i = 0; i < 3; i++) expect(direct[i]).toBeCloseTo(generic[i], 15)
+	}
+})
+
+test('FK5 dynamic frame and ICRS/FK5 wrappers match generic transforms', () => {
+	const dynamicFk5 = fk5Frame(TIME)
+	const viaFrame = frameAt(XYZ, dynamicFk5, TIME)
+	const viaGeneric = frameToFrame(XYZ, ICRS, dynamicFk5, TIME)
+	for (let i = 0; i < 3; i++) expect(viaFrame[i]).toBeCloseTo(viaGeneric[i], 15)
+
+	const fk5Position = icrsToFk5(XYZ)
+	const roundTrip = fk5ToIcrs(fk5Position)
+	for (let i = 0; i < 3; i++) expect(roundTrip[i]).toBeCloseTo(XYZ[i], 15)
 })
 
 test('teme<->itrf position round trip without polar motion', () => {
@@ -221,6 +269,19 @@ test('frameAt and frameToBase write into an output parameter', () => {
 	for (let i = 0; i < 3; i++) {
 		expect(outState[0][i]).toBeCloseTo(freshState[0][i], 15)
 		expect(outState[1][i]).toBeCloseTo(freshState[1][i], 15)
+	}
+
+	const baseOut: PositionAndVelocity = [
+		[0, 0, 0],
+		[0, 0, 0],
+	]
+	const frameState = frameAt(state, ITRS, TIME)
+	const baseFresh = frameToBase(frameState, ITRS, TIME)
+	const baseWritten = frameToBase(frameState, ITRS, TIME, baseOut)
+	expect(baseWritten).toBe(baseOut)
+	for (let i = 0; i < 3; i++) {
+		expect(baseOut[0][i]).toBeCloseTo(baseFresh[0][i], 15)
+		expect(baseOut[1][i]).toBeCloseTo(baseFresh[1][i], 15)
 	}
 })
 

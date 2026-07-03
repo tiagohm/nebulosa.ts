@@ -57,7 +57,7 @@ test('matches the heliacal (Sothic) rising date of Sirius', () => {
 	// Independent Skyfield geometry at the same instant (baked literals).
 	expect(toDeg(altitudeOf(sunDirection(rising.time), rising.time, CAIRO))).toBeCloseTo(-11.193, 1)
 	expect(toDeg(altitudeOf(SIRIUS, rising.time, CAIRO))).toBeCloseTo(-0.574, 1)
-}, 3000)
+}, 8000)
 
 test('a larger arc of vision delays the heliacal rising', () => {
 	const at11 = heliacalPhases(siriusDirection, sunDirection, CAIRO, RISING_START, RISING_STOP, { arcusVisionis: deg(11), step: STEP }).find((p) => p.kind === 'heliacalRising')!

@@ -36,6 +36,18 @@ test('the magnitude reduces to the distance modulus at zero phase', () => {
 	const observerToBody: Vec3 = [4, 0, 0]
 	// Jupiter base -9.395 plus 5*log10(5*4).
 	expect(planetMagnitude('jupiter', sunToBody, observerToBody)).toBeCloseTo(-9.395 + 5 * Math.log10(20), 10)
+	// Earth has its own phase polynomial and the same distance modulus.
+	expect(planetMagnitude('earth', sunToBody, observerToBody)).toBeCloseTo(-3.99 + 5 * Math.log10(20), 10)
+})
+
+test('Jupiter uses the large-phase photometric branch', () => {
+	const phase = (30 * Math.PI) / 180
+	const sunToBody: Vec3 = [5, 0, 0]
+	const observerToBody: Vec3 = [4 * Math.cos(phase), 4 * Math.sin(phase), 0]
+	const p = 30 / 180
+	const phaseTerm = -2.5 * Math.log10(((((-1.876 * p + 2.809) * p - 0.062) * p - 0.363) * p - 1.507) * p + 1)
+
+	expect(planetMagnitude('jupiter', sunToBody, observerToBody)).toBeCloseTo(-9.428 + 5 * Math.log10(20) + phaseTerm, 12)
 })
 
 test("Saturn's ringed model is undefined beyond a 6.5 deg phase angle", () => {

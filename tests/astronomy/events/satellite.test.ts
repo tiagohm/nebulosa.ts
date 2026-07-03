@@ -194,7 +194,7 @@ test('the penumbra brackets the umbra', () => {
 	expect(minutesAfterEpoch(penumbra[1].entry!)).toBeLessThan(minutesAfterEpoch(umbra[1].entry!))
 	expect(minutesAfterEpoch(penumbra[1].exit!)).toBeGreaterThan(minutesAfterEpoch(umbra[1].exit!))
 	expect(penumbra[1].duration).toBeGreaterThan(umbra[1].duration)
-})
+}, 2000)
 
 test('conjunction screening finds the separation minima', () => {
 	// Independent Skyfield propagation of both TLEs at 1 s over 100 min finds two separation minima:

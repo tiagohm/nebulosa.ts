@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 // oxfmt-ignore
-import { DATE_FORMAT, daysInMonth, formatTemporal, formatTemporalFromPattern, isLeapYear, parseTemporal, TIME_FORMAT, temporalAdd, temporalDayOfWeek, temporalEndOfDay, temporalFromDate, temporalFromFractionOfYear, temporalFromTime, temporalGet, temporalSet, temporalStartOfDay, temporalSubtract, temporalToDate, zellersCongruence } from '../../../src/astronomy/time/temporal'
+import { DATE_FORMAT, daysInMonth, formatTemporal, formatTemporalFromPattern, isLeapYear, parseTemporal, temporalNow, temporalUnix, TIME_FORMAT, temporalAdd, temporalDayOfWeek, temporalEndOfDay, temporalFromDate, temporalFromFractionOfYear, temporalFromTime, temporalGet, temporalSet, temporalStartOfDay, temporalSubtract, temporalToDate, zellersCongruence } from '../../../src/astronomy/time/temporal'
 import { timeToDate, timeYMDHMS } from '../../../src/astronomy/time/time'
 
 test('is leap year', () => {
@@ -27,6 +27,16 @@ test('format and parse round-trip', () => {
 	for (const ms of [1709210096000, 1756510498123, 0]) {
 		expect(parseTemporal(formatTemporal(ms, pattern), pattern)).toBe(ms)
 	}
+})
+
+test('temporal now and unix helpers return millisecond timestamps', () => {
+	const before = Date.now()
+	const now = temporalNow()
+	const after = Date.now()
+
+	expect(now).toBeGreaterThanOrEqual(before)
+	expect(now).toBeLessThanOrEqual(after)
+	expect(temporalUnix(1234.5)).toBe(1234500)
 })
 
 test('temporal from date', () => {
@@ -410,6 +420,7 @@ describe('parse', () => {
 
 	test('invalid input', () => {
 		expect(() => parseTemporal('2028/01/01', 'YYYY-MM-DD')).toThrow()
+		expect(() => parseTemporal('2028-13-01', 'YYYY-MM-DD')).toThrow('invalid month')
 		expect(() => parseTemporal('2023-02-29', 'YYYY-MM-DD')).toThrow()
 		expect(() => parseTemporal('2024-01-01T24:00:00.000', 'YYYY-MM-DDTHH:mm:ss.SSS')).toThrow()
 		expect(() => parseTemporal('2024-01-01T23:60:00.000', 'YYYY-MM-DDTHH:mm:ss.SSS')).toThrow()
