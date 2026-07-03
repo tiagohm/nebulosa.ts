@@ -99,9 +99,9 @@ test('finds an interior appulse anywhere in a window shorter than the default st
 	}
 })
 
-test('never samples the observer or body outside the requested window', () => {
+test('with light time disabled, never samples the observer or body outside the requested window', () => {
 	// A boundary appulse (crossing 1 s after start) still must not drive any evaluation before start or after
-	// stop, so bounded/interpolated samplers stay valid over exactly [start, stop].
+	// stop, so bounded/interpolated samplers stay valid over exactly [start, stop] when light time is off.
 	const start = timeShift(CROSSING, -1 * ONE_SECOND)
 	const stop = timeShift(CROSSING, 19 * ONE_SECOND)
 	const guard = (t: Time): PositionAndVelocity => {
@@ -118,6 +118,42 @@ test('never samples the observer or body outside the requested window', () => {
 	const candidates = occultationCandidates(guardedBody, STAR, guard, start, stop, { radius: BODY_RADIUS, lightTimeIterations: 0 })
 	expect(candidates.length).toBe(1)
 	expect(candidates[0].occultation).toBe(true)
+})
+
+test('with default light time, samples the observer only in-window but the target retarded before it', () => {
+	// The observed appulse is delayed by the one-way light time; center the window there. The observer (at
+	// reception) must stay strictly inside [start, stop], while the target is queried at the retarded emission
+	// time, which precedes start — the documented contract for the default light-time correction.
+	const observed = timeShift(CROSSING, RANGE * LIGHT_TIME_PER_AU)
+	const start = timeShift(observed, -10 * ONE_SECOND)
+	const stop = timeShift(observed, 10 * ONE_SECOND)
+
+	let observerMinFromStart = Number.POSITIVE_INFINITY
+	let observerMaxFromStop = Number.NEGATIVE_INFINITY
+	let targetMinFromStart = Number.POSITIVE_INFINITY
+	const trackedObserver = (t: Time): PositionAndVelocity => {
+		observerMinFromStart = Math.min(observerMinFromStart, timeSubtract(t, start))
+		observerMaxFromStop = Math.max(observerMaxFromStop, timeSubtract(t, stop))
+		return [
+			[0, 0, 0],
+			[0, 0, 0],
+		]
+	}
+	const trackedBody = (t: Time): PositionAndVelocity => {
+		targetMinFromStart = Math.min(targetMinFromStart, timeSubtract(t, start))
+		return driftingBody(t)
+	}
+
+	const candidates = occultationCandidates(trackedBody, STAR, trackedObserver, start, stop, { radius: BODY_RADIUS })
+	expect(candidates.length).toBe(1)
+	expect(candidates[0].occultation).toBe(true)
+	// The observed appulse sits at reception time `observed`, near the window centre.
+	expect(timeSubtract(candidates[0].time, observed) * DAYSEC).toBeCloseTo(0, 1)
+	// The observer (reception) is never sampled outside the window.
+	expect(observerMinFromStart).toBeGreaterThanOrEqual(0)
+	expect(observerMaxFromStop).toBeLessThanOrEqual(0)
+	// The target (emission) is retarded to before the window opens.
+	expect(targetMinFromStart).toBeLessThan(0)
 })
 
 test('does not report an appulse whose minimum lies outside the window', () => {

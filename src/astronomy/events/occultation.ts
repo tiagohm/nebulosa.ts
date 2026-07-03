@@ -62,7 +62,8 @@ export interface OccultationOptions extends TimeSearchOptions {
 	// Number.POSITIVE_INFINITY, which returns every separation minimum in the window.
 	readonly maxSeparation?: Angle
 	// Fixed-point iterations for the light-time correction to the body. Defaults to 2, enough for
-	// interplanetary distances; 0 disables it (geometric, uncorrected position).
+	// interplanetary distances; 0 disables it (geometric, uncorrected position). A positive value samples the
+	// `target` ephemeris at the retarded emission time, up to the one-way light travel time before `start`.
 	readonly lightTimeIterations?: number
 }
 
@@ -131,10 +132,13 @@ function boundaryMinimum(separationAt: (time: Time) => number, from: Time, to: T
 // chord duration then follows from the radius and the apparent angular speed. Candidates are chronological.
 // The coarse `step` must be finer than the approach it should catch.
 //
-// The separation, and therefore `target`/`observer`, is only ever evaluated within [start, stop]: the shared
-// scanner covers the interior intervals, while the first and last intervals — whose minimum would sit next
-// to a window endpoint the scanner cannot bracket — are refined by an in-window bounded minimization. This
-// keeps callers backed by bounded or interpolated states valid over exactly the requested window.
+// Reception times — and therefore `observer` — are only ever evaluated within [start, stop]: the shared
+// scanner covers the interior intervals, while the first and last intervals, whose minimum would sit next to
+// a window endpoint the scanner cannot bracket, are refined by an in-window bounded minimization. The
+// light-time correction, however, samples `target` at the retarded emission time (reception minus the
+// one-way light travel time), so with `lightTimeIterations` > 0 the target ephemeris must stay valid up to
+// that much before `start`; set `lightTimeIterations` to 0 to keep the target strictly in-window too. This
+// lets an `observer` backed by bounded or interpolated states stay valid over exactly the requested window.
 export function occultationCandidates(target: PositionAndVelocityOverTime, star: Vec3, observer: PositionAndVelocityOverTime, start: Time, stop: Time, { radius = 0, maxSeparation = Number.POSITIVE_INFINITY, lightTimeIterations = 2, step = DEFAULT_STEP, tolerance }: OccultationOptions = {}): OccultationCandidate[] {
 	const separationAt = (time: Time) => separationFrom(topocentricDirection(target, observer, time, lightTimeIterations), star)
 	const span = timeSubtract(stop, start)
