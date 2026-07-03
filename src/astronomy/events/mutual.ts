@@ -66,6 +66,11 @@ const CONTACT_WINDOW = 0.25
 // Earth-satellite light time of both planets (Jupiter ~54 min, Saturn ~91 min at their farthest).
 const ECLIPSE_LIGHT_TIME_PAD = 0.08
 
+// Days the scan is padded on each side of the requested window, so an event that overlaps the window but
+// whose minimum lies just outside it (or too close to an edge for searchExtrema to bracket) is still
+// found. It exceeds the half-duration of any mutual event (~72 min).
+const EVENT_PAD = 0.05
+
 // Jupiter's four Galilean moons. Radii are the IAU/JPL mean values (km): Io 1821.6, Europa 1560.8,
 // Ganymede 2631.2, Callisto 2410.3.
 const JUPITER_SYSTEM: MutualSystem<GalileanMoon> = {
@@ -247,23 +252,44 @@ function bracketContact(gap: (time: Time) => number, from: Time, to: Time, toler
 	return timeShift(from, root.root + observedShift)
 }
 
+// Keeps an event only if its span from first to last contact overlaps [windowStart, windowStop], and
+// blanks the contacts that fall outside the window (a contact before the start, or after the stop, is
+// reported as undefined, matching the "already underway" convention). The middle is left as the true
+// instant of maximum obscuration even when it lies just outside the window.
+function clipToWindow<M extends string>(event: MutualEvent<M>, windowStart: Time, windowStop: Time): MutualEvent<M> | undefined {
+	const first = event.start ?? event.middle
+	const last = event.end ?? event.middle
+	if (timeSubtract(first, windowStop) > 0 || timeSubtract(last, windowStart) < 0) return undefined
+
+	const start = event.start !== undefined && timeSubtract(event.start, windowStart) >= 0 && timeSubtract(event.start, windowStop) <= 0 ? event.start : undefined
+	const end = event.end !== undefined && timeSubtract(event.end, windowStart) >= 0 && timeSubtract(event.end, windowStop) <= 0 ? event.end : undefined
+	return { ...event, start, end }
+}
+
 // Finds every mutual occultation and eclipse among a planet's moons over a time window.
 //
-// Occultations are scanned in observed time over [start, stop]. Eclipses are scanned in physical time
-// over a window reaching one light time before `start`, then filtered to those seen from Earth within
-// [start, stop], so an eclipse observed just after `start` is not lost because its shadow fell earlier.
+// Each pair and kind is scanned over the requested window padded on both sides, so an event that overlaps
+// the window but whose minimum lies just outside it is still found; the results are then clipped back to
+// the window. Occultations are scanned in observed time; eclipses are scanned in physical time reaching
+// an extra light time before the start, then reported at the light-time-delayed instant seen from Earth.
 function mutualEvents<M extends string>(system: MutualSystem<M>, start: Time, stop: Time, options: TimeSearchOptions): MutualEvent<M>[] {
 	const scan: TimeSearchOptions = { step: options.step ?? DEFAULT_STEP, tolerance: options.tolerance }
-	const eclipseStart = timeShift(start, -ECLIPSE_LIGHT_TIME_PAD)
+	const paddedStart = timeShift(start, -EVENT_PAD)
+	const paddedStop = timeShift(stop, EVENT_PAD)
+	const eclipseStart = timeShift(paddedStart, -ECLIPSE_LIGHT_TIME_PAD)
 	const events: MutualEvent<M>[] = []
 
 	for (let i = 0; i < system.order.length; i++) {
 		for (let j = i + 1; j < system.order.length; j++) {
 			const a = system.order[i]
 			const b = system.order[j]
-			events.push(...findPairEvents(system, 'occultation', a, b, start, stop, scan))
-			for (const event of findPairEvents(system, 'eclipse', a, b, eclipseStart, stop, scan)) {
-				if (timeSubtract(event.middle, start) >= 0 && timeSubtract(event.middle, stop) < 0) events.push(event)
+			for (const event of findPairEvents(system, 'occultation', a, b, paddedStart, paddedStop, scan)) {
+				const clipped = clipToWindow(event, start, stop)
+				if (clipped !== undefined) events.push(clipped)
+			}
+			for (const event of findPairEvents(system, 'eclipse', a, b, eclipseStart, paddedStop, scan)) {
+				const clipped = clipToWindow(event, start, stop)
+				if (clipped !== undefined) events.push(clipped)
 			}
 		}
 	}

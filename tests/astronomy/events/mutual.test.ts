@@ -56,6 +56,28 @@ test('finds the Ganymede-shadow mutual eclipses on 2026-12-02', () => {
 	expect(secondsAfter(events[1].middle, start)).toBeGreaterThan(secondsAfter(central.middle, start))
 })
 
+test('reports an event that is only underway during the window', () => {
+	// A narrow window wholly inside the 2026-12-05 Europa-Ganymede occultation (mid 19:17:59.7, ending
+	// 19:26:56): the event overlaps the window although both its minimum and first contact lie before the
+	// window start, so it must still be reported with the first contact blanked as undefined.
+	const start = timeYMDHMS(2026, 12, 5, 19, 20, 0, Timescale.UTC)
+	const stop = timeYMDHMS(2026, 12, 5, 19, 30, 0, Timescale.UTC)
+	const events = galileanMutualEvents(start, stop)
+	expect(events.length).toBe(1)
+
+	const event = events[0]
+	expect(event.kind).toBe('occultation')
+	expect(event.front).toBe('europa')
+	expect(event.back).toBe('ganymede')
+	// Already underway at the window start: the first contact is dropped, the last contact is in-window.
+	expect(event.start).toBeUndefined()
+	expect(event.end).toBeDefined()
+	expect(secondsAfter(event.end!, start)).toBeGreaterThan(0)
+	expect(secondsAfter(event.end!, stop)).toBeLessThan(0)
+	// The middle is the true peak of the occultation, just before the window start.
+	expect(secondsAfter(event.middle, start)).toBeLessThan(0)
+})
+
 test('finds the Titan-Rhea mutual events in the 2025 Saturn season', () => {
 	// Near Saturn's 2025 conjunction (just after the ring-plane crossing) the Sun and Earth are almost in
 	// line, so Titan eclipses Rhea and then occults it a few minutes later.
