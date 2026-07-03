@@ -27,7 +27,7 @@ import { icrs as icrsVector } from '../src/astronomy/coordinates/icrs'
 import { itrs } from '../src/astronomy/coordinates/itrs'
 import { Base as Meeus } from '../src/astronomy/ephemeris/meeus'
 import { moon as moonGeocentric } from '../src/astronomy/ephemeris/models/analytical/elpmpp02'
-import { earth, jupiter, mars, saturn, sun, venus } from '../src/astronomy/ephemeris/models/analytical/vsop87e'
+import { earth, jupiter, mars, mercury, saturn, sun, venus } from '../src/astronomy/ephemeris/models/analytical/vsop87e'
 import { sunMoonPosition } from '../src/astronomy/events/eclipse/eclipse'
 import { computeLocalLunarEclipseCircumstances } from '../src/astronomy/events/eclipse/lunar/local'
 import { computeGreatestEclipseCircumstances, computeLocalSolarEclipseCircumstances } from '../src/astronomy/events/eclipse/solar/local'
@@ -39,6 +39,7 @@ import { galileanMutualEvents, saturnianMutualEvents } from '../src/astronomy/ev
 import { occultationCandidates } from '../src/astronomy/events/occultation'
 import { satelliteConjunctions, satelliteEclipses, satelliteMagnitude, satellitePasses, satelliteShadowState } from '../src/astronomy/events/satellite'
 import { searchExtrema, searchRoots } from '../src/astronomy/events/search'
+import { planetaryTransits } from '../src/astronomy/events/transit'
 import { airmass, airmassKastenYoung, altitudeAtTransit, asteroidMagnitudeEstimate, atmosphericRefraction, cometMagnitudeEstimate, objectAngularDiameter } from '../src/astronomy/formulas'
 import { Ellipsoid, geodeticLocation, localSiderealTime, subpoint } from '../src/astronomy/observer/location'
 import { KeplerOrbit, asteroid, comet, eccentricAnomalyFromMean, meanMotion, period, tisserandParameter, trueAnomalyClosed, trueAnomalyHyperbolic } from '../src/astronomy/orbits/asteroid'
@@ -1394,19 +1395,41 @@ function lunarOccultationPrediction() {
 	console.info('Lunar occultation: compare the Moon topocentric limb with the star; not implemented.')
 }
 
-// Planetary / Mercury / Venus Transit Prediction.
-// TODO(almanac): transits of Mercury/Venus across the Sun are a Besselian-element
-// problem analogous to solar eclipses, but no transit module exists. Not implemented.
+// Planetary / Mercury / Venus Transit Prediction: planetaryTransits scans the topocentric planet-Sun
+// separation for the observer and root-finds the four contacts where it crosses the sum (exterior I/IV) and
+// difference (interior II/III) of the angular radii, with the limb position angles and the I->IV duration.
+// This is the per-site question, without any Besselian path engine. Windows are set at the actual transit
+// dates: the next Mercury transit is 2032-11-13, the next Venus transit 2117-12-11.
+const SUN_RADIUS = kilometer(695700) // Sun physical radius, AU
+
+// Screens one planetary transit from SITE and prints its circumstances (existence, exterior contacts, chord
+// depth, and contact position angles).
+function reportTransit(label: string, planet: PositionAndVelocityOverTime, planetRadiusKm: number, start: Time, stop: Time) {
+	const observer = (time: Time): PositionAndVelocity => observerState(time, earth(time), SITE) as PositionAndVelocity
+	const [transit] = planetaryTransits(planet, sun, observer, start, stop, { sunRadius: SUN_RADIUS, planetRadius: kilometer(planetRadiusKm) })
+	if (transit === undefined) return console.info(`${label}: no transit visible from the site in the window.`)
+	const contact = (t?: Time) => (t ? formatTemporal(temporalFromTime(utc(t))) : 'outside window')
+	const pa = (a?: Angle) => (a === undefined ? 'n/a' : `${toDeg(a).toFixed(1)}deg`)
+	console.info(
+		`${label}: ${transit.full ? 'full' : 'grazing'}; contact I`,
+		contact(transit.exteriorIngress),
+		'IV',
+		contact(transit.exteriorEgress),
+		`; min sep ${toArcsec(transit.minSeparation).toFixed(1)} arcsec; PA I/IV ${pa(transit.ingressPositionAngle)}/${pa(transit.egressPositionAngle)}`,
+		transit.duration ? `; duration ${(transit.duration / 3600).toFixed(2)} h` : '',
+	)
+}
+
 function planetaryTransitPrediction() {
-	console.info('Planetary transit: solve inner-planet conjunction with |ecliptic latitude| < Sun radius; not implemented.')
+	reportTransit('Mercury transit 2032-11-13', mercury, 2439.7, timeYMDHMS(2032, 11, 13, 5, 0, 0, Timescale.UTC), timeYMDHMS(2032, 11, 13, 12, 0, 0, Timescale.UTC))
 }
 
 function mercuryTransitCircumstances() {
-	console.info('Mercury transit circumstances: needs a transit module (Besselian-style); not implemented.')
+	reportTransit('Mercury transit circumstances', mercury, 2439.7, timeYMDHMS(2032, 11, 13, 5, 0, 0, Timescale.UTC), timeYMDHMS(2032, 11, 13, 12, 0, 0, Timescale.UTC))
 }
 
 function venusTransitCircumstances() {
-	console.info('Venus transit circumstances: needs a transit module (Besselian-style); not implemented.')
+	reportTransit('Venus transit 2117-12-11', venus, 6051.8, timeYMDHMS(2117, 12, 10, 23, 0, 0, Timescale.UTC), timeYMDHMS(2117, 12, 11, 6, 0, 0, Timescale.UTC))
 }
 
 // Mutual Satellite Event: galileanMutualEvents and saturnianMutualEvents screen the Galilean and main

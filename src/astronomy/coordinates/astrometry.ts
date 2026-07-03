@@ -5,7 +5,7 @@ import type { Distance } from '../../math/units/distance'
 import type { Pressure } from '../../math/units/pressure'
 import type { Temperature } from '../../math/units/temperature'
 import type { GeographicCoordinate } from '../observer/location'
-import { pmAngles, type Time, tt, ut1 } from '../time/time'
+import { pmAngles, type Time, timeShift, tt, ut1 } from '../time/time'
 import type { CartesianCoordinate, EquatorialCoordinate, SphericalCoordinate } from './coordinate'
 import { type EraAstrom, eraApci13, eraApco13, eraApio13, eraAtciqz, eraAticq, eraAtioq, eraAtoiq, eraC2s, eraP2s, eraRefco } from './erfa/erfa'
 
@@ -98,6 +98,29 @@ export function relativePositionAndVelocity(target: PositionAndVelocityOverTime,
 		[tp[0] - op[0], tp[1] - op[1], tp[2] - op[2]],
 		[tv[0] - ov[0], tv[1] - ov[1], tv[2] - ov[2]],
 	]
+}
+
+// Topocentric direction from the observer to a body at reception time `time`, light-time corrected.
+//
+// The observer is sampled at `time` (reception); the body is sampled at the retarded emission time
+// `time - tau`, where tau is the light travel time over the current observer-body distance, refined by
+// `iterations` fixed-point steps (0 leaves the geometric, uncorrected direction). `target` and `observer`
+// must share one origin (typically barycentric ICRS); the common origin cancels in the difference. Returns a
+// freshly allocated non-unit vector whose length is the topocentric distance in AU. Aberration is not applied
+// (it nearly cancels in the differential geometry of two bodies close on the sky, e.g. an occultation or
+// transit), so this is a geometric line of sight, not an apparent place.
+export function topocentricDirection(target: PositionAndVelocityOverTime, observer: PositionAndVelocityOverTime, time: Time, iterations: number): Vec3 {
+	const [ox, oy, oz] = observer(time)[0]
+
+	let emission = time
+	let direction: Vec3 = [0, 0, 0]
+	for (let k = 0; k <= iterations; k++) {
+		const tp = target(emission)[0]
+		direction = [tp[0] - ox, tp[1] - oy, tp[2] - oz]
+		emission = timeShift(time, -lightTime(direction))
+	}
+
+	return direction
 }
 
 // Computes the phase angle of a body: the Sun-body-observer angle measured at the

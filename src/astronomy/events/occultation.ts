@@ -4,7 +4,7 @@ import { clamp } from '../../math/numerical/math'
 import { brentMinimize } from '../../math/numerical/optimization'
 import type { Angle } from '../../math/units/angle'
 import type { Distance } from '../../math/units/distance'
-import { lightTime, type PositionAndVelocityOverTime, separationFrom } from '../coordinates/astrometry'
+import { type PositionAndVelocityOverTime, separationFrom, topocentricDirection } from '../coordinates/astrometry'
 import { type Time, timeShift, timeSubtract } from '../time/time'
 import { searchExtrema, type TimeSearchOptions } from './search'
 
@@ -77,27 +77,6 @@ const DEFAULT_STEP = 60 * ONE_SECOND
 // minimum to bracket it, so a window shorter than a few steps would otherwise return nothing; the effective
 // step is capped at span / this so even a sub-step window is sampled densely enough to catch its appulse.
 const MIN_INTERVALS = 4
-
-// Topocentric direction from the observer to the body at reception time `time`, light-time corrected.
-//
-// The observer is sampled at `time` (reception); the body is sampled at the retarded emission time
-// `time - tau`, where tau is the light travel time over the current observer-body distance, refined by
-// fixed-point iteration. `target` and `observer` must share one origin (typically barycentric ICRS); the
-// common origin cancels in the difference. Returns a freshly allocated non-unit vector (its length is the
-// topocentric distance in AU).
-function topocentricDirection(target: PositionAndVelocityOverTime, observer: PositionAndVelocityOverTime, time: Time, iterations: number): Vec3 {
-	const [ox, oy, oz] = observer(time)[0]
-
-	let emission = time
-	let direction: Vec3 = [0, 0, 0]
-	for (let k = 0; k <= iterations; k++) {
-		const tp = target(emission)[0]
-		direction = [tp[0] - ox, tp[1] - oy, tp[2] - oz]
-		emission = timeShift(time, -lightTime(direction))
-	}
-
-	return direction
-}
 
 // A separation minimum located in the window: the refined appulse instant and the separation there.
 interface SeparationMinimum {
