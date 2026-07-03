@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import type { EquatorialCoordinate } from '../../../src/astronomy/coordinates/coordinate'
 import { KeplerOrbit } from '../../../src/astronomy/orbits/asteroid'
-import { type OrbitFitAngularResidual, type OrbitFitOptions, fitOrbit, type OrbitFitObservation } from '../../../src/astronomy/orbits/orbit.fit'
+import { type OrbitFitAngularResidual, type OrbitFitOptions, fitOrbit, type OrbitFitObservation } from '../../../src/astronomy/orbits/fit'
 import { type Time, Timescale, timeShift, timeYMDHMS } from '../../../src/astronomy/time/time'
 import { ASEC2RAD, DAYSPERJY, TAU } from '../../../src/core/constants'
 import { matIdentity } from '../../../src/math/linear-algebra/mat3'

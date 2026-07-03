@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { closeApproachBPlane } from '../../../src/astronomy/orbits/orbit.bplane'
+import { closeApproachBPlane } from '../../../src/astronomy/orbits/bplane'
 import { AU_KM, DAYSEC } from '../../../src/core/constants'
 import { type Vec3, vecDot, vecLength } from '../../../src/math/linear-algebra/vec3'
 

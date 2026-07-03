@@ -298,6 +298,14 @@ export class KeplerOrbit implements OsculatingElements {
 		return pv
 	}
 
+	// Position (AU) on an orbit at a given true anomaly, in the orbit's output frame. This is purely
+	// geometric: it traces the orbit as a curve, independent of the epoch and mean anomaly. `trueAnomaly` is
+	// radians; the result is a freshly allocated vector.
+	positionAtTrueAnomaly(trueAnomaly: Angle) {
+		const [position] = computePositionAndVelocityFromOrbitalElements(this.semiLatusRectum, this.eccentricity, this.inclination, this.longitudeOfAscendingNode, this.argumentOfPeriapsis, trueAnomaly, this.mu)
+		return matMulVec(this.rotation, position, position)
+	}
+
 	// Creates a `KeplerOrbit` from orbital elements using mean anomaly.
 	static meanAnomaly(p: Distance, e: number, i: Angle, om: Angle, w: Angle, M: Angle, epoch: Time, mu: number = GM_SUN_PITJEVA_2005, rotation: Mat3 = REFERENCE_FRAME) {
 		let v: number
@@ -410,14 +418,6 @@ function computePositionAndVelocityFromOrbitalElements(p: Distance, e: number, i
 	const velocity: MutVec3 = [xDot, yDot, zDot]
 
 	return [position, velocity]
-}
-
-// Position (AU) on an orbit at a given true anomaly, in the orbit's output frame. This is purely
-// geometric: it traces the orbit as a curve, independent of the epoch and mean anomaly. `trueAnomaly` is
-// radians; the result is a freshly allocated vector.
-export function positionAtTrueAnomaly(orbit: KeplerOrbit, trueAnomaly: Angle): MutVec3 {
-	const [position] = computePositionAndVelocityFromOrbitalElements(orbit.semiLatusRectum, orbit.eccentricity, orbit.inclination, orbit.longitudeOfAscendingNode, orbit.argumentOfPeriapsis, trueAnomaly, orbit.mu)
-	return matMulVec(orbit.rotation, position, position)
 }
 
 // ln(1.5), used when bounding the universal anomaly for elliptic/parabolic orbits.

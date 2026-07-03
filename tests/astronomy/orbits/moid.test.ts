@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import { KeplerOrbit } from '../../../src/astronomy/orbits/asteroid'
-import { moid } from '../../../src/astronomy/orbits/orbit.moid'
-import { type Time, Timescale, time } from '../../../src/astronomy/time/time'
+import { moid } from '../../../src/astronomy/orbits/moid'
+import { Timescale, time } from '../../../src/astronomy/time/time'
 import { GM_SUN_PITJEVA_2005 } from '../../../src/core/constants'
 import { matIdentity } from '../../../src/math/linear-algebra/mat3'
 import type { Vec3 } from '../../../src/math/linear-algebra/vec3'
@@ -9,7 +9,7 @@ import type { Vec3 } from '../../../src/math/linear-algebra/vec3'
 // Heliocentric states (Sun-centred, ICRF equatorial, AU and AU/day, geometric) at JD 2461200.5 TDB from
 // JPL Horizons, with the Earth MOID published by the JPL Small-Body Database at the same solution epoch.
 const IDENTITY = matIdentity()
-const EPOCH: Time = time(2461200.5, 0, Timescale.TDB)
+const EPOCH = time(2461200.5, 0, Timescale.TDB)
 
 // Builds a heliocentric KeplerOrbit in the ICRF equatorial frame.
 function heliocentricOrbit(position: Vec3, velocity: Vec3): KeplerOrbit {

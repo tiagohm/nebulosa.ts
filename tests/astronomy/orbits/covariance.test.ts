@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import { earth } from '../../../src/astronomy/ephemeris/models/analytical/vsop87e'
 import { KeplerOrbit } from '../../../src/astronomy/orbits/asteroid'
-import { ephemerisUncertaintyEllipse, propagateStateCovariance, stateTransitionMatrix } from '../../../src/astronomy/orbits/orbit.covariance'
+import { ephemerisUncertaintyEllipse, propagateStateCovariance, stateTransitionMatrix } from '../../../src/astronomy/orbits/covariance'
 import { Timescale, type Time, timeShift, timeYMDHMS } from '../../../src/astronomy/time/time'
 import { GM_SUN_PITJEVA_2005 } from '../../../src/core/constants'
 import { matIdentity } from '../../../src/math/linear-algebra/mat3'

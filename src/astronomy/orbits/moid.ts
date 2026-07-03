@@ -1,7 +1,7 @@
 import { TAU } from '../../core/constants'
 import { type Vec3, vecDot } from '../../math/linear-algebra/vec3'
 import { type Angle, normalizeAngle } from '../../math/units/angle'
-import { KeplerOrbit, positionAtTrueAnomaly } from './asteroid'
+import { KeplerOrbit } from './asteroid'
 
 // Minimum Orbit Intersection Distance (MOID): the closest the two orbits ever come to each other as
 // geometric curves, minimized over both true anomalies independently. It is time-independent — it depends
@@ -57,8 +57,8 @@ export function moid(first: KeplerOrbit, second: KeplerOrbit, options?: MoidOpti
 	const firstPoints = new Array<Vec3>(samples)
 	const secondPoints = new Array<Vec3>(samples)
 	for (let i = 0; i < samples; i++) {
-		firstPoints[i] = positionAtTrueAnomaly(first, i * step)
-		secondPoints[i] = positionAtTrueAnomaly(second, i * step)
+		firstPoints[i] = first.positionAtTrueAnomaly(i * step)
+		secondPoints[i] = second.positionAtTrueAnomaly(i * step)
 	}
 
 	// Grid of inter-orbit distances, computed inline to avoid an allocation per cell.
@@ -117,8 +117,8 @@ function refine(first: KeplerOrbit, second: KeplerOrbit, initialNu1: number, ini
 	let nu2 = initialNu2
 
 	for (let iteration = 0; iteration < MAX_REFINE_ITERATIONS; iteration++) {
-		const p1 = positionAtTrueAnomaly(first, nu1)
-		const p2 = positionAtTrueAnomaly(second, nu2)
+		const p1 = first.positionAtTrueAnomaly(nu1)
+		const p2 = second.positionAtTrueAnomaly(nu2)
 		const separation: Vec3 = [p1[0] - p2[0], p1[1] - p2[1], p1[2] - p2[2]]
 
 		const t1 = tangent(first, nu1)
@@ -147,15 +147,15 @@ function refine(first: KeplerOrbit, second: KeplerOrbit, initialNu1: number, ini
 		if (Math.abs(delta1) < tolerance && Math.abs(delta2) < tolerance) break
 	}
 
-	const p1 = positionAtTrueAnomaly(first, nu1)
-	const p2 = positionAtTrueAnomaly(second, nu2)
+	const p1 = first.positionAtTrueAnomaly(nu1)
+	const p2 = second.positionAtTrueAnomaly(nu2)
 	return { distance: Math.hypot(p1[0] - p2[0], p1[1] - p2[1], p1[2] - p2[2]), trueAnomaly1: normalizeAngle(nu1), trueAnomaly2: normalizeAngle(nu2) }
 }
 
 // Orbit position tangent dr/dnu (AU per radian) at a true anomaly, by central difference.
 function tangent(orbit: KeplerOrbit, nu: number): Vec3 {
-	const plus = positionAtTrueAnomaly(orbit, nu + DERIVATIVE_STEP)
-	const minus = positionAtTrueAnomaly(orbit, nu - DERIVATIVE_STEP)
+	const plus = orbit.positionAtTrueAnomaly(nu + DERIVATIVE_STEP)
+	const minus = orbit.positionAtTrueAnomaly(nu - DERIVATIVE_STEP)
 	const scale = 1 / (2 * DERIVATIVE_STEP)
 	return [(plus[0] - minus[0]) * scale, (plus[1] - minus[1]) * scale, (plus[2] - minus[2]) * scale]
 }
