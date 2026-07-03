@@ -1,4 +1,4 @@
-import { ASEC2RAD, AU_KM, DAYSPERJY, DEG2RAD, EARTH_RADIUS_KM, J2000, MOON_SYNODIC_DAYS } from '../../core/constants'
+import { ASEC2RAD, AU_KM, DAYSPERJY, DEG2RAD, EARTH_RADIUS_KM, J2000, MOON_SYNODIC_DAYS, PI } from '../../core/constants'
 import { type Angle, arcsec, deg } from '../../math/units/angle'
 import { type Distance, kilometer } from '../../math/units/distance'
 import { type Time, Timescale, time, timeNormalize, toJulianDay, tt } from '../time/time'
@@ -19,6 +19,8 @@ export type LunarPhase = 'NEW' | 'FIRST_QUARTER' | 'FULL' | 'LAST_QUARTER'
 
 // The two lunar apsides (closest/farthest points of the Moon's orbit).
 export type LunarApsis = 'PERIGEE' | 'APOGEE'
+
+export type LunarDeclination = 'NORTH' | 'SOUTH'
 
 // Circumstances of a lunar eclipse, including the standard contact instants (all in TT).
 export interface LunarEclipse {
@@ -574,59 +576,7 @@ export function nearestLunarApsis(time: Time, apsis: LunarApsis, next: boolean):
 				Math.sin(4 * D - 4 * F) * 0.0005 +
 				Math.sin(2 * D + 2 * M) * 0.0005 +
 				Math.sin(D - M) * -0.0004
-
-			parallax =
-				3629.215 +
-				63.224 * Math.cos(2 * D) -
-				6.99 * Math.cos(4 * D) +
-				2.834 * Math.cos(2 * D - M) -
-				0.0071 * T * Math.cos(2 * D - M) +
-				1.927 * Math.cos(6 * D) -
-				1.263 * Math.cos(D) -
-				0.702 * Math.cos(8 * D) +
-				0.696 * Math.cos(M) -
-				0.0017 * T * Math.cos(M) -
-				0.69 * Math.cos(2 * F) -
-				0.629 * Math.cos(4 * D - M) +
-				0.0016 * T * Math.cos(4 * D - M) -
-				0.392 * Math.cos(2 * D - 2 * F) +
-				0.297 * Math.cos(10 * D) +
-				0.26 * Math.cos(6 * D - M) +
-				0.201 * Math.cos(3 * D) -
-				0.161 * Math.cos(2 * D + M) +
-				0.157 * Math.cos(D + M) -
-				0.138 * Math.cos(12 * D) -
-				0.127 * Math.cos(8 * D - M) +
-				0.104 * Math.cos(2 * D + 2 * F) +
-				0.104 * Math.cos(2 * D - 2 * M) -
-				0.079 * Math.cos(5 * D) +
-				0.068 * Math.cos(14 * D) +
-				0.067 * Math.cos(10 * D - M) +
-				0.054 * Math.cos(4 * D + M) -
-				0.038 * Math.cos(12 * D - M) -
-				0.038 * Math.cos(4 * D - 2 * M) +
-				0.037 * Math.cos(7 * D) -
-				0.037 * Math.cos(4 * D + 2 * F) -
-				0.035 * Math.cos(16 * D) -
-				0.03 * Math.cos(3 * D + M) +
-				0.029 * Math.cos(D - M) -
-				0.025 * Math.cos(6 * D + M) +
-				0.023 * Math.cos(2 * M) +
-				0.023 * Math.cos(14 * D - M) -
-				0.023 * Math.cos(2 * D + 2 * M) +
-				0.022 * Math.cos(6 * D - 2 * M) -
-				0.021 * Math.cos(2 * D - 2 * F - M) -
-				0.02 * Math.cos(9 * D) +
-				0.019 * Math.cos(18 * D) +
-				0.017 * Math.cos(6 * D + 2 * F) +
-				0.014 * Math.cos(2 * F - M) -
-				0.014 * Math.cos(16 * D - M) +
-				0.013 * Math.cos(4 * D - 2 * F) +
-				0.012 * Math.cos(8 * D + M) +
-				0.011 * Math.cos(11 * D) +
-				0.01 * Math.cos(5 * D + M) -
-				0.01 * Math.cos(20 * D)
-		} else if (apsis === 'APOGEE') {
+		} else {
 			jdFraction +=
 				Math.sin(2 * D) * 0.4392 +
 				Math.sin(4 * D) * 0.0684 +
@@ -660,33 +610,87 @@ export function nearestLunarApsis(time: Time, apsis: LunarApsis, next: boolean):
 				Math.sin(12 * D) * 0.0003 +
 				Math.sin(2 * D + 2 * F - M) * 0.0003 +
 				Math.sin(D - M) * -0.0003
-
-			parallax =
-				3245.251 -
-				9.147 * Math.cos(2 * D) -
-				0.841 * Math.cos(D) +
-				0.697 * Math.cos(2 * F) -
-				0.656 * Math.cos(M) +
-				0.0016 * T * Math.cos(M) +
-				0.355 * Math.cos(4 * D) +
-				0.159 * Math.cos(2 * D - M) +
-				0.127 * Math.cos(D + M) +
-				0.065 * Math.cos(4 * D - M) +
-				0.052 * Math.cos(6 * D) +
-				0.043 * Math.cos(2 * D + M) +
-				0.031 * Math.cos(2 * D + 2 * F) -
-				0.023 * Math.cos(2 * D - 2 * F) +
-				0.022 * Math.cos(2 * D - 2 * M) +
-				0.019 * Math.cos(2 * D + 2 * M) -
-				0.016 * Math.cos(2 * M) +
-				0.014 * Math.cos(6 * D - M) +
-				0.01 * Math.cos(8 * D)
 		}
 
 		if (jdDay + jdFraction > jd !== next) {
 			if (next) k++
 			else k--
 		} else {
+			if (apsis === 'PERIGEE') {
+				parallax =
+					3629.215 +
+					63.224 * Math.cos(2 * D) -
+					6.99 * Math.cos(4 * D) +
+					2.834 * Math.cos(2 * D - M) -
+					0.0071 * T * Math.cos(2 * D - M) +
+					1.927 * Math.cos(6 * D) -
+					1.263 * Math.cos(D) -
+					0.702 * Math.cos(8 * D) +
+					0.696 * Math.cos(M) -
+					0.0017 * T * Math.cos(M) -
+					0.69 * Math.cos(2 * F) -
+					0.629 * Math.cos(4 * D - M) +
+					0.0016 * T * Math.cos(4 * D - M) -
+					0.392 * Math.cos(2 * D - 2 * F) +
+					0.297 * Math.cos(10 * D) +
+					0.26 * Math.cos(6 * D - M) +
+					0.201 * Math.cos(3 * D) -
+					0.161 * Math.cos(2 * D + M) +
+					0.157 * Math.cos(D + M) -
+					0.138 * Math.cos(12 * D) -
+					0.127 * Math.cos(8 * D - M) +
+					0.104 * Math.cos(2 * D + 2 * F) +
+					0.104 * Math.cos(2 * D - 2 * M) -
+					0.079 * Math.cos(5 * D) +
+					0.068 * Math.cos(14 * D) +
+					0.067 * Math.cos(10 * D - M) +
+					0.054 * Math.cos(4 * D + M) -
+					0.038 * Math.cos(12 * D - M) -
+					0.038 * Math.cos(4 * D - 2 * M) +
+					0.037 * Math.cos(7 * D) -
+					0.037 * Math.cos(4 * D + 2 * F) -
+					0.035 * Math.cos(16 * D) -
+					0.03 * Math.cos(3 * D + M) +
+					0.029 * Math.cos(D - M) -
+					0.025 * Math.cos(6 * D + M) +
+					0.023 * Math.cos(2 * M) +
+					0.023 * Math.cos(14 * D - M) -
+					0.023 * Math.cos(2 * D + 2 * M) +
+					0.022 * Math.cos(6 * D - 2 * M) -
+					0.021 * Math.cos(2 * D - 2 * F - M) -
+					0.02 * Math.cos(9 * D) +
+					0.019 * Math.cos(18 * D) +
+					0.017 * Math.cos(6 * D + 2 * F) +
+					0.014 * Math.cos(2 * F - M) -
+					0.014 * Math.cos(16 * D - M) +
+					0.013 * Math.cos(4 * D - 2 * F) +
+					0.012 * Math.cos(8 * D + M) +
+					0.011 * Math.cos(11 * D) +
+					0.01 * Math.cos(5 * D + M) -
+					0.01 * Math.cos(20 * D)
+			} else {
+				parallax =
+					3245.251 -
+					9.147 * Math.cos(2 * D) -
+					0.841 * Math.cos(D) +
+					0.697 * Math.cos(2 * F) -
+					0.656 * Math.cos(M) +
+					0.0016 * T * Math.cos(M) +
+					0.355 * Math.cos(4 * D) +
+					0.159 * Math.cos(2 * D - M) +
+					0.127 * Math.cos(D + M) +
+					0.065 * Math.cos(4 * D - M) +
+					0.052 * Math.cos(6 * D) +
+					0.043 * Math.cos(2 * D + M) +
+					0.031 * Math.cos(2 * D + 2 * F) -
+					0.023 * Math.cos(2 * D - 2 * F) +
+					0.022 * Math.cos(2 * D - 2 * M) +
+					0.019 * Math.cos(2 * D + 2 * M) -
+					0.016 * Math.cos(2 * M) +
+					0.014 * Math.cos(6 * D - M) +
+					0.01 * Math.cos(8 * D)
+			}
+
 			break
 		}
 	}
@@ -695,4 +699,141 @@ export function nearestLunarApsis(time: Time, apsis: LunarApsis, next: boolean):
 	const diameter = 2 * moonSemidiameter(distance)
 
 	return [timeNormalize(jdDay, jdFraction, 0, Timescale.TT), distance, diameter]
+}
+
+// Finds the instant of the nearest maximal declination (northern or southern) of the Moon, searching
+// forward (`next` = true) or backward (`next` = false) from `time`. Implements Meeus' "Astronomical
+// Algorithms" Chapter 52.
+//
+// Returns the instant (TT) and the Moon's geocentric declination at that extremum (radians): positive at a
+// northern maximum, negative at a southern one (the Moon's most southerly declination). The declination is
+// the mean geocentric value of the truncated series (a few arcminutes accurate); nutation and the observer's
+// topocentric parallax are not applied. Northern and southern maxima alternate about every 13.66 days, and
+// their amplitude swings between ~18.3 deg and ~28.6 deg over the 18.6-year nodal cycle.
+//
+// The southern series reuses the northern periodic coefficients with the argument of latitude F shifted by
+// 180 deg: this is Meeus' southern table, which is the northern one with the signs of the odd-F terms
+// reversed. `k` is iterated from the seed year until the passage lands on the requested side of `time`.
+export function nearestMaxDeclination(time: Time, declination: LunarDeclination, next: boolean): readonly [Time, Angle] {
+	time = tt(time)
+	const jd = toJulianDay(time)
+	const year = timeToMeeusApproxYear(time)
+	const isNorthern = declination === 'NORTH'
+	let k = Math.floor((year - 2000.03) * 13.3686)
+
+	let jdDay = 0
+	let jdFraction = 0
+	let delta = 0
+
+	while (true) {
+		const T = k / 1336.86
+		const T2 = T * T
+		const T3 = T2 * T
+
+		const D = deg((isNorthern ? 152.2029 : 345.6676) + 333.0705546 * k - 0.0004214 * T2 + 0.00000011 * T3)
+		const M = deg((isNorthern ? 14.8591 : 1.3951) + 26.9281592 * k - 0.00003555 * T2 - 0.0000001 * T3)
+		const M_ = deg((isNorthern ? 4.6881 : 186.21) + 356.9562794 * k + 0.0103066 * T2 + 0.00001251 * T3)
+		// Argument of latitude; the southern series shifts it by 180 deg to flip the odd-F terms' signs.
+		const F = deg((isNorthern ? 325.8867 : 145.1633) + 1.4467807 * k - 0.002069 * T2 - 0.00000215 * T3) + (isNorthern ? 0 : PI)
+		// Multiplier related to the eccentricity of the Earth orbit.
+		const E = 1 - 0.002516 * T - 0.0000047 * T2
+
+		jdDay = (isNorthern ? 2451562 : 2451548) + 27 * k
+		jdFraction = (isNorthern ? 0.5897 : 0.9289) + 0.321582247 * k + 0.000119804 * T2 - 0.000000141 * T3
+		jdFraction +=
+			0.8975 * Math.cos(F) +
+			-0.4726 * Math.sin(M_) +
+			-0.103 * Math.sin(2 * F) +
+			-0.0976 * Math.sin(2 * D - M_) +
+			-0.0462 * Math.cos(M_ - F) +
+			-0.0461 * Math.cos(M_ + F) +
+			-0.0438 * Math.sin(2 * D) +
+			0.0162 * E * Math.sin(M) +
+			-0.0157 * Math.cos(3 * F) +
+			0.0145 * Math.sin(M_ + 2 * F) +
+			0.0136 * Math.cos(2 * D - F) +
+			-0.0095 * Math.cos(2 * D - M_ - F) +
+			-0.0091 * Math.cos(2 * D - M_ + F) +
+			-0.0089 * Math.cos(2 * D + F) +
+			0.0075 * Math.sin(2 * M_) +
+			-0.0068 * Math.sin(M_ - 2 * F) +
+			0.0061 * Math.cos(2 * M_ - F) +
+			-0.0047 * Math.sin(M_ + 3 * F) +
+			-0.0043 * E * Math.sin(2 * D - M - M_) +
+			-0.004 * Math.cos(M_ - 2 * F) +
+			-0.0037 * Math.sin(2 * D - 2 * M_) +
+			0.0031 * Math.sin(F) +
+			0.003 * Math.sin(2 * D + M_) +
+			-0.0029 * Math.cos(M_ + 2 * F) +
+			-0.0029 * E * Math.sin(2 * D - M) +
+			-0.0027 * Math.sin(M_ + F) +
+			0.0024 * E * Math.sin(M - M_) +
+			-0.0021 * Math.sin(M_ - 3 * F) +
+			0.0019 * Math.sin(2 * M_ + F) +
+			0.0018 * Math.cos(2 * D - 2 * M_ - F) +
+			0.0018 * Math.sin(3 * F) +
+			0.0017 * Math.cos(M_ + 3 * F) +
+			0.0017 * Math.cos(2 * M_) +
+			-0.0014 * Math.cos(2 * D - M_) +
+			0.0013 * Math.cos(2 * D + M_ + F) +
+			0.0013 * Math.cos(M_) +
+			0.0012 * Math.sin(3 * M_ + F) +
+			0.0011 * Math.sin(2 * D - M_ + F) +
+			-0.0011 * Math.cos(2 * D - 2 * M_) +
+			0.001 * Math.cos(D + F) +
+			0.001 * E * Math.sin(M + M_) +
+			-0.0009 * Math.sin(2 * D - 2 * F) +
+			0.0007 * Math.cos(2 * M_ + F) +
+			-0.0007 * Math.cos(3 * M_ + F)
+
+		if (jdDay + jdFraction > jd !== next) {
+			if (next) k++
+			else k--
+		} else {
+			delta = 23.6961 - 0.013004 * T
+			delta +=
+				5.1093 * Math.sin(F) +
+				0.2658 * Math.cos(2 * F) +
+				0.1448 * Math.sin(2 * D - F) +
+				-0.0322 * Math.sin(3 * F) +
+				0.0133 * Math.cos(2 * D - 2 * F) +
+				0.0125 * Math.cos(2 * D) +
+				-0.0124 * Math.sin(M_ - F) +
+				-0.0101 * Math.sin(M_ + 2 * F) +
+				0.0097 * Math.cos(F) +
+				-0.0087 * E * Math.sin(2 * D + M - F) +
+				0.0074 * Math.sin(M_ + 3 * F) +
+				0.0067 * Math.sin(D + F) +
+				0.0063 * Math.sin(M_ - 2 * F) +
+				0.006 * E * Math.sin(2 * D - M - F) +
+				-0.0057 * Math.sin(2 * D - M_ - F) +
+				-0.0056 * Math.cos(M_ + F) +
+				0.0052 * Math.cos(M_ + 2 * F) +
+				0.0041 * Math.cos(2 * M_ + F) +
+				-0.004 * Math.cos(M_ - 3 * F) +
+				0.0038 * Math.cos(2 * M_ - F) +
+				-0.0034 * Math.cos(M_ - 2 * F) +
+				-0.0029 * Math.sin(2 * M_) +
+				0.0029 * Math.sin(3 * M_ + F) +
+				-0.0028 * E * Math.cos(2 * D + M - F) +
+				-0.0028 * Math.cos(M_ - F) +
+				-0.0023 * Math.cos(3 * F) +
+				-0.0021 * Math.sin(2 * D + F) +
+				0.0019 * Math.cos(M_ + 3 * F) +
+				0.0018 * Math.cos(D + F) +
+				0.0017 * Math.sin(2 * M_ - F) +
+				0.0015 * Math.cos(3 * M_ + F) +
+				0.0014 * Math.cos(2 * D + 2 * M_ + F) +
+				-0.0012 * Math.sin(2 * D - 2 * M_ - F) +
+				-0.0012 * Math.cos(2 * M_) +
+				-0.001 * Math.cos(M_) +
+				-0.001 * Math.sin(2 * F) +
+				0.0006 * Math.sin(M_ + F)
+
+			break
+		}
+	}
+
+	// Southern maxima are the Moon's most southerly declination, reported as a negative angle.
+	return [timeNormalize(jdDay, jdFraction, 0, Timescale.TT), deg(isNorthern ? delta : -delta)] as const
 }
