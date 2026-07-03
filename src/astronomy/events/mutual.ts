@@ -1,19 +1,20 @@
 import { AU_KM, SPEED_OF_LIGHT_AU_DAY } from '../../core/constants'
 import { type Vec3, vecAngle, vecDot, vecLength, vecMinus, vecMulScalar, vecNormalize, vecPlus } from '../../math/linear-algebra/vec3'
 import { brentRoot } from '../../math/numerical/optimization'
-import type { Angle } from '../../math/units/angle'
 import { callisto, europa, ganymede, io } from '../ephemeris/models/analytical/l12'
-import { earth, jupiter, sun } from '../ephemeris/models/analytical/vsop87e'
+import { dione, enceladus, iapetus, mimas, rhea, tethys, titan } from '../ephemeris/models/analytical/tass17'
+import { earth, jupiter, saturn, sun } from '../ephemeris/models/analytical/vsop87e'
 import { type Time, timeShift, timeSubtract } from '../time/time'
 import { searchExtrema, type TimeSearchOptions } from './search'
 
-// Mutual events between the Galilean satellites of Jupiter: the instants when one moon occults another
-// (passes in front of it as seen from Earth) or eclipses it (casts its shadow on it). This is the
-// detection layer only — the times, the pair, which body is in front or casting the shadow, and how
-// central the event is — not the photometry: no light curve, obscured-area fraction or magnitude drop.
+// Mutual events between the major satellites of a giant planet: the instants when one moon occults
+// another (passes in front of it as seen from Earth) or eclipses it (casts its shadow on it). This is the
+// detection layer only — the times, the pair, which body is in front or casting the shadow, the contacts,
+// and how central the event is — not the photometry: no light curve, obscured-area fraction or magnitude
+// drop. Jupiter's Galilean moons (L1.2 theory) and Saturn's main moons (TASS 1.7) are supported.
 //
-// Positions come from the L1.2 Galilean theory (Jovicentric, J2000 equatorial, AU) added to the VSOP87E
-// Jupiter position, so every body shares one barycentric ICRF frame. Occultations are evaluated from the
+// Positions come from the satellite theory (planetocentric, J2000 equatorial, AU) added to the VSOP87E
+// planet position, so every body shares one barycentric ICRF frame. Occultations are evaluated from the
 // apparent geocentric directions of the two moons, each corrected for its own light time; eclipses are
 // evaluated from the heliocentric shadow geometry at the physical instant, then reported at the
 // light-time-delayed instant they are seen from Earth. The finder reuses the shared time-domain scanner
@@ -22,65 +23,102 @@ import { searchExtrema, type TimeSearchOptions } from './search'
 // A Galilean satellite of Jupiter.
 export type GalileanMoon = 'io' | 'europa' | 'ganymede' | 'callisto'
 
+// A major Saturnian satellite covered by TASS 1.7 (Hyperion is omitted: its chaotic rotation makes it a
+// poor mutual-event target and its disk is tiny).
+export type SaturnianMoon = 'mimas' | 'enceladus' | 'tethys' | 'dione' | 'rhea' | 'titan' | 'iapetus'
+
 // Kind of mutual event: an occultation (one moon in front of the other) or an eclipse (one moon's shadow
 // on the other).
 export type MutualEventKind = 'occultation' | 'eclipse'
 
-// One Galilean satellite's ephemeris and physical radius.
+// One satellite's ephemeris and physical radius.
 interface MoonData {
-	// L1.2 Jovicentric position+velocity (AU, J2000 equatorial).
+	// Planetocentric position+velocity (AU, J2000 equatorial) from the satellite theory.
 	readonly ephemeris: (time: Time) => readonly [Vec3, Vec3]
 	// Mean physical radius in AU.
 	readonly radius: number
 }
 
-// Physical radii from the IAU/JPL mean values (km): Io 1821.6, Europa 1560.8, Ganymede 2631.2, Callisto
-// 2410.3, converted to AU.
-const GALILEAN: Record<GalileanMoon, MoonData> = {
-	io: { ephemeris: io, radius: 1821.6 / AU_KM },
-	europa: { ephemeris: europa, radius: 1560.8 / AU_KM },
-	ganymede: { ephemeris: ganymede, radius: 2631.2 / AU_KM },
-	callisto: { ephemeris: callisto, radius: 2410.3 / AU_KM },
+// A planet and its moon set for the mutual-event finder.
+interface MutualSystem<M extends string> {
+	// Barycentric position of the planet (AU, ICRF) from VSOP87E.
+	readonly planet: (time: Time) => readonly [Vec3, Vec3]
+	// Ephemeris and radius of each moon.
+	readonly moons: Record<M, MoonData>
+	// The moons in orbital order, enumerated pairwise.
+	readonly order: readonly M[]
 }
-
-// The four moons in orbital order, used to enumerate the six unordered pairs.
-const GALILEAN_MOONS: readonly GalileanMoon[] = ['io', 'europa', 'ganymede', 'callisto']
 
 // Solar photospheric radius in AU (IAU 2015 nominal radius 695700 km), for the penumbral shadow cone.
 const SUN_RADIUS_AU = 695700 / AU_KM
 
-// Default coarse sampling step for the separation-minimum search: 20 minutes, in days. A Galilean
-// conjunction valley is hours wide, so this brackets every separation minimum while staying cheap.
-const DEFAULT_STEP = 1200 / 86400
+// Default coarse sampling step for the separation-minimum search: 10 minutes, in days. A conjunction
+// valley is tens of minutes to hours wide, so this brackets every separation minimum, including the fast
+// inner Saturnian pairs, while staying cheap.
+const DEFAULT_STEP = 600 / 86400
 
 // Half-width in days of the window searched on each side of a separation minimum for the first and last
-// contact: 6 hours, comfortably longer than any Galilean mutual event.
+// contact: 6 hours, comfortably longer than any mutual event.
 const CONTACT_WINDOW = 0.25
 
+// Days the eclipse scan reaches back before the window start so that eclipses whose physical instant
+// precedes the window but whose Earth-seen instant falls inside it are still found. It exceeds the
+// Earth-satellite light time of both planets (Jupiter ~54 min, Saturn ~91 min at their farthest).
+const ECLIPSE_LIGHT_TIME_PAD = 0.08
+
+// Jupiter's four Galilean moons. Radii are the IAU/JPL mean values (km): Io 1821.6, Europa 1560.8,
+// Ganymede 2631.2, Callisto 2410.3.
+const JUPITER_SYSTEM: MutualSystem<GalileanMoon> = {
+	planet: jupiter,
+	order: ['io', 'europa', 'ganymede', 'callisto'],
+	moons: {
+		io: { ephemeris: io, radius: 1821.6 / AU_KM },
+		europa: { ephemeris: europa, radius: 1560.8 / AU_KM },
+		ganymede: { ephemeris: ganymede, radius: 2631.2 / AU_KM },
+		callisto: { ephemeris: callisto, radius: 2410.3 / AU_KM },
+	},
+}
+
+// Saturn's main moons. Radii are the IAU/JPL mean values (km): Mimas 198.2, Enceladus 252.1, Tethys
+// 531.1, Dione 561.4, Rhea 763.8, Titan 2575 (solid surface), Iapetus 734.5.
+const SATURN_SYSTEM: MutualSystem<SaturnianMoon> = {
+	planet: saturn,
+	order: ['mimas', 'enceladus', 'tethys', 'dione', 'rhea', 'titan', 'iapetus'],
+	moons: {
+		mimas: { ephemeris: mimas, radius: 198.2 / AU_KM },
+		enceladus: { ephemeris: enceladus, radius: 252.1 / AU_KM },
+		tethys: { ephemeris: tethys, radius: 531.1 / AU_KM },
+		dione: { ephemeris: dione, radius: 561.4 / AU_KM },
+		rhea: { ephemeris: rhea, radius: 763.8 / AU_KM },
+		titan: { ephemeris: titan, radius: 2575 / AU_KM },
+		iapetus: { ephemeris: iapetus, radius: 734.5 / AU_KM },
+	},
+}
+
 // Separation geometry of a moon pair for one event kind at one instant.
-interface PairGeometry {
+interface PairGeometry<M extends string> {
 	// Separation to compare against the contact limit: angular (radians) for occultation, linear
 	// perpendicular distance (AU) for eclipse.
 	readonly separation: number
 	// Contact-limit separation: an event exists while separation < limit.
 	readonly limit: number
 	// The moon in front (occultation) or casting the shadow (eclipse).
-	readonly front: GalileanMoon
+	readonly front: M
 	// The moon behind (occultation) or being shadowed (eclipse).
-	readonly back: GalileanMoon
+	readonly back: M
 	// Whether the geometry admits an event at all (always true for occultation; requires the shadowed moon
 	// to be behind the caster for eclipse).
 	readonly valid: boolean
 }
 
-// A detected mutual event between two Galilean moons.
-export interface MutualEvent {
+// A detected mutual event between two moons.
+export interface MutualEvent<M extends string = string> {
 	// Whether one moon passes in front of the other (occultation) or shadows it (eclipse).
 	readonly kind: MutualEventKind
 	// The moon in front (occultation) or casting the shadow (eclipse).
-	readonly front: GalileanMoon
+	readonly front: M
 	// The moon behind (occultation) or being shadowed (eclipse).
-	readonly back: GalileanMoon
+	readonly back: M
 	// First contact, or undefined when the event is already underway at the window start.
 	readonly start?: Time
 	// Instant of maximum obscuration (minimum separation).
@@ -92,20 +130,19 @@ export interface MutualEvent {
 	readonly impactParameter: number
 }
 
-// Barycentric position of a Galilean moon (AU, ICRF): the VSOP87E Jupiter position plus the L1.2
-// Jovicentric offset.
-function moonPosition(moon: GalileanMoon, time: Time): Vec3 {
-	return vecPlus(jupiter(time)[0], GALILEAN[moon].ephemeris(time)[0])
+// Barycentric position of a moon (AU, ICRF): the VSOP87E planet position plus the planetocentric offset.
+function moonPosition<M extends string>(system: MutualSystem<M>, moon: M, time: Time): Vec3 {
+	return vecPlus(system.planet(time)[0], system.moons[moon].ephemeris(time)[0])
 }
 
 // Apparent direction from a fixed barycentric observer to a moon, corrected for the moon's light time.
 // The observer stays at `observer` (its position at the observation instant); the moon is retarded so the
 // pair is seen as it appears at that instant.
-function apparentDirection(moon: GalileanMoon, observer: Vec3, time: Time): Vec3 {
+function apparentDirection<M extends string>(system: MutualSystem<M>, moon: M, observer: Vec3, time: Time): Vec3 {
 	let delay = 0
 	let direction: Vec3 = [0, 0, 0]
 	for (let i = 0; i < 3; i++) {
-		direction = vecMinus(moonPosition(moon, timeShift(time, -delay)), observer)
+		direction = vecMinus(moonPosition(system, moon, timeShift(time, -delay)), observer)
 		delay = vecLength(direction) / SPEED_OF_LIGHT_AU_DAY
 	}
 	return direction
@@ -115,14 +152,14 @@ function apparentDirection(moon: GalileanMoon, observer: Vec3, time: Time): Vec3
 // two moons seen from Earth, the contact-limit separation (sum of their apparent angular radii) and which
 // moon is in front (nearer Earth). Only the direction of light matters here, so both moons are taken at
 // their own light-retarded positions.
-function occultation(a: GalileanMoon, b: GalileanMoon, time: Time): PairGeometry {
+function occultation<M extends string>(system: MutualSystem<M>, a: M, b: M, time: Time): PairGeometry<M> {
 	const observer = earth(time)[0]
-	const da = apparentDirection(a, observer, time)
-	const db = apparentDirection(b, observer, time)
+	const da = apparentDirection(system, a, observer, time)
+	const db = apparentDirection(system, b, observer, time)
 	const ra = vecLength(da)
 	const rb = vecLength(db)
 	const separation = vecAngle(da, db)
-	const limit = GALILEAN[a].radius / ra + GALILEAN[b].radius / rb
+	const limit = system.moons[a].radius / ra + system.moons[b].radius / rb
 	const aInFront = ra < rb
 	return { separation, limit, front: aInFront ? a : b, back: aInFront ? b : a, valid: true }
 }
@@ -132,10 +169,10 @@ function occultation(a: GalileanMoon, b: GalileanMoon, time: Time): PairGeometry
 // radius) and which moon casts the shadow (nearer the Sun). `valid` is false when the shadowed moon is
 // not behind the caster (no eclipse is geometrically possible); the separation stays finite so the
 // scanner never sees a discontinuity.
-function eclipse(a: GalileanMoon, b: GalileanMoon, time: Time): PairGeometry {
+function eclipse<M extends string>(system: MutualSystem<M>, a: M, b: M, time: Time): PairGeometry<M> {
 	const star = sun(time)[0]
-	const sa = vecMinus(moonPosition(a, time), star)
-	const sb = vecMinus(moonPosition(b, time), star)
+	const sa = vecMinus(moonPosition(system, a, time), star)
+	const sb = vecMinus(moonPosition(system, b, time), star)
 
 	// The caster is the moon nearer the Sun; the other is the one that can fall in its shadow.
 	const aIsCaster = vecLength(sa) < vecLength(sb)
@@ -151,14 +188,14 @@ function eclipse(a: GalileanMoon, b: GalileanMoon, time: Time): PairGeometry {
 	// Penumbral shadow radius at the shadowed moon: the caster's radius widened by the Sun's angular size
 	// over the caster-to-shadowed distance, plus the shadowed moon's own radius.
 	const sunAngularRadius = SUN_RADIUS_AU / vecLength(casterToSun)
-	const limit = GALILEAN[caster].radius + GALILEAN[shadowed].radius + Math.max(0, along) * Math.tan(sunAngularRadius)
+	const limit = system.moons[caster].radius + system.moons[shadowed].radius + Math.max(0, along) * Math.tan(sunAngularRadius)
 	return { separation: perpendicular, limit, front: caster, back: shadowed, valid: along > 0 }
 }
 
 // One-way light time in days from a physical instant at a moon to the geocentric observer, used to report
 // eclipses at the moment they are seen from Earth.
-function earthLightTime(moon: GalileanMoon, time: Time): number {
-	return vecLength(vecMinus(moonPosition(moon, time), earth(time)[0])) / SPEED_OF_LIGHT_AU_DAY
+function earthLightTime<M extends string>(system: MutualSystem<M>, moon: M, time: Time): number {
+	return vecLength(vecMinus(moonPosition(system, moon, time), earth(time)[0])) / SPEED_OF_LIGHT_AU_DAY
 }
 
 // Extracts the events of one kind for one moon pair over the window.
@@ -168,23 +205,23 @@ function earthLightTime(moon: GalileanMoon, time: Time): number {
 // (separation - limit) bracketing the minimum, found with Brent's method; a contact that does not fall in
 // the search window (or the window edge) is left undefined. Eclipse times are shifted by the Earth light
 // time so they are reported as seen from Earth.
-function findPairEvents(kind: MutualEventKind, a: GalileanMoon, b: GalileanMoon, start: Time, stop: Time, options: TimeSearchOptions): MutualEvent[] {
+function findPairEvents<M extends string>(system: MutualSystem<M>, kind: MutualEventKind, a: M, b: M, start: Time, stop: Time, options: TimeSearchOptions): MutualEvent<M>[] {
 	const geometry = kind === 'occultation' ? occultation : eclipse
-	const separationAt = (time: Time) => geometry(a, b, time).separation
+	const separationAt = (time: Time) => geometry(system, a, b, time).separation
 	const gapAt = (time: Time) => {
-		const g = geometry(a, b, time)
+		const g = geometry(system, a, b, time)
 		return g.separation - g.limit
 	}
 
-	const events: MutualEvent[] = []
+	const events: MutualEvent<M>[] = []
 
 	for (const minimum of searchExtrema(separationAt, start, stop, options)) {
 		if (minimum.kind !== 'minimum') continue
-		const state = geometry(a, b, minimum.time)
+		const state = geometry(system, a, b, minimum.time)
 		if (!state.valid || state.separation >= state.limit) continue
 
 		const middle = minimum.time
-		const observedShift = kind === 'eclipse' ? earthLightTime(state.back, middle) : 0
+		const observedShift = kind === 'eclipse' ? earthLightTime(system, state.back, middle) : 0
 
 		events.push({
 			kind,
@@ -210,29 +247,47 @@ function bracketContact(gap: (time: Time) => number, from: Time, to: Time, toler
 	return timeShift(from, root.root + observedShift)
 }
 
-// Finds every mutual occultation and eclipse among the four Galilean satellites over a time window.
+// Finds every mutual occultation and eclipse among a planet's moons over a time window.
 //
-// Both event kinds are screened for all six moon pairs and returned chronologically. Occultation times
-// are the instants the events are seen from Earth (each moon light-time corrected); eclipse times are
-// likewise shifted to when the shadowed moon is seen from Earth, but the geometry is sampled in physical
-// time, so eclipses near the window edges may fall a light time (~35-50 min) outside [start, stop].
-// `step` must stay well under the width of a conjunction so consecutive minima bracket cleanly; it
-// defaults to 20 minutes. Mutual events only occur in the seasons around Jupiter's equinox (every ~6
-// years), so most windows return nothing.
-export function galileanMutualEvents(start: Time, stop: Time, options: TimeSearchOptions = {}): MutualEvent[] {
-	const step = options.step ?? DEFAULT_STEP
-	const scan: TimeSearchOptions = { step, tolerance: options.tolerance }
-	const events: MutualEvent[] = []
+// Occultations are scanned in observed time over [start, stop]. Eclipses are scanned in physical time
+// over a window reaching one light time before `start`, then filtered to those seen from Earth within
+// [start, stop], so an eclipse observed just after `start` is not lost because its shadow fell earlier.
+function mutualEvents<M extends string>(system: MutualSystem<M>, start: Time, stop: Time, options: TimeSearchOptions): MutualEvent<M>[] {
+	const scan: TimeSearchOptions = { step: options.step ?? DEFAULT_STEP, tolerance: options.tolerance }
+	const eclipseStart = timeShift(start, -ECLIPSE_LIGHT_TIME_PAD)
+	const events: MutualEvent<M>[] = []
 
-	for (let i = 0; i < GALILEAN_MOONS.length; i++) {
-		for (let j = i + 1; j < GALILEAN_MOONS.length; j++) {
-			const a = GALILEAN_MOONS[i]
-			const b = GALILEAN_MOONS[j]
-			events.push(...findPairEvents('occultation', a, b, start, stop, scan))
-			events.push(...findPairEvents('eclipse', a, b, start, stop, scan))
+	for (let i = 0; i < system.order.length; i++) {
+		for (let j = i + 1; j < system.order.length; j++) {
+			const a = system.order[i]
+			const b = system.order[j]
+			events.push(...findPairEvents(system, 'occultation', a, b, start, stop, scan))
+			for (const event of findPairEvents(system, 'eclipse', a, b, eclipseStart, stop, scan)) {
+				if (timeSubtract(event.middle, start) >= 0 && timeSubtract(event.middle, stop) < 0) events.push(event)
+			}
 		}
 	}
 
 	events.sort((x, y) => timeSubtract(x.middle, y.middle))
 	return events
+}
+
+// Finds every mutual occultation and eclipse among the four Galilean satellites over a time window.
+//
+// Both event kinds are screened for all six moon pairs and returned chronologically. All times are the
+// instants the events are seen from Earth (each moon light-time corrected). `step` must stay well under
+// the width of a conjunction so consecutive minima bracket cleanly; it defaults to 10 minutes. Mutual
+// events only occur in the seasons around Jupiter's equinox (every ~6 years), so most windows return
+// nothing.
+export function galileanMutualEvents(start: Time, stop: Time, options: TimeSearchOptions = {}): MutualEvent<GalileanMoon>[] {
+	return mutualEvents(JUPITER_SYSTEM, start, stop, options)
+}
+
+// Finds every mutual occultation and eclipse among Saturn's main moons over a time window.
+//
+// Screens all twenty-one pairs of the seven moons for both event kinds, chronologically, with the same
+// light-time conventions as galileanMutualEvents. Saturn's mutual-event seasons fall around its equinox
+// (every ~15 years, most recently the 2025 ring-plane crossing), so most windows return nothing.
+export function saturnianMutualEvents(start: Time, stop: Time, options: TimeSearchOptions = {}): MutualEvent<SaturnianMoon>[] {
+	return mutualEvents(SATURN_SYSTEM, start, stop, options)
 }

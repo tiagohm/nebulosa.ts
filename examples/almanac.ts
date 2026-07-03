@@ -33,7 +33,7 @@ import { computeGreatestEclipseCircumstances, computeLocalSolarEclipseCircumstan
 import { computePolynomialBesselianElements } from '../src/astronomy/events/eclipse/solar/map'
 import { ASTRONOMICAL_TWILIGHT, CIVIL_TWILIGHT, NAUTICAL_TWILIGHT, riseTransitSet, STANDARD_HORIZON, SUN_HORIZON } from '../src/astronomy/events/horizon'
 import { greatRedSpotTransits, jupiterCentralMeridian } from '../src/astronomy/events/jupiter'
-import { galileanMutualEvents } from '../src/astronomy/events/mutual'
+import { galileanMutualEvents, saturnianMutualEvents } from '../src/astronomy/events/mutual'
 import { satelliteConjunctions, satelliteEclipses, satelliteMagnitude, satellitePasses, satelliteShadowState } from '../src/astronomy/events/satellite'
 import { searchExtrema, searchRoots } from '../src/astronomy/events/search'
 import { airmass, airmassKastenYoung, altitudeAtTransit, asteroidMagnitudeEstimate, atmosphericRefraction, cometMagnitudeEstimate, objectAngularDiameter } from '../src/astronomy/formulas'
@@ -1413,14 +1413,16 @@ function venusTransitCircumstances() {
 	console.info('Venus transit circumstances: needs a transit module (Besselian-style); not implemented.')
 }
 
-// Mutual Satellite Event: galileanMutualEvents screens the six Galilean moon pairs for mutual
-// occultations and eclipses over a window (here a day in the 2026-2027 Jupiter mutual-event season).
+// Mutual Satellite Event: galileanMutualEvents and saturnianMutualEvents screen the Galilean and main
+// Saturnian moon pairs for mutual occultations and eclipses over a window (here days in the 2026-2027
+// Jupiter and 2025 Saturn mutual-event seasons).
 function mutualSatelliteEvent() {
-	const start = timeYMDHMS(2026, 12, 2, 0, 0, 0, Timescale.UTC)
-	const events = galileanMutualEvents(start, timeShift(start, 1))
-	console.info('Galilean mutual events in the day:', events.length)
-	const [first] = events
-	if (first !== undefined) console.info(`first: ${first.front} ${first.kind === 'occultation' ? 'occults' : 'eclipses'} ${first.back}, impact ${first.impactParameter.toFixed(3)}`)
+	const jovian = galileanMutualEvents(timeYMDHMS(2026, 12, 2, 0, 0, 0, Timescale.UTC), timeYMDHMS(2026, 12, 3, 0, 0, 0, Timescale.UTC))
+	const [first] = jovian
+	console.info('Galilean mutual events in the day:', jovian.length, first ? `(first: ${first.front} ${first.kind === 'occultation' ? 'occults' : 'eclipses'} ${first.back})` : '')
+
+	const saturnian = saturnianMutualEvents(timeYMDHMS(2025, 3, 12, 0, 0, 0, Timescale.UTC), timeYMDHMS(2025, 3, 13, 0, 0, 0, Timescale.UTC))
+	console.info('Saturnian mutual events in the day:', saturnian.length)
 }
 
 // ##### Orbits and Small Bodies #####

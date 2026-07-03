@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { galileanMutualEvents } from '../../../src/astronomy/events/mutual'
+import { galileanMutualEvents, saturnianMutualEvents } from '../../../src/astronomy/events/mutual'
 import { Timescale, type Time, timeSubtract, timeYMDHMS } from '../../../src/astronomy/time/time'
 
 // The 2026-2027 Jupiter mutual-event season (Earth and Sun near the Jovian equatorial plane) provides the
@@ -54,6 +54,30 @@ test('finds the Ganymede-shadow mutual eclipses on 2026-12-02', () => {
 	expect(events[1].kind).toBe('eclipse')
 	expect(events[1].back).toBe('europa')
 	expect(secondsAfter(events[1].middle, start)).toBeGreaterThan(secondsAfter(central.middle, start))
+})
+
+test('finds the Titan-Rhea mutual events in the 2025 Saturn season', () => {
+	// Near Saturn's 2025 conjunction (just after the ring-plane crossing) the Sun and Earth are almost in
+	// line, so Titan eclipses Rhea and then occults it a few minutes later.
+	const start = timeYMDHMS(2025, 3, 12, 10, 0, 0, Timescale.UTC)
+	const events = saturnianMutualEvents(start, timeYMDHMS(2025, 3, 12, 13, 0, 0, Timescale.UTC))
+	expect(events.length).toBe(2)
+
+	const eclipse = events[0]
+	expect(eclipse.kind).toBe('eclipse')
+	expect(eclipse.front).toBe('titan')
+	expect(eclipse.back).toBe('rhea')
+
+	const occultation = events[1]
+	expect(occultation.kind).toBe('occultation')
+	expect(occultation.front).toBe('titan')
+	expect(occultation.back).toBe('rhea')
+	// Impact 0.245: Horizons gives the apparent separation as 0.112" at mid-occultation versus 0.107" here
+	// (the TASS17-vs-SAT441 ephemeris difference).
+	expect(occultation.impactParameter).toBeCloseTo(0.245, 2)
+	// Mid-occultation 2025-03-12 11:34:01 UTC, minutes after the eclipse.
+	expect(secondsAfter(occultation.middle, start)).toBeCloseTo(5641.3, -1)
+	expect(secondsAfter(occultation.middle, eclipse.middle)).toBeGreaterThan(0)
 })
 
 test('contacts bracket every event and impact parameters stay in range', () => {
