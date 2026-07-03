@@ -1,6 +1,7 @@
 import { DAYSEC, ONE_SECOND } from '../../core/constants'
 import type { Vec3 } from '../../math/linear-algebra/vec3'
 import { clamp } from '../../math/numerical/math'
+import { brentMinimize } from '../../math/numerical/optimization'
 import type { Angle } from '../../math/units/angle'
 import type { Distance } from '../../math/units/distance'
 import { lightTime, type PositionAndVelocityOverTime, separationFrom } from '../coordinates/astrometry'
@@ -97,6 +98,26 @@ function topocentricDirection(target: PositionAndVelocityOverTime, observer: Pos
 	return direction
 }
 
+// A separation minimum located in the window: the refined appulse instant and the separation there.
+interface SeparationMinimum {
+	readonly time: Time
+	readonly value: number
+}
+
+// Refines a separation minimum in a boundary interval [from, to] that searchExtrema cannot bracket from its
+// endpoint sample. `outerValue` is the separation at the interval's outer window endpoint, which the caller
+// has already found to be the lower of the two ends; probing only in that case also guarantees searchExtrema
+// does not fire on the inner sample, so no duplicate is produced. Returns the interior minimum only when the
+// interval genuinely dips below the outer endpoint — a monotonic slope toward the endpoint is the appulse
+// peak sitting at or beyond the boundary, not an in-window event. Evaluates the separation only within
+// [from, to], so a bounded/interpolated sampler is never queried outside the requested window.
+function boundaryMinimum(separationAt: (time: Time) => number, from: Time, to: Time, outerValue: number, tolerance: number | undefined): SeparationMinimum | undefined {
+	const width = timeSubtract(to, from)
+	const result = brentMinimize((x) => separationAt(timeShift(from, x)), 0, width, { tolerance })
+	if (!(result.value < outerValue)) return undefined
+	return { time: timeShift(from, result.minimum), value: result.value }
+}
+
 // Screens a star for occultations by a moving body over a time window, from one observer.
 //
 // `target` and `observer` are position/velocity samplers in a shared origin and frame (barycentric ICRS):
@@ -104,40 +125,67 @@ function topocentricDirection(target: PositionAndVelocityOverTime, observer: Pos
 // parallax is included). `star` is the ICRS direction toward the star (need not be a unit vector); its
 // proper motion and parallax should already be folded in by the caller if sub-arcsecond accuracy matters.
 //
-// The topocentric star-body separation is sampled at the coarse `step`, each local minimum is refined with
-// the shared scanner, and every minimum at or below `maxSeparation` is returned as a candidate carrying the
-// appulse geometry. A candidate is an occultation when its separation is within the body's angular radius
-// (from `radius`); the chord duration then follows from the radius and the apparent angular speed.
-// Candidates are chronological. The coarse `step` must be finer than the approach it should catch.
+// The topocentric star-body separation is sampled at the coarse `step`, each local minimum is refined, and
+// every minimum at or below `maxSeparation` is returned as a candidate carrying the appulse geometry. A
+// candidate is an occultation when its separation is within the body's angular radius (from `radius`); the
+// chord duration then follows from the radius and the apparent angular speed. Candidates are chronological.
+// The coarse `step` must be finer than the approach it should catch.
+//
+// The separation, and therefore `target`/`observer`, is only ever evaluated within [start, stop]: the shared
+// scanner covers the interior intervals, while the first and last intervals — whose minimum would sit next
+// to a window endpoint the scanner cannot bracket — are refined by an in-window bounded minimization. This
+// keeps callers backed by bounded or interpolated states valid over exactly the requested window.
 export function occultationCandidates(target: PositionAndVelocityOverTime, star: Vec3, observer: PositionAndVelocityOverTime, start: Time, stop: Time, { radius = 0, maxSeparation = Number.POSITIVE_INFINITY, lightTimeIterations = 2, step = DEFAULT_STEP, tolerance }: OccultationOptions = {}): OccultationCandidate[] {
 	const separationAt = (time: Time) => separationFrom(topocentricDirection(target, observer, time, lightTimeIterations), star)
 	const span = timeSubtract(stop, start)
 	if (span <= 0) return []
 
-	// Cap the step so a short window still gets MIN_INTERVALS samples, and scan one step beyond each end so an
-	// appulse in the first or last interval — which searchExtrema cannot bracket from an endpoint sample — is
-	// straddled and refined. Refined minima that land in the padding outside the window are dropped below.
+	// Cap the step so a short window still gets MIN_INTERVALS samples.
 	const effectiveStep = Math.min(step, span / MIN_INTERVALS)
-	const extrema = searchExtrema(separationAt, timeShift(start, -effectiveStep), timeShift(stop, effectiveStep), { step: effectiveStep, tolerance })
+
+	// Collect separation minima in chronological order. The first interval is probed when its outer endpoint
+	// (start) is the lower coarse sample, then the scanner covers the interior, then the last interval is
+	// probed when its outer endpoint (stop) is the lower sample.
+	const minima: SeparationMinimum[] = []
+
+	const startValue = separationAt(start)
+	const firstInner = timeShift(start, effectiveStep)
+	if (startValue < separationAt(firstInner)) {
+		const first = boundaryMinimum(separationAt, start, firstInner, startValue, tolerance)
+		if (first) minima.push(first)
+	}
+
+	for (const extremum of searchExtrema(separationAt, start, stop, { step: effectiveStep, tolerance })) {
+		if (extremum.kind === 'minimum') minima.push({ time: extremum.time, value: extremum.value })
+	}
+
+	const stopValue = separationAt(stop)
+	const lastInner = timeShift(stop, -effectiveStep)
+	if (stopValue < separationAt(lastInner)) {
+		const last = boundaryMinimum(separationAt, lastInner, stop, stopValue, tolerance)
+		if (last) minima.push(last)
+	}
+
 	const candidates: OccultationCandidate[] = []
 
-	for (const extremum of extrema) {
-		if (extremum.kind !== 'minimum') continue
-		// Keep only appulses inside the requested window; the one-step padding may bracket minima just outside.
-		if (timeSubtract(extremum.time, start) < 0 || timeSubtract(stop, extremum.time) < 0) continue
-
-		const separation = extremum.value
+	for (const minimum of minima) {
+		const separation = minimum.value
 		if (separation > maxSeparation) continue
 
 		// Topocentric distance and angular radius of the disk at the refined appulse instant.
-		const direction = topocentricDirection(target, observer, extremum.time, lightTimeIterations)
+		const direction = topocentricDirection(target, observer, minimum.time, lightTimeIterations)
 		const distance = Math.hypot(direction[0], direction[1], direction[2])
 		const angularRadius = Math.asin(clamp(radius / distance, 0, 1))
 
-		// Apparent angular speed by central difference of the topocentric direction (star fixed), rad/day.
-		const before = topocentricDirection(target, observer, timeShift(extremum.time, -DERIVATIVE_STEP), lightTimeIterations)
-		const after = topocentricDirection(target, observer, timeShift(extremum.time, DERIVATIVE_STEP), lightTimeIterations)
-		const relativeAngularSpeed = separationFrom(before, after) / (2 * DERIVATIVE_STEP)
+		// Apparent angular speed by finite difference of the topocentric direction (star fixed), rad/day. The
+		// stencil is clamped into [start, stop] so a near-boundary appulse is not evaluated outside the window;
+		// it stays centred when the appulse is at least DERIVATIVE_STEP from both ends.
+		const beforeTime = timeSubtract(minimum.time, start) >= DERIVATIVE_STEP ? timeShift(minimum.time, -DERIVATIVE_STEP) : start
+		const afterTime = timeSubtract(stop, minimum.time) >= DERIVATIVE_STEP ? timeShift(minimum.time, DERIVATIVE_STEP) : stop
+		const stencil = timeSubtract(afterTime, beforeTime)
+		const beforeDir = topocentricDirection(target, observer, beforeTime, lightTimeIterations)
+		const afterDir = topocentricDirection(target, observer, afterTime, lightTimeIterations)
+		const relativeAngularSpeed = stencil > 0 ? separationFrom(beforeDir, afterDir) / stencil : 0
 
 		const occultation = separation <= angularRadius
 		// Chord across the disk at impact parameter `separation`, divided by the relative angular speed.
@@ -147,7 +195,7 @@ export function occultationCandidates(target: PositionAndVelocityOverTime, star:
 			duration = ((2 * halfChord) / relativeAngularSpeed) * DAYSEC
 		}
 
-		candidates.push({ time: extremum.time, separation, angularRadius, occultation, distance, relativeAngularSpeed, duration })
+		candidates.push({ time: minimum.time, separation, angularRadius, occultation, distance, relativeAngularSpeed, duration })
 	}
 
 	return candidates

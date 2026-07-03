@@ -85,11 +85,11 @@ test('maxSeparation filters appulses wider than the limit', () => {
 	expect(occultationCandidates(driftingBody, STAR, fixedObserver, start, stop, { lightTimeIterations: 0, maxSeparation: (IMPACT / RANGE) * 2 }).length).toBe(1)
 })
 
-test('finds an appulse anywhere in a window shorter than the default step', () => {
-	// A 20 s window is far shorter than the 60 s default step, so the effective step must be capped and the
-	// window padded, otherwise searchExtrema returns nothing. The appulse is caught whether it sits at the
-	// centre or hard against either boundary (the first/last coarse interval an endpoint scan cannot bracket).
-	for (const offset of [-10, -9, 0, 9, 10]) {
+test('finds an interior appulse anywhere in a window shorter than the default step', () => {
+	// A 20 s window is far shorter than the 60 s default step, so the effective step must be capped, otherwise
+	// searchExtrema returns nothing. The appulse is caught whether it sits at the centre or just 1 s inside
+	// either boundary (the first/last coarse interval an endpoint scan cannot bracket).
+	for (const offset of [-9, -5, 0, 5, 9]) {
 		const start = timeShift(CROSSING, (offset - 10) * ONE_SECOND)
 		const stop = timeShift(CROSSING, (offset + 10) * ONE_SECOND)
 		const candidates = occultationCandidates(driftingBody, STAR, fixedObserver, start, stop, { radius: BODY_RADIUS, lightTimeIterations: 0 })
@@ -97,6 +97,27 @@ test('finds an appulse anywhere in a window shorter than the default step', () =
 		expect(candidates[0].occultation).toBe(true)
 		expect(timeSubtract(candidates[0].time, CROSSING) * DAYSEC).toBeCloseTo(0, 1)
 	}
+})
+
+test('never samples the observer or body outside the requested window', () => {
+	// A boundary appulse (crossing 1 s after start) still must not drive any evaluation before start or after
+	// stop, so bounded/interpolated samplers stay valid over exactly [start, stop].
+	const start = timeShift(CROSSING, -1 * ONE_SECOND)
+	const stop = timeShift(CROSSING, 19 * ONE_SECOND)
+	const guard = (t: Time): PositionAndVelocity => {
+		if (timeSubtract(t, start) < 0 || timeSubtract(stop, t) < 0) throw new Error('sampled outside the window')
+		return [
+			[0, 0, 0],
+			[0, 0, 0],
+		]
+	}
+	const guardedBody = (t: Time): PositionAndVelocity => {
+		if (timeSubtract(t, start) < 0 || timeSubtract(stop, t) < 0) throw new Error('sampled outside the window')
+		return driftingBody(t)
+	}
+	const candidates = occultationCandidates(guardedBody, STAR, guard, start, stop, { radius: BODY_RADIUS, lightTimeIterations: 0 })
+	expect(candidates.length).toBe(1)
+	expect(candidates[0].occultation).toBe(true)
 })
 
 test('does not report an appulse whose minimum lies outside the window', () => {
