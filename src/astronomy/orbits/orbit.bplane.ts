@@ -51,13 +51,28 @@ export interface BPlaneOptions {
 // fallback reference axis is used so the T/R axes stay defined.
 const POLE_PARALLEL_TOLERANCE = 1e-8
 
+// Below this sine of the angle between the relative position and velocity the encounter is treated as
+// radial (zero angular momentum, zero impact parameter), avoiding a divide-by-zero on the orbit normal.
+const RADIAL_TOLERANCE = 1e-8
+
+// Builds the (T, R) axes of the target plane from the incoming asymptote and a reference pole. T = S x
+// pole (normalized); a fallback reference axis is used when the pole is parallel to S; R = S x T.
+function targetPlaneAxes(sHat: Vec3, pole: Vec3): [Vec3, Vec3] {
+	let tHat = vecCross(sHat, pole)
+	if (vecLength(tHat) < POLE_PARALLEL_TOLERANCE) tHat = vecCross(sHat, Math.abs(sHat[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0])
+	tHat = vecDivScalar(tHat, vecLength(tHat))
+	return [tHat, vecCross(sHat, tHat)]
+}
+
 // Computes the B-plane coordinates of a hyperbolic close encounter from the planetocentric relative state.
 //
 // `relativePosition` and `relativeVelocity` are the body's position and velocity minus the planet's (AU,
 // AU/day), taken near the encounter (ideally inside the planet's sphere of influence, where the two-body
 // approximation holds). The relative orbit must be hyperbolic (positive energy); a bound relative orbit
-// has no incoming asymptote and throws. The result gives the impact parameter, the (T, R) B-vector
-// components, the hyperbolic excess speed and the closest-approach distance.
+// has no incoming asymptote and throws. A radial (head-on, zero angular momentum) hyperbolic state is
+// valid and returns a zero impact parameter and zero closest-approach distance. The result gives the
+// impact parameter, the (T, R) B-vector components, the hyperbolic excess speed and the closest-approach
+// distance.
 export function closeApproachBPlane(relativePosition: Vec3, relativeVelocity: Vec3, options?: BPlaneOptions): BPlane {
 	const mu = options?.mu ?? GM_EARTH
 	const pole = options?.pole ?? [0, 0, 1]
@@ -77,12 +92,20 @@ export function closeApproachBPlane(relativePosition: Vec3, relativeVelocity: Ve
 	const eccentricityVector = vecDivScalar(vecMinus(vecMulScalar(relativePosition, vSquared - mu / r), vecMulScalar(relativeVelocity, radialVelocity)), mu)
 	const e = vecLength(eccentricityVector)
 
+	const eHat = vecDivScalar(eccentricityVector, e)
+
+	// Radial (head-on) encounter: r parallel to v gives zero angular momentum, so the impact parameter is
+	// zero, the trajectory passes through the planet centre, and the incoming asymptote is the apse line
+	// itself. Handle it explicitly so the orbit normal is never divided by a zero h.
+	if (h < RADIAL_TOLERANCE * r * Math.sqrt(vSquared)) {
+		const [tHat, rHat] = targetPlaneAxes(eHat, pole)
+		return { impactParameter: 0, bt: 0, br: 0, vInfinity, periapsisDistance: 0, sHat: eHat, tHat, rHat, bVector: [0, 0, 0] }
+	}
+
 	const periapsisDistance = semiMajorAxis * (1 - e) // > 0 since a < 0 and e > 1
 	const impactParameter = Math.abs(semiMajorAxis) * Math.sqrt(e * e - 1)
 
-	// Orbit-plane basis: eHat toward periapsis, hHat the orbit normal, nHat the in-plane direction of
-	// motion at periapsis.
-	const eHat = vecDivScalar(eccentricityVector, e)
+	// Orbit-plane basis: hHat the orbit normal, nHat the in-plane direction of motion at periapsis.
 	const hHat = vecDivScalar(angularMomentum, h)
 	const nHat = vecCross(hHat, eHat)
 
@@ -91,11 +114,7 @@ export function closeApproachBPlane(relativePosition: Vec3, relativeVelocity: Ve
 	const sHat = vecPlus(vecMulScalar(eHat, 1 / e), vecMulScalar(nHat, branch))
 	const bVector = vecMulScalar(vecCross(sHat, hHat), impactParameter)
 
-	// (S, T, R) frame: T = S x pole (normalized), R = S x T. Fall back if the pole is parallel to S.
-	let tHat = vecCross(sHat, pole)
-	if (vecLength(tHat) < POLE_PARALLEL_TOLERANCE) tHat = vecCross(sHat, Math.abs(sHat[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0])
-	tHat = vecDivScalar(tHat, vecLength(tHat))
-	const rHat = vecCross(sHat, tHat)
+	const [tHat, rHat] = targetPlaneAxes(sHat, pole)
 
 	return { impactParameter, bt: vecDot(bVector, tHat), br: vecDot(bVector, rHat), vInfinity, periapsisDistance, sHat, tHat, rHat, bVector }
 }

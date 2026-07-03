@@ -56,3 +56,22 @@ test('a bound relative orbit has no incoming asymptote and throws', () => {
 	const slow: Vec3 = [0, 1e-4, 0]
 	expect(() => closeApproachBPlane([1e-3, 0, 0], slow)).toThrow()
 })
+
+test('a radial head-on hyperbolic encounter has a zero impact parameter', () => {
+	// Position parallel to velocity above escape speed: zero angular momentum, so a direct hit with zero
+	// impact parameter and zero closest-approach distance, and finite (non-NaN) axes.
+	const bplane = closeApproachBPlane([1e-3, 0, 0], [3e-3, 0, 0])
+
+	expect(bplane.impactParameter).toBe(0)
+	expect(bplane.bt).toBe(0)
+	expect(bplane.br).toBe(0)
+	expect(bplane.periapsisDistance).toBe(0)
+	expect(bplane.vInfinity).toBeGreaterThan(0)
+	// The asymptote and target-plane axes are a finite right-handed orthonormal frame.
+	for (const axis of [bplane.sHat, bplane.tHat, bplane.rHat]) {
+		expect(axis.some(Number.isNaN)).toBe(false)
+		expect(vecLength(axis)).toBeCloseTo(1, 12)
+	}
+	expect(vecDot(bplane.sHat, bplane.tHat)).toBeCloseTo(0, 12)
+	expect(vecDot(bplane.sHat, bplane.rHat)).toBeCloseTo(0, 12)
+})
