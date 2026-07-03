@@ -16,7 +16,8 @@ import { JUPITER_ROTATION, MARS_ROTATION, MOON_ROTATION, positionAngleOfPole, SA
 import { planetMagnitude, type Planet } from '../src/astronomy/bodies/photometry'
 import { spaceMotion, star } from '../src/astronomy/bodies/star'
 import { carringtonRotationNumber, equationOfTime, nearestSolarEclipse, season } from '../src/astronomy/bodies/sun'
-import { cirsToObserved, distance as vectorDistance, equatorial as vectorToEquatorial, icrsToCirs, icrsToObserved, parallacticAngle, phaseAngle, refractedAltitude, relativePositionAndVelocity, separationFrom, unrefractedAltitude, type PositionAndVelocityOverTime } from '../src/astronomy/coordinates/astrometry'
+// oxfmt-ignore
+import { cirsToObserved, distance as vectorDistance, equatorial as vectorToEquatorial, icrsToCirs, icrsToObserved, parallacticAngle, phaseAngle, refractedAltitude, relativePositionAndVelocity, separationFrom, unrefractedAltitude, type PositionAndVelocity, type PositionAndVelocityOverTime } from '../src/astronomy/coordinates/astrometry'
 import { angularDistance, eclipticToEquatorial, equatorialFromJ2000, equatorialToEcliptic, equatorialToGalatic, equatorialToHorizontal, galacticToEquatorial, horizontalToEquatorial, zenith } from '../src/astronomy/coordinates/coordinate'
 import { annualAberration, observerState, radialVelocityCorrection } from '../src/astronomy/coordinates/correction'
 import { eraAnpm, eraC2s, eraLd, eraLdSun, eraPmpx, eraS2c, eraSeps, eraStarpm, eraStarpv } from '../src/astronomy/coordinates/erfa/erfa'
@@ -34,6 +35,7 @@ import { computePolynomialBesselianElements } from '../src/astronomy/events/ecli
 import { ASTRONOMICAL_TWILIGHT, CIVIL_TWILIGHT, NAUTICAL_TWILIGHT, riseTransitSet, STANDARD_HORIZON, SUN_HORIZON } from '../src/astronomy/events/horizon'
 import { greatRedSpotTransits, jupiterCentralMeridian } from '../src/astronomy/events/jupiter'
 import { galileanMutualEvents, saturnianMutualEvents } from '../src/astronomy/events/mutual'
+import { occultationCandidates } from '../src/astronomy/events/occultation'
 import { satelliteConjunctions, satelliteEclipses, satelliteMagnitude, satellitePasses, satelliteShadowState } from '../src/astronomy/events/satellite'
 import { searchExtrema, searchRoots } from '../src/astronomy/events/search'
 import { airmass, airmassKastenYoung, altitudeAtTransit, asteroidMagnitudeEstimate, atmosphericRefraction, cometMagnitudeEstimate, objectAngularDiameter } from '../src/astronomy/formulas'
@@ -1362,19 +1364,38 @@ function lunarEclipseMoonAltitude() {
 	console.info('Moon altitude at eclipse maximum (deg):', toDeg(alt))
 }
 
-// Stellar / Asteroid / Lunar Occultation Prediction.
-// TODO(almanac): no occultation predictor. Stellar/asteroid occultations need the
-// shadow path of the occulting body across the Earth; lunar occultations need the
-// Moon's topocentric limb vs the star. The small-body identify() endpoint (SBD)
-// finds candidate occulters but does not predict tracks. Not implemented.
-function stellarOccultationCircumstances() {
-	console.info('Stellar occultation: predict from the occulter shadow path vs the observer; not implemented.')
-}
-
+// Stellar / Asteroid Occultation Prediction: occultationCandidates scans the topocentric star-asteroid
+// separation for the observer and flags the appulse as an occultation when it falls within the asteroid's
+// angular radius (the per-site question, with no shadow-path geometry). The sample asteroid is screened
+// against a star placed on its own mid-window line of sight, so the demonstration reports a real hit; in
+// practice you pass a catalog star direction (proper-motion corrected). A stellar occultation by a minor
+// body is the same computation seen from the star's side.
 function asteroidOccultationPrediction() {
-	console.info('Asteroid occultation: project the asteroid shadow onto the Earth; not implemented.')
+	const orbit = asteroidKeplerOrbit()
+	// Barycentric samplers sharing one origin: asteroid = Sun + heliocentric state; observer = topocentric.
+	const target = (time: Time): PositionAndVelocity => {
+		const [sp, sv] = sun(time)
+		const [hp, hv] = orbit.at(time)
+		return [
+			[sp[0] + hp[0], sp[1] + hp[1], sp[2] + hp[2]],
+			[sv[0] + hv[0], sv[1] + hv[1], sv[2] + hv[2]],
+		]
+	}
+	const observer = (time: Time): PositionAndVelocity => observerState(time, earth(time), SITE) as PositionAndVelocity
+	const anchor = timeShift(NOW, 0.5)
+	// Star on the asteroid's geometric line of sight at the anchor; screening without light time keeps the
+	// synthetic star consistent, so the demonstration yields a real hit. Real use passes a catalog star with
+	// the default light-time correction enabled.
+	const star = vecMinus(target(anchor)[0], observer(anchor)[0])
+	const ASTEROID_RADIUS = kilometer(470) // ~Ceres radius, AU
+	const [event] = occultationCandidates(target, star, observer, NOW, timeShift(NOW, 1), { radius: ASTEROID_RADIUS, lightTimeIterations: 0, step: 300 / DAYSEC })
+	if (event === undefined) return console.info('Asteroid occultation: no appulse in the window.')
+	console.info('Asteroid occultation appulse: separation', toArcsec(event.separation).toFixed(3), 'arcsec; disk radius', toArcsec(event.angularRadius).toFixed(3), 'arcsec; occultation:', event.occultation, event.duration ? `(~${event.duration.toFixed(1)} s)` : '')
 }
 
+// Lunar Occultation Prediction.
+// TODO(almanac): a lunar occultation needs the Moon's topocentric limb profile versus the star, not a
+// point/sphere appulse; the limb geometry is out of the occultationCandidates scope. Not implemented.
 function lunarOccultationPrediction() {
 	console.info('Lunar occultation: compare the Moon topocentric limb with the star; not implemented.')
 }
@@ -1957,7 +1978,6 @@ function run() {
 	localLunarEclipseCircumstances()
 	lunarEclipseMagnitude()
 	lunarEclipseMoonAltitude()
-	stellarOccultationCircumstances()
 	asteroidOccultationPrediction()
 	lunarOccultationPrediction()
 	planetaryTransitPrediction()
