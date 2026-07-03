@@ -115,14 +115,17 @@ export function propagateStateCovariance(orbit: KeplerOrbit, covariance: Matrix,
 // `covariance` supplies the 3x3 position covariance in its top-left block (a full 6x6 state covariance is
 // accepted). `geocentric` is the observer-to-object vector in the same frame (AU, ICRF equatorial); its
 // direction sets the tangent plane and its length converts the linear position spread to an angular one.
-// The tangent-plane axes are East (increasing right ascension) and North (increasing declination), so the
-// returned position angle follows the standard North-through-East convention. The Earth's own position is
-// treated as errorless, so the direction covariance equals the object's position covariance.
+// It must be a non-zero, finite vector: an angular ellipse is undefined at zero range, so a degenerate
+// direction throws. The tangent-plane axes are East (increasing right ascension) and North (increasing
+// declination), so the returned position angle follows the standard North-through-East convention. The
+// Earth's own position is treated as errorless, so the direction covariance equals the object's position
+// covariance.
 export function ephemerisUncertaintyEllipse(covariance: Matrix, geocentric: Vec3, options?: UncertaintyEllipseOptions): UncertaintyEllipse {
 	const sigma = options?.sigma ?? 1
 
 	const [x, y, z] = geocentric
 	const distance = Math.sqrt(x * x + y * y + z * z)
+	if (!(distance > 0)) throw new Error('geocentric direction must be a non-zero vector to define a sky-plane ellipse')
 	const horizontal = Math.sqrt(x * x + y * y)
 
 	// Sky-plane East/North unit vectors at the object's direction. Right ascension is undefined within a

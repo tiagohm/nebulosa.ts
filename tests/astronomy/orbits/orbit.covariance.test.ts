@@ -131,6 +131,14 @@ test('the uncertainty ellipse is finite for a pole direction', () => {
 	expect(ellipse.semiMinor).toBeCloseTo(1e-6 / distance, 12)
 })
 
+test('the uncertainty ellipse rejects a zero-range direction', () => {
+	// An angular ellipse is undefined at zero range; a zero geocentric vector must throw rather than
+	// return NaN axes.
+	const covariance = new Matrix(6, 6)
+	for (let k = 0; k < 3; k++) covariance.set(k, k, 1e-6 * 1e-6)
+	expect(() => ephemerisUncertaintyEllipse(covariance, [0, 0, 0])).toThrow()
+})
+
 test('the ellipse matches the sky-plane scatter of the propagated covariance', () => {
 	const time = timeShift(EPOCH, 40)
 	const propagated = propagateStateCovariance(ORBIT, epochCovariance(), time)
