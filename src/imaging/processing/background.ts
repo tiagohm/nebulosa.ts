@@ -1,3 +1,4 @@
+import type { Writable } from '../../core/types'
 import { medianOf, STANDARD_DEVIATION_SCALE } from '../../core/util'
 import { Matrix, QrDecomposition } from '../../math/linear-algebra/matrix'
 import { clamp } from '../../math/numerical/math'
@@ -18,6 +19,13 @@ import { clone } from './transformation'
 // - `divide`: multiplicative removal for vignetting and flat-field residuals.
 // - `none`: leave the source untouched and only return the modeled background.
 export type BackgroundExtractionCorrection = 'subtract' | 'divide' | 'none'
+
+// How out-of-range corrected values are brought back into [0, 1] after a subtract/divide correction.
+// Mirrors the background neutralization modes.
+// - `truncate`: clamp to [0, 1]; simplest, but clips signal that overshoots the range.
+// - `rescale`: always linearly rescale the channel from its [min, max] to [0, 1].
+// - `rescaleAsNeeded`: rescale only when the correction produced values outside [0, 1].
+export type BackgroundExtractionClipping = 'truncate' | 'rescale' | 'rescaleAsNeeded'
 
 // Options controlling automatic background extraction. All fields are optional and fall back to
 // `DEFAULT_BACKGROUND_EXTRACTION_OPTIONS`.
@@ -46,6 +54,9 @@ export interface BackgroundExtractionOptions {
 	readonly rejectionIterations?: number
 	// How the modeled background is removed from the source. See `BackgroundExtractionCorrection`.
 	readonly correction?: BackgroundExtractionCorrection
+	// How out-of-range corrected values are handled. See `BackgroundExtractionClipping`. Ignored when
+	// correction is `none`.
+	readonly clipping?: BackgroundExtractionClipping
 	// Level re-established after correction to preserve overall brightness, in [0, 1]. For `subtract`
 	// it is the background pedestal re-added after removing the surface; for `divide` it is the target
 	// flat level the quotient is scaled to. When undefined the per-channel model mean is used.
@@ -63,6 +74,12 @@ export interface BackgroundExtractionChannelModel {
 	readonly rejectedSamples: number
 	// Robust dispersion (normalized MAD) of the final fit residuals, a quality indicator.
 	readonly residual: number
+	// Minimum corrected pixel value of this channel before clipping, or undefined when correction is
+	// `none`. With `outputMax` it reveals how far the correction pushed values outside [0, 1].
+	readonly outputMin?: number
+	// Maximum corrected pixel value of this channel before clipping, or undefined when correction is
+	// `none`.
+	readonly outputMax?: number
 }
 
 // Result of `automaticBackgroundExtraction`.
@@ -85,6 +102,7 @@ export const DEFAULT_BACKGROUND_EXTRACTION_OPTIONS: Required<Omit<BackgroundExtr
 	rejectionLow: 4,
 	rejectionIterations: 2,
 	correction: 'subtract',
+	clipping: 'truncate',
 }
 
 // One grid sample: the robust background estimate at a box center, in normalized coordinates.
@@ -407,16 +425,33 @@ function channelMean(model: ImageRawType, width: number, height: number, channel
 	return sum / n
 }
 
+// Brings the corrected values of one channel back into [0, 1] according to the clipping mode.
+// `min`/`max` are the finite value range the correction produced. A `rescale` (or a needed
+// `rescaleAsNeeded`) linearly maps [min, max] to [0, 1]; otherwise, or when the range is degenerate,
+// values are simply clamped.
+function applyClipping(raw: ImageRawType, channel: number, channels: number, n: number, clipping: BackgroundExtractionClipping, min: number, max: number) {
+	const rescale = clipping === 'rescale' || (clipping === 'rescaleAsNeeded' && (min < 0 || max > 1))
+
+	if (rescale && max > min) {
+		const inv = 1 / (max - min)
+		for (let p = 0, i = channel; p < n; p++, i += channels) raw[i] = clamp((raw[i] - min) * inv, 0, 1)
+	} else {
+		for (let p = 0, i = channel; p < n; p++, i += channels) raw[i] = clamp(raw[i], 0, 1)
+	}
+}
+
 // Extracts and removes a smooth sky background from an image.
 //
 // Builds a grid of robust background samples, rejects those contaminated by stars or nebulae, fits a
 // low-degree 2D polynomial surface per channel, and removes it by subtraction (gradients, light
 // pollution) or division (vignetting). Samples and the fit use coordinates normalized to [-1, 1].
 //
-// The source `image` is mutated in place with the corrected pixels (clamped to [0, 1]) unless
-// `correction` is `none`. The returned `background` is always a fresh image holding the fitted model.
-// After a `subtract`/`divide` correction the per-channel level is restored to `targetBackground` (or
-// the channel model mean when omitted) so overall brightness is preserved.
+// The source `image` is mutated in place with the corrected pixels unless `correction` is `none`.
+// The returned `background` is always a fresh image holding the fitted model. After a
+// `subtract`/`divide` correction the per-channel level is restored to `targetBackground` (or the
+// channel model mean when omitted) so overall brightness is preserved, and out-of-range values are
+// brought back into [0, 1] per the `clipping` mode (truncate or rescale). Each channel model reports
+// the pre-clipping value range in `outputMin`/`outputMax`.
 //
 // Throws when a channel has fewer clean samples than the polynomial degree requires.
 export function automaticBackgroundExtraction(image: Image, options: BackgroundExtractionOptions = DEFAULT_BACKGROUND_EXTRACTION_OPTIONS): BackgroundExtractionResult {
@@ -428,8 +463,9 @@ export function automaticBackgroundExtraction(image: Image, options: BackgroundE
 	const rejectionLow = Math.max(0, options.rejectionLow ?? DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.rejectionLow)
 	const rejectionIterations = Math.max(0, Math.trunc(options.rejectionIterations ?? DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.rejectionIterations))
 	const correction = options.correction ?? DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.correction
+	const clipping = options.clipping ?? DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.clipping
 
-	const resolved = { gridSize, boxSize, degree, tolerance, rejectionHigh, rejectionLow, rejectionIterations, correction }
+	const resolved = { gridSize, boxSize, degree, tolerance, rejectionHigh, rejectionLow, rejectionIterations, correction, clipping }
 
 	const { raw, metadata } = image
 	const { width, height, channels } = metadata
@@ -453,16 +489,38 @@ export function automaticBackgroundExtraction(image: Image, options: BackgroundE
 			const target = options.targetBackground !== undefined && Number.isFinite(options.targetBackground) ? clamp(options.targetBackground, 0, 1) : channelMean(model, width, height, channels, channel)
 			const n = width * height
 
+			// First pass: write the unclamped corrected values and track their finite range so the
+			// clipping step can rescale instead of blindly truncating out-of-range signal.
+			let min = Number.POSITIVE_INFINITY
+			let max = Number.NEGATIVE_INFINITY
+
 			if (correction === 'subtract') {
 				for (let p = 0, i = channel; p < n; p++, i += channels) {
-					raw[i] = clamp(raw[i] - model[i] + target, 0, 1)
+					const v = raw[i] - model[i] + target
+					raw[i] = v
+					if (Number.isFinite(v)) {
+						if (v < min) min = v
+						if (v > max) max = v
+					}
 				}
 			} else {
 				for (let p = 0, i = channel; p < n; p++, i += channels) {
 					const denom = model[i]
-					raw[i] = clamp((raw[i] / (Math.abs(denom) < DIVIDE_EPSILON ? (denom < 0 ? -DIVIDE_EPSILON : DIVIDE_EPSILON) : denom)) * target, 0, 1)
+					const v = (raw[i] / (Math.abs(denom) < DIVIDE_EPSILON ? (denom < 0 ? -DIVIDE_EPSILON : DIVIDE_EPSILON) : denom)) * target
+					raw[i] = v
+					if (Number.isFinite(v)) {
+						if (v < min) min = v
+						if (v > max) max = v
+					}
 				}
 			}
+
+			// Second pass: clamp or rescale into [0, 1] per the clipping mode.
+			applyClipping(raw, channel, channels, n, clipping, min, max)
+
+			const channelModel = channelModels[channel] as Writable<BackgroundExtractionChannelModel>
+			channelModel.outputMin = Number.isFinite(min) ? min : Number.NaN
+			channelModel.outputMax = Number.isFinite(max) ? max : Number.NaN
 		}
 	}
 

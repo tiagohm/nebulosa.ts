@@ -152,6 +152,38 @@ test('models every channel of an RGB image independently', () => {
 	}
 })
 
+test('reports the output range and rescales instead of truncating', () => {
+	const width = 96
+	const height = 96
+	const bg = (x: number) => 0.3 + 0.3 * (x / (width - 1))
+	// Zero-mean deterministic noise remains after the smooth gradient is removed; with a zero pedestal
+	// it drives roughly half the corrected pixels below 0, exercising the clipping modes.
+	const noise = (x: number, y: number) => {
+		const s = Math.sin(x * 12.9898 + y * 78.233) * 43758.5453
+		return (s - Math.floor(s)) * 2 - 1
+	}
+	const makeNoisy = () => makeImage(width, height, 1, (x, y) => Math.max(0, Math.min(1, bg(x) + 0.05 * noise(x, y))))
+
+	// truncate: the correction pushed values below 0, and the model reports that pre-clipping range.
+	const truncated = automaticBackgroundExtraction(makeNoisy(), { degree: 1, gridSize: 12, targetBackground: 0, clipping: 'truncate' })
+	expect(truncated.channels[0].outputMin!).toBeLessThan(0)
+	// The low side is clamped to 0 by truncation.
+	let clampedToZero = 0
+	for (const v of truncated.image.raw) if (v === 0) clampedToZero++
+	expect(clampedToZero).toBeGreaterThan(0)
+
+	// rescale: the same out-of-range field is linearly mapped into [0, 1] instead of clipped.
+	const rescaled = automaticBackgroundExtraction(makeNoisy(), { degree: 1, gridSize: 12, targetBackground: 0, clipping: 'rescale' })
+	let rmin = Infinity
+	let rmax = -Infinity
+	for (const v of rescaled.image.raw) {
+		rmin = Math.min(rmin, v)
+		rmax = Math.max(rmax, v)
+	}
+	expect(rmin).toBeCloseTo(0, 3)
+	expect(rmax).toBeCloseTo(1, 3)
+})
+
 test('leaves the source untouched when correction is none', () => {
 	const width = 64
 	const height = 64
