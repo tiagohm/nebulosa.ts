@@ -587,6 +587,55 @@ function tpsKernel(sq: number) {
 // perfect square so the spatial buckets below tile evenly.
 const TPS_MAX_CONTROL_POINTS = 1024
 
+// Below this ratio of (normalized) MAD to standard deviation, the box medians are treated as a flat
+// background plus a distinct outlier mode — a saturated / flat-topped object filling boxes — rather than
+// smooth structure. Smooth light pollution (a broad dome) or a gradient keeps MAD/std ~ 0.8-1.3; a flat
+// frame with an object collapses it toward 0. Below the threshold the outlier mode is rejected so the TPS
+// does not model the object as background; above it, domes and gradients are preserved untouched.
+const TPS_BIMODAL_MAD_RATIO = 0.3
+
+// Iteration cap for the flat-topped-structure rejection; it converges in one pass in the common case.
+const FLAT_TOP_REJECTION_MAX_ITERATIONS = 4
+
+// Rejects box medians that form a distinct bright/dark outlier mode on an otherwise flat background,
+// marking those samples inactive in place. A compact saturated object has near-zero internal dispersion,
+// so the box-dispersion prefilter and the smoothing TPS both accept it and would model it as background,
+// then subtract it away. Detection is gated on the box-median MAD collapsing relative to their spread:
+// smooth structure (a broad dome, a gradient) keeps a healthy ratio and is left untouched, while a
+// flat-plus-object distribution collapses it. Rejection is asymmetric like the polynomial path (tight on
+// the bright side, loose on the dark). `buffer`/`scratch` are reusable arrays sized to the sample count.
+function rejectFlatToppedStructure(samples: readonly SurfaceSample[], buffer: Float64Array, scratch: Float64Array, rejectionHigh: number, rejectionLow: number) {
+	for (let iteration = 0; iteration < FLAT_TOP_REJECTION_MAX_ITERATIONS; iteration++) {
+		let count = 0
+		for (const sample of samples) if (sample.active) buffer[count++] = sample.value
+		if (count < 4) return
+
+		// Robust center and scale of the active box medians (scratch holds the sorted values / deviations).
+		scratch.set(buffer.subarray(0, count))
+		scratch.subarray(0, count).sort()
+		const center = medianOf(scratch, count)
+		for (let i = 0; i < count; i++) scratch[i] = Math.abs(buffer[i] - center)
+		scratch.subarray(0, count).sort()
+		const mad = STANDARD_DEVIATION_SCALE * medianOf(scratch, count)
+		const spread = standardDeviationOf(buffer, count)
+
+		// Only reject when the distribution is flat-plus-outliers (collapsed MAD), never for smooth structure.
+		if (!(spread > 0) || mad > TPS_BIMODAL_MAD_RATIO * spread) return
+
+		const highLimit = rejectionHigh > 0 ? center + rejectionHigh * spread : Infinity
+		const lowLimit = rejectionLow > 0 ? center - rejectionLow * spread : -Infinity
+		let rejected = 0
+		for (const sample of samples) {
+			if (!sample.active) continue
+			if (sample.value > highLimit || sample.value < lowLimit) {
+				sample.active = false
+				rejected++
+			}
+		}
+		if (rejected === 0) return
+	}
+}
+
 // Deterministically subsamples the active samples down to at most `maxPoints` control points, preserving
 // spatial coverage: the normalized [-1, 1] domain is split into a g x g grid (g = floor(sqrt(maxPoints)))
 // and the first active sample landing in each bucket is kept. Returns `samples` unchanged when the active
@@ -866,8 +915,16 @@ function fitChannelSurface(raw: ImageRawType, width: number, height: number, cha
 		// even a smoothing TPS) cannot match a dome exactly, so its samples would read as high-residual
 		// outliers and be rejected, leaving the spline fit only to the surrounding floor. The
 		// box-dispersion prefilter in collectSamples still drops star-contaminated boxes, which is the
-		// appropriate rejection for a flexible interpolating surface. The final surface is a smoothing
-		// TPS through the surviving samples, capped to a tractable number of control points on dense grids.
+		// appropriate rejection for a flexible interpolating surface.
+		//
+		// A saturated flat-topped object fills whole boxes with a near-constant value, so it has near-zero
+		// internal dispersion and slips past that prefilter; without rejection the TPS would model it as
+		// background and subtract it away. Reject such a distinct outlier mode first, but only when the box
+		// medians are flat-plus-outliers rather than smoothly varying, so genuine domes/gradients survive.
+		rejectFlatToppedStructure(samples, residuals, residualScratch, rejectionHigh, rejectionLow)
+
+		// The final surface is a smoothing TPS through the surviving samples, capped to a tractable number
+		// of control points on dense grids.
 		const controlSamples = subsampleControlPoints(samples, TPS_MAX_CONTROL_POINTS)
 		const tps = fitThinPlateSpline(controlSamples, smoothing)
 		if (tps === undefined) throw new Error('thin-plate spline fit failed (needs at least 3 clean samples and a non-singular system)')

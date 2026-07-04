@@ -993,6 +993,28 @@ test('thin-plate spline preserves a smooth localized dome through rejection', ()
 	expect(maxError).toBeLessThan(0.015)
 })
 
+test('thin-plate spline preserves a bright flat-topped object instead of subtracting it', () => {
+	// A saturated flat-topped object (0.8 square) on a flat 0.2 frame. Its boxes have near-zero internal
+	// dispersion, so the box-dispersion prefilter accepts them and the TPS would model the object as
+	// background and subtract it away (~0.14 remaining). Unlike a smooth dome, the box medians collapse
+	// to a flat-plus-outlier distribution, so the outlier boxes must be rejected and the object preserved.
+	const width = 100
+	const height = 100
+	const isObject = (x: number, y: number) => Math.abs(x - 50) < 20 && Math.abs(y - 50) < 20
+	const image = makeImage(width, height, 1, (x, y) => (isObject(x, y) ? 0.8 : 0.2))
+
+	const result = automaticBackgroundExtraction(image, { model: 'thinPlateSpline', correction: 'subtract', targetBackground: 0 })
+
+	// The object boxes are rejected, and the modeled background sits on the 0.2 floor, not on the object.
+	expect(result.channels[0].rejectedSamples).toBeGreaterThan(0)
+	expect(result.background.raw[50 * width + 50]).toBeCloseTo(0.2, 2)
+
+	// After subtraction the object stays bright (~0.6), rather than being flattened toward 0.
+	expect(result.image.raw[50 * width + 50]).toBeGreaterThan(0.5)
+	// The surrounding sky is corrected to the pedestal.
+	expect(result.image.raw[5 * width + 5]).toBeCloseTo(0, 2)
+})
+
 test('thin-plate spline extraction flattens a complex gradient', () => {
 	const width = 96
 	const height = 96
