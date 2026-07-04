@@ -360,18 +360,20 @@ function collectSamples(raw: ImageRawType, width: number, height: number, channe
 		// frame at the edges; otherwise use the real-valued half-size with inclusive floor/ceil bounds.
 		const y0 = explicitBox ? clamp(Math.round(cy - halfBox), 0, Math.max(0, height - boxPixels)) : Math.max(0, Math.floor(cy - boxHalf))
 		const y1 = explicitBox ? Math.min(height - 1, y0 + boxPixels - 1) : Math.min(height - 1, Math.ceil(cy + boxHalf))
-		// Record each sample at its clipped box centroid, not the cell center: at the frame edges the box
-		// is clipped asymmetrically, so its median reflects a shifted pixel window whose center is the
-		// centroid. For interior boxes the centroid equals the cell center, so this is a no-op there.
-		const sy = (y0 + y1) / 2
 
 		for (let c = 0; c < nx; c++) {
 			const cx = Math.min((c + 0.5) * cellW, maxX)
 			const x0 = explicitBox ? clamp(Math.round(cx - halfBox), 0, Math.max(0, width - boxPixels)) : Math.max(0, Math.floor(cx - boxHalf))
 			const x1 = explicitBox ? Math.min(width - 1, x0 + boxPixels - 1) : Math.min(width - 1, Math.ceil(cx + boxHalf))
-			const sx = (x0 + x1) / 2
 
+			// Accumulate the centroid of the pixels that actually contribute (unmasked and finite) alongside
+			// their values. Recording the sample at that centroid rather than the geometric box center keeps
+			// the median attributed to the region it was drawn from: at the frame edges the box is clipped,
+			// and an exclusion mask can remove part of it, so the contributing region is shifted. For a full,
+			// unmasked box the pixel centroid equals the geometric box center, so this is a no-op there.
 			let count = 0
+			let sumX = 0
+			let sumY = 0
 
 			for (let y = y0; y <= y1; y++) {
 				let i = (y * width + x0) * channels + channel
@@ -380,7 +382,11 @@ function collectSamples(raw: ImageRawType, width: number, height: number, channe
 				for (let x = x0; x <= x1; x++, i += channels, m++) {
 					if (mask !== undefined && mask[m] !== 0) continue
 					const p = raw[i]
-					if (Number.isFinite(p)) buf[count++] = p
+					if (Number.isFinite(p)) {
+						buf[count++] = p
+						sumX += x
+						sumY += y
+					}
 				}
 			}
 
@@ -389,6 +395,9 @@ function collectSamples(raw: ImageRawType, width: number, height: number, channe
 
 			const [median, dispersion] = boxStatistics(buf, dev, count)
 			if (!Number.isFinite(median)) continue
+
+			const sx = sumX / count
+			const sy = sumY / count
 
 			samples.push({
 				x: sx,

@@ -628,6 +628,32 @@ test('an exclusion mask keeps masked regions out of the fit', () => {
 	}
 })
 
+test('fits a linear gradient exactly through a wide exclusion band', () => {
+	// A wide vertical exclusion band clips whole columns from the boxes it overlaps, leaving a shifted
+	// rectangular window. If the sample is recorded at the geometric box center instead of the centroid
+	// of the pixels that actually contributed, the median from the unmasked edge is paired with the
+	// masked band's center coordinate, biasing the fit. With the contributing-pixel centroid, an exactly
+	// linear background must still be reproduced to numerical precision even across the band.
+	const width = 128
+	const height = 128
+	const bg = (x: number, y: number) => 0.1 + 0.4 * (x / (width - 1)) + 0.3 * (y / (height - 1))
+	const image = makeImage(width, height, 1, (x, y) => bg(x, y))
+
+	const mask = new Uint8Array(width * height)
+	for (let y = 0; y < height; y++) {
+		for (let x = 50; x < 80; x++) mask[y * width + x] = 1
+	}
+
+	const model = fitBackgroundSurface(image, { degree: 1, gridSize: 12, tolerance: 0, rejectionIterations: 0, exclusionMask: mask })
+	const background = evaluateBackgroundModel(model, image).raw
+
+	let maxError = 0
+	for (let y = 0; y < height; y++) {
+		for (let x = 0; x < width; x++) maxError = Math.max(maxError, Math.abs(background[y * width + x] - bg(x, y)))
+	}
+	expect(maxError).toBeLessThan(1e-5)
+})
+
 test('backgroundExclusionMaskFromStars marks disks around stars', () => {
 	const width = 64
 	const height = 64
