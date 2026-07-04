@@ -675,60 +675,87 @@ function fitChannelSurface(raw: ImageRawType, width: number, height: number, cha
 	const { gridSize, boxSize, model, degree, smoothing, tolerance, rejectionHigh, rejectionLow, rejectionIterations, exclusionMask } = options
 	const samples = collectSamples(raw, width, height, channels, channel, gridSize, boxSize, tolerance, exclusionMask)
 
-	let coefficients = fitSurface(samples, degree, terms, ti, tj)
-	if (coefficients === undefined) throw new Error(`not enough clean background samples to fit a degree-${degree} surface (need at least ${terms})`)
-
 	const residuals = new Float64Array(samples.length)
 	const residualScratch = new Float64Array(samples.length)
-	const uCheb = new Float64Array(degree + 1)
-	const vCheb = new Float64Array(degree + 1)
 	let residualDispersion = 0
 
-	// Samples rejected during the current pass. Tracked so they can be reinstated if the subsequent
-	// refit turns out to be unsolvable, keeping the reported accepted set consistent with the kept fit.
-	const rejectedThisPass: SurfaceSample[] = []
+	let coefficients: Float64Array
+	let controlPoints: Float64Array | undefined
 
-	// Iteratively reject residual outliers and refit until the iteration budget is spent or nothing is
-	// rejected. Rejection is asymmetric: the sky background is the lower envelope of the data, so
-	// samples above the surface (contaminating structure) are rejected with a tight sigma while samples
-	// below it (usually the cleanest sky) are only dropped when they are gross low outliers.
-	for (let iteration = 0; iteration <= rejectionIterations; iteration++) {
+	if (model === 'thinPlateSpline') {
+		// The thin-plate spline exists to model smooth localized structure such as a light-pollution
+		// dome. The polynomial residual rejection below must NOT run for it: a low-degree polynomial (and
+		// even a smoothing TPS) cannot match a dome exactly, so its samples would read as high-residual
+		// outliers and be rejected, leaving the spline fit only to the surrounding floor. The
+		// box-dispersion prefilter in collectSamples still drops star-contaminated boxes, which is the
+		// appropriate rejection for a flexible interpolating surface. The final surface is a smoothing
+		// TPS through the surviving samples.
+		const tps = fitThinPlateSpline(samples, smoothing)
+		if (tps === undefined) throw new Error('thin-plate spline fit failed (needs at least 3 clean samples and a non-singular system)')
+		coefficients = tps.coefficients
+		controlPoints = tps.controlPoints
+
+		const k = controlPoints.length / 2
 		let count = 0
 		for (const sample of samples) {
 			if (!sample.active) continue
-			residuals[count++] = sample.value - evaluateSurface(coefficients, sample.u, sample.v, degree, terms, ti, tj, uCheb, vCheb)
+			residuals[count++] = sample.value - tpsValue(coefficients, controlPoints, k, sample.u, sample.v)
 		}
-
 		residualDispersion = computeResidualDispersion(residuals, residualScratch, count)
+	} else {
+		const poly = fitSurface(samples, degree, terms, ti, tj)
+		if (poly === undefined) throw new Error(`not enough clean background samples to fit a degree-${degree} surface (need at least ${terms})`)
+		coefficients = poly
 
-		if (iteration === rejectionIterations || !Number.isFinite(residualDispersion) || residualDispersion === 0) break
+		const uCheb = new Float64Array(degree + 1)
+		const vCheb = new Float64Array(degree + 1)
 
-		const highLimit = rejectionHigh * residualDispersion
-		const lowLimit = rejectionLow * residualDispersion
-		rejectedThisPass.length = 0
-		let index = 0
-		for (const sample of samples) {
-			if (!sample.active) continue
-			// residual = sample - surface: positive above the surface (structure), negative below it.
-			const residual = residuals[index]
-			if (residual > highLimit || residual < -lowLimit) {
-				sample.active = false
-				rejectedThisPass.push(sample)
+		// Samples rejected during the current pass. Tracked so they can be reinstated if the subsequent
+		// refit turns out to be unsolvable, keeping the reported accepted set consistent with the kept fit.
+		const rejectedThisPass: SurfaceSample[] = []
+
+		// Iteratively reject residual outliers and refit until the iteration budget is spent or nothing is
+		// rejected. Rejection is asymmetric: the sky background is the lower envelope of the data, so
+		// samples above the surface (contaminating structure) are rejected with a tight sigma while
+		// samples below it (usually the cleanest sky) are only dropped when they are gross low outliers.
+		for (let iteration = 0; iteration <= rejectionIterations; iteration++) {
+			let count = 0
+			for (const sample of samples) {
+				if (!sample.active) continue
+				residuals[count++] = sample.value - evaluateSurface(coefficients, sample.u, sample.v, degree, terms, ti, tj, uCheb, vCheb)
 			}
-			index++
-		}
 
-		if (rejectedThisPass.length === 0) break
+			residualDispersion = computeResidualDispersion(residuals, residualScratch, count)
 
-		const refit = fitSurface(samples, degree, terms, ti, tj)
-		if (refit === undefined) {
-			// The reduced sample set has fewer rows than terms, so the refit is unsolvable. Reinstate the
-			// samples rejected in this pass and keep the previous fit, which matches those samples, so the
-			// reported accepted set stays consistent with the evaluated coefficients.
-			for (const sample of rejectedThisPass) sample.active = true
-			break
+			if (iteration === rejectionIterations || !Number.isFinite(residualDispersion) || residualDispersion === 0) break
+
+			const highLimit = rejectionHigh * residualDispersion
+			const lowLimit = rejectionLow * residualDispersion
+			rejectedThisPass.length = 0
+			let index = 0
+			for (const sample of samples) {
+				if (!sample.active) continue
+				// residual = sample - surface: positive above the surface (structure), negative below it.
+				const residual = residuals[index]
+				if (residual > highLimit || residual < -lowLimit) {
+					sample.active = false
+					rejectedThisPass.push(sample)
+				}
+				index++
+			}
+
+			if (rejectedThisPass.length === 0) break
+
+			const refit = fitSurface(samples, degree, terms, ti, tj)
+			if (refit === undefined) {
+				// The reduced sample set has fewer rows than terms, so the refit is unsolvable. Reinstate
+				// the samples rejected in this pass and keep the previous fit, which matches those samples,
+				// so the reported accepted set stays consistent with the evaluated coefficients.
+				for (const sample of rejectedThisPass) sample.active = true
+				break
+			}
+			coefficients = refit
 		}
-		coefficients = refit
 	}
 
 	let accepted = 0
@@ -736,24 +763,6 @@ function fitChannelSurface(raw: ImageRawType, width: number, height: number, cha
 	for (const sample of samples) {
 		if (sample.active) accepted++
 		sampleList.push({ x: sample.x, y: sample.y, value: sample.value, weight: sample.weight, accepted: sample.active })
-	}
-
-	// For the thin-plate spline model, the polynomial fit above only served to robustly reject
-	// outliers; the final surface is a smoothing TPS through the surviving samples.
-	let controlPoints: Float64Array | undefined
-	if (model === 'thinPlateSpline') {
-		const tps = fitThinPlateSpline(samples, smoothing)
-		if (tps === undefined) throw new Error('thin-plate spline fit failed (needs at least 3 clean samples and a non-singular system)')
-		coefficients = tps.coefficients
-		controlPoints = tps.controlPoints
-
-		let count = 0
-		const k = controlPoints.length / 2
-		for (const sample of samples) {
-			if (!sample.active) continue
-			residuals[count++] = sample.value - tpsValue(coefficients, controlPoints, k, sample.u, sample.v)
-		}
-		residualDispersion = computeResidualDispersion(residuals, residualScratch, count)
 	}
 
 	return {

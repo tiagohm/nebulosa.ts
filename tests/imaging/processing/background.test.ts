@@ -611,6 +611,39 @@ test('thin-plate spline follows a complex background a polynomial cannot', () =>
 	expect(tpsError).toBeLessThan(polyError / 5)
 })
 
+test('thin-plate spline preserves a smooth localized dome through rejection', () => {
+	// A smooth Gaussian light-pollution dome — the documented TPS use case. The default residual
+	// rejection is tuned for a global polynomial, which cannot represent the dome, so running it here
+	// would flag the dome samples as outliers and fit the spline only to the surrounding floor (the
+	// center came out ~0.29 too low). Rejection must be skipped for TPS: the spline has to follow the
+	// dome, with every clean sample retained.
+	const width = 256
+	const height = 256
+	const cx = width / 2
+	const cy = height / 2
+	const sigma = 60
+	const dome = (x: number, y: number) => {
+		const dx = x - cx
+		const dy = y - cy
+		return 0.1 + 0.4 * Math.exp(-(dx * dx + dy * dy) / (2 * sigma * sigma))
+	}
+	const image = makeImage(width, height, 1, (x, y) => dome(x, y))
+
+	const model = fitBackgroundSurface(image, { model: 'thinPlateSpline', gridSize: 24 })
+	// No clean sample is rejected: the box-dispersion prefilter finds no star contamination here.
+	expect(model.surfaces[0].acceptedSamples).toBe(model.surfaces[0].samples.length)
+
+	const background = evaluateBackgroundModel(model, image).raw
+	// The spline follows the dome to the center rather than the flanks; the peak is captured, not missed.
+	expect(Math.abs(dome(cx, cy) - background[cy * width + cx])).toBeLessThan(0.01)
+
+	let maxError = 0
+	for (let y = 0; y < height; y += 4) {
+		for (let x = 0; x < width; x += 4) maxError = Math.max(maxError, Math.abs(background[y * width + x] - dome(x, y)))
+	}
+	expect(maxError).toBeLessThan(0.015)
+})
+
 test('thin-plate spline extraction flattens a complex gradient', () => {
 	const width = 96
 	const height = 96
