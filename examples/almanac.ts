@@ -1084,6 +1084,22 @@ function lunarLibration() {
 	console.info('Lunar libration l, b, P (deg):', toDeg(normalizePI(disk.longitude)).toFixed(2), toDeg(disk.latitude).toFixed(2), toDeg(p).toFixed(2))
 }
 
+// Lunar Libration Extremes: the greatest tilts of the disc over a month, when a limb is best presented.
+// searchExtrema scans the sub-Earth libration in longitude l and latitude b separately; l is wrapped to
+// -PI..PI first so the small (+/-8deg) swing stays continuous across the 0/TAU seam and does not fool the
+// extremum finder. The longitude maxima/minima expose the east/west limbs, the latitude ones the north/
+// south limbs.
+function lunarLibrationExtremes() {
+	const stop = timeShift(NOW, 28)
+	const librationLongitude = (time: Time) => normalizePI(bodySubObserver(MOON_ROTATION, time, moonToEarth(time)).longitude)
+	const librationLatitude = (time: Time) => bodySubObserver(MOON_ROTATION, time, moonToEarth(time)).latitude
+	const describe = (e: { value: Angle; time: Time }) => `${toDeg(e.value).toFixed(2)}deg @ ${formatTemporal(temporalFromTime(utc(e.time)))}`
+	const lonExtrema = searchExtrema(librationLongitude, NOW, stop, { step: 1 })
+	const latExtrema = searchExtrema(librationLatitude, NOW, stop, { step: 1 })
+	console.info('Lunar libration longitude extremes (l):', lonExtrema.map(describe).join('; ') || 'none in the month')
+	console.info('Lunar libration latitude extremes (b):', latExtrema.map(describe).join('; ') || 'none in the month')
+}
+
 // Lunar Colongitude: the selenographic colongitude of the Sun, 90deg minus the
 // sub-solar selenographic longitude. It locates the morning terminator (0deg near first
 // quarter, 90deg near full, 180deg near last quarter, 270deg near new).
@@ -2030,6 +2046,7 @@ function run() {
 	lunarAngularDiameter()
 	lunarHorizontalParallax()
 	lunarLibration()
+	lunarLibrationExtremes()
 	lunarColongitude()
 	lunarTerminatorPosition()
 	lunarSubSolarPoint()
