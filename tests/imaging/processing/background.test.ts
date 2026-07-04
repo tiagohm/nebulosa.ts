@@ -533,6 +533,7 @@ test('thin-plate spline follows a complex background a polynomial cannot', () =>
 	expect(tps.type).toBe('thinPlateSpline')
 	expect(tps.surfaces[0].controlPoints).toBeDefined()
 	expect(tps.surfaces[0].controlPoints!.length).toBe(tps.surfaces[0].acceptedSamples * 2)
+	expect(tps.surfaces[0].residual).toBeLessThan(0.005)
 	const tpsError = errorFor(evaluateBackgroundModel(tps, image()).raw)
 
 	const poly = fitBackgroundSurface(image(), { model: 'polynomial', degree: 4, gridSize: 16 })

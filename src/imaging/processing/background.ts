@@ -287,6 +287,19 @@ function boxStatistics(buf: Float64Array, dev: Float64Array, count: number) {
 	return [median, STANDARD_DEVIATION_SCALE * medianOf(dev, count)] as const
 }
 
+// Robust normalized MAD of the first `count` values in `values`, using `scratch` for sorting and
+// absolute deviations. Leaves `values` order intact so residuals can still be mapped to samples.
+function computeResidualDispersion(values: Float64Array, scratch: Float64Array, count: number) {
+	if (count === 0) return Number.NaN
+
+	scratch.set(values.subarray(0, count))
+	scratch.subarray(0, count).sort()
+	const median = medianOf(scratch, count)
+	for (let i = 0; i < count; i++) scratch[i] = Math.abs(values[i] - median)
+	scratch.subarray(0, count).sort()
+	return STANDARD_DEVIATION_SCALE * medianOf(scratch, count)
+}
+
 // Collects grid samples for one channel. Divides the image into a grid of roughly square cells,
 // estimates a robust background per box, and rejects boxes whose internal dispersion marks them as
 // contaminated by stars or nebulae. Coordinates are normalized to [-1, 1] for a well-conditioned fit.
@@ -668,14 +681,7 @@ function fitChannelSurface(raw: ImageRawType, width: number, height: number, cha
 			residuals[count++] = sample.value - evaluateSurface(coefficients, sample.u, sample.v, degree, terms, ti, tj, uCheb, vCheb)
 		}
 
-		// Robust residual spread; medianOf needs sorted input, so copy before sorting to keep the
-		// residual-to-sample correspondence below intact.
-		residualScratch.set(residuals.subarray(0, count))
-		residualScratch.subarray(0, count).sort()
-		const median = medianOf(residualScratch, count)
-		for (let i = 0; i < count; i++) residualScratch[i] = Math.abs(residualScratch[i] - median)
-		residualScratch.subarray(0, count).sort()
-		residualDispersion = STANDARD_DEVIATION_SCALE * medianOf(residualScratch, count)
+		residualDispersion = computeResidualDispersion(residuals, residualScratch, count)
 
 		if (iteration === rejectionIterations || !Number.isFinite(residualDispersion) || residualDispersion === 0) break
 
@@ -716,6 +722,14 @@ function fitChannelSurface(raw: ImageRawType, width: number, height: number, cha
 		if (tps === undefined) throw new Error('thin-plate spline fit failed (needs at least 3 clean samples and a non-singular system)')
 		coefficients = tps.coefficients
 		controlPoints = tps.controlPoints
+
+		let count = 0
+		const k = controlPoints.length / 2
+		for (const sample of samples) {
+			if (!sample.active) continue
+			residuals[count++] = sample.value - tpsValue(coefficients, controlPoints, k, sample.u, sample.v)
+		}
+		residualDispersion = computeResidualDispersion(residuals, residualScratch, count)
 	}
 
 	return {
