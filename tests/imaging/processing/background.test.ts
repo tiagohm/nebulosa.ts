@@ -266,6 +266,26 @@ test('explicit box sizes keep every sampled pixel in the statistics buffer', () 
 	expect(maxError).toBeLessThan(0.01)
 })
 
+test('fits a linear gradient exactly at the frame edges with a default box', () => {
+	// With the default box, edge cells clip the sampling window asymmetrically. If a sample is recorded
+	// at its unclipped cell center rather than the clipped box centroid, its median (drawn from a shifted
+	// window) is attributed to the wrong coordinate, biasing the fit at the border (~0.057 off here). A
+	// linear gradient must be reproduced to float precision everywhere, corners included.
+	const width = 10
+	const height = 10
+	const bg = (x: number, y: number) => 0.1 + 0.4 * (x / (width - 1)) + 0.3 * (y / (height - 1))
+	const image = makeImage(width, height, 1, (x, y) => bg(x, y))
+
+	const model = fitBackgroundSurface(image, { degree: 1, gridSize: 10, tolerance: 0, rejectionIterations: 0 })
+	const background = evaluateBackgroundModel(model, image).raw
+
+	let maxError = 0
+	for (let y = 0; y < height; y++) {
+		for (let x = 0; x < width; x++) maxError = Math.max(maxError, Math.abs(background[y * width + x] - bg(x, y)))
+	}
+	expect(maxError).toBeLessThan(1e-5)
+})
+
 test('an explicit boxSize samples exactly that many pixels per axis', () => {
 	// boxSize is the sampled side length in pixels. A boxSize of 1 must sample a single pixel per box,
 	// not a 2x2 window (which a real-valued half-size with inclusive floor/ceil bounds would produce for
@@ -356,10 +376,11 @@ test('keeps dense-grid samples inside the fit domain', () => {
 		maxY = Math.max(maxY, sample.y)
 	}
 
-	// The grid is dense enough (cells < 2 px) that the overflowing edge cells clamp onto the boundary,
-	// confirming the fix is actually exercised rather than trivially satisfied by a sparse grid.
-	expect(maxX).toBe(width - 1)
-	expect(maxY).toBe(height - 1)
+	// The grid is dense enough (cells < 2 px) that the edge cells reach the frame border, confirming the
+	// clamp is exercised rather than trivially satisfied by a sparse grid. Samples record the clipped box
+	// centroid, so the extreme is a pixel or two inside the last column/row, not exactly width - 1.
+	expect(maxX).toBeGreaterThan(width - 4)
+	expect(maxY).toBeGreaterThan(height - 4)
 })
 
 test('rejects bright structure but keeps faint dark sky (asymmetric rejection)', () => {

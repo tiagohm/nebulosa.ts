@@ -345,10 +345,10 @@ function collectSamples(raw: ImageRawType, width: number, height: number, channe
 	const invW = width > 1 ? 2 / (width - 1) : 0
 	const invH = height > 1 ? 2 / (height - 1) : 0
 
-	// Last valid pixel-center coordinates. Cell centers are clamped to these before normalization: for
-	// dense grids whose cells are narrower than ~2 px, the naive (c + 0.5) * cellW center can exceed
-	// width - 1 and push the normalized u/v outside the [-1, 1] Chebyshev domain, while the evaluated
-	// surface only spans [-1, 1] — biasing the edge samples. Clamping is a no-op for normal grids.
+	// Last valid pixel-center coordinates. The cell center that positions each box is clamped to these:
+	// for dense grids whose cells are narrower than ~2 px, the naive (c + 0.5) * cellW center can exceed
+	// width - 1 and place the box entirely outside the frame. Clamping is a no-op for normal grids. (The
+	// recorded sample coordinate is the box centroid below, which is always within the frame.)
 	const maxX = width > 1 ? width - 1 : 0
 	const maxY = height > 1 ? height - 1 : 0
 
@@ -360,13 +360,16 @@ function collectSamples(raw: ImageRawType, width: number, height: number, channe
 		// frame at the edges; otherwise use the real-valued half-size with inclusive floor/ceil bounds.
 		const y0 = explicitBox ? clamp(Math.round(cy - halfBox), 0, Math.max(0, height - boxPixels)) : Math.max(0, Math.floor(cy - boxHalf))
 		const y1 = explicitBox ? Math.min(height - 1, y0 + boxPixels - 1) : Math.min(height - 1, Math.ceil(cy + boxHalf))
-		const sy = explicitBox ? (y0 + y1) / 2 : cy
+		// Record each sample at its clipped box centroid, not the cell center: at the frame edges the box
+		// is clipped asymmetrically, so its median reflects a shifted pixel window whose center is the
+		// centroid. For interior boxes the centroid equals the cell center, so this is a no-op there.
+		const sy = (y0 + y1) / 2
 
 		for (let c = 0; c < nx; c++) {
 			const cx = Math.min((c + 0.5) * cellW, maxX)
 			const x0 = explicitBox ? clamp(Math.round(cx - halfBox), 0, Math.max(0, width - boxPixels)) : Math.max(0, Math.floor(cx - boxHalf))
 			const x1 = explicitBox ? Math.min(width - 1, x0 + boxPixels - 1) : Math.min(width - 1, Math.ceil(cx + boxHalf))
-			const sx = explicitBox ? (x0 + x1) / 2 : cx
+			const sx = (x0 + x1) / 2
 
 			let count = 0
 
