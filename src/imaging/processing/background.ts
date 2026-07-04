@@ -691,7 +691,10 @@ function resolveFitOptions(options: BackgroundExtractionOptions): ResolvedFitOpt
 		model: options.model ?? DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.model,
 		colorMode: options.colorMode ?? DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.colorMode,
 		degree: clamp(Math.trunc(options.degree ?? DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.degree), 1, 6),
-		smoothing: Math.max(0, options.smoothing ?? DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.smoothing),
+		// Normalize non-finite smoothing (e.g. NaN) to the default rather than letting Math.max(0, NaN)
+		// leak NaN: a NaN smoothing makes fitThinPlateSpline interpolate (NaN > 0 is false) while
+		// evaluateBackgroundModel still coarsens (NaN <= 0 is false), so the two would disagree.
+		smoothing: Number.isFinite(options.smoothing) ? Math.max(0, options.smoothing!) : DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.smoothing,
 		tolerance: Math.max(0, options.tolerance ?? DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.tolerance),
 		rejectionHigh: Math.max(0, options.rejectionHigh ?? DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.rejectionHigh),
 		rejectionLow: Math.max(0, options.rejectionLow ?? DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.rejectionLow),

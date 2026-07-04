@@ -260,6 +260,19 @@ test('reports zero smoothing for a polynomial model', () => {
 	expect(fitBackgroundSurface(image, { model: 'thinPlateSpline', gridSize: 8, smoothing: 0.3 }).smoothing).toBe(0.3)
 })
 
+test('normalizes a non-finite smoothing to a finite value', () => {
+	// A NaN smoothing would otherwise leak into the model: fitThinPlateSpline would treat it as zero
+	// (NaN > 0 is false) and interpolate, while evaluateBackgroundModel would still coarsen (NaN <= 0 is
+	// false), producing an inconsistent, non-exact surface. It must be normalized to a finite smoothing.
+	const image = makeImage(64, 64, 1, (x, y) => 0.2 + 0.1 * (x / 63) + 0.05 * (y / 63))
+	const model = fitBackgroundSurface(image, { model: 'thinPlateSpline', gridSize: 8, smoothing: Number.NaN })
+
+	expect(Number.isFinite(model.smoothing)).toBe(true)
+	// The evaluated surface is well-defined everywhere (no NaN leaked through the fit or evaluation).
+	const background = evaluateBackgroundModel(model, image).raw
+	for (const v of background) expect(Number.isFinite(v)).toBe(true)
+})
+
 test('explicit box sizes keep every sampled pixel in the statistics buffer', () => {
 	const width = 30
 	const height = 30
