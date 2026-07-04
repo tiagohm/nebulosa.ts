@@ -60,15 +60,7 @@ jobs:
 
             - name: Run Tests
               if: ${{ matrix.os == 'ubuntu-24.04' }}
-              run: RUN_SKIPPED_TESTS=false bun test --timeout 1000 --parallel --coverage --coverage-reporter=lcov
-
-            - name: Upload coverage reports to Codecov
-              if: ${{ matrix.os == 'ubuntu-24.04' }}
-              uses: codecov/codecov-action@v7
-              with:
-                  token: ${{ secrets.CODECOV_TOKEN }}
-                  file: ./coverage/lcov.info
-                  disable_file_fixes: true
+              run: RUN_SKIPPED_TESTS=false bun test --timeout 1000 --parallel
 
             - name: Run Tests
               if: ${{ matrix.os != 'ubuntu-24.04' }}
