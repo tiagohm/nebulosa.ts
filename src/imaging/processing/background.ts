@@ -392,7 +392,7 @@ function collectSamples(raw: ImageRawType, width: number, height: number, channe
 
 // Fits a 2D Chebyshev surface to the currently active samples by least squares (QR). Returns the
 // coefficient vector, or undefined when there are too few samples or the system is rank deficient.
-function fitSurface(samples: readonly SurfaceSample[], degree: number, terms: number, ti: Uint8Array, tj: Uint8Array) {
+function fitSurface(samples: readonly SurfaceSample[], degree: number, terms: number, ti: Uint8Array, tj: Uint8Array): Float64Array | undefined {
 	let m = 0
 	for (const sample of samples) if (sample.active) m++
 	if (m < terms) return undefined
@@ -524,34 +524,88 @@ function fitThinPlateSpline(samples: readonly SurfaceSample[], smoothing: number
 	}
 }
 
-// Evaluates a fitted thin-plate spline at every pixel, writing into `model` at the channel offset.
-// Cost is O(width * height * controlPoints); the surface is smooth, so a coarse-grid evaluation with
-// interpolation could accelerate this in the future.
+// Coarse-grid node spacing, as a fraction of the mean control-point spacing. The TPS is smooth at the
+// control-point scale, so evaluating it on nodes this much finer and bilinearly upsampling keeps the
+// interpolation error well below the fit accuracy (~0.5% of the local amplitude at this fraction).
+const TPS_COARSE_FRACTION = 0.2
+
+// Evaluates the fitted thin-plate spline at one normalized point (u, v) in [-1, 1].
+function tpsValue(coefficients: Float64Array, controlPoints: Float64Array, k: number, u: number, v: number) {
+	let sum = coefficients[0] + coefficients[1] * u + coefficients[2] * v
+
+	for (let c = 0; c < k; c++) {
+		const du = u - controlPoints[2 * c]
+		const dv = v - controlPoints[2 * c + 1]
+		const sq = du * du + dv * dv
+		if (sq > 0) sum += coefficients[3 + c] * (0.5 * sq * Math.log(sq))
+	}
+
+	return sum
+}
+
+// Coarse evaluation step in pixels for a TPS with `k` control points over a width*height image. Nodes
+// are spaced a fraction of the mean control-point spacing sqrt(area/k). Returns 1 (evaluate every
+// pixel directly) for small images or degenerate axes, where coarsening would not pay off.
+function tpsCoarseStep(width: number, height: number, k: number) {
+	if (k <= 0 || width < 2 || height < 2) return 1
+	const spacing = Math.sqrt((width * height) / k)
+	return Math.max(1, Math.floor(spacing * TPS_COARSE_FRACTION))
+}
+
+// Evaluates a fitted thin-plate spline over a whole channel, writing into `model` at the channel
+// offset. Direct evaluation is O(width * height * controlPoints); since the surface is smooth, this
+// instead evaluates the exact TPS on a coarse grid (spacing from `tpsCoarseStep`) and bilinearly
+// upsamples to full resolution, cutting the cost by the squared coarsening factor for a tiny,
+// documented interpolation error. Small images fall back to exact per-pixel evaluation.
 function evaluateChannelTps(coefficients: Float64Array, controlPoints: Float64Array, model: ImageRawType, width: number, height: number, channels: number, channel: number) {
 	const k = controlPoints.length / 2
-	const a0 = coefficients[0]
-	const a1 = coefficients[1]
-	const a2 = coefficients[2]
-
 	const invW = width > 1 ? 2 / (width - 1) : 0
 	const invH = height > 1 ? 2 / (height - 1) : 0
+	const step = tpsCoarseStep(width, height, k)
 
+	if (step <= 1) {
+		for (let y = 0; y < height; y++) {
+			const v = y * invH - 1
+			let idx = y * width * channels + channel
+			for (let x = 0; x < width; x++, idx += channels) model[idx] = tpsValue(coefficients, controlPoints, k, x * invW - 1, v)
+		}
+		return
+	}
+
+	// Coarse node grid spanning the full image (first node at 0, last exactly at the far edge), so
+	// bilinear upsampling never extrapolates. Evaluate the exact TPS at each node.
+	const ncx = Math.max(2, Math.ceil((width - 1) / step) + 1)
+	const ncy = Math.max(2, Math.ceil((height - 1) / step) + 1)
+	const sx = (width - 1) / (ncx - 1)
+	const sy = (height - 1) / (ncy - 1)
+	const coarse = new Float64Array(ncx * ncy)
+
+	for (let jy = 0; jy < ncy; jy++) {
+		const v = jy * sy * invH - 1
+		const row = jy * ncx
+		for (let jx = 0; jx < ncx; jx++) coarse[row + jx] = tpsValue(coefficients, controlPoints, k, jx * sx * invW - 1, v)
+	}
+
+	// Bilinear upsample the coarse grid into the channel plane.
 	for (let y = 0; y < height; y++) {
-		const v = y * invH - 1
+		const fy = y / sy
+		const j0 = Math.min(ncy - 2, Math.floor(fy))
+		const ty = fy - j0
+		const row0 = j0 * ncx
+		const row1 = row0 + ncx
 		let idx = y * width * channels + channel
 
 		for (let x = 0; x < width; x++, idx += channels) {
-			const u = x * invW - 1
-			let sum = a0 + a1 * u + a2 * v
-
-			for (let c = 0; c < k; c++) {
-				const du = u - controlPoints[2 * c]
-				const dv = v - controlPoints[2 * c + 1]
-				const sq = du * du + dv * dv
-				if (sq > 0) sum += coefficients[3 + c] * (0.5 * sq * Math.log(sq))
-			}
-
-			model[idx] = sum
+			const fx = x / sx
+			const i0 = Math.min(ncx - 2, Math.floor(fx))
+			const tx = fx - i0
+			const c00 = coarse[row0 + i0]
+			const c01 = coarse[row0 + i0 + 1]
+			const c10 = coarse[row1 + i0]
+			const c11 = coarse[row1 + i0 + 1]
+			const top = c00 + (c01 - c00) * tx
+			const bot = c10 + (c11 - c10) * tx
+			model[idx] = top + (bot - top) * ty
 		}
 	}
 }
@@ -594,7 +648,7 @@ function fitChannelSurface(raw: ImageRawType, width: number, height: number, cha
 	const { gridSize, boxSize, model, degree, smoothing, tolerance, rejectionHigh, rejectionLow, rejectionIterations, exclusionMask } = options
 	const samples = collectSamples(raw, width, height, channels, channel, gridSize, boxSize, tolerance, exclusionMask)
 
-	let coefficients: Float64Array | undefined = fitSurface(samples, degree, terms, ti, tj)
+	let coefficients = fitSurface(samples, degree, terms, ti, tj)
 	if (coefficients === undefined) throw new Error(`not enough clean background samples to fit a degree-${degree} surface (need at least ${terms})`)
 
 	const residuals = new Float64Array(samples.length)

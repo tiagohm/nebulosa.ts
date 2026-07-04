@@ -620,3 +620,48 @@ test('luminance mode falls back to per-channel for single-channel images', () =>
 	expect(model.colorMode).toBe('perChannel')
 	expect(model.surfaces).toHaveLength(1)
 })
+
+test('coarse-grid TPS evaluation matches direct evaluation', () => {
+	const width = 256
+	const height = 256
+	const bg = (x: number, y: number) => {
+		const u = (x / (width - 1)) * 2 - 1
+		const v = (y / (height - 1)) * 2 - 1
+		return 0.4 + 0.12 * Math.sin(2.6 * u) * Math.cos(2.2 * v) + 0.05 * u
+	}
+	const model = fitBackgroundSurface(
+		makeImage(width, height, 1, (x, y) => bg(x, y)),
+		{ model: 'thinPlateSpline', gridSize: 24, smoothing: 0.05 },
+	)
+	const surface = model.surfaces[0]
+	const coef = surface.coefficients
+	const cp = surface.controlPoints!
+	const k = cp.length / 2
+
+	// Direct reference evaluation of the exact TPS at every pixel (documented coefficient layout).
+	const direct = (u: number, v: number) => {
+		let sum = coef[0] + coef[1] * u + coef[2] * v
+		for (let c = 0; c < k; c++) {
+			const du = u - cp[2 * c]
+			const dv = v - cp[2 * c + 1]
+			const sq = du * du + dv * dv
+			if (sq > 0) sum += coef[3 + c] * (0.5 * sq * Math.log(sq))
+		}
+		return sum
+	}
+
+	const evaluated = evaluateBackgroundModel(
+		model,
+		makeImage(width, height, 1, () => 0),
+	).raw
+	let maxError = 0
+	for (let y = 0; y < height; y++) {
+		for (let x = 0; x < width; x++) {
+			const ref = direct((x / (width - 1)) * 2 - 1, (y / (height - 1)) * 2 - 1)
+			maxError = Math.max(maxError, Math.abs(evaluated[y * width + x] - ref))
+		}
+	}
+
+	// Bilinear upsampling of the smooth surface stays far below the fit/noise accuracy.
+	expect(maxError).toBeLessThan(1e-3)
+})
