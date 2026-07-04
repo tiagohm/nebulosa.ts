@@ -136,27 +136,27 @@ export interface LocalSolarEclipseCircumstances {
 		}
 	}
 	readonly details: {
-		// Maximal local magnitude, or null when there is no local eclipse.
-		readonly maximalMagnitude: number | null
-		// Moon/Sun apparent diameter ratio at maximum, or null when unavailable.
-		readonly moonSunDiameterRatio: number | null
-		// Partial-phase duration in seconds (C4 - C1), or null.
-		readonly partialPhaseDuration: number | null
-		// Central-phase duration in seconds (C3 - C2), or null.
-		readonly centralPhaseDuration: number | null
+		// Maximal local magnitude, or undefined when there is no local eclipse.
+		readonly maximalMagnitude?: number
+		// Moon/Sun apparent diameter ratio at maximum, or undefined when unavailable.
+		readonly moonSunDiameterRatio?: number
+		// Partial-phase duration in seconds (C4 - C1), or undefined.
+		readonly partialPhaseDuration?: number
+		// Central-phase duration in seconds (C3 - C2), or undefined.
+		readonly centralPhaseDuration?: number
 		// Width (km) of the local central-shadow chord through the observer at maximum, measured across the
 		// path on a spherical Earth. This is NOT necessarily the canonical path width reported on the central
 		// line (Astrarium/EclipseWise): for an off-center observer it is the chord through their own location.
-		// Null when the maximum is not central, the observer is outside the central shadow, or no edge is
+		// undefined when the maximum is not central, the observer is outside the central shadow, or no edge is
 		// found within MAX_SHADOW_HALF_WIDTH_KM.
-		readonly shadowPathWidthKm: number | null
+		readonly shadowPathWidthKm?: number
 	}
 	readonly events: {
-		readonly C1: LocalSolarEclipseEvent | null
-		readonly C2: LocalSolarEclipseEvent | null
-		readonly MAX: LocalSolarEclipseEvent | null
-		readonly C3: LocalSolarEclipseEvent | null
-		readonly C4: LocalSolarEclipseEvent | null
+		readonly C1?: LocalSolarEclipseEvent
+		readonly C2?: LocalSolarEclipseEvent
+		readonly MAX?: LocalSolarEclipseEvent
+		readonly C3?: LocalSolarEclipseEvent
+		readonly C4?: LocalSolarEclipseEvent
 	}
 }
 
@@ -166,16 +166,16 @@ export interface LocalSolarEclipseCircumstances {
 export interface LocalViewEventState {
 	// Sun-Moon center separation in solar radii at the event.
 	readonly separationSolarRadii: number
-	// Position angle of the lunar center from celestial north toward east, or null.
-	readonly centerPositionAngleP: Angle | null
-	// Zenith-oriented position angle of the lunar center, or null.
-	readonly centerZenithAngleZ: Angle | null
-	// Solar parallactic angle (radians) at the event, used to rotate the horizon in the north frame, or null.
-	readonly parallacticAngle: Angle | null
+	// Position angle of the lunar center from celestial north toward east, or undefined.
+	readonly centerPositionAngle?: Angle
+	// Zenith-oriented position angle of the lunar center, or undefined.
+	readonly centerZenithAngle?: Angle
+	// Solar parallactic angle (radians) at the event, used to rotate the horizon in the north frame, or undefined.
+	readonly parallacticAngle?: Angle
 	// Solar altitude (radians) at the event.
 	readonly sunAltitude: Angle
-	// Apparent solar angular radius (radians), or null when unavailable.
-	readonly solarAngularRadius: Angle | null
+	// Apparent solar angular radius (radians), or undefined when unavailable.
+	readonly solarAngularRadius?: Angle
 }
 
 // One resolved local contact event.
@@ -194,17 +194,17 @@ export interface LocalSolarEclipseEvent {
 	// Position angle of the contact point on the solar limb, from celestial north toward east, normalized to
 	// [0, TAU). This is the table/circumstances angle: it coincides with the lunar-center angle at C1/MAX/C4
 	// and at annular C2/C3, but is opposite (center + PI) at total C2/C3 (internal tangency on the far limb).
-	readonly positionAngleP: Angle | null
+	readonly positionAngle?: Angle
 	// Same contact-point angle in the local zenith-oriented frame, normalized to [0, TAU).
-	readonly zenithAngleZ: Angle | null
+	readonly zenithAngle?: Angle
 	// Whether the Sun is above or below the horizon at the event.
 	readonly visibility: LocalEventVisibility
 	// Whether the event is observable (Sun at or above the configured horizon altitude).
 	readonly observable: boolean
 	// Local magnitude at the event.
 	readonly magnitude: number
-	// Moon/Sun apparent diameter ratio at the event, or null when unavailable.
-	readonly moonSunDiameterRatio: number | null
+	// Moon/Sun apparent diameter ratio at the event, or undefined when unavailable.
+	readonly moonSunDiameterRatio?: number
 	// Central-phase character at the event.
 	readonly centralPhaseKind: LocalCentralPhaseKind
 	// Internal geometry cache consumed by the Local View builder.
@@ -238,8 +238,8 @@ export interface LocalFundamentalState {
 	readonly L2: number
 	// Local magnitude (L1 - distance) / (L1 + L2).
 	readonly magnitude: number
-	// Moon/Sun apparent diameter ratio, or null when the solar radius is non-positive.
-	readonly moonSunDiameterRatio: number | null
+	// Moon/Sun apparent diameter ratio, or undefined when the solar radius is non-positive.
+	readonly moonSunDiameterRatio?: number
 	// Central-phase character at this state.
 	readonly centralPhaseKind: LocalCentralPhaseKind
 }
@@ -280,7 +280,7 @@ export interface LocalSolarEclipseSvgCircle {
 	readonly kind: 'circle'
 	// Semantic role of this circle.
 	readonly role: 'sunDisk' | 'moonDisk' | 'ghostSunDisk' | 'ghostMoonDisk' | 'solarLimb' | 'lunarLimb'
-	// Contact this circle was drawn for, so the UI can label it (e.g. the ghost disks "C1"/"Max"/"C4"). This
+	// Contact this circle was drawn for, so the UI can label it (e.g. the ghost disks "C1"/"MAX"/"C4"). This
 	// is a semantic tag, not rendered text.
 	readonly event?: LocalEclipseContactKind
 	// Center x in SVG pixels.
@@ -331,8 +331,8 @@ export interface LocalSolarEclipseViewGeometry {
 	// The contact the caller requested as the primary state.
 	readonly requestedEvent: LocalEclipseContactKind
 	// The contact actually drawn as the primary state: the requested one when available, otherwise the
-	// fallback chosen by the builder, or null when no event exists at all.
-	readonly selectedEvent: LocalEclipseContactKind | null
+	// fallback chosen by the builder, or undefined when no event exists at all.
+	readonly selectedEvent?: LocalEclipseContactKind
 	// Solar disk radius in SVG pixels.
 	readonly solarRadiusPx: number
 	// All drawable shapes.
@@ -354,12 +354,12 @@ export interface SolarEclipseExtremeCircumstances {
 	readonly sunAltitude: Angle
 	// Solar azimuth at the event in radians, measured from North through East, normalized to [0, TAU).
 	readonly sunAzimuth: Angle
-	// Width of the central (umbral/antumbral) path on the ground in km; null when the point is not central.
-	readonly pathWidthKm: number | null
-	// Duration of the central (total/annular) phase in seconds; null when the point is not central.
-	readonly centralDuration: number | null
-	// Local eclipse character at the event; null when the point is not central.
-	readonly kind: SolarEclipseGeoPoint['kind'] | null
+	// Width of the central (umbral/antumbral) path on the ground in km; undefined when the point is not central.
+	readonly pathWidthKm?: number
+	// Duration of the central (total/annular) phase in seconds; undefined when the point is not central.
+	readonly centralDuration?: number
+	// Local eclipse character at the event; undefined when the point is not central.
+	readonly kind?: SolarEclipseGeoPoint['kind']
 }
 
 // Default circumstances options (all fields fall back to their per-field defaults).
@@ -412,8 +412,8 @@ export function computeLocalFundamentalState(pbe: PolynomialBesselianElements, l
 	const solarRadius = (L1 + L2) * 0.5
 	const lunarRadius = (L1 - L2) * 0.5
 	// Guarded against degraded Besselian values (e.g. far extrapolation): a non-positive or non-finite radius
-	// yields a null ratio rather than a meaningless or negative one.
-	const moonSunDiameterRatio = solarRadius > 0 && lunarRadius > 0 && Number.isFinite(solarRadius) && Number.isFinite(lunarRadius) ? lunarRadius / solarRadius : null
+	// yields a undefined ratio rather than a meaningless or negative one.
+	const moonSunDiameterRatio = solarRadius > 0 && lunarRadius > 0 && Number.isFinite(solarRadius) && Number.isFinite(lunarRadius) ? lunarRadius / solarRadius : undefined
 	// Central phase = observer strictly inside the umbral/antumbral cone (|L2| - distance > tolerance). This is
 	// the robust test for both total and annular: the diameter-ratio magnitude exceeds 1 only for total
 	// eclipses (the Moon is larger than the Sun), so a magnitude > 1 test would never flag an annular central
@@ -527,15 +527,15 @@ function computeSolarAltitude(time: Time, longitude: Angle, latitude: Angle, pos
 // rotates that into the zenith frame (Z = P - q). The limb-CONTACT angle equals the center angle except at
 // a total internal tangency (C2/C3 total), where the last solar sliver is on the far limb (center + PI).
 interface LocalTopocentricAspect {
-	// Position angle of the lunar center, from celestial north toward east, in [0, TAU), or null when the
+	// Position angle of the lunar center, from celestial north toward east, in [0, TAU), or undefined when the
 	// Sun-Moon separation is too small for the direction to be defined.
-	readonly centerPositionAngleP: Angle | null
-	// Position angle of the lunar center in the zenith frame, in [0, TAU), or null.
-	readonly centerZenithAngleZ: Angle | null
-	// Position angle of the limb-contact point, from celestial north toward east, in [0, TAU), or null.
-	readonly contactPositionAngleP: Angle | null
-	// Position angle of the limb-contact point in the zenith frame, in [0, TAU), or null.
-	readonly contactZenithAngleZ: Angle | null
+	readonly centerPositionAngle?: Angle
+	// Position angle of the lunar center in the zenith frame, in [0, TAU), or undefined.
+	readonly centerZenithAngle?: Angle
+	// Position angle of the limb-contact point, from celestial north toward east, in [0, TAU), or undefined.
+	readonly contactPositionAngle?: Angle
+	// Position angle of the limb-contact point in the zenith frame, in [0, TAU), or undefined.
+	readonly contactZenithAngle?: Angle
 	// Solar parallactic angle, in [-PI, PI] (always defined, it does not depend on the separation).
 	readonly parallacticAngle: Angle
 }
@@ -578,10 +578,10 @@ function isLocalViewAngleUndefined(state: LocalFundamentalState) {
 function computeLocalTopocentricAspect(kind: LocalEclipseContactKind, state: LocalFundamentalState, time: Time, longitude: Angle, latitude: Angle, position: SunMoonPosition | undefined): LocalTopocentricAspect {
 	const q = computeSolarParallacticAngle(time, longitude, latitude, state, position)
 
-	// At a near-exact central alignment the lunar-center direction is undefined (atan2(0, 0)); report null
+	// At a near-exact central alignment the lunar-center direction is undefined (atan2(0, 0)); report undefined
 	// rather than a spurious 0. The Local View is unaffected because the separation is ~0 there anyway.
 	if (isLocalViewAngleUndefined(state)) {
-		return { centerPositionAngleP: null, centerZenithAngleZ: null, contactPositionAngleP: null, contactZenithAngleZ: null, parallacticAngle: q }
+		return { parallacticAngle: q }
 	}
 
 	const centerP = normalizeAngle(Math.atan2(state.u, state.v))
@@ -589,10 +589,10 @@ function computeLocalTopocentricAspect(kind: LocalEclipseContactKind, state: Loc
 	const centralKind = eventCentralKind(kind, state)
 
 	return {
-		centerPositionAngleP: centerP,
-		centerZenithAngleZ: centerZ,
-		contactPositionAngleP: contactAngleFromCenter(kind, centralKind, centerP),
-		contactZenithAngleZ: contactAngleFromCenter(kind, centralKind, centerZ),
+		centerPositionAngle: centerP,
+		centerZenithAngle: centerZ,
+		contactPositionAngle: contactAngleFromCenter(kind, centralKind, centerP),
+		contactZenithAngle: contactAngleFromCenter(kind, centralKind, centerZ),
 		parallacticAngle: q,
 	}
 }
@@ -660,14 +660,14 @@ function buildLocalEvent(kind: LocalEclipseContactKind, jd: number, pbe: Polynom
 		jd,
 		sunAltitude,
 		// The table angles are the limb-contact angles; the Local View uses the center angles below.
-		positionAngleP: aspect.contactPositionAngleP,
-		zenithAngleZ: aspect.contactZenithAngleZ,
+		positionAngle: aspect.contactPositionAngle,
+		zenithAngle: aspect.contactZenithAngle,
 		visibility: observable ? 'aboveHorizon' : 'belowHorizon',
 		observable,
 		magnitude: state.magnitude,
 		moonSunDiameterRatio: state.moonSunDiameterRatio,
 		centralPhaseKind: kind === 'C2' || kind === 'C3' ? centralKind : state.centralPhaseKind,
-		localViewState: { separationSolarRadii, centerPositionAngleP: aspect.centerPositionAngleP, centerZenithAngleZ: aspect.centerZenithAngleZ, parallacticAngle: aspect.parallacticAngle, sunAltitude, solarAngularRadius },
+		localViewState: { separationSolarRadii, centerPositionAngle: aspect.centerPositionAngle, centerZenithAngle: aspect.centerZenithAngle, parallacticAngle: aspect.parallacticAngle, sunAltitude, solarAngularRadius },
 	}
 }
 
@@ -944,7 +944,7 @@ function findLocalEclipseMaximumJd(pbe: PolynomialBesselianElements, longitude: 
 }
 
 // Shared frozen "no contacts" event set, returned when the eclipse is not visible at the location.
-const EMPTY_LOCAL_ECLIPSE_EVENTS: LocalSolarEclipseCircumstances['events'] = Object.freeze({ C1: null, C2: null, MAX: null, C3: null, C4: null })
+const EMPTY_LOCAL_ECLIPSE_EVENTS: LocalSolarEclipseCircumstances['events'] = Object.freeze({ C1: undefined, C2: undefined, MAX: undefined, C3: undefined, C4: undefined })
 
 // Resolves the local C1/C2/MAX/C3/C4 events. C2/C3 are only sought when the local maximum is central, so
 // a partial-only local eclipse never invents central contacts. Every event is computed geometrically even
@@ -1008,16 +1008,16 @@ export function computeLocalEclipseEvents(pbe: PolynomialBesselianElements, long
 	}
 
 	const partial = resolveContacts(false)
-	const C1 = partial.before !== undefined ? buildLocalEvent('C1', partial.before, pbe, longitude, latitude, options, state) : null
-	const C4 = partial.after !== undefined ? buildLocalEvent('C4', partial.after, pbe, longitude, latitude, options, state) : null
+	const C1 = partial.before !== undefined ? buildLocalEvent('C1', partial.before, pbe, longitude, latitude, options, state) : undefined
+	const C4 = partial.after !== undefined ? buildLocalEvent('C4', partial.after, pbe, longitude, latitude, options, state) : undefined
 
-	let C2: LocalSolarEclipseEvent | null = null
-	let C3: LocalSolarEclipseEvent | null = null
+	let C2: LocalSolarEclipseEvent | undefined
+	let C3: LocalSolarEclipseEvent | undefined
 
 	if (centralPhaseKind !== 'none') {
 		const central = resolveContacts(true)
-		C2 = central.before !== undefined ? buildLocalEvent('C2', central.before, pbe, longitude, latitude, options, state) : null
-		C3 = central.after !== undefined ? buildLocalEvent('C3', central.after, pbe, longitude, latitude, options, state) : null
+		C2 = central.before !== undefined ? buildLocalEvent('C2', central.before, pbe, longitude, latitude, options, state) : undefined
+		C3 = central.after !== undefined ? buildLocalEvent('C3', central.after, pbe, longitude, latitude, options, state) : undefined
 	}
 
 	return { C1, C2, MAX, C3, C4 }
@@ -1048,14 +1048,16 @@ const SUN_MOTION_ALTITUDE_EPSILON = 1e-3
 // Vertical trend of the Sun across the present contacts, by comparing the earliest and latest event altitudes
 // (the events are already time-ordered). Lets the UI compose an "on sunset"/"on sunrise" qualifier.
 function computeSunMotion(events: LocalSolarEclipseCircumstances['events']): LocalSunMotion {
-	let first: LocalSolarEclipseEvent | null = null
-	let last: LocalSolarEclipseEvent | null = null
+	let first: LocalSolarEclipseEvent | undefined
+	let last: LocalSolarEclipseEvent | undefined
+
 	for (const kind of CONTACT_ORDER) {
 		const event = events[kind]
 		if (!event) continue
 		first ??= event
 		last = event
 	}
+
 	if (!first || !last || first === last) return 'none'
 	const delta = last.sunAltitude - first.sunAltitude
 	if (delta < -SUN_MOTION_ALTITUDE_EPSILON) return 'setting'
@@ -1171,7 +1173,7 @@ function computeLocalVisibility(events: LocalSolarEclipseCircumstances['events']
 
 	// The events expected for this eclipse character. `completelyVisible` requires this full set to exist and
 	// be above the horizon, so a missing contact never masquerades as a fully visible eclipse.
-	const completeEventSet = hasCentralPhase ? C1 !== null && C2 !== null && C3 !== null && C4 !== null : C1 !== null && C4 !== null
+	const completeEventSet = hasCentralPhase ? C1 !== undefined && C2 !== undefined && C3 !== undefined && C4 !== undefined : C1 !== undefined && C4 !== undefined
 	const allExpectedAbove = hasCentralPhase ? C1?.observable === true && C2?.observable === true && MAX.observable && C3?.observable === true && C4?.observable === true : C1?.observable === true && MAX.observable && C4?.observable === true
 
 	// Common case: any contact above the horizon means the eclipse is observable. Only when every contact is
@@ -1180,19 +1182,19 @@ function computeLocalVisibility(events: LocalSolarEclipseCircumstances['events']
 	// contact, so this never lowers observability below the event-based answer.
 	const horizonAltitude = options.horizonAltitude ?? 0
 	const eventAnyAbove = C1?.observable === true || C2?.observable === true || MAX.observable || C3?.observable === true || C4?.observable === true
-	const anyAbove = eventAnyAbove || (C1 !== null && C4 !== null && maxSunAltitudeOverInterval(pbe, longitude, latitude, C1.jd, C4.jd, options) >= horizonAltitude)
+	const anyAbove = eventAnyAbove || (C1 !== undefined && C4 !== undefined && maxSunAltitudeOverInterval(pbe, longitude, latitude, C1.jd, C4.jd, options) >= horizonAltitude)
 
 	// `completelyVisible` requires the full expected event set above the horizon AND no interior dip below it.
 	// The dip is only possible when the interval straddles lower culmination (a valley), detected cheaply, so
 	// the continuous minimum is computed only in that rare case.
 	let completelyVisible = completeEventSet && allExpectedAbove
-	if (completelyVisible && C1 !== null && C4 !== null && intervalHasAltitudeValley(pbe, longitude, C1.jd, C4.jd, options)) {
+	if (completelyVisible && C1 !== undefined && C4 !== undefined && intervalHasAltitudeValley(pbe, longitude, C1.jd, C4.jd, options)) {
 		completelyVisible = minSunAltitudeOverInterval(pbe, longitude, latitude, C1.jd, C4.jd, options) >= horizonAltitude
 	}
 
 	// The central phase is visible if any central event is above the horizon, or (rare) the central interval
 	// pokes above between below-horizon central events. The interval scan short-circuits after the event checks.
-	const centralPhaseVisible = hasCentralPhase && ((C2?.observable ?? false) || (C3?.observable ?? false) || MAX.observable || (C2 !== null && C3 !== null && maxSunAltitudeOverInterval(pbe, longitude, latitude, C2.jd, C3.jd, options) >= horizonAltitude))
+	const centralPhaseVisible = hasCentralPhase && ((C2?.observable ?? false) || (C3?.observable ?? false) || MAX.observable || (C2 !== undefined && C3 !== undefined && maxSunAltitudeOverInterval(pbe, longitude, latitude, C2.jd, C3.jd, options) >= horizonAltitude))
 
 	let kind: LocalVisibilityKind
 	if (!anyAbove) {
@@ -1207,13 +1209,13 @@ function computeLocalVisibility(events: LocalSolarEclipseCircumstances['events']
 		kind = 'partiallyVisible'
 	}
 
-	const completeness = { partialContactsComplete: C1 !== null && C4 !== null, centralContactsComplete: !hasCentralPhase || (C2 !== null && C3 !== null) }
+	const completeness = { partialContactsComplete: C1 !== undefined && C4 !== undefined, centralContactsComplete: !hasCentralPhase || (C2 !== undefined && C3 !== undefined) }
 	return { kind, text: localVisibilityText(kind), hasGeometricEclipse: true, hasObservableEclipse: anyAbove, hasCentralPhase, centralPhaseKind, sunMotion: computeSunMotion(events), completeness }
 }
 
 // Maximum geodesic half-width (km) probed when measuring the central shadow path on the ground. A genuine
 // local path width stays well under this; a probe that runs past it (e.g. a grazing umbra near the
-// terminator, whose ground footprint stretches enormously) is reported as null instead of an absurd value.
+// terminator, whose ground footprint stretches enormously) is reported as undefined instead of an absurd value.
 const MAX_SHADOW_HALF_WIDTH_KM = 600
 // March step (km) for the central-edge search across the path.
 const SHADOW_EDGE_STEP_KM = 5
@@ -1277,7 +1279,7 @@ const INVALID_CHORD_WIDTH_PENALTY_KM = MAX_SHADOW_HALF_WIDTH_KM * 4
 // center of the shadow, where the central-contact function distance - |L2| has a non-differentiable cone
 // point and the gradient vanishes by symmetry. For each bearing the two opposite edges are summed; the
 // discrete minimum over all bearings is refined by a 1-D minimization within one angular step, so the result
-// is not capped at the PI / count grid resolution. Returns null when no opposite pair of edges is found.
+// is not capped at the PI / count grid resolution. Returns undefined when no opposite pair of edges is found.
 function computeCentralShadowChordWidthByBearingsKm(centralValueAt: (longitude: Angle, latitude: Angle) => number, longitude: Angle, latitude: Angle) {
 	const chordWidthAtBearing = (bearing: Angle) => {
 		const forward = findCentralShadowEdgeKm(centralValueAt, longitude, latitude, bearing)
@@ -1286,20 +1288,20 @@ function computeCentralShadowChordWidthByBearingsKm(centralValueAt: (longitude: 
 	}
 
 	const step = PI / SHADOW_CHORD_BEARING_COUNT
-	let best: number | null = null
+	let best: number | undefined
 	let bestBearing = 0
 
 	for (let i = 0; i < SHADOW_CHORD_BEARING_COUNT; i++) {
 		const bearing = i * step
 		const width = chordWidthAtBearing(bearing)
 		if (width === undefined) continue
-		if (best === null || width < best) {
+		if (best === undefined || width < best) {
 			best = width
 			bestBearing = bearing
 		}
 	}
 
-	if (best === null) return null
+	if (best === undefined) return undefined
 
 	// Refine the bearing within one grid step; the true minimum chord usually lies between two samples.
 	try {
@@ -1318,7 +1320,7 @@ function computeCentralShadowChordWidthByBearingsKm(centralValueAt: (longitude: 
 // edges being where the central-contact function vanishes on either side. Working on the ground makes the
 // foreshortening near the horizon implicit, avoiding the 1 / sin(altitude) blow-up of a fundamental-plane
 // estimate, and the multi-bearing scan stays well defined even at the exact center of the shadow. Returns
-// null when the maximum is not central, the observer is not inside the central shadow, or no edge is found
+// undefined when the maximum is not central, the observer is not inside the central shadow, or no edge is found
 // within MAX_SHADOW_HALF_WIDTH_KM.
 export function computeLocalShadowPathWidthKm(pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, jd: number) {
 	// The Besselian sample depends only on the instant; evaluate it once and reuse it across every
@@ -1332,20 +1334,20 @@ export function computeLocalShadowPathWidthKm(pbe: PolynomialBesselianElements, 
 
 	// The observer must be strictly inside the central shadow, using the same margin as the central-phase
 	// classification so a tangential (zero-duration) edge is treated consistently as not central.
-	if (!(centralValueAt(longitude, latitude) < -CENTRAL_CONE_TOLERANCE)) return null
+	if (!(centralValueAt(longitude, latitude) < -CENTRAL_CONE_TOLERANCE)) return undefined
 
 	return computeCentralShadowChordWidthByBearingsKm(centralValueAt, longitude, latitude)
 }
 
 // Computes the local detail summary (magnitude, ratios and durations) from the resolved events.
-function computeLocalDetails(events: LocalSolarEclipseCircumstances['events'], shadowPathWidthKm: number | null): LocalSolarEclipseCircumstances['details'] {
+function computeLocalDetails(events: LocalSolarEclipseCircumstances['events'], shadowPathWidthKm: number | undefined): LocalSolarEclipseCircumstances['details'] {
 	const { C1, C2, MAX, C3, C4 } = events
 
 	return {
-		maximalMagnitude: MAX ? MAX.magnitude : null,
-		moonSunDiameterRatio: MAX ? MAX.moonSunDiameterRatio : null,
-		partialPhaseDuration: C1 && C4 ? (C4.jd - C1.jd) * DAYSEC : null,
-		centralPhaseDuration: C2 && C3 ? (C3.jd - C2.jd) * DAYSEC : null,
+		maximalMagnitude: MAX?.magnitude,
+		moonSunDiameterRatio: MAX?.moonSunDiameterRatio,
+		partialPhaseDuration: C1 !== undefined && C4 !== undefined ? (C4.jd - C1.jd) * DAYSEC : undefined,
+		centralPhaseDuration: C2 !== undefined && C3 !== undefined ? (C3.jd - C2.jd) * DAYSEC : undefined,
 		shadowPathWidthKm,
 	}
 }
@@ -1365,10 +1367,9 @@ function requireLocalViewState(event: LocalSolarEclipseEvent) {
 // ghost would sit in its own instantaneous vertical, inconsistent with the single horizon drawn for the
 // primary event.
 function localViewAngleForEvent(eventState: LocalViewEventState, options: LocalSolarEclipseViewOptions, frameState: LocalViewEventState) {
-	if (options.orientationMode === 'north') return eventState.centerPositionAngleP
-	const centerP = eventState.centerPositionAngleP
-	if (centerP === null) return null
-	return normalizeAngle(centerP - (frameState.parallacticAngle ?? 0))
+	if (options.orientationMode === 'north') return eventState.centerPositionAngle
+	const centerP = eventState.centerPositionAngle
+	return centerP && normalizeAngle(centerP - (frameState.parallacticAngle ?? 0))
 }
 
 // Computes the solar and lunar disk circles for one event in the Local View frame. The Sun is centered in
@@ -1382,7 +1383,7 @@ export function computeLocalViewDiskPair(event: LocalSolarEclipseEvent, options:
 	const sunCy = options.height * 0.5
 	const sunR = options.solarRadiusPx
 	// Fall back to a unit ratio for a missing or degraded value, so the Moon disk is never zero/negative.
-	const ratio = event.moonSunDiameterRatio !== null && event.moonSunDiameterRatio > 0 && Number.isFinite(event.moonSunDiameterRatio) ? event.moonSunDiameterRatio : 1
+	const ratio = event.moonSunDiameterRatio !== undefined && event.moonSunDiameterRatio > 0 && Number.isFinite(event.moonSunDiameterRatio) ? event.moonSunDiameterRatio : 1
 	const moonR = sunR * ratio
 
 	const separationPx = viewState.separationSolarRadii * sunR
@@ -1402,7 +1403,7 @@ export function computeLocalViewDiskPair(event: LocalSolarEclipseEvent, options:
 
 // Converts a solar altitude to its signed Local View offset (px) from the Sun center along the zenith
 // direction. Guarded against non-finite inputs and clamped only for numerical stability (not physics).
-function altitudeToLocalViewOffsetPx(sunAltitude: Angle, solarAngularRadius: Angle | null, solarRadiusPx: number, width: number, height: number) {
+function altitudeToLocalViewOffsetPx(sunAltitude: Angle, solarAngularRadius: Angle | undefined, solarRadiusPx: number, width: number, height: number) {
 	if (!solarAngularRadius || !(solarAngularRadius > 0)) return 0
 	const offset = (sunAltitude / solarAngularRadius) * solarRadiusPx
 	if (!Number.isFinite(offset)) return 0
@@ -1482,7 +1483,7 @@ function selectPrimaryEvent(events: LocalSolarEclipseCircumstances['events'], se
 		const event = events[kind]
 		if (event) return event
 	}
-	return null
+	return undefined
 }
 
 // Builds the serializable Local View geometry from the resolved events. Emits only geometric shapes: no
@@ -1517,25 +1518,18 @@ export function computeLocalSolarEclipseViewGeometry(circumstances: Pick<LocalSo
 		for (const shape of buildLocalViewHorizonGeometry(primary, resolvedOptions)) shapes.push(shape)
 	}
 
-	return { width: resolvedOptions.width, height: resolvedOptions.height, orientationMode: resolvedOptions.orientationMode, requestedEvent: resolvedOptions.selectedEvent, selectedEvent: primary?.kind ?? null, solarRadiusPx: resolvedOptions.solarRadiusPx, shapes }
+	return { width: resolvedOptions.width, height: resolvedOptions.height, orientationMode: resolvedOptions.orientationMode, requestedEvent: resolvedOptions.selectedEvent, selectedEvent: primary?.kind, solarRadiusPx: resolvedOptions.solarRadiusPx, shapes }
 }
 
 // Computes the full local circumstances for a geographic point: resolves contacts, summarizes details,
 // classifies visibility, and optionally builds the Local View. The result is immutable and serializable;
 // times are returned as Time/Julian Day and durations in seconds (the UI formats them).
-export function computeLocalSolarEclipseCircumstances(pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, options: LocalSolarEclipseCircumstancesOptions = DEFAULT_LOCAL_SOLAR_ECLIPSE_CIRCUMSTANCES_OPTIONS): LocalSolarEclipseCircumstances {
+export function computeLocalSolarEclipseCircumstances(pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, options: LocalSolarEclipseCircumstancesOptions = DEFAULT_LOCAL_SOLAR_ECLIPSE_CIRCUMSTANCES_OPTIONS) {
 	const events = computeLocalEclipseEvents(pbe, longitude, latitude, options)
 	const visibility = computeLocalVisibility(events, pbe, longitude, latitude, options)
-	const shadowPathWidthKm = events.MAX && events.MAX.centralPhaseKind !== 'none' ? computeLocalShadowPathWidthKm(pbe, longitude, latitude, events.MAX.jd) : null
+	const shadowPathWidthKm = events.MAX !== undefined && events.MAX.centralPhaseKind !== 'none' ? computeLocalShadowPathWidthKm(pbe, longitude, latitude, events.MAX.jd) : undefined
 	const details = computeLocalDetails(events, shadowPathWidthKm)
-
-	const result: LocalSolarEclipseCircumstances = {
-		location: { longitude, latitude },
-		visibility,
-		details,
-		events,
-	}
-
+	const result: LocalSolarEclipseCircumstances = { location: { longitude, latitude }, visibility, details, events }
 	return result
 }
 
@@ -1604,15 +1598,15 @@ function solarAzimuthAtPoint(pbe: PolynomialBesselianElements, point: SolarEclip
 }
 
 // Duration (seconds) of the central (total/annular) phase for a ground point under the shadow axis at
-// jdCenter: the span the point stays inside the umbral/antumbral cone. Returns null when the point is not
+// jdCenter: the span the point stays inside the umbral/antumbral cone. Returns undefined when the point is not
 // inside the cone at jdCenter (no central phase there).
 function centralPhaseDurationSeconds(pbe: PolynomialBesselianElements, longitude: Angle, latitude: Angle, jdCenter: number) {
 	const gapAtJd = (jd: number) => centralConeGap(besselianSampleAtJulianDay(pbe, jd), longitude, latitude)
-	if (!(gapAtJd(jdCenter) > CENTRAL_CONE_TOLERANCE)) return null
+	if (!(gapAtJd(jdCenter) > CENTRAL_CONE_TOLERANCE)) return undefined
 
 	const enter = findConeCrossingJd(gapAtJd, jdCenter, -CENTRAL_DURATION_STEP_DAYS)
 	const exit = findConeCrossingJd(gapAtJd, jdCenter, CENTRAL_DURATION_STEP_DAYS)
-	return enter === undefined || exit === undefined ? null : (exit - enter) * DAYSEC
+	return enter === undefined || exit === undefined ? undefined : (exit - enter) * DAYSEC
 }
 
 // Assembles the full summary circumstances at one central-eclipse point: geographic location, TD/UT1 times,
@@ -1629,17 +1623,17 @@ function extremeCircumstancesAt(pbe: PolynomialBesselianElements, point: SolarEc
 		deltaT: pbe.deltaT,
 		sunAltitude: solarAltitudeAtPoint(pbe, point),
 		sunAzimuth: solarAzimuthAtPoint(pbe, point),
-		pathWidthKm: centralDuration === null ? null : computeLocalShadowPathWidthKm(pbe, point.x, point.y, jd),
+		pathWidthKm: centralDuration && computeLocalShadowPathWidthKm(pbe, point.x, point.y, jd),
 		centralDuration,
-		kind: centralDuration === null ? null : centralLineKind(pbe, jd),
+		kind: centralDuration === undefined ? undefined : centralLineKind(pbe, jd),
 	}
 }
 
 // Circumstances at the greatest eclipse: the instant the shadow axis passes closest to the Earth's center
 // (maximum magnitude). For a central eclipse this is the central point at that instant; for a partial or
-// non-central eclipse it is the limb point nearest the axis, and the path width / central duration are null.
+// non-central eclipse it is the limb point nearest the axis, and the path width / central duration are undefined.
 // Returns undefined only when no greatest-eclipse point can be projected.
-export function computeGreatestEclipseCircumstances(pbe: PolynomialBesselianElements): SolarEclipseExtremeCircumstances | undefined {
+export function computeGreatestEclipseCircumstances(pbe: PolynomialBesselianElements) {
 	const point = findMaximumPoint(pbe)
 	return point ? extremeCircumstancesAt(pbe, point) : undefined
 }
@@ -1648,7 +1642,7 @@ export function computeGreatestEclipseCircumstances(pbe: PolynomialBesselianElem
 // phase lasts longest, which is generally not the greatest-eclipse point. Searches the central line over the
 // contact window, evaluating the local central duration at each sampled central point and refining the
 // maximum. Returns undefined for an eclipse with no central line (partial or non-central).
-export function computeGreatestDurationCircumstances(pbe: PolynomialBesselianElements): SolarEclipseExtremeCircumstances | undefined {
+export function computeGreatestDurationCircumstances(pbe: PolynomialBesselianElements) {
 	if (!centralAxisIntersectsEarth(pbe)) return undefined
 
 	const julianDay0 = toJulianDay(pbe.time0)
@@ -1737,7 +1731,7 @@ export interface LocalSolarEclipseListEntry {
 // below the local horizon there. Pass the returned `elements` to computeLocalSolarEclipseCircumstances to
 // refine observability, magnitude, contacts and the Local View. longitude is east-positive radians, latitude
 // geodetic radians; the results are ordered earliest-first.
-export function listLocalSolarEclipses(longitude: Angle, latitude: Angle, startTime: Time, endTime: Time, sunMoonPosition: (time: Time) => SunMoonPosition): LocalSolarEclipseListEntry[] {
+export function listLocalSolarEclipses(longitude: Angle, latitude: Angle, startTime: Time, endTime: Time, sunMoonPosition: (time: Time) => SunMoonPosition) {
 	const result: LocalSolarEclipseListEntry[] = []
 
 	const startJd = toJulianDay(startTime)

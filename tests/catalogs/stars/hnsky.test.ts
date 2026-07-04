@@ -149,28 +149,24 @@ test('HnskyCatalog exposes .290 archives through the generic star catalog API', 
 		[`g14_${hnsky290AreaFile(147).fileName}`]: makeSyntheticFile({ recordSize: 11, star: { rightAscension: deg(11.7), declination: deg(4.9), magnitude: 1.1, designation: (101 << 20) | 1 }, outside: { rightAscension: deg(40), declination: deg(4.9), magnitude: 1.2, designation: (101 << 20) | 2 } }),
 	}
 
-	const catalog = openHnskyCatalog(archive, 'g14')
+	using catalog = openHnskyCatalog(archive, 'g14')
 
-	try {
-		const cone = await catalog.queryCone(deg(11.1), deg(5), deg(2))
-		const box = await catalog.queryBox(deg(10), deg(12), deg(4.5), deg(5.5))
+	const cone = await catalog.queryCone(deg(11.1), deg(5), deg(2))
+	const box = await catalog.queryBox(deg(10), deg(12), deg(4.5), deg(5.5))
 
-		expect(cone.map((e) => e.area).sort(NumberComparator)).toEqual([146, 147])
-		expect(cone.map((e) => e.recordNumber).sort(NumberComparator)).toEqual([1, 1])
-		expect(box.map((e) => e.area).sort(NumberComparator)).toEqual([146, 147])
-		expect(box.map((e) => e.recordNumber).sort(NumberComparator)).toEqual([1, 1])
-		expect(cone[0].epoch).toBe(2000)
-		expect(cone[0].designation?.label).toBe('UCAC4 100-1')
+	expect(cone.map((e) => e.area).sort(NumberComparator)).toEqual([146, 147])
+	expect(cone.map((e) => e.recordNumber).sort(NumberComparator)).toEqual([1, 1])
+	expect(box.map((e) => e.area).sort(NumberComparator)).toEqual([146, 147])
+	expect(box.map((e) => e.recordNumber).sort(NumberComparator)).toEqual([1, 1])
+	expect(cone[0].epoch).toBe(2000)
+	expect(cone[0].designation?.label).toBe('UCAC4 100-1')
 
-		const star = await catalog.get('g14', 147, 1)
+	const star = await catalog.get('g14', 147, 1)
 
-		expect(star?.area).toBe(147)
-		expect(star?.recordNumber).toBe(1)
-		expect(star?.magnitude).toBeCloseTo(1.1, 6)
-		expect(star?.designation?.label).toBe('UCAC4 101-1')
-	} finally {
-		catalog.close()
-	}
+	expect(star?.area).toBe(147)
+	expect(star?.recordNumber).toBe(1)
+	expect(star?.magnitude).toBeCloseTo(1.1, 6)
+	expect(star?.designation?.label).toBe('UCAC4 101-1')
 })
 
 test('read g14 database', async () => {

@@ -164,7 +164,7 @@ const DAYSEC_MS = DAYSEC * 1000
 
 // Returns the polar motion provider used for this computation.
 function polarMotionProvider(time: Time, pm?: PolarMotion): PolarMotion {
-	return pm ?? time.providers?.pm ?? iers.xy
+	return pm ?? time.providers?.pm ?? TIME_PROVIDERS.pm
 }
 
 // Computes the motion angles (sprime, x, y) from the given time.
@@ -172,7 +172,7 @@ export function pmAngles(time: Time, pm?: PolarMotion): readonly [Angle, Angle, 
 	const polarMotion = polarMotionProvider(time, pm)
 	if (time.cache?.pmAngles !== undefined && time.cache.pmAnglesPolarMotion === polarMotion) return time.cache.pmAngles
 	const t = tt(time)
-	const sprime = time.providers?.sp?.(t) ?? eraSp00(t.day, t.fraction)
+	const sprime = time.providers?.sp?.(t) ?? TIME_PROVIDERS.sp(t)
 	const [x, y] = polarMotion(time)
 	const a: [Angle, Angle, Angle] = [sprime, x, y]
 	const c = cache(time)
@@ -186,7 +186,7 @@ export function pmMatrix(time: Time, pm?: PolarMotion): Mat3 {
 	const polarMotion = polarMotionProvider(time, pm)
 	if (time.cache?.pmMatrix !== undefined && time.cache.pmMatrixPolarMotion === polarMotion) return time.cache.pmMatrix
 	const [sprime, x, y] = pmAngles(time, polarMotion)
-	const m = time.providers?.pom?.(x, y, sprime) ?? eraPom00(x, y, sprime)
+	const m = time.providers?.pom?.(x, y, sprime) ?? TIME_PROVIDERS.pom(x, y, sprime)
 	const c = cache(time)
 	cacheKey(c, 'pmMatrix', m)
 	cacheKey(c, 'pmMatrixPolarMotion', polarMotion)
@@ -254,6 +254,12 @@ export function timeMJD(mjd: number, scale: Timescale = Timescale.UTC) {
 // Julian epoch year as floating point value like 2000.0.
 export function timeJulianYear(epoch: number, scale: Timescale = Timescale.TT) {
 	return time(J2000 + (epoch - 2000) * DAYSPERJY, 0, scale)
+}
+
+// Julian epoch year of the given time (e.g. 2026.5 for J2026.5), the inverse of
+// timeJulianYear. Computed from the Julian Date in TT: 2000 + (JD_TT - J2000) / 365.25.
+export function toJulianEpoch(time: Time): number {
+	return 2000 + (toJulianDay(tt(time)) - J2000) / DAYSPERJY
 }
 
 // Besselian epoch year as floating point value like 1950.0.
@@ -428,12 +434,12 @@ export function ut1(time: Time) {
 	if (time.cache?.ut1 !== undefined) return time.cache.ut1
 
 	if (scale === Timescale.TAI) {
-		eraTaiUt1(day, fraction, (time.providers?.ut1MinusTai ?? ut1MinusTai)(time), DAY_FRACTION)
+		eraTaiUt1(day, fraction, (time.providers?.ut1MinusTai ?? TIME_PROVIDERS.ut1MinusTai)(time), DAY_FRACTION)
 	} else if (scale === Timescale.UTC) {
-		eraUtcUt1(day, fraction, (time.providers?.dut1 ?? dut1)(time), DAY_FRACTION)
+		eraUtcUt1(day, fraction, dut1(time), DAY_FRACTION)
 	} else {
 		const u = utc(time)
-		eraUtcUt1(u.day, u.fraction, (time.providers?.dut1 ?? dut1)(u), DAY_FRACTION)
+		eraUtcUt1(u.day, u.fraction, dut1(u), DAY_FRACTION)
 	}
 
 	normalizeDayAndFraction(DAY_FRACTION[0], DAY_FRACTION[1], 0, DAY_FRACTION)
@@ -452,7 +458,7 @@ export function utc(time: Time) {
 	if (time.cache?.utc !== undefined) return time.cache.utc
 
 	if (scale === Timescale.UT1) {
-		eraUt1Utc(day, fraction, (time.providers?.dut1 ?? dut1)(time), DAY_FRACTION)
+		eraUt1Utc(day, fraction, dut1(time), DAY_FRACTION)
 	} else if (scale === Timescale.TAI) {
 		eraTaiUtc(day, fraction, DAY_FRACTION)
 	} else {
@@ -476,7 +482,7 @@ export function tai(time: Time) {
 	if (time.cache?.tai !== undefined) return time.cache.tai
 
 	if (scale === Timescale.UT1) {
-		eraUt1Tai(day, fraction, (time.providers?.ut1MinusTai ?? ut1MinusTai)(time), DAY_FRACTION)
+		eraUt1Tai(day, fraction, (time.providers?.ut1MinusTai ?? TIME_PROVIDERS.ut1MinusTai)(time), DAY_FRACTION)
 	} else if (scale === Timescale.UTC) {
 		eraUtcTai(day, fraction, DAY_FRACTION)
 	} else if (scale === Timescale.TT) {
@@ -506,13 +512,13 @@ export function tt(time: Time) {
 	} else if (scale === Timescale.TCG) {
 		eraTcgTt(day, fraction, DAY_FRACTION)
 	} else if (scale === Timescale.TDB) {
-		eraTdbTt(day, fraction, (time.providers?.tdbMinusTt ?? tdbMinusTt)(time), DAY_FRACTION)
+		eraTdbTt(day, fraction, (time.providers?.tdbMinusTt ?? TIME_PROVIDERS.tdbMinusTt)(time), DAY_FRACTION)
 	} else if (scale < Timescale.TAI) {
 		const t = tai(time)
 		eraTaiTt(t.day, t.fraction, DAY_FRACTION)
 	} else {
 		const t = tdb(time)
-		eraTdbTt(t.day, t.fraction, (time.providers?.tdbMinusTt ?? tdbMinusTt)(t), DAY_FRACTION)
+		eraTdbTt(t.day, t.fraction, (time.providers?.tdbMinusTt ?? TIME_PROVIDERS.tdbMinusTt)(t), DAY_FRACTION)
 	}
 
 	normalizeDayAndFraction(DAY_FRACTION[0], DAY_FRACTION[1], 0, DAY_FRACTION)
@@ -553,12 +559,12 @@ export function tdb(time: Time) {
 	if (time.cache?.tdb !== undefined) return time.cache.tdb
 
 	if (scale === Timescale.TT) {
-		eraTtTdb(day, fraction, (time.providers?.tdbMinusTt ?? tdbMinusTt)(time), DAY_FRACTION)
+		eraTtTdb(day, fraction, (time.providers?.tdbMinusTt ?? TIME_PROVIDERS.tdbMinusTt)(time), DAY_FRACTION)
 	} else if (scale === Timescale.TCB) {
 		eraTcbTdb(day, fraction, DAY_FRACTION)
 	} else {
 		const t = tt(time)
-		eraTtTdb(t.day, t.fraction, (time.providers?.tdbMinusTt ?? tdbMinusTt)(t), DAY_FRACTION)
+		eraTtTdb(t.day, t.fraction, (time.providers?.tdbMinusTt ?? TIME_PROVIDERS.tdbMinusTt)(t), DAY_FRACTION)
 	}
 
 	normalizeDayAndFraction(DAY_FRACTION[0], DAY_FRACTION[1], 0, DAY_FRACTION)
@@ -598,7 +604,7 @@ export function greenwichApparentSiderealTime(time: Time): Angle {
 	if (cached !== undefined) return cached
 	const u = ut1(time)
 	const t = tt(time)
-	const gast = time.providers?.gast?.(u, t) ?? eraGst06a(u.day, u.fraction, t.day, t.fraction)
+	const gast = time.providers?.gast?.(u, t) ?? TIME_PROVIDERS.gast(u, t)
 	cacheKey(cache(time), 'gast', gast)
 	return gast
 }
@@ -609,7 +615,7 @@ export function greenwichMeanSiderealTime(time: Time): Angle {
 	if (cached !== undefined) return cached
 	const u = ut1(time)
 	const t = tt(time)
-	const gmst = time.providers?.gmst?.(u, t) ?? eraGmst06(u.day, u.fraction, t.day, t.fraction)
+	const gmst = time.providers?.gmst?.(u, t) ?? TIME_PROVIDERS.gmst(u, t)
 	cacheKey(cache(time), 'gmst', gmst)
 	return gmst
 }
@@ -628,7 +634,7 @@ export function earthRotationAngle(time: Time): Angle {
 	const cached = time.cache?.era
 	if (cached !== undefined) return cached
 	const u = ut1(time)
-	const era = time.providers?.era?.(u) ?? eraEra00(u.day, u.fraction)
+	const era = time.providers?.era?.(u) ?? TIME_PROVIDERS.era(u)
 	cacheKey(cache(time), 'era', era)
 	return era
 }
@@ -638,7 +644,7 @@ export function meanObliquity(time: Time): Angle {
 	const cached = time.cache?.meanObliquity
 	if (cached !== undefined) return cached
 	const t = tt(time)
-	const meanObliquity = time.providers?.obl?.(t) ?? eraObl06(t.day, t.fraction)
+	const meanObliquity = time.providers?.obl?.(t) ?? TIME_PROVIDERS.obl(t)
 	cacheKey(cache(time), 'meanObliquity', meanObliquity)
 	return meanObliquity
 }
@@ -657,7 +663,7 @@ export function trueEclipticRotation(time: Time) {
 export function nutationAngles(time: Time): readonly [Angle, Angle] {
 	if (time.cache?.nutation !== undefined) return time.cache.nutation
 	const t = tt(time)
-	const nutation = time.providers?.nut?.(t) ?? eraNut06a(t.day, t.fraction)
+	const nutation = time.providers?.nut?.(t) ?? TIME_PROVIDERS.nut(t)
 	cacheKey(cache(time), 'nutation', nutation)
 	return nutation
 }
@@ -666,7 +672,7 @@ export function nutationAngles(time: Time): readonly [Angle, Angle] {
 export function precessionMatrix(time: Time): Mat3 {
 	if (time.cache?.precession !== undefined) return time.cache.precession
 	const t = tt(time)
-	const precession = time.providers?.pmat?.(t) ?? eraPmat06(t.day, t.fraction)
+	const precession = time.providers?.pmat?.(t) ?? TIME_PROVIDERS.pmat(t)
 	cacheKey(cache(time), 'precession', precession)
 	return precession
 }
@@ -675,7 +681,7 @@ export function precessionMatrix(time: Time): Mat3 {
 export function precessionNutationMatrix(time: Time): Mat3 {
 	if (time.cache?.precessionNutation !== undefined) return time.cache.precessionNutation
 	const t = tt(time)
-	const precessionNutation = time.providers?.pnm?.(t) ?? eraPnm06a(t.day, t.fraction)
+	const precessionNutation = time.providers?.pnm?.(t) ?? TIME_PROVIDERS.pnm(t)
 	cacheKey(cache(time), 'precessionNutation', precessionNutation)
 	return precessionNutation
 }
@@ -751,7 +757,7 @@ export const dut1: TimeDelta = (time) => {
 	const cached = time.cache?.ut1MinusUtc
 	if (cached !== undefined) return cached
 
-	const ut1MinusUtc = time.providers?.dut1 ?? iers.dut1
+	const ut1MinusUtc = time.providers?.dut1 ?? TIME_PROVIDERS.dut1
 
 	// https://github.com/astropy/astropy/blob/71a2eafd6c09f1992f8b4132e6e40ba68a675bde/astropy/time/core.py#L2554
 	// Interpolate UT1-UTC in IERS table
@@ -845,7 +851,7 @@ export const ut1MinusTai: TimeDelta = (time) => {
 	if (cached !== undefined) return cached
 	const cal = eraJdToCal(time.day, time.fraction)
 	const dat = eraDat(cal[0], cal[1], cal[2], cal[3])
-	const ut1MinusUtc = (time.providers?.dut1 ?? dut1)(time)
+	const ut1MinusUtc = dut1(time)
 	const dt = ut1MinusUtc - dat
 	cacheKey(cache(time), 'ut1MinusTai', dt)
 	return dt
@@ -853,12 +859,12 @@ export const ut1MinusTai: TimeDelta = (time) => {
 
 // Default Earth-orientation and scale-offset providers: IERS tables for polar motion and UT1, and the
 // IAU 2006/2000A ERFA models for sidereal time, obliquity, nutation, precession, and polar-motion matrices.
-export const DEFAULT_TIME_PROVIDERS: Required<Readonly<TimeProviders>> = {
+export const TIME_PROVIDERS: Required<TimeProviders> = {
 	pm: iers.xy,
 	dut1: iers.dut1,
-	tdbMinusTt: tdbMinusTt,
-	// taiMinusUtc: taiMinusUtc,
-	ut1MinusTai: ut1MinusTai,
+	tdbMinusTt,
+	// taiMinusUtc,
+	ut1MinusTai,
 	era: (u) => eraEra00(u.day, u.fraction),
 	gast: (u, t) => eraGst06a(u.day, u.fraction, t.day, t.fraction),
 	gmst: (u, t) => eraGmst06(u.day, u.fraction, t.day, t.fraction),

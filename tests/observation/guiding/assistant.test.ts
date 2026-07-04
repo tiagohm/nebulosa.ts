@@ -20,8 +20,8 @@ function frame(timestamp: number, frameId: number, patch: Partial<GuideStar> = {
 function command(raPx: number, decPx: number, patch: Partial<GuideCommand['diagnostics']> = {}, state: GuideCommand['state'] = 'guiding'): GuideCommand {
 	return {
 		state,
-		ra: { direction: null, duration: 0 },
-		dec: { direction: null, duration: 0 },
+		ra: { direction: undefined, duration: 0 },
+		dec: { direction: undefined, duration: 0 },
 		diagnostics: {
 			totalStars: 1,
 			acceptedStars: 1,
@@ -110,7 +110,7 @@ test('requires declination and image scale for polar alignment error', () => {
 	]
 
 	const withoutContext = run(samples)
-	expect(withoutContext.motion.polarAlignmentError).toBeNull()
+	expect(withoutContext.motion.polarAlignmentError).toBeUndefined()
 	expect(withoutContext.notes).toContain('image_scale_unavailable')
 	expect(withoutContext.notes).toContain('declination_unavailable')
 
@@ -339,7 +339,7 @@ test('keeps DEC backlash running until the south return is within tolerance', ()
 
 	step = assistant.addSample(frame(2000, 3), command(0, 0.4))
 	expect(step.result.status).toBe('backlash')
-	expect(step.result.backlash).toBeNull()
+	expect(step.result.backlash).toBeUndefined()
 	expect(step.pulse?.dec.direction).toBe('south')
 })
 
@@ -466,7 +466,7 @@ test('does not report passive guide failures as backlash failures', () => {
 	const result = assistant.fail('guide star lost', 1000)
 
 	expect(result.status).toBe('failed')
-	expect(result.backlash).toBeNull()
+	expect(result.backlash).toBeUndefined()
 	expect(result.recommendations.some((recommendation) => recommendation.kind === 'backlash')).toBeFalse()
 })
 
@@ -517,7 +517,7 @@ test('does not start backlash after completion', () => {
 	expect(step.pulse).toBeUndefined()
 	expect(step.result.status).toBe('completed')
 	expect(step.result.sampleCount).toBe(completed.sampleCount)
-	expect(step.result.backlash).toBeNull()
+	expect(step.result.backlash).toBeUndefined()
 })
 
 test('produces finite baseline recommendations with no samples', () => {
@@ -529,7 +529,7 @@ test('produces finite baseline recommendations with no samples', () => {
 	expect(result.meanSnr).toBe(0)
 	expect(result.meanHfd).toBe(0)
 	expect(result.motion.totalRmsPx).toBe(0)
-	expect(result.motion.driftLimitingExposure).toBeNull()
+	expect(result.motion.driftLimitingExposure).toBeUndefined()
 
 	const kinds = result.recommendations.map((recommendation) => recommendation.kind)
 	expect(kinds).toContain('exposure')
@@ -611,7 +611,7 @@ test('reports drift-limited exposure from RA min-move and clears it without drif
 		[0, 0, 0],
 		[1000, 0, 0],
 	])
-	expect(calm.motion.driftLimitingExposure).toBeNull()
+	expect(calm.motion.driftLimitingExposure).toBeUndefined()
 })
 
 test('estimates seeing from the quietest window on long runs', () => {
@@ -676,7 +676,7 @@ test('returns no polar alignment estimate near the celestial pole', () => {
 	)
 
 	expect(result.motion.dec.driftRatePxPerMinute).toBeCloseTo(2, 8)
-	expect(result.motion.polarAlignmentError).toBeNull()
+	expect(result.motion.polarAlignmentError).toBeUndefined()
 	expect(result.notes).not.toContain('declination_unavailable')
 	expect(result.recommendations.some((recommendation) => recommendation.kind === 'polar-alignment')).toBeFalse()
 })
@@ -709,7 +709,7 @@ test('recommends no compensation for negligible DEC backlash', () => {
 
 	expect(step.result.status).toBe('completed')
 	expect(step.result.backlash?.backlash).toBe(0)
-	expect(step.result.backlash?.recommendedCompensation).toBeNull()
+	expect(step.result.backlash?.recommendedCompensation).toBeUndefined()
 
 	const backlash = step.result.recommendations.find((recommendation) => recommendation.kind === 'backlash')
 	expect(backlash?.message).toContain('no compensation needed')
@@ -729,7 +729,7 @@ test('recommends single-direction guiding for excessive DEC backlash', () => {
 
 	expect(step.result.status).toBe('completed')
 	expect(step.result.backlash?.backlash).toBe(4000)
-	expect(step.result.backlash?.recommendedCompensation).toBeNull()
+	expect(step.result.backlash?.recommendedCompensation).toBeUndefined()
 
 	const decMode = step.result.recommendations.find((recommendation) => recommendation.kind === 'dec-mode')
 	expect(decMode?.appliesTo).toBe('decGuideMode')

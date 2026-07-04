@@ -650,8 +650,8 @@ export class AlpacaServer {
 
 			console.info(connect ? 'device connecting:' : 'device disconnecting:', device.name)
 
-			if (connect) this.#deviceManager.connect(device as never)
-			else this.#deviceManager.disconnect(device as never)
+			if (connect) this.#deviceManager.connect(device)
+			else this.#deviceManager.disconnect(device)
 
 			return await task.promise.then(makeResponseForTask)
 		}

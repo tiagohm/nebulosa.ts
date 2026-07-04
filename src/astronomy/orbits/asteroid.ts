@@ -291,11 +291,19 @@ export class KeplerOrbit implements OsculatingElements {
 		const pv = propagate(this.position, this.velocity, this.epoch, time, this.#propagation)
 
 		if (this.rotation) {
-			matMulVec(this.rotation, pv[0], pv[0] as never)
-			matMulVec(this.rotation, pv[1], pv[1] as never)
+			matMulVec(this.rotation, pv[0], pv[0])
+			matMulVec(this.rotation, pv[1], pv[1])
 		}
 
 		return pv
+	}
+
+	// Position (AU) on an orbit at a given true anomaly, in the orbit's output frame. This is purely
+	// geometric: it traces the orbit as a curve, independent of the epoch and mean anomaly. `trueAnomaly` is
+	// radians; the result is a freshly allocated vector.
+	positionAtTrueAnomaly(trueAnomaly: Angle) {
+		const [position] = computePositionAndVelocityFromOrbitalElements(this.semiLatusRectum, this.eccentricity, this.inclination, this.longitudeOfAscendingNode, this.argumentOfPeriapsis, trueAnomaly, this.mu)
+		return matMulVec(this.rotation, position, position)
 	}
 
 	// Creates a `KeplerOrbit` from orbital elements using mean anomaly.
@@ -625,6 +633,37 @@ export function eccentricAnomaly(v: number, e: number) {
 	else return 0
 }
 
+// Solves Kepler's equation for the eccentric anomaly (radians) from mean anomaly `M` (radians) and
+// eccentricity `e`, the inverse of meanAnomaly. Newton-Raphson on the elliptic branch (e < 1) solves
+// E - e*sin(E) = M with M wrapped to -PI..PI, and on the hyperbolic branch (e > 1) solves
+// e*sinh(H) - H = M, returning the hyperbolic anomaly H. Returns 0 for the parabolic case (e == 1),
+// matching eccentricAnomaly. Converges to double precision; the iteration is capped for safety.
+export function eccentricAnomalyFromMean(M: Angle, e: number): Angle {
+	if (e === 1) return 0
+
+	if (e < 1) {
+		// Solve on the wrapped anomaly for robust convergence, then restore the revolution of M.
+		const m = normalizePI(M)
+		// Near-parabolic ellipses converge faster starting from the apsis side of the wrapped anomaly.
+		let E = e < 0.8 ? m : m < 0 ? -Math.PI : Math.PI
+		for (let i = 0; i < 30; i++) {
+			const delta = (E - e * Math.sin(E) - m) / (1 - e * Math.cos(E))
+			E -= delta
+			if (Math.abs(delta) < 1e-14) break
+		}
+		// M - m is a whole multiple of TAU, so adding it keeps E - e*sin(E) = M with E near M.
+		return E + (M - m)
+	}
+
+	let H = Math.asinh(M / e)
+	for (let i = 0; i < 50; i++) {
+		const delta = (e * Math.sinh(H) - H - M) / (e * Math.cosh(H) - 1)
+		H -= delta
+		if (Math.abs(delta) < 1e-14) break
+	}
+	return H
+}
+
 // Eccentricity vector from `position` (AU) and `velocity` (AU/day) and `mu`. Points toward periapsis
 // with magnitude equal to the eccentricity. Writes into `o` when given, which is returned.
 export function eccentricityVector(position: CartesianCoordinate, velocity: CartesianCoordinate, mu: number, o?: MutVec3): Vec3 {
@@ -691,6 +730,19 @@ export function periapsisDistance(p: Distance, e: number): Distance {
 // Orbital period (days) from semi-major axis `a` (AU) and `mu`; Infinity for open orbits (a <= 0).
 export function period(a: Distance, mu: number) {
 	return a > 0 ? TAU * Math.sqrt(a ** 3 / mu) : Infinity
+}
+
+// Tisserand parameter of a small body relative to a perturbing planet, dimensionless.
+// T = a_p/a + 2*cos(i)*sqrt((a/a_p)*(1 - e^2)), from the small body's osculating
+// semi-major axis `a` (AU), eccentricity `e` and inclination `i` (radians, referred
+// to the perturber's orbital plane, usually the ecliptic), and the perturber's
+// semi-major axis `perturberSemiMajorAxis` (AU; Jupiter ~5.204 AU). It is nearly
+// conserved across close encounters with that planet, so it classifies orbits:
+// T > 3 is typically asteroidal, 2 < T < 3 a Jupiter-family comet, and T < 2 a
+// nearly isotropic / Halley-type orbit. Assumes a bound small-body orbit (a > 0)
+// and a positive perturber semi-major axis.
+export function tisserandParameter(a: Distance, e: number, i: Angle, perturberSemiMajorAxis: Distance): number {
+	return perturberSemiMajorAxis / a + 2 * Math.cos(i) * Math.sqrt((a / perturberSemiMajorAxis) * (1 - e * e))
 }
 
 // Semi-latus rectum (AU) from `position` (AU), `velocity` (AU/day), and `mu`.

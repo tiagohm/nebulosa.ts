@@ -53,8 +53,8 @@ export interface GuideFrame {
 
 // A commanded pulse on one mount axis.
 export interface AxisPulse {
-	// Pulse direction, or null for no motion.
-	readonly direction: GuideDirectionRA | GuideDirectionDEC | null
+	// Pulse direction, or undefined for no motion.
+	readonly direction?: GuideDirectionRA | GuideDirectionDEC
 	// Pulse duration, in milliseconds.
 	readonly duration: number
 }
@@ -81,8 +81,8 @@ export interface GuideDiagnostics {
 	readonly acceptedStars: number
 	// Accepted/total ratio in [0, 1].
 	readonly qualityScore: number
-	// Measurement mode actually used, or null when no measurement was made.
-	readonly modeUsed: GuidingMode | null
+	// Measurement mode actually used, or undefined when no measurement was made.
+	readonly modeUsed?: GuidingMode
 	// Measured guide-star X, in pixels.
 	readonly measurementX?: number
 	// Measured guide-star Y, in pixels.
@@ -259,7 +259,7 @@ interface GuiderInternalState {
 	lastGoodMeasurementY?: number
 	filteredRA: number
 	filteredDEC: number
-	lastDecDirection: GuideDirectionDEC | null
+	lastDecDirection?: GuideDirectionDEC
 	oppositeDecErrorAccum: number
 	lastDiagnostics: GuideDiagnostics
 }
@@ -431,7 +431,7 @@ export function filterGuideStars(frame: GuideFrame, config: StarFilterConfig): F
 	for (const star of frame.stars) {
 		const reason = rejectStarReason(star, config, borderRight, borderBottom, config.borderMarginPx)
 
-		if (reason !== null) {
+		if (reason !== undefined) {
 			rejectedReasons[reason] = (rejectedReasons[reason] ?? 0) + 1
 			continue
 		}
@@ -542,7 +542,7 @@ function rejectStarReason(star: GuideStar, config: StarFilterConfig, borderRight
 	if (star.ellipticity !== undefined && star.ellipticity > config.maxEllipticity) return 'elongated'
 	if (config.maxFwhm !== undefined && star.fwhm !== undefined && star.fwhm > config.maxFwhm) return 'high_fwhm'
 	if (star.x < borderLeft || star.y < borderLeft || star.x >= borderRight || star.y >= borderBottom) return 'border'
-	return null
+	return undefined
 }
 
 // Merges selector options on top of the default filtering constraints.
@@ -705,7 +705,7 @@ export function estimateTranslation(referenceStars: readonly GuideStar[], stars:
 		count++
 	}
 
-	if (count === 0) return null
+	if (count === 0) return undefined
 
 	return robustWeightedTranslation(dx, dy, weights, count, outlierSigma)
 }
@@ -734,7 +734,7 @@ function robustWeightedTranslation(dx: Float64Array, dy: Float64Array, weights: 
 		if (Math.abs(residual[i] - median) <= threshold) kept++
 	}
 
-	if (kept === 0) return null
+	if (kept === 0) return undefined
 	if (kept === count) return { ...initial, matches: count }
 
 	const fdx = new Float64Array(kept)
@@ -778,7 +778,7 @@ export function applyDeadband(error: number, minMove: number) {
 }
 
 // Sentinel axis pulse representing no commanded motion on one axis.
-export const NO_PULSE: AxisPulse = { direction: null, duration: 0 }
+export const NO_PULSE: AxisPulse = Object.freeze({ direction: undefined, duration: 0 })
 
 // Pristine internal state cloned on construction and reset; all counters and filters start cleared.
 const EMPTY_STATE: Readonly<GuiderInternalState> = {
@@ -802,14 +802,14 @@ const EMPTY_STATE: Readonly<GuiderInternalState> = {
 	lastGoodMeasurementY: undefined,
 	filteredRA: 0,
 	filteredDEC: 0,
-	lastDecDirection: null,
+	lastDecDirection: undefined,
 	oppositeDecErrorAccum: 0,
 	lastCadence: 0,
 	lastDiagnostics: {
 		totalStars: 0,
 		acceptedStars: 0,
 		qualityScore: 0,
-		modeUsed: null,
+		modeUsed: undefined,
 		rejectedReasons: {},
 		badFrame: true,
 		lostFrames: 0,
@@ -890,18 +890,18 @@ export class Guider {
 		if (droppedFrame) notes.push('dropped_frame')
 
 		let badFrame = filtered.accepted.length === 0 || filtered.qualityScore < this.config.minFrameQuality
-		let measurement: TranslationMeasurement | null = null
+		let measurement: TranslationMeasurement | undefined
 
 		if (!badFrame) {
 			measurement = this.#measureTranslation(filtered.accepted)
 
-			if (measurement === null) {
+			if (measurement === undefined) {
 				badFrame = true
 				notes.push('measurement_failed')
 			}
 		}
 
-		if (!badFrame && measurement !== null && this.#isImpossibleJump(measurement)) {
+		if (!badFrame && measurement !== undefined && this.#isImpossibleJump(measurement)) {
 			badFrame = true
 			notes.push('jump_rejected')
 		}
@@ -909,7 +909,7 @@ export class Guider {
 		if (badFrame) {
 			this.state.consecutiveBadFrames++
 			if (this.state.consecutiveBadFrames >= this.config.lostStarFrameCount) this.state.state = 'lost'
-			this.#updateDiagnostics(frame, filtered, null, droppedFrame, true, notes)
+			this.#updateDiagnostics(frame, filtered, undefined, droppedFrame, true, notes)
 			return { state: this.state.state, ra: NO_PULSE, dec: NO_PULSE, diagnostics: this.state.lastDiagnostics }
 		}
 
@@ -983,7 +983,7 @@ export class Guider {
 		const filtered = filterGuideStars(frame, this.config.filter)
 
 		if (filtered.accepted.length === 0) {
-			this.#updateDiagnostics(frame, filtered, null, false, true, ['init_waiting'])
+			this.#updateDiagnostics(frame, filtered, undefined, false, true, ['init_waiting'])
 			return
 		}
 
@@ -991,7 +991,7 @@ export class Guider {
 		const preferred = previous === undefined ? pickInitialLockStar(filtered.accepted, this.config.initialPosition) : pickNearestGuideStar(filtered.accepted, previous.x, previous.y)
 
 		if (preferred === undefined) {
-			this.#updateDiagnostics(frame, filtered, null, false, true, ['init_no_star'])
+			this.#updateDiagnostics(frame, filtered, undefined, false, true, ['init_no_star'])
 			return
 		}
 
@@ -1063,11 +1063,11 @@ export class Guider {
 	}
 
 	// Measures current guide position using configured mode with fallback.
-	#measureTranslation(stars: readonly GuideStar[]): TranslationMeasurement | null {
+	#measureTranslation(stars: readonly GuideStar[]): TranslationMeasurement | undefined {
 		if (this.config.mode === 'multi-star' && this.state.referenceStars.length > 1 && stars.length > 1) {
 			const translation = estimateTranslation(this.state.referenceStars, stars, this.config.maxMatchDistancePx, this.config.outlierSigma)
 
-			if (translation !== null) {
+			if (translation !== undefined) {
 				return {
 					x: this.state.measurementOriginX + translation.dx,
 					y: this.state.measurementOriginY + translation.dy,
@@ -1078,7 +1078,7 @@ export class Guider {
 		}
 
 		const single = pickNearestGuideStar(stars, this.state.measurementOriginX, this.state.measurementOriginY)
-		if (single === undefined) return null
+		if (single === undefined) return undefined
 		return { x: single.x, y: single.y, usedMode: 'single-star', matches: 1 }
 	}
 
@@ -1141,7 +1141,7 @@ export class Guider {
 
 		const last = this.state.lastDecDirection
 
-		if (last !== null && last !== direction) {
+		if (last !== undefined && last !== direction) {
 			if (magnitude < this.config.decReversalThreshold) return NO_PULSE
 			this.state.oppositeDecErrorAccum += magnitude
 			if (this.state.oppositeDecErrorAccum < this.config.decBacklashAccumThreshold) return NO_PULSE
@@ -1156,13 +1156,13 @@ export class Guider {
 	}
 
 	// Updates diagnostics payload for telemetry and testing.
-	#updateDiagnostics(frame: GuideFrame, filtered: FilteredStars, measurement: DiagnosticMeasurement | null, droppedFrame: boolean, badFrame: boolean, notes: readonly string[]) {
+	#updateDiagnostics(frame: GuideFrame, filtered: FilteredStars, measurement: DiagnosticMeasurement | undefined, droppedFrame: boolean, badFrame: boolean, notes: readonly string[]) {
 		this.state.lastDiagnostics = {
 			frameId: frame.frameId,
 			totalStars: frame.stars.length,
 			acceptedStars: filtered.accepted.length,
 			qualityScore: filtered.qualityScore,
-			modeUsed: measurement?.modeUsed ?? null,
+			modeUsed: measurement?.modeUsed,
 			measurementX: measurement?.measurementX,
 			measurementY: measurement?.measurementY,
 			referenceX: this.state.referenceX,

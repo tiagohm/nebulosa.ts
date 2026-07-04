@@ -234,7 +234,6 @@ export function gauss(obs1: GaussObservation, obs2: GaussObservation, obs3: Gaus
 }
 
 function resolveOptions(options: GaussOptions): ResolvedGaussOptions {
-	if (options === undefined || options === null) throw new TypeError('gauss options are required')
 	validatePositiveFinite(options.mu)
 	const minPositiveRho = validateNonNegativeFinite(options.minPositiveRho ?? DEFAULT_MIN_POSITIVE_RHO)
 	const maxIterations = validatePositiveFinite(options.maxIterations ?? DEFAULT_MAX_ITERATIONS)

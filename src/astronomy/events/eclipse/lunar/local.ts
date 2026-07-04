@@ -96,16 +96,16 @@ export interface LocalLunarEclipseVisibility {
 
 // Maximal magnitudes and phase durations for the local circumstances panel.
 export interface LocalLunarEclipseDetails {
-	// Maximal umbral magnitude (eclipse magnitude for total/partial), or null for a penumbral eclipse.
-	readonly maximalUmbralMagnitude: number | null
+	// Maximal umbral magnitude (eclipse magnitude for total/partial), or undefined for a penumbral eclipse.
+	readonly maximalUmbralMagnitude?: number
 	// Maximal penumbral magnitude at greatest eclipse.
 	readonly maximalPenumbralMagnitude: number
 	// Penumbral-phase duration P4 - P1 in seconds.
 	readonly penumbralPhaseDuration: number
-	// Partial (umbral) phase duration U4 - U1 in seconds, or null when there is no umbral phase.
-	readonly partialPhaseDuration: number | null
-	// Total phase duration U3 - U2 in seconds, or null when there is no total phase.
-	readonly totalPhaseDuration: number | null
+	// Partial (umbral) phase duration U4 - U1 in seconds, or undefined when there is no umbral phase.
+	readonly partialPhaseDuration?: number
+	// Total phase duration U3 - U2 in seconds, or undefined when there is no total phase.
+	readonly totalPhaseDuration?: number
 	// Total time (seconds) the Moon is at or above the horizon within the penumbral interval, integrated from the
 	// continuous visibility samples (refining any interval that may hide a sub-sample horizon crossing, so it
 	// stays consistent with hasObservableEclipse). Never exceeds penumbralPhaseDuration.
@@ -672,11 +672,11 @@ export function computeLocalLunarEclipseCircumstances(eclipse: LunarEclipse, lon
 	const [, maximalPenumbralMagnitude] = shadowMagnitudes(Math.abs(eclipse.gamma), eclipse.u)
 
 	const details: LocalLunarEclipseDetails = {
-		maximalUmbralMagnitude: eclipse.type === 'PENUMBRAL' ? null : eclipse.magnitude,
+		maximalUmbralMagnitude: eclipse.type === 'PENUMBRAL' ? undefined : eclipse.magnitude,
 		maximalPenumbralMagnitude,
 		penumbralPhaseDuration: p1 && p4 ? (p4.jd - p1.jd) * DAYSEC : 0,
-		partialPhaseDuration: events.U1 && events.U4 ? (events.U4.jd - events.U1.jd) * DAYSEC : null,
-		totalPhaseDuration: events.U2 && events.U3 ? (events.U3.jd - events.U2.jd) * DAYSEC : null,
+		partialPhaseDuration: events.U1 && events.U4 ? (events.U4.jd - events.U1.jd) * DAYSEC : undefined,
+		totalPhaseDuration: events.U2 && events.U3 ? (events.U3.jd - events.U2.jd) * DAYSEC : undefined,
 		observableDuration,
 	}
 
@@ -826,8 +826,8 @@ export interface LocalLunarEclipseViewGeometry {
 	// The contact the caller requested as the primary state.
 	readonly requestedEvent: LunarEclipseContactKind
 	// The contact actually drawn as primary: the requested one when available, else MAX, else the first
-	// available contact, or null when no contact exists.
-	readonly selectedEvent: LunarEclipseContactKind | null
+	// available contact, or undefined when no contact exists.
+	readonly selectedEvent?: LunarEclipseContactKind
 	// Umbra circle radius in SVG pixels.
 	readonly umbraRadiusPx: number
 	// All drawable shapes, in painter order.
@@ -862,7 +862,7 @@ function selectPrimaryEvent(events: Partial<Record<LunarEclipseContactKind, Loca
 		if (event) return event
 	}
 
-	return null
+	return undefined
 }
 
 // Shadow-center (disk-placement) direction of a resolved event: the reported limb-contact P angle, undoing the
@@ -1026,7 +1026,7 @@ export function computeLocalLunarEclipseViewGeometry(circumstances: Pick<LocalLu
 		height: resolved.height,
 		orientationMode: resolved.orientationMode,
 		requestedEvent: resolved.selectedEvent,
-		selectedEvent: primary ? primary.kind : null,
+		selectedEvent: primary ? primary.kind : undefined,
 		umbraRadiusPx: resolved.umbraRadiusPx,
 		shapes,
 	}

@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { deg, normalizePI } from '../../../src/math/units/angle'
 // oxfmt-ignore
-import { AzimuthalEquidistant, Balthasart, Behrmann, Braun, CentralCylindrical, CylindricalEqualArea, CylindricalEquidistant, CylindricalStereographic, EllipsoidalMercator, Gall, GallPeters, Gnomonic, HoboDyer, LambertAzimuthalEqualArea, LambertCylindricalEqualArea, Mercator, Miller, Orthographic, PlateCarree, projectMany, projectPolyline, Stereographic, TrystanEdwards, WEB_MERCATOR_MAX_LATITUDE, WebMercator, } from '../../../src/astronomy/projections/projection'
+import { AzimuthalEquidistant, Balthasart, Behrmann, Braun, CentralCylindrical, CylindricalEqualArea, CylindricalEquidistant, CylindricalStereographic, EllipsoidalMercator, Gall, GallPeters, Gnomonic, HoboDyer, LambertAzimuthalEqualArea, LambertCylindricalEqualArea, Mercator, Miller, Orthographic, PlateCarree, projectMany, projectPolygon, projectPolyline, Stereographic, TrystanEdwards, WEB_MERCATOR_MAX_LATITUDE, WebMercator, } from '../../../src/astronomy/projections/projection'
 import { PI, PIOVERTWO } from '../../../src/core/constants'
 import { sphericalSeparation, type Point } from '../../../src/math/numerical/geometry'
 
@@ -428,4 +428,34 @@ test('anti-meridian polylines are split before projection', () => {
 	expect(lines).toHaveLength(2)
 	expect(lines[0]).toHaveLength(1)
 	expect(lines[1]).toHaveLength(1)
+})
+
+test('polyline densification inserts intermediate projected points', () => {
+	const lines = projectPolyline(
+		new PlateCarree(),
+		[
+			{ x: 0, y: 0 },
+			{ x: deg(30), y: deg(10) },
+		],
+		{ maxSegmentRadians: deg(10) },
+	)
+
+	expect(lines).toHaveLength(1)
+	expect(lines[0].length).toBeGreaterThan(2)
+	expect(lines[0][1].x).toBeCloseTo(deg(10), 12)
+})
+
+test('projectPolygon projects each ring through projectPolyline', () => {
+	const polygon = projectPolygon(new PlateCarree(), [
+		[
+			{ x: deg(170), y: 0 },
+			{ x: deg(179), y: 0 },
+			{ x: deg(-179), y: 0 },
+		],
+	])
+
+	expect(polygon).toHaveLength(1)
+	expect(polygon[0]).toHaveLength(2)
+	expect(polygon[0][0]).toHaveLength(2)
+	expect(polygon[0][1]).toHaveLength(1)
 })

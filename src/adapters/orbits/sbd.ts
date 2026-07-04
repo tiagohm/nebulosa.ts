@@ -1,8 +1,8 @@
+import { DATE_FORMAT, formatTemporal, type Temporal, temporalNow } from '../../astronomy/time/temporal'
+import type { Time } from '../../astronomy/time/time'
 import { DEG2RAD } from '../../core/constants'
 import { type Angle, type FormatAngleOptions, formatAngle, toDeg } from '../../math/units/angle'
 import { type Distance, toKilometer } from '../../math/units/distance'
-import { DATE_FORMAT, formatTemporal, type Temporal, temporalNow } from '../time/temporal'
-import type { Time } from '../time/time'
 
 // Thin client for the JPL Solar System Dynamics small-body web services: the SBDB lookup (search),
 // the sb_ident field-of-view identification, and the close-approach data (CAD) endpoint. The

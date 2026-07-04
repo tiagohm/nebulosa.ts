@@ -125,6 +125,21 @@ test('iersAB prefers B in range and otherwise picks the nearest edge table', () 
 	expectXY(iers.xy(t), arcsec(2), arcsec(3))
 })
 
+test('iersAB clear empties both source tables and load is unsupported', () => {
+	const a = new IersATest()
+	const b = new IersBTest()
+	a.set([60000], [1], [2], [3])
+	b.set([60001], [4], [5], [6])
+
+	const iers = new IersAB(a, b)
+	expectDut1(iers.dut1(timeMJD(60000, Timescale.UTC)), 3)
+
+	iers.clear()
+	expectDut1(iers.dut1(timeMJD(60000, Timescale.UTC)), 0)
+	expectXY(iers.xy(timeMJD(60001, Timescale.UTC)), 0, 0)
+	expect(() => iers.load(bufferSource(Buffer.from('')))).toThrow('not supported')
+})
+
 test('iersA load keeps zero-valued finals columns', async () => {
 	const rows = [
 		fixedWidthLine(188, [

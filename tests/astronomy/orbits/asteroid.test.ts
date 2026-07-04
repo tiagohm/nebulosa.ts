@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import type { CartesianCoordinate } from '../../../src/astronomy/coordinates/coordinate'
-import { KeplerOrbit, eccentricAnomaly, meanAnomaly, mpcAsteroid, mpcComet, stumpff, timeSincePeriapsis, trueAnomalyHyperbolic, trueAnomalyParabolic } from '../../../src/astronomy/orbits/asteroid'
+import { KeplerOrbit, eccentricAnomaly, eccentricAnomalyFromMean, eccentricityVector, inclination, longitudeOfAscendingNode, meanAnomaly, mpcAsteroid, mpcComet, stumpff, timeSincePeriapsis, tisserandParameter, trueAnomalyHyperbolic, trueAnomalyParabolic } from '../../../src/astronomy/orbits/asteroid'
 import { mpcorb, mpcorbComet } from '../../../src/astronomy/orbits/mpcorb'
 import { Timescale, time, timeYMDHMS } from '../../../src/astronomy/time/time'
 import { GM_SUN_PITJEVA_2005 } from '../../../src/core/constants'
@@ -115,6 +115,19 @@ test('propagation at epoch preserves the input state without rotation', () => {
 	}
 })
 
+test('positionAtTrueAnomaly evaluates the orbital curve independent of epoch', () => {
+	const orbit = KeplerOrbit.trueAnomaly(1, 0.2, 0, 0, 0, 0, t, GM_SUN_PITJEVA_2005, matIdentity())
+	const periapsis = orbit.positionAtTrueAnomaly(0)
+	const apoapsis = orbit.positionAtTrueAnomaly(Math.PI)
+
+	expect(periapsis[0]).toBeCloseTo(orbit.periapsisDistance, 15)
+	expect(periapsis[1]).toBeCloseTo(0, 15)
+	expect(periapsis[2]).toBeCloseTo(0, 15)
+	expect(apoapsis[0]).toBeCloseTo(-orbit.apoapsisDistance, 15)
+	expect(apoapsis[1]).toBeCloseTo(0, 15)
+	expect(apoapsis[2]).toBeCloseTo(0, 15)
+})
+
 test('stumpff', () => {
 	expect(stumpff(-2)).toEqual([2.178183556608571, 1.368298872008591, 0.5890917783042855, 0.18414943600429545])
 	expect(stumpff(0.5)).toEqual([0.7602445970756302, 0.9187253698655684, 0.4795108058487397, 0.16254926026886313])
@@ -164,4 +177,53 @@ test('circular equatorial true anomaly', () => {
 	expect(prograde.trueAnomaly).toBeCloseTo(Math.PI / 2, 14)
 	expect(prograde.trueLongitude).toBeCloseTo(Math.PI / 2, 14)
 	expect(retrograde.trueAnomaly).toBeCloseTo(Math.PI / 2, 14)
+})
+
+test('tisserand parameter is 3 for a circular coplanar orbit at the perturber distance', () => {
+	// a = a_p, e = 0, i = 0 -> T = 1 + 2*sqrt(1) = 3 exactly.
+	expect(tisserandParameter(5.2044, 0, 0, 5.2044)).toBeCloseTo(3, 12)
+	// Synthetic interior circular coplanar orbit: T = a_p/a + 2*sqrt(a/a_p).
+	expect(tisserandParameter(2, 0, 0, 5.2044)).toBeCloseTo(3.8420229, 6)
+})
+
+test('tisserand parameter is above 3 for a main-belt asteroid', () => {
+	// Ceres-like elements relative to Jupiter (a_p = 5.2044 AU).
+	const t = tisserandParameter(2.7658, 0.0785, 0.184899, 5.2044)
+	expect(t).toBeCloseTo(3.3103, 3)
+	expect(t).toBeGreaterThan(3)
+})
+
+test('eccentricAnomalyFromMean inverts meanAnomaly across the elliptic range', () => {
+	for (const e of [0, 0.1, 0.5, 0.9, 0.99]) {
+		for (const Mdeg of [0, 30, 90, 175, 270, 359]) {
+			const M = (Mdeg * Math.PI) / 180
+			const E = eccentricAnomalyFromMean(M, e)
+			// Kepler's equation must hold and round-trip through meanAnomaly.
+			expect(E - e * Math.sin(E)).toBeCloseTo(M, 11)
+			expect(meanAnomaly(E, e)).toBeCloseTo(M, 11)
+		}
+	}
+})
+
+test('eccentricAnomalyFromMean solves the hyperbolic branch', () => {
+	const e = 1.5
+	for (const M of [-3, -0.5, 0.5, 2, 8]) {
+		const H = eccentricAnomalyFromMean(M, e)
+		expect(e * Math.sinh(H) - H).toBeCloseTo(M, 10)
+	}
+	// Parabolic case is undefined and returns 0, matching eccentricAnomaly.
+	expect(eccentricAnomalyFromMean(1, 1)).toBe(0)
+})
+
+test('eccentricity vector and node angles handle circular and inclined states', () => {
+	const circular = eccentricityVector([1, 0, 0], [0, 1, 0], 1)
+	expect(circular[0]).toBeCloseTo(0, 15)
+	expect(circular[1]).toBeCloseTo(0, 15)
+	expect(circular[2]).toBeCloseTo(0, 15)
+
+	const h = [1, -1, 1] as const
+	const i = inclination(h)
+	expect(i).toBeCloseTo(Math.atan2(Math.SQRT2, 1), 15)
+	expect(longitudeOfAscendingNode(h, i)).toBeCloseTo(Math.PI / 4, 15)
+	expect(longitudeOfAscendingNode([0, 0, 1], 0)).toBe(0)
 })

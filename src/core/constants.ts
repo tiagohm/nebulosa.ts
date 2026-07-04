@@ -119,6 +119,15 @@ export const SPEED_OF_LIGHT_AU_DAY = (SPEED_OF_LIGHT * DAYSEC) / AU_M
 // Earth radius in km
 export const EARTH_RADIUS_KM = 6378.135
 
+// Earth equatorial radius in AU, used both as the ITRS scale and as the occulting-disk radius.
+export const EARTH_RADIUS_AU = EARTH_RADIUS_KM / AU_KM
+
+// Solar photospheric radius in km (IAU 2015 nominal radius).
+export const SUN_RADIUS_KM = 695700
+
+// Solar photospheric radius in AU (IAU 2015 nominal radius).
+export const SUN_RADIUS_AU = SUN_RADIUS_KM / AU_KM
+
 // Radians to degrees.
 export const RAD2DEG = 180 / PI
 
@@ -193,6 +202,11 @@ export const GM_SUN_PITJEVA_2005 = (GM_SUN_PITJEVA_2005_KM3_S2 * DAYSEC * DAYSEC
 export const MU_KM3_S2_TO_AU3_D2 = (DAYSEC * DAYSEC) / AU_KM / AU_KM / AU_KM
 // Conversion factor for a gravitational parameter from AU³/day² to km³/s².
 export const MU_AU3_D2_TO_KM3_S2 = (AU_KM * AU_KM * AU_KM) / (DAYSEC * DAYSEC)
+
+// Earth gravitational parameter (GM_Earth) in km³/s², from JPL DE440.
+export const GM_EARTH_KM3_S2 = 398600.435436
+// Earth gravitational parameter (GM_Earth) in AU³/day², from JPL DE440.
+export const GM_EARTH = GM_EARTH_KM3_S2 * MU_KM3_S2_TO_AU3_D2
 
 // Heliocentric gravitational constant in meters^3 / second^2, from DE-405.
 export const GS = 1.32712440017987e20

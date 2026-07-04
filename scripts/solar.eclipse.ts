@@ -51,12 +51,12 @@ function catalogAssert(condition: boolean, description: string) {
 	if (!condition) throw new Error(description)
 }
 
-function marker(point: Point | undefined | null, label: string, color: string) {
+function marker(point: Point | undefined, label: string, color: string) {
 	return point ? `<circle cx="${point.x.toFixed(2)}" cy="${point.y.toFixed(2)}" r="3" fill="${color}"/><text x="${(point.x + 5).toFixed(2)}" y="${(point.y - 5).toFixed(2)}">${label}</text>` : ''
 }
 
 function makeSvg(paths: SolarEclipseMapSvgPaths, width: number, height: number) {
-	return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}"><style>.ocean { fill: #103099; } .umbra { fill: none; stroke: #FFE66D; stroke-width: 2; stroke-linecap: round; } .center { fill: none; stroke: #FF2ED1; stroke-width: 2; stroke-linecap: round; } .penumbra { fill: none; stroke: #FF9F1C; stroke-width: 2; stroke-linecap: round; } .riseset { fill: none; stroke: #00E5FF; stroke-width: 2; }text { font: 14px sans-serif; font-weight: bold; fill: #fff; }</style><rect class="ocean" x="0" y="0" width="${width}" height="${height}"/><path class="penumbra" d="${paths.penumbraNorth}"/><path class="penumbra" d="${paths.penumbraSouth}"/><path class="riseset" d="${paths.riseSetCurves}"/><path class="umbra" d="${paths.umbraNorth}"/><path class="umbra" d="${paths.umbraSouth}"/><path class="center" d="${paths.centerLine}"/>${marker(paths.points.P1, 'P1', '#FF9F1C')}${marker(paths.points.P4, 'P4', '#FF9F1C')}${marker(paths.points.P2, 'P2', '#FF9F1C')}${marker(paths.points.P3, 'P3', '#FF9F1C')}${marker(paths.points.U1, 'U1', '#FFE66D')}${marker(paths.points.U4, 'U4', '#FFE66D')}${marker(paths.points.U2, 'U2', '#FFE66D')}${marker(paths.points.U3, 'U3', '#FFE66D')}${marker(paths.points.C1, 'C1', '#FF7BEA')}${marker(paths.points.C2, 'C2', '#FF7BEA')}${marker(paths.points.N1, 'N1', '#35FF7A')}${marker(paths.points.N2, 'N2', '#35FF7A')}${marker(paths.points.S1, 'S1', '#FF4D4D')}${marker(paths.points.S2, 'S2', '#FF4D4D')}${marker(paths.points.Max, 'Max', '#FFFFFF')}</svg>`
+	return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}"><style>.ocean { fill: #103099; } .umbra { fill: none; stroke: #FFE66D; stroke-width: 2; stroke-linecap: round; } .center { fill: none; stroke: #FF2ED1; stroke-width: 2; stroke-linecap: round; } .penumbra { fill: none; stroke: #FF9F1C; stroke-width: 2; stroke-linecap: round; } .riseset { fill: none; stroke: #00E5FF; stroke-width: 2; }text { font: 14px sans-serif; font-weight: bold; fill: #fff; }</style><rect class="ocean" x="0" y="0" width="${width}" height="${height}"/><path class="penumbra" d="${paths.penumbraNorth}"/><path class="penumbra" d="${paths.penumbraSouth}"/><path class="riseset" d="${paths.riseSetCurves}"/><path class="umbra" d="${paths.umbraNorth}"/><path class="umbra" d="${paths.umbraSouth}"/><path class="center" d="${paths.centerLine}"/>${marker(paths.points.P1, 'P1', '#FF9F1C')}${marker(paths.points.P4, 'P4', '#FF9F1C')}${marker(paths.points.P2, 'P2', '#FF9F1C')}${marker(paths.points.P3, 'P3', '#FF9F1C')}${marker(paths.points.U1, 'U1', '#FFE66D')}${marker(paths.points.U4, 'U4', '#FFE66D')}${marker(paths.points.U2, 'U2', '#FFE66D')}${marker(paths.points.U3, 'U3', '#FFE66D')}${marker(paths.points.C1, 'C1', '#FF7BEA')}${marker(paths.points.C2, 'C2', '#FF7BEA')}${marker(paths.points.N1, 'N1', '#35FF7A')}${marker(paths.points.N2, 'N2', '#35FF7A')}${marker(paths.points.S1, 'S1', '#FF4D4D')}${marker(paths.points.S2, 'S2', '#FF4D4D')}${marker(paths.points.MAX, 'MAX', '#FFFFFF')}</svg>`
 }
 
 function validateCatalogPoint(point: SolarEclipseGeoPoint, name: string, requireJd: boolean) {
@@ -244,8 +244,8 @@ function validateCatalogGeometry(eclipse: SolarEclipse, elements: PolynomialBess
 	}
 
 	validateOptionalOrder(points.P1, points.P2, 'P1/P2')
-	validateOptionalOrder(points.P2, points.Max, 'P2/Max')
-	validateOptionalOrder(points.Max, points.P3, 'Max/P3')
+	validateOptionalOrder(points.P2, points.MAX, 'P2/MAX')
+	validateOptionalOrder(points.MAX, points.P3, 'MAX/P3')
 	validateOptionalOrder(points.P3, points.P4, 'P3/P4')
 	validateOptionalOrder(points.N1, points.N2, 'N1/N2')
 	validateOptionalOrder(points.S1, points.S2, 'S1/S2')

@@ -123,7 +123,7 @@ export async function* readSaoCatalog(source: Source, bigEndian: boolean): Async
 		const pmRA = mprop ? readFloat() : undefined
 		const pmDEC = mprop ? readFloat() : undefined
 
-		yield { id, epoch: SAO_EPOCH, rightAscension, declination, spType, magnitude, pmRA, pmDEC } as SaoCatalogEntry
+		yield { id, epoch: SAO_EPOCH, rightAscension, declination, spType, magnitude, pmRA, pmDEC }
 	}
 }
 

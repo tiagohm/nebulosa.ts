@@ -98,12 +98,12 @@ for (const { title, tle, results } of VALLADO_CASES) {
 
 test('TEME to ITRF by GMST matches reference rotation', () => {
 	const itrf = temeToItrfByGmst([6400, 0, 0], 10)
-	expectVector(itrf as unknown as number[], [-5370.057786089295, 3481.7351096919665, 0], 9)
+	expectVector(itrf, [-5370.057786089295, 3481.7351096919665, 0], 9)
 })
 
 test('ITRF to TEME by GMST matches reference rotation', () => {
 	const teme = itrfToTemeByGmst([5555, 3000, 0], 100)
-	expectVector(teme as unknown as number[], [6309.278258887361, -225.90451950165834, 0], 9)
+	expectVector(teme, [6309.278258887361, -225.90451950165834, 0], 9)
 })
 
 test('TEME and ITRF state conversion round-trips', () => {

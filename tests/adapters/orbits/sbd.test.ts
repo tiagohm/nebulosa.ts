@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { closeApproaches, identify, search } from '../../../src/astronomy/orbits/sbd'
+import { closeApproaches, identify, search } from '../../../src/adapters/orbits/sbd'
 import { temporalFromDate } from '../../../src/astronomy/time/temporal'
 import { deg, parseAngle } from '../../../src/math/units/angle'
 import { kilometer } from '../../../src/math/units/distance'

@@ -89,8 +89,8 @@ export interface TrendLineRegression extends Regression, MinimumPointRegression 
 	readonly left: LinearRegression
 	// Linear fit of the ascending (right) branch.
 	readonly right: LinearRegression
-	// Intersection of the left and right trend lines, or null when they are parallel or degenerate.
-	readonly intersection: Readonly<Point> | null
+	// Intersection of the left and right trend lines, or undefined when they are parallel or degenerate.
+	readonly intersection?: Readonly<Point>
 }
 
 // A least-squares fit in the Chebyshev polynomial basis T_0..T_degree.
@@ -558,17 +558,17 @@ export function regressionScore(regression: Regression, x: Readonly<NumberArray>
 	return { r, r2, rss, rmsd }
 }
 
-// Computes the intersection point of two lines, or null when they are parallel or degenerate.
-export function intersect(a: LinearRegression, b: LinearRegression): Readonly<Point> | null {
+// Computes the intersection point of two lines, or undefined when they are parallel or degenerate.
+export function intersect(a: LinearRegression, b: LinearRegression): Readonly<Point> | undefined {
 	const denominator = a.slope - b.slope
 
 	// Parallel lines (equal slopes) and degenerate fits (non-finite slope difference) have no intersection.
-	if (denominator === 0 || !Number.isFinite(denominator)) return null
+	if (denominator === 0 || !Number.isFinite(denominator)) return undefined
 
 	const x = (b.intercept - a.intercept) / denominator
 	const y = a.slope * x + a.intercept
 
-	if (!Number.isFinite(x) || !Number.isFinite(y)) return null
+	if (!Number.isFinite(x) || !Number.isFinite(y)) return undefined
 
 	return { x, y }
 }

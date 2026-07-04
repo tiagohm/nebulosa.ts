@@ -70,8 +70,8 @@ export interface StarMatchingConfig {
 	readonly maxScaleRatio?: number
 	// Minimum accepted scale ratio between frames.
 	readonly minScaleRatio?: number
-	// Maximum accepted rotation magnitude (radians), or null to allow any.
-	readonly maxRotation?: Angle | null
+	// Maximum accepted rotation magnitude (radians), or undefined/null to allow any.
+	readonly maxRotation?: Angle | undefined | null
 	// Cap on RANSAC-style hypothesis iterations.
 	readonly ransacIterations?: number
 	// Minimum inliers required to accept a transform.
@@ -1026,9 +1026,9 @@ function fitAffinePoints(current: readonly Point[], reference: readonly Point[],
 function transformPlausible(transform: SimilarityTransform, config: ReturnType<typeof resolveConfig>) {
 	const scale = Math.hypot(transform.a, transform.b)
 	if (!Number.isFinite(scale) || scale < config.minScaleRatio || scale > config.maxScaleRatio) return false
-	const maxRotation = config.maxRotation ?? null
+	const maxRotation = config.maxRotation
 
-	if (maxRotation !== null) {
+	if (maxRotation !== undefined && maxRotation !== null) {
 		const rotation = normalizePI(Math.atan2(transform.b, transform.a))
 		if (Math.abs(rotation) > maxRotation) return false
 	}

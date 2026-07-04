@@ -109,7 +109,7 @@ describe('per-contact magnitudes', () => {
 	test('penumbral-only eclipse exposes its penumbral magnitude at MAX', () => {
 		const localPen = computeLocalLunarEclipseCircumstances(PENUMBRAL, FAST_LONGITUDE, FAST_LATITUDE, fastSunMoonPosition, { altitudeSamples: 4 })
 		expect(localPen.events.MAX!.penumbralMagnitude).toBeCloseTo(PENUMBRAL.magnitude, 6)
-		expect(localPen.details.maximalUmbralMagnitude).toBeNull()
+		expect(localPen.details.maximalUmbralMagnitude).toBeUndefined()
 	})
 })
 
@@ -382,7 +382,7 @@ describe('P/Z orientation angles and Alt/Az', () => {
 
 	test('partial eclipse has no total phase duration', () => {
 		const localPartial = computeLocalLunarEclipseCircumstances(PARTIAL, FAST_LONGITUDE, FAST_LATITUDE, fastSunMoonPosition, { altitudeSamples: 4 })
-		expect(localPartial.details.totalPhaseDuration).toBeNull()
+		expect(localPartial.details.totalPhaseDuration).toBeUndefined()
 		expect(localPartial.details.partialPhaseDuration).toBeGreaterThan(0)
 	})
 

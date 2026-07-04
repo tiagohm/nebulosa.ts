@@ -2634,10 +2634,7 @@ export class CameraSimulator extends DeviceSimulator {
 
 		const type = this.catalogSourceType
 		const catalogSource = this.options?.catalogSources?.[type]
-		const stars =
-			catalogSource !== undefined && catalogSource !== null && centerRightAscension !== undefined && centerDeclination !== undefined && radius > 0
-				? this.#mapCatalogCatalogStarsToAstronomicalImageStars(await catalogSource(centerRightAscension, centerDeclination, radius), centerRightAscension, centerDeclination, ps)
-				: this.#randomSource()
+		const stars = catalogSource && centerRightAscension !== undefined && centerDeclination !== undefined && radius > 0 ? this.#mapCatalogCatalogStarsToAstronomicalImageStars(await catalogSource(centerRightAscension, centerDeclination, radius), centerRightAscension, centerDeclination, ps) : this.#randomSource()
 		this.#catalog = stars
 		this.#catalogKey = key
 		this.#catalogDirty = false

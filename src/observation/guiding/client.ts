@@ -442,7 +442,7 @@ export class GuiderClient {
 
 	// Returns the current lock target if one has been selected or acquired.
 	getLockPosition() {
-		return this.#lockPosition ?? null
+		return this.#lockPosition
 	}
 
 	// Returns whether lock-shift drift compensation is enabled.
@@ -867,7 +867,7 @@ export class GuiderClient {
 
 	// Sends one axis pulse if guide output is enabled and returns the applied delay.
 	#pulseAxis(direction?: AxisPulse['direction'], duration?: number, force: boolean = false) {
-		if (this.#guideOutput === undefined || this.#paused || (!force && !this.#guideOutputActive) || direction === undefined || direction === null || duration === undefined || duration <= 0 || !Number.isFinite(duration)) return 0
+		if (this.#guideOutput === undefined || this.#paused || (!force && !this.#guideOutputActive) || direction === undefined || duration === undefined || duration <= 0 || !Number.isFinite(duration)) return 0
 
 		const pulseDuration = Math.max(1, Math.round(duration))
 		this.guideOutputManager.pulse(this.#guideOutput, direction.toUpperCase() as GuideDirection, pulseDuration)
@@ -1461,8 +1461,8 @@ function calibrationDistanceOf(diagnostics: GuidingCalibrationDiagnostics) {
 }
 
 // Converts local pulse directions to PHD2 casing and falls back to a mandatory default direction on no-pulse frames.
-function toPHD2GuideDirection(direction: AxisPulse['direction'], fallback: PHD2GuideDirection) {
-	return direction === null ? fallback : ((direction[0].toUpperCase() + direction.slice(1).toLowerCase()) as PHD2GuideDirection)
+function toPHD2GuideDirection(direction: AxisPulse['direction'], fallback: PHD2GuideDirection): PHD2GuideDirection {
+	return direction === 'east' ? 'East' : direction === 'north' ? 'North' : direction === 'south' ? 'South' : direction === 'west' ? 'West' : fallback
 }
 
 // Resolves the focal length in mm from explicit focal length or aperture/focal-ratio geometry.

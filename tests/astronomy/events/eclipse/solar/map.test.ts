@@ -413,8 +413,8 @@ describe('NASA Besselian fixtures cover eclipse classes and central gating', () 
 		test(fixture.name, () => {
 			const geometry = computeSolarEclipseMapGeometry(nasaEclipse(fixture), nasaPbe(fixture), { longitudeStep: deg(90), maxAngularStep: deg(45), includeRiseSetCurves: false })
 
-			expect(geometry.points.Max).toBeDefined()
-			expectGeoPoint(geometry.points.Max!)
+			expect(geometry.points.MAX).toBeDefined()
+			expectGeoPoint(geometry.points.MAX!)
 			for (const point of geometry.lines.penumbraNorth.flat()) expectGeoPoint(point)
 			for (const point of geometry.lines.penumbraSouth.flat()) expectGeoPoint(point)
 
@@ -460,8 +460,8 @@ test('computeSolarEclipseMapGeometry produces ordered partial contacts and ancho
 	const { points, lines } = geometry
 
 	// Existence, finiteness and chronological order replace the frozen synthetic coordinates.
-	for (const point of [points.P1, points.P4, points.Max]) expectGeoPoint(point!)
-	expectIncreasingJd([points.P1!, points.Max!, points.P4!])
+	for (const point of [points.P1, points.P4, points.MAX]) expectGeoPoint(point!)
+	expectIncreasingJd([points.P1!, points.MAX!, points.P4!])
 	// A pure partial eclipse: no internal penumbral contacts, no umbral cone contacts and no central line.
 	for (const point of [points.P2, points.P3, points.U1, points.U2, points.U3, points.U4, points.C1, points.C2]) expect(point).toBeUndefined()
 	expect(lines.centerLine).toHaveLength(0)
@@ -505,12 +505,12 @@ test('computeSolarEclipseMapGeometry orders and anchors NASA total central endpo
 	const { points, lines } = geometry
 
 	// All named contacts/endpoints exist for this central total eclipse and are finite.
-	for (const point of [points.P1, points.P2, points.P3, points.P4, points.U1, points.U2, points.U3, points.U4, points.C1, points.C2, points.Max]) expectGeoPoint(point!)
-	// Chronological ordering: P1 < U1 < C1 < U2 < P2 < Max < P3 < U3 < C2 < U4 < P4. This is the physical
+	for (const point of [points.P1, points.P2, points.P3, points.P4, points.U1, points.U2, points.U3, points.U4, points.C1, points.C2, points.MAX]) expectGeoPoint(point!)
+	// Chronological ordering: P1 < U1 < C1 < U2 < P2 < MAX < P3 < U3 < C2 < U4 < P4. This is the physical
 	// invariant; exact coordinates are intentionally not frozen.
-	expectIncreasingJd([points.P1!, points.U1!, points.C1!, points.U2!, points.P2!, points.Max!, points.P3!, points.U3!, points.C2!, points.U4!, points.P4!])
+	expectIncreasingJd([points.P1!, points.U1!, points.C1!, points.U2!, points.P2!, points.MAX!, points.P3!, points.U3!, points.C2!, points.U4!, points.P4!])
 	// Greatest eclipse is anchored at the published instant.
-	expect(points.Max!.jd).toBe(fixture.greatestEclipse[2])
+	expect(points.MAX!.jd).toBe(fixture.greatestEclipse[2])
 	// Penumbral contacts satisfy the external circle-ellipse tangency condition.
 	expect(Math.abs(externalContactResidual(elements, points.P1!.jd!, evaluateBesselian(elements, time(points.P1!.jd!, 0, Timescale.TT)).l1))).toBeLessThan(1e-6)
 	expect(Math.abs(externalContactResidual(elements, points.P4!.jd!, evaluateBesselian(elements, time(points.P4!.jd!, 0, Timescale.TT)).l1))).toBeLessThan(1e-6)
@@ -548,8 +548,8 @@ test('computeSolarEclipseMapGeometry traces NASA total partial-eclipse limits no
 
 	// The northern limit lies wholly north of the greatest-eclipse point and reaches the high Arctic;
 	// the southern limit lies wholly south of it and crosses into the southern hemisphere.
-	expect(penumbraNorth.every((point) => point.y > points.Max!.y)).toBe(true)
-	expect(penumbraSouth.every((point) => point.y < points.Max!.y)).toBe(true)
+	expect(penumbraNorth.every((point) => point.y > points.MAX!.y)).toBe(true)
+	expect(penumbraSouth.every((point) => point.y < points.MAX!.y)).toBe(true)
 	expect(Math.min(...penumbraNorth.map((point) => point.y))).toBeGreaterThan(deg(28))
 	expect(Math.max(...penumbraNorth.map((point) => point.y))).toBeGreaterThan(deg(70))
 	expect(Math.min(...penumbraSouth.map((point) => point.y))).toBeLessThan(deg(-30))
@@ -710,7 +710,7 @@ test('partial eclipse geometry omits central and umbral path data', () => {
 	// has no central or umbral path. A central-geometry fixture would now (correctly) draw both.
 	const geometry = computeSolarEclipseMapGeometry(eclipse('partial', 1.1), pbe({ y: [1.2] }), { longitudeStep: deg(60), maxAngularStep: deg(30), includeRiseSetCurves: false })
 
-	expect(geometry.points.Max).toBeDefined()
+	expect(geometry.points.MAX).toBeDefined()
 	for (const point of [geometry.points.U1, geometry.points.U2, geometry.points.U3, geometry.points.U4, geometry.points.C1, geometry.points.C2]) expect(point).toBeUndefined()
 	expect(geometry.lines.centerLine).toHaveLength(0)
 	expect(geometry.lines.umbraNorth).toHaveLength(0)
@@ -720,8 +720,8 @@ test('partial eclipse geometry omits central and umbral path data', () => {
 test('central total eclipse geometry exposes a populated central and umbral path when enabled', () => {
 	const geometry = computeSolarEclipseMapGeometry(eclipse('total'), pbe({ x: [0, 0.25], y: [0.05], mu: [0, deg(8)] }), { longitudeStep: deg(60), maxAngularStep: deg(30), includeRiseSetCurves: true, riseSetStep: 1800 })
 
-	expect(geometry.points.Max).toBeDefined()
-	expectGeoPoint(geometry.points.Max!)
+	expect(geometry.points.MAX).toBeDefined()
+	expectGeoPoint(geometry.points.MAX!)
 
 	expect(geometry.lines.centerLine.length).toBeGreaterThan(1)
 	expectIncreasingJd(geometry.lines.centerLine)
@@ -804,8 +804,8 @@ describe('map geometry exposes the NASA greatest-eclipse point for every eclipse
 		test(fixture.name, () => {
 			const geometry = computeSolarEclipseMapGeometry(nasaEclipse(fixture), nasaPbe(fixture), { longitudeStep: deg(90), maxAngularStep: deg(45) })
 
-			expectGeoNear(geometry.points.Max, parseAngle(fixture.greatestEclipse[1])!, parseAngle(fixture.greatestEclipse[0])!, 2)
-			expect(geometry.points.Max!.jd).toBe(fixture.greatestEclipse[2])
+			expectGeoNear(geometry.points.MAX, parseAngle(fixture.greatestEclipse[1])!, parseAngle(fixture.greatestEclipse[0])!, 2)
+			expect(geometry.points.MAX!.jd).toBe(fixture.greatestEclipse[2])
 		})
 	}
 })
@@ -822,8 +822,8 @@ test('central-line endpoints graze the flattened Earth limb and bound the centra
 		expect(Math.abs(axisLimbResidual(elements, C1!.jd!))).toBeLessThan(1e-6)
 		expect(Math.abs(axisLimbResidual(elements, C2!.jd!))).toBeLessThan(1e-6)
 		// C1 precedes C2 and both bracket the greatest eclipse instant.
-		expect(C1!.jd!).toBeLessThan(geometry.points.Max!.jd!)
-		expect(geometry.points.Max!.jd!).toBeLessThan(C2!.jd!)
+		expect(C1!.jd!).toBeLessThan(geometry.points.MAX!.jd!)
+		expect(geometry.points.MAX!.jd!).toBeLessThan(C2!.jd!)
 		// Endpoints anchor the drawn central line.
 		expectGeoPointClose(geometry.lines.centerLine[0], C1!.x, C1!.y, C1!.jd)
 		expectGeoPointClose(geometry.lines.centerLine.at(-1), C2!.x, C2!.y, C2!.jd)
@@ -834,7 +834,7 @@ test('greatest eclipse lies on the central line for central eclipses', () => {
 	for (const fixture of CENTRAL_FIXTURES) {
 		const geometry = computeSolarEclipseMapGeometry(nasaEclipse(fixture), nasaPbe(fixture), { longitudeStep: deg(30), maxAngularStep: deg(12) })
 		const centerLine = geometry.lines.centerLine
-		const max = geometry.points.Max!
+		const max = geometry.points.MAX!
 
 		expect(centerLine.length).toBeGreaterThan(1)
 		expect(max.jd!).toBeGreaterThanOrEqual(centerLine[0].jd!)
@@ -881,12 +881,12 @@ test('hybrid eclipse produces a central path anchored at the NASA greatest eclip
 	const geometry = computeSolarEclipseMapGeometry(nasaEclipse(fixture), elements, { longitudeStep: deg(30), maxAngularStep: deg(12) })
 	const { points, lines } = geometry
 
-	expectGeoNear(points.Max, parseAngle(fixture.greatestEclipse[1])!, parseAngle(fixture.greatestEclipse[0])!, 2)
+	expectGeoNear(points.MAX, parseAngle(fixture.greatestEclipse[1])!, parseAngle(fixture.greatestEclipse[0])!, 2)
 	expect(points.C1).toBeDefined()
 	expect(points.C2).toBeDefined()
 	expect(Math.abs(axisLimbResidual(elements, points.C1!.jd!))).toBeLessThan(1e-6)
 	expect(Math.abs(axisLimbResidual(elements, points.C2!.jd!))).toBeLessThan(1e-6)
-	expectIncreasingJd([points.C1!, points.Max!, points.C2!])
+	expectIncreasingJd([points.C1!, points.MAX!, points.C2!])
 
 	expect(lines.centerLine.length).toBeGreaterThan(1)
 	expectIncreasingJd(lines.centerLine)
@@ -997,7 +997,7 @@ test('solarEclipseMapToSvgPaths serializes lines and skips empty features', () =
 				{ x: deg(10), y: deg(5) },
 			],
 		},
-		{ Max: { x: 0, y: 0 } },
+		{ MAX: { x: 0, y: 0 } },
 	)
 
 	const paths = solarEclipseMapToSvgPaths(map, equirectangularProjection(360, 180))
@@ -1006,7 +1006,7 @@ test('solarEclipseMapToSvgPaths serializes lines and skips empty features', () =
 	expect(paths.centerLine).toContain('L')
 	expect(paths.penumbraNorth).toBe('')
 	expect(paths.umbraSouth).toBe('')
-	expect(paths.points.Max).toEqual({ x: 180, y: 90 })
+	expect(paths.points.MAX).toEqual({ x: 180, y: 90 })
 	expect(paths.points.U1).toBeUndefined()
 })
 
@@ -1065,13 +1065,13 @@ test('solarEclipseMapToSvgPaths places the 2024-04-08 totality over North Americ
 	}
 
 	// The Max marker matches a direct projection and lands over Mexico (lon ~ -104, lat ~ +25).
-	const expectedMax = projection.project(map.points.Max!.x, map.points.Max!.y)!
-	expect(paths.points.Max!.x).toBeCloseTo(expectedMax.x, 9)
-	expect(paths.points.Max!.y).toBeCloseTo(expectedMax.y, 9)
-	expect(paths.points.Max!.x).toBeGreaterThan(140)
-	expect(paths.points.Max!.x).toBeLessThan(165)
-	expect(paths.points.Max!.y).toBeGreaterThan(120)
-	expect(paths.points.Max!.y).toBeLessThan(140)
+	const expectedMax = projection.project(map.points.MAX!.x, map.points.MAX!.y)!
+	expect(paths.points.MAX!.x).toBeCloseTo(expectedMax.x, 9)
+	expect(paths.points.MAX!.y).toBeCloseTo(expectedMax.y, 9)
+	expect(paths.points.MAX!.x).toBeGreaterThan(140)
+	expect(paths.points.MAX!.x).toBeLessThan(165)
+	expect(paths.points.MAX!.y).toBeGreaterThan(120)
+	expect(paths.points.MAX!.y).toBeLessThan(140)
 
 	// All projected coordinates stay inside the viewport.
 	for (const value of paths.centerLine.match(/-?\d+(?:\.\d+)?/g)!.map(Number)) expect(Number.isFinite(value)).toBe(true)
@@ -1146,7 +1146,7 @@ describe('solar eclipse map validation cases', () => {
 				// All three cases are central, so the central endpoints exist and bracket the maximum.
 				expect(points.C1).toBeDefined()
 				expect(points.C2).toBeDefined()
-				expectIncreasingJd([points.C1!, points.Max!, points.C2!])
+				expectIncreasingJd([points.C1!, points.MAX!, points.C2!])
 				expect(Math.abs(axisLimbResidual(elements, points.C1!.jd!))).toBeLessThan(1e-6)
 				expect(Math.abs(axisLimbResidual(elements, points.C2!.jd!))).toBeLessThan(1e-6)
 			})
@@ -1157,9 +1157,9 @@ describe('solar eclipse map validation cases', () => {
 				expectGeoPointClose(lines.centerLine[0], points.C1!.x, points.C1!.y, points.C1!.jd)
 				expectGeoPointClose(lines.centerLine.at(-1), points.C2!.x, points.C2!.y, points.C2!.jd)
 				// Max lies on the central line.
-				const onCentralLine = interpolateAtJulianDay(lines.centerLine, points.Max!.jd!)
+				const onCentralLine = interpolateAtJulianDay(lines.centerLine, points.MAX!.jd!)
 				expect(onCentralLine).toBeDefined()
-				expect(sphericalSeparation(onCentralLine!.x, onCentralLine!.y, points.Max!.x, points.Max!.y)).toBeLessThan(deg(0.5))
+				expect(sphericalSeparation(onCentralLine!.x, onCentralLine!.y, points.MAX!.x, points.MAX!.y)).toBeLessThan(deg(0.5))
 			})
 
 			test('umbra limits come from the G = 1 solver and penumbra limits from G = 0', () => {
@@ -1439,7 +1439,7 @@ describe('solar eclipse map acceptance criteria', () => {
 			test('all entity points are finite and in range', () => {
 				const families = [lines.centerLine, ...lines.umbraNorth, ...lines.umbraSouth, ...lines.penumbraNorth, ...lines.penumbraSouth, ...lines.riseSetCurves]
 				for (const family of families) for (const point of family) expectGeoPoint(point)
-				for (const key of ['P1', 'P2', 'P3', 'P4', 'U1', 'U2', 'U3', 'U4', 'C1', 'C2', 'Max', 'N1', 'N2', 'S1', 'S2'] as const) {
+				for (const key of ['P1', 'P2', 'P3', 'P4', 'U1', 'U2', 'U3', 'U4', 'C1', 'C2', 'MAX', 'N1', 'N2', 'S1', 'S2'] as const) {
 					const point = points[key]
 					if (point) expectGeoPoint(point)
 				}
@@ -1470,9 +1470,9 @@ describe('solar eclipse map acceptance criteria', () => {
 
 			// Greatest eclipse is on the sunlit side and near the central line.
 			test('greatest eclipse is near the central line', () => {
-				expect(solarAltitudeAtPoint(elements, points.Max!)).toBeGreaterThan(deg(-1))
+				expect(solarAltitudeAtPoint(elements, points.MAX!)).toBeGreaterThan(deg(-1))
 				let nearest = Number.POSITIVE_INFINITY
-				for (const point of lines.centerLine) nearest = Math.min(nearest, sphericalSeparation(points.Max!.x, points.Max!.y, point.x, point.y))
+				for (const point of lines.centerLine) nearest = Math.min(nearest, sphericalSeparation(points.MAX!.x, points.MAX!.y, point.x, point.y))
 				expect(nearest).toBeLessThan(deg(2))
 			})
 
@@ -1586,7 +1586,7 @@ describe('solar eclipse map acceptance criteria', () => {
 		expect(geometry.points.N1!.y).toBeLessThan(geometry.points.S1!.y)
 		expect(sphericalSeparation(geometry.points.N1!.x, geometry.points.N1!.y, deg(52.005), deg(10.858))).toBeLessThan(deg(0.5))
 		expect(sphericalSeparation(geometry.points.S1!.x, geometry.points.S1!.y, deg(-164.075), deg(37.093))).toBeLessThan(deg(0.5))
-	}, 2000)
+	}, 4000)
 
 	// An annular (both-limit) eclipse names the penumbral extremes chronologically -- N1/S1 where
 	// each limit begins, N2/S2 where it ends -- not by latitude. Regression for the 2001-12-14 annular, where

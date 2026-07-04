@@ -187,7 +187,7 @@ export async function novaAstrometryNetPlateSolve(input: string | Blob, options?
 
 				// A job slot is null until created and a created job stays 'solving' until it finishes,
 				// so wait for a real job id and poll its status instead of grabbing the WCS too early.
-				const jobId = status?.jobs.find((id): id is number => typeof id === 'number')
+				const jobId = status?.jobs.find((id) => typeof id === 'number')
 
 				if (jobId !== undefined) {
 					const job = await jobStatus(jobId, { session }, signal)

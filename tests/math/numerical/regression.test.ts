@@ -145,18 +145,18 @@ describe('theil-sen', () => {
 	})
 })
 
-test('intersect returns null for parallel lines', () => {
+test('intersect returns undefined for parallel lines', () => {
 	const a = simpleLinearRegression([0, 1, 2], [0, 1, 2])
 	const b = simpleLinearRegression([0, 1, 2], [1, 2, 3])
 
 	expect(a.slope).toBeCloseTo(b.slope, 12)
-	expect(intersect(a, b)).toBeNull()
+	expect(intersect(a, b)).toBeUndefined()
 
 	const c = simpleLinearRegression([0, 1, 2], [0, 1, 2])
 	const d = simpleLinearRegression([0, 1, 2], [2, 1, 0])
 	const point = intersect(c, d)
 
-	expect(point).not.toBeNull()
+	expect(point).not.toBeUndefined()
 	expect(point!.x).toBeCloseTo(1, 12)
 })
 

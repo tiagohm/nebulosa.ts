@@ -4,7 +4,7 @@ import { ANGVEL_PER_DAY, DAYSEC, J2000 } from '../../../src/core/constants'
 import { deg, hour } from '../../../src/math/units/angle'
 import { meter } from '../../../src/math/units/distance'
 // oxfmt-ignore
-import { earthRotationAngle, equationOfEquinoxes, equationOfOrigins, greenwichApparentSiderealTime, greenwichMeanSiderealTime, instantaneousEarthAngularVelocity, instantaneousEarthRotationMatrix, meanObliquity, nutationAngles, pmAngles, pmMatrix, type PolarMotion, precessionMatrix, precessionNutationMatrix, type Time, Timescale, tai, tcb, tcg, tdb, tdbMinusTtByFairheadAndBretagnon1990, time, timeBesselianYear, timeConvert, timeGPS, timeJulianYear, timeMJD, timeNormalize, timeSubtract, timeToDate, timeToUnix, timeToUnixMillis, timeUnix, timeYMD, timeYMDHMS, toJulianDay, tt, ut1, utc, DEFAULT_TIME_PROVIDERS, dut1 } from '../../../src/astronomy/time/time'
+import { earthRotationAngle, equationOfEquinoxes, equationOfOrigins, greenwichApparentSiderealTime, greenwichMeanSiderealTime, instantaneousEarthAngularVelocity, instantaneousEarthRotationMatrix, meanObliquity, nutationAngles, pmAngles, pmMatrix, type PolarMotion, precessionMatrix, precessionNutationMatrix, type Time, Timescale, tai, tcb, tcg, tdb, tdbMinusTtByFairheadAndBretagnon1990, time, timeBesselianYear, timeConvert, timeGPS, timeJulianYear, timeMJD, timeNormalize, timeSubtract, timeToDate, timeToUnix, timeToUnixMillis, timeUnix, timeYMD, timeYMDHMS, toJulianDay, toJulianEpoch, tt, ut1, utc, TIME_PROVIDERS, dut1 } from '../../../src/astronomy/time/time'
 import { downloadPerTag } from '../../download'
 
 await downloadPerTag('time')
@@ -456,7 +456,7 @@ test('cache', () => {
 }, 50)
 
 test('providers', () => {
-	const providers = { ...DEFAULT_TIME_PROVIDERS }
+	const providers = { ...TIME_PROVIDERS }
 
 	for (let scale = 0; scale <= 6; scale++) {
 		const t = timeYMDHMS(2020, 10, 7, 12, 0, 0, scale)
@@ -510,7 +510,7 @@ test('zero-valued DUT1 is cached', () => {
 		return 0
 	}
 
-	t.providers = { ...DEFAULT_TIME_PROVIDERS, dut1: _dut1 }
+	t.providers = { ...TIME_PROVIDERS, dut1: _dut1 }
 
 	expect(dut1(t)).toBe(0)
 	expect(dut1(t)).toBe(0)
@@ -527,7 +527,7 @@ test('tdb minus tt by Fairhead and Bretagnon 1990', () => {
 		return tdbMinusTtByFairheadAndBretagnon1990(time)
 	}
 
-	const providers = { ...DEFAULT_TIME_PROVIDERS, tdbMinusTt }
+	const providers = { ...TIME_PROVIDERS, tdbMinusTt }
 
 	const t0 = timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.TDB)
 	t0.providers = providers
@@ -687,4 +687,11 @@ test('equation of the equinoxes is GAST minus GMST and stays within a few arcsec
 	expect(eqeq).toBeCloseTo(greenwichApparentSiderealTime(t) - greenwichMeanSiderealTime(t), 14)
 	// The equation of the equinoxes never exceeds ~1.2 s of time (~18 arcsec ~ 8.7e-5 rad).
 	expect(Math.abs(eqeq)).toBeLessThan(1e-4)
+})
+
+test('to julian epoch inverts timeJulianYear', () => {
+	expect(toJulianEpoch(timeJulianYear(2026.5, Timescale.TT))).toBeCloseTo(2026.5, 9)
+	expect(toJulianEpoch(timeJulianYear(2000, Timescale.TT))).toBeCloseTo(2000, 9)
+	// J2000.0 is exactly JD 2451545.0 (TT).
+	expect(toJulianEpoch(time(J2000, 0, Timescale.TT))).toBeCloseTo(2000, 12)
 })

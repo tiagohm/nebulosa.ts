@@ -4,6 +4,7 @@ Elegant astronomy for TypeScript. Supercharged by Bun.
 
 [![Active Development](https://img.shields.io/badge/Maintenance%20Level-Actively%20Developed-brightgreen.svg)](https://gist.github.com/cheerfulstoic/d107229326a01ff0f333a1d3476e068d)
 [![CI](https://github.com/tiagohm/nebulosa.ts/actions/workflows/ci.yml/badge.svg)](https://github.com/tiagohm/nebulosa.ts/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/github/tiagohm/nebulosa.ts/graph/badge.svg?token=J9O5KHPMIT)](https://codecov.io/github/tiagohm/nebulosa.ts)
 
 ## API
 
@@ -63,6 +64,8 @@ formatALT(PI) // Format the angle in degrees as +00 00 00.00
 ```ts
 const stars = astapDetectStars(path, options) // Detect stars on image using astap
 const solution = astapPlateSolve(path, options) // Plate solve the image using astap
+const catalog = openAstapCatalog(files, database) // Open the ASTAP .1476 star database (d05/d20/...)
+const region = await findAstap1476Stars(files, database, query) // Read stars from a square field
 ```
 
 ### Asteroid ![](bun.webp) ![](browser.webp)
