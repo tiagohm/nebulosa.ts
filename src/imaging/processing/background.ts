@@ -3,7 +3,6 @@ import { LuDecomposition, Matrix, QrDecomposition } from '../../math/linear-alge
 import { clamp, type NumberArray } from '../../math/numerical/math'
 import { DEFAULT_GRAYSCALE, type Image, type ImageRawType } from '../model/types'
 import type { DetectedStar } from '../stars/detector'
-import { clone } from './transformation'
 
 // Automatic Background Extraction (ABE/DBE): models a smooth sky background from a grid of robust
 // samples and removes it, correcting gradients, vignetting, and light pollution. The background is
@@ -856,8 +855,11 @@ export function fitBackgroundSurface(image: Image, options: BackgroundExtraction
 export function evaluateBackgroundModel(model: BackgroundModel, image: Image): Image {
 	ensureModelMatchesImage(model, image)
 
-	const background = clone(image)
-	const out = background.raw
+	const header = structuredClone(image.header)
+	const metadata = structuredClone(image.metadata)
+	const out = image.raw instanceof Float32Array ? new Float32Array(image.raw.length) : new Float64Array(image.raw.length)
+
+	const background: Image = { header, metadata, raw: out }
 	const { type, width, height, channelCount, degree } = model
 
 	const terms = basisTermCount(degree)
