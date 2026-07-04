@@ -462,6 +462,15 @@ function collectSamples(raw: ImageRawType, width: number, height: number, channe
 // thin strip approaches 0. The threshold caps the worst-case extrapolation amplification.
 const MIN_SAMPLE_SPREAD = 0.02
 
+// Maximum ratio of the fitted surface's magnitude bound to the largest sampled magnitude. On [-1, 1]^2
+// the surface value is bounded by the L1 norm of its Chebyshev coefficients (each |T_i| <= 1), so a
+// well-posed fit keeps that bound within a small multiple of the sampled values. A near-rank-deficient
+// layout that slips past isFullRank — e.g. samples covering too few distinct coordinate bands for the
+// requested degree, where the spread check still passes — instead yields coefficients whose sum dwarfs
+// the data and a surface that explodes across the frame. The factor is generous so genuine smooth
+// backgrounds are never rejected; only gross blow-ups (orders of magnitude past the data) are caught.
+const MAX_SURFACE_MAGNITUDE_FACTOR = 100
+
 // RMS extent of the active samples along their least-covered direction: sqrt of the smaller eigenvalue
 // of the (u, v) covariance. About 0.58 for full [-1, 1] coverage, ~0 for a collinear / thin-strip layout
 // regardless of orientation. `m` must be the number of active samples and be > 0.
@@ -499,7 +508,8 @@ function activeSampleSpread(samples: readonly SurfaceSample[], m: number) {
 
 // Fits a 2D Chebyshev surface to the currently active samples by least squares (QR). Returns the
 // coefficient vector, or undefined when there are too few samples, the layout is degenerate (a thin
-// strip, so the system is effectively singular), or the system is rank deficient.
+// strip or too few coordinate bands for the degree, so the system is effectively singular), or the
+// system is rank deficient.
 function fitSurface(samples: readonly SurfaceSample[], degree: number, terms: number, ti: Uint8Array, tj: Uint8Array): Float64Array | undefined {
 	let m = 0
 	for (const sample of samples) if (sample.active) m++
@@ -516,6 +526,7 @@ function fitSurface(samples: readonly SurfaceSample[], degree: number, terms: nu
 	const vCheb = new Float64Array(degree + 1)
 
 	let row = 0
+	let maxAbsValue = 0
 
 	for (const sample of samples) {
 		if (!sample.active) continue
@@ -529,6 +540,7 @@ function fitSurface(samples: readonly SurfaceSample[], degree: number, terms: nu
 		const base = row * terms
 		for (let k = 0; k < terms; k++) data[base + k] = w * uCheb[ti[k]] * vCheb[tj[k]]
 		b[row] = w * sample.value
+		if (Math.abs(sample.value) > maxAbsValue) maxAbsValue = Math.abs(sample.value)
 		row++
 	}
 
@@ -537,7 +549,16 @@ function fitSurface(samples: readonly SurfaceSample[], degree: number, terms: nu
 		if (!qr.isFullRank) return undefined
 		// solve() returns a vector sized to the sample count (rows); only the first `terms` entries are
 		// the least-squares coefficients, the rest are residual internals. Copy just the coefficients.
-		return qr.solve(b).slice(0, terms)
+		const coefficients = qr.solve(b).slice(0, terms)
+
+		// Guard against ill-conditioned layouts that pass isFullRank through floating-point noise (e.g.
+		// too few distinct coordinate bands for the degree): the surface value on [-1, 1]^2 is bounded by
+		// the L1 norm of the coefficients, so reject when that bound explodes past the sampled value scale.
+		let coefficientL1 = 0
+		for (let k = 0; k < terms; k++) coefficientL1 += Math.abs(coefficients[k])
+		if (coefficientL1 > MAX_SURFACE_MAGNITUDE_FACTOR * maxAbsValue) return undefined
+
+		return coefficients
 	} catch {
 		return undefined
 	}

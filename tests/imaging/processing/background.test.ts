@@ -403,7 +403,7 @@ test('a boxSize larger than the frame does not oversize the sample buffers', () 
 	// Reached the fit stage (a domain error about the surface fit) rather than dying on an oversized
 	// allocation. Every box spans the whole frame, collapsing all samples onto one position.
 	expect((error as Error).message).toContain('surface')
-})
+}, 1500)
 
 test('fits a high-degree surface accurately (Chebyshev conditioning)', () => {
 	const width = 160
@@ -851,6 +851,41 @@ test('rejects an ill-conditioned thin-strip sample layout instead of extrapolati
 
 	// The same ramp without the mask fits cleanly and stays within the image value range.
 	const model = fitBackgroundSurface(image, { degree: 1, gridSize: 16 })
+	const background = evaluateBackgroundModel(model, image).raw
+	let min = Infinity
+	let max = -Infinity
+	for (const v of background) {
+		min = Math.min(min, v)
+		max = Math.max(max, v)
+	}
+	expect(min).toBeGreaterThan(0)
+	expect(max).toBeLessThan(1)
+})
+
+test('rejects a high-degree fit with too few sample bands', () => {
+	// An exclusion mask leaving only two thin horizontal bands. The samples span the full u range and two
+	// v values, so the 2D covariance is healthy and the thin-strip spread check passes — but a degree-4
+	// polynomial needs at least five distinct v coordinates, so the v-direction is rank deficient. The QR
+	// reports full rank through floating-point noise and the evaluated surface explodes (~1e10 here). The
+	// coefficient-magnitude guard must reject it instead of materializing that surface.
+	const width = 160
+	const height = 160
+	const bg = (x: number, y: number) => {
+		const u = x / (width - 1)
+		const v = y / (height - 1)
+		return 0.1 + 0.6 * (0.5 * u * u + 0.5 * v)
+	}
+	const image = makeImage(width, height, 1, (x, y) => bg(x, y))
+
+	// Two clean bands, each one box row tall (gridSize 24 -> cells ~6.7 px), near y = 40 and y = 120.
+	const mask = new Uint8Array(width * height)
+	for (let y = 0; y < height; y++) {
+		for (let x = 0; x < width; x++) if (!(Math.abs(y - 40) <= 2 || Math.abs(y - 120) <= 2)) mask[y * width + x] = 1
+	}
+	expect(() => fitBackgroundSurface(image, { degree: 4, gridSize: 24, exclusionMask: mask })).toThrow()
+
+	// The same frame without the mask fits and stays within the image value range.
+	const model = fitBackgroundSurface(image, { degree: 4, gridSize: 24 })
 	const background = evaluateBackgroundModel(model, image).raw
 	let min = Infinity
 	let max = -Infinity
