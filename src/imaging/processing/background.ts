@@ -1,7 +1,7 @@
 import { medianOf, STANDARD_DEVIATION_SCALE } from '../../core/util'
 import { LuDecomposition, Matrix, QrDecomposition } from '../../math/linear-algebra/matrix'
 import { clamp, type NumberArray } from '../../math/numerical/math'
-import type { Image, ImageRawType } from '../model/types'
+import { DEFAULT_GRAYSCALE, type Image, type ImageRawType } from '../model/types'
 import type { DetectedStar } from '../stars/detector'
 import { clone } from './transformation'
 
@@ -12,7 +12,8 @@ import { clone } from './transformation'
 // grid samples are per-box medians weighted by reliability (low-dispersion boxes count more), with
 // structure (stars, nebulae) rejected first by high internal box dispersion and then iteratively by
 // polynomial-fit residuals. The fitted surface is either subtracted (additive gradients/light
-// pollution) or divided out (multiplicative vignetting). Color images fit each channel independently.
+// pollution) or divided out (multiplicative vignetting). Color images fit each channel independently
+// by default, or share a single luminance surface across channels (`colorMode: 'luminance'`).
 // An optional exclusion mask (e.g. built from detected stars) keeps large objects out of the sample
 // grid. The fit exposes its grid samples (positions, values, weights, acceptance) for inspection.
 // https://pixinsight.com/doc/tools/AutomaticBackgroundExtractor/AutomaticBackgroundExtractor.html
@@ -39,6 +40,14 @@ export type BackgroundExtractionClipping = 'truncate' | 'rescale' | 'rescaleAsNe
 //   evaluation cost. Outlier rejection still uses the polynomial pre-fit.
 export type BackgroundModelType = 'polynomial' | 'thinPlateSpline'
 
+// How color images are modeled.
+// - `perChannel`: fit an independent surface per channel; removes differential color gradients such
+//   as chromatic light pollution. The right choice for additive (`subtract`) correction.
+// - `luminance`: fit a single surface on the luminance plane and apply it to every channel. Removes a
+//   shared achromatic component while preserving color, and avoids per-channel fit noise. Best paired
+//   with `divide` for achromatic vignetting. Falls back to `perChannel` for non-RGB images.
+export type BackgroundColorMode = 'perChannel' | 'luminance'
+
 // Options controlling automatic background extraction. All fields are optional and fall back to
 // `DEFAULT_BACKGROUND_EXTRACTION_OPTIONS`.
 export interface BackgroundExtractionOptions {
@@ -50,6 +59,9 @@ export interface BackgroundExtractionOptions {
 	readonly boxSize?: number
 	// Surface model used to represent the background. See `BackgroundModelType`. Default `polynomial`.
 	readonly model?: BackgroundModelType
+	// How color (RGB) images are modeled. See `BackgroundColorMode`. Default `perChannel`. Ignored for
+	// single-channel images.
+	readonly colorMode?: BackgroundColorMode
 	// Degree of the fitted 2D polynomial surface (also the surface used for outlier rejection in
 	// `thinPlateSpline` mode). Clamped to 1..6. Requires at least (degree+1)*(degree+2)/2 accepted
 	// samples per channel.
@@ -129,6 +141,9 @@ export interface BackgroundSurfaceFit {
 export interface BackgroundModel {
 	// Surface model the fit produced. Determines how `coefficients`/`controlPoints` are interpreted.
 	readonly type: BackgroundModelType
+	// Color modeling used. `luminance` means a single shared surface (`surfaces` has one entry) applied
+	// to every channel; `perChannel` means one surface per channel.
+	readonly colorMode: BackgroundColorMode
 	// Width, in pixels, of the image the model was fitted to.
 	readonly width: number
 	// Height, in pixels, of the image the model was fitted to.
@@ -186,6 +201,7 @@ export const DEFAULT_BACKGROUND_EXTRACTION_OPTIONS: Required<Omit<BackgroundExtr
 	gridSize: 24,
 	boxSize: 0,
 	model: 'polynomial',
+	colorMode: 'perChannel',
 	degree: 4,
 	smoothing: 0.1,
 	tolerance: 3,
@@ -545,6 +561,7 @@ interface ResolvedFitOptions {
 	gridSize: number
 	boxSize: number
 	model: BackgroundModelType
+	colorMode: BackgroundColorMode
 	degree: number
 	smoothing: number
 	tolerance: number
@@ -560,6 +577,7 @@ function resolveFitOptions(options: BackgroundExtractionOptions): ResolvedFitOpt
 		gridSize: Math.max(2, Math.trunc(options.gridSize ?? DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.gridSize)),
 		boxSize: Math.max(0, options.boxSize ?? DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.boxSize),
 		model: options.model ?? DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.model,
+		colorMode: options.colorMode ?? DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.colorMode,
 		degree: clamp(Math.trunc(options.degree ?? DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.degree), 1, 6),
 		smoothing: Math.max(0, options.smoothing ?? DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.smoothing),
 		tolerance: Math.max(0, options.tolerance ?? DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.tolerance),
@@ -746,11 +764,22 @@ export function fitBackgroundSurface(image: Image, options: BackgroundExtraction
 	fillBasisExponents(fit.degree, ti, tj)
 
 	const surfaces: BackgroundSurfaceFit[] = []
+
+	// Luminance mode (RGB only): fit a single surface on the luminance plane; per-channel otherwise.
+	if (fit.colorMode === 'luminance' && channels === 3) {
+		const n = width * height
+		const lum = new Float64Array(n)
+		const { red, green, blue } = DEFAULT_GRAYSCALE
+		for (let p = 0, i = 0; p < n; p++, i += 3) lum[p] = red * raw[i] + green * raw[i + 1] + blue * raw[i + 2]
+		surfaces.push(fitChannelSurface(lum, width, height, 1, 0, fit, terms, ti, tj))
+		return { type: fit.model, colorMode: 'luminance', width, height, channelCount: channels, degree: fit.degree, surfaces }
+	}
+
 	for (let channel = 0; channel < channels; channel++) {
 		surfaces.push(fitChannelSurface(raw, width, height, channels, channel, fit, terms, ti, tj))
 	}
 
-	return { type: fit.model, width, height, channelCount: channels, degree: fit.degree, surfaces }
+	return { type: fit.model, colorMode: 'perChannel', width, height, channelCount: channels, degree: fit.degree, surfaces }
 }
 
 // Materializes a fitted `model` into a fresh background image cloned from `image` (which supplies the
@@ -761,22 +790,34 @@ export function evaluateBackgroundModel(model: BackgroundModel, image: Image): I
 
 	const background = clone(image)
 	const out = background.raw
-	const { width, height, channelCount, degree } = model
+	const { type, width, height, channelCount, degree } = model
 
-	if (model.type === 'thinPlateSpline') {
-		for (let channel = 0; channel < channelCount; channel++) {
-			const surface = model.surfaces[channel]
-			evaluateChannelTps(surface.coefficients, surface.controlPoints!, out, width, height, channelCount, channel)
-		}
-	} else {
-		const terms = basisTermCount(degree)
-		const ti = new Uint8Array(terms)
-		const tj = new Uint8Array(terms)
-		fillBasisExponents(degree, ti, tj)
+	const terms = basisTermCount(degree)
+	const ti = new Uint8Array(terms)
+	const tj = new Uint8Array(terms)
+	if (type === 'polynomial') fillBasisExponents(degree, ti, tj)
 
-		for (let channel = 0; channel < channelCount; channel++) {
-			evaluateChannelSurface(model.surfaces[channel].coefficients, out, width, height, channelCount, channel, degree, terms, ti, tj)
+	// Shared luminance surface: evaluate once into a scratch plane and broadcast to every channel.
+	if (model.colorMode === 'luminance' && model.surfaces.length === 1 && channelCount > 1) {
+		const n = width * height
+		const lum = new Float64Array(n)
+		const surface = model.surfaces[0]
+
+		if (type === 'thinPlateSpline') evaluateChannelTps(surface.coefficients, surface.controlPoints!, lum, width, height, 1, 0)
+		else evaluateChannelSurface(surface.coefficients, lum, width, height, 1, 0, degree, terms, ti, tj)
+
+		for (let p = 0, i = 0; p < n; p++, i += channelCount) {
+			const v = lum[p]
+			for (let c = 0; c < channelCount; c++) out[i + c] = v
 		}
+
+		return background
+	}
+
+	for (let channel = 0; channel < channelCount; channel++) {
+		const surface = model.surfaces[channel]
+		if (type === 'thinPlateSpline') evaluateChannelTps(surface.coefficients, surface.controlPoints!, out, width, height, channelCount, channel)
+		else evaluateChannelSurface(surface.coefficients, out, width, height, channelCount, channel, degree, terms, ti, tj)
 	}
 
 	return background
@@ -863,13 +904,17 @@ export function automaticBackgroundExtraction(image: Image, options: BackgroundE
 
 	const channels: BackgroundExtractionChannelModel[] = []
 
+	// In luminance mode a single surface is shared across every channel; report one result per image
+	// channel so the array length always matches the channel count.
+	const surfaceFor = (c: number) => (model.surfaces.length === 1 ? model.surfaces[0] : model.surfaces[c])
+
 	if (correction === 'none') {
-		for (const surface of model.surfaces) channels.push(surface)
+		for (let c = 0; c < model.channelCount; c++) channels.push(surfaceFor(c))
 	} else {
 		const ranges = applyBackground(image, background, { correction, clipping: options.clipping, targetBackground: options.targetBackground })
 
-		for (let c = 0; c < model.surfaces.length; c++) {
-			const s = model.surfaces[c]
+		for (let c = 0; c < model.channelCount; c++) {
+			const s = surfaceFor(c)
 			channels.push({ coefficients: s.coefficients, controlPoints: s.controlPoints, acceptedSamples: s.acceptedSamples, rejectedSamples: s.rejectedSamples, residual: s.residual, samples: s.samples, outputMin: ranges[c].min, outputMax: ranges[c].max })
 		}
 	}

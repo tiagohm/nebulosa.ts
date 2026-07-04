@@ -567,3 +567,56 @@ test('a thin-plate spline model reuses across frames and evaluate rejects mismat
 		),
 	).toThrow()
 })
+
+test('luminance color mode shares one surface and preserves color', () => {
+	const width = 96
+	const height = 96
+	// Achromatic gradient (identical shape in every channel) plus a fixed per-channel color offset.
+	const grad = (x: number, y: number) => 0.2 * (x / (width - 1)) + 0.1 * (y / (height - 1))
+	const offsets = [0.05, 0.12, 0.2]
+	const bg = (x: number, y: number, c: number) => offsets[c] + grad(x, y)
+
+	const model = fitBackgroundSurface(makeImage(width, height, 3, bg), { degree: 1, colorMode: 'luminance' })
+	expect(model.colorMode).toBe('luminance')
+	expect(model.surfaces).toHaveLength(1)
+
+	const result = automaticBackgroundExtraction(makeImage(width, height, 3, bg), { degree: 1, colorMode: 'luminance' })
+	// One result entry per image channel, all sharing the same fitted surface.
+	expect(result.channels).toHaveLength(3)
+	expect(result.channels[1].coefficients).toBe(result.channels[0].coefficients)
+
+	// Each channel is flattened and keeps its own mean (color preserved, not grayed).
+	const gradMean = 0.5 * 0.2 + 0.5 * 0.1
+	for (let c = 0; c < 3; c++) {
+		const after = channelStdDev(result.image, c)
+		expect(after.std).toBeLessThan(1e-3)
+		expect(after.mean).toBeCloseTo(offsets[c] + gradMean, 3)
+	}
+})
+
+test('luminance + divide applies one achromatic gain and preserves color ratios', () => {
+	const width = 96
+	const height = 96
+	const cx = (width - 1) / 2
+	const cy = (height - 1) / 2
+	// Achromatic vignette multiplying fixed per-channel color levels.
+	const vignette = (x: number, y: number) => 1 - 0.35 * (((x - cx) * (x - cx) + (y - cy) * (y - cy)) / (cx * cx + cy * cy))
+	const levels = [0.5, 0.4, 0.3]
+	const image = makeImage(width, height, 3, (x, y, c) => levels[c] * vignette(x, y))
+
+	const before = [channelStdDev(image, 0).std, channelStdDev(image, 1).std, channelStdDev(image, 2).std]
+	const result = automaticBackgroundExtraction(image, { degree: 4, colorMode: 'luminance', correction: 'divide' })
+
+	// Every channel is flattened (vignette removed) and the color ratios are preserved.
+	const meanR = channelStdDev(result.image, 0).mean
+	const meanG = channelStdDev(result.image, 1).mean
+	for (let c = 0; c < 3; c++) expect(channelStdDev(result.image, c).std).toBeLessThan(before[c] / 8)
+	expect(meanR / meanG).toBeCloseTo(levels[0] / levels[1], 2)
+})
+
+test('luminance mode falls back to per-channel for single-channel images', () => {
+	const image = makeImage(48, 48, 1, (x) => 0.2 + 0.1 * (x / 47))
+	const model = fitBackgroundSurface(image, { degree: 1, gridSize: 8, colorMode: 'luminance' })
+	expect(model.colorMode).toBe('perChannel')
+	expect(model.surfaces).toHaveLength(1)
+})
