@@ -786,6 +786,18 @@ function planetaryQuadrature() {
 	console.info('Mars quadratures (local):', labelled.join('; '))
 }
 
+// Planetary Closest Geocentric Approach: the minimum of the geocentric distance over a synodic period,
+// reached near opposition for an outer planet. The largest apparent disk is the same extremum reexpressed,
+// since the apparent diameter is the physical diameter over that minimum distance; it is reported here from
+// objectAngularDiameter at the closest-approach instant rather than scanned separately.
+function planetaryClosestApproach() {
+	const MARS_DIAMETER_KM = 6779
+	const minimum = searchExtrema((time) => vectorDistance(geocentricDirection(mars, time)), NOW, timeShift(NOW, 800), { step: 5 }).find((e) => e.kind === 'minimum')
+	if (minimum === undefined) return console.info('Mars closest approach: no distance minimum in the next synodic period.')
+	const diameter = objectAngularDiameter(MARS_DIAMETER_KM, toKilometer(minimum.value))
+	console.info('Mars closest approach (local):', formatTemporal(temporalFromTime(utc(minimum.time))), `distance ${minimum.value.toFixed(4)} AU, apparent diameter ${toArcsec(diameter).toFixed(1)} arcsec`)
+}
+
 // Inferior / Superior Conjunction (inner planets): the elongation minima, classified by
 // whether the planet is nearer than the Sun (inferior) or beyond it (superior).
 function inferiorConjunction() {
@@ -1945,6 +1957,7 @@ function run() {
 	planetaryOpposition()
 	planetaryConjunction()
 	planetaryQuadrature()
+	planetaryClosestApproach()
 	inferiorConjunction()
 	superiorConjunction()
 	perihelionAndAphelion()
