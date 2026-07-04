@@ -171,3 +171,17 @@ test('throws when there are too few clean samples for the degree', () => {
 	const image = makeImage(48, 48, 1, () => 0.2)
 	expect(() => automaticBackgroundExtraction(image, { degree: 6, gridSize: 3 })).toThrow()
 })
+
+test('exposes exactly (degree+1)(degree+2)/2 coefficients regardless of sample count', () => {
+	const width = 96
+	const height = 96
+	const image = makeImage(width, height, 1, (x, y) => 0.1 + 0.2 * (x / (width - 1)) + 0.1 * (y / (height - 1)))
+
+	// A dense grid produces far more samples than terms; coefficients must be cropped to the term count.
+	for (const degree of [1, 2, 3, 4] as const) {
+		const result = automaticBackgroundExtraction(image, { degree, gridSize: 16, correction: 'none' })
+		const terms = ((degree + 1) * (degree + 2)) / 2
+		expect(result.channels[0].acceptedSamples).toBeGreaterThan(terms)
+		expect(result.channels[0].coefficients).toHaveLength(terms)
+	}
+})

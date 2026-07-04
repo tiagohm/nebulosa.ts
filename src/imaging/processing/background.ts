@@ -247,7 +247,9 @@ function fitSurface(samples: readonly BackgroundSample[], degree: number, terms:
 	try {
 		const qr = new QrDecomposition(A)
 		if (!qr.isFullRank) return undefined
-		return Float64Array.from(qr.solve(b))
+		// solve() returns a vector sized to the sample count (rows); only the first `terms` entries are
+		// the least-squares coefficients, the rest are residual internals. Copy just the coefficients.
+		return qr.solve(b).slice(0, terms)
 	} catch {
 		return undefined
 	}
