@@ -317,7 +317,8 @@ function collectSamples(raw: ImageRawType, width: number, height: number, channe
 	// floor/ceil bounds would instead sample boxSize + 1 pixels for fractional centers, weakening small
 	// boxes at avoiding stars and letting under-sized boxes slip past MIN_BOX_SAMPLES. When boxSize is
 	// not given, fall back to a real-valued half-size derived from the smaller cell edge (about half a
-	// cell). Capped to the long axis so a pathologically large boxSize cannot oversize the buffers.
+	// cell). boxPixels is capped to the long axis only to keep the centering arithmetic in a sane range;
+	// a box larger than the frame is simply clipped to the frame by the sampling loops below.
 	const explicitBox = boxSize > 0
 	const boxPixels = explicitBox ? clamp(Math.trunc(boxSize), 1, longAxis) : 0
 	// Fractional half-extent used to center the integer window on the cell center; each box records its
@@ -326,10 +327,16 @@ function collectSamples(raw: ImageRawType, width: number, height: number, channe
 	const halfBox = (boxPixels - 1) / 2
 	const boxHalf = explicitBox ? 0 : Math.max(1.5, Math.min(cellW, cellH) * 0.25)
 
-	// Scratch buffers sized to the largest possible box, reused across every box.
-	const maxBox = explicitBox ? boxPixels : Math.ceil(2 * boxHalf) + 2
-	const buf = new Float64Array(maxBox * maxBox)
-	const dev = new Float64Array(maxBox * maxBox)
+	// Scratch buffers sized to the largest possible CLIPPED box, reused across every box. The sampling
+	// loops clip each box to the image bounds, so no box can span more than width pixels across or height
+	// pixels down regardless of the requested boxSize. Sizing by the clipped per-axis extents avoids
+	// allocating for an oversized request (e.g. boxSize far larger than a narrow frame) that no box could
+	// ever fill — the requested side length alone could otherwise imply a multi-gigabyte buffer.
+	const spanX = explicitBox ? boxPixels : Math.ceil(2 * boxHalf) + 2
+	const maxBoxX = Math.min(spanX, width)
+	const maxBoxY = Math.min(spanX, height)
+	const buf = new Float64Array(maxBoxX * maxBoxY)
+	const dev = new Float64Array(maxBoxX * maxBoxY)
 
 	const invW = width > 1 ? 2 / (width - 1) : 0
 	const invH = height > 1 ? 2 / (height - 1) : 0

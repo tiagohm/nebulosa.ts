@@ -280,6 +280,25 @@ test('an explicit boxSize samples exactly that many pixels per axis', () => {
 	expect(model.surfaces[0].samples.length).toBe(20 * 20)
 })
 
+test('a boxSize larger than the frame does not oversize the sample buffers', () => {
+	// The scratch buffers must be sized by the clipped box extents, not the requested side length: a box
+	// can never span more than width pixels across or height pixels down. On this tall, narrow frame the
+	// requested boxSize is far larger than the image, so buffers sized by boxSize squared (~70000^2)
+	// would exhaust memory before any clipping. Sizing by the clipped extents keeps the allocation to the
+	// frame, so the call completes and fails only for the expected reason (every box spans the whole
+	// frame, collapsing all samples to one position).
+	const image = makeImage(2, 70000, 1, (x, y) => 0.2 + 0.0001 * y)
+	let error: unknown
+	try {
+		fitBackgroundSurface(image, { degree: 1, boxSize: 200000 })
+	} catch (e) {
+		error = e
+	}
+	expect(error).toBeInstanceOf(Error)
+	// Reached the fit stage rather than dying on an oversized allocation.
+	expect((error as Error).message).toContain('not enough')
+})
+
 test('fits a high-degree surface accurately (Chebyshev conditioning)', () => {
 	const width = 160
 	const height = 160
