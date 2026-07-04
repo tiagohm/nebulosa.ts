@@ -1807,6 +1807,25 @@ function satelliteEclipseDuration() {
 	console.info('ISS eclipse duration (s):', complete?.duration)
 }
 
+// Visible Pass Prediction: the practical "when can I actually see it" question, composing the three
+// primitives. satellitePasses brackets the passes that clear a minimum culmination altitude (the
+// minAltitude horizon), then each pass is screened at its culmination with satelliteMagnitude, which
+// reports both whether the satellite is sunlit (out of the Earth's umbra) and its apparent magnitude.
+// Only sunlit passes at or brighter than a magnitude limit are kept. A full naked-eye prediction would
+// also require the observer to be in darkness (Sun sufficiently below the horizon); that gate reuses the
+// twilight machinery shown earlier and is left out here to keep the demonstration focused.
+function visiblePassPrediction() {
+	const rec = recordFromTLE(ISS_TLE)
+	const minAltitude = deg(20) // ignore low passes lost in horizon murk
+	const magnitudeLimit = 3.5 // roughly the naked-eye limit under suburban skies
+	const passes = satellitePasses(rec, SITE, SAT_TIME, timeShift(SAT_TIME, 1), { minAltitude })
+	const visible = passes.map((pass) => ({ pass, mag: satelliteMagnitude(rec, SITE, geocentricSun, pass.culmination.time, -1.8) })).filter(({ mag }) => mag.illuminated && mag.magnitude <= magnitudeLimit)
+	if (visible.length === 0) return console.info('Visible passes: none above 20deg, sunlit and brighter than', magnitudeLimit, 'in the next day.')
+	for (const { pass, mag } of visible) {
+		console.info('Visible ISS pass (local):', formatTemporal(temporalFromTime(utc(pass.culmination.time))), `culmination ${toDeg(pass.culmination.altitude).toFixed(0)}deg, magnitude ${mag.magnitude.toFixed(1)}`)
+	}
+}
+
 function run() {
 	// Time and Earth Orientation
 	julianDateConversion()
@@ -2039,6 +2058,7 @@ function run() {
 	satelliteConjunctionScreening()
 	geostationarySatelliteLongitude()
 	satelliteEclipseDuration()
+	visiblePassPrediction()
 }
 
 run()
