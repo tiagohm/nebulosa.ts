@@ -1038,6 +1038,28 @@ test('thin-plate spline preserves a large flat-topped object that inflates the s
 	expect(result.image.raw[5 * width + 5]).toBeCloseTo(0, 2)
 })
 
+test('thin-plate spline rejects a layout left collinear after flat-topped rejection', () => {
+	// A masked horizontal sky strip plus two small bright unmasked boxes. The two bright boxes sit off the
+	// strip, so the initial 2D-coverage check passes. They then form the flat-topped outlier mode and are
+	// rejected, leaving only the collinear strip samples. Without re-checking coverage the spline would
+	// materialize a spurious background (~[-28, 25]) from the rank-deficient layout; it must throw instead.
+	const width = 100
+	const height = 100
+	const isBright = (x: number, y: number) => (Math.abs(x - 25) < 4 || Math.abs(x - 75) < 4) && Math.abs(y - 15) < 4
+	const image = makeImage(width, height, 1, (x, y) => (isBright(x, y) ? 0.8 : 0.2))
+
+	// Mask everything except a horizontal strip around y = 45 and the two bright boxes around y = 15.
+	const mask = new Uint8Array(width * height)
+	for (let y = 0; y < height; y++) {
+		for (let x = 0; x < width; x++) {
+			const keep = (y >= 41 && y <= 49) || isBright(x, y)
+			if (!keep) mask[y * width + x] = 1
+		}
+	}
+
+	expect(() => fitBackgroundSurface(image, { model: 'thinPlateSpline', gridSize: 10, exclusionMask: mask })).toThrow('2D region')
+})
+
 test('thin-plate spline extraction flattens a complex gradient', () => {
 	const width = 96
 	const height = 96

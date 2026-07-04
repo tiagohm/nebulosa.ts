@@ -658,6 +658,20 @@ function deduplicateActiveSamples(samples: readonly SurfaceSample[]) {
 	}
 }
 
+// Throws unless the currently active samples span a genuine 2D region rather than a thin strip or a
+// collinear set. A TPS fit over collinear control points has its affine component unconstrained
+// perpendicular to the line, so it extrapolates wildly across the frame and corrupts the correction. The
+// spread test is orientation-agnostic (smallest covariance eigenvalue), so it catches any line direction.
+// Must be re-checked after every pass that can deactivate samples (dedup, flat-topped rejection), since a
+// layout that started 2D can collapse to collinear once the off-strip samples are rejected.
+function assertTpsTwoDimensionalCoverage(samples: readonly SurfaceSample[]) {
+	let active = 0
+	for (const sample of samples) if (sample.active) active++
+	if (active < 3 || activeSampleSpread(samples, active) < MIN_SAMPLE_SPREAD) {
+		throw new Error('thin-plate spline fit failed: needs at least 3 clean samples spanning a 2D region, not a thin strip')
+	}
+}
+
 // Deterministically subsamples the active samples down to at most `maxPoints` control points, preserving
 // spatial coverage: the normalized [-1, 1] domain is split into a g x g grid (g = floor(sqrt(maxPoints)))
 // and the first active sample landing in each bucket is kept. Returns `samples` unchanged when the active
@@ -925,12 +939,8 @@ function fitChannelSurface(raw: ImageRawType, width: number, height: number, cha
 		// Reject strip / collinear layouts before fitting, exactly as the polynomial path does. A TPS whose
 		// clean samples lie on a line (e.g. an exclusion mask leaving a single row) has an affine component
 		// unconstrained perpendicular to the strip, so it extrapolates wildly across the frame and corrupts
-		// the correction. The 2D-spread check is orientation-agnostic and leaves genuine coverage untouched.
-		let active = 0
-		for (const sample of samples) if (sample.active) active++
-		if (active < 3 || activeSampleSpread(samples, active) < MIN_SAMPLE_SPREAD) {
-			throw new Error('thin-plate spline fit failed: needs at least 3 clean samples spanning a 2D region, not a thin strip')
-		}
+		// the correction.
+		assertTpsTwoDimensionalCoverage(samples)
 
 		// Drop duplicate control-point coordinates before fitting: they make the (unregularized) spline
 		// system singular. Cheap no-op when boxes do not overlap (large images / coarse grids).
@@ -948,6 +958,12 @@ function fitChannelSurface(raw: ImageRawType, width: number, height: number, cha
 		// background and subtract it away. Reject such a distinct outlier mode first, but only when the box
 		// medians are flat-plus-outliers rather than smoothly varying, so genuine domes/gradients survive.
 		rejectFlatToppedStructure(samples, residuals, residualScratch, rejectionHigh, rejectionLow)
+
+		// Rejection (and the dedup above) can deactivate the only off-strip samples — e.g. a masked horizontal
+		// sky strip plus two bright unmasked boxes passes the initial check, then the bright boxes are rejected
+		// and the survivors are collinear. Re-check coverage so the fit fails loudly instead of extrapolating a
+		// spurious background from a rank-deficient control-point layout.
+		assertTpsTwoDimensionalCoverage(samples)
 
 		// The final surface is a smoothing TPS through the surviving samples, capped to a tractable number
 		// of control points on dense grids.
