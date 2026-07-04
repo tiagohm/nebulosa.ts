@@ -1,7 +1,8 @@
 import { medianOf, STANDARD_DEVIATION_SCALE } from '../../core/util'
 import { Matrix, QrDecomposition } from '../../math/linear-algebra/matrix'
-import { clamp } from '../../math/numerical/math'
+import { clamp, type NumberArray } from '../../math/numerical/math'
 import type { Image, ImageRawType } from '../model/types'
+import type { DetectedStar } from '../stars/detector'
 import { clone } from './transformation'
 
 // Automatic Background Extraction (ABE): models a smooth sky background from a grid of robust
@@ -11,7 +12,8 @@ import { clone } from './transformation'
 // structure (stars, nebulae) rejected first by high internal box dispersion and then
 // iteratively by fit residuals. The fitted surface is either subtracted (additive gradients/light
 // pollution) or divided out (multiplicative vignetting). Color images fit each channel independently.
-// The fit exposes its grid samples (positions, values, weights, acceptance) for inspection.
+// An optional exclusion mask (e.g. built from detected stars) keeps large objects out of the sample
+// grid. The fit exposes its grid samples (positions, values, weights, acceptance) for inspection.
 // https://pixinsight.com/doc/tools/AutomaticBackgroundExtractor/AutomaticBackgroundExtractor.html
 
 // How the fitted background surface is removed from the source image.
@@ -42,6 +44,10 @@ export interface BackgroundExtractionOptions {
 	// Sigma multiple for rejecting contaminated boxes by internal dispersion: a box is discarded when
 	// its normalized MAD exceeds median(MAD) + tolerance*MAD-of-MADs across boxes. Lower is stricter.
 	readonly tolerance?: number
+	// Optional pixel exclusion mask, row-major with length width*height. Pixels with a nonzero value are
+	// skipped during sampling, keeping large objects (bright nebulae, galaxies) or stars out of the
+	// background estimate. Build one from detected stars with `backgroundExclusionMaskFromStars`.
+	readonly exclusionMask?: Readonly<NumberArray>
 	// Sigma multiple for rejecting samples that sit ABOVE the fitted surface (residual > 0), i.e.
 	// structure such as stars, nebulae, or galaxies contaminating a box. Kept tight because the sky
 	// background is the lower envelope of the data. Applied per iteration against the residual MAD.
@@ -152,7 +158,7 @@ export interface BackgroundApplyOptions {
 }
 
 // Default automatic background extraction options.
-export const DEFAULT_BACKGROUND_EXTRACTION_OPTIONS: Required<Omit<BackgroundExtractionOptions, 'targetBackground'>> = {
+export const DEFAULT_BACKGROUND_EXTRACTION_OPTIONS: Required<Omit<BackgroundExtractionOptions, 'targetBackground' | 'exclusionMask'>> = {
 	gridSize: 24,
 	boxSize: 0,
 	degree: 4,
@@ -186,6 +192,10 @@ interface SurfaceSample {
 
 // Small epsilon guarding the multiplicative correction from division by a near-zero model value.
 const DIVIDE_EPSILON = 1e-6
+
+// Minimum number of unmasked finite pixels a box must contain for its median to be a usable sample.
+// Only bites when an exclusion mask removes most of a box; full boxes always exceed it.
+const MIN_BOX_SAMPLES = 4
 
 // Number of polynomial basis terms for a 2D surface of the given total degree: (d+1)*(d+2)/2.
 function basisTermCount(degree: number) {
@@ -238,7 +248,7 @@ function boxStatistics(buf: Float64Array, dev: Float64Array, count: number) {
 // Collects grid samples for one channel. Divides the image into a grid of roughly square cells,
 // estimates a robust background per box, and rejects boxes whose internal dispersion marks them as
 // contaminated by stars or nebulae. Coordinates are normalized to [-1, 1] for a well-conditioned fit.
-function collectSamples(raw: ImageRawType, width: number, height: number, channels: number, channel: number, gridSize: number, boxSize: number, tolerance: number) {
+function collectSamples(raw: ImageRawType, width: number, height: number, channels: number, channel: number, gridSize: number, boxSize: number, tolerance: number, mask?: Readonly<NumberArray>) {
 	const longAxis = Math.max(width, height)
 	const cell = longAxis / gridSize
 	const nx = Math.max(1, Math.round(width / cell))
@@ -273,14 +283,17 @@ function collectSamples(raw: ImageRawType, width: number, height: number, channe
 
 			for (let y = y0; y <= y1; y++) {
 				let i = (y * width + x0) * channels + channel
+				let m = y * width + x0
 
-				for (let x = x0; x <= x1; x++, i += channels) {
+				for (let x = x0; x <= x1; x++, i += channels, m++) {
+					if (mask !== undefined && mask[m] !== 0) continue
 					const p = raw[i]
 					if (Number.isFinite(p)) buf[count++] = p
 				}
 			}
 
-			if (count === 0) continue
+			// Skip boxes with too few usable pixels (e.g. mostly masked out) so their median is reliable.
+			if (count < MIN_BOX_SAMPLES) continue
 
 			const [median, dispersion] = boxStatistics(buf, dev, count)
 			if (!Number.isFinite(median)) continue
@@ -395,6 +408,7 @@ interface ResolvedFitOptions {
 	rejectionHigh: number
 	rejectionLow: number
 	rejectionIterations: number
+	exclusionMask?: Readonly<NumberArray>
 }
 
 // Resolves and clamps the fit-relevant subset of the options against the defaults.
@@ -407,14 +421,15 @@ function resolveFitOptions(options: BackgroundExtractionOptions): ResolvedFitOpt
 		rejectionHigh: Math.max(0, options.rejectionHigh ?? DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.rejectionHigh),
 		rejectionLow: Math.max(0, options.rejectionLow ?? DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.rejectionLow),
 		rejectionIterations: Math.max(0, Math.trunc(options.rejectionIterations ?? DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.rejectionIterations)),
+		exclusionMask: options.exclusionMask,
 	}
 }
 
 // Fits the background surface for one channel with iterative asymmetric residual rejection. Returns
 // the Chebyshev coefficients and fit diagnostics; does not evaluate the surface into an image.
 function fitChannelSurface(raw: ImageRawType, width: number, height: number, channels: number, channel: number, options: ResolvedFitOptions, terms: number, ti: Uint8Array, tj: Uint8Array): BackgroundSurfaceFit {
-	const { gridSize, boxSize, degree, tolerance, rejectionHigh, rejectionLow, rejectionIterations } = options
-	const samples = collectSamples(raw, width, height, channels, channel, gridSize, boxSize, tolerance)
+	const { gridSize, boxSize, degree, tolerance, rejectionHigh, rejectionLow, rejectionIterations, exclusionMask } = options
+	const samples = collectSamples(raw, width, height, channels, channel, gridSize, boxSize, tolerance, exclusionMask)
 
 	let coefficients = fitSurface(samples, degree, terms, ti, tj)
 	if (coefficients === undefined) throw new Error(`not enough clean background samples to fit a degree-${degree} surface (need at least ${terms})`)
@@ -564,6 +579,10 @@ export function fitBackgroundSurface(image: Image, options: BackgroundExtraction
 	const { raw, metadata } = image
 	const { width, height, channels } = metadata
 
+	if (fit.exclusionMask !== undefined && fit.exclusionMask.length !== width * height) {
+		throw new Error(`exclusionMask length must be ${width * height} (width*height), got ${fit.exclusionMask.length}`)
+	}
+
 	const terms = basisTermCount(fit.degree)
 	const ti = new Uint8Array(terms)
 	const tj = new Uint8Array(terms)
@@ -692,4 +711,44 @@ export function automaticBackgroundExtraction(image: Image, options: BackgroundE
 	}
 
 	return { image, background, channels }
+}
+
+// Options for `backgroundExclusionMaskFromStars`.
+export interface BackgroundStarExclusionOptions {
+	// Multiplier applied to each star's HFD to set the excluded disk radius, in pixels. Default 1.5.
+	readonly radiusScale?: number
+	// Minimum excluded disk radius in pixels, regardless of star size. Default 4.
+	readonly minRadius?: number
+}
+
+// Builds a pixel exclusion mask (1 = excluded, 0 = kept), row-major and width*height bytes, covering a
+// disk around each detected star sized from its HFD (radius = max(minRadius, radiusScale*hfd)). Feed
+// the result as `exclusionMask` to keep star-contaminated pixels out of background sampling. Star
+// positions and HFD are in pixels; stars outside the frame contribute only their overlapping pixels.
+export function backgroundExclusionMaskFromStars(width: number, height: number, stars: readonly DetectedStar[], options: BackgroundStarExclusionOptions = {}): Uint8Array {
+	const radiusScale = options.radiusScale ?? 1.5
+	const minRadius = options.minRadius ?? 4
+	const mask = new Uint8Array(width * height)
+
+	for (const star of stars) {
+		const radius = Math.max(minRadius, radiusScale * star.hfd)
+		const r2 = radius * radius
+		const x0 = Math.max(0, Math.floor(star.x - radius))
+		const x1 = Math.min(width - 1, Math.ceil(star.x + radius))
+		const y0 = Math.max(0, Math.floor(star.y - radius))
+		const y1 = Math.min(height - 1, Math.ceil(star.y + radius))
+
+		for (let y = y0; y <= y1; y++) {
+			const dy = y - star.y
+			const dy2 = dy * dy
+			let m = y * width + x0
+
+			for (let x = x0; x <= x1; x++, m++) {
+				const dx = x - star.x
+				if (dx * dx + dy2 <= r2) mask[m] = 1
+			}
+		}
+	}
+
+	return mask
 }

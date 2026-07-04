@@ -782,6 +782,7 @@ automaticBackgroundExtraction(image, options) // Model and remove a gradient/vig
 fitBackgroundSurface(image, options) // Fit a reusable background model without modifying the image
 evaluateBackgroundModel(model, image) // Materialize a fitted background model into an image
 applyBackground(image, background, options) // Remove a modeled background in place (subtract/divide)
+backgroundExclusionMaskFromStars(width, height, stars, options) // Build an ABE exclusion mask from detected stars
 brightness(image, value) // Adjust image brightness
 saturation(image, value, channel) // Adjust image saturation
 linear(image, slope, intercept) // Apply a linear transform

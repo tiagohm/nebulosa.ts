@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import type { Image } from '../../../src/imaging/model/types'
-import { applyBackground, automaticBackgroundExtraction, evaluateBackgroundModel, fitBackgroundSurface } from '../../../src/imaging/processing/background'
+import { applyBackground, automaticBackgroundExtraction, backgroundExclusionMaskFromStars, evaluateBackgroundModel, fitBackgroundSurface } from '../../../src/imaging/processing/background'
 import { Bitpix } from '../../../src/io/formats/fits/fits'
 
 // Builds a synthetic floating-point image from a per-pixel generator.
@@ -430,4 +430,65 @@ test('exposes the grid sample map for inspection', () => {
 	// Samples sitting on the blob are rejected; those far from it are kept.
 	const onBlob = samples.find((s) => Math.abs(s.x - 40) < 8 && Math.abs(s.y - 40) < 8)
 	expect(onBlob?.accepted).toBe(false)
+})
+
+test('an exclusion mask keeps masked regions out of the fit', () => {
+	const width = 128
+	const height = 128
+	const bg = (x: number, y: number) => 0.15 + 0.2 * (x / (width - 1)) + 0.1 * (y / (height - 1))
+	// A large bright object the internal dispersion test cannot fully reject on its own.
+	const object: readonly [number, number, number] = [40, 40, 18]
+	const image = makeImage(width, height, 1, (x, y) => {
+		const inside = (x - object[0]) * (x - object[0]) + (y - object[1]) * (y - object[1]) < object[2] * object[2]
+		return Math.min(1, bg(x, y) + (inside ? 0.5 : 0))
+	})
+
+	// Mask out a disk covering the object.
+	const mask = new Uint8Array(width * height)
+	for (let y = 0; y < height; y++) {
+		for (let x = 0; x < width; x++) {
+			const d2 = (x - object[0]) * (x - object[0]) + (y - object[1]) * (y - object[1])
+			if (d2 < (object[2] + 4) * (object[2] + 4)) mask[y * width + x] = 1
+		}
+	}
+
+	const masked = fitBackgroundSurface(image, { degree: 1, gridSize: 12, exclusionMask: mask })
+
+	// The model tracks the true gradient even at the masked object's location.
+	const bgImage = evaluateBackgroundModel(masked, image)
+	expect(bgImage.raw[object[1] * width + object[0]]).toBeCloseTo(bg(object[0], object[1]), 2)
+
+	// No accepted sample falls inside the masked disk.
+	for (const s of masked.surfaces[0].samples) {
+		if (!s.accepted) continue
+		const d2 = (s.x - object[0]) * (s.x - object[0]) + (s.y - object[1]) * (s.y - object[1])
+		expect(d2).toBeGreaterThan(object[2] * object[2])
+	}
+})
+
+test('backgroundExclusionMaskFromStars marks disks around stars', () => {
+	const width = 64
+	const height = 64
+	const stars = [
+		{ x: 20, y: 30, hfd: 4, fwhm: 3, snr: 50, flux: 1000 },
+		{ x: 50, y: 12, hfd: 2, fwhm: 1.5, snr: 20, flux: 200 },
+	]
+
+	const mask = backgroundExclusionMaskFromStars(width, height, stars, { radiusScale: 1.5, minRadius: 4 })
+	expect(mask).toHaveLength(width * height)
+
+	// Star centers are masked.
+	expect(mask[30 * width + 20]).toBe(1)
+	expect(mask[12 * width + 50]).toBe(1)
+	// A point far from every star is not.
+	expect(mask[0]).toBe(0)
+
+	// The first star's disk radius is max(4, 1.5*4) = 6: a pixel 5px away is masked, 8px away is not.
+	expect(mask[30 * width + 25]).toBe(1)
+	expect(mask[30 * width + (20 + 8)]).toBe(0)
+})
+
+test('fitBackgroundSurface rejects a wrongly sized exclusion mask', () => {
+	const image = makeImage(64, 64, 1, () => 0.2)
+	expect(() => fitBackgroundSurface(image, { degree: 1, gridSize: 8, exclusionMask: new Uint8Array(10) })).toThrow()
 })
