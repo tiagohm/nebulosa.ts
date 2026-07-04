@@ -301,8 +301,8 @@ function collectSamples(raw: ImageRawType, width: number, height: number, channe
 	// Derive the box half-size from the smaller cell edge when not given explicitly (half a cell).
 	const boxHalf = boxSize > 0 ? boxSize / 2 : Math.max(1.5, Math.min(cellW, cellH) * 0.25)
 
-	// Scratch buffers sized to the largest possible box, reused across every box.
-	const maxBox = Math.ceil(2 * boxHalf + 1)
+	// Scratch buffers sized to the largest possible inclusive floor/ceil box, reused across every box.
+	const maxBox = Math.ceil(2 * boxHalf) + 2
 	const buf = new Float64Array(maxBox * maxBox)
 	const dev = new Float64Array(maxBox * maxBox)
 

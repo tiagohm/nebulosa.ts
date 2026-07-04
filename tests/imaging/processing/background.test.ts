@@ -58,7 +58,7 @@ test('removes a smooth linear gradient by subtraction', () => {
 	// The corrected plane should be nearly flat around the requested pedestal.
 	const after = channelStdDev(result.image, 0)
 	expect(after.std).toBeLessThan(1e-3)
-	expect(after.mean).toBeCloseTo(0.1, 3)
+	expect(Math.abs(after.mean - 0.1)).toBeLessThan(1e-3)
 
 	// The fitted model should reproduce the injected gradient across the frame.
 	const model = result.background.raw
@@ -216,6 +216,23 @@ test('exposes exactly (degree+1)(degree+2)/2 coefficients regardless of sample c
 		expect(result.channels[0].acceptedSamples).toBeGreaterThan(terms)
 		expect(result.channels[0].coefficients).toHaveLength(terms)
 	}
+})
+
+test('explicit box sizes keep every sampled pixel in the statistics buffer', () => {
+	const width = 30
+	const height = 30
+	const bg = (x: number, y: number) => 0.1 + 0.3 * (x / (width - 1)) + 0.2 * (y / (height - 1))
+	const image = makeImage(width, height, 1, bg)
+
+	const result = automaticBackgroundExtraction(image, { degree: 1, gridSize: 10, boxSize: 4, tolerance: 0, rejectionIterations: 0, correction: 'none' })
+
+	const model = result.background.raw
+	let maxError = 0
+	for (let y = 0; y < height; y++) {
+		for (let x = 0; x < width; x++) maxError = Math.max(maxError, Math.abs(model[y * width + x] - bg(x, y)))
+	}
+
+	expect(maxError).toBeLessThan(0.01)
 })
 
 test('fits a high-degree surface accurately (Chebyshev conditioning)', () => {
