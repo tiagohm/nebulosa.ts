@@ -6,8 +6,9 @@ import { clone } from './transformation'
 
 // Automatic Background Extraction (ABE): models a smooth sky background from a grid of robust
 // samples and removes it, correcting gradients, vignetting, and light pollution. The background is
-// approximated by a low-degree 2D polynomial surface fitted by least squares to per-box median
-// samples, with structure (stars, nebulae) rejected first by high internal box dispersion and then
+// approximated by a low-degree 2D polynomial surface (tensor Chebyshev basis) fitted by least
+// squares to per-box median samples, with structure (stars, nebulae) rejected first by high
+// internal box dispersion and then
 // iteratively by fit residuals. The fitted surface is either subtracted (additive gradients/light
 // pollution) or divided out (multiplicative vignetting). Color images fit each channel independently.
 // https://pixinsight.com/doc/tools/AutomaticBackgroundExtractor/AutomaticBackgroundExtractor.html
@@ -48,8 +49,8 @@ export interface BackgroundExtractionOptions {
 
 // Fitted background model for a single channel.
 export interface BackgroundExtractionChannelModel {
-	// Polynomial coefficients ordered by ascending total degree, indexing the basis u^i * v^j with
-	// i + j <= degree and normalized coordinates u, v in [-1, 1].
+	// Surface coefficients ordered by ascending total degree, indexing the tensor Chebyshev basis
+	// T_i(u) * T_j(v) with i + j <= degree and normalized coordinates u, v in [-1, 1].
 	readonly coefficients: Float64Array
 	// Number of grid samples that survived rejection and fed the final fit.
 	readonly acceptedSamples: number
@@ -102,8 +103,8 @@ function basisTermCount(degree: number) {
 	return ((degree + 1) * (degree + 2)) / 2
 }
 
-// Fills `ti`/`tj` with the (i, j) exponent pairs of the basis u^i * v^j ordered by ascending total
-// degree. Returns the number of terms written.
+// Fills `ti`/`tj` with the (i, j) index pairs of the tensor basis T_i(u) * T_j(v) ordered by
+// ascending total degree i + j. Returns the number of terms written.
 function fillBasisExponents(degree: number, ti: Uint8Array, tj: Uint8Array) {
 	let k = 0
 
@@ -116,6 +117,18 @@ function fillBasisExponents(degree: number, ti: Uint8Array, tj: Uint8Array) {
 	}
 
 	return k
+}
+
+// Fills `out[offset..offset+degree]` with Chebyshev polynomials of the first kind T_0..T_degree at
+// `x` (expected in [-1, 1]) via the recurrence T_0 = 1, T_1 = x, T_d = 2x*T_{d-1} - T_{d-2}. The
+// surface basis is the tensor product T_i(u)*T_j(v); Chebyshev polynomials are orthogonal on
+// [-1, 1], so the least-squares design matrix is far better conditioned than with raw monomials
+// u^i*v^j, which keeps the fit stable at higher degrees.
+function fillChebyshev(out: Float64Array, offset: number, x: number, degree: number) {
+	out[offset] = 1
+	if (degree >= 1) out[offset + 1] = x
+	const x2 = 2 * x
+	for (let d = 2; d <= degree; d++) out[offset + d] = x2 * out[offset + d - 1] - out[offset + d - 2]
 }
 
 // Robust center and dispersion of the first `count` values in `buf`. Sorts `buf` in place and uses
@@ -213,7 +226,7 @@ function collectSamples(raw: ImageRawType, width: number, height: number, channe
 	return samples
 }
 
-// Fits a 2D polynomial surface to the currently active samples by least squares (QR). Returns the
+// Fits a 2D Chebyshev surface to the currently active samples by least squares (QR). Returns the
 // coefficient vector, or undefined when there are too few samples or the system is rank deficient.
 function fitSurface(samples: readonly BackgroundSample[], degree: number, terms: number, ti: Uint8Array, tj: Uint8Array) {
 	let m = 0
@@ -223,23 +236,19 @@ function fitSurface(samples: readonly BackgroundSample[], degree: number, terms:
 	const A = new Matrix(m, terms)
 	const b = new Float64Array(m)
 	const data = A.data
-	const uPow = new Float64Array(degree + 1)
-	const vPow = new Float64Array(degree + 1)
-	uPow[0] = 1
-	vPow[0] = 1
+	const uCheb = new Float64Array(degree + 1)
+	const vCheb = new Float64Array(degree + 1)
 
 	let row = 0
 
 	for (const sample of samples) {
 		if (!sample.active) continue
 
-		for (let d = 1; d <= degree; d++) {
-			uPow[d] = uPow[d - 1] * sample.u
-			vPow[d] = vPow[d - 1] * sample.v
-		}
+		fillChebyshev(uCheb, 0, sample.u, degree)
+		fillChebyshev(vCheb, 0, sample.v, degree)
 
 		const base = row * terms
-		for (let k = 0; k < terms; k++) data[base + k] = uPow[ti[k]] * vPow[tj[k]]
+		for (let k = 0; k < terms; k++) data[base + k] = uCheb[ti[k]] * vCheb[tj[k]]
 		b[row] = sample.value
 		row++
 	}
@@ -255,15 +264,13 @@ function fitSurface(samples: readonly BackgroundSample[], degree: number, terms:
 	}
 }
 
-// Evaluates the polynomial surface at a normalized point using precomputed exponent tables.
-function evaluateSurface(coefficients: Float64Array, u: number, v: number, degree: number, terms: number, ti: Uint8Array, tj: Uint8Array, uPow: Float64Array, vPow: Float64Array) {
-	for (let d = 1; d <= degree; d++) {
-		uPow[d] = uPow[d - 1] * u
-		vPow[d] = vPow[d - 1] * v
-	}
+// Evaluates the Chebyshev surface at a normalized point, using `uCheb`/`vCheb` as reusable scratch.
+function evaluateSurface(coefficients: Float64Array, u: number, v: number, degree: number, terms: number, ti: Uint8Array, tj: Uint8Array, uCheb: Float64Array, vCheb: Float64Array) {
+	fillChebyshev(uCheb, 0, u, degree)
+	fillChebyshev(vCheb, 0, v, degree)
 
 	let sum = 0
-	for (let k = 0; k < terms; k++) sum += coefficients[k] * uPow[ti[k]] * vPow[tj[k]]
+	for (let k = 0; k < terms; k++) sum += coefficients[k] * uCheb[ti[k]] * vCheb[tj[k]]
 	return sum
 }
 
@@ -279,10 +286,8 @@ function modelChannel(raw: ImageRawType, model: ImageRawType, width: number, hei
 
 	const residuals = new Float64Array(samples.length)
 	const residualScratch = new Float64Array(samples.length)
-	const uPow = new Float64Array(degree + 1)
-	const vPow = new Float64Array(degree + 1)
-	uPow[0] = 1
-	vPow[0] = 1
+	const uCheb = new Float64Array(degree + 1)
+	const vCheb = new Float64Array(degree + 1)
 	let residualDispersion = 0
 
 	// Iteratively reject samples sitting far above the fitted surface (residual outliers are structure
@@ -291,7 +296,7 @@ function modelChannel(raw: ImageRawType, model: ImageRawType, width: number, hei
 		let count = 0
 		for (const sample of samples) {
 			if (!sample.active) continue
-			residuals[count++] = sample.value - evaluateSurface(coefficients, sample.u, sample.v, degree, terms, ti, tj, uPow, vPow)
+			residuals[count++] = sample.value - evaluateSurface(coefficients, sample.u, sample.v, degree, terms, ti, tj, uCheb, vCheb)
 		}
 
 		// Robust residual spread; medianOf needs sorted input, so copy before sorting to keep the
@@ -324,32 +329,27 @@ function modelChannel(raw: ImageRawType, model: ImageRawType, width: number, hei
 		coefficients = refit
 	}
 
-	// Evaluate the fitted surface at every pixel of this channel. Precompute per-column u powers so the
-	// inner loop only multiplies against per-row v powers.
+	// Evaluate the fitted surface at every pixel of this channel. Precompute per-column Chebyshev
+	// values so the inner loop only multiplies against the per-row Chebyshev values.
 	const invW = width > 1 ? 2 / (width - 1) : 0
 	const invH = height > 1 ? 2 / (height - 1) : 0
-	const uPowTable = new Float64Array(width * (degree + 1))
+	const uChebTable = new Float64Array(width * (degree + 1))
 
 	for (let x = 0; x < width; x++) {
-		const u = x * invW - 1
-		const base = x * (degree + 1)
-		uPowTable[base] = 1
-		for (let d = 1; d <= degree; d++) uPowTable[base + d] = uPowTable[base + d - 1] * u
+		fillChebyshev(uChebTable, x * (degree + 1), x * invW - 1, degree)
 	}
 
 	const vRow = new Float64Array(degree + 1)
-	vRow[0] = 1
 
 	for (let y = 0; y < height; y++) {
-		const v = y * invH - 1
-		for (let d = 1; d <= degree; d++) vRow[d] = vRow[d - 1] * v
+		fillChebyshev(vRow, 0, y * invH - 1, degree)
 
 		let i = y * width * channels + channel
 
 		for (let x = 0; x < width; x++, i += channels) {
 			const base = x * (degree + 1)
 			let sum = 0
-			for (let k = 0; k < terms; k++) sum += coefficients[k] * uPowTable[base + ti[k]] * vRow[tj[k]]
+			for (let k = 0; k < terms; k++) sum += coefficients[k] * uChebTable[base + ti[k]] * vRow[tj[k]]
 			model[i] = sum
 		}
 	}

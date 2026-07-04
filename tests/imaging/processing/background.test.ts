@@ -185,3 +185,30 @@ test('exposes exactly (degree+1)(degree+2)/2 coefficients regardless of sample c
 		expect(result.channels[0].coefficients).toHaveLength(terms)
 	}
 })
+
+test('fits a high-degree surface accurately (Chebyshev conditioning)', () => {
+	const width = 160
+	const height = 160
+	// A smooth non-monotonic polynomial background that only a high degree can capture. The orthogonal
+	// Chebyshev basis keeps the degree-6 least-squares fit well conditioned, where raw monomials would
+	// lose precision. Residual rejection is disabled so the surface is judged on approximation alone.
+	const bg = (x: number, y: number) => {
+		const u = (x / (width - 1)) * 2 - 1
+		const v = (y / (height - 1)) * 2 - 1
+		return 0.4 + 0.1 * u + 0.08 * v - 0.05 * u * v + 0.02 * (u * u - 1) + 0.03 * u * u * v
+	}
+	const image = makeImage(width, height, 1, (x, y) => bg(x, y))
+
+	const result = automaticBackgroundExtraction(image, { degree: 6, gridSize: 24, correction: 'none', rejectionIterations: 0 })
+	expect(result.channels[0].coefficients).toHaveLength(28)
+
+	// The evaluated model should track the true surface everywhere, including the frame corners.
+	const model = result.background.raw
+	let maxError = 0
+	for (let y = 0; y < height; y += 8) {
+		for (let x = 0; x < width; x += 8) {
+			maxError = Math.max(maxError, Math.abs(model[y * width + x] - bg(x, y)))
+		}
+	}
+	expect(maxError).toBeLessThan(4e-3)
+})
