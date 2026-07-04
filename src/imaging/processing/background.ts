@@ -684,6 +684,10 @@ function fitChannelSurface(raw: ImageRawType, width: number, height: number, cha
 	const vCheb = new Float64Array(degree + 1)
 	let residualDispersion = 0
 
+	// Samples rejected during the current pass. Tracked so they can be reinstated if the subsequent
+	// refit turns out to be unsolvable, keeping the reported accepted set consistent with the kept fit.
+	const rejectedThisPass: SurfaceSample[] = []
+
 	// Iteratively reject residual outliers and refit until the iteration budget is spent or nothing is
 	// rejected. Rejection is asymmetric: the sky background is the lower envelope of the data, so
 	// samples above the surface (contaminating structure) are rejected with a tight sigma while samples
@@ -701,7 +705,7 @@ function fitChannelSurface(raw: ImageRawType, width: number, height: number, cha
 
 		const highLimit = rejectionHigh * residualDispersion
 		const lowLimit = rejectionLow * residualDispersion
-		let rejected = 0
+		rejectedThisPass.length = 0
 		let index = 0
 		for (const sample of samples) {
 			if (!sample.active) continue
@@ -709,15 +713,21 @@ function fitChannelSurface(raw: ImageRawType, width: number, height: number, cha
 			const residual = residuals[index]
 			if (residual > highLimit || residual < -lowLimit) {
 				sample.active = false
-				rejected++
+				rejectedThisPass.push(sample)
 			}
 			index++
 		}
 
-		if (rejected === 0) break
+		if (rejectedThisPass.length === 0) break
 
 		const refit = fitSurface(samples, degree, terms, ti, tj)
-		if (refit === undefined) break
+		if (refit === undefined) {
+			// The reduced sample set has fewer rows than terms, so the refit is unsolvable. Reinstate the
+			// samples rejected in this pass and keep the previous fit, which matches those samples, so the
+			// reported accepted set stays consistent with the evaluated coefficients.
+			for (const sample of rejectedThisPass) sample.active = true
+			break
+		}
 		coefficients = refit
 	}
 

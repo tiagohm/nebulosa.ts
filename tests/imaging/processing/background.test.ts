@@ -213,6 +213,28 @@ test('rejects a non-finite gridSize instead of hanging', () => {
 	expect(() => fitBackgroundSurface(image, { gridSize: Infinity })).toThrow()
 })
 
+test('keeps the reported accepted set consistent with the kept fit after a failed refit', () => {
+	// A very tight residual threshold makes the first rejection pass drop the active set below the 6
+	// terms of a degree-2 surface, so the refit is unsolvable. The accepted samples reinstated in that
+	// pass must be restored, so the reported accepted count never falls below the coefficients actually
+	// evaluated; otherwise the surface would be built from more samples than the result claims.
+	const width = 60
+	const height = 60
+	// Mild cubic structure a degree-2 surface cannot fully capture, leaving a non-zero residual spread.
+	const bg = (x: number, y: number) => {
+		const u = x / (width - 1)
+		const v = y / (height - 1)
+		return 0.3 + 0.2 * u * u * u + 0.15 * v * v * v + 0.05 * u * v
+	}
+	const image = makeImage(width, height, 1, bg)
+
+	const model = fitBackgroundSurface(image, { degree: 2, gridSize: 3, tolerance: 0, rejectionHigh: 0.01, rejectionLow: 0.01, rejectionIterations: 2 })
+	const surface = model.surfaces[0]
+
+	expect(surface.acceptedSamples).toBeGreaterThanOrEqual(surface.coefficients.length)
+	for (const c of surface.coefficients) expect(Number.isFinite(c)).toBe(true)
+})
+
 test('exposes exactly (degree+1)(degree+2)/2 coefficients regardless of sample count', () => {
 	const width = 96
 	const height = 96
