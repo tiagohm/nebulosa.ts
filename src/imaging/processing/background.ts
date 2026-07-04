@@ -506,6 +506,41 @@ function tpsKernel(sq: number) {
 	return sq > 0 ? 0.5 * sq * Math.log(sq) : 0
 }
 
+// Upper bound on thin-plate spline control points. The TPS fit solves a dense (k+3)x(k+3) system in
+// O(k^3) and, for an exact (zero-smoothing) spline, evaluation costs O(width*height*k) kernel calls, so
+// both blow up for very dense grids. This cap keeps the fit and evaluation tractable; the default grid
+// (gridSize 24, up to ~576 samples) stays well under it, so normal usage is unaffected. Chosen as a
+// perfect square so the spatial buckets below tile evenly.
+const TPS_MAX_CONTROL_POINTS = 1024
+
+// Deterministically subsamples the active samples down to at most `maxPoints` control points, preserving
+// spatial coverage: the normalized [-1, 1] domain is split into a g x g grid (g = floor(sqrt(maxPoints)))
+// and the first active sample landing in each bucket is kept. Returns `samples` unchanged when the active
+// count is already within the cap, so the common case allocates nothing. The returned samples are all
+// active, so fitThinPlateSpline uses exactly them as control points.
+function subsampleControlPoints(samples: readonly SurfaceSample[], maxPoints: number): readonly SurfaceSample[] {
+	let active = 0
+	for (const sample of samples) if (sample.active) active++
+	if (active <= maxPoints) return samples
+
+	const g = Math.max(1, Math.floor(Math.sqrt(maxPoints)))
+	const seen = new Uint8Array(g * g)
+	const chosen: SurfaceSample[] = []
+
+	for (const sample of samples) {
+		if (!sample.active) continue
+		// Map u, v in [-1, 1] to a bucket in [0, g); clamp guards the exact +1 edge.
+		const bu = Math.min(g - 1, Math.floor(((sample.u + 1) / 2) * g))
+		const bv = Math.min(g - 1, Math.floor(((sample.v + 1) / 2) * g))
+		const b = bv * g + bu
+		if (seen[b]) continue
+		seen[b] = 1
+		chosen.push(sample)
+	}
+
+	return chosen
+}
+
 // Fits a smoothing thin-plate spline to the currently active samples. Solves the (k+3)x(k+3)
 // saddle-point system [K + s*W^-1, P; P^T, 0] [w; a] = [f; 0], where K_ij = U(|p_i - p_j|), P rows are
 // [1, u_i, v_i], `s` is the smoothing term scaled by each sample's inverse weight, and the P^T rows
@@ -739,8 +774,9 @@ function fitChannelSurface(raw: ImageRawType, width: number, height: number, cha
 		// outliers and be rejected, leaving the spline fit only to the surrounding floor. The
 		// box-dispersion prefilter in collectSamples still drops star-contaminated boxes, which is the
 		// appropriate rejection for a flexible interpolating surface. The final surface is a smoothing
-		// TPS through the surviving samples.
-		const tps = fitThinPlateSpline(samples, smoothing)
+		// TPS through the surviving samples, capped to a tractable number of control points on dense grids.
+		const controlSamples = subsampleControlPoints(samples, TPS_MAX_CONTROL_POINTS)
+		const tps = fitThinPlateSpline(controlSamples, smoothing)
 		if (tps === undefined) throw new Error('thin-plate spline fit failed (needs at least 3 clean samples and a non-singular system)')
 		coefficients = tps.coefficients
 		controlPoints = tps.controlPoints

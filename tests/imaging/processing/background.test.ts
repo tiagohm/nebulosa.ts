@@ -848,6 +848,34 @@ test('thin-plate spline extraction flattens a complex gradient', () => {
 	expect(after.std).toBeLessThan(5e-3)
 })
 
+test('caps thin-plate spline control points on dense grids', () => {
+	// A dense grid produces far more accepted samples than the TPS control-point cap (1024). The fit
+	// must subsample the control points to stay tractable (the dense solve is O(k^3)) while still
+	// reporting every accepted sample and following the background. The default grid stays under the cap.
+	const width = 400
+	const height = 400
+	const bg = (x: number, y: number) => 0.3 + 0.15 * Math.sin(3 * (x / width)) * Math.cos(3 * (y / height)) + 0.1 * (x / width)
+	const image = makeImage(width, height, 1, (x, y) => bg(x, y))
+
+	const dense = fitBackgroundSurface(image, { model: 'thinPlateSpline', gridSize: 48, smoothing: 0.05 })
+	const controlPoints = dense.surfaces[0].controlPoints!.length / 2
+	// Far more samples survive than control points are kept, and the kept set honors the cap.
+	expect(dense.surfaces[0].acceptedSamples).toBeGreaterThan(1024)
+	expect(controlPoints).toBeLessThanOrEqual(1024)
+
+	// The capped spline still tracks the background.
+	const background = evaluateBackgroundModel(dense, image).raw
+	let maxError = 0
+	for (let y = 0; y < height; y += 4) {
+		for (let x = 0; x < width; x += 4) maxError = Math.max(maxError, Math.abs(background[y * width + x] - bg(x, y)))
+	}
+	expect(maxError).toBeLessThan(0.03)
+
+	// A default-density grid stays under the cap, so every accepted sample is a control point.
+	const normal = fitBackgroundSurface(image, { model: 'thinPlateSpline', gridSize: 16, smoothing: 0.05 })
+	expect(normal.surfaces[0].controlPoints!.length).toBe(normal.surfaces[0].acceptedSamples * 2)
+}, 4000)
+
 test('a thin-plate spline model reuses across frames and evaluate rejects mismatched geometry', () => {
 	const width = 80
 	const height = 80
