@@ -855,6 +855,16 @@ function saturnRingOpeningAngle() {
 	console.info('Saturn ring opening angle B (deg):', toDeg(b.latitude).toFixed(3))
 }
 
+// Saturn Ring Orientation: how the ring plane is tilted on the sky. The rings lie in Saturn's equator, so
+// their axis is the planet's north pole; positionAngleOfPole gives that pole's position angle from
+// celestial north through east, which is the orientation of the rings' minor axis (the major axis lies
+// 90deg from it). Together with the opening angle B this fixes the projected ellipse of the rings.
+function saturnRingOrientation() {
+	const toEarth = vecMinus(earth(NOW)[0], saturn(NOW)[0])
+	const p = positionAngleOfPole(SATURN_ROTATION, NOW, toEarth)
+	console.info('Saturn north-pole position angle (deg):', toDeg(normalizeAngle(p)).toFixed(2))
+}
+
 // Jupiter Great Red Spot Transit: jupiterCentralMeridian gives the System II central meridian and
 // greatRedSpotTransits finds when the spot (at its observed System II longitude, supplied by the caller
 // from the ALPO/JUPOS bulletins) crosses it.
@@ -2059,6 +2069,7 @@ function run() {
 	subObserverPoint()
 	subSolarPoint()
 	saturnRingOpeningAngle()
+	saturnRingOrientation()
 	jupiterGreatRedSpotTransit()
 
 	// Sun and Moon
