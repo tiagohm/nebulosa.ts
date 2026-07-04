@@ -312,11 +312,22 @@ function collectSamples(raw: ImageRawType, width: number, height: number, channe
 	const cellW = width / nx
 	const cellH = height / ny
 
-	// Derive the box half-size from the smaller cell edge when not given explicitly (half a cell).
-	const boxHalf = boxSize > 0 ? boxSize / 2 : Math.max(1.5, Math.min(cellW, cellH) * 0.25)
+	// An explicit boxSize is the exact sampled side length in pixels: build an integer window of exactly
+	// boxSize pixels per axis, centered on the cell center. A real-valued half-size with inclusive
+	// floor/ceil bounds would instead sample boxSize + 1 pixels for fractional centers, weakening small
+	// boxes at avoiding stars and letting under-sized boxes slip past MIN_BOX_SAMPLES. When boxSize is
+	// not given, fall back to a real-valued half-size derived from the smaller cell edge (about half a
+	// cell). Capped to the long axis so a pathologically large boxSize cannot oversize the buffers.
+	const explicitBox = boxSize > 0
+	const boxPixels = explicitBox ? clamp(Math.trunc(boxSize), 1, longAxis) : 0
+	// Fractional half-extent used to center the integer window on the cell center; each box records its
+	// true centroid so the sampled value is attributed to the right position even when the window is
+	// nudged inward at the frame edges.
+	const halfBox = (boxPixels - 1) / 2
+	const boxHalf = explicitBox ? 0 : Math.max(1.5, Math.min(cellW, cellH) * 0.25)
 
-	// Scratch buffers sized to the largest possible inclusive floor/ceil box, reused across every box.
-	const maxBox = Math.ceil(2 * boxHalf) + 2
+	// Scratch buffers sized to the largest possible box, reused across every box.
+	const maxBox = explicitBox ? boxPixels : Math.ceil(2 * boxHalf) + 2
 	const buf = new Float64Array(maxBox * maxBox)
 	const dev = new Float64Array(maxBox * maxBox)
 
@@ -334,13 +345,17 @@ function collectSamples(raw: ImageRawType, width: number, height: number, channe
 
 	for (let r = 0; r < ny; r++) {
 		const cy = Math.min((r + 0.5) * cellH, maxY)
-		const y0 = Math.max(0, Math.floor(cy - boxHalf))
-		const y1 = Math.min(height - 1, Math.ceil(cy + boxHalf))
+		// For an explicit box, take exactly boxPixels rows centered on cy, shifting the window inside the
+		// frame at the edges; otherwise use the real-valued half-size with inclusive floor/ceil bounds.
+		const y0 = explicitBox ? clamp(Math.round(cy - halfBox), 0, Math.max(0, height - boxPixels)) : Math.max(0, Math.floor(cy - boxHalf))
+		const y1 = explicitBox ? Math.min(height - 1, y0 + boxPixels - 1) : Math.min(height - 1, Math.ceil(cy + boxHalf))
+		const sy = explicitBox ? (y0 + y1) / 2 : cy
 
 		for (let c = 0; c < nx; c++) {
 			const cx = Math.min((c + 0.5) * cellW, maxX)
-			const x0 = Math.max(0, Math.floor(cx - boxHalf))
-			const x1 = Math.min(width - 1, Math.ceil(cx + boxHalf))
+			const x0 = explicitBox ? clamp(Math.round(cx - halfBox), 0, Math.max(0, width - boxPixels)) : Math.max(0, Math.floor(cx - boxHalf))
+			const x1 = explicitBox ? Math.min(width - 1, x0 + boxPixels - 1) : Math.min(width - 1, Math.ceil(cx + boxHalf))
+			const sx = explicitBox ? (x0 + x1) / 2 : cx
 
 			let count = 0
 
@@ -362,10 +377,10 @@ function collectSamples(raw: ImageRawType, width: number, height: number, channe
 			if (!Number.isFinite(median)) continue
 
 			samples.push({
-				x: cx,
-				y: cy,
-				u: cx * invW - 1,
-				v: cy * invH - 1,
+				x: sx,
+				y: sy,
+				u: sx * invW - 1,
+				v: sy * invH - 1,
 				value: median,
 				dispersion: Number.isFinite(dispersion) ? dispersion : 0,
 				weight: 1,

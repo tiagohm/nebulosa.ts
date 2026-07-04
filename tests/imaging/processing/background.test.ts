@@ -266,6 +266,20 @@ test('explicit box sizes keep every sampled pixel in the statistics buffer', () 
 	expect(maxError).toBeLessThan(0.01)
 })
 
+test('an explicit boxSize samples exactly that many pixels per axis', () => {
+	// boxSize is the sampled side length in pixels. A boxSize of 1 must sample a single pixel per box,
+	// not a 2x2 window (which a real-valued half-size with inclusive floor/ceil bounds would produce for
+	// fractional grid centers). With one pixel per box no box reaches the 4-pixel minimum, so every box
+	// is skipped and the fit fails for lack of samples. A boxSize of 2 samples exactly a 2x2 = 4-pixel
+	// box, which meets the minimum and yields one sample per grid cell.
+	const image = makeImage(64, 64, 1, (x, y) => 0.2 + 0.1 * (x / 63) + 0.05 * (y / 63))
+
+	expect(() => fitBackgroundSurface(image, { degree: 1, gridSize: 20, boxSize: 1, tolerance: 0, rejectionIterations: 0 })).toThrow()
+
+	const model = fitBackgroundSurface(image, { degree: 1, gridSize: 20, boxSize: 2, tolerance: 0, rejectionIterations: 0 })
+	expect(model.surfaces[0].samples.length).toBe(20 * 20)
+})
+
 test('fits a high-degree surface accurately (Chebyshev conditioning)', () => {
 	const width = 160
 	const height = 160
