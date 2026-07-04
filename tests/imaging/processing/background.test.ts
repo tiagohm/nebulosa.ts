@@ -1015,6 +1015,29 @@ test('thin-plate spline preserves a bright flat-topped object instead of subtrac
 	expect(result.image.raw[5 * width + 5]).toBeCloseTo(0, 2)
 })
 
+test('thin-plate spline preserves a large flat-topped object that inflates the sample spread', () => {
+	// A larger saturated object (48x48 at 0.8) fills roughly a quarter of the sample boxes on a flat 0.2
+	// frame. Its outlier mode inflates the ordinary standard deviation of the box medians enough that a
+	// spread-scaled bright limit would outrun the object and reject nothing, so the TPS would model the
+	// object at ~0.8 and subtract it to ~0. The rejection must anchor its threshold to the collapsed robust
+	// scale (the flat mode's MAD) so the object mode is still separated regardless of how many boxes it fills.
+	const width = 100
+	const height = 100
+	const isObject = (x: number, y: number) => Math.abs(x - 50) < 24 && Math.abs(y - 50) < 24
+	const image = makeImage(width, height, 1, (x, y) => (isObject(x, y) ? 0.8 : 0.2))
+
+	const result = automaticBackgroundExtraction(image, { model: 'thinPlateSpline', correction: 'subtract', targetBackground: 0 })
+
+	// The object boxes are rejected and the modeled background sits on the 0.2 floor, not on the object.
+	expect(result.channels[0].rejectedSamples).toBeGreaterThan(0)
+	expect(result.background.raw[50 * width + 50]).toBeCloseTo(0.2, 2)
+
+	// After subtraction the object stays bright (~0.6) rather than being flattened toward 0.
+	expect(result.image.raw[50 * width + 50]).toBeGreaterThan(0.5)
+	// The surrounding sky is corrected to the pedestal.
+	expect(result.image.raw[5 * width + 5]).toBeCloseTo(0, 2)
+})
+
 test('thin-plate spline extraction flattens a complex gradient', () => {
 	const width = 96
 	const height = 96

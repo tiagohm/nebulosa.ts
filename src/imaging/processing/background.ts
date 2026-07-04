@@ -622,8 +622,14 @@ function rejectFlatToppedStructure(samples: readonly SurfaceSample[], buffer: Fl
 		// Only reject when the distribution is flat-plus-outliers (collapsed MAD), never for smooth structure.
 		if (!(spread > 0) || mad > TPS_BIMODAL_MAD_RATIO * spread) return
 
-		const highLimit = rejectionHigh > 0 ? center + rejectionHigh * spread : Infinity
-		const lowLimit = rejectionLow > 0 ? center - rejectionLow * spread : -Infinity
+		// Scale the limits by the collapsed robust scale (MAD of the flat mode), not the ordinary standard
+		// deviation: the outlier mode itself inflates `spread`, so once a saturated object fills enough boxes
+		// (roughly a quarter of the frame) a spread-scaled bright limit outruns the object and rejects nothing.
+		// The MAD reflects the flat mode's dispersion regardless of how many outlier boxes exist, keeping the
+		// threshold anchored to the background. When the flat mode is noise-free MAD is 0 and the limit
+		// collapses to `center`, which still separates the two modes cleanly.
+		const highLimit = rejectionHigh > 0 ? center + rejectionHigh * mad : Infinity
+		const lowLimit = rejectionLow > 0 ? center - rejectionLow * mad : -Infinity
 		let rejected = 0
 		for (const sample of samples) {
 			if (!sample.active) continue
