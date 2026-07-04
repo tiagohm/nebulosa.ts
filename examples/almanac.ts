@@ -58,7 +58,7 @@ import { Matrix } from '../src/math/linear-algebra/matrix'
 // oxfmt-ignore
 import { Timescale, dut1 as dut1FromTime, earthRotationAngle, equationOfEquinoxes, greenwichApparentSiderealTime, greenwichMeanSiderealTime, nutationAngles, pmAngles, pmMatrix, tai, taiMinusUtc, tcb, tdb, timeBesselianYear, timeJulianYear, timeMJD, timeShift, timeSubtract, timeToDate, timeUnix, timeYMDHMS, toJulianDay, toJulianEpoch, tt, ut1, utc, type Time } from '../src/astronomy/time/time'
 import { formatTemporal, temporalFromTime } from '../src/astronomy/time/temporal'
-import { AU_KM, DAYSEC, DAYSPERSY, DAYSPERTY, EARTH_RADIUS_KM, GM_SUN_PITJEVA_2005, PI, SPEED_OF_LIGHT_AU_DAY, SUN_RADIUS_AU, TAU } from '../src/core/constants'
+import { AU_KM, DAYSEC, DAYSPERSY, DAYSPERTY, EARTH_RADIUS_KM, GM_EARTH, GM_EARTH_KM3_S2, GM_SUN_PITJEVA_2005, PI, SPEED_OF_LIGHT_AU_DAY, SUN_RADIUS_AU, TAU } from '../src/core/constants'
 import { type Vec3, vecAngle, vecCross, vecLatitude, vecLength, vecLongitude, vecMinus, vecMulScalar, vecNormalize } from '../src/math/linear-algebra/vec3'
 import { sphericalDestination, sphericalInterpolate, sphericalPolygonArea, sphericalPositionAngle, sphericalProjectTangentPlane, sphericalSeparation, sphericalTriangleAngles, sphericalTriangleArea, sphericalUnprojectTangentPlane } from '../src/math/numerical/geometry'
 import { type Angle, arcsec, deg, formatAZ, formatHMS, formatSignedDMS, hms, hour, normalizeAngle, normalizePI, toArcsec, toDeg, toHour } from '../src/math/units/angle'
@@ -1556,6 +1556,46 @@ function orbitalEnergy() {
 	console.info('Specific orbital energy (AU^2/day^2):', energy)
 }
 
+// Semi-major axes (AU) of the Earth and Mars orbits, reused by the synodic-period and Hill-sphere demos.
+const EARTH_SEMI_MAJOR_AXIS = 1.00000011
+const MARS_SEMI_MAJOR_AXIS = 1.52371034
+
+// Synodic Period: the time between successive identical Sun-Earth-planet configurations (e.g. oppositions),
+// from the sidereal periods via 1 / S = |1/P1 - 1/P2|. Here the Earth and Mars sidereal periods come from
+// their semi-major axes through period(); the ~780 d result matches the spacing of the opposition scans.
+function synodicPeriodComputation() {
+	const earthPeriod = period(EARTH_SEMI_MAJOR_AXIS, GM_SUN_PITJEVA_2005)
+	const marsPeriod = period(MARS_SEMI_MAJOR_AXIS, GM_SUN_PITJEVA_2005)
+	const synodic = 1 / Math.abs(1 / earthPeriod - 1 / marsPeriod)
+	console.info('Earth-Mars synodic period (days):', synodic.toFixed(1))
+}
+
+// Escape Velocity: the speed needed to reach infinity from a spherical body, v = sqrt(2 mu / r). Evaluated
+// at the Earth's surface with the Earth GM (km^3/s^2) and radius (km), so the result is km/s directly.
+function escapeVelocityComputation() {
+	const v = Math.sqrt((2 * GM_EARTH_KM3_S2) / EARTH_RADIUS_KM)
+	console.info('Earth surface escape velocity (km/s):', v.toFixed(3))
+}
+
+// Hill Sphere Radius: the region where a body's gravity dominates the primary's tide, r_H = a (1 - e)
+// (m / 3M)^(1/3). The mass ratio m/M equals the GM ratio; the Earth-about-Sun value is ~0.0098 AU
+// (~1.5 million km), comfortably enclosing the Moon's orbit.
+function hillSphereRadius() {
+	const EARTH_ECCENTRICITY = 0.01671
+	const hill = EARTH_SEMI_MAJOR_AXIS * (1 - EARTH_ECCENTRICITY) * Math.cbrt(GM_EARTH / GM_SUN_PITJEVA_2005 / 3)
+	console.info('Earth Hill sphere radius (AU):', hill.toFixed(5), '(km):', toKilometer(hill).toFixed(0))
+}
+
+// Roche Limit: the distance inside which a fluid satellite is torn apart by tides, d = 2.44 R_primary
+// (rho_primary / rho_satellite)^(1/3). Shown for the Earth-Moon densities; the ~18400 km result is well
+// inside the Moon's actual orbit, so the Moon is safe.
+function rocheLimitComputation() {
+	const EARTH_DENSITY = 5514 // kg/m^3
+	const MOON_DENSITY = 3344 // kg/m^3
+	const roche = 2.44 * EARTH_RADIUS_KM * Math.cbrt(EARTH_DENSITY / MOON_DENSITY)
+	console.info('Earth-Moon fluid Roche limit (km):', roche.toFixed(0))
+}
+
 // Angular Momentum Vector: h = r x v.
 function angularMomentumVector() {
 	const [p, v] = asteroidKeplerOrbit().at(NOW)
@@ -2108,6 +2148,10 @@ function run() {
 	meanMotionComputation()
 	periapsisAndApoapsisDistance()
 	orbitalEnergy()
+	synodicPeriodComputation()
+	escapeVelocityComputation()
+	hillSphereRadius()
+	rocheLimitComputation()
 	angularMomentumVector()
 	orbitClassification()
 	osculatingElements()
