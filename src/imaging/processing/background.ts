@@ -686,6 +686,14 @@ interface ResolvedFitOptions {
 	exclusionMask?: Readonly<NumberArray>
 }
 
+// Returns `value` when it is a finite number, otherwise `fallback`. Used to normalize numeric options
+// so a stray NaN/Infinity falls back to the default instead of poisoning downstream comparisons: a NaN
+// threshold would silently disable a feature (e.g. `x > NaN` and `x < -NaN` are both false), and a NaN
+// smoothing would make the fit and the evaluation disagree on whether the spline interpolates.
+function finiteOr(value: number | undefined, fallback: number) {
+	return Number.isFinite(value) ? value! : fallback
+}
+
 // Resolves and clamps the fit-relevant subset of the options against the defaults.
 function resolveFitOptions(options: BackgroundExtractionOptions): ResolvedFitOptions {
 	// gridSize drives the sampling loop bounds in collectSamples; a non-finite value (Infinity/NaN)
@@ -694,20 +702,19 @@ function resolveFitOptions(options: BackgroundExtractionOptions): ResolvedFitOpt
 	const gridSize = options.gridSize ?? DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.gridSize
 	if (!Number.isFinite(gridSize)) throw new TypeError('gridSize must be a finite number')
 
+	// Every other numeric option normalizes a non-finite input to its default before clamping, so NaN
+	// cannot silently disable rejection/thresholds or split the smoothing decision (see finiteOr).
 	return {
 		gridSize: Math.max(2, Math.trunc(gridSize)),
-		boxSize: Math.max(0, options.boxSize ?? DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.boxSize),
+		boxSize: Math.max(0, finiteOr(options.boxSize, DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.boxSize)),
 		model: options.model ?? DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.model,
 		colorMode: options.colorMode ?? DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.colorMode,
-		degree: clamp(Math.trunc(options.degree ?? DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.degree), 1, 6),
-		// Normalize non-finite smoothing (e.g. NaN) to the default rather than letting Math.max(0, NaN)
-		// leak NaN: a NaN smoothing makes fitThinPlateSpline interpolate (NaN > 0 is false) while
-		// evaluateBackgroundModel still coarsens (NaN <= 0 is false), so the two would disagree.
-		smoothing: Number.isFinite(options.smoothing) ? Math.max(0, options.smoothing!) : DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.smoothing,
-		tolerance: Math.max(0, options.tolerance ?? DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.tolerance),
-		rejectionHigh: Math.max(0, options.rejectionHigh ?? DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.rejectionHigh),
-		rejectionLow: Math.max(0, options.rejectionLow ?? DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.rejectionLow),
-		rejectionIterations: Math.max(0, Math.trunc(options.rejectionIterations ?? DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.rejectionIterations)),
+		degree: clamp(Math.trunc(finiteOr(options.degree, DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.degree)), 1, 6),
+		smoothing: Math.max(0, finiteOr(options.smoothing, DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.smoothing)),
+		tolerance: Math.max(0, finiteOr(options.tolerance, DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.tolerance)),
+		rejectionHigh: Math.max(0, finiteOr(options.rejectionHigh, DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.rejectionHigh)),
+		rejectionLow: Math.max(0, finiteOr(options.rejectionLow, DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.rejectionLow)),
+		rejectionIterations: Math.max(0, Math.trunc(finiteOr(options.rejectionIterations, DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.rejectionIterations))),
 		exclusionMask: options.exclusionMask,
 	}
 }

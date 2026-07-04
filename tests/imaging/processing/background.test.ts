@@ -273,6 +273,36 @@ test('normalizes a non-finite smoothing to a finite value', () => {
 	for (const v of background) expect(Number.isFinite(v)).toBe(true)
 })
 
+test('normalizes non-finite numeric options to their defaults', () => {
+	// A NaN in a threshold or count would silently disable a feature (x > NaN and x < -NaN are both
+	// false) or poison the fit. Each such option must fall back to its default, so a NaN-riddled call
+	// still behaves like the default run: a plain linear gradient is fitted and removed cleanly.
+	const width = 96
+	const height = 96
+	const bg = (x: number, y: number) => 0.15 + 0.3 * (x / (width - 1)) + 0.2 * (y / (height - 1))
+	const image = makeImage(width, height, 1, (x, y) => bg(x, y))
+
+	const model = fitBackgroundSurface(image, {
+		degree: Number.NaN,
+		boxSize: Number.NaN,
+		tolerance: Number.NaN,
+		rejectionHigh: Number.NaN,
+		rejectionLow: Number.NaN,
+		rejectionIterations: Number.NaN,
+	})
+
+	// degree falls back to the default (4), not NaN, so the coefficient count is well-defined.
+	expect(model.degree).toBe(4)
+	expect(model.surfaces[0].coefficients).toHaveLength(((4 + 1) * (4 + 2)) / 2)
+
+	const background = evaluateBackgroundModel(model, image).raw
+	let maxError = 0
+	for (let y = 0; y < height; y++) {
+		for (let x = 0; x < width; x++) maxError = Math.max(maxError, Math.abs(background[y * width + x] - bg(x, y)))
+	}
+	expect(maxError).toBeLessThan(1e-3)
+})
+
 test('explicit box sizes keep every sampled pixel in the statistics buffer', () => {
 	const width = 30
 	const height = 30
