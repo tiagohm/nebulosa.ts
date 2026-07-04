@@ -836,6 +836,18 @@ function fitChannelSurface(raw: ImageRawType, width: number, height: number, cha
 		coefficients = tps.coefficients
 		controlPoints = tps.controlPoints
 
+		// An exact (interpolating) spline only passes through its control points. When the cap dropped
+		// some active samples, mark those as rejected so the reported accepted set matches the interpolated
+		// set: otherwise evaluateBackgroundModel would treat the model as exact while accepted-but-dropped
+		// samples fail to reproduce their medians. A genuine smoothing spline interpolates nothing, so its
+		// dropped samples legitimately stay accepted and still inform the residual diagnostics below.
+		if (controlSamples !== samples && smoothing <= TPS_EXACT_SMOOTHING_MAX) {
+			const kept = new Set(controlSamples)
+			for (const sample of samples) {
+				if (sample.active && !kept.has(sample)) sample.active = false
+			}
+		}
+
 		const k = controlPoints.length / 2
 		let count = 0
 		for (const sample of samples) {

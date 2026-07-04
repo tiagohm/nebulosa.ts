@@ -944,6 +944,50 @@ test('caps thin-plate spline control points on dense grids', () => {
 	expect(normal.surfaces[0].controlPoints!.length).toBe(normal.surfaces[0].acceptedSamples * 2)
 }, 4000)
 
+test('an exact thin-plate spline interpolates every accepted sample past the control-point cap', () => {
+	// With smoothing 0 the spline is an exact interpolant, but a dense grid exceeds the control-point
+	// cap. Samples the cap drops must be marked rejected, not left accepted, so the reported accepted set
+	// equals the interpolated control set — otherwise evaluation (which treats a zero-smoothing model as
+	// exact) would fail to reproduce the medians of accepted-but-dropped samples.
+	const width = 400
+	const height = 400
+	const bg = (x: number, y: number) => 0.3 + 0.15 * Math.sin(3 * (x / width)) * Math.cos(3 * (y / height)) + 0.1 * (x / width)
+	const image = makeImage(width, height, 1, (x, y) => bg(x, y))
+
+	const model = fitBackgroundSurface(image, { model: 'thinPlateSpline', gridSize: 48, smoothing: 0 })
+	const surface = model.surfaces[0]
+	const controlPoints = surface.controlPoints!.length / 2
+
+	// The cap engaged (more samples survived than are kept) and the accepted set is exactly the control
+	// set, so nothing is claimed interpolated that the spline does not pass through.
+	expect(controlPoints).toBeLessThanOrEqual(1024)
+	expect(surface.acceptedSamples).toBe(controlPoints)
+	expect(surface.rejectedSamples).toBeGreaterThan(0)
+
+	// Every accepted sample is reproduced by the fitted spline to float precision.
+	const coef = surface.coefficients
+	const cp = surface.controlPoints!
+	const k = cp.length / 2
+	const tps = (u: number, v: number) => {
+		let sum = coef[0] + coef[1] * u + coef[2] * v
+		for (let c = 0; c < k; c++) {
+			const du = u - cp[2 * c]
+			const dv = v - cp[2 * c + 1]
+			const sq = du * du + dv * dv
+			if (sq > 0) sum += coef[3 + c] * (0.5 * sq * Math.log(sq))
+		}
+		return sum
+	}
+	let maxInterpError = 0
+	for (const sample of surface.samples) {
+		if (!sample.accepted) continue
+		const u = (sample.x / (width - 1)) * 2 - 1
+		const v = (sample.y / (height - 1)) * 2 - 1
+		maxInterpError = Math.max(maxInterpError, Math.abs(tps(u, v) - sample.value))
+	}
+	expect(maxInterpError).toBeLessThan(1e-9)
+}, 4000)
+
 test('a thin-plate spline model reuses across frames and evaluate rejects mismatched geometry', () => {
 	const width = 80
 	const height = 80
