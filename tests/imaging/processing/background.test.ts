@@ -204,6 +204,15 @@ test('throws when there are too few clean samples for the degree', () => {
 	expect(() => automaticBackgroundExtraction(image, { degree: 6, gridSize: 3 })).toThrow()
 })
 
+test('rejects a non-finite gridSize instead of hanging', () => {
+	// A non-finite gridSize would collapse the cell size to zero and produce infinite grid dimensions,
+	// hanging the sampling loops. It must fail fast with a clear error instead.
+	const image = makeImage(16, 16, 1, () => 0.2)
+	expect(() => automaticBackgroundExtraction(image, { gridSize: Infinity })).toThrow()
+	expect(() => automaticBackgroundExtraction(image, { gridSize: Number.NaN })).toThrow()
+	expect(() => fitBackgroundSurface(image, { gridSize: Infinity })).toThrow()
+})
+
 test('exposes exactly (degree+1)(degree+2)/2 coefficients regardless of sample count', () => {
 	const width = 96
 	const height = 96

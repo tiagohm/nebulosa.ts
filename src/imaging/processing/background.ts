@@ -305,8 +305,10 @@ function computeResidualDispersion(values: Float64Array, scratch: Float64Array, 
 function collectSamples(raw: ImageRawType, width: number, height: number, channels: number, channel: number, gridSize: number, boxSize: number, tolerance: number, mask?: Readonly<NumberArray>) {
 	const longAxis = Math.max(width, height)
 	const cell = longAxis / gridSize
-	const nx = Math.max(1, Math.round(width / cell))
-	const ny = Math.max(1, Math.round(height / cell))
+	// Cap the grid at one cell per pixel: a very large (but finite) gridSize would otherwise blow the
+	// cell count up to unusable sizes and exhaust memory. More cells than pixels is meaningless anyway.
+	const nx = clamp(Math.round(width / cell), 1, width)
+	const ny = clamp(Math.round(height / cell), 1, height)
 	const cellW = width / nx
 	const cellH = height / ny
 
@@ -646,8 +648,14 @@ interface ResolvedFitOptions {
 
 // Resolves and clamps the fit-relevant subset of the options against the defaults.
 function resolveFitOptions(options: BackgroundExtractionOptions): ResolvedFitOptions {
+	// gridSize drives the sampling loop bounds in collectSamples; a non-finite value (Infinity/NaN)
+	// would collapse the cell size to zero and produce infinite grid dimensions, hanging the fit. Reject
+	// it up front so the caller fails fast with a clear error instead of timing out.
+	const gridSize = options.gridSize ?? DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.gridSize
+	if (!Number.isFinite(gridSize)) throw new TypeError('gridSize must be a finite number')
+
 	return {
-		gridSize: Math.max(2, Math.trunc(options.gridSize ?? DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.gridSize)),
+		gridSize: Math.max(2, Math.trunc(gridSize)),
 		boxSize: Math.max(0, options.boxSize ?? DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.boxSize),
 		model: options.model ?? DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.model,
 		colorMode: options.colorMode ?? DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.colorMode,
