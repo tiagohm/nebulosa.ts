@@ -818,29 +818,32 @@ function fitChannelSurface(raw: ImageRawType, width: number, height: number, cha
 	}
 }
 
-// Evaluates a fitted channel surface at every pixel, writing into `model` at the channel offset.
-// Precomputes per-column Chebyshev values so the inner loop only multiplies against the per-row ones.
-function evaluateChannelSurface(coefficients: Float64Array, model: ImageRawType, width: number, height: number, channels: number, channel: number, degree: number, terms: number, ti: Uint8Array, tj: Uint8Array) {
-	const invW = width > 1 ? 2 / (width - 1) : 0
+// Evaluates a fitted polynomial channel surface at every pixel, writing into `model` at the channel
+// offset. `uChebTable` holds T_0..T_degree(u) for every column and depends only on width/degree, so the
+// caller builds it once and shares it across channels. The tensor basis T_i(u)*T_j(v) is separable, so
+// each row first collapses the 2D terms into per-u-degree coefficients rowCoef[i] = Σ_j coef[i,j]*T_j(v);
+// the per-pixel inner loop then costs degree+1 multiplies instead of `terms` (5 vs 15 at degree 4, 7 vs
+// 28 at degree 6).
+function evaluateChannelSurface(coefficients: Float64Array, model: ImageRawType, width: number, height: number, channels: number, channel: number, degree: number, terms: number, ti: Uint8Array, tj: Uint8Array, uChebTable: Float64Array) {
 	const invH = height > 1 ? 2 / (height - 1) : 0
-	const uChebTable = new Float64Array(width * (degree + 1))
-
-	for (let x = 0; x < width; x++) {
-		fillChebyshev(uChebTable, x * (degree + 1), x * invW - 1, degree)
-	}
-
-	const vRow = new Float64Array(degree + 1)
+	const stride = degree + 1
+	const vRow = new Float64Array(stride)
+	const rowCoef = new Float64Array(stride)
 
 	for (let y = 0; y < height; y++) {
 		fillChebyshev(vRow, 0, y * invH - 1, degree)
 
-		let i = y * width * channels + channel
+		// Collapse the 2D terms into one coefficient per u-degree for this row.
+		rowCoef.fill(0)
+		for (let k = 0; k < terms; k++) rowCoef[ti[k]] += coefficients[k] * vRow[tj[k]]
 
-		for (let x = 0; x < width; x++, i += channels) {
-			const base = x * (degree + 1)
+		let idx = y * width * channels + channel
+
+		for (let x = 0; x < width; x++, idx += channels) {
+			const base = x * stride
 			let sum = 0
-			for (let k = 0; k < terms; k++) sum += coefficients[k] * uChebTable[base + ti[k]] * vRow[tj[k]]
-			model[i] = sum
+			for (let d = 0; d <= degree; d++) sum += rowCoef[d] * uChebTable[base + d]
+			model[idx] = sum
 		}
 	}
 }
@@ -949,7 +952,17 @@ export function evaluateBackgroundModel(model: BackgroundModel, image: Image): I
 	const terms = basisTermCount(degree)
 	const ti = new Uint8Array(terms)
 	const tj = new Uint8Array(terms)
-	if (type === 'polynomial') fillBasisExponents(degree, ti, tj)
+
+	// Precompute the per-column Chebyshev table T_0..T_degree(u) once. It depends only on width/degree,
+	// so it is shared across every channel instead of being rebuilt per channel.
+	let uChebTable: Float64Array | undefined
+	if (type === 'polynomial') {
+		fillBasisExponents(degree, ti, tj)
+		const stride = degree + 1
+		const invW = width > 1 ? 2 / (width - 1) : 0
+		uChebTable = new Float64Array(width * stride)
+		for (let x = 0; x < width; x++) fillChebyshev(uChebTable, x * stride, x * invW - 1, degree)
+	}
 
 	// Shared luminance surface: evaluate once into a scratch plane and broadcast to every channel.
 	if (model.colorMode === 'luminance' && model.surfaces.length === 1 && channelCount > 1) {
@@ -958,7 +971,7 @@ export function evaluateBackgroundModel(model: BackgroundModel, image: Image): I
 		const surface = model.surfaces[0]
 
 		if (type === 'thinPlateSpline') evaluateChannelTps(surface.coefficients, surface.controlPoints!, lum, width, height, 1, 0, exactTps)
-		else evaluateChannelSurface(surface.coefficients, lum, width, height, 1, 0, degree, terms, ti, tj)
+		else evaluateChannelSurface(surface.coefficients, lum, width, height, 1, 0, degree, terms, ti, tj, uChebTable!)
 
 		for (let p = 0, i = 0; p < n; p++, i += channelCount) {
 			const v = lum[p]
@@ -971,7 +984,7 @@ export function evaluateBackgroundModel(model: BackgroundModel, image: Image): I
 	for (let channel = 0; channel < channelCount; channel++) {
 		const surface = model.surfaces[channel]
 		if (type === 'thinPlateSpline') evaluateChannelTps(surface.coefficients, surface.controlPoints!, out, width, height, channelCount, channel, exactTps)
-		else evaluateChannelSurface(surface.coefficients, out, width, height, channelCount, channel, degree, terms, ti, tj)
+		else evaluateChannelSurface(surface.coefficients, out, width, height, channelCount, channel, degree, terms, ti, tj, uChebTable!)
 	}
 
 	return background

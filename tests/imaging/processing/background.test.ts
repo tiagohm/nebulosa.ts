@@ -370,6 +370,58 @@ test('fits a high-degree surface accurately (Chebyshev conditioning)', () => {
 	expect(maxError).toBeLessThan(4e-3)
 })
 
+test('separable polynomial evaluation matches the full tensor-basis sum', () => {
+	// evaluateChannelSurface factorizes the tensor Chebyshev basis per row (rowCoef[i] = Σ_j coef*T_j(v))
+	// so the per-pixel loop is degree+1 multiplies instead of `terms`. This asserts the factorized result
+	// equals a direct brute-force sum over every term at each pixel, within float32 storage precision.
+	const width = 70
+	const height = 55
+	const degree = 6
+	const image = makeImage(width, height, 1, (x, y) => {
+		const u = (x / (width - 1)) * 2 - 1
+		const v = (y / (height - 1)) * 2 - 1
+		return 0.4 + 0.12 * u - 0.09 * v + 0.05 * u * v - 0.04 * (u * u - 1) + 0.03 * u * u * v
+	})
+
+	const model = fitBackgroundSurface(image, { degree, gridSize: 16, correction: 'none' } as const)
+	const coef = model.surfaces[0].coefficients
+
+	// Rebuild the tensor-basis exponents in fillBasisExponents order: ascending total degree d, ti = i,
+	// tj = d - i, i from d down to 0.
+	const ti: number[] = []
+	const tj: number[] = []
+	for (let d = 0; d <= degree; d++) {
+		for (let i = d; i >= 0; i--) {
+			ti.push(i)
+			tj.push(d - i)
+		}
+	}
+	const cheb = (n: number, t: number) => {
+		let t0 = 1
+		if (n === 0) return t0
+		let t1 = t
+		for (let d = 2; d <= n; d++) {
+			const next = 2 * t * t1 - t0
+			t0 = t1
+			t1 = next
+		}
+		return t1
+	}
+
+	const evaluated = evaluateBackgroundModel(model, image).raw
+	let maxError = 0
+	for (let y = 0; y < height; y++) {
+		const v = (y / (height - 1)) * 2 - 1
+		for (let x = 0; x < width; x++) {
+			const u = (x / (width - 1)) * 2 - 1
+			let ref = 0
+			for (let k = 0; k < ti.length; k++) ref += coef[k] * cheb(ti[k], u) * cheb(tj[k], v)
+			maxError = Math.max(maxError, Math.abs(evaluated[y * width + x] - ref))
+		}
+	}
+	expect(maxError).toBeLessThan(1e-5)
+})
+
 test('keeps dense-grid samples inside the fit domain', () => {
 	// A grid dense enough that cells are narrower than 2 px (cellW = width / nx < 2). Naive centers at
 	// (c + 0.5) * cellW push the last ones past width - 1, so their normalized u/v leave the [-1, 1]
