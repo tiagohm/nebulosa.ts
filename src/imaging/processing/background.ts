@@ -671,6 +671,13 @@ function fitThinPlateSpline(samples: readonly SurfaceSample[], smoothing: number
 // interpolation error well below the fit accuracy (~0.5% of the local amplitude at this fraction).
 const TPS_COARSE_FRACTION = 0.2
 
+// Smoothing at or below this is treated as exact interpolation. The regularization added to the TPS
+// diagonal is `smoothing / weight`; against the O(1) normalized kernel entries a value this small is
+// negligible, so the spline effectively interpolates the samples and can have sharp local structure the
+// coarse-grid approximation would miss — the materialized surface would then disagree with the fitted
+// coefficients. The default smoothing (0.1) and any genuine regularization stay well above this.
+const TPS_EXACT_SMOOTHING_MAX = 1e-6
+
 // Evaluates the fitted thin-plate spline at one normalized point (u, v) in [-1, 1].
 function tpsValue(coefficients: Float64Array, controlPoints: Float64Array, k: number, u: number, v: number) {
 	let sum = coefficients[0] + coefficients[1] * u + coefficients[2] * v
@@ -1048,9 +1055,10 @@ export function evaluateBackgroundModel(model: BackgroundModel, image: Image): I
 
 	const background: Image = { header, metadata, raw: out }
 	const { type, width, height, channelCount, degree } = model
-	// A zero-smoothing TPS interpolates the accepted samples exactly; disable coarse-grid evaluation for
-	// it so the materialized surface honors that interpolation contract.
-	const exactTps = type === 'thinPlateSpline' && model.smoothing <= 0
+	// A TPS with zero (or negligibly small) smoothing interpolates the accepted samples; disable
+	// coarse-grid evaluation for it so the materialized surface honors that interpolation contract and
+	// matches the fitted coefficients rather than a bilinear approximation.
+	const exactTps = type === 'thinPlateSpline' && model.smoothing <= TPS_EXACT_SMOOTHING_MAX
 
 	const terms = basisTermCount(degree)
 	const ti = new Uint8Array(terms)

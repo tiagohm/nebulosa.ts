@@ -1066,13 +1066,13 @@ test('coarse-grid TPS evaluation matches direct evaluation', () => {
 	expect(maxError).toBeLessThan(1e-3)
 }, 2000)
 
-test('a zero-smoothing thin-plate spline is evaluated exactly, without coarsening', () => {
-	// With smoothing 0 the spline interpolates the accepted samples exactly, so evaluation must
+test('a zero or negligibly-smoothed thin-plate spline is evaluated exactly, without coarsening', () => {
+	// With smoothing 0 — or a value so small the spline still effectively interpolates — evaluation must
 	// materialize the true surface per pixel. The coarse-grid bilinear approximation used for smoothing
 	// splines would deviate from it (here up to ~1e-4), breaking the exact-interpolation contract and
 	// leaving residual background after correction. This asserts the evaluated image matches a direct
-	// per-pixel TPS evaluation to within float32 storage precision, while a smoothing spline over the
-	// same data does take the coarse path (proving coarsening is disabled only for the exact case).
+	// per-pixel TPS evaluation to within float32 storage precision for zero and near-zero smoothing,
+	// while a genuine smoothing spline over the same data still takes the coarse path.
 	const width = 256
 	const height = 256
 	const bg = (x: number, y: number) => {
@@ -1109,7 +1109,9 @@ test('a zero-smoothing thin-plate spline is evaluated exactly, without coarsenin
 		return maxError
 	}
 
-	// Exact: within float32 storage precision. Smoothing: visibly coarsened, well above that floor.
+	// Exact for zero and negligibly-small smoothing: within float32 storage precision. A genuine
+	// smoothing value is visibly coarsened, well above that floor.
 	expect(maxCoarseningError(0)).toBeLessThan(1e-6)
+	expect(maxCoarseningError(1e-12)).toBeLessThan(1e-6)
 	expect(maxCoarseningError(0.05)).toBeGreaterThan(1e-6)
-}, 2000)
+}, 3000)
