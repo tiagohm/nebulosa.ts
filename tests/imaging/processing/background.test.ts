@@ -815,4 +815,52 @@ test('coarse-grid TPS evaluation matches direct evaluation', () => {
 
 	// Bilinear upsampling of the smooth surface stays far below the fit/noise accuracy.
 	expect(maxError).toBeLessThan(1e-3)
-})
+}, 2000)
+
+test('a zero-smoothing thin-plate spline is evaluated exactly, without coarsening', () => {
+	// With smoothing 0 the spline interpolates the accepted samples exactly, so evaluation must
+	// materialize the true surface per pixel. The coarse-grid bilinear approximation used for smoothing
+	// splines would deviate from it (here up to ~1e-4), breaking the exact-interpolation contract and
+	// leaving residual background after correction. This asserts the evaluated image matches a direct
+	// per-pixel TPS evaluation to within float32 storage precision, while a smoothing spline over the
+	// same data does take the coarse path (proving coarsening is disabled only for the exact case).
+	const width = 256
+	const height = 256
+	const bg = (x: number, y: number) => {
+		const u = (x / (width - 1)) * 2 - 1
+		const v = (y / (height - 1)) * 2 - 1
+		return 0.4 + 0.12 * Math.sin(3 * u) * Math.cos(3 * v)
+	}
+	const image = makeImage(width, height, 1, (x, y) => bg(x, y))
+
+	// Max deviation of the evaluated model from a direct per-pixel evaluation of its own TPS.
+	const maxCoarseningError = (smoothing: number) => {
+		const model = fitBackgroundSurface(image, { model: 'thinPlateSpline', gridSize: 16, smoothing })
+		const coef = model.surfaces[0].coefficients
+		const cp = model.surfaces[0].controlPoints!
+		const k = cp.length / 2
+		const direct = (u: number, v: number) => {
+			let sum = coef[0] + coef[1] * u + coef[2] * v
+			for (let c = 0; c < k; c++) {
+				const du = u - cp[2 * c]
+				const dv = v - cp[2 * c + 1]
+				const sq = du * du + dv * dv
+				if (sq > 0) sum += coef[3 + c] * (0.5 * sq * Math.log(sq))
+			}
+			return sum
+		}
+		const evaluated = evaluateBackgroundModel(model, image).raw
+		let maxError = 0
+		for (let y = 0; y < height; y++) {
+			for (let x = 0; x < width; x++) {
+				const ref = direct((x / (width - 1)) * 2 - 1, (y / (height - 1)) * 2 - 1)
+				maxError = Math.max(maxError, Math.abs(evaluated[y * width + x] - ref))
+			}
+		}
+		return maxError
+	}
+
+	// Exact: within float32 storage precision. Smoothing: visibly coarsened, well above that floor.
+	expect(maxCoarseningError(0)).toBeLessThan(1e-6)
+	expect(maxCoarseningError(0.05)).toBeGreaterThan(1e-6)
+}, 2000)

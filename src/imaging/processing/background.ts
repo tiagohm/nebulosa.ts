@@ -151,6 +151,10 @@ export interface BackgroundModel {
 	readonly channelCount: number
 	// Polynomial degree (of the polynomial surface, or the TPS affine-part / rejection pre-fit).
 	readonly degree: number
+	// Thin-plate spline smoothing used for the fit (0 for the polynomial model). 0 means the spline
+	// interpolates the accepted samples exactly, so evaluation must materialize it per pixel rather than
+	// through the coarse-grid approximation, which would otherwise break the exact-interpolation contract.
+	readonly smoothing: number
 	// Fitted surface, one per channel.
 	readonly surfaces: readonly BackgroundSurfaceFit[]
 }
@@ -596,15 +600,17 @@ function tpsCoarseStep(width: number, height: number, k: number) {
 }
 
 // Evaluates a fitted thin-plate spline over a whole channel, writing into `model` at the channel
-// offset. Direct evaluation is O(width * height * controlPoints); since the surface is smooth, this
-// instead evaluates the exact TPS on a coarse grid (spacing from `tpsCoarseStep`) and bilinearly
+// offset. Direct evaluation is O(width * height * controlPoints); since a smoothing surface is smooth,
+// this instead evaluates the exact TPS on a coarse grid (spacing from `tpsCoarseStep`) and bilinearly
 // upsamples to full resolution, cutting the cost by the squared coarsening factor for a tiny,
-// documented interpolation error. Small images fall back to exact per-pixel evaluation.
-function evaluateChannelTps(coefficients: Float64Array, controlPoints: Float64Array, model: ImageRawType, width: number, height: number, channels: number, channel: number) {
+// documented interpolation error. Small images fall back to exact per-pixel evaluation. When `exact`
+// is set (a zero-smoothing, interpolating spline), coarsening is disabled so the materialized surface
+// passes through the accepted samples as the interpolation contract requires.
+function evaluateChannelTps(coefficients: Float64Array, controlPoints: Float64Array, model: ImageRawType, width: number, height: number, channels: number, channel: number, exact: boolean) {
 	const k = controlPoints.length / 2
 	const invW = width > 1 ? 2 / (width - 1) : 0
 	const invH = height > 1 ? 2 / (height - 1) : 0
-	const step = tpsCoarseStep(width, height, k)
+	const step = exact ? 1 : tpsCoarseStep(width, height, k)
 
 	if (step <= 1) {
 		for (let y = 0; y < height; y++) {
@@ -895,14 +901,14 @@ export function fitBackgroundSurface(image: Image, options: BackgroundExtraction
 		const { red, green, blue } = DEFAULT_GRAYSCALE
 		for (let p = 0, i = 0; p < n; p++, i += 3) lum[p] = red * raw[i] + green * raw[i + 1] + blue * raw[i + 2]
 		surfaces.push(fitChannelSurface(lum, width, height, 1, 0, fit, terms, ti, tj))
-		return { type: fit.model, colorMode: 'luminance', width, height, channelCount: channels, degree: fit.degree, surfaces }
+		return { type: fit.model, colorMode: 'luminance', width, height, channelCount: channels, degree: fit.degree, smoothing: fit.smoothing, surfaces }
 	}
 
 	for (let channel = 0; channel < channels; channel++) {
 		surfaces.push(fitChannelSurface(raw, width, height, channels, channel, fit, terms, ti, tj))
 	}
 
-	return { type: fit.model, colorMode: 'perChannel', width, height, channelCount: channels, degree: fit.degree, surfaces }
+	return { type: fit.model, colorMode: 'perChannel', width, height, channelCount: channels, degree: fit.degree, smoothing: fit.smoothing, surfaces }
 }
 
 // Materializes a fitted `model` into a fresh background image cloned from `image` (which supplies the
@@ -917,6 +923,9 @@ export function evaluateBackgroundModel(model: BackgroundModel, image: Image): I
 
 	const background: Image = { header, metadata, raw: out }
 	const { type, width, height, channelCount, degree } = model
+	// A zero-smoothing TPS interpolates the accepted samples exactly; disable coarse-grid evaluation for
+	// it so the materialized surface honors that interpolation contract.
+	const exactTps = type === 'thinPlateSpline' && model.smoothing <= 0
 
 	const terms = basisTermCount(degree)
 	const ti = new Uint8Array(terms)
@@ -929,7 +938,7 @@ export function evaluateBackgroundModel(model: BackgroundModel, image: Image): I
 		const lum = new Float64Array(n)
 		const surface = model.surfaces[0]
 
-		if (type === 'thinPlateSpline') evaluateChannelTps(surface.coefficients, surface.controlPoints!, lum, width, height, 1, 0)
+		if (type === 'thinPlateSpline') evaluateChannelTps(surface.coefficients, surface.controlPoints!, lum, width, height, 1, 0, exactTps)
 		else evaluateChannelSurface(surface.coefficients, lum, width, height, 1, 0, degree, terms, ti, tj)
 
 		for (let p = 0, i = 0; p < n; p++, i += channelCount) {
@@ -942,7 +951,7 @@ export function evaluateBackgroundModel(model: BackgroundModel, image: Image): I
 
 	for (let channel = 0; channel < channelCount; channel++) {
 		const surface = model.surfaces[channel]
-		if (type === 'thinPlateSpline') evaluateChannelTps(surface.coefficients, surface.controlPoints!, out, width, height, channelCount, channel)
+		if (type === 'thinPlateSpline') evaluateChannelTps(surface.coefficients, surface.controlPoints!, out, width, height, channelCount, channel, exactTps)
 		else evaluateChannelSurface(surface.coefficients, out, width, height, channelCount, channel, degree, terms, ti, tj)
 	}
 
