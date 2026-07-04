@@ -492,3 +492,78 @@ test('fitBackgroundSurface rejects a wrongly sized exclusion mask', () => {
 	const image = makeImage(64, 64, 1, () => 0.2)
 	expect(() => fitBackgroundSurface(image, { degree: 1, gridSize: 8, exclusionMask: new Uint8Array(10) })).toThrow()
 })
+
+test('thin-plate spline follows a complex background a polynomial cannot', () => {
+	const width = 128
+	const height = 128
+	// A non-monotonic sinusoidal background: too wiggly for a low-degree polynomial without oscillating.
+	const bg = (x: number, y: number) => {
+		const u = (x / (width - 1)) * 2 - 1
+		const v = (y / (height - 1)) * 2 - 1
+		return 0.4 + 0.12 * Math.sin(2.6 * u) * Math.cos(2.2 * v) + 0.05 * u
+	}
+	const image = () => makeImage(width, height, 1, (x, y) => bg(x, y))
+
+	const errorFor = (raw: Float32Array | Float64Array) => {
+		let maxError = 0
+		for (let y = 0; y < height; y += 4) {
+			for (let x = 0; x < width; x += 4) maxError = Math.max(maxError, Math.abs(raw[y * width + x] - bg(x, y)))
+		}
+		return maxError
+	}
+
+	const tps = fitBackgroundSurface(image(), { model: 'thinPlateSpline', gridSize: 16, smoothing: 0.05 })
+	expect(tps.type).toBe('thinPlateSpline')
+	expect(tps.surfaces[0].controlPoints).toBeDefined()
+	expect(tps.surfaces[0].controlPoints!.length).toBe(tps.surfaces[0].acceptedSamples * 2)
+	const tpsError = errorFor(evaluateBackgroundModel(tps, image()).raw)
+
+	const poly = fitBackgroundSurface(image(), { model: 'polynomial', degree: 4, gridSize: 16 })
+	const polyError = errorFor(evaluateBackgroundModel(poly, image()).raw)
+
+	// The spline tracks the surface far more accurately than the polynomial on this background.
+	expect(tpsError).toBeLessThan(0.02)
+	expect(tpsError).toBeLessThan(polyError / 5)
+})
+
+test('thin-plate spline extraction flattens a complex gradient', () => {
+	const width = 96
+	const height = 96
+	const bg = (x: number, y: number) => {
+		const u = (x / (width - 1)) * 2 - 1
+		const v = (y / (height - 1)) * 2 - 1
+		return 0.35 + 0.1 * Math.sin(2 * u) - 0.08 * v * v + 0.06 * u * v
+	}
+	const image = makeImage(width, height, 1, (x, y) => bg(x, y))
+
+	const result = automaticBackgroundExtraction(image, { model: 'thinPlateSpline', gridSize: 14, smoothing: 0.05, targetBackground: 0.2 })
+	const after = channelStdDev(result.image, 0)
+
+	expect(result.background.raw).toBeDefined()
+	expect(after.mean).toBeCloseTo(0.2, 2)
+	expect(after.std).toBeLessThan(5e-3)
+})
+
+test('a thin-plate spline model reuses across frames and evaluate rejects mismatched geometry', () => {
+	const width = 80
+	const height = 80
+	const bg = (x: number, y: number) => 0.3 + 0.15 * Math.sin(3 * (x / (width - 1))) + 0.1 * (y / (height - 1))
+
+	const model = fitBackgroundSurface(makeImage(width, height, 1, bg), { model: 'thinPlateSpline', gridSize: 12, smoothing: 0.05 })
+
+	// Reuse on a second identical frame.
+	const frameB = makeImage(width, height, 1, bg)
+	const background = evaluateBackgroundModel(model, frameB)
+	applyBackground(frameB, background, { correction: 'subtract', targetBackground: 0.1 })
+	const after = channelStdDev(frameB, 0)
+	expect(after.mean).toBeCloseTo(0.1, 2)
+	expect(after.std).toBeLessThan(5e-3)
+
+	// Geometry validation still applies to spline models.
+	expect(() =>
+		evaluateBackgroundModel(
+			model,
+			makeImage(40, 80, 1, () => 0.3),
+		),
+	).toThrow()
+})

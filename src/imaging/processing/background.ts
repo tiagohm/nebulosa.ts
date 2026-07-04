@@ -1,20 +1,22 @@
 import { medianOf, STANDARD_DEVIATION_SCALE } from '../../core/util'
-import { Matrix, QrDecomposition } from '../../math/linear-algebra/matrix'
+import { LuDecomposition, Matrix, QrDecomposition } from '../../math/linear-algebra/matrix'
 import { clamp, type NumberArray } from '../../math/numerical/math'
 import type { Image, ImageRawType } from '../model/types'
 import type { DetectedStar } from '../stars/detector'
 import { clone } from './transformation'
 
-// Automatic Background Extraction (ABE): models a smooth sky background from a grid of robust
+// Automatic Background Extraction (ABE/DBE): models a smooth sky background from a grid of robust
 // samples and removes it, correcting gradients, vignetting, and light pollution. The background is
-// approximated by a low-degree 2D polynomial surface (tensor Chebyshev basis) fitted by weighted
-// least squares to per-box median samples (reliable low-dispersion boxes count more), with
-// structure (stars, nebulae) rejected first by high internal box dispersion and then
-// iteratively by fit residuals. The fitted surface is either subtracted (additive gradients/light
+// approximated either by a low-degree 2D polynomial surface (tensor Chebyshev basis, ABE) or by a
+// smoothing thin-plate spline through the samples (DBE) for complex non-monotonic backgrounds. The
+// grid samples are per-box medians weighted by reliability (low-dispersion boxes count more), with
+// structure (stars, nebulae) rejected first by high internal box dispersion and then iteratively by
+// polynomial-fit residuals. The fitted surface is either subtracted (additive gradients/light
 // pollution) or divided out (multiplicative vignetting). Color images fit each channel independently.
 // An optional exclusion mask (e.g. built from detected stars) keeps large objects out of the sample
 // grid. The fit exposes its grid samples (positions, values, weights, acceptance) for inspection.
 // https://pixinsight.com/doc/tools/AutomaticBackgroundExtractor/AutomaticBackgroundExtractor.html
+// https://pixinsight.com/doc/tools/DynamicBackgroundExtraction/DynamicBackgroundExtraction.html
 
 // How the fitted background surface is removed from the source image.
 // - `subtract`: additive removal for gradients and light pollution.
@@ -29,6 +31,14 @@ export type BackgroundExtractionCorrection = 'subtract' | 'divide' | 'none'
 // - `rescaleAsNeeded`: rescale only when the correction produced values outside [0, 1].
 export type BackgroundExtractionClipping = 'truncate' | 'rescale' | 'rescaleAsNeeded'
 
+// The surface model used to represent the background.
+// - `polynomial`: a global low-degree 2D Chebyshev surface; cheap, best for smooth gradients and
+//   vignetting, but cannot follow complex non-monotonic backgrounds without oscillating.
+// - `thinPlateSpline`: a smoothing thin-plate spline through the accepted samples; follows arbitrary
+//   smooth backgrounds (localized light-pollution domes, irregular gradients) at higher fit and
+//   evaluation cost. Outlier rejection still uses the polynomial pre-fit.
+export type BackgroundModelType = 'polynomial' | 'thinPlateSpline'
+
 // Options controlling automatic background extraction. All fields are optional and fall back to
 // `DEFAULT_BACKGROUND_EXTRACTION_OPTIONS`.
 export interface BackgroundExtractionOptions {
@@ -38,9 +48,16 @@ export interface BackgroundExtractionOptions {
 	// Side length in pixels of each square sample box. When 0 (default) it is derived from the grid
 	// cell size (half a cell), which trades statistics for lower contamination from nearby structure.
 	readonly boxSize?: number
-	// Degree of the fitted 2D polynomial surface. Clamped to 1..6. Requires at least
-	// (degree+1)*(degree+2)/2 accepted samples per channel.
+	// Surface model used to represent the background. See `BackgroundModelType`. Default `polynomial`.
+	readonly model?: BackgroundModelType
+	// Degree of the fitted 2D polynomial surface (also the surface used for outlier rejection in
+	// `thinPlateSpline` mode). Clamped to 1..6. Requires at least (degree+1)*(degree+2)/2 accepted
+	// samples per channel.
 	readonly degree?: number
+	// Thin-plate spline smoothing (regularization) applied on the diagonal of the TPS system, scaled by
+	// each sample's inverse weight. 0 interpolates every sample exactly (chases box-median noise);
+	// larger values relax to a smoother surface. Ignored for the polynomial model.
+	readonly smoothing?: number
 	// Sigma multiple for rejecting contaminated boxes by internal dispersion: a box is discarded when
 	// its normalized MAD exceeds median(MAD) + tolerance*MAD-of-MADs across boxes. Lower is stricter.
 	readonly tolerance?: number
@@ -87,9 +104,14 @@ export interface BackgroundSample {
 // A fitted background surface for one channel: the Chebyshev coefficients plus fit diagnostics.
 // Independent of any correction and reusable through `evaluateBackgroundModel`.
 export interface BackgroundSurfaceFit {
-	// Surface coefficients ordered by ascending total degree, indexing the tensor Chebyshev basis
-	// T_i(u) * T_j(v) with i + j <= degree and normalized coordinates u, v in [-1, 1].
+	// Surface coefficients. For `polynomial`, the tensor Chebyshev coefficients T_i(u)*T_j(v) ordered
+	// by ascending total degree (i + j <= degree). For `thinPlateSpline`, [a0, a1, a2, w0..w_{k-1}]:
+	// the affine part followed by the RBF weights, one weight per control point in `controlPoints`
+	// order. Coordinates u, v are normalized to [-1, 1].
 	readonly coefficients: Float64Array
+	// Thin-plate spline only: interleaved normalized control-point coordinates [u0, v0, u1, v1, ...],
+	// one per accepted sample; undefined for the polynomial model.
+	readonly controlPoints?: Float64Array
 	// Number of grid samples that survived rejection and fed the final fit.
 	readonly acceptedSamples: number
 	// Number of grid samples discarded as structure (internal dispersion or residual rejection).
@@ -105,13 +127,15 @@ export interface BackgroundSurfaceFit {
 // `evaluateBackgroundModel` to materialize the background image, or reuse it across other frames of
 // the same geometry (e.g. local normalization, multi-frame correction).
 export interface BackgroundModel {
+	// Surface model the fit produced. Determines how `coefficients`/`controlPoints` are interpreted.
+	readonly type: BackgroundModelType
 	// Width, in pixels, of the image the model was fitted to.
 	readonly width: number
 	// Height, in pixels, of the image the model was fitted to.
 	readonly height: number
 	// Number of channels the model covers (one surface each).
 	readonly channelCount: number
-	// Polynomial degree of every fitted surface.
+	// Polynomial degree (of the polynomial surface, or the TPS affine-part / rejection pre-fit).
 	readonly degree: number
 	// Fitted surface, one per channel.
 	readonly surfaces: readonly BackgroundSurfaceFit[]
@@ -161,7 +185,9 @@ export interface BackgroundApplyOptions {
 export const DEFAULT_BACKGROUND_EXTRACTION_OPTIONS: Required<Omit<BackgroundExtractionOptions, 'targetBackground' | 'exclusionMask'>> = {
 	gridSize: 24,
 	boxSize: 0,
+	model: 'polynomial',
 	degree: 4,
+	smoothing: 0.1,
 	tolerance: 3,
 	rejectionHigh: 2.5,
 	rejectionLow: 4,
@@ -399,11 +425,128 @@ function evaluateSurface(coefficients: Float64Array, u: number, v: number, degre
 	return sum
 }
 
+// Thin-plate spline radial basis U(r) = r^2 * ln(r), expressed from the squared distance s = r^2 as
+// 0.5 * s * ln(s) with U(0) = 0. Taking the squared distance avoids a sqrt in the hot evaluation loop.
+function tpsKernel(sq: number) {
+	return sq > 0 ? 0.5 * sq * Math.log(sq) : 0
+}
+
+// Fits a smoothing thin-plate spline to the currently active samples. Solves the (k+3)x(k+3)
+// saddle-point system [K + s*W^-1, P; P^T, 0] [w; a] = [f; 0], where K_ij = U(|p_i - p_j|), P rows are
+// [1, u_i, v_i], `s` is the smoothing term scaled by each sample's inverse weight, and the P^T rows
+// enforce the affine side conditions. Returns the packed coefficients [a0, a1, a2, w...] and the
+// interleaved control-point coordinates, or undefined when there are fewer than 3 samples or the
+// system is singular/non-finite.
+function fitThinPlateSpline(samples: readonly SurfaceSample[], smoothing: number): { coefficients: Float64Array; controlPoints: Float64Array } | undefined {
+	const us: number[] = []
+	const vs: number[] = []
+	const fs: number[] = []
+	const ws: number[] = []
+
+	for (const sample of samples) {
+		if (!sample.active) continue
+		us.push(sample.u)
+		vs.push(sample.v)
+		fs.push(sample.value)
+		ws.push(sample.weight)
+	}
+
+	const k = us.length
+	if (k < 3) return undefined
+
+	const size = k + 3
+	const L = new Matrix(size, size)
+	const data = L.data
+
+	for (let i = 0; i < k; i++) {
+		const ui = us[i]
+		const vi = vs[i]
+		const rowI = i * size
+
+		for (let j = i + 1; j < k; j++) {
+			const du = ui - us[j]
+			const dv = vi - vs[j]
+			const value = tpsKernel(du * du + dv * dv)
+			data[rowI + j] = value
+			data[j * size + i] = value
+		}
+
+		// Diagonal smoothing: reliable samples (weight ~ 1) get the base smoothing, noisy ones more.
+		data[rowI + i] = smoothing > 0 ? smoothing / ws[i] : 0
+
+		// Affine block P (columns k..k+2) and its transpose P^T (rows k..k+2).
+		data[rowI + k] = 1
+		data[rowI + k + 1] = ui
+		data[rowI + k + 2] = vi
+		data[k * size + i] = 1
+		data[(k + 1) * size + i] = ui
+		data[(k + 2) * size + i] = vi
+	}
+
+	const b = new Float64Array(size)
+	for (let i = 0; i < k; i++) b[i] = fs[i]
+
+	try {
+		const x = new LuDecomposition(L).solve(b)
+		for (let i = 0; i < size; i++) if (!Number.isFinite(x[i])) return undefined
+
+		const coefficients = new Float64Array(size)
+		coefficients[0] = x[k]
+		coefficients[1] = x[k + 1]
+		coefficients[2] = x[k + 2]
+		for (let i = 0; i < k; i++) coefficients[3 + i] = x[i]
+
+		const controlPoints = new Float64Array(2 * k)
+		for (let i = 0; i < k; i++) {
+			controlPoints[2 * i] = us[i]
+			controlPoints[2 * i + 1] = vs[i]
+		}
+
+		return { coefficients, controlPoints }
+	} catch {
+		return undefined
+	}
+}
+
+// Evaluates a fitted thin-plate spline at every pixel, writing into `model` at the channel offset.
+// Cost is O(width * height * controlPoints); the surface is smooth, so a coarse-grid evaluation with
+// interpolation could accelerate this in the future.
+function evaluateChannelTps(coefficients: Float64Array, controlPoints: Float64Array, model: ImageRawType, width: number, height: number, channels: number, channel: number) {
+	const k = controlPoints.length / 2
+	const a0 = coefficients[0]
+	const a1 = coefficients[1]
+	const a2 = coefficients[2]
+
+	const invW = width > 1 ? 2 / (width - 1) : 0
+	const invH = height > 1 ? 2 / (height - 1) : 0
+
+	for (let y = 0; y < height; y++) {
+		const v = y * invH - 1
+		let idx = y * width * channels + channel
+
+		for (let x = 0; x < width; x++, idx += channels) {
+			const u = x * invW - 1
+			let sum = a0 + a1 * u + a2 * v
+
+			for (let c = 0; c < k; c++) {
+				const du = u - controlPoints[2 * c]
+				const dv = v - controlPoints[2 * c + 1]
+				const sq = du * du + dv * dv
+				if (sq > 0) sum += coefficients[3 + c] * (0.5 * sq * Math.log(sq))
+			}
+
+			model[idx] = sum
+		}
+	}
+}
+
 // Fitting-relevant options resolved to concrete numbers (correction/clipping are applied separately).
 interface ResolvedFitOptions {
 	gridSize: number
 	boxSize: number
+	model: BackgroundModelType
 	degree: number
+	smoothing: number
 	tolerance: number
 	rejectionHigh: number
 	rejectionLow: number
@@ -416,7 +559,9 @@ function resolveFitOptions(options: BackgroundExtractionOptions): ResolvedFitOpt
 	return {
 		gridSize: Math.max(2, Math.trunc(options.gridSize ?? DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.gridSize)),
 		boxSize: Math.max(0, options.boxSize ?? DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.boxSize),
+		model: options.model ?? DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.model,
 		degree: clamp(Math.trunc(options.degree ?? DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.degree), 1, 6),
+		smoothing: Math.max(0, options.smoothing ?? DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.smoothing),
 		tolerance: Math.max(0, options.tolerance ?? DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.tolerance),
 		rejectionHigh: Math.max(0, options.rejectionHigh ?? DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.rejectionHigh),
 		rejectionLow: Math.max(0, options.rejectionLow ?? DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.rejectionLow),
@@ -428,10 +573,10 @@ function resolveFitOptions(options: BackgroundExtractionOptions): ResolvedFitOpt
 // Fits the background surface for one channel with iterative asymmetric residual rejection. Returns
 // the Chebyshev coefficients and fit diagnostics; does not evaluate the surface into an image.
 function fitChannelSurface(raw: ImageRawType, width: number, height: number, channels: number, channel: number, options: ResolvedFitOptions, terms: number, ti: Uint8Array, tj: Uint8Array): BackgroundSurfaceFit {
-	const { gridSize, boxSize, degree, tolerance, rejectionHigh, rejectionLow, rejectionIterations, exclusionMask } = options
+	const { gridSize, boxSize, model, degree, smoothing, tolerance, rejectionHigh, rejectionLow, rejectionIterations, exclusionMask } = options
 	const samples = collectSamples(raw, width, height, channels, channel, gridSize, boxSize, tolerance, exclusionMask)
 
-	let coefficients = fitSurface(samples, degree, terms, ti, tj)
+	let coefficients: Float64Array | undefined = fitSurface(samples, degree, terms, ti, tj)
 	if (coefficients === undefined) throw new Error(`not enough clean background samples to fit a degree-${degree} surface (need at least ${terms})`)
 
 	const residuals = new Float64Array(samples.length)
@@ -491,8 +636,19 @@ function fitChannelSurface(raw: ImageRawType, width: number, height: number, cha
 		sampleList.push({ x: sample.x, y: sample.y, value: sample.value, weight: sample.weight, accepted: sample.active })
 	}
 
+	// For the thin-plate spline model, the polynomial fit above only served to robustly reject
+	// outliers; the final surface is a smoothing TPS through the surviving samples.
+	let controlPoints: Float64Array | undefined
+	if (model === 'thinPlateSpline') {
+		const tps = fitThinPlateSpline(samples, smoothing)
+		if (tps === undefined) throw new Error('thin-plate spline fit failed (needs at least 3 clean samples and a non-singular system)')
+		coefficients = tps.coefficients
+		controlPoints = tps.controlPoints
+	}
+
 	return {
 		coefficients,
+		controlPoints,
 		acceptedSamples: accepted,
 		rejectedSamples: samples.length - accepted,
 		residual: Number.isFinite(residualDispersion) ? residualDispersion : 0,
@@ -568,12 +724,13 @@ function applyClipping(raw: ImageRawType, channel: number, channels: number, n: 
 // Fits a background model to an image without modifying it.
 //
 // Builds a grid of robust per-box background samples, rejects those contaminated by stars or nebulae
-// (by internal dispersion and then iterative asymmetric residual rejection), and fits a low-degree
-// 2D Chebyshev surface per channel by weighted least squares. Coordinates are normalized to [-1, 1].
+// (by internal dispersion and then iterative asymmetric residual rejection), and fits a surface per
+// channel: a weighted-least-squares 2D Chebyshev polynomial (`polynomial`) or a smoothing thin-plate
+// spline through the surviving samples (`thinPlateSpline`). Coordinates are normalized to [-1, 1].
 // The returned model is independent of any correction and can be evaluated or reused across frames of
 // the same geometry.
 //
-// Throws when a channel has fewer clean samples than the polynomial degree requires.
+// Throws when a channel has fewer clean samples than the chosen model requires.
 export function fitBackgroundSurface(image: Image, options: BackgroundExtractionOptions = DEFAULT_BACKGROUND_EXTRACTION_OPTIONS): BackgroundModel {
 	const fit = resolveFitOptions(options)
 	const { raw, metadata } = image
@@ -593,7 +750,7 @@ export function fitBackgroundSurface(image: Image, options: BackgroundExtraction
 		surfaces.push(fitChannelSurface(raw, width, height, channels, channel, fit, terms, ti, tj))
 	}
 
-	return { width, height, channelCount: channels, degree: fit.degree, surfaces }
+	return { type: fit.model, width, height, channelCount: channels, degree: fit.degree, surfaces }
 }
 
 // Materializes a fitted `model` into a fresh background image cloned from `image` (which supplies the
@@ -606,13 +763,20 @@ export function evaluateBackgroundModel(model: BackgroundModel, image: Image): I
 	const out = background.raw
 	const { width, height, channelCount, degree } = model
 
-	const terms = basisTermCount(degree)
-	const ti = new Uint8Array(terms)
-	const tj = new Uint8Array(terms)
-	fillBasisExponents(degree, ti, tj)
+	if (model.type === 'thinPlateSpline') {
+		for (let channel = 0; channel < channelCount; channel++) {
+			const surface = model.surfaces[channel]
+			evaluateChannelTps(surface.coefficients, surface.controlPoints!, out, width, height, channelCount, channel)
+		}
+	} else {
+		const terms = basisTermCount(degree)
+		const ti = new Uint8Array(terms)
+		const tj = new Uint8Array(terms)
+		fillBasisExponents(degree, ti, tj)
 
-	for (let channel = 0; channel < channelCount; channel++) {
-		evaluateChannelSurface(model.surfaces[channel].coefficients, out, width, height, channelCount, channel, degree, terms, ti, tj)
+		for (let channel = 0; channel < channelCount; channel++) {
+			evaluateChannelSurface(model.surfaces[channel].coefficients, out, width, height, channelCount, channel, degree, terms, ti, tj)
+		}
 	}
 
 	return background
@@ -706,7 +870,7 @@ export function automaticBackgroundExtraction(image: Image, options: BackgroundE
 
 		for (let c = 0; c < model.surfaces.length; c++) {
 			const s = model.surfaces[c]
-			channels.push({ coefficients: s.coefficients, acceptedSamples: s.acceptedSamples, rejectedSamples: s.rejectedSamples, residual: s.residual, samples: s.samples, outputMin: ranges[c].min, outputMax: ranges[c].max })
+			channels.push({ coefficients: s.coefficients, controlPoints: s.controlPoints, acceptedSamples: s.acceptedSamples, rejectedSamples: s.rejectedSamples, residual: s.residual, samples: s.samples, outputMin: ranges[c].min, outputMax: ranges[c].max })
 		}
 	}
 
