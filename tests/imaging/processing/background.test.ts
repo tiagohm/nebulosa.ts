@@ -262,6 +262,42 @@ test('fits a high-degree surface accurately (Chebyshev conditioning)', () => {
 	expect(maxError).toBeLessThan(4e-3)
 })
 
+test('keeps dense-grid samples inside the fit domain', () => {
+	// A grid dense enough that cells are narrower than 2 px (cellW = width / nx < 2). Naive centers at
+	// (c + 0.5) * cellW push the last ones past width - 1, so their normalized u/v leave the [-1, 1]
+	// Chebyshev domain while the evaluated surface only spans [-1, 1] — biasing the quadratic fit at the
+	// edges. With the clamp, every sample stays in domain and the surface tracks the true corners.
+	const width = 40
+	const height = 40
+	const bg = (x: number, y: number) => {
+		const u = (x / (width - 1)) * 2 - 1
+		const v = (y / (height - 1)) * 2 - 1
+		return 0.3 + 0.12 * u + 0.09 * v + 0.05 * (u * u - 1) + 0.04 * (v * v - 1)
+	}
+	const image = makeImage(width, height, 1, (x, y) => bg(x, y))
+
+	const model = fitBackgroundSurface(image, { degree: 2, gridSize: 60, tolerance: 0, rejectionIterations: 0 })
+	const samples = model.surfaces[0].samples
+
+	// Every sample must stay within the pixel-center span [0, width - 1] / [0, height - 1] so its
+	// normalized u/v stays in [-1, 1]; without the clamp the last centers reach ~39.67 on a 40 px axis.
+	let maxX = 0
+	let maxY = 0
+	for (const sample of samples) {
+		expect(sample.x).toBeGreaterThanOrEqual(0)
+		expect(sample.y).toBeGreaterThanOrEqual(0)
+		expect(sample.x).toBeLessThanOrEqual(width - 1)
+		expect(sample.y).toBeLessThanOrEqual(height - 1)
+		maxX = Math.max(maxX, sample.x)
+		maxY = Math.max(maxY, sample.y)
+	}
+
+	// The grid is dense enough (cells < 2 px) that the overflowing edge cells clamp onto the boundary,
+	// confirming the fix is actually exercised rather than trivially satisfied by a sparse grid.
+	expect(maxX).toBe(width - 1)
+	expect(maxY).toBe(height - 1)
+})
+
 test('rejects bright structure but keeps faint dark sky (asymmetric rejection)', () => {
 	const width = 128
 	const height = 128

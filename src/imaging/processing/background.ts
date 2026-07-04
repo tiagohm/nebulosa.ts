@@ -321,15 +321,22 @@ function collectSamples(raw: ImageRawType, width: number, height: number, channe
 	const invW = width > 1 ? 2 / (width - 1) : 0
 	const invH = height > 1 ? 2 / (height - 1) : 0
 
+	// Last valid pixel-center coordinates. Cell centers are clamped to these before normalization: for
+	// dense grids whose cells are narrower than ~2 px, the naive (c + 0.5) * cellW center can exceed
+	// width - 1 and push the normalized u/v outside the [-1, 1] Chebyshev domain, while the evaluated
+	// surface only spans [-1, 1] — biasing the edge samples. Clamping is a no-op for normal grids.
+	const maxX = width > 1 ? width - 1 : 0
+	const maxY = height > 1 ? height - 1 : 0
+
 	const samples: SurfaceSample[] = []
 
 	for (let r = 0; r < ny; r++) {
-		const cy = (r + 0.5) * cellH
+		const cy = Math.min((r + 0.5) * cellH, maxY)
 		const y0 = Math.max(0, Math.floor(cy - boxHalf))
 		const y1 = Math.min(height - 1, Math.ceil(cy + boxHalf))
 
 		for (let c = 0; c < nx; c++) {
-			const cx = (c + 0.5) * cellW
+			const cx = Math.min((c + 0.5) * cellW, maxX)
 			const x0 = Math.max(0, Math.floor(cx - boxHalf))
 			const x1 = Math.min(width - 1, Math.ceil(cx + boxHalf))
 
