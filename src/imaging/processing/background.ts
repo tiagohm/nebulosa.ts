@@ -1,4 +1,4 @@
-import { medianOf, STANDARD_DEVIATION_SCALE } from '../../core/util'
+import { medianOf, STANDARD_DEVIATION_SCALE, standardDeviationOf } from '../../core/util'
 import { LuDecomposition, Matrix, QrDecomposition } from '../../math/linear-algebra/matrix'
 import { clamp, type NumberArray } from '../../math/numerical/math'
 import { DEFAULT_GRAYSCALE, type Image, type ImageRawType } from '../model/types'
@@ -813,10 +813,22 @@ function fitChannelSurface(raw: ImageRawType, width: number, height: number, cha
 
 			residualDispersion = computeResidualDispersion(residuals, residualScratch, count)
 
-			if (iteration === rejectionIterations || !Number.isFinite(residualDispersion) || residualDispersion === 0) break
+			if (iteration === rejectionIterations || !Number.isFinite(residualDispersion)) break
 
-			const highLimit = rejectionHigh * residualDispersion
-			const lowLimit = rejectionLow * residualDispersion
+			// The robust MAD collapses toward 0 on a nearly flat frame where most residuals are identical,
+			// even when a few gross outliers (e.g. sample boxes filling a bright object) remain; floating
+			// point can leave it at ~1e-17 rather than exactly 0. Using it directly would make the
+			// thresholds ~0, flag every sample, and reinstate them all on the failed refit — leaving the
+			// outliers active and the surface pulled up. Compare it to the overall standard deviation
+			// (scale-invariant): when the MAD is negligible but real spread exists the bulk is degenerate,
+			// so fall back to the non-robust std to keep the thresholds meaningful. When the std is 0 too
+			// the residuals are genuinely constant and there is nothing to reject.
+			const spread = standardDeviationOf(residuals, count)
+			if (spread === 0 || Number.isNaN(spread)) break
+			const scale = residualDispersion > 1e-6 * spread ? residualDispersion : spread
+
+			const highLimit = rejectionHigh * scale
+			const lowLimit = rejectionLow * scale
 			rejectedThisPass.length = 0
 			let index = 0
 			for (const sample of samples) {

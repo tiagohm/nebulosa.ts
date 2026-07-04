@@ -521,6 +521,43 @@ test('rejects bright structure but keeps faint dark sky (asymmetric rejection)',
 	expect(result.channels[0].rejectedSamples).toBeGreaterThan(0)
 })
 
+test('rejects gross outliers on a flat frame where the residual MAD is zero', () => {
+	// A flat 0.2 frame with four uniformly bright (0.8) sample boxes. The bright boxes have zero internal
+	// dispersion, so they survive the box-dispersion prefilter (disabled here to isolate the residual
+	// stage), and a symmetric linear surface stays constant, so nearly all residuals are identical and
+	// the robust MAD degenerates to ~0. If rejection stops on that near-zero MAD, the four outliers stay
+	// active and pull the constant model up to ~0.2375. The standard-deviation fallback must still catch
+	// them, leaving the surface on the true flat background.
+	const width = 80
+	const height = 80
+	// Four small bright patches, each covering a single sample box at gridSize 8 (cell = 10 px).
+	const centers: ReadonlyArray<readonly [number, number]> = [
+		[25, 25],
+		[55, 25],
+		[25, 55],
+		[55, 55],
+	]
+	const bright = (x: number, y: number) => centers.some(([cx, cy]) => Math.abs(x - cx) <= 3 && Math.abs(y - cy) <= 3)
+	const image = makeImage(width, height, 1, (x, y) => (bright(x, y) ? 0.8 : 0.2))
+
+	const result = automaticBackgroundExtraction(image, { degree: 1, gridSize: 8, tolerance: 0, correction: 'none' })
+
+	// The bright boxes are rejected, not absorbed into the surface.
+	expect(result.channels[0].rejectedSamples).toBeGreaterThan(0)
+
+	// The modeled background sits on the true flat level, not pulled up toward ~0.2375.
+	const model = result.background.raw
+	for (const [x, y] of [
+		[5, 5],
+		[75, 5],
+		[5, 75],
+		[75, 75],
+		[40, 40],
+	] as const) {
+		expect(model[y * width + x]).toBeCloseTo(0.2, 3)
+	}
+})
+
 test('down-weights noisy boxes so biased samples do not tilt the fit', () => {
 	const width = 96
 	const height = 96
