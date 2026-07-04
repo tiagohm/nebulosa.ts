@@ -369,8 +369,9 @@ test('a boxSize larger than the frame does not oversize the sample buffers', () 
 		error = e
 	}
 	expect(error).toBeInstanceOf(Error)
-	// Reached the fit stage rather than dying on an oversized allocation.
-	expect((error as Error).message).toContain('not enough')
+	// Reached the fit stage (a domain error about the surface fit) rather than dying on an oversized
+	// allocation. Every box spans the whole frame, collapsing all samples onto one position.
+	expect((error as Error).message).toContain('surface')
 })
 
 test('fits a high-degree surface accurately (Chebyshev conditioning)', () => {
@@ -798,6 +799,36 @@ test('backgroundExclusionMaskFromStars marks disks around stars', () => {
 test('fitBackgroundSurface rejects a wrongly sized exclusion mask', () => {
 	const image = makeImage(64, 64, 1, () => 0.2)
 	expect(() => fitBackgroundSurface(image, { degree: 1, gridSize: 8, exclusionMask: new Uint8Array(10) })).toThrow()
+})
+
+test('rejects an ill-conditioned thin-strip sample layout instead of extrapolating', () => {
+	// A linear ramp with everything masked except one narrow vertical strip. The surviving sample boxes
+	// share (almost) the same u, so the horizontal slope is undetermined: the QR is nominally full rank
+	// (the pivot is non-zero only through floating-point noise) but the fit extrapolates to values far
+	// outside the image range (~[-7, 9] here). The layout must be rejected rather than materialized.
+	const width = 128
+	const height = 128
+	const bg = (x: number) => 0.1 + 0.8 * (x / (width - 1))
+	const image = makeImage(width, height, 1, (x) => bg(x))
+
+	// Keep only a strip aligned to a single box column (gridSize 16 -> box centers every 8 px at ...60).
+	const mask = new Uint8Array(width * height)
+	for (let y = 0; y < height; y++) {
+		for (let x = 0; x < width; x++) if (!(x >= 57 && x < 63)) mask[y * width + x] = 1
+	}
+	expect(() => fitBackgroundSurface(image, { degree: 1, gridSize: 16, exclusionMask: mask })).toThrow()
+
+	// The same ramp without the mask fits cleanly and stays within the image value range.
+	const model = fitBackgroundSurface(image, { degree: 1, gridSize: 16 })
+	const background = evaluateBackgroundModel(model, image).raw
+	let min = Infinity
+	let max = -Infinity
+	for (const v of background) {
+		min = Math.min(min, v)
+		max = Math.max(max, v)
+	}
+	expect(min).toBeGreaterThan(0)
+	expect(max).toBeLessThan(1)
 })
 
 test('thin-plate spline follows a complex background a polynomial cannot', () => {

@@ -449,12 +449,60 @@ function collectSamples(raw: ImageRawType, width: number, height: number, channe
 	return samples
 }
 
+// Minimum 2D spread (RMS extent along the least-covered direction, in the normalized [-1, 1] domain)
+// the accepted samples must have for the polynomial system to be well-posed. Samples confined to a thin
+// strip give one basis direction almost no variation, so the surface is unconstrained across the rest of
+// the frame and extrapolates far outside the image range even though the QR reports full rank (the tiny
+// pivot is non-zero only through floating-point noise). Full-frame coverage has a spread near 0.58; a
+// thin strip approaches 0. The threshold caps the worst-case extrapolation amplification.
+const MIN_SAMPLE_SPREAD = 0.02
+
+// RMS extent of the active samples along their least-covered direction: sqrt of the smaller eigenvalue
+// of the (u, v) covariance. About 0.58 for full [-1, 1] coverage, ~0 for a collinear / thin-strip layout
+// regardless of orientation. `m` must be the number of active samples and be > 0.
+function activeSampleSpread(samples: readonly SurfaceSample[], m: number) {
+	let su = 0
+	let sv = 0
+	for (const sample of samples) {
+		if (!sample.active) continue
+		su += sample.u
+		sv += sample.v
+	}
+	const mu = su / m
+	const mv = sv / m
+
+	let cuu = 0
+	let cvv = 0
+	let cuv = 0
+	for (const sample of samples) {
+		if (!sample.active) continue
+		const du = sample.u - mu
+		const dv = sample.v - mv
+		cuu += du * du
+		cvv += dv * dv
+		cuv += du * dv
+	}
+	cuu /= m
+	cvv /= m
+	cuv /= m
+
+	// Smaller eigenvalue of the symmetric 2x2 covariance [[cuu, cuv], [cuv, cvv]].
+	const tr = cuu + cvv
+	const disc = Math.sqrt(Math.max(0, (tr * tr) / 4 - (cuu * cvv - cuv * cuv)))
+	return Math.sqrt(Math.max(0, tr / 2 - disc))
+}
+
 // Fits a 2D Chebyshev surface to the currently active samples by least squares (QR). Returns the
-// coefficient vector, or undefined when there are too few samples or the system is rank deficient.
+// coefficient vector, or undefined when there are too few samples, the layout is degenerate (a thin
+// strip, so the system is effectively singular), or the system is rank deficient.
 function fitSurface(samples: readonly SurfaceSample[], degree: number, terms: number, ti: Uint8Array, tj: Uint8Array): Float64Array | undefined {
 	let m = 0
 	for (const sample of samples) if (sample.active) m++
 	if (m < terms) return undefined
+
+	// Reject thin-strip / collinear layouts before trusting the solve: the QR can be nominally full rank
+	// yet so ill-conditioned that the surface extrapolates wildly across the unsampled part of the frame.
+	if (activeSampleSpread(samples, m) < MIN_SAMPLE_SPREAD) return undefined
 
 	const A = new Matrix(m, terms)
 	const b = new Float64Array(m)
@@ -790,7 +838,7 @@ function fitChannelSurface(raw: ImageRawType, width: number, height: number, cha
 		residualDispersion = computeResidualDispersion(residuals, residualScratch, count)
 	} else {
 		const poly = fitSurface(samples, degree, terms, ti, tj)
-		if (poly === undefined) throw new Error(`not enough clean background samples to fit a degree-${degree} surface (need at least ${terms})`)
+		if (poly === undefined) throw new Error(`unable to fit a degree-${degree} background surface: need at least ${terms} clean samples spanning a 2D region, not a thin strip`)
 		coefficients = poly
 
 		const uCheb = new Float64Array(degree + 1)
