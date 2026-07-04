@@ -249,6 +249,17 @@ test('exposes exactly (degree+1)(degree+2)/2 coefficients regardless of sample c
 	}
 })
 
+test('reports zero smoothing for a polynomial model', () => {
+	// Smoothing only applies to the thin-plate spline; a polynomial fit ignores it, so the reported
+	// metadata must be 0 even when the smoothing option defaults to a non-zero value.
+	const image = makeImage(48, 48, 1, (x, y) => 0.2 + 0.1 * (x / 47) + 0.05 * (y / 47))
+	expect(fitBackgroundSurface(image, { model: 'polynomial', degree: 1 }).smoothing).toBe(0)
+	// An explicit smoothing option is still ignored for the polynomial model.
+	expect(fitBackgroundSurface(image, { model: 'polynomial', degree: 1, smoothing: 0.5 }).smoothing).toBe(0)
+	// The thin-plate spline still reports its smoothing.
+	expect(fitBackgroundSurface(image, { model: 'thinPlateSpline', gridSize: 8, smoothing: 0.3 }).smoothing).toBe(0.3)
+})
+
 test('explicit box sizes keep every sampled pixel in the statistics buffer', () => {
 	const width = 30
 	const height = 30

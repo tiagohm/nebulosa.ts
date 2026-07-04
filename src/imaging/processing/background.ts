@@ -897,6 +897,10 @@ export function fitBackgroundSurface(image: Image, options: BackgroundExtraction
 
 	const surfaces: BackgroundSurfaceFit[] = []
 
+	// Smoothing only applies to the thin-plate spline; the polynomial model ignores it, so report 0 to
+	// keep the metadata honest for callers inspecting or serializing the fit.
+	const smoothing = fit.model === 'thinPlateSpline' ? fit.smoothing : 0
+
 	// Luminance mode (RGB only): fit a single surface on the luminance plane; per-channel otherwise.
 	if (fit.colorMode === 'luminance' && channels === 3) {
 		const n = width * height
@@ -904,14 +908,14 @@ export function fitBackgroundSurface(image: Image, options: BackgroundExtraction
 		const { red, green, blue } = DEFAULT_GRAYSCALE
 		for (let p = 0, i = 0; p < n; p++, i += 3) lum[p] = red * raw[i] + green * raw[i + 1] + blue * raw[i + 2]
 		surfaces.push(fitChannelSurface(lum, width, height, 1, 0, fit, terms, ti, tj))
-		return { type: fit.model, colorMode: 'luminance', width, height, channelCount: channels, degree: fit.degree, smoothing: fit.smoothing, surfaces }
+		return { type: fit.model, colorMode: 'luminance', width, height, channelCount: channels, degree: fit.degree, smoothing, surfaces }
 	}
 
 	for (let channel = 0; channel < channels; channel++) {
 		surfaces.push(fitChannelSurface(raw, width, height, channels, channel, fit, terms, ti, tj))
 	}
 
-	return { type: fit.model, colorMode: 'perChannel', width, height, channelCount: channels, degree: fit.degree, smoothing: fit.smoothing, surfaces }
+	return { type: fit.model, colorMode: 'perChannel', width, height, channelCount: channels, degree: fit.degree, smoothing, surfaces }
 }
 
 // Materializes a fitted `model` into a fresh background image cloned from `image` (which supplies the
