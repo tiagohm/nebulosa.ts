@@ -75,6 +75,30 @@ test('removes a smooth linear gradient by subtraction', () => {
 	expect(result.channels[0].acceptedSamples).toBeGreaterThan(0)
 })
 
+test('fits a high-aspect panorama frame with default options', () => {
+	// A very wide frame: with square cells derived from the long axis, the short axis rounds down to a
+	// single cell row, collapsing every sample onto one v coordinate so the surface fit rejects the layout
+	// as a thin strip. The grid must keep enough rows for the degree; the default fit must succeed and
+	// reproduce the gradient rather than throw even though the frame has ample pixels.
+	const width = 1000
+	const height = 30
+	const bg = (x: number, y: number) => 0.15 + 0.4 * (x / (width - 1)) + 0.2 * (y / (height - 1))
+	const image = makeImage(width, height, 1, (x, y) => bg(x, y))
+
+	const model = fitBackgroundSurface(image, {})
+	const background = evaluateBackgroundModel(model, image).raw
+
+	let maxError = 0
+	for (let y = 0; y < height; y++) {
+		for (let x = 0; x < width; x++) maxError = Math.max(maxError, Math.abs(background[y * width + x] - bg(x, y)))
+	}
+	expect(maxError).toBeLessThan(1e-3)
+
+	// The same holds for the transposed (tall) frame.
+	const tall = makeImage(height, width, 1, (x, y) => 0.15 + 0.4 * (y / (width - 1)) + 0.2 * (x / (height - 1)))
+	expect(() => fitBackgroundSurface(tall, {})).not.toThrow()
+})
+
 test('fits the background under bright stars without being pulled up', () => {
 	const width = 128
 	const height = 128
@@ -199,9 +223,16 @@ test('leaves the source untouched when correction is none', () => {
 })
 
 test('throws when there are too few clean samples for the degree', () => {
-	// A 3x3 grid yields at most 9 samples, fewer than the 28 terms of a degree-6 surface.
-	const image = makeImage(48, 48, 1, () => 0.2)
-	expect(() => automaticBackgroundExtraction(image, { degree: 6, gridSize: 3 })).toThrow()
+	// Masking all but a small corner leaves far fewer clean sample boxes than the 28 terms of a degree-6
+	// surface, so the fit is underdetermined and must throw.
+	const width = 48
+	const height = 48
+	const image = makeImage(width, height, 1, () => 0.2)
+	const mask = new Uint8Array(width * height)
+	for (let y = 0; y < height; y++) {
+		for (let x = 0; x < width; x++) if (x >= 16 || y >= 16) mask[y * width + x] = 1
+	}
+	expect(() => automaticBackgroundExtraction(image, { degree: 6, gridSize: 8, exclusionMask: mask })).toThrow()
 })
 
 test('rejects a non-finite gridSize instead of hanging', () => {

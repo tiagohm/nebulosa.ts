@@ -306,13 +306,18 @@ function computeResidualDispersion(values: Float64Array, scratch: Float64Array, 
 // Collects grid samples for one channel. Divides the image into a grid of roughly square cells,
 // estimates a robust background per box, and rejects boxes whose internal dispersion marks them as
 // contaminated by stars or nebulae. Coordinates are normalized to [-1, 1] for a well-conditioned fit.
-function collectSamples(raw: ImageRawType, width: number, height: number, channels: number, channel: number, gridSize: number, boxSize: number, tolerance: number, mask?: Readonly<NumberArray>) {
+// `minCellsPerAxis` is the minimum number of cells kept on each axis so a high-aspect frame (e.g.
+// 1000x30) still yields a 2D layout rather than a single row/column that a surface fit would reject.
+function collectSamples(raw: ImageRawType, width: number, height: number, channels: number, channel: number, gridSize: number, boxSize: number, tolerance: number, minCellsPerAxis: number, mask?: Readonly<NumberArray>) {
 	const longAxis = Math.max(width, height)
 	const cell = longAxis / gridSize
-	// Cap the grid at one cell per pixel: a very large (but finite) gridSize would otherwise blow the
+	// Square cells come from the long axis, so the short axis of a high-aspect frame can round down to a
+	// single cell, collapsing every sample onto one coordinate. Keep at least `minCellsPerAxis` cells per
+	// axis (bounded by the pixel count) so the layout stays two-dimensional and the fit is well-posed.
+	// The upper bound caps the grid at one cell per pixel: a very large gridSize would otherwise blow the
 	// cell count up to unusable sizes and exhaust memory. More cells than pixels is meaningless anyway.
-	const nx = clamp(Math.round(width / cell), 1, width)
-	const ny = clamp(Math.round(height / cell), 1, height)
+	const nx = clamp(Math.round(width / cell), Math.min(minCellsPerAxis, width), width)
+	const ny = clamp(Math.round(height / cell), Math.min(minCellsPerAxis, height), height)
 	const cellW = width / nx
 	const cellH = height / ny
 
@@ -813,7 +818,9 @@ function resolveFitOptions(options: BackgroundExtractionOptions): ResolvedFitOpt
 // the Chebyshev coefficients and fit diagnostics; does not evaluate the surface into an image.
 function fitChannelSurface(raw: ImageRawType, width: number, height: number, channels: number, channel: number, options: ResolvedFitOptions, terms: number, ti: Uint8Array, tj: Uint8Array): BackgroundSurfaceFit {
 	const { gridSize, boxSize, model, degree, smoothing, tolerance, rejectionHigh, rejectionLow, rejectionIterations, exclusionMask } = options
-	const samples = collectSamples(raw, width, height, channels, channel, gridSize, boxSize, tolerance, exclusionMask)
+	// A degree-d polynomial needs at least d+1 distinct coordinates per axis to be determined; keep that
+	// many cell rows/columns so high-aspect frames still produce a 2D sample layout.
+	const samples = collectSamples(raw, width, height, channels, channel, gridSize, boxSize, tolerance, degree + 1, exclusionMask)
 
 	const residuals = new Float64Array(samples.length)
 	const residualScratch = new Float64Array(samples.length)
