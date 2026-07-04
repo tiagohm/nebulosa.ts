@@ -244,3 +244,35 @@ test('rejects bright structure but keeps faint dark sky (asymmetric rejection)',
 	}
 	expect(result.channels[0].rejectedSamples).toBeGreaterThan(0)
 })
+
+test('down-weights noisy boxes so biased samples do not tilt the fit', () => {
+	const width = 96
+	const height = 96
+	const bg = (x: number, y: number) => 0.2 + 0.2 * (x / (width - 1))
+	// Deterministic pseudo-noise in [0, 1) for reproducibility.
+	const noise = (x: number, y: number) => {
+		const s = Math.sin(x * 12.9898 + y * 78.233) * 43758.5453
+		return s - Math.floor(s)
+	}
+	// The left band is biased strongly upward with high internal dispersion; reliable low-dispersion
+	// boxes elsewhere should dominate the weighted fit and keep the plane on the true gradient.
+	const image = makeImage(width, height, 1, (x, y) => {
+		let v = bg(x, y)
+		if (x < 24) v += 0.1 + 0.25 * noise(x, y)
+		return Math.max(0, Math.min(1, v))
+	})
+
+	// Rejection is disabled (tolerance 0, no residual iterations) to isolate the weighting effect.
+	const result = automaticBackgroundExtraction(image, { degree: 1, gridSize: 12, tolerance: 0, rejectionIterations: 0, correction: 'none' })
+	const model = result.background.raw
+
+	// Without weighting the biased band would visibly lift the left side of the degree-1 plane; the
+	// weighted fit stays within a percent of the true gradient across the frame, including that band.
+	for (const [x, y] of [
+		[10, 48],
+		[48, 48],
+		[85, 48],
+	] as const) {
+		expect(Math.abs(model[y * width + x] - bg(x, y))).toBeLessThan(0.01)
+	}
+})

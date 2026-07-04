@@ -6,9 +6,9 @@ import { clone } from './transformation'
 
 // Automatic Background Extraction (ABE): models a smooth sky background from a grid of robust
 // samples and removes it, correcting gradients, vignetting, and light pollution. The background is
-// approximated by a low-degree 2D polynomial surface (tensor Chebyshev basis) fitted by least
-// squares to per-box median samples, with structure (stars, nebulae) rejected first by high
-// internal box dispersion and then
+// approximated by a low-degree 2D polynomial surface (tensor Chebyshev basis) fitted by weighted
+// least squares to per-box median samples (reliable low-dispersion boxes count more), with
+// structure (stars, nebulae) rejected first by high internal box dispersion and then
 // iteratively by fit residuals. The fitted surface is either subtracted (additive gradients/light
 // pollution) or divided out (multiplicative vignetting). Color images fit each channel independently.
 // https://pixinsight.com/doc/tools/AutomaticBackgroundExtractor/AutomaticBackgroundExtractor.html
@@ -95,8 +95,10 @@ interface BackgroundSample {
 	v: number
 	// Robust background value (box median) of the sampled channel.
 	value: number
-	// Internal box dispersion (normalized MAD), used for structure rejection.
+	// Internal box dispersion (normalized MAD), used for structure rejection and weighting.
 	dispersion: number
+	// Least-squares weight in (0, 1]: reliable (low-dispersion) boxes count more than noisy ones.
+	weight: number
 	// Whether the sample is currently active in the fit (cleared by rejection passes).
 	active: boolean
 }
@@ -207,19 +209,37 @@ function collectSamples(raw: ImageRawType, width: number, height: number, channe
 				v: (r + 0.5) * cellH * invH - 1,
 				value: median,
 				dispersion: Number.isFinite(dispersion) ? dispersion : 0,
+				weight: 1,
 				active: true,
 			})
+		}
+	}
+
+	if (samples.length === 0) return samples
+
+	// Robust statistics of the per-box internal dispersions, used both for weighting and rejection.
+	const disp = new Float64Array(samples.length)
+	for (let i = 0; i < samples.length; i++) disp[i] = samples[i].dispersion
+	const scratch = new Float64Array(samples.length)
+	const [medDisp, madDisp] = boxStatistics(disp, scratch, samples.length)
+
+	// Weight each sample by reliability: w = floor^2 / (dispersion^2 + floor^2), bounded to (0, 1].
+	// Clean boxes (dispersion << floor) approach 1; noisy boxes are down-weighted. The floor is the
+	// median dispersion, so weighting adapts to the image noise; a degenerate all-flat image (median
+	// dispersion 0) falls back to equal unit weights.
+	const floor = medDisp > 0 && Number.isFinite(medDisp) ? medDisp : 0
+	const floorSq = floor * floor
+	if (floorSq > 0) {
+		for (const sample of samples) {
+			const d = sample.dispersion
+			sample.weight = floorSq / (d * d + floorSq)
 		}
 	}
 
 	// Reject contaminated boxes by internal dispersion: structure inflates the box MAD well above the
 	// typical sky box. The threshold is itself robust (median + tolerance * MAD of the dispersions), so
 	// it adapts to the image noise instead of assuming a fixed level.
-	if (samples.length > 0 && tolerance > 0) {
-		const disp = new Float64Array(samples.length)
-		for (let i = 0; i < samples.length; i++) disp[i] = samples[i].dispersion
-		const scratch = new Float64Array(samples.length)
-		const [medDisp, madDisp] = boxStatistics(disp, scratch, samples.length)
+	if (tolerance > 0) {
 		const limit = medDisp + tolerance * (madDisp > 0 ? madDisp : medDisp)
 
 		if (Number.isFinite(limit)) {
@@ -253,9 +273,12 @@ function fitSurface(samples: readonly BackgroundSample[], degree: number, terms:
 		fillChebyshev(uCheb, 0, sample.u, degree)
 		fillChebyshev(vCheb, 0, sample.v, degree)
 
+		// Weighted least squares: scaling each equation (design row and right-hand side) by sqrt(weight)
+		// makes QR minimize the weighted residual sum, giving reliable low-dispersion boxes more pull.
+		const w = Math.sqrt(sample.weight)
 		const base = row * terms
-		for (let k = 0; k < terms; k++) data[base + k] = uCheb[ti[k]] * vCheb[tj[k]]
-		b[row] = sample.value
+		for (let k = 0; k < terms; k++) data[base + k] = w * uCheb[ti[k]] * vCheb[tj[k]]
+		b[row] = w * sample.value
 		row++
 	}
 
