@@ -1,4 +1,3 @@
-import type { Writable } from '../../core/types'
 import { medianOf, STANDARD_DEVIATION_SCALE } from '../../core/util'
 import { Matrix, QrDecomposition } from '../../math/linear-algebra/matrix'
 import { clamp } from '../../math/numerical/math'
@@ -63,8 +62,9 @@ export interface BackgroundExtractionOptions {
 	readonly targetBackground?: number
 }
 
-// Fitted background model for a single channel.
-export interface BackgroundExtractionChannelModel {
+// A fitted background surface for one channel: the Chebyshev coefficients plus fit diagnostics.
+// Independent of any correction and reusable through `evaluateBackgroundModel`.
+export interface BackgroundSurfaceFit {
 	// Surface coefficients ordered by ascending total degree, indexing the tensor Chebyshev basis
 	// T_i(u) * T_j(v) with i + j <= degree and normalized coordinates u, v in [-1, 1].
 	readonly coefficients: Float64Array
@@ -74,6 +74,27 @@ export interface BackgroundExtractionChannelModel {
 	readonly rejectedSamples: number
 	// Robust dispersion (normalized MAD) of the final fit residuals, a quality indicator.
 	readonly residual: number
+}
+
+// A fitted background model: the per-channel surfaces plus the geometry and degree they apply to.
+// Produced by `fitBackgroundSurface` without touching the source pixels; feed it to
+// `evaluateBackgroundModel` to materialize the background image, or reuse it across other frames of
+// the same geometry (e.g. local normalization, multi-frame correction).
+export interface BackgroundModel {
+	// Width, in pixels, of the image the model was fitted to.
+	readonly width: number
+	// Height, in pixels, of the image the model was fitted to.
+	readonly height: number
+	// Number of channels the model covers (one surface each).
+	readonly channelCount: number
+	// Polynomial degree of every fitted surface.
+	readonly degree: number
+	// Fitted surface, one per channel.
+	readonly surfaces: readonly BackgroundSurfaceFit[]
+}
+
+// Fitted background model for a single channel, extended with the post-correction output range.
+export interface BackgroundExtractionChannelModel extends BackgroundSurfaceFit {
 	// Minimum corrected pixel value of this channel before clipping, or undefined when correction is
 	// `none`. With `outputMax` it reveals how far the correction pushed values outside [0, 1].
 	readonly outputMin?: number
@@ -90,6 +111,26 @@ export interface BackgroundExtractionResult {
 	readonly background: Image
 	// Per-channel fitted models, one entry per image channel.
 	readonly channels: readonly BackgroundExtractionChannelModel[]
+}
+
+// Pre-clipping value range produced by a correction on one channel.
+export interface BackgroundOutputRange {
+	// Minimum corrected value before clipping (NaN when the channel had no finite pixels).
+	readonly min: number
+	// Maximum corrected value before clipping.
+	readonly max: number
+}
+
+// Options for `applyBackground`.
+export interface BackgroundApplyOptions {
+	// How the modeled background is removed from the source. Default `subtract`.
+	readonly correction?: Exclude<BackgroundExtractionCorrection, 'none'>
+	// How out-of-range corrected values are handled. See `BackgroundExtractionClipping`. Default
+	// `truncate`.
+	readonly clipping?: BackgroundExtractionClipping
+	// Level re-established after correction to preserve overall brightness, in [0, 1]. When undefined
+	// the per-channel background mean is used.
+	readonly targetBackground?: number
 }
 
 // Default automatic background extraction options.
@@ -321,11 +362,34 @@ function evaluateSurface(coefficients: Float64Array, u: number, v: number, degre
 	return sum
 }
 
-// Fits the background surface for one channel with iterative residual rejection, then writes the
-// evaluated model into `model` at the channel offset and returns the channel fit summary.
-function modelChannel(raw: ImageRawType, model: ImageRawType, width: number, height: number, channels: number, channel: number, options: Required<Omit<BackgroundExtractionOptions, 'targetBackground'>>, ti: Uint8Array, tj: Uint8Array): BackgroundExtractionChannelModel {
+// Fitting-relevant options resolved to concrete numbers (correction/clipping are applied separately).
+interface ResolvedFitOptions {
+	gridSize: number
+	boxSize: number
+	degree: number
+	tolerance: number
+	rejectionHigh: number
+	rejectionLow: number
+	rejectionIterations: number
+}
+
+// Resolves and clamps the fit-relevant subset of the options against the defaults.
+function resolveFitOptions(options: BackgroundExtractionOptions): ResolvedFitOptions {
+	return {
+		gridSize: Math.max(2, Math.trunc(options.gridSize ?? DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.gridSize)),
+		boxSize: Math.max(0, options.boxSize ?? DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.boxSize),
+		degree: clamp(Math.trunc(options.degree ?? DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.degree), 1, 6),
+		tolerance: Math.max(0, options.tolerance ?? DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.tolerance),
+		rejectionHigh: Math.max(0, options.rejectionHigh ?? DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.rejectionHigh),
+		rejectionLow: Math.max(0, options.rejectionLow ?? DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.rejectionLow),
+		rejectionIterations: Math.max(0, Math.trunc(options.rejectionIterations ?? DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.rejectionIterations)),
+	}
+}
+
+// Fits the background surface for one channel with iterative asymmetric residual rejection. Returns
+// the Chebyshev coefficients and fit diagnostics; does not evaluate the surface into an image.
+function fitChannelSurface(raw: ImageRawType, width: number, height: number, channels: number, channel: number, options: ResolvedFitOptions, terms: number, ti: Uint8Array, tj: Uint8Array): BackgroundSurfaceFit {
 	const { gridSize, boxSize, degree, tolerance, rejectionHigh, rejectionLow, rejectionIterations } = options
-	const terms = basisTermCount(degree)
 	const samples = collectSamples(raw, width, height, channels, channel, gridSize, boxSize, tolerance)
 
 	let coefficients = fitSurface(samples, degree, terms, ti, tj)
@@ -381,8 +445,20 @@ function modelChannel(raw: ImageRawType, model: ImageRawType, width: number, hei
 		coefficients = refit
 	}
 
-	// Evaluate the fitted surface at every pixel of this channel. Precompute per-column Chebyshev
-	// values so the inner loop only multiplies against the per-row Chebyshev values.
+	let accepted = 0
+	for (const sample of samples) if (sample.active) accepted++
+
+	return {
+		coefficients,
+		acceptedSamples: accepted,
+		rejectedSamples: samples.length - accepted,
+		residual: Number.isFinite(residualDispersion) ? residualDispersion : 0,
+	}
+}
+
+// Evaluates a fitted channel surface at every pixel, writing into `model` at the channel offset.
+// Precomputes per-column Chebyshev values so the inner loop only multiplies against the per-row ones.
+function evaluateChannelSurface(coefficients: Float64Array, model: ImageRawType, width: number, height: number, channels: number, channel: number, degree: number, terms: number, ti: Uint8Array, tj: Uint8Array) {
 	const invW = width > 1 ? 2 / (width - 1) : 0
 	const invH = height > 1 ? 2 / (height - 1) : 0
 	const uChebTable = new Float64Array(width * (degree + 1))
@@ -405,15 +481,20 @@ function modelChannel(raw: ImageRawType, model: ImageRawType, width: number, hei
 			model[i] = sum
 		}
 	}
+}
 
-	let accepted = 0
-	for (const sample of samples) if (sample.active) accepted++
+// Throws when a fitted model's geometry does not match the image it is being evaluated/applied to.
+function ensureModelMatchesImage(model: BackgroundModel, image: Image) {
+	const { width, height, channels } = image.metadata
+	if (width !== model.width || height !== model.height || channels !== model.channelCount) {
+		throw new Error(`background model geometry (${model.width}x${model.height}x${model.channelCount}) does not match image (${width}x${height}x${channels})`)
+	}
+}
 
-	return {
-		coefficients,
-		acceptedSamples: accepted,
-		rejectedSamples: samples.length - accepted,
-		residual: Number.isFinite(residualDispersion) ? residualDispersion : 0,
+// Throws when an image and a background image do not share the same dimensions and channel count.
+function ensureSameGeometry(image: Image, background: Image) {
+	if (image.metadata.width !== background.metadata.width || image.metadata.height !== background.metadata.height || image.metadata.channels !== background.metadata.channels) {
+		throw new Error('image and background must have the same dimensions and channel count')
 	}
 }
 
@@ -440,89 +521,146 @@ function applyClipping(raw: ImageRawType, channel: number, channels: number, n: 
 	}
 }
 
-// Extracts and removes a smooth sky background from an image.
+// Fits a background model to an image without modifying it.
 //
-// Builds a grid of robust background samples, rejects those contaminated by stars or nebulae, fits a
-// low-degree 2D polynomial surface per channel, and removes it by subtraction (gradients, light
-// pollution) or division (vignetting). Samples and the fit use coordinates normalized to [-1, 1].
-//
-// The source `image` is mutated in place with the corrected pixels unless `correction` is `none`.
-// The returned `background` is always a fresh image holding the fitted model. After a
-// `subtract`/`divide` correction the per-channel level is restored to `targetBackground` (or the
-// channel model mean when omitted) so overall brightness is preserved, and out-of-range values are
-// brought back into [0, 1] per the `clipping` mode (truncate or rescale). Each channel model reports
-// the pre-clipping value range in `outputMin`/`outputMax`.
+// Builds a grid of robust per-box background samples, rejects those contaminated by stars or nebulae
+// (by internal dispersion and then iterative asymmetric residual rejection), and fits a low-degree
+// 2D Chebyshev surface per channel by weighted least squares. Coordinates are normalized to [-1, 1].
+// The returned model is independent of any correction and can be evaluated or reused across frames of
+// the same geometry.
 //
 // Throws when a channel has fewer clean samples than the polynomial degree requires.
-export function automaticBackgroundExtraction(image: Image, options: BackgroundExtractionOptions = DEFAULT_BACKGROUND_EXTRACTION_OPTIONS): BackgroundExtractionResult {
-	const gridSize = Math.max(2, Math.trunc(options.gridSize ?? DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.gridSize))
-	const boxSize = Math.max(0, options.boxSize ?? DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.boxSize)
-	const degree = clamp(Math.trunc(options.degree ?? DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.degree), 1, 6)
-	const tolerance = Math.max(0, options.tolerance ?? DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.tolerance)
-	const rejectionHigh = Math.max(0, options.rejectionHigh ?? DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.rejectionHigh)
-	const rejectionLow = Math.max(0, options.rejectionLow ?? DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.rejectionLow)
-	const rejectionIterations = Math.max(0, Math.trunc(options.rejectionIterations ?? DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.rejectionIterations))
-	const correction = options.correction ?? DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.correction
-	const clipping = options.clipping ?? DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.clipping
-
-	const resolved = { gridSize, boxSize, degree, tolerance, rejectionHigh, rejectionLow, rejectionIterations, correction, clipping }
-
+export function fitBackgroundSurface(image: Image, options: BackgroundExtractionOptions = DEFAULT_BACKGROUND_EXTRACTION_OPTIONS): BackgroundModel {
+	const fit = resolveFitOptions(options)
 	const { raw, metadata } = image
 	const { width, height, channels } = metadata
 
+	const terms = basisTermCount(fit.degree)
+	const ti = new Uint8Array(terms)
+	const tj = new Uint8Array(terms)
+	fillBasisExponents(fit.degree, ti, tj)
+
+	const surfaces: BackgroundSurfaceFit[] = []
+	for (let channel = 0; channel < channels; channel++) {
+		surfaces.push(fitChannelSurface(raw, width, height, channels, channel, fit, terms, ti, tj))
+	}
+
+	return { width, height, channelCount: channels, degree: fit.degree, surfaces }
+}
+
+// Materializes a fitted `model` into a fresh background image cloned from `image` (which supplies the
+// header/metadata and must match the model geometry). The source pixels are not read; every pixel of
+// the returned image is overwritten with the evaluated surface.
+export function evaluateBackgroundModel(model: BackgroundModel, image: Image): Image {
+	ensureModelMatchesImage(model, image)
+
 	const background = clone(image)
-	const model = background.raw
+	const out = background.raw
+	const { width, height, channelCount, degree } = model
 
 	const terms = basisTermCount(degree)
 	const ti = new Uint8Array(terms)
 	const tj = new Uint8Array(terms)
 	fillBasisExponents(degree, ti, tj)
 
-	const channelModels: BackgroundExtractionChannelModel[] = []
-
-	for (let channel = 0; channel < channels; channel++) {
-		channelModels.push(modelChannel(raw, model, width, height, channels, channel, resolved, ti, tj))
+	for (let channel = 0; channel < channelCount; channel++) {
+		evaluateChannelSurface(model.surfaces[channel].coefficients, out, width, height, channelCount, channel, degree, terms, ti, tj)
 	}
 
-	if (correction !== 'none') {
-		for (let channel = 0; channel < channels; channel++) {
-			const target = options.targetBackground !== undefined && Number.isFinite(options.targetBackground) ? clamp(options.targetBackground, 0, 1) : channelMean(model, width, height, channels, channel)
-			const n = width * height
+	return background
+}
 
-			// First pass: write the unclamped corrected values and track their finite range so the
-			// clipping step can rescale instead of blindly truncating out-of-range signal.
-			let min = Number.POSITIVE_INFINITY
-			let max = Number.NEGATIVE_INFINITY
+// Removes a modeled `background` from `image` in place, returning the per-channel pre-clipping value
+// range.
+//
+// `subtract` performs additive removal (gradients, light pollution); `divide` performs multiplicative
+// removal (vignetting), guarded against division by near-zero model values. The per-channel level is
+// restored to `targetBackground` (or the background channel mean when omitted) so overall brightness
+// is preserved. Out-of-range values are brought back into [0, 1] per the `clipping` mode. `image` and
+// `background` must share the same geometry.
+export function applyBackground(image: Image, background: Image, options: BackgroundApplyOptions = {}): BackgroundOutputRange[] {
+	ensureSameGeometry(image, background)
 
-			if (correction === 'subtract') {
-				for (let p = 0, i = channel; p < n; p++, i += channels) {
-					const v = raw[i] - model[i] + target
-					raw[i] = v
-					if (Number.isFinite(v)) {
-						if (v < min) min = v
-						if (v > max) max = v
-					}
-				}
-			} else {
-				for (let p = 0, i = channel; p < n; p++, i += channels) {
-					const denom = model[i]
-					const v = (raw[i] / (Math.abs(denom) < DIVIDE_EPSILON ? (denom < 0 ? -DIVIDE_EPSILON : DIVIDE_EPSILON) : denom)) * target
-					raw[i] = v
-					if (Number.isFinite(v)) {
-						if (v < min) min = v
-						if (v > max) max = v
-					}
+	const correction = options.correction ?? 'subtract'
+	const clipping = options.clipping ?? DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.clipping
+	const targetOverride = options.targetBackground !== undefined && Number.isFinite(options.targetBackground) ? clamp(options.targetBackground, 0, 1) : undefined
+
+	const { raw, metadata } = image
+	const model = background.raw
+	const { width, height, channels } = metadata
+	const n = width * height
+
+	const ranges: BackgroundOutputRange[] = []
+
+	for (let channel = 0; channel < channels; channel++) {
+		const target = targetOverride ?? channelMean(model, width, height, channels, channel)
+
+		// First pass: write the unclamped corrected values and track their finite range so the clipping
+		// step can rescale instead of blindly truncating out-of-range signal.
+		let min = Number.POSITIVE_INFINITY
+		let max = Number.NEGATIVE_INFINITY
+
+		if (correction === 'subtract') {
+			for (let p = 0, i = channel; p < n; p++, i += channels) {
+				const v = raw[i] - model[i] + target
+				raw[i] = v
+				if (Number.isFinite(v)) {
+					if (v < min) min = v
+					if (v > max) max = v
 				}
 			}
+		} else {
+			for (let p = 0, i = channel; p < n; p++, i += channels) {
+				const denom = model[i]
+				const v = (raw[i] / (Math.abs(denom) < DIVIDE_EPSILON ? (denom < 0 ? -DIVIDE_EPSILON : DIVIDE_EPSILON) : denom)) * target
+				raw[i] = v
+				if (Number.isFinite(v)) {
+					if (v < min) min = v
+					if (v > max) max = v
+				}
+			}
+		}
 
-			// Second pass: clamp or rescale into [0, 1] per the clipping mode.
-			applyClipping(raw, channel, channels, n, clipping, min, max)
+		// Second pass: clamp or rescale into [0, 1] per the clipping mode.
+		applyClipping(raw, channel, channels, n, clipping, min, max)
 
-			const channelModel = channelModels[channel] as Writable<BackgroundExtractionChannelModel>
-			channelModel.outputMin = Number.isFinite(min) ? min : Number.NaN
-			channelModel.outputMax = Number.isFinite(max) ? max : Number.NaN
+		ranges.push({ min: Number.isFinite(min) ? min : Number.NaN, max: Number.isFinite(max) ? max : Number.NaN })
+	}
+
+	return ranges
+}
+
+// Extracts and removes a smooth sky background from an image.
+//
+// Convenience orchestrator over `fitBackgroundSurface`, `evaluateBackgroundModel`, and
+// `applyBackground`: fits the surface per channel, materializes the background image, and removes it
+// by subtraction (gradients, light pollution) or division (vignetting).
+//
+// The source `image` is mutated in place with the corrected pixels unless `correction` is `none`.
+// The returned `background` is always a fresh image holding the fitted model. After a
+// `subtract`/`divide` correction the per-channel level is restored to `targetBackground` (or the
+// background mean when omitted) so overall brightness is preserved, and out-of-range values are
+// brought back into [0, 1] per the `clipping` mode. Each channel model reports the pre-clipping value
+// range in `outputMin`/`outputMax`.
+//
+// Throws when a channel has fewer clean samples than the polynomial degree requires.
+export function automaticBackgroundExtraction(image: Image, options: BackgroundExtractionOptions = DEFAULT_BACKGROUND_EXTRACTION_OPTIONS): BackgroundExtractionResult {
+	const model = fitBackgroundSurface(image, options)
+	const background = evaluateBackgroundModel(model, image)
+	const correction = options.correction ?? DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.correction
+
+	const channels: BackgroundExtractionChannelModel[] = []
+
+	if (correction === 'none') {
+		for (const surface of model.surfaces) channels.push(surface)
+	} else {
+		const ranges = applyBackground(image, background, { correction, clipping: options.clipping, targetBackground: options.targetBackground })
+
+		for (let c = 0; c < model.surfaces.length; c++) {
+			const s = model.surfaces[c]
+			channels.push({ coefficients: s.coefficients, acceptedSamples: s.acceptedSamples, rejectedSamples: s.rejectedSamples, residual: s.residual, outputMin: ranges[c].min, outputMax: ranges[c].max })
 		}
 	}
 
-	return { image, background, channels: channelModels }
+	return { image, background, channels }
 }

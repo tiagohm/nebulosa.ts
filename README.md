@@ -779,6 +779,9 @@ sigmaClip(image, options) // Generate rejection map using sigma-clip
 estimateBackground(image, options) // Estimate the image background
 estimateBackgroundUsingMode(image, options) // Estimate the background using the mode
 automaticBackgroundExtraction(image, options) // Model and remove a gradient/vignetting background (ABE)
+fitBackgroundSurface(image, options) // Fit a reusable background model without modifying the image
+evaluateBackgroundModel(model, image) // Materialize a fitted background model into an image
+applyBackground(image, background, options) // Remove a modeled background in place (subtract/divide)
 brightness(image, value) // Adjust image brightness
 saturation(image, value, channel) // Adjust image saturation
 linear(image, slope, intercept) // Apply a linear transform

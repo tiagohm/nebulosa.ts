@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import type { Image } from '../../../src/imaging/model/types'
-import { automaticBackgroundExtraction } from '../../../src/imaging/processing/background'
+import { applyBackground, automaticBackgroundExtraction, evaluateBackgroundModel, fitBackgroundSurface } from '../../../src/imaging/processing/background'
 import { Bitpix } from '../../../src/io/formats/fits/fits'
 
 // Builds a synthetic floating-point image from a per-pixel generator.
@@ -307,4 +307,95 @@ test('down-weights noisy boxes so biased samples do not tilt the fit', () => {
 	] as const) {
 		expect(Math.abs(model[y * width + x] - bg(x, y))).toBeLessThan(0.01)
 	}
+})
+
+test('fitBackgroundSurface fits without mutating the source', () => {
+	const width = 64
+	const height = 48
+	const image = makeImage(width, height, 1, (x, y) => 0.15 + 0.2 * (x / (width - 1)) + 0.1 * (y / (height - 1)))
+	const original = Float32Array.from(image.raw)
+
+	const model = fitBackgroundSurface(image, { degree: 1, gridSize: 8 })
+
+	// The source pixels are untouched by fitting.
+	expect(image.raw).toEqual(original)
+	// Geometry and per-channel surfaces are reported.
+	expect(model.width).toBe(width)
+	expect(model.height).toBe(height)
+	expect(model.channelCount).toBe(1)
+	expect(model.degree).toBe(1)
+	expect(model.surfaces).toHaveLength(1)
+	expect(model.surfaces[0].coefficients).toHaveLength(3)
+})
+
+test('fit + evaluate + apply reproduces automaticBackgroundExtraction', () => {
+	const width = 96
+	const height = 80
+	const bg = (x: number, y: number, c: number) => 0.1 + 0.02 * c + 0.25 * (x / (width - 1)) - 0.1 * (y / (height - 1))
+	const options = { degree: 2, gridSize: 12, targetBackground: 0.1 } as const
+
+	// One-shot orchestrator.
+	const oneShot = automaticBackgroundExtraction(makeImage(width, height, 3, bg), options)
+
+	// Composed pipeline on a fresh identical image.
+	const composed = makeImage(width, height, 3, bg)
+	const model = fitBackgroundSurface(composed, options)
+	const background = evaluateBackgroundModel(model, composed)
+	const ranges = applyBackground(composed, background, { correction: 'subtract', targetBackground: 0.1 })
+
+	// Background models and corrected images match bit for bit.
+	expect(background.raw).toEqual(oneShot.background.raw)
+	expect(composed.raw).toEqual(oneShot.image.raw)
+	// Output ranges match the orchestrator's per-channel diagnostics.
+	for (let c = 0; c < 3; c++) {
+		expect(ranges[c].min).toBeCloseTo(oneShot.channels[c].outputMin!, 6)
+		expect(ranges[c].max).toBeCloseTo(oneShot.channels[c].outputMax!, 6)
+	}
+})
+
+test('a fitted model can be reused to correct another frame of the same geometry', () => {
+	const width = 80
+	const height = 80
+	const bg = (x: number, y: number) => 0.2 + 0.3 * (x / (width - 1)) + 0.15 * (y / (height - 1))
+
+	// Fit the background on frame A.
+	const frameA = makeImage(width, height, 1, bg)
+	const model = fitBackgroundSurface(frameA, { degree: 1, gridSize: 10 })
+
+	// Apply the same model to frame B, which shares the identical gradient.
+	const frameB = makeImage(width, height, 1, bg)
+	const background = evaluateBackgroundModel(model, frameB)
+	applyBackground(frameB, background, { correction: 'subtract', targetBackground: 0.1 })
+
+	// Frame B is flattened around the pedestal.
+	let sum = 0
+	let sumSq = 0
+	for (const v of frameB.raw) {
+		sum += v
+		sumSq += v * v
+	}
+	const mean = sum / frameB.raw.length
+	const std = Math.sqrt(Math.max(0, sumSq / frameB.raw.length - mean * mean))
+	expect(mean).toBeCloseTo(0.1, 3)
+	expect(std).toBeLessThan(1e-3)
+})
+
+test('evaluate and apply reject mismatched geometry', () => {
+	const model = fitBackgroundSurface(
+		makeImage(64, 64, 1, () => 0.2),
+		{ degree: 1, gridSize: 8 },
+	)
+
+	// Evaluating against a differently sized image throws.
+	expect(() =>
+		evaluateBackgroundModel(
+			model,
+			makeImage(32, 64, 1, () => 0.2),
+		),
+	).toThrow()
+
+	// Applying a mismatched background image throws.
+	const image = makeImage(64, 64, 1, () => 0.2)
+	const wrongBackground = makeImage(64, 32, 1, () => 0.2)
+	expect(() => applyBackground(image, wrongBackground)).toThrow()
 })
