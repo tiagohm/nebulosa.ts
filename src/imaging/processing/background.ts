@@ -34,9 +34,14 @@ export interface BackgroundExtractionOptions {
 	// Sigma multiple for rejecting contaminated boxes by internal dispersion: a box is discarded when
 	// its normalized MAD exceeds median(MAD) + tolerance*MAD-of-MADs across boxes. Lower is stricter.
 	readonly tolerance?: number
-	// Sigma multiple for iterative residual-based rejection: after each fit, samples whose residual
-	// exceeds rejectionSigma * normalized-MAD of residuals are dropped and the surface is refitted.
-	readonly rejectionSigma?: number
+	// Sigma multiple for rejecting samples that sit ABOVE the fitted surface (residual > 0), i.e.
+	// structure such as stars, nebulae, or galaxies contaminating a box. Kept tight because the sky
+	// background is the lower envelope of the data. Applied per iteration against the residual MAD.
+	readonly rejectionHigh?: number
+	// Sigma multiple for rejecting samples that sit BELOW the fitted surface (residual < 0). Kept
+	// looser than `rejectionHigh` since dark samples are usually the cleanest sky; only gross low
+	// outliers (dead/cold pixels) should be dropped. Applied per iteration against the residual MAD.
+	readonly rejectionLow?: number
 	// Number of fit / reject / refit iterations. 0 disables residual rejection.
 	readonly rejectionIterations?: number
 	// How the modeled background is removed from the source. See `BackgroundExtractionCorrection`.
@@ -76,7 +81,8 @@ export const DEFAULT_BACKGROUND_EXTRACTION_OPTIONS: Required<Omit<BackgroundExtr
 	boxSize: 0,
 	degree: 4,
 	tolerance: 3,
-	rejectionSigma: 2.5,
+	rejectionHigh: 2.5,
+	rejectionLow: 4,
 	rejectionIterations: 2,
 	correction: 'subtract',
 }
@@ -277,7 +283,7 @@ function evaluateSurface(coefficients: Float64Array, u: number, v: number, degre
 // Fits the background surface for one channel with iterative residual rejection, then writes the
 // evaluated model into `model` at the channel offset and returns the channel fit summary.
 function modelChannel(raw: ImageRawType, model: ImageRawType, width: number, height: number, channels: number, channel: number, options: Required<Omit<BackgroundExtractionOptions, 'targetBackground'>>, ti: Uint8Array, tj: Uint8Array): BackgroundExtractionChannelModel {
-	const { gridSize, boxSize, degree, tolerance, rejectionSigma, rejectionIterations } = options
+	const { gridSize, boxSize, degree, tolerance, rejectionHigh, rejectionLow, rejectionIterations } = options
 	const terms = basisTermCount(degree)
 	const samples = collectSamples(raw, width, height, channels, channel, gridSize, boxSize, tolerance)
 
@@ -290,8 +296,10 @@ function modelChannel(raw: ImageRawType, model: ImageRawType, width: number, hei
 	const vCheb = new Float64Array(degree + 1)
 	let residualDispersion = 0
 
-	// Iteratively reject samples sitting far above the fitted surface (residual outliers are structure
-	// the dispersion test missed) and refit until the iteration budget is spent or nothing is rejected.
+	// Iteratively reject residual outliers and refit until the iteration budget is spent or nothing is
+	// rejected. Rejection is asymmetric: the sky background is the lower envelope of the data, so
+	// samples above the surface (contaminating structure) are rejected with a tight sigma while samples
+	// below it (usually the cleanest sky) are only dropped when they are gross low outliers.
 	for (let iteration = 0; iteration <= rejectionIterations; iteration++) {
 		let count = 0
 		for (const sample of samples) {
@@ -310,12 +318,15 @@ function modelChannel(raw: ImageRawType, model: ImageRawType, width: number, hei
 
 		if (iteration === rejectionIterations || !Number.isFinite(residualDispersion) || residualDispersion === 0) break
 
-		const limit = rejectionSigma * residualDispersion
+		const highLimit = rejectionHigh * residualDispersion
+		const lowLimit = rejectionLow * residualDispersion
 		let rejected = 0
 		let index = 0
 		for (const sample of samples) {
 			if (!sample.active) continue
-			if (Math.abs(residuals[index]) > limit) {
+			// residual = sample - surface: positive above the surface (structure), negative below it.
+			const residual = residuals[index]
+			if (residual > highLimit || residual < -lowLimit) {
 				sample.active = false
 				rejected++
 			}
@@ -390,11 +401,12 @@ export function automaticBackgroundExtraction(image: Image, options: BackgroundE
 	const boxSize = Math.max(0, options.boxSize ?? DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.boxSize)
 	const degree = clamp(Math.trunc(options.degree ?? DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.degree), 1, 6)
 	const tolerance = Math.max(0, options.tolerance ?? DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.tolerance)
-	const rejectionSigma = Math.max(0, options.rejectionSigma ?? DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.rejectionSigma)
+	const rejectionHigh = Math.max(0, options.rejectionHigh ?? DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.rejectionHigh)
+	const rejectionLow = Math.max(0, options.rejectionLow ?? DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.rejectionLow)
 	const rejectionIterations = Math.max(0, Math.trunc(options.rejectionIterations ?? DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.rejectionIterations))
 	const correction = options.correction ?? DEFAULT_BACKGROUND_EXTRACTION_OPTIONS.correction
 
-	const resolved = { gridSize, boxSize, degree, tolerance, rejectionSigma, rejectionIterations, correction }
+	const resolved = { gridSize, boxSize, degree, tolerance, rejectionHigh, rejectionLow, rejectionIterations, correction }
 
 	const { raw, metadata } = image
 	const { width, height, channels } = metadata

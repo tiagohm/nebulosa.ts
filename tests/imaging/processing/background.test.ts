@@ -212,3 +212,35 @@ test('fits a high-degree surface accurately (Chebyshev conditioning)', () => {
 	}
 	expect(maxError).toBeLessThan(4e-3)
 })
+
+test('rejects bright structure but keeps faint dark sky (asymmetric rejection)', () => {
+	const width = 128
+	const height = 128
+	const bg = (x: number, y: number) => 0.2 + 0.15 * (x / (width - 1))
+	// One bright blob (structure, above the surface) and one faint dark dip (clean sky, below it).
+	const blob: readonly [number, number] = [40, 40]
+	const dip: readonly [number, number] = [90, 90]
+
+	const image = makeImage(width, height, 1, (x, y) => {
+		let v = bg(x, y)
+		const db2 = (x - blob[0]) * (x - blob[0]) + (y - blob[1]) * (y - blob[1])
+		v += 0.6 * Math.exp(-db2 / 8)
+		const dd2 = (x - dip[0]) * (x - dip[0]) + (y - dip[1]) * (y - dip[1])
+		v -= 0.03 * Math.exp(-dd2 / 8)
+		return Math.max(0, Math.min(1, v))
+	})
+
+	// A tight high sigma removes the blob; a very loose low sigma keeps the shallow dip in the fit.
+	const result = automaticBackgroundExtraction(image, { degree: 1, gridSize: 16, rejectionHigh: 2, rejectionLow: 100, correction: 'none' })
+
+	// The model tracks the underlying gradient, unperturbed by the rejected bright blob.
+	const model = result.background.raw
+	for (const [x, y] of [
+		[10, 64],
+		[64, 64],
+		[118, 64],
+	] as const) {
+		expect(model[y * width + x]).toBeCloseTo(bg(x, y), 2)
+	}
+	expect(result.channels[0].rejectedSamples).toBeGreaterThan(0)
+})
