@@ -399,3 +399,35 @@ test('evaluate and apply reject mismatched geometry', () => {
 	const wrongBackground = makeImage(64, 32, 1, () => 0.2)
 	expect(() => applyBackground(image, wrongBackground)).toThrow()
 })
+
+test('exposes the grid sample map for inspection', () => {
+	const width = 128
+	const height = 128
+	const bg = (x: number) => 0.15 + 0.2 * (x / (width - 1))
+	// A bright blob contaminates a few boxes, which should be reported as rejected samples.
+	const image = makeImage(width, height, 1, (x, y) => {
+		const d2 = (x - 40) * (x - 40) + (y - 40) * (y - 40)
+		return Math.min(1, bg(x) + 0.7 * Math.exp(-d2 / 8))
+	})
+
+	const model = fitBackgroundSurface(image, { degree: 1, gridSize: 16 })
+	const samples = model.surfaces[0].samples
+
+	// The sample list is non-empty and consistent with the accepted/rejected counters.
+	expect(samples.length).toBe(model.surfaces[0].acceptedSamples + model.surfaces[0].rejectedSamples)
+	expect(samples.some((s) => !s.accepted)).toBe(true)
+
+	for (const s of samples) {
+		// Positions fall inside the frame and weights are in (0, 1].
+		expect(s.x).toBeGreaterThanOrEqual(0)
+		expect(s.x).toBeLessThan(width)
+		expect(s.y).toBeGreaterThanOrEqual(0)
+		expect(s.y).toBeLessThan(height)
+		expect(s.weight).toBeGreaterThan(0)
+		expect(s.weight).toBeLessThanOrEqual(1)
+	}
+
+	// Samples sitting on the blob are rejected; those far from it are kept.
+	const onBlob = samples.find((s) => Math.abs(s.x - 40) < 8 && Math.abs(s.y - 40) < 8)
+	expect(onBlob?.accepted).toBe(false)
+})

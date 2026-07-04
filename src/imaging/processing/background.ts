@@ -11,6 +11,7 @@ import { clone } from './transformation'
 // structure (stars, nebulae) rejected first by high internal box dispersion and then
 // iteratively by fit residuals. The fitted surface is either subtracted (additive gradients/light
 // pollution) or divided out (multiplicative vignetting). Color images fit each channel independently.
+// The fit exposes its grid samples (positions, values, weights, acceptance) for inspection.
 // https://pixinsight.com/doc/tools/AutomaticBackgroundExtractor/AutomaticBackgroundExtractor.html
 
 // How the fitted background surface is removed from the source image.
@@ -62,6 +63,21 @@ export interface BackgroundExtractionOptions {
 	readonly targetBackground?: number
 }
 
+// One grid sample of the fitted background, in pixel coordinates, exposed for inspection (e.g. drawing
+// the sample boxes in a UI) or manual review.
+export interface BackgroundSample {
+	// Box center x in pixels.
+	readonly x: number
+	// Box center y in pixels.
+	readonly y: number
+	// Robust background value (box median) of the channel at this box.
+	readonly value: number
+	// Least-squares weight in (0, 1]: reliable (low-dispersion) boxes count more.
+	readonly weight: number
+	// Whether the sample fed the final fit (false when rejected as structure or a residual outlier).
+	readonly accepted: boolean
+}
+
 // A fitted background surface for one channel: the Chebyshev coefficients plus fit diagnostics.
 // Independent of any correction and reusable through `evaluateBackgroundModel`.
 export interface BackgroundSurfaceFit {
@@ -74,6 +90,8 @@ export interface BackgroundSurfaceFit {
 	readonly rejectedSamples: number
 	// Robust dispersion (normalized MAD) of the final fit residuals, a quality indicator.
 	readonly residual: number
+	// All grid samples with their pixel positions, values, weights, and acceptance, for inspection.
+	readonly samples: readonly BackgroundSample[]
 }
 
 // A fitted background model: the per-channel surfaces plus the geometry and degree they apply to.
@@ -146,8 +164,12 @@ export const DEFAULT_BACKGROUND_EXTRACTION_OPTIONS: Required<Omit<BackgroundExtr
 	clipping: 'truncate',
 }
 
-// One grid sample: the robust background estimate at a box center, in normalized coordinates.
-interface BackgroundSample {
+// One grid sample used internally by the fit, carrying both pixel and normalized coordinates.
+interface SurfaceSample {
+	// Box center x in pixels.
+	x: number
+	// Box center y in pixels.
+	y: number
 	// Box center x mapped to [-1, 1].
 	u: number
 	// Box center y mapped to [-1, 1].
@@ -235,7 +257,7 @@ function collectSamples(raw: ImageRawType, width: number, height: number, channe
 	const invW = width > 1 ? 2 / (width - 1) : 0
 	const invH = height > 1 ? 2 / (height - 1) : 0
 
-	const samples: BackgroundSample[] = []
+	const samples: SurfaceSample[] = []
 
 	for (let r = 0; r < ny; r++) {
 		const cy = (r + 0.5) * cellH
@@ -264,8 +286,10 @@ function collectSamples(raw: ImageRawType, width: number, height: number, channe
 			if (!Number.isFinite(median)) continue
 
 			samples.push({
-				u: (c + 0.5) * cellW * invW - 1,
-				v: (r + 0.5) * cellH * invH - 1,
+				x: cx,
+				y: cy,
+				u: cx * invW - 1,
+				v: cy * invH - 1,
 				value: median,
 				dispersion: Number.isFinite(dispersion) ? dispersion : 0,
 				weight: 1,
@@ -313,7 +337,7 @@ function collectSamples(raw: ImageRawType, width: number, height: number, channe
 
 // Fits a 2D Chebyshev surface to the currently active samples by least squares (QR). Returns the
 // coefficient vector, or undefined when there are too few samples or the system is rank deficient.
-function fitSurface(samples: readonly BackgroundSample[], degree: number, terms: number, ti: Uint8Array, tj: Uint8Array) {
+function fitSurface(samples: readonly SurfaceSample[], degree: number, terms: number, ti: Uint8Array, tj: Uint8Array) {
 	let m = 0
 	for (const sample of samples) if (sample.active) m++
 	if (m < terms) return undefined
@@ -446,13 +470,18 @@ function fitChannelSurface(raw: ImageRawType, width: number, height: number, cha
 	}
 
 	let accepted = 0
-	for (const sample of samples) if (sample.active) accepted++
+	const sampleList: BackgroundSample[] = []
+	for (const sample of samples) {
+		if (sample.active) accepted++
+		sampleList.push({ x: sample.x, y: sample.y, value: sample.value, weight: sample.weight, accepted: sample.active })
+	}
 
 	return {
 		coefficients,
 		acceptedSamples: accepted,
 		rejectedSamples: samples.length - accepted,
 		residual: Number.isFinite(residualDispersion) ? residualDispersion : 0,
+		samples: sampleList,
 	}
 }
 
@@ -658,7 +687,7 @@ export function automaticBackgroundExtraction(image: Image, options: BackgroundE
 
 		for (let c = 0; c < model.surfaces.length; c++) {
 			const s = model.surfaces[c]
-			channels.push({ coefficients: s.coefficients, acceptedSamples: s.acceptedSamples, rejectedSamples: s.rejectedSamples, residual: s.residual, outputMin: ranges[c].min, outputMax: ranges[c].max })
+			channels.push({ coefficients: s.coefficients, acceptedSamples: s.acceptedSamples, rejectedSamples: s.rejectedSamples, residual: s.residual, samples: s.samples, outputMin: ranges[c].min, outputMax: ranges[c].max })
 		}
 	}
 
