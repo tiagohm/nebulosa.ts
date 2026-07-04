@@ -1580,6 +1580,34 @@ function synodicPeriodComputation() {
 	console.info('Earth-Mars synodic period (days):', synodic.toFixed(1))
 }
 
+// Orbital Resonance: whether two orbits are locked in a small-integer mean-motion ratio. The outer/inner
+// period ratio is matched against every reduced fraction p/q up to a small order, and the closest one
+// within a tolerance is reported as the resonance. Neptune and Pluto sit near a 3:2 mean-motion resonance:
+// Pluto completes 2 orbits for every 3 of Neptune, so its period ratio is close to 3/2.
+function orbitalResonance() {
+	const NEPTUNE_SEMI_MAJOR_AXIS = 30.06992 // AU
+	const PLUTO_SEMI_MAJOR_AXIS = 39.48211 // AU
+	const ratio = period(PLUTO_SEMI_MAJOR_AXIS, GM_SUN_PITJEVA_2005) / period(NEPTUNE_SEMI_MAJOR_AXIS, GM_SUN_PITJEVA_2005)
+
+	// Greatest common divisor, used to keep only reduced fractions in the search.
+	const gcd = (a: number, b: number): number => (b === 0 ? a : gcd(b, a % b))
+
+	// Scan reduced p/q up to MAX_ORDER for the best match to the period ratio (p >= q since the ratio > 1).
+	const MAX_ORDER = 6
+	let best: { p: number; q: number; error: number } | undefined
+	for (let q = 1; q <= MAX_ORDER; q++) {
+		for (let p = q; p <= MAX_ORDER; p++) {
+			if (gcd(p, q) !== 1) continue
+			const error = Math.abs(ratio - p / q)
+			if (best === undefined || error < best.error) best = { p, q, error }
+		}
+	}
+
+	// Accept the match only when it is within 2% of an exact resonance.
+	const resonance = best !== undefined && best.error / (best.p / best.q) < 0.02 ? `${best.p}:${best.q}` : 'no low-order resonance'
+	console.info('Neptune-Pluto period ratio:', ratio.toFixed(4), 'nearest resonance:', resonance, best ? `(mismatch ${((best.error / (best.p / best.q)) * 100).toFixed(1)}%)` : '')
+}
+
 // Escape Velocity: the speed needed to reach infinity from a spherical body, v = sqrt(2 mu / r). Evaluated
 // at the Earth's surface with the Earth GM (km^3/s^2) and radius (km), so the result is km/s directly.
 function escapeVelocityComputation() {
@@ -2160,6 +2188,7 @@ function run() {
 	periapsisAndApoapsisDistance()
 	orbitalEnergy()
 	synodicPeriodComputation()
+	orbitalResonance()
 	escapeVelocityComputation()
 	hillSphereRadius()
 	rocheLimitComputation()
