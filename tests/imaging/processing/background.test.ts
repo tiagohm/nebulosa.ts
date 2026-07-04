@@ -1105,6 +1105,28 @@ test('an exact thin-plate spline interpolates every accepted sample past the con
 	expect(maxInterpError).toBeLessThan(1e-9)
 }, 4000)
 
+test('an exact thin-plate spline fits a tiny image with overlapping sample boxes', () => {
+	// On a small dense grid the edge boxes clamp inward to the same window, so several sample boxes share
+	// one (u, v). Feeding those duplicate control points into the zero-smoothing spline makes the system
+	// singular and the fit throws. Coalescing duplicate coordinates keeps it solvable, so a trivial linear
+	// gradient is still reproduced exactly.
+	const width = 10
+	const height = 10
+	const bg = (x: number, y: number) => 0.1 + 0.4 * (x / (width - 1)) + 0.3 * (y / (height - 1))
+	const image = makeImage(width, height, 1, (x, y) => bg(x, y))
+
+	const model = fitBackgroundSurface(image, { model: 'thinPlateSpline', gridSize: 10, smoothing: 0 })
+	// The reported accepted set matches the (deduplicated) control points.
+	expect(model.surfaces[0].controlPoints!.length).toBe(model.surfaces[0].acceptedSamples * 2)
+
+	const background = evaluateBackgroundModel(model, image).raw
+	let maxError = 0
+	for (let y = 0; y < height; y++) {
+		for (let x = 0; x < width; x++) maxError = Math.max(maxError, Math.abs(background[y * width + x] - bg(x, y)))
+	}
+	expect(maxError).toBeLessThan(1e-5)
+})
+
 test('a thin-plate spline model reuses across frames and evaluate rejects mismatched geometry', () => {
 	const width = 80
 	const height = 80

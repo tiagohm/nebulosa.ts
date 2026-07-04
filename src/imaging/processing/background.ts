@@ -636,6 +636,22 @@ function rejectFlatToppedStructure(samples: readonly SurfaceSample[], buffer: Fl
 	}
 }
 
+// Marks all but one active sample per distinct (u, v) coordinate inactive. Overlapping sample boxes —
+// common on small images or dense grids where edge boxes are clamped inward to the same window — can
+// produce repeated control-point coordinates; two identical points give the thin-plate spline system two
+// identical rows, making it singular (the zero-smoothing diagonal cannot break the tie) so the fit fails.
+// Keeping one representative per location leaves the system solvable and keeps the reported accepted set
+// consistent with the control points.
+function deduplicateActiveSamples(samples: readonly SurfaceSample[]) {
+	const seen = new Set<string>()
+	for (const sample of samples) {
+		if (!sample.active) continue
+		const key = `${sample.u},${sample.v}`
+		if (seen.has(key)) sample.active = false
+		else seen.add(key)
+	}
+}
+
 // Deterministically subsamples the active samples down to at most `maxPoints` control points, preserving
 // spatial coverage: the normalized [-1, 1] domain is split into a g x g grid (g = floor(sqrt(maxPoints)))
 // and the first active sample landing in each bucket is kept. Returns `samples` unchanged when the active
@@ -909,6 +925,10 @@ function fitChannelSurface(raw: ImageRawType, width: number, height: number, cha
 		if (active < 3 || activeSampleSpread(samples, active) < MIN_SAMPLE_SPREAD) {
 			throw new Error('thin-plate spline fit failed: needs at least 3 clean samples spanning a 2D region, not a thin strip')
 		}
+
+		// Drop duplicate control-point coordinates before fitting: they make the (unregularized) spline
+		// system singular. Cheap no-op when boxes do not overlap (large images / coarse grids).
+		deduplicateActiveSamples(samples)
 
 		// The thin-plate spline exists to model smooth localized structure such as a light-pollution
 		// dome. The polynomial residual rejection below must NOT run for it: a low-degree polynomial (and
