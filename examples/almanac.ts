@@ -1125,6 +1125,30 @@ function lunarTerminatorPosition() {
 	console.info('Lunar morning terminator selenographic longitude (deg):', toDeg(normalizeAngle(deg(90) - sub.longitude)).toFixed(2))
 }
 
+// Lunar Sunrise and Sunset at a Selenographic Point: the Sun's elevation above the local horizon at a
+// surface feature crosses zero once upward (sunrise, the morning terminator reaching the feature) and once
+// downward (sunset) per synodic month. The elevation is the sub-solar-point formula on a sphere,
+// sin(alt) = sin(phi) sin(b) + cos(phi) cos(b) cos(lambda - l), where (l, b) is the sub-solar selenographic
+// longitude/latitude from bodySubSolar and (lambda, phi) the feature's. The zero crossings are root-found
+// over a lunation and labelled by the elevation's slope. Shown for the crater Copernicus (~9.62N, 20.08W;
+// west longitude is negative in the east-positive selenographic convention).
+function lunarSunriseSunsetAtFeature() {
+	const featureLon = deg(-20.08)
+	const featureLat = deg(9.62)
+	const sinLat = Math.sin(featureLat)
+	const cosLat = Math.cos(featureLat)
+	const solarAltitude = (time: Time) => {
+		const sub = bodySubSolar(MOON_ROTATION, time, moonToEarth(time), moonToSun(time))
+		// Clamp guards asin against rounding just outside [-1, 1] near grazing illumination.
+		const sinAlt = sinLat * Math.sin(sub.latitude) + cosLat * Math.cos(sub.latitude) * Math.cos(featureLon - sub.longitude)
+		return Math.asin(Math.max(-1, Math.min(1, sinAlt)))
+	}
+	const crossings = searchRoots(solarAltitude, NOW, timeShift(NOW, 30), { step: 1 })
+	if (crossings.length === 0) return console.info('Copernicus sunrise/sunset: no terminator crossing in the next lunation.')
+	const labelled = crossings.map((time) => `${solarAltitude(timeShift(time, 0.05)) > solarAltitude(time) ? 'sunrise' : 'sunset'} ${formatTemporal(temporalFromTime(utc(time)))}`)
+	console.info('Copernicus lunar sunrise/sunset (local):', labelled.join('; '))
+}
+
 // Lunar Sub-Solar / Sub-Observer Point (selenographic east longitude, latitude).
 function lunarSubSolarPoint() {
 	const sub = bodySubSolar(MOON_ROTATION, NOW, moonToEarth(), moonToSun())
@@ -2128,6 +2152,7 @@ function run() {
 	lunarLibrationExtremes()
 	lunarColongitude()
 	lunarTerminatorPosition()
+	lunarSunriseSunsetAtFeature()
 	lunarSubSolarPoint()
 	lunarSubObserverPoint()
 	lunarAscendingAndDescendingNodes()
