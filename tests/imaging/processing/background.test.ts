@@ -897,6 +897,35 @@ test('rejects a high-degree fit with too few sample bands', () => {
 	expect(max).toBeLessThan(1)
 })
 
+test('rejects a strip-only thin-plate spline layout instead of extrapolating', () => {
+	// A 2D gradient with an exclusion mask leaving one thin horizontal band of clean samples. The TPS
+	// affine component is unconstrained perpendicular to the strip, so it extrapolates wildly across the
+	// frame (~[-58, 52] here). The same 2D-spread guard the polynomial path uses must reject the layout.
+	const width = 100
+	const height = 100
+	const bg = (x: number, y: number) => 0.1 + 0.35 * (x / (width - 1)) + 0.35 * (y / (height - 1))
+	const image = makeImage(width, height, 1, (x, y) => bg(x, y))
+
+	// One box row tall (gridSize 16 -> cells ~6.25 px), so every clean sample shares one v coordinate.
+	const mask = new Uint8Array(width * height)
+	for (let y = 0; y < height; y++) {
+		for (let x = 0; x < width; x++) if (!(y >= 45 && y < 49)) mask[y * width + x] = 1
+	}
+	expect(() => fitBackgroundSurface(image, { model: 'thinPlateSpline', gridSize: 16, exclusionMask: mask })).toThrow()
+
+	// The same frame without the mask fits and stays within the image value range.
+	const model = fitBackgroundSurface(image, { model: 'thinPlateSpline', gridSize: 16 })
+	const background = evaluateBackgroundModel(model, image).raw
+	let min = Infinity
+	let max = -Infinity
+	for (const v of background) {
+		min = Math.min(min, v)
+		max = Math.max(max, v)
+	}
+	expect(min).toBeGreaterThan(0)
+	expect(max).toBeLessThan(1)
+})
+
 test('thin-plate spline follows a complex background a polynomial cannot', () => {
 	const width = 128
 	const height = 128

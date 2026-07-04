@@ -851,6 +851,16 @@ function fitChannelSurface(raw: ImageRawType, width: number, height: number, cha
 	let controlPoints: Float64Array | undefined
 
 	if (model === 'thinPlateSpline') {
+		// Reject strip / collinear layouts before fitting, exactly as the polynomial path does. A TPS whose
+		// clean samples lie on a line (e.g. an exclusion mask leaving a single row) has an affine component
+		// unconstrained perpendicular to the strip, so it extrapolates wildly across the frame and corrupts
+		// the correction. The 2D-spread check is orientation-agnostic and leaves genuine coverage untouched.
+		let active = 0
+		for (const sample of samples) if (sample.active) active++
+		if (active < 3 || activeSampleSpread(samples, active) < MIN_SAMPLE_SPREAD) {
+			throw new Error('thin-plate spline fit failed: needs at least 3 clean samples spanning a 2D region, not a thin strip')
+		}
+
 		// The thin-plate spline exists to model smooth localized structure such as a light-pollution
 		// dome. The polynomial residual rejection below must NOT run for it: a low-degree polynomial (and
 		// even a smoothing TPS) cannot match a dome exactly, so its samples would read as high-residual
