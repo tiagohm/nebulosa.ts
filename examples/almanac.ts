@@ -22,7 +22,7 @@ import { angularDistance, eclipticToEquatorial, equatorialFromJ2000, equatorialT
 import { annualAberration, observerState, radialVelocityCorrection } from '../src/astronomy/coordinates/correction'
 import { eraAnpm, eraC2s, eraLd, eraLdSun, eraPmpx, eraS2c, eraSeps, eraStarpm, eraStarpv } from '../src/astronomy/coordinates/erfa/erfa'
 import { precessFk5FromJ2000 } from '../src/astronomy/coordinates/fk5'
-import { GALACTIC, SUPERGALACTIC, fk5ToIcrs, frameToFrame, icrsToFk5, temeToItrf } from '../src/astronomy/coordinates/frame'
+import { GALACTIC, ICRS, SUPERGALACTIC, TEME, fk5ToIcrs, frameToFrame, icrsToFk5, temeToItrf } from '../src/astronomy/coordinates/frame'
 import { icrs as icrsVector } from '../src/astronomy/coordinates/icrs'
 import { itrs } from '../src/astronomy/coordinates/itrs'
 import { Base as Meeus } from '../src/astronomy/ephemeris/meeus'
@@ -37,7 +37,7 @@ import { ASTRONOMICAL_TWILIGHT, CIVIL_TWILIGHT, NAUTICAL_TWILIGHT, riseTransitSe
 import { greatRedSpotTransits, jupiterCentralMeridian } from '../src/astronomy/events/jupiter'
 import { galileanMutualEvents, saturnianMutualEvents } from '../src/astronomy/events/mutual'
 import { occultationCandidates } from '../src/astronomy/events/occultation'
-import { satelliteConjunctions, satelliteEclipses, satelliteMagnitude, satellitePasses, satelliteShadowState } from '../src/astronomy/events/satellite'
+import { satelliteConjunctions, satelliteEclipses, satelliteLookAngles, satelliteMagnitude, satellitePasses, satelliteShadowState } from '../src/astronomy/events/satellite'
 import { searchExtrema, searchRoots } from '../src/astronomy/events/search'
 import { planetaryTransits } from '../src/astronomy/events/transit'
 import { airmass, airmassKastenYoung, altitudeAtTransit, asteroidMagnitudeEstimate, atmosphericRefraction, cometMagnitudeEstimate, objectAngularDiameter } from '../src/astronomy/formulas'
@@ -58,7 +58,7 @@ import { Matrix } from '../src/math/linear-algebra/matrix'
 // oxfmt-ignore
 import { Timescale, dut1 as dut1FromTime, earthRotationAngle, equationOfEquinoxes, greenwichApparentSiderealTime, greenwichMeanSiderealTime, nutationAngles, pmAngles, pmMatrix, tai, taiMinusUtc, tcb, tdb, timeBesselianYear, timeJulianYear, timeMJD, timeShift, timeSubtract, timeToDate, timeUnix, timeYMDHMS, toJulianDay, toJulianEpoch, tt, ut1, utc, type Time } from '../src/astronomy/time/time'
 import { formatTemporal, temporalFromTime } from '../src/astronomy/time/temporal'
-import { AU_KM, DAYSEC, DAYSPERSY, DAYSPERTY, EARTH_RADIUS_KM, GM_SUN_PITJEVA_2005, PI, SUN_RADIUS_AU, TAU } from '../src/core/constants'
+import { AU_KM, DAYSEC, DAYSPERSY, DAYSPERTY, EARTH_RADIUS_KM, GM_SUN_PITJEVA_2005, PI, SPEED_OF_LIGHT_AU_DAY, SUN_RADIUS_AU, TAU } from '../src/core/constants'
 import { type Vec3, vecAngle, vecCross, vecLatitude, vecLength, vecLongitude, vecMinus, vecMulScalar, vecNormalize } from '../src/math/linear-algebra/vec3'
 import { sphericalDestination, sphericalInterpolate, sphericalPolygonArea, sphericalPositionAngle, sphericalProjectTangentPlane, sphericalSeparation, sphericalTriangleAngles, sphericalTriangleArea, sphericalUnprojectTangentPlane } from '../src/math/numerical/geometry'
 import { type Angle, arcsec, deg, formatAZ, formatHMS, formatSignedDMS, hms, hour, normalizeAngle, normalizePI, toArcsec, toDeg, toHour } from '../src/math/units/angle'
@@ -1837,6 +1837,43 @@ function satelliteEclipseDuration() {
 	console.info('ISS eclipse duration (s):', complete?.duration)
 }
 
+// Satellite Beta Angle: the elevation of the Sun above the orbital plane, the driver of the eclipse
+// fraction and thermal/power load. The orbit normal is the specific angular momentum direction r x v from
+// the SGP4 state, rotated out of TEME into the geocentric ICRS frame the Sun vector lives in; the beta
+// angle is 90deg minus the Sun-normal angle, so it is positive when the Sun is on the +h side of the plane
+// and near +/-90deg for a Sun-synchronous, permanently-lit geometry.
+function satelliteBetaAngle() {
+	const [p, v] = sgp4(SAT_TIME, recordFromTLE(ISS_TLE))
+	const normal = frameToFrame(vecCross(p, v), TEME, ICRS, SAT_TIME)
+	const beta = PI / 2 - vecAngle(geocentricSun(SAT_TIME), normal)
+	console.info('ISS beta angle (deg):', toDeg(beta).toFixed(2))
+}
+
+// Satellite Range-Rate and Doppler: the line-of-sight closing speed and the frequency shift it induces on
+// a downlink. The slant range from satelliteLookAngles is differenced over one second (a central-scale
+// finite difference is unnecessary here) to give the range-rate in AU/day; a negative value means the pass
+// is approaching. The classical Doppler shift of a received carrier is -(range-rate / c) * f, evaluated in
+// AU/day with SPEED_OF_LIGHT_AU_DAY so no unit conversion is needed before scaling by the frequency.
+function satelliteRangeRateAndDoppler() {
+	const rec = recordFromTLE(ISS_TLE)
+	const dt = 1 / DAYSEC // one second expressed in days
+	const rangeRate = (satelliteLookAngles(rec, SITE, timeShift(SAT_TIME, dt)).range - satelliteLookAngles(rec, SITE, SAT_TIME).range) / dt
+	const DOWNLINK_MHZ = 145.8 // ISS VHF voice downlink
+	const dopplerKHz = (-rangeRate / SPEED_OF_LIGHT_AU_DAY) * DOWNLINK_MHZ * 1000
+	console.info('ISS range-rate (km/s):', toKilometerPerSecond(rangeRate).toFixed(3), 'Doppler at 145.8 MHz (kHz):', dopplerKHz.toFixed(2))
+}
+
+// Satellite Ground Footprint: the circle of the Earth's surface within the satellite's geometric horizon.
+// From the geocentric radius Re + h (the SGP4 TEME position magnitude), the Earth central angle from the
+// sub-point to the horizon is lambda = acos(Re / (Re + h)); the footprint radius along the surface is
+// Re * lambda. This is the ideal-horizon coverage cap (no terrain or minimum-elevation mask).
+function satelliteGroundFootprint() {
+	const [p] = sgp4(SAT_TIME, recordFromTLE(ISS_TLE))
+	const geocentricRadiusKm = toKilometer(vecLength(p))
+	const lambda = Math.acos(EARTH_RADIUS_KM / geocentricRadiusKm)
+	console.info('ISS altitude (km):', (geocentricRadiusKm - EARTH_RADIUS_KM).toFixed(1), 'coverage half-angle (deg):', toDeg(lambda).toFixed(2), 'footprint radius (km):', (EARTH_RADIUS_KM * lambda).toFixed(0))
+}
+
 // Visible Pass Prediction: the practical "when can I actually see it" question, composing the three
 // primitives. satellitePasses brackets the passes that clear a minimum culmination altitude (the
 // minAltitude horizon), then each pass is screened at its culmination with satelliteMagnitude, which
@@ -2090,6 +2127,9 @@ function run() {
 	satelliteConjunctionScreening()
 	geostationarySatelliteLongitude()
 	satelliteEclipseDuration()
+	satelliteBetaAngle()
+	satelliteRangeRateAndDoppler()
+	satelliteGroundFootprint()
 	visiblePassPrediction()
 }
 
