@@ -768,6 +768,24 @@ function planetaryConjunction() {
 	console.info('Mars conjunction (local):', conjunction ? `${formatTemporal(temporalFromTime(utc(conjunction.time)))} (elongation ${toDeg(conjunction.value).toFixed(1)}deg)` : 'none in the next synodic period')
 }
 
+// Planetary Quadrature: the instants an outer planet's Sun-Earth-planet elongation passes through 90deg,
+// found by root-finding elongationAt - PI/2 over a synodic period. Each crossing is labelled east or west
+// from the sign of the geocentric ecliptic longitude difference planet - Sun: a planet east of the Sun is
+// at east (evening) quadrature, one west of it at west (morning) quadrature.
+function planetaryQuadrature() {
+	const quadratures = searchRoots((time) => elongationAt(mars, time) - PI / 2, NOW, timeShift(NOW, 800), { step: 5 })
+	if (quadratures.length === 0) return console.info('Mars quadratures: none in the next synodic period.')
+	const labelled = quadratures.map((time) => {
+		const planetEq = vectorToEquatorial(geocentricDirection(mars, time))
+		const [planetLon] = equatorialToEcliptic(planetEq[0], planetEq[1], time)
+		const sunEq = sunEquatorial(time)
+		const [sunLon] = equatorialToEcliptic(sunEq[0], sunEq[1], time)
+		const side = normalizePI(planetLon - sunLon) > 0 ? 'east' : 'west'
+		return `${side} ${formatTemporal(temporalFromTime(utc(time)))}`
+	})
+	console.info('Mars quadratures (local):', labelled.join('; '))
+}
+
 // Inferior / Superior Conjunction (inner planets): the elongation minima, classified by
 // whether the planet is nearer than the Sun (inferior) or beyond it (superior).
 function inferiorConjunction() {
@@ -1926,6 +1944,7 @@ function run() {
 	planetaryGreatestElongation()
 	planetaryOpposition()
 	planetaryConjunction()
+	planetaryQuadrature()
 	inferiorConjunction()
 	superiorConjunction()
 	perihelionAndAphelion()
