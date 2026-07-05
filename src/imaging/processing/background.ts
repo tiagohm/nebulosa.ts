@@ -1200,8 +1200,11 @@ export function fitBackgroundSurface(image: Image, options: BackgroundExtraction
 export function evaluateBackgroundModel(model: BackgroundModel, image: Image): Image {
 	ensureModelMatchesImage(model, image)
 
-	const header = structuredClone(image.header)
-	const metadata = structuredClone(image.metadata)
+	// Both the FITS header and the metadata are flat records of primitive values, so a shallow copy yields
+	// a fully independent clone without the cost of structuredClone (matching the idiom in transformation
+	// and stacker). The background image thus owns its own header/metadata and never aliases the source's.
+	const header = { ...image.header }
+	const metadata = { ...image.metadata }
 	const out = image.raw instanceof Float32Array ? new Float32Array(image.raw.length) : new Float64Array(image.raw.length)
 
 	const background: Image = { header, metadata, raw: out }
