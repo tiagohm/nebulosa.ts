@@ -338,6 +338,21 @@ describe('LU decomposition', () => {
 		expect(() => decomposition.solve([1, 2])).toThrow('matrix is singular and cannot be solved')
 		expect(() => decomposition.invert()).toThrow('matrix is singular and cannot be inverted')
 	})
+
+	test('destructive factorization solves in place and mutates the input', () => {
+		const entries = [2, 7, 1, 3, -2, 0, 1, 5, 3]
+
+		// Default (non-destructive) preserves the input matrix.
+		const preserved = Matrix.square(3, entries)
+		const x0 = new LuDecomposition(preserved).solve([1, 1, 1])
+		expect(preserved.toArray()).toEqual(entries)
+
+		// Destructive factorizes on the input itself: same solution, but the input now holds the L\U factors.
+		const inPlace = Matrix.square(3, entries)
+		const x1 = new LuDecomposition(inPlace, true).solve([1, 1, 1])
+		for (let i = 0; i < 3; i++) expect(x1[i]).toBeCloseTo(x0[i], 15)
+		expect(inPlace.toArray()).not.toEqual(entries)
+	})
 })
 
 describe('QR decomposition', () => {
@@ -381,6 +396,21 @@ describe('QR decomposition', () => {
 
 		expect(x[0]).toBeCloseTo(1, 12)
 		expect(x[1]).toBeCloseTo(1, 12)
+	})
+
+	test('destructive factorization solves in place and mutates the input', () => {
+		const entries = [2, 7, 1, 3, -2, 0, 1, 5, 3]
+
+		// Default (non-destructive) preserves the input matrix.
+		const preserved = Matrix.square(3, entries)
+		const x0 = new QrDecomposition(preserved).solve([1, 1, 1])
+		expect(preserved.toArray()).toEqual(entries)
+
+		// Destructive packs the Householder form onto the input itself: same solution, input now mutated.
+		const inPlace = Matrix.square(3, entries)
+		const x1 = new QrDecomposition(inPlace, true).solve([1, 1, 1])
+		for (let i = 0; i < 3; i++) expect(x1[i]).toBeCloseTo(x0[i], 15)
+		expect(inPlace.toArray()).not.toEqual(entries)
 	})
 })
 

@@ -110,22 +110,21 @@ export function medianAbsoluteDeviationOf(a: Readonly<NumberArray>, median: numb
 	return normalized ? STANDARD_DEVIATION_SCALE * mad : mad
 }
 
-// Computes the population standard deviation using a single-pass recurrence.
-export function standardDeviationOf(a: Readonly<NumberArray>) {
-	const n = a.length
-	if (n === 0) return Number.NaN
+// Computes the population standard deviation of the first `count` values using a single-pass recurrence.
+export function standardDeviationOf(a: Readonly<NumberArray>, count: number = a.length) {
+	if (count === 0) return Number.NaN
 
 	let mean = 0
 	let sumSquared = 0
 
-	for (let i = 0; i < n; i++) {
+	for (let i = 0; i < count; i++) {
 		const value = a[i]
 		const delta = value - mean
 		mean += delta / (i + 1)
 		sumSquared += delta * (value - mean)
 	}
 
-	return Math.sqrt(sumSquared / n)
+	return Math.sqrt(sumSquared / count)
 }
 
 // Computes a percentile from an ascending-sorted numeric array using linear interpolation between ranks.

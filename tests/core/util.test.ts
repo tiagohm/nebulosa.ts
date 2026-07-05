@@ -95,6 +95,8 @@ test('standard deviation of', () => {
 	expect(standardDeviationOf(new Float64Array([2, 4, 4, 4, 5, 5, 7, 9]))).toBe(2)
 	expect(standardDeviationOf(new Float64Array([1e12 + 1, 1e12 + 2, 1e12 + 3]))).toBeCloseTo(Math.sqrt(2 / 3), 12)
 	expect(standardDeviationOf(new Float64Array())).toBeNaN()
+	expect(standardDeviationOf([1e308, 1e308])).toBe(0)
+	expect(standardDeviationOf(Array.from({ length: 1000 }, (e, i) => (i % 2 === 0 ? 1e15 : 1e15 + 1)))).toBe(0.5)
 })
 
 test('percentile of', () => {

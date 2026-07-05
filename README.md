@@ -778,6 +778,11 @@ medianAbsoluteDeviation(image, median, normalized, options) // Calculate the MAD
 sigmaClip(image, options) // Generate rejection map using sigma-clip
 estimateBackground(image, options) // Estimate the image background
 estimateBackgroundUsingMode(image, options) // Estimate the background using the mode
+automaticBackgroundExtraction(image, options) // Model and remove a gradient/vignetting background (ABE/DBE)
+fitBackgroundSurface(image, options) // Fit a reusable background model (polynomial or thin-plate spline)
+evaluateBackgroundModel(model, image) // Materialize a fitted background model into an image
+applyBackground(image, background, options) // Remove a modeled background in place (subtract/divide)
+backgroundExclusionMaskFromStars(width, height, stars, options) // Build an ABE exclusion mask from detected stars
 brightness(image, value) // Adjust image brightness
 saturation(image, value, channel) // Adjust image saturation
 linear(image, slope, intercept) // Apply a linear transform
