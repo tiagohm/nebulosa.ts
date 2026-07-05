@@ -269,6 +269,26 @@ test('a hot pixel on a strong gradient is detected when the scale comes from loc
 	expect(image.raw[pixelOffset(image, spikeX, spikeY)]).toBeCloseTo(localLevel, 2)
 })
 
+test('a huge window radius on a small image is clamped without exhausting memory', () => {
+	// windowRadius is user-provided and only floored at 1; a naive (2r+1)^2 scratch buffer would try to
+	// allocate tens of billions of samples here. The radius must be clamped to the image extent so the call
+	// completes and still repairs the defect using the whole (clamped) neighborhood.
+	const width = 12
+	const height = 8
+	const { values, at } = rampImage(width, height, 0.3, 0.34)
+	values[4 * width + 6] = 0.95 // a hot pixel
+	const image = makeImage(width, height, 1, values)
+
+	const result = cosmeticCorrection(image, { windowRadius: 100000 })
+
+	expect(result.hot).toBe(1)
+	expect(result.corrected).toBe(1)
+	// Repaired onto the ramp (the clamped whole-image median), not left saturated.
+	const repaired = image.raw[pixelOffset(image, 6, 4)]
+	expect(repaired).toBeGreaterThan(at(0))
+	expect(repaired).toBeLessThan(at(width - 1))
+})
+
 test('an empty image and amount 0 are no-ops', () => {
 	const empty = makeImage(0, 0, 1, new Float32Array(0))
 	expect(cosmeticCorrection(empty).corrected).toBe(0)

@@ -160,21 +160,26 @@ function computePhaseStats(plane: Float64Array, width: number, height: number, p
 // Median of the neighborhood of (x, y), read from the deinterleaved `plane`. Samples the (2r+1)^2 lattice
 // centered on (x, y) with a spacing of `step` pixels per axis, clamped to the image bounds. `step` is 1
 // for a normal plane; for a Bayer CFA mosaic it is 2 so only same-color-phase photosites are gathered
-// (adjacent photosites carry different colors and must not be mixed). When `skip` is given, neighbors
-// flagged in it (the defect mask) are excluded so a repair interpolates only from good samples —
-// essential for bad columns/rows, where the defective neighbors would otherwise bias the median toward
-// one side. Falls back to including every sampled neighbor if the whole window is flagged, so the result
-// is always finite. `buf` must hold at least (2r+1)^2 elements.
+// (adjacent photosites carry different colors and must not be mixed). The in-bounds lattice range is
+// computed up front, so the scan cost is the number of samples actually gathered rather than (2r+1)^2 —
+// a radius far larger than the frame does not blow the loop up. When `skip` is given, neighbors flagged in
+// it (the defect mask) are excluded so a repair interpolates only from good samples — essential for bad
+// columns/rows, where the defective neighbors would otherwise bias the median toward one side. Falls back
+// to including every sampled neighbor if the whole window is flagged, so the result is always finite.
+// `buf` must hold at least (min(2r+1, ceil(width/step)) * min(2r+1, ceil(height/step))) elements.
 function neighborhoodMedian(plane: Float64Array, x: number, y: number, width: number, height: number, r: number, step: number, buf: Float64Array, skip?: Uint8Array) {
+	// Restrict the lattice offsets to those that land inside the frame, so an oversized radius neither
+	// scans nor requires buffer space for samples that would only be clamped away.
+	const kyMin = Math.max(-r, -Math.floor(y / step))
+	const kyMax = Math.min(r, Math.floor((height - 1 - y) / step))
+	const kxMin = Math.max(-r, -Math.floor(x / step))
+	const kxMax = Math.min(r, Math.floor((width - 1 - x) / step))
+
 	let count = 0
-	for (let ky = -r; ky <= r; ky++) {
-		const yy = y + ky * step
-		if (yy < 0 || yy >= height) continue
-		const row = yy * width
-		for (let kx = -r; kx <= r; kx++) {
-			const xx = x + kx * step
-			if (xx < 0 || xx >= width) continue
-			const q = row + xx
+	for (let ky = kyMin; ky <= kyMax; ky++) {
+		const row = (y + ky * step) * width
+		for (let kx = kxMin; kx <= kxMax; kx++) {
+			const q = row + x + kx * step
 			if (skip !== undefined && skip[q] !== 0) continue
 			buf[count++] = plane[q]
 		}
@@ -182,14 +187,9 @@ function neighborhoodMedian(plane: Float64Array, x: number, y: number, width: nu
 
 	// Every sampled neighbor was flagged: re-gather without the skip so the repair stays finite.
 	if (count === 0) {
-		for (let ky = -r; ky <= r; ky++) {
-			const yy = y + ky * step
-			if (yy < 0 || yy >= height) continue
-			const row = yy * width
-			for (let kx = -r; kx <= r; kx++) {
-				const xx = x + kx * step
-				if (xx >= 0 && xx < width) buf[count++] = plane[row + xx]
-			}
+		for (let ky = kyMin; ky <= kyMax; ky++) {
+			const row = (y + ky * step) * width
+			for (let kx = kxMin; kx <= kxMax; kx++) buf[count++] = plane[row + x + kx * step]
 		}
 	}
 
@@ -296,7 +296,7 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 
 	const hotSigma = Number.isFinite(options.hotSigma) ? Math.max(0, options.hotSigma!) : DEFAULT_COSMETIC_CORRECTION_OPTIONS.hotSigma
 	const coldSigma = Number.isFinite(options.coldSigma) ? Math.max(0, options.coldSigma!) : DEFAULT_COSMETIC_CORRECTION_OPTIONS.coldSigma
-	const radius = Number.isFinite(options.windowRadius) ? Math.max(1, Math.trunc(options.windowRadius!)) : DEFAULT_COSMETIC_CORRECTION_OPTIONS.windowRadius
+	const requestedRadius = Number.isFinite(options.windowRadius) ? Math.max(1, Math.trunc(options.windowRadius!)) : DEFAULT_COSMETIC_CORRECTION_OPTIONS.windowRadius
 	const amount = Number.isFinite(options.amount) ? clamp(options.amount!, 0, 1) : DEFAULT_COSMETIC_CORRECTION_OPTIONS.amount
 	const darkHotSigma = Number.isFinite(options.darkHotSigma) ? Math.max(0, options.darkHotSigma!) : DEFAULT_COSMETIC_CORRECTION_OPTIONS.darkHotSigma
 
@@ -320,10 +320,6 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 		throw new Error(`protect mask length must be ${n} (width*height), got ${protectMask.length}`)
 	}
 
-	// Background window for the isolation test spans one pixel more than the repair window so a compact
-	// source stays a minority of the window and its median tracks the true background.
-	const bgRadius = radius + 1
-
 	// A Bayer CFA mosaic interleaves 4 color-phase photosites; neighborhoods and robust statistics must be
 	// computed per phase so a valid uniform-color mosaic is not mistaken for a field of hot pixels.
 	// `step` samples only same-phase photosites; `phases` splits the robust statistics accordingly.
@@ -331,15 +327,32 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 	const step = bayer ? 2 : 1
 	const phases = bayer ? 4 : 1
 
+	// Clamp the requested window radius to the largest same-phase extent the frame can actually supply:
+	// beyond this every further lattice ring falls outside the image and contributes nothing, so an
+	// unbounded radius (e.g. 100000 on a tiny frame) must not drive the scratch-buffer size or the scan.
+	const maxRadius = Math.max(1, Math.ceil((Math.max(width, height) - 1) / step))
+	const radius = Math.min(requestedRadius, maxRadius)
+
+	// Background window for the isolation test spans one pixel more than the repair window so a compact
+	// source stays a minority of the window and its median tracks the true background.
+	const bgRadius = radius + 1
+
 	// Whether the auto detector could run at all; when off, the per-pixel median field is not built.
 	const autoPossible = hotSigma > 0 || coldSigma > 0
+
+	// Scratch window sizes are bounded by the per-axis in-bounds sample count, not the raw (2r+1)^2, so a
+	// large radius on a small (or high-aspect) frame allocates only what a neighborhood can actually hold.
+	const sameAxisColumns = Math.ceil(width / step)
+	const sameAxisRows = Math.ceil(height / step)
+	const windowSize = Math.min(2 * radius + 1, sameAxisColumns) * Math.min(2 * radius + 1, sameAxisRows)
+	const bgWindowSize = Math.min(2 * bgRadius + 1, sameAxisColumns) * Math.min(2 * bgRadius + 1, sameAxisRows)
 
 	// Reusable scratch buffers, allocated once and shared across channels.
 	const plane = new Float64Array(n)
 	const scaleScratch = new Float64Array(n)
 	const gatherBuf = new Float64Array(n)
-	const window = new Float64Array((2 * radius + 1) * (2 * radius + 1))
-	const bgWindow = new Float64Array((2 * bgRadius + 1) * (2 * bgRadius + 1))
+	const window = new Float64Array(windowSize)
+	const bgWindow = new Float64Array(bgWindowSize)
 	const darkPlane = dark0 !== undefined ? new Float64Array(n) : undefined
 	// Per-pixel local median (the repair value) and high-pass residual, built once per channel for the
 	// noise-scale estimate and reused as the repair value so the median is computed only once per pixel.
