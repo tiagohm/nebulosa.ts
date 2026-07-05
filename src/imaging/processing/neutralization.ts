@@ -2,6 +2,10 @@ import { medianOf } from '../../core/util'
 import { clamp } from '../../math/numerical/math'
 import type { Image, ImageRawType } from '../model/types'
 
+// Background neutralization for RGB images: removes a color cast by matching per-channel medians on a
+// reference region, then optionally rescales or truncates the result back into the normalized [0, 1]
+// range. Operates in place.
+
 // Strategy for remapping the neutralized background level.
 export type BackgroundNeutralizationMode = 'targetBackground' | 'rescale' | 'rescaleAsNeeded' | 'truncate'
 

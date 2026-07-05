@@ -1,6 +1,9 @@
 import type { Image, ImageRawType } from '../model/types'
 import { shift } from './convolution'
 
+// KStars internal-guider point-spread-function (PSF) filter, applied in place to the normalized [0, 1]
+// raw buffer to enhance star-like features against a local background over a 9x9 concentric-ring stencil.
+
 // https://github.com/KDE/kstars/blob/master/kstars/ekos/guide/internalguide/guidealgorithms.cpp
 
 // KStars guider point-spread-function weights, one per concentric ring (A center .. D3 outermost),

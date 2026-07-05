@@ -1,6 +1,10 @@
 import { clamp } from '../../math/numerical/math'
 import { BT709_GRAYSCALE, GRAYSCALES, type GrayscaleAlgorithm, type Image } from '../model/types'
 
+// PixInsight-style arcsinh stretch of the normalized [0, 1] raw buffer, preserving RGB color ratios
+// above a black point, plus a solver that approximates the arcsinh parameters best matching a screen
+// transfer function curve.
+
 // Fitted parameters approximating an arcsinh stretch.
 export interface ApproximateArcsinhStretchParameters {
 	readonly stretchFactor: number

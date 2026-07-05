@@ -3,6 +3,10 @@ import { akimaSplineLUT, catmullRomSplineLUT, cubicHermiteSplineLUT, naturalCubi
 import { truncatePixel } from '../model/image'
 import { GRAYSCALES, type Image, type ImageChannelOrGray } from '../model/types'
 
+// Curves transformation of the normalized [0, 1] raw buffer: applies per-channel or RGB/K tone curves
+// through a configurable spline LUT, preserving color ratios for luminance-style curves. Operates in
+// place.
+
 // Spline interpolation used by the curves transformation.
 export type CurvesTransformationInterpolation = 'cubicHermite' | 'akima' | 'catmullRom' | 'naturalCubic'
 

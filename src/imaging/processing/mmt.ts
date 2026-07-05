@@ -2,6 +2,10 @@ import { medianOf, STANDARD_DEVIATION_SCALE } from '../../core/util'
 import { clamp } from '../../math/numerical/math'
 import type { Image, ImageMetadata, ImageRawType } from '../model/types'
 
+// Multiscale median transform (MMT) similar to PixInsight's: decomposes the image into dyadic detail
+// layers using a quantized sliding-median filter, applies per-layer threshold/amount/bias, and
+// reconstructs in place on the normalized [0, 1] raw buffer.
+
 // Quantization bit depth of the sliding-median histogram used by the multiscale median transform.
 const MMT_MEDIAN_HISTOGRAM_BITS = 14
 // Number of fine histogram bins (2^bits).

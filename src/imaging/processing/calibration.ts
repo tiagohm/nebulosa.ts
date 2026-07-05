@@ -4,6 +4,10 @@ import type { Image } from '../model/types'
 import { clone, copyInto, divide, multiplyScalar, plusScalar, subtract } from './arithmetic'
 import { estimateBackgroundUsingMode } from './computation'
 
+// Frame calibration for astronomical images: computes (Light - Dark) / (Flat - Bias) * mean(Flat) in
+// place on the light frame, with exposure-scaled dark background matching, building on the image
+// arithmetic helpers.
+
 // Calibrated = (Light - Dark) / (Flat - Bias) * mean(Flat)
 export function calibrate(light: Image, dark?: Image, flat?: Image, bias?: Image, darkFlat?: Image) {
 	let tmp: Image | undefined

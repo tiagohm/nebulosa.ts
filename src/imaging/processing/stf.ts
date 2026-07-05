@@ -1,6 +1,10 @@
 import { truncatePixel } from '../model/image'
 import { channelIndex, type Image, type ImageChannelOrGray } from '../model/types'
 
+// Screen transfer function (display stretch) applied in place to the normalized [0, 1] raw buffer.
+// Remaps pixel values through a midtone/shadow/highlight transfer curve via a cached LUT, over a
+// chosen channel or all channels.
+
 // Options for applying a screen transfer function (display stretch).
 export interface ApplyScreenTransferFunctionOptions {
 	channel?: ImageChannelOrGray

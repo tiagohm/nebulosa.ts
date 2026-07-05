@@ -2,6 +2,10 @@ import { TAU } from '../../core/constants'
 import { clamp } from '../../math/numerical/math'
 import type { Image } from '../model/types'
 
+// Frequency-domain (FFT) radial band filtering of images: a reusable radix-2 workspace and a centered
+// low-pass/high-pass Butterworth filter applied in place, with MaxIm-style range restoration for the
+// low-pass output.
+
 // FFT frequency-domain filter direction.
 export type FFTFilterType = 'lowPass' | 'highPass'
 

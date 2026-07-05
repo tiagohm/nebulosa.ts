@@ -1,5 +1,8 @@
 import type { Image, ImageChannel } from '../model/types'
 
+// Subtractive Chromatic Noise Reduction (SCNR): attenuates a color cast (usually green) in RGB images
+// using a selectable protection method, operating in place on the normalized [0, 1] raw buffer.
+
 // Highlight/green-cast protection method for the SCNR (subtractive chromatic noise reduction) operation.
 export type SCNRProtectionMethod = 'MAXIMUM_MASK' | 'ADDITIVE_MASK' | 'AVERAGE_NEUTRAL' | 'MAXIMUM_NEUTRAL' | 'MINIMUM_NEUTRAL'
 

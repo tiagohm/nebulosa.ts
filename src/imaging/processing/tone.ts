@@ -1,6 +1,9 @@
 import { clamp } from '../../math/numerical/math'
 import { grayscaleFromChannel, type Image, type ImageChannelOrGray } from '../model/types'
 
+// In-place tonal adjustments on the normalized [0, 1] raw buffer: brightness, saturation, linear
+// (slope/intercept), contrast, and gamma, each clamping the result to the valid range.
+
 // Apply brightness adjustment to image.
 export function brightness(image: Image, value: number) {
 	if (value >= 0 && value !== 1) {

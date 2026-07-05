@@ -1,5 +1,9 @@
 import { channelIndex, grayscaleFromChannel, type Image, type ImageChannelOrGray, type ImageMetadata } from '../model/types'
 
+// In-place geometric and channel operations on images: horizontal/vertical flips and pixel inversion,
+// plus RGB-to-grayscale conversion. Flips and inversion mutate and return the input; grayscale builds
+// a fresh single-channel image.
+
 // Mirrors the image across the vertical axis in place.
 export function horizontalFlip(image: Image) {
 	const { raw, metadata } = image

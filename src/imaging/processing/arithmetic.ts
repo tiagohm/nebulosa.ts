@@ -1,5 +1,9 @@
 import type { Image } from '../model/types'
 
+// Per-sample image arithmetic and buffer utilities: deep clone, copy, and element-wise
+// add/subtract/multiply/divide (image or scalar), clamping where noted. Operate on matching-dimension
+// images and write to an optional output image, defaulting to the first operand.
+
 // Verifies that two images share the same dimensions and channel layout.
 export function checkDimensions(a: Image, b: Image) {
 	if (a.metadata.channels !== b.metadata.channels) throw new Error(`channels does not match: ${a.metadata.channels} != ${b.metadata.channels}`)

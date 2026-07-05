@@ -1,5 +1,9 @@
 import type { CfaPattern, Image, ImageRawType } from '../model/types'
 
+// Bayer/debayer conversions between an RGB image and a mono CFA mosaic. `bayer` samples one color per
+// pixel from a CFA pattern; `debayer` reconstructs RGB by neighborhood averaging. Both build fresh
+// buffers rather than mutating in place.
+
 // Per-Bayer-pattern 2x2 channel-index maps: two rows of [evenCol, oddCol] color indices
 // (0 red, 1 green, 2 blue) used to route each mosaic pixel to its color channel during debayering.
 const CFA_PATTERNS: Record<CfaPattern, Uint8Array[]> = {

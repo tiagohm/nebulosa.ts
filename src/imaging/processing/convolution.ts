@@ -3,6 +3,10 @@ import type { Size } from '../../math/numerical/geometry'
 import type { NumberArray } from '../../math/numerical/math'
 import type { Image, ImageRawType } from '../model/types'
 
+// Spatial convolution of images in place on the normalized [0, 1] raw buffer: a generic kernel
+// convolver with optional edge renormalization, kernel builders, and named filters (edge detection,
+// emboss, mean/box blur, sharpen, pyramid blur, and Gaussian blur).
+
 // A convolution kernel and its normalization divisor.
 export interface ConvolutionKernel extends Readonly<Size> {
 	// Row-major kernel weights, width*height long.
