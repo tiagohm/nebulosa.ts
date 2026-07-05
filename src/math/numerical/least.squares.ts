@@ -242,7 +242,7 @@ function solveLinearLeastSquares(design: readonly Readonly<NumberArray>[], targe
 		}
 	}
 
-	const qr = new QrDecomposition(matrix)
+	const qr = new QrDecomposition(matrix, true)
 
 	if (qr.isFullRank) {
 		const solution = qr.solve(rhs)

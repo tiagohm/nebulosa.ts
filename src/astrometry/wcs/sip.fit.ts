@@ -736,7 +736,7 @@ function solveSipCoefficients(stars: readonly PreparedStar[], usedIndices: reado
 		throw new SipFitError('illConditionedFit', 'SIP design matrix is ill-conditioned', { conditionNumber, maxConditionNumber: options.maxConditionNumber })
 	}
 
-	const decomposition = new QrDecomposition(matrix)
+	const decomposition = new QrDecomposition(matrix, true)
 
 	if (!decomposition.isFullRank) {
 		throw new SipFitError('singularMatrix', 'SIP design matrix is rank deficient')

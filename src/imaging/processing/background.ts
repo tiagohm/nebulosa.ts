@@ -545,7 +545,8 @@ function fitSurface(samples: readonly SurfaceSample[], degree: number, terms: nu
 	}
 
 	try {
-		const qr = new QrDecomposition(A)
+		// `A` is a throwaway design matrix used only for this solve, so factorize in place and skip the clone.
+		const qr = new QrDecomposition(A, true)
 		if (!qr.isFullRank) return undefined
 		// solve() returns a vector sized to the sample count (rows); only the first `terms` entries are
 		// the least-squares coefficients, the rest are residual internals. Copy just the coefficients.
@@ -756,7 +757,8 @@ function fitThinPlateSpline(samples: readonly SurfaceSample[], smoothing: number
 	for (let i = 0; i < k; i++) b[i] = fs[i]
 
 	try {
-		const x = new LuDecomposition(L).solve(b)
+		// `L` is a throwaway system matrix used only for this solve, so factorize in place and skip the clone.
+		const x = new LuDecomposition(L, true).solve(b)
 		for (let i = 0; i < size; i++) if (!Number.isFinite(x[i])) return undefined
 
 		const coefficients = new Float64Array(size)
