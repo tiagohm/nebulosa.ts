@@ -443,6 +443,21 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 		// Nothing to detect for this channel: skip the per-pixel scan entirely.
 		if (defectMask === undefined && !darkEnabled && !autoEnabled) continue
 
+		// Combined skip mask for dark-path repairs: neighbors that are themselves flagged by the dark
+		// detector (above threshold) are excluded from the repair median so a cluster of fixed hot pixels
+		// does not bias the interpolation toward the hot-cluster value.
+		let darkSkip: Uint8Array | undefined
+		if (darkEnabled) {
+			if (defectMask !== undefined) {
+				darkSkip = new Uint8Array(defectMask)
+			} else {
+				darkSkip = new Uint8Array(n)
+			}
+			for (let p = 0; p < n; p++) {
+				if (darkPlane![p] > darkThreshold[phaseIndex(p % width, Math.trunc(p / width), phases)]) darkSkip[p] = 1
+			}
+		}
+
 		for (let y = 0; y < height; y++) {
 			const rowBase = y * width
 			for (let x = 0; x < width; x++) {
@@ -471,7 +486,7 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 				if (cause === 0) continue
 
 				// Reuse the precomputed median field when it was built (auto enabled); otherwise compute it now.
-				if (!haveM) m = medianField !== undefined ? medianField[p] : neighborhoodMedian(plane, x, y, width, height, radius, step, window, defectMask)
+				if (!haveM) m = medianField !== undefined ? medianField[p] : neighborhoodMedian(plane, x, y, width, height, radius, step, window, cause === 2 ? darkSkip : defectMask)
 				raw[p * channels + channel] = amount >= 1 ? m : center + amount * (m - center)
 
 				if (cause === 1) defect++
