@@ -142,6 +142,62 @@ test('end-to-end: detects and repairs synthetic hot/dead pixels from the generat
 	expect(maxAfter).toBeLessThan(maxBefore)
 })
 
+test('a resolved compact star is protected from auto repair by the isolation test', () => {
+	// A flat sky with one compact but resolved star: a bright core whose PSF spreads flux into the
+	// adjacent pixels. The isolation test must recognize the neighbor support and leave the whole star
+	// untouched instead of repairing the peak as a hot pixel.
+	const width = 20
+	const height = 20
+	const values = new Float32Array(width * height).fill(0.1)
+	const set = (x: number, y: number, v: number) => (values[y * width + x] = v)
+	set(10, 10, 0.8) // core
+	set(9, 10, 0.4)
+	set(11, 10, 0.4)
+	set(10, 9, 0.4)
+	set(10, 11, 0.4) // first ring
+	set(9, 9, 0.2)
+	set(11, 9, 0.2)
+	set(9, 11, 0.2)
+	set(11, 11, 0.2) // diagonals
+	const image = makeImage(width, height, 1, values)
+	const before = Float32Array.from(image.raw)
+
+	const result = cosmeticCorrection(image)
+
+	expect(result.corrected).toBe(0)
+	// The star core and its wings are untouched.
+	expect(image.raw[pixelOffset(image, 10, 10)]).toBeCloseTo(0.8, 6)
+	for (let i = 0; i < before.length; i++) expect(image.raw[i]).toBe(before[i])
+})
+
+test('a single-pixel source is repaired unless an explicit protect mask covers it', () => {
+	const width = 20
+	const height = 20
+	const values = new Float32Array(width * height).fill(0.1)
+	values[10 * width + 10] = 0.8 // an unresolved point confined to one pixel
+	const image = makeImage(width, height, 1, values)
+
+	// Without protection a lone bright pixel is indistinguishable from a hot pixel and is repaired.
+	const unprotected = cosmeticCorrection(makeImage(width, height, 1, Float32Array.from(values)))
+	expect(unprotected.hot).toBe(1)
+
+	// A protect mask over that pixel keeps the auto detector away from it.
+	const protect = new Uint8Array(width * height)
+	protect[10 * width + 10] = 1
+	const result = cosmeticCorrection(image, { protect })
+
+	expect(result.corrected).toBe(0)
+	expect(image.raw[pixelOffset(image, 10, 10)]).toBeCloseTo(0.8, 6)
+})
+
+test('a wrongly sized protect mask throws', () => {
+	const width = 8
+	const height = 8
+	const { values } = rampImage(width, height, 0.3, 0.34)
+	const image = makeImage(width, height, 1, values)
+	expect(() => cosmeticCorrection(image, { protect: new Uint8Array(10) })).toThrow('protect mask length')
+})
+
 test('an empty image and amount 0 are no-ops', () => {
 	const empty = makeImage(0, 0, 1, new Float32Array(0))
 	expect(cosmeticCorrection(empty).corrected).toBe(0)
