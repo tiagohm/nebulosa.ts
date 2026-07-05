@@ -322,8 +322,11 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 
 	// A Bayer CFA mosaic interleaves 4 color-phase photosites; neighborhoods and robust statistics must be
 	// computed per phase so a valid uniform-color mosaic is not mistaken for a field of hot pixels.
+	// Only single-channel raw frames are treated as mosaics — debayer() returns an RGB image that still
+	// carries `metadata.bayer`, and its per-channel neighborhoods must be contiguous (step=1), not
+	// parity-strided.
 	// `step` samples only same-phase photosites; `phases` splits the robust statistics accordingly.
-	const bayer = metadata.bayer !== undefined
+	const bayer = metadata.bayer !== undefined && channels === 1
 	const step = bayer ? 2 : 1
 	const phases = bayer ? 4 : 1
 

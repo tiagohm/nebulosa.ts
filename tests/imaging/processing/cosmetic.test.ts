@@ -289,6 +289,36 @@ test('a huge window radius on a small image is clamped without exhausting memory
 	expect(repaired).toBeLessThan(at(width - 1))
 })
 
+test('a debayered RGB image with bayer metadata is treated as a non-mosaic frame', () => {
+	// debayer() preserves `metadata.bayer` on the output RGB image (src/imaging/processing/debayer.ts:209),
+	// so cosmeticCorrection must gate CFA-phase handling on channels===1 to avoid parity-striding inside
+	// each contiguous RGB channel.
+	const width = 20
+	const height = 20
+	const values = new Float32Array(width * height * 3)
+	// Fill each channel with a ramp so there is structured content to process.
+	for (let y = 0; y < height; y++) {
+		for (let x = 0; x < width; x++) {
+			const p = y * width + x
+			values[p * 3 + 0] = 0.3 + 0.1 * (x / (width - 1))
+			values[p * 3 + 1] = 0.4 + 0.05 * (x / (width - 1))
+			values[p * 3 + 2] = 0.2 + 0.08 * (x / (width - 1))
+		}
+	}
+	// Inject a hot pixel in the red channel.
+	values[(10 * width + 12) * 3 + 0] = 0.95
+	const image = makeImage(width, height, 3, values, { BAYERPAT: 'RGGB' })
+	expect(image.metadata.bayer).toBe('RGGB')
+	expect(image.metadata.channels).toBe(3)
+
+	const result = cosmeticCorrection(image)
+
+	// The hot pixel must be detected and repaired (3-channel image, so step=1 contiguous neighborhood).
+	expect(result.hot).toBe(1)
+	// Only that one pixel is touched — no CFA-phase confusion across channels.
+	expect(result.corrected).toBe(1)
+})
+
 test('an empty image and amount 0 are no-ops', () => {
 	const empty = makeImage(0, 0, 1, new Float32Array(0))
 	expect(cosmeticCorrection(empty).corrected).toBe(0)
