@@ -7,7 +7,7 @@ import { type AstronomicalImageNoiseConfig, type AstronomicalImageStar, DEFAULT_
 import { Bitpix } from '../../../src/io/formats/fits/fits'
 import { mulberry32 } from '../../../src/math/numerical/random'
 import { downloadPerTag } from '../../download'
-import { readImage } from '../../util/image.util'
+import { readImage } from '../util'
 
 await downloadPerTag('stardetector')
 
@@ -304,15 +304,19 @@ describe('detect stars II', () => {
 	] as const
 
 	for (const scenario of scenarios) {
-		test(scenario.name, () => {
-			const raw = new Float32Array(width * height)
-			const stars = generateStars(scenario.seed, scenario.hfd, scenario.flux, scenario.snr)
-			expect(stars).toHaveLength(count)
+		test(
+			scenario.name,
+			() => {
+				const raw = new Float32Array(width * height)
+				const stars = generateStars(scenario.seed, scenario.hfd, scenario.flux, scenario.snr)
+				expect(stars).toHaveLength(count)
 
-			generateStarImage(raw, width, height, 1, stars, 1.2, BASE_NOISE_CONFIG, BASE_PLOT_OPTIONS)
-			const image: Image = { raw, header: { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: width, NAXIS2: height }, metadata: { width, height, channels: 1, pixelCount: width * height, pixelSizeInBytes: 4, bitpix: -32, stride: width, strideInBytes: width * 4, bayer: undefined } }
-			const detectedStars = detectStars(image, { maxStars: 500 })
-			expect(detectedStars).toHaveLength(stars.length)
-		})
+				generateStarImage(raw, width, height, 1, stars, 1.2, BASE_NOISE_CONFIG, BASE_PLOT_OPTIONS)
+				const image: Image = { raw, header: { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: width, NAXIS2: height }, metadata: { width, height, channels: 1, pixelCount: width * height, pixelSizeInBytes: 4, bitpix: -32, stride: width, strideInBytes: width * 4, bayer: undefined } }
+				const detectedStars = detectStars(image, { maxStars: 500 })
+				expect(detectedStars).toHaveLength(stars.length)
+			},
+			2000,
+		)
 	}
 })

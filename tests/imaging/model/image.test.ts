@@ -21,7 +21,7 @@ import { stf } from '../../../src/imaging/processing/stf'
 import { brightness, contrast, gamma, saturation } from '../../../src/imaging/processing/tone'
 import { bufferSink, bufferSource } from '../../../src/io/io'
 import { downloadPerTag } from '../../download'
-import { BITPIXES, CHANNELS, readImage, readImageTransformAndSave, saveImageAndCompareHash } from '../../util/image.util'
+import { BITPIXES, CHANNELS, readImage, readImageTransformAndSave, saveImageAndCompareHash } from '../util'
 
 await downloadPerTag('image')
 

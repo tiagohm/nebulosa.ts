@@ -8,7 +8,7 @@ import { sunMoonPosition, type EclipseGeoCurve, type EclipseGeoPoint } from '../
 import { computeLunarEclipseMapGeometry, lunarEclipseMapToSvgPaths, type LunarEclipseContactKind, type LunarEclipseMapGeometry, type LunarEclipseMapGeometryOptions, type LunarEclipseMapSvgPaths } from '../src/astronomy/events/eclipse/lunar/map'
 import { timeYMD, toJulianDay, timeToDate } from '../src/astronomy/time/time'
 import { deg } from '../src/math/units/angle'
-import { longestProjectedSegment } from '../tests/util/eclipse.util'
+import { longestProjectedSegment } from '../tests/astronomy/events/eclipse/util'
 
 const CATALOG_STEP = deg(0.5)
 const LUNAR_ECLIPSE_MAP_GEOMETRY_OPTIONS: LunarEclipseMapGeometryOptions = { maxAngularStep: CATALOG_STEP }

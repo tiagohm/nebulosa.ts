@@ -8,7 +8,7 @@ import { BRANCH_MAX_DRAWABLE_GAP, type SolarEclipseGeoPoint, type PolynomialBess
 import { parseArgs } from 'node:util'
 import { sunMoonPosition } from '../src/astronomy/events/eclipse/eclipse'
 import { timeYMD, toJulianDay, timeToDate } from '../src/astronomy/time/time'
-import { catalogBranchRetraces, endpointRetraces, hasContinuousCurveBetween, limitTangencyResidual, longestProjectedSegment } from '../tests/util/eclipse.util'
+import { catalogBranchRetraces, endpointRetraces, hasContinuousCurveBetween, limitTangencyResidual, longestProjectedSegment } from '../tests/astronomy/events/eclipse/util'
 
 const CATALOG_STEP = deg(0.5)
 const CATALOG_MAX_DRAWABLE_GAP = Math.max(BRANCH_MAX_DRAWABLE_GAP, CATALOG_STEP * 4)

@@ -7,7 +7,7 @@ import { declinationKeyword, heightKeyword, observationDateKeyword, rightAscensi
 import { bufferSink, bufferSource, fileHandleSource } from '../../../../src/io/io'
 import { dms, hms } from '../../../../src/math/units/angle'
 import { downloadPerTag } from '../../../download'
-import { BITPIXES, CHANNELS, saveImageAndCompareHash } from '../../../util/image.util'
+import { BITPIXES, CHANNELS, saveImageAndCompareHash } from '../../../imaging/util'
 
 await downloadPerTag('fits')
 

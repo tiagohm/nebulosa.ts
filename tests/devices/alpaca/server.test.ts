@@ -4,7 +4,7 @@ import { makeImageBytesFromFits } from '../../../src/devices/alpaca/server'
 import { AlpacaImageElementType } from '../../../src/devices/alpaca/types'
 import { bitpixInBytes } from '../../../src/io/formats/fits/util'
 import { downloadPerTag } from '../../download'
-import { saveAndCompareHash } from '../../util/image.util'
+import { saveAndCompareHash } from '../../imaging/util'
 
 await downloadPerTag('alpaca.server')
 
