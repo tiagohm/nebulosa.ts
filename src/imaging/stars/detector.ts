@@ -1,7 +1,10 @@
 import type { Point, Rect } from '../../math/numerical/geometry'
 import { clamp } from '../../math/numerical/math'
 import type { Image } from '../model/types'
-import { clone, grayscale, mean3x3, psf } from '../processing/transformation'
+import { clone } from '../processing/arithmetic'
+import { mean3x3 } from '../processing/convolution'
+import { grayscale } from '../processing/geometry'
+import { psf } from '../processing/psf'
 
 // Star detection and photometry for an image. Median-filters out hot pixels, runs a PSF-matched
 // response to find candidate peaks, then measures each star's flux, SNR, half-flux diameter (HFD),

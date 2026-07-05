@@ -6,7 +6,7 @@ import { CLIENT, type Client, DEFAULT_CAMERA, DEFAULT_MOUNT, type Device, type D
 import { CameraManager, CoverManager, type DeviceProvider, FlatPanelManager, FocuserManager, GuideOutputManager, MountManager, RotatorManager, ThermometerManager, WheelManager } from '../../../src/devices/indi/manager'
 import type { PropertyState } from '../../../src/devices/indi/types'
 import { readImageFromBuffer } from '../../../src/imaging/model/image'
-import { debayer } from '../../../src/imaging/processing/transformation'
+import { debayer } from '../../../src/imaging/processing/debayer'
 import type { FitsHeader } from '../../../src/io/formats/fits/fits'
 import { roundToNthDecimal } from '../../../src/math/numerical/math'
 import { deg, hour } from '../../../src/math/units/angle'
