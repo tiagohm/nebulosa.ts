@@ -13,7 +13,7 @@ The codebase is module-oriented and organized under `src/` into domain-and-respo
 - Treat numerical correctness, unit consistency, and performance as first-class requirements.
 - Avoid broad refactors while fixing local issues.
 - Do not introduce unrelated formatting changes, generated files, debug logs, temporary code, or local-only configuration.
-- When behavior changes, update tests and any affected examples or README snippets in the same task.
+- When behavior changes, update tests and any affected examples in the same task.
 
 ## Code Discovery
 
@@ -37,7 +37,6 @@ Prefer the MCP graph tools for code discovery:
 - `data/`: test fixtures such as FITS, XISF, SPK, catalogs, and Earth orientation files.
 - `examples/`, `scripts/`: runnable usage examples and maintenance scripts that import from `src/`. Update their imports when modules move.
 - `native/`: native/runtime support used by `postinstall` (distinct from `src/bindings/`, which holds the TypeScript FFI bindings). Treat changes here as high-risk.
-- `README.md`: public API documentation. Update it when exported behavior or examples change.
 - `main.ts`: not the main implementation surface of the library. Prefer editing `src/` and `tests/`.
 
 ## Project Structure Rules
