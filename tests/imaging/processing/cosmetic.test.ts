@@ -244,6 +244,32 @@ test('a hot photosite in an RGGB mosaic is still repaired from its own color pha
 	expect(image.raw[pixelOffset(image, 12, 10)]).toBeCloseTo(0.8, 5)
 })
 
+test('a resolved star on an RGGB mosaic is protected by cross-phase PSF support', () => {
+	// A resolved star centered on a red photosite has a bright core in the red phase but its PSF spills
+	// into the adjacent green/blue CFA pixels. The same-phase isolation loop (step=2) alone sees only
+	// distant red neighbors at background level and would flag the core as hot; the cross-phase 8-neighbor
+	// check (step=1) must recognize the elevated adjacent CFA pixels as support.
+	const width = 24
+	const height = 24
+	const values = rggbMosaic(width, height, 0.8, 0.2, 0.1)
+	// Star core at an even-even (red) photosite.
+	const cx = 12
+	const cy = 10
+	values[cy * width + cx] = 0.96
+	// PSF wings in adjacent CFA pixels — same raw 8-neighborhood.
+	values[cy * width + cx - 1] = 0.55 // green to the left
+	values[cy * width + cx + 1] = 0.55 // green to the right
+	values[(cy - 1) * width + cx] = 0.55 // green above
+	values[(cy + 1) * width + cx] = 0.55 // green below
+	const image = makeImage(width, height, 1, values, { BAYERPAT: 'RGGB' })
+
+	const result = cosmeticCorrection(image)
+
+	// The star core must not be flagged as hot — its cross-phase neighbors are elevated.
+	expect(result.corrected).toBe(0)
+	expect(image.raw[pixelOffset(image, cx, cy)]).toBeCloseTo(0.96, 6)
+})
+
 test('a hot pixel on a strong gradient is detected when the scale comes from local residuals', () => {
 	// A steep 0..1 horizontal ramp: the raw plane's global spread is huge, so a global-MAD threshold would
 	// swamp a real defect. The spike sits near the bright end where its excess over the local level is only

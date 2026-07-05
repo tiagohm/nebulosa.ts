@@ -201,10 +201,16 @@ function neighborhoodMedian(plane: Float64Array, x: number, y: number, width: nu
 // source (a star). `sign` is +1 for a hot candidate, -1 for a cold one. Uses a robust local background
 // `bg` (median over the slightly larger radius `bgRadius` window, where a compact source is a minority so
 // the median is not pulled toward it) and requires both that the center exceeds the background by
-// `sigma * scale` in the candidate direction AND that NO immediate 8-neighbor is itself that far from the
-// background — a defect stands alone, a star's PSF elevates its neighbors. `skip` (the defect mask) is
-// excluded from the background and neighbor tests. Returns true only for a confirmed isolated defect.
-function isIsolatedDefect(plane: Float64Array, x: number, y: number, width: number, height: number, bgRadius: number, step: number, buf: Float64Array, skip: Uint8Array | undefined, scale: number, sigma: number, sign: number) {
+// `sigma * scale` in the candidate direction AND that NO immediate neighbor is itself that far from the
+// background — a defect stands alone, a star's PSF elevates its neighbors. The first neighbor loop checks
+// same-phase neighbors (spacing `step`); for Bayer CFA frames (`step > 1`), a second loop checks the raw
+// 8-neighbors (step=1) against a contiguous background because a resolved star's PSF spreads across ALL
+// adjacent CFA photosites, not just those of the same color phase. The contiguous background excludes the
+// center pixel so the star core does not bias its median. `buf` is sized for the step-spaced background
+// window; `rawBuf` is sized for the contiguous (step=1) background window and is only used when
+// `step > 1`. `skip` (the defect mask) is excluded from background and neighbor tests. Returns true only
+// for a confirmed isolated defect.
+function isIsolatedDefect(plane: Float64Array, x: number, y: number, width: number, height: number, bgRadius: number, step: number, buf: Float64Array, skip: Uint8Array | undefined, scale: number, sigma: number, sign: number, rawBuf?: Float64Array) {
 	const bg = neighborhoodMedian(plane, x, y, width, height, bgRadius, step, buf, skip)
 	const center = plane[y * width + x]
 	const threshold = sigma * scale
@@ -227,6 +233,38 @@ function isIsolatedDefect(plane: Float64Array, x: number, y: number, width: numb
 			if (skip !== undefined && skip[q] !== 0) continue
 			const nb = plane[q]
 			if (sign > 0 ? nb - bg > threshold : bg - nb > threshold) return false
+		}
+	}
+
+	// For Bayer CFA frames the same-phase neighbors are two pixels apart; a resolved star's PSF spills
+	// into the adjacent CFA photosites as well. Check the raw 8-neighbors (step=1) against a contiguous
+	// background so cross-phase PSF support is not missed.
+	if (step > 1 && rawBuf !== undefined) {
+		// Exclude the center pixel from the raw background so the star core does not bias the median;
+		// build a combined skip mask that merges any caller skip with the center exclusion.
+		let rawSkip: Uint8Array
+		if (skip !== undefined) {
+			rawSkip = new Uint8Array(skip)
+			rawSkip[centerIndex] = 1
+		} else {
+			rawSkip = new Uint8Array(plane.length)
+			rawSkip[centerIndex] = 1
+		}
+		const rawBg = neighborhoodMedian(plane, x, y, width, height, bgRadius, 1, rawBuf, rawSkip)
+		const rawThreshold = sigma * scale
+		for (let dy = -1; dy <= 1; dy++) {
+			const yy = y + dy
+			if (yy < 0 || yy >= height) continue
+			const row = yy * width
+			for (let dx = -1; dx <= 1; dx++) {
+				const xx = x + dx
+				if (xx < 0 || xx >= width) continue
+				const q = row + xx
+				if (q === centerIndex) continue
+				if (skip !== undefined && skip[q] !== 0) continue
+				const nb = plane[q]
+				if (sign > 0 ? nb - rawBg > rawThreshold : rawBg - nb > rawThreshold) return false
+			}
 		}
 	}
 
@@ -356,6 +394,9 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 	const gatherBuf = new Float64Array(n)
 	const window = new Float64Array(windowSize)
 	const bgWindow = new Float64Array(bgWindowSize)
+	// For Bayer CFA frames the isolation test must also check raw 8-neighbors against a contiguous
+	// (step=1) background — a star's PSF crosses all CFA phases, not just same-color ones.
+	const rawBgWindow = step > 1 ? new Float64Array(Math.min(2 * bgRadius + 1, width) * Math.min(2 * bgRadius + 1, height)) : undefined
 	const darkPlane = dark0 !== undefined ? new Float64Array(n) : undefined
 	// Per-pixel local median (the repair value) and high-pass residual, built once per channel for the
 	// noise-scale estimate and reused as the repair value so the median is computed only once per pixel.
@@ -423,8 +464,8 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 					haveM = true
 					// The window-median deviation is a cheap gate; a candidate is confirmed only when the
 					// isolation test (against the robust background) rules out a resolved source such as a star.
-					if (hotSigma > 0 && center > m + hotSigma * gScale && isIsolatedDefect(plane, x, y, width, height, bgRadius, step, bgWindow, defectMask, gScale, hotSigma, 1)) cause = 3
-					else if (coldSigma > 0 && center < m - coldSigma * gScale && isIsolatedDefect(plane, x, y, width, height, bgRadius, step, bgWindow, defectMask, gScale, coldSigma, -1)) cause = 4
+					if (hotSigma > 0 && center > m + hotSigma * gScale && isIsolatedDefect(plane, x, y, width, height, bgRadius, step, bgWindow, defectMask, gScale, hotSigma, 1, rawBgWindow)) cause = 3
+					else if (coldSigma > 0 && center < m - coldSigma * gScale && isIsolatedDefect(plane, x, y, width, height, bgRadius, step, bgWindow, defectMask, gScale, coldSigma, -1, rawBgWindow)) cause = 4
 				}
 
 				if (cause === 0) continue
