@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { stf } from '../../../src/imaging/processing/stf'
-import { expectImageValues, makeImage } from './processing.util'
+import { expectImageValues, makeImage } from './util'
 
 test('stf applies the transfer function only to the selected RGB channel', () => {
 	const image = makeImage(1, 1, 3, [0.2, 0.4, 0.8])

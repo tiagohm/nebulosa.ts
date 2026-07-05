@@ -1,6 +1,6 @@
 import { test } from 'bun:test'
 import { scnr } from '../../../src/imaging/processing/scnr'
-import { expectImageValues, makeImage } from './processing.util'
+import { expectImageValues, makeImage } from './util'
 
 test('scnr reduces the selected chroma channel while preserving the others', () => {
 	const image = makeImage(1, 1, 3, [0.2, 0.9, 0.4])

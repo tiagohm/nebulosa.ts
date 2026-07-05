@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { multiscaleMedianTransform } from '../../../src/imaging/processing/mmt'
-import { exactMedianFilter, expectImageValues, makeImage } from './processing.util'
+import { exactMedianFilter, expectImageValues, makeImage } from './util'
 
 test('multiscaleMedianTransform reconstructs the original image with default settings', () => {
 	const image = makeImage(2, 2, 3, [0.1, 0.2, 0.3, 0.9, 0.8, 0.7, 0.4, 0.5, 0.6, 0.2, 0.3, 0.4])

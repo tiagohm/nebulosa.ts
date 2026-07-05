@@ -1,7 +1,29 @@
-import { clamp } from '../../math/numerical/math'
+import { clamp, type NumberArray } from '../../math/numerical/math'
 import { akimaSplineLUT, catmullRomSplineLUT, cubicHermiteSplineLUT, naturalCubicSplineLUT } from '../../math/numerical/spline'
 import { truncatePixel } from '../model/image'
-import { type CurvesTransformationCurve, type CurvesTransformationInterpolation, type CurvesTransformationOptions, DEFAULT_CURVES_TRANSFORMATION_OPTIONS, GRAYSCALES, type Image, type ImageChannelOrGray } from '../model/types'
+import { GRAYSCALES, type Image, type ImageChannelOrGray } from '../model/types'
+
+// Spline interpolation used by the curves transformation.
+export type CurvesTransformationInterpolation = 'cubicHermite' | 'akima' | 'catmullRom' | 'naturalCubic'
+
+// One channel's control points for the curves transformation.
+export interface CurvesTransformationCurve {
+	readonly channel: ImageChannelOrGray
+	// Input control-point values (ascending).
+	readonly x: Readonly<NumberArray>
+	// Output values at each control point.
+	readonly y: Readonly<NumberArray>
+}
+
+// Options for the curves transformation.
+export interface CurvesTransformationOptions {
+	// Bit depth of the input/output values.
+	readonly bits: number
+	// Spline interpolation between control points.
+	readonly interpolation: CurvesTransformationInterpolation
+	// Per-channel curves; undefined entries leave that channel unchanged.
+	readonly curves: readonly (CurvesTransformationCurve | undefined)[]
+}
 
 // A user curve resolved to typed arrays with endpoints injected and an identity flag.
 interface ResolvedCurvesTransformationCurve {
@@ -10,6 +32,13 @@ interface ResolvedCurvesTransformationCurve {
 	readonly y: Float64Array
 	// True when the curve maps every value to itself (can be skipped).
 	readonly identity: boolean
+}
+
+// Default curves transformation (16-bit, Akima spline, no-op curve).
+export const DEFAULT_CURVES_TRANSFORMATION_OPTIONS: Readonly<CurvesTransformationOptions> = {
+	bits: 16,
+	interpolation: 'akima',
+	curves: [undefined],
 }
 
 // Control points of the identity mapping (input equals output at 0 and 1).

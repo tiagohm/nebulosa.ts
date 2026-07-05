@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test'
 import { approximateArcsinhStretchParameters, arcsinhStretch } from '../../../src/imaging/processing/arcsinh'
 import { clone } from '../../../src/imaging/processing/arithmetic'
 import { stf } from '../../../src/imaging/processing/stf'
-import { makeImage, meanAbsoluteDifference } from './processing.util'
+import { makeImage, meanAbsoluteDifference } from './util'
 
 test('approximateArcsinhStretchParameters returns identity for the default STF', () => {
 	const parameters = approximateArcsinhStretchParameters()

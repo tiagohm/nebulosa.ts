@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { calibrate } from '../../../src/imaging/processing/calibration'
-import { expectImageValues, makeImage } from './processing.util'
+import { expectImageValues, makeImage } from './util'
 
 test('calibrate subtracts dark current and normalizes by a bias-corrected flat', () => {
 	const light = makeImage(2, 1, 1, [0.6, 0.4])

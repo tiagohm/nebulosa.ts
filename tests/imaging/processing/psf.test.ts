@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { psf } from '../../../src/imaging/processing/psf'
-import { expectImageValues, makeImage, pixelOffset } from './processing.util'
+import { expectImageValues, makeImage, pixelOffset } from './util'
 
 test('psf removes a flat interior while leaving the untouched border unchanged', () => {
 	const image = makeImage(11, 11, 1, new Float32Array(121).fill(1))

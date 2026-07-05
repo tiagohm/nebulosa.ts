@@ -1,5 +1,34 @@
 import { clamp } from '../../math/numerical/math'
-import { type ApproximateArcsinhStretchParameters, type ArcsinhStretchOptions, DEFAULT_ARCSINH_STRETCH_OPTIONS, GRAYSCALES, type Image } from '../model/types'
+import { BT709_GRAYSCALE, GRAYSCALES, type GrayscaleAlgorithm, type Image } from '../model/types'
+
+// Fitted parameters approximating an arcsinh stretch.
+export interface ApproximateArcsinhStretchParameters {
+	readonly stretchFactor: number
+	readonly blackPoint: number
+}
+
+// Options for the arcsinh stretch.
+export interface ArcsinhStretchOptions {
+	// Strength of the arcsinh stretch.
+	stretchFactor: number
+	// Black point clipped before stretching, 0..1.
+	blackPoint: number
+	// Preserve highlight color ratios while stretching.
+	protectHighlights: boolean
+	// Stretch luminance in an RGB working space rather than per channel.
+	useRgbWorkingSpace: boolean
+	// Grayscale weighting defining the RGB working space.
+	rgbWorkingSpace: GrayscaleAlgorithm
+}
+
+// Default arcsinh stretch options (no stretch, no highlight protection).
+export const DEFAULT_ARCSINH_STRETCH_OPTIONS: Readonly<ArcsinhStretchOptions> = {
+	stretchFactor: 1,
+	blackPoint: 0,
+	protectHighlights: false,
+	useRgbWorkingSpace: false,
+	rgbWorkingSpace: BT709_GRAYSCALE,
+}
 
 // Solves beta/asinh(beta)=stretchFactor for the PixInsight-compatible softening factor.
 function arcsinhStretchBeta(stretchFactor: number) {

@@ -17,18 +17,6 @@ export type ImageFormat = 'jpeg' | 'fits' | 'xisf'
 // Color filter array (Bayer) pixel pattern.
 export type CfaPattern = 'RGGB' | 'BGGR' | 'GBRG' | 'GRBG' | 'GRGB' | 'GBGR' | 'RGBG' | 'BGRG'
 
-// Highlight/green-cast protection method for the SCNR (subtractive chromatic noise reduction) operation.
-export type SCNRProtectionMethod = 'MAXIMUM_MASK' | 'ADDITIVE_MASK' | 'AVERAGE_NEUTRAL' | 'MAXIMUM_NEUTRAL' | 'MINIMUM_NEUTRAL'
-
-// FFT frequency-domain filter direction.
-export type FFTFilterType = 'lowPass' | 'highPass'
-
-// SCNR kernel: given the three channel values and an amount, returns the corrected middle channel.
-export type SCNRAlgorithm = (a: number, b: number, c: number, amount: number) => number
-
-// Strategy for remapping the neutralized background level.
-export type BackgroundNeutralizationMode = 'targetBackground' | 'rescale' | 'rescaleAsNeeded' | 'truncate'
-
 // Per-channel weights summing a color pixel to a single luminance value.
 export type Grayscale = Readonly<Record<Lowercase<ImageChannel>, number>>
 
@@ -46,9 +34,6 @@ export type SigmaClipCenterMethod = 'median' | 'mean'
 
 // Dispersion estimator for sigma clipping (standard deviation or median absolute deviation).
 export type SigmaClipDispersionMethod = 'std' | 'mad'
-
-// Spline interpolation used by the curves transformation.
-export type CurvesTransformationInterpolation = 'cubicHermite' | 'akima' | 'catmullRom' | 'naturalCubic'
 
 // Backing typed array for raw pixel data (single or double precision).
 export type ImageRawType = Float64Array | Float32Array
@@ -88,50 +73,6 @@ export interface ImageMetadata extends Readonly<Size> {
 	readonly bayer: CfaPattern | undefined
 }
 
-// A convolution kernel and its normalization divisor.
-export interface ConvolutionKernel extends Readonly<Size> {
-	// Row-major kernel weights, width*height long.
-	readonly kernel: Readonly<NumberArray>
-	// Divisor applied to the weighted sum (kernel normalization).
-	readonly divisor: number
-}
-
-// Common convolution behavior options.
-export interface ConvolutionOptions {
-	// Recompute the divisor at edges from the in-bounds kernel weights instead of clamping.
-	dynamicDivisorForEdges: boolean
-	// Normalize the kernel so its weights sum to one.
-	normalize: boolean
-}
-
-// Options for a Gaussian blur convolution.
-export interface GaussianBlurConvolutionOptions extends ConvolutionOptions {
-	// Standard deviation of the Gaussian, in pixels.
-	sigma: number
-	// Kernel side length, in pixels.
-	size: number
-}
-
-// Per-detail-layer options of the multiscale median transform.
-export interface MultiscaleMedianTransformLayerOptions {
-	// Coefficient threshold below which detail is suppressed.
-	readonly threshold: number
-	// Gain applied to the layer's detail coefficients.
-	readonly amount: number
-	// Bias added to the layer's detail coefficients.
-	readonly bias: number
-}
-
-// Options for the multiscale median transform (wavelet-like detail manipulation).
-export interface MultiscaleMedianTransformOptions {
-	// Number of decomposition layers.
-	readonly layers: number
-	// Per-layer overrides, indexed by detail layer.
-	readonly detailLayers: readonly Partial<MultiscaleMedianTransformLayerOptions>[]
-	// Gain applied to the residual (smoothest) layer.
-	readonly residualGain: number
-}
-
 // Options controlling histogram computation.
 export interface HistogramOptions {
 	// Channel or grayscale weighting to sample.
@@ -144,64 +85,6 @@ export interface HistogramOptions {
 	bits: NumberArray | number
 	// Optional per-pixel sigma-clip mask excluding rejected pixels.
 	sigmaClip?: Int8Array | Uint8Array
-}
-
-// One channel's control points for the curves transformation.
-export interface CurvesTransformationCurve {
-	readonly channel: ImageChannelOrGray
-	// Input control-point values (ascending).
-	readonly x: Readonly<NumberArray>
-	// Output values at each control point.
-	readonly y: Readonly<NumberArray>
-}
-
-// Options for the curves transformation.
-export interface CurvesTransformationOptions {
-	// Bit depth of the input/output values.
-	readonly bits: number
-	// Spline interpolation between control points.
-	readonly interpolation: CurvesTransformationInterpolation
-	// Per-channel curves; undefined entries leave that channel unchanged.
-	readonly curves: readonly (CurvesTransformationCurve | undefined)[]
-}
-
-// Options for applying a screen transfer function (display stretch).
-export interface ApplyScreenTransferFunctionOptions {
-	channel?: ImageChannelOrGray
-	// Bit depth of the data.
-	bits: number
-}
-
-// Options for the arcsinh stretch.
-export interface ArcsinhStretchOptions {
-	// Strength of the arcsinh stretch.
-	stretchFactor: number
-	// Black point clipped before stretching, 0..1.
-	blackPoint: number
-	// Preserve highlight color ratios while stretching.
-	protectHighlights: boolean
-	// Stretch luminance in an RGB working space rather than per channel.
-	useRgbWorkingSpace: boolean
-	// Grayscale weighting defining the RGB working space.
-	rgbWorkingSpace: GrayscaleAlgorithm
-}
-
-// Fitted parameters approximating an arcsinh stretch.
-export interface ApproximateArcsinhStretchParameters {
-	readonly stretchFactor: number
-	readonly blackPoint: number
-}
-
-// Options for background neutralization (removing a color cast from the sky background).
-export interface BackgroundNeutralizationOptions {
-	// Lower reference level (background floor), 0..1.
-	lowerLimit: number
-	// Upper reference level, 0..1.
-	upperLimit: number
-	// Desired background level after neutralization, 0..1.
-	targetBackground: number
-	// How the neutralized values are remapped.
-	mode: BackgroundNeutralizationMode
 }
 
 // Options for the adaptive display function (auto-stretch), extending histogram options.
@@ -267,33 +150,6 @@ export const DEFAULT_WRITE_IMAGE_TO_FORMAT_OPTIONS = {
 	},
 } as const
 
-// Default convolution options.
-export const DEFAULT_CONVOLUTION_OPTIONS: Readonly<ConvolutionOptions> = {
-	dynamicDivisorForEdges: true,
-	normalize: true,
-}
-
-// Default Gaussian blur (sigma 1.4, 5x5 kernel).
-export const DEFAULT_GAUSSIAN_BLUR_CONVOLUTION_OPTIONS: Readonly<GaussianBlurConvolutionOptions> = {
-	...DEFAULT_CONVOLUTION_OPTIONS,
-	sigma: 1.4,
-	size: 5,
-}
-
-// Default per-layer multiscale median transform options (no thresholding, unit gain).
-export const DEFAULT_MMT_LAYER_OPTIONS: Readonly<MultiscaleMedianTransformLayerOptions> = {
-	threshold: 0,
-	amount: 1,
-	bias: 0,
-}
-
-// Default multiscale median transform options (3 layers, unit residual gain).
-export const DEFAULT_MMT_OPTIONS: Readonly<MultiscaleMedianTransformOptions> = {
-	layers: 3,
-	detailLayers: [],
-	residualGain: 1,
-}
-
 // Identity histogram pixel transform.
 export const DEFAULT_HISTOGRAM_PIXEL_TRANSFORM: HistogramPixelTransform = (p) => p
 
@@ -301,36 +157,6 @@ export const DEFAULT_HISTOGRAM_PIXEL_TRANSFORM: HistogramPixelTransform = (p) =>
 export const DEFAULT_HISTOGRAM_OPTIONS: Readonly<HistogramOptions> = {
 	transform: DEFAULT_HISTOGRAM_PIXEL_TRANSFORM,
 	bits: 16,
-}
-
-// Default curves transformation (16-bit, Akima spline, no-op curve).
-export const DEFAULT_CURVES_TRANSFORMATION_OPTIONS: Readonly<CurvesTransformationOptions> = {
-	bits: 16,
-	interpolation: 'akima',
-	curves: [undefined],
-}
-
-// Default screen transfer function options (grayscale, 16-bit).
-export const DEFAULT_APPLY_SCREEN_TRANSFER_FUNCTION_OPTIONS: Readonly<ApplyScreenTransferFunctionOptions> = {
-	channel: 'GRAY',
-	bits: 16,
-}
-
-// Default arcsinh stretch options (no stretch, no highlight protection).
-export const DEFAULT_ARCSINH_STRETCH_OPTIONS: Readonly<ArcsinhStretchOptions> = {
-	stretchFactor: 1,
-	blackPoint: 0,
-	protectHighlights: false,
-	useRgbWorkingSpace: false,
-	rgbWorkingSpace: BT709_GRAYSCALE,
-}
-
-// Default background neutralization options.
-export const DEFAULT_BACKGROUND_NEUTRALIZATION_OPTIONS: Readonly<BackgroundNeutralizationOptions> = {
-	lowerLimit: 0,
-	upperLimit: 1,
-	targetBackground: 0.05,
-	mode: 'rescaleAsNeeded',
 }
 
 // Default adaptive display function options.

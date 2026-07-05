@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { brightness, contrast, gamma, linear, saturation } from '../../../src/imaging/processing/tone'
-import { expectImageValues, makeImage } from './processing.util'
+import { expectImageValues, makeImage } from './util'
 
 test('brightness scales pixel values and clamps them to one', () => {
 	const image = makeImage(1, 3, 1, [0.2, 0.5, 0.8])

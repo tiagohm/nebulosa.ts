@@ -1,6 +1,44 @@
 import { TAU } from '../../core/constants'
+import type { Size } from '../../math/numerical/geometry'
 import type { NumberArray } from '../../math/numerical/math'
-import { type ConvolutionKernel, type ConvolutionOptions, DEFAULT_CONVOLUTION_OPTIONS, DEFAULT_GAUSSIAN_BLUR_CONVOLUTION_OPTIONS, type GaussianBlurConvolutionOptions, type Image, type ImageRawType } from '../model/types'
+import type { Image, ImageRawType } from '../model/types'
+
+// A convolution kernel and its normalization divisor.
+export interface ConvolutionKernel extends Readonly<Size> {
+	// Row-major kernel weights, width*height long.
+	readonly kernel: Readonly<NumberArray>
+	// Divisor applied to the weighted sum (kernel normalization).
+	readonly divisor: number
+}
+
+// Common convolution behavior options.
+export interface ConvolutionOptions {
+	// Recompute the divisor at edges from the in-bounds kernel weights instead of clamping.
+	dynamicDivisorForEdges: boolean
+	// Normalize the kernel so its weights sum to one.
+	normalize: boolean
+}
+
+// Options for a Gaussian blur convolution.
+export interface GaussianBlurConvolutionOptions extends ConvolutionOptions {
+	// Standard deviation of the Gaussian, in pixels.
+	sigma: number
+	// Kernel side length, in pixels.
+	size: number
+}
+
+// Default convolution options.
+export const DEFAULT_CONVOLUTION_OPTIONS: Readonly<ConvolutionOptions> = {
+	dynamicDivisorForEdges: true,
+	normalize: true,
+}
+
+// Default Gaussian blur (sigma 1.4, 5x5 kernel).
+export const DEFAULT_GAUSSIAN_BLUR_CONVOLUTION_OPTIONS: Readonly<GaussianBlurConvolutionOptions> = {
+	...DEFAULT_CONVOLUTION_OPTIONS,
+	sigma: 1.4,
+	size: 5,
+}
 
 // Builds a convolution kernel descriptor and infers its divisor when omitted.
 export function convolutionKernel(kernel: Readonly<NumberArray>, width: number, height: number = width, divisor?: number): ConvolutionKernel {

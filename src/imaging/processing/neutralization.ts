@@ -1,6 +1,29 @@
 import { medianOf } from '../../core/util'
 import { clamp } from '../../math/numerical/math'
-import { type BackgroundNeutralizationOptions, DEFAULT_BACKGROUND_NEUTRALIZATION_OPTIONS, type Image, type ImageRawType } from '../model/types'
+import type { Image, ImageRawType } from '../model/types'
+
+// Strategy for remapping the neutralized background level.
+export type BackgroundNeutralizationMode = 'targetBackground' | 'rescale' | 'rescaleAsNeeded' | 'truncate'
+
+// Options for background neutralization (removing a color cast from the sky background).
+export interface BackgroundNeutralizationOptions {
+	// Lower reference level (background floor), 0..1.
+	lowerLimit: number
+	// Upper reference level, 0..1.
+	upperLimit: number
+	// Desired background level after neutralization, 0..1.
+	targetBackground: number
+	// How the neutralized values are remapped.
+	mode: BackgroundNeutralizationMode
+}
+
+// Default background neutralization options.
+export const DEFAULT_BACKGROUND_NEUTRALIZATION_OPTIONS: Readonly<BackgroundNeutralizationOptions> = {
+	lowerLimit: 0,
+	upperLimit: 1,
+	targetBackground: 0.05,
+	mode: 'rescaleAsNeeded',
+}
 
 // Computes the median of all significant reference samples for one RGB channel.
 function backgroundNeutralizationMedian(raw: ImageRawType, lowerLimit: number, upperLimit: number, channel: number, samples: Float64Array, tolerance: number) {

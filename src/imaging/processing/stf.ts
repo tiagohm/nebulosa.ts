@@ -1,5 +1,18 @@
 import { truncatePixel } from '../model/image'
-import { type ApplyScreenTransferFunctionOptions, channelIndex, DEFAULT_APPLY_SCREEN_TRANSFER_FUNCTION_OPTIONS, type Image } from '../model/types'
+import { channelIndex, type Image, type ImageChannelOrGray } from '../model/types'
+
+// Options for applying a screen transfer function (display stretch).
+export interface ApplyScreenTransferFunctionOptions {
+	channel?: ImageChannelOrGray
+	// Bit depth of the data.
+	bits: number
+}
+
+// Default screen transfer function options (grayscale, 16-bit).
+export const DEFAULT_APPLY_SCREEN_TRANSFER_FUNCTION_OPTIONS: Readonly<ApplyScreenTransferFunctionOptions> = {
+	channel: 'GRAY',
+	bits: 16,
+}
 
 // Apply Screen Transfer Function to image.
 // https://pixinsight.com/doc/docs/XISF-1.0-spec/XISF-1.0-spec.html#__XISF_Data_Objects_:_XISF_Image_:_Display_Function__

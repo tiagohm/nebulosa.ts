@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { backgroundNeutralization } from '../../../src/imaging/processing/neutralization'
-import { expectImageValues, makeImage } from './processing.util'
+import { expectImageValues, makeImage } from './util'
 
 test('backgroundNeutralization uses a lower-exclusive and upper-inclusive significance interval', () => {
 	const image = makeImage(2, 1, 3, [0.1, 0.2, 0.3, 0.5, 0.6, 0.7])

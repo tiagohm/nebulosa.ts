@@ -1,6 +1,9 @@
 import { TAU } from '../../core/constants'
 import { clamp } from '../../math/numerical/math'
-import type { FFTFilterType, Image } from '../model/types'
+import type { Image } from '../model/types'
+
+// FFT frequency-domain filter direction.
+export type FFTFilterType = 'lowPass' | 'highPass'
 
 // Precomputed radix-2 FFT plan for a given transform length.
 interface FFTPlan {

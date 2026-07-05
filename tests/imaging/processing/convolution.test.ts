@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import { clone } from '../../../src/imaging/processing/arithmetic'
 import { blur, convolution, convolutionKernel, edges, emboss, gaussianBlur, mean, sharpen } from '../../../src/imaging/processing/convolution'
-import { expectImageValues, makeImage, pixelOffset } from './processing.util'
+import { expectImageValues, makeImage, pixelOffset } from './util'
 
 test('convolutionKernel infers the divisor and validates the kernel size', () => {
 	expect(convolutionKernel(new Int8Array([1, 2, 3, 4]), 2).divisor).toBe(10)

@@ -1,6 +1,6 @@
 import { medianOf, STANDARD_DEVIATION_SCALE } from '../../core/util'
 import { clamp } from '../../math/numerical/math'
-import { DEFAULT_MMT_LAYER_OPTIONS, DEFAULT_MMT_OPTIONS, type Image, type ImageMetadata, type ImageRawType, type MultiscaleMedianTransformOptions } from '../model/types'
+import type { Image, ImageMetadata, ImageRawType } from '../model/types'
 
 // Quantization bit depth of the sliding-median histogram used by the multiscale median transform.
 const MMT_MEDIAN_HISTOGRAM_BITS = 14
@@ -14,6 +14,40 @@ const MMT_MEDIAN_HISTOGRAM_GROUP_BITS = 6
 const MMT_MEDIAN_HISTOGRAM_GROUP_SIZE = 1 << MMT_MEDIAN_HISTOGRAM_GROUP_BITS
 // Number of coarse groups.
 const MMT_MEDIAN_HISTOGRAM_GROUP_COUNT = MMT_MEDIAN_HISTOGRAM_SIZE >> MMT_MEDIAN_HISTOGRAM_GROUP_BITS
+
+// Per-detail-layer options of the multiscale median transform.
+export interface MultiscaleMedianTransformLayerOptions {
+	// Coefficient threshold below which detail is suppressed.
+	readonly threshold: number
+	// Gain applied to the layer's detail coefficients.
+	readonly amount: number
+	// Bias added to the layer's detail coefficients.
+	readonly bias: number
+}
+
+// Options for the multiscale median transform (wavelet-like detail manipulation).
+export interface MultiscaleMedianTransformOptions {
+	// Number of decomposition layers.
+	readonly layers: number
+	// Per-layer overrides, indexed by detail layer.
+	readonly detailLayers: readonly Partial<MultiscaleMedianTransformLayerOptions>[]
+	// Gain applied to the residual (smoothest) layer.
+	readonly residualGain: number
+}
+
+// Default per-layer multiscale median transform options (no thresholding, unit gain).
+export const DEFAULT_MMT_LAYER_OPTIONS: Readonly<MultiscaleMedianTransformLayerOptions> = {
+	threshold: 0,
+	amount: 1,
+	bias: 0,
+}
+
+// Default multiscale median transform options (3 layers, unit residual gain).
+export const DEFAULT_MMT_OPTIONS: Readonly<MultiscaleMedianTransformOptions> = {
+	layers: 3,
+	detailLayers: [],
+	residualGain: 1,
+}
 
 // Tracks the quantization range for one image channel.
 function multiscaleMedianHistogramRange(raw: ImageRawType, channels: number, channel: number) {

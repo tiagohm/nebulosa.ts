@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { curvesTransformation } from '../../../src/imaging/processing/curves'
-import { expectImageValues, makeImage } from './processing.util'
+import { expectImageValues, makeImage } from './util'
 
 test('curvesTransformation is a no-op by default', () => {
 	const image = makeImage(2, 1, 3, [0.1, 0.3, 0.5, 0.7, 0.2, 0.9])

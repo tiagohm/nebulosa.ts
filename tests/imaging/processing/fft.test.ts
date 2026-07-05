@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import { clone } from '../../../src/imaging/processing/arithmetic'
 import { fft, FFTWorkspace } from '../../../src/imaging/processing/fft'
-import { imageMean, makeImage, meanAbsoluteDifference, meanHorizontalDelta, halfMaximumRadius } from './processing.util'
+import { imageMean, makeImage, meanAbsoluteDifference, meanHorizontalDelta, halfMaximumRadius } from './util'
 
 test('fft keeps the input unchanged when weight is zero', () => {
 	const image = makeImage(5, 3, 1, [0.1, 0.2, 0.3, 0.4, 0.5, 0.15, 0.25, 0.35, 0.45, 0.55, 0.12, 0.22, 0.32, 0.42, 0.52])

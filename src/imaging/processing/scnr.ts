@@ -1,4 +1,10 @@
-import type { Image, ImageChannel, SCNRAlgorithm, SCNRProtectionMethod } from '../model/types'
+import type { Image, ImageChannel } from '../model/types'
+
+// Highlight/green-cast protection method for the SCNR (subtractive chromatic noise reduction) operation.
+export type SCNRProtectionMethod = 'MAXIMUM_MASK' | 'ADDITIVE_MASK' | 'AVERAGE_NEUTRAL' | 'MAXIMUM_NEUTRAL' | 'MINIMUM_NEUTRAL'
+
+// SCNR kernel: given the three channel values and an amount, returns the corrected middle channel.
+export type SCNRAlgorithm = (a: number, b: number, c: number, amount: number) => number
 
 // Computes the maximum-mask SCNR attenuation for one protected channel sample.
 export function scnrMaximumMask(a: number, b: number, c: number, amount: number) {

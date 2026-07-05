@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test'
 import type { Image } from '../../../src/imaging/model/types'
 import { bayer, debayer } from '../../../src/imaging/processing/debayer'
 import { Bitpix } from '../../../src/io/formats/fits/fits'
-import { expectImageValues, makeImage } from './processing.util'
+import { expectImageValues, makeImage } from './util'
 
 test('bayer converts RGB pixels into a mono CFA frame', () => {
 	const image = makeImage(2, 2, 3, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12])
