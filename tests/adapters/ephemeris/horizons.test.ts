@@ -9,8 +9,9 @@ import type { CsvRow } from '../../../src/io/csv'
 import { bufferSource } from '../../../src/io/io'
 import { deg } from '../../../src/math/units/angle'
 import { meter } from '../../../src/math/units/distance'
+import { isNetworkTestSkipped } from '../../util'
 
-const SKIP = Bun.env.RUN_SKIPPED_TESTS !== 'true'
+const SKIP = isNetworkTestSkipped()
 
 const START_TIME = temporalFromDate(2025, 1, 29, 13, 5, 0, 0)
 const END_TIME = temporalFromDate(2025, 1, 29, 14, 5, 0, 0)

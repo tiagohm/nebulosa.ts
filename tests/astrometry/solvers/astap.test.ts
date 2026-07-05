@@ -3,10 +3,11 @@ import { dirname, join } from 'path'
 import { astapDetectStars, astapPlateSolve } from '../../../src/astrometry/solvers/astap'
 import { deg, hour, toArcmin, toArcsec, toDeg, toHour } from '../../../src/math/units/angle'
 import { downloadPerTag } from '../../download'
+import { isBinaryTestSkipped } from '../../util'
 
 await downloadPerTag('astap')
 
-const SKIP = Bun.env.RUN_SKIPPED_TESTS !== 'true'
+const SKIP = isBinaryTestSkipped()
 
 test.skipIf(SKIP)('detect stars', async () => {
 	const stars = await astapDetectStars(join(dirname(__dirname), '..', '..', 'data', 'apod4.jpg'))

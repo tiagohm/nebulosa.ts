@@ -7,8 +7,9 @@ import type { PropertyState } from '../../../src/devices/indi/types'
 import { readImageFromBuffer } from '../../../src/imaging/model/image'
 import type { ImageRawType } from '../../../src/imaging/model/types'
 import { deg, formatDEC, formatRA, hour, normalizePI } from '../../../src/math/units/angle'
+import { isTimeConsumingTestSkipped } from '../../util'
 
-const SKIP = Bun.env.RUN_SKIPPED_TESTS !== 'true'
+const SKIP = isTimeConsumingTestSkipped()
 
 class CameraFrameReceiver implements DeviceHandler<Camera> {
 	readonly #frames: Buffer<ArrayBuffer>[] = []

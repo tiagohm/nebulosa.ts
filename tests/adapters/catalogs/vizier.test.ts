@@ -2,8 +2,10 @@ import { describe, expect, test } from 'bun:test'
 import { VizierGaiaCatalog, vizierQuery } from '../../../src/adapters/catalogs/vizier'
 import { arcmin, formatDEC, formatRA, toDeg, toMas } from '../../../src/math/units/angle'
 import { toKilometerPerSecond } from '../../../src/math/units/velocity'
+import { isNetworkTestSkipped } from '../../util'
 
-const SKIP = Bun.env.RUN_SKIPPED_TESTS !== 'true'
+const SKIP = isNetworkTestSkipped()
+
 const VIZIER_GAIA_HEADER = 'Source\tRAJ2000\tDEJ2000\tGmag\tpmRA\tpmDE\tRV'
 
 async function withMockVizierGaiaCatalog<T>(rows: readonly string[], callback: (catalog: VizierGaiaCatalog, queries: string[]) => Promise<T> | T) {

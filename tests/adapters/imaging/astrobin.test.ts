@@ -1,8 +1,9 @@
 import { expect, test } from 'bun:test'
 import { camera, cameras, sensor, sensors, telescope, telescopes } from '../../../src/adapters/imaging/astrobin'
 import { NumberComparator } from '../../../src/core/util'
+import { isNetworkTestSkipped } from '../../util'
 
-const SKIP = Bun.env.RUN_SKIPPED_TESTS !== 'true'
+const SKIP = isNetworkTestSkipped()
 
 test.skipIf(SKIP)('sensor', async () => {
 	const data = (await sensors(1))!

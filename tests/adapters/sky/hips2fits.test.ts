@@ -3,8 +3,9 @@ import { HIPS2FITS_ALTERNATIVE_URL, type Hips2FitsOptions, hips2Fits, hipsSurvey
 import { readFits } from '../../../src/io/formats/fits/fits'
 import { bufferSource } from '../../../src/io/io'
 import { deg } from '../../../src/math/units/angle'
+import { isNetworkTestSkipped } from '../../util'
 
-const SKIP = Bun.env.RUN_SKIPPED_TESTS !== 'true'
+const SKIP = isNetworkTestSkipped()
 
 test.skipIf(SKIP)('fits', async () => {
 	const options: Hips2FitsOptions = { width: 400, height: 400, baseUrl: HIPS2FITS_ALTERNATIVE_URL }

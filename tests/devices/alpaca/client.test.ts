@@ -12,6 +12,7 @@ import { roundToNthDecimal } from '../../../src/math/numerical/math'
 import { deg, hour } from '../../../src/math/units/angle'
 import { downloadPerTag } from '../../download'
 import { saveImageAndCompareHash } from '../../imaging/util'
+import { isNonWindowsSkipped } from '../../util'
 
 await downloadPerTag('alpaca.client')
 
@@ -153,15 +154,14 @@ test('client derives connection metadata from the configured URL', () => {
 
 const TEST_OPTIONS: TestOptions = { retry: 5, timeout: 60000 }
 
-// ASCOM Omni-Simulators
-const ALPACA_CLIENT_ENABLED = process.platform === 'win32' && process.env.ALPACA === 'true'
+const SKIP = isNonWindowsSkipped() || process.env.ALPACA !== 'true'
 
-describe.skipIf(!ALPACA_CLIENT_ENABLED)('client', async () => {
+describe.skipIf(SKIP)('client', async () => {
 	const client = new AlpacaClient('http://localhost:32323', { handler }, deviceProvider)
 
 	// Avoid the network start() when the suite is skipped; otherwise it logs a
 	// ConnectionRefused even though no tests run.
-	if (!ALPACA_CLIENT_ENABLED || !(await client.start())) return
+	if (!SKIP || !(await client.start())) return
 
 	test(
 		'camera',

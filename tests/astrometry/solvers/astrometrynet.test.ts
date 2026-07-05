@@ -5,8 +5,11 @@ import { RA_TAN_SIP, tanUnproject } from '../../../src/astrometry/wcs/fits.wcs'
 import { readFits } from '../../../src/io/formats/fits/fits'
 import { bufferSource } from '../../../src/io/io'
 import { toArcsec, toDeg, toHour } from '../../../src/math/units/angle'
+import { isLinuxSkipped, isNetworkTestSkipped } from '../../util'
 
-describe.skip('nova', () => {
+const SKIP = isNetworkTestSkipped()
+
+describe.skipIf(SKIP)('nova', () => {
 	test('login', async () => {
 		const session = await login()
 
@@ -91,7 +94,7 @@ describe.skip('nova', () => {
 	}, 300000)
 })
 
-test.skip('local', async () => {
+test.skipIf(isLinuxSkipped())('local', async () => {
 	const solution = await localAstrometryNetPlateSolve(join(dirname(__dirname), 'data', 'apod4.jpg'), {
 		executable: 'solve-field',
 	})

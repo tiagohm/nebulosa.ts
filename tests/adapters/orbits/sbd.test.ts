@@ -3,8 +3,9 @@ import { closeApproaches, identify, search } from '../../../src/adapters/orbits/
 import { temporalFromDate } from '../../../src/astronomy/time/temporal'
 import { deg, parseAngle } from '../../../src/math/units/angle'
 import { kilometer } from '../../../src/math/units/distance'
+import { isNetworkTestSkipped } from '../../util'
 
-const SKIP = Bun.env.RUN_SKIPPED_TESTS !== 'true'
+const SKIP = isNetworkTestSkipped()
 
 describe.skipIf(SKIP)('search', () => {
 	test('single record', async () => {

@@ -1,0 +1,31 @@
+export function isNetworkTestSkipped() {
+	return Bun.env.RUN_NETWORK_TEST !== 'true'
+}
+
+export function isBinaryTestSkipped() {
+	return Bun.env.RUN_BINARY_TEST !== 'true'
+}
+
+export function isTimeConsumingTestSkipped() {
+	return Bun.env.RUN_TIME_CONSUMING_TEST !== 'true'
+}
+
+export function isPlatformDependentTestSkipped() {
+	return Bun.env.RUN_PLATFORM_DEPENDENT_TEST !== 'true'
+}
+
+export function isLinuxSkipped() {
+	return isPlatformDependentTestSkipped() || process.platform === 'linux'
+}
+
+export function isWindowsSkipped() {
+	return isPlatformDependentTestSkipped() || process.platform === 'win32'
+}
+
+export function isNonLinuxSkipped() {
+	return isPlatformDependentTestSkipped() || process.platform !== 'linux'
+}
+
+export function isNonWindowsSkipped() {
+	return isPlatformDependentTestSkipped() || process.platform !== 'win32'
+}
