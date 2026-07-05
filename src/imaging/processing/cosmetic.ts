@@ -19,6 +19,11 @@ import type { Image } from '../model/types'
 // and the `protect` mask. The repair value is the neighborhood median computed from the ORIGINAL
 // (pre-correction) plane, so corrections never feed back into later ones. Operates in place on the [0, 1]
 // raw buffer.
+//
+// For a Bayer CFA mosaic (single channel with `metadata.bayer` set), adjacent photosites carry different
+// colors, so neighborhoods and robust statistics are computed per color phase (2-pixel stride, 4 phases)
+// to avoid flagging a valid uniform-color mosaic as a field of hot pixels. Non-mosaic frames use the full
+// contiguous neighborhood (1 phase).
 
 // An explicit list of known-bad geometry to always repair, independent of any statistical detection.
 // Coordinates are pixel indices; out-of-range entries are ignored. Shared across channels.
@@ -104,33 +109,79 @@ function robustPlaneScale(plane: Float64Array, count: number, buf: Float64Array)
 	return { median, scale: Number.isFinite(scale) ? scale : 0 } as const
 }
 
-// Median of the neighborhood of (x, y) within radius `r`, clamped to the image bounds, read from the
-// deinterleaved `plane`. Gathers up to (2r+1)^2 values into `buf` (reused across pixels) and returns
-// their median. When `skip` is given, neighbors flagged in it (the defect mask) are excluded so a repair
-// interpolates only from good samples — essential for bad columns/rows, where the defective neighbors
-// would otherwise bias the median toward one side. Falls back to including every neighbor if the whole
-// window is flagged, so the result is always finite. `buf` must hold at least (2r+1)^2 elements.
-function neighborhoodMedian(plane: Float64Array, x: number, y: number, width: number, height: number, r: number, buf: Float64Array, skip?: Uint8Array) {
-	const y0 = Math.max(0, y - r)
-	const y1 = Math.min(height - 1, y + r)
-	const x0 = Math.max(0, x - r)
-	const x1 = Math.min(width - 1, x + r)
+// CFA phase index of (x, y): a Bayer 2x2 mosaic has 4 interleaved photosite phases (each a distinct color
+// position) that must be treated independently, so this maps to [0, 3] by pixel parity; a non-mosaic
+// plane is a single phase (always 0). `phases` is 4 for a Bayer frame, 1 otherwise.
+function phaseIndex(x: number, y: number, phases: number) {
+	return phases === 1 ? 0 : (y & 1) * 2 + (x & 1)
+}
 
+// Robust median and scale of each CFA phase of `plane` (or one global pair when `phases === 1`), written
+// into `medians`/`scales` (length `phases`). Same-phase samples are gathered by parity-strided scans into
+// `gather`; `scratch` is the robust-computation scratch. Both buffers must hold at least width*height
+// elements. A phase with no samples gets median NaN and scale 0 (its detection is effectively disabled).
+function computePhaseStats(plane: Float64Array, width: number, height: number, phases: number, gather: Float64Array, scratch: Float64Array, medians: Float64Array, scales: Float64Array) {
+	for (let ph = 0; ph < phases; ph++) {
+		let count = 0
+
+		if (phases === 1) {
+			gather.set(plane.subarray(0, width * height))
+			count = width * height
+		} else {
+			// Visit only the photosites of this phase via a parity-strided scan (px, py in {0, 1}).
+			const py = ph >> 1
+			const px = ph & 1
+			for (let y = py; y < height; y += 2) {
+				const row = y * width
+				for (let x = px; x < width; x += 2) gather[count++] = plane[row + x]
+			}
+		}
+
+		if (count === 0) {
+			medians[ph] = Number.NaN
+			scales[ph] = 0
+			continue
+		}
+
+		const stats = robustPlaneScale(gather, count, scratch)
+		medians[ph] = stats.median
+		scales[ph] = stats.scale
+	}
+}
+
+// Median of the neighborhood of (x, y), read from the deinterleaved `plane`. Samples the (2r+1)^2 lattice
+// centered on (x, y) with a spacing of `step` pixels per axis, clamped to the image bounds. `step` is 1
+// for a normal plane; for a Bayer CFA mosaic it is 2 so only same-color-phase photosites are gathered
+// (adjacent photosites carry different colors and must not be mixed). When `skip` is given, neighbors
+// flagged in it (the defect mask) are excluded so a repair interpolates only from good samples —
+// essential for bad columns/rows, where the defective neighbors would otherwise bias the median toward
+// one side. Falls back to including every sampled neighbor if the whole window is flagged, so the result
+// is always finite. `buf` must hold at least (2r+1)^2 elements.
+function neighborhoodMedian(plane: Float64Array, x: number, y: number, width: number, height: number, r: number, step: number, buf: Float64Array, skip?: Uint8Array) {
 	let count = 0
-	for (let yy = y0; yy <= y1; yy++) {
+	for (let ky = -r; ky <= r; ky++) {
+		const yy = y + ky * step
+		if (yy < 0 || yy >= height) continue
 		const row = yy * width
-		for (let xx = x0; xx <= x1; xx++) {
+		for (let kx = -r; kx <= r; kx++) {
+			const xx = x + kx * step
+			if (xx < 0 || xx >= width) continue
 			const q = row + xx
 			if (skip !== undefined && skip[q] !== 0) continue
 			buf[count++] = plane[q]
 		}
 	}
 
-	// Every neighbor was flagged: re-gather without the skip so the repair stays finite.
+	// Every sampled neighbor was flagged: re-gather without the skip so the repair stays finite.
 	if (count === 0) {
-		for (let yy = y0; yy <= y1; yy++) {
+		for (let ky = -r; ky <= r; ky++) {
+			const yy = y + ky * step
+			if (yy < 0 || yy >= height) continue
 			const row = yy * width
-			for (let xx = x0; xx <= x1; xx++) buf[count++] = plane[row + xx]
+			for (let kx = -r; kx <= r; kx++) {
+				const xx = x + kx * step
+				if (xx >= 0 && xx < width) buf[count++] = plane[row + xx]
+			}
 		}
 	}
 
@@ -145,25 +196,24 @@ function neighborhoodMedian(plane: Float64Array, x: number, y: number, width: nu
 // `sigma * scale` in the candidate direction AND that NO immediate 8-neighbor is itself that far from the
 // background — a defect stands alone, a star's PSF elevates its neighbors. `skip` (the defect mask) is
 // excluded from the background and neighbor tests. Returns true only for a confirmed isolated defect.
-function isIsolatedDefect(plane: Float64Array, x: number, y: number, width: number, height: number, bgRadius: number, buf: Float64Array, skip: Uint8Array | undefined, scale: number, sigma: number, sign: number) {
-	const bg = neighborhoodMedian(plane, x, y, width, height, bgRadius, buf, skip)
+function isIsolatedDefect(plane: Float64Array, x: number, y: number, width: number, height: number, bgRadius: number, step: number, buf: Float64Array, skip: Uint8Array | undefined, scale: number, sigma: number, sign: number) {
+	const bg = neighborhoodMedian(plane, x, y, width, height, bgRadius, step, buf, skip)
 	const center = plane[y * width + x]
 	const threshold = sigma * scale
 
 	// The center must stand out from the robust background in the candidate direction.
 	if (sign > 0 ? !(center - bg > threshold) : !(bg - center > threshold)) return false
 
-	// Isolation: any immediate neighbor that is itself beyond the background threshold in the same
-	// direction is support (a real source), so the candidate is not an isolated defect.
-	const y0 = Math.max(0, y - 1)
-	const y1 = Math.min(height - 1, y + 1)
-	const x0 = Math.max(0, x - 1)
-	const x1 = Math.min(width - 1, x + 1)
+	// Isolation: any immediate same-phase neighbor (one lattice step away) that is itself beyond the
+	// background threshold in the same direction is support (a real source), so this is not a lone defect.
 	const centerIndex = y * width + x
-
-	for (let yy = y0; yy <= y1; yy++) {
+	for (let ky = -1; ky <= 1; ky++) {
+		const yy = y + ky * step
+		if (yy < 0 || yy >= height) continue
 		const row = yy * width
-		for (let xx = x0; xx <= x1; xx++) {
+		for (let kx = -1; kx <= 1; kx++) {
+			const xx = x + kx * step
+			if (xx < 0 || xx >= width) continue
 			const q = row + xx
 			if (q === centerIndex) continue
 			if (skip !== undefined && skip[q] !== 0) continue
@@ -248,29 +298,51 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 	// source stays a minority of the window and its median tracks the true background.
 	const bgRadius = radius + 1
 
+	// A Bayer CFA mosaic interleaves 4 color-phase photosites; neighborhoods and robust statistics must be
+	// computed per phase so a valid uniform-color mosaic is not mistaken for a field of hot pixels.
+	// `step` samples only same-phase photosites; `phases` splits the robust statistics accordingly.
+	const bayer = metadata.bayer !== undefined
+	const step = bayer ? 2 : 1
+	const phases = bayer ? 4 : 1
+
 	// Reusable scratch buffers, allocated once and shared across channels.
 	const plane = new Float64Array(n)
 	const scaleScratch = new Float64Array(n)
+	const gatherBuf = new Float64Array(n)
 	const window = new Float64Array((2 * radius + 1) * (2 * radius + 1))
 	const bgWindow = new Float64Array((2 * bgRadius + 1) * (2 * bgRadius + 1))
 	const darkPlane = dark0 !== undefined ? new Float64Array(n) : undefined
+
+	// Per-phase robust statistics (one entry when not a mosaic).
+	const phaseMedian = new Float64Array(phases)
+	const phaseScale = new Float64Array(phases)
+	const darkPhaseMedian = new Float64Array(phases)
+	const darkPhaseScale = new Float64Array(phases)
+	const darkThreshold = new Float64Array(phases)
 
 	for (let channel = 0; channel < channels; channel++) {
 		// Deinterleave the channel into a contiguous plane so neighbor reads are cache-friendly and repairs
 		// (written back to the interleaved raw buffer) never feed into later neighborhood medians.
 		for (let p = 0, i = channel; p < n; p++, i += channels) plane[p] = raw[i]
 
-		const { scale: gScale } = robustPlaneScale(plane, n, scaleScratch)
-		const autoEnabled = gScale > 0 && (hotSigma > 0 || coldSigma > 0)
+		computePhaseStats(plane, width, height, phases, gatherBuf, scaleScratch, phaseMedian, phaseScale)
+		let autoEnabled = false
+		for (let ph = 0; ph < phases; ph++) autoEnabled ||= phaseScale[ph] > 0
+		autoEnabled &&= hotSigma > 0 || coldSigma > 0
 
-		// Master-dark threshold for this channel; disabled when the dark plane is constant (scale 0).
-		let darkThreshold = Number.POSITIVE_INFINITY
+		// Per-phase master-dark thresholds for this channel; a phase is disabled when its dark scale is 0.
+		darkThreshold.fill(Number.POSITIVE_INFINITY)
+		let darkEnabled = false
 		if (darkPlane !== undefined) {
 			for (let p = 0, i = channel; p < n; p++, i += channels) darkPlane[p] = dark0![i]
-			const darkStats = robustPlaneScale(darkPlane, n, scaleScratch)
-			if (darkStats.scale > 0) darkThreshold = darkStats.median + darkHotSigma * darkStats.scale
+			computePhaseStats(darkPlane, width, height, phases, gatherBuf, scaleScratch, darkPhaseMedian, darkPhaseScale)
+			for (let ph = 0; ph < phases; ph++) {
+				if (darkPhaseScale[ph] > 0) {
+					darkThreshold[ph] = darkPhaseMedian[ph] + darkHotSigma * darkPhaseScale[ph]
+					darkEnabled = true
+				}
+			}
 		}
-		const darkEnabled = darkPlane !== undefined && Number.isFinite(darkThreshold)
 
 		// Nothing to detect for this channel: skip the per-pixel scan entirely.
 		if (defectMask === undefined && !darkEnabled && !autoEnabled) continue
@@ -280,6 +352,8 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 			for (let x = 0; x < width; x++) {
 				const p = rowBase + x
 				const center = plane[p]
+				const ph = phaseIndex(x, y, phases)
+				const gScale = phaseScale[ph]
 
 				let m = 0
 				let haveM = false
@@ -287,20 +361,20 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 
 				if (defectMask !== undefined && defectMask[p] !== 0) {
 					cause = 1
-				} else if (darkEnabled && darkPlane[p] > darkThreshold) {
+				} else if (darkEnabled && darkPlane![p] > darkThreshold[ph]) {
 					cause = 2
-				} else if (autoEnabled && (protectMask === undefined || protectMask[p] === 0)) {
-					m = neighborhoodMedian(plane, x, y, width, height, radius, window, defectMask)
+				} else if (autoEnabled && gScale > 0 && (protectMask === undefined || protectMask[p] === 0)) {
+					m = neighborhoodMedian(plane, x, y, width, height, radius, step, window, defectMask)
 					haveM = true
 					// The window-median deviation is a cheap gate; a candidate is confirmed only when the
 					// isolation test (against the robust background) rules out a resolved source such as a star.
-					if (hotSigma > 0 && center > m + hotSigma * gScale && isIsolatedDefect(plane, x, y, width, height, bgRadius, bgWindow, defectMask, gScale, hotSigma, 1)) cause = 3
-					else if (coldSigma > 0 && center < m - coldSigma * gScale && isIsolatedDefect(plane, x, y, width, height, bgRadius, bgWindow, defectMask, gScale, coldSigma, -1)) cause = 4
+					if (hotSigma > 0 && center > m + hotSigma * gScale && isIsolatedDefect(plane, x, y, width, height, bgRadius, step, bgWindow, defectMask, gScale, hotSigma, 1)) cause = 3
+					else if (coldSigma > 0 && center < m - coldSigma * gScale && isIsolatedDefect(plane, x, y, width, height, bgRadius, step, bgWindow, defectMask, gScale, coldSigma, -1)) cause = 4
 				}
 
 				if (cause === 0) continue
 
-				if (!haveM) m = neighborhoodMedian(plane, x, y, width, height, radius, window, defectMask)
+				if (!haveM) m = neighborhoodMedian(plane, x, y, width, height, radius, step, window, defectMask)
 				raw[p * channels + channel] = amount >= 1 ? m : center + amount * (m - center)
 
 				if (cause === 1) defect++

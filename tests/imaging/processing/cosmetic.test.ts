@@ -198,6 +198,52 @@ test('a wrongly sized protect mask throws', () => {
 	expect(() => cosmeticCorrection(image, { protect: new Uint8Array(10) })).toThrow('protect mask length')
 })
 
+// Builds a single-channel RGGB Bayer mosaic with uniform per-color levels: R at (even, even),
+// G at (odd, even) and (even, odd), B at (odd, odd).
+function rggbMosaic(width: number, height: number, r: number, g: number, b: number) {
+	const values = new Float32Array(width * height)
+	for (let y = 0; y < height; y++) {
+		for (let x = 0; x < width; x++) {
+			const even = (x & 1) === 0
+			values[y * width + x] = (y & 1) === 0 ? (even ? r : g) : even ? g : b
+		}
+	}
+	return values
+}
+
+test('a uniform-color RGGB mosaic yields zero corrections', () => {
+	// Adjacent photosites carry different colors (R=0.8, G=0.2, B=0.1). A naive full-neighborhood detector
+	// would flag every red photosite as a hot pixel; the per-CFA-phase statistics must leave the raw
+	// mosaic completely untouched.
+	const width = 24
+	const height = 24
+	const values = rggbMosaic(width, height, 0.8, 0.2, 0.1)
+	const image = makeImage(width, height, 1, values, { BAYERPAT: 'RGGB' })
+	expect(image.metadata.bayer).toBe('RGGB')
+	const before = Float32Array.from(image.raw)
+
+	const result = cosmeticCorrection(image)
+
+	expect(result.corrected).toBe(0)
+	for (let i = 0; i < before.length; i++) expect(image.raw[i]).toBe(before[i])
+})
+
+test('a hot photosite in an RGGB mosaic is still repaired from its own color phase', () => {
+	const width = 24
+	const height = 24
+	const values = rggbMosaic(width, height, 0.8, 0.2, 0.1)
+	// A hot red photosite (red phase is (even, even)); its same-color neighbors sit at the 0.8 red level.
+	values[10 * width + 12] = 0.98
+	const image = makeImage(width, height, 1, values, { BAYERPAT: 'RGGB' })
+
+	const result = cosmeticCorrection(image)
+
+	expect(result.hot).toBe(1)
+	expect(result.corrected).toBe(1)
+	// Repaired to the red level from same-phase neighbors, not to the green/blue neighborhood.
+	expect(image.raw[pixelOffset(image, 12, 10)]).toBeCloseTo(0.8, 5)
+})
+
 test('an empty image and amount 0 are no-ops', () => {
 	const empty = makeImage(0, 0, 1, new Float32Array(0))
 	expect(cosmeticCorrection(empty).corrected).toBe(0)
