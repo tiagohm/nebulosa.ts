@@ -244,6 +244,31 @@ test('a hot photosite in an RGGB mosaic is still repaired from its own color pha
 	expect(image.raw[pixelOffset(image, 12, 10)]).toBeCloseTo(0.8, 5)
 })
 
+test('a hot pixel on a strong gradient is detected when the scale comes from local residuals', () => {
+	// A steep 0..1 horizontal ramp: the raw plane's global spread is huge, so a global-MAD threshold would
+	// swamp a real defect. The spike sits near the bright end where its excess over the local level is only
+	// ~0.2, far below 3 * global-MAD but far above the local-residual noise. Estimating the scale from
+	// local-median residuals removes the gradient and exposes the spike.
+	const width = 100
+	const height = 10
+	const values = new Float32Array(width * height)
+	for (let y = 0; y < height; y++) {
+		for (let x = 0; x < width; x++) values[y * width + x] = x / (width - 1)
+	}
+	const spikeX = 80
+	const spikeY = 5
+	const localLevel = spikeX / (width - 1)
+	values[spikeY * width + spikeX] = 1 // saturated single-pixel spike above the local ramp level
+
+	const image = makeImage(width, height, 1, values)
+	const result = cosmeticCorrection(image)
+
+	expect(result.hot).toBe(1)
+	expect(result.corrected).toBe(1)
+	// Repaired back onto the ramp, not left saturated.
+	expect(image.raw[pixelOffset(image, spikeX, spikeY)]).toBeCloseTo(localLevel, 2)
+})
+
 test('an empty image and amount 0 are no-ops', () => {
 	const empty = makeImage(0, 0, 1, new Float32Array(0))
 	expect(cosmeticCorrection(empty).corrected).toBe(0)
