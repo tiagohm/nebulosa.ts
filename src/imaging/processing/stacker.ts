@@ -4,8 +4,9 @@ import { Bitpix, type FitsHeader } from '../../io/formats/fits/fits'
 import { bitpixInBytes } from '../../io/formats/fits/util'
 import type { Rect, Size } from '../../math/numerical/geometry'
 import { clamp } from '../../math/numerical/math'
-import type { Image, ImageRawType, SigmaClipCenterMethod, SigmaClipDispersionMethod } from '../model/types'
+import type { Image, ImageRawType } from '../model/types'
 import type { DetectedStar } from '../stars/detector'
+import type { SigmaClipCenterMethod, SigmaClipDispersionMethod } from './computation'
 
 // Image stacking pipeline: registers a set of frames to a reference using star matching, normalizes
 // and weights them, then combines the aligned pixels with a selectable rejection method (average,

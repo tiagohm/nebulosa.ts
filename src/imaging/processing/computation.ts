@@ -1,12 +1,93 @@
 import { STANDARD_DEVIATION_SCALE } from '../../core/util'
+import type { Rect } from '../../math/numerical/geometry'
+import type { NumberArray } from '../../math/numerical/math'
 import { Histogram } from '../../math/numerical/statistics'
 import { truncatePixel } from '../model/image'
-import { type AdaptiveDisplayFunctionOptions, channelIndex, DEFAULT_ADAPTIVE_DISPLAY_FUNCTION_OPTIONS, DEFAULT_HISTOGRAM_OPTIONS, DEFAULT_SIGMA_CLIP_OPTIONS, grayscaleFromChannel, type HistogramOptions, type Image, type SigmaClipOptions } from '../model/types'
+import { channelIndex, grayscaleFromChannel, type Image, type ImageChannelOrGray } from '../model/types'
 
 // Pixel statistics for images: histogram, median, (normalized) median absolute deviation, iterative
 // sigma clipping, the PixInsight adaptive display function (auto-stretch parameters), and background
 // level estimators. Operates over a chosen channel/grayscale and optional region of interest; pixel
 // values are in [0, 1] and binned at the requested bit depth.
+
+// Maps a pixel value `p` at flat index `i` to a transformed value while building a histogram.
+export type HistogramPixelTransform = (p: number, i: number) => number
+
+// Central-tendency estimator for sigma clipping.
+export type SigmaClipCenterMethod = 'median' | 'mean'
+
+// Dispersion estimator for sigma clipping (standard deviation or median absolute deviation).
+export type SigmaClipDispersionMethod = 'std' | 'mad'
+
+// Options controlling histogram computation.
+export interface HistogramOptions {
+	// Channel or grayscale weighting to sample.
+	channel?: ImageChannelOrGray
+	// Region of interest; whole image when omitted.
+	area?: Partial<Rect>
+	// Per-pixel value transform applied before binning.
+	transform: HistogramPixelTransform
+	// Bit depth (number) or explicit per-channel bit depths.
+	bits: NumberArray | number
+	// Optional per-pixel sigma-clip mask excluding rejected pixels.
+	sigmaClip?: Int8Array | Uint8Array
+}
+
+// Options for the adaptive display function (auto-stretch), extending histogram options.
+export interface AdaptiveDisplayFunctionOptions extends HistogramOptions {
+	meanBackground: number // Controls the global illumination of the displayed image
+	clippingPoint: number // Controls the overall contrast of the displayed image
+}
+
+// Options for iterative sigma clipping of pixel values.
+export interface SigmaClipOptions extends Omit<HistogramOptions, 'sigmaClip'> {
+	// Center estimator.
+	centerMethod: SigmaClipCenterMethod
+	// Dispersion estimator.
+	dispersionMethod: SigmaClipDispersionMethod
+	// Lower rejection threshold, in sigmas below center.
+	sigmaLower: number
+	// Upper rejection threshold, in sigmas above center.
+	sigmaUpper: number
+	// Convergence tolerance on the center/dispersion change between iterations.
+	tolerance: number
+	// Maximum number of clipping iterations.
+	maxIterations: number
+	// Optional pre-existing rejection mask to seed the clip.
+	mask?: Int8Array | Uint8Array
+}
+
+// Default target mean background for the adaptive display function (global brightness).
+export const DEFAULT_MEAN_BACKGROUND = 0.25
+// Default clipping point (in sigmas) for the adaptive display function (overall contrast).
+export const DEFAULT_CLIPPING_POINT = -2.8
+
+// Identity histogram pixel transform.
+export const DEFAULT_HISTOGRAM_PIXEL_TRANSFORM: HistogramPixelTransform = (p) => p
+
+// Default histogram options (16-bit, identity transform).
+export const DEFAULT_HISTOGRAM_OPTIONS: Readonly<HistogramOptions> = {
+	transform: DEFAULT_HISTOGRAM_PIXEL_TRANSFORM,
+	bits: 16,
+}
+
+// Default adaptive display function options.
+export const DEFAULT_ADAPTIVE_DISPLAY_FUNCTION_OPTIONS: Readonly<AdaptiveDisplayFunctionOptions> = {
+	...DEFAULT_HISTOGRAM_OPTIONS,
+	meanBackground: DEFAULT_MEAN_BACKGROUND,
+	clippingPoint: DEFAULT_CLIPPING_POINT,
+}
+
+// Default sigma-clip options (mean center, std dispersion, +-3 sigma, 5 iterations).
+export const DEFAULT_SIGMA_CLIP_OPTIONS: Readonly<SigmaClipOptions> = {
+	...DEFAULT_HISTOGRAM_OPTIONS,
+	centerMethod: 'mean',
+	dispersionMethod: 'std',
+	sigmaLower: 3,
+	sigmaUpper: 3,
+	tolerance: 1e-3,
+	maxIterations: 5,
+}
 
 // Median pixel value of the selected channel/region.
 export function median(image: Image, options: Partial<HistogramOptions> = DEFAULT_HISTOGRAM_OPTIONS) {
