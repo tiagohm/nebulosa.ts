@@ -97,6 +97,7 @@ Additional rules:
 
 Use concise, Claude-style documentation comments: explain intent, units, constraints, side effects, and edge cases. Do not restate obvious code.
 
+- Start every new file with a module description comment placed immediately after the imports (or at the top when there are none), following the existing `//` block style used across `src/`. Summarize what the module provides, the domain it belongs to, relevant units or conventions, and whether operations mutate in place or return fresh values. Keep existing module descriptions up to date when a file's responsibility changes.
 - Always add a documentation comment above every function, method, class, interface, type alias, enum, and module-level constant.
 - Always comment constants. For local throwaway constants inside a function, comment the surrounding calculation when individual comments would create noise.
 - Prefer the repository's existing `//` comment style. Use multi-line `//` comment blocks instead of `/* ... */` unless the file already uses TSDoc/JSDoc or tooling requires it.
