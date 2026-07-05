@@ -3,7 +3,7 @@ import { DEFAULT_REFRACTION_PARAMETERS } from '../../../src/astronomy/coordinate
 import { geodeticLocation, localSiderealTime } from '../../../src/astronomy/observer/location'
 import { type Time, timeYMDHMS } from '../../../src/astronomy/time/time'
 import { SIDEREAL_RATE } from '../../../src/core/constants'
-import { arcmin, deg, hour, parseAngle, toArcmin, toArcsec, toDeg } from '../../../src/math/units/angle'
+import { arcmin, deg, hour, normalizePI, parseAngle, toArcmin, toArcsec, toDeg } from '../../../src/math/units/angle'
 import { meter } from '../../../src/math/units/distance'
 import { estimateDarvExposure, type DarvExposureInput, polarAlignmentError, ThreePointPolarAlignment, threePointPolarAlignmentError, COARSE_DARV_EXPOSURE_PRESET } from '../../../src/observation/alignment/polaralignment'
 
@@ -60,6 +60,30 @@ describe('darv exposure estimator', () => {
 		expect(estimate.raTrailTime).toBeCloseTo((preset.targetTrail * estimate.imageScale) / estimate.raVelocity, 12)
 		expect(estimate.driftDec).toBeCloseTo(0.004375 * preset.targetPolarError, 12)
 	})
+})
+
+test('matches Ralph Pass two-star polar alignment reference example', () => {
+	const latitude = deg(42 + 40 / 60)
+	const lst = 0
+
+	const azimuthError = arcmin(32.26)
+	const altitudeError = arcmin(7.39)
+
+	const star1 = [hour(3), deg(48)] as const
+	const star2 = [hour(23), deg(45)] as const
+
+	const actual1 = polarAlignmentError(star1[0], star1[1], latitude, lst, azimuthError, altitudeError)
+	const actual2 = polarAlignmentError(star2[0], star2[1], latitude, lst, azimuthError, altitudeError)
+
+	const readoutError1 = [normalizePI(star1[0] - actual1[0]), star1[1] - actual1[1]]
+	const readoutError2 = [normalizePI(star2[0] - actual2[0]), star2[1] - actual2[1]]
+
+	// Ralph Pass syncs on star 1, so only the differential readout error remains at star 2.
+	const syncedRaError = normalizePI(readoutError2[0] - readoutError1[0])
+	const syncedDecError = readoutError2[1] - readoutError1[1]
+
+	expect(toArcmin(syncedRaError)).toBeCloseTo(-12, 2)
+	expect(toArcmin(syncedDecError)).toBeCloseTo(-21, 2)
 })
 
 describe('computed polar alignment error', () => {

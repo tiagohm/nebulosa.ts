@@ -686,7 +686,8 @@ export function precessionNutationMatrix(time: Time): Mat3 {
 	return precessionNutation
 }
 
-// Computes the 3x3 CIO-based GCRS -> CIRS (celestial-to-intermediate) rotation matrix.
+// Computes the 3x3 CIO-based celestial/base ICRS-GCRS oriented -> CIRS rotation matrix,
+// via ERFA eraC2i06a, including frame bias/precession/nutation.
 // Unlike precessionNutationMatrix, which is equinox based and places right ascension on the
 // true equinox, this matrix places it on the CIO. It is the correct companion to the CIO/ERA
 // based observed conversions (cirsToObserved/observedToCirs, which use eraAtioq/eraAtoiq):

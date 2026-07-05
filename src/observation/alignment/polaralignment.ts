@@ -16,8 +16,6 @@ import { type Angle, normalizePI } from '../../math/units/angle'
 // All geometric computations are done in ICRF to avoid time-dependent distortions caused by precession, nutation, or Earth rotation.
 // Conversion to observed (horizontal) coordinates is performed only at the final stage for user feedback.
 
-// Thanks to Codex!
-
 // Result of a three-point polar alignment, with the mount pole in horizontal coordinates and the
 // signed azimuth/altitude errors and applied adjustments. All angles are radians.
 export interface ThreePointPolarAlignmentResult extends Readonly<HorizontalCoordinate> {
@@ -92,7 +90,7 @@ export function threePointPolarAlignmentAfterAdjustment(
 	time: Time,
 	refraction: RefractionParameters | false = DEFAULT_REFRACTION_PARAMETERS,
 	location: GeographicPosition = time.location!,
-): ThreePointPolarAlignmentResult | false {
+) {
 	const isNorthern = location.latitude > 0
 
 	// Convert both solved positions to ICRF vectors so we can compare the actual sky displacement.
@@ -198,7 +196,7 @@ export class ThreePointPolarAlignment {
 			this.#referencePoint = this.#points[2]
 		} else if (this.#position > 3 && this.#currentError !== false && this.#referencePoint !== false) {
 			this.#currentError = threePointPolarAlignmentAfterAdjustment(this.#currentError, this.#referencePoint, point, time, this.refraction)
-			if (this.#currentError !== false) this.#referencePoint = point
+			this.#referencePoint = point
 		}
 
 		return this.#currentError
