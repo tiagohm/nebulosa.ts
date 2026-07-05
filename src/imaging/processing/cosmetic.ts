@@ -384,11 +384,13 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 		}
 
 		// Per-phase master-dark thresholds for this channel; a phase is disabled when its dark scale is 0.
+		// Known defects are excluded from the dark statistics so a mapped bad column does not inflate the
+		// scale and mask other fixed hot pixels in the same master dark.
 		darkThreshold.fill(Number.POSITIVE_INFINITY)
 		let darkEnabled = false
 		if (darkPlane !== undefined) {
 			for (let p = 0, i = channel; p < n; p++, i += channels) darkPlane[p] = dark0![i]
-			computePhaseStats(darkPlane, width, height, phases, gatherBuf, scaleScratch, darkPhaseMedian, darkPhaseScale)
+			computePhaseStats(darkPlane, width, height, phases, gatherBuf, scaleScratch, darkPhaseMedian, darkPhaseScale, defectMask)
 			for (let ph = 0; ph < phases; ph++) {
 				if (darkPhaseScale[ph] > 0) {
 					darkThreshold[ph] = darkPhaseMedian[ph] + darkHotSigma * darkPhaseScale[ph]

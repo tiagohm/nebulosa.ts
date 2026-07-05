@@ -319,6 +319,46 @@ test('a debayered RGB image with bayer metadata is treated as a non-mosaic frame
 	expect(result.corrected).toBe(1)
 })
 
+test('explicit defects are excluded from master-dark statistics', () => {
+	// A mapped bad column in the defect map produces saturated values in the master dark. Without the fix
+	// those saturated values inflate the dark's robust scale, raising the detection threshold so other
+	// fixed hot pixels in the same dark fall below it and are missed. Passing defectMask to
+	// computePhaseStats keeps the bad column out of the dark statistics.
+	const width = 20
+	const height = 12
+	const { values, at } = rampImage(width, height, 0.3, 0.34)
+	// A real hot pixel in the light frame.
+	values[6 * width + 15] = 0.85
+	const image = makeImage(width, height, 1, values)
+
+	// Master dark: a faint ramp plus one saturated bad column (x=10) and one separate hot pixel (x=5).
+	const dark = new Float32Array(width * height)
+	for (let y = 0; y < height; y++) {
+		for (let x = 0; x < width; x++) dark[y * width + x] = 0.01 + 0.002 * (x / (width - 1))
+	}
+	// Saturated bad column in the dark — would dominate the MAD if included.
+	for (let y = 0; y < height; y++) dark[y * width + 10] = 1
+	// Separate fixed hot pixel at a different column.
+	dark[6 * width + 5] = 0.7
+	const masterDark = makeImage(width, height, 1, dark)
+
+	const result = cosmeticCorrection(image, {
+		hotSigma: 0,
+		coldSigma: 0,
+		masterDark,
+		defects: { columns: [10] },
+	})
+
+	// The defect-map column (height pixels) + the dark-flagged pixel at (5, 6) whose dark value is 0.7.
+	expect(result.defect).toBe(height)
+	expect(result.dark).toBe(1)
+	expect(result.corrected).toBe(height + 1)
+	// The light-frame pixel at (15, 6) was a hot pixel but the dark at that position is normal — only the
+	// dark-flagged pixel at (5, 6) is repaired by the dark path.
+	expect(image.raw[pixelOffset(image, 15, 6)]).toBeCloseTo(0.85, 3) // untouched by dark detection
+	expect(image.raw[pixelOffset(image, 5, 6)]).toBeCloseTo(at(5), 3) // repaired from dark flag
+})
+
 test('an empty image and amount 0 are no-ops', () => {
 	const empty = makeImage(0, 0, 1, new Float32Array(0))
 	expect(cosmeticCorrection(empty).corrected).toBe(0)
