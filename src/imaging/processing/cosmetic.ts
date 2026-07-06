@@ -113,30 +113,30 @@ interface NeighborhoodScratch {
 // Robust center and scale of a plane's first `count` values. Returns the median and the normalized MAD
 // (comparable to a standard deviation); falls back to the population standard deviation when the MAD
 // collapses to 0 (a near-constant plane), and to 0 only when the plane is genuinely constant. `buf` is a
-// reusable scratch array of at least `count` elements, sorted in place.
+// reusable scratch array of at least `count` elements, partitioned in place.
 function robustPlaneScale(plane: Float64Array, count: number, buf: Float64Array) {
-	buf.set(plane.subarray(0, count))
-	buf.subarray(0, count).sort()
-	const median = medianOf(buf, count)
+	for (let i = 0; i < count; i++) buf[i] = plane[i]
+	const median = medianBySelection(buf, count)
 
 	for (let i = 0; i < count; i++) buf[i] = Math.abs(plane[i] - median)
-	buf.subarray(0, count).sort()
-	const mad = STANDARD_DEVIATION_SCALE * medianOf(buf, count)
+	const mad = STANDARD_DEVIATION_SCALE * medianBySelection(buf, count)
 
 	const scale = mad > 0 ? mad : standardDeviationOf(plane, count)
 	return { median, scale: Number.isFinite(scale) ? scale : 0 } as const
 }
 
-// Robust scale from the lower side of a sorted sample distribution, measured around `median`. Master-dark
-// hot pixels are an upper-tail defect population, so using only values at or below the median keeps the
-// dark scale tied to the clean background even when the hot tail is wider than a fixed trim percentage.
-// Returns undefined when fewer than two lower-tail samples exist, leaving the caller's original scale intact.
-function lowerTailScale(sortedValues: Float64Array, count: number, median: number, scratch: Float64Array) {
+// Robust scale from the lower side of a sample distribution, measured around `median`. Master-dark hot
+// pixels are an upper-tail defect population, so using only values at or below the median keeps the dark
+// scale tied to the clean background even when the hot tail is wider than a fixed trim percentage. Returns
+// undefined when fewer than two lower-tail samples exist, leaving the caller's original scale intact.
+function lowerTailScale(values: Float64Array, count: number, median: number, scratch: Float64Array) {
 	let lowerCount = 0
-	for (let i = 0; i < count && sortedValues[i] <= median; i++) scratch[lowerCount++] = median - sortedValues[i]
+	for (let i = 0; i < count; i++) {
+		const value = values[i]
+		if (value <= median) scratch[lowerCount++] = median - value
+	}
 	if (lowerCount < 2) return undefined
-	scratch.subarray(0, lowerCount).sort()
-	const scale = STANDARD_DEVIATION_SCALE * medianOf(scratch, lowerCount)
+	const scale = STANDARD_DEVIATION_SCALE * medianBySelection(scratch, lowerCount)
 	return Number.isFinite(scale) ? scale : 0
 }
 
@@ -199,7 +199,7 @@ function growNeighborhoodBuffer(scratch: NeighborhoodScratch, minLength: number)
 }
 
 // Sorts a tiny prefix of `values` in ascending numeric order, matching TypedArray sort's practical NaN
-// placement by pushing NaNs to the high end. Used only for 3x3 neighborhood medians.
+// placement by pushing NaNs to the high end. Used for 3x3 neighborhoods and very small robust samples.
 function sortSmallPrefix(values: Float64Array, count: number) {
 	for (let i = 1; i < count; i++) {
 		const value = values[i]
@@ -213,6 +213,73 @@ function sortSmallPrefix(values: Float64Array, count: number) {
 		}
 		values[j + 1] = value
 	}
+}
+
+// Numeric ordering used by selection helpers: finite values sort ascending and NaNs stay at the high end,
+// matching the median behavior expected from TypedArray sorting for non-finite samples.
+function compareNumericValues(a: number, b: number) {
+	const aIsNaN = Number.isNaN(a)
+	const bIsNaN = Number.isNaN(b)
+	if (aIsNaN) return bIsNaN ? 0 : 1
+	if (bIsNaN) return -1
+	return a < b ? -1 : a > b ? 1 : 0
+}
+
+// Swaps two entries in a numeric scratch buffer.
+function swapValues(values: Float64Array, a: number, b: number) {
+	const value = values[a]
+	values[a] = values[b]
+	values[b] = value
+}
+
+// Selects the kth value in ascending numeric order, mutating only the first `count` entries. A three-way
+// partition avoids quadratic behavior on flat frames where many samples equal the pivot.
+function quickselect(values: Float64Array, count: number, k: number) {
+	let left = 0
+	let right = count - 1
+
+	while (left < right) {
+		const pivot = values[(left + right) >>> 1]
+		let lt = left
+		let i = left
+		let gt = right
+
+		while (i <= gt) {
+			const cmp = compareNumericValues(values[i], pivot)
+			if (cmp < 0) {
+				swapValues(values, lt, i)
+				lt++
+				i++
+			} else if (cmp > 0) {
+				swapValues(values, i, gt)
+				gt--
+			} else {
+				i++
+			}
+		}
+
+		if (k < lt) right = lt - 1
+		else if (k > gt) left = gt + 1
+		else return values[k]
+	}
+
+	return values[left]
+}
+
+// Median of the first `count` scratch values without a full sort. Even counts select both middle order
+// statistics to preserve the existing average-of-two contract.
+function medianBySelection(values: Float64Array, count: number) {
+	if (count <= SMALL_MEDIAN_SORT_LIMIT) {
+		sortSmallPrefix(values, count)
+		return medianOf(values, count)
+	}
+
+	const mid = count >>> 1
+	if ((count & 1) === 1) return quickselect(values, count, mid)
+
+	const upper = quickselect(values, count, mid)
+	const lower = quickselect(values, count, mid - 1)
+	return (lower + upper) * 0.5
 }
 
 // Median of the neighborhood of (x, y), read from the deinterleaved `plane`. Samples the (2r+1)^2 lattice
@@ -554,7 +621,6 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 						}
 					}
 					if (dCount > 1) {
-						gatherBuf.subarray(0, dCount).sort()
 						const tailScale = lowerTailScale(gatherBuf, dCount, darkPhaseMedian[ph], scaleScratch)
 						if (tailScale !== undefined) {
 							if (tailScale > 0 && tailScale < dScale) {
