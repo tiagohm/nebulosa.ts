@@ -385,6 +385,40 @@ test('explicit defects are excluded from master-dark statistics', () => {
 	expect(image.raw[pixelOffset(image, 5, 6)]).toBeCloseTo(at(5), 3) // repaired from dark flag
 })
 
+test('a dark-hot cluster with auto detection enabled is fully repaired', () => {
+	// When auto detection and master dark are both active, the medianField was computed without
+	// darkSkip, so reusing it for dark-path repairs would include neighboring hot pixels in the
+	// repair median. The fix always recomputes with darkSkip for cause===2.
+	const width = 20
+	const height = 20
+	const values = new Float32Array(width * height).fill(0.1)
+	// A 5-pixel cross-shaped hot cluster in the light frame.
+	const cx = 10
+	const cy = 10
+	values[cy * width + cx] = 0.9 // center
+	values[cy * width + cx - 1] = 0.9
+	values[cy * width + cx + 1] = 0.9
+	values[(cy - 1) * width + cx] = 0.9
+	values[(cy + 1) * width + cx] = 0.9
+	const image = makeImage(width, height, 1, values)
+
+	// Master dark: same cluster is hot.
+	const dark = new Float32Array(width * height).fill(0.01)
+	dark[cy * width + cx] = 0.8
+	dark[cy * width + cx - 1] = 0.8
+	dark[cy * width + cx + 1] = 0.8
+	dark[(cy - 1) * width + cx] = 0.8
+	dark[(cy + 1) * width + cx] = 0.8
+	const masterDark = makeImage(width, height, 1, dark)
+
+	const result = cosmeticCorrection(image, { masterDark })
+	// With the fix all 5 cluster pixels are dark-repaired, not left hot.
+	expect(result.dark).toBe(5)
+	expect(result.corrected).toBe(5)
+	// The cluster center is repaired back to the background.
+	expect(image.raw[pixelOffset(image, cx, cy)]).toBeCloseTo(0.1, 3)
+})
+
 test('an empty image and amount 0 are no-ops', () => {
 	const empty = makeImage(0, 0, 1, new Float32Array(0))
 	expect(cosmeticCorrection(empty).corrected).toBe(0)
