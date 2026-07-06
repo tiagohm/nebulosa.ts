@@ -683,6 +683,41 @@ test('auto gate uses darkSkip when multiple dark neighbors bias the local median
 	expect(image.raw[pixelOffset(image, cx, cy)]).toBeCloseTo(0.1, 3)
 })
 
+test('auto repair skips the candidate when darkSkip covers the local window', () => {
+	// The transient center is not hot in the master dark, but every neighbor in its default 3x3
+	// window is. Rebuilding the auto median with darkSkip must also skip the candidate, otherwise
+	// the center becomes its own only unmasked neighbor and the hot pixel is missed.
+	const width = 20
+	const height = 20
+	const values = new Float32Array(width * height).fill(0.1)
+	const cx = 10
+	const cy = 10
+	values[cy * width + cx] = 0.9
+	for (let dy = -1; dy <= 1; dy++) {
+		for (let dx = -1; dx <= 1; dx++) {
+			if (dx === 0 && dy === 0) continue
+			values[(cy + dy) * width + (cx + dx)] = 0.9
+		}
+	}
+	const image = makeImage(width, height, 1, values)
+
+	const dark = new Float32Array(width * height).fill(0.01)
+	for (let dy = -1; dy <= 1; dy++) {
+		for (let dx = -1; dx <= 1; dx++) {
+			if (dx === 0 && dy === 0) continue
+			dark[(cy + dy) * width + (cx + dx)] = 0.8
+		}
+	}
+	const masterDark = makeImage(width, height, 1, dark)
+
+	const result = cosmeticCorrection(image, { masterDark })
+
+	expect(result.dark).toBe(8)
+	expect(result.hot).toBe(1)
+	expect(result.corrected).toBe(9)
+	expect(image.raw[pixelOffset(image, cx, cy)]).toBeCloseTo(0.1, 3)
+})
+
 test('an empty image and amount 0 are no-ops', () => {
 	const empty = makeImage(0, 0, 1, new Float32Array(0))
 	expect(cosmeticCorrection(empty).corrected).toBe(0)

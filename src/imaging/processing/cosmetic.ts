@@ -257,8 +257,9 @@ function neighborhoodMedian(plane: Float64Array, x: number, y: number, width: nu
 // robust scales for the cross-phase normalization. Returns true only
 // for a confirmed isolated defect.
 function isIsolatedDefect(plane: Float64Array, x: number, y: number, width: number, height: number, bgRadius: number, step: number, buf: Float64Array, skip: Uint8Array | undefined, scale: number, sigma: number, sign: number, rawBuf?: Float64Array, residual?: Float64Array, phaseScale?: Float64Array) {
-	const bg = neighborhoodMedian(plane, x, y, width, height, bgRadius, step, buf, skip)
-	const center = plane[y * width + x]
+	const centerIndex = y * width + x
+	const bg = neighborhoodMedian(plane, x, y, width, height, bgRadius, step, buf, skip, centerIndex)
+	const center = plane[centerIndex]
 	const threshold = sigma * scale
 
 	// The center must stand out from the robust background in the candidate direction.
@@ -266,7 +267,6 @@ function isIsolatedDefect(plane: Float64Array, x: number, y: number, width: numb
 
 	// Isolation: any immediate same-phase neighbor (one lattice step away) that is itself beyond the
 	// background threshold in the same direction is support (a real source), so this is not a lone defect.
-	const centerIndex = y * width + x
 	for (let ky = -1; ky <= 1; ky++) {
 		const yy = y + ky * step
 		if (yy < 0 || yy >= height) continue
@@ -566,7 +566,7 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 					// The window-median deviation is a cheap gate; a candidate is confirmed only when the
 					// isolation test (against the robust background) rules out a resolved source such as a star.
 					const autoSkip = darkSkip ?? defectMask
-					if (darkSkip !== undefined) m = neighborhoodMedian(plane, x, y, width, height, radius, step, window, darkSkip)
+					if (darkSkip !== undefined) m = neighborhoodMedian(plane, x, y, width, height, radius, step, window, darkSkip, p)
 					if (hotSigma > 0 && center > m + hotSigma * gScale && isIsolatedDefect(plane, x, y, width, height, bgRadius, step, bgWindow, autoSkip, gScale, hotSigma, 1, rawBgWindow, residual, phaseScale)) cause = 3
 					else if (coldSigma > 0 && center < m - coldSigma * gScale && isIsolatedDefect(plane, x, y, width, height, bgRadius, step, bgWindow, autoSkip, gScale, coldSigma, -1, rawBgWindow, residual, phaseScale)) cause = 4
 				}
