@@ -163,11 +163,11 @@ function computePhaseStats(plane: Float64Array, width: number, height: number, p
 // (adjacent photosites carry different colors and must not be mixed). The in-bounds lattice range is
 // computed up front, so the scan cost is the number of samples actually gathered rather than (2r+1)^2 —
 // a radius far larger than the frame does not blow the loop up. When `skip` is given, neighbors flagged in
-// it (the defect mask) are excluded so a repair interpolates only from good samples — essential for bad
-// columns/rows, where the defective neighbors would otherwise bias the median toward one side. Falls back
+// it (the defect mask) are excluded; `skipIndex` additionally skips a single pixel index without
+// requiring a full-frame mask. Falls back
 // to including every sampled neighbor if the whole window is flagged, so the result is always finite.
 // `buf` must hold at least (min(2r+1, ceil(width/step)) * min(2r+1, ceil(height/step))) elements.
-function neighborhoodMedian(plane: Float64Array, x: number, y: number, width: number, height: number, r: number, step: number, buf: Float64Array, skip?: Uint8Array) {
+function neighborhoodMedian(plane: Float64Array, x: number, y: number, width: number, height: number, r: number, step: number, buf: Float64Array, skip?: Uint8Array, skipIndex?: number) {
 	// Restrict the lattice offsets to those that land inside the frame, so an oversized radius neither
 	// scans nor requires buffer space for samples that would only be clamped away.
 	const kyMin = Math.max(-r, -Math.floor(y / step))
@@ -180,6 +180,7 @@ function neighborhoodMedian(plane: Float64Array, x: number, y: number, width: nu
 		const row = (y + ky * step) * width
 		for (let kx = kxMin; kx <= kxMax; kx++) {
 			const q = row + x + kx * step
+			if (q === skipIndex) continue
 			if (skip !== undefined && skip[q] !== 0) continue
 			buf[count++] = plane[q]
 		}
@@ -240,17 +241,8 @@ function isIsolatedDefect(plane: Float64Array, x: number, y: number, width: numb
 	// into the adjacent CFA photosites as well. Check the raw 8-neighbors (step=1) against a contiguous
 	// background so cross-phase PSF support is not missed.
 	if (step > 1 && rawBuf !== undefined) {
-		// Exclude the center pixel from the raw background so the star core does not bias the median;
-		// build a combined skip mask that merges any caller skip with the center exclusion.
-		let rawSkip: Uint8Array
-		if (skip !== undefined) {
-			rawSkip = new Uint8Array(skip)
-			rawSkip[centerIndex] = 1
-		} else {
-			rawSkip = new Uint8Array(plane.length)
-			rawSkip[centerIndex] = 1
-		}
-		const rawBg = neighborhoodMedian(plane, x, y, width, height, bgRadius, 1, rawBuf, rawSkip)
+		// Exclude the center pixel from the raw background via skipIndex so no full-frame mask is allocated.
+		const rawBg = neighborhoodMedian(plane, x, y, width, height, bgRadius, 1, rawBuf, skip, centerIndex)
 		const rawThreshold = sigma * scale
 		for (let dy = -1; dy <= 1; dy++) {
 			const yy = y + dy
