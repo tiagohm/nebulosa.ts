@@ -898,7 +898,7 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 		const directMedian = new Float64Array(phases)
 		const directScale = new Float64Array(phases)
 		const directThreshold = new Float64Array(phases)
-		const direct = repairMasterDarkDirect(raw, dark0!, width, height, channels, phases, radius, step, amount, darkHotSigma, defectMask, directGather, directScratch, directMedian, directScale, directThreshold, window)
+		const direct = repairMasterDarkDirect(raw, dark0, width, height, channels, phases, radius, step, amount, darkHotSigma, defectMask, directGather, directScratch, directMedian, directScale, directThreshold, window)
 		defect = direct.defect
 		dark = direct.dark
 		return { image, corrected: dark + defect, hot, cold, dark, defect }
@@ -938,7 +938,7 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 		if (darkPossible) {
 			// When the master dark has a flat background with hot pixels, the MAD collapses to zero and
 			// the stddev fallback includes the hot tail, so the threshold helper clamps to a lower-tail scale.
-			darkEnabled = computeInterleavedDarkThresholds(dark0!, channel, channels, width, height, phases, darkHotSigma, gatherBuf, scaleScratch, darkPhaseMedian, darkPhaseScale, darkThreshold, defectMask)
+			darkEnabled = computeInterleavedDarkThresholds(dark0, channel, channels, width, height, phases, darkHotSigma, gatherBuf, scaleScratch, darkPhaseMedian, darkPhaseScale, darkThreshold, defectMask)
 		} else {
 			darkThreshold.fill(Number.POSITIVE_INFINITY)
 		}
