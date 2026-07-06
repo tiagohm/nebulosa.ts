@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test'
 import { cosmeticCorrection } from '../../../src/imaging/processing/cosmetic'
 import { generateNoiseImage } from '../../../src/imaging/synthetic/generator'
 import { makeImage, pixelOffset } from './util'
+import { mulberry32 } from '../../../src/math/numerical/random'
 
 // A horizontal ramp so the 3x3 local median tracks the background exactly (median of a horizontal ramp
 // window is the center column value), leaving normal pixels with ~0 residual and no false positives.
@@ -464,10 +465,11 @@ test('an RGGB star with noisier red phase and modest green wings is preserved', 
 	const width = 24
 	const height = 24
 	const values = rggbMosaic(width, height, 0.8, 0.2, 0.1)
+	const random = mulberry32(0)
 	// Inject noise into the red phase to inflate its scale (random offsets at red positions).
 	for (let y = 0; y < height; y += 2) {
 		for (let x = 0; x < width; x += 2) {
-			values[y * width + x] += (Math.random() - 0.5) * 0.06
+			values[y * width + x] += (random() - 0.5) * 0.06
 		}
 	}
 	// Star core at a red photosite with modest green wings.
