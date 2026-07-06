@@ -194,9 +194,10 @@ function growNeighborhoodBuffer(buf: Float64Array, minLength: number) {
 // a radius far larger than the frame does not blow the loop up. When `skip` is given, neighbors flagged in
 // it (the defect mask) are excluded; `skipIndex` additionally skips a single pixel index without
 // requiring a full-frame mask. If no unflagged neighbor exists anywhere in the sampled lattice, returns
-// the original center value so the caller leaves the sample effectively unchanged. `buf` must hold the
-// initial in-bounds window; it grows only when a skipped window has to expand beyond that initial size.
-function neighborhoodMedian(plane: Float64Array, x: number, y: number, width: number, height: number, r: number, step: number, buf: Float64Array, skip?: Uint8Array, skipIndex?: number) {
+// `emptyValue` when supplied, otherwise the original center value so the caller leaves the sample effectively
+// unchanged. `buf` must hold the initial in-bounds window; it grows only when a skipped window has to expand
+// beyond that initial size.
+function neighborhoodMedian(plane: Float64Array, x: number, y: number, width: number, height: number, r: number, step: number, buf: Float64Array, skip?: Uint8Array, skipIndex?: number, emptyValue?: number) {
 	// Restrict the lattice offsets to those that land inside the frame, so an oversized radius neither
 	// scans nor requires buffer space for samples that would only be clamped away.
 	const kyMin = Math.max(-r, -Math.floor(y / step))
@@ -231,7 +232,7 @@ function neighborhoodMedian(plane: Float64Array, x: number, y: number, width: nu
 			const ekyMax = Math.min(er, Math.floor((height - 1 - y) / step))
 			const ekxMin = Math.max(-er, -Math.floor(x / step))
 			const ekxMax = Math.min(er, Math.floor((width - 1 - x) / step))
-			if (ekyMin === prevKyMin && ekyMax === prevKyMax && ekxMin === prevKxMin && ekxMax === prevKxMax) return plane[y * width + x]
+			if (ekyMin === prevKyMin && ekyMax === prevKyMax && ekxMin === prevKxMin && ekxMax === prevKxMax) return emptyValue ?? plane[y * width + x]
 			prevKyMin = ekyMin
 			prevKyMax = ekyMax
 			prevKxMin = ekxMin
@@ -607,12 +608,14 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 				if (!haveM) {
 					const repairSkip = cause === 1 || cause === 2 ? (darkSkip ?? defectMask) : darkSkip
 					if (repairSkip !== undefined) {
-						m = neighborhoodMedian(plane, x, y, width, height, radius, step, window, repairSkip)
+						m = neighborhoodMedian(plane, x, y, width, height, radius, step, window, repairSkip, undefined, Number.NaN)
 					} else {
 						m = medianField !== undefined ? medianField[p] : neighborhoodMedian(plane, x, y, width, height, radius, step, window, defectMask)
 					}
 				}
-				raw[p * channels + channel] = amount >= 1 ? m : center + amount * (m - center)
+				const repaired = amount >= 1 ? m : center + amount * (m - center)
+				if (!Number.isFinite(repaired)) continue
+				raw[p * channels + channel] = repaired
 
 				if (cause === 1) defect++
 				else if (cause === 2) dark++

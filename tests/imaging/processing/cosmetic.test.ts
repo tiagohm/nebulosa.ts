@@ -680,7 +680,7 @@ test('a 5x5 dark-hot block grows repair scratch for expanded neighbors', () => {
 
 test('a fully mapped bad frame does not hang when no repair neighbor exists', () => {
 	// Every sample is explicitly skipped, so no unflagged repair neighbor exists anywhere in the frame.
-	// The median helper must stop expanding and leave samples unchanged instead of looping forever.
+	// The median helper must stop expanding and leave samples unchanged without counting no-op repairs.
 	const width = 4
 	const height = 4
 	const values = new Float32Array(width * height)
@@ -690,8 +690,8 @@ test('a fully mapped bad frame does not hang when no repair neighbor exists', ()
 
 	const result = cosmeticCorrection(image, { hotSigma: 0, coldSigma: 0, defects: { columns: [0, 1, 2, 3] } })
 
-	expect(result.defect).toBe(width * height)
-	expect(result.corrected).toBe(width * height)
+	expect(result.defect).toBe(0)
+	expect(result.corrected).toBe(0)
 	for (let i = 0; i < before.length; i++) expect(image.raw[i]).toBe(before[i])
 })
 
