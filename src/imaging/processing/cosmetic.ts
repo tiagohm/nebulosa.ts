@@ -491,6 +491,10 @@ function neighborhoodMedian(plane: Float64Array, x: number, y: number, width: nu
 			const ekxMin = Math.max(-er, -Math.floor(x / step))
 			const ekxMax = Math.min(er, Math.floor((width - 1 - x) / step))
 			if (ekyMin === prevKyMin && ekyMax === prevKyMax && ekxMin === prevKxMin && ekxMax === prevKxMax) return emptyValue ?? plane[y * width + x]
+			const oldKyMin = prevKyMin
+			const oldKyMax = prevKyMax
+			const oldKxMin = prevKxMin
+			const oldKxMax = prevKxMax
 			prevKyMin = ekyMin
 			prevKyMax = ekyMax
 			prevKxMin = ekxMin
@@ -498,6 +502,7 @@ function neighborhoodMedian(plane: Float64Array, x: number, y: number, width: nu
 			for (let ky = ekyMin; ky <= ekyMax; ky++) {
 				const row = (y + ky * step) * width
 				for (let kx = ekxMin; kx <= ekxMax; kx++) {
+					if (ky >= oldKyMin && ky <= oldKyMax && kx >= oldKxMin && kx <= oldKxMax) continue
 					const q = row + x + kx * step
 					if (q === skipIndex) continue
 					if (skip !== undefined && skip[q] !== 0) continue
@@ -547,6 +552,10 @@ function interleavedNeighborhoodMedian(raw: Readonly<NumberArray>, channel: numb
 			const ekxMin = Math.max(-er, -Math.floor(x / step))
 			const ekxMax = Math.min(er, Math.floor((width - 1 - x) / step))
 			if (ekyMin === prevKyMin && ekyMax === prevKyMax && ekxMin === prevKxMin && ekxMax === prevKxMax) return emptyValue ?? raw[(y * width + x) * channels + channel]
+			const oldKyMin = prevKyMin
+			const oldKyMax = prevKyMax
+			const oldKxMin = prevKxMin
+			const oldKxMax = prevKxMax
 			prevKyMin = ekyMin
 			prevKyMax = ekyMax
 			prevKxMin = ekxMin
@@ -554,6 +563,7 @@ function interleavedNeighborhoodMedian(raw: Readonly<NumberArray>, channel: numb
 			for (let ky = ekyMin; ky <= ekyMax; ky++) {
 				const row = (y + ky * step) * width
 				for (let kx = ekxMin; kx <= ekxMax; kx++) {
+					if (ky >= oldKyMin && ky <= oldKyMax && kx >= oldKxMin && kx <= oldKxMax) continue
 					const q = row + x + kx * step
 					if (q === skipIndex) continue
 					if (skip !== undefined && skip[q] !== 0) continue
