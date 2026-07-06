@@ -553,16 +553,16 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 					// The window-median deviation is a cheap gate; a candidate is confirmed only when the
 					// isolation test (against the robust background) rules out a resolved source such as a star.
 					const autoSkip = darkSkip ?? defectMask
+					if (darkSkip !== undefined) m = neighborhoodMedian(plane, x, y, width, height, radius, step, window, darkSkip)
 					if (hotSigma > 0 && center > m + hotSigma * gScale && isIsolatedDefect(plane, x, y, width, height, bgRadius, step, bgWindow, autoSkip, gScale, hotSigma, 1, rawBgWindow, residual, phaseScale)) cause = 3
 					else if (coldSigma > 0 && center < m - coldSigma * gScale && isIsolatedDefect(plane, x, y, width, height, bgRadius, step, bgWindow, autoSkip, gScale, coldSigma, -1, rawBgWindow, residual, phaseScale)) cause = 4
-					if (cause !== 0 && darkSkip !== undefined) haveM = false
 				}
 
 				if (cause === 0) continue
 
 				// Dark-path and explicit-defect repairs use darkSkip when available so co-flagged dark
-				// neighbors are excluded from the median; hot/cold (auto) repairs do the same when a master
-				// dark has already identified neighboring fixed defects.
+				// neighbors are excluded from the median; hot/cold (auto) repairs reuse their gate median,
+				// which was already recomputed with darkSkip when a master dark is present.
 				if (!haveM) {
 					if (darkSkip !== undefined && (cause === 1 || cause === 2 || cause === 3 || cause === 4)) {
 						m = neighborhoodMedian(plane, x, y, width, height, radius, step, window, darkSkip)

@@ -634,6 +634,36 @@ test('auto isolation ignores neighbors already flagged by the master dark', () =
 	expect(image.raw[pixelOffset(image, 11, 10)]).toBeCloseTo(0.1, 3)
 })
 
+test('auto gate uses darkSkip when multiple dark neighbors bias the local median', () => {
+	// Four fixed hot neighbors make the unmasked 3x3 median hot enough to hide the transient center.
+	// The auto gate must use the darkSkip median before deciding whether the center is a candidate.
+	const width = 20
+	const height = 20
+	const values = new Float32Array(width * height).fill(0.1)
+	const cx = 10
+	const cy = 10
+	values[cy * width + cx] = 0.9
+	values[cy * width + cx - 1] = 0.9
+	values[cy * width + cx + 1] = 0.9
+	values[(cy - 1) * width + cx] = 0.9
+	values[(cy + 1) * width + cx] = 0.9
+	const image = makeImage(width, height, 1, values)
+
+	const dark = new Float32Array(width * height).fill(0.01)
+	dark[cy * width + cx - 1] = 0.8
+	dark[cy * width + cx + 1] = 0.8
+	dark[(cy - 1) * width + cx] = 0.8
+	dark[(cy + 1) * width + cx] = 0.8
+	const masterDark = makeImage(width, height, 1, dark)
+
+	const result = cosmeticCorrection(image, { masterDark })
+
+	expect(result.dark).toBe(4)
+	expect(result.hot).toBe(1)
+	expect(result.corrected).toBe(5)
+	expect(image.raw[pixelOffset(image, cx, cy)]).toBeCloseTo(0.1, 3)
+})
+
 test('an empty image and amount 0 are no-ops', () => {
 	const empty = makeImage(0, 0, 1, new Float32Array(0))
 	expect(cosmeticCorrection(empty).corrected).toBe(0)
