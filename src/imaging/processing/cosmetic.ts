@@ -601,12 +601,13 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 
 				if (cause === 0) continue
 
-				// Dark-path and explicit-defect repairs use darkSkip when available so co-flagged dark
-				// neighbors are excluded from the median; hot/cold (auto) repairs reuse their gate median,
-				// which was already recomputed with darkSkip when a master dark is present.
+				// Dark-path and explicit-defect repairs recompute from the defect/dark skip masks so the
+				// auto detector's protect mask does not change corroborated repairs. Hot/cold (auto) repairs
+				// reuse their gate median, which was already recomputed with darkSkip when a master dark is present.
 				if (!haveM) {
-					if (darkSkip !== undefined && (cause === 1 || cause === 2 || cause === 3 || cause === 4)) {
-						m = neighborhoodMedian(plane, x, y, width, height, radius, step, window, darkSkip)
+					const repairSkip = cause === 1 || cause === 2 ? (darkSkip ?? defectMask) : darkSkip
+					if (repairSkip !== undefined) {
+						m = neighborhoodMedian(plane, x, y, width, height, radius, step, window, repairSkip)
 					} else {
 						m = medianField !== undefined ? medianField[p] : neighborhoodMedian(plane, x, y, width, height, radius, step, window, defectMask)
 					}

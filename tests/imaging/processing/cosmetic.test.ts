@@ -191,6 +191,34 @@ test('a single-pixel source is repaired unless an explicit protect mask covers i
 	expect(image.raw[pixelOffset(image, 10, 10)]).toBeCloseTo(0.8, 6)
 })
 
+test('a protected mapped defect is repaired from unprotected defect medians', () => {
+	// Protect masks star-like sources from auto repair, but explicit defects are corroborated repairs.
+	// A bad center pixel inside a protected 3x3 star core must interpolate from the star neighbors,
+	// not from the exterior sky that auto-scale medians use after excluding protected samples.
+	const width = 20
+	const height = 20
+	const values = new Float32Array(width * height).fill(0.1)
+	const protect = new Uint8Array(width * height)
+	const cx = 10
+	const cy = 10
+	for (let dy = -1; dy <= 1; dy++) {
+		for (let dx = -1; dx <= 1; dx++) {
+			const p = (cy + dy) * width + (cx + dx)
+			values[p] = 0.8
+			protect[p] = 1
+		}
+	}
+	values[cy * width + cx] = 0
+	const image = makeImage(width, height, 1, values)
+
+	const result = cosmeticCorrection(image, { protect, defects: { pixels: [[cx, cy]] } })
+
+	expect(result.defect).toBe(1)
+	expect(result.corrected).toBe(1)
+	expect(image.raw[pixelOffset(image, cx, cy)]).toBeCloseTo(0.8, 6)
+	expect(image.raw[pixelOffset(image, cx - 1, cy)]).toBeCloseTo(0.8, 6)
+})
+
 test('a wrongly sized protect mask throws', () => {
 	const width = 8
 	const height = 8
