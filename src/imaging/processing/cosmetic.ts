@@ -545,8 +545,12 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 			} else {
 				darkSkip = new Uint8Array(n)
 			}
-			for (let p = 0; p < n; p++) {
-				if (darkPlane![p] > darkThreshold[phaseIndex(p % width, Math.trunc(p / width), phases)]) darkSkip[p] = 1
+			for (let y = 0; y < height; y++) {
+				const rowBase = y * width
+				for (let x = 0; x < width; x++) {
+					const p = rowBase + x
+					if (darkPlane![p] > darkThreshold[phaseIndex(x, y, phases)]) darkSkip[p] = 1
+				}
 			}
 		}
 
