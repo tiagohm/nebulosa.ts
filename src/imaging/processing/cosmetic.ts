@@ -393,6 +393,51 @@ function neighborhoodMedianRadius1(plane: Float64Array, x: number, y: number, wi
 	return medianOfScratchPrefix(values, count)
 }
 
+// Fast masked radius-1 median. Returns undefined when every 3x3 sample is masked, letting the generic
+// path handle outward expansion.
+function neighborhoodMedianRadius1Masked(plane: Float64Array, x: number, y: number, width: number, height: number, step: number, scratch: NeighborhoodScratch, skip: Uint8Array, skipIndex?: number) {
+	const values = scratch.values
+	let count = 0
+	const center = y * width + x
+
+	if (x >= step && x + step < width && y >= step && y + step < height) {
+		const prevCenter = center - step * width
+		const nextCenter = center + step * width
+
+		const q00 = prevCenter - step
+		if (q00 !== skipIndex && skip[q00] === 0) values[count++] = plane[q00]
+		const q01 = prevCenter
+		if (q01 !== skipIndex && skip[q01] === 0) values[count++] = plane[q01]
+		const q02 = prevCenter + step
+		if (q02 !== skipIndex && skip[q02] === 0) values[count++] = plane[q02]
+		const q10 = center - step
+		if (q10 !== skipIndex && skip[q10] === 0) values[count++] = plane[q10]
+		if (center !== skipIndex && skip[center] === 0) values[count++] = plane[center]
+		const q12 = center + step
+		if (q12 !== skipIndex && skip[q12] === 0) values[count++] = plane[q12]
+		const q20 = nextCenter - step
+		if (q20 !== skipIndex && skip[q20] === 0) values[count++] = plane[q20]
+		const q21 = nextCenter
+		if (q21 !== skipIndex && skip[q21] === 0) values[count++] = plane[q21]
+		const q22 = nextCenter + step
+		if (q22 !== skipIndex && skip[q22] === 0) values[count++] = plane[q22]
+	} else {
+		for (let dy = -1; dy <= 1; dy++) {
+			const yy = y + dy * step
+			if (yy < 0 || yy >= height) continue
+			const row = yy * width
+			for (let dx = -1; dx <= 1; dx++) {
+				const xx = x + dx * step
+				if (xx < 0 || xx >= width) continue
+				const q = row + xx
+				if (q !== skipIndex && skip[q] === 0) values[count++] = plane[q]
+			}
+		}
+	}
+
+	return count === 0 ? undefined : medianOfScratchPrefix(values, count)
+}
+
 // Median of the neighborhood of (x, y), read from the deinterleaved `plane`. Samples the (2r+1)^2 lattice
 // centered on (x, y) with a spacing of `step` pixels per axis, clamped to the image bounds. `step` is 1
 // for a normal plane; for a Bayer CFA mosaic it is 2 so only same-color-phase photosites are gathered
@@ -405,7 +450,11 @@ function neighborhoodMedianRadius1(plane: Float64Array, x: number, y: number, wi
 // unchanged. `scratch` must hold the initial in-bounds window; it grows only when a skipped window has to
 // expand beyond that initial size, and the growth is kept for later calls.
 function neighborhoodMedian(plane: Float64Array, x: number, y: number, width: number, height: number, r: number, step: number, scratch: NeighborhoodScratch, skip?: Uint8Array, skipIndex?: number, emptyValue?: number) {
-	if (r === 1 && skip === undefined) return neighborhoodMedianRadius1(plane, x, y, width, height, step, scratch, skipIndex, emptyValue)
+	if (r === 1) {
+		if (skip === undefined) return neighborhoodMedianRadius1(plane, x, y, width, height, step, scratch, skipIndex, emptyValue)
+		const maskedMedian = neighborhoodMedianRadius1Masked(plane, x, y, width, height, step, scratch, skip, skipIndex)
+		if (maskedMedian !== undefined) return maskedMedian
+	}
 
 	// Restrict the lattice offsets to those that land inside the frame, so an oversized radius neither
 	// scans nor requires buffer space for samples that would only be clamped away.
