@@ -104,6 +104,12 @@ export interface CosmeticCorrectionResult {
 	readonly defect: number
 }
 
+// Mutable scratch storage for local-neighborhood medians.
+interface NeighborhoodScratch {
+	// Reusable value buffer; it may grow when skip masks force a wider repair search.
+	values: Float64Array
+}
+
 // Robust center and scale of a plane's first `count` values. Returns the median and the normalized MAD
 // (comparable to a standard deviation); falls back to the population standard deviation when the MAD
 // collapses to 0 (a near-constant plane), and to 0 only when the plane is genuinely constant. `buf` is a
@@ -183,10 +189,12 @@ function computePhaseStats(plane: Float64Array, width: number, height: number, p
 }
 
 // Allocates a larger neighborhood scratch buffer when skip-mask expansion finds more samples than the
-// initial in-bounds window could hold. Existing samples are copied into the returned buffer.
-function growNeighborhoodBuffer(buf: Float64Array, minLength: number) {
-	const next = new Float64Array(Math.max(minLength, buf.length * 2, 1))
-	next.set(buf)
+// current in-bounds window could hold. Existing samples are copied and the caller's scratch is updated.
+function growNeighborhoodBuffer(scratch: NeighborhoodScratch, minLength: number) {
+	const values = scratch.values
+	const next = new Float64Array(Math.max(minLength, values.length * 2, 1))
+	next.set(values)
+	scratch.values = next
 	return next
 }
 
@@ -216,9 +224,9 @@ function sortSmallPrefix(values: Float64Array, count: number) {
 // it (the defect mask) are excluded; `skipIndex` additionally skips a single pixel index without
 // requiring a full-frame mask. If no unflagged neighbor exists anywhere in the sampled lattice, returns
 // `emptyValue` when supplied, otherwise the original center value so the caller leaves the sample effectively
-// unchanged. `buf` must hold the initial in-bounds window; it grows only when a skipped window has to expand
-// beyond that initial size.
-function neighborhoodMedian(plane: Float64Array, x: number, y: number, width: number, height: number, r: number, step: number, buf: Float64Array, skip?: Uint8Array, skipIndex?: number, emptyValue?: number) {
+// unchanged. `scratch` must hold the initial in-bounds window; it grows only when a skipped window has to
+// expand beyond that initial size, and the growth is kept for later calls.
+function neighborhoodMedian(plane: Float64Array, x: number, y: number, width: number, height: number, r: number, step: number, scratch: NeighborhoodScratch, skip?: Uint8Array, skipIndex?: number, emptyValue?: number) {
 	// Restrict the lattice offsets to those that land inside the frame, so an oversized radius neither
 	// scans nor requires buffer space for samples that would only be clamped away.
 	const kyMin = Math.max(-r, -Math.floor(y / step))
@@ -226,7 +234,7 @@ function neighborhoodMedian(plane: Float64Array, x: number, y: number, width: nu
 	const kxMin = Math.max(-r, -Math.floor(x / step))
 	const kxMax = Math.min(r, Math.floor((width - 1 - x) / step))
 
-	let values = buf
+	let values = scratch.values
 	let count = 0
 	for (let ky = kyMin; ky <= kyMax; ky++) {
 		const row = (y + ky * step) * width
@@ -234,7 +242,7 @@ function neighborhoodMedian(plane: Float64Array, x: number, y: number, width: nu
 			const q = row + x + kx * step
 			if (q === skipIndex) continue
 			if (skip !== undefined && skip[q] !== 0) continue
-			if (count === values.length) values = growNeighborhoodBuffer(values, count + 1)
+			if (count === values.length) values = growNeighborhoodBuffer(scratch, count + 1)
 			values[count++] = plane[q]
 		}
 	}
@@ -264,7 +272,7 @@ function neighborhoodMedian(plane: Float64Array, x: number, y: number, width: nu
 					const q = row + x + kx * step
 					if (q === skipIndex) continue
 					if (skip !== undefined && skip[q] !== 0) continue
-					if (count === values.length) values = growNeighborhoodBuffer(values, count + 1)
+					if (count === values.length) values = growNeighborhoodBuffer(scratch, count + 1)
 					values[count++] = plane[q]
 				}
 			}
@@ -295,7 +303,7 @@ function neighborhoodMedian(plane: Float64Array, x: number, y: number, width: nu
 // `step > 1`. `residual` and `phaseScale` provide per-pixel same-phase residuals and per-phase
 // robust scales for the cross-phase normalization. Returns true only
 // for a confirmed isolated defect.
-function isIsolatedDefect(plane: Float64Array, x: number, y: number, width: number, height: number, bgRadius: number, step: number, buf: Float64Array, skip: Uint8Array | undefined, scale: number, sigma: number, sign: number, rawBuf?: Float64Array, residual?: Float64Array, phaseScale?: Float64Array) {
+function isIsolatedDefect(plane: Float64Array, x: number, y: number, width: number, height: number, bgRadius: number, step: number, buf: NeighborhoodScratch, skip: Uint8Array | undefined, scale: number, sigma: number, sign: number, rawBuf?: NeighborhoodScratch, residual?: Float64Array, phaseScale?: Float64Array) {
 	const centerIndex = y * width + x
 	const bg = neighborhoodMedian(plane, x, y, width, height, bgRadius, step, buf, skip, centerIndex)
 	const center = plane[centerIndex]
@@ -364,7 +372,7 @@ function isIsolatedDefect(plane: Float64Array, x: number, y: number, width: numb
 // the auto detector needs the repair value. `skip` (the defect mask) is passed to the median so known
 // defects do not bias it. The center sample is skipped too so a candidate surrounded by masked neighbors
 // cannot become its own local background.
-function buildResidualField(plane: Float64Array, width: number, height: number, radius: number, step: number, window: Float64Array, skip: Uint8Array | undefined, residual: Float64Array) {
+function buildResidualField(plane: Float64Array, width: number, height: number, radius: number, step: number, window: NeighborhoodScratch, skip: Uint8Array | undefined, residual: Float64Array) {
 	for (let y = 0; y < height; y++) {
 		const rowBase = y * width
 		for (let x = 0; x < width; x++) {
@@ -448,6 +456,11 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 		protectSkip = new Uint8Array(n)
 		for (let p = 0; p < n; p++) if (protectMask[p] !== 0) protectSkip[p] = 1
 	}
+	let defectProtectSkip: Uint8Array | undefined
+	if (defectMask !== undefined && protectSkip !== undefined) {
+		defectProtectSkip = new Uint8Array(defectMask)
+		for (let p = 0; p < n; p++) if (protectSkip[p] !== 0) defectProtectSkip[p] = 1
+	}
 
 	// A Bayer CFA mosaic interleaves 4 color-phase photosites; neighborhoods and robust statistics must be
 	// computed per phase so a valid uniform-color mosaic is not mistaken for a field of hot pixels.
@@ -486,11 +499,11 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 	const scratchNeeded = autoPossible || dark0 !== undefined
 	const scaleScratch = scratchNeeded ? new Float64Array(n) : new Float64Array(0)
 	const gatherBuf = scratchNeeded ? new Float64Array(n) : new Float64Array(0)
-	const window = new Float64Array(windowSize)
-	const bgWindow = new Float64Array(bgWindowSize)
+	const window: NeighborhoodScratch = { values: new Float64Array(windowSize) }
+	const bgWindow: NeighborhoodScratch = { values: new Float64Array(bgWindowSize) }
 	// For Bayer CFA frames the isolation test must also check raw 8-neighbors against a contiguous
 	// (step=1) background — a star's PSF crosses all CFA phases, not just same-color ones.
-	const rawBgWindow = step > 1 ? new Float64Array(Math.min(2 * bgRadius + 1, width) * Math.min(2 * bgRadius + 1, height)) : undefined
+	const rawBgWindow: NeighborhoodScratch | undefined = step > 1 ? { values: new Float64Array(Math.min(2 * bgRadius + 1, width) * Math.min(2 * bgRadius + 1, height)) } : undefined
 	const darkPlane = dark0 !== undefined ? new Float64Array(n) : undefined
 	// Per-pixel high-pass residual, built once per channel for the noise-scale estimate. The local median
 	// is recovered as `plane[p] - residual[p]` when the auto path needs the repair value.
@@ -586,6 +599,8 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 			if (protectSkip !== undefined) {
 				if (autoSkip === undefined) {
 					autoSkip = protectSkip
+				} else if (darkSkip === undefined && defectProtectSkip !== undefined) {
+					autoSkip = defectProtectSkip
 				} else {
 					const combinedSkip = new Uint8Array(autoSkip)
 					for (let p = 0; p < n; p++) if (protectSkip[p] !== 0) combinedSkip[p] = 1
