@@ -418,6 +418,11 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 	if (protectMask !== undefined && protectMask.length !== n) {
 		throw new Error(`protect mask length must be ${n} (width*height), got ${protectMask.length}`)
 	}
+	let protectSkip: Uint8Array | undefined
+	if (protectMask !== undefined) {
+		protectSkip = new Uint8Array(n)
+		for (let p = 0; p < n; p++) if (protectMask[p] !== 0) protectSkip[p] = 1
+	}
 
 	// A Bayer CFA mosaic interleaves 4 color-phase photosites; neighborhoods and robust statistics must be
 	// computed per phase so a valid uniform-color mosaic is not mistaken for a field of hot pixels.
@@ -545,11 +550,20 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 		}
 
 		// Estimate the noise scale from local-median residuals (not the raw plane), so smooth gradients and
-		// vignetting do not inflate it and hide obvious local defects. Known defects and master-dark fixed
-		// defects are skipped because they are not sensor noise for the auto detector.
+		// vignetting do not inflate it and hide obvious local defects. Known defects, protected sources,
+		// and master-dark fixed defects are skipped because they are not sensor noise for the auto detector.
 		let autoEnabled = false
 		if (autoPossible) {
-			const autoSkip = darkSkip ?? defectMask
+			let autoSkip = darkSkip ?? defectMask
+			if (protectSkip !== undefined) {
+				if (autoSkip === undefined) {
+					autoSkip = protectSkip
+				} else {
+					const combinedSkip = new Uint8Array(autoSkip)
+					for (let p = 0; p < n; p++) if (protectSkip[p] !== 0) combinedSkip[p] = 1
+					autoSkip = combinedSkip
+				}
+			}
 			buildResidualField(plane, width, height, radius, step, window, autoSkip, medianField!, residual!)
 			computePhaseStats(residual!, width, height, phases, gatherBuf, scaleScratch, phaseMedian, phaseScale, autoSkip)
 			for (let ph = 0; ph < phases; ph++) autoEnabled ||= phaseScale[ph] > 0
@@ -574,7 +588,7 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 					cause = 1
 				} else if (darkEnabled && darkPlane![p] > darkThreshold[ph]) {
 					cause = 2
-				} else if (autoEnabled && gScale > 0 && (protectMask === undefined || protectMask[p] === 0)) {
+				} else if (autoEnabled && gScale > 0 && (protectSkip === undefined || protectSkip[p] === 0)) {
 					m = medianField![p]
 					haveM = true
 					// The window-median deviation is a cheap gate; a candidate is confirmed only when the

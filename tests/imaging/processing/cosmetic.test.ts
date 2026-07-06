@@ -726,6 +726,30 @@ test('auto scale excludes pixels already flagged by the master dark', () => {
 	expect(image.raw[pixelOffset(image, 15, 15)]).toBeCloseTo(0.1, 3)
 })
 
+test('auto scale excludes protected bright pixels', () => {
+	// Protected bright point sources are intentionally skipped by final auto repair; they must also be
+	// excluded from the auto noise scale so an unrelated weaker hot pixel still exceeds the threshold.
+	const width = 30
+	const height = 30
+	const values = new Float32Array(width * height).fill(0.1)
+	const protect = new Uint8Array(width * height)
+	for (let y = 2; y < height; y += 5) {
+		for (let x = 2; x < width; x += 5) {
+			values[y * width + x] = 0.9
+			protect[y * width + x] = 1
+		}
+	}
+	values[15 * width + 15] = 0.35
+	const image = makeImage(width, height, 1, values)
+
+	const result = cosmeticCorrection(image, { protect })
+
+	expect(result.hot).toBe(1)
+	expect(result.corrected).toBe(1)
+	expect(image.raw[pixelOffset(image, 15, 15)]).toBeCloseTo(0.1, 3)
+	expect(image.raw[pixelOffset(image, 2, 2)]).toBeCloseTo(0.9, 6)
+})
+
 test('auto gate uses darkSkip when multiple dark neighbors bias the local median', () => {
 	// Four fixed hot neighbors make the unmasked 3x3 median hot enough to hide the transient center.
 	// The auto gate must use the darkSkip median before deciding whether the center is a candidate.
