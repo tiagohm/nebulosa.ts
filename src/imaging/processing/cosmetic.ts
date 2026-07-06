@@ -343,12 +343,7 @@ function medianBySelection(values: Float64Array, count: number) {
 
 // Median of the collected scratch prefix.
 function medianOfScratchPrefix(values: Float64Array, count: number) {
-	if (count <= SMALL_MEDIAN_SORT_LIMIT) {
-		sortSmallPrefix(values, count)
-	} else {
-		values.subarray(0, count).sort()
-	}
-	return medianOf(values, count)
+	return medianBySelection(values, count)
 }
 
 // Fast median for the common radius-1, unmasked local window. It avoids dynamic lattice-bound
