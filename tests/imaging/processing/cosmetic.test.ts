@@ -523,6 +523,26 @@ test('a flat master dark with a hot column still detects the defects', () => {
 	expect(image.raw[pixelOffset(image, 5, 6)]).toBeCloseTo(at(5), 3)
 })
 
+test('a narrow master dark hot column is excluded from the dark scale', () => {
+	// One hot column in a narrow crop can exceed a fixed trim percentage. The dark scale must come
+	// from the lower clean tail instead of the remaining hot-column samples.
+	const width = 10
+	const height = 20
+	const values = new Float32Array(width * height).fill(0.1)
+	for (let y = 0; y < height; y++) values[y * width + 4] = 0.9
+	const image = makeImage(width, height, 1, values)
+
+	const dark = new Float32Array(width * height).fill(0.01)
+	for (let y = 0; y < height; y++) dark[y * width + 4] = 0.8
+	const masterDark = makeImage(width, height, 1, dark)
+
+	const result = cosmeticCorrection(image, { hotSigma: 0, coldSigma: 0, masterDark })
+
+	expect(result.dark).toBe(height)
+	expect(result.corrected).toBe(height)
+	for (let y = 0; y < height; y++) expect(image.raw[pixelOffset(image, 4, y)]).toBeCloseTo(0.1, 3)
+})
+
 test('a two-sample master dark phase keeps its measured scale', () => {
 	// With only two clean samples, trimming one value would collapse the dark scale to zero and make the
 	// brighter normal sample look like a fixed hot pixel. The trimmed clamp only applies when at least two

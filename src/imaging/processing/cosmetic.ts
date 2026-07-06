@@ -117,6 +117,19 @@ function robustPlaneScale(plane: Float64Array, count: number, buf: Float64Array)
 	return { median, scale: Number.isFinite(scale) ? scale : 0 } as const
 }
 
+// Robust scale from the lower side of a sorted sample distribution, measured around `median`. Master-dark
+// hot pixels are an upper-tail defect population, so using only values at or below the median keeps the
+// dark scale tied to the clean background even when the hot tail is wider than a fixed trim percentage.
+// Returns undefined when fewer than two lower-tail samples exist, leaving the caller's original scale intact.
+function lowerTailScale(sortedValues: Float64Array, count: number, median: number, scratch: Float64Array) {
+	let lowerCount = 0
+	for (let i = 0; i < count && sortedValues[i] <= median; i++) scratch[lowerCount++] = median - sortedValues[i]
+	if (lowerCount < 2) return undefined
+	scratch.subarray(0, lowerCount).sort()
+	const scale = STANDARD_DEVIATION_SCALE * medianOf(scratch, lowerCount)
+	return Number.isFinite(scale) ? scale : 0
+}
+
 // CFA phase index of (x, y): a Bayer 2x2 mosaic has 4 interleaved photosite phases (each a distinct color
 // position) that must be treated independently, so this maps to [0, 3] by pixel parity; a non-mosaic
 // plane is a single phase (always 0). `phases` is 4 for a Bayer frame, 1 otherwise.
@@ -483,11 +496,10 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 		if (darkPlane !== undefined) {
 			for (let p = 0, i = channel; p < n; p++, i += channels) darkPlane[p] = dark0![i]
 			computePhaseStats(darkPlane, width, height, phases, gatherBuf, scaleScratch, darkPhaseMedian, darkPhaseScale, defectMask)
-			// When the master dark has a flat background with sparse hot pixels, the MAD collapses
-			// to zero and the stddev fallback includes the hot tail, inflating the threshold past
-			// the very defects it should catch. Compute a trimmed scale from the lower portion
-			// of each phase's sorted values (excluding the top 5%) and clamp the dark scale to
-			// that bound so the hot-pixel tail cannot mask itself.
+			// When the master dark has a flat background with hot pixels, the MAD collapses to zero
+			// and the stddev fallback includes the hot tail, inflating the threshold past the very
+			// defects it should catch. Clamp the dark scale to a lower-tail scale so hot outliers
+			// cannot mask themselves, even when they occupy more than a fixed trim percentage.
 			for (let ph = 0; ph < phases; ph++) {
 				if (Number.isFinite(darkPhaseMedian[ph])) {
 					let dScale = darkPhaseScale[ph]
@@ -510,12 +522,11 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 					}
 					if (dCount > 1) {
 						gatherBuf.subarray(0, dCount).sort()
-						const trimCount = Math.max(1, dCount - Math.max(1, Math.trunc(dCount * 0.05)))
-						if (trimCount > 1) {
-							const trimmedScale = standardDeviationOf(gatherBuf, trimCount)
-							if (trimmedScale > 0 && trimmedScale < dScale) {
-								dScale = trimmedScale
-							} else if (trimmedScale === 0 && dScale > 0) {
+						const tailScale = lowerTailScale(gatherBuf, dCount, darkPhaseMedian[ph], scaleScratch)
+						if (tailScale !== undefined) {
+							if (tailScale > 0 && tailScale < dScale) {
+								dScale = tailScale
+							} else if (tailScale === 0 && dScale > 0) {
 								const constantScaleLimit = Math.max(CONSTANT_DARK_SCALE_LIMIT, Math.abs(darkPhaseMedian[ph]) * CONSTANT_DARK_SCALE_FRACTION)
 								if (constantScaleLimit < dScale) dScale = constantScaleLimit
 							}
