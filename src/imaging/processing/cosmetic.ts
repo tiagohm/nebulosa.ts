@@ -479,15 +479,6 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 		// (written back to the interleaved raw buffer) never feed into later neighborhood medians.
 		for (let p = 0, i = channel; p < n; p++, i += channels) plane[p] = raw[i]
 
-		// Estimate the noise scale from local-median residuals (not the raw plane), so smooth gradients and
-		// vignetting do not inflate it and hide obvious local defects.
-		let autoEnabled = false
-		if (autoPossible) {
-			buildResidualField(plane, width, height, radius, step, window, defectMask, medianField!, residual!)
-			computePhaseStats(residual!, width, height, phases, gatherBuf, scaleScratch, phaseMedian, phaseScale, defectMask)
-			for (let ph = 0; ph < phases; ph++) autoEnabled ||= phaseScale[ph] > 0
-		}
-
 		// Per-phase master-dark thresholds for this channel; a phase is disabled when its dark scale is 0.
 		// Known defects are excluded from the dark statistics so a mapped bad column does not inflate the
 		// scale and mask other fixed hot pixels in the same master dark.
@@ -538,12 +529,9 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 			}
 		}
 
-		// Nothing to detect for this channel: skip the per-pixel scan entirely.
-		if (defectMask === undefined && !darkEnabled && !autoEnabled) continue
-
-		// Combined skip mask for dark-path repairs: neighbors that are themselves flagged by the dark
-		// detector (above threshold) are excluded from the repair median so a cluster of fixed hot pixels
-		// does not bias the interpolation toward the hot-cluster value.
+		// Combined skip mask for dark-path repairs and auto noise estimation: neighbors that are themselves
+		// flagged by the dark detector (above threshold) are excluded so fixed hot pixels do not bias repair
+		// medians or inflate the auto residual scale.
 		let darkSkip: Uint8Array | undefined
 		if (darkEnabled) {
 			if (defectMask !== undefined) {
@@ -555,6 +543,20 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 				if (darkPlane![p] > darkThreshold[phaseIndex(p % width, Math.trunc(p / width), phases)]) darkSkip[p] = 1
 			}
 		}
+
+		// Estimate the noise scale from local-median residuals (not the raw plane), so smooth gradients and
+		// vignetting do not inflate it and hide obvious local defects. Known defects and master-dark fixed
+		// defects are skipped because they are not sensor noise for the auto detector.
+		let autoEnabled = false
+		if (autoPossible) {
+			const autoSkip = darkSkip ?? defectMask
+			buildResidualField(plane, width, height, radius, step, window, autoSkip, medianField!, residual!)
+			computePhaseStats(residual!, width, height, phases, gatherBuf, scaleScratch, phaseMedian, phaseScale, autoSkip)
+			for (let ph = 0; ph < phases; ph++) autoEnabled ||= phaseScale[ph] > 0
+		}
+
+		// Nothing to detect for this channel: skip the per-pixel scan entirely.
+		if (defectMask === undefined && !darkEnabled && !autoEnabled) continue
 
 		for (let y = 0; y < height; y++) {
 			const rowBase = y * width

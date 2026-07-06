@@ -673,6 +673,42 @@ test('auto isolation ignores neighbors already flagged by the master dark', () =
 	expect(image.raw[pixelOffset(image, 11, 10)]).toBeCloseTo(0.1, 3)
 })
 
+test('auto scale excludes pixels already flagged by the master dark', () => {
+	// Fixed hot pixels from the master dark are repaired by the dark path, but their large residuals
+	// must not inflate the auto detector's noise scale and hide an unrelated weaker transient hot pixel.
+	const width = 30
+	const height = 30
+	const fixed: [number, number][] = [
+		[2, 2],
+		[7, 2],
+		[12, 2],
+		[17, 2],
+		[22, 2],
+		[27, 2],
+		[2, 27],
+		[7, 27],
+		[12, 27],
+		[17, 27],
+		[22, 27],
+		[27, 27],
+	]
+	const values = new Float32Array(width * height).fill(0.1)
+	for (const [x, y] of fixed) values[y * width + x] = 0.9
+	values[15 * width + 15] = 0.35
+	const image = makeImage(width, height, 1, values)
+
+	const dark = new Float32Array(width * height).fill(0.01)
+	for (const [x, y] of fixed) dark[y * width + x] = 0.8
+	const masterDark = makeImage(width, height, 1, dark)
+
+	const result = cosmeticCorrection(image, { masterDark })
+
+	expect(result.dark).toBe(fixed.length)
+	expect(result.hot).toBe(1)
+	expect(result.corrected).toBe(fixed.length + 1)
+	expect(image.raw[pixelOffset(image, 15, 15)]).toBeCloseTo(0.1, 3)
+})
+
 test('auto gate uses darkSkip when multiple dark neighbors bias the local median', () => {
 	// Four fixed hot neighbors make the unmasked 3x3 median hot enough to hide the transient center.
 	// The auto gate must use the darkSkip median before deciding whether the center is a candidate.
