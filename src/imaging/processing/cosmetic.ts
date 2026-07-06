@@ -74,6 +74,14 @@ export const DEFAULT_COSMETIC_CORRECTION_OPTIONS: Readonly<Required<Omit<Cosmeti
 	darkHotSigma: 5,
 }
 
+// One normalized 16-bit code value used as a nonzero dark-scale limit for perfectly flat trimmed
+// backgrounds, preventing small quantized differences from becoming zero-noise outliers.
+const CONSTANT_DARK_SCALE_LIMIT = 1 / 65535
+
+// Relative dark-scale limit for flat trimmed backgrounds; fixed hot pixels should exceed ordinary
+// dark-current quantization by more than this fraction of the median background.
+const CONSTANT_DARK_SCALE_FRACTION = 0.1
+
 // Outcome of a cosmetic-correction pass: the mutated image plus how many samples each detector repaired.
 // The per-detector counts are mutually exclusive (a sample is attributed to the first detector that
 // flags it, in the order defect > dark > hot > cold) and sum to `corrected`.
@@ -504,7 +512,12 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 						const trimCount = Math.max(1, dCount - Math.max(1, Math.trunc(dCount * 0.05)))
 						if (trimCount > 1) {
 							const trimmedScale = standardDeviationOf(gatherBuf, trimCount)
-							if (trimmedScale < dScale) dScale = trimmedScale
+							if (trimmedScale > 0 && trimmedScale < dScale) {
+								dScale = trimmedScale
+							} else if (trimmedScale === 0 && dScale > 0) {
+								const constantScaleLimit = Math.max(CONSTANT_DARK_SCALE_LIMIT, Math.abs(darkPhaseMedian[ph]) * CONSTANT_DARK_SCALE_FRACTION)
+								if (constantScaleLimit < dScale) dScale = constantScaleLimit
+							}
 						}
 					}
 					darkThreshold[ph] = darkPhaseMedian[ph] + darkHotSigma * dScale
