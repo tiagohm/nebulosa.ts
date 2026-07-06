@@ -1046,7 +1046,7 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 					// The window-median deviation is a cheap gate; a candidate is confirmed only when the
 					// isolation test (against the robust background) rules out a resolved source such as a star.
 					const autoSkip = darkSkip ?? defectMask
-					if (darkSkip !== undefined) m = neighborhoodMedian(plane, x, y, width, height, radius, step, window, darkSkip, p)
+					if (darkSkip !== undefined && protectSkip !== undefined) m = neighborhoodMedian(plane, x, y, width, height, radius, step, window, darkSkip, p)
 					if (hotSigma > 0 && center > m + hotSigma * gScale && isIsolatedDefect(plane, x, y, width, height, bgRadius, step, bgWindow, autoSkip, gScale, hotSigma, 1, rawBgWindow, residual, phaseScale)) cause = 3
 					else if (coldSigma > 0 && center < m - coldSigma * gScale && isIsolatedDefect(plane, x, y, width, height, bgRadius, step, bgWindow, autoSkip, gScale, coldSigma, -1, rawBgWindow, residual, phaseScale)) cause = 4
 				}
