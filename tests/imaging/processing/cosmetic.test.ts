@@ -718,6 +718,34 @@ test('auto repair skips the candidate when darkSkip covers the local window', ()
 	expect(image.raw[pixelOffset(image, cx, cy)]).toBeCloseTo(0.1, 3)
 })
 
+test('auto residual skips the candidate when explicit defects cover the local window', () => {
+	// The explicit defect ring is skipped from local medians, but the unmapped hot center still needs
+	// to be compared against the exterior background. If the center remains in its own median, its
+	// residual is zero and auto detection never sees it.
+	const width = 20
+	const height = 20
+	const values = new Float32Array(width * height).fill(0.1)
+	const cx = 10
+	const cy = 10
+	const pixels: [number, number][] = []
+	values[cy * width + cx] = 0.9
+	for (let dy = -1; dy <= 1; dy++) {
+		for (let dx = -1; dx <= 1; dx++) {
+			if (dx === 0 && dy === 0) continue
+			values[(cy + dy) * width + (cx + dx)] = 0.9
+			pixels.push([cx + dx, cy + dy])
+		}
+	}
+	const image = makeImage(width, height, 1, values)
+
+	const result = cosmeticCorrection(image, { defects: { pixels } })
+
+	expect(result.defect).toBe(8)
+	expect(result.hot).toBe(1)
+	expect(result.corrected).toBe(9)
+	expect(image.raw[pixelOffset(image, cx, cy)]).toBeCloseTo(0.1, 3)
+})
+
 test('an empty image and amount 0 are no-ops', () => {
 	const empty = makeImage(0, 0, 1, new Float32Array(0))
 	expect(cosmeticCorrection(empty).corrected).toBe(0)

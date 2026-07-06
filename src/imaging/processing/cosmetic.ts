@@ -323,13 +323,14 @@ function isIsolatedDefect(plane: Float64Array, x: number, y: number, width: numb
 // it. Subtracting the local median removes smooth structure (sky gradients, vignetting), so the robust
 // scale of `residual` reflects sensor noise instead of the background slope — using the raw plane's global
 // spread would otherwise inflate the threshold and hide obvious local defects. `skip` (the defect mask) is
-// passed to the median so known defects do not bias it.
+// passed to the median so known defects do not bias it. The center sample is skipped too so a candidate
+// surrounded by masked neighbors cannot become its own local background.
 function buildResidualField(plane: Float64Array, width: number, height: number, radius: number, step: number, window: Float64Array, skip: Uint8Array | undefined, medianField: Float64Array, residual: Float64Array) {
 	for (let y = 0; y < height; y++) {
 		const rowBase = y * width
 		for (let x = 0; x < width; x++) {
 			const p = rowBase + x
-			const m = neighborhoodMedian(plane, x, y, width, height, radius, step, window, skip)
+			const m = neighborhoodMedian(plane, x, y, width, height, radius, step, window, skip, p)
 			medianField[p] = m
 			residual[p] = plane[p] - m
 		}
