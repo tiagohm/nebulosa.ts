@@ -131,6 +131,25 @@ test('a master dark repairs one RGB channel without auto detection', () => {
 	expect(image.raw[pixelOffset(image, x, y, 2)]).toBeCloseTo(0.4 + 0.01 * y, 6)
 })
 
+test('darkHotSigma 0 disables master-dark detection', () => {
+	const width = 20
+	const height = 12
+	const { values } = rampImage(width, height, 0.3, 0.34)
+	values[6 * width + 8] = 0.85
+	const image = makeImage(width, height, 1, values)
+	const before = Float32Array.from(image.raw)
+
+	const dark = new Float32Array(width * height).fill(0.01)
+	dark[6 * width + 8] = 0.8
+	const masterDark = makeImage(width, height, 1, dark)
+
+	const result = cosmeticCorrection(image, { hotSigma: 0, coldSigma: 0, darkHotSigma: 0, masterDark })
+
+	expect(result.corrected).toBe(0)
+	expect(result.dark).toBe(0)
+	for (let i = 0; i < before.length; i++) expect(image.raw[i]).toBe(before[i])
+})
+
 test('an explicit defect column is repaired unconditionally', () => {
 	const width = 16
 	const height = 10

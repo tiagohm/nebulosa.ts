@@ -778,6 +778,7 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 	const md = options.masterDark
 	const darkUsable = md !== undefined && md.metadata.width === width && md.metadata.height === height && md.metadata.channels === channels
 	const dark0 = darkUsable ? md.raw : undefined
+	const darkPossible = dark0 !== undefined && darkHotSigma > 0
 
 	const defectMask = buildDefectMask(options.defects, width, height)
 
@@ -831,19 +832,19 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 
 	// Pure explicit-defect maps can be repaired directly from the interleaved raw buffer when the map is
 	// sparse, avoiding a full deinterleaved Float64 plane and the full-frame detection scan.
-	const sparseDefectIndices = defectMask !== undefined && !autoPossible && dark0 === undefined ? collectSparseDefectIndices(defectMask, Math.max(1, Math.floor(n * SPARSE_DEFECT_MAX_FRACTION))) : undefined
+	const sparseDefectIndices = defectMask !== undefined && !autoPossible && !darkPossible ? collectSparseDefectIndices(defectMask, Math.max(1, Math.floor(n * SPARSE_DEFECT_MAX_FRACTION))) : undefined
 	if (sparseDefectIndices !== undefined) {
 		defect = repairSparseDefects(raw, width, height, channels, radius, step, amount, defectMask!, sparseDefectIndices, window)
 		return { image, corrected: defect, hot, cold, dark, defect }
 	}
 
-	if (!autoPossible && dark0 !== undefined) {
+	if (!autoPossible && darkPossible) {
 		const directGather = new Float64Array(n)
 		const directScratch = new Float64Array(n)
 		const directMedian = new Float64Array(phases)
 		const directScale = new Float64Array(phases)
 		const directThreshold = new Float64Array(phases)
-		const direct = repairMasterDarkDirect(raw, dark0, width, height, channels, phases, radius, step, amount, darkHotSigma, defectMask, directGather, directScratch, directMedian, directScale, directThreshold, window)
+		const direct = repairMasterDarkDirect(raw, dark0!, width, height, channels, phases, radius, step, amount, darkHotSigma, defectMask, directGather, directScratch, directMedian, directScale, directThreshold, window)
 		defect = direct.defect
 		dark = direct.dark
 		return { image, corrected: dark + defect, hot, cold, dark, defect }
@@ -853,7 +854,7 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 	// plane is needed for deinterleaving whenever statistical detection or dense defect repair runs;
 	// scale/gather are only allocated when the auto or master-dark detector could run.
 	const plane = new Float64Array(n)
-	const scratchNeeded = autoPossible || dark0 !== undefined
+	const scratchNeeded = autoPossible || darkPossible
 	const scaleScratch = scratchNeeded ? new Float64Array(n) : new Float64Array(0)
 	const gatherBuf = scratchNeeded ? new Float64Array(n) : new Float64Array(0)
 	const bgWindow: NeighborhoodScratch = { values: new Float64Array(bgWindowSize) }
@@ -880,10 +881,10 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 		// Known defects are excluded from the dark statistics so a mapped bad column does not inflate the
 		// scale and mask other fixed hot pixels in the same master dark.
 		let darkEnabled = false
-		if (dark0 !== undefined) {
+		if (darkPossible) {
 			// When the master dark has a flat background with hot pixels, the MAD collapses to zero and
 			// the stddev fallback includes the hot tail, so the threshold helper clamps to a lower-tail scale.
-			darkEnabled = computeInterleavedDarkThresholds(dark0, channel, channels, width, height, phases, darkHotSigma, gatherBuf, scaleScratch, darkPhaseMedian, darkPhaseScale, darkThreshold, defectMask)
+			darkEnabled = computeInterleavedDarkThresholds(dark0!, channel, channels, width, height, phases, darkHotSigma, gatherBuf, scaleScratch, darkPhaseMedian, darkPhaseScale, darkThreshold, defectMask)
 		} else {
 			darkThreshold.fill(Number.POSITIVE_INFINITY)
 		}
