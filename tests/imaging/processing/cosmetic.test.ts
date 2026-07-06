@@ -579,6 +579,23 @@ test('a quantized clean master dark high tail is not treated as zero-noise defec
 	for (let i = 0; i < before.length; i++) expect(image.raw[i]).toBe(before[i])
 })
 
+test('a single quantized master dark blip stays below the dark-scale floor', () => {
+	const width = 20
+	const height = 5
+	const values = new Float32Array(width * height).fill(0.1)
+	const image = makeImage(width, height, 1, values)
+	const before = Float32Array.from(image.raw)
+
+	const dark = new Float32Array(width * height).fill(0.01)
+	dark[0] = 0.010001
+	const masterDark = makeImage(width, height, 1, dark)
+
+	const result = cosmeticCorrection(image, { hotSigma: 0, coldSigma: 0, masterDark })
+
+	expect(result.corrected).toBe(0)
+	for (let i = 0; i < before.length; i++) expect(image.raw[i]).toBe(before[i])
+})
+
 test('a 3x3 dark-hot block is repaired from exterior neighbors not the cluster', () => {
 	// A 3x3 block of fixed-hot pixels in both light and master dark covers the entire default 3x3
 	// repair window (radius=1). Without window expansion, the fallback would use the hot cluster's

@@ -517,9 +517,9 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 						if (tailScale !== undefined) {
 							if (tailScale > 0 && tailScale < dScale) {
 								dScale = tailScale
-							} else if (tailScale === 0 && dScale > 0) {
+							} else if (tailScale === 0) {
 								const constantScaleLimit = Math.max(CONSTANT_DARK_SCALE_LIMIT, Math.abs(darkPhaseMedian[ph]) * CONSTANT_DARK_SCALE_FRACTION)
-								if (constantScaleLimit < dScale) dScale = constantScaleLimit
+								dScale = constantScaleLimit
 							}
 						}
 					}
