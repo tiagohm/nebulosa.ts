@@ -523,6 +523,23 @@ test('a flat master dark with a hot column still detects the defects', () => {
 	expect(image.raw[pixelOffset(image, 5, 6)]).toBeCloseTo(at(5), 3)
 })
 
+test('a two-sample master dark phase keeps its measured scale', () => {
+	// With only two clean samples, trimming one value would collapse the dark scale to zero and make the
+	// brighter normal sample look like a fixed hot pixel. The trimmed clamp only applies when at least two
+	// samples remain after trimming.
+	const width = 2
+	const height = 1
+	const values = new Float32Array([0.1, 0.11])
+	const image = makeImage(width, height, 1, values)
+	const before = Float32Array.from(image.raw)
+	const masterDark = makeImage(width, height, 1, new Float32Array([0.01, 0.02]))
+
+	const result = cosmeticCorrection(image, { hotSigma: 0, coldSigma: 0, masterDark })
+
+	expect(result.corrected).toBe(0)
+	for (let i = 0; i < before.length; i++) expect(image.raw[i]).toBe(before[i])
+})
+
 test('a 3x3 dark-hot block is repaired from exterior neighbors not the cluster', () => {
 	// A 3x3 block of fixed-hot pixels in both light and master dark covers the entire default 3x3
 	// repair window (radius=1). Without window expansion, the fallback would use the hot cluster's
@@ -550,6 +567,71 @@ test('a 3x3 dark-hot block is repaired from exterior neighbors not the cluster',
 	expect(result.corrected).toBe(9)
 	// The cluster center is repaired to the background level.
 	expect(image.raw[pixelOffset(image, 10, 10)]).toBeCloseTo(0.1, 2)
+})
+
+test('a 5x5 dark-hot block grows repair scratch for expanded neighbors', () => {
+	// The default repair scratch holds a 3x3 window. A 5x5 flagged block forces expansion to a 7x7
+	// neighborhood, where the exterior good samples must all be retained for a finite median.
+	const width = 20
+	const height = 20
+	const values = new Float32Array(width * height).fill(0.1)
+	for (let y = 8; y <= 12; y++) {
+		for (let x = 8; x <= 12; x++) values[y * width + x] = 0.9
+	}
+	const image = makeImage(width, height, 1, values)
+
+	const dark = new Float32Array(width * height).fill(0.01)
+	for (let y = 8; y <= 12; y++) {
+		for (let x = 8; x <= 12; x++) dark[y * width + x] = 0.8
+	}
+	const masterDark = makeImage(width, height, 1, dark)
+
+	const result = cosmeticCorrection(image, { hotSigma: 0, coldSigma: 0, masterDark })
+
+	expect(result.dark).toBe(25)
+	expect(result.corrected).toBe(25)
+	expect(image.raw[pixelOffset(image, 10, 10)]).toBeCloseTo(0.1, 2)
+	expect(Number.isFinite(image.raw[pixelOffset(image, 10, 10)])).toBe(true)
+})
+
+test('a fully mapped bad frame does not hang when no repair neighbor exists', () => {
+	// Every sample is explicitly skipped, so no unflagged repair neighbor exists anywhere in the frame.
+	// The median helper must stop expanding and leave samples unchanged instead of looping forever.
+	const width = 4
+	const height = 4
+	const values = new Float32Array(width * height)
+	for (let i = 0; i < values.length; i++) values[i] = 0.1 + i * 0.01
+	const image = makeImage(width, height, 1, values)
+	const before = Float32Array.from(image.raw)
+
+	const result = cosmeticCorrection(image, { hotSigma: 0, coldSigma: 0, defects: { columns: [0, 1, 2, 3] } })
+
+	expect(result.defect).toBe(width * height)
+	expect(result.corrected).toBe(width * height)
+	for (let i = 0; i < before.length; i++) expect(image.raw[i]).toBe(before[i])
+})
+
+test('auto isolation ignores neighbors already flagged by the master dark', () => {
+	// The transient hot pixel at (10, 10) is adjacent to a fixed hot pixel identified by the master dark.
+	// That dark-flagged neighbor is not PSF support, so the transient remains isolated and is repaired too.
+	const width = 20
+	const height = 20
+	const values = new Float32Array(width * height).fill(0.1)
+	values[10 * width + 10] = 0.9
+	values[10 * width + 11] = 0.9
+	const image = makeImage(width, height, 1, values)
+
+	const dark = new Float32Array(width * height).fill(0.01)
+	dark[10 * width + 11] = 0.8
+	const masterDark = makeImage(width, height, 1, dark)
+
+	const result = cosmeticCorrection(image, { masterDark })
+
+	expect(result.dark).toBe(1)
+	expect(result.hot).toBe(1)
+	expect(result.corrected).toBe(2)
+	expect(image.raw[pixelOffset(image, 10, 10)]).toBeCloseTo(0.1, 3)
+	expect(image.raw[pixelOffset(image, 11, 10)]).toBeCloseTo(0.1, 3)
 })
 
 test('an empty image and amount 0 are no-ops', () => {

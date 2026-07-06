@@ -157,6 +157,14 @@ function computePhaseStats(plane: Float64Array, width: number, height: number, p
 	}
 }
 
+// Allocates a larger neighborhood scratch buffer when skip-mask expansion finds more samples than the
+// initial in-bounds window could hold. Existing samples are copied into the returned buffer.
+function growNeighborhoodBuffer(buf: Float64Array, minLength: number) {
+	const next = new Float64Array(Math.max(minLength, buf.length * 2, 1))
+	next.set(buf)
+	return next
+}
+
 // Median of the neighborhood of (x, y), read from the deinterleaved `plane`. Samples the (2r+1)^2 lattice
 // centered on (x, y) with a spacing of `step` pixels per axis, clamped to the image bounds. `step` is 1
 // for a normal plane; for a Bayer CFA mosaic it is 2 so only same-color-phase photosites are gathered
@@ -164,9 +172,9 @@ function computePhaseStats(plane: Float64Array, width: number, height: number, p
 // computed up front, so the scan cost is the number of samples actually gathered rather than (2r+1)^2 —
 // a radius far larger than the frame does not blow the loop up. When `skip` is given, neighbors flagged in
 // it (the defect mask) are excluded; `skipIndex` additionally skips a single pixel index without
-// requiring a full-frame mask. Falls back
-// to including every sampled neighbor if the whole window is flagged, so the result is always finite.
-// `buf` must hold at least (min(2r+1, ceil(width/step)) * min(2r+1, ceil(height/step))) elements.
+// requiring a full-frame mask. If no unflagged neighbor exists anywhere in the sampled lattice, returns
+// the original center value so the caller leaves the sample effectively unchanged. `buf` must hold the
+// initial in-bounds window; it grows only when a skipped window has to expand beyond that initial size.
 function neighborhoodMedian(plane: Float64Array, x: number, y: number, width: number, height: number, r: number, step: number, buf: Float64Array, skip?: Uint8Array, skipIndex?: number) {
 	// Restrict the lattice offsets to those that land inside the frame, so an oversized radius neither
 	// scans nor requires buffer space for samples that would only be clamped away.
@@ -175,6 +183,7 @@ function neighborhoodMedian(plane: Float64Array, x: number, y: number, width: nu
 	const kxMin = Math.max(-r, -Math.floor(x / step))
 	const kxMax = Math.min(r, Math.floor((width - 1 - x) / step))
 
+	let values = buf
 	let count = 0
 	for (let ky = kyMin; ky <= kyMax; ky++) {
 		const row = (y + ky * step) * width
@@ -182,7 +191,8 @@ function neighborhoodMedian(plane: Float64Array, x: number, y: number, width: nu
 			const q = row + x + kx * step
 			if (q === skipIndex) continue
 			if (skip !== undefined && skip[q] !== 0) continue
-			buf[count++] = plane[q]
+			if (count === values.length) values = growNeighborhoodBuffer(values, count + 1)
+			values[count++] = plane[q]
 		}
 	}
 
@@ -191,25 +201,28 @@ function neighborhoodMedian(plane: Float64Array, x: number, y: number, width: nu
 	// back to the hot cluster's own values when a skip mask covers the entire window.
 	if (count === 0) {
 		let er = r + 1
+		let prevKyMin = kyMin
+		let prevKyMax = kyMax
+		let prevKxMin = kxMin
+		let prevKxMax = kxMax
 		while (true) {
 			const ekyMin = Math.max(-er, -Math.floor(y / step))
 			const ekyMax = Math.min(er, Math.floor((height - 1 - y) / step))
 			const ekxMin = Math.max(-er, -Math.floor(x / step))
 			const ekxMax = Math.min(er, Math.floor((width - 1 - x) / step))
-			if (ekyMin === kyMin && ekyMax === kyMax && ekxMin === kxMin && ekxMax === kxMax) {
-				// Window cannot grow further: re-gather without the skip as last resort.
-				for (let ky = kyMin; ky <= kyMax; ky++) {
-					const row = (y + ky * step) * width
-					for (let kx = kxMin; kx <= kxMax; kx++) buf[count++] = plane[row + x + kx * step]
-				}
-				break
-			}
+			if (ekyMin === prevKyMin && ekyMax === prevKyMax && ekxMin === prevKxMin && ekxMax === prevKxMax) return plane[y * width + x]
+			prevKyMin = ekyMin
+			prevKyMax = ekyMax
+			prevKxMin = ekxMin
+			prevKxMax = ekxMax
 			for (let ky = ekyMin; ky <= ekyMax; ky++) {
 				const row = (y + ky * step) * width
 				for (let kx = ekxMin; kx <= ekxMax; kx++) {
 					const q = row + x + kx * step
+					if (q === skipIndex) continue
 					if (skip !== undefined && skip[q] !== 0) continue
-					buf[count++] = plane[q]
+					if (count === values.length) values = growNeighborhoodBuffer(values, count + 1)
+					values[count++] = plane[q]
 				}
 			}
 			if (count > 0) break
@@ -217,8 +230,8 @@ function neighborhoodMedian(plane: Float64Array, x: number, y: number, width: nu
 		}
 	}
 
-	buf.subarray(0, count).sort()
-	return medianOf(buf, count)
+	values.subarray(0, count).sort()
+	return medianOf(values, count)
 }
 
 // Decides whether a candidate pixel is a genuine isolated defect rather than the peak of a resolved
@@ -489,8 +502,10 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 					if (dCount > 1) {
 						gatherBuf.subarray(0, dCount).sort()
 						const trimCount = Math.max(1, dCount - Math.max(1, Math.trunc(dCount * 0.05)))
-						const trimmedScale = standardDeviationOf(gatherBuf, trimCount)
-						if (trimmedScale < dScale) dScale = trimmedScale
+						if (trimCount > 1) {
+							const trimmedScale = standardDeviationOf(gatherBuf, trimCount)
+							if (trimmedScale < dScale) dScale = trimmedScale
+						}
 					}
 					darkThreshold[ph] = darkPhaseMedian[ph] + darkHotSigma * dScale
 					darkEnabled = true
@@ -537,17 +552,19 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 					haveM = true
 					// The window-median deviation is a cheap gate; a candidate is confirmed only when the
 					// isolation test (against the robust background) rules out a resolved source such as a star.
-					if (hotSigma > 0 && center > m + hotSigma * gScale && isIsolatedDefect(plane, x, y, width, height, bgRadius, step, bgWindow, defectMask, gScale, hotSigma, 1, rawBgWindow, residual, phaseScale)) cause = 3
-					else if (coldSigma > 0 && center < m - coldSigma * gScale && isIsolatedDefect(plane, x, y, width, height, bgRadius, step, bgWindow, defectMask, gScale, coldSigma, -1, rawBgWindow, residual, phaseScale)) cause = 4
+					const autoSkip = darkSkip ?? defectMask
+					if (hotSigma > 0 && center > m + hotSigma * gScale && isIsolatedDefect(plane, x, y, width, height, bgRadius, step, bgWindow, autoSkip, gScale, hotSigma, 1, rawBgWindow, residual, phaseScale)) cause = 3
+					else if (coldSigma > 0 && center < m - coldSigma * gScale && isIsolatedDefect(plane, x, y, width, height, bgRadius, step, bgWindow, autoSkip, gScale, coldSigma, -1, rawBgWindow, residual, phaseScale)) cause = 4
+					if (cause !== 0 && darkSkip !== undefined) haveM = false
 				}
 
 				if (cause === 0) continue
 
 				// Dark-path and explicit-defect repairs use darkSkip when available so co-flagged dark
-				// neighbors are excluded from the median; hot/cold (auto) repairs reuse the precomputed
-				// median field which was built with only defectMask (acceptable for auto detections).
+				// neighbors are excluded from the median; hot/cold (auto) repairs do the same when a master
+				// dark has already identified neighboring fixed defects.
 				if (!haveM) {
-					if ((cause === 1 || cause === 2) && darkSkip !== undefined) {
+					if (darkSkip !== undefined && (cause === 1 || cause === 2 || cause === 3 || cause === 4)) {
 						m = neighborhoodMedian(plane, x, y, width, height, radius, step, window, darkSkip)
 					} else {
 						m = medianField !== undefined ? medianField[p] : neighborhoodMedian(plane, x, y, width, height, radius, step, window, defectMask)
