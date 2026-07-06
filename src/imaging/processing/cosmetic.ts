@@ -82,6 +82,10 @@ const CONSTANT_DARK_SCALE_LIMIT = 1 / 65535
 // dark-current quantization by more than this fraction of the median background.
 const CONSTANT_DARK_SCALE_FRACTION = 0.1
 
+// Largest sample count in the common 3x3 local-median window; insertion sort avoids a TypedArray
+// subarray/sort call for the per-pixel radius-1 path.
+const SMALL_MEDIAN_SORT_LIMIT = 9
+
 // Outcome of a cosmetic-correction pass: the mutated image plus how many samples each detector repaired.
 // The per-detector counts are mutually exclusive (a sample is attributed to the first detector that
 // flags it, in the order defect > dark > hot > cold) and sum to `corrected`.
@@ -186,6 +190,23 @@ function growNeighborhoodBuffer(buf: Float64Array, minLength: number) {
 	return next
 }
 
+// Sorts a tiny prefix of `values` in ascending numeric order, matching TypedArray sort's practical NaN
+// placement by pushing NaNs to the high end. Used only for 3x3 neighborhood medians.
+function sortSmallPrefix(values: Float64Array, count: number) {
+	for (let i = 1; i < count; i++) {
+		const value = values[i]
+		const valueIsNaN = Number.isNaN(value)
+		let j = i - 1
+		while (j >= 0) {
+			const previous = values[j]
+			if (!Number.isNaN(previous) ? valueIsNaN || previous <= value : valueIsNaN) break
+			values[j + 1] = previous
+			j--
+		}
+		values[j + 1] = value
+	}
+}
+
 // Median of the neighborhood of (x, y), read from the deinterleaved `plane`. Samples the (2r+1)^2 lattice
 // centered on (x, y) with a spacing of `step` pixels per axis, clamped to the image bounds. `step` is 1
 // for a normal plane; for a Bayer CFA mosaic it is 2 so only same-color-phase photosites are gathered
@@ -252,7 +273,11 @@ function neighborhoodMedian(plane: Float64Array, x: number, y: number, width: nu
 		}
 	}
 
-	values.subarray(0, count).sort()
+	if (count <= SMALL_MEDIAN_SORT_LIMIT) {
+		sortSmallPrefix(values, count)
+	} else {
+		values.subarray(0, count).sort()
+	}
 	return medianOf(values, count)
 }
 
