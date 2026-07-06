@@ -114,6 +114,15 @@ interface NeighborhoodScratch {
 	values: Float64Array
 }
 
+// Dense explicit-defect mask plus, when the map stays sparse, the unique row-major indices marked while
+// building it. The sparse list is omitted once the map exceeds the caller's direct-repair density limit.
+interface BuiltDefectMask {
+	// Geometry-level defect mask shared by all channels, with 1 for known bad samples.
+	readonly mask: Uint8Array
+	// Unique marked pixel indices when the explicit map remains sparse enough for direct repair.
+	readonly sparseIndices?: readonly number[]
+}
+
 // Robust center and scale of a plane's first `count` values. Returns the median and the normalized MAD
 // (comparable to a standard deviation); falls back to the population standard deviation when the MAD
 // collapses to 0 (a near-constant plane), and to 0 only when the plane is genuinely constant. `buf` is a
@@ -598,20 +607,6 @@ function interleavedNeighborhoodMedian(raw: Readonly<NumberArray>, channel: numb
 	return medianBySelection(values, count)
 }
 
-// Collects mapped-defect indices only while the map remains sparse enough for the direct repair path.
-// Returns undefined once the map exceeds `maxCount`, so dense maps fall back to the normal full-frame pass.
-function collectSparseDefectIndices(mask: Uint8Array, maxCount: number) {
-	const indices: number[] = []
-
-	for (let p = 0; p < mask.length; p++) {
-		if (mask[p] === 0) continue
-		if (indices.length >= maxCount) return undefined
-		indices.push(p)
-	}
-
-	return indices
-}
-
 // Repairs only explicitly mapped defects from the interleaved raw buffer. All mapped defects stay in the
 // skip mask, so direct reads do not reuse values already corrected earlier in the sparse pass.
 function repairSparseDefects(raw: NumberArray, width: number, height: number, channels: number, radius: number, step: number, amount: number, defectMask: Uint8Array, defectIndices: readonly number[], window: NeighborhoodScratch) {
@@ -803,19 +798,32 @@ function buildResidualField(plane: Float64Array, width: number, height: number, 
 }
 
 // Builds the geometry-level defect mask (shared across channels) from an explicit defect map, or returns
-// undefined when there is nothing to mark. Out-of-range entries are ignored so callers can pass loose
-// lists without pre-filtering.
-function buildDefectMask(defects: CosmeticDefectMap | undefined, width: number, height: number) {
+// undefined when there is nothing valid to mark. Out-of-range entries are ignored so callers can pass loose
+// lists without pre-filtering. When `maxSparseCount` is positive, also collects unique marked indices until
+// the map exceeds that count, allowing sparse direct repair without a second full-frame scan.
+function buildDefectMask(defects: CosmeticDefectMap | undefined, width: number, height: number, maxSparseCount = 0): BuiltDefectMask | undefined {
 	if (defects === undefined) return undefined
 	const { pixels, columns, rows } = defects
 	if ((!pixels || pixels.length === 0) && (!columns || columns.length === 0) && (!rows || rows.length === 0)) return undefined
 
 	const mask = new Uint8Array(width * height)
+	let sparseIndices: number[] | undefined = maxSparseCount > 0 ? [] : undefined
+	let count = 0
 
 	if (columns) {
 		for (const col of columns) {
 			if (!Number.isInteger(col) || col < 0 || col >= width) continue
-			for (let y = 0; y < height; y++) mask[y * width + col] = 1
+			for (let y = 0; y < height; y++) {
+				const p = y * width + col
+				if (mask[p] !== 0) continue
+				mask[p] = 1
+				count++
+
+				if (sparseIndices !== undefined) {
+					if (sparseIndices.length < maxSparseCount) sparseIndices.push(p)
+					else sparseIndices = undefined
+				}
+			}
 		}
 	}
 
@@ -823,18 +831,36 @@ function buildDefectMask(defects: CosmeticDefectMap | undefined, width: number, 
 		for (const row of rows) {
 			if (!Number.isInteger(row) || row < 0 || row >= height) continue
 			const base = row * width
-			for (let x = 0; x < width; x++) mask[base + x] = 1
+			for (let x = 0; x < width; x++) {
+				const p = base + x
+				if (mask[p] !== 0) continue
+				mask[p] = 1
+				count++
+
+				if (sparseIndices !== undefined) {
+					if (sparseIndices.length < maxSparseCount) sparseIndices.push(p)
+					else sparseIndices = undefined
+				}
+			}
 		}
 	}
 
 	if (pixels) {
 		for (const [x, y] of pixels) {
 			if (!Number.isInteger(x) || !Number.isInteger(y) || x < 0 || x >= width || y < 0 || y >= height) continue
-			mask[y * width + x] = 1
+			const p = y * width + x
+			if (mask[p] !== 0) continue
+			mask[p] = 1
+			count++
+
+			if (sparseIndices !== undefined) {
+				if (sparseIndices.length < maxSparseCount) sparseIndices.push(p)
+				else sparseIndices = undefined
+			}
 		}
 	}
 
-	return mask
+	return count === 0 ? undefined : { mask, sparseIndices }
 }
 
 // Detects and repairs sensor defects in `image`, in place, returning the mutated image and per-detector
@@ -864,7 +890,11 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 	const dark0 = darkUsable ? md.raw : undefined
 	const darkPossible = dark0 !== undefined && darkHotSigma > 0
 
-	const defectMask = buildDefectMask(options.defects, width, height)
+	// Whether the auto detector could run at all; when off, the per-pixel median field is not built.
+	const autoPossible = hotSigma > 0 || coldSigma > 0
+	const sparseRepairMaxCount = !autoPossible ? Math.max(1, Math.floor(n * SPARSE_DEFECT_MAX_FRACTION)) : 0
+	const builtDefects = buildDefectMask(options.defects, width, height, sparseRepairMaxCount)
+	const defectMask = builtDefects?.mask
 
 	// Optional protection mask for the auto detector; must match the frame so it aligns pixel-for-pixel.
 	const protectMask = options.protect
@@ -904,9 +934,6 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 	// source stays a minority of the window and its median tracks the true background.
 	const bgRadius = radius + 1
 
-	// Whether the auto detector could run at all; when off, the per-pixel median field is not built.
-	const autoPossible = hotSigma > 0 || coldSigma > 0
-
 	// Scratch window sizes are bounded by the per-axis in-bounds sample count, not the raw (2r+1)^2, so a
 	// large radius on a small (or high-aspect) frame allocates only what a neighborhood can actually hold.
 	const sameAxisColumns = Math.ceil(width / step)
@@ -919,9 +946,9 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 
 	// Pure explicit-defect maps can be repaired directly from the interleaved raw buffer when the map is
 	// sparse, avoiding a full deinterleaved Float64 plane and the full-frame detection scan.
-	const sparseDefectIndices = defectMask !== undefined && !autoPossible && !darkPossible ? collectSparseDefectIndices(defectMask, Math.max(1, Math.floor(n * SPARSE_DEFECT_MAX_FRACTION))) : undefined
-	if (sparseDefectIndices !== undefined) {
-		defect = repairSparseDefects(raw, width, height, channels, radius, step, amount, defectMask!, sparseDefectIndices, window)
+	const sparseDefectIndices = !autoPossible && !darkPossible ? builtDefects?.sparseIndices : undefined
+	if (builtDefects !== undefined && sparseDefectIndices !== undefined) {
+		defect = repairSparseDefects(raw, width, height, channels, radius, step, amount, builtDefects.mask, sparseDefectIndices, window)
 		return { image, corrected: defect, hot, cold, dark, defect }
 	}
 
