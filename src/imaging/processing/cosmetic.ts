@@ -188,6 +188,44 @@ function computePhaseStats(plane: Float64Array, width: number, height: number, p
 	}
 }
 
+// Robust median and scale of each CFA phase read directly from an interleaved master-dark buffer. This
+// avoids materializing a full deinterleaved dark plane while preserving the same per-channel/per-phase
+// statistics as `computePhaseStats`.
+function computeInterleavedPhaseStats(dark: Readonly<NumberArray>, channel: number, channels: number, width: number, height: number, phases: number, gather: Float64Array, scratch: Float64Array, medians: Float64Array, scales: Float64Array, skip?: Uint8Array) {
+	for (let ph = 0; ph < phases; ph++) {
+		let count = 0
+
+		if (phases === 1) {
+			const n = width * height
+			for (let p = 0; p < n; p++) {
+				if (skip !== undefined && skip[p] !== 0) continue
+				gather[count++] = dark[p * channels + channel]
+			}
+		} else {
+			const py = ph >> 1
+			const px = ph & 1
+			for (let y = py; y < height; y += 2) {
+				const row = y * width
+				for (let x = px; x < width; x += 2) {
+					const p = row + x
+					if (skip !== undefined && skip[p] !== 0) continue
+					gather[count++] = dark[p * channels + channel]
+				}
+			}
+		}
+
+		if (count === 0) {
+			medians[ph] = Number.NaN
+			scales[ph] = 0
+			continue
+		}
+
+		const stats = robustPlaneScale(gather, count, scratch)
+		medians[ph] = stats.median
+		scales[ph] = stats.scale
+	}
+}
+
 // Allocates a larger neighborhood scratch buffer when skip-mask expansion finds more samples than the
 // current in-bounds window could hold. Existing samples are copied and the caller's scratch is updated.
 function growNeighborhoodBuffer(scratch: NeighborhoodScratch, minLength: number) {
@@ -571,7 +609,6 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 	// For Bayer CFA frames the isolation test must also check raw 8-neighbors against a contiguous
 	// (step=1) background — a star's PSF crosses all CFA phases, not just same-color ones.
 	const rawBgWindow: NeighborhoodScratch | undefined = step > 1 ? { values: new Float64Array(Math.min(2 * bgRadius + 1, width) * Math.min(2 * bgRadius + 1, height)) } : undefined
-	const darkPlane = dark0 !== undefined ? new Float64Array(n) : undefined
 	// Per-pixel high-pass residual, built once per channel for the noise-scale estimate. The local median
 	// is recovered as `plane[p] - residual[p]` when the auto path needs the repair value.
 	const residual = autoPossible ? new Float64Array(n) : undefined
@@ -593,9 +630,8 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 		// scale and mask other fixed hot pixels in the same master dark.
 		darkThreshold.fill(Number.POSITIVE_INFINITY)
 		let darkEnabled = false
-		if (darkPlane !== undefined) {
-			for (let p = 0, i = channel; p < n; p++, i += channels) darkPlane[p] = dark0![i]
-			computePhaseStats(darkPlane, width, height, phases, gatherBuf, scaleScratch, darkPhaseMedian, darkPhaseScale, defectMask)
+		if (dark0 !== undefined) {
+			computeInterleavedPhaseStats(dark0, channel, channels, width, height, phases, gatherBuf, scaleScratch, darkPhaseMedian, darkPhaseScale, defectMask)
 			// When the master dark has a flat background with hot pixels, the MAD collapses to zero
 			// and the stddev fallback includes the hot tail, inflating the threshold past the very
 			// defects it should catch. Clamp the dark scale to a lower-tail scale so hot outliers
@@ -607,7 +643,7 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 					let dCount = 0
 					if (phases === 1) {
 						for (let p = 0; p < n; p++) {
-							if (defectMask === undefined || defectMask[p] === 0) gatherBuf[dCount++] = darkPlane[p]
+							if (defectMask === undefined || defectMask[p] === 0) gatherBuf[dCount++] = dark0[p * channels + channel]
 						}
 					} else {
 						const py = ph >> 1
@@ -616,7 +652,7 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 							const row = y * width
 							for (let x = px; x < width; x += 2) {
 								const p = row + x
-								if (defectMask === undefined || defectMask[p] === 0) gatherBuf[dCount++] = darkPlane[p]
+								if (defectMask === undefined || defectMask[p] === 0) gatherBuf[dCount++] = dark0[p * channels + channel]
 							}
 						}
 					}
@@ -651,7 +687,7 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 				const rowBase = y * width
 				for (let x = 0; x < width; x++) {
 					const p = rowBase + x
-					if (darkPlane![p] > darkThreshold[phaseIndex(x, y, phases)]) darkSkip[p] = 1
+					if (dark0![p * channels + channel] > darkThreshold[phaseIndex(x, y, phases)]) darkSkip[p] = 1
 				}
 			}
 		}
@@ -695,7 +731,7 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 
 				if (defectMask !== undefined && defectMask[p] !== 0) {
 					cause = 1
-				} else if (darkEnabled && darkPlane![p] > darkThreshold[ph]) {
+				} else if (darkEnabled && dark0![p * channels + channel] > darkThreshold[ph]) {
 					cause = 2
 				} else if (autoEnabled && gScale > 0 && (protectSkip === undefined || protectSkip[p] === 0)) {
 					m = center - residual![p]
