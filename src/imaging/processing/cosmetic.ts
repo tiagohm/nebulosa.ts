@@ -86,8 +86,8 @@ const CONSTANT_DARK_SCALE_FRACTION = 0.1
 // subarray/sort call for the per-pixel radius-1 path.
 const SMALL_MEDIAN_SORT_LIMIT = 9
 
-// Maximum mapped-defect density that uses the sparse explicit-defect repair path. Denser maps keep the
-// normal full-frame pass, which is better for large bad-row/column sets.
+// Maximum candidate density that uses sparse direct-repair paths. Denser maps keep the normal full-frame
+// pass, which is better for large bad-row/column or dark-defect sets.
 const SPARSE_DEFECT_MAX_FRACTION = 1 / 32
 
 // Outcome of a cosmetic-correction pass: the mutated image plus how many samples each detector repaired.
@@ -607,6 +607,20 @@ function interleavedNeighborhoodMedian(raw: Readonly<NumberArray>, channel: numb
 	return medianBySelection(values, count)
 }
 
+// Repairs one interleaved sample by index from the current raw buffer, excluding every sample marked in
+// `repairSkip` from the neighborhood median. Returns true only when a finite repair value is written.
+function repairInterleavedIndex(raw: NumberArray, width: number, height: number, channels: number, channel: number, p: number, radius: number, step: number, amount: number, repairSkip: Uint8Array, window: NeighborhoodScratch) {
+	const y = Math.trunc(p / width)
+	const x = p - y * width
+	const rawIndex = p * channels + channel
+	const center = raw[rawIndex]
+	const m = interleavedNeighborhoodMedian(raw, channel, channels, x, y, width, height, radius, step, window, repairSkip, undefined, Number.NaN)
+	const repaired = amount >= 1 ? m : center + amount * (m - center)
+	if (!Number.isFinite(repaired)) return false
+	raw[rawIndex] = repaired
+	return true
+}
+
 // Repairs only explicitly mapped defects from the interleaved raw buffer. All mapped defects stay in the
 // skip mask, so direct reads do not reuse values already corrected earlier in the sparse pass.
 function repairSparseDefects(raw: NumberArray, width: number, height: number, channels: number, radius: number, step: number, amount: number, defectMask: Uint8Array, defectIndices: readonly number[], window: NeighborhoodScratch) {
@@ -614,15 +628,7 @@ function repairSparseDefects(raw: NumberArray, width: number, height: number, ch
 
 	for (let channel = 0; channel < channels; channel++) {
 		for (const p of defectIndices) {
-			const y = Math.trunc(p / width)
-			const x = p - y * width
-			const rawIndex = p * channels + channel
-			const center = raw[rawIndex]
-			const m = interleavedNeighborhoodMedian(raw, channel, channels, x, y, width, height, radius, step, window, defectMask, undefined, Number.NaN)
-			const repaired = amount >= 1 ? m : center + amount * (m - center)
-			if (!Number.isFinite(repaired)) continue
-			raw[rawIndex] = repaired
-			repairedCount++
+			if (repairInterleavedIndex(raw, width, height, channels, channel, p, radius, step, amount, defectMask, window)) repairedCount++
 		}
 	}
 
@@ -631,7 +637,8 @@ function repairSparseDefects(raw: NumberArray, width: number, height: number, ch
 
 // Computes master-dark repairs directly from interleaved buffers when no auto detector is active. The
 // repair skip mask still covers both explicit defects and dark-flagged pixels, preserving cluster repair
-// behavior without materializing a deinterleaved light plane.
+// behavior without materializing a deinterleaved light plane. Sparse candidate sets repair by index;
+// dense sets fall back to the full-frame pass.
 function repairMasterDarkDirect(
 	raw: NumberArray,
 	dark: Readonly<NumberArray>,
@@ -644,6 +651,8 @@ function repairMasterDarkDirect(
 	amount: number,
 	darkHotSigma: number,
 	defectMask: Uint8Array | undefined,
+	defectIndices: readonly number[] | undefined,
+	maxSparseCount: number,
 	gather: Float64Array,
 	scratch: Float64Array,
 	medians: Float64Array,
@@ -661,15 +670,43 @@ function repairMasterDarkDirect(
 		if (!darkEnabled && defectMask === undefined) continue
 
 		const repairSkip = defectMask !== undefined ? new Uint8Array(defectMask) : new Uint8Array(n)
+		let darkIndices: number[] | undefined = darkEnabled ? [] : undefined
 
 		if (darkEnabled) {
 			for (let y = 0; y < height; y++) {
 				const rowBase = y * width
 				for (let x = 0; x < width; x++) {
 					const p = rowBase + x
-					if (dark[p * channels + channel] > thresholds[phaseIndex(x, y, phases)]) repairSkip[p] = 1
+					if (dark[p * channels + channel] > thresholds[phaseIndex(x, y, phases)]) {
+						repairSkip[p] = 1
+
+						if (darkIndices !== undefined) {
+							if (darkIndices.length < maxSparseCount) darkIndices.push(p)
+							else darkIndices = undefined
+						}
+					}
 				}
 			}
+		}
+
+		const sparseDefectCount = defectMask === undefined ? 0 : (defectIndices?.length ?? Number.POSITIVE_INFINITY)
+		const sparseDarkCount = darkEnabled ? (darkIndices?.length ?? Number.POSITIVE_INFINITY) : 0
+
+		if (sparseDefectCount + sparseDarkCount <= maxSparseCount) {
+			if (defectIndices !== undefined) {
+				for (const p of defectIndices) {
+					if (repairInterleavedIndex(raw, width, height, channels, channel, p, radius, step, amount, repairSkip, window)) defect++
+				}
+			}
+
+			if (darkIndices !== undefined) {
+				for (const p of darkIndices) {
+					if (defectMask !== undefined && defectMask[p] !== 0) continue
+					if (repairInterleavedIndex(raw, width, height, channels, channel, p, radius, step, amount, repairSkip, window)) darkCount++
+				}
+			}
+
+			continue
 		}
 
 		for (let y = 0; y < height; y++) {
@@ -678,7 +715,7 @@ function repairMasterDarkDirect(
 			for (let x = 0; x < width; x++) {
 				const p = rowBase + x
 				const isDefect = defectMask !== undefined && defectMask[p] !== 0
-				const isDark = !isDefect && darkEnabled && dark[p * channels + channel] > thresholds[phaseIndex(x, y, phases)]
+				const isDark = !isDefect && darkEnabled && repairSkip[p] !== 0
 				if (!isDefect && !isDark) continue
 
 				const rawIndex = p * channels + channel
@@ -958,7 +995,7 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 		const directMedian = new Float64Array(phases)
 		const directScale = new Float64Array(phases)
 		const directThreshold = new Float64Array(phases)
-		const direct = repairMasterDarkDirect(raw, dark0, width, height, channels, phases, radius, step, amount, darkHotSigma, defectMask, directGather, directScratch, directMedian, directScale, directThreshold, window)
+		const direct = repairMasterDarkDirect(raw, dark0, width, height, channels, phases, radius, step, amount, darkHotSigma, defectMask, builtDefects?.sparseIndices, sparseRepairMaxCount, directGather, directScratch, directMedian, directScale, directThreshold, window)
 		defect = direct.defect
 		dark = direct.dark
 		return { image, corrected: dark + defect, hot, cold, dark, defect }
