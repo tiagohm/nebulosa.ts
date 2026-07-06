@@ -392,9 +392,12 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 	const bgWindowSize = Math.min(2 * bgRadius + 1, sameAxisColumns) * Math.min(2 * bgRadius + 1, sameAxisRows)
 
 	// Reusable scratch buffers, allocated once and shared across channels.
+	// plane is always needed for deinterleaving; scale/gather are only allocated when the auto or
+	// master-dark detector could run, keeping defect-only and dry-run paths much lighter.
 	const plane = new Float64Array(n)
-	const scaleScratch = new Float64Array(n)
-	const gatherBuf = new Float64Array(n)
+	const scratchNeeded = autoPossible || dark0 !== undefined
+	const scaleScratch = scratchNeeded ? new Float64Array(n) : new Float64Array(0)
+	const gatherBuf = scratchNeeded ? new Float64Array(n) : new Float64Array(0)
 	const window = new Float64Array(windowSize)
 	const bgWindow = new Float64Array(bgWindowSize)
 	// For Bayer CFA frames the isolation test must also check raw 8-neighbors against a contiguous
