@@ -324,6 +324,63 @@ function medianBySelection(values: Float64Array, count: number) {
 	return (lower + upper) * 0.5
 }
 
+// Median of the collected scratch prefix.
+function medianOfScratchPrefix(values: Float64Array, count: number) {
+	if (count <= SMALL_MEDIAN_SORT_LIMIT) {
+		sortSmallPrefix(values, count)
+	} else {
+		values.subarray(0, count).sort()
+	}
+	return medianOf(values, count)
+}
+
+// Fast median for the common radius-1, unmasked local window. It avoids dynamic lattice-bound
+// calculations on every auto-residual pixel, while still honoring the optional skipped center sample.
+function neighborhoodMedianRadius1(plane: Float64Array, x: number, y: number, width: number, height: number, step: number, scratch: NeighborhoodScratch, skipIndex?: number, emptyValue?: number) {
+	let values = scratch.values
+	let count = 0
+	const center = y * width + x
+
+	if (x >= step && x + step < width && y >= step && y + step < height) {
+		const prevCenter = center - step * width
+		const nextCenter = center + step * width
+
+		const q00 = prevCenter - step
+		if (q00 !== skipIndex) values[count++] = plane[q00]
+		const q01 = prevCenter
+		if (q01 !== skipIndex) values[count++] = plane[q01]
+		const q02 = prevCenter + step
+		if (q02 !== skipIndex) values[count++] = plane[q02]
+		const q10 = center - step
+		if (q10 !== skipIndex) values[count++] = plane[q10]
+		if (center !== skipIndex) values[count++] = plane[center]
+		const q12 = center + step
+		if (q12 !== skipIndex) values[count++] = plane[q12]
+		const q20 = nextCenter - step
+		if (q20 !== skipIndex) values[count++] = plane[q20]
+		const q21 = nextCenter
+		if (q21 !== skipIndex) values[count++] = plane[q21]
+		const q22 = nextCenter + step
+		if (q22 !== skipIndex) values[count++] = plane[q22]
+	} else {
+		for (let dy = -1; dy <= 1; dy++) {
+			const yy = y + dy * step
+			if (yy < 0 || yy >= height) continue
+			const row = yy * width
+			for (let dx = -1; dx <= 1; dx++) {
+				const xx = x + dx * step
+				if (xx < 0 || xx >= width) continue
+				const q = row + xx
+				if (q === skipIndex) continue
+				values[count++] = plane[q]
+			}
+		}
+	}
+
+	if (count === 0) return emptyValue ?? plane[center]
+	return medianOfScratchPrefix(values, count)
+}
+
 // Median of the neighborhood of (x, y), read from the deinterleaved `plane`. Samples the (2r+1)^2 lattice
 // centered on (x, y) with a spacing of `step` pixels per axis, clamped to the image bounds. `step` is 1
 // for a normal plane; for a Bayer CFA mosaic it is 2 so only same-color-phase photosites are gathered
@@ -336,6 +393,8 @@ function medianBySelection(values: Float64Array, count: number) {
 // unchanged. `scratch` must hold the initial in-bounds window; it grows only when a skipped window has to
 // expand beyond that initial size, and the growth is kept for later calls.
 function neighborhoodMedian(plane: Float64Array, x: number, y: number, width: number, height: number, r: number, step: number, scratch: NeighborhoodScratch, skip?: Uint8Array, skipIndex?: number, emptyValue?: number) {
+	if (r === 1 && skip === undefined) return neighborhoodMedianRadius1(plane, x, y, width, height, step, scratch, skipIndex, emptyValue)
+
 	// Restrict the lattice offsets to those that land inside the frame, so an oversized radius neither
 	// scans nor requires buffer space for samples that would only be clamped away.
 	const kyMin = Math.max(-r, -Math.floor(y / step))
@@ -390,12 +449,7 @@ function neighborhoodMedian(plane: Float64Array, x: number, y: number, width: nu
 		}
 	}
 
-	if (count <= SMALL_MEDIAN_SORT_LIMIT) {
-		sortSmallPrefix(values, count)
-	} else {
-		values.subarray(0, count).sort()
-	}
-	return medianOf(values, count)
+	return medianOfScratchPrefix(values, count)
 }
 
 // Median of the neighborhood of (x, y), read directly from an interleaved raw buffer for sparse
@@ -451,12 +505,7 @@ function interleavedNeighborhoodMedian(raw: Readonly<NumberArray>, channel: numb
 		}
 	}
 
-	if (count <= SMALL_MEDIAN_SORT_LIMIT) {
-		sortSmallPrefix(values, count)
-	} else {
-		values.subarray(0, count).sort()
-	}
-	return medianOf(values, count)
+	return medianOfScratchPrefix(values, count)
 }
 
 // Collects mapped-defect indices only while the map remains sparse enough for the direct repair path.
