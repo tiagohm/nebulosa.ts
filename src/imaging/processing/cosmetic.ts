@@ -155,8 +155,8 @@ function phaseIndex(x: number, y: number, phases: number) {
 
 // Robust median and scale of each CFA phase of `plane` (or one global pair when `phases === 1`), written
 // into `medians`/`scales` (length `phases`). Same-phase samples are gathered by parity-strided scans into
-// `gather`; `scratch` is the robust-computation scratch. Both buffers must hold at least width*height
-// elements. Pixels flagged in `skip` (the defect mask) are excluded so known defects do not inflate the
+// `gather`; `scratch` is the robust-computation scratch. Both buffers must hold at least the largest phase
+// sample count. Pixels flagged in `skip` (the defect mask) are excluded so known defects do not inflate the
 // scale. A phase with no samples gets median NaN and scale 0 (its detection is effectively disabled).
 function computePhaseStats(plane: Float64Array, width: number, height: number, phases: number, gather: Float64Array, scratch: Float64Array, medians: Float64Array, scales: Float64Array, skip?: Uint8Array) {
 	for (let ph = 0; ph < phases; ph++) {
@@ -911,6 +911,7 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 	// large radius on a small (or high-aspect) frame allocates only what a neighborhood can actually hold.
 	const sameAxisColumns = Math.ceil(width / step)
 	const sameAxisRows = Math.ceil(height / step)
+	const maxPhaseSamples = sameAxisColumns * sameAxisRows
 	const windowSize = Math.min(2 * radius + 1, sameAxisColumns) * Math.min(2 * radius + 1, sameAxisRows)
 	const bgWindowSize = Math.min(2 * bgRadius + 1, sameAxisColumns) * Math.min(2 * bgRadius + 1, sameAxisRows)
 
@@ -925,8 +926,8 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 	}
 
 	if (!autoPossible && darkPossible) {
-		const directGather = new Float64Array(n)
-		const directScratch = new Float64Array(n)
+		const directGather = new Float64Array(maxPhaseSamples)
+		const directScratch = new Float64Array(maxPhaseSamples)
 		const directMedian = new Float64Array(phases)
 		const directScale = new Float64Array(phases)
 		const directThreshold = new Float64Array(phases)
@@ -941,8 +942,8 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 	// scale/gather are only allocated when the auto or master-dark detector could run.
 	const plane = new Float64Array(n)
 	const scratchNeeded = autoPossible || darkPossible
-	const scaleScratch = scratchNeeded ? new Float64Array(n) : new Float64Array(0)
-	const gatherBuf = scratchNeeded ? new Float64Array(n) : new Float64Array(0)
+	const scaleScratch = scratchNeeded ? new Float64Array(maxPhaseSamples) : new Float64Array(0)
+	const gatherBuf = scratchNeeded ? new Float64Array(maxPhaseSamples) : new Float64Array(0)
 	const bgWindow: NeighborhoodScratch = { values: new Float64Array(bgWindowSize) }
 	// For Bayer CFA frames the isolation test must also check raw 8-neighbors against a contiguous
 	// (step=1) background — a star's PSF crosses all CFA phases, not just same-color ones.
