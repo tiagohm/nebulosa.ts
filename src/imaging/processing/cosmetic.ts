@@ -192,10 +192,12 @@ function computePhaseStats(plane: Float64Array, width: number, height: number, p
 	}
 }
 
-// Robust median and scale of each CFA phase read directly from an interleaved master-dark buffer. This
-// avoids materializing a full deinterleaved dark plane while preserving the same per-channel/per-phase
-// statistics as `computePhaseStats`.
-function computeInterleavedPhaseStats(dark: Readonly<NumberArray>, channel: number, channels: number, width: number, height: number, phases: number, gather: Float64Array, scratch: Float64Array, medians: Float64Array, scales: Float64Array, skip?: Uint8Array) {
+// Master-dark thresholds for each CFA phase, read directly from the interleaved dark buffer. Each phase
+// is gathered once, then used for both the robust MAD and the lower-tail scale clamp.
+function computeInterleavedDarkThresholds(dark: Readonly<NumberArray>, channel: number, channels: number, width: number, height: number, phases: number, darkHotSigma: number, gather: Float64Array, scratch: Float64Array, medians: Float64Array, scales: Float64Array, thresholds: Float64Array, skip?: Uint8Array) {
+	let enabled = false
+	thresholds.fill(Number.POSITIVE_INFINITY)
+
 	for (let ph = 0; ph < phases; ph++) {
 		let count = 0
 
@@ -226,8 +228,23 @@ function computeInterleavedPhaseStats(dark: Readonly<NumberArray>, channel: numb
 
 		const stats = robustPlaneScale(gather, count, scratch)
 		medians[ph] = stats.median
-		scales[ph] = stats.scale
+		let scale = stats.scale
+		if (count > 1) {
+			const tailScale = lowerTailScale(gather, count, stats.median, scratch)
+			if (tailScale !== undefined) {
+				if (tailScale > 0 && tailScale < scale) {
+					scale = tailScale
+				} else if (tailScale === 0) {
+					scale = Math.max(CONSTANT_DARK_SCALE_LIMIT, Math.abs(stats.median) * CONSTANT_DARK_SCALE_FRACTION)
+				}
+			}
+		}
+		scales[ph] = scale
+		thresholds[ph] = stats.median + darkHotSigma * scale
+		enabled = true
 	}
+
+	return enabled
 }
 
 // Allocates a larger neighborhood scratch buffer when skip-mask expansion finds more samples than the
@@ -337,7 +354,7 @@ function medianOfScratchPrefix(values: Float64Array, count: number) {
 // Fast median for the common radius-1, unmasked local window. It avoids dynamic lattice-bound
 // calculations on every auto-residual pixel, while still honoring the optional skipped center sample.
 function neighborhoodMedianRadius1(plane: Float64Array, x: number, y: number, width: number, height: number, step: number, scratch: NeighborhoodScratch, skipIndex?: number, emptyValue?: number) {
-	let values = scratch.values
+	const values = scratch.values
 	let count = 0
 	const center = y * width + x
 
@@ -569,43 +586,7 @@ function repairMasterDarkDirect(
 	let darkCount = 0
 
 	for (let channel = 0; channel < channels; channel++) {
-		thresholds.fill(Number.POSITIVE_INFINITY)
-		let darkEnabled = false
-		computeInterleavedPhaseStats(dark, channel, channels, width, height, phases, gather, scratch, medians, scales, defectMask)
-
-		for (let ph = 0; ph < phases; ph++) {
-			if (Number.isFinite(medians[ph])) {
-				let dScale = scales[ph]
-				let dCount = 0
-				if (phases === 1) {
-					for (let p = 0; p < n; p++) {
-						if (defectMask === undefined || defectMask[p] === 0) gather[dCount++] = dark[p * channels + channel]
-					}
-				} else {
-					const py = ph >> 1
-					const px = ph & 1
-					for (let y = py; y < height; y += 2) {
-						const row = y * width
-						for (let x = px; x < width; x += 2) {
-							const p = row + x
-							if (defectMask === undefined || defectMask[p] === 0) gather[dCount++] = dark[p * channels + channel]
-						}
-					}
-				}
-				if (dCount > 1) {
-					const tailScale = lowerTailScale(gather, dCount, medians[ph], scratch)
-					if (tailScale !== undefined) {
-						if (tailScale > 0 && tailScale < dScale) {
-							dScale = tailScale
-						} else if (tailScale === 0) {
-							dScale = Math.max(CONSTANT_DARK_SCALE_LIMIT, Math.abs(medians[ph]) * CONSTANT_DARK_SCALE_FRACTION)
-						}
-					}
-				}
-				thresholds[ph] = medians[ph] + darkHotSigma * dScale
-				darkEnabled = true
-			}
-		}
+		const darkEnabled = computeInterleavedDarkThresholds(dark, channel, channels, width, height, phases, darkHotSigma, gather, scratch, medians, scales, thresholds, defectMask)
 
 		if (!darkEnabled && defectMask === undefined) continue
 
@@ -898,49 +879,13 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 		// Per-phase master-dark thresholds for this channel; a phase is disabled when its dark scale is 0.
 		// Known defects are excluded from the dark statistics so a mapped bad column does not inflate the
 		// scale and mask other fixed hot pixels in the same master dark.
-		darkThreshold.fill(Number.POSITIVE_INFINITY)
 		let darkEnabled = false
 		if (dark0 !== undefined) {
-			computeInterleavedPhaseStats(dark0, channel, channels, width, height, phases, gatherBuf, scaleScratch, darkPhaseMedian, darkPhaseScale, defectMask)
-			// When the master dark has a flat background with hot pixels, the MAD collapses to zero
-			// and the stddev fallback includes the hot tail, inflating the threshold past the very
-			// defects it should catch. Clamp the dark scale to a lower-tail scale so hot outliers
-			// cannot mask themselves, even when they occupy more than a fixed trim percentage.
-			for (let ph = 0; ph < phases; ph++) {
-				if (Number.isFinite(darkPhaseMedian[ph])) {
-					let dScale = darkPhaseScale[ph]
-					// Re-gather same-phase dark values, sort, and compute trimmed stddev.
-					let dCount = 0
-					if (phases === 1) {
-						for (let p = 0; p < n; p++) {
-							if (defectMask === undefined || defectMask[p] === 0) gatherBuf[dCount++] = dark0[p * channels + channel]
-						}
-					} else {
-						const py = ph >> 1
-						const px = ph & 1
-						for (let y = py; y < height; y += 2) {
-							const row = y * width
-							for (let x = px; x < width; x += 2) {
-								const p = row + x
-								if (defectMask === undefined || defectMask[p] === 0) gatherBuf[dCount++] = dark0[p * channels + channel]
-							}
-						}
-					}
-					if (dCount > 1) {
-						const tailScale = lowerTailScale(gatherBuf, dCount, darkPhaseMedian[ph], scaleScratch)
-						if (tailScale !== undefined) {
-							if (tailScale > 0 && tailScale < dScale) {
-								dScale = tailScale
-							} else if (tailScale === 0) {
-								const constantScaleLimit = Math.max(CONSTANT_DARK_SCALE_LIMIT, Math.abs(darkPhaseMedian[ph]) * CONSTANT_DARK_SCALE_FRACTION)
-								dScale = constantScaleLimit
-							}
-						}
-					}
-					darkThreshold[ph] = darkPhaseMedian[ph] + darkHotSigma * dScale
-					darkEnabled = true
-				}
-			}
+			// When the master dark has a flat background with hot pixels, the MAD collapses to zero and
+			// the stddev fallback includes the hot tail, so the threshold helper clamps to a lower-tail scale.
+			darkEnabled = computeInterleavedDarkThresholds(dark0, channel, channels, width, height, phases, darkHotSigma, gatherBuf, scaleScratch, darkPhaseMedian, darkPhaseScale, darkThreshold, defectMask)
+		} else {
+			darkThreshold.fill(Number.POSITIVE_INFINITY)
 		}
 
 		// Combined skip mask for dark-path repairs and auto noise estimation: neighbors that are themselves
