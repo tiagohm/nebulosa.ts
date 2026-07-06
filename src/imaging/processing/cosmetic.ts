@@ -488,10 +488,16 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 
 				if (cause === 0) continue
 
-				// Reuse the precomputed median field for hot/cold/defect repairs; dark-path repairs always
-				// recompute with darkSkip because the median field was built without excluding co-flagged
-				// dark neighbors, which would leave a cluster at its hot value.
-				if (!haveM) m = cause === 2 ? neighborhoodMedian(plane, x, y, width, height, radius, step, window, darkSkip) : medianField !== undefined ? medianField[p] : neighborhoodMedian(plane, x, y, width, height, radius, step, window, defectMask)
+				// Dark-path and explicit-defect repairs use darkSkip when available so co-flagged dark
+				// neighbors are excluded from the median; hot/cold (auto) repairs reuse the precomputed
+				// median field which was built with only defectMask (acceptable for auto detections).
+				if (!haveM) {
+					if ((cause === 1 || cause === 2) && darkSkip !== undefined) {
+						m = neighborhoodMedian(plane, x, y, width, height, radius, step, window, darkSkip)
+					} else {
+						m = medianField !== undefined ? medianField[p] : neighborhoodMedian(plane, x, y, width, height, radius, step, window, defectMask)
+					}
+				}
 				raw[p * channels + channel] = amount >= 1 ? m : center + amount * (m - center)
 
 				if (cause === 1) defect++

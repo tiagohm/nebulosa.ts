@@ -419,6 +419,43 @@ test('a dark-hot cluster with auto detection enabled is fully repaired', () => {
 	expect(image.raw[pixelOffset(image, cx, cy)]).toBeCloseTo(0.1, 3)
 })
 
+test('a mapped defect surrounded by dark-flagged pixels uses darkSkip for repair', () => {
+	// When a pixel is in both the explicit defect map and surrounded by master-dark hot pixels,
+	// the defect repair must exclude co-flagged dark neighbors so the repair doesn't interpolate
+	// from hot neighbors.
+	const width = 20
+	const height = 12
+	const { values, at } = rampImage(width, height, 0.3, 0.34)
+	const image = makeImage(width, height, 1, values)
+
+	// Master dark: faint ramp plus a 3x3 hot cluster at (10, 6).
+	const dark = new Float32Array(width * height)
+	for (let y = 0; y < height; y++) {
+		for (let x = 0; x < width; x++) dark[y * width + x] = 0.01 + 0.002 * (x / (width - 1))
+	}
+	for (let dy = -1; dy <= 1; dy++) {
+		for (let dx = -1; dx <= 1; dx++) dark[(6 + dy) * width + (10 + dx)] = 0.8
+	}
+	const masterDark = makeImage(width, height, 1, dark)
+
+	// Mark the center of the dark-hot cluster as an explicit defect pixel.
+	const result = cosmeticCorrection(image, {
+		hotSigma: 0,
+		coldSigma: 0,
+		masterDark,
+		defects: { pixels: [[10, 6]] },
+	})
+
+	// The mapped pixel at (10, 6) is counted as defect; the 8 surrounding dark-hot pixels are
+	// also repaired (counted as dark). Without the fix, the mapped pixel would interpolate from
+	// its hot dark neighbors and stay elevated.
+	expect(result.defect).toBe(1)
+	expect(result.dark).toBe(8)
+	expect(result.corrected).toBe(9)
+	// The mapped pixel is repaired back to the ramp level, not left at a hot-cluster average.
+	expect(image.raw[pixelOffset(image, 10, 6)]).toBeCloseTo(at(10), 3)
+})
+
 test('an empty image and amount 0 are no-ops', () => {
 	const empty = makeImage(0, 0, 1, new Float32Array(0))
 	expect(cosmeticCorrection(empty).corrected).toBe(0)
