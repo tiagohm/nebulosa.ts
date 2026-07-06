@@ -244,7 +244,6 @@ function isIsolatedDefect(plane: Float64Array, x: number, y: number, width: numb
 	if (step > 1 && rawBuf !== undefined && residual !== undefined && phaseScale !== undefined) {
 		// Exclude the center pixel from the raw background via skipIndex so no full-frame mask is allocated.
 		const rawBg = neighborhoodMedian(plane, x, y, width, height, bgRadius, 1, rawBuf, skip, centerIndex)
-		const rawThreshold = sigma * scale
 		for (let dy = -1; dy <= 1; dy++) {
 			const yy = y + dy
 			if (yy < 0 || yy >= height) continue
@@ -255,16 +254,17 @@ function isIsolatedDefect(plane: Float64Array, x: number, y: number, width: numb
 				const q = row + xx
 				if (q === centerIndex) continue
 				if (skip !== undefined && skip[q] !== 0) continue
+				// Each neighbor is evaluated against its own CFA phase scale so a
+				// noisier/quieter candidate phase does not bias the support test.
+				const nbPhase = (yy & 1) * 2 + (xx & 1)
+				const nbScale = phaseScale[nbPhase]
+				const nbThreshold = sigma * nbScale
 				// First gate: raw deviation from the contiguous background.
 				const nb = plane[q]
-				if (sign > 0 ? nb - rawBg > rawThreshold : rawBg - nb > rawThreshold) {
+				if (sign > 0 ? nb - rawBg > nbThreshold : rawBg - nb > nbThreshold) {
 					// Second gate: the neighbor must be anomalous in its own CFA phase — its
-					// same-phase residual must exceed its own phase's sigma*scale. A normal
-					// red neighbor at its nominal level has residual ~0 and won't pass, so
-					// it doesn't veto the candidate.
-					const nbPhase = (yy & 1) * 2 + (xx & 1)
+					// same-phase residual must exceed its own phase's sigma*scale.
 					const nbResidual = residual[q]
-					const nbThreshold = sigma * phaseScale[nbPhase]
 					if (sign > 0 ? nbResidual > nbThreshold : -nbResidual > nbThreshold) return false
 				}
 			}

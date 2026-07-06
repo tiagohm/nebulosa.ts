@@ -456,6 +456,38 @@ test('a mapped defect surrounded by dark-flagged pixels uses darkSkip for repair
 	expect(image.raw[pixelOffset(image, 10, 6)]).toBeCloseTo(at(10), 3)
 })
 
+test('an RGGB star with noisier red phase and modest green wings is preserved', () => {
+	// When the red (candidate) phase has more noise than the green (neighbor) phase, the cross-phase
+	// threshold must use the green phase's own scale. Using the red phase's larger scale would make
+	// the raw threshold too wide and miss the green support or make the residual threshold too tight
+	// and incorrectly reject PSF wings.
+	const width = 24
+	const height = 24
+	const values = rggbMosaic(width, height, 0.8, 0.2, 0.1)
+	// Inject noise into the red phase to inflate its scale (random offsets at red positions).
+	for (let y = 0; y < height; y += 2) {
+		for (let x = 0; x < width; x += 2) {
+			values[y * width + x] += (Math.random() - 0.5) * 0.06
+		}
+	}
+	// Star core at a red photosite with modest green wings.
+	const cx = 12
+	const cy = 10
+	values[cy * width + cx] = 0.96
+	// Modest green wings (only 0.35, not the 0.55 from earlier tests).
+	values[cy * width + cx - 1] = 0.35
+	values[cy * width + cx + 1] = 0.35
+	values[(cy - 1) * width + cx] = 0.35
+	values[(cy + 1) * width + cx] = 0.35
+	const image = makeImage(width, height, 1, values, { BAYERPAT: 'RGGB' })
+
+	const result = cosmeticCorrection(image)
+
+	// The star core must survive — green wings are anomalous in their own phase.
+	expect(result.corrected).toBe(0)
+	expect(image.raw[pixelOffset(image, cx, cy)]).toBeCloseTo(0.96, 4)
+})
+
 test('an empty image and amount 0 are no-ops', () => {
 	const empty = makeImage(0, 0, 1, new Float32Array(0))
 	expect(cosmeticCorrection(empty).corrected).toBe(0)
