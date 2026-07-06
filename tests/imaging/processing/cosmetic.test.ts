@@ -1,8 +1,8 @@
 import { expect, test } from 'bun:test'
 import { cosmeticCorrection } from '../../../src/imaging/processing/cosmetic'
 import { generateNoiseImage } from '../../../src/imaging/synthetic/generator'
-import { makeImage, pixelOffset } from './util'
 import { mulberry32 } from '../../../src/math/numerical/random'
+import { makeImage, pixelOffset } from './util'
 
 // A horizontal ramp so the 3x3 local median tracks the background exactly (median of a horizontal ramp
 // window is the center column value), leaving normal pixels with ~0 residual and no false positives.
@@ -488,6 +488,39 @@ test('an RGGB star with noisier red phase and modest green wings is preserved', 
 	// The star core must survive — green wings are anomalous in their own phase.
 	expect(result.corrected).toBe(0)
 	expect(image.raw[pixelOffset(image, cx, cy)]).toBeCloseTo(0.96, 4)
+})
+
+test('a flat master dark with a hot column still detects the defects', () => {
+	// A flat (constant) dark background has MAD=0, so the stddev fallback includes the hot column
+	// itself and inflates the threshold past the defects. The trimmed-scale clamp must recognize
+	// the dark background is constant and use a lower threshold.
+	const width = 20
+	const height = 12
+	const { values, at } = rampImage(width, height, 0.3, 0.34)
+	values[6 * width + 15] = 0.85 // light-frame hot pixel
+	const image = makeImage(width, height, 1, values)
+
+	// Flat dark at 0.01 everywhere except one hot column at x=10.
+	const dark = new Float32Array(width * height)
+	dark.fill(0.01)
+	for (let y = 0; y < height; y++) dark[y * width + 10] = 0.8
+	// A separate hot pixel away from the column.
+	dark[6 * width + 5] = 0.7
+	const masterDark = makeImage(width, height, 1, dark)
+
+	const result = cosmeticCorrection(image, {
+		hotSigma: 0,
+		coldSigma: 0,
+		masterDark,
+	})
+
+	// The hot column in the dark produces 12 dark-flagged repairs; the separate hot pixel at
+	// (5, 6) adds 1 more. Without the trimmed-scale clamp, the column-inflated threshold would
+	// miss both.
+	expect(result.dark).toBe(height + 1)
+	expect(result.corrected).toBe(height + 1)
+	expect(image.raw[pixelOffset(image, 15, 6)]).toBeCloseTo(0.85, 3) // light hot pixel untouched
+	expect(image.raw[pixelOffset(image, 5, 6)]).toBeCloseTo(at(5), 3)
 })
 
 test('an empty image and amount 0 are no-ops', () => {

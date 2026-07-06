@@ -438,9 +438,38 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 		if (darkPlane !== undefined) {
 			for (let p = 0, i = channel; p < n; p++, i += channels) darkPlane[p] = dark0![i]
 			computePhaseStats(darkPlane, width, height, phases, gatherBuf, scaleScratch, darkPhaseMedian, darkPhaseScale, defectMask)
+			// When the master dark has a flat background with sparse hot pixels, the MAD collapses
+			// to zero and the stddev fallback includes the hot tail, inflating the threshold past
+			// the very defects it should catch. Compute a trimmed scale from the lower portion
+			// of each phase's sorted values (excluding the top 5%) and clamp the dark scale to
+			// that bound so the hot-pixel tail cannot mask itself.
 			for (let ph = 0; ph < phases; ph++) {
-				if (darkPhaseScale[ph] > 0) {
-					darkThreshold[ph] = darkPhaseMedian[ph] + darkHotSigma * darkPhaseScale[ph]
+				if (Number.isFinite(darkPhaseMedian[ph])) {
+					let dScale = darkPhaseScale[ph]
+					// Re-gather same-phase dark values, sort, and compute trimmed stddev.
+					let dCount = 0
+					if (phases === 1) {
+						for (let p = 0; p < n; p++) {
+							if (defectMask === undefined || defectMask[p] === 0) gatherBuf[dCount++] = darkPlane[p]
+						}
+					} else {
+						const py = ph >> 1
+						const px = ph & 1
+						for (let y = py; y < height; y += 2) {
+							const row = y * width
+							for (let x = px; x < width; x += 2) {
+								const p = row + x
+								if (defectMask === undefined || defectMask[p] === 0) gatherBuf[dCount++] = darkPlane[p]
+							}
+						}
+					}
+					if (dCount > 1) {
+						gatherBuf.subarray(0, dCount).sort()
+						const trimCount = Math.max(1, dCount - Math.max(1, Math.trunc(dCount * 0.05)))
+						const trimmedScale = standardDeviationOf(gatherBuf, trimCount)
+						if (trimmedScale < dScale) dScale = trimmedScale
+					}
+					darkThreshold[ph] = darkPhaseMedian[ph] + darkHotSigma * dScale
 					darkEnabled = true
 				}
 			}
