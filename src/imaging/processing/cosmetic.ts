@@ -186,11 +186,34 @@ function neighborhoodMedian(plane: Float64Array, x: number, y: number, width: nu
 		}
 	}
 
-	// Every sampled neighbor was flagged: re-gather without the skip so the repair stays finite.
+	// Every sampled neighbor was flagged: expand the window radius until at least one
+	// unflagged neighbor is found or the image bounds are exhausted. This avoids falling
+	// back to the hot cluster's own values when a skip mask covers the entire window.
 	if (count === 0) {
-		for (let ky = kyMin; ky <= kyMax; ky++) {
-			const row = (y + ky * step) * width
-			for (let kx = kxMin; kx <= kxMax; kx++) buf[count++] = plane[row + x + kx * step]
+		let er = r + 1
+		while (true) {
+			const ekyMin = Math.max(-er, -Math.floor(y / step))
+			const ekyMax = Math.min(er, Math.floor((height - 1 - y) / step))
+			const ekxMin = Math.max(-er, -Math.floor(x / step))
+			const ekxMax = Math.min(er, Math.floor((width - 1 - x) / step))
+			if (ekyMin === kyMin && ekyMax === kyMax && ekxMin === kxMin && ekxMax === kxMax) {
+				// Window cannot grow further: re-gather without the skip as last resort.
+				for (let ky = kyMin; ky <= kyMax; ky++) {
+					const row = (y + ky * step) * width
+					for (let kx = kxMin; kx <= kxMax; kx++) buf[count++] = plane[row + x + kx * step]
+				}
+				break
+			}
+			for (let ky = ekyMin; ky <= ekyMax; ky++) {
+				const row = (y + ky * step) * width
+				for (let kx = ekxMin; kx <= ekxMax; kx++) {
+					const q = row + x + kx * step
+					if (skip !== undefined && skip[q] !== 0) continue
+					buf[count++] = plane[q]
+				}
+			}
+			if (count > 0) break
+			er++
 		}
 	}
 

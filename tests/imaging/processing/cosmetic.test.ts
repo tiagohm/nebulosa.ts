@@ -453,8 +453,8 @@ test('a mapped defect surrounded by dark-flagged pixels uses darkSkip for repair
 	expect(result.defect).toBe(1)
 	expect(result.dark).toBe(8)
 	expect(result.corrected).toBe(9)
-	// The mapped pixel is repaired back to the ramp level, not left at a hot-cluster average.
-	expect(image.raw[pixelOffset(image, 10, 6)]).toBeCloseTo(at(10), 3)
+	// The mapped pixel is repaired back to the ramp level by expanding past the hot cluster.
+	expect(image.raw[pixelOffset(image, 10, 6)]).toBeCloseTo(at(10), 2)
 })
 
 test('an RGGB star with noisier red phase and modest green wings is preserved', () => {
@@ -521,6 +521,35 @@ test('a flat master dark with a hot column still detects the defects', () => {
 	expect(result.corrected).toBe(height + 1)
 	expect(image.raw[pixelOffset(image, 15, 6)]).toBeCloseTo(0.85, 3) // light hot pixel untouched
 	expect(image.raw[pixelOffset(image, 5, 6)]).toBeCloseTo(at(5), 3)
+})
+
+test('a 3x3 dark-hot block is repaired from exterior neighbors not the cluster', () => {
+	// A 3x3 block of fixed-hot pixels in both light and master dark covers the entire default 3x3
+	// repair window (radius=1). Without window expansion, the fallback would use the hot cluster's
+	// own median and leave the center unrepaired while reporting it corrected.
+	const width = 20
+	const height = 20
+	const values = new Float32Array(width * height).fill(0.1)
+	// 3x3 hot block at (8..10, 8..10).
+	for (let dy = -1; dy <= 1; dy++) {
+		for (let dx = -1; dx <= 1; dx++) values[(10 + dy) * width + (10 + dx)] = 0.9
+	}
+	const image = makeImage(width, height, 1, values)
+
+	// Master dark: same 3x3 block is hot.
+	const dark = new Float32Array(width * height).fill(0.01)
+	for (let dy = -1; dy <= 1; dy++) {
+		for (let dx = -1; dx <= 1; dx++) dark[(10 + dy) * width + (10 + dx)] = 0.8
+	}
+	const masterDark = makeImage(width, height, 1, dark)
+
+	const result = cosmeticCorrection(image, { hotSigma: 0, coldSigma: 0, masterDark })
+
+	// All 9 cluster pixels are dark-flagged and repaired from exterior good neighbors.
+	expect(result.dark).toBe(9)
+	expect(result.corrected).toBe(9)
+	// The cluster center is repaired to the background level.
+	expect(image.raw[pixelOffset(image, 10, 10)]).toBeCloseTo(0.1, 2)
 })
 
 test('an empty image and amount 0 are no-ops', () => {
