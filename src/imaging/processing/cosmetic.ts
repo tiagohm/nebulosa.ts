@@ -135,10 +135,12 @@ function robustPlaneScale(plane: Float64Array, count: number, buf: Float64Array)
 // undefined when fewer than two lower-tail samples exist, leaving the caller's original scale intact.
 function lowerTailScale(values: Float64Array, count: number, median: number, scratch: Float64Array) {
 	let lowerCount = 0
+
 	for (let i = 0; i < count; i++) {
 		const value = values[i]
 		if (value <= median) scratch[lowerCount++] = median - value
 	}
+
 	if (lowerCount < 2) return undefined
 	const scale = STANDARD_DEVIATION_SCALE * medianBySelection(scratch, lowerCount)
 	return Number.isFinite(scale) ? scale : 0
@@ -162,6 +164,7 @@ function computePhaseStats(plane: Float64Array, width: number, height: number, p
 
 		if (phases === 1) {
 			const n = width * height
+
 			for (let p = 0; p < n; p++) {
 				if (skip !== undefined && skip[p] !== 0) continue
 				gather[count++] = plane[p]
@@ -170,8 +173,10 @@ function computePhaseStats(plane: Float64Array, width: number, height: number, p
 			// Visit only the photosites of this phase via a parity-strided scan (px, py in {0, 1}).
 			const py = ph >> 1
 			const px = ph & 1
+
 			for (let y = py; y < height; y += 2) {
 				const row = y * width
+
 				for (let x = px; x < width; x += 2) {
 					const p = row + x
 					if (skip !== undefined && skip[p] !== 0) continue
@@ -203,6 +208,7 @@ function computeInterleavedDarkThresholds(dark: Readonly<NumberArray>, channel: 
 
 		if (phases === 1) {
 			const n = width * height
+
 			for (let p = 0; p < n; p++) {
 				if (skip !== undefined && skip[p] !== 0) continue
 				gather[count++] = dark[p * channels + channel]
@@ -210,8 +216,10 @@ function computeInterleavedDarkThresholds(dark: Readonly<NumberArray>, channel: 
 		} else {
 			const py = ph >> 1
 			const px = ph & 1
+
 			for (let y = py; y < height; y += 2) {
 				const row = y * width
+
 				for (let x = px; x < width; x += 2) {
 					const p = row + x
 					if (skip !== undefined && skip[p] !== 0) continue
@@ -229,8 +237,10 @@ function computeInterleavedDarkThresholds(dark: Readonly<NumberArray>, channel: 
 		const stats = robustPlaneScale(gather, count, scratch)
 		medians[ph] = stats.median
 		let scale = stats.scale
+
 		if (count > 1) {
 			const tailScale = lowerTailScale(gather, count, stats.median, scratch)
+
 			if (tailScale !== undefined) {
 				if (tailScale > 0 && tailScale < scale) {
 					scale = tailScale
@@ -239,6 +249,7 @@ function computeInterleavedDarkThresholds(dark: Readonly<NumberArray>, channel: 
 				}
 			}
 		}
+
 		scales[ph] = scale
 		thresholds[ph] = stats.median + darkHotSigma * scale
 		enabled = true
@@ -264,36 +275,21 @@ function sortSmallPrefix(values: Float64Array, count: number) {
 		const value = values[i]
 		const valueIsNaN = Number.isNaN(value)
 		let j = i - 1
+
 		while (j >= 0) {
 			const previous = values[j]
 			if (!Number.isNaN(previous) ? valueIsNaN || previous <= value : valueIsNaN) break
 			values[j + 1] = previous
 			j--
 		}
+
 		values[j + 1] = value
 	}
 }
 
-// Numeric ordering used by selection helpers: finite values sort ascending and NaNs stay at the high end,
-// matching the median behavior expected from TypedArray sorting for non-finite samples.
-function compareNumericValues(a: number, b: number) {
-	const aIsNaN = Number.isNaN(a)
-	const bIsNaN = Number.isNaN(b)
-	if (aIsNaN) return bIsNaN ? 0 : 1
-	if (bIsNaN) return -1
-	return a < b ? -1 : a > b ? 1 : 0
-}
-
-// Swaps two entries in a numeric scratch buffer.
-function swapValues(values: Float64Array, a: number, b: number) {
-	const value = values[a]
-	values[a] = values[b]
-	values[b] = value
-}
-
 // Selects the kth value in ascending numeric order, mutating only the first `count` entries. A three-way
 // partition avoids quadratic behavior on flat frames where many samples equal the pivot.
-function quickselect(values: Float64Array, count: number, k: number) {
+function quickSelect(values: Float64Array, count: number, k: number) {
 	let left = 0
 	let right = count - 1
 
@@ -304,13 +300,18 @@ function quickselect(values: Float64Array, count: number, k: number) {
 		let gt = right
 
 		while (i <= gt) {
-			const cmp = compareNumericValues(values[i], pivot)
+			const cmp = values[i] - pivot
+
 			if (cmp < 0) {
-				swapValues(values, lt, i)
+				const value = values[lt]
+				values[lt] = values[i]
+				values[i] = value
 				lt++
 				i++
 			} else if (cmp > 0) {
-				swapValues(values, i, gt)
+				const value = values[i]
+				values[i] = values[gt]
+				values[gt] = value
 				gt--
 			} else {
 				i++
@@ -334,16 +335,11 @@ function medianBySelection(values: Float64Array, count: number) {
 	}
 
 	const mid = count >>> 1
-	if ((count & 1) === 1) return quickselect(values, count, mid)
+	if ((count & 1) === 1) return quickSelect(values, count, mid)
 
-	const upper = quickselect(values, count, mid)
-	const lower = quickselect(values, count, mid - 1)
+	const upper = quickSelect(values, count, mid)
+	const lower = quickSelect(values, count, mid - 1)
 	return (lower + upper) * 0.5
-}
-
-// Median of the collected scratch prefix.
-function medianOfScratchPrefix(values: Float64Array, count: number) {
-	return medianBySelection(values, count)
 }
 
 // Fast median for the common radius-1, unmasked local window. It avoids dynamic lattice-bound
@@ -377,8 +373,11 @@ function neighborhoodMedianRadius1(plane: Float64Array, x: number, y: number, wi
 	} else {
 		for (let dy = -1; dy <= 1; dy++) {
 			const yy = y + dy * step
+
 			if (yy < 0 || yy >= height) continue
+
 			const row = yy * width
+
 			for (let dx = -1; dx <= 1; dx++) {
 				const xx = x + dx * step
 				if (xx < 0 || xx >= width) continue
@@ -390,7 +389,7 @@ function neighborhoodMedianRadius1(plane: Float64Array, x: number, y: number, wi
 	}
 
 	if (count === 0) return emptyValue ?? plane[center]
-	return medianOfScratchPrefix(values, count)
+	return medianBySelection(values, count)
 }
 
 // Fast masked radius-1 median. Returns undefined when every 3x3 sample is masked, letting the generic
@@ -424,8 +423,11 @@ function neighborhoodMedianRadius1Masked(plane: Float64Array, x: number, y: numb
 	} else {
 		for (let dy = -1; dy <= 1; dy++) {
 			const yy = y + dy * step
+
 			if (yy < 0 || yy >= height) continue
+
 			const row = yy * width
+
 			for (let dx = -1; dx <= 1; dx++) {
 				const xx = x + dx * step
 				if (xx < 0 || xx >= width) continue
@@ -435,7 +437,7 @@ function neighborhoodMedianRadius1Masked(plane: Float64Array, x: number, y: numb
 		}
 	}
 
-	return count === 0 ? undefined : medianOfScratchPrefix(values, count)
+	return count === 0 ? undefined : medianBySelection(values, count)
 }
 
 // Median of the neighborhood of (x, y), read from the deinterleaved `plane`. Samples the (2r+1)^2 lattice
@@ -467,6 +469,7 @@ function neighborhoodMedian(plane: Float64Array, x: number, y: number, width: nu
 	let count = 0
 	for (let ky = kyMin; ky <= kyMax; ky++) {
 		const row = (y + ky * step) * width
+
 		for (let kx = kxMin; kx <= kxMax; kx++) {
 			const q = row + x + kx * step
 			if (q === skipIndex) continue
@@ -485,12 +488,15 @@ function neighborhoodMedian(plane: Float64Array, x: number, y: number, width: nu
 		let prevKyMax = kyMax
 		let prevKxMin = kxMin
 		let prevKxMax = kxMax
+
 		while (true) {
 			const ekyMin = Math.max(-er, -Math.floor(y / step))
 			const ekyMax = Math.min(er, Math.floor((height - 1 - y) / step))
 			const ekxMin = Math.max(-er, -Math.floor(x / step))
 			const ekxMax = Math.min(er, Math.floor((width - 1 - x) / step))
+
 			if (ekyMin === prevKyMin && ekyMax === prevKyMax && ekxMin === prevKxMin && ekxMax === prevKxMax) return emptyValue ?? plane[y * width + x]
+
 			const oldKyMin = prevKyMin
 			const oldKyMax = prevKyMax
 			const oldKxMin = prevKxMin
@@ -499,8 +505,10 @@ function neighborhoodMedian(plane: Float64Array, x: number, y: number, width: nu
 			prevKyMax = ekyMax
 			prevKxMin = ekxMin
 			prevKxMax = ekxMax
+
 			for (let ky = ekyMin; ky <= ekyMax; ky++) {
 				const row = (y + ky * step) * width
+
 				for (let kx = ekxMin; kx <= ekxMax; kx++) {
 					if (ky >= oldKyMin && ky <= oldKyMax && kx >= oldKxMin && kx <= oldKxMax) continue
 					const q = row + x + kx * step
@@ -510,12 +518,14 @@ function neighborhoodMedian(plane: Float64Array, x: number, y: number, width: nu
 					values[count++] = plane[q]
 				}
 			}
+
 			if (count > 0) break
+
 			er++
 		}
 	}
 
-	return medianOfScratchPrefix(values, count)
+	return medianBySelection(values, count)
 }
 
 // Median of the neighborhood of (x, y), read directly from an interleaved raw buffer for sparse
@@ -529,8 +539,10 @@ function interleavedNeighborhoodMedian(raw: Readonly<NumberArray>, channel: numb
 
 	let values = scratch.values
 	let count = 0
+
 	for (let ky = kyMin; ky <= kyMax; ky++) {
 		const row = (y + ky * step) * width
+
 		for (let kx = kxMin; kx <= kxMax; kx++) {
 			const q = row + x + kx * step
 			if (q === skipIndex) continue
@@ -546,12 +558,15 @@ function interleavedNeighborhoodMedian(raw: Readonly<NumberArray>, channel: numb
 		let prevKyMax = kyMax
 		let prevKxMin = kxMin
 		let prevKxMax = kxMax
+
 		while (true) {
 			const ekyMin = Math.max(-er, -Math.floor(y / step))
 			const ekyMax = Math.min(er, Math.floor((height - 1 - y) / step))
 			const ekxMin = Math.max(-er, -Math.floor(x / step))
 			const ekxMax = Math.min(er, Math.floor((width - 1 - x) / step))
+
 			if (ekyMin === prevKyMin && ekyMax === prevKyMax && ekxMin === prevKxMin && ekxMax === prevKxMax) return emptyValue ?? raw[(y * width + x) * channels + channel]
+
 			const oldKyMin = prevKyMin
 			const oldKyMax = prevKyMax
 			const oldKxMin = prevKxMin
@@ -560,8 +575,10 @@ function interleavedNeighborhoodMedian(raw: Readonly<NumberArray>, channel: numb
 			prevKyMax = ekyMax
 			prevKxMin = ekxMin
 			prevKxMax = ekxMax
+
 			for (let ky = ekyMin; ky <= ekyMax; ky++) {
 				const row = (y + ky * step) * width
+
 				for (let kx = ekxMin; kx <= ekxMax; kx++) {
 					if (ky >= oldKyMin && ky <= oldKyMax && kx >= oldKxMin && kx <= oldKxMax) continue
 					const q = row + x + kx * step
@@ -571,23 +588,27 @@ function interleavedNeighborhoodMedian(raw: Readonly<NumberArray>, channel: numb
 					values[count++] = raw[q * channels + channel]
 				}
 			}
+
 			if (count > 0) break
+
 			er++
 		}
 	}
 
-	return medianOfScratchPrefix(values, count)
+	return medianBySelection(values, count)
 }
 
 // Collects mapped-defect indices only while the map remains sparse enough for the direct repair path.
 // Returns undefined once the map exceeds `maxCount`, so dense maps fall back to the normal full-frame pass.
 function collectSparseDefectIndices(mask: Uint8Array, maxCount: number) {
 	const indices: number[] = []
+
 	for (let p = 0; p < mask.length; p++) {
 		if (mask[p] === 0) continue
 		if (indices.length >= maxCount) return undefined
 		indices.push(p)
 	}
+
 	return indices
 }
 
@@ -645,6 +666,7 @@ function repairMasterDarkDirect(
 		if (!darkEnabled && defectMask === undefined) continue
 
 		const repairSkip = defectMask !== undefined ? new Uint8Array(defectMask) : new Uint8Array(n)
+
 		if (darkEnabled) {
 			for (let y = 0; y < height; y++) {
 				const rowBase = y * width
@@ -657,6 +679,7 @@ function repairMasterDarkDirect(
 
 		for (let y = 0; y < height; y++) {
 			const rowBase = y * width
+
 			for (let x = 0; x < width; x++) {
 				const p = rowBase + x
 				const isDefect = defectMask !== undefined && defectMask[p] !== 0
@@ -707,6 +730,7 @@ function isIsolatedDefect(plane: Float64Array, x: number, y: number, width: numb
 		const yy = y + ky * step
 		if (yy < 0 || yy >= height) continue
 		const row = yy * width
+
 		for (let kx = -1; kx <= 1; kx++) {
 			const xx = x + kx * step
 			if (xx < 0 || xx >= width) continue
@@ -724,23 +748,28 @@ function isIsolatedDefect(plane: Float64Array, x: number, y: number, width: numb
 	if (step > 1 && rawBuf !== undefined && residual !== undefined && phaseScale !== undefined) {
 		// Exclude the center pixel from the raw background via skipIndex so no full-frame mask is allocated.
 		const rawBg = neighborhoodMedian(plane, x, y, width, height, bgRadius, 1, rawBuf, skip, centerIndex)
+
 		for (let dy = -1; dy <= 1; dy++) {
 			const yy = y + dy
 			if (yy < 0 || yy >= height) continue
 			const row = yy * width
+
 			for (let dx = -1; dx <= 1; dx++) {
 				const xx = x + dx
 				if (xx < 0 || xx >= width) continue
 				const q = row + xx
 				if (q === centerIndex) continue
 				if (skip !== undefined && skip[q] !== 0) continue
+
 				// Each neighbor is evaluated against its own CFA phase scale so a
 				// noisier/quieter candidate phase does not bias the support test.
 				const nbPhase = (yy & 1) * 2 + (xx & 1)
 				const nbScale = phaseScale[nbPhase]
 				const nbThreshold = sigma * nbScale
+
 				// First gate: raw deviation from the contiguous background.
 				const nb = plane[q]
+
 				if (sign > 0 ? nb - rawBg > nbThreshold : rawBg - nb > nbThreshold) {
 					// Second gate: the neighbor must be anomalous in its own CFA phase — its
 					// same-phase residual must exceed its own phase's sigma*scale.
@@ -764,6 +793,7 @@ function isIsolatedDefect(plane: Float64Array, x: number, y: number, width: numb
 function buildResidualField(plane: Float64Array, width: number, height: number, radius: number, step: number, window: NeighborhoodScratch, skip: Uint8Array | undefined, residual: Float64Array) {
 	for (let y = 0; y < height; y++) {
 		const rowBase = y * width
+
 		for (let x = 0; x < width; x++) {
 			const p = rowBase + x
 			const m = neighborhoodMedian(plane, x, y, width, height, radius, step, window, skip, p)
@@ -841,11 +871,13 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 	if (protectMask !== undefined && protectMask.length !== n) {
 		throw new Error(`protect mask length must be ${n} (width*height), got ${protectMask.length}`)
 	}
+
 	let protectSkip: Uint8Array | undefined
 	if (protectMask !== undefined) {
 		protectSkip = new Uint8Array(n)
 		for (let p = 0; p < n; p++) if (protectMask[p] !== 0) protectSkip[p] = 1
 	}
+
 	let defectProtectSkip: Uint8Array | undefined
 	if (defectMask !== undefined && protectSkip !== undefined) {
 		defectProtectSkip = new Uint8Array(defectMask)
@@ -953,6 +985,7 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 			} else {
 				darkSkip = new Uint8Array(n)
 			}
+
 			for (let y = 0; y < height; y++) {
 				const rowBase = y * width
 				for (let x = 0; x < width; x++) {
@@ -968,6 +1001,7 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 		let autoEnabled = false
 		if (autoPossible) {
 			let autoSkip = darkSkip ?? defectMask
+
 			if (protectSkip !== undefined) {
 				if (autoSkip === undefined) {
 					autoSkip = protectSkip
@@ -979,8 +1013,10 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 					autoSkip = combinedSkip
 				}
 			}
+
 			buildResidualField(plane, width, height, radius, step, window, autoSkip, residual!)
 			computePhaseStats(residual!, width, height, phases, gatherBuf, scaleScratch, phaseMedian, phaseScale, autoSkip)
+
 			for (let ph = 0; ph < phases; ph++) autoEnabled ||= phaseScale[ph] > 0
 		}
 
@@ -989,6 +1025,7 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 
 		for (let y = 0; y < height; y++) {
 			const rowBase = y * width
+
 			for (let x = 0; x < width; x++) {
 				const p = rowBase + x
 				const center = plane[p]
@@ -1027,6 +1064,7 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 						m = residual !== undefined ? center - residual[p] : neighborhoodMedian(plane, x, y, width, height, radius, step, window, defectMask)
 					}
 				}
+
 				const repaired = amount >= 1 ? m : center + amount * (m - center)
 				if (!Number.isFinite(repaired)) continue
 				raw[p * channels + channel] = repaired
