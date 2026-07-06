@@ -332,20 +332,19 @@ function isIsolatedDefect(plane: Float64Array, x: number, y: number, width: numb
 	return true
 }
 
-// Builds the high-pass residual field `value - local-median` for a plane: `medianField[p]` receives the
-// same-phase neighborhood median (reused later as the repair value) and `residual[p]` the deviation from
-// it. Subtracting the local median removes smooth structure (sky gradients, vignetting), so the robust
-// scale of `residual` reflects sensor noise instead of the background slope — using the raw plane's global
-// spread would otherwise inflate the threshold and hide obvious local defects. `skip` (the defect mask) is
-// passed to the median so known defects do not bias it. The center sample is skipped too so a candidate
-// surrounded by masked neighbors cannot become its own local background.
-function buildResidualField(plane: Float64Array, width: number, height: number, radius: number, step: number, window: Float64Array, skip: Uint8Array | undefined, medianField: Float64Array, residual: Float64Array) {
+// Builds the high-pass residual field `value - local-median` for a plane. Subtracting the local median
+// removes smooth structure (sky gradients, vignetting), so the robust scale of `residual` reflects sensor
+// noise instead of the background slope — using the raw plane's global spread would otherwise inflate the
+// threshold and hide obvious local defects. The median can be recovered as `plane[p] - residual[p]` when
+// the auto detector needs the repair value. `skip` (the defect mask) is passed to the median so known
+// defects do not bias it. The center sample is skipped too so a candidate surrounded by masked neighbors
+// cannot become its own local background.
+function buildResidualField(plane: Float64Array, width: number, height: number, radius: number, step: number, window: Float64Array, skip: Uint8Array | undefined, residual: Float64Array) {
 	for (let y = 0; y < height; y++) {
 		const rowBase = y * width
 		for (let x = 0; x < width; x++) {
 			const p = rowBase + x
 			const m = neighborhoodMedian(plane, x, y, width, height, radius, step, window, skip, p)
-			medianField[p] = m
 			residual[p] = plane[p] - m
 		}
 	}
@@ -468,9 +467,8 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 	// (step=1) background — a star's PSF crosses all CFA phases, not just same-color ones.
 	const rawBgWindow = step > 1 ? new Float64Array(Math.min(2 * bgRadius + 1, width) * Math.min(2 * bgRadius + 1, height)) : undefined
 	const darkPlane = dark0 !== undefined ? new Float64Array(n) : undefined
-	// Per-pixel local median (the repair value) and high-pass residual, built once per channel for the
-	// noise-scale estimate and reused as the repair value so the median is computed only once per pixel.
-	const medianField = autoPossible ? new Float64Array(n) : undefined
+	// Per-pixel high-pass residual, built once per channel for the noise-scale estimate. The local median
+	// is recovered as `plane[p] - residual[p]` when the auto path needs the repair value.
 	const residual = autoPossible ? new Float64Array(n) : undefined
 
 	// Per-phase robust statistics (one entry when not a mosaic).
@@ -569,7 +567,7 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 					autoSkip = combinedSkip
 				}
 			}
-			buildResidualField(plane, width, height, radius, step, window, autoSkip, medianField!, residual!)
+			buildResidualField(plane, width, height, radius, step, window, autoSkip, residual!)
 			computePhaseStats(residual!, width, height, phases, gatherBuf, scaleScratch, phaseMedian, phaseScale, autoSkip)
 			for (let ph = 0; ph < phases; ph++) autoEnabled ||= phaseScale[ph] > 0
 		}
@@ -594,7 +592,7 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 				} else if (darkEnabled && darkPlane![p] > darkThreshold[ph]) {
 					cause = 2
 				} else if (autoEnabled && gScale > 0 && (protectSkip === undefined || protectSkip[p] === 0)) {
-					m = medianField![p]
+					m = center - residual![p]
 					haveM = true
 					// The window-median deviation is a cheap gate; a candidate is confirmed only when the
 					// isolation test (against the robust background) rules out a resolved source such as a star.
@@ -614,7 +612,7 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 					if (repairSkip !== undefined) {
 						m = neighborhoodMedian(plane, x, y, width, height, radius, step, window, repairSkip, undefined, Number.NaN)
 					} else {
-						m = medianField !== undefined ? medianField[p] : neighborhoodMedian(plane, x, y, width, height, radius, step, window, defectMask)
+						m = residual !== undefined ? center - residual[p] : neighborhoodMedian(plane, x, y, width, height, radius, step, window, defectMask)
 					}
 				}
 				const repaired = amount >= 1 ? m : center + amount * (m - center)
