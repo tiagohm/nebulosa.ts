@@ -100,6 +100,37 @@ test('a master dark flags fixed hot pixels even with auto detection disabled', (
 	expect(image.raw[pixelOffset(image, 8, 6)]).toBeCloseTo(at(8), 3)
 })
 
+test('a master dark repairs one RGB channel without auto detection', () => {
+	const width = 12
+	const height = 8
+	const values = new Float32Array(width * height * 3)
+	for (let y = 0; y < height; y++) {
+		for (let x = 0; x < width; x++) {
+			const p = (y * width + x) * 3
+			values[p] = 0.2 + 0.01 * x
+			values[p + 1] = 0.3 + 0.02 * (x / (width - 1))
+			values[p + 2] = 0.4 + 0.01 * y
+		}
+	}
+	const x = 7
+	const y = 4
+	const expectedGreen = 0.3 + 0.02 * (x / (width - 1))
+	values[(y * width + x) * 3 + 1] = 0.85
+	const image = makeImage(width, height, 3, values)
+
+	const dark = new Float32Array(width * height * 3).fill(0.01)
+	dark[(y * width + x) * 3 + 1] = 0.8
+	const masterDark = makeImage(width, height, 3, dark)
+
+	const result = cosmeticCorrection(image, { hotSigma: 0, coldSigma: 0, masterDark })
+
+	expect(result.dark).toBe(1)
+	expect(result.corrected).toBe(1)
+	expect(image.raw[pixelOffset(image, x, y, 0)]).toBeCloseTo(0.2 + 0.01 * x, 6)
+	expect(image.raw[pixelOffset(image, x, y, 1)]).toBeCloseTo(expectedGreen, 3)
+	expect(image.raw[pixelOffset(image, x, y, 2)]).toBeCloseTo(0.4 + 0.01 * y, 6)
+})
+
 test('an explicit defect column is repaired unconditionally', () => {
 	const width = 16
 	const height = 10
