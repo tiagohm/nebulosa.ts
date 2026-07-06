@@ -116,6 +116,21 @@ test('an explicit defect column is repaired unconditionally', () => {
 	for (let y = 0; y < height; y++) expect(image.raw[pixelOffset(image, 8, y)]).toBeCloseTo(at(8), 3)
 })
 
+test('a sparse explicit defect pixel is repaired without auto detection', () => {
+	const width = 16
+	const height = 10
+	const { values, at } = rampImage(width, height, 0.25, 0.55)
+	values[5 * width + 8] = 0
+	const image = makeImage(width, height, 1, values)
+
+	const result = cosmeticCorrection(image, { hotSigma: 0, coldSigma: 0, defects: { pixels: [[8, 5]] } })
+
+	expect(result.defect).toBe(1)
+	expect(result.corrected).toBe(1)
+	expect(image.raw[pixelOffset(image, 8, 5)]).toBeCloseTo(at(8), 3)
+	expect(image.raw[pixelOffset(image, 10, 5)]).toBeCloseTo(at(10), 6)
+})
+
 test('end-to-end: detects and repairs synthetic hot/dead pixels from the generator', () => {
 	const width = 64
 	const height = 64

@@ -86,6 +86,10 @@ const CONSTANT_DARK_SCALE_FRACTION = 0.1
 // subarray/sort call for the per-pixel radius-1 path.
 const SMALL_MEDIAN_SORT_LIMIT = 9
 
+// Maximum mapped-defect density that uses the sparse explicit-defect repair path. Denser maps keep the
+// normal full-frame pass, which is better for large bad-row/column sets.
+const SPARSE_DEFECT_MAX_FRACTION = 1 / 32
+
 // Outcome of a cosmetic-correction pass: the mutated image plus how many samples each detector repaired.
 // The per-detector counts are mutually exclusive (a sample is attributed to the first detector that
 // flags it, in the order defect > dark > hot > cold) and sum to `corrected`.
@@ -394,6 +398,101 @@ function neighborhoodMedian(plane: Float64Array, x: number, y: number, width: nu
 	return medianOf(values, count)
 }
 
+// Median of the neighborhood of (x, y), read directly from an interleaved raw buffer for sparse
+// explicit-defect repair. It mirrors `neighborhoodMedian` but avoids materializing a full plane when no
+// statistical detector is active.
+function interleavedNeighborhoodMedian(raw: Readonly<NumberArray>, channel: number, channels: number, x: number, y: number, width: number, height: number, r: number, step: number, scratch: NeighborhoodScratch, skip?: Uint8Array, skipIndex?: number, emptyValue?: number) {
+	const kyMin = Math.max(-r, -Math.floor(y / step))
+	const kyMax = Math.min(r, Math.floor((height - 1 - y) / step))
+	const kxMin = Math.max(-r, -Math.floor(x / step))
+	const kxMax = Math.min(r, Math.floor((width - 1 - x) / step))
+
+	let values = scratch.values
+	let count = 0
+	for (let ky = kyMin; ky <= kyMax; ky++) {
+		const row = (y + ky * step) * width
+		for (let kx = kxMin; kx <= kxMax; kx++) {
+			const q = row + x + kx * step
+			if (q === skipIndex) continue
+			if (skip !== undefined && skip[q] !== 0) continue
+			if (count === values.length) values = growNeighborhoodBuffer(scratch, count + 1)
+			values[count++] = raw[q * channels + channel]
+		}
+	}
+
+	if (count === 0) {
+		let er = r + 1
+		let prevKyMin = kyMin
+		let prevKyMax = kyMax
+		let prevKxMin = kxMin
+		let prevKxMax = kxMax
+		while (true) {
+			const ekyMin = Math.max(-er, -Math.floor(y / step))
+			const ekyMax = Math.min(er, Math.floor((height - 1 - y) / step))
+			const ekxMin = Math.max(-er, -Math.floor(x / step))
+			const ekxMax = Math.min(er, Math.floor((width - 1 - x) / step))
+			if (ekyMin === prevKyMin && ekyMax === prevKyMax && ekxMin === prevKxMin && ekxMax === prevKxMax) return emptyValue ?? raw[(y * width + x) * channels + channel]
+			prevKyMin = ekyMin
+			prevKyMax = ekyMax
+			prevKxMin = ekxMin
+			prevKxMax = ekxMax
+			for (let ky = ekyMin; ky <= ekyMax; ky++) {
+				const row = (y + ky * step) * width
+				for (let kx = ekxMin; kx <= ekxMax; kx++) {
+					const q = row + x + kx * step
+					if (q === skipIndex) continue
+					if (skip !== undefined && skip[q] !== 0) continue
+					if (count === values.length) values = growNeighborhoodBuffer(scratch, count + 1)
+					values[count++] = raw[q * channels + channel]
+				}
+			}
+			if (count > 0) break
+			er++
+		}
+	}
+
+	if (count <= SMALL_MEDIAN_SORT_LIMIT) {
+		sortSmallPrefix(values, count)
+	} else {
+		values.subarray(0, count).sort()
+	}
+	return medianOf(values, count)
+}
+
+// Collects mapped-defect indices only while the map remains sparse enough for the direct repair path.
+// Returns undefined once the map exceeds `maxCount`, so dense maps fall back to the normal full-frame pass.
+function collectSparseDefectIndices(mask: Uint8Array, maxCount: number) {
+	const indices: number[] = []
+	for (let p = 0; p < mask.length; p++) {
+		if (mask[p] === 0) continue
+		if (indices.length >= maxCount) return undefined
+		indices.push(p)
+	}
+	return indices
+}
+
+// Repairs only explicitly mapped defects from the interleaved raw buffer. All mapped defects stay in the
+// skip mask, so direct reads do not reuse values already corrected earlier in the sparse pass.
+function repairSparseDefects(raw: NumberArray, width: number, height: number, channels: number, radius: number, step: number, amount: number, defectMask: Uint8Array, defectIndices: readonly number[], window: NeighborhoodScratch) {
+	let repairedCount = 0
+
+	for (let channel = 0; channel < channels; channel++) {
+		for (const p of defectIndices) {
+			const y = Math.trunc(p / width)
+			const x = p - y * width
+			const rawIndex = p * channels + channel
+			const center = raw[rawIndex]
+			const m = interleavedNeighborhoodMedian(raw, channel, channels, x, y, width, height, radius, step, window, defectMask, undefined, Number.NaN)
+			const repaired = amount >= 1 ? m : center + amount * (m - center)
+			if (!Number.isFinite(repaired)) continue
+			raw[rawIndex] = repaired
+			repairedCount++
+		}
+	}
+
+	return repairedCount
+}
+
 // Decides whether a candidate pixel is a genuine isolated defect rather than the peak of a resolved
 // source (a star). `sign` is +1 for a hot candidate, -1 for a cold one. Uses a robust local background
 // `bg` (median over the slightly larger radius `bgRadius` window, where a compact source is a minority so
@@ -597,14 +696,23 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 	const windowSize = Math.min(2 * radius + 1, sameAxisColumns) * Math.min(2 * radius + 1, sameAxisRows)
 	const bgWindowSize = Math.min(2 * bgRadius + 1, sameAxisColumns) * Math.min(2 * bgRadius + 1, sameAxisRows)
 
+	const window: NeighborhoodScratch = { values: new Float64Array(windowSize) }
+
+	// Pure explicit-defect maps can be repaired directly from the interleaved raw buffer when the map is
+	// sparse, avoiding a full deinterleaved Float64 plane and the full-frame detection scan.
+	const sparseDefectIndices = defectMask !== undefined && !autoPossible && dark0 === undefined ? collectSparseDefectIndices(defectMask, Math.max(1, Math.floor(n * SPARSE_DEFECT_MAX_FRACTION))) : undefined
+	if (sparseDefectIndices !== undefined) {
+		defect = repairSparseDefects(raw, width, height, channels, radius, step, amount, defectMask!, sparseDefectIndices, window)
+		return { image, corrected: defect, hot, cold, dark, defect }
+	}
+
 	// Reusable scratch buffers, allocated once and shared across channels.
-	// plane is always needed for deinterleaving; scale/gather are only allocated when the auto or
-	// master-dark detector could run, keeping defect-only and dry-run paths much lighter.
+	// plane is needed for deinterleaving whenever statistical detection or dense defect repair runs;
+	// scale/gather are only allocated when the auto or master-dark detector could run.
 	const plane = new Float64Array(n)
 	const scratchNeeded = autoPossible || dark0 !== undefined
 	const scaleScratch = scratchNeeded ? new Float64Array(n) : new Float64Array(0)
 	const gatherBuf = scratchNeeded ? new Float64Array(n) : new Float64Array(0)
-	const window: NeighborhoodScratch = { values: new Float64Array(windowSize) }
 	const bgWindow: NeighborhoodScratch = { values: new Float64Array(bgWindowSize) }
 	// For Bayer CFA frames the isolation test must also check raw 8-neighbors against a contiguous
 	// (step=1) background — a star's PSF crosses all CFA phases, not just same-color ones.
