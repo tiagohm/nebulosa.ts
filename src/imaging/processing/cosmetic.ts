@@ -209,9 +209,10 @@ function neighborhoodMedian(plane: Float64Array, x: number, y: number, width: nu
 // adjacent CFA photosites, not just those of the same color phase. The contiguous background excludes the
 // center pixel so the star core does not bias its median. `buf` is sized for the step-spaced background
 // window; `rawBuf` is sized for the contiguous (step=1) background window and is only used when
-// `step > 1`. `skip` (the defect mask) is excluded from background and neighbor tests. Returns true only
+// `step > 1`. `residual` and `phaseScale` provide per-pixel same-phase residuals and per-phase
+// robust scales for the cross-phase normalization. Returns true only
 // for a confirmed isolated defect.
-function isIsolatedDefect(plane: Float64Array, x: number, y: number, width: number, height: number, bgRadius: number, step: number, buf: Float64Array, skip: Uint8Array | undefined, scale: number, sigma: number, sign: number, rawBuf?: Float64Array) {
+function isIsolatedDefect(plane: Float64Array, x: number, y: number, width: number, height: number, bgRadius: number, step: number, buf: Float64Array, skip: Uint8Array | undefined, scale: number, sigma: number, sign: number, rawBuf?: Float64Array, residual?: Float64Array, phaseScale?: Float64Array) {
 	const bg = neighborhoodMedian(plane, x, y, width, height, bgRadius, step, buf, skip)
 	const center = plane[y * width + x]
 	const threshold = sigma * scale
@@ -240,7 +241,7 @@ function isIsolatedDefect(plane: Float64Array, x: number, y: number, width: numb
 	// For Bayer CFA frames the same-phase neighbors are two pixels apart; a resolved star's PSF spills
 	// into the adjacent CFA photosites as well. Check the raw 8-neighbors (step=1) against a contiguous
 	// background so cross-phase PSF support is not missed.
-	if (step > 1 && rawBuf !== undefined) {
+	if (step > 1 && rawBuf !== undefined && residual !== undefined && phaseScale !== undefined) {
 		// Exclude the center pixel from the raw background via skipIndex so no full-frame mask is allocated.
 		const rawBg = neighborhoodMedian(plane, x, y, width, height, bgRadius, 1, rawBuf, skip, centerIndex)
 		const rawThreshold = sigma * scale
@@ -254,8 +255,18 @@ function isIsolatedDefect(plane: Float64Array, x: number, y: number, width: numb
 				const q = row + xx
 				if (q === centerIndex) continue
 				if (skip !== undefined && skip[q] !== 0) continue
+				// First gate: raw deviation from the contiguous background.
 				const nb = plane[q]
-				if (sign > 0 ? nb - rawBg > rawThreshold : rawBg - nb > rawThreshold) return false
+				if (sign > 0 ? nb - rawBg > rawThreshold : rawBg - nb > rawThreshold) {
+					// Second gate: the neighbor must be anomalous in its own CFA phase — its
+					// same-phase residual must exceed its own phase's sigma*scale. A normal
+					// red neighbor at its nominal level has residual ~0 and won't pass, so
+					// it doesn't veto the candidate.
+					const nbPhase = (yy & 1) * 2 + (xx & 1)
+					const nbResidual = residual[q]
+					const nbThreshold = sigma * phaseScale[nbPhase]
+					if (sign > 0 ? nbResidual > nbThreshold : -nbResidual > nbThreshold) return false
+				}
 			}
 		}
 	}
@@ -471,8 +482,8 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 					haveM = true
 					// The window-median deviation is a cheap gate; a candidate is confirmed only when the
 					// isolation test (against the robust background) rules out a resolved source such as a star.
-					if (hotSigma > 0 && center > m + hotSigma * gScale && isIsolatedDefect(plane, x, y, width, height, bgRadius, step, bgWindow, defectMask, gScale, hotSigma, 1, rawBgWindow)) cause = 3
-					else if (coldSigma > 0 && center < m - coldSigma * gScale && isIsolatedDefect(plane, x, y, width, height, bgRadius, step, bgWindow, defectMask, gScale, coldSigma, -1, rawBgWindow)) cause = 4
+					if (hotSigma > 0 && center > m + hotSigma * gScale && isIsolatedDefect(plane, x, y, width, height, bgRadius, step, bgWindow, defectMask, gScale, hotSigma, 1, rawBgWindow, residual, phaseScale)) cause = 3
+					else if (coldSigma > 0 && center < m - coldSigma * gScale && isIsolatedDefect(plane, x, y, width, height, bgRadius, step, bgWindow, defectMask, gScale, coldSigma, -1, rawBgWindow, residual, phaseScale)) cause = 4
 				}
 
 				if (cause === 0) continue
