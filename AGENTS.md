@@ -461,6 +461,31 @@ Do not report:
 
 Commit messages must be precise, English, and easy to scan.
 
+### Message Structure
+
+Assemble every commit message the same way, in this order:
+
+1. A single subject line.
+2. One blank line, only when a body is present.
+3. A required body of one or more paragraphs.
+4. One blank line before the trailers.
+5. A `Co-Authored-By` trailer identifying the agent that authored the change.
+
+Concretely, the message follows this shape:
+
+```
+<imperative subject in lowercase>
+
+<required body explaining why, side effects, and trade-offs>
+
+Co-Authored-By: Agent <email>
+```
+
+- Separate the subject, body, and trailer block with exactly one blank line each. Do not add a blank line before the subject.
+- Wrap body paragraphs at a readable width and use `-` bullets when listing several independent effects.
+
+### Subject And Body Rules
+
 - Use lowercase text, except for acronyms, proper nouns, package names, and file names.
 - Start the subject directly with a present-tense imperative verb such as `implement`, `fix`, `improve`, `update`, `use`, `remove`, `rename`, or `refactor`.
 - Do not prefix the subject with Conventional Commit-style labels such as `feat:`, `fix:`, `perf:`, `docs:`, `refactor:`, `test:`, or scoped variants such as `feat(image):`.
