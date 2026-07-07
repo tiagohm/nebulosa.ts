@@ -1238,11 +1238,11 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 	let protectSkip: Uint8Array | undefined
 	let protectIndices: number[] | undefined
 	if (autoPossible && protectMask !== undefined) {
-		protectSkip = new Uint8Array(n)
 		const protectIndexMaxCount = darkPossible || defectMask !== undefined ? Math.max(1, Math.floor(n * SPARSE_PROTECT_MAX_FRACTION)) : 0
 		protectIndices = protectIndexMaxCount > 0 ? [] : undefined
 		for (let p = 0; p < n; p++) {
 			if (protectMask[p] === 0) continue
+			protectSkip ??= new Uint8Array(n)
 			protectSkip[p] = 1
 			if (protectIndices !== undefined) {
 				if (protectIndices.length < protectIndexMaxCount) {
@@ -1252,6 +1252,7 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 				}
 			}
 		}
+		if (protectSkip === undefined) protectIndices = undefined
 	}
 
 	let defectProtectSkip: Uint8Array | undefined

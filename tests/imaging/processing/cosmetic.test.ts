@@ -256,6 +256,23 @@ test('a single-pixel source is repaired unless an explicit protect mask covers i
 	expect(image.raw[pixelOffset(image, 10, 10)]).toBeCloseTo(0.8, 6)
 })
 
+test('an empty protect mask behaves like no protect mask', () => {
+	const width = 20
+	const height = 20
+	const values = new Float32Array(width * height).fill(0.1)
+	values[10 * width + 10] = 0.8
+
+	const unprotected = makeImage(width, height, 1, Float32Array.from(values))
+	const emptyProtected = makeImage(width, height, 1, Float32Array.from(values))
+	const protect = new Uint8Array(width * height)
+
+	const withoutProtect = cosmeticCorrection(unprotected)
+	const withEmptyProtect = cosmeticCorrection(emptyProtected, { protect })
+
+	expect(withEmptyProtect).toEqual(withoutProtect)
+	expect(emptyProtected.raw[pixelOffset(emptyProtected, 10, 10)]).toBeCloseTo(unprotected.raw[pixelOffset(unprotected, 10, 10)], 6)
+})
+
 test('a protected mapped defect is repaired from unprotected defect medians', () => {
 	// Protect masks star-like sources from auto repair, but explicit defects are corroborated repairs.
 	// A bad center pixel inside a protected 3x3 star core must interpolate from the star neighbors,
