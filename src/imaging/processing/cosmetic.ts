@@ -716,6 +716,28 @@ function repairSparseDefects(raw: NumberArray, width: number, height: number, ch
 	return repairedCount
 }
 
+// Repairs a dense explicit-defect mask directly from the interleaved raw buffer when no statistical
+// detector is active. The dense mask is used as the repair skip mask, so mapped defects never feed later
+// repairs even though writes happen in place.
+function repairDenseDefectsDirect(raw: NumberArray, width: number, height: number, channels: number, radius: number, step: number, amount: number, defectMask: Uint8Array, window: NeighborhoodScratch) {
+	let repairedCount = 0
+
+	for (let y = 0; y < height; y++) {
+		const rowBase = y * width
+
+		for (let x = 0; x < width; x++) {
+			const p = rowBase + x
+			if (defectMask[p] === 0) continue
+
+			for (let channel = 0; channel < channels; channel++) {
+				if (repairInterleavedIndex(raw, width, height, channels, channel, p, radius, step, amount, defectMask, undefined, undefined, window)) repairedCount++
+			}
+		}
+	}
+
+	return repairedCount
+}
+
 // Computes master-dark repairs directly from interleaved buffers when no auto detector is active. The
 // repair skip mask still covers both explicit defects and dark-flagged pixels, preserving cluster repair
 // behavior without materializing a deinterleaved light plane. Sparse candidate sets repair by index;
@@ -1149,6 +1171,11 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 	const sparseDefectIndices = !autoPossible && !darkPossible ? builtDefects?.sparseIndices : undefined
 	if (builtDefects !== undefined && sparseDefectIndices !== undefined) {
 		defect = repairSparseDefects(raw, width, height, channels, radius, step, amount, builtDefects.mask, builtDefects.sparseSet, sparseDefectIndices, window)
+		return { image, corrected: defect, hot, cold, dark, defect }
+	}
+
+	if (!autoPossible && !darkPossible && defectMask !== undefined) {
+		defect = repairDenseDefectsDirect(raw, width, height, channels, radius, step, amount, defectMask, window)
 		return { image, corrected: defect, hot, cold, dark, defect }
 	}
 
