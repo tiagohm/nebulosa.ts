@@ -173,9 +173,8 @@ function computePhaseStats(plane: Float64Array, width: number, height: number, p
 			const n = width * height
 
 			if (skip === undefined) {
-				for (let p = 0; p < n; p++) {
-					gather[count++] = plane[p]
-				}
+				gather.set(plane)
+				count = n
 			} else {
 				for (let p = 0; p < n; p++) {
 					if (skip[p] !== 0) continue
@@ -1379,7 +1378,11 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 	for (let channel = 0; channel < channels; channel++) {
 		// Deinterleave the channel into a contiguous plane so neighbor reads are cache-friendly and repairs
 		// (written back to the interleaved raw buffer) never feed into later neighborhood medians.
-		for (let p = 0, i = channel; p < n; p++, i += channels) plane[p] = raw[i]
+		if (channels === 1) {
+			plane.set(raw)
+		} else {
+			for (let p = 0, i = channel; p < n; p++, i += channels) plane[p] = raw[i]
+		}
 
 		// Per-phase master-dark thresholds for this channel; the dark detector is disabled when no
 		// unmasked dark sample exceeds its threshold.
