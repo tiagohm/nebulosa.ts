@@ -551,7 +551,23 @@ function neighborhoodMedian(plane: Float64Array, x: number, y: number, width: nu
 // Median of the neighborhood of (x, y), read directly from an interleaved raw buffer for sparse
 // explicit-defect repair. It mirrors `neighborhoodMedian` but avoids materializing a full plane when no
 // statistical detector is active.
-function interleavedNeighborhoodMedian(raw: Readonly<NumberArray>, channel: number, channels: number, x: number, y: number, width: number, height: number, r: number, step: number, scratch: NeighborhoodScratch, skip?: Uint8Array, skipIndex?: number, emptyValue?: number, sparseSkip?: ReadonlySet<number>) {
+function interleavedNeighborhoodMedian(
+	raw: Readonly<NumberArray>,
+	channel: number,
+	channels: number,
+	x: number,
+	y: number,
+	width: number,
+	height: number,
+	r: number,
+	step: number,
+	scratch: NeighborhoodScratch,
+	skip?: Uint8Array,
+	skipIndex?: number,
+	emptyValue?: number,
+	sparseSkip?: ReadonlySet<number>,
+	sparseSkip2?: ReadonlySet<number>,
+) {
 	const kyMin = Math.max(-r, -Math.floor(y / step))
 	const kyMax = Math.min(r, Math.floor((height - 1 - y) / step))
 	const kxMin = Math.max(-r, -Math.floor(x / step))
@@ -568,6 +584,7 @@ function interleavedNeighborhoodMedian(raw: Readonly<NumberArray>, channel: numb
 			if (q === skipIndex) continue
 			if (skip !== undefined && skip[q] !== 0) continue
 			if (sparseSkip !== undefined && sparseSkip.has(q)) continue
+			if (sparseSkip2 !== undefined && sparseSkip2.has(q)) continue
 			if (count === values.length) values = growNeighborhoodBuffer(scratch, count + 1)
 			values[count++] = raw[q * channels + channel]
 		}
@@ -606,6 +623,7 @@ function interleavedNeighborhoodMedian(raw: Readonly<NumberArray>, channel: numb
 					if (q === skipIndex) continue
 					if (skip !== undefined && skip[q] !== 0) continue
 					if (sparseSkip !== undefined && sparseSkip.has(q)) continue
+					if (sparseSkip2 !== undefined && sparseSkip2.has(q)) continue
 					if (count === values.length) values = growNeighborhoodBuffer(scratch, count + 1)
 					values[count++] = raw[q * channels + channel]
 				}
@@ -621,14 +639,28 @@ function interleavedNeighborhoodMedian(raw: Readonly<NumberArray>, channel: numb
 }
 
 // Repairs one interleaved sample by index from the current raw buffer, excluding every sample marked in
-// `repairSkip` or `sparseRepairSkip` from the neighborhood median. Returns true only when a finite repair
+// `repairSkip` or sparse skip sets from the neighborhood median. Returns true only when a finite repair
 // value is written.
-function repairInterleavedIndex(raw: NumberArray, width: number, height: number, channels: number, channel: number, p: number, radius: number, step: number, amount: number, repairSkip: Uint8Array | undefined, sparseRepairSkip: ReadonlySet<number> | undefined, window: NeighborhoodScratch) {
+function repairInterleavedIndex(
+	raw: NumberArray,
+	width: number,
+	height: number,
+	channels: number,
+	channel: number,
+	p: number,
+	radius: number,
+	step: number,
+	amount: number,
+	repairSkip: Uint8Array | undefined,
+	sparseRepairSkip: ReadonlySet<number> | undefined,
+	sparseRepairSkip2: ReadonlySet<number> | undefined,
+	window: NeighborhoodScratch,
+) {
 	const y = Math.trunc(p / width)
 	const x = p - y * width
 	const rawIndex = p * channels + channel
 	const center = raw[rawIndex]
-	const m = interleavedNeighborhoodMedian(raw, channel, channels, x, y, width, height, radius, step, window, repairSkip, undefined, Number.NaN, sparseRepairSkip)
+	const m = interleavedNeighborhoodMedian(raw, channel, channels, x, y, width, height, radius, step, window, repairSkip, undefined, Number.NaN, sparseRepairSkip, sparseRepairSkip2)
 	const repaired = amount >= 1 ? m : center + amount * (m - center)
 	if (!Number.isFinite(repaired)) return false
 	raw[rawIndex] = repaired
@@ -642,7 +674,7 @@ function repairSparseDefects(raw: NumberArray, width: number, height: number, ch
 
 	for (let channel = 0; channel < channels; channel++) {
 		for (const p of defectIndices) {
-			if (repairInterleavedIndex(raw, width, height, channels, channel, p, radius, step, amount, defectMask, defectSet, window)) repairedCount++
+			if (repairInterleavedIndex(raw, width, height, channels, channel, p, radius, step, amount, defectMask, defectSet, undefined, window)) repairedCount++
 		}
 	}
 
@@ -747,11 +779,9 @@ function repairMasterDarkDirect(
 		const sparseDarkCount = darkEnabled ? (darkIndices?.length ?? Number.POSITIVE_INFINITY) : 0
 
 		if (sparseDefectCount + sparseDarkCount <= maxSparseCount) {
-			const sparseRepairSkip = darkSet === undefined ? defectSet : defectSet === undefined ? darkSet : new Set([...defectSet, ...darkSet])
-
 			if (defectIndices !== undefined) {
 				for (const p of defectIndices) {
-					if (repairInterleavedIndex(raw, width, height, channels, channel, p, radius, step, amount, defectMask, sparseRepairSkip, window)) defect++
+					if (repairInterleavedIndex(raw, width, height, channels, channel, p, radius, step, amount, defectMask, defectSet, darkSet, window)) defect++
 				}
 			}
 
@@ -759,7 +789,7 @@ function repairMasterDarkDirect(
 				for (const p of darkIndices) {
 					if (defectMask !== undefined && defectMask[p] !== 0) continue
 					if (defectSet !== undefined && defectSet.has(p)) continue
-					if (repairInterleavedIndex(raw, width, height, channels, channel, p, radius, step, amount, defectMask, sparseRepairSkip, window)) darkCount++
+					if (repairInterleavedIndex(raw, width, height, channels, channel, p, radius, step, amount, defectMask, defectSet, darkSet, window)) darkCount++
 				}
 			}
 
