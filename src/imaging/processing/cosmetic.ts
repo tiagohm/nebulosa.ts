@@ -1457,7 +1457,7 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 
 				if (defectMask !== undefined && defectMask[p] !== 0) {
 					cause = 1
-				} else if (darkEnabled && dark0![rawIndex] > darkThreshold[ph]) {
+				} else if (darkSkip !== undefined && darkSkip[p] !== 0) {
 					cause = 2
 				} else if (autoEnabled && gScale > 0 && (protectSkip === undefined || protectSkip[p] === 0)) {
 					m = center - residual![p]
