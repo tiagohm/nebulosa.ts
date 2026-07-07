@@ -227,6 +227,7 @@ function computeInterleavedDarkThresholds(dark: Readonly<NumberArray>, channel: 
 	for (let ph = 0; ph < phases; ph++) {
 		let count = 0
 		let maxValue = Number.NEGATIVE_INFINITY
+		let minValue = Number.POSITIVE_INFINITY
 
 		if (phases === 1) {
 			const n = width * height
@@ -236,6 +237,7 @@ function computeInterleavedDarkThresholds(dark: Readonly<NumberArray>, channel: 
 					const value = dark[i]
 					gather[count++] = value
 					if (value > maxValue) maxValue = value
+					if (value < minValue) minValue = value
 				}
 			} else {
 				for (let p = 0, i = channel; p < n; p++, i += channels) {
@@ -244,6 +246,7 @@ function computeInterleavedDarkThresholds(dark: Readonly<NumberArray>, channel: 
 					const value = dark[i]
 					gather[count++] = value
 					if (value > maxValue) maxValue = value
+					if (value < minValue) minValue = value
 				}
 			}
 		} else {
@@ -260,6 +263,7 @@ function computeInterleavedDarkThresholds(dark: Readonly<NumberArray>, channel: 
 						const value = dark[i]
 						gather[count++] = value
 						if (value > maxValue) maxValue = value
+						if (value < minValue) minValue = value
 					}
 				}
 			} else {
@@ -274,6 +278,7 @@ function computeInterleavedDarkThresholds(dark: Readonly<NumberArray>, channel: 
 						const value = dark[i]
 						gather[count++] = value
 						if (value > maxValue) maxValue = value
+						if (value < minValue) minValue = value
 					}
 				}
 			}
@@ -282,6 +287,9 @@ function computeInterleavedDarkThresholds(dark: Readonly<NumberArray>, channel: 
 		if (count === 0) {
 			continue
 		}
+
+		// A constant phase cannot contain a high-tail outlier, so keep its threshold disabled.
+		if (maxValue === minValue) continue
 
 		const stats = robustPlaneScale(gather, count, scratch)
 		let scale = stats.scale
