@@ -11,6 +11,18 @@ const input = `
 </person>
 `
 
+const TEXT_DECODER = new TextDecoder()
+const TEXT_ENCODER = new TextEncoder()
+const EMPTY_TEXT = new Uint8Array(0)
+
+function nodeText(node: XmlNode) {
+	return TEXT_DECODER.decode(node.text).trim()
+}
+
+function encodeText(text: string) {
+	return TEXT_ENCODER.encode(text)
+}
+
 describe('parse', () => {
 	test('single', () => {
 		const parser = new SimpleXmlParser()
@@ -20,17 +32,17 @@ describe('parse', () => {
 		expect(tag.name).toBe('person')
 		expect(tag.attributes.id).toBe('1')
 		expect(tag.attributes.type).toBe('student')
-		expect(tag.text).toBeEmpty()
+		expect(nodeText(tag)).toBeEmpty()
 		expect(tag.children).toHaveLength(3)
 		expect(tag.children[0].name).toBe('name')
-		expect(tag.children[0].text).toBe('John Doe')
+		expect(nodeText(tag.children[0])).toBe('John Doe')
 		expect(tag.children[0].children).toBeEmpty()
 		expect(tag.children[1].name).toBe('age')
-		expect(tag.children[1].text).toBe('25')
+		expect(nodeText(tag.children[1])).toBe('25')
 		expect(tag.children[1].children).toBeEmpty()
 		expect(tag.children[2].name).toBe('address')
 		expect(tag.children[2].attributes.city).toBe('New York')
-		expect(tag.children[2].text).toBe('')
+		expect(nodeText(tag.children[2])).toBe('')
 		expect(tag.children[2].children).toBeEmpty()
 	})
 
@@ -44,17 +56,17 @@ describe('parse', () => {
 			expect(tags[i].name).toBe('person')
 			expect(tags[i].attributes.id).toBe('1')
 			expect(tags[i].attributes.type).toBe('student')
-			expect(tags[i].text).toBeEmpty()
+			expect(nodeText(tags[i])).toBeEmpty()
 			expect(tags[i].children).toHaveLength(3)
 			expect(tags[i].children[0].name).toBe('name')
-			expect(tags[i].children[0].text).toBe('John Doe')
+			expect(nodeText(tags[i].children[0])).toBe('John Doe')
 			expect(tags[i].children[0].children).toBeEmpty()
 			expect(tags[i].children[1].name).toBe('age')
-			expect(tags[i].children[1].text).toBe('25')
+			expect(nodeText(tags[i].children[1])).toBe('25')
 			expect(tags[i].children[1].children).toBeEmpty()
 			expect(tags[i].children[2].name).toBe('address')
 			expect(tags[i].children[2].attributes.city).toBe('New York')
-			expect(tags[i].children[2].text).toBe('')
+			expect(nodeText(tags[i].children[2])).toBe('')
 			expect(tags[i].children[2].children).toBeEmpty()
 		}
 	})
@@ -73,43 +85,45 @@ describe('parse', () => {
 		expect(tag.name).toBe('person')
 		expect(tag.attributes.id).toBe('1')
 		expect(tag.attributes.type).toBe('student')
-		expect(tag.text).toBeEmpty()
+		expect(nodeText(tag)).toBeEmpty()
 		expect(tag.children).toHaveLength(3)
 		expect(tag.children[0].name).toBe('name')
-		expect(tag.children[0].text).toBe('John Doe')
+		expect(nodeText(tag.children[0])).toBe('John Doe')
 		expect(tag.children[0].children).toBeEmpty()
 		expect(tag.children[1].name).toBe('age')
-		expect(tag.children[1].text).toBe('25')
+		expect(nodeText(tag.children[1])).toBe('25')
 		expect(tag.children[1].children).toBeEmpty()
 		expect(tag.children[2].name).toBe('address')
 		expect(tag.children[2].attributes.city).toBe('New York')
-		expect(tag.children[2].text).toBe('')
+		expect(nodeText(tag.children[2])).toBe('')
 		expect(tag.children[2].children).toBeEmpty()
 	})
 
 	test('edge cases', () => {
 		const parser = new SimpleXmlParser()
 
-		expect(parser.parse('<person></person>')).toEqual([{ name: 'person', attributes: {}, children: [], text: '' }])
-		expect(parser.parse('<person name="John"></person>')).toEqual([{ name: 'person', attributes: { name: 'John' }, children: [], text: '' }])
-		expect(parser.parse('<person name="John" disabled student></person>')).toEqual([{ name: 'person', attributes: { name: 'John', disabled: '', student: '' }, children: [], text: '' }])
-		expect(parser.parse('<person gender=""></person>')).toEqual([{ name: 'person', attributes: { gender: '' }, children: [], text: '' }])
-		expect(parser.parse('<person>Text</person>')).toEqual([{ name: 'person', attributes: {}, children: [], text: 'Text' }])
-		expect(parser.parse('<person name="John"><phone number="5511987654321"></phone></person>')).toEqual([{ name: 'person', attributes: { name: 'John' }, children: [{ name: 'phone', attributes: { number: '5511987654321' }, children: [], text: '' }], text: '' }])
-		expect(parser.parse('<person name="John"><phone number="5511987654321" /></person>')).toEqual([{ name: 'person', attributes: { name: 'John' }, children: [{ name: 'phone', attributes: { number: '5511987654321' }, children: [], text: '' }], text: '' }])
-		expect(parser.parse('<person name="John"><phone country="55">11987654321</phone></person>')).toEqual([{ name: 'person', attributes: { name: 'John' }, children: [{ name: 'phone', attributes: { country: '55' }, children: [], text: '11987654321' }], text: '' }])
+		expect(parser.parse('<person></person>')).toEqual([{ name: 'person', attributes: {}, children: [], text: EMPTY_TEXT }])
+		expect(parser.parse('<person name="John"></person>')).toEqual([{ name: 'person', attributes: { name: 'John' }, children: [], text: EMPTY_TEXT }])
+		expect(parser.parse('<person name="John" disabled student></person>')).toEqual([{ name: 'person', attributes: { name: 'John', disabled: '', student: '' }, children: [], text: EMPTY_TEXT }])
+		expect(parser.parse('<person gender=""></person>')).toEqual([{ name: 'person', attributes: { gender: '' }, children: [], text: EMPTY_TEXT }])
+		expect(parser.parse('<person>Text</person>')).toEqual([{ name: 'person', attributes: {}, children: [], text: encodeText('Text') }])
+		expect(parser.parse('<person name="John"><phone number="5511987654321"></phone></person>')).toEqual([{ name: 'person', attributes: { name: 'John' }, children: [{ name: 'phone', attributes: { number: '5511987654321' }, children: [], text: EMPTY_TEXT }], text: EMPTY_TEXT }])
+		expect(parser.parse('<person name="John"><phone number="5511987654321" /></person>')).toEqual([{ name: 'person', attributes: { name: 'John' }, children: [{ name: 'phone', attributes: { number: '5511987654321' }, children: [], text: EMPTY_TEXT }], text: EMPTY_TEXT }])
+		expect(parser.parse('<person name="John"><phone country="55">11987654321</phone></person>')).toEqual([{ name: 'person', attributes: { name: 'John' }, children: [{ name: 'phone', attributes: { country: '55' }, children: [], text: encodeText('11987654321') }], text: EMPTY_TEXT }])
 		expect(parser.parse('<person name="John"><phone number="5511987654321"></phone><phone country="55">11976543210</phone></person>')).toEqual([
 			{
 				name: 'person',
 				attributes: { name: 'John' },
 				children: [
-					{ name: 'phone', attributes: { number: '5511987654321' }, children: [], text: '' },
-					{ name: 'phone', attributes: { country: '55' }, children: [], text: '11976543210' },
+					{ name: 'phone', attributes: { number: '5511987654321' }, children: [], text: EMPTY_TEXT },
+					{ name: 'phone', attributes: { country: '55' }, children: [], text: encodeText('11976543210') },
 				],
-				text: '',
+				text: EMPTY_TEXT,
 			},
 		])
-		expect(parser.parse('<person name="John"><address><city>New York</city></address></person>')).toEqual([{ name: 'person', attributes: { name: 'John' }, children: [{ name: 'address', attributes: {}, children: [{ name: 'city', attributes: {}, children: [], text: 'New York' }], text: '' }], text: '' }])
+		expect(parser.parse('<person name="John"><address><city>New York</city></address></person>')).toEqual([
+			{ name: 'person', attributes: { name: 'John' }, children: [{ name: 'address', attributes: {}, children: [{ name: 'city', attributes: {}, children: [], text: encodeText('New York') }], text: EMPTY_TEXT }], text: EMPTY_TEXT },
+		])
 		expect(parser.parse('<person name="John"><address><city>New York</city><complement/></address></person>')).toEqual([
 			{
 				name: 'person',
@@ -119,20 +133,20 @@ describe('parse', () => {
 						name: 'address',
 						attributes: {},
 						children: [
-							{ name: 'city', attributes: {}, children: [], text: 'New York' },
-							{ name: 'complement', attributes: {}, children: [], text: '' },
+							{ name: 'city', attributes: {}, children: [], text: encodeText('New York') },
+							{ name: 'complement', attributes: {}, children: [], text: EMPTY_TEXT },
 						],
-						text: '',
+						text: EMPTY_TEXT,
 					},
 				],
-				text: '',
+				text: EMPTY_TEXT,
 			},
 		])
 
-		expect(parser.parse('<person/>')).toEqual([{ name: 'person', attributes: {}, children: [], text: '' }])
-		expect(parser.parse('<person name="John"/>')).toEqual([{ name: 'person', attributes: { name: 'John' }, children: [], text: '' }])
-		expect(parser.parse('<person name="John" disabled student/>')).toEqual([{ name: 'person', attributes: { name: 'John', disabled: '', student: '' }, children: [], text: '' }])
-		expect(parser.parse('<person gender=""/>')).toEqual([{ name: 'person', attributes: { gender: '' }, children: [], text: '' }])
+		expect(parser.parse('<person/>')).toEqual([{ name: 'person', attributes: {}, children: [], text: EMPTY_TEXT }])
+		expect(parser.parse('<person name="John"/>')).toEqual([{ name: 'person', attributes: { name: 'John' }, children: [], text: EMPTY_TEXT }])
+		expect(parser.parse('<person name="John" disabled student/>')).toEqual([{ name: 'person', attributes: { name: 'John', disabled: '', student: '' }, children: [], text: EMPTY_TEXT }])
+		expect(parser.parse('<person gender=""/>')).toEqual([{ name: 'person', attributes: { gender: '' }, children: [], text: EMPTY_TEXT }])
 	})
 
 	test('parses deeply nested tags', () => {
@@ -147,15 +161,15 @@ describe('parse', () => {
 				node = node.children[0]
 			}
 		}
-		expect(node.text).toBe('deep')
+		expect(nodeText(node)).toBe('deep')
 		expect(node.children).toBeEmpty()
 	})
 
 	test('mixed content after child tags', () => {
 		const parser = new SimpleXmlParser()
 
-		expect(parser.parse('<person>John<phone/>Doe</person>')).toEqual([{ name: 'person', attributes: {}, children: [{ name: 'phone', attributes: {}, children: [], text: '' }], text: 'JohnDoe' }])
-		expect(parser.parse('<person><phone></phone>Doe</person>')).toEqual([{ name: 'person', attributes: {}, children: [{ name: 'phone', attributes: {}, children: [], text: '' }], text: 'Doe' }])
+		expect(parser.parse('<person>John<phone/>Doe</person>')).toEqual([{ name: 'person', attributes: {}, children: [{ name: 'phone', attributes: {}, children: [], text: EMPTY_TEXT }], text: encodeText('JohnDoe') }])
+		expect(parser.parse('<person><phone></phone>Doe</person>')).toEqual([{ name: 'person', attributes: {}, children: [{ name: 'phone', attributes: {}, children: [], text: EMPTY_TEXT }], text: encodeText('Doe') }])
 	})
 
 	test('preserve valid name characters', () => {
@@ -166,7 +180,7 @@ describe('parse', () => {
 				name: 'person-data',
 				attributes: { attr_name: '1', 'attr-name': '2', 'xmlns:x': '3' },
 				children: [],
-				text: '',
+				text: EMPTY_TEXT,
 			},
 		])
 	})
@@ -174,8 +188,8 @@ describe('parse', () => {
 	test('treat tabs and newlines as tag whitespace', () => {
 		const parser = new SimpleXmlParser()
 
-		expect(parser.parse('<person\tname="John"></person>')).toEqual([{ name: 'person', attributes: { name: 'John' }, children: [], text: '' }])
-		expect(parser.parse('<person\nname="John"></person>')).toEqual([{ name: 'person', attributes: { name: 'John' }, children: [], text: '' }])
+		expect(parser.parse('<person\tname="John"></person>')).toEqual([{ name: 'person', attributes: { name: 'John' }, children: [], text: EMPTY_TEXT }])
+		expect(parser.parse('<person\nname="John"></person>')).toEqual([{ name: 'person', attributes: { name: 'John' }, children: [], text: EMPTY_TEXT }])
 	})
 
 	test('reject mismatched closing tags', () => {
@@ -216,58 +230,58 @@ describe('behavior', () => {
 
 		// Regression guard: the opening tag must not complete a top-level node before its close.
 		expect(parser.parse('<person id="1">')).toBeEmpty()
-		expect(parser.parse('text</person>')).toEqual([{ name: 'person', attributes: { id: '1' }, children: [], text: 'text' }])
+		expect(parser.parse('text</person>')).toEqual([{ name: 'person', attributes: { id: '1' }, children: [], text: encodeText('text') }])
 	})
 
 	test('trims surrounding whitespace and drops whitespace-only text', () => {
 		const parser = new SimpleXmlParser()
 
-		expect(parser.parse('<a>  hello  </a>')[0].text).toBe('hello')
-		expect(parser.parse('<a> \t\n </a>')[0].text).toBe('')
+		expect(nodeText(parser.parse('<a>  hello  </a>')[0])).toBe('hello')
+		expect(nodeText(parser.parse('<a> \t\n </a>')[0])).toBe('')
 		// Internal whitespace inside the trimmed segment is preserved verbatim.
-		expect(parser.parse('<a>two  words</a>')[0].text).toBe('two  words')
+		expect(nodeText(parser.parse('<a>two  words</a>')[0])).toBe('two  words')
 	})
 
 	test('keeps tag delimiters and equals literal inside quoted attribute values', () => {
 		const parser = new SimpleXmlParser()
 
-		expect(parser.parse('<a b="1<2>3/=4"/>')).toEqual([{ name: 'a', attributes: { b: '1<2>3/=4' }, children: [], text: '' }])
+		expect(parser.parse('<a b="1<2>3/=4"/>')).toEqual([{ name: 'a', attributes: { b: '1<2>3/=4' }, children: [], text: EMPTY_TEXT }])
 	})
 
 	test('reads an empty attribute value followed by another attribute', () => {
 		const parser = new SimpleXmlParser()
 
-		expect(parser.parse('<a b="" c="2"/>')).toEqual([{ name: 'a', attributes: { b: '', c: '2' }, children: [], text: '' }])
+		expect(parser.parse('<a b="" c="2"/>')).toEqual([{ name: 'a', attributes: { b: '', c: '2' }, children: [], text: EMPTY_TEXT }])
 	})
 
 	test('streams an empty attribute value split across chunks', () => {
 		const parser = new SimpleXmlParser()
 
 		expect(parser.parse('<a b="')).toBeEmpty()
-		expect(parser.parse('" c="2"/>')).toEqual([{ name: 'a', attributes: { b: '', c: '2' }, children: [], text: '' }])
+		expect(parser.parse('" c="2"/>')).toEqual([{ name: 'a', attributes: { b: '', c: '2' }, children: [], text: EMPTY_TEXT }])
 	})
 
 	test('allows whitespace inside closing and self-closing tags', () => {
 		const parser = new SimpleXmlParser()
 
-		expect(parser.parse('<person></person >')).toEqual([{ name: 'person', attributes: {}, children: [], text: '' }])
-		expect(parser.parse('<person/ >')).toEqual([{ name: 'person', attributes: {}, children: [], text: '' }])
+		expect(parser.parse('<person></person >')).toEqual([{ name: 'person', attributes: {}, children: [], text: EMPTY_TEXT }])
+		expect(parser.parse('<person/ >')).toEqual([{ name: 'person', attributes: {}, children: [], text: EMPTY_TEXT }])
 	})
 
 	test('ignores stray characters between and before top-level nodes', () => {
 		const parser = new SimpleXmlParser()
 
 		expect(parser.parse('garbage<a/>between<b/>trailing')).toEqual([
-			{ name: 'a', attributes: {}, children: [], text: '' },
-			{ name: 'b', attributes: {}, children: [], text: '' },
+			{ name: 'a', attributes: {}, children: [], text: EMPTY_TEXT },
+			{ name: 'b', attributes: {}, children: [], text: EMPTY_TEXT },
 		])
 	})
 
 	test('parses Buffer and Uint8Array input', () => {
 		const parser = new SimpleXmlParser()
 
-		expect(parser.parse(Buffer.from('<a x="1"/>'))).toEqual([{ name: 'a', attributes: { x: '1' }, children: [], text: '' }])
-		expect(parser.parse(new TextEncoder().encode('<b y="2"/>'))).toEqual([{ name: 'b', attributes: { y: '2' }, children: [], text: '' }])
+		expect(parser.parse(Buffer.from('<a x="1"/>'))).toEqual([{ name: 'a', attributes: { x: '1' }, children: [], text: EMPTY_TEXT }])
+		expect(parser.parse(new TextEncoder().encode('<b y="2"/>'))).toEqual([{ name: 'b', attributes: { y: '2' }, children: [], text: EMPTY_TEXT }])
 	})
 
 	test('streams multibyte characters split one byte per chunk', () => {
@@ -280,7 +294,7 @@ describe('behavior', () => {
 			for (const node of parser.parse(Uint8Array.of(byte))) out.push(node)
 		}
 
-		expect(out).toEqual([{ name: 'a', attributes: { x: 'café 😎' }, children: [], text: 'hï' }])
+		expect(out).toEqual([{ name: 'a', attributes: { x: 'café 😎' }, children: [], text: encodeText('hï') }])
 	})
 })
 
@@ -304,7 +318,7 @@ describe('errors and recovery', () => {
 
 		expect(() => parser.parse('<a></b>')).toThrow('mismatched closing tag')
 		// #fail() calls reset(), so a fresh well-formed document parses cleanly afterwards.
-		expect(parser.parse('<a/>')).toEqual([{ name: 'a', attributes: {}, children: [], text: '' }])
+		expect(parser.parse('<a/>')).toEqual([{ name: 'a', attributes: {}, children: [], text: EMPTY_TEXT }])
 	})
 
 	test('reset() clears a partially parsed tree', () => {
@@ -312,6 +326,6 @@ describe('errors and recovery', () => {
 
 		expect(parser.parse('<a><b>')).toBeEmpty()
 		parser.reset()
-		expect(parser.parse('<c/>')).toEqual([{ name: 'c', attributes: {}, children: [], text: '' }])
+		expect(parser.parse('<c/>')).toEqual([{ name: 'c', attributes: {}, children: [], text: EMPTY_TEXT }])
 	})
 })

@@ -16,8 +16,8 @@ export interface XmlNode {
 	attributes: XmlNodeAttributes
 	// Child element nodes in document order.
 	children: XmlNode[]
-	// Concatenated trimmed text content directly inside this element.
-	text: string
+	// Concatenated raw (bytes) text content directly inside this element.
+	text: Uint8Array
 }
 
 // Internal tokenizer states of the byte-level XML state machine.
@@ -60,7 +60,7 @@ class InternalBuffer {
 	readonly #maxByteLength: number
 	#data: Uint8Array
 
-	position = 0
+	#position = 0
 
 	// Allocate only the initial capacity and defer growth until writes exceed it.
 	constructor(size: number, maxByteLength: number = 0) {
@@ -68,21 +68,29 @@ class InternalBuffer {
 		this.#data = new Uint8Array(size)
 	}
 
+	get length() {
+		return this.#position
+	}
+
 	// Reset the logical cursor while retaining the current allocation.
 	reset() {
-		this.position = 0
+		this.#position = 0
 	}
 
 	// Append one byte and grow the storage geometrically only when capacity is exhausted.
 	write(byte: number) {
-		if (this.position >= this.#data.length) this.#grow()
+		if (this.#position >= this.#data.length) this.#grow()
 
-		this.#data[this.position++] = byte
+		this.#data[this.#position++] = byte
 	}
 
 	// Decode the bytes written since the last reset.
 	text() {
-		return this.#decoder.decode(this.#data.subarray(0, this.position))
+		return this.#decoder.decode(this.array())
+	}
+
+	array() {
+		return this.#data.subarray(0, this.#position)
 	}
 
 	// Grow without eagerly reserving the full max byte length.
@@ -98,6 +106,13 @@ class InternalBuffer {
 		data.set(this.#data)
 		this.#data = data
 	}
+}
+
+function mergeArray(a: Uint8Array, b: Uint8Array) {
+	const merged = new Uint8Array(a.length + b.length)
+	merged.set(a, 0)
+	merged.set(b, a.length)
+	return merged
 }
 
 // Incremental XML parser. Feed bytes/strings via parse(); it returns any top-level nodes that completed
@@ -146,7 +161,7 @@ export class SimpleXmlParser {
 
 	// Append a new node to the current tree and optionally keep it open.
 	#appendNode(attributes: XmlNodeAttributes, push: boolean = true): XmlNode {
-		const node: XmlNode = { name: this.#tag.text(), attributes, children: [], text: '' }
+		const node: XmlNode = { name: this.#tag.text(), attributes, children: [], text: new Uint8Array(0) }
 
 		if (this.#tree.length > 0) {
 			this.#tree.at(-1)!.children.push(node)
@@ -166,13 +181,12 @@ export class SimpleXmlParser {
 			return
 		}
 
-		const value = this.#text.text().trim()
-		this.#text.reset()
-
-		if (!value) return
+		if (this.#text.length === 0) return
 
 		const node = this.#tree.at(-1)!
-		node.text += value
+		node.text = mergeArray(node.text, this.#text.array())
+
+		this.#text.reset()
 	}
 
 	// Flush a valueless attribute that ended at whitespace, `/`, or `>`.
@@ -256,7 +270,7 @@ export class SimpleXmlParser {
 			}
 		} else if (this.#state === XmlState.ATTR_VALUE) {
 			if (code === QUOTE) {
-				if (this.#value.position > 0 || this.#prevCode === QUOTE) {
+				if (this.#value.length > 0 || this.#prevCode === QUOTE) {
 					const name = this.#name.text()
 					this.#attributes[name] = this.#value.text()
 					this.#name.reset()
@@ -293,7 +307,7 @@ export class SimpleXmlParser {
 				if (this.#closeTagSealed) this.#fail('invalid closing tag syntax')
 				this.#tag.write(code)
 			} else if (isWhitespace(code)) {
-				if (this.#tag.position > 0) this.#closeTagSealed = true
+				if (this.#tag.length > 0) this.#closeTagSealed = true
 			} else if (code === CLOSE_ANGLE) {
 				const node = this.#closeNode()
 				this.#state = this.#tree.length === 0 ? XmlState.START : XmlState.TEXT

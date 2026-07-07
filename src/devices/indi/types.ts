@@ -306,7 +306,7 @@ export interface OneBlob {
 	name: string
 	size: string
 	format: string
-	value: string | Buffer<ArrayBuffer> // Buffer is used by Alpaca to avoid base64 encoding
+	value: Buffer<ArrayBuffer> | undefined // Buffer is used by Alpaca to avoid base64 encoding
 }
 
 export type OneElement = OneText | OneNumber | OneSwitch | OneLight | OneBlob
@@ -349,7 +349,7 @@ export function makeTextVector(device: string, name: string, label: string, grou
 // and a 60 s timeout.
 export function makeBlobVector(device: string, name: string, label: string, group: string, permission: PropertyPermission, ...properties: readonly [string, string][]): Omit<DefBlobVector, 'elements'> & SetBlobVector & { type: 'BLOB' } {
 	const elements: Record<string, Omit<DefBlob, 'value'> & OneBlob> = {}
-	for (const [name, label] of properties) elements[name] = { name, label, size: '0', format: 'fits', value: '' }
+	for (const [name, label] of properties) elements[name] = { name, label, size: '0', format: 'fits', value: undefined }
 	return { type: 'BLOB', device, name, label, group, permission, state: 'Idle', timeout: 60, elements }
 }
 

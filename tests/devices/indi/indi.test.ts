@@ -4,7 +4,7 @@ import { type Camera, type Cover, expectedPierSide, type FlatPanel, type Focuser
 import { CameraManager, CoverManager, type DeviceHandler, FlatPanelManager, FocuserManager, GuideOutputManager, MountManager, PowerManager, RotatorManager, ThermometerManager, WheelManager } from '../../../src/devices/indi/manager'
 import type { DefNumberVector, DefSwitchVector, DefTextVector, PropertyState, SetTextVector } from '../../../src/devices/indi/types'
 // oxfmt-ignore
-import { SimpleXmlParser } from '../../../src/io/xml'
+import { SimpleXmlParser, type XmlNode } from '../../../src/io/xml'
 import { PI, SIDEREAL_DAYSEC, TAU } from '../../../src/core/constants'
 import { downloadPerTag } from '../../download'
 import { isTimeConsumingTestSkipped } from '../../util'
@@ -16,6 +16,18 @@ const parser = new SimpleXmlParser()
 const tags = parser.parse(text)
 
 expect(tags).toHaveLength(85)
+
+const TEXT_DECODER = new TextDecoder()
+const TEXT_ENCODER = new TextEncoder()
+const EMPTY_TEXT = new Uint8Array(0)
+
+function nodeText(node: XmlNode) {
+	return TEXT_DECODER.decode(node.text).trim()
+}
+
+function encodeText(text: string) {
+	return TEXT_ENCODER.encode(text)
+}
 
 describe('parseXml', () => {
 	test('defSwitchVector', () => {
@@ -31,16 +43,16 @@ describe('parseXml', () => {
 		expect(node.attributes.rule).toBe('OneOfMany')
 		expect(node.attributes.timeout).toBe('60')
 		expect(node.attributes.timestamp).toBe('2025-03-11T12:43:02')
-		expect(node.text).toBeEmpty()
+		expect(nodeText(node)).toBeEmpty()
 		expect(node.children).toHaveLength(2)
 		expect(node.children[0].name).toBe('defSwitch')
 		expect(node.children[0].attributes.name).toBe('CONNECT')
 		expect(node.children[0].attributes.label).toBe('Connect')
-		expect(node.children[0].text).toBe('Off')
+		expect(nodeText(node.children[0])).toBe('Off')
 		expect(node.children[1].name).toBe('defSwitch')
 		expect(node.children[1].attributes.name).toBe('DISCONNECT')
 		expect(node.children[1].attributes.label).toBe('Disconnect')
-		expect(node.children[1].text).toBe('On')
+		expect(nodeText(node.children[1])).toBe('On')
 	})
 
 	test('defTextVector', () => {
@@ -56,24 +68,24 @@ describe('parseXml', () => {
 		expect(node.attributes.rule).toBeUndefined()
 		expect(node.attributes.timeout).toBe('60')
 		expect(node.attributes.timestamp).toBe('2025-03-11T12:43:02')
-		expect(node.text).toBeEmpty()
+		expect(nodeText(node)).toBeEmpty()
 		expect(node.children).toHaveLength(4)
 		expect(node.children[0].name).toBe('defText')
 		expect(node.children[0].attributes.name).toBe('DRIVER_NAME')
 		expect(node.children[0].attributes.label).toBe('Name')
-		expect(node.children[0].text).toBe('CCD Simulator')
+		expect(nodeText(node.children[0])).toBe('CCD Simulator')
 		expect(node.children[1].name).toBe('defText')
 		expect(node.children[1].attributes.name).toBe('DRIVER_EXEC')
 		expect(node.children[1].attributes.label).toBe('Exec')
-		expect(node.children[1].text).toBe('indi_simulator_ccd')
+		expect(nodeText(node.children[1])).toBe('indi_simulator_ccd')
 		expect(node.children[2].name).toBe('defText')
 		expect(node.children[2].attributes.name).toBe('DRIVER_VERSION')
 		expect(node.children[2].attributes.label).toBe('Version')
-		expect(node.children[2].text).toBe('1.0')
+		expect(nodeText(node.children[2])).toBe('1.0')
 		expect(node.children[3].name).toBe('defText')
 		expect(node.children[3].attributes.name).toBe('DRIVER_INTERFACE')
 		expect(node.children[3].attributes.label).toBe('Interface')
-		expect(node.children[3].text).toBe('22')
+		expect(nodeText(node.children[3])).toBe('22')
 	})
 
 	test('defNumberVector', () => {
@@ -89,7 +101,7 @@ describe('parseXml', () => {
 		expect(node.attributes.rule).toBeUndefined()
 		expect(node.attributes.timeout).toBe('60')
 		expect(node.attributes.timestamp).toBe('2025-03-11T12:43:02')
-		expect(node.text).toBeEmpty()
+		expect(nodeText(node)).toBeEmpty()
 		expect(node.children).toHaveLength(16)
 		expect(node.children[0].name).toBe('defNumber')
 		expect(node.children[0].attributes.name).toBe('SIM_XRES')
@@ -98,7 +110,7 @@ describe('parseXml', () => {
 		expect(node.children[0].attributes.min).toBe('512')
 		expect(node.children[0].attributes.max).toBe('8192')
 		expect(node.children[0].attributes.step).toBe('512')
-		expect(node.children[0].text).toBe('1280')
+		expect(nodeText(node.children[0])).toBe('1280')
 		expect(node.children[15].name).toBe('defNumber')
 		expect(node.children[15].attributes.name).toBe('SIM_ROTATION')
 		expect(node.children[15].attributes.label).toBe('CCD Rotation')
@@ -106,7 +118,7 @@ describe('parseXml', () => {
 		expect(node.children[15].attributes.min).toBe('0')
 		expect(node.children[15].attributes.max).toBe('360')
 		expect(node.children[15].attributes.step).toBe('10')
-		expect(node.children[15].text).toBe('0')
+		expect(nodeText(node.children[15])).toBe('0')
 	})
 
 	test('defBLOBVector', () => {
@@ -122,12 +134,12 @@ describe('parseXml', () => {
 		expect(node.attributes.rule).toBeUndefined()
 		expect(node.attributes.timeout).toBe('60')
 		expect(node.attributes.timestamp).toBe('2025-03-11T12:43:07')
-		expect(node.text).toBeEmpty()
+		expect(nodeText(node)).toBeEmpty()
 		expect(node.children).toHaveLength(1)
 		expect(node.children[0].name).toBe('defBLOB')
 		expect(node.children[0].attributes.name).toBe('CCD1')
 		expect(node.children[0].attributes.label).toBe('Image')
-		expect(node.children[0].text).toBeEmpty()
+		expect(nodeText(node.children[0])).toBeEmpty()
 	})
 })
 
@@ -208,8 +220,8 @@ describe('parse', () => {
 		const vector = client.parseDefVector({
 			name: 'defTextVector',
 			attributes: { device: 'Device', name: 'PROTOTYPE_TEST', state: 'Ok', perm: 'rw' },
-			children: [{ name: 'defText', attributes: { name: '__proto__' }, children: [], text: 'safe' }],
-			text: '',
+			children: [{ name: 'defText', attributes: { name: '__proto__' }, children: [], text: encodeText('safe') }],
+			text: EMPTY_TEXT,
 		}) as DefTextVector
 
 		expect(Object.getPrototypeOf(vector.elements)).toBeNull()
@@ -221,8 +233,8 @@ describe('parse', () => {
 		const vector = client.parseSetVector({
 			name: 'setTextVector',
 			attributes: { device: 'Device', name: 'PROTOTYPE_TEST', state: 'Ok' },
-			children: [{ name: 'oneText', attributes: { name: 'constructor' }, children: [], text: 'safe' }],
-			text: '',
+			children: [{ name: 'oneText', attributes: { name: 'constructor' }, children: [], text: encodeText('safe') }],
+			text: EMPTY_TEXT,
 		}) as SetTextVector
 
 		expect(Object.getPrototypeOf(vector.elements)).toBeNull()

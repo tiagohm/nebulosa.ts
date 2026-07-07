@@ -829,7 +829,7 @@ class AlpacaCamera extends AlpacaDevice {
 					return true
 				}
 			} else {
-				this.#image.elements.CCD1.value = ''
+				this.#image.elements.CCD1.value = undefined
 			}
 
 			if (ExposureStarted || CameraState === 2) {
@@ -989,7 +989,7 @@ class AlpacaCamera extends AlpacaDevice {
 			this.#image.elements.CCD1.value = fits
 		} else {
 			this.#image.state = 'Alert'
-			this.#image.elements.CCD1.value = ''
+			this.#image.elements.CCD1.value = undefined
 		}
 
 		handleSetBlobVector(this.client, this.handler, this.#image)

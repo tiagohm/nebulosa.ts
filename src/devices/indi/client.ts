@@ -178,22 +178,22 @@ export class IndiClient implements Client {
 		for (const child of node.children) {
 			switch (child.name) {
 				case 'defText': {
-					const element = { name: child.attributes.name, label: child.attributes.label, value: child.text } as DefText
+					const element = { name: child.attributes.name, label: child.attributes.label, value: nodeText(child) } as DefText
 					;(message as DefTextVector).elements[element.name] = element
 					break
 				}
 				case 'defNumber': {
-					const element = { name: child.attributes.name, label: child.attributes.label, format: child.attributes.format, min: +child.attributes.min, max: +child.attributes.max, step: +child.attributes.step, value: +child.text } as DefNumber
+					const element = { name: child.attributes.name, label: child.attributes.label, format: child.attributes.format, min: +child.attributes.min, max: +child.attributes.max, step: +child.attributes.step, value: +nodeText(child) } as DefNumber
 					;(message as DefNumberVector).elements[element.name] = element
 					break
 				}
 				case 'defSwitch': {
-					const element = { name: child.attributes.name, label: child.attributes.label, value: child.text === 'On' } as DefSwitch
+					const element = { name: child.attributes.name, label: child.attributes.label, value: nodeText(child) === 'On' } as DefSwitch
 					;(message as DefSwitchVector).elements[element.name] = element
 					break
 				}
 				case 'defLight': {
-					const element = { name: child.attributes.name, label: child.attributes.label, value: child.text } as DefLight
+					const element = { name: child.attributes.name, label: child.attributes.label, value: nodeText(child) } as DefLight
 					;(message as DefLightVector).elements[element.name] = element
 					break
 				}
@@ -224,13 +224,13 @@ export class IndiClient implements Client {
 		for (const child of node.children) {
 			switch (child.name) {
 				case 'oneText': {
-					const element: OneText = { name: child.attributes.name, value: child.text }
+					const element: OneText = { name: child.attributes.name, value: nodeText(child) }
 					;(message as SetTextVector).elements[element.name] = element
 					break
 				}
 				case 'oneNumber': {
 					const a = child.attributes
-					const element: OneNumber = { name: a.name, value: +child.text }
+					const element: OneNumber = { name: a.name, value: +nodeText(child) }
 					// INDI's IUUpdateMinMax updates a number's range through a set vector; keep it.
 					if (a.min !== undefined) element.min = +a.min
 					if (a.max !== undefined) element.max = +a.max
@@ -239,17 +239,17 @@ export class IndiClient implements Client {
 					break
 				}
 				case 'oneSwitch': {
-					const element: OneSwitch = { name: child.attributes.name, value: child.text === 'On' }
+					const element: OneSwitch = { name: child.attributes.name, value: nodeText(child) === 'On' }
 					;(message as SetSwitchVector).elements[element.name] = element
 					break
 				}
 				case 'oneLight': {
-					const element: OneLight = { name: child.attributes.name, value: child.text as PropertyState }
+					const element: OneLight = { name: child.attributes.name, value: nodeText(child) as PropertyState }
 					;(message as SetLightVector).elements[element.name] = element
 					break
 				}
 				case 'oneBLOB': {
-					const element = { name: child.attributes.name, size: child.attributes.size, format: child.attributes.format, value: child.text } as OneBlob
+					const element = { name: child.attributes.name, size: child.attributes.size, format: child.attributes.format, value: Buffer.from(child.text.buffer) } as OneBlob
 					;(message as SetBlobVector).elements[element.name] = element
 					break
 				}
@@ -615,4 +615,10 @@ function escapeXml(value: string | number | boolean, attribute: boolean) {
 	}
 
 	return start === 0 ? text : escaped + text.slice(start)
+}
+
+const TEXT_DECODER = new TextDecoder()
+
+function nodeText(node: XmlNode) {
+	return TEXT_DECODER.decode(node.text).trim()
 }

@@ -2159,7 +2159,7 @@ export class CameraSimulator extends DeviceSimulator {
 		this.#exposure.state = 'Busy'
 		this.#exposure.elements.CCD_EXPOSURE_VALUE.value = duration
 		this.#image.state = 'Busy'
-		this.#image.elements.CCD1.value = ''
+		this.#image.elements.CCD1.value = undefined
 		this.#image.elements.CCD1.size = '0'
 		this.#abort.elements.ABORT.value = false
 		this.notify(this.#exposure)
@@ -2324,7 +2324,7 @@ export class CameraSimulator extends DeviceSimulator {
 		} catch {
 			this.#image.state = 'Alert'
 			this.#image.elements.CCD1.size = '0'
-			this.#image.elements.CCD1.value = ''
+			this.#image.elements.CCD1.value = undefined
 			this.#exposure.state = 'Alert'
 		}
 
