@@ -698,16 +698,18 @@ function interleavedNeighborhoodMedian(
 	return medianBySelection(values, count)
 }
 
-// Repairs one interleaved sample by index from the current raw buffer, excluding every sample marked in
-// `repairSkip` or sparse skip sets from the neighborhood median. Returns true only when a finite repair
-// value is written.
-function repairInterleavedIndex(
+// Repairs one interleaved sample from the current raw buffer using precomputed pixel coordinates and raw
+// index. Samples marked in `repairSkip` or sparse skip sets are excluded from the neighborhood median.
+// Returns true only when a finite repair value is written.
+function repairInterleavedPixel(
 	raw: NumberArray,
 	width: number,
 	height: number,
 	channels: number,
 	channel: number,
-	p: number,
+	x: number,
+	y: number,
+	rawIndex: number,
 	radius: number,
 	step: number,
 	amount: number,
@@ -716,9 +718,6 @@ function repairInterleavedIndex(
 	sparseRepairSkip2: ReadonlySet<number> | undefined,
 	window: NeighborhoodScratch,
 ) {
-	const y = Math.trunc(p / width)
-	const x = p - y * width
-	const rawIndex = p * channels + channel
 	const center = raw[rawIndex]
 	const m = interleavedNeighborhoodMedian(raw, channel, channels, x, y, width, height, radius, step, window, repairSkip, undefined, Number.NaN, sparseRepairSkip, sparseRepairSkip2)
 	const repaired = amount >= 1 ? m : center + amount * (m - center)
@@ -732,9 +731,13 @@ function repairInterleavedIndex(
 function repairSparseDefects(raw: NumberArray, width: number, height: number, channels: number, radius: number, step: number, amount: number, defectMask: Uint8Array | undefined, defectSet: ReadonlySet<number> | undefined, defectIndices: readonly number[], window: NeighborhoodScratch) {
 	let repairedCount = 0
 
-	for (let channel = 0; channel < channels; channel++) {
-		for (const p of defectIndices) {
-			if (repairInterleavedIndex(raw, width, height, channels, channel, p, radius, step, amount, defectMask, defectSet, undefined, window)) repairedCount++
+	for (const p of defectIndices) {
+		const y = Math.trunc(p / width)
+		const x = p - y * width
+		const rawBase = p * channels
+
+		for (let channel = 0; channel < channels; channel++) {
+			if (repairInterleavedPixel(raw, width, height, channels, channel, x, y, rawBase + channel, radius, step, amount, defectMask, defectSet, undefined, window)) repairedCount++
 		}
 	}
 
@@ -753,9 +756,10 @@ function repairDenseDefectsDirect(raw: NumberArray, width: number, height: numbe
 		for (let x = 0; x < width; x++) {
 			const p = rowBase + x
 			if (defectMask[p] === 0) continue
+			const rawBase = p * channels
 
 			for (let channel = 0; channel < channels; channel++) {
-				if (repairInterleavedIndex(raw, width, height, channels, channel, p, radius, step, amount, defectMask, undefined, undefined, window)) repairedCount++
+				if (repairInterleavedPixel(raw, width, height, channels, channel, x, y, rawBase + channel, radius, step, amount, defectMask, undefined, undefined, window)) repairedCount++
 			}
 		}
 	}
@@ -862,7 +866,10 @@ function repairMasterDarkDirect(
 		if (sparseDefectCount + sparseDarkCount <= maxSparseCount) {
 			if (defectIndices !== undefined) {
 				for (const p of defectIndices) {
-					if (repairInterleavedIndex(raw, width, height, channels, channel, p, radius, step, amount, defectMask, defectSet, darkSet, window)) defect++
+					const y = Math.trunc(p / width)
+					const x = p - y * width
+					const rawIndex = p * channels + channel
+					if (repairInterleavedPixel(raw, width, height, channels, channel, x, y, rawIndex, radius, step, amount, defectMask, defectSet, darkSet, window)) defect++
 				}
 			}
 
@@ -870,7 +877,10 @@ function repairMasterDarkDirect(
 				for (const p of darkIndices) {
 					if (defectMask !== undefined && defectMask[p] !== 0) continue
 					if (defectSet !== undefined && defectSet.has(p)) continue
-					if (repairInterleavedIndex(raw, width, height, channels, channel, p, radius, step, amount, defectMask, defectSet, darkSet, window)) darkCount++
+					const y = Math.trunc(p / width)
+					const x = p - y * width
+					const rawIndex = p * channels + channel
+					if (repairInterleavedPixel(raw, width, height, channels, channel, x, y, rawIndex, radius, step, amount, defectMask, defectSet, darkSet, window)) darkCount++
 				}
 			}
 
