@@ -3,7 +3,7 @@ import { IndiClientHandlerSet } from '../../../src/devices/indi/client'
 import type { Camera, GuideOutput, Thermometer } from '../../../src/devices/indi/device'
 import { CameraManager, CoverManager, type DeviceHandler, type DeviceProvider, FlatPanelManager, FocuserManager, GuideOutputManager, MountManager, RotatorManager, ThermometerManager, WheelManager } from '../../../src/devices/indi/manager'
 import { CameraSimulator, type CatalogSource, ClientSimulator, CoverSimulator, FlatPanelSimulator, FocuserSimulator, MountSimulator, RotatorSimulator, WheelSimulator } from '../../../src/devices/indi/simulator'
-import type { PropertyState } from '../../../src/devices/indi/types'
+import type { BlobEncoding, PropertyState } from '../../../src/devices/indi/types'
 import { readImageFromBuffer } from '../../../src/imaging/model/image'
 import type { ImageRawType } from '../../../src/imaging/model/types'
 import { deg, formatDEC, formatRA, hour, normalizePI } from '../../../src/math/units/angle'
@@ -12,14 +12,14 @@ import { isTimeConsumingTestSkipped } from '../../util'
 const SKIP = isTimeConsumingTestSkipped()
 
 class CameraFrameReceiver implements DeviceHandler<Camera> {
-	readonly #frames: Buffer<ArrayBuffer>[] = []
+	readonly #frames: Buffer[] = []
 
 	added(device: Camera) {}
 	updated(device: Camera, property: keyof Camera & string, state?: PropertyState) {}
 	removed(device: Camera) {}
 
-	blobReceived(device: Camera, data: string | Buffer<ArrayBuffer>) {
-		Buffer.isBuffer(data) && this.#frames.push(data)
+	blobReceived(device: Camera, data: Buffer, encoding: BlobEncoding) {
+		this.#frames.push(data)
 	}
 
 	get length() {

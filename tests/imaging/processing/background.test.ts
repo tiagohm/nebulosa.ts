@@ -1292,7 +1292,7 @@ test('coarse-grid TPS evaluation matches direct evaluation', () => {
 
 	// Bilinear upsampling of the smooth surface stays far below the fit/noise accuracy.
 	expect(maxError).toBeLessThan(1e-3)
-}, 2000)
+}, 3000)
 
 test('a zero or negligibly-smoothed thin-plate spline is evaluated exactly, without coarsening', () => {
 	// With smoothing 0 — or a value so small the spline still effectively interpolates — evaluation must

@@ -11,6 +11,7 @@ import { type Camera, type Cover, type Device, type DeviceType, expectedPierSide
 import { type GeographicCoordinate, localSiderealTime } from '../../astronomy/observer/location'
 import { type Time, timeNow } from '../../astronomy/time/time'
 import type { CameraManager, CoverManager, DeviceHandler, DeviceManager, FlatPanelManager, FocuserManager, GuideOutputManager, MountManager, RotatorManager, WheelManager } from '../indi/manager'
+import type { BlobEncoding } from '../indi/types'
 
 // Embedded ASCOM Alpaca server: exposes the app's INDI devices (camera, mount, focuser, wheel, rotator,
 // cover/calibrator) over the Alpaca REST API so external Alpaca clients can control them. Subscribes to
@@ -47,7 +48,7 @@ interface AlpacaDeviceState extends GeographicCoordinate, EquatorialCoordinate {
 	// Device
 	tasks: Partial<Record<'connect' | 'position', ReturnType<typeof promiseWithTimeout>>>
 	// Camera
-	data?: string | Buffer<ArrayBuffer>
+	data?: readonly [Buffer, BlobEncoding]
 	lastExposureDuration: number
 	ccdTemperature: number
 	frame: [number, number, number, number]
@@ -133,13 +134,13 @@ export class AlpacaServer {
 		removed: (device: Camera) => {
 			this.#removeConfiguredDevice(device, 'camera')
 		},
-		blobReceived: (device, data) => {
+		blobReceived: (device, data, encoding) => {
 			const { state } = this.#camera(device)
 
 			// Has the capture started?
 			if (state.lastExposureDuration) {
 				// console.info('camera image received', device.name, data.length)
-				state.data = data
+				state.data = [data, encoding]
 			}
 		},
 	}
@@ -1032,9 +1033,8 @@ export class AlpacaServer {
 
 		try {
 			if (accept?.includes('imagebytes')) {
-				// const data = Buffer.from(await Bun.file('c:\\Users\\tiago\\Documents\\Nebulosa\\Captures\\SVBONY CCD SV305.fit').arrayBuffer())
-				const { data } = state
-				const image = makeImageBytesFromFits(Buffer.isBuffer(data) ? data : Buffer.from(data!, 'base64'))
+				const [buffer, encoding] = state.data!
+				const image = makeImageBytesFromFits(encoding === 'raw' ? buffer : Buffer.from(buffer.toString('ascii'), 'base64'))
 				return new Response(image.buffer, { headers: { 'Content-Type': 'application/imagebytes' } })
 			}
 		} finally {
@@ -1731,7 +1731,7 @@ function promiseWithTimeout(code: AlpacaException, message: string, delay: numbe
 // rebiased to unsigned (BZERO) values. Big-endian FITS samples are byte-swapped around the copy. The
 // transmitted element type is forced to a 32-bit width to satisfy clients like MaxIm DL.
 // https://github.com/ASCOMInitiative/ASCOMRemote/blob/main/Documentation/AlpacaImageBytes.pdf
-export function makeImageBytesFromFits(source: Buffer<ArrayBuffer>) {
+export function makeImageBytesFromFits(source: Buffer) {
 	const reader = new FitsKeywordReader()
 	let position = 0
 
@@ -1781,7 +1781,7 @@ export function makeImageBytesFromFits(source: Buffer<ArrayBuffer>) {
 
 	const sourceLength = (source.byteLength - position) / bytesPerPixel
 	const SourceTypedArray = bitpix === 8 ? Uint8Array : bitpix === 16 ? Int16Array : bitpix === 32 ? Int32Array : bitpix === -32 ? Float32Array : Float64Array
-	const sourceArray = new SourceTypedArray(source.buffer, position, sourceLength)
+	const sourceArray = new SourceTypedArray(source.buffer as never, position, sourceLength)
 	const outputLength = (output.byteLength - dataStart) / bytesPerPixel
 	const OutputTypedArray = bitpix === 8 ? Uint8Array : bitpix === 16 ? Uint16Array : bitpix === 32 ? Uint32Array : bitpix === -32 ? Float32Array : Float64Array
 	const outputArray = new OutputTypedArray(output.buffer, dataStart, outputLength)

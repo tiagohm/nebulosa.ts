@@ -323,6 +323,8 @@ export type SwitchElement = OneSwitch | DefSwitch
 export type LightElement = OneLight | DefLight
 export type BlobElement = OneBlob | DefBlob
 
+export type BlobEncoding = 'base64' | 'raw'
+
 // Builds a switch vector from [name, label, value] tuples. Defaults to Idle state and a 60 s timeout.
 export function makeSwitchVector(device: string, name: string, label: string, group: string, rule: SwitchRule, permission: PropertyPermission, ...properties: readonly [string, string, boolean][]): DefSwitchVector & SetSwitchVector & { type: 'SWITCH' } {
 	const elements: Record<string, DefSwitch> = {}

@@ -160,7 +160,7 @@ async function feedFrame(harness: Harness) {
 	expect(handler?.blobReceived).toBeDefined()
 
 	const expected = ++harness.frameCount
-	handler!.blobReceived!(harness.camera, FRAME_BUFFER as Buffer<ArrayBuffer>)
+	handler!.blobReceived!(harness.camera, FRAME_BUFFER, 'raw')
 
 	for (let i = 0; i < 1000; i++) {
 		const image = harness.client.getStarImage()
@@ -664,8 +664,8 @@ describe('frame processing robustness', () => {
 
 		// Two BLOBs delivered back-to-back: the second must be dropped because the first is still
 		// decoding, so only one frame is processed and the stateful guider is not mutated twice.
-		handler.blobReceived!(harness.camera, FRAME_BUFFER as Buffer<ArrayBuffer>)
-		handler.blobReceived!(harness.camera, FRAME_BUFFER as Buffer<ArrayBuffer>)
+		handler.blobReceived!(harness.camera, FRAME_BUFFER, 'raw')
+		handler.blobReceived!(harness.camera, FRAME_BUFFER, 'raw')
 
 		await waitForLoopingExposures(1)
 		// Give any erroneously-spawned second processing a chance to surface before asserting.
@@ -684,7 +684,7 @@ describe('frame processing robustness', () => {
 		const before = eventsOf(harness.events, 'LoopingExposures').length
 		const handler = harness.cameraManager.handler!
 		// An undecodable BLOB still advances the looping frame, but must not leave a stale image behind.
-		handler.blobReceived!(harness.camera, Buffer.from('not a valid fits or xisf payload'))
+		handler.blobReceived!(harness.camera, Buffer.from('not a valid fits or xisf payload'), 'raw')
 
 		await waitForLoopingExposures(before + 1)
 		expect(harness.client.getStarImage()).toBeUndefined()

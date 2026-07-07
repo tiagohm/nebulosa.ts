@@ -3,10 +3,11 @@ import type { PartialOnly, Writable } from '../../core/types'
 import { DEFAULT_PHD2_SETTLE, type PHD2AppState, type PHD2CalibrationData, type PHD2DeclinationGuideMode, type PHD2EventMap, type PHD2Events, type PHD2GuideDirection, type PHD2LockShiftParams, type PHD2Settle, type PHD2StarImage } from '../../devices/guiding/phd2'
 import type { Camera, GuideDirection, GuideOutput } from '../../devices/indi/device'
 import type { CameraManager, DeviceHandler, GuideOutputManager } from '../../devices/indi/manager'
+import type { BlobEncoding } from '../../devices/indi/types'
 import { readImageFromBuffer, readImageFromSource } from '../../imaging/model/image'
 import { type Image, type ImageRawType, makeImageRawTypedArray } from '../../imaging/model/types'
 import { detectStars } from '../../imaging/stars/detector'
-import { base64Source } from '../../io/io'
+import { base64Source, bufferSource } from '../../io/io'
 import { clamp } from '../../math/numerical/math'
 import { GuidingAssistant, type GuidingAssistantConfig, type GuidingAssistantResult } from './assistant'
 import { type CalibrationPulseCommand, flipGuidingCalibration, type GuidingCalibrationDiagnostics, type GuidingCalibrationResult, GuidingCalibrator } from './calibrator'
@@ -127,8 +128,8 @@ export class GuiderClient {
 		// Ignores manager-level removal callbacks because disconnect owns active-session teardown.
 		removed: () => {},
 		// Decodes each camera frame asynchronously and feeds the guider state machine.
-		blobReceived: (device, data) => {
-			void this.#processBlob(device, data)
+		blobReceived: (device, data, encoding) => {
+			void this.#processBlob(device, data, encoding)
 		},
 	}
 
@@ -730,7 +731,7 @@ export class GuiderClient {
 	}
 
 	// Parses a received camera BLOB, runs guider state updates, and schedules the next exposure.
-	async #processBlob(device: Camera, data: string | Buffer<ArrayBuffer>): Promise<void> {
+	async #processBlob(device: Camera, data: Buffer, encoding: BlobEncoding): Promise<void> {
 		if (!this.#connected || device !== this.#camera) return
 
 		// The calibrator and guider are stateful and not reentrant, so a BLOB that arrives while a
@@ -742,9 +743,8 @@ export class GuiderClient {
 			let image: Image | undefined
 
 			try {
-				if (typeof data === 'string') {
-					const source = base64Source(data)
-					image = await readImageFromSource(source)
+				if (encoding === 'base64') {
+					image = await readImageFromSource(base64Source(bufferSource(data)))
 				} else {
 					image = await readImageFromBuffer(data)
 				}

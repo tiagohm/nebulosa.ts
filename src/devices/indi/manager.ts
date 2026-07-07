@@ -11,7 +11,7 @@ import type { GeographicCoordinate } from '../../astronomy/observer/location'
 import { formatTemporal, parseTemporal } from '../../astronomy/time/temporal'
 import { type Time, timeNow } from '../../astronomy/time/time'
 import type { PickByValue } from '../../core/types'
-import type { DefBlobVector, DefElement, DefNumber, DefNumberVector, DefSwitch, DefSwitchVector, DefTextVector, DefVector, DelProperty, OneNumber, PropertyState, SetBlobVector, SetNumberVector, SetSwitchVector, SetTextVector, SetVector, ValueType } from './types'
+import type { BlobEncoding, DefBlobVector, DefElement, DefNumber, DefNumberVector, DefSwitch, DefSwitchVector, DefTextVector, DefVector, DelProperty, OneNumber, PropertyState, SetBlobVector, SetNumberVector, SetSwitchVector, SetTextVector, SetVector, ValueType } from './types'
 
 // Device managers that turn the raw INDI property stream into typed device state. A DeviceManager per
 // device type consumes def*/set* vectors as an IndiClientHandler, maintains the device objects, applies
@@ -25,7 +25,7 @@ export interface DeviceHandler<D extends Device> {
 	readonly updated?: (device: D, property: keyof D & string, state?: PropertyState) => void
 	readonly removed: (device: D) => void
 	// Notified when an image/data BLOB arrives for the device.
-	readonly blobReceived?: (device: D, data: string | Buffer<ArrayBuffer>) => void
+	readonly blobReceived?: (device: D, data: Buffer, encoding: BlobEncoding) => void
 }
 
 // Subscriber to raw INDI property add/update/remove events for a device type.
@@ -240,8 +240,8 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 		for (const handler of this.#handlers) handler.removed(device)
 	}
 
-	blobReceived(device: D, data: string | Buffer<ArrayBuffer>) {
-		for (const handler of this.#handlers) handler.blobReceived?.(device, data)
+	blobReceived(device: D, data: Buffer, encoding: BlobEncoding) {
+		for (const handler of this.#handlers) handler.blobReceived?.(device, data, encoding)
 	}
 
 	// Lists managed devices, optionally filtered to a single client.
@@ -950,7 +950,7 @@ export class CameraManager extends DeviceManager<Camera> {
 					const data = message.elements.CCD1?.value
 
 					if (data) {
-						this.blobReceived(device, data)
+						this.blobReceived(device, data, 'base64')
 					} else {
 						console.warn(`received empty BLOB for device ${device.name}`)
 					}
