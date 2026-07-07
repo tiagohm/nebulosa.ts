@@ -156,13 +156,6 @@ function lowerTailScale(values: Float64Array, count: number, median: number, scr
 	return Number.isFinite(scale) ? scale : 0
 }
 
-// CFA phase index of (x, y): a Bayer 2x2 mosaic has 4 interleaved photosite phases (each a distinct color
-// position) that must be treated independently, so this maps to [0, 3] by pixel parity; a non-mosaic
-// plane is a single phase (always 0). `phases` is 4 for a Bayer frame, 1 otherwise.
-function phaseIndex(x: number, y: number, phases: number) {
-	return phases === 1 ? 0 : (y & 1) * 2 + (x & 1)
-}
-
 // Robust median and scale of each CFA phase of `plane` (or one global pair when `phases === 1`), written
 // into `medians`/`scales` (length `phases`). Same-phase samples are gathered by parity-strided scans into
 // `gather`; `scratch` is the robust-computation scratch. Both buffers must hold at least the largest phase
@@ -683,6 +676,7 @@ function repairMasterDarkDirect(
 	window: NeighborhoodScratch,
 ) {
 	const n = width * height
+	const singlePhase = phases === 1
 	let defect = 0
 	let darkCount = 0
 
@@ -696,11 +690,11 @@ function repairMasterDarkDirect(
 		let denseRepairSkip: Uint8Array | undefined
 
 		if (darkEnabled) {
-			for (let y = 0; y < height; y++) {
-				const rowBase = y * width
-				for (let x = 0; x < width; x++) {
-					const p = rowBase + x
-					if (dark[p * channels + channel] > thresholds[phaseIndex(x, y, phases)]) {
+			if (singlePhase) {
+				const threshold = thresholds[0]
+
+				for (let p = 0; p < n; p++) {
+					if (dark[p * channels + channel] > threshold) {
 						if (darkIndices !== undefined) {
 							if (darkIndices.length < maxSparseCount) {
 								darkIndices.push(p)
@@ -717,6 +711,32 @@ function repairMasterDarkDirect(
 							}
 						} else {
 							denseRepairSkip![p] = 1
+						}
+					}
+				}
+			} else {
+				for (let y = 0; y < height; y++) {
+					const rowBase = y * width
+					for (let x = 0; x < width; x++) {
+						const p = rowBase + x
+						if (dark[p * channels + channel] > thresholds[(y & 1) * 2 + (x & 1)]) {
+							if (darkIndices !== undefined) {
+								if (darkIndices.length < maxSparseCount) {
+									darkIndices.push(p)
+									darkSet!.add(p)
+								} else {
+									denseRepairSkip = defectMask !== undefined ? new Uint8Array(defectMask) : new Uint8Array(n)
+									if (defectMask === undefined && defectIndices !== undefined) {
+										for (const q of defectIndices) denseRepairSkip[q] = 1
+									}
+									for (const q of darkIndices) denseRepairSkip[q] = 1
+									denseRepairSkip[p] = 1
+									darkIndices = undefined
+									darkSet = undefined
+								}
+							} else {
+								denseRepairSkip![p] = 1
+							}
 						}
 					}
 				}
@@ -1035,6 +1055,7 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 	const bayer = metadata.bayer !== undefined && channels === 1
 	const step = bayer ? 2 : 1
 	const phases = bayer ? 4 : 1
+	const singlePhase = phases === 1
 
 	// Clamp the requested window radius to the largest same-phase extent the frame can actually supply:
 	// beyond this every further lattice ring falls outside the image and contributes nothing, so an
@@ -1126,11 +1147,18 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 				darkSkip = new Uint8Array(n)
 			}
 
-			for (let y = 0; y < height; y++) {
-				const rowBase = y * width
-				for (let x = 0; x < width; x++) {
-					const p = rowBase + x
-					if (dark0![p * channels + channel] > darkThreshold[phaseIndex(x, y, phases)]) darkSkip[p] = 1
+			if (singlePhase) {
+				const threshold = darkThreshold[0]
+				for (let p = 0; p < n; p++) {
+					if (dark0![p * channels + channel] > threshold) darkSkip[p] = 1
+				}
+			} else {
+				for (let y = 0; y < height; y++) {
+					const rowBase = y * width
+					for (let x = 0; x < width; x++) {
+						const p = rowBase + x
+						if (dark0![p * channels + channel] > darkThreshold[(y & 1) * 2 + (x & 1)]) darkSkip[p] = 1
+					}
 				}
 			}
 		}
@@ -1169,7 +1197,7 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 			for (let x = 0; x < width; x++) {
 				const p = rowBase + x
 				const center = plane[p]
-				const ph = phaseIndex(x, y, phases)
+				const ph = singlePhase ? 0 : (y & 1) * 2 + (x & 1)
 				const gScale = phaseScale[ph]
 
 				let m = 0
