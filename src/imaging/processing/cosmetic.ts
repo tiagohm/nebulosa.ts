@@ -608,6 +608,56 @@ function neighborhoodMedian(plane: Float64Array, x: number, y: number, width: nu
 	return medianBySelection(values, count)
 }
 
+// Fast masked radius-1 median for direct interleaved repairs. Returns undefined when every 3x3 sample is
+// masked, letting the generic interleaved path expand the window exactly as before.
+function interleavedNeighborhoodMedianRadius1(raw: Readonly<NumberArray>, channel: number, channels: number, x: number, y: number, width: number, height: number, step: number, scratch: NeighborhoodScratch, skip?: Uint8Array, sparseSkip?: ReadonlySet<number>, sparseSkip2?: ReadonlySet<number>) {
+	const values = scratch.values
+	let count = 0
+	const center = y * width + x
+
+	if (x >= step && x + step < width && y >= step && y + step < height) {
+		const prevCenter = center - step * width
+		const nextCenter = center + step * width
+
+		const q00 = prevCenter - step
+		if ((skip === undefined || skip[q00] === 0) && (sparseSkip === undefined || !sparseSkip.has(q00)) && (sparseSkip2 === undefined || !sparseSkip2.has(q00))) values[count++] = raw[q00 * channels + channel]
+		const q01 = prevCenter
+		if ((skip === undefined || skip[q01] === 0) && (sparseSkip === undefined || !sparseSkip.has(q01)) && (sparseSkip2 === undefined || !sparseSkip2.has(q01))) values[count++] = raw[q01 * channels + channel]
+		const q02 = prevCenter + step
+		if ((skip === undefined || skip[q02] === 0) && (sparseSkip === undefined || !sparseSkip.has(q02)) && (sparseSkip2 === undefined || !sparseSkip2.has(q02))) values[count++] = raw[q02 * channels + channel]
+		const q10 = center - step
+		if ((skip === undefined || skip[q10] === 0) && (sparseSkip === undefined || !sparseSkip.has(q10)) && (sparseSkip2 === undefined || !sparseSkip2.has(q10))) values[count++] = raw[q10 * channels + channel]
+		if ((skip === undefined || skip[center] === 0) && (sparseSkip === undefined || !sparseSkip.has(center)) && (sparseSkip2 === undefined || !sparseSkip2.has(center))) values[count++] = raw[center * channels + channel]
+		const q12 = center + step
+		if ((skip === undefined || skip[q12] === 0) && (sparseSkip === undefined || !sparseSkip.has(q12)) && (sparseSkip2 === undefined || !sparseSkip2.has(q12))) values[count++] = raw[q12 * channels + channel]
+		const q20 = nextCenter - step
+		if ((skip === undefined || skip[q20] === 0) && (sparseSkip === undefined || !sparseSkip.has(q20)) && (sparseSkip2 === undefined || !sparseSkip2.has(q20))) values[count++] = raw[q20 * channels + channel]
+		const q21 = nextCenter
+		if ((skip === undefined || skip[q21] === 0) && (sparseSkip === undefined || !sparseSkip.has(q21)) && (sparseSkip2 === undefined || !sparseSkip2.has(q21))) values[count++] = raw[q21 * channels + channel]
+		const q22 = nextCenter + step
+		if ((skip === undefined || skip[q22] === 0) && (sparseSkip === undefined || !sparseSkip.has(q22)) && (sparseSkip2 === undefined || !sparseSkip2.has(q22))) values[count++] = raw[q22 * channels + channel]
+	} else {
+		for (let dy = -1; dy <= 1; dy++) {
+			const yy = y + dy * step
+			if (yy < 0 || yy >= height) continue
+
+			const row = yy * width
+
+			for (let dx = -1; dx <= 1; dx++) {
+				const xx = x + dx * step
+				if (xx < 0 || xx >= width) continue
+				const q = row + xx
+				if (skip !== undefined && skip[q] !== 0) continue
+				if (sparseSkip !== undefined && sparseSkip.has(q)) continue
+				if (sparseSkip2 !== undefined && sparseSkip2.has(q)) continue
+				values[count++] = raw[q * channels + channel]
+			}
+		}
+	}
+
+	return count === 0 ? undefined : medianBySelection(values, count)
+}
+
 // Median of the neighborhood of (x, y), read directly from an interleaved raw buffer for sparse
 // explicit-defect repair. It mirrors `neighborhoodMedian` but avoids materializing a full plane when no
 // statistical detector is active.
@@ -628,6 +678,11 @@ function interleavedNeighborhoodMedian(
 	sparseSkip?: ReadonlySet<number>,
 	sparseSkip2?: ReadonlySet<number>,
 ) {
+	if (r === 1 && skipIndex === undefined) {
+		const median = interleavedNeighborhoodMedianRadius1(raw, channel, channels, x, y, width, height, step, scratch, skip, sparseSkip, sparseSkip2)
+		if (median !== undefined) return median
+	}
+
 	const kyMin = Math.max(-r, -Math.floor(y / step))
 	const kyMax = Math.min(r, Math.floor((height - 1 - y) / step))
 	const kxMin = Math.max(-r, -Math.floor(x / step))
