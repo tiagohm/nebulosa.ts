@@ -1037,7 +1037,7 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 	if (!autoPossible && !darkPossible && builtDefects === undefined) return { image, corrected: 0, hot, cold, dark, defect }
 
 	let protectSkip: Uint8Array | undefined
-	if (protectMask !== undefined) {
+	if (autoPossible && protectMask !== undefined) {
 		protectSkip = new Uint8Array(n)
 		for (let p = 0; p < n; p++) if (protectMask[p] !== 0) protectSkip[p] = 1
 	}
