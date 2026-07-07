@@ -248,19 +248,18 @@ function computeInterleavedDarkThresholds(
 					gather[count++] = dark[i]
 				}
 			} else {
-				for (let p = 0; p < n; p++) {
+				for (let p = 0, i = channel; p < n; p++, i += channels) {
 					if (skip !== undefined && skip[p] !== 0) continue
 					if (sparseSkip !== undefined && sparseSkip.has(p)) continue
-					gather[count++] = dark[p * channels + channel]
+					gather[count++] = dark[i]
 				}
 			}
 		} else {
 			const py = ph >> 1
 			const px = ph & 1
+			const channelStep = channels * 2
 
 			if (skip === undefined && sparseSkip === undefined) {
-				const channelStep = channels * 2
-
 				for (let y = py; y < height; y += 2) {
 					const row = y * width
 					let i = (row + px) * channels + channel
@@ -272,12 +271,13 @@ function computeInterleavedDarkThresholds(
 			} else {
 				for (let y = py; y < height; y += 2) {
 					const row = y * width
+					let i = (row + px) * channels + channel
 
-					for (let x = px; x < width; x += 2) {
+					for (let x = px; x < width; x += 2, i += channelStep) {
 						const p = row + x
 						if (skip !== undefined && skip[p] !== 0) continue
 						if (sparseSkip !== undefined && sparseSkip.has(p)) continue
-						gather[count++] = dark[p * channels + channel]
+						gather[count++] = dark[i]
 					}
 				}
 			}
@@ -788,8 +788,8 @@ function repairMasterDarkDirect(
 			if (singlePhase) {
 				const threshold = thresholds[0]
 
-				for (let p = 0; p < n; p++) {
-					if (dark[p * channels + channel] > threshold) {
+				for (let p = 0, i = channel; p < n; p++, i += channels) {
+					if (dark[i] > threshold) {
 						if (darkIndices !== undefined) {
 							if (darkIndices.length < maxSparseCount) {
 								darkIndices.push(p)
@@ -812,9 +812,10 @@ function repairMasterDarkDirect(
 			} else {
 				for (let y = 0; y < height; y++) {
 					const rowBase = y * width
-					for (let x = 0; x < width; x++) {
+					let i = rowBase * channels + channel
+					for (let x = 0; x < width; x++, i += channels) {
 						const p = rowBase + x
-						if (dark[p * channels + channel] > thresholds[(y & 1) * 2 + (x & 1)]) {
+						if (dark[i] > thresholds[(y & 1) * 2 + (x & 1)]) {
 							if (darkIndices !== undefined) {
 								if (darkIndices.length < maxSparseCount) {
 									darkIndices.push(p)
@@ -869,14 +870,14 @@ function repairMasterDarkDirect(
 
 		for (let y = 0; y < height; y++) {
 			const rowBase = y * width
+			let rawIndex = rowBase * channels + channel
 
-			for (let x = 0; x < width; x++) {
+			for (let x = 0; x < width; x++, rawIndex += channels) {
 				const p = rowBase + x
 				const isDefect = (defectMask !== undefined && defectMask[p] !== 0) || (defectSet !== undefined && defectSet.has(p))
 				const isDark = !isDefect && darkEnabled && repairSkip[p] !== 0
 				if (!isDefect && !isDark) continue
 
-				const rawIndex = p * channels + channel
 				const center = raw[rawIndex]
 				const m = interleavedNeighborhoodMedian(raw, channel, channels, x, y, width, height, radius, step, window, repairSkip, undefined, Number.NaN)
 				const repaired = amount >= 1 ? m : center + amount * (m - center)
@@ -1255,15 +1256,16 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 
 			if (singlePhase) {
 				const threshold = darkThreshold[0]
-				for (let p = 0; p < n; p++) {
-					if (dark0![p * channels + channel] > threshold) darkSkip[p] = 1
+				for (let p = 0, i = channel; p < n; p++, i += channels) {
+					if (dark0![i] > threshold) darkSkip[p] = 1
 				}
 			} else {
 				for (let y = 0; y < height; y++) {
 					const rowBase = y * width
-					for (let x = 0; x < width; x++) {
+					let i = rowBase * channels + channel
+					for (let x = 0; x < width; x++, i += channels) {
 						const p = rowBase + x
-						if (dark0![p * channels + channel] > darkThreshold[(y & 1) * 2 + (x & 1)]) darkSkip[p] = 1
+						if (dark0![i] > darkThreshold[(y & 1) * 2 + (x & 1)]) darkSkip[p] = 1
 					}
 				}
 			}
@@ -1299,8 +1301,9 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 
 		for (let y = 0; y < height; y++) {
 			const rowBase = y * width
+			let rawIndex = rowBase * channels + channel
 
-			for (let x = 0; x < width; x++) {
+			for (let x = 0; x < width; x++, rawIndex += channels) {
 				const p = rowBase + x
 				const center = plane[p]
 				const ph = singlePhase ? 0 : (y & 1) * 2 + (x & 1)
@@ -1312,7 +1315,7 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 
 				if (defectMask !== undefined && defectMask[p] !== 0) {
 					cause = 1
-				} else if (darkEnabled && dark0![p * channels + channel] > darkThreshold[ph]) {
+				} else if (darkEnabled && dark0![rawIndex] > darkThreshold[ph]) {
 					cause = 2
 				} else if (autoEnabled && gScale > 0 && (protectSkip === undefined || protectSkip[p] === 0)) {
 					m = center - residual![p]
@@ -1341,7 +1344,7 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 
 				const repaired = amount >= 1 ? m : center + amount * (m - center)
 				if (!Number.isFinite(repaired)) continue
-				raw[p * channels + channel] = repaired
+				raw[rawIndex] = repaired
 
 				if (cause === 1) defect++
 				else if (cause === 2) dark++
