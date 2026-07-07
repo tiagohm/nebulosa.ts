@@ -956,8 +956,10 @@ function repairMasterDarkDirect(
 
 			for (let x = 0; x < width; x++, rawIndex += channels) {
 				const p = rowBase + x
+				const marked = repairSkip[p] !== 0
+				if (!marked) continue
 				const isDefect = (defectMask !== undefined && defectMask[p] !== 0) || (defectSet !== undefined && defectSet.has(p))
-				const isDark = !isDefect && darkEnabled && repairSkip[p] !== 0
+				const isDark = !isDefect && darkEnabled
 				if (!isDefect && !isDark) continue
 
 				const center = raw[rawIndex]
