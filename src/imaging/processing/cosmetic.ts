@@ -883,6 +883,8 @@ function repairMasterDarkDirect(
 	}
 	const repairDefectMask = defectMask ?? denseDefectMask
 	const repairDefectSet = repairDefectMask === undefined ? defectSet : undefined
+	const sparseDefectCount = defectIndices !== undefined ? defectIndices.length : defectMask === undefined && defectSet === undefined ? 0 : Number.POSITIVE_INFINITY
+	const sparseDarkMaxCount = Number.isFinite(sparseDefectCount) ? maxSparseCount - sparseDefectCount : -1
 	let defect = 0
 	let darkCount = 0
 
@@ -891,9 +893,9 @@ function repairMasterDarkDirect(
 
 		if (!darkEnabled && repairDefectMask === undefined && repairDefectSet === undefined) continue
 
-		let darkIndices: number[] | undefined = darkEnabled ? [] : undefined
-		let darkSet: Set<number> | undefined = darkEnabled ? new Set<number>() : undefined
-		let denseRepairSkip: Uint8Array | undefined
+		let darkIndices: number[] | undefined = darkEnabled && Number.isFinite(sparseDefectCount) ? [] : undefined
+		let darkSet: Set<number> | undefined = darkEnabled && sparseDarkMaxCount > 0 ? new Set<number>() : undefined
+		let denseRepairSkip: Uint8Array | undefined = darkEnabled && darkIndices === undefined ? (repairDefectMask !== undefined ? new Uint8Array(repairDefectMask) : new Uint8Array(n)) : undefined
 
 		if (darkEnabled) {
 			if (singlePhase) {
@@ -902,7 +904,7 @@ function repairMasterDarkDirect(
 				for (let p = 0, i = channel; p < n; p++, i += channels) {
 					if (dark[i] > threshold) {
 						if (darkIndices !== undefined) {
-							if (darkIndices.length < maxSparseCount) {
+							if (darkIndices.length < sparseDarkMaxCount) {
 								darkIndices.push(p)
 								darkSet!.add(p)
 							} else {
@@ -925,7 +927,7 @@ function repairMasterDarkDirect(
 						const p = rowBase + x
 						if (dark[i] > thresholds[(y & 1) * 2 + (x & 1)]) {
 							if (darkIndices !== undefined) {
-								if (darkIndices.length < maxSparseCount) {
+								if (darkIndices.length < sparseDarkMaxCount) {
 									darkIndices.push(p)
 									darkSet!.add(p)
 								} else {
@@ -944,7 +946,6 @@ function repairMasterDarkDirect(
 			}
 		}
 
-		const sparseDefectCount = defectIndices !== undefined ? defectIndices.length : defectMask === undefined && defectSet === undefined ? 0 : Number.POSITIVE_INFINITY
 		const sparseDarkCount = darkEnabled ? (darkIndices?.length ?? Number.POSITIVE_INFINITY) : 0
 
 		if (sparseDefectCount + sparseDarkCount <= maxSparseCount) {
