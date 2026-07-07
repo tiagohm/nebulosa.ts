@@ -123,18 +123,17 @@ interface BuiltDefectMask {
 	readonly sparseIndices?: readonly number[]
 }
 
-// Robust center and scale of a plane's first `count` values. Returns the median and the normalized MAD
-// (comparable to a standard deviation); falls back to the population standard deviation when the MAD
-// collapses to 0 (a near-constant plane), and to 0 only when the plane is genuinely constant. `buf` is a
-// reusable scratch array of at least `count` elements, partitioned in place.
-function robustPlaneScale(plane: Float64Array, count: number, buf: Float64Array) {
-	for (let i = 0; i < count; i++) buf[i] = plane[i]
-	const median = medianBySelection(buf, count)
+// Robust center and scale of a sample buffer's first `count` values. Returns the median and the normalized
+// MAD (comparable to a standard deviation); falls back to the population standard deviation when the MAD
+// collapses to 0 (a near-constant plane), and to 0 only when the plane is genuinely constant. `values` and
+// `scratch` are reusable buffers of at least `count` elements, partitioned in place.
+function robustPlaneScale(values: Float64Array, count: number, scratch: Float64Array) {
+	const median = medianBySelection(values, count)
 
-	for (let i = 0; i < count; i++) buf[i] = Math.abs(plane[i] - median)
-	const mad = STANDARD_DEVIATION_SCALE * medianBySelection(buf, count)
+	for (let i = 0; i < count; i++) scratch[i] = Math.abs(values[i] - median)
+	const mad = STANDARD_DEVIATION_SCALE * medianBySelection(scratch, count)
 
-	const scale = mad > 0 ? mad : standardDeviationOf(plane, count)
+	const scale = mad > 0 ? mad : standardDeviationOf(values, count)
 	return { median, scale: Number.isFinite(scale) ? scale : 0 } as const
 }
 
