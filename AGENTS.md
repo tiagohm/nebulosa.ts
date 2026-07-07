@@ -469,7 +469,7 @@ Assemble every commit message the same way, in this order:
 2. One blank line, only when a body is present.
 3. A required body of one or more paragraphs.
 4. One blank line before the trailers.
-5. A `Co-Authored-By` trailer identifying the agent that authored the change.
+5. A `Co-Authored-By` trailer identifying the agent that authored the change (name + email).
 
 Concretely, the message follows this shape:
 
@@ -478,7 +478,7 @@ Concretely, the message follows this shape:
 
 <required body explaining why, side effects, and trade-offs>
 
-Co-Authored-By: Agent <email>
+Co-Authored-By: Agent's name <GitHub agent's email>
 ```
 
 - Separate the subject, body, and trailer block with exactly one blank line each. Do not add a blank line before the subject.
