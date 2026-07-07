@@ -453,6 +453,46 @@ function neighborhoodMedianRadius1(plane: Float64Array, x: number, y: number, wi
 	return medianBySelection(values, count)
 }
 
+// Fast radius-1 median for the common residual-field path where the center is always excluded and no mask
+// is active. Interior pixels avoid the per-sample `skipIndex` comparisons used by the generic helper.
+function neighborhoodMedianRadius1SkipCenter(plane: Float64Array, x: number, y: number, width: number, height: number, step: number, scratch: NeighborhoodScratch) {
+	const values = scratch.values
+	let count = 0
+	const center = y * width + x
+
+	if (x >= step && x + step < width && y >= step && y + step < height) {
+		const prevCenter = center - step * width
+		const nextCenter = center + step * width
+
+		values[count++] = plane[prevCenter - step]
+		values[count++] = plane[prevCenter]
+		values[count++] = plane[prevCenter + step]
+		values[count++] = plane[center - step]
+		values[count++] = plane[center + step]
+		values[count++] = plane[nextCenter - step]
+		values[count++] = plane[nextCenter]
+		values[count++] = plane[nextCenter + step]
+	} else {
+		for (let dy = -1; dy <= 1; dy++) {
+			const yy = y + dy * step
+
+			if (yy < 0 || yy >= height) continue
+
+			const row = yy * width
+
+			for (let dx = -1; dx <= 1; dx++) {
+				const xx = x + dx * step
+				if (xx < 0 || xx >= width) continue
+				const q = row + xx
+				if (q === center) continue
+				values[count++] = plane[q]
+			}
+		}
+	}
+
+	return count === 0 ? plane[center] : medianBySelection(values, count)
+}
+
 // Fast masked radius-1 median. Returns undefined when every 3x3 sample is masked, letting the generic
 // path handle outward expansion.
 function neighborhoodMedianRadius1Masked(plane: Float64Array, x: number, y: number, width: number, height: number, step: number, scratch: NeighborhoodScratch, skip: Uint8Array, skipIndex?: number) {
@@ -982,6 +1022,20 @@ function isIsolatedDefect(plane: Float64Array, x: number, y: number, width: numb
 // defects do not bias it. The center sample is skipped too so a candidate surrounded by masked neighbors
 // cannot become its own local background.
 function buildResidualField(plane: Float64Array, width: number, height: number, radius: number, step: number, window: NeighborhoodScratch, skip: Uint8Array | undefined, residual: Float64Array) {
+	if (radius === 1 && skip === undefined) {
+		for (let y = 0; y < height; y++) {
+			const rowBase = y * width
+
+			for (let x = 0; x < width; x++) {
+				const p = rowBase + x
+				const m = neighborhoodMedianRadius1SkipCenter(plane, x, y, width, height, step, window)
+				residual[p] = plane[p] - m
+			}
+		}
+
+		return
+	}
+
 	for (let y = 0; y < height; y++) {
 		const rowBase = y * width
 
