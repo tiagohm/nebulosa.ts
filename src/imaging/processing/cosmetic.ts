@@ -1034,6 +1034,8 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 		throw new Error(`protect mask length must be ${n} (width*height), got ${protectMask.length}`)
 	}
 
+	if (!autoPossible && !darkPossible && builtDefects === undefined) return { image, corrected: 0, hot, cold, dark, defect }
+
 	let protectSkip: Uint8Array | undefined
 	if (protectMask !== undefined) {
 		protectSkip = new Uint8Array(n)
