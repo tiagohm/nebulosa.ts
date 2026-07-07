@@ -90,6 +90,10 @@ const SMALL_MEDIAN_SORT_LIMIT = 9
 // pass, which is better for large bad-row/column or dark-defect sets.
 const SPARSE_DEFECT_MAX_FRACTION = 1 / 32
 
+// Maximum protection-mask density that records sparse indices for replaying mask unions. Denser source
+// masks keep full-frame scans to avoid retaining a large numeric side table.
+const SPARSE_PROTECT_MAX_FRACTION = 1 / 32
+
 // Outcome of a cosmetic-correction pass: the mutated image plus how many samples each detector repaired.
 // The per-detector counts are mutually exclusive (a sample is attributed to the first detector that
 // flags it, in the order defect > dark > hot > cold) and sum to `corrected`.
@@ -1232,15 +1236,32 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 	if (!autoPossible && !darkPossible && builtDefects === undefined) return { image, corrected: 0, hot, cold, dark, defect }
 
 	let protectSkip: Uint8Array | undefined
+	let protectIndices: number[] | undefined
 	if (autoPossible && protectMask !== undefined) {
 		protectSkip = new Uint8Array(n)
-		for (let p = 0; p < n; p++) if (protectMask[p] !== 0) protectSkip[p] = 1
+		const protectIndexMaxCount = darkPossible || defectMask !== undefined ? Math.max(1, Math.floor(n * SPARSE_PROTECT_MAX_FRACTION)) : 0
+		protectIndices = protectIndexMaxCount > 0 ? [] : undefined
+		for (let p = 0; p < n; p++) {
+			if (protectMask[p] === 0) continue
+			protectSkip[p] = 1
+			if (protectIndices !== undefined) {
+				if (protectIndices.length < protectIndexMaxCount) {
+					protectIndices.push(p)
+				} else {
+					protectIndices = undefined
+				}
+			}
+		}
 	}
 
 	let defectProtectSkip: Uint8Array | undefined
 	if (defectMask !== undefined && protectSkip !== undefined) {
 		defectProtectSkip = new Uint8Array(defectMask)
-		for (let p = 0; p < n; p++) if (protectSkip[p] !== 0) defectProtectSkip[p] = 1
+		if (protectIndices !== undefined) {
+			for (const p of protectIndices) defectProtectSkip[p] = 1
+		} else {
+			for (let p = 0; p < n; p++) if (protectSkip[p] !== 0) defectProtectSkip[p] = 1
+		}
 	}
 
 	// A Bayer CFA mosaic interleaves 4 color-phase photosites; neighborhoods and robust statistics must be
@@ -1375,7 +1396,11 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 					autoSkip = defectProtectSkip
 				} else {
 					const combinedSkip = new Uint8Array(autoSkip)
-					for (let p = 0; p < n; p++) if (protectSkip[p] !== 0) combinedSkip[p] = 1
+					if (protectIndices !== undefined) {
+						for (const p of protectIndices) combinedSkip[p] = 1
+					} else {
+						for (let p = 0; p < n; p++) if (protectSkip[p] !== 0) combinedSkip[p] = 1
+					}
 					autoSkip = combinedSkip
 				}
 			}
