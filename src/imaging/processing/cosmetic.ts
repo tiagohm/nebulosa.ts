@@ -421,6 +421,110 @@ function medianBySelection(values: Float64Array, count: number) {
 	return (lower + upper) * 0.5
 }
 
+// Median of eight non-NaN values using a fixed sorting network. The caller falls back to the small-sort
+// path when NaNs are present so the existing NaN-high ordering remains unchanged.
+function median8NoNaN(v0: number, v1: number, v2: number, v3: number, v4: number, v5: number, v6: number, v7: number) {
+	let t = 0
+
+	if (v0 > v1) {
+		t = v0
+		v0 = v1
+		v1 = t
+	}
+	if (v2 > v3) {
+		t = v2
+		v2 = v3
+		v3 = t
+	}
+	if (v4 > v5) {
+		t = v4
+		v4 = v5
+		v5 = t
+	}
+	if (v6 > v7) {
+		t = v6
+		v6 = v7
+		v7 = t
+	}
+	if (v0 > v2) {
+		t = v0
+		v0 = v2
+		v2 = t
+	}
+	if (v1 > v3) {
+		t = v1
+		v1 = v3
+		v3 = t
+	}
+	if (v4 > v6) {
+		t = v4
+		v4 = v6
+		v6 = t
+	}
+	if (v5 > v7) {
+		t = v5
+		v5 = v7
+		v7 = t
+	}
+	if (v1 > v2) {
+		t = v1
+		v1 = v2
+		v2 = t
+	}
+	if (v5 > v6) {
+		t = v5
+		v5 = v6
+		v6 = t
+	}
+	if (v0 > v4) {
+		t = v0
+		v0 = v4
+		v4 = t
+	}
+	if (v3 > v7) {
+		t = v3
+		v3 = v7
+		v7 = t
+	}
+	if (v1 > v5) {
+		t = v1
+		v1 = v5
+		v5 = t
+	}
+	if (v2 > v6) {
+		t = v2
+		v2 = v6
+		v6 = t
+	}
+	if (v1 > v4) {
+		t = v1
+		v1 = v4
+		v4 = t
+	}
+	if (v3 > v6) {
+		t = v3
+		v3 = v6
+		v6 = t
+	}
+	if (v2 > v4) {
+		t = v2
+		v2 = v4
+		v4 = t
+	}
+	if (v3 > v5) {
+		t = v3
+		v3 = v5
+		v5 = t
+	}
+	if (v3 > v4) {
+		t = v3
+		v3 = v4
+		v4 = t
+	}
+
+	return (v3 + v4) * 0.5
+}
+
 // Fast median for the common radius-1, unmasked local window. It avoids dynamic lattice-bound
 // calculations on every auto-residual pixel, while still honoring the optional skipped center sample.
 function neighborhoodMedianRadius1(plane: Float64Array, x: number, y: number, width: number, height: number, step: number, scratch: NeighborhoodScratch, skipIndex?: number, emptyValue?: number) {
@@ -474,37 +578,52 @@ function neighborhoodMedianRadius1(plane: Float64Array, x: number, y: number, wi
 // Fast radius-1 median for the common residual-field path where the center is always excluded and no mask
 // is active. Interior pixels avoid the per-sample `skipIndex` comparisons used by the generic helper.
 function neighborhoodMedianRadius1SkipCenter(plane: Float64Array, x: number, y: number, width: number, height: number, step: number, scratch: NeighborhoodScratch) {
-	const values = scratch.values
-	let count = 0
 	const center = y * width + x
 
 	if (x >= step && x + step < width && y >= step && y + step < height) {
 		const prevCenter = center - step * width
 		const nextCenter = center + step * width
+		const v0 = plane[prevCenter - step]
+		const v1 = plane[prevCenter]
+		const v2 = plane[prevCenter + step]
+		const v3 = plane[center - step]
+		const v4 = plane[center + step]
+		const v5 = plane[nextCenter - step]
+		const v6 = plane[nextCenter]
+		const v7 = plane[nextCenter + step]
 
-		values[count++] = plane[prevCenter - step]
-		values[count++] = plane[prevCenter]
-		values[count++] = plane[prevCenter + step]
-		values[count++] = plane[center - step]
-		values[count++] = plane[center + step]
-		values[count++] = plane[nextCenter - step]
-		values[count++] = plane[nextCenter]
-		values[count++] = plane[nextCenter + step]
-	} else {
-		for (let dy = -1; dy <= 1; dy++) {
-			const yy = y + dy * step
+		if (!Number.isNaN(v0) && !Number.isNaN(v1) && !Number.isNaN(v2) && !Number.isNaN(v3) && !Number.isNaN(v4) && !Number.isNaN(v5) && !Number.isNaN(v6) && !Number.isNaN(v7)) {
+			return median8NoNaN(v0, v1, v2, v3, v4, v5, v6, v7)
+		}
 
-			if (yy < 0 || yy >= height) continue
+		const values = scratch.values
+		values[0] = v0
+		values[1] = v1
+		values[2] = v2
+		values[3] = v3
+		values[4] = v4
+		values[5] = v5
+		values[6] = v6
+		values[7] = v7
+		return medianBySelection(values, 8)
+	}
 
-			const row = yy * width
+	const values = scratch.values
+	let count = 0
 
-			for (let dx = -1; dx <= 1; dx++) {
-				const xx = x + dx * step
-				if (xx < 0 || xx >= width) continue
-				const q = row + xx
-				if (q === center) continue
-				values[count++] = plane[q]
-			}
+	for (let dy = -1; dy <= 1; dy++) {
+		const yy = y + dy * step
+
+		if (yy < 0 || yy >= height) continue
+
+		const row = yy * width
+
+		for (let dx = -1; dx <= 1; dx++) {
+			const xx = x + dx * step
+			if (xx < 0 || xx >= width) continue
+			const q = row + xx
+			if (q === center) continue
+			values[count++] = plane[q]
 		}
 	}
 
