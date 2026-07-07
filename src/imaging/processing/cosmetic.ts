@@ -117,10 +117,12 @@ interface NeighborhoodScratch {
 // Dense explicit-defect mask plus, when the map stays sparse, the unique row-major indices marked while
 // building it. The sparse list is omitted once the map exceeds the caller's direct-repair density limit.
 interface BuiltDefectMask {
-	// Geometry-level defect mask shared by all channels, with 1 for known bad samples.
-	readonly mask: Uint8Array
+	// Optional geometry-level defect mask shared by all channels, with 1 for known bad samples.
+	readonly mask?: Uint8Array
 	// Unique marked pixel indices when the explicit map remains sparse enough for direct repair.
 	readonly sparseIndices?: readonly number[]
+	// Sparse membership set used by direct repair when no dense mask was allocated.
+	readonly sparseSet?: ReadonlySet<number>
 }
 
 // Robust center and scale of a sample buffer's first `count` values. Returns the median and the normalized
@@ -539,7 +541,7 @@ function neighborhoodMedian(plane: Float64Array, x: number, y: number, width: nu
 // Median of the neighborhood of (x, y), read directly from an interleaved raw buffer for sparse
 // explicit-defect repair. It mirrors `neighborhoodMedian` but avoids materializing a full plane when no
 // statistical detector is active.
-function interleavedNeighborhoodMedian(raw: Readonly<NumberArray>, channel: number, channels: number, x: number, y: number, width: number, height: number, r: number, step: number, scratch: NeighborhoodScratch, skip?: Uint8Array, skipIndex?: number, emptyValue?: number) {
+function interleavedNeighborhoodMedian(raw: Readonly<NumberArray>, channel: number, channels: number, x: number, y: number, width: number, height: number, r: number, step: number, scratch: NeighborhoodScratch, skip?: Uint8Array, skipIndex?: number, emptyValue?: number, sparseSkip?: ReadonlySet<number>) {
 	const kyMin = Math.max(-r, -Math.floor(y / step))
 	const kyMax = Math.min(r, Math.floor((height - 1 - y) / step))
 	const kxMin = Math.max(-r, -Math.floor(x / step))
@@ -555,6 +557,7 @@ function interleavedNeighborhoodMedian(raw: Readonly<NumberArray>, channel: numb
 			const q = row + x + kx * step
 			if (q === skipIndex) continue
 			if (skip !== undefined && skip[q] !== 0) continue
+			if (sparseSkip !== undefined && sparseSkip.has(q)) continue
 			if (count === values.length) values = growNeighborhoodBuffer(scratch, count + 1)
 			values[count++] = raw[q * channels + channel]
 		}
@@ -592,6 +595,7 @@ function interleavedNeighborhoodMedian(raw: Readonly<NumberArray>, channel: numb
 					const q = row + x + kx * step
 					if (q === skipIndex) continue
 					if (skip !== undefined && skip[q] !== 0) continue
+					if (sparseSkip !== undefined && sparseSkip.has(q)) continue
 					if (count === values.length) values = growNeighborhoodBuffer(scratch, count + 1)
 					values[count++] = raw[q * channels + channel]
 				}
@@ -607,13 +611,14 @@ function interleavedNeighborhoodMedian(raw: Readonly<NumberArray>, channel: numb
 }
 
 // Repairs one interleaved sample by index from the current raw buffer, excluding every sample marked in
-// `repairSkip` from the neighborhood median. Returns true only when a finite repair value is written.
-function repairInterleavedIndex(raw: NumberArray, width: number, height: number, channels: number, channel: number, p: number, radius: number, step: number, amount: number, repairSkip: Uint8Array, window: NeighborhoodScratch) {
+// `repairSkip` or `sparseRepairSkip` from the neighborhood median. Returns true only when a finite repair
+// value is written.
+function repairInterleavedIndex(raw: NumberArray, width: number, height: number, channels: number, channel: number, p: number, radius: number, step: number, amount: number, repairSkip: Uint8Array | undefined, sparseRepairSkip: ReadonlySet<number> | undefined, window: NeighborhoodScratch) {
 	const y = Math.trunc(p / width)
 	const x = p - y * width
 	const rawIndex = p * channels + channel
 	const center = raw[rawIndex]
-	const m = interleavedNeighborhoodMedian(raw, channel, channels, x, y, width, height, radius, step, window, repairSkip, undefined, Number.NaN)
+	const m = interleavedNeighborhoodMedian(raw, channel, channels, x, y, width, height, radius, step, window, repairSkip, undefined, Number.NaN, sparseRepairSkip)
 	const repaired = amount >= 1 ? m : center + amount * (m - center)
 	if (!Number.isFinite(repaired)) return false
 	raw[rawIndex] = repaired
@@ -622,12 +627,12 @@ function repairInterleavedIndex(raw: NumberArray, width: number, height: number,
 
 // Repairs only explicitly mapped defects from the interleaved raw buffer. All mapped defects stay in the
 // skip mask, so direct reads do not reuse values already corrected earlier in the sparse pass.
-function repairSparseDefects(raw: NumberArray, width: number, height: number, channels: number, radius: number, step: number, amount: number, defectMask: Uint8Array, defectIndices: readonly number[], window: NeighborhoodScratch) {
+function repairSparseDefects(raw: NumberArray, width: number, height: number, channels: number, radius: number, step: number, amount: number, defectMask: Uint8Array | undefined, defectSet: ReadonlySet<number> | undefined, defectIndices: readonly number[], window: NeighborhoodScratch) {
 	let repairedCount = 0
 
 	for (let channel = 0; channel < channels; channel++) {
 		for (const p of defectIndices) {
-			if (repairInterleavedIndex(raw, width, height, channels, channel, p, radius, step, amount, defectMask, window)) repairedCount++
+			if (repairInterleavedIndex(raw, width, height, channels, channel, p, radius, step, amount, defectMask, defectSet, window)) repairedCount++
 		}
 	}
 
@@ -694,14 +699,14 @@ function repairMasterDarkDirect(
 		if (sparseDefectCount + sparseDarkCount <= maxSparseCount) {
 			if (defectIndices !== undefined) {
 				for (const p of defectIndices) {
-					if (repairInterleavedIndex(raw, width, height, channels, channel, p, radius, step, amount, repairSkip, window)) defect++
+					if (repairInterleavedIndex(raw, width, height, channels, channel, p, radius, step, amount, repairSkip, undefined, window)) defect++
 				}
 			}
 
 			if (darkIndices !== undefined) {
 				for (const p of darkIndices) {
 					if (defectMask !== undefined && defectMask[p] !== 0) continue
-					if (repairInterleavedIndex(raw, width, height, channels, channel, p, radius, step, amount, repairSkip, window)) darkCount++
+					if (repairInterleavedIndex(raw, width, height, channels, channel, p, radius, step, amount, repairSkip, undefined, window)) darkCount++
 				}
 			}
 
@@ -833,14 +838,44 @@ function buildResidualField(plane: Float64Array, width: number, height: number, 
 	}
 }
 
-// Builds the geometry-level defect mask (shared across channels) from an explicit defect map, or returns
-// undefined when there is nothing valid to mark. Out-of-range entries are ignored so callers can pass loose
-// lists without pre-filtering. When `maxSparseCount` is positive, also collects unique marked indices until
-// the map exceeds that count, allowing sparse direct repair without a second full-frame scan.
-function buildDefectMask(defects: CosmeticDefectMap | undefined, width: number, height: number, maxSparseCount = 0): BuiltDefectMask | undefined {
+// Builds the geometry-level defect map from explicit bad pixels/rows/columns, or returns undefined when
+// there is nothing valid to mark. Out-of-range entries are ignored so callers can pass loose lists without
+// pre-filtering. When `maxSparseCount` is positive, also collects unique marked indices until the map
+// exceeds that count, allowing sparse direct repair without a second full-frame scan. Pixel-only maps can
+// stay sparse-only when `allowSparseOnly` is true, avoiding a dense frame-sized mask.
+function buildDefectMask(defects: CosmeticDefectMap | undefined, width: number, height: number, maxSparseCount = 0, allowSparseOnly = false): BuiltDefectMask | undefined {
 	if (defects === undefined) return undefined
 	const { pixels, columns, rows } = defects
 	if ((!pixels || pixels.length === 0) && (!columns || columns.length === 0) && (!rows || rows.length === 0)) return undefined
+
+	if (allowSparseOnly && maxSparseCount > 0 && pixels !== undefined && (!columns || columns.length === 0) && (!rows || rows.length === 0)) {
+		const sparseSet = new Set<number>()
+		const sparseIndices: number[] = []
+
+		for (const [x, y] of pixels) {
+			if (!Number.isInteger(x) || !Number.isInteger(y) || x < 0 || x >= width || y < 0 || y >= height) continue
+			const p = y * width + x
+			if (sparseSet.has(p)) continue
+
+			if (sparseIndices.length >= maxSparseCount) {
+				const mask = new Uint8Array(width * height)
+				for (const q of sparseIndices) mask[q] = 1
+				mask[p] = 1
+
+				for (const [xx, yy] of pixels) {
+					if (!Number.isInteger(xx) || !Number.isInteger(yy) || xx < 0 || xx >= width || yy < 0 || yy >= height) continue
+					mask[yy * width + xx] = 1
+				}
+
+				return { mask }
+			}
+
+			sparseSet.add(p)
+			sparseIndices.push(p)
+		}
+
+		return sparseIndices.length === 0 ? undefined : { sparseIndices, sparseSet }
+	}
 
 	const mask = new Uint8Array(width * height)
 	let sparseIndices: number[] | undefined = maxSparseCount > 0 ? [] : undefined
@@ -929,7 +964,7 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 	// Whether the auto detector could run at all; when off, the per-pixel median field is not built.
 	const autoPossible = hotSigma > 0 || coldSigma > 0
 	const sparseRepairMaxCount = !autoPossible ? Math.max(1, Math.floor(n * SPARSE_DEFECT_MAX_FRACTION)) : 0
-	const builtDefects = buildDefectMask(options.defects, width, height, sparseRepairMaxCount)
+	const builtDefects = buildDefectMask(options.defects, width, height, sparseRepairMaxCount, !autoPossible && !darkPossible)
 	const defectMask = builtDefects?.mask
 
 	// Optional protection mask for the auto detector; must match the frame so it aligns pixel-for-pixel.
@@ -984,7 +1019,7 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 	// sparse, avoiding a full deinterleaved Float64 plane and the full-frame detection scan.
 	const sparseDefectIndices = !autoPossible && !darkPossible ? builtDefects?.sparseIndices : undefined
 	if (builtDefects !== undefined && sparseDefectIndices !== undefined) {
-		defect = repairSparseDefects(raw, width, height, channels, radius, step, amount, builtDefects.mask, sparseDefectIndices, window)
+		defect = repairSparseDefects(raw, width, height, channels, radius, step, amount, builtDefects.mask, builtDefects.sparseSet, sparseDefectIndices, window)
 		return { image, corrected: defect, hot, cold, dark, defect }
 	}
 
