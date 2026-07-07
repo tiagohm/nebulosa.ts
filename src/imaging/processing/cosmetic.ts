@@ -1000,7 +1000,10 @@ function buildDefectMask(defects: CosmeticDefectMap | undefined, width: number, 
 		const sparseSet = new Set<number>()
 		const sparseIndices: number[] = []
 
-		for (const [x, y] of pixels) {
+		for (let i = 0; i < pixels.length; i++) {
+			const pixel = pixels[i]
+			const x = pixel[0]
+			const y = pixel[1]
 			if (!Number.isInteger(x) || !Number.isInteger(y) || x < 0 || x >= width || y < 0 || y >= height) continue
 			const p = y * width + x
 			if (sparseSet.has(p)) continue
@@ -1010,7 +1013,10 @@ function buildDefectMask(defects: CosmeticDefectMap | undefined, width: number, 
 				for (const q of sparseIndices) mask[q] = 1
 				mask[p] = 1
 
-				for (const [xx, yy] of pixels) {
+				for (let j = i + 1; j < pixels.length; j++) {
+					const nextPixel = pixels[j]
+					const xx = nextPixel[0]
+					const yy = nextPixel[1]
 					if (!Number.isInteger(xx) || !Number.isInteger(yy) || xx < 0 || xx >= width || yy < 0 || yy >= height) continue
 					mask[yy * width + xx] = 1
 				}
