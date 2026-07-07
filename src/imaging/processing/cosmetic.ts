@@ -219,26 +219,32 @@ function computePhaseStats(plane: Float64Array, width: number, height: number, p
 }
 
 // Master-dark thresholds for each CFA phase, read directly from the interleaved dark buffer. Each phase
-// is gathered once, then used for both the robust MAD and the lower-tail scale clamp.
+// is gathered once, then used for both the robust MAD and the lower-tail scale clamp. Returns true only
+// when at least one unmasked dark sample exceeds its phase threshold.
 function computeInterleavedDarkThresholds(dark: Readonly<NumberArray>, channel: number, channels: number, width: number, height: number, phases: number, darkHotSigma: number, gather: Float64Array, scratch: Float64Array, thresholds: Float64Array, skip?: Uint8Array, sparseSkip?: ReadonlySet<number>) {
 	let enabled = false
 	thresholds.fill(Number.POSITIVE_INFINITY)
 
 	for (let ph = 0; ph < phases; ph++) {
 		let count = 0
+		let maxValue = Number.NEGATIVE_INFINITY
 
 		if (phases === 1) {
 			const n = width * height
 
 			if (skip === undefined && sparseSkip === undefined) {
 				for (let p = 0, i = channel; p < n; p++, i += channels) {
-					gather[count++] = dark[i]
+					const value = dark[i]
+					gather[count++] = value
+					if (value > maxValue) maxValue = value
 				}
 			} else {
 				for (let p = 0, i = channel; p < n; p++, i += channels) {
 					if (skip !== undefined && skip[p] !== 0) continue
 					if (sparseSkip !== undefined && sparseSkip.has(p)) continue
-					gather[count++] = dark[i]
+					const value = dark[i]
+					gather[count++] = value
+					if (value > maxValue) maxValue = value
 				}
 			}
 		} else {
@@ -252,7 +258,9 @@ function computeInterleavedDarkThresholds(dark: Readonly<NumberArray>, channel: 
 					let i = (row + px) * channels + channel
 
 					for (let x = px; x < width; x += 2, i += channelStep) {
-						gather[count++] = dark[i]
+						const value = dark[i]
+						gather[count++] = value
+						if (value > maxValue) maxValue = value
 					}
 				}
 			} else {
@@ -264,7 +272,9 @@ function computeInterleavedDarkThresholds(dark: Readonly<NumberArray>, channel: 
 						const p = row + x
 						if (skip !== undefined && skip[p] !== 0) continue
 						if (sparseSkip !== undefined && sparseSkip.has(p)) continue
-						gather[count++] = dark[i]
+						const value = dark[i]
+						gather[count++] = value
+						if (value > maxValue) maxValue = value
 					}
 				}
 			}
@@ -289,8 +299,9 @@ function computeInterleavedDarkThresholds(dark: Readonly<NumberArray>, channel: 
 			}
 		}
 
-		thresholds[ph] = stats.median + darkHotSigma * scale
-		enabled = true
+		const threshold = stats.median + darkHotSigma * scale
+		thresholds[ph] = threshold
+		if (maxValue > threshold) enabled = true
 	}
 
 	return enabled
@@ -1370,7 +1381,8 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 		// (written back to the interleaved raw buffer) never feed into later neighborhood medians.
 		for (let p = 0, i = channel; p < n; p++, i += channels) plane[p] = raw[i]
 
-		// Per-phase master-dark thresholds for this channel; a phase is disabled when its dark scale is 0.
+		// Per-phase master-dark thresholds for this channel; the dark detector is disabled when no
+		// unmasked dark sample exceeds its threshold.
 		// Known defects are excluded from the dark statistics so a mapped bad column does not inflate the
 		// scale and mask other fixed hot pixels in the same master dark.
 		let darkEnabled = false
