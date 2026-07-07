@@ -393,7 +393,13 @@ function medianBySelection(values: Float64Array, count: number) {
 	if ((count & 1) === 1) return quickSelect(values, count, mid)
 
 	const upper = quickSelect(values, count, mid)
-	const lower = quickSelect(values, count, mid - 1)
+	// Selecting the upper median partitions the lower half into the prefix, so a linear max replaces
+	// a second full quickselect pass for even-sized buffers.
+	let lower = values[0]
+	for (let i = 1; i < mid; i++) {
+		const value = values[i]
+		if (value > lower) lower = value
+	}
 	return (lower + upper) * 0.5
 }
 
