@@ -306,6 +306,31 @@ function growNeighborhoodBuffer(scratch: NeighborhoodScratch, minLength: number)
 	return next
 }
 
+// Builds a dense lookup for centers whose radius/step neighborhood can include one of the sparse protected
+// pixels. Only those centers need the master-dark auto gate median recomputed without the protect mask.
+function buildProtectInfluenceMask(protectIndices: readonly number[], width: number, height: number, radius: number, step: number) {
+	const influence = new Uint8Array(width * height)
+
+	for (const p of protectIndices) {
+		const py = Math.trunc(p / width)
+		const px = p - py * width
+
+		for (let dy = -radius; dy <= radius; dy++) {
+			const y = py + dy * step
+			if (y < 0 || y >= height) continue
+			const row = y * width
+
+			for (let dx = -radius; dx <= radius; dx++) {
+				const x = px + dx * step
+				if (x < 0 || x >= width) continue
+				influence[row + x] = 1
+			}
+		}
+	}
+
+	return influence
+}
+
 // Sorts a tiny prefix of `values` in ascending numeric order, matching TypedArray sort's practical NaN
 // placement by pushing NaNs to the high end. Used for 3x3 neighborhoods and very small robust samples.
 function sortSmallPrefix(values: Float64Array, count: number) {
@@ -1333,6 +1358,7 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 	// Per-pixel high-pass residual, built once per channel for the noise-scale estimate. The local median
 	// is recovered as `plane[p] - residual[p]` when the auto path needs the repair value.
 	const residual = autoPossible ? new Float64Array(n) : undefined
+	const protectInfluenceMask = darkPossible && protectSkip !== undefined && protectIndices !== undefined && protectIndices.length * windowSize <= n ? buildProtectInfluenceMask(protectIndices, width, height, radius, step) : undefined
 
 	// Per-phase robust statistics (one entry when not a mosaic).
 	const phaseScale = new Float64Array(phases)
@@ -1439,7 +1465,7 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 					// The window-median deviation is a cheap gate; a candidate is confirmed only when the
 					// isolation test (against the robust background) rules out a resolved source such as a star.
 					const autoSkip = darkSkip ?? defectMask
-					if (darkSkip !== undefined && protectSkip !== undefined) m = neighborhoodMedian(plane, x, y, width, height, radius, step, window, darkSkip, p)
+					if (darkSkip !== undefined && protectSkip !== undefined && (protectInfluenceMask === undefined || protectInfluenceMask[p] !== 0)) m = neighborhoodMedian(plane, x, y, width, height, radius, step, window, darkSkip, p)
 					if (hotSigma > 0 && center > m + hotSigma * gScale && isIsolatedDefect(plane, x, y, width, height, bgRadius, step, bgWindow, autoSkip, gScale, hotSigma, 1, rawBgWindow, residual, phaseScale)) cause = 3
 					else if (coldSigma > 0 && center < m - coldSigma * gScale && isIsolatedDefect(plane, x, y, width, height, bgRadius, step, bgWindow, autoSkip, gScale, coldSigma, -1, rawBgWindow, residual, phaseScale)) cause = 4
 				}
