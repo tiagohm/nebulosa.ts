@@ -848,13 +848,19 @@ function repairMasterDarkDirect(
 ) {
 	const n = width * height
 	const singlePhase = phases === 1
+	const denseDefectMask = defectMask === undefined && defectIndices !== undefined ? new Uint8Array(n) : undefined
+	if (denseDefectMask !== undefined && defectIndices !== undefined) {
+		for (const p of defectIndices) denseDefectMask[p] = 1
+	}
+	const repairDefectMask = defectMask ?? denseDefectMask
+	const repairDefectSet = repairDefectMask === undefined ? defectSet : undefined
 	let defect = 0
 	let darkCount = 0
 
 	for (let channel = 0; channel < channels; channel++) {
-		const darkEnabled = computeInterleavedDarkThresholds(dark, channel, channels, width, height, phases, darkHotSigma, gather, scratch, thresholds, defectMask, defectSet)
+		const darkEnabled = computeInterleavedDarkThresholds(dark, channel, channels, width, height, phases, darkHotSigma, gather, scratch, thresholds, repairDefectMask, repairDefectSet)
 
-		if (!darkEnabled && defectMask === undefined && defectSet === undefined) continue
+		if (!darkEnabled && repairDefectMask === undefined && repairDefectSet === undefined) continue
 
 		let darkIndices: number[] | undefined = darkEnabled ? [] : undefined
 		let darkSet: Set<number> | undefined = darkEnabled ? new Set<number>() : undefined
@@ -871,10 +877,7 @@ function repairMasterDarkDirect(
 								darkIndices.push(p)
 								darkSet!.add(p)
 							} else {
-								denseRepairSkip = defectMask !== undefined ? new Uint8Array(defectMask) : new Uint8Array(n)
-								if (defectMask === undefined && defectIndices !== undefined) {
-									for (const q of defectIndices) denseRepairSkip[q] = 1
-								}
+								denseRepairSkip = repairDefectMask !== undefined ? new Uint8Array(repairDefectMask) : new Uint8Array(n)
 								for (const q of darkIndices) denseRepairSkip[q] = 1
 								denseRepairSkip[p] = 1
 								darkIndices = undefined
@@ -897,10 +900,7 @@ function repairMasterDarkDirect(
 									darkIndices.push(p)
 									darkSet!.add(p)
 								} else {
-									denseRepairSkip = defectMask !== undefined ? new Uint8Array(defectMask) : new Uint8Array(n)
-									if (defectMask === undefined && defectIndices !== undefined) {
-										for (const q of defectIndices) denseRepairSkip[q] = 1
-									}
+									denseRepairSkip = repairDefectMask !== undefined ? new Uint8Array(repairDefectMask) : new Uint8Array(n)
 									for (const q of darkIndices) denseRepairSkip[q] = 1
 									denseRepairSkip[p] = 1
 									darkIndices = undefined
@@ -924,28 +924,25 @@ function repairMasterDarkDirect(
 					const y = Math.trunc(p / width)
 					const x = p - y * width
 					const rawIndex = p * channels + channel
-					if (repairInterleavedPixel(raw, width, height, channels, channel, x, y, rawIndex, radius, step, amount, defectMask, defectSet, darkSet, window)) defect++
+					if (repairInterleavedPixel(raw, width, height, channels, channel, x, y, rawIndex, radius, step, amount, repairDefectMask, repairDefectSet, darkSet, window)) defect++
 				}
 			}
 
 			if (darkIndices !== undefined) {
 				for (const p of darkIndices) {
-					if (defectMask !== undefined && defectMask[p] !== 0) continue
-					if (defectSet !== undefined && defectSet.has(p)) continue
+					if (repairDefectMask !== undefined && repairDefectMask[p] !== 0) continue
+					if (repairDefectSet !== undefined && repairDefectSet.has(p)) continue
 					const y = Math.trunc(p / width)
 					const x = p - y * width
 					const rawIndex = p * channels + channel
-					if (repairInterleavedPixel(raw, width, height, channels, channel, x, y, rawIndex, radius, step, amount, defectMask, defectSet, darkSet, window)) darkCount++
+					if (repairInterleavedPixel(raw, width, height, channels, channel, x, y, rawIndex, radius, step, amount, repairDefectMask, repairDefectSet, darkSet, window)) darkCount++
 				}
 			}
 
 			continue
 		}
 
-		const repairSkip = denseRepairSkip ?? (defectMask !== undefined ? new Uint8Array(defectMask) : new Uint8Array(n))
-		if (defectMask === undefined && defectIndices !== undefined) {
-			for (const p of defectIndices) repairSkip[p] = 1
-		}
+		const repairSkip = denseRepairSkip ?? (repairDefectMask !== undefined ? new Uint8Array(repairDefectMask) : new Uint8Array(n))
 		if (darkIndices !== undefined) {
 			for (const p of darkIndices) repairSkip[p] = 1
 		}
@@ -958,7 +955,7 @@ function repairMasterDarkDirect(
 				const p = rowBase + x
 				const marked = repairSkip[p] !== 0
 				if (!marked) continue
-				const isDefect = (defectMask !== undefined && defectMask[p] !== 0) || (defectSet !== undefined && defectSet.has(p))
+				const isDefect = (repairDefectMask !== undefined && repairDefectMask[p] !== 0) || (repairDefectSet !== undefined && repairDefectSet.has(p))
 				const isDark = !isDefect && darkEnabled
 				if (!isDefect && !isDark) continue
 
