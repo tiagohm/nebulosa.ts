@@ -156,12 +156,12 @@ function lowerTailScale(values: Float64Array, count: number, median: number, scr
 	return Number.isFinite(scale) ? scale : 0
 }
 
-// Robust median and scale of each CFA phase of `plane` (or one global pair when `phases === 1`), written
-// into `medians`/`scales` (length `phases`). Same-phase samples are gathered by parity-strided scans into
-// `gather`; `scratch` is the robust-computation scratch. Both buffers must hold at least the largest phase
-// sample count. Pixels flagged in `skip` (the defect mask) are excluded so known defects do not inflate the
-// scale. A phase with no samples gets median NaN and scale 0 (its detection is effectively disabled).
-function computePhaseStats(plane: Float64Array, width: number, height: number, phases: number, gather: Float64Array, scratch: Float64Array, medians: Float64Array, scales: Float64Array, skip?: Uint8Array) {
+// Robust scale of each CFA phase of `plane` (or one global scale when `phases === 1`), written into
+// `scales` (length `phases`). Same-phase samples are gathered by parity-strided scans into `gather`;
+// `scratch` is the robust-computation scratch. Both buffers must hold at least the largest phase sample
+// count. Pixels flagged in `skip` (the defect mask) are excluded so known defects do not inflate the scale.
+// A phase with no samples gets scale 0 (its detection is effectively disabled).
+function computePhaseStats(plane: Float64Array, width: number, height: number, phases: number, gather: Float64Array, scratch: Float64Array, scales: Float64Array, skip?: Uint8Array) {
 	for (let ph = 0; ph < phases; ph++) {
 		let count = 0
 
@@ -205,35 +205,18 @@ function computePhaseStats(plane: Float64Array, width: number, height: number, p
 		}
 
 		if (count === 0) {
-			medians[ph] = Number.NaN
 			scales[ph] = 0
 			continue
 		}
 
 		const stats = robustPlaneScale(gather, count, scratch)
-		medians[ph] = stats.median
 		scales[ph] = stats.scale
 	}
 }
 
 // Master-dark thresholds for each CFA phase, read directly from the interleaved dark buffer. Each phase
 // is gathered once, then used for both the robust MAD and the lower-tail scale clamp.
-function computeInterleavedDarkThresholds(
-	dark: Readonly<NumberArray>,
-	channel: number,
-	channels: number,
-	width: number,
-	height: number,
-	phases: number,
-	darkHotSigma: number,
-	gather: Float64Array,
-	scratch: Float64Array,
-	medians: Float64Array,
-	scales: Float64Array,
-	thresholds: Float64Array,
-	skip?: Uint8Array,
-	sparseSkip?: ReadonlySet<number>,
-) {
+function computeInterleavedDarkThresholds(dark: Readonly<NumberArray>, channel: number, channels: number, width: number, height: number, phases: number, darkHotSigma: number, gather: Float64Array, scratch: Float64Array, thresholds: Float64Array, skip?: Uint8Array, sparseSkip?: ReadonlySet<number>) {
 	let enabled = false
 	thresholds.fill(Number.POSITIVE_INFINITY)
 
@@ -284,13 +267,10 @@ function computeInterleavedDarkThresholds(
 		}
 
 		if (count === 0) {
-			medians[ph] = Number.NaN
-			scales[ph] = 0
 			continue
 		}
 
 		const stats = robustPlaneScale(gather, count, scratch)
-		medians[ph] = stats.median
 		let scale = stats.scale
 
 		if (count > 1) {
@@ -305,7 +285,6 @@ function computeInterleavedDarkThresholds(
 			}
 		}
 
-		scales[ph] = scale
 		thresholds[ph] = stats.median + darkHotSigma * scale
 		enabled = true
 	}
@@ -805,8 +784,6 @@ function repairMasterDarkDirect(
 	maxSparseCount: number,
 	gather: Float64Array,
 	scratch: Float64Array,
-	medians: Float64Array,
-	scales: Float64Array,
 	thresholds: Float64Array,
 	window: NeighborhoodScratch,
 ) {
@@ -816,7 +793,7 @@ function repairMasterDarkDirect(
 	let darkCount = 0
 
 	for (let channel = 0; channel < channels; channel++) {
-		const darkEnabled = computeInterleavedDarkThresholds(dark, channel, channels, width, height, phases, darkHotSigma, gather, scratch, medians, scales, thresholds, defectMask, defectSet)
+		const darkEnabled = computeInterleavedDarkThresholds(dark, channel, channels, width, height, phases, darkHotSigma, gather, scratch, thresholds, defectMask, defectSet)
 
 		if (!darkEnabled && defectMask === undefined && defectSet === undefined) continue
 
@@ -1249,10 +1226,8 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 	if (!autoPossible && darkPossible) {
 		const directGather = new Float64Array(maxPhaseSamples)
 		const directScratch = new Float64Array(maxPhaseSamples)
-		const directMedian = new Float64Array(phases)
-		const directScale = new Float64Array(phases)
 		const directThreshold = new Float64Array(phases)
-		const direct = repairMasterDarkDirect(raw, dark0, width, height, channels, phases, radius, step, amount, darkHotSigma, defectMask, builtDefects?.sparseIndices, builtDefects?.sparseSet, sparseRepairMaxCount, directGather, directScratch, directMedian, directScale, directThreshold, window)
+		const direct = repairMasterDarkDirect(raw, dark0, width, height, channels, phases, radius, step, amount, darkHotSigma, defectMask, builtDefects?.sparseIndices, builtDefects?.sparseSet, sparseRepairMaxCount, directGather, directScratch, directThreshold, window)
 		defect = direct.defect
 		dark = direct.dark
 		return { image, corrected: dark + defect, hot, cold, dark, defect }
@@ -1274,10 +1249,7 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 	const residual = autoPossible ? new Float64Array(n) : undefined
 
 	// Per-phase robust statistics (one entry when not a mosaic).
-	const phaseMedian = new Float64Array(phases)
 	const phaseScale = new Float64Array(phases)
-	const darkPhaseMedian = new Float64Array(phases)
-	const darkPhaseScale = new Float64Array(phases)
 	const darkThreshold = new Float64Array(phases)
 
 	for (let channel = 0; channel < channels; channel++) {
@@ -1292,7 +1264,7 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 		if (darkPossible) {
 			// When the master dark has a flat background with hot pixels, the MAD collapses to zero and
 			// the stddev fallback includes the hot tail, so the threshold helper clamps to a lower-tail scale.
-			darkEnabled = computeInterleavedDarkThresholds(dark0, channel, channels, width, height, phases, darkHotSigma, gatherBuf, scaleScratch, darkPhaseMedian, darkPhaseScale, darkThreshold, defectMask)
+			darkEnabled = computeInterleavedDarkThresholds(dark0, channel, channels, width, height, phases, darkHotSigma, gatherBuf, scaleScratch, darkThreshold, defectMask)
 		} else {
 			darkThreshold.fill(Number.POSITIVE_INFINITY)
 		}
@@ -1345,7 +1317,7 @@ export function cosmeticCorrection(image: Image, options: CosmeticCorrectionOpti
 			}
 
 			buildResidualField(plane, width, height, radius, step, window, autoSkip, residual!)
-			computePhaseStats(residual!, width, height, phases, gatherBuf, scaleScratch, phaseMedian, phaseScale, autoSkip)
+			computePhaseStats(residual!, width, height, phases, gatherBuf, scaleScratch, phaseScale, autoSkip)
 
 			for (let ph = 0; ph < phases; ph++) autoEnabled ||= phaseScale[ph] > 0
 		}
