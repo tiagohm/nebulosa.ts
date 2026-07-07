@@ -168,22 +168,38 @@ function computePhaseStats(plane: Float64Array, width: number, height: number, p
 		if (phases === 1) {
 			const n = width * height
 
-			for (let p = 0; p < n; p++) {
-				if (skip !== undefined && skip[p] !== 0) continue
-				gather[count++] = plane[p]
+			if (skip === undefined) {
+				for (let p = 0; p < n; p++) {
+					gather[count++] = plane[p]
+				}
+			} else {
+				for (let p = 0; p < n; p++) {
+					if (skip[p] !== 0) continue
+					gather[count++] = plane[p]
+				}
 			}
 		} else {
 			// Visit only the photosites of this phase via a parity-strided scan (px, py in {0, 1}).
 			const py = ph >> 1
 			const px = ph & 1
 
-			for (let y = py; y < height; y += 2) {
-				const row = y * width
+			if (skip === undefined) {
+				for (let y = py; y < height; y += 2) {
+					const row = y * width
 
-				for (let x = px; x < width; x += 2) {
-					const p = row + x
-					if (skip !== undefined && skip[p] !== 0) continue
-					gather[count++] = plane[p]
+					for (let x = px; x < width; x += 2) {
+						gather[count++] = plane[row + x]
+					}
+				}
+			} else {
+				for (let y = py; y < height; y += 2) {
+					const row = y * width
+
+					for (let x = px; x < width; x += 2) {
+						const p = row + x
+						if (skip[p] !== 0) continue
+						gather[count++] = plane[p]
+					}
 				}
 			}
 		}
@@ -227,23 +243,42 @@ function computeInterleavedDarkThresholds(
 		if (phases === 1) {
 			const n = width * height
 
-			for (let p = 0; p < n; p++) {
-				if (skip !== undefined && skip[p] !== 0) continue
-				if (sparseSkip !== undefined && sparseSkip.has(p)) continue
-				gather[count++] = dark[p * channels + channel]
+			if (skip === undefined && sparseSkip === undefined) {
+				for (let p = 0, i = channel; p < n; p++, i += channels) {
+					gather[count++] = dark[i]
+				}
+			} else {
+				for (let p = 0; p < n; p++) {
+					if (skip !== undefined && skip[p] !== 0) continue
+					if (sparseSkip !== undefined && sparseSkip.has(p)) continue
+					gather[count++] = dark[p * channels + channel]
+				}
 			}
 		} else {
 			const py = ph >> 1
 			const px = ph & 1
 
-			for (let y = py; y < height; y += 2) {
-				const row = y * width
+			if (skip === undefined && sparseSkip === undefined) {
+				const channelStep = channels * 2
 
-				for (let x = px; x < width; x += 2) {
-					const p = row + x
-					if (skip !== undefined && skip[p] !== 0) continue
-					if (sparseSkip !== undefined && sparseSkip.has(p)) continue
-					gather[count++] = dark[p * channels + channel]
+				for (let y = py; y < height; y += 2) {
+					const row = y * width
+					let i = (row + px) * channels + channel
+
+					for (let x = px; x < width; x += 2, i += channelStep) {
+						gather[count++] = dark[i]
+					}
+				}
+			} else {
+				for (let y = py; y < height; y += 2) {
+					const row = y * width
+
+					for (let x = px; x < width; x += 2) {
+						const p = row + x
+						if (skip !== undefined && skip[p] !== 0) continue
+						if (sparseSkip !== undefined && sparseSkip.has(p)) continue
+						gather[count++] = dark[p * channels + channel]
+					}
 				}
 			}
 		}
