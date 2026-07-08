@@ -2320,6 +2320,7 @@ export class CameraSimulator extends DeviceSimulator {
 			this.#image.elements.CCD1.size = blob.byteLength.toFixed(0)
 			this.#image.elements.CCD1.format = this.transferFormat === 'XISF' ? '.xisf' : '.fits'
 			this.#image.elements.CCD1.value = blob
+			this.#image.elements.CCD1.encoding = 'raw'
 			handleSetBlobVector(this.client, this.handler, this.#image)
 		} catch {
 			this.#image.state = 'Alert'

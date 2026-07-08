@@ -950,7 +950,7 @@ export class CameraManager extends DeviceManager<Camera> {
 					const data = message.elements.CCD1?.value
 
 					if (data) {
-						this.blobReceived(device, data, 'base64')
+						this.blobReceived(device, data, message.elements.CCD1.encoding ?? 'base64')
 					} else {
 						console.warn(`received empty BLOB for device ${device.name}`)
 					}
