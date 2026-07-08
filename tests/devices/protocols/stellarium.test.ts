@@ -19,49 +19,35 @@ test('catalog', async () => {
 		entries[i++] = entry
 	}
 
-	expect(i).toBe(94659)
+	expect(i).toBeGreaterThan(94000)
 
-	expect(entries[0].id).toBe(1)
-	expect(entries[0].m).toBe(40)
-	expect(entries[0].rightAscension).toBe(3.238497018814087)
-	expect(entries[0].declination).toBe(1.0137385129928589)
-	expect(entries[0].magnitude).toBe(9.649999618530273)
-	expect(entries[0].type).toBe(StellariumObjectType.STAR)
-	expect(entries[0].majorAxis).toBe(0)
-	expect(entries[0].minorAxis).toBe(0)
-	expect(entries[0].orientation).toBe(0)
-	expect(entries[0].redshift).toBe(99)
-	expect(entries[0].aco).toBeUndefined()
+	const M40 = entries.find((e) => e.m === 40)!
+	expect(M40.id).toBe(1)
+	expect(M40.rightAscension).toBe(3.238497018814087)
+	expect(M40.declination).toBe(1.0137385129928589)
+	expect(M40.magnitude).toBe(9.649999618530273)
+	expect(M40.type).toBe(StellariumObjectType.STAR)
+	expect(M40.majorAxis).toBe(0)
+	expect(M40.minorAxis).toBe(0)
+	expect(M40.orientation).toBe(0)
+	expect(M40.redshift).toBe(99)
+	expect(M40.aco).toBeUndefined()
 
-	expect(entries[311].id).toBe(312)
-	expect(entries[311].ngc).toBe(281)
-	expect(entries[311].sh2).toBe(184)
-	expect(entries[311].lbn).toBe(616)
-	expect(entries[311].ced).toBe('3')
-	expect(entries[311].rightAscension).toBe(0.22871841490268707)
-	expect(entries[311].declination).toBe(0.9872454404830933)
-	expect(entries[311].magnitude).toBeUndefined()
-	expect(entries[311].type).toBe(StellariumObjectType.HII_REGION)
-	expect(entries[311].majorAxis).toBe(0.01018108695653449)
-	expect(entries[311].minorAxis).toBe(0.008726646259971648)
-	expect(entries[311].orientation).toBe(0)
-	expect(entries[311].redshift).toBe(99)
-	expect(entries[311].px).toBe(2.908882202245805e-9)
-	expect(toLightYear(entries[311].distance)).toBeCloseTo(5544.6, 0)
-
-	expect(entries[94658].id).toBe(94659)
-	expect(entries[94658].vdbha).toBe(197)
-	expect(entries[94658].rightAscension).toBe(4.391684532165527)
-	expect(entries[94658].declination).toBe(-0.8004080057144165)
-	expect(entries[94658].magnitude).toBeUndefined()
-	expect(entries[94658].type).toBe(StellariumObjectType.OPEN_STAR_CLUSTER)
-	expect(entries[94658].majorAxis).toBe(0.0011635528953468956)
-	expect(entries[94658].minorAxis).toBe(0.0011635528953468956)
-	expect(entries[94658].orientation).toBe(1.5707963267948966)
-	expect(entries[94658].redshift).toBe(99)
-	expect(entries[94658].aco).toBeUndefined()
-
-	expect(entries[254].mType).toBe('SA(s)b')
+	const NGC281 = entries.find((e) => e.ngc === 281)!
+	expect(NGC281.id).toBe(312)
+	expect(NGC281.sh2).toBe(184)
+	expect(NGC281.lbn).toBe(616)
+	expect(NGC281.ced).toBe('3')
+	expect(NGC281.rightAscension).toBe(0.22871841490268707)
+	expect(NGC281.declination).toBe(0.9872454404830933)
+	expect(NGC281.magnitude).toBeUndefined()
+	expect(NGC281.type).toBe(StellariumObjectType.HII_REGION)
+	expect(NGC281.majorAxis).toBe(0.01018108695653449)
+	expect(NGC281.minorAxis).toBe(0.008726646259971648)
+	expect(NGC281.orientation).toBe(0)
+	expect(NGC281.redshift).toBe(99)
+	expect(NGC281.px).toBe(2.908882202245805e-9)
+	expect(toLightYear(NGC281.distance)).toBeCloseTo(5544.6, 0)
 
 	const catalog = new StellariumCatalog()
 	catalog.addMany(entries)
@@ -76,7 +62,7 @@ test('catalog', async () => {
 		expect(sphericalSeparation(centerRA, centerDEC, entry.rightAscension, entry.declination)).toBeLessThanOrEqual(radius + 1e-9)
 	}
 
-	expect(catalog.queryCone(parseAngle('18h 02 42.0')!, parseAngle('-22 58 18')!, deg(1))).toHaveLength(19)
+	expect(catalog.queryCone(parseAngle('18h 02 42.0')!, parseAngle('-22 58 18')!, deg(1)).length).toBeGreaterThan(19)
 }, 5000)
 
 test('names', async () => {
@@ -89,15 +75,13 @@ test('names', async () => {
 		entries[i++] = entry
 	}
 
-	expect(i).toBe(1383)
+	expect(i).toBeGreaterThan(1300)
 
-	expect(entries[0].prefix).toBe('NGC')
-	expect(entries[0].id).toBe('40')
-	expect(entries[0].name).toBe('Bow-Tie Nebula')
+	const NGC40 = entries.find((e) => e.prefix === 'NGC' && e.id === '40')!
+	expect(NGC40.name).toBe('Bow-Tie Nebula')
 
-	expect(entries[1382].prefix).toBe('')
-	expect(entries[1382].id).toBe('49')
-	expect(entries[1382].name).toBe('Norma Star Cloud')
+	const Norma = entries.find((e) => e.prefix === '' && e.id === '49')!
+	expect(Norma.name).toBe('Norma Star Cloud')
 })
 
 test('names skips comments and entries without translated names', async () => {

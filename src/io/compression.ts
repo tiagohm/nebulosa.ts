@@ -322,7 +322,7 @@ export function decompressRice<T extends RiceCompressionTypedArray>(compressed: 
 	let b = compressed[offset++]
 	let nbits = 8
 
-	for (let i = 0; i < nx; ) {
+	for (let i = 0; i < nx;) {
 		nbits -= fsbits
 
 		while (nbits < 0) {

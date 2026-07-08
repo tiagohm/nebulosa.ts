@@ -534,7 +534,7 @@ export function eraEpv00(tdb1: number, tdb2: number): readonly [PositionAndVeloc
 		let coeffs = CE0[i]
 		let nterms = coeffs.length
 
-		for (let j = 0; j < nterms; ) {
+		for (let j = 0; j < nterms;) {
 			const a = coeffs[j++]
 			const b = coeffs[j++]
 			const c = coeffs[j++]
@@ -547,7 +547,7 @@ export function eraEpv00(tdb1: number, tdb2: number): readonly [PositionAndVeloc
 		coeffs = CE1[i]
 		nterms = coeffs.length
 
-		for (let j = 0; j < nterms; ) {
+		for (let j = 0; j < nterms;) {
 			const a = coeffs[j++]
 			const b = coeffs[j++]
 			const c = coeffs[j++]
@@ -562,7 +562,7 @@ export function eraEpv00(tdb1: number, tdb2: number): readonly [PositionAndVeloc
 		coeffs = CE2[i]
 		nterms = coeffs.length
 
-		for (let j = 0; j < nterms; ) {
+		for (let j = 0; j < nterms;) {
 			const a = coeffs[j++]
 			const b = coeffs[j++]
 			const c = coeffs[j++]
@@ -585,7 +585,7 @@ export function eraEpv00(tdb1: number, tdb2: number): readonly [PositionAndVeloc
 		coeffs = CS0[i]
 		nterms = coeffs.length
 
-		for (let j = 0; j < nterms; ) {
+		for (let j = 0; j < nterms;) {
 			const a = coeffs[j++]
 			const b = coeffs[j++]
 			const c = coeffs[j++]
@@ -598,7 +598,7 @@ export function eraEpv00(tdb1: number, tdb2: number): readonly [PositionAndVeloc
 		coeffs = CS1[i]
 		nterms = coeffs.length
 
-		for (let j = 0; j < nterms; ) {
+		for (let j = 0; j < nterms;) {
 			const a = coeffs[j++]
 			const b = coeffs[j++]
 			const c = coeffs[j++]
@@ -613,7 +613,7 @@ export function eraEpv00(tdb1: number, tdb2: number): readonly [PositionAndVeloc
 		coeffs = CS2[i]
 		nterms = coeffs.length
 
-		for (let j = 0; j < nterms; ) {
+		for (let j = 0; j < nterms;) {
 			const a = coeffs[j++]
 			const b = coeffs[j++]
 			const c = coeffs[j++]

@@ -697,7 +697,7 @@ export function findLocalMaximumTime(pbe: PolynomialBesselianElements, longitude
 	let bestJd: number | undefined
 	let bestMagnitude = -Infinity
 
-	for (let jd = fromJd; ; ) {
+	for (let jd = fromJd; ;) {
 		const magnitude = magnitudeAt(jd)
 		if (Number.isFinite(magnitude) && magnitude > bestMagnitude) {
 			bestMagnitude = magnitude
@@ -850,7 +850,7 @@ function findLocalContactValueRoots(fromJd: number, toJd: number, stepDays: numb
 	// Transversal roots are caught between adjacent samples. Grazing/sub-sample roots are recovered by
 	// refining each interior local minimum as soon as the triplet is available, without storing the whole
 	// sampled window.
-	for (let jd = Math.min(fromJd + effectiveStepDays, toJd); ; ) {
+	for (let jd = Math.min(fromJd + effectiveStepDays, toJd); ;) {
 		if (jd <= previousJd) jd = toJd
 		const value = evaluate(jd)
 
@@ -1088,7 +1088,7 @@ function extremeSunAltitudeOverInterval(pbe: PolynomialBesselianElements, longit
 	let best = -Infinity
 	let bestJd = fromJd
 
-	for (let jd = fromJd; ; ) {
+	for (let jd = fromJd; ;) {
 		const value = oriented(jd)
 		if (value > best) {
 			best = value

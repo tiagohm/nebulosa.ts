@@ -286,7 +286,7 @@ async function draw(file: Bun.BunFile, paths: SolarEclipseMapSvgPaths) {
 
 console.info('☀️  validating solar eclipses from %s-01-01 to %s-12-31', FROM_YEAR, TO_YEAR)
 
-for (let prevJd = -Infinity, prevLunation = -Infinity; ; ) {
+for (let prevJd = -Infinity, prevLunation = -Infinity; ;) {
 	const eclipse = nearestSolarEclipse(cursor, true)
 	const jd = toJulianDay(eclipse.maximalTime)
 
