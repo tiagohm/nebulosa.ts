@@ -8,6 +8,7 @@ import type { Image, ImageRawPrecision, ImageRawType } from '../model/types'
 import type { DetectedStar } from '../stars/detector'
 import type { SigmaClipCenterMethod, SigmaClipDispersionMethod } from './computation'
 import { type ImageInterpolationMode, type ImageRegistrationFailureReason, type ImageRegistrationSuccess, registerImage } from './registration'
+import { measureSubframeQuality, type SubframeQualityMetrics } from './subframe.selector'
 
 // Image stacking pipeline: registers a set of frames to a reference using star matching, normalizes
 // and weights them, then combines the aligned pixels with a selectable rejection method (average,
@@ -95,17 +96,7 @@ export interface StackingTransformSummary {
 }
 
 // Quality metrics estimated for one frame.
-export interface StackingFrameQualityMetrics {
-	readonly starCount: number
-	// Median signal-to-noise of the detected stars.
-	readonly medianSNR: number
-	// Median half-flux diameter (focus sharpness), pixels.
-	readonly medianHFD: number
-	// Combined quality score used for weighting/reference selection.
-	readonly qualityScore: number
-	// Estimated sky background level, 0..1.
-	readonly estimatedBackground: number
-}
+export type StackingFrameQualityMetrics = SubframeQualityMetrics
 
 // Per-channel normalization scales/offsets and the resulting frame weight.
 export interface FrameNormalizationSummary {
@@ -257,8 +248,6 @@ const DEFAULT_STACKING_OPTIONS: ResolvedStackingOptions = {
 
 // Small epsilon guarding divisions and degeneracy tests.
 const FLOAT_EPSILON = 1e-12
-// Maximum pixels sampled when estimating a frame's background level.
-const BACKGROUND_SAMPLE_LIMIT = 1024
 // Maximum pixels sampled when estimating normalization scale/offset.
 const NORMALIZATION_SAMPLE_LIMIT = 8192
 
@@ -386,7 +375,7 @@ export class LiveStacker {
 	// Adds a single frame to the live stack when the method supports exact incremental updates.
 	add(frame: StackingFrame): FrameAcceptanceResult {
 		const frameIndex = this.#diagnostics.length
-		const quality = computeFrameQuality(frame)
+		const quality = measureSubframeQuality(frame)
 
 		if (!isImageShapeValid(frame.image)) return this.#reject(frameIndex, frame, quality, 'invalid-image-shape')
 		if (!isLiveCombinationMethodSupported(this.#options.combinationMethod)) return this.#reject(frameIndex, frame, quality, 'combination-method-not-supported-in-live-mode')
@@ -487,7 +476,7 @@ export class LiveStacker {
 export function stackFrames(frames: readonly StackingFrame[], options: StackingOptions = {}): StackResult {
 	const resolved = resolveStackingOptions(options)
 	if (frames.length === 0) return emptyStackResult(resolved, -1, [])
-	const qualities = frames.map(computeFrameQuality)
+	const qualities = frames.map(measureSubframeQuality)
 	const referenceIndex = selectReferenceFrameIndex(frames, qualities, resolved)
 	const referenceFrame = frames[referenceIndex]
 
@@ -598,34 +587,6 @@ export function stackFrames(frames: readonly StackingFrame[], options: StackingO
 		coverageMap: resolved.keepPerPixelStatistics ? coverageMap : undefined,
 		validityMask: buildValidityMask(coverageMap, acceptedCount, resolved, referenceFrame.image.metadata.width, referenceFrame.image.metadata.height, cropBounds),
 	}
-}
-
-// Computes deterministic frame quality metrics from stars and coarse image background.
-function computeFrameQuality(frame: StackingFrame): StackingFrameQualityMetrics {
-	const starCount = frame.stars.length
-	const snr = new Float64Array(starCount)
-	const hfd = new Float64Array(starCount)
-
-	for (let i = 0; i < starCount; i++) {
-		snr[i] = frame.stars[i].snr
-		hfd[i] = frame.stars[i].hfd
-	}
-
-	snr.sort()
-	hfd.sort()
-
-	const medianSNR = starCount > 0 ? medianOf(snr) : 0
-	const medianHFD = starCount > 0 ? medianOf(hfd) : Infinity
-	const estimatedBackground = estimateImageBackground(frame.image)
-	const qualityScore = starCount > 0 ? clamp((Math.sqrt(starCount) * Math.max(medianSNR, 1)) / Math.max(medianHFD, 0.5), 0, 1e6) : 0
-
-	return { starCount, medianSNR, medianHFD, qualityScore, estimatedBackground }
-}
-
-// Estimates a coarse image background from a sparse raw sample.
-function estimateImageBackground(image: Image) {
-	const sample = sampleImageValues(image.raw, image.metadata.channels, image.metadata.width, image.metadata.height, BACKGROUND_SAMPLE_LIMIT, true)
-	return sample.length === 0 ? 0 : medianOf(sample.sort())
 }
 
 // Selects the reference frame according to the configured batch strategy.
