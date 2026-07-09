@@ -33,10 +33,22 @@ test('eraTaiUt1', () => {
 	expect(b).toBeCloseTo(0.8921045614537037037, 13)
 })
 
+test('eraTtUt1', () => {
+	const [a, b] = erfa.eraTtUt1(2453750.5, 0.892855139, 64.8499)
+	expect(a).toBe(2453750.5)
+	expect(b).toBeCloseTo(0.8921045614537037037, 13)
+})
+
 test('eraUt1Tai', () => {
 	const [a, b] = erfa.eraUt1Tai(2453750.5, 0.892104561, -32.6659)
 	expect(a).toBe(2453750.5)
 	expect(b).toBeCloseTo(0.8924826385462962963, 13)
+})
+
+test('eraUt1Tt', () => {
+	const [a, b] = erfa.eraUt1Tt(2453750.5, 0.892104561, 64.8499)
+	expect(a).toBe(2453750.5)
+	expect(b).toBeCloseTo(0.8928551385462962963, 13)
 })
 
 test('eraTaiUtc', () => {

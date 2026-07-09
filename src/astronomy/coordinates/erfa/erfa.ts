@@ -210,6 +210,13 @@ export function eraTtTcg(tt1: number, tt2: number, out?: NumberArray): NumberArr
 	return [tt1, tcg2]
 }
 
+// Terrestrial Time, TT, to Universal Time, UT1.
+export function eraTtUt1(tt1: number, tt2: number, dt: number, out?: NumberArray): NumberArray {
+	const dtd = dt / DAYSEC
+	if (out !== undefined) return fillDayAndFraction(out, tt1, tt2 - dtd)
+	return [tt1, tt2 - dtd]
+}
+
 // International Atomic Time, TAI, to Universal Time, UT1.
 export function eraTaiUt1(tai1: number, tai2: number, ut1MinusTai: number, out?: NumberArray): NumberArray {
 	if (out !== undefined) return fillDayAndFraction(out, tai1, tai2 + ut1MinusTai / DAYSEC)
@@ -220,6 +227,13 @@ export function eraTaiUt1(tai1: number, tai2: number, ut1MinusTai: number, out?:
 export function eraUt1Tai(ut11: number, ut12: number, ut1MinusTai: number, out?: NumberArray): NumberArray {
 	if (out !== undefined) return fillDayAndFraction(out, ut11, ut12 - ut1MinusTai / DAYSEC)
 	return [ut11, ut12 - ut1MinusTai / DAYSEC]
+}
+
+// Universal Time, UT1 to Terrestrial Time, TT.
+export function eraUt1Tt(tt1: number, tt2: number, dt: number, out?: NumberArray): NumberArray {
+	const dtd = dt / DAYSEC
+	if (out !== undefined) return fillDayAndFraction(out, tt1, tt2 + dtd)
+	return [tt1, tt2 + dtd]
 }
 
 // International Atomic Time, TAI, to Terrestrial Time, TT.
