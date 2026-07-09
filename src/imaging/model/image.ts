@@ -6,7 +6,7 @@ import { bitpixInBytes, cfaPatternKeyword, heightKeyword, isRiceCompressedImageH
 import { readXisf, writeXisf, type Xisf, type XisfImage, XisfImageReader, type XisfWriteFormat } from '../../io/formats/xisf/xisf'
 import { bufferSink, bufferSource, fileHandleSource, readRemaining, readUntil, type Seekable, type Sink, type Source } from '../../io/io'
 import { clamp } from '../../math/numerical/math'
-import { DEFAULT_WRITE_IMAGE_TO_FORMAT_OPTIONS, type Image, type ImageFormat, type ImageRawType, type WriteImageToFormatOptions } from './types'
+import { DEFAULT_WRITE_IMAGE_TO_FORMAT_OPTIONS, type Image, type ImageFormat, type ImageRawPrecision, type ImageRawType, type WriteImageToFormatOptions } from './types'
 
 // Image input/output for the imaging model: reads FITS, XISF, and JPEG sources (auto-detected) into a
 // normalized in-memory Image whose pixels are scaled into [0, 1], and writes an Image back out to
@@ -24,7 +24,7 @@ function findUncompressedImageHdu(hdu: FitsHdu) {
 }
 
 // Reads an image from a FITS file
-export async function readImageFromFits(fits: Fits | FitsHdu, source: Source & Seekable, raw: ImageRawType | 32 | 64 | 'auto' = 'auto') {
+export async function readImageFromFits(fits: Fits | FitsHdu, source: Source & Seekable, raw: ImageRawType | ImageRawPrecision = 'auto') {
 	const hdu = 'hdus' in fits ? (fits.hdus.find(findCompressedImageHdu) ?? fits.hdus.find(findUncompressedImageHdu) ?? fits.hdus[0]) : fits
 	const { header } = hdu
 
@@ -50,7 +50,7 @@ export async function readImageFromFits(fits: Fits | FitsHdu, source: Source & S
 }
 
 // Reads an image from a parsed XISF file or image into a normalized Image.
-export async function readImageFromXisf(xisf: Xisf | XisfImage, source: Source & Seekable, raw: ImageRawType | 32 | 64 | 'auto' = 'auto') {
+export async function readImageFromXisf(xisf: Xisf | XisfImage, source: Source & Seekable, raw: ImageRawType | ImageRawPrecision = 'auto') {
 	const image = 'images' in xisf ? xisf.images[0] : xisf
 	const { bitpix, geometry, header } = image
 	const { width, height, channels } = geometry
@@ -72,7 +72,7 @@ export async function readImageFromXisf(xisf: Xisf | XisfImage, source: Source &
 }
 
 // Decodes a JPEG buffer into a single-channel (luminance) normalized Image, or undefined if not JPEG.
-export function readImageFromJpeg(buffer: Buffer, raw: ImageRawType | 32 | 64 | 'auto' = 'auto', format?: PixelFormat): Image | undefined {
+export function readImageFromJpeg(buffer: Buffer, raw: ImageRawType | ImageRawPrecision = 'auto', format?: PixelFormat): Image | undefined {
 	if (!isJpeg(buffer)) return undefined
 
 	// The output is a single-channel image, so decode as luminance. Without this a color
@@ -95,7 +95,7 @@ export function readImageFromJpeg(buffer: Buffer, raw: ImageRawType | 32 | 64 | 
 }
 
 // Reads an image from a seekable source, auto-detecting FITS, then XISF, then JPEG.
-export async function readImageFromSource(source: Source & Seekable, raw: ImageRawType | 32 | 64 | 'auto' = 'auto') {
+export async function readImageFromSource(source: Source & Seekable, raw: ImageRawType | ImageRawPrecision = 'auto') {
 	const { position } = source
 
 	const fits = await readFits(source)
@@ -117,18 +117,18 @@ export async function readImageFromSource(source: Source & Seekable, raw: ImageR
 }
 
 // Reads an image from an in-memory buffer.
-export async function readImageFromBuffer(buffer: Buffer, raw: ImageRawType | 32 | 64 | 'auto' = 'auto') {
+export async function readImageFromBuffer(buffer: Buffer, raw: ImageRawType | ImageRawPrecision = 'auto') {
 	return await readImageFromSource(bufferSource(buffer), raw)
 }
 
 // Reads an image from an open file handle.
-export async function readImageFromFileHandle(handle: FileHandle, raw: ImageRawType | 32 | 64 | 'auto' = 'auto') {
+export async function readImageFromFileHandle(handle: FileHandle, raw: ImageRawType | ImageRawPrecision = 'auto') {
 	await using source = fileHandleSource(handle)
 	return await readImageFromSource(source, raw)
 }
 
 // Opens a file path and reads an image from it.
-export async function readImageFromPath(path: PathLike, raw: ImageRawType | 32 | 64 | 'auto' = 'auto') {
+export async function readImageFromPath(path: PathLike, raw: ImageRawType | ImageRawPrecision = 'auto') {
 	await using handle = await fs.open(path, 'r')
 	return await readImageFromFileHandle(handle, raw)
 }

@@ -28,6 +28,9 @@ export type ImageChannelOrGray = ImageChannel | GrayscaleAlgorithm | 'GRAY'
 // Backing typed array for raw pixel data (single or double precision).
 export type ImageRawType = Float64Array | Float32Array
 
+// Backing typed array precision for raw pixel data (single, double precision, or based on image raw type).
+export type ImageRawPrecision = 32 | 64 | 'auto'
+
 // Per-format options when serializing an image.
 export interface WriteImageToFormatOptions {
 	jpeg: {
