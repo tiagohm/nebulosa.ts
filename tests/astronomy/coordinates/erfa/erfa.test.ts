@@ -152,6 +152,14 @@ test('eraGst06', () => {
 	expect(erfa.eraGst06(2453736, 0.5, 2453736, 0.5, rnpb)).toBeCloseTo(1.754166138018167568, 13)
 })
 
+test('eraGmst82', () => {
+	expect(erfa.eraGmst82(2453736, 0.5)).toBeCloseTo(1.754174981860675096, 13)
+})
+
+test('eraGmst00', () => {
+	expect(erfa.eraGmst00(2453736, 0.5, 2453736, 0.5)).toBeCloseTo(1.75417497221074059, 13)
+})
+
 test('eraGmst06', () => {
 	expect(erfa.eraGmst06(2453736, 0.5, 2453736, 0.5)).toBeCloseTo(1.754174971870091203, 13)
 })
@@ -215,6 +223,10 @@ test('eraFasa03', () => {
 
 test('eraFaur03', () => {
 	expect(erfa.eraFaur03(0.8)).toBeCloseTo(5.180636450180413523, 13)
+})
+
+test('eraFane03', () => {
+	expect(erfa.eraFane03(0.8)).toBeCloseTo(2.079343830860413523, 13)
 })
 
 test('eraFalp03', () => {

@@ -98,6 +98,11 @@ export function hms(h: number, min: number = 0, sec: number = 0): Angle {
 	return neg ? -angle : angle
 }
 
+// Creates a new Angle from seconds of time.
+export function secondsOfTime(value: number): Angle {
+	return value * (PI / 43200)
+}
+
 // Converts the angle to degrees.
 export function toDeg(angle: Angle): number {
 	return angle * RAD2DEG

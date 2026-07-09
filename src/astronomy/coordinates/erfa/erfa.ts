@@ -2,7 +2,7 @@ import { ASEC2RAD, DAYSEC, DAYSPERJC, DAYSPERJM, DAYSPERJY, DAYSPERTY, ELB, ELG,
 import { type Mat3, type MutMat3, matClone, matCopy, matIdentity, matMul, matMulTranspose, matMulVec, matRotX, matRotY, matRotZ, matTransposeMulVec } from '../../../math/linear-algebra/mat3'
 import { type MutVec3, type Vec3, vecClone, vecCross, vecDivScalar, vecDot, vecFill, vecLength, vecMinus, vecMulScalar, vecNormalize, vecNormalizeMut, vecPlus } from '../../../math/linear-algebra/vec3'
 import { pmod, roundToNearestWholeNumber, type NumberArray } from '../../../math/numerical/math'
-import { type Angle, arcsec, deg, normalizeAngle } from '../../../math/units/angle'
+import { type Angle, arcsec, deg, normalizeAngle, secondsOfTime } from '../../../math/units/angle'
 import { type Distance, toKilometer } from '../../../math/units/distance'
 import type { Pressure } from '../../../math/units/pressure'
 import type { Temperature } from '../../../math/units/temperature'
@@ -571,6 +571,24 @@ export function eraGst06(ut11: number, ut12: number, tt1: number, tt2: number, r
 	return normalizeAngle(era - eors)
 }
 
+// Universal Time to Greenwich mean sidereal time (IAU 1982 model).
+export function eraGmst82(ut11: number, ut12: number): Angle {
+	// TT Julian centuries since J2000.0.
+	const t = (ut11 - J2000 + ut12) / DAYSPERJC
+	// Fractional part of JD(UT1), in seconds
+	const f = ((ut11 % 1) + (ut12 % 1)) * DAYSEC
+
+	return normalizeAngle(secondsOfTime(24110.54841 - DAYSEC / 2 + (8640184.812866 + (0.093104 + -6.2e-6 * t) * t) * t + f))
+}
+
+// Greenwich mean sidereal time (model consistent with IAU 2000 resolutions).
+export function eraGmst00(ut11: number, ut12: number, tt1: number, tt2: number): Angle {
+	// TT Julian centuries since J2000.0.
+	const t = (tt1 - J2000 + tt2) / DAYSPERJC
+
+	return normalizeAngle(eraEra00(ut11, ut12) + arcsec(0.014506 + (4612.15739966 + (1.39667721 + (-0.00009344 + 0.00001882 * t) * t) * t) * t))
+}
+
 // Greenwich mean sidereal time (model consistent with IAU 2006 precession).
 export function eraGmst06(ut11: number, ut12: number, tt1: number, tt2: number): Angle {
 	// TT Julian centuries since J2000.0.
@@ -749,6 +767,11 @@ export function eraFasa03(t: number): Angle {
 // Fundamental argument, IERS Conventions (2003): mean longitude of Uranus.
 export function eraFaur03(t: number): Angle {
 	return (5.481293872 + 7.4781598567 * t) % TAU
+}
+
+// Fundamental argument, IERS Conventions (2003): mean longitude of Neptune.
+export function eraFane03(t: number): Angle {
+	return (5.311886287 + 3.8133035638 * t) % TAU
 }
 
 // Nutation, IAU 2000A model (MHB2000 luni-solar and planetary nutation
