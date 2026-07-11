@@ -396,7 +396,7 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		expect(header.TELESCOP).toBe('Mount Simulator')
 		expect(header.SITELAT).toBeCloseTo(-22, 6)
 		expect(header.SITELONG).toBeCloseTo(-45, 6)
-		expect(header.RA).toBeCloseTo(329.53, 2)
+		expect(header.RA).toBeCloseTo(329.52, 2)
 		expect(header.DEC).toBeCloseTo(-60.125, 2)
 		expect(header.OBJCTRA).toBe(formatRA(deg(header.RA as number)))
 		expect(header.OBJCTDEC).toBe(formatDEC(deg(header.DEC as number)))

@@ -296,6 +296,20 @@ test('composes per-star covariance with the global PSF', () => {
 	expect(verticalY).toBeGreaterThan(verticalX * 2)
 })
 
+test('scales base HFD and seeing independently along each binned axis', () => {
+	const size = 128
+	const unbinned = new Float64Array(size * size)
+	const binnedX = new Float64Array(size * size)
+
+	expect(plotStar(unbinned, size, size, 1, 64, 64, 0.5, 8, 100, 4, undefined, { maxPlotRadius: 50 })).toBe(true)
+	expect(plotStar(binnedX, size, size, 1, 64, 64, 0.5, 8, 100, 4, undefined, { maxPlotRadius: 50 }, { scaleX: 0.5, scaleY: 1 })).toBe(true)
+	const [unbinnedX, unbinnedY] = monoSecondMoments(unbinned, size, size, 64, 64)
+	const [scaledX, scaledY] = monoSecondMoments(binnedX, size, size, 64, 64)
+
+	expect(scaledX / unbinnedX).toBeCloseTo(0.25, 1)
+	expect(scaledY / unbinnedY).toBeCloseTo(1, 1)
+})
+
 test('preserves flux and centroid when adding a coma tail', () => {
 	const circular = new Float64Array(96 * 96)
 	const comatic = new Float64Array(96 * 96)

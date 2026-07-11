@@ -2619,7 +2619,6 @@ export class CameraSimulator extends DeviceSimulator {
 		const frameHeight = this.#frame.elements.HEIGHT.value
 		const binX = this.#bin.elements.HOR_BIN.value
 		const binY = this.#bin.elements.VER_BIN.value
-		const hfdScale = (binX + binY) * 0.5
 		const gainFactor = 1 + this.#gain.elements.GAIN.value / 100
 		const exposureScale = exposureTime / this.#noiseExposure.elements.EXPOSURE_TIME.value
 		const projected: AstronomicalImageStar[] = []
@@ -2655,9 +2654,11 @@ export class CameraSimulator extends DeviceSimulator {
 				x: (sensorX - frameX) / binX,
 				y: (sensorY - frameY) / binY,
 				flux: star.flux * gainFactor * exposureScale,
-				hfd: Math.max(0.35, star.hfd / hfdScale),
+				hfd: star.hfd,
 				snr: star.snr * Math.sqrt(Math.max(exposureScale, 0.01)),
 				colorIndex: star.colorIndex,
+				scaleX: 1 / binX,
+				scaleY: 1 / binY,
 				defocus: aberration.focusEnabled ? aberrationResult.defocus : undefined,
 				covarianceXX: aberration.enabled ? aberrationResult.covarianceXX / (binX * binX) : undefined,
 				covarianceXY: aberration.enabled ? aberrationResult.covarianceXY / (binX * binY) : undefined,
@@ -2714,8 +2715,8 @@ export class CameraSimulator extends DeviceSimulator {
 	#mapCatalogCatalogStarsToAstronomicalImageStars(stars: readonly CatalogSourceStar[], centerRightAscension: Angle, centerDeclination: Angle, pixelScale: Angle): readonly (AstronomicalImageStar | undefined)[] {
 		const sensorWidth = this.sensorWidth
 		const sensorHeight = this.sensorHeight
-		const halfWidth = sensorWidth * 0.5
-		const halfHeight = sensorHeight * 0.5
+		const halfWidth = (sensorWidth - 1) * 0.5
+		const halfHeight = (sensorHeight - 1) * 0.5
 		const point: Point = { x: 0, y: 0 }
 		const projection = new Gnomonic(centerRightAscension, centerDeclination)
 
@@ -2753,13 +2754,15 @@ export class CameraSimulator extends DeviceSimulator {
 		const minFlux = this.#scene.elements.FLUX_MIN.value
 		const maxFlux = Math.max(minFlux, this.#scene.elements.FLUX_MAX.value)
 		const stars = new Array<AstronomicalImageStar>(count)
+		const maxWidth = Math.max(0, width - 1)
+		const maxHeight = Math.max(0, height - 1)
 
 		for (let i = 0; i < count; i++) {
 			const brightness = 1 - random()
 
 			stars[i] = {
-				x: random() * width,
-				y: random() * height,
+				x: random() * maxWidth,
+				y: random() * maxHeight,
 				flux: minFlux + (maxFlux - minFlux) * brightness ** 6,
 				hfd: minHfd + (maxHfd - minHfd) * random(),
 				snr: 12 + brightness * 180,
@@ -2859,9 +2862,9 @@ export class CameraSimulator extends DeviceSimulator {
 		return Math.max(1, Math.ceil(this.#frame.elements.HEIGHT.value / this.#bin.elements.VER_BIN.value))
 	}
 
-	// Returns the scene seeing term used by generateStarImage.
+	// Returns the scene seeing in unbinned pixels; each projected star supplies its X/Y bin scale.
 	get seeing() {
-		return this.#scene.elements.SEEING.value / ((this.#bin.elements.HOR_BIN.value + this.#bin.elements.VER_BIN.value) * 0.5)
+		return this.#scene.elements.SEEING.value
 	}
 
 	// Returns the selected readout-mode descriptor.

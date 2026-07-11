@@ -57,6 +57,10 @@ export interface PlotStarOptions {
 
 // Per-star PSF changes already expressed in the output image coordinate system.
 export interface StarPsfModifiers {
+	// X scale applied to the complete base PSF before additive covariance, normally 1/binX.
+	readonly scaleX?: number
+	// Y scale applied to the complete base PSF before additive covariance, normally 1/binY.
+	readonly scaleY?: number
 	// Overrides the global normalized defocus amount for this star, clamped to 0..1.
 	readonly defocus?: number
 	// Additive Gaussian covariance xx component, in output pixel squared.
@@ -197,21 +201,23 @@ export function plotStar(raw: ImageRawType, width: number, height: number, chann
 	const baseMajorSigma = sigma / globalAxisRatioSqrt
 	const baseMinorSigma = sigma * globalAxisRatioSqrt
 	const globalTheta = sanitizeSigned(options.theta, 0)
+	const scaleX = sanitizePositive(modifiers?.scaleX, 1)
+	const scaleY = sanitizePositive(modifiers?.scaleY, 1)
 	const localCovarianceXX = sanitizePositive(modifiers?.covarianceXX, 0)
 	const localCovarianceXY = sanitizeSigned(modifiers?.covarianceXY, 0)
 	const localCovarianceYY = sanitizePositive(modifiers?.covarianceYY, 0)
-	let majorSigma = baseMajorSigma
-	let minorSigma = baseMinorSigma
+	let majorSigma = baseMajorSigma * scaleX
+	let minorSigma = baseMinorSigma * scaleY
 	let theta = globalEllipticity > FAST_PATH_ELLIPTICITY_EPSILON ? globalTheta : 0
 
-	if (localCovarianceXX > 0 || Math.abs(localCovarianceXY) > Number.EPSILON || localCovarianceYY > 0) {
+	if (Math.abs(scaleX - scaleY) > Number.EPSILON || localCovarianceXX > 0 || Math.abs(localCovarianceXY) > Number.EPSILON || localCovarianceYY > 0) {
 		const cosGlobalTheta = Math.cos(globalTheta)
 		const sinGlobalTheta = Math.sin(globalTheta)
 		const baseMajorVariance = baseMajorSigma * baseMajorSigma
 		const baseMinorVariance = baseMinorSigma * baseMinorSigma
-		const covarianceXX = baseMajorVariance * cosGlobalTheta * cosGlobalTheta + baseMinorVariance * sinGlobalTheta * sinGlobalTheta + localCovarianceXX
-		const covarianceXY = (baseMajorVariance - baseMinorVariance) * cosGlobalTheta * sinGlobalTheta + localCovarianceXY
-		const covarianceYY = baseMajorVariance * sinGlobalTheta * sinGlobalTheta + baseMinorVariance * cosGlobalTheta * cosGlobalTheta + localCovarianceYY
+		const covarianceXX = (baseMajorVariance * cosGlobalTheta * cosGlobalTheta + baseMinorVariance * sinGlobalTheta * sinGlobalTheta) * scaleX * scaleX + localCovarianceXX
+		const covarianceXY = (baseMajorVariance - baseMinorVariance) * cosGlobalTheta * sinGlobalTheta * scaleX * scaleY + localCovarianceXY
+		const covarianceYY = (baseMajorVariance * sinGlobalTheta * sinGlobalTheta + baseMinorVariance * cosGlobalTheta * cosGlobalTheta) * scaleY * scaleY + localCovarianceYY
 		const halfDifference = (covarianceXX - covarianceYY) * 0.5
 		const discriminant = Math.hypot(halfDifference, covarianceXY)
 		const halfTrace = Math.max(MIN_SIGMA * MIN_SIGMA, (covarianceXX + covarianceYY) * 0.5)
