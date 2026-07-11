@@ -312,9 +312,16 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		expect(cameraManager.properties.get(camera)?.SIMULATOR_NOISE_EXPOSURE).toBeDefined()
 		expect(cameraManager.properties.get(camera)?.SIMULATOR_CATALOG_SOURCE).toBeDefined()
 		expect(cameraManager.properties.get(camera)?.SIMULATOR_STAR_PLOT_OPTIONS).toBeDefined()
+		expect(cameraManager.properties.get(camera)?.SIMULATOR_ABERRATION_FEATURES).toBeDefined()
+		expect(cameraManager.properties.get(camera)?.SIMULATOR_ABERRATION_FOCUS).toBeDefined()
+		expect(cameraManager.properties.get(camera)?.SIMULATOR_ABERRATION_SHAPE).toBeDefined()
 
 		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_STAR_PLOT_FLAGS', elements: { GAMMA_ENABLED: true } })
 		await waitUntil(() => cameraManager.properties.get(camera)?.SIMULATOR_STAR_PLOT_FLAGS?.elements.GAMMA_ENABLED.value === true)
+		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_ABERRATION_FEATURES', elements: { SENSOR_TILT: true } })
+		client.sendNumber({ device: camera.name, name: 'SIMULATOR_ABERRATION_FOCUS', elements: { TILT: 200, TILT_ANGLE: 0 } })
+		await waitUntil(() => cameraManager.properties.get(camera)?.SIMULATOR_ABERRATION_FEATURES?.elements.SENSOR_TILT.value === true)
+		await waitUntil(() => cameraManager.properties.get(camera)?.SIMULATOR_ABERRATION_FOCUS?.elements.TILT.value === 200)
 
 		cameraManager.frame(camera, 32, 16, 160, 120)
 		await waitUntil(() => camera.frame.x.value === 32 && camera.frame.y.value === 16 && camera.frame.width.value === 160 && camera.frame.height.value === 120)
@@ -401,7 +408,7 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		expect(mountManager.has(client, mount.name)).toBeFalse()
 	}, 5000)
 
-	test('rotates rendered stars around the image center using the snooped rotator angle', async () => {
+	test('rotates on the full sensor before extracting a subframe', async () => {
 		const handler = new IndiClientHandlerSet()
 		const cameraManager = new CameraManager()
 		const rotatorManager = new RotatorManager()
@@ -438,34 +445,26 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		cameraManager.startExposure(camera, 0.1)
 		await waitUntil(() => frameReceiver.length > 0, 5000, 50)
 		const fullFrameImage = await readImageFromBuffer(frameReceiver.lastFrame)
-		const [fullFrameX, fullFrameY] = brightestPixel(fullFrameImage!.raw, fullFrameImage!.metadata.width, fullFrameImage!.metadata.channels)
-		const frameX = Math.max(0, Math.min(fullFrameImage!.metadata.width - 64, fullFrameX - 48))
-		const frameY = Math.max(0, Math.min(fullFrameImage!.metadata.height - 64, fullFrameY - 20))
-
-		cameraManager.frame(camera, frameX, frameY, 64, 64)
-		await waitUntil(() => camera.frame.x.value === frameX && camera.frame.y.value === frameY && camera.frame.width.value === 64 && camera.frame.height.value === 64)
-
-		cameraManager.startExposure(camera, 0.1)
-		await waitUntil(() => frameReceiver.length > 1, 5000, 50)
-		const unrotatedImage = await readImageFromBuffer(frameReceiver.lastFrame)
-		const [unrotatedX, unrotatedY] = brightestPixel(unrotatedImage!.raw, unrotatedImage!.metadata.width, unrotatedImage!.metadata.channels)
-		const centerX = (unrotatedImage!.metadata.width - 1) * 0.5
-		const centerY = (unrotatedImage!.metadata.height - 1) * 0.5
-
-		expect(Math.hypot(unrotatedX - centerX, unrotatedY - centerY)).toBeGreaterThan(12)
 
 		rotatorManager.syncTo(rotator, 90)
 		await waitUntil(() => Math.abs(rotator.angle.value - 90) < 1e-9)
 
 		cameraManager.startExposure(camera, 0.1)
-		await waitUntil(() => frameReceiver.length > 2, 5000, 50)
-		const rotatedImage = await readImageFromBuffer(frameReceiver.lastFrame)
-		const [rotatedX, rotatedY] = brightestPixel(rotatedImage!.raw, rotatedImage!.metadata.width, rotatedImage!.metadata.channels)
-		const expectedX = centerX - (unrotatedY - centerY)
-		const expectedY = centerY + (unrotatedX - centerX)
+		await waitUntil(() => frameReceiver.length > 1, 5000, 50)
+		const rotatedFullFrame = await readImageFromBuffer(frameReceiver.lastFrame)
+		const [rotatedFullX, rotatedFullY] = brightestPixel(rotatedFullFrame!.raw, rotatedFullFrame!.metadata.width, rotatedFullFrame!.metadata.channels)
+		const frameX = Math.max(0, Math.min(fullFrameImage!.metadata.width - 64, rotatedFullX - 32))
+		const frameY = Math.max(0, Math.min(fullFrameImage!.metadata.height - 64, rotatedFullY - 32))
 
-		expect(Math.abs(rotatedX - expectedX)).toBeLessThanOrEqual(2)
-		expect(Math.abs(rotatedY - expectedY)).toBeLessThanOrEqual(2)
+		cameraManager.frame(camera, frameX, frameY, 64, 64)
+		await waitUntil(() => camera.frame.x.value === frameX && camera.frame.y.value === frameY && camera.frame.width.value === 64 && camera.frame.height.value === 64)
+		cameraManager.startExposure(camera, 0.1)
+		await waitUntil(() => frameReceiver.length > 2, 5000, 50)
+		const rotatedSubframe = await readImageFromBuffer(frameReceiver.lastFrame)
+		const [subframeX, subframeY] = brightestPixel(rotatedSubframe!.raw, rotatedSubframe!.metadata.width, rotatedSubframe!.metadata.channels)
+
+		expect(Math.abs(subframeX - (rotatedFullX - frameX))).toBeLessThanOrEqual(2)
+		expect(Math.abs(subframeY - (rotatedFullY - frameY))).toBeLessThanOrEqual(2)
 
 		cameraSimulator.dispose()
 		rotatorSimulator.dispose()

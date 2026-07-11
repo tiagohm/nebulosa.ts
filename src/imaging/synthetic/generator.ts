@@ -4,7 +4,7 @@ import { clamp } from '../../math/numerical/math'
 import { mulberry32, type Random } from '../../math/numerical/random'
 import type { ImageRawType } from '../model/types'
 import type { DetectedStar } from '../stars/detector'
-import { type PlotStarOptions, plotStar } from '../stars/generator'
+import { type PlotStarOptions, plotStar, type StarPsfModifiers } from '../stars/generator'
 
 // Physically motivated synthetic astronomical-image generator: renders stars and then injects a full
 // noise/signal chain — sky background and gradients, moonlight, light pollution, atmospheric effects,
@@ -175,8 +175,8 @@ export interface AstronomicalImageNoiseResult {
 	readonly stats: AstronomicalImageNoiseStats
 }
 
-// A star to render, with an optional B-V color index.
-export interface AstronomicalImageStar extends DetectedStar {
+// A star to render, with optional color and per-star PSF changes.
+export interface AstronomicalImageStar extends DetectedStar, StarPsfModifiers {
 	readonly colorIndex?: number
 }
 
@@ -511,7 +511,7 @@ export function generateNoiseImage(raw: ImageRawType, width: number, height: num
 export function generateStarImage(raw: ImageRawType, width: number, height: number, channels: 1 | 3, stars: readonly AstronomicalImageStar[], seeing: number, noiseConfig?: AstronomicalImageNoiseConfig, plotOptions: PlotStarOptions = {}) {
 	for (let i = 0; i < stars.length; i++) {
 		const star = stars[i]
-		plotStar(raw, width, height, channels, star.x, star.y, star.flux, star.hfd, star.snr, seeing, star.colorIndex, plotOptions)
+		plotStar(raw, width, height, channels, star.x, star.y, star.flux, star.hfd, star.snr, seeing, star.colorIndex, plotOptions, star)
 	}
 
 	return generateNoiseImage(raw, width, height, channels, noiseConfig)

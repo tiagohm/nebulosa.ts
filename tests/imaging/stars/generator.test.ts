@@ -283,6 +283,34 @@ test('supports ellipticity and halo shaping', () => {
 	expect(ringEnergy(withHalo, WIDTH, HEIGHT, 24, 24, 5)).toBeGreaterThan(ringEnergy(noHalo, WIDTH, HEIGHT, 24, 24, 5))
 })
 
+test('composes per-star covariance with the global PSF', () => {
+	const horizontal = new Float64Array(WIDTH * HEIGHT)
+	const vertical = new Float64Array(WIDTH * HEIGHT)
+
+	expect(plotStar(horizontal, WIDTH, HEIGHT, 1, 24, 24, 0.3, 3, 24, 0, undefined, {}, { covarianceXX: 4 })).toBe(true)
+	expect(plotStar(vertical, WIDTH, HEIGHT, 1, 24, 24, 0.3, 3, 24, 0, undefined, {}, { covarianceYY: 4 })).toBe(true)
+	const [horizontalX, horizontalY] = monoSecondMoments(horizontal, WIDTH, HEIGHT, 24, 24)
+	const [verticalX, verticalY] = monoSecondMoments(vertical, WIDTH, HEIGHT, 24, 24)
+
+	expect(horizontalX).toBeGreaterThan(horizontalY * 2)
+	expect(verticalY).toBeGreaterThan(verticalX * 2)
+})
+
+test('preserves flux and centroid when adding a coma tail', () => {
+	const circular = new Float64Array(96 * 96)
+	const comatic = new Float64Array(96 * 96)
+	const x = 47.25
+	const y = 48.4
+
+	expect(plotStar(circular, 96, 96, 1, x, y, 0.5, 3.2, 24, 0, undefined, { maxPlotRadius: 40 })).toBe(true)
+	expect(plotStar(comatic, 96, 96, 1, x, y, 0.5, 3.2, 24, 0, undefined, { maxPlotRadius: 40 }, { coma: 0.8, comaTheta: 0 })).toBe(true)
+	const [centroidX, centroidY] = monoCentroid(comatic, 96, 96)
+
+	expect(monoSum(comatic)).toBeCloseTo(monoSum(circular), 8)
+	expect(centroidX).toBeCloseTo(x, 2)
+	expect(centroidY).toBeCloseTo(y, 2)
+})
+
 test('supports the optional moffat profile with broader wings', () => {
 	const gaussian = new Float64Array(WIDTH * HEIGHT)
 	const moffat = new Float64Array(WIDTH * HEIGHT)

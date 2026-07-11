@@ -8,6 +8,7 @@ import { ASEC2RAD, DAYSEC, DEG2RAD, MOON_SIDEREAL_DAYS, PIOVERTWO, SIDEREAL_DAYS
 import { writeImageToFits, writeImageToXisf } from '../../imaging/model/image'
 import type { CfaPattern, Image, ImageRawType } from '../../imaging/model/types'
 import type { PlotStarOptions } from '../../imaging/stars/generator'
+import { evaluateSyntheticAberration, type ResolvedSyntheticAberration, resolveSyntheticAberration, type SyntheticAberrationConfig, type SyntheticStarAberration } from '../../imaging/synthetic/aberration'
 import { type AstronomicalImageNoiseConfig, type AstronomicalImageStar, DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG, generateNoiseImage, generateStarImage } from '../../imaging/synthetic/generator'
 import type { FitsHeader } from '../../io/formats/fits/fits'
 import { bufferSink } from '../../io/io'
@@ -1838,6 +1839,12 @@ export class CameraSimulator extends DeviceSimulator {
 	readonly #plotOptions = makeNumberVector('', 'SIMULATOR_STAR_PLOT_OPTIONS', 'Star Plot', SIMULATION, 'rw', ['BACKGROUND', 'Background', 0, 0, 10, 0.001, '%.4f'], ['SATURATION_LEVEL', 'Saturation Level', 1, 0, 10, 0.01, '%.3f'], ['FOCUS_STEP', 'Focus Step', 50000, 0, 100000, 1, '%.0f'], ['BEST_FOCUS', 'Best Focus', 50000, 0, 100000, 1, '%.0f'], ['PEAK_SCALE', 'Peak Scale', 1, 0.01, 20, 0.01, '%.3f'], ['ELLIPTICITY', 'Ellipticity', 0, 0, 0.8, 0.01, '%.3f'], ['THETA', 'Theta', 0, -TAU, TAU, 0.01, '%.3f'], ['SOFT_CORE', 'Soft Core', 0, 0, 10, 0.01, '%.3f'], ['BETA', 'Beta', 2.5, 1.05, 20, 0.01, '%.3f'], ['HALO_STRENGTH', 'Halo Strength', 0, 0, 5, 0.01, '%.3f'], ['HALO_SCALE', 'Halo Scale', 2.8, 1.1, 20, 0.01, '%.3f'], ['JITTER_X', 'Jitter X', 0, -5, 5, 0.01, '%.3f'], ['JITTER_Y', 'Jitter Y', 0, -5, 5, 0.01, '%.3f'], ['GAIN', 'Plot Gain', 1, 0.01, 20, 0.01, '%.3f'], ['GAMMA_COMPENSATION', 'Gamma Compensation', 2.2, 0.1, 10, 0.01, '%.3f'], ['ADDITIVE_NOISE_HINT', 'Additive Noise Hint', 0, 0, 20, 0.01, '%.3f'], ['MIN_PLOT_RADIUS', 'Min Radius', 2, 0, 50, 1, '%.0f'], ['MAX_PLOT_RADIUS', 'Max Radius', 24, 0, 100, 1, '%.0f'], ['CUTOFF_SIGMA', 'Cutoff Sigma', 4.25, 2.5, 10, 0.01, '%.3f'])
 	readonly #plotFlags = makeSwitchVector('', 'SIMULATOR_STAR_PLOT_FLAGS', 'Star Plot Flags', SIMULATION, 'AnyOfMany', 'rw', ['SATURATION_ENABLED', 'Saturation', false], ['GAMMA_ENABLED', 'Gamma', false])
 	readonly #plotPsfModel = makeSwitchVector('', 'SIMULATOR_STAR_PLOT_PSF_MODEL', 'Star PSF Model', SIMULATION, 'OneOfMany', 'rw', ['GAUSSIAN', 'Gaussian', true], ['MOFFAT', 'Moffat', false])
+	// oxfmt-ignore
+	readonly #aberrationFeatures = makeSwitchVector('', 'SIMULATOR_ABERRATION_FEATURES', 'Aberration Features', SIMULATION, 'AnyOfMany', 'rw', ['SENSOR_TILT', 'Sensor Tilt', false], ['BACKFOCUS', 'Backfocus', false], ['FIELD_CURVATURE', 'Field Curvature', false], ['COMA', 'Coma', false], ['ASTIGMATISM', 'Astigmatism', false], ['DECENTER', 'Decenter', false], ['COLLIMATION', 'Collimation', false])
+	// oxfmt-ignore
+	readonly #aberrationFocus = makeNumberVector('', 'SIMULATOR_ABERRATION_FOCUS', 'Aberration Focus', SIMULATION, 'rw', ['FOCUS_RANGE', 'Focus Range (steps)', 2000, 1, 100000, 10, '%.0f'], ['TILT', 'Sensor Tilt (steps)', 0, -50000, 50000, 10, '%.0f'], ['TILT_ANGLE', 'Tilt Angle (rad)', 0, -TAU, TAU, 0.01, '%.3f'], ['CURVATURE', 'Field Curvature (steps)', 0, -50000, 50000, 10, '%.0f'])
+	// oxfmt-ignore
+	readonly #aberrationShape = makeNumberVector('', 'SIMULATOR_ABERRATION_SHAPE', 'Aberration Shape', SIMULATION, 'rw', ['BACKFOCUS', 'Backfocus', 0, -1, 1, 0.01, '%.3f'], ['BACKFOCUS_BLUR', 'Backfocus Blur (px)', 4, 0, 100, 0.1, '%.2f'], ['BACKFOCUS_ELLIPTICITY', 'Backfocus Ellipticity', 0.35, 0, 0.8, 0.01, '%.3f'], ['COMA', 'Coma', 0, 0, 1, 0.01, '%.3f'], ['ASTIGMATISM', 'Astigmatism', 0, -0.8, 0.8, 0.01, '%.3f'], ['ASTIGMATISM_BLUR', 'Astigmatism Blur (px)', 4, 0, 100, 0.1, '%.2f'], ['ASTIGMATISM_ANGLE', 'Astigmatism Angle (rad)', 0, -TAU, TAU, 0.01, '%.3f'], ['DECENTER_X', 'Decenter X', 0, -0.5, 0.5, 0.01, '%.3f'], ['DECENTER_Y', 'Decenter Y', 0, -0.5, 0.5, 0.01, '%.3f'], ['COLLIMATION', 'Collimation', 0, 0, 1, 0.01, '%.3f'], ['COLLIMATION_ANGLE', 'Collimation Angle (rad)', 0, -TAU, TAU, 0.01, '%.3f'])
 	readonly #telescopeInfo = makeNumberVector('', 'TELESCOPE_INFO', 'Telescope Info', SIMULATION, 'rw', ['FOCAL_LENGTH', 'Focal Length (mm)', 500, 1, 10000, 1, '%.0f'], ['APERTURE', 'Aperture (mm)', 80, 1, 3000, 1, '%.0f'])
 	readonly #telescopeEffects = makeNumberVector(
 		'',
@@ -1889,6 +1896,9 @@ export class CameraSimulator extends DeviceSimulator {
 		this.#plotOptions,
 		this.#plotFlags,
 		this.#plotPsfModel,
+		this.#aberrationFeatures,
+		this.#aberrationFocus,
+		this.#aberrationShape,
 		this.#telescopeInfo,
 		this.#telescopeEffects,
 	]
@@ -2062,6 +2072,12 @@ export class CameraSimulator extends DeviceSimulator {
 			case 'SIMULATOR_STAR_PLOT_OPTIONS':
 				if (applyNumberVectorValues(this.#plotOptions, vector.elements)) this.notify(this.#plotOptions)
 				return
+			case 'SIMULATOR_ABERRATION_FOCUS':
+				if (applyNumberVectorValues(this.#aberrationFocus, vector.elements)) this.notify(this.#aberrationFocus)
+				return
+			case 'SIMULATOR_ABERRATION_SHAPE':
+				if (applyNumberVectorValues(this.#aberrationShape, vector.elements)) this.notify(this.#aberrationShape)
+				return
 			case 'TELESCOPE_INFO':
 				if (applyNumberVectorValues(this.#telescopeInfo, vector.elements)) this.notify(this.#telescopeInfo)
 				return
@@ -2115,6 +2131,9 @@ export class CameraSimulator extends DeviceSimulator {
 				return
 			case 'SIMULATOR_STAR_PLOT_FLAGS':
 				if (applyMultiSwitchValues(this.#plotFlags, vector.elements)) this.notify(this.#plotFlags)
+				return
+			case 'SIMULATOR_ABERRATION_FEATURES':
+				if (applyMultiSwitchValues(this.#aberrationFeatures, vector.elements)) this.notify(this.#aberrationFeatures)
 				return
 			case 'SIMULATOR_STAR_PLOT_PSF_MODEL':
 				if (applyExclusiveSwitchValues(this.#plotPsfModel, vector.elements)) this.notify(this.#plotPsfModel)
@@ -2343,7 +2362,7 @@ export class CameraSimulator extends DeviceSimulator {
 		const rotatorAngle = (this.activeRotator?.angle.value ?? 0) * DEG2RAD
 
 		if (frameType === 'LIGHT') {
-			const stars = await this.#collectFrameStars(exposureTime, width, height, rotatorAngle)
+			const stars = await this.#collectFrameStars(exposureTime, rotatorAngle)
 			generateStarImage(raw, width, height, channels, stars, this.seeing, noiseConfig, this.#makePlotOptions())
 		} else {
 			if (frameType === 'FLAT') fillFlatField(raw, width, height, channels, exposureTime, this.#noiseExposure.elements.EXPOSURE_TIME.value)
@@ -2549,7 +2568,7 @@ export class CameraSimulator extends DeviceSimulator {
 			haloScale: this.#plotOptions.elements.HALO_SCALE.value,
 			jitterX: this.#plotOptions.elements.JITTER_X.value,
 			jitterY: this.#plotOptions.elements.JITTER_Y.value,
-			gain: this.#plotOptions.elements.GAIN.value * (1 + this.#gain.elements.GAIN.value / 100),
+			gain: this.#plotOptions.elements.GAIN.value,
 			gammaCompensation: this.#plotFlags.elements.GAMMA_ENABLED.value ? this.#plotOptions.elements.GAMMA_COMPENSATION.value : false,
 			additiveNoiseHint: this.#plotOptions.elements.ADDITIVE_NOISE_HINT.value,
 			minPlotRadius: this.#plotOptions.elements.MIN_PLOT_RADIUS.value,
@@ -2558,8 +2577,41 @@ export class CameraSimulator extends DeviceSimulator {
 		}
 	}
 
-	// Projects the master catalog into the current subframe and binning.
-	async #collectFrameStars(exposureTime: number, imageWidth: number, imageHeight: number, rotatorAngle: number) {
+	// Resolves INDI aberration properties and caches trigonometry for the current frame.
+	#makeAberrationConfig(): ResolvedSyntheticAberration {
+		const features = this.#aberrationFeatures.elements
+		const focus = this.#aberrationFocus.elements
+		const shape = this.#aberrationShape.elements
+		const config: SyntheticAberrationConfig = {
+			enabled: features.SENSOR_TILT.value || features.BACKFOCUS.value || features.FIELD_CURVATURE.value || features.COMA.value || features.ASTIGMATISM.value || features.DECENTER.value || features.COLLIMATION.value,
+			sensorTiltEnabled: features.SENSOR_TILT.value,
+			fieldCurvatureEnabled: features.FIELD_CURVATURE.value,
+			backfocusEnabled: features.BACKFOCUS.value,
+			comaEnabled: features.COMA.value,
+			astigmatismEnabled: features.ASTIGMATISM.value,
+			decenterEnabled: features.DECENTER.value,
+			collimationEnabled: features.COLLIMATION.value,
+			decenterX: shape.DECENTER_X.value,
+			decenterY: shape.DECENTER_Y.value,
+			focusRange: focus.FOCUS_RANGE.value,
+			tilt: focus.TILT.value,
+			tiltAngle: focus.TILT_ANGLE.value,
+			curvature: focus.CURVATURE.value,
+			backfocus: shape.BACKFOCUS.value,
+			backfocusBlur: shape.BACKFOCUS_BLUR.value,
+			backfocusEllipticity: shape.BACKFOCUS_ELLIPTICITY.value,
+			coma: shape.COMA.value,
+			astigmatism: shape.ASTIGMATISM.value,
+			astigmatismBlur: shape.ASTIGMATISM_BLUR.value,
+			astigmatismAngle: shape.ASTIGMATISM_ANGLE.value,
+			collimation: shape.COLLIMATION.value,
+			collimationAngle: shape.COLLIMATION_ANGLE.value,
+		}
+		return resolveSyntheticAberration(config)
+	}
+
+	// Rotates the master catalog on the full sensor, then applies aberration, subframe, and binning.
+	async #collectFrameStars(exposureTime: number, rotatorAngle: number) {
 		const stars = await this.#ensureCatalog()
 		const frameX = this.#frame.elements.X.value
 		const frameY = this.#frame.elements.Y.value
@@ -2571,30 +2623,47 @@ export class CameraSimulator extends DeviceSimulator {
 		const gainFactor = 1 + this.#gain.elements.GAIN.value / 100
 		const exposureScale = exposureTime / this.#noiseExposure.elements.EXPOSURE_TIME.value
 		const projected: AstronomicalImageStar[] = []
-		const centerX = (imageWidth - 1) * 0.5
-		const centerY = (imageHeight - 1) * 0.5
+		const centerX = (this.sensorWidth - 1) * 0.5
+		const centerY = (this.sensorHeight - 1) * 0.5
 		const rotate = Math.abs(rotatorAngle) >= 1e-12
 		const sinAngle = rotate ? Math.sin(rotatorAngle) : 0
 		const cosAngle = rotate ? Math.cos(rotatorAngle) : 1
+		const aberration = this.#makeAberrationConfig()
+		const currentFocus = this.activeFocuser?.position.value ?? this.#plotOptions.elements.FOCUS_STEP.value
+		const bestFocus = this.#plotOptions.elements.BEST_FOCUS.value
+		const aberrationResult: SyntheticStarAberration = { defocus: 0, focusOffset: 0, covarianceXX: 0, covarianceXY: 0, covarianceYY: 0, coma: 0, comaTheta: 0 }
 
 		for (let i = 0; i < stars.length; i++) {
 			const star = stars[i]
 
 			if (star === undefined) continue
+			let sensorX = star.x
+			let sensorY = star.y
 
-			if (star.x < frameX || star.x >= frameX + frameWidth || star.y < frameY || star.y >= frameY + frameHeight) continue
+			if (rotate) {
+				const dx = sensorX - centerX
+				const dy = sensorY - centerY
+				sensorX = centerX + dx * cosAngle - dy * sinAngle
+				sensorY = centerY + dx * sinAngle + dy * cosAngle
+			}
 
-			const projectedStar = {
-				x: (star.x - frameX) / binX,
-				y: (star.y - frameY) / binY,
+			if (sensorX < frameX || sensorX >= frameX + frameWidth || sensorY < frameY || sensorY >= frameY + frameHeight) continue
+			if (aberration.enabled) evaluateSyntheticAberration(sensorX, sensorY, this.sensorWidth, this.sensorHeight, currentFocus, bestFocus, aberration, aberrationResult)
+			const comaX = aberration.enabled ? Math.cos(aberrationResult.comaTheta) / binX : 0
+			const comaY = aberration.enabled ? Math.sin(aberrationResult.comaTheta) / binY : 0
+			const projectedStar: AstronomicalImageStar = {
+				x: (sensorX - frameX) / binX,
+				y: (sensorY - frameY) / binY,
 				flux: star.flux * gainFactor * exposureScale,
 				hfd: Math.max(0.35, star.hfd / hfdScale),
 				snr: star.snr * Math.sqrt(Math.max(exposureScale, 0.01)),
 				colorIndex: star.colorIndex,
-			}
-
-			if (rotate) {
-				rotateImageCoordinate(projectedStar, centerX, centerY, sinAngle, cosAngle)
+				defocus: aberration.focusEnabled ? aberrationResult.defocus : undefined,
+				covarianceXX: aberration.enabled ? aberrationResult.covarianceXX / (binX * binX) : undefined,
+				covarianceXY: aberration.enabled ? aberrationResult.covarianceXY / (binX * binY) : undefined,
+				covarianceYY: aberration.enabled ? aberrationResult.covarianceYY / (binY * binY) : undefined,
+				coma: aberration.enabled ? aberrationResult.coma : undefined,
+				comaTheta: aberration.enabled && aberrationResult.coma > 0 ? Math.atan2(comaY, comaX) : undefined,
 			}
 
 			projected.push(projectedStar)
@@ -2911,14 +2980,6 @@ function shortestRotatorDelta(target: number, current: number) {
 	else if (delta < -180) delta += 360
 
 	return delta
-}
-
-// Rotates a pixel point in place about (centerX, centerY) using precomputed sin/cos of the angle.
-function rotateImageCoordinate(point: { x: number; y: number }, centerX: number, centerY: number, sinAngle: number, cosAngle: number) {
-	const dx = point.x - centerX
-	const dy = point.y - centerY
-	point.x = centerX + dx * cosAngle - dy * sinAngle
-	point.y = centerY + dx * sinAngle + dy * cosAngle
 }
 
 // Fills a raw image buffer with a deterministic flat-field illumination (gentle vignetting plus a slight
