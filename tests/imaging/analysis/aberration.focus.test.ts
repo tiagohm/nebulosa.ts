@@ -118,6 +118,19 @@ test('fits a trend-lines focus curve', () => {
 	expect(result.used[0]).toBeFalse()
 })
 
+// Prevents a spuriously low endpoint from defining an unsupported initial branch partition.
+test('fits trend lines with a low endpoint outlier', () => {
+	const positions = [-5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5]
+	const points = positions.map((position) => ({ position, value: position < 0.5 ? 2 + 1.2 * (0.5 - position) : 2 + 1.8 * (position - 0.5) }))
+	points[0] = { position: -5, value: 0.1 }
+	const result = fitAberrationFocusCurve(points, { model: 'trendLines', sigmaClip: 3 })
+
+	expect(result.success).toBeTrue()
+	if (!result.success) return
+	expect(result.minimum.x).toBeCloseTo(0.5, 8)
+	expect(result.used[0]).toBeFalse()
+})
+
 // Uses corrected AIC to distinguish smooth hyperbolic, parabolic, and piecewise-linear sweeps.
 test('selects a focus curve model automatically', () => {
 	const positions = [-5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5]

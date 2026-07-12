@@ -269,12 +269,7 @@ interface RobustHyperbolicFit {
 function fitRobustHyperbola(domain: NormalizedFocusData, initial: readonly [a: number, b: number, c: number], options: AberrationFocusCurveOptions): RobustHyperbolicFit | undefined {
 	const tuning = positiveNumber(options.sigmaClip, DEFAULT_SIGMA_CLIP)
 	const maximumIterations = positiveInteger(options.maxIterations, DEFAULT_MAX_ITERATIONS)
-	const seedDesign = new Array<Float64Array>(domain.positions.length)
-	for (let i = 0; i < seedDesign.length; i++) {
-		const position = domain.positions[i]
-		seedDesign[i] = new Float64Array([1, position, position * position])
-	}
-	const seed = robustLinearLeastSquares(seedDesign, domain.target, { weights: domain.weights, method: 'tukey', tuning, maxIterations: maximumIterations })
+	const seed = fitRobustQuadraticSeed(domain, tuning, maximumIterations)
 	let weights = seed.rankDeficient ? domain.weights.slice() : Float64Array.from(seed.weights)
 	if (positiveWeightCount(weights) < 3) return undefined
 	let parameters = initial
@@ -316,6 +311,16 @@ function positiveWeightCount(weights: Float64Array): number {
 	return count
 }
 
+// Fits a robust normalized quadratic used only to seed nonlinear and piecewise focus models.
+function fitRobustQuadraticSeed(domain: NormalizedFocusData, tuning: number, maximumIterations: number) {
+	const design = new Array<Float64Array>(domain.positions.length)
+	for (let i = 0; i < design.length; i++) {
+		const position = domain.positions[i]
+		design[i] = new Float64Array([1, position, position * position])
+	}
+	return robustLinearLeastSquares(design, domain.target, { weights: domain.weights, method: 'tukey', tuning, maxIterations: maximumIterations })
+}
+
 // Estimates nonlinear residual scale from MAD, with RMS as the exact-fit fallback.
 function hyperbolicResidualScale(residuals: Float64Array, absolute: Float64Array) {
 	const middle = absolute.length >>> 1
@@ -343,9 +348,7 @@ function fitTrendLinesFocusCurve(points: readonly AberrationFocusPoint[], option
 	if (points.length < minimumPoints) return failure(points, emptyUsed, 'insufficientPoints')
 	const domain = normalizedFocusData(points)
 	if (domain === undefined) return failure(points, emptyUsed, 'invalidInput')
-	let minimumIndex = 0
-	for (let i = 1; i < points.length; i++) if (points[i].value < points[minimumIndex].value) minimumIndex = i
-	let split = domain.positions[minimumIndex]
+	let split = trendLineInitialSplit(domain, options)
 	let branch: ReturnType<typeof fitTrendBranches> | undefined
 	let converged = false
 	for (let iteration = 0; iteration < TREND_LINE_PARTITION_ITERATIONS; iteration++) {
@@ -368,6 +371,25 @@ function fitTrendLinesFocusCurve(points: readonly AberrationFocusPoint[], option
 	const minimumValue = branch.leftIntercept + branch.leftSlope * branch.intersection
 	const predict = (t: number) => (t <= branch.intersection ? branch.leftIntercept + branch.leftSlope * t : branch.rightIntercept + branch.rightSlope * t)
 	return focusCurveSuccess('trendLines', points, branch.used, position, minimumValue, predict, branch.conditionNumber, maximumCondition, minimumPoints, domain)
+}
+
+// Seeds the branch partition from a robust quadratic vertex, falling back to the interior position median.
+function trendLineInitialSplit(domain: NormalizedFocusData, options: AberrationFocusCurveOptions): number {
+	const seed = fitRobustQuadraticSeed(domain, positiveNumber(options.sigmaClip, DEFAULT_SIGMA_CLIP), positiveInteger(options.maxIterations, DEFAULT_MAX_ITERATIONS))
+	if (!seed.rankDeficient && seed.coefficients[2] > 0) {
+		const split = -seed.coefficients[1] / (2 * seed.coefficients[2])
+		if (Number.isFinite(split) && trendSplitHasSides(domain.positions, split)) return split
+	}
+	const sorted = domain.positions.slice().sort()
+	return sorted[(sorted.length - 1) >>> 1]
+}
+
+// Checks the two-sample branch minimum used by the piecewise line solver.
+function trendSplitHasSides(positions: Float64Array, split: number): boolean {
+	let left = 0
+	let right = 0
+	for (let i = 0; i < positions.length; i++) positions[i] <= split ? left++ : right++
+	return left >= 2 && right >= 2
 }
 
 // Normalized arrays shared by nonlinear and piecewise focus models.
