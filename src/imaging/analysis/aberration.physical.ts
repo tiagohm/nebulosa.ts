@@ -16,9 +16,9 @@ export interface AberrationPhysicalScale {
 
 // Physical small-angle tilt derived from normalized-sensor focus-plane gradients.
 export interface PhysicalTiltAnalysis {
-	// Tilt around the sensor X axis in radians.
+	// Right-handed tilt around the sensor X axis in radians.
 	readonly x: number
-	// Tilt around the sensor Y axis in radians.
+	// Right-handed tilt around the sensor Y axis in radians.
 	readonly y: number
 	// Combined plane tilt in radians.
 	readonly magnitude: number
@@ -89,7 +89,7 @@ export function analyzePhysicalTilt(plane: FocusPlaneAnalysis, width: number, he
 		throw new RangeError('finite sensor dimensions, pixel size, and non-zero focus displacement are required')
 	const slopeX = (plane.gradientX * scale.focusDisplacement) / ((width - 1) * scale.pixelSize)
 	const slopeY = (plane.gradientY * scale.focusDisplacement) / ((height - 1) * scale.pixelSize)
-	return { x: Math.atan(slopeX), y: Math.atan(slopeY), magnitude: Math.atan(Math.hypot(slopeX, slopeY)) }
+	return { x: Math.atan(slopeY), y: Math.atan(-slopeX), magnitude: Math.atan(Math.hypot(slopeX, slopeY)) }
 }
 
 // Converts normalized quadratic coefficients into physical principal curvatures and approximate radii.

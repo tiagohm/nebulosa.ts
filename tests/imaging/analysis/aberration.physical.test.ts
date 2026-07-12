@@ -4,9 +4,20 @@ import { analyzePhysicalCurvature, analyzePhysicalTilt, criticalFocusZone, estim
 // Converts normalized focus-plane slopes with explicit physical scale and preserves displacement sign.
 test('converts focus-plane gradients into physical tilt', () => {
 	const tilt = analyzePhysicalTilt({ gradientX: 2, gradientY: -3, effect: 5 }, 101, 201, { pixelSize: 0.004, focusDisplacement: -0.01 })
-	expect(tilt.x).toBeCloseTo(Math.atan(-0.05), 12)
-	expect(tilt.y).toBeCloseTo(Math.atan(0.0375), 12)
+	expect(tilt.x).toBeCloseTo(Math.atan(0.0375), 12)
+	expect(tilt.y).toBeCloseTo(Math.atan(0.05), 12)
 	expect(tilt.magnitude).toBeCloseTo(Math.atan(Math.hypot(-0.05, 0.0375)), 12)
+})
+
+// Maps a focus gradient to rotation about the orthogonal sensor axis with right-handed signs.
+test('maps pure physical tilt gradients to their rotation axes', () => {
+	const alongX = analyzePhysicalTilt({ gradientX: 1, gradientY: 0, effect: 1 }, 101, 201, { pixelSize: 0.01, focusDisplacement: 0.1 })
+	const alongY = analyzePhysicalTilt({ gradientX: 0, gradientY: 1, effect: 1 }, 101, 201, { pixelSize: 0.01, focusDisplacement: 0.1 })
+
+	expect(alongX.x).toBe(0)
+	expect(alongX.y).toBeCloseTo(-Math.atan(0.1), 12)
+	expect(alongY.x).toBeCloseTo(Math.atan(0.05), 12)
+	expect(alongY.y).toBe(-0)
 })
 
 // Includes interior extrema so a radially curved surface cannot report a zero effect.
