@@ -52,3 +52,53 @@ test('rejects duplicate positions and concave curves', () => {
 	expect(concave.success).toBeFalse()
 	if (!concave.success) expect(concave.reason).toBe('nonConvex')
 })
+
+// Recovers a weighted nonlinear focus minimum without treating weights as replicated samples.
+test('fits a weighted hyperbolic focus curve', () => {
+	const positions = [-4, -3, -2, -1, 0, 1, 2, 3, 4]
+	const points = positions.map((position) => ({ position, value: 2.5 * Math.sqrt(1 + ((position - 0.4) / 1.7) ** 2), weight: 1 }))
+	points[0] = { position: -4, value: 80, weight: 1e-12 }
+	const result = fitAberrationFocusCurve(points, { model: 'hyperbolic' })
+
+	expect(result.success).toBeTrue()
+	if (!result.success) return
+	expect(result.model).toBe('hyperbolic')
+	expect(result.minimum.x).toBeCloseTo(0.4, 5)
+	expect(result.minimum.y).toBeCloseTo(2.5, 5)
+})
+
+// Recovers the intersection of two asymmetric robust branches.
+test('fits a trend-lines focus curve', () => {
+	const positions = [-5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5]
+	const points = positions.map((position) => ({ position, value: position < 0.5 ? 2 + 1.2 * (0.5 - position) : 2 + 1.8 * (position - 0.5) }))
+	points[0] = { position: -5, value: 80 }
+	const result = fitAberrationFocusCurve(points, { model: 'trendLines', sigmaClip: 3 })
+
+	expect(result.success).toBeTrue()
+	if (!result.success) return
+	expect(result.model).toBe('trendLines')
+	expect(result.minimum.x).toBeCloseTo(0.5, 8)
+	expect(result.minimum.y).toBeCloseTo(2, 8)
+	expect(result.used[0]).toBeFalse()
+})
+
+// Uses corrected AIC to distinguish smooth hyperbolic, parabolic, and piecewise-linear sweeps.
+test('selects a focus curve model automatically', () => {
+	const positions = [-5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5]
+	const hyperbolic = fitAberrationFocusCurve(
+		positions.map((position) => ({ position, value: 2 * Math.sqrt(1 + ((position - 0.3) / 1.4) ** 2) })),
+		{ model: 'auto' },
+	)
+	const quadratic = fitAberrationFocusCurve(
+		positions.map((position) => ({ position, value: 2 + 0.25 * (position + 0.4) ** 2 })),
+		{ model: 'auto' },
+	)
+	const trendLines = fitAberrationFocusCurve(
+		positions.map((position) => ({ position, value: position < 0.2 ? 2 + 0.7 * (0.2 - position) : 2 + 1.1 * (position - 0.2) })),
+		{ model: 'auto' },
+	)
+
+	expect(hyperbolic.success && hyperbolic.model).toBe('hyperbolic')
+	expect(quadratic.success && quadratic.model).toBe('quadratic')
+	expect(trendLines.success && trendLines.model).toBe('trendLines')
+})

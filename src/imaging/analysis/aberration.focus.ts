@@ -1,14 +1,15 @@
-import { robustLinearLeastSquares } from '../../math/numerical/least.squares'
+import { linearLeastSquares, robustLinearLeastSquares } from '../../math/numerical/least.squares'
 import type { NumberArray } from '../../math/numerical/math'
+import { hyperbolicRegression } from '../../math/numerical/regression'
 import type { AberrationWarning } from './aberration.types'
 
-// Robust one-dimensional quadratic focus-curve fitting for completed focus scans.
+// Robust one-dimensional focus-curve fitting for completed focus scans.
 
 // Focus metrics supported by regional focus curves.
 export type AberrationFocusMetric = 'hfd' | 'fwhm'
 
-// Implemented focus-curve models; `auto` currently selects the robust quadratic model.
-export type AberrationFocusModel = 'quadratic' | 'auto'
+// Implemented focus-curve models and automatic penalized-error selection.
+export type AberrationFocusModel = 'quadratic' | 'hyperbolic' | 'trendLines' | 'auto'
 
 // Stable reason why a best-focus estimate was not published.
 export type AberrationFocusCurveFailureReason = 'insufficientPoints' | 'insufficientSides' | 'invalidInput' | 'nonConvex' | 'minimumOutsideRange' | 'illConditioned' | 'nonConvergent' | 'excessiveRejection'
@@ -25,9 +26,9 @@ export interface AberrationFocusPoint {
 	readonly starCount?: number
 }
 
-// Configures robust quadratic focus-curve fitting.
+// Configures robust focus-curve fitting.
 export interface AberrationFocusCurveOptions {
-	// Quadratic model, or `auto` which currently chooses it.
+	// Explicit model or penalized-error automatic selection.
 	readonly model?: AberrationFocusModel
 	// Positive Tukey residual-scale tuning threshold.
 	readonly sigmaClip?: number
@@ -48,7 +49,7 @@ export interface AberrationFocusCurveSuccess {
 	// Discriminates successful curve fits.
 	readonly success: true
 	// Implemented model used to estimate best focus.
-	readonly model: 'quadratic'
+	readonly model: Exclude<AberrationFocusModel, 'auto'>
 	// Input points in original order.
 	readonly points: readonly AberrationFocusPoint[]
 	// Whether each point retained sufficient final robust weight.
@@ -98,9 +99,41 @@ const DEFAULT_MAX_ITERATIONS = 20
 const DEFAULT_MAXIMUM_CONDITION_NUMBER = 1e10
 // Relative final robust weight retained as a curve point.
 const MINIMUM_RETAINED_WEIGHT = 1e-3
+// Maximum branch repartitioning passes for a trend-lines curve.
+const TREND_LINE_PARTITION_ITERATIONS = 12
+// Internal residuals retained only while automatic model candidates remain reachable.
+const FOCUS_CURVE_RESIDUALS = new WeakMap<AberrationFocusCurveSuccess, Float64Array>()
+
+// Fits the requested curve, or evaluates every supported curve for `auto`.
+export function fitAberrationFocusCurve(points: readonly AberrationFocusPoint[], options: AberrationFocusCurveOptions = {}): AberrationFocusCurveResult {
+	const model = options.model ?? 'quadratic'
+	if (model === 'quadratic') return fitQuadraticFocusCurve(points, options)
+	if (model === 'hyperbolic') return fitHyperbolicFocusCurve(points, options)
+	if (model === 'trendLines') return fitTrendLinesFocusCurve(points, options)
+
+	const candidates = [fitHyperbolicFocusCurve(points, options), fitQuadraticFocusCurve(points, options), fitTrendLinesFocusCurve(points, options)]
+	const commonUsed = new Array<boolean>(points.length).fill(true)
+	for (let i = 0; i < candidates.length; i++) {
+		const candidate = candidates[i]
+		if (!candidate.success) continue
+		for (let j = 0; j < commonUsed.length; j++) commonUsed[j] &&= candidate.used[j]
+	}
+	let best: AberrationFocusCurveSuccess | undefined
+	let bestScore = Number.POSITIVE_INFINITY
+	for (let i = 0; i < candidates.length; i++) {
+		const candidate = candidates[i]
+		if (!candidate.success) continue
+		const score = focusCurveAicc(candidate, commonUsed)
+		if (score < bestScore) {
+			best = candidate
+			bestScore = score
+		}
+	}
+	return best ?? fitQuadraticFocusCurve(points, options)
+}
 
 // Fits a normalized robust quadratic and converts its minimum back to the caller's focuser unit.
-export function fitAberrationFocusCurve(points: readonly AberrationFocusPoint[], options: AberrationFocusCurveOptions = {}): AberrationFocusCurveResult {
+function fitQuadraticFocusCurve(points: readonly AberrationFocusPoint[], options: AberrationFocusCurveOptions): AberrationFocusCurveResult {
 	const emptyUsed = new Array<boolean>(points.length).fill(false)
 	const minimumPoints = Math.max(DEFAULT_MINIMUM_POINTS, positiveInteger(options.minimumPoints, DEFAULT_MINIMUM_POINTS))
 	if (!validPoints(points)) return failure(points, emptyUsed, 'invalidInput')
@@ -174,7 +207,226 @@ export function fitAberrationFocusCurve(points: readonly AberrationFocusPoint[],
 	const condition = Math.min(1, Math.max(0, Math.log10(positiveNumber(options.maxConditionNumber, DEFAULT_MAXIMUM_CONDITION_NUMBER) / Math.max(1, fit.conditionNumber)) / Math.log10(positiveNumber(options.maxConditionNumber, DEFAULT_MAXIMUM_CONDITION_NUMBER))))
 	const confidence = Math.sqrt(usedCount / points.length) * condition
 
-	return { success: true, model: 'quadratic', points, used, minimum: { x: position, y: c + b * tMinimum + a * tMinimum * tMinimum }, uncertainty, rms, r2, conditionNumber: fit.conditionNumber, confidence, warnings }
+	const result: AberrationFocusCurveSuccess = { success: true, model: 'quadratic', points, used, minimum: { x: position, y: c + b * tMinimum + a * tMinimum * tMinimum }, uncertainty, rms, r2, conditionNumber: fit.conditionNumber, confidence, warnings }
+	const residuals = new Float64Array(points.length)
+	for (let i = 0; i < points.length; i++) residuals[i] = target[i] - (c + b * design[i][1] + a * design[i][2])
+	FOCUS_CURVE_RESIDUALS.set(result, residuals)
+	return result
+}
+
+// Fits the existing nonlinear hyperbola in normalized focus coordinates with true sample weights.
+function fitHyperbolicFocusCurve(points: readonly AberrationFocusPoint[], options: AberrationFocusCurveOptions): AberrationFocusCurveResult {
+	const emptyUsed = new Array<boolean>(points.length).fill(false)
+	const minimumPoints = Math.max(DEFAULT_MINIMUM_POINTS, positiveInteger(options.minimumPoints, DEFAULT_MINIMUM_POINTS))
+	if (!validPoints(points)) return failure(points, emptyUsed, 'invalidInput')
+	if (points.length < minimumPoints) return failure(points, emptyUsed, 'insufficientPoints')
+	const domain = normalizedFocusData(points)
+	if (domain === undefined) return failure(points, emptyUsed, 'invalidInput')
+
+	let minimumIndex = 0
+	for (let i = 1; i < points.length; i++) if (domain.target[i] < domain.target[minimumIndex]) minimumIndex = i
+	const regression = hyperbolicRegression(domain.positions, domain.target, domain.weights, [0.5, domain.target[minimumIndex], domain.positions[minimumIndex]])
+	const { a, b, c } = regression
+	if (!Number.isFinite(a) || !Number.isFinite(b) || !Number.isFinite(c) || Math.abs(a) <= Number.EPSILON || !(b > 0)) return failure(points, emptyUsed, 'nonConvergent')
+	const position = domain.center + domain.halfSpan * c
+	if ((options.requireMinimumInsideRange ?? true) && (position < domain.minimum || position > domain.maximum)) return failure(points, emptyUsed, 'minimumOutsideRange')
+
+	const used = new Array<boolean>(points.length).fill(true)
+	if (!hasSideSupport(points, used, position, positiveInteger(options.minimumPointsPerSide, DEFAULT_MINIMUM_POINTS_PER_SIDE))) return failure(points, used, 'insufficientSides')
+	const jacobian = new Array<Float64Array>(points.length)
+	const zero = new Float64Array(points.length)
+	for (let i = 0; i < points.length; i++) {
+		const u = (domain.positions[i] - c) / a
+		const root = Math.sqrt(1 + u * u)
+		jacobian[i] = new Float64Array([(-b * u * u) / (a * root), root, (-b * u) / (a * root)])
+	}
+	const conditionFit = linearLeastSquares(jacobian, zero, { weights: domain.weights })
+	const maximumCondition = positiveNumber(options.maxConditionNumber, DEFAULT_MAXIMUM_CONDITION_NUMBER)
+	if (conditionFit.rankDeficient || !Number.isFinite(conditionFit.conditionNumber) || conditionFit.conditionNumber > maximumCondition) return failure(points, used, 'illConditioned')
+	return focusCurveSuccess('hyperbolic', points, used, position, b, regression.predict, conditionFit.conditionNumber, maximumCondition, minimumPoints)
+}
+
+// Fits two robust weighted line branches and iterates their partition around the intersection.
+function fitTrendLinesFocusCurve(points: readonly AberrationFocusPoint[], options: AberrationFocusCurveOptions): AberrationFocusCurveResult {
+	const emptyUsed = new Array<boolean>(points.length).fill(false)
+	const minimumPoints = Math.max(DEFAULT_MINIMUM_POINTS, positiveInteger(options.minimumPoints, DEFAULT_MINIMUM_POINTS))
+	if (!validPoints(points)) return failure(points, emptyUsed, 'invalidInput')
+	if (points.length < minimumPoints) return failure(points, emptyUsed, 'insufficientPoints')
+	const domain = normalizedFocusData(points)
+	if (domain === undefined) return failure(points, emptyUsed, 'invalidInput')
+	let minimumIndex = 0
+	for (let i = 1; i < points.length; i++) if (points[i].value < points[minimumIndex].value) minimumIndex = i
+	let split = domain.positions[minimumIndex]
+	let branch: ReturnType<typeof fitTrendBranches> | undefined
+	for (let iteration = 0; iteration < TREND_LINE_PARTITION_ITERATIONS; iteration++) {
+		branch = fitTrendBranches(domain, split, options)
+		if (branch === undefined) return failure(points, emptyUsed, 'insufficientSides')
+		if (!(branch.leftSlope < 0) || !(branch.rightSlope > 0)) return failure(points, branch.used, 'nonConvex')
+		if (!Number.isFinite(branch.intersection)) return failure(points, branch.used, 'nonConvergent')
+		if (Math.abs(branch.intersection - split) <= 1e-9) break
+		split = branch.intersection
+	}
+	if (branch === undefined) return failure(points, emptyUsed, 'nonConvergent')
+	const position = domain.center + domain.halfSpan * branch.intersection
+	if ((options.requireMinimumInsideRange ?? true) && (position < domain.minimum || position > domain.maximum)) return failure(points, branch.used, 'minimumOutsideRange')
+	if (!hasSideSupport(points, branch.used, position, positiveInteger(options.minimumPointsPerSide, DEFAULT_MINIMUM_POINTS_PER_SIDE))) return failure(points, branch.used, 'insufficientSides')
+	const maximumCondition = positiveNumber(options.maxConditionNumber, DEFAULT_MAXIMUM_CONDITION_NUMBER)
+	if (!Number.isFinite(branch.conditionNumber) || branch.conditionNumber > maximumCondition) return failure(points, branch.used, 'illConditioned')
+	const minimumValue = branch.leftIntercept + branch.leftSlope * branch.intersection
+	const predict = (t: number) => (t <= branch.intersection ? branch.leftIntercept + branch.leftSlope * t : branch.rightIntercept + branch.rightSlope * t)
+	return focusCurveSuccess('trendLines', points, branch.used, position, minimumValue, predict, branch.conditionNumber, maximumCondition, minimumPoints, domain)
+}
+
+// Normalized arrays shared by nonlinear and piecewise focus models.
+interface NormalizedFocusData {
+	readonly minimum: number
+	readonly maximum: number
+	readonly center: number
+	readonly halfSpan: number
+	readonly positions: Float64Array
+	readonly target: Float64Array
+	readonly weights: Float64Array
+}
+
+// Normalizes focuser positions to approximately -1..1 while preserving point order.
+function normalizedFocusData(points: readonly AberrationFocusPoint[]): NormalizedFocusData | undefined {
+	let minimum = Number.POSITIVE_INFINITY
+	let maximum = Number.NEGATIVE_INFINITY
+	for (let i = 0; i < points.length; i++) {
+		minimum = Math.min(minimum, points[i].position)
+		maximum = Math.max(maximum, points[i].position)
+	}
+	if (!(maximum > minimum)) return undefined
+	const center = 0.5 * (minimum + maximum)
+	const halfSpan = 0.5 * (maximum - minimum)
+	const positions = new Float64Array(points.length)
+	const target = new Float64Array(points.length)
+	const weights = new Float64Array(points.length)
+	for (let i = 0; i < points.length; i++) {
+		positions[i] = (points[i].position - center) / halfSpan
+		target[i] = points[i].value
+		weights[i] = points[i].weight ?? 1
+	}
+	return { minimum, maximum, center, halfSpan, positions, target, weights }
+}
+
+// Result of one robust left/right branch partition in normalized coordinates.
+interface TrendBranchFit {
+	readonly leftIntercept: number
+	readonly leftSlope: number
+	readonly rightIntercept: number
+	readonly rightSlope: number
+	readonly intersection: number
+	readonly conditionNumber: number
+	readonly used: readonly boolean[]
+}
+
+// Fits both weighted branches for the current split and maps robust weights to input points.
+function fitTrendBranches(domain: NormalizedFocusData, split: number, options: AberrationFocusCurveOptions): TrendBranchFit | undefined {
+	const leftIndices: number[] = []
+	const rightIndices: number[] = []
+	for (let i = 0; i < domain.positions.length; i++) (domain.positions[i] <= split ? leftIndices : rightIndices).push(i)
+	if (leftIndices.length < 2 || rightIndices.length < 2) return undefined
+	const left = fitLineBranch(domain, leftIndices, options)
+	const right = fitLineBranch(domain, rightIndices, options)
+	if (left === undefined || right === undefined) return undefined
+	const denominator = left.coefficients[1] - right.coefficients[1]
+	if (Math.abs(denominator) <= Number.EPSILON) return undefined
+	const intersection = (right.coefficients[0] - left.coefficients[0]) / denominator
+	const used = new Array<boolean>(domain.positions.length).fill(false)
+	for (let i = 0; i < leftIndices.length; i++) used[leftIndices[i]] = left.weights[i] > domain.weights[leftIndices[i]] * MINIMUM_RETAINED_WEIGHT
+	for (let i = 0; i < rightIndices.length; i++) used[rightIndices[i]] = right.weights[i] > domain.weights[rightIndices[i]] * MINIMUM_RETAINED_WEIGHT
+	return { leftIntercept: left.coefficients[0], leftSlope: left.coefficients[1], rightIntercept: right.coefficients[0], rightSlope: right.coefficients[1], intersection, conditionNumber: Math.max(left.conditionNumber, right.conditionNumber), used }
+}
+
+// Fits one line branch using normalized coordinates and Tukey residual weights.
+function fitLineBranch(domain: NormalizedFocusData, indices: readonly number[], options: AberrationFocusCurveOptions) {
+	const design = new Array<Float64Array>(indices.length)
+	const target = new Float64Array(indices.length)
+	const weights = new Float64Array(indices.length)
+	for (let i = 0; i < indices.length; i++) {
+		const index = indices[i]
+		design[i] = new Float64Array([1, domain.positions[index]])
+		target[i] = domain.target[index]
+		weights[i] = domain.weights[index]
+	}
+	const fit = robustLinearLeastSquares(design, target, { weights, method: 'tukey', tuning: positiveNumber(options.sigmaClip, DEFAULT_SIGMA_CLIP), maxIterations: positiveInteger(options.maxIterations, DEFAULT_MAX_ITERATIONS) })
+	return fit.rankDeficient ? undefined : fit
+}
+
+// Checks that retained points support the fitted minimum on both sampled sides.
+function hasSideSupport(points: readonly AberrationFocusPoint[], used: readonly boolean[], minimum: number, required: number): boolean {
+	let left = 0
+	let right = 0
+	for (let i = 0; i < points.length; i++) {
+		if (!used[i]) continue
+		if (points[i].position < minimum) left++
+		if (points[i].position > minimum) right++
+	}
+	return left >= required && right >= required
+}
+
+// Builds common residual statistics for nonlinear and piecewise models.
+function focusCurveSuccess(
+	model: 'hyperbolic' | 'trendLines',
+	points: readonly AberrationFocusPoint[],
+	used: readonly boolean[],
+	position: number,
+	minimumValue: number,
+	predictNormalized: (position: number) => number,
+	conditionNumber: number,
+	maximumCondition: number,
+	minimumPoints: number,
+	domain = normalizedFocusData(points),
+): AberrationFocusCurveResult {
+	if (domain === undefined || !Number.isFinite(minimumValue) || !(minimumValue > 0)) return failure(points, used, 'nonConvergent')
+	let count = 0
+	let sum = 0
+	let sumSquares = 0
+	const residuals = new Float64Array(points.length)
+	for (let i = 0; i < points.length; i++) {
+		const residual = points[i].value - predictNormalized(domain.positions[i])
+		if (!Number.isFinite(residual)) return failure(points, used, 'nonConvergent')
+		residuals[i] = residual
+		if (!used[i]) continue
+		sum += points[i].value
+		sumSquares += residual * residual
+		count++
+	}
+	if (count < minimumPoints) return failure(points, used, 'excessiveRejection')
+	const mean = sum / count
+	let totalSquares = 0
+	for (let i = 0; i < points.length; i++) if (used[i]) totalSquares += (points[i].value - mean) * (points[i].value - mean)
+	const rms = Math.sqrt(sumSquares / count)
+	const r2 = totalSquares > 0 ? 1 - sumSquares / totalSquares : sumSquares === 0 ? 1 : 0
+	const warnings: AberrationWarning[] = []
+	if (count < points.length) warnings.push({ code: 'robustOutliers', values: { rejectedCount: points.length - count } })
+	const normalizedMinimum = (position - domain.center) / domain.halfSpan
+	if (Math.abs(normalizedMinimum) > 0.9) warnings.push({ code: 'minimumNearRangeEdge', values: { normalizedPosition: normalizedMinimum } })
+	const condition = Math.min(1, Math.max(0, Math.log10(maximumCondition / Math.max(1, conditionNumber)) / Math.log10(maximumCondition)))
+	const result: AberrationFocusCurveSuccess = { success: true, model, points, used, minimum: { x: position, y: minimumValue }, rms, r2, conditionNumber, confidence: Math.sqrt(count / points.length) * condition, warnings }
+	FOCUS_CURVE_RESIDUALS.set(result, residuals)
+	return result
+}
+
+// Computes AICc over the same commonly retained samples for every automatic candidate.
+function focusCurveAicc(curve: AberrationFocusCurveSuccess, commonUsed: readonly boolean[]): number {
+	const residuals = FOCUS_CURVE_RESIDUALS.get(curve)
+	if (residuals === undefined) return Number.POSITIVE_INFINITY
+	let count = 0
+	let weightSum = 0
+	let weightedSquares = 0
+	for (let i = 0; i < commonUsed.length; i++) {
+		if (!commonUsed[i]) continue
+		const weight = curve.points[i].weight ?? 1
+		weightSum += weight
+		weightedSquares += weight * residuals[i] * residuals[i]
+		count++
+	}
+	const parameters = curve.model === 'trendLines' ? 4 : 3
+	if (count <= parameters + 1 || !(weightSum > 0)) return Number.POSITIVE_INFINITY
+	const variance = Math.max(Number.EPSILON, weightedSquares / weightSum)
+	return count * Math.log(variance) + 2 * parameters + (2 * parameters * (parameters + 1)) / (count - parameters - 1)
 }
 
 // Propagates the final weighted quadratic-coefficient covariance to the fitted minimum position.

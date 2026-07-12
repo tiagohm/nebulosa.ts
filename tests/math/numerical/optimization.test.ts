@@ -141,6 +141,24 @@ describe('Levenberg-Marquardt optimization', () => {
 		}
 	})
 
+	test('weighted line suppresses a zero-weight outlier', () => {
+		function line(x: number, [a, b]: NumberArray) {
+			return a * x + b
+		}
+
+		const result = levenbergMarquardt([0, 1, 2, 3], [1, 3, 5, 100], line, [1, 0], { weights: [1, 1, 1, 0] })
+
+		expect(result[0]).toBeCloseTo(2, 7)
+		expect(result[1]).toBeCloseTo(1, 7)
+	})
+
+	test('rejects invalid sample weights', () => {
+		const line = (x: number, [a, b]: NumberArray) => a * x + b
+
+		expect(() => levenbergMarquardt([0, 1], [0, 1], line, [1, 0], { weights: [1] })).toThrow(RangeError)
+		expect(() => levenbergMarquardt([0, 1], [0, 1], line, [1, 0], { weights: [1, -1] })).toThrow(RangeError)
+	})
+
 	test('quadratic', () => {
 		function quadratic(x: number, [a, b, c]: NumberArray) {
 			return a * x * x + b * x + c
