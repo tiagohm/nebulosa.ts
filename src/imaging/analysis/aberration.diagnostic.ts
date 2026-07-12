@@ -1,5 +1,7 @@
 import { clamp } from '../../math/numerical/math'
+import type { FocusCurvatureAnalysis, FocusPlaneAnalysis, FocusSurfaceFitResult } from '../../math/numerical/surface.fit'
 import type { Angle } from '../../math/units/angle'
+import type { FocusFieldOffset } from './aberration.physical'
 import type { AberrationFinding, AberrationInspectionQuality, AberrationLimitationCode, AberrationRegionResult, AberrationStar } from './aberration.types'
 
 // Conservative evidence-based single-frame aberration findings without mechanical conclusions.
@@ -72,6 +74,74 @@ export function diagnoseSingleFrameAberration(stars: readonly AberrationStar[], 
 	}
 
 	return findings
+}
+
+// Evaluates uncertainty-qualified patterns from a completed regional focus scan.
+export function diagnoseFocusScan(surface: FocusSurfaceFitResult | undefined, plane: FocusPlaneAnalysis | undefined, curvature: FocusCurvatureAnalysis | undefined, fieldOffset: FocusFieldOffset | undefined, backfocusCalibrated: boolean = false): AberrationFinding[] {
+	if (!surface?.success || plane === undefined || curvature === undefined) {
+		return [{ kind: 'inconclusive', likelihood: 1, confidence: 0, evidence: [], limitations: ['modelUncertaintyUnavailable'] }]
+	}
+	if (surface.covariance === undefined) {
+		return [{ kind: 'inconclusive', likelihood: 1, confidence: surface.confidence, evidence: [{ code: 'surfaceConditionNumber', value: surface.conditionNumber, confidence: surface.confidence }], limitations: ['modelUncertaintyUnavailable'] }]
+	}
+
+	const findings: AberrationFinding[] = []
+	const columns = surface.model === 'plane' ? 3 : surface.model === 'radialQuadratic' ? 4 : 6
+	const planeUncertainty = linearEffectUncertainty(surface.coefficients.ax, surface.coefficients.ay, surface.covariance, columns)
+	if (planeUncertainty !== undefined && plane.effect > 3 * planeUncertainty) {
+		const significance = plane.effect / Math.max(planeUncertainty, Number.EPSILON)
+		findings.push({
+			kind: 'sensorTiltPattern',
+			likelihood: clamp((significance - 3) / 7, 0, 1),
+			confidence: surface.confidence,
+			evidence: [
+				{ code: 'planeEffect', value: plane.effect, reference: 3 * planeUncertainty, confidence: surface.confidence },
+				{ code: 'planeSignificance', value: significance, reference: 3, confidence: surface.confidence },
+			],
+			limitations: ['missingPhysicalScale'],
+		})
+	}
+
+	const curvatureUncertainty = quadraticEffectUncertainty(surface, columns)
+	if (curvatureUncertainty !== undefined && curvature.effect > 3 * curvatureUncertainty) {
+		const significance = curvature.effect / Math.max(curvatureUncertainty, Number.EPSILON)
+		findings.push({ kind: 'fieldCurvature', likelihood: clamp((significance - 3) / 7, 0, 1), confidence: surface.confidence, evidence: [{ code: 'curvatureEffect', value: curvature.effect, reference: 3 * curvatureUncertainty, confidence: surface.confidence }], limitations: [] })
+		if ((curvature.anisotropy ?? 0) >= 0.2)
+			findings.push({ kind: 'astigmaticCurvature', likelihood: clamp(curvature.anisotropy ?? 0, 0, 1), confidence: surface.confidence, evidence: [{ code: 'curvatureAnisotropy', value: curvature.anisotropy ?? 0, reference: 0.2, confidence: surface.confidence }], limitations: [] })
+	}
+
+	if (backfocusCalibrated && fieldOffset !== undefined && curvatureUncertainty !== undefined && Math.abs(fieldOffset.centerToEdge) > 3 * curvatureUncertainty) {
+		findings.push({
+			kind: 'backfocusMismatch',
+			likelihood: clamp(Math.abs(fieldOffset.centerToEdge) / Math.max(curvature.effect, Number.EPSILON), 0, 1),
+			confidence: Math.min(surface.confidence, fieldOffset.confidence),
+			evidence: [{ code: 'centerToEdgeFocus', value: fieldOffset.centerToEdge, reference: 3 * curvatureUncertainty, confidence: fieldOffset.confidence }],
+			limitations: [],
+		})
+	}
+
+	return findings.length > 0 ? findings : [{ kind: 'inconclusive', likelihood: 1, confidence: surface.confidence, evidence: [{ code: 'surfaceConditionNumber', value: surface.conditionNumber, confidence: surface.confidence }], limitations: [] }]
+}
+
+// Propagates the covariance of ax and ay to abs(ax) + abs(ay).
+function linearEffectUncertainty(ax: number, ay: number, covariance: Float64Array, columns: number): number | undefined {
+	if (covariance.length !== columns * columns) return undefined
+	const signX = ax < 0 ? -1 : 1
+	const signY = ay < 0 ? -1 : 1
+	const variance = covariance[columns + 1] + covariance[2 * columns + 2] + 2 * signX * signY * covariance[columns + 2]
+	return variance >= 0 && Number.isFinite(variance) ? Math.sqrt(variance) : undefined
+}
+
+// Estimates a conservative curvature-effect uncertainty from quadratic coefficient covariance.
+function quadraticEffectUncertainty(surface: FocusSurfaceFitResult & { readonly success: true }, columns: number): number | undefined {
+	const covariance = surface.covariance
+	if (covariance === undefined || covariance.length !== columns * columns || surface.model === 'plane') return undefined
+	if (surface.model === 'radialQuadratic') {
+		const variance = covariance[3 * columns + 3]
+		return variance >= 0 && Number.isFinite(variance) ? 0.5 * Math.sqrt(variance) : undefined
+	}
+	const variance = 0.0625 * (covariance[3 * columns + 3] + covariance[5 * columns + 5] + 2 * Math.abs(covariance[3 * columns + 5])) + 0.0625 * covariance[4 * columns + 4]
+	return variance >= 0 && Number.isFinite(variance) ? Math.sqrt(variance) : undefined
 }
 
 // Collects selected profiles that have a usable HFD measurement.

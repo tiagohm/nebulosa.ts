@@ -1,4 +1,4 @@
-import type { FocusPlaneAnalysis, FocusSurfaceCoefficients } from '../../math/numerical/surface.fit'
+import { evaluateFocusSurface, type FocusPlaneAnalysis, type FocusSurfaceCoefficients } from '../../math/numerical/surface.fit'
 
 // Physical conversions and calibrated focus-field corrections for completed aberration scans.
 
@@ -22,6 +22,18 @@ export interface PhysicalTiltAnalysis {
 	readonly y: number
 	// Combined plane tilt in radians.
 	readonly magnitude: number
+}
+
+// Principal physical focal-surface curvatures and finite radii under the small-slope approximation.
+export interface PhysicalCurvatureAnalysis {
+	// Larger principal physical curvature in inverse caller length units.
+	readonly principalX: number
+	// Smaller principal physical curvature in inverse caller length units.
+	readonly principalY: number
+	// Reciprocal radius of `principalX`, omitted near zero curvature.
+	readonly radiusX?: number
+	// Reciprocal radius of `principalY`, omitted near zero curvature.
+	readonly radiusY?: number
 }
 
 // Center-to-edge best-focus offset measured from supported regional curves.
@@ -75,9 +87,26 @@ export interface CriticalFocusResult {
 export function analyzePhysicalTilt(plane: FocusPlaneAnalysis, width: number, height: number, scale: Required<Pick<AberrationPhysicalScale, 'pixelSize' | 'focusDisplacement'>>): PhysicalTiltAnalysis {
 	if (!Number.isInteger(width) || !Number.isInteger(height) || width <= 1 || height <= 1 || !(scale.pixelSize > 0) || !Number.isFinite(scale.pixelSize) || !Number.isFinite(scale.focusDisplacement) || scale.focusDisplacement === 0)
 		throw new RangeError('finite sensor dimensions, pixel size, and non-zero focus displacement are required')
-	const x = (plane.gradientX * scale.focusDisplacement) / ((width - 1) * scale.pixelSize)
-	const y = (plane.gradientY * scale.focusDisplacement) / ((height - 1) * scale.pixelSize)
-	return { x, y, magnitude: Math.atan(Math.hypot(x, y)) }
+	const slopeX = (plane.gradientX * scale.focusDisplacement) / ((width - 1) * scale.pixelSize)
+	const slopeY = (plane.gradientY * scale.focusDisplacement) / ((height - 1) * scale.pixelSize)
+	return { x: Math.atan(slopeX), y: Math.atan(slopeY), magnitude: Math.atan(Math.hypot(slopeX, slopeY)) }
+}
+
+// Converts normalized quadratic coefficients into physical principal curvatures and approximate radii.
+export function analyzePhysicalCurvature(surface: FocusSurfaceCoefficients, width: number, height: number, scale: Required<Pick<AberrationPhysicalScale, 'pixelSize' | 'focusDisplacement'>>): PhysicalCurvatureAnalysis {
+	if (!Number.isInteger(width) || !Number.isInteger(height) || width <= 1 || height <= 1 || !(scale.pixelSize > 0) || !Number.isFinite(scale.pixelSize) || !Number.isFinite(scale.focusDisplacement) || scale.focusDisplacement === 0)
+		throw new RangeError('finite sensor dimensions, pixel size, and non-zero focus displacement are required')
+	const sensorWidth = (width - 1) * scale.pixelSize
+	const sensorHeight = (height - 1) * scale.pixelSize
+	const hxx = (2 * surface.qxx * scale.focusDisplacement) / (sensorWidth * sensorWidth)
+	const hxy = (surface.qxy * scale.focusDisplacement) / (sensorWidth * sensorHeight)
+	const hyy = (2 * surface.qyy * scale.focusDisplacement) / (sensorHeight * sensorHeight)
+	const mean = 0.5 * (hxx + hyy)
+	const spread = Math.hypot(0.5 * (hxx - hyy), hxy)
+	const principalX = mean + spread
+	const principalY = mean - spread
+	const threshold = Number.EPSILON * Math.max(1, Math.abs(principalX), Math.abs(principalY))
+	return { principalX, principalY, radiusX: Math.abs(principalX) > threshold ? 1 / principalX : undefined, radiusY: Math.abs(principalY) > threshold ? 1 / principalY : undefined }
 }
 
 // Estimates center-to-edge focus offset from finite best-focus samples and normalized radii.
@@ -119,17 +148,36 @@ export function criticalFocusZone(options: CriticalFocusOptions): CriticalFocusR
 	return { tolerance: wavelength * focalRatio * focalRatio, criterion }
 }
 
-// Evaluates a common surface at four corners and returns its peak-to-peak focus variation.
+// Evaluates all interior and boundary extremum candidates over the normalized sensor rectangle.
 export function focusSurfaceEffect(surface: FocusSurfaceCoefficients): number {
+	const candidates: { readonly u: number; readonly v: number }[] = [
+		{ u: 0, v: 0 },
+		{ u: -0.5, v: -0.5 },
+		{ u: 0.5, v: -0.5 },
+		{ u: -0.5, v: 0.5 },
+		{ u: 0.5, v: 0.5 },
+	]
+	for (const u of [-0.5, 0.5]) addBoundaryCandidate(candidates, u, -(surface.ay + surface.qxy * u) / (2 * surface.qyy))
+	for (const v of [-0.5, 0.5]) addBoundaryCandidate(candidates, -(surface.ax + surface.qxy * v) / (2 * surface.qxx), v)
+	const determinant = 4 * surface.qxx * surface.qyy - surface.qxy * surface.qxy
+	if (Math.abs(determinant) > Number.EPSILON) {
+		const u = (-2 * surface.qyy * surface.ax + surface.qxy * surface.ay) / determinant
+		const v = (surface.qxy * surface.ax - 2 * surface.qxx * surface.ay) / determinant
+		addBoundaryCandidate(candidates, u, v)
+	}
 	let minimum = Number.POSITIVE_INFINITY
 	let maximum = Number.NEGATIVE_INFINITY
-	for (const u of [-0.5, 0.5])
-		for (const v of [-0.5, 0.5]) {
-			const value = surface.c + surface.ax * u + surface.ay * v + surface.qxx * u * u + surface.qxy * u * v + surface.qyy * v * v
-			minimum = Math.min(minimum, value)
-			maximum = Math.max(maximum, value)
-		}
+	for (let i = 0; i < candidates.length; i++) {
+		const value = evaluateFocusSurface(surface, candidates[i].u, candidates[i].v)
+		minimum = Math.min(minimum, value)
+		maximum = Math.max(maximum, value)
+	}
 	return maximum - minimum
+}
+
+// Adds a finite extremum candidate only when it lies on or inside the normalized sensor.
+function addBoundaryCandidate(candidates: { u: number; v: number }[], u: number, v: number): void {
+	if (Number.isFinite(u) && Number.isFinite(v) && u >= -0.5 && u <= 0.5 && v >= -0.5 && v <= 0.5) candidates.push({ u, v })
 }
 
 // Returns a finite sample median without mutating caller-owned data.

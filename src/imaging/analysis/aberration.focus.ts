@@ -1,4 +1,5 @@
 import { robustLinearLeastSquares } from '../../math/numerical/least.squares'
+import type { NumberArray } from '../../math/numerical/math'
 import type { AberrationWarning } from './aberration.types'
 
 // Robust one-dimensional quadratic focus-curve fitting for completed focus scans.
@@ -169,11 +170,47 @@ export function fitAberrationFocusCurve(points: readonly AberrationFocusPoint[],
 	if (usedCount < points.length) warnings.push({ code: 'robustOutliers', values: { rejectedCount: points.length - usedCount } })
 	if (Math.abs(tMinimum) > 0.9) warnings.push({ code: 'minimumNearRangeEdge', values: { normalizedPosition: tMinimum } })
 	const degreesOfFreedom = usedCount - 3
-	const uncertainty = degreesOfFreedom > 0 ? Math.sqrt(sumSquares / degreesOfFreedom / (4 * a * a)) * halfSpan : undefined
+	const uncertainty = degreesOfFreedom > 0 ? focusMinimumUncertainty(design, target, fit.weights, used, c, b, a, halfSpan, degreesOfFreedom) : undefined
 	const condition = Math.min(1, Math.max(0, Math.log10(positiveNumber(options.maxConditionNumber, DEFAULT_MAXIMUM_CONDITION_NUMBER) / Math.max(1, fit.conditionNumber)) / Math.log10(positiveNumber(options.maxConditionNumber, DEFAULT_MAXIMUM_CONDITION_NUMBER))))
 	const confidence = Math.sqrt(usedCount / points.length) * condition
 
 	return { success: true, model: 'quadratic', points, used, minimum: { x: position, y: c + b * tMinimum + a * tMinimum * tMinimum }, uncertainty, rms, r2, conditionNumber: fit.conditionNumber, confidence, warnings }
+}
+
+// Propagates the final weighted quadratic-coefficient covariance to the fitted minimum position.
+function focusMinimumUncertainty(design: readonly Float64Array[], target: Float64Array, weights: Readonly<NumberArray>, used: readonly boolean[], c: number, b: number, a: number, halfSpan: number, degreesOfFreedom: number): number | undefined {
+	let m00 = 0
+	let m01 = 0
+	let m02 = 0
+	let m11 = 0
+	let m12 = 0
+	let m22 = 0
+	let weightedSquares = 0
+	for (let i = 0; i < design.length; i++) {
+		if (!used[i]) continue
+		const weight = weights[i]
+		const t = design[i][1]
+		const t2 = design[i][2]
+		m00 += weight
+		m01 += weight * t
+		m02 += weight * t2
+		m11 += weight * t * t
+		m12 += weight * t * t2
+		m22 += weight * t2 * t2
+		const residual = target[i] - (c + b * t + a * t2)
+		weightedSquares += weight * residual * residual
+	}
+	const determinant = m00 * (m11 * m22 - m12 * m12) - m01 * (m01 * m22 - m12 * m02) + m02 * (m01 * m12 - m11 * m02)
+	const scale = Math.max(1, Math.abs(m00), Math.abs(m01), Math.abs(m02), Math.abs(m11), Math.abs(m12), Math.abs(m22))
+	if (!(Math.abs(determinant) > Number.EPSILON * scale * scale * scale)) return undefined
+	const residualVariance = weightedSquares / degreesOfFreedom
+	const covarianceBB = (residualVariance * (m00 * m22 - m02 * m02)) / determinant
+	const covarianceAA = (residualVariance * (m00 * m11 - m01 * m01)) / determinant
+	const covarianceBA = (residualVariance * (m01 * m02 - m00 * m12)) / determinant
+	const derivativeB = -1 / (2 * a)
+	const derivativeA = b / (2 * a * a)
+	const variance = derivativeB * derivativeB * covarianceBB + derivativeA * derivativeA * covarianceAA + 2 * derivativeB * derivativeA * covarianceBA
+	return variance >= 0 && Number.isFinite(variance) ? Math.sqrt(variance) * halfSpan : undefined
 }
 
 // Validates finite positive focus measurements, weights, and unique focuser positions.

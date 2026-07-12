@@ -83,6 +83,20 @@ test('measures an elliptical Gaussian principal shape', () => {
 	expect(profile.theta).toBeCloseTo(theta, 1)
 })
 
+// Preserves axial orientation near the 0/PI wrap without flipping the principal axis.
+test('normalizes elliptical orientation near PI', () => {
+	const theta = Math.PI - 0.08
+	const source = image(81, 81)
+	addGaussian(source, 40, 40, 3, 1.5, theta, 0.6)
+	const profile = measureStarProfile(source, { x: 40, y: 40 }, { initialRadius: 4, maximumRadius: 24, minSNR: 0 })
+
+	expect(profile.valid).toBeTrue()
+	expect(profile.theta).toBeDefined()
+	expect(profile.theta).toBeGreaterThan(0)
+	expect(profile.theta).toBeLessThan(Math.PI)
+	expect(profile.theta).toBeCloseTo(theta, 1)
+})
+
 // Uses the annular median and MAD path without biasing a centered star on a smooth background gradient.
 test('measures a star over an inclined background', () => {
 	const source = image(65, 65, 0)
@@ -162,4 +176,24 @@ test('marks a near-border profile', () => {
 
 	expect(profile.flags).toContain('nearBorder')
 	expect(Number.isFinite(profile.hfd)).toBeTrue()
+})
+
+// Distinguishes an ROI truncated by the sensor boundary from a merely nearby warning.
+test('flags a star profile clipped by the sensor boundary', () => {
+	const source = image(33, 33)
+	addGaussian(source, 1.5, 16, 3, 2, 0, 0.6)
+	const profile = measureStarProfile(source, { x: 2, y: 16 }, { initialRadius: 5, maximumRadius: 16, minSNR: 0 })
+
+	expect(profile.flags).toContain('clipped')
+	expect(profile.valid).toBeFalse()
+})
+
+// Returns a discriminated low-signal result without leaking non-finite physical metrics.
+test('rejects a flat low-signal candidate', () => {
+	const profile = measureStarProfile(image(33, 33), { x: 16, y: 16 })
+
+	expect(profile.valid).toBeFalse()
+	expect(profile.flags).toContain('lowSignal')
+	expect(profile.hfd).toBeUndefined()
+	expect(profile.fwhm).toBeUndefined()
 })

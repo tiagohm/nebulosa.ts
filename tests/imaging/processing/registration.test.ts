@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import type { AffineTransform } from '../../../src/astrometry/matching/star.matching'
 import type { Image, ImageRawPrecision } from '../../../src/imaging/model/types'
-import { registerImage, warpImage } from '../../../src/imaging/processing/registration'
+import { registerImage, registerStars, warpImage } from '../../../src/imaging/processing/registration'
 import type { DetectedStar } from '../../../src/imaging/stars/detector'
 import { Bitpix } from '../../../src/io/formats/fits/fits'
 
@@ -49,6 +49,15 @@ function expectRawClose(actual: ArrayLike<number>, expected: ArrayLike<number>, 
 const IDENTITY: AffineTransform = { m00: 1, m01: 0, tx: 0, m10: 0, m11: 1, ty: 0 }
 
 describe('image registration', () => {
+	test('resolves star correspondences and transforms without warping an image', () => {
+		const result = registerStars(makeStars(), makeStars(-2, 1), { acceptance: { minInliers: 3, maxRmsError: 0.5 } })
+		expect(result.success).toBeTrue()
+		if (!result.success) return
+		expect(result.match.matches).toHaveLength(6)
+		expect(result.transform.summary.translationX).toBeCloseTo(2, 8)
+		expect(result.transform.summary.translationY).toBeCloseTo(-1, 8)
+	})
+
 	test('warps a translated target onto the reference grid and exposes both transform directions', () => {
 		const reference = makeImage(18, 18, 1, (x, y) => ((x * 3 + y * 5) % 17) / 16)
 		const target = translateImage(reference, 2, -1)

@@ -1,7 +1,8 @@
 import { expect, test } from 'bun:test'
-import { diagnoseSingleFrameAberration } from '../../../src/imaging/analysis/aberration.diagnostic'
+import { diagnoseFocusScan, diagnoseSingleFrameAberration } from '../../../src/imaging/analysis/aberration.diagnostic'
 import type { AberrationInspectionQuality, AberrationStar } from '../../../src/imaging/analysis/aberration.types'
 import type { StarProfile } from '../../../src/imaging/stars/profile'
+import { analyzeFocusCurvature, analyzeFocusPlane, fitFocusSurface } from '../../../src/math/numerical/surface.fit'
 
 // Creates a valid selected profile with a prescribed axial direction in normalized sensor coordinates.
 function star(u: number, v: number, theta: number): AberrationStar {
@@ -66,4 +67,22 @@ test('reports radial and tangential elongation findings from axial orientation',
 
 	expect(diagnoseSingleFrameAberration(radial, [], quality(radial.length)).some((finding) => finding.kind === 'radialElongation')).toBeTrue()
 	expect(diagnoseSingleFrameAberration(tangential, [], quality(tangential.length)).some((finding) => finding.kind === 'tangentialElongation')).toBeTrue()
+})
+
+// Refuses significance-based scan findings when the exact-fit surface has no residual degrees of freedom.
+test('keeps focus-scan findings inconclusive without covariance', () => {
+	const fit = fitFocusSurface(
+		[
+			{ u: -0.5, v: -0.5, focus: 90 },
+			{ u: 0.5, v: -0.5, focus: 100 },
+			{ u: 0, v: 0.5, focus: 95 },
+		],
+		{ model: 'plane' },
+	)
+	expect(fit.success).toBeTrue()
+	if (!fit.success) return
+	const findings = diagnoseFocusScan(fit, analyzeFocusPlane(fit.coefficients), analyzeFocusCurvature(fit.coefficients), undefined)
+	expect(findings).toHaveLength(1)
+	expect(findings[0].kind).toBe('inconclusive')
+	expect(findings[0].limitations).toContain('modelUncertaintyUnavailable')
 })

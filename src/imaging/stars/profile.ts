@@ -445,13 +445,14 @@ function hasSecondaryPeak(image: Image, x: number, y: number, radius: number, ba
 function profileFromMeasurement(width: number, height: number, sourceIndex: number | undefined, reachedBorder: boolean, background: BackgroundEstimate, measurement: SignalMeasurement, options: Required<Omit<MeasureStarProfileOptions, 'channel'>>, flags: StarProfileFlag[]): StarProfile {
 	if (background.nonFinite || measurement.nonFinite) addFlag(flags, 'nonFinite')
 	if (measurement.x < options.borderMargin || measurement.y < options.borderMargin || measurement.x > width - 1 - options.borderMargin || measurement.y > height - 1 - options.borderMargin) addFlag(flags, 'nearBorder')
-	if (reachedBorder && measurement.outerFlux > measurement.flux * OUTER_FLUX_FRACTION) addFlag(flags, 'clipped')
 	if (measurement.saturatedFraction > options.maximumSaturatedFraction) addFlag(flags, 'saturated')
 	if (measurement.snr < options.minSNR) addFlag(flags, 'lowSignal')
 
 	const major = measurement.majorVariance !== undefined ? GAUSSIAN_FWHM_FACTOR * Math.sqrt(measurement.majorVariance) : undefined
 	const minor = measurement.minorVariance !== undefined ? GAUSSIAN_FWHM_FACTOR * Math.sqrt(measurement.minorVariance) : undefined
 	const fwhm = major !== undefined && minor !== undefined ? Math.sqrt(major * minor) : undefined
+	const borderDistance = Math.min(measurement.x, measurement.y, width - 1 - measurement.x, height - 1 - measurement.y)
+	if (reachedBorder && (measurement.outerFlux > measurement.flux * OUTER_FLUX_FRACTION || borderDistance < options.initialRadius || (major !== undefined && borderDistance < 0.5 * major))) addFlag(flags, 'clipped')
 
 	if (major === undefined || minor === undefined || measurement.eccentricity === undefined || measurement.elongation === undefined) addFlag(flags, 'degenerateShape')
 
@@ -510,7 +511,7 @@ function measureStarProfileFromGrayscale(image: Image, star: Readonly<Point>, op
 		const background = estimateBackground(image, x, y, radius, scratch)
 		if (!background) return failedProfile(star, ['invalidBackground'], sourceIndex)
 		const measurement = measureSignal(image, x, y, radius, background.background, background.deviation, options.saturationLevel, scratch)
-		if (!measurement) return failedProfile(star, ['invalidCentroid'], sourceIndex)
+		if (!measurement) return failedProfile(star, ['lowSignal'], sourceIndex)
 
 		const major = measurement.majorVariance !== undefined ? GAUSSIAN_FWHM_FACTOR * Math.sqrt(measurement.majorVariance) : undefined
 		const minor = measurement.minorVariance !== undefined ? GAUSSIAN_FWHM_FACTOR * Math.sqrt(measurement.minorVariance) : undefined

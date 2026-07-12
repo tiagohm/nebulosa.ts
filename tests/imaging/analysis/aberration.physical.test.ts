@@ -1,12 +1,27 @@
 import { expect, test } from 'bun:test'
-import { analyzePhysicalTilt, criticalFocusZone, estimateBackfocusCorrection, measureFocusFieldOffset } from '../../../src/imaging/analysis/aberration.physical'
+import { analyzePhysicalCurvature, analyzePhysicalTilt, criticalFocusZone, estimateBackfocusCorrection, focusSurfaceEffect, measureFocusFieldOffset } from '../../../src/imaging/analysis/aberration.physical'
 
 // Converts normalized focus-plane slopes with explicit physical scale and preserves displacement sign.
 test('converts focus-plane gradients into physical tilt', () => {
 	const tilt = analyzePhysicalTilt({ gradientX: 2, gradientY: -3, effect: 5 }, 101, 201, { pixelSize: 0.004, focusDisplacement: -0.01 })
-	expect(tilt.x).toBeCloseTo(-0.05, 12)
-	expect(tilt.y).toBeCloseTo(0.0375, 12)
+	expect(tilt.x).toBeCloseTo(Math.atan(-0.05), 12)
+	expect(tilt.y).toBeCloseTo(Math.atan(0.0375), 12)
 	expect(tilt.magnitude).toBeCloseTo(Math.atan(Math.hypot(-0.05, 0.0375)), 12)
+})
+
+// Includes interior extrema so a radially curved surface cannot report a zero effect.
+test('measures full quadratic surface effect over the sensor', () => {
+	expect(focusSurfaceEffect({ c: 100, ax: 0, ay: 0, qxx: 8, qxy: 0, qyy: 8 })).toBeCloseTo(4, 12)
+	expect(focusSurfaceEffect({ c: 100, ax: 2, ay: -3, qxx: 0, qxy: 0, qyy: 0 })).toBeCloseTo(5, 12)
+})
+
+// Converts anisotropic normalized curvature independently along physical sensor axes.
+test('converts quadratic coefficients into physical principal radii', () => {
+	const curvature = analyzePhysicalCurvature({ c: 0, ax: 0, ay: 0, qxx: 2, qxy: 0, qyy: 4 }, 101, 201, { pixelSize: 0.01, focusDisplacement: 0.5 })
+	expect(curvature.principalX).toBeCloseTo(2, 12)
+	expect(curvature.principalY).toBeCloseTo(1, 12)
+	expect(curvature.radiusX).toBeCloseTo(0.5, 12)
+	expect(curvature.radiusY).toBeCloseTo(1, 12)
 })
 
 // Measures a robust center-to-edge offset and applies only an explicit calibration response.

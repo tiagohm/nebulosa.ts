@@ -195,7 +195,7 @@ export interface AberrationFieldCell {
 }
 
 // Identifies a conservative qualitative pattern inferred from a single image.
-export type AberrationFindingKind = 'singleFrameFocusGradient' | 'fieldDegradation' | 'radialElongation' | 'tangentialElongation' | 'uniformElongation' | 'decenteredPattern' | 'insufficientData' | 'inconclusive'
+export type AberrationFindingKind = 'singleFrameFocusGradient' | 'sensorTiltPattern' | 'fieldCurvature' | 'astigmaticCurvature' | 'backfocusMismatch' | 'fieldDegradation' | 'radialElongation' | 'tangentialElongation' | 'uniformElongation' | 'decenteredPattern' | 'insufficientData' | 'inconclusive'
 
 // Provides one numeric observation used to support a finding.
 export interface AberrationEvidence {

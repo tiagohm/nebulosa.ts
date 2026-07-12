@@ -132,25 +132,40 @@ export interface ImageRegistrationFailure {
 // Result of registering target onto reference.
 export type ImageRegistrationResult = ImageRegistrationSuccess | ImageRegistrationFailure
 
+// Successful star-only registration without image resampling.
+export interface StarRegistrationSuccess {
+	readonly success: true
+	// Full accepted correspondence set.
+	readonly match: StarMatchingResult
+	// Forward and inverse target/reference transforms.
+	readonly transform: ImageRegistrationTransform
+}
+
+// Result of matching stars and validating their transform without allocating a warped image.
+export type StarRegistrationResult = StarRegistrationSuccess | ImageRegistrationFailure
+
+// Matches target stars onto reference stars and validates the transform without resampling pixels.
+export function registerStars(reference: readonly DetectedStar[], target: readonly DetectedStar[], options: Pick<ImageRegistrationOptions, 'matchStarsConfig' | 'acceptance'> = {}): StarRegistrationResult {
+	const match = matchStars(reference, target, options.matchStarsConfig)
+	if (!match.success || (options.acceptance?.minInliers !== undefined && match.inlierCount < options.acceptance.minInliers)) return { success: false, reason: 'match-failed', match }
+	if (options.acceptance?.maxRmsError !== undefined && (match.rmsError ?? Infinity) > options.acceptance.maxRmsError) return { success: false, reason: 'transform-error-too-high', match }
+	const transform = resolveRegistrationTransform(match)
+	if (transform === undefined) return { success: false, reason: 'invalid-transform', match }
+	if (!transformWithinBounds(transform.summary, options.acceptance)) return { success: false, reason: 'transform-out-of-bounds', match }
+	const inverseTransform = invertTransform(transform.transform)
+	return inverseTransform === undefined ? { success: false, reason: 'invalid-transform', match } : { success: true, match, transform: { ...transform, inverseTransform } }
+}
+
 // Registers target stars against reference stars and warps target pixels onto the reference grid.
 export function registerImage(reference: ImageRegistrationInput, target: ImageRegistrationInput, options: ImageRegistrationOptions = {}): ImageRegistrationResult {
 	if (!isImageShapeValid(reference.image)) return { success: false, reason: 'invalid-reference-image' }
 	if (!isImageShapeValid(target.image)) return { success: false, reason: 'invalid-target-image' }
 	if (reference.image.metadata.channels !== target.image.metadata.channels) return { success: false, reason: 'channel-mismatch' }
 
-	const match = matchStars(reference.stars, target.stars, options.matchStarsConfig)
-	if (!match.success || (options.acceptance?.minInliers !== undefined && match.inlierCount < options.acceptance.minInliers)) return { success: false, reason: 'match-failed', match }
-	if (options.acceptance?.maxRmsError !== undefined && (match.rmsError ?? Infinity) > options.acceptance.maxRmsError) return { success: false, reason: 'transform-error-too-high', match }
-
-	const transform = resolveRegistrationTransform(match)
-	if (transform === undefined) return { success: false, reason: 'invalid-transform', match }
-	if (!transformWithinBounds(transform.summary, options.acceptance)) return { success: false, reason: 'transform-out-of-bounds', match }
-
-	const inverseTransform = invertTransform(transform.transform)
-	if (inverseTransform === undefined) return { success: false, reason: 'invalid-transform', match }
-
-	const warped = warpImage(target.image, reference.image, inverseTransform, options)
-	return { success: true, match, transform: { ...transform, inverseTransform }, ...warped }
+	const registration = registerStars(reference.stars, target.stars, options)
+	if (!registration.success) return registration
+	const warped = warpImage(target.image, reference.image, registration.transform.inverseTransform, options)
+	return { ...registration, ...warped }
 }
 
 // Warps source pixels onto reference's grid using an inverse reference-to-source transform.
