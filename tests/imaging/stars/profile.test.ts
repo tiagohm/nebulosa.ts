@@ -46,6 +46,27 @@ function addGaussian(image: Image, x: number, y: number, majorSigma: number, min
 	}
 }
 
+// Adds a single elliptical Moffat component evaluated at pixel centers.
+function addMoffat(image: Image, x: number, y: number, alphaMajor: number, alphaMinor: number, theta: number, beta: number, amplitude: number): void {
+	const { raw, metadata } = image
+	const { width, height, stride } = metadata
+	const cosTheta = Math.cos(theta)
+	const sinTheta = Math.sin(theta)
+	const inverseMajor2 = 1 / (alphaMajor * alphaMajor)
+	const inverseMinor2 = 1 / (alphaMinor * alphaMinor)
+
+	for (let py = 0; py < height; py++) {
+		const dy = py - y
+		const row = py * stride
+		for (let px = 0; px < width; px++) {
+			const dx = px - x
+			const major = dx * cosTheta + dy * sinTheta
+			const minor = -dx * sinTheta + dy * cosTheta
+			raw[row + px] += amplitude / (1 + major * major * inverseMajor2 + minor * minor * inverseMinor2) ** beta
+		}
+	}
+}
+
 // Measures a round Gaussian profile through the adaptive curve-of-growth path.
 test('measures a round Gaussian with refined centroid and HFD', () => {
 	const sigma = 2
@@ -81,6 +102,79 @@ test('measures an elliptical Gaussian principal shape', () => {
 	expect(profile.eccentricity).toBeCloseTo(Math.sqrt(0.75), 1)
 	expect(profile.elongation).toBeCloseTo(2, 1)
 	expect(profile.theta).toBeCloseTo(theta, 1)
+})
+
+// Recovers a single elliptical Moffat component with subpixel center and analytic shape parameters.
+test('fits an elliptical Moffat profile at pixel centers', () => {
+	const source = image(81, 81)
+	const centerX = 40.3
+	const centerY = 39.7
+	const alphaMajor = 3.2
+	const alphaMinor = 1.8
+	const theta = 0.65
+	const beta = 2.4
+	addMoffat(source, centerX, centerY, alphaMajor, alphaMinor, theta, beta, 0.65)
+
+	const profile = measureStarProfile(source, { x: 40, y: 40 }, { model: 'moffat', initialRadius: 5, maximumRadius: 20, minSNR: 0 })
+
+	expect(profile.valid).toBeTrue()
+	expect(profile.model).toBe('moffat')
+	expect(profile.flags).not.toContain('poorFit')
+	expect(profile.moffat?.success).toBeTrue()
+	if (!profile.moffat?.success) return
+	expect(profile.x).toBeCloseTo(centerX, 2)
+	expect(profile.y).toBeCloseTo(centerY, 2)
+	expect(profile.moffat.alphaMajor).toBeCloseTo(alphaMajor, 2)
+	expect(profile.moffat.alphaMinor).toBeCloseTo(alphaMinor, 2)
+	expect(profile.moffat.beta).toBeCloseTo(beta, 2)
+	expect(profile.theta).toBeCloseTo(theta, 2)
+	expect(profile.moffat.rms).toBeLessThan(1e-5)
+})
+
+// Falls back to the valid moment profile when one Moffat component cannot represent a blend.
+test('falls back to moments when a requested Moffat fit is poor', () => {
+	const source = image(65, 65)
+	addGaussian(source, 29, 32, 1.5, 1.5, 0, 0.6)
+	addGaussian(source, 35, 32, 1.5, 1.5, 0, 0.45)
+
+	const moments = measureStarProfile(source, { x: 29, y: 32 }, { initialRadius: 4, maximumRadius: 16, minSNR: 0 })
+	const profile = measureStarProfile(source, { x: 29, y: 32 }, { model: 'moffat', initialRadius: 4, maximumRadius: 16, minSNR: 0 })
+
+	expect(profile.valid).toBeTrue()
+	expect(profile.model).toBe('moments')
+	expect(profile.flags).toContain('blended')
+	expect(profile.flags).toContain('poorFit')
+	expect(profile.moffat?.success).toBeFalse()
+	expect(profile.x).toBe(moments.x)
+	expect(profile.y).toBe(moments.y)
+	expect(profile.fwhm).toBe(moments.fwhm)
+	expect(profile.quality).toBeCloseTo(0.375)
+})
+
+// Reuses the fixed solver workspace without leaking parameters between batch entries.
+test('fits independent Moffat profiles in input order', () => {
+	const source = image(97, 65)
+	addMoffat(source, 24.2, 31.8, 2.6, 2.6, 0, 2.2, 0.6)
+	addMoffat(source, 72.25, 32.3, 3.1, 1.7, Math.PI - 0.2, 3.1, 0.55)
+
+	const profiles = measureStarProfiles(
+		source,
+		[
+			{ x: 24, y: 32 },
+			{ x: 72, y: 32 },
+		],
+		{ model: 'moffat', initialRadius: 5, maximumRadius: 18, minSNR: 0 },
+	)
+
+	expect(profiles.map((profile) => profile.sourceIndex)).toEqual([0, 1])
+	expect(profiles.every((profile) => profile.model === 'moffat' && profile.moffat?.success)).toBeTrue()
+	expect(profiles[0].theta).toBeUndefined()
+	const firstFit = profiles[0].moffat
+	const secondFit = profiles[1].moffat
+	if (!firstFit?.success || !secondFit?.success) return
+	expect(firstFit.beta).toBeCloseTo(2.2, 2)
+	expect(profiles[1].theta).toBeCloseTo(Math.PI - 0.2, 2)
+	expect(secondFit.beta).toBeCloseTo(3.1, 2)
 })
 
 // Preserves axial orientation near the 0/PI wrap without flipping the principal axis.
@@ -148,6 +242,18 @@ test('detects and profiles a candidate through the combined API', () => {
 	expect(profiles[0].sourceIndex).toBe(0)
 	expect(profiles[0].valid).toBeTrue()
 	expect(profiles[0].hfd).toBeGreaterThan(0)
+})
+
+// Propagates the optional model through the detector-backed entry point used by the inspector.
+test('detects and fits a Moffat candidate through the combined API', () => {
+	const source = image(65, 65)
+	addMoffat(source, 32.2, 31.8, 2.8, 1.9, 0.4, 2.6, 0.75)
+
+	const profiles = detectStarProfiles(source, { maxStars: 1 }, { model: 'moffat', initialRadius: 5, maximumRadius: 18, minSNR: 0 })
+
+	expect(profiles).toHaveLength(1)
+	expect(profiles[0].model).toBe('moffat')
+	expect(profiles[0].moffat?.success).toBeTrue()
 })
 
 // Flags saturation and a resolved secondary maximum without changing the input image.

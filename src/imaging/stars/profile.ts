@@ -5,9 +5,10 @@ import type { Angle } from '../../math/units/angle'
 import type { Image, ImageChannelOrGray } from '../model/types'
 import { grayscale } from '../processing/geometry'
 import { type DetectStarOptions, detectStars } from './detector'
+import { createMoffatFitWorkspace, fitEllipticalMoffat, type MoffatFitWorkspace, type MoffatProfileFit } from './profile.moffat'
 import { starMomentShape } from './shape'
 
-// Robust moment-based optical star profiles measured from grayscale image apertures.
+// Robust moment-based and optional Moffat optical star profiles measured from grayscale apertures.
 // The functions return fresh result objects, never mutate the input image, and use pixels and radians.
 
 // Full width at half maximum of a unit-variance Gaussian, in pixels per standard deviation.
@@ -36,7 +37,7 @@ const MIN_ORIENTATION_ECCENTRICITY = 0.05
 const BLEND_PEAK_RATIO = 0.25
 
 // Identifies the implemented profile model.
-export type StarProfileModel = 'moments'
+export type StarProfileModel = 'moments' | 'moffat'
 
 // Marks a measurement condition that can reduce confidence or invalidate a star profile.
 export type StarProfileFlag = 'nonFinite' | 'nearBorder' | 'clipped' | 'saturated' | 'lowSignal' | 'invalidBackground' | 'invalidCentroid' | 'degenerateShape' | 'blended' | 'poorFit'
@@ -75,13 +76,15 @@ export interface StarProfile extends Readonly<Point> {
 	readonly quality: number
 	// Measurement model used for this profile.
 	readonly model: StarProfileModel
+	// Moffat fit diagnostics when that model was explicitly requested, including failed fallback attempts.
+	readonly moffat?: MoffatProfileFit
 	// Stable flags describing degraded or invalid measurement conditions.
 	readonly flags: readonly StarProfileFlag[]
 }
 
-// Configures robust moment-profile measurement for one star or a batch.
+// Configures robust moment measurement and an optional single-component elliptical Moffat refinement.
 export interface MeasureStarProfileOptions {
-	// Requested profile model; this foundation currently supports only `moments`.
+	// Requested profile model; `moffat` falls back to moments when its nonlinear fit is rejected.
 	readonly model?: StarProfileModel
 	// Image channel or grayscale coefficients used for color inputs.
 	readonly channel?: ImageChannelOrGray
@@ -109,6 +112,8 @@ interface ProfileScratch {
 	deviations: Float64Array
 	// Flux accumulated by radial HFD bin.
 	bins: Float64Array
+	// Fixed-size workspace reused by optional Moffat fits.
+	readonly moffat: MoffatFitWorkspace
 }
 
 // Stores the robust local background estimated in an annulus around a candidate.
@@ -159,7 +164,7 @@ function resolveOptions(options: MeasureStarProfileOptions): Required<Omit<Measu
 	const maximumRadius = Math.max(initialRadius, finitePositive(options.maximumRadius, DEFAULT_MAXIMUM_RADIUS))
 
 	return {
-		model: 'moments',
+		model: options.model === 'moffat' ? 'moffat' : 'moments',
 		initialRadius,
 		maximumRadius,
 		maxIterations: Math.max(1, Math.trunc(finitePositive(options.maxIterations, DEFAULT_MAX_ITERATIONS))),
@@ -484,7 +489,31 @@ function profileQuality(flags: readonly StarProfileFlag[], invalid: boolean): nu
 	if (flags.includes('nearBorder')) quality *= 0.7
 	if (flags.includes('blended')) quality *= 0.5
 	if (flags.includes('degenerateShape')) quality *= 0.8
+	if (flags.includes('poorFit')) quality *= 0.75
 	return quality
+}
+
+// Applies an explicitly requested Moffat refinement or annotates a moment-profile fallback.
+function refineWithMoffat(image: Image, radius: number, measurement: SignalMeasurement, background: BackgroundEstimate, options: Required<Omit<MeasureStarProfileOptions, 'channel'>>, flags: StarProfileFlag[], profile: StarProfile, workspace: MoffatFitWorkspace): StarProfile {
+	if (options.model !== 'moffat') return profile
+	const major = measurement.majorVariance !== undefined ? GAUSSIAN_FWHM_FACTOR * Math.sqrt(measurement.majorVariance) : undefined
+	const minor = measurement.minorVariance !== undefined ? GAUSSIAN_FWHM_FACTOR * Math.sqrt(measurement.minorVariance) : undefined
+	const moffat =
+		major !== undefined && minor !== undefined
+			? fitEllipticalMoffat(image, { x: measurement.x, y: measurement.y, radius, background: background.background, deviation: background.deviation, peak: measurement.peak, major, minor, theta: measurement.theta ?? 0, saturationLevel: options.saturationLevel }, workspace)
+			: ({ success: false, reason: 'invalidInput', iterations: 0 } as const)
+
+	if (!moffat.success) {
+		addFlag(flags, 'poorFit')
+		return { ...profile, quality: profileQuality(flags, !profile.valid), moffat, flags }
+	}
+
+	const fwhmFactor = 2 * Math.sqrt(2 ** (1 / moffat.beta) - 1)
+	const fittedMajor = moffat.alphaMajor * fwhmFactor
+	const fittedMinor = moffat.alphaMinor * fwhmFactor
+	const elongation = fittedMajor / fittedMinor
+	const eccentricity = Math.sqrt(Math.max(0, 1 - 1 / (elongation * elongation)))
+	return { ...profile, x: moffat.centerX, y: moffat.centerY, fwhm: Math.sqrt(fittedMajor * fittedMinor), major: fittedMajor, minor: fittedMinor, eccentricity, elongation, theta: moffat.theta, model: 'moffat', moffat }
 }
 
 // Measures a profile from a grayscale image and an optional source index using one reusable scratch context.
@@ -529,13 +558,14 @@ function measureStarProfileFromGrayscale(image: Image, star: Readonly<Point>, op
 	const minor = finalMeasurement.minorVariance !== undefined ? GAUSSIAN_FWHM_FACTOR * Math.sqrt(finalMeasurement.minorVariance) : undefined
 	if (hasSecondaryPeak(image, finalMeasurement.x, finalMeasurement.y, radius, finalBackground.background, finalMeasurement.peak, minor)) addFlag(flags, 'blended')
 
-	return profileFromMeasurement(width, height, sourceIndex, reachedBorder, finalBackground, finalMeasurement, options, flags)
+	const profile = profileFromMeasurement(width, height, sourceIndex, reachedBorder, finalBackground, finalMeasurement, options, flags)
+	return refineWithMoffat(image, radius, finalMeasurement, finalBackground, options, flags, profile, scratch.moffat)
 }
 
 // Measures one star profile after converting a color image to grayscale when necessary.
 export function measureStarProfile(image: Image, star: Readonly<Point>, options: MeasureStarProfileOptions = {}): StarProfile {
 	const grayscaleImage = grayscale(image, options.channel)
-	const scratch: ProfileScratch = { ring: new Float64Array(0), deviations: new Float64Array(0), bins: new Float64Array(0) }
+	const scratch: ProfileScratch = { ring: new Float64Array(0), deviations: new Float64Array(0), bins: new Float64Array(0), moffat: createMoffatFitWorkspace() }
 	return measureStarProfileFromGrayscale(grayscaleImage, star, resolveOptions(options), undefined, scratch)
 }
 
@@ -543,7 +573,7 @@ export function measureStarProfile(image: Image, star: Readonly<Point>, options:
 export function measureStarProfiles(image: Image, stars: readonly Readonly<Point>[], options: MeasureStarProfileOptions = {}): StarProfile[] {
 	const grayscaleImage = grayscale(image, options.channel)
 	const resolved = resolveOptions(options)
-	const scratch: ProfileScratch = { ring: new Float64Array(0), deviations: new Float64Array(0), bins: new Float64Array(0) }
+	const scratch: ProfileScratch = { ring: new Float64Array(0), deviations: new Float64Array(0), bins: new Float64Array(0), moffat: createMoffatFitWorkspace() }
 	const profiles = new Array<StarProfile>(stars.length)
 
 	for (let i = 0; i < stars.length; i++) profiles[i] = measureStarProfileFromGrayscale(grayscaleImage, stars[i], resolved, i, scratch)
