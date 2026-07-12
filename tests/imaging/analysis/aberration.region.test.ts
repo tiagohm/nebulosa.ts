@@ -79,3 +79,18 @@ test('builds a regular scalar field without using rejected metric values', () =>
 	expect(cells[3].value).toBe(4)
 	expect(cells[1].value).toBeUndefined()
 })
+
+// Preserves FWHM field confidence when valid profiles intentionally omit HFD.
+test('builds metric-specific confidence for FWHM-only profiles', () => {
+	const fwhmOnly = star(0, 0)
+	const profile = { ...fwhmOnly.profile, hfd: undefined, fwhm: 3 }
+	const stars: AberrationStar[] = [{ ...fwhmOnly, profile }]
+	const [summary] = summarizeAberrationRegions(stars, createAberrationRegions({ layout: 'grid', columns: 1, rows: 1 }), { minimumStars: 1 })
+	const [cell] = buildAberrationField(stars, 'fwhm', { columns: 1, rows: 1, minimumStars: 1 })
+
+	expect(summary.medianHFD).toBeUndefined()
+	expect(summary.medianFWHM).toBe(3)
+	expect(summary.confidenceByMetric?.fwhm).toBeGreaterThan(0)
+	expect(cell.value).toBe(3)
+	expect(cell.confidence).toBeGreaterThan(0)
+})

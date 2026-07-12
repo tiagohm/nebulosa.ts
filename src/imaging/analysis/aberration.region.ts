@@ -108,7 +108,7 @@ export function buildAberrationField(stars: readonly AberrationStar[], metric: A
 			value,
 			deviation,
 			count,
-			confidence: value === undefined ? 0 : summary.confidence,
+			confidence: value === undefined ? 0 : (summary.confidenceByMetric?.[metric] ?? summary.confidence),
 		}
 	}
 
@@ -221,10 +221,12 @@ function summarizeRegion(region: AberrationRegionDefinition, stars: readonly Abe
 		elongation: elongation?.values.length ?? 0,
 		orientation: orientation.count,
 	}
-	const scalarSupport = hfd?.values.length ?? 0
-	const averageWeight = averageMetricWeight(stars, 'hfd')
-	const support = clamp(scalarSupport / minimumStars, 0, 1)
-	const confidence = support * averageWeight
+	const confidenceByMetric: Partial<Record<AberrationMetric, number>> = {
+		hfd: metricConfidence(stars, 'hfd', usedStarCountByMetric.hfd ?? 0, minimumStars),
+		fwhm: metricConfidence(stars, 'fwhm', usedStarCountByMetric.fwhm ?? 0, minimumStars),
+		eccentricity: metricConfidence(stars, 'eccentricity', usedStarCountByMetric.eccentricity ?? 0, minimumStars),
+		elongation: metricConfidence(stars, 'elongation', usedStarCountByMetric.elongation ?? 0, minimumStars),
+	}
 	const publishOrientation = orientation.count >= minimumOrientationStars && orientation.coherence >= minimumOrientationCoherence
 
 	return {
@@ -233,6 +235,7 @@ function summarizeRegion(region: AberrationRegionDefinition, stars: readonly Abe
 		center: regionCenter(region),
 		inputStarCount: stars.length,
 		usedStarCountByMetric,
+		confidenceByMetric,
 		medianHFD: hfd && hfd.values.length >= minimumStars ? hfd.median : undefined,
 		medianFWHM: fwhm && fwhm.values.length >= minimumStars ? fwhm.median : undefined,
 		medianEccentricity: eccentricity && eccentricity.values.length >= minimumStars ? eccentricity.median : undefined,
@@ -242,8 +245,13 @@ function summarizeRegion(region: AberrationRegionDefinition, stars: readonly Abe
 		deviationEccentricity: eccentricity && eccentricity.values.length >= minimumStars ? eccentricity.deviation : undefined,
 		orientation: publishOrientation ? orientation.theta : undefined,
 		orientationCoherence: orientation.count >= minimumOrientationStars ? orientation.coherence : undefined,
-		confidence,
+		confidence: confidenceByMetric.hfd ?? 0,
 	}
+}
+
+// Combines usable sample support and average selected profile weight for one scalar metric.
+function metricConfidence(stars: readonly AberrationStar[], metric: AberrationMetric, count: number, minimumStars: number): number {
+	return clamp(count / minimumStars, 0, 1) * averageMetricWeight(stars, metric)
 }
 
 // Extracts finite usable values for one scalar metric and computes median plus scaled MAD.

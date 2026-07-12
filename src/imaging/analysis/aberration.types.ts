@@ -138,6 +138,8 @@ export interface AberrationRegionResult {
 	readonly inputStarCount: number
 	// Number of usable samples for each scalar metric and orientation.
 	readonly usedStarCountByMetric: Readonly<Partial<Record<AberrationMeasuredQuantity, number>>>
+	// Bounded support and profile-weight confidence for each published scalar metric.
+	readonly confidenceByMetric?: Readonly<Partial<Record<AberrationMetric, number>>>
 	// Median half-flux diameter in pixels.
 	readonly medianHFD?: number
 	// Median Gaussian-equivalent FWHM in pixels.
@@ -156,7 +158,7 @@ export interface AberrationRegionResult {
 	readonly orientation?: Angle
 	// Axial orientation coherence in 0..1.
 	readonly orientationCoherence?: number
-	// Bounded aggregate quality from sample support and usable profile weights.
+	// Bounded HFD quality retained as the default regional confidence.
 	readonly confidence: number
 }
 
