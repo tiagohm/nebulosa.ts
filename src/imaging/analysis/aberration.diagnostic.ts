@@ -53,7 +53,7 @@ export function diagnoseSingleFrameAberration(stars: readonly AberrationStar[], 
 
 		const directional = radialTangentialFindings(oriented, quality, limitations)
 		for (let i = 0; i < directional.length; i++) findings.push(directional[i])
-	} else {
+	} else if (findings.length === 0) {
 		findings.push({
 			kind: 'inconclusive',
 			likelihood: 1,

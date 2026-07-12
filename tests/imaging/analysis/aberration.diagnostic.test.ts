@@ -69,6 +69,29 @@ test('reports radial and tangential elongation findings from axial orientation',
 	expect(diagnoseSingleFrameAberration(tangential, [], quality(tangential.length)).some((finding) => finding.kind === 'tangentialElongation')).toBeTrue()
 })
 
+// Keeps supported scalar findings decisive when round profiles provide no usable orientation.
+test('does not append inconclusive to supported size findings', () => {
+	const samples = [
+		[-0.1, 0, 2],
+		[0.1, 0, 2],
+		[-0.5, 0, 3],
+		[0.5, 0, 3],
+		[0, -0.5, 3],
+		[0, 0.5, 3],
+	] as const
+	const stars: AberrationStar[] = []
+	for (let i = 0; i < samples.length; i++) {
+		const [u, v, hfd] = samples[i]
+		const sample = star(u, v, 0)
+		stars.push({ ...sample, profile: { ...sample.profile, hfd, fwhm: hfd, eccentricity: 0, elongation: 1, theta: undefined } })
+	}
+	const support = quality(stars.length)
+	const findings = diagnoseSingleFrameAberration(stars, [], { ...support, usedStarCountByMetric: { ...support.usedStarCountByMetric, orientation: 0 } })
+
+	expect(findings.some((finding) => finding.kind === 'fieldDegradation')).toBeTrue()
+	expect(findings.some((finding) => finding.kind === 'inconclusive')).toBeFalse()
+})
+
 // Refuses significance-based scan findings when the exact-fit surface has no residual degrees of freedom.
 test('keeps focus-scan findings inconclusive without covariance', () => {
 	const fit = fitFocusSurface(
