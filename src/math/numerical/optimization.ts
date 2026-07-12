@@ -89,6 +89,8 @@ export interface LevenbergMarquardtOptions {
 	lambda?: number
 	// Minimum residual-improvement threshold.
 	tolerance?: number
+	// Optional non-negative sample weights; omitted entries are not permitted.
+	weights?: Readonly<NumberArray>
 }
 
 // Finite-difference step used to numerically approximate the Levenberg-Marquardt Jacobian.
@@ -597,9 +599,19 @@ export function powell(f: (params: Readonly<NumberArray>) => number, initial: Re
 // Computes the parameters of a Levenberg-Marquardt model.
 // This is a non-linear least squares optimization algorithm.
 // It minimizes the sum of squared residuals between the model and the data.
-export function levenbergMarquardt(x: Readonly<NumberArray>, y: Readonly<NumberArray>, model: (x: number, params: NumberArray) => number, params: number[], { maxIterations = 100, lambda = 0.01, tolerance = 1e-6 }: LevenbergMarquardtOptions = {}) {
+export function levenbergMarquardt(x: Readonly<NumberArray>, y: Readonly<NumberArray>, model: (x: number, params: NumberArray) => number, params: number[], { maxIterations = 100, lambda = 0.01, tolerance = 1e-6, weights }: LevenbergMarquardtOptions = {}) {
 	const n = Math.min(x.length, y.length)
 	const m = params.length
+	let effectiveSamples = n
+	if (weights !== undefined) {
+		if (weights.length < n) throw new RangeError('weights must contain one value per sample')
+		effectiveSamples = 0
+		for (let i = 0; i < n; i++) {
+			if (!Number.isFinite(weights[i]) || weights[i] < 0) throw new RangeError('weights must be finite and non-negative')
+			if (weights[i] > 0) effectiveSamples++
+		}
+	}
+	if (effectiveSamples < m) throw new RangeError('effective samples must be at least the number of model parameters')
 
 	const J = new Array<Float64Array>(m)
 	const PJ = new Float64Array(m)
@@ -639,7 +651,7 @@ export function levenbergMarquardt(x: Readonly<NumberArray>, y: Readonly<NumberA
 			for (let i = 0; i < n; i++) {
 				const ri = y[i] - YP[i]
 				R[i] = ri
-				error += ri * ri
+				error += (weights?.[i] ?? 1) * ri * ri
 			}
 
 			// Jacobian
@@ -658,7 +670,7 @@ export function levenbergMarquardt(x: Readonly<NumberArray>, y: Readonly<NumberA
 				const Ji = J[i]
 
 				let sum = 0
-				for (let k = 0; k < n; k++) sum += Ji[k] * R[k]
+				for (let k = 0; k < n; k++) sum += (weights?.[k] ?? 1) * Ji[k] * R[k]
 				JTR[i] = sum
 
 				const iOffset = i * m
@@ -667,7 +679,7 @@ export function levenbergMarquardt(x: Readonly<NumberArray>, y: Readonly<NumberA
 					const Jj = J[j]
 
 					let dot = 0
-					for (let k = 0; k < n; k++) dot += Ji[k] * Jj[k]
+					for (let k = 0; k < n; k++) dot += (weights?.[k] ?? 1) * Ji[k] * Jj[k]
 
 					JTJData[iOffset + j] = dot
 					JTJData[j * m + i] = dot
@@ -696,7 +708,7 @@ export function levenbergMarquardt(x: Readonly<NumberArray>, y: Readonly<NumberA
 		let newError = 0
 		for (let i = 0; i < n; i++) {
 			const di = y[i] - YPJ[i]
-			newError += di * di
+			newError += (weights?.[i] ?? 1) * di * di
 		}
 
 		if (newError < error) {

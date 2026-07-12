@@ -491,15 +491,22 @@ export function powerRegression(x: Readonly<NumberArray>, y: Readonly<NumberArra
 }
 
 // Computes the coefficients of a hyperbolic regression of the form y = b * sqrt(1 + ((x - c) / a)^2)
-export function hyperbolicRegression(x: Readonly<NumberArray>, y: Readonly<NumberArray>): HyperbolicRegression {
-	// Get the initial guess for A, for A, we take the mean value of the y
-	const A = meanOf(y)
-
-	// Get the initial guess for B, for B, we take the min value of the y
-	const B = minOf(y)[0]
-
-	// Get the initial guess for C, for C, we take the mean value of the x
-	const C = meanOf(x)
+export function hyperbolicRegression(x: Readonly<NumberArray>, y: Readonly<NumberArray>, weights?: Readonly<NumberArray>, initial?: readonly [a: number, b: number, c: number]): HyperbolicRegression {
+	let A = 0
+	let B = Number.POSITIVE_INFINITY
+	let C = 0
+	let weightSum = 0
+	for (let i = 0, n = Math.min(x.length, y.length); i < n; i++) {
+		const weight = weights?.[i] ?? 1
+		if (!(weight > 0)) continue
+		A += weight * y[i]
+		C += weight * x[i]
+		B = Math.min(B, y[i])
+		weightSum += weight
+	}
+	A = weightSum > 0 ? A / weightSum : meanOf(y)
+	B = Number.isFinite(B) ? B : minOf(y)[0]
+	C = weightSum > 0 ? C / weightSum : meanOf(x)
 
 	// https://github.com/observerly/iris/blob/main/pkg/vcurve/vcurve.go
 	function hyperbolic(x: number, [a, b, c]: NumberArray) {
@@ -507,7 +514,7 @@ export function hyperbolicRegression(x: Readonly<NumberArray>, y: Readonly<Numbe
 	}
 
 	// Use Levenberg-Marquardt to optimize the parameters
-	const [a, b, c] = levenbergMarquardt(x, y, hyperbolic, [Math.round(A), B, C], { maxIterations: 1000, tolerance: 1e-8 })
+	const [a, b, c] = levenbergMarquardt(x, y, hyperbolic, initial === undefined ? [Math.max(Math.abs(A), Number.EPSILON), B, C] : [...initial], { maxIterations: 1000, tolerance: 1e-8, weights })
 
 	return {
 		xPoints: x,

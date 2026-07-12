@@ -5,6 +5,7 @@ import { clone } from '../processing/arithmetic'
 import { mean3x3 } from '../processing/convolution'
 import { grayscale } from '../processing/geometry'
 import { psf } from '../processing/psf'
+import { starMomentShape } from './shape'
 
 // Star detection and photometry for an image. Median-filters out hot pixels, runs a PSF-matched
 // response to find candidate peaks, then measures each star's flux, SNR, half-flux diameter (HFD),
@@ -336,22 +337,8 @@ function measureStarPhotometryRaw(raw: Image['raw'], width: number, height: numb
 		}
 	}
 
-	const [eccentricity, elongation] = shapeFromMoments(momentXX / flux, momentXY / flux, momentYY / flux)
+	const { eccentricity, elongation } = starMomentShape(momentXX / flux, momentXY / flux, momentYY / flux)
 	return [flux, snr, hfd, fwhm, eccentricity, elongation]
-}
-
-// Derives eccentricity and major/minor axis ratio from normalized central second moments.
-function shapeFromMoments(momentXX: number, momentXY: number, momentYY: number): readonly [number | undefined, number | undefined] {
-	if (!Number.isFinite(momentXX) || !Number.isFinite(momentXY) || !Number.isFinite(momentYY)) return [undefined, undefined]
-	const trace = momentXX + momentYY
-	const determinant = momentXX * momentYY - momentXY * momentXY
-	const discriminant = Math.max(0, 0.25 * trace * trace - determinant)
-	const root = Math.sqrt(discriminant)
-	const major = 0.5 * trace + root
-	const minor = 0.5 * trace - root
-	if (!(major > Number.EPSILON) || !(minor > Number.EPSILON)) return [undefined, undefined]
-	const ratio = minor / major
-	return [Math.sqrt(Math.max(0, 1 - ratio)), Math.sqrt(1 / ratio)]
 }
 
 // Builds summed-area tables for fast local mean and variance queries.
