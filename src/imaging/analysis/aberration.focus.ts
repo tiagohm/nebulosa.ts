@@ -176,6 +176,8 @@ function fitQuadraticFocusCurve(points: readonly AberrationFocusPoint[], options
 	if (!(a > 0)) return failure(points, used, 'nonConvex')
 	const tMinimum = -b / (2 * a)
 	const position = center + halfSpan * tMinimum
+	const minimumValue = c + b * tMinimum + a * tMinimum * tMinimum
+	if (!Number.isFinite(minimumValue) || !(minimumValue > 0)) return failure(points, used, 'nonConvergent')
 	if ((options.requireMinimumInsideRange ?? true) && (position < minimumPosition || position > maximumPosition)) return failure(points, used, 'minimumOutsideRange')
 
 	let left = 0
@@ -207,7 +209,7 @@ function fitQuadraticFocusCurve(points: readonly AberrationFocusPoint[], options
 	const condition = Math.min(1, Math.max(0, Math.log10(positiveNumber(options.maxConditionNumber, DEFAULT_MAXIMUM_CONDITION_NUMBER) / Math.max(1, fit.conditionNumber)) / Math.log10(positiveNumber(options.maxConditionNumber, DEFAULT_MAXIMUM_CONDITION_NUMBER))))
 	const confidence = Math.sqrt(usedCount / points.length) * condition
 
-	const result: AberrationFocusCurveSuccess = { success: true, model: 'quadratic', points, used, minimum: { x: position, y: c + b * tMinimum + a * tMinimum * tMinimum }, uncertainty, rms, r2, conditionNumber: fit.conditionNumber, confidence, warnings }
+	const result: AberrationFocusCurveSuccess = { success: true, model: 'quadratic', points, used, minimum: { x: position, y: minimumValue }, uncertainty, rms, r2, conditionNumber: fit.conditionNumber, confidence, warnings }
 	FOCUS_CURVE_RESIDUALS.set(result, fit.residuals)
 	return result
 }

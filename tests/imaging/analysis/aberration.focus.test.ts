@@ -22,6 +22,17 @@ test('rejects a focus minimum outside the sampled range', () => {
 	expect(result.reason).toBe('minimumOutsideRange')
 })
 
+// Refuses a positive metric sweep whose leveraged endpoint would drive the fitted metric below zero.
+test('rejects a non-positive quadratic metric minimum', () => {
+	const points = [-2, -1, 0, 1, 2].map((position) => ({ position, value: 2 + position * position }))
+	points[4] = { position: 2, value: 50 }
+	const result = fitAberrationFocusCurve(points, { sigmaClip: 1e6 })
+
+	expect(result.success).toBeFalse()
+	if (result.success) return
+	expect(result.reason).toBe('nonConvergent')
+})
+
 // Recovers a noisy minimum while rejecting one gross metric outlier.
 test('fits a noisy focus curve with a gross outlier', () => {
 	const positions = [-4, -3, -2, -1, 0, 1, 2, 3, 4]
