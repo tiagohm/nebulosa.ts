@@ -78,6 +78,20 @@ test('fits a weighted hyperbolic focus curve', () => {
 	expect(result.minimum.y).toBeCloseTo(2.5, 5)
 })
 
+// Rejects a gross endpoint before it can bias nonlinear fit statistics and side support.
+test('robustly rejects a hyperbolic focus outlier', () => {
+	const positions = [-4, -3, -2, -1, 0, 1, 2, 3, 4]
+	const points = positions.map((position) => ({ position, value: 2.5 * Math.sqrt(1 + ((position - 0.4) / 1.7) ** 2) }))
+	points[0] = { position: -4, value: 80 }
+	const result = fitAberrationFocusCurve(points, { model: 'hyperbolic', sigmaClip: 3 })
+
+	expect(result.success).toBeTrue()
+	if (!result.success) return
+	expect(result.minimum.x).toBeCloseTo(0.4, 4)
+	expect(result.used[0]).toBeFalse()
+	expect(result.warnings.some((warning) => warning.code === 'robustOutliers')).toBeTrue()
+})
+
 // Recovers the intersection of two asymmetric robust branches.
 test('fits a trend-lines focus curve', () => {
 	const positions = [-5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5]

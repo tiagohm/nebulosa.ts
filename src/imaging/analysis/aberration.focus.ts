@@ -99,6 +99,8 @@ const DEFAULT_MAX_ITERATIONS = 20
 const DEFAULT_MAXIMUM_CONDITION_NUMBER = 1e10
 // Relative final robust weight retained as a curve point.
 const MINIMUM_RETAINED_WEIGHT = 1e-3
+// Median absolute normal residual used to scale nonlinear Tukey weights.
+const NORMAL_MAD = 0.6744897501960817
 // Maximum branch repartitioning passes for a trend-lines curve.
 const TREND_LINE_PARTITION_ITERATIONS = 12
 // Internal residuals retained only while automatic model candidates remain reachable.
@@ -231,13 +233,15 @@ function fitHyperbolicFocusCurve(points: readonly AberrationFocusPoint[], option
 		if (minimumIndex < 0 || domain.target[i] < domain.target[minimumIndex]) minimumIndex = i
 	}
 	if (minimumIndex < 0) return failure(points, emptyUsed, 'nonConvergent')
-	const regression = hyperbolicRegression(domain.positions, domain.target, domain.weights, [0.5, domain.target[minimumIndex], domain.positions[minimumIndex]])
+	const robustFit = fitRobustHyperbola(domain, [0.5, domain.target[minimumIndex], domain.positions[minimumIndex]], options)
+	const regression = robustFit.regression
 	const { a, b, c } = regression
 	if (!Number.isFinite(a) || !Number.isFinite(b) || !Number.isFinite(c) || Math.abs(a) <= Number.EPSILON || !(b > 0)) return failure(points, emptyUsed, 'nonConvergent')
 	const position = domain.center + domain.halfSpan * c
 	if ((options.requireMinimumInsideRange ?? true) && (position < domain.minimum || position > domain.maximum)) return failure(points, emptyUsed, 'minimumOutsideRange')
 
-	const used = new Array<boolean>(points.length).fill(true)
+	const used = new Array<boolean>(points.length)
+	for (let i = 0; i < points.length; i++) used[i] = robustFit.weights[i] > domain.weights[i] * MINIMUM_RETAINED_WEIGHT
 	if (!hasSideSupport(points, used, position, positiveInteger(options.minimumPointsPerSide, DEFAULT_MINIMUM_POINTS_PER_SIDE))) return failure(points, used, 'insufficientSides')
 	const jacobian = new Array<Float64Array>(points.length)
 	const zero = new Float64Array(points.length)
@@ -246,10 +250,80 @@ function fitHyperbolicFocusCurve(points: readonly AberrationFocusPoint[], option
 		const root = Math.sqrt(1 + u * u)
 		jacobian[i] = new Float64Array([(-b * u * u) / (a * root), root, (-b * u) / (a * root)])
 	}
-	const conditionFit = linearLeastSquares(jacobian, zero, { weights: domain.weights })
+	const conditionFit = linearLeastSquares(jacobian, zero, { weights: robustFit.weights })
 	const maximumCondition = positiveNumber(options.maxConditionNumber, DEFAULT_MAXIMUM_CONDITION_NUMBER)
 	if (conditionFit.rankDeficient || !Number.isFinite(conditionFit.conditionNumber) || conditionFit.conditionNumber > maximumCondition) return failure(points, used, 'illConditioned')
 	return focusCurveSuccess('hyperbolic', points, used, position, b, regression.predict, conditionFit.conditionNumber, maximumCondition, minimumPoints)
+}
+
+// Result of nonlinear Tukey reweighting for a normalized hyperbolic focus curve.
+interface RobustHyperbolicFit {
+	// Final nonlinear regression refitted with the retained robust weights.
+	readonly regression: ReturnType<typeof hyperbolicRegression>
+	// Base sample weights multiplied by their final Tukey weights.
+	readonly weights: Float64Array
+}
+
+// Iteratively reweights nonlinear residuals and performs a final fit with the converged weights.
+function fitRobustHyperbola(domain: NormalizedFocusData, initial: readonly [a: number, b: number, c: number], options: AberrationFocusCurveOptions): RobustHyperbolicFit {
+	const tuning = positiveNumber(options.sigmaClip, DEFAULT_SIGMA_CLIP)
+	const maximumIterations = positiveInteger(options.maxIterations, DEFAULT_MAX_ITERATIONS)
+	const seedDesign = new Array<Float64Array>(domain.positions.length)
+	for (let i = 0; i < seedDesign.length; i++) {
+		const position = domain.positions[i]
+		seedDesign[i] = new Float64Array([1, position, position * position])
+	}
+	const seed = robustLinearLeastSquares(seedDesign, domain.target, { weights: domain.weights, method: 'tukey', tuning, maxIterations: maximumIterations })
+	let weights = seed.rankDeficient ? domain.weights.slice() : Float64Array.from(seed.weights)
+	let parameters: readonly [number, number, number] = initial
+	const [seedIntercept, seedSlope, seedCurvature] = seed.coefficients
+	if (!seed.rankDeficient && seedCurvature > 0) {
+		const center = -seedSlope / (2 * seedCurvature)
+		const minimum = seedIntercept + seedSlope * center + seedCurvature * center * center
+		const width = Math.sqrt(minimum / (2 * seedCurvature))
+		if (Number.isFinite(center) && minimum > 0 && Number.isFinite(width) && width > Number.EPSILON) parameters = [width, minimum, center]
+	}
+	const convergenceScale = Math.max(1, maximumWeightOf(domain.weights))
+	for (let iteration = 0; iteration < maximumIterations; iteration++) {
+		const regression = hyperbolicRegression(domain.positions, domain.target, weights, parameters)
+		parameters = [regression.a, regression.b, regression.c]
+		const residuals = new Float64Array(domain.target.length)
+		for (let i = 0; i < residuals.length; i++) residuals[i] = domain.target[i] - regression.predict(domain.positions[i])
+		const scale = hyperbolicResidualScale(residuals)
+		const nextWeights = new Float64Array(weights.length)
+		let maximumDelta = 0
+		for (let i = 0; i < nextWeights.length; i++) {
+			const normalized = Math.abs(residuals[i]) / (Math.max(scale, Number.EPSILON) * tuning)
+			const complement = normalized < 1 ? 1 - normalized * normalized : 0
+			nextWeights[i] = domain.weights[i] * complement * complement
+			maximumDelta = Math.max(maximumDelta, Math.abs(nextWeights[i] - weights[i]))
+		}
+		weights = nextWeights
+		if (maximumDelta <= 1e-6 * convergenceScale) break
+	}
+	return { regression: hyperbolicRegression(domain.positions, domain.target, weights, parameters), weights }
+}
+
+// Estimates nonlinear residual scale from MAD, with RMS as the exact-fit fallback.
+function hyperbolicResidualScale(residuals: Float64Array): number {
+	const absolute = new Float64Array(residuals.length)
+	for (let i = 0; i < residuals.length; i++) absolute[i] = Math.abs(residuals[i])
+	absolute.sort()
+	const middle = absolute.length >>> 1
+	let scale = (absolute.length % 2 === 0 ? 0.5 * (absolute[middle - 1] + absolute[middle]) : absolute[middle]) / NORMAL_MAD
+	if (!(scale > 0)) {
+		let sumSquares = 0
+		for (let i = 0; i < residuals.length; i++) sumSquares += residuals[i] * residuals[i]
+		scale = Math.sqrt(sumSquares / residuals.length)
+	}
+	return scale
+}
+
+// Returns the largest finite weight in a non-empty normalized focus domain.
+function maximumWeightOf(weights: Float64Array): number {
+	let maximum = 0
+	for (let i = 0; i < weights.length; i++) maximum = Math.max(maximum, weights[i])
+	return maximum
 }
 
 // Fits two robust weighted line branches and iterates their partition around the intersection.
