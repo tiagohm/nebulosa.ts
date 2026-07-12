@@ -92,6 +92,17 @@ test('robustly rejects a hyperbolic focus outlier', () => {
 	expect(result.warnings.some((warning) => warning.code === 'robustOutliers')).toBeTrue()
 })
 
+// Returns a discriminated failure when an extreme Tukey cutoff removes every nonlinear sample.
+test('rejects a hyperbolic curve after excessive clipping', () => {
+	const values = [5, 3, 2, 3.2, 5]
+	const points = [-2, -1, 0, 1, 2].map((position, index) => ({ position, value: values[index] }))
+	const result = fitAberrationFocusCurve(points, { model: 'hyperbolic', sigmaClip: 1e-12 })
+
+	expect(result.success).toBeFalse()
+	if (result.success) return
+	expect(result.reason).toBe('excessiveRejection')
+})
+
 // Recovers the intersection of two asymmetric robust branches.
 test('fits a trend-lines focus curve', () => {
 	const positions = [-5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5]

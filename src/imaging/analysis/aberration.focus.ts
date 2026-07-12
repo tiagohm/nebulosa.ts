@@ -234,6 +234,7 @@ function fitHyperbolicFocusCurve(points: readonly AberrationFocusPoint[], option
 	}
 	if (minimumIndex < 0) return failure(points, emptyUsed, 'nonConvergent')
 	const robustFit = fitRobustHyperbola(domain, [0.5, domain.target[minimumIndex], domain.positions[minimumIndex]], options)
+	if (robustFit === undefined) return failure(points, emptyUsed, 'excessiveRejection')
 	const regression = robustFit.regression
 	const { a, b, c } = regression
 	if (!Number.isFinite(a) || !Number.isFinite(b) || !Number.isFinite(c) || Math.abs(a) <= Number.EPSILON || !(b > 0)) return failure(points, emptyUsed, 'nonConvergent')
@@ -265,7 +266,7 @@ interface RobustHyperbolicFit {
 }
 
 // Iteratively reweights nonlinear residuals and performs a final fit with the converged weights.
-function fitRobustHyperbola(domain: NormalizedFocusData, initial: readonly [a: number, b: number, c: number], options: AberrationFocusCurveOptions): RobustHyperbolicFit {
+function fitRobustHyperbola(domain: NormalizedFocusData, initial: readonly [a: number, b: number, c: number], options: AberrationFocusCurveOptions): RobustHyperbolicFit | undefined {
 	const tuning = positiveNumber(options.sigmaClip, DEFAULT_SIGMA_CLIP)
 	const maximumIterations = positiveInteger(options.maxIterations, DEFAULT_MAX_ITERATIONS)
 	const seedDesign = new Array<Float64Array>(domain.positions.length)
@@ -275,6 +276,7 @@ function fitRobustHyperbola(domain: NormalizedFocusData, initial: readonly [a: n
 	}
 	const seed = robustLinearLeastSquares(seedDesign, domain.target, { weights: domain.weights, method: 'tukey', tuning, maxIterations: maximumIterations })
 	let weights = seed.rankDeficient ? domain.weights.slice() : Float64Array.from(seed.weights)
+	if (positiveWeightCount(weights) < 3) return undefined
 	let parameters = initial
 	const [seedIntercept, seedSlope, seedCurvature] = seed.coefficients
 	if (!seed.rankDeficient && seedCurvature > 0) {
@@ -301,9 +303,17 @@ function fitRobustHyperbola(domain: NormalizedFocusData, initial: readonly [a: n
 			maximumDelta = Math.max(maximumDelta, Math.abs(nextWeights[i] - weights[i]))
 		}
 		weights = nextWeights
+		if (positiveWeightCount(weights) < 3) return undefined
 		if (maximumDelta <= 1e-6 * convergenceScale) break
 	}
 	return { regression: hyperbolicRegression(domain.positions, domain.target, weights, parameters), weights }
+}
+
+// Counts samples that remain effective in a weighted three-parameter hyperbolic fit.
+function positiveWeightCount(weights: Float64Array): number {
+	let count = 0
+	for (let i = 0; i < weights.length; i++) if (weights[i] > 0) count++
+	return count
 }
 
 // Estimates nonlinear residual scale from MAD, with RMS as the exact-fit fallback.
