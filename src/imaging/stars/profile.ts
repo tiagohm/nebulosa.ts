@@ -405,6 +405,7 @@ function hasSecondaryPeak(image: Image, x: number, y: number, radius: number, ba
 	const minimumPeak = peak * BLEND_PEAK_RATIO
 	const separation = Math.max(1.5, 0.75 * (minor ?? 2))
 	const separationSq = separation * separation
+	const radiusSq = radius * radius
 	const x0 = Math.max(1, Math.ceil(x - radius))
 	const y0 = Math.max(1, Math.ceil(y - radius))
 	const x1 = Math.min(width - 2, Math.floor(x + radius))
@@ -416,7 +417,8 @@ function hasSecondaryPeak(image: Image, x: number, y: number, radius: number, ba
 
 		for (let px = x0; px <= x1; px++) {
 			const dx = px - x
-			if (dx * dx + dy * dy <= separationSq) continue
+			const distanceSq = dx * dx + dy * dy
+			if (distanceSq <= separationSq || distanceSq > radiusSq) continue
 			const value = raw[row + px]
 			if (!Number.isFinite(value) || value - background < minimumPeak) continue
 

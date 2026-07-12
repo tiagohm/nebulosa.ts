@@ -273,6 +273,18 @@ test('flags saturated and blended profiles', () => {
 	expect(blendedProfile.flags).toContain('blended')
 })
 
+// Ignores a diagonal secondary peak that lies in the square bounds but outside the measured aperture.
+test('limits blend detection to the circular profile aperture', () => {
+	const source = image(65, 65)
+	addGaussian(source, 32, 32, 1.5, 1.5, 0, 0.6)
+	addGaussian(source, 39, 39, 1, 1, 0, 0.45)
+
+	const profile = measureStarProfile(source, { x: 32, y: 32 }, { initialRadius: 4, maximumRadius: 8, minSNR: 0 })
+
+	expect(profile.valid).toBeTrue()
+	expect(profile.flags).not.toContain('blended')
+})
+
 // Marks a profile close to the sensor boundary while keeping valid finite measurements available.
 test('marks a near-border profile', () => {
 	const source = image(65, 65)
