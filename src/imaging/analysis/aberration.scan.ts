@@ -280,21 +280,23 @@ export function inspectAberrationFocusScan(frames: readonly AberrationFocusFrame
 	if (usedFrameCount === 0) warnings.push({ code: 'noUsableFrames' })
 	if (surface && !surface.success) warnings.push({ code: 'surfaceFitFailed' })
 	if (options.backfocusCalibration !== undefined && !backfocusCalibrated) warnings.push({ code: 'invalidBackfocusCalibration' })
-	const breakdown = confidenceBreakdown(frameResults, regions, surface, tracking?.quality)
+	const breakdown = confidenceBreakdown(frameResults, regions, surface, metric, tracking?.quality)
 	const confidence = breakdown.total
 
 	return { width, height, frames: frameResults, regions, tracks: tracking?.tracks, surface, plane, curvature, fieldOffset, findings, quality: { inputFrameCount: frames.length, usedFrameCount, rejectedFrameCount: frames.length - usedFrameCount, confidence, breakdown, warnings } }
 }
 
 // Computes independent support and model-quality components plus their applicable geometric mean.
-function confidenceBreakdown(frames: readonly AberrationFocusFrameResult[], regions: readonly AberrationRegionFocusResult[], surface: FocusSurfaceFitResult | undefined, registrationQuality?: number): AberrationConfidenceBreakdown {
+function confidenceBreakdown(frames: readonly AberrationFocusFrameResult[], regions: readonly AberrationRegionFocusResult[], surface: FocusSurfaceFitResult | undefined, metric: AberrationFocusMetric, registrationQuality?: number): AberrationConfidenceBreakdown {
 	let usedFrames = 0
 	let stability = 0
 	for (let i = 0; i < frames.length; i++) {
 		const frame = frames[i]
 		if (frame.status !== 'used' || frame.inspection === undefined) continue
 		usedFrames++
-		stability += frame.inspection.quality.confidence
+		let metricSamples = 0
+		for (let j = 0; j < frame.inspection.regions.length; j++) metricSamples += frame.inspection.regions[j].usedStarCountByMetric[metric] ?? 0
+		stability += Math.min(1, metricSamples / frame.inspection.quality.selectedStarCount)
 	}
 	let successfulRegions = 0
 	let curveQuality = 0

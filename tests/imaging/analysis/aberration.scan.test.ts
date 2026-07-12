@@ -239,6 +239,8 @@ test('builds FWHM tracks without requiring HFD profiles', () => {
 	expect(result.frames.every((frame) => frame.status === 'used')).toBeTrue()
 	expect(result.tracks).toHaveLength(6)
 	expect(result.tracks?.every((track) => track.points.length === 7 && track.curve?.success)).toBeTrue()
+	expect(result.quality.breakdown.stability).toBeGreaterThan(0)
+	expect(result.quality.confidence).toBeGreaterThan(0)
 })
 
 // Prevents a frame rejected by registration from leaking into fixed-sensor regional curves.
