@@ -157,6 +157,7 @@ describe('Levenberg-Marquardt optimization', () => {
 
 		expect(() => levenbergMarquardt([0, 1], [0, 1], line, [1, 0], { weights: [1] })).toThrow(RangeError)
 		expect(() => levenbergMarquardt([0, 1], [0, 1], line, [1, 0], { weights: [1, -1] })).toThrow(RangeError)
+		expect(() => levenbergMarquardt([0, 1, 2], [1, 3, 5], line, [1, 0], { weights: [1, 0, 0] })).toThrow('effective samples must be at least the number of model parameters')
 	})
 
 	test('quadratic', () => {
