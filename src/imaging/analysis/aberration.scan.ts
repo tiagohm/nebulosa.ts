@@ -392,8 +392,9 @@ function trackEntries(inspection: AberrationInspectionResult, metric: Aberration
 	for (let i = 0; i < inspection.stars.length; i++) {
 		const inspected = inspection.stars[i]
 		const profile = inspected.profile
-		if (!inspected.selected || profile.hfd === undefined || profile.snr === undefined || profile.flux === undefined || (metric === 'fwhm' && profile.fwhm === undefined) || inspected.rejections.some((rejection) => rejection.metric === metric)) continue
-		entries.push({ star: { x: profile.x, y: profile.y, hfd: profile.hfd, fwhm: profile.fwhm, eccentricity: profile.eccentricity, elongation: profile.elongation, snr: profile.snr, flux: profile.flux }, profile, profileIndex: i })
+		const size = metric === 'fwhm' ? profile.fwhm : profile.hfd
+		if (!inspected.selected || size === undefined || profile.snr === undefined || profile.flux === undefined || inspected.rejections.some((rejection) => rejection.metric === metric)) continue
+		entries.push({ star: { x: profile.x, y: profile.y, hfd: profile.hfd ?? size, fwhm: profile.fwhm, eccentricity: profile.eccentricity, elongation: profile.elongation, snr: profile.snr, flux: profile.flux }, profile, profileIndex: i })
 	}
 	return entries
 }

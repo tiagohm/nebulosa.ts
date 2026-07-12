@@ -287,6 +287,17 @@ test('weighted hyperbolic regression suppresses a zero-weight outlier', () => {
 	expect(regression.minimum.y).toBeCloseTo(2, 6)
 })
 
+test('hyperbolic regression preserves sub-unit curve scales', () => {
+	const x = [-3, -2, -1, 0, 1, 2, 3]
+	const y = x.map((value) => 0.1 * Math.sqrt(1 + ((value - 0.5) / 1.5) ** 2))
+	const regression = hyperbolicRegression(x, y)
+
+	expect(regression.a).toBeCloseTo(1.5, 6)
+	expect(regression.minimum.x).toBeCloseTo(0.5, 6)
+	expect(regression.minimum.y).toBeCloseTo(0.1, 6)
+	expect(regression.predict(0.5)).toBeFinite()
+})
+
 test('regression score', () => {
 	// https://en.wikipedia.org/wiki/Simple_linear_regression#Numerical_example
 	const x = [1.47, 1.5, 1.52, 1.55, 1.57, 1.6, 1.63, 1.65, 1.68, 1.7, 1.73, 1.75, 1.78, 1.8, 1.83]

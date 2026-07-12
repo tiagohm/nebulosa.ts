@@ -223,6 +223,24 @@ test('builds registered per-star tracks and curves', () => {
 	expect(result.tracks?.every((track) => track.points.length === 7 && track.curve?.success)).toBeTrue()
 })
 
+// Keeps FWHM-only profiles eligible for registration when HFD was not measured.
+test('builds FWHM tracks without requiring HFD profiles', () => {
+	const frames = [80, 90, 95, 100, 105, 110, 120].map((position) => {
+		const current = trackingFrame(position)
+		return Object.assign({}, current, { profiles: current.profiles.map((profile) => Object.assign({}, profile, { hfd: undefined })) })
+	})
+	const result = inspectAberrationFocusScan(frames, {
+		metric: 'fwhm',
+		inspection: { minimumStars: 1, minimumStarsPerRegion: 1 },
+		regions: { layout: 'grid', columns: 3, rows: 3 },
+		tracking: { minimumFrames: 5, maximumResidual: 0.5, registration: { acceptance: { minInliers: 3, maxRmsError: 0.5 } } },
+	})
+
+	expect(result.frames.every((frame) => frame.status === 'used')).toBeTrue()
+	expect(result.tracks).toHaveLength(6)
+	expect(result.tracks?.every((track) => track.points.length === 7 && track.curve?.success)).toBeTrue()
+})
+
 // Prevents a frame rejected by registration from leaking into fixed-sensor regional curves.
 test('excludes registration-failed frames from regional curves', () => {
 	const failed = trackingFrame(130)

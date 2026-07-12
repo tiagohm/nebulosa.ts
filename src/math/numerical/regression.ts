@@ -514,7 +514,7 @@ export function hyperbolicRegression(x: Readonly<NumberArray>, y: Readonly<Numbe
 	}
 
 	// Use Levenberg-Marquardt to optimize the parameters
-	const [a, b, c] = levenbergMarquardt(x, y, hyperbolic, initial === undefined ? [Math.round(A), B, C] : [...initial], { maxIterations: 1000, tolerance: 1e-8, weights })
+	const [a, b, c] = levenbergMarquardt(x, y, hyperbolic, initial === undefined ? [Math.max(Math.abs(A), Number.EPSILON), B, C] : [...initial], { maxIterations: 1000, tolerance: 1e-8, weights })
 
 	return {
 		xPoints: x,
