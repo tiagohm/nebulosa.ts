@@ -1,4 +1,4 @@
-import { evaluateFocusSurface, type FocusPlaneAnalysis, type FocusSurfaceCoefficients } from '../../math/numerical/surface.fit'
+import { focusSurfaceEffect as numericalFocusSurfaceEffect, type FocusPlaneAnalysis, type FocusSurfaceCoefficients } from '../../math/numerical/surface.fit'
 
 // Physical conversions and calibrated focus-field corrections for completed aberration scans.
 
@@ -157,34 +157,7 @@ export function criticalFocusZone(options: CriticalFocusOptions): CriticalFocusR
 
 // Evaluates all interior and boundary extremum candidates over the normalized sensor rectangle.
 export function focusSurfaceEffect(surface: FocusSurfaceCoefficients): number {
-	const candidates: { readonly u: number; readonly v: number }[] = [
-		{ u: 0, v: 0 },
-		{ u: -0.5, v: -0.5 },
-		{ u: 0.5, v: -0.5 },
-		{ u: -0.5, v: 0.5 },
-		{ u: 0.5, v: 0.5 },
-	]
-	for (const u of [-0.5, 0.5]) addBoundaryCandidate(candidates, u, -(surface.ay + surface.qxy * u) / (2 * surface.qyy))
-	for (const v of [-0.5, 0.5]) addBoundaryCandidate(candidates, -(surface.ax + surface.qxy * v) / (2 * surface.qxx), v)
-	const determinant = 4 * surface.qxx * surface.qyy - surface.qxy * surface.qxy
-	if (Math.abs(determinant) > Number.EPSILON) {
-		const u = (-2 * surface.qyy * surface.ax + surface.qxy * surface.ay) / determinant
-		const v = (surface.qxy * surface.ax - 2 * surface.qxx * surface.ay) / determinant
-		addBoundaryCandidate(candidates, u, v)
-	}
-	let minimum = Number.POSITIVE_INFINITY
-	let maximum = Number.NEGATIVE_INFINITY
-	for (let i = 0; i < candidates.length; i++) {
-		const value = evaluateFocusSurface(surface, candidates[i].u, candidates[i].v)
-		minimum = Math.min(minimum, value)
-		maximum = Math.max(maximum, value)
-	}
-	return maximum - minimum
-}
-
-// Adds a finite extremum candidate only when it lies on or inside the normalized sensor.
-function addBoundaryCandidate(candidates: { u: number; v: number }[], u: number, v: number): void {
-	if (Number.isFinite(u) && Number.isFinite(v) && u >= -0.5 && u <= 0.5 && v >= -0.5 && v <= 0.5) candidates.push({ u, v })
+	return numericalFocusSurfaceEffect(surface)
 }
 
 // Returns a finite sample median without mutating caller-owned data.

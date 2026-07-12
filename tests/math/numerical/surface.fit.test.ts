@@ -159,3 +159,10 @@ test('analyzes quadratic focus curvature', () => {
 	expect(analysis.centerToEdge).toBeCloseTo(3.5, 12)
 	expect(analysis.effect).toBeCloseTo(5, 12)
 })
+
+// Includes edge-interior extrema when a saddle vanishes at all four corners.
+test('measures saddle curvature at sensor edges', () => {
+	const analysis = analyzeFocusCurvature({ c: 0, ax: 0, ay: 0, qxx: 1, qxy: 0, qyy: -1 })
+
+	expect(analysis.effect).toBeCloseTo(0.5, 12)
+})

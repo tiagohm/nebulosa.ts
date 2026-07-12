@@ -236,6 +236,34 @@ export function analyzeFocusPlane(surface: FocusSurfaceCoefficients): FocusPlane
 	return { gradientX: surface.ax, gradientY: surface.ay, direction, effect }
 }
 
+// Computes the full focus range over the normalized sensor, including stationary extrema on edges and in the interior.
+export function focusSurfaceEffect(surface: FocusSurfaceCoefficients): number {
+	assertFiniteCoefficients(surface)
+	const candidates: Point[] = [
+		{ x: -0.5, y: -0.5 },
+		{ x: 0.5, y: -0.5 },
+		{ x: -0.5, y: 0.5 },
+		{ x: 0.5, y: 0.5 },
+	]
+	for (const u of [-0.5, 0.5]) appendSurfaceCandidate(candidates, u, -(surface.ay + surface.qxy * u) / (2 * surface.qyy))
+	for (const v of [-0.5, 0.5]) appendSurfaceCandidate(candidates, -(surface.ax + surface.qxy * v) / (2 * surface.qxx), v)
+	const determinant = 4 * surface.qxx * surface.qyy - surface.qxy * surface.qxy
+	const scale = Math.max(1, 4 * surface.qxx * surface.qxx + 2 * surface.qxy * surface.qxy + 4 * surface.qyy * surface.qyy)
+	if (Math.abs(determinant) > Number.EPSILON * scale) {
+		const u = (-2 * surface.qyy * surface.ax + surface.qxy * surface.ay) / determinant
+		const v = (surface.qxy * surface.ax - 2 * surface.qxx * surface.ay) / determinant
+		appendSurfaceCandidate(candidates, u, v)
+	}
+	let minimum = Number.POSITIVE_INFINITY
+	let maximum = Number.NEGATIVE_INFINITY
+	for (let i = 0; i < candidates.length; i++) {
+		const value = evaluateFocusSurface(surface, candidates[i].x, candidates[i].y)
+		minimum = Math.min(minimum, value)
+		maximum = Math.max(maximum, value)
+	}
+	return maximum - minimum
+}
+
 // Derives Hessian eigenstructure, stationary point, and sensor-scale curvature effects.
 export function analyzeFocusCurvature(surface: FocusSurfaceCoefficients): FocusCurvatureAnalysis {
 	assertFiniteCoefficients(surface)
@@ -252,9 +280,7 @@ export function analyzeFocusCurvature(surface: FocusSurfaceCoefficients): FocusC
 	const determinant = hxx * hyy - hxy * hxy
 	const scale = Math.max(1, hxx * hxx + 2 * hxy * hxy + hyy * hyy)
 	const stationaryPoint = Math.abs(determinant) > Number.EPSILON * scale ? stationaryPointFor(surface, hxx, hxy, hyy, determinant) : undefined
-	const positiveCorner = 0.25 * (surface.qxx + surface.qxy + surface.qyy)
-	const negativeCorner = 0.25 * (surface.qxx - surface.qxy + surface.qyy)
-	const effect = Math.max(0, positiveCorner, negativeCorner) - Math.min(0, positiveCorner, negativeCorner)
+	const effect = focusSurfaceEffect({ c: 0, ax: 0, ay: 0, qxx: surface.qxx, qxy: surface.qxy, qyy: surface.qyy })
 
 	return {
 		stationaryPoint,
@@ -265,6 +291,11 @@ export function analyzeFocusCurvature(surface: FocusSurfaceCoefficients): FocusC
 		centerToEdge: 0.25 * (surface.qxx + surface.qyy),
 		effect,
 	}
+}
+
+// Appends a finite stationary candidate when it lies on or inside the normalized sensor rectangle.
+function appendSurfaceCandidate(candidates: Point[], u: number, v: number): void {
+	if (Number.isFinite(u) && Number.isFinite(v) && u >= -0.5 && u <= 0.5 && v >= -0.5 && v <= 0.5) candidates.push({ x: u, y: v })
 }
 
 // Builds a discriminated failure while preserving the original sample order.
