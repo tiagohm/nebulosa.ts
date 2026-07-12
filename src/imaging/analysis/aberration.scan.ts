@@ -2,6 +2,7 @@ import { analyzeFocusCurvature, analyzeFocusPlane, fitFocusSurface, type FocusCu
 import type { Image } from '../model/types'
 import type { StarProfile } from '../stars/profile'
 import { fitAberrationFocusCurve, type AberrationFocusCurveOptions, type AberrationFocusCurveResult, type AberrationFocusMetric } from './aberration.focus'
+import { measureFocusFieldOffset, type FocusFieldOffset } from './aberration.physical'
 import { inspectAberration, inspectAberrationProfiles, type InspectAberrationOptions } from './aberration.single'
 import type { AberrationInspectionResult, AberrationRegionDefinition, AberrationRegionOptions, AberrationWarning } from './aberration.types'
 
@@ -111,6 +112,8 @@ export interface AberrationFocusScanResult {
 	readonly plane?: FocusPlaneAnalysis
 	// Curvature derivative when a focus surface succeeds.
 	readonly curvature?: FocusCurvatureAnalysis
+	// Robust peripheral-minus-central best-focus offset when both supports are present.
+	readonly fieldOffset?: FocusFieldOffset
 	// Support and warning diagnostics.
 	readonly quality: AberrationFocusScanQuality
 }
@@ -174,13 +177,14 @@ export function inspectAberrationFocusScan(frames: readonly AberrationFocusFrame
 	const surface = surfaceSamples.length > 0 ? fitFocusSurface(surfaceSamples, options.surface) : undefined
 	const plane = surface?.success ? analyzeFocusPlane(surface.coefficients) : undefined
 	const curvature = surface?.success ? analyzeFocusCurvature(surface.coefficients) : undefined
+	const fieldOffset = measureFocusFieldOffset(regions)
 	const warnings: AberrationWarning[] = []
 	if (usedFrameCount === 0) warnings.push({ code: 'noUsableFrames' })
 	if (surface && !surface.success) warnings.push({ code: 'surfaceFitFailed' })
 	const curveConfidence = regions.length > 0 ? regions.reduce((sum, region) => sum + region.confidence, 0) / regions.length : 0
 	const confidence = Math.sqrt((frames.length > 0 ? usedFrameCount / frames.length : 0) * curveConfidence * (surface?.success ? surface.confidence : 0))
 
-	return { width, height, frames: frameResults, regions, surface, plane, curvature, quality: { inputFrameCount: frames.length, usedFrameCount, rejectedFrameCount: frames.length - usedFrameCount, confidence, warnings } }
+	return { width, height, frames: frameResults, regions, surface, plane, curvature, fieldOffset, quality: { inputFrameCount: frames.length, usedFrameCount, rejectedFrameCount: frames.length - usedFrameCount, confidence, warnings } }
 }
 
 // Builds one fixed-sensor regional curve per region from accepted frame inspections.
