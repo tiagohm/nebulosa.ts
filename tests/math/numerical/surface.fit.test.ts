@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { analyzeFocusCurvature, analyzeFocusPlane, evaluateFocusSurface, fitFocusSurface, type FocusSurfaceCoefficients, type FocusSurfaceSample } from '../../../src/math/numerical/surface.fit'
+import { analyzeFocusCurvature, analyzeFocusPlane, evaluateFocusSurface, fitFocusSurface, focusSurfaceEffect, type FocusSurfaceCoefficients, type FocusSurfaceSample } from '../../../src/math/numerical/surface.fit'
 
 // Creates a regular normalized sensor grid for deterministic surface-fit fixtures.
 function grid(step: number = 0.25): FocusSurfaceSample[] {
@@ -165,4 +165,10 @@ test('measures saddle curvature at sensor edges', () => {
 	const analysis = analyzeFocusCurvature({ c: 0, ax: 0, ay: 0, qxx: 1, qxy: 0, qyy: -1 })
 
 	expect(analysis.effect).toBeCloseTo(0.5, 12)
+})
+
+// Includes interior extrema so a radially curved surface cannot report a zero effect.
+test('measures full quadratic surface effect over the sensor', () => {
+	expect(focusSurfaceEffect({ c: 100, ax: 0, ay: 0, qxx: 8, qxy: 0, qyy: 8 })).toBeCloseTo(4, 12)
+	expect(focusSurfaceEffect({ c: 100, ax: 2, ay: -3, qxx: 0, qxy: 0, qyy: 0 })).toBeCloseTo(5, 12)
 })

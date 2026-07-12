@@ -1,6 +1,6 @@
 import { linearLeastSquares, robustLinearLeastSquares } from '../../math/numerical/least.squares'
 import type { NumberArray } from '../../math/numerical/math'
-import { hyperbolicRegression } from '../../math/numerical/regression'
+import { hyperbolicRegression, type HyperbolicRegression } from '../../math/numerical/regression'
 import type { AberrationWarning } from './aberration.types'
 
 // Robust one-dimensional focus-curve fitting for completed focus scans.
@@ -259,7 +259,7 @@ function fitHyperbolicFocusCurve(points: readonly AberrationFocusPoint[], option
 // Result of nonlinear Tukey reweighting for a normalized hyperbolic focus curve.
 interface RobustHyperbolicFit {
 	// Final nonlinear regression refitted with the retained robust weights.
-	readonly regression: ReturnType<typeof hyperbolicRegression>
+	readonly regression: HyperbolicRegression
 	// Base sample weights multiplied by their final Tukey weights.
 	readonly weights: Float64Array
 }
@@ -275,7 +275,7 @@ function fitRobustHyperbola(domain: NormalizedFocusData, initial: readonly [a: n
 	}
 	const seed = robustLinearLeastSquares(seedDesign, domain.target, { weights: domain.weights, method: 'tukey', tuning, maxIterations: maximumIterations })
 	let weights = seed.rankDeficient ? domain.weights.slice() : Float64Array.from(seed.weights)
-	let parameters: readonly [number, number, number] = initial
+	let parameters = initial
 	const [seedIntercept, seedSlope, seedCurvature] = seed.coefficients
 	if (!seed.rankDeficient && seedCurvature > 0) {
 		const center = -seedSlope / (2 * seedCurvature)
@@ -284,12 +284,14 @@ function fitRobustHyperbola(domain: NormalizedFocusData, initial: readonly [a: n
 		if (Number.isFinite(center) && minimum > 0 && Number.isFinite(width) && width > Number.EPSILON) parameters = [width, minimum, center]
 	}
 	const convergenceScale = Math.max(1, maximumWeightOf(domain.weights))
+	const residuals = new Float64Array(domain.target.length)
+	const residualAbsolute = new Float64Array(residuals.length)
 	for (let iteration = 0; iteration < maximumIterations; iteration++) {
 		const regression = hyperbolicRegression(domain.positions, domain.target, weights, parameters)
 		parameters = [regression.a, regression.b, regression.c]
-		const residuals = new Float64Array(domain.target.length)
 		for (let i = 0; i < residuals.length; i++) residuals[i] = domain.target[i] - regression.predict(domain.positions[i])
-		const scale = hyperbolicResidualScale(residuals)
+		for (let i = 0; i < residuals.length; i++) residualAbsolute[i] = Math.abs(residuals[i])
+		const scale = hyperbolicResidualScale(residuals, residualAbsolute.sort())
 		const nextWeights = new Float64Array(weights.length)
 		let maximumDelta = 0
 		for (let i = 0; i < nextWeights.length; i++) {
@@ -305,10 +307,7 @@ function fitRobustHyperbola(domain: NormalizedFocusData, initial: readonly [a: n
 }
 
 // Estimates nonlinear residual scale from MAD, with RMS as the exact-fit fallback.
-function hyperbolicResidualScale(residuals: Float64Array): number {
-	const absolute = new Float64Array(residuals.length)
-	for (let i = 0; i < residuals.length; i++) absolute[i] = Math.abs(residuals[i])
-	absolute.sort()
+function hyperbolicResidualScale(residuals: Float64Array, absolute: Float64Array) {
 	const middle = absolute.length >>> 1
 	let scale = (absolute.length % 2 === 0 ? 0.5 * (absolute[middle - 1] + absolute[middle]) : absolute[middle]) / NORMAL_MAD
 	if (!(scale > 0)) {
@@ -320,7 +319,7 @@ function hyperbolicResidualScale(residuals: Float64Array): number {
 }
 
 // Returns the largest finite weight in a non-empty normalized focus domain.
-function maximumWeightOf(weights: Float64Array): number {
+function maximumWeightOf(weights: Float64Array) {
 	let maximum = 0
 	for (let i = 0; i < weights.length; i++) maximum = Math.max(maximum, weights[i])
 	return maximum
@@ -494,7 +493,7 @@ function focusCurveSuccess(
 }
 
 // Computes AICc over the same commonly retained samples for every automatic candidate.
-function focusCurveAicc(curve: AberrationFocusCurveSuccess, commonUsed: readonly boolean[]): number {
+function focusCurveAicc(curve: AberrationFocusCurveSuccess, commonUsed: readonly boolean[]) {
 	const residuals = FOCUS_CURVE_RESIDUALS.get(curve)
 	if (residuals === undefined) return Number.POSITIVE_INFINITY
 	let count = 0
@@ -566,11 +565,11 @@ function failure(points: readonly AberrationFocusPoint[], used: readonly boolean
 }
 
 // Returns a finite positive number option or fallback.
-function positiveNumber(value: number | undefined, fallback: number): number {
+function positiveNumber(value: number | undefined, fallback: number) {
 	return value !== undefined && Number.isFinite(value) && value > 0 ? value : fallback
 }
 
 // Returns a finite positive integer option or fallback.
-function positiveInteger(value: number | undefined, fallback: number): number {
+function positiveInteger(value: number | undefined, fallback: number) {
 	return value !== undefined && Number.isFinite(value) && Number.isInteger(value) && value > 0 ? value : fallback
 }

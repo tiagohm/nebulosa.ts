@@ -1,4 +1,4 @@
-import { focusSurfaceEffect as numericalFocusSurfaceEffect, type FocusPlaneAnalysis, type FocusSurfaceCoefficients } from '../../math/numerical/surface.fit'
+import type { FocusPlaneAnalysis, FocusSurfaceCoefficients } from '../../math/numerical/surface.fit'
 
 // Physical conversions and calibrated focus-field corrections for completed aberration scans.
 
@@ -153,11 +153,6 @@ export function criticalFocusZone(options: CriticalFocusOptions): CriticalFocusR
 	const wavelength = options.wavelength
 	if (!(focalRatio !== undefined && focalRatio > 0) || !(wavelength !== undefined && wavelength > 0) || !Number.isFinite(focalRatio) || !Number.isFinite(wavelength)) throw new RangeError('finite positive focal ratio and wavelength are required')
 	return { tolerance: wavelength * focalRatio * focalRatio, criterion }
-}
-
-// Evaluates all interior and boundary extremum candidates over the normalized sensor rectangle.
-export function focusSurfaceEffect(surface: FocusSurfaceCoefficients): number {
-	return numericalFocusSurfaceEffect(surface)
 }
 
 // Returns a finite sample median without mutating caller-owned data.
