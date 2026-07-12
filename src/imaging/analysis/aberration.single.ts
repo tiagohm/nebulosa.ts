@@ -59,6 +59,11 @@ export interface InspectAberrationOptions {
 export function inspectAberration(image: Image, options: InspectAberrationOptions = {}): AberrationInspectionResult {
 	const { width, height } = image.metadata
 	const profiles = options.profiles ?? detectStarProfiles(image, options.detection, options.profile)
+	return inspectAberrationProfiles(width, height, profiles, options)
+}
+
+// Inspects supplied optical profiles for explicit image dimensions without rerunning detection.
+export function inspectAberrationProfiles(width: number, height: number, profiles: readonly StarProfile[], options: Omit<InspectAberrationOptions, 'profiles'> = {}): AberrationInspectionResult {
 	const minimumSNR = Math.max(0, finiteNumber(options.minimumSNR, 0))
 	const stars = prepareStars(profiles, width, height, minimumSNR, options.maximumEccentricityForSize)
 	const selected = selectSpatialStars(stars, options.selection, minimumSNR)
