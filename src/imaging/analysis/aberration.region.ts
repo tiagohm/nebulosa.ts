@@ -1,7 +1,8 @@
+import { medianOf } from '../../core/util'
 import type { Point } from '../../math/numerical/geometry'
 import { clamp } from '../../math/numerical/math'
 import type { Angle } from '../../math/units/angle'
-import type { AberrationFieldCell, AberrationFieldOptions, AberrationMeasuredQuantity, AberrationMetric, AberrationRegionDefinition, AberrationRegionLayout, AberrationRegionOptions, AberrationRegionResult, AberrationStar, AberrationSummaryOptions } from './aberration.types'
+import type { AberrationFieldCell, AberrationFieldOptions, AberrationMeasuredQuantity, AberrationMetric, AberrationRegionDefinition, AberrationRegionOptions, AberrationRegionResult, AberrationStar, AberrationSummaryOptions } from './aberration.types'
 
 // Region generation and robust scalar/axial aggregation for one-image aberration inspection.
 
@@ -258,13 +259,11 @@ function summarizeMetric(stars: readonly AberrationStar[], metric: AberrationMet
 	if (count === 0) return undefined
 
 	const sorted = values.subarray(0, count)
-	sorted.sort()
-	const median = medianOfSorted(sorted, count)
+	const median = medianOf(sorted.sort(), count)
 	const deviations = new Float64Array(count)
 	for (let i = 0; i < count; i++) deviations[i] = Math.abs(sorted[i] - median)
-	deviations.sort()
 
-	return { values: sorted, median, deviation: 1.4826 * medianOfSorted(deviations, count) }
+	return { values: sorted, median, deviation: 1.4826 * medianOf(deviations.sort(), count) }
 }
 
 // Computes an axial weighted mean and coherence from selected oriented profiles.
@@ -334,12 +333,6 @@ function averageMetricWeight(stars: readonly AberrationStar[], metric: Aberratio
 // Computes the normalized center of a region rectangle.
 function regionCenter(region: AberrationRegionDefinition): Point {
 	return { x: 0.5 * (region.left + region.right), y: 0.5 * (region.top + region.bottom) }
-}
-
-// Returns the median of a sorted typed-array prefix.
-function medianOfSorted(values: Readonly<Float64Array>, count: number): number {
-	const middle = count >>> 1
-	return count % 2 === 0 ? 0.5 * (values[middle - 1] + values[middle]) : values[middle]
 }
 
 // Returns a finite scalar option or its fallback.

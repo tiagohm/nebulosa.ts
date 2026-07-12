@@ -1,3 +1,4 @@
+import { medianOf } from '../../core/util'
 import { clamp } from '../../math/numerical/math'
 import type { Image } from '../model/types'
 import type { DetectStarOptions } from '../stars/detector'
@@ -28,6 +29,9 @@ const DEFAULT_MINIMUM_ORIENTATION_STARS = 3
 const REFERENCE_SNR = 30
 // Minimum eccentricity that makes an axial direction meaningful in the single-frame pipeline.
 const MINIMUM_ORIENTATION_ECCENTRICITY = 0.05
+
+// Internal inspection star whose copied rejection list can be extended during clipping.
+type MutableAberrationStar = Omit<AberrationStar, 'rejections'> & { rejections: AberrationMetricRejection[] }
 
 // Configures profile production, balanced selection, robust regional summaries, and optional supplied profiles.
 export interface InspectAberrationOptions {
@@ -91,12 +95,13 @@ function prepareStars(profiles: readonly StarProfile[], width: number, height: n
 
 		if (!profile.valid) addSelectionReason(selectionReasons, 'invalidProfile')
 		if (!Number.isFinite(u) || !Number.isFinite(v) || u < -0.5 || u > 0.5 || v < -0.5 || v > 0.5) addSelectionReason(selectionReasons, 'nonFiniteCoordinate')
-		if (profile.snr === undefined || profile.snr < minimumSNR) addSelectionReason(selectionReasons, 'belowMinimumSNR')
+		if (profile.snr === undefined || !Number.isFinite(profile.snr) || profile.snr < minimumSNR) addSelectionReason(selectionReasons, 'belowMinimumSNR')
 		for (const metric of ['hfd', 'fwhm', 'eccentricity', 'elongation'] as const) {
-			if (profileMetric(profile, metric) === undefined) addMetricRejection(rejections, metric, 'unavailable')
+			const value = profileMetric(profile, metric)
+			if (value === undefined || !Number.isFinite(value)) addMetricRejection(rejections, metric, 'unavailable')
 		}
 
-		if (profile.theta === undefined || profile.eccentricity === undefined || profile.eccentricity < MINIMUM_ORIENTATION_ECCENTRICITY) addMetricRejection(rejections, 'orientation', 'degenerateShape')
+		if (profile.theta === undefined || !Number.isFinite(profile.theta) || profile.eccentricity === undefined || !Number.isFinite(profile.eccentricity) || profile.eccentricity < MINIMUM_ORIENTATION_ECCENTRICITY) addMetricRejection(rejections, 'orientation', 'degenerateShape')
 		if (profile.flags.includes('lowSignal') || (profile.snr !== undefined && profile.snr < minimumSNR)) addAllMetricRejections(rejections, 'lowSignal')
 		if (profile.flags.includes('saturated') || profile.flags.includes('clipped') || !profile.valid) addAllMetricRejections(rejections, 'unavailable')
 		if (profile.flags.includes('blended')) addAllMetricRejections(rejections, 'unavailable')
@@ -130,16 +135,14 @@ function selectSpatialStars(stars: readonly AberrationStar[], options: SpatialSt
 	const rejectClipped = options?.rejectClipped ?? true
 	const rejectBlended = options?.rejectBlended ?? true
 	const cells = new Array<number[]>(columns * rows)
+	const reasonsByStar = new Array<AberrationStarRejectionReason[]>(stars.length)
 
 	for (let i = 0; i < cells.length; i++) cells[i] = []
 
 	for (let i = 0; i < stars.length; i++) {
 		const star = stars[i]
-		const reasons = [...star.selectionReasons]
-		if (star.profile.snr === undefined || star.profile.snr < minSNR) addSelectionReason(reasons, 'belowMinimumSNR')
-		if (rejectSaturated && star.profile.flags.includes('saturated')) addSelectionReason(reasons, 'saturated')
-		if (rejectClipped && star.profile.flags.includes('clipped')) addSelectionReason(reasons, 'clipped')
-		if (rejectBlended && star.profile.flags.includes('blended')) addSelectionReason(reasons, 'blended')
+		const reasons = selectionReasonsFor(star, minSNR, rejectSaturated, rejectClipped, rejectBlended)
+		reasonsByStar[i] = reasons
 		if (reasons.length > 0) continue
 
 		const column = Math.min(columns - 1, Math.max(0, Math.floor((star.u + 0.5) * columns)))
@@ -164,11 +167,7 @@ function selectSpatialStars(stars: readonly AberrationStar[], options: SpatialSt
 	const output = new Array<AberrationStar>(stars.length)
 	for (let i = 0; i < stars.length; i++) {
 		const star = stars[i]
-		const selectionReasons = [...star.selectionReasons]
-		if (star.profile.snr === undefined || star.profile.snr < minSNR) addSelectionReason(selectionReasons, 'belowMinimumSNR')
-		if (rejectSaturated && star.profile.flags.includes('saturated')) addSelectionReason(selectionReasons, 'saturated')
-		if (rejectClipped && star.profile.flags.includes('clipped')) addSelectionReason(selectionReasons, 'clipped')
-		if (rejectBlended && star.profile.flags.includes('blended')) addSelectionReason(selectionReasons, 'blended')
+		const selectionReasons = reasonsByStar[i]
 		if (selectionReasons.length === 0 && selected[i] === 0) addSelectionReason(selectionReasons, 'spatialQuota')
 
 		output[i] = { ...star, selected: selected[i] === 1, selectionReasons }
@@ -177,52 +176,77 @@ function selectSpatialStars(stars: readonly AberrationStar[], options: SpatialSt
 	return output
 }
 
+// Computes all selection exclusions once so cell assignment and output publication share one result.
+function selectionReasonsFor(star: AberrationStar, minimumSNR: number, rejectSaturated: boolean, rejectClipped: boolean, rejectBlended: boolean): AberrationStarRejectionReason[] {
+	const reasons = [...star.selectionReasons]
+	if (star.profile.snr === undefined || !Number.isFinite(star.profile.snr) || star.profile.snr < minimumSNR) addSelectionReason(reasons, 'belowMinimumSNR')
+	let saturated = false
+	let clipped = false
+	let blended = false
+	for (let i = 0; i < star.profile.flags.length; i++) {
+		const flag = star.profile.flags[i]
+		if (flag === 'saturated') saturated = true
+		else if (flag === 'clipped') clipped = true
+		else if (flag === 'blended') blended = true
+	}
+	if (rejectSaturated && saturated) addSelectionReason(reasons, 'saturated')
+	if (rejectClipped && clipped) addSelectionReason(reasons, 'clipped')
+	if (rejectBlended && blended) addSelectionReason(reasons, 'blended')
+	return reasons
+}
+
 // Applies optional scalar sigma clipping independently inside each assigned spatial region.
 function applyRegionalOutliers(stars: readonly AberrationStar[], regions: ReturnType<typeof createAberrationRegions>, sigmaClip: number | undefined, maxIterations: number | undefined): AberrationStar[] {
 	if (!(sigmaClip !== undefined && Number.isFinite(sigmaClip) && sigmaClip > 0)) return [...stars]
 
 	const iterations = positiveInteger(maxIterations, DEFAULT_MAX_CLIP_ITERATIONS)
-	let output = [...stars]
+	const output = new Array<MutableAberrationStar>(stars.length)
+	for (let i = 0; i < stars.length; i++) output[i] = { ...stars[i], rejections: [...stars[i].rejections] }
+	const assigned = new Array<number[]>(regions.length)
+	for (let i = 0; i < assigned.length; i++) assigned[i] = []
+	for (let i = 0; i < output.length; i++) {
+		const regionIndex = assignAberrationRegion(output[i].u, output[i].v, regions)
+		if (regionIndex >= 0) assigned[regionIndex].push(i)
+	}
 
 	for (let iteration = 0; iteration < iterations; iteration++) {
 		let changed = false
-		const next = output.map((star) => ({ ...star, rejections: [...star.rejections] }))
 
 		for (let regionIndex = 0; regionIndex < regions.length; regionIndex++) {
-			const indices: number[] = []
-			for (let i = 0; i < next.length; i++) {
-				if (assignAberrationRegion(next[i].u, next[i].v, regions) === regionIndex) indices.push(i)
-			}
+			const indices = assigned[regionIndex]
 
 			for (const metric of ['hfd', 'fwhm', 'eccentricity', 'elongation'] as const) {
-				const values = collectMetricIndices(next, indices, metric)
+				const values = collectMetricIndices(output, indices, metric)
 				if (values.length < 3) continue
-				const center = median(values.map((value) => value.value))
-				const deviation = scaledMad(
-					values.map((value) => value.value),
-					center,
-				)
+				const { center, deviation } = robustCenterScale(values)
 				const threshold = Math.max(sigmaClip * deviation, Number.EPSILON * Math.max(1, Math.abs(center)))
 				for (let i = 0; i < values.length; i++) {
 					if (Math.abs(values[i].value - center) <= threshold) continue
-					if (!hasMetricRejection(next[values[i].index], metric)) {
-						addMetricRejection(next[values[i].index].rejections, metric, 'outlier')
+					if (!hasMetricRejection(output[values[i].index], metric)) {
+						addMetricRejection(output[values[i].index].rejections, metric, 'outlier')
 						changed = true
 					}
 				}
 			}
 		}
 
-		output = next
 		if (!changed) break
 	}
 
 	return output
 }
 
+// One usable scalar metric paired with its owning star index.
+interface IndexedMetricValue {
+	// Star index in the inspection result.
+	readonly index: number
+	// Finite scalar metric value.
+	readonly value: number
+}
+
 // Collects scalar values and owning indices that are currently usable for a metric.
-function collectMetricIndices(stars: readonly AberrationStar[], indices: readonly number[], metric: AberrationMetric): { readonly index: number; readonly value: number }[] {
-	const output: { index: number; value: number }[] = []
+function collectMetricIndices(stars: readonly AberrationStar[], indices: readonly number[], metric: AberrationMetric): IndexedMetricValue[] {
+	const output: IndexedMetricValue[] = []
 
 	for (let i = 0; i < indices.length; i++) {
 		const index = indices[i]
@@ -232,6 +256,15 @@ function collectMetricIndices(stars: readonly AberrationStar[], indices: readonl
 	}
 
 	return output
+}
+
+// Computes median and scaled MAD from indexed values with two compact typed-array sorts.
+function robustCenterScale(values: readonly IndexedMetricValue[]): { readonly center: number; readonly deviation: number } {
+	const sorted = new Float64Array(values.length)
+	for (let i = 0; i < values.length; i++) sorted[i] = values[i].value
+	const center = medianOf(sorted.sort())
+	for (let i = 0; i < sorted.length; i++) sorted[i] = Math.abs(sorted[i] - center)
+	return { center, deviation: 1.4826 * medianOf(sorted.sort()) }
 }
 
 // Computes support, per-metric counts, warnings, and bounded overall inspection confidence.
@@ -308,10 +341,11 @@ function buildVectors(regions: readonly ReturnType<typeof summarizeAberrationReg
 
 // Computes a bounded profile aggregation weight without allowing high-SNR stars to dominate a region.
 function profileWeight(profile: StarProfile): number {
-	const snr = Math.max(0, profile.snr ?? 0)
+	const snr = profile.snr !== undefined && Number.isFinite(profile.snr) ? Math.max(0, profile.snr) : 0
 	const snrWeight = clamp(Math.log1p(snr) / Math.log1p(REFERENCE_SNR), 0, 1)
-	const shapeWeight = profile.eccentricity === undefined ? 0.75 : clamp(1 - 0.5 * profile.eccentricity, 0.5, 1)
-	return clamp(profile.quality * snrWeight * shapeWeight, 0, 1)
+	const shapeWeight = profile.eccentricity === undefined || !Number.isFinite(profile.eccentricity) ? 0.75 : clamp(1 - 0.5 * profile.eccentricity, 0.5, 1)
+	const quality = Number.isFinite(profile.quality) ? clamp(profile.quality, 0, 1) : 0
+	return clamp(quality * snrWeight * shapeWeight, 0, 1)
 }
 
 // Returns a usable selected scalar metric or undefined when excluded.
@@ -355,24 +389,6 @@ function addMetricRejection(rejections: AberrationMetricRejection[], metric: Abe
 // Applies one rejection reason to all scalar metrics and orientation without overwriting earlier detail.
 function addAllMetricRejections(rejections: AberrationMetricRejection[], reason: AberrationMetricRejectionReason): void {
 	for (const metric of ['hfd', 'fwhm', 'eccentricity', 'elongation', 'orientation'] as const) addMetricRejection(rejections, metric, reason)
-}
-
-// Computes a median after sorting a fresh scalar array.
-function median(values: readonly number[]): number {
-	const sorted = Float64Array.from(values)
-	sorted.sort()
-	const middle = sorted.length >>> 1
-	return sorted.length % 2 === 0 ? 0.5 * (sorted[middle - 1] + sorted[middle]) : sorted[middle]
-}
-
-// Computes scaled median absolute deviation from scalar values and a known median.
-function scaledMad(values: readonly number[], center: number): number {
-	const deviations = new Float64Array(values.length)
-	for (let i = 0; i < values.length; i++) deviations[i] = Math.abs(values[i] - center)
-	deviations.sort()
-	const middle = deviations.length >>> 1
-	const mad = deviations.length % 2 === 0 ? 0.5 * (deviations[middle - 1] + deviations[middle]) : deviations[middle]
-	return 1.4826 * mad
 }
 
 // Returns a finite scalar option or fallback.

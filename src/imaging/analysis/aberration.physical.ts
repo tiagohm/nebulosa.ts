@@ -96,6 +96,7 @@ export function analyzePhysicalTilt(plane: FocusPlaneAnalysis, width: number, he
 export function analyzePhysicalCurvature(surface: FocusSurfaceCoefficients, width: number, height: number, scale: Required<Pick<AberrationPhysicalScale, 'pixelSize' | 'focusDisplacement'>>): PhysicalCurvatureAnalysis {
 	if (!Number.isInteger(width) || !Number.isInteger(height) || width <= 1 || height <= 1 || !(scale.pixelSize > 0) || !Number.isFinite(scale.pixelSize) || !Number.isFinite(scale.focusDisplacement) || scale.focusDisplacement === 0)
 		throw new RangeError('finite sensor dimensions, pixel size, and non-zero focus displacement are required')
+	if (!finiteSurface(surface)) throw new RangeError('focus surface coefficients must be finite')
 	const sensorWidth = (width - 1) * scale.pixelSize
 	const sensorHeight = (height - 1) * scale.pixelSize
 	const hxx = (2 * surface.qxx * scale.focusDisplacement) / (sensorWidth * sensorWidth)
@@ -120,12 +121,18 @@ export function measureFocusFieldOffset(samples: readonly { readonly u: number; 
 		const radius = Math.hypot(sample.u, sample.v)
 		if (radius <= 0.2) center.push(sample.bestFocus)
 		else if (radius >= 0.45) edge.push(sample.bestFocus)
-		confidence += sample.confidence
+		else continue
+		if (Number.isFinite(sample.confidence)) confidence += Math.max(0, Math.min(1, sample.confidence))
 	}
 	if (center.length === 0 || edge.length === 0) return undefined
 	const centerValue = median(center)
 	const edgeValue = median(edge)
 	return { centerToEdge: edgeValue - centerValue, center: centerValue, edge: edgeValue, confidence: Math.min(1, confidence / samples.length) }
+}
+
+// Tests whether all common focus-surface coefficients are finite before physical conversion.
+function finiteSurface(surface: FocusSurfaceCoefficients): boolean {
+	return Number.isFinite(surface.c) && Number.isFinite(surface.ax) && Number.isFinite(surface.ay) && Number.isFinite(surface.qxx) && Number.isFinite(surface.qxy) && Number.isFinite(surface.qyy)
 }
 
 // Converts a measured field offset into a calibrated spacing correction.

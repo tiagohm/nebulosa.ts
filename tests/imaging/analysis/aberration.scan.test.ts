@@ -223,6 +223,21 @@ test('builds registered per-star tracks and curves', () => {
 	expect(result.tracks?.every((track) => track.points.length === 7 && track.curve?.success)).toBeTrue()
 })
 
+// Prevents a frame rejected by registration from leaking into fixed-sensor regional curves.
+test('excludes registration-failed frames from regional curves', () => {
+	const failed = trackingFrame(130)
+	const result = inspectAberrationFocusScan([...[80, 90, 95, 100, 105, 110, 120].map(trackingFrame), { ...failed, id: 'registration-failure', profiles: failed.profiles.slice(0, 1) }], {
+		inspection: { minimumStars: 1, minimumStarsPerRegion: 1 },
+		regions: { layout: 'grid', columns: 3, rows: 3 },
+		tracking: { minimumFrames: 5, maximumResidual: 0.5, registration: { acceptance: { minInliers: 3, maxRmsError: 0.5 } } },
+		surface: { model: 'plane' },
+	})
+
+	expect(result.frames[7].status).toBe('rejected')
+	expect(result.frames[7].rejectionReasons).toContain('registrationFailed')
+	for (const region of result.regions) expect(region.curve.points.some((point) => point.position === 130)).toBeFalse()
+})
+
 // Recovers known per-star minima and field tilt from real NGC 3372 detector geometry.
 test('recovers ground truth from a real-field-derived focus sweep', () => {
 	const result = inspectAberrationFocusScan(REAL_FOCUS_SWEEP_POSITIONS.map(realFocusSweepFrame), {

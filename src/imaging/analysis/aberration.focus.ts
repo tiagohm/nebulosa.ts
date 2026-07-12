@@ -102,7 +102,7 @@ const MINIMUM_RETAINED_WEIGHT = 1e-3
 // Maximum branch repartitioning passes for a trend-lines curve.
 const TREND_LINE_PARTITION_ITERATIONS = 12
 // Internal residuals retained only while automatic model candidates remain reachable.
-const FOCUS_CURVE_RESIDUALS = new WeakMap<AberrationFocusCurveSuccess, Float64Array>()
+const FOCUS_CURVE_RESIDUALS = new WeakMap<AberrationFocusCurveSuccess, Readonly<NumberArray>>()
 
 // Fits the requested curve, or evaluates every supported curve for `auto`.
 export function fitAberrationFocusCurve(points: readonly AberrationFocusPoint[], options: AberrationFocusCurveOptions = {}): AberrationFocusCurveResult {
@@ -124,7 +124,7 @@ export function fitAberrationFocusCurve(points: readonly AberrationFocusPoint[],
 		const candidate = candidates[i]
 		if (!candidate.success) continue
 		const score = focusCurveAicc(candidate, commonUsed)
-		if (score < bestScore) {
+		if (best === undefined || score < bestScore) {
 			best = candidate
 			bestScore = score
 		}
@@ -208,9 +208,7 @@ function fitQuadraticFocusCurve(points: readonly AberrationFocusPoint[], options
 	const confidence = Math.sqrt(usedCount / points.length) * condition
 
 	const result: AberrationFocusCurveSuccess = { success: true, model: 'quadratic', points, used, minimum: { x: position, y: c + b * tMinimum + a * tMinimum * tMinimum }, uncertainty, rms, r2, conditionNumber: fit.conditionNumber, confidence, warnings }
-	const residuals = new Float64Array(points.length)
-	for (let i = 0; i < points.length; i++) residuals[i] = target[i] - (c + b * design[i][1] + a * design[i][2])
-	FOCUS_CURVE_RESIDUALS.set(result, residuals)
+	FOCUS_CURVE_RESIDUALS.set(result, fit.residuals)
 	return result
 }
 
@@ -223,8 +221,14 @@ function fitHyperbolicFocusCurve(points: readonly AberrationFocusPoint[], option
 	const domain = normalizedFocusData(points)
 	if (domain === undefined) return failure(points, emptyUsed, 'invalidInput')
 
-	let minimumIndex = 0
-	for (let i = 1; i < points.length; i++) if (domain.target[i] < domain.target[minimumIndex]) minimumIndex = i
+	let maximumWeight = 0
+	for (let i = 0; i < points.length; i++) maximumWeight = Math.max(maximumWeight, domain.weights[i])
+	let minimumIndex = -1
+	for (let i = 0; i < points.length; i++) {
+		if (domain.weights[i] < maximumWeight * MINIMUM_RETAINED_WEIGHT) continue
+		if (minimumIndex < 0 || domain.target[i] < domain.target[minimumIndex]) minimumIndex = i
+	}
+	if (minimumIndex < 0) return failure(points, emptyUsed, 'nonConvergent')
 	const regression = hyperbolicRegression(domain.positions, domain.target, domain.weights, [0.5, domain.target[minimumIndex], domain.positions[minimumIndex]])
 	const { a, b, c } = regression
 	if (!Number.isFinite(a) || !Number.isFinite(b) || !Number.isFinite(c) || Math.abs(a) <= Number.EPSILON || !(b > 0)) return failure(points, emptyUsed, 'nonConvergent')
@@ -258,15 +262,19 @@ function fitTrendLinesFocusCurve(points: readonly AberrationFocusPoint[], option
 	for (let i = 1; i < points.length; i++) if (points[i].value < points[minimumIndex].value) minimumIndex = i
 	let split = domain.positions[minimumIndex]
 	let branch: ReturnType<typeof fitTrendBranches> | undefined
+	let converged = false
 	for (let iteration = 0; iteration < TREND_LINE_PARTITION_ITERATIONS; iteration++) {
 		branch = fitTrendBranches(domain, split, options)
 		if (branch === undefined) return failure(points, emptyUsed, 'insufficientSides')
 		if (!(branch.leftSlope < 0) || !(branch.rightSlope > 0)) return failure(points, branch.used, 'nonConvex')
 		if (!Number.isFinite(branch.intersection)) return failure(points, branch.used, 'nonConvergent')
-		if (Math.abs(branch.intersection - split) <= 1e-9) break
+		if (Math.abs(branch.intersection - split) <= 1e-9) {
+			converged = true
+			break
+		}
 		split = branch.intersection
 	}
-	if (branch === undefined) return failure(points, emptyUsed, 'nonConvergent')
+	if (branch === undefined || !converged) return failure(points, branch?.used ?? emptyUsed, 'nonConvergent')
 	const position = domain.center + domain.halfSpan * branch.intersection
 	if ((options.requireMinimumInsideRange ?? true) && (position < domain.minimum || position > domain.maximum)) return failure(points, branch.used, 'minimumOutsideRange')
 	if (!hasSideSupport(points, branch.used, position, positiveInteger(options.minimumPointsPerSide, DEFAULT_MINIMUM_POINTS_PER_SIDE))) return failure(points, branch.used, 'insufficientSides')

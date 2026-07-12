@@ -150,7 +150,7 @@ function collectSized(stars: readonly AberrationStar[]): readonly AberrationStar
 
 	for (let i = 0; i < stars.length; i++) {
 		const star = stars[i]
-		if (star.selected && star.profile.hfd !== undefined && !hasRejection(star, 'hfd')) output.push(star)
+		if (star.selected && star.profile.hfd !== undefined && Number.isFinite(star.profile.hfd) && !hasRejection(star, 'hfd')) output.push(star)
 	}
 
 	return output
@@ -162,7 +162,7 @@ function collectOriented(stars: readonly AberrationStar[]): readonly AberrationS
 
 	for (let i = 0; i < stars.length; i++) {
 		const star = stars[i]
-		if (star.selected && star.profile.theta !== undefined && star.profile.elongation !== undefined && !hasRejection(star, 'orientation')) output.push(star)
+		if (star.selected && star.profile.theta !== undefined && Number.isFinite(star.profile.theta) && star.profile.elongation !== undefined && Number.isFinite(star.profile.elongation) && !hasRejection(star, 'orientation')) output.push(star)
 	}
 
 	return output
@@ -244,15 +244,19 @@ function uniformElongationFinding(stars: readonly AberrationStar[], orientation:
 	let minimum = Number.POSITIVE_INFINITY
 	let maximum = 0
 	let sum = 0
+	let count = 0
 
 	for (let i = 0; i < stars.length; i++) {
+		if (hasRejection(stars[i], 'elongation')) continue
 		const elongation = stars[i].profile.elongation!
 		minimum = Math.min(minimum, elongation)
 		maximum = Math.max(maximum, elongation)
 		sum += elongation
+		count++
 	}
 
-	const mean = sum / stars.length
+	if (count < MINIMUM_ORIENTATION_SAMPLES) return undefined
+	const mean = sum / count
 	const variation = (maximum - minimum) / Math.max(mean, Number.EPSILON)
 	const stability = clamp(1 - variation, 0, 1)
 	const score = orientation.coherence * stability
@@ -404,7 +408,7 @@ function supportedRegionFraction(regions: readonly AberrationRegionResult[]): nu
 }
 
 // Tests whether a profile has a metric-specific exclusion.
-function hasRejection(star: AberrationStar, metric: 'hfd' | 'orientation'): boolean {
+function hasRejection(star: AberrationStar, metric: 'hfd' | 'elongation' | 'orientation'): boolean {
 	for (let i = 0; i < star.rejections.length; i++) {
 		if (star.rejections[i].metric === metric) return true
 	}

@@ -1,3 +1,4 @@
+import { medianOf } from '../../core/util'
 import type { Point } from '../../math/numerical/geometry'
 import { clamp } from '../../math/numerical/math'
 import type { Angle } from '../../math/units/angle'
@@ -243,23 +244,15 @@ function estimateBackground(image: Image, x: number, y: number, radius: number, 
 	if (count < 8) return undefined
 
 	const ring = scratch.ring.subarray(0, count)
-	ring.sort()
-	const background = medianOfSorted(ring, count)
+	const background = medianOf(ring.sort(), count)
 	if (!Number.isFinite(background)) return undefined
 
 	scratch.deviations = ensureCapacity(scratch.deviations, count)
 	for (let i = 0; i < count; i++) scratch.deviations[i] = Math.abs(ring[i] - background)
 	const deviations = scratch.deviations.subarray(0, count)
-	deviations.sort()
-	const deviation = 1.4826 * medianOfSorted(deviations, count)
+	const deviation = 1.4826 * medianOf(deviations.sort(), count)
 
 	return Number.isFinite(deviation) ? { background, deviation, nonFinite } : undefined
-}
-
-// Returns the median of a sorted numeric prefix without allocating an array.
-function medianOfSorted(values: Readonly<Float64Array>, count: number): number {
-	const middle = count >>> 1
-	return count % 2 === 0 ? 0.5 * (values[middle - 1] + values[middle]) : values[middle]
 }
 
 // Measures a signal aperture, refines its centroid, and fills radial HFD bins around that centroid.

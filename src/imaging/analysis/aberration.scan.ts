@@ -6,6 +6,7 @@ import type { StarProfile } from '../stars/profile'
 import { diagnoseFocusScan } from './aberration.diagnostic'
 import { fitAberrationFocusCurve, type AberrationFocusCurveOptions, type AberrationFocusCurveResult, type AberrationFocusMetric } from './aberration.focus'
 import { measureFocusFieldOffset, type BackfocusCalibration, type FocusFieldOffset } from './aberration.physical'
+import { assignAberrationRegion } from './aberration.region'
 import { inspectAberration, inspectAberrationProfiles, type InspectAberrationOptions } from './aberration.single'
 import type { AberrationFinding, AberrationInspectionResult, AberrationRegionDefinition, AberrationRegionOptions, AberrationWarning } from './aberration.types'
 
@@ -434,25 +435,31 @@ function positiveInteger(value: number | undefined, fallback: number): number {
 function regionalCurves(frames: readonly AberrationFocusFrameResult[], metric: AberrationFocusMetric, options: AberrationFocusCurveOptions | undefined): AberrationRegionFocusResult[] {
 	let regionCount = 0
 	for (let i = 0; i < frames.length; i++)
-		if (frames[i].inspection) {
+		if (frames[i].status === 'used' && frames[i].inspection) {
 			regionCount = frames[i].inspection!.regions.length
 			break
 		}
 	const output = new Array<AberrationRegionFocusResult>(regionCount)
+	const coordinates = new Array<readonly ({ readonly x: number; readonly y: number } | undefined)[] | undefined>(frames.length)
+	for (let frameIndex = 0; frameIndex < frames.length; frameIndex++) {
+		if (frames[frameIndex].status !== 'used') continue
+		const inspection = frames[frameIndex].inspection
+		if (inspection !== undefined) coordinates[frameIndex] = regionalCoordinates(inspection, metric)
+	}
 
 	for (let regionIndex = 0; regionIndex < regionCount; regionIndex++) {
 		const observations: RegionObservation[] = []
 		let definition: AberrationRegionDefinition | undefined
 		for (let frameIndex = 0; frameIndex < frames.length; frameIndex++) {
 			const frame = frames[frameIndex]
-			if (!frame.inspection) continue
+			if (frame.status !== 'used' || !frame.inspection) continue
 			const region = frame.inspection.regions[regionIndex]
 			definition ??= region.bounds
 			const value = metric === 'hfd' ? region.medianHFD : region.medianFWHM
 			const deviation = metric === 'hfd' ? region.deviationHFD : region.deviationFWHM
 			const starCount = region.usedStarCountByMetric[metric] ?? 0
 			if (value === undefined || !(starCount > 0)) continue
-			const coordinate = regionalCoordinate(frame.inspection, regionIndex, metric)
+			const coordinate = coordinates[frameIndex]?.[regionIndex]
 			if (coordinate === undefined) continue
 			observations.push({ position: frame.position, value, weight: regionWeight(value, deviation, starCount), starCount, u: coordinate.x, v: coordinate.y })
 		}
@@ -499,26 +506,32 @@ function aggregatePositions(observations: readonly RegionObservation[]): { reado
 	return points
 }
 
-// Computes the mean sensor coordinate of selected stars usable for one regional scalar metric.
-function regionalCoordinate(inspection: AberrationInspectionResult, regionIndex: number, metric: AberrationFocusMetric): { readonly x: number; readonly y: number } | undefined {
-	const bounds = inspection.regions[regionIndex].bounds
-	let x = 0
-	let y = 0
-	let count = 0
+// Computes mean usable-star coordinates for every region in one pass over an inspection.
+function regionalCoordinates(inspection: AberrationInspectionResult, metric: AberrationFocusMetric): readonly ({ readonly x: number; readonly y: number } | undefined)[] {
+	const x = new Float64Array(inspection.regions.length)
+	const y = new Float64Array(inspection.regions.length)
+	const count = new Uint32Array(inspection.regions.length)
+	const bounds = new Array<AberrationRegionDefinition>(inspection.regions.length)
+	for (let i = 0; i < bounds.length; i++) bounds[i] = inspection.regions[i].bounds
 	for (let i = 0; i < inspection.stars.length; i++) {
 		const star = inspection.stars[i]
 		const value = metric === 'hfd' ? star.profile.hfd : star.profile.fwhm
-		if (!star.selected || value === undefined || !containsRegion(bounds, star.u, star.v) || star.rejections.some((rejection) => rejection.metric === metric)) continue
-		x += star.u
-		y += star.v
-		count++
+		if (!star.selected || value === undefined || hasMetricRejection(star, metric)) continue
+		const regionIndex = assignAberrationRegion(star.u, star.v, bounds)
+		if (regionIndex < 0) continue
+		x[regionIndex] += star.u
+		y[regionIndex] += star.v
+		count[regionIndex]++
 	}
-	return count > 0 ? { x: x / count, y: y / count } : undefined
+	const coordinates = new Array<{ readonly x: number; readonly y: number } | undefined>(inspection.regions.length)
+	for (let i = 0; i < coordinates.length; i++) coordinates[i] = count[i] > 0 ? { x: x[i] / count[i], y: y[i] / count[i] } : undefined
+	return coordinates
 }
 
-// Applies the same half-open normalized-region boundary convention as the single-frame inspector.
-function containsRegion(region: AberrationRegionDefinition, u: number, v: number): boolean {
-	return u >= region.left && (u < region.right || (region.right === 0.5 && u <= region.right)) && v >= region.top && (v < region.bottom || (region.bottom === 0.5 && v <= region.bottom))
+// Tests one inspected star for a metric-specific exclusion without allocating a callback.
+function hasMetricRejection(star: AberrationInspectionResult['stars'][number], metric: AberrationFocusMetric): boolean {
+	for (let i = 0; i < star.rejections.length; i++) if (star.rejections[i].metric === metric) return true
+	return false
 }
 
 // Returns the weighted mean measurement coordinate, falling back to the region center only without points.

@@ -111,6 +111,29 @@ test('rejects regional scalar outliers per metric', () => {
 	expect(result.regions[0].medianHFD).toBe(2)
 })
 
+// Prevents non-finite supplied profile metrics and SNR from entering public summaries or selection.
+test('rejects non-finite supplied profile measurements', () => {
+	const source = image()
+	const invalidHfd = { ...profileAt(source, -0.3, -0.3, 2), hfd: Number.NaN }
+	const invalidSnr = { ...profileAt(source, 0.3, 0.3, 2), snr: Number.NaN }
+	const result = inspectAberration(source, { profiles: [invalidHfd, invalidSnr], minimumStars: 1, minimumStarsPerRegion: 1 })
+
+	expect(result.stars[0].rejections).toContainEqual({ metric: 'hfd', reason: 'unavailable' })
+	expect(result.stars[1].selected).toBeFalse()
+	expect(result.stars[1].selectionReasons).toContain('belowMinimumSNR')
+	expect(result.regions.every((region) => region.medianHFD === undefined || Number.isFinite(region.medianHFD))).toBeTrue()
+})
+
+// Keeps an elongation outlier out of the uniform-shape diagnostic while preserving its orientation.
+test('excludes rejected elongation from uniform diagnostics', () => {
+	const source = image()
+	const profiles = [profileAt(source, -0.45, -0.4, 2, 30, 0.2), profileAt(source, -0.4, -0.35, 2, 30, 0.2), { ...profileAt(source, -0.35, -0.3, 2, 30, 0.2), elongation: 10 }, profileAt(source, 0.25, -0.4, 2, 30, 0.2), profileAt(source, 0.35, -0.35, 2, 30, 0.2), profileAt(source, 0.45, -0.3, 2, 30, 0.2)]
+	const result = inspectAberration(source, { profiles, minimumStars: 5, minimumStarsPerRegion: 1, sigmaClip: 3 })
+
+	expect(result.stars[2].rejections).toContainEqual({ metric: 'elongation', reason: 'outlier' })
+	expect(result.findings.some((finding) => finding.kind === 'uniformElongation')).toBeTrue()
+})
+
 // Publishes numeric regional maps and a conservative one-frame focus-gradient finding from supplied profiles.
 test('inspects regions and reports a one-frame size gradient without claiming mechanical tilt', () => {
 	const source = image()

@@ -24,6 +24,11 @@ test('converts quadratic coefficients into physical principal radii', () => {
 	expect(curvature.radiusY).toBeCloseTo(1, 12)
 })
 
+// Refuses non-finite public surface coefficients before they can leak into physical radii.
+test('rejects non-finite physical curvature coefficients', () => {
+	expect(() => analyzePhysicalCurvature({ c: 0, ax: 0, ay: 0, qxx: Number.NaN, qxy: 0, qyy: 1 }, 100, 100, { pixelSize: 0.004, focusDisplacement: 0.001 })).toThrow(RangeError)
+})
+
 // Measures a robust center-to-edge offset and applies only an explicit calibration response.
 test('measures and calibrates a field focus offset', () => {
 	const offset = measureFocusFieldOffset([
@@ -35,6 +40,17 @@ test('measures and calibrates a field focus offset', () => {
 	if (!offset) return
 	expect(offset.centerToEdge).toBe(11)
 	expect(estimateBackfocusCorrection(offset, { response: 2 }).correction).toBe(-5.5)
+})
+
+// Does not let unsupported middle-field samples inflate center-to-edge confidence.
+test('limits field-offset confidence to contributing samples', () => {
+	const offset = measureFocusFieldOffset([
+		{ u: 0, v: 0, bestFocus: 100, confidence: 0.3 },
+		{ u: 0.5, v: 0.5, bestFocus: 110, confidence: 0.3 },
+		{ u: 0.3, v: 0, bestFocus: 105, confidence: 1 },
+	])
+
+	expect(offset?.confidence).toBeCloseTo(0.2, 12)
 })
 
 // Keeps CFZ explicitly as a semi-amplitude for both supported conventions.
