@@ -5,7 +5,7 @@ import { measureSensorLinearity, type SensorLinearity } from './sensor.linearity
 import { characterizeSensorTemporal, type PhotonTransferPoint, type SensorBias, type SensorGain, type SensorReadNoise } from './sensor.ptc'
 import { computeSensorDynamicRange, detectSensorSaturation, type SensorDynamicRange, type SensorSaturation } from './sensor.saturation'
 import { measureSensorSpatial, type SensorPhotoResponse, type SensorSpatialNoise } from './sensor.spatial'
-import { DEFAULT_SENSOR_CHARACTERIZATION_OPTIONS, type SensorCharacterizationInput, type SensorCharacterizationOptions, type SensorFrameSet, type SensorOperatingPoint, type SensorPlane } from './sensor.types'
+import { BAYER_SENSOR_PLANES, DEFAULT_SENSOR_CHARACTERIZATION_OPTIONS, MONO_SENSOR_PLANES, type SensorCharacterizationInput, type SensorCharacterizationOptions, type SensorFrameSet, type SensorOperatingPoint, type SensorPlane } from './sensor.types'
 
 // Public orchestration for one sensor operating point. It validates structural acquisition contracts,
 // characterizes each mono/CFA plane independently, and converts recoverable failures into explicit
@@ -34,6 +34,7 @@ export type SensorDiagnosticCode =
 	| 'darkCurrentMismatch'
 	| 'ampGlowDetected'
 	| 'quantizationCorrectionUnavailable'
+	| 'missingSpectralCalibration'
 	| 'invalidQuantumEfficiency'
 	| 'spatialBuffersRequired'
 	| 'insufficientSpatialFrames'
@@ -68,7 +69,7 @@ export interface SensorAcquisitionReport {
 	// Number of supplied dark levels.
 	readonly darkLevels: number
 	// Minimum and maximum recorded temperatures, degrees Celsius.
-	readonly temperatures: Readonly<[number, number]> | undefined
+	readonly temperatures: readonly [number, number] | undefined
 }
 
 // Temporal characterization for one mono or CFA plane.
@@ -137,7 +138,7 @@ function resolveArea(area: Readonly<Rect> | undefined, width: number, height: nu
 }
 
 // Collects the finite temperature span declared by frame sets and their operating points.
-function temperatureRange(sets: readonly SensorFrameSet[]): Readonly<[number, number]> | undefined {
+function temperatureRange(sets: readonly SensorFrameSet[]): readonly [number, number] | undefined {
 	let minimum = Number.POSITIVE_INFINITY
 	let maximum = Number.NEGATIVE_INFINITY
 	for (const set of sets) {
@@ -161,7 +162,7 @@ function operatingPointDiffers(expected: SensorOperatingPoint, actual: SensorOpe
 }
 
 // Resolves CFA phase from explicit sensor origin or image-local Bayer offset keywords.
-function cfaOffset(input: SensorCharacterizationInput): Readonly<[number, number]> | undefined {
+function cfaOffset(input: SensorCharacterizationInput): readonly [number, number] | undefined {
 	const origin = input.operatingPoint.sensorOrigin
 	if (origin && Number.isInteger(origin[0]) && Number.isInteger(origin[1])) return origin
 	const header = input.bias.frames[0].header
@@ -171,7 +172,7 @@ function cfaOffset(input: SensorCharacterizationInput): Readonly<[number, number
 }
 
 // Adds high-level fit and acquisition diagnostics for one plane.
-function diagnosePlane(result: SensorPlaneCharacterization, diagnostics: SensorDiagnostic[]): void {
+function diagnosePlane(result: SensorPlaneCharacterization, diagnostics: SensorDiagnostic[]) {
 	const plane = result.plane
 	if (!result.gain) diagnostics.push({ severity: 'error', code: 'poorGainFit', message: 'Fewer than two valid PTC points or a non-positive gain slope prevented conversion-gain estimation.', plane })
 	else {
@@ -183,7 +184,6 @@ function diagnosePlane(result: SensorPlaneCharacterization, diagnostics: SensorD
 	if (!result.linearity) diagnostics.push({ severity: 'warning', code: 'poorLinearityFit', message: 'Fewer than two compatible positive-stimulus levels were available for linearity.', plane })
 	else if (result.linearity.error > 0.01) diagnostics.push({ severity: 'warning', code: 'poorLinearityFit', message: 'Mean absolute relative linearity error exceeds 1%.', plane })
 	if (result.readNoise.sensorElectrons === undefined) diagnostics.push({ severity: 'info', code: 'quantizationCorrectionUnavailable', message: 'Electronic read noise could not be separated from quantization.', plane })
-	if (result.responsivity !== undefined && result.quantumEfficiency === undefined) diagnostics.push({ severity: 'error', code: 'invalidQuantumEfficiency', message: 'Photon responsivity and system gain imply quantum efficiency outside 0..1.', plane })
 	if (result.darkCurrent?.variance !== undefined && Math.abs(result.darkCurrent.mean - result.darkCurrent.variance) / result.darkCurrent.mean > 0.5) diagnostics.push({ severity: 'warning', code: 'darkCurrentMismatch', message: 'Mean- and variance-derived dark currents differ by more than 50%.', plane })
 	if (result.darkCurrent?.ampGlow?.ratio !== undefined && result.darkCurrent.ampGlow.ratio > 1.5) diagnostics.push({ severity: 'warning', code: 'ampGlowDetected', message: 'Maximum tile dark current exceeds 1.5 times the median tile current.', plane })
 	if (result.prnu) {
@@ -191,7 +191,7 @@ function diagnosePlane(result: SensorPlaneCharacterization, diagnostics: SensorD
 		if (result.prnu.undetrended.overall > Math.max(0.01, reference * 2)) diagnostics.push({ severity: 'warning', code: 'sourceGradientDetected', message: 'Undetrended response variation substantially exceeds detrended PRNU.', plane })
 	}
 
-	const ordered = [...result.photonTransfer].sort((a, b) => a.level - b.level)
+	const ordered = result.photonTransfer.toSorted((a, b) => a.level - b.level)
 	let maximum = 0
 	for (const point of ordered) maximum = Math.max(maximum, point.signal)
 	for (let i = 0; i < ordered.length; i++) {
@@ -204,6 +204,9 @@ function diagnosePlane(result: SensorPlaneCharacterization, diagnostics: SensorD
 
 // Characterizes all requested planes for a single validated sensor operating point.
 export function characterizeSensor(input: SensorCharacterizationInput, options: Partial<SensorCharacterizationOptions> = {}): SensorCharacterization {
+	if (options.digitalClip !== undefined && !Number.isFinite(options.digitalClip)) throw new RangeError('sensor digital clip must be finite')
+	if (options.temperatureTolerance !== undefined && (!Number.isFinite(options.temperatureTolerance) || options.temperatureTolerance < 0)) throw new RangeError('sensor temperature tolerance must be finite and non-negative')
+	if (options.rejectionSigma !== undefined && (!Number.isFinite(options.rejectionSigma) || options.rejectionSigma <= 0)) throw new RangeError('sensor rejection sigma must be finite and positive')
 	const diagnostics: SensorDiagnostic[] = []
 	const sets = frameSets(input)
 	const first = input.bias.frames?.[0]
@@ -230,6 +233,10 @@ export function characterizeSensor(input: SensorCharacterizationInput, options: 
 	}
 
 	let structuralError = false
+	if (channels !== 1) {
+		diagnostics.push({ severity: 'error', code: 'mixedDimensions', message: 'Sensor characterization requires undebayered single-channel frames.' })
+		structuralError = true
+	}
 	for (const set of sets) {
 		if (!Number.isFinite(set.exposure) || set.exposure < 0) {
 			diagnostics.push({ severity: 'error', code: 'mixedOperatingPoint', message: 'Every frame set exposure must be finite and non-negative.' })
@@ -240,6 +247,11 @@ export function characterizeSensor(input: SensorCharacterizationInput, options: 
 			structuralError = true
 		}
 		for (const frame of set.frames) {
+			const pixelCount = frame.metadata.width * frame.metadata.height
+			if (frame.sampleScale !== 'digital' || frame.metadata.pixelCount !== pixelCount || frame.raw.length < pixelCount) {
+				diagnostics.push({ severity: 'error', code: 'mixedDimensions', message: 'Every sensor frame must be digital and contain its declared pixel geometry.' })
+				structuralError = true
+			}
 			if (frame.metadata.width !== width || frame.metadata.height !== height || frame.metadata.channels !== channels) {
 				diagnostics.push({ severity: 'error', code: 'mixedDimensions', message: 'All sensor frames must have identical dimensions and channel counts.' })
 				structuralError = true
@@ -270,7 +282,7 @@ export function characterizeSensor(input: SensorCharacterizationInput, options: 
 	const acquisition: SensorAcquisitionReport = { width, height, roi, biasFrames: input.bias.frames.length, flatLevels: input.flats.length, darkLevels: input.darks?.length ?? 0, temperatures }
 	if (structuralError) return { operatingPoint: input.operatingPoint, planes: [], acquisition, diagnostics }
 
-	const planes = options.planes ?? (bayer ? (['red', 'green1', 'green2', 'blue'] as const) : (['mono'] as const))
+	const planes = options.planes ?? (bayer ? BAYER_SENSOR_PLANES : MONO_SENSOR_PLANES)
 	const results: SensorPlaneCharacterization[] = []
 	for (const plane of planes) {
 		try {
@@ -282,17 +294,25 @@ export function characterizeSensor(input: SensorCharacterizationInput, options: 
 			const photonTransfer = temporal.photonTransfer.map((point) => ({ ...point, saturationFraction: saturation ? point.signal / saturation.signal : undefined }))
 			let darkCurrent: SensorDarkCurrent | undefined
 			if (input.darks && input.darks.length >= 3 && temporal.gain) {
-				darkCurrent = measureSensorDarkCurrent(input.darks, temporal.gain.conversion, { area: roi, plane, cfaOffset: offset, digitalClip: options.digitalClip, tile: options.tile })
+				try {
+					darkCurrent = measureSensorDarkCurrent(input.darks, temporal.gain.conversion, { area: roi, plane, cfaOffset: offset, digitalClip: options.digitalClip, tile: options.tile })
+				} catch (error) {
+					diagnostics.push({ severity: 'error', code: 'insufficientDarkLevels', message: error instanceof Error ? error.message : 'Dark-current analysis failed.', plane })
+				}
 			}
 			let dsnu: SensorSpatialNoise | undefined
 			let prnu: SensorPhotoResponse | undefined
 			let defects: SensorDefects | undefined
 			if (input.spatial && temporal.gain) {
-				const spatial = measureSensorSpatial(input.spatial.dark, input.spatial.flat, temporal.gain.conversion, { area: roi, plane, cfaOffset: offset, spatialDetrend: options.spatialDetrend, maps: options.maps, spatialBuffers: options.spatialBuffers, tile: options.tile })
-				dsnu = spatial.dsnu
-				prnu = spatial.prnu
-				defects = measureSensorDefects(input.spatial.dark, input.spatial.flat, { area: roi, plane, cfaOffset: offset, rejectionSigma: options.rejectionSigma, digitalClip: options.digitalClip, maps: options.maps, spatialBuffers: options.spatialBuffers })
-				if (!defects) diagnostics.push({ severity: 'warning', code: 'spatialBuffersRequired', message: 'Defect counts require retained maps or caller-provided mean, variance, and mask buffers.', plane })
+				try {
+					const spatial = measureSensorSpatial(input.spatial.dark, input.spatial.flat, temporal.gain.conversion, { area: roi, plane, cfaOffset: offset, spatialDetrend: options.spatialDetrend, maps: options.maps, spatialBuffers: options.spatialBuffers, tile: options.tile })
+					dsnu = spatial.dsnu
+					prnu = spatial.prnu
+					defects = measureSensorDefects(input.spatial.dark, input.spatial.flat, { area: roi, plane, cfaOffset: offset, rejectionSigma: options.rejectionSigma, digitalClip: options.digitalClip, maps: options.maps, spatialBuffers: options.spatialBuffers })
+					if (!defects) diagnostics.push({ severity: 'warning', code: 'spatialBuffersRequired', message: 'Defect counts require retained maps or caller-provided mean, variance, and mask buffers.', plane })
+				} catch (error) {
+					diagnostics.push({ severity: 'error', code: 'insufficientValidPixels', message: error instanceof Error ? error.message : 'Spatial sensor analysis failed.', plane })
+				}
 			}
 			const result: SensorPlaneCharacterization = {
 				plane,
@@ -312,6 +332,8 @@ export function characterizeSensor(input: SensorCharacterizationInput, options: 
 			}
 			results.push(result)
 			diagnosePlane(result, diagnostics)
+			if (linearityAnalysis.quantumEfficiencyUnavailable === 'missingSpectralCalibration') diagnostics.push({ severity: 'warning', code: 'missingSpectralCalibration', message: 'Quantum efficiency requires one finite, positive, consistent wavelength across photon-calibrated flat levels.', plane })
+			else if (linearityAnalysis.quantumEfficiencyUnavailable === 'outOfRange') diagnostics.push({ severity: 'error', code: 'invalidQuantumEfficiency', message: 'Photon responsivity and system gain imply quantum efficiency outside 0..1.', plane })
 		} catch (error) {
 			diagnostics.push({ severity: 'error', code: 'insufficientValidPixels', message: error instanceof Error ? error.message : 'Sensor-plane analysis failed.', plane })
 		}

@@ -150,6 +150,26 @@ test('preserves floating-point XISF samples in digital scale', async () => {
 	expect(image!.quantizationStep).toBeUndefined()
 })
 
+test('rejects a caller-provided XISF output buffer smaller than the image', async () => {
+	const data = Buffer.alloc(8)
+	const image = await readImageFromXisf(
+		{
+			byteOrder: 'little',
+			colorSpace: 'Gray',
+			imageType: 'Bias',
+			pixelStorage: 'Normal',
+			sampleFormat: 'UInt16',
+			header: { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: 4, NAXIS2: 1 },
+			location: { offset: 0, size: data.length },
+			geometry: { width: 4, height: 1, channels: 1 },
+			bitpix: 16,
+		},
+		bufferSource(data),
+		{ sampleScale: 'digital', raw: new Float64Array(3) },
+	)
+	expect(image).toBeUndefined()
+})
+
 describe('read compressed', () => {
 	for (const format of COMPRESSION_FORMATS) {
 		test(format, async () => {

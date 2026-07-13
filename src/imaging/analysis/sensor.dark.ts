@@ -1,6 +1,7 @@
 import { medianOf } from '../../core/util'
-import { weightedLinearRegression, weightedLinearRegressionScore } from '../../math/numerical/regression'
-import { aggregateSensorPairs, measureSensorPair, type SensorPairOptions, type SensorPairStatistics } from './sensor.pair'
+import { weightedLinearRegression, weightedLinearRegressionScore, type LinearRegression } from '../../math/numerical/regression'
+import { resolveSensorArea, validateSensorSpatialStack } from './sensor.grid'
+import { aggregateSensorPairs, measureSensorPair, type SensorPairAggregate, type SensorPairOptions, type SensorPairStatistics } from './sensor.pair'
 import type { SensorRegressionFit } from './sensor.ptc'
 import type { SensorFrameSet, SensorPlane, SensorTileOptions } from './sensor.types'
 
@@ -53,18 +54,9 @@ export interface SensorDarkCurrentOptions extends SensorPairOptions {
 }
 
 // Converts generic weighted score fields into the sensor regression contract.
-function sensorFit(regression: ReturnType<typeof weightedLinearRegression>, x: Float64Array, y: Float64Array, weights: Float64Array): SensorRegressionFit {
+function sensorFit(regression: LinearRegression, x: Float64Array, y: Float64Array, weights: Float64Array): SensorRegressionFit {
 	const score = weightedLinearRegressionScore(regression, x, y, weights)
-	return {
-		r: score.r,
-		r2: score.r2,
-		rss: score.rss,
-		rmsd: score.rmsd,
-		pointCount: score.pointCount,
-		weighted: true,
-		slopeStandardError: score.slopeStandardError,
-		interceptStandardError: score.interceptStandardError,
-	}
+	return { r: score.r, r2: score.r2, rss: score.rss, rmsd: score.rmsd, pointCount: score.pointCount, weighted: true, slopeStandardError: score.slopeStandardError, interceptStandardError: score.interceptStandardError }
 }
 
 // Returns the selected 2x2 CFA slot, or -1 for mono.
@@ -75,11 +67,13 @@ function planeSlot(pattern: string | undefined, plane: SensorPlane | undefined):
 	}
 	if (plane === undefined || plane === 'mono') throw new RangeError('CFA dark analysis requires an explicit color plane')
 	const channel = plane === 'red' ? 'R' : plane === 'blue' ? 'B' : 'G'
-	return plane === 'green2' ? pattern.indexOf(channel, pattern.indexOf(channel) + 1) : pattern.indexOf(channel)
+	const slot = plane === 'green2' ? pattern.indexOf(channel, pattern.indexOf(channel) + 1) : pattern.indexOf(channel)
+	if (slot < 0) throw new RangeError(`sensor plane ${plane} is absent from CFA pattern ${pattern}`)
+	return slot
 }
 
 // Measures and groups non-overlapping dark pairs by exact exposure duration.
-function darkLevels(darks: readonly SensorFrameSet[], options: Partial<SensorPairOptions>): readonly { exposure: number; statistics: ReturnType<typeof aggregateSensorPairs> }[] {
+function darkLevels(darks: readonly SensorFrameSet[], options: Partial<SensorPairOptions>): readonly { exposure: number; statistics: SensorPairAggregate }[] {
 	const grouped = new Map<number, SensorPairStatistics[]>()
 	for (const set of darks) {
 		if (!Number.isFinite(set.exposure) || set.exposure < 0) throw new RangeError('dark exposure must be finite and non-negative')
@@ -87,37 +81,38 @@ function darkLevels(darks: readonly SensorFrameSet[], options: Partial<SensorPai
 		if (!group) grouped.set(set.exposure, (group = []))
 		for (let i = 0; i + 1 < set.frames.length; i += 2) group.push(measureSensorPair(set.frames[i], set.frames[i + 1], options))
 	}
-	const levels: { exposure: number; statistics: ReturnType<typeof aggregateSensorPairs> }[] = []
+	const levels: { exposure: number; statistics: SensorPairAggregate }[] = []
 	for (const [exposure, pairs] of grouped) {
 		if (pairs.length > 0) levels.push({ exposure, statistics: aggregateSensorPairs(pairs) })
 	}
-	levels.sort((a, b) => a.exposure - b.exposure)
 	if (levels.length < 3) throw new RangeError('dark-current regression requires at least three distinct exposure times')
+	levels.sort((a, b) => a.exposure - b.exposure)
 	return levels
 }
 
 // Computes the mean of one frame stack for each output tile and selected sensor plane.
-function tileMeans(set: SensorFrameSet, tileWidth: number, tileHeight: number, plane: SensorPlane | undefined, cfaOffset: Readonly<[number, number]> | undefined): Float64Array {
+function tileMeans(set: SensorFrameSet, tileWidth: number, tileHeight: number, area: Readonly<{ left: number; top: number; right: number; bottom: number }>, plane: SensorPlane | undefined, cfaOffset: readonly [number, number] | undefined): Float64Array {
 	const first = set.frames[0]
-	const { width, height, bayer } = first.metadata
-	const columns = Math.ceil(width / tileWidth)
-	const rows = Math.ceil(height / tileHeight)
+	const { width, bayer } = first.metadata
+	const columns = Math.ceil((area.right - area.left) / tileWidth)
+	const rows = Math.ceil((area.bottom - area.top) / tileHeight)
 	const sums = new Float64Array(columns * rows)
 	const counts = new Uint32Array(columns * rows)
 	const slot = planeSlot(bayer, plane)
+	if (slot >= 0 && cfaOffset === undefined) throw new RangeError('CFA amp-glow analysis requires an explicit sensor origin')
 	const offsetX = cfaOffset?.[0] ?? 0
 	const offsetY = cfaOffset?.[1] ?? 0
+	if (!Number.isInteger(offsetX) || !Number.isInteger(offsetY)) throw new RangeError('amp-glow CFA offset must use integer sensor coordinates')
 
 	for (const frame of set.frames) {
-		if (frame.metadata.width !== width || frame.metadata.height !== height || frame.metadata.bayer !== bayer) throw new RangeError('amp-glow frames must share dimensions and CFA pattern')
-		for (let y = 0; y < height; y++) {
-			let index = y * width
-			const tileRow = Math.trunc(y / tileHeight) * columns
-			for (let x = 0; x < width; x++, index++) {
+		for (let y = area.top; y < area.bottom; y++) {
+			let index = y * width + area.left
+			const tileRow = Math.trunc((y - area.top) / tileHeight) * columns
+			for (let x = area.left; x < area.right; x++, index++) {
 				if (slot >= 0 && ((((y + offsetY) & 1) << 1) | ((x + offsetX) & 1)) !== slot) continue
 				const value = frame.raw[index]
 				if (!Number.isFinite(value)) continue
-				const tile = tileRow + Math.trunc(x / tileWidth)
+				const tile = tileRow + Math.trunc((x - area.left) / tileWidth)
 				sums[tile] += value
 				counts[tile]++
 			}
@@ -135,13 +130,15 @@ function measureAmpGlow(darks: readonly SensorFrameSet[], conversionGain: number
 	const tileWidth = options.tile?.width ?? 64
 	const tileHeight = options.tile?.height ?? 64
 	if (!Number.isInteger(tileWidth) || !Number.isInteger(tileHeight) || tileWidth <= 0 || tileHeight <= 0) throw new RangeError('amp-glow tile dimensions must be positive integers')
-	const columns = Math.ceil(first.metadata.width / tileWidth)
-	const rows = Math.ceil(first.metadata.height / tileHeight)
+	const area = resolveSensorArea(options.area, first.metadata.width, first.metadata.height)
+	for (const level of darks) validateSensorSpatialStack(level, first)
+	const columns = Math.ceil((area.right - area.left) / tileWidth)
+	const rows = Math.ceil((area.bottom - area.top) / tileHeight)
 	const tileCount = columns * rows
-	const levels = [...darks].sort((a, b) => a.exposure - b.exposure)
+	const levels = darks.toSorted((a, b) => a.exposure - b.exposure)
 	const unique = new Set(levels.map((level) => level.exposure))
 	if (unique.size < 3) return undefined
-	const means = levels.map((level) => tileMeans(level, tileWidth, tileHeight, options.plane, options.cfaOffset))
+	const means = levels.map((level) => tileMeans(level, tileWidth, tileHeight, area, options.plane, options.cfaOffset))
 	const x = new Float64Array(levels.length)
 	const y = new Float64Array(levels.length)
 	const weights = new Float64Array(levels.length)
@@ -166,8 +163,7 @@ function measureAmpGlow(darks: readonly SensorFrameSet[], conversionGain: number
 		sorted[tile] = value
 		maximum = Math.max(maximum, value)
 	}
-	sorted.sort()
-	const median = medianOf(sorted)
+	const median = medianOf(sorted.sort())
 	const excess = maximum - median
 	return { tileWidth, tileHeight, columns, rows, current, median, maximum, excess, ratio: median > 0 ? maximum / median : undefined }
 }
@@ -204,12 +200,5 @@ export function measureSensorDarkCurrent(darks: readonly SensorFrameSet[], conve
 		}
 	}
 
-	return {
-		mean,
-		variance,
-		meanFit,
-		varianceFit,
-		temperature: temperatureCount > 0 ? temperatureSum / temperatureCount : undefined,
-		ampGlow: measureAmpGlow(darks, conversionGain, options),
-	}
+	return { mean, variance, meanFit, varianceFit, temperature: temperatureCount > 0 ? temperatureSum / temperatureCount : undefined, ampGlow: measureAmpGlow(darks, conversionGain, options) }
 }

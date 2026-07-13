@@ -22,13 +22,13 @@ function point(level: number, signal: number): PhotonTransferPoint {
 }
 
 // Creates a photon-calibrated flat-set placeholder.
-function flat(photons: number): SensorFlatFrameSet {
-	return { frames: [IMAGE, IMAGE], exposure: photons / 250, photons }
+function flat(photons: number, wavelength?: number): SensorFlatFrameSet {
+	return { frames: [IMAGE, IMAGE], exposure: photons / 250, photons, wavelength }
 }
 
 test('recovers photon responsivity, quantum efficiency, and relative residuals', () => {
 	const points = [point(0, 100), point(1, 300), point(2, 500), point(3, 700), point(4, 900)]
-	const flats = [flat(250), flat(750), flat(1250), flat(1750), flat(2250)]
+	const flats = [flat(250, 550), flat(750, 550), flat(1250, 550), flat(1750, 550), flat(2250, 550)]
 	const gain: SensorGain = { system: 0.5, conversion: 2, intercept: 0, range: [100, 700], fit: { r: 1, r2: 1, rss: 0, rmsd: 0, pointCount: 4, weighted: true } }
 	const result = measureSensorLinearity(points, flats, { signal: 1000, capacity: 2000, index: 4, method: 'response', confidence: 0.8 }, gain)
 
@@ -36,6 +36,15 @@ test('recovers photon responsivity, quantum efficiency, and relative residuals',
 	expect(result.linearity?.error).toBeCloseTo(0, 12)
 	expect(result.responsivity).toBeCloseTo(0.4, 12)
 	expect(result.quantumEfficiency).toBeCloseTo(0.8, 12)
+})
+
+test('requires a recorded spectral condition before reporting quantum efficiency', () => {
+	const points = [point(0, 100), point(1, 300), point(2, 500)]
+	const gain: SensorGain = { system: 0.5, conversion: 2, intercept: 0, range: [100, 500], fit: { r: 1, r2: 1, rss: 0, rmsd: 0, pointCount: 3, weighted: true } }
+	const result = measureSensorLinearity(points, [flat(250), flat(750), flat(1250)], { signal: 600, index: 2, method: 'response', confidence: 0.8 }, gain, [0, 1])
+	expect(result.responsivity).toBeCloseTo(0.4, 12)
+	expect(result.quantumEfficiency).toBeUndefined()
+	expect(result.quantumEfficiencyUnavailable).toBe('missingSpectralCalibration')
 })
 
 test('reports compression as a nonzero relative linearity error', () => {

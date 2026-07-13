@@ -26,6 +26,11 @@ test('detects variance collapse and uses digital range only as low-confidence fa
 	expect(fallback).toEqual({ signal: 1000, capacity: 2000, index: -1, method: 'digitalRange', confidence: 0.2 })
 })
 
+test('does not report a clipped first sample as an unbiased capacity measurement', () => {
+	const result = detectSensorSaturation([point(0, 100, 50, 0.2)], GAIN, 1000)
+	expect(result).toEqual({ signal: 1000, capacity: 2000, index: -1, method: 'digitalRange', confidence: 0.2 })
+})
+
 test('computes practical RMS and EMVA sensitivity dynamic ranges separately', () => {
 	const saturation = { signal: 500, capacity: 1000, index: 2, method: 'unclippedLevel', confidence: 0.95 } as const
 	const readNoise: SensorReadNoise = { digital: 2, totalElectrons: 4, sensorElectrons: 3.9, pairCount: 2, deviation: 0.1 }

@@ -47,10 +47,12 @@ export interface SensorLinearityAnalysis {
 	readonly responsivity?: number
 	// Converted electrons per incident photon when physically within 0..1.
 	readonly quantumEfficiency?: number
+	// Reason calibrated photon responsivity could not produce quantum efficiency.
+	readonly quantumEfficiencyUnavailable?: 'missingSpectralCalibration' | 'outOfRange'
 }
 
 // Measures response linearity over a fractional saturation interval.
-export function measureSensorLinearity(points: readonly PhotonTransferPoint[], flats: readonly SensorFlatFrameSet[], saturation: SensorSaturation | undefined, gain: SensorGain | undefined, range: Readonly<[number, number]> = DEFAULT_SENSOR_CHARACTERIZATION_OPTIONS.linearityRange): SensorLinearityAnalysis {
+export function measureSensorLinearity(points: readonly PhotonTransferPoint[], flats: readonly SensorFlatFrameSet[], saturation: SensorSaturation | undefined, gain: SensorGain | undefined, range: readonly [number, number] = DEFAULT_SENSOR_CHARACTERIZATION_OPTIONS.linearityRange): SensorLinearityAnalysis {
 	if (range.length !== 2 || !Number.isFinite(range[0]) || !Number.isFinite(range[1]) || range[0] < 0 || range[0] >= range[1] || range[1] > 1) throw new RangeError('linearity range must be an increasing fraction within 0..1')
 	let observedMaximum = 0
 	for (const point of points) if (point.valid && point.signal > observedMaximum) observedMaximum = point.signal
@@ -60,12 +62,17 @@ export function measureSensorLinearity(points: readonly PhotonTransferPoint[], f
 	const maximumSignal = saturationSignal * range[1]
 	const eligible: { point: PhotonTransferPoint; flat: SensorFlatFrameSet }[] = []
 	let allPhotonCalibrated = true
+	let allSpectrallyCalibrated = true
+	let wavelength: number | undefined
 	for (const point of points) {
 		if (!point.valid || point.signal < minimumSignal || point.signal > maximumSignal) continue
 		const flat = flats[point.level]
 		if (!flat) continue
 		const photons = flat.photons
 		allPhotonCalibrated &&= photons !== undefined && Number.isFinite(photons) && photons > 0
+		const candidateWavelength = flat.wavelength
+		allSpectrallyCalibrated &&= candidateWavelength !== undefined && Number.isFinite(candidateWavelength) && candidateWavelength > 0 && (wavelength === undefined || candidateWavelength === wavelength)
+		if (candidateWavelength !== undefined && Number.isFinite(candidateWavelength) && candidateWavelength > 0 && wavelength === undefined) wavelength = candidateWavelength
 		eligible.push({ point, flat })
 	}
 
@@ -93,6 +100,7 @@ export function measureSensorLinearity(points: readonly PhotonTransferPoint[], f
 	} catch {
 		return {}
 	}
+
 	if (!(regression.slope > 0) || !Number.isFinite(regression.intercept)) return {}
 	const score = weightedLinearRegressionScore(regression, x, y, weights)
 	const linearityPoints: SensorLinearityPoint[] = []
@@ -111,19 +119,11 @@ export function measureSensorLinearity(points: readonly PhotonTransferPoint[], f
 		linearityPoints.push({ input: x[i], measured: y[i], predicted, error })
 	}
 
-	const fit: SensorRegressionFit = {
-		r: score.r,
-		r2: score.r2,
-		rss: score.rss,
-		rmsd: score.rmsd,
-		pointCount: score.pointCount,
-		weighted: true,
-		slopeStandardError: score.slopeStandardError,
-		interceptStandardError: score.interceptStandardError,
-	}
+	const fit: SensorRegressionFit = { r: score.r, r2: score.r2, rss: score.rss, rmsd: score.rmsd, pointCount: score.pointCount, weighted: true, slopeStandardError: score.slopeStandardError, interceptStandardError: score.interceptStandardError }
 	const linearity: SensorLinearity = { slope: regression.slope, intercept: regression.intercept, minimum, maximum, rms: Math.sqrt(squaredError / x.length), error: absoluteError / x.length, points: linearityPoints, fit }
 	const responsivity = allPhotonCalibrated ? regression.slope : undefined
-	const efficiency = responsivity !== undefined && gain ? responsivity / gain.system : undefined
+	const efficiency = responsivity !== undefined && allSpectrallyCalibrated && gain ? responsivity / gain.system : undefined
 	const quantumEfficiency = efficiency !== undefined && Number.isFinite(efficiency) && efficiency >= 0 && efficiency <= 1 ? efficiency : undefined
-	return { linearity, responsivity, quantumEfficiency }
+	const quantumEfficiencyUnavailable = responsivity !== undefined && gain && quantumEfficiency === undefined ? (allSpectrallyCalibrated ? 'outOfRange' : 'missingSpectralCalibration') : undefined
+	return { linearity, responsivity, quantumEfficiency, quantumEfficiencyUnavailable }
 }

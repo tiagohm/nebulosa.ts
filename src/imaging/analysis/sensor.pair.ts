@@ -31,7 +31,7 @@ export interface SensorPairOptions {
 	// Mono or CFA plane; required for CFA mosaics and must be mono otherwise.
 	readonly plane?: SensorPlane
 	// CFA phase offset of image coordinate (0,0), in unbinned sensor pixels.
-	readonly cfaOffset?: Readonly<[number, number]>
+	readonly cfaOffset?: readonly [number, number]
 	// Known upper clipping code in DN; clipped samples remain in the statistics.
 	readonly digitalClip?: number
 	// Per-pixel nonzero rejection mask with length width times height.
@@ -70,7 +70,8 @@ function validatePair(first: DigitalImage, second: DigitalImage, plane: SensorPl
 	if (first.sampleScale !== 'digital' || second.sampleScale !== 'digital') throw new TypeError('sensor pair requires digital images')
 	if (a.width !== b.width || a.height !== b.height || a.channels !== b.channels || a.bayer !== b.bayer) throw new RangeError('sensor pair images must have identical dimensions, channels, and CFA pattern')
 	if (a.channels !== 1) throw new RangeError('sensor pair analysis requires an undebayered single-channel image')
-	if (first.raw.length < a.pixelCount || second.raw.length < a.pixelCount) throw new RangeError('sensor pair raw buffer is smaller than the declared image')
+	const pixelCount = a.width * a.height
+	if (a.pixelCount !== pixelCount || b.pixelCount !== pixelCount || first.raw.length < pixelCount || second.raw.length < pixelCount) throw new RangeError('sensor pair pixel geometry or raw-buffer length is inconsistent')
 	if (mask && mask.length !== a.pixelCount) throw new RangeError('sensor pair mask length must equal width times height')
 
 	if (!a.bayer) {
@@ -91,6 +92,7 @@ export function measureSensorPair(first: DigitalImage, second: DigitalImage, opt
 	const area = resolveArea(options.area, width, height)
 	const clip = options.digitalClip
 	if (clip !== undefined && !Number.isFinite(clip)) throw new RangeError('sensor pair digital clip must be finite')
+	if (slot >= 0 && options.cfaOffset === undefined) throw new RangeError('a CFA sensor pair requires an explicit sensor-origin offset')
 	const cfaOffsetX = options.cfaOffset?.[0] ?? 0
 	const cfaOffsetY = options.cfaOffset?.[1] ?? 0
 	if (!Number.isInteger(cfaOffsetX) || !Number.isInteger(cfaOffsetY)) throw new RangeError('sensor pair CFA offset must use integer sensor coordinates')
@@ -167,16 +169,5 @@ export function aggregateSensorPairs(pairs: readonly SensorPairStatistics[]): Se
 		saturatedCount += pair.saturatedCount
 	}
 
-	return {
-		mean,
-		variance,
-		drift,
-		clippedFraction: saturatedCount / sampleCount,
-		sampleCount,
-		rejectedCount,
-		saturatedCount,
-		pairCount: pairs.length,
-		meanScatter: meanM2 / sampleCount,
-		varianceScatter: varianceM2 / sampleCount,
-	}
+	return { mean, variance, drift, clippedFraction: saturatedCount / sampleCount, sampleCount, rejectedCount, saturatedCount, pairCount: pairs.length, meanScatter: meanM2 / sampleCount, varianceScatter: varianceM2 / sampleCount }
 }

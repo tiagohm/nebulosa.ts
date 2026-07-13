@@ -87,6 +87,13 @@ test('preserves floating-point FITS samples in digital scale', async () => {
 	expect(image!.quantizationStep).toBeUndefined()
 })
 
+test('rejects a caller-provided FITS output buffer smaller than the image', async () => {
+	const header: FitsHeader = { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: 4, NAXIS2: 1 }
+	const data = Buffer.alloc(8)
+	const image = await readImageFromFits({ header, data: { offset: 0, size: data.length } }, bufferSource(data), { sampleScale: 'digital', raw: new Float64Array(3) })
+	expect(image).toBeUndefined()
+})
+
 describe('write', () => {
 	const buffer = Buffer.allocUnsafe(1024 * 1024 * 18)
 

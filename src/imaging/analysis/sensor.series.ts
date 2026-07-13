@@ -53,7 +53,7 @@ function sameScalar<T>(first: T | undefined, second: T | undefined): boolean {
 }
 
 // Compares optional two-element numeric tuples exactly.
-function samePair(first: Readonly<[number, number]> | undefined, second: Readonly<[number, number]> | undefined): boolean {
+function samePair(first: readonly [number, number] | undefined, second: readonly [number, number] | undefined): boolean {
 	return first === undefined ? second === undefined : second !== undefined && first[0] === second[0] && first[1] === second[1]
 }
 
@@ -63,12 +63,11 @@ function sameSize(first: SensorOperatingPoint['size'], second: SensorOperatingPo
 }
 
 // Reports whether two operating points differ in any acquisition field other than configured gain.
-function compatibleOperatingPoints(first: SensorOperatingPoint, second: SensorOperatingPoint, temperatureTolerance: number): boolean {
-	const temperatureCompatible = first.temperature === undefined ? second.temperature === undefined : second.temperature !== undefined && Math.abs(first.temperature - second.temperature) <= temperatureTolerance
+function compatibleOperatingPoints(first: SensorOperatingPoint, second: SensorOperatingPoint): boolean {
 	return (
 		sameScalar(first.camera, second.camera) &&
 		sameScalar(first.offset, second.offset) &&
-		temperatureCompatible &&
+		(first.temperature === undefined) === (second.temperature === undefined) &&
 		sameScalar(first.readoutMode, second.readoutMode) &&
 		sameScalar(first.bitDepth, second.bitDepth) &&
 		samePair(first.binning, second.binning) &&
@@ -119,7 +118,7 @@ export function characterizeSensorSeries(profiles: readonly SensorCharacterizati
 		diagnostics.push({ severity: 'error', code: 'invalidConfiguredGain', message: 'Every series profile requires a finite configured gain.' })
 		return { profiles: [...profiles], diagnostics }
 	}
-	const ordered = [...profiles].sort((first, second) => first.operatingPoint.gain! - second.operatingPoint.gain!)
+	const ordered = profiles.toSorted((first, second) => first.operatingPoint.gain! - second.operatingPoint.gain!)
 	for (let i = 1; i < ordered.length; i++) {
 		if (ordered[i - 1].operatingPoint.gain === ordered[i].operatingPoint.gain) {
 			diagnostics.push({ severity: 'error', code: 'invalidConfiguredGain', message: 'Configured gain values must be unique to define an ordered curve.' })
@@ -127,7 +126,17 @@ export function characterizeSensorSeries(profiles: readonly SensorCharacterizati
 		}
 	}
 	const reference = ordered[0].operatingPoint
-	if (ordered.some((profile) => !compatibleOperatingPoints(reference, profile.operatingPoint, temperatureTolerance))) {
+	let minimumTemperature = Number.POSITIVE_INFINITY
+	let maximumTemperature = Number.NEGATIVE_INFINITY
+	for (const profile of ordered) {
+		const temperature = profile.operatingPoint.temperature
+		if (temperature !== undefined) {
+			minimumTemperature = Math.min(minimumTemperature, temperature)
+			maximumTemperature = Math.max(maximumTemperature, temperature)
+		}
+	}
+	const temperatureCompatible = minimumTemperature === Number.POSITIVE_INFINITY || (Number.isFinite(minimumTemperature) && Number.isFinite(maximumTemperature) && maximumTemperature - minimumTemperature <= temperatureTolerance)
+	if (!temperatureCompatible || ordered.some((profile) => !compatibleOperatingPoints(reference, profile.operatingPoint))) {
 		diagnostics.push({ severity: 'error', code: 'incompatibleProfiles', message: 'Profiles differ in camera, offset, temperature, readout mode, bit depth, binning, or ROI.' })
 		return { profiles: ordered, diagnostics }
 	}

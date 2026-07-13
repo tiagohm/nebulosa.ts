@@ -1,6 +1,7 @@
 import { gaussianElimination, Matrix } from '../../math/linear-algebra/matrix'
 import type { Rect } from '../../math/numerical/geometry'
 import { resolveSensorArea, resolveSensorPlaneGeometry, validateSensorSpatialStack, type SensorPlaneGeometry } from './sensor.grid'
+import { SensorRobustReservoir } from './sensor.reservoir'
 import type { SensorFrameSet, SensorPlane, SensorSpatialBuffers, SensorTileOptions } from './sensor.types'
 
 // Tiled spatial sensor analysis for fixed-exposure dark and flat stacks. Each tile rereads frames and
@@ -72,7 +73,7 @@ export interface SensorSpatialOptions {
 	// Mono or CFA plane to analyze.
 	readonly plane?: SensorPlane
 	// CFA phase offset of image coordinate (0,0), unbinned sensor pixels.
-	readonly cfaOffset?: Readonly<[number, number]>
+	readonly cfaOffset?: readonly [number, number]
 	// Illumination detrending used for optional practical PRNU.
 	readonly spatialDetrend?: 'none' | 'emvaHighpass' | 'plane' | 'polynomial'
 	// Diagnostic maps to retain; only all retains DSNU/PRNU maps in this phase.
@@ -118,7 +119,7 @@ function createWorkspace(tileWidth: number, tileHeight: number): SpatialWorkspac
 }
 
 // Fills expanded plane-grid stack mean and unbiased temporal variance, clamping the filter halo to edges.
-function fillStackStatistics(set: SensorFrameSet, geometry: SensorPlaneGeometry, tileLeft: number, tileTop: number, targetWidth: number, targetHeight: number, workspace: SpatialWorkspace): readonly [number, number] {
+function fillStackStatistics(set: SensorFrameSet, geometry: SensorPlaneGeometry, tileLeft: number, tileTop: number, targetWidth: number, targetHeight: number, workspace: SpatialWorkspace) {
 	const expandedWidth = targetWidth + 18
 	const expandedHeight = targetHeight + 18
 	const sourceWidth = set.frames[0].metadata.width
@@ -133,8 +134,8 @@ function fillStackStatistics(set: SensorFrameSet, geometry: SensorPlaneGeometry,
 			let count = 0
 			let mean = 0
 			let m2 = 0
-			for (const frame of set.frames) {
-				const value = frame.raw[index]
+			for (let frameIndex = 0; frameIndex < set.frames.length; frameIndex++) {
+				const value = set.frames[frameIndex].raw[index]
 				if (!Number.isFinite(value)) continue
 				count++
 				const delta = value - mean
@@ -145,11 +146,10 @@ function fillStackStatistics(set: SensorFrameSet, geometry: SensorPlaneGeometry,
 			workspace.variance[output] = count > 1 ? m2 / (count - 1) : Number.NaN
 		}
 	}
-	return [expandedWidth, expandedHeight]
 }
 
-// Applies a separable valid box filter without allocating per pass.
-function boxValid(input: Float64Array, width: number, height: number, radius: number, horizontal: Float64Array, output: Float64Array): readonly [number, number] {
+// Applies a separable valid box filter while excluding non-finite samples from each window.
+function boxValid(input: Float64Array, width: number, height: number, radius: number, horizontal: Float64Array, output: Float64Array) {
 	const kernel = radius * 2 + 1
 	const outputWidth = width - radius * 2
 	const outputHeight = height - radius * 2
@@ -157,27 +157,58 @@ function boxValid(input: Float64Array, width: number, height: number, radius: nu
 		const row = y * width
 		const targetRow = y * outputWidth
 		let sum = 0
-		for (let x = 0; x < kernel; x++) sum += input[row + x]
-		horizontal[targetRow] = sum / kernel
+		let count = 0
+		for (let x = 0; x < kernel; x++) {
+			const value = input[row + x]
+			if (Number.isFinite(value)) {
+				sum += value
+				count++
+			}
+		}
+		horizontal[targetRow] = count > 0 ? sum / count : Number.NaN
 		for (let x = 1; x < outputWidth; x++) {
-			sum += input[row + x + kernel - 1] - input[row + x - 1]
-			horizontal[targetRow + x] = sum / kernel
+			const removed = input[row + x - 1]
+			const added = input[row + x + kernel - 1]
+			if (Number.isFinite(removed)) {
+				sum -= removed
+				count--
+			}
+			if (Number.isFinite(added)) {
+				sum += added
+				count++
+			}
+			horizontal[targetRow + x] = count > 0 ? sum / count : Number.NaN
 		}
 	}
 	for (let x = 0; x < outputWidth; x++) {
 		let sum = 0
-		for (let y = 0; y < kernel; y++) sum += horizontal[y * outputWidth + x]
-		output[x] = sum / kernel
+		let count = 0
+		for (let y = 0; y < kernel; y++) {
+			const value = horizontal[y * outputWidth + x]
+			if (Number.isFinite(value)) {
+				sum += value
+				count++
+			}
+		}
+		output[x] = count > 0 ? sum / count : Number.NaN
 		for (let y = 1; y < outputHeight; y++) {
-			sum += horizontal[(y + kernel - 1) * outputWidth + x] - horizontal[(y - 1) * outputWidth + x]
-			output[y * outputWidth + x] = sum / kernel
+			const removed = horizontal[(y - 1) * outputWidth + x]
+			const added = horizontal[(y + kernel - 1) * outputWidth + x]
+			if (Number.isFinite(removed)) {
+				sum -= removed
+				count--
+			}
+			if (Number.isFinite(added)) {
+				sum += added
+				count++
+			}
+			output[y * outputWidth + x] = count > 0 ? sum / count : Number.NaN
 		}
 	}
-	return [outputWidth, outputHeight]
 }
 
 // Applies the final valid binomial 3x3 filter to produce the target tile.
-function binomialValid(input: Float64Array, width: number, height: number, output: Float64Array): void {
+function binomialValid(input: Float64Array, width: number, height: number, output: Float64Array) {
 	const outputWidth = width - 2
 	const outputHeight = height - 2
 	for (let y = 0; y < outputHeight; y++) {
@@ -185,20 +216,69 @@ function binomialValid(input: Float64Array, width: number, height: number, outpu
 			const top = y * width + x
 			const middle = top + width
 			const bottom = middle + width
-			output[y * outputWidth + x] = (input[top] + 2 * input[top + 1] + input[top + 2] + 2 * input[middle] + 4 * input[middle + 1] + 2 * input[middle + 2] + input[bottom] + 2 * input[bottom + 1] + input[bottom + 2]) / 16
+			let sum = 0
+			let weight = 0
+			let value = input[top]
+			if (Number.isFinite(value)) {
+				sum += value
+				weight++
+			}
+			value = input[top + 1]
+			if (Number.isFinite(value)) {
+				sum += value * 2
+				weight += 2
+			}
+			value = input[top + 2]
+			if (Number.isFinite(value)) {
+				sum += value
+				weight++
+			}
+			value = input[middle]
+			if (Number.isFinite(value)) {
+				sum += value * 2
+				weight += 2
+			}
+			value = input[middle + 1]
+			if (Number.isFinite(value)) {
+				sum += value * 4
+				weight += 4
+			}
+			value = input[middle + 2]
+			if (Number.isFinite(value)) {
+				sum += value * 2
+				weight += 2
+			}
+			value = input[bottom]
+			if (Number.isFinite(value)) {
+				sum += value
+				weight++
+			}
+			value = input[bottom + 1]
+			if (Number.isFinite(value)) {
+				sum += value * 2
+				weight += 2
+			}
+			value = input[bottom + 2]
+			if (Number.isFinite(value)) {
+				sum += value
+				weight++
+			}
+			output[y * outputWidth + x] = weight > 0 ? sum / weight : Number.NaN
 		}
 	}
 }
 
 // Computes the prescribed sequential high-pass smoothing for the current expanded stack mean.
-function smoothTarget(workspace: SpatialWorkspace, expandedWidth: number, expandedHeight: number): void {
-	const firstSize = boxValid(workspace.mean, expandedWidth, expandedHeight, 3, workspace.horizontal, workspace.first)
-	const secondSize = boxValid(workspace.first, firstSize[0], firstSize[1], 5, workspace.secondHorizontal, workspace.second)
-	binomialValid(workspace.second, secondSize[0], secondSize[1], workspace.smooth)
+function smoothTarget(workspace: SpatialWorkspace, targetWidth: number, targetHeight: number) {
+	const expandedWidth = targetWidth + 18
+	const expandedHeight = targetHeight + 18
+	boxValid(workspace.mean, expandedWidth, expandedHeight, 3, workspace.horizontal, workspace.first)
+	boxValid(workspace.first, expandedWidth - 6, expandedHeight - 6, 5, workspace.secondHorizontal, workspace.second)
+	binomialValid(workspace.second, targetWidth + 2, targetHeight + 2, workspace.smooth)
 }
 
 // Adds basis outer products and response products for plane or quadratic detrending.
-function accumulateSurface(normal: Float64Array, rhs: Float64Array, basis: Float64Array, terms: number, x: number, y: number, value: number): void {
+function accumulateSurface(normal: Float64Array, rhs: Float64Array, basis: Float64Array, terms: number, x: number, y: number, value: number) {
 	basis[0] = 1
 	basis[1] = x
 	basis[2] = y
@@ -221,6 +301,7 @@ function solveSurface(normal: Float64Array, rhs: Float64Array, terms: number): F
 		for (let i = 0; i < normal.length; i++) matrix.data[i] = normal[i]
 		const coefficients = new Float64Array(terms)
 		gaussianElimination(matrix, rhs, coefficients)
+		for (let i = 0; i < coefficients.length; i++) if (!Number.isFinite(coefficients[i])) return undefined
 		return coefficients
 	} catch {
 		return undefined
@@ -235,8 +316,13 @@ function surfaceValue(coefficients: Float64Array, x: number, y: number): number 
 // Converts total/row/column variances into a non-negative RMS decomposition and applies scale.
 function components(totalVariance: number, rowVariance: number, columnVariance: number, scale: number): SensorSpatialComponents {
 	const total = Math.max(0, totalVariance)
-	const rows = Math.max(0, Math.min(total, rowVariance))
-	const columns = Math.max(0, Math.min(total - rows, columnVariance))
+	let rows = Math.max(0, rowVariance)
+	let columns = Math.max(0, columnVariance)
+	if (rows + columns > total && rows + columns > 0) {
+		const factor = total / (rows + columns)
+		rows *= factor
+		columns *= factor
+	}
 	const pixels = Math.max(0, total - rows - columns)
 	return { overall: Math.sqrt(total) * scale, rows: Math.sqrt(rows) * scale, columns: Math.sqrt(columns) * scale, pixels: Math.sqrt(pixels) * scale }
 }
@@ -257,7 +343,8 @@ function effectVariance(sums: Float64Array, counts: Uint32Array, overallMean: nu
 // Measures DSNU and PRNU for matched fixed-exposure dark and bright stacks.
 export function measureSensorSpatial(dark: SensorFrameSet, flat: SensorFrameSet, conversionGain: number, options: Partial<SensorSpatialOptions> = {}): SensorSpatialCharacterization {
 	if (!Number.isFinite(conversionGain) || conversionGain <= 0) throw new RangeError('spatial conversion gain must be finite and positive')
-	if (dark.exposure !== flat.exposure) throw new RangeError('spatial dark and flat stacks must have matching exposure')
+	if (!Number.isFinite(dark.exposure) || dark.exposure < 0 || !Number.isFinite(flat.exposure) || flat.exposure < 0 || dark.exposure !== flat.exposure) throw new RangeError('spatial dark and flat stacks must have matching finite non-negative exposure')
+	if (options.spatialDetrend !== undefined && options.spatialDetrend !== 'none' && options.spatialDetrend !== 'emvaHighpass' && options.spatialDetrend !== 'plane' && options.spatialDetrend !== 'polynomial') throw new RangeError('unsupported spatial detrending mode')
 	const reference = dark.frames[0]
 	validateSensorSpatialStack(dark, reference)
 	validateSensorSpatialStack(flat, reference)
@@ -294,6 +381,10 @@ export function measureSensorSpatial(dark: SensorFrameSet, flat: SensorFrameSet,
 	const meanBuffer = options.spatialBuffers?.mean
 	const varianceBuffer = options.spatialBuffers?.variance
 	const maskBuffer = options.spatialBuffers?.mask
+	if (dsnuMap) dsnuMap.fill(Number.NaN)
+	if (prnuMap) prnuMap.fill(Number.NaN)
+	if (meanBuffer) meanBuffer.fill(Number.NaN, 0, sampleCapacity)
+	if (varianceBuffer) varianceBuffer.fill(Number.NaN, 0, sampleCapacity)
 	if (maskBuffer) maskBuffer.fill(1, 0, sampleCapacity)
 	let count = 0
 	let darkMean = 0
@@ -309,17 +400,18 @@ export function measureSensorSpatial(dark: SensorFrameSet, flat: SensorFrameSet,
 		const targetHeight = Math.min(tileHeight, geometry.height - tileTop)
 		for (let tileLeft = 0; tileLeft < geometry.width; tileLeft += tileWidth) {
 			const targetWidth = Math.min(tileWidth, geometry.width - tileLeft)
-			const darkExpanded = fillStackStatistics(dark, geometry, tileLeft, tileTop, targetWidth, targetHeight, darkWorkspace)
-			smoothTarget(darkWorkspace, darkExpanded[0], darkExpanded[1])
-			const flatExpanded = fillStackStatistics(flat, geometry, tileLeft, tileTop, targetWidth, targetHeight, flatWorkspace)
-			smoothTarget(flatWorkspace, flatExpanded[0], flatExpanded[1])
+			const expandedWidth = targetWidth + 18
+			fillStackStatistics(dark, geometry, tileLeft, tileTop, targetWidth, targetHeight, darkWorkspace)
+			smoothTarget(darkWorkspace, targetWidth, targetHeight)
+			fillStackStatistics(flat, geometry, tileLeft, tileTop, targetWidth, targetHeight, flatWorkspace)
+			smoothTarget(flatWorkspace, targetWidth, targetHeight)
 			for (let localY = 0; localY < targetHeight; localY++) {
 				const y = tileTop + localY
 				for (let localX = 0; localX < targetWidth; localX++) {
 					const x = tileLeft + localX
 					const target = localY * targetWidth + localX
-					const darkCenter = (localY + 9) * darkExpanded[0] + localX + 9
-					const flatCenter = (localY + 9) * flatExpanded[0] + localX + 9
+					const darkCenter = (localY + 9) * expandedWidth + localX + 9
+					const flatCenter = darkCenter
 					const meanDark = darkWorkspace.mean[darkCenter]
 					const meanFlat = flatWorkspace.mean[flatCenter]
 					const temporalDark = darkWorkspace.variance[darkCenter]
@@ -391,7 +483,7 @@ export function measureSensorSpatial(dark: SensorFrameSet, flat: SensorFrameSet,
 	const darkColumnVariance = effectVariance(darkResidualColumn, columnCounts, darkMean)
 	const brightRowVariance = effectVariance(brightResidualRow, rowCounts, brightMean)
 	const brightColumnVariance = effectVariance(brightResidualColumn, columnCounts, brightMean)
-	const signalTotalVariance = signalM2 / count
+	const signalTotalVariance = Math.max(0, signalM2 / count - darkTemporal - brightTemporal)
 	const signalRowVariance = effectVariance(signalSpatialRow, rowCounts, signalMean)
 	const signalColumnVariance = effectVariance(signalSpatialColumn, columnCounts, signalMean)
 	const dsnuComponents = components(darkTotalVariance, darkRowVariance, darkColumnVariance, conversionGain)
@@ -411,12 +503,15 @@ export function measureSensorSpatial(dark: SensorFrameSet, flat: SensorFrameSet,
 		let correctedCount = 0
 		let correctedMean = 0
 		let correctedM2 = 0
+		let correctedTemporalSum = 0
+		const correctedResiduals = new SensorRobustReservoir(sampleCapacity)
 		for (let tileTop = 0; tileTop < geometry.height; tileTop += tileHeight) {
 			const targetHeight = Math.min(tileHeight, geometry.height - tileTop)
 			for (let tileLeft = 0; tileLeft < geometry.width; tileLeft += tileWidth) {
 				const targetWidth = Math.min(tileWidth, geometry.width - tileLeft)
-				const darkExpanded = fillStackStatistics(dark, geometry, tileLeft, tileTop, targetWidth, targetHeight, darkWorkspace)
-				const flatExpanded = fillStackStatistics(flat, geometry, tileLeft, tileTop, targetWidth, targetHeight, flatWorkspace)
+				const expandedWidth = targetWidth + 18
+				fillStackStatistics(dark, geometry, tileLeft, tileTop, targetWidth, targetHeight, darkWorkspace)
+				fillStackStatistics(flat, geometry, tileLeft, tileTop, targetWidth, targetHeight, flatWorkspace)
 				for (let localY = 0; localY < targetHeight; localY++) {
 					const y = tileTop + localY
 					const normalizedY = geometry.height > 1 ? (2 * y) / (geometry.height - 1) - 1 : 0
@@ -424,15 +519,19 @@ export function measureSensorSpatial(dark: SensorFrameSet, flat: SensorFrameSet,
 						const x = tileLeft + localX
 						const normalizedX = geometry.width > 1 ? (2 * x) / (geometry.width - 1) - 1 : 0
 						const model = surfaceValue(coefficients, normalizedX, normalizedY)
-						const darkCenter = (localY + 9) * darkExpanded[0] + localX + 9
-						const flatCenter = (localY + 9) * flatExpanded[0] + localX + 9
+						const darkCenter = (localY + 9) * expandedWidth + localX + 9
+						const flatCenter = darkCenter
 						const signal = flatWorkspace.mean[flatCenter] - darkWorkspace.mean[darkCenter]
-						if (!Number.isFinite(signal) || !Number.isFinite(model) || Math.abs(model) <= Number.EPSILON) continue
+						const temporalDark = darkWorkspace.variance[darkCenter]
+						const temporalBright = flatWorkspace.variance[flatCenter]
+						if (!Number.isFinite(signal) || !Number.isFinite(model) || Math.abs(model) <= Number.EPSILON || !Number.isFinite(temporalDark) || !Number.isFinite(temporalBright)) continue
 						const residual = signal / model - 1
 						correctedCount++
 						const delta = residual - correctedMean
 						correctedMean += delta / correctedCount
 						correctedM2 += delta * (residual - correctedMean)
+						correctedTemporalSum += (temporalDark / dark.frames.length + temporalBright / flat.frames.length) / (model * model)
+						correctedResiduals.push(residual)
 						correctedRow[y] += residual
 						correctedColumn[x] += residual
 						correctedRowCounts[y]++
@@ -442,7 +541,11 @@ export function measureSensorSpatial(dark: SensorFrameSet, flat: SensorFrameSet,
 				}
 			}
 		}
-		if (correctedCount > 0) corrected = components(correctedM2 / correctedCount, effectVariance(correctedRow, correctedRowCounts, correctedMean), effectVariance(correctedColumn, correctedColumnCounts, correctedMean), 1)
+		if (correctedCount > 0) {
+			const robustDeviation = correctedResiduals.robustStandardDeviation()
+			const correctedVariance = Number.isFinite(robustDeviation) ? Math.max(0, robustDeviation * robustDeviation - correctedTemporalSum / correctedCount) : Math.max(0, correctedM2 / correctedCount - correctedTemporalSum / correctedCount)
+			corrected = components(correctedVariance, effectVariance(correctedRow, correctedRowCounts, correctedMean), effectVariance(correctedColumn, correctedColumnCounts, correctedMean), 1)
+		}
 	}
 
 	return {

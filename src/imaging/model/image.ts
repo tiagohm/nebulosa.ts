@@ -90,6 +90,7 @@ export async function readImageFromFits(fits: Fits | FitsHdu, source: Source & S
 	const sampleScale = resolved[1]
 	if (raw === 'auto') raw = bitpix === 8 ? 32 : 64
 	if (typeof raw === 'number') raw = raw === 32 ? new Float32Array(pixelCount * channels) : new Float64Array(pixelCount * channels)
+	if (raw.length < pixelCount * channels) return undefined
 	if (!(await reader.read(source, raw, sampleScale))) return undefined
 
 	const metadata = { width, height, channels, pixelCount, pixelSizeInBytes, strideInBytes, stride, bitpix, bayer }
@@ -126,6 +127,7 @@ export async function readImageFromXisf(xisf: Xisf | XisfImage, source: Source &
 	const sampleScale = resolved[1]
 	if (raw === 'auto') raw = bitpix === 8 ? 32 : 64
 	if (typeof raw === 'number') raw = raw === 32 ? new Float32Array(pixelCount * channels) : new Float64Array(pixelCount * channels)
+	if (raw.length < pixelCount * channels) return undefined
 	if (!(await reader.read(source, raw, sampleScale))) return undefined
 
 	const metadata = { width, height, channels, pixelCount, pixelSizeInBytes, strideInBytes, stride, bitpix, bayer }

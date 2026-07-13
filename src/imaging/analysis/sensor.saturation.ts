@@ -62,13 +62,14 @@ function saturation(point: PhotonTransferPoint | undefined, signal: number, meth
 
 // Detects output saturation from clipping, PTC variance collapse, response plateau, or digital limit.
 export function detectSensorSaturation(points: readonly PhotonTransferPoint[], gain?: SensorGain, digitalSignalLimit?: number): SensorSaturation | undefined {
-	const ordered = [...points].sort((a, b) => a.level - b.level)
+	const ordered = points.toSorted((a, b) => a.level - b.level)
 	for (let i = 0; i < ordered.length; i++) {
 		if (ordered[i].clippedFraction <= 0) continue
 		let candidate = i - 1
 		while (candidate >= 0 && !ordered[candidate].valid) candidate--
-		const selected = candidate >= 0 ? ordered[candidate] : ordered[i]
-		const result = saturation(selected, selected.signal, 'unclippedLevel', candidate >= 0 ? 0.95 : 0.6, gain)
+		if (candidate < 0) break
+		const selected = ordered[candidate]
+		const result = saturation(selected, selected.signal, 'unclippedLevel', 0.95, gain)
 		if (result) return result
 	}
 
@@ -87,15 +88,17 @@ export function detectSensorSaturation(points: readonly PhotonTransferPoint[], g
 		}
 	}
 
-	let previousIncrease = Number.POSITIVE_INFINITY
+	let previousSlope = Number.POSITIVE_INFINITY
 	for (let i = 1; i < ordered.length; i++) {
-		const increase = ordered[i].signal - ordered[i - 1].signal
-		if (increase > 0 && previousIncrease < Number.POSITIVE_INFINITY && increase < previousIncrease * 0.25) {
+		const exposureIncrease = ordered[i].exposure - ordered[i - 1].exposure
+		if (!(Number.isFinite(exposureIncrease) && exposureIncrease > 0)) continue
+		const slope = (ordered[i].signal - ordered[i - 1].signal) / exposureIncrease
+		if (slope > 0 && previousSlope < Number.POSITIVE_INFINITY && slope < previousSlope * 0.25) {
 			const selected = ordered[i - 1]
 			const result = saturation(selected, selected.signal, 'response', 0.65, gain)
 			if (result) return result
 		}
-		if (increase > 0) previousIncrease = increase
+		if (slope > 0) previousSlope = slope
 	}
 
 	if (ordered.length >= 3) {

@@ -82,3 +82,32 @@ test('analyzes a CFA plane on its dense plane grid with sensor-origin phase', ()
 	expect(result.prnu.rowProfile).toHaveLength(8)
 	expect(result.prnu.columnProfile).toHaveLength(8)
 })
+
+test('ignores isolated non-finite samples without poisoning neighboring smoothing windows', () => {
+	const width = 32
+	const darkRaw = new Float64Array(width * width).fill(100)
+	const flatRaw = new Float64Array(width * width).fill(1100)
+	darkRaw[width + 1] = Number.NaN
+	flatRaw[width + 1] = Number.NaN
+	const mean = new Float64Array(width * width)
+	const variance = new Float64Array(width * width)
+	const mask = new Uint8Array(width * width)
+	const result = measureSensorSpatial(stack(darkRaw, width), stack(flatRaw, width), 2, { maps: 'all', spatialBuffers: { mean, variance, mask }, tile: { width: 8, height: 8 } })
+	expect(result.sampleCount).toBe(width * width - 1)
+	expect(Number.isNaN(result.dsnu.map![width + 1])).toBeTrue()
+	expect(Number.isNaN(mean[width + 1])).toBeTrue()
+	expect(mask[width + 1]).toBe(1)
+})
+
+test('removes finite-stack temporal variance from undetrended PRNU', () => {
+	const width = 32
+	const capacity = width * width
+	const darkRaw = new Float64Array(capacity).fill(100)
+	const brightA = new Float64Array(capacity)
+	const brightB = new Float64Array(capacity).fill(1100)
+	for (let i = 0; i < capacity; i++) brightA[i] = 1100 + ((i & 1) === 0 ? 20 : -20)
+	const dark = stack(darkRaw, width)
+	const flat: SensorFrameSet = { frames: [image(brightA, width), image(brightB, width)], exposure: 10 }
+	const result = measureSensorSpatial(dark, flat, 2, { tile: { width: 8, height: 8 } })
+	expect(result.prnu.undetrended.overall).toBeCloseTo(0, 10)
+})

@@ -32,13 +32,13 @@ test('selects CFA plane inside ROI while rejecting mask and non-finite samples',
 	const mask = new Uint8Array(16)
 	mask[6] = 1
 
-	const red = measureSensorPair(first, second, { plane: 'red', area: { left: 0, top: 0, right: 4, bottom: 4 }, digitalClip: 80 })
+	const red = measureSensorPair(first, second, { plane: 'red', cfaOffset: [0, 0], area: { left: 0, top: 0, right: 4, bottom: 4 }, digitalClip: 80 })
 	expect(red.sampleCount).toBe(3)
 	expect(red.rejectedCount).toBe(1)
 	expect(red.saturatedCount).toBe(1)
 	expect(red.clippedFraction).toBeCloseTo(1 / 3, 12)
 
-	const green2 = measureSensorPair(first, second, { plane: 'green2', area: { left: 0, top: 0, right: 4, bottom: 4 }, mask })
+	const green2 = measureSensorPair(first, second, { plane: 'green2', cfaOffset: [0, 0], area: { left: 0, top: 0, right: 4, bottom: 4 }, mask })
 	expect(green2.sampleCount).toBe(3)
 	expect(green2.rejectedCount).toBe(1)
 })
@@ -50,6 +50,9 @@ test('rejects incompatible structure, invalid ROI, mask, and empty samples', () 
 	expect(() => measureSensorPair(mono, mono, { mask: new Uint8Array(3) })).toThrow()
 	expect(() => measureSensorPair(digitalImage([Number.NaN], 1), digitalImage([1], 1))).toThrow()
 	expect(() => measureSensorPair(digitalImage([1, 2, 3, 4], 2, 'RGGB'), digitalImage([1, 2, 3, 4], 2, 'RGGB'))).toThrow()
+	expect(() => measureSensorPair(digitalImage([1, 2, 3, 4], 2, 'RGGB'), digitalImage([1, 2, 3, 4], 2, 'RGGB'), { plane: 'red' })).toThrow()
+	const invalidGeometry = { ...mono, metadata: { ...mono.metadata, pixelCount: 3 } }
+	expect(() => measureSensorPair(invalidGeometry, invalidGeometry)).toThrow()
 })
 
 test('aggregates pairs by valid samples and preserves between-pair scatter', () => {

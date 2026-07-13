@@ -1,10 +1,12 @@
 import { medianOf } from '../../core/util'
 import type { Rect } from '../../math/numerical/geometry'
-import { resolveSensorArea, resolveSensorPlaneGeometry, validateSensorSpatialStack, type SensorPlaneGeometry } from './sensor.grid'
+import { resolveSensorArea, resolveSensorPlaneGeometry, validateSensorSpatialStack } from './sensor.grid'
+import { SensorRobustReservoir } from './sensor.reservoir'
 import type { SensorFrameSet, SensorPlane, SensorSpatialBuffers } from './sensor.types'
 
-// Robust fixed-pattern defect classification for matched dark and flat stacks. Caller buffers are
-// overwritten and reused between passes; a compact mask is retained only when explicitly requested.
+// Bounded-memory fixed-pattern defect classification for matched dark and flat stacks. Statistics
+// are reread in three passes; only a compact mask, O(width+height) profiles, and fixed robust samples
+// are retained. Caller buffers are overwritten with response and combined temporal variance.
 
 // Defect categories represented by the compact per-pixel bit mask.
 export type SensorDefectType = 'hot' | 'cold' | 'noisy' | 'unstable' | 'saturated' | 'row' | 'column'
@@ -45,144 +47,66 @@ export interface SensorDefectOptions {
 	// Mono or CFA plane to classify.
 	readonly plane?: SensorPlane
 	// CFA phase offset of image coordinate (0,0), unbinned sensor pixels.
-	readonly cfaOffset?: Readonly<[number, number]>
+	readonly cfaOffset?: readonly [number, number]
 	// Median absolute deviation multiplier; defaults to five.
 	readonly rejectionSigma?: number
 	// Known upper digital clipping code in DN for saturated-pixel flags.
 	readonly digitalClip?: number
 	// Whether to retain a compact defect mask.
 	readonly maps?: 'none' | 'defects' | 'all'
-	// Caller-owned buffers overwritten by dark/flat statistics and the defect mask.
+	// Caller-owned response, variance, and mask buffers overwritten during classification.
 	readonly spatialBuffers?: SensorSpatialBuffers
 }
 
-// Fills per-pixel stack means and unbiased temporal variances on a dense selected-plane grid.
-function fillDefectStatistics(set: SensorFrameSet, geometry: SensorPlaneGeometry, mean: Float64Array, variance: Float64Array): void {
-	const sourceWidth = set.frames[0].metadata.width
-	for (let y = 0; y < geometry.height; y++) {
-		const sourceY = geometry.sourceTop + y * geometry.step
-		for (let x = 0; x < geometry.width; x++) {
-			const sourceIndex = sourceY * sourceWidth + geometry.sourceLeft + x * geometry.step
-			const index = y * geometry.width + x
-			let count = 0
-			let center = 0
-			let m2 = 0
-			for (const frame of set.frames) {
-				const value = frame.raw[sourceIndex]
-				if (!Number.isFinite(value)) continue
-				count++
-				const delta = value - center
-				center += delta / count
-				m2 += delta * (value - center)
-			}
-			mean[index] = count > 0 ? center : Number.NaN
-			variance[index] = count > 1 ? m2 / (count - 1) : Number.NaN
-		}
+// Computes finite stack mean and unbiased temporal variance for one source pixel into output[0..1].
+function pixelStatistics(set: SensorFrameSet, sourceIndex: number, output: Float64Array): void {
+	let count = 0
+	let mean = 0
+	let m2 = 0
+	for (let frameIndex = 0; frameIndex < set.frames.length; frameIndex++) {
+		const value = set.frames[frameIndex].raw[sourceIndex]
+		if (!Number.isFinite(value)) continue
+		count++
+		const delta = value - mean
+		mean += delta / count
+		m2 += delta * (value - mean)
 	}
+	output[0] = count > 0 ? mean : Number.NaN
+	output[1] = count > 1 ? m2 / (count - 1) : Number.NaN
 }
 
-// Computes robust median and raw MAD using one reusable scratch array.
-function robustCenterScale(values: Float64Array, scratch: Float64Array): readonly [number, number] {
+// Computes excess kurtosis around the measured dark mean for one source pixel.
+function excessKurtosis(set: SensorFrameSet, sourceIndex: number, mean: number, sampleVariance: number): number {
 	let count = 0
+	let fourth = 0
+	for (let frameIndex = 0; frameIndex < set.frames.length; frameIndex++) {
+		const value = set.frames[frameIndex].raw[sourceIndex]
+		if (!Number.isFinite(value)) continue
+		const residual = value - mean
+		const squared = residual * residual
+		fourth += squared * squared
+		count++
+	}
+	const populationVariance = count > 1 ? (sampleVariance * (count - 1)) / count : 0
+	return populationVariance > 0 ? fourth / count / (populationVariance * populationVariance) - 3 : 0
+}
+
+// Computes an exact robust center and MAD for a small row/column profile.
+function robustCenterScale(values: Float64Array): readonly [number, number] {
+	let count = 0
+	const scratch = new Float64Array(values.length)
 	for (let i = 0; i < values.length; i++) if (Number.isFinite(values[i])) scratch[count++] = values[i]
 	if (count === 0) return [Number.NaN, Number.NaN]
 	const selected = scratch.subarray(0, count)
-	selected.sort()
-	const center = medianOf(selected)
+	const center = medianOf(selected.sort())
 	for (let i = 0; i < count; i++) scratch[i] = Math.abs(scratch[i] - center)
-	selected.sort()
-	return [center, medianOf(selected)]
+	return [center, medianOf(selected.sort())]
 }
 
-// Adds hot and noisy flags from dark-stack statistics and returns their counts.
-function classifyDark(mean: Float64Array, variance: Float64Array, mask: Uint8Array, scratch: Float64Array, sigma: number): readonly [number, number] {
-	const dark = robustCenterScale(mean, scratch)
-	const temporal = robustCenterScale(variance, scratch)
-	const hotLimit = dark[0] + sigma * dark[1]
-	const noisyLimit = temporal[0] + sigma * temporal[1]
-	let hot = 0
-	let noisy = 0
-	for (let i = 0; i < mean.length; i++) {
-		if (mean[i] > hotLimit) {
-			mask[i] |= SENSOR_DEFECT_HOT
-			hot++
-		}
-		if (variance[i] > noisyLimit) {
-			mask[i] |= SENSOR_DEFECT_NOISY
-			noisy++
-		}
-	}
-	return [hot, noisy]
-}
-
-// Adds an approximate RTS/non-Gaussian flag for already-noisy dark pixels using excess kurtosis.
-function classifyUnstable(set: SensorFrameSet, geometry: SensorPlaneGeometry, mean: Float64Array, variance: Float64Array, mask: Uint8Array): number {
-	const sourceWidth = set.frames[0].metadata.width
-	let unstable = 0
-	for (let y = 0; y < geometry.height; y++) {
-		const sourceY = geometry.sourceTop + y * geometry.step
-		for (let x = 0; x < geometry.width; x++) {
-			const index = y * geometry.width + x
-			if ((mask[index] & SENSOR_DEFECT_NOISY) === 0) continue
-			const sourceIndex = sourceY * sourceWidth + geometry.sourceLeft + x * geometry.step
-			let count = 0
-			let fourth = 0
-			for (const frame of set.frames) {
-				const value = frame.raw[sourceIndex]
-				if (!Number.isFinite(value)) continue
-				const residual = value - mean[index]
-				const squared = residual * residual
-				fourth += squared * squared
-				count++
-			}
-			const populationVariance = count > 1 ? (variance[index] * (count - 1)) / count : 0
-			const excess = populationVariance > 0 ? fourth / count / (populationVariance * populationVariance) - 3 : 0
-			if (excess < -0.8 || excess > 2) {
-				mask[index] |= SENSOR_DEFECT_UNSTABLE
-				unstable++
-			}
-		}
-	}
-	return unstable
-}
-
-// Adds cold and optional saturated flags from the flat-stack mean.
-function classifyFlat(mean: Float64Array, mask: Uint8Array, scratch: Float64Array, sigma: number, digitalClip: number | undefined): number {
-	const response = robustCenterScale(mean, scratch)
-	const coldLimit = response[0] - sigma * response[1]
-	let cold = 0
-	for (let i = 0; i < mean.length; i++) {
-		if (mean[i] < coldLimit) {
-			mask[i] |= SENSOR_DEFECT_COLD
-			cold++
-		}
-		if (digitalClip !== undefined && mean[i] >= digitalClip) mask[i] |= SENSOR_DEFECT_SATURATED
-	}
-	return cold
-}
-
-// Computes dense row/column profiles from the final flat-stack mean.
-function fillProfiles(mean: Float64Array, width: number, height: number, rows: Float64Array, columns: Float64Array): void {
-	for (let y = 0; y < height; y++) {
-		let sum = 0
-		for (let x = 0; x < width; x++) sum += mean[y * width + x]
-		rows[y] = sum / width
-	}
-	for (let x = 0; x < width; x++) {
-		let sum = 0
-		for (let y = 0; y < height; y++) sum += mean[y * width + x]
-		columns[x] = sum / height
-	}
-}
-
-// Detects structural rows and columns from defect density or robust profile deviations.
-function classifyStructures(mean: Float64Array, mask: Uint8Array, width: number, height: number, sigma: number): readonly [readonly number[], readonly number[]] {
-	const rowProfiles = new Float64Array(height)
-	const columnProfiles = new Float64Array(width)
-	fillProfiles(mean, width, height, rowProfiles, columnProfiles)
-	const scratch = new Float64Array(Math.max(width, height))
-	const rowStats = robustCenterScale(rowProfiles, scratch)
-	const columnStats = robustCenterScale(columnProfiles, scratch)
+// Detects structural rows and columns from defect density or robust response-profile deviations.
+function classifyStructures(rowProfiles: Float64Array, columnProfiles: Float64Array, mask: Uint8Array, width: number, height: number, sigma: number): readonly [readonly number[], readonly number[]] {
+	const rowStats = robustCenterScale(rowProfiles)
+	const columnStats = robustCenterScale(columnProfiles)
 	const rows: number[] = []
 	const columns: number[] = []
 	for (let y = 0; y < height; y++) {
@@ -198,10 +122,10 @@ function classifyStructures(mean: Float64Array, mask: Uint8Array, width: number,
 	return [rows, columns]
 }
 
-// Classifies defects in matched fixed-exposure dark and flat stacks. Returns undefined without
-// retained maps when the caller did not provide all three reusable spatial buffers.
+// Classifies defects in matched fixed-exposure dark and flat stacks using three bounded passes.
 export function measureSensorDefects(dark: SensorFrameSet, flat: SensorFrameSet, options: Partial<SensorDefectOptions> = {}): SensorDefects | undefined {
-	if (dark.exposure !== flat.exposure) throw new RangeError('defect dark and flat stacks must have matching exposure')
+	if (!Number.isFinite(dark.exposure) || dark.exposure < 0 || !Number.isFinite(flat.exposure) || flat.exposure < 0 || dark.exposure !== flat.exposure) throw new RangeError('defect dark and flat stacks must have matching finite non-negative exposure')
+	if (options.digitalClip !== undefined && !Number.isFinite(options.digitalClip)) throw new RangeError('defect digital clip must be finite')
 	const reference = dark.frames[0]
 	validateSensorSpatialStack(dark, reference)
 	validateSensorSpatialStack(flat, reference)
@@ -211,22 +135,107 @@ export function measureSensorDefects(dark: SensorFrameSet, flat: SensorFrameSet,
 	const retainMask = options.maps === 'defects' || options.maps === 'all'
 	const supplied = options.spatialBuffers?.mean && options.spatialBuffers.variance && options.spatialBuffers.mask
 	if (!retainMask && !supplied) return undefined
-	const mean = options.spatialBuffers?.mean ?? new Float64Array(capacity)
-	const variance = options.spatialBuffers?.variance ?? new Float64Array(capacity)
+	const meanBuffer = options.spatialBuffers?.mean
+	const varianceBuffer = options.spatialBuffers?.variance
 	const mask = options.spatialBuffers?.mask ?? new Uint8Array(capacity)
-	if (mean.length < capacity || variance.length < capacity || mask.length < capacity) throw new RangeError('defect buffer is smaller than the selected plane/ROI')
-	const activeMean = mean.subarray(0, capacity)
-	const activeVariance = variance.subarray(0, capacity)
+	if ((meanBuffer && meanBuffer.length < capacity) || (varianceBuffer && varianceBuffer.length < capacity) || mask.length < capacity) throw new RangeError('defect buffer is smaller than the selected plane/ROI')
 	const activeMask = mask.subarray(0, capacity)
 	activeMask.fill(0)
+	if (meanBuffer) meanBuffer.fill(Number.NaN, 0, capacity)
+	if (varianceBuffer) varianceBuffer.fill(Number.NaN, 0, capacity)
 	const sigma = options.rejectionSigma ?? 5
 	if (!Number.isFinite(sigma) || sigma <= 0) throw new RangeError('defect rejection sigma must be finite and positive')
-	const scratch = new Float64Array(capacity)
-	fillDefectStatistics(dark, geometry, activeMean, activeVariance)
-	const darkCounts = classifyDark(activeMean, activeVariance, activeMask, scratch, sigma)
-	const unstable = dark.frames.length >= 8 ? classifyUnstable(dark, geometry, activeMean, activeVariance, activeMask) : 0
-	fillDefectStatistics(flat, geometry, activeMean, activeVariance)
-	const cold = classifyFlat(activeMean, activeMask, scratch, sigma, options.digitalClip)
-	const structures = classifyStructures(activeMean, activeMask, geometry.width, geometry.height, sigma)
-	return { mask: retainMask ? activeMask : undefined, hot: darkCounts[0], cold, noisy: darkCounts[1], unstable, rows: structures[0], columns: structures[1] }
+
+	const darkMeans = new SensorRobustReservoir(capacity)
+	const darkVariances = new SensorRobustReservoir(capacity)
+	const responses = new SensorRobustReservoir(capacity)
+	const sourceWidth = reference.metadata.width
+	const darkStatistics = new Float64Array(2)
+	const flatStatistics = new Float64Array(2)
+	for (let y = 0; y < geometry.height; y++) {
+		const sourceY = geometry.sourceTop + y * geometry.step
+		for (let x = 0; x < geometry.width; x++) {
+			const sourceIndex = sourceY * sourceWidth + geometry.sourceLeft + x * geometry.step
+			pixelStatistics(dark, sourceIndex, darkStatistics)
+			pixelStatistics(flat, sourceIndex, flatStatistics)
+			darkMeans.push(darkStatistics[0])
+			darkVariances.push(darkStatistics[1])
+			responses.push(flatStatistics[0] - darkStatistics[0])
+		}
+	}
+	const darkCenter = darkMeans.median()
+	const varianceCenter = darkVariances.median()
+	const responseCenter = responses.median()
+	if (!Number.isFinite(darkCenter) || !Number.isFinite(varianceCenter) || !Number.isFinite(responseCenter)) throw new RangeError('defect analysis has no finite stack statistics')
+
+	const darkDeviations = new SensorRobustReservoir(capacity)
+	const varianceDeviations = new SensorRobustReservoir(capacity)
+	const responseDeviations = new SensorRobustReservoir(capacity)
+	for (let y = 0; y < geometry.height; y++) {
+		const sourceY = geometry.sourceTop + y * geometry.step
+		for (let x = 0; x < geometry.width; x++) {
+			const sourceIndex = sourceY * sourceWidth + geometry.sourceLeft + x * geometry.step
+			pixelStatistics(dark, sourceIndex, darkStatistics)
+			pixelStatistics(flat, sourceIndex, flatStatistics)
+			darkDeviations.push(Math.abs(darkStatistics[0] - darkCenter))
+			varianceDeviations.push(Math.abs(darkStatistics[1] - varianceCenter))
+			responseDeviations.push(Math.abs(flatStatistics[0] - darkStatistics[0] - responseCenter))
+		}
+	}
+	const hotLimit = darkCenter + sigma * darkDeviations.median()
+	const noisyLimit = varianceCenter + sigma * varianceDeviations.median()
+	const coldLimit = responseCenter - sigma * responseDeviations.median()
+	const rowProfiles = new Float64Array(geometry.height)
+	const columnProfiles = new Float64Array(geometry.width)
+	const rowCounts = new Uint32Array(geometry.height)
+	const columnCounts = new Uint32Array(geometry.width)
+	let hot = 0
+	let cold = 0
+	let noisy = 0
+	let unstable = 0
+	for (let y = 0; y < geometry.height; y++) {
+		const sourceY = geometry.sourceTop + y * geometry.step
+		for (let x = 0; x < geometry.width; x++) {
+			const sourceIndex = sourceY * sourceWidth + geometry.sourceLeft + x * geometry.step
+			const index = y * geometry.width + x
+			pixelStatistics(dark, sourceIndex, darkStatistics)
+			pixelStatistics(flat, sourceIndex, flatStatistics)
+			const darkMean = darkStatistics[0]
+			const darkVariance = darkStatistics[1]
+			const flatMean = flatStatistics[0]
+			const response = flatMean - darkMean
+			if (darkMean > hotLimit) {
+				activeMask[index] |= SENSOR_DEFECT_HOT
+				hot++
+			}
+			if (darkVariance > noisyLimit) {
+				activeMask[index] |= SENSOR_DEFECT_NOISY
+				noisy++
+				if (dark.frames.length >= 8) {
+					const excess = excessKurtosis(dark, sourceIndex, darkMean, darkVariance)
+					if (excess < -0.8 || excess > 2) {
+						activeMask[index] |= SENSOR_DEFECT_UNSTABLE
+						unstable++
+					}
+				}
+			}
+			if (response < coldLimit) {
+				activeMask[index] |= SENSOR_DEFECT_COLD
+				cold++
+			}
+			if (options.digitalClip !== undefined && flatMean >= options.digitalClip) activeMask[index] |= SENSOR_DEFECT_SATURATED
+			if (Number.isFinite(response)) {
+				rowProfiles[y] += response
+				columnProfiles[x] += response
+				rowCounts[y]++
+				columnCounts[x]++
+			}
+			if (meanBuffer) meanBuffer[index] = response
+			if (varianceBuffer) varianceBuffer[index] = darkVariance + flatStatistics[1]
+		}
+	}
+	for (let y = 0; y < geometry.height; y++) rowProfiles[y] = rowCounts[y] > 0 ? rowProfiles[y] / rowCounts[y] : Number.NaN
+	for (let x = 0; x < geometry.width; x++) columnProfiles[x] = columnCounts[x] > 0 ? columnProfiles[x] / columnCounts[x] : Number.NaN
+	const structures = classifyStructures(rowProfiles, columnProfiles, activeMask, geometry.width, geometry.height, sigma)
+	return { mask: retainMask ? activeMask : undefined, hot, cold, noisy, unstable, rows: structures[0], columns: structures[1] }
 }

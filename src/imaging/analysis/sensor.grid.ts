@@ -41,7 +41,7 @@ function sensorPlaneSlot(pattern: string | undefined, plane: SensorPlane | undef
 }
 
 // Maps an image ROI to the dense mono or CFA-plane grid used by spatial measurements.
-export function resolveSensorPlaneGeometry(image: DigitalImage, area: Readonly<Rect>, plane: SensorPlane | undefined, cfaOffset: Readonly<[number, number]> | undefined): SensorPlaneGeometry {
+export function resolveSensorPlaneGeometry(image: DigitalImage, area: Readonly<Rect>, plane: SensorPlane | undefined, cfaOffset: readonly [number, number] | undefined): SensorPlaneGeometry {
 	const slot = sensorPlaneSlot(image.metadata.bayer, plane)
 	if (slot < 0) return { sourceLeft: area.left, sourceTop: area.top, step: 1, width: area.right - area.left, height: area.bottom - area.top }
 	const offsetX = cfaOffset?.[0]
@@ -60,11 +60,12 @@ export function resolveSensorPlaneGeometry(image: DigitalImage, area: Readonly<R
 }
 
 // Validates a digital mono stack against reference dimensions and CFA metadata.
-export function validateSensorSpatialStack(set: SensorFrameSet, reference: DigitalImage): void {
+export function validateSensorSpatialStack(set: SensorFrameSet, reference: DigitalImage) {
 	if (set.frames.length < 2) throw new RangeError('spatial stack requires at least two frames')
 	for (const frame of set.frames) {
 		if (frame.sampleScale !== 'digital') throw new TypeError('spatial analysis requires digital images')
 		if (frame.metadata.width !== reference.metadata.width || frame.metadata.height !== reference.metadata.height || frame.metadata.channels !== 1 || frame.metadata.bayer !== reference.metadata.bayer) throw new RangeError('spatial stack frames must share dimensions and CFA pattern')
-		if (frame.raw.length < frame.metadata.pixelCount) throw new RangeError('spatial frame buffer is smaller than declared geometry')
+		const pixelCount = frame.metadata.width * frame.metadata.height
+		if (frame.metadata.pixelCount !== pixelCount || frame.raw.length < pixelCount) throw new RangeError('spatial frame pixel geometry or raw-buffer length is inconsistent')
 	}
 }

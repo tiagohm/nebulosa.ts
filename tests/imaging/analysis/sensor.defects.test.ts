@@ -38,7 +38,10 @@ function defectiveStacks(): readonly [SensorFrameSet, SensorFrameSet, number, nu
 	for (let frame = 0; frame < frames; frame++) {
 		const darkRaw = new Float64Array(width * height).fill(100)
 		const flatRaw = new Float64Array(width * height).fill(1100)
-		for (let x = 0; x < width; x++) darkRaw[width + x] += 40
+		for (let x = 0; x < width; x++) {
+			darkRaw[width + x] += 40
+			flatRaw[width + x] += 40
+		}
 		for (let y = 0; y < height; y++) flatRaw[y * width + 4] = 400
 		darkRaw[noisyIndex] += gaussianLike[frame]
 		darkRaw[unstableIndex] += (frame & 1) === 0 ? -30 : 30
@@ -75,4 +78,16 @@ test('requires reusable spatial buffers when maps are disabled', () => {
 	expect(result.mask).toBeUndefined()
 	expect(result.hot).toBe(12)
 	expect(buffers.mask.some((value) => value !== 0)).toBeTrue()
+})
+
+test('classifies cold pixels from dark-subtracted response instead of raw flat level', () => {
+	const width = 8
+	const darkRaw = new Float64Array(width * width).fill(100)
+	const flatRaw = new Float64Array(width * width).fill(1100)
+	darkRaw[10] = -100
+	flatRaw[10] = 900
+	const dark = stack([darkRaw, darkRaw], width)
+	const flat = stack([flatRaw, flatRaw], width)
+	const result = measureSensorDefects(dark, flat, { maps: 'defects' })!
+	expect(result.mask![10] & SENSOR_DEFECT_COLD).toBe(0)
 })

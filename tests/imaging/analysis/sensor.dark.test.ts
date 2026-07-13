@@ -76,3 +76,11 @@ test('requires three distinct dark exposure times', () => {
 		),
 	).toThrow()
 })
+
+test('limits amp-glow tiles to the requested measurement ROI', () => {
+	const darks: SensorFrameSet[] = [0, 10, 20].map((exposure) => ({ frames: uniformPair(100 + 5 * exposure, 4), exposure }))
+	const result = measureSensorDarkCurrent(darks, 2, { area: { left: 2, top: 0, right: 4, bottom: 2 }, tile: { width: 2, height: 2 } })
+	expect(result.ampGlow?.columns).toBe(1)
+	expect(result.ampGlow?.rows).toBe(1)
+	expect(result.ampGlow?.current).toHaveLength(1)
+})

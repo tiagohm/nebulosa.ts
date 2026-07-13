@@ -5,9 +5,6 @@ import type { DigitalImage } from '../model/types'
 // dimensions use output pixels, exposure uses seconds, and temperature uses degrees Celsius. Analysis
 // functions return fresh scalar reports while optional spatial buffers are overwritten in place.
 
-// Tuple containing at least two independently acquired frames.
-export type AtLeastTwo<T> = readonly [T, T, ...T[]]
-
 // Mono or individual row-major CFA plane selected before debayering.
 export type SensorPlane = 'mono' | 'red' | 'green1' | 'green2' | 'blue'
 
@@ -27,9 +24,9 @@ export interface SensorOperatingPoint {
 	// Effective ADC or output bit depth when known.
 	readonly bitDepth?: number
 	// Horizontal and vertical hardware binning factors.
-	readonly binning?: Readonly<[number, number]>
+	readonly binning?: readonly [number, number]
 	// Sensor-space ROI origin in unbinned pixels.
-	readonly sensorOrigin?: Readonly<[number, number]>
+	readonly sensorOrigin?: readonly [number, number]
 	// Acquired ROI size in output pixels.
 	readonly size?: Readonly<Size>
 	// Descriptive camera identifier.
@@ -39,7 +36,7 @@ export interface SensorOperatingPoint {
 // Images acquired under identical exposure and illumination conditions.
 export interface SensorFrameSet {
 	// Two or more independent digital images.
-	readonly frames: AtLeastTwo<DigitalImage>
+	readonly frames: readonly [DigitalImage, DigitalImage, ...DigitalImage[]]
 	// Recorded camera configuration for this set.
 	readonly operatingPoint?: SensorOperatingPoint
 	// Exposure duration, seconds; must be finite and non-negative.
@@ -57,7 +54,7 @@ export interface SensorFrameSet {
 // Illuminated level and its optional exposure-matched dark reference.
 export interface SensorFlatFrameSet extends SensorFrameSet {
 	// Independent dark frames acquired at the flat exposure.
-	readonly darkFrames?: AtLeastTwo<DigitalImage>
+	readonly darkFrames?: readonly [DigitalImage, DigitalImage, ...DigitalImage[]]
 }
 
 // Complete datasets for one sensor operating point.
@@ -106,9 +103,9 @@ export interface SensorCharacterizationOptions {
 	// Known upper digital clipping code in DN.
 	readonly digitalClip?: number
 	// Fractional saturation range used for PTC gain fitting.
-	readonly gainRange?: Readonly<[number, number]>
+	readonly gainRange?: readonly [number, number]
 	// Fractional saturation range used for linearity fitting.
-	readonly linearityRange?: Readonly<[number, number]>
+	readonly linearityRange?: readonly [number, number]
 	// Maximum allowed temperature spread, degrees Celsius.
 	readonly temperatureTolerance?: number
 	// Robust outlier-rejection threshold in standard deviations.
@@ -132,3 +129,6 @@ export const DEFAULT_SENSOR_CHARACTERIZATION_OPTIONS = {
 	spatialDetrend: 'emvaHighpass',
 	maps: 'none',
 } as const satisfies Partial<SensorCharacterizationOptions>
+
+export const BAYER_SENSOR_PLANES: readonly SensorPlane[] = ['red', 'green1', 'green2', 'blue']
+export const MONO_SENSOR_PLANES: readonly SensorPlane[] = ['mono']

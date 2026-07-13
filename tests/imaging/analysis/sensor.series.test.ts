@@ -55,6 +55,12 @@ test('refuses to compare profiles from different readout regimes', () => {
 	expect(result.diagnostics.some((diagnostic) => diagnostic.code === 'incompatibleProfiles')).toBeTrue()
 })
 
+test('uses the complete temperature span when checking series compatibility', () => {
+	const result = characterizeSensorSeries([profile(0, 0.5, { temperature: -10 }), profile(50, 1, { temperature: -9.6 }), profile(100, 1.5, { temperature: -10.4 })], { temperatureTolerance: 0.5 })
+	expect(result.unityGain).toBeUndefined()
+	expect(result.diagnostics.some((diagnostic) => diagnostic.code === 'incompatibleProfiles')).toBeTrue()
+})
+
 test('rejects a non-monotonic measured gain curve', () => {
 	const result = characterizeSensorSeries([profile(0, 0.5), profile(50, 1.2), profile(100, 0.9)])
 	expect(result.unityGain).toBeUndefined()

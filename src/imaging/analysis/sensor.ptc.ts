@@ -59,7 +59,7 @@ export interface SensorGain {
 	// Weighted regression quality and uncertainty.
 	readonly fit: SensorRegressionFit
 	// Minimum and maximum selected signal, DN.
-	readonly range: Readonly<[number, number]>
+	readonly range: readonly [number, number]
 }
 
 // Temporal read-noise measurement from short dark or bias pairs.
@@ -89,7 +89,7 @@ export interface SensorBias {
 // Options for one sensor plane's temporal characterization.
 export interface SensorTemporalOptions extends SensorPairOptions {
 	// Fractional observed-signal interval used for the gain fit.
-	readonly gainRange?: Readonly<[number, number]>
+	readonly gainRange?: readonly [number, number]
 }
 
 // First practical temporal characterization result for one sensor plane.
@@ -150,7 +150,7 @@ export function measureSensorReadNoise(pairs: readonly SensorPairStatistics[], c
 }
 
 // Fits positive PTC points over a fractional observed-signal range and annotates every rejection.
-export function fitPhotonTransferGain(points: readonly PhotonTransferPoint[], range: Readonly<[number, number]> = DEFAULT_SENSOR_CHARACTERIZATION_OPTIONS.gainRange): readonly [readonly PhotonTransferPoint[], SensorGain | undefined] {
+export function fitPhotonTransferGain(points: readonly PhotonTransferPoint[], range: readonly [number, number] = DEFAULT_SENSOR_CHARACTERIZATION_OPTIONS.gainRange): readonly [readonly PhotonTransferPoint[], SensorGain | undefined] {
 	if (range.length !== 2 || !Number.isFinite(range[0]) || !Number.isFinite(range[1]) || range[0] < 0 || range[0] >= range[1] || range[1] > 1) throw new RangeError('gain range must be an increasing fraction within 0..1')
 	let maximumSignal = 0
 	for (const point of points) if (point.valid && point.clippedFraction === 0 && point.signal > maximumSignal) maximumSignal = point.signal

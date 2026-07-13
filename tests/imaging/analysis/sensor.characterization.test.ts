@@ -74,3 +74,14 @@ test('returns structural diagnostics instead of plausible results for mixed dime
 	expect(result.planes).toHaveLength(0)
 	expect(result.diagnostics.some((diagnostic) => diagnostic.code === 'mixedDimensions')).toBeTrue()
 })
+
+test('preserves temporal characterization when optional dark-current analysis fails', () => {
+	const flats: SensorFlatFrameSet[] = []
+	for (let level = 1; level <= 4; level++) flats.push({ frames: pairedFrames(1000 + level * 100, 4 + level * 50), darkFrames: pairedFrames(1000, 4), exposure: level })
+	const duplicateExposureDarks = [1, 1, 2].map((exposure) => ({ frames: pairedFrames(1000 + 5 * exposure, 4), exposure }))
+	const result = characterizeSensor({ operatingPoint: {}, bias: { frames: pairedFrames(1000, 4), exposure: 0 }, flats, darks: duplicateExposureDarks })
+	expect(result.planes).toHaveLength(1)
+	expect(result.planes[0].gain).toBeDefined()
+	expect(result.planes[0].darkCurrent).toBeUndefined()
+	expect(result.diagnostics.some((diagnostic) => diagnostic.code === 'insufficientDarkLevels')).toBeTrue()
+})
