@@ -177,9 +177,9 @@ function mergeOperatingPoint(reference: SensorOperatingPoint, actual: SensorOper
 	}
 }
 
-// Resolves CFA phase from an explicit sensor origin or consistent Bayer offsets across every frame.
-function cfaOffset(input: SensorCharacterizationInput, sets: readonly SensorFrameSet[]): readonly [number, number] | undefined {
-	const origin = input.operatingPoint.sensorOrigin
+// Resolves CFA phase from the merged sensor origin or consistent Bayer offsets across every frame.
+function cfaOffset(operatingPoint: SensorOperatingPoint, sets: readonly SensorFrameSet[]): readonly [number, number] | undefined {
+	const origin = operatingPoint.sensorOrigin
 	if (origin) return Number.isInteger(origin[0]) && Number.isInteger(origin[1]) ? origin : undefined
 
 	let reference: readonly [number, number] | undefined
@@ -301,7 +301,7 @@ export function characterizeSensor(input: SensorCharacterizationInput, options: 
 	const temperatures = temperatureRange(sets)
 	if (temperatures && temperatures[1] - temperatures[0] > temperatureTolerance) diagnostics.push({ severity: 'warning', code: 'temperatureDrift', message: `Recorded temperature span exceeds ${temperatureTolerance} °C.` })
 
-	const offset = bayer ? cfaOffset(input, sets) : undefined
+	const offset = bayer ? cfaOffset(operatingPointReference, sets) : undefined
 	if (bayer && (!offset || channels !== 1 || (operatingPointReference.binning && (operatingPointReference.binning[0] !== 1 || operatingPointReference.binning[1] !== 1)))) {
 		diagnostics.push({ severity: 'error', code: 'unknownCfaOrigin', message: 'CFA analysis requires an integer sensor origin or consistent Bayer offsets across all unbinned single-channel frames.' })
 		structuralError = true

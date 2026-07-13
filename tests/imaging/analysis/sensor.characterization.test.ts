@@ -61,6 +61,14 @@ function cfaPairedFrames(mean: number, variance: number): readonly [DigitalImage
 	]
 }
 
+// Removes image-local Bayer offsets while retaining the CFA metadata and pixel data.
+function withoutCfaOffsets(frames: readonly [DigitalImage, DigitalImage]): readonly [DigitalImage, DigitalImage] {
+	return [
+		{ ...frames[0], header: { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: frames[0].metadata.width, NAXIS2: frames[0].metadata.height } },
+		{ ...frames[1], header: { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: frames[1].metadata.width, NAXIS2: frames[1].metadata.height } },
+	]
+}
+
 test('characterizes the temporal MVP and distinguishes observable capacity from digital range', () => {
 	const biasFrames = pairedFrames(1000, 4)
 	const flats: SensorFlatFrameSet[] = []
@@ -175,6 +183,26 @@ test('rejects binned CFA data declared only by frame sets', () => {
 
 	expect(result.planes).toHaveLength(0)
 	expect(result.diagnostics.some((diagnostic) => diagnostic.code === 'unknownCfaOrigin' && diagnostic.severity === 'error')).toBeTrue()
+})
+
+test('uses the sensor origin accumulated from CFA frame sets', () => {
+	const operatingPoint = { sensorOrigin: [2, 4] as const }
+	const result = characterizeSensor(
+		{
+			operatingPoint: {},
+			bias: { frames: withoutCfaOffsets(cfaPairedFrames(100, 4)), exposure: 0, operatingPoint },
+			flats: [
+				{ frames: withoutCfaOffsets(cfaPairedFrames(200, 54)), exposure: 1, operatingPoint },
+				{ frames: withoutCfaOffsets(cfaPairedFrames(300, 104)), exposure: 2, operatingPoint },
+				{ frames: withoutCfaOffsets(cfaPairedFrames(500, 204)), exposure: 3, operatingPoint },
+			],
+		},
+		{ planes: ['red'] },
+	)
+
+	expect(result.planes).toHaveLength(1)
+	expect(result.operatingPoint.sensorOrigin).toEqual([2, 4])
+	expect(result.diagnostics.some((diagnostic) => diagnostic.code === 'unknownCfaOrigin')).toBeFalse()
 })
 
 test('retains independent defect masks for each CFA plane when reusing buffers', () => {
