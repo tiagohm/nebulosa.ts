@@ -197,6 +197,30 @@ test('declares unsigned-integer BZERO/BSCALE when the source header omits them',
 	expect(data.readInt16BE(2) + 32768).toBe(65535)
 })
 
+test('preserves signed digital samples when BZERO is absent', async () => {
+	const buffer = Buffer.alloc(FITS_BLOCK_SIZE * 2)
+	const header: FitsHeader = { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: 2, NAXIS2: 1 }
+
+	await writeFits(bufferSink(buffer), [{ header, raw: new Float64Array([-2, 2]), sampleScale: 'digital', digitalRange: [-32768, 32767] }], { type: false })
+
+	const fits = await readFits(bufferSource(buffer))
+	const image = await readImageFromFits(fits!, bufferSource(buffer), { sampleScale: 'digital' })
+	expect(fits!.hdus[0].header.BZERO).toBeUndefined()
+	expect(Array.from(image!.raw)).toEqual([-2, 2])
+})
+
+test('retains the unsigned convention for digital images with an unsigned range', async () => {
+	const buffer = Buffer.alloc(FITS_BLOCK_SIZE * 2)
+	const header: FitsHeader = { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: 2, NAXIS2: 1 }
+
+	await writeFits(bufferSink(buffer), [{ header, raw: new Float64Array([0, 65535]), sampleScale: 'digital', digitalRange: [0, 65535] }], { type: false })
+
+	const fits = await readFits(bufferSource(buffer))
+	const image = await readImageFromFits(fits!, bufferSource(buffer), { sampleScale: 'digital' })
+	expect(fits!.hdus[0].header.BZERO).toBe(32768)
+	expect(Array.from(image!.raw)).toEqual([0, 65535])
+})
+
 test('read keyword', () => {
 	const reader = new FitsKeywordReader()
 	const buffer = Buffer.allocUnsafe(FITS_HEADER_CARD_SIZE * 2)
