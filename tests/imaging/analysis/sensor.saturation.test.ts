@@ -31,6 +31,11 @@ test('detects variance collapse and uses digital range only as low-confidence fa
 	expect(fallback).toEqual({ signal: 1000, capacity: 2000, index: -1, method: 'digitalRange', confidence: 0.2 })
 })
 
+test('requires an earlier valid variance sample before reporting collapse', () => {
+	const result = detectSensorSaturation([invalid(point(0, 100, 20)), point(1, 300, 160), point(2, 500, 100)], GAIN)
+	expect(result).toBeUndefined()
+})
+
 test('does not report a clipped first sample as an unbiased capacity measurement', () => {
 	const result = detectSensorSaturation([point(0, 100, 50, 0.2)], GAIN, 1000)
 	expect(result).toEqual({ signal: 1000, capacity: 2000, index: -1, method: 'digitalRange', confidence: 0.2 })
