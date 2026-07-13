@@ -109,6 +109,15 @@ test('preserves floating-point FITS samples in digital scale', async () => {
 	expect(image!.quantizationStep).toBeUndefined()
 })
 
+test('applies FITS affine scaling before normalized float output', async () => {
+	const header: FitsHeader = { SIMPLE: true, BITPIX: -32, NAXIS: 2, NAXIS1: 1, NAXIS2: 1, BSCALE: 2, BZERO: 0.1 }
+	const data = Buffer.alloc(4)
+	data.writeFloatBE(0.1)
+	const image = await readImageFromFits({ header, data: { offset: 0, size: data.length } }, bufferSource(data))
+
+	expect(image!.raw[0]).toBeCloseTo(0.3, 6)
+})
+
 test('rejects a caller-provided FITS output buffer smaller than the image', async () => {
 	const header: FitsHeader = { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: 4, NAXIS2: 1 }
 	const data = Buffer.alloc(8)

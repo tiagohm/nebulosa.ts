@@ -1053,19 +1053,12 @@ function writePlanarToInterleaved(data: NumberArray, output: ImageRawType, heade
 	const zero = uncompressedZeroKeyword(header, defaultZero)
 	const safeScale = Number.isFinite(scale) ? scale : 1
 	const safeZero = Number.isFinite(zero) ? zero : defaultZero
-	const factor = normalized && bitpix > 0 ? (safeScale === 0 ? 1 : safeScale) / (2 ** bitpix - 1) : safeScale
+	const effectiveScale = normalized && bitpix > 0 && safeScale === 0 ? 1 : safeScale
+	const normalization = normalized && bitpix > 0 ? 1 / (2 ** bitpix - 1) : 1
 
-	if (normalized) {
-		for (let i = 0, p = 0; i < numberOfPixels; i++) {
-			for (let c = 0, m = i; c < channels; c++, m += numberOfPixels) {
-				output[p++] = (data[m] + safeZero) * factor
-			}
-		}
-	} else {
-		for (let i = 0, p = 0; i < numberOfPixels; i++) {
-			for (let c = 0, m = i; c < channels; c++, m += numberOfPixels) {
-				output[p++] = data[m] * factor + safeZero
-			}
+	for (let i = 0, p = 0; i < numberOfPixels; i++) {
+		for (let c = 0, m = i; c < channels; c++, m += numberOfPixels) {
+			output[p++] = (data[m] * effectiveScale + safeZero) * normalization
 		}
 	}
 }
