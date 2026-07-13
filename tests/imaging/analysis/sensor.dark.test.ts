@@ -98,6 +98,21 @@ test('requires three distinct dark exposure times', () => {
 	).toThrow()
 })
 
+test('validates common dark-stack geometry before fitting exposure slopes', () => {
+	const mismatchedPair = uniformPair(0, 4)
+	const mismatched = [
+		{ ...mismatchedPair[0], metadata: { ...mismatchedPair[0].metadata, width: 2, height: 8, stride: 2, strideInBytes: 4 } },
+		{ ...mismatchedPair[1], metadata: { ...mismatchedPair[1].metadata, width: 2, height: 8, stride: 2, strideInBytes: 4 } },
+	] as const
+	const darks: SensorFrameSet[] = [
+		{ frames: uniformPair(100, 4), exposure: 0 },
+		{ frames: uniformPair(200, 4), exposure: 10 },
+		{ frames: mismatched, exposure: 20 },
+	]
+
+	expect(() => measureSensorDarkCurrent(darks, 2)).toThrow('spatial stack frames must share dimensions and CFA pattern')
+})
+
 test('limits amp-glow tiles to the requested measurement ROI', () => {
 	const darks: SensorFrameSet[] = [0, 10, 20].map((exposure) => ({ frames: uniformPair(100 + 5 * exposure, 4), exposure }))
 	const result = measureSensorDarkCurrent(darks, 2, { area: { left: 2, top: 0, right: 4, bottom: 2 }, tile: { width: 2, height: 2 } })

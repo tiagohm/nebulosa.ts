@@ -74,6 +74,9 @@ function planeSlot(pattern: string | undefined, plane: SensorPlane | undefined):
 
 // Measures and groups non-overlapping dark pairs by exact exposure duration.
 function darkLevels(darks: readonly SensorFrameSet[], options: Partial<SensorPairOptions>): readonly { exposure: number; statistics: SensorPairAggregate }[] {
+	const reference = darks[0]?.frames[0]
+	if (!reference) throw new RangeError('dark-current analysis requires a non-empty reference stack')
+	for (const set of darks) validateSensorSpatialStack(set, reference)
 	const grouped = new Map<number, SensorPairStatistics[]>()
 	for (const set of darks) {
 		if (!Number.isFinite(set.exposure) || set.exposure < 0) throw new RangeError('dark exposure must be finite and non-negative')
@@ -131,7 +134,6 @@ function measureAmpGlow(darks: readonly SensorFrameSet[], conversionGain: number
 	const tileHeight = options.tile?.height ?? 64
 	if (!Number.isInteger(tileWidth) || !Number.isInteger(tileHeight) || tileWidth <= 0 || tileHeight <= 0) throw new RangeError('amp-glow tile dimensions must be positive integers')
 	const area = resolveSensorArea(options.area, first.metadata.width, first.metadata.height)
-	for (const level of darks) validateSensorSpatialStack(level, first)
 	const columns = Math.ceil((area.right - area.left) / tileWidth)
 	const rows = Math.ceil((area.bottom - area.top) / tileHeight)
 	const tileCount = columns * rows
