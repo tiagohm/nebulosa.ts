@@ -6,11 +6,11 @@ import { eraC2s, eraS2c } from '../../astronomy/coordinates/erfa/erfa'
 import type { GeographicPosition } from '../../astronomy/observer/location'
 import type { Time } from '../../astronomy/time/time'
 import { ASEC2RAD, PI, PIOVERTWO, TAU } from '../../core/constants'
-import { type MutVec3, type Vec3, vecAngleUnit, vecDot, vecLength, vecNormalize, vecRotateByRodrigues } from '../../math/linear-algebra/vec3'
+import { type MutVec3, type Vec3, vecAngleUnit, vecCross, vecDot, vecLength, vecNormalize, vecRotateByRodrigues } from '../../math/linear-algebra/vec3'
 import { type Point, sphericalTangentBasis } from '../../math/numerical/geometry'
-import { type Angle, normalizeAngle } from '../../math/units/angle'
+import { type Angle, normalizeAngle, normalizePI } from '../../math/units/angle'
 import { mountAdjustmentAxes, solveAzAltAdjustment, type ThreePointPolarAlignmentResult } from './polaralignment'
-import { applyInverseMountAdjustment, celestialPoleVector, decomposePolarErrorGeodesic } from './polaralignment.util'
+import { applyInverseMountAdjustment, applyMountAdjustment, celestialPoleVector, decomposePolarErrorGeodesic } from './polaralignment.util'
 
 // Geometry-only visual guidance for three-point polar alignment. The module solves the remaining
 // two-axis mount correction in inertial 3D, maps a persistent celestial reference through the full
@@ -37,6 +37,9 @@ const DEFAULT_MAXIMUM_CONDITION = 1e12
 
 // Maximum absolute mount correction solved on either axis, in radians.
 const MAXIMUM_CORRECTION = PIOVERTWO
+
+// Largest spherical residual accepted from the tangent-linear seed before using the exact fallback.
+const LINEAR_SEED_RESIDUAL_LIMIT = PI / 720
 
 // Angular distance from the spherical antipode treated as an undefined logarithm.
 const ANTIPODAL_EPSILON = 1e-10
@@ -120,7 +123,7 @@ export interface ThreePointPolarAlignmentCorrection {
 	readonly condition?: number
 	// Whether an angular or step convergence criterion was met.
 	readonly converged: boolean
-	// Whether the finite solution is sufficiently conditioned for visual guidance.
+	// Whether the residual target was reached with finite, sufficiently conditioned geometry.
 	readonly stable: boolean
 	// Deterministic solver termination reason.
 	readonly termination: PolarAlignmentCorrectionTermination
@@ -354,21 +357,21 @@ export function computeThreePointPolarAlignmentOverlay(result: Readonly<ThreePoi
 	}
 	if (!targetPole) return failure('invalidPole', warnings)
 
-	const error = decomposePolarErrorGeodesic(currentPole, targetPole, axes.upAxis, axes.eastAxis)
-	if (!error) return failure('degenerateCorrection', warnings)
-
-	const correction = solveCorrection(currentPole, targetPole, axes.upAxis, axes.eastAxis, resolved)
-	if (!correction.stable) {
-		if (correction.termination === 'illConditioned') pushWarning(warnings, 'correctionIllConditioned')
-		return failure('degenerateCorrection', warnings)
-	}
-	if (!correction.converged) pushWarning(warnings, 'correctionNotConverged')
-
 	const reference = resolveReference(solution, resolved.reference)
 	if ('reason' in reference) return failure(reference.reason, warnings)
 	const referenceVector = eraS2c(reference.rightAscension, reference.declination)
 	const currentPosition = projectCoordinate(solution, reference.rightAscension, reference.declination)
 	if (!currentPosition) return failure('unprojectableReference', warnings)
+
+	const error = decomposePolarErrorGeodesic(currentPole, targetPole, axes.upAxis, axes.eastAxis)
+	if (!error) return failure('degenerateCorrection', warnings)
+
+	const correction = solveCorrection(currentPole, targetPole, axes.upAxis, axes.eastAxis, resolved)
+	if (correction.termination === 'singular' || correction.termination === 'nonFinite' || correction.termination === 'illConditioned') {
+		if (correction.termination === 'illConditioned') pushWarning(warnings, 'correctionIllConditioned')
+		return failure('degenerateCorrection', warnings)
+	}
+	if (!correction.converged || !correction.stable) pushWarning(warnings, 'correctionNotConverged')
 
 	const azimuthVector = vecRotateByRodrigues(referenceVector, axes.upAxis, -correction.azimuth)
 	const azimuthPosition = projectVector(solution, azimuthVector)
@@ -419,7 +422,8 @@ export function computeThreePointPolarAlignmentOverlay(result: Readonly<ThreePoi
 function resolveOptions(solution: Readonly<PlateSolution>, time: Time, options?: Readonly<ThreePointPolarAlignmentOverlayOptions>): ResolvedOverlayOptions | { readonly reason: ThreePointPolarAlignmentOverlayFailureReason } {
 	const location = options?.location ?? time.location
 	if (!location) return { reason: 'missingLocation' }
-	if (!isFiniteLocation(location) || !Number.isFinite(time.day) || !Number.isFinite(time.fraction)) return { reason: 'invalidOptions' }
+	const refraction = options?.refraction ?? DEFAULT_REFRACTION_PARAMETERS
+	if (!isFiniteLocation(location) || !Number.isFinite(time.day) || !Number.isFinite(time.fraction) || !Number.isInteger(time.scale) || time.scale < 0 || time.scale > 6 || !isValidRefraction(refraction)) return { reason: 'invalidOptions' }
 	if (!Number.isFinite(solution.widthInPixels) || !Number.isFinite(solution.heightInPixels) || solution.widthInPixels <= 0 || solution.heightInPixels <= 0) return { reason: 'invalidFrame' }
 
 	const sourceFrame = options?.frame ?? { x: 0, y: 0, width: solution.widthInPixels, height: solution.heightInPixels }
@@ -443,7 +447,7 @@ function resolveOptions(solution: Readonly<PlateSolution>, time: Time, options?:
 		tolerances.push(tolerance)
 	}
 
-	return { location, refraction: options?.refraction ?? DEFAULT_REFRACTION_PARAMETERS, reference: options?.reference, frame, margin, tolerances, samples, correctionTolerance, maximumIterations, derivativeStep, maximumCondition }
+	return { location, refraction, reference: options?.reference, frame, margin, tolerances, samples, correctionTolerance, maximumIterations, derivativeStep, maximumCondition }
 }
 
 // Resolves a pixel/equatorial/default reference and normalizes its right ascension.
@@ -464,10 +468,21 @@ function resolveReference(solution: Readonly<PlateSolution>, reference?: PolarAl
 
 // Solves the nonlinear two-angle mechanical correction with damped scalar Levenberg-Marquardt.
 function solveCorrection(currentPole: Vec3, targetPole: Vec3, upAxis: Vec3, eastAxis: Vec3, options: ResolvedOverlayOptions, explicitSeed?: CorrectionSeed): ThreePointPolarAlignmentCorrection {
+	const initialSeparation = vecAngleUnit(currentPole, targetPole)
+	if (initialSeparation <= options.correctionTolerance) return correctionResult(0, 0, initialSeparation, 0, undefined, true, true, 'convergedResidual')
+
 	const basis = sphericalTangentBasis(targetPole)
-	const linearSeed = explicitSeed ?? solveAzAltAdjustment(currentPole, targetPole, upAxis, eastAxis)
-	let azimuth = clampCorrection('azimuthAdjustment' in linearSeed ? linearSeed.azimuthAdjustment : linearSeed.azimuth)
-	let altitude = clampCorrection('altitudeAdjustment' in linearSeed ? linearSeed.altitudeAdjustment : linearSeed.altitude)
+	let seed = explicitSeed
+	if (!seed) {
+		const linearSeed = solveAzAltAdjustment(currentPole, targetPole, upAxis, eastAxis)
+		const linearInDomain = Number.isFinite(linearSeed.azimuthAdjustment) && Number.isFinite(linearSeed.altitudeAdjustment) && Math.abs(linearSeed.azimuthAdjustment) <= MAXIMUM_CORRECTION && Math.abs(linearSeed.altitudeAdjustment) <= MAXIMUM_CORRECTION
+		const clampedLinearSeed = { azimuth: clampCorrection(linearSeed.azimuthAdjustment), altitude: clampCorrection(linearSeed.altitudeAdjustment) }
+		const linearResidual = linearInDomain ? correctionSeedResidual(currentPole, targetPole, upAxis, eastAxis, clampedLinearSeed) : Number.POSITIVE_INFINITY
+		const exactSeed = linearResidual > LINEAR_SEED_RESIDUAL_LIMIT ? closedFormCorrectionSeed(currentPole, targetPole, upAxis, eastAxis) : undefined
+		seed = exactSeed ?? clampedLinearSeed
+	}
+	let azimuth = clampCorrection(seed.azimuth)
+	let altitude = clampCorrection(seed.altitude)
 	const workspace: CorrectionWorkspace = { afterAzimuth: [0, 0, 0], altitudeAxis: [0, 0, 0], predicted: [0, 0, 0] }
 	const current: CorrectionResidual = { r0: 0, r1: 0, angle: 0, cost: 0 }
 	const plusAzimuth: CorrectionResidual = { r0: 0, r1: 0, angle: 0, cost: 0 }
@@ -476,7 +491,6 @@ function solveCorrection(currentPole: Vec3, targetPole: Vec3, upAxis: Vec3, east
 	const minusAltitude: CorrectionResidual = { r0: 0, r1: 0, angle: 0, cost: 0 }
 	const candidate: CorrectionResidual = { r0: 0, r1: 0, angle: 0, cost: 0 }
 	if (!evaluateCorrectionResidual(currentPole, targetPole, upAxis, eastAxis, basis.east, basis.north, azimuth, altitude, current, workspace)) return correctionResult(azimuth, altitude, Number.MAX_VALUE, 0, undefined, false, false, 'nonFinite')
-	if (current.angle <= options.correctionTolerance) return correctionResult(azimuth, altitude, current.angle, 0, undefined, true, true, 'convergedResidual')
 
 	let damping = 1e-6
 	let condition: number | undefined
@@ -503,6 +517,7 @@ function solveCorrection(currentPole: Vec3, targetPole: Vec3, upAxis: Vec3, east
 		condition = normalMatrixCondition(a11, a12, a22)
 		if (condition === undefined) return correctionResult(azimuth, altitude, current.angle, acceptedIterations, undefined, false, false, 'singular')
 		if (condition > options.maximumCondition) return correctionResult(azimuth, altitude, current.angle, acceptedIterations, condition, false, false, 'illConditioned')
+		if (current.angle <= options.correctionTolerance) return correctionResult(azimuth, altitude, current.angle, acceptedIterations, condition, true, true, 'convergedResidual')
 
 		const g0 = j00 * current.r0 + j10 * current.r1
 		const g1 = j01 * current.r0 + j11 * current.r1
@@ -539,12 +554,59 @@ function solveCorrection(currentPole: Vec3, targetPole: Vec3, upAxis: Vec3, east
 			damping *= 10
 		}
 
-		if (!accepted) return correctionResult(azimuth, altitude, current.angle, acceptedIterations, condition, false, true, 'noImprovement')
+		if (!accepted) return correctionResult(azimuth, altitude, current.angle, acceptedIterations, condition, false, false, 'noImprovement')
 		if (current.angle <= options.correctionTolerance) return correctionResult(azimuth, altitude, current.angle, acceptedIterations, condition, true, true, 'convergedResidual')
-		if (acceptedStep <= options.correctionTolerance) return correctionResult(azimuth, altitude, current.angle, acceptedIterations, condition, true, true, 'convergedStep')
+		if (acceptedStep <= options.correctionTolerance) return correctionResult(azimuth, altitude, current.angle, acceptedIterations, condition, true, false, 'convergedStep')
 	}
 
-	return correctionResult(azimuth, altitude, current.angle, acceptedIterations, condition, false, true, 'maximumIterations')
+	return correctionResult(azimuth, altitude, current.angle, acceptedIterations, condition, false, false, 'maximumIterations')
+}
+
+// Measures a correction seed against the requested target pole without entering the iterative loop.
+function correctionSeedResidual(currentPole: Vec3, targetPole: Vec3, upAxis: Vec3, eastAxis: Vec3, seed: CorrectionSeed): Angle {
+	const predicted = applyMountAdjustment(currentPole, upAxis, eastAxis, seed.azimuth, seed.altitude)
+	return vecAngleUnit(predicted, targetPole)
+}
+
+// Derives both exact two-rotation branches in the local east/north/up basis and selects the
+// smallest finite knob-space solution inside the supported ±90° domain. This rescues large errors
+// whose tangent-linear seed falls outside the domain; LM still verifies conditioning and refines it.
+function closedFormCorrectionSeed(currentPole: Vec3, targetPole: Vec3, upAxis: Vec3, eastAxis: Vec3): CorrectionSeed | undefined {
+	const up = vecNormalize(upAxis)
+	const east = vecNormalize(eastAxis)
+	const north = vecNormalize(vecCross(up, east))
+	const eastCoordinate = vecDot(currentPole, east)
+	const northCoordinate = vecDot(currentPole, north)
+	const upCoordinate = vecDot(currentPole, up)
+	const targetEast = vecDot(targetPole, east)
+	const targetNorth = vecDot(targetPole, north)
+	const targetUp = vecDot(targetPole, up)
+	const meridianRadius = Math.hypot(northCoordinate, upCoordinate)
+	if (!Number.isFinite(meridianRadius) || meridianRadius <= 1e-14) return undefined
+
+	const normalizedTargetUp = targetUp / meridianRadius
+	if (!Number.isFinite(normalizedTargetUp) || normalizedTargetUp < -1 - 1e-12 || normalizedTargetUp > 1 + 1e-12) return undefined
+	const phase = Math.atan2(northCoordinate, upCoordinate)
+	const offset = Math.acos(Math.max(-1, Math.min(1, normalizedTargetUp)))
+	let best: CorrectionSeed | undefined
+	let bestMagnitude = Number.POSITIVE_INFINITY
+
+	for (let branch = 0; branch < 2; branch++) {
+		const altitude = normalizePI(phase + (branch === 0 ? offset : -offset))
+		if (Math.abs(altitude) > MAXIMUM_CORRECTION + 1e-12) continue
+		const rotatedNorth = northCoordinate * Math.cos(altitude) - upCoordinate * Math.sin(altitude)
+		const azimuth = normalizePI(Math.atan2(targetNorth, targetEast) - Math.atan2(rotatedNorth, eastCoordinate))
+		if (Math.abs(azimuth) > MAXIMUM_CORRECTION + 1e-12) continue
+		const predicted = applyMountAdjustment(currentPole, up, east, azimuth, altitude)
+		const residual = vecAngleUnit(predicted, targetPole)
+		const magnitude = Math.hypot(azimuth, altitude)
+		if (Number.isFinite(residual) && residual <= 1e-8 && magnitude < bestMagnitude) {
+			best = { azimuth, altitude }
+			bestMagnitude = magnitude
+		}
+	}
+
+	return best
 }
 
 // Evaluates the spherical-log residual into a caller-owned scalar result and vector workspace.
@@ -588,6 +650,7 @@ function buildContours(
 		const cosTolerance = Math.cos(tolerance)
 		const sinTolerance = Math.sin(tolerance)
 		const points: Point[] = []
+		const residualPole: MutVec3 = [0, 0, 0]
 		let seed: CorrectionSeed = { azimuth: centralCorrection.azimuth, altitude: centralCorrection.altitude }
 		let illConditioned = false
 		let omitted = false
@@ -596,11 +659,9 @@ function buildContours(
 			const theta = (sample * TAU) / options.samples
 			const cosTheta = Math.cos(theta)
 			const sinTheta = Math.sin(theta)
-			const residualPole: MutVec3 = [
-				targetPole[0] * cosTolerance + (basis.east[0] * cosTheta + basis.north[0] * sinTheta) * sinTolerance,
-				targetPole[1] * cosTolerance + (basis.east[1] * cosTheta + basis.north[1] * sinTheta) * sinTolerance,
-				targetPole[2] * cosTolerance + (basis.east[2] * cosTheta + basis.north[2] * sinTheta) * sinTolerance,
-			]
+			residualPole[0] = targetPole[0] * cosTolerance + (basis.east[0] * cosTheta + basis.north[0] * sinTheta) * sinTolerance
+			residualPole[1] = targetPole[1] * cosTolerance + (basis.east[1] * cosTheta + basis.north[1] * sinTheta) * sinTolerance
+			residualPole[2] = targetPole[2] * cosTolerance + (basis.east[2] * cosTheta + basis.north[2] * sinTheta) * sinTolerance
 			const normalizedResidualPole = vecNormalize(residualPole, residualPole)
 			const correction = solveCorrection(currentPole, normalizedResidualPole, upAxis, eastAxis, options, seed)
 			if (!correction.stable || !correction.converged) {
@@ -793,6 +854,16 @@ function isFinitePoint(point: Readonly<Point>): boolean {
 // Tests the finite geodetic fields required by the current coordinate transformations.
 function isFiniteLocation(location: GeographicPosition): boolean {
 	return Number.isFinite(location.longitude) && Number.isFinite(location.latitude) && Number.isFinite(location.elevation) && location.longitude >= -PI && location.longitude <= PI && location.latitude >= -PIOVERTWO && location.latitude <= PIOVERTWO
+}
+
+// Validates optional atmospheric fields before they reach ERFA or the refraction approximation.
+function isValidRefraction(refraction: RefractionParameters | false): boolean {
+	if (refraction === false) return true
+	if (refraction.pressure !== undefined && (!Number.isFinite(refraction.pressure) || refraction.pressure < 0)) return false
+	if (refraction.temperature !== undefined && !Number.isFinite(refraction.temperature)) return false
+	if (refraction.relativeHumidity !== undefined && (!Number.isFinite(refraction.relativeHumidity) || refraction.relativeHumidity < 0 || refraction.relativeHumidity > 1)) return false
+	if (refraction.wl !== undefined && (!Number.isFinite(refraction.wl) || refraction.wl <= 0)) return false
+	return true
 }
 
 // Returns a fresh normalized vector, or undefined for a non-finite/zero direction.

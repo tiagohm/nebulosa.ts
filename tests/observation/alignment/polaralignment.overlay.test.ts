@@ -82,6 +82,14 @@ describe('mount adjustment geometry', () => {
 	test('rejects degenerate public adjustment axes', () => {
 		expect(() => applyMountAdjustment([1, 0, 0], [0, 0, 0], [0, 1, 0], 0, 0)).toThrow()
 		expect(() => applyMountAdjustment([1, 0, 0], [0, 1, 0], [0, 2, 0], 0, 0)).toThrow()
+		expect(() => applyMountAdjustment([Number.NaN, 0, 0], [0, 1, 0], [0, 0, 1], 0, 0)).toThrow()
+		expect(() => applyMountAdjustment([Number.MAX_VALUE, Number.MAX_VALUE, Number.MAX_VALUE], [0, 1, 0], [0, 0, 1], 0, 0)).toThrow()
+	})
+
+	test('rejects the undefined antipodal spherical logarithm', () => {
+		const alignment = makeAlignment(deg(35))
+		const antipode = [-alignment.targetPole[0], -alignment.targetPole[1], -alignment.targetPole[2]] as const
+		expect(decomposePolarErrorGeodesic(antipode, alignment.targetPole, alignment.axes.upAxis, alignment.axes.eastAxis)).toBeUndefined()
 	})
 })
 
@@ -96,6 +104,36 @@ describe('pixel geometry', () => {
 		expect(segment.clipped).toBeTrue()
 		expect(segment.from).toEqual({ x: 15, y: 60 })
 		expect(segment.to).toEqual({ x: 105, y: 60 })
+	})
+
+	test('clips rays through every side and preserves boundary-collinear segments', () => {
+		const center = { x: 60, y: 60 }
+		const cases = [
+			[
+				{ x: -50, y: 60 },
+				{ x: 10, y: 60 },
+			],
+			[
+				{ x: 170, y: 60 },
+				{ x: 110, y: 60 },
+			],
+			[
+				{ x: 60, y: -50 },
+				{ x: 60, y: 20 },
+			],
+			[
+				{ x: 60, y: 150 },
+				{ x: 60, y: 100 },
+			],
+		] as const
+		for (const [outside, expected] of cases) {
+			const segment = clipPolarAlignmentOverlaySegment(center, outside, frame)
+			expect(segment?.visible).toBeTrue()
+			expect(segment?.to).toEqual(expected)
+		}
+
+		const boundary = clipPolarAlignmentOverlaySegment({ x: -20, y: 20 }, { x: 140, y: 20 }, frame)
+		expect(boundary).toMatchObject({ visible: true, clipped: true, from: { x: 10, y: 20 }, to: { x: 110, y: 20 } })
 	})
 
 	test('keeps fully external and zero-length segments finite', () => {
@@ -190,6 +228,21 @@ describe('complete overlay', () => {
 		})
 	}
 
+	test('returns zero finite geometry when the mount is already aligned', () => {
+		const alignment = makeAlignment(deg(35), 0, 0)
+		const computed = computeThreePointPolarAlignmentOverlay(alignment.result, makeSolution(), alignment.time, {
+			refraction: false,
+			reference: { type: 'equatorial', rightAscension: deg(120), declination: deg(30) },
+			tolerances: [],
+		})
+		expect(computed.success).toBeTrue()
+		if (!computed.success) return
+		expect(computed.overlay.correction).toMatchObject({ azimuth: 0, altitude: 0, residual: 0, iterations: 0, converged: true, stable: true })
+		expect(computed.overlay.azimuthSegment).toMatchObject({ length: 0, direction: { x: 0, y: 0 } })
+		expect(computed.overlay.altitudeSegment).toMatchObject({ length: 0, direction: { x: 0, y: 0 } })
+		expect(computed.overlay.totalSegment).toMatchObject({ length: 0, direction: { x: 0, y: 0 } })
+	})
+
 	test('projects current, azimuth-only, and final positions through the supplied WCS', () => {
 		const alignment = makeAlignment(deg(35))
 		const solution = makeSolution()
@@ -205,10 +258,18 @@ describe('complete overlay', () => {
 		const targetVector = applyInverseMountAdjustment([Math.cos(deg(30)) * Math.cos(deg(120)), Math.cos(deg(30)) * Math.sin(deg(120)), Math.sin(deg(30))], alignment.axes.upAxis, alignment.axes.eastAxis, computed.overlay.correction.azimuth, computed.overlay.correction.altitude)
 		const [targetRa, targetDec] = eraC2s(...targetVector)
 		const target = tanProject(solution, targetRa, targetDec)
+		const directVector = applyMountAdjustment([Math.cos(deg(30)) * Math.cos(deg(120)), Math.cos(deg(30)) * Math.sin(deg(120)), Math.sin(deg(30))], alignment.axes.upAxis, alignment.axes.eastAxis, computed.overlay.correction.azimuth, computed.overlay.correction.altitude)
+		const [directRa, directDec] = eraC2s(...directVector)
+		const direct = tanProject(solution, directRa, directDec)
 		expect(computed.overlay.currentPoint.position.x).toBeCloseTo(current![0], 10)
 		expect(computed.overlay.currentPoint.position.y).toBeCloseTo(current![1], 10)
 		expect(computed.overlay.targetPoint.position.x).toBeCloseTo(target![0], 8)
 		expect(computed.overlay.targetPoint.position.y).toBeCloseTo(target![1], 8)
+		const inverseDx = target![0] - current![0]
+		const inverseDy = target![1] - current![1]
+		const directDx = direct![0] - current![0]
+		const directDy = direct![1] - current![1]
+		expect(inverseDx * directDx + inverseDy * directDy).toBeLessThan(0)
 		expect(computed.overlay.path).toHaveLength(3)
 	})
 
@@ -223,6 +284,20 @@ describe('complete overlay', () => {
 		expect(computed.overlay.reference.declination).toBeCloseTo(expectedReference!.declination, 12)
 		expect(computed.overlay.currentPoint.position.x).toBeCloseTo(solution.widthInPixels * 0.5, 8)
 		expect(computed.overlay.currentPoint.position.y).toBeCloseTo(solution.heightInPixels * 0.5, 8)
+	})
+
+	test('uses the configured refraction model for the target pole', () => {
+		const location = geodeticLocation(deg(-45), deg(35))
+		const time = timeYMDHMS(2026, 7, 12, 2, 0, 0)
+		time.location = location
+		const targetPole = celestialPoleVector(time, location)
+		const axes = mountAdjustmentAxes(time, location)
+		const pole = applyInverseMountAdjustment(targetPole, axes.upAxis, axes.eastAxis, arcmin(4), arcmin(-3))
+		const result: ThreePointPolarAlignmentResult = { azimuth: 0, altitude: 0, azimuthError: 0, altitudeError: 0, pole, azimuthAdjustment: 0, altitudeAdjustment: 0 }
+		const computed = computeThreePointPolarAlignmentOverlay(result, makeSolution(), time, { tolerances: [] })
+		expect(computed.success).toBeTrue()
+		if (!computed.success) return
+		expect(vecAngleUnit(computed.overlay.targetPole, targetPole)).toBeLessThan(1e-14)
 	})
 
 	test('generates finite explicitly closed spherical tolerance contours', () => {
@@ -244,9 +319,23 @@ describe('complete overlay', () => {
 			expect(contour.bounds.height).toBeGreaterThan(0)
 			for (const point of contour.points) expect(Number.isFinite(point.x) && Number.isFinite(point.y)).toBeTrue()
 		}
+		expect(computed.overlay.contours[1].bounds.width).toBeGreaterThan(computed.overlay.contours[0].bounds.width)
+		expect(computed.overlay.contours[1].bounds.height).toBeGreaterThan(computed.overlay.contours[0].bounds.height)
 	})
 
-	test('omits a whole non-projectable contour with deterministic diagnostics', () => {
+	test('uses the documented default contour radii and sample count', () => {
+		const alignment = makeAlignment(deg(35))
+		const computed = computeThreePointPolarAlignmentOverlay(alignment.result, makeSolution(), alignment.time, {
+			refraction: false,
+			reference: { type: 'equatorial', rightAscension: deg(120), declination: deg(30) },
+		})
+		expect(computed.success).toBeTrue()
+		if (!computed.success) return
+		expect(computed.overlay.contours).toHaveLength(3)
+		for (const contour of computed.overlay.contours) expect(contour.points).toHaveLength(49)
+	})
+
+	test('omits a whole unusable contour with deterministic diagnostics', () => {
 		const alignment = makeAlignment(deg(35))
 		const tolerance = deg(100)
 		const computed = computeThreePointPolarAlignmentOverlay(alignment.result, makeSolution(), alignment.time, {
@@ -259,7 +348,7 @@ describe('complete overlay', () => {
 		if (!computed.success) return
 		expect(computed.overlay.contours).toHaveLength(0)
 		expect(computed.overlay.diagnostics.omittedTolerances).toEqual([tolerance])
-		expect(computed.overlay.diagnostics.warnings).toContain('contourOmitted')
+		expect(computed.overlay.diagnostics.warnings.some((warning) => warning === 'contourOmitted' || warning === 'contourIllConditioned')).toBeTrue()
 	})
 
 	test('supports mirrored sheared TAN-SIP WCS without scale shortcuts', () => {
@@ -334,7 +423,24 @@ describe('complete overlay', () => {
 		expect(Math.hypot(computed.overlay.targetPoint.direction.x, computed.overlay.targetPoint.direction.y)).toBeCloseTo(1, 12)
 	})
 
-	test('returns the best stable correction with a deterministic non-convergence warning', () => {
+	test('uses an exact in-domain seed when the linear seed crosses a correction bound', () => {
+		const alignment = makeAlignment(deg(45), deg(80), 0)
+		const computed = computeThreePointPolarAlignmentOverlay(alignment.result, makeSolution(), alignment.time, {
+			refraction: false,
+			reference: { type: 'equatorial', rightAscension: deg(120), declination: deg(30) },
+			tolerances: [],
+		})
+		expect(computed.success).toBeTrue()
+		if (!computed.success) return
+		const corrected = applyMountAdjustment(alignment.currentPole, alignment.axes.upAxis, alignment.axes.eastAxis, computed.overlay.correction.azimuth, computed.overlay.correction.altitude)
+		expect(computed.overlay.correction.converged).toBeTrue()
+		expect(computed.overlay.correction.stable).toBeTrue()
+		expect(vecAngleUnit(corrected, alignment.targetPole)).toBeLessThan(arcsec(0.05))
+		expect(Math.abs(computed.overlay.correction.azimuth)).toBeLessThanOrEqual(Math.PI / 2)
+		expect(Math.abs(computed.overlay.correction.altitude)).toBeLessThanOrEqual(Math.PI / 2)
+	})
+
+	test('returns the best finite correction with a deterministic non-convergence warning', () => {
 		const alignment = makeAlignment(deg(35))
 		const computed = computeThreePointPolarAlignmentOverlay(alignment.result, makeSolution(), alignment.time, {
 			refraction: false,
@@ -345,9 +451,37 @@ describe('complete overlay', () => {
 		})
 		expect(computed.success).toBeTrue()
 		if (!computed.success) return
-		expect(computed.overlay.correction.stable).toBeTrue()
+		expect(computed.overlay.correction.stable).toBeFalse()
 		expect(computed.overlay.correction.converged).toBeFalse()
 		expect(computed.overlay.diagnostics.warnings).toContain('correctionNotConverged')
+	})
+
+	test('rejects a correction whose normal matrix exceeds the configured condition limit', () => {
+		const alignment = makeAlignment(deg(35))
+		const computed = computeThreePointPolarAlignmentOverlay(alignment.result, makeSolution(), alignment.time, {
+			refraction: false,
+			reference: { type: 'equatorial', rightAscension: deg(120), declination: deg(30) },
+			tolerances: [],
+			maximumCondition: 1.01,
+		})
+		expect(computed).toMatchObject({ success: false, reason: 'degenerateCorrection', warnings: ['correctionIllConditioned'] })
+	})
+
+	test('orders correction, reference, and contour warnings deterministically', () => {
+		const alignment = makeAlignment(deg(35))
+		const computed = computeThreePointPolarAlignmentOverlay(alignment.result, makeSolution(), alignment.time, {
+			refraction: false,
+			reference: { type: 'pixel', point: { x: 900, y: 300 } },
+			tolerances: [deg(100)],
+			samples: 12,
+			maximumIterations: 1,
+			correctionTolerance: 1e-20,
+		})
+		expect(computed.success).toBeTrue()
+		if (!computed.success) return
+		expect(computed.overlay.diagnostics.warnings[0]).toBe('correctionNotConverged')
+		expect(computed.overlay.diagnostics.warnings[1]).toBe('referenceOutsideFrame')
+		expect(['contourOmitted', 'contourIllConditioned']).toContain(computed.overlay.diagnostics.warnings[2])
 	})
 
 	test('returns discriminated failures for missing context and invalid geometry', () => {
@@ -360,9 +494,31 @@ describe('complete overlay', () => {
 
 		const antipodalPole = [-alignment.targetPole[0], -alignment.targetPole[1], -alignment.targetPole[2]] as const
 		expect(computeThreePointPolarAlignmentOverlay({ ...alignment.result, pole: antipodalPole }, makeSolution(), alignment.time, { refraction: false, tolerances: [] })).toMatchObject({ success: false, reason: 'degenerateCorrection' })
+		expect(computeThreePointPolarAlignmentOverlay({ ...alignment.result, pole: antipodalPole }, makeSolution(), alignment.time, { refraction: false, reference: { type: 'equatorial', rightAscension: 0, declination: Math.PI }, tolerances: [] })).toMatchObject({ success: false, reason: 'invalidReference' })
 
 		const invalidWcs = { ...makeSolution(), CD1_1: 1, CD1_2: 2, CD2_1: 1, CD2_2: 2 }
 		expect(computeThreePointPolarAlignmentOverlay(alignment.result, invalidWcs, alignment.time, { tolerances: [] })).toMatchObject({ success: false, reason: 'invalidWcs' })
+
+		const unprojectable = makeAlignment(deg(-89.9), deg(-80), deg(-80))
+		expect(computeThreePointPolarAlignmentOverlay(unprojectable.result, makeSolution(), unprojectable.time, { refraction: false, reference: { type: 'equatorial', rightAscension: deg(120), declination: deg(30) }, tolerances: [] })).toMatchObject({ success: false, reason: 'unprojectableTarget' })
+	})
+
+	test('validates every bounded solver and contour option', () => {
+		const alignment = makeAlignment(deg(35))
+		const invalidOptions = [
+			{ samples: 11 },
+			{ samples: 257 },
+			{ samples: 12.5 },
+			{ maximumIterations: 0 },
+			{ derivativeStep: 0 },
+			{ correctionTolerance: 0 },
+			{ maximumCondition: 1 },
+			{ tolerances: [0] },
+			{ tolerances: [Math.PI] },
+			{ refraction: { pressure: -1 } },
+			{ refraction: { relativeHumidity: 1.1 } },
+		] as const
+		for (const options of invalidOptions) expect(computeThreePointPolarAlignmentOverlay(alignment.result, makeSolution(), alignment.time, options)).toMatchObject({ success: false, reason: 'invalidOptions' })
 	})
 
 	test('does not mutate result, WCS, reference, options, or tolerance arrays', () => {
