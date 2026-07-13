@@ -3,6 +3,7 @@ import { measureSensorDarkCurrent, type SensorDarkCurrent } from './sensor.dark'
 import { measureSensorLinearity, type SensorLinearity } from './sensor.linearity'
 import { characterizeSensorTemporal, type PhotonTransferPoint, type SensorBias, type SensorGain, type SensorReadNoise } from './sensor.ptc'
 import { computeSensorDynamicRange, detectSensorSaturation, type SensorDynamicRange, type SensorSaturation } from './sensor.saturation'
+import { measureSensorSpatial, type SensorPhotoResponse, type SensorSpatialNoise } from './sensor.spatial'
 import { DEFAULT_SENSOR_CHARACTERIZATION_OPTIONS, type SensorCharacterizationInput, type SensorCharacterizationOptions, type SensorFrameSet, type SensorOperatingPoint, type SensorPlane } from './sensor.types'
 
 // Public orchestration for one sensor operating point. It validates structural acquisition contracts,
@@ -34,6 +35,7 @@ export type SensorDiagnosticCode =
 	| 'quantizationCorrectionUnavailable'
 	| 'invalidQuantumEfficiency'
 	| 'spatialBuffersRequired'
+	| 'insufficientSpatialFrames'
 	| 'insufficientValidPixels'
 
 // One acquisition or measurement diagnostic.
@@ -92,6 +94,10 @@ export interface SensorPlaneCharacterization {
 	readonly quantumEfficiency?: number
 	// Dark current and optional tile-resolved amp glow.
 	readonly darkCurrent?: SensorDarkCurrent
+	// Dark-signal nonuniformity in electrons RMS.
+	readonly dsnu?: SensorSpatialNoise
+	// Photo-response nonuniformity as fractional RMS.
+	readonly prnu?: SensorPhotoResponse
 }
 
 // Complete characterization of one operating point.
@@ -177,6 +183,10 @@ function diagnosePlane(result: SensorPlaneCharacterization, diagnostics: SensorD
 	if (result.responsivity !== undefined && result.quantumEfficiency === undefined) diagnostics.push({ severity: 'error', code: 'invalidQuantumEfficiency', message: 'Photon responsivity and system gain imply quantum efficiency outside 0..1.', plane })
 	if (result.darkCurrent?.variance !== undefined && Math.abs(result.darkCurrent.mean - result.darkCurrent.variance) / result.darkCurrent.mean > 0.5) diagnostics.push({ severity: 'warning', code: 'darkCurrentMismatch', message: 'Mean- and variance-derived dark currents differ by more than 50%.', plane })
 	if (result.darkCurrent?.ampGlow?.ratio !== undefined && result.darkCurrent.ampGlow.ratio > 1.5) diagnostics.push({ severity: 'warning', code: 'ampGlowDetected', message: 'Maximum tile dark current exceeds 1.5 times the median tile current.', plane })
+	if (result.prnu) {
+		const reference = result.prnu.corrected?.overall ?? result.prnu.emva.overall
+		if (result.prnu.undetrended.overall > Math.max(0.01, reference * 2)) diagnostics.push({ severity: 'warning', code: 'sourceGradientDetected', message: 'Undetrended response variation substantially exceeds detrended PRNU.', plane })
+	}
 
 	const ordered = [...result.photonTransfer].sort((a, b) => a.level - b.level)
 	let maximum = 0
@@ -240,6 +250,11 @@ export function characterizeSensor(input: SensorCharacterizationInput, options: 
 
 	if (input.flats.length < 9) diagnostics.push({ severity: input.flats.length < 2 ? 'error' : 'warning', code: 'insufficientFlatLevels', message: 'At least nine flat levels are recommended for production gain and linearity fits.' })
 	if (input.darks && input.darks.length < 6) diagnostics.push({ severity: input.darks.length < 3 ? 'error' : 'warning', code: 'insufficientDarkLevels', message: 'At least six dark exposure levels are recommended; three distinct times are the mathematical minimum.' })
+	if (input.spatial && (input.spatial.dark.frames.length < 100 || input.spatial.flat.frames.length < 100)) diagnostics.push({ severity: 'warning', code: 'insufficientSpatialFrames', message: 'Spatial DSNU/PRNU stacks contain fewer than the recommended 100 frames.' })
+	if (input.spatial && input.spatial.dark.exposure !== input.spatial.flat.exposure) {
+		diagnostics.push({ severity: 'error', code: 'darkCurrentMismatch', message: 'Spatial dark and flat exposures differ and no exposure correction was requested.' })
+		structuralError = true
+	}
 	const temperatures = temperatureRange(sets)
 	const tolerance = options.temperatureTolerance ?? DEFAULT_SENSOR_CHARACTERIZATION_OPTIONS.temperatureTolerance
 	if (temperatures && temperatures[1] - temperatures[0] > tolerance) diagnostics.push({ severity: 'warning', code: 'temperatureDrift', message: `Recorded temperature span exceeds ${tolerance} °C.` })
@@ -266,6 +281,13 @@ export function characterizeSensor(input: SensorCharacterizationInput, options: 
 			if (input.darks && input.darks.length >= 3 && temporal.gain) {
 				darkCurrent = measureSensorDarkCurrent(input.darks, temporal.gain.conversion, { area: roi, plane, cfaOffset: offset, digitalClip: options.digitalClip, tile: options.tile })
 			}
+			let dsnu: SensorSpatialNoise | undefined
+			let prnu: SensorPhotoResponse | undefined
+			if (input.spatial && temporal.gain) {
+				const spatial = measureSensorSpatial(input.spatial.dark, input.spatial.flat, temporal.gain.conversion, { area: roi, plane, cfaOffset: offset, spatialDetrend: options.spatialDetrend, maps: options.maps, spatialBuffers: options.spatialBuffers, tile: options.tile })
+				dsnu = spatial.dsnu
+				prnu = spatial.prnu
+			}
 			const result: SensorPlaneCharacterization = {
 				plane,
 				bias: temporal.bias,
@@ -278,6 +300,8 @@ export function characterizeSensor(input: SensorCharacterizationInput, options: 
 				responsivity: linearityAnalysis.responsivity,
 				quantumEfficiency: linearityAnalysis.quantumEfficiency,
 				darkCurrent,
+				dsnu,
+				prnu,
 			}
 			results.push(result)
 			diagnosePlane(result, diagnostics)
