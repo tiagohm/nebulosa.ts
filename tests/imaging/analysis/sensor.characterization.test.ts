@@ -75,6 +75,20 @@ test('returns structural diagnostics instead of plausible results for mixed dime
 	expect(result.diagnostics.some((diagnostic) => diagnostic.code === 'mixedDimensions')).toBeTrue()
 })
 
+test('rejects conflicting frame-set operating points when the expected field is omitted', () => {
+	const frames = pairedFrames(100, 2)
+	const input: SensorCharacterizationInput = {
+		operatingPoint: {},
+		bias: { frames, exposure: 0, operatingPoint: { gain: 100 } },
+		flats: [{ frames, exposure: 1, operatingPoint: { gain: 200 } }],
+	}
+
+	const result = characterizeSensor(input)
+
+	expect(result.planes).toHaveLength(0)
+	expect(result.diagnostics.some((diagnostic) => diagnostic.code === 'mixedOperatingPoint' && diagnostic.severity === 'error')).toBeTrue()
+})
+
 test('preserves temporal characterization when optional dark-current analysis fails', () => {
 	const flats: SensorFlatFrameSet[] = []
 	for (let level = 1; level <= 4; level++) flats.push({ frames: pairedFrames(1000 + level * 100, 4 + level * 50), darkFrames: pairedFrames(1000, 4), exposure: level })

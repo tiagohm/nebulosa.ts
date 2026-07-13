@@ -161,6 +161,21 @@ function operatingPointDiffers(expected: SensorOperatingPoint, actual: SensorOpe
 	return false
 }
 
+// Fills undeclared reference fields from one compatible frame-set operating point.
+function mergeOperatingPoint(reference: SensorOperatingPoint, actual: SensorOperatingPoint): SensorOperatingPoint {
+	return {
+		gain: reference.gain ?? actual.gain,
+		offset: reference.offset ?? actual.offset,
+		temperature: reference.temperature ?? actual.temperature,
+		readoutMode: reference.readoutMode ?? actual.readoutMode,
+		binning: reference.binning ?? actual.binning,
+		sensorOrigin: reference.sensorOrigin ?? actual.sensorOrigin,
+		size: reference.size ?? actual.size,
+		bitDepth: reference.bitDepth ?? actual.bitDepth,
+		camera: reference.camera ?? actual.camera,
+	}
+}
+
 // Resolves CFA phase from explicit sensor origin or image-local Bayer offset keywords.
 function cfaOffset(input: SensorCharacterizationInput): readonly [number, number] | undefined {
 	const origin = input.operatingPoint.sensorOrigin
@@ -237,14 +252,17 @@ export function characterizeSensor(input: SensorCharacterizationInput, options: 
 		diagnostics.push({ severity: 'error', code: 'mixedDimensions', message: 'Sensor characterization requires undebayered single-channel frames.' })
 		structuralError = true
 	}
+	let operatingPointReference = input.operatingPoint
 	for (const set of sets) {
 		if (!Number.isFinite(set.exposure) || set.exposure < 0) {
 			diagnostics.push({ severity: 'error', code: 'mixedOperatingPoint', message: 'Every frame set exposure must be finite and non-negative.' })
 			structuralError = true
 		}
-		if (set.operatingPoint && operatingPointDiffers(input.operatingPoint, set.operatingPoint)) {
-			diagnostics.push({ severity: 'error', code: 'mixedOperatingPoint', message: 'A frame set contradicts the expected sensor operating point.' })
-			structuralError = true
+		if (set.operatingPoint) {
+			if (operatingPointDiffers(operatingPointReference, set.operatingPoint)) {
+				diagnostics.push({ severity: 'error', code: 'mixedOperatingPoint', message: 'A frame set contradicts the expected or previously declared sensor operating point.' })
+				structuralError = true
+			} else operatingPointReference = mergeOperatingPoint(operatingPointReference, set.operatingPoint)
 		}
 		for (const frame of set.frames) {
 			const pixelCount = frame.metadata.width * frame.metadata.height
