@@ -8,6 +8,8 @@ import { DEFAULT_SENSOR_CHARACTERIZATION_OPTIONS, type SensorFlatFrameSet, type 
 
 // One dark-corrected photon-transfer measurement level.
 export interface PhotonTransferPoint {
+	// Zero-based acquisition level index in the caller's flat array.
+	readonly level: number
 	// Flat exposure duration, seconds.
 	readonly exposure: number
 	// Dark-corrected mean signal, DN.
@@ -203,10 +205,11 @@ export function fitPhotonTransferGain(points: readonly PhotonTransferPoint[], ra
 
 // Characterizes one plane's PTC, gain, bias, and read noise from paired bias and flat datasets.
 export function characterizeSensorTemporal(bias: SensorFrameSet, flats: readonly SensorFlatFrameSet[], options: Partial<SensorTemporalOptions> = {}): SensorTemporalCharacterization {
-	const pairOptions: Partial<SensorPairOptions> = { area: options.area, plane: options.plane, digitalClip: options.digitalClip, mask: options.mask }
+	const pairOptions: Partial<SensorPairOptions> = { area: options.area, plane: options.plane, cfaOffset: options.cfaOffset, digitalClip: options.digitalClip, mask: options.mask }
 	const [biasAggregate, biasPairs] = measurePairs(bias.frames, pairOptions)
 	const rawPoints: PhotonTransferPoint[] = []
-	for (const level of flats) {
+	for (let levelIndex = 0; levelIndex < flats.length; levelIndex++) {
+		const level = flats[levelIndex]
 		const [flat] = measurePairs(level.frames, pairOptions)
 		const dark = level.darkFrames ? measurePairs(level.darkFrames, pairOptions)[0] : biasAggregate
 		const signal = flat.mean - dark.mean
@@ -214,6 +217,7 @@ export function characterizeSensorTemporal(bias: SensorFrameSet, flats: readonly
 		const totalVariance = variance + dark.variance
 		const valid = Number.isFinite(signal) && Number.isFinite(variance) && signal > 0 && variance > 0
 		rawPoints.push({
+			level: levelIndex,
 			exposure: level.exposure,
 			signal,
 			variance,

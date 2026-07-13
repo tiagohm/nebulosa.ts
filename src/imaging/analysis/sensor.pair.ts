@@ -30,6 +30,8 @@ export interface SensorPairOptions {
 	readonly area?: Readonly<Rect>
 	// Mono or CFA plane; required for CFA mosaics and must be mono otherwise.
 	readonly plane?: SensorPlane
+	// CFA phase offset of image coordinate (0,0), in unbinned sensor pixels.
+	readonly cfaOffset?: Readonly<[number, number]>
 	// Known upper clipping code in DN; clipped samples remain in the statistics.
 	readonly digitalClip?: number
 	// Per-pixel nonzero rejection mask with length width times height.
@@ -89,6 +91,9 @@ export function measureSensorPair(first: DigitalImage, second: DigitalImage, opt
 	const area = resolveArea(options.area, width, height)
 	const clip = options.digitalClip
 	if (clip !== undefined && !Number.isFinite(clip)) throw new RangeError('sensor pair digital clip must be finite')
+	const cfaOffsetX = options.cfaOffset?.[0] ?? 0
+	const cfaOffsetY = options.cfaOffset?.[1] ?? 0
+	if (!Number.isInteger(cfaOffsetX) || !Number.isInteger(cfaOffsetY)) throw new RangeError('sensor pair CFA offset must use integer sensor coordinates')
 
 	const a = first.raw
 	const b = second.raw
@@ -104,7 +109,7 @@ export function measureSensorPair(first: DigitalImage, second: DigitalImage, opt
 	for (let y = area.top; y < area.bottom; y++) {
 		let index = y * width + area.left
 		for (let x = area.left; x < area.right; x++, index++) {
-			if (slot >= 0 && (((y & 1) << 1) | (x & 1)) !== slot) continue
+			if (slot >= 0 && ((((y + cfaOffsetY) & 1) << 1) | ((x + cfaOffsetX) & 1)) !== slot) continue
 			const firstValue = a[index]
 			const secondValue = b[index]
 			if (mask?.[index] || !Number.isFinite(firstValue) || !Number.isFinite(secondValue)) {
