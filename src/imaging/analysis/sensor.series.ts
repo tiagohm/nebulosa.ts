@@ -134,14 +134,26 @@ export function characterizeSensorSeries(profiles: readonly SensorCharacterizati
 	const reference = referenceProfile.operatingPoint
 	let minimumTemperature = Number.POSITIVE_INFINITY
 	let maximumTemperature = Number.NEGATIVE_INFINITY
+	let validTemperatures = true
 	for (const profile of ordered) {
 		const temperature = profile.operatingPoint.temperature
 		if (temperature !== undefined) {
-			minimumTemperature = Math.min(minimumTemperature, temperature)
-			maximumTemperature = Math.max(maximumTemperature, temperature)
+			if (!Number.isFinite(temperature)) validTemperatures = false
+			else {
+				minimumTemperature = Math.min(minimumTemperature, temperature)
+				maximumTemperature = Math.max(maximumTemperature, temperature)
+			}
+		}
+		const temperatures = profile.acquisition.temperatures
+		if (temperatures) {
+			if (!Number.isFinite(temperatures[0]) || !Number.isFinite(temperatures[1]) || temperatures[0] > temperatures[1]) validTemperatures = false
+			else {
+				minimumTemperature = Math.min(minimumTemperature, temperatures[0])
+				maximumTemperature = Math.max(maximumTemperature, temperatures[1])
+			}
 		}
 	}
-	const temperatureCompatible = minimumTemperature === Number.POSITIVE_INFINITY || (Number.isFinite(minimumTemperature) && Number.isFinite(maximumTemperature) && maximumTemperature - minimumTemperature <= temperatureTolerance)
+	const temperatureCompatible = validTemperatures && (minimumTemperature === Number.POSITIVE_INFINITY || maximumTemperature - minimumTemperature <= temperatureTolerance)
 	if (!temperatureCompatible || ordered.some((profile) => !compatibleOperatingPoints(reference, profile.operatingPoint) || !compatibleAcquisitions(referenceProfile.acquisition, profile.acquisition))) {
 		diagnostics.push({ severity: 'error', code: 'incompatibleProfiles', message: 'Profiles differ in camera, offset, temperature, readout mode, bit depth, binning, or ROI.' })
 		return { profiles: ordered, diagnostics }

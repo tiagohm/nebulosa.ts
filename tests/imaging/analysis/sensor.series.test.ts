@@ -68,6 +68,14 @@ test('uses the complete temperature span when checking series compatibility', ()
 	expect(result.diagnostics.some((diagnostic) => diagnostic.code === 'incompatibleProfiles')).toBeTrue()
 })
 
+test('uses acquisition temperature spans when operating-point temperatures are absent', () => {
+	const cold = profile(0, 0.5, { temperature: undefined })
+	const warm = profile(100, 1.5, { temperature: undefined })
+	const result = characterizeSensorSeries([cold, { ...warm, acquisition: { ...warm.acquisition, temperatures: [0, 0] } }], { temperatureTolerance: 0.5 })
+	expect(result.unityGain).toBeUndefined()
+	expect(result.diagnostics.some((diagnostic) => diagnostic.code === 'incompatibleProfiles')).toBeTrue()
+})
+
 test('rejects a non-monotonic measured gain curve', () => {
 	const result = characterizeSensorSeries([profile(0, 0.5), profile(50, 1.2), profile(100, 0.9)])
 	expect(result.unityGain).toBeUndefined()
