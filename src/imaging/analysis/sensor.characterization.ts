@@ -1,5 +1,6 @@
 import type { Rect } from '../../math/numerical/geometry'
 import { measureSensorDarkCurrent, type SensorDarkCurrent } from './sensor.dark'
+import { measureSensorDefects, type SensorDefects } from './sensor.defects'
 import { measureSensorLinearity, type SensorLinearity } from './sensor.linearity'
 import { characterizeSensorTemporal, type PhotonTransferPoint, type SensorBias, type SensorGain, type SensorReadNoise } from './sensor.ptc'
 import { computeSensorDynamicRange, detectSensorSaturation, type SensorDynamicRange, type SensorSaturation } from './sensor.saturation'
@@ -98,6 +99,8 @@ export interface SensorPlaneCharacterization {
 	readonly dsnu?: SensorSpatialNoise
 	// Photo-response nonuniformity as fractional RMS.
 	readonly prnu?: SensorPhotoResponse
+	// Persistent, temporal, and structural pixel defects.
+	readonly defects?: SensorDefects
 }
 
 // Complete characterization of one operating point.
@@ -283,10 +286,13 @@ export function characterizeSensor(input: SensorCharacterizationInput, options: 
 			}
 			let dsnu: SensorSpatialNoise | undefined
 			let prnu: SensorPhotoResponse | undefined
+			let defects: SensorDefects | undefined
 			if (input.spatial && temporal.gain) {
 				const spatial = measureSensorSpatial(input.spatial.dark, input.spatial.flat, temporal.gain.conversion, { area: roi, plane, cfaOffset: offset, spatialDetrend: options.spatialDetrend, maps: options.maps, spatialBuffers: options.spatialBuffers, tile: options.tile })
 				dsnu = spatial.dsnu
 				prnu = spatial.prnu
+				defects = measureSensorDefects(input.spatial.dark, input.spatial.flat, { area: roi, plane, cfaOffset: offset, rejectionSigma: options.rejectionSigma, digitalClip: options.digitalClip, maps: options.maps, spatialBuffers: options.spatialBuffers })
+				if (!defects) diagnostics.push({ severity: 'warning', code: 'spatialBuffersRequired', message: 'Defect counts require retained maps or caller-provided mean, variance, and mask buffers.', plane })
 			}
 			const result: SensorPlaneCharacterization = {
 				plane,
@@ -302,6 +308,7 @@ export function characterizeSensor(input: SensorCharacterizationInput, options: 
 				darkCurrent,
 				dsnu,
 				prnu,
+				defects,
 			}
 			results.push(result)
 			diagnosePlane(result, diagnostics)

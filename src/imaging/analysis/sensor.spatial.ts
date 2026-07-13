@@ -1,6 +1,6 @@
 import { gaussianElimination, Matrix } from '../../math/linear-algebra/matrix'
 import type { Rect } from '../../math/numerical/geometry'
-import type { DigitalImage } from '../model/types'
+import { resolveSensorArea, resolveSensorPlaneGeometry, validateSensorSpatialStack, type SensorPlaneGeometry } from './sensor.grid'
 import type { SensorFrameSet, SensorPlane, SensorSpatialBuffers, SensorTileOptions } from './sensor.types'
 
 // Tiled spatial sensor analysis for fixed-exposure dark and flat stacks. Each tile rereads frames and
@@ -83,20 +83,6 @@ export interface SensorSpatialOptions {
 	readonly tile?: Readonly<SensorTileOptions>
 }
 
-// Selected plane-grid geometry mapped back to source image coordinates.
-interface PlaneGeometry {
-	// First selected source x coordinate.
-	readonly sourceLeft: number
-	// First selected source y coordinate.
-	readonly sourceTop: number
-	// Source-coordinate step between plane samples.
-	readonly step: number
-	// Plane-grid width.
-	readonly width: number
-	// Plane-grid height.
-	readonly height: number
-}
-
 // Fixed reusable buffers for one expanded tile and the valid-convolution stages.
 interface SpatialWorkspace {
 	// Per-pixel stack mean on the expanded tile.
@@ -113,56 +99,6 @@ interface SpatialWorkspace {
 	readonly second: Float64Array
 	// Final binomial-smoothed target tile.
 	readonly smooth: Float64Array
-}
-
-// Resolves a validated image ROI.
-function resolveArea(area: Readonly<Rect> | undefined, width: number, height: number): Readonly<Rect> {
-	const roi = area ?? { left: 0, top: 0, right: width, bottom: height }
-	if (!Number.isInteger(roi.left) || !Number.isInteger(roi.top) || !Number.isInteger(roi.right) || !Number.isInteger(roi.bottom) || roi.left < 0 || roi.top < 0 || roi.right > width || roi.bottom > height || roi.left >= roi.right || roi.top >= roi.bottom)
-		throw new RangeError('spatial sensor area must be a non-empty inclusive-exclusive integer rectangle')
-	return roi
-}
-
-// Returns the selected row-major CFA slot, or -1 for mono.
-function planeSlot(pattern: string | undefined, plane: SensorPlane | undefined): number {
-	if (!pattern) {
-		if (plane !== undefined && plane !== 'mono') throw new RangeError('non-CFA spatial analysis supports only the mono plane')
-		return -1
-	}
-	if (plane === undefined || plane === 'mono') throw new RangeError('CFA spatial analysis requires an explicit color plane')
-	const channel = plane === 'red' ? 'R' : plane === 'blue' ? 'B' : 'G'
-	const slot = plane === 'green2' ? pattern.indexOf(channel, pattern.indexOf(channel) + 1) : pattern.indexOf(channel)
-	if (slot < 0) throw new RangeError(`sensor plane ${plane} is absent from CFA pattern ${pattern}`)
-	return slot
-}
-
-// Maps an image ROI to the dense mono or CFA-plane grid used by spatial filters.
-function planeGeometry(image: DigitalImage, area: Readonly<Rect>, plane: SensorPlane | undefined, cfaOffset: Readonly<[number, number]> | undefined): PlaneGeometry {
-	const slot = planeSlot(image.metadata.bayer, plane)
-	if (slot < 0) return { sourceLeft: area.left, sourceTop: area.top, step: 1, width: area.right - area.left, height: area.bottom - area.top }
-	const offsetX = cfaOffset?.[0]
-	const offsetY = cfaOffset?.[1]
-	if (!Number.isInteger(offsetX) || !Number.isInteger(offsetY)) throw new RangeError('CFA spatial analysis requires an integer sensor origin')
-	const xParity = slot & 1
-	const yParity = slot >>> 1
-	let sourceLeft = area.left
-	let sourceTop = area.top
-	if (((sourceLeft + offsetX!) & 1) !== xParity) sourceLeft++
-	if (((sourceTop + offsetY!) & 1) !== yParity) sourceTop++
-	const width = sourceLeft < area.right ? Math.floor((area.right - 1 - sourceLeft) / 2) + 1 : 0
-	const height = sourceTop < area.bottom ? Math.floor((area.bottom - 1 - sourceTop) / 2) + 1 : 0
-	if (width <= 0 || height <= 0) throw new RangeError('selected CFA plane has no samples inside the spatial ROI')
-	return { sourceLeft, sourceTop, step: 2, width, height }
-}
-
-// Validates a stack against reference image structure and selected plane-grid storage.
-function validateStack(set: SensorFrameSet, reference: DigitalImage): void {
-	if (set.frames.length < 2) throw new RangeError('spatial stack requires at least two frames')
-	for (const frame of set.frames) {
-		if (frame.sampleScale !== 'digital') throw new TypeError('spatial analysis requires digital images')
-		if (frame.metadata.width !== reference.metadata.width || frame.metadata.height !== reference.metadata.height || frame.metadata.channels !== 1 || frame.metadata.bayer !== reference.metadata.bayer) throw new RangeError('spatial stack frames must share dimensions and CFA pattern')
-		if (frame.raw.length < frame.metadata.pixelCount) throw new RangeError('spatial frame buffer is smaller than declared geometry')
-	}
 }
 
 // Allocates fixed workspaces sized for the largest requested target tile plus a nine-sample halo.
@@ -182,7 +118,7 @@ function createWorkspace(tileWidth: number, tileHeight: number): SpatialWorkspac
 }
 
 // Fills expanded plane-grid stack mean and unbiased temporal variance, clamping the filter halo to edges.
-function fillStackStatistics(set: SensorFrameSet, geometry: PlaneGeometry, tileLeft: number, tileTop: number, targetWidth: number, targetHeight: number, workspace: SpatialWorkspace): readonly [number, number] {
+function fillStackStatistics(set: SensorFrameSet, geometry: SensorPlaneGeometry, tileLeft: number, tileTop: number, targetWidth: number, targetHeight: number, workspace: SpatialWorkspace): readonly [number, number] {
 	const expandedWidth = targetWidth + 18
 	const expandedHeight = targetHeight + 18
 	const sourceWidth = set.frames[0].metadata.width
@@ -323,10 +259,10 @@ export function measureSensorSpatial(dark: SensorFrameSet, flat: SensorFrameSet,
 	if (!Number.isFinite(conversionGain) || conversionGain <= 0) throw new RangeError('spatial conversion gain must be finite and positive')
 	if (dark.exposure !== flat.exposure) throw new RangeError('spatial dark and flat stacks must have matching exposure')
 	const reference = dark.frames[0]
-	validateStack(dark, reference)
-	validateStack(flat, reference)
-	const area = resolveArea(options.area, reference.metadata.width, reference.metadata.height)
-	const geometry = planeGeometry(reference, area, options.plane, options.cfaOffset)
+	validateSensorSpatialStack(dark, reference)
+	validateSensorSpatialStack(flat, reference)
+	const area = resolveSensorArea(options.area, reference.metadata.width, reference.metadata.height)
+	const geometry = resolveSensorPlaneGeometry(reference, area, options.plane, options.cfaOffset)
 	const sampleCapacity = geometry.width * geometry.height
 	const tileWidth = options.tile?.width ?? 256
 	const tileHeight = options.tile?.height ?? 256
