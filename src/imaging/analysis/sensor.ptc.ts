@@ -1,4 +1,5 @@
 import { weightedLinearRegression, weightedLinearRegressionScore, type RegressionScore } from '../../math/numerical/regression'
+import type { DigitalImage } from '../model/types'
 import { aggregateSensorPairs, measureSensorPair, type SensorPairAggregate, type SensorPairOptions, type SensorPairStatistics } from './sensor.pair'
 import { DEFAULT_SENSOR_CHARACTERIZATION_OPTIONS, type SensorFlatFrameSet, type SensorFrameSet, type SensorPointRejectionReason } from './sensor.types'
 
@@ -104,6 +105,20 @@ export interface SensorTemporalCharacterization {
 	readonly gain?: SensorGain
 	// Read noise from bias pairs, with electron values when gain is valid.
 	readonly readNoise: SensorReadNoise
+}
+
+// Validates a temporal frame list and returns its reference image. Every frame must be a single-channel
+// digital image with the same dimensions and CFA pattern as `reference`, when provided.
+function validateTemporalFrames(frames: SensorFrameSet['frames'], reference?: DigitalImage): DigitalImage {
+	if (frames.length < 2) throw new RangeError('temporal frame set requires at least two frames')
+	const expected = reference ?? frames[0]
+	for (const frame of frames) {
+		if (frame.sampleScale !== 'digital') throw new TypeError('temporal analysis requires digital images')
+		if (frame.metadata.width !== expected.metadata.width || frame.metadata.height !== expected.metadata.height || frame.metadata.channels !== 1 || frame.metadata.bayer !== expected.metadata.bayer) throw new RangeError('temporal frame sets must share dimensions and CFA pattern')
+		const pixelCount = frame.metadata.width * frame.metadata.height
+		if (frame.metadata.pixelCount !== pixelCount || frame.raw.length < pixelCount) throw new RangeError('temporal frame pixel geometry or raw-buffer length is inconsistent')
+	}
+	return expected
 }
 
 // Measures all consecutive non-overlapping pairs in a frame list.
@@ -216,6 +231,11 @@ export function fitPhotonTransferGain(points: readonly PhotonTransferPoint[], ra
 // Characterizes one plane's PTC, gain, bias, and read noise from paired bias and flat datasets.
 export function characterizeSensorTemporal(bias: SensorFrameSet, flats: readonly SensorFlatFrameSet[], options: Partial<SensorTemporalOptions> = {}): SensorTemporalCharacterization {
 	const pairOptions: Partial<SensorPairOptions> = { area: options.area, plane: options.plane, cfaOffset: options.cfaOffset, digitalClip: options.digitalClip, mask: options.mask }
+	const reference = validateTemporalFrames(bias.frames)
+	for (const level of flats) {
+		validateTemporalFrames(level.frames, reference)
+		if (level.darkFrames) validateTemporalFrames(level.darkFrames, reference)
+	}
 	const [biasAggregate, biasPairs] = measurePairs(bias.frames, pairOptions)
 	const rawPoints: PhotonTransferPoint[] = []
 	for (let levelIndex = 0; levelIndex < flats.length; levelIndex++) {

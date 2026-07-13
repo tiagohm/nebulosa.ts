@@ -6,7 +6,7 @@ import type { DigitalImage } from '../../../src/imaging/model/types'
 // Exact synthetic PTC tests with prescribed pair means and temporal population variances.
 
 // Creates an eight-pixel digital frame pair around a mean with exact temporal variance.
-function pairedFrames(mean: number, variance: number): readonly [DigitalImage, DigitalImage] {
+function pairedFrames(mean: number, variance: number, width: number = 4): readonly [DigitalImage, DigitalImage] {
 	const difference = Math.sqrt(2 * variance)
 	const first = new Float64Array(8)
 	const second = new Float64Array(8)
@@ -18,10 +18,11 @@ function pairedFrames(mean: number, variance: number): readonly [DigitalImage, D
 
 	// Wraps one raw buffer as an immutable digital image contract.
 	function image(raw: Float64Array): DigitalImage {
+		const height = raw.length / width
 		return {
-			header: { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: 4, NAXIS2: 2 },
+			header: { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: width, NAXIS2: height },
 			raw,
-			metadata: { width: 4, height: 2, channels: 1, pixelCount: 8, pixelSizeInBytes: 2, strideInBytes: 8, stride: 4, bitpix: 16, bayer: undefined },
+			metadata: { width, height, channels: 1, pixelCount: 8, pixelSizeInBytes: 2, strideInBytes: width * 2, stride: width, bitpix: 16, bayer: undefined },
 			sampleScale: 'digital',
 			digitalRange: [0, 65535],
 			quantizationStep: 1,
@@ -75,6 +76,13 @@ test('records calibrated or relative flat stimulus independently from exposure',
 	const result = characterizeSensorTemporal(bias, flats, { gainRange: [0, 1] })
 	expect(result.photonTransfer.find((point) => point.level === 0)?.stimulus).toBe(500)
 	expect(result.photonTransfer.find((point) => point.level === 1)?.stimulus).toBe(30)
+})
+
+test('rejects temporal flat levels with mismatched dimensions', () => {
+	const bias: SensorFrameSet = { frames: pairedFrames(100, 2), exposure: 0 }
+	const flats: SensorFlatFrameSet[] = [{ frames: pairedFrames(200, 20, 8), exposure: 1 }]
+
+	expect(() => characterizeSensorTemporal(bias, flats)).toThrow('temporal frame sets must share dimensions and CFA pattern')
 })
 
 test('returns annotated points without gain when selected signals are duplicated', () => {
