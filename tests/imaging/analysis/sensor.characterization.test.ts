@@ -254,6 +254,25 @@ test('retains independent defect masks for each CFA plane when reusing buffers',
 	expect(redMask!.buffer).not.toBe(spatialBuffers.mask.buffer)
 })
 
+test('classifies spatial defects when temporal gain is unavailable', () => {
+	const spatialDark = pairedFrames(100, 0)
+	spatialDark[0].raw[3] = 1000
+	spatialDark[1].raw[3] = 1000
+	const result = characterizeSensor(
+		{
+			operatingPoint: {},
+			bias: { frames: pairedFrames(100, 2), exposure: 0 },
+			flats: [{ frames: pairedFrames(500, 20), exposure: 1 }],
+			spatial: { dark: { frames: spatialDark, exposure: 1 }, flat: { frames: pairedFrames(500, 0), exposure: 1 } },
+		},
+		{ maps: 'defects' },
+	)
+
+	expect(result.planes).toHaveLength(1)
+	expect(result.planes[0].gain).toBeUndefined()
+	expect(result.planes[0].defects?.hot).toBe(1)
+})
+
 test('preserves temporal characterization when optional dark-current analysis fails', () => {
 	const flats: SensorFlatFrameSet[] = []
 	for (let level = 1; level <= 4; level++) flats.push({ frames: pairedFrames(1000 + level * 100, 4 + level * 50), darkFrames: pairedFrames(1000, 4), exposure: level })
