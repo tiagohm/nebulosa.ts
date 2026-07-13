@@ -23,8 +23,10 @@ export interface PhotonTransferPoint {
 	readonly darkMean: number
 	// Temporal dark-reference variance, DN squared.
 	readonly darkVariance: number
-	// Maximum flat or dark-reference fraction at the known upper digital clip.
+	// Fraction of valid flat samples at the known upper digital clip.
 	readonly clippedFraction: number
+	// Fraction of valid dark-reference samples at the known upper digital clip.
+	readonly darkClippedFraction?: number
 	// Signal divided by an independently determined saturation signal.
 	readonly saturationFraction?: number
 	// Number of non-overlapping flat pairs represented.
@@ -177,7 +179,7 @@ export function measureSensorReadNoise(pairs: readonly SensorPairStatistics[], c
 export function fitPhotonTransferGain(points: readonly PhotonTransferPoint[], range: readonly [number, number] = DEFAULT_SENSOR_CHARACTERIZATION_OPTIONS.gainRange): readonly [readonly PhotonTransferPoint[], SensorGain | undefined] {
 	if (range.length !== 2 || !Number.isFinite(range[0]) || !Number.isFinite(range[1]) || range[0] < 0 || range[0] >= range[1] || range[1] > 1) throw new RangeError('gain range must be an increasing fraction within 0..1')
 	let maximumSignal = 0
-	for (const point of points) if (point.valid && point.clippedFraction === 0 && point.signal > maximumSignal) maximumSignal = point.signal
+	for (const point of points) if (point.valid && point.clippedFraction === 0 && (point.darkClippedFraction ?? 0) === 0 && point.signal > maximumSignal) maximumSignal = point.signal
 	const minimum = maximumSignal * range[0]
 	const maximum = maximumSignal * range[1]
 	const annotated: PhotonTransferPoint[] = []
@@ -187,7 +189,7 @@ export function fitPhotonTransferGain(points: readonly PhotonTransferPoint[], ra
 		if (!point.valid) reasons.push('invalidPoint')
 		if (!(point.signal > 0)) reasons.push('nonPositiveSignal')
 		if (!(point.variance > 0)) reasons.push('nonPositiveVariance')
-		if (point.clippedFraction > 0) reasons.push('clipped')
+		if (point.clippedFraction > 0 || (point.darkClippedFraction ?? 0) > 0) reasons.push('clipped')
 		if (point.signal < minimum || point.signal > maximum) reasons.push('outsideFitRange')
 		if (point.pairCount < 1) reasons.push('insufficientSamples')
 		const selectedForGainFit = reasons.length === 0
@@ -262,7 +264,8 @@ export function characterizeSensorTemporal(bias: SensorFrameSet, flats: readonly
 			variance,
 			darkMean: dark.mean,
 			darkVariance: dark.variance,
-			clippedFraction: Math.max(flat.clippedFraction, dark.clippedFraction),
+			clippedFraction: flat.clippedFraction,
+			darkClippedFraction: dark.clippedFraction,
 			pairCount: flat.pairCount,
 			snr: signal > 0 && totalVariance > 0 ? signal / Math.sqrt(totalVariance) : undefined,
 			valid,

@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test'
 import { characterizeSensorTemporal, fitPhotonTransferGain, type PhotonTransferPoint } from '../../../src/imaging/analysis/sensor.ptc'
+import { detectSensorSaturation } from '../../../src/imaging/analysis/sensor.saturation'
 import type { SensorFlatFrameSet, SensorFrameSet } from '../../../src/imaging/analysis/sensor.types'
 import type { DigitalImage } from '../../../src/imaging/model/types'
 
@@ -67,17 +68,23 @@ test('marks nonpositive and clipped PTC levels instead of fitting them', () => {
 	expect(result.photonTransfer[1].fitRejectionReasons).toContain('clipped')
 })
 
-test('rejects an unclipped flat when its matched dark reference is clipped', () => {
+test('rejects dark-reference clipping without treating a linear flat series as saturated', () => {
 	const bias: SensorFrameSet = { frames: pairedFrames(100, 2), exposure: 0 }
 	const darkFrames = pairedFrames(100, 0)
-	darkFrames[0].raw[0] = 200
-	darkFrames[1].raw[0] = 200
-	const flats: SensorFlatFrameSet[] = [{ frames: pairedFrames(150, 20), darkFrames, exposure: 1 }]
-	const result = characterizeSensorTemporal(bias, flats, { digitalClip: 200, gainRange: [0, 1] })
-	const point = result.photonTransfer[0]
+	darkFrames[0].raw[0] = 1000
+	darkFrames[1].raw[0] = 1000
+	const flats: SensorFlatFrameSet[] = [
+		{ frames: pairedFrames(150, 27), darkFrames: pairedFrames(100, 2), exposure: 1 },
+		{ frames: pairedFrames(400, 90), darkFrames, exposure: 2 },
+		{ frames: pairedFrames(350, 127), darkFrames: pairedFrames(100, 2), exposure: 3 },
+	]
+	const result = characterizeSensorTemporal(bias, flats, { digitalClip: 1000, gainRange: [0, 1] })
+	const point = result.photonTransfer.find((candidate) => candidate.level === 1)!
 	expect(point.valid).toBeTrue()
-	expect(point.clippedFraction).toBeGreaterThan(0)
+	expect(point.clippedFraction).toBe(0)
+	expect(point.darkClippedFraction).toBeGreaterThan(0)
 	expect(point.fitRejectionReasons).toContain('clipped')
+	expect(detectSensorSaturation(result.photonTransfer, result.gain)).toBeUndefined()
 })
 
 test('keeps partially calibrated flat stimuli on the relative exposure-intensity scale', () => {
