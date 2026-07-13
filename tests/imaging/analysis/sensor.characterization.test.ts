@@ -146,6 +146,18 @@ test('rejects inconsistent Bayer offsets across CFA frame sets', () => {
 	expect(result.diagnostics.some((diagnostic) => diagnostic.code === 'unknownCfaOrigin' && diagnostic.severity === 'error')).toBeTrue()
 })
 
+test('rejects binned CFA data declared only by frame sets', () => {
+	const frames = cfaFrames(pairedFrames(100, 2), 0, 0)
+	const result = characterizeSensor({
+		operatingPoint: {},
+		bias: { frames, exposure: 0, operatingPoint: { binning: [2, 2] } },
+		flats: [{ frames: cfaFrames(pairedFrames(200, 20), 0, 0), exposure: 1, operatingPoint: { binning: [2, 2] } }],
+	})
+
+	expect(result.planes).toHaveLength(0)
+	expect(result.diagnostics.some((diagnostic) => diagnostic.code === 'unknownCfaOrigin' && diagnostic.severity === 'error')).toBeTrue()
+})
+
 test('retains independent defect masks for each CFA plane when reusing buffers', () => {
 	const bias = cfaPairedFrames(100, 4)
 	const flats: SensorFlatFrameSet[] = [

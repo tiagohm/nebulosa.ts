@@ -302,7 +302,7 @@ export function characterizeSensor(input: SensorCharacterizationInput, options: 
 	if (temperatures && temperatures[1] - temperatures[0] > temperatureTolerance) diagnostics.push({ severity: 'warning', code: 'temperatureDrift', message: `Recorded temperature span exceeds ${temperatureTolerance} °C.` })
 
 	const offset = bayer ? cfaOffset(input, sets) : undefined
-	if (bayer && (!offset || channels !== 1 || (input.operatingPoint.binning && (input.operatingPoint.binning[0] !== 1 || input.operatingPoint.binning[1] !== 1)))) {
+	if (bayer && (!offset || channels !== 1 || (operatingPointReference.binning && (operatingPointReference.binning[0] !== 1 || operatingPointReference.binning[1] !== 1)))) {
 		diagnostics.push({ severity: 'error', code: 'unknownCfaOrigin', message: 'CFA analysis requires an integer sensor origin or consistent Bayer offsets across all unbinned single-channel frames.' })
 		structuralError = true
 	}
