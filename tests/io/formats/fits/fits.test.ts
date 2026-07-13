@@ -96,6 +96,22 @@ test('uses physical scaling keywords for Rice-compressed integer samples', async
 	expect(image!.digitalRange).toEqual([0, 65535])
 })
 
+test('uses ZSCALE and ZZERO when compressed FITS scaling has no unprefixed cards', async () => {
+	const buffer = Buffer.alloc(FITS_BLOCK_SIZE * 3)
+	const header: FitsHeader = { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: 3, NAXIS2: 1, BSCALE: -0.5, BZERO: 10 }
+	const raw = new Float64Array([11 / 65535, 10 / 65535, 9 / 65535])
+	await writeFits(bufferSink(buffer), [{ header, raw }], { type: 'RICE_1' })
+	const scaleOffset = buffer.indexOf('BSCALE  ', 0, 'ascii')
+	const zeroOffset = buffer.indexOf('BZERO   ', 0, 'ascii')
+	buffer.write('ZSCALE  ', scaleOffset, 'ascii')
+	buffer.write('ZZERO   ', zeroOffset, 'ascii')
+
+	const image = await readImageFromBuffer(buffer, { sampleScale: 'digital', raw: 64 })
+
+	expect(Array.from(image!.raw)).toEqual([11, 10, 9])
+	expect(image!.digitalRange).toEqual([-16373.5, 16394])
+})
+
 test('preserves floating-point FITS samples in digital scale', async () => {
 	const header: FitsHeader = { SIMPLE: true, BITPIX: -32, NAXIS: 2, NAXIS1: 3, NAXIS2: 1 }
 	const data = Buffer.alloc(12)

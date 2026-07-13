@@ -164,14 +164,18 @@ export function uncompressedBitpixKeyword<T extends BitpixOrZero = BitpixOrZero,
 	return numericKeyword(header, 'ZBITPIX', undefined) ?? bitpixKeyword(header, defaultValue)
 }
 
-// Physical sample multiplier for an uncompressed or supported integer tile-compressed image.
-export function uncompressedScaleKeyword<T extends number = number, D extends T | undefined = T>(header: FitsHeader, defaultValue: D) {
-	return numericKeyword(header, 'BSCALE', defaultValue)
+// Physical sample multiplier, falling back to ZSCALE only for a compressed image.
+export function uncompressedScaleKeyword<T extends number = number, D extends T | undefined = T>(header: FitsHeader, defaultValue: D): T | D {
+	const scale = numericKeyword<T, undefined>(header, 'BSCALE', undefined)
+	if (scale !== undefined) return scale
+	return isCompressedImageHeader(header) ? numericKeyword<T, D>(header, 'ZSCALE', defaultValue) : defaultValue
 }
 
-// Physical sample zero point for an uncompressed or supported integer tile-compressed image.
-export function uncompressedZeroKeyword<T extends number = number, D extends T | undefined = T>(header: FitsHeader, defaultValue: D) {
-	return numericKeyword(header, 'BZERO', defaultValue)
+// Physical sample zero point, falling back to ZZERO only for a compressed image.
+export function uncompressedZeroKeyword<T extends number = number, D extends T | undefined = T>(header: FitsHeader, defaultValue: D): T | D {
+	const zero = numericKeyword<T, undefined>(header, 'BZERO', undefined)
+	if (zero !== undefined) return zero
+	return isCompressedImageHeader(header) ? numericKeyword<T, D>(header, 'ZZERO', defaultValue) : defaultValue
 }
 
 // True when the HDU holds a tile-compressed image (ZIMAGE = T).
