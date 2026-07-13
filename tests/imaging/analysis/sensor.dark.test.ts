@@ -42,6 +42,14 @@ test('recovers dark current independently from mean and temporal variance slopes
 	expect(result.ampGlow?.ratio).toBeCloseTo(1, 12)
 })
 
+test('returns zero dark current when the mean is constant across exposure times', () => {
+	const darks: SensorFrameSet[] = [0, 10, 20].map((exposure) => ({ frames: uniformPair(100, 4), exposure }))
+
+	const result = measureSensorDarkCurrent(darks, 2)
+
+	expect(result.mean).toBe(0)
+})
+
 test('resolves localized amp glow from per-tile exposure slopes', () => {
 	const darks: SensorFrameSet[] = [0, 10, 20, 40].map((exposure) => {
 		const first = new Float64Array(16)

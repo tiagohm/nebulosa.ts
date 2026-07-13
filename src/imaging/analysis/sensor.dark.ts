@@ -191,8 +191,8 @@ export function measureSensorDarkCurrent(darks: readonly SensorFrameSet[], conve
 	}
 
 	const meanRegression = weightedLinearRegression(x, means, weights)
-	if (!(meanRegression.slope > 0)) throw new RangeError('dark mean does not increase with exposure')
-	const mean = meanRegression.slope * conversionGain
+	if (!Number.isFinite(meanRegression.slope) || meanRegression.slope < 0) throw new RangeError('dark mean decreases with exposure')
+	const mean = Math.max(0, meanRegression.slope) * conversionGain
 	const meanFit = sensorFit(meanRegression, x, means, weights)
 	const varianceRegression = weightedLinearRegression(x, variances, weights)
 	const variance = varianceRegression.slope > 0 ? varianceRegression.slope * conversionGain * conversionGain : undefined
