@@ -395,6 +395,16 @@ test('fits image reader and writer honor non-zero backing buffer offsets', async
 	expect(readBuffer[7]).toBe(77)
 })
 
+test('inverts FITS affine scaling when writing normalized samples', async () => {
+	const header: FitsHeader = { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: 1, NAXIS2: 1, BSCALE: 2, BZERO: 10 }
+	const stored = Buffer.alloc(2)
+	const normalized = new Float64Array([10 / 65535])
+
+	await new FitsImageWriter(header).write(normalized, bufferSink(stored))
+
+	expect(stored.readInt16BE()).toBe(0)
+})
+
 test('width keywords', () => {
 	expect(widthKeyword({ NAXIS1: 1200 }, undefined)).toBe(1200)
 	expect(widthKeyword({ IMAGEW: 1400 }, undefined)).toBe(1400)
