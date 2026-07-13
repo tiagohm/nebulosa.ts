@@ -306,6 +306,13 @@ describe('buffer views', () => {
 	})
 })
 
+test('rejects signed or out-of-range digital samples for unsigned XISF integers', () => {
+	const writer = new XisfImageWriter({ bitpix: 16, byteOrder: 'little', pixelStorage: 'Normal', geometry: { width: 2, height: 1, channels: 1 } }, false)
+
+	expect(writer.encode(new Float64Array([-2, 2]), 'digital')).rejects.toThrow('digital integer XISF samples must be integers within 0..65535')
+	expect(writer.encode(new Float64Array([0, 65536]), 'digital')).rejects.toThrow('digital integer XISF samples must be integers within 0..65535')
+})
+
 test('should parse correctly XML header', () => {
 	const xml = `<?xml version="1.0"?><!--
 Extensible Image Serialization Format - XISF version 1.0
