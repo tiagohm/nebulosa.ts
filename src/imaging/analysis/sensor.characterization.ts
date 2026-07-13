@@ -151,10 +151,11 @@ function temperatureRange(sets: readonly SensorFrameSet[]): readonly [number, nu
 	return minimum <= maximum ? [minimum, maximum] : undefined
 }
 
-// Reports whether supplied operating-point fields contradict expected fields.
-function operatingPointDiffers(expected: SensorOperatingPoint, actual: SensorOperatingPoint): boolean {
-	const scalarKeys = ['gain', 'offset', 'temperature', 'readoutMode', 'bitDepth', 'camera'] as const
+// Reports whether supplied operating-point fields contradict expected fields within temperature tolerance.
+function operatingPointDiffers(expected: SensorOperatingPoint, actual: SensorOperatingPoint, temperatureTolerance: number): boolean {
+	const scalarKeys = ['gain', 'offset', 'readoutMode', 'bitDepth', 'camera'] as const
 	for (const key of scalarKeys) if (expected[key] !== undefined && actual[key] !== undefined && expected[key] !== actual[key]) return true
+	if (expected.temperature !== undefined && actual.temperature !== undefined && Math.abs(expected.temperature - actual.temperature) > temperatureTolerance) return true
 	if (expected.binning && actual.binning && (expected.binning[0] !== actual.binning[0] || expected.binning[1] !== actual.binning[1])) return true
 	if (expected.sensorOrigin && actual.sensorOrigin && (expected.sensorOrigin[0] !== actual.sensorOrigin[0] || expected.sensorOrigin[1] !== actual.sensorOrigin[1])) return true
 	if (expected.size !== undefined && actual.size !== undefined && (expected.size.width !== actual.size.width || expected.size.height !== actual.size.height)) return true
@@ -231,6 +232,7 @@ export function characterizeSensor(input: SensorCharacterizationInput, options: 
 	if (options.temperatureTolerance !== undefined && (!Number.isFinite(options.temperatureTolerance) || options.temperatureTolerance < 0)) throw new RangeError('sensor temperature tolerance must be finite and non-negative')
 	if (options.rejectionSigma !== undefined && (!Number.isFinite(options.rejectionSigma) || options.rejectionSigma <= 0)) throw new RangeError('sensor rejection sigma must be finite and positive')
 	const diagnostics: SensorDiagnostic[] = []
+	const temperatureTolerance = options.temperatureTolerance ?? DEFAULT_SENSOR_CHARACTERIZATION_OPTIONS.temperatureTolerance
 	const sets = frameSets(input)
 	const first = input.bias.frames?.[0]
 	if (!first || input.bias.frames.length < 2) {
@@ -267,7 +269,7 @@ export function characterizeSensor(input: SensorCharacterizationInput, options: 
 			structuralError = true
 		}
 		if (set.operatingPoint) {
-			if (operatingPointDiffers(operatingPointReference, set.operatingPoint)) {
+			if (operatingPointDiffers(operatingPointReference, set.operatingPoint, temperatureTolerance)) {
 				diagnostics.push({ severity: 'error', code: 'mixedOperatingPoint', message: 'A frame set contradicts the expected or previously declared sensor operating point.' })
 				structuralError = true
 			} else operatingPointReference = mergeOperatingPoint(operatingPointReference, set.operatingPoint)
@@ -297,8 +299,7 @@ export function characterizeSensor(input: SensorCharacterizationInput, options: 
 		structuralError = true
 	}
 	const temperatures = temperatureRange(sets)
-	const tolerance = options.temperatureTolerance ?? DEFAULT_SENSOR_CHARACTERIZATION_OPTIONS.temperatureTolerance
-	if (temperatures && temperatures[1] - temperatures[0] > tolerance) diagnostics.push({ severity: 'warning', code: 'temperatureDrift', message: `Recorded temperature span exceeds ${tolerance} °C.` })
+	if (temperatures && temperatures[1] - temperatures[0] > temperatureTolerance) diagnostics.push({ severity: 'warning', code: 'temperatureDrift', message: `Recorded temperature span exceeds ${temperatureTolerance} °C.` })
 
 	const offset = bayer ? cfaOffset(input, sets) : undefined
 	if (bayer && (!offset || channels !== 1 || (input.operatingPoint.binning && (input.operatingPoint.binning[0] !== 1 || input.operatingPoint.binning[1] !== 1)))) {

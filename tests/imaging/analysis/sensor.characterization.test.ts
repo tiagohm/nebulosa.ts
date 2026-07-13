@@ -120,6 +120,19 @@ test('rejects conflicting frame-set operating points when the expected field is 
 	expect(result.diagnostics.some((diagnostic) => diagnostic.code === 'mixedOperatingPoint' && diagnostic.severity === 'error')).toBeTrue()
 })
 
+test('accepts frame-set temperature drift within the configured tolerance', () => {
+	const frames = pairedFrames(100, 2)
+	const result = characterizeSensor({
+		operatingPoint: {},
+		bias: { frames, exposure: 0, operatingPoint: { temperature: -10 } },
+		flats: [{ frames: pairedFrames(200, 20), exposure: 1, operatingPoint: { temperature: -9.9 } }],
+	})
+
+	expect(result.planes).toHaveLength(1)
+	expect(result.diagnostics.some((diagnostic) => diagnostic.code === 'mixedOperatingPoint')).toBeFalse()
+	expect(result.diagnostics.some((diagnostic) => diagnostic.code === 'temperatureDrift')).toBeFalse()
+})
+
 test('rejects inconsistent Bayer offsets across CFA frame sets', () => {
 	const input: SensorCharacterizationInput = {
 		operatingPoint: {},
