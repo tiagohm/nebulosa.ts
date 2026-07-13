@@ -1,5 +1,5 @@
 import { type X2jOptions, XMLParser } from 'fast-xml-parser'
-import type { Image, ImageRawType } from '../../../imaging/model/types'
+import type { Image, ImageRawType, ImageSampleScale } from '../../../imaging/model/types'
 import type { Size } from '../../../math/numerical/geometry'
 import type { NumberArray } from '../../../math/numerical/math'
 import { deflate, inflate } from '../../compression'
@@ -521,8 +521,7 @@ function decompress(input: ArrayBuffer | Buffer | NodeJS.TypedArray, format: Xis
 	return undefined
 }
 
-// Reads an XISF image's pixel data block into a channel-interleaved buffer, handling decompression,
-// byte-unshuffling, byte-order swapping, planar/normal layout, and normalizing integers to floats in [0, 1].
+// Reads an XISF image's pixel block into interleaved normalized or digital samples.
 export class XisfImageReader {
 	readonly #buffer: Buffer
 	readonly #compressed?: Buffer
@@ -540,8 +539,8 @@ export class XisfImageReader {
 		this.#data = xisfDataView(this.#buffer, bitpix)
 	}
 
-	// Reads XISF-format image from source into RGB-interleaved array
-	async read(source: Source & Seekable, output: ImageRawType) {
+	// Reads XISF samples into an interleaved buffer using the requested sample scale.
+	async read(source: Source & Seekable, output: ImageRawType, sampleScale: ImageSampleScale = 'normalized') {
 		const { bitpix, pixelStorage, geometry, location, compression } = this.image
 
 		source.seek(location.offset)
@@ -574,7 +573,7 @@ export class XisfImageReader {
 		const data = this.#data
 		const { width, height, channels } = geometry
 		const numberOfPixels = width * height
-		const factor = bitpix > 0 ? 1 / (2 ** (8 * pixelInBytes) - 1) : 1
+		const factor = bitpix > 0 && sampleScale === 'normalized' ? 1 / (2 ** (8 * pixelInBytes) - 1) : 1
 
 		if (pixelStorage === 'Planar') {
 			for (let i = 0, p = 0; i < numberOfPixels; i++) {

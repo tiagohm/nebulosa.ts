@@ -1,9 +1,9 @@
 import { type FitsKeyword, KEYWORDS } from './headers'
 // oxfmt-ignore
-import { bitpixInBytes, bitpixKeyword, computeHduDataSize, escapeQuotedText, heightKeyword, isCommentKeyword, isCommentStyleCard, isRiceCompressedImageHeader, numberOfChannelsKeyword, numericKeyword, RICE_1_COMPRESSION_TYPE, textKeyword, uncompressedBitpixKeyword, uncompressedHeightKeyword, uncompressedNumberOfChannelsKeyword, uncompressedWidthKeyword, unescapeQuotedText, widthKeyword } from './util'
+import { bitpixInBytes, bitpixKeyword, computeHduDataSize, escapeQuotedText, heightKeyword, isCommentKeyword, isCommentStyleCard, isRiceCompressedImageHeader, numberOfChannelsKeyword, numericKeyword, RICE_1_COMPRESSION_TYPE, textKeyword, uncompressedBitpixKeyword, uncompressedHeightKeyword, uncompressedNumberOfChannelsKeyword, uncompressedScaleKeyword, uncompressedWidthKeyword, uncompressedZeroKeyword, unescapeQuotedText, widthKeyword } from './util'
 import type { Writable } from '../../../core/types'
 import { validatePositiveInteger } from '../../../core/validation'
-import type { Image, ImageRawType } from '../../../imaging/model/types'
+import type { Image, ImageRawType, ImageSampleScale } from '../../../imaging/model/types'
 import type { NumberArray } from '../../../math/numerical/math'
 import { readUntil, type Seekable, type Sink, type Source } from '../../io'
 
@@ -1044,17 +1044,20 @@ function riceBlockSizeFromHeader(header: Readonly<FitsHeader>) {
 	return Number.isFinite(fallback) && fallback > 0 ? Math.trunc(fallback) : RICE_DEFAULT_BLOCK_SIZE
 }
 
-// Converts FITS planar (channel-major) pixel data into the library's channel-interleaved image, applying
-// the BZERO/BSCALE scaling: the unsigned zero-point is added back and integer values are mapped to floats in [0, 1].
-function writePlanarToInterleaved(data: NumberArray, output: ImageRawType, header: Readonly<FitsHeader>, bitpix: BitpixOrZero, width: number, height: number, channels: number) {
+// Converts FITS planar samples to interleaved output in normalized or physical digital scale.
+function writePlanarToInterleaved(data: NumberArray, output: ImageRawType, header: Readonly<FitsHeader>, bitpix: BitpixOrZero, width: number, height: number, channels: number, sampleScale: ImageSampleScale) {
 	const numberOfPixels = width * height
-	const scale = numericKeyword(header, 'BSCALE', 1)
-	const zero = numericKeyword(header, 'BZERO', bitpix === 16 ? 32768 : bitpix === 32 ? 2147483648 : 0)
-	const factor = bitpix > 0 ? (Number.isFinite(scale) && scale !== 0 ? scale : 1) / (2 ** bitpix - 1) : 1 // Transform n-bit integer to float [0..1]
+	const normalized = sampleScale === 'normalized'
+	const defaultZero = normalized && bitpix === 16 ? 32768 : normalized && bitpix === 32 ? 2147483648 : 0
+	const scale = uncompressedScaleKeyword(header, 1)
+	const zero = uncompressedZeroKeyword(header, defaultZero)
+	const safeScale = Number.isFinite(scale) ? scale : 1
+	const safeZero = Number.isFinite(zero) ? zero : defaultZero
+	const factor = normalized && bitpix > 0 ? (safeScale === 0 ? 1 : safeScale) / (2 ** bitpix - 1) : safeScale
 
 	for (let i = 0, p = 0; i < numberOfPixels; i++) {
 		for (let c = 0, m = i; c < channels; c++, m += numberOfPixels) {
-			output[p++] = (data[m] + zero) * factor
+			output[p++] = normalized ? (data[m] + safeZero) * factor : data[m] * factor + safeZero
 		}
 	}
 }
@@ -1083,9 +1086,9 @@ export class FitsImageReader {
 		}
 	}
 
-	// Reads FITS-format image from source into RGB-interleaved array
-	async read(source: Source & Seekable, output: ImageRawType) {
-		if (this.#compressed) return await this.#readRiceCompressed(source, output)
+	// Reads FITS image samples into an interleaved buffer using the requested sample scale.
+	async read(source: Source & Seekable, output: ImageRawType, sampleScale: ImageSampleScale = 'normalized') {
+		if (this.#compressed) return await this.#readRiceCompressed(source, output, sampleScale)
 
 		source.seek(this.hdu.data.offset)
 
@@ -1103,14 +1106,14 @@ export class FitsImageReader {
 		const width = widthKeyword(header, 0)
 		const height = heightKeyword(header, 0)
 		const channels = numberOfChannelsKeyword(header, 1)
-		writePlanarToInterleaved(this.#data, output, header, bitpix, width, height, channels)
+		writePlanarToInterleaved(this.#data, output, header, bitpix, width, height, channels, sampleScale)
 
 		return true
 	}
 
 	// Reads and Rice-decompresses a tiled compressed image, reassembling tiles into the planar buffer
 	// before converting to interleaved output. Validates the tile table and heap offsets.
-	async #readRiceCompressed(source: Source & Seekable, output: ImageRawType) {
+	async #readRiceCompressed(source: Source & Seekable, output: ImageRawType, sampleScale: ImageSampleScale) {
 		const { header } = this.hdu
 		const bitpix = uncompressedBitpixKeyword(header, 0)
 		const width = uncompressedWidthKeyword(header, 0)
@@ -1213,7 +1216,7 @@ export class FitsImageReader {
 			}
 		}
 
-		writePlanarToInterleaved(data, output, header, bitpix, width, height, channels)
+		writePlanarToInterleaved(data, output, header, bitpix, width, height, channels, sampleScale)
 
 		return true
 	}

@@ -40,6 +40,53 @@ describe('read', () => {
 	}
 })
 
+test('reads integer FITS samples in digital scale without content normalization', async () => {
+	const header: FitsHeader = { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: 4, NAXIS2: 1, BSCALE: 1, BZERO: 32768 }
+	const data = Buffer.alloc(8)
+	data.writeInt16BE(-32256, 0)
+	data.writeInt16BE(-31744, 2)
+	data.writeInt16BE(0, 4)
+	data.writeInt16BE(32767, 6)
+	const image = await readImageFromFits({ header, data: { offset: 0, size: data.length } }, bufferSource(data), { sampleScale: 'digital' })
+
+	expect(image).toBeDefined()
+	expect(image!.sampleScale).toBe('digital')
+	expect(Array.from(image!.raw)).toEqual([512, 1024, 32768, 65535])
+	expect(image!.digitalRange).toEqual([0, 65535])
+	expect(image!.quantizationStep).toBe(1)
+})
+
+test('applies FITS physical scaling and standard defaults in digital scale', async () => {
+	const scaledHeader: FitsHeader = { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: 3, NAXIS2: 1, BSCALE: -0.5, BZERO: 10 }
+	const scaledData = Buffer.alloc(6)
+	scaledData.writeInt16BE(-2, 0)
+	scaledData.writeInt16BE(0, 2)
+	scaledData.writeInt16BE(2, 4)
+	const scaled = await readImageFromFits({ header: scaledHeader, data: { offset: 0, size: scaledData.length } }, bufferSource(scaledData), { sampleScale: 'digital', raw: 64 })
+
+	expect(Array.from(scaled!.raw)).toEqual([11, 10, 9])
+	expect(scaled!.digitalRange).toEqual([-16373.5, 16394])
+	expect(scaled!.quantizationStep).toBe(0.5)
+
+	const defaultHeader: FitsHeader = { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: 3, NAXIS2: 1 }
+	const defaults = await readImageFromFits({ header: defaultHeader, data: { offset: 0, size: scaledData.length } }, bufferSource(scaledData), { sampleScale: 'digital' })
+	expect(Array.from(defaults!.raw)).toEqual([-2, 0, 2])
+	expect(defaults!.digitalRange).toEqual([-32768, 32767])
+})
+
+test('preserves floating-point FITS samples in digital scale', async () => {
+	const header: FitsHeader = { SIMPLE: true, BITPIX: -32, NAXIS: 2, NAXIS1: 3, NAXIS2: 1 }
+	const data = Buffer.alloc(12)
+	data.writeFloatBE(-2.5, 0)
+	data.writeFloatBE(0.25, 4)
+	data.writeFloatBE(12.75, 8)
+	const image = await readImageFromFits({ header, data: { offset: 0, size: data.length } }, bufferSource(data), { sampleScale: 'digital' })
+
+	expect(Array.from(image!.raw)).toEqual([-2.5, 0.25, 12.75])
+	expect(image!.digitalRange).toBeUndefined()
+	expect(image!.quantizationStep).toBeUndefined()
+})
+
 describe('write', () => {
 	const buffer = Buffer.allocUnsafe(1024 * 1024 * 18)
 

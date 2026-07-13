@@ -31,6 +31,28 @@ export type ImageRawType = Float64Array | Float32Array
 // Backing typed array precision for raw pixel data (single, double precision, or based on image raw type).
 export type ImageRawPrecision = 32 | 64 | 'auto'
 
+// Scale represented by an image sample buffer.
+export type ImageSampleScale = 'normalized' | 'digital'
+
+// Options for reading an image into the normalized 0..1 processing scale.
+export interface NormalizedImageReadOptions {
+	// Caller-provided output buffer or requested floating-point precision.
+	readonly raw?: ImageRawType | ImageRawPrecision
+	// Normalized processing scale; this is the default when omitted.
+	readonly sampleScale?: 'normalized'
+}
+
+// Options for preserving source digital numbers after format-defined scaling.
+export interface DigitalImageReadOptions {
+	// Caller-provided output buffer or requested floating-point precision.
+	readonly raw?: ImageRawType | ImageRawPrecision
+	// Digital-number scale required for sensor measurements.
+	readonly sampleScale: 'digital'
+}
+
+// Discriminated image-reader options for normalized or digital samples.
+export type ImageReadOptions = NormalizedImageReadOptions | DigitalImageReadOptions
+
 // Per-format options when serializing an image.
 export interface WriteImageToFormatOptions {
 	jpeg: {
@@ -46,6 +68,16 @@ export interface Image {
 	readonly header: FitsHeader
 	readonly metadata: ImageMetadata
 	readonly raw: ImageRawType
+}
+
+// An image whose samples preserve the source digital-number scale after format scaling.
+export interface DigitalImage extends Image {
+	// Discriminant preventing normalized images from being used as digital sensor data.
+	readonly sampleScale: 'digital'
+	// Representable scaled code range, ordered from low to high when derivable.
+	readonly digitalRange?: Readonly<[number, number]>
+	// Positive spacing between adjacent integer codes after source scaling, in DN.
+	readonly quantizationStep?: number
 }
 
 // Geometry and storage metadata derived from an image's header.

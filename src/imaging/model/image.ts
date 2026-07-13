@@ -2,16 +2,19 @@ import type { PathLike } from 'fs'
 import fs, { type FileHandle } from 'fs/promises'
 import { isJpeg, Jpeg, type PixelFormat } from '../../bindings/imaging/libturbojpeg'
 import { type Bitpix, type Fits, type FitsHdu, FitsImageReader, readFits, writeFits } from '../../io/formats/fits/fits'
-import { bitpixInBytes, cfaPatternKeyword, heightKeyword, isRiceCompressedImageHeader, uncompressedBitpixKeyword, uncompressedHeightKeyword, uncompressedNumberOfChannelsKeyword, uncompressedWidthKeyword, widthKeyword } from '../../io/formats/fits/util'
+import { bitpixInBytes, cfaPatternKeyword, heightKeyword, isRiceCompressedImageHeader, uncompressedBitpixKeyword, uncompressedHeightKeyword, uncompressedNumberOfChannelsKeyword, uncompressedScaleKeyword, uncompressedWidthKeyword, uncompressedZeroKeyword, widthKeyword } from '../../io/formats/fits/util'
 import { readXisf, writeXisf, type Xisf, type XisfImage, XisfImageReader, type XisfWriteFormat } from '../../io/formats/xisf/xisf'
 import { bufferSink, bufferSource, fileHandleSource, readRemaining, readUntil, type Seekable, type Sink, type Source } from '../../io/io'
 import { clamp } from '../../math/numerical/math'
-import { DEFAULT_WRITE_IMAGE_TO_FORMAT_OPTIONS, type Image, type ImageFormat, type ImageRawPrecision, type ImageRawType, type WriteImageToFormatOptions } from './types'
+import { DEFAULT_WRITE_IMAGE_TO_FORMAT_OPTIONS, type DigitalImage, type DigitalImageReadOptions, type Image, type ImageFormat, type ImageRawPrecision, type ImageRawType, type ImageReadOptions, type ImageSampleScale, type NormalizedImageReadOptions, type WriteImageToFormatOptions } from './types'
 
 // Image input/output for the imaging model: reads FITS, XISF, and JPEG sources (auto-detected) into a
-// normalized in-memory Image whose pixels are scaled into [0, 1], and writes an Image back out to
-// JPEG, FITS, or XISF. The `raw` argument selects the backing precision (Float32 32 / Float64 64) or
-// reuses a caller-provided buffer; 'auto' picks 32-bit for 8-bit sources and 64-bit otherwise.
+// normalized in-memory Image or a DigitalImage preserving source digital numbers, and writes an Image
+// back out to JPEG, FITS, or XISF. Reader options select the sample scale and backing precision while
+// the legacy positional raw argument remains normalized for compatibility.
+
+// Accepted legacy or options-based image-reader argument.
+type ImageReadArgument = ImageRawType | ImageRawPrecision | ImageReadOptions
 
 // Predicate selecting a Rice-compressed image HDU.
 function findCompressedImageHdu(hdu: FitsHdu) {
@@ -23,8 +26,50 @@ function findUncompressedImageHdu(hdu: FitsHdu) {
 	return widthKeyword(hdu.header, 0) > 0 && heightKeyword(hdu.header, 0) > 0
 }
 
-// Reads an image from a FITS file
-export async function readImageFromFits(fits: Fits | FitsHdu, source: Source & Seekable, raw: ImageRawType | ImageRawPrecision = 'auto') {
+// Resolves legacy raw arguments and discriminated reader options.
+function resolveImageReadArgument(argument: ImageReadArgument = 'auto'): readonly [ImageRawType | ImageRawPrecision, ImageSampleScale] {
+	if (typeof argument === 'object' && !(argument instanceof Float32Array) && !(argument instanceof Float64Array)) {
+		return [argument.raw ?? 'auto', argument.sampleScale ?? 'normalized']
+	}
+
+	return [argument, 'normalized']
+}
+
+// Computes the representable physical range and code spacing for an integer FITS image.
+function fitsDigitalProperties(header: FitsHdu['header'], bitpix: Bitpix): Pick<DigitalImage, 'digitalRange' | 'quantizationStep'> {
+	if (bitpix < 0) return {}
+
+	const storedMinimum = bitpix === 8 ? 0 : -(2 ** (bitpix - 1))
+	const storedMaximum = bitpix === 8 ? 2 ** bitpix - 1 : 2 ** (bitpix - 1) - 1
+	const scaleValue = uncompressedScaleKeyword(header, 1)
+	const zeroValue = uncompressedZeroKeyword(header, 0)
+	const scale = Number.isFinite(scaleValue) ? scaleValue : 1
+	const zero = Number.isFinite(zeroValue) ? zeroValue : 0
+	const first = storedMinimum * scale + zero
+	const last = storedMaximum * scale + zero
+	const quantizationStep = Math.abs(scale)
+
+	return {
+		digitalRange: first <= last ? [first, last] : [last, first],
+		quantizationStep: quantizationStep > 0 ? quantizationStep : undefined,
+	}
+}
+
+// Computes the representable range and code spacing for an integer XISF image.
+function xisfDigitalProperties(bitpix: Bitpix): Pick<DigitalImage, 'digitalRange' | 'quantizationStep'> {
+	return bitpix > 0 ? { digitalRange: [0, 2 ** bitpix - 1], quantizationStep: 1 } : {}
+}
+
+// Reads a FITS image while preserving source digital numbers.
+export function readImageFromFits(fits: Fits | FitsHdu, source: Source & Seekable, options: DigitalImageReadOptions): Promise<DigitalImage | undefined>
+// Reads a FITS image in the normalized processing scale.
+export function readImageFromFits(fits: Fits | FitsHdu, source: Source & Seekable, options?: NormalizedImageReadOptions): Promise<Image | undefined>
+// Reads a FITS image with the legacy normalized raw-buffer argument.
+export function readImageFromFits(fits: Fits | FitsHdu, source: Source & Seekable, raw?: ImageRawType | ImageRawPrecision): Promise<Image | undefined>
+// Reads a FITS image with a runtime-selected sample scale.
+export function readImageFromFits(fits: Fits | FitsHdu, source: Source & Seekable, options: ImageReadOptions): Promise<Image | DigitalImage | undefined>
+
+export async function readImageFromFits(fits: Fits | FitsHdu, source: Source & Seekable, argument: ImageReadArgument = 'auto'): Promise<Image | DigitalImage | undefined> {
 	const hdu = 'hdus' in fits ? (fits.hdus.find(findCompressedImageHdu) ?? fits.hdus.find(findUncompressedImageHdu) ?? fits.hdus[0]) : fits
 	const { header } = hdu
 
@@ -40,17 +85,31 @@ export async function readImageFromFits(fits: Fits | FitsHdu, source: Source & S
 	const bayer = cfaPatternKeyword(header)
 
 	const reader = new FitsImageReader(hdu)
+	const resolved = resolveImageReadArgument(argument)
+	let raw = resolved[0]
+	const sampleScale = resolved[1]
 	if (raw === 'auto') raw = bitpix === 8 ? 32 : 64
 	if (typeof raw === 'number') raw = raw === 32 ? new Float32Array(pixelCount * channels) : new Float64Array(pixelCount * channels)
-	if (!(await reader.read(source, raw))) return undefined
+	if (!(await reader.read(source, raw, sampleScale))) return undefined
+
+	const metadata = { width, height, channels, pixelCount, pixelSizeInBytes, strideInBytes, stride, bitpix, bayer }
+	if (sampleScale === 'digital') return { header, raw, metadata, sampleScale, ...fitsDigitalProperties(header, bitpix) }
 
 	normalize(raw)
 
-	return { header, raw, metadata: { width, height, channels, pixelCount, pixelSizeInBytes, strideInBytes, stride, bitpix, bayer } } satisfies Image as Image
+	return { header, raw, metadata }
 }
 
-// Reads an image from a parsed XISF file or image into a normalized Image.
-export async function readImageFromXisf(xisf: Xisf | XisfImage, source: Source & Seekable, raw: ImageRawType | ImageRawPrecision = 'auto') {
+// Reads an XISF image while preserving source digital numbers.
+export function readImageFromXisf(xisf: Xisf | XisfImage, source: Source & Seekable, options: DigitalImageReadOptions): Promise<DigitalImage | undefined>
+// Reads an XISF image in the normalized processing scale.
+export function readImageFromXisf(xisf: Xisf | XisfImage, source: Source & Seekable, options?: NormalizedImageReadOptions): Promise<Image | undefined>
+// Reads an XISF image with the legacy normalized raw-buffer argument.
+export function readImageFromXisf(xisf: Xisf | XisfImage, source: Source & Seekable, raw?: ImageRawType | ImageRawPrecision): Promise<Image | undefined>
+// Reads an XISF image with a runtime-selected sample scale.
+export function readImageFromXisf(xisf: Xisf | XisfImage, source: Source & Seekable, options: ImageReadOptions): Promise<Image | DigitalImage | undefined>
+
+export async function readImageFromXisf(xisf: Xisf | XisfImage, source: Source & Seekable, argument: ImageReadArgument = 'auto'): Promise<Image | DigitalImage | undefined> {
 	const image = 'images' in xisf ? xisf.images[0] : xisf
 	const { bitpix, geometry, header } = image
 	const { width, height, channels } = geometry
@@ -62,13 +121,19 @@ export async function readImageFromXisf(xisf: Xisf | XisfImage, source: Source &
 	const bayer = cfaPatternKeyword(header)
 
 	const reader = new XisfImageReader(image)
+	const resolved = resolveImageReadArgument(argument)
+	let raw = resolved[0]
+	const sampleScale = resolved[1]
 	if (raw === 'auto') raw = bitpix === 8 ? 32 : 64
 	if (typeof raw === 'number') raw = raw === 32 ? new Float32Array(pixelCount * channels) : new Float64Array(pixelCount * channels)
-	if (!(await reader.read(source, raw))) return undefined
+	if (!(await reader.read(source, raw, sampleScale))) return undefined
+
+	const metadata = { width, height, channels, pixelCount, pixelSizeInBytes, strideInBytes, stride, bitpix, bayer }
+	if (sampleScale === 'digital') return { header, raw, metadata, sampleScale, ...xisfDigitalProperties(bitpix) }
 
 	normalize(raw)
 
-	return { header, raw, metadata: { width, height, channels, pixelCount, pixelSizeInBytes, strideInBytes, stride, bitpix, bayer } } satisfies Image as Image
+	return { header, raw, metadata }
 }
 
 // Decodes a JPEG buffer into a single-channel (luminance) normalized Image, or undefined if not JPEG.
@@ -94,17 +159,26 @@ export function readImageFromJpeg(buffer: Buffer, raw: ImageRawType | ImageRawPr
 	return { header, raw, metadata: { width, height, channels: 1, pixelCount, pixelSizeInBytes: 1, strideInBytes: width, stride: width, bitpix: 8, bayer: undefined } }
 }
 
-// Reads an image from a seekable source, auto-detecting FITS, then XISF, then JPEG.
-export async function readImageFromSource(source: Source & Seekable, raw: ImageRawType | ImageRawPrecision = 'auto') {
+// Reads a FITS or XISF source while preserving source digital numbers.
+export function readImageFromSource(source: Source & Seekable, options: DigitalImageReadOptions): Promise<DigitalImage | undefined>
+// Reads an auto-detected source in the normalized processing scale.
+export function readImageFromSource(source: Source & Seekable, options?: NormalizedImageReadOptions): Promise<Image | undefined>
+// Reads an auto-detected source with the legacy normalized raw-buffer argument.
+export function readImageFromSource(source: Source & Seekable, raw?: ImageRawType | ImageRawPrecision): Promise<Image | undefined>
+// Reads an auto-detected source with a runtime-selected sample scale.
+export function readImageFromSource(source: Source & Seekable, options: ImageReadOptions): Promise<Image | DigitalImage | undefined>
+
+export async function readImageFromSource(source: Source & Seekable, argument: ImageReadArgument = 'auto'): Promise<Image | DigitalImage | undefined> {
 	const { position } = source
+	const [, sampleScale] = resolveImageReadArgument(argument)
 
 	const fits = await readFits(source)
-	if (fits) return await readImageFromFits(fits, source, raw)
+	if (fits) return await readImageFromFits(fits, source, argument as ImageReadOptions)
 
 	source.seek(position)
 
 	const xisf = await readXisf(source)
-	if (xisf) return await readImageFromXisf(xisf, source, raw)
+	if (xisf) return await readImageFromXisf(xisf, source, argument as ImageReadOptions)
 
 	source.seek(position)
 
@@ -113,24 +187,47 @@ export async function readImageFromSource(source: Source & Seekable, raw: ImageR
 
 	source.seek(position)
 
+	if (sampleScale === 'digital') return undefined
+	const [raw] = resolveImageReadArgument(argument)
 	return readImageFromJpeg(await readRemaining(source), raw)
 }
 
-// Reads an image from an in-memory buffer.
-export async function readImageFromBuffer(buffer: Buffer, raw: ImageRawType | ImageRawPrecision = 'auto') {
-	return await readImageFromSource(bufferSource(buffer), raw)
+// Reads a buffer while preserving FITS or XISF source digital numbers.
+export function readImageFromBuffer(buffer: Buffer, options: DigitalImageReadOptions): Promise<DigitalImage | undefined>
+// Reads a buffer in the normalized processing scale.
+export function readImageFromBuffer(buffer: Buffer, options?: NormalizedImageReadOptions): Promise<Image | undefined>
+// Reads a buffer with the legacy normalized raw-buffer argument.
+export function readImageFromBuffer(buffer: Buffer, raw?: ImageRawType | ImageRawPrecision): Promise<Image | undefined>
+// Reads a buffer with a runtime-selected sample scale.
+export function readImageFromBuffer(buffer: Buffer, options: ImageReadOptions): Promise<Image | DigitalImage | undefined>
+export async function readImageFromBuffer(buffer: Buffer, argument: ImageReadArgument = 'auto'): Promise<Image | DigitalImage | undefined> {
+	return await readImageFromSource(bufferSource(buffer), argument as ImageReadOptions)
 }
 
-// Reads an image from an open file handle.
-export async function readImageFromFileHandle(handle: FileHandle, raw: ImageRawType | ImageRawPrecision = 'auto') {
+// Reads a file handle while preserving FITS or XISF source digital numbers.
+export function readImageFromFileHandle(handle: FileHandle, options: DigitalImageReadOptions): Promise<DigitalImage | undefined>
+// Reads a file handle in the normalized processing scale.
+export function readImageFromFileHandle(handle: FileHandle, options?: NormalizedImageReadOptions): Promise<Image | undefined>
+// Reads a file handle with the legacy normalized raw-buffer argument.
+export function readImageFromFileHandle(handle: FileHandle, raw?: ImageRawType | ImageRawPrecision): Promise<Image | undefined>
+// Reads a file handle with a runtime-selected sample scale.
+export function readImageFromFileHandle(handle: FileHandle, options: ImageReadOptions): Promise<Image | DigitalImage | undefined>
+export async function readImageFromFileHandle(handle: FileHandle, argument: ImageReadArgument = 'auto'): Promise<Image | DigitalImage | undefined> {
 	await using source = fileHandleSource(handle)
-	return await readImageFromSource(source, raw)
+	return await readImageFromSource(source, argument as ImageReadOptions)
 }
 
-// Opens a file path and reads an image from it.
-export async function readImageFromPath(path: PathLike, raw: ImageRawType | ImageRawPrecision = 'auto') {
+// Reads a FITS or XISF path while preserving source digital numbers.
+export function readImageFromPath(path: PathLike, options: DigitalImageReadOptions): Promise<DigitalImage | undefined>
+// Reads a path in the normalized processing scale.
+export function readImageFromPath(path: PathLike, options?: NormalizedImageReadOptions): Promise<Image | undefined>
+// Reads a path with the legacy normalized raw-buffer argument.
+export function readImageFromPath(path: PathLike, raw?: ImageRawType | ImageRawPrecision): Promise<Image | undefined>
+// Reads a path with a runtime-selected sample scale.
+export function readImageFromPath(path: PathLike, options: ImageReadOptions): Promise<Image | DigitalImage | undefined>
+export async function readImageFromPath(path: PathLike, argument: ImageReadArgument = 'auto'): Promise<Image | DigitalImage | undefined> {
 	await using handle = await fs.open(path, 'r')
-	return await readImageFromFileHandle(handle, raw)
+	return await readImageFromFileHandle(handle, argument as ImageReadOptions)
 }
 
 // Encodes an Image to an in-memory format buffer (currently JPEG); returns undefined for other formats.

@@ -95,6 +95,61 @@ describe('read', () => {
 	}
 })
 
+test('reads integer XISF samples in digital scale', async () => {
+	const data = Buffer.alloc(8)
+	data.writeUInt16LE(512, 0)
+	data.writeUInt16LE(1024, 2)
+	data.writeUInt16LE(32768, 4)
+	data.writeUInt16LE(65535, 6)
+	const image = await readImageFromXisf(
+		{
+			byteOrder: 'little',
+			colorSpace: 'Gray',
+			imageType: 'Bias',
+			pixelStorage: 'Normal',
+			sampleFormat: 'UInt16',
+			header: { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: 4, NAXIS2: 1 },
+			location: { offset: 0, size: data.length },
+			geometry: { width: 4, height: 1, channels: 1 },
+			bitpix: 16,
+		},
+		bufferSource(data),
+		{ sampleScale: 'digital' },
+	)
+
+	expect(image).toBeDefined()
+	expect(image!.sampleScale).toBe('digital')
+	expect(Array.from(image!.raw)).toEqual([512, 1024, 32768, 65535])
+	expect(image!.digitalRange).toEqual([0, 65535])
+	expect(image!.quantizationStep).toBe(1)
+})
+
+test('preserves floating-point XISF samples in digital scale', async () => {
+	const data = Buffer.alloc(12)
+	data.writeFloatLE(-2.5, 0)
+	data.writeFloatLE(0.25, 4)
+	data.writeFloatLE(12.75, 8)
+	const image = await readImageFromXisf(
+		{
+			byteOrder: 'little',
+			colorSpace: 'Gray',
+			imageType: 'Bias',
+			pixelStorage: 'Normal',
+			sampleFormat: 'Float32',
+			header: { SIMPLE: true, BITPIX: -32, NAXIS: 2, NAXIS1: 3, NAXIS2: 1 },
+			location: { offset: 0, size: data.length },
+			geometry: { width: 3, height: 1, channels: 1 },
+			bitpix: -32,
+		},
+		bufferSource(data),
+		{ sampleScale: 'digital' },
+	)
+
+	expect(Array.from(image!.raw)).toEqual([-2.5, 0.25, 12.75])
+	expect(image!.digitalRange).toBeUndefined()
+	expect(image!.quantizationStep).toBeUndefined()
+})
+
 describe('read compressed', () => {
 	for (const format of COMPRESSION_FORMATS) {
 		test(format, async () => {
