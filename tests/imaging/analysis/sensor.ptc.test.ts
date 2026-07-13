@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { characterizeSensorTemporal } from '../../../src/imaging/analysis/sensor.ptc'
+import { characterizeSensorTemporal, fitPhotonTransferGain, type PhotonTransferPoint } from '../../../src/imaging/analysis/sensor.ptc'
 import type { SensorFlatFrameSet, SensorFrameSet } from '../../../src/imaging/analysis/sensor.types'
 import type { DigitalImage } from '../../../src/imaging/model/types'
 
@@ -64,4 +64,23 @@ test('marks nonpositive and clipped PTC levels instead of fitting them', () => {
 	expect(result.gain).toBeUndefined()
 	expect(result.photonTransfer[0].fitRejectionReasons).toContain('nonPositiveSignal')
 	expect(result.photonTransfer[1].fitRejectionReasons).toContain('clipped')
+})
+
+test('returns annotated points without gain when selected signals are duplicated', () => {
+	const points: PhotonTransferPoint[] = [1, 2].map((variance, level) => ({
+		level,
+		exposure: level + 1,
+		signal: 100,
+		variance,
+		darkMean: 10,
+		darkVariance: 1,
+		clippedFraction: 0,
+		pairCount: 1,
+		valid: true,
+		selectedForGainFit: false,
+		fitRejectionReasons: [],
+	}))
+	const [annotated, gain] = fitPhotonTransferGain(points, [0, 1])
+	expect(gain).toBeUndefined()
+	expect(annotated.every((point) => point.selectedForGainFit)).toBeTrue()
 })

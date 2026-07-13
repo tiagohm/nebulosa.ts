@@ -187,6 +187,7 @@ export function fitPhotonTransferGain(points: readonly PhotonTransferPoint[], ra
 		at++
 	}
 
+	if (selectedMinimum === selectedMaximum) return [annotated, undefined]
 	const regression = weightedLinearRegression(x, y, weights)
 	if (!(regression.slope > 0) || !Number.isFinite(regression.slope) || !Number.isFinite(regression.intercept)) return [annotated, undefined]
 	const score = weightedLinearRegressionScore(regression, x, y, weights)
