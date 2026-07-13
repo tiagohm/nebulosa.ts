@@ -198,6 +198,8 @@ const DEFAULT_WRITE_XISF_FORMAT: Required<XisfWriteFormat> = { byteOrder: 'littl
 // fragments, and the encoded data block.
 interface XisfWriteEntry {
 	readonly bitpix: Bitpix
+	// Scale represented by the encoded samples, used to emit compatible floating-point bounds.
+	readonly sampleScale: ImageSampleScale
 	readonly width: number
 	readonly height: number
 	readonly channels: number
@@ -323,15 +325,16 @@ export async function writeXisf(sink: Sink, images: readonly Readonly<Pick<Image
 		}
 
 		const writer = new XisfImageWriter({ byteOrder: options.byteOrder, pixelStorage: options.pixelStorage, bitpix, geometry: { width, height, channels } }, options.compression)
-		const encoded = await writer.encode(image.raw, image.sampleScale ?? 'normalized')
-		entries.push({ bitpix, width, height, channels, sampleFormat, colorSpace, fitsKeywords, encoded })
+		const sampleScale = image.sampleScale ?? 'normalized'
+		const encoded = await writer.encode(image.raw, sampleScale)
+		entries.push({ bitpix, sampleScale, width, height, channels, sampleFormat, colorSpace, fitsKeywords, encoded })
 	}
 
 	const buildHeader = (offset: number) => {
 		let xml = '<?xml version="1.0" encoding="UTF-8"?>\n<xisf version="1.0">'
 
 		for (const entry of entries) {
-			const bounds = entry.bitpix === -64 || entry.bitpix === -32 ? ' bounds="0:1"' : ''
+			const bounds = entry.sampleScale === 'normalized' && (entry.bitpix === -64 || entry.bitpix === -32) ? ' bounds="0:1"' : ''
 			const byteOrder = entry.bitpix === 8 ? '' : ` byteOrder="${options.byteOrder}"`
 			const compression = entry.encoded.compression ? ` compression="${formatCompression(entry.encoded.compression)}"` : ''
 			xml += `<Image geometry="${entry.width}:${entry.height}:${entry.channels}" sampleFormat="${entry.sampleFormat}" colorSpace="${entry.colorSpace}" location="attachment:${offset}:${entry.encoded.data.byteLength}" pixelStorage="${options.pixelStorage}"${byteOrder}${bounds}${compression}>`
