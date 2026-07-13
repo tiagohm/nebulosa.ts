@@ -67,7 +67,6 @@ function compatibleOperatingPoints(first: SensorOperatingPoint, second: SensorOp
 	return (
 		sameScalar(first.camera, second.camera) &&
 		sameScalar(first.offset, second.offset) &&
-		(first.temperature === undefined) === (second.temperature === undefined) &&
 		sameScalar(first.readoutMode, second.readoutMode) &&
 		sameScalar(first.bitDepth, second.bitDepth) &&
 		samePair(first.binning, second.binning) &&
@@ -135,8 +134,11 @@ export function characterizeSensorSeries(profiles: readonly SensorCharacterizati
 	let minimumTemperature = Number.POSITIVE_INFINITY
 	let maximumTemperature = Number.NEGATIVE_INFINITY
 	let validTemperatures = true
+	let profilesWithTemperature = 0
 	for (const profile of ordered) {
 		const temperature = profile.operatingPoint.temperature
+		const temperatures = profile.acquisition.temperatures
+		if (temperature !== undefined || temperatures !== undefined) profilesWithTemperature++
 		if (temperature !== undefined) {
 			if (!Number.isFinite(temperature)) validTemperatures = false
 			else {
@@ -144,7 +146,6 @@ export function characterizeSensorSeries(profiles: readonly SensorCharacterizati
 				maximumTemperature = Math.max(maximumTemperature, temperature)
 			}
 		}
-		const temperatures = profile.acquisition.temperatures
 		if (temperatures) {
 			if (!Number.isFinite(temperatures[0]) || !Number.isFinite(temperatures[1]) || temperatures[0] > temperatures[1]) validTemperatures = false
 			else {
@@ -153,7 +154,8 @@ export function characterizeSensorSeries(profiles: readonly SensorCharacterizati
 			}
 		}
 	}
-	const temperatureCompatible = validTemperatures && (minimumTemperature === Number.POSITIVE_INFINITY || maximumTemperature - minimumTemperature <= temperatureTolerance)
+	const temperatureCoverageCompatible = profilesWithTemperature === 0 || profilesWithTemperature === ordered.length
+	const temperatureCompatible = validTemperatures && temperatureCoverageCompatible && (minimumTemperature === Number.POSITIVE_INFINITY || maximumTemperature - minimumTemperature <= temperatureTolerance)
 	if (!temperatureCompatible || ordered.some((profile) => !compatibleOperatingPoints(reference, profile.operatingPoint) || !compatibleAcquisitions(referenceProfile.acquisition, profile.acquisition))) {
 		diagnostics.push({ severity: 'error', code: 'incompatibleProfiles', message: 'Profiles differ in camera, offset, temperature, readout mode, bit depth, binning, or ROI.' })
 		return { profiles: ordered, diagnostics }

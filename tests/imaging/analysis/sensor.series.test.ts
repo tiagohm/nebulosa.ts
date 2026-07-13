@@ -76,6 +76,14 @@ test('uses acquisition temperature spans when operating-point temperatures are a
 	expect(result.diagnostics.some((diagnostic) => diagnostic.code === 'incompatibleProfiles')).toBeTrue()
 })
 
+test('accepts matching temperatures recorded through different profile metadata', () => {
+	const acquisitionOnly = profile(0, 0.5, { temperature: undefined })
+	const operatingOnly = profile(100, 1.5)
+	const result = characterizeSensorSeries([acquisitionOnly, { ...operatingOnly, acquisition: { ...operatingOnly.acquisition, temperatures: undefined } }])
+	expect(result.unityGain?.configuredGain).toBeCloseTo(50, 12)
+	expect(result.diagnostics).toHaveLength(0)
+})
+
 test('rejects a non-monotonic measured gain curve', () => {
 	const result = characterizeSensorSeries([profile(0, 0.5), profile(50, 1.2), profile(100, 0.9)])
 	expect(result.unityGain).toBeUndefined()
