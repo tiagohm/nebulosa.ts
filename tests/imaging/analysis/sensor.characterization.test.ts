@@ -122,6 +122,30 @@ test('uses the image digital range to reject clipped flats by default', () => {
 	expect(result.diagnostics.some((diagnostic) => diagnostic.code === 'tooManySaturatedPixels' && diagnostic.level === 2)).toBeTrue()
 })
 
+test('uses the lowest frame digital maximum to reject clipped flats', () => {
+	const clipped = pairedFrames(300, 152)
+	clipped[0].raw.fill(4095)
+	clipped[1].raw.fill(4095)
+	const clippedAtLowerRange = [
+		{ ...clipped[0], digitalRange: [0, 4095] as const },
+		{ ...clipped[1], digitalRange: [0, 4095] as const },
+	] as const
+	const result = characterizeSensor(
+		{
+			operatingPoint: {},
+			bias: { frames: pairedFrames(100, 2), exposure: 0 },
+			flats: [
+				{ frames: pairedFrames(200, 52), exposure: 1 },
+				{ frames: pairedFrames(300, 102), exposure: 2 },
+				{ frames: clippedAtLowerRange, exposure: 3 },
+			],
+		},
+		{ gainRange: [0, 1] },
+	)
+
+	expect(result.planes[0].photonTransfer.find((point) => point.level === 2)?.fitRejectionReasons).toContain('clipped')
+})
+
 test('returns structural diagnostics instead of plausible results for mixed dimensions', () => {
 	const bias = pairedFrames(100, 2)
 	const invalid = { ...bias[0], metadata: { ...bias[0].metadata, width: 8, height: 1, stride: 8 } }

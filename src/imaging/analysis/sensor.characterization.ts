@@ -128,6 +128,18 @@ function frameSets(input: SensorCharacterizationInput): readonly SensorFrameSet[
 	return sets
 }
 
+// Returns the lowest finite upper digital-number bound declared by any input frame.
+function minimumDigitalMaximum(sets: readonly SensorFrameSet[]): number | undefined {
+	let maximum = Number.POSITIVE_INFINITY
+	for (const set of sets) {
+		for (const frame of set.frames) {
+			const candidate = frame.digitalRange?.[1]
+			if (candidate !== undefined && Number.isFinite(candidate)) maximum = Math.min(maximum, candidate)
+		}
+	}
+	return Number.isFinite(maximum) ? maximum : undefined
+}
+
 // Resolves and validates the inclusive-exclusive analysis ROI.
 function resolveArea(area: Readonly<Rect> | undefined, width: number, height: number): Readonly<Rect> {
 	const roi = area ?? { left: 0, top: 0, right: width, bottom: height }
@@ -317,7 +329,7 @@ export function characterizeSensor(input: SensorCharacterizationInput, options: 
 	const acquisition: SensorAcquisitionReport = { width, height, roi, biasFrames: input.bias.frames.length, flatLevels: input.flats.length, darkLevels: input.darks?.length ?? 0, temperatures }
 	if (structuralError) return { operatingPoint: operatingPointReference, planes: [], acquisition, diagnostics }
 
-	const digitalMaximum = options.digitalClip ?? first.digitalRange?.[1]
+	const digitalMaximum = options.digitalClip ?? minimumDigitalMaximum(sets)
 	const planes = options.planes ?? (bayer ? BAYER_SENSOR_PLANES : MONO_SENSOR_PLANES)
 	const results: SensorPlaneCharacterization[] = []
 	for (const plane of planes) {
