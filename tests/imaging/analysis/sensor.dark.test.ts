@@ -50,6 +50,15 @@ test('returns zero dark current when the mean is constant across exposure times'
 	expect(result.mean).toBe(0)
 })
 
+test('clamps a noise-level negative dark-current slope to zero', () => {
+	const darks: SensorFrameSet[] = [0, 10, 20].map((exposure) => ({ frames: uniformPair(100.2 - exposure * 0.01, 4), exposure }))
+
+	const result = measureSensorDarkCurrent(darks, 2)
+
+	expect(result.mean).toBe(0)
+	expect(result.meanFit.r).toBeCloseTo(-1, 12)
+})
+
 test('resolves localized amp glow from per-tile exposure slopes', () => {
 	const darks: SensorFrameSet[] = [0, 10, 20, 40].map((exposure) => {
 		const first = new Float64Array(16)
