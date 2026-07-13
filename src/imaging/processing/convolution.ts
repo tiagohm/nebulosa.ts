@@ -1,11 +1,12 @@
 import { TAU } from '../../core/constants'
+import { validateNonNegativeFinite, validatePositiveFinite, validatePositiveInteger } from '../../core/validation'
 import type { Size } from '../../math/numerical/geometry'
 import type { NumberArray } from '../../math/numerical/math'
-import type { Image, ImageRawType } from '../model/types'
+import type { Image, ImageMetadata, ImageRawType } from '../model/types'
 
 // Spatial convolution of images in place on the normalized [0, 1] raw buffer: a generic kernel
-// convolver with optional edge renormalization, kernel builders, and named filters (edge detection,
-// emboss, mean/box blur, sharpen, pyramid blur, and Gaussian blur).
+// convolver with optional edge renormalization, a raw separable dilated smoother, kernel builders,
+// and named filters (edge detection, emboss, mean/box blur, sharpen, pyramid blur, and Gaussian blur).
 
 // A convolution kernel and its normalization divisor.
 export interface ConvolutionKernel extends Readonly<Size> {
@@ -23,6 +24,22 @@ export interface ConvolutionOptions {
 	normalize: boolean
 }
 
+// A non-negative one-dimensional smoothing kernel and its positive normalization divisor.
+export interface SeparableSmoothingKernel {
+	// Kernel weights in increasing offset order; the length is odd and at least three.
+	readonly kernel: Readonly<NumberArray>
+	// Positive divisor applied independently by the horizontal and vertical passes.
+	readonly divisor: number
+}
+
+// Sampling and edge-normalization options for raw separable smoothing.
+export interface SeparableSmoothingOptions {
+	// Positive integer spacing, in pixels, between adjacent kernel taps.
+	readonly step: number
+	// Recompute each axis divisor from in-bounds weights at truncated borders.
+	readonly dynamicDivisorForEdges: boolean
+}
+
 // Options for a Gaussian blur convolution.
 export interface GaussianBlurConvolutionOptions extends ConvolutionOptions {
 	// Standard deviation of the Gaussian, in pixels.
@@ -35,6 +52,12 @@ export interface GaussianBlurConvolutionOptions extends ConvolutionOptions {
 export const DEFAULT_CONVOLUTION_OPTIONS: Readonly<ConvolutionOptions> = {
 	dynamicDivisorForEdges: true,
 	normalize: true,
+}
+
+// Default raw separable smoothing options: adjacent taps and normalized truncated borders.
+const DEFAULT_SEPARABLE_SMOOTHING_OPTIONS: Readonly<SeparableSmoothingOptions> = {
+	step: 1,
+	dynamicDivisorForEdges: true,
 }
 
 // Default Gaussian blur (sigma 1.4, 5x5 kernel).
@@ -53,6 +76,157 @@ export function convolutionKernel(kernel: Readonly<NumberArray>, width: number, 
 	divisor ??= (kernel as number[]).reduce((a, b) => a + b)
 
 	return { kernel, width, height, divisor }
+}
+
+// Validates a smoothing kernel descriptor used by the two separable passes.
+function validateSeparableSmoothingKernel(kernel: SeparableSmoothingKernel) {
+	if (kernel.kernel.length < 3 || kernel.kernel.length % 2 === 0) {
+		throw new RangeError('separable kernel length must be odd and at least 3')
+	}
+
+	for (let i = 0; i < kernel.kernel.length; i++) {
+		validateNonNegativeFinite(kernel.kernel[i])
+	}
+
+	validatePositiveFinite(kernel.divisor)
+}
+
+// Builds a validated one-dimensional smoothing kernel, inferring its positive divisor when omitted.
+export function separableSmoothingKernel(kernel: Readonly<NumberArray>, divisor?: number): SeparableSmoothingKernel {
+	if (kernel.length < 3 || kernel.length % 2 === 0) {
+		throw new RangeError('separable kernel length must be odd and at least 3')
+	}
+
+	let sum = 0
+
+	for (let i = 0; i < kernel.length; i++) {
+		const weight = kernel[i]
+		validateNonNegativeFinite(weight)
+		sum += weight
+	}
+
+	const resolvedDivisor = divisor ?? sum
+	const result = { kernel, divisor: resolvedDivisor }
+	validateSeparableSmoothingKernel(result)
+	return result
+}
+
+// Applies a dilated separable smoothing kernel from source into output via a reusable full-frame
+// intermediate buffer. Buffers must be non-overlapping, have one precision, and match metadata;
+// the returned value aliases output.
+//
+// This is intentionally separate from convolution(): expanding an a trous kernel would create a
+// sparse square kernel with side 2*radius*step+1. The generic 2D path caps sides at 99, visits every
+// inserted zero, and therefore makes work grow with the square of the dilated support. These two 1D
+// passes visit only the original taps, keeping work linear in the raw buffer length at every scale;
+// the full intermediate buffer also preserves source samples without a scale-dependent row queue.
+export function separableSmoothing(source: ImageRawType, output: ImageRawType, intermediate: ImageRawType, metadata: ImageMetadata, kernel: SeparableSmoothingKernel, options: Partial<SeparableSmoothingOptions> = DEFAULT_SEPARABLE_SMOOTHING_OPTIONS): ImageRawType {
+	validateSeparableSmoothingKernel(kernel)
+
+	const step = options.step ?? DEFAULT_SEPARABLE_SMOOTHING_OPTIONS.step
+	const dynamicDivisorForEdges = options.dynamicDivisorForEdges ?? DEFAULT_SEPARABLE_SMOOTHING_OPTIONS.dynamicDivisorForEdges
+	const radius = kernel.kernel.length >>> 1
+	const effectiveRadius = radius * step
+	validatePositiveInteger(step)
+
+	if (!Number.isFinite(effectiveRadius)) {
+		throw new RangeError('separable smoothing effective radius must be finite')
+	}
+
+	const { width, height, channels, stride, pixelCount } = metadata
+
+	if (!Number.isInteger(width) || width <= 0 || !Number.isInteger(height) || height <= 0 || !Number.isInteger(channels) || channels <= 0 || stride !== width * channels || pixelCount !== width * height) {
+		throw new RangeError('invalid image metadata for separable smoothing')
+	}
+
+	const length = stride * height
+
+	if (source.length !== length || output.length !== length || intermediate.length !== length) {
+		throw new RangeError('separable smoothing buffers must match image metadata')
+	}
+
+	if (source.BYTES_PER_ELEMENT !== output.BYTES_PER_ELEMENT || source.BYTES_PER_ELEMENT !== intermediate.BYTES_PER_ELEMENT) {
+		throw new TypeError('separable smoothing buffers must use the same precision')
+	}
+
+	if (source.buffer === output.buffer || source.buffer === intermediate.buffer || output.buffer === intermediate.buffer) {
+		throw new TypeError('separable smoothing buffers must not alias')
+	}
+
+	const weights = kernel.kernel
+
+	for (let y = 0; y < height; y++) {
+		const row = y * stride
+
+		for (let x = 0; x < width; x++) {
+			let divisor = kernel.divisor
+
+			if (dynamicDivisorForEdges) {
+				divisor = 0
+
+				for (let tap = 0; tap < weights.length; tap++) {
+					const sampleX = x + (tap - radius) * step
+					if (sampleX >= 0 && sampleX < width) divisor += weights[tap]
+				}
+
+				// A valid non-negative kernel can still have no positive in-bounds weight.
+				if (divisor === 0) divisor = kernel.divisor
+			}
+
+			const pixel = row + x * channels
+
+			for (let channel = 0; channel < channels; channel++) {
+				let sum = 0
+
+				for (let tap = 0; tap < weights.length; tap++) {
+					const sampleX = x + (tap - radius) * step
+
+					if (sampleX >= 0 && sampleX < width) {
+						sum += weights[tap] * source[row + sampleX * channels + channel]
+					}
+				}
+
+				intermediate[pixel + channel] = sum / divisor
+			}
+		}
+	}
+
+	for (let y = 0; y < height; y++) {
+		let divisor = kernel.divisor
+
+		if (dynamicDivisorForEdges) {
+			divisor = 0
+
+			for (let tap = 0; tap < weights.length; tap++) {
+				const sampleY = y + (tap - radius) * step
+				if (sampleY >= 0 && sampleY < height) divisor += weights[tap]
+			}
+
+			if (divisor === 0) divisor = kernel.divisor
+		}
+
+		const row = y * stride
+
+		for (let x = 0; x < width; x++) {
+			const pixel = row + x * channels
+
+			for (let channel = 0; channel < channels; channel++) {
+				let sum = 0
+
+				for (let tap = 0; tap < weights.length; tap++) {
+					const sampleY = y + (tap - radius) * step
+
+					if (sampleY >= 0 && sampleY < height) {
+						sum += weights[tap] * intermediate[sampleY * stride + x * channels + channel]
+					}
+				}
+
+				output[pixel + channel] = sum / divisor
+			}
+		}
+	}
+
+	return output
 }
 
 // Rotates the convolution row buffer forward by one slot.
