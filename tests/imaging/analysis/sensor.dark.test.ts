@@ -5,12 +5,12 @@ import type { DigitalImage } from '../../../src/imaging/model/types'
 
 // Synthetic dark stacks prescribe mean and variance slopes independently in digital-number units.
 
-// Wraps a 4x4 raw buffer as a digital mono image.
-function image(raw: Float64Array): DigitalImage {
+// Wraps a 4x4 raw buffer as a digital mono or CFA image.
+function image(raw: Float64Array, bayer?: 'RGGB'): DigitalImage {
 	return {
-		header: { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: 4, NAXIS2: 4 },
+		header: { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: 4, NAXIS2: 4, BAYERPAT: bayer },
 		raw,
-		metadata: { width: 4, height: 4, channels: 1, pixelCount: 16, pixelSizeInBytes: 2, strideInBytes: 8, stride: 4, bitpix: 16, bayer: undefined },
+		metadata: { width: 4, height: 4, channels: 1, pixelCount: 16, pixelSizeInBytes: 2, strideInBytes: 8, stride: 4, bitpix: 16, bayer },
 		sampleScale: 'digital',
 		digitalRange: [0, 65535],
 		quantizationStep: 1,
@@ -18,7 +18,7 @@ function image(raw: Float64Array): DigitalImage {
 }
 
 // Creates a uniform pair with exact temporal variance.
-function uniformPair(mean: number, variance: number): readonly [DigitalImage, DigitalImage] {
+function uniformPair(mean: number, variance: number, bayer?: 'RGGB'): readonly [DigitalImage, DigitalImage] {
 	const difference = Math.sqrt(2 * variance)
 	const first = new Float64Array(16)
 	const second = new Float64Array(16)
@@ -27,7 +27,7 @@ function uniformPair(mean: number, variance: number): readonly [DigitalImage, Di
 		first[i] = mean + signed / 2
 		second[i] = mean - signed / 2
 	}
-	return [image(first), image(second)]
+	return [image(first, bayer), image(second, bayer)]
 }
 
 test('recovers dark current independently from mean and temporal variance slopes', () => {
@@ -61,6 +61,19 @@ test('resolves localized amp glow from per-tile exposure slopes', () => {
 	expect(result.ampGlow?.current).toEqual(Float32Array.from([10, 40, 10, 10]))
 	expect(result.ampGlow?.median).toBe(10)
 	expect(result.ampGlow?.ratio).toBe(4)
+})
+
+test('excludes empty CFA tiles from amp-glow statistics', () => {
+	const darks: SensorFrameSet[] = [0, 10, 20, 40].map((exposure) => ({ frames: uniformPair(100 + 5 * exposure, 4, 'RGGB'), exposure }))
+	const result = measureSensorDarkCurrent(darks, 2, { plane: 'red', cfaOffset: [0, 0], tile: { width: 1, height: 1 } })
+	const ampGlow = result.ampGlow!
+
+	expect(ampGlow.median).toBeCloseTo(10, 12)
+	expect(ampGlow.maximum).toBeCloseTo(10, 12)
+	expect(ampGlow.excess).toBeCloseTo(0, 12)
+	expect(ampGlow.ratio).toBeCloseTo(1, 12)
+	expect(ampGlow.current.filter(Number.isFinite)).toEqual(Float32Array.from([10, 10, 10, 10]))
+	expect(ampGlow.current.filter(Number.isNaN)).toHaveLength(12)
 })
 
 test('requires three distinct dark exposure times', () => {

@@ -19,7 +19,7 @@ export interface SensorAmpGlow {
 	readonly columns: number
 	// Number of tile rows.
 	readonly rows: number
-	// Dark-current slope for each row-major tile, electrons/pixel/second.
+	// Dark-current slope for each row-major tile, electrons/pixel/second; NaN marks an empty or unfittable tile.
 	readonly current: Float32Array
 	// Median tile current, electrons/pixel/second.
 	readonly median: number
@@ -148,22 +148,29 @@ function measureAmpGlow(darks: readonly SensorFrameSet[], conversionGain: number
 	}
 
 	const current = new Float32Array(tileCount)
+	current.fill(Number.NaN)
 	const sorted = new Float64Array(tileCount)
 	let maximum = Number.NEGATIVE_INFINITY
+	let validCount = 0
 	for (let tile = 0; tile < tileCount; tile++) {
-		for (let level = 0; level < levels.length; level++) y[level] = means[level][tile]
-		let value = 0
+		let valid = true
+		for (let level = 0; level < levels.length; level++) {
+			y[level] = means[level][tile]
+			valid &&= Number.isFinite(y[level])
+		}
+		if (!valid) continue
 		try {
 			const regression = weightedLinearRegression(x, y, weights)
-			value = Math.max(0, regression.slope * conversionGain)
+			const value = Math.max(0, regression.slope * conversionGain)
+			current[tile] = value
+			sorted[validCount++] = value
+			maximum = Math.max(maximum, value)
 		} catch {
-			value = 0
+			continue
 		}
-		current[tile] = value
-		sorted[tile] = value
-		maximum = Math.max(maximum, value)
 	}
-	const median = medianOf(sorted.sort())
+	if (validCount === 0) return undefined
+	const median = medianOf(sorted.subarray(0, validCount).sort())
 	const excess = maximum - median
 	return { tileWidth, tileHeight, columns, rows, current, median, maximum, excess, ratio: median > 0 ? maximum / median : undefined }
 }
