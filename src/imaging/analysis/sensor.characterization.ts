@@ -307,7 +307,7 @@ export function characterizeSensor(input: SensorCharacterizationInput, options: 
 		structuralError = true
 	}
 	const acquisition: SensorAcquisitionReport = { width, height, roi, biasFrames: input.bias.frames.length, flatLevels: input.flats.length, darkLevels: input.darks?.length ?? 0, temperatures }
-	if (structuralError) return { operatingPoint: input.operatingPoint, planes: [], acquisition, diagnostics }
+	if (structuralError) return { operatingPoint: operatingPointReference, planes: [], acquisition, diagnostics }
 
 	const planes = options.planes ?? (bayer ? BAYER_SENSOR_PLANES : MONO_SENSOR_PLANES)
 	const results: SensorPlaneCharacterization[] = []
@@ -367,5 +367,5 @@ export function characterizeSensor(input: SensorCharacterizationInput, options: 
 		}
 	}
 
-	return { operatingPoint: input.operatingPoint, planes: results, acquisition, diagnostics }
+	return { operatingPoint: operatingPointReference, planes: results, acquisition, diagnostics }
 }

@@ -120,6 +120,25 @@ test('rejects conflicting frame-set operating points when the expected field is 
 	expect(result.diagnostics.some((diagnostic) => diagnostic.code === 'mixedOperatingPoint' && diagnostic.severity === 'error')).toBeTrue()
 })
 
+test('returns operating-point metadata accumulated from frame sets', () => {
+	const frames = pairedFrames(100, 2)
+	const successful = characterizeSensor({
+		operatingPoint: {},
+		bias: { frames, exposure: 0, operatingPoint: { gain: 100 } },
+		flats: [{ frames: pairedFrames(200, 20), exposure: 1, operatingPoint: { gain: 100 } }],
+	})
+	const invalid = { ...frames[0], metadata: { ...frames[0].metadata, width: 8, height: 1, stride: 8 } }
+	const structural = characterizeSensor({
+		operatingPoint: {},
+		bias: { frames, exposure: 0, operatingPoint: { gain: 100 } },
+		flats: [{ frames: [invalid, invalid], exposure: 1, operatingPoint: { gain: 100 } }],
+	})
+
+	expect(successful.operatingPoint.gain).toBe(100)
+	expect(structural.planes).toHaveLength(0)
+	expect(structural.operatingPoint.gain).toBe(100)
+})
+
 test('accepts frame-set temperature drift within the configured tolerance', () => {
 	const frames = pairedFrames(100, 2)
 	const result = characterizeSensor({
