@@ -309,12 +309,12 @@ export function characterizeSensor(input: SensorCharacterizationInput, options: 
 	const acquisition: SensorAcquisitionReport = { width, height, roi, biasFrames: input.bias.frames.length, flatLevels: input.flats.length, darkLevels: input.darks?.length ?? 0, temperatures }
 	if (structuralError) return { operatingPoint: operatingPointReference, planes: [], acquisition, diagnostics }
 
+	const digitalMaximum = options.digitalClip ?? first.digitalRange?.[1]
 	const planes = options.planes ?? (bayer ? BAYER_SENSOR_PLANES : MONO_SENSOR_PLANES)
 	const results: SensorPlaneCharacterization[] = []
 	for (const plane of planes) {
 		try {
-			const temporal = characterizeSensorTemporal(input.bias, input.flats, { area: roi, plane, cfaOffset: offset, digitalClip: options.digitalClip, gainRange: options.gainRange })
-			const digitalMaximum = options.digitalClip ?? first.digitalRange?.[1]
+			const temporal = characterizeSensorTemporal(input.bias, input.flats, { area: roi, plane, cfaOffset: offset, digitalClip: digitalMaximum, gainRange: options.gainRange })
 			const digitalSignalLimit = digitalMaximum !== undefined ? digitalMaximum - temporal.bias.mean : undefined
 			const saturation = detectSensorSaturation(temporal.photonTransfer, temporal.gain, digitalSignalLimit)
 			const linearityAnalysis = measureSensorLinearity(temporal.photonTransfer, input.flats, saturation, temporal.gain, options.linearityRange)
@@ -322,7 +322,7 @@ export function characterizeSensor(input: SensorCharacterizationInput, options: 
 			let darkCurrent: SensorDarkCurrent | undefined
 			if (input.darks && input.darks.length >= 3 && temporal.gain) {
 				try {
-					darkCurrent = measureSensorDarkCurrent(input.darks, temporal.gain.conversion, { area: roi, plane, cfaOffset: offset, digitalClip: options.digitalClip, tile: options.tile })
+					darkCurrent = measureSensorDarkCurrent(input.darks, temporal.gain.conversion, { area: roi, plane, cfaOffset: offset, digitalClip: digitalMaximum, tile: options.tile })
 				} catch (error) {
 					diagnostics.push({ severity: 'error', code: 'insufficientDarkLevels', message: error instanceof Error ? error.message : 'Dark-current analysis failed.', plane })
 				}
@@ -335,7 +335,7 @@ export function characterizeSensor(input: SensorCharacterizationInput, options: 
 					const spatial = measureSensorSpatial(input.spatial.dark, input.spatial.flat, temporal.gain.conversion, { area: roi, plane, cfaOffset: offset, spatialDetrend: options.spatialDetrend, maps: options.maps, spatialBuffers: options.spatialBuffers, tile: options.tile })
 					dsnu = spatial.dsnu
 					prnu = spatial.prnu
-					const measuredDefects = measureSensorDefects(input.spatial.dark, input.spatial.flat, { area: roi, plane, cfaOffset: offset, rejectionSigma: options.rejectionSigma, digitalClip: options.digitalClip, maps: options.maps, spatialBuffers: options.spatialBuffers })
+					const measuredDefects = measureSensorDefects(input.spatial.dark, input.spatial.flat, { area: roi, plane, cfaOffset: offset, rejectionSigma: options.rejectionSigma, digitalClip: digitalMaximum, maps: options.maps, spatialBuffers: options.spatialBuffers })
 					defects = measuredDefects?.mask && options.spatialBuffers?.mask ? { ...measuredDefects, mask: measuredDefects.mask.slice() } : measuredDefects
 					if (!defects) diagnostics.push({ severity: 'warning', code: 'spatialBuffersRequired', message: 'Defect counts require retained maps or caller-provided mean, variance, and mask buffers.', plane })
 				} catch (error) {
