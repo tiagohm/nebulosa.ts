@@ -306,8 +306,8 @@ function writeInterleavedToPlanar(input: ImageRawType, output: NumberArray, head
 	const numberOfPixels = width * height
 	const normalized = sampleScale === 'normalized'
 	const unsigned = usesUnsignedIntegerScaling(header, bitpix, sampleScale, digitalRange)
-	const zero = numericKeyword(header, 'BZERO', unsigned ? 2 ** (bitpix - 1) : 0)
-	const scaleValue = numericKeyword(header, 'BSCALE', 1)
+	const zero = normalized ? numericKeyword(header, 'BZERO', unsigned ? 2 ** (bitpix - 1) : 0) : uncompressedZeroKeyword(header, unsigned ? 2 ** (bitpix - 1) : 0)
+	const scaleValue = normalized ? numericKeyword(header, 'BSCALE', 1) : uncompressedScaleKeyword(header, 1)
 	const scale = Number.isFinite(scaleValue) && scaleValue !== 0 ? scaleValue : 1
 	const factor = bitpix > 0 && normalized ? (2 ** bitpix - 1) / scale : 1 / scale
 

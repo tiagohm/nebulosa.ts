@@ -221,6 +221,35 @@ test('retains the unsigned convention for digital images with an unsigned range'
 	expect(Array.from(image!.raw)).toEqual([0, 65535])
 })
 
+test('applies ZSCALE and ZZERO inversely when writing compressed digital samples', async () => {
+	const buffer = Buffer.alloc(FITS_BLOCK_SIZE * 3)
+	const header: FitsHeader = {
+		XTENSION: 'BINTABLE',
+		BITPIX: 8,
+		NAXIS: 2,
+		NAXIS1: 8,
+		NAXIS2: 1,
+		PCOUNT: 0,
+		GCOUNT: 1,
+		TFIELDS: 1,
+		TTYPE1: 'COMPRESSED_DATA',
+		TFORM1: '1PB',
+		ZIMAGE: true,
+		ZCMPTYPE: 'RICE_1',
+		ZBITPIX: 8,
+		ZNAXIS: 2,
+		ZNAXIS1: 2,
+		ZNAXIS2: 1,
+		ZSCALE: 2,
+		ZZERO: 10,
+	}
+
+	await writeFits(bufferSink(buffer), [{ header, raw: new Float64Array([12, 14]), sampleScale: 'digital', digitalRange: [10, 520] }])
+
+	const image = await readImageFromBuffer(buffer, { sampleScale: 'digital' })
+	expect(Array.from(image!.raw)).toEqual([12, 14])
+})
+
 test('read keyword', () => {
 	const reader = new FitsKeywordReader()
 	const buffer = Buffer.allocUnsafe(FITS_HEADER_CARD_SIZE * 2)
