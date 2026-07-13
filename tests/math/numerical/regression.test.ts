@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import type { NumberArray } from '../../../src/math/numerical/math'
-import { exponentialRegression, chebyshevLeastSquares, hyperbolicRegression, intersect, polynomialRegression, powerRegression, quadraticRegression, regressionScore, simpleLinearRegression, theilSenRegression, trendLineRegression } from '../../../src/math/numerical/regression'
+// oxfmt-ignore
+import { exponentialRegression, chebyshevLeastSquares, hyperbolicRegression, intersect, polynomialRegression, powerRegression, quadraticRegression, regressionScore, simpleLinearRegression, theilSenRegression, trendLineRegression, weightedLinearRegression, weightedLinearRegressionScore } from '../../../src/math/numerical/regression'
 
 function chebyshevSeries(x: number, coefficients: Readonly<NumberArray>) {
 	let previous = 1
@@ -38,6 +39,28 @@ test('simple linear stays accurate for large-x offsets', () => {
 
 	expect(regression.slope).toBeCloseTo(2, 9)
 	expect(regression.predict(1e8 + 10)).toBeCloseTo(2 * (1e8 + 10) + 5, 3)
+})
+
+test('weighted linear regression remains centered and reports parameter uncertainty', () => {
+	const x = Float64Array.from([1e12, 1e12 + 1, 1e12 + 2, 1e12 + 4])
+	const y = Float64Array.from(x, (value) => 2 * (value - 1e12) + 5)
+	const weights = Float64Array.from([1, 2, 4, 8])
+	const regression = weightedLinearRegression(x, y, weights)
+	const score = weightedLinearRegressionScore(regression, x, y, weights)
+
+	expect(regression.slope).toBeCloseTo(2, 12)
+	expect(regression.predict(1e12 + 3)).toBeCloseTo(11, 9)
+	expect(score.r2).toBeCloseTo(1, 12)
+	expect(score.rmsd).toBeCloseTo(0, 12)
+	expect(score.slopeStandardError).toBeCloseTo(0, 12)
+	expect(score.interceptStandardError).toBeCloseTo(0, 12)
+})
+
+test('weighted linear regression rejects invalid and degenerate inputs', () => {
+	expect(() => weightedLinearRegression([1], [2], [1])).toThrow()
+	expect(() => weightedLinearRegression([1, 2], [2], [1, 1])).toThrow()
+	expect(() => weightedLinearRegression([1, 2], [2, 4], [1, 0])).toThrow()
+	expect(() => weightedLinearRegression([1, 1], [2, 4], [1, 1])).toThrow()
 })
 
 // https://github.com/mljs/regression-polynomial/blob/main/src/__tests__/index.test.ts
