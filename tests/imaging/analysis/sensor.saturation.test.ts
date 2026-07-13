@@ -41,6 +41,11 @@ test('does not report a clipped first sample as an unbiased capacity measurement
 	expect(result).toEqual({ signal: 1000, capacity: 2000, index: -1, method: 'digitalRange', confidence: 0.2 })
 })
 
+test('does not backtrack from one clipped level to another clipped level', () => {
+	const result = detectSensorSaturation([point(0, 100, 50, 0.2), point(1, 200, 100, 0.1)], GAIN, 1000)
+	expect(result).toEqual({ signal: 1000, capacity: 2000, index: -1, method: 'digitalRange', confidence: 0.2 })
+})
+
 test('continues scanning after a leading clipped sample', () => {
 	const result = detectSensorSaturation([point(0, 100, 10, 0.2), point(1, 300, 20), point(2, 500, 30, 0.2)], GAIN)
 	expect(result).toEqual({ signal: 300, capacity: 600, index: 1, method: 'unclippedLevel', confidence: 0.95 })

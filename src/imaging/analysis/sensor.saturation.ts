@@ -67,7 +67,7 @@ export function detectSensorSaturation(points: readonly PhotonTransferPoint[], g
 	for (let i = 0; i < ordered.length; i++) {
 		if (ordered[i].clippedFraction <= 0) continue
 		let candidate = i - 1
-		while (candidate >= 0 && !ordered[candidate].valid) candidate--
+		while (candidate >= 0 && (!ordered[candidate].valid || ordered[candidate].clippedFraction > 0)) candidate--
 		if (candidate < 0) continue
 		const selected = ordered[candidate]
 		const result = saturation(selected, selected.signal, 'unclippedLevel', 0.95, gain)
