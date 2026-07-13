@@ -76,6 +76,11 @@ function compatibleOperatingPoints(first: SensorOperatingPoint, second: SensorOp
 	)
 }
 
+// Reports whether two profiles measured the same image dimensions and inclusive-exclusive analysis ROI.
+function compatibleAcquisitions(first: SensorCharacterization['acquisition'], second: SensorCharacterization['acquisition']): boolean {
+	return first.width === second.width && first.height === second.height && first.roi.left === second.roi.left && first.roi.top === second.roi.top && first.roi.right === second.roi.right && first.roi.bottom === second.roi.bottom
+}
+
 // Resolves an unambiguous plane shared by every profile.
 function resolveSeriesPlane(profiles: readonly SensorCharacterization[], requested: SensorPlane | undefined): SensorPlane | undefined {
 	if (requested !== undefined) return requested
@@ -125,7 +130,8 @@ export function characterizeSensorSeries(profiles: readonly SensorCharacterizati
 			return { profiles: ordered, diagnostics }
 		}
 	}
-	const reference = ordered[0].operatingPoint
+	const referenceProfile = ordered[0]
+	const reference = referenceProfile.operatingPoint
 	let minimumTemperature = Number.POSITIVE_INFINITY
 	let maximumTemperature = Number.NEGATIVE_INFINITY
 	for (const profile of ordered) {
@@ -136,7 +142,7 @@ export function characterizeSensorSeries(profiles: readonly SensorCharacterizati
 		}
 	}
 	const temperatureCompatible = minimumTemperature === Number.POSITIVE_INFINITY || (Number.isFinite(minimumTemperature) && Number.isFinite(maximumTemperature) && maximumTemperature - minimumTemperature <= temperatureTolerance)
-	if (!temperatureCompatible || ordered.some((profile) => !compatibleOperatingPoints(reference, profile.operatingPoint))) {
+	if (!temperatureCompatible || ordered.some((profile) => !compatibleOperatingPoints(reference, profile.operatingPoint) || !compatibleAcquisitions(referenceProfile.acquisition, profile.acquisition))) {
 		diagnostics.push({ severity: 'error', code: 'incompatibleProfiles', message: 'Profiles differ in camera, offset, temperature, readout mode, bit depth, binning, or ROI.' })
 		return { profiles: ordered, diagnostics }
 	}
