@@ -202,6 +202,7 @@ export function readImageFromBuffer(buffer: Buffer, options?: NormalizedImageRea
 export function readImageFromBuffer(buffer: Buffer, raw?: ImageRawType | ImageRawPrecision): Promise<Image | undefined>
 // Reads a buffer with a runtime-selected sample scale.
 export function readImageFromBuffer(buffer: Buffer, options: ImageReadOptions): Promise<Image | DigitalImage | undefined>
+
 export async function readImageFromBuffer(buffer: Buffer, argument: ImageReadArgument = 'auto'): Promise<Image | DigitalImage | undefined> {
 	return await readImageFromSource(bufferSource(buffer), argument as ImageReadOptions)
 }
@@ -214,6 +215,7 @@ export function readImageFromFileHandle(handle: FileHandle, options?: Normalized
 export function readImageFromFileHandle(handle: FileHandle, raw?: ImageRawType | ImageRawPrecision): Promise<Image | undefined>
 // Reads a file handle with a runtime-selected sample scale.
 export function readImageFromFileHandle(handle: FileHandle, options: ImageReadOptions): Promise<Image | DigitalImage | undefined>
+
 export async function readImageFromFileHandle(handle: FileHandle, argument: ImageReadArgument = 'auto'): Promise<Image | DigitalImage | undefined> {
 	await using source = fileHandleSource(handle)
 	return await readImageFromSource(source, argument as ImageReadOptions)
@@ -227,6 +229,7 @@ export function readImageFromPath(path: PathLike, options?: NormalizedImageReadO
 export function readImageFromPath(path: PathLike, raw?: ImageRawType | ImageRawPrecision): Promise<Image | undefined>
 // Reads a path with a runtime-selected sample scale.
 export function readImageFromPath(path: PathLike, options: ImageReadOptions): Promise<Image | DigitalImage | undefined>
+
 export async function readImageFromPath(path: PathLike, argument: ImageReadArgument = 'auto'): Promise<Image | DigitalImage | undefined> {
 	await using handle = await fs.open(path, 'r')
 	return await readImageFromFileHandle(handle, argument as ImageReadOptions)
@@ -234,9 +237,7 @@ export async function readImageFromPath(path: PathLike, argument: ImageReadArgum
 
 // Encodes an Image to an in-memory format buffer (currently JPEG); returns undefined for other formats.
 // Pixel values in [0, 1] are scaled to 0..255 before compression.
-export function writeImageToFormat(image: Image | DigitalImage, format: Exclude<ImageFormat, 'fits' | 'xisf'> = 'jpeg', options: Partial<WriteImageToFormatOptions> = DEFAULT_WRITE_IMAGE_TO_FORMAT_OPTIONS) {
-	if ('sampleScale' in image && image.sampleScale === 'digital') throw new TypeError('digital images cannot be written to display formats')
-
+export function writeImageToFormat(image: Image, format: Exclude<ImageFormat, 'fits' | 'xisf'> = 'jpeg', options: Partial<WriteImageToFormatOptions> = DEFAULT_WRITE_IMAGE_TO_FORMAT_OPTIONS) {
 	const { raw, metadata } = image
 	const { width, height, channels } = metadata
 
@@ -252,13 +253,13 @@ export function writeImageToFormat(image: Image | DigitalImage, format: Exclude<
 }
 
 // Writes an Image to a FITS file via a buffer or sink.
-export function writeImageToFits(image: Image | DigitalImage, output: Buffer | Sink) {
+export function writeImageToFits(image: Image, output: Buffer | Sink) {
 	if (Buffer.isBuffer(output)) output = bufferSink(output)
 	return writeFits(output, [image])
 }
 
 // Writes an Image to an XISF file via a buffer or sink.
-export function writeImageToXisf(image: Image | DigitalImage, output: Buffer | Sink, format?: XisfWriteFormat) {
+export function writeImageToXisf(image: Image, output: Buffer | Sink, format?: XisfWriteFormat) {
 	if (Buffer.isBuffer(output)) output = bufferSink(output)
 	return writeXisf(output, [image], format)
 }

@@ -1,5 +1,5 @@
 import { type X2jOptions, XMLParser } from 'fast-xml-parser'
-import type { DigitalImage, Image, ImageRawType, ImageSampleScale } from '../../../imaging/model/types'
+import type { Image, ImageRawType, ImageSampleScale } from '../../../imaging/model/types'
 import type { Size } from '../../../math/numerical/geometry'
 import type { NumberArray } from '../../../math/numerical/math'
 import { deflate, inflate } from '../../compression'
@@ -198,8 +198,6 @@ const DEFAULT_WRITE_XISF_FORMAT: Required<XisfWriteFormat> = { byteOrder: 'littl
 // fragments, and the encoded data block.
 interface XisfWriteEntry {
 	readonly bitpix: Bitpix
-	// Scale represented by the encoded samples, used to emit compatible floating-point bounds.
-	readonly sampleScale: ImageSampleScale
 	readonly width: number
 	readonly height: number
 	readonly channels: number
@@ -304,7 +302,7 @@ function escapeXml(text: string) {
 // Writes images to `sink` as a monolithic XISF file: encodes each image's data block, then builds the
 // XML header (iterating until the data offsets stabilize), and writes signature, header, and blocks.
 // Returns total bytes written.
-export async function writeXisf(sink: Sink, images: readonly Readonly<Pick<Image, 'header' | 'raw'> & Partial<Pick<DigitalImage, 'sampleScale'>>>[], format: XisfWriteFormat = DEFAULT_WRITE_XISF_FORMAT) {
+export async function writeXisf(sink: Sink, images: readonly Readonly<Pick<Image, 'header' | 'raw' | 'sampleScale'>>[], format: XisfWriteFormat = DEFAULT_WRITE_XISF_FORMAT) {
 	const options = { ...DEFAULT_WRITE_XISF_FORMAT, ...format }
 	const entries: XisfWriteEntry[] = []
 
@@ -325,16 +323,15 @@ export async function writeXisf(sink: Sink, images: readonly Readonly<Pick<Image
 		}
 
 		const writer = new XisfImageWriter({ byteOrder: options.byteOrder, pixelStorage: options.pixelStorage, bitpix, geometry: { width, height, channels } }, options.compression)
-		const sampleScale = image.sampleScale ?? 'normalized'
-		const encoded = await writer.encode(image.raw, sampleScale)
-		entries.push({ bitpix, sampleScale, width, height, channels, sampleFormat, colorSpace, fitsKeywords, encoded })
+		const encoded = await writer.encode(image.raw)
+		entries.push({ bitpix, width, height, channels, sampleFormat, colorSpace, fitsKeywords, encoded })
 	}
 
 	const buildHeader = (offset: number) => {
 		let xml = '<?xml version="1.0" encoding="UTF-8"?>\n<xisf version="1.0">'
 
 		for (const entry of entries) {
-			const bounds = entry.sampleScale === 'normalized' && (entry.bitpix === -64 || entry.bitpix === -32) ? ' bounds="0:1"' : ''
+			const bounds = entry.bitpix === -64 || entry.bitpix === -32 ? ' bounds="0:1"' : ''
 			const byteOrder = entry.bitpix === 8 ? '' : ` byteOrder="${options.byteOrder}"`
 			const compression = entry.encoded.compression ? ` compression="${formatCompression(entry.encoded.compression)}"` : ''
 			xml += `<Image geometry="${entry.width}:${entry.height}:${entry.channels}" sampleFormat="${entry.sampleFormat}" colorSpace="${entry.colorSpace}" location="attachment:${offset}:${entry.encoded.data.byteLength}" pixelStorage="${options.pixelStorage}"${byteOrder}${bounds}${compression}>`
@@ -618,12 +615,12 @@ export class XisfImageWriter {
 	}
 
 	// Encodes XISF-format image from RGB-interleaved array into a block buffer
-	async encode(input: ImageRawType, sampleScale: ImageSampleScale = 'normalized'): Promise<XisfEncodedBlock> {
+	async encode(input: ImageRawType): Promise<XisfEncodedBlock> {
 		const { bitpix, geometry, byteOrder, pixelStorage } = this.xisf
 		const { width, height, channels } = geometry
 		const pixelInBytes = bitpixInBytes(bitpix)
 		const numberOfPixels = width * height
-		const factor = bitpix > 0 && sampleScale === 'normalized' ? 2 ** bitpix - 1 : 1
+		const factor = bitpix > 0 ? 2 ** bitpix - 1 : 1 // Transform float [0..1] to n-bit integer
 		const data = this.#data
 
 		if (pixelStorage === 'Planar') {
@@ -673,8 +670,8 @@ export class XisfImageWriter {
 	}
 
 	// Writes XISF-format image from RGB-interleaved array into sink
-	async write(input: ImageRawType, sink: Sink, sampleScale: ImageSampleScale = 'normalized') {
-		const encoded = await this.encode(input, sampleScale)
+	async write(input: ImageRawType, sink: Sink) {
+		const encoded = await this.encode(input)
 		return await sink.write(encoded.data)
 	}
 }

@@ -1,9 +1,9 @@
 import { type FitsKeyword, KEYWORDS } from './headers'
 // oxfmt-ignore
-import { bitpixInBytes, bitpixKeyword, computeHduDataSize, escapeQuotedText, heightKeyword, isCommentKeyword, isCommentStyleCard, isCompressedImageHeader, isRiceCompressedImageHeader, numberOfChannelsKeyword, numericKeyword, RICE_1_COMPRESSION_TYPE, textKeyword, uncompressedBitpixKeyword, uncompressedHeightKeyword, uncompressedNumberOfChannelsKeyword, uncompressedScaleKeyword, uncompressedWidthKeyword, uncompressedZeroKeyword, unescapeQuotedText, widthKeyword } from './util'
+import { bitpixInBytes, bitpixKeyword, computeHduDataSize, escapeQuotedText, heightKeyword, isCommentKeyword, isCommentStyleCard, isRiceCompressedImageHeader, numberOfChannelsKeyword, numericKeyword, RICE_1_COMPRESSION_TYPE, textKeyword, uncompressedBitpixKeyword, uncompressedHeightKeyword, uncompressedNumberOfChannelsKeyword, uncompressedScaleKeyword, uncompressedWidthKeyword, uncompressedZeroKeyword, unescapeQuotedText, widthKeyword } from './util'
 import type { Writable } from '../../../core/types'
 import { validatePositiveInteger } from '../../../core/validation'
-import type { DigitalImage, Image, ImageRawType, ImageSampleScale } from '../../../imaging/model/types'
+import type { Image, ImageRawType, ImageSampleScale } from '../../../imaging/model/types'
 import type { NumberArray } from '../../../math/numerical/math'
 import { readUntil, type Seekable, type Sink, type Source } from '../../io'
 
@@ -241,45 +241,21 @@ const COMPRESSION_EXTENSION_EXCLUDED_KEYS = new Set([
 	'END',
 ])
 
-// Minimal image contract accepted by FITS writers, including optional digital-scale metadata.
-type FitsWritableImage = Readonly<Pick<Image, 'header' | 'raw'> & Partial<Pick<DigitalImage, 'sampleScale' | 'digitalRange'>>>
-
-// Reports whether an integer image without BZERO is known to use the conventional unsigned range.
-function usesUnsignedIntegerScaling(header: Readonly<FitsHeader>, bitpix: BitpixOrZero, sampleScale: ImageSampleScale, digitalRange?: Readonly<[number, number]>): boolean {
-	if ((bitpix !== 16 && bitpix !== 32) || header.BZERO !== undefined) return false
-	return sampleScale === 'normalized' || (digitalRange?.[0] === 0 && digitalRange[1] === 2 ** bitpix - 1)
-}
-
 // Emits the unsigned-integer BZERO/BSCALE convention keywords when an integer
 // encoding applies a nonzero zero-point that the header does not already declare.
 // writeInterleavedToPlanar stores unsigned samples as signed integers offset by
 // BZERO (32768 for 16-bit, 2147483648 for 32-bit); without these cards a
 // standards-compliant reader interprets the samples as signed and shifts every
 // pixel by the missing zero-point. Skips 8-bit and float data, which apply no
-// offset, and leaves an existing BZERO untouched (it is copied by the caller). Digital images without
-// an explicit zero point retain the FITS signed-integer convention.
-function appendUnsignedIntegerScaling(cards: FitsHeaderCard[], header: Readonly<FitsHeader>, bitpix: BitpixOrZero, sampleScale: ImageSampleScale, digitalRange?: Readonly<[number, number]>) {
-	if (!usesUnsignedIntegerScaling(header, bitpix, sampleScale, digitalRange)) return
+// offset, and leaves an existing BZERO untouched (it is copied by the caller).
+function appendUnsignedIntegerScaling(cards: FitsHeaderCard[], header: Readonly<FitsHeader>, bitpix: BitpixOrZero) {
+	if ((bitpix !== 16 && bitpix !== 32) || header.BZERO !== undefined) return
 	cards.push(['BZERO', bitpix === 16 ? 32768 : 2147483648])
 	if (header.BSCALE === undefined) cards.push(['BSCALE', 1])
 }
 
-// Emits canonical BSCALE/BZERO cards when a compressed digital source is written as a normal image.
-function appendUncompressedImageScaling(cards: FitsHeaderCard[], header: Readonly<FitsHeader>, bitpix: BitpixOrZero, sampleScale: ImageSampleScale, digitalRange?: Readonly<[number, number]>) {
-	if (sampleScale !== 'digital' || !isCompressedImageHeader(header)) {
-		appendUnsignedIntegerScaling(cards, header, bitpix, sampleScale, digitalRange)
-		return
-	}
-
-	const unsigned = usesUnsignedIntegerScaling(header, bitpix, sampleScale, digitalRange)
-	const zero = uncompressedZeroKeyword(header, unsigned ? 2 ** (bitpix - 1) : 0)
-	const scale = uncompressedScaleKeyword(header, 1)
-	if (zero !== 0) cards.push(['BZERO', zero])
-	if (scale !== 1 || zero !== 0) cards.push(['BSCALE', scale])
-}
-
 // Builds canonical image HDU cards and strips stale compressed-table keywords.
-function buildImageHeaderCards(header: Readonly<FitsHeader>, primary: boolean, sampleScale: ImageSampleScale, digitalRange?: Readonly<[number, number]>): FitsHeaderCard[] {
+function buildImageHeaderCards(header: Readonly<FitsHeader>, primary: boolean): FitsHeaderCard[] {
 	const cards: FitsHeaderCard[] = [[primary ? 'SIMPLE' : 'XTENSION', primary ? true : 'IMAGE']]
 	const bitpix = uncompressedBitpixKeyword(header, 0)
 	const width = uncompressedWidthKeyword(header, 0)
@@ -296,12 +272,10 @@ function buildImageHeaderCards(header: Readonly<FitsHeader>, primary: boolean, s
 
 	if (!primary) cards.push(['PCOUNT', 0], ['GCOUNT', 1])
 
-	const compressedSource = isCompressedImageHeader(header)
-	appendUncompressedImageScaling(cards, header, bitpix, sampleScale, digitalRange)
+	appendUnsignedIntegerScaling(cards, header, bitpix)
 
 	for (const key in header) {
 		if (COMPRESSION_EXTENSION_EXCLUDED_KEYS.has(key)) continue
-		if (compressedSource && (key === 'ZSCALE' || key === 'ZZERO' || (sampleScale === 'digital' && (key === 'BSCALE' || key === 'BZERO')))) continue
 		const value = header[key]
 		if (value !== undefined) cards.push([key, value])
 	}
@@ -318,26 +292,15 @@ function shouldUseRiceCompression(header: Readonly<FitsHeader>, compression: Fit
 // Converts the library's channel-interleaved image into FITS planar (channel-major) storage, applying
 // the inverse BZERO/BSCALE scaling: floats are mapped to the integer range and the unsigned zero-point
 // is subtracted so unsigned samples are stored as signed integers per the FITS convention.
-function writeInterleavedToPlanar(input: ImageRawType, output: NumberArray, header: Readonly<FitsHeader>, bitpix: BitpixOrZero, width: number, height: number, channels: number, sampleScale: ImageSampleScale = 'normalized', digitalRange?: Readonly<[number, number]>) {
+function writeInterleavedToPlanar(input: ImageRawType, output: NumberArray, header: Readonly<FitsHeader>, bitpix: BitpixOrZero, width: number, height: number, channels: number) {
 	const numberOfPixels = width * height
-	const normalized = sampleScale === 'normalized'
-	const unsigned = usesUnsignedIntegerScaling(header, bitpix, sampleScale, digitalRange)
-	const zero = normalized ? numericKeyword(header, 'BZERO', unsigned ? 2 ** (bitpix - 1) : 0) : uncompressedZeroKeyword(header, unsigned ? 2 ** (bitpix - 1) : 0)
-	const scaleValue = normalized ? numericKeyword(header, 'BSCALE', 1) : uncompressedScaleKeyword(header, 1)
-	const scale = Number.isFinite(scaleValue) && scaleValue !== 0 ? scaleValue : 1
-	const factor = bitpix > 0 && normalized ? (2 ** bitpix - 1) / scale : 1 / scale
+	const zero = numericKeyword(header, 'BZERO', bitpix === 16 ? 32768 : bitpix === 32 ? 2147483648 : 0)
+	const scale = numericKeyword(header, 'BSCALE', 1)
+	const factor = bitpix > 0 ? (2 ** bitpix - 1) / (Number.isFinite(scale) && scale !== 0 ? scale : 1) : 1 // Transform float [0..1] to n-bit integer
 
-	if (normalized) {
-		for (let c = 0, p = 0; c < channels; c++) {
-			for (let i = 0, m = c; i < numberOfPixels; i++, m += channels) {
-				output[p++] = input[m] * factor - zero
-			}
-		}
-	} else {
-		for (let c = 0, p = 0; c < channels; c++) {
-			for (let i = 0, m = c; i < numberOfPixels; i++, m += channels) {
-				output[p++] = (input[m] - zero) * factor
-			}
+	for (let c = 0, p = 0; c < channels; c++) {
+		for (let i = 0, m = c; i < numberOfPixels; i++, m += channels) {
+			output[p++] = input[m] * factor - zero
 		}
 	}
 }
@@ -345,7 +308,7 @@ function writeInterleavedToPlanar(input: ImageRawType, output: NumberArray, head
 // Rice-compresses an image into a BINTABLE extension: builds the per-tile compressed heap plus the
 // descriptor rows and the ZIMAGE/ZCMPTYPE/ZTILE compression keyword cards. Returns the cards and payload
 // (descriptor table followed by the compressed heap). Supports BITPIX 8/16/32 only.
-async function buildRiceCompressedImage(header: Readonly<FitsHeader>, raw: ImageRawType, options: Readonly<FitsCompressionOptions>, sampleScale: ImageSampleScale, digitalRange?: Readonly<[number, number]>) {
+async function buildRiceCompressedImage(header: Readonly<FitsHeader>, raw: ImageRawType, options: Readonly<FitsCompressionOptions>) {
 	const bitpix = uncompressedBitpixKeyword(header, 0)
 	const width = uncompressedWidthKeyword(header, 0)
 	const height = uncompressedHeightKeyword(header, 0)
@@ -364,7 +327,7 @@ async function buildRiceCompressedImage(header: Readonly<FitsHeader>, raw: Image
 
 	const ImageTypedArray = bitpix === 8 ? Uint8Array : bitpix === 16 ? Int16Array : Int32Array
 	const imageData = new ImageTypedArray(numberOfPixels * channels)
-	writeInterleavedToPlanar(raw, imageData, header, bitpix, width, height, channels, sampleScale, digitalRange)
+	writeInterleavedToPlanar(raw, imageData, header, bitpix, width, height, channels)
 
 	const rowSize = 8
 	const tilesPerChannel = Math.ceil(height / tileHeight)
@@ -435,7 +398,7 @@ async function buildRiceCompressedImage(header: Readonly<FitsHeader>, raw: Image
 		cards.push(['ZNAXIS3', channels], ['ZTILE3', 1])
 	}
 
-	appendUnsignedIntegerScaling(cards, header, bitpix, sampleScale, digitalRange)
+	appendUnsignedIntegerScaling(cards, header, bitpix)
 
 	for (const key in header) {
 		if (COMPRESSION_EXTENSION_EXCLUDED_KEYS.has(key)) continue
@@ -449,7 +412,7 @@ async function buildRiceCompressedImage(header: Readonly<FitsHeader>, raw: Image
 // Writes a sequence of image HDUs to `sink`, padding each header and data segment to FITS block
 // boundaries. The first HDU becomes the primary HDU; when compression is requested each image is written
 // as a Rice-compressed BINTABLE extension preceded once by an empty primary header.
-export async function writeFits(sink: Sink & Partial<Seekable>, hdus: readonly FitsWritableImage[], options: FitsCompressionOptions = {}) {
+export async function writeFits(sink: Sink & Partial<Seekable>, hdus: readonly Readonly<Pick<Image, 'header' | 'raw' | 'sampleScale'>>[], options: FitsCompressionOptions = {}) {
 	let buffer = Buffer.allocUnsafe(FITS_BLOCK_SIZE * 4)
 	const headerWriter = new FitsKeywordWriter()
 
@@ -477,7 +440,7 @@ export async function writeFits(sink: Sink & Partial<Seekable>, hdus: readonly F
 	let hasPrimaryHdu = false
 
 	for (const hdu of hdus) {
-		const { header, raw, sampleScale = 'normalized', digitalRange } = hdu
+		const { header, raw } = hdu
 
 		if (shouldUseRiceCompression(header, options.type)) {
 			if (!hasPrimaryHdu) {
@@ -485,7 +448,7 @@ export async function writeFits(sink: Sink & Partial<Seekable>, hdus: readonly F
 				hasPrimaryHdu = true
 			}
 
-			const { cards, payload } = await buildRiceCompressedImage(header, raw, options, sampleScale, digitalRange)
+			const { cards, payload } = await buildRiceCompressedImage(header, raw, options)
 			await writeHeader(cards)
 			await sink.write(payload)
 
@@ -494,9 +457,9 @@ export async function writeFits(sink: Sink & Partial<Seekable>, hdus: readonly F
 			continue
 		}
 
-		await writeHeader(buildImageHeaderCards(header, !hasPrimaryHdu, sampleScale, digitalRange))
+		await writeHeader(buildImageHeaderCards(header, !hasPrimaryHdu))
 		const imageWriter = new FitsImageWriter(header)
-		const offset = fillWithRemainingBytes(await imageWriter.write(raw, sink, sampleScale, digitalRange), 0, FITS_DATA_PADDING)
+		const offset = fillWithRemainingBytes(await imageWriter.write(raw, sink), 0, FITS_DATA_PADDING)
 		if (offset > 0) await sink.write(buffer, 0, offset)
 		hasPrimaryHdu = true
 	}
@@ -1092,9 +1055,17 @@ function writePlanarToInterleaved(data: NumberArray, output: ImageRawType, heade
 	const safeZero = Number.isFinite(zero) ? zero : defaultZero
 	const factor = normalized && bitpix > 0 ? (safeScale === 0 ? 1 : safeScale) / (2 ** bitpix - 1) : safeScale
 
-	for (let i = 0, p = 0; i < numberOfPixels; i++) {
-		for (let c = 0, m = i; c < channels; c++, m += numberOfPixels) {
-			output[p++] = normalized ? (data[m] + safeZero) * factor : data[m] * factor + safeZero
+	if (normalized) {
+		for (let i = 0, p = 0; i < numberOfPixels; i++) {
+			for (let c = 0, m = i; c < channels; c++, m += numberOfPixels) {
+				output[p++] = (data[m] + safeZero) * factor
+			}
+		}
+	} else {
+		for (let i = 0, p = 0; i < numberOfPixels; i++) {
+			for (let c = 0, m = i; c < channels; c++, m += numberOfPixels) {
+				output[p++] = data[m] * factor + safeZero
+			}
 		}
 	}
 }
@@ -1279,14 +1250,14 @@ export class FitsImageWriter {
 	}
 
 	// Writes FITS-format image from RGB-interleaved array into sink
-	async write(input: ImageRawType, sink: Sink, sampleScale: ImageSampleScale = 'normalized', digitalRange?: Readonly<[number, number]>) {
+	async write(input: ImageRawType, sink: Sink) {
 		const bitpix = uncompressedBitpixKeyword(this.header, 0)
 		const pixelInBytes = bitpixInBytes(bitpix)
 		const width = uncompressedWidthKeyword(this.header, 0)
 		const height = uncompressedHeightKeyword(this.header, 0)
 		const channels = uncompressedNumberOfChannelsKeyword(this.header, 1)
 
-		writeInterleavedToPlanar(input, this.#data, this.header, bitpix, width, height, channels, sampleScale, digitalRange)
+		writeInterleavedToPlanar(input, this.#data, this.header, bitpix, width, height, channels)
 
 		// little-endian to big-endian
 		if (pixelInBytes === 2) this.#buffer.swap16()

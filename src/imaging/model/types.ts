@@ -65,17 +65,26 @@ export interface WriteImageToFormatOptions {
 
 // An in-memory image: its FITS header, derived metadata, and the flat raw pixel buffer.
 export interface Image {
+	// Normalized processing scale; omitted by legacy normalized producers.
+	readonly sampleScale?: 'normalized'
+	// Source FITS-compatible header.
 	readonly header: FitsHeader
+	// Geometry and storage metadata derived from the source.
 	readonly metadata: ImageMetadata
+	// Normalized pixel buffer.
 	readonly raw: ImageRawType
 }
 
-// An image whose samples preserve the source digital-number scale after format scaling.
-export interface DigitalImage extends Image {
+// Read-only measurement image whose samples preserve source digital numbers after format scaling.
+// DigitalImage is intentionally produced only by digital reader modes for workflows such as sensor
+// characterization. It is not a writer input: serialize only a normalized Image instead.
+export interface DigitalImage extends Pick<Image, 'header' | 'metadata'> {
 	// Discriminant preventing normalized images from being used as digital sensor data.
 	readonly sampleScale: 'digital'
+	// Flat pixel buffer in physical digital-number scale.
+	readonly raw: ImageRawType
 	// Representable scaled code range, ordered from low to high when derivable.
-	readonly digitalRange?: Readonly<[number, number]>
+	readonly digitalRange?: readonly [number, number]
 	// Positive spacing between adjacent integer codes after source scaling, in DN.
 	readonly quantizationStep?: number
 }
@@ -134,7 +143,7 @@ export const DEFAULT_WRITE_IMAGE_TO_FORMAT_OPTIONS = {
 
 // Type guard: true when a value has the Image shape (header, metadata, raw).
 export function isImage(image?: object): image is Image {
-	return !!image && 'header' in image && 'metadata' in image && 'raw' in image
+	return !!image && 'header' in image && 'metadata' in image && 'raw' in image && (!('sampleScale' in image) || image.sampleScale === 'normalized')
 }
 
 // Maps a channel to its index in the raw buffer (RED/GRAY 0, GREEN 1, BLUE 2).
