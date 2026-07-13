@@ -23,6 +23,15 @@ function stack(raw: Float64Array, width: number, exposure: number = 10, bayer?: 
 	return { frames: [image(raw.slice(), width, bayer), image(raw.slice(), width, bayer)], exposure }
 }
 
+// Transposes one square row-major image while preserving non-finite samples.
+function transpose(raw: Float64Array, width: number): Float64Array {
+	const result = new Float64Array(raw.length)
+	for (let y = 0; y < width; y++) {
+		for (let x = 0; x < width; x++) result[x * width + y] = raw[y * width + x]
+	}
+	return result
+}
+
 test('recovers high-frequency DSNU without retaining full-resolution workspaces', () => {
 	const width = 32
 	const darkRaw = new Float64Array(width * width)
@@ -114,6 +123,20 @@ test('ignores isolated non-finite samples without poisoning neighboring smoothin
 	expect(Number.isNaN(result.dsnu.map![width + 1])).toBeTrue()
 	expect(Number.isNaN(mean[width + 1])).toBeTrue()
 	expect(mask[width + 1]).toBe(1)
+})
+
+test('weights finite pixels consistently across horizontal and vertical smoothing', () => {
+	const width = 32
+	const darkRaw = new Float64Array(width * width).fill(100)
+	const flatRaw = new Float64Array(width * width)
+	for (let y = 0; y < width; y++) {
+		for (let x = 0; x < width; x++) flatRaw[y * width + x] = 1100 + 3 * x + 7 * y
+	}
+	for (let x = 10; x <= 18; x++) flatRaw[14 * width + x] = Number.NaN
+	const original = measureSensorSpatial(stack(darkRaw, width), stack(flatRaw, width), 2, { maps: 'all', tile: { width, height: width } })
+	const transposed = measureSensorSpatial(stack(transpose(darkRaw, width), width), stack(transpose(flatRaw, width), width), 2, { maps: 'all', tile: { width, height: width } })
+	const center = 16 * width + 16
+	expect(original.prnu.map![center]).toBeCloseTo(transposed.prnu.map![center], 12)
 })
 
 test('marks spatial row and column profiles without finite samples as missing', () => {

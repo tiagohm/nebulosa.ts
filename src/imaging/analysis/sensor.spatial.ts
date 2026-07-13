@@ -92,6 +92,8 @@ interface SpatialWorkspace {
 	readonly variance: Float64Array
 	// Horizontal box-filter workspace.
 	readonly horizontal: Float64Array
+	// Finite-sample counts paired with the active horizontal box-filter workspace.
+	readonly horizontalCounts: Uint32Array
 	// First valid box-filter output.
 	readonly first: Float64Array
 	// Second horizontal box-filter workspace.
@@ -111,6 +113,7 @@ function createWorkspace(tileWidth: number, tileHeight: number): SpatialWorkspac
 		mean: new Float64Array(expanded),
 		variance: new Float64Array(expanded),
 		horizontal: new Float64Array((expandedWidth - 6) * expandedHeight),
+		horizontalCounts: new Uint32Array((expandedWidth - 6) * expandedHeight),
 		first: new Float64Array((expandedWidth - 6) * (expandedHeight - 6)),
 		secondHorizontal: new Float64Array((expandedWidth - 16) * (expandedHeight - 6)),
 		second: new Float64Array((expandedWidth - 16) * (expandedHeight - 16)),
@@ -149,7 +152,7 @@ function fillStackStatistics(set: SensorFrameSet, geometry: SensorPlaneGeometry,
 }
 
 // Applies a separable valid box filter while excluding non-finite samples from each window.
-function boxValid(input: Float64Array, width: number, height: number, radius: number, horizontal: Float64Array, output: Float64Array) {
+function boxValid(input: Float64Array, width: number, height: number, radius: number, horizontal: Float64Array, horizontalCounts: Uint32Array, output: Float64Array) {
 	const kernel = radius * 2 + 1
 	const outputWidth = width - radius * 2
 	const outputHeight = height - radius * 2
@@ -165,7 +168,8 @@ function boxValid(input: Float64Array, width: number, height: number, radius: nu
 				count++
 			}
 		}
-		horizontal[targetRow] = count > 0 ? sum / count : Number.NaN
+		horizontal[targetRow] = sum
+		horizontalCounts[targetRow] = count
 		for (let x = 1; x < outputWidth; x++) {
 			const removed = input[row + x - 1]
 			const added = input[row + x + kernel - 1]
@@ -177,31 +181,26 @@ function boxValid(input: Float64Array, width: number, height: number, radius: nu
 				sum += added
 				count++
 			}
-			horizontal[targetRow + x] = count > 0 ? sum / count : Number.NaN
+			horizontal[targetRow + x] = sum
+			horizontalCounts[targetRow + x] = count
 		}
 	}
 	for (let x = 0; x < outputWidth; x++) {
 		let sum = 0
 		let count = 0
 		for (let y = 0; y < kernel; y++) {
-			const value = horizontal[y * outputWidth + x]
-			if (Number.isFinite(value)) {
-				sum += value
-				count++
-			}
+			const index = y * outputWidth + x
+			sum += horizontal[index]
+			count += horizontalCounts[index]
 		}
 		output[x] = count > 0 ? sum / count : Number.NaN
 		for (let y = 1; y < outputHeight; y++) {
-			const removed = horizontal[(y - 1) * outputWidth + x]
-			const added = horizontal[(y + kernel - 1) * outputWidth + x]
-			if (Number.isFinite(removed)) {
-				sum -= removed
-				count--
-			}
-			if (Number.isFinite(added)) {
-				sum += added
-				count++
-			}
+			const removed = (y - 1) * outputWidth + x
+			const added = (y + kernel - 1) * outputWidth + x
+			sum -= horizontal[removed]
+			count -= horizontalCounts[removed]
+			sum += horizontal[added]
+			count += horizontalCounts[added]
 			output[y * outputWidth + x] = count > 0 ? sum / count : Number.NaN
 		}
 	}
@@ -272,8 +271,8 @@ function binomialValid(input: Float64Array, width: number, height: number, outpu
 function smoothTarget(workspace: SpatialWorkspace, targetWidth: number, targetHeight: number) {
 	const expandedWidth = targetWidth + 18
 	const expandedHeight = targetHeight + 18
-	boxValid(workspace.mean, expandedWidth, expandedHeight, 3, workspace.horizontal, workspace.first)
-	boxValid(workspace.first, expandedWidth - 6, expandedHeight - 6, 5, workspace.secondHorizontal, workspace.second)
+	boxValid(workspace.mean, expandedWidth, expandedHeight, 3, workspace.horizontal, workspace.horizontalCounts, workspace.first)
+	boxValid(workspace.first, expandedWidth - 6, expandedHeight - 6, 5, workspace.secondHorizontal, workspace.horizontalCounts, workspace.second)
 	binomialValid(workspace.second, targetWidth + 2, targetHeight + 2, workspace.smooth)
 }
 
