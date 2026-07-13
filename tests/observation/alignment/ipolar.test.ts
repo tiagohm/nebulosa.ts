@@ -8,8 +8,9 @@ import type { FitsHeader } from '../../../src/io/formats/fits/fits'
 import { matMulVec, matTransposeMulVec } from '../../../src/math/linear-algebra/mat3'
 import { type Vec3, vecCross, vecDot, vecNormalizeMut, vecRotateByRodrigues } from '../../../src/math/linear-algebra/vec3'
 import { type Angle, arcmin, arcsec, deg, toDeg } from '../../../src/math/units/angle'
-import { celestialPoleVector, decomposePolarError, IPolarPolarAlignment, projectGuidePoint, solveSimilarityFixedPoint } from '../../../src/observation/alignment/ipolar'
+import { decomposePolarError, IPolarPolarAlignment, projectGuidePoint, solveSimilarityFixedPoint } from '../../../src/observation/alignment/ipolar'
 import { mountAdjustmentAxes } from '../../../src/observation/alignment/polaralignment'
+import { celestialPoleVector } from '../../../src/observation/alignment/polaralignment.util'
 
 test('solve similarity fixed point', () => {
 	const transform = { a: Math.cos(deg(5)), b: Math.sin(deg(5)), tx: 12, ty: -8, mirrored: false } as const
