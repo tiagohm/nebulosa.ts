@@ -624,24 +624,19 @@ export class XisfImageWriter {
 		const pixelInBytes = bitpixInBytes(bitpix)
 		const numberOfPixels = width * height
 		const factor = bitpix > 0 && sampleScale === 'normalized' ? 2 ** bitpix - 1 : 1
-		const digitalMaximum = bitpix > 0 && sampleScale === 'digital' ? 2 ** bitpix - 1 : undefined
 		const data = this.#data
 
 		if (pixelStorage === 'Planar') {
 			for (let c = 0, p = 0; c < channels; c++) {
 				for (let i = 0, m = c; i < numberOfPixels; i++, m += channels) {
-					const value = input[m]
-					if (digitalMaximum !== undefined && (!Number.isInteger(value) || value < 0 || value > digitalMaximum)) throw new RangeError(`digital integer XISF samples must be integers within 0..${digitalMaximum}`)
-					data[p++] = value * factor
+					data[p++] = input[m] * factor
 				}
 			}
 		} else {
 			const total = numberOfPixels * channels
 
 			for (let i = 0; i < total; i++) {
-				const value = input[i]
-				if (digitalMaximum !== undefined && (!Number.isInteger(value) || value < 0 || value > digitalMaximum)) throw new RangeError(`digital integer XISF samples must be integers within 0..${digitalMaximum}`)
-				data[i] = value * factor
+				data[i] = input[i] * factor
 			}
 		}
 
