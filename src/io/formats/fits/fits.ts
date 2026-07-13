@@ -1,6 +1,6 @@
 import { type FitsKeyword, KEYWORDS } from './headers'
 // oxfmt-ignore
-import { bitpixInBytes, bitpixKeyword, computeHduDataSize, escapeQuotedText, heightKeyword, isCommentKeyword, isCommentStyleCard, isRiceCompressedImageHeader, numberOfChannelsKeyword, numericKeyword, RICE_1_COMPRESSION_TYPE, textKeyword, uncompressedBitpixKeyword, uncompressedHeightKeyword, uncompressedNumberOfChannelsKeyword, uncompressedScaleKeyword, uncompressedWidthKeyword, uncompressedZeroKeyword, unescapeQuotedText, widthKeyword } from './util'
+import { bitpixInBytes, bitpixKeyword, computeHduDataSize, escapeQuotedText, heightKeyword, isCommentKeyword, isCommentStyleCard, isCompressedImageHeader, isRiceCompressedImageHeader, numberOfChannelsKeyword, numericKeyword, RICE_1_COMPRESSION_TYPE, textKeyword, uncompressedBitpixKeyword, uncompressedHeightKeyword, uncompressedNumberOfChannelsKeyword, uncompressedScaleKeyword, uncompressedWidthKeyword, uncompressedZeroKeyword, unescapeQuotedText, widthKeyword } from './util'
 import type { Writable } from '../../../core/types'
 import { validatePositiveInteger } from '../../../core/validation'
 import type { DigitalImage, Image, ImageRawType, ImageSampleScale } from '../../../imaging/model/types'
@@ -264,6 +264,20 @@ function appendUnsignedIntegerScaling(cards: FitsHeaderCard[], header: Readonly<
 	if (header.BSCALE === undefined) cards.push(['BSCALE', 1])
 }
 
+// Emits canonical BSCALE/BZERO cards when a compressed digital source is written as a normal image.
+function appendUncompressedImageScaling(cards: FitsHeaderCard[], header: Readonly<FitsHeader>, bitpix: BitpixOrZero, sampleScale: ImageSampleScale, digitalRange?: Readonly<[number, number]>) {
+	if (sampleScale !== 'digital' || !isCompressedImageHeader(header)) {
+		appendUnsignedIntegerScaling(cards, header, bitpix, sampleScale, digitalRange)
+		return
+	}
+
+	const unsigned = usesUnsignedIntegerScaling(header, bitpix, sampleScale, digitalRange)
+	const zero = uncompressedZeroKeyword(header, unsigned ? 2 ** (bitpix - 1) : 0)
+	const scale = uncompressedScaleKeyword(header, 1)
+	if (zero !== 0) cards.push(['BZERO', zero])
+	if (scale !== 1 || zero !== 0) cards.push(['BSCALE', scale])
+}
+
 // Builds canonical image HDU cards and strips stale compressed-table keywords.
 function buildImageHeaderCards(header: Readonly<FitsHeader>, primary: boolean, sampleScale: ImageSampleScale, digitalRange?: Readonly<[number, number]>): FitsHeaderCard[] {
 	const cards: FitsHeaderCard[] = [[primary ? 'SIMPLE' : 'XTENSION', primary ? true : 'IMAGE']]
@@ -282,10 +296,12 @@ function buildImageHeaderCards(header: Readonly<FitsHeader>, primary: boolean, s
 
 	if (!primary) cards.push(['PCOUNT', 0], ['GCOUNT', 1])
 
-	appendUnsignedIntegerScaling(cards, header, bitpix, sampleScale, digitalRange)
+	const compressedSource = isCompressedImageHeader(header)
+	appendUncompressedImageScaling(cards, header, bitpix, sampleScale, digitalRange)
 
 	for (const key in header) {
 		if (COMPRESSION_EXTENSION_EXCLUDED_KEYS.has(key)) continue
+		if (compressedSource && (key === 'ZSCALE' || key === 'ZZERO' || (sampleScale === 'digital' && (key === 'BSCALE' || key === 'BZERO')))) continue
 		const value = header[key]
 		if (value !== undefined) cards.push([key, value])
 	}

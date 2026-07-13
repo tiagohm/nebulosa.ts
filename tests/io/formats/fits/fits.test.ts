@@ -74,6 +74,17 @@ test('applies FITS physical scaling and standard defaults in digital scale', asy
 	expect(defaults!.digitalRange).toEqual([-32768, 32767])
 })
 
+test('ignores stale compressed scaling keywords in uncompressed FITS headers', async () => {
+	const header: FitsHeader = { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: 1, NAXIS2: 1, BSCALE: 1, BZERO: 32768, ZSCALE: 2, ZZERO: 10 }
+	const data = Buffer.alloc(2)
+	data.writeInt16BE(0)
+
+	const image = await readImageFromFits({ header, data: { offset: 0, size: data.length } }, bufferSource(data), { sampleScale: 'digital' })
+
+	expect(Array.from(image!.raw)).toEqual([32768])
+	expect(image!.digitalRange).toEqual([0, 65535])
+})
+
 test('preserves floating-point FITS samples in digital scale', async () => {
 	const header: FitsHeader = { SIMPLE: true, BITPIX: -32, NAXIS: 2, NAXIS1: 3, NAXIS2: 1 }
 	const data = Buffer.alloc(12)
@@ -247,6 +258,35 @@ test('applies ZSCALE and ZZERO inversely when writing compressed digital samples
 	await writeFits(bufferSink(buffer), [{ header, raw: new Float64Array([12, 14]), sampleScale: 'digital', digitalRange: [10, 520] }])
 
 	const image = await readImageFromBuffer(buffer, { sampleScale: 'digital' })
+	expect(Array.from(image!.raw)).toEqual([12, 14])
+})
+
+test('translates compressed digital scaling when writing an uncompressed FITS image', async () => {
+	const buffer = Buffer.alloc(FITS_BLOCK_SIZE * 2)
+	const header: FitsHeader = {
+		XTENSION: 'BINTABLE',
+		BITPIX: 8,
+		NAXIS: 2,
+		NAXIS1: 8,
+		NAXIS2: 1,
+		ZIMAGE: true,
+		ZCMPTYPE: 'RICE_1',
+		ZBITPIX: 8,
+		ZNAXIS: 2,
+		ZNAXIS1: 2,
+		ZNAXIS2: 1,
+		ZSCALE: 2,
+		ZZERO: 10,
+	}
+
+	await writeFits(bufferSink(buffer), [{ header, raw: new Float64Array([12, 14]), sampleScale: 'digital', digitalRange: [10, 520] }], { type: false })
+
+	const fits = await readFits(bufferSource(buffer))
+	const image = await readImageFromFits(fits!, bufferSource(buffer), { sampleScale: 'digital' })
+	expect(fits!.hdus[0].header.BSCALE).toBe(2)
+	expect(fits!.hdus[0].header.BZERO).toBe(10)
+	expect(fits!.hdus[0].header.ZSCALE).toBeUndefined()
+	expect(fits!.hdus[0].header.ZZERO).toBeUndefined()
 	expect(Array.from(image!.raw)).toEqual([12, 14])
 })
 
