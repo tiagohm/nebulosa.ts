@@ -90,9 +90,11 @@ export function detectSensorSaturation(points: readonly PhotonTransferPoint[], g
 
 	let previousSlope = Number.POSITIVE_INFINITY
 	for (let i = 1; i < ordered.length; i++) {
-		const exposureIncrease = ordered[i].exposure - ordered[i - 1].exposure
-		if (!(Number.isFinite(exposureIncrease) && exposureIncrease > 0)) continue
-		const slope = (ordered[i].signal - ordered[i - 1].signal) / exposureIncrease
+		const stimulus = ordered[i].stimulus ?? ordered[i].exposure
+		const previousStimulus = ordered[i - 1].stimulus ?? ordered[i - 1].exposure
+		const stimulusIncrease = stimulus - previousStimulus
+		if (!(Number.isFinite(stimulusIncrease) && stimulusIncrease > 0)) continue
+		const slope = (ordered[i].signal - ordered[i - 1].signal) / stimulusIncrease
 		if (slope > 0 && previousSlope < Number.POSITIVE_INFINITY && slope < previousSlope * 0.25) {
 			const selected = ordered[i - 1]
 			const result = saturation(selected, selected.signal, 'response', 0.65, gain)

@@ -66,6 +66,17 @@ test('marks nonpositive and clipped PTC levels instead of fitting them', () => {
 	expect(result.photonTransfer[1].fitRejectionReasons).toContain('clipped')
 })
 
+test('records calibrated or relative flat stimulus independently from exposure', () => {
+	const bias: SensorFrameSet = { frames: pairedFrames(100, 2), exposure: 0 }
+	const flats: SensorFlatFrameSet[] = [
+		{ frames: pairedFrames(200, 20), exposure: 10, intensity: 2, photons: 500 },
+		{ frames: pairedFrames(300, 40), exposure: 10, intensity: 3 },
+	]
+	const result = characterizeSensorTemporal(bias, flats, { gainRange: [0, 1] })
+	expect(result.photonTransfer.find((point) => point.level === 0)?.stimulus).toBe(500)
+	expect(result.photonTransfer.find((point) => point.level === 1)?.stimulus).toBe(30)
+})
+
 test('returns annotated points without gain when selected signals are duplicated', () => {
 	const points: PhotonTransferPoint[] = [1, 2].map((variance, level) => ({
 		level,

@@ -5,8 +5,8 @@ import { computeSensorDynamicRange, detectSensorSaturation } from '../../../src/
 // Saturation and dynamic-range tests distinguish observed output capacity from representable range.
 
 // Creates a valid PTC point with optional clipping.
-function point(level: number, signal: number, variance: number, clippedFraction: number = 0): PhotonTransferPoint {
-	return { level, exposure: level + 1, signal, variance, darkMean: 100, darkVariance: 4, clippedFraction, pairCount: 1, valid: true, selectedForGainFit: false, fitRejectionReasons: [] }
+function point(level: number, signal: number, variance: number, clippedFraction: number = 0, exposure: number = level + 1, stimulus?: number): PhotonTransferPoint {
+	return { level, exposure, stimulus, signal, variance, darkMean: 100, darkVariance: 4, clippedFraction, pairCount: 1, valid: true, selectedForGainFit: false, fitRejectionReasons: [] }
 }
 
 // Exact 2 e-/DN conversion-gain fixture.
@@ -29,6 +29,12 @@ test('detects variance collapse and uses digital range only as low-confidence fa
 test('does not report a clipped first sample as an unbiased capacity measurement', () => {
 	const result = detectSensorSaturation([point(0, 100, 50, 0.2)], GAIN, 1000)
 	expect(result).toEqual({ signal: 1000, capacity: 2000, index: -1, method: 'digitalRange', confidence: 0.2 })
+})
+
+test('detects response compression from intensity stimulus at constant exposure', () => {
+	const result = detectSensorSaturation([point(0, 100, 10, 0, 1, 1), point(1, 200, 20, 0, 1, 2), point(2, 300, 30, 0, 1, 3), point(3, 320, 40, 0, 1, 4)], GAIN)
+	expect(result?.method).toBe('response')
+	expect(result?.signal).toBe(300)
 })
 
 test('computes practical RMS and EMVA sensitivity dynamic ranges separately', () => {

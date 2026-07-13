@@ -12,6 +12,8 @@ export interface PhotonTransferPoint {
 	readonly level: number
 	// Flat exposure duration, seconds.
 	readonly exposure: number
+	// Calibrated photons/pixel or relative exposure-intensity stimulus used for response slopes.
+	readonly stimulus?: number
 	// Dark-corrected mean signal, DN.
 	readonly signal: number
 	// Dark-corrected temporal variance, DN squared.
@@ -120,6 +122,13 @@ function commonQuantizationStep(frames: SensorFrameSet['frames']): number | unde
 	return step
 }
 
+// Resolves calibrated photons or a finite non-negative relative stimulus for one flat level.
+function flatStimulus(level: SensorFlatFrameSet): number | undefined {
+	if (level.photons !== undefined && Number.isFinite(level.photons) && level.photons > 0) return level.photons
+	const stimulus = level.exposure * (level.intensity ?? 1)
+	return Number.isFinite(stimulus) && stimulus >= 0 ? stimulus : undefined
+}
+
 // Computes digital and optionally input-referred read noise from independent dark-pair reports.
 export function measureSensorReadNoise(pairs: readonly SensorPairStatistics[], conversionGain?: number, quantizationStep?: number): SensorReadNoise {
 	if (pairs.length === 0) throw new RangeError('read-noise measurement requires at least one pair')
@@ -220,6 +229,7 @@ export function characterizeSensorTemporal(bias: SensorFrameSet, flats: readonly
 		rawPoints.push({
 			level: levelIndex,
 			exposure: level.exposure,
+			stimulus: flatStimulus(level),
 			signal,
 			variance,
 			darkMean: dark.mean,
