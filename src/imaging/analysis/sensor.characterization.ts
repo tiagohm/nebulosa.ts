@@ -1,4 +1,5 @@
 import type { Rect } from '../../math/numerical/geometry'
+import { measureSensorDarkCurrent, type SensorDarkCurrent } from './sensor.dark'
 import { measureSensorLinearity, type SensorLinearity } from './sensor.linearity'
 import { characterizeSensorTemporal, type PhotonTransferPoint, type SensorBias, type SensorGain, type SensorReadNoise } from './sensor.ptc'
 import { computeSensorDynamicRange, detectSensorSaturation, type SensorDynamicRange, type SensorSaturation } from './sensor.saturation'
@@ -29,6 +30,7 @@ export type SensorDiagnosticCode =
 	| 'sourceGradientDetected'
 	| 'tooManySaturatedPixels'
 	| 'darkCurrentMismatch'
+	| 'ampGlowDetected'
 	| 'quantizationCorrectionUnavailable'
 	| 'invalidQuantumEfficiency'
 	| 'spatialBuffersRequired'
@@ -88,6 +90,8 @@ export interface SensorPlaneCharacterization {
 	readonly responsivity?: number
 	// Electrons per incident photon when physically valid.
 	readonly quantumEfficiency?: number
+	// Dark current and optional tile-resolved amp glow.
+	readonly darkCurrent?: SensorDarkCurrent
 }
 
 // Complete characterization of one operating point.
@@ -171,6 +175,8 @@ function diagnosePlane(result: SensorPlaneCharacterization, diagnostics: SensorD
 	else if (result.linearity.error > 0.01) diagnostics.push({ severity: 'warning', code: 'poorLinearityFit', message: 'Mean absolute relative linearity error exceeds 1%.', plane })
 	if (result.readNoise.sensorElectrons === undefined) diagnostics.push({ severity: 'info', code: 'quantizationCorrectionUnavailable', message: 'Electronic read noise could not be separated from quantization.', plane })
 	if (result.responsivity !== undefined && result.quantumEfficiency === undefined) diagnostics.push({ severity: 'error', code: 'invalidQuantumEfficiency', message: 'Photon responsivity and system gain imply quantum efficiency outside 0..1.', plane })
+	if (result.darkCurrent?.variance !== undefined && Math.abs(result.darkCurrent.mean - result.darkCurrent.variance) / result.darkCurrent.mean > 0.5) diagnostics.push({ severity: 'warning', code: 'darkCurrentMismatch', message: 'Mean- and variance-derived dark currents differ by more than 50%.', plane })
+	if (result.darkCurrent?.ampGlow?.ratio !== undefined && result.darkCurrent.ampGlow.ratio > 1.5) diagnostics.push({ severity: 'warning', code: 'ampGlowDetected', message: 'Maximum tile dark current exceeds 1.5 times the median tile current.', plane })
 
 	const ordered = [...result.photonTransfer].sort((a, b) => a.level - b.level)
 	let maximum = 0
@@ -233,6 +239,7 @@ export function characterizeSensor(input: SensorCharacterizationInput, options: 
 	}
 
 	if (input.flats.length < 9) diagnostics.push({ severity: input.flats.length < 2 ? 'error' : 'warning', code: 'insufficientFlatLevels', message: 'At least nine flat levels are recommended for production gain and linearity fits.' })
+	if (input.darks && input.darks.length < 6) diagnostics.push({ severity: input.darks.length < 3 ? 'error' : 'warning', code: 'insufficientDarkLevels', message: 'At least six dark exposure levels are recommended; three distinct times are the mathematical minimum.' })
 	const temperatures = temperatureRange(sets)
 	const tolerance = options.temperatureTolerance ?? DEFAULT_SENSOR_CHARACTERIZATION_OPTIONS.temperatureTolerance
 	if (temperatures && temperatures[1] - temperatures[0] > tolerance) diagnostics.push({ severity: 'warning', code: 'temperatureDrift', message: `Recorded temperature span exceeds ${tolerance} °C.` })
@@ -255,6 +262,10 @@ export function characterizeSensor(input: SensorCharacterizationInput, options: 
 			const saturation = detectSensorSaturation(temporal.photonTransfer, temporal.gain, digitalSignalLimit)
 			const linearityAnalysis = measureSensorLinearity(temporal.photonTransfer, input.flats, saturation, temporal.gain, options.linearityRange)
 			const photonTransfer = temporal.photonTransfer.map((point) => ({ ...point, saturationFraction: saturation ? point.signal / saturation.signal : undefined }))
+			let darkCurrent: SensorDarkCurrent | undefined
+			if (input.darks && input.darks.length >= 3 && temporal.gain) {
+				darkCurrent = measureSensorDarkCurrent(input.darks, temporal.gain.conversion, { area: roi, plane, cfaOffset: offset, digitalClip: options.digitalClip, tile: options.tile })
+			}
 			const result: SensorPlaneCharacterization = {
 				plane,
 				bias: temporal.bias,
@@ -266,6 +277,7 @@ export function characterizeSensor(input: SensorCharacterizationInput, options: 
 				photonTransfer,
 				responsivity: linearityAnalysis.responsivity,
 				quantumEfficiency: linearityAnalysis.quantumEfficiency,
+				darkCurrent,
 			}
 			results.push(result)
 			diagnosePlane(result, diagnostics)

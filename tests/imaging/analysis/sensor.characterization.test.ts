@@ -37,7 +37,8 @@ test('characterizes the temporal MVP and distinguishes observable capacity from 
 		const signal = Math.min(level * 100, 700)
 		flats.push({ frames: pairedFrames(1000 + signal, 4 + signal * 0.5), darkFrames: pairedFrames(1000, 4), exposure: level })
 	}
-	const input: SensorCharacterizationInput = { operatingPoint: { gain: 100, offset: 20, size: { width: 4, height: 2 } }, bias: { frames: biasFrames, exposure: 0.001 }, flats }
+	const darks = [0, 10, 20, 30, 40, 50].map((exposure) => ({ frames: pairedFrames(1000 + 5 * exposure, 4 + 2.5 * exposure), exposure }))
+	const input: SensorCharacterizationInput = { operatingPoint: { gain: 100, offset: 20, size: { width: 4, height: 2 } }, bias: { frames: biasFrames, exposure: 0.001 }, flats, darks }
 	const result = characterizeSensor(input, { digitalClip: 1700 })
 
 	expect(result.planes).toHaveLength(1)
@@ -48,6 +49,8 @@ test('characterizes the temporal MVP and distinguishes observable capacity from 
 	expect(plane.saturation?.capacity).toBeCloseTo(1200, 10)
 	expect(plane.dynamicRange?.practical.ratio).toBeCloseTo(300, 10)
 	expect(plane.linearity?.error).toBeCloseTo(0, 10)
+	expect(plane.darkCurrent?.mean).toBeCloseTo(10, 10)
+	expect(plane.darkCurrent?.variance).toBeCloseTo(10, 10)
 	expect(plane.photonTransfer.at(-1)?.saturationFraction).toBeGreaterThan(1)
 	expect(result.diagnostics.some((diagnostic) => diagnostic.code === 'tooManySaturatedPixels')).toBeTrue()
 })
