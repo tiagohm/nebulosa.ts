@@ -9,6 +9,11 @@ function point(level: number, signal: number, variance: number, clippedFraction:
 	return { level, exposure, stimulus, signal, variance, darkMean: 100, darkVariance: 4, clippedFraction, pairCount: 1, valid: true, selectedForGainFit: false, fitRejectionReasons: [] }
 }
 
+// Marks a synthetic PTC point as unusable by saturation heuristics.
+function invalid(point: PhotonTransferPoint): PhotonTransferPoint {
+	return { ...point, valid: false }
+}
+
 // Exact 2 e-/DN conversion-gain fixture.
 const GAIN: SensorGain = { system: 0.5, conversion: 2, intercept: 0, range: [100, 400], fit: { r: 1, r2: 1, rss: 0, rmsd: 0, pointCount: 4, weighted: true } }
 
@@ -35,6 +40,16 @@ test('detects response compression from intensity stimulus at constant exposure'
 	const result = detectSensorSaturation([point(0, 100, 10, 0, 1, 1), point(1, 200, 20, 0, 1, 2), point(2, 300, 30, 0, 1, 3), point(3, 320, 40, 0, 1, 4)], GAIN)
 	expect(result?.method).toBe('response')
 	expect(result?.signal).toBe(300)
+})
+
+test('ignores invalid response-compression levels', () => {
+	const result = detectSensorSaturation([point(0, 100, 10), invalid(point(1, 200, 20)), invalid(point(2, 210, 30))], GAIN)
+	expect(result).toBeUndefined()
+})
+
+test('ignores invalid levels in the plateau tail', () => {
+	const result = detectSensorSaturation([point(0, 100, 10), point(1, 200, 20), point(2, 300, 30), invalid(point(3, 301, 40, 0, 3)), invalid(point(4, 302, 50, 0, 3))], GAIN)
+	expect(result).toBeUndefined()
 })
 
 test('computes practical RMS and EMVA sensitivity dynamic ranges separately', () => {

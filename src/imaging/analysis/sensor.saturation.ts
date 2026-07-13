@@ -63,6 +63,7 @@ function saturation(point: PhotonTransferPoint | undefined, signal: number, meth
 // Detects output saturation from clipping, PTC variance collapse, response plateau, or digital limit.
 export function detectSensorSaturation(points: readonly PhotonTransferPoint[], gain?: SensorGain, digitalSignalLimit?: number): SensorSaturation | undefined {
 	const ordered = points.toSorted((a, b) => a.level - b.level)
+	const valid = ordered.filter((point) => point.valid)
 	for (let i = 0; i < ordered.length; i++) {
 		if (ordered[i].clippedFraction <= 0) continue
 		let candidate = i - 1
@@ -89,25 +90,25 @@ export function detectSensorSaturation(points: readonly PhotonTransferPoint[], g
 	}
 
 	let previousSlope = Number.POSITIVE_INFINITY
-	for (let i = 1; i < ordered.length; i++) {
-		const stimulus = ordered[i].stimulus ?? ordered[i].exposure
-		const previousStimulus = ordered[i - 1].stimulus ?? ordered[i - 1].exposure
+	for (let i = 1; i < valid.length; i++) {
+		const stimulus = valid[i].stimulus ?? valid[i].exposure
+		const previousStimulus = valid[i - 1].stimulus ?? valid[i - 1].exposure
 		const stimulusIncrease = stimulus - previousStimulus
 		if (!(Number.isFinite(stimulusIncrease) && stimulusIncrease > 0)) continue
-		const slope = (ordered[i].signal - ordered[i - 1].signal) / stimulusIncrease
+		const slope = (valid[i].signal - valid[i - 1].signal) / stimulusIncrease
 		if (slope > 0 && previousSlope < Number.POSITIVE_INFINITY && slope < previousSlope * 0.25) {
-			const selected = ordered[i - 1]
+			const selected = valid[i - 1]
 			const result = saturation(selected, selected.signal, 'response', 0.65, gain)
 			if (result) return result
 		}
 		if (slope > 0) previousSlope = slope
 	}
 
-	if (ordered.length >= 3) {
+	if (valid.length >= 3) {
 		let maximumSignal = 0
-		for (const point of ordered) maximumSignal = Math.max(maximumSignal, point.signal)
-		const last = ordered.at(-1)!
-		const previous = ordered.at(-2)!
+		for (const point of valid) maximumSignal = Math.max(maximumSignal, point.signal)
+		const last = valid.at(-1)!
+		const previous = valid.at(-2)!
 		if (maximumSignal > 0 && Math.abs(last.signal - previous.signal) <= maximumSignal * 0.01) {
 			const result = saturation(previous, previous.signal, 'plateau', 0.5, gain)
 			if (result) return result
