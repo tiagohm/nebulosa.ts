@@ -85,6 +85,17 @@ test('ignores stale compressed scaling keywords in uncompressed FITS headers', a
 	expect(image!.digitalRange).toEqual([0, 65535])
 })
 
+test('uses physical scaling keywords for Rice-compressed integer samples', async () => {
+	const buffer = Buffer.alloc(FITS_BLOCK_SIZE * 3)
+	const header: FitsHeader = { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: 2, NAXIS2: 1, BSCALE: 1, BZERO: 32768, ZSCALE: 2, ZZERO: 10 }
+
+	await writeFits(bufferSink(buffer), [{ header, raw: new Float64Array([0, 1]) }], { type: 'RICE_1' })
+	const image = await readImageFromBuffer(buffer, { sampleScale: 'digital' })
+
+	expect(Array.from(image!.raw)).toEqual([0, 65535])
+	expect(image!.digitalRange).toEqual([0, 65535])
+})
+
 test('preserves floating-point FITS samples in digital scale', async () => {
 	const header: FitsHeader = { SIMPLE: true, BITPIX: -32, NAXIS: 2, NAXIS1: 3, NAXIS2: 1 }
 	const data = Buffer.alloc(12)

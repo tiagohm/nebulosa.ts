@@ -164,14 +164,14 @@ export function uncompressedBitpixKeyword<T extends BitpixOrZero = BitpixOrZero,
 	return numericKeyword(header, 'ZBITPIX', undefined) ?? bitpixKeyword(header, defaultValue)
 }
 
-// Physical sample multiplier for an uncompressed or tile-compressed image.
+// Physical sample multiplier for an uncompressed or supported integer tile-compressed image.
 export function uncompressedScaleKeyword<T extends number = number, D extends T | undefined = T>(header: FitsHeader, defaultValue: D) {
-	return (isCompressedImageHeader(header) ? numericKeyword(header, 'ZSCALE', undefined) : undefined) ?? numericKeyword(header, 'BSCALE', defaultValue)
+	return numericKeyword(header, 'BSCALE', defaultValue)
 }
 
-// Physical sample zero point for an uncompressed or tile-compressed image.
+// Physical sample zero point for an uncompressed or supported integer tile-compressed image.
 export function uncompressedZeroKeyword<T extends number = number, D extends T | undefined = T>(header: FitsHeader, defaultValue: D) {
-	return (isCompressedImageHeader(header) ? numericKeyword(header, 'ZZERO', undefined) : undefined) ?? numericKeyword(header, 'BZERO', defaultValue)
+	return numericKeyword(header, 'BZERO', defaultValue)
 }
 
 // True when the HDU holds a tile-compressed image (ZIMAGE = T).
