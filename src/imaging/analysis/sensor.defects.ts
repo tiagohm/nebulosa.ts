@@ -112,12 +112,12 @@ function classifyStructures(rowProfiles: Float64Array, columnProfiles: Float64Ar
 	for (let y = 0; y < height; y++) {
 		let anomalies = 0
 		for (let x = 0; x < width; x++) if ((mask[y * width + x] & 0x0f) !== 0) anomalies++
-		if (anomalies >= Math.max(2, Math.ceil(width * 0.25)) || Math.abs(rowProfiles[y] - rowStats[0]) > sigma * rowStats[1]) rows.push(y)
+		if (anomalies >= Math.max(2, Math.ceil(width * 0.25)) || (rowStats[1] > 0 && Math.abs(rowProfiles[y] - rowStats[0]) > sigma * rowStats[1])) rows.push(y)
 	}
 	for (let x = 0; x < width; x++) {
 		let anomalies = 0
 		for (let y = 0; y < height; y++) if ((mask[y * width + x] & 0x0f) !== 0) anomalies++
-		if (anomalies >= Math.max(2, Math.ceil(height * 0.25)) || Math.abs(columnProfiles[x] - columnStats[0]) > sigma * columnStats[1]) columns.push(x)
+		if (anomalies >= Math.max(2, Math.ceil(height * 0.25)) || (columnStats[1] > 0 && Math.abs(columnProfiles[x] - columnStats[0]) > sigma * columnStats[1])) columns.push(x)
 	}
 	return [rows, columns]
 }

@@ -91,3 +91,14 @@ test('classifies cold pixels from dark-subtracted response instead of raw flat l
 	const result = measureSensorDefects(dark, flat, { maps: 'defects' })!
 	expect(result.mask![10] & SENSOR_DEFECT_COLD).toBe(0)
 })
+
+test('does not promote one isolated cold pixel to a structural row or column when profile MAD is zero', () => {
+	const width = 4
+	const darkRaw = new Float64Array(width * width).fill(100)
+	const flatRaw = new Float64Array(width * width).fill(1100)
+	flatRaw[1] = 1099
+	const result = measureSensorDefects(stack([darkRaw, darkRaw], width), stack([flatRaw, flatRaw], width), { maps: 'defects' })!
+	expect(result.cold).toBe(1)
+	expect(result.rows).toHaveLength(0)
+	expect(result.columns).toHaveLength(0)
+})
