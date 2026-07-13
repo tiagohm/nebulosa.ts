@@ -181,6 +181,18 @@ test('accepts frame-set temperature drift within the configured tolerance', () =
 	expect(result.diagnostics.some((diagnostic) => diagnostic.code === 'temperatureDrift')).toBeFalse()
 })
 
+test('rejects top-level frame temperatures outside the expected operating point', () => {
+	const frames = pairedFrames(100, 2)
+	const result = characterizeSensor({
+		operatingPoint: { temperature: -10 },
+		bias: { frames, exposure: 0, temperature: -5 },
+		flats: [{ frames: pairedFrames(200, 20), exposure: 1, temperature: -5 }],
+	})
+
+	expect(result.planes).toHaveLength(0)
+	expect(result.diagnostics.some((diagnostic) => diagnostic.code === 'mixedOperatingPoint' && diagnostic.severity === 'error')).toBeTrue()
+})
+
 test('rejects inconsistent Bayer offsets across CFA frame sets', () => {
 	const input: SensorCharacterizationInput = {
 		operatingPoint: {},

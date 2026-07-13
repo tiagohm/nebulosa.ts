@@ -268,11 +268,19 @@ export function characterizeSensor(input: SensorCharacterizationInput, options: 
 			diagnostics.push({ severity: 'error', code: 'mixedOperatingPoint', message: 'Every frame set exposure must be finite and non-negative.' })
 			structuralError = true
 		}
+		let contradictoryOperatingPoint = false
 		if (set.operatingPoint) {
-			if (operatingPointDiffers(operatingPointReference, set.operatingPoint, temperatureTolerance)) {
-				diagnostics.push({ severity: 'error', code: 'mixedOperatingPoint', message: 'A frame set contradicts the expected or previously declared sensor operating point.' })
-				structuralError = true
-			} else operatingPointReference = mergeOperatingPoint(operatingPointReference, set.operatingPoint)
+			contradictoryOperatingPoint = operatingPointDiffers(operatingPointReference, set.operatingPoint, temperatureTolerance)
+			if (!contradictoryOperatingPoint) operatingPointReference = mergeOperatingPoint(operatingPointReference, set.operatingPoint)
+		}
+		if (set.temperature !== undefined) {
+			const measuredTemperature = { temperature: set.temperature }
+			if (!Number.isFinite(set.temperature) || operatingPointDiffers(operatingPointReference, measuredTemperature, temperatureTolerance)) contradictoryOperatingPoint = true
+			else if (!contradictoryOperatingPoint) operatingPointReference = mergeOperatingPoint(operatingPointReference, measuredTemperature)
+		}
+		if (contradictoryOperatingPoint) {
+			diagnostics.push({ severity: 'error', code: 'mixedOperatingPoint', message: 'A frame set contradicts the expected or previously declared sensor operating point.' })
+			structuralError = true
 		}
 		for (const frame of set.frames) {
 			const pixelCount = frame.metadata.width * frame.metadata.height
