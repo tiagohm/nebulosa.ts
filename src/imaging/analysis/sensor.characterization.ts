@@ -334,7 +334,8 @@ export function characterizeSensor(input: SensorCharacterizationInput, options: 
 					const spatial = measureSensorSpatial(input.spatial.dark, input.spatial.flat, temporal.gain.conversion, { area: roi, plane, cfaOffset: offset, spatialDetrend: options.spatialDetrend, maps: options.maps, spatialBuffers: options.spatialBuffers, tile: options.tile })
 					dsnu = spatial.dsnu
 					prnu = spatial.prnu
-					defects = measureSensorDefects(input.spatial.dark, input.spatial.flat, { area: roi, plane, cfaOffset: offset, rejectionSigma: options.rejectionSigma, digitalClip: options.digitalClip, maps: options.maps, spatialBuffers: options.spatialBuffers })
+					const measuredDefects = measureSensorDefects(input.spatial.dark, input.spatial.flat, { area: roi, plane, cfaOffset: offset, rejectionSigma: options.rejectionSigma, digitalClip: options.digitalClip, maps: options.maps, spatialBuffers: options.spatialBuffers })
+					defects = measuredDefects?.mask && options.spatialBuffers?.mask ? { ...measuredDefects, mask: measuredDefects.mask.slice() } : measuredDefects
 					if (!defects) diagnostics.push({ severity: 'warning', code: 'spatialBuffersRequired', message: 'Defect counts require retained maps or caller-provided mean, variance, and mask buffers.', plane })
 				} catch (error) {
 					diagnostics.push({ severity: 'error', code: 'insufficientValidPixels', message: error instanceof Error ? error.message : 'Spatial sensor analysis failed.', plane })

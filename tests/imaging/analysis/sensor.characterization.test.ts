@@ -38,6 +38,29 @@ function cfaFrames(frames: readonly [DigitalImage, DigitalImage], x: number, y: 
 	]
 }
 
+// Creates a CFA pair whose temporal differences vary within every two-sample plane grid.
+function cfaPairedFrames(mean: number, variance: number): readonly [DigitalImage, DigitalImage] {
+	const width = 16
+	const height = 16
+	const difference = Math.sqrt(2 * variance)
+	const first = new Float64Array(width * height)
+	const second = new Float64Array(width * height)
+	for (let y = 0; y < height; y++) {
+		for (let x = 0; x < width; x++) {
+			const index = y * width + x
+			const signed = (((x >>> 1) + (y >>> 1)) & 1) === 0 ? difference : -difference
+			first[index] = mean + signed / 2
+			second[index] = mean - signed / 2
+		}
+	}
+	const header = { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: width, NAXIS2: height, XBAYROFF: 0, YBAYROFF: 0 }
+	const metadata = { width, height, channels: 1, pixelCount: width * height, pixelSizeInBytes: 2, strideInBytes: width * 2, stride: width, bitpix: 16, bayer: 'RGGB' as const }
+	return [
+		{ header, metadata, raw: first, sampleScale: 'digital', digitalRange: [0, 65535], quantizationStep: 1 },
+		{ header, metadata, raw: second, sampleScale: 'digital', digitalRange: [0, 65535], quantizationStep: 1 },
+	]
+}
+
 test('characterizes the temporal MVP and distinguishes observable capacity from digital range', () => {
 	const biasFrames = pairedFrames(1000, 4)
 	const flats: SensorFlatFrameSet[] = []
@@ -108,6 +131,34 @@ test('rejects inconsistent Bayer offsets across CFA frame sets', () => {
 
 	expect(result.planes).toHaveLength(0)
 	expect(result.diagnostics.some((diagnostic) => diagnostic.code === 'unknownCfaOrigin' && diagnostic.severity === 'error')).toBeTrue()
+})
+
+test('retains independent defect masks for each CFA plane when reusing buffers', () => {
+	const bias = cfaPairedFrames(100, 4)
+	const flats: SensorFlatFrameSet[] = [
+		{ frames: cfaPairedFrames(200, 54), darkFrames: cfaPairedFrames(100, 4), exposure: 1 },
+		{ frames: cfaPairedFrames(300, 104), darkFrames: cfaPairedFrames(100, 4), exposure: 2 },
+		{ frames: cfaPairedFrames(500, 204), darkFrames: cfaPairedFrames(100, 4), exposure: 3 },
+	]
+	const planeCapacity = 8 * 8
+	const spatialBuffers = { mean: new Float64Array(planeCapacity), variance: new Float64Array(planeCapacity), mask: new Uint8Array(planeCapacity) }
+	const result = characterizeSensor(
+		{
+			operatingPoint: {},
+			bias: { frames: bias, exposure: 0 },
+			flats,
+			spatial: { dark: { frames: cfaPairedFrames(100, 4), exposure: 1 }, flat: { frames: cfaPairedFrames(500, 20), exposure: 1 } },
+		},
+		{ maps: 'defects', planes: ['red', 'blue'], spatialBuffers, tile: { width: 4, height: 4 } },
+	)
+
+	expect(result.planes).toHaveLength(2)
+	const redMask = result.planes[0].defects?.mask
+	const blueMask = result.planes[1].defects?.mask
+	expect(redMask).toBeDefined()
+	expect(blueMask).toBeDefined()
+	expect(redMask!.buffer).not.toBe(blueMask!.buffer)
+	expect(redMask!.buffer).not.toBe(spatialBuffers.mask.buffer)
 })
 
 test('preserves temporal characterization when optional dark-current analysis fails', () => {
