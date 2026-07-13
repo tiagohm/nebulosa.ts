@@ -165,6 +165,7 @@ function temperatureRange(sets: readonly SensorFrameSet[]): readonly [number, nu
 
 // Reports whether supplied operating-point fields contradict expected fields within temperature tolerance.
 function operatingPointDiffers(expected: SensorOperatingPoint, actual: SensorOperatingPoint, temperatureTolerance: number): boolean {
+	if (actual.temperature !== undefined && !Number.isFinite(actual.temperature)) return true
 	const scalarKeys = ['gain', 'offset', 'readoutMode', 'bitDepth', 'camera'] as const
 	for (const key of scalarKeys) if (expected[key] !== undefined && actual[key] !== undefined && expected[key] !== actual[key]) return true
 	if (expected.temperature !== undefined && actual.temperature !== undefined && Math.abs(expected.temperature - actual.temperature) > temperatureTolerance) return true
