@@ -233,9 +233,11 @@ export function fitPhotonTransferGain(points: readonly PhotonTransferPoint[], ra
 
 // Characterizes one plane's PTC, gain, bias, and read noise from paired bias and flat datasets.
 export function characterizeSensorTemporal(bias: SensorFrameSet, flats: readonly SensorFlatFrameSet[], options: Partial<SensorTemporalOptions> = {}): SensorTemporalCharacterization {
+	if (!Number.isFinite(bias.exposure) || bias.exposure < 0) throw new RangeError('bias exposure must be finite and non-negative')
 	const pairOptions: Partial<SensorPairOptions> = { area: options.area, plane: options.plane, cfaOffset: options.cfaOffset, digitalClip: options.digitalClip, mask: options.mask }
 	const reference = validateTemporalFrames(bias.frames)
 	for (const level of flats) {
+		if (!Number.isFinite(level.exposure) || level.exposure < 0) throw new RangeError('flat exposure must be finite and non-negative')
 		validateTemporalFrames(level.frames, reference)
 		if (level.darkFrames) validateTemporalFrames(level.darkFrames, reference)
 	}

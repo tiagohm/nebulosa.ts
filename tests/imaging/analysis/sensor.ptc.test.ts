@@ -116,6 +116,13 @@ test('rejects temporal flat levels with mismatched dimensions', () => {
 	expect(() => characterizeSensorTemporal(bias, flats)).toThrow('temporal frame sets must share dimensions and CFA pattern')
 })
 
+test('rejects temporal flat levels with negative exposure', () => {
+	const bias: SensorFrameSet = { frames: pairedFrames(100, 2), exposure: 0 }
+	const flats: SensorFlatFrameSet[] = [{ frames: pairedFrames(200, 20), exposure: -1 }]
+
+	expect(() => characterizeSensorTemporal(bias, flats)).toThrow('flat exposure must be finite and non-negative')
+})
+
 test('returns annotated points without gain when selected signals are duplicated', () => {
 	const points: PhotonTransferPoint[] = [1, 2].map((variance, level) => ({
 		level,
