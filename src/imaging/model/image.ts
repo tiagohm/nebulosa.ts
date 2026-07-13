@@ -234,7 +234,9 @@ export async function readImageFromPath(path: PathLike, argument: ImageReadArgum
 
 // Encodes an Image to an in-memory format buffer (currently JPEG); returns undefined for other formats.
 // Pixel values in [0, 1] are scaled to 0..255 before compression.
-export function writeImageToFormat(image: Image, format: Exclude<ImageFormat, 'fits' | 'xisf'> = 'jpeg', options: Partial<WriteImageToFormatOptions> = DEFAULT_WRITE_IMAGE_TO_FORMAT_OPTIONS) {
+export function writeImageToFormat(image: Image | DigitalImage, format: Exclude<ImageFormat, 'fits' | 'xisf'> = 'jpeg', options: Partial<WriteImageToFormatOptions> = DEFAULT_WRITE_IMAGE_TO_FORMAT_OPTIONS) {
+	if ('sampleScale' in image && image.sampleScale === 'digital') throw new TypeError('digital images cannot be written to display formats')
+
 	const { raw, metadata } = image
 	const { width, height, channels } = metadata
 
@@ -250,13 +252,13 @@ export function writeImageToFormat(image: Image, format: Exclude<ImageFormat, 'f
 }
 
 // Writes an Image to a FITS file via a buffer or sink.
-export function writeImageToFits(image: Image, output: Buffer | Sink) {
+export function writeImageToFits(image: Image | DigitalImage, output: Buffer | Sink) {
 	if (Buffer.isBuffer(output)) output = bufferSink(output)
 	return writeFits(output, [image])
 }
 
 // Writes an Image to an XISF file via a buffer or sink.
-export function writeImageToXisf(image: Image, output: Buffer | Sink, format?: XisfWriteFormat) {
+export function writeImageToXisf(image: Image | DigitalImage, output: Buffer | Sink, format?: XisfWriteFormat) {
 	if (Buffer.isBuffer(output)) output = bufferSink(output)
 	return writeXisf(output, [image], format)
 }

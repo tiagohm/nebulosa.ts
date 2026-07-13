@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { Jpeg } from '../../../src/bindings/imaging/libturbojpeg'
-import { readImageFromJpeg, readImageFromPath, readImageFromSource, writeImageToFits, writeImageToXisf } from '../../../src/imaging/model/image'
+import { readImageFromJpeg, readImageFromPath, readImageFromSource, writeImageToFits, writeImageToFormat, writeImageToXisf } from '../../../src/imaging/model/image'
 import { approximateArcsinhStretchParameters, arcsinhStretch } from '../../../src/imaging/processing/arcsinh'
 import { clone } from '../../../src/imaging/processing/arithmetic'
 import { calibrate } from '../../../src/imaging/processing/calibration'
@@ -124,6 +124,37 @@ test('write image to xisf', async () => {
 		}
 	}
 }, 10000)
+
+test('preserves digital samples when writing FITS', async () => {
+	const header = { BITPIX: 16, NAXIS: 2, NAXIS1: 2, NAXIS2: 1 }
+	const metadata = { width: 2, height: 1, channels: 1, stride: 2, pixelCount: 2, strideInBytes: 4, pixelSizeInBytes: 2, bitpix: Bitpix.SHORT, bayer: undefined }
+	const source = Buffer.alloc(5760)
+	await writeImageToFits({ header, metadata, raw: new Float64Array([1000 / 65535, 42000 / 65535]) }, source)
+	const digital = await readImageFromSource(bufferSource(source), { sampleScale: 'digital' })
+	expect(digital).toBeDefined()
+
+	const target = Buffer.alloc(5760)
+	await writeImageToFits(digital!, target)
+	const roundTrip = await readImageFromSource(bufferSource(target), { sampleScale: 'digital' })
+
+	expect(roundTrip?.raw).toEqual(new Float64Array([1000, 42000]))
+	expect(() => writeImageToFormat(digital!)).toThrow(TypeError)
+})
+
+test('preserves digital samples when writing XISF', async () => {
+	const header = { BITPIX: 16, NAXIS: 2, NAXIS1: 2, NAXIS2: 1 }
+	const metadata = { width: 2, height: 1, channels: 1, stride: 2, pixelCount: 2, strideInBytes: 4, pixelSizeInBytes: 2, bitpix: Bitpix.SHORT, bayer: undefined }
+	const source = Buffer.alloc(4096)
+	await writeImageToXisf({ header, metadata, raw: new Float64Array([1000 / 65535, 42000 / 65535]) }, source)
+	const digital = await readImageFromSource(bufferSource(source), { sampleScale: 'digital' })
+	expect(digital).toBeDefined()
+
+	const target = Buffer.alloc(4096)
+	await writeImageToXisf(digital!, target)
+	const roundTrip = await readImageFromSource(bufferSource(target), { sampleScale: 'digital' })
+
+	expect(roundTrip?.raw).toEqual(new Float64Array([1000, 42000]))
+})
 
 test('histogram on red channel', async () => {
 	const [image] = await readImage(Bitpix.FLOAT, 3)
