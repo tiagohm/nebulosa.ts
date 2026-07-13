@@ -297,11 +297,20 @@ function writeInterleavedToPlanar(input: ImageRawType, output: NumberArray, head
 	const zero = numericKeyword(header, 'BZERO', bitpix === 16 ? 32768 : bitpix === 32 ? 2147483648 : 0)
 	const scaleValue = numericKeyword(header, 'BSCALE', 1)
 	const scale = Number.isFinite(scaleValue) && scaleValue !== 0 ? scaleValue : 1
-	const factor = bitpix > 0 && sampleScale === 'normalized' ? (2 ** bitpix - 1) / scale : 1 / scale
+	const normalized = sampleScale === 'normalized'
+	const factor = bitpix > 0 && normalized ? (2 ** bitpix - 1) / scale : 1 / scale
 
-	for (let c = 0, p = 0; c < channels; c++) {
-		for (let i = 0, m = c; i < numberOfPixels; i++, m += channels) {
-			output[p++] = sampleScale === 'normalized' ? input[m] * factor - zero : (input[m] - zero) * factor
+	if (normalized) {
+		for (let c = 0, p = 0; c < channels; c++) {
+			for (let i = 0, m = c; i < numberOfPixels; i++, m += channels) {
+				output[p++] = input[m] * factor - zero
+			}
+		}
+	} else {
+		for (let c = 0, p = 0; c < channels; c++) {
+			for (let i = 0, m = c; i < numberOfPixels; i++, m += channels) {
+				output[p++] = (input[m] - zero) * factor
+			}
 		}
 	}
 }
