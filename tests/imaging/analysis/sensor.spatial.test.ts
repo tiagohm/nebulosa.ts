@@ -73,6 +73,23 @@ test('recovers PRNU after a smooth illumination gradient and fills optional maps
 	expect(mask.every((value) => value === 0)).toBeTrue()
 })
 
+test('preserves the illumination gradient in undetrended PRNU maps', () => {
+	const width = 32
+	const darkRaw = new Float64Array(width * width).fill(100)
+	const flatRaw = new Float64Array(width * width)
+	for (let y = 0; y < width; y++) {
+		for (let x = 0; x < width; x++) flatRaw[y * width + x] = 1100 + 10 * x + 5 * y
+	}
+	const result = measureSensorSpatial(stack(darkRaw, width), stack(flatRaw, width), 2, { spatialDetrend: 'none', maps: 'all', tile: { width: 8, height: 8 } })
+	const map = result.prnu.map!
+	const signalMean = 1000 + 10 * ((width - 1) / 2) + 5 * ((width - 1) / 2)
+
+	expect(map[0]).toBeCloseTo(1000 / signalMean - 1, 7)
+	expect(map.at(-1)).toBeCloseTo((1000 + 15 * (width - 1)) / signalMean - 1, 7)
+	expect(map[0]).toBeLessThan(0)
+	expect(map.at(-1)).toBeGreaterThan(0)
+})
+
 test('analyzes a CFA plane on its dense plane grid with sensor-origin phase', () => {
 	const width = 16
 	const darkRaw = new Float64Array(width * width).fill(100)

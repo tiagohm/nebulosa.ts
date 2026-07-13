@@ -451,7 +451,7 @@ export function measureSensorSpatial(dark: SensorFrameSet, flat: SensorFrameSet,
 					}
 					const mapIndex = y * geometry.width + x
 					if (dsnuMap) dsnuMap[mapIndex] = residualDark * conversionGain
-					if (prnuMap && terms === 0) prnuMap[mapIndex] = residualBright - residualDark
+					if (prnuMap && terms === 0) prnuMap[mapIndex] = detrend === 'none' ? signal : residualBright - residualDark
 					if (meanBuffer) meanBuffer[mapIndex] = signal
 					if (varianceBuffer) varianceBuffer[mapIndex] = temporalBright + temporalDark
 					if (maskBuffer) maskBuffer[mapIndex] = 0
@@ -461,7 +461,10 @@ export function measureSensorSpatial(dark: SensorFrameSet, flat: SensorFrameSet,
 	}
 
 	if (count === 0 || !(signalMean > 0)) throw new RangeError('spatial analysis has no finite positive-signal samples')
-	if (prnuMap && terms === 0) for (let i = 0; i < prnuMap.length; i++) prnuMap[i] /= signalMean
+	if (prnuMap && terms === 0) {
+		const offset = detrend === 'none' ? 1 : 0
+		for (let i = 0; i < prnuMap.length; i++) prnuMap[i] = prnuMap[i] / signalMean - offset
+	}
 	for (let y = 0; y < geometry.height; y++) {
 		if (rowCounts[y] > 0) {
 			darkRow[y] /= rowCounts[y]
