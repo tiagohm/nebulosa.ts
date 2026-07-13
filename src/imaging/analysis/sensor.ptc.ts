@@ -137,9 +137,9 @@ function commonQuantizationStep(frames: SensorFrameSet['frames']): number | unde
 	return step
 }
 
-// Resolves calibrated photons or a finite non-negative relative stimulus for one flat level.
-function flatStimulus(level: SensorFlatFrameSet): number | undefined {
-	if (level.photons !== undefined && Number.isFinite(level.photons) && level.photons > 0) return level.photons
+// Resolves one flat level on the common calibrated or relative stimulus scale selected for the series.
+function flatStimulus(level: SensorFlatFrameSet, calibrated: boolean): number | undefined {
+	if (calibrated) return level.photons
 	const stimulus = level.exposure * (level.intensity ?? 1)
 	return Number.isFinite(stimulus) && stimulus >= 0 ? stimulus : undefined
 }
@@ -238,6 +238,13 @@ export function characterizeSensorTemporal(bias: SensorFrameSet, flats: readonly
 	}
 	const [biasAggregate, biasPairs] = measurePairs(bias.frames, pairOptions)
 	const rawPoints: PhotonTransferPoint[] = []
+	let calibratedStimulus = flats.length > 0
+	for (const level of flats) {
+		if (!(level.photons !== undefined && Number.isFinite(level.photons) && level.photons > 0)) {
+			calibratedStimulus = false
+			break
+		}
+	}
 	for (let levelIndex = 0; levelIndex < flats.length; levelIndex++) {
 		const level = flats[levelIndex]
 		const [flat] = measurePairs(level.frames, pairOptions)
@@ -249,7 +256,7 @@ export function characterizeSensorTemporal(bias: SensorFrameSet, flats: readonly
 		rawPoints.push({
 			level: levelIndex,
 			exposure: level.exposure,
-			stimulus: flatStimulus(level),
+			stimulus: flatStimulus(level, calibratedStimulus),
 			signal,
 			variance,
 			darkMean: dark.mean,

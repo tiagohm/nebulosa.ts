@@ -67,15 +67,26 @@ test('marks nonpositive and clipped PTC levels instead of fitting them', () => {
 	expect(result.photonTransfer[1].fitRejectionReasons).toContain('clipped')
 })
 
-test('records calibrated or relative flat stimulus independently from exposure', () => {
+test('keeps partially calibrated flat stimuli on the relative exposure-intensity scale', () => {
 	const bias: SensorFrameSet = { frames: pairedFrames(100, 2), exposure: 0 }
 	const flats: SensorFlatFrameSet[] = [
 		{ frames: pairedFrames(200, 20), exposure: 10, intensity: 2, photons: 500 },
 		{ frames: pairedFrames(300, 40), exposure: 10, intensity: 3 },
 	]
 	const result = characterizeSensorTemporal(bias, flats, { gainRange: [0, 1] })
-	expect(result.photonTransfer.find((point) => point.level === 0)?.stimulus).toBe(500)
+	expect(result.photonTransfer.find((point) => point.level === 0)?.stimulus).toBe(20)
 	expect(result.photonTransfer.find((point) => point.level === 1)?.stimulus).toBe(30)
+})
+
+test('uses calibrated photons when every flat level defines them', () => {
+	const bias: SensorFrameSet = { frames: pairedFrames(100, 2), exposure: 0 }
+	const flats: SensorFlatFrameSet[] = [
+		{ frames: pairedFrames(200, 20), exposure: 10, intensity: 2, photons: 500 },
+		{ frames: pairedFrames(300, 40), exposure: 10, intensity: 3, photons: 700 },
+	]
+	const result = characterizeSensorTemporal(bias, flats, { gainRange: [0, 1] })
+	expect(result.photonTransfer.find((point) => point.level === 0)?.stimulus).toBe(500)
+	expect(result.photonTransfer.find((point) => point.level === 1)?.stimulus).toBe(700)
 })
 
 test('rejects temporal flat levels with mismatched dimensions', () => {
