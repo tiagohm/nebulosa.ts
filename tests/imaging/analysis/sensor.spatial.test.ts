@@ -116,6 +116,28 @@ test('ignores isolated non-finite samples without poisoning neighboring smoothin
 	expect(mask[width + 1]).toBe(1)
 })
 
+test('marks spatial row and column profiles without finite samples as missing', () => {
+	const width = 32
+	const missingRow = 5
+	const missingColumn = 7
+	const darkRaw = new Float64Array(width * width).fill(100)
+	const flatRaw = new Float64Array(width * width).fill(1100)
+	for (let x = 0; x < width; x++) {
+		darkRaw[missingRow * width + x] = Number.NaN
+		flatRaw[missingRow * width + x] = Number.NaN
+	}
+	for (let y = 0; y < width; y++) {
+		darkRaw[y * width + missingColumn] = Number.NaN
+		flatRaw[y * width + missingColumn] = Number.NaN
+	}
+	const result = measureSensorSpatial(stack(darkRaw, width), stack(flatRaw, width), 2, { tile: { width: 8, height: 8 } })
+	expect(result.sampleCount).toBe((width - 1) * (width - 1))
+	expect(Number.isNaN(result.dsnu.rowProfile![missingRow])).toBeTrue()
+	expect(Number.isNaN(result.prnu.rowProfile![missingRow])).toBeTrue()
+	expect(Number.isNaN(result.dsnu.columnProfile![missingColumn])).toBeTrue()
+	expect(Number.isNaN(result.prnu.columnProfile![missingColumn])).toBeTrue()
+})
+
 test('removes finite-stack temporal variance from undetrended PRNU', () => {
 	const width = 32
 	const capacity = width * width

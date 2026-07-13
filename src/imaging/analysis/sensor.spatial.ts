@@ -469,12 +469,18 @@ export function measureSensorSpatial(dark: SensorFrameSet, flat: SensorFrameSet,
 		if (rowCounts[y] > 0) {
 			darkRow[y] /= rowCounts[y]
 			signalRow[y] /= rowCounts[y]
+		} else {
+			darkRow[y] = Number.NaN
+			signalRow[y] = Number.NaN
 		}
 	}
 	for (let x = 0; x < geometry.width; x++) {
 		if (columnCounts[x] > 0) {
 			darkColumn[x] /= columnCounts[x]
 			signalColumn[x] /= columnCounts[x]
+		} else {
+			darkColumn[x] = Number.NaN
+			signalColumn[x] = Number.NaN
 		}
 	}
 
