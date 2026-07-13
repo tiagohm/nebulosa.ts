@@ -22,6 +22,13 @@ test('uses the last unbiased level before digital clipping as saturation capacit
 	expect(result).toEqual({ signal: 500, capacity: 1000, index: 2, method: 'unclippedLevel', confidence: 0.95 })
 })
 
+test('skips dark-clipped levels before a clipped flat', () => {
+	const darkClipped = { ...point(1, 300, 150), darkClippedFraction: 0.1 }
+	const result = detectSensorSaturation([point(0, 100, 50), darkClipped, point(2, 500, 200, 0.2)], GAIN)
+
+	expect(result).toEqual({ signal: 100, capacity: 200, index: 0, method: 'unclippedLevel', confidence: 0.95 })
+})
+
 test('detects variance collapse and uses digital range only as low-confidence fallback', () => {
 	const variance = detectSensorSaturation([point(0, 100, 50), point(1, 300, 160), point(2, 500, 140), point(3, 600, 100)], GAIN)
 	expect(variance?.method).toBe('variance')

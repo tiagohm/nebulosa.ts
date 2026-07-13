@@ -63,11 +63,11 @@ function saturation(point: PhotonTransferPoint | undefined, signal: number, meth
 // Detects output saturation from clipping, PTC variance collapse, response plateau, or digital limit.
 export function detectSensorSaturation(points: readonly PhotonTransferPoint[], gain?: SensorGain, digitalSignalLimit?: number): SensorSaturation | undefined {
 	const ordered = points.toSorted((a, b) => a.level - b.level)
-	const valid = ordered.filter((point) => point.valid)
+	const valid = ordered.filter((point) => point.valid && (point.darkClippedFraction ?? 0) <= 0)
 	for (let i = 0; i < ordered.length; i++) {
 		if (ordered[i].clippedFraction <= 0) continue
 		let candidate = i - 1
-		while (candidate >= 0 && (!ordered[candidate].valid || ordered[candidate].clippedFraction > 0)) candidate--
+		while (candidate >= 0 && (!ordered[candidate].valid || ordered[candidate].clippedFraction > 0 || (ordered[candidate].darkClippedFraction ?? 0) > 0)) candidate--
 		if (candidate < 0) continue
 		const selected = ordered[candidate]
 		const result = saturation(selected, selected.signal, 'unclippedLevel', 0.95, gain)
