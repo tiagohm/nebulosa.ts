@@ -30,6 +30,14 @@ function pairedFrames(mean: number, variance: number): readonly [DigitalImage, D
 	return [image(first), image(second)]
 }
 
+// Adds one CFA pattern and image-local Bayer offset to a digital frame pair.
+function cfaFrames(frames: readonly [DigitalImage, DigitalImage], x: number, y: number): readonly [DigitalImage, DigitalImage] {
+	return [
+		{ ...frames[0], header: { ...frames[0].header, XBAYROFF: x, YBAYROFF: y }, metadata: { ...frames[0].metadata, bayer: 'RGGB' } },
+		{ ...frames[1], header: { ...frames[1].header, XBAYROFF: x, YBAYROFF: y }, metadata: { ...frames[1].metadata, bayer: 'RGGB' } },
+	]
+}
+
 test('characterizes the temporal MVP and distinguishes observable capacity from digital range', () => {
 	const biasFrames = pairedFrames(1000, 4)
 	const flats: SensorFlatFrameSet[] = []
@@ -87,6 +95,19 @@ test('rejects conflicting frame-set operating points when the expected field is 
 
 	expect(result.planes).toHaveLength(0)
 	expect(result.diagnostics.some((diagnostic) => diagnostic.code === 'mixedOperatingPoint' && diagnostic.severity === 'error')).toBeTrue()
+})
+
+test('rejects inconsistent Bayer offsets across CFA frame sets', () => {
+	const input: SensorCharacterizationInput = {
+		operatingPoint: {},
+		bias: { frames: cfaFrames(pairedFrames(100, 2), 0, 0), exposure: 0 },
+		flats: [{ frames: cfaFrames(pairedFrames(200, 4), 1, 0), exposure: 1 }],
+	}
+
+	const result = characterizeSensor(input)
+
+	expect(result.planes).toHaveLength(0)
+	expect(result.diagnostics.some((diagnostic) => diagnostic.code === 'unknownCfaOrigin' && diagnostic.severity === 'error')).toBeTrue()
 })
 
 test('preserves temporal characterization when optional dark-current analysis fails', () => {

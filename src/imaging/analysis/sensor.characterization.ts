@@ -176,14 +176,22 @@ function mergeOperatingPoint(reference: SensorOperatingPoint, actual: SensorOper
 	}
 }
 
-// Resolves CFA phase from explicit sensor origin or image-local Bayer offset keywords.
-function cfaOffset(input: SensorCharacterizationInput): readonly [number, number] | undefined {
+// Resolves CFA phase from an explicit sensor origin or consistent Bayer offsets across every frame.
+function cfaOffset(input: SensorCharacterizationInput, sets: readonly SensorFrameSet[]): readonly [number, number] | undefined {
 	const origin = input.operatingPoint.sensorOrigin
-	if (origin && Number.isInteger(origin[0]) && Number.isInteger(origin[1])) return origin
-	const header = input.bias.frames[0].header
-	const x = header.XBAYROFF
-	const y = header.YBAYROFF
-	return typeof x === 'number' && typeof y === 'number' && Number.isInteger(x) && Number.isInteger(y) ? [x, y] : undefined
+	if (origin) return Number.isInteger(origin[0]) && Number.isInteger(origin[1]) ? origin : undefined
+
+	let reference: readonly [number, number] | undefined
+	for (const set of sets) {
+		for (const frame of set.frames) {
+			const x = frame.header.XBAYROFF
+			const y = frame.header.YBAYROFF
+			if (typeof x !== 'number' || typeof y !== 'number' || !Number.isInteger(x) || !Number.isInteger(y)) return undefined
+			if (!reference) reference = [x, y]
+			else if (reference[0] !== x || reference[1] !== y) return undefined
+		}
+	}
+	return reference
 }
 
 // Adds high-level fit and acquisition diagnostics for one plane.
@@ -292,9 +300,9 @@ export function characterizeSensor(input: SensorCharacterizationInput, options: 
 	const tolerance = options.temperatureTolerance ?? DEFAULT_SENSOR_CHARACTERIZATION_OPTIONS.temperatureTolerance
 	if (temperatures && temperatures[1] - temperatures[0] > tolerance) diagnostics.push({ severity: 'warning', code: 'temperatureDrift', message: `Recorded temperature span exceeds ${tolerance} °C.` })
 
-	const offset = bayer ? cfaOffset(input) : undefined
+	const offset = bayer ? cfaOffset(input, sets) : undefined
 	if (bayer && (!offset || channels !== 1 || (input.operatingPoint.binning && (input.operatingPoint.binning[0] !== 1 || input.operatingPoint.binning[1] !== 1)))) {
-		diagnostics.push({ severity: 'error', code: 'unknownCfaOrigin', message: 'CFA analysis requires an integer sensor origin and unbinned single-channel mosaic.' })
+		diagnostics.push({ severity: 'error', code: 'unknownCfaOrigin', message: 'CFA analysis requires an integer sensor origin or consistent Bayer offsets across all unbinned single-channel frames.' })
 		structuralError = true
 	}
 	const acquisition: SensorAcquisitionReport = { width, height, roi, biasFrames: input.bias.frames.length, flatLevels: input.flats.length, darkLevels: input.darks?.length ?? 0, temperatures }
