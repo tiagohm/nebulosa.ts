@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { measureSensorDefects, SENSOR_DEFECT_COLD, SENSOR_DEFECT_HOT, SENSOR_DEFECT_NOISY, SENSOR_DEFECT_UNSTABLE } from '../../../src/imaging/analysis/sensor.defects'
+import { measureSensorDefects, SENSOR_DEFECT_COLD, SENSOR_DEFECT_HOT, SENSOR_DEFECT_NOISY, SENSOR_DEFECT_SATURATED, SENSOR_DEFECT_UNSTABLE } from '../../../src/imaging/analysis/sensor.defects'
 import type { SensorFrameSet } from '../../../src/imaging/analysis/sensor.types'
 import type { DigitalImage } from '../../../src/imaging/model/types'
 
@@ -101,4 +101,15 @@ test('does not promote one isolated cold pixel to a structural row or column whe
 	expect(result.cold).toBe(1)
 	expect(result.rows).toHaveLength(0)
 	expect(result.columns).toHaveLength(0)
+})
+
+test('marks a pixel saturated when any flat frame reaches the digital clip', () => {
+	const width = 4
+	const darkRaw = new Float64Array(width * width).fill(100)
+	const flatA = new Float64Array(width * width).fill(1000)
+	const flatB = new Float64Array(width * width).fill(1000)
+	flatA[5] = 65535
+	flatB[5] = 65534
+	const result = measureSensorDefects(stack([darkRaw, darkRaw], width), stack([flatA, flatB], width), { digitalClip: 65535, maps: 'defects' })!
+	expect(result.mask![5] & SENSOR_DEFECT_SATURATED).toBe(SENSOR_DEFECT_SATURATED)
 })

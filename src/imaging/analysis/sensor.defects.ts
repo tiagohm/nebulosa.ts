@@ -58,14 +58,16 @@ export interface SensorDefectOptions {
 	readonly spatialBuffers?: SensorSpatialBuffers
 }
 
-// Computes finite stack mean and unbiased temporal variance for one source pixel into output[0..1].
-function pixelStatistics(set: SensorFrameSet, sourceIndex: number, output: Float64Array): void {
+// Computes finite stack mean, unbiased temporal variance, and optional clipping into output[0..2].
+function pixelStatistics(set: SensorFrameSet, sourceIndex: number, output: Float64Array, digitalClip?: number): void {
 	let count = 0
 	let mean = 0
 	let m2 = 0
+	let clipped = false
 	for (let frameIndex = 0; frameIndex < set.frames.length; frameIndex++) {
 		const value = set.frames[frameIndex].raw[sourceIndex]
 		if (!Number.isFinite(value)) continue
+		if (digitalClip !== undefined && value >= digitalClip) clipped = true
 		count++
 		const delta = value - mean
 		mean += delta / count
@@ -73,6 +75,7 @@ function pixelStatistics(set: SensorFrameSet, sourceIndex: number, output: Float
 	}
 	output[0] = count > 0 ? mean : Number.NaN
 	output[1] = count > 1 ? m2 / (count - 1) : Number.NaN
+	output[2] = clipped ? 1 : 0
 }
 
 // Computes excess kurtosis around the measured dark mean for one source pixel.
@@ -150,8 +153,8 @@ export function measureSensorDefects(dark: SensorFrameSet, flat: SensorFrameSet,
 	const darkVariances = new SensorRobustReservoir(capacity)
 	const responses = new SensorRobustReservoir(capacity)
 	const sourceWidth = reference.metadata.width
-	const darkStatistics = new Float64Array(2)
-	const flatStatistics = new Float64Array(2)
+	const darkStatistics = new Float64Array(3)
+	const flatStatistics = new Float64Array(3)
 	for (let y = 0; y < geometry.height; y++) {
 		const sourceY = geometry.sourceTop + y * geometry.step
 		for (let x = 0; x < geometry.width; x++) {
@@ -199,7 +202,7 @@ export function measureSensorDefects(dark: SensorFrameSet, flat: SensorFrameSet,
 			const sourceIndex = sourceY * sourceWidth + geometry.sourceLeft + x * geometry.step
 			const index = y * geometry.width + x
 			pixelStatistics(dark, sourceIndex, darkStatistics)
-			pixelStatistics(flat, sourceIndex, flatStatistics)
+			pixelStatistics(flat, sourceIndex, flatStatistics, options.digitalClip)
 			const darkMean = darkStatistics[0]
 			const darkVariance = darkStatistics[1]
 			const flatMean = flatStatistics[0]
@@ -223,7 +226,7 @@ export function measureSensorDefects(dark: SensorFrameSet, flat: SensorFrameSet,
 				activeMask[index] |= SENSOR_DEFECT_COLD
 				cold++
 			}
-			if (options.digitalClip !== undefined && flatMean >= options.digitalClip) activeMask[index] |= SENSOR_DEFECT_SATURATED
+			if (flatStatistics[2] !== 0) activeMask[index] |= SENSOR_DEFECT_SATURATED
 			if (Number.isFinite(response)) {
 				rowProfiles[y] += response
 				columnProfiles[x] += response
