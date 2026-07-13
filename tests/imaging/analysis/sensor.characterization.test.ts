@@ -230,6 +230,26 @@ test('rejects non-finite frame-set operating temperatures before merging', () =>
 	expect(result.diagnostics.some((diagnostic) => diagnostic.code === 'mixedOperatingPoint' && diagnostic.severity === 'error')).toBeTrue()
 })
 
+test('rejects non-finite numeric fields in expected and frame-set operating points', () => {
+	const frames = pairedFrames(100, 2)
+	const invalidFrameSet = characterizeSensor({
+		operatingPoint: {},
+		bias: { frames, exposure: 0, operatingPoint: { gain: Number.NaN } },
+		flats: [{ frames: pairedFrames(200, 20), exposure: 1 }],
+	})
+	const invalidExpected = characterizeSensor({
+		operatingPoint: { temperature: Number.NaN },
+		bias: { frames, exposure: 0 },
+		flats: [{ frames: pairedFrames(200, 20), exposure: 1 }],
+	})
+
+	expect(invalidFrameSet.planes).toHaveLength(0)
+	expect(invalidFrameSet.operatingPoint.gain).toBeUndefined()
+	expect(invalidExpected.planes).toHaveLength(0)
+	expect(invalidFrameSet.diagnostics.some((diagnostic) => diagnostic.code === 'mixedOperatingPoint')).toBeTrue()
+	expect(invalidExpected.diagnostics.some((diagnostic) => diagnostic.code === 'mixedOperatingPoint')).toBeTrue()
+})
+
 test('rejects inconsistent Bayer offsets across CFA frame sets', () => {
 	const input: SensorCharacterizationInput = {
 		operatingPoint: {},

@@ -163,9 +163,18 @@ function temperatureRange(sets: readonly SensorFrameSet[]): readonly [number, nu
 	return minimum <= maximum ? [minimum, maximum] : undefined
 }
 
+// Reports non-finite numeric metadata that cannot identify a stable sensor operating point.
+function hasNonFiniteOperatingPoint(point: SensorOperatingPoint): boolean {
+	const scalarKeys = ['gain', 'offset', 'temperature', 'bitDepth'] as const
+	for (const key of scalarKeys) if (point[key] !== undefined && !Number.isFinite(point[key])) return true
+	if (point.binning && (!Number.isFinite(point.binning[0]) || !Number.isFinite(point.binning[1]))) return true
+	if (point.sensorOrigin && (!Number.isFinite(point.sensorOrigin[0]) || !Number.isFinite(point.sensorOrigin[1]))) return true
+	return point.size !== undefined && (!Number.isFinite(point.size.width) || !Number.isFinite(point.size.height))
+}
+
 // Reports whether supplied operating-point fields contradict expected fields within temperature tolerance.
 function operatingPointDiffers(expected: SensorOperatingPoint, actual: SensorOperatingPoint, temperatureTolerance: number): boolean {
-	if (actual.temperature !== undefined && !Number.isFinite(actual.temperature)) return true
+	if (hasNonFiniteOperatingPoint(actual)) return true
 	const scalarKeys = ['gain', 'offset', 'readoutMode', 'bitDepth', 'camera'] as const
 	for (const key of scalarKeys) if (expected[key] !== undefined && actual[key] !== undefined && expected[key] !== actual[key]) return true
 	if (expected.temperature !== undefined && actual.temperature !== undefined && Math.abs(expected.temperature - actual.temperature) > temperatureTolerance) return true
@@ -276,6 +285,10 @@ export function characterizeSensor(input: SensorCharacterizationInput, options: 
 		structuralError = true
 	}
 	let operatingPointReference = input.operatingPoint
+	if (hasNonFiniteOperatingPoint(operatingPointReference)) {
+		diagnostics.push({ severity: 'error', code: 'mixedOperatingPoint', message: 'The expected sensor operating point contains non-finite numeric metadata.' })
+		structuralError = true
+	}
 	for (const set of sets) {
 		if (!Number.isFinite(set.exposure) || set.exposure < 0) {
 			diagnostics.push({ severity: 'error', code: 'mixedOperatingPoint', message: 'Every frame set exposure must be finite and non-negative.' })
@@ -288,7 +301,7 @@ export function characterizeSensor(input: SensorCharacterizationInput, options: 
 		}
 		if (set.temperature !== undefined) {
 			const measuredTemperature = { temperature: set.temperature }
-			if (!Number.isFinite(set.temperature) || operatingPointDiffers(operatingPointReference, measuredTemperature, temperatureTolerance)) contradictoryOperatingPoint = true
+			if (operatingPointDiffers(operatingPointReference, measuredTemperature, temperatureTolerance)) contradictoryOperatingPoint = true
 			else if (!contradictoryOperatingPoint) operatingPointReference = mergeOperatingPoint(operatingPointReference, measuredTemperature)
 		}
 		if (contradictoryOperatingPoint) {
