@@ -23,7 +23,7 @@ export interface PhotonTransferPoint {
 	readonly darkMean: number
 	// Temporal dark-reference variance, DN squared.
 	readonly darkVariance: number
-	// Fraction of valid samples at the known upper digital clip.
+	// Maximum flat or dark-reference fraction at the known upper digital clip.
 	readonly clippedFraction: number
 	// Signal divided by an independently determined saturation signal.
 	readonly saturationFraction?: number
@@ -262,7 +262,7 @@ export function characterizeSensorTemporal(bias: SensorFrameSet, flats: readonly
 			variance,
 			darkMean: dark.mean,
 			darkVariance: dark.variance,
-			clippedFraction: flat.clippedFraction,
+			clippedFraction: Math.max(flat.clippedFraction, dark.clippedFraction),
 			pairCount: flat.pairCount,
 			snr: signal > 0 && totalVariance > 0 ? signal / Math.sqrt(totalVariance) : undefined,
 			valid,

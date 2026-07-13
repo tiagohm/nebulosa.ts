@@ -67,6 +67,19 @@ test('marks nonpositive and clipped PTC levels instead of fitting them', () => {
 	expect(result.photonTransfer[1].fitRejectionReasons).toContain('clipped')
 })
 
+test('rejects an unclipped flat when its matched dark reference is clipped', () => {
+	const bias: SensorFrameSet = { frames: pairedFrames(100, 2), exposure: 0 }
+	const darkFrames = pairedFrames(100, 0)
+	darkFrames[0].raw[0] = 200
+	darkFrames[1].raw[0] = 200
+	const flats: SensorFlatFrameSet[] = [{ frames: pairedFrames(150, 20), darkFrames, exposure: 1 }]
+	const result = characterizeSensorTemporal(bias, flats, { digitalClip: 200, gainRange: [0, 1] })
+	const point = result.photonTransfer[0]
+	expect(point.valid).toBeTrue()
+	expect(point.clippedFraction).toBeGreaterThan(0)
+	expect(point.fitRejectionReasons).toContain('clipped')
+})
+
 test('keeps partially calibrated flat stimuli on the relative exposure-intensity scale', () => {
 	const bias: SensorFrameSet = { frames: pairedFrames(100, 2), exposure: 0 }
 	const flats: SensorFlatFrameSet[] = [
