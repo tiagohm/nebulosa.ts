@@ -114,3 +114,23 @@ test('returns annotated points without gain when selected signals are duplicated
 	expect(gain).toBeUndefined()
 	expect(annotated.every((point) => point.selectedForGainFit)).toBeTrue()
 })
+
+test('keeps invalid positive PTC points out of the gain fit', () => {
+	const points: PhotonTransferPoint[] = [100, 200, 300].map((signal, level) => ({
+		level,
+		exposure: level + 1,
+		signal,
+		variance: level === 1 ? 500 : signal * 0.5,
+		darkMean: 10,
+		darkVariance: 1,
+		clippedFraction: 0,
+		pairCount: 1,
+		valid: level !== 1,
+		selectedForGainFit: false,
+		fitRejectionReasons: [],
+	}))
+	const [annotated, gain] = fitPhotonTransferGain(points, [0, 1])
+	expect(annotated[1].selectedForGainFit).toBeFalse()
+	expect(annotated[1].fitRejectionReasons).toContain('invalidPoint')
+	expect(gain?.system).toBeCloseTo(0.5, 12)
+})

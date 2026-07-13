@@ -9,7 +9,7 @@ import type { DigitalImage } from '../model/types'
 export type SensorPlane = 'mono' | 'red' | 'green1' | 'green2' | 'blue'
 
 // Reason a temporal measurement point was excluded from a fit.
-export type SensorPointRejectionReason = 'outsideFitRange' | 'nonPositiveSignal' | 'nonPositiveVariance' | 'clipped' | 'unstableIllumination' | 'insufficientSamples'
+export type SensorPointRejectionReason = 'invalidPoint' | 'outsideFitRange' | 'nonPositiveSignal' | 'nonPositiveVariance' | 'clipped' | 'unstableIllumination' | 'insufficientSamples'
 
 // Camera configuration under which all measurements were acquired.
 export interface SensorOperatingPoint {

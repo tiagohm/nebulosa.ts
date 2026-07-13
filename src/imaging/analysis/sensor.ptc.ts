@@ -184,6 +184,7 @@ export function fitPhotonTransferGain(points: readonly PhotonTransferPoint[], ra
 	let selectedCount = 0
 	for (const point of points) {
 		const reasons: SensorPointRejectionReason[] = []
+		if (!point.valid) reasons.push('invalidPoint')
 		if (!(point.signal > 0)) reasons.push('nonPositiveSignal')
 		if (!(point.variance > 0)) reasons.push('nonPositiveVariance')
 		if (point.clippedFraction > 0) reasons.push('clipped')
