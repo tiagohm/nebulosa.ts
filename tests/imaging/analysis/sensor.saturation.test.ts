@@ -62,6 +62,15 @@ test('ignores invalid levels in the plateau tail', () => {
 	expect(result).toBeUndefined()
 })
 
+test('scales plateau detection by stimulus spacing', () => {
+	const linear = detectSensorSaturation([point(0, 100, 10, 0, 100), point(1, 101, 20, 0, 101), point(2, 102, 30, 0, 102)], GAIN)
+	expect(linear).toBeUndefined()
+
+	const plateau = detectSensorSaturation([point(0, 100, 10), point(1, 200, 20), point(2, 200, 30)], GAIN)
+	expect(plateau?.method).toBe('plateau')
+	expect(plateau?.signal).toBe(200)
+})
+
 test('computes practical RMS and EMVA sensitivity dynamic ranges separately', () => {
 	const saturation = { signal: 500, capacity: 1000, index: 2, method: 'unclippedLevel', confidence: 0.95 } as const
 	const readNoise: SensorReadNoise = { digital: 2, totalElectrons: 4, sensorElectrons: 3.9, pairCount: 2, deviation: 0.1 }

@@ -104,11 +104,17 @@ export function detectSensorSaturation(points: readonly PhotonTransferPoint[], g
 	}
 
 	if (valid.length >= 3) {
-		let maximumSignal = 0
-		for (const point of valid) maximumSignal = Math.max(maximumSignal, point.signal)
 		const last = valid.at(-1)!
 		const previous = valid.at(-2)!
-		if (maximumSignal > 0 && Math.abs(last.signal - previous.signal) <= maximumSignal * 0.01) {
+		const before = valid.at(-3)!
+		const tailStimulus = last.stimulus ?? last.exposure
+		const previousStimulus = previous.stimulus ?? previous.exposure
+		const beforeStimulus = before.stimulus ?? before.exposure
+		const tailIncrease = tailStimulus - previousStimulus
+		const previousIncrease = previousStimulus - beforeStimulus
+		const tailSlope = tailIncrease > 0 ? (last.signal - previous.signal) / tailIncrease : Number.NaN
+		const previousSlope = previousIncrease > 0 ? (previous.signal - before.signal) / previousIncrease : Number.NaN
+		if (Number.isFinite(tailSlope) && Number.isFinite(previousSlope) && previousSlope > 0 && Math.abs(tailSlope) <= previousSlope * 0.01) {
 			const result = saturation(previous, previous.signal, 'plateau', 0.5, gain)
 			if (result) return result
 		}
