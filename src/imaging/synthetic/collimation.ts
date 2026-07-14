@@ -154,7 +154,13 @@ export function renderSyntheticCollimationPattern(raw: ImageRawType, pattern: Sy
 	const channels = pattern.channels ?? 1
 	const expectedLength = pattern.width * pattern.height * channels
 	if (raw.length !== expectedLength) throw new RangeError(`buffer length mismatch: expected ${expectedLength}, received ${raw.length}`)
+	return renderValidatedSyntheticCollimationPattern(raw, pattern, saturationLevel)
+}
 
+// Adds a pattern whose geometry, buffer layout, and saturation were already validated for the current
+// render batch. This internal hot-path primitive avoids repeating invariant geometry checks per star.
+export function renderValidatedSyntheticCollimationPattern(raw: ImageRawType, pattern: SyntheticCollimationPattern, saturationLevel?: number): boolean {
+	const channels = pattern.channels ?? 1
 	const outer = resolveEllipse(pattern.outer)
 	const obstruction = resolveEllipse(pattern.obstruction)
 	const harmonics = pattern.harmonics

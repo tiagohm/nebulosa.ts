@@ -9,7 +9,7 @@ import { writeImageToFits, writeImageToXisf } from '../../imaging/model/image'
 import type { CfaPattern, Image, ImageRawType } from '../../imaging/model/types'
 import { colorIndexToRgbWeights, gaussianSigmaFromHfd, plotStar, type PlotStarOptions } from '../../imaging/stars/generator'
 import { evaluateSyntheticAberration, type ResolvedSyntheticAberration, resolveSyntheticAberration, type SyntheticAberrationConfig, type SyntheticStarAberration } from '../../imaging/synthetic/aberration'
-import { applySyntheticCollimationBlur, renderSyntheticCollimationPattern, type SyntheticCollimationPattern } from '../../imaging/synthetic/collimation'
+import { applySyntheticCollimationBlur, renderSyntheticCollimationPattern, renderValidatedSyntheticCollimationPattern, type SyntheticCollimationPattern } from '../../imaging/synthetic/collimation'
 import { type AstronomicalImageNoiseConfig, type AstronomicalImageStar, DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG, generateNoiseImage, generateStarImage } from '../../imaging/synthetic/generator'
 import type { FitsHeader } from '../../io/formats/fits/fits'
 import { bufferSink } from '../../io/io'
@@ -2411,6 +2411,7 @@ export class CameraSimulator extends DeviceSimulator {
 		const plotGain = plotOptions.gain ?? 1
 		const focusedPlotOptions: PlotStarOptions = { ...plotOptions, psfModel: 'gaussian', focusStep: bestFocus, bestFocus }
 		const channelWeights: [number, number, number] | undefined = channels === 3 ? [1 / 3, 1 / 3, 1 / 3] : undefined
+		let annularFixtureValidated = false
 
 		const fixture = {
 			width,
@@ -2463,7 +2464,11 @@ export class CameraSimulator extends DeviceSimulator {
 				channelWeights[2] = weights[2]
 			}
 
-			renderSyntheticCollimationPattern(raw, fixture, plotOptions.saturationLevel)
+			if (annularFixtureValidated) renderValidatedSyntheticCollimationPattern(raw, fixture, plotOptions.saturationLevel)
+			else {
+				renderSyntheticCollimationPattern(raw, fixture, plotOptions.saturationLevel)
+				annularFixtureValidated = true
+			}
 		}
 	}
 

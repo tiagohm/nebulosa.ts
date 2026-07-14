@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { colorIndexToRgbWeights, plotStar } from '../../../src/imaging/stars/generator'
-import { applySyntheticCollimationBlur, generateSyntheticCollimationImage, renderSyntheticCollimationPattern, type SyntheticCollimationPattern } from '../../../src/imaging/synthetic/collimation'
+import { applySyntheticCollimationBlur, generateSyntheticCollimationImage, renderSyntheticCollimationPattern, renderValidatedSyntheticCollimationPattern, type SyntheticCollimationPattern } from '../../../src/imaging/synthetic/collimation'
 
 // Verifies deterministic annular fixtures independently from the INDI camera integration.
 
@@ -186,6 +186,14 @@ describe('synthetic collimation image', () => {
 		raw.fill(pattern.background)
 		expect(renderSyntheticCollimationPattern(raw, pattern)).toBeTrue()
 		expect(sum(raw)).toBeCloseTo(64 * 64 * 0.3 + 100, 6)
+	})
+
+	test('reuses validated geometry for subsequent patterns in a render batch', () => {
+		const pattern = fixture()
+		const raw = new Float64Array(64 * 64)
+		expect(renderSyntheticCollimationPattern(raw, pattern)).toBeTrue()
+		expect(renderValidatedSyntheticCollimationPattern(raw, pattern)).toBeTrue()
+		expect(sum(raw)).toBeCloseTo(200, 6)
 	})
 
 	test('clamps accumulated annular samples at the star saturation level', () => {
