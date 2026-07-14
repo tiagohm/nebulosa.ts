@@ -205,6 +205,14 @@ describe('synthetic collimation image', () => {
 		expect(() => generateSyntheticCollimationImage(pattern)).toThrow('obstruction must be contained')
 	})
 
+	test('rejects a slender near-tangent obstruction escaping between sparse angles', () => {
+		const pattern = fixture({
+			outer: { center: { x: 32, y: 32 }, semiMajor: 20, semiMinor: 6, theta: -0.6075485148800015, softness: 0.5 },
+			obstruction: { center: { x: 33.69883232191205, y: 31.802297553047538 }, semiMajor: 6.124932156410068, semiMinor: 0.454666255787015, theta: 0.3466286439143537, softness: 0.5 },
+		})
+		expect(() => generateSyntheticCollimationImage(pattern)).toThrow('obstruction must be contained')
+	})
+
 	test('makes the annulus thicker opposite the obstruction offset', () => {
 		const image = generateSyntheticCollimationImage(fixture({ obstruction: { center: { x: 36, y: 32 }, semiMajor: 8, semiMinor: 8, theta: 0, softness: 0.5 } }))
 		expect(halfPlaneSum(image.raw, 64, 64, true)).toBeLessThan(halfPlaneSum(image.raw, 64, 64, false))
