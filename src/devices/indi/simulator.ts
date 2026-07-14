@@ -7,7 +7,7 @@ import { timeUnix } from '../../astronomy/time/time'
 import { ASEC2RAD, DAYSEC, DEG2RAD, MOON_SIDEREAL_DAYS, PIOVERTWO, SIDEREAL_DAYSEC, SIDEREAL_RATE, TAU } from '../../core/constants'
 import { writeImageToFits, writeImageToXisf } from '../../imaging/model/image'
 import type { CfaPattern, Image, ImageRawType } from '../../imaging/model/types'
-import { plotStar, type PlotStarOptions } from '../../imaging/stars/generator'
+import { gaussianSigmaFromHfd, plotStar, type PlotStarOptions } from '../../imaging/stars/generator'
 import { evaluateSyntheticAberration, type ResolvedSyntheticAberration, resolveSyntheticAberration, type SyntheticAberrationConfig, type SyntheticStarAberration } from '../../imaging/synthetic/aberration'
 import { applySyntheticCollimationBlur, renderSyntheticCollimationPattern, type SyntheticCollimationPattern } from '../../imaging/synthetic/collimation'
 import { type AstronomicalImageNoiseConfig, type AstronomicalImageStar, DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG, generateNoiseImage, generateStarImage } from '../../imaging/synthetic/generator'
@@ -2373,7 +2373,8 @@ export class CameraSimulator extends DeviceSimulator {
 			const stars = await this.#collectFrameStars(exposureTime, rotatorAngle)
 			if (this.#plotPsfModel.elements.ANNULAR.value) {
 				this.#renderAnnularStars(raw, width, height, channels, stars)
-				applySyntheticCollimationBlur(raw, width, height, channels, this.seeing)
+				const seeingSigma = gaussianSigmaFromHfd(this.seeing)
+				applySyntheticCollimationBlur(raw, width, height, channels, { sigmaX: seeingSigma / this.#bin.elements.HOR_BIN.value, sigmaY: seeingSigma / this.#bin.elements.VER_BIN.value })
 				generateNoiseImage(raw, width, height, channels, noiseConfig)
 			} else {
 				generateStarImage(raw, width, height, channels, stars, this.seeing, noiseConfig, this.#makePlotOptions())

@@ -49,6 +49,14 @@ export interface SyntheticDirectionalBlur {
 	readonly angle: Angle
 }
 
+// Anisotropic Gaussian blur standard deviations in output-image pixels.
+export interface SyntheticGaussianBlur {
+	// Horizontal Gaussian standard deviation in pixels.
+	readonly sigmaX: number
+	// Vertical Gaussian standard deviation in pixels.
+	readonly sigmaY: number
+}
+
 // Radial spider-vane attenuation centered on the outer ellipse.
 export interface SyntheticSpider {
 	// Number of radial vanes; zero disables the effect.
@@ -170,15 +178,17 @@ export function renderSyntheticCollimationPattern(raw: ImageRawType, pattern: Sy
 
 // Applies Gaussian seeing and optional linear tracking blur to an interleaved image in place. Temporary
 // buffers are allocated once per call, not inside pixel loops.
-export function applySyntheticCollimationBlur(raw: ImageRawType, width: number, height: number, channels: 1 | 3, seeing: number = 0, tracking?: SyntheticDirectionalBlur): ImageRawType {
+export function applySyntheticCollimationBlur(raw: ImageRawType, width: number, height: number, channels: 1 | 3, seeing: number | SyntheticGaussianBlur = 0, tracking?: SyntheticDirectionalBlur): ImageRawType {
 	validateRaster(raw, width, height, channels)
-	if (!Number.isFinite(seeing) || seeing < 0) throw new RangeError('seeing must be finite and non-negative')
+	const sigmaX = typeof seeing === 'number' ? seeing : seeing.sigmaX
+	const sigmaY = typeof seeing === 'number' ? seeing : seeing.sigmaY
+	if (!Number.isFinite(sigmaX) || sigmaX < 0 || !Number.isFinite(sigmaY) || sigmaY < 0) throw new RangeError('seeing must be finite and non-negative')
 	if (tracking !== undefined) {
 		if (!Number.isFinite(tracking.length) || tracking.length < 0) throw new RangeError('tracking length must be finite and non-negative')
 		if (!Number.isFinite(tracking.angle)) throw new RangeError('tracking angle must be finite')
 	}
 
-	if (seeing > 0) gaussianBlurInPlace(raw, width, height, channels, seeing)
+	if (sigmaX > 0 || sigmaY > 0) gaussianBlurInPlace(raw, width, height, channels, sigmaX, sigmaY)
 	if (tracking !== undefined && tracking.length > 0) directionalBlurInPlace(raw, width, height, channels, tracking)
 	return raw
 }
@@ -383,32 +393,34 @@ function validateRaster(raw: ImageRawType, width: number, height: number, channe
 }
 
 // Applies a normalized separable Gaussian kernel with zero-valued samples outside the frame.
-function gaussianBlurInPlace(raw: ImageRawType, width: number, height: number, channels: 1 | 3, sigma: number): void {
-	const radius = Math.max(1, Math.ceil(sigma * GAUSSIAN_SUPPORT))
-	const kernel = new Float64Array(radius * 2 + 1)
-	let divisor = 0
-	for (let i = -radius; i <= radius; i++) {
-		const value = Math.exp(-(i * i) / (2 * sigma * sigma))
-		kernel[i + radius] = value
-		divisor += value
-	}
-	for (let i = 0; i < kernel.length; i++) kernel[i] /= divisor
-
-	const horizontal = new Float32Array(raw.length)
-	for (let y = 0; y < height; y++) {
-		for (let x = 0; x < width; x++) {
-			const pixel = (y * width + x) * channels
-			for (let channel = 0; channel < channels; channel++) {
-				let sum = 0
-				for (let tap = -radius; tap <= radius; tap++) {
-					const sampleX = x + tap
-					if (sampleX < 0 || sampleX >= width) continue
-					sum += raw[(y * width + sampleX) * channels + channel] * kernel[tap + radius]
+function gaussianBlurInPlace(raw: ImageRawType, width: number, height: number, channels: 1 | 3, sigmaX: number, sigmaY: number): void {
+	const horizontal = sigmaX > 0 ? new Float32Array(raw.length) : raw
+	if (sigmaX > 0) {
+		const kernel = gaussianKernel(sigmaX)
+		const radius = (kernel.length - 1) >> 1
+		for (let y = 0; y < height; y++) {
+			for (let x = 0; x < width; x++) {
+				const pixel = (y * width + x) * channels
+				for (let channel = 0; channel < channels; channel++) {
+					let sum = 0
+					for (let tap = -radius; tap <= radius; tap++) {
+						const sampleX = x + tap
+						if (sampleX < 0 || sampleX >= width) continue
+						sum += raw[(y * width + sampleX) * channels + channel] * kernel[tap + radius]
+					}
+					horizontal[pixel + channel] = sum
 				}
-				horizontal[pixel + channel] = sum
 			}
 		}
 	}
+
+	if (sigmaY <= 0) {
+		if (horizontal !== raw) raw.set(horizontal)
+		return
+	}
+
+	const kernel = gaussianKernel(sigmaY)
+	const radius = (kernel.length - 1) >> 1
 	for (let y = 0; y < height; y++) {
 		for (let x = 0; x < width; x++) {
 			const pixel = (y * width + x) * channels
@@ -423,6 +435,20 @@ function gaussianBlurInPlace(raw: ImageRawType, width: number, height: number, c
 			}
 		}
 	}
+}
+
+// Builds a normalized one-dimensional Gaussian kernel for a positive standard deviation in pixels.
+function gaussianKernel(sigma: number): Float64Array {
+	const radius = Math.max(1, Math.ceil(sigma * GAUSSIAN_SUPPORT))
+	const kernel = new Float64Array(radius * 2 + 1)
+	let divisor = 0
+	for (let i = -radius; i <= radius; i++) {
+		const value = Math.exp(-(i * i) / (2 * sigma * sigma))
+		kernel[i + radius] = value
+		divisor += value
+	}
+	for (let i = 0; i < kernel.length; i++) kernel[i] /= divisor
+	return kernel
 }
 
 // Applies a sampled line convolution with zero-valued samples outside the frame.

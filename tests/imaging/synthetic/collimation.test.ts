@@ -113,6 +113,24 @@ describe('synthetic collimation image', () => {
 		expect(sum(raw)).toBeGreaterThan(0)
 	})
 
+	test('applies anisotropic seeing in output-pixel sigma units', () => {
+		const raw = new Float64Array(17 * 17)
+		raw[8 * 17 + 8] = 1
+		applySyntheticCollimationBlur(raw, 17, 17, 1, { sigmaX: 0.6, sigmaY: 1.2 })
+
+		let varianceX = 0
+		let varianceY = 0
+		for (let y = 0; y < 17; y++) {
+			for (let x = 0; x < 17; x++) {
+				const value = raw[y * 17 + x]
+				varianceX += (x - 8) * (x - 8) * value
+				varianceY += (y - 8) * (y - 8) * value
+			}
+		}
+		expect(varianceX).toBeCloseTo(0.6 * 0.6, 1)
+		expect(varianceY).toBeCloseTo(1.2 * 1.2, 1)
+	})
+
 	test('adds normalized flux to a caller-owned buffer', () => {
 		const pattern = fixture({ background: 0.3 })
 		const raw = new Float64Array(64 * 64)
