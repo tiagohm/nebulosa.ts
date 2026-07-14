@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { colorIndexToRgbWeights, plotStar } from '../../../src/imaging/stars/generator'
 import { applySyntheticCollimationBlur, generateSyntheticCollimationImage, renderSyntheticCollimationPattern, type SyntheticCollimationPattern } from '../../../src/imaging/synthetic/collimation'
 
 // Verifies deterministic annular fixtures independently from the INDI camera integration.
@@ -76,11 +77,26 @@ describe('synthetic collimation image', () => {
 		})
 		const rgb = generateSyntheticCollimationImage(ellipse)
 		expect(rgb.metadata.channels).toBe(3)
-		expect(sum(rgb.raw)).toBeCloseTo(300, 3)
+		expect(sum(rgb.raw)).toBeCloseTo(100, 3)
 
 		const cfa = generateSyntheticCollimationImage(fixture({ bayer: 'RGGB', crop: { left: 1, top: 0, right: 63, bottom: 64 } }))
 		expect(cfa.metadata.channels).toBe(1)
 		expect(cfa.metadata.bayer).toBe('GRBG')
+	})
+
+	test('matches Gaussian RGB flux scaling and color weights', () => {
+		const colorIndex = 1.2
+		const channelWeights = colorIndexToRgbWeights(colorIndex)
+		const annular = generateSyntheticCollimationImage(fixture({ channels: 3, signal: 200, channelWeights }))
+		const gaussian = new Float64Array(64 * 64 * 3)
+		plotStar(gaussian, 64, 64, 3, 32, 32, 100, 4, 100, 0, colorIndex, { gain: 2 })
+
+		expect(sum(annular.raw)).toBeCloseTo(sum(gaussian), 3)
+		for (let channel = 0; channel < 3; channel++) {
+			let channelFlux = 0
+			for (let pixel = channel; pixel < annular.raw.length; pixel += 3) channelFlux += annular.raw[pixel]
+			expect(channelFlux / sum(annular.raw)).toBeCloseTo(channelWeights[channel], 4)
+		}
 	})
 
 	test('applies deterministic optical and sensor effects in the documented order', () => {

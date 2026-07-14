@@ -7,7 +7,7 @@ import { timeUnix } from '../../astronomy/time/time'
 import { ASEC2RAD, DAYSEC, DEG2RAD, MOON_SIDEREAL_DAYS, PIOVERTWO, SIDEREAL_DAYSEC, SIDEREAL_RATE, TAU } from '../../core/constants'
 import { writeImageToFits, writeImageToXisf } from '../../imaging/model/image'
 import type { CfaPattern, Image, ImageRawType } from '../../imaging/model/types'
-import { gaussianSigmaFromHfd, plotStar, type PlotStarOptions } from '../../imaging/stars/generator'
+import { colorIndexToRgbWeights, gaussianSigmaFromHfd, plotStar, type PlotStarOptions } from '../../imaging/stars/generator'
 import { evaluateSyntheticAberration, type ResolvedSyntheticAberration, resolveSyntheticAberration, type SyntheticAberrationConfig, type SyntheticStarAberration } from '../../imaging/synthetic/aberration'
 import { applySyntheticCollimationBlur, renderSyntheticCollimationPattern, type SyntheticCollimationPattern } from '../../imaging/synthetic/collimation'
 import { type AstronomicalImageNoiseConfig, type AstronomicalImageStar, DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG, generateNoiseImage, generateStarImage } from '../../imaging/synthetic/generator'
@@ -2408,12 +2408,15 @@ export class CameraSimulator extends DeviceSimulator {
 		const collimationAngle = shape.COLLIMATION_ANGLE.value
 		const spiderVanes = Math.round(pattern.SPIDER_VANES.value)
 		const plotOptions = this.#makePlotOptions()
+		const plotGain = plotOptions.gain ?? 1
 		const focusedPlotOptions: PlotStarOptions = { ...plotOptions, psfModel: 'gaussian', focusStep: bestFocus, bestFocus }
+		const channelWeights: [number, number, number] | undefined = channels === 3 ? [1 / 3, 1 / 3, 1 / 3] : undefined
 
 		const fixture = {
 			width,
 			height,
 			channels,
+			channelWeights,
 			outer: { center: { x: 0, y: 0 }, semiMajor: 0, semiMinor: 0, theta: 0, softness: 0 },
 			obstruction: { center: { x: 0, y: 0 }, semiMajor: 0, semiMinor: 0, theta: 0, softness: 0 },
 			signal: 0,
@@ -2452,7 +2455,13 @@ export class CameraSimulator extends DeviceSimulator {
 			fixture.obstruction.semiMinor = sensorObstructionRadius * scaleY
 			fixture.obstruction.softness = softness
 			if (fixture.spider !== undefined) fixture.spider.width = pattern.SPIDER_WIDTH.value * Math.sqrt(scaleX * scaleY)
-			fixture.signal = star.flux
+			fixture.signal = star.flux * plotGain
+			if (channelWeights !== undefined) {
+				const weights = colorIndexToRgbWeights(star.colorIndex, plotOptions.gammaCompensation)
+				channelWeights[0] = weights[0]
+				channelWeights[1] = weights[1]
+				channelWeights[2] = weights[2]
+			}
 
 			renderSyntheticCollimationPattern(raw, fixture)
 		}

@@ -87,6 +87,8 @@ export interface SyntheticCollimationPattern {
 	readonly height: number
 	// Number of interleaved channels; defaults to monochrome.
 	readonly channels?: 1 | 3
+	// Normalized red, green, and blue signal fractions for RGB output; defaults to equal energy.
+	readonly channelWeights?: readonly [number, number, number]
 	// Optional CFA metadata for a monochrome mosaic.
 	readonly bayer?: CfaPattern
 	// Outer illuminated boundary.
@@ -139,9 +141,8 @@ interface ResolvedEllipse {
 	readonly softness: number
 }
 
-// Adds one normalized collimation annulus to an existing interleaved image buffer. The signal is the
-// integrated flux across all pixels and is replicated into each RGB channel. Returns false when the
-// complete outer support falls outside the frame.
+// Adds one normalized collimation annulus to an existing interleaved image buffer. Signal is integrated
+// across all pixels and channels. Returns false when the complete outer support falls outside the frame.
 export function renderSyntheticCollimationPattern(raw: ImageRawType, pattern: SyntheticCollimationPattern): boolean {
 	validateSyntheticCollimationPattern(pattern, false)
 	const channels = pattern.channels ?? 1
@@ -161,15 +162,16 @@ export function renderSyntheticCollimationPattern(raw: ImageRawType, pattern: Sy
 	if (!(weightSum > MIN_WEIGHT_SUM)) return false
 
 	const scale = pattern.signal / weightSum
+	const channelWeights = pattern.channelWeights ?? [1 / 3, 1 / 3, 1 / 3]
 	for (let y = bounds.top; y < bounds.bottom; y++) {
 		let pixel = (y * pattern.width + bounds.left) * channels
 		for (let x = bounds.left; x < bounds.right; x++, pixel += channels) {
 			const value = annulusWeight(x, y, outer, obstruction, pattern) * scale
 			if (channels === 1) raw[pixel] += value
 			else {
-				raw[pixel] += value
-				raw[pixel + 1] += value
-				raw[pixel + 2] += value
+				raw[pixel] += value * channelWeights[0]
+				raw[pixel + 1] += value * channelWeights[1]
+				raw[pixel + 2] += value * channelWeights[2]
 			}
 		}
 	}
@@ -228,6 +230,11 @@ function validateSyntheticCollimationPattern(pattern: SyntheticCollimationPatter
 	if (!Number.isInteger(pattern.height) || pattern.height <= 0) throw new RangeError('height must be a positive integer')
 	if (pattern.channels !== undefined && pattern.channels !== 1 && pattern.channels !== 3) throw new RangeError('channels must be 1 or 3')
 	if (pattern.bayer !== undefined && (pattern.channels ?? 1) !== 1) throw new RangeError('bayer metadata requires one channel')
+	if (pattern.channelWeights !== undefined) {
+		if ((pattern.channels ?? 1) !== 3) throw new RangeError('channel weights require three channels')
+		const sum = pattern.channelWeights[0] + pattern.channelWeights[1] + pattern.channelWeights[2]
+		if (!pattern.channelWeights.every((weight) => Number.isFinite(weight) && weight >= 0) || Math.abs(sum - 1) > 1e-9) throw new RangeError('channel weights must be finite, non-negative, and sum to one')
+	}
 	if (!Number.isFinite(pattern.signal) || pattern.signal < 0) throw new RangeError('signal must be finite and non-negative')
 	if (!Number.isFinite(pattern.background)) throw new RangeError('background must be finite')
 	if (!Number.isFinite(pattern.noise) || pattern.noise < 0) throw new RangeError('noise must be finite and non-negative')
