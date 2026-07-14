@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { type AffineTransform, applyTransformToPoint, applyTransformToStars, canonicalTrianglePattern, fitAffineTransform, fitSimilarityTransform, invertSimilarityTransform, invertTransform, matchStars, type SimilarityTransform, type StarMatchingResult } from '../../../src/astrometry/matching/star.matching'
+import { PI, PIOVERTWO } from '../../../src/core/constants'
 import { medianOf } from '../../../src/core/util'
 import { type DetectedStar, detectStars } from '../../../src/imaging/stars/detector'
 import { vecDistance } from '../../../src/math/linear-algebra/vec3'
@@ -529,13 +530,13 @@ describe('real stars dataset', async () => {
 			{
 				name: 'similarity ninety degrees',
 				model: 'similarity',
-				transform: similarity(1, Math.PI / 2, 42, 18),
+				transform: similarity(1, PIOVERTWO, 42, 18),
 				config: { allowAffineFallback: false, maxRotation: undefined },
 			},
 			{
 				name: 'similarity one eighty degrees',
 				model: 'similarity',
-				transform: similarity(1, Math.PI, -16, 28),
+				transform: similarity(1, PI, -16, 28),
 				config: { allowAffineFallback: false, maxRotation: undefined },
 			},
 			{
@@ -596,12 +597,12 @@ describe('real stars dataset', async () => {
 			{
 				name: 'similarity ninety degrees',
 				model: 'similarity',
-				transform: similarity(1, Math.PI / 2, 42, 18),
+				transform: similarity(1, PIOVERTWO, 42, 18),
 			},
 			{
 				name: 'similarity one eighty degrees',
 				model: 'similarity',
-				transform: similarity(1, Math.PI, -16, 28),
+				transform: similarity(1, PI, -16, 28),
 			},
 			{
 				name: 'similarity scaled rotated',

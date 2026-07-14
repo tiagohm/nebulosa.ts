@@ -1,3 +1,4 @@
+import { PI, PIOVERTWO } from '../../core/constants'
 import { gaussianElimination, Matrix } from '../../math/linear-algebra/matrix'
 import type { Angle } from '../../math/units/angle'
 import type { Image } from '../model/types'
@@ -203,7 +204,7 @@ export function fitEllipticalMoffat(image: Image, input: MoffatFitInput, workspa
 			workspace.candidate[i] = parameters[i] + workspace.step[i]
 			maximumRelativeStep = Math.max(maximumRelativeStep, Math.abs(workspace.step[i]) / (1 + Math.abs(parameters[i])))
 		}
-		workspace.candidate[6] = ((workspace.candidate[6] % Math.PI) + Math.PI) % Math.PI
+		workspace.candidate[6] = ((workspace.candidate[6] % PI) + PI) % PI
 		if (!validCandidate(workspace.candidate, input)) {
 			damping *= 10
 			if (damping > MAX_DAMPING) return failureFromEvaluation('singular', evaluation, iterations + 1)
@@ -405,9 +406,9 @@ function publicFit(parameters: Readonly<Float64Array>, rms: number, iterations: 
 		const temporary = alphaMajor
 		alphaMajor = alphaMinor
 		alphaMinor = temporary
-		theta += Math.PI / 2
+		theta += PIOVERTWO
 	}
-	theta = ((theta % Math.PI) + Math.PI) % Math.PI
+	theta = ((theta % PI) + PI) % PI
 	const axisRatio = alphaMinor / alphaMajor
 	const eccentricity = Math.sqrt(Math.max(0, 1 - axisRatio * axisRatio))
 	const relativeRms = rms / Math.max(amplitude, input.deviation, Number.EPSILON)

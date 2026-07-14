@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { PI, PIOVERFOUR, PIOVERTWO, TAU } from '../../../src/core/constants'
 import type { NumberArray } from '../../../src/math/numerical/math'
 import { bisection, brentMinimize, brentRoot, coordinateDescent, falsePositionRoot, goldenSectionSearch, levenbergMarquardt, nelderMead, powell, secantRoot } from '../../../src/math/numerical/optimization'
 
@@ -219,7 +220,7 @@ describe('Levenberg-Marquardt optimization', () => {
 			return a * Math.sin(b * x + c)
 		}
 
-		const x = [0, Math.PI / 2, Math.PI, (3 * Math.PI) / 2, 2 * Math.PI]
+		const x = [0, PIOVERTWO, PI, (3 * PI) / 2, TAU]
 		const y = [0, 1, 0, -1, 0]
 		const result = levenbergMarquardt(x, y, sine, [1, 1, 0])
 
@@ -227,7 +228,7 @@ describe('Levenberg-Marquardt optimization', () => {
 		expect(result[1]).toBeCloseTo(1, 8)
 		expect(result[2]).toBeCloseTo(0, 8)
 
-		expect(sine(Math.PI / 4, result)).toBeCloseTo(0.7071067811865475, 8)
+		expect(sine(PIOVERFOUR, result)).toBeCloseTo(0.7071067811865475, 8)
 
 		for (let i = 0; i < x.length; i++) {
 			expect(sine(x[i], result)).toBeCloseTo(y[i], 8)

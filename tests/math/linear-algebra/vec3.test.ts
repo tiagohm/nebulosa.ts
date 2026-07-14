@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { PI, PIOVERTWO } from '../../../src/core/constants'
+import { PI, PIOVERFOUR, PIOVERTWO } from '../../../src/core/constants'
 import { deg } from '../../../src/math/units/angle'
 // oxfmt-ignore
 import { type MutVec3, type Vec3, vecAngle, vecCross, vecDistance, vecDiv, vecDivScalar, vecDot, vecLatitude, vecLength, vecLongitude, vecMinus, vecMinusScalar, vecMul, vecMulScalar, vecNegate, vecNormalize, vecNormalizeMut, vecPlane, vecPlus, vecPlusScalar, vecPolarAngle, vecRotateByRodrigues, vecRotX, vecRotY, vecRotZ, vecXAxis, vecYAxis, vecZAxis } from '../../../src/math/linear-algebra/vec3'
@@ -12,11 +12,11 @@ test('angle', () => {
 	expect(vecAngle([1, 1e-8, 0], [1, 0, 0])).toBeCloseTo(1e-8, 15)
 	expect(vecAngle([0, 0, 0], [1, 0, 0])).toBe(0)
 	expect(vecAngle([1, 0, 0], [1, 0, 0])).toBe(0)
-	expect(vecAngle([1, 0, 0], [0, 1, 0])).toBe(PI / 2)
+	expect(vecAngle([1, 0, 0], [0, 1, 0])).toBe(PIOVERTWO)
 	expect(vecAngle([1, 0, 0], [-1, 0, 0])).toBe(PI)
 	expect(vecAngle([0, 0, 0], [1, 0, 0])).toBe(0)
 	expect(vecAngle([1e308, 0, 0], [1e308, 0, 0])).toBe(0)
-	expect(vecAngle([1e308, 0, 0], [0, 1e308, 0])).toBe(PI / 2)
+	expect(vecAngle([1e308, 0, 0], [0, 1e308, 0])).toBe(PIOVERTWO)
 })
 
 test('normalize', () => {
@@ -88,24 +88,24 @@ test('cross', () => {
 test('vecPolarAngle', () => {
 	expect(vecPolarAngle([0, 0, 1])).toBe(0)
 	expect(vecPolarAngle([0, 0, -1])).toBe(PI)
-	expect(vecPolarAngle([1, 0, 0])).toBe(PI / 2)
+	expect(vecPolarAngle([1, 0, 0])).toBe(PIOVERTWO)
 	// Must handle non-unit vectors (acos(2) would be NaN).
 	expect(vecPolarAngle([0, 0, 2])).toBe(0)
-	expect(vecPolarAngle([10, 0, 0])).toBe(PI / 2)
+	expect(vecPolarAngle([10, 0, 0])).toBe(PIOVERTWO)
 })
 
 test('vecLatitude', () => {
-	expect(vecLatitude([0, 0, 1])).toBe(PI / 2)
+	expect(vecLatitude([0, 0, 1])).toBe(PIOVERTWO)
 	expect(vecLatitude([1, 0, 0])).toBe(0)
-	expect(vecLatitude([0, 0, -1])).toBe(-PI / 2)
-	expect(vecLatitude([0, 0, 2])).toBe(PI / 2)
+	expect(vecLatitude([0, 0, -1])).toBe(-PIOVERTWO)
+	expect(vecLatitude([0, 0, 2])).toBe(PIOVERTWO)
 	expect(vecLatitude([10, 0, 0])).toBe(0)
-	expect(vecLatitude([0, 0, -5])).toBe(-PI / 2)
+	expect(vecLatitude([0, 0, -5])).toBe(-PIOVERTWO)
 })
 
 test('vecLongitude', () => {
 	expect(vecLongitude([1, 0, 0])).toBe(0)
-	expect(vecLongitude([0, 1, 0])).toBe(PI / 2)
+	expect(vecLongitude([0, 1, 0])).toBe(PIOVERTWO)
 	expect(vecLongitude([-1, 0, 0])).toBe(PI)
 	expect(vecLongitude([0, -1, 0])).toBe((3 * PI) / 2)
 })
@@ -121,17 +121,17 @@ test('rotate by rodrigues', () => {
 	expect(vecRotateByRodrigues(z, z, PI)).toEqual(z)
 
 	const v: Vec3 = [1, 2, 3]
-	let u = vecRotateByRodrigues(v, x, PI / 4)
+	let u = vecRotateByRodrigues(v, x, PIOVERFOUR)
 	expect(u[0]).toBeCloseTo(1, 15)
 	expect(u[1]).toBeCloseTo(-0.7071067811865472, 15)
 	expect(u[2]).toBeCloseTo(3.5355339059327378, 15)
 
-	u = vecRotateByRodrigues(v, y, PI / 4)
+	u = vecRotateByRodrigues(v, y, PIOVERFOUR)
 	expect(u[0]).toBeCloseTo(2.82842712474619, 15)
 	expect(u[1]).toBeCloseTo(2, 15)
 	expect(u[2]).toBeCloseTo(1.4142135623730954, 15)
 
-	u = vecRotateByRodrigues(v, z, PI / 4)
+	u = vecRotateByRodrigues(v, z, PIOVERFOUR)
 	expect(u[0]).toBeCloseTo(-0.7071067811865474, 15)
 	expect(u[1]).toBeCloseTo(2.121320343559643, 15)
 	expect(u[2]).toBeCloseTo(3, 15)

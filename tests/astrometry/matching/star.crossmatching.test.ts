@@ -3,6 +3,7 @@ import { crossMatchStars, type StarCrossmatchCameraInfo } from '../../../src/ast
 import { Gnomonic } from '../../../src/astronomy/projections/projection'
 import type { StarCatalog, StarCatalogEntry, StarCatalogQuery, Vertex } from '../../../src/catalogs/stars/catalog'
 import { HnskyCatalog } from '../../../src/catalogs/stars/hnsky'
+import { PI, TAU } from '../../../src/core/constants'
 import { type DetectedStar, detectStars } from '../../../src/imaging/stars/detector'
 import { Bitpix } from '../../../src/io/formats/fits/fits'
 import { sphericalDestination, sphericalSeparation, type Point } from '../../../src/math/numerical/geometry'
@@ -136,7 +137,7 @@ function createScenario(options: ScenarioOptions): Scenario {
 
 	for (let index = 0; index < distractorStars; index++) {
 		const radius = randomRange(random, fieldRadiusRadians * 1.45, Math.min(queryRadius * 0.95, fieldRadiusRadians * 3))
-		const angle = randomRange(random, 0, Math.PI * 2)
+		const angle = randomRange(random, 0, TAU)
 		const sky = gnomonic.unproject(radius * Math.cos(angle), radius * Math.sin(angle), p)
 		if (sky === undefined) continue
 		catalogStars.push({ id: index, epoch: 2000, rightAscension: sky.x, declination: sky.y, magnitude: 12 + random() * 2 })
@@ -297,8 +298,8 @@ describe('image-based star crossmatching', () => {
 		expect(result.success).toBeTrue()
 		expect(result.solution?.mirrored).toBeFalse()
 		expect(result.solution!.scale).toBeGreaterThan(0)
-		expect(result.solution!.rotation).toBeGreaterThanOrEqual(-Math.PI)
-		expect(result.solution!.rotation).toBeLessThanOrEqual(Math.PI)
+		expect(result.solution!.rotation).toBeGreaterThanOrEqual(-PI)
+		expect(result.solution!.rotation).toBeLessThanOrEqual(PI)
 		expect(result.summary.totalDetected).toBe(scenario.detectedStars.length)
 		expect(result.summary.matchedCount + result.summary.unmatchedCount).toBe(result.summary.totalDetected)
 		expect(result.summary.inlierCount).toBeGreaterThan(0)

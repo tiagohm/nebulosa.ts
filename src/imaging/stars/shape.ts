@@ -1,3 +1,4 @@
+import { PI } from '../../core/constants'
 import type { Angle } from '../../math/units/angle'
 
 // Shared principal-axis measurements derived from normalized central second moments in image pixels.
@@ -32,7 +33,7 @@ export function starMomentShape(momentXX: number, momentXY: number, momentYY: nu
 
 	const ratio = minorVariance / majorVariance
 	let theta = 0.5 * Math.atan2(2 * momentXY, momentXX - momentYY)
-	if (theta < 0) theta += Math.PI
+	if (theta < 0) theta += PI
 
 	return {
 		majorVariance,

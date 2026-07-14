@@ -3,7 +3,7 @@ import type { EquatorialCoordinate } from '../../../../src/astronomy/coordinates
 import { KeplerOrbit } from '../../../../src/astronomy/orbits/asteroid'
 import { gauss, type GaussObservation } from '../../../../src/astronomy/orbits/determination/gauss'
 import { type Time, Timescale, timeShift, timeYMDHMS } from '../../../../src/astronomy/time/time'
-import { DAYSPERJY, GM_SUN_PITJEVA_2005, TAU } from '../../../../src/core/constants'
+import { DAYSPERJY, GM_SUN_PITJEVA_2005, PI, TAU } from '../../../../src/core/constants'
 import { matIdentity } from '../../../../src/math/linear-algebra/mat3'
 import { type MutVec3, type Vec3, vecDistance, vecLength } from '../../../../src/math/linear-algebra/vec3'
 import { normalizeAngle } from '../../../../src/math/units/angle'
@@ -125,7 +125,7 @@ test('rejects invalid numeric input', () => {
 
 	expect(() => gauss({ ...obs1, rightAscension: Number.NaN }, obs2, obs3, { mu: MU })).toThrow('value must be finite')
 	expect(() => gauss({ ...obs1, declination: Number.POSITIVE_INFINITY }, obs2, obs3, { mu: MU })).toThrow('value must be finite')
-	expect(() => gauss({ ...obs1, declination: Math.PI }, obs2, obs3, { mu: MU })).toThrow('value must be within')
+	expect(() => gauss({ ...obs1, declination: PI }, obs2, obs3, { mu: MU })).toThrow('value must be within')
 	expect(() => gauss({ ...obs1, observer: [Number.NaN, 0, 0] }, obs2, obs3, { mu: MU })).toThrow('value must be finite')
 	expect(() => gauss({ ...obs1, time: invalidTime }, obs2, obs3, { mu: MU })).toThrow('value must be finite')
 	expect(() => gauss(obs1, obs2, obs3, { mu: 0 })).toThrow('value must be positive')

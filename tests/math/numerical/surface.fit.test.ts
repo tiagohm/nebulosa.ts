@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test'
+import { PI, TAU } from '../../../src/core/constants'
 import { analyzeFocusCurvature, analyzeFocusPlane, evaluateFocusSurface, fitFocusSurface, focusSurfaceEffect, type FocusSurfaceCoefficients, type FocusSurfaceSample } from '../../../src/math/numerical/surface.fit'
 
 // Creates a regular normalized sensor grid for deterministic surface-fit fixtures.
@@ -144,7 +145,7 @@ test('analyzes the planar focus component', () => {
 	expect(analysis.gradientX).toBe(12)
 	expect(analysis.gradientY).toBe(-8)
 	expect(analysis.effect).toBe(20)
-	expect(analysis.direction).toBeCloseTo(2 * Math.PI + Math.atan2(-8, 12), 12)
+	expect(analysis.direction).toBeCloseTo(TAU + Math.atan2(-8, 12), 12)
 })
 
 // Derives Hessian eigenstructure, a stationary point, and center-to-edge curvature metrics.
@@ -153,7 +154,7 @@ test('analyzes quadratic focus curvature', () => {
 
 	expect(analysis.principalX).toBeCloseTo(14 + Math.sqrt(72), 12)
 	expect(analysis.principalY).toBeCloseTo(14 - Math.sqrt(72), 12)
-	expect(analysis.orientation).toBeCloseTo(0.5 * Math.atan2(-6, 6) + Math.PI, 12)
+	expect(analysis.orientation).toBeCloseTo(0.5 * Math.atan2(-6, 6) + PI, 12)
 	expect(analysis.anisotropy).toBeGreaterThan(0)
 	expect(analysis.stationaryPoint).toBeDefined()
 	expect(analysis.centerToEdge).toBeCloseTo(3.5, 12)

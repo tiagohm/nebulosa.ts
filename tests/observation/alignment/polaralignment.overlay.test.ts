@@ -4,6 +4,7 @@ import { tanProject } from '../../../src/astrometry/wcs/fits.wcs'
 import { eraC2s } from '../../../src/astronomy/coordinates/erfa/erfa'
 import { geodeticLocation } from '../../../src/astronomy/observer/location'
 import { timeYMDHMS } from '../../../src/astronomy/time/time'
+import { PI, PIOVERTWO } from '../../../src/core/constants'
 import type { FitsHeader } from '../../../src/io/formats/fits/fits'
 import { vecAngleUnit } from '../../../src/math/linear-algebra/vec3'
 import { arcmin, arcsec, deg } from '../../../src/math/units/angle'
@@ -436,8 +437,8 @@ describe('complete overlay', () => {
 		expect(computed.overlay.correction.converged).toBeTrue()
 		expect(computed.overlay.correction.stable).toBeTrue()
 		expect(vecAngleUnit(corrected, alignment.targetPole)).toBeLessThan(arcsec(0.05))
-		expect(Math.abs(computed.overlay.correction.azimuth)).toBeLessThanOrEqual(Math.PI / 2)
-		expect(Math.abs(computed.overlay.correction.altitude)).toBeLessThanOrEqual(Math.PI / 2)
+		expect(Math.abs(computed.overlay.correction.azimuth)).toBeLessThanOrEqual(PIOVERTWO)
+		expect(Math.abs(computed.overlay.correction.altitude)).toBeLessThanOrEqual(PIOVERTWO)
 	})
 
 	test('returns the best finite correction with a deterministic non-convergence warning', () => {
@@ -490,11 +491,11 @@ describe('complete overlay', () => {
 		expect(computeThreePointPolarAlignmentOverlay(alignment.result, makeSolution(), timeWithoutLocation, { tolerances: [] })).toMatchObject({ success: false, reason: 'missingLocation' })
 		expect(computeThreePointPolarAlignmentOverlay(alignment.result, makeSolution(), alignment.time, { margin: 300, tolerances: [] })).toMatchObject({ success: false, reason: 'invalidFrame' })
 		expect(computeThreePointPolarAlignmentOverlay({ ...alignment.result, pole: [0, 0, 0] }, makeSolution(), alignment.time, { tolerances: [] })).toMatchObject({ success: false, reason: 'invalidPole' })
-		expect(computeThreePointPolarAlignmentOverlay(alignment.result, makeSolution(), alignment.time, { reference: { type: 'equatorial', rightAscension: 0, declination: Math.PI }, tolerances: [] })).toMatchObject({ success: false, reason: 'invalidReference' })
+		expect(computeThreePointPolarAlignmentOverlay(alignment.result, makeSolution(), alignment.time, { reference: { type: 'equatorial', rightAscension: 0, declination: PI }, tolerances: [] })).toMatchObject({ success: false, reason: 'invalidReference' })
 
 		const antipodalPole = [-alignment.targetPole[0], -alignment.targetPole[1], -alignment.targetPole[2]] as const
 		expect(computeThreePointPolarAlignmentOverlay({ ...alignment.result, pole: antipodalPole }, makeSolution(), alignment.time, { refraction: false, tolerances: [] })).toMatchObject({ success: false, reason: 'degenerateCorrection' })
-		expect(computeThreePointPolarAlignmentOverlay({ ...alignment.result, pole: antipodalPole }, makeSolution(), alignment.time, { refraction: false, reference: { type: 'equatorial', rightAscension: 0, declination: Math.PI }, tolerances: [] })).toMatchObject({ success: false, reason: 'invalidReference' })
+		expect(computeThreePointPolarAlignmentOverlay({ ...alignment.result, pole: antipodalPole }, makeSolution(), alignment.time, { refraction: false, reference: { type: 'equatorial', rightAscension: 0, declination: PI }, tolerances: [] })).toMatchObject({ success: false, reason: 'invalidReference' })
 
 		const invalidWcs = { ...makeSolution(), CD1_1: 1, CD1_2: 2, CD2_1: 1, CD2_2: 2 }
 		expect(computeThreePointPolarAlignmentOverlay(alignment.result, invalidWcs, alignment.time, { tolerances: [] })).toMatchObject({ success: false, reason: 'invalidWcs' })
@@ -505,19 +506,7 @@ describe('complete overlay', () => {
 
 	test('validates every bounded solver and contour option', () => {
 		const alignment = makeAlignment(deg(35))
-		const invalidOptions = [
-			{ samples: 11 },
-			{ samples: 257 },
-			{ samples: 12.5 },
-			{ maximumIterations: 0 },
-			{ derivativeStep: 0 },
-			{ correctionTolerance: 0 },
-			{ maximumCondition: 1 },
-			{ tolerances: [0] },
-			{ tolerances: [Math.PI] },
-			{ refraction: { pressure: -1 } },
-			{ refraction: { relativeHumidity: 1.1 } },
-		] as const
+		const invalidOptions = [{ samples: 11 }, { samples: 257 }, { samples: 12.5 }, { maximumIterations: 0 }, { derivativeStep: 0 }, { correctionTolerance: 0 }, { maximumCondition: 1 }, { tolerances: [0] }, { tolerances: [PI] }, { refraction: { pressure: -1 } }, { refraction: { relativeHumidity: 1.1 } }] as const
 		for (const options of invalidOptions) expect(computeThreePointPolarAlignmentOverlay(alignment.result, makeSolution(), alignment.time, options)).toMatchObject({ success: false, reason: 'invalidOptions' })
 	})
 

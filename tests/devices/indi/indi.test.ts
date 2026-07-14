@@ -5,7 +5,7 @@ import { CameraManager, CoverManager, type DeviceHandler, FlatPanelManager, Focu
 import type { DefNumberVector, DefSwitchVector, DefTextVector, PropertyState, SetTextVector } from '../../../src/devices/indi/types'
 // oxfmt-ignore
 import { SimpleXmlParser, type XmlNode } from '../../../src/io/xml'
-import { PI, SIDEREAL_DAYSEC, TAU } from '../../../src/core/constants'
+import { PI, PIOVERTWO, SIDEREAL_DAYSEC, TAU } from '../../../src/core/constants'
 import { downloadPerTag } from '../../download'
 import { isTimeConsumingTestSkipped } from '../../util'
 
@@ -274,7 +274,7 @@ describe('meridianTimeIn', () => {
 		// On the meridian now -> no remaining time.
 		expect(meridianTimeIn(0, 0)).toBe(0)
 		// A quarter turn east (6 sidereal hours) -> a quarter sidereal day.
-		expect(meridianTimeIn(PI / 2, 0)).toBeCloseTo(SIDEREAL_DAYSEC / 4, 3)
+		expect(meridianTimeIn(PIOVERTWO, 0)).toBeCloseTo(SIDEREAL_DAYSEC / 4, 3)
 		// Half a turn (12 sidereal hours) -> half a sidereal day (~11.97 solar hours).
 		expect(meridianTimeIn(PI, 0)).toBeCloseTo(SIDEREAL_DAYSEC / 2, 3)
 	})
@@ -298,8 +298,8 @@ describe('expectedPierSide', () => {
 	})
 
 	test('the pole is undefined', () => {
-		expect(expectedPierSide(0, PI / 2, lst)).toBe('NEITHER')
-		expect(expectedPierSide(0, -PI / 2, lst)).toBe('NEITHER')
+		expect(expectedPierSide(0, PIOVERTWO, lst)).toBe('NEITHER')
+		expect(expectedPierSide(0, -PIOVERTWO, lst)).toBe('NEITHER')
 	})
 })
 

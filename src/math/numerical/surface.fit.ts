@@ -1,3 +1,4 @@
+import { PI } from '../../core/constants'
 import { normalizeAngle, type Angle } from '../units/angle'
 import type { Point } from './geometry'
 import { robustLinearLeastSquares } from './least.squares'
@@ -275,7 +276,7 @@ export function analyzeFocusCurvature(surface: FocusSurfaceCoefficients): FocusC
 	const principalX = surface.qxx + surface.qyy + spread
 	const principalY = surface.qxx + surface.qyy - spread
 	let orientation = 0.5 * Math.atan2(surface.qxy, difference)
-	if (orientation < 0) orientation += Math.PI
+	if (orientation < 0) orientation += PI
 	const anisotropy = spread > 0 ? Math.min(1, (principalX - principalY) / Math.max(Math.abs(principalX), Math.abs(principalY), Number.EPSILON)) : 0
 	const determinant = hxx * hyy - hxy * hxy
 	const scale = Math.max(1, hxx * hxx + 2 * hxy * hxy + hyy * hyy)

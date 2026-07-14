@@ -58,7 +58,7 @@ import { Matrix } from '../src/math/linear-algebra/matrix'
 // oxfmt-ignore
 import { Timescale, dut1 as dut1FromTime, earthRotationAngle, equationOfEquinoxes, greenwichApparentSiderealTime, greenwichMeanSiderealTime, nutationAngles, pmAngles, pmMatrix, tai, taiMinusUtc, tcb, tdb, timeBesselianYear, timeJulianYear, timeMJD, timeShift, timeSubtract, timeToDate, timeUnix, timeYMDHMS, toJulianDay, toJulianEpoch, tt, ut1, utc, type Time } from '../src/astronomy/time/time'
 import { formatTemporal, temporalFromTime } from '../src/astronomy/time/temporal'
-import { AU_KM, DAYSEC, DAYSPERSY, DAYSPERTY, EARTH_RADIUS_KM, GM_EARTH, GM_EARTH_KM3_S2, GM_SUN_PITJEVA_2005, PI, SPEED_OF_LIGHT_AU_DAY, SUN_RADIUS_AU, TAU } from '../src/core/constants'
+import { AU_KM, DAYSEC, DAYSPERSY, DAYSPERTY, EARTH_RADIUS_KM, GM_EARTH, GM_EARTH_KM3_S2, GM_SUN_PITJEVA_2005, PI, PIOVERTWO, SPEED_OF_LIGHT_AU_DAY, SUN_RADIUS_AU, TAU } from '../src/core/constants'
 import { type Vec3, vecAngle, vecCross, vecLatitude, vecLength, vecLongitude, vecMinus, vecMulScalar, vecNormalize } from '../src/math/linear-algebra/vec3'
 import { sphericalDestination, sphericalInterpolate, sphericalPolygonArea, sphericalPositionAngle, sphericalProjectTangentPlane, sphericalSeparation, sphericalTriangleAngles, sphericalTriangleArea, sphericalUnprojectTangentPlane } from '../src/math/numerical/geometry'
 import { type Angle, arcsec, deg, formatAZ, formatHMS, formatSignedDMS, hms, hour, normalizeAngle, normalizePI, toArcsec, toDeg, toHour } from '../src/math/units/angle'
@@ -390,14 +390,14 @@ function smallAngleOffset() {
 
 // Celestial Pole Distance: co-declination = 90deg - DEC.
 function celestialPoleDistance() {
-	console.info('Distance to north celestial pole (deg):', toDeg(PI / 2 - SIRIUS_DEC))
+	console.info('Distance to north celestial pole (deg):', toDeg(PIOVERTWO - SIRIUS_DEC))
 }
 
 // Zenith Distance: 90deg minus altitude (and the zenith's equatorial coords).
 function zenithDistance() {
 	const lst = localSiderealTime(NOW, SITE, false)
 	const [, alt] = equatorialToHorizontal(SIRIUS_RA, SIRIUS_DEC, SITE.latitude, lst)
-	console.info('Zenith distance of Sirius (deg):', toDeg(PI / 2 - alt))
+	console.info('Zenith distance of Sirius (deg):', toDeg(PIOVERTWO - alt))
 	const [zra, zdec] = zenith(SITE.longitude, SITE.latitude, NOW)
 	console.info('Zenith equatorial RA/DEC:', formatHMS(normalizeAngle(zra)), formatSignedDMS(zdec))
 }
@@ -773,7 +773,7 @@ function planetaryConjunction() {
 // from the sign of the geocentric ecliptic longitude difference planet - Sun: a planet east of the Sun is
 // at east (evening) quadrature, one west of it at west (morning) quadrature.
 function planetaryQuadrature() {
-	const quadratures = searchRoots((time) => elongationAt(mars, time) - PI / 2, NOW, timeShift(NOW, 800), { step: 5 })
+	const quadratures = searchRoots((time) => elongationAt(mars, time) - PIOVERTWO, NOW, timeShift(NOW, 800), { step: 5 })
 	if (quadratures.length === 0) return console.info('Mars quadratures: none in the next synodic period.')
 	const labelled = quadratures.map((time) => {
 		const planetEq = vectorToEquatorial(geocentricDirection(mars, time))
@@ -1239,17 +1239,17 @@ function objectVisibilityIntervals() {
 function circumpolarClassification() {
 	const lat = SITE.latitude
 	let kind = 'rises and sets'
-	if (SIRIUS_DEC > PI / 2 - Math.abs(lat) && lat > 0) kind = 'circumpolar (always up)'
-	else if (SIRIUS_DEC < -(PI / 2 - Math.abs(lat)) && lat > 0) kind = 'never rises'
-	else if (SIRIUS_DEC < -(PI / 2 - Math.abs(lat)) && lat < 0) kind = 'circumpolar (always up)'
-	else if (SIRIUS_DEC > PI / 2 - Math.abs(lat) && lat < 0) kind = 'never rises'
+	if (SIRIUS_DEC > PIOVERTWO - Math.abs(lat) && lat > 0) kind = 'circumpolar (always up)'
+	else if (SIRIUS_DEC < -(PIOVERTWO - Math.abs(lat)) && lat > 0) kind = 'never rises'
+	else if (SIRIUS_DEC < -(PIOVERTWO - Math.abs(lat)) && lat < 0) kind = 'circumpolar (always up)'
+	else if (SIRIUS_DEC > PIOVERTWO - Math.abs(lat) && lat < 0) kind = 'never rises'
 	console.info('Circumpolar classification:', kind)
 }
 
 // Airmass Calculation.
 function airmassCalculation() {
 	const alt = altitudeAtTransit(SITE.latitude, SIRIUS_DEC)
-	console.info('Airmass at transit (secant):', airmass(PI / 2 - alt), 'Kasten-Young:', airmassKastenYoung(alt))
+	console.info('Airmass at transit (secant):', airmass(PIOVERTWO - alt), 'Kasten-Young:', airmassKastenYoung(alt))
 }
 
 // Airmass Time Series across hour angles around transit.
@@ -1963,7 +1963,7 @@ function satelliteEclipseDuration() {
 function satelliteBetaAngle() {
 	const [p, v] = sgp4(SAT_TIME, recordFromTLE(ISS_TLE))
 	const normal = frameToFrame(vecCross(p, v), TEME, ICRS, SAT_TIME)
-	const beta = PI / 2 - vecAngle(geocentricSun(SAT_TIME), normal)
+	const beta = PIOVERTWO - vecAngle(geocentricSun(SAT_TIME), normal)
 	console.info('ISS beta angle (deg):', toDeg(beta).toFixed(2))
 }
 

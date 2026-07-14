@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { cd, cdFromCdelt, cdMatrix, DEC_TAN_SIP, hasCd, isWcsFitsKeyword, pc2cd, RA_TAN_SIP, tanProject, tanUnproject } from '../../../src/astrometry/wcs/fits.wcs'
 import { Wcs } from '../../../src/bindings/astrometry/libwcs'
-import { PI } from '../../../src/core/constants'
+import { PI, PIOVERTWO } from '../../../src/core/constants'
 import type { FitsHeader } from '../../../src/io/formats/fits/fits'
 import { type Angle, deg } from '../../../src/math/units/angle'
 
@@ -141,7 +141,7 @@ describe('cd', () => {
 describe('cd from cdelt', () => {
 	test('converts scale and rotation into a CD matrix', () => {
 		// Canonical WCS conversion: CD1_2 = -CDELT2·sin, CD2_1 = CDELT1·sin.
-		expectMatrixCloseTo(cdFromCdelt(2, 3, PI / 2), [0, -3, 2, 0])
+		expectMatrixCloseTo(cdFromCdelt(2, 3, PIOVERTWO), [0, -3, 2, 0])
 	})
 
 	test('applies axis flips to the rotated matrix', () => {

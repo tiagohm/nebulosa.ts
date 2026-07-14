@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { coordinateToTile, distanceToTile, tileIntersectsDisc, ASTROMETRY_INDEX_MANIFEST, type AstrometryNetIndexRequest, selectAstrometryIndexes } from '../../../src/astrometry/solvers/astrometrynet.index'
 import { coordToPixel } from '../../../src/astronomy/sky/spatial/healpix'
-import { PI, TAU } from '../../../src/core/constants'
+import { PI, PIOVERTWO, TAU } from '../../../src/core/constants'
 import { arcmin, deg, toArcmin, toDeg } from '../../../src/math/units/angle'
 
 // Astrometry.net XY fixtures.
@@ -151,14 +151,14 @@ describe('astrometry.net healpix xy', () => {
 		expect(() => coordinateToTile(Number.NaN, 0, 2)).toThrow(RangeError)
 		expect(() => coordinateToTile(0, Number.NaN, 2)).toThrow(RangeError)
 		expect(() => coordinateToTile(Number.POSITIVE_INFINITY, 0, 2)).toThrow(RangeError)
-		expect(() => coordinateToTile(0, PI / 2 + 1e-6, 2)).toThrow(RangeError)
-		expect(() => coordinateToTile(0, -PI / 2 - 1e-6, 2)).toThrow(RangeError)
+		expect(() => coordinateToTile(0, PIOVERTWO + 1e-6, 2)).toThrow(RangeError)
+		expect(() => coordinateToTile(0, -PIOVERTWO - 1e-6, 2)).toThrow(RangeError)
 		expect(() => distanceToTile(0, 2, Number.NaN, 0)).toThrow(RangeError)
 		expect(() => distanceToTile(0, 2, 0, PI)).toThrow(RangeError)
 		expect(() => tileIntersectsDisc(0, 2, 0, Number.NaN, 0)).toThrow(RangeError)
 		// The exact poles remain valid.
-		expect(() => coordinateToTile(0, PI / 2, 2)).not.toThrow()
-		expect(() => coordinateToTile(0, -PI / 2, 2)).not.toThrow()
+		expect(() => coordinateToTile(0, PIOVERTWO, 2)).not.toThrow()
+		expect(() => coordinateToTile(0, -PIOVERTWO, 2)).not.toThrow()
 	})
 
 	test('non-finite or negative search radius throws RangeError', () => {

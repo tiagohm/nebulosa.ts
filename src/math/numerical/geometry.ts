@@ -1,5 +1,5 @@
 import { eraS2c } from '../../astronomy/coordinates/erfa/erfa'
-import { PI } from '../../core/constants'
+import { PI, PIOVERTWO } from '../../core/constants'
 import { type MutVec3, type Vec3, vecCross, vecDot, vecFill, vecNormalize, vecNormalizeMut } from '../linear-algebra/vec3'
 import { normalizeAngle } from '../units/angle'
 import { clamp } from './math'
@@ -387,7 +387,7 @@ export function sphericalDestination(longitude: number, latitude: number, positi
 	const sinPositionAngle = Math.sin(positionAngle)
 	const cosPositionAngle = Math.cos(positionAngle)
 	const nextSinLatitude = sinLatitude * cosDistance + cosLatitude * sinDistance * cosPositionAngle
-	const nextLatitude = nextSinLatitude <= -1 ? -PI / 2 : nextSinLatitude >= 1 ? PI / 2 : Math.asin(nextSinLatitude)
+	const nextLatitude = nextSinLatitude <= -1 ? -PIOVERTWO : nextSinLatitude >= 1 ? PIOVERTWO : Math.asin(nextSinLatitude)
 	const y = sinPositionAngle * sinDistance * cosLatitude
 	const x = cosDistance - sinLatitude * nextSinLatitude
 	return [normalizeAngle(longitude + Math.atan2(y, x)), nextLatitude] as const

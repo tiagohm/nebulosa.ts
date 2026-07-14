@@ -2,7 +2,7 @@ import { angularDistance, type EquatorialCoordinate, equatorialToHorizontal } fr
 import { eraC2s, eraS2c } from '../../astronomy/coordinates/erfa/erfa'
 import { localSiderealTime } from '../../astronomy/observer/location'
 import type { Time } from '../../astronomy/time/time'
-import { AMIN2RAD, DEG2RAD, PIOVERTWO, TAU } from '../../core/constants'
+import { AMIN2RAD, DEG2RAD, PI, PIOVERTWO, TAU } from '../../core/constants'
 import { medianOf, percentileOf, rmsOf, STANDARD_DEVIATION_SCALE } from '../../core/util'
 import type { PierSide } from '../../devices/indi/device'
 import { type Vec3, vecAngle } from '../../math/linear-algebra/vec3'
@@ -508,7 +508,7 @@ export function extractEmpiricalPointingFeatures(input: Readonly<PointingModelIn
 
 	const hourAngle = context.hourAngle ?? 0
 	const altitude = context.altitude ?? 0
-	const normalizedHourAngle = context.hourAngle === undefined ? 0 : hourAngle / Math.PI
+	const normalizedHourAngle = context.hourAngle === undefined ? 0 : hourAngle / PI
 	const normalizedDeclination = input.declination / PIOVERTWO
 	const sinHa = context.hourAngle === undefined ? 0 : Math.sin(hourAngle)
 	const cosHa = context.hourAngle === undefined ? 0 : Math.cos(hourAngle)
@@ -1197,8 +1197,8 @@ function summarizePointingCoverage(samples: readonly PreparedPointingSample[]): 
 			maxLon = Math.max(maxLon, context.longitude)
 		}
 
-		const haBin = context.hourAngle === undefined ? 0 : Math.min(5, Math.max(0, Math.floor(((context.hourAngle + Math.PI) / TAU) * 6)))
-		const decBin = Math.min(3, Math.max(0, Math.floor(((dec + PIOVERTWO) / Math.PI) * 4)))
+		const haBin = context.hourAngle === undefined ? 0 : Math.min(5, Math.max(0, Math.floor(((context.hourAngle + PI) / TAU) * 6)))
+		const decBin = Math.min(3, Math.max(0, Math.floor(((dec + PIOVERTWO) / PI) * 4)))
 		bins[haBin * 4 + decBin] = 1
 	}
 

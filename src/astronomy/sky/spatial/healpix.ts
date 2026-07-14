@@ -18,7 +18,7 @@ const HEALPIX_FACE_COUNT = 12
 // |sin(dec)| boundary between the equatorial belt and the polar caps (z = 2/3).
 const EQUATORIAL_Z_LIMIT = 2 / 3
 // Multiplier converting a face cell's edge span into an angular radius bound for cover tests.
-const COVER_BOUND_FACTOR = PI / 2
+const COVER_BOUND_FACTOR = PIOVERTWO
 // General angular/geometry tolerance, radians.
 const EPSILON = 1e-14
 // Tolerance for RA/Dec box edge comparisons, radians.

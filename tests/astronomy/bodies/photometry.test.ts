@@ -4,6 +4,7 @@ import type { PositionAndVelocity } from '../../../src/astronomy/coordinates/ast
 import { earth, jupiter, mars, mercury, neptune, saturn, sun, uranus, venus } from '../../../src/astronomy/ephemeris/models/analytical/vsop87e'
 import { Timescale, type Time, timeYMDHMS, toJulianEpoch } from '../../../src/astronomy/time/time'
 import { type Vec3, vecMinus } from '../../../src/math/linear-algebra/vec3'
+import { deg } from '../../../src/math/units/angle'
 
 // Shared instant and the corresponding Julian year (Neptune's secular term).
 const NOW = timeYMDHMS(2026, 6, 29, 0, 0, 0, Timescale.UTC)
@@ -41,7 +42,7 @@ test('the magnitude reduces to the distance modulus at zero phase', () => {
 })
 
 test('Jupiter uses the large-phase photometric branch', () => {
-	const phase = (30 * Math.PI) / 180
+	const phase = deg(30)
 	const sunToBody: Vec3 = [5, 0, 0]
 	const observerToBody: Vec3 = [4 * Math.cos(phase), 4 * Math.sin(phase), 0]
 	const p = 30 / 180

@@ -1,3 +1,4 @@
+import { DEG2RAD, PIOVERTWO } from '../../core/constants'
 import type { Point } from '../../math/numerical/geometry'
 import { clamp } from '../../math/numerical/math'
 import type { Angle } from '../../math/units/angle'
@@ -358,7 +359,7 @@ export const DEFAULT_GUIDING_CALIBRATOR_CONFIG: Readonly<GuidingCalibrationConfi
 	clearingMoveFraction: 1,
 	maxClearingSteps: 20,
 	maxClearingOffsetPx: 4,
-	minAxisSeparation: (12 * Math.PI) / 180,
+	minAxisSeparation: 12 * DEG2RAD,
 	minDeterminant: 1e-6,
 	maxMatchDistancePx: 8,
 	edgeMarginPx: 12,
@@ -927,7 +928,7 @@ function validateGuidingCalibratorConfig(config: GuidingCalibrationConfig) {
 	if (config.clearingMoveFraction <= 0) issues.push({ key: 'clearingMoveFraction', reason: 'must be > 0' })
 	if (config.maxClearingSteps <= 0) issues.push({ key: 'maxClearingSteps', reason: 'must be > 0' })
 	if (config.maxClearingOffsetPx < 0) issues.push({ key: 'maxClearingOffsetPx', reason: 'must be >= 0' })
-	if (config.minAxisSeparation <= 0 || config.minAxisSeparation >= Math.PI / 2) issues.push({ key: 'minAxisSeparation', reason: 'must be within (0, pi/2)' })
+	if (config.minAxisSeparation <= 0 || config.minAxisSeparation >= PIOVERTWO) issues.push({ key: 'minAxisSeparation', reason: 'must be within (0, pi/2)' })
 	if (config.minDeterminant <= 0) issues.push({ key: 'minDeterminant', reason: 'must be > 0' })
 	if (config.maxMatchDistancePx <= 0) issues.push({ key: 'maxMatchDistancePx', reason: 'must be > 0' })
 	if (config.edgeMarginPx < 0) issues.push({ key: 'edgeMarginPx', reason: 'must be >= 0' })

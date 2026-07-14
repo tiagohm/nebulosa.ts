@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test'
+import { PIOVERTWO } from '../../../src/core/constants'
 import { evaluateSyntheticAberration, resolveSyntheticAberration, type SyntheticAberrationConfig, type SyntheticStarAberration } from '../../../src/imaging/synthetic/aberration'
 
 // Tests the allocation-free synthetic aberration evaluator independently from camera rendering.
@@ -76,11 +77,11 @@ test('backfocus sign swaps radial and tangential covariance', () => {
 })
 
 test('decenter and collimation move and combine coma vectors without non-finite output', () => {
-	const resolved = resolveSyntheticAberration(config({ comaEnabled: true, decenterEnabled: true, collimationEnabled: true, decenterX: 0.25, coma: 0.5, collimation: 0.2, collimationAngle: Math.PI / 2 }))
+	const resolved = resolveSyntheticAberration(config({ comaEnabled: true, decenterEnabled: true, collimationEnabled: true, decenterX: 0.25, coma: 0.5, collimation: 0.2, collimationAngle: PIOVERTWO }))
 	const out = result()
 
 	evaluateSyntheticAberration(149.25, 49.5, 200, 100, 1000, 1000, resolved, out)
 	expect(out.coma).toBeCloseTo(0.2, 9)
-	expect(out.comaTheta).toBeCloseTo(Math.PI / 2, 9)
+	expect(out.comaTheta).toBeCloseTo(PIOVERTWO, 9)
 	for (const value of Object.values(out)) expect(Number.isFinite(value)).toBeTrue()
 })

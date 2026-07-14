@@ -1,4 +1,5 @@
-import { describe, expect, test } from 'bun:test'
+import { expect, test } from 'bun:test'
+import { PI, PIOVERFOUR } from '../../../src/core/constants'
 import type { Image } from '../../../src/imaging/model/types'
 import { detectStarProfiles, measureStarProfile, measureStarProfiles } from '../../../src/imaging/stars/profile'
 import { Bitpix } from '../../../src/io/formats/fits/fits'
@@ -89,7 +90,7 @@ test('measures a round Gaussian with refined centroid and HFD', () => {
 test('measures an elliptical Gaussian principal shape', () => {
 	const majorSigma = 3
 	const minorSigma = 1.5
-	const theta = Math.PI / 4
+	const theta = PIOVERFOUR
 	const scale = 2 * Math.sqrt(2 * Math.LN2)
 	const source = image(81, 81)
 	addGaussian(source, 40.2, 39.8, majorSigma, minorSigma, theta, 0.6)
@@ -155,7 +156,7 @@ test('falls back to moments when a requested Moffat fit is poor', () => {
 test('fits independent Moffat profiles in input order', () => {
 	const source = image(97, 65)
 	addMoffat(source, 24.2, 31.8, 2.6, 2.6, 0, 2.2, 0.6)
-	addMoffat(source, 72.25, 32.3, 3.1, 1.7, Math.PI - 0.2, 3.1, 0.55)
+	addMoffat(source, 72.25, 32.3, 3.1, 1.7, PI - 0.2, 3.1, 0.55)
 
 	const profiles = measureStarProfiles(
 		source,
@@ -173,13 +174,13 @@ test('fits independent Moffat profiles in input order', () => {
 	const secondFit = profiles[1].moffat
 	if (!firstFit?.success || !secondFit?.success) return
 	expect(firstFit.beta).toBeCloseTo(2.2, 2)
-	expect(profiles[1].theta).toBeCloseTo(Math.PI - 0.2, 2)
+	expect(profiles[1].theta).toBeCloseTo(PI - 0.2, 2)
 	expect(secondFit.beta).toBeCloseTo(3.1, 2)
 })
 
 // Preserves axial orientation near the 0/PI wrap without flipping the principal axis.
 test('normalizes elliptical orientation near PI', () => {
-	const theta = Math.PI - 0.08
+	const theta = PI - 0.08
 	const source = image(81, 81)
 	addGaussian(source, 40, 40, 3, 1.5, theta, 0.6)
 	const profile = measureStarProfile(source, { x: 40, y: 40 }, { initialRadius: 4, maximumRadius: 24, minSNR: 0 })
@@ -187,7 +188,7 @@ test('normalizes elliptical orientation near PI', () => {
 	expect(profile.valid).toBeTrue()
 	expect(profile.theta).toBeDefined()
 	expect(profile.theta).toBeGreaterThan(0)
-	expect(profile.theta).toBeLessThan(Math.PI)
+	expect(profile.theta).toBeLessThan(PI)
 	expect(profile.theta).toBeCloseTo(theta, 1)
 })
 
