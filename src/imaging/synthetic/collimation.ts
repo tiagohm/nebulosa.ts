@@ -142,12 +142,13 @@ export function renderSyntheticCollimationPattern(raw: ImageRawType, pattern: Sy
 
 	const outer = resolveEllipse(pattern.outer)
 	const obstruction = resolveEllipse(pattern.obstruction)
-	const bounds = ellipseBounds(outer, pattern.width, pattern.height)
+	const support = ellipseBounds(outer)
+	const bounds = clipBounds(support, pattern.width, pattern.height)
 	if (bounds.left >= bounds.right || bounds.top >= bounds.bottom || pattern.signal === 0) return false
 
 	let weightSum = 0
-	for (let y = bounds.top; y < bounds.bottom; y++) {
-		for (let x = bounds.left; x < bounds.right; x++) weightSum += annulusWeight(x, y, outer, obstruction, pattern)
+	for (let y = support.top; y < support.bottom; y++) {
+		for (let x = support.left; x < support.right; x++) weightSum += annulusWeight(x, y, outer, obstruction, pattern)
 	}
 	if (!(weightSum > MIN_WEIGHT_SUM)) return false
 
@@ -300,15 +301,25 @@ function resolveEllipse(ellipse: SyntheticEllipse): ResolvedEllipse {
 	}
 }
 
-// Computes the clipped support of an ellipse including eight softness lengths.
-function ellipseBounds(ellipse: ResolvedEllipse, width: number, height: number): RasterBounds {
+// Computes the complete support of an ellipse including eight softness lengths.
+function ellipseBounds(ellipse: ResolvedEllipse): RasterBounds {
 	const extentX = Math.hypot(ellipse.semiMajor * ellipse.cosTheta, ellipse.semiMinor * ellipse.sinTheta) + ellipse.softness * 8
 	const extentY = Math.hypot(ellipse.semiMajor * ellipse.sinTheta, ellipse.semiMinor * ellipse.cosTheta) + ellipse.softness * 8
 	return {
-		left: Math.max(0, Math.floor(ellipse.centerX - extentX)),
-		top: Math.max(0, Math.floor(ellipse.centerY - extentY)),
-		right: Math.min(width, Math.ceil(ellipse.centerX + extentX + 1)),
-		bottom: Math.min(height, Math.ceil(ellipse.centerY + extentY + 1)),
+		left: Math.floor(ellipse.centerX - extentX),
+		top: Math.floor(ellipse.centerY - extentY),
+		right: Math.ceil(ellipse.centerX + extentX + 1),
+		bottom: Math.ceil(ellipse.centerY + extentY + 1),
+	}
+}
+
+// Intersects complete ellipse support with the writable image rectangle.
+function clipBounds(bounds: RasterBounds, width: number, height: number): RasterBounds {
+	return {
+		left: Math.max(0, bounds.left),
+		top: Math.max(0, bounds.top),
+		right: Math.min(width, bounds.right),
+		bottom: Math.min(height, bounds.bottom),
 	}
 }
 

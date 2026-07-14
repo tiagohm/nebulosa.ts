@@ -113,6 +113,17 @@ describe('synthetic collimation image', () => {
 		expect(sum(raw)).toBeCloseTo(64 * 64 * 0.3 + 100, 6)
 	})
 
+	test('normalizes against complete support before clipping an edge pattern', () => {
+		const image = generateSyntheticCollimationImage(
+			fixture({
+				outer: { center: { x: -15, y: 32 }, semiMajor: 20, semiMinor: 20, theta: 0, softness: 0.5 },
+				obstruction: { center: { x: -15, y: 32 }, semiMajor: 8, semiMinor: 8, theta: 0, softness: 0.5 },
+			}),
+		)
+		expect(sum(image.raw)).toBeGreaterThan(0)
+		expect(sum(image.raw)).toBeLessThan(30)
+	})
+
 	test('rejects an obstruction that escapes the outer ellipse', () => {
 		const pattern = fixture({ obstruction: { center: { x: 48, y: 32 }, semiMajor: 8, semiMinor: 8, theta: 0, softness: 0.5 } })
 		expect(() => generateSyntheticCollimationImage(pattern)).toThrow('obstruction must be contained')
