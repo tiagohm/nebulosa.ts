@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { generateSyntheticCollimationImage, renderSyntheticCollimationPattern, type SyntheticCollimationPattern } from '../../../src/imaging/synthetic/collimation'
+import { applySyntheticCollimationBlur, generateSyntheticCollimationImage, renderSyntheticCollimationPattern, type SyntheticCollimationPattern } from '../../../src/imaging/synthetic/collimation'
 
 // Verifies deterministic annular fixtures independently from the INDI camera integration.
 
@@ -103,6 +103,14 @@ describe('synthetic collimation image', () => {
 		expect(first.header.XORGSUBF).toBe(8)
 		expect(first.header.YORGSUBF).toBe(10)
 		expect(Math.max(...first.raw)).toBeLessThanOrEqual(0.2)
+	})
+
+	test('does not replicate edge pixels during optical blur', () => {
+		const raw = new Float64Array(9 * 9)
+		raw[4 * 9] = 1
+		applySyntheticCollimationBlur(raw, 9, 9, 1, 1.2, { length: 4, angle: 0 })
+		expect(sum(raw)).toBeLessThanOrEqual(1)
+		expect(sum(raw)).toBeGreaterThan(0)
 	})
 
 	test('adds normalized flux to a caller-owned buffer', () => {

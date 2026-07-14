@@ -382,7 +382,7 @@ function validateRaster(raw: ImageRawType, width: number, height: number, channe
 	if (raw.length !== width * height * channels) throw new RangeError('raster buffer length mismatch')
 }
 
-// Applies a normalized separable Gaussian kernel using edge replication.
+// Applies a normalized separable Gaussian kernel with zero-valued samples outside the frame.
 function gaussianBlurInPlace(raw: ImageRawType, width: number, height: number, channels: 1 | 3, sigma: number): void {
 	const radius = Math.max(1, Math.ceil(sigma * GAUSSIAN_SUPPORT))
 	const kernel = new Float64Array(radius * 2 + 1)
@@ -401,7 +401,8 @@ function gaussianBlurInPlace(raw: ImageRawType, width: number, height: number, c
 			for (let channel = 0; channel < channels; channel++) {
 				let sum = 0
 				for (let tap = -radius; tap <= radius; tap++) {
-					const sampleX = Math.max(0, Math.min(width - 1, x + tap))
+					const sampleX = x + tap
+					if (sampleX < 0 || sampleX >= width) continue
 					sum += raw[(y * width + sampleX) * channels + channel] * kernel[tap + radius]
 				}
 				horizontal[pixel + channel] = sum
@@ -414,7 +415,8 @@ function gaussianBlurInPlace(raw: ImageRawType, width: number, height: number, c
 			for (let channel = 0; channel < channels; channel++) {
 				let sum = 0
 				for (let tap = -radius; tap <= radius; tap++) {
-					const sampleY = Math.max(0, Math.min(height - 1, y + tap))
+					const sampleY = y + tap
+					if (sampleY < 0 || sampleY >= height) continue
 					sum += horizontal[(sampleY * width + x) * channels + channel] * kernel[tap + radius]
 				}
 				raw[pixel + channel] = sum
@@ -423,7 +425,7 @@ function gaussianBlurInPlace(raw: ImageRawType, width: number, height: number, c
 	}
 }
 
-// Applies a flux-preserving sampled line convolution with bilinear interpolation and edge replication.
+// Applies a sampled line convolution with zero-valued samples outside the frame.
 function directionalBlurInPlace(raw: ImageRawType, width: number, height: number, channels: 1 | 3, tracking: SyntheticDirectionalBlur): void {
 	const samples = Math.max(2, Math.ceil(tracking.length) + 1)
 	const dx = Math.cos(tracking.angle) * tracking.length
@@ -434,8 +436,9 @@ function directionalBlurInPlace(raw: ImageRawType, width: number, height: number
 			const pixel = (y * width + x) * channels
 			for (let sample = 0; sample < samples; sample++) {
 				const t = sample / (samples - 1) - 0.5
-				const sampleX = Math.max(0, Math.min(width - 1, x + dx * t))
-				const sampleY = Math.max(0, Math.min(height - 1, y + dy * t))
+				const sampleX = x + dx * t
+				const sampleY = y + dy * t
+				if (sampleX < 0 || sampleX > width - 1 || sampleY < 0 || sampleY > height - 1) continue
 				const x0 = Math.floor(sampleX)
 				const y0 = Math.floor(sampleY)
 				const x1 = Math.min(width - 1, x0 + 1)
