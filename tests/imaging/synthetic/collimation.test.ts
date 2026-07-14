@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { colorIndexToRgbWeights, plotStar } from '../../../src/imaging/stars/generator'
-import { applySyntheticCollimationBlur, generateSyntheticCollimationImage, renderSyntheticCollimationPattern, renderValidatedSyntheticCollimationPattern, type SyntheticCollimationPattern } from '../../../src/imaging/synthetic/collimation'
+import { applySyntheticCollimationBlur, applySyntheticCollimationSaturation, generateSyntheticCollimationImage, renderSyntheticCollimationPattern, renderValidatedSyntheticCollimationPattern, type SyntheticCollimationPattern } from '../../../src/imaging/synthetic/collimation'
 
 // Verifies deterministic annular fixtures independently from the INDI camera integration.
 
@@ -196,11 +196,24 @@ describe('synthetic collimation image', () => {
 		expect(sum(raw)).toBeCloseTo(200, 6)
 	})
 
-	test('clamps accumulated annular samples at the star saturation level', () => {
+	test('clamps annular samples after optical blur', () => {
 		const pattern = fixture({ signal: 1000 })
 		const raw = new Float64Array(64 * 64)
-		expect(renderSyntheticCollimationPattern(raw, pattern, 0.1)).toBeTrue()
+		const preClamped = new Float64Array(64 * 64)
+		expect(renderSyntheticCollimationPattern(raw, pattern)).toBeTrue()
+		expect(renderSyntheticCollimationPattern(preClamped, pattern)).toBeTrue()
+		applySyntheticCollimationSaturation(preClamped, 0.1)
+		applySyntheticCollimationBlur(preClamped, 64, 64, 1, 1.2)
+		applySyntheticCollimationBlur(raw, 64, 64, 1, 1.2)
+		applySyntheticCollimationSaturation(raw, 0.1)
 		expect(Math.max(...raw)).toBe(0.1)
+		let saturated = 0
+		let preClampedSaturated = 0
+		for (let i = 0; i < raw.length; i++) {
+			if (raw[i] === 0.1) saturated++
+			if (preClamped[i] === 0.1) preClampedSaturated++
+		}
+		expect(saturated).toBeGreaterThan(preClampedSaturated)
 	})
 
 	test('normalizes against complete support before clipping an edge pattern', () => {

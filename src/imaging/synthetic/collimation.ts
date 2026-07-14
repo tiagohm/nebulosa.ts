@@ -146,20 +146,18 @@ interface ResolvedEllipse {
 }
 
 // Adds one normalized collimation annulus to an existing interleaved image buffer. Signal is integrated
-// across all pixels and channels. An optional saturation level clamps each accumulated sample. Returns
-// false when the complete outer support falls outside the frame.
-export function renderSyntheticCollimationPattern(raw: ImageRawType, pattern: SyntheticCollimationPattern, saturationLevel?: number): boolean {
+// across all pixels and channels. Returns false when the complete outer support falls outside the frame.
+export function renderSyntheticCollimationPattern(raw: ImageRawType, pattern: SyntheticCollimationPattern): boolean {
 	validateSyntheticCollimationPattern(pattern, false)
-	if (saturationLevel !== undefined && (!Number.isFinite(saturationLevel) || saturationLevel < 0)) throw new RangeError('saturation level must be finite and non-negative')
 	const channels = pattern.channels ?? 1
 	const expectedLength = pattern.width * pattern.height * channels
 	if (raw.length !== expectedLength) throw new RangeError(`buffer length mismatch: expected ${expectedLength}, received ${raw.length}`)
-	return renderValidatedSyntheticCollimationPattern(raw, pattern, saturationLevel)
+	return renderValidatedSyntheticCollimationPattern(raw, pattern)
 }
 
-// Adds a pattern whose geometry, buffer layout, and saturation were already validated for the current
-// render batch. This internal hot-path primitive avoids repeating invariant geometry checks per star.
-export function renderValidatedSyntheticCollimationPattern(raw: ImageRawType, pattern: SyntheticCollimationPattern, saturationLevel?: number): boolean {
+// Adds a pattern whose geometry and buffer layout were already validated for the current render batch.
+// This internal hot-path primitive avoids repeating invariant geometry checks per star.
+export function renderValidatedSyntheticCollimationPattern(raw: ImageRawType, pattern: SyntheticCollimationPattern): boolean {
 	const channels = pattern.channels ?? 1
 	const outer = resolveEllipse(pattern.outer)
 	const obstruction = resolveEllipse(pattern.obstruction)
@@ -180,14 +178,11 @@ export function renderValidatedSyntheticCollimationPattern(raw: ImageRawType, pa
 		let pixel = (y * pattern.width + bounds.left) * channels
 		for (let x = bounds.left; x < bounds.right; x++, pixel += channels) {
 			const value = annulusWeight(x, y, outer, obstruction, pattern, harmonics) * scale
-			if (channels === 1) raw[pixel] = saturationLevel === undefined ? raw[pixel] + value : Math.min(saturationLevel, raw[pixel] + value)
+			if (channels === 1) raw[pixel] += value
 			else {
-				const red = raw[pixel] + value * channelWeights[0]
-				const green = raw[pixel + 1] + value * channelWeights[1]
-				const blue = raw[pixel + 2] + value * channelWeights[2]
-				raw[pixel] = saturationLevel === undefined ? red : Math.min(saturationLevel, red)
-				raw[pixel + 1] = saturationLevel === undefined ? green : Math.min(saturationLevel, green)
-				raw[pixel + 2] = saturationLevel === undefined ? blue : Math.min(saturationLevel, blue)
+				raw[pixel] += value * channelWeights[0]
+				raw[pixel + 1] += value * channelWeights[1]
+				raw[pixel + 2] += value * channelWeights[2]
 			}
 		}
 	}
@@ -210,6 +205,16 @@ export function applySyntheticCollimationBlur(raw: ImageRawType, width: number, 
 
 	if (effectiveSigmaX > 0 || effectiveSigmaY > 0) gaussianBlurInPlace(raw, width, height, channels, effectiveSigmaX, effectiveSigmaY)
 	if (tracking !== undefined && tracking.length > 0) directionalBlurInPlace(raw, width, height, channels, tracking)
+	return raw
+}
+
+// Clamps an image buffer to an optional non-negative saturation level in place after optical effects.
+export function applySyntheticCollimationSaturation(raw: ImageRawType, saturationLevel?: number): ImageRawType {
+	if (saturationLevel === undefined) return raw
+	if (!Number.isFinite(saturationLevel) || saturationLevel < 0) throw new RangeError('saturation level must be finite and non-negative')
+	for (let i = 0; i < raw.length; i++) {
+		if (raw[i] > saturationLevel) raw[i] = saturationLevel
+	}
 	return raw
 }
 
@@ -594,8 +599,8 @@ function applyNoiseAndOutputEffects(raw: ImageRawType, pattern: SyntheticCollima
 			}
 			raw[i] += gaussian * pattern.noise
 		}
-		if (pattern.saturation !== undefined && raw[i] > pattern.saturation) raw[i] = pattern.saturation
 	}
+	applySyntheticCollimationSaturation(raw, pattern.saturation)
 
 	const hotValue = pattern.saturation ?? Math.max(pattern.background + pattern.signal, 1)
 	for (const point of pattern.hotPixels ?? []) {

@@ -9,7 +9,7 @@ import { writeImageToFits, writeImageToXisf } from '../../imaging/model/image'
 import type { CfaPattern, Image, ImageRawType } from '../../imaging/model/types'
 import { colorIndexToRgbWeights, gaussianSigmaFromHfd, plotStar, type PlotStarOptions } from '../../imaging/stars/generator'
 import { evaluateSyntheticAberration, type ResolvedSyntheticAberration, resolveSyntheticAberration, type SyntheticAberrationConfig, type SyntheticStarAberration } from '../../imaging/synthetic/aberration'
-import { applySyntheticCollimationBlur, renderSyntheticCollimationPattern, renderValidatedSyntheticCollimationPattern, type SyntheticCollimationPattern } from '../../imaging/synthetic/collimation'
+import { applySyntheticCollimationBlur, applySyntheticCollimationSaturation, renderSyntheticCollimationPattern, renderValidatedSyntheticCollimationPattern, type SyntheticCollimationPattern } from '../../imaging/synthetic/collimation'
 import { type AstronomicalImageNoiseConfig, type AstronomicalImageStar, DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG, generateNoiseImage, generateStarImage } from '../../imaging/synthetic/generator'
 import type { FitsHeader } from '../../io/formats/fits/fits'
 import { bufferSink } from '../../io/io'
@@ -2372,9 +2372,10 @@ export class CameraSimulator extends DeviceSimulator {
 		if (frameType === 'LIGHT') {
 			const stars = await this.#collectFrameStars(exposureTime, rotatorAngle)
 			if (this.#plotPsfModel.elements.ANNULAR.value) {
-				this.#renderAnnularStars(raw, width, height, channels, stars)
+				const saturationLevel = this.#renderAnnularStars(raw, width, height, channels, stars)
 				const seeingSigma = gaussianSigmaFromHfd(this.seeing)
 				applySyntheticCollimationBlur(raw, width, height, channels, { sigmaX: seeingSigma / this.#bin.elements.HOR_BIN.value, sigmaY: seeingSigma / this.#bin.elements.VER_BIN.value })
+				applySyntheticCollimationSaturation(raw, saturationLevel)
 				generateNoiseImage(raw, width, height, channels, noiseConfig)
 			} else {
 				generateStarImage(raw, width, height, channels, stars, this.seeing, noiseConfig, this.#makePlotOptions())
@@ -2395,8 +2396,8 @@ export class CameraSimulator extends DeviceSimulator {
 	}
 
 	// Renders defocused catalog stars as centrally obstructed annuli. Focused stars use the existing
-	// Gaussian renderer, while the sensor-noise stage remains frame-global in #renderImage.
-	#renderAnnularStars(raw: ImageRawType, width: number, height: number, channels: 1 | 3, stars: readonly AstronomicalImageStar[]): void {
+	// Gaussian renderer. Returns the optional frame-wide saturation limit applied after optical blur.
+	#renderAnnularStars(raw: ImageRawType, width: number, height: number, channels: 1 | 3, stars: readonly AstronomicalImageStar[]): number | undefined {
 		const pattern = this.#collimationPattern.elements
 		const shape = this.#aberrationShape.elements
 		const focusRange = this.#aberrationFocus.elements.FOCUS_RANGE.value
@@ -2409,7 +2410,7 @@ export class CameraSimulator extends DeviceSimulator {
 		const spiderVanes = Math.round(pattern.SPIDER_VANES.value)
 		const plotOptions = this.#makePlotOptions()
 		const plotGain = plotOptions.gain ?? 1
-		const focusedPlotOptions: PlotStarOptions = { ...plotOptions, psfModel: 'gaussian', focusStep: bestFocus, bestFocus }
+		const focusedPlotOptions: PlotStarOptions = { ...plotOptions, saturationLevel: undefined, psfModel: 'gaussian', focusStep: bestFocus, bestFocus }
 		const channelWeights: [number, number, number] | undefined = channels === 3 ? [1 / 3, 1 / 3, 1 / 3] : undefined
 		let annularFixtureValidated = false
 
@@ -2464,12 +2465,13 @@ export class CameraSimulator extends DeviceSimulator {
 				channelWeights[2] = weights[2]
 			}
 
-			if (annularFixtureValidated) renderValidatedSyntheticCollimationPattern(raw, fixture, plotOptions.saturationLevel)
+			if (annularFixtureValidated) renderValidatedSyntheticCollimationPattern(raw, fixture)
 			else {
-				renderSyntheticCollimationPattern(raw, fixture, plotOptions.saturationLevel)
+				renderSyntheticCollimationPattern(raw, fixture)
 				annularFixtureValidated = true
 			}
 		}
+		return plotOptions.saturationLevel
 	}
 
 	// Builds an image model suitable for the FITS/XISF writers.
