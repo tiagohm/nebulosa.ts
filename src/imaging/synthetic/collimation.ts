@@ -97,7 +97,7 @@ export interface SyntheticCollimationPattern {
 	readonly obstruction: SyntheticEllipse
 	// Total integrated annulus signal above background.
 	readonly signal: number
-	// Constant background level added before optical effects.
+	// Constant background level added after optical effects and before sensor effects.
 	readonly background: number
 	// Standard deviation of additive Gaussian noise per sample.
 	readonly noise: number
@@ -208,9 +208,11 @@ export function generateSyntheticCollimationImage(pattern: SyntheticCollimationP
 	const channels = pattern.channels ?? 1
 	const length = pattern.width * pattern.height * channels
 	const raw = new Float32Array(length)
-	if (pattern.background !== 0) raw.fill(pattern.background)
 	renderSyntheticCollimationPattern(raw, pattern)
 	applySyntheticCollimationBlur(raw, pattern.width, pattern.height, channels, pattern.seeing, pattern.tracking)
+	if (pattern.background !== 0) {
+		for (let i = 0; i < raw.length; i++) raw[i] += pattern.background
+	}
 	applyNoiseAndOutputEffects(raw, pattern, channels)
 
 	const crop = pattern.crop

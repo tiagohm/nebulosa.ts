@@ -121,6 +121,11 @@ describe('synthetic collimation image', () => {
 		expect(Math.max(...first.raw)).toBeLessThanOrEqual(0.2)
 	})
 
+	test('keeps a constant background flat across zero-padded optical blur', () => {
+		const image = generateSyntheticCollimationImage(fixture({ signal: 0, background: 1, seeing: 2, tracking: { length: 4, angle: 0.4 } }))
+		expect(image.raw.every((value) => value === 1)).toBeTrue()
+	})
+
 	test('does not replicate edge pixels during optical blur', () => {
 		const raw = new Float64Array(9 * 9)
 		raw[4 * 9] = 1
