@@ -679,6 +679,16 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		const clippedImage = await readImageFromBuffer(frameReceiver.lastFrame)
 		expect(clippedImage).toBeDefined()
 		expect(sumPixels(clippedImage!.raw)).toBeGreaterThan(0)
+
+		client.sendNumber({ device: camera.name, name: 'SIMULATOR_COLLIMATION_PATTERN', elements: { EDGE_SOFTNESS: 10 } })
+		cameraManager.bin(camera, 4, 1)
+		cameraManager.frame(camera, 790, 384, 256, 256)
+		await waitUntil(() => camera.frame.x.value === 790 && camera.bin.x.value === 4 && camera.bin.y.value === 1 && cameraManager.properties.get(camera)?.SIMULATOR_COLLIMATION_PATTERN?.elements.EDGE_SOFTNESS.value === 10)
+		cameraManager.startExposure(camera, 0.05)
+		await waitUntil(() => frameReceiver.length > 5, 10000, 50)
+		const asymmetricEdgeImage = await readImageFromBuffer(frameReceiver.lastFrame)
+		expect(asymmetricEdgeImage).toBeDefined()
+		expect(sumPixels(asymmetricEdgeImage!.raw)).toBeGreaterThan(0)
 	}, 5000)
 
 	test('camera sends guiding pulse to mount', async () => {
