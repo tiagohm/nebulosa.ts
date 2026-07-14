@@ -290,7 +290,13 @@ describe.skipIf(SKIP)('camera simulator', () => {
 
 		cameraManager.addHandler(frameReceiver)
 
-		using cameraSimulator = new CameraSimulator('Camera Simulator', client, { mountManager })
+		let savedCollimationRadius: unknown
+		using cameraSimulator = new CameraSimulator('Camera Simulator', client, {
+			mountManager,
+			save: (_name, properties) => {
+				savedCollimationRadius = properties.find((property) => property.name === 'SIMULATOR_COLLIMATION_PATTERN')?.elements.MAX_RADIUS?.value
+			},
+		})
 		const camera = cameraManager.get(client, cameraSimulator.name)!
 
 		expect(camera).toBeDefined()
@@ -312,12 +318,17 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		expect(cameraManager.properties.get(camera)?.SIMULATOR_NOISE_EXPOSURE).toBeDefined()
 		expect(cameraManager.properties.get(camera)?.SIMULATOR_CATALOG_SOURCE).toBeDefined()
 		expect(cameraManager.properties.get(camera)?.SIMULATOR_STAR_PLOT_OPTIONS).toBeDefined()
+		expect(cameraManager.properties.get(camera)?.SIMULATOR_COLLIMATION_PATTERN).toBeDefined()
 		expect(cameraManager.properties.get(camera)?.SIMULATOR_ABERRATION_FEATURES).toBeDefined()
 		expect(cameraManager.properties.get(camera)?.SIMULATOR_ABERRATION_FOCUS).toBeDefined()
 		expect(cameraManager.properties.get(camera)?.SIMULATOR_ABERRATION_SHAPE).toBeDefined()
 
 		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_STAR_PLOT_FLAGS', elements: { GAMMA_ENABLED: true } })
 		await waitUntil(() => cameraManager.properties.get(camera)?.SIMULATOR_STAR_PLOT_FLAGS?.elements.GAMMA_ENABLED.value === true)
+		client.sendNumber({ device: camera.name, name: 'SIMULATOR_COLLIMATION_PATTERN', elements: { MAX_RADIUS: 64 } })
+		await waitUntil(() => cameraManager.properties.get(camera)?.SIMULATOR_COLLIMATION_PATTERN?.elements.MAX_RADIUS.value === 64)
+		cameraSimulator.saveProperties()
+		expect(savedCollimationRadius).toBe(64)
 		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_ABERRATION_FEATURES', elements: { SENSOR_TILT: true } })
 		client.sendNumber({ device: camera.name, name: 'SIMULATOR_ABERRATION_FOCUS', elements: { TILT: 200, TILT_ANGLE: 0 } })
 		await waitUntil(() => cameraManager.properties.get(camera)?.SIMULATOR_ABERRATION_FEATURES?.elements.SENSOR_TILT.value === true)
@@ -567,6 +578,119 @@ describe.skipIf(SKIP)('camera simulator', () => {
 			cameraSimulator.dispose()
 			mountSimulator.dispose()
 		}
+	}, 5000)
+
+	test('renders a defocused annular collimation pattern with anisotropic binning', async () => {
+		const handler = new IndiClientHandlerSet()
+		const mountManager = new MountManager()
+		const cameraManager = new CameraManager()
+		using client = new ClientSimulator('camera.collimation.simulator', handler)
+		const frameReceiver = new CameraFrameReceiver()
+
+		handler.add(mountManager)
+		handler.add(cameraManager)
+		cameraManager.addHandler(frameReceiver)
+
+		const catalogProvider: CatalogSource = (rightAscension, declination) => [{ snr: 100, hfd: 2, flux: 1000, rightAscension, declination }]
+		using mountSimulator = new MountSimulator('Mount Simulator', client)
+		using cameraSimulator = new CameraSimulator('Camera Simulator', client, { mountManager, catalogSources: { COLLIMATION: catalogProvider } })
+		const mount = mountManager.get(client, mountSimulator.name)!
+		const camera = cameraManager.get(client, cameraSimulator.name)!
+
+		mountSimulator.connect()
+		cameraSimulator.connect()
+		await waitUntil(() => mount.connected && camera.connected)
+		mountSimulator.syncTo(hour(5), deg(20))
+		await waitUntil(() => closeTo(mount.equatorialCoordinate.rightAscension, hour(5), 1e-9))
+		cameraManager.snoop(camera, mount)
+		await waitUntil(() => cameraManager.properties.get(camera)?.ACTIVE_DEVICES?.elements.ACTIVE_TELESCOPE.value === mount.name)
+
+		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_CATALOG_SOURCE', elements: { COLLIMATION: true } })
+		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_STAR_PLOT_PSF_MODEL', elements: { ANNULAR: true } })
+		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_ABERRATION_FEATURES', elements: { COLLIMATION: true } })
+		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_NOISE_FEATURES', elements: { SKY_ENABLED: false, MOON_ENABLED: false, LIGHT_POLLUTION_ENABLED: false, AMP_GLOW_ENABLED: false } })
+		client.sendNumber({ device: camera.name, name: 'SIMULATOR_NOISE_SENSOR', elements: { READ_NOISE: 0, BIAS_ELECTRONS: 0, BLACK_LEVEL_ELECTRONS: 0, DARK_CURRENT_AT_REFERENCE_TEMP: 0, DARK_SIGNAL_NON_UNIFORMITY: 0 } })
+		client.sendNumber({
+			device: camera.name,
+			name: 'SIMULATOR_NOISE_ARTIFACTS',
+			elements: { FIXED_PATTERN_NOISE_STRENGTH: 0, ROW_NOISE_STRENGTH: 0, COLUMN_NOISE_STRENGTH: 0, BANDING_STRENGTH: 0, HOT_PIXEL_RATE: 0, WARM_PIXEL_RATE: 0, DEAD_PIXEL_RATE: 0 },
+		})
+		client.sendNumber({ device: camera.name, name: 'SIMULATOR_SCENE', elements: { SEEING: 0 } })
+		client.sendNumber({ device: camera.name, name: 'SIMULATOR_COLLIMATION_PATTERN', elements: { MAX_RADIUS: 40, OBSTRUCTION_RATIO: 0.35, EDGE_SOFTNESS: 0.6, SPIDER_VANES: 4 } })
+		client.sendNumber({ device: camera.name, name: 'SIMULATOR_ABERRATION_SHAPE', elements: { COLLIMATION: 0.5, COLLIMATION_ANGLE: 0 } })
+		cameraManager.frame(camera, 512, 384, 256, 256)
+		cameraManager.bin(camera, 2, 1)
+
+		await waitUntil(() => cameraManager.properties.get(camera)?.SIMULATOR_STAR_PLOT_PSF_MODEL?.elements.ANNULAR.value === true)
+		await waitUntil(() => cameraManager.properties.get(camera)?.SIMULATOR_COLLIMATION_PATTERN?.elements.MAX_RADIUS.value === 40)
+		await waitUntil(() => camera.frame.x.value === 512 && camera.bin.x.value === 2 && camera.bin.y.value === 1)
+
+		cameraManager.startExposure(camera, 0.05)
+		await waitUntil(() => frameReceiver.length > 0, 10000, 50)
+		const focusedImage = await readImageFromBuffer(frameReceiver.lastFrame)
+		expect(focusedImage).toBeDefined()
+		expect(focusedImage!.raw[128 * focusedImage!.metadata.stride + 64]).toBeGreaterThan(focusedImage!.raw[128 * focusedImage!.metadata.stride + 80])
+
+		client.sendNumber({ device: camera.name, name: 'SIMULATOR_STAR_PLOT_OPTIONS', elements: { FOCUS_STEP: 52000, BEST_FOCUS: 50000 } })
+		await waitUntil(() => cameraManager.properties.get(camera)?.SIMULATOR_STAR_PLOT_OPTIONS?.elements.FOCUS_STEP.value === 52000)
+		cameraManager.startExposure(camera, 0.05)
+		await waitUntil(() => frameReceiver.length > 1, 10000, 50)
+		const image = await readImageFromBuffer(frameReceiver.lastFrame)
+		expect(image).toBeDefined()
+		expect(image!.metadata.width).toBe(128)
+		expect(image!.metadata.height).toBe(256)
+
+		const centerX = 64
+		const centerY = 128
+		const obstructionX = 70
+		const obstructionSample = image!.raw[centerY * image!.metadata.stride + obstructionX]
+		let maximum = 0
+		for (let i = 0; i < image!.raw.length; i++) maximum = Math.max(maximum, image!.raw[i])
+		expect(maximum).toBeGreaterThan(0)
+		expect(obstructionSample).toBeLessThan(maximum * 0.35)
+		expect(image!.raw[centerY * image!.metadata.stride + centerX]).toBeLessThan(maximum * 0.5)
+
+		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_STAR_PLOT_FLAGS', elements: { SATURATION_ENABLED: true } })
+		client.sendNumber({ device: camera.name, name: 'SIMULATOR_STAR_PLOT_OPTIONS', elements: { SATURATION_LEVEL: 0.1 } })
+		client.sendNumber({ device: camera.name, name: 'SIMULATOR_SCENE', elements: { SEEING: 1.2 } })
+		await waitUntil(() => cameraManager.properties.get(camera)?.SIMULATOR_STAR_PLOT_FLAGS?.elements.SATURATION_ENABLED.value === true && cameraManager.properties.get(camera)?.SIMULATOR_SCENE?.elements.SEEING.value === 1.2)
+		cameraManager.startExposure(camera, 0.05)
+		await waitUntil(() => frameReceiver.length > 2, 10000, 50)
+		const saturatedImage = await readImageFromBuffer(frameReceiver.lastFrame)
+		expect(saturatedImage).toBeDefined()
+		expect(Math.max(...saturatedImage!.raw)).toBeLessThanOrEqual(0.1)
+		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_STAR_PLOT_FLAGS', elements: { SATURATION_ENABLED: false } })
+		client.sendNumber({ device: camera.name, name: 'SIMULATOR_SCENE', elements: { SEEING: 0 } })
+		await waitUntil(() => cameraManager.properties.get(camera)?.SIMULATOR_STAR_PLOT_FLAGS?.elements.SATURATION_ENABLED.value === false && cameraManager.properties.get(camera)?.SIMULATOR_SCENE?.elements.SEEING.value === 0)
+
+		client.sendNumber({ device: camera.name, name: 'SIMULATOR_STAR_PLOT_OPTIONS', elements: { BEST_FOCUS: 0 } })
+		await waitUntil(() => cameraManager.properties.get(camera)?.SIMULATOR_STAR_PLOT_OPTIONS?.elements.BEST_FOCUS.value === 0)
+		cameraManager.startExposure(camera, 0.05)
+		await waitUntil(() => frameReceiver.length > 3, 10000, 50)
+		const disabledFocusImage = await readImageFromBuffer(frameReceiver.lastFrame)
+		expect(disabledFocusImage).toBeDefined()
+		expect(disabledFocusImage!.raw[centerY * disabledFocusImage!.metadata.stride + centerX]).toBeGreaterThan(disabledFocusImage!.raw[centerY * disabledFocusImage!.metadata.stride + 80])
+
+		client.sendNumber({ device: camera.name, name: 'SIMULATOR_STAR_PLOT_OPTIONS', elements: { BEST_FOCUS: 50000 } })
+		await waitUntil(() => cameraManager.properties.get(camera)?.SIMULATOR_STAR_PLOT_OPTIONS?.elements.BEST_FOCUS.value === 50000)
+
+		cameraManager.frame(camera, 660, 384, 256, 256)
+		await waitUntil(() => camera.frame.x.value === 660)
+		cameraManager.startExposure(camera, 0.05)
+		await waitUntil(() => frameReceiver.length > 4, 10000, 50)
+		const clippedImage = await readImageFromBuffer(frameReceiver.lastFrame)
+		expect(clippedImage).toBeDefined()
+		expect(sumPixels(clippedImage!.raw)).toBeGreaterThan(0)
+
+		client.sendNumber({ device: camera.name, name: 'SIMULATOR_COLLIMATION_PATTERN', elements: { EDGE_SOFTNESS: 10 } })
+		cameraManager.bin(camera, 4, 1)
+		cameraManager.frame(camera, 790, 384, 256, 256)
+		await waitUntil(() => camera.frame.x.value === 790 && camera.bin.x.value === 4 && camera.bin.y.value === 1 && cameraManager.properties.get(camera)?.SIMULATOR_COLLIMATION_PATTERN?.elements.EDGE_SOFTNESS.value === 10)
+		cameraManager.startExposure(camera, 0.05)
+		await waitUntil(() => frameReceiver.length > 5, 10000, 50)
+		const asymmetricEdgeImage = await readImageFromBuffer(frameReceiver.lastFrame)
+		expect(asymmetricEdgeImage).toBeDefined()
+		expect(sumPixels(asymmetricEdgeImage!.raw)).toBeGreaterThan(0)
 	}, 5000)
 
 	test('camera sends guiding pulse to mount', async () => {

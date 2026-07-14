@@ -7,8 +7,9 @@ import { timeUnix } from '../../astronomy/time/time'
 import { ASEC2RAD, DAYSEC, DEG2RAD, MOON_SIDEREAL_DAYS, PIOVERTWO, SIDEREAL_DAYSEC, SIDEREAL_RATE, TAU } from '../../core/constants'
 import { writeImageToFits, writeImageToXisf } from '../../imaging/model/image'
 import type { CfaPattern, Image, ImageRawType } from '../../imaging/model/types'
-import type { PlotStarOptions } from '../../imaging/stars/generator'
+import { colorIndexToRgbWeights, gaussianSigmaFromHfd, plotStar, type PlotStarOptions } from '../../imaging/stars/generator'
 import { evaluateSyntheticAberration, type ResolvedSyntheticAberration, resolveSyntheticAberration, type SyntheticAberrationConfig, type SyntheticStarAberration } from '../../imaging/synthetic/aberration'
+import { applySyntheticCollimationBlur, applySyntheticCollimationSaturation, renderSyntheticCollimationPattern, renderValidatedSyntheticCollimationPattern, type SyntheticCollimationPattern } from '../../imaging/synthetic/collimation'
 import { type AstronomicalImageNoiseConfig, type AstronomicalImageStar, DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG, generateNoiseImage, generateStarImage } from '../../imaging/synthetic/generator'
 import type { FitsHeader } from '../../io/formats/fits/fits'
 import { bufferSink } from '../../io/io'
@@ -1838,7 +1839,9 @@ export class CameraSimulator extends DeviceSimulator {
 	// oxfmt-ignore
 	readonly #plotOptions = makeNumberVector('', 'SIMULATOR_STAR_PLOT_OPTIONS', 'Star Plot', SIMULATION, 'rw', ['BACKGROUND', 'Background', 0, 0, 10, 0.001, '%.4f'], ['SATURATION_LEVEL', 'Saturation Level', 1, 0, 10, 0.01, '%.3f'], ['FOCUS_STEP', 'Focus Step', 50000, 0, 100000, 1, '%.0f'], ['BEST_FOCUS', 'Best Focus', 50000, 0, 100000, 1, '%.0f'], ['PEAK_SCALE', 'Peak Scale', 1, 0.01, 20, 0.01, '%.3f'], ['ELLIPTICITY', 'Ellipticity', 0, 0, 0.8, 0.01, '%.3f'], ['THETA', 'Theta', 0, -TAU, TAU, 0.01, '%.3f'], ['SOFT_CORE', 'Soft Core', 0, 0, 10, 0.01, '%.3f'], ['BETA', 'Beta', 2.5, 1.05, 20, 0.01, '%.3f'], ['HALO_STRENGTH', 'Halo Strength', 0, 0, 5, 0.01, '%.3f'], ['HALO_SCALE', 'Halo Scale', 2.8, 1.1, 20, 0.01, '%.3f'], ['JITTER_X', 'Jitter X', 0, -5, 5, 0.01, '%.3f'], ['JITTER_Y', 'Jitter Y', 0, -5, 5, 0.01, '%.3f'], ['GAIN', 'Plot Gain', 1, 0.01, 20, 0.01, '%.3f'], ['GAMMA_COMPENSATION', 'Gamma Compensation', 2.2, 0.1, 10, 0.01, '%.3f'], ['ADDITIVE_NOISE_HINT', 'Additive Noise Hint', 0, 0, 20, 0.01, '%.3f'], ['MIN_PLOT_RADIUS', 'Min Radius', 2, 0, 50, 1, '%.0f'], ['MAX_PLOT_RADIUS', 'Max Radius', 24, 0, 100, 1, '%.0f'], ['CUTOFF_SIGMA', 'Cutoff Sigma', 4.25, 2.5, 10, 0.01, '%.3f'])
 	readonly #plotFlags = makeSwitchVector('', 'SIMULATOR_STAR_PLOT_FLAGS', 'Star Plot Flags', SIMULATION, 'AnyOfMany', 'rw', ['SATURATION_ENABLED', 'Saturation', false], ['GAMMA_ENABLED', 'Gamma', false])
-	readonly #plotPsfModel = makeSwitchVector('', 'SIMULATOR_STAR_PLOT_PSF_MODEL', 'Star PSF Model', SIMULATION, 'OneOfMany', 'rw', ['GAUSSIAN', 'Gaussian', true], ['MOFFAT', 'Moffat', false])
+	readonly #plotPsfModel = makeSwitchVector('', 'SIMULATOR_STAR_PLOT_PSF_MODEL', 'Star PSF Model', SIMULATION, 'OneOfMany', 'rw', ['GAUSSIAN', 'Gaussian', true], ['MOFFAT', 'Moffat', false], ['ANNULAR', 'Annular', false])
+	// oxfmt-ignore
+	readonly #collimationPattern = makeNumberVector('', 'SIMULATOR_COLLIMATION_PATTERN', 'Collimation Pattern', SIMULATION, 'rw', ['MAX_RADIUS', 'Maximum Radius (px)', 48, 2, 512, 1, '%.0f'], ['OBSTRUCTION_RATIO', 'Obstruction Ratio', 0.35, 0.05, 0.9, 0.01, '%.3f'], ['EDGE_SOFTNESS', 'Edge Softness (px)', 0.8, 0.05, 20, 0.05, '%.2f'], ['SPIDER_VANES', 'Spider Vanes', 0, 0, 12, 1, '%.0f'], ['SPIDER_WIDTH', 'Spider Width (px)', 1.5, 0, 20, 0.1, '%.2f'], ['SPIDER_ANGLE', 'Spider Angle (rad)', 0, -TAU, TAU, 0.01, '%.3f'], ['SPIDER_ATTENUATION', 'Spider Attenuation', 0.9, 0, 1, 0.01, '%.3f'])
 	// oxfmt-ignore
 	readonly #aberrationFeatures = makeSwitchVector('', 'SIMULATOR_ABERRATION_FEATURES', 'Aberration Features', SIMULATION, 'AnyOfMany', 'rw', ['SENSOR_TILT', 'Sensor Tilt', false], ['BACKFOCUS', 'Backfocus', false], ['FIELD_CURVATURE', 'Field Curvature', false], ['COMA', 'Coma', false], ['ASTIGMATISM', 'Astigmatism', false], ['DECENTER', 'Decenter', false], ['COLLIMATION', 'Collimation', false])
 	// oxfmt-ignore
@@ -1896,6 +1899,7 @@ export class CameraSimulator extends DeviceSimulator {
 		this.#plotOptions,
 		this.#plotFlags,
 		this.#plotPsfModel,
+		this.#collimationPattern,
 		this.#aberrationFeatures,
 		this.#aberrationFocus,
 		this.#aberrationShape,
@@ -2071,6 +2075,9 @@ export class CameraSimulator extends DeviceSimulator {
 				return
 			case 'SIMULATOR_STAR_PLOT_OPTIONS':
 				if (applyNumberVectorValues(this.#plotOptions, vector.elements)) this.notify(this.#plotOptions)
+				return
+			case 'SIMULATOR_COLLIMATION_PATTERN':
+				if (applyNumberVectorValues(this.#collimationPattern, vector.elements)) this.notify(this.#collimationPattern)
 				return
 			case 'SIMULATOR_ABERRATION_FOCUS':
 				if (applyNumberVectorValues(this.#aberrationFocus, vector.elements)) this.notify(this.#aberrationFocus)
@@ -2341,11 +2348,12 @@ export class CameraSimulator extends DeviceSimulator {
 			this.#image.elements.CCD1.value = blob
 			this.#image.elements.CCD1.encoding = 'raw'
 			handleSetBlobVector(this.client, this.handler, this.#image)
-		} catch {
+		} catch (e) {
 			this.#image.state = 'Alert'
 			this.#image.elements.CCD1.size = '0'
 			this.#image.elements.CCD1.value = undefined
 			this.#exposure.state = 'Alert'
+			console.error('failed to render image', e)
 		}
 
 		this.notify(this.#exposure)
@@ -2363,7 +2371,15 @@ export class CameraSimulator extends DeviceSimulator {
 
 		if (frameType === 'LIGHT') {
 			const stars = await this.#collectFrameStars(exposureTime, rotatorAngle)
-			generateStarImage(raw, width, height, channels, stars, this.seeing, noiseConfig, this.#makePlotOptions())
+			if (this.#plotPsfModel.elements.ANNULAR.value) {
+				const saturationLevel = this.#renderAnnularStars(raw, width, height, channels, stars)
+				const seeingSigma = gaussianSigmaFromHfd(this.seeing)
+				applySyntheticCollimationBlur(raw, width, height, channels, { sigmaX: seeingSigma / this.#bin.elements.HOR_BIN.value, sigmaY: seeingSigma / this.#bin.elements.VER_BIN.value })
+				applySyntheticCollimationSaturation(raw, saturationLevel)
+				generateNoiseImage(raw, width, height, channels, noiseConfig)
+			} else {
+				generateStarImage(raw, width, height, channels, stars, this.seeing, noiseConfig, this.#makePlotOptions())
+			}
 		} else {
 			if (frameType === 'FLAT') fillFlatField(raw, width, height, channels, exposureTime, this.#noiseExposure.elements.EXPOSURE_TIME.value)
 			generateNoiseImage(raw, width, height, channels, noiseConfig)
@@ -2377,6 +2393,85 @@ export class CameraSimulator extends DeviceSimulator {
 		else await writeImageToFits(image, sink)
 
 		return output.subarray(0, sink.position)
+	}
+
+	// Renders defocused catalog stars as centrally obstructed annuli. Focused stars use the existing
+	// Gaussian renderer. Returns the optional frame-wide saturation limit applied after optical blur.
+	#renderAnnularStars(raw: ImageRawType, width: number, height: number, channels: 1 | 3, stars: readonly AstronomicalImageStar[]): number | undefined {
+		const pattern = this.#collimationPattern.elements
+		const shape = this.#aberrationShape.elements
+		const focusRange = this.#aberrationFocus.elements.FOCUS_RANGE.value
+		const currentFocus = this.activeFocuser?.position.value ?? this.#plotOptions.elements.FOCUS_STEP.value
+		const bestFocus = this.#plotOptions.elements.BEST_FOCUS.value
+		const globalDefocus = bestFocus === 0 ? 0 : clamp(Math.abs(currentFocus - bestFocus) / focusRange, 0, 1)
+		const obstructionRatio = pattern.OBSTRUCTION_RATIO.value
+		const collimation = this.#aberrationFeatures.elements.COLLIMATION.value ? shape.COLLIMATION.value : 0
+		const collimationAngle = shape.COLLIMATION_ANGLE.value
+		const spiderVanes = Math.round(pattern.SPIDER_VANES.value)
+		const plotOptions = this.#makePlotOptions()
+		const plotGain = plotOptions.gain ?? 1
+		const focusedPlotOptions: PlotStarOptions = { ...plotOptions, saturationLevel: undefined, psfModel: 'gaussian', focusStep: bestFocus, bestFocus }
+		const channelWeights: [number, number, number] | undefined = channels === 3 ? [1 / 3, 1 / 3, 1 / 3] : undefined
+		let annularFixtureValidated = false
+
+		const fixture = {
+			width,
+			height,
+			channels,
+			channelWeights,
+			outer: { center: { x: 0, y: 0 }, semiMajor: 0, semiMinor: 0, theta: 0, softness: 0 },
+			obstruction: { center: { x: 0, y: 0 }, semiMajor: 0, semiMinor: 0, theta: 0, softness: 0 },
+			signal: 0,
+			background: 0,
+			noise: 0,
+			spider: spiderVanes > 0 ? { vanes: spiderVanes, angle: pattern.SPIDER_ANGLE.value, width: 0, attenuation: pattern.SPIDER_ATTENUATION.value } : undefined,
+		} satisfies SyntheticCollimationPattern
+
+		for (let i = 0; i < stars.length; i++) {
+			const star = stars[i]
+			const defocus = star.defocus ?? globalDefocus
+
+			if (defocus <= 1e-6) {
+				plotStar(raw, width, height, channels, star.x, star.y, star.flux, star.hfd, star.snr, 0, star.colorIndex, focusedPlotOptions, star)
+				continue
+			}
+
+			const scaleX = star.scaleX ?? 1
+			const scaleY = star.scaleY ?? 1
+			const sensorRadius = Math.max(pattern.EDGE_SOFTNESS.value * 3, pattern.MAX_RADIUS.value * defocus)
+			const sensorObstructionRadius = sensorRadius * obstructionRatio
+			const sensorClearance = Math.max(0, sensorRadius - sensorObstructionRadius - pattern.EDGE_SOFTNESS.value * 2)
+			const sensorOffset = sensorClearance * collimation
+			const offsetX = Math.cos(collimationAngle) * sensorOffset * scaleX
+			const offsetY = Math.sin(collimationAngle) * sensorOffset * scaleY
+			const softness = pattern.EDGE_SOFTNESS.value * Math.sqrt(scaleX * scaleY)
+
+			fixture.outer.center.x = star.x
+			fixture.outer.center.y = star.y
+			fixture.outer.semiMajor = sensorRadius * scaleX
+			fixture.outer.semiMinor = sensorRadius * scaleY
+			fixture.outer.softness = softness
+			fixture.obstruction.center.x = star.x + offsetX
+			fixture.obstruction.center.y = star.y + offsetY
+			fixture.obstruction.semiMajor = sensorObstructionRadius * scaleX
+			fixture.obstruction.semiMinor = sensorObstructionRadius * scaleY
+			fixture.obstruction.softness = softness
+			if (fixture.spider !== undefined) fixture.spider.width = pattern.SPIDER_WIDTH.value * Math.sqrt(scaleX * scaleY)
+			fixture.signal = star.flux * plotGain
+			if (channelWeights !== undefined) {
+				const weights = colorIndexToRgbWeights(star.colorIndex, plotOptions.gammaCompensation)
+				channelWeights[0] = weights[0]
+				channelWeights[1] = weights[1]
+				channelWeights[2] = weights[2]
+			}
+
+			if (annularFixtureValidated) renderValidatedSyntheticCollimationPattern(raw, fixture)
+			else {
+				renderSyntheticCollimationPattern(raw, fixture)
+				annularFixtureValidated = true
+			}
+		}
+		return plotOptions.saturationLevel
 	}
 
 	// Builds an image model suitable for the FITS/XISF writers.
@@ -2630,6 +2725,10 @@ export class CameraSimulator extends DeviceSimulator {
 		const aberration = this.#makeAberrationConfig()
 		const currentFocus = this.activeFocuser?.position.value ?? this.#plotOptions.elements.FOCUS_STEP.value
 		const bestFocus = this.#plotOptions.elements.BEST_FOCUS.value
+		const annularRadius = this.#plotPsfModel.elements.ANNULAR.value ? this.#collimationPattern.elements.MAX_RADIUS.value : 0
+		const annularSoftness = this.#plotPsfModel.elements.ANNULAR.value ? this.#collimationPattern.elements.EDGE_SOFTNESS.value * 8 : 0
+		const annularPaddingX = annularRadius + annularSoftness * Math.sqrt(binX / binY)
+		const annularPaddingY = annularRadius + annularSoftness * Math.sqrt(binY / binX)
 		const aberrationResult: SyntheticStarAberration = { defocus: 0, focusOffset: 0, covarianceXX: 0, covarianceXY: 0, covarianceYY: 0, coma: 0, comaTheta: 0 }
 
 		for (let i = 0; i < stars.length; i++) {
@@ -2646,7 +2745,7 @@ export class CameraSimulator extends DeviceSimulator {
 				sensorY = centerY + dx * sinAngle + dy * cosAngle
 			}
 
-			if (sensorX < frameX || sensorX >= frameX + frameWidth || sensorY < frameY || sensorY >= frameY + frameHeight) continue
+			if (sensorX < frameX - annularPaddingX || sensorX >= frameX + frameWidth + annularPaddingX || sensorY < frameY - annularPaddingY || sensorY >= frameY + frameHeight + annularPaddingY) continue
 			if (aberration.enabled) evaluateSyntheticAberration(sensorX, sensorY, this.sensorWidth, this.sensorHeight, currentFocus, bestFocus, aberration, aberrationResult)
 			const comaX = aberration.enabled ? Math.cos(aberrationResult.comaTheta) / binX : 0
 			const comaY = aberration.enabled ? Math.sin(aberrationResult.comaTheta) / binY : 0

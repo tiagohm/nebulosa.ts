@@ -146,10 +146,16 @@ export function colorIndexToRgbWeights(colorIndex: number = DEFAULT_COLOR_INDEX,
 	else return [red / sum, green / sum, blue / sum] as const
 }
 
+// Converts a non-negative half-flux diameter in pixels to the standard deviation of an equivalent
+// circular Gaussian. Invalid and negative diameters produce zero.
+export function gaussianSigmaFromHfd(hfd: number): number {
+	return Math.max(0, sanitizePositive(hfd, 0) * HFD_TO_SIGMA)
+}
+
 // Converts HFD and seeing terms, both treated as HFD-like diameters in pixels, into one effective Gaussian sigma.
 export function effectiveGaussianSigma(hfd: number, seeing: number = 0, snr: number = 0, softCore: number = 0, additiveNoiseHint: number = 0, peakScale: number = 1, background: number = 0) {
 	const hfdSigma = Math.max(MIN_SIGMA, sanitizePositive(hfd, MIN_HFD) * HFD_TO_SIGMA)
-	const seeingSigma = Math.max(0, sanitizePositive(seeing, 0) * HFD_TO_SIGMA)
+	const seeingSigma = gaussianSigmaFromHfd(seeing)
 	const combinedSigma = Math.hypot(hfdSigma, seeingSigma)
 	const lowSnr = 1 - clamp(sanitizePositive(snr, 0) / 32, 0, 1)
 	const noiseSoftening = clamp(sanitizePositive(additiveNoiseHint, 0) * 0.04, 0, 0.2)
