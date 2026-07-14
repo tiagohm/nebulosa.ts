@@ -2463,7 +2463,7 @@ export class CameraSimulator extends DeviceSimulator {
 				channelWeights[2] = weights[2]
 			}
 
-			renderSyntheticCollimationPattern(raw, fixture)
+			renderSyntheticCollimationPattern(raw, fixture, plotOptions.saturationLevel)
 		}
 	}
 

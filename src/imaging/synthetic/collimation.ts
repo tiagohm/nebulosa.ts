@@ -142,9 +142,11 @@ interface ResolvedEllipse {
 }
 
 // Adds one normalized collimation annulus to an existing interleaved image buffer. Signal is integrated
-// across all pixels and channels. Returns false when the complete outer support falls outside the frame.
-export function renderSyntheticCollimationPattern(raw: ImageRawType, pattern: SyntheticCollimationPattern): boolean {
+// across all pixels and channels. An optional saturation level clamps each accumulated sample. Returns
+// false when the complete outer support falls outside the frame.
+export function renderSyntheticCollimationPattern(raw: ImageRawType, pattern: SyntheticCollimationPattern, saturationLevel?: number): boolean {
 	validateSyntheticCollimationPattern(pattern, false)
+	if (saturationLevel !== undefined && (!Number.isFinite(saturationLevel) || saturationLevel < 0)) throw new RangeError('saturation level must be finite and non-negative')
 	const channels = pattern.channels ?? 1
 	const expectedLength = pattern.width * pattern.height * channels
 	if (raw.length !== expectedLength) throw new RangeError(`buffer length mismatch: expected ${expectedLength}, received ${raw.length}`)
@@ -167,11 +169,14 @@ export function renderSyntheticCollimationPattern(raw: ImageRawType, pattern: Sy
 		let pixel = (y * pattern.width + bounds.left) * channels
 		for (let x = bounds.left; x < bounds.right; x++, pixel += channels) {
 			const value = annulusWeight(x, y, outer, obstruction, pattern) * scale
-			if (channels === 1) raw[pixel] += value
+			if (channels === 1) raw[pixel] = saturationLevel === undefined ? raw[pixel] + value : Math.min(saturationLevel, raw[pixel] + value)
 			else {
-				raw[pixel] += value * channelWeights[0]
-				raw[pixel + 1] += value * channelWeights[1]
-				raw[pixel + 2] += value * channelWeights[2]
+				const red = raw[pixel] + value * channelWeights[0]
+				const green = raw[pixel + 1] + value * channelWeights[1]
+				const blue = raw[pixel + 2] + value * channelWeights[2]
+				raw[pixel] = saturationLevel === undefined ? red : Math.min(saturationLevel, red)
+				raw[pixel + 1] = saturationLevel === undefined ? green : Math.min(saturationLevel, green)
+				raw[pixel + 2] = saturationLevel === undefined ? blue : Math.min(saturationLevel, blue)
 			}
 		}
 	}

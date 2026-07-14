@@ -164,6 +164,13 @@ describe('synthetic collimation image', () => {
 		expect(sum(raw)).toBeCloseTo(64 * 64 * 0.3 + 100, 6)
 	})
 
+	test('clamps accumulated annular samples at the star saturation level', () => {
+		const pattern = fixture({ signal: 1000 })
+		const raw = new Float64Array(64 * 64)
+		expect(renderSyntheticCollimationPattern(raw, pattern, 0.1)).toBeTrue()
+		expect(Math.max(...raw)).toBe(0.1)
+	})
+
 	test('normalizes against complete support before clipping an edge pattern', () => {
 		const image = generateSyntheticCollimationImage(
 			fixture({
