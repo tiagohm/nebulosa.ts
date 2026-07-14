@@ -649,6 +649,14 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		expect(maximum).toBeGreaterThan(0)
 		expect(obstructionSample).toBeLessThan(maximum * 0.35)
 		expect(image!.raw[centerY * image!.metadata.stride + centerX]).toBeLessThan(maximum * 0.5)
+
+		cameraManager.frame(camera, 660, 384, 256, 256)
+		await waitUntil(() => camera.frame.x.value === 660)
+		cameraManager.startExposure(camera, 0.05)
+		await waitUntil(() => frameReceiver.length > 2, 10000, 50)
+		const clippedImage = await readImageFromBuffer(frameReceiver.lastFrame)
+		expect(clippedImage).toBeDefined()
+		expect(sumPixels(clippedImage!.raw)).toBeGreaterThan(0)
 	}, 5000)
 
 	test('camera sends guiding pulse to mount', async () => {

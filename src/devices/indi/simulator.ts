@@ -2708,6 +2708,7 @@ export class CameraSimulator extends DeviceSimulator {
 		const aberration = this.#makeAberrationConfig()
 		const currentFocus = this.activeFocuser?.position.value ?? this.#plotOptions.elements.FOCUS_STEP.value
 		const bestFocus = this.#plotOptions.elements.BEST_FOCUS.value
+		const annularPadding = this.#plotPsfModel.elements.ANNULAR.value ? this.#collimationPattern.elements.MAX_RADIUS.value + this.#collimationPattern.elements.EDGE_SOFTNESS.value * 8 : 0
 		const aberrationResult: SyntheticStarAberration = { defocus: 0, focusOffset: 0, covarianceXX: 0, covarianceXY: 0, covarianceYY: 0, coma: 0, comaTheta: 0 }
 
 		for (let i = 0; i < stars.length; i++) {
@@ -2724,7 +2725,7 @@ export class CameraSimulator extends DeviceSimulator {
 				sensorY = centerY + dx * sinAngle + dy * cosAngle
 			}
 
-			if (sensorX < frameX || sensorX >= frameX + frameWidth || sensorY < frameY || sensorY >= frameY + frameHeight) continue
+			if (sensorX < frameX - annularPadding || sensorX >= frameX + frameWidth + annularPadding || sensorY < frameY - annularPadding || sensorY >= frameY + frameHeight + annularPadding) continue
 			if (aberration.enabled) evaluateSyntheticAberration(sensorX, sensorY, this.sensorWidth, this.sensorHeight, currentFocus, bestFocus, aberration, aberrationResult)
 			const comaX = aberration.enabled ? Math.cos(aberrationResult.comaTheta) / binX : 0
 			const comaY = aberration.enabled ? Math.sin(aberrationResult.comaTheta) / binY : 0
