@@ -147,6 +147,15 @@ describe('synthetic collimation image', () => {
 		expect(varianceY).toBeCloseTo(1.2 * 1.2, 1)
 	})
 
+	test('keeps a vertical-only blur symmetric without reusing output rows', () => {
+		const raw = new Float64Array(9 * 9)
+		raw[4 * 9 + 4] = 1
+		applySyntheticCollimationBlur(raw, 9, 9, 1, { sigmaX: 0, sigmaY: 1 })
+
+		for (let offset = 1; offset <= 4; offset++) expect(raw[(4 - offset) * 9 + 4]).toBeCloseTo(raw[(4 + offset) * 9 + 4], 7)
+		expect(sum(raw)).toBeCloseTo(1, 6)
+	})
+
 	test('adds normalized flux to a caller-owned buffer', () => {
 		const pattern = fixture({ background: 0.3 })
 		const raw = new Float64Array(64 * 64)

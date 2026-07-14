@@ -401,7 +401,7 @@ function validateRaster(raw: ImageRawType, width: number, height: number, channe
 
 // Applies a normalized separable Gaussian kernel with zero-valued samples outside the frame.
 function gaussianBlurInPlace(raw: ImageRawType, width: number, height: number, channels: 1 | 3, sigmaX: number, sigmaY: number): void {
-	const horizontal = sigmaX > 0 ? new Float32Array(raw.length) : raw
+	const horizontal = new Float32Array(raw.length)
 	if (sigmaX > 0) {
 		const kernel = gaussianKernel(sigmaX)
 		const radius = (kernel.length - 1) >> 1
@@ -419,10 +419,10 @@ function gaussianBlurInPlace(raw: ImageRawType, width: number, height: number, c
 				}
 			}
 		}
-	}
+	} else horizontal.set(raw)
 
 	if (sigmaY <= 0) {
-		if (horizontal !== raw) raw.set(horizontal)
+		raw.set(horizontal)
 		return
 	}
 
