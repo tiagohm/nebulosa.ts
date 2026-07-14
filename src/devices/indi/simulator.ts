@@ -2402,7 +2402,7 @@ export class CameraSimulator extends DeviceSimulator {
 		const focusRange = this.#aberrationFocus.elements.FOCUS_RANGE.value
 		const currentFocus = this.activeFocuser?.position.value ?? this.#plotOptions.elements.FOCUS_STEP.value
 		const bestFocus = this.#plotOptions.elements.BEST_FOCUS.value
-		const globalDefocus = clamp(Math.abs(currentFocus - bestFocus) / focusRange, 0, 1)
+		const globalDefocus = bestFocus === 0 ? 0 : clamp(Math.abs(currentFocus - bestFocus) / focusRange, 0, 1)
 		const obstructionRatio = pattern.OBSTRUCTION_RATIO.value
 		const collimation = this.#aberrationFeatures.elements.COLLIMATION.value ? shape.COLLIMATION.value : 0
 		const collimationAngle = shape.COLLIMATION_ANGLE.value

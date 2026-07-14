@@ -650,10 +650,21 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		expect(obstructionSample).toBeLessThan(maximum * 0.35)
 		expect(image!.raw[centerY * image!.metadata.stride + centerX]).toBeLessThan(maximum * 0.5)
 
+		client.sendNumber({ device: camera.name, name: 'SIMULATOR_STAR_PLOT_OPTIONS', elements: { BEST_FOCUS: 0 } })
+		await waitUntil(() => cameraManager.properties.get(camera)?.SIMULATOR_STAR_PLOT_OPTIONS?.elements.BEST_FOCUS.value === 0)
+		cameraManager.startExposure(camera, 0.05)
+		await waitUntil(() => frameReceiver.length > 2, 10000, 50)
+		const disabledFocusImage = await readImageFromBuffer(frameReceiver.lastFrame)
+		expect(disabledFocusImage).toBeDefined()
+		expect(disabledFocusImage!.raw[centerY * disabledFocusImage!.metadata.stride + centerX]).toBeGreaterThan(disabledFocusImage!.raw[centerY * disabledFocusImage!.metadata.stride + 80])
+
+		client.sendNumber({ device: camera.name, name: 'SIMULATOR_STAR_PLOT_OPTIONS', elements: { BEST_FOCUS: 50000 } })
+		await waitUntil(() => cameraManager.properties.get(camera)?.SIMULATOR_STAR_PLOT_OPTIONS?.elements.BEST_FOCUS.value === 50000)
+
 		cameraManager.frame(camera, 660, 384, 256, 256)
 		await waitUntil(() => camera.frame.x.value === 660)
 		cameraManager.startExposure(camera, 0.05)
-		await waitUntil(() => frameReceiver.length > 2, 10000, 50)
+		await waitUntil(() => frameReceiver.length > 3, 10000, 50)
 		const clippedImage = await readImageFromBuffer(frameReceiver.lastFrame)
 		expect(clippedImage).toBeDefined()
 		expect(sumPixels(clippedImage!.raw)).toBeGreaterThan(0)
