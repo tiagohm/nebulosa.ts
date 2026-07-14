@@ -173,3 +173,33 @@ test('removes finite-stack temporal variance from undetrended PRNU', () => {
 	const result = measureSensorSpatial(dark, flat, 2, { tile: { width: 8, height: 8 } })
 	expect(result.prnu.undetrended.overall).toBeCloseTo(0, 10)
 })
+
+test('removes temporally correlated row noise from the DSNU decomposition', () => {
+	const width = 32
+	const capacity = width * width
+	const darkA = new Float64Array(capacity)
+	const darkB = new Float64Array(capacity)
+	const flatA = new Float64Array(capacity)
+	const flatB = new Float64Array(capacity)
+	for (let y = 0; y < width; y++) {
+		for (let x = 0; x < width; x++) {
+			const index = y * width + x
+			const pixelDsnu = ((x + y) & 1) === 0 ? 2 : -2
+			const temporalRowNoise = (y & 1) === 0 ? 1 : -1
+			darkA[index] = 100 + pixelDsnu + 2 * temporalRowNoise
+			darkB[index] = 100 + pixelDsnu
+			flatA[index] = darkA[index] + 1000
+			flatB[index] = darkB[index] + 1000
+		}
+	}
+	const dark: SensorFrameSet = { frames: [image(darkA, width), image(darkB, width)], exposure: 10 }
+	const flat: SensorFrameSet = { frames: [image(flatA, width), image(flatB, width)], exposure: 10 }
+	const result = measureSensorSpatial(dark, flat, 1, { tile: { width: 8, height: 8 } })
+	const transposed = measureSensorSpatial({ frames: [image(transpose(darkA, width), width), image(transpose(darkB, width), width)], exposure: 10 }, { frames: [image(transpose(flatA, width), width), image(transpose(flatB, width), width)], exposure: 10 }, 1, { tile: { width: 8, height: 8 } })
+
+	expect(result.dsnu.overall).toBeCloseTo(2, 2)
+	expect(result.dsnu.rows).toBeLessThan(0.1)
+	expect(result.dsnu.pixels).toBeCloseTo(result.dsnu.overall, 2)
+	expect(transposed.dsnu.columns).toBeLessThan(0.1)
+	expect(transposed.dsnu.pixels).toBeCloseTo(transposed.dsnu.overall, 2)
+})

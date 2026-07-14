@@ -104,6 +104,18 @@ interface SpatialWorkspace {
 	readonly smooth: Float64Array
 }
 
+// Temporal variance of raw and EMVA-high-pass row/column means for a stack average.
+interface TemporalProfileVariances {
+	// Variance of each raw row mean after averaging the finite frames, DN².
+	readonly rawRows: Float64Array
+	// Variance of each raw column mean after averaging the finite frames, DN².
+	readonly rawColumns: Float64Array
+	// Variance of each high-pass row mean after averaging the finite frames, DN².
+	readonly highpassRows: Float64Array
+	// Variance of each high-pass column mean after averaging the finite frames, DN².
+	readonly highpassColumns: Float64Array
+}
+
 // Allocates fixed workspaces sized for the largest requested target tile plus a nine-sample halo.
 function createWorkspace(tileWidth: number, tileHeight: number): SpatialWorkspace {
 	const expandedWidth = tileWidth + 18
@@ -119,6 +131,119 @@ function createWorkspace(tileWidth: number, tileHeight: number): SpatialWorkspac
 		second: new Float64Array((expandedWidth - 16) * (expandedHeight - 16)),
 		smooth: new Float64Array(tileWidth * tileHeight),
 	}
+}
+
+// Applies an edge-clamped one-dimensional box filter while excluding non-finite samples.
+function boxProfile(input: Float64Array, output: Float64Array, radius: number) {
+	for (let i = 0; i < input.length; i++) {
+		let sum = 0
+		let count = 0
+		for (let offset = -radius; offset <= radius; offset++) {
+			const value = input[Math.max(0, Math.min(input.length - 1, i + offset))]
+			if (Number.isFinite(value)) {
+				sum += value
+				count++
+			}
+		}
+		output[i] = count > 0 ? sum / count : Number.NaN
+	}
+}
+
+// Applies the final edge-clamped binomial filter used by the EMVA high-pass sequence.
+function binomialProfile(input: Float64Array, output: Float64Array) {
+	for (let i = 0; i < input.length; i++) {
+		let sum = 0
+		let weight = 0
+		for (let offset = -1; offset <= 1; offset++) {
+			const value = input[Math.max(0, Math.min(input.length - 1, i + offset))]
+			if (Number.isFinite(value)) {
+				const sampleWeight = offset === 0 ? 2 : 1
+				sum += value * sampleWeight
+				weight += sampleWeight
+			}
+		}
+		output[i] = weight > 0 ? sum / weight : Number.NaN
+	}
+}
+
+// Updates per-profile online moments with one raw profile and its EMVA high-pass residual.
+function updateTemporalProfileMoments(profile: Float64Array, first: Float64Array, second: Float64Array, smooth: Float64Array, rawMeans: Float64Array, rawM2: Float64Array, rawCounts: Uint32Array, highpassMeans: Float64Array, highpassM2: Float64Array, highpassCounts: Uint32Array) {
+	boxProfile(profile, first, 3)
+	boxProfile(first, second, 5)
+	binomialProfile(second, smooth)
+	for (let i = 0; i < profile.length; i++) {
+		const value = profile[i]
+		if (!Number.isFinite(value)) continue
+		let count = ++rawCounts[i]
+		let delta = value - rawMeans[i]
+		rawMeans[i] += delta / count
+		rawM2[i] += delta * (value - rawMeans[i])
+		const highpass = value - smooth[i]
+		if (!Number.isFinite(highpass)) continue
+		count = ++highpassCounts[i]
+		delta = highpass - highpassMeans[i]
+		highpassMeans[i] += delta / count
+		highpassM2[i] += delta * (highpass - highpassMeans[i])
+	}
+}
+
+// Converts temporal profile M2 values to the variance remaining in each finite stack mean.
+function finalizeTemporalProfileVariances(m2: Float64Array, counts: Uint32Array) {
+	for (let i = 0; i < m2.length; i++) m2[i] = counts[i] > 1 ? m2[i] / (counts[i] - 1) / counts[i] : Number.NaN
+}
+
+// Measures temporal contamination of raw and high-pass row/column means without image-sized buffers.
+function temporalProfileVariances(set: SensorFrameSet, geometry: SensorPlaneGeometry): TemporalProfileVariances {
+	const rawRows = new Float64Array(geometry.height)
+	const rawColumns = new Float64Array(geometry.width)
+	const highpassRows = new Float64Array(geometry.height)
+	const highpassColumns = new Float64Array(geometry.width)
+	const rawRowMeans = new Float64Array(geometry.height)
+	const rawColumnMeans = new Float64Array(geometry.width)
+	const highpassRowMeans = new Float64Array(geometry.height)
+	const highpassColumnMeans = new Float64Array(geometry.width)
+	const rawRowCounts = new Uint32Array(geometry.height)
+	const rawColumnCounts = new Uint32Array(geometry.width)
+	const highpassRowCounts = new Uint32Array(geometry.height)
+	const highpassColumnCounts = new Uint32Array(geometry.width)
+	const rowProfile = new Float64Array(geometry.height)
+	const columnProfile = new Float64Array(geometry.width)
+	const rowSamples = new Uint32Array(geometry.height)
+	const columnSamples = new Uint32Array(geometry.width)
+	const rowFirst = new Float64Array(geometry.height)
+	const rowSecond = new Float64Array(geometry.height)
+	const rowSmooth = new Float64Array(geometry.height)
+	const columnFirst = new Float64Array(geometry.width)
+	const columnSecond = new Float64Array(geometry.width)
+	const columnSmooth = new Float64Array(geometry.width)
+	const sourceWidth = set.frames[0].metadata.width
+	for (const frame of set.frames) {
+		rowProfile.fill(0)
+		columnProfile.fill(0)
+		rowSamples.fill(0)
+		columnSamples.fill(0)
+		for (let y = 0; y < geometry.height; y++) {
+			const sourceY = geometry.sourceTop + y * geometry.step
+			let index = sourceY * sourceWidth + geometry.sourceLeft
+			for (let x = 0; x < geometry.width; x++, index += geometry.step) {
+				const value = frame.raw[index]
+				if (!Number.isFinite(value)) continue
+				rowProfile[y] += value
+				columnProfile[x] += value
+				rowSamples[y]++
+				columnSamples[x]++
+			}
+		}
+		for (let y = 0; y < geometry.height; y++) rowProfile[y] = rowSamples[y] > 0 ? rowProfile[y] / rowSamples[y] : Number.NaN
+		for (let x = 0; x < geometry.width; x++) columnProfile[x] = columnSamples[x] > 0 ? columnProfile[x] / columnSamples[x] : Number.NaN
+		updateTemporalProfileMoments(rowProfile, rowFirst, rowSecond, rowSmooth, rawRowMeans, rawRows, rawRowCounts, highpassRowMeans, highpassRows, highpassRowCounts)
+		updateTemporalProfileMoments(columnProfile, columnFirst, columnSecond, columnSmooth, rawColumnMeans, rawColumns, rawColumnCounts, highpassColumnMeans, highpassColumns, highpassColumnCounts)
+	}
+	finalizeTemporalProfileVariances(rawRows, rawRowCounts)
+	finalizeTemporalProfileVariances(rawColumns, rawColumnCounts)
+	finalizeTemporalProfileVariances(highpassRows, highpassRowCounts)
+	finalizeTemporalProfileVariances(highpassColumns, highpassColumnCounts)
+	return { rawRows, rawColumns, highpassRows, highpassColumns }
 }
 
 // Fills expanded plane-grid stack mean and unbiased temporal variance, clamping the filter halo to edges.
@@ -339,6 +464,46 @@ function effectVariance(sums: Float64Array, counts: Uint32Array, overallMean: nu
 	return count > 0 ? total / count : 0
 }
 
+// Averages temporal variances with the same spatial weights used by row/column decomposition.
+function weightedTemporalVariance(variances: Float64Array, counts: Uint32Array): number {
+	let total = 0
+	let count = 0
+	for (let i = 0; i < variances.length; i++) {
+		if (counts[i] === 0 || !Number.isFinite(variances[i])) continue
+		total += variances[i] * counts[i]
+		count += counts[i]
+	}
+	return count > 0 ? total / count : 0
+}
+
+// Averages additive temporal profile variance after normalization by a fitted response surface.
+function weightedNormalizedTemporalVariance(first: Float64Array, second: Float64Array, counts: Uint32Array, coefficients: Float64Array, geometry: SensorPlaneGeometry, rows: boolean): number {
+	let total = 0
+	let count = 0
+	for (let profileIndex = 0; profileIndex < counts.length; profileIndex++) {
+		const variance = first[profileIndex] + second[profileIndex]
+		if (counts[profileIndex] === 0 || !Number.isFinite(variance)) continue
+		const samples = rows ? geometry.width : geometry.height
+		let inverseModelMean = 0
+		let inverseModelCount = 0
+		for (let sample = 0; sample < samples; sample++) {
+			const x = rows ? sample : profileIndex
+			const y = rows ? profileIndex : sample
+			const normalizedX = geometry.width > 1 ? (2 * x) / (geometry.width - 1) - 1 : 0
+			const normalizedY = geometry.height > 1 ? (2 * y) / (geometry.height - 1) - 1 : 0
+			const model = surfaceValue(coefficients, normalizedX, normalizedY)
+			if (!Number.isFinite(model) || Math.abs(model) <= Number.EPSILON) continue
+			inverseModelMean += 1 / model
+			inverseModelCount++
+		}
+		if (inverseModelCount === 0) continue
+		inverseModelMean /= inverseModelCount
+		total += variance * inverseModelMean * inverseModelMean * counts[profileIndex]
+		count += counts[profileIndex]
+	}
+	return count > 0 ? total / count : 0
+}
+
 // Measures DSNU and PRNU for matched fixed-exposure dark and bright stacks.
 export function measureSensorSpatial(dark: SensorFrameSet, flat: SensorFrameSet, conversionGain: number, options: Partial<SensorSpatialOptions> = {}): SensorSpatialCharacterization {
 	if (!Number.isFinite(conversionGain) || conversionGain <= 0) throw new RangeError('spatial conversion gain must be finite and positive')
@@ -380,6 +545,8 @@ export function measureSensorSpatial(dark: SensorFrameSet, flat: SensorFrameSet,
 	const meanBuffer = options.spatialBuffers?.mean
 	const varianceBuffer = options.spatialBuffers?.variance
 	const maskBuffer = options.spatialBuffers?.mask
+	const darkProfileTemporal = temporalProfileVariances(dark, geometry)
+	const brightProfileTemporal = temporalProfileVariances(flat, geometry)
 	if (dsnuMap) dsnuMap.fill(Number.NaN)
 	if (prnuMap) prnuMap.fill(Number.NaN)
 	if (meanBuffer) meanBuffer.fill(Number.NaN, 0, sampleCapacity)
@@ -487,13 +654,13 @@ export function measureSensorSpatial(dark: SensorFrameSet, flat: SensorFrameSet,
 	const brightTemporal = brightTemporalSum / count / flat.frames.length
 	const darkTotalVariance = Math.max(0, darkM2 / count - darkTemporal)
 	const brightTotalVariance = Math.max(0, brightM2 / count - brightTemporal)
-	const darkRowVariance = effectVariance(darkResidualRow, rowCounts, darkMean)
-	const darkColumnVariance = effectVariance(darkResidualColumn, columnCounts, darkMean)
-	const brightRowVariance = effectVariance(brightResidualRow, rowCounts, brightMean)
-	const brightColumnVariance = effectVariance(brightResidualColumn, columnCounts, brightMean)
+	const darkRowVariance = Math.max(0, effectVariance(darkResidualRow, rowCounts, darkMean) - weightedTemporalVariance(darkProfileTemporal.highpassRows, rowCounts))
+	const darkColumnVariance = Math.max(0, effectVariance(darkResidualColumn, columnCounts, darkMean) - weightedTemporalVariance(darkProfileTemporal.highpassColumns, columnCounts))
+	const brightRowVariance = Math.max(0, effectVariance(brightResidualRow, rowCounts, brightMean) - weightedTemporalVariance(brightProfileTemporal.highpassRows, rowCounts))
+	const brightColumnVariance = Math.max(0, effectVariance(brightResidualColumn, columnCounts, brightMean) - weightedTemporalVariance(brightProfileTemporal.highpassColumns, columnCounts))
 	const signalTotalVariance = Math.max(0, signalM2 / count - darkTemporal - brightTemporal)
-	const signalRowVariance = effectVariance(signalSpatialRow, rowCounts, signalMean)
-	const signalColumnVariance = effectVariance(signalSpatialColumn, columnCounts, signalMean)
+	const signalRowVariance = Math.max(0, effectVariance(signalSpatialRow, rowCounts, signalMean) - weightedTemporalVariance(darkProfileTemporal.rawRows, rowCounts) - weightedTemporalVariance(brightProfileTemporal.rawRows, rowCounts))
+	const signalColumnVariance = Math.max(0, effectVariance(signalSpatialColumn, columnCounts, signalMean) - weightedTemporalVariance(darkProfileTemporal.rawColumns, columnCounts) - weightedTemporalVariance(brightProfileTemporal.rawColumns, columnCounts))
 	const dsnuComponents = components(darkTotalVariance, darkRowVariance, darkColumnVariance, conversionGain)
 	const emvaTotal = Math.max(0, brightTotalVariance - darkTotalVariance)
 	const emvaRows = Math.max(0, brightRowVariance - darkRowVariance)
@@ -552,7 +719,9 @@ export function measureSensorSpatial(dark: SensorFrameSet, flat: SensorFrameSet,
 		if (correctedCount > 0) {
 			const robustDeviation = correctedResiduals.robustStandardDeviation()
 			const correctedVariance = Number.isFinite(robustDeviation) ? Math.max(0, robustDeviation * robustDeviation - correctedTemporalSum / correctedCount) : Math.max(0, correctedM2 / correctedCount - correctedTemporalSum / correctedCount)
-			corrected = components(correctedVariance, effectVariance(correctedRow, correctedRowCounts, correctedMean), effectVariance(correctedColumn, correctedColumnCounts, correctedMean), 1)
+			const correctedRowVariance = Math.max(0, effectVariance(correctedRow, correctedRowCounts, correctedMean) - weightedNormalizedTemporalVariance(darkProfileTemporal.rawRows, brightProfileTemporal.rawRows, correctedRowCounts, coefficients, geometry, true))
+			const correctedColumnVariance = Math.max(0, effectVariance(correctedColumn, correctedColumnCounts, correctedMean) - weightedNormalizedTemporalVariance(darkProfileTemporal.rawColumns, brightProfileTemporal.rawColumns, correctedColumnCounts, coefficients, geometry, false))
+			corrected = components(correctedVariance, correctedRowVariance, correctedColumnVariance, 1)
 		}
 	}
 
