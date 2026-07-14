@@ -155,13 +155,14 @@ export function renderSyntheticCollimationPattern(raw: ImageRawType, pattern: Sy
 
 	const outer = resolveEllipse(pattern.outer)
 	const obstruction = resolveEllipse(pattern.obstruction)
+	const harmonics = pattern.harmonics
 	const support = ellipseBounds(outer)
 	const bounds = clipBounds(support, pattern.width, pattern.height)
 	if (bounds.left >= bounds.right || bounds.top >= bounds.bottom || pattern.signal === 0) return false
 
 	let weightSum = 0
 	for (let y = support.top; y < support.bottom; y++) {
-		for (let x = support.left; x < support.right; x++) weightSum += annulusWeight(x, y, outer, obstruction, pattern)
+		for (let x = support.left; x < support.right; x++) weightSum += annulusWeight(x, y, outer, obstruction, pattern, harmonics)
 	}
 	if (!(weightSum > MIN_WEIGHT_SUM)) return false
 
@@ -170,7 +171,7 @@ export function renderSyntheticCollimationPattern(raw: ImageRawType, pattern: Sy
 	for (let y = bounds.top; y < bounds.bottom; y++) {
 		let pixel = (y * pattern.width + bounds.left) * channels
 		for (let x = bounds.left; x < bounds.right; x++, pixel += channels) {
-			const value = annulusWeight(x, y, outer, obstruction, pattern) * scale
+			const value = annulusWeight(x, y, outer, obstruction, pattern, harmonics) * scale
 			if (channels === 1) raw[pixel] = saturationLevel === undefined ? raw[pixel] + value : Math.min(saturationLevel, raw[pixel] + value)
 			else {
 				const red = raw[pixel] + value * channelWeights[0]
@@ -430,7 +431,7 @@ function ellipseOccupancy(x: number, y: number, ellipse: ResolvedEllipse): numbe
 }
 
 // Computes one non-negative annulus sample including azimuthal attenuation.
-function annulusWeight(x: number, y: number, outer: ResolvedEllipse, obstruction: ResolvedEllipse, pattern: SyntheticCollimationPattern): number {
+function annulusWeight(x: number, y: number, outer: ResolvedEllipse, obstruction: ResolvedEllipse, pattern: SyntheticCollimationPattern, harmonics: readonly SyntheticHarmonic[] | undefined): number {
 	let weight = ellipseOccupancy(x, y, outer) * (1 - ellipseOccupancy(x, y, obstruction))
 	if (weight <= 0) return 0
 	const dx = x - outer.centerX
@@ -438,7 +439,12 @@ function annulusWeight(x: number, y: number, outer: ResolvedEllipse, obstruction
 	const phi = Math.atan2(dy, dx)
 
 	let harmonic = 1
-	for (const term of pattern.harmonics ?? []) harmonic += term.amplitude * Math.cos(term.order * (phi - term.phase))
+	if (harmonics !== undefined) {
+		for (let i = 0; i < harmonics.length; i++) {
+			const term = harmonics[i]
+			harmonic += term.amplitude * Math.cos(term.order * (phi - term.phase))
+		}
+	}
 	weight *= Math.max(0, harmonic)
 
 	const spider = pattern.spider
