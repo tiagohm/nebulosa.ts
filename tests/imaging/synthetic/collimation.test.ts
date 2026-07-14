@@ -1,0 +1,125 @@
+import { describe, expect, test } from 'bun:test'
+import { generateSyntheticCollimationImage, renderSyntheticCollimationPattern, type SyntheticCollimationPattern } from '../../../src/imaging/synthetic/collimation'
+
+// Verifies deterministic annular fixtures independently from the INDI camera integration.
+
+// Builds a centered high-SNR fixture with selected top-level overrides.
+function fixture(overrides: Partial<SyntheticCollimationPattern> = {}): SyntheticCollimationPattern {
+	return {
+		width: 64,
+		height: 64,
+		outer: { center: { x: 32, y: 32 }, semiMajor: 20, semiMinor: 20, theta: 0, softness: 0.5 },
+		obstruction: { center: { x: 32, y: 32 }, semiMajor: 8, semiMinor: 8, theta: 0, softness: 0.5 },
+		signal: 100,
+		background: 0,
+		noise: 0,
+		seed: 42,
+		...overrides,
+	}
+}
+
+// Sums a numeric image buffer without allocating an intermediate array.
+function sum(raw: ArrayLike<number>): number {
+	let value = 0
+	for (let i = 0; i < raw.length; i++) value += raw[i]
+	return value
+}
+
+// Sums a half-plane relative to a vertical split in image coordinates.
+function halfPlaneSum(raw: ArrayLike<number>, width: number, height: number, right: boolean): number {
+	let value = 0
+	for (let y = 0; y < height; y++) {
+		for (let x = right ? width / 2 : 0; x < (right ? width : width / 2); x++) value += raw[y * width + x]
+	}
+	return value
+}
+
+describe('synthetic collimation image', () => {
+	test('renders two soft edges while preserving integrated signal', () => {
+		const image = generateSyntheticCollimationImage(fixture())
+		const center = image.raw[32 * 64 + 32]
+		const ring = image.raw[32 * 64 + 46]
+
+		expect(sum(image.raw)).toBeCloseTo(100, 4)
+		expect(center).toBeLessThan(ring * 0.001)
+		expect(ring).toBeGreaterThan(0)
+		expect(image.raw.every(Number.isFinite)).toBeTrue()
+	})
+
+	test('moves the obstruction independently in all eight directions', () => {
+		for (let i = 0; i < 8; i++) {
+			const angle = (i * Math.PI) / 4
+			const dx = Math.cos(angle) * 4
+			const dy = Math.sin(angle) * 4
+			const pattern = fixture({
+				obstruction: { center: { x: 32 + dx, y: 32 + dy }, semiMajor: 8, semiMinor: 8, theta: 0, softness: 0.5 },
+			})
+			const image = generateSyntheticCollimationImage(pattern)
+			let positive = 0
+			let negative = 0
+			for (let y = 0; y < 64; y++) {
+				for (let x = 0; x < 64; x++) {
+					const projection = (x - 32) * dx + (y - 32) * dy
+					if (projection >= 0) positive += image.raw[y * 64 + x]
+					else negative += image.raw[y * 64 + x]
+				}
+			}
+			expect(positive).toBeLessThan(negative)
+		}
+	})
+
+	test('supports rotated ellipses, RGB, and CFA metadata', () => {
+		const ellipse = fixture({
+			channels: 3,
+			outer: { center: { x: 32, y: 32 }, semiMajor: 22, semiMinor: 16, theta: 0.4, softness: 0.7 },
+			obstruction: { center: { x: 32, y: 32 }, semiMajor: 8, semiMinor: 6, theta: 0.4, softness: 0.7 },
+		})
+		const rgb = generateSyntheticCollimationImage(ellipse)
+		expect(rgb.metadata.channels).toBe(3)
+		expect(sum(rgb.raw)).toBeCloseTo(300, 3)
+
+		const cfa = generateSyntheticCollimationImage(fixture({ bayer: 'RGGB', crop: { left: 1, top: 0, right: 63, bottom: 64 } }))
+		expect(cfa.metadata.channels).toBe(1)
+		expect(cfa.metadata.bayer).toBe('GRBG')
+	})
+
+	test('applies deterministic optical and sensor effects in the documented order', () => {
+		const pattern = fixture({
+			noise: 0.01,
+			seeing: 1.2,
+			tracking: { length: 4, angle: 0.3 },
+			harmonics: [{ order: 1, amplitude: 0.25, phase: -0.2 }],
+			spider: { vanes: 4, angle: 0, width: 2, attenuation: 0.8 },
+			thermalPlume: { angle: 1, width: 0.25, strength: 0.5 },
+			saturation: 0.2,
+			hotPixels: [{ x: 1, y: 2 }],
+			crop: { left: 8, top: 10, right: 56, bottom: 58 },
+		})
+		const first = generateSyntheticCollimationImage(pattern)
+		const second = generateSyntheticCollimationImage(pattern)
+		expect(first.raw).toEqual(second.raw)
+		expect(first.metadata.width).toBe(48)
+		expect(first.metadata.height).toBe(48)
+		expect(first.header.XORGSUBF).toBe(8)
+		expect(first.header.YORGSUBF).toBe(10)
+		expect(Math.max(...first.raw)).toBeLessThanOrEqual(0.2)
+	})
+
+	test('adds normalized flux to a caller-owned buffer', () => {
+		const pattern = fixture({ background: 0.3 })
+		const raw = new Float64Array(64 * 64)
+		raw.fill(pattern.background)
+		expect(renderSyntheticCollimationPattern(raw, pattern)).toBeTrue()
+		expect(sum(raw)).toBeCloseTo(64 * 64 * 0.3 + 100, 6)
+	})
+
+	test('rejects an obstruction that escapes the outer ellipse', () => {
+		const pattern = fixture({ obstruction: { center: { x: 48, y: 32 }, semiMajor: 8, semiMinor: 8, theta: 0, softness: 0.5 } })
+		expect(() => generateSyntheticCollimationImage(pattern)).toThrow('obstruction must be contained')
+	})
+
+	test('makes the annulus thicker opposite the obstruction offset', () => {
+		const image = generateSyntheticCollimationImage(fixture({ obstruction: { center: { x: 36, y: 32 }, semiMajor: 8, semiMinor: 8, theta: 0, softness: 0.5 } }))
+		expect(halfPlaneSum(image.raw, 64, 64, true)).toBeLessThan(halfPlaneSum(image.raw, 64, 64, false))
+	})
+})
