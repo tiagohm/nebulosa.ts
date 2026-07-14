@@ -152,6 +152,12 @@ describe('synthetic collimation image', () => {
 		expect(varianceY).toBeCloseTo(1.2 * 1.2, 1)
 	})
 
+	test('treats an underflowing Gaussian sigma as a no-op', () => {
+		const raw = new Float64Array([1])
+		applySyntheticCollimationBlur(raw, 1, 1, 1, Number.MIN_VALUE)
+		expect(raw[0]).toBe(1)
+	})
+
 	test('keeps a vertical-only blur symmetric without reusing output rows', () => {
 		const raw = new Float64Array(9 * 9)
 		raw[4 * 9 + 4] = 1

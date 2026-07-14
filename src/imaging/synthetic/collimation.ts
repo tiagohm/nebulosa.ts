@@ -16,6 +16,8 @@ const CONTAINMENT_TOLERANCE = 1e-9
 const CONTAINMENT_SOLVER_ITERATIONS = 80
 // Gaussian blur support, in standard deviations on either side of the center.
 const GAUSSIAN_SUPPORT = 3
+// Smallest sigma whose square remains representable for Gaussian-kernel evaluation.
+const MIN_EFFECTIVE_GAUSSIAN_SIGMA = Math.sqrt(Number.MIN_VALUE)
 // Smallest positive normalization divisor accepted by the flux-preserving renderer.
 const MIN_WEIGHT_SUM = 1e-12
 
@@ -193,12 +195,14 @@ export function applySyntheticCollimationBlur(raw: ImageRawType, width: number, 
 	const sigmaX = typeof seeing === 'number' ? seeing : seeing.sigmaX
 	const sigmaY = typeof seeing === 'number' ? seeing : seeing.sigmaY
 	if (!Number.isFinite(sigmaX) || sigmaX < 0 || !Number.isFinite(sigmaY) || sigmaY < 0) throw new RangeError('seeing must be finite and non-negative')
+	const effectiveSigmaX = sigmaX > MIN_EFFECTIVE_GAUSSIAN_SIGMA ? sigmaX : 0
+	const effectiveSigmaY = sigmaY > MIN_EFFECTIVE_GAUSSIAN_SIGMA ? sigmaY : 0
 	if (tracking !== undefined) {
 		if (!Number.isFinite(tracking.length) || tracking.length < 0) throw new RangeError('tracking length must be finite and non-negative')
 		if (!Number.isFinite(tracking.angle)) throw new RangeError('tracking angle must be finite')
 	}
 
-	if (sigmaX > 0 || sigmaY > 0) gaussianBlurInPlace(raw, width, height, channels, sigmaX, sigmaY)
+	if (effectiveSigmaX > 0 || effectiveSigmaY > 0) gaussianBlurInPlace(raw, width, height, channels, effectiveSigmaX, effectiveSigmaY)
 	if (tracking !== undefined && tracking.length > 0) directionalBlurInPlace(raw, width, height, channels, tracking)
 	return raw
 }
