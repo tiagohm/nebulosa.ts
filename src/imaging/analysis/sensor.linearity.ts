@@ -55,7 +55,7 @@ export interface SensorLinearityAnalysis {
 export function measureSensorLinearity(points: readonly PhotonTransferPoint[], flats: readonly SensorFlatFrameSet[], saturation: SensorSaturation | undefined, gain: SensorGain | undefined, range: readonly [number, number] = DEFAULT_SENSOR_CHARACTERIZATION_OPTIONS.linearityRange): SensorLinearityAnalysis {
 	if (range.length !== 2 || !Number.isFinite(range[0]) || !Number.isFinite(range[1]) || range[0] < 0 || range[0] >= range[1] || range[1] > 1) throw new RangeError('linearity range must be an increasing fraction within 0..1')
 	let observedMaximum = 0
-	for (const point of points) if (point.valid && point.signal > observedMaximum) observedMaximum = point.signal
+	for (const point of points) if (point.valid && point.clippedFraction <= 0 && (point.darkClippedFraction ?? 0) <= 0 && point.signal > observedMaximum) observedMaximum = point.signal
 	const saturationSignal = saturation?.signal ?? observedMaximum
 	if (!(saturationSignal > 0)) return {}
 	const minimumSignal = saturationSignal * range[0]
@@ -65,7 +65,7 @@ export function measureSensorLinearity(points: readonly PhotonTransferPoint[], f
 	let allSpectrallyCalibrated = true
 	let wavelength: number | undefined
 	for (const point of points) {
-		if (!point.valid || point.signal < minimumSignal || point.signal > maximumSignal) continue
+		if (!point.valid || point.clippedFraction > 0 || (point.darkClippedFraction ?? 0) > 0 || point.signal < minimumSignal || point.signal > maximumSignal) continue
 		const flat = flats[point.level]
 		if (!flat) continue
 		const photons = flat.photons

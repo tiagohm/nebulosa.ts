@@ -66,3 +66,15 @@ test('does not mix photon and exposure axes when calibration metadata is incompl
 	expect(result.linearity?.slope).toBeCloseTo(100, 12)
 	expect(result.responsivity).toBeUndefined()
 })
+
+test('excludes flat- and dark-clipped levels from the linearity fit', () => {
+	const flatClipped = { ...point(1, 120), clippedFraction: 0.01 }
+	const darkClipped = { ...point(2, 180), darkClippedFraction: 0.01 }
+	const points = [point(0, 100), flatClipped, darkClipped, point(3, 400)]
+	const flats = [flat(1), flat(2), flat(3), flat(4)]
+	const result = measureSensorLinearity(points, flats, { signal: 400, index: 3, method: 'response', confidence: 0.8 }, undefined, [0, 1])
+
+	expect(result.linearity?.fit.pointCount).toBe(2)
+	expect(result.linearity?.slope).toBeCloseTo(100, 12)
+	expect(result.linearity?.error).toBeCloseTo(0, 12)
+})
