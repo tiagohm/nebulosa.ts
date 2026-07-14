@@ -20,7 +20,7 @@ export function numericKeyword<T extends number = number, D extends T | undefine
 	if (value === undefined) return defaultValue
 	else if (typeof value === 'number') return value as D | T
 	else if (typeof value === 'boolean') return (value ? 1 : 0) as D | T
-	else return Number.parseFloat(value) as D | T
+	else return Number(value) as D | T
 }
 
 // Reads `key` as a boolean (numbers: non-zero is true; strings: 'T'/'true'), or `defaultValue` when absent.

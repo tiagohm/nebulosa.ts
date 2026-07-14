@@ -7,7 +7,7 @@ import { type SolarEclipseGeoPoint, type PolynomialBesselianElements, intermedia
 import { F, sunMoonPosition, type EclipseGeoBranch, type EclipseGeoCurve, type SunMoonProvider } from '../../../../src/astronomy/events/eclipse/eclipse'
 import { timeYMD, time, Timescale } from '../../../../src/astronomy/time/time'
 
-const CATALOG_STEP = deg(Number.parseFloat(Bun.env.SOLAR_ECLIPSE_CATALOG_STEP_DEG || '0.5'))
+const CATALOG_STEP = deg(Number(Bun.env.SOLAR_ECLIPSE_CATALOG_STEP_DEG || '0.5'))
 const CATALOG_MAX_DRAWABLE_GAP = Math.max(BRANCH_MAX_DRAWABLE_GAP, CATALOG_STEP * 4)
 const CATALOG_BRIDGE_BALANCE = 0.75
 const CATALOG_RECONNECT_POLE_LATITUDE = deg(85)

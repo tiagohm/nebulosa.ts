@@ -127,7 +127,7 @@ export async function astapPlateSolve(input: string, { fov = 0, downsample = 0, 
 					const [key, value] = line.trim().split('=')
 
 					if (key in header || isWcsFitsKeyword(key)) {
-						const numericValue = Number.parseFloat(value)
+						const numericValue = Number(value)
 						header[key] = Number.isFinite(numericValue) ? numericValue : value
 					} else if (key === 'DIMENSIONS') {
 						const [width, height] = value.split('x')

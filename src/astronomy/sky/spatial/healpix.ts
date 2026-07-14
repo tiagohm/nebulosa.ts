@@ -1025,7 +1025,7 @@ function matchesAnyBox(rightAscension: number, declination: number, boxes: reado
 }
 
 // Recursively covers a region with nested pixels.
-function coverPixels(nside: number, options: HealpixCoverOptions | undefined, tester: { intersects(center: Vec3, bound: number): boolean }) {
+function coverPixels(nside: number, options: HealpixCoverOptions | undefined, tester: { intersects: (center: Vec3, bound: number) => boolean }) {
 	const targetNside = options?.targetNside ?? nside
 	validateNside(targetNside)
 
