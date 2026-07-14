@@ -1,7 +1,7 @@
 import type { Point, Rect } from '../../math/numerical/geometry'
 import { mulberry32 } from '../../math/numerical/random'
 import type { Angle } from '../../math/units/angle'
-import type { CfaPattern, Image, ImageRawType } from '../model/types'
+import { type CfaPattern, type Image, type ImageRawType, makeImageRawTypedArray } from '../model/types'
 
 // Deterministic rasterization of defocused, centrally obstructed stellar patterns. Geometry is expressed
 // in full-image pixel coordinates with Y increasing downward. The low-level renderer adds flux to a
@@ -406,7 +406,7 @@ function validateRaster(raw: ImageRawType, width: number, height: number, channe
 
 // Applies a normalized separable Gaussian kernel with zero-valued samples outside the frame.
 function gaussianBlurInPlace(raw: ImageRawType, width: number, height: number, channels: 1 | 3, sigmaX: number, sigmaY: number): void {
-	const horizontal = new Float32Array(raw.length)
+	const horizontal = makeImageRawTypedArray(raw, raw.length)
 	if (sigmaX > 0) {
 		const kernel = gaussianKernel(sigmaX)
 		const radius = (kernel.length - 1) >> 1
@@ -468,7 +468,7 @@ function directionalBlurInPlace(raw: ImageRawType, width: number, height: number
 	const samples = Math.max(2, Math.ceil(tracking.length) + 1)
 	const dx = Math.cos(tracking.angle) * tracking.length
 	const dy = Math.sin(tracking.angle) * tracking.length
-	const output = new Float32Array(raw.length)
+	const output = makeImageRawTypedArray(raw, raw.length)
 	for (let y = 0; y < height; y++) {
 		for (let x = 0; x < width; x++) {
 			const pixel = (y * width + x) * channels

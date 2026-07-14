@@ -156,6 +156,19 @@ describe('synthetic collimation image', () => {
 		expect(sum(raw)).toBeCloseTo(1, 6)
 	})
 
+	test('preserves Float64 precision in Gaussian and directional scratch buffers', () => {
+		const delta = 2 ** -30
+		for (const tracking of [undefined, { length: 2, angle: 0 }]) {
+			const unit = new Float64Array(9 * 9)
+			const precise = new Float64Array(9 * 9)
+			unit[4 * 9 + 4] = 1
+			precise[4 * 9 + 4] = 1 + delta
+			applySyntheticCollimationBlur(unit, 9, 9, 1, tracking === undefined ? { sigmaX: 0, sigmaY: 1 } : 0, tracking)
+			applySyntheticCollimationBlur(precise, 9, 9, 1, tracking === undefined ? { sigmaX: 0, sigmaY: 1 } : 0, tracking)
+			expect(precise[4 * 9 + 4]).toBeGreaterThan(unit[4 * 9 + 4])
+		}
+	})
+
 	test('adds normalized flux to a caller-owned buffer', () => {
 		const pattern = fixture({ background: 0.3 })
 		const raw = new Float64Array(64 * 64)
