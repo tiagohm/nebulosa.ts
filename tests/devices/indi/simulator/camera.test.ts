@@ -81,6 +81,9 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		expect(camera.pixelSize.x).toBeCloseTo(5.2, 6)
 		expect(camera.pixelSize.y).toBeCloseTo(5.2, 6)
 		expect(cameraManager.properties.get(camera)?.SIMULATOR_NOISE_EXPOSURE).toBeDefined()
+		expect(cameraManager.properties.get(camera)?.SIMULATOR_FLAT_FIELD).toBeDefined()
+		expect(cameraManager.properties.get(camera)?.SIMULATOR_FLAT_DUST).toBeDefined()
+		expect(cameraManager.properties.get(camera)?.SIMULATOR_FLAT_BANDING).toBeDefined()
 		expect(cameraManager.properties.get(camera)?.SIMULATOR_CATALOG_SOURCE).toBeDefined()
 		expect(cameraManager.properties.get(camera)?.SIMULATOR_STAR_PLOT_OPTIONS).toBeDefined()
 		expect(cameraManager.properties.get(camera)?.SIMULATOR_COLLIMATION_PATTERN).toBeDefined()
@@ -248,7 +251,7 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		expect(rotatorManager.has(client, rotator.name)).toBeFalse()
 	}, 5000)
 
-	test('scales flat frames with exposure time', async () => {
+	test('scales configured flat fields and preserves artifacts through crop and binning', async () => {
 		const handler = new IndiClientHandlerSet()
 		const mountManager = new MountManager()
 		const cameraManager = new CameraManager()
@@ -268,11 +271,14 @@ describe.skipIf(SKIP)('camera simulator', () => {
 
 		cameraManager.frameType(camera, 'FLAT')
 		await waitUntil(() => camera.frameType === 'FLAT')
-		cameraManager.frame(camera, 0, 0, 64, 64)
-		await waitUntil(() => camera.frame.width.value === 64 && camera.frame.height.value === 64)
+		cameraManager.frame(camera, 608, 448, 64, 64)
+		await waitUntil(() => camera.frame.x.value === 608 && camera.frame.y.value === 448 && camera.frame.width.value === 64 && camera.frame.height.value === 64)
 
 		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_NOISE_FEATURES', elements: { SKY_ENABLED: false, MOON_ENABLED: false, LIGHT_POLLUTION_ENABLED: false, AMP_GLOW_ENABLED: false } })
 		client.sendNumber({ device: camera.name, name: 'SIMULATOR_NOISE_EXPOSURE', elements: { EXPOSURE_TIME: 1 } })
+		client.sendNumber({ device: camera.name, name: 'SIMULATOR_FLAT_FIELD', elements: { REFERENCE_SIGNAL: 0.5, VIGNETTING: 0, CENTER_OFFSET_X: 0, CENTER_OFFSET_Y: 0, GRADIENT_X: 0, GRADIENT_Y: 0, PRNU: 0 } })
+		client.sendNumber({ device: camera.name, name: 'SIMULATOR_FLAT_DUST', elements: { CENTER_X: 0, CENTER_Y: 0, SIGMA_X: 8, SIGMA_Y: 8, ANGLE: 0, CONTRAST: 0.5 } })
+		client.sendNumber({ device: camera.name, name: 'SIMULATOR_FLAT_BANDING', elements: { ROW_AMPLITUDE: 0.1, ROW_PERIOD: 16, ROW_PHASE: Math.PI / 2, COLUMN_AMPLITUDE: 0 } })
 		client.sendNumber({ device: camera.name, name: 'SIMULATOR_NOISE_SENSOR', elements: { READ_NOISE: 0, BIAS_ELECTRONS: 0, BLACK_LEVEL_ELECTRONS: 0, DARK_CURRENT_AT_REFERENCE_TEMP: 0, DARK_SIGNAL_NON_UNIFORMITY: 0 } })
 		client.sendNumber({
 			device: camera.name,
@@ -280,23 +286,41 @@ describe.skipIf(SKIP)('camera simulator', () => {
 			elements: { FIXED_PATTERN_NOISE_STRENGTH: 0, ROW_NOISE_STRENGTH: 0, COLUMN_NOISE_STRENGTH: 0, BANDING_STRENGTH: 0, HOT_PIXEL_RATE: 0, WARM_PIXEL_RATE: 0, DEAD_PIXEL_RATE: 0, HOT_PIXEL_STRENGTH: 0, WARM_PIXEL_STRENGTH: 0, DEAD_PIXEL_RESIDUAL: 0 },
 		})
 
-		await waitUntil(() => cameraManager.properties.get(camera)?.SIMULATOR_NOISE_EXPOSURE?.elements.EXPOSURE_TIME.value === 1)
+		await waitUntil(
+			() =>
+				cameraManager.properties.get(camera)?.SIMULATOR_NOISE_EXPOSURE?.elements.EXPOSURE_TIME.value === 1 &&
+				cameraManager.properties.get(camera)?.SIMULATOR_FLAT_FIELD?.elements.REFERENCE_SIGNAL.value === 0.5 &&
+				cameraManager.properties.get(camera)?.SIMULATOR_FLAT_DUST?.elements.CONTRAST.value === 0.5 &&
+				cameraManager.properties.get(camera)?.SIMULATOR_FLAT_BANDING?.elements.ROW_AMPLITUDE.value === 0.1,
+		)
 
 		cameraManager.startExposure(camera, 0.1)
 		await waitUntil(() => frameReceiver.length > 0, 5000, 50)
-		const shortFlat = await readImageFromBuffer(frameReceiver.lastFrame)
+		const shortFlat = await readImageFromBuffer(frameReceiver.lastFrame, { sampleScale: 'digital' })
 
 		cameraManager.startExposure(camera, 0.2)
 		await waitUntil(() => frameReceiver.length > 1, 5000, 50)
-		const longFlat = await readImageFromBuffer(frameReceiver.lastFrame)
+		const longFlat = await readImageFromBuffer(frameReceiver.lastFrame, { sampleScale: 'digital' })
 
 		expect(shortFlat).toBeDefined()
 		expect(longFlat).toBeDefined()
 		expect(sumPixels(longFlat!.raw)).toBeGreaterThan(sumPixels(shortFlat!.raw) * 1.8)
+		expect(shortFlat!.raw[32 * 64 + 32]).toBeLessThan(shortFlat!.raw[32])
+		expect(shortFlat!.raw[0]).toBeGreaterThan(shortFlat!.raw[4 * 64])
+
+		cameraManager.frame(camera, 624, 464, 32, 32)
+		cameraManager.bin(camera, 2, 1)
+		await waitUntil(() => camera.frame.x.value === 624 && camera.frame.y.value === 464 && camera.bin.x.value === 2 && camera.bin.y.value === 1)
+		cameraManager.startExposure(camera, 0.1)
+		await waitUntil(() => frameReceiver.length > 2, 5000, 50)
+		const binnedFlat = await readImageFromBuffer(frameReceiver.lastFrame, { sampleScale: 'digital' })
+		expect(binnedFlat!.metadata.width).toBe(16)
+		expect(binnedFlat!.metadata.height).toBe(32)
+		expect(binnedFlat!.raw[16 * 16 + 8]).toBeLessThan(binnedFlat!.raw[8])
 
 		cameraSimulator.dispose()
 		expect(cameraManager.has(client, camera.name)).toBeFalse()
-	}, 5000)
+	}, 10000)
 
 	test('projects catalog provider stars from the active mount pointing', async () => {
 		const handler = new IndiClientHandlerSet()

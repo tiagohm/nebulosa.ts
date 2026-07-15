@@ -10,6 +10,7 @@ import type { CfaPattern, Image, ImageRawType } from '../../../imaging/model/typ
 import { colorIndexToRgbWeights, gaussianSigmaFromHfd, plotStar, type PlotStarOptions } from '../../../imaging/stars/generator'
 import { evaluateSyntheticAberration, type ResolvedSyntheticAberration, resolveSyntheticAberration, type SyntheticAberrationConfig, type SyntheticStarAberration } from '../../../imaging/synthetic/aberration'
 import { applySyntheticCollimationBlur, applySyntheticCollimationSaturation, renderSyntheticCollimationPattern, renderValidatedSyntheticCollimationPattern, type SyntheticCollimationPattern } from '../../../imaging/synthetic/collimation'
+import { renderSyntheticFlat } from '../../../imaging/synthetic/flat'
 import { type AstronomicalImageNoiseConfig, type AstronomicalImageStar, DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG, generateNoiseImage, generateStarImage } from '../../../imaging/synthetic/generator'
 import type { FitsHeader } from '../../../io/formats/fits/fits'
 import { bufferSink } from '../../../io/io'
@@ -26,7 +27,7 @@ import type { ClientSimulator } from './client'
 import { CAMERA_AMBIENT_TEMPERATURE, CAMERA_BLOB_PADDING, CAMERA_DEFAULT_TARGET_TEMPERATURE, CAMERA_MAX_BIN, CAMERA_MAX_EXPOSURE, CAMERA_MIN_EXPOSURE, CAMERA_PIXEL_SIZE, CAMERA_SCENE_SEED, CAMERA_SENSOR_HEIGHT, CAMERA_SENSOR_WIDTH, GENERAL_INFO, MAIN_CONTROL, SIMULATION, TICK_INTERVAL_MS } from './constants'
 import { DeviceSimulator } from './device'
 import type { CatalogSource, CatalogSourceStar, CatalogSourceType, DeviceSimulatorOptions, ReadoutMode, SimulatorProperty, TransferFormat } from './types'
-import { applyExclusiveSwitchValues, applyMultiSwitchValues, applyNumberVectorValues, fillFlatField } from './util'
+import { applyExclusiveSwitchValues, applyMultiSwitchValues, applyNumberVectorValues } from './util'
 
 // Simulated astronomical camera acquisition, cooling, guiding, and synthetic image generation.
 
@@ -69,6 +70,12 @@ export class CameraSimulator extends DeviceSimulator {
 
 	// oxfmt-ignore
 	readonly #scene = makeNumberVector('', 'SIMULATOR_SCENE', 'Scene', SIMULATION, 'rw', ['SCENE_SEED', 'Seed', CAMERA_SCENE_SEED, 0, 0xffffffff, 1, '%.0f'], ['STAR_DENSITY', 'Star Density', 0.0006, 0, 0.01, 0.0001, '%.6f'], ['SEEING', 'Seeing (px)', 1.2, 0, 20, 0.1, '%.2f'], ['HFD_MIN', 'HFD Min (px)', 1.2, 0.35, 10, 0.1, '%.2f'], ['HFD_MAX', 'HFD Max (px)', 3.6, 0.35, 20, 0.1, '%.2f'], ['FLUX_MIN', 'Flux Min', 0.002, 0, 10, 0.001, '%.4f'], ['FLUX_MAX', 'Flux Max', 0.85, 0, 100, 0.01, '%.4f'])
+	// oxfmt-ignore
+	readonly #flatField = makeNumberVector('', 'SIMULATOR_FLAT_FIELD', 'Flat Field', SIMULATION, 'rw', ['REFERENCE_SIGNAL', 'Reference Signal', 0.72, 0, 10, 0.001, '%.4f'], ['VIGNETTING', 'Vignetting', 0.4, 0, 1, 0.001, '%.4f'], ['CENTER_OFFSET_X', 'Center Offset X', 0, -1, 1, 0.001, '%.4f'], ['CENTER_OFFSET_Y', 'Center Offset Y', 0, -1, 1, 0.001, '%.4f'], ['GRADIENT_X', 'Gradient X', 0.08, -1, 1, 0.001, '%.4f'], ['GRADIENT_Y', 'Gradient Y', 0.08, -1, 1, 0.001, '%.4f'], ['PRNU', 'PRNU', 0, 0, 1, 0.0001, '%.5f'])
+	// oxfmt-ignore
+	readonly #flatDust = makeNumberVector('', 'SIMULATOR_FLAT_DUST', 'Flat Dust', SIMULATION, 'rw', ['CENTER_X', 'Center X', 0, -1, 1, 0.001, '%.4f'], ['CENTER_Y', 'Center Y', 0, -1, 1, 0.001, '%.4f'], ['SIGMA_X', 'Sigma X (px)', 24, 0.1, 1000, 0.1, '%.2f'], ['SIGMA_Y', 'Sigma Y (px)', 24, 0.1, 1000, 0.1, '%.2f'], ['ANGLE', 'Angle (rad)', 0, -TAU, TAU, 0.01, '%.3f'], ['CONTRAST', 'Contrast', 0, 0, 1, 0.001, '%.4f'])
+	// oxfmt-ignore
+	readonly #flatBanding = makeNumberVector('', 'SIMULATOR_FLAT_BANDING', 'Flat Banding', SIMULATION, 'rw', ['ROW_AMPLITUDE', 'Row Amplitude', 0, 0, 0.5, 0.001, '%.4f'], ['ROW_PERIOD', 'Row Period (px)', 32, 0.1, 10000, 0.1, '%.2f'], ['ROW_PHASE', 'Row Phase (rad)', 0, -TAU, TAU, 0.01, '%.3f'], ['COLUMN_AMPLITUDE', 'Column Amplitude', 0, 0, 0.5, 0.001, '%.4f'], ['COLUMN_PERIOD', 'Column Period (px)', 32, 0.1, 10000, 0.1, '%.2f'], ['COLUMN_PHASE', 'Column Phase (rad)', 0, -TAU, TAU, 0.01, '%.3f'])
 	readonly #catalogSource = makeSwitchVector('', 'SIMULATOR_CATALOG_SOURCE', 'Catalog Source', SIMULATION, 'OneOfMany', 'rw', ['RANDOM', 'Random', true], ['VIZIER', 'VizieR', false])
 	// oxfmt-ignore
 	readonly #noiseQuality = makeSwitchVector('', 'SIMULATOR_NOISE_QUALITY', 'Noise Quality', SIMULATION, 'OneOfMany', 'rw', ['FAST', 'Fast', false], ['BALANCED', 'Balanced', true], ['HIGH_REALISM', 'High Realism', false])
@@ -140,6 +147,9 @@ export class CameraSimulator extends DeviceSimulator {
 		this.#guideWE,
 		this.#image,
 		this.#scene,
+		this.#flatField,
+		this.#flatDust,
+		this.#flatBanding,
 		this.#catalogSource,
 		this.#noiseQuality,
 		this.#noiseFeatures,
@@ -303,6 +313,15 @@ export class CameraSimulator extends DeviceSimulator {
 					if (this.catalogSourceType === 'RANDOM') this.#catalogDirty = true
 					this.notify(this.#scene)
 				}
+				return
+			case 'SIMULATOR_FLAT_FIELD':
+				if (applyNumberVectorValues(this.#flatField, vector.elements)) this.notify(this.#flatField)
+				return
+			case 'SIMULATOR_FLAT_DUST':
+				if (applyNumberVectorValues(this.#flatDust, vector.elements)) this.notify(this.#flatDust)
+				return
+			case 'SIMULATOR_FLAT_BANDING':
+				if (applyNumberVectorValues(this.#flatBanding, vector.elements)) this.notify(this.#flatBanding)
 				return
 			case 'SIMULATOR_NOISE_EXPOSURE':
 				if (applyNumberVectorValues(this.#noiseExposure, vector.elements)) this.notify(this.#noiseExposure)
@@ -639,7 +658,7 @@ export class CameraSimulator extends DeviceSimulator {
 				generateStarImage(raw, width, height, channels, stars, this.seeing, noiseConfig, this.#makePlotOptions())
 			}
 		} else {
-			if (frameType === 'FLAT') fillFlatField(raw, width, height, channels, exposureTime, this.#noiseExposure.elements.EXPOSURE_TIME.value)
+			if (frameType === 'FLAT') this.#renderFlat(raw, width, height, channels, exposureTime)
 			generateNoiseImage(raw, width, height, channels, noiseConfig)
 		}
 
@@ -651,6 +670,51 @@ export class CameraSimulator extends DeviceSimulator {
 		else await writeImageToFits(image, sink)
 
 		return output.subarray(0, sink.position)
+	}
+
+	// Renders deterministic full-sensor flat illumination before the shared camera-noise pipeline.
+	#renderFlat(raw: ImageRawType, width: number, height: number, channels: 1 | 3, exposureTime: number) {
+		const field = this.#flatField.elements
+		const dust = this.#flatDust.elements
+		const banding = this.#flatBanding.elements
+		const sensorCenterX = (this.sensorWidth - 1) * 0.5
+		const sensorCenterY = (this.sensorHeight - 1) * 0.5
+		const dustMotes =
+			dust.CONTRAST.value > 0
+				? [
+						{
+							center: { x: sensorCenterX + dust.CENTER_X.value * sensorCenterX, y: sensorCenterY + dust.CENTER_Y.value * sensorCenterY },
+							sigmaX: dust.SIGMA_X.value,
+							sigmaY: dust.SIGMA_Y.value,
+							angle: dust.ANGLE.value,
+							contrast: dust.CONTRAST.value,
+						},
+					]
+				: undefined
+
+		renderSyntheticFlat(raw, {
+			width,
+			height,
+			channels,
+			channelResponse: [1.02, 1, 0.98],
+			sensor: {
+				width: this.sensorWidth,
+				height: this.sensorHeight,
+				origin: { x: this.#frame.elements.X.value, y: this.#frame.elements.Y.value },
+				binning: [this.#bin.elements.HOR_BIN.value, this.#bin.elements.VER_BIN.value],
+				extent: { width: this.#frame.elements.WIDTH.value, height: this.#frame.elements.HEIGHT.value },
+			},
+			bias: 0,
+			signal: field.REFERENCE_SIGNAL.value * (exposureTime / Math.max(this.#noiseExposure.elements.EXPOSURE_TIME.value, CAMERA_MIN_EXPOSURE)),
+			vignetting: field.VIGNETTING.value,
+			centerOffset: { x: field.CENTER_OFFSET_X.value, y: field.CENTER_OFFSET_Y.value },
+			gradient: { x: field.GRADIENT_X.value, y: field.GRADIENT_Y.value },
+			prnu: field.PRNU.value,
+			seed: this.#scene.elements.SCENE_SEED.value,
+			dustMotes,
+			rowBanding: banding.ROW_AMPLITUDE.value > 0 ? { amplitude: banding.ROW_AMPLITUDE.value, period: banding.ROW_PERIOD.value, phase: banding.ROW_PHASE.value } : undefined,
+			columnBanding: banding.COLUMN_AMPLITUDE.value > 0 ? { amplitude: banding.COLUMN_AMPLITUDE.value, period: banding.COLUMN_PERIOD.value, phase: banding.COLUMN_PHASE.value } : undefined,
+		})
 	}
 
 	// Renders defocused catalog stars as centrally obstructed annuli. Focused stars use the existing
