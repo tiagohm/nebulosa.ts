@@ -287,8 +287,8 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		client.sendNumber({ device: camera.name, name: 'SIMULATOR_SCENE', elements: { SCENE_SEED: seed } })
 		client.sendNumber({ device: camera.name, name: 'SIMULATOR_NOISE_EXPOSURE', elements: { EXPOSURE_TIME: 1 } })
 		client.sendNumber({ device: camera.name, name: 'SIMULATOR_FLAT_FIELD', elements: { REFERENCE_SIGNAL: 0.5, VIGNETTING: 0, CENTER_OFFSET_X: 0, CENTER_OFFSET_Y: 0, GRADIENT_X: 0, GRADIENT_Y: 0, PRNU: 0 } })
-		client.sendNumber({ device: camera.name, name: 'SIMULATOR_FLAT_DUST', elements: { COUNT: 2, SIGMA_X: 8, SIGMA_Y: 8, ANGLE: 0, CONTRAST: 0.5 } })
-		client.sendNumber({ device: camera.name, name: 'SIMULATOR_FLAT_BANDING', elements: { ROW_AMPLITUDE: 0.1, ROW_PERIOD: 16, ROW_PHASE: Math.PI / 2, COLUMN_AMPLITUDE: 0 } })
+		client.sendNumber({ device: camera.name, name: 'SIMULATOR_FLAT_DUST', elements: { COUNT: 0, SIGMA_X: 8, SIGMA_Y: 8, ANGLE: 0, CONTRAST: 0.5 } })
+		client.sendNumber({ device: camera.name, name: 'SIMULATOR_FLAT_BANDING', elements: { ROW_AMPLITUDE: 0, ROW_PERIOD: 16, ROW_PHASE: Math.PI / 2, COLUMN_AMPLITUDE: 0 } })
 		client.sendNumber({ device: camera.name, name: 'SIMULATOR_NOISE_SENSOR', elements: { READ_NOISE: 0, BIAS_ELECTRONS: 0, BLACK_LEVEL_ELECTRONS: 0, DARK_CURRENT_AT_REFERENCE_TEMP: 0, DARK_SIGNAL_NON_UNIFORMITY: 0 } })
 		client.sendNumber({
 			device: camera.name,
@@ -301,17 +301,25 @@ describe.skipIf(SKIP)('camera simulator', () => {
 				cameraManager.properties.get(camera)?.SIMULATOR_NOISE_EXPOSURE?.elements.EXPOSURE_TIME.value === 1 &&
 				cameraManager.properties.get(camera)?.SIMULATOR_SCENE?.elements.SCENE_SEED.value === seed &&
 				cameraManager.properties.get(camera)?.SIMULATOR_FLAT_FIELD?.elements.REFERENCE_SIGNAL.value === 0.5 &&
-				cameraManager.properties.get(camera)?.SIMULATOR_FLAT_DUST?.elements.COUNT.value === 2 &&
+				cameraManager.properties.get(camera)?.SIMULATOR_FLAT_DUST?.elements.COUNT.value === 0 &&
 				cameraManager.properties.get(camera)?.SIMULATOR_FLAT_DUST?.elements.CONTRAST.value === 0.5 &&
-				cameraManager.properties.get(camera)?.SIMULATOR_FLAT_BANDING?.elements.ROW_AMPLITUDE.value === 0.1,
+				cameraManager.properties.get(camera)?.SIMULATOR_FLAT_BANDING?.elements.ROW_AMPLITUDE.value === 0,
 		)
 
 		cameraManager.startExposure(camera, 0.1)
 		await waitUntil(() => frameReceiver.length > 0, 5000, 50)
+		const neutralFlat = await readImageFromBuffer(frameReceiver.lastFrame, { sampleScale: 'digital' })
+		expect(neutralFlat!.raw[0] / 65535).toBeCloseTo(0.05, 3)
+
+		client.sendNumber({ device: camera.name, name: 'SIMULATOR_FLAT_DUST', elements: { COUNT: 2 } })
+		client.sendNumber({ device: camera.name, name: 'SIMULATOR_FLAT_BANDING', elements: { ROW_AMPLITUDE: 0.1 } })
+		await waitUntil(() => cameraManager.properties.get(camera)?.SIMULATOR_FLAT_DUST?.elements.COUNT.value === 2 && cameraManager.properties.get(camera)?.SIMULATOR_FLAT_BANDING?.elements.ROW_AMPLITUDE.value === 0.1)
+		cameraManager.startExposure(camera, 0.1)
+		await waitUntil(() => frameReceiver.length > 1, 5000, 50)
 		const shortFlat = await readImageFromBuffer(frameReceiver.lastFrame, { sampleScale: 'digital' })
 
 		cameraManager.startExposure(camera, 0.2)
-		await waitUntil(() => frameReceiver.length > 1, 5000, 50)
+		await waitUntil(() => frameReceiver.length > 2, 5000, 50)
 		const longFlat = await readImageFromBuffer(frameReceiver.lastFrame, { sampleScale: 'digital' })
 
 		expect(shortFlat).toBeDefined()
@@ -326,7 +334,7 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		client.sendNumber({ device: camera.name, name: 'SIMULATOR_FLAT_DUST', elements: { COUNT: 1 } })
 		await waitUntil(() => cameraManager.properties.get(camera)?.SIMULATOR_FLAT_DUST?.elements.COUNT.value === 1)
 		cameraManager.startExposure(camera, 0.1)
-		await waitUntil(() => frameReceiver.length > 2, 5000, 50)
+		await waitUntil(() => frameReceiver.length > 3, 5000, 50)
 		const singleDustFlat = await readImageFromBuffer(frameReceiver.lastFrame, { sampleScale: 'digital' })
 		expect(singleDustFlat!.raw[dustIndex]).toBeGreaterThan(shortFlat!.raw[dustIndex] * 1.5)
 
@@ -335,7 +343,7 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		cameraManager.bin(camera, 2, 1)
 		await waitUntil(() => camera.frame.x.value === frameX + 16 && camera.frame.y.value === frameY + 16 && camera.bin.x.value === 2 && camera.bin.y.value === 1 && cameraManager.properties.get(camera)?.SIMULATOR_FLAT_DUST?.elements.COUNT.value === 2)
 		cameraManager.startExposure(camera, 0.1)
-		await waitUntil(() => frameReceiver.length > 3, 5000, 50)
+		await waitUntil(() => frameReceiver.length > 4, 5000, 50)
 		const binnedFlat = await readImageFromBuffer(frameReceiver.lastFrame, { sampleScale: 'digital' })
 		expect(binnedFlat!.metadata.width).toBe(16)
 		expect(binnedFlat!.metadata.height).toBe(32)

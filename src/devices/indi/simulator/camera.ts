@@ -699,7 +699,7 @@ export class CameraSimulator extends DeviceSimulator {
 			width,
 			height,
 			channels,
-			channelResponse: [1.02, 1, 0.98],
+			channelResponse: channels === 3 ? [1.02, 1, 0.98] : undefined,
 			sensor: {
 				width: this.sensorWidth,
 				height: this.sensorHeight,
