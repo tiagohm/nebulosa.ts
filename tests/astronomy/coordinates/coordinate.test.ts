@@ -15,10 +15,11 @@ import {
 	horizontalToEquatorial,
 	meridianEcliptic,
 	meridianEquator,
+	positionAngleBetween,
 	zenith,
 } from '../../../src/astronomy/coordinates/coordinate'
 import { timeNormalize, timeYMDHMS } from '../../../src/astronomy/time/time'
-import { PI } from '../../../src/core/constants'
+import { PI, TAU } from '../../../src/core/constants'
 import { deg, formatDEC, formatRA, normalizeAngle, parseAngle } from '../../../src/math/units/angle'
 
 const TIME = timeYMDHMS(2026, 1, 4, 23, 30, 0)
@@ -156,6 +157,10 @@ test('angular distance is one hundred eighty degrees for antipodal poles', () =>
 test('angular distance preserves tiny separations', () => {
 	expect(angularDistance(0, 0, 1e-9, 0)).toBeCloseTo(1e-9, 15)
 	expect(angularDistanceHaversine(0, 0, 1e-9, 0)).toBeCloseTo(1e-9, 15)
+})
+
+test('position angle between', () => {
+	expect(positionAngleBetween(1, 0.1, 0.2, -1)).toBeCloseTo(-2.724544922932270424 + TAU, 13)
 })
 
 test('equatorial to horizontal handles a north-pole observer', () => {

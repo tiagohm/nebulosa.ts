@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 // oxfmt-ignore
-import { type MutMat3, matClone, matDeterminant, matDivScalar, matFlipX, matFlipY, matIdentity, matMinus, matMinusScalar, matMul, matMulScalar, matMulTranspose, matMulVec, matPlus, matPlusScalar, matRodriguesRotation, matRotX, matRotY, matRotZ, matTranspose, matTransposeMul, matTransposeMulTranspose, matZero } from '../../../src/math/linear-algebra/mat3'
+import { type MutMat3, matClone, matDeterminant, matDivScalar, matFlipX, matFlipY, matFromVec3, matIdentity, matMinus, matMinusScalar, matMul, matMulScalar, matMulTranspose, matMulVec, matPlus, matPlusScalar, matRodriguesRotation, matRotX, matRotY, matRotZ, matToVec3, matTranspose, matTransposeMul, matTransposeMulTranspose, matZero } from '../../../src/math/linear-algebra/mat3'
 import { PI, PIOVERTWO } from '../../../src/core/constants'
 import type { MutVec3 } from '../../../src/math/linear-algebra/vec3'
 
@@ -219,4 +219,26 @@ test('rodrigues rotation matrix', () => {
 
 test('rodrigues rotation matrix with zero axis is identity', () => {
 	expect(matRodriguesRotation([0, 0, 0], PI / 3)).toEqual(matIdentity())
+})
+
+test('matrix to vector', () => {
+	const v = matToVec3([0, -0.8, -0.6, 0.8, -0.36, 0.48, 0.6, 0.48, -0.64])
+
+	expect(v[0]).toBeCloseTo(0, 13)
+	expect(v[1]).toBeCloseTo(1.413716694115406957, 13)
+	expect(v[2]).toBeCloseTo(-1.884955592153875943, 13)
+})
+
+test('vector to matrix', () => {
+	const m = matFromVec3([0, 1.41371669, -1.88495559])
+
+	expect(m[0]).toBeCloseTo(-0.7071067782221119905, 15)
+	expect(m[1]).toBeCloseTo(-0.5656854276809129651, 15)
+	expect(m[2]).toBeCloseTo(-0.4242640700104211225, 15)
+	expect(m[3]).toBeCloseTo(0.5656854276809129651, 15)
+	expect(m[4]).toBeCloseTo(-0.0925483394532274246, 15)
+	expect(m[5]).toBeCloseTo(-0.8194112531408833269, 15)
+	expect(m[6]).toBeCloseTo(0.4242640700104211225, 15)
+	expect(m[7]).toBeCloseTo(-0.8194112531408833269, 15)
+	expect(m[8]).toBeCloseTo(0.3854415612311154341, 15)
 })
