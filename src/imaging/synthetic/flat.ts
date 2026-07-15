@@ -1,3 +1,4 @@
+import { TAU } from '../../core/constants'
 import type { Point, Size } from '../../math/numerical/geometry'
 import type { CfaPattern, DigitalImage, ImageRawType } from '../model/types'
 
@@ -139,8 +140,6 @@ interface ResolvedSyntheticDustMote {
 const PRNU_SALT = 0x2c1b3c6d
 // Salt separating temporal noise from the fixed spatial fields.
 const NOISE_SALT = 0x9e3779b9
-// Two pi, used by the banding and Gaussian samplers.
-const TWO_PI = Math.PI * 2
 
 // Overwrites a caller-owned interleaved buffer with one deterministic synthetic flat frame.
 export function renderSyntheticFlat(raw: ImageRawType, model: SyntheticFlatModel): ImageRawType {
@@ -157,7 +156,7 @@ export function renderSyntheticFlat(raw: ImageRawType, model: SyntheticFlatModel
 		const sensorY = resolved.originY + y * resolved.binY + (sampleHeight - 1) * 0.5
 		const sensorY2 = resolved.originY * 2 + y * resolved.binY * 2 + sampleHeight - 1
 		const normalizedY = sensorSpanY > 0 ? (sensorY * 2) / sensorSpanY - 1 : 0
-		const rowFactor = rowBanding === undefined ? 0 : rowBanding.amplitude * Math.sin((TWO_PI * sensorY) / rowBanding.period + (rowBanding.phase ?? 0))
+		const rowFactor = rowBanding === undefined ? 0 : rowBanding.amplitude * Math.sin((TAU * sensorY) / rowBanding.period + (rowBanding.phase ?? 0))
 
 		for (let x = 0; x < resolved.width; x++) {
 			const sampleWidth = Math.min(resolved.binX, resolved.frameWidth - x * resolved.binX)
@@ -169,7 +168,7 @@ export function renderSyntheticFlat(raw: ImageRawType, model: SyntheticFlatModel
 			const radiusSquared = (dx * dx + dy * dy) * resolved.inverseMaximumRadiusSquared
 			const vignetting = 1 - resolved.vignetting * radiusSquared
 			const gradient = 1 + 0.5 * (resolved.gradientX * normalizedX + resolved.gradientY * normalizedY)
-			const columnFactor = columnBanding === undefined ? 0 : columnBanding.amplitude * Math.sin((TWO_PI * sensorX) / columnBanding.period + (columnBanding.phase ?? 0))
+			const columnFactor = columnBanding === undefined ? 0 : columnBanding.amplitude * Math.sin((TAU * sensorX) / columnBanding.period + (columnBanding.phase ?? 0))
 			const banding = 1 + rowFactor + columnFactor
 			const dust = evaluateDust(sensorX, sensorY, resolved.dustMotes)
 			const baseIndex = (y * resolved.width + x) * resolved.channels
@@ -401,7 +400,7 @@ function sampleCoordinateGaussian(seed: number, x2: number, y2: number, channel:
 	const second = mix32(first ^ 0x165667b1)
 	const u1 = (first + 1) / 4294967297
 	const u2 = (second + 1) / 4294967297
-	return Math.sqrt(-2 * Math.log(u1)) * Math.cos(TWO_PI * u2)
+	return Math.sqrt(-2 * Math.log(u1)) * Math.cos(TAU * u2)
 }
 
 // Mixes one integer into an unsigned 32-bit pseudo-random value.
