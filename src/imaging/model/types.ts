@@ -28,6 +28,31 @@ export type ImageChannelOrGray = ImageChannel | GrayscaleAlgorithm | 'GRAY'
 // Backing typed array for raw pixel data (single or double precision).
 export type ImageRawType = Float64Array | Float32Array
 
+// Backing typed array precision for raw pixel data (single, double precision, or based on image raw type).
+export type ImageRawPrecision = 32 | 64 | 'auto'
+
+// Scale represented by an image sample buffer.
+export type ImageSampleScale = 'normalized' | 'digital'
+
+// Options for reading an image into the normalized 0..1 processing scale.
+export interface NormalizedImageReadOptions {
+	// Caller-provided output buffer or requested floating-point precision.
+	readonly raw?: ImageRawType | ImageRawPrecision
+	// Normalized processing scale; this is the default when omitted.
+	readonly sampleScale?: 'normalized'
+}
+
+// Options for preserving source digital numbers after format-defined scaling.
+export interface DigitalImageReadOptions {
+	// Caller-provided output buffer or requested floating-point precision.
+	readonly raw?: ImageRawType | ImageRawPrecision
+	// Digital-number scale required for sensor measurements.
+	readonly sampleScale: 'digital'
+}
+
+// Discriminated image-reader options for normalized or digital samples.
+export type ImageReadOptions = NormalizedImageReadOptions | DigitalImageReadOptions
+
 // Per-format options when serializing an image.
 export interface WriteImageToFormatOptions {
 	jpeg: {
@@ -40,9 +65,28 @@ export interface WriteImageToFormatOptions {
 
 // An in-memory image: its FITS header, derived metadata, and the flat raw pixel buffer.
 export interface Image {
+	// Normalized processing scale; omitted by legacy normalized producers.
+	readonly sampleScale?: 'normalized'
+	// Source FITS-compatible header.
 	readonly header: FitsHeader
+	// Geometry and storage metadata derived from the source.
 	readonly metadata: ImageMetadata
+	// Normalized pixel buffer.
 	readonly raw: ImageRawType
+}
+
+// Read-only measurement image whose samples preserve source digital numbers after format scaling.
+// DigitalImage is intentionally produced only by digital reader modes for workflows such as sensor
+// characterization. It is not a writer input: serialize only a normalized Image instead.
+export interface DigitalImage extends Pick<Image, 'header' | 'metadata'> {
+	// Discriminant preventing normalized images from being used as digital sensor data.
+	readonly sampleScale: 'digital'
+	// Flat pixel buffer in physical digital-number scale.
+	readonly raw: ImageRawType
+	// Representable scaled code range, ordered from low to high when derivable.
+	readonly digitalRange?: readonly [number, number]
+	// Positive spacing between adjacent integer codes after source scaling, in DN.
+	readonly quantizationStep?: number
 }
 
 // Geometry and storage metadata derived from an image's header.
@@ -99,7 +143,7 @@ export const DEFAULT_WRITE_IMAGE_TO_FORMAT_OPTIONS = {
 
 // Type guard: true when a value has the Image shape (header, metadata, raw).
 export function isImage(image?: object): image is Image {
-	return !!image && 'header' in image && 'metadata' in image && 'raw' in image
+	return !!image && 'header' in image && 'metadata' in image && 'raw' in image && (!('sampleScale' in image) || image.sampleScale === 'normalized')
 }
 
 // Maps a channel to its index in the raw buffer (RED/GRAY 0, GREEN 1, BLUE 2).
@@ -115,4 +159,13 @@ export function grayscaleFromChannel(channel?: ImageChannelOrGray): Grayscale {
 // Allocates a same-type raw pixel buffer for the cropped ROI.
 export function makeImageRawTypedArray(source: ImageRawType, size: number): ImageRawType {
 	return source.BYTES_PER_ELEMENT === 4 ? new Float32Array(size) : new Float64Array(size)
+}
+
+// Shifts a full-sensor 2x2 CFA tile to an image-local origin. Offsets are integer unbinned pixels.
+export function shiftCfaPattern(pattern: CfaPattern | undefined, offsetX: number, offsetY: number): CfaPattern | undefined {
+	if (!Number.isInteger(offsetX) || !Number.isInteger(offsetY)) throw new RangeError('CFA offsets must be integers')
+	if (pattern === undefined || ((offsetX | offsetY) & 1) === 0) return pattern
+	const x = offsetX & 1
+	const y = offsetY & 1
+	return `${pattern[y * 2 + x]}${pattern[y * 2 + ((x + 1) & 1)]}${pattern[((y + 1) & 1) * 2 + x]}${pattern[((y + 1) & 1) * 2 + ((x + 1) & 1)]}` as CfaPattern
 }

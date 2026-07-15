@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { PI } from '../../../src/core/constants'
+import { PI, TAU } from '../../../src/core/constants'
 import { deg, type Angle, normalizeAngle } from '../../../src/math/units/angle'
 // oxfmt-ignore
 import { computeHourAngle, computeLocalSiderealTime, createMeridianFlipState, evaluateMeridianFlip, type MeridianFlipAction, type MeridianFlipEvent, type MeridianFlipPhase, type MeridianFlipPolicy, type MeridianFlipReason, type MeridianFlipSnapshot, type MeridianFlipState, transitionMeridianFlip } from '../../../src/observation/mount/meridian.flip'
@@ -38,7 +38,7 @@ test('hour angle and local sidereal time are inverse operations', () => {
 	const rightAscension = deg(40)
 	for (const hourAngle of [deg(-30), 0, deg(15), deg(120)]) {
 		const lst = computeLocalSiderealTime(rightAscension, hourAngle)
-		expect(computeHourAngle(lst, rightAscension)).toBeCloseTo(normalizeAngle(hourAngle) > PI ? normalizeAngle(hourAngle) - 2 * PI : normalizeAngle(hourAngle), 12)
+		expect(computeHourAngle(lst, rightAscension)).toBeCloseTo(normalizeAngle(hourAngle) > PI ? normalizeAngle(hourAngle) - TAU : normalizeAngle(hourAngle), 12)
 	}
 })
 

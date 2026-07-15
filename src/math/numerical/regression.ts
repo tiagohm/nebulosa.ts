@@ -56,6 +56,18 @@ export interface LinearRegression extends Regression, InverseRegression {
 	readonly intercept: number
 }
 
+// Weighted goodness-of-fit metrics and parameter uncertainty for a straight-line regression.
+export interface WeightedLinearRegressionScore extends RegressionScore {
+	// Number of finite samples used by the fit.
+	readonly pointCount: number
+	// Sum of positive input weights.
+	readonly weightSum: number
+	// Estimated standard error of the fitted slope when at least three points exist.
+	readonly slopeStandardError?: number
+	// Estimated standard error of the fitted intercept when at least three points exist.
+	readonly interceptStandardError?: number
+}
+
 // A polynomial fit with coefficients in ascending power order.
 export interface PolynomialRegression extends Regression {
 	// Polynomial coefficients indexed by power (coefficients[k] multiplies x^k, or the k-th requested power).
@@ -238,6 +250,105 @@ export function simpleLinearRegression(x: Readonly<NumberArray>, y: Readonly<Num
 		predict: (x: number) => slope * x + intercept,
 		x: (y: number) => (y - intercept) / slope,
 	}
+}
+
+// Fits y = slope*x + intercept with positive weights using centered sums for numerical stability.
+export function weightedLinearRegression(x: Readonly<NumberArray>, y: Readonly<NumberArray>, weights: Readonly<NumberArray>): LinearRegression {
+	const n = x.length
+	if (y.length !== n || weights.length !== n) throw new RangeError('weighted linear regression arrays must have the same length')
+	if (n < 2) throw new RangeError('weighted linear regression requires at least two samples')
+
+	const xOrigin = x[0]
+	const yOrigin = y[0]
+	let weightSum = 0
+	let xMeanOffset = 0
+	let yMeanOffset = 0
+	for (let i = 0; i < n; i++) {
+		const xi = x[i]
+		const yi = y[i]
+		const weight = weights[i]
+		if (!Number.isFinite(xi) || !Number.isFinite(yi)) throw new RangeError(`weighted linear regression sample at index ${i} must be finite`)
+		if (!Number.isFinite(weight) || weight <= 0) throw new RangeError(`weighted linear regression weight at index ${i} must be finite and positive`)
+		weightSum += weight
+		const fraction = weight / weightSum
+		xMeanOffset += (xi - xOrigin - xMeanOffset) * fraction
+		yMeanOffset += (yi - yOrigin - yMeanOffset) * fraction
+	}
+
+	let sxx = 0
+	let sxy = 0
+	for (let i = 0; i < n; i++) {
+		const dx = x[i] - xOrigin - xMeanOffset
+		sxx += weights[i] * dx * dx
+		sxy += weights[i] * dx * (y[i] - yOrigin - yMeanOffset)
+	}
+
+	if (!Number.isFinite(sxx) || !(sxx > 0)) throw new RangeError('weighted linear regression requires at least two distinct x values')
+	const slope = sxy / sxx
+	const xMean = xOrigin + xMeanOffset
+	const yMean = yOrigin + yMeanOffset
+	const intercept = yMean - slope * xMean
+	if (!Number.isFinite(slope) || !Number.isFinite(intercept)) throw new RangeError('weighted linear regression produced non-finite coefficients')
+
+	return {
+		xPoints: x,
+		yPoints: y,
+		slope,
+		intercept,
+		predict: (x: number) => slope * (x - xOrigin - xMeanOffset) + yMean,
+		x: (y: number) => xOrigin + xMeanOffset + (y - yMean) / slope,
+	}
+}
+
+// Scores a weighted linear fit and estimates coefficient errors from weighted residual variance.
+export function weightedLinearRegressionScore(regression: LinearRegression, x: Readonly<NumberArray>, y: Readonly<NumberArray>, weights: Readonly<NumberArray>): WeightedLinearRegressionScore {
+	const n = x.length
+	if (y.length !== n || weights.length !== n) throw new RangeError('weighted linear regression score arrays must have the same length')
+	if (n < 2) throw new RangeError('weighted linear regression score requires at least two samples')
+
+	const xOrigin = x[0]
+	const yOrigin = y[0]
+	let weightSum = 0
+	let xMeanOffset = 0
+	let yMeanOffset = 0
+	for (let i = 0; i < n; i++) {
+		const weight = weights[i]
+		if (!Number.isFinite(x[i]) || !Number.isFinite(y[i]) || !Number.isFinite(weight) || weight <= 0) throw new RangeError(`weighted regression score sample at index ${i} must be finite with positive weight`)
+		weightSum += weight
+		const fraction = weight / weightSum
+		xMeanOffset += (x[i] - xOrigin - xMeanOffset) * fraction
+		yMeanOffset += (y[i] - yOrigin - yMeanOffset) * fraction
+	}
+
+	let sxx = 0
+	let syy = 0
+	let sxy = 0
+	let rss = 0
+	for (let i = 0; i < n; i++) {
+		const weight = weights[i]
+		const dx = x[i] - xOrigin - xMeanOffset
+		const dy = y[i] - yOrigin - yMeanOffset
+		const residual = y[i] - regression.predict(x[i])
+		sxx += weight * dx * dx
+		syy += weight * dy * dy
+		sxy += weight * dx * dy
+		rss += weight * residual * residual
+	}
+
+	const correlationDenominator = Math.sqrt(sxx * syy)
+	const r = correlationDenominator > 0 ? sxy / correlationDenominator : Number.NaN
+	const r2 = r * r
+	const rmsd = Math.sqrt(rss / weightSum)
+	let slopeStandardError: number | undefined
+	let interceptStandardError: number | undefined
+	if (n > 2 && sxx > 0) {
+		const residualVariance = rss / (n - 2)
+		const xMean = xOrigin + xMeanOffset
+		slopeStandardError = Math.sqrt(residualVariance / sxx)
+		interceptStandardError = Math.sqrt(residualVariance * (1 / weightSum + (xMean * xMean) / sxx))
+	}
+
+	return { r, r2, rss, rmsd, pointCount: n, weightSum, slopeStandardError, interceptStandardError }
 }
 
 // Computes the coefficients of a polynomial regression
@@ -491,15 +602,22 @@ export function powerRegression(x: Readonly<NumberArray>, y: Readonly<NumberArra
 }
 
 // Computes the coefficients of a hyperbolic regression of the form y = b * sqrt(1 + ((x - c) / a)^2)
-export function hyperbolicRegression(x: Readonly<NumberArray>, y: Readonly<NumberArray>): HyperbolicRegression {
-	// Get the initial guess for A, for A, we take the mean value of the y
-	const A = meanOf(y)
-
-	// Get the initial guess for B, for B, we take the min value of the y
-	const B = minOf(y)[0]
-
-	// Get the initial guess for C, for C, we take the mean value of the x
-	const C = meanOf(x)
+export function hyperbolicRegression(x: Readonly<NumberArray>, y: Readonly<NumberArray>, weights?: Readonly<NumberArray>, initial?: readonly [a: number, b: number, c: number]): HyperbolicRegression {
+	let A = 0
+	let B = Number.POSITIVE_INFINITY
+	let C = 0
+	let weightSum = 0
+	for (let i = 0, n = Math.min(x.length, y.length); i < n; i++) {
+		const weight = weights?.[i] ?? 1
+		if (!(weight > 0)) continue
+		A += weight * y[i]
+		C += weight * x[i]
+		B = Math.min(B, y[i])
+		weightSum += weight
+	}
+	A = weightSum > 0 ? A / weightSum : meanOf(y)
+	B = Number.isFinite(B) ? B : minOf(y)[0]
+	C = weightSum > 0 ? C / weightSum : meanOf(x)
 
 	// https://github.com/observerly/iris/blob/main/pkg/vcurve/vcurve.go
 	function hyperbolic(x: number, [a, b, c]: NumberArray) {
@@ -507,7 +625,7 @@ export function hyperbolicRegression(x: Readonly<NumberArray>, y: Readonly<Numbe
 	}
 
 	// Use Levenberg-Marquardt to optimize the parameters
-	const [a, b, c] = levenbergMarquardt(x, y, hyperbolic, [Math.round(A), B, C], { maxIterations: 1000, tolerance: 1e-8 })
+	const [a, b, c] = levenbergMarquardt(x, y, hyperbolic, initial === undefined ? [Math.max(Math.abs(A), Number.EPSILON), B, C] : [...initial], { maxIterations: 1000, tolerance: 1e-8, weights })
 
 	return {
 		xPoints: x,

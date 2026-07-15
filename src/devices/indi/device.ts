@@ -1,6 +1,6 @@
 import type { EquatorialCoordinate } from '../../astronomy/coordinates/coordinate'
 import type { GeographicCoordinate } from '../../astronomy/observer/location'
-import { SIDEREAL_DAYSEC, TAU } from '../../core/constants'
+import { PIOVERTWO, SIDEREAL_DAYSEC, TAU } from '../../core/constants'
 import type { CfaPattern } from '../../imaging/model/types'
 import type { Point } from '../../math/numerical/geometry'
 import { type Angle, normalizeAngle, toHour } from '../../math/units/angle'
@@ -639,7 +639,7 @@ export function isGPS(device: Device): device is GPS {
 // sidereal time. RA, Dec, and LST are radians. Returns NEITHER at the celestial poles where it is
 // undefined; otherwise WEST when the target is east of the meridian (hour angle in [0,12)h), else EAST.
 export function expectedPierSide(rightAscension: Angle, declination: Angle, lst: Angle): PierSide {
-	if (Math.abs(declination) === Math.PI / 2) return 'NEITHER'
+	if (Math.abs(declination) === PIOVERTWO) return 'NEITHER'
 	return (toHour(rightAscension - lst) + 24) % 24 < 12 ? 'WEST' : 'EAST'
 }
 

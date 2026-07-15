@@ -40,6 +40,107 @@ describe('read', () => {
 	}
 })
 
+test('reads integer FITS samples in digital scale without content normalization', async () => {
+	const header: FitsHeader = { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: 4, NAXIS2: 1, BSCALE: 1, BZERO: 32768 }
+	const data = Buffer.alloc(8)
+	data.writeInt16BE(-32256, 0)
+	data.writeInt16BE(-31744, 2)
+	data.writeInt16BE(0, 4)
+	data.writeInt16BE(32767, 6)
+	const image = await readImageFromFits({ header, data: { offset: 0, size: data.length } }, bufferSource(data), { sampleScale: 'digital' })
+
+	expect(image).toBeDefined()
+	expect(image!.sampleScale).toBe('digital')
+	expect(Array.from(image!.raw)).toEqual([512, 1024, 32768, 65535])
+	expect(image!.digitalRange).toEqual([0, 65535])
+	expect(image!.quantizationStep).toBe(1)
+})
+
+test('applies FITS physical scaling and standard defaults in digital scale', async () => {
+	const scaledHeader: FitsHeader = { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: 3, NAXIS2: 1, BSCALE: -0.5, BZERO: 10 }
+	const scaledData = Buffer.alloc(6)
+	scaledData.writeInt16BE(-2, 0)
+	scaledData.writeInt16BE(0, 2)
+	scaledData.writeInt16BE(2, 4)
+	const scaled = await readImageFromFits({ header: scaledHeader, data: { offset: 0, size: scaledData.length } }, bufferSource(scaledData), { sampleScale: 'digital', raw: 64 })
+
+	expect(Array.from(scaled!.raw)).toEqual([11, 10, 9])
+	expect(scaled!.digitalRange).toEqual([-16373.5, 16394])
+	expect(scaled!.quantizationStep).toBe(0.5)
+
+	const defaultHeader: FitsHeader = { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: 3, NAXIS2: 1 }
+	const defaults = await readImageFromFits({ header: defaultHeader, data: { offset: 0, size: scaledData.length } }, bufferSource(scaledData), { sampleScale: 'digital' })
+	expect(Array.from(defaults!.raw)).toEqual([-2, 0, 2])
+	expect(defaults!.digitalRange).toEqual([-32768, 32767])
+})
+
+test('ignores stale compressed scaling keywords in uncompressed FITS headers', async () => {
+	const header: FitsHeader = { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: 1, NAXIS2: 1, BSCALE: 1, BZERO: 32768, ZSCALE: 2, ZZERO: 10 }
+	const data = Buffer.alloc(2)
+	data.writeInt16BE(0)
+
+	const image = await readImageFromFits({ header, data: { offset: 0, size: data.length } }, bufferSource(data), { sampleScale: 'digital' })
+
+	expect(Array.from(image!.raw)).toEqual([32768])
+	expect(image!.digitalRange).toEqual([0, 65535])
+})
+
+test('uses physical scaling keywords for Rice-compressed integer samples', async () => {
+	const buffer = Buffer.alloc(FITS_BLOCK_SIZE * 3)
+	const header: FitsHeader = { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: 2, NAXIS2: 1, BSCALE: 1, BZERO: 32768, ZSCALE: 2, ZZERO: 10 }
+
+	await writeFits(bufferSink(buffer), [{ header, raw: new Float64Array([0, 1]) }], { type: 'RICE_1' })
+	const image = await readImageFromBuffer(buffer, { sampleScale: 'digital' })
+
+	expect(Array.from(image!.raw)).toEqual([0, 65535])
+	expect(image!.digitalRange).toEqual([0, 65535])
+})
+
+test('uses ZSCALE and ZZERO when compressed FITS scaling has no unprefixed cards', async () => {
+	const buffer = Buffer.alloc(FITS_BLOCK_SIZE * 3)
+	const header: FitsHeader = { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: 3, NAXIS2: 1, BSCALE: -0.5, BZERO: 10 }
+	const raw = new Float64Array([11 / 65535, 10 / 65535, 9 / 65535])
+	await writeFits(bufferSink(buffer), [{ header, raw }], { type: 'RICE_1' })
+	const scaleOffset = buffer.indexOf('BSCALE  ', 0, 'ascii')
+	const zeroOffset = buffer.indexOf('BZERO   ', 0, 'ascii')
+	buffer.write('ZSCALE  ', scaleOffset, 'ascii')
+	buffer.write('ZZERO   ', zeroOffset, 'ascii')
+
+	const image = await readImageFromBuffer(buffer, { sampleScale: 'digital', raw: 64 })
+
+	expect(Array.from(image!.raw)).toEqual([11, 10, 9])
+	expect(image!.digitalRange).toEqual([-16373.5, 16394])
+})
+
+test('preserves floating-point FITS samples in digital scale', async () => {
+	const header: FitsHeader = { SIMPLE: true, BITPIX: -32, NAXIS: 2, NAXIS1: 3, NAXIS2: 1 }
+	const data = Buffer.alloc(12)
+	data.writeFloatBE(-2.5, 0)
+	data.writeFloatBE(0.25, 4)
+	data.writeFloatBE(12.75, 8)
+	const image = await readImageFromFits({ header, data: { offset: 0, size: data.length } }, bufferSource(data), { sampleScale: 'digital' })
+
+	expect(Array.from(image!.raw)).toEqual([-2.5, 0.25, 12.75])
+	expect(image!.digitalRange).toBeUndefined()
+	expect(image!.quantizationStep).toBeUndefined()
+})
+
+test('applies FITS affine scaling before normalized float output', async () => {
+	const header: FitsHeader = { SIMPLE: true, BITPIX: -32, NAXIS: 2, NAXIS1: 1, NAXIS2: 1, BSCALE: 2, BZERO: 0.1 }
+	const data = Buffer.alloc(4)
+	data.writeFloatBE(0.1)
+	const image = await readImageFromFits({ header, data: { offset: 0, size: data.length } }, bufferSource(data))
+
+	expect(image!.raw[0]).toBeCloseTo(0.3, 6)
+})
+
+test('rejects a caller-provided FITS output buffer smaller than the image', async () => {
+	const header: FitsHeader = { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: 4, NAXIS2: 1 }
+	const data = Buffer.alloc(8)
+	const image = await readImageFromFits({ header, data: { offset: 0, size: data.length } }, bufferSource(data), { sampleScale: 'digital', raw: new Float64Array(3) })
+	expect(image).toBeUndefined()
+})
+
 describe('write', () => {
 	const buffer = Buffer.allocUnsafe(1024 * 1024 * 18)
 
@@ -308,6 +409,16 @@ test('fits image reader and writer honor non-zero backing buffer offsets', async
 	expect(output[1]).toBeCloseTo(1, 12)
 	expect(readBuffer[2]).toBe(77)
 	expect(readBuffer[7]).toBe(77)
+})
+
+test('inverts FITS affine scaling when writing normalized samples', async () => {
+	const header: FitsHeader = { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: 1, NAXIS2: 1, BSCALE: 2, BZERO: 10 }
+	const stored = Buffer.alloc(2)
+	const normalized = new Float64Array([10 / 65535])
+
+	await new FitsImageWriter(header).write(normalized, bufferSink(stored))
+
+	expect(stored.readInt16BE()).toBe(0)
 })
 
 test('width keywords', () => {

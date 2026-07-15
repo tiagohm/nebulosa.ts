@@ -539,8 +539,8 @@ function mockRangeFetch(data: Buffer, chunkSize?: number) {
 
 		if (!match) return new Response(null, { status: 400 })
 
-		const start = Number.parseInt(match[1], 10)
-		const end = Number.parseInt(match[2], 10)
+		const start = Math.trunc(Number(match[1]))
+		const end = Math.trunc(Number(match[2]))
 		const slice = data.subarray(start, Math.min(end + 1, data.byteLength))
 		const body = new Uint8Array(slice.buffer, slice.byteOffset, slice.byteLength)
 

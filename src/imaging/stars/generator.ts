@@ -55,6 +55,26 @@ export interface PlotStarOptions {
 	readonly cutoffSigma?: number
 }
 
+// Per-star PSF changes already expressed in the output image coordinate system.
+export interface StarPsfModifiers {
+	// X scale applied to the complete base PSF before additive covariance, normally 1/binX.
+	readonly scaleX?: number
+	// Y scale applied to the complete base PSF before additive covariance, normally 1/binY.
+	readonly scaleY?: number
+	// Overrides the global normalized defocus amount for this star, clamped to 0..1.
+	readonly defocus?: number
+	// Additive Gaussian covariance xx component, in output pixel squared.
+	readonly covarianceXX?: number
+	// Additive Gaussian covariance xy component, in output pixel squared.
+	readonly covarianceXY?: number
+	// Additive Gaussian covariance yy component, in output pixel squared.
+	readonly covarianceYY?: number
+	// Normalized asymmetric coma strength, 0..1.
+	readonly coma?: number
+	// Coma direction in image coordinates, radians clockwise because Y grows downward.
+	readonly comaTheta?: number
+}
+
 // sqrt(2 ln 2): half-width-at-half-maximum factor relating FWHM and Gaussian sigma.
 const SQRT_TWO_LN_TWO = 1.1774100225154747
 // Converts a half-flux diameter to the equivalent Gaussian sigma.
@@ -126,10 +146,16 @@ export function colorIndexToRgbWeights(colorIndex: number = DEFAULT_COLOR_INDEX,
 	else return [red / sum, green / sum, blue / sum] as const
 }
 
+// Converts a non-negative half-flux diameter in pixels to the standard deviation of an equivalent
+// circular Gaussian. Invalid and negative diameters produce zero.
+export function gaussianSigmaFromHfd(hfd: number): number {
+	return Math.max(0, sanitizePositive(hfd, 0) * HFD_TO_SIGMA)
+}
+
 // Converts HFD and seeing terms, both treated as HFD-like diameters in pixels, into one effective Gaussian sigma.
 export function effectiveGaussianSigma(hfd: number, seeing: number = 0, snr: number = 0, softCore: number = 0, additiveNoiseHint: number = 0, peakScale: number = 1, background: number = 0) {
 	const hfdSigma = Math.max(MIN_SIGMA, sanitizePositive(hfd, MIN_HFD) * HFD_TO_SIGMA)
-	const seeingSigma = Math.max(0, sanitizePositive(seeing, 0) * HFD_TO_SIGMA)
+	const seeingSigma = gaussianSigmaFromHfd(seeing)
 	const combinedSigma = Math.hypot(hfdSigma, seeingSigma)
 	const lowSnr = 1 - clamp(sanitizePositive(snr, 0) / 32, 0, 1)
 	const noiseSoftening = clamp(sanitizePositive(additiveNoiseHint, 0) * 0.04, 0, 0.2)
@@ -151,7 +177,7 @@ export function focusDefocusAmount(focusStep?: number, bestFocus?: number, maxFo
 }
 
 // Plots one synthetic star into an existing ImageRawType image buffer.
-export function plotStar(raw: ImageRawType, width: number, height: number, channels: 1 | 3, x: number, y: number, flux: number, hfd: number, snr: number, seeing: number, colorIndex?: number, options: PlotStarOptions = {}) {
+export function plotStar(raw: ImageRawType, width: number, height: number, channels: 1 | 3, x: number, y: number, flux: number, hfd: number, snr: number, seeing: number, colorIndex?: number, options: PlotStarOptions = {}, modifiers?: StarPsfModifiers) {
 	if (!Number.isInteger(width) || width <= 0) throw new RangeError('width must be a positive integer')
 	if (!Number.isInteger(height) || height <= 0) throw new RangeError('height must be a positive integer')
 	const expectedLength = width * height * channels
@@ -167,7 +193,8 @@ export function plotStar(raw: ImageRawType, width: number, height: number, chann
 
 	const background = sanitizePositive(options.background, 0)
 	const peakScale = sanitizePositive(options.peakScale, 1)
-	const defocus = focusDefocusAmount(options.focusStep, options.bestFocus, options.maxFocusStep)
+	const globalDefocus = focusDefocusAmount(options.focusStep, options.bestFocus, options.maxFocusStep)
+	const defocus = modifiers?.defocus === undefined ? globalDefocus : clamp(sanitizePositive(modifiers.defocus, 0), 0, 1)
 	const effectiveSoftCore = (options.softCore ?? 0) + defocus * 3.2
 	const effectivePeakScale = Math.max(0.2, peakScale / (1 + defocus * 1.4))
 	const sigma = effectiveGaussianSigma(hfd, seeing, snr, effectiveSoftCore, options.additiveNoiseHint ?? 0, effectivePeakScale, background) * (1 + defocus * defocus * 2.4)
@@ -175,9 +202,35 @@ export function plotStar(raw: ImageRawType, width: number, height: number, chann
 	const haloVisibility = 1 - lowSnr * 0.5 - clamp(background * 2, 0, 0.25)
 	const haloStrength = Math.max(0, (sanitizePositive(options.haloStrength, 0) + defocus * defocus * 0.24) * Math.max(0, haloVisibility))
 	const haloScale = clamp(sanitizePositive(options.haloScale, DEFAULT_HALO_SCALE) * (1 + defocus * 0.6), 1.1, 10)
-	const haloSigma = sigma * haloScale
-	const axisRatio = 1 - clamp(sanitizePositive(options.ellipticity, 0), 0, 1 - MIN_AXIS_RATIO)
-	const ellipticity = 1 - axisRatio
+	const globalEllipticity = clamp(sanitizePositive(options.ellipticity, 0), 0, 1 - MIN_AXIS_RATIO)
+	const globalAxisRatioSqrt = Math.sqrt(1 - globalEllipticity)
+	const baseMajorSigma = sigma / globalAxisRatioSqrt
+	const baseMinorSigma = sigma * globalAxisRatioSqrt
+	const globalTheta = sanitizeSigned(options.theta, 0)
+	const scaleX = sanitizePositive(modifiers?.scaleX, 1)
+	const scaleY = sanitizePositive(modifiers?.scaleY, 1)
+	const localCovarianceXX = sanitizePositive(modifiers?.covarianceXX, 0)
+	const localCovarianceXY = sanitizeSigned(modifiers?.covarianceXY, 0)
+	const localCovarianceYY = sanitizePositive(modifiers?.covarianceYY, 0)
+	let majorSigma = baseMajorSigma * scaleX
+	let minorSigma = baseMinorSigma * scaleY
+	let theta = globalEllipticity > FAST_PATH_ELLIPTICITY_EPSILON ? globalTheta : 0
+
+	if (Math.abs(scaleX - scaleY) > Number.EPSILON || localCovarianceXX > 0 || Math.abs(localCovarianceXY) > Number.EPSILON || localCovarianceYY > 0) {
+		const cosGlobalTheta = Math.cos(globalTheta)
+		const sinGlobalTheta = Math.sin(globalTheta)
+		const baseMajorVariance = baseMajorSigma * baseMajorSigma
+		const baseMinorVariance = baseMinorSigma * baseMinorSigma
+		const covarianceXX = (baseMajorVariance * cosGlobalTheta * cosGlobalTheta + baseMinorVariance * sinGlobalTheta * sinGlobalTheta) * scaleX * scaleX + localCovarianceXX
+		const covarianceXY = (baseMajorVariance - baseMinorVariance) * cosGlobalTheta * sinGlobalTheta * scaleX * scaleY + localCovarianceXY
+		const covarianceYY = (baseMajorVariance * sinGlobalTheta * sinGlobalTheta + baseMinorVariance * cosGlobalTheta * cosGlobalTheta) * scaleY * scaleY + localCovarianceYY
+		const halfDifference = (covarianceXX - covarianceYY) * 0.5
+		const discriminant = Math.hypot(halfDifference, covarianceXY)
+		const halfTrace = Math.max(MIN_SIGMA * MIN_SIGMA, (covarianceXX + covarianceYY) * 0.5)
+		majorSigma = Math.sqrt(Math.max(MIN_SIGMA * MIN_SIGMA, halfTrace + discriminant))
+		minorSigma = Math.sqrt(Math.max(MIN_SIGMA * MIN_SIGMA, halfTrace - discriminant))
+		theta = discriminant > Number.EPSILON ? 0.5 * Math.atan2(2 * covarianceXY, covarianceXX - covarianceYY) : 0
+	}
 	const psfModel = options.psfModel === 'moffat' ? 'moffat' : 'gaussian'
 	const beta = Math.max(1.05, sanitizePositive(options.beta, DEFAULT_BETA))
 	const saturationEnabled = options.saturationLevel !== undefined && Number.isFinite(options.saturationLevel)
@@ -185,17 +238,112 @@ export function plotStar(raw: ImageRawType, width: number, height: number, chann
 	const cutoffSigma = clamp(sanitizePositive(options.cutoffSigma, DEFAULT_CUTOFF_SIGMA), 2.5, 7)
 	const minPlotRadius = Math.max(0, sanitizePositive(options.minPlotRadius, DEFAULT_MIN_RADIUS))
 	const maxPlotRadius = Math.max(minPlotRadius, sanitizePositive(options.maxPlotRadius, DEFAULT_MAX_RADIUS))
-	const wingsScale = psfModel === 'moffat' ? 1.35 : 1
+	const coma = clamp(sanitizePositive(modifiers?.coma, 0), 0, 1)
+
+	if (coma <= 0) return plotStarComponent(raw, width, height, channels, centerX, centerY, totalFlux, majorSigma, minorSigma, theta, colorIndex, lowSnr, haloStrength, haloScale, psfModel, beta, saturationEnabled, saturationLevel, cutoffSigma, minPlotRadius, maxPlotRadius, options.gammaCompensation)
+
+	const comaTheta = sanitizeSigned(modifiers?.comaTheta, 0)
+	const geometricSigma = Math.sqrt(majorSigma * minorSigma)
+	const separation = geometricSigma * (0.75 + coma * 2.25)
+	const tailFraction = coma * 0.3
+	const coreFraction = 1 - tailFraction
+	const offsetX = Math.cos(comaTheta) * separation
+	const offsetY = Math.sin(comaTheta) * separation
+	const coreRendered = plotStarComponent(
+		raw,
+		width,
+		height,
+		channels,
+		centerX - tailFraction * offsetX,
+		centerY - tailFraction * offsetY,
+		totalFlux * coreFraction,
+		majorSigma,
+		minorSigma,
+		theta,
+		colorIndex,
+		lowSnr,
+		haloStrength,
+		haloScale,
+		psfModel,
+		beta,
+		saturationEnabled,
+		saturationLevel,
+		cutoffSigma,
+		minPlotRadius,
+		maxPlotRadius,
+		options.gammaCompensation,
+	)
+	const tailScale = 1 + coma * 1.5
+	const tailRendered = plotStarComponent(
+		raw,
+		width,
+		height,
+		channels,
+		centerX + coreFraction * offsetX,
+		centerY + coreFraction * offsetY,
+		totalFlux * tailFraction,
+		majorSigma * tailScale,
+		minorSigma * tailScale,
+		theta,
+		colorIndex,
+		lowSnr,
+		haloStrength,
+		haloScale,
+		psfModel,
+		beta,
+		saturationEnabled,
+		saturationLevel,
+		cutoffSigma,
+		minPlotRadius,
+		maxPlotRadius,
+		options.gammaCompensation,
+	)
+	return coreRendered || tailRendered
+}
+
+// Renders one symmetric Gaussian or Moffat component with discrete flux normalization.
+function plotStarComponent(
+	raw: ImageRawType,
+	width: number,
+	height: number,
+	channels: 1 | 3,
+	centerX: number,
+	centerY: number,
+	totalFlux: number,
+	majorSigma: number,
+	minorSigma: number,
+	theta: number,
+	colorIndex: number | undefined,
+	lowSnr: number,
+	haloStrength: number,
+	haloScale: number,
+	psfModel: StarPsfModel,
+	beta: number,
+	saturationEnabled: boolean,
+	saturationLevel: number,
+	cutoffSigma: number,
+	minPlotRadius: number,
+	maxPlotRadius: number,
+	gammaCompensation?: number | false,
+) {
+	if (totalFlux <= 0 || !Number.isFinite(centerX) || !Number.isFinite(centerY)) return false
+	const geometricSigma = Math.sqrt(majorSigma * minorSigma)
+	const axisRatio = clamp(minorSigma / majorSigma, MIN_AXIS_RATIO, 1)
+	const ellipticity = 1 - axisRatio
 	const axisRatioSqrt = Math.sqrt(axisRatio)
-	const sigmaExtent = Math.max(sigma / axisRatioSqrt, haloStrength > 0 ? haloSigma / axisRatioSqrt : 0)
+	const haloSigma = geometricSigma * haloScale
+	const haloMajorSigma = haloStrength > 0 ? haloSigma / axisRatioSqrt : 0
+	const haloMinorSigma = haloStrength > 0 ? haloSigma * axisRatioSqrt : 0
+	const wingsScale = psfModel === 'moffat' ? 1.35 : 1
+	const sigmaExtent = Math.max(majorSigma, haloMajorSigma)
 	// Smallest Gaussian scale evaluated by the incremental exponential recurrence used in the
 	// plotting loops. Each row seeds the recurrence at the box edge as exp(-0.5 * (edge/scale)^2);
 	// far enough into the tail that seed underflows to 0, and the multiplicative march then
 	// collapses the whole row to 0 or NaN (0 * overflowing step), erasing even the core. Cap the
 	// radius at SAFE_RADIUS_SIGMA scales so the edge seed stays representable. The Moffat core is
 	// evaluated additively and never underflows, so only its optional Gaussian halo constrains it.
-	const haloScaleMinor = haloStrength > 0 ? haloSigma * axisRatioSqrt : Number.POSITIVE_INFINITY
-	const recurrenceScale = psfModel === 'moffat' ? haloScaleMinor : Math.min(sigma * axisRatioSqrt, haloScaleMinor)
+	const haloScaleMinor = haloStrength > 0 ? haloMinorSigma : Number.POSITIVE_INFINITY
+	const recurrenceScale = psfModel === 'moffat' ? haloScaleMinor : Math.min(minorSigma, haloScaleMinor)
 	const safeRadius = Number.isFinite(recurrenceScale) ? Math.max(1, Math.floor(SAFE_RADIUS_SIGMA * recurrenceScale)) : Number.POSITIVE_INFINITY
 	const radius = Math.min(Math.ceil(clamp(cutoffSigma * wingsScale * sigmaExtent * (1 - lowSnr * 0.08), minPlotRadius, maxPlotRadius)), safeRadius)
 	const plotMinX = Math.ceil(centerX - radius)
@@ -213,51 +361,45 @@ export function plotStar(raw: ImageRawType, width: number, height: number, chann
 	const haloFlux = totalFlux - coreFlux
 
 	if (psfModel === 'gaussian' && ellipticity <= FAST_PATH_ELLIPTICITY_EPSILON) {
-		const coreAmplitude = coreFlux / Math.max(Number.EPSILON, circularGaussianDiscreteSum(plotMinX, plotMaxX, plotMinY, plotMaxY, centerX, centerY, sigma))
+		const coreAmplitude = coreFlux / Math.max(Number.EPSILON, circularGaussianDiscreteSum(plotMinX, plotMaxX, plotMinY, plotMaxY, centerX, centerY, geometricSigma))
 		const haloAmplitude = haloFlux > 0 ? haloFlux / Math.max(Number.EPSILON, circularGaussianDiscreteSum(plotMinX, plotMaxX, plotMinY, plotMaxY, centerX, centerY, haloSigma)) : 0
 
 		if (channels === 1) {
-			plotCircularGaussianMono(raw, width, minX, maxX, minY, maxY, centerX, centerY, sigma, coreAmplitude, haloSigma, haloAmplitude, saturationEnabled, saturationLevel)
+			plotCircularGaussianMono(raw, width, minX, maxX, minY, maxY, centerX, centerY, geometricSigma, coreAmplitude, haloSigma, haloAmplitude, saturationEnabled, saturationLevel)
 		} else {
-			const [redWeight, greenWeight, blueWeight] = colorIndexToRgbWeights(colorIndex, options.gammaCompensation)
-			plotCircularGaussianRgb(raw, width, minX, maxX, minY, maxY, centerX, centerY, sigma, coreAmplitude, haloSigma, haloAmplitude, redWeight, greenWeight, blueWeight, saturationEnabled, saturationLevel)
+			const [redWeight, greenWeight, blueWeight] = colorIndexToRgbWeights(colorIndex, gammaCompensation)
+			plotCircularGaussianRgb(raw, width, minX, maxX, minY, maxY, centerX, centerY, geometricSigma, coreAmplitude, haloSigma, haloAmplitude, redWeight, greenWeight, blueWeight, saturationEnabled, saturationLevel)
 		}
 
 		return true
 	}
 
 	if (psfModel === 'gaussian') {
-		const majorSigma = sigma / axisRatioSqrt
-		const minorSigma = sigma * axisRatioSqrt
-		const haloMajorSigma = haloStrength > 0 ? haloSigma / axisRatioSqrt : 0
-		const haloMinorSigma = haloStrength > 0 ? haloSigma * axisRatioSqrt : 0
-		const coreAmplitude = coreFlux / Math.max(Number.EPSILON, ellipticalGaussianDiscreteSum(plotMinX, plotMaxX, plotMinY, plotMaxY, centerX, centerY, majorSigma, minorSigma, options.theta || 0))
-		const haloAmplitude = haloFlux > 0 ? haloFlux / Math.max(Number.EPSILON, ellipticalGaussianDiscreteSum(plotMinX, plotMaxX, plotMinY, plotMaxY, centerX, centerY, haloMajorSigma, haloMinorSigma, options.theta || 0)) : 0
+		const coreAmplitude = coreFlux / Math.max(Number.EPSILON, ellipticalGaussianDiscreteSum(plotMinX, plotMaxX, plotMinY, plotMaxY, centerX, centerY, majorSigma, minorSigma, theta))
+		const haloAmplitude = haloFlux > 0 ? haloFlux / Math.max(Number.EPSILON, ellipticalGaussianDiscreteSum(plotMinX, plotMaxX, plotMinY, plotMaxY, centerX, centerY, haloMajorSigma, haloMinorSigma, theta)) : 0
 
 		if (channels === 1) {
-			plotEllipticalGaussianMono(raw, width, minX, maxX, minY, maxY, centerX, centerY, majorSigma, minorSigma, options.theta || 0, coreAmplitude, haloMajorSigma, haloMinorSigma, haloAmplitude, saturationEnabled, saturationLevel)
+			plotEllipticalGaussianMono(raw, width, minX, maxX, minY, maxY, centerX, centerY, majorSigma, minorSigma, theta, coreAmplitude, haloMajorSigma, haloMinorSigma, haloAmplitude, saturationEnabled, saturationLevel)
 		} else {
-			const [redWeight, greenWeight, blueWeight] = colorIndexToRgbWeights(colorIndex, options.gammaCompensation)
-			plotEllipticalGaussianRgb(raw, width, minX, maxX, minY, maxY, centerX, centerY, majorSigma, minorSigma, options.theta || 0, coreAmplitude, haloMajorSigma, haloMinorSigma, haloAmplitude, redWeight, greenWeight, blueWeight, saturationEnabled, saturationLevel)
+			const [redWeight, greenWeight, blueWeight] = colorIndexToRgbWeights(colorIndex, gammaCompensation)
+			plotEllipticalGaussianRgb(raw, width, minX, maxX, minY, maxY, centerX, centerY, majorSigma, minorSigma, theta, coreAmplitude, haloMajorSigma, haloMinorSigma, haloAmplitude, redWeight, greenWeight, blueWeight, saturationEnabled, saturationLevel)
 		}
 
 		return true
 	}
 
-	const effectiveHfd = sigma / HFD_TO_SIGMA
+	const effectiveHfd = geometricSigma / HFD_TO_SIGMA
 	const baseAlpha = moffatAlphaFromHfd(effectiveHfd, beta)
 	const majorAlpha = baseAlpha / axisRatioSqrt
 	const minorAlpha = baseAlpha * axisRatioSqrt
-	const haloMajorSigma = haloSigma / axisRatioSqrt
-	const haloMinorSigma = haloSigma * axisRatioSqrt
-	const coreAmplitude = coreFlux / Math.max(Number.EPSILON, moffatDiscreteSum(plotMinX, plotMaxX, plotMinY, plotMaxY, centerX, centerY, majorAlpha, minorAlpha, options.theta || 0, beta))
-	const haloAmplitude = haloFlux > 0 ? haloFlux / Math.max(Number.EPSILON, ellipticalGaussianDiscreteSum(plotMinX, plotMaxX, plotMinY, plotMaxY, centerX, centerY, haloMajorSigma, haloMinorSigma, options.theta || 0)) : 0
+	const coreAmplitude = coreFlux / Math.max(Number.EPSILON, moffatDiscreteSum(plotMinX, plotMaxX, plotMinY, plotMaxY, centerX, centerY, majorAlpha, minorAlpha, theta, beta))
+	const haloAmplitude = haloFlux > 0 ? haloFlux / Math.max(Number.EPSILON, ellipticalGaussianDiscreteSum(plotMinX, plotMaxX, plotMinY, plotMaxY, centerX, centerY, haloMajorSigma, haloMinorSigma, theta)) : 0
 
 	if (channels === 1) {
-		plotMoffatMono(raw, width, minX, maxX, minY, maxY, centerX, centerY, majorAlpha, minorAlpha, options.theta || 0, beta, coreAmplitude, haloMajorSigma, haloMinorSigma, haloAmplitude, saturationEnabled, saturationLevel)
+		plotMoffatMono(raw, width, minX, maxX, minY, maxY, centerX, centerY, majorAlpha, minorAlpha, theta, beta, coreAmplitude, haloMajorSigma, haloMinorSigma, haloAmplitude, saturationEnabled, saturationLevel)
 	} else {
-		const [redWeight, greenWeight, blueWeight] = colorIndexToRgbWeights(colorIndex, options.gammaCompensation)
-		plotMoffatRgb(raw, width, minX, maxX, minY, maxY, centerX, centerY, majorAlpha, minorAlpha, options.theta || 0, beta, coreAmplitude, haloMajorSigma, haloMinorSigma, haloAmplitude, redWeight, greenWeight, blueWeight, saturationEnabled, saturationLevel)
+		const [redWeight, greenWeight, blueWeight] = colorIndexToRgbWeights(colorIndex, gammaCompensation)
+		plotMoffatRgb(raw, width, minX, maxX, minY, maxY, centerX, centerY, majorAlpha, minorAlpha, theta, beta, coreAmplitude, haloMajorSigma, haloMinorSigma, haloAmplitude, redWeight, greenWeight, blueWeight, saturationEnabled, saturationLevel)
 	}
 
 	return true

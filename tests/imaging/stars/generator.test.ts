@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { PI, PIOVERFOUR, PIOVERTWO } from '../../../src/core/constants'
 import type { Image, ImageMetadata } from '../../../src/imaging/model/types'
 import { brightness, gamma } from '../../../src/imaging/processing/tone'
 import { colorIndexToRgbWeights, effectiveGaussianSigma, focusDefocusAmount, type PlotStarOptions, plotStar } from '../../../src/imaging/stars/generator'
@@ -165,7 +166,7 @@ test('keeps flux finite for sharp stars forced into a large plot radius', () => 
 	const size = 96
 	const buffer = new Float64Array(size * size * 3)
 
-	const scenarios: PlotStarOptions[] = [{ minPlotRadius: 20 }, { minPlotRadius: 24, ellipticity: 0.8, theta: Math.PI / 2 }, { minPlotRadius: 22, psfModel: 'moffat', haloStrength: 0.3 }]
+	const scenarios: PlotStarOptions[] = [{ minPlotRadius: 20 }, { minPlotRadius: 24, ellipticity: 0.8, theta: PIOVERTWO }, { minPlotRadius: 22, psfModel: 'moffat', haloStrength: 0.3 }]
 
 	for (const channels of [1, 3] as const) {
 		for (const options of scenarios) {
@@ -283,6 +284,48 @@ test('supports ellipticity and halo shaping', () => {
 	expect(ringEnergy(withHalo, WIDTH, HEIGHT, 24, 24, 5)).toBeGreaterThan(ringEnergy(noHalo, WIDTH, HEIGHT, 24, 24, 5))
 })
 
+test('composes per-star covariance with the global PSF', () => {
+	const horizontal = new Float64Array(WIDTH * HEIGHT)
+	const vertical = new Float64Array(WIDTH * HEIGHT)
+
+	expect(plotStar(horizontal, WIDTH, HEIGHT, 1, 24, 24, 0.3, 3, 24, 0, undefined, {}, { covarianceXX: 4 })).toBe(true)
+	expect(plotStar(vertical, WIDTH, HEIGHT, 1, 24, 24, 0.3, 3, 24, 0, undefined, {}, { covarianceYY: 4 })).toBe(true)
+	const [horizontalX, horizontalY] = monoSecondMoments(horizontal, WIDTH, HEIGHT, 24, 24)
+	const [verticalX, verticalY] = monoSecondMoments(vertical, WIDTH, HEIGHT, 24, 24)
+
+	expect(horizontalX).toBeGreaterThan(horizontalY * 2)
+	expect(verticalY).toBeGreaterThan(verticalX * 2)
+})
+
+test('scales base HFD and seeing independently along each binned axis', () => {
+	const size = 128
+	const unbinned = new Float64Array(size * size)
+	const binnedX = new Float64Array(size * size)
+
+	expect(plotStar(unbinned, size, size, 1, 64, 64, 0.5, 8, 100, 4, undefined, { maxPlotRadius: 50 })).toBe(true)
+	expect(plotStar(binnedX, size, size, 1, 64, 64, 0.5, 8, 100, 4, undefined, { maxPlotRadius: 50 }, { scaleX: 0.5, scaleY: 1 })).toBe(true)
+	const [unbinnedX, unbinnedY] = monoSecondMoments(unbinned, size, size, 64, 64)
+	const [scaledX, scaledY] = monoSecondMoments(binnedX, size, size, 64, 64)
+
+	expect(scaledX / unbinnedX).toBeCloseTo(0.25, 1)
+	expect(scaledY / unbinnedY).toBeCloseTo(1, 1)
+})
+
+test('preserves flux and centroid when adding a coma tail', () => {
+	const circular = new Float64Array(96 * 96)
+	const comatic = new Float64Array(96 * 96)
+	const x = 47.25
+	const y = 48.4
+
+	expect(plotStar(circular, 96, 96, 1, x, y, 0.5, 3.2, 24, 0, undefined, { maxPlotRadius: 40 })).toBe(true)
+	expect(plotStar(comatic, 96, 96, 1, x, y, 0.5, 3.2, 24, 0, undefined, { maxPlotRadius: 40 }, { coma: 0.8, comaTheta: 0 })).toBe(true)
+	const [centroidX, centroidY] = monoCentroid(comatic, 96, 96)
+
+	expect(monoSum(comatic)).toBeCloseTo(monoSum(circular), 8)
+	expect(centroidX).toBeCloseTo(x, 2)
+	expect(centroidY).toBeCloseTo(y, 2)
+})
+
 test('supports the optional moffat profile with broader wings', () => {
 	const gaussian = new Float64Array(WIDTH * HEIGHT)
 	const moffat = new Float64Array(WIDTH * HEIGHT)
@@ -355,7 +398,7 @@ describe('plot star', () => {
 		{ name: 'mono bright saturated core', slug: 'mono-bright-saturated-core', channels: 1, flux: 5.5, hfd: 1.15, snr: 64, seeing: 0, saturationLevel: 1, peakScale: 1.5, hash: '4ff8371f564b9ab6a25184fd17b86f8d' },
 		{ name: 'mono diffuse seeing dominated', slug: 'mono-diffuse-seeing-dominated', channels: 1, flux: 0.42, hfd: 8.4, snr: 10, seeing: 4.8, softCore: 1.4, maxPlotRadius: 24, hash: '5f9c4bb225b6b94383efff2fae977bcb' },
 		{ name: 'mono elliptical horizontal', slug: 'mono-elliptical-horizontal', channels: 1, flux: 0.3, hfd: 3.1, snr: 20, seeing: 0.5, ellipticity: 0.45, theta: 0, hash: 'e84227d2250195e4099623356c50d1bc' },
-		{ name: 'mono elliptical rotated halo', slug: 'mono-elliptical-rotated-halo', channels: 1, flux: 0.32, hfd: 3.4, snr: 18, seeing: 0.8, ellipticity: 0.38, theta: Math.PI / 4, haloStrength: 0.22, haloScale: 3.5, hash: '02f7f008dbb74c5baf1484843a186215' },
+		{ name: 'mono elliptical rotated halo', slug: 'mono-elliptical-rotated-halo', channels: 1, flux: 0.32, hfd: 3.4, snr: 18, seeing: 0.8, ellipticity: 0.38, theta: PIOVERFOUR, haloStrength: 0.22, haloScale: 3.5, hash: '02f7f008dbb74c5baf1484843a186215' },
 		{ name: 'mono left edge clip', slug: 'mono-left-edge-clip', channels: 1, x: 1.35, y: HEIGHT / 2, flux: 0.3, hfd: 3.2, snr: 16, seeing: 0.9, hash: 'd3fefbf67943e75e3f5c54b70573c24e' },
 		{ name: 'mono corner clip', slug: 'mono-corner-clip', channels: 1, x: 1.25, y: 1.75, flux: 0.26, hfd: 2.7, snr: 14, seeing: 0.7, hash: 'fb024542be6bc7b31f3569fd106a615a' },
 		{ name: 'mono moffat compact', slug: 'mono-moffat-compact', channels: 1, flux: 0.29, hfd: 3, snr: 30, seeing: 0.4, psfModel: 'moffat', beta: 2.2, hash: '83b5f299f3ae240e78279efb713bfaa3' },
@@ -366,7 +409,7 @@ describe('plot star', () => {
 		{ name: 'rgb blue hot star', slug: 'rgb-blue-hot-star', channels: 3, flux: 0.36, hfd: 2.7, snr: 30, seeing: 0.4, colorIndex: -0.3, peakScale: 1.2, hash: '84fe142d37e945145f667b5b1113c8e3' },
 		{ name: 'rgb red cool star', slug: 'rgb-red-cool-star', channels: 3, flux: 0.36, hfd: 3.7, snr: 28, seeing: 0.7, colorIndex: 1.85, hash: 'ac3936cbcd6c4633cdff17bc7a97b3a5' },
 		{ name: 'rgb diffuse low snr', slug: 'rgb-diffuse-low-snr', channels: 3, flux: 0.24, hfd: 6.8, snr: 4, seeing: 3.4, colorIndex: 0.9, softCore: 1.2, maxPlotRadius: 24, hash: '60ffbb2121035a2399663b6bfeb220fc' },
-		{ name: 'rgb elliptical rotated', slug: 'rgb-elliptical-rotated', channels: 3, flux: 0.32, hfd: 3, snr: 18, seeing: 0.6, colorIndex: 0.05, ellipticity: 0.34, theta: Math.PI / 6, hash: '0de84b935c5c8b25b6afdbf9ebd5ec54' },
+		{ name: 'rgb elliptical rotated', slug: 'rgb-elliptical-rotated', channels: 3, flux: 0.32, hfd: 3, snr: 18, seeing: 0.6, colorIndex: 0.05, ellipticity: 0.34, theta: PI / 6, hash: '0de84b935c5c8b25b6afdbf9ebd5ec54' },
 		{ name: 'rgb halo and gamma', slug: 'rgb-halo-and-gamma', channels: 3, flux: 0.34, hfd: 3.5, snr: 20, seeing: 0.7, colorIndex: 1.15, haloStrength: 0.24, haloScale: 3.6, gammaCompensation: 2.2, hash: '8195341783cf3e9597c17ed33949d4cc' },
 		{ name: 'rgb moffat halo', slug: 'rgb-moffat-halo', channels: 3, flux: 0.31, hfd: 2.9, snr: 32, seeing: 0.4, colorIndex: -0.15, psfModel: 'moffat', beta: 2.5, haloStrength: 0.12, haloScale: 3.1, hash: '69bd723fd403c7861913b29a9fc3d920' },
 		{ name: 'rgb defocused', slug: 'rgb-defocused', channels: 3, flux: 0.34, hfd: 2.8, snr: 22, seeing: 0.5, colorIndex: 0.8, focusStep: 12000, bestFocus: 64000, hash: '933cc32600298b1d103b97d667c8cb2c' },

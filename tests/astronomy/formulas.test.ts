@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 // oxfmt-ignore
 import { asteroidMagnitudeEstimate, airmass, airmassKastenYoung, airyDiskInPixels, airyDiskSize, altitudeAtTransit, atmosphericExtinction, atmosphericRefraction, cometMagnitudeEstimate, criticalFocusZone, dawesLimit, dewPoint, dynamicRange, dynamicRangeInStops, effectiveApertureWithObstruction, exitPupil, exitPupilFromApertureAndMagnification, exitPupilFromEyepieceAndFocalRatio, eyepieceTrueFovViaFieldStop, eyepieceView, focalLength, focalRatio, guidingErrorInPixels, hourAngleAtAltitude, lightGraspRatio, limitingMagnitude, magnification, maxExposureBeforeTrail, mosaicPanelCount, objectAngularDiameter, obstructionRatio, periodicErrorInPixels, pixelScale, plateScale, rayleighLimit, recommendedFocalLength, requiredSubframeCount, samplingRatio, saturationTime, sensorDiagonalFov, sensorFieldOfView, signalToNoiseRatio, skyLimitedExposure, stackingMagnitudeGain, stackingSnrGain, starTrailLength, subframeCount, surfaceBrightness, totalIntegrationTime } from '../../src/astronomy/formulas'
-import { DEG2RAD, RAD2DEG } from '../../src/core/constants'
+import { DEG2RAD, PIOVERTWO, RAD2DEG } from '../../src/core/constants'
 
 test('visual astronomy and optical planning formulas return expected values', () => {
 	expect(focalLength(200, 5)).toBe(1000)
@@ -118,8 +118,8 @@ test('formulas reject invalid inputs and denominators consistently', () => {
 
 test('hour angle at altitude gives a six-hour arc for a body on the celestial equator', () => {
 	// A declination-zero body is up exactly half the day at any latitude: H = 90 deg.
-	expect(hourAngleAtAltitude(0, 45 * DEG2RAD, 0)).toBeCloseTo(Math.PI / 2, 12)
-	expect(hourAngleAtAltitude(0, 0, 0)).toBeCloseTo(Math.PI / 2, 12)
+	expect(hourAngleAtAltitude(0, 45 * DEG2RAD, 0)).toBeCloseTo(PIOVERTWO, 12)
+	expect(hourAngleAtAltitude(0, 0, 0)).toBeCloseTo(PIOVERTWO, 12)
 })
 
 test('hour angle at altitude matches the standard semidiurnal arc', () => {

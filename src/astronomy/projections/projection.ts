@@ -1,4 +1,4 @@
-import { DEG2RAD, PI, PIOVERTWO } from '../../core/constants'
+import { DEG2RAD, PI, PIOVERFOUR, PIOVERTWO } from '../../core/constants'
 import { GEOMETRY_EPSILON } from '../../core/validation'
 import { euclideanDistance, fillPoint, type Point } from '../../math/numerical/geometry'
 import { clamp } from '../../math/numerical/math'
@@ -317,14 +317,14 @@ export class Miller extends CylindricalProjection {
 	project(lambda: Angle, phi: Angle, out?: Point, options?: ProjectionOptions) {
 		const longitude = longitudeFromLambda(lambda, options, this.options)
 		const latitude = latitudeFromPhi(phi, options, this.options, WEB_MERCATOR_MAX_LATITUDE)
-		return longitude === undefined || latitude === undefined ? undefined : projectPoint(out, longitude, 1.25 * Math.log(Math.tan(PI / 4 + 0.4 * latitude)), options, this.options)
+		return longitude === undefined || latitude === undefined ? undefined : projectPoint(out, longitude, 1.25 * Math.log(Math.tan(PIOVERFOUR + 0.4 * latitude)), options, this.options)
 	}
 
 	unproject(x: number, y: number, out?: Point, options?: ProjectionOptions) {
 		out = unprojectPoint(out, x, y, options, this.options)
 		if (out === undefined) return undefined
 		const longitude = longitudeFromDelta(out.x, options, this.options)
-		const latitude = latitudeInRange(2.5 * (Math.atan(Math.exp(0.8 * out.y)) - PI / 4), options, this.options)
+		const latitude = latitudeInRange(2.5 * (Math.atan(Math.exp(0.8 * out.y)) - PIOVERFOUR), options, this.options)
 		return longitude === undefined || latitude === undefined ? undefined : fillPoint(out, longitude, latitude)
 	}
 }
@@ -391,7 +391,7 @@ export class Behrmann extends CylindricalEqualArea {
 // Gall-Peters equal-area: standard parallel at 45 deg.
 export class GallPeters extends CylindricalEqualArea {
 	constructor(latitudeOfOrigin: Angle = 0) {
-		super(PI / 4, latitudeOfOrigin)
+		super(PIOVERFOUR, latitudeOfOrigin)
 	}
 }
 
@@ -456,7 +456,7 @@ export class CylindricalStereographic extends CylindricalProjection {
 // Gall stereographic: cylindrical stereographic with standard parallel at 45 deg.
 export class Gall extends CylindricalStereographic {
 	constructor() {
-		super(PI / 4)
+		super(PIOVERFOUR)
 	}
 }
 

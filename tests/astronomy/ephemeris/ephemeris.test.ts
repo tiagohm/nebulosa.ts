@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import type { PositionAndVelocity } from '../../../src/astronomy/coordinates/astrometry'
 import { ellipticToRectangular, ellipticToRectangularA, ellipticToRectangularN } from '../../../src/astronomy/ephemeris/ephemeris'
-import { PI } from '../../../src/core/constants'
+import { PI, TAU } from '../../../src/core/constants'
 
 // Circular, equatorial orbit: K=H=Q=P=0, so the body sits on a radius-a circle
 // in the reference plane with speed a*n. With a=2, n=0.5 the speed is exactly 1.
@@ -48,7 +48,7 @@ test('eccentric orbit at pericenter', () => {
 
 test('eccentric orbit at apocenter', () => {
 	// L advances by PI (half a mean revolution) to reach apocenter on the -x axis.
-	const [p, v] = ellipticToRectangular(2, 0.5, ECCENTRIC, 2 * PI)
+	const [p, v] = ellipticToRectangular(2, 0.5, ECCENTRIC, TAU)
 
 	expect(p[0]).toBeCloseTo(-3, 13)
 	expect(p[1]).toBeCloseTo(0, 13)

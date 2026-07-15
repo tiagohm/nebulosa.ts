@@ -20,7 +20,7 @@ export function numericKeyword<T extends number = number, D extends T | undefine
 	if (value === undefined) return defaultValue
 	else if (typeof value === 'number') return value as D | T
 	else if (typeof value === 'boolean') return (value ? 1 : 0) as D | T
-	else return Number.parseFloat(value) as D | T
+	else return Number(value) as D | T
 }
 
 // Reads `key` as a boolean (numbers: non-zero is true; strings: 'T'/'true'), or `defaultValue` when absent.
@@ -162,6 +162,20 @@ export function uncompressedNumberOfChannelsKeyword<T extends number = number, D
 // The value of the BITPIX keyword in the uncompressed FITS image
 export function uncompressedBitpixKeyword<T extends BitpixOrZero = BitpixOrZero, D extends T | undefined = T>(header: FitsHeader, defaultValue: D) {
 	return numericKeyword(header, 'ZBITPIX', undefined) ?? bitpixKeyword(header, defaultValue)
+}
+
+// Physical sample multiplier, falling back to ZSCALE only for a compressed image.
+export function uncompressedScaleKeyword<T extends number = number, D extends T | undefined = T>(header: FitsHeader, defaultValue: D): T | D {
+	const scale = numericKeyword<T, undefined>(header, 'BSCALE', undefined)
+	if (scale !== undefined) return scale
+	return isCompressedImageHeader(header) ? numericKeyword<T, D>(header, 'ZSCALE', defaultValue) : defaultValue
+}
+
+// Physical sample zero point, falling back to ZZERO only for a compressed image.
+export function uncompressedZeroKeyword<T extends number = number, D extends T | undefined = T>(header: FitsHeader, defaultValue: D): T | D {
+	const zero = numericKeyword<T, undefined>(header, 'BZERO', undefined)
+	if (zero !== undefined) return zero
+	return isCompressedImageHeader(header) ? numericKeyword<T, D>(header, 'ZZERO', defaultValue) : defaultValue
 }
 
 // True when the HDU holds a tile-compressed image (ZIMAGE = T).

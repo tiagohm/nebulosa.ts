@@ -16,7 +16,7 @@ function fastSunMoonPosition(time: Time) {
 	const gast = greenwichApparentSiderealTime(time)
 
 	return {
-		sun: { rightAscension: gast - Math.PI + deg(0.1), declination: 0, distance: 1 },
+		sun: { rightAscension: gast - PI + deg(0.1), declination: 0, distance: 1 },
 		moon: { rightAscension: gast, declination: 0, distance: 60 },
 		deltaT: 0,
 	}
@@ -128,8 +128,8 @@ describe('horizon curve geometry', () => {
 				for (const point of branch) {
 					expect(Number.isFinite(point.x)).toBe(true)
 					expect(Number.isFinite(point.y)).toBe(true)
-					expect(point.x).toBeGreaterThanOrEqual(-Math.PI - 1e-9)
-					expect(point.x).toBeLessThanOrEqual(Math.PI + 1e-9)
+					expect(point.x).toBeGreaterThanOrEqual(-PI - 1e-9)
+					expect(point.x).toBeLessThanOrEqual(PI + 1e-9)
 					expect(Math.abs(point.y)).toBeLessThanOrEqual(PIOVERTWO + 1e-9)
 				}
 			}
@@ -156,7 +156,7 @@ describe('horizon curve geometry', () => {
 			const sub = event.sublunar
 			const altSub = moonAltitude(event.rightAscension, event.declination, event.gast, sub.x, sub.y)
 			expect(altSub).toBeCloseTo(PIOVERTWO, 6)
-			const antipodeLon = sub.x > 0 ? sub.x - Math.PI : sub.x + Math.PI
+			const antipodeLon = sub.x > 0 ? sub.x - PI : sub.x + PI
 			const altAnti = moonAltitude(event.rightAscension, event.declination, event.gast, antipodeLon, -sub.y)
 			expect(altAnti).toBeCloseTo(-PIOVERTWO, 6)
 		}
@@ -344,7 +344,7 @@ describe('fill region polygons', () => {
 	test('aboveHorizon fill excludes the antipodal (below-horizon) point', () => {
 		const above = lunarEclipseMapToSvgPaths(geometry, projection, { fill: true, fillRegion: 'aboveHorizon' })
 		const max = geometry.events.find((e) => e.kind === 'MAX')!
-		const antiLon = max.sublunar.x > 0 ? max.sublunar.x - Math.PI : max.sublunar.x + Math.PI
+		const antiLon = max.sublunar.x > 0 ? max.sublunar.x - PI : max.sublunar.x + PI
 		const anti = projection.project(antiLon, -max.sublunar.y)!
 		expect(pointInPolygon(anti.x, anti.y, parsePolygon(above.moonRiseSet.MAX))).toBe(false)
 	})
@@ -363,7 +363,7 @@ describe('fill region polygons', () => {
 		expect(pointInPath(sub.x, sub.y, above)).toBe(true)
 
 		// The antipodal point is below the horizon, so it must be outside the cap.
-		const antiLon = max.sublunar.x > 0 ? max.sublunar.x - Math.PI : max.sublunar.x + Math.PI
+		const antiLon = max.sublunar.x > 0 ? max.sublunar.x - PI : max.sublunar.x + PI
 		const anti = projection.project(antiLon, -max.sublunar.y)!
 		expect(pointInPath(anti.x, anti.y, above)).toBe(false)
 	})
@@ -376,7 +376,7 @@ describe('fill region polygons', () => {
 		const max = geo.events.find((e) => e.kind === 'MAX')!
 		const below = lunarEclipseMapToSvgPaths(geo, projection, { fill: true, fillRegion: 'belowHorizon' }).moonRiseSet.MAX
 		const sub = projection.project(max.sublunar.x, max.sublunar.y)!
-		const antiLon = max.sublunar.x > 0 ? max.sublunar.x - Math.PI : max.sublunar.x + Math.PI
+		const antiLon = max.sublunar.x > 0 ? max.sublunar.x - PI : max.sublunar.x + PI
 		const anti = projection.project(antiLon, -max.sublunar.y)!
 		expect(pointInPath(anti.x, anti.y, below)).toBe(true)
 		expect(pointInPath(sub.x, sub.y, below)).toBe(false)
@@ -392,7 +392,7 @@ describe('fill region polygons', () => {
 		const above = lunarEclipseMapToSvgPaths(geo, projection, { fill: true, fillRegion: 'aboveHorizon' }).moonRiseSet.MAX
 		const below = lunarEclipseMapToSvgPaths(geo, projection, { fill: true, fillRegion: 'belowHorizon' }).moonRiseSet.MAX
 		const sub = projection.project(max.sublunar.x, max.sublunar.y)!
-		const antiLon = max.sublunar.x > 0 ? max.sublunar.x - Math.PI : max.sublunar.x + Math.PI
+		const antiLon = max.sublunar.x > 0 ? max.sublunar.x - PI : max.sublunar.x + PI
 		const anti = projection.project(antiLon, -max.sublunar.y)!
 
 		// Above-horizon contains the sublunar point and excludes its antipode.
@@ -414,7 +414,7 @@ describe('fill region polygons', () => {
 		const above = lunarEclipseMapToSvgPaths(geo, projection, { fill: true, fillRegion: 'aboveHorizon' }).moonRiseSet.MAX
 		const northPole = projection.project(0, PIOVERTWO - 1e-6)!
 		const southPole = projection.project(0, -(PIOVERTWO - 1e-6))!
-		const antiLon = max.sublunar.x > 0 ? max.sublunar.x - Math.PI : max.sublunar.x + Math.PI
+		const antiLon = max.sublunar.x > 0 ? max.sublunar.x - PI : max.sublunar.x + PI
 		const anti = projection.project(antiLon, -max.sublunar.y)!
 
 		expect(pointInPath(northPole.x, northPole.y, above)).toBe(true)

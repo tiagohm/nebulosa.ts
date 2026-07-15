@@ -37,7 +37,7 @@ export interface MosaicOverlap {
 
 // Describes an equatorial coordinate in one caller-selected celestial frame.
 export interface MosaicCoordinate {
-	// Right ascension in radians, normalized to [0, 2 * PI).
+	// Right ascension in radians, normalized to [0, TAU).
 	readonly ra: Angle
 
 	// Declination in radians, constrained to [-PI / 2, PI / 2].

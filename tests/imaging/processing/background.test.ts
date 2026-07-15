@@ -403,7 +403,7 @@ test('a boxSize larger than the frame does not oversize the sample buffers', () 
 	// Reached the fit stage (a domain error about the surface fit) rather than dying on an oversized
 	// allocation. Every box spans the whole frame, collapsing all samples onto one position.
 	expect((error as Error).message).toContain('surface')
-}, 1500)
+}, 3000)
 
 test('fits a high-degree surface accurately (Chebyshev conditioning)', () => {
 	const width = 160

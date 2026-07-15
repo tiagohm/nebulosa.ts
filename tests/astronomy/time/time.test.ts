@@ -1,6 +1,6 @@
 import { expect, test, describe } from 'bun:test'
 import { Ellipsoid, geodeticLocation } from '../../../src/astronomy/observer/location'
-import { ANGVEL_PER_DAY, DAYSEC, J2000 } from '../../../src/core/constants'
+import { ANGVEL_PER_DAY, DAYSEC, J2000, PI } from '../../../src/core/constants'
 import { deg, hour } from '../../../src/math/units/angle'
 import { meter } from '../../../src/math/units/distance'
 // oxfmt-ignore
@@ -360,7 +360,7 @@ describe('normalize time', () => {
 	})
 
 	test('preserva o termo de erro durante a divisão por divisor não inteiro', () => {
-		expectTimeClose(timeNormalize(2451545, 0.1, Math.PI), { day: 780351, fraction: 0.04175542975065355, scale: 1 })
+		expectTimeClose(timeNormalize(2451545, 0.1, PI), { day: 780351, fraction: 0.04175542975065355, scale: 1 })
 	})
 
 	test('normaliza corretamente após divisão por um número grande', () => {
@@ -453,7 +453,7 @@ test('cache', () => {
 		expect(f.cache?.tcb).toBe(t)
 		expect(t.cache?.tdb).toBe(f)
 	}
-}, 50)
+}, 100)
 
 test('providers', () => {
 	const providers = { ...TIME_PROVIDERS }

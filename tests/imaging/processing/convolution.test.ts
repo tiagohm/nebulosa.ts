@@ -1,11 +1,146 @@
 import { expect, test } from 'bun:test'
+import type { ImageMetadata, ImageRawType } from '../../../src/imaging/model/types'
 import { clone } from '../../../src/imaging/processing/arithmetic'
-import { blur, convolution, convolutionKernel, edges, emboss, gaussianBlur, mean, sharpen } from '../../../src/imaging/processing/convolution'
+import { blur, convolution, convolutionKernel, edges, emboss, gaussianBlur, mean, separableSmoothingKernel, separableSmoothing, sharpen } from '../../../src/imaging/processing/convolution'
 import { expectImageValues, makeImage, pixelOffset } from './util'
+
+// Applies the separable kernel as one direct 2D convolution for an independent small-image reference.
+function directSeparableReference(source: ImageRawType, metadata: ImageMetadata, weights: Readonly<Int8Array>, divisor: number, step: number, dynamicDivisorForEdges: boolean) {
+	const { width, height, channels, stride } = metadata
+	const radius = weights.length >>> 1
+	const output = new Float64Array(source.length)
+
+	for (let y = 0; y < height; y++) {
+		for (let x = 0; x < width; x++) {
+			for (let channel = 0; channel < channels; channel++) {
+				let sum = 0
+				let effectiveDivisor = dynamicDivisorForEdges ? 0 : divisor * divisor
+
+				for (let tapY = 0; tapY < weights.length; tapY++) {
+					const sampleY = y + (tapY - radius) * step
+					if (sampleY < 0 || sampleY >= height) continue
+
+					for (let tapX = 0; tapX < weights.length; tapX++) {
+						const sampleX = x + (tapX - radius) * step
+						if (sampleX < 0 || sampleX >= width) continue
+
+						const weight = weights[tapY] * weights[tapX]
+						sum += weight * source[sampleY * stride + sampleX * channels + channel]
+						if (dynamicDivisorForEdges) effectiveDivisor += weight
+					}
+				}
+
+				if (effectiveDivisor === 0) effectiveDivisor = divisor * divisor
+				output[y * stride + x * channels + channel] = sum / effectiveDivisor
+			}
+		}
+	}
+
+	return output
+}
+
+// Runs raw separable convolution with fresh same-precision output and intermediate buffers.
+function runSeparable(source: ImageRawType, metadata: ImageMetadata, step: number, dynamicDivisorForEdges: boolean = true) {
+	const output = source instanceof Float64Array ? new Float64Array(source.length) : new Float32Array(source.length)
+	const intermediate = source instanceof Float64Array ? new Float64Array(source.length) : new Float32Array(source.length)
+	const kernel = separableSmoothingKernel(new Int8Array([1, 4, 6, 4, 1]), 16)
+	separableSmoothing(source, output, intermediate, metadata, kernel, { step, dynamicDivisorForEdges })
+	return output
+}
 
 test('convolutionKernel infers the divisor and validates the kernel size', () => {
 	expect(convolutionKernel(new Int8Array([1, 2, 3, 4]), 2).divisor).toBe(10)
 	expect(() => convolutionKernel(new Int8Array([1, 2, 3]), 2, 2)).toThrow('invalid kernel size')
+})
+
+test('separableSmoothingKernel validates odd non-negative smoothing kernels and divisors', () => {
+	expect(separableSmoothingKernel(new Int8Array([1, 2, 1])).divisor).toBe(4)
+	expect(() => separableSmoothingKernel(new Int8Array([1, 1]))).toThrow('length must be odd')
+	expect(() => separableSmoothingKernel(new Int8Array([1]))).toThrow('at least 3')
+	expect(() => separableSmoothingKernel([1, Number.NaN, 1])).toThrow('value must be finite')
+	expect(() => separableSmoothingKernel([1, -1, 1])).toThrow('value must be non-negative')
+	expect(() => separableSmoothingKernel(new Int8Array([1, 2, 1]), 0)).toThrow('value must be positive')
+	expect(() => separableSmoothingKernel(new Int8Array([1, 2, 1]), Number.POSITIVE_INFINITY)).toThrow('value must be finite')
+})
+
+test('separableSmoothing validates steps, layouts, precision, and buffer aliases', () => {
+	const metadata = makeImage(3, 2, 1, new Float32Array(6)).metadata
+	const source = new Float32Array(6)
+	const output = new Float32Array(6)
+	const intermediate = new Float32Array(6)
+	const kernel = separableSmoothingKernel(new Int8Array([1, 2, 1]))
+	const wideKernel = separableSmoothingKernel(new Int8Array([1, 1, 1, 1, 1]))
+
+	expect(() => separableSmoothing(source, output, intermediate, metadata, kernel, { step: 0 })).toThrow('positive integer')
+	expect(() => separableSmoothing(source, output, intermediate, metadata, kernel, { step: 1.5 })).toThrow('positive integer')
+	expect(() => separableSmoothing(source, output, intermediate, metadata, kernel, { step: Number.POSITIVE_INFINITY })).toThrow('positive integer')
+	expect(() => separableSmoothing(source, output, intermediate, metadata, wideKernel, { step: Number.MAX_VALUE })).toThrow('effective radius must be finite')
+	expect(() => separableSmoothing(source.subarray(0, 5), output, intermediate, metadata, kernel)).toThrow('match image metadata')
+	expect(() => separableSmoothing(source, new Float64Array(6), intermediate, metadata, kernel)).toThrow('same precision')
+	expect(() => separableSmoothing(source, source, intermediate, metadata, kernel)).toThrow('must not alias')
+	expect(() => separableSmoothing(source, output, new Float32Array(output.buffer), metadata, kernel)).toThrow('must not alias')
+	expect(() => separableSmoothing(source, output, intermediate, { ...metadata, stride: 4 }, kernel)).toThrow('invalid image metadata')
+})
+
+test('separableSmoothing preserves mono and RGB constants at every border and large steps', () => {
+	for (const precision of [32, 64] as const) {
+		for (const channels of [1, 3] as const) {
+			const metadata = makeImage(4, 3, channels, new Float32Array(4 * 3 * channels)).metadata
+			const values = new Array<number>(metadata.stride * metadata.height)
+
+			for (let i = 0; i < values.length; i++) values[i] = channels === 1 ? 0.25 : [0.2, 0.5, 0.8][i % channels]
+
+			const source = precision === 64 ? new Float64Array(values) : new Float32Array(values)
+
+			for (const step of [1, 9]) {
+				const output = runSeparable(source, metadata, step)
+				expect(output.constructor).toBe(source.constructor)
+
+				for (let i = 0; i < output.length; i++) expect(output[i]).toBeCloseTo(values[i], precision === 64 ? 12 : 6)
+			}
+		}
+	}
+})
+
+test('separableSmoothing produces the B3-spline impulse response without expanded kernels', () => {
+	const image = makeImage(9, 9, 1, new Float32Array(81))
+	image.raw[pixelOffset(image, 4, 4)] = 1
+	const output = runSeparable(image.raw, image.metadata, 1)
+
+	expect(output[pixelOffset(image, 4, 4)]).toBeCloseTo(36 / 256, 8)
+	expect(output[pixelOffset(image, 5, 4)]).toBeCloseTo(24 / 256, 8)
+	expect(output[pixelOffset(image, 5, 5)]).toBeCloseTo(16 / 256, 8)
+})
+
+test('separableSmoothing dilates taps at exact multiples of the requested step', () => {
+	const image = makeImage(13, 13, 1, new Float32Array(169))
+	image.raw[pixelOffset(image, 6, 6)] = 1
+	const output = runSeparable(image.raw, image.metadata, 2)
+
+	expect(output[pixelOffset(image, 6, 6)]).toBeCloseTo(36 / 256, 8)
+	expect(output[pixelOffset(image, 7, 6)]).toBe(0)
+	expect(output[pixelOffset(image, 8, 6)]).toBeCloseTo(24 / 256, 8)
+	expect(output[pixelOffset(image, 8, 8)]).toBeCloseTo(16 / 256, 8)
+})
+
+test('separableSmoothing matches independent direct 2D references for edge modes and steps', () => {
+	const weights = new Int8Array([1, 4, 6, 4, 1])
+	const metadata = makeImage(5, 4, 3, new Float32Array(60)).metadata
+
+	for (const precision of [32, 64] as const) {
+		const values = new Array<number>(60)
+		for (let i = 0; i < values.length; i++) values[i] = ((i * 37 + 11) % 101) / 37 - 0.6
+		const source = precision === 64 ? new Float64Array(values) : new Float32Array(values)
+
+		for (const dynamicDivisorForEdges of [true, false]) {
+			for (const step of [1, 2, 7]) {
+				const expected = directSeparableReference(source, metadata, weights, 16, step, dynamicDivisorForEdges)
+				const output = runSeparable(source, metadata, step, dynamicDivisorForEdges)
+
+				for (let i = 0; i < output.length; i++) expect(Math.abs(output[i] - expected[i])).toBeLessThanOrEqual(precision === 64 ? 1e-12 : 1e-6)
+			}
+		}
+	}
 })
 
 test('convolution keeps the image unchanged with an identity kernel', () => {

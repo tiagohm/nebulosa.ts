@@ -1,10 +1,9 @@
-import { medianOf, STANDARD_DEVIATION_SCALE } from '../../core/util'
-import { clamp } from '../../math/numerical/math'
-import type { Image, ImageMetadata, ImageRawType } from '../model/types'
+import { makeImageRawTypedArray, type Image, type ImageMetadata, type ImageRawType } from '../model/types'
+import { multiscaleDetailScales, multiscaleNeedsDenoise, resolveMultiscaleLayer, resolveMultiscaleLayers, resolveMultiscaleResidualGain, type MultiscaleTransformLayerOptions, type MultiscaleTransformOptions } from './multiscale'
 
 // Multiscale median transform (MMT) similar to PixInsight's: decomposes the image into dyadic detail
 // layers using a quantized sliding-median filter, applies per-layer threshold/amount/bias, and
-// reconstructs in place on the normalized [0, 1] raw buffer.
+// reconstructs in place without clamping the raw buffer.
 
 // Quantization bit depth of the sliding-median histogram used by the multiscale median transform.
 const MMT_MEDIAN_HISTOGRAM_BITS = 14
@@ -20,24 +19,10 @@ const MMT_MEDIAN_HISTOGRAM_GROUP_SIZE = 1 << MMT_MEDIAN_HISTOGRAM_GROUP_BITS
 const MMT_MEDIAN_HISTOGRAM_GROUP_COUNT = MMT_MEDIAN_HISTOGRAM_SIZE >> MMT_MEDIAN_HISTOGRAM_GROUP_BITS
 
 // Per-detail-layer options of the multiscale median transform.
-export interface MultiscaleMedianTransformLayerOptions {
-	// Coefficient threshold below which detail is suppressed.
-	readonly threshold: number
-	// Gain applied to the layer's detail coefficients.
-	readonly amount: number
-	// Bias added to the layer's detail coefficients.
-	readonly bias: number
-}
+export interface MultiscaleMedianTransformLayerOptions extends MultiscaleTransformLayerOptions {}
 
 // Options for the multiscale median transform (wavelet-like detail manipulation).
-export interface MultiscaleMedianTransformOptions {
-	// Number of decomposition layers.
-	readonly layers: number
-	// Per-layer overrides, indexed by detail layer.
-	readonly detailLayers: readonly Partial<MultiscaleMedianTransformLayerOptions>[]
-	// Gain applied to the residual (smoothest) layer.
-	readonly residualGain: number
-}
+export interface MultiscaleMedianTransformOptions extends MultiscaleTransformOptions {}
 
 // Default per-layer multiscale median transform options (no thresholding, unit gain).
 export const DEFAULT_MMT_LAYER_OPTIONS: Readonly<MultiscaleMedianTransformLayerOptions> = {
@@ -187,81 +172,49 @@ function multiscaleMedianFilter(raw: ImageRawType, output: ImageRawType, metadat
 	return output
 }
 
-// Estimates a robust per-channel coefficient scale for MMT thresholding.
-function multiscaleMedianScales(working: ImageRawType, filtered: ImageRawType, channels: number) {
-	const pixelCount = working.length / channels
-	const samples = new Float64Array(pixelCount)
-	const scales = new Float64Array(channels)
-
-	for (let channel = 0; channel < channels; channel++) {
-		let sumSquares = 0
-
-		for (let i = channel, k = 0; i < working.length; i += channels, k++) {
-			const value = working[i] - filtered[i]
-			const absolute = Math.abs(value)
-			samples[k] = absolute
-			sumSquares += value * value
-		}
-
-		let scale = STANDARD_DEVIATION_SCALE * medianOf(samples.sort(), pixelCount)
-
-		// Sparse detail layers can have zero MAD, so fall back to RMS.
-		if (!(scale > 0)) {
-			scale = Math.sqrt(sumSquares / pixelCount)
-		}
-
-		scales[channel] = scale
-	}
-
-	return scales
-}
-
 // Applies a redundant dyadic multiscale median transform similar to PixInsight's MMT.
 export function multiscaleMedianTransform(image: Image, options: Partial<MultiscaleMedianTransformOptions> = DEFAULT_MMT_OPTIONS): Image {
-	const resolvedLayers = options.layers ?? DEFAULT_MMT_OPTIONS.layers
-	const layers = Number.isFinite(resolvedLayers) ? Math.max(0, Math.trunc(resolvedLayers)) : DEFAULT_MMT_OPTIONS.layers
+	const layers = resolveMultiscaleLayers(options.layers, DEFAULT_MMT_OPTIONS.layers)
 
 	if (layers === 0) return image
 
 	const detailLayers = options.detailLayers ?? DEFAULT_MMT_OPTIONS.detailLayers
-	const resolvedResidualGain = options.residualGain ?? DEFAULT_MMT_OPTIONS.residualGain
-	const residualGain = Number.isFinite(resolvedResidualGain) ? resolvedResidualGain : DEFAULT_MMT_OPTIONS.residualGain
+	const residualGain = resolveMultiscaleResidualGain(options.residualGain, DEFAULT_MMT_OPTIONS.residualGain)
 	const { raw, metadata } = image
 	const n = raw.length
-	const working = raw.slice()
-	const filtered = raw instanceof Float64Array ? new Float64Array(n) : new Float32Array(n)
+	let working: ImageRawType = raw.slice()
+	let filtered = makeImageRawTypedArray(raw, n)
+	const denoise = multiscaleNeedsDenoise(detailLayers, layers, DEFAULT_MMT_LAYER_OPTIONS)
+	const samples = denoise ? new Float64Array(metadata.pixelCount) : undefined
+	const scales = denoise ? new Float64Array(metadata.channels) : undefined
 
 	raw.fill(0)
 
 	for (let layer = 0; layer < layers; layer++) {
-		const radius = 1 << layer
-		const detailLayer = detailLayers[layer]
-		const resolvedThreshold = detailLayer?.threshold ?? DEFAULT_MMT_LAYER_OPTIONS.threshold
-		const threshold = Number.isFinite(resolvedThreshold) ? Math.max(0, resolvedThreshold) : DEFAULT_MMT_LAYER_OPTIONS.threshold
-		const resolvedAmount = detailLayer?.amount ?? DEFAULT_MMT_LAYER_OPTIONS.amount
-		const amount = Number.isFinite(resolvedAmount) ? clamp(resolvedAmount, 0, 1) : DEFAULT_MMT_LAYER_OPTIONS.amount
-		const resolvedBias = detailLayer?.bias ?? DEFAULT_MMT_LAYER_OPTIONS.bias
-		const bias = Number.isFinite(resolvedBias) ? resolvedBias : DEFAULT_MMT_LAYER_OPTIONS.bias
-		const gain = 1 + bias
+		const radius = 2 ** layer
+		const detail = resolveMultiscaleLayer(detailLayers[layer], DEFAULT_MMT_LAYER_OPTIONS)
 
 		multiscaleMedianFilter(working, filtered, metadata, radius)
 
-		const scales = threshold > 0 && amount > 0 ? multiscaleMedianScales(working, filtered, metadata.channels) : undefined
+		const channelScales = detail.threshold > 0 && detail.amount > 0 ? multiscaleDetailScales(working, filtered, metadata.channels, samples!, scales!) : undefined
 
 		for (let i = 0; i < n; i++) {
 			let value = working[i] - filtered[i]
 
-			if (scales !== undefined) {
-				const limit = threshold * scales[i % metadata.channels]
+			if (channelScales !== undefined) {
+				const limit = detail.threshold * channelScales[i % metadata.channels]
 
 				if (Math.abs(value) <= limit) {
-					value *= 1 - amount
+					value *= 1 - detail.amount
 				}
 			}
 
-			raw[i] += value * gain
-			working[i] = filtered[i]
+			raw[i] += value * detail.gain
 		}
+
+		const swap = working
+		working = filtered
+		filtered = swap
 	}
 
 	if (residualGain !== 0) {

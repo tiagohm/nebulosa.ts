@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { PI, PIOVERFOUR, PIOVERTWO, TAU } from '../../../src/core/constants'
 import type { NumberArray } from '../../../src/math/numerical/math'
 import { bisection, brentMinimize, brentRoot, coordinateDescent, falsePositionRoot, goldenSectionSearch, levenbergMarquardt, nelderMead, powell, secantRoot } from '../../../src/math/numerical/optimization'
 
@@ -141,6 +142,25 @@ describe('Levenberg-Marquardt optimization', () => {
 		}
 	})
 
+	test('weighted line suppresses a zero-weight outlier', () => {
+		function line(x: number, [a, b]: NumberArray) {
+			return a * x + b
+		}
+
+		const result = levenbergMarquardt([0, 1, 2, 3], [1, 3, 5, 100], line, [1, 0], { weights: [1, 1, 1, 0] })
+
+		expect(result[0]).toBeCloseTo(2, 7)
+		expect(result[1]).toBeCloseTo(1, 7)
+	})
+
+	test('rejects invalid sample weights', () => {
+		const line = (x: number, [a, b]: NumberArray) => a * x + b
+
+		expect(() => levenbergMarquardt([0, 1], [0, 1], line, [1, 0], { weights: [1] })).toThrow(RangeError)
+		expect(() => levenbergMarquardt([0, 1], [0, 1], line, [1, 0], { weights: [1, -1] })).toThrow(RangeError)
+		expect(() => levenbergMarquardt([0, 1, 2], [1, 3, 5], line, [1, 0], { weights: [1, 0, 0] })).toThrow('effective samples must be at least the number of model parameters')
+	})
+
 	test('quadratic', () => {
 		function quadratic(x: number, [a, b, c]: NumberArray) {
 			return a * x * x + b * x + c
@@ -200,7 +220,7 @@ describe('Levenberg-Marquardt optimization', () => {
 			return a * Math.sin(b * x + c)
 		}
 
-		const x = [0, Math.PI / 2, Math.PI, (3 * Math.PI) / 2, 2 * Math.PI]
+		const x = [0, PIOVERTWO, PI, (3 * PI) / 2, TAU]
 		const y = [0, 1, 0, -1, 0]
 		const result = levenbergMarquardt(x, y, sine, [1, 1, 0])
 
@@ -208,7 +228,7 @@ describe('Levenberg-Marquardt optimization', () => {
 		expect(result[1]).toBeCloseTo(1, 8)
 		expect(result[2]).toBeCloseTo(0, 8)
 
-		expect(sine(Math.PI / 4, result)).toBeCloseTo(0.7071067811865475, 8)
+		expect(sine(PIOVERFOUR, result)).toBeCloseTo(0.7071067811865475, 8)
 
 		for (let i = 0; i < x.length; i++) {
 			expect(sine(x[i], result)).toBeCloseTo(y[i], 8)

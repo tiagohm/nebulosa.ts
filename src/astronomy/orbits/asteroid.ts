@@ -1,4 +1,4 @@
-import { ECLIPTIC_J2000_MATRIX, GM_SUN_PITJEVA_2005, TAU } from '../../core/constants'
+import { ECLIPTIC_J2000_MATRIX, GM_SUN_PITJEVA_2005, PI, TAU } from '../../core/constants'
 import type { Writable } from '../../core/types'
 import { type Mat3, matMulVec, matTranspose } from '../../math/linear-algebra/mat3'
 import { type MutVec3, type Vec3, vecAngle, vecCross, vecCrossLength, vecDivScalar, vecDot, vecLength, vecMinus, vecMulScalar, vecNormalize, vecPlus } from '../../math/linear-algebra/vec3'
@@ -645,7 +645,7 @@ export function eccentricAnomalyFromMean(M: Angle, e: number): Angle {
 		// Solve on the wrapped anomaly for robust convergence, then restore the revolution of M.
 		const m = normalizePI(M)
 		// Near-parabolic ellipses converge faster starting from the apsis side of the wrapped anomaly.
-		let E = e < 0.8 ? m : m < 0 ? -Math.PI : Math.PI
+		let E = e < 0.8 ? m : m < 0 ? -PI : PI
 		for (let i = 0; i < 30; i++) {
 			const delta = (E - e * Math.sin(E) - m) / (1 - e * Math.cos(E))
 			E -= delta

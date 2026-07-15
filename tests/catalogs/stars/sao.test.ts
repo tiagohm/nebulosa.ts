@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test'
 import fs from 'fs/promises'
 import { readSaoCatalog, SaoCatalog, type SaoCatalogEntry } from '../../../src/catalogs/stars/sao'
 import { fileHandleSource } from '../../../src/io/io'
-import { deg, formatDEC, formatRA, parseAngle } from '../../../src/math/units/angle'
+import { deg, formatDEC, formatRA, parseAngle, toMas } from '../../../src/math/units/angle'
 import { downloadPerTag } from '../../download'
 
 await downloadPerTag('sao')
@@ -34,12 +34,11 @@ test('read', async () => {
 	// SAO stores RA proper motion as dα/dt (no cosδ factor), the convention ERFA expects, so it must not
 	// be divided by cosδ. Lock this in with Groombridge 1830 (SAO 62738): stored dα/dt ≈ 5080.5 mas/yr,
 	// and dα/dt·cosδ ≈ 3999 mas/yr reproduces the catalogued μα·cosδ (SIMBAD ≈ 4003.7 mas/yr).
-	const RAD2MAS = (180 / Math.PI) * 3600 * 1000
 	const groombridge = entries[62737]
 	expect(groombridge.id).toBe(62738)
-	expect(groombridge.pmRA! * RAD2MAS).toBeCloseTo(5080.5, 0)
-	expect(groombridge.pmDEC! * RAD2MAS).toBeCloseTo(-5806, 0)
-	expect(groombridge.pmRA! * Math.cos(groombridge.declination) * RAD2MAS).toBeCloseTo(3999.25, 0)
+	expect(toMas(groombridge.pmRA!)).toBeCloseTo(5080.5, 0)
+	expect(toMas(groombridge.pmDEC!)).toBeCloseTo(-5806, 0)
+	expect(toMas(groombridge.pmRA! * Math.cos(groombridge.declination))).toBeCloseTo(3999.25, 0)
 
 	const catalog = new SaoCatalog()
 	catalog.addMany(entries)

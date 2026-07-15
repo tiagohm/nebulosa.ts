@@ -121,6 +121,35 @@ test('measure star photometry from image aperture', () => {
 	expect(measureStarPhotometry(image, x, y, 0)).toEqual([0, 0, 0, 0])
 })
 
+test('detect stars measures round and elongated shapes from central moments', () => {
+	const width = 64
+	const height = 64
+	const x = width / 2
+	const y = height / 2
+
+	function imageWithGaussian(sigmaX: number, sigmaY: number): Image {
+		const raw = new Float32Array(width * height).fill(0.05)
+		for (let py = 0; py < height; py++) {
+			for (let px = 0; px < width; px++) {
+				const dx = px - x
+				const dy = py - y
+				raw[py * width + px] += 0.8 * Math.exp(-0.5 * ((dx * dx) / (sigmaX * sigmaX) + (dy * dy) / (sigmaY * sigmaY)))
+			}
+		}
+		return { raw, header: {}, metadata: { width, height, channels: 1, pixelCount: width * height, pixelSizeInBytes: 4, bitpix: -32, stride: width, strideInBytes: width * 4, bayer: undefined } }
+	}
+
+	const round = detectStars(imageWithGaussian(1.5, 1.5), { maxStars: 1 })[0]
+	const elongated = detectStars(imageWithGaussian(2.4, 1), { maxStars: 1 })[0]
+
+	expect(round).toBeDefined()
+	expect(elongated).toBeDefined()
+	expect(round.eccentricity).toBeLessThan(0.1)
+	expect(round.elongation).toBeCloseTo(1, 1)
+	expect(elongated.eccentricity).toBeGreaterThan(0.5)
+	expect(elongated.elongation).toBeGreaterThan(1.5)
+})
+
 test('detect stars finds nothing in a flat image', () => {
 	const width = 128
 	const height = 128

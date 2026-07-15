@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import { equatorialToHorizontal } from '../../../src/astronomy/coordinates/coordinate'
 import { localSiderealTime } from '../../../src/astronomy/observer/location'
-import { ASEC2RAD } from '../../../src/core/constants'
+import { ASEC2RAD, PI } from '../../../src/core/constants'
 import { clamp, lerp, type NumberArray } from '../../../src/math/numerical/math'
 import { type Angle, arcmin, deg, hour, normalizeAngle } from '../../../src/math/units/angle'
 // oxfmt-ignore
@@ -267,7 +267,7 @@ export function generateSyntheticPointingSamples(options: SyntheticPointingOptio
 	const latitude = options.latitude ?? deg(-23)
 	const longitude = options.longitude ?? deg(-46)
 	const lst = time ? localSiderealTime(time, longitude, true) : 0
-	const hourAngleRange = options.hourAngleRange ?? ([-Math.PI * 0.75, Math.PI * 0.75] as const)
+	const hourAngleRange = options.hourAngleRange ?? ([-PI * 0.75, PI * 0.75] as const)
 	const declinationRange = options.declinationRange ?? ([deg(-25), deg(70)] as const)
 	const coefficientsDx = normalizeSyntheticCoefficients(featureNames.length, options.empiricalCoefficientsDx)
 	const coefficientsDy = normalizeSyntheticCoefficients(featureNames.length, options.empiricalCoefficientsDy, 0.5)

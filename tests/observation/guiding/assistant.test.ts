@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test'
+import { PIOVERTWO } from '../../../src/core/constants'
 import { GuidingAssistant, type GuidingAssistantResult } from '../../../src/observation/guiding/assistant'
 import { GuiderClient } from '../../../src/observation/guiding/client'
 import type { GuideCommand, GuideFrame, GuideStar } from '../../../src/observation/guiding/guider'
@@ -672,7 +673,7 @@ test('returns no polar alignment estimate near the celestial pole', () => {
 			[60000, 0, 2],
 			[120000, 0, 4],
 		],
-		{ imageScale: 1, declination: Math.PI / 2 },
+		{ imageScale: 1, declination: PIOVERTWO },
 	)
 
 	expect(result.motion.dec.driftRatePxPerMinute).toBeCloseTo(2, 8)

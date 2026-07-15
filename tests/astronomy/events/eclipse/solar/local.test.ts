@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { nearestSolarEclipse } from '../../../../../src/astronomy/bodies/sun'
 import { computePolynomialBesselianElements, type PolynomialBesselianElements } from '../../../../../src/astronomy/events/eclipse/solar/map'
-import { ASEC2RAD, PI, RAD2DEG, TAU } from '../../../../../src/core/constants'
+import { ASEC2RAD, PI, PIOVERFOUR, PIOVERTWO, RAD2DEG, TAU } from '../../../../../src/core/constants'
 import { deg, normalizeAngle } from '../../../../../src/math/units/angle'
 // oxfmt-ignore
 import { computeLocalSolarEclipseViewGeometry, buildLocalViewHorizonGeometry, computeGreatestDurationCircumstances, computeGreatestEclipseCircumstances, computeLocalSolarEclipseCircumstances, findLocalContactRoots, findLocalMaximumTime, listLocalSolarEclipses, type LocalFundamentalState, type LocalSolarEclipseCircumstancesOptions, type LocalSolarEclipseEvent, type LocalSolarEclipseViewOptions, type LocalSolarEclipseCircumstances, } from '../../../../../src/astronomy/events/eclipse/solar/local'
@@ -405,7 +405,7 @@ describe('local view horizon geometry', () => {
 		const flatLine = flat.find((s) => s.role === 'horizonLine') as Extract<(typeof flat)[number], { kind: 'line' }>
 		expect(flatLine.y1).toBeCloseTo(flatLine.y2, 9)
 		// q = PI/2: the zenith points sideways, so the horizon is vertical.
-		const vertical = buildLocalViewHorizonGeometry(horizonEvent(0, PI / 2), viewOptions({ solarRadiusPx, height, orientationMode: 'north' }))
+		const vertical = buildLocalViewHorizonGeometry(horizonEvent(0, PIOVERTWO), viewOptions({ solarRadiusPx, height, orientationMode: 'north' }))
 		const verticalLine = vertical.find((s) => s.role === 'horizonLine') as Extract<(typeof vertical)[number], { kind: 'line' }>
 		expect(verticalLine.x1).toBeCloseTo(verticalLine.x2, 9)
 	})
@@ -432,7 +432,7 @@ describe('local view horizon geometry', () => {
 		const width = 450
 		const slope = (line: { x1: number; y1: number; x2: number; y2: number }) => (line.y2 - line.y1) / (line.x2 - line.x1)
 		const lineFor = (handedness: 'eastRight' | 'eastLeft') => {
-			const shapes = buildLocalViewHorizonGeometry(horizonEvent(0, PI / 4), viewOptions({ width, solarRadiusPx, height, orientationMode: 'north', handedness }))
+			const shapes = buildLocalViewHorizonGeometry(horizonEvent(0, PIOVERFOUR), viewOptions({ width, solarRadiusPx, height, orientationMode: 'north', handedness }))
 			return shapes.find((s) => s.role === 'horizonLine') as Extract<(typeof shapes)[number], { kind: 'line' }>
 		}
 		const right = lineFor('eastRight')
@@ -447,7 +447,7 @@ describe('local view horizon geometry', () => {
 
 	test('north horizon offset follows the rotated zenith normal for a non-zero altitude', () => {
 		const width = 450
-		const q = PI / 4
+		const q = PIOVERFOUR
 		// Altitude of exactly one solar angular radius should push the horizon one solar pixel radius away from
 		// the zenith, measured along the rotated zenith normal (not just vertically as in the zenith frame).
 		const shapes = buildLocalViewHorizonGeometry(horizonEvent(solarAngularRadius, q), viewOptions({ width, height, solarRadiusPx, orientationMode: 'north' }))

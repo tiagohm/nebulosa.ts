@@ -1,17 +1,18 @@
 import { fitSimilarityTransform, matchStars, type SimilarityTransform, type StarMatchingConfig, type StarMatchingResult } from '../../astrometry/matching/star.matching'
 import type { PlateSolution } from '../../astrometry/solvers/platesolver'
 import { tanProject, tanUnproject } from '../../astrometry/wcs/fits.wcs'
-import { cirsToObserved, DEFAULT_REFRACTION_PARAMETERS, observedToCirs, type RefractionParameters, refractedAltitude } from '../../astronomy/coordinates/astrometry'
+import { cirsToObserved, DEFAULT_REFRACTION_PARAMETERS, type RefractionParameters } from '../../astronomy/coordinates/astrometry'
 import { angularDistance } from '../../astronomy/coordinates/coordinate'
 import { eraC2s, eraS2c } from '../../astronomy/coordinates/erfa/erfa'
 import type { GeographicPosition } from '../../astronomy/observer/location'
 import { cirsRotationMatrix, type Time } from '../../astronomy/time/time'
-import { ASEC2RAD, PI } from '../../core/constants'
+import { ASEC2RAD } from '../../core/constants'
 import type { DetectedStar } from '../../imaging/stars/detector'
-import { matMulVec, matTransposeMulVec } from '../../math/linear-algebra/mat3'
-import { type Vec3, vecAngle, vecDot, vecMinus, vecMulScalar, vecNormalizeMut } from '../../math/linear-algebra/vec3'
+import { matMulVec } from '../../math/linear-algebra/mat3'
+import { type Vec3, vecAngle, vecDot, vecMinus, vecMulScalar } from '../../math/linear-algebra/vec3'
 import { euclideanDistance, type Point } from '../../math/numerical/geometry'
 import { type Angle, normalizePI } from '../../math/units/angle'
+import { celestialPoleVector } from './polaralignment.util'
 
 // iPolar-style camera-based polar alignment driven by plate solutions. The user captures two frames
 // separated by an RA-only rotation; the mount's rotation axis is recovered as the image-space fixed
@@ -272,15 +273,6 @@ export function projectGuidePoint(point: Point, width: number, height: number, m
 		arrow: { x: dx * invLength, y: dy * invLength },
 		unclamped: { x: point.x, y: point.y },
 	}
-}
-
-// Computes the celestial pole direction in the same inertial J2000/ICRS frame used by the plate solver.
-export function celestialPoleVector(time: Time, location: GeographicPosition = time.location!, refraction: RefractionParameters | false = DEFAULT_REFRACTION_PARAMETERS): Vec3 {
-	const azimuth = location.latitude >= 0 ? 0 : PI
-	const trueAltitude = Math.abs(location.latitude)
-	const altitude = refraction === false ? trueAltitude : refractedAltitude(trueAltitude, refraction)
-	const [rightAscension, declination] = observedToCirs(azimuth, altitude, time, refraction, location)
-	return vecNormalizeMut(matTransposeMulVec(cirsRotationMatrix(time), eraS2c(rightAscension, declination)))
 }
 
 // Splits the small polar error into altitude and azimuth tangent components in the current topocentric frame.

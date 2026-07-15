@@ -1,12 +1,14 @@
-import { type AffineTransform, invertTransform, matchStars, type SimilarityTransform, type StarMatchingConfig, type StarMatchingResult } from '../../astrometry/matching/star.matching'
+import type { StarMatchingConfig } from '../../astrometry/matching/star.matching'
 import { meanOf, medianAbsoluteDeviationOf, medianOf } from '../../core/util'
 import { Bitpix, type FitsHeader } from '../../io/formats/fits/fits'
 import { bitpixInBytes } from '../../io/formats/fits/util'
 import type { Rect, Size } from '../../math/numerical/geometry'
 import { clamp } from '../../math/numerical/math'
-import type { Image, ImageRawType } from '../model/types'
+import type { Image, ImageRawPrecision, ImageRawType } from '../model/types'
 import type { DetectedStar } from '../stars/detector'
 import type { SigmaClipCenterMethod, SigmaClipDispersionMethod } from './computation'
+import { type ImageInterpolationMode, type ImageRegistrationFailureReason, type ImageRegistrationSuccess, registerImage } from './registration'
+import { measureSubframeQuality, type SubframeQualityMetrics } from './subframe.selector'
 
 // Image stacking pipeline: registers a set of frames to a reference using star matching, normalizes
 // and weights them, then combines the aligned pixels with a selectable rejection method (average,
@@ -17,7 +19,7 @@ import type { SigmaClipCenterMethod, SigmaClipDispersionMethod } from './computa
 export type StackingCombinationMethod = 'sum' | 'average' | 'weighted-average' | 'median' | 'sigma-clip' | 'min-max-average' | 'winsorized-mean' | 'percentile-clip-average'
 
 // Resampling kernel used when warping a frame onto the reference grid.
-export type StackingInterpolationMode = 'nearest' | 'bilinear' | 'bicubic'
+export type StackingInterpolationMode = ImageInterpolationMode
 
 // Output extent: the union (full coverage) or intersection (common area) of the frames.
 export type StackingCropMode = 'union' | 'intersection'
@@ -94,17 +96,7 @@ export interface StackingTransformSummary {
 }
 
 // Quality metrics estimated for one frame.
-export interface StackingFrameQualityMetrics {
-	readonly starCount: number
-	// Median signal-to-noise of the detected stars.
-	readonly medianSNR: number
-	// Median half-flux diameter (focus sharpness), pixels.
-	readonly medianHFD: number
-	// Combined quality score used for weighting/reference selection.
-	readonly qualityScore: number
-	// Estimated sky background level, 0..1.
-	readonly estimatedBackground: number
-}
+export type StackingFrameQualityMetrics = SubframeQualityMetrics
 
 // Per-channel normalization scales/offsets and the resulting frame weight.
 export interface FrameNormalizationSummary {
@@ -192,7 +184,7 @@ export interface StackingOptions {
 	readonly maxScale?: number
 	readonly maxShear?: number
 	// Accumulator precision for the combination.
-	readonly samplePrecision?: 32 | 64
+	readonly samplePrecision?: ImageRawPrecision
 	readonly matchStarsConfig?: StarMatchingConfig
 }
 
@@ -204,17 +196,6 @@ interface ResolvedStackingOptions extends Required<Omit<StackingOptions, 'sigmaC
 	readonly percentileClip: Required<PercentileRangeOptions>
 	readonly batchReference: Required<BatchReferenceSelection>
 	readonly matchStarsConfig: StarMatchingConfig
-}
-
-// Flattened 2x3 affine transform coefficients (row-major) plus its summary.
-interface ResolvedTransform {
-	readonly m00: number
-	readonly m01: number
-	readonly tx: number
-	readonly m10: number
-	readonly m11: number
-	readonly ty: number
-	readonly summary: StackingTransformSummary
 }
 
 // One frame after warping onto the reference grid: its resampled pixels, validity, and per-frame metadata.
@@ -261,14 +242,12 @@ const DEFAULT_STACKING_OPTIONS: ResolvedStackingOptions = {
 	minScale: 0.5,
 	maxScale: 2,
 	maxShear: 0.5,
-	samplePrecision: 32,
+	samplePrecision: 'auto',
 	matchStarsConfig: {},
 }
 
 // Small epsilon guarding divisions and degeneracy tests.
 const FLOAT_EPSILON = 1e-12
-// Maximum pixels sampled when estimating a frame's background level.
-const BACKGROUND_SAMPLE_LIMIT = 1024
 // Maximum pixels sampled when estimating normalization scale/offset.
 const NORMALIZATION_SAMPLE_LIMIT = 8192
 
@@ -314,6 +293,39 @@ function resolveStackingOptions(options: StackingOptions = {}): ResolvedStacking
 		maxShear: Math.max(0, options.maxShear ?? DEFAULT_STACKING_OPTIONS.maxShear),
 		samplePrecision: options.samplePrecision ?? DEFAULT_STACKING_OPTIONS.samplePrecision,
 		matchStarsConfig: { ...DEFAULT_STACKING_OPTIONS.matchStarsConfig, ...options.matchStarsConfig },
+	}
+}
+
+// Projects stacking registration policy onto the reusable image-registration API.
+function registrationOptions(options: ResolvedStackingOptions, outputRaw?: ImageRawType, validityMask?: Uint8Array) {
+	return {
+		matchStarsConfig: options.matchStarsConfig,
+		interpolationMode: options.interpolationMode,
+		outputPrecision: options.samplePrecision,
+		outputRaw,
+		validityMask,
+		acceptance: {
+			minInliers: options.minAcceptedInliers,
+			maxRmsError: options.maxAcceptedTransformError,
+			maxTranslation: options.maxTranslation,
+			maxRotation: options.maxRotation,
+			minScale: options.minScale,
+			maxScale: options.maxScale,
+			maxShear: options.maxShear,
+		},
+	}
+}
+
+// Converts generic registration failures into the stacker's established diagnostics.
+function stackingRegistrationFailureReason(reason: ImageRegistrationFailureReason): FrameRejectionReason {
+	switch (reason) {
+		case 'invalid-reference-image':
+		case 'invalid-target-image':
+			return 'invalid-image-shape'
+		case 'channel-mismatch':
+			return 'channel-mismatch'
+		default:
+			return reason
 	}
 }
 
@@ -363,7 +375,7 @@ export class LiveStacker {
 	// Adds a single frame to the live stack when the method supports exact incremental updates.
 	add(frame: StackingFrame): FrameAcceptanceResult {
 		const frameIndex = this.#diagnostics.length
-		const quality = computeFrameQuality(frame)
+		const quality = measureSubframeQuality(frame)
 
 		if (!isImageShapeValid(frame.image)) return this.#reject(frameIndex, frame, quality, 'invalid-image-shape')
 		if (!isLiveCombinationMethodSupported(this.#options.combinationMethod)) return this.#reject(frameIndex, frame, quality, 'combination-method-not-supported-in-live-mode')
@@ -391,26 +403,19 @@ export class LiveStacker {
 		if (frame.stars.length < this.#options.minAcceptedStars) return this.#reject(frameIndex, frame, quality, 'too-few-stars')
 		if (this.#referenceFrame.stars.length < this.#options.minAcceptedStars) return this.#reject(frameIndex, frame, quality, 'reference-has-no-stars')
 
-		const matched = matchStars(this.#referenceFrame.stars, frame.stars, this.#options.matchStarsConfig)
-		if (!matched.success || matched.inlierCount < this.#options.minAcceptedInliers) return this.#reject(frameIndex, frame, quality, 'match-failed')
-		if ((matched.rmsError ?? Infinity) > this.#options.maxAcceptedTransformError) return this.#reject(frameIndex, frame, quality, 'transform-error-too-high')
+		this.#ensureWorkBuffers(this.#referenceFrame.image.metadata.pixelCount * this.#referenceFrame.image.metadata.channels, this.#referenceFrame.image.raw.BYTES_PER_ELEMENT)
+		const registration = registerImage(this.#referenceFrame, frame, registrationOptions(this.#options, this.#workRaw, this.#workMask))
+		if (!registration.success) return this.#reject(frameIndex, frame, quality, stackingRegistrationFailureReason(registration.reason))
 
-		const transform = resolveTransform(matched)
-		if (transform === undefined) return this.#reject(frameIndex, frame, quality, 'invalid-transform')
-		if (!transformWithinBounds(transform.summary, this.#options)) return this.#reject(frameIndex, frame, quality, 'transform-out-of-bounds')
-
-		const inverse = invertTransform(matched.model === 'affine' ? matched.affine! : matched.similarity!)
-		if (inverse === undefined) return this.#reject(frameIndex, frame, quality, 'invalid-transform')
-
-		this.#ensureWorkBuffers(this.#referenceFrame.image.metadata.pixelCount * this.#referenceFrame.image.metadata.channels)
-		const coveredPixels = alignIntoReference(frame.image, inverse, this.#referenceFrame.image.metadata.width, this.#referenceFrame.image.metadata.height, this.#options.interpolationMode, this.#workRaw!, this.#workMask!)
-		const overlapFraction = coveredPixels / Math.max(this.#workMask!.length, 1)
+		const { raw } = registration.image
+		const valid = registration.validityMask
+		const overlapFraction = registration.coveredPixels / Math.max(valid.length, 1)
 		if (overlapFraction <= 0) return this.#reject(frameIndex, frame, quality, 'no-overlap')
 		if (overlapFraction < this.#options.minOverlapFraction) return this.#reject(frameIndex, frame, quality, 'insufficient-overlap')
 
-		const normalization = computeNormalization(this.#workRaw!, this.#workMask!, frame, this.#referenceFrame, quality, this.#options)
-		applyNormalizationInPlace(this.#workRaw!, this.#workMask!, frame.image.metadata.channels, normalization.scales, normalization.offsets)
-		accumulateAlignedFrame(this.#referenceFrame.image.metadata.channels, this.#workRaw!, this.#workMask!, this.#sum!, this.#weightSum!, this.#coverageMap, this.#options.combinationMethod, normalization.weight)
+		const normalization = computeNormalization(raw, valid, frame, this.#referenceFrame, quality, this.#options)
+		applyNormalizationInPlace(raw, valid, frame.image.metadata.channels, normalization.scales, normalization.offsets)
+		accumulateAlignedFrame(this.#referenceFrame.image.metadata.channels, raw, valid, this.#sum!, this.#weightSum!, this.#coverageMap, this.#options.combinationMethod, normalization.weight)
 
 		this.#acceptedFrames++
 
@@ -420,7 +425,7 @@ export class LiveStacker {
 			frameId: frame.id,
 			overlapFraction,
 			quality,
-			transform: transform.summary,
+			transform: registration.transform.summary,
 			normalization,
 		}
 
@@ -458,9 +463,10 @@ export class LiveStacker {
 		return result
 	}
 
-	// Reuses alignment working buffers between live add calls.
-	#ensureWorkBuffers(length: number) {
-		const ImageType = this.#options.samplePrecision === 64 ? Float64Array : Float32Array
+	// Reuses registration output buffers between live add calls.
+	#ensureWorkBuffers(length: number, byteLength: number) {
+		const samplePrecision = this.#options.samplePrecision === 'auto' ? byteLength * 8 : this.#options.samplePrecision
+		const ImageType = samplePrecision === 64 ? Float64Array : Float32Array
 		if (this.#workRaw === undefined || this.#workRaw.length !== length) this.#workRaw = new ImageType(length)
 		if (this.#workMask === undefined || this.#workMask.length !== length / (this.#referenceFrame?.image.metadata.channels ?? 1)) this.#workMask = new Uint8Array(length / (this.#referenceFrame?.image.metadata.channels ?? 1))
 	}
@@ -470,7 +476,7 @@ export class LiveStacker {
 export function stackFrames(frames: readonly StackingFrame[], options: StackingOptions = {}): StackResult {
 	const resolved = resolveStackingOptions(options)
 	if (frames.length === 0) return emptyStackResult(resolved, -1, [])
-	const qualities = frames.map(computeFrameQuality)
+	const qualities = frames.map(measureSubframeQuality)
 	const referenceIndex = selectReferenceFrameIndex(frames, qualities, resolved)
 	const referenceFrame = frames[referenceIndex]
 
@@ -527,38 +533,14 @@ export function stackFrames(frames: readonly StackingFrame[], options: StackingO
 			continue
 		}
 
-		const matched = matchStars(referenceFrame.stars, frame.stars, resolved.matchStarsConfig)
+		const registration = registerImage(referenceFrame, frame, registrationOptions(resolved))
 
-		if (!matched.success || matched.inlierCount < resolved.minAcceptedInliers) {
-			diagnostics.push({ accepted: false, frameIndex: i, frameId: frame.id, overlapFraction: 0, quality, reason: 'match-failed' })
+		if (!registration.success) {
+			diagnostics.push({ accepted: false, frameIndex: i, frameId: frame.id, overlapFraction: 0, quality, reason: stackingRegistrationFailureReason(registration.reason) })
 			continue
 		}
 
-		if ((matched.rmsError ?? Infinity) > resolved.maxAcceptedTransformError) {
-			diagnostics.push({ accepted: false, frameIndex: i, frameId: frame.id, overlapFraction: 0, quality, reason: 'transform-error-too-high' })
-			continue
-		}
-
-		const transform = resolveTransform(matched)
-
-		if (transform === undefined) {
-			diagnostics.push({ accepted: false, frameIndex: i, frameId: frame.id, overlapFraction: 0, quality, reason: 'invalid-transform' })
-			continue
-		}
-
-		if (!transformWithinBounds(transform.summary, resolved)) {
-			diagnostics.push({ accepted: false, frameIndex: i, frameId: frame.id, overlapFraction: 0, quality, reason: 'transform-out-of-bounds' })
-			continue
-		}
-
-		const inverse = invertTransform(matched.model === 'affine' ? matched.affine! : matched.similarity!)
-
-		if (inverse === undefined) {
-			diagnostics.push({ accepted: false, frameIndex: i, frameId: frame.id, overlapFraction: 0, quality, reason: 'invalid-transform' })
-			continue
-		}
-
-		const aligned = createAlignedFrame(frame, i, quality, referenceFrame, inverse, resolved, transform.summary)
+		const aligned = createAlignedFrame(frame, i, quality, referenceFrame, registration, resolved)
 		const overlapFraction = aligned.coveredPixels / Math.max(aligned.valid.length, 1)
 
 		if (overlapFraction <= 0) {
@@ -567,7 +549,7 @@ export function stackFrames(frames: readonly StackingFrame[], options: StackingO
 		}
 
 		if (overlapFraction < resolved.minOverlapFraction) {
-			diagnostics.push({ accepted: false, frameIndex: i, frameId: frame.id, overlapFraction, quality, reason: 'insufficient-overlap', transform: transform.summary })
+			diagnostics.push({ accepted: false, frameIndex: i, frameId: frame.id, overlapFraction, quality, reason: 'insufficient-overlap', transform: registration.transform.summary })
 			continue
 		}
 
@@ -581,7 +563,7 @@ export function stackFrames(frames: readonly StackingFrame[], options: StackingO
 			accumulateAlignedFrame(channels, aligned.raw, aligned.valid, sum, weightSum, undefined, resolved.combinationMethod, aligned.weight)
 		}
 
-		diagnostics.push({ accepted: true, frameIndex: i, frameId: frame.id, overlapFraction, quality, transform: transform.summary, normalization: aligned.normalization })
+		diagnostics.push({ accepted: true, frameIndex: i, frameId: frame.id, overlapFraction, quality, transform: registration.transform.summary, normalization: aligned.normalization })
 	}
 
 	const finalized = sampleBasedMethod ? finalizeBatchImage(referenceFrame, resolved, accepted, coverageMap) : finalizeOnlineImage(referenceFrame, resolved, sum, weightSum, coverageMap, acceptedCount)
@@ -605,34 +587,6 @@ export function stackFrames(frames: readonly StackingFrame[], options: StackingO
 		coverageMap: resolved.keepPerPixelStatistics ? coverageMap : undefined,
 		validityMask: buildValidityMask(coverageMap, acceptedCount, resolved, referenceFrame.image.metadata.width, referenceFrame.image.metadata.height, cropBounds),
 	}
-}
-
-// Computes deterministic frame quality metrics from stars and coarse image background.
-function computeFrameQuality(frame: StackingFrame): StackingFrameQualityMetrics {
-	const starCount = frame.stars.length
-	const snr = new Float64Array(starCount)
-	const hfd = new Float64Array(starCount)
-
-	for (let i = 0; i < starCount; i++) {
-		snr[i] = frame.stars[i].snr
-		hfd[i] = frame.stars[i].hfd
-	}
-
-	snr.sort()
-	hfd.sort()
-
-	const medianSNR = starCount > 0 ? medianOf(snr) : 0
-	const medianHFD = starCount > 0 ? medianOf(hfd) : Infinity
-	const estimatedBackground = estimateImageBackground(frame.image)
-	const qualityScore = starCount > 0 ? clamp((Math.sqrt(starCount) * Math.max(medianSNR, 1)) / Math.max(medianHFD, 0.5), 0, 1e6) : 0
-
-	return { starCount, medianSNR, medianHFD, qualityScore, estimatedBackground }
-}
-
-// Estimates a coarse image background from a sparse raw sample.
-function estimateImageBackground(image: Image) {
-	const sample = sampleImageValues(image.raw, image.metadata.channels, image.metadata.width, image.metadata.height, BACKGROUND_SAMPLE_LIMIT, true)
-	return sample.length === 0 ? 0 : medianOf(sample.sort())
 }
 
 // Selects the reference frame according to the configured batch strategy.
@@ -686,14 +640,14 @@ function makeAlignedReference(frame: StackingFrame, index: number, quality: Stac
 }
 
 // Creates an aligned and normalized batch sample against the reference frame grid.
-function createAlignedFrame(frame: StackingFrame, index: number, quality: StackingFrameQualityMetrics, referenceFrame: StackingFrame, inverseTransform: SimilarityTransform | AffineTransform, options: ResolvedStackingOptions, transform: StackingTransformSummary): AlignedFrame {
-	const { pixelCount, channels, width, height } = referenceFrame.image.metadata
-	const raw = options.samplePrecision === 64 ? new Float64Array(pixelCount * channels) : new Float32Array(pixelCount * channels)
-	const valid = new Uint8Array(pixelCount)
-	const coveredPixels = alignIntoReference(frame.image, inverseTransform, width, height, options.interpolationMode, raw, valid)
+function createAlignedFrame(frame: StackingFrame, index: number, quality: StackingFrameQualityMetrics, referenceFrame: StackingFrame, registration: ImageRegistrationSuccess, options: ResolvedStackingOptions): AlignedFrame {
+	const { channels } = referenceFrame.image.metadata
+	const { raw } = registration.image
+	const valid = registration.validityMask
+	const coveredPixels = registration.coveredPixels
 	const normalization = computeNormalization(raw, valid, frame, referenceFrame, quality, options)
 	applyNormalizationInPlace(raw, valid, channels, normalization.scales, normalization.offsets)
-	return { raw, valid, weight: normalization.weight, coveredPixels, index, id: frame.id, quality, normalization, transform }
+	return { raw, valid, weight: normalization.weight, coveredPixels, index, id: frame.id, quality, normalization, transform: registration.transform.summary }
 }
 
 // Builds the current live result from online accumulators.
@@ -1015,228 +969,6 @@ function resolveFrameWeight(frame: StackingFrame, quality: StackingFrameQualityM
 		case 'quality':
 			return base * clamp((Math.sqrt(Math.max(quality.starCount, 1)) * Math.max(quality.medianSNR, 1)) / Math.max(quality.medianHFD * 10, 1), 0.25, 6)
 	}
-}
-
-// Converts matchStars output into a generic affine-form transform summary.
-function resolveTransform(match: StarMatchingResult): ResolvedTransform | undefined {
-	if (!match.success || match.model === undefined) return undefined
-
-	if (match.model === 'similarity' && match.similarity !== undefined) {
-		const { a, b, tx, ty, mirrored } = match.similarity
-		const scale = Math.hypot(a, b)
-
-		return {
-			m00: a,
-			m01: mirrored ? b : -b,
-			tx,
-			m10: b,
-			m11: mirrored ? -a : a,
-			ty,
-			summary: {
-				model: 'similarity',
-				translationX: tx,
-				translationY: ty,
-				scaleX: scale,
-				scaleY: scale,
-				rotation: Math.atan2(b, a),
-				shear: 0,
-				mirrored,
-				inlierCount: match.inlierCount,
-				rmsError: match.rmsError ?? Infinity,
-			},
-		}
-	}
-
-	if (match.model === 'affine' && match.affine !== undefined) {
-		const { m00, m01, tx, m10, m11, ty } = match.affine
-		const scaleX = Math.hypot(m00, m10)
-		const scaleY = Math.hypot(m01, m11)
-		const shear = Math.abs(m00 * m01 + m10 * m11) / Math.max(scaleX * scaleY, FLOAT_EPSILON)
-
-		return {
-			m00,
-			m01,
-			tx,
-			m10,
-			m11,
-			ty,
-			summary: {
-				model: 'affine',
-				translationX: tx,
-				translationY: ty,
-				scaleX,
-				scaleY,
-				rotation: Math.atan2(m10, m00),
-				shear,
-				mirrored: m00 * m11 - m01 * m10 < 0,
-				inlierCount: match.inlierCount,
-				rmsError: match.rmsError ?? Infinity,
-			},
-		}
-	}
-
-	return undefined
-}
-
-// Verifies transform plausibility against caller limits.
-function transformWithinBounds(transform: StackingTransformSummary, options: ResolvedStackingOptions) {
-	const translation = Math.hypot(transform.translationX, transform.translationY)
-	if (translation > options.maxTranslation) return false
-	if (Math.abs(transform.rotation) > options.maxRotation) return false
-	if (transform.scaleX < options.minScale || transform.scaleX > options.maxScale) return false
-	if (transform.scaleY < options.minScale || transform.scaleY > options.maxScale) return false
-	if (transform.shear > options.maxShear) return false
-	return true
-}
-
-// Aligns one source image into the reference frame coordinate grid.
-function alignIntoReference(image: Image, inverseTransform: SimilarityTransform | AffineTransform, outWidth: number, outHeight: number, interpolation: StackingInterpolationMode, outRaw: ImageRawType, outMask: Uint8Array) {
-	const matrix = toAffineMatrix(inverseTransform)
-	const { raw, metadata } = image
-	const { width, height, channels } = metadata
-	const widthMinus1 = width - 1
-	const heightMinus1 = height - 1
-	outRaw.fill(0)
-	outMask.fill(0)
-	let coveredPixels = 0
-
-	if (interpolation === 'nearest') {
-		for (let y = 0, pixel = 0, outIndex = 0; y < outHeight; y++) {
-			let sourceX = matrix.m01 * y + matrix.tx
-			let sourceY = matrix.m11 * y + matrix.ty
-
-			for (let x = 0; x < outWidth; x++, pixel++, outIndex += channels) {
-				if (!(sourceX >= 0 && sourceY >= 0 && sourceX <= widthMinus1 && sourceY <= heightMinus1)) {
-					sourceX += matrix.m00
-					sourceY += matrix.m10
-					continue
-				}
-
-				const ix = Math.round(sourceX)
-				const iy = Math.round(sourceY)
-				const base = (iy * width + ix) * channels
-				for (let channel = 0; channel < channels; channel++) outRaw[outIndex + channel] = raw[base + channel]
-				outMask[pixel] = 1
-				coveredPixels++
-				sourceX += matrix.m00
-				sourceY += matrix.m10
-			}
-		}
-
-		return coveredPixels
-	}
-
-	if (interpolation === 'bilinear') {
-		for (let y = 0, pixel = 0, outIndex = 0; y < outHeight; y++) {
-			let sourceX = matrix.m01 * y + matrix.tx
-			let sourceY = matrix.m11 * y + matrix.ty
-
-			for (let x = 0; x < outWidth; x++, pixel++, outIndex += channels) {
-				if (!(sourceX >= 0 && sourceY >= 0 && sourceX <= widthMinus1 && sourceY <= heightMinus1)) {
-					sourceX += matrix.m00
-					sourceY += matrix.m10
-					continue
-				}
-
-				const x0 = Math.floor(sourceX)
-				const y0 = Math.floor(sourceY)
-				const x1 = Math.min(x0 + 1, widthMinus1)
-				const y1 = Math.min(y0 + 1, heightMinus1)
-				const tx = sourceX - x0
-				const ty = sourceY - y0
-				const w00 = (1 - tx) * (1 - ty)
-				const w10 = tx * (1 - ty)
-				const w01 = (1 - tx) * ty
-				const w11 = tx * ty
-				const base00 = (y0 * width + x0) * channels
-				const base10 = (y0 * width + x1) * channels
-				const base01 = (y1 * width + x0) * channels
-				const base11 = (y1 * width + x1) * channels
-
-				for (let channel = 0; channel < channels; channel++) {
-					outRaw[outIndex + channel] = raw[base00 + channel] * w00 + raw[base10 + channel] * w10 + raw[base01 + channel] * w01 + raw[base11 + channel] * w11
-				}
-
-				outMask[pixel] = 1
-				coveredPixels++
-				sourceX += matrix.m00
-				sourceY += matrix.m10
-			}
-		}
-
-		return coveredPixels
-	}
-
-	// Bicubic uses edge-clamped Catmull-Rom taps; this is smooth but may overshoot sharp peaks.
-	const rowStride = width * channels
-
-	for (let y = 0, pixel = 0, outIndex = 0; y < outHeight; y++) {
-		let sourceX = matrix.m01 * y + matrix.tx
-		let sourceY = matrix.m11 * y + matrix.ty
-
-		for (let x = 0; x < outWidth; x++, pixel++, outIndex += channels) {
-			if (!(sourceX >= 0 && sourceY >= 0 && sourceX <= widthMinus1 && sourceY <= heightMinus1)) {
-				sourceX += matrix.m00
-				sourceY += matrix.m10
-				continue
-			}
-
-			const x1 = Math.floor(sourceX)
-			const y1 = Math.floor(sourceY)
-			const x0 = x1 > 0 ? x1 - 1 : 0
-			const x2 = x1 < widthMinus1 ? x1 + 1 : widthMinus1
-			const x3 = x1 + 2 <= widthMinus1 ? x1 + 2 : widthMinus1
-			const y0 = y1 > 0 ? y1 - 1 : 0
-			const y2 = y1 < heightMinus1 ? y1 + 1 : heightMinus1
-			const y3 = y1 + 2 <= heightMinus1 ? y1 + 2 : heightMinus1
-			const tx = sourceX - x1
-			const ty = sourceY - y1
-			const tx2 = tx * tx
-			const tx3 = tx2 * tx
-			const ty2 = ty * ty
-			const ty3 = ty2 * ty
-			const wx0 = 0.5 * (-tx3 + 2 * tx2 - tx)
-			const wx1 = 0.5 * (3 * tx3 - 5 * tx2 + 2)
-			const wx2 = 0.5 * (-3 * tx3 + 4 * tx2 + tx)
-			const wx3 = 0.5 * (tx3 - tx2)
-			const wy0 = 0.5 * (-ty3 + 2 * ty2 - ty)
-			const wy1 = 0.5 * (3 * ty3 - 5 * ty2 + 2)
-			const wy2 = 0.5 * (-3 * ty3 + 4 * ty2 + ty)
-			const wy3 = 0.5 * (ty3 - ty2)
-			const baseY0 = y0 * rowStride
-			const baseY1 = y1 * rowStride
-			const baseY2 = y2 * rowStride
-			const baseY3 = y3 * rowStride
-			const baseX0 = x0 * channels
-			const baseX1 = x1 * channels
-			const baseX2 = x2 * channels
-			const baseX3 = x3 * channels
-
-			for (let channel = 0; channel < channels; channel++) {
-				const row0 = raw[baseY0 + baseX0 + channel] * wx0 + raw[baseY0 + baseX1 + channel] * wx1 + raw[baseY0 + baseX2 + channel] * wx2 + raw[baseY0 + baseX3 + channel] * wx3
-				const row1 = raw[baseY1 + baseX0 + channel] * wx0 + raw[baseY1 + baseX1 + channel] * wx1 + raw[baseY1 + baseX2 + channel] * wx2 + raw[baseY1 + baseX3 + channel] * wx3
-				const row2 = raw[baseY2 + baseX0 + channel] * wx0 + raw[baseY2 + baseX1 + channel] * wx1 + raw[baseY2 + baseX2 + channel] * wx2 + raw[baseY2 + baseX3 + channel] * wx3
-				const row3 = raw[baseY3 + baseX0 + channel] * wx0 + raw[baseY3 + baseX1 + channel] * wx1 + raw[baseY3 + baseX2 + channel] * wx2 + raw[baseY3 + baseX3 + channel] * wx3
-				outRaw[outIndex + channel] = row0 * wy0 + row1 * wy1 + row2 * wy2 + row3 * wy3
-			}
-
-			outMask[pixel] = 1
-			coveredPixels++
-			sourceX += matrix.m00
-			sourceY += matrix.m10
-		}
-	}
-
-	return coveredPixels
-}
-
-// Converts similarity or affine parameters into a common matrix representation.
-function toAffineMatrix(transform: SimilarityTransform | AffineTransform) {
-	if ('mirrored' in transform) {
-		return { m00: transform.a, m01: transform.mirrored ? transform.b : -transform.b, tx: transform.tx, m10: transform.b, m11: transform.mirrored ? -transform.a : transform.a, ty: transform.ty }
-	}
-
-	return transform
 }
 
 // Accumulates an aligned frame into online sum and weight buffers.

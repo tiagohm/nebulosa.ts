@@ -18,6 +18,7 @@ import {
 	zenith,
 } from '../../../src/astronomy/coordinates/coordinate'
 import { timeNormalize, timeYMDHMS } from '../../../src/astronomy/time/time'
+import { PI } from '../../../src/core/constants'
 import { deg, formatDEC, formatRA, normalizeAngle, parseAngle } from '../../../src/math/units/angle'
 
 const TIME = timeYMDHMS(2026, 1, 4, 23, 30, 0)
@@ -148,8 +149,8 @@ test('angular distance is invariant to RA at the celestial pole', () => {
 })
 
 test('angular distance is one hundred eighty degrees for antipodal poles', () => {
-	expect(angularDistance(0, deg(90), deg(13), deg(-90))).toBeCloseTo(Math.PI, 15)
-	expect(angularDistanceHaversine(0, deg(90), deg(13), deg(-90))).toBeCloseTo(Math.PI, 15)
+	expect(angularDistance(0, deg(90), deg(13), deg(-90))).toBeCloseTo(PI, 15)
+	expect(angularDistanceHaversine(0, deg(90), deg(13), deg(-90))).toBeCloseTo(PI, 15)
 })
 
 test('angular distance preserves tiny separations', () => {

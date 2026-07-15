@@ -29,3 +29,12 @@ export function isNonLinuxSkipped() {
 export function isNonWindowsSkipped() {
 	return isPlatformDependentTestSkipped() || process.platform !== 'win32'
 }
+
+// Waits until a simulator state predicate succeeds or the timeout expires.
+export async function waitUntil(predicate: () => boolean, timeout: number = 5000, step: number = 100): Promise<void> {
+	while (!predicate()) {
+		if (timeout <= 0) throw new Error('timeout waiting for condition')
+		await Bun.sleep(step)
+		timeout -= step
+	}
+}

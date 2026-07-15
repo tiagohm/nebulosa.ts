@@ -5,6 +5,7 @@ import { clone } from '../processing/arithmetic'
 import { mean3x3 } from '../processing/convolution'
 import { grayscale } from '../processing/geometry'
 import { psf } from '../processing/psf'
+import { starMomentShape } from './shape'
 
 // Star detection and photometry for an image. Median-filters out hot pixels, runs a PSF-matched
 // response to find candidate peaks, then measures each star's flux, SNR, half-flux diameter (HFD),
@@ -18,6 +19,10 @@ export interface DetectedStar extends Readonly<Point> {
 	readonly hfd: number
 	// Full width at half maximum, pixels (when estimable).
 	readonly fwhm?: number
+	// Shape eccentricity from 0 (round) toward 1 (elongated), when estimable.
+	readonly eccentricity?: number
+	// Major/minor axis ratio, at least 1, when estimable.
+	readonly elongation?: number
 	// Signal-to-noise ratio.
 	readonly snr: number
 	// Integrated flux above background.
@@ -38,6 +43,8 @@ export interface DetectStarOptions {
 type IntegralImages = readonly [Float64Array, Float64Array, number] // sum, sumSq, width
 // Measured photometry of one star as [flux, snr, hfd, fwhm].
 export type StarPhotometry = readonly [number, number, number, number] // flux, snr, hfd, fwhm
+// Internal photometry plus shape measurements as [flux, snr, hfd, fwhm, eccentricity, elongation].
+type MeasuredStarPhotometry = readonly [number, number, number, number, number | undefined, number | undefined]
 
 // Aperture radius (pixels) over which a star's signal flux is integrated.
 const STAR_SIGNAL_RADIUS = 4
@@ -167,13 +174,13 @@ export function detectStars(image: Image, { maxStars = 500, searchRegion = 0, mi
 			if (h < 0.1) continue
 
 			// Validate each candidate against the original image so ranking uses measured photometry instead of only convolution response.
-			const [flux, snr, hfd, fwhm] = measureStarPhotometryRaw(original, width, height, stride, x, y, STAR_SIGNAL_RADIUS, STAR_BACKGROUND_INNER_RADIUS, STAR_BACKGROUND_OUTER_RADIUS, STAR_CONVOLVED_MARGIN)
+			const [flux, snr, hfd, fwhm, eccentricity, elongation] = measureStarPhotometryRaw(original, width, height, stride, x, y, STAR_SIGNAL_RADIUS, STAR_BACKGROUND_INNER_RADIUS, STAR_BACKGROUND_OUTER_RADIUS, STAR_CONVOLVED_MARGIN)
 			if (flux <= 0 || snr < minSNR || hfd < STAR_MIN_HFD) continue
 
 			// Ranks detections by measured signal so real stars survive capacity limits better than noise artifacts.
 			const rank = flux * snr
 
-			stars.add(x, y, rank, flux, snr, hfd, fwhm)
+			stars.add(x, y, rank, flux, snr, hfd, fwhm, eccentricity, elongation)
 		}
 	}
 
@@ -191,8 +198,8 @@ export function detectStars(image: Image, { maxStars = 500, searchRegion = 0, mi
 	let i = 0
 	const res = new Array<DetectedStar>(stars.size)
 
-	for (const { x, y, flux = 0, snr = 0, hfd = 0, fwhm = 0 } of stars) {
-		res[i++] = { x, y, flux, hfd, fwhm, snr }
+	for (const { x, y, flux = 0, snr = 0, hfd = 0, fwhm = 0, eccentricity, elongation } of stars) {
+		res[i++] = { x, y, flux, hfd, fwhm, snr, eccentricity, elongation }
 	}
 
 	return res
@@ -230,19 +237,20 @@ export function measureStarPhotometry(image: Image, x: number, y: number, radius
 
 	const { raw, metadata } = image
 	const { width, height, stride } = metadata
-	return measureStarPhotometryRaw(raw, width, height, stride, x, y, radius, radius + 1, radius + 3, 0)
+	const [flux, snr, hfd, fwhm] = measureStarPhotometryRaw(raw, width, height, stride, x, y, radius, radius + 1, radius + 3, 0)
+	return [flux, snr, hfd, fwhm]
 }
 
 // Computes aperture flux, SNR, HFD and FWHM for a detected star.
-function measureStarPhotometryRaw(raw: Image['raw'], width: number, height: number, stride: number, x: number, y: number, signalRadius: number, backgroundInnerRadius: number, backgroundOuterRadius: number, margin: number): StarPhotometry {
-	if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(signalRadius) || signalRadius <= 0) return [0, 0, 0, 0]
-	if (!Number.isFinite(backgroundInnerRadius) || !Number.isFinite(backgroundOuterRadius) || backgroundInnerRadius <= signalRadius || backgroundOuterRadius < backgroundInnerRadius) return [0, 0, 0, 0]
+function measureStarPhotometryRaw(raw: Image['raw'], width: number, height: number, stride: number, x: number, y: number, signalRadius: number, backgroundInnerRadius: number, backgroundOuterRadius: number, margin: number): MeasuredStarPhotometry {
+	if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(signalRadius) || signalRadius <= 0) return [0, 0, 0, 0, undefined, undefined]
+	if (!Number.isFinite(backgroundInnerRadius) || !Number.isFinite(backgroundOuterRadius) || backgroundInnerRadius <= signalRadius || backgroundOuterRadius < backgroundInnerRadius) return [0, 0, 0, 0, undefined, undefined]
 
 	const xMin = margin
 	const yMin = margin
 	const xMax = width - margin - 1
 	const yMax = height - margin - 1
-	if (x < xMin || x > xMax || y < yMin || y > yMax) return [0, 0, 0, 0]
+	if (x < xMin || x > xMax || y < yMin || y > yMax) return [0, 0, 0, 0, undefined, undefined]
 	const x0 = Math.max(xMin, Math.ceil(x - backgroundOuterRadius))
 	const y0 = Math.max(yMin, Math.ceil(y - backgroundOuterRadius))
 	const x1 = Math.min(xMax, Math.floor(x + backgroundOuterRadius))
@@ -270,7 +278,7 @@ function measureStarPhotometryRaw(raw: Image['raw'], width: number, height: numb
 		}
 	}
 
-	if (backgroundCount <= 0) return [0, 0, 0, 0]
+	if (backgroundCount <= 0) return [0, 0, 0, 0, undefined, undefined]
 
 	const backgroundMean = backgroundSum / backgroundCount
 	const backgroundVariance = Math.max(0, backgroundSumSq / backgroundCount - backgroundMean * backgroundMean)
@@ -278,6 +286,8 @@ function measureStarPhotometryRaw(raw: Image['raw'], width: number, height: numb
 	let radialMoment = 0
 	let radialMomentSq = 0
 	let aperturePixels = 0
+	let weightedX = 0
+	let weightedY = 0
 
 	for (let py = y0; py <= y1; py++) {
 		const row = py * stride
@@ -294,16 +304,41 @@ function measureStarPhotometryRaw(raw: Image['raw'], width: number, height: numb
 			flux += signal
 			radialMoment += signal * Math.sqrt(d2)
 			radialMomentSq += signal * d2
+			weightedX += signal * px
+			weightedY += signal * py
 		}
 	}
 
-	if (flux <= 0 || aperturePixels <= 0) return [0, 0, 0, 0]
+	if (flux <= 0 || aperturePixels <= 0) return [0, 0, 0, 0, undefined, undefined]
 
 	const snr = flux / Math.sqrt(Math.max(flux + aperturePixels * backgroundVariance, Number.EPSILON))
 	const hfd = (2 * radialMoment) / flux
 	// Gaussian-equivalent FWHM from the second radial moment; this avoids fitting a noisy radial profile.
 	const fwhm = radialMomentSq > 0 ? 2 * Math.sqrt((Math.LN2 * radialMomentSq) / flux) : 0
-	return [flux, snr, hfd, fwhm]
+	const centroidX = weightedX / flux
+	const centroidY = weightedY / flux
+	let momentXX = 0
+	let momentXY = 0
+	let momentYY = 0
+
+	for (let py = y0; py <= y1; py++) {
+		const row = py * stride
+		for (let px = x0; px <= x1; px++) {
+			const dx = px - x
+			const dy = py - y
+			if (dx * dx + dy * dy > signalRadiusSq) continue
+			const signal = raw[row + px] - backgroundMean
+			if (signal <= 0) continue
+			const centerX = px - centroidX
+			const centerY = py - centroidY
+			momentXX += signal * centerX * centerX
+			momentXY += signal * centerX * centerY
+			momentYY += signal * centerY * centerY
+		}
+	}
+
+	const { eccentricity, elongation } = starMomentShape(momentXX / flux, momentXY / flux, momentYY / flux)
+	return [flux, snr, hfd, fwhm, eccentricity, elongation]
 }
 
 // Builds summed-area tables for fast local mean and variance queries.
@@ -448,6 +483,10 @@ interface Star {
 	readonly hfd?: number
 	// FWHM, when computed.
 	readonly fwhm?: number
+	// Eccentricity, when computed.
+	readonly eccentricity?: number
+	// Major/minor axis ratio, when computed.
+	readonly elongation?: number
 	// Next node in the list.
 	next?: this
 	// Previous node in the list.
@@ -468,8 +507,8 @@ export class StarList implements Iterable<Star, Star | undefined, Star> {
 	}
 
 	// Appends a star at the tail (brightest end).
-	addLast(x: number, y: number, h: number, flux?: number, snr?: number, hfd?: number, fwhm?: number) {
-		const star: Star = { x, y, h, flux, snr, hfd, fwhm }
+	addLast(x: number, y: number, h: number, flux?: number, snr?: number, hfd?: number, fwhm?: number, eccentricity?: number, elongation?: number) {
+		const star: Star = { x, y, h, flux, snr, hfd, fwhm, eccentricity, elongation }
 
 		if (!this.#head) {
 			this.#head = star
@@ -484,8 +523,8 @@ export class StarList implements Iterable<Star, Star | undefined, Star> {
 	}
 
 	// Prepends a star at the head (dimmest end).
-	addFirst(x: number, y: number, h: number, flux?: number, snr?: number, hfd?: number, fwhm?: number) {
-		const star: Star = { x, y, h, flux, snr, hfd, fwhm }
+	addFirst(x: number, y: number, h: number, flux?: number, snr?: number, hfd?: number, fwhm?: number, eccentricity?: number, elongation?: number) {
+		const star: Star = { x, y, h, flux, snr, hfd, fwhm, eccentricity, elongation }
 
 		if (!this.#head) {
 			this.#head = star
@@ -501,13 +540,13 @@ export class StarList implements Iterable<Star, Star | undefined, Star> {
 
 	// Inserts a star keeping the list sorted by ascending height, searching from the nearer end, and
 	// evicts the dimmest star (head) when the capacity is exceeded.
-	add(x: number, y: number, h: number, flux?: number, snr?: number, hfd?: number, fwhm?: number) {
+	add(x: number, y: number, h: number, flux?: number, snr?: number, hfd?: number, fwhm?: number, eccentricity?: number, elongation?: number) {
 		if (!this.#head || h <= this.#head.h) {
-			if (this.size < this.capacity) this.addFirst(x, y, h, flux, snr, hfd, fwhm)
+			if (this.size < this.capacity) this.addFirst(x, y, h, flux, snr, hfd, fwhm, eccentricity, elongation)
 		} else if (!this.#tail || h >= this.#tail.h) {
-			this.addLast(x, y, h, flux, snr, hfd, fwhm)
+			this.addLast(x, y, h, flux, snr, hfd, fwhm, eccentricity, elongation)
 		} else {
-			const star: Star = { x, y, h, flux, snr, hfd, fwhm }
+			const star: Star = { x, y, h, flux, snr, hfd, fwhm, eccentricity, elongation }
 			const headDistance = h - this.#head.h
 			const tailDistance = this.#tail.h - h
 

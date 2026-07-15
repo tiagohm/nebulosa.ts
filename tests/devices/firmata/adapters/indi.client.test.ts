@@ -6,6 +6,7 @@ import type { Accelerometer, Altimeter, Ammeter, Barometer, Gyroscope, Hygromete
 import { LM35 } from '../../../../src/devices/firmata/sensors/thermometer'
 import type { IndiClientHandler } from '../../../../src/devices/indi/client'
 import type { DefNumberVector, DelProperty, SetNumberVector, SetSwitchVector } from '../../../../src/devices/indi/types'
+import { waitUntil } from '../../../util'
 
 // Deterministic Firmata stand-in. Only the methods the adapter actually uses are implemented:
 // handler registration and the initialization gate. `ready` controls the connection outcome.
@@ -1417,13 +1418,3 @@ describe('firmata indi client', () => {
 		expect(events.filter((e) => e.tag === 'close')).toHaveLength(2)
 	})
 })
-
-// Polls a predicate until it holds or the timeout elapses.
-async function waitUntil(predicate: () => boolean, timeout: number = 1000) {
-	const start = performance.now()
-
-	while (!predicate()) {
-		if (performance.now() - start > timeout) throw new Error('waitUntil timed out')
-		await Bun.sleep(10)
-	}
-}

@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 // oxfmt-ignore
 import { type MutMat3, matClone, matDeterminant, matDivScalar, matFlipX, matFlipY, matIdentity, matMinus, matMinusScalar, matMul, matMulScalar, matMulTranspose, matMulVec, matPlus, matPlusScalar, matRodriguesRotation, matRotX, matRotY, matRotZ, matTranspose, matTransposeMul, matTransposeMulTranspose, matZero } from '../../../src/math/linear-algebra/mat3'
+import { PI, PIOVERTWO } from '../../../src/core/constants'
 import type { MutVec3 } from '../../../src/math/linear-algebra/vec3'
 
 test('determinant', () => {
@@ -201,14 +202,14 @@ describe('mul transpose', () => {
 })
 
 test('rodrigues rotation matrix', () => {
-	const m = matRodriguesRotation([0, 0, 1], Math.PI / 2)
+	const m = matRodriguesRotation([0, 0, 1], PIOVERTWO)
 	let v = matMulVec(m, [1, 0, 0])
 
 	expect(v[0]).toBeCloseTo(0, 12)
 	expect(v[1]).toBeCloseTo(1, 12)
 	expect(v[2]).toBeCloseTo(0, 12)
 
-	const n = matMul(m, matRodriguesRotation([1, 0, 0], Math.PI / 2))
+	const n = matMul(m, matRodriguesRotation([1, 0, 0], PIOVERTWO))
 	v = matMulVec(n, [0, 1, 0])
 
 	expect(v[0]).toBeCloseTo(0, 12)
@@ -217,5 +218,5 @@ test('rodrigues rotation matrix', () => {
 })
 
 test('rodrigues rotation matrix with zero axis is identity', () => {
-	expect(matRodriguesRotation([0, 0, 0], Math.PI / 3)).toEqual(matIdentity())
+	expect(matRodriguesRotation([0, 0, 0], PI / 3)).toEqual(matIdentity())
 })
