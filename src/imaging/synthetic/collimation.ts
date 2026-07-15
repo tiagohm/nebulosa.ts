@@ -1,7 +1,7 @@
 import type { Point, Rect } from '../../math/numerical/geometry'
 import { mulberry32 } from '../../math/numerical/random'
 import type { Angle } from '../../math/units/angle'
-import { type CfaPattern, type Image, type ImageRawType, makeImageRawTypedArray } from '../model/types'
+import { type CfaPattern, type Image, type ImageRawType, makeImageRawTypedArray, shiftCfaPattern } from '../model/types'
 
 // Deterministic rasterization of defocused, centrally obstructed stellar patterns. Geometry is expressed
 // in full-image pixel coordinates with Y increasing downward. The low-level renderer adds flux to a
@@ -627,12 +627,4 @@ function makeImage(raw: Float32Array, width: number, height: number, channels: 1
 		},
 		raw,
 	}
-}
-
-// Shifts a 2x2 CFA tile to the local origin of a cropped image.
-function shiftCfaPattern(pattern: CfaPattern | undefined, offsetX: number, offsetY: number): CfaPattern | undefined {
-	if (pattern === undefined || ((offsetX | offsetY) & 1) === 0) return pattern
-	const x = offsetX & 1
-	const y = offsetY & 1
-	return `${pattern[y * 2 + x]}${pattern[y * 2 + ((x + 1) & 1)]}${pattern[((y + 1) & 1) * 2 + x]}${pattern[((y + 1) & 1) * 2 + ((x + 1) & 1)]}` as CfaPattern
 }

@@ -1,10 +1,8 @@
 import { PIOVERTWO } from '../../../core/constants'
-import type { ImageRawType } from '../../../imaging/model/types'
 import { clamp } from '../../../math/numerical/math'
 import { handleDefNumberVector, handleDefSwitchVector, handleDefTextVector, type IndiClientHandler } from '../client'
 import { type DefNumberVector, type DefSwitchVector, type DefTextVector, selectOnSwitch } from '../types'
 import type { ClientSimulator } from './client'
-import { CAMERA_MIN_EXPOSURE } from './constants'
 import type { SimulatorProperty } from './types'
 
 // Shared property-vector updates and numerical helpers used by the device simulators.
@@ -97,34 +95,6 @@ export function shortestRotatorDelta(target: number, current: number) {
 	else if (delta < -180) delta += 360
 
 	return delta
-}
-
-// Fills a raw image buffer with a deterministic flat-field illumination (gentle vignetting plus a slight
-// gradient), scaled by exposure time relative to the reference exposure. `channels` is 1 (mono) or 3 (RGB).
-export function fillFlatField(raw: ImageRawType, width: number, height: number, channels: 1 | 3, exposureTime: number, referenceExposureTime: number) {
-	const invWidth = width > 1 ? 2 / (width - 1) : 0
-	const invHeight = height > 1 ? 2 / (height - 1) : 0
-	// Scale the deterministic flat illumination against the simulator reference exposure.
-	const exposureScale = exposureTime / Math.max(referenceExposureTime, CAMERA_MIN_EXPOSURE)
-
-	for (let y = 0; y < height; y++) {
-		const yc = y * invHeight - 1
-		const row = y * width
-
-		for (let x = 0; x < width; x++) {
-			const xc = x * invWidth - 1
-			const radius2 = xc * xc + yc * yc
-			const illumination = clamp(0.72 - radius2 * 0.16 + (xc + yc) * 0.03, 0.15, 0.95) * exposureScale
-
-			if (channels === 1) raw[row + x] = illumination
-			else {
-				const index = (row + x) * 3
-				raw[index] = illumination * 1.02
-				raw[index + 1] = illumination
-				raw[index + 2] = illumination * 0.98
-			}
-		}
-	}
 }
 
 // Clamps a declination to [-π/2, π/2] radians.
