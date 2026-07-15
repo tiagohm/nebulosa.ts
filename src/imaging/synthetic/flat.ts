@@ -287,7 +287,7 @@ function resolveSyntheticFlatModel(raw: ImageRawType, model: SyntheticFlatModel)
 	if (Math.abs(gradientX) + Math.abs(gradientY) > 2) throw new RangeError('gradient must remain non-negative across the sensor')
 
 	const response = model.channelResponse ?? [1, 1, 1]
-	if (!response.every((value) => Number.isFinite(value) && value >= 0)) throw new RangeError('channel response must contain finite non-negative values')
+	if (response.length !== 3 || !response.every((value) => Number.isFinite(value) && value >= 0)) throw new RangeError('channel response must contain exactly three finite non-negative values')
 	if (model.lowerClip !== undefined && !Number.isFinite(model.lowerClip)) throw new RangeError('lower clip must be finite')
 	if (model.upperClip !== undefined && !Number.isFinite(model.upperClip)) throw new RangeError('upper clip must be finite')
 	if (model.lowerClip !== undefined && model.upperClip !== undefined && model.lowerClip >= model.upperClip) throw new RangeError('lower clip must be smaller than upper clip')
