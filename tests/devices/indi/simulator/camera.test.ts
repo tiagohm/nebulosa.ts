@@ -272,8 +272,8 @@ describe.skipIf(SKIP)('camera simulator', () => {
 
 		cameraManager.frameType(camera, 'FLAT')
 		await waitUntil(() => camera.frameType === 'FLAT')
-		const seed = 17
-		const random = mulberry32(seed)
+		const seed = 17.5
+		const random = mulberry32(seed >>> 0)
 		random()
 		random()
 		const secondDustX = random() * (cameraSimulator.sensorWidth - 1)

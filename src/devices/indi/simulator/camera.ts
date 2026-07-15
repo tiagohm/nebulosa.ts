@@ -713,7 +713,7 @@ export class CameraSimulator extends DeviceSimulator {
 			centerOffset: { x: field.CENTER_OFFSET_X.value, y: field.CENTER_OFFSET_Y.value },
 			gradient: { x: field.GRADIENT_X.value, y: field.GRADIENT_Y.value },
 			prnu: field.PRNU.value,
-			seed: this.#scene.elements.SCENE_SEED.value,
+			seed: this.#scene.elements.SCENE_SEED.value >>> 0,
 			dustMotes,
 			rowBanding: banding.ROW_AMPLITUDE.value > 0 ? { amplitude: banding.ROW_AMPLITUDE.value, period: banding.ROW_PERIOD.value, phase: banding.ROW_PHASE.value } : undefined,
 			columnBanding: banding.COLUMN_AMPLITUDE.value > 0 ? { amplitude: banding.COLUMN_AMPLITUDE.value, period: banding.COLUMN_PERIOD.value, phase: banding.COLUMN_PHASE.value } : undefined,
