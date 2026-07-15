@@ -1,6 +1,6 @@
 import { TAU } from '../../core/constants'
 import type { Point, Size } from '../../math/numerical/geometry'
-import type { CfaPattern, DigitalImage, ImageRawType } from '../model/types'
+import { type CfaPattern, type DigitalImage, type ImageRawType, shiftCfaPattern } from '../model/types'
 
 // Deterministic flat-frame fixtures in digital or caller-selected sample units. Spatial effects are
 // evaluated in unbinned sensor coordinates so fixed patterns remain stable across crops and binning.
@@ -196,6 +196,7 @@ export function generateSyntheticFlatImage(model: SyntheticFlatModel): DigitalIm
 	const raw = new Float64Array(model.width * model.height * channels)
 	renderSyntheticFlat(raw, model)
 	const origin = model.sensor?.origin
+	const bayer = shiftCfaPattern(model.bayer, origin?.x ?? 0, origin?.y ?? 0)
 	const bitpix = -64
 	const pixelSizeInBytes = raw.BYTES_PER_ELEMENT
 	const header = {
@@ -205,7 +206,7 @@ export function generateSyntheticFlatImage(model: SyntheticFlatModel): DigitalIm
 		NAXIS1: model.width,
 		NAXIS2: model.height,
 		NAXIS3: channels === 3 ? 3 : undefined,
-		BAYERPAT: model.bayer,
+		BAYERPAT: bayer,
 		XORGSUBF: origin?.x,
 		YORGSUBF: origin?.y,
 		XBINNING: model.sensor?.binning?.[0],
@@ -224,7 +225,7 @@ export function generateSyntheticFlatImage(model: SyntheticFlatModel): DigitalIm
 			stride: model.width * channels,
 			strideInBytes: model.width * channels * pixelSizeInBytes,
 			bitpix,
-			bayer: model.bayer,
+			bayer,
 		},
 		sampleScale: 'digital',
 		digitalRange: model.lowerClip !== undefined && model.upperClip !== undefined ? [model.lowerClip, model.upperClip] : undefined,

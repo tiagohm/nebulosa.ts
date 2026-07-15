@@ -97,6 +97,8 @@ test('applies RGB response and every CFA pattern in absolute sensor phase', () =
 
 	const crop = generateSyntheticFlatImage(fixture({ width: 2, height: 2, bayer: 'RGGB', bias: 0, signal: 100, channelResponse: [1, 0.5, 0.25], sensor: { width: 4, height: 4, origin: { x: 1, y: 1 } } }))
 	expect(Array.from(crop.raw)).toEqual([25, 50, 50, 100])
+	expect(crop.header.BAYERPAT).toBe('BGGR')
+	expect(crop.metadata.bayer).toBe('BGGR')
 	expect(crop.header.XORGSUBF).toBe(1)
 	expect(crop.header.YORGSUBF).toBe(1)
 })

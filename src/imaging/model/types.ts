@@ -160,3 +160,12 @@ export function grayscaleFromChannel(channel?: ImageChannelOrGray): Grayscale {
 export function makeImageRawTypedArray(source: ImageRawType, size: number): ImageRawType {
 	return source.BYTES_PER_ELEMENT === 4 ? new Float32Array(size) : new Float64Array(size)
 }
+
+// Shifts a full-sensor 2x2 CFA tile to an image-local origin. Offsets are integer unbinned pixels.
+export function shiftCfaPattern(pattern: CfaPattern | undefined, offsetX: number, offsetY: number): CfaPattern | undefined {
+	if (!Number.isInteger(offsetX) || !Number.isInteger(offsetY)) throw new RangeError('CFA offsets must be integers')
+	if (pattern === undefined || ((offsetX | offsetY) & 1) === 0) return pattern
+	const x = offsetX & 1
+	const y = offsetY & 1
+	return `${pattern[y * 2 + x]}${pattern[y * 2 + ((x + 1) & 1)]}${pattern[((y + 1) & 1) * 2 + x]}${pattern[((y + 1) & 1) * 2 + ((x + 1) & 1)]}` as CfaPattern
+}
