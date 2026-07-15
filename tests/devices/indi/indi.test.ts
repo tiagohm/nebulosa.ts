@@ -7,7 +7,7 @@ import type { DefNumberVector, DefSwitchVector, DefTextVector, PropertyState, Se
 import { SimpleXmlParser, type XmlNode } from '../../../src/io/xml'
 import { PI, PIOVERTWO, SIDEREAL_DAYSEC, TAU } from '../../../src/core/constants'
 import { downloadPerTag } from '../../download'
-import { isTimeConsumingTestSkipped } from '../../util'
+import { isTimeConsumingTestSkipped, waitUntil } from '../../util'
 
 await downloadPerTag('indi')
 
@@ -326,14 +326,6 @@ async function captureClientWrites(endMarker: string, write: (client: IndiClient
 	} finally {
 		client.close()
 		server.stop(true)
-	}
-}
-
-async function waitUntil(predicate: () => boolean, timeout: number, step: number) {
-	while (!predicate()) {
-		if (timeout <= 0) throw new Error('timeout waiting for condition')
-		await Bun.sleep(step)
-		timeout -= step
 	}
 }
 
