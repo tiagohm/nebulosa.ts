@@ -11,6 +11,7 @@ import type { CatalogSource } from '../../../../src/devices/indi/simulator/types
 import type { BlobEncoding, PropertyState } from '../../../../src/devices/indi/types'
 import { readImageFromBuffer } from '../../../../src/imaging/model/image'
 import type { ImageRawType } from '../../../../src/imaging/model/types'
+import { mulberry32 } from '../../../../src/math/numerical/random'
 import { deg, formatDEC, formatRA, hour } from '../../../../src/math/units/angle'
 import { isTimeConsumingTestSkipped, waitUntil } from '../../../util'
 
@@ -271,13 +272,22 @@ describe.skipIf(SKIP)('camera simulator', () => {
 
 		cameraManager.frameType(camera, 'FLAT')
 		await waitUntil(() => camera.frameType === 'FLAT')
-		cameraManager.frame(camera, 608, 448, 64, 64)
-		await waitUntil(() => camera.frame.x.value === 608 && camera.frame.y.value === 448 && camera.frame.width.value === 64 && camera.frame.height.value === 64)
+		const seed = 17
+		const random = mulberry32(seed)
+		random()
+		random()
+		const secondDustX = random() * (cameraSimulator.sensorWidth - 1)
+		const secondDustY = random() * (cameraSimulator.sensorHeight - 1)
+		const frameX = Math.max(0, Math.min(cameraSimulator.sensorWidth - 64, Math.round(secondDustX) - 32))
+		const frameY = Math.max(0, Math.min(cameraSimulator.sensorHeight - 64, Math.round(secondDustY) - 32))
+		cameraManager.frame(camera, frameX, frameY, 64, 64)
+		await waitUntil(() => camera.frame.x.value === frameX && camera.frame.y.value === frameY && camera.frame.width.value === 64 && camera.frame.height.value === 64)
 
 		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_NOISE_FEATURES', elements: { SKY_ENABLED: false, MOON_ENABLED: false, LIGHT_POLLUTION_ENABLED: false, AMP_GLOW_ENABLED: false } })
+		client.sendNumber({ device: camera.name, name: 'SIMULATOR_SCENE', elements: { SCENE_SEED: seed } })
 		client.sendNumber({ device: camera.name, name: 'SIMULATOR_NOISE_EXPOSURE', elements: { EXPOSURE_TIME: 1 } })
 		client.sendNumber({ device: camera.name, name: 'SIMULATOR_FLAT_FIELD', elements: { REFERENCE_SIGNAL: 0.5, VIGNETTING: 0, CENTER_OFFSET_X: 0, CENTER_OFFSET_Y: 0, GRADIENT_X: 0, GRADIENT_Y: 0, PRNU: 0 } })
-		client.sendNumber({ device: camera.name, name: 'SIMULATOR_FLAT_DUST', elements: { CENTER_X: 0, CENTER_Y: 0, SIGMA_X: 8, SIGMA_Y: 8, ANGLE: 0, CONTRAST: 0.5 } })
+		client.sendNumber({ device: camera.name, name: 'SIMULATOR_FLAT_DUST', elements: { COUNT: 2, SIGMA_X: 8, SIGMA_Y: 8, ANGLE: 0, CONTRAST: 0.5 } })
 		client.sendNumber({ device: camera.name, name: 'SIMULATOR_FLAT_BANDING', elements: { ROW_AMPLITUDE: 0.1, ROW_PERIOD: 16, ROW_PHASE: Math.PI / 2, COLUMN_AMPLITUDE: 0 } })
 		client.sendNumber({ device: camera.name, name: 'SIMULATOR_NOISE_SENSOR', elements: { READ_NOISE: 0, BIAS_ELECTRONS: 0, BLACK_LEVEL_ELECTRONS: 0, DARK_CURRENT_AT_REFERENCE_TEMP: 0, DARK_SIGNAL_NON_UNIFORMITY: 0 } })
 		client.sendNumber({
@@ -289,7 +299,9 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		await waitUntil(
 			() =>
 				cameraManager.properties.get(camera)?.SIMULATOR_NOISE_EXPOSURE?.elements.EXPOSURE_TIME.value === 1 &&
+				cameraManager.properties.get(camera)?.SIMULATOR_SCENE?.elements.SCENE_SEED.value === seed &&
 				cameraManager.properties.get(camera)?.SIMULATOR_FLAT_FIELD?.elements.REFERENCE_SIGNAL.value === 0.5 &&
+				cameraManager.properties.get(camera)?.SIMULATOR_FLAT_DUST?.elements.COUNT.value === 2 &&
 				cameraManager.properties.get(camera)?.SIMULATOR_FLAT_DUST?.elements.CONTRAST.value === 0.5 &&
 				cameraManager.properties.get(camera)?.SIMULATOR_FLAT_BANDING?.elements.ROW_AMPLITUDE.value === 0.1,
 		)
@@ -305,18 +317,31 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		expect(shortFlat).toBeDefined()
 		expect(longFlat).toBeDefined()
 		expect(sumPixels(longFlat!.raw)).toBeGreaterThan(sumPixels(shortFlat!.raw) * 1.8)
-		expect(shortFlat!.raw[32 * 64 + 32]).toBeLessThan(shortFlat!.raw[32])
-		expect(shortFlat!.raw[0]).toBeGreaterThan(shortFlat!.raw[4 * 64])
+		const dustX = Math.round(secondDustX) - frameX
+		const dustY = Math.round(secondDustY) - frameY
+		const dustIndex = dustY * 64 + dustX
+		expect(shortFlat!.raw[dustIndex]).toBeLessThan(shortFlat!.raw[32])
+		expect(shortFlat!.raw[0]).not.toBe(shortFlat!.raw[4 * 64])
 
-		cameraManager.frame(camera, 624, 464, 32, 32)
-		cameraManager.bin(camera, 2, 1)
-		await waitUntil(() => camera.frame.x.value === 624 && camera.frame.y.value === 464 && camera.bin.x.value === 2 && camera.bin.y.value === 1)
+		client.sendNumber({ device: camera.name, name: 'SIMULATOR_FLAT_DUST', elements: { COUNT: 1 } })
+		await waitUntil(() => cameraManager.properties.get(camera)?.SIMULATOR_FLAT_DUST?.elements.COUNT.value === 1)
 		cameraManager.startExposure(camera, 0.1)
 		await waitUntil(() => frameReceiver.length > 2, 5000, 50)
+		const singleDustFlat = await readImageFromBuffer(frameReceiver.lastFrame, { sampleScale: 'digital' })
+		expect(singleDustFlat!.raw[dustIndex]).toBeGreaterThan(shortFlat!.raw[dustIndex] * 1.5)
+
+		client.sendNumber({ device: camera.name, name: 'SIMULATOR_FLAT_DUST', elements: { COUNT: 2 } })
+		cameraManager.frame(camera, frameX + 16, frameY + 16, 32, 32)
+		cameraManager.bin(camera, 2, 1)
+		await waitUntil(() => camera.frame.x.value === frameX + 16 && camera.frame.y.value === frameY + 16 && camera.bin.x.value === 2 && camera.bin.y.value === 1 && cameraManager.properties.get(camera)?.SIMULATOR_FLAT_DUST?.elements.COUNT.value === 2)
+		cameraManager.startExposure(camera, 0.1)
+		await waitUntil(() => frameReceiver.length > 3, 5000, 50)
 		const binnedFlat = await readImageFromBuffer(frameReceiver.lastFrame, { sampleScale: 'digital' })
 		expect(binnedFlat!.metadata.width).toBe(16)
 		expect(binnedFlat!.metadata.height).toBe(32)
-		expect(binnedFlat!.raw[16 * 16 + 8]).toBeLessThan(binnedFlat!.raw[8])
+		const binnedDustX = Math.round((secondDustX - frameX - 16 - 0.5) / 2)
+		const binnedDustY = Math.round(secondDustY) - frameY - 16
+		expect(binnedFlat!.raw[binnedDustY * 16 + binnedDustX]).toBeLessThan(binnedFlat!.raw[binnedDustX])
 
 		cameraSimulator.dispose()
 		expect(cameraManager.has(client, camera.name)).toBeFalse()

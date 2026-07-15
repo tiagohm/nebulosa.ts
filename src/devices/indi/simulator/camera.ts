@@ -73,7 +73,7 @@ export class CameraSimulator extends DeviceSimulator {
 	// oxfmt-ignore
 	readonly #flatField = makeNumberVector('', 'SIMULATOR_FLAT_FIELD', 'Flat Field', SIMULATION, 'rw', ['REFERENCE_SIGNAL', 'Reference Signal', 0.72, 0, 10, 0.001, '%.4f'], ['VIGNETTING', 'Vignetting', 0.4, 0, 1, 0.001, '%.4f'], ['CENTER_OFFSET_X', 'Center Offset X', 0, -1, 1, 0.001, '%.4f'], ['CENTER_OFFSET_Y', 'Center Offset Y', 0, -1, 1, 0.001, '%.4f'], ['GRADIENT_X', 'Gradient X', 0.08, -1, 1, 0.001, '%.4f'], ['GRADIENT_Y', 'Gradient Y', 0.08, -1, 1, 0.001, '%.4f'], ['PRNU', 'PRNU', 0, 0, 1, 0.0001, '%.5f'])
 	// oxfmt-ignore
-	readonly #flatDust = makeNumberVector('', 'SIMULATOR_FLAT_DUST', 'Flat Dust', SIMULATION, 'rw', ['CENTER_X', 'Center X', 0, -1, 1, 0.001, '%.4f'], ['CENTER_Y', 'Center Y', 0, -1, 1, 0.001, '%.4f'], ['SIGMA_X', 'Sigma X (px)', 24, 0.1, 1000, 0.1, '%.2f'], ['SIGMA_Y', 'Sigma Y (px)', 24, 0.1, 1000, 0.1, '%.2f'], ['ANGLE', 'Angle (rad)', 0, -TAU, TAU, 0.01, '%.3f'], ['CONTRAST', 'Contrast', 0, 0, 1, 0.001, '%.4f'])
+	readonly #flatDust = makeNumberVector('', 'SIMULATOR_FLAT_DUST', 'Flat Dust', SIMULATION, 'rw', ['COUNT', 'Count', 1, 0, 256, 1, '%.0f'], ['SIGMA_X', 'Sigma X (px)', 24, 0.1, 1000, 0.1, '%.2f'], ['SIGMA_Y', 'Sigma Y (px)', 24, 0.1, 1000, 0.1, '%.2f'], ['ANGLE', 'Angle (rad)', 0, -TAU, TAU, 0.01, '%.3f'], ['CONTRAST', 'Contrast', 0, 0, 1, 0.001, '%.4f'])
 	// oxfmt-ignore
 	readonly #flatBanding = makeNumberVector('', 'SIMULATOR_FLAT_BANDING', 'Flat Banding', SIMULATION, 'rw', ['ROW_AMPLITUDE', 'Row Amplitude', 0, 0, 0.5, 0.001, '%.4f'], ['ROW_PERIOD', 'Row Period (px)', 32, 0.1, 10000, 0.1, '%.2f'], ['ROW_PHASE', 'Row Phase (rad)', 0, -TAU, TAU, 0.01, '%.3f'], ['COLUMN_AMPLITUDE', 'Column Amplitude', 0, 0, 0.5, 0.001, '%.4f'], ['COLUMN_PERIOD', 'Column Period (px)', 32, 0.1, 10000, 0.1, '%.2f'], ['COLUMN_PHASE', 'Column Phase (rad)', 0, -TAU, TAU, 0.01, '%.3f'])
 	readonly #catalogSource = makeSwitchVector('', 'SIMULATOR_CATALOG_SOURCE', 'Catalog Source', SIMULATION, 'OneOfMany', 'rw', ['RANDOM', 'Random', true], ['VIZIER', 'VizieR', false])
@@ -677,20 +677,23 @@ export class CameraSimulator extends DeviceSimulator {
 		const field = this.#flatField.elements
 		const dust = this.#flatDust.elements
 		const banding = this.#flatBanding.elements
-		const sensorCenterX = (this.sensorWidth - 1) * 0.5
-		const sensorCenterY = (this.sensorHeight - 1) * 0.5
-		const dustMotes =
-			dust.CONTRAST.value > 0
-				? [
-						{
-							center: { x: sensorCenterX + dust.CENTER_X.value * sensorCenterX, y: sensorCenterY + dust.CENTER_Y.value * sensorCenterY },
-							sigmaX: dust.SIGMA_X.value,
-							sigmaY: dust.SIGMA_Y.value,
-							angle: dust.ANGLE.value,
-							contrast: dust.CONTRAST.value,
-						},
-					]
-				: undefined
+		const dustCount = dust.CONTRAST.value > 0 ? Math.round(dust.COUNT.value) : 0
+		const dustMotes = dustCount > 0 ? new Array(dustCount) : undefined
+
+		if (dustMotes !== undefined) {
+			// A fresh generator with the same scene seed keeps physical mote positions fixed across frames.
+			const random = mulberry32(this.#scene.elements.SCENE_SEED.value >>> 0)
+
+			for (let i = 0; i < dustMotes.length; i++) {
+				dustMotes[i] = {
+					center: { x: random() * (this.sensorWidth - 1), y: random() * (this.sensorHeight - 1) },
+					sigmaX: dust.SIGMA_X.value,
+					sigmaY: dust.SIGMA_Y.value,
+					angle: dust.ANGLE.value,
+					contrast: dust.CONTRAST.value,
+				}
+			}
+		}
 
 		renderSyntheticFlat(raw, {
 			width,
