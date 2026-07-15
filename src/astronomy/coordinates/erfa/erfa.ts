@@ -7,7 +7,7 @@ import { type Distance, toKilometer } from '../../../math/units/distance'
 import type { Pressure } from '../../../math/units/pressure'
 import type { Temperature } from '../../../math/units/temperature'
 import type { Velocity } from '../../../math/units/velocity'
-import { FAIRHEAD, IAU2000A_LS, IAU2000A_PL, IAU2000B_LS, IAU2006_S, IAU2006_SP } from './erfa.data'
+import { FAIRHEAD, NUT00A_LS, NUT00A_PL, NUT00B_LS, IAU2006_S, NUT80_X } from './erfa.data'
 
 const DBL_EPSILON = 2.220446049250313e-16
 
@@ -563,6 +563,29 @@ export function eraDtDb(tdb1: number, tdb2: number, ut: number, elong: Angle = 0
 	return wt + wf + wj
 }
 
+// Equation of the equinoxes, IAU 1994 model.
+export function eraEqeq94(tdb1: number, tdb2: number) {
+	// Interval between fundamental epoch J2000.0 and given date (JC).
+	const t = (tdb1 - J2000 + tdb2) / DAYSPERJC
+
+	// Longitude of the mean ascending node of the lunar orbit on the ecliptic, measured from the mean equinox of date.
+	const om = eraAnpm(ASEC2RAD * (450160.28 + (-482890.539 + (7.455 + 0.008 * t) * t) * t) + ((-5 * t) % 1) * TAU)
+
+	// Nutation components and mean obliquity.
+	const [dpsi] = eraNut80(tdb1, tdb2)
+	const eps0 = eraObl80(tdb1, tdb2)
+
+	// Equation of the equinoxes.
+	return dpsi * Math.cos(eps0) + ASEC2RAD * (0.00264 * Math.sin(om) + 0.000063 * Math.sin(om + om))
+}
+
+// Greenwich apparent sidereal time (consistent with IAU 1982/94 resolutions).
+export function eraGst94(ut11: number, ut12: number) {
+	const gmst82 = eraGmst82(ut11, ut12)
+	const eqeq94 = eraEqeq94(ut11, ut12)
+	return normalizeAngle(gmst82 + eqeq94)
+}
+
 // Greenwich apparent sidereal time (consistent with IAU 2000 and 2006 resolutions).
 export function eraGst06a(ut11: number, ut12: number, tt1: number, tt2: number): Angle {
 	const rnpb = eraPnm06a(tt1, tt2)
@@ -662,7 +685,9 @@ export function eraS06(tt1: number, tt2: number, x: Angle, y: Angle): Angle {
 	fa[7] = eraFapa03(t)
 
 	// Evalutate s.
-	const w = [...IAU2006_SP]
+
+	// Polynomial coefficients.
+	const w = [94e-6, 3808.65e-6, -122.68e-6, -72574.11e-6, 27.98e-6, 15.62e-6]
 
 	for (let k = 0; k < IAU2006_S.length; k++) {
 		for (let i = IAU2006_S[k].length - 1; i >= 0; i--) {
@@ -707,6 +732,14 @@ export function eraPfw06(tt1: number, tt2: number): [Angle, Angle, Angle, Angle]
 	const epsa = eraObl06(tt1, tt2)
 
 	return [gamb, phib, psib, epsa]
+}
+
+// Mean obliquity of the ecliptic, IAU 1980 model.
+export function eraObl80(tt1: number, tt2: number): Angle {
+	// Interval between fundamental epoch J2000.0 and given date (JC).
+	const t = (tt1 - J2000 + tt2) / DAYSPERJC
+	// Mean obliquity of date.
+	return ASEC2RAD * (84381.448 + (-46.815 + (-0.00059 + 0.001813 * t) * t) * t)
 }
 
 // Mean obliquity of the ecliptic, IAU 2006 precession model.
@@ -788,6 +821,66 @@ export function eraFane03(t: number): Angle {
 	return (5.311886287 + 3.8133035638 * t) % TAU
 }
 
+// Nutation, IAU 1980 model.
+export function eraNut80(tt1: number, tt2: number): [Angle, Angle] {
+	// Interval between fundamental epoch J2000.0 and given date (JC).
+	const t = (tt1 - J2000 + tt2) / DAYSPERJC
+
+	// Fundamental arguments
+
+	// Mean longitude of Moon minus mean longitude of Moon's perigee.
+	const el = eraAnpm(ASEC2RAD * (485866.733 + (715922.633 + (31.31 + 0.064 * t) * t) * t) + ((1325 * t) % 1) * TAU)
+
+	// Mean longitude of Sun minus mean longitude of Sun's perigee.
+	const elp = eraAnpm(ASEC2RAD * (1287099.804 + (1292581.224 + (-0.577 - 0.012 * t) * t) * t) + ((99 * t) % 1) * TAU)
+
+	// Mean longitude of Moon minus mean longitude of Moon's node.
+	const f = eraAnpm(ASEC2RAD * (335778.877 + (295263.137 + (-13.257 + 0.011 * t) * t) * t) + ((1342 * t) % 1) * TAU)
+
+	// Mean elongation of Moon from Sun.
+	const d = eraAnpm(ASEC2RAD * (1072261.307 + (1105601.328 + (-6.891 + 0.019 * t) * t) * t) + ((1236 * t) % 1) * TAU)
+
+	// Longitude of the mean ascending node of the lunar orbit on the ecliptic, measured from the mean equinox of date.
+	const om = eraAnpm(ASEC2RAD * (450160.28 + (-482890.539 + (7.455 + 0.008 * t) * t) * t) + ((-5 * t) % 1) * TAU)
+
+	// Nutation series
+
+	let dp = 0
+	let de = 0
+
+	// Sum the nutation terms, ending with the biggest.
+	for (let j = NUT80_X.length - 1; j >= 0; j--) {
+		const x = NUT80_X[j]
+
+		// Form argument for current term.
+		const arg = x[0] * el + x[1] * elp + x[2] * f + x[3] * d + x[4] * om
+
+		// Accumulate current nutation term.
+		const s = x[5] + x[6] * t
+		const c = x[7] + x[8] * t
+		if (s !== 0) dp += s * Math.sin(arg)
+		if (c !== 0) de += c * Math.cos(arg)
+	}
+
+	// Units of 0.1 milliarcsecond to radians.
+	return [dp * (ASEC2RAD / 10000), de * (ASEC2RAD / 10000)]
+}
+
+// Forms the matrix of nutation for a given date, IAU 1980 model.
+export function eraNutm80(tt1: number, tt2: number) {
+	// Nutation components and mean obliquity.
+	const [dpsi, deps] = eraNut80(tt1, tt2)
+	const epsa = eraObl80(tt1, tt2)
+
+	// Build the rotation matrix.
+	return eraNumat(epsa, dpsi, deps)
+}
+
+// Forms the matrix of nutation.
+export function eraNumat(epsa: Angle, dpsi: Angle, deps: Angle, m?: MutMat3): MutMat3 {
+	return matRotX(-(epsa + deps), matRotZ(-dpsi, matRotX(epsa, m)))
+}
+
 // Nutation, IAU 2000A model (MHB2000 luni-solar and planetary nutation
 // with free core nutation omitted).
 export function eraNut00a(tt1: number, tt2: number): [Angle, Angle] {
@@ -814,8 +907,8 @@ export function eraNut00a(tt1: number, tt2: number): [Angle, Angle] {
 	let de = 0
 
 	// Summation of luni-solar nutation series (in reverse order).
-	for (let i = IAU2000A_LS.length - 1; i >= 0; i--) {
-		const [nl, nlp, nf, nd, nom, sp, spt, cp, ce, cet, se] = IAU2000A_LS[i]
+	for (let i = NUT00A_LS.length - 1; i >= 0; i--) {
+		const [nl, nlp, nf, nd, nom, sp, spt, cp, ce, cet, se] = NUT00A_LS[i]
 		const arg = (nl * el + nlp * elp + nf * f + nd * d + nom * om) % TAU
 
 		const sarg = Math.sin(arg)
@@ -858,8 +951,8 @@ export function eraNut00a(tt1: number, tt2: number): [Angle, Angle] {
 	dp = 0
 	de = 0
 
-	for (let i = IAU2000A_PL.length - 1; i >= 0; i--) {
-		const [nl, nf, nd, nom, nme, nve, nea, nma, nju, nsa, nur, nne, npa, sp, cp, se, ce] = IAU2000A_PL[i]
+	for (let i = NUT00A_PL.length - 1; i >= 0; i--) {
+		const [nl, nf, nd, nom, nme, nve, nea, nma, nju, nsa, nur, nne, npa, sp, cp, se, ce] = NUT00A_PL[i]
 		const arg = (nl * al + nf * af + nd * ad + nom * aom + nme * alme + nve * alve + nea * alea + nma * alma + nju * alju + nsa * alsa + nur * alur + nne * alne + npa * apa) % TAU
 
 		const sarg = Math.sin(arg)
@@ -870,7 +963,7 @@ export function eraNut00a(tt1: number, tt2: number): [Angle, Angle] {
 	}
 
 	// Units of 0.1 microarcsecond to radians.
-	return [arcsec(dpls + dp) / 10000000, arcsec(dels + de) / 10000000]
+	return [(dpls + dp) * (ASEC2RAD / 10000000), (dels + de) * (ASEC2RAD / 10000000)]
 }
 
 // IAU 2000A nutation with adjustments to match the IAU 2006 precession.
@@ -915,8 +1008,8 @@ export function eraNut00b(tt1: number, tt2: number): [Angle, Angle] {
 	let dp = 0
 	let de = 0
 
-	for (let i = IAU2000B_LS.length - 1; i >= 0; i--) {
-		const [nl, nlp, nf, nd, nom, ps, pst, pc, ec, ect, es] = IAU2000B_LS[i]
+	for (let i = NUT00B_LS.length - 1; i >= 0; i--) {
+		const [nl, nlp, nf, nd, nom, ps, pst, pc, ec, ect, es] = NUT00B_LS[i]
 		const arg = (nl * el + nlp * elp + nf * f + nd * d + nom * om) % TAU
 
 		const sarg = Math.sin(arg)
