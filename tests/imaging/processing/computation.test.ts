@@ -11,13 +11,12 @@ test('histogram preserves RGB grayscale binning on the identity fast path', () =
 	expect(Array.from(result.histogram)).toEqual([1, 0, 1, 0])
 })
 
-test('histogram accepts per-pixel and raw-layout masks for RGB images', () => {
+test('histogram accepts only per-pixel masks for RGB images', () => {
 	const image = makeImage(2, 1, 3, [1, 0, 0, 0, 1, 0])
 	const perPixel = histogram(image, { bits: 2, sigmaClip: new Int8Array([1, 0]) })
-	const rawLayout = histogram(image, { bits: 2, sigmaClip: new Int8Array([1, 0, 0, 0, 0, 0]) })
 
 	expect(Array.from(perPixel.histogram)).toEqual([0, 0, 1, 0])
-	expect(Array.from(rawLayout.histogram)).toEqual([0, 0, 1, 0])
+	expect(() => histogram(image, { bits: 2, sigmaClip: new Int8Array([1, 0, 0, 0, 0, 0]) })).toThrow()
 })
 
 test('histogram clears and reuses an explicit bin buffer', () => {
@@ -36,7 +35,7 @@ test('histogram rejects unsafe bit depths and invalid buffers', () => {
 	expect(() => histogram(image, { bits: new Int32Array(0) })).toThrow()
 })
 
-test('histogram rejects a mask that matches neither supported layout', () => {
+test('histogram rejects a mask that does not match the pixel count', () => {
 	const image = makeImage(2, 1, 3, [1, 0, 0, 0, 1, 0])
 	expect(() => histogram(image, { sigmaClip: new Int8Array(3) })).toThrow()
 })
@@ -96,6 +95,7 @@ test('sigma clip uses a per-pixel mask for RGB images', () => {
 	const result = sigmaClip(image, { maxIterations: 0 })
 
 	expect(result.length).toBe(image.metadata.pixelCount)
+	expect(() => sigmaClip(image, { mask: new Int8Array(image.raw.length), maxIterations: 0 })).toThrow()
 })
 
 test('sigma clip validates thresholds and iteration limits', () => {

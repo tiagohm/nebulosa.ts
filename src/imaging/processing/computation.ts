@@ -118,8 +118,7 @@ function computeHistogram(image: Image, options: Partial<HistogramOptions>, devi
 	const { raw, metadata } = image
 	const { stride, width, height, channels, pixelCount } = metadata
 
-	const pixelMask = sigmaClip !== undefined && sigmaClip.length === pixelCount
-	if (sigmaClip !== undefined && !pixelMask && sigmaClip.length < raw.length) throw new RangeError(`sigmaClip must have length ${pixelCount} or >= ${raw.length}`)
+	if (sigmaClip !== undefined && sigmaClip.length !== pixelCount) throw new RangeError(`sigmaClip must have length ${pixelCount}`)
 
 	const left = Math.max(0, Math.min(area?.left ?? 0, width - 1))
 	const top = Math.max(0, Math.min(area?.top ?? 0, height - 1))
@@ -147,7 +146,7 @@ function computeHistogram(image: Image, options: Partial<HistogramOptions>, devi
 					}
 				} else {
 					for (; i < end; i += channels, pixel++) {
-						if (sigmaClip[pixelMask ? pixel : i] !== 0) continue
+						if (sigmaClip[pixel] !== 0) continue
 						let value = raw[i] * red + raw[i + 1] * green + raw[i + 2] * blue
 						if (useDeviation) value = Math.abs(value - deviationCenter)
 						h[truncatePixel(value, max)]++
@@ -161,7 +160,7 @@ function computeHistogram(image: Image, options: Partial<HistogramOptions>, devi
 				}
 			} else {
 				for (; i < end; i += channels, pixel++) {
-					if (sigmaClip[pixelMask ? pixel : i] !== 0) continue
+					if (sigmaClip[pixel] !== 0) continue
 					let value = transform(raw[i], i) * red + transform(raw[i + 1], i + 1) * green + transform(raw[i + 2], i + 2) * blue
 					if (useDeviation) value = Math.abs(value - deviationCenter)
 					h[truncatePixel(value, max)]++
@@ -182,7 +181,7 @@ function computeHistogram(image: Image, options: Partial<HistogramOptions>, devi
 					}
 				} else {
 					for (; i < end; i += channels, pixel++) {
-						if (sigmaClip[pixelMask ? pixel : i] !== 0) continue
+						if (sigmaClip[pixel] !== 0) continue
 						const value = useDeviation ? Math.abs(raw[i] - deviationCenter) : raw[i]
 						h[truncatePixel(value, max)]++
 					}
@@ -195,7 +194,7 @@ function computeHistogram(image: Image, options: Partial<HistogramOptions>, devi
 				}
 			} else {
 				for (; i < end; i += channels, pixel++) {
-					if (sigmaClip[pixelMask ? pixel : i] !== 0) continue
+					if (sigmaClip[pixel] !== 0) continue
 					const transformed = transform(raw[i], i)
 					const value = useDeviation ? Math.abs(transformed - deviationCenter) : transformed
 					h[truncatePixel(value, max)]++
@@ -255,7 +254,6 @@ interface SigmaClipMoments {
 // Internal clipping result retaining the per-pixel mask and an optional final histogram for callers.
 interface SigmaClipResult {
 	readonly mask: Int8Array | Uint8Array
-	readonly pixelMask: Int8Array | Uint8Array
 	readonly histogram?: Histogram
 }
 
@@ -346,34 +344,12 @@ function rejectSigmaClipSamples(image: Image, channel: ImageChannelOrGray | unde
 	return count
 }
 
-// Resolves a caller mask to the canonical per-pixel layout while preserving legacy RGB buffers.
-function resolveSigmaClipMask(image: Image, channel: ImageChannelOrGray | undefined, provided?: Int8Array | Uint8Array) {
-	const { raw, metadata } = image
-	const { channels, pixelCount } = metadata
-	if (provided === undefined || provided.length === pixelCount) return { mask: provided ?? new Int8Array(pixelCount), legacy: false }
-	if (channels !== 3 || provided.length < raw.length) throw new RangeError(`mask must have length ${pixelCount} or >= ${raw.length}`)
-
-	const mask = new Int8Array(pixelCount)
-	if (channel === 'RED' || channel === 'GREEN' || channel === 'BLUE') {
-		for (let pixel = 0, i = channelIndex(channel); pixel < pixelCount; pixel++, i += 3) mask[pixel] = provided[i] === 0 ? 0 : 1
-	} else {
-		for (let pixel = 0, i = 0; pixel < pixelCount; pixel++, i += 3) mask[pixel] = provided[i] === 0 && provided[i + 1] === 0 && provided[i + 2] === 0 ? 0 : 1
-	}
-	return { mask, legacy: true }
-}
-
-// Copies the canonical per-pixel mask back into a caller-provided legacy RGB layout.
-function updateLegacySigmaClipMask(mask: Int8Array | Uint8Array, output: Int8Array | Uint8Array, channel: ImageChannelOrGray | undefined) {
-	if (channel === 'RED' || channel === 'GREEN' || channel === 'BLUE') {
-		for (let pixel = 0, i = channelIndex(channel); pixel < mask.length; pixel++, i += 3) if (mask[pixel] !== 0) output[i] = 1
-	} else {
-		for (let pixel = 0, i = 0; pixel < mask.length; pixel++, i += 3) {
-			if (mask[pixel] === 0) continue
-			output[i] = 1
-			output[i + 1] = 1
-			output[i + 2] = 1
-		}
-	}
+// Resolves the canonical one-entry-per-pixel clipping mask.
+function resolveSigmaClipMask(image: Image, provided?: Int8Array | Uint8Array) {
+	const { pixelCount } = image.metadata
+	if (provided === undefined) return new Int8Array(pixelCount)
+	if (provided.length !== pixelCount) throw new RangeError(`mask must have length ${pixelCount}`)
+	return provided
 }
 
 // Performs sigma clipping and retains internal state useful to background estimation.
@@ -385,11 +361,10 @@ function sigmaClipResult(image: Image, options: Partial<SigmaClipOptions> = DEFA
 	validateNonNegativeInteger(maxIterations)
 
 	const transform = options.transform ?? DEFAULT_SIGMA_CLIP_OPTIONS.transform
-	const resolvedMask = resolveSigmaClipMask(image, channel, options.mask)
-	const pixelMask = resolvedMask.mask
+	const mask = resolveSigmaClipMask(image, options.mask)
 	const useDirectMoments = centerMethod === 'mean' && dispersionMethod === 'std'
 	const bits = useDirectMoments ? undefined : resolveHistogramBins(options.bits)
-	const histogramOptions = { ...options, bits, transform, sigmaClip: pixelMask } as HistogramOptions
+	const histogramOptions = { ...options, bits, transform, sigmaClip: mask } as HistogramOptions
 	const deviationOptions = dispersionMethod === 'mad' && bits !== undefined ? { ...histogramOptions, bits: new Int32Array(bits.length) } : histogramOptions
 	let lastCenter: number | undefined
 	let lastDispersion: number | undefined
@@ -401,7 +376,7 @@ function sigmaClipResult(image: Image, options: Partial<SigmaClipOptions> = DEFA
 		let currentHistogram: Histogram | undefined
 
 		if (useDirectMoments) {
-			const moments = sigmaClipMoments(image, channel, transform, pixelMask)
+			const moments = sigmaClipMoments(image, channel, transform, mask)
 			center = moments.mean
 			dispersion = moments.standardDeviation
 		} else {
@@ -417,7 +392,7 @@ function sigmaClipResult(image: Image, options: Partial<SigmaClipOptions> = DEFA
 
 		const lower = center - sigmaLower * dispersion
 		const upper = center + sigmaUpper * dispersion
-		const rejected = rejectSigmaClipSamples(image, channel, transform, pixelMask, lower, upper)
+		const rejected = rejectSigmaClipSamples(image, channel, transform, mask, lower, upper)
 		const converged = lastCenter !== undefined && lastDispersion !== undefined && Math.abs(center - lastCenter) <= tolerance * Math.max(Math.abs(center), Number.EPSILON) && Math.abs(dispersion - lastDispersion) <= tolerance * Math.max(Math.abs(dispersion), Number.EPSILON)
 
 		if (rejected === 0) {
@@ -429,9 +404,7 @@ function sigmaClipResult(image: Image, options: Partial<SigmaClipOptions> = DEFA
 		lastDispersion = dispersion
 	}
 
-	const outputMask = options.mask ?? pixelMask
-	if (resolvedMask.legacy) updateLegacySigmaClipMask(pixelMask, outputMask, channel)
-	return { mask: outputMask, pixelMask, histogram: finalHistogram }
+	return { mask, histogram: finalHistogram }
 }
 
 // Iteratively rejects outlier pixels beyond [center - sigmaLower*disp, center + sigmaUpper*disp],
@@ -444,7 +417,7 @@ export function sigmaClip(image: Image, options: Partial<SigmaClipOptions> = DEF
 // Estimates the sky background as the median of the sigma-clipped (median/MAD) pixels.
 export function estimateBackground(image: Image, options?: Partial<Omit<SigmaClipOptions, 'centerMethod' | 'dispersionMethod'>>) {
 	const result = sigmaClipResult(image, { ...options, centerMethod: 'median', dispersionMethod: 'mad' })
-	return (result.histogram ?? computeHistogram(image, { ...options, sigmaClip: result.pixelMask })).median
+	return (result.histogram ?? computeHistogram(image, { ...options, sigmaClip: result.mask })).median
 }
 
 // Estimates the background using the empirical mode approximation 2.5*median - 1.5*mean.
