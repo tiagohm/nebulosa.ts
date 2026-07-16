@@ -110,6 +110,33 @@ test('calibrate applies flat normalization without dark or bias frames', () => {
 	expectImageValues(light, [0.9, 0.3], 6)
 })
 
+test('calibrate normalizes each planar color channel independently', () => {
+	const light = makeImage(2, 1, 3, [0.4, 0.4, 0.4, 0.4, 0.4, 0.4])
+	const flat = makeImage(2, 1, 3, [0.5, 1, 1, 2, 0.25, 0.5])
+
+	calibrate(light, { flat })
+
+	expectImageValues(light, [0.6, 0.3, 0.6, 0.3, 0.6, 0.3], 7)
+})
+
+test('calibrate normalizes each CFA phase independently', () => {
+	const light = makeImage(4, 2, 1, [0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 0.4], { BAYERPAT: 'RGGB' })
+	const flat = makeImage(4, 2, 1, [0.5, 1, 1, 2, 1.5, 0.25, 3, 0.5], { BAYERPAT: 'RGGB' })
+
+	calibrate(light, { flat })
+
+	expectImageValues(light, [0.6, 0.6, 0.3, 0.3, 0.6, 0.6, 0.3, 0.3], 7)
+})
+
+test('calibrate handles CFA phases absent from a small image', () => {
+	const light = makeImage(1, 1, 1, [0.4], { BAYERPAT: 'RGGB' })
+	const flat = makeImage(1, 1, 1, [0.5], { BAYERPAT: 'RGGB' })
+
+	calibrate(light, { flat })
+
+	expectImageValues(light, [0.4], 7)
+})
+
 test('calibrate subtracts an exposure-matched dark-flat without separately subtracting bias', () => {
 	const light = makeImage(2, 1, 1, [0.8, 0.4])
 	const flat = makeImage(2, 1, 1, [0.5, 1], { EXPTIME: 2 })
@@ -185,6 +212,61 @@ test('calibrate rejects channel-layout mismatches', () => {
 	const flat = makeImage(1, 1, 1, [0.5])
 
 	expect(() => calibrate(light, { flat })).toThrow('flat channels do not match light: 1 != 3')
+})
+
+test('calibrate rejects a flat with another CFA phase layout', () => {
+	const light = makeImage(2, 2, 1, [0.4, 0.4, 0.4, 0.4], { BAYERPAT: 'RGGB' })
+	const flat = makeImage(2, 2, 1, [0.5, 0.5, 0.5, 0.5], { BAYERPAT: 'BGGR' })
+	const before = new Float32Array(light.raw)
+
+	expect(() => calibrate(light, { flat })).toThrow('flat CFA pattern does not match light: BGGR != RGGB')
+	expect(light.raw).toEqual(before)
+})
+
+test('calibrate requires CFA metadata on a flat for a CFA light', () => {
+	const light = makeImage(2, 2, 1, [0.4, 0.4, 0.4, 0.4], { BAYERPAT: 'RGGB' })
+	const flat = makeImage(2, 2, 1, [0.5, 0.5, 0.5, 0.5])
+
+	expect(() => calibrate(light, { flat })).toThrow('flat CFA pattern does not match light: none != RGGB')
+})
+
+test('calibrate permits CFA-neutral masters without Bayer metadata', () => {
+	const light = makeImage(2, 2, 1, [0.4, 0.4, 0.4, 0.4], { BAYERPAT: 'RGGB', EXPTIME: 10 })
+	const dark = makeImage(2, 2, 1, [0.1, 0.1, 0.1, 0.1], { EXPTIME: 10 })
+
+	calibrate(light, { dark })
+
+	expectImageValues(light, [0.3, 0.3, 0.3, 0.3], 7)
+})
+
+test('calibrate rejects conflicting CFA metadata on a dark master', () => {
+	const light = makeImage(2, 2, 1, [0.4, 0.4, 0.4, 0.4], { BAYERPAT: 'RGGB', EXPTIME: 10 })
+	const dark = makeImage(2, 2, 1, [0.1, 0.1, 0.1, 0.1], { BAYERPAT: 'BGGR', EXPTIME: 10 })
+
+	expect(() => calibrate(light, { dark })).toThrow('dark CFA pattern does not match light: BGGR != RGGB')
+})
+
+test('calibrate rejects unsupported CFA metadata', () => {
+	const light = makeImage(2, 2, 1, [0.4, 0.4, 0.4, 0.4], { BAYERPAT: 'XXXX' })
+	const flat = makeImage(2, 2, 1, [0.5, 0.5, 0.5, 0.5], { BAYERPAT: 'XXXX' })
+
+	expect(() => calibrate(light, { flat })).toThrow('light has unsupported CFA pattern: XXXX')
+})
+
+test('calibrate rejects known subframe-origin mismatches', () => {
+	const light = makeImage(2, 1, 1, [0.4, 0.4], { XORGSUBF: 10 })
+	const flat = makeImage(2, 1, 1, [0.5, 0.5], { XORGSUBF: 11 })
+
+	expect(() => calibrate(light, { flat })).toThrow('flat XORGSUBF does not match light: 11 != 10')
+})
+
+test('calibrate rejects known binning and readout mismatches', () => {
+	const light = makeImage(2, 1, 1, [0.4, 0.4], { XBINNING: 1, GAIN: 100 })
+	const flatBinning = makeImage(2, 1, 1, [0.5, 0.5], { XBINNING: 2, GAIN: 100 })
+	const flatGain = makeImage(2, 1, 1, [0.5, 0.5], { XBINNING: 1, GAIN: 200 })
+
+	expect(() => calibrate(light, { flat: flatBinning })).toThrow('flat XBINNING does not match light: 2 != 1')
+	expect(() => calibrate(light, { flat: flatGain })).toThrow('flat GAIN does not match light: 200 != 100')
 })
 
 test('calibrate rejects raw buffers inconsistent with metadata', () => {
