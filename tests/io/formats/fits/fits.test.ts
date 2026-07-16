@@ -223,6 +223,22 @@ test('write/read RICE compressed', async () => {
 	await saveImageAndCompareHash(output, 'write-fits-rice-16-1', 'c754bf834dc1bb3948ec3cf8b9aca303')
 }, 5000)
 
+test('writes and reads interleaved channels directly from Rice tiles', async () => {
+	const width = 3
+	const height = 3
+	const channels = 3
+	const header: FitsHeader = { SIMPLE: true, BITPIX: 16, NAXIS: 3, NAXIS1: width, NAXIS2: height, NAXIS3: channels, BSCALE: 1, BZERO: 32768 }
+	const raw = new Float64Array(width * height * channels)
+	for (let i = 0; i < raw.length; i++) raw[i] = i / (raw.length - 1)
+	const buffer = Buffer.alloc(FITS_BLOCK_SIZE * 4)
+
+	await writeFits(bufferSink(buffer), [{ header, raw }], { type: 'RICE_1', tileHeight: 2 })
+	const output = await readImageFromBuffer(buffer, { raw: 64 })
+
+	expect(output?.metadata.channels).toBe(channels)
+	for (let i = 0; i < raw.length; i++) expect(output!.raw[i]).toBeCloseTo(raw[i], 4)
+})
+
 test('write uncompressed FITS from a compressed image header', async () => {
 	const buffer = Buffer.alloc(FITS_BLOCK_SIZE * 3, 20)
 	const header: FitsHeader = {

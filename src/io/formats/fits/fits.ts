@@ -1086,9 +1086,8 @@ function riceBlockSizeFromHeader(header: Readonly<FitsHeader>) {
 	return Number.isFinite(fallback) && fallback > 0 ? Math.trunc(fallback) : RICE_DEFAULT_BLOCK_SIZE
 }
 
-// Converts FITS planar samples to interleaved output in normalized or physical digital scale.
-function writePlanarToInterleaved(data: NumberArray, output: ImageRawType, header: Readonly<FitsHeader>, bitpix: BitpixOrZero, width: number, height: number, channels: number, sampleScale: ImageSampleScale) {
-	const numberOfPixels = width * height
+// Computes the multiplier and bias that apply FITS scaling in normalized or digital sample space.
+function fitsReadScaling(header: Readonly<FitsHeader>, bitpix: BitpixOrZero, sampleScale: ImageSampleScale) {
 	const normalized = sampleScale === 'normalized'
 	const defaultZero = normalized && bitpix === 16 ? 32768 : normalized && bitpix === 32 ? 2147483648 : 0
 	const scale = uncompressedScaleKeyword(header, 1)
@@ -1097,8 +1096,13 @@ function writePlanarToInterleaved(data: NumberArray, output: ImageRawType, heade
 	const safeZero = Number.isFinite(zero) ? zero : defaultZero
 	const effectiveScale = normalized && bitpix > 0 && safeScale === 0 ? 1 : safeScale
 	const normalization = normalized && bitpix > 0 ? 1 / (2 ** bitpix - 1) : 1
-	const multiplier = effectiveScale * normalization
-	const bias = safeZero * normalization
+	return [effectiveScale * normalization, safeZero * normalization] as const
+}
+
+// Converts FITS planar samples to interleaved output in normalized or physical digital scale.
+function writePlanarToInterleaved(data: NumberArray, output: ImageRawType, header: Readonly<FitsHeader>, bitpix: BitpixOrZero, width: number, height: number, channels: number, sampleScale: ImageSampleScale) {
+	const numberOfPixels = width * height
+	const [multiplier, bias] = fitsReadScaling(header, bitpix, sampleScale)
 
 	if (channels === 1) {
 		if (multiplier === 1 && bias === 0) output.set(data)
@@ -1116,6 +1120,36 @@ function writePlanarToInterleaved(data: NumberArray, output: ImageRawType, heade
 	for (let i = 0, p = 0; i < numberOfPixels; i++) {
 		for (let c = 0, m = i; c < channels; c++, m += numberOfPixels) {
 			output[p++] = data[m] * multiplier + bias
+		}
+	}
+}
+
+// Scales one decompressed planar Rice tile directly into its interleaved image coordinates.
+function writePlanarTileToInterleaved(tile: NumberArray, output: ImageRawType, width: number, channels: number, x0: number, y0: number, z0: number, tileWidth: number, tileHeight: number, tileDepth: number, multiplier: number, bias: number) {
+	if (channels === 1 && tileWidth === width && x0 === 0 && tileDepth === 1) {
+		const target = y0 * width
+		if (multiplier === 1 && bias === 0) output.set(tile, target)
+		else for (let i = 0; i < tile.length; i++) output[target + i] = tile[i] * multiplier + bias
+		return
+	}
+
+	const tilePlaneSize = tileWidth * tileHeight
+	const identity = multiplier === 1 && bias === 0
+
+	for (let z = 0; z < tileDepth; z++) {
+		const channel = z0 + z
+		const tileOffset = z * tilePlaneSize
+
+		for (let y = 0; y < tileHeight; y++) {
+			let source = tileOffset + y * tileWidth
+			let target = ((y0 + y) * width + x0) * channels + channel
+			const sourceEnd = source + tileWidth
+
+			if (identity) {
+				for (; source < sourceEnd; source++, target += channels) output[target] = tile[source]
+			} else {
+				for (; source < sourceEnd; source++, target += channels) output[target] = tile[source] * multiplier + bias
+			}
 		}
 	}
 }
@@ -1218,10 +1252,9 @@ export class FitsImageReader {
 
 		if (rowCount < totalTiles) throw new Error('compressed FITS image has incomplete tile table')
 
-		const numberOfPixels = width * height
 		const ImageTypedArray = bitpix === 8 ? Uint8Array : bitpix === 16 ? Int16Array : Int32Array
-		const data = new ImageTypedArray(numberOfPixels * channels)
 		const tileBuffer = new ImageTypedArray(maxTilePixels)
+		const [multiplier, bias] = fitsReadScaling(header, bitpix, sampleScale)
 
 		const { decompressRice } = await import('../../compression')
 
@@ -1251,30 +1284,8 @@ export class FitsImageReader {
 			const tile = thisTilePixels === tileBuffer.length ? tileBuffer : tileBuffer.subarray(0, thisTilePixels)
 
 			decompressRice(compressed.subarray(start, end), tile, blockSize)
-
-			for (let z = 0; z < thisTileDepth; z++) {
-				const channel = z0 + z
-				const channelOffset = channel * numberOfPixels
-				const tileOffset = z * thisTileWidth * thisTileHeight
-
-				if (thisTileWidth === width && x0 === 0) {
-					data.set(tile.subarray(tileOffset, tileOffset + thisTileWidth * thisTileHeight), channelOffset + y0 * width)
-					continue
-				}
-
-				for (let y = 0; y < thisTileHeight; y++) {
-					let sourceOffset = tileOffset + y * thisTileWidth
-					let targetOffset = channelOffset + (y0 + y) * width + x0
-					const sourceEnd = sourceOffset + thisTileWidth
-
-					for (; sourceOffset < sourceEnd; sourceOffset++, targetOffset++) {
-						data[targetOffset] = tile[sourceOffset]
-					}
-				}
-			}
+			writePlanarTileToInterleaved(tile, output, width, channels, x0, y0, z0, thisTileWidth, thisTileHeight, thisTileDepth, multiplier, bias)
 		}
-
-		writePlanarToInterleaved(data, output, header, bitpix, width, height, channels, sampleScale)
 
 		return true
 	}
