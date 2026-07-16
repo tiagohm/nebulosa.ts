@@ -82,7 +82,32 @@ test('curvesTransformation ignores absent color channels in mono images', () => 
 
 	const gray = makeImage(1, 1, 1, [0.25])
 	curvesTransformation(gray, { bits: 8, curves: [{ channel: 'GRAY', x: [0, 1], y: [1, 0] }] })
-	expectImageValues(gray, [192 / 255], 6)
+	expectImageValues(gray, [0.75], 7)
+})
+
+test('curvesTransformation evaluates normalized integer codes without downward LUT bias', () => {
+	const max = 65535
+	const raw = new Float32Array(max + 1)
+	for (let i = 0; i <= max; i++) raw[i] = i / max
+	const image = makeImage(max + 1, 1, 1, raw)
+
+	curvesTransformation(image, { bits: 16, curves: [{ channel: 'GRAY', x: [0, 1], y: [1, 0] }] })
+
+	let maximumError = 0
+	for (let i = 0; i <= max; i++) maximumError = Math.max(maximumError, Math.abs(image.raw[i] - (1 - i / max)))
+	expect(image.raw[1]).toBeCloseTo(1 - 1 / max, 7)
+	expect(maximumError).toBeLessThan(6e-8)
+})
+
+test('curvesTransformation caps dense LUT storage while retaining high-bit continuous sampling', () => {
+	const a = makeImage(5, 1, 1, [0.123456, 0.25, 0.5, 0.75, 0.987654])
+	const b = makeImage(5, 1, 1, a.raw.slice())
+	const curve = { channel: 'GRAY', x: [0, 0.2, 0.65, 1], y: [0.05, 0.4, 0.8, 0.95] } as const
+
+	curvesTransformation(a, { bits: 16, curves: [curve] })
+	curvesTransformation(b, { bits: 24, curves: [curve] })
+
+	expect(b.raw).toEqual(a.raw)
 })
 
 test('curvesTransformation validates interpolation and every channel before mutation', () => {

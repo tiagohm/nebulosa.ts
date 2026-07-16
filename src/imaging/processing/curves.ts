@@ -1,7 +1,6 @@
 import { validateNonNegativeFinite } from '../../core/validation'
 import { clamp, type NumberArray } from '../../math/numerical/math'
 import { akimaSplineLUT, catmullRomSplineLUT, cubicHermiteSplineLUT, naturalCubicSplineLUT } from '../../math/numerical/spline'
-import { truncatePixel } from '../model/image'
 import { GRAYSCALES, type Image, type ImageChannelOrGray } from '../model/types'
 
 // Curves transformation of the normalized [0, 1] raw buffer: applies per-channel or RGB/K tone curves
@@ -22,7 +21,7 @@ export interface CurvesTransformationCurve {
 
 // Options for the curves transformation.
 export interface CurvesTransformationOptions {
-	// Bit depth of the input/output values.
+	// Requested LUT sampling depth; dense storage is capped and evaluated with linear interpolation.
 	readonly bits: number
 	// Spline interpolation between control points.
 	readonly interpolation: CurvesTransformationInterpolation
@@ -51,6 +50,8 @@ const IDENTITY_CURVES_TRANSFORMATION = new Float64Array([0, 1])
 
 // Absolute tolerance accepted for normalized custom grayscale weights.
 const CURVES_WEIGHT_SUM_TOLERANCE = 1e-6
+// Maximum dense LUT depth; interpolation provides higher logical precision without exponential memory.
+const MAX_CURVES_LUT_BITS = 16
 
 // Verifies the dense mono or interleaved RGB layout required by curves transformation.
 function validateCurvesImage(image: Image) {
@@ -141,23 +142,34 @@ function resolveCurvesTransformationCurve(curve: CurvesTransformationCurve | und
 // Builds and clamps a LUT for one resolved interpolation curve.
 function curvesTransformationLUT(curve: ResolvedCurvesTransformationCurve, bits: number, interpolation: CurvesTransformationInterpolation) {
 	if (curve.identity) return undefined
-	const size = 1 << bits
+	const size = 1 << Math.min(bits, MAX_CURVES_LUT_BITS)
 	const lut = interpolation === 'cubicHermite' ? cubicHermiteSplineLUT(curve.x, curve.y, size) : interpolation === 'catmullRom' ? catmullRomSplineLUT(curve.x, curve.y, size) : interpolation === 'naturalCubic' ? naturalCubicSplineLUT(curve.x, curve.y, size) : akimaSplineLUT(curve.x, curve.y, size)
 	const n = lut.length
 	for (let i = 0; i < n; i++) lut[i] = clamp(lut[i], 0, 1)
 	return lut
 }
 
+// Samples a normalized curve continuously between adjacent LUT entries, avoiding downward bin bias.
+function sampleCurvesTransformationLUT(lut: Float32Array, value: number) {
+	const max = lut.length - 1
+	const position = clamp(value, 0, 1) * max
+	const lower = Math.floor(position)
+	if (lower >= max) return lut[max]
+	const fraction = position - lower
+	if (fraction <= 0) return lut[lower]
+	const a = lut[lower]
+	return a + fraction * (lut[lower + 1] - a)
+}
+
 // Applies the shared RGB/K-style curve to every stored sample.
 function applyCurvesTransformation(image: Image, lut: Float32Array, channel: ImageChannelOrGray) {
 	const { raw, metadata } = image
-	const max = lut.length - 1
 	const n = raw.length
 
-	if (metadata.channels === 1) for (let i = 0; i < n; i++) raw[i] = lut[truncatePixel(raw[i], max)]
-	else if (channel === 'RED') for (let i = 0; i < n; i += 3) raw[i] = lut[truncatePixel(raw[i], max)]
-	else if (channel === 'GREEN') for (let i = 1; i < n; i += 3) raw[i] = lut[truncatePixel(raw[i], max)]
-	else if (channel === 'BLUE') for (let i = 2; i < n; i += 3) raw[i] = lut[truncatePixel(raw[i], max)]
+	if (metadata.channels === 1) for (let i = 0; i < n; i++) raw[i] = sampleCurvesTransformationLUT(lut, raw[i])
+	else if (channel === 'RED') for (let i = 0; i < n; i += 3) raw[i] = sampleCurvesTransformationLUT(lut, raw[i])
+	else if (channel === 'GREEN') for (let i = 1; i < n; i += 3) raw[i] = sampleCurvesTransformationLUT(lut, raw[i])
+	else if (channel === 'BLUE') for (let i = 2; i < n; i += 3) raw[i] = sampleCurvesTransformationLUT(lut, raw[i])
 	else {
 		const { red, green, blue } = typeof channel === 'string' ? GRAYSCALES[channel] : channel
 
@@ -166,7 +178,7 @@ function applyCurvesTransformation(image: Image, lut: Float32Array, channel: Ima
 			const g = raw[i + 1]
 			const b = raw[i + 2]
 			const p = clamp(red * r + green * g + blue * b, 0, 1)
-			const v = lut[truncatePixel(p, max)]
+			const v = sampleCurvesTransformationLUT(lut, p)
 
 			if (p > 0) {
 				const scale = v / p
