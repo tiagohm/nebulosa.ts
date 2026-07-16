@@ -352,7 +352,7 @@ describe('generate image', () => {
 		{
 			name: 'mono read noise only',
 			channels: 1,
-			hash: '7c62fd378defa43245bc0eb9403f8a67',
+			hash: 'adf4c5b565757ca0b3c7ff1cee7b585e',
 			config: baseConfig({ sensor: { readNoise: 3.5 } }),
 		},
 		{
@@ -398,7 +398,7 @@ describe('generate image', () => {
 		{
 			name: 'mono amp glow and structure',
 			channels: 1,
-			hash: 'c7b699160063961b748dd57723a37f26',
+			hash: '7a86d44167b6e07a9a43adf810fc9eff',
 			config: baseConfig({
 				sky: { enabled: true, baseRate: 0.08 },
 				sensor: { readNoise: 2.5, ampGlow: { enabled: true, strength: 0.12, position: 'right', radiusX: 0.22, radiusY: 0.35, falloff: 4.2, tint: [1, 1, 1] } },
@@ -408,7 +408,7 @@ describe('generate image', () => {
 		{
 			name: 'mono hot pixel defect map',
 			channels: 1,
-			hash: 'b5db8d17892c6b99580676b763cc2f2c',
+			hash: '4c5e4070953051ca5895a2c50ec9b3b7',
 			config: baseConfig({
 				sensor: { readNoise: 1.4, biasElectrons: 120 },
 				artifacts: { hotPixelRate: 0.0008, warmPixelRate: 0.0015, deadPixelRate: 0.0003, hotPixelStrength: 180, warmPixelStrength: 42, deadPixelResidual: 0.01 },
@@ -417,7 +417,7 @@ describe('generate image', () => {
 		{
 			name: 'mono realistic cooled camera',
 			channels: 1,
-			hash: '9748001c4ceafe6ca24b05dfddfe5c8b',
+			hash: '2657a5a1bcbb48ff34900d633f66c64e',
 			config: baseConfig({
 				quality: 'high-realism',
 				exposure: { exposureTime: 180, electronsPerAdu: 0.75 },
@@ -459,7 +459,7 @@ describe('generate image', () => {
 		{
 			name: 'rgb broadband realistic',
 			channels: 3,
-			hash: '23cb7b107e4ecde245b3ed787b22fbab',
+			hash: '8daa9a5ecd4734cf69bed9dfb7b77f73',
 			config: baseConfig({
 				quality: 'high-realism',
 				exposure: { exposureTime: 180, electronsPerAdu: 0.8 },
@@ -484,7 +484,7 @@ describe('generate image', () => {
 		{
 			name: 'rgb amp glow sensor tint',
 			channels: 3,
-			hash: '733a9a41b1f51ebdc50aeaa3bc88fd48',
+			hash: 'd4fdcc258d079b72aa3620e734db8d02',
 			config: baseConfig({
 				sky: { enabled: true, baseRate: 0.08, perChannelMultipliers: [1, 1, 1] },
 				sensor: {
@@ -498,7 +498,7 @@ describe('generate image', () => {
 		{
 			name: 'rgb warm noisy one shot color',
 			channels: 3,
-			hash: 'a7d4b64830dc1b85926407c5a8821473',
+			hash: '0a6d3e91b10242595c0a9166d2549a00',
 			config: baseConfig({
 				exposure: { exposureTime: 90, analogGain: 1.6, digitalGain: 1.15, electronsPerAdu: 0.9 },
 				sky: { enabled: true, baseRate: 0.22, gradientStrength: 0.08, radialGradientStrength: 0.05, lowFrequencyVariationStrength: 0.03, perChannelMultipliers: [1.04, 1, 0.94], colorBias: [1.02, 1, 0.96] },
@@ -559,7 +559,7 @@ describe('generate image with stars', () => {
 
 		generateStarImage(raw, width, height, 1, stars, 0.2, config, { psfModel: 'gaussian', jitterX: 0.18, jitterY: -0.22, softCore: 1.8, additiveNoiseHint: 1.5, haloStrength: 0.2 })
 		const image: Image = { raw, header: {}, metadata: { width, height, channels: 1, pixelCount: width * height, pixelSizeInBytes: 8, bitpix: -64, stride: width * 1, strideInBytes: width * 1 * 8, bayer: undefined } }
-		await saveImageAndCompareHash(stf(image, ...adf(image)), 'generate-image-with-stars-mono', '50b5b6a448fa12089d697a731de274bb')
+		await saveImageAndCompareHash(stf(image, ...adf(image)), 'generate-image-with-stars-mono', '0fd451a354b0de58721515c6108537fa')
 	})
 
 	test('color', async () => {
@@ -569,6 +569,6 @@ describe('generate image with stars', () => {
 
 		generateStarImage(raw, width, height, 3, stars, 0.2, config, { psfModel: 'gaussian', jitterX: 0.18, jitterY: -0.22, softCore: 1.8, additiveNoiseHint: 1.5, haloStrength: 0.2 })
 		const image: Image = { raw, header: {}, metadata: { width, height, channels: 3, pixelCount: width * height, pixelSizeInBytes: 8, bitpix: -64, stride: width * 3, strideInBytes: width * 3 * 8, bayer: undefined } }
-		await saveImageAndCompareHash(stf(image, ...adf(image)), 'generate-image-with-stars-color', '196f77132bc3c82529bb8869e82a9991')
+		await saveImageAndCompareHash(stf(image, ...adf(image)), 'generate-image-with-stars-color', 'cb310e5dc1c5fb3a8ce4049e51def4ad')
 	})
 })

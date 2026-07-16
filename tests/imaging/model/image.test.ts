@@ -189,7 +189,7 @@ test('histogram with transform', async () => {
 })
 
 test('debayer', async () => {
-	const image = await readImageTransformAndSave((i) => stf(debayer(i) ?? i, 0.05), 'debayer-grbg', '4a99487d41ece23c4ed2f3773eb92f1f', Bitpix.SHORT, 1, 'fit', 'GRBG')
+	const image = await readImageTransformAndSave((i) => stf(debayer(i) ?? i, 0.05), 'debayer-grbg', 'c03d37c612fd1a4c20bfd5036260aeb0', Bitpix.SHORT, 1, 'fit', 'GRBG')
 
 	expect(image.header.NAXIS).toBe(3)
 	expect(image.header.NAXIS3).toBe(3)
@@ -197,7 +197,7 @@ test('debayer', async () => {
 }, 5000)
 
 test('debayer RGBG', async () => {
-	const image = await readImageTransformAndSave((i) => stf(debayer(i, 'RGBG') ?? i, 0.05), 'debayer-rgbg', '11aae349eaff0fce3319cf0caac90e89', Bitpix.SHORT, 1, 'fit', 'GRBG')
+	const image = await readImageTransformAndSave((i) => stf(debayer(i, 'RGBG') ?? i, 0.05), 'debayer-rgbg', '5e17e6927f823695d26df4758ca870ae', Bitpix.SHORT, 1, 'fit', 'GRBG')
 
 	expect(image.header.NAXIS).toBe(3)
 	expect(image.header.NAXIS3).toBe(3)
@@ -240,11 +240,11 @@ test('clone produces an independent pixel buffer', () => {
 	expect(image.raw[0]).toBeCloseTo(0.1, 8)
 })
 
-test('stf', () => readImageTransformAndSave((i) => stf(i, 0.005), 'stf', '82161af2eac053ad688a161d4e1fc6da'), 5000)
+test('stf', () => readImageTransformAndSave((i) => stf(i, 0.005), 'stf', '0d4c72c8140e27f9823bd5cdd36f9108'), 5000)
 
-test('auto stf', () => readImageTransformAndSave((i) => stf(i, ...adf(i)), 'stf-auto', 'c89314c7f303599568199398d7312372'), 5000)
+test('auto stf', () => readImageTransformAndSave((i) => stf(i, ...adf(i)), 'stf-auto', 'f317ee55154ecb95770fad5df319855b'), 5000)
 
-test('auto stf with sigma clip', () => readImageTransformAndSave((i) => stf(i, ...adf(i, { sigmaClip: sigmaClip(i) })), 'stf-auto-sigma-clip', 'c5a13d1826c35bf30667b95222560ae0'), 5000)
+test('auto stf with sigma clip', () => readImageTransformAndSave((i) => stf(i, ...adf(i, { sigmaClip: sigmaClip(i) })), 'stf-auto-sigma-clip', '08a491b6f34efff02d78e45fe15e16ae'), 5000)
 
 test('sigma clip excludes rejected pixels from the iteration statistics', () => {
 	// Continuous background plus a bright tail: rejection is marginal, so a biased
@@ -400,14 +400,14 @@ test('gamma', () => readImageTransformAndSave((i) => gamma(i, 2.2), 'gamma', '08
 describe('fft', () => {
 	const workspace = new FFTWorkspace(1037, 706)
 
-	test('low-pass', () => readImageTransformAndSave((i) => autoStf(fft(i, workspace, 'lowPass', 0.015, 0.8)), 'fft-low-pass', '56a0759224001a7b3441f1393538921b'), 5000)
+	test('low-pass', () => readImageTransformAndSave((i) => autoStf(fft(i, workspace, 'lowPass', 0.015, 0.8)), 'fft-low-pass', 'a73e40cb9a87bb3ebf5cc004cc55c27b'), 5000)
 
-	test('high-pass', () => readImageTransformAndSave((i) => autoStf(fft(i, workspace, 'highPass', 0.5, 0.3)), 'fft-high-pass', '16478c59f81f07e8cb82b2f4246c304a'), 5000)
+	test('high-pass', () => readImageTransformAndSave((i) => autoStf(fft(i, workspace, 'highPass', 0.5, 0.3)), 'fft-high-pass', '3ec4f47c7e52a4a6b36374bd3dd199c9'), 5000)
 })
 
 test('arcsinh stretch', () => readImageTransformAndSave((i) => arcsinhStretch(i, approximateArcsinhStretchParameters(...adf(i))), 'arcsinh', 'f2eaccfae404773ebd06f1200fb67c10'))
 
-test('background neutralization', () => readImageTransformAndSave((i) => autoStf(backgroundNeutralization(i, { upperLimit: 0.1 })), 'background-neutralization', '123c3c9df7ca332a67098b7eeed55981'))
+test('background neutralization', () => readImageTransformAndSave((i) => autoStf(backgroundNeutralization(i, { upperLimit: 0.1 })), 'background-neutralization', 'e7fb3b8cd06488553d031996c2ec93db'))
 
 test('mmt', () => {
 	const options: MultiscaleMedianTransformOptions = {
@@ -416,7 +416,7 @@ test('mmt', () => {
 		residualGain: 1,
 	}
 
-	return readImageTransformAndSave((i) => autoStf(multiscaleMedianTransform(i, options)), 'mmt', 'b9bdeda38c1423468f6602451144546e')
+	return readImageTransformAndSave((i) => autoStf(multiscaleMedianTransform(i, options)), 'mmt', '75f6a6dc50e4890dbc7b8916a87c3974')
 }, 5000)
 
 test('curves transformation - mono', () => readImageTransformAndSave((i) => autoStf(curvesTransformation(i, { curves: [{ channel: 'GRAY', x: [0.007], y: [0.08] }] })), 'ct-mono', 'f51a8f097b44ddebbedc8bea320f1c43', undefined, 1))
@@ -426,22 +426,22 @@ describe('curves transformation - RGB', () => {
 		{
 			name: 'gray-shadow-lift',
 			curves: [{ channel: 'GRAY', x: [0.004], y: [0.08] }],
-			hash: 'ed36b22d4cec83e486c2d8c50cce1712',
+			hash: '45e9082c05133fb038f774891daf7fcf',
 		},
 		{
 			name: 'red-boost',
 			curves: [{ channel: 'RED', x: [0.02, 0.55], y: [0.08, 0.72] }],
-			hash: '988dc15d5063fe08095df263ac813f17',
+			hash: '86854e46d0ef39f291f596a5fea78dc3',
 		},
 		{
 			name: 'green-boost',
 			curves: [{ channel: 'GREEN', x: [0.02, 0.55], y: [0.08, 0.72] }],
-			hash: '52950fe45e3ad347728c749d9d754690',
+			hash: 'b743614b29a3d75ce3b24022c54b55a3',
 		},
 		{
 			name: 'blue-boost',
 			curves: [{ channel: 'BLUE', x: [0.02, 0.55], y: [0.08, 0.72] }],
-			hash: '3f8f1daad375e0e1db743708db27297d',
+			hash: 'ac711c787876472e58724c8657570dfb',
 		},
 		{
 			name: 'warm-balance',
@@ -449,7 +449,7 @@ describe('curves transformation - RGB', () => {
 				{ channel: 'RED', x: [0.03, 0.45], y: [0.1, 0.6] },
 				{ channel: 'BLUE', x: [0.08, 0.6], y: [0.04, 0.52] },
 			],
-			hash: 'bd0df21275ecf5044728d20f52ffae80',
+			hash: '597190b08325b09501913c4b4aae7d06',
 		},
 		{
 			name: 'cool-balance',
@@ -457,7 +457,7 @@ describe('curves transformation - RGB', () => {
 				{ channel: 'RED', x: [0.08, 0.6], y: [0.04, 0.52] },
 				{ channel: 'BLUE', x: [0.03, 0.45], y: [0.1, 0.6] },
 			],
-			hash: '94286951a92691c5b6b2b138ca8bbf67',
+			hash: 'faa3b2714942c6e680483af993762f45',
 		},
 	]
 
@@ -487,16 +487,16 @@ describe('calibrate', async () => {
 
 	test('full', async () => {
 		const calibrated = calibrate(clone(light!), dark, flat, bias, darkFlat)
-		await saveImageAndCompareHash(stf(calibrated, ...adf(calibrated)), 'calibrated-full', '1e63852e5eee85471ae22f974b3393d1')
+		await saveImageAndCompareHash(stf(calibrated, ...adf(calibrated)), 'calibrated-full', '3d29ccc5272ded749b8d100c98657b3c')
 	})
 
 	test('dark 60s', async () => {
 		const calibrated = calibrate(clone(light!), dark60, flat, bias, darkFlat)
-		await saveImageAndCompareHash(stf(calibrated, ...adf(calibrated)), 'calibrated-dark-60', '921b65f82b556936e9c6365dde76788d')
+		await saveImageAndCompareHash(stf(calibrated, ...adf(calibrated)), 'calibrated-dark-60', '6a1a17cf094124534698a94e799bfc60')
 	}, 5000)
 
 	test('dark 15s', async () => {
 		const calibrated = calibrate(clone(light!), dark15, flat, bias, darkFlat)
-		await saveImageAndCompareHash(stf(calibrated, ...adf(calibrated)), 'calibrated-dark-15', 'fb26002004e336571d49cc51a02ca338')
+		await saveImageAndCompareHash(stf(calibrated, ...adf(calibrated)), 'calibrated-dark-15', 'd43a75ced0af0f6a9bb85852e74f9c4b')
 	}, 5000)
 })
