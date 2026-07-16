@@ -281,6 +281,31 @@ describe('byte shuffle and unshuffle', () => {
 })
 
 describe('buffer views', () => {
+	test('reader uses the decompressed block without copying it into scratch storage', async () => {
+		const input = new Float64Array([0, 0.5, 1])
+		const writer = new XisfImageWriter({ bitpix: 16, byteOrder: 'little', pixelStorage: 'Normal', geometry: { width: 3, height: 1, channels: 1 } }, { format: 'zstd' })
+		const encoded = await writer.encode(input)
+		const scratch = Buffer.alloc(6, 0x5a)
+		const reader = new XisfImageReader(
+			{
+				bitpix: 16,
+				location: { offset: 0, size: encoded.data.byteLength },
+				compression: encoded.compression,
+				byteOrder: 'little',
+				pixelStorage: 'Normal',
+				geometry: { width: 3, height: 1, channels: 1 },
+			},
+			scratch,
+		)
+		const output = new Float64Array(3)
+
+		expect(await reader.read(bufferSource(encoded.data), output)).toBeTrue()
+		expect(output[0]).toBe(0)
+		expect(output[1]).toBeCloseTo(0.5, 4)
+		expect(output[2]).toBe(1)
+		expect(scratch).toEqual(Buffer.alloc(6, 0x5a))
+	})
+
 	test('reader respects provided buffer offset', async () => {
 		const storage = Buffer.alloc(8, 0)
 		const buffer = storage.subarray(2, 4)

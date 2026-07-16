@@ -523,9 +523,8 @@ function decompress(input: ArrayBuffer | Buffer | NodeJS.TypedArray, format: Xis
 
 // Reads an XISF image's pixel block into interleaved normalized or digital samples.
 export class XisfImageReader {
-	readonly #buffer: Buffer
+	readonly #buffer?: Buffer
 	readonly #compressed?: Buffer
-	readonly #data: NumberArray
 
 	// Prepares to read `image`; an optional caller `buffer` is reused as scratch storage when alignment allows.
 	constructor(
@@ -534,9 +533,8 @@ export class XisfImageReader {
 	) {
 		const { bitpix, location, compression } = image
 		const size = compression?.uncompressedSize ?? location.size
-		this.#buffer = xisfBufferView(buffer, size, bitpix)
+		this.#buffer = !compression || compression.shuffled ? xisfBufferView(buffer, size, bitpix) : undefined
 		this.#compressed = compression ? Buffer.allocUnsafe(location.size) : undefined
-		this.#data = xisfDataView(this.#buffer, bitpix)
 	}
 
 	// Reads XISF samples into an interleaved buffer using the requested sample scale.
@@ -545,32 +543,34 @@ export class XisfImageReader {
 
 		source.seek(location.offset)
 
-		const input = this.#compressed ?? this.#buffer
+		const input = this.#compressed ?? this.#buffer!
 		if ((await readUntil(source, input, location.size, 0)) !== location.size) return false
+		let buffer = this.#buffer
 
 		if (compression) {
 			if (compression.format !== 'zstd' && compression.format !== 'zlib') throw new Error(`unsupported XISF compression format: ${compression.format}`)
 
 			const decompressed = await decompress(input.subarray(0, location.size), compression.format)
-			if (decompressed === undefined || decompressed.byteLength !== this.#buffer.byteLength) return false
+			if (decompressed === undefined || decompressed.byteLength !== compression.uncompressedSize) return false
 
 			if (compression.shuffled) {
-				if (compression.itemSize <= 0) return false
-				byteUnshuffle(decompressed, this.#buffer, compression.itemSize)
+				if (compression.itemSize <= 0 || buffer === undefined) return false
+				byteUnshuffle(decompressed, buffer, compression.itemSize)
 			} else {
-				decompressed.copy(this.#buffer)
+				buffer = decompressed
 			}
 		}
+		if (buffer === undefined) return false
 
 		const pixelInBytes = bitpixInBytes(this.image.bitpix)
 
 		if (pixelInBytes > 1 && this.image.byteOrder === 'big') {
-			if (pixelInBytes === 2) this.#buffer.swap16()
-			else if (pixelInBytes === 4) this.#buffer.swap32()
-			else if (pixelInBytes === 8) this.#buffer.swap64()
+			if (pixelInBytes === 2) buffer.swap16()
+			else if (pixelInBytes === 4) buffer.swap32()
+			else if (pixelInBytes === 8) buffer.swap64()
 		}
 
-		const data = this.#data
+		const data = xisfDataView(buffer, bitpix)
 		const { width, height, channels } = geometry
 		const numberOfPixels = width * height
 		const factor = bitpix > 0 && sampleScale === 'normalized' ? 1 / (2 ** (8 * pixelInBytes) - 1) : 1
