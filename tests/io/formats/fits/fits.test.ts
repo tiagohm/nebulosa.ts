@@ -463,6 +463,50 @@ test('fits image reader and writer honor non-zero backing buffer offsets', async
 	expect(readBuffer[7]).toBe(77)
 })
 
+test('reads and writes uncompressed FITS images in bounded chunks', async () => {
+	const width = 600_000
+	const header: FitsHeader = { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: width, NAXIS2: 1, BSCALE: 1, BZERO: 32768 }
+	const raw = new Float32Array(width)
+	raw.fill(0.25)
+	const stored = Buffer.alloc(width * 2)
+	const sinkDelegate = bufferSink(stored)
+	const writeSizes: number[] = []
+	const sink = {
+		write(buffer: string | Buffer, offset?: number, size?: number, encoding?: BufferEncoding) {
+			if (typeof buffer === 'string') throw new Error('unexpected string FITS chunk')
+			writeSizes.push(size ?? buffer.length - (offset ?? 0))
+			return sinkDelegate.write(buffer, offset, size, encoding)
+		},
+	}
+
+	expect(await new FitsImageWriter(header).write(raw, sink)).toBe(stored.length)
+	expect(writeSizes.length).toBeGreaterThan(1)
+	expect(Math.max(...writeSizes)).toBeLessThanOrEqual(1024 * 1024)
+
+	const sourceDelegate = bufferSource(stored)
+	const readSizes: number[] = []
+	const source = {
+		get position() {
+			return sourceDelegate.position
+		},
+		seek(position: number) {
+			return sourceDelegate.seek(position)
+		},
+		read(buffer: Buffer, offset?: number, size?: number) {
+			readSizes.push(size ?? buffer.length - (offset ?? 0))
+			return sourceDelegate.read(buffer, offset, size)
+		},
+	}
+	const output = new Float32Array(width)
+	const reader = new FitsImageReader({ header, data: { offset: 0, size: stored.length } })
+
+	expect(await reader.read(source, output)).toBeTrue()
+	expect(readSizes.length).toBeGreaterThan(1)
+	expect(Math.max(...readSizes)).toBeLessThanOrEqual(1024 * 1024)
+	expect(output[0]).toBeCloseTo(0.25, 4)
+	expect(output[width - 1]).toBeCloseTo(0.25, 4)
+})
+
 test('inverts FITS affine scaling when writing normalized samples', async () => {
 	const header: FitsHeader = { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: 1, NAXIS2: 1, BSCALE: 2, BZERO: 10 }
 	const stored = Buffer.alloc(2)
