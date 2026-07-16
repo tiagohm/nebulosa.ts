@@ -1,20 +1,55 @@
-import type { CfaPattern, Image, ImageRawType } from '../model/types'
+import { makeImageRawTypedArray, type CfaPattern, type Image, type ImageRawType } from '../model/types'
 
 // Bayer/debayer conversions between an RGB image and a mono CFA mosaic. `bayer` samples one color per
 // pixel from a CFA pattern; `debayer` reconstructs RGB by neighborhood averaging. Both build fresh
 // buffers rather than mutating in place.
 
-// Per-Bayer-pattern 2x2 channel-index maps: two rows of [evenCol, oddCol] color indices
-// (0 red, 1 green, 2 blue) used to route each mosaic pixel to its color channel during debayering.
-const CFA_PATTERNS: Record<CfaPattern, Uint8Array[]> = {
-	RGGB: [new Uint8Array([0, 1]), new Uint8Array([1, 2])],
-	BGGR: [new Uint8Array([2, 1]), new Uint8Array([1, 0])],
-	GBRG: [new Uint8Array([1, 2]), new Uint8Array([0, 1])],
-	GRBG: [new Uint8Array([1, 0]), new Uint8Array([2, 1])],
-	GRGB: [new Uint8Array([1, 0]), new Uint8Array([1, 2])],
-	GBGR: [new Uint8Array([1, 2]), new Uint8Array([1, 0])],
-	RGBG: [new Uint8Array([0, 1]), new Uint8Array([2, 1])],
-	BGRG: [new Uint8Array([2, 1]), new Uint8Array([0, 1])],
+// A 2x2 CFA layout and its precomputed interior-pixel normalization scales.
+interface CfaPatternData {
+	// Even and odd rows containing the channel index at even and odd columns.
+	readonly rows: readonly [Uint8Array, Uint8Array]
+	// Per-row/per-column-parity reciprocal sample counts for red, green, and blue.
+	readonly interiorScales: readonly [readonly [Float64Array, Float64Array], readonly [Float64Array, Float64Array]]
+}
+
+// Computes the reciprocal channel sample counts for one interior CFA pixel class.
+function makeInteriorScales(rows: readonly [Uint8Array, Uint8Array], yParity: number, xParity: number) {
+	const row = rows[yParity]
+	const nextRow = rows[yParity ^ 1]
+	const nextParity = xParity ^ 1
+	const counts = new Uint8Array(3)
+
+	counts[row[xParity]]++
+	counts[row[nextParity]] += 2
+	counts[nextRow[xParity]] += 2
+	counts[nextRow[nextParity]] += 4
+
+	return new Float64Array([1 / counts[0], 1 / counts[1], 1 / counts[2]])
+}
+
+// Builds lookup data for one repeating 2x2 CFA pattern.
+function makeCfaPatternData(evenRow: readonly [number, number], oddRow: readonly [number, number]): CfaPatternData {
+	const rows = [new Uint8Array(evenRow), new Uint8Array(oddRow)] as const
+
+	return {
+		rows,
+		interiorScales: [
+			[makeInteriorScales(rows, 0, 0), makeInteriorScales(rows, 0, 1)],
+			[makeInteriorScales(rows, 1, 0), makeInteriorScales(rows, 1, 1)],
+		],
+	}
+}
+
+// Per-Bayer-pattern channel routing and normalization data; channel indices are red 0, green 1, blue 2.
+const CFA_PATTERNS: Record<CfaPattern, CfaPatternData> = {
+	RGGB: makeCfaPatternData([0, 1], [1, 2]),
+	BGGR: makeCfaPatternData([2, 1], [1, 0]),
+	GBRG: makeCfaPatternData([1, 2], [0, 1]),
+	GRBG: makeCfaPatternData([1, 0], [2, 1]),
+	GRGB: makeCfaPatternData([1, 0], [1, 2]),
+	GBGR: makeCfaPatternData([1, 2], [1, 0]),
+	RGBG: makeCfaPatternData([0, 1], [2, 1]),
+	BGRG: makeCfaPatternData([2, 1], [0, 1]),
 }
 
 // Bayer an RGB image into a mono CFA frame.
@@ -22,20 +57,26 @@ export function bayer(image: Image, pattern: CfaPattern): Image | undefined {
 	const { metadata, raw } = image
 
 	if (metadata.channels === 3) {
-		const header = structuredClone(image.header)
-		const cfa = CFA_PATTERNS[pattern]
+		const header = { ...image.header }
+		const cfa = CFA_PATTERNS[pattern].rows
 		const output = raw instanceof Float64Array ? new Float64Array(metadata.pixelCount) : new Float32Array(metadata.pixelCount)
 		const { width, height, stride } = metadata
+		const pairedWidth = width & ~1
 
 		for (let y = 0; y < height; y++) {
 			const cfaRow = cfa[y & 1]
 			let ii = y * stride
 			let oi = y * width
+			const pairEnd = oi + pairedWidth
 
-			for (let x = 0; x < width; x++, oi++) {
-				output[oi] = raw[ii + cfaRow[x & 1]]
+			while (oi < pairEnd) {
+				output[oi++] = raw[ii + cfaRow[0]]
+				ii += 3
+				output[oi++] = raw[ii + cfaRow[1]]
 				ii += 3
 			}
+
+			if (pairedWidth !== width) output[oi] = raw[ii + cfaRow[0]]
 		}
 
 		delete header.NAXIS3
@@ -44,7 +85,7 @@ export function bayer(image: Image, pattern: CfaPattern): Image | undefined {
 
 		return {
 			header,
-			metadata: { ...metadata, bayer: pattern, channels: 1, stride: width },
+			metadata: { ...metadata, bayer: pattern, channels: 1, stride: width, strideInBytes: width * metadata.pixelSizeInBytes },
 			raw: output,
 		}
 	}
@@ -124,11 +165,14 @@ export function debayer(image: Image, pattern?: CfaPattern): Image | undefined {
 		pattern ??= metadata.bayer
 
 		if (pattern) {
-			const cfa = CFA_PATTERNS[pattern]
-			const values = raw instanceof Float64Array ? new Float64Array(3) : new Float32Array(3)
-			const counters = new Uint8Array(3)
-			const output = raw instanceof Float64Array ? new Float64Array(raw.length * 3) : new Float32Array(raw.length * 3)
+			const { rows: cfa, interiorScales } = CFA_PATTERNS[pattern]
 			const { width, height } = metadata
+
+			if (width < 2 || height < 2) return undefined
+
+			const values = makeImageRawTypedArray(raw, 3)
+			const counters = new Uint8Array(3)
+			const output = makeImageRawTypedArray(raw, raw.length * 3)
 			const widthLast = width - 1
 			const heightLast = height - 1
 
@@ -139,60 +183,54 @@ export function debayer(image: Image, pattern?: CfaPattern): Image | undefined {
 
 				for (let y = 1; y < heightLast; y++) {
 					const row = y * width
-					const cfaRow = cfa[y & 1]
-					const cfaNextRow = cfa[(y + 1) & 1]
+					const yParity = y & 1
+					const cfaRow = cfa[yParity]
+					const cfaNextRow = cfa[yParity ^ 1]
+					const rowScales = interiorScales[yParity]
 
 					debayerPixel(raw, output, width, row, 0, cfaRow, cfaNextRow, false, true, true, true, values, counters)
 
-					for (let x = 1; x < widthLast; x++) {
-						const ci = row + x
+					let ci = row + 1
+					let oi = ci * 3
+
+					for (let x = 1; x < widthLast; x++, ci++, oi += 3) {
 						const xParity = x & 1
 						const nextParity = xParity ^ 1
 						const centerChannel = cfaRow[xParity]
 						const horizontalChannel = cfaRow[nextParity]
 						const verticalChannel = cfaNextRow[xParity]
 						const diagonalChannel = cfaNextRow[nextParity]
+						const scales = rowScales[xParity]
 
 						values[0] = 0
 						values[1] = 0
 						values[2] = 0
-						counters[0] = 0
-						counters[1] = 0
-						counters[2] = 0
 
-						// Interior pixels have a complete 3x3 neighborhood, so the hot path can stay branch-light.
+						// Interior pixels have a complete 3x3 neighborhood and precomputed channel sample counts.
 						values[centerChannel] += raw[ci]
-						counters[centerChannel]++
 						values[horizontalChannel] += raw[ci - 1]
-						counters[horizontalChannel]++
 						values[horizontalChannel] += raw[ci + 1]
-						counters[horizontalChannel]++
 						values[verticalChannel] += raw[ci - width]
-						counters[verticalChannel]++
 						values[diagonalChannel] += raw[ci - width - 1]
-						counters[diagonalChannel]++
 						values[diagonalChannel] += raw[ci - width + 1]
-						counters[diagonalChannel]++
 						values[verticalChannel] += raw[ci + width]
-						counters[verticalChannel]++
 						values[diagonalChannel] += raw[ci + width - 1]
-						counters[diagonalChannel]++
 						values[diagonalChannel] += raw[ci + width + 1]
-						counters[diagonalChannel]++
 
-						let oi = ci * 3
-						output[oi++] = values[0] / counters[0]
-						output[oi++] = values[1] / counters[1]
-						output[oi] = values[2] / counters[2]
+						output[oi] = values[0] * scales[0]
+						output[oi + 1] = values[1] * scales[1]
+						output[oi + 2] = values[2] * scales[2]
 					}
 
 					debayerPixel(raw, output, width, row + widthLast, widthLast & 1, cfaRow, cfaNextRow, true, false, true, true, values, counters)
 				}
 
 				const bottomRow = heightLast * width
+				const bottomCfaRow = cfa[heightLast & 1]
+				const bottomCfaNextRow = cfa[height & 1]
 
 				for (let x = 0; x < width; x++) {
-					debayerPixel(raw, output, width, bottomRow + x, x & 1, cfa[heightLast & 1], cfa[height & 1], x !== 0, x !== widthLast, true, false, values, counters)
+					debayerPixel(raw, output, width, bottomRow + x, x & 1, bottomCfaRow, bottomCfaNextRow, x !== 0, x !== widthLast, true, false, values, counters)
 				}
 			} else {
 				for (let y = 0; y < height; y++) {
@@ -210,7 +248,7 @@ export function debayer(image: Image, pattern?: CfaPattern): Image | undefined {
 
 			return {
 				header: { ...image.header, NAXIS: 3, NAXIS3: 3 },
-				metadata: { ...metadata, channels: 3, stride: width * 3 },
+				metadata: { ...metadata, channels: 3, stride: width * 3, strideInBytes: width * 3 * metadata.pixelSizeInBytes },
 				raw: output,
 			}
 		}

@@ -189,7 +189,7 @@ test('histogram with transform', async () => {
 })
 
 test('debayer', async () => {
-	const image = await readImageTransformAndSave((i) => stf(debayer(i) ?? i, 0.05), 'debayer-grbg', 'acaf9161599a72260af6019337e0ea60', Bitpix.SHORT, 1, 'fit', 'GRBG')
+	const image = await readImageTransformAndSave((i) => stf(debayer(i) ?? i, 0.05), 'debayer-grbg', '4a99487d41ece23c4ed2f3773eb92f1f', Bitpix.SHORT, 1, 'fit', 'GRBG')
 
 	expect(image.header.NAXIS).toBe(3)
 	expect(image.header.NAXIS3).toBe(3)
@@ -197,7 +197,7 @@ test('debayer', async () => {
 }, 5000)
 
 test('debayer RGBG', async () => {
-	const image = await readImageTransformAndSave((i) => stf(debayer(i, 'RGBG') ?? i, 0.05), 'debayer-rgbg', 'a9e0c072d50681410e15f65aeeb57dc6', Bitpix.SHORT, 1, 'fit', 'GRBG')
+	const image = await readImageTransformAndSave((i) => stf(debayer(i, 'RGBG') ?? i, 0.05), 'debayer-rgbg', '11aae349eaff0fce3319cf0caac90e89', Bitpix.SHORT, 1, 'fit', 'GRBG')
 
 	expect(image.header.NAXIS).toBe(3)
 	expect(image.header.NAXIS3).toBe(3)
