@@ -197,8 +197,8 @@ const DEFAULT_WRITE_XISF_FORMAT: Required<XisfWriteFormat> = { byteOrder: 'littl
 // Maximum scratch-buffer size used for uncompressed XISF image I/O.
 const XISF_IMAGE_IO_CHUNK_SIZE = 1024 * 1024
 
-// Per-image working state accumulated while writing: dimensions, declared format, FITSKeyword XML
-// fragments, and the encoded data block.
+// Per-image working state accumulated while writing: dimensions, declared format, FITSKeyword XML,
+// source samples, and an encoded block only when compression requires its size before the header.
 interface XisfWriteEntry {
 	readonly bitpix: Bitpix
 	readonly width: number
@@ -207,7 +207,9 @@ interface XisfWriteEntry {
 	readonly sampleFormat: XisfSampleFormat
 	readonly colorSpace: XisfColorSpace
 	readonly fitsKeywords: readonly string[]
-	readonly encoded: XisfEncodedBlock
+	readonly raw: ImageRawType
+	readonly dataSize: number
+	readonly encoded?: XisfEncodedBlock
 }
 
 // An encoded image data block plus its compression descriptor (absent when stored uncompressed).
@@ -313,9 +315,64 @@ function escapeXml(text: string) {
 	return text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&apos;')
 }
 
-// Writes images to `sink` as a monolithic XISF file: encodes each image's data block, then builds the
-// XML header (iterating until the data offsets stabilize), and writes signature, header, and blocks.
-// Returns total bytes written.
+// Converts and writes an uncompressed image through a bounded buffer, preserving planar or interleaved
+// sample order and the requested byte order. Returns the number of pixel-block bytes written.
+async function writeUncompressedXisfImage(sink: Sink, input: ImageRawType, bitpix: Bitpix, width: number, height: number, channels: number, byteOrder: XisfByteOrder, pixelStorage: XisfPixelStorageModel) {
+	const pixelInBytes = bitpixInBytes(bitpix)
+	const numberOfPixels = width * height
+	const total = numberOfPixels * channels
+	const size = total * pixelInBytes
+	const buffer = xisfBufferView(undefined, xisfImageChunkSize(size, bitpix), bitpix)
+	const data = xisfDataView(buffer, bitpix)
+	const factor = bitpix > 0 ? 2 ** bitpix - 1 : 1
+	// Integer views truncate on assignment; a half-DN bias quantizes normalized samples to the nearest code.
+	const rounding = bitpix > 0 ? 0.5 : 0
+	if (total > 0 && data.length === 0) return 0
+
+	let written = 0
+
+	if (pixelStorage === 'Planar') {
+		for (let channel = 0; channel < channels; channel++) {
+			for (let startPixel = 0; startPixel < numberOfPixels;) {
+				const count = Math.min(data.length, numberOfPixels - startPixel)
+				const byteCount = count * pixelInBytes
+				const chunk = byteCount === buffer.length ? buffer : buffer.subarray(0, byteCount)
+				let source = startPixel * channels + channel
+
+				for (let i = 0; i < count; i++, source += channels) data[i] = input[source] * factor + rounding
+				if (byteOrder === 'big') {
+					if (pixelInBytes === 2) chunk.swap16()
+					else if (pixelInBytes === 4) chunk.swap32()
+					else if (pixelInBytes === 8) chunk.swap64()
+				}
+
+				written += await sink.write(chunk)
+				startPixel += count
+			}
+		}
+	} else {
+		for (let start = 0; start < total;) {
+			const count = Math.min(data.length, total - start)
+			const byteCount = count * pixelInBytes
+			const chunk = byteCount === buffer.length ? buffer : buffer.subarray(0, byteCount)
+
+			for (let i = 0; i < count; i++) data[i] = input[start + i] * factor + rounding
+			if (byteOrder === 'big') {
+				if (pixelInBytes === 2) chunk.swap16()
+				else if (pixelInBytes === 4) chunk.swap32()
+				else if (pixelInBytes === 8) chunk.swap64()
+			}
+
+			written += await sink.write(chunk)
+			start += count
+		}
+	}
+
+	return written
+}
+
+// Writes images to `sink` as a monolithic XISF file: compressed blocks are staged to determine their
+// sizes, while uncompressed blocks are streamed after the XML offsets stabilize. Returns total bytes.
 export async function writeXisf(sink: Sink, images: readonly Readonly<Pick<Image, 'header' | 'raw' | 'sampleScale'>>[], format: XisfWriteFormat = DEFAULT_WRITE_XISF_FORMAT) {
 	const options = { ...DEFAULT_WRITE_XISF_FORMAT, ...format }
 	const entries: XisfWriteEntry[] = []
@@ -336,9 +393,9 @@ export async function writeXisf(sink: Sink, images: readonly Readonly<Pick<Image
 			fitsKeywords.push(`<FITSKeyword name="${escapeXml(key)}" value="${escapeXml(formatFitsHeaderValue(value))}" comment=""/>`)
 		}
 
-		const writer = new XisfImageWriter({ byteOrder: options.byteOrder, pixelStorage: options.pixelStorage, bitpix, geometry: { width, height, channels } }, options.compression)
-		const encoded = await writer.encode(image.raw)
-		entries.push({ bitpix, width, height, channels, sampleFormat, colorSpace, fitsKeywords, encoded })
+		const encoded = options.compression ? await new XisfImageWriter({ byteOrder: options.byteOrder, pixelStorage: options.pixelStorage, bitpix, geometry: { width, height, channels } }, options.compression).encode(image.raw) : undefined
+		const dataSize = encoded?.data.byteLength ?? width * height * channels * bitpixInBytes(bitpix)
+		entries.push({ bitpix, width, height, channels, sampleFormat, colorSpace, fitsKeywords, raw: image.raw, dataSize, encoded })
 	}
 
 	const buildHeader = (offset: number) => {
@@ -347,11 +404,11 @@ export async function writeXisf(sink: Sink, images: readonly Readonly<Pick<Image
 		for (const entry of entries) {
 			const bounds = entry.bitpix === -64 || entry.bitpix === -32 ? ' bounds="0:1"' : ''
 			const byteOrder = entry.bitpix === 8 ? '' : ` byteOrder="${options.byteOrder}"`
-			const compression = entry.encoded.compression ? ` compression="${formatCompression(entry.encoded.compression)}"` : ''
-			xml += `<Image geometry="${entry.width}:${entry.height}:${entry.channels}" sampleFormat="${entry.sampleFormat}" colorSpace="${entry.colorSpace}" location="attachment:${offset}:${entry.encoded.data.byteLength}" pixelStorage="${options.pixelStorage}"${byteOrder}${bounds}${compression}>`
+			const compression = entry.encoded?.compression ? ` compression="${formatCompression(entry.encoded.compression)}"` : ''
+			xml += `<Image geometry="${entry.width}:${entry.height}:${entry.channels}" sampleFormat="${entry.sampleFormat}" colorSpace="${entry.colorSpace}" location="attachment:${offset}:${entry.dataSize}" pixelStorage="${options.pixelStorage}"${byteOrder}${bounds}${compression}>`
 			if (entry.fitsKeywords.length > 0) xml += entry.fitsKeywords.join('')
 			xml += '</Image>'
-			offset += entry.encoded.data.byteLength
+			offset += entry.dataSize
 		}
 
 		xml += '</xisf>'
@@ -377,7 +434,8 @@ export async function writeXisf(sink: Sink, images: readonly Readonly<Pick<Image
 	size += await sink.write(headerData)
 
 	for (const entry of entries) {
-		size += await sink.write(entry.encoded.data)
+		if (entry.encoded) size += await sink.write(entry.encoded.data)
+		else size += await writeUncompressedXisfImage(sink, entry.raw, entry.bitpix, entry.width, entry.height, entry.channels, options.byteOrder, options.pixelStorage)
 	}
 
 	return size

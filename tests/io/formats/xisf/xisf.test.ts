@@ -187,6 +187,34 @@ describe('read compressed', () => {
 describe('write', () => {
 	const buffer = Buffer.allocUnsafe(1024 * 1024 * 18)
 
+	test('bounds uncompressed pixel writes', async () => {
+		const width = 512 * 1024 + 1
+		const raw = new Float64Array(width)
+		raw.fill(0.5)
+		raw[0] = 0
+		raw[width - 1] = 1
+		const buffer = Buffer.allocUnsafe(width * 2 + 4096)
+		const base = bufferSink(buffer)
+		let largestWrite = 0
+		const sink = {
+			write: (chunk: string | Buffer, offset?: number, size?: number, encoding?: BufferEncoding) => {
+				largestWrite = Math.max(largestWrite, size ?? chunk.length)
+				return base.write(chunk, offset, size, encoding)
+			},
+		}
+		const size = await writeXisf(sink, [{ header: { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: width, NAXIS2: 1 }, raw, sampleScale: 'normalized' }], {
+			byteOrder: 'big',
+			pixelStorage: 'Normal',
+		})
+		const output = await readImageFromBuffer(buffer.subarray(0, size))
+
+		expect(largestWrite).toBeLessThanOrEqual(1024 * 1024)
+		expect(output).toBeDefined()
+		expect(output!.raw[0]).toBe(0)
+		expect(output!.raw[Math.trunc(width / 2)]).toBeCloseTo(0.5, 4)
+		expect(output!.raw.at(-1)).toBe(1)
+	})
+
 	for (const channel of CHANNELS) {
 		for (const bitpix of BITPIXES) {
 			test(`channel=${channel}, bitpix=${bitpix}`, async () => {
