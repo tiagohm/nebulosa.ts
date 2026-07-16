@@ -274,14 +274,14 @@ describe('write compressed', () => {
 })
 
 describe('byte shuffle and unshuffle', () => {
-	for (let itemSize = 1; itemSize <= 4; itemSize *= 2) {
+	for (let itemSize = 1; itemSize <= 8; itemSize *= 2) {
 		test(`itemSize=${itemSize}`, () => {
-			const TypedArray = itemSize === 1 ? Uint8Array : itemSize === 2 ? Uint16Array : Uint32Array
+			const TypedArray = itemSize === 1 ? Uint8Array : itemSize === 2 ? Uint16Array : itemSize === 4 ? Uint32Array : BigUint64Array
 			const original = new TypedArray(512)
 			const shuffled = new TypedArray(512)
 			const unshuffled = new TypedArray(512)
 
-			for (let i = 0; i < original.length; i++) original[i] = i
+			for (let i = 0; i < original.length; i++) original[i] = itemSize === 8 ? BigInt(i) : i
 
 			byteShuffle(Buffer.from(original.buffer), Buffer.from(shuffled.buffer), itemSize)
 
@@ -306,6 +306,18 @@ describe('byte shuffle and unshuffle', () => {
 		byteUnshuffle(shuffled, unshuffled, 4)
 		expect(unshuffled).toEqual(original)
 	})
+
+	for (const itemSize of [2, 8]) {
+		test(`preserves trailing bytes for itemSize=${itemSize}`, () => {
+			const original = Uint8Array.from({ length: itemSize * 2 + 1 }, (_, i) => i + 1)
+			const shuffled = new Uint8Array(original.length)
+			const unshuffled = new Uint8Array(original.length)
+
+			byteShuffle(original, shuffled, itemSize)
+			byteUnshuffle(shuffled, unshuffled, itemSize)
+			expect(unshuffled).toEqual(original)
+		})
+	}
 })
 
 describe('buffer views', () => {

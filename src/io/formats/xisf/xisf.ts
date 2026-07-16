@@ -823,18 +823,59 @@ export function byteShuffle(input: Int8Array | Uint8Array | Buffer, output: Int8
 	const numberOfItems = Math.trunc(inputSize / itemSize)
 	const copyLength = inputSize % itemSize
 
-	let s = 0
+	if (itemSize === 1) {
+		output.set(input.subarray(0, inputSize))
+		return
+	} else if (itemSize === 2) {
+		for (let i = 0; i < numberOfItems; i++) {
+			const source = i * 2
+			output[i] = input[source]
+			output[numberOfItems + i] = input[source + 1]
+		}
+	} else if (itemSize === 4) {
+		const plane2 = numberOfItems * 2
+		const plane3 = numberOfItems * 3
 
-	for (let j = 0; j < itemSize; j++) {
-		let u = j
+		for (let i = 0; i < numberOfItems; i++) {
+			const source = i * 4
+			output[i] = input[source]
+			output[numberOfItems + i] = input[source + 1]
+			output[plane2 + i] = input[source + 2]
+			output[plane3 + i] = input[source + 3]
+		}
+	} else if (itemSize === 8) {
+		const plane2 = numberOfItems * 2
+		const plane3 = numberOfItems * 3
+		const plane4 = numberOfItems * 4
+		const plane5 = numberOfItems * 5
+		const plane6 = numberOfItems * 6
+		const plane7 = numberOfItems * 7
 
-		for (let k = 0; k < numberOfItems; k++) {
-			output[s++] = input[u]
-			u += itemSize
+		for (let i = 0; i < numberOfItems; i++) {
+			const source = i * 8
+			output[i] = input[source]
+			output[numberOfItems + i] = input[source + 1]
+			output[plane2 + i] = input[source + 2]
+			output[plane3 + i] = input[source + 3]
+			output[plane4 + i] = input[source + 4]
+			output[plane5 + i] = input[source + 5]
+			output[plane6 + i] = input[source + 6]
+			output[plane7 + i] = input[source + 7]
+		}
+	} else {
+		let target = 0
+
+		for (let j = 0; j < itemSize; j++) {
+			let source = j
+
+			for (let i = 0; i < numberOfItems; i++) {
+				output[target++] = input[source]
+				source += itemSize
+			}
 		}
 	}
 
-	if (copyLength > 0) output.set(input.subarray(numberOfItems * itemSize, inputSize), s)
+	if (copyLength > 0) output.set(input.subarray(numberOfItems * itemSize, inputSize), numberOfItems * itemSize)
 }
 
 // Inverse of byteShuffle: restores the original interleaved byte layout of fixed-size items.
@@ -845,16 +886,57 @@ export function byteUnshuffle(input: Int8Array | Uint8Array | Buffer, output: In
 	const numberOfItems = Math.trunc(inputSize / itemSize)
 	const copyLength = inputSize % itemSize
 
-	let s = 0
+	if (itemSize === 1) {
+		output.set(input.subarray(0, inputSize))
+		return
+	} else if (itemSize === 2) {
+		for (let i = 0; i < numberOfItems; i++) {
+			const target = i * 2
+			output[target] = input[i]
+			output[target + 1] = input[numberOfItems + i]
+		}
+	} else if (itemSize === 4) {
+		const plane2 = numberOfItems * 2
+		const plane3 = numberOfItems * 3
 
-	for (let j = 0; j < itemSize; j++) {
-		let u = j
+		for (let i = 0; i < numberOfItems; i++) {
+			const target = i * 4
+			output[target] = input[i]
+			output[target + 1] = input[numberOfItems + i]
+			output[target + 2] = input[plane2 + i]
+			output[target + 3] = input[plane3 + i]
+		}
+	} else if (itemSize === 8) {
+		const plane2 = numberOfItems * 2
+		const plane3 = numberOfItems * 3
+		const plane4 = numberOfItems * 4
+		const plane5 = numberOfItems * 5
+		const plane6 = numberOfItems * 6
+		const plane7 = numberOfItems * 7
 
-		for (let k = 0; k < numberOfItems; k++) {
-			output[u] = input[s++]
-			u += itemSize
+		for (let i = 0; i < numberOfItems; i++) {
+			const target = i * 8
+			output[target] = input[i]
+			output[target + 1] = input[numberOfItems + i]
+			output[target + 2] = input[plane2 + i]
+			output[target + 3] = input[plane3 + i]
+			output[target + 4] = input[plane4 + i]
+			output[target + 5] = input[plane5 + i]
+			output[target + 6] = input[plane6 + i]
+			output[target + 7] = input[plane7 + i]
+		}
+	} else {
+		let source = 0
+
+		for (let j = 0; j < itemSize; j++) {
+			let target = j
+
+			for (let i = 0; i < numberOfItems; i++) {
+				output[target] = input[source++]
+				target += itemSize
+			}
 		}
 	}
 
-	if (copyLength > 0) output.set(input.subarray(s, s + copyLength), numberOfItems * itemSize)
+	if (copyLength > 0) output.set(input.subarray(numberOfItems * itemSize, inputSize), numberOfItems * itemSize)
 }
