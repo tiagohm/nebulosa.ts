@@ -35,7 +35,7 @@ function imageCfaPattern(image: Image, name: string): CfaPattern | undefined {
 	throw new Error(`${name} has unsupported CFA pattern: ${pattern}`)
 }
 
-// Verifies an image has a dense planar buffer consistent with its declared geometry.
+// Verifies an image has a dense mono or interleaved RGB buffer consistent with its declared geometry.
 function validateImageLayout(image: Image, name: string) {
 	const { width, height, channels, pixelCount } = image.metadata
 	if (!Number.isInteger(width) || width <= 0) throw new Error(`${name} width must be a positive integer: ${width}`)
@@ -83,7 +83,7 @@ function darkScale(target: Image, dark: Image, bias: Image | undefined, scaling:
 	return scale
 }
 
-// Computes and validates corrected-flat means independently for planar channels or the four CFA phases.
+// Computes and validates corrected-flat means independently for interleaved RGB channels or the four CFA phases.
 function correctedFlatMeans(flat: Image, bias: Image | undefined, darkFlat: Image | undefined, scale: number, minimum: number, pattern: CfaPattern | undefined) {
 	const flatRaw = flat.raw
 	const biasRaw = bias?.raw
@@ -113,17 +113,16 @@ function correctedFlatMeans(flat: Image, bias: Image | undefined, darkFlat: Imag
 			}
 		}
 	} else {
-		for (let channel = 0; channel < channels; channel++) {
-			const end = (channel + 1) * pixelCount
-			for (let i = channel * pixelCount; i < end; i++) {
-				let value = flatRaw[i]
+		for (let pixel = 0, offset = 0; pixel < pixelCount; pixel++) {
+			for (let channel = 0; channel < channels; channel++, offset++) {
+				let value = flatRaw[offset]
 				if (darkFlatRaw) {
-					if (scale === 1) value -= darkFlatRaw[i]
-					else value -= biasRaw![i] + scale * (darkFlatRaw[i] - biasRaw![i])
+					if (scale === 1) value -= darkFlatRaw[offset]
+					else value -= biasRaw![offset] + scale * (darkFlatRaw[offset] - biasRaw![offset])
 				} else if (biasRaw) {
-					value -= biasRaw[i]
+					value -= biasRaw[offset]
 				}
-				if (!Number.isFinite(value) || value <= minimum) throw new Error(`corrected flat sample ${i} must be finite and greater than ${minimum}: ${value}`)
+				if (!Number.isFinite(value) || value <= minimum) throw new Error(`corrected flat sample ${offset} must be finite and greater than ${minimum}: ${value}`)
 				sums[channel] += value
 				counts[channel]++
 			}
@@ -145,7 +144,7 @@ function correctedFlatMeans(flat: Image, bias: Image | undefined, darkFlat: Imag
 // Calibrates `light` in place and returns the same object. Masters are raw: dark and dark-flat include
 // their bias pedestal, while flat includes bias and dark current. Exposure scaling requires finite
 // positive FITS exposure metadata and a bias whenever target and dark exposures differ. Flat
-// normalization is independent per planar channel or CFA phase. Results are intentionally not clipped.
+// normalization is independent per interleaved RGB channel or CFA phase. Results are intentionally not clipped.
 export function calibrate(light: Image, options: CalibrationOptions = {}) {
 	const { dark, flat, bias, darkFlat, darkScaling = 'exposure', minimumFlat = 0 } = options
 	if (darkScaling !== 'exposure' && darkScaling !== 'none') throw new Error(`unsupported dark scaling: ${darkScaling}`)
@@ -206,25 +205,23 @@ export function calibrate(light: Image, options: CalibrationOptions = {}) {
 		}
 	} else {
 		const { channels, pixelCount } = light.metadata
-		for (let channel = 0; channel < channels; channel++) {
-			const end = (channel + 1) * pixelCount
-			const flatMean = flatMeans![channel]
-			for (let i = channel * pixelCount; i < end; i++) {
-				let value = lightRaw[i]
+		for (let pixel = 0, offset = 0; pixel < pixelCount; pixel++) {
+			for (let channel = 0; channel < channels; channel++, offset++) {
+				let value = lightRaw[offset]
 				if (darkRaw) {
-					if (darkExposureScale === 1) value -= darkRaw[i]
-					else value -= biasRaw![i] + darkExposureScale * (darkRaw[i] - biasRaw![i])
+					if (darkExposureScale === 1) value -= darkRaw[offset]
+					else value -= biasRaw![offset] + darkExposureScale * (darkRaw[offset] - biasRaw![offset])
 				} else if (biasRaw) {
-					value -= biasRaw[i]
+					value -= biasRaw[offset]
 				}
-				let correctedFlat = flatRaw[i]
+				let correctedFlat = flatRaw[offset]
 				if (darkFlatRaw) {
-					if (darkFlatExposureScale === 1) correctedFlat -= darkFlatRaw[i]
-					else correctedFlat -= biasRaw![i] + darkFlatExposureScale * (darkFlatRaw[i] - biasRaw![i])
+					if (darkFlatExposureScale === 1) correctedFlat -= darkFlatRaw[offset]
+					else correctedFlat -= biasRaw![offset] + darkFlatExposureScale * (darkFlatRaw[offset] - biasRaw![offset])
 				} else if (biasRaw) {
-					correctedFlat -= biasRaw[i]
+					correctedFlat -= biasRaw[offset]
 				}
-				lightRaw[i] = value * (flatMean / correctedFlat)
+				lightRaw[offset] = value * (flatMeans![channel] / correctedFlat)
 			}
 		}
 	}

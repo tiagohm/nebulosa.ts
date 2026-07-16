@@ -110,13 +110,23 @@ test('calibrate applies flat normalization without dark or bias frames', () => {
 	expectImageValues(light, [0.9, 0.3], 6)
 })
 
-test('calibrate normalizes each planar color channel independently', () => {
+test('calibrate normalizes each interleaved color channel independently', () => {
 	const light = makeImage(2, 1, 3, [0.4, 0.4, 0.4, 0.4, 0.4, 0.4])
 	const flat = makeImage(2, 1, 3, [0.5, 1, 1, 2, 0.25, 0.5])
 
 	calibrate(light, { flat })
 
-	expectImageValues(light, [0.6, 0.3, 0.6, 0.3, 0.6, 0.3], 7)
+	expectImageValues(light, [1, 0.25, 0.3, 0.25, 1, 0.6], 7)
+})
+
+test('calibrate applies bias-corrected flat means to interleaved RGB channels', () => {
+	const light = makeImage(2, 1, 3, [0.45, 0.65, 0.85, 0.85, 0.45, 0.25])
+	const flat = makeImage(2, 1, 3, [0.55, 1.05, 0.3, 1.05, 0.55, 0.55])
+	const bias = makeImage(2, 1, 3, [0.05, 0.05, 0.05, 0.05, 0.05, 0.05])
+
+	calibrate(light, { flat, bias })
+
+	expectImageValues(light, [0.6, 0.45, 1.2, 0.6, 0.6, 0.15], 7)
 })
 
 test('calibrate normalizes each CFA phase independently', () => {

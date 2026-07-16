@@ -422,7 +422,7 @@ describe('plot star', () => {
 		test(name, async () => {
 			raw.fill(0)
 			expect(plotStar(raw, WIDTH, HEIGHT, channels, x, y, flux, hfd, snr, seeing, colorIndex, options)).toBeTrue()
-			const image: Image = { raw, header: {}, metadata: metadata(channels) }
+			const image: Image = { raw: raw.subarray(0, WIDTH * HEIGHT * channels), header: {}, metadata: metadata(channels) }
 			await saveImageAndCompareHash(brightness(gamma(image, 3), 4), `plot-star-${slug}`, hash)
 		})
 	}
