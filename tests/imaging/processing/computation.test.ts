@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { adf, histogram, medianAbsoluteDeviation, sigmaClip } from '../../../src/imaging/processing/computation'
+import { adf, estimateBackground, histogram, median, medianAbsoluteDeviation, sigmaClip } from '../../../src/imaging/processing/computation'
 import { makeImage } from './util'
 
 // Focused regression coverage for image histogram, display statistics, and sigma clipping.
@@ -105,4 +105,13 @@ test('sigma clip validates thresholds and iteration limits', () => {
 	expect(() => sigmaClip(image, { sigmaUpper: Number.NaN })).toThrow()
 	expect(() => sigmaClip(image, { tolerance: -1 })).toThrow()
 	expect(() => sigmaClip(image, { maxIterations: 1.5 })).toThrow()
+})
+
+test('background estimation matches the median of the final clipped population', () => {
+	const image = makeImage(7, 1, 1, [0.1, 0.11, 0.12, 0.13, 0.14, 0.15, 1])
+	const options = { sigmaLower: 2, sigmaUpper: 2, maxIterations: 5 }
+	const mask = sigmaClip(image, { ...options, centerMethod: 'median', dispersionMethod: 'mad' })
+	const expected = median(image, { ...options, sigmaClip: mask })
+
+	expect(estimateBackground(image, options)).toBe(expected)
 })

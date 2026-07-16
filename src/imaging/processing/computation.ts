@@ -390,6 +390,7 @@ function sigmaClipResult(image: Image, options: Partial<SigmaClipOptions> = DEFA
 	const useDirectMoments = centerMethod === 'mean' && dispersionMethod === 'std'
 	const bits = useDirectMoments ? undefined : resolveHistogramBins(options.bits)
 	const histogramOptions = { ...options, bits, transform, sigmaClip: pixelMask } as HistogramOptions
+	const deviationOptions = dispersionMethod === 'mad' && bits !== undefined ? { ...histogramOptions, bits: new Int32Array(bits.length) } : histogramOptions
 	let lastCenter: number | undefined
 	let lastDispersion: number | undefined
 	let finalHistogram: Histogram | undefined
@@ -406,7 +407,7 @@ function sigmaClipResult(image: Image, options: Partial<SigmaClipOptions> = DEFA
 		} else {
 			currentHistogram = computeHistogram(image, histogramOptions)
 			center = centerMethod === 'mean' ? currentHistogram.mean : currentHistogram.median
-			dispersion = dispersionMethod === 'std' ? currentHistogram.standardDeviation : STANDARD_DEVIATION_SCALE * computeHistogram(image, histogramOptions, currentHistogram.median).median
+			dispersion = dispersionMethod === 'std' ? currentHistogram.standardDeviation : STANDARD_DEVIATION_SCALE * computeHistogram(image, deviationOptions, currentHistogram.median).median
 		}
 
 		if (!Number.isFinite(dispersion) || dispersion === 0) {
@@ -442,7 +443,8 @@ export function sigmaClip(image: Image, options: Partial<SigmaClipOptions> = DEF
 
 // Estimates the sky background as the median of the sigma-clipped (median/MAD) pixels.
 export function estimateBackground(image: Image, options?: Partial<Omit<SigmaClipOptions, 'centerMethod' | 'dispersionMethod'>>) {
-	return median(image, { ...options, sigmaClip: sigmaClip(image, { ...options, centerMethod: 'median', dispersionMethod: 'mad' }) })
+	const result = sigmaClipResult(image, { ...options, centerMethod: 'median', dispersionMethod: 'mad' })
+	return (result.histogram ?? computeHistogram(image, { ...options, sigmaClip: result.pixelMask })).median
 }
 
 // Estimates the background using the empirical mode approximation 2.5*median - 1.5*mean.
