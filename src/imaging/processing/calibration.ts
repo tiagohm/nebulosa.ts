@@ -4,12 +4,26 @@ import type { Image } from '../model/types'
 import { clone, copyInto, divide, multiplyScalar, plusScalar, subtract } from './arithmetic'
 import { estimateBackgroundUsingMode } from './computation'
 
+// Raw master frames used to calibrate a light image.
+export interface CalibrationOptions {
+	// Master dark containing its original bias pedestal.
+	readonly dark?: Image
+	// Master flat containing its original bias and dark-current signals.
+	readonly flat?: Image
+	// Master bias acquired with the same sensor geometry and readout settings.
+	readonly bias?: Image
+	// Master dark-flat acquired for the flat exposure and containing its bias pedestal.
+	readonly darkFlat?: Image
+}
+
 // Frame calibration for astronomical images: computes (Light - Dark) / (Flat - Bias) * mean(Flat) in
 // place on the light frame, with exposure-scaled dark background matching, building on the image
 // arithmetic helpers.
 
 // Calibrated = (Light - Dark) / (Flat - Bias) * mean(Flat)
-export function calibrate(light: Image, dark?: Image, flat?: Image, bias?: Image, darkFlat?: Image) {
+export function calibrate(light: Image, options: CalibrationOptions = {}) {
+	const { dark, flat: sourceFlat, bias, darkFlat } = options
+	let flat = sourceFlat
 	let tmp: Image | undefined
 
 	// DARK
