@@ -317,8 +317,16 @@ function fitsWriteScaling(header: Readonly<FitsHeader>, bitpix: BitpixOrZero) {
 	return [factor / divisor, zero / divisor] as const
 }
 
+// Numeric typed views constructed over FITS image buffers; ordinary number arrays are never used here.
+type FitsImageDataArray = Exclude<NumberArray, number[]>
+
 // Converts one channel chunk directly from interleaved samples into a reusable planar buffer.
-function writeInterleavedChannelChunk(input: ImageRawType, output: NumberArray, count: number, startPixel: number, channel: number, channels: number, multiplier: number, bias: number) {
+function writeInterleavedChannelChunk(input: ImageRawType, output: FitsImageDataArray, count: number, startPixel: number, channel: number, channels: number, multiplier: number, bias: number) {
+	if (channels === 1 && multiplier === 1 && bias === 0) {
+		output.set(input.subarray(startPixel, startPixel + count))
+		return
+	}
+
 	let source = startPixel * channels + channel
 
 	for (let i = 0; i < count; i++, source += channels) output[i] = input[source] * multiplier - bias
@@ -721,7 +729,7 @@ function cardEnd(line: Buffer, position: Position) {
 }
 
 // Builds a correctly aligned typed view over the backing FITS image buffer.
-function imageDataView(buffer: Buffer, bitpix: BitpixOrZero): NumberArray {
+function imageDataView(buffer: Buffer, bitpix: BitpixOrZero): FitsImageDataArray {
 	const byteLength = buffer.byteLength
 
 	if (byteLength === 0) return new Uint8Array(0)
@@ -1096,11 +1104,13 @@ function fitsReadScaling(header: Readonly<FitsHeader>, bitpix: BitpixOrZero, sam
 }
 
 // Scales one sequential planar channel chunk into its interleaved image positions.
-function writePlanarChannelChunkToInterleaved(data: NumberArray, count: number, output: ImageRawType, startPixel: number, channel: number, channels: number, multiplier: number, bias: number) {
+function writePlanarChannelChunkToInterleaved(data: FitsImageDataArray, count: number, output: ImageRawType, startPixel: number, channel: number, channels: number, multiplier: number, bias: number) {
 	let target = startPixel * channels + channel
 	const identity = multiplier === 1 && bias === 0
 
-	if (identity) {
+	if (identity && channels === 1) {
+		output.set(data.subarray(0, count), startPixel)
+	} else if (identity) {
 		for (let i = 0; i < count; i++, target += channels) output[target] = data[i]
 	} else {
 		for (let i = 0; i < count; i++, target += channels) output[target] = data[i] * multiplier + bias
@@ -1142,7 +1152,7 @@ function writePlanarTileToInterleaved(tile: NumberArray, output: ImageRawType, w
 export class FitsImageReader {
 	readonly #compressed: boolean
 	readonly #buffer: Buffer
-	readonly #data: NumberArray
+	readonly #data: FitsImageDataArray
 
 	// Prepares to read `hdu`; a caller buffer must cover the full data segment, while the default scratch
 	// storage is bounded and reused for sequential planar chunks.
@@ -1290,7 +1300,7 @@ export class FitsImageReader {
 // Writes a channel-interleaved image to a sink as a plain (uncompressed) big-endian FITS data segment.
 export class FitsImageWriter {
 	readonly #buffer: Buffer
-	readonly #data: NumberArray
+	readonly #data: FitsImageDataArray
 
 	// Prepares to write the dimensions/BITPIX declared in `header`; a caller buffer must cover the full
 	// image, while the default scratch storage is bounded and reused for sequential planar chunks.
