@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { histogram, medianAbsoluteDeviation } from '../../../src/imaging/processing/computation'
+import { adf, histogram, medianAbsoluteDeviation } from '../../../src/imaging/processing/computation'
 import { makeImage } from './util'
 
 // Focused regression coverage for image histogram, display statistics, and sigma clipping.
@@ -55,4 +55,14 @@ test('median absolute deviation honors transforms and normalization', () => {
 
 	expect(raw).toBeGreaterThan(0)
 	expect(normalized).toBeCloseTo(raw * 1.482602218505602, 12)
+})
+
+test('adaptive display function validates and reuses histogram storage', () => {
+	const image = makeImage(3, 1, 1, [0.1, 0.2, 0.4])
+	const bits = new Int32Array(16)
+	const result = adf(image, { bits })
+
+	expect(result.every(Number.isFinite)).toBe(true)
+	expect(bits.some((count) => count !== 0)).toBe(true)
+	expect(() => adf(image, { bits: 25 })).toThrow()
 })

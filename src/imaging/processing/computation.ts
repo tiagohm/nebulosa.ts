@@ -224,7 +224,7 @@ export function medianAbsoluteDeviation(image: Image, m: number, normalized: boo
 // Computes an auto-stretch midtone/shadow/highlight triple from the image's median and MAD.
 // Returns [midtone, shadow, highlight], all in [0, 1], suitable for a screen transfer function.
 export function adf(image: Image, options: Partial<AdaptiveDisplayFunctionOptions> = DEFAULT_ADAPTIVE_DISPLAY_FUNCTION_OPTIONS) {
-	const bits = options.bits === undefined || typeof options.bits === 'number' ? new Int32Array(1 << (options.bits ?? 16)) : options.bits
+	const bits = resolveHistogramBins(options.bits)
 	options = { ...options, bits }
 	const meanBackground = options.meanBackground ?? DEFAULT_ADAPTIVE_DISPLAY_FUNCTION_OPTIONS.meanBackground
 	const clippingPoint = options.clippingPoint ?? DEFAULT_ADAPTIVE_DISPLAY_FUNCTION_OPTIONS.clippingPoint
