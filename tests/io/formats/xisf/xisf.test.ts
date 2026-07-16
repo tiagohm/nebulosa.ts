@@ -281,6 +281,41 @@ describe('byte shuffle and unshuffle', () => {
 })
 
 describe('buffer views', () => {
+	test('reader bounds default scratch storage for uncompressed images', async () => {
+		const numberOfPixels = 512 * 1024 + 1
+		const block = Buffer.allocUnsafe(numberOfPixels * 2 * 2)
+		const samples = new Uint16Array(block.buffer, block.byteOffset, block.byteLength / 2)
+		samples.subarray(0, numberOfPixels).fill(0)
+		samples.subarray(numberOfPixels).fill(0xffff)
+		const base = bufferSource(block)
+		let largestRead = 0
+		const source = {
+			get position() {
+				return base.position
+			},
+			seek: (position: number) => base.seek(position),
+			read: (buffer: Buffer, offset?: number, size?: number) => {
+				largestRead = Math.max(largestRead, size ?? buffer.byteLength)
+				return base.read(buffer, offset, size)
+			},
+		}
+		const reader = new XisfImageReader({
+			bitpix: 16,
+			location: { offset: 0, size: block.byteLength },
+			byteOrder: 'little',
+			pixelStorage: 'Planar',
+			geometry: { width: numberOfPixels, height: 1, channels: 2 },
+		})
+		const output = new Float64Array(numberOfPixels * 2)
+
+		expect(await reader.read(source, output)).toBeTrue()
+		expect(largestRead).toBeLessThanOrEqual(1024 * 1024)
+		expect(output[0]).toBe(0)
+		expect(output[1]).toBe(1)
+		expect(output.at(-2)).toBe(0)
+		expect(output.at(-1)).toBe(1)
+	})
+
 	test('reader uses the decompressed block without copying it into scratch storage', async () => {
 		const input = new Float64Array([0, 0.5, 1])
 		const writer = new XisfImageWriter({ bitpix: 16, byteOrder: 'little', pixelStorage: 'Normal', geometry: { width: 3, height: 1, channels: 1 } }, { format: 'zstd' })

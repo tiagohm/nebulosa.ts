@@ -194,6 +194,9 @@ const RESERVED_FITS_KEYS = new Set(['SIMPLE', 'BITPIX', 'NAXIS', 'NAXIS1', 'NAXI
 // Default write format: little-endian, planar, uncompressed.
 const DEFAULT_WRITE_XISF_FORMAT: Required<XisfWriteFormat> = { byteOrder: 'little', pixelStorage: 'Planar', compression: false }
 
+// Maximum scratch-buffer size used for uncompressed XISF image I/O.
+const XISF_IMAGE_IO_CHUNK_SIZE = 1024 * 1024
+
 // Per-image working state accumulated while writing: dimensions, declared format, FITSKeyword XML
 // fragments, and the encoded data block.
 interface XisfWriteEntry {
@@ -255,6 +258,17 @@ function xisfBufferView(buffer: Buffer | undefined, size: number, bitpix: Bitpix
 	if (size === 0 || pixelInBytes <= 1 || view.byteOffset % pixelInBytes === 0) return view
 
 	return Buffer.allocUnsafe(size)
+}
+
+// Returns an image I/O chunk size aligned to complete XISF samples, validating the total byte size.
+function xisfImageChunkSize(size: number, bitpix: Bitpix) {
+	const pixelInBytes = bitpixInBytes(bitpix)
+
+	if (pixelInBytes < 1 || size % pixelInBytes !== 0) throw new Error('invalid XISF image buffer size')
+	if (size === 0) return 0
+
+	const target = Math.min(size, XISF_IMAGE_IO_CHUNK_SIZE)
+	return target - (target % pixelInBytes)
 }
 
 // Maps a FITS BITPIX code to the corresponding XISF sample format (unsigned integers / IEEE floats).
@@ -533,13 +547,15 @@ export class XisfImageReader {
 	) {
 		const { bitpix, location, compression } = image
 		const size = compression?.uncompressedSize ?? location.size
-		this.#buffer = !compression || compression.shuffled ? xisfBufferView(buffer, size, bitpix) : undefined
+		const bufferSize = !compression && buffer === undefined ? xisfImageChunkSize(size, bitpix) : size
+		this.#buffer = !compression || compression.shuffled ? xisfBufferView(buffer, bufferSize, bitpix) : undefined
 		this.#compressed = compression ? Buffer.allocUnsafe(location.size) : undefined
 	}
 
 	// Reads XISF samples into an interleaved buffer using the requested sample scale.
 	async read(source: Source & Seekable, output: ImageRawType, sampleScale: ImageSampleScale = 'normalized') {
 		const { bitpix, pixelStorage, geometry, location, compression } = this.image
+		if (!compression) return await this.#readUncompressed(source, output, sampleScale)
 
 		source.seek(location.offset)
 
@@ -586,6 +602,61 @@ export class XisfImageReader {
 
 			for (let i = 0; i < total; i++) {
 				output[i] = data[i] * factor
+			}
+		}
+
+		return true
+	}
+
+	// Reads an uncompressed pixel block through the bounded scratch buffer and converts each chunk directly
+	// into its final interleaved output positions.
+	async #readUncompressed(source: Source & Seekable, output: ImageRawType, sampleScale: ImageSampleScale) {
+		const { bitpix, pixelStorage, geometry, location } = this.image
+		const buffer = this.#buffer!
+		const data = xisfDataView(buffer, bitpix)
+		const pixelInBytes = bitpixInBytes(bitpix)
+		const { width, height, channels } = geometry
+		const numberOfPixels = width * height
+		const factor = bitpix > 0 && sampleScale === 'normalized' ? 1 / (2 ** (8 * pixelInBytes) - 1) : 1
+		if (numberOfPixels > 0 && data.length === 0) return false
+		source.seek(location.offset)
+
+		if (pixelStorage === 'Planar') {
+			for (let channel = 0; channel < channels; channel++) {
+				for (let startPixel = 0; startPixel < numberOfPixels;) {
+					const count = Math.min(data.length, numberOfPixels - startPixel)
+					const byteCount = count * pixelInBytes
+					const chunk = byteCount === buffer.length ? buffer : buffer.subarray(0, byteCount)
+
+					if ((await readUntil(source, chunk, byteCount, 0)) !== byteCount) return false
+					if (pixelInBytes > 1 && this.image.byteOrder === 'big') {
+						if (pixelInBytes === 2) chunk.swap16()
+						else if (pixelInBytes === 4) chunk.swap32()
+						else if (pixelInBytes === 8) chunk.swap64()
+					}
+
+					let target = startPixel * channels + channel
+					for (let i = 0; i < count; i++, target += channels) output[target] = data[i] * factor
+					startPixel += count
+				}
+			}
+		} else {
+			const total = numberOfPixels * channels
+
+			for (let start = 0; start < total;) {
+				const count = Math.min(data.length, total - start)
+				const byteCount = count * pixelInBytes
+				const chunk = byteCount === buffer.length ? buffer : buffer.subarray(0, byteCount)
+
+				if ((await readUntil(source, chunk, byteCount, 0)) !== byteCount) return false
+				if (pixelInBytes > 1 && this.image.byteOrder === 'big') {
+					if (pixelInBytes === 2) chunk.swap16()
+					else if (pixelInBytes === 4) chunk.swap32()
+					else if (pixelInBytes === 8) chunk.swap64()
+				}
+
+				for (let i = 0; i < count; i++) output[start + i] = data[i] * factor
+				start += count
 			}
 		}
 
