@@ -218,8 +218,11 @@ interface XisfEncodedBlock {
 	readonly compression?: XisfCompression
 }
 
+// Typed numeric views constructed over XISF byte buffers; ordinary number arrays are never used here.
+type XisfDataArray = Exclude<NumberArray, number[]>
+
 // Builds a correctly aligned typed view over the backing XISF image buffer.
-function xisfDataView(buffer: Buffer, bitpix: Bitpix): NumberArray {
+function xisfDataView(buffer: Buffer, bitpix: Bitpix): XisfDataArray {
 	const byteLength = buffer.byteLength
 
 	if (byteLength === 0) return new Uint8Array(0)
@@ -327,6 +330,7 @@ async function writeUncompressedXisfImage(sink: Sink, input: ImageRawType, bitpi
 	const factor = bitpix > 0 ? 2 ** bitpix - 1 : 1
 	// Integer views truncate on assignment; a half-DN bias quantizes normalized samples to the nearest code.
 	const rounding = bitpix > 0 ? 0.5 : 0
+	const identity = factor === 1 && rounding === 0
 	if (total > 0 && data.length === 0) return 0
 
 	let written = 0
@@ -339,7 +343,8 @@ async function writeUncompressedXisfImage(sink: Sink, input: ImageRawType, bitpi
 				const chunk = byteCount === buffer.length ? buffer : buffer.subarray(0, byteCount)
 				let source = startPixel * channels + channel
 
-				for (let i = 0; i < count; i++, source += channels) data[i] = input[source] * factor + rounding
+				if (identity && channels === 1) data.set(input.subarray(startPixel, startPixel + count))
+				else for (let i = 0; i < count; i++, source += channels) data[i] = input[source] * factor + rounding
 				if (byteOrder === 'big') {
 					if (pixelInBytes === 2) chunk.swap16()
 					else if (pixelInBytes === 4) chunk.swap32()
@@ -356,7 +361,8 @@ async function writeUncompressedXisfImage(sink: Sink, input: ImageRawType, bitpi
 			const byteCount = count * pixelInBytes
 			const chunk = byteCount === buffer.length ? buffer : buffer.subarray(0, byteCount)
 
-			for (let i = 0; i < count; i++) data[i] = input[start + i] * factor + rounding
+			if (identity) data.set(input.subarray(start, start + count))
+			else for (let i = 0; i < count; i++) data[i] = input[start + i] * factor + rounding
 			if (byteOrder === 'big') {
 				if (pixelInBytes === 2) chunk.swap16()
 				else if (pixelInBytes === 4) chunk.swap32()
@@ -649,7 +655,9 @@ export class XisfImageReader {
 		const numberOfPixels = width * height
 		const factor = bitpix > 0 && sampleScale === 'normalized' ? 1 / (2 ** (8 * pixelInBytes) - 1) : 1
 
-		if (pixelStorage === 'Planar') {
+		if (factor === 1 && (pixelStorage === 'Normal' || channels === 1)) {
+			output.set(data.subarray(0, numberOfPixels * channels))
+		} else if (pixelStorage === 'Planar') {
 			for (let i = 0, p = 0; i < numberOfPixels; i++) {
 				for (let c = 0, m = i; c < channels; c++, m += numberOfPixels) {
 					output[p++] = data[m] * factor
@@ -693,8 +701,11 @@ export class XisfImageReader {
 						else if (pixelInBytes === 8) chunk.swap64()
 					}
 
-					let target = startPixel * channels + channel
-					for (let i = 0; i < count; i++, target += channels) output[target] = data[i] * factor
+					if (factor === 1 && channels === 1) output.set(data.subarray(0, count), startPixel)
+					else {
+						let target = startPixel * channels + channel
+						for (let i = 0; i < count; i++, target += channels) output[target] = data[i] * factor
+					}
 					startPixel += count
 				}
 			}
@@ -713,7 +724,8 @@ export class XisfImageReader {
 					else if (pixelInBytes === 8) chunk.swap64()
 				}
 
-				for (let i = 0; i < count; i++) output[start + i] = data[i] * factor
+				if (factor === 1) output.set(data.subarray(0, count), start)
+				else for (let i = 0; i < count; i++) output[start + i] = data[i] * factor
 				start += count
 			}
 		}
@@ -727,7 +739,7 @@ export class XisfImageReader {
 export class XisfImageWriter {
 	readonly #buffer: Buffer
 	readonly #shuffled?: Buffer
-	readonly #data: NumberArray
+	readonly #data: XisfDataArray
 
 	// Prepares to encode an image of the given format; an optional caller `buffer` is reused when aligned.
 	constructor(
@@ -755,7 +767,9 @@ export class XisfImageWriter {
 		const rounding = bitpix > 0 ? 0.5 : 0
 		const data = this.#data
 
-		if (pixelStorage === 'Planar') {
+		if (factor === 1 && rounding === 0 && (pixelStorage === 'Normal' || channels === 1)) {
+			data.set(input.subarray(0, numberOfPixels * channels))
+		} else if (pixelStorage === 'Planar') {
 			for (let c = 0, p = 0; c < channels; c++) {
 				for (let i = 0, m = c; i < numberOfPixels; i++, m += channels) {
 					data[p++] = input[m] * factor + rounding
