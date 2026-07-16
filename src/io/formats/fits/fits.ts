@@ -313,10 +313,17 @@ function writeInterleavedToPlanar(input: ImageRawType, output: NumberArray, head
 	const scale = numericKeyword(header, 'BSCALE', 1)
 	const factor = bitpix > 0 ? 2 ** bitpix - 1 : 1 // Transform float [0..1] to n-bit integer
 	const divisor = Number.isFinite(scale) && scale !== 0 ? scale : 1
+	const multiplier = factor / divisor
+	const bias = zero / divisor
+
+	if (channels === 1) {
+		for (let i = 0; i < numberOfPixels; i++) output[i] = input[i] * multiplier - bias
+		return
+	}
 
 	for (let c = 0, p = 0; c < channels; c++) {
 		for (let i = 0, m = c; i < numberOfPixels; i++, m += channels) {
-			output[p++] = (input[m] * factor - zero) / divisor
+			output[p++] = input[m] * multiplier - bias
 		}
 	}
 }
@@ -1071,10 +1078,25 @@ function writePlanarToInterleaved(data: NumberArray, output: ImageRawType, heade
 	const safeZero = Number.isFinite(zero) ? zero : defaultZero
 	const effectiveScale = normalized && bitpix > 0 && safeScale === 0 ? 1 : safeScale
 	const normalization = normalized && bitpix > 0 ? 1 / (2 ** bitpix - 1) : 1
+	const multiplier = effectiveScale * normalization
+	const bias = safeZero * normalization
+
+	if (channels === 1) {
+		if (multiplier === 1 && bias === 0) output.set(data)
+		else for (let i = 0; i < numberOfPixels; i++) output[i] = data[i] * multiplier + bias
+		return
+	}
+
+	if (multiplier === 1 && bias === 0) {
+		for (let i = 0, p = 0; i < numberOfPixels; i++) {
+			for (let c = 0, m = i; c < channels; c++, m += numberOfPixels) output[p++] = data[m]
+		}
+		return
+	}
 
 	for (let i = 0, p = 0; i < numberOfPixels; i++) {
 		for (let c = 0, m = i; c < channels; c++, m += numberOfPixels) {
-			output[p++] = (data[m] * effectiveScale + safeZero) * normalization
+			output[p++] = data[m] * multiplier + bias
 		}
 	}
 }
