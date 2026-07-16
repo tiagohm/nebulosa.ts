@@ -402,6 +402,46 @@ describe('buffer views', () => {
 		expect(scratch).toEqual(Buffer.alloc(6, 0x5a))
 	})
 
+	test('reads and writes shuffled samples without a second full-image buffer', async () => {
+		const geometry = { width: 3, height: 1, channels: 1 }
+		const input = new Float64Array([-2.5, 0.25, 12.75])
+		const xisf = { bitpix: -64 as const, byteOrder: 'big' as const, pixelStorage: 'Normal' as const, geometry }
+		const uncompressed = await new XisfImageWriter(xisf, false).encode(input)
+		const expectedShuffled = Buffer.alloc(uncompressed.data.byteLength)
+		byteShuffle(uncompressed.data, expectedShuffled, 8)
+		const writeScratch = Buffer.alloc(uncompressed.data.byteLength)
+		const encoded = await new XisfImageWriter(xisf, { format: 'zstd', shuffled: true }, writeScratch).encode(input)
+
+		expect(writeScratch).toEqual(expectedShuffled)
+
+		const readScratch = Buffer.alloc(uncompressed.data.byteLength, 0x5a)
+		const reader = new XisfImageReader(
+			{
+				...xisf,
+				location: { offset: 0, size: encoded.data.byteLength },
+				compression: encoded.compression,
+			},
+			readScratch,
+		)
+		const output = new Float64Array(input.length)
+
+		expect(await reader.read(bufferSource(encoded.data), output)).toBeTrue()
+		expect(output).toEqual(input)
+		expect(readScratch).toEqual(Buffer.alloc(uncompressed.data.byteLength, 0x5a))
+	})
+
+	test('round-trips planar integer samples through direct shuffle conversion', async () => {
+		const geometry = { width: 2, height: 1, channels: 2 }
+		const input = new Float64Array([0, 0.25, 0.75, 1])
+		const xisf = { bitpix: 16 as const, byteOrder: 'little' as const, pixelStorage: 'Planar' as const, geometry }
+		const encoded = await new XisfImageWriter(xisf, { format: 'zlib', shuffled: true }).encode(input)
+		const reader = new XisfImageReader({ ...xisf, location: { offset: 0, size: encoded.data.byteLength }, compression: encoded.compression })
+		const output = new Float64Array(input.length)
+
+		expect(await reader.read(bufferSource(encoded.data), output)).toBeTrue()
+		for (let i = 0; i < input.length; i++) expect(output[i]).toBeCloseTo(input[i], 4)
+	})
+
 	test('reader respects provided buffer offset', async () => {
 		const storage = Buffer.alloc(8, 0)
 		const buffer = storage.subarray(2, 4)
