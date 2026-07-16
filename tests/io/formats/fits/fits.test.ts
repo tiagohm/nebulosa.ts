@@ -239,6 +239,41 @@ test('writes and reads interleaved channels directly from Rice tiles', async () 
 	for (let i = 0; i < raw.length; i++) expect(output!.raw[i]).toBeCloseTo(raw[i], 4)
 })
 
+test('reads Rice tiles without staging the complete compressed HDU', async () => {
+	const width = 2048
+	const height = 16
+	const header: FitsHeader = { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: width, NAXIS2: height, BSCALE: 1, BZERO: 32768 }
+	const raw = new Float64Array(width * height)
+	raw.fill(0.25)
+	const storage = Buffer.alloc(256 * 1024)
+	const sink = bufferSink(storage)
+
+	await writeFits(sink, [{ header, raw }], { type: 'RICE_1', tileHeight: 1 })
+	const file = storage.subarray(0, sink.position)
+	const fits = await readFits(bufferSource(file))
+	const hdu = fits!.hdus.at(-1)!
+	const delegate = bufferSource(file)
+	let largestRead = 0
+	const source = {
+		get position() {
+			return delegate.position
+		},
+		seek(position: number) {
+			return delegate.seek(position)
+		},
+		read(buffer: Buffer, offset?: number, size?: number) {
+			largestRead = Math.max(largestRead, size ?? buffer.byteLength)
+			return delegate.read(buffer, offset, size)
+		},
+	}
+	const output = new Float64Array(raw.length)
+
+	expect(await new FitsImageReader(hdu).read(source, output)).toBeTrue()
+	expect(largestRead).toBeLessThan(hdu.data.size)
+	expect(output[0]).toBeCloseTo(0.25, 4)
+	expect(output.at(-1)).toBeCloseTo(0.25, 4)
+})
+
 test('write uncompressed FITS from a compressed image header', async () => {
 	const buffer = Buffer.alloc(FITS_BLOCK_SIZE * 3, 20)
 	const header: FitsHeader = {

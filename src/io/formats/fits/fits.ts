@@ -1226,11 +1226,6 @@ export class FitsImageReader {
 			throw new Error('RICE 1 supports only BITPIX = 8, 16 or 32')
 		}
 
-		const compressed = Buffer.allocUnsafe(this.hdu.data.size)
-		source.seek(this.hdu.data.offset)
-
-		if ((await readUntil(source, compressed, compressed.length, 0)) !== compressed.length) return false
-
 		const rowSize = widthKeyword(header, 0)
 		const rowCount = heightKeyword(header, 0)
 		const heapOffset = Math.trunc(numericKeyword(header, 'THEAP', rowSize * rowCount))
@@ -1245,9 +1240,16 @@ export class FitsImageReader {
 		validatePositiveInteger(tileHeight)
 		validatePositiveInteger(tileDepth)
 
-		if (rowSize < 8 || heapOffset < rowSize * rowCount || heapOffset > compressed.length) {
+		const tableSize = rowSize * rowCount
+
+		if (!Number.isSafeInteger(tableSize) || rowSize < 8 || heapOffset < tableSize || heapOffset > this.hdu.data.size) {
 			throw new Error('compressed FITS image has invalid heap offsets')
 		}
+
+		const rows = Buffer.allocUnsafe(tableSize)
+		source.seek(this.hdu.data.offset)
+
+		if ((await readUntil(source, rows)) !== rows.length) return false
 
 		const tilesX = Math.ceil(width / tileWidth)
 		const tilesY = Math.ceil(height / tileHeight)
@@ -1261,19 +1263,33 @@ export class FitsImageReader {
 		const ImageTypedArray = bitpix === 8 ? Uint8Array : bitpix === 16 ? Int16Array : Int32Array
 		const tileBuffer = new ImageTypedArray(maxTilePixels)
 		const [multiplier, bias] = fitsReadScaling(header, bitpix, sampleScale)
+		let maxCompressedTileSize = 0
+
+		for (let tileIndex = 0; tileIndex < totalTiles; tileIndex++) {
+			const descriptorOffset = tileIndex * rowSize
+			if (descriptorOffset + 8 > rows.length) throw new Error('compressed FITS image has truncated tile descriptors')
+
+			const byteCount = rows.readUInt32BE(descriptorOffset)
+			const heapRelativeOffset = rows.readUInt32BE(descriptorOffset + 4)
+			const start = heapOffset + heapRelativeOffset
+			const end = start + byteCount
+
+			if (start < heapOffset || end > this.hdu.data.size) throw new Error('compressed FITS image has invalid heap offsets')
+			maxCompressedTileSize = Math.max(maxCompressedTileSize, byteCount)
+		}
+
+		const compressedTileBuffer = Buffer.allocUnsafe(maxCompressedTileSize)
 
 		const { decompressRice } = await import('../../compression')
 
 		for (let tileIndex = 0; tileIndex < totalTiles; tileIndex++) {
 			const descriptorOffset = tileIndex * rowSize
-			if (descriptorOffset + 8 > compressed.length) throw new Error('compressed FITS image has truncated tile descriptors')
-
-			const byteCount = compressed.readUInt32BE(descriptorOffset)
-			const heapRelativeOffset = compressed.readUInt32BE(descriptorOffset + 4)
+			const byteCount = rows.readUInt32BE(descriptorOffset)
+			const heapRelativeOffset = rows.readUInt32BE(descriptorOffset + 4)
 			const start = heapOffset + heapRelativeOffset
-			const end = start + byteCount
-
-			if (start < 0 || end > compressed.length) throw new Error('compressed FITS image has invalid heap offsets')
+			const compressedTile = byteCount === compressedTileBuffer.length ? compressedTileBuffer : compressedTileBuffer.subarray(0, byteCount)
+			source.seek(this.hdu.data.offset + start)
+			if ((await readUntil(source, compressedTile)) !== byteCount) return false
 
 			const tz = Math.trunc(tileIndex / tilePlaneSize)
 			const rem = tileIndex - tz * tilePlaneSize
@@ -1289,7 +1305,7 @@ export class FitsImageReader {
 			const thisTilePixels = thisTileWidth * thisTileHeight * thisTileDepth
 			const tile = thisTilePixels === tileBuffer.length ? tileBuffer : tileBuffer.subarray(0, thisTilePixels)
 
-			decompressRice(compressed.subarray(start, end), tile, blockSize)
+			decompressRice(compressedTile, tile, blockSize)
 			writePlanarTileToInterleaved(tile, output, width, channels, x0, y0, z0, thisTileWidth, thisTileHeight, thisTileDepth, multiplier, bias)
 		}
 
