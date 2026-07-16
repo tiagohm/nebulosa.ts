@@ -25,6 +25,42 @@ test('is fits rejects non-FITS and too-short buffers', () => {
 	expect(isFits(Buffer.alloc(0))).toBeFalse()
 })
 
+test('reads FITS headers one block at a time', async () => {
+	const buffer = Buffer.alloc(FITS_BLOCK_SIZE, 32)
+	const cards: FitsHeaderCard[] = [
+		['SIMPLE', true],
+		['BITPIX', 8],
+		['NAXIS', 0],
+	]
+
+	for (let i = 0; i < 30; i++) cards.push(['COMMENT', undefined, `card ${i}`])
+
+	const writer = new FitsKeywordWriter()
+	let offset = writer.writeAll(cards, buffer)
+	offset += writer.writeEnd(buffer, offset)
+	buffer.fill(32, offset)
+
+	const delegate = bufferSource(buffer)
+	let readCount = 0
+	const source = {
+		get position() {
+			return delegate.position
+		},
+		seek(position: number) {
+			return delegate.seek(position)
+		},
+		read(output: Buffer, outputOffset?: number, size?: number) {
+			readCount++
+			return delegate.read(output, outputOffset, size)
+		},
+	}
+
+	const fits = await readFits(source)
+
+	expect(fits?.hdus).toHaveLength(1)
+	expect(readCount).toBe(2)
+})
+
 describe('read', () => {
 	for (const bitpix of BITPIXES) {
 		for (const channel of CHANNELS) {

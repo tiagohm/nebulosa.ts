@@ -122,44 +122,40 @@ export interface FitsCompressionOptions {
 // Parses a FITS file from a seekable source into its HDU list, recording each HDU's header and the
 // offset/size of its data segment (which is skipped, not read). Returns undefined when the input is not FITS.
 export async function readFits(source: Source & Seekable): Promise<Fits | undefined> {
-	const buffer = Buffer.allocUnsafe(FITS_HEADER_CARD_SIZE)
+	const buffer = Buffer.allocUnsafe(FITS_BLOCK_SIZE)
 	const reader = new FitsKeywordReader()
-
-	if ((await readUntil(source, buffer)) !== FITS_HEADER_CARD_SIZE) return undefined
-	if (!isFits(buffer)) return undefined
-
 	const hdus: FitsHdu[] = []
 	let prev: FitsHeaderCard | undefined
 	let inHeader = false
 
-	// Parses one 80-byte card and stops once trailing bytes are no longer inside an HDU.
-	function parseCard() {
-		const card = reader.read(buffer)
+	// Parses one 80-byte card from a buffered FITS block. Returns 2 after END so the caller
+	// discards the remaining padding and continues from the data-adjusted source position.
+	function parseCard(offset: number, absoluteEnd: number) {
+		const card = reader.read(buffer, offset)
 		const [key, value, comment] = card
 
 		if (!key) {
 			prev = undefined
-			return inHeader
+			return inHeader ? 1 : 0
 		}
 
 		if (key === 'SIMPLE' || key === 'XTENSION') {
-			const offset = source.position - FITS_HEADER_CARD_SIZE
-			hdus.push({ header: { [key]: value }, offset, data: { offset: 0, size: 0 } })
+			hdus.push({ header: { [key]: value }, offset: absoluteEnd - FITS_HEADER_CARD_SIZE, data: { offset: 0, size: 0 } })
 			prev = undefined
 			inHeader = true
-			return true
+			return 1
 		}
 
 		if (!inHeader || hdus.length === 0) {
 			prev = undefined
-			return false
+			return 0
 		}
 
 		const hdu = hdus.at(-1)!
 		const { header } = hdu
 
 		if (key === 'END') {
-			const offset = source.position + computeRemainingBytes(source.position)
+			const offset = absoluteEnd + computeRemainingBytes(absoluteEnd)
 			const size = computeHduDataSize(header)
 			const data = hdu.data as Writable<FitsData>
 			source.seek(offset + size + computeRemainingBytes(size))
@@ -167,7 +163,7 @@ export async function readFits(source: Source & Seekable): Promise<Fits | undefi
 			data.offset = offset
 			prev = undefined
 			inHeader = false
-			return true
+			return 2
 		}
 
 		if (prev && key === 'CONTINUE' && typeof value === 'string' && typeof prev[1] === 'string' && prev[1].endsWith('&')) {
@@ -183,18 +179,37 @@ export async function readFits(source: Source & Seekable): Promise<Fits | undefi
 			prev = card
 		}
 
-		return true
+		return 1
 	}
 
-	if (!parseCard() || hdus.length === 0) return undefined
-
+	let firstBlock = true
 	while (true) {
+		const blockStart = source.position
 		const size = await readUntil(source, buffer)
-		if (size !== FITS_HEADER_CARD_SIZE) break
-		if (!parseCard()) break
+
+		if (firstBlock) {
+			if (size < FITS_HEADER_CARD_SIZE || !isFits(buffer)) return undefined
+			firstBlock = false
+		}
+
+		if (size < FITS_HEADER_CARD_SIZE) break
+
+		let nextHdu = false
+
+		for (let offset = 0; offset + FITS_HEADER_CARD_SIZE <= size; offset += FITS_HEADER_CARD_SIZE) {
+			const result = parseCard(offset, blockStart + offset + FITS_HEADER_CARD_SIZE)
+			if (result === 0) return hdus.length > 0 ? { hdus } : undefined
+			if (result === 2) {
+				nextHdu = true
+				break
+			}
+		}
+
+		if (nextHdu) continue
+		if (size !== FITS_BLOCK_SIZE) break
 	}
 
-	return { hdus }
+	return hdus.length > 0 ? { hdus } : undefined
 }
 
 // Default Rice block size in pixels when none is specified.
