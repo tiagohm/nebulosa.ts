@@ -422,20 +422,24 @@ describe('base64', () => {
 			const alphabet = i % 2 === 0 ? 'base64' : 'base64url'
 			const sink = base64Sink(bufferSink(output), alphabet)
 			const [encoded, raw] = randomBase64(i, alphabet)
-			const n = (await sink.write(raw)) + (await sink.end())
+			const consumed = await sink.write(raw)
+			await sink.end()
 
-			expect(n).toBe(encoded.byteLength)
-			expect(output.subarray(0, n)).toEqual(encoded.subarray(0, n))
+			expect(consumed).toBe(raw.byteLength)
+			expect(sink.encodedSize).toBe(encoded.byteLength)
+			expect(output.subarray(0, sink.encodedSize)).toEqual(encoded)
 		}
 	})
 
 	test('sink honors buffer offset and size', async () => {
 		const sink = base64Sink(bufferSink(output))
 		const input = Buffer.from('abcdef', 'ascii')
-		const n = (await sink.write(input, 1, 4)) + (await sink.end())
+		const consumed = await sink.write(input, 1, 4)
+		await sink.end()
 
-		expect(n).toBe(8)
-		expect(output.subarray(0, n).toString('ascii')).toBe('YmNkZQ==')
+		expect(consumed).toBe(4)
+		expect(sink.encodedSize).toBe(8)
+		expect(output.subarray(0, sink.encodedSize).toString('ascii')).toBe('YmNkZQ==')
 	})
 
 	test('fits header', async () => {

@@ -4,7 +4,7 @@ import { readImageFromBuffer, readImageFromFits, readImageFromPath } from '../..
 import { FITS_BLOCK_SIZE, FITS_HEADER_CARD_SIZE, type FitsHdu, type FitsHeader, type FitsHeaderCard, FitsImageReader, FitsImageWriter, FitsKeywordReader, FitsKeywordWriter, isFits, readFits, writeFits } from '../../../../src/io/formats/fits/fits'
 import { KEYWORDS } from '../../../../src/io/formats/fits/headers'
 import { declinationKeyword, heightKeyword, observationDateKeyword, rightAscensionKeyword, widthKeyword } from '../../../../src/io/formats/fits/util'
-import { bufferSink, bufferSource, fileHandleSource } from '../../../../src/io/io'
+import { base64Sink, bufferSink, bufferSource, fileHandleSource } from '../../../../src/io/io'
 import { dms, hms } from '../../../../src/math/units/angle'
 import { downloadPerTag } from '../../../download'
 import { BITPIXES, CHANNELS, saveImageAndCompareHash } from '../../../imaging/util'
@@ -23,6 +23,42 @@ test('is fits rejects non-FITS and too-short buffers', () => {
 	expect(isFits(Buffer.from('this is not a fits file at all really'))).toBeFalse()
 	expect(isFits(Buffer.from('SIMPL'))).toBeFalse()
 	expect(isFits(Buffer.alloc(0))).toBeFalse()
+})
+
+test('reads FITS headers one block at a time', async () => {
+	const buffer = Buffer.alloc(FITS_BLOCK_SIZE, 32)
+	const cards: FitsHeaderCard[] = [
+		['SIMPLE', true],
+		['BITPIX', 8],
+		['NAXIS', 0],
+	]
+
+	for (let i = 0; i < 30; i++) cards.push(['COMMENT', undefined, `card ${i}`])
+
+	const writer = new FitsKeywordWriter()
+	let offset = writer.writeAll(cards, buffer)
+	offset += writer.writeEnd(buffer, offset)
+	buffer.fill(32, offset)
+
+	const delegate = bufferSource(buffer)
+	let readCount = 0
+	const source = {
+		get position() {
+			return delegate.position
+		},
+		seek(position: number) {
+			return delegate.seek(position)
+		},
+		read(output: Buffer, outputOffset?: number, size?: number) {
+			readCount++
+			return delegate.read(output, outputOffset, size)
+		},
+	}
+
+	const fits = await readFits(source)
+
+	expect(fits?.hdus).toHaveLength(1)
+	expect(readCount).toBe(2)
 })
 
 describe('read', () => {
@@ -186,6 +222,57 @@ test('write/read RICE compressed', async () => {
 
 	await saveImageAndCompareHash(output, 'write-fits-rice-16-1', 'c754bf834dc1bb3948ec3cf8b9aca303')
 }, 5000)
+
+test('writes and reads interleaved channels directly from Rice tiles', async () => {
+	const width = 3
+	const height = 3
+	const channels = 3
+	const header: FitsHeader = { SIMPLE: true, BITPIX: 16, NAXIS: 3, NAXIS1: width, NAXIS2: height, NAXIS3: channels, BSCALE: 1, BZERO: 32768 }
+	const raw = new Float64Array(width * height * channels)
+	for (let i = 0; i < raw.length; i++) raw[i] = i / (raw.length - 1)
+	const buffer = Buffer.alloc(FITS_BLOCK_SIZE * 4)
+
+	await writeFits(bufferSink(buffer), [{ header, raw }], { type: 'RICE_1', tileHeight: 2 })
+	const output = await readImageFromBuffer(buffer, { raw: 64 })
+
+	expect(output?.metadata.channels).toBe(channels)
+	for (let i = 0; i < raw.length; i++) expect(output!.raw[i]).toBeCloseTo(raw[i], 4)
+})
+
+test('reads Rice tiles without staging the complete compressed HDU', async () => {
+	const width = 2048
+	const height = 16
+	const header: FitsHeader = { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: width, NAXIS2: height, BSCALE: 1, BZERO: 32768 }
+	const raw = new Float64Array(width * height)
+	raw.fill(0.25)
+	const storage = Buffer.alloc(256 * 1024)
+	const sink = bufferSink(storage)
+
+	await writeFits(sink, [{ header, raw }], { type: 'RICE_1', tileHeight: 1 })
+	const file = storage.subarray(0, sink.position)
+	const fits = await readFits(bufferSource(file))
+	const hdu = fits!.hdus.at(-1)!
+	const delegate = bufferSource(file)
+	let largestRead = 0
+	const source = {
+		get position() {
+			return delegate.position
+		},
+		seek(position: number) {
+			return delegate.seek(position)
+		},
+		read(buffer: Buffer, offset?: number, size?: number) {
+			largestRead = Math.max(largestRead, size ?? buffer.byteLength)
+			return delegate.read(buffer, offset, size)
+		},
+	}
+	const output = new Float64Array(raw.length)
+
+	expect(await new FitsImageReader(hdu).read(source, output)).toBeTrue()
+	expect(largestRead).toBeLessThan(hdu.data.size)
+	expect(output[0]).toBeCloseTo(0.25, 4)
+	expect(output.at(-1)).toBeCloseTo(0.25, 4)
+})
 
 test('write uncompressed FITS from a compressed image header', async () => {
 	const buffer = Buffer.alloc(FITS_BLOCK_SIZE * 3, 20)
@@ -409,6 +496,88 @@ test('fits image reader and writer honor non-zero backing buffer offsets', async
 	expect(output[1]).toBeCloseTo(1, 12)
 	expect(readBuffer[2]).toBe(77)
 	expect(readBuffer[7]).toBe(77)
+})
+
+test('completes partial FITS sink writes', async () => {
+	const header: FitsHeader = { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: 3, NAXIS2: 1, BSCALE: 1, BZERO: 32768 }
+	const raw = new Float64Array([0, 0.5, 1])
+	const buffer = Buffer.alloc(FITS_BLOCK_SIZE * 2)
+	const delegate = bufferSink(buffer)
+	const sink = {
+		write(chunk: string | Buffer, offset?: number, size?: number, encoding?: BufferEncoding) {
+			const available = typeof chunk === 'string' ? chunk.length - (offset ?? 0) : chunk.byteLength - (offset ?? 0)
+			return delegate.write(chunk, offset, Math.min(size ?? available, 7), encoding)
+		},
+	}
+
+	await writeFits(sink, [{ header, raw }])
+	const output = await readImageFromBuffer(buffer.subarray(0, delegate.position))
+
+	expect(output).toBeDefined()
+	expect(output!.raw[0]).toBe(0)
+	expect(output!.raw[1]).toBeCloseTo(0.5, 4)
+	expect(output!.raw[2]).toBe(1)
+})
+
+test('writes FITS through a transforming base64 sink', async () => {
+	const header: FitsHeader = { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: 3, NAXIS2: 1, BSCALE: 1, BZERO: 32768 }
+	const raw = new Float64Array([0, 0.5, 1])
+	const encoded = Buffer.alloc(FITS_BLOCK_SIZE * 3)
+	const sink = base64Sink(bufferSink(encoded))
+
+	await writeFits(sink, [{ header, raw }])
+	await sink.end()
+	const decoded = Buffer.from(encoded.subarray(0, sink.encodedSize).toString('ascii'), 'base64')
+	const output = await readImageFromBuffer(decoded)
+
+	expect(output).toBeDefined()
+	expect(output!.raw[0]).toBe(0)
+	expect(output!.raw[1]).toBeCloseTo(0.5, 4)
+	expect(output!.raw[2]).toBe(1)
+})
+
+test('reads and writes uncompressed FITS images in bounded chunks', async () => {
+	const width = 600_000
+	const header: FitsHeader = { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: width, NAXIS2: 1, BSCALE: 1, BZERO: 32768 }
+	const raw = new Float32Array(width)
+	raw.fill(0.25)
+	const stored = Buffer.alloc(width * 2)
+	const sinkDelegate = bufferSink(stored)
+	const writeSizes: number[] = []
+	const sink = {
+		write(buffer: string | Buffer, offset?: number, size?: number, encoding?: BufferEncoding) {
+			if (typeof buffer === 'string') throw new Error('unexpected string FITS chunk')
+			writeSizes.push(size ?? buffer.length - (offset ?? 0))
+			return sinkDelegate.write(buffer, offset, size, encoding)
+		},
+	}
+
+	expect(await new FitsImageWriter(header).write(raw, sink)).toBe(stored.length)
+	expect(writeSizes.length).toBeGreaterThan(1)
+	expect(Math.max(...writeSizes)).toBeLessThanOrEqual(1024 * 1024)
+
+	const sourceDelegate = bufferSource(stored)
+	const readSizes: number[] = []
+	const source = {
+		get position() {
+			return sourceDelegate.position
+		},
+		seek(position: number) {
+			return sourceDelegate.seek(position)
+		},
+		read(buffer: Buffer, offset?: number, size?: number) {
+			readSizes.push(size ?? buffer.length - (offset ?? 0))
+			return sourceDelegate.read(buffer, offset, size)
+		},
+	}
+	const output = new Float32Array(width)
+	const reader = new FitsImageReader({ header, data: { offset: 0, size: stored.length } })
+
+	expect(await reader.read(source, output)).toBeTrue()
+	expect(readSizes.length).toBeGreaterThan(1)
+	expect(Math.max(...readSizes)).toBeLessThanOrEqual(1024 * 1024)
+	expect(output[0]).toBeCloseTo(0.25, 4)
+	expect(output[width - 1]).toBeCloseTo(0.25, 4)
 })
 
 test('inverts FITS affine scaling when writing normalized samples', async () => {

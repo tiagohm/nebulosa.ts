@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import fs from 'fs/promises'
 import { readImageFromBuffer, readImageFromPath, readImageFromXisf } from '../../../../src/imaging/model/image'
 import { byteShuffle, byteUnshuffle, isXisf, parseXisfHeader, readXisf, writeXisf, XisfImageReader, XisfImageWriter } from '../../../../src/io/formats/xisf/xisf'
-import { bufferSink, bufferSource, fileHandleSource } from '../../../../src/io/io'
+import { base64Sink, bufferSink, bufferSource, fileHandleSource } from '../../../../src/io/io'
 import { downloadPerTag } from '../../../download'
 import { BITPIXES, CHANNELS, saveImageAndCompareHash } from '../../../imaging/util'
 
@@ -187,6 +187,71 @@ describe('read compressed', () => {
 describe('write', () => {
 	const buffer = Buffer.allocUnsafe(1024 * 1024 * 18)
 
+	test('completes partial sink writes', async () => {
+		const raw = new Float64Array([0, 0.5, 1])
+		const buffer = Buffer.alloc(4096)
+		const delegate = bufferSink(buffer)
+		const sink = {
+			write(chunk: string | Buffer, offset?: number, size?: number, encoding?: BufferEncoding) {
+				const available = typeof chunk === 'string' ? chunk.length - (offset ?? 0) : chunk.byteLength - (offset ?? 0)
+				return delegate.write(chunk, offset, Math.min(size ?? available, 7), encoding)
+			},
+		}
+
+		const size = await writeXisf(sink, [{ header: { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: 3, NAXIS2: 1 }, raw, sampleScale: 'normalized' }])
+		const output = await readImageFromBuffer(buffer.subarray(0, size))
+
+		expect(size).toBe(delegate.position)
+		expect(output).toBeDefined()
+		expect(output!.raw[0]).toBe(0)
+		expect(output!.raw[1]).toBeCloseTo(0.5, 4)
+		expect(output!.raw[2]).toBe(1)
+	})
+
+	test('writes through a transforming base64 sink', async () => {
+		const raw = new Float64Array([0, 0.5, 1])
+		const encoded = Buffer.alloc(4096)
+		const sink = base64Sink(bufferSink(encoded))
+
+		await writeXisf(sink, [{ header: { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: 3, NAXIS2: 1 }, raw, sampleScale: 'normalized' }])
+		await sink.end()
+		const decoded = Buffer.from(encoded.subarray(0, sink.encodedSize).toString('ascii'), 'base64')
+		const output = await readImageFromBuffer(decoded)
+
+		expect(output).toBeDefined()
+		expect(output!.raw[0]).toBe(0)
+		expect(output!.raw[1]).toBeCloseTo(0.5, 4)
+		expect(output!.raw[2]).toBe(1)
+	})
+
+	test('bounds uncompressed pixel writes', async () => {
+		const width = 512 * 1024 + 1
+		const raw = new Float64Array(width)
+		raw.fill(0.5)
+		raw[0] = 0
+		raw[width - 1] = 1
+		const buffer = Buffer.allocUnsafe(width * 2 + 4096)
+		const base = bufferSink(buffer)
+		let largestWrite = 0
+		const sink = {
+			write: (chunk: string | Buffer, offset?: number, size?: number, encoding?: BufferEncoding) => {
+				largestWrite = Math.max(largestWrite, size ?? chunk.length)
+				return base.write(chunk, offset, size, encoding)
+			},
+		}
+		const size = await writeXisf(sink, [{ header: { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: width, NAXIS2: 1 }, raw, sampleScale: 'normalized' }], {
+			byteOrder: 'big',
+			pixelStorage: 'Normal',
+		})
+		const output = await readImageFromBuffer(buffer.subarray(0, size))
+
+		expect(largestWrite).toBeLessThanOrEqual(1024 * 1024)
+		expect(output).toBeDefined()
+		expect(output!.raw[0]).toBe(0)
+		expect(output!.raw[Math.trunc(width / 2)]).toBeCloseTo(0.5, 4)
+		expect(output!.raw.at(-1)).toBe(1)
+	})
+
 	for (const channel of CHANNELS) {
 		for (const bitpix of BITPIXES) {
 			test(`channel=${channel}, bitpix=${bitpix}`, async () => {
@@ -246,14 +311,14 @@ describe('write compressed', () => {
 })
 
 describe('byte shuffle and unshuffle', () => {
-	for (let itemSize = 1; itemSize <= 4; itemSize *= 2) {
+	for (let itemSize = 1; itemSize <= 8; itemSize *= 2) {
 		test(`itemSize=${itemSize}`, () => {
-			const TypedArray = itemSize === 1 ? Uint8Array : itemSize === 2 ? Uint16Array : Uint32Array
+			const TypedArray = itemSize === 1 ? Uint8Array : itemSize === 2 ? Uint16Array : itemSize === 4 ? Uint32Array : BigUint64Array
 			const original = new TypedArray(512)
 			const shuffled = new TypedArray(512)
 			const unshuffled = new TypedArray(512)
 
-			for (let i = 0; i < original.length; i++) original[i] = i
+			for (let i = 0; i < original.length; i++) original[i] = itemSize === 8 ? BigInt(i) : i
 
 			byteShuffle(Buffer.from(original.buffer), Buffer.from(shuffled.buffer), itemSize)
 
@@ -278,9 +343,121 @@ describe('byte shuffle and unshuffle', () => {
 		byteUnshuffle(shuffled, unshuffled, 4)
 		expect(unshuffled).toEqual(original)
 	})
+
+	for (const itemSize of [2, 8]) {
+		test(`preserves trailing bytes for itemSize=${itemSize}`, () => {
+			const original = Uint8Array.from({ length: itemSize * 2 + 1 }, (_, i) => i + 1)
+			const shuffled = new Uint8Array(original.length)
+			const unshuffled = new Uint8Array(original.length)
+
+			byteShuffle(original, shuffled, itemSize)
+			byteUnshuffle(shuffled, unshuffled, itemSize)
+			expect(unshuffled).toEqual(original)
+		})
+	}
 })
 
 describe('buffer views', () => {
+	test('reader bounds default scratch storage for uncompressed images', async () => {
+		const numberOfPixels = 512 * 1024 + 1
+		const block = Buffer.allocUnsafe(numberOfPixels * 2 * 2)
+		const samples = new Uint16Array(block.buffer, block.byteOffset, block.byteLength / 2)
+		samples.subarray(0, numberOfPixels).fill(0)
+		samples.subarray(numberOfPixels).fill(0xffff)
+		const base = bufferSource(block)
+		let largestRead = 0
+		const source = {
+			get position() {
+				return base.position
+			},
+			seek: (position: number) => base.seek(position),
+			read: (buffer: Buffer, offset?: number, size?: number) => {
+				largestRead = Math.max(largestRead, size ?? buffer.byteLength)
+				return base.read(buffer, offset, size)
+			},
+		}
+		const reader = new XisfImageReader({
+			bitpix: 16,
+			location: { offset: 0, size: block.byteLength },
+			byteOrder: 'little',
+			pixelStorage: 'Planar',
+			geometry: { width: numberOfPixels, height: 1, channels: 2 },
+		})
+		const output = new Float64Array(numberOfPixels * 2)
+
+		expect(await reader.read(source, output)).toBeTrue()
+		expect(largestRead).toBeLessThanOrEqual(1024 * 1024)
+		expect(output[0]).toBe(0)
+		expect(output[1]).toBe(1)
+		expect(output.at(-2)).toBe(0)
+		expect(output.at(-1)).toBe(1)
+	})
+
+	test('reader uses the decompressed block without copying it into scratch storage', async () => {
+		const input = new Float64Array([0, 0.5, 1])
+		const writer = new XisfImageWriter({ bitpix: 16, byteOrder: 'little', pixelStorage: 'Normal', geometry: { width: 3, height: 1, channels: 1 } }, { format: 'zstd' })
+		const encoded = await writer.encode(input)
+		const scratch = Buffer.alloc(6, 0x5a)
+		const reader = new XisfImageReader(
+			{
+				bitpix: 16,
+				location: { offset: 0, size: encoded.data.byteLength },
+				compression: encoded.compression,
+				byteOrder: 'little',
+				pixelStorage: 'Normal',
+				geometry: { width: 3, height: 1, channels: 1 },
+			},
+			scratch,
+		)
+		const output = new Float64Array(3)
+
+		expect(await reader.read(bufferSource(encoded.data), output)).toBeTrue()
+		expect(output[0]).toBe(0)
+		expect(output[1]).toBeCloseTo(0.5, 4)
+		expect(output[2]).toBe(1)
+		expect(scratch).toEqual(Buffer.alloc(6, 0x5a))
+	})
+
+	test('reads and writes shuffled samples without a second full-image buffer', async () => {
+		const geometry = { width: 3, height: 1, channels: 1 }
+		const input = new Float64Array([-2.5, 0.25, 12.75])
+		const xisf = { bitpix: -64 as const, byteOrder: 'big' as const, pixelStorage: 'Normal' as const, geometry }
+		const uncompressed = await new XisfImageWriter(xisf, false).encode(input)
+		const expectedShuffled = Buffer.alloc(uncompressed.data.byteLength)
+		byteShuffle(uncompressed.data, expectedShuffled, 8)
+		const writeScratch = Buffer.alloc(uncompressed.data.byteLength)
+		const encoded = await new XisfImageWriter(xisf, { format: 'zstd', shuffled: true }, writeScratch).encode(input)
+
+		expect(writeScratch).toEqual(expectedShuffled)
+
+		const readScratch = Buffer.alloc(uncompressed.data.byteLength, 0x5a)
+		const reader = new XisfImageReader(
+			{
+				...xisf,
+				location: { offset: 0, size: encoded.data.byteLength },
+				compression: encoded.compression,
+			},
+			readScratch,
+		)
+		const output = new Float64Array(input.length)
+
+		expect(await reader.read(bufferSource(encoded.data), output)).toBeTrue()
+		expect(output).toEqual(input)
+		expect(readScratch).toEqual(Buffer.alloc(uncompressed.data.byteLength, 0x5a))
+	})
+
+	test('round-trips planar integer samples through direct shuffle conversion', async () => {
+		const geometry = { width: 2, height: 1, channels: 2 }
+		const input = new Float64Array([0, 0.25, 0.75, 1])
+		const xisf = { bitpix: 16 as const, byteOrder: 'little' as const, pixelStorage: 'Planar' as const, geometry }
+		const encoded = await new XisfImageWriter(xisf, { format: 'zlib', shuffled: true }).encode(input)
+		const reader = new XisfImageReader({ ...xisf, location: { offset: 0, size: encoded.data.byteLength }, compression: encoded.compression })
+		const output = new Float64Array(input.length)
+
+		expect(await reader.read(bufferSource(encoded.data), output)).toBeTrue()
+		for (let i = 0; i < input.length; i++) expect(output[i]).toBeCloseTo(input[i], 4)
+	})
+
 	test('reader respects provided buffer offset', async () => {
 		const storage = Buffer.alloc(8, 0)
 		const buffer = storage.subarray(2, 4)
