@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { histogram } from '../../../src/imaging/processing/computation'
+import { histogram, medianAbsoluteDeviation } from '../../../src/imaging/processing/computation'
 import { makeImage } from './util'
 
 // Focused regression coverage for image histogram, display statistics, and sigma clipping.
@@ -39,4 +39,20 @@ test('histogram rejects unsafe bit depths and invalid buffers', () => {
 test('histogram rejects a mask that matches neither supported layout', () => {
 	const image = makeImage(2, 1, 3, [1, 0, 0, 0, 1, 0])
 	expect(() => histogram(image, { sigmaClip: new Int8Array(3) })).toThrow()
+})
+
+test('median absolute deviation reduces RGB to grayscale before measuring deviations', () => {
+	const color = makeImage(2, 1, 3, [0, 1, 0, 1, 0, 0])
+	const grayscale = makeImage(2, 1, 1, [0.7154, 0.2125])
+
+	expect(medianAbsoluteDeviation(color, 0.5)).toBe(medianAbsoluteDeviation(grayscale, 0.5))
+})
+
+test('median absolute deviation honors transforms and normalization', () => {
+	const image = makeImage(3, 1, 1, [0.1, 0.2, 0.4])
+	const raw = medianAbsoluteDeviation(image, 0.4, false, { transform: (value) => value * 2 })
+	const normalized = medianAbsoluteDeviation(image, 0.4, true, { transform: (value) => value * 2 })
+
+	expect(raw).toBeGreaterThan(0)
+	expect(normalized).toBeCloseTo(raw * 1.482602218505602, 12)
 })

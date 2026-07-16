@@ -215,8 +215,7 @@ export function median(image: Image, options: Partial<HistogramOptions> = DEFAUL
 // Median absolute deviation about `m`. When `normalized`, scales by the Gaussian-consistency factor so
 // the result is comparable to a standard deviation.
 export function medianAbsoluteDeviation(image: Image, m: number, normalized: boolean = false, options: Partial<HistogramOptions> = DEFAULT_HISTOGRAM_OPTIONS) {
-	const transform = options.transform ?? DEFAULT_HISTOGRAM_OPTIONS.transform
-	const mad = median(image, { ...options, transform: (p, i) => Math.abs(transform(p, i) - m) })
+	const mad = computeHistogram(image, options, m).median
 	return normalized ? STANDARD_DEVIATION_SCALE * mad : mad
 }
 

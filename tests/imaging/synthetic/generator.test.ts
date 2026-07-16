@@ -432,7 +432,7 @@ describe('generate image', () => {
 		{
 			name: 'rgb neutral sky background',
 			channels: 3,
-			hash: '9ebb8b48b9fbab38b380848bcba58b81',
+			hash: 'ad1140f77ad178c579e98c4a5a57117c',
 			config: baseConfig({
 				sky: { enabled: true, baseRate: 0.16, gradientStrength: 0.05, radialGradientStrength: 0.03, lowFrequencyVariationStrength: 0.02, perChannelMultipliers: [1, 1, 1], colorBias: [1, 1, 1], filterTransmission: [1, 1, 1] },
 			}),
@@ -459,7 +459,7 @@ describe('generate image', () => {
 		{
 			name: 'rgb broadband realistic',
 			channels: 3,
-			hash: '8daa9a5ecd4734cf69bed9dfb7b77f73',
+			hash: '245e9541f853ed355ac989ca50a4670b',
 			config: baseConfig({
 				quality: 'high-realism',
 				exposure: { exposureTime: 180, electronsPerAdu: 0.8 },
@@ -498,7 +498,7 @@ describe('generate image', () => {
 		{
 			name: 'rgb warm noisy one shot color',
 			channels: 3,
-			hash: '0a6d3e91b10242595c0a9166d2549a00',
+			hash: '786a8da0cf84caaa124b00b44b1f2b37',
 			config: baseConfig({
 				exposure: { exposureTime: 90, analogGain: 1.6, digitalGain: 1.15, electronsPerAdu: 0.9 },
 				sky: { enabled: true, baseRate: 0.22, gradientStrength: 0.08, radialGradientStrength: 0.05, lowFrequencyVariationStrength: 0.03, perChannelMultipliers: [1.04, 1, 0.94], colorBias: [1.02, 1, 0.96] },
