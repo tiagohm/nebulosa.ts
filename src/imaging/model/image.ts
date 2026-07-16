@@ -6,7 +6,7 @@ import { bitpixInBytes, cfaPatternKeyword, heightKeyword, isRiceCompressedImageH
 import { readXisf, writeXisf, type Xisf, type XisfImage, XisfImageReader, type XisfWriteFormat } from '../../io/formats/xisf/xisf'
 import { bufferSink, bufferSource, fileHandleSource, readRemaining, readUntil, type Seekable, type Sink, type Source } from '../../io/io'
 import { clamp } from '../../math/numerical/math'
-import { DEFAULT_WRITE_IMAGE_TO_FORMAT_OPTIONS, type DigitalImage, type DigitalImageReadOptions, type Image, type ImageFormat, type ImageRawPrecision, type ImageRawType, type ImageReadOptions, type ImageSampleScale, type NormalizedImageReadOptions, type WriteImageToFormatOptions } from './types'
+import { DEFAULT_WRITE_IMAGE_TO_FORMAT_OPTIONS, makeImageRawTypedArray, type DigitalImage, type DigitalImageReadOptions, type Image, type ImageFormat, type ImageRawPrecision, type ImageRawType, type ImageReadOptions, type ImageSampleScale, type NormalizedImageReadOptions, type WriteImageToFormatOptions } from './types'
 
 // Image input/output for the imaging model: reads FITS, XISF, and JPEG sources (auto-detected) into a
 // normalized in-memory Image or a DigitalImage preserving source digital numbers, and writes an Image
@@ -73,7 +73,7 @@ export async function readImageFromFits(fits: Fits | FitsHdu, source: Source & S
 	const hdu = 'hdus' in fits ? (fits.hdus.find(findCompressedImageHdu) ?? fits.hdus.find(findUncompressedImageHdu) ?? fits.hdus[0]) : fits
 	const { header } = hdu
 
-	const bitpix = uncompressedBitpixKeyword<Bitpix>(header, 8)
+	const bitpix: Bitpix = uncompressedBitpixKeyword(header, 8)
 	const width = uncompressedWidthKeyword(header, 0)
 	const height = uncompressedHeightKeyword(header, 0)
 	const channels = uncompressedNumberOfChannelsKeyword(header, 1)
@@ -88,8 +88,9 @@ export async function readImageFromFits(fits: Fits | FitsHdu, source: Source & S
 	const resolved = resolveImageReadArgument(argument)
 	let raw = resolved[0]
 	const sampleScale = resolved[1]
+
 	if (raw === 'auto') raw = bitpix === 8 ? 32 : 64
-	if (typeof raw === 'number') raw = raw === 32 ? new Float32Array(pixelCount * channels) : new Float64Array(pixelCount * channels)
+	if (typeof raw === 'number') raw = makeImageRawTypedArray(raw, pixelCount * channels)
 	if (raw.length < pixelCount * channels) return undefined
 	if (!(await reader.read(source, raw, sampleScale))) return undefined
 
@@ -125,8 +126,9 @@ export async function readImageFromXisf(xisf: Xisf | XisfImage, source: Source &
 	const resolved = resolveImageReadArgument(argument)
 	let raw = resolved[0]
 	const sampleScale = resolved[1]
+
 	if (raw === 'auto') raw = bitpix === 8 ? 32 : 64
-	if (typeof raw === 'number') raw = raw === 32 ? new Float32Array(pixelCount * channels) : new Float64Array(pixelCount * channels)
+	if (typeof raw === 'number') raw = makeImageRawTypedArray(raw, pixelCount * channels)
 	if (raw.length < pixelCount * channels) return undefined
 	if (!(await reader.read(source, raw, sampleScale))) return undefined
 
@@ -152,7 +154,7 @@ export function readImageFromJpeg(buffer: Buffer, raw: ImageRawType | ImageRawPr
 	const pixelCount = width * height
 
 	if (raw === 'auto') raw = 32
-	if (typeof raw === 'number') raw = raw === 32 ? new Float32Array(pixelCount) : new Float64Array(pixelCount)
+	if (typeof raw === 'number') raw = makeImageRawTypedArray(raw, pixelCount)
 	if (raw.length < pixelCount) return undefined
 
 	for (let i = 0; i < pixelCount; i++) raw[i] = data[i] / 255
@@ -172,7 +174,7 @@ export function readImageFromSource(source: Source & Seekable, options: ImageRea
 
 export async function readImageFromSource(source: Source & Seekable, argument: ImageReadArgument = 'auto'): Promise<Image | DigitalImage | undefined> {
 	const { position } = source
-	const [, sampleScale] = resolveImageReadArgument(argument)
+	const [raw, sampleScale] = resolveImageReadArgument(argument)
 
 	const fits = await readFits(source)
 	if (fits) return await readImageFromFits(fits, source, argument as ImageReadOptions)
@@ -190,7 +192,6 @@ export async function readImageFromSource(source: Source & Seekable, argument: I
 	source.seek(position)
 
 	if (sampleScale === 'digital') return undefined
-	const [raw] = resolveImageReadArgument(argument)
 	return readImageFromJpeg(await readRemaining(source), raw)
 }
 

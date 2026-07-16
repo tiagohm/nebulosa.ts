@@ -71,59 +71,65 @@ test('reads a JPEG into an explicit 64-bit raw buffer', () => {
 	}
 })
 
-test('read image from fits', async () => {
+describe('read image from fits', () => {
 	for (const bitpix of BITPIXES) {
 		for (const channel of CHANNELS) {
-			const [image, fits] = await readImage(bitpix, channel)
+			test(`bitpix=${bitpix}, channel=${channel}`, async () => {
+				const [image, fits] = await readImage(bitpix, channel)
 
-			expect(image.header).toBe(fits.hdus[0].header)
+				expect(image.header).toBe(fits.hdus[0].header)
 
-			const hash = channel === 1 ? 'c754bf834dc1bb3948ec3cf8b9aca303' : '1ca5a4dd509ee4c67e3a2fbca43f81d4'
+				const hash = channel === 1 ? 'c754bf834dc1bb3948ec3cf8b9aca303' : '1ca5a4dd509ee4c67e3a2fbca43f81d4'
 
-			await readImageTransformAndSave((i) => i, `read-${bitpix}.${channel}`, hash, bitpix, channel)
+				await readImageTransformAndSave((i) => i, `read-${bitpix}.${channel}`, hash, bitpix, channel)
+			})
 		}
 	}
-}, 15000)
+})
 
-test('write image to fits', async () => {
+describe('write image to fits', () => {
 	const buffer = Buffer.allocUnsafe(1024 * 1024 * 18)
 
 	for (const bitpix of BITPIXES) {
 		for (const channel of CHANNELS) {
-			buffer.fill(20)
+			test(`bitpix=${bitpix}, channel=${channel}`, async () => {
+				buffer.fill(20)
 
-			const [a] = await readImage(bitpix, channel)
-			await writeImageToFits(a, bufferSink(buffer))
-			const b = await readImageFromSource(bufferSource(buffer))
+				const [a] = await readImage(bitpix, channel)
+				await writeImageToFits(a, bufferSink(buffer))
+				const b = await readImageFromSource(bufferSource(buffer))
 
-			expect(a.header).toEqual(b!.header)
+				expect(a.header).toEqual(b!.header)
 
-			const hash = channel === 1 ? 'c754bf834dc1bb3948ec3cf8b9aca303' : '1ca5a4dd509ee4c67e3a2fbca43f81d4'
+				const hash = channel === 1 ? 'c754bf834dc1bb3948ec3cf8b9aca303' : '1ca5a4dd509ee4c67e3a2fbca43f81d4'
 
-			await saveImageAndCompareHash(b!, `witf-${bitpix}.${channel}`, hash)
+				await saveImageAndCompareHash(b!, `witf-${bitpix}.${channel}`, hash)
+			})
 		}
 	}
-}, 10000)
+})
 
-test('write image to xisf', async () => {
+describe('write image to xisf', () => {
 	const buffer = Buffer.allocUnsafe(1024 * 1024 * 18)
 
 	for (const bitpix of BITPIXES) {
 		for (const channel of CHANNELS) {
-			buffer.fill(20)
+			test(`bitpix=${bitpix}, channel=${channel}`, async () => {
+				buffer.fill(20)
 
-			const [a] = await readImage(bitpix, channel)
-			await writeImageToXisf(a, bufferSink(buffer))
-			const b = await readImageFromSource(bufferSource(buffer))
+				const [a] = await readImage(bitpix, channel)
+				await writeImageToXisf(a, bufferSink(buffer))
+				const b = await readImageFromSource(bufferSource(buffer))
 
-			expect(a.header).toEqual(b!.header)
+				expect(a.header).toEqual(b!.header)
 
-			const hash = channel === 1 ? 'c754bf834dc1bb3948ec3cf8b9aca303' : '1ca5a4dd509ee4c67e3a2fbca43f81d4'
+				const hash = channel === 1 ? 'c754bf834dc1bb3948ec3cf8b9aca303' : '1ca5a4dd509ee4c67e3a2fbca43f81d4'
 
-			await saveImageAndCompareHash(b!, `witf-${bitpix}.${channel}`, hash)
+				await saveImageAndCompareHash(b!, `witf-${bitpix}.${channel}`, hash)
+			})
 		}
 	}
-}, 10000)
+})
 
 test('histogram on red channel', async () => {
 	const [image] = await readImage(Bitpix.FLOAT, 3)

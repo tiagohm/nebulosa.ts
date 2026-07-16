@@ -157,7 +157,9 @@ export function grayscaleFromChannel(channel?: ImageChannelOrGray): Grayscale {
 }
 
 // Allocates a same-type raw pixel buffer for the cropped ROI.
-export function makeImageRawTypedArray(source: ImageRawType, size: number): ImageRawType {
+export function makeImageRawTypedArray(source: ImageRawType | Exclude<ImageRawPrecision, 'auto'>, size: number): ImageRawType {
+	if (source === 32) return new Float32Array(size)
+	if (source === 64) return new Float64Array(size)
 	return source.BYTES_PER_ELEMENT === 4 ? new Float32Array(size) : new Float64Array(size)
 }
 

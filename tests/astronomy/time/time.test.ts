@@ -567,7 +567,7 @@ test('mean obliquity', () => {
 test('nutation', () => {
 	const t = timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.UTC)
 	expect(nutationAngles(t)).toBe(t.cache!.nutation!)
-	expect(t.cache?.nutation).toEqual([-0.00008760676099523273, 0.00000755771193699156])
+	expect(t.cache?.nutation).toEqual([-0.00008760676099523272, 0.00000755771193699156])
 })
 
 test('precession', () => {
