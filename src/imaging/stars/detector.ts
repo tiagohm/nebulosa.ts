@@ -3,6 +3,7 @@ import { clamp } from '../../math/numerical/math'
 import type { Image } from '../model/types'
 import { clone } from '../processing/arithmetic'
 import { mean3x3 } from '../processing/convolution'
+import { debayer } from '../processing/debayer'
 import { grayscale } from '../processing/geometry'
 import { psf } from '../processing/psf'
 import { starMomentShape } from './shape'
@@ -66,10 +67,20 @@ const DEFAULT_DETECT_STARS_OPTIONS: Readonly<DetectStarOptions> = {
 	minSNR: 0,
 }
 
+// Converts RGB or raw CFA input into a coherent mono intensity image for filtering and photometry.
+function starAnalysisImage(image: Image): Image | undefined {
+	image = grayscale(image)
+	if (!image.metadata.bayer) return image
+	const color = debayer(image)
+	return color && grayscale(color)
+}
+
 // Detects stars in an image and returns them sorted by descending flux (up to maxStars), filtered by
 // minSNR and optionally restricted to a central search region.
 export function detectStars(image: Image, { maxStars = 500, searchRegion = 0, minSNR = 0 }: Partial<DetectStarOptions> = DEFAULT_DETECT_STARS_OPTIONS): DetectedStar[] {
-	image = grayscale(image)
+	const intensity = starAnalysisImage(image)
+	if (intensity === undefined) return []
+	image = intensity
 
 	const original = image.raw
 
@@ -233,7 +244,9 @@ function trimStarsByScoreGap(stars: StarList) {
 
 // Computes aperture flux, SNR, HFD and FWHM for a star centered on an image coordinate.
 export function measureStarPhotometry(image: Image, x: number, y: number, radius: number): StarPhotometry {
-	image = grayscale(image)
+	const intensity = starAnalysisImage(image)
+	if (intensity === undefined) return [0, 0, 0, 0]
+	image = intensity
 
 	const { raw, metadata } = image
 	const { width, height, stride } = metadata

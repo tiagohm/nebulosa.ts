@@ -159,6 +159,26 @@ test('detect stars finds nothing in a flat image', () => {
 	expect(detectStars(image, { maxStars: 100 })).toHaveLength(0)
 })
 
+test('detect stars converts a flat CFA mosaic to intensity before filtering', () => {
+	const width = 128
+	const height = 128
+	const raw = new Float32Array(width * height)
+	for (let y = 0; y < height; y++) {
+		for (let x = 0; x < width; x++) raw[y * width + x] = (y & 1) === 0 ? ((x & 1) === 0 ? 0.6 : 0.5) : (x & 1) === 0 ? 0.5 : 0.4
+	}
+	const image: Image = { raw, header: { BAYERPAT: 'RGGB' }, metadata: { width, height, channels: 1, pixelCount: width * height, pixelSizeInBytes: 4, bitpix: -32, stride: width, strideInBytes: width * 4, bayer: 'RGGB' } }
+	const before = raw.slice()
+
+	expect(detectStars(image, { maxStars: 500 })).toHaveLength(0)
+	expect(image.raw).toEqual(before)
+})
+
+test('star analysis returns no result when a CFA image is too small to interpolate', () => {
+	const image: Image = { raw: new Float32Array([0.5]), header: { BAYERPAT: 'RGGB' }, metadata: { width: 1, height: 1, channels: 1, pixelCount: 1, pixelSizeInBytes: 4, bitpix: -32, stride: 1, strideInBytes: 4, bayer: 'RGGB' } }
+	expect(detectStars(image)).toEqual([])
+	expect(measureStarPhotometry(image, 0, 0, 1)).toEqual([0, 0, 0, 0])
+})
+
 describe('detect stars I', () => {
 	const width = 400
 	const height = 200
