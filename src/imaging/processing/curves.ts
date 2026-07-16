@@ -34,14 +34,16 @@ interface ResolvedCurvesTransformationCurve {
 	readonly channel: ImageChannelOrGray
 	readonly x: Float64Array
 	readonly y: Float64Array
+	// Direction imposed by monotonic control points, or zero for an intentionally turning curve.
+	readonly monotonicDirection: -1 | 0 | 1
 	// True when the curve maps every value to itself (can be skipped).
 	readonly identity: boolean
 }
 
-// Default curves transformation (16-bit, Akima spline, no-op curve).
+// Default curves transformation (16-bit, monotone cubic Hermite spline, no-op curve).
 export const DEFAULT_CURVES_TRANSFORMATION_OPTIONS: Readonly<CurvesTransformationOptions> = {
 	bits: 16,
-	interpolation: 'akima',
+	interpolation: 'cubicHermite',
 	curves: [undefined],
 }
 
@@ -90,7 +92,7 @@ function validateCurvesChannel(channel: ImageChannelOrGray) {
 
 // Resolves one user curve, injects missing end points, and detects identity mappings.
 function resolveCurvesTransformationCurve(curve: CurvesTransformationCurve | undefined): ResolvedCurvesTransformationCurve {
-	if (curve === undefined) return { channel: 'GRAY', x: IDENTITY_CURVES_TRANSFORMATION, y: IDENTITY_CURVES_TRANSFORMATION, identity: true }
+	if (curve === undefined) return { channel: 'GRAY', x: IDENTITY_CURVES_TRANSFORMATION, y: IDENTITY_CURVES_TRANSFORMATION, monotonicDirection: 1, identity: true }
 	validateCurvesChannel(curve.channel)
 
 	const { x: cx, y: cy } = curve
@@ -98,7 +100,7 @@ function resolveCurvesTransformationCurve(curve: CurvesTransformationCurve | und
 	const n = cx.length
 
 	if (n !== cy.length) throw new Error('curves transformation x and y arrays must have the same length')
-	if (n === 0) return { channel: curve.channel, x: IDENTITY_CURVES_TRANSFORMATION, y: IDENTITY_CURVES_TRANSFORMATION, identity: true }
+	if (n === 0) return { channel: curve.channel, x: IDENTITY_CURVES_TRANSFORMATION, y: IDENTITY_CURVES_TRANSFORMATION, monotonicDirection: 1, identity: true }
 
 	for (let i = 0; i < n; i++) {
 		if (!Number.isFinite(cx[i]) || !Number.isFinite(cy[i])) throw new Error('curves transformation control points must be finite')
@@ -129,14 +131,19 @@ function resolveCurvesTransformationCurve(curve: CurvesTransformationCurve | und
 	}
 
 	let identity = true
+	let nondecreasing = true
+	let nonincreasing = true
 
 	for (let i = 0; i < x.length; i++) {
 		if (!Number.isFinite(x[i]) || !Number.isFinite(y[i])) throw new Error('curves transformation control points must be finite')
 		if (i > 0 && !(x[i] > x[i - 1])) throw new Error('curves transformation x coordinates must be strictly increasing after clamping')
+		if (i > 0 && y[i] < y[i - 1]) nondecreasing = false
+		if (i > 0 && y[i] > y[i - 1]) nonincreasing = false
 		if (identity && Math.abs(x[i] - y[i]) > 1e-12) identity = false
 	}
 
-	return { channel: curve.channel, x, y, identity }
+	const monotonicDirection = nondecreasing ? 1 : nonincreasing ? -1 : 0
+	return { channel: curve.channel, x, y, monotonicDirection, identity }
 }
 
 // Builds and clamps a LUT for one resolved interpolation curve.
@@ -146,6 +153,11 @@ function curvesTransformationLUT(curve: ResolvedCurvesTransformationCurve, bits:
 	const lut = interpolation === 'cubicHermite' ? cubicHermiteSplineLUT(curve.x, curve.y, size) : interpolation === 'catmullRom' ? catmullRomSplineLUT(curve.x, curve.y, size) : interpolation === 'naturalCubic' ? naturalCubicSplineLUT(curve.x, curve.y, size) : akimaSplineLUT(curve.x, curve.y, size)
 	const n = lut.length
 	for (let i = 0; i < n; i++) lut[i] = clamp(lut[i], 0, 1)
+	if (curve.monotonicDirection > 0) {
+		for (let i = 1; i < n; i++) if (lut[i] < lut[i - 1]) lut[i] = lut[i - 1]
+	} else if (curve.monotonicDirection < 0) {
+		for (let i = 1; i < n; i++) if (lut[i] > lut[i - 1]) lut[i] = lut[i - 1]
+	}
 	return lut
 }
 

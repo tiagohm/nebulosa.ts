@@ -110,6 +110,36 @@ test('curvesTransformation caps dense LUT storage while retaining high-bit conti
 	expect(b.raw).toEqual(a.raw)
 })
 
+test('curvesTransformation keeps monotonic control curves order-preserving for every interpolation', () => {
+	const width = 4097
+	const input = new Float32Array(width)
+	for (let i = 0; i < width; i++) input[i] = i / (width - 1)
+	const curve = { channel: 'GRAY', x: [0, 0.2, 0.4, 0.6, 0.8, 1], y: [0, 0.4566976190544665, 0.9133023099512029, 0.9139800948430841, 0.9271990390529644, 1] } as const
+
+	for (const interpolation of ['cubicHermite', 'akima', 'catmullRom', 'naturalCubic'] as const) {
+		const image = makeImage(width, 1, 1, input.slice())
+		curvesTransformation(image, { bits: 12, interpolation, curves: [curve] })
+		for (let i = 1; i < width; i++) expect(image.raw[i]).toBeGreaterThanOrEqual(image.raw[i - 1])
+	}
+})
+
+test('curvesTransformation preserves explicitly nonmonotonic control curves', () => {
+	const image = makeImage(5, 1, 1, [0, 0.25, 0.5, 0.75, 1])
+	curvesTransformation(image, { bits: 12, curves: [{ channel: 'GRAY', x: [0, 0.5, 1], y: [0, 1, 0] }] })
+	expect(image.raw[2]).toBeGreaterThan(image.raw[1])
+	expect(image.raw[2]).toBeGreaterThan(image.raw[3])
+})
+
+test('curvesTransformation defaults to monotone cubic Hermite interpolation', () => {
+	const values = [0.1, 0.3, 0.55, 0.8]
+	const curve = { channel: 'GRAY', x: [0, 0.25, 0.7, 1], y: [0, 0.6, 0.75, 1] } as const
+	const implicit = makeImage(4, 1, 1, values)
+	const explicit = makeImage(4, 1, 1, values)
+	curvesTransformation(implicit, { bits: 12, curves: [curve] })
+	curvesTransformation(explicit, { bits: 12, interpolation: 'cubicHermite', curves: [curve] })
+	expect(implicit.raw).toEqual(explicit.raw)
+})
+
 test('curvesTransformation validates interpolation and every channel before mutation', () => {
 	const scenarios = [
 		{ interpolation: 'linear' },

@@ -419,29 +419,29 @@ test('mmt', () => {
 	return readImageTransformAndSave((i) => autoStf(multiscaleMedianTransform(i, options)), 'mmt', '75f6a6dc50e4890dbc7b8916a87c3974')
 }, 5000)
 
-test('curves transformation - mono', () => readImageTransformAndSave((i) => autoStf(curvesTransformation(i, { curves: [{ channel: 'GRAY', x: [0.007], y: [0.08] }] })), 'ct-mono', 'fe537a6ce1dbf5fc7c2396c587aa61e6', undefined, 1))
+test('curves transformation - mono', () => readImageTransformAndSave((i) => autoStf(curvesTransformation(i, { curves: [{ channel: 'GRAY', x: [0.007], y: [0.08] }] })), 'ct-mono', '7fd7e8ef10d688a64b905e9671e9503d', undefined, 1))
 
 describe('curves transformation - RGB', () => {
 	const scenarios: { name: string; curves: readonly CurvesTransformationCurve[]; hash: string }[] = [
 		{
 			name: 'gray-shadow-lift',
 			curves: [{ channel: 'GRAY', x: [0.004], y: [0.08] }],
-			hash: 'cc87850276cff3c3f00fb3b3190801a7',
+			hash: '9ef924035eaccec3ccffb401ac266119',
 		},
 		{
 			name: 'red-boost',
 			curves: [{ channel: 'RED', x: [0.02, 0.55], y: [0.08, 0.72] }],
-			hash: '3974aa724436833b4039d0ca9e1eb7c3',
+			hash: '080912985f503dc8c7bc15e8156dbc0b',
 		},
 		{
 			name: 'green-boost',
 			curves: [{ channel: 'GREEN', x: [0.02, 0.55], y: [0.08, 0.72] }],
-			hash: '55123614f28e33666da27a5435ba2882',
+			hash: '00a5c89440cc98a03afe7ec19a8c2427',
 		},
 		{
 			name: 'blue-boost',
 			curves: [{ channel: 'BLUE', x: [0.02, 0.55], y: [0.08, 0.72] }],
-			hash: 'd0a8192b878b4b6a1bad658f1aa468a7',
+			hash: 'b7967091ab99ca6129be54578c47e4ed',
 		},
 		{
 			name: 'warm-balance',
@@ -449,7 +449,7 @@ describe('curves transformation - RGB', () => {
 				{ channel: 'RED', x: [0.03, 0.45], y: [0.1, 0.6] },
 				{ channel: 'BLUE', x: [0.08, 0.6], y: [0.04, 0.52] },
 			],
-			hash: 'df54941778d5c98af3576b60fe99d87f',
+			hash: '56efb76c5dbed093cfeb6f9daf9453e7',
 		},
 		{
 			name: 'cool-balance',
@@ -457,7 +457,7 @@ describe('curves transformation - RGB', () => {
 				{ channel: 'RED', x: [0.08, 0.6], y: [0.04, 0.52] },
 				{ channel: 'BLUE', x: [0.03, 0.45], y: [0.1, 0.6] },
 			],
-			hash: '56ec6c491b4feac3b964817c5d5b5316',
+			hash: 'be6b4d12d47f10092eace7e5dc5f7def',
 		},
 	]
 
