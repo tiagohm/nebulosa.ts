@@ -621,19 +621,22 @@ export class XisfImageWriter {
 		const pixelInBytes = bitpixInBytes(bitpix)
 		const numberOfPixels = width * height
 		const factor = bitpix > 0 ? 2 ** bitpix - 1 : 1 // Transform float [0..1] to n-bit integer
+		// Integer views truncate on assignment; a half-DN bias quantizes normalized samples to the
+		// nearest code and prevents equivalent floating-point scaling from landing one code low.
+		const rounding = bitpix > 0 ? 0.5 : 0
 		const data = this.#data
 
 		if (pixelStorage === 'Planar') {
 			for (let c = 0, p = 0; c < channels; c++) {
 				for (let i = 0, m = c; i < numberOfPixels; i++, m += channels) {
-					data[p++] = input[m] * factor
+					data[p++] = input[m] * factor + rounding
 				}
 			}
 		} else {
 			const total = numberOfPixels * channels
 
 			for (let i = 0; i < total; i++) {
-				data[i] = input[i] * factor
+				data[i] = input[i] * factor + rounding
 			}
 		}
 

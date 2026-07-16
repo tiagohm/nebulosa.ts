@@ -55,7 +55,7 @@ describe('make fits from image bytes', () => {
 		const image = await readImageFromBuffer(fits)
 		expectNaxis(image!.header, 2, 1280, 1024, undefined)
 		expectHeader(image!.header)
-		await saveImageAndCompareHash(debayer(image!, 'RGGB')!, 'alpaca.8.3', '242f9a2336cb217b83570bb51f8616f2')
+		await saveImageAndCompareHash(debayer(image!, 'RGGB')!, 'alpaca.8.3', '428add70df1895f245a20a5f7f8ca098')
 	})
 
 	test('convert to and from', async () => {
