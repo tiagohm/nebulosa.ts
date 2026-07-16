@@ -1,3 +1,4 @@
+import { validateNonNegativeFinite } from '../../core/validation'
 import { clamp, type NumberArray } from '../../math/numerical/math'
 import { akimaSplineLUT, catmullRomSplineLUT, cubicHermiteSplineLUT, naturalCubicSplineLUT } from '../../math/numerical/spline'
 import { truncatePixel } from '../model/image'
@@ -48,11 +49,51 @@ export const DEFAULT_CURVES_TRANSFORMATION_OPTIONS: Readonly<CurvesTransformatio
 // Control points of the identity mapping (input equals output at 0 and 1).
 const IDENTITY_CURVES_TRANSFORMATION = new Float64Array([0, 1])
 
+// Absolute tolerance accepted for normalized custom grayscale weights.
+const CURVES_WEIGHT_SUM_TOLERANCE = 1e-6
+
+// Verifies the dense mono or interleaved RGB layout required by curves transformation.
+function validateCurvesImage(image: Image) {
+	const { width, height, channels, stride, pixelCount } = image.metadata
+	if (!Number.isInteger(width) || width <= 0) throw new Error(`image width must be a positive integer: ${width}`)
+	if (!Number.isInteger(height) || height <= 0) throw new Error(`image height must be a positive integer: ${height}`)
+	if (channels !== 1 && channels !== 3) throw new Error(`image channels must be 1 or 3: ${channels}`)
+	const expectedPixelCount = width * height
+	if (pixelCount !== expectedPixelCount) throw new Error(`image pixelCount does not match geometry: ${pixelCount} != ${expectedPixelCount}`)
+	const expectedStride = width * channels
+	if (stride !== expectedStride) throw new Error(`image stride does not match geometry: ${stride} != ${expectedStride}`)
+	const expectedLength = pixelCount * channels
+	if (image.raw.length !== expectedLength) throw new Error(`image raw length does not match metadata: ${image.raw.length} != ${expectedLength}`)
+}
+
+// Reports whether a runtime value names one of the supported spline interpolations.
+function isCurvesInterpolation(value: unknown): value is CurvesTransformationInterpolation {
+	return value === 'cubicHermite' || value === 'akima' || value === 'catmullRom' || value === 'naturalCubic'
+}
+
+// Validates a named channel or normalized custom grayscale weights before image mutation.
+function validateCurvesChannel(channel: ImageChannelOrGray) {
+	if (typeof channel === 'string') {
+		if (!Object.hasOwn(GRAYSCALES, channel)) throw new RangeError(`unsupported curves transformation channel: ${channel}`)
+		return
+	}
+
+	if (channel === null || typeof channel !== 'object') throw new RangeError('curves transformation channel must be a named channel or grayscale weights')
+	const { red, green, blue } = channel
+	validateNonNegativeFinite(red)
+	validateNonNegativeFinite(green)
+	validateNonNegativeFinite(blue)
+	const sum = red + green + blue
+	if (Math.abs(sum - 1) > CURVES_WEIGHT_SUM_TOLERANCE) throw new RangeError(`curves transformation weights must sum to one: ${sum}`)
+}
+
 // Resolves one user curve, injects missing end points, and detects identity mappings.
 function resolveCurvesTransformationCurve(curve: CurvesTransformationCurve | undefined): ResolvedCurvesTransformationCurve {
 	if (curve === undefined) return { channel: 'GRAY', x: IDENTITY_CURVES_TRANSFORMATION, y: IDENTITY_CURVES_TRANSFORMATION, identity: true }
+	validateCurvesChannel(curve.channel)
 
 	const { x: cx, y: cy } = curve
+	if (cx === undefined || cy === undefined) throw new Error('curves transformation x and y arrays are required')
 	const n = cx.length
 
 	if (n !== cy.length) throw new Error('curves transformation x and y arrays must have the same length')
@@ -148,13 +189,16 @@ function applyCurvesTransformation(image: Image, lut: Float32Array, channel: Ima
 // https://pixinsight.com/doc/legacy/LE/17_curves/curves_window/curves_window.html
 // https://pixinsight.com/forum/index.php?threads/creating-a-smooth-surface-from-an-array-of-points.14567/
 export function curvesTransformation(image: Image, options: Partial<CurvesTransformationOptions> = DEFAULT_CURVES_TRANSFORMATION_OPTIONS): Image {
+	validateCurvesImage(image)
 	const curves = !options.curves || options.curves?.length === 0 ? DEFAULT_CURVES_TRANSFORMATION_OPTIONS.curves : options.curves
 	const bits = Number.isFinite(options.bits) ? clamp(Math.trunc(options.bits ?? DEFAULT_CURVES_TRANSFORMATION_OPTIONS.bits), 8, 24) : DEFAULT_CURVES_TRANSFORMATION_OPTIONS.bits
-	const interpolation = options.interpolation || DEFAULT_CURVES_TRANSFORMATION_OPTIONS.interpolation
+	const interpolation = options.interpolation ?? DEFAULT_CURVES_TRANSFORMATION_OPTIONS.interpolation
+	if (!isCurvesInterpolation(interpolation)) throw new RangeError(`unsupported curves transformation interpolation: ${interpolation}`)
 	const resolvedCurves = curves.map(resolveCurvesTransformationCurve)
 
 	for (const curve of resolvedCurves) {
 		if (curve.identity) continue
+		if (image.metadata.channels === 1 && (curve.channel === 'RED' || curve.channel === 'GREEN' || curve.channel === 'BLUE')) continue
 		const lut = curvesTransformationLUT(curve, bits, interpolation)
 		lut !== undefined && applyCurvesTransformation(image, lut, curve.channel)
 	}

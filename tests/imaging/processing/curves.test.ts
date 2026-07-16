@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test'
+import type { Image } from '../../../src/imaging/model/types'
 import { curvesTransformation } from '../../../src/imaging/processing/curves'
 import { expectImageValues, makeImage } from './util'
 
@@ -70,4 +71,52 @@ test('curvesTransformation rejects infinite control points before clamping', () 
 	const image = makeImage(1, 1, 1, [0.5])
 
 	expect(() => curvesTransformation(image, { curves: [{ channel: 'GRAY', x: [0, 1], y: [Number.POSITIVE_INFINITY, 1] }] })).toThrow('curves transformation control points must be finite')
+})
+
+test('curvesTransformation ignores absent color channels in mono images', () => {
+	for (const channel of ['RED', 'GREEN', 'BLUE'] as const) {
+		const image = makeImage(1, 1, 1, [0.25])
+		expect(curvesTransformation(image, { bits: 8, curves: [{ channel, x: [0, 1], y: [1, 0] }] })).toBe(image)
+		expectImageValues(image, [0.25], 8)
+	}
+
+	const gray = makeImage(1, 1, 1, [0.25])
+	curvesTransformation(gray, { bits: 8, curves: [{ channel: 'GRAY', x: [0, 1], y: [1, 0] }] })
+	expectImageValues(gray, [192 / 255], 6)
+})
+
+test('curvesTransformation validates interpolation and every channel before mutation', () => {
+	const scenarios = [
+		{ interpolation: 'linear' },
+		{ curves: [{ channel: 'INVALID', x: [0, 1], y: [0.2, 1] }] },
+		{ curves: [{ channel: null, x: [0, 1], y: [0.2, 1] }] },
+		{ curves: [{ channel: { red: Number.NaN, green: 0, blue: 1 }, x: [0, 1], y: [0.2, 1] }] },
+		{ curves: [{ channel: { red: -0.1, green: 0.5, blue: 0.6 }, x: [0, 1], y: [0.2, 1] }] },
+		{ curves: [{ channel: { red: 0.2, green: 0.3, blue: 0.4 }, x: [0, 1], y: [0.2, 1] }] },
+	] as const
+
+	for (const options of scenarios) {
+		const image = makeImage(1, 1, 3, [0.25, 0.5, 0.75])
+		const before = image.raw.slice()
+		expect(() => curvesTransformation(image, { bits: 8, curves: [{ channel: 'RED', x: [0, 1], y: [1, 0] }], ...options } as never)).toThrow()
+		expect(image.raw).toEqual(before)
+	}
+})
+
+test('curvesTransformation rejects malformed dense layouts before mutation', () => {
+	const valid = makeImage(1, 1, 3, [0.25, 0.5, 0.75])
+	const malformed: Image[] = [
+		{ ...valid, metadata: { ...valid.metadata, width: 0 } },
+		{ ...valid, metadata: { ...valid.metadata, height: 0 } },
+		makeImage(1, 1, 2, [0.25, 0.5]),
+		{ ...valid, metadata: { ...valid.metadata, pixelCount: 2 } },
+		{ ...valid, metadata: { ...valid.metadata, stride: 2 } },
+		makeImage(1, 1, 3, [0.25, 0.5]),
+	]
+
+	for (const image of malformed) {
+		const before = image.raw.slice()
+		expect(() => curvesTransformation(image, { bits: 8, curves: [{ channel: 'GRAY', x: [0, 1], y: [1, 0] }] })).toThrow()
+		expect(image.raw).toEqual(before)
+	}
 })
