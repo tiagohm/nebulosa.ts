@@ -4,7 +4,7 @@ import { readImageFromBuffer, readImageFromFits, readImageFromPath } from '../..
 import { FITS_BLOCK_SIZE, FITS_HEADER_CARD_SIZE, type FitsHdu, type FitsHeader, type FitsHeaderCard, FitsImageReader, FitsImageWriter, FitsKeywordReader, FitsKeywordWriter, isFits, readFits, writeFits } from '../../../../src/io/formats/fits/fits'
 import { KEYWORDS } from '../../../../src/io/formats/fits/headers'
 import { declinationKeyword, heightKeyword, observationDateKeyword, rightAscensionKeyword, widthKeyword } from '../../../../src/io/formats/fits/util'
-import { bufferSink, bufferSource, fileHandleSource } from '../../../../src/io/io'
+import { base64Sink, bufferSink, bufferSource, fileHandleSource } from '../../../../src/io/io'
 import { dms, hms } from '../../../../src/math/units/angle'
 import { downloadPerTag } from '../../../download'
 import { BITPIXES, CHANNELS, saveImageAndCompareHash } from '../../../imaging/util'
@@ -512,6 +512,23 @@ test('completes partial FITS sink writes', async () => {
 
 	await writeFits(sink, [{ header, raw }])
 	const output = await readImageFromBuffer(buffer.subarray(0, delegate.position))
+
+	expect(output).toBeDefined()
+	expect(output!.raw[0]).toBe(0)
+	expect(output!.raw[1]).toBeCloseTo(0.5, 4)
+	expect(output!.raw[2]).toBe(1)
+})
+
+test('writes FITS through a transforming base64 sink', async () => {
+	const header: FitsHeader = { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: 3, NAXIS2: 1, BSCALE: 1, BZERO: 32768 }
+	const raw = new Float64Array([0, 0.5, 1])
+	const encoded = Buffer.alloc(FITS_BLOCK_SIZE * 3)
+	const sink = base64Sink(bufferSink(encoded))
+
+	await writeFits(sink, [{ header, raw }])
+	await sink.end()
+	const decoded = Buffer.from(encoded.subarray(0, sink.encodedSize).toString('ascii'), 'base64')
+	const output = await readImageFromBuffer(decoded)
 
 	expect(output).toBeDefined()
 	expect(output!.raw[0]).toBe(0)

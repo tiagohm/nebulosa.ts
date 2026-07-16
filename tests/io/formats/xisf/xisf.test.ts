@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import fs from 'fs/promises'
 import { readImageFromBuffer, readImageFromPath, readImageFromXisf } from '../../../../src/imaging/model/image'
 import { byteShuffle, byteUnshuffle, isXisf, parseXisfHeader, readXisf, writeXisf, XisfImageReader, XisfImageWriter } from '../../../../src/io/formats/xisf/xisf'
-import { bufferSink, bufferSource, fileHandleSource } from '../../../../src/io/io'
+import { base64Sink, bufferSink, bufferSource, fileHandleSource } from '../../../../src/io/io'
 import { downloadPerTag } from '../../../download'
 import { BITPIXES, CHANNELS, saveImageAndCompareHash } from '../../../imaging/util'
 
@@ -202,6 +202,22 @@ describe('write', () => {
 		const output = await readImageFromBuffer(buffer.subarray(0, size))
 
 		expect(size).toBe(delegate.position)
+		expect(output).toBeDefined()
+		expect(output!.raw[0]).toBe(0)
+		expect(output!.raw[1]).toBeCloseTo(0.5, 4)
+		expect(output!.raw[2]).toBe(1)
+	})
+
+	test('writes through a transforming base64 sink', async () => {
+		const raw = new Float64Array([0, 0.5, 1])
+		const encoded = Buffer.alloc(4096)
+		const sink = base64Sink(bufferSink(encoded))
+
+		await writeXisf(sink, [{ header: { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: 3, NAXIS2: 1 }, raw, sampleScale: 'normalized' }])
+		await sink.end()
+		const decoded = Buffer.from(encoded.subarray(0, sink.encodedSize).toString('ascii'), 'base64')
+		const output = await readImageFromBuffer(decoded)
+
 		expect(output).toBeDefined()
 		expect(output!.raw[0]).toBe(0)
 		expect(output!.raw[1]).toBeCloseTo(0.5, 4)
