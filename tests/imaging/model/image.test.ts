@@ -244,7 +244,7 @@ test('stf', () => readImageTransformAndSave((i) => stf(i, 0.005), 'stf', '0d4c72
 
 test('auto stf', () => readImageTransformAndSave((i) => stf(i, ...adf(i)), 'stf-auto', 'f317ee55154ecb95770fad5df319855b'), 5000)
 
-test('auto stf with sigma clip', () => readImageTransformAndSave((i) => stf(i, ...adf(i, { sigmaClip: sigmaClip(i) })), 'stf-auto-sigma-clip', '08a491b6f34efff02d78e45fe15e16ae'), 5000)
+test('auto stf with sigma clip', () => readImageTransformAndSave((i) => stf(i, ...adf(i, { sigmaClip: sigmaClip(i) })), 'stf-auto-sigma-clip', '64a59c2a47af748ee17106dec7d65e6f'), 5000)
 
 test('sigma clip excludes rejected pixels from the iteration statistics', () => {
 	// Continuous background plus a bright tail: rejection is marginal, so a biased

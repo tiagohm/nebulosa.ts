@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { adf, histogram, medianAbsoluteDeviation } from '../../../src/imaging/processing/computation'
+import { adf, histogram, medianAbsoluteDeviation, sigmaClip } from '../../../src/imaging/processing/computation'
 import { makeImage } from './util'
 
 // Focused regression coverage for image histogram, display statistics, and sigma clipping.
@@ -65,4 +65,44 @@ test('adaptive display function validates and reuses histogram storage', () => {
 	expect(result.every(Number.isFinite)).toBe(true)
 	expect(bits.some((count) => count !== 0)).toBe(true)
 	expect(() => adf(image, { bits: 25 })).toThrow()
+})
+
+test('sigma clip preserves caller-provided seed rejections', () => {
+	const image = makeImage(3, 1, 1, [0.2, 0.2, 0.2])
+	const seed = new Int8Array([1, 0, 0])
+	const result = sigmaClip(image, { mask: seed, maxIterations: 1 })
+
+	expect(result).toBe(seed)
+	expect(Array.from(result)).toEqual([1, 0, 0])
+})
+
+test('sigma clip applies the histogram transform during rejection', () => {
+	const image = makeImage(4, 1, 1, [0, 0, 0, 0.2])
+	const result = sigmaClip(image, { transform: (value) => 1 - value, sigmaLower: 1, sigmaUpper: 1, maxIterations: 1, tolerance: 0 })
+
+	expect(Array.from(result)).toEqual([0, 0, 0, 1])
+})
+
+test('sigma clip performs rejection before considering near-one statistics converged', () => {
+	const values = new Float32Array(1000).fill(1)
+	values[999] = 0.5
+	const result = sigmaClip(makeImage(1000, 1, 1, values))
+
+	expect(result[999]).toBe(1)
+})
+
+test('sigma clip uses a per-pixel mask for RGB images', () => {
+	const image = makeImage(2, 1, 3, [0.1, 0.1, 0.1, 0.2, 0.2, 0.2])
+	const result = sigmaClip(image, { maxIterations: 0 })
+
+	expect(result.length).toBe(image.metadata.pixelCount)
+})
+
+test('sigma clip validates thresholds and iteration limits', () => {
+	const image = makeImage(1, 1, 1, [0.5])
+
+	expect(() => sigmaClip(image, { sigmaLower: -1 })).toThrow()
+	expect(() => sigmaClip(image, { sigmaUpper: Number.NaN })).toThrow()
+	expect(() => sigmaClip(image, { tolerance: -1 })).toThrow()
+	expect(() => sigmaClip(image, { maxIterations: 1.5 })).toThrow()
 })

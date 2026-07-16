@@ -1,5 +1,5 @@
 import { STANDARD_DEVIATION_SCALE } from '../../core/util'
-import { validatePositiveInteger } from '../../core/validation'
+import { validateNonNegativeFinite, validateNonNegativeInteger, validatePositiveInteger } from '../../core/validation'
 import type { Rect } from '../../math/numerical/geometry'
 import type { NumberArray } from '../../math/numerical/math'
 import { Histogram } from '../../math/numerical/statistics'
@@ -246,91 +246,198 @@ export function histogram(image: Image, options: Partial<HistogramOptions> = DEF
 	return computeHistogram(image, options)
 }
 
+// Direct mean and standard deviation of the accepted transformed samples.
+interface SigmaClipMoments {
+	readonly mean: number
+	readonly standardDeviation: number
+}
+
+// Internal clipping result retaining the per-pixel mask and an optional final histogram for callers.
+interface SigmaClipResult {
+	readonly mask: Int8Array | Uint8Array
+	readonly pixelMask: Int8Array | Uint8Array
+	readonly histogram?: Histogram
+}
+
+// Computes stable one-pass moments around the first accepted sample to avoid cancellation near one.
+function sigmaClipMoments(image: Image, channel: ImageChannelOrGray | undefined, transform: HistogramPixelTransform, mask: Int8Array | Uint8Array): SigmaClipMoments {
+	const { raw, metadata } = image
+	const { channels, pixelCount } = metadata
+	const { red, green, blue } = grayscaleFromChannel(channel)
+	let origin = 0
+	let sum = 0
+	let sumSq = 0
+	let count = 0
+
+	if (channels === 1) {
+		for (let i = 0; i < pixelCount; i++) {
+			if (mask[i] !== 0) continue
+			const value = transform(raw[i], i)
+			if (count === 0) origin = value
+			const d = value - origin
+			sum += d
+			sumSq += d * d
+			count++
+		}
+	} else if (channel === 'RED' || channel === 'GREEN' || channel === 'BLUE') {
+		for (let pixel = 0, i = channelIndex(channel); pixel < pixelCount; pixel++, i += 3) {
+			if (mask[pixel] !== 0) continue
+			const value = transform(raw[i], i)
+			if (count === 0) origin = value
+			const d = value - origin
+			sum += d
+			sumSq += d * d
+			count++
+		}
+	} else {
+		for (let pixel = 0, i = 0; pixel < pixelCount; pixel++, i += 3) {
+			if (mask[pixel] !== 0) continue
+			const value = transform(raw[i], i) * red + transform(raw[i + 1], i + 1) * green + transform(raw[i + 2], i + 2) * blue
+			if (count === 0) origin = value
+			const d = value - origin
+			sum += d
+			sumSq += d * d
+			count++
+		}
+	}
+
+	if (count === 0) return { mean: 0, standardDeviation: 0 }
+	const meanOffset = sum / count
+	const variance = Math.max(0, sumSq / count - meanOffset * meanOffset)
+	return { mean: origin + meanOffset, standardDeviation: Math.sqrt(variance) }
+}
+
+// Rejects samples outside the transformed clipping interval and returns the number newly rejected.
+function rejectSigmaClipSamples(image: Image, channel: ImageChannelOrGray | undefined, transform: HistogramPixelTransform, mask: Int8Array | Uint8Array, lower: number, upper: number): number {
+	const { raw, metadata } = image
+	const { channels, pixelCount } = metadata
+	const { red, green, blue } = grayscaleFromChannel(channel)
+	let count = 0
+
+	if (channels === 1) {
+		for (let i = 0; i < pixelCount; i++) {
+			if (mask[i] !== 0) continue
+			const value = transform(raw[i], i)
+			if (value < lower || value > upper) {
+				mask[i] = 1
+				count++
+			}
+		}
+	} else if (channel === 'RED' || channel === 'GREEN' || channel === 'BLUE') {
+		for (let pixel = 0, i = channelIndex(channel); pixel < pixelCount; pixel++, i += 3) {
+			if (mask[pixel] !== 0) continue
+			const value = transform(raw[i], i)
+			if (value < lower || value > upper) {
+				mask[pixel] = 1
+				count++
+			}
+		}
+	} else {
+		for (let pixel = 0, i = 0; pixel < pixelCount; pixel++, i += 3) {
+			if (mask[pixel] !== 0) continue
+			const value = transform(raw[i], i) * red + transform(raw[i + 1], i + 1) * green + transform(raw[i + 2], i + 2) * blue
+			if (value < lower || value > upper) {
+				mask[pixel] = 1
+				count++
+			}
+		}
+	}
+
+	return count
+}
+
+// Resolves a caller mask to the canonical per-pixel layout while preserving legacy RGB buffers.
+function resolveSigmaClipMask(image: Image, channel: ImageChannelOrGray | undefined, provided?: Int8Array | Uint8Array) {
+	const { raw, metadata } = image
+	const { channels, pixelCount } = metadata
+	if (provided === undefined || provided.length === pixelCount) return { mask: provided ?? new Int8Array(pixelCount), legacy: false }
+	if (channels !== 3 || provided.length < raw.length) throw new RangeError(`mask must have length ${pixelCount} or >= ${raw.length}`)
+
+	const mask = new Int8Array(pixelCount)
+	if (channel === 'RED' || channel === 'GREEN' || channel === 'BLUE') {
+		for (let pixel = 0, i = channelIndex(channel); pixel < pixelCount; pixel++, i += 3) mask[pixel] = provided[i] === 0 ? 0 : 1
+	} else {
+		for (let pixel = 0, i = 0; pixel < pixelCount; pixel++, i += 3) mask[pixel] = provided[i] === 0 && provided[i + 1] === 0 && provided[i + 2] === 0 ? 0 : 1
+	}
+	return { mask, legacy: true }
+}
+
+// Copies the canonical per-pixel mask back into a caller-provided legacy RGB layout.
+function updateLegacySigmaClipMask(mask: Int8Array | Uint8Array, output: Int8Array | Uint8Array, channel: ImageChannelOrGray | undefined) {
+	if (channel === 'RED' || channel === 'GREEN' || channel === 'BLUE') {
+		for (let pixel = 0, i = channelIndex(channel); pixel < mask.length; pixel++, i += 3) if (mask[pixel] !== 0) output[i] = 1
+	} else {
+		for (let pixel = 0, i = 0; pixel < mask.length; pixel++, i += 3) {
+			if (mask[pixel] === 0) continue
+			output[i] = 1
+			output[i + 1] = 1
+			output[i + 2] = 1
+		}
+	}
+}
+
+// Performs sigma clipping and retains internal state useful to background estimation.
+function sigmaClipResult(image: Image, options: Partial<SigmaClipOptions> = DEFAULT_SIGMA_CLIP_OPTIONS): SigmaClipResult {
+	const { channel, centerMethod, dispersionMethod, sigmaLower, sigmaUpper, tolerance, maxIterations } = Object.assign({}, DEFAULT_SIGMA_CLIP_OPTIONS, options)
+	validateNonNegativeFinite(sigmaLower)
+	validateNonNegativeFinite(sigmaUpper)
+	validateNonNegativeFinite(tolerance)
+	validateNonNegativeInteger(maxIterations)
+
+	const transform = options.transform ?? DEFAULT_SIGMA_CLIP_OPTIONS.transform
+	const resolvedMask = resolveSigmaClipMask(image, channel, options.mask)
+	const pixelMask = resolvedMask.mask
+	const useDirectMoments = centerMethod === 'mean' && dispersionMethod === 'std'
+	const bits = useDirectMoments ? undefined : resolveHistogramBins(options.bits)
+	const histogramOptions = { ...options, bits, transform, sigmaClip: pixelMask } as HistogramOptions
+	let lastCenter: number | undefined
+	let lastDispersion: number | undefined
+	let finalHistogram: Histogram | undefined
+
+	for (let iteration = 0; iteration < maxIterations; iteration++) {
+		let center: number
+		let dispersion: number
+		let currentHistogram: Histogram | undefined
+
+		if (useDirectMoments) {
+			const moments = sigmaClipMoments(image, channel, transform, pixelMask)
+			center = moments.mean
+			dispersion = moments.standardDeviation
+		} else {
+			currentHistogram = computeHistogram(image, histogramOptions)
+			center = centerMethod === 'mean' ? currentHistogram.mean : currentHistogram.median
+			dispersion = dispersionMethod === 'std' ? currentHistogram.standardDeviation : STANDARD_DEVIATION_SCALE * computeHistogram(image, histogramOptions, currentHistogram.median).median
+		}
+
+		if (!Number.isFinite(dispersion) || dispersion === 0) {
+			finalHistogram = currentHistogram
+			break
+		}
+
+		const lower = center - sigmaLower * dispersion
+		const upper = center + sigmaUpper * dispersion
+		const rejected = rejectSigmaClipSamples(image, channel, transform, pixelMask, lower, upper)
+		const converged = lastCenter !== undefined && lastDispersion !== undefined && Math.abs(center - lastCenter) <= tolerance * Math.max(Math.abs(center), Number.EPSILON) && Math.abs(dispersion - lastDispersion) <= tolerance * Math.max(Math.abs(dispersion), Number.EPSILON)
+
+		if (rejected === 0) {
+			finalHistogram = currentHistogram
+			break
+		}
+		if (converged) break
+		lastCenter = center
+		lastDispersion = dispersion
+	}
+
+	const outputMask = options.mask ?? pixelMask
+	if (resolvedMask.legacy) updateLegacySigmaClipMask(pixelMask, outputMask, channel)
+	return { mask: outputMask, pixelMask, histogram: finalHistogram }
+}
+
 // Iteratively rejects outlier pixels beyond [center - sigmaLower*disp, center + sigmaUpper*disp],
 // recomputing center and dispersion each pass until convergence, no new rejections, or maxIterations.
 // Returns the rejection mask (1 = rejected); for color the whole pixel is rejected on a grayscale clip.
 export function sigmaClip(image: Image, options: Partial<SigmaClipOptions> = DEFAULT_SIGMA_CLIP_OPTIONS) {
-	const { channel, centerMethod, dispersionMethod, sigmaLower, sigmaUpper, tolerance, maxIterations } = Object.assign({}, DEFAULT_SIGMA_CLIP_OPTIONS, options)
-
-	const { raw, metadata } = image
-	const { red, green, blue } = grayscaleFromChannel(channel)
-	const { pixelCount: n, channels } = metadata
-	const mask = options.mask?.fill(0) ?? new Int8Array(raw.length)
-
-	if (raw.length > mask.length) throw new Error(`mask must have length >= ${raw.length}`)
-
-	const transform = options.transform ?? DEFAULT_SIGMA_CLIP_OPTIONS.transform
-	const bits = options.bits === undefined || typeof options.bits === 'number' ? new Int32Array(1 << (options.bits ?? 16)) : options.bits
-	// Exclude already-rejected pixels from the iteration statistics through the histogram
-	// skip path. Mapping them into the histogram (e.g. to bin 0, or to |median| in the MAD)
-	// instead of excluding them biases the center, dispersion, and clip bounds once the
-	// rejected fraction grows, weakening convergence.
-	options = { ...options, bits, transform, sigmaClip: mask } as HistogramOptions
-
-	const isMono = channels === 1
-
-	let lastCenter = 1
-
-	for (let i = 0; i < maxIterations; i++) {
-		const h = histogram(image, options)
-
-		const center = centerMethod === 'mean' ? h.mean : h.median
-		const dispersion = dispersionMethod === 'std' ? h.standardDeviation : medianAbsoluteDeviation(image, h.median, true, options)
-
-		if (!Number.isFinite(dispersion) || dispersion === 0) break
-
-		// Check convergence
-		if (Math.abs(center - lastCenter) < tolerance * Math.abs(center)) break
-
-		lastCenter = center
-
-		const lower = center - sigmaLower * dispersion
-		const upper = center + sigmaUpper * dispersion
-
-		let count = 0
-
-		if (isMono) {
-			for (let i = 0; i < n; i++) {
-				if (mask[i] === 1) continue
-
-				const p = raw[i]
-
-				if (p < lower || p > upper) {
-					mask[i] = 1
-					count++
-				}
-			}
-		} else if (channel === 'RED' || channel === 'GREEN' || channel === 'BLUE') {
-			for (let i = 0, k = channelIndex(channel); i < n; i++, k += 3) {
-				if (mask[k] === 1) continue
-
-				const p = raw[k]
-
-				if (p < lower || p > upper) {
-					mask[k] = 1
-					count++
-				}
-			}
-		} else {
-			for (let i = 0, k = 0; i < n; i++, k += 3) {
-				if (mask[k] === 1) continue
-
-				const p = raw[k] * red + raw[k + 1] * green + raw[k + 2] * blue
-
-				if (p < lower || p > upper) {
-					mask[k] = 1
-					mask[k + 1] = 1
-					mask[k + 2] = 1
-					count++
-				}
-			}
-		}
-
-		// Good!
-		if (count === 0) break
-	}
-
-	return mask
+	return sigmaClipResult(image, options).mask
 }
 
 // Estimates the sky background as the median of the sigma-clipped (median/MAD) pixels.
