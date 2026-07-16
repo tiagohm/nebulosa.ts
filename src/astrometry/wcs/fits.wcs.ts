@@ -13,6 +13,8 @@ import { type Angle, deg, normalizeAngle, normalizePI } from '../../math/units/a
 const DIRECT_CD_KEY_PATTERN = /^CD\d+_\d+$/
 // Matches PC-matrix keywords (PCi_j).
 const PC_KEY_PATTERN = /^PC\d+_\d+$/
+// Captures one forward or inverse SIP coefficient and its polynomial powers.
+const SIP_COEFFICIENT_KEY_PATTERN = /^(A|AP|B|BP)_(\d+)_(\d+)$/
 // Matches every WCS keyword (including SIP terms) handled by this module.
 const WCS_FITS_KEY_PATTERN = /^(?:WCSAXES|CUNIT\d+|CTYPE\d+|CRPIX\d+|CRVAL\d+|PS\d+_\d+|PV\d+_\d+|CD\d+_\d+|PC\d+_\d+|CDELT\d+|CROTA\d+|RADESYS|LONPOLE|LATPOLE|EQUINOX|A_\d+_\d+|AP_\d+_\d+|B_\d+_\d+|BP_\d+_\d+|A_ORDER|AP_ORDER|B_ORDER|BP_ORDER|A_DMAX|B_DMAX)$/
 // Iteration cap for the Newton inversion of the forward SIP polynomial.
@@ -243,6 +245,61 @@ export function cdFromCdelt(cdelt1: number, cdelt2: number, crota: Angle, flipH:
 // Applies CDELT scaling to a row-major PC matrix to produce a row-major CD matrix.
 export function pc2cd(pc11: number, pc12: number, pc21: number, pc22: number, cdelt1: number, cdelt2: number): CDMatrix {
 	return [cdelt1 * pc11, cdelt1 * pc12, cdelt2 * pc21, cdelt2 * pc22]
+}
+
+// Reflects a FITS WCS in place across either image axis. Dimensions and CRPIX use FITS one-based
+// coordinates. CD, PC+CDELT, CDELT+CROTA, and forward/inverse SIP terms remain equivalent at the
+// mirrored pixel coordinates. Returns the same header object.
+export function reflectFitsWcs(header: FitsHeader, width: number, height: number, horizontal: boolean, vertical: boolean) {
+	if (!Number.isInteger(width) || width <= 0) throw new RangeError(`WCS reflection width must be a positive integer: ${width}`)
+	if (!Number.isInteger(height) || height <= 0) throw new RangeError(`WCS reflection height must be a positive integer: ${height}`)
+	if (!horizontal && !vertical) return header
+
+	const sx = horizontal ? -1 : 1
+	const sy = vertical ? -1 : 1
+	const crpix1 = numericKeyword(header, 'CRPIX1', Number.NaN)
+	const crpix2 = numericKeyword(header, 'CRPIX2', Number.NaN)
+	if (horizontal && Number.isFinite(crpix1)) header.CRPIX1 = width + 1 - crpix1
+	if (vertical && Number.isFinite(crpix2)) header.CRPIX2 = height + 1 - crpix2
+
+	switch (matrixKind(header)) {
+		case 'cd': {
+			const [cd11, cd12, cd21, cd22] = cdMatrix(header, 'cd')
+			header.CD1_1 = sx * cd11
+			header.CD1_2 = sy * cd12
+			header.CD2_1 = sx * cd21
+			header.CD2_2 = sy * cd22
+			break
+		}
+		case 'pc': {
+			const pc11 = pcKeyword(header, 1, 1)
+			const pc12 = pcKeyword(header, 1, 2)
+			const pc21 = pcKeyword(header, 2, 1)
+			const pc22 = pcKeyword(header, 2, 2)
+			header.PC1_1 = sx * pc11
+			header.PC1_2 = sy * pc12
+			header.PC2_1 = sx * pc21
+			header.PC2_2 = sy * pc22
+			break
+		}
+		default:
+			if (horizontal && hasKeyword(header, 'CDELT1')) header.CDELT1 = -numericKeyword(header, 'CDELT1', 0)
+			if (vertical && hasKeyword(header, 'CDELT2')) header.CDELT2 = -numericKeyword(header, 'CDELT2', 0)
+	}
+
+	for (const key in header) {
+		const match = SIP_COEFFICIENT_KEY_PATTERN.exec(key)
+		if (!match || typeof header[key] !== 'number') continue
+		const prefix = match[1]
+		const p = +match[2]
+		const q = +match[3]
+		const axisSign = prefix === 'B' || prefix === 'BP' ? sy : sx
+		const xPowerSign = sx < 0 && (p & 1) !== 0 ? -1 : 1
+		const yPowerSign = sy < 0 && (q & 1) !== 0 ? -1 : 1
+		header[key] *= axisSign * xPowerSign * yPowerSign
+	}
+
+	return header
 }
 
 // Projects equatorial coordinates onto FITS TAN pixel coordinates using the header WCS.

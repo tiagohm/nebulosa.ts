@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { cd, cdFromCdelt, cdMatrix, DEC_TAN_SIP, hasCd, isWcsFitsKeyword, pc2cd, RA_TAN_SIP, tanProject, tanUnproject } from '../../../src/astrometry/wcs/fits.wcs'
+import { cd, cdFromCdelt, cdMatrix, DEC_TAN_SIP, hasCd, isWcsFitsKeyword, pc2cd, RA_TAN_SIP, reflectFitsWcs, tanProject, tanUnproject } from '../../../src/astrometry/wcs/fits.wcs'
 import { Wcs } from '../../../src/bindings/astrometry/libwcs'
 import { PI, PIOVERTWO } from '../../../src/core/constants'
 import type { FitsHeader } from '../../../src/io/formats/fits/fits'
@@ -152,6 +152,69 @@ describe('cd from cdelt', () => {
 describe('pc2cd', () => {
 	test('scales the PC matrix without swapping elements', () => {
 		expectMatrixCloseTo(pc2cd(1, 2, 3, 4, 10, 20), [10, 20, 60, 80])
+	})
+})
+
+describe('reflect fits wcs', () => {
+	const cases: readonly { name: string; header: FitsHeader; width: number; height: number; x: number; y: number; precision: number }[] = [
+		{ name: 'direct CD', header: TAN_HEADER, width: 800, height: 600, x: 512.25, y: 180.75, precision: 10 },
+		{ name: 'PC plus CDELT', header: TAN_PC_HEADER, width: 1024, height: 1024, x: 620.25, y: 455.75, precision: 10 },
+		{ name: 'CDELT plus CROTA', header: TAN_CROTA_HEADER, width: 13689, height: 5849, x: 7012.5, y: 3101.25, precision: 9 },
+		{ name: 'CDELT only', header: { ...TAN_HEADER, CD1_1: undefined, CD1_2: undefined, CD2_1: undefined, CD2_2: undefined, CDELT1: -7e-4, CDELT2: 6.8e-4 }, width: 800, height: 600, x: 512.25, y: 180.75, precision: 10 },
+		{ name: 'SIP', header: TAN_SIP_HEADER, width: 256, height: 256, x: 200.5, y: 210.25, precision: 9 },
+	]
+
+	for (const entry of cases) {
+		for (const [name, horizontal, vertical] of [
+			['horizontal', true, false],
+			['vertical', false, true],
+			['both', true, true],
+		] as const) {
+			test(`${entry.name} ${name}`, () => {
+				const before = tanUnproject(entry.header, entry.x, entry.y)
+				expect(before).toBeDefined()
+				if (!before) return
+
+				const header = { ...entry.header }
+				expect(reflectFitsWcs(header, entry.width, entry.height, horizontal, vertical)).toBe(header)
+				const x = horizontal ? entry.width + 1 - entry.x : entry.x
+				const y = vertical ? entry.height + 1 - entry.y : entry.y
+				const after = tanUnproject(header, x, y)
+				expect(after).toBeDefined()
+				if (!after) return
+
+				expect(after[0]).toBeCloseTo(before[0], entry.precision)
+				expect(after[1]).toBeCloseTo(before[1], entry.precision)
+				expectTanMatchesNativeUnproject(header, x, y, entry.name === 'SIP' ? 9 : entry.precision)
+				const projected = tanProject(header, before[0], before[1])
+				expect(projected).toBeDefined()
+				if (!projected) return
+				expect(projected[0]).toBeCloseTo(x, entry.name === 'SIP' ? 3 : entry.precision)
+				expect(projected[1]).toBeCloseTo(y, entry.name === 'SIP' ? 3 : entry.precision)
+			})
+		}
+	}
+
+	test('rejects invalid dimensions before mutation', () => {
+		const header: FitsHeader = { ...TAN_HEADER }
+		const before = { ...header }
+		expect(() => reflectFitsWcs(header, 0, 600, true, false)).toThrow('width must be a positive integer')
+		expect(header).toEqual(before)
+		expect(() => reflectFitsWcs(header, 800, Number.NaN, false, true)).toThrow('height must be a positive integer')
+		expect(header).toEqual(before)
+	})
+
+	test('is an exact involution and preserves a no-op request', () => {
+		const header: FitsHeader = { ...TAN_SIP_HEADER }
+		const before = { ...header }
+		expect(reflectFitsWcs(header, 256, 256, false, false)).toBe(header)
+		expect(header).toEqual(before)
+		reflectFitsWcs(header, 256, 256, true, false)
+		reflectFitsWcs(header, 256, 256, true, false)
+		expect(header).toEqual(before)
+		reflectFitsWcs(header, 256, 256, false, true)
+		reflectFitsWcs(header, 256, 256, false, true)
+		expect(header).toEqual(before)
 	})
 })
 
