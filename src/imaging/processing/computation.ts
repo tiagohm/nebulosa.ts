@@ -1,4 +1,5 @@
 import { STANDARD_DEVIATION_SCALE } from '../../core/util'
+import { validatePositiveInteger } from '../../core/validation'
 import type { Rect } from '../../math/numerical/geometry'
 import type { NumberArray } from '../../math/numerical/math'
 import { Histogram } from '../../math/numerical/statistics'
@@ -89,6 +90,123 @@ export const DEFAULT_SIGMA_CLIP_OPTIONS: Readonly<SigmaClipOptions> = {
 	maxIterations: 5,
 }
 
+// Maximum supported histogram bit depth, limiting a default Int32 buffer to 64 MiB.
+const MAX_HISTOGRAM_BITS = 24
+
+// Allocates or clears a histogram bin buffer after validating its size.
+function resolveHistogramBins(bits: NumberArray | number | undefined): NumberArray {
+	bits ??= DEFAULT_HISTOGRAM_OPTIONS.bits
+
+	if (typeof bits === 'number') {
+		validatePositiveInteger(bits)
+		if (bits > MAX_HISTOGRAM_BITS) throw new RangeError(`histogram bits must be <= ${MAX_HISTOGRAM_BITS}`)
+		return new Int32Array(2 ** bits)
+	}
+
+	if (bits.length === 0) throw new RangeError('histogram buffer must not be empty')
+	return bits.fill(0)
+}
+
+// Builds a histogram, optionally binning absolute deviations from a center after channel reduction.
+function computeHistogram(image: Image, options: Partial<HistogramOptions>, deviationCenter?: number): Histogram {
+	const channel = options.channel
+	const area = options.area
+	const sigmaClip = options.sigmaClip
+	const transform = options.transform ?? DEFAULT_HISTOGRAM_PIXEL_TRANSFORM
+	const h = resolveHistogramBins(options.bits)
+	const max = h.length - 1
+	const { raw, metadata } = image
+	const { stride, width, height, channels, pixelCount } = metadata
+
+	const pixelMask = sigmaClip !== undefined && sigmaClip.length === pixelCount
+	if (sigmaClip !== undefined && !pixelMask && sigmaClip.length < raw.length) throw new RangeError(`sigmaClip must have length ${pixelCount} or >= ${raw.length}`)
+
+	const left = Math.max(0, Math.min(area?.left ?? 0, width - 1))
+	const top = Math.max(0, Math.min(area?.top ?? 0, height - 1))
+	const right = Math.max(0, Math.min(area?.right ?? width - 1, width - 1))
+	const bottom = Math.max(0, Math.min(area?.bottom ?? height - 1, height - 1))
+
+	const offset = channelIndex(channel)
+	const { red, green, blue } = grayscaleFromChannel(channel)
+	const useGrayscale = channels === 3 && !(channel === 'RED' || channel === 'GREEN' || channel === 'BLUE')
+	const identityTransform = transform === DEFAULT_HISTOGRAM_PIXEL_TRANSFORM
+	const useDeviation = deviationCenter !== undefined
+
+	if (useGrayscale) {
+		for (let y = top; y <= bottom; y++) {
+			let i = y * stride + left * channels
+			const end = y * stride + (right + 1) * channels
+			let pixel = y * width + left
+
+			if (identityTransform) {
+				if (sigmaClip === undefined) {
+					for (; i < end; i += channels) {
+						let value = raw[i] * red + raw[i + 1] * green + raw[i + 2] * blue
+						if (useDeviation) value = Math.abs(value - deviationCenter)
+						h[truncatePixel(value, max)]++
+					}
+				} else {
+					for (; i < end; i += channels, pixel++) {
+						if (sigmaClip[pixelMask ? pixel : i] !== 0) continue
+						let value = raw[i] * red + raw[i + 1] * green + raw[i + 2] * blue
+						if (useDeviation) value = Math.abs(value - deviationCenter)
+						h[truncatePixel(value, max)]++
+					}
+				}
+			} else if (sigmaClip === undefined) {
+				for (; i < end; i += channels) {
+					let value = transform(raw[i], i) * red + transform(raw[i + 1], i + 1) * green + transform(raw[i + 2], i + 2) * blue
+					if (useDeviation) value = Math.abs(value - deviationCenter)
+					h[truncatePixel(value, max)]++
+				}
+			} else {
+				for (; i < end; i += channels, pixel++) {
+					if (sigmaClip[pixelMask ? pixel : i] !== 0) continue
+					let value = transform(raw[i], i) * red + transform(raw[i + 1], i + 1) * green + transform(raw[i + 2], i + 2) * blue
+					if (useDeviation) value = Math.abs(value - deviationCenter)
+					h[truncatePixel(value, max)]++
+				}
+			}
+		}
+	} else {
+		for (let y = top; y <= bottom; y++) {
+			let i = y * stride + left * channels + offset
+			const end = y * stride + (right + 1) * channels + offset
+			let pixel = y * width + left
+
+			if (identityTransform) {
+				if (sigmaClip === undefined) {
+					for (; i < end; i += channels) {
+						const value = useDeviation ? Math.abs(raw[i] - deviationCenter) : raw[i]
+						h[truncatePixel(value, max)]++
+					}
+				} else {
+					for (; i < end; i += channels, pixel++) {
+						if (sigmaClip[pixelMask ? pixel : i] !== 0) continue
+						const value = useDeviation ? Math.abs(raw[i] - deviationCenter) : raw[i]
+						h[truncatePixel(value, max)]++
+					}
+				}
+			} else if (sigmaClip === undefined) {
+				for (; i < end; i += channels) {
+					const transformed = transform(raw[i], i)
+					const value = useDeviation ? Math.abs(transformed - deviationCenter) : transformed
+					h[truncatePixel(value, max)]++
+				}
+			} else {
+				for (; i < end; i += channels, pixel++) {
+					if (sigmaClip[pixelMask ? pixel : i] !== 0) continue
+					const transformed = transform(raw[i], i)
+					const value = useDeviation ? Math.abs(transformed - deviationCenter) : transformed
+					h[truncatePixel(value, max)]++
+				}
+			}
+		}
+	}
+
+	return new Histogram(h, max)
+}
+
 // Median pixel value of the selected channel/region.
 export function median(image: Image, options: Partial<HistogramOptions> = DEFAULT_HISTOGRAM_OPTIONS) {
 	return histogram(image, options).median
@@ -126,56 +244,7 @@ export function adf(image: Image, options: Partial<AdaptiveDisplayFunctionOption
 // transform and skipping sigma-clip-masked pixels. Color channels are combined by the grayscale weights
 // when no single channel is requested.
 export function histogram(image: Image, options: Partial<HistogramOptions> = DEFAULT_HISTOGRAM_OPTIONS) {
-	const channel = options.channel
-	const area = options.area
-	const sigmaClip = options.sigmaClip
-	const transform = options.transform ?? DEFAULT_HISTOGRAM_OPTIONS.transform
-	const bits = options.bits ?? DEFAULT_HISTOGRAM_OPTIONS.bits
-	const h = typeof bits === 'number' ? new Int32Array(1 << bits) : bits.fill(0)
-	const max = h.length - 1
-	const { raw, metadata } = image
-	const { stride, width, height, channels } = metadata
-
-	const left = Math.max(0, Math.min(area?.left ?? 0, width - 1))
-	const top = Math.max(0, Math.min(area?.top ?? 0, height - 1))
-	const right = Math.max(0, Math.min(area?.right ?? width - 1, width - 1))
-	const bottom = Math.max(0, Math.min(area?.bottom ?? height - 1, height - 1))
-
-	const offset = channelIndex(channel)
-	const { red, green, blue } = grayscaleFromChannel(channel)
-	const useGrayscale = channels === 3 && !(channel === 'RED' || channel === 'GREEN' || channel === 'BLUE')
-	const hasSigmaClip = sigmaClip !== undefined
-
-	if (useGrayscale) {
-		for (let y = top; y <= bottom; y++) {
-			let i = y * stride + left * channels
-			const end = y * stride + (right + 1) * channels
-
-			for (; i < end; i += channels) {
-				if (hasSigmaClip && sigmaClip[i] !== 0) continue
-
-				const r = transform(raw[i], i)
-				const gi = i + 1
-				const g = transform(raw[gi], gi)
-				const bi = i + 2
-				const b = transform(raw[bi], bi)
-
-				h[truncatePixel(r * red + g * green + b * blue, max)]++
-			}
-		}
-	} else {
-		for (let y = top; y <= bottom; y++) {
-			let i = y * stride + left * channels + offset
-			const end = y * stride + (right + 1) * channels + offset
-
-			for (; i < end; i += channels) {
-				if (hasSigmaClip && sigmaClip[i] !== 0) continue
-				h[truncatePixel(transform(raw[i], i), max)]++
-			}
-		}
-	}
-
-	return new Histogram(h, max)
+	return computeHistogram(image, options)
 }
 
 // Iteratively rejects outlier pixels beyond [center - sigmaLower*disp, center + sigmaUpper*disp],
