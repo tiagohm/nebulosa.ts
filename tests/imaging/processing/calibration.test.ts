@@ -1,15 +1,14 @@
 import { expect, test } from 'bun:test'
-import { calibrate } from '../../../src/imaging/processing/calibration'
+import { calibrate, type CalibrationOptions } from '../../../src/imaging/processing/calibration'
 import { expectImageValues, makeImage } from './util'
 
-test('calibrate subtracts dark current and normalizes by a bias-corrected flat', () => {
-	const light = makeImage(2, 1, 1, [0.6, 0.4])
-	const dark = makeImage(2, 1, 1, [0.1, 0.1])
+test('calibrate subtracts an exposure-matched raw dark and normalizes by a bias-corrected flat', () => {
+	const light = makeImage(2, 1, 1, [0.6, 0.4], { EXPTIME: 30 })
+	const dark = makeImage(2, 1, 1, [0.1, 0.1], { EXPTIME: 30 })
 	const flat = makeImage(2, 1, 1, [0.4, 0.8])
 	const bias = makeImage(2, 1, 1, [0.05, 0.05])
 
-	calibrate(light, { dark, flat, bias })
-
+	expect(calibrate(light, { dark, flat, bias })).toBe(light)
 	expectImageValues(light, [0.7857142857142858, 0.22], 6)
 })
 
@@ -22,16 +21,87 @@ test('calibrate subtracts only bias when it is the sole calibration frame', () =
 	expectImageValues(light, [0.5, 0.35], 6)
 })
 
-test('calibrate subtracts dark frames directly when exposure times match', () => {
-	const light = makeImage(2, 1, 1, [0.6, 0.4])
-	const dark = makeImage(2, 1, 1, [0.1, 0.2])
+test('calibrate subtracts a raw dark directly when exposure times match', () => {
+	const light = makeImage(2, 1, 1, [0.6, 0.4], { EXPTIME: 30 })
+	const dark = makeImage(2, 1, 1, [0.1, 0.2], { EXPTIME: 30 })
 
 	calibrate(light, { dark })
 
 	expectImageValues(light, [0.5, 0.2], 8)
 })
 
-test('calibrate applies flat normalization even without dark or bias frames', () => {
+test('calibrate scales only bias-corrected dark current when exposure times differ', () => {
+	const light = makeImage(2, 1, 1, [0.41, 0.7], { EXPTIME: 30 })
+	const dark = makeImage(2, 1, 1, [0.07, 0.1], { EXPTIME: 10 })
+	const bias = makeImage(2, 1, 1, [0.05, 0.04])
+
+	calibrate(light, { dark, bias })
+
+	// (L - B) - (D - B) * (TL / TD)
+	expectImageValues(light, [0.3, 0.48], 7)
+})
+
+test('calibrate honors EXPOSURE as the exposure-time fallback', () => {
+	const light = makeImage(1, 1, 1, [0.41], { EXPOSURE: 30 })
+	const dark = makeImage(1, 1, 1, [0.07], { EXPOSURE: 10 })
+	const bias = makeImage(1, 1, 1, [0.05])
+
+	calibrate(light, { dark, bias })
+
+	expectImageValues(light, [0.3], 7)
+})
+
+test('calibrate preserves negative residuals instead of clipping noise at zero', () => {
+	const light = makeImage(2, 1, 1, [0.04, 0.06], { EXPTIME: 10 })
+	const dark = makeImage(2, 1, 1, [0.05, 0.05], { EXPTIME: 10 })
+
+	calibrate(light, { dark })
+
+	expectImageValues(light, [-0.01, 0.01], 7)
+})
+
+test('calibrate permits results above one without clipping', () => {
+	const light = makeImage(2, 1, 1, [0.8, 0.4])
+	const flat = makeImage(2, 1, 1, [0.4, 1.2])
+
+	calibrate(light, { flat })
+
+	expectImageValues(light, [1.6, 0.26666666666666666], 7)
+})
+
+test('calibrate can disable exposure scaling for known exposure-matched or non-linear darks', () => {
+	const light = makeImage(2, 1, 1, [0.6, 0.4])
+	const dark = makeImage(2, 1, 1, [0.1, 0.2])
+
+	calibrate(light, { dark, darkScaling: 'none' })
+
+	expectImageValues(light, [0.5, 0.2], 8)
+})
+
+test('calibrate rejects missing exposure metadata when exposure scaling is enabled', () => {
+	const light = makeImage(1, 1, 1, [0.6])
+	const dark = makeImage(1, 1, 1, [0.1])
+	const before = new Float32Array(light.raw)
+
+	expect(() => calibrate(light, { dark })).toThrow('light requires a finite positive EXPTIME or EXPOSURE')
+	expect(light.raw).toEqual(before)
+})
+
+test('calibrate rejects non-positive exposure metadata', () => {
+	const light = makeImage(1, 1, 1, [0.6], { EXPTIME: 0 })
+	const dark = makeImage(1, 1, 1, [0.1], { EXPTIME: 10 })
+
+	expect(() => calibrate(light, { dark })).toThrow('light requires a finite positive EXPTIME or EXPOSURE')
+})
+
+test('calibrate requires bias to scale a raw dark to another exposure', () => {
+	const light = makeImage(1, 1, 1, [0.6], { EXPTIME: 30 })
+	const dark = makeImage(1, 1, 1, [0.1], { EXPTIME: 10 })
+
+	expect(() => calibrate(light, { dark })).toThrow('dark exposure differs from light; a bias master is required for exposure scaling')
+})
+
+test('calibrate applies flat normalization without dark or bias frames', () => {
 	const light = makeImage(2, 1, 1, [0.6, 0.4])
 	const flat = makeImage(2, 1, 1, [0.4, 0.8])
 
@@ -40,27 +110,95 @@ test('calibrate applies flat normalization even without dark or bias frames', ()
 	expectImageValues(light, [0.9, 0.3], 6)
 })
 
-test('calibrate subtracts dark-flat from flat normalization without bias', () => {
+test('calibrate subtracts an exposure-matched dark-flat without separately subtracting bias', () => {
 	const light = makeImage(2, 1, 1, [0.8, 0.4])
-	const flat = makeImage(2, 1, 1, [0.5, 1])
-	const darkFlat = makeImage(2, 1, 1, [0.1, 0.2])
+	const flat = makeImage(2, 1, 1, [0.5, 1], { EXPTIME: 2 })
+	const darkFlat = makeImage(2, 1, 1, [0.1, 0.2], { EXPTIME: 2 })
 
 	calibrate(light, { flat, darkFlat })
 
 	expectImageValues(light, [1.2, 0.3], 6)
 })
 
-test('calibrate rescales the dark background when exposure times differ', () => {
-	const light = makeImage(1, 1, 1, [0.8])
-	const dark = makeImage(1, 1, 1, [0.3])
-	const bias = makeImage(1, 1, 1, [0.1])
+test('calibrate scales bias-corrected dark-flat current to the flat exposure', () => {
+	const light = makeImage(2, 1, 1, [0.49, 0.83])
+	const flat = makeImage(2, 1, 1, [0.55, 0.95], { EXPTIME: 30 })
+	const bias = makeImage(2, 1, 1, [0.05, 0.05])
+	const darkFlat = makeImage(2, 1, 1, [0.07, 0.09], { EXPTIME: 10 })
 
-	light.header.EXPTIME = 30
-	dark.header.EXPTIME = 15
+	calibrate(light, { flat, bias, darkFlat })
 
-	calibrate(light, { dark, bias })
+	// Corrected flat is [0.44, 0.78], whose mean is 0.61.
+	expectImageValues(light, [0.61, 0.61], 7)
+})
 
-	expect(light.raw[0]).toBeCloseTo(0.100008, 6)
+test('calibrate requires bias to scale a dark-flat to another exposure', () => {
+	const light = makeImage(1, 1, 1, [0.4])
+	const flat = makeImage(1, 1, 1, [0.8], { EXPTIME: 2 })
+	const darkFlat = makeImage(1, 1, 1, [0.1], { EXPTIME: 1 })
+
+	expect(() => calibrate(light, { flat, darkFlat })).toThrow('darkFlat exposure differs from flat; a bias master is required for exposure scaling')
+})
+
+test('calibrate rejects a dark-flat without a flat master', () => {
+	const light = makeImage(1, 1, 1, [0.4])
+	const darkFlat = makeImage(1, 1, 1, [0.1])
+
+	expect(() => calibrate(light, { darkFlat })).toThrow('darkFlat requires a flat master')
+})
+
+test('calibrate rejects zero corrected-flat samples before mutating the light', () => {
+	const light = makeImage(2, 1, 1, [0.2, 0.4])
+	const flat = makeImage(2, 1, 1, [0, 1])
+	const before = new Float32Array(light.raw)
+
+	expect(() => calibrate(light, { flat })).toThrow('corrected flat sample 0 must be finite and greater than 0: 0')
+	expect(light.raw).toEqual(before)
+})
+
+test('calibrate rejects corrected-flat samples at the configured floor', () => {
+	const light = makeImage(2, 1, 1, [0.2, 0.4])
+	const flat = makeImage(2, 1, 1, [0.01, 1])
+
+	expect(() => calibrate(light, { flat, minimumFlat: 0.01 })).toThrow('corrected flat sample 0 must be finite and greater than 0.01')
+})
+
+test('calibrate rejects non-finite corrected-flat samples', () => {
+	const light = makeImage(2, 1, 1, [0.2, 0.4])
+	const flat = makeImage(2, 1, 1, [Number.NaN, 1])
+
+	expect(() => calibrate(light, { flat })).toThrow('corrected flat sample 0 must be finite')
+})
+
+test('calibrate validates every master before mutating the light', () => {
+	const light = makeImage(2, 1, 1, [0.6, 0.4], { EXPTIME: 10 })
+	const dark = makeImage(2, 1, 1, [0.1, 0.1], { EXPTIME: 10 })
+	const flat = makeImage(1, 1, 1, [0.5])
+	const before = new Float32Array(light.raw)
+
+	expect(() => calibrate(light, { dark, flat })).toThrow('flat width does not match light: 1 != 2')
+	expect(light.raw).toEqual(before)
+})
+
+test('calibrate rejects channel-layout mismatches', () => {
+	const light = makeImage(1, 1, 3, [0.1, 0.2, 0.3])
+	const flat = makeImage(1, 1, 1, [0.5])
+
+	expect(() => calibrate(light, { flat })).toThrow('flat channels do not match light: 1 != 3')
+})
+
+test('calibrate rejects raw buffers inconsistent with metadata', () => {
+	const light = makeImage(2, 1, 1, [0.1])
+	const bias = makeImage(2, 1, 1, [0.05, 0.05])
+
+	expect(() => calibrate(light, { bias })).toThrow('light raw length does not match metadata: 1 != 2')
+})
+
+test('calibrate rejects invalid numerical policies', () => {
+	const light = makeImage(1, 1, 1, [0.2])
+
+	expect(() => calibrate(light, { minimumFlat: -1 })).toThrow('minimumFlat must be finite and non-negative')
+	expect(() => calibrate(light, { darkScaling: 'invalid' } as unknown as CalibrationOptions)).toThrow('unsupported dark scaling: invalid')
 })
 
 test('calibrate leaves the image unchanged when no calibration frames are provided', () => {
@@ -69,11 +207,4 @@ test('calibrate leaves the image unchanged when no calibration frames are provid
 
 	expect(calibrate(light)).toBe(light)
 	expectImageValues(light, before, 8)
-})
-
-test('calibrate propagates dimension mismatches from arithmetic steps', () => {
-	const light = makeImage(2, 1, 1, [0.1, 0.2])
-	const dark = makeImage(1, 1, 1, [0.1])
-
-	expect(() => calibrate(light, { dark })).toThrow('width does not match: 2 != 1')
 })

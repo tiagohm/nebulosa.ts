@@ -71,7 +71,7 @@ export interface Image {
 	readonly header: FitsHeader
 	// Geometry and storage metadata derived from the source.
 	readonly metadata: ImageMetadata
-	// Normalized pixel buffer.
+	// Pixel buffer in normalized full-scale units; processing results may exceed the nominal 0..1 input range.
 	readonly raw: ImageRawType
 }
 
