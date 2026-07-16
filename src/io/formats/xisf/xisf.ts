@@ -3,7 +3,7 @@ import type { Image, ImageRawType, ImageSampleScale } from '../../../imaging/mod
 import type { Size } from '../../../math/numerical/geometry'
 import type { NumberArray } from '../../../math/numerical/math'
 import { deflate, inflate } from '../../compression'
-import { readUntil, type Seekable, type Sink, type Source } from '../../io'
+import { readUntil, type Seekable, type Sink, type Source, writeFully } from '../../io'
 import type { Bitpix, FitsHeader, FitsHeaderValue } from '../fits/fits'
 import { bitpixInBytes, formatFitsHeaderValue, unescapeQuotedText } from '../fits/util'
 
@@ -351,7 +351,7 @@ async function writeUncompressedXisfImage(sink: Sink, input: ImageRawType, bitpi
 					else if (pixelInBytes === 8) chunk.swap64()
 				}
 
-				written += await sink.write(chunk)
+				written += await writeFully(sink, chunk)
 				startPixel += count
 			}
 		}
@@ -369,7 +369,7 @@ async function writeUncompressedXisfImage(sink: Sink, input: ImageRawType, bitpi
 				else if (pixelInBytes === 8) chunk.swap64()
 			}
 
-			written += await sink.write(chunk)
+			written += await writeFully(sink, chunk)
 			start += count
 		}
 	}
@@ -436,11 +436,11 @@ export async function writeXisf(sink: Sink, images: readonly Readonly<Pick<Image
 	signatureData.write(XISF_SIGNATURE, 0, 8, 'ascii')
 	signatureData.writeUInt32LE(headerData.byteLength, 8)
 
-	let size = await sink.write(signatureData)
-	size += await sink.write(headerData)
+	let size = await writeFully(sink, signatureData)
+	size += await writeFully(sink, headerData)
 
 	for (const entry of entries) {
-		if (entry.encoded) size += await sink.write(entry.encoded.data)
+		if (entry.encoded) size += await writeFully(sink, entry.encoded.data)
 		else size += await writeUncompressedXisfImage(sink, entry.raw, entry.bitpix, entry.width, entry.height, entry.channels, options.byteOrder, options.pixelStorage)
 	}
 
@@ -818,7 +818,7 @@ export class XisfImageWriter {
 	// Writes XISF-format image from RGB-interleaved array into sink
 	async write(input: ImageRawType, sink: Sink) {
 		const encoded = await this.encode(input)
-		return await sink.write(encoded.data)
+		return await writeFully(sink, encoded.data)
 	}
 }
 

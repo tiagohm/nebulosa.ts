@@ -5,7 +5,7 @@ import type { Writable } from '../../../core/types'
 import { validatePositiveInteger } from '../../../core/validation'
 import type { Image, ImageRawType, ImageSampleScale } from '../../../imaging/model/types'
 import type { NumberArray } from '../../../math/numerical/math'
-import { readUntil, type Seekable, type Sink, type Source } from '../../io'
+import { readUntil, type Seekable, type Sink, type Source, writeFully } from '../../io'
 
 // FITS container reading and writing: parses an HDU list (header keyword cards plus data segment
 // offsets/sizes) from a seekable source and writes image HDUs back, including optional Rice tile
@@ -454,7 +454,7 @@ export async function writeFits(sink: Sink & Partial<Seekable>, hdus: readonly R
 				let offset = headerWriter.writeAll(header, buffer)
 				offset += headerWriter.writeEnd(buffer, offset)
 				offset += fillWithRemainingBytes(offset, offset, FITS_HEADER_PADDING)
-				await sink.write(buffer, 0, offset)
+				await writeFully(sink, buffer, offset)
 				return
 			} catch (error) {
 				if (!(error instanceof RangeError) || error.message !== FITS_HEADER_BUFFER_TOO_SMALL) throw error
@@ -476,18 +476,18 @@ export async function writeFits(sink: Sink & Partial<Seekable>, hdus: readonly R
 
 			const { cards, rows, heapPages, heapSize } = await buildRiceCompressedImage(header, raw, options)
 			await writeHeader(cards)
-			await sink.write(rows)
-			for (const page of heapPages) await sink.write(page)
+			await writeFully(sink, rows)
+			for (const page of heapPages) await writeFully(sink, page)
 
 			const pad = fillWithRemainingBytes(rows.length + heapSize, 0, FITS_DATA_PADDING)
-			if (pad > 0) await sink.write(buffer, 0, pad)
+			if (pad > 0) await writeFully(sink, buffer, pad)
 			continue
 		}
 
 		await writeHeader(buildImageHeaderCards(header, !hasPrimaryHdu))
 		const imageWriter = new FitsImageWriter(header)
 		const offset = fillWithRemainingBytes(await imageWriter.write(raw, sink), 0, FITS_DATA_PADDING)
-		if (offset > 0) await sink.write(buffer, 0, offset)
+		if (offset > 0) await writeFully(sink, buffer, offset)
 		hasPrimaryHdu = true
 	}
 }
@@ -1330,9 +1330,8 @@ export class FitsImageWriter {
 				else if (pixelInBytes === 4) chunk.swap32()
 				else if (pixelInBytes === 8) chunk.swap64()
 
-				const n = await sink.write(chunk)
-				written += n
-				if (n !== byteCount) return written
+				await writeFully(sink, chunk)
+				written += byteCount
 				startPixel += count
 			}
 		}

@@ -618,6 +618,21 @@ export async function readUntil(source: Source, buffer: Buffer, size: number = b
 	return size - remaining
 }
 
+// Writes exactly `size` bytes from `buffer`, retrying partial sink writes from the advanced source offset.
+// Throws when the sink stops making progress or reports an invalid byte count.
+export async function writeFully(sink: Sink, buffer: Buffer, size: number = buffer.byteLength, offset: number = 0) {
+	let remaining = size
+
+	while (remaining > 0) {
+		const n = await sink.write(buffer, offset, remaining)
+		if (!Number.isInteger(n) || n <= 0 || n > remaining) throw new Error('sink failed to complete write')
+		remaining -= n
+		offset += n
+	}
+
+	return size
+}
+
 // Reads the source to exhaustion and returns all remaining bytes as a single Buffer.
 export async function readRemaining(source: Source) {
 	const chunks: Buffer[] = []

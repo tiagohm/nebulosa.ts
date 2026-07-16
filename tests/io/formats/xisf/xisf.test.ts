@@ -187,6 +187,27 @@ describe('read compressed', () => {
 describe('write', () => {
 	const buffer = Buffer.allocUnsafe(1024 * 1024 * 18)
 
+	test('completes partial sink writes', async () => {
+		const raw = new Float64Array([0, 0.5, 1])
+		const buffer = Buffer.alloc(4096)
+		const delegate = bufferSink(buffer)
+		const sink = {
+			write(chunk: string | Buffer, offset?: number, size?: number, encoding?: BufferEncoding) {
+				const available = typeof chunk === 'string' ? chunk.length - (offset ?? 0) : chunk.byteLength - (offset ?? 0)
+				return delegate.write(chunk, offset, Math.min(size ?? available, 7), encoding)
+			},
+		}
+
+		const size = await writeXisf(sink, [{ header: { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: 3, NAXIS2: 1 }, raw, sampleScale: 'normalized' }])
+		const output = await readImageFromBuffer(buffer.subarray(0, size))
+
+		expect(size).toBe(delegate.position)
+		expect(output).toBeDefined()
+		expect(output!.raw[0]).toBe(0)
+		expect(output!.raw[1]).toBeCloseTo(0.5, 4)
+		expect(output!.raw[2]).toBe(1)
+	})
+
 	test('bounds uncompressed pixel writes', async () => {
 		const width = 512 * 1024 + 1
 		const raw = new Float64Array(width)

@@ -463,6 +463,27 @@ test('fits image reader and writer honor non-zero backing buffer offsets', async
 	expect(readBuffer[7]).toBe(77)
 })
 
+test('completes partial FITS sink writes', async () => {
+	const header: FitsHeader = { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: 3, NAXIS2: 1, BSCALE: 1, BZERO: 32768 }
+	const raw = new Float64Array([0, 0.5, 1])
+	const buffer = Buffer.alloc(FITS_BLOCK_SIZE * 2)
+	const delegate = bufferSink(buffer)
+	const sink = {
+		write(chunk: string | Buffer, offset?: number, size?: number, encoding?: BufferEncoding) {
+			const available = typeof chunk === 'string' ? chunk.length - (offset ?? 0) : chunk.byteLength - (offset ?? 0)
+			return delegate.write(chunk, offset, Math.min(size ?? available, 7), encoding)
+		},
+	}
+
+	await writeFits(sink, [{ header, raw }])
+	const output = await readImageFromBuffer(buffer.subarray(0, delegate.position))
+
+	expect(output).toBeDefined()
+	expect(output!.raw[0]).toBe(0)
+	expect(output!.raw[1]).toBeCloseTo(0.5, 4)
+	expect(output!.raw[2]).toBe(1)
+})
+
 test('reads and writes uncompressed FITS images in bounded chunks', async () => {
 	const width = 600_000
 	const header: FitsHeader = { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: width, NAXIS2: 1, BSCALE: 1, BZERO: 32768 }
