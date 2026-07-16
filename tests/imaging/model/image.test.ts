@@ -426,7 +426,7 @@ describe('curves transformation - RGB', () => {
 		{
 			name: 'gray-shadow-lift',
 			curves: [{ channel: 'GRAY', x: [0.004], y: [0.08] }],
-			hash: '9ef924035eaccec3ccffb401ac266119',
+			hash: 'a931450ac42ab34f931c0a0069058163',
 		},
 		{
 			name: 'red-boost',

@@ -28,6 +28,49 @@ test('curvesTransformation lifts pure-black RGB pixels for RGB/K curves', () => 
 	expectImageValues(image, [quarter, quarter, quarter], 6)
 })
 
+test('curvesTransformation reaches lifted RGB/K luminance without clipping saturated channels', () => {
+	const image = makeImage(1, 1, 3, [1, 0.2, 0.2])
+	const inputLuminance = 0.2126 + 0.7152 * 0.2 + 0.0722 * 0.2
+	const expectedLuminance = 0.5 + 0.5 * inputLuminance
+
+	curvesTransformation(image, { bits: 16, curves: [{ channel: 'GRAY', x: [0, 1], y: [0.5, 1] }] })
+
+	const outputLuminance = 0.2126 * image.raw[0] + 0.7152 * image.raw[1] + 0.0722 * image.raw[2]
+	expect(outputLuminance).toBeCloseTo(expectedLuminance, 6)
+	expect(image.raw[0]).toBe(1)
+	expect(image.raw[1]).toBeGreaterThan(0.2)
+	expect(image.raw[1]).toBeLessThan(1)
+	expect(image.raw[2]).toBeCloseTo(image.raw[1], 7)
+})
+
+test('curvesTransformation preserves RGB ratios while darkening luminance', () => {
+	const image = makeImage(1, 1, 3, [1, 0.2, 0.2])
+	const inputLuminance = 0.2126 + 0.7152 * 0.2 + 0.0722 * 0.2
+
+	curvesTransformation(image, { bits: 16, curves: [{ channel: 'GRAY', x: [0, 1], y: [0, 0.5] }] })
+
+	const outputLuminance = 0.2126 * image.raw[0] + 0.7152 * image.raw[1] + 0.0722 * image.raw[2]
+	expect(outputLuminance).toBeCloseTo(0.5 * inputLuminance, 7)
+	expect(image.raw[0] / image.raw[1]).toBeCloseTo(5, 6)
+	expect(image.raw[1]).toBeCloseTo(image.raw[2], 7)
+})
+
+test('curvesTransformation reaches luminance for normalized custom weights', () => {
+	const weights = { red: 0.5, green: 0.25, blue: 0.25 }
+	const image = makeImage(1, 1, 3, [1, 0.2, 0.4])
+	const inputLuminance = weights.red + weights.green * 0.2 + weights.blue * 0.4
+	const expectedLuminance = 0.25 + 0.75 * inputLuminance
+
+	curvesTransformation(image, { bits: 16, curves: [{ channel: weights, x: [0, 1], y: [0.25, 1] }] })
+
+	const outputLuminance = weights.red * image.raw[0] + weights.green * image.raw[1] + weights.blue * image.raw[2]
+	expect(outputLuminance).toBeCloseTo(expectedLuminance, 6)
+	for (const value of image.raw) {
+		expect(value).toBeGreaterThanOrEqual(0)
+		expect(value).toBeLessThanOrEqual(1)
+	}
+})
+
 test('curvesTransformation can use Akima interpolation', () => {
 	const midpoint = 128 / 255
 	const quarter = 64 / 255

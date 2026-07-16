@@ -4,8 +4,8 @@ import { akimaSplineLUT, catmullRomSplineLUT, cubicHermiteSplineLUT, naturalCubi
 import { GRAYSCALES, type Image, type ImageChannelOrGray } from '../model/types'
 
 // Curves transformation of the normalized [0, 1] raw buffer: applies per-channel or RGB/K tone curves
-// through a configurable spline LUT, preserving color ratios for luminance-style curves. Operates in
-// place.
+// through a configurable spline LUT. Luminance-style curves preserve color ratios while darkening and
+// blend toward white while brightening so the requested luminance remains attainable. Operates in place.
 
 // Spline interpolation used by the curves transformation.
 export type CurvesTransformationInterpolation = 'cubicHermite' | 'akima' | 'catmullRom' | 'naturalCubic'
@@ -192,15 +192,20 @@ function applyCurvesTransformation(image: Image, lut: Float32Array, channel: Ima
 			const p = clamp(red * r + green * g + blue * b, 0, 1)
 			const v = sampleCurvesTransformationLUT(lut, p)
 
-			if (p > 0) {
+			if (p <= 0) {
+				raw[i] = v
+				raw[i + 1] = v
+				raw[i + 2] = v
+			} else if (v <= p) {
 				const scale = v / p
 				raw[i] = clamp(r * scale, 0, 1)
 				raw[i + 1] = clamp(g * scale, 0, 1)
 				raw[i + 2] = clamp(b * scale, 0, 1)
 			} else {
-				raw[i] = v
-				raw[i + 1] = v
-				raw[i + 2] = v
+				const blend = (v - p) / (1 - p)
+				raw[i] = clamp(r + (1 - r) * blend, 0, 1)
+				raw[i + 1] = clamp(g + (1 - g) * blend, 0, 1)
+				raw[i + 2] = clamp(b + (1 - b) * blend, 0, 1)
 			}
 		}
 	}
