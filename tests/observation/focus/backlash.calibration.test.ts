@@ -1,18 +1,16 @@
 import { describe, expect, test } from 'bun:test'
+import { medianOf, NumberComparator } from '../../../src/core/util'
+import { IndiClientHandlerSet } from '../../../src/devices/indi/client'
+import { CameraManager, FocuserManager } from '../../../src/devices/indi/manager'
+import { CameraSimulator } from '../../../src/devices/indi/simulator/camera'
+import { ClientSimulator } from '../../../src/devices/indi/simulator/client'
+import { FocuserSimulator } from '../../../src/devices/indi/simulator/focuser'
+import { readImageFromBuffer } from '../../../src/imaging/model/image'
+import { detectStars } from '../../../src/imaging/stars/detector'
 import { mulberry32, type Random } from '../../../src/math/numerical/random'
-import {
-	aggregateBacklashRuns,
-	BacklashCalibration,
-	backlashCompensationFromCalibration,
-	fitBacklashBreakpoint,
-	type BacklashCalibrationCommand,
-	type BacklashCalibrationOptions,
-	type BacklashCalibrationResult,
-	type BacklashFitOptions,
-	type BacklashProbePoint,
-	type BacklashRunResult,
-	type FocusAxisDirection,
-} from '../../../src/observation/focus/backlash.calibration'
+// oxfmt-ignore
+import { aggregateBacklashRuns, BacklashCalibration, backlashCompensationFromCalibration, fitBacklashBreakpoint, type BacklashCalibrationCommand, type BacklashCalibrationOptions, type BacklashCalibrationResult, type BacklashFitOptions, type BacklashProbePoint, type BacklashRunResult, type FocusAxisDirection } from '../../../src/observation/focus/backlash.calibration'
+import { CameraFrameReceiver, isTimeConsumingTestSkipped, waitUntil } from '../../util'
 
 // Deterministic numerical and state-machine coverage for bidirectional focuser-backlash calibration.
 
@@ -34,6 +32,21 @@ const CALIBRATION_OPTIONS: BacklashCalibrationOptions = {
 	breakpointTolerance: 10,
 	minimumPosition: 0,
 	maximumPosition: 20000,
+}
+
+// Indicates whether integration tests involving timed simulator exposures are disabled.
+const SKIP_TIME_CONSUMING = isTimeConsumingTestSkipped()
+
+// Captures one deterministic frame and returns the median HFD of its detected stars, in pixels.
+async function measureMedianHfd(camera: CameraSimulator, receiver: CameraFrameReceiver) {
+	const previousFrameCount = receiver.length
+	camera.startExposure(0.05)
+	await waitUntil(() => receiver.length > previousFrameCount, 10000, 20)
+	const image = await readImageFromBuffer(receiver.lastFrame)
+	if (!image) throw new Error('camera simulator did not produce a readable image')
+	const stars = detectStars(image, { maxStars: 100 })
+	if (stars.length < 5) throw new Error(`expected at least five detected stars, received ${stars.length}`)
+	return medianOf(stars.map((star) => star.hfd).sort(NumberComparator))
 }
 
 // Builds exact samples from the continuous plateau-plus-line model.
@@ -185,6 +198,67 @@ describe('backlash breakpoint fitting', () => {
 		expect(() => fitBacklashBreakpoint([], { ...FIT_OPTIONS, probeStep: 0 })).toThrow(RangeError)
 		expect(() => fitBacklashBreakpoint([], { ...FIT_OPTIONS, minimumPostBreakPoints: 1.5 })).toThrow(TypeError)
 	})
+})
+
+describe.skipIf(SKIP_TIME_CONSUMING)('backlash calibration simulator integration', () => {
+	test('recovers focuser backlash from detected star HFD', async () => {
+		const handler = new IndiClientHandlerSet()
+		const cameraManager = new CameraManager()
+		const focuserManager = new FocuserManager()
+		const frameReceiver = new CameraFrameReceiver()
+		handler.add(cameraManager)
+		handler.add(focuserManager)
+		cameraManager.addHandler(frameReceiver)
+
+		using client = new ClientSimulator('backlash.calibration', handler)
+		using cameraSimulator = new CameraSimulator('Camera Simulator', client, { focuserManager })
+		using focuserSimulator = new FocuserSimulator('Focuser Simulator', client, { backlashOut: 300 })
+		const camera = cameraManager.get(client, cameraSimulator.name)!
+		const focuser = focuserManager.get(client, focuserSimulator.name)!
+		cameraManager.connect(camera)
+		focuserManager.connect(focuser)
+		await waitUntil(() => camera.connected && focuser.connected)
+		cameraManager.snoop(camera, undefined, focuser)
+
+		cameraManager.frame(camera, 512, 352, 256, 256)
+		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_NOISE_FEATURES', elements: { SKY_ENABLED: false, MOON_ENABLED: false, LIGHT_POLLUTION_ENABLED: false, AMP_GLOW_ENABLED: false } })
+		client.sendNumber({ device: camera.name, name: 'SIMULATOR_NOISE_EXPOSURE', elements: { EXPOSURE_TIME: 0.05 } })
+		client.sendNumber({ device: camera.name, name: 'SIMULATOR_SCENE', elements: { SCENE_SEED: 0x5eed, STAR_DENSITY: 0.001, SEEING: 0, HFD_MIN: 1.5, HFD_MAX: 1.5, FLUX_MIN: 5, FLUX_MAX: 5 } })
+		client.sendNumber({ device: camera.name, name: 'SIMULATOR_NOISE_SENSOR', elements: { READ_NOISE: 0, BIAS_ELECTRONS: 0, BLACK_LEVEL_ELECTRONS: 0, DARK_CURRENT_AT_REFERENCE_TEMP: 0, DARK_SIGNAL_NON_UNIFORMITY: 0 } })
+		client.sendNumber({
+			device: camera.name,
+			name: 'SIMULATOR_NOISE_ARTIFACTS',
+			elements: { FIXED_PATTERN_NOISE_STRENGTH: 0, ROW_NOISE_STRENGTH: 0, COLUMN_NOISE_STRENGTH: 0, BANDING_STRENGTH: 0, HOT_PIXEL_RATE: 0, WARM_PIXEL_RATE: 0, DEAD_PIXEL_RATE: 0 },
+		})
+		client.sendNumber({ device: camera.name, name: 'SIMULATOR_STAR_PLOT_OPTIONS', elements: { BEST_FOCUS: 50000 } })
+		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_ABERRATION_FEATURES', elements: { SENSOR_TILT: true } })
+		client.sendNumber({ device: camera.name, name: 'SIMULATOR_ABERRATION_FOCUS', elements: { FOCUS_RANGE: 4000, TILT: 10, TILT_ANGLE: 0 } })
+
+		await waitUntil(() => camera.frame.width.value === 256 && camera.frame.height.value === 256 && cameraSimulator.activeFocuser?.name === focuser.name)
+		focuserManager.syncTo(focuser, 50000)
+		await waitUntil(() => focuser.position.value === 50000)
+		focuserManager.moveTo(focuser, 49000)
+		await waitUntil(() => focuser.moving)
+		await waitUntil(() => !focuser.moving, 3000, 20)
+		expect(focuserSimulator.effectivePosition).toBe(49000)
+
+		const points: BacklashProbePoint[] = []
+		for (let traveled = 0; traveled <= 900; traveled += 100) {
+			if (traveled > 0) {
+				focuserManager.moveTo(focuser, 49000 + traveled)
+				await waitUntil(() => focuser.moving)
+				await waitUntil(() => !focuser.moving, 3000, 20)
+			}
+
+			points.push({ position: focuser.position.value, traveled, value: await measureMedianHfd(cameraSimulator, frameReceiver), dispersion: 0, sampleCount: 1 })
+		}
+
+		const fit = fitBacklashBreakpoint(points, { probeStep: 100, minimumPlateauPoints: 2, minimumPostBreakPoints: 3, minimumSlope: 1e-5, huberTuning: 1.345 })
+		expect(fit.valid).toBeTrue()
+		expect(Math.abs(fit.breakpoint! - focuserSimulator.backlashOut)).toBeLessThanOrEqual(100)
+		expect(points[0].value).toBeCloseTo(points[3].value, 6)
+		expect(points.at(-1)!.value).toBeLessThan(points[3].value)
+	}, 5000)
 })
 
 describe('backlash run aggregation', () => {

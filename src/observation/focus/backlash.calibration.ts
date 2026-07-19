@@ -296,12 +296,9 @@ function consolidateProbePoints(points: readonly BacklashProbePoint[]) {
 				sampleCount += point.sampleCount
 			}
 
-			positions.sort()
-			values.sort()
-			dispersions.sort()
-			const value = medianOf(values)
+			const value = medianOf(values.sort())
 			const betweenPointMad = medianAbsoluteDeviationOf(values, value, false)
-			consolidated.push({ position: medianOf(positions), traveled: valid[start].traveled, value, dispersion: Math.max(betweenPointMad, medianOf(dispersions)), sampleCount })
+			consolidated.push({ position: medianOf(positions.sort()), traveled: valid[start].traveled, value, dispersion: Math.max(betweenPointMad, medianOf(dispersions.sort())), sampleCount })
 		}
 
 		start = end
@@ -517,15 +514,13 @@ export function aggregateBacklashRuns(runs: readonly BacklashRunResult[]): Backl
 		uncertainties[i] = valid[i].uncertainty!
 	}
 
-	steps.sort()
-	uncertainties.sort()
-	const medianSteps = medianOf(steps)
+	const medianSteps = medianOf(steps.sort())
 	const dispersion = medianAbsoluteDeviationOf(steps, medianSteps, false)
 	return {
 		direction,
 		steps: Math.round(medianSteps),
 		dispersion,
-		uncertainty: Math.max(medianOf(uncertainties), NORMALIZED_MAD_SCALE * dispersion),
+		uncertainty: Math.max(medianOf(uncertainties.sort()), NORMALIZED_MAD_SCALE * dispersion),
 		validRunCount: valid.length,
 		totalRunCount: runs.length,
 		runs: runs.slice(),
@@ -652,13 +647,11 @@ function directionConfidence(result: BacklashDirectionResult, scale: number) {
 		slopeAgreement[i] = preloadSlope * slope < 0 ? Math.min(Math.abs(preloadSlope), Math.abs(slope)) / Math.max(Math.abs(preloadSlope), Math.abs(slope)) : 0
 	}
 
-	nrmse.sort()
-	slopeAgreement.sort()
 	const coverage = result.validRunCount / result.totalRunCount
 	const dispersionScore = 1 / (1 + result.dispersion / scale)
-	const fitScore = 1 / (1 + medianOf(nrmse))
+	const fitScore = 1 / (1 + medianOf(nrmse.sort()))
 	const uncertaintyScore = 1 / (1 + result.uncertainty / scale)
-	const slopeScore = medianOf(slopeAgreement)
+	const slopeScore = medianOf(slopeAgreement.sort())
 	return geometricMean([coverage, dispersionScore, fitScore, uncertaintyScore, slopeScore])
 }
 
@@ -773,7 +766,7 @@ export class BacklashCalibration {
 		this.#pending = undefined
 		if (this.#sampleCount < this.#config.samplesPerPosition) return this.#queueMeasure()
 
-		const sorted = this.#samples.slice().sort()
+		const sorted = this.#samples.toSorted()
 		const median = medianOf(sorted)
 		const point: BacklashProbePoint = {
 			position: this.#currentPosition,
