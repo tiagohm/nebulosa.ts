@@ -26,6 +26,7 @@ import { findOnSwitch, makeBlobVector, makeNumberVector, makeSwitchVector, makeT
 import type { ClientSimulator } from './client'
 import { CAMERA_AMBIENT_TEMPERATURE, CAMERA_BLOB_PADDING, CAMERA_DEFAULT_TARGET_TEMPERATURE, CAMERA_MAX_BIN, CAMERA_MAX_EXPOSURE, CAMERA_MIN_EXPOSURE, CAMERA_PIXEL_SIZE, CAMERA_SCENE_SEED, CAMERA_SENSOR_HEIGHT, CAMERA_SENSOR_WIDTH, GENERAL_INFO, MAIN_CONTROL, SIMULATION, TICK_INTERVAL_MS } from './constants'
 import { DeviceSimulator } from './device'
+import { FocuserSimulator } from './focuser'
 import type { CatalogSource, CatalogSourceStar, CatalogSourceType, DeviceSimulatorOptions, ReadoutMode, SimulatorProperty, TransferFormat } from './types'
 import { applyExclusiveSwitchValues, applyMultiSwitchValues, applyNumberVectorValues } from './util'
 
@@ -232,6 +233,14 @@ export class CameraSimulator extends DeviceSimulator {
 	get activeFocuser() {
 		const focuser = this.#focuserManager?.get(this.client, this.snoopDevices.elements.ACTIVE_FOCUSER.value)
 		return focuser?.connected ? focuser : undefined
+	}
+
+	// Resolves the optical position for a simulated focuser, falling back to its reported motor position.
+	#focusPosition() {
+		const focuser = this.activeFocuser
+		if (!focuser) return undefined
+		const simulator = this.client.get(focuser.name)
+		return simulator instanceof FocuserSimulator ? simulator.effectivePosition : focuser.position.value
 	}
 
 	get activeRotator() {
@@ -726,7 +735,7 @@ export class CameraSimulator extends DeviceSimulator {
 		const pattern = this.#collimationPattern.elements
 		const shape = this.#aberrationShape.elements
 		const focusRange = this.#aberrationFocus.elements.FOCUS_RANGE.value
-		const currentFocus = this.activeFocuser?.position.value ?? this.#plotOptions.elements.FOCUS_STEP.value
+		const currentFocus = this.#focusPosition() ?? this.#plotOptions.elements.FOCUS_STEP.value
 		const bestFocus = this.#plotOptions.elements.BEST_FOCUS.value
 		const globalDefocus = bestFocus === 0 ? 0 : clamp(Math.abs(currentFocus - bestFocus) / focusRange, 0, 1)
 		const obstructionRatio = pattern.OBSTRUCTION_RATIO.value
@@ -975,7 +984,7 @@ export class CameraSimulator extends DeviceSimulator {
 		return {
 			background: this.#plotOptions.elements.BACKGROUND.value,
 			saturationLevel: this.#plotFlags.elements.SATURATION_ENABLED.value ? this.#plotOptions.elements.SATURATION_LEVEL.value : undefined,
-			focusStep: this.activeFocuser?.position.value ?? this.#plotOptions.elements.FOCUS_STEP.value,
+			focusStep: this.#focusPosition() ?? this.#plotOptions.elements.FOCUS_STEP.value,
 			bestFocus: this.#plotOptions.elements.BEST_FOCUS.value,
 			maxFocusStep: this.activeFocuser?.position.max || undefined,
 			peakScale: this.#plotOptions.elements.PEAK_SCALE.value,
@@ -1048,7 +1057,7 @@ export class CameraSimulator extends DeviceSimulator {
 		const sinAngle = rotate ? Math.sin(rotatorAngle) : 0
 		const cosAngle = rotate ? Math.cos(rotatorAngle) : 1
 		const aberration = this.#makeAberrationConfig()
-		const currentFocus = this.activeFocuser?.position.value ?? this.#plotOptions.elements.FOCUS_STEP.value
+		const currentFocus = this.#focusPosition() ?? this.#plotOptions.elements.FOCUS_STEP.value
 		const bestFocus = this.#plotOptions.elements.BEST_FOCUS.value
 		const annularRadius = this.#plotPsfModel.elements.ANNULAR.value ? this.#collimationPattern.elements.MAX_RADIUS.value : 0
 		const annularSoftness = this.#plotPsfModel.elements.ANNULAR.value ? this.#collimationPattern.elements.EDGE_SOFTNESS.value * 8 : 0

@@ -71,59 +71,65 @@ test('reads a JPEG into an explicit 64-bit raw buffer', () => {
 	}
 })
 
-test('read image from fits', async () => {
+describe('read image from fits', () => {
 	for (const bitpix of BITPIXES) {
 		for (const channel of CHANNELS) {
-			const [image, fits] = await readImage(bitpix, channel)
+			test(`bitpix=${bitpix}, channel=${channel}`, async () => {
+				const [image, fits] = await readImage(bitpix, channel)
 
-			expect(image.header).toBe(fits.hdus[0].header)
+				expect(image.header).toBe(fits.hdus[0].header)
 
-			const hash = channel === 1 ? 'c754bf834dc1bb3948ec3cf8b9aca303' : '1ca5a4dd509ee4c67e3a2fbca43f81d4'
+				const hash = channel === 1 ? 'c754bf834dc1bb3948ec3cf8b9aca303' : '1ca5a4dd509ee4c67e3a2fbca43f81d4'
 
-			await readImageTransformAndSave((i) => i, `read-${bitpix}.${channel}`, hash, bitpix, channel)
+				await readImageTransformAndSave((i) => i, `read-${bitpix}.${channel}`, hash, bitpix, channel)
+			})
 		}
 	}
-}, 15000)
+})
 
-test('write image to fits', async () => {
+describe('write image to fits', () => {
 	const buffer = Buffer.allocUnsafe(1024 * 1024 * 18)
 
 	for (const bitpix of BITPIXES) {
 		for (const channel of CHANNELS) {
-			buffer.fill(20)
+			test(`bitpix=${bitpix}, channel=${channel}`, async () => {
+				buffer.fill(20)
 
-			const [a] = await readImage(bitpix, channel)
-			await writeImageToFits(a, bufferSink(buffer))
-			const b = await readImageFromSource(bufferSource(buffer))
+				const [a] = await readImage(bitpix, channel)
+				await writeImageToFits(a, bufferSink(buffer))
+				const b = await readImageFromSource(bufferSource(buffer))
 
-			expect(a.header).toEqual(b!.header)
+				expect(a.header).toEqual(b!.header)
 
-			const hash = channel === 1 ? 'c754bf834dc1bb3948ec3cf8b9aca303' : '1ca5a4dd509ee4c67e3a2fbca43f81d4'
+				const hash = channel === 1 ? 'c754bf834dc1bb3948ec3cf8b9aca303' : '1ca5a4dd509ee4c67e3a2fbca43f81d4'
 
-			await saveImageAndCompareHash(b!, `witf-${bitpix}.${channel}`, hash)
+				await saveImageAndCompareHash(b!, `witf-${bitpix}.${channel}`, hash)
+			})
 		}
 	}
-}, 10000)
+})
 
-test('write image to xisf', async () => {
+describe('write image to xisf', () => {
 	const buffer = Buffer.allocUnsafe(1024 * 1024 * 18)
 
 	for (const bitpix of BITPIXES) {
 		for (const channel of CHANNELS) {
-			buffer.fill(20)
+			test(`bitpix=${bitpix}, channel=${channel}`, async () => {
+				buffer.fill(20)
 
-			const [a] = await readImage(bitpix, channel)
-			await writeImageToXisf(a, bufferSink(buffer))
-			const b = await readImageFromSource(bufferSource(buffer))
+				const [a] = await readImage(bitpix, channel)
+				await writeImageToXisf(a, bufferSink(buffer))
+				const b = await readImageFromSource(bufferSource(buffer))
 
-			expect(a.header).toEqual(b!.header)
+				expect(a.header).toEqual(b!.header)
 
-			const hash = channel === 1 ? 'c754bf834dc1bb3948ec3cf8b9aca303' : '1ca5a4dd509ee4c67e3a2fbca43f81d4'
+				const hash = channel === 1 ? 'c754bf834dc1bb3948ec3cf8b9aca303' : '1ca5a4dd509ee4c67e3a2fbca43f81d4'
 
-			await saveImageAndCompareHash(b!, `witf-${bitpix}.${channel}`, hash)
+				await saveImageAndCompareHash(b!, `witf-${bitpix}.${channel}`, hash)
+			})
 		}
 	}
-}, 10000)
+})
 
 test('histogram on red channel', async () => {
 	const [image] = await readImage(Bitpix.FLOAT, 3)
@@ -183,7 +189,7 @@ test('histogram with transform', async () => {
 })
 
 test('debayer', async () => {
-	const image = await readImageTransformAndSave((i) => stf(debayer(i) ?? i, 0.05), 'debayer-grbg', 'a83991af17528a13a4248add8b406a74', Bitpix.SHORT, 1, 'fit', 'GRBG')
+	const image = await readImageTransformAndSave((i) => stf(debayer(i) ?? i, 0.05), 'debayer-grbg', 'c03d37c612fd1a4c20bfd5036260aeb0', Bitpix.SHORT, 1, 'fit', 'GRBG')
 
 	expect(image.header.NAXIS).toBe(3)
 	expect(image.header.NAXIS3).toBe(3)
@@ -191,7 +197,7 @@ test('debayer', async () => {
 }, 5000)
 
 test('debayer RGBG', async () => {
-	const image = await readImageTransformAndSave((i) => stf(debayer(i, 'RGBG') ?? i, 0.05), 'debayer-rgbg', '7c4bda2a5155e235912660fda310c594', Bitpix.SHORT, 1, 'fit', 'GRBG')
+	const image = await readImageTransformAndSave((i) => stf(debayer(i, 'RGBG') ?? i, 0.05), 'debayer-rgbg', '5e17e6927f823695d26df4758ca870ae', Bitpix.SHORT, 1, 'fit', 'GRBG')
 
 	expect(image.header.NAXIS).toBe(3)
 	expect(image.header.NAXIS3).toBe(3)
@@ -234,11 +240,11 @@ test('clone produces an independent pixel buffer', () => {
 	expect(image.raw[0]).toBeCloseTo(0.1, 8)
 })
 
-test('stf', () => readImageTransformAndSave((i) => stf(i, 0.005), 'stf', '82161af2eac053ad688a161d4e1fc6da'), 5000)
+test('stf', () => readImageTransformAndSave((i) => stf(i, 0.005), 'stf', '0d4c72c8140e27f9823bd5cdd36f9108'), 5000)
 
-test('auto stf', () => readImageTransformAndSave((i) => stf(i, ...adf(i)), 'stf-auto', 'c89314c7f303599568199398d7312372'), 5000)
+test('auto stf', () => readImageTransformAndSave((i) => stf(i, ...adf(i)), 'stf-auto', 'f317ee55154ecb95770fad5df319855b'), 5000)
 
-test('auto stf with sigma clip', () => readImageTransformAndSave((i) => stf(i, ...adf(i, { sigmaClip: sigmaClip(i) })), 'stf-auto-sigma-clip', 'c5a13d1826c35bf30667b95222560ae0'), 5000)
+test('auto stf with sigma clip', () => readImageTransformAndSave((i) => stf(i, ...adf(i, { sigmaClip: sigmaClip(i) })), 'stf-auto-sigma-clip', '64a59c2a47af748ee17106dec7d65e6f'), 5000)
 
 test('sigma clip excludes rejected pixels from the iteration statistics', () => {
 	// Continuous background plus a bright tail: rejection is marginal, so a biased
@@ -394,14 +400,14 @@ test('gamma', () => readImageTransformAndSave((i) => gamma(i, 2.2), 'gamma', '08
 describe('fft', () => {
 	const workspace = new FFTWorkspace(1037, 706)
 
-	test('low-pass', () => readImageTransformAndSave((i) => autoStf(fft(i, workspace, 'lowPass', 0.015, 0.8)), 'fft-low-pass', '56a0759224001a7b3441f1393538921b'), 5000)
+	test('low-pass', () => readImageTransformAndSave((i) => autoStf(fft(i, workspace, 'lowPass', 0.015, 0.8)), 'fft-low-pass', 'a73e40cb9a87bb3ebf5cc004cc55c27b'), 5000)
 
-	test('high-pass', () => readImageTransformAndSave((i) => autoStf(fft(i, workspace, 'highPass', 0.5, 0.3)), 'fft-high-pass', '16478c59f81f07e8cb82b2f4246c304a'), 5000)
+	test('high-pass', () => readImageTransformAndSave((i) => autoStf(fft(i, workspace, 'highPass', 0.5, 0.3)), 'fft-high-pass', '3ec4f47c7e52a4a6b36374bd3dd199c9'), 5000)
 })
 
 test('arcsinh stretch', () => readImageTransformAndSave((i) => arcsinhStretch(i, approximateArcsinhStretchParameters(...adf(i))), 'arcsinh', 'f2eaccfae404773ebd06f1200fb67c10'))
 
-test('background neutralization', () => readImageTransformAndSave((i) => autoStf(backgroundNeutralization(i, { upperLimit: 0.1 })), 'background-neutralization', '123c3c9df7ca332a67098b7eeed55981'))
+test('background neutralization', () => readImageTransformAndSave((i) => autoStf(backgroundNeutralization(i, { upperLimit: 0.1 })), 'background-neutralization', 'e7fb3b8cd06488553d031996c2ec93db'))
 
 test('mmt', () => {
 	const options: MultiscaleMedianTransformOptions = {
@@ -410,32 +416,32 @@ test('mmt', () => {
 		residualGain: 1,
 	}
 
-	return readImageTransformAndSave((i) => autoStf(multiscaleMedianTransform(i, options)), 'mmt', 'b9bdeda38c1423468f6602451144546e')
+	return readImageTransformAndSave((i) => autoStf(multiscaleMedianTransform(i, options)), 'mmt', '75f6a6dc50e4890dbc7b8916a87c3974')
 }, 5000)
 
-test('curves transformation - mono', () => readImageTransformAndSave((i) => autoStf(curvesTransformation(i, { curves: [{ channel: 'GRAY', x: [0.007], y: [0.08] }] })), 'ct-mono', 'f51a8f097b44ddebbedc8bea320f1c43', undefined, 1))
+test('curves transformation - mono', () => readImageTransformAndSave((i) => autoStf(curvesTransformation(i, { curves: [{ channel: 'GRAY', x: [0.007], y: [0.08] }] })), 'ct-mono', '7fd7e8ef10d688a64b905e9671e9503d', undefined, 1))
 
 describe('curves transformation - RGB', () => {
 	const scenarios: { name: string; curves: readonly CurvesTransformationCurve[]; hash: string }[] = [
 		{
 			name: 'gray-shadow-lift',
 			curves: [{ channel: 'GRAY', x: [0.004], y: [0.08] }],
-			hash: 'ed36b22d4cec83e486c2d8c50cce1712',
+			hash: 'a931450ac42ab34f931c0a0069058163',
 		},
 		{
 			name: 'red-boost',
 			curves: [{ channel: 'RED', x: [0.02, 0.55], y: [0.08, 0.72] }],
-			hash: '988dc15d5063fe08095df263ac813f17',
+			hash: '080912985f503dc8c7bc15e8156dbc0b',
 		},
 		{
 			name: 'green-boost',
 			curves: [{ channel: 'GREEN', x: [0.02, 0.55], y: [0.08, 0.72] }],
-			hash: '52950fe45e3ad347728c749d9d754690',
+			hash: '00a5c89440cc98a03afe7ec19a8c2427',
 		},
 		{
 			name: 'blue-boost',
 			curves: [{ channel: 'BLUE', x: [0.02, 0.55], y: [0.08, 0.72] }],
-			hash: '3f8f1daad375e0e1db743708db27297d',
+			hash: 'b7967091ab99ca6129be54578c47e4ed',
 		},
 		{
 			name: 'warm-balance',
@@ -443,7 +449,7 @@ describe('curves transformation - RGB', () => {
 				{ channel: 'RED', x: [0.03, 0.45], y: [0.1, 0.6] },
 				{ channel: 'BLUE', x: [0.08, 0.6], y: [0.04, 0.52] },
 			],
-			hash: 'bd0df21275ecf5044728d20f52ffae80',
+			hash: '56efb76c5dbed093cfeb6f9daf9453e7',
 		},
 		{
 			name: 'cool-balance',
@@ -451,7 +457,7 @@ describe('curves transformation - RGB', () => {
 				{ channel: 'RED', x: [0.08, 0.6], y: [0.04, 0.52] },
 				{ channel: 'BLUE', x: [0.03, 0.45], y: [0.1, 0.6] },
 			],
-			hash: '94286951a92691c5b6b2b138ca8bbf67',
+			hash: 'be6b4d12d47f10092eace7e5dc5f7def',
 		},
 	]
 
@@ -480,17 +486,17 @@ describe('calibrate', async () => {
 	const darkFlat = await readImageFromPath('data/DARKFLAT.fit')
 
 	test('full', async () => {
-		const calibrated = calibrate(clone(light!), dark, flat, bias, darkFlat)
-		await saveImageAndCompareHash(stf(calibrated, ...adf(calibrated)), 'calibrated-full', '1e63852e5eee85471ae22f974b3393d1')
+		const calibrated = calibrate(clone(light!), { dark, flat, bias, darkFlat })
+		await saveImageAndCompareHash(stf(calibrated, ...adf(calibrated)), 'calibrated-full', '5ec5a07ca2bdcf4d7e66bc2d120bf520')
 	})
 
 	test('dark 60s', async () => {
-		const calibrated = calibrate(clone(light!), dark60, flat, bias, darkFlat)
-		await saveImageAndCompareHash(stf(calibrated, ...adf(calibrated)), 'calibrated-dark-60', 'b9f99a73a3920198ac8661a27f8c40f0')
+		const calibrated = calibrate(clone(light!), { dark: dark60, flat, bias, darkFlat })
+		await saveImageAndCompareHash(stf(calibrated, ...adf(calibrated)), 'calibrated-dark-60', '539f2b3e0c5afb37dc04ce0e0bded4c1')
 	}, 5000)
 
 	test('dark 15s', async () => {
-		const calibrated = calibrate(clone(light!), dark15, flat, bias, darkFlat)
-		await saveImageAndCompareHash(stf(calibrated, ...adf(calibrated)), 'calibrated-dark-15', '1d3b04aad4b720ec72b5eb46775c75c1')
+		const calibrated = calibrate(clone(light!), { dark: dark15, flat, bias, darkFlat })
+		await saveImageAndCompareHash(stf(calibrated, ...adf(calibrated)), 'calibrated-dark-15', 'b72aa07a6c3269a10b72e363acd8cac0')
 	}, 5000)
 })

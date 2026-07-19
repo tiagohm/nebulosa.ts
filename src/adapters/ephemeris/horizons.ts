@@ -1,5 +1,5 @@
-import { formatTemporal, type Temporal } from '../../astronomy/time/temporal'
-import type { Time } from '../../astronomy/time/time'
+import { formatTemporal, temporalGet, type Temporal } from '../../astronomy/time/temporal'
+import { toJulianDay, type Time } from '../../astronomy/time/time'
 import { type ReadCsvOptions, readCsv } from '../../io/csv'
 import { type Angle, toDeg } from '../../math/units/angle'
 import { type Distance, toKilometer } from '../../math/units/distance'
@@ -352,8 +352,7 @@ export async function observer(input: string | ObserverWithOsculatingElements | 
 	makeParametersFromQuantities(parameters, quantities)
 	makeParametersFromOptions(parameters, options)
 	parameters.CSV_FORMAT = 'YES'
-	const response = await makeRequestAndGetResponse(parameters, 'text')
-	return parseCsvTable(await response.text(), options)
+	return await makeRequestAndGetResponseWithRetry(input, startTime, parameters, options)
 }
 
 // Requests a state-vector ephemeris for `input` over [startTime, endTime] and returns the parsed CSV rows.
@@ -365,7 +364,9 @@ export async function vector(input: string | ObserverWithOsculatingElements | Ob
 	makeParametersFromOptions(parameters, options)
 	parameters.CSV_FORMAT = 'YES'
 	const response = await makeRequestAndGetResponse(parameters, 'text')
-	return parseCsvTable(await response.text(), options)
+	const identification = identifyTable(await response.text())
+	if (identification?.kind === 'ephemeris') return parseEphemerisTable(identification, options)
+	return await makeRequestAndGetResponseWithRetry(input, startTime, parameters, options)
 }
 
 // Requests an osculating-elements ephemeris for `input` over [startTime, endTime] and returns the parsed CSV rows.
@@ -376,8 +377,7 @@ export async function elements(input: string | ObserverWithOsculatingElements | 
 	makeParametersFromStartAndStopTime(parameters, startTime, endTime)
 	makeParametersFromOptions(parameters, options)
 	parameters.CSV_FORMAT = 'YES'
-	const response = await makeRequestAndGetResponse(parameters, 'text')
-	return parseCsvTable(await response.text(), options)
+	return await makeRequestAndGetResponseWithRetry(input, startTime, parameters, options)
 }
 
 // Requests an SPK binary kernel for the small body designation `id` over [startTime, endTime].
@@ -387,6 +387,30 @@ export async function spkFile(id: number, startTime: Temporal | Time, endTime: T
 	makeParametersFromStartAndStopTime(parameters, startTime, endTime)
 	const response = await makeRequestAndGetResponse(parameters, 'json')
 	return (await response.json()) as SpkFile
+}
+
+async function makeRequestAndGetResponseWithRetry(input: string | ObserverWithOsculatingElements | ObserverWithTLE, time: Temporal | Time, parameters: HorizonsQueryParameters, options: ObserverVectorElementsOptions) {
+	const response = await makeRequestAndGetResponse(parameters, 'text')
+	const identification = identifyTable(await response.text())
+
+	if (identification?.kind === 'ephemeris') return parseEphemerisTable(identification, options)
+	else if (typeof input === 'string' && identification?.kind === 'smallBodyMatch') {
+		const retryPlan = analyzeSmallBodyMatches(identification.matches)
+
+		if (retryPlan !== undefined) {
+			if (retryPlan.useNoFrag && !input.includes(';NOFRAG')) input += 'NOFRAG;'
+			if (retryPlan.useCap && !input.includes(';CAP')) {
+				if (typeof time === 'number') input += `CAP<${temporalGet(time, 'y')};`
+				else input += `CAP<${toJulianDay(time).toFixed(1)};`
+			}
+			makeParametersFromInput(parameters, input)
+			const response = await makeRequestAndGetResponse(parameters, 'text')
+			const identification = identifyTable(await response.text())
+			if (identification?.kind === 'ephemeris') return parseEphemerisTable(identification, options)
+		}
+	}
+
+	return []
 }
 
 // Sets the COMMAND/target parameters from a target name, TLE, or osculating-element input.
@@ -539,22 +563,175 @@ const START_TABLE_PREFIX = '$$SOE'
 // Marker line ending the ephemeris data block.
 const END_TABLE_PREFIX = '$$EOE'
 
-// Extracts the CSV rows between the $$SOE/$$EOE markers (with their header) from a Horizons text response.
-function parseCsvTable(text: string, options: ObserverVectorElementsOptions) {
+interface EphemerisTable {
+	readonly kind: 'ephemeris'
+	// start and end index of ephemeris data block prefixes.
+	readonly startIndex: number
+	readonly endIndex: number
+	readonly lines: string[]
+}
+
+interface SmallBodyMatch {
+	readonly record: number
+	readonly epochYear?: number
+	readonly matchDesignation: string
+	readonly primaryDesignation: string
+	readonly name: string
+}
+
+interface SmallBodyMatchTable {
+	readonly kind: 'smallBodyMatch'
+	readonly matches: readonly SmallBodyMatch[]
+}
+
+function identifyTable(text: string): EphemerisTable | SmallBodyMatchTable | undefined {
 	const lines = text.split('\n')
-	const start = lines.findIndex((e) => e.startsWith(START_TABLE_PREFIX))
 
-	if (start >= 3) lines.splice(0, start - 2)
-	else return []
+	// Ephemeris start/end blocks
+	const startIndex = lines.findIndex((e) => e.startsWith(START_TABLE_PREFIX))
+	const endIndex = lines.findLastIndex((e) => e.startsWith(END_TABLE_PREFIX))
 
-	const end = lines.findLastIndex((e) => e.startsWith(END_TABLE_PREFIX))
+	if (startIndex >= 0 && endIndex > startIndex) {
+		if (startIndex >= 3) {
+			const content = lines.slice(startIndex + 1, endIndex)
+			content.splice(0, 0, lines[startIndex - 2]) // Add the header line
+			return { kind: 'ephemeris', startIndex, endIndex, lines: content } as const
+		}
+	} else if (lines.some((e) => e.includes('Small-body Index Search Results')) && !lines.some((e) => e.includes('No matches found'))) {
+		const headerIndex = lines.findIndex((line) => line.includes('Record #') && line.includes('Epoch-yr') && line.includes('>MATCH DESIG<') && line.includes('Primary Desig') && line.includes('Name'))
 
-	if (end > 0) lines.splice(end, lines.length - end)
-	else return []
+		if (headerIndex >= 0) {
+			const header = lines[headerIndex].trim()
+			const recordStart = header.indexOf('Record #')
+			const epochStart = header.indexOf('Epoch-yr')
+			const matchStart = header.indexOf('>MATCH DESIG<')
+			const primaryStart = header.indexOf('Primary Desig')
+			const nameStart = header.indexOf('Name', primaryStart + 13)
+			const matches: SmallBodyMatch[] = []
 
-	lines.splice(1, 2)
+			if (recordStart >= 0 && epochStart > recordStart && matchStart > recordStart && primaryStart > recordStart && nameStart > primaryStart) {
+				for (let i = headerIndex + 2; i < lines.length; i++) {
+					const line = lines[i].trim()
 
-	return lines.length <= 1 ? [] : readCsv(lines, options)
+					if (line.length === 0) continue
+
+					const footer = line.includes(' matches')
+
+					if (footer) break
+
+					const recordText = line.slice(recordStart, epochStart).trim()
+					const epochText = line.slice(epochStart, matchStart).trim()
+					const matchDesignation = line.slice(matchStart, primaryStart).trim()
+					const primaryDesignation = line.slice(primaryStart, nameStart).trim()
+					const name = line.slice(nameStart).trim()
+
+					matches.push({
+						record: Math.trunc(Number(recordText)),
+						epochYear: Math.trunc(Number(epochText)) || undefined,
+						matchDesignation,
+						primaryDesignation,
+						name,
+					})
+				}
+
+				return { kind: 'smallBodyMatch', matches }
+			}
+		}
+	}
+}
+
+interface HorizonsRetryPlan {
+	readonly reason: 'multipleApparitions' | 'fragments' | 'fragmentsAndMultipleApparitions'
+	readonly useCap: boolean
+	readonly useNoFrag: boolean
+	readonly parentDesignation: string
+}
+
+function analyzeSmallBodyMatches(matches: readonly SmallBodyMatch[]): HorizonsRetryPlan | undefined {
+	const groups = groupByPrimaryDesignation(matches)
+	const designations = [...groups.keys()]
+
+	if (designations.length === 1) {
+		const designation = designations[0]
+		const group = groups.get(designation)!
+
+		if (group.length > 1 && isCometDesignation(designation)) {
+			return { reason: 'multipleApparitions', useCap: true, useNoFrag: false, parentDesignation: designation }
+		}
+
+		return undefined
+	}
+
+	const familyCandidates = designations
+		.map((parent) => {
+			const members = designations.filter((candidate) => candidate === parent || isFragmentOf(candidate, parent))
+			return { parent, members }
+		})
+		.filter((family) => family.members.length > 1 && family.members.length === designations.length && isCometDesignation(family.parent))
+
+	if (familyCandidates.length !== 1) {
+		return undefined
+	}
+
+	const family = familyCandidates[0]
+	const parentMatches = groups.get(family.parent)!
+
+	const multipleParentApparitions = parentMatches.length > 1
+
+	return {
+		reason: multipleParentApparitions ? 'fragmentsAndMultipleApparitions' : 'fragments',
+		useCap: multipleParentApparitions,
+		useNoFrag: true,
+		parentDesignation: family.parent,
+	}
+}
+
+function canonicalDesignation(value: string) {
+	return value.trim().replaceAll(/\s+/g, ' ').toUpperCase()
+}
+
+function isCometDesignation(value: string) {
+	const designation = canonicalDesignation(value)
+
+	// 1P, 10P, 3D, 73P-B, 73P-BB...
+	if (/^\d+[PD](?:-[A-Z0-9]+)?$/.test(designation)) {
+		return true
+	}
+
+	// C/2023 A3, P/2010 A2, D/1993 F2-C...
+	if (/^[PCDX]\/\d{4}\s+[A-Z]\d+(?:-[A-Z0-9]+)?$/.test(designation)) {
+		return true
+	}
+
+	return false
+}
+
+function isFragmentOf(candidate: string, parent: string): boolean {
+	const normalizedCandidate = canonicalDesignation(candidate)
+	const normalizedParent = canonicalDesignation(parent)
+	return normalizedCandidate.startsWith(`${normalizedParent}-`)
+}
+
+function groupByPrimaryDesignation(matches: readonly SmallBodyMatch[]) {
+	const groups = new Map<string, SmallBodyMatch[]>()
+
+	for (const match of matches) {
+		const designation = canonicalDesignation(match.primaryDesignation)
+		const group = groups.get(designation)
+
+		if (group) {
+			group.push(match)
+		} else {
+			groups.set(designation, [match])
+		}
+	}
+
+	return groups
+}
+
+// Extracts the CSV rows between the $$SOE/$$EOE markers (with their header) from a Horizons text response.
+function parseEphemerisTable(table: EphemerisTable, options: ObserverVectorElementsOptions) {
+	return readCsv(table.lines, options)
 }
 
 // Base parameters shared by every request (generate ephemeris, no object summary).

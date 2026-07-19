@@ -1,5 +1,5 @@
-import { expect, test } from 'bun:test'
-import type { Image } from '../../../src/imaging/model/types'
+import { expect, describe, test } from 'bun:test'
+import type { CfaPattern, Image } from '../../../src/imaging/model/types'
 import { bayer, debayer } from '../../../src/imaging/processing/debayer'
 import { Bitpix } from '../../../src/io/formats/fits/fits'
 import { expectImageValues, makeImage } from './util'
@@ -14,6 +14,7 @@ test('bayer converts RGB pixels into a mono CFA frame', () => {
 	expect(output!.header.BAYERPAT).toBe('RGGB')
 	expect(output!.metadata.channels).toBe(1)
 	expect(output!.metadata.stride).toBe(2)
+	expect(output!.metadata.strideInBytes).toBe(output!.metadata.width * output!.metadata.channels * output!.metadata.pixelSizeInBytes)
 	expect(output!.metadata.bayer).toBe('RGGB')
 	expectImageValues(output!, [1, 5, 8, 12], 8)
 })
@@ -34,11 +35,13 @@ test('bayer and debayer preserve Float64 storage', () => {
 
 	expect(cfa).toBeDefined()
 	expect(cfa!.raw instanceof Float64Array).toBe(true)
+	expect(cfa!.metadata.strideInBytes).toBe(16)
 
 	const output = debayer(cfa!)
 
 	expect(output).toBeDefined()
 	expect(output!.raw instanceof Float64Array).toBe(true)
+	expect(output!.metadata.strideInBytes).toBe(48)
 })
 
 test('debayer reconstructs RGB samples from the stored CFA pattern', () => {
@@ -54,7 +57,27 @@ test('debayer reconstructs RGB samples from the stored CFA pattern', () => {
 	expect(output!.header.NAXIS3).toBe(3)
 	expect(output!.metadata.channels).toBe(3)
 	expect(output!.metadata.stride).toBe(9)
+	expect(output!.metadata.strideInBytes).toBe(output!.metadata.width * output!.metadata.channels * output!.metadata.pixelSizeInBytes)
 	expectImageValues(output!, [11, 32, 53, 21, 42, 53, 31, 42, 53, 41, 48.66666793823242, 53, 51, 52, 53, 61, 55.33333206176758, 53, 71, 62, 53, 81, 62, 53, 91, 72, 53], 6)
+})
+
+describe('bayer and debayer handle every CFA pattern and odd image dimensions', () => {
+	const patterns: readonly CfaPattern[] = ['RGGB', 'BGGR', 'GBRG', 'GRBG', 'GRGB', 'GBGR', 'RGBG', 'BGRG']
+	const pixel = [0.125, 0.5, 0.875]
+	const values = Array.from({ length: 5 * 5 }, () => pixel).flat()
+	const expected = Array.from({ length: 5 * 5 }, () => pixel).flat()
+	const image = makeImage(5, 5, 3, values)
+
+	for (const pattern of patterns) {
+		test(pattern, () => {
+			const cfa = bayer(image, pattern)
+			const output = cfa && debayer(cfa)
+
+			expect(cfa).toBeDefined()
+			expect(output).toBeDefined()
+			expectImageValues(output!, expected, 8)
+		})
+	}
 })
 
 test('debayer returns undefined when no CFA pattern is available', () => {
@@ -67,4 +90,10 @@ test('debayer handles small 2x2 CFA images through the border path', () => {
 	const output = debayer(image)
 	expect(output).toBeDefined()
 	expectImageValues(output!, [1, 2.5, 4, 1, 2.5, 4, 1, 2.5, 4, 1, 2.5, 4], 6)
+})
+
+test('debayer rejects CFA images that cannot contain a complete 2x2 pattern', () => {
+	expect(debayer(makeImage(1, 1, 1, [1], { BAYERPAT: 'RGGB' }))).toBeUndefined()
+	expect(debayer(makeImage(1, 2, 1, [1, 2], { BAYERPAT: 'RGGB' }))).toBeUndefined()
+	expect(debayer(makeImage(2, 1, 1, [1, 2], { BAYERPAT: 'RGGB' }))).toBeUndefined()
 })

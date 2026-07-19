@@ -1,19 +1,31 @@
 import { TAU } from '../../../core/constants'
+import { validateInRange } from '../../../core/validation'
 import { clamp } from '../../../math/numerical/math'
 import { normalizeAngle } from '../../../math/units/angle'
 import type { IndiClientHandler } from '../client'
 import { DeviceInterfaceType } from '../device'
 import { makeNumberVector, makeSwitchVector, type NewNumberVector, type NewSwitchVector } from '../types'
 import type { ClientSimulator } from './client'
-import { CAMERA_AMBIENT_TEMPERATURE, FOCUSER_INITIAL_POSITION, FOCUSER_MAX_POSITION, FOCUSER_MOVE_RATE, FOCUSER_TEMPERATURE_AMPLITUDE, FOCUSER_TEMPERATURE_COMPENSATION_HYSTERESIS, FOCUSER_TEMPERATURE_COMPENSATION_STEPS, FOCUSER_TEMPERATURE_PERIOD_SECONDS, MAIN_CONTROL, TICK_INTERVAL_MS } from './constants'
+import { CAMERA_AMBIENT_TEMPERATURE, FOCUSER_INITIAL_POSITION, FOCUSER_MAX_POSITION, FOCUSER_MOVE_RATE, FOCUSER_TEMPERATURE_AMPLITUDE, FOCUSER_TEMPERATURE_COMPENSATION_HYSTERESIS, FOCUSER_TEMPERATURE_COMPENSATION_STEPS, FOCUSER_TEMPERATURE_PERIOD_SECONDS, MAIN_CONTROL, SIMULATION, TICK_INTERVAL_MS } from './constants'
 import { DeviceSimulator } from './device'
 import type { DeviceSimulatorOptions, SimulatorProperty } from './types'
-import { applyExclusiveSwitchValues } from './util'
+import { applyExclusiveSwitchValues, applyNumberVectorValues } from './util'
 
-// Simulated focuser motion, ambient temperature, and temperature compensation.
+// Simulated focuser motion, mechanical backlash, ambient temperature, and temperature compensation.
+
+// Direction of motor travel, with zero denoting a mechanism that has not yet engaged either side.
+type FocuserAxisDirection = -1 | 0 | 1
+
+// Configures persistence and direction-dependent lost motion for a simulated focuser.
+export interface FocuserSimulatorOptions extends DeviceSimulatorOptions {
+	// Motor travel in steps consumed before effective motion resumes in the inward/decreasing direction.
+	readonly backlashIn?: number
+	// Motor travel in steps consumed before effective motion resumes in the outward/increasing direction.
+	readonly backlashOut?: number
+}
 
 // Simulated focuser. Models absolute/relative moves at a fixed rate, reverse, a sinusoidal temperature,
-// and temperature compensation, advancing the position each tick.
+// direction-dependent backlash, and temperature compensation, advancing the position each tick.
 export class FocuserSimulator extends DeviceSimulator {
 	readonly type = 'focuser'
 
@@ -25,23 +37,29 @@ export class FocuserSimulator extends DeviceSimulator {
 	readonly #sync = makeNumberVector('', 'FOCUS_SYNC', 'Sync', MAIN_CONTROL, 'rw', ['FOCUS_SYNC_VALUE', 'Position', FOCUSER_INITIAL_POSITION, 0, FOCUSER_MAX_POSITION, 1, '%.0f'])
 	readonly #temperature = makeNumberVector('', 'FOCUS_TEMPERATURE', 'Temperature', MAIN_CONTROL, 'ro', ['TEMPERATURE', 'Temperature', CAMERA_AMBIENT_TEMPERATURE, -50, 70, 0.1, '%6.2f'])
 	readonly #temperatureCompensation = makeSwitchVector('', 'FOCUS_TEMPERATURE_COMPENSATION', 'Temperature Compensation', MAIN_CONTROL, 'OneOfMany', 'rw', ['INDI_ENABLED', 'On', false], ['INDI_DISABLED', 'Off', true])
+	readonly #backlash = makeNumberVector('', 'SIMULATOR_BACKLASH', 'Backlash', SIMULATION, 'rw', ['BACKLASH_IN', 'In (steps)', 0, 0, FOCUSER_MAX_POSITION, 1, '%.0f'], ['BACKLASH_OUT', 'Out (steps)', 0, 0, FOCUSER_MAX_POSITION, 1, '%.0f'])
 
-	protected readonly properties: readonly SimulatorProperty[] = [this.#position, this.#relativePosition, this.#motion, this.#abort, this.#reverse, this.#sync, this.#temperature, this.#temperatureCompensation]
-	protected propertiesToNotSave: readonly SimulatorProperty[] = this.properties.filter((e) => e !== this.#reverse && e !== this.#motion)
+	protected readonly properties: readonly SimulatorProperty[] = [this.#position, this.#relativePosition, this.#motion, this.#abort, this.#reverse, this.#sync, this.#temperature, this.#temperatureCompensation, this.#backlash]
+	protected propertiesToNotSave: readonly SimulatorProperty[] = this.properties.filter((e) => e !== this.#reverse && e !== this.#motion && e !== this.#backlash)
 
 	#timer?: NodeJS.Timeout
 	#lastTick = 0
 	#targetPosition?: number
+	#effectivePosition = FOCUSER_INITIAL_POSITION
+	#engagedDirection: FocuserAxisDirection = 0
+	#slackTravel = 0
 	#temperaturePhase = 0
 	#lastCompensationTemperature = CAMERA_AMBIENT_TEMPERATURE
 
 	constructor(
 		name: string,
 		client: ClientSimulator,
-		readonly options?: DeviceSimulatorOptions,
+		readonly options?: FocuserSimulatorOptions,
 		handler: IndiClientHandler = client.handler,
 	) {
 		super(name, client, handler, DeviceInterfaceType.FOCUSER)
+		this.#backlash.elements.BACKLASH_IN.value = validateInRange(options?.backlashIn ?? 0, 0, FOCUSER_MAX_POSITION)
+		this.#backlash.elements.BACKLASH_OUT.value = validateInRange(options?.backlashOut ?? 0, 0, FOCUSER_MAX_POSITION)
 
 		for (const property of this.properties) {
 			property.device = name
@@ -53,6 +71,21 @@ export class FocuserSimulator extends DeviceSimulator {
 	// Current absolute position (steps).
 	get position() {
 		return this.#position.elements.FOCUS_ABSOLUTE_POSITION.value
+	}
+
+	// Current effective optical position after mechanical backlash is applied, in steps.
+	get effectivePosition() {
+		return this.#effectivePosition
+	}
+
+	// Configured lost motion before effective inward/decreasing travel resumes, in steps.
+	get backlashIn() {
+		return this.#backlash.elements.BACKLASH_IN.value
+	}
+
+	// Configured lost motion before effective outward/increasing travel resumes, in steps.
+	get backlashOut() {
+		return this.#backlash.elements.BACKLASH_OUT.value
 	}
 
 	// Whether a move is in progress.
@@ -81,6 +114,13 @@ export class FocuserSimulator extends DeviceSimulator {
 				return
 			case 'FOCUS_SYNC':
 				if (vector.elements.FOCUS_SYNC_VALUE !== undefined) this.syncTo(vector.elements.FOCUS_SYNC_VALUE)
+				return
+			case 'SIMULATOR_BACKLASH':
+				if (applyNumberVectorValues(this.#backlash, vector.elements)) {
+					this.#engagedDirection = 0
+					this.#slackTravel = 0
+					this.notify(this.#backlash)
+				}
 		}
 	}
 
@@ -173,6 +213,9 @@ export class FocuserSimulator extends DeviceSimulator {
 		position = clamp(position, this.#position.elements.FOCUS_ABSOLUTE_POSITION.min, this.#position.elements.FOCUS_ABSOLUTE_POSITION.max)
 		this.#sync.elements.FOCUS_SYNC_VALUE.value = position
 		this.#position.elements.FOCUS_ABSOLUTE_POSITION.value = position
+		this.#effectivePosition = position
+		this.#engagedDirection = 0
+		this.#slackTravel = 0
 		this.#relativePosition.elements.FOCUS_RELATIVE_POSITION.value = 0
 		this.stop(false)
 		this.notify(this.#sync)
@@ -211,6 +254,7 @@ export class FocuserSimulator extends DeviceSimulator {
 		const step = FOCUSER_MOVE_RATE * dtSeconds
 
 		if (Math.abs(delta) <= step) {
+			this.#advanceEffectivePosition(delta)
 			this.#position.elements.FOCUS_ABSOLUTE_POSITION.value = this.#targetPosition
 			this.#relativePosition.elements.FOCUS_RELATIVE_POSITION.value = 0
 			this.#targetPosition = undefined
@@ -221,10 +265,45 @@ export class FocuserSimulator extends DeviceSimulator {
 		}
 
 		const next = current + Math.sign(delta) * step
+		this.#advanceEffectivePosition(next - current)
 		this.#position.elements.FOCUS_ABSOLUTE_POSITION.value = next
 		this.#relativePosition.elements.FOCUS_RELATIVE_POSITION.value = Math.abs(this.#targetPosition - next)
 		this.notify(this.#position)
 		this.notify(this.#relativePosition)
+	}
+
+	// Applies signed motor travel to the effective position while preserving partially consumed slack.
+	#advanceEffectivePosition(travel: number) {
+		if (travel === 0) return
+
+		const direction = Math.sign(travel) as Exclude<FocuserAxisDirection, 0>
+		let remaining = Math.abs(travel)
+
+		if (this.#engagedDirection === 0) {
+			this.#engagedDirection = direction
+			this.#effectivePosition = clamp(this.#effectivePosition + travel, this.#position.elements.FOCUS_ABSOLUTE_POSITION.min, this.#position.elements.FOCUS_ABSOLUTE_POSITION.max)
+			return
+		}
+
+		if (direction === this.#engagedDirection) {
+			const recovered = Math.min(remaining, this.#slackTravel)
+			this.#slackTravel -= recovered
+			remaining -= recovered
+			if (remaining > 0) this.#effectivePosition += direction * remaining
+		} else {
+			const backlash = direction < 0 ? this.backlashIn : this.backlashOut
+			const consumed = Math.min(remaining, Math.max(0, backlash - this.#slackTravel))
+			this.#slackTravel += consumed
+			remaining -= consumed
+
+			if (this.#slackTravel >= backlash) {
+				this.#engagedDirection = direction
+				this.#slackTravel = 0
+				if (remaining > 0) this.#effectivePosition += direction * remaining
+			}
+		}
+
+		this.#effectivePosition = clamp(this.#effectivePosition, this.#position.elements.FOCUS_ABSOLUTE_POSITION.min, this.#position.elements.FOCUS_ABSOLUTE_POSITION.max)
 	}
 
 	// Updates the moving state reflected by both focuser motion vectors.

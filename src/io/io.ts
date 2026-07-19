@@ -42,9 +42,10 @@ export function isSeekable(o: object): o is Seekable {
 	return 'seek' in o
 }
 
-// A sequential byte target. Returns the number of bytes actually written (possibly as a promise).
+// A sequential byte target. Returns the number of source bytes consumed (possibly as a promise);
+// transforming sinks expose encoded-output counts separately.
 export interface Sink {
-	// Writes `size` bytes of `chunk` starting at `offset`, decoding strings with `encoding`; returns the byte count written.
+	// Writes `size` bytes of `chunk` starting at `offset`, decoding strings with `encoding`; returns source bytes consumed.
 	readonly write: (chunk: string | Buffer, offset?: number, size?: number, encoding?: BufferEncoding) => Promise<number> | number
 }
 
@@ -497,6 +498,7 @@ export class Base64Sink implements Sink {
 	readonly #encoded = Buffer.allocUnsafe(128)
 	#state = 0
 	#position = 0
+	#encodedSize = 0
 	readonly #sink: Sink
 
 	constructor(sink: Sink, alphabet: Base64Alphabet = 'base64') {
@@ -510,7 +512,6 @@ export class Base64Sink implements Sink {
 		let data: Buffer
 		let start = 0
 		let end = 0
-		let n = 0
 
 		if (typeof chunk === 'string') {
 			if (size === undefined && !offset) data = Buffer.from(chunk, encoding)
@@ -528,19 +529,24 @@ export class Base64Sink implements Sink {
 			this.#encode(data[i])
 
 			if (this.#position >= BASE64_ENCODED_BUFFER_SIZE - 1) {
-				n += this.#position
-				await this.#sink.write(this.#encoded, 0, this.#position)
+				await writeFully(this.#sink, this.#encoded, this.#position)
+				this.#encodedSize += this.#position
 				this.#position = 0
 			}
 		}
 
 		if (this.#position > 0) {
-			n += this.#position
-			await this.#sink.write(this.#encoded, 0, this.#position)
+			await writeFully(this.#sink, this.#encoded, this.#position)
+			this.#encodedSize += this.#position
 			this.#position = 0
 		}
 
-		return n
+		return Math.max(0, end - start)
+	}
+
+	// Total encoded bytes emitted to the wrapped sink, including padding written by end().
+	get encodedSize() {
+		return this.#encodedSize
 	}
 
 	#encode(b: number) {
@@ -590,7 +596,8 @@ export class Base64Sink implements Sink {
 				this.#encoded.writeUInt8(TRAILING, n++)
 			}
 
-			await this.#sink.write(this.#encoded, 0, n)
+			await writeFully(this.#sink, this.#encoded, n)
+			this.#encodedSize += n
 			this.#state = 0
 		}
 
@@ -616,6 +623,21 @@ export async function readUntil(source: Source, buffer: Buffer, size: number = b
 	}
 
 	return size - remaining
+}
+
+// Writes exactly `size` bytes from `buffer`, retrying partial sink writes from the advanced source offset.
+// Throws when the sink stops making progress or reports an invalid byte count.
+export async function writeFully(sink: Sink, buffer: Buffer, size: number = buffer.byteLength, offset: number = 0) {
+	let remaining = size
+
+	while (remaining > 0) {
+		const n = await sink.write(buffer, offset, remaining)
+		if (!Number.isInteger(n) || n <= 0 || n > remaining) throw new Error('sink failed to complete write')
+		remaining -= n
+		offset += n
+	}
+
+	return size
 }
 
 // Reads the source to exhaustion and returns all remaining bytes as a single Buffer.

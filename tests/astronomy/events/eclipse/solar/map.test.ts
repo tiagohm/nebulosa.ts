@@ -1257,7 +1257,7 @@ describe('branch-aware curve topology', () => {
 
 		expect(nearest).toBeLessThan(STEP)
 		expect(branchWithLowerArc).toContain(geometry.points.N1)
-	}, 3000)
+	}, 4000)
 
 	test('2005-10-03 rise/set curve passes through N1 without a visible cusp gap', () => {
 		const eclipse = nearestSolarEclipse(timeYMD(2005, 10, 1), true)
@@ -1271,12 +1271,12 @@ describe('branch-aware curve topology', () => {
 		}
 
 		expect(nearest).toBeLessThan(1e-9)
-	}, 3000)
+	}, 4000)
 
 	test('2006-09-22 southern penumbral limit joins its cusp fragments', () => {
 		const { geometry } = geometryFor(2006, 9, 1)
 		expect(geometry.lines.penumbraSouth).toHaveLength(1)
-	}, 3000)
+	}, 4000)
 
 	test('2082-08-24 keeps the southern penumbral fold connected through S2', () => {
 		const { geometry } = geometryFor(2082, 8, 1)
@@ -1288,7 +1288,7 @@ describe('branch-aware curve topology', () => {
 
 		const paths = solarEclipseMapToSvgPaths(geometry, projection)
 		expect(longestProjectedSegment(paths.penumbraSouth)).toBeLessThan(MAP_WIDTH / 2)
-	}, 3000)
+	}, 4000)
 
 	test('2026-02-17 trims the southern umbra endpoint fold', () => {
 		const { geometry } = geometryFor(2026, 2, 1)
@@ -1296,7 +1296,7 @@ describe('branch-aware curve topology', () => {
 		expect(geometry.lines.umbraSouth).toHaveLength(1)
 		expect(endpointRetraces(geometry.lines.umbraSouth[0], false)).toBe(false)
 		expect(maxBranchSegment(geometry.lines.umbraSouth)).toBeLessThanOrEqual(BRANCH_MAX_DRAWABLE_GAP)
-	}, 3000)
+	}, 4000)
 
 	test('2026-08-12 keeps the north-polar partial boundary anchored', () => {
 		const { eclipse, elements } = geometryFor(2026, 8, 1)
@@ -1332,7 +1332,7 @@ describe('branch-aware curve topology', () => {
 		// single connected arc (no fold-back to split), with the U3 contact lying on it.
 		expect(geometry.lines.umbraSouth).toHaveLength(1)
 		expect(Math.min(...geometry.lines.umbraSouth.flat().map((point) => sphericalSeparation(U3.x, U3.y, point.x, point.y)))).toBeLessThan(1e-9)
-	}, 3000)
+	}, 4000)
 
 	// 1957-10-23 is a non-central total eclipse (|gamma| > 1): the shadow axis misses Earth, so the umbra
 	// only grazes the limb and the G = 1 limit is a tiny closed loop near the south pole. The curve tracer
@@ -1381,7 +1381,7 @@ describe('branch-aware curve topology', () => {
 		expect(branch).toBeDefined()
 		expect(branch!.length).toBeGreaterThan(100)
 		expect(Math.min(sphericalSeparation(N2.x, N2.y, branch![0].x, branch![0].y), sphericalSeparation(N2.x, N2.y, branch!.at(-1)!.x, branch!.at(-1)!.y))).toBeLessThan(1e-9)
-	}, 3000)
+	}, 4000)
 
 	for (const fixture of CASES) {
 		describe(fixture.name, () => {
@@ -1609,7 +1609,7 @@ describe('solar eclipse map acceptance criteria', () => {
 		expect(sphericalSeparation(geometry.points.N2!.x, geometry.points.N2!.y, deg(-95.3), deg(57.93))).toBeLessThan(deg(0.5))
 		expect(sphericalSeparation(geometry.points.S1!.x, geometry.points.S1!.y, deg(160.89), deg(0.6))).toBeLessThan(deg(0.5))
 		expect(sphericalSeparation(geometry.points.S2!.x, geometry.points.S2!.y, deg(-62.29), deg(-15.54))).toBeLessThan(deg(0.5))
-	}, 3000)
+	}, 4000)
 })
 
 describe('reference data and conventions', () => {

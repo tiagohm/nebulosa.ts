@@ -100,10 +100,22 @@ describe.skipIf(SKIP)('observer', () => {
 		expectCsvRow(data[12], ['2025-Jan-29 11:05', null, null, 312.01347, -17.85339, null])
 	})
 
-	test('multiple matches', async () => {
-		const data = await observer('DES=1000041;', 'coord', COORD, START_TIME, END_TIME, [Quantity.ASTROMETRIC_RA_DEC], { stepSize: 5 })
+	// multipleApparitions, useCap=true
+	test('10P/Tempel', async () => {
+		const data = await observer('DES=1000094;', 'coord', COORD, START_TIME, END_TIME, [Quantity.ASTROMETRIC_RA_DEC], { stepSize: 5 })
 
-		expect(data).toBeEmpty()
+		expect(data).toHaveLength(13)
+		expectCsvRow(data[0], ['2025-Jan-29 13:05', null, null, 178.7245, 12.29526, null])
+		expectCsvRow(data[12], ['2025-Jan-29 14:05', null, null, 178.7215, 12.29904, null])
+	})
+
+	// fragmentsAndMultipleApparitions, useCap=true, useNoFrag=true
+	test('141P/Machholz 2', async () => {
+		const data = await observer('DES=141P;', 'coord', COORD, START_TIME, END_TIME, [Quantity.ASTROMETRIC_RA_DEC], { stepSize: 5 })
+
+		expect(data).toHaveLength(13)
+		expectCsvRow(data[0], ['2025-Jan-29 13:05', null, null, 251.09106, -22.44842, null])
+		expectCsvRow(data[12], ['2025-Jan-29 14:05', null, null, 251.09967, -22.44887, null])
 	})
 
 	test('no matches found', async () => {

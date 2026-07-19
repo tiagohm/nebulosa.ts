@@ -3,7 +3,7 @@ import type { Image, ImageRawType, ImageSampleScale } from '../../../imaging/mod
 import type { Size } from '../../../math/numerical/geometry'
 import type { NumberArray } from '../../../math/numerical/math'
 import { deflate, inflate } from '../../compression'
-import { readUntil, type Seekable, type Sink, type Source } from '../../io'
+import { readUntil, type Seekable, type Sink, type Source, writeFully } from '../../io'
 import type { Bitpix, FitsHeader, FitsHeaderValue } from '../fits/fits'
 import { bitpixInBytes, formatFitsHeaderValue, unescapeQuotedText } from '../fits/util'
 
@@ -194,8 +194,11 @@ const RESERVED_FITS_KEYS = new Set(['SIMPLE', 'BITPIX', 'NAXIS', 'NAXIS1', 'NAXI
 // Default write format: little-endian, planar, uncompressed.
 const DEFAULT_WRITE_XISF_FORMAT: Required<XisfWriteFormat> = { byteOrder: 'little', pixelStorage: 'Planar', compression: false }
 
-// Per-image working state accumulated while writing: dimensions, declared format, FITSKeyword XML
-// fragments, and the encoded data block.
+// Maximum scratch-buffer size used for uncompressed XISF image I/O.
+const XISF_IMAGE_IO_CHUNK_SIZE = 1024 * 1024
+
+// Per-image working state accumulated while writing: dimensions, declared format, FITSKeyword XML,
+// source samples, and an encoded block only when compression requires its size before the header.
 interface XisfWriteEntry {
 	readonly bitpix: Bitpix
 	readonly width: number
@@ -204,7 +207,9 @@ interface XisfWriteEntry {
 	readonly sampleFormat: XisfSampleFormat
 	readonly colorSpace: XisfColorSpace
 	readonly fitsKeywords: readonly string[]
-	readonly encoded: XisfEncodedBlock
+	readonly raw: ImageRawType
+	readonly dataSize: number
+	readonly encoded?: XisfEncodedBlock
 }
 
 // An encoded image data block plus its compression descriptor (absent when stored uncompressed).
@@ -213,8 +218,11 @@ interface XisfEncodedBlock {
 	readonly compression?: XisfCompression
 }
 
+// Typed numeric views constructed over XISF byte buffers; ordinary number arrays are never used here.
+type XisfDataArray = Exclude<NumberArray, number[]>
+
 // Builds a correctly aligned typed view over the backing XISF image buffer.
-function xisfDataView(buffer: Buffer, bitpix: Bitpix): NumberArray {
+function xisfDataView(buffer: Buffer, bitpix: Bitpix): XisfDataArray {
 	const byteLength = buffer.byteLength
 
 	if (byteLength === 0) return new Uint8Array(0)
@@ -255,6 +263,85 @@ function xisfBufferView(buffer: Buffer | undefined, size: number, bitpix: Bitpix
 	if (size === 0 || pixelInBytes <= 1 || view.byteOffset % pixelInBytes === 0) return view
 
 	return Buffer.allocUnsafe(size)
+}
+
+// Returns an image I/O chunk size aligned to complete XISF samples, validating the total byte size.
+function xisfImageChunkSize(size: number, bitpix: Bitpix) {
+	const pixelInBytes = bitpixInBytes(bitpix)
+
+	if (pixelInBytes < 1 || size % pixelInBytes !== 0) throw new Error('invalid XISF image buffer size')
+	if (size === 0) return 0
+
+	const target = Math.min(size, XISF_IMAGE_IO_CHUNK_SIZE)
+	return target - (target % pixelInBytes)
+}
+
+// Decodes byte-shuffled samples directly into their final interleaved output positions, avoiding an
+// unshuffled full-image buffer. Returns false when geometry and the decompressed block size disagree.
+function readShuffledXisfSamples(input: Buffer, output: ImageRawType, bitpix: Bitpix, byteOrder: XisfByteOrder, pixelStorage: XisfPixelStorageModel, geometry: XisfGeometry, sampleScale: ImageSampleScale) {
+	const pixelInBytes = bitpixInBytes(bitpix)
+	const { width, height, channels } = geometry
+	const numberOfPixels = width * height
+	const total = numberOfPixels * channels
+	if (input.byteLength !== total * pixelInBytes) return false
+
+	const scalarBuffer = Buffer.allocUnsafeSlow(pixelInBytes)
+	const scalarBytes = new Uint8Array(scalarBuffer.buffer, scalarBuffer.byteOffset, pixelInBytes)
+	const scalar = xisfDataView(scalarBuffer, bitpix)
+	const factor = bitpix > 0 && sampleScale === 'normalized' ? 1 / (2 ** (8 * pixelInBytes) - 1) : 1
+	const bigEndian = byteOrder === 'big'
+	let channel = 0
+	let pixel = 0
+
+	for (let stored = 0; stored < total; stored++) {
+		for (let byte = 0; byte < pixelInBytes; byte++) {
+			scalarBytes[bigEndian ? pixelInBytes - byte - 1 : byte] = input[byte * total + stored]
+		}
+
+		const target = pixelStorage === 'Normal' ? stored : pixel * channels + channel
+		output[target] = scalar[0] * factor
+
+		if (pixelStorage === 'Planar' && ++pixel === numberOfPixels) {
+			pixel = 0
+			channel++
+		}
+	}
+
+	return true
+}
+
+// Converts interleaved normalized samples directly into XISF byte planes in serialized byte order,
+// avoiding a separate native-layout image buffer and subsequent shuffle pass.
+function writeShuffledXisfSamples(input: ImageRawType, output: Buffer, bitpix: Bitpix, byteOrder: XisfByteOrder, pixelStorage: XisfPixelStorageModel, geometry: XisfGeometry) {
+	const pixelInBytes = bitpixInBytes(bitpix)
+	const { width, height, channels } = geometry
+	const numberOfPixels = width * height
+	const total = numberOfPixels * channels
+	if (output.byteLength !== total * pixelInBytes) throw new Error('invalid XISF image buffer size')
+
+	const scalarBuffer = Buffer.allocUnsafeSlow(pixelInBytes)
+	const scalarBytes = new Uint8Array(scalarBuffer.buffer, scalarBuffer.byteOffset, pixelInBytes)
+	const scalar = xisfDataView(scalarBuffer, bitpix)
+	const factor = bitpix > 0 ? 2 ** bitpix - 1 : 1
+	// Integer views truncate on assignment; a half-DN bias quantizes normalized samples to the nearest code.
+	const rounding = bitpix > 0 ? 0.5 : 0
+	const bigEndian = byteOrder === 'big'
+	let channel = 0
+	let pixel = 0
+
+	for (let stored = 0; stored < total; stored++) {
+		const source = pixelStorage === 'Normal' ? stored : pixel * channels + channel
+		scalar[0] = input[source] * factor + rounding
+
+		for (let byte = 0; byte < pixelInBytes; byte++) {
+			output[byte * total + stored] = scalarBytes[bigEndian ? pixelInBytes - byte - 1 : byte]
+		}
+
+		if (pixelStorage === 'Planar' && ++pixel === numberOfPixels) {
+			pixel = 0
+			channel++
+		}
+	}
 }
 
 // Maps a FITS BITPIX code to the corresponding XISF sample format (unsigned integers / IEEE floats).
@@ -299,9 +386,67 @@ function escapeXml(text: string) {
 	return text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&apos;')
 }
 
-// Writes images to `sink` as a monolithic XISF file: encodes each image's data block, then builds the
-// XML header (iterating until the data offsets stabilize), and writes signature, header, and blocks.
-// Returns total bytes written.
+// Converts and writes an uncompressed image through a bounded buffer, preserving planar or interleaved
+// sample order and the requested byte order. Returns the number of pixel-block bytes written.
+async function writeUncompressedXisfImage(sink: Sink, input: ImageRawType, bitpix: Bitpix, width: number, height: number, channels: number, byteOrder: XisfByteOrder, pixelStorage: XisfPixelStorageModel) {
+	const pixelInBytes = bitpixInBytes(bitpix)
+	const numberOfPixels = width * height
+	const total = numberOfPixels * channels
+	const size = total * pixelInBytes
+	const buffer = xisfBufferView(undefined, xisfImageChunkSize(size, bitpix), bitpix)
+	const data = xisfDataView(buffer, bitpix)
+	const factor = bitpix > 0 ? 2 ** bitpix - 1 : 1
+	// Integer views truncate on assignment; a half-DN bias quantizes normalized samples to the nearest code.
+	const rounding = bitpix > 0 ? 0.5 : 0
+	const identity = factor === 1 && rounding === 0
+	if (total > 0 && data.length === 0) return 0
+
+	let written = 0
+
+	if (pixelStorage === 'Planar') {
+		for (let channel = 0; channel < channels; channel++) {
+			for (let startPixel = 0; startPixel < numberOfPixels;) {
+				const count = Math.min(data.length, numberOfPixels - startPixel)
+				const byteCount = count * pixelInBytes
+				const chunk = byteCount === buffer.length ? buffer : buffer.subarray(0, byteCount)
+				let source = startPixel * channels + channel
+
+				if (identity && channels === 1) data.set(input.subarray(startPixel, startPixel + count))
+				else for (let i = 0; i < count; i++, source += channels) data[i] = input[source] * factor + rounding
+				if (byteOrder === 'big') {
+					if (pixelInBytes === 2) chunk.swap16()
+					else if (pixelInBytes === 4) chunk.swap32()
+					else if (pixelInBytes === 8) chunk.swap64()
+				}
+
+				written += await writeFully(sink, chunk)
+				startPixel += count
+			}
+		}
+	} else {
+		for (let start = 0; start < total;) {
+			const count = Math.min(data.length, total - start)
+			const byteCount = count * pixelInBytes
+			const chunk = byteCount === buffer.length ? buffer : buffer.subarray(0, byteCount)
+
+			if (identity) data.set(input.subarray(start, start + count))
+			else for (let i = 0; i < count; i++) data[i] = input[start + i] * factor + rounding
+			if (byteOrder === 'big') {
+				if (pixelInBytes === 2) chunk.swap16()
+				else if (pixelInBytes === 4) chunk.swap32()
+				else if (pixelInBytes === 8) chunk.swap64()
+			}
+
+			written += await writeFully(sink, chunk)
+			start += count
+		}
+	}
+
+	return written
+}
+
+// Writes images to `sink` as a monolithic XISF file: compressed blocks are staged to determine their
+// sizes, while uncompressed blocks are streamed after the XML offsets stabilize. Returns total bytes.
 export async function writeXisf(sink: Sink, images: readonly Readonly<Pick<Image, 'header' | 'raw' | 'sampleScale'>>[], format: XisfWriteFormat = DEFAULT_WRITE_XISF_FORMAT) {
 	const options = { ...DEFAULT_WRITE_XISF_FORMAT, ...format }
 	const entries: XisfWriteEntry[] = []
@@ -322,9 +467,9 @@ export async function writeXisf(sink: Sink, images: readonly Readonly<Pick<Image
 			fitsKeywords.push(`<FITSKeyword name="${escapeXml(key)}" value="${escapeXml(formatFitsHeaderValue(value))}" comment=""/>`)
 		}
 
-		const writer = new XisfImageWriter({ byteOrder: options.byteOrder, pixelStorage: options.pixelStorage, bitpix, geometry: { width, height, channels } }, options.compression)
-		const encoded = await writer.encode(image.raw)
-		entries.push({ bitpix, width, height, channels, sampleFormat, colorSpace, fitsKeywords, encoded })
+		const encoded = options.compression ? await new XisfImageWriter({ byteOrder: options.byteOrder, pixelStorage: options.pixelStorage, bitpix, geometry: { width, height, channels } }, options.compression).encode(image.raw) : undefined
+		const dataSize = encoded?.data.byteLength ?? width * height * channels * bitpixInBytes(bitpix)
+		entries.push({ bitpix, width, height, channels, sampleFormat, colorSpace, fitsKeywords, raw: image.raw, dataSize, encoded })
 	}
 
 	const buildHeader = (offset: number) => {
@@ -333,11 +478,11 @@ export async function writeXisf(sink: Sink, images: readonly Readonly<Pick<Image
 		for (const entry of entries) {
 			const bounds = entry.bitpix === -64 || entry.bitpix === -32 ? ' bounds="0:1"' : ''
 			const byteOrder = entry.bitpix === 8 ? '' : ` byteOrder="${options.byteOrder}"`
-			const compression = entry.encoded.compression ? ` compression="${formatCompression(entry.encoded.compression)}"` : ''
-			xml += `<Image geometry="${entry.width}:${entry.height}:${entry.channels}" sampleFormat="${entry.sampleFormat}" colorSpace="${entry.colorSpace}" location="attachment:${offset}:${entry.encoded.data.byteLength}" pixelStorage="${options.pixelStorage}"${byteOrder}${bounds}${compression}>`
+			const compression = entry.encoded?.compression ? ` compression="${formatCompression(entry.encoded.compression)}"` : ''
+			xml += `<Image geometry="${entry.width}:${entry.height}:${entry.channels}" sampleFormat="${entry.sampleFormat}" colorSpace="${entry.colorSpace}" location="attachment:${offset}:${entry.dataSize}" pixelStorage="${options.pixelStorage}"${byteOrder}${bounds}${compression}>`
 			if (entry.fitsKeywords.length > 0) xml += entry.fitsKeywords.join('')
 			xml += '</Image>'
-			offset += entry.encoded.data.byteLength
+			offset += entry.dataSize
 		}
 
 		xml += '</xisf>'
@@ -359,11 +504,12 @@ export async function writeXisf(sink: Sink, images: readonly Readonly<Pick<Image
 	signatureData.write(XISF_SIGNATURE, 0, 8, 'ascii')
 	signatureData.writeUInt32LE(headerData.byteLength, 8)
 
-	let size = await sink.write(signatureData)
-	size += await sink.write(headerData)
+	let size = await writeFully(sink, signatureData)
+	size += await writeFully(sink, headerData)
 
 	for (const entry of entries) {
-		size += await sink.write(entry.encoded.data)
+		if (entry.encoded) size += await writeFully(sink, entry.encoded.data)
+		else size += await writeUncompressedXisfImage(sink, entry.raw, entry.bitpix, entry.width, entry.height, entry.channels, options.byteOrder, options.pixelStorage)
 	}
 
 	return size
@@ -523,9 +669,8 @@ function decompress(input: ArrayBuffer | Buffer | NodeJS.TypedArray, format: Xis
 
 // Reads an XISF image's pixel block into interleaved normalized or digital samples.
 export class XisfImageReader {
-	readonly #buffer: Buffer
+	readonly #buffer?: Buffer
 	readonly #compressed?: Buffer
-	readonly #data: NumberArray
 
 	// Prepares to read `image`; an optional caller `buffer` is reused as scratch storage when alignment allows.
 	constructor(
@@ -534,48 +679,57 @@ export class XisfImageReader {
 	) {
 		const { bitpix, location, compression } = image
 		const size = compression?.uncompressedSize ?? location.size
-		this.#buffer = xisfBufferView(buffer, size, bitpix)
+		const bufferSize = !compression && buffer === undefined ? xisfImageChunkSize(size, bitpix) : size
+		const directShuffle = compression?.shuffled && compression.itemSize === bitpixInBytes(bitpix)
+		this.#buffer = !compression || (compression.shuffled && !directShuffle) ? xisfBufferView(buffer, bufferSize, bitpix) : undefined
 		this.#compressed = compression ? Buffer.allocUnsafe(location.size) : undefined
-		this.#data = xisfDataView(this.#buffer, bitpix)
 	}
 
 	// Reads XISF samples into an interleaved buffer using the requested sample scale.
 	async read(source: Source & Seekable, output: ImageRawType, sampleScale: ImageSampleScale = 'normalized') {
 		const { bitpix, pixelStorage, geometry, location, compression } = this.image
+		if (!compression) return await this.#readUncompressed(source, output, sampleScale)
 
 		source.seek(location.offset)
 
-		const input = this.#compressed ?? this.#buffer
+		const input = this.#compressed ?? this.#buffer!
 		if ((await readUntil(source, input, location.size, 0)) !== location.size) return false
+		let buffer = this.#buffer
 
 		if (compression) {
 			if (compression.format !== 'zstd' && compression.format !== 'zlib') throw new Error(`unsupported XISF compression format: ${compression.format}`)
 
 			const decompressed = await decompress(input.subarray(0, location.size), compression.format)
-			if (decompressed === undefined || decompressed.byteLength !== this.#buffer.byteLength) return false
+			if (decompressed === undefined || decompressed.byteLength !== compression.uncompressedSize) return false
+			const pixelInBytes = bitpixInBytes(bitpix)
 
 			if (compression.shuffled) {
 				if (compression.itemSize <= 0) return false
-				byteUnshuffle(decompressed, this.#buffer, compression.itemSize)
+				if (compression.itemSize === pixelInBytes) return readShuffledXisfSamples(decompressed, output, bitpix, this.image.byteOrder, pixelStorage, geometry, sampleScale)
+				if (buffer === undefined) return false
+				byteUnshuffle(decompressed, buffer, compression.itemSize)
 			} else {
-				decompressed.copy(this.#buffer)
+				buffer = decompressed
 			}
 		}
+		if (buffer === undefined) return false
 
 		const pixelInBytes = bitpixInBytes(this.image.bitpix)
 
 		if (pixelInBytes > 1 && this.image.byteOrder === 'big') {
-			if (pixelInBytes === 2) this.#buffer.swap16()
-			else if (pixelInBytes === 4) this.#buffer.swap32()
-			else if (pixelInBytes === 8) this.#buffer.swap64()
+			if (pixelInBytes === 2) buffer.swap16()
+			else if (pixelInBytes === 4) buffer.swap32()
+			else if (pixelInBytes === 8) buffer.swap64()
 		}
 
-		const data = this.#data
+		const data = xisfDataView(buffer, bitpix)
 		const { width, height, channels } = geometry
 		const numberOfPixels = width * height
 		const factor = bitpix > 0 && sampleScale === 'normalized' ? 1 / (2 ** (8 * pixelInBytes) - 1) : 1
 
-		if (pixelStorage === 'Planar') {
+		if (factor === 1 && (pixelStorage === 'Normal' || channels === 1)) {
+			output.set(data.subarray(0, numberOfPixels * channels))
+		} else if (pixelStorage === 'Planar') {
 			for (let i = 0, p = 0; i < numberOfPixels; i++) {
 				for (let c = 0, m = i; c < channels; c++, m += numberOfPixels) {
 					output[p++] = data[m] * factor
@@ -591,14 +745,73 @@ export class XisfImageReader {
 
 		return true
 	}
+
+	// Reads an uncompressed pixel block through the bounded scratch buffer and converts each chunk directly
+	// into its final interleaved output positions.
+	async #readUncompressed(source: Source & Seekable, output: ImageRawType, sampleScale: ImageSampleScale) {
+		const { bitpix, pixelStorage, geometry, location } = this.image
+		const buffer = this.#buffer!
+		const data = xisfDataView(buffer, bitpix)
+		const pixelInBytes = bitpixInBytes(bitpix)
+		const { width, height, channels } = geometry
+		const numberOfPixels = width * height
+		const factor = bitpix > 0 && sampleScale === 'normalized' ? 1 / (2 ** (8 * pixelInBytes) - 1) : 1
+		if (numberOfPixels > 0 && data.length === 0) return false
+		source.seek(location.offset)
+
+		if (pixelStorage === 'Planar') {
+			for (let channel = 0; channel < channels; channel++) {
+				for (let startPixel = 0; startPixel < numberOfPixels;) {
+					const count = Math.min(data.length, numberOfPixels - startPixel)
+					const byteCount = count * pixelInBytes
+					const chunk = byteCount === buffer.length ? buffer : buffer.subarray(0, byteCount)
+
+					if ((await readUntil(source, chunk, byteCount, 0)) !== byteCount) return false
+					if (pixelInBytes > 1 && this.image.byteOrder === 'big') {
+						if (pixelInBytes === 2) chunk.swap16()
+						else if (pixelInBytes === 4) chunk.swap32()
+						else if (pixelInBytes === 8) chunk.swap64()
+					}
+
+					if (factor === 1 && channels === 1) output.set(data.subarray(0, count), startPixel)
+					else {
+						let target = startPixel * channels + channel
+						for (let i = 0; i < count; i++, target += channels) output[target] = data[i] * factor
+					}
+					startPixel += count
+				}
+			}
+		} else {
+			const total = numberOfPixels * channels
+
+			for (let start = 0; start < total;) {
+				const count = Math.min(data.length, total - start)
+				const byteCount = count * pixelInBytes
+				const chunk = byteCount === buffer.length ? buffer : buffer.subarray(0, byteCount)
+
+				if ((await readUntil(source, chunk, byteCount, 0)) !== byteCount) return false
+				if (pixelInBytes > 1 && this.image.byteOrder === 'big') {
+					if (pixelInBytes === 2) chunk.swap16()
+					else if (pixelInBytes === 4) chunk.swap32()
+					else if (pixelInBytes === 8) chunk.swap64()
+				}
+
+				if (factor === 1) output.set(data.subarray(0, count), start)
+				else for (let i = 0; i < count; i++) output[start + i] = data[i] * factor
+				start += count
+			}
+		}
+
+		return true
+	}
 }
 
 // Encodes a channel-interleaved image into an XISF data block: lays it out per the pixel-storage model,
 // maps floats to the integer range, swaps byte order, and optionally byte-shuffles and compresses it.
 export class XisfImageWriter {
-	readonly #buffer: Buffer
+	readonly #buffer?: Buffer
 	readonly #shuffled?: Buffer
-	readonly #data: NumberArray
+	readonly #data?: XisfDataArray
 
 	// Prepares to encode an image of the given format; an optional caller `buffer` is reused when aligned.
 	constructor(
@@ -609,9 +822,11 @@ export class XisfImageWriter {
 		const { bitpix, geometry } = xisf
 		const { width, height, channels } = geometry
 		const pixelInBytes = bitpixInBytes(bitpix)
-		this.#buffer = xisfBufferView(buffer, width * height * channels * pixelInBytes, bitpix)
-		this.#data = xisfDataView(this.#buffer, bitpix)
-		this.#shuffled = compression !== false && compression !== undefined && compression.shuffled && pixelInBytes > 1 ? Buffer.allocUnsafe(this.#buffer.byteLength) : undefined
+		const size = width * height * channels * pixelInBytes
+		const shuffled = compression !== false && compression !== undefined && compression.shuffled && pixelInBytes > 1
+		this.#buffer = shuffled ? undefined : xisfBufferView(buffer, size, bitpix)
+		this.#data = this.#buffer ? xisfDataView(this.#buffer, bitpix) : undefined
+		this.#shuffled = shuffled ? xisfBufferView(buffer, size, 8) : undefined
 	}
 
 	// Encodes XISF-format image from RGB-interleaved array into a block buffer
@@ -620,51 +835,67 @@ export class XisfImageWriter {
 		const { width, height, channels } = geometry
 		const pixelInBytes = bitpixInBytes(bitpix)
 		const numberOfPixels = width * height
-		const factor = bitpix > 0 ? 2 ** bitpix - 1 : 1 // Transform float [0..1] to n-bit integer
-		const data = this.#data
+		const total = numberOfPixels * channels
 
-		if (pixelStorage === 'Planar') {
+		if (this.#shuffled) {
+			const compression = this.compression
+			if (!compression || (compression.format !== 'zstd' && compression.format !== 'zlib')) {
+				throw new Error(`unsupported XISF compression format: ${compression && compression.format}`)
+			}
+
+			writeShuffledXisfSamples(input, this.#shuffled, bitpix, byteOrder, pixelStorage, geometry)
+			const compressed = await compress(this.#shuffled, compression)
+
+			return {
+				data: compressed!,
+				compression: {
+					format: compression.format,
+					shuffled: true,
+					uncompressedSize: this.#shuffled.byteLength,
+					itemSize: pixelInBytes,
+				},
+			}
+		}
+
+		const factor = bitpix > 0 ? 2 ** bitpix - 1 : 1 // Transform float [0..1] to n-bit integer
+		// Integer views truncate on assignment; a half-DN bias quantizes normalized samples to the
+		// nearest code and prevents equivalent floating-point scaling from landing one code low.
+		const rounding = bitpix > 0 ? 0.5 : 0
+		const data = this.#data!
+
+		if (factor === 1 && rounding === 0 && (pixelStorage === 'Normal' || channels === 1)) {
+			data.set(input.subarray(0, total))
+		} else if (pixelStorage === 'Planar') {
 			for (let c = 0, p = 0; c < channels; c++) {
 				for (let i = 0, m = c; i < numberOfPixels; i++, m += channels) {
-					data[p++] = input[m] * factor
+					data[p++] = input[m] * factor + rounding
 				}
 			}
 		} else {
-			const total = numberOfPixels * channels
-
 			for (let i = 0; i < total; i++) {
-				data[i] = input[i] * factor
+				data[i] = input[i] * factor + rounding
 			}
 		}
 
 		// little-endian to big-endian
 		if (byteOrder === 'big') {
-			if (pixelInBytes === 2) this.#buffer.swap16()
-			else if (pixelInBytes === 4) this.#buffer.swap32()
-			else if (pixelInBytes === 8) this.#buffer.swap64()
+			if (pixelInBytes === 2) this.#buffer!.swap16()
+			else if (pixelInBytes === 4) this.#buffer!.swap32()
+			else if (pixelInBytes === 8) this.#buffer!.swap64()
 		}
 
-		if (!this.compression) return { data: this.#buffer }
+		if (!this.compression) return { data: this.#buffer! }
 		if (this.compression.format !== 'zstd' && this.compression.format !== 'zlib') throw new Error(`unsupported XISF compression format: ${this.compression.format}`)
 
-		const shuffled = this.#shuffled !== undefined && pixelInBytes > 1
-
-		let compressed: Buffer | undefined
-
-		if (shuffled) {
-			byteShuffle(this.#buffer, this.#shuffled, pixelInBytes)
-			compressed = await compress(this.#shuffled, this.compression)
-		} else {
-			compressed = await compress(this.#buffer, this.compression)
-		}
+		const compressed = await compress(this.#buffer!, this.compression)
 
 		return {
 			data: compressed!,
 			compression: {
 				format: this.compression.format,
-				shuffled,
-				uncompressedSize: this.#buffer.byteLength,
-				itemSize: shuffled ? pixelInBytes : 0,
+				shuffled: false,
+				uncompressedSize: this.#buffer!.byteLength,
+				itemSize: 0,
 			},
 		}
 	}
@@ -672,7 +903,7 @@ export class XisfImageWriter {
 	// Writes XISF-format image from RGB-interleaved array into sink
 	async write(input: ImageRawType, sink: Sink) {
 		const encoded = await this.encode(input)
-		return await sink.write(encoded.data)
+		return await writeFully(sink, encoded.data)
 	}
 }
 
@@ -691,18 +922,59 @@ export function byteShuffle(input: Int8Array | Uint8Array | Buffer, output: Int8
 	const numberOfItems = Math.trunc(inputSize / itemSize)
 	const copyLength = inputSize % itemSize
 
-	let s = 0
+	if (itemSize === 1) {
+		output.set(input.subarray(0, inputSize))
+		return
+	} else if (itemSize === 2) {
+		for (let i = 0; i < numberOfItems; i++) {
+			const source = i * 2
+			output[i] = input[source]
+			output[numberOfItems + i] = input[source + 1]
+		}
+	} else if (itemSize === 4) {
+		const plane2 = numberOfItems * 2
+		const plane3 = numberOfItems * 3
 
-	for (let j = 0; j < itemSize; j++) {
-		let u = j
+		for (let i = 0; i < numberOfItems; i++) {
+			const source = i * 4
+			output[i] = input[source]
+			output[numberOfItems + i] = input[source + 1]
+			output[plane2 + i] = input[source + 2]
+			output[plane3 + i] = input[source + 3]
+		}
+	} else if (itemSize === 8) {
+		const plane2 = numberOfItems * 2
+		const plane3 = numberOfItems * 3
+		const plane4 = numberOfItems * 4
+		const plane5 = numberOfItems * 5
+		const plane6 = numberOfItems * 6
+		const plane7 = numberOfItems * 7
 
-		for (let k = 0; k < numberOfItems; k++) {
-			output[s++] = input[u]
-			u += itemSize
+		for (let i = 0; i < numberOfItems; i++) {
+			const source = i * 8
+			output[i] = input[source]
+			output[numberOfItems + i] = input[source + 1]
+			output[plane2 + i] = input[source + 2]
+			output[plane3 + i] = input[source + 3]
+			output[plane4 + i] = input[source + 4]
+			output[plane5 + i] = input[source + 5]
+			output[plane6 + i] = input[source + 6]
+			output[plane7 + i] = input[source + 7]
+		}
+	} else {
+		let target = 0
+
+		for (let j = 0; j < itemSize; j++) {
+			let source = j
+
+			for (let i = 0; i < numberOfItems; i++) {
+				output[target++] = input[source]
+				source += itemSize
+			}
 		}
 	}
 
-	if (copyLength > 0) output.set(input.subarray(numberOfItems * itemSize, inputSize), s)
+	if (copyLength > 0) output.set(input.subarray(numberOfItems * itemSize, inputSize), numberOfItems * itemSize)
 }
 
 // Inverse of byteShuffle: restores the original interleaved byte layout of fixed-size items.
@@ -713,16 +985,57 @@ export function byteUnshuffle(input: Int8Array | Uint8Array | Buffer, output: In
 	const numberOfItems = Math.trunc(inputSize / itemSize)
 	const copyLength = inputSize % itemSize
 
-	let s = 0
+	if (itemSize === 1) {
+		output.set(input.subarray(0, inputSize))
+		return
+	} else if (itemSize === 2) {
+		for (let i = 0; i < numberOfItems; i++) {
+			const target = i * 2
+			output[target] = input[i]
+			output[target + 1] = input[numberOfItems + i]
+		}
+	} else if (itemSize === 4) {
+		const plane2 = numberOfItems * 2
+		const plane3 = numberOfItems * 3
 
-	for (let j = 0; j < itemSize; j++) {
-		let u = j
+		for (let i = 0; i < numberOfItems; i++) {
+			const target = i * 4
+			output[target] = input[i]
+			output[target + 1] = input[numberOfItems + i]
+			output[target + 2] = input[plane2 + i]
+			output[target + 3] = input[plane3 + i]
+		}
+	} else if (itemSize === 8) {
+		const plane2 = numberOfItems * 2
+		const plane3 = numberOfItems * 3
+		const plane4 = numberOfItems * 4
+		const plane5 = numberOfItems * 5
+		const plane6 = numberOfItems * 6
+		const plane7 = numberOfItems * 7
 
-		for (let k = 0; k < numberOfItems; k++) {
-			output[u] = input[s++]
-			u += itemSize
+		for (let i = 0; i < numberOfItems; i++) {
+			const target = i * 8
+			output[target] = input[i]
+			output[target + 1] = input[numberOfItems + i]
+			output[target + 2] = input[plane2 + i]
+			output[target + 3] = input[plane3 + i]
+			output[target + 4] = input[plane4 + i]
+			output[target + 5] = input[plane5 + i]
+			output[target + 6] = input[plane6 + i]
+			output[target + 7] = input[plane7 + i]
+		}
+	} else {
+		let source = 0
+
+		for (let j = 0; j < itemSize; j++) {
+			let target = j
+
+			for (let i = 0; i < numberOfItems; i++) {
+				output[target] = input[source++]
+				target += itemSize
+			}
 		}
 	}
 
-	if (copyLength > 0) output.set(input.subarray(s, s + copyLength), numberOfItems * itemSize)
+	if (copyLength > 0) output.set(input.subarray(numberOfItems * itemSize, inputSize), numberOfItems * itemSize)
 }

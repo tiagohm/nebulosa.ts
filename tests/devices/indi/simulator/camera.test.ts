@@ -1,43 +1,22 @@
 import { describe, expect, test } from 'bun:test'
 import { IndiClientHandlerSet } from '../../../../src/devices/indi/client'
-import type { Camera, GuideOutput, Thermometer } from '../../../../src/devices/indi/device'
-import { CameraManager, type DeviceHandler, type DeviceProvider, FocuserManager, GuideOutputManager, MountManager, RotatorManager, ThermometerManager } from '../../../../src/devices/indi/manager'
+import type { GuideOutput, Thermometer } from '../../../../src/devices/indi/device'
+import { CameraManager, type DeviceProvider, FocuserManager, GuideOutputManager, MountManager, RotatorManager, ThermometerManager } from '../../../../src/devices/indi/manager'
 import { CameraSimulator } from '../../../../src/devices/indi/simulator/camera'
 import { ClientSimulator } from '../../../../src/devices/indi/simulator/client'
 import { FocuserSimulator } from '../../../../src/devices/indi/simulator/focuser'
 import { MountSimulator } from '../../../../src/devices/indi/simulator/mount'
 import { RotatorSimulator } from '../../../../src/devices/indi/simulator/rotator'
 import type { CatalogSource } from '../../../../src/devices/indi/simulator/types'
-import type { BlobEncoding, PropertyState } from '../../../../src/devices/indi/types'
 import { readImageFromBuffer } from '../../../../src/imaging/model/image'
 import type { ImageRawType } from '../../../../src/imaging/model/types'
 import { mulberry32 } from '../../../../src/math/numerical/random'
 import { deg, formatDEC, formatRA, hour } from '../../../../src/math/units/angle'
-import { isTimeConsumingTestSkipped, waitUntil } from '../../../util'
+import { CameraFrameReceiver, isTimeConsumingTestSkipped, waitUntil } from '../../../util'
 
 // Integration coverage for simulated camera acquisition, rendering, metadata, and related devices.
 
 const SKIP = isTimeConsumingTestSkipped()
-
-class CameraFrameReceiver implements DeviceHandler<Camera> {
-	readonly #frames: Buffer[] = []
-
-	added(device: Camera) {}
-	updated(device: Camera, property: keyof Camera & string, state?: PropertyState) {}
-	removed(device: Camera) {}
-
-	blobReceived(device: Camera, data: Buffer, encoding: BlobEncoding) {
-		this.#frames.push(data)
-	}
-
-	get length() {
-		return this.#frames.length
-	}
-
-	get lastFrame() {
-		return this.#frames.at(-1)!
-	}
-}
 
 describe.skipIf(SKIP)('camera simulator', () => {
 	test('integrates with camera manager and exposes synthetic image controls', async () => {
