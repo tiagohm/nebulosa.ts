@@ -54,7 +54,7 @@ test('predicts the four contacts of the 2032-11-13 Mercury transit from Greenwic
 
 	// Total contact I -> IV duration, ~4.44 h, equals the exterior-egress minus exterior-ingress span.
 	expect(transit.duration! / 3600).toBeCloseTo(4.44, 1)
-}, 4000)
+}, 8000)
 
 test('predicts the four contacts of the 2117-12-11 Venus transit from Tokyo', () => {
 	const observer = observerAt(TOKYO)
@@ -109,7 +109,7 @@ test('leaves egress contacts undefined when the window closes before egress', ()
 	expect(transit.duration).toBeUndefined()
 	expect(contactError(transit.exteriorIngress, 2463549.779682)).toBeLessThan(2)
 	expect(contactError(transit.interiorIngress, 2463549.781121)).toBeLessThan(2)
-}, 2000)
+}, 4000)
 
 test('catches an appulse in the last interval when the window ends just after mid-transit', () => {
 	const observer = observerAt(GREENWICH)

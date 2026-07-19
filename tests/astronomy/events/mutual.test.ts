@@ -112,4 +112,4 @@ test('contacts bracket every event and impact parameters stay in range', () => {
 		if (event.start !== undefined) expect(timeSubtract(event.middle, event.start)).toBeGreaterThan(0)
 		if (event.end !== undefined) expect(timeSubtract(event.end, event.middle)).toBeGreaterThan(0)
 	}
-})
+}, 3000)
