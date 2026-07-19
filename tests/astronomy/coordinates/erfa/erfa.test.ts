@@ -81,6 +81,522 @@ test('eraTaiTt', () => {
 	expect(b).toBeCloseTo(0.892855139, 13)
 })
 
+test('eraAe2hd', () => {
+	const [ha, dec] = erfa.eraAe2hd(5.5, 1.1, 0.7)
+	expect(ha).toBeCloseTo(0.5933291115507309663, 14)
+	expect(dec).toBeCloseTo(0.961393476164781762, 14)
+})
+
+test('eraHd2ae', () => {
+	const [az, el] = erfa.eraHd2ae(1.1, 1.2, 0.3)
+	expect(az).toBeCloseTo(5.916889243730066194, 13)
+	expect(el).toBeCloseTo(0.4472186304990486228, 14)
+})
+
+test('eraHd2pa', () => {
+	expect(erfa.eraHd2pa(1.1, 1.2, 0.3)).toBeCloseTo(1.90622742800199558, 13)
+})
+
+test('eraBpn2xy', () => {
+	const [x, y] = erfa.eraBpn2xy([0.9999962358680738, -0.002516417057665452, -0.00109356978534237, 0.002516462370370876, 0.9999968329010883, 0.0000400615958735831, 0.001093465510215479, -0.00004281337229063151, 0.9999994012499173])
+	expect(x).toBeCloseTo(0.001093465510215479, 12)
+	expect(y).toBeCloseTo(-0.00004281337229063151, 12)
+})
+
+test('eraFw2xy', () => {
+	const [x, y] = erfa.eraFw2xy(-0.2243387670997992368e-5, 0.4091014602391312982, -0.9501954178013015092e-3, 0.4091014316587367472)
+	expect(x).toBeCloseTo(-0.377973495703408279e-3, 14)
+	expect(y).toBeCloseTo(-0.1924880848087615651e-6, 14)
+})
+
+test('eraG2icrs', () => {
+	const [ra, dec] = erfa.eraG2icrs(5.585053606381854646, -0.7853981633974483)
+	expect(ra).toBeCloseTo(5.933807430222719, 14)
+	expect(dec).toBeCloseTo(-1.1784870613579945, 14)
+})
+
+test('eraIcrs2g', () => {
+	const [longitude, latitude] = erfa.eraIcrs2g(5.933807430222719, -1.1784870613579945)
+	expect(longitude).toBeCloseTo(5.585053606381855, 14)
+	expect(latitude).toBeCloseTo(-0.7853981633974483, 14)
+})
+
+test('eraTpsts', () => {
+	const [ra, dec] = erfa.eraTpsts(-0.03, 0.07, 2.3, 1.5)
+	expect(ra).toBeCloseTo(0.759612716735963, 14)
+	expect(dec).toBeCloseTo(1.540864645109263, 13)
+})
+
+test('eraTpstv', () => {
+	const v = erfa.eraTpstv(-0.03, 0.07, erfa.eraS2c(2.3, 1.5))
+	expect(v[0]).toBeCloseTo(0.02170030454907377, 15)
+	expect(v[1]).toBeCloseTo(0.020609095905353674, 15)
+	expect(v[2]).toBeCloseTo(0.9995520806583524, 14)
+})
+
+test('eraTpors', () => {
+	const [count, a01, b01, a02, b02] = erfa.eraTpors(-0.03, 0.07, 1.3, 1.5)
+	expect(count).toBe(2)
+	expect(a01).toBeCloseTo(1.7366215777832087, 13)
+	expect(b01).toBeCloseTo(1.4367365618440903, 13)
+	expect(a02).toBeCloseTo(4.0049710758065845, 13)
+	expect(b02).toBeCloseTo(1.565084088476418, 13)
+})
+
+test('eraTporv', () => {
+	const [count, v01, v02] = erfa.eraTporv(-0.03, 0.07, erfa.eraS2c(1.3, 1.5))
+	expect(count).toBe(2)
+	expect(v01?.[0]).toBeCloseTo(-0.022062528223668886, 15)
+	expect(v01?.[1]).toBeCloseTo(0.1318251060359645, 14)
+	expect(v01?.[2]).toBeCloseTo(0.9910274397144544, 14)
+	expect(v02?.[0]).toBeCloseTo(-0.003712211763801968, 16)
+	expect(v02?.[1]).toBeCloseTo(-0.004341519956299837, 16)
+	expect(v02?.[2]).toBeCloseTo(0.9999836852110587, 14)
+})
+
+test('eraTpxes', () => {
+	const [status, xi, eta] = erfa.eraTpxes(1.3, 1.55, 2.3, 1.5)
+	expect(status).toBe(0)
+	expect(xi).toBeCloseTo(-0.017532009832369806, 15)
+	expect(eta).toBeCloseTo(0.05962940005778713, 15)
+})
+
+test('eraTpxev', () => {
+	const [status, xi, eta] = erfa.eraTpxev(erfa.eraS2c(1.3, 1.55), erfa.eraS2c(2.3, 1.5))
+	expect(status).toBe(0)
+	expect(xi).toBeCloseTo(-0.017532009832369806, 15)
+	expect(eta).toBeCloseTo(0.05962940005778713, 15)
+})
+
+test('eraEpb2jd', () => {
+	const [djm0, djm] = erfa.eraEpb2jd(1957.3)
+	expect(djm0).toBeCloseTo(2400000.5, 9)
+	expect(djm).toBeCloseTo(35948.1915101513, 9)
+})
+
+test('eraEpj2jd', () => {
+	const [djm0, djm] = erfa.eraEpj2jd(1996.8)
+	expect(djm0).toBeCloseTo(2400000.5, 9)
+	expect(djm).toBeCloseTo(50375.7, 9)
+})
+
+test('eraPlan94', () => {
+	let pv = erfa.eraPlan94(2400000.5, -320000, 2)
+	expect(pv[0][0]).toBeCloseTo(0.9308038666832975759, 11)
+	expect(pv[0][1]).toBeCloseTo(0.3258319040261346, 11)
+	expect(pv[0][2]).toBeCloseTo(0.142279454448114056, 11)
+	expect(pv[1][0]).toBeCloseTo(-0.6429458958255170006e-2, 11)
+	expect(pv[1][1]).toBeCloseTo(0.1468570657704237764e-1, 11)
+	expect(pv[1][2]).toBeCloseTo(0.6406996426270981189e-2, 11)
+
+	pv = erfa.eraPlan94(2400000.5, 43999.9, 0)
+	expect(pv[0][0]).toBeCloseTo(0.2945293959257430832, 11)
+	expect(pv[0][1]).toBeCloseTo(-0.2452204176601049596, 11)
+	expect(pv[0][2]).toBeCloseTo(-0.1615427700571978153, 11)
+	expect(pv[1][0]).toBeCloseTo(0.1413867871404614441e-1, 11)
+	expect(pv[1][1]).toBeCloseTo(0.1946548301104706582e-1, 11)
+	expect(pv[1][2]).toBeCloseTo(0.8929809783898904786e-2, 11)
+})
+
+test('eraPr00', () => {
+	const [dpsipr, depspr] = erfa.eraPr00(2400000.5, 53736)
+	expect(dpsipr).toBeCloseTo(-0.8716465172668348e-7, 22)
+	expect(depspr).toBeCloseTo(-0.7342018386722813e-8, 22)
+})
+
+test('eraPrec76', () => {
+	const [zeta, z, theta] = erfa.eraPrec76(2400000.5, 33282, 2400000.5, 51544)
+	expect(zeta).toBeCloseTo(0.5588961642000161e-2, 12)
+	expect(z).toBeCloseTo(0.5589922365870681e-2, 12)
+	expect(theta).toBeCloseTo(0.4858945471687297e-2, 12)
+})
+
+test('eraPmat76', () => {
+	const m = erfa.eraPmat76(2400000.5, 50123.9999)
+	expect(m[0]).toBeCloseTo(0.9999995504328350733, 12)
+	expect(m[1]).toBeCloseTo(0.8696632209480960785e-3, 12)
+	expect(m[2]).toBeCloseTo(0.3779153474959888345e-3, 12)
+	expect(m[3]).toBeCloseTo(-0.8696632209485112192e-3, 12)
+	expect(m[4]).toBeCloseTo(0.9999996218428560614, 12)
+	expect(m[5]).toBeCloseTo(-0.1643284776111886407e-6, 12)
+	expect(m[6]).toBeCloseTo(-0.3779153474950335077e-3, 12)
+	expect(m[7]).toBeCloseTo(-0.1643306746147366896e-6, 12)
+	expect(m[8]).toBeCloseTo(0.9999999285899790119, 12)
+})
+
+test('eraPb06', () => {
+	const [bzeta, bz, btheta] = erfa.eraPb06(2400000.5, 50123.9999)
+	expect(bzeta).toBeCloseTo(-0.5092634016326478e-3, 12)
+	expect(bz).toBeCloseTo(-0.36027720605660444e-3, 12)
+	expect(btheta).toBeCloseTo(-0.3779735537167811e-3, 12)
+})
+
+test('eraS00', () => {
+	expect(erfa.eraS00(2400000.5, 53736, 0.5791308486706011e-3, 0.4020579816732961219e-4)).toBeCloseTo(-0.12200362632709057e-7, 18)
+})
+
+test('eraS00a', () => {
+	expect(erfa.eraS00a(2400000.5, 52541)).toBeCloseTo(-0.1340684448919163584e-7, 18)
+})
+
+test('eraS00b', () => {
+	expect(erfa.eraS00b(2400000.5, 52541)).toBeCloseTo(-0.1340695782951026584e-7, 18)
+})
+
+test('eraS06a', () => {
+	expect(erfa.eraS06a(2400000.5, 52541)).toBeCloseTo(-0.1340680437291812383e-7, 18)
+})
+
+test('eraXys00a', () => {
+	const [x, y, s] = erfa.eraXys00a(2400000.5, 53736)
+	expect(x).toBeCloseTo(0.5791308472168152904e-3, 14)
+	expect(y).toBeCloseTo(0.4020595661591500259e-4, 15)
+	expect(s).toBeCloseTo(-0.1220040848471549623e-7, 18)
+})
+
+test('eraXys00b', () => {
+	const [x, y, s] = erfa.eraXys00b(2400000.5, 53736)
+	expect(x).toBeCloseTo(0.5791301929950208873e-3, 14)
+	expect(y).toBeCloseTo(0.4020553681373720832e-4, 15)
+	expect(s).toBeCloseTo(-0.1220027377285083189e-7, 18)
+})
+
+test('eraXys06a', () => {
+	const [x, y, s] = erfa.eraXys06a(2400000.5, 53736)
+	expect(x).toBeCloseTo(0.5791308482835292617e-3, 14)
+	expect(y).toBeCloseTo(0.402058009945402031e-4, 15)
+	expect(s).toBeCloseTo(-0.1220032294164579896e-7, 18)
+})
+
+test('eraC2ibpn', () => {
+	const m = erfa.eraC2ibpn(2400000.5, 50123.9999, [0.9999962358680738, -0.002516417057665452, -0.00109356978534237, 0.002516462370370876, 0.9999968329010883, 0.0000400615958735831, 0.001093465510215479, -0.00004281337229063151, 0.9999994012499173])
+	expect(m[0]).toBeCloseTo(0.9999994021664089977, 12)
+	expect(m[1]).toBeCloseTo(-0.3869195948017503664e-8, 12)
+	expect(m[2]).toBeCloseTo(-0.1093465511383285076e-2, 12)
+	expect(m[3]).toBeCloseTo(0.5068413965715446111e-7, 12)
+	expect(m[4]).toBeCloseTo(0.9999999990835075686, 12)
+	expect(m[5]).toBeCloseTo(0.4281334246452708915e-4, 12)
+	expect(m[6]).toBeCloseTo(0.1093465510215479e-2, 12)
+	expect(m[7]).toBeCloseTo(-0.4281337229063151e-4, 12)
+	expect(m[8]).toBeCloseTo(0.9999994012499173103, 12)
+})
+
+test('eraC2ixy', () => {
+	const m = erfa.eraC2ixy(2400000.5, 53736, 0.5791308486706011e-3, 0.4020579816732961219e-4)
+	expect(m[0]).toBeCloseTo(0.9999998323037157138, 12)
+	expect(m[1]).toBeCloseTo(0.5581526349032241205e-9, 12)
+	expect(m[2]).toBeCloseTo(-0.5791308491611263745e-3, 12)
+	expect(m[3]).toBeCloseTo(-0.2384257057469842953e-7, 12)
+	expect(m[4]).toBeCloseTo(0.9999999991917468964, 12)
+	expect(m[5]).toBeCloseTo(-0.4020579110172324363e-4, 12)
+	expect(m[6]).toBeCloseTo(0.5791308486706011e-3, 12)
+	expect(m[7]).toBeCloseTo(0.4020579816732961219e-4, 12)
+	expect(m[8]).toBeCloseTo(0.999999831495462759, 12)
+})
+
+test('eraBp00', () => {
+	const [rb, rp, rbp] = erfa.eraBp00(2400000.5, 50123.9999)
+	expect(rb[0]).toBeCloseTo(0.9999999999999942498, 12)
+	expect(rb[1]).toBeCloseTo(-0.7078279744199196626e-7, 12)
+	expect(rb[2]).toBeCloseTo(0.8056217146976134152e-7, 12)
+	expect(rb[3]).toBeCloseTo(0.7078279477857337206e-7, 12)
+	expect(rb[4]).toBeCloseTo(0.9999999999999969484, 12)
+	expect(rb[5]).toBeCloseTo(0.3306041454222136517e-7, 12)
+	expect(rb[6]).toBeCloseTo(-0.8056217380986972157e-7, 12)
+	expect(rb[7]).toBeCloseTo(-0.33060408839805525e-7, 12)
+	expect(rb[8]).toBeCloseTo(0.9999999999999962084, 12)
+	expect(rp[0]).toBeCloseTo(0.9999995504864048241, 12)
+	expect(rp[1]).toBeCloseTo(0.8696113836207084411e-3, 12)
+	expect(rp[2]).toBeCloseTo(0.3778928813389333402e-3, 12)
+	expect(rp[3]).toBeCloseTo(-0.8696113818227265968e-3, 12)
+	expect(rp[4]).toBeCloseTo(0.9999996218879365258, 12)
+	expect(rp[5]).toBeCloseTo(-0.1690679263009242066e-6, 12)
+	expect(rp[6]).toBeCloseTo(-0.3778928854764695214e-3, 12)
+	expect(rp[7]).toBeCloseTo(-0.1595521004195286491e-6, 12)
+	expect(rp[8]).toBeCloseTo(0.9999999285984682756, 12)
+	expect(rbp[0]).toBeCloseTo(0.999999550517508726, 12)
+	expect(rbp[1]).toBeCloseTo(0.8695405883617884705e-3, 12)
+	expect(rbp[2]).toBeCloseTo(0.3779734722239007105e-3, 12)
+	expect(rbp[3]).toBeCloseTo(-0.8695405990410863719e-3, 12)
+	expect(rbp[4]).toBeCloseTo(0.99999962194949259, 12)
+	expect(rbp[5]).toBeCloseTo(-0.1360775820404982209e-6, 12)
+	expect(rbp[6]).toBeCloseTo(-0.3779734476558184991e-3, 12)
+	expect(rbp[7]).toBeCloseTo(-0.1925857585832024058e-6, 12)
+	expect(rbp[8]).toBeCloseTo(0.9999999285680153377, 12)
+})
+
+test('eraPmat00', () => {
+	const m = erfa.eraPmat00(2400000.5, 50123.9999)
+	expect(m[8]).toBeCloseTo(0.9999999285680153, 12)
+	expect(m[0]).toBeCloseTo(0.999999550517508726, 12)
+	expect(m[1]).toBeCloseTo(0.8695405883617884705e-3, 12)
+	expect(m[2]).toBeCloseTo(0.3779734722239007105e-3, 12)
+	expect(m[3]).toBeCloseTo(-0.8695405990410863719e-3, 12)
+	expect(m[4]).toBeCloseTo(0.99999962194949259, 12)
+	expect(m[5]).toBeCloseTo(-0.1360775820404982209e-6, 12)
+	expect(m[6]).toBeCloseTo(-0.3779734476558184991e-3, 12)
+	expect(m[7]).toBeCloseTo(-0.1925857585832024058e-6, 12)
+	expect(m[8]).toBeCloseTo(0.9999999285680153377, 12)
+})
+
+test('eraPn00', () => {
+	const [epsa, rb, rp, rbp, rn, rbpn] = erfa.eraPn00(2400000.5, 53736, -0.9632552291149336e-5, 0.40631971066211414e-4)
+	expect(epsa).toBeCloseTo(0.409079178940423, 12)
+	expect(rb[0]).toBeCloseTo(0.9999999999999942498, 12)
+	expect(rb[1]).toBeCloseTo(-0.7078279744199196626e-7, 12)
+	expect(rb[2]).toBeCloseTo(0.8056217146976134152e-7, 12)
+	expect(rb[3]).toBeCloseTo(0.7078279477857337206e-7, 12)
+	expect(rb[4]).toBeCloseTo(0.9999999999999969484, 12)
+	expect(rb[5]).toBeCloseTo(0.3306041454222136517e-7, 12)
+	expect(rb[6]).toBeCloseTo(-0.8056217380986972157e-7, 12)
+	expect(rb[7]).toBeCloseTo(-0.33060408839805525e-7, 12)
+	expect(rb[8]).toBeCloseTo(0.9999999999999962084, 12)
+	expect(rp[0]).toBeCloseTo(0.9999989300532289018, 12)
+	expect(rp[1]).toBeCloseTo(-0.1341647226791824349e-2, 12)
+	expect(rp[2]).toBeCloseTo(-0.5829880927190296547e-3, 12)
+	expect(rp[3]).toBeCloseTo(0.1341647231069759008e-2, 12)
+	expect(rp[4]).toBeCloseTo(0.9999990999908750433, 12)
+	expect(rp[5]).toBeCloseTo(-0.3837444441583715468e-6, 12)
+	expect(rp[6]).toBeCloseTo(0.5829880828740957684e-3, 12)
+	expect(rp[7]).toBeCloseTo(-0.3984203267708834759e-6, 12)
+	expect(rp[8]).toBeCloseTo(0.9999998300623538046, 12)
+	expect(rbp[0]).toBeCloseTo(0.9999989300052243993, 12)
+	expect(rbp[1]).toBeCloseTo(-0.1341717990239703727e-2, 12)
+	expect(rbp[2]).toBeCloseTo(-0.5829075749891684053e-3, 12)
+	expect(rbp[3]).toBeCloseTo(0.1341718013831739992e-2, 12)
+	expect(rbp[4]).toBeCloseTo(0.9999990998959191343, 12)
+	expect(rbp[5]).toBeCloseTo(-0.350575973356542117e-6, 12)
+	expect(rbp[6]).toBeCloseTo(0.5829075206857717883e-3, 12)
+	expect(rbp[7]).toBeCloseTo(-0.431521995519860897e-6, 12)
+	expect(rbp[8]).toBeCloseTo(0.9999998301093036269, 12)
+	expect(rn[0]).toBeCloseTo(0.9999999999536069682, 12)
+	expect(rn[1]).toBeCloseTo(0.8837746144872140812e-5, 12)
+	expect(rn[2]).toBeCloseTo(0.3831488838252590008e-5, 12)
+	expect(rn[3]).toBeCloseTo(-0.8837590456633197506e-5, 12)
+	expect(rn[4]).toBeCloseTo(0.9999999991354692733, 12)
+	expect(rn[5]).toBeCloseTo(-0.4063198798559573702e-4, 12)
+	expect(rn[6]).toBeCloseTo(-0.3831847930135328368e-5, 12)
+	expect(rn[7]).toBeCloseTo(0.4063195412258150427e-4, 12)
+	expect(rn[8]).toBeCloseTo(0.9999999991671806225, 12)
+	expect(rbpn[0]).toBeCloseTo(0.9999989440499982806, 12)
+	expect(rbpn[1]).toBeCloseTo(-0.1332880253640848301e-2, 12)
+	expect(rbpn[2]).toBeCloseTo(-0.5790760898731087295e-3, 12)
+	expect(rbpn[3]).toBeCloseTo(0.1332856746979948745e-2, 12)
+	expect(rbpn[4]).toBeCloseTo(0.9999991109064768883, 12)
+	expect(rbpn[5]).toBeCloseTo(-0.4097740555723063806e-4, 12)
+	expect(rbpn[6]).toBeCloseTo(0.5791301929950205e-3, 12)
+	expect(rbpn[7]).toBeCloseTo(0.4020553681373702931e-4, 12)
+	expect(rbpn[8]).toBeCloseTo(0.9999998314958529887, 12)
+})
+
+test('eraPn00a', () => {
+	const [dpsi, deps, epsa, rb, rp, rbp, rn, rbpn] = erfa.eraPn00a(2400000.5, 53736)
+	expect(dpsi).toBeCloseTo(-0.9630909107115518e-5, 12)
+	expect(deps).toBeCloseTo(0.40632391740016787e-4, 12)
+	expect(epsa).toBeCloseTo(0.409079178940423, 12)
+	expect(rb[0]).toBeCloseTo(0.9999999999999942498, 12)
+	expect(rb[1]).toBeCloseTo(-0.7078279744199196626e-7, 12)
+	expect(rb[2]).toBeCloseTo(0.8056217146976134152e-7, 12)
+	expect(rb[3]).toBeCloseTo(0.7078279477857337206e-7, 12)
+	expect(rb[4]).toBeCloseTo(0.9999999999999969484, 12)
+	expect(rb[5]).toBeCloseTo(0.3306041454222136517e-7, 12)
+	expect(rb[6]).toBeCloseTo(-0.8056217380986972157e-7, 12)
+	expect(rb[7]).toBeCloseTo(-0.33060408839805525e-7, 12)
+	expect(rb[8]).toBeCloseTo(0.9999999999999962084, 12)
+	expect(rp[0]).toBeCloseTo(0.9999989300532289018, 12)
+	expect(rp[1]).toBeCloseTo(-0.1341647226791824349e-2, 12)
+	expect(rp[2]).toBeCloseTo(-0.5829880927190296547e-3, 12)
+	expect(rp[3]).toBeCloseTo(0.1341647231069759008e-2, 12)
+	expect(rp[4]).toBeCloseTo(0.9999990999908750433, 12)
+	expect(rp[5]).toBeCloseTo(-0.3837444441583715468e-6, 12)
+	expect(rp[6]).toBeCloseTo(0.5829880828740957684e-3, 12)
+	expect(rp[7]).toBeCloseTo(-0.3984203267708834759e-6, 12)
+	expect(rp[8]).toBeCloseTo(0.9999998300623538046, 12)
+	expect(rbp[0]).toBeCloseTo(0.9999989300052243993, 12)
+	expect(rbp[1]).toBeCloseTo(-0.1341717990239703727e-2, 12)
+	expect(rbp[2]).toBeCloseTo(-0.5829075749891684053e-3, 12)
+	expect(rbp[3]).toBeCloseTo(0.1341718013831739992e-2, 12)
+	expect(rbp[4]).toBeCloseTo(0.9999990998959191343, 12)
+	expect(rbp[5]).toBeCloseTo(-0.350575973356542117e-6, 12)
+	expect(rbp[6]).toBeCloseTo(0.5829075206857717883e-3, 12)
+	expect(rbp[7]).toBeCloseTo(-0.431521995519860897e-6, 12)
+	expect(rbp[8]).toBeCloseTo(0.9999998301093036269, 12)
+	expect(rn[0]).toBeCloseTo(0.9999999999536227949, 12)
+	expect(rn[1]).toBeCloseTo(0.8836238544090873336e-5, 12)
+	expect(rn[2]).toBeCloseTo(0.3830835237722400669e-5, 12)
+	expect(rn[3]).toBeCloseTo(-0.8836082880798569274e-5, 12)
+	expect(rn[4]).toBeCloseTo(0.9999999991354655028, 12)
+	expect(rn[5]).toBeCloseTo(-0.406324086536249985e-4, 12)
+	expect(rn[6]).toBeCloseTo(-0.3831194272065995866e-5, 12)
+	expect(rn[7]).toBeCloseTo(0.4063237480216291775e-4, 12)
+	expect(rn[8]).toBeCloseTo(0.9999999991671660338, 12)
+	expect(rbpn[0]).toBeCloseTo(0.9999989440476103435, 12)
+	expect(rbpn[1]).toBeCloseTo(-0.1332881761240011763e-2, 12)
+	expect(rbpn[2]).toBeCloseTo(-0.5790767434730085751e-3, 12)
+	expect(rbpn[3]).toBeCloseTo(0.1332858254308954658e-2, 12)
+	expect(rbpn[4]).toBeCloseTo(0.9999991109044505577, 12)
+	expect(rbpn[5]).toBeCloseTo(-0.4097782710396580452e-4, 12)
+	expect(rbpn[6]).toBeCloseTo(0.5791308472168152904e-3, 12)
+	expect(rbpn[7]).toBeCloseTo(0.4020595661591500259e-4, 12)
+	expect(rbpn[8]).toBeCloseTo(0.9999998314954572304, 12)
+})
+
+test('eraPn00b', () => {
+	const [dpsi, deps, epsa, rb, rp, rbp, rn, rbpn] = erfa.eraPn00b(2400000.5, 53736)
+	expect(dpsi).toBeCloseTo(-0.9632552291148363e-5, 12)
+	expect(deps).toBeCloseTo(0.40631971066211594e-4, 12)
+	expect(epsa).toBeCloseTo(0.409079178940423, 12)
+	expect(rb[0]).toBeCloseTo(0.9999999999999942498, 12)
+	expect(rb[1]).toBeCloseTo(-0.7078279744199196626e-7, 12)
+	expect(rb[2]).toBeCloseTo(0.8056217146976134152e-7, 12)
+	expect(rb[3]).toBeCloseTo(0.7078279477857337206e-7, 12)
+	expect(rb[4]).toBeCloseTo(0.9999999999999969484, 12)
+	expect(rb[5]).toBeCloseTo(0.3306041454222136517e-7, 12)
+	expect(rb[6]).toBeCloseTo(-0.8056217380986972157e-7, 12)
+	expect(rb[7]).toBeCloseTo(-0.33060408839805525e-7, 12)
+	expect(rb[8]).toBeCloseTo(0.9999999999999962084, 12)
+	expect(rp[0]).toBeCloseTo(0.9999989300532289018, 12)
+	expect(rp[1]).toBeCloseTo(-0.1341647226791824349e-2, 12)
+	expect(rp[2]).toBeCloseTo(-0.5829880927190296547e-3, 12)
+	expect(rp[3]).toBeCloseTo(0.1341647231069759008e-2, 12)
+	expect(rp[4]).toBeCloseTo(0.9999990999908750433, 12)
+	expect(rp[5]).toBeCloseTo(-0.3837444441583715468e-6, 12)
+	expect(rp[6]).toBeCloseTo(0.5829880828740957684e-3, 12)
+	expect(rp[7]).toBeCloseTo(-0.3984203267708834759e-6, 12)
+	expect(rp[8]).toBeCloseTo(0.9999998300623538046, 12)
+	expect(rbp[0]).toBeCloseTo(0.9999989300052243993, 12)
+	expect(rbp[1]).toBeCloseTo(-0.1341717990239703727e-2, 12)
+	expect(rbp[2]).toBeCloseTo(-0.5829075749891684053e-3, 12)
+	expect(rbp[3]).toBeCloseTo(0.1341718013831739992e-2, 12)
+	expect(rbp[4]).toBeCloseTo(0.9999990998959191343, 12)
+	expect(rbp[5]).toBeCloseTo(-0.350575973356542117e-6, 12)
+	expect(rbp[6]).toBeCloseTo(0.5829075206857717883e-3, 12)
+	expect(rbp[7]).toBeCloseTo(-0.431521995519860897e-6, 12)
+	expect(rbp[8]).toBeCloseTo(0.9999998301093036269, 12)
+	expect(rn[0]).toBeCloseTo(0.9999999999536069682, 12)
+	expect(rn[1]).toBeCloseTo(0.8837746144871248011e-5, 12)
+	expect(rn[2]).toBeCloseTo(0.3831488838252202945e-5, 12)
+	expect(rn[3]).toBeCloseTo(-0.883759045663230472e-5, 12)
+	expect(rn[4]).toBeCloseTo(0.9999999991354692733, 12)
+	expect(rn[5]).toBeCloseTo(-0.4063198798559591654e-4, 12)
+	expect(rn[6]).toBeCloseTo(-0.3831847930134941271e-5, 12)
+	expect(rn[7]).toBeCloseTo(0.406319541225816838e-4, 12)
+	expect(rn[8]).toBeCloseTo(0.9999999991671806225, 12)
+	expect(rbpn[0]).toBeCloseTo(0.9999989440499982806, 12)
+	expect(rbpn[1]).toBeCloseTo(-0.1332880253640849194e-2, 12)
+	expect(rbpn[2]).toBeCloseTo(-0.5790760898731091166e-3, 12)
+	expect(rbpn[3]).toBeCloseTo(0.1332856746979949638e-2, 12)
+	expect(rbpn[4]).toBeCloseTo(0.9999991109064768883, 12)
+	expect(rbpn[5]).toBeCloseTo(-0.4097740555723081811e-4, 12)
+	expect(rbpn[6]).toBeCloseTo(0.5791301929950208873e-3, 12)
+	expect(rbpn[7]).toBeCloseTo(0.4020553681373720832e-4, 12)
+	expect(rbpn[8]).toBeCloseTo(0.9999998314958529887, 12)
+})
+
+test('eraPnm00a', () => {
+	const rbpn = erfa.eraPnm00a(2400000.5, 50123.9999)
+	expect(rbpn[0]).toBeCloseTo(0.9999995832793134257, 12)
+	expect(rbpn[1]).toBeCloseTo(0.8372384254137809439e-3, 12)
+	expect(rbpn[2]).toBeCloseTo(0.3639684306407150645e-3, 12)
+	expect(rbpn[3]).toBeCloseTo(-0.8372535226570394543e-3, 12)
+	expect(rbpn[4]).toBeCloseTo(0.9999996486491582471, 12)
+	expect(rbpn[5]).toBeCloseTo(0.4132915262664072381e-4, 12)
+	expect(rbpn[6]).toBeCloseTo(-0.3639337004054317729e-3, 12)
+	expect(rbpn[7]).toBeCloseTo(-0.4163386925461775873e-4, 12)
+	expect(rbpn[8]).toBeCloseTo(0.9999999329094390695, 12)
+})
+
+test('eraPnm00b', () => {
+	const rbpn = erfa.eraPnm00b(2400000.5, 50123.9999)
+	expect(rbpn[0]).toBeCloseTo(0.999999583277620828, 12)
+	expect(rbpn[1]).toBeCloseTo(0.8372401264429654837e-3, 12)
+	expect(rbpn[2]).toBeCloseTo(0.3639691681450271771e-3, 12)
+	expect(rbpn[3]).toBeCloseTo(-0.8372552234147137424e-3, 12)
+	expect(rbpn[4]).toBeCloseTo(0.9999996486477686123, 12)
+	expect(rbpn[5]).toBeCloseTo(0.413283219094605289e-4, 12)
+	expect(rbpn[6]).toBeCloseTo(-0.3639344385341866407e-3, 12)
+	expect(rbpn[7]).toBeCloseTo(-0.4163303977421522785e-4, 12)
+	expect(rbpn[8]).toBeCloseTo(0.9999999329092049734, 12)
+})
+
+test('eraC2i00a', () => {
+	const rc2i = erfa.eraC2i00a(2400000.5, 53736)
+	expect(rc2i[0]).toBeCloseTo(0.9999998323037165557, 12)
+	expect(rc2i[1]).toBeCloseTo(0.5581526348992140183e-9, 12)
+	expect(rc2i[2]).toBeCloseTo(-0.5791308477073443415e-3, 12)
+	expect(rc2i[3]).toBeCloseTo(-0.2384266227870752452e-7, 12)
+	expect(rc2i[4]).toBeCloseTo(0.9999999991917405258, 12)
+	expect(rc2i[5]).toBeCloseTo(-0.4020594955028209745e-4, 12)
+	expect(rc2i[6]).toBeCloseTo(0.5791308472168152904e-3, 12)
+	expect(rc2i[7]).toBeCloseTo(0.4020595661591500259e-4, 12)
+	expect(rc2i[8]).toBeCloseTo(0.9999998314954572304, 12)
+})
+
+test('eraC2i00b', () => {
+	const rc2i = erfa.eraC2i00b(2400000.5, 53736)
+	expect(rc2i[0]).toBeCloseTo(0.9999998323040954356, 12)
+	expect(rc2i[1]).toBeCloseTo(0.5581526349131823372e-9, 12)
+	expect(rc2i[2]).toBeCloseTo(-0.5791301934855394005e-3, 12)
+	expect(rc2i[3]).toBeCloseTo(-0.2384239285499175543e-7, 12)
+	expect(rc2i[4]).toBeCloseTo(0.9999999991917574043, 12)
+	expect(rc2i[5]).toBeCloseTo(-0.4020552974819030066e-4, 12)
+	expect(rc2i[6]).toBeCloseTo(0.5791301929950208873e-3, 12)
+	expect(rc2i[7]).toBeCloseTo(0.4020553681373720832e-4, 12)
+	expect(rc2i[8]).toBeCloseTo(0.9999998314958529887, 12)
+})
+
+test('eraC2t00a', () => {
+	const rc2t = erfa.eraC2t00a(2400000.5, 53736, 2400000.5, 53736, 2.55060238e-7, 1.860359247e-6)
+	expect(rc2t[0]).toBeCloseTo(-0.1810332128307182668, 12)
+	expect(rc2t[1]).toBeCloseTo(0.9834769806938457836, 12)
+	expect(rc2t[2]).toBeCloseTo(0.6555535638688341725e-4, 12)
+	expect(rc2t[3]).toBeCloseTo(-0.9834768134135984552, 12)
+	expect(rc2t[4]).toBeCloseTo(-0.1810332203649520727, 12)
+	expect(rc2t[5]).toBeCloseTo(0.5749801116141056317e-3, 12)
+	expect(rc2t[6]).toBeCloseTo(0.5773474014081406921e-3, 12)
+	expect(rc2t[7]).toBeCloseTo(0.3961832391770163647e-4, 12)
+	expect(rc2t[8]).toBeCloseTo(0.9999998325501692289, 12)
+})
+
+test('eraC2t00b', () => {
+	const rc2t = erfa.eraC2t00b(2400000.5, 53736, 2400000.5, 53736, 2.55060238e-7, 1.860359247e-6)
+	expect(rc2t[0]).toBeCloseTo(-0.1810332128439678965, 12)
+	expect(rc2t[1]).toBeCloseTo(0.9834769806913872359, 12)
+	expect(rc2t[2]).toBeCloseTo(0.6555565082458415611e-4, 12)
+	expect(rc2t[3]).toBeCloseTo(-0.9834768134115435923, 12)
+	expect(rc2t[4]).toBeCloseTo(-0.1810332203784001946, 12)
+	expect(rc2t[5]).toBeCloseTo(0.574979392203001723e-3, 12)
+	expect(rc2t[6]).toBeCloseTo(0.5773467471863534901e-3, 12)
+	expect(rc2t[7]).toBeCloseTo(0.396179041154994502e-4, 12)
+	expect(rc2t[8]).toBeCloseTo(0.9999998325505635738, 12)
+})
+
+test('eraC2tpe', () => {
+	const rc2t = erfa.eraC2tpe(2400000.5, 53736, 2400000.5, 53736, -0.9630909107115582393e-5, 0.40907897633565099, 2.55060238e-7, 1.860359247e-6)
+	expect(rc2t[0]).toBeCloseTo(-0.1813677995763029394, 12)
+	expect(rc2t[1]).toBeCloseTo(0.9023482206891683275, 12)
+	expect(rc2t[2]).toBeCloseTo(-0.3909902938641085751, 12)
+	expect(rc2t[3]).toBeCloseTo(-0.9834147641476804807, 12)
+	expect(rc2t[4]).toBeCloseTo(-0.1659883635434995121, 12)
+	expect(rc2t[5]).toBeCloseTo(0.7309763898042819705e-1, 12)
+	expect(rc2t[6]).toBeCloseTo(0.1059685430673215247e-2, 12)
+	expect(rc2t[7]).toBeCloseTo(0.3977631855605078674, 12)
+	expect(rc2t[8]).toBeCloseTo(0.9174875068792735362, 12)
+})
+
+test('eraC2txy', () => {
+	const rc2t = erfa.eraC2txy(2400000.5, 53736, 2400000.5, 53736, 0.5791308486706011e-3, 0.4020579816732961219e-4, 2.55060238e-7, 1.860359247e-6)
+	expect(rc2t[0]).toBeCloseTo(-0.1810332128306279253, 12)
+	expect(rc2t[1]).toBeCloseTo(0.9834769806938520084, 12)
+	expect(rc2t[2]).toBeCloseTo(0.6555551248057665829e-4, 12)
+	expect(rc2t[3]).toBeCloseTo(-0.9834768134136142314, 12)
+	expect(rc2t[4]).toBeCloseTo(-0.1810332203649529312, 12)
+	expect(rc2t[5]).toBeCloseTo(0.5749800843594139912e-3, 12)
+	expect(rc2t[6]).toBeCloseTo(0.5773474028619264494e-3, 12)
+	expect(rc2t[7]).toBeCloseTo(0.396181654691162426e-4, 12)
+	expect(rc2t[8]).toBeCloseTo(0.999999832550174667, 12)
+})
+
 test('eraTtTai', () => {
 	const [a, b] = erfa.eraTtTai(2453750.5, 0.892482639)
 	expect(a).toBe(2453750.5)
@@ -159,6 +675,14 @@ test('eraGst06a', () => {
 	expect(erfa.eraGst06a(2453736, 0.5, 2453736, 0.5)).toBeCloseTo(1.754166137675019159, 13)
 })
 
+test('eraGst00a', () => {
+	expect(erfa.eraGst00a(2400000.5, 53736, 2400000.5, 53736)).toBeCloseTo(1.754166138018281369, 12)
+})
+
+test('eraGst00b', () => {
+	expect(erfa.eraGst00b(2400000.5, 53736)).toBeCloseTo(1.754166136510680589, 12)
+})
+
 test('eraGst94', () => {
 	expect(erfa.eraGst94(2400000.5, 53736)).toBeCloseTo(1.754166136020645203, 13)
 })
@@ -182,6 +706,22 @@ test('eraGmst06', () => {
 
 test('eraEqeq94', () => {
 	expect(erfa.eraEqeq94(2400000.5, 41234)).toBeCloseTo(0.5357758254609256894e-4, 17)
+})
+
+test('eraEe00', () => {
+	expect(erfa.eraEe00(2400000.5, 53736, 0.40907897633565099, -0.9630909107115582393e-5)).toBeCloseTo(-0.8834193235367965479e-5, 18)
+})
+
+test('eraEe00a', () => {
+	expect(erfa.eraEe00a(2400000.5, 53736)).toBeCloseTo(-0.8834192459222588227e-5, 17)
+})
+
+test('eraEe00b', () => {
+	expect(erfa.eraEe00b(2400000.5, 53736)).toBeCloseTo(-0.8835700060003032831e-5, 18)
+})
+
+test('eraEect00', () => {
+	expect(erfa.eraEect00(2400000.5, 53736)).toBeCloseTo(0.2046085004885125264e-8, 20)
 })
 
 test('eraEra00', () => {
@@ -998,6 +1538,91 @@ test('eraAtci13', () => {
 	expect(astrom.eo).toBeCloseTo(-0.002900618712657375647, 15)
 })
 
+test('eraAtcc13', () => {
+	const ph = [0.903358544130430152, -0.415395237027994912, -0.180084014143265775] as const
+	const pb = [0.901310874734066458, -0.41740266404059817, -0.180982287786775775] as const
+	const vb = [0.007427279538863471, 0.014050745866797413, 0.006090457918538545] as const
+	const p = erfa.eraAtcc13(2.71, 0.174, 1e-5, 5e-6, arcsec(0.1), kilometerPerSecond(55), 2456165.5, 0.401182685, [pb, vb], ph)
+	const [ra, da] = erfa.eraC2s(...p)
+
+	expect(ra).toBeCloseTo(2.710126504531372384, 13)
+	expect(da).toBeCloseTo(0.1740632537628350152, 13)
+})
+
+test('eraAtciqn', () => {
+	const ph = [0.903358544130430152, -0.415395237027994912, -0.180084014143265775] as const
+	const pb = [0.901310874734066458, -0.41740266404059817, -0.180982287786775775] as const
+	const vb = [0.007427279538863471, 0.014050745866797413, 0.006090457918538545] as const
+	const astrom = erfa.eraApci13(2456165.5, 0.401182685, [pb, vb], ph)
+	const bodies = [
+		{ bm: 0.00028574, dl: 3e-10, p: [-7.81014427, -5.60956681, -1.98079819] as const, v: [0.0030723249, -0.00406995477, -0.00181335842] as const },
+		{ bm: 0.00095435, dl: 3e-9, p: [0.738098796, 4.63658692, 1.9693136] as const, v: [-0.00755816922, 0.00126913722, 0.000727999001] as const },
+		{ bm: 1, dl: 6e-6, p: [-0.000712174377, -0.00230478303, -0.00105865966] as const, v: [6.29235213e-6, -3.30888387e-7, -2.96486623e-7] as const },
+	]
+	const [ri, di] = erfa.eraAtciqn(2.71, 0.174, 1e-5, 5e-6, arcsec(0.1), kilometerPerSecond(55), astrom, bodies)
+
+	expect(ri).toBeCloseTo(2.710122008104983335, 13)
+	expect(di).toBeCloseTo(0.1729371916492767821, 13)
+})
+
+test('eraAtic13', () => {
+	const ph = [0.903358544130430152, -0.415395237027994912, -0.180084014143265775] as const
+	const pb = [0.901310874734066458, -0.41740266404059817, -0.180982287786775775] as const
+	const vb = [0.007427279538863471, 0.014050745866797413, 0.006090457918538545] as const
+	const [rc, dc, astrom] = erfa.eraAtic13(2.710121572969038991, 0.1729371367218230438, 2456165.5, 0.401182685, [pb, vb], ph)
+
+	expect(rc).toBeCloseTo(2.710126504531716819, 13)
+	expect(dc).toBeCloseTo(0.1740632537627034482, 13)
+	expect(astrom.eo).toBeCloseTo(-0.002900618712657375647, 15)
+})
+
+test('eraAticqn', () => {
+	const ph = [0.903358544130430152, -0.415395237027994912, -0.180084014143265775] as const
+	const pb = [0.901310874734066458, -0.41740266404059817, -0.180982287786775775] as const
+	const vb = [0.007427279538863471, 0.014050745866797413, 0.006090457918538545] as const
+	const astrom = erfa.eraApci13(2456165.5, 0.401182685, [pb, vb], ph)
+	const bodies = [
+		{ bm: 0.00028574, dl: 3e-10, p: [-7.81014427, -5.60956681, -1.98079819] as const, v: [0.0030723249, -0.00406995477, -0.00181335842] as const },
+		{ bm: 0.00095435, dl: 3e-9, p: [0.738098796, 4.63658692, 1.9693136] as const, v: [-0.00755816922, 0.00126913722, 0.000727999001] as const },
+		{ bm: 1, dl: 6e-6, p: [-0.000712174377, -0.00230478303, -0.00105865966] as const, v: [6.29235213e-6, -3.30888387e-7, -2.96486623e-7] as const },
+	]
+	const [rc, dc] = erfa.eraAticqn(2.709994899247599271, 0.1728740720983623469, astrom, bodies)
+
+	expect(rc).toBeCloseTo(2.709999575033027333, 13)
+	expect(dc).toBeCloseTo(0.173999965631646999, 13)
+})
+
+test('eraAtio13', () => {
+	erfa.eraUtcTai(2456384.5, 0.969254051, DAY_FRACTION_SCRATCH)
+	const [tt1, tt2] = erfa.eraTaiTt(DAY_FRACTION_SCRATCH[0], DAY_FRACTION_SCRATCH[1])
+	const [ut11, ut12] = erfa.eraUtcUt1(2456384.5, 0.969254051, 0.1550675)
+	const [aob, zob, hob, rob, dob] = erfa.eraAtio13(2.710121572969038991, 0.1729371367218230438, tt1, tt2, ut11, ut12, -0.527800806, -1.2345856, meter(2738), 2.47230737e-7, 1.82640464e-6, 0, 731, 12.8, 0.59, 0.55)
+
+	expect(aob).toBeCloseTo(0.9233952224895122499e-1, 13)
+	expect(zob).toBeCloseTo(1.407758704513549991, 13)
+	expect(hob).toBeCloseTo(-0.924761987988169814e-1, 13)
+	expect(dob).toBeCloseTo(0.1717653435756234676, 13)
+	expect(rob).toBeCloseTo(2.710085107988480746, 13)
+})
+
+test('eraAtoi13', () => {
+	erfa.eraUtcTai(2456384.5, 0.969254051, DAY_FRACTION_SCRATCH)
+	const [tt1, tt2] = erfa.eraTaiTt(DAY_FRACTION_SCRATCH[0], DAY_FRACTION_SCRATCH[1])
+	const [ut11, ut12] = erfa.eraUtcUt1(2456384.5, 0.969254051, 0.1550675)
+
+	let [ri, di] = erfa.eraAtoi13('R', 2.710085107986886201, 0.1717653435758265198, tt1, tt2, ut11, ut12, -0.527800806, -1.2345856, meter(2738), 2.47230737e-7, 1.82640464e-6, 0, 731, 12.8, 0.59, 0.55)
+	expect(ri).toBeCloseTo(2.71012157444754081, 13)
+	expect(di).toBeCloseTo(0.1729371839116608778, 13)
+
+	;[ri, di] = erfa.eraAtoi13('H', -0.09247619879782006106, 0.1717653435758265198, tt1, tt2, ut11, ut12, -0.527800806, -1.2345856, meter(2738), 2.47230737e-7, 1.82640464e-6, 0, 731, 12.8, 0.59, 0.55)
+	expect(ri).toBeCloseTo(2.710121574448138676, 13)
+	expect(di).toBeCloseTo(0.1729371839116608778, 13)
+
+	;[ri, di] = erfa.eraAtoi13('A', 0.09233952224794989993, 1.407758704513722461, tt1, tt2, ut11, ut12, -0.527800806, -1.2345856, meter(2738), 2.47230737e-7, 1.82640464e-6, 0, 731, 12.8, 0.59, 0.55)
+	expect(ri).toBeCloseTo(2.710121574448138676, 13)
+	expect(di).toBeCloseTo(0.1729371839116608781, 13)
+})
+
 test('eraAtco13', () => {
 	const pb = [-0.974170437669016342, -0.211520082035387968, -0.091758302425478583] as const
 	const vb = [0.003643658242375083, -0.015428731944935825, -0.006689220237864495] as const
@@ -1059,6 +1684,161 @@ test('eraMoon98', () => {
 	expect(v[2]).toBeCloseTo(-0.1716132214378462047e-3, 13)
 })
 
+test('eraEceq06', () => {
+	const [dr, dd] = erfa.eraEceq06(2456165.5, 0.401182685, 5.1, -0.9)
+	expect(dr).toBeCloseTo(5.533459733613627767, 14)
+	expect(dd).toBeCloseTo(-1.246542932554480576, 14)
+})
+
+test('eraEcm06', () => {
+	const m = erfa.eraEcm06(2456165.5, 0.401182685)
+	expect(m[0]).toBeCloseTo(0.9999952427708701137, 14)
+	expect(m[1]).toBeCloseTo(-0.2829062057663042347e-2, 14)
+	expect(m[2]).toBeCloseTo(-0.1229163741100017629e-2, 14)
+	expect(m[3]).toBeCloseTo(0.3084546876908653562e-2, 14)
+	expect(m[4]).toBeCloseTo(0.9174891871550392514, 14)
+	expect(m[5]).toBeCloseTo(0.3977487611849338124, 14)
+	expect(m[6]).toBeCloseTo(0.2488512951527405928e-5, 14)
+	expect(m[7]).toBeCloseTo(-0.3977506604161195467, 14)
+	expect(m[8]).toBeCloseTo(0.9174935488232863071, 14)
+})
+
+test('eraEe06a', () => {
+	expect(erfa.eraEe06a(2400000.5, 53736)).toBeCloseTo(-0.8834195072043790156e-5, 15)
+})
+
+test('eraEo06a', () => {
+	expect(erfa.eraEo06a(2400000.5, 53736)).toBeCloseTo(-0.1332882371941833644e-2, 15)
+})
+
+test('eraEqec06', () => {
+	const [dl, db] = erfa.eraEqec06(1234.5, 2440000.5, 1.234, 0.987)
+	expect(dl).toBeCloseTo(1.342509918994654619, 14)
+	expect(db).toBeCloseTo(0.5926215259704608132, 14)
+})
+
+test('eraP06e', () => {
+	const [eps0, psia, oma, bpa, bqa, pia, bpia, epsa, chia, za, zetaa, thetaa, pa, gam, phi, psi] = erfa.eraP06e(2400000.5, 52541)
+	expect(eps0).toBeCloseTo(0.4090926006005828715, 14)
+	expect(psia).toBeCloseTo(0.6664369630191613431e-3, 14)
+	expect(oma).toBeCloseTo(0.4090925973783255982, 14)
+	expect(bpa).toBeCloseTo(0.5561149371265209445e-6, 14)
+	expect(bqa).toBeCloseTo(-0.619151719329062127e-5, 14)
+	expect(pia).toBeCloseTo(0.6216441751884382923e-5, 14)
+	expect(bpia).toBeCloseTo(3.052014180023779882, 14)
+	expect(epsa).toBeCloseTo(0.4090864054922431688, 14)
+	expect(chia).toBeCloseTo(0.1387703379530915364e-5, 14)
+	expect(za).toBeCloseTo(0.2921789846651790546e-3, 14)
+	expect(zetaa).toBeCloseTo(0.317877329033200931e-3, 14)
+	expect(thetaa).toBeCloseTo(0.2650932701657497181e-3, 14)
+	expect(pa).toBeCloseTo(0.6651637681381016288e-3, 14)
+	expect(gam).toBeCloseTo(0.1398077115963754987e-5, 14)
+	expect(phi).toBeCloseTo(0.4090864090837462602, 14)
+	expect(psi).toBeCloseTo(0.6664464807480920325e-3, 14)
+})
+
+test('eraPn06', () => {
+	const [epsa, rb, rp, rbp, rn, rbpn] = erfa.eraPn06(2400000.5, 53736, -0.9632552291149335877e-5, 0.4063197106621141414e-4)
+	expect(epsa).toBeCloseTo(0.4090789763356509926, 12)
+	expect(rb[0]).toBeCloseTo(0.9999999999999942497, 12)
+	expect(rb[1]).toBeCloseTo(-0.7078368960971557145e-7, 14)
+	expect(rb[2]).toBeCloseTo(0.8056213977613185606e-7, 14)
+	expect(rb[3]).toBeCloseTo(0.7078368694637674333e-7, 14)
+	expect(rb[4]).toBeCloseTo(0.9999999999999969484, 12)
+	expect(rb[5]).toBeCloseTo(0.3305943742989134124e-7, 14)
+	expect(rb[6]).toBeCloseTo(-0.8056214211620056792e-7, 14)
+	expect(rb[7]).toBeCloseTo(-0.330594317274058695e-7, 14)
+	expect(rb[8]).toBeCloseTo(0.9999999999999962084, 12)
+	expect(rp[0]).toBeCloseTo(0.9999989300536854831, 12)
+	expect(rp[1]).toBeCloseTo(-0.1341646886204443795e-2, 14)
+	expect(rp[2]).toBeCloseTo(-0.5829880933488627759e-3, 14)
+	expect(rp[3]).toBeCloseTo(0.1341646890569782183e-2, 14)
+	expect(rp[4]).toBeCloseTo(0.9999990999913319321, 12)
+	expect(rp[5]).toBeCloseTo(-0.3835944216374477457e-6, 14)
+	expect(rp[6]).toBeCloseTo(0.5829880833027867368e-3, 14)
+	expect(rp[7]).toBeCloseTo(-0.3985701514686976112e-6, 14)
+	expect(rp[8]).toBeCloseTo(0.999999830062353495, 12)
+	expect(rbp[0]).toBeCloseTo(0.9999989300056797893, 12)
+	expect(rbp[1]).toBeCloseTo(-0.1341717650545059598e-2, 14)
+	expect(rbp[2]).toBeCloseTo(-0.5829075756493728856e-3, 14)
+	expect(rbp[3]).toBeCloseTo(0.1341717674223918101e-2, 14)
+	expect(rbp[4]).toBeCloseTo(0.9999990998963748448, 12)
+	expect(rbp[5]).toBeCloseTo(-0.3504269280170069029e-6, 14)
+	expect(rbp[6]).toBeCloseTo(0.5829075211461454599e-3, 14)
+	expect(rbp[7]).toBeCloseTo(-0.4316708436255949093e-6, 14)
+	expect(rbp[8]).toBeCloseTo(0.9999998301093032943, 12)
+	expect(rn[0]).toBeCloseTo(0.9999999999536069682, 12)
+	expect(rn[1]).toBeCloseTo(0.8837746921149881914e-5, 14)
+	expect(rn[2]).toBeCloseTo(0.3831487047682968703e-5, 14)
+	expect(rn[3]).toBeCloseTo(-0.883759123298369234e-5, 14)
+	expect(rn[4]).toBeCloseTo(0.9999999991354692664, 12)
+	expect(rn[5]).toBeCloseTo(-0.4063198798558931215e-4, 14)
+	expect(rn[6]).toBeCloseTo(-0.3831846139597250235e-5, 14)
+	expect(rn[7]).toBeCloseTo(0.4063195412258792914e-4, 14)
+	expect(rn[8]).toBeCloseTo(0.9999999991671806293, 12)
+	expect(rbpn[0]).toBeCloseTo(0.9999989440504506688, 12)
+	expect(rbpn[1]).toBeCloseTo(-0.1332879913170492655e-2, 14)
+	expect(rbpn[2]).toBeCloseTo(-0.5790760923225655753e-3, 14)
+	expect(rbpn[3]).toBeCloseTo(0.1332856406595754748e-2, 14)
+	expect(rbpn[4]).toBeCloseTo(0.9999991109069366795, 12)
+	expect(rbpn[5]).toBeCloseTo(-0.4097725651142641812e-4, 14)
+	expect(rbpn[6]).toBeCloseTo(0.5791301952321296716e-3, 14)
+	expect(rbpn[7]).toBeCloseTo(0.4020538796195230577e-4, 14)
+	expect(rbpn[8]).toBeCloseTo(0.9999998314958576778, 12)
+})
+
+test('eraPn06a', () => {
+	const [dpsi, deps, epsa, rb, rp, rbp, rn, rbpn] = erfa.eraPn06a(2400000.5, 53736)
+	expect(dpsi).toBeCloseTo(-0.9630912025820308797e-5, 12)
+	expect(deps).toBeCloseTo(0.4063238496887249798e-4, 12)
+	expect(epsa).toBeCloseTo(0.4090789763356509926, 12)
+	expect(rb[0]).toBeCloseTo(0.9999999999999942497, 12)
+	expect(rb[1]).toBeCloseTo(-0.7078368960971557145e-7, 14)
+	expect(rb[2]).toBeCloseTo(0.8056213977613185606e-7, 14)
+	expect(rb[3]).toBeCloseTo(0.7078368694637674333e-7, 14)
+	expect(rb[4]).toBeCloseTo(0.9999999999999969484, 12)
+	expect(rb[5]).toBeCloseTo(0.3305943742989134124e-7, 14)
+	expect(rb[6]).toBeCloseTo(-0.8056214211620056792e-7, 14)
+	expect(rb[7]).toBeCloseTo(-0.330594317274058695e-7, 14)
+	expect(rb[8]).toBeCloseTo(0.9999999999999962084, 12)
+	expect(rp[0]).toBeCloseTo(0.9999989300536854831, 12)
+	expect(rp[1]).toBeCloseTo(-0.1341646886204443795e-2, 14)
+	expect(rp[2]).toBeCloseTo(-0.5829880933488627759e-3, 14)
+	expect(rp[3]).toBeCloseTo(0.1341646890569782183e-2, 14)
+	expect(rp[4]).toBeCloseTo(0.9999990999913319321, 12)
+	expect(rp[5]).toBeCloseTo(-0.3835944216374477457e-6, 14)
+	expect(rp[6]).toBeCloseTo(0.5829880833027867368e-3, 14)
+	expect(rp[7]).toBeCloseTo(-0.3985701514686976112e-6, 14)
+	expect(rp[8]).toBeCloseTo(0.999999830062353495, 12)
+	expect(rbp[0]).toBeCloseTo(0.9999989300056797893, 12)
+	expect(rbp[1]).toBeCloseTo(-0.1341717650545059598e-2, 14)
+	expect(rbp[2]).toBeCloseTo(-0.5829075756493728856e-3, 14)
+	expect(rbp[3]).toBeCloseTo(0.1341717674223918101e-2, 14)
+	expect(rbp[4]).toBeCloseTo(0.9999990998963748448, 12)
+	expect(rbp[5]).toBeCloseTo(-0.3504269280170069029e-6, 14)
+	expect(rbp[6]).toBeCloseTo(0.5829075211461454599e-3, 14)
+	expect(rbp[7]).toBeCloseTo(-0.4316708436255949093e-6, 14)
+	expect(rbp[8]).toBeCloseTo(0.9999998301093032943, 12)
+	expect(rn[0]).toBeCloseTo(0.9999999999536227668, 12)
+	expect(rn[1]).toBeCloseTo(0.8836241998111535233e-5, 14)
+	expect(rn[2]).toBeCloseTo(0.3830834608415287707e-5, 14)
+	expect(rn[3]).toBeCloseTo(-0.8836086334870740138e-5, 14)
+	expect(rn[4]).toBeCloseTo(0.9999999991354657474, 12)
+	expect(rn[5]).toBeCloseTo(-0.4063240188248455065e-4, 14)
+	expect(rn[6]).toBeCloseTo(-0.3831193642839398128e-5, 14)
+	expect(rn[7]).toBeCloseTo(0.406323680310147977e-4, 14)
+	expect(rn[8]).toBeCloseTo(0.9999999991671663114, 12)
+	expect(rbpn[0]).toBeCloseTo(0.9999989440480669738, 12)
+	expect(rbpn[1]).toBeCloseTo(-0.1332881418091915973e-2, 14)
+	expect(rbpn[2]).toBeCloseTo(-0.5790767447612042565e-3, 14)
+	expect(rbpn[3]).toBeCloseTo(0.1332857911250989133e-2, 14)
+	expect(rbpn[4]).toBeCloseTo(0.9999991109049141908, 12)
+	expect(rbpn[5]).toBeCloseTo(-0.4097767128546784878e-4, 14)
+	expect(rbpn[6]).toBeCloseTo(0.5791308482835292617e-3, 14)
+	expect(rbpn[7]).toBeCloseTo(0.402058009945402031e-4, 14)
+	expect(rbpn[8]).toBeCloseTo(0.9999998314954628695, 12)
+})
+
 test('eraNutm80', () => {
 	const m = erfa.eraNutm80(2400000.5, 53736)
 
@@ -1085,4 +1865,121 @@ test('eraNumat', () => {
 	expect(m[6]).toBeCloseTo(-0.3831192481833385226e-5, 13)
 	expect(m[7]).toBeCloseTo(0.4063237480216934159e-4, 13)
 	expect(m[8]).toBeCloseTo(0.9999999991671660407, 13)
+})
+
+test('eraNum00a', () => {
+	const m = erfa.eraNum00a(2400000.5, 53736)
+	expect(m[0]).toBeCloseTo(0.9999999999536227949, 12)
+	expect(m[1]).toBeCloseTo(0.8836238544090873336e-5, 12)
+	expect(m[2]).toBeCloseTo(0.3830835237722400669e-5, 12)
+	expect(m[3]).toBeCloseTo(-0.8836082880798569274e-5, 12)
+	expect(m[4]).toBeCloseTo(0.9999999991354655028, 12)
+	expect(m[5]).toBeCloseTo(-0.406324086536249985e-4, 12)
+	expect(m[6]).toBeCloseTo(-0.3831194272065995866e-5, 12)
+	expect(m[7]).toBeCloseTo(0.4063237480216291775e-4, 12)
+	expect(m[8]).toBeCloseTo(0.9999999991671660338, 12)
+})
+
+test('eraNum00b', () => {
+	const m = erfa.eraNum00b(2400000.5, 53736)
+	expect(m[0]).toBeCloseTo(0.9999999999536069682, 12)
+	expect(m[1]).toBeCloseTo(0.8837746144871248011e-5, 12)
+	expect(m[2]).toBeCloseTo(0.3831488838252202945e-5, 12)
+	expect(m[3]).toBeCloseTo(-0.883759045663230472e-5, 12)
+	expect(m[4]).toBeCloseTo(0.9999999991354692733, 12)
+	expect(m[5]).toBeCloseTo(-0.4063198798559591654e-4, 12)
+	expect(m[6]).toBeCloseTo(-0.3831847930134941271e-5, 12)
+	expect(m[7]).toBeCloseTo(0.406319541225816838e-4, 12)
+	expect(m[8]).toBeCloseTo(0.9999999991671806225, 12)
+})
+
+test('eraNum06a', () => {
+	const m = erfa.eraNum06a(2400000.5, 53736)
+	expect(m[0]).toBeCloseTo(0.9999999999536227668, 12)
+	expect(m[1]).toBeCloseTo(0.8836241998111535233e-5, 12)
+	expect(m[2]).toBeCloseTo(0.3830834608415287707e-5, 12)
+	expect(m[3]).toBeCloseTo(-0.8836086334870740138e-5, 12)
+	expect(m[4]).toBeCloseTo(0.9999999991354657474, 12)
+	expect(m[5]).toBeCloseTo(-0.4063240188248455065e-4, 12)
+	expect(m[6]).toBeCloseTo(-0.3831193642839398128e-5, 12)
+	expect(m[7]).toBeCloseTo(0.406323680310147977e-4, 12)
+	expect(m[8]).toBeCloseTo(0.9999999991671663114, 12)
+})
+
+test('eraPnm80', () => {
+	const m = erfa.eraPnm80(2400000.5, 50123.9999)
+	expect(m[0]).toBeCloseTo(0.9999995831934611169, 12)
+	expect(m[1]).toBeCloseTo(0.8373654045728124011e-3, 12)
+	expect(m[2]).toBeCloseTo(0.3639121916933106191e-3, 12)
+	expect(m[3]).toBeCloseTo(-0.8373804896118301316e-3, 12)
+	expect(m[4]).toBeCloseTo(0.9999996485439674092, 12)
+	expect(m[5]).toBeCloseTo(0.4130202510421549752e-4, 12)
+	expect(m[6]).toBeCloseTo(-0.3638774789072144473e-3, 12)
+	expect(m[7]).toBeCloseTo(-0.4160674085851722359e-4, 12)
+	expect(m[8]).toBeCloseTo(0.9999999329310274805, 12)
+})
+
+test('eraLteceq', () => {
+	const [dr, dd] = erfa.eraLteceq(2500, 1.5, 0.6)
+	expect(dr).toBeCloseTo(1.275156021861921167, 14)
+	expect(dd).toBeCloseTo(0.9966573543519204791, 14)
+})
+
+test('eraLteqec', () => {
+	const [dl, db] = erfa.eraLteqec(-1500, 1.234, 0.987)
+	expect(dl).toBeCloseTo(0.5039483649047114859, 14)
+	expect(db).toBeCloseTo(0.5848534459726224882, 14)
+})
+
+test('eraLtpecl', () => {
+	const v = erfa.eraLtpecl(-1500)
+	expect(v[0]).toBeCloseTo(0.4768625676477096525e-3, 14)
+	expect(v[1]).toBeCloseTo(-0.4052259533091875112, 14)
+	expect(v[2]).toBeCloseTo(0.9142164401096448012, 14)
+})
+
+test('eraLtpequ', () => {
+	const v = erfa.eraLtpequ(-2500)
+	expect(v[0]).toBeCloseTo(-0.3586652560237326659, 14)
+	expect(v[1]).toBeCloseTo(-0.1996978910771128475, 14)
+	expect(v[2]).toBeCloseTo(0.9118552442250819624, 14)
+})
+
+test('eraLtecm', () => {
+	const m = erfa.eraLtecm(-3000)
+	expect(m[0]).toBeCloseTo(0.3564105644859788825, 14)
+	expect(m[1]).toBeCloseTo(0.8530575738617682284, 14)
+	expect(m[2]).toBeCloseTo(0.3811355207795060435, 14)
+	expect(m[3]).toBeCloseTo(-0.9343283469640709942, 14)
+	expect(m[4]).toBeCloseTo(0.3247830597681745976, 14)
+	expect(m[5]).toBeCloseTo(0.1467872751535940865, 14)
+	expect(m[6]).toBeCloseTo(0.1431636191201167793e-2, 14)
+	expect(m[7]).toBeCloseTo(-0.4084222566960599342, 14)
+	expect(m[8]).toBeCloseTo(0.9127919865189030899, 14)
+})
+
+test('eraLtp', () => {
+	const m = erfa.eraLtp(1666.666)
+	expect(m[0]).toBeCloseTo(0.9967044141159213819, 14)
+	expect(m[1]).toBeCloseTo(0.0743780189319321084, 14)
+	expect(m[2]).toBeCloseTo(0.03237624409345603401, 14)
+	expect(m[3]).toBeCloseTo(-0.07437802731819618167, 14)
+	expect(m[4]).toBeCloseTo(0.997229389445453307, 14)
+	expect(m[5]).toBeCloseTo(-0.001205768842723593346, 14)
+	expect(m[6]).toBeCloseTo(-0.03237622482766575399, 14)
+	expect(m[7]).toBeCloseTo(-0.001206286039697609008, 14)
+	expect(m[8]).toBeCloseTo(0.9994750246704010914, 14)
+})
+
+test('eraLtpb', () => {
+	const m = erfa.eraLtpb(1666.666)
+	expect(m[0]).toBeCloseTo(0.9967044167723271851, 14)
+	expect(m[1]).toBeCloseTo(0.7437794731203340345e-1, 14)
+	expect(m[2]).toBeCloseTo(0.3237632684841625547e-1, 14)
+	expect(m[3]).toBeCloseTo(-0.7437795663437177152e-1, 14)
+	expect(m[4]).toBeCloseTo(0.9972293947500013666, 14)
+	expect(m[5]).toBeCloseTo(-0.1205741865911243235e-2, 14)
+	expect(m[6]).toBeCloseTo(-0.3237630543224664992e-1, 14)
+	expect(m[7]).toBeCloseTo(-0.1206316791076485295e-2, 14)
+	expect(m[8]).toBeCloseTo(0.9994750220222438819, 14)
 })

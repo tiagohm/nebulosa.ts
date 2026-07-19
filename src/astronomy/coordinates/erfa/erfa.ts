@@ -7,7 +7,7 @@ import { type Distance, toKilometer } from '../../../math/units/distance'
 import type { Pressure } from '../../../math/units/pressure'
 import type { Temperature } from '../../../math/units/temperature'
 import type { Velocity } from '../../../math/units/velocity'
-import { FAIRHEAD, NUT00A_LS, NUT00A_PL, NUT00B_LS, IAU2006_S, NUT80_X } from './erfa.data'
+import { FAIRHEAD, IAU2000_EECT, IAU2000_S, IAU2006_S, NUT00A_LS, NUT00A_PL, NUT00B_LS, NUT80_X, PLAN94, VONDRAK_ECLIPTIC, VONDRAK_ECLIPTIC_POLYNOMIAL, VONDRAK_EQUATOR, VONDRAK_EQUATOR_POLYNOMIAL } from './erfa.data'
 
 const DBL_EPSILON = 2.220446049250313e-16
 
@@ -171,6 +171,249 @@ export function eraEpb(jd1: number, jd2: number) {
 // Julian Date to Julian Epoch.
 export function eraEpj(jd1: number, jd2: number) {
 	return 2000 + (jd1 - J2000 + jd2) / DAYSPERJY
+}
+
+// Besselian epoch to Julian Date, returned as a two-part Modified Julian Date.
+export function eraEpb2jd(epb: number): [number, number] {
+	// MJD zero-point and Besselian epoch offset.
+	return [MJD0, 15019.81352 + (epb - 1900) * DAYSPERTY]
+}
+
+// Transform ICRS right ascension and declination to ecliptic longitude and latitude of date, IAU 2006.
+export function eraEqec06(date1: number, date2: number, dr: Angle, dd: Angle): [Angle, Angle] {
+	const v = matMulVec(eraEcm06(date1, date2), eraS2c(dr, dd))
+	const [longitude, latitude] = eraC2s(v[0], v[1], v[2])
+	return [normalizeAngle(longitude), eraAnpm(latitude)]
+}
+
+// Transform ecliptic longitude and latitude of date to ICRS right ascension and declination, IAU 2006.
+export function eraEceq06(date1: number, date2: number, dl: Angle, db: Angle): [Angle, Angle] {
+	const v = matTransposeMulVec(eraEcm06(date1, date2), eraS2c(dl, db))
+	const [rightAscension, declination] = eraC2s(v[0], v[1], v[2])
+	return [normalizeAngle(rightAscension), eraAnpm(declination)]
+}
+
+// ICRS equatorial-to-ecliptic rotation matrix for the ecliptic and equinox of date, IAU 2006.
+export function eraEcm06(date1: number, date2: number): MutMat3 {
+	return matMul(matRotX(eraObl06(date1, date2)), eraPmat06(date1, date2))
+}
+
+// Long-term precession of the ecliptic: pole vector in the J2000.0 equatorial frame.
+export function eraLtpecl(epj: number): MutVec3 {
+	const t = (epj - 2000) / 100
+	let p = 0
+	let q = 0
+	const w = TAU * t
+
+	for (const [period, pc, qc, ps, qs] of VONDRAK_ECLIPTIC) {
+		const a = w / period
+		p += Math.cos(a) * pc + Math.sin(a) * ps
+		q += Math.cos(a) * qc + Math.sin(a) * qs
+	}
+
+	let tp = 1
+	for (let i = 0; i < 4; i++) {
+		p += VONDRAK_ECLIPTIC_POLYNOMIAL[0][i] * tp
+		q += VONDRAK_ECLIPTIC_POLYNOMIAL[1][i] * tp
+		tp *= t
+	}
+
+	p *= ASEC2RAD
+	q *= ASEC2RAD
+
+	const pole = Math.sqrt(Math.max(0, 1 - p * p - q * q))
+	const eps0 = 84381.406 * ASEC2RAD
+	return [p, -q * Math.cos(eps0) - pole * Math.sin(eps0), -q * Math.sin(eps0) + pole * Math.cos(eps0)]
+}
+
+// Long-term precession of the equator: pole vector in the J2000.0 equatorial frame.
+export function eraLtpequ(epj: number): MutVec3 {
+	const t = (epj - 2000) / 100
+	let x = 0
+	let y = 0
+	const w = TAU * t
+
+	for (const [period, xc, yc, xs, ys] of VONDRAK_EQUATOR) {
+		const a = w / period
+		x += Math.cos(a) * xc + Math.sin(a) * xs
+		y += Math.cos(a) * yc + Math.sin(a) * ys
+	}
+
+	let tp = 1
+	for (let i = 0; i < 4; i++) {
+		x += VONDRAK_EQUATOR_POLYNOMIAL[0][i] * tp
+		y += VONDRAK_EQUATOR_POLYNOMIAL[1][i] * tp
+		tp *= t
+	}
+
+	x *= ASEC2RAD
+	y *= ASEC2RAD
+
+	return [x, y, Math.sqrt(Math.max(0, 1 - x * x - y * y))]
+}
+
+// Long-term precession matrix from J2000.0 mean equator and equinox to the given Julian epoch.
+export function eraLtp(epj: number): MutMat3 {
+	const equatorPole = eraLtpequ(epj)
+	const eclipticPole = eraLtpecl(epj)
+	const equinox = vecNormalize(vecCross(equatorPole, eclipticPole))
+	const middle = vecCross(equatorPole, equinox)
+	return [equinox[0], equinox[1], equinox[2], middle[0], middle[1], middle[2], equatorPole[0], equatorPole[1], equatorPole[2]]
+}
+
+// Long-term precession matrix including the ICRS frame bias.
+export function eraLtpb(epj: number): MutMat3 {
+	const rp = eraLtp(epj)
+	const dx = -0.016617 * ASEC2RAD
+	const de = -0.0068192 * ASEC2RAD
+	const dr = -0.0146 * ASEC2RAD
+	for (let i = 0; i < 9; i += 3) {
+		const x = rp[i]
+		const y = rp[i + 1]
+		const z = rp[i + 2]
+		rp[i] = x - y * dr + z * dx
+		rp[i + 1] = x * dr + y + z * de
+		rp[i + 2] = -x * dx - y * de + z
+	}
+	return rp
+}
+
+// ICRS equatorial-to-ecliptic rotation matrix using the Vondrak long-term precession model.
+export function eraLtecm(epj: number): MutMat3 {
+	const p = eraLtpequ(epj)
+	const z = eraLtpecl(epj)
+	const x = vecNormalize(vecCross(p, z))
+	const y = vecCross(z, x)
+	const dx = -0.016617 * ASEC2RAD
+	const de = -0.0068192 * ASEC2RAD
+	const dr = -0.0146 * ASEC2RAD
+	return [x[0] - x[1] * dr + x[2] * dx, x[0] * dr + x[1] + x[2] * de, -x[0] * dx - x[1] * de + x[2], y[0] - y[1] * dr + y[2] * dx, y[0] * dr + y[1] + y[2] * de, -y[0] * dx - y[1] * de + y[2], z[0] - z[1] * dr + z[2] * dx, z[0] * dr + z[1] + z[2] * de, -z[0] * dx - z[1] * de + z[2]]
+}
+
+// Transform ICRS right ascension and declination to ecliptic coordinates using long-term precession.
+export function eraLteqec(epj: number, dr: Angle, dd: Angle): [Angle, Angle] {
+	const v = matMulVec(eraLtecm(epj), eraS2c(dr, dd))
+	const [longitude, latitude] = eraC2s(v[0], v[1], v[2])
+	return [normalizeAngle(longitude), eraAnpm(latitude)]
+}
+
+// Transform ecliptic coordinates to ICRS right ascension and declination using long-term precession.
+export function eraLteceq(epj: number, dl: Angle, db: Angle): [Angle, Angle] {
+	const v = matTransposeMulVec(eraLtecm(epj), eraS2c(dl, db))
+	const [rightAscension, declination] = eraC2s(v[0], v[1], v[2])
+	return [normalizeAngle(rightAscension), eraAnpm(declination)]
+}
+
+// Julian epoch to Julian Date, returned as a two-part Modified Julian Date.
+export function eraEpj2jd(epj: number): [number, number] {
+	// MJD zero-point and Julian epoch offset.
+	return [MJD0, 51544.5 + (epj - 2000) * DAYSPERJY]
+}
+
+// Approximate heliocentric position and velocity of Mercury, Venus,
+// EMB, Mars, Jupiter, Saturn, Uranus or Neptune, in J2000.0 axes.
+// Returns the ERFA status (-1 invalid planet, 1 remote date, 2 no convergence)
+// and position/velocity in AU and AU/day.
+export function eraPlan94(tdb1: number, tdb2: number, np: number): readonly [MutVec3, MutVec3] {
+	// Gaussian constant and J2000.0 mean obliquity (IAU 1976).
+	const gaussianConstant = 0.01720209895
+	const sineObliquity = 0.3977771559319137
+	const cosineObliquity = 0.9174820620691818
+
+	const pv: readonly [MutVec3, MutVec3] = [
+		[0, 0, 0],
+		[0, 0, 0],
+	]
+
+	// Time: Julian millennia since J2000.0.
+	const t = (tdb1 - J2000 + tdb2) / DAYSPERJM
+
+	const { masses, semiMajorAxis, meanLongitude, eccentricity, perihelionLongitude, inclination, ascendingNodeLongitude, semiMajorAxisArgument, semiMajorAxisCosine, semiMajorAxisSine, meanLongitudeArgument, meanLongitudeCosine, meanLongitudeSine } = PLAN94
+
+	// Compute the mean elements.
+	let da = semiMajorAxis[np][0] + (semiMajorAxis[np][1] + semiMajorAxis[np][2] * t) * t
+	let dl = (3600 * meanLongitude[np][0] + (meanLongitude[np][1] + meanLongitude[np][2] * t) * t) * ASEC2RAD
+	const de = eccentricity[np][0] + (eccentricity[np][1] + eccentricity[np][2] * t) * t
+	const dp = eraAnpm((3600 * perihelionLongitude[np][0] + (perihelionLongitude[np][1] + perihelionLongitude[np][2] * t) * t) * ASEC2RAD)
+	const di = (3600 * inclination[np][0] + (inclination[np][1] + inclination[np][2] * t) * t) * ASEC2RAD
+	const dom = eraAnpm((3600 * ascendingNodeLongitude[np][0] + (ascendingNodeLongitude[np][1] + ascendingNodeLongitude[np][2] * t) * t) * ASEC2RAD)
+
+	// Apply the trigonometric terms.
+	const dmu = 0.3595362 * t
+
+	const smaa = semiMajorAxisArgument[np]
+	const smac = semiMajorAxisCosine[np]
+	const mla = meanLongitudeArgument[np]
+	const mlc = meanLongitudeCosine[np]
+
+	for (let k = 0; k < 8; k++) {
+		const arga = smaa[k] * dmu
+		const argl = mla[k] * dmu
+		da += (smac[k] * Math.cos(arga) + semiMajorAxisSine[np][k] * Math.sin(arga)) * 1e-7
+		dl += (mlc[k] * Math.cos(argl) + meanLongitudeSine[np][k] * Math.sin(argl)) * 1e-7
+	}
+
+	const arga = smaa[8] * dmu
+	da += t * (smac[8] * Math.cos(arga) + semiMajorAxisSine[np][8] * Math.sin(arga)) * 1e-7
+
+	for (let k = 8; k < 10; k++) {
+		const argl = mla[k] * dmu
+		dl += t * (mlc[k] * Math.cos(argl) + meanLongitudeSine[np][k] * Math.sin(argl)) * 1e-7
+	}
+
+	dl %= TAU
+
+	// Iterative solution of Kepler's equation to get eccentric anomaly.
+	const am = dl - dp
+	let ae = am + de * Math.sin(am)
+	let dae = 1
+
+	for (let k = 0; k < 10 && Math.abs(dae) > 1e-12; k++) {
+		dae = (am - ae + de * Math.sin(ae)) / (1 - de * Math.cos(ae))
+		ae += dae
+	}
+
+	// True anomaly.
+	const ae2 = ae / 2
+	const at = 2 * Math.atan2(Math.sqrt((1 + de) / (1 - de)) * Math.sin(ae2), Math.cos(ae2))
+
+	// Distance (AU) and speed (radians per day).
+	const r = da * (1 - de * Math.cos(ae))
+	const v = gaussianConstant * Math.sqrt((1 + 1 / masses[np]) / (da * da * da))
+	const si2 = Math.sin(di / 2)
+	const xq = si2 * Math.cos(dom)
+	const xp = si2 * Math.sin(dom)
+	const tl = at + dp
+	const xsw = Math.sin(tl)
+	const xcw = Math.cos(tl)
+	const xm2 = 2 * (xp * xcw - xq * xsw)
+	const xf = da / Math.sqrt(1 - de * de)
+	const ci2 = Math.cos(di / 2)
+	const xms = (de * Math.sin(dp) + xsw) * xf
+	const xmc = (de * Math.cos(dp) + xcw) * xf
+	const xpxq2 = 2 * xp * xq
+
+	// Position (J2000.0 ecliptic x,y,z in AU).
+	let x = r * (xcw - xm2 * xp)
+	let y = r * (xsw + xm2 * xq)
+	let z = r * -xm2 * ci2
+
+	// Rotate to equatorial.
+	pv[0][0] = x
+	pv[0][1] = y * cosineObliquity - z * sineObliquity
+	pv[0][2] = y * sineObliquity + z * cosineObliquity
+
+	// Velocity (J2000.0 ecliptic xdot,ydot,zdot in AU/day).
+	x = v * ((-1 + 2 * xp * xp) * xms + xpxq2 * xmc)
+	y = v * ((1 - 2 * xq * xq) * xmc - xpxq2 * xms)
+	z = v * (2 * ci2 * (xp * xms + xq * xmc))
+
+	// Rotate to equatorial.
+	pv[1][0] = x
+	pv[1][1] = y * cosineObliquity - z * sineObliquity
+	pv[1][2] = y * sineObliquity + z * cosineObliquity
+
+	return pv
 }
 
 function fillDayAndFraction(out: NumberArray, day: number, fraction: number) {
@@ -626,6 +869,69 @@ export function eraGmst00(ut11: number, ut12: number, tt1: number, tt2: number):
 	return normalizeAngle(eraEra00(ut11, ut12) + arcsec(0.014506 + (4612.15739966 + (1.39667721 + (-0.00009344 + 0.00001882 * t) * t) * t) * t))
 }
 
+// Equation of the equinoxes complementary terms, compatible with IAU 2000 resolutions.
+export function eraEect00(date1: number, date2: number): Angle {
+	// Interval between fundamental epoch J2000.0 and current date (JC).
+	const t = (date1 - J2000 + date2) / DAYSPERJC
+	// Fundamental arguments from IERS Conventions 2003.
+	const fa = [eraFal03(t), eraFalp03(t), eraFaf03(t), eraFad03(t), eraFaom03(t), eraFave03(t), eraFae03(t), eraFapa03(t)]
+	const s = [0, 0]
+
+	for (let k = 0; k < IAU2000_EECT.length; k++) {
+		for (let i = IAU2000_EECT[k].length - 1; i >= 0; i--) {
+			const [nfa, sine, cosine] = IAU2000_EECT[k][i]
+			let a = 0
+			for (let j = 0; j < 8; j++) a += nfa[j] * fa[j]
+			s[k] += sine * Math.sin(a) + cosine * Math.cos(a)
+		}
+	}
+
+	return arcsec(s[0] + s[1] * t)
+}
+
+// Equation of the equinoxes, IAU 2000, using the supplied mean obliquity and nutation in longitude.
+export function eraEe00(date1: number, date2: number, epsa: Angle, dpsi: Angle): Angle {
+	return dpsi * Math.cos(epsa) + eraEect00(date1, date2)
+}
+
+// Equation of the equinoxes, IAU 2000A model.
+export function eraEe00a(date1: number, date2: number): Angle {
+	const [, depspr] = eraPr00(date1, date2)
+	const epsa = eraObl80(date1, date2) + depspr
+	const [dpsi] = eraNut00a(date1, date2)
+	return eraEe00(date1, date2, epsa, dpsi)
+}
+
+// Equation of the equinoxes, IAU 2000B abridged model.
+export function eraEe00b(date1: number, date2: number): Angle {
+	const [, depspr] = eraPr00(date1, date2)
+	const epsa = eraObl80(date1, date2) + depspr
+	const [dpsi] = eraNut00b(date1, date2)
+	return eraEe00(date1, date2, epsa, dpsi)
+}
+
+// Equation of the equinoxes using IAU 2006 precession and IAU 2000A nutation.
+export function eraEe06a(date1: number, date2: number): Angle {
+	return eraAnpm(eraGst06a(0, 0, date1, date2) - eraGmst06(0, 0, date1, date2))
+}
+
+// Equation of the origins using IAU 2006 precession and IAU 2000A nutation.
+export function eraEo06a(date1: number, date2: number): Angle {
+	const rnpb = eraPnm06a(date1, date2)
+	const [x, y] = eraBpn2xy(rnpb)
+	return eraEors(rnpb, eraS06(date1, date2, x, y))
+}
+
+// Greenwich apparent sidereal time, IAU 2000A model, in the range 0 to 2pi radians.
+export function eraGst00a(ut11: number, ut12: number, tt1: number, tt2: number): Angle {
+	return normalizeAngle(eraGmst00(ut11, ut12, tt1, tt2) + eraEe00a(tt1, tt2))
+}
+
+// Greenwich apparent sidereal time, IAU 2000B abridged model, in the range 0 to 2pi radians.
+export function eraGst00b(ut11: number, ut12: number): Angle {
+	return normalizeAngle(eraGmst00(ut11, ut12, ut11, ut12) + eraEe00b(ut11, ut12))
+}
+
 // Greenwich mean sidereal time (model consistent with IAU 2006 precession).
 export function eraGmst06(ut11: number, ut12: number, tt1: number, tt2: number): Angle {
 	// TT Julian centuries since J2000.0.
@@ -703,6 +1009,68 @@ export function eraS06(tt1: number, tt2: number, x: Angle, y: Angle): Angle {
 	}
 
 	return arcsec(w[0] + (w[1] + (w[2] + (w[3] + (w[4] + w[5] * t) * t) * t) * t) * t) - (x * y) / 2
+}
+
+// The CIO locator s, positioning the Celestial Intermediate Origin on
+// the equator of the Celestial Intermediate Pole, given the CIP's X,Y
+// coordinates. Compatible with IAU 2000A precession-nutation.
+export function eraS00(tt1: number, tt2: number, x: Angle, y: Angle): Angle {
+	// Interval between fundamental epoch J2000.0 and current date (JC).
+	const t = (tt1 - J2000 + tt2) / DAYSPERJC
+
+	// Fundamental arguments from IERS Conventions 2003.
+	const fa = [eraFal03(t), eraFalp03(t), eraFaf03(t), eraFad03(t), eraFaom03(t), eraFave03(t), eraFae03(t), eraFapa03(t)]
+
+	// Polynomial coefficients and periodic terms for s + XY/2.
+	const w = [94e-6, 3808.35e-6, -119.94e-6, -72574.09e-6, 27.7e-6, 15.61e-6]
+
+	for (let k = 0; k < IAU2000_S.length; k++) {
+		for (let i = IAU2000_S[k].length - 1; i >= 0; i--) {
+			const [nfa, s, c] = IAU2000_S[k][i]
+			let a = 0
+			for (let j = 0; j < 8; j++) a += nfa[j] * fa[j]
+			w[k] += s * Math.sin(a) + c * Math.cos(a)
+		}
+	}
+
+	// Form s, removing the polynomial XY/2 term.
+	return arcsec(w[0] + (w[1] + (w[2] + (w[3] + (w[4] + w[5] * t) * t) * t) * t) * t) - (x * y) / 2
+}
+
+// CIO locator s using the IAU 2000A precession-nutation model.
+export function eraS00a(date1: number, date2: number): Angle {
+	const [x, y] = eraBpn2xy(eraPnm00a(date1, date2))
+	return eraS00(date1, date2, x, y)
+}
+
+// CIO locator s using the IAU 2000B abridged precession-nutation model.
+export function eraS00b(date1: number, date2: number): Angle {
+	const [x, y] = eraBpn2xy(eraPnm00b(date1, date2))
+	return eraS00(date1, date2, x, y)
+}
+
+// CIO locator s using IAU 2006 precession and IAU 2000A nutation.
+export function eraS06a(date1: number, date2: number): Angle {
+	const [x, y] = eraBpn2xy(eraPnm06a(date1, date2))
+	return eraS06(date1, date2, x, y)
+}
+
+// CIP X,Y coordinates and CIO locator s using the IAU 2000A precession-nutation model.
+export function eraXys00a(date1: number, date2: number): [Angle, Angle, Angle] {
+	const [x, y] = eraBpn2xy(eraPnm00a(date1, date2))
+	return [x, y, eraS00(date1, date2, x, y)]
+}
+
+// CIP X,Y coordinates and CIO locator s using the IAU 2000B abridged precession-nutation model.
+export function eraXys00b(date1: number, date2: number): [Angle, Angle, Angle] {
+	const [x, y] = eraBpn2xy(eraPnm00b(date1, date2))
+	return [x, y, eraS00(date1, date2, x, y)]
+}
+
+// CIP X,Y coordinates and CIO locator s using IAU 2006 precession and IAU 2000A nutation.
+export function eraXys06a(date1: number, date2: number): [Angle, Angle, Angle] {
+	const [x, y] = eraBpn2xy(eraPnm06a(date1, date2))
+	return [x, y, eraS06(date1, date2, x, y)]
 }
 
 // Form the matrix of precession-nutation for a given date (including
@@ -881,6 +1249,22 @@ export function eraNumat(epsa: Angle, dpsi: Angle, deps: Angle, m?: MutMat3): Mu
 	return matRotX(-(epsa + deps), matRotZ(-dpsi, matRotX(epsa, m)))
 }
 
+// Nutation matrix, IAU 2000A model.
+export function eraNum00a(date1: number, date2: number): MutMat3 {
+	return eraPn00a(date1, date2)[6]
+}
+
+// Nutation matrix, IAU 2000B abridged model.
+export function eraNum00b(date1: number, date2: number): MutMat3 {
+	return eraPn00b(date1, date2)[6]
+}
+
+// Nutation matrix using IAU 2006 precession and IAU 2000A nutation.
+export function eraNum06a(date1: number, date2: number): MutMat3 {
+	const [dpsi, deps] = eraNut06a(date1, date2)
+	return eraNumat(eraObl06(date1, date2), dpsi, deps)
+}
+
 // Nutation, IAU 2000A model (MHB2000 luni-solar and planetary nutation
 // with free core nutation omitted).
 export function eraNut00a(tt1: number, tt2: number): [Angle, Angle] {
@@ -1032,6 +1416,46 @@ export function eraPmat06(tt1: number, tt2: number) {
 	return eraFw2m(gamb, phib, psib, epsa)
 }
 
+// Equinox-based IAU 2006 precession angles, in radians.
+export function eraP06e(date1: number, date2: number): readonly [Angle, Angle, Angle, Angle, Angle, Angle, Angle, Angle, Angle, Angle, Angle, Angle, Angle, Angle, Angle, Angle] {
+	const t = (date1 - J2000 + date2) / DAYSPERJC
+	const eps0 = 84381.406 * ASEC2RAD
+	const psia = arcsec((5038.481507 + (-1.0790069 + (-0.00114045 + (0.000132851 - 0.0000000951 * t) * t) * t) * t) * t)
+	const oma = eps0 + arcsec((-0.025754 + (0.0512623 + (-0.00772503 + (-0.000000467 + 0.0000003337 * t) * t) * t) * t) * t)
+	const bpa = arcsec((4.199094 + (0.1939873 + (-0.00022466 + (-0.000000912 + 0.000000012 * t) * t) * t) * t) * t)
+	const bqa = arcsec((-46.811015 + (0.0510283 + (0.00052413 + (-0.000000646 - 0.0000000172 * t) * t) * t) * t) * t)
+	const pia = arcsec((46.998973 + (-0.0334926 + (-0.00012559 + (0.000000113 - 0.0000000022 * t) * t) * t) * t) * t)
+	const bpia = arcsec(629546.7936 + (-867.95758 + (0.157992 + (-0.0005371 + (-0.00004797 + 0.000000072 * t) * t) * t) * t) * t)
+	const epsa = eraObl06(date1, date2)
+	const chia = arcsec((10.556403 + (-2.3814292 + (-0.00121197 + (0.000170663 - 0.000000056 * t) * t) * t) * t) * t)
+	const za = arcsec(-2.650545 + (2306.077181 + (1.0927348 + (0.01826837 + (-0.000028596 - 0.0000002904 * t) * t) * t) * t) * t)
+	const zetaa = arcsec(2.650545 + (2306.083227 + (0.2988499 + (0.01801828 + (-0.000005971 - 0.0000003173 * t) * t) * t) * t) * t)
+	const thetaa = arcsec((2004.191903 + (-0.4294934 + (-0.04182264 + (-0.000007089 - 0.0000001274 * t) * t) * t) * t) * t)
+	const pa = arcsec((5028.796195 + (1.1054348 + (0.00007964 + (-0.000023857 - 0.0000000383 * t) * t) * t) * t) * t)
+	const gam = arcsec((10.556403 + (0.4932044 + (-0.00031238 + (-0.000002788 + 0.000000026 * t) * t) * t) * t) * t)
+	const phi = eps0 + arcsec((-46.811015 + (0.0511269 + (0.00053289 + (-0.00000044 - 0.0000000176 * t) * t) * t) * t) * t)
+	const psi = arcsec((5038.481507 + (1.5584176 + (-0.00018522 + (-0.000026452 - 0.0000000148 * t) * t) * t) * t) * t)
+	return [eps0, psia, oma, bpa, bqa, pia, bpia, epsa, chia, za, zetaa, thetaa, pa, gam, phi, psi]
+}
+
+// IAU 2006 precession-nutation matrices for supplied nutation components.
+export function eraPn06(date1: number, date2: number, dpsi: Angle, deps: Angle): readonly [Angle, MutMat3, MutMat3, MutMat3, MutMat3, MutMat3] {
+	const [gamb0, phib0, psib0, eps0] = eraPfw06(MJD0, J2000 - MJD0)
+	const rb = eraFw2m(gamb0, phib0, psib0, eps0)
+	const [gamb, phib, psib, epsa] = eraPfw06(date1, date2)
+	const rbp = eraFw2m(gamb, phib, psib, epsa)
+	const rp = matMulTranspose(rbp, rb)
+	const rbpn = eraFw2m(gamb, phib, psib + dpsi, epsa + deps)
+	const rn = matMulTranspose(rbpn, rbp)
+	return [epsa, rb, rp, rbp, rn, rbpn]
+}
+
+// IAU 2006 precession and IAU 2000A nutation matrices.
+export function eraPn06a(date1: number, date2: number): readonly [Angle, Angle, Angle, MutMat3, MutMat3, MutMat3, MutMat3, MutMat3] {
+	const [dpsi, deps] = eraNut06a(date1, date2)
+	return [dpsi, deps, ...eraPn06(date1, date2, dpsi, deps)]
+}
+
 // Form the matrix of polar motion for a given date, IAU 2000.
 export function eraPom00(xp: Angle, yp: Angle, sp: Angle) {
 	return matRotZ(sp, matRotY(-xp, matRotX(-yp)))
@@ -1140,6 +1564,81 @@ export function eraBp06(tt1: number, tt2: number) {
 	const rp = matMulTranspose(rbpw, rb)
 
 	return [rb, rp, rbpw] as const
+}
+
+// Frame bias and precession, IAU 2000.
+export function eraBp00(date1: number, date2: number): readonly [MutMat3, MutMat3, MutMat3] {
+	// J2000.0 obliquity and interval from J2000.0, in Julian centuries.
+	const eps0 = arcsec(84381.448)
+	const t = (date1 - J2000 + date2) / DAYSPERJC
+
+	// Frame bias and precession angles, including IAU 2000 corrections.
+	const [dpsibi, depsbi, dra0] = eraBi00()
+	const psia77 = (5038.7784 + (-1.07259 - 0.001147 * t) * t) * t * ASEC2RAD
+	const oma77 = eps0 + (0.05127 - 0.007726 * t) * t * t * ASEC2RAD
+	const chia = (10.5526 + (-2.38064 - 0.001125 * t) * t) * t * ASEC2RAD
+	const [dpsipr, depspr] = eraPr00(date1, date2)
+	const psia = psia77 + dpsipr
+	const oma = oma77 + depspr
+
+	// Frame bias matrix: GCRS to J2000.0.
+	const rb = matRotX(-depsbi, matRotY(dpsibi * Math.sin(eps0), matRotZ(dra0)))
+
+	// Precession matrix: J2000.0 to mean of date.
+	const rp = matRotZ(chia, matRotX(-oma, matRotZ(-psia, matRotX(eps0))))
+
+	// Bias-precession matrix: GCRS to mean of date.
+	return [rb, rp, matMul(rp, rb)]
+}
+
+// IAU 2000 precession matrix from J2000.0 to the given date.
+export function eraPmat00(date1: number, date2: number): MutMat3 {
+	// Obtain the bias-precession matrix.
+	return eraBp00(date1, date2)[2]
+}
+
+// IAU 2000 precession-nutation matrices for supplied nutation components.
+export function eraPn00(date1: number, date2: number, dpsi: Angle, deps: Angle): readonly [Angle, MutMat3, MutMat3, MutMat3, MutMat3, MutMat3] {
+	// IAU 2000 precession-rate corrections and mean obliquity.
+	const [, depspr] = eraPr00(date1, date2)
+	const epsa = eraObl80(date1, date2) + depspr
+
+	// Frame bias, precession, and nutation matrices.
+	const [rb, rp, rbp] = eraBp00(date1, date2)
+	const rn = eraNumat(epsa, dpsi, deps)
+	return [epsa, rb, rp, rbp, rn, matMul(rn, rbp)]
+}
+
+// IAU 2000A precession-nutation matrices.
+export function eraPn00a(date1: number, date2: number): readonly [Angle, Angle, Angle, MutMat3, MutMat3, MutMat3, MutMat3, MutMat3] {
+	const [dpsi, deps] = eraNut00a(date1, date2)
+	return [dpsi, deps, ...eraPn00(date1, date2, dpsi, deps)]
+}
+
+// IAU 2000B precession-nutation matrices.
+export function eraPn00b(date1: number, date2: number): readonly [Angle, Angle, Angle, MutMat3, MutMat3, MutMat3, MutMat3, MutMat3] {
+	const [dpsi, deps] = eraNut00b(date1, date2)
+	return [dpsi, deps, ...eraPn00(date1, date2, dpsi, deps)]
+}
+
+// IAU 2000A bias-precession-nutation matrix.
+export function eraPnm00a(date1: number, date2: number): MutMat3 {
+	return eraPn00a(date1, date2)[7]
+}
+
+// IAU 2000B bias-precession-nutation matrix.
+export function eraPnm00b(date1: number, date2: number): MutMat3 {
+	return eraPn00b(date1, date2)[7]
+}
+
+// IAU 2000A celestial-to-intermediate matrix.
+export function eraC2i00a(date1: number, date2: number): MutMat3 {
+	return eraC2ibpn(date1, date2, eraPnm00a(date1, date2))
+}
+
+// IAU 2000B celestial-to-intermediate matrix.
+export function eraC2i00b(date1: number, date2: number): MutMat3 {
+	return eraC2ibpn(date1, date2, eraPnm00b(date1, date2))
 }
 
 const PXMIN = 5e-7 * ASEC2RAD
@@ -1527,6 +2026,46 @@ export function eraC2t06a(tt1: number, tt2: number, ut11: number, ut12: number, 
 	return eraC2tcio(rc2i, era, rpom, rc2i)
 }
 
+// Form the IAU 2000A celestial-to-terrestrial matrix from TT, UT1, and polar motion.
+export function eraC2t00a(tta: number, ttb: number, uta: number, utb: number, xp: Angle, yp: Angle): MutMat3 {
+	// Form the celestial-to-intermediate matrix for this TT.
+	const rc2i = eraC2i00a(tta, ttb)
+
+	// Predict the Earth rotation angle and estimate s'.
+	const era = eraEra00(uta, utb)
+	const sp = eraSp00(tta, ttb)
+
+	// Form polar motion and combine the transformations.
+	return eraC2tcio(rc2i, era, eraPom00(xp, yp, sp), rc2i)
+}
+
+// Form the IAU 2000B celestial-to-terrestrial matrix from TT, UT1, and polar motion.
+export function eraC2t00b(tta: number, ttb: number, uta: number, utb: number, xp: Angle, yp: Angle): MutMat3 {
+	// Form the celestial-to-intermediate matrix for this TT.
+	const rc2i = eraC2i00b(tta, ttb)
+
+	// Predict the Earth rotation angle; IAU 2000B neglects s'.
+	const era = eraEra00(uta, utb)
+
+	// Form polar motion and combine the transformations.
+	return eraC2tcio(rc2i, era, eraPom00(xp, yp, 0), rc2i)
+}
+
+// Form the IAU 2000 celestial-to-terrestrial matrix from TT, UT1, CIP X,Y, and polar motion.
+export function eraC2txy(tta: number, ttb: number, uta: number, utb: number, x: Angle, y: Angle, xp: Angle, yp: Angle): MutMat3 {
+	const rc2i = eraC2ixy(tta, ttb, x, y)
+	const era = eraEra00(uta, utb)
+	return eraC2tcio(rc2i, era, eraPom00(xp, yp, eraSp00(tta, ttb)), rc2i)
+}
+
+// Form the IAU 2000 celestial-to-terrestrial matrix from TT, UT1, supplied nutation, and polar motion.
+export function eraC2tpe(tta: number, ttb: number, uta: number, utb: number, dpsi: Angle, deps: Angle, xp: Angle, yp: Angle): MutMat3 {
+	const [epsa, , , , , rbpn] = eraPn00(tta, ttb, dpsi, deps)
+	const gmst = eraGmst00(uta, utb, tta, ttb)
+	const ee = eraEe00(tta, ttb, epsa, dpsi)
+	return eraC2teqx(rbpn, gmst + ee, eraPom00(xp, yp, eraSp00(tta, ttb)))
+}
+
 // Form the celestial-to-intermediate matrix for a given date using the
 // IAU 2006 precession and IAU 2000A nutation models.
 export function eraC2i06a(tt1: number, tt2: number) {
@@ -1551,10 +2090,21 @@ export function eraC2ixys(x: Angle, y: Angle, s: Angle, o?: MutMat3) {
 	const e = r2 > 0 ? Math.atan2(y, x) : 0
 	const d = Math.atan(Math.sqrt(r2 / (1 - r2)))
 
-	if (o) matIdentity(o)
-
 	// Form the matrix.
-	return matRotZ(-(e + s), matRotY(d, matRotZ(e, o)))
+	return matRotZ(-(e + s), matRotY(d, matRotZ(e, matIdentity(o))))
+}
+
+// Form the celestial-to-intermediate matrix from CIP X,Y coordinates.
+export function eraC2ixy(date1: number, date2: number, x: Angle, y: Angle, o?: MutMat3): MutMat3 {
+	// Compute s and then the matrix.
+	return eraC2ixys(x, y, eraS00(date1, date2, x, y), o)
+}
+
+// Form the celestial-to-intermediate matrix from a bias-precession-nutation matrix.
+export function eraC2ibpn(date1: number, date2: number, rbpn: Mat3, o?: MutMat3): MutMat3 {
+	// Extract the X,Y coordinates and form the IAU 2000 matrix.
+	const [x, y] = eraBpn2xy(rbpn)
+	return eraC2ixy(date1, date2, x, y, o)
 }
 
 // Assemble the celestial to terrestrial matrix from CIO-based
@@ -1667,7 +2217,7 @@ export function eraAtccq(rc: Angle, dc: Angle, pr: Angle, pd: Angle, px: Distanc
 
 	// ICRS astrometric RA,Dec.
 	// const s = eraC2s(...p)
-	// s[0] = pmod(s[0], TAU)
+	// s[0] = normalize(s[0])
 	// return s
 
 	return p
@@ -1692,7 +2242,7 @@ export function eraAtciq(rc: Angle, dc: Angle, pr: Angle, pd: Angle, px: Distanc
 
 	// ICRS astrometric RA,Dec.
 	const s = eraC2s(...pi)
-	s[0] = pmod(s[0], TAU)
+	s[0] = normalizeAngle(s[0])
 	return s
 }
 
@@ -1714,7 +2264,7 @@ export function eraAtciqz(rc: Angle, dc: Angle, astrom: EraAstrom) {
 
 	// CIRS RA,Dec.
 	const [w, di] = eraC2s(...pi)
-	const ri = pmod(w, TAU)
+	const ri = normalizeAngle(w)
 	return [ri, di] as const
 }
 
@@ -2056,11 +2606,11 @@ export function eraAtioq(ri: Angle, di: Angle, astrom: EraAstrom) {
 	const raobs = astrom.eral + hmobs
 
 	// Return the results.
-	const aob = pmod(azobs, TAU)
+	const aob = normalizeAngle(azobs)
 	const zob = zdobs
 	const hob = -hmobs
 	const dob = dcobs
-	const rob = pmod(raobs, TAU)
+	const rob = normalizeAngle(raobs)
 
 	// NOTE: rob and dob are swapped in relation to the original erfaAtioq
 	return [aob, zob, hob, rob, dob] as const
@@ -2153,7 +2703,7 @@ export function eraAtoiq(type: 'R' | 'H' | 'A', ob1: Angle, ob2: Angle, astrom: 
 	const [hma, di] = eraC2s(v0, v1, v2)
 
 	// Right ascension.
-	const ri = pmod(eral + hma, TAU)
+	const ri = normalizeAngle(eral + hma)
 
 	return [ri, di] as const
 }
@@ -2227,7 +2777,7 @@ export function eraAticq(ri: Angle, di: Angle, astrom: EraAstrom) {
 
 	// ICRS astrometric RA,Dec.
 	const [w, dc] = eraC2s(...pco)
-	const rc = pmod(w, TAU)
+	const rc = normalizeAngle(w)
 	return [rc, dc] as const
 }
 
@@ -2235,6 +2785,26 @@ export function eraAticq(ri: Angle, di: Angle, astrom: EraAstrom) {
 export function eraAtci13(tdb1: number, tdb2: number, rc: Angle, dc: Angle, pr: Angle, pd: Angle, px: Distance, rv: Velocity, ebpv: readonly [Vec3, Vec3], ehp: Vec3 = ebpv[0], astrom?: EraAstrom) {
 	astrom = eraApci13(tdb1, tdb2, ebpv, ehp, astrom)
 	return [...eraAtciq(rc, dc, pr, pd, px, rv, astrom), astrom] as const
+}
+
+// Transform an ICRS catalog entry into CIRS, accounting for light
+// deflection by the supplied solar-system bodies. The astrometry
+// parameters and body positions must describe the observation epoch.
+export function eraAtciqn(rc: Angle, dc: Angle, pr: Angle, pd: Angle, px: Distance, rv: Velocity, astrom: EraAstrom, bodies: LdBody[]) {
+	// Proper motion and parallax, giving BCRS coordinate direction.
+	const pco = eraPmpx(rc, dc, pr, pd, px, rv, astrom.pmt, astrom.eb)
+
+	// Light deflection, giving BCRS natural direction.
+	const pnat = eraLdn(bodies, astrom.eb, pco)
+
+	// Aberration, giving GCRS proper direction.
+	const ppr = eraAb(pnat, astrom.v, astrom.em, astrom.bm1)
+
+	// Bias-precession-nutation, giving CIRS proper direction.
+	const pi = matMulVec(astrom.bpn, ppr)
+	const [w, di] = eraC2s(...pi)
+
+	return [normalizeAngle(w), di] as const
 }
 
 // ICRS RA,Dec to observed place.
@@ -2310,4 +2880,406 @@ export function eraAtoc13(
 
 	// Transform CIRS to ICRS.
 	return eraAticq(ri, di, astrom)
+}
+
+// Transform CIRS right ascension and declination into observed
+// azimuth, zenith distance, hour angle, declination and CIO-based
+// right ascension. TT, UT1 and the TIO locator are supplied by the caller.
+export function eraAtio13(ri: Angle, di: Angle, tt1: number, tt2: number, ut11: number, ut12: number, elong: Angle, phi: Angle, hm: Distance, xp: Angle, yp: Angle, sp: Angle, phpa: Pressure, tc: Temperature, rh: number, wl: number, astrom?: EraAstrom) {
+	astrom = eraApio13(tt1, tt2, ut11, ut12, elong, phi, hm, xp, yp, sp, phpa, tc, rh, wl, astrom)
+	return eraAtioq(ri, di, astrom)
+}
+
+// Transform an observed place into CIRS right ascension and declination.
+// TT, UT1 and the TIO locator are supplied by the caller.
+export function eraAtoi13(type: 'R' | 'H' | 'A', ob1: Angle, ob2: Angle, tt1: number, tt2: number, ut11: number, ut12: number, elong: Angle, phi: Angle, hm: Distance, xp: Angle, yp: Angle, sp: Angle, phpa: Pressure, tc: Temperature, rh: number, wl: number, astrom?: EraAstrom) {
+	astrom = eraApio13(tt1, tt2, ut11, ut12, elong, phi, hm, xp, yp, sp, phpa, tc, rh, wl, astrom)
+	return eraAtoiq(type, ob1, ob2, astrom)
+}
+
+// Transform CIRS coordinates into ICRS astrometric coordinates using
+// the supplied light-deflecting bodies and precomputed astrometry.
+export function eraAticqn(ri: Angle, di: Angle, astrom: EraAstrom, bodies: LdBody[]) {
+	// CIRS RA,Dec to Cartesian and undo bias-precession-nutation.
+	const pi = eraS2c(ri, di)
+	const ppr = matTransposeMulVec(astrom.bpn, pi)
+
+	// Undo aberration by fixed-point iteration.
+	const d: MutVec3 = [0, 0, 0]
+	const before: MutVec3 = [0, 0, 0]
+	const after: MutVec3 = [0, 0, 0]
+	const pnat: MutVec3 = [0, 0, 0]
+	const pco: MutVec3 = [0, 0, 0]
+
+	for (let j = 0; j < 2; j++) {
+		let r2 = 0
+
+		for (let i = 0; i < 3; i++) {
+			const w = ppr[i] - d[i]
+			before[i] = w
+			r2 += w * w
+		}
+
+		vecDivScalar(before, Math.sqrt(r2), before)
+		eraAb(before, astrom.v, astrom.em, astrom.bm1, after)
+		r2 = 0
+
+		for (let i = 0; i < 3; i++) {
+			d[i] = after[i] - before[i]
+			const w = ppr[i] - d[i]
+			pnat[i] = w
+			r2 += w * w
+		}
+
+		vecDivScalar(pnat, Math.sqrt(r2), pnat)
+	}
+
+	// Undo the light deflection by fixed-point iteration.
+	d.fill(0)
+
+	for (let j = 0; j < 5; j++) {
+		let r2 = 0
+
+		for (let i = 0; i < 3; i++) {
+			const w = pnat[i] - d[i]
+			before[i] = w
+			r2 += w * w
+		}
+
+		vecDivScalar(before, Math.sqrt(r2), before)
+		const deflected = eraLdn(bodies, astrom.eb, before)
+		r2 = 0
+
+		for (let i = 0; i < 3; i++) {
+			d[i] = deflected[i] - before[i]
+			const w = pnat[i] - d[i]
+			pco[i] = w
+			r2 += w * w
+		}
+
+		vecDivScalar(pco, Math.sqrt(r2), pco)
+	}
+
+	const [w, dc] = eraC2s(...pco)
+	return [normalizeAngle(w), dc] as const
+}
+
+// Transform CIRS right ascension and declination into ICRS astrometric
+// coordinates, preparing geocentric astrometry from caller-supplied
+// Earth ephemerides.
+export function eraAtic13(ri: Angle, di: Angle, tdb1: number, tdb2: number, ebpv: readonly [Vec3, Vec3], ehp: Vec3 = ebpv[0], astrom?: EraAstrom) {
+	astrom = eraApci13(tdb1, tdb2, ebpv, ehp, astrom)
+	return [...eraAticq(ri, di, astrom), astrom] as const
+}
+
+// Transform an ICRS catalog entry into ICRS astrometric coordinates,
+// preparing geocentric astrometry from caller-supplied Earth ephemerides.
+export function eraAtcc13(rc: Angle, dc: Angle, pr: Angle, pd: Angle, px: Distance, rv: Velocity, tdb1: number, tdb2: number, ebpv: readonly [Vec3, Vec3], ehp: Vec3 = ebpv[0], astrom?: EraAstrom) {
+	astrom = eraApci13(tdb1, tdb2, ebpv, ehp, astrom)
+	return eraAtccq(rc, dc, pr, pd, px, rv, astrom)
+}
+
+// Horizon to equatorial coordinates: transform azimuth and altitude to
+// local hour angle and declination. Angles are radians; azimuth is N=0,E=90.
+export function eraAe2hd(az: Angle, el: Angle, phi: Angle): [Angle, Angle] {
+	// Useful trig functions.
+	const sa = Math.sin(az)
+	const ca = Math.cos(az)
+	const se = Math.sin(el)
+	const ce = Math.cos(el)
+	const sp = Math.sin(phi)
+	const cp = Math.cos(phi)
+
+	// HA,Dec unit vector.
+	const x = -ca * ce * sp + se * cp
+	const y = -sa * ce
+	const z = ca * ce * cp + se * sp
+
+	// To spherical.
+	const r = Math.sqrt(x * x + y * y)
+	return [r !== 0 ? Math.atan2(y, x) : 0, Math.atan2(z, r)]
+}
+
+// Equatorial to horizon coordinates: transform local hour angle and
+// declination to azimuth and altitude. Angles are radians; azimuth is N=0,E=90.
+export function eraHd2ae(ha: Angle, dec: Angle, phi: Angle): [Angle, Angle] {
+	// Useful trig functions.
+	const sh = Math.sin(ha)
+	const ch = Math.cos(ha)
+	const sd = Math.sin(dec)
+	const cd = Math.cos(dec)
+	const sp = Math.sin(phi)
+	const cp = Math.cos(phi)
+
+	// Az,Alt unit vector.
+	const x = -ch * cd * sp + sd * cp
+	const y = -sh * cd
+	const z = ch * cd * cp + sd * sp
+
+	// To spherical.
+	const r = Math.sqrt(x * x + y * y)
+	const a = r !== 0 ? Math.atan2(y, x) : 0
+	return [a < 0 ? a + TAU : a, Math.atan2(z, r)]
+}
+
+// Parallactic angle for hour angle, declination, and site latitude, in radians.
+export function eraHd2pa(ha: Angle, dec: Angle, phi: Angle): Angle {
+	const cosPhi = Math.cos(phi)
+	const sinQ = cosPhi * Math.sin(ha)
+	const cosQ = Math.sin(phi) * Math.cos(dec) - cosPhi * Math.sin(dec) * Math.cos(ha)
+	return sinQ !== 0 || cosQ !== 0 ? Math.atan2(sinQ, cosQ) : 0
+}
+
+// Extract the Celestial Intermediate Pole X,Y coordinates from a
+// celestial-to-true bias-precession-nutation matrix.
+export function eraBpn2xy(rbpn: Mat3): [Angle, Angle] {
+	// Extract the X,Y coordinates.
+	return [rbpn[6], rbpn[7]]
+}
+
+// CIP X,Y given Fukushima-Williams bias-precession-nutation angles.
+export function eraFw2xy(gamb: Angle, phib: Angle, psi: Angle, eps: Angle): [Angle, Angle] {
+	// Form NxPxB matrix.
+	const r = eraFw2m(gamb, phib, psi, eps)
+
+	// Extract CIP X,Y.
+	return eraBpn2xy(r)
+}
+
+// ICRS to Galactic rotation matrix.
+const ICRS_TO_GALACTIC_MATRIX = [
+	-0.054875560416215368492398900454, -0.873437090234885048760383168409, -0.483835015548713226831774175116, 0.494109427875583673525222371358, -0.444829629960011178146614061616, 0.746982244497218890527388004556, -0.86766614901900470118161653457, -0.198076373431201528180486091412, 0.455983776175066922272100478348,
+] as const
+
+// Transform Galactic longitude and latitude to ICRS right ascension and declination.
+export function eraG2icrs(dl: Angle, db: Angle): [Angle, Angle] {
+	// Spherical to Cartesian, then Galactic to ICRS.
+	const v2 = matTransposeMulVec(ICRS_TO_GALACTIC_MATRIX, eraS2c(dl, db))
+
+	// Cartesian to spherical and express conventional ranges.
+	const [dr, dd] = eraC2s(v2[0], v2[1], v2[2])
+	return [normalizeAngle(dr), eraAnpm(dd)]
+}
+
+// Transform ICRS right ascension and declination to Galactic longitude and latitude.
+export function eraIcrs2g(dr: Angle, dd: Angle): [Angle, Angle] {
+	// Spherical to Cartesian, then ICRS to Galactic.
+	const v2 = matMulVec(ICRS_TO_GALACTIC_MATRIX, eraS2c(dr, dd))
+
+	// Cartesian to spherical and express conventional ranges.
+	const [dl, db] = eraC2s(v2[0], v2[1], v2[2])
+	return [normalizeAngle(dl), eraAnpm(db)]
+}
+
+// In the tangent-plane projection, solve for the spherical coordinates of a star.
+export function eraTpsts(xi: Angle, eta: Angle, a0: Angle, b0: Angle): [Angle, Angle] {
+	// Functions of the tangent point.
+	const sb0 = Math.sin(b0)
+	const cb0 = Math.cos(b0)
+	const d = cb0 - eta * sb0
+
+	// Star spherical coordinates.
+	return [normalizeAngle(Math.atan2(xi, d) + a0), Math.atan2(sb0 + eta * cb0, Math.sqrt(xi * xi + d * d))]
+}
+
+// In the tangent-plane projection, solve for a star's direction cosines.
+export function eraTpstv(xi: Angle, eta: Angle, v0: Vec3, o?: MutVec3): MutVec3 {
+	// Tangent point.
+	let x = v0[0]
+	const y = v0[1]
+	const z = v0[2]
+
+	// Deal with polar case.
+	let r = Math.sqrt(x * x + y * y)
+	if (r === 0) {
+		r = 1e-20
+		x = r
+	}
+
+	// Star vector length to tangent plane.
+	const f = Math.sqrt(1 + xi * xi + eta * eta)
+
+	// Apply the transformation and normalize.
+	const ox = (x - (xi * y + eta * x * z) / r) / f
+	const oy = (y + (xi * x - eta * y * z) / r) / f
+	const oz = (z + eta * r) / f
+
+	if (o) return vecFill(o, ox, oy, oz)
+	return [ox, oy, oz]
+}
+
+// In the tangent-plane projection, solve for the possible tangent points
+// from a star's spherical coordinates and rectangular tangent-plane coordinates.
+export function eraTpors(xi: Angle, eta: Angle, a: Angle, b: Angle): [number, Angle?, Angle?, Angle?, Angle?] {
+	// Functions of the star coordinates and tangent-plane position.
+	const xi2 = xi * xi
+	const r = Math.sqrt(1 + xi2 + eta * eta)
+	const sb = Math.sin(b)
+	const cb = Math.cos(b)
+	const rsb = r * sb
+	const rcb = r * cb
+	const w2 = rcb * rcb - xi2
+	if (w2 < 0) return [0]
+
+	// First tangent point.
+	let w = Math.sqrt(w2)
+	let s = rsb - eta * w
+	let c = rsb * eta + w
+	if (xi === 0 && w === 0) w = 1
+	const a01 = normalizeAngle(a - Math.atan2(xi, w))
+	const b01 = Math.atan2(s, c)
+
+	// Second tangent point.
+	w = -w
+	s = rsb - eta * w
+	c = rsb * eta + w
+	const a02 = normalizeAngle(a - Math.atan2(xi, w))
+	const b02 = Math.atan2(s, c)
+	return [Math.abs(rsb) < 1 ? 1 : 2, a01, b01, a02, b02]
+}
+
+// In the tangent-plane projection, solve for the possible tangent-point
+// direction cosines from a star vector and rectangular coordinates.
+export function eraTporv(xi: Angle, eta: Angle, v: Vec3): [number, MutVec3?, MutVec3?] {
+	// Star vector and tangent-plane position.
+	const x = v[0]
+	const y = v[1]
+	const z = v[2]
+	const rxy2 = x * x + y * y
+	const xi2 = xi * xi
+	const eta2p1 = eta * eta + 1
+	const r = Math.sqrt(xi2 + eta2p1)
+	const rsb = r * z
+	const rcb = r * Math.sqrt(rxy2)
+	const w2 = rcb * rcb - xi2
+	if (w2 <= 0) return [0]
+
+	// First tangent point.
+	let w = Math.sqrt(w2)
+	let c = (rsb * eta + w) / (eta2p1 * Math.sqrt(rxy2 * (w2 + xi2)))
+	const v01: MutVec3 = [c * (x * w + y * xi), c * (y * w - x * xi), (rsb - eta * w) / eta2p1]
+
+	// Second tangent point.
+	w = -w
+	c = (rsb * eta + w) / (eta2p1 * Math.sqrt(rxy2 * (w2 + xi2)))
+	const v02: MutVec3 = [c * (x * w + y * xi), c * (y * w - x * xi), (rsb - eta * w) / eta2p1]
+	return [Math.abs(rsb) < 1 ? 1 : 2, v01, v02]
+}
+
+// In the tangent-plane projection, solve for a star's rectangular coordinates.
+export function eraTpxes(a: Angle, b: Angle, a0: Angle, b0: Angle): [number, Angle, Angle] {
+	// Functions of the spherical coordinates.
+	const sb0 = Math.sin(b0)
+	const sb = Math.sin(b)
+	const cb0 = Math.cos(b0)
+	const cb = Math.cos(b)
+	const da = a - a0
+	const sda = Math.sin(da)
+	const cda = Math.cos(da)
+
+	// Reciprocal of star vector length to tangent plane.
+	let d = sb * sb0 + cb * cb0 * cda
+
+	// Check for error cases.
+	const status = d > 1e-6 ? 0 : d >= 0 ? ((d = 1e-6), 1) : d > -1e-6 ? ((d = -1e-6), 2) : 3
+
+	// Return tangent plane coordinates, even in dubious cases.
+	return [status, (cb * sda) / d, (sb * cb0 - cb * sb0 * cda) / d]
+}
+
+// In the tangent-plane projection, solve for a star's rectangular coordinates from vectors.
+export function eraTpxev(v: Vec3, v0: Vec3): [number, Angle, Angle] {
+	// Star and tangent point.
+	const x = v[0]
+	const y = v[1]
+	const z = v[2]
+	let x0 = v0[0]
+	const y0 = v0[1]
+	const z0 = v0[2]
+
+	// Deal with polar case.
+	const r2 = x0 * x0 + y0 * y0
+	let r = Math.sqrt(r2)
+	if (r === 0) {
+		r = 1e-20
+		x0 = r
+	}
+
+	// Reciprocal of star vector length to tangent plane.
+	const w = x * x0 + y * y0
+	let d = w + z * z0
+
+	// Check for error cases.
+	const status = d > 1e-6 ? 0 : d >= 0 ? ((d = 1e-6), 1) : d > -1e-6 ? ((d = -1e-6), 2) : 3
+
+	// Return tangent plane coordinates, even in dubious cases.
+	d *= r
+	return [status, (y * x0 - x * y0) / d, (z * r2 - z0 * w) / d]
+}
+
+// Precession-rate corrections with respect to the IAU 1976/80 models.
+export function eraPr00(date1: number, date2: number): [Angle, Angle] {
+	// Interval between J2000.0 and the given date, in Julian centuries.
+	const t = (date1 - J2000 + date2) / DAYSPERJC
+
+	// Precession and obliquity corrections, in radians.
+	return [-0.29965 * ASEC2RAD * t, -0.02524 * ASEC2RAD * t]
+}
+
+// IAU 1976 precession Euler angles between two Julian Dates.
+export function eraPrec76(date01: number, date02: number, date11: number, date12: number): [Angle, Angle, Angle] {
+	// Intervals from J2000.0 to the start date and across the transformation.
+	const t0 = (date01 - J2000 + date02) / DAYSPERJC
+	const t = (date11 - date01 + date12 - date02) / DAYSPERJC
+	const tas2r = t * ASEC2RAD
+	const w = 2306.2181 + (1.39656 - 0.000139 * t0) * t0
+
+	// Euler angles.
+	const zeta = (w + (0.30188 - 0.000344 * t0 + 0.017998 * t) * t) * tas2r
+	const z = (w + (1.09468 + 0.000066 * t0 + 0.018203 * t) * t) * tas2r
+	const theta = (2004.3109 + (-0.8533 - 0.000217 * t0) * t0 + (-0.42665 - 0.000217 * t0 - 0.041833 * t) * t) * tas2r
+	return [zeta, z, theta]
+}
+
+// IAU 1976 precession matrix from J2000.0 to the given date.
+export function eraPmat76(date1: number, date2: number, o?: MutMat3): MutMat3 {
+	// Precession Euler angles, J2000.0 to specified date.
+	const [zeta, z, theta] = eraPrec76(J2000, 0, date1, date2)
+
+	// Form the rotation matrix.
+	return matRotZ(-z, matRotY(theta, matRotZ(-zeta, matIdentity(o))))
+}
+
+// Precession-nutation matrix using IAU 1976 precession and IAU 1980 nutation.
+export function eraPnm80(date1: number, date2: number): MutMat3 {
+	const rmatp = eraPmat76(date1, date2)
+	return matMul(eraNutm80(date1, date2), rmatp, rmatp)
+}
+
+// IAU 2006 Fukushima-Williams bias-precession angles.
+export function eraPb06(date1: number, date2: number): [Angle, Angle, Angle] {
+	// Precession matrix via Fukushima-Williams angles.
+	const r = eraPmat06(date1, date2)
+
+	// Solve for z, choosing the +/- pi alternative.
+	let y = r[5]
+	let x = -r[2]
+	if (x < 0) {
+		y = -y
+		x = -x
+	}
+
+	const bz = x !== 0 || y !== 0 ? -Math.atan2(y, x) : 0
+
+	// Derotate it out of the matrix.
+	matRotZ(bz, r)
+
+	// Solve for the remaining two angles.
+	y = r[2]
+	x = r[8]
+	const btheta = x !== 0 || y !== 0 ? -Math.atan2(y, x) : 0
+	y = -r[3]
+	x = r[4]
+	const bzeta = x !== 0 || y !== 0 ? -Math.atan2(y, x) : 0
+	return [bzeta, bz, btheta]
 }
