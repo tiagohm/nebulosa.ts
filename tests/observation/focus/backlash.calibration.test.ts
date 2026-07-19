@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { medianOf, NumberComparator } from '../../../src/core/util'
 import { IndiClientHandlerSet } from '../../../src/devices/indi/client'
+import type { Camera, Focuser } from '../../../src/devices/indi/device'
 import { CameraManager, FocuserManager } from '../../../src/devices/indi/manager'
 import { CameraSimulator } from '../../../src/devices/indi/simulator/camera'
 import { ClientSimulator } from '../../../src/devices/indi/simulator/client'
@@ -47,6 +48,57 @@ async function measureMedianHfd(camera: CameraSimulator, receiver: CameraFrameRe
 	const stars = detectStars(image, { maxStars: 100 })
 	if (stars.length < 5) throw new Error(`expected at least five detected stars, received ${stars.length}`)
 	return medianOf(stars.map((star) => star.hfd).sort(NumberComparator))
+}
+
+// Configures a compact deterministic star field whose HFD responds to the simulated optical position.
+function configureBacklashImagingScene(client: ClientSimulator, cameraManager: CameraManager, camera: Camera, bestFocus = 50000, focusRange = 4000) {
+	cameraManager.frame(camera, 512, 352, 256, 256)
+	client.sendSwitch({ device: camera.name, name: 'SIMULATOR_NOISE_FEATURES', elements: { SKY_ENABLED: false, MOON_ENABLED: false, LIGHT_POLLUTION_ENABLED: false, AMP_GLOW_ENABLED: false } })
+	client.sendNumber({ device: camera.name, name: 'SIMULATOR_NOISE_EXPOSURE', elements: { EXPOSURE_TIME: 0.05 } })
+	client.sendNumber({ device: camera.name, name: 'SIMULATOR_SCENE', elements: { SCENE_SEED: 0x5eed, STAR_DENSITY: 0.001, SEEING: 0, HFD_MIN: 1.5, HFD_MAX: 1.5, FLUX_MIN: 5, FLUX_MAX: 5 } })
+	client.sendNumber({ device: camera.name, name: 'SIMULATOR_NOISE_SENSOR', elements: { READ_NOISE: 0, BIAS_ELECTRONS: 0, BLACK_LEVEL_ELECTRONS: 0, DARK_CURRENT_AT_REFERENCE_TEMP: 0, DARK_SIGNAL_NON_UNIFORMITY: 0 } })
+	client.sendNumber({
+		device: camera.name,
+		name: 'SIMULATOR_NOISE_ARTIFACTS',
+		elements: { FIXED_PATTERN_NOISE_STRENGTH: 0, ROW_NOISE_STRENGTH: 0, COLUMN_NOISE_STRENGTH: 0, BANDING_STRENGTH: 0, HOT_PIXEL_RATE: 0, WARM_PIXEL_RATE: 0, DEAD_PIXEL_RATE: 0 },
+	})
+	client.sendNumber({ device: camera.name, name: 'SIMULATOR_STAR_PLOT_OPTIONS', elements: { BEST_FOCUS: bestFocus } })
+	client.sendSwitch({ device: camera.name, name: 'SIMULATOR_ABERRATION_FEATURES', elements: { SENSOR_TILT: true } })
+	client.sendNumber({ device: camera.name, name: 'SIMULATOR_ABERRATION_FOCUS', elements: { FOCUS_RANGE: focusRange, TILT: 10, TILT_ANGLE: 0 } })
+}
+
+// Command counts and terminal output produced by an asynchronous simulator-backed calibration.
+interface SimulatorCalibrationExecution {
+	// Terminal calibration command.
+	readonly command: BacklashCalibrationCommand
+	// Number of move commands applied through the focuser manager.
+	readonly moveCommandCount: number
+	// Number of measure commands fulfilled from camera HFD measurements.
+	readonly measureCommandCount: number
+}
+
+// Executes calibration commands through the real simulator managers until a terminal command is emitted.
+async function runCalibrationWithSimulators(calibration: BacklashCalibration, focuserManager: FocuserManager, focuser: Focuser, camera: CameraSimulator, receiver: CameraFrameReceiver): Promise<SimulatorCalibrationExecution> {
+	let command = calibration.start(focuser.position.value)
+	let moveCommandCount = 0
+	let measureCommandCount = 0
+
+	for (let commandCount = 0; commandCount < 500; commandCount++) {
+		if (command.type === 'move') {
+			moveCommandCount++
+			focuserManager.moveTo(focuser, focuser.position.value + command.relative)
+			await waitUntil(() => focuser.moving)
+			await waitUntil(() => !focuser.moving, 3000, 20)
+			command = calibration.next({ type: 'moved', position: focuser.position.value })
+		} else if (command.type === 'measure') {
+			measureCommandCount++
+			command = calibration.next({ type: 'measured', position: focuser.position.value, value: await measureMedianHfd(camera, receiver) })
+		} else {
+			return { command, moveCommandCount, measureCommandCount }
+		}
+	}
+
+	throw new Error('simulator-backed calibration did not reach a terminal command')
 }
 
 // Builds exact samples from the continuous plateau-plus-line model.
@@ -219,20 +271,7 @@ describe.skipIf(SKIP_TIME_CONSUMING)('backlash calibration simulator integration
 		focuserManager.connect(focuser)
 		await waitUntil(() => camera.connected && focuser.connected)
 		cameraManager.snoop(camera, undefined, focuser)
-
-		cameraManager.frame(camera, 512, 352, 256, 256)
-		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_NOISE_FEATURES', elements: { SKY_ENABLED: false, MOON_ENABLED: false, LIGHT_POLLUTION_ENABLED: false, AMP_GLOW_ENABLED: false } })
-		client.sendNumber({ device: camera.name, name: 'SIMULATOR_NOISE_EXPOSURE', elements: { EXPOSURE_TIME: 0.05 } })
-		client.sendNumber({ device: camera.name, name: 'SIMULATOR_SCENE', elements: { SCENE_SEED: 0x5eed, STAR_DENSITY: 0.001, SEEING: 0, HFD_MIN: 1.5, HFD_MAX: 1.5, FLUX_MIN: 5, FLUX_MAX: 5 } })
-		client.sendNumber({ device: camera.name, name: 'SIMULATOR_NOISE_SENSOR', elements: { READ_NOISE: 0, BIAS_ELECTRONS: 0, BLACK_LEVEL_ELECTRONS: 0, DARK_CURRENT_AT_REFERENCE_TEMP: 0, DARK_SIGNAL_NON_UNIFORMITY: 0 } })
-		client.sendNumber({
-			device: camera.name,
-			name: 'SIMULATOR_NOISE_ARTIFACTS',
-			elements: { FIXED_PATTERN_NOISE_STRENGTH: 0, ROW_NOISE_STRENGTH: 0, COLUMN_NOISE_STRENGTH: 0, BANDING_STRENGTH: 0, HOT_PIXEL_RATE: 0, WARM_PIXEL_RATE: 0, DEAD_PIXEL_RATE: 0 },
-		})
-		client.sendNumber({ device: camera.name, name: 'SIMULATOR_STAR_PLOT_OPTIONS', elements: { BEST_FOCUS: 50000 } })
-		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_ABERRATION_FEATURES', elements: { SENSOR_TILT: true } })
-		client.sendNumber({ device: camera.name, name: 'SIMULATOR_ABERRATION_FOCUS', elements: { FOCUS_RANGE: 4000, TILT: 10, TILT_ANGLE: 0 } })
+		configureBacklashImagingScene(client, cameraManager, camera)
 
 		await waitUntil(() => camera.frame.width.value === 256 && camera.frame.height.value === 256 && cameraSimulator.activeFocuser?.name === focuser.name)
 		focuserManager.syncTo(focuser, 50000)
@@ -259,6 +298,59 @@ describe.skipIf(SKIP_TIME_CONSUMING)('backlash calibration simulator integration
 		expect(points[0].value).toBeCloseTo(points[3].value, 6)
 		expect(points.at(-1)!.value).toBeLessThan(points[3].value)
 	}, 5000)
+
+	test('executes calibration move and measure commands through camera and focuser simulators', async () => {
+		const handler = new IndiClientHandlerSet()
+		const cameraManager = new CameraManager()
+		const focuserManager = new FocuserManager()
+		const frameReceiver = new CameraFrameReceiver()
+		handler.add(cameraManager)
+		handler.add(focuserManager)
+		cameraManager.addHandler(frameReceiver)
+
+		using client = new ClientSimulator('backlash.calibration.commands', handler)
+		using cameraSimulator = new CameraSimulator('Camera Simulator', client, { focuserManager })
+		using focuserSimulator = new FocuserSimulator('Focuser Simulator', client, { backlashIn: 300, backlashOut: 300 })
+		const camera = cameraManager.get(client, cameraSimulator.name)!
+		const focuser = focuserManager.get(client, focuserSimulator.name)!
+		cameraManager.connect(camera)
+		focuserManager.connect(focuser)
+		await waitUntil(() => camera.connected && focuser.connected)
+		cameraManager.snoop(camera, undefined, focuser)
+		configureBacklashImagingScene(client, cameraManager, camera, 52000, 8000)
+		await waitUntil(() => camera.frame.width.value === 256 && camera.frame.height.value === 256 && cameraSimulator.activeFocuser?.name === focuser.name)
+
+		focuserManager.syncTo(focuser, 50000)
+		await waitUntil(() => focuser.position.value === 50000)
+		const calibration = new BacklashCalibration({
+			probeStep: 150,
+			preloadDistance: 300,
+			maximumProbeDistance: 750,
+			minimumSlope: 1e-5,
+			repeats: 3,
+			samplesPerPosition: 1,
+			minimumPreloadPoints: 2,
+			minimumPlateauPoints: 2,
+			minimumPostBreakPoints: 2,
+			breakpointTolerance: 150,
+			stabilityCount: 1,
+			minimumPosition: 0,
+			maximumPosition: 100000,
+		})
+		const execution = await runCalibrationWithSimulators(calibration, focuserManager, focuser, cameraSimulator, frameReceiver)
+
+		expect(execution.command.type).toBe('completed')
+		if (execution.command.type !== 'completed') throw new Error(`expected completed calibration, received ${execution.command.type}`)
+		expect(execution.moveCommandCount).toBe(execution.measureCommandCount)
+		expect(execution.moveCommandCount).toBeGreaterThan(20)
+		expect(Math.abs(execution.command.result.increasing.steps - focuserSimulator.backlashOut)).toBeLessThanOrEqual(150)
+		expect(Math.abs(execution.command.result.decreasing.steps - focuserSimulator.backlashIn)).toBeLessThanOrEqual(150)
+		expect(execution.command.result.increasing.totalRunCount).toBe(3)
+		expect(execution.command.result.decreasing.totalRunCount).toBe(3)
+		expect(execution.command.result.increasing.validRunCount).toBeGreaterThanOrEqual(2)
+		expect(execution.command.result.decreasing.validRunCount).toBeGreaterThanOrEqual(2)
+		expect(calibration.result).toBe(execution.command.result)
+	}, 30000)
 })
 
 describe('backlash run aggregation', () => {
