@@ -266,6 +266,39 @@ describe('backlash calibration state machine', () => {
 		expect(Math.abs(command.result.decreasing.steps - 140)).toBeLessThanOrEqual(20)
 	})
 
+	test('rejects an in-range probe move beyond the commanded maximum', () => {
+		const calibration = new BacklashCalibration({ ...CALIBRATION_OPTIONS, stabilityCount: 13 })
+		const axis = new SyntheticFocusAxis(10000, 120, 120)
+		let command: BacklashCalibrationCommand = calibration.start(axis.position)
+		let reversalPosition: number | undefined
+
+		for (let i = 0; i < 200; i++) {
+			if (command.type === 'move') {
+				if (calibration.state === 'probing') {
+					reversalPosition ??= axis.position
+					const traveled = Math.abs(axis.position - reversalPosition)
+
+					if (traveled + Math.abs(command.relative) >= CALIBRATION_OPTIONS.maximumProbeDistance) {
+						const overtravelRelative = command.relative + Math.sign(command.relative) * CALIBRATION_OPTIONS.probeStep
+						const overtravelPosition = axis.move(overtravelRelative)
+						expect(Math.abs(overtravelPosition - reversalPosition)).toBeGreaterThan(CALIBRATION_OPTIONS.maximumProbeDistance)
+						expect(overtravelPosition).toBeLessThanOrEqual(CALIBRATION_OPTIONS.maximumPosition!)
+						expect(calibration.next({ type: 'moved', position: overtravelPosition })).toMatchObject({ type: 'failed', reason: 'invalidPosition' })
+						return
+					}
+				}
+
+				command = calibration.next({ type: 'moved', position: axis.move(command.relative) })
+			} else if (command.type === 'measure') {
+				command = calibration.next({ type: 'measured', position: axis.position, value: axis.measure() })
+			} else {
+				throw new Error(`unexpected terminal command: ${command.type}`)
+			}
+		}
+
+		throw new Error('calibration did not issue the expected late probe move')
+	})
+
 	test('fails after constant metrics make a valid majority impossible', () => {
 		const calibration = new BacklashCalibration(CALIBRATION_OPTIONS)
 		const axis = new SyntheticFocusAxis(10000, 100, 100)

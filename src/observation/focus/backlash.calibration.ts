@@ -755,6 +755,7 @@ export class BacklashCalibration {
 
 		const delta = position - this.#currentPosition
 		if (delta === 0 || Math.sign(delta) !== directionSign(pending.direction)) return this.#fail('axisStalled')
+		if (Math.abs(delta) > Math.abs(pending.relative)) return this.#fail('invalidPosition')
 
 		this.#currentPosition = position
 		if (this.#state === 'preloading') this.#preloadTraveled += Math.abs(delta)
