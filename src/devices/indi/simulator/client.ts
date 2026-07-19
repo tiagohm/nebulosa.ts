@@ -38,6 +38,11 @@ export class ClientSimulator implements Client {
 		for (const device of this.#devices.values()) device.name === vector.device && device.sendSwitch(vector)
 	}
 
+	// Returns the simulator registered under a device name, when available.
+	get(name: string) {
+		return this.#devices.get(name)
+	}
+
 	// Registers/unregisters a device simulator under its name.
 	register(device: DeviceSimulator) {
 		this.#devices.set(device.name, device)

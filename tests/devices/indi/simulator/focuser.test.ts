@@ -5,7 +5,7 @@ import { ClientSimulator } from '../../../../src/devices/indi/simulator/client'
 import { FocuserSimulator } from '../../../../src/devices/indi/simulator/focuser'
 import { isTimeConsumingTestSkipped, waitUntil } from '../../../util'
 
-// Integration coverage for simulated focuser movement, temperature, and manager projection.
+// Integration coverage for simulated focuser movement, backlash, temperature, and manager projection.
 
 const SKIP = isTimeConsumingTestSkipped()
 
@@ -38,6 +38,7 @@ describe.skipIf(SKIP)('focuser simulator', () => {
 		const properties = focuserManager.properties.get(focuser)!
 		expect(properties.FOCUS_TEMPERATURE).toBeDefined()
 		expect(properties.FOCUS_TEMPERATURE_COMPENSATION).toBeDefined()
+		expect(properties.SIMULATOR_BACKLASH).toBeDefined()
 
 		const initialTemperature = Number(properties.FOCUS_TEMPERATURE.elements.TEMPERATURE.value)
 		await waitUntil(() => Math.abs(Number(properties.FOCUS_TEMPERATURE.elements.TEMPERATURE.value) - initialTemperature) >= 0.05, 3000)
@@ -79,4 +80,64 @@ describe.skipIf(SKIP)('focuser simulator', () => {
 		expect(focuserManager.properties.length).toBe(0)
 		expect(thermometerManager.properties.length).toBe(0)
 	}, 7000)
+
+	test('simulates asymmetric backlash with persistent partial slack', async () => {
+		using client = new ClientSimulator('focuser', new IndiClientHandlerSet())
+		using simulator = new FocuserSimulator('Focuser Simulator', client)
+
+		simulator.connect()
+		client.sendNumber({ device: simulator.name, name: 'SIMULATOR_BACKLASH', elements: { BACKLASH_IN: 100, BACKLASH_OUT: 200 } })
+		expect(simulator.backlashIn).toBe(100)
+		expect(simulator.backlashOut).toBe(200)
+		simulator.syncTo(50000)
+
+		simulator.moveTo(51000)
+		await waitUntil(() => !simulator.isMoving)
+		expect(simulator.position).toBe(51000)
+		expect(simulator.effectivePosition).toBeCloseTo(51000, 6)
+
+		// A partial inward reversal consumes slack without moving the optical mechanism.
+		simulator.moveTo(50960)
+		await waitUntil(() => !simulator.isMoving)
+		expect(simulator.position).toBe(50960)
+		expect(simulator.effectivePosition).toBeCloseTo(51000, 6)
+
+		// Returning toward the engaged side first recovers the partially consumed slack.
+		simulator.moveTo(50980)
+		await waitUntil(() => !simulator.isMoving)
+		expect(simulator.effectivePosition).toBeCloseTo(51000, 6)
+		simulator.moveTo(51020)
+		await waitUntil(() => !simulator.isMoving)
+		expect(simulator.effectivePosition).toBeCloseTo(51020, 6)
+
+		// Each direction has an independent lost-motion distance.
+		simulator.moveTo(50920)
+		await waitUntil(() => !simulator.isMoving)
+		expect(simulator.effectivePosition).toBeCloseTo(51020, 6)
+		simulator.moveTo(50870)
+		await waitUntil(() => !simulator.isMoving)
+		expect(simulator.effectivePosition).toBeCloseTo(50970, 6)
+		simulator.moveTo(51020)
+		await waitUntil(() => !simulator.isMoving)
+		expect(simulator.effectivePosition).toBeCloseTo(50970, 6)
+		simulator.moveTo(51120)
+		await waitUntil(() => !simulator.isMoving)
+		expect(simulator.position).toBe(51120)
+		expect(simulator.effectivePosition).toBeCloseTo(51020, 6)
+
+		// Sync establishes a new optical reference and clears the engagement history.
+		simulator.syncTo(30000)
+		expect(simulator.effectivePosition).toBeCloseTo(30000, 6)
+		simulator.moveTo(29950)
+		await waitUntil(() => !simulator.isMoving)
+		expect(simulator.effectivePosition).toBeCloseTo(29950, 6)
+	})
+})
+
+test('rejects invalid focuser backlash configuration', () => {
+	using client = new ClientSimulator('focuser', new IndiClientHandlerSet())
+
+	expect(() => new FocuserSimulator('Negative Backlash', client, { backlashIn: -1 })).toThrow(RangeError)
+	expect(() => new FocuserSimulator('Non-finite Backlash', client, { backlashOut: Number.POSITIVE_INFINITY })).toThrow(TypeError)
+	expect(() => new FocuserSimulator('Excessive Backlash', client, { backlashOut: 100001 })).toThrow(RangeError)
 })
