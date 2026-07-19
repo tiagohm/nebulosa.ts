@@ -198,6 +198,78 @@ test('eraPlan94', () => {
 	expect(pv[1][2]).toBeCloseTo(0.8929809783898904786e-2, 11)
 })
 
+test('eraFk5hz', () => {
+	const [rh, dh] = erfa.eraFk5hz(1.76779433, -0.2917517103, 2400000.5, 54479)
+	expect(rh).toBeCloseTo(1.767794191464423978, 13)
+	expect(dh).toBeCloseTo(-0.2917516001679884419, 13)
+})
+
+test('eraFk52h', () => {
+	const h = erfa.eraFk52h(1.76779433, -0.2917517103, -1.91851572e-7, -5.8468475e-6, arcsec(0.37921), kilometerPerSecond(-7.6))
+	if (h === false) throw new Error()
+	const [rh, dh, drh, ddh, pxh, rvh] = h
+	expect(rh).toBeCloseTo(1.767794226299947632, 14)
+	expect(dh).toBeCloseTo(-0.2917516070530391757, 14)
+	expect(drh).toBeCloseTo(-0.196187412560572127e-6, 19)
+	expect(ddh).toBeCloseTo(-0.58459905176693911e-5, 19)
+	expect(pxh).toBeCloseTo(arcsec(0.37921), 14)
+	expect(rvh).toBeCloseTo(kilometerPerSecond(-7.6000000940000254), 11)
+})
+
+test('eraH2fk5', () => {
+	const fk5 = erfa.eraH2fk5(1.767794352, -0.2917512594, -2.76413026e-6, -5.92994449e-6, arcsec(0.37921), kilometerPerSecond(-7.6))
+	if (fk5 === false) throw new Error()
+	const [r5, d5, dr5, dd5, px5, rv5] = fk5
+	expect(r5).toBeCloseTo(1.767794455700065506, 13)
+	expect(d5).toBeCloseTo(-0.291751362646963889, 13)
+	expect(dr5).toBeCloseTo(-0.27597945024511204e-5, 18)
+	expect(dd5).toBeCloseTo(-0.59308014093262838e-5, 18)
+	expect(px5).toBeCloseTo(arcsec(0.37921), 13)
+	expect(rv5).toBeCloseTo(kilometerPerSecond(-7.6000001309071126), 11)
+})
+
+test('eraFk425', () => {
+	const [r2000, d2000, dr2000, dd2000, p2000, v2000] = erfa.eraFk425(0.07626899753879587532, -1.13740537839960578, 0.197374921784908746e-4, 0.5659714913272723189e-5, arcsec(0.134), kilometerPerSecond(8.7))
+	expect(r2000).toBeCloseTo(0.0875798993355644604, 14)
+	expect(d2000).toBeCloseTo(-1.132279113042091895, 12)
+	expect(dr2000).toBeCloseTo(0.1953670614474396139e-4, 17)
+	expect(dd2000).toBeCloseTo(0.5637686678659640164e-5, 18)
+	expect(p2000).toBeCloseTo(arcsec(0.1339919950582767871), 13)
+	expect(v2000).toBeCloseTo(kilometerPerSecond(8.736999669183529069), 12)
+})
+
+test('eraFk45z', () => {
+	const [r2000, d2000] = erfa.eraFk45z(0.01602284975382960982, -0.1164347929099906024, 1954.677617625256806)
+	expect(r2000).toBeCloseTo(0.02719295911606862303, 15)
+	expect(d2000).toBeCloseTo(-0.1115766001565926892, 13)
+})
+
+test('eraFk524', () => {
+	const [r1950, d1950, dr1950, dd1950, p1950, v1950] = erfa.eraFk524(0.8723503576487275595, -0.7517076365138887672, 0.2019447755430472323e-4, 0.3541563940505160433e-5, arcsec(0.1559), kilometerPerSecond(86.87))
+	expect(r1950).toBeCloseTo(0.8636359659799603487, 13)
+	expect(d1950).toBeCloseTo(-0.7550281733160843059, 13)
+	expect(dr1950).toBeCloseTo(0.2023628192747172486e-4, 17)
+	expect(dd1950).toBeCloseTo(0.3624459754935334718e-5, 18)
+	expect(p1950).toBeCloseTo(arcsec(0.1560079963299390241), 13)
+	expect(v1950).toBeCloseTo(kilometerPerSecond(86.79606353469163751), 11)
+})
+
+test('eraFk54z', () => {
+	const [r1950, d1950, dr1950, dd1950] = erfa.eraFk54z(0.02719026625066316119, -0.1115815170738754813, 1954.677308160316374)
+	expect(r1950).toBeCloseTo(0.01602015588390065476, 14)
+	expect(d1950).toBeCloseTo(-0.1164397101110765346, 13)
+	expect(dr1950).toBeCloseTo(-0.1175712648471090704e-7, 20)
+	expect(dd1950).toBeCloseTo(0.2108109051316431056e-7, 20)
+})
+
+test('eraHfk5z', () => {
+	const [r5, d5, dr5, dd5] = erfa.eraHfk5z(1.767794352, -0.2917512594, 2400000.5, 54479)
+	expect(r5).toBeCloseTo(1.767794490535581026, 13)
+	expect(d5).toBeCloseTo(-0.2917513695320114258, 14)
+	expect(dr5).toBeCloseTo(0.4335890983539243029e-8, 22)
+	expect(dd5).toBeCloseTo(-0.8569648841237745902e-9, 23)
+})
+
 test('eraPr00', () => {
 	const [dpsipr, depspr] = erfa.eraPr00(2400000.5, 53736)
 	expect(dpsipr).toBeCloseTo(-0.8716465172668348e-7, 22)
@@ -266,6 +338,12 @@ test('eraXys06a', () => {
 	expect(x).toBeCloseTo(0.5791308482835292617e-3, 14)
 	expect(y).toBeCloseTo(0.402058009945402031e-4, 15)
 	expect(s).toBeCloseTo(-0.1220032294164579896e-7, 18)
+})
+
+test('eraXy06', () => {
+	const [x, y] = erfa.eraXy06(2400000.5, 53736)
+	expect(x).toBeCloseTo(0.5791308486706010975e-3, 16)
+	expect(y).toBeCloseTo(0.4020579816732958141e-4, 17)
 })
 
 test('eraC2ibpn', () => {

@@ -2,12 +2,12 @@ import { ASEC2RAD, DAYSEC, DAYSPERJC, DAYSPERJM, DAYSPERJY, DAYSPERTY, ELB, ELG,
 import { type Mat3, type MutMat3, matClone, matCopy, matIdentity, matMul, matMulTranspose, matMulVec, matRotX, matRotY, matRotZ, matTransposeMulVec } from '../../../math/linear-algebra/mat3'
 import { type MutVec3, type Vec3, vecClone, vecCross, vecDivScalar, vecDot, vecFill, vecLength, vecMinus, vecMulScalar, vecNormalize, vecNormalizeMut, vecPlus } from '../../../math/linear-algebra/vec3'
 import { pmod, roundToNearestWholeNumber, type NumberArray } from '../../../math/numerical/math'
-import { type Angle, arcsec, deg, normalizeAngle, secondsOfTime } from '../../../math/units/angle'
+import { type Angle, arcsec, deg, normalizeAngle, secondsOfTime, toArcsec } from '../../../math/units/angle'
 import { type Distance, toKilometer } from '../../../math/units/distance'
 import type { Pressure } from '../../../math/units/pressure'
 import type { Temperature } from '../../../math/units/temperature'
-import type { Velocity } from '../../../math/units/velocity'
-import { FAIRHEAD, IAU2000_EECT, IAU2000_S, IAU2006_S, NUT00A_LS, NUT00A_PL, NUT00B_LS, NUT80_X, PLAN94, VONDRAK_ECLIPTIC, VONDRAK_ECLIPTIC_POLYNOMIAL, VONDRAK_EQUATOR, VONDRAK_EQUATOR_POLYNOMIAL } from './erfa.data'
+import { kilometerPerSecond, toKilometerPerSecond, type Velocity } from '../../../math/units/velocity'
+import { FAIRHEAD, FK4_FK5, IAU2000_EECT, IAU2000_S, IAU2006_S, NUT00A_LS, NUT00A_PL, NUT00B_LS, NUT80_X, PLAN94, VONDRAK_ECLIPTIC, VONDRAK_ECLIPTIC_POLYNOMIAL, VONDRAK_EQUATOR, VONDRAK_EQUATOR_POLYNOMIAL, XY06 } from './erfa.data'
 
 const DBL_EPSILON = 2.220446049250313e-16
 
@@ -414,6 +414,198 @@ export function eraPlan94(tdb1: number, tdb2: number, np: number): readonly [Mut
 	pv[1][2] = y * sineObliquity + z * cosineObliquity
 
 	return pv
+}
+
+// Converts the Seidelmann 6-space FK4/FK5 transformation matrix into a position/velocity vector.
+function fkCatalogTransform(pv: readonly [Vec3, Vec3], matrix: typeof FK4_FK5.forward | typeof FK4_FK5.inverse): readonly [MutVec3, MutVec3] {
+	const transformed: readonly [MutVec3, MutVec3] = [
+		[0, 0, 0],
+		[0, 0, 0],
+	]
+
+	for (let i = 0; i < 2; i++) {
+		for (let j = 0; j < 3; j++) {
+			let value = 0
+
+			for (let k = 0; k < 2; k++) {
+				for (let l = 0; l < 3; l++) value += matrix[i][j][k][l] * pv[k][l]
+			}
+
+			transformed[i][j] = value
+		}
+	}
+
+	return transformed
+}
+
+// Applies the FK4 E-term correction w*a - (p.a)*p to a position or velocity vector.
+function fkEtermsCorrection(vector: Vec3, eTerm: Vec3, scale: number): MutVec3 {
+	return vecMinus(vecMulScalar(eTerm, scale), vecMulScalar(vector, vecDot(vector, eTerm)))
+}
+
+// Converts B1950.0 FK4 catalog data to J2000.0 FK5 catalog data.
+export function eraFk425(r1950: Angle, d1950: Angle, dr1950: Angle, dd1950: Angle, p1950: Angle, v1950: Velocity): [Angle, Angle, Angle, Angle, Angle, Velocity] {
+	// FK proper motion is expressed in arcseconds per century inside the published transformation.
+	const properMotionFactor = 100 / ASEC2RAD
+	const parallax = toArcsec(p1950)
+	const radialVelocity = toKilometerPerSecond(v1950)
+	const radialScale = parallax * 21.095
+	const pv0 = eraS2pv(r1950, d1950, 1, dr1950 * properMotionFactor, dd1950 * properMotionFactor, radialVelocity * radialScale)
+	const [eTerms, eTermsRate] = FK4_FK5.eTerms
+
+	// Remove FK4 aberration E-terms before transforming into the Fricke system.
+	const pv1: readonly [MutVec3, MutVec3] = [vecPlus(vecMinus(pv0[0], eTerms), vecMulScalar(pv0[0], vecDot(pv0[0], eTerms))), vecPlus(vecMinus(pv0[1], eTermsRate), vecMulScalar(pv0[0], vecDot(pv0[0], eTermsRate)))]
+	const pv2 = fkCatalogTransform(pv1, FK4_FK5.forward)
+	const [r2000, d2000, distance, ur2000, ud2000, rd2000] = eraPv2s(pv2[0], pv2[1])
+
+	const p2000 = parallax > 1e-30 ? parallax / distance : parallax
+	const v2000 = parallax > 1e-30 ? rd2000 / radialScale : radialVelocity
+	return [normalizeAngle(r2000), d2000, ur2000 / properMotionFactor, ud2000 / properMotionFactor, arcsec(p2000), kilometerPerSecond(v2000)]
+}
+
+// Converts a B1950.0 FK4 star position to J2000.0 FK5 assuming zero FK5 proper motion.
+export function eraFk45z(r1950: Angle, d1950: Angle, bepoch: number): [Angle, Angle] {
+	const properMotionFactor = 100 / ASEC2RAD
+	const [eTerms, eTermsRate] = FK4_FK5.eTerms
+	const position = eraS2c(r1950, d1950)
+	const eTermsAtEpoch = vecPlus(eTerms, vecMulScalar(eTermsRate, (bepoch - 1950) / properMotionFactor))
+	const correctedPosition = vecMinus(position, vecMinus(eTermsAtEpoch, vecMulScalar(position, vecDot(position, eTermsAtEpoch))))
+	const pv = fkCatalogTransform([correctedPosition, [0, 0, 0]], FK4_FK5.forward)
+	const [djm0, djm] = eraEpb2jd(bepoch)
+	vecPlus(pv[0], vecMulScalar(pv[1], (eraEpj(djm0, djm) - 2000) / properMotionFactor), pv[0])
+	const rd = eraC2s(...pv[0])
+	rd[0] = normalizeAngle(rd[0])
+	return rd
+}
+
+// Converts J2000.0 FK5 catalog data to B1950.0 FK4 catalog data.
+export function eraFk524(r2000: Angle, d2000: Angle, dr2000: Angle, dd2000: Angle, p2000: Angle, v2000: Velocity): [Angle, Angle, Angle, Angle, Angle, Velocity] {
+	const properMotionFactor = 100 / ASEC2RAD
+	const parallax = toArcsec(p2000)
+	const radialVelocity = toKilometerPerSecond(v2000)
+	const radialScale = parallax * 21.095
+	const pv0 = eraS2pv(r2000, d2000, 1, dr2000 * properMotionFactor, dd2000 * properMotionFactor, radialVelocity * radialScale)
+	const pv1 = fkCatalogTransform(pv0, FK4_FK5.inverse)
+	const [eTerms, eTermsRate] = FK4_FK5.eTerms
+
+	// Reintroduce FK4 aberration E-terms, recomputing the position modulus after the first iteration.
+	let modulus = vecLength(pv1[0])
+	const firstPosition = vecPlus(pv1[0], fkEtermsCorrection(pv1[0], eTerms, modulus))
+	modulus = vecLength(firstPosition)
+	const position = vecPlus(pv1[0], fkEtermsCorrection(pv1[0], eTerms, modulus))
+	const velocity = vecPlus(pv1[1], vecMinus(vecMulScalar(eTermsRate, modulus), vecMulScalar(position, vecDot(pv1[0], eTermsRate))))
+	const [r1950, d1950, distance, ur1950, ud1950, rd1950] = eraPv2s(position, velocity)
+
+	const p1950 = parallax > 1e-30 ? parallax / distance : parallax
+	const v1950 = parallax > 1e-30 ? rd1950 / radialScale : radialVelocity
+	return [normalizeAngle(r1950), d1950, ur1950 / properMotionFactor, ud1950 / properMotionFactor, arcsec(p1950), kilometerPerSecond(v1950)]
+}
+
+// Converts a J2000.0 FK5 star position to B1950.0 FK4 with zero FK5 proper motion.
+export function eraFk54z(r2000: Angle, d2000: Angle, bepoch: number): [Angle, Angle, Angle, Angle] {
+	const [r, d, pr, pd] = eraFk524(r2000, d2000, 0, 0, arcsec(0), kilometerPerSecond(0))
+	const position = eraS2c(r, d)
+	const velocity: MutVec3 = [-pr * position[1] - pd * Math.cos(r) * Math.sin(d), pr * position[0] - pd * Math.sin(r) * Math.sin(d), pd * Math.cos(d)]
+	vecPlus(position, vecMulScalar(velocity, bepoch - 1950), position)
+	const [r1950, d1950] = eraC2s(...position)
+	return [normalizeAngle(r1950), d1950, pr, pd]
+}
+
+// FK5 with respect to Hipparcos orientation, expressed as an r-matrix.
+const FK5_HIP_ROTATION_MATRIX = [0.9999999999999928638, 0.1110223351022919694e-6, 0.4411803962536558154e-7, -0.111022330845874643e-6, 0.999999999999989183, -0.9647792498984142358e-7, -0.4411805033656962252e-7, 0.9647792009175314354e-7, 0.9999999999999943728] as const
+
+// Forms the r-matrix for an Euler rotation vector using the ERFA convention.
+function fkRotationVectorToMatrix(vector: Vec3): MutMat3 {
+	let [x, y, z] = vector
+	const phi = Math.sqrt(x * x + y * y + z * z)
+	const sinPhi = Math.sin(phi)
+	const cosPhi = Math.cos(phi)
+	const oneMinusCosPhi = 1 - cosPhi
+
+	if (phi > 0) {
+		x /= phi
+		y /= phi
+		z /= phi
+	}
+
+	return [
+		x * x * oneMinusCosPhi + cosPhi,
+		x * y * oneMinusCosPhi + z * sinPhi,
+		x * z * oneMinusCosPhi - y * sinPhi,
+		y * x * oneMinusCosPhi - z * sinPhi,
+		y * y * oneMinusCosPhi + cosPhi,
+		y * z * oneMinusCosPhi + x * sinPhi,
+		z * x * oneMinusCosPhi + y * sinPhi,
+		z * y * oneMinusCosPhi - x * sinPhi,
+		z * z * oneMinusCosPhi + cosPhi,
+	]
+}
+
+// Transform an FK5 star position into the Hipparcos system for a given date.
+export function eraFk5hz(r5: Angle, d5: Angle, date1: number, date2: number): [Angle, Angle] {
+	// Interval from given date to fundamental epoch J2000.0 (Julian years).
+	const t = -(date1 - J2000 + date2) / DAYSPERJY
+
+	// FK5 barycentric position vector and the FK5-to-Hipparcos transform.
+	const p5e = eraS2c(r5, d5)
+	// Hipparcos with respect to FK5 spin, in radians per Julian year, accumulated over the interval.
+	const vst: MutVec3 = [-0.1454441043328607981e-8 * t, 0.2908882086657215962e-8 * t, 0.3393695767766751955e-8 * t]
+
+	const p5 = matTransposeMulVec(fkRotationVectorToMatrix(vst), p5e, p5e)
+	const ph = matMulVec(FK5_HIP_ROTATION_MATRIX, p5, p5)
+	const rd = eraC2s(...ph)
+	rd[0] = normalizeAngle(rd[0])
+	return rd
+}
+
+// Transform FK5 star catalog data into the Hipparcos system.
+export function eraFk52h(r5: Angle, d5: Angle, dr5: Angle, dd5: Angle, px5: Angle, rv5: Velocity) {
+	// FK5 barycentric position/velocity pv-vector (normalized).
+	const pv5 = eraStarpv(r5, d5, dr5, dd5, px5, rv5)
+
+	// Hipparcos with respect to FK5 spin, in radians per day.
+	const s5h: MutVec3 = [-0.1454441043328607981e-8 / DAYSPERJY, 0.2908882086657215962e-8 / DAYSPERJY, 0.3393695767766751955e-8 / DAYSPERJY]
+
+	// Apply spin to the position and add the extra space motion component.
+	const velocity = matMulVec(FK5_HIP_ROTATION_MATRIX, vecPlus(vecCross(pv5[0], s5h, s5h), pv5[1], s5h), s5h)
+
+	// Orient the FK5 position into the Hipparcos system.
+	const position = matMulVec(FK5_HIP_ROTATION_MATRIX, pv5[0], pv5[0])
+
+	return eraPvstar(position, velocity)
+}
+
+// Transform Hipparcos star catalog data into the FK5 system.
+export function eraH2fk5(rh: Angle, dh: Angle, drh: Angle, ddh: Angle, pxh: Angle, rvh: Velocity) {
+	// Hipparcos barycentric position/velocity pv-vector (normalized).
+	const pvh = eraStarpv(rh, dh, drh, ddh, pxh, rvh)
+
+	// Hipparcos with respect to FK5 spin, in radians per day.
+	const s5h: MutVec3 = [-0.1454441043328607981e-8 / DAYSPERJY, 0.2908882086657215962e-8 / DAYSPERJY, 0.3393695767766751955e-8 / DAYSPERJY]
+
+	// Orient the spin into the Hipparcos system and remove it from velocity.
+	const sh = matMulVec(FK5_HIP_ROTATION_MATRIX, s5h, s5h)
+	const velocity = matTransposeMulVec(FK5_HIP_ROTATION_MATRIX, vecMinus(pvh[1], vecCross(pvh[0], sh, sh), sh), sh)
+	const position = matTransposeMulVec(FK5_HIP_ROTATION_MATRIX, pvh[0], pvh[0])
+	return eraPvstar(position, velocity)
+}
+
+// Transforms a Hipparcos star position into FK5 J2000.0, assuming zero Hipparcos proper motion.
+export function eraHfk5z(rh: Angle, dh: Angle, date1: number, date2: number): [Angle, Angle, Angle, Angle] {
+	// Time from J2000.0 in Julian years and the Hipparcos unit position.
+	const t = (date1 - J2000 + date2) / DAYSPERJY
+	const ph = eraS2c(rh, dh)
+	// Hipparcos with respect to FK5 spin, in radians per Julian year.
+	const s5h: MutVec3 = [-0.1454441043328607981e-8, 0.2908882086657215962e-8, 0.3393695767766751955e-8]
+	const sh = matMulVec(FK5_HIP_ROTATION_MATRIX, s5h)
+
+	// Accumulated Hipparcos-with-respect-to-FK5 spin, followed by the FK5-to-Hipparcos orientation.
+	const r = fkRotationVectorToMatrix(vecMulScalar(s5h, t, s5h))
+	const r5ht = matMul(FK5_HIP_ROTATION_MATRIX, r, r)
+	const velocity = matTransposeMulVec(r5ht, vecCross(sh, ph, sh), sh)
+	const position = matTransposeMulVec(r5ht, ph, ph)
+	const [r5, d5, , dr5, dd5] = eraPv2s(position, velocity)
+	return [normalizeAngle(r5), d5, dr5, dd5]
 }
 
 function fillDayAndFraction(out: NumberArray, day: number, fraction: number) {
@@ -1071,6 +1263,76 @@ export function eraXys00b(date1: number, date2: number): [Angle, Angle, Angle] {
 export function eraXys06a(date1: number, date2: number): [Angle, Angle, Angle] {
 	const [x, y] = eraBpn2xy(eraPnm06a(date1, date2))
 	return [x, y, eraS06(date1, date2, x, y)]
+}
+
+// X,Y coordinates of the celestial intermediate pole from the series
+// based on IAU 2006 precession and IAU 2000A nutation.
+export function eraXy06(date1: number, date2: number): [Angle, Angle] {
+	// Interval between fundamental epoch J2000.0 and current date (JC).
+	const t = (date1 - J2000 + date2) / DAYSPERJC
+	const pt = new Float64Array([1, t, t * t, t * t * t, t * t * t * t, t * t * t * t * t])
+	const fa = new Float64Array([eraFal03(t), eraFalp03(t), eraFaf03(t), eraFad03(t), eraFaom03(t), eraFame03(t), eraFave03(t), eraFae03(t), eraFama03(t), eraFaju03(t), eraFasa03(t), eraFaur03(t), eraFane03(t), eraFapa03(t)])
+	const { polynomial, luniSolarMultipliers, planetaryMultipliers, coefficientIndex, amplitudes, component, trigonometricFunction, timePower } = XY06
+	const xypr = new Float64Array(2)
+	const xyls = new Float64Array(2)
+	const xypl = new Float64Array(2)
+
+	// Polynomial part of precession-nutation.
+	for (let jxy = 0; jxy < 2; jxy++) {
+		for (let j = 5; j >= 0; j--) xypr[jxy] += polynomial[jxy][j] * pt[j]
+	}
+
+	// Nutation periodic terms, planetary.
+	let ialast = amplitudes.length
+	const sc = new Float64Array(2)
+
+	for (let ifreq = planetaryMultipliers.length - 1; ifreq >= 0; ifreq--) {
+		const multipliers = planetaryMultipliers[ifreq]
+		let arg = 0
+
+		for (let i = 0; i < 14; i++) {
+			const multiplier = multipliers[i]
+			if (multiplier !== 0) arg += multiplier * fa[i]
+		}
+
+		sc[0] = Math.sin(arg)
+		sc[1] = Math.cos(arg)
+
+		const ia = coefficientIndex[ifreq + luniSolarMultipliers.length]
+
+		for (let i = ialast; i >= ia; i--) {
+			const j = i - ia
+			xypl[component[j]] += amplitudes[i - 1] * sc[trigonometricFunction[j]] * pt[timePower[j]]
+		}
+
+		ialast = ia - 1
+	}
+
+	// Nutation periodic terms, luni-solar.
+	for (let ifreq = luniSolarMultipliers.length - 1; ifreq >= 0; ifreq--) {
+		const multipliers = luniSolarMultipliers[ifreq]
+		let arg = 0
+
+		for (let i = 0; i < 5; i++) {
+			const multiplier = multipliers[i]
+			if (multiplier !== 0) arg += multiplier * fa[i]
+		}
+
+		sc[0] = Math.sin(arg)
+		sc[1] = Math.cos(arg)
+
+		const ia = coefficientIndex[ifreq]
+
+		for (let i = ialast; i >= ia; i--) {
+			const j = i - ia
+			xyls[component[j]] += amplitudes[i - 1] * sc[trigonometricFunction[j]] * pt[timePower[j]]
+		}
+
+		ialast = ia - 1
+	}
+
+	// CIP unit vector components.
+	return [arcsec(xypr[0] + (xyls[0] + xypl[0]) / 1e6), arcsec(xypr[1] + (xyls[1] + xypl[1]) / 1e6)]
 }
 
 // Form the matrix of precession-nutation for a given date (including
