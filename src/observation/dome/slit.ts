@@ -47,9 +47,6 @@ export interface DomeSlitSolution extends RaySphereIntersection {
 // Relative tolerance used only to clamp a slightly negative tangency discriminant to zero.
 const DISCRIMINANT_RELATIVE_EPSILON = 64 * Number.EPSILON
 
-// Relative distance below which a root is treated as the ray origin rather than a forward hit.
-const FORWARD_DISTANCE_RELATIVE_EPSILON = 64 * Number.EPSILON
-
 // Returns the nearest strictly forward intersection of a ray with a sphere, or undefined when the
 // line misses or both roots are non-forward. Direction is normalized so distance remains metres.
 export function intersectRaySphere(ray: Readonly<OpticalRay>, center: Vec3, radius: number): RaySphereIntersection | undefined {
@@ -69,10 +66,9 @@ export function intersectRaySphere(ray: Readonly<OpticalRay>, center: Vec3, radi
 	const root = Math.sqrt(discriminant)
 	const near = -b - root
 	const far = -b + root
-	const minimumDistance = FORWARD_DISTANCE_RELATIVE_EPSILON * Math.max(radius, vecLength(relative))
 	let distance: number
-	if (near > minimumDistance) distance = near
-	else if (far > minimumDistance) distance = far
+	if (near > 0) distance = near
+	else if (far > 0) distance = far
 	else return undefined
 	return { point: vecPlus(ray.origin, vecMulScalar(direction, distance)), distance }
 }

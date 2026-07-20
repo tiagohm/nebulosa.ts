@@ -30,6 +30,14 @@ test('outside entering rays choose the near root rather than the opposite exit',
 	expect(intersectRaySphere({ origin: [-10, 0, 0], direction: [-1, 0, 0] }, [0, 0, 0], 5)).toBeUndefined()
 })
 
+test('near-surface entering rays preserve the nearest strictly positive root', () => {
+	const intersection = intersectRaySphere({ origin: [5 + 5e-14, 0, 0], direction: [-1, 0, 0] }, [0, 0, 0], 5)!
+
+	expect(intersection.distance).toBeGreaterThan(0)
+	expect(intersection.distance).toBeLessThan(1e-12)
+	expectVectorClose(intersection.point, [5, 0, 0])
+})
+
 test('tangent, surface, and invalid rays follow strict forward semantics', () => {
 	const tangent = intersectRaySphere({ origin: [-10, 5, 0], direction: [1, 0, 0] }, [0, 0, 0], 5)!
 	expectVectorClose(tangent.point, [0, 5, 0])
