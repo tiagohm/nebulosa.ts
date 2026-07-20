@@ -40,6 +40,20 @@ test('two exact non-collinear directions recover a proper TRIAD rotation', () =>
 	expectVectorClose(predictMountDirection(result, predictWorldDirection(result, [0.3, -0.4, 0.8])), [0.3 / Math.hypot(0.3, -0.4, 0.8), -0.4 / Math.hypot(0.3, -0.4, 0.8), 0.8 / Math.hypot(0.3, -0.4, 0.8)])
 })
 
+test('two noisy directions refine the TRIAD seed to the least-squares compromise', () => {
+	const result = fitDirectionAlignment([
+		{ mount: [1, 0, 0], world: [1, 0, 0] },
+		{ mount: [0, 1, 0], world: [Math.cos(deg(80)), Math.sin(deg(80)), 0] },
+	])
+
+	expect(result.converged).toBeTrue()
+	expect(result.iterations).toBeGreaterThan(0)
+	expect(result.residuals[0]).toBeCloseTo(deg(5), 10)
+	expect(result.residuals[1]).toBeCloseTo(deg(5), 10)
+	expect(result.rms).toBeCloseTo(deg(5), 10)
+	expectVectorClose(predictWorldDirection(result, [1, 0, 0]), [Math.cos(deg(5)), -Math.sin(deg(5)), 0], 10)
+})
+
 test('many exact directions refine to the known rotation', () => {
 	const expected = matRodriguesRotation([-0.3, 0.7, 1], deg(17))
 	const mounts = [

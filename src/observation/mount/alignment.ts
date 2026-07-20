@@ -104,9 +104,9 @@ export function fitDirectionAlignment(samples: readonly Readonly<DirectionAlignm
 	let residuals = alignmentResiduals(rotation, normalized.mount, normalized.world)
 	let weights = finalWeights(residuals, normalized.baseWeights, controls)
 	let iterations = 0
-	let converged = samples.length === 2
+	let converged = residuals.every((residual) => residual <= controls.tolerance)
 
-	if (samples.length > 2) {
+	if (!converged) {
 		for (let iteration = 0; iteration < controls.maxIterations; iteration++) {
 			iterations = iteration + 1
 			weights = finalWeights(residuals, normalized.baseWeights, controls)
