@@ -87,6 +87,16 @@ test('inverse kinematics recovers local branches for both canonical geometries',
 	}
 })
 
+test('inverse kinematics escapes an antipodal default seed', () => {
+	const geometry = createIdealAltAzGeometry()
+	const target = [0, -1, 0] as const
+	const solution = solveMountEncoders(geometry, target, { tolerance: 1e-12 })
+
+	expect(solution.converged).toBeTrue()
+	expect(solution.residual).toBeLessThanOrEqual(1e-12)
+	expectVectorClose(mountDirectionFromEncoders(geometry, solution), target)
+})
+
 test('inverse kinematics respects ranges and returns a finite best effort', () => {
 	const geometry = createIdealAltAzGeometry()
 	const target = mountDirectionFromEncoders(geometry, { primary: 1, secondary: 0.5 })

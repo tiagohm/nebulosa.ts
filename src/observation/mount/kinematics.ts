@@ -117,6 +117,9 @@ const JACOBIAN_RELATIVE_EPSILON = 64 * Number.EPSILON
 // Maximum number of step halvings used when a full Gauss-Newton update increases residual.
 const MAX_BACKTRACKING_STEPS = 16
 
+// Angular band around PI where the tangent residual cannot select a descent direction reliably.
+const ANTIPODAL_ESCAPE_EPSILON = 1e-8
+
 // Computes the complete world-frame pose for finite encoder angles.
 export function mountPoseFromEncoders(geometry: Readonly<TwoAxisMountGeometry>, encoders: Readonly<MountEncoderPosition>): MountPose {
 	validateGeometry(geometry)
@@ -174,6 +177,22 @@ export function solveMountEncoders(geometry: Readonly<TwoAxisMountGeometry>, wor
 
 	for (let iteration = 0; iteration < controls.maxIterations; iteration++) {
 		iterations = iteration + 1
+
+		if (PI - residual <= ANTIPODAL_ESCAPE_EPSILON) {
+			const escape = tryAntipodalEscape(geometry, target, primary, secondary, residual, controls)
+			if (escape) {
+				primary = escape.primary
+				secondary = escape.secondary
+				pose = escape.pose
+				residual = escape.residual
+				bestPrimary = primary
+				bestSecondary = secondary
+				bestResidual = residual
+				if (residual <= controls.tolerance) return makeSolution(primary, secondary, true, iteration + 1, residual)
+				continue
+			}
+		}
+
 		const primaryJacobian = vecCross(pose.primaryAxis, pose.direction)
 		const secondaryJacobian = vecCross(pose.secondaryAxis, pose.direction)
 		if ((geometry.primaryDirection ?? 1) < 0) vecNegateMut(primaryJacobian)
@@ -261,6 +280,40 @@ interface MountEncoderSolveControls {
 	readonly primaryRange?: readonly [Angle, Angle]
 	// Optional inclusive secondary range in radians.
 	readonly secondaryRange?: readonly [Angle, Angle]
+}
+
+// Improved finite-step seed used to leave the antipodal tangent singularity.
+interface MountEncoderEscape extends MountEncoderPosition {
+	// Pose at the escaped encoder position.
+	readonly pose: MountPose
+	// Angular target residual at the escaped position, in radians.
+	readonly residual: Angle
+}
+
+// Probes one bounded step in both directions of each encoder and returns the best strict
+// improvement. This is only called near an antipodal target, where the tangent gradient vanishes.
+function tryAntipodalEscape(geometry: Readonly<TwoAxisMountGeometry>, target: Vec3, primary: Angle, secondary: Angle, residual: Angle, controls: Readonly<MountEncoderSolveControls>): MountEncoderEscape | undefined {
+	const candidates: readonly MountEncoderPosition[] = [
+		{ primary: clampToRange(primary + controls.maxStep, controls.primaryRange), secondary },
+		{ primary: clampToRange(primary - controls.maxStep, controls.primaryRange), secondary },
+		{ primary, secondary: clampToRange(secondary + controls.maxStep, controls.secondaryRange) },
+		{ primary, secondary: clampToRange(secondary - controls.maxStep, controls.secondaryRange) },
+	]
+	let best: MountEncoderEscape | undefined
+	let bestResidual = residual
+
+	for (let i = 0; i < candidates.length; i++) {
+		const candidate = candidates[i]
+		if (candidate.primary === primary && candidate.secondary === secondary) continue
+		const pose = mountPoseFromEncodersUnchecked(geometry, candidate)
+		const candidateResidual = directionResidual(pose.direction, target)
+		if (candidateResidual < bestResidual) {
+			best = { ...candidate, pose, residual: candidateResidual }
+			bestResidual = candidateResidual
+		}
+	}
+
+	return best
 }
 
 // Validates and materializes inverse-solver defaults.
