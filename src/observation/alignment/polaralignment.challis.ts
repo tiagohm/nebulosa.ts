@@ -5,6 +5,7 @@ import { validateFinite, validateInRange } from '../../core/validation'
 import { matMulVec } from '../../math/linear-algebra/mat3'
 import { vecAngleUnit, vecMulScalar, vecNormalize, type Vec3 } from '../../math/linear-algebra/vec3'
 import { linearLeastSquares, robustLinearLeastSquares, type LinearLeastSquaresResult } from '../../math/numerical/least.squares'
+import type { NumberArray } from '../../math/numerical/math'
 import { normalizeAngle, type Angle } from '../../math/units/angle'
 import { decomposePolarErrorGeodesic } from './polaralignment.util'
 
@@ -68,9 +69,9 @@ export interface ChallisPolarAlignmentResult {
 	// Whether the solver diagnosed a rank-deficient design; successful fits require false.
 	readonly rankDeficient: boolean
 	// Target-minus-fitted declination residuals, in radians.
-	readonly residuals: Readonly<Float64Array>
+	readonly residuals: Readonly<NumberArray>
 	// Final base times robust weight for every observation.
-	readonly weights: Readonly<Float64Array>
+	readonly weights: Readonly<NumberArray>
 	// Non-fatal coverage, leverage, conditioning, and approximation diagnostics.
 	readonly warnings: readonly string[]
 }
@@ -121,17 +122,16 @@ export function fitChallisPolarAlignment(observations: readonly Readonly<Challis
 
 	if (positiveWeightCount < columnCount) throw new RangeError(`at least ${columnCount} positive-weight observations are required`)
 
-	const robust = options.robust ?? 'none'
+	const method = options.robust ?? 'none'
 	let fit: LinearLeastSquaresResult
-	let weights: Float64Array
+	let weights: Readonly<NumberArray> = baseWeights
 
-	if (robust === 'none') {
-		fit = linearLeastSquares(design, target, { weights: baseWeights })
-		weights = Float64Array.from(baseWeights)
+	if (method === 'none') {
+		fit = linearLeastSquares(design, target, { weights })
 	} else {
-		const robustFit = robustLinearLeastSquares(design, target, { weights: baseWeights, method: robust, maxIterations: options.maxIterations, tolerance: options.tolerance, tuning: options.tuning })
+		const robustFit = robustLinearLeastSquares(design, target, { weights, method, maxIterations: options.maxIterations, tolerance: options.tolerance, tuning: options.tuning })
 		fit = robustFit
-		weights = Float64Array.from(robustFit.weights)
+		weights = robustFit.weights
 	}
 
 	if (fit.rankDeficient || !Number.isFinite(fit.conditionNumber)) throw new RangeError('Challis design matrix is rank deficient')
@@ -149,8 +149,7 @@ export function fitChallisPolarAlignment(observations: readonly Readonly<Challis
 	const error = decomposePolarErrorGeodesic(poleEnu, targetEnu, [0, 0, 1], [1, 0, 0])
 	const totalError = vecAngleUnit(targetEnu, poleEnu)
 
-	const residuals = Float64Array.from(fit.residuals)
-	const warnings = [...challisWarnings(observations, weights, fit, magnitude)]
+	const warnings = challisWarnings(observations, weights, fit, magnitude) as string[]
 	if (!error) warnings.push('polar error adjustment components are undefined at this latitude')
 
 	return {
@@ -167,7 +166,7 @@ export function fitChallisPolarAlignment(observations: readonly Readonly<Challis
 		totalError,
 		conditionNumber: fit.conditionNumber,
 		rankDeficient: fit.rankDeficient,
-		residuals,
+		residuals: fit.residuals,
 		weights,
 		warnings,
 	}
@@ -210,7 +209,7 @@ function effectiveAngleComparator(a: number, b: number) {
 }
 
 // Produces non-fatal diagnostics from hour-angle coverage, final weights, conditioning, and scale.
-function challisWarnings(observations: readonly Readonly<ChallisObservation>[], weights: Readonly<Float64Array>, fit: Readonly<LinearLeastSquaresResult>, magnitude: Angle): readonly string[] {
+function challisWarnings(observations: readonly Readonly<ChallisObservation>[], weights: Readonly<NumberArray>, fit: Readonly<LinearLeastSquaresResult>, magnitude: Angle): readonly string[] {
 	const warnings: string[] = []
 	const effectiveAngles: number[] = []
 	let weightSum = 0
