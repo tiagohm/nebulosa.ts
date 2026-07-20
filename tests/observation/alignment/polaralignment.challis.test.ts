@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test'
+import { PI } from '../../../src/core/constants'
 import { deg } from '../../../src/math/units/angle'
 import { challisRefractionCorrection, fitChallisPolarAlignment, type ChallisObservation } from '../../../src/observation/alignment/polaralignment.challis'
 
@@ -76,7 +77,7 @@ test('refraction correction uses the shared atmosphere model and rejects deep-be
 	const correction = challisRefractionCorrection(0, deg(20), deg(45))
 	expect(Number.isFinite(correction)).toBeTrue()
 	expect(correction).not.toBe(0)
-	expect(() => challisRefractionCorrection(Math.PI, deg(-60), deg(45))).toThrow()
+	expect(() => challisRefractionCorrection(PI, deg(-60), deg(45))).toThrow()
 })
 
 test('insufficient, rank-deficient, and invalid observations are rejected', () => {

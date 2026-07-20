@@ -5,6 +5,7 @@ import type { TwoAxisMountGeometry } from './kinematics'
 
 // Adapter from Toshimi Taki's three mount-fabrication errors to the vector geometry consumed by
 // the shared two-axis kinematics. Angles follow equation 5.3-1 of Matrix Method, revision E.
+// https://www.astrovox.gr/applications/core/interface/file/attachment.php?id=30983
 
 // Incremental Taki fabrication errors in radians.
 export interface TakiFabricationErrors {

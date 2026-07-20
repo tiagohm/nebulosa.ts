@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { enuVectorToHorizontal, horizontalToEnuVector } from '../../../src/astronomy/coordinates/frame.local'
-import { PIOVERTWO } from '../../../src/core/constants'
+import { PI, PIOVERTWO } from '../../../src/core/constants'
 import { matMulVec, matRodriguesRotation } from '../../../src/math/linear-algebra/mat3'
 import { deg } from '../../../src/math/units/angle'
 import { domeAzimuthError, intersectRaySphere, isDomeMoveRequired, mountPoseToOpticalRay, solveDomeSlit, solveDomeSlitFromMount } from '../../../src/observation/dome/slit'
@@ -55,7 +55,7 @@ test('inverse to forward to physical ray preserves offsets and hits the dome sph
 	const target = mountDirectionFromEncoders(geometry, expectedEncoders)
 	const encoders = solveMountEncoders(geometry, target, {
 		initial: { primary: deg(60), secondary: deg(30) },
-		primaryRange: [0, Math.PI],
+		primaryRange: [0, PI],
 		secondaryRange: [0, PIOVERTWO],
 		tolerance: 1e-12,
 	})

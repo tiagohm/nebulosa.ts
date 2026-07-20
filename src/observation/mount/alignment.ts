@@ -114,6 +114,7 @@ export function fitDirectionAlignment(samples: readonly Readonly<DirectionAlignm
 			const normal = tangentNormal(rotation, normalized.mount, normalized.world, weights)
 			const delta = solveSymmetricNormal(normal.matrix, normal.rhs)
 			if (!delta) break
+
 			const deltaLength = vecLength(delta)
 			if (deltaLength <= controls.tolerance) {
 				converged = true
@@ -122,10 +123,12 @@ export function fitDirectionAlignment(samples: readonly Readonly<DirectionAlignm
 
 			const objective = weightedObjective(residuals, weights)
 			let accepted = false
+
 			for (let backtracking = 0; backtracking <= MAX_BACKTRACKING_STEPS; backtracking++) {
 				const factor = 2 ** -backtracking
 				const candidate = matMul(matRodriguesRotation(delta, deltaLength * factor), rotation)
 				const candidateResiduals = alignmentResiduals(candidate, normalized.mount, normalized.world)
+
 				if (weightedObjective(candidateResiduals, weights) < objective) {
 					rotation = candidate
 					residuals = candidateResiduals
@@ -134,6 +137,7 @@ export function fitDirectionAlignment(samples: readonly Readonly<DirectionAlignm
 					break
 				}
 			}
+
 			if (!accepted || converged) break
 		}
 	}
@@ -189,6 +193,7 @@ export function applyDirectionAlignment(geometry: Readonly<TwoAxisMountGeometry>
 export function fitMountAlignment(geometry: Readonly<TwoAxisMountGeometry>, observations: readonly Readonly<MountAlignmentObservation>[], options: Readonly<DirectionAlignmentOptions> = {}): DirectionAlignmentResult {
 	const baseGeometry: TwoAxisMountGeometry = { ...geometry, baseToWorld: rigidIdentity() }
 	const samples = new Array<DirectionAlignmentSample>(observations.length)
+
 	for (let i = 0; i < observations.length; i++) {
 		const observation = observations[i]
 		samples[i] = {
@@ -197,6 +202,7 @@ export function fitMountAlignment(geometry: Readonly<TwoAxisMountGeometry>, obse
 			weight: observation.weight,
 		}
 	}
+
 	return fitDirectionAlignment(samples, options)
 }
 
@@ -260,6 +266,7 @@ function normalizeSamples(samples: readonly Readonly<DirectionAlignmentSample>[]
 	const world = new Array<Vec3>(samples.length)
 	const baseWeights = new Float64Array(samples.length)
 	let effectiveCount = 0
+
 	for (let i = 0; i < samples.length; i++) {
 		const sample = samples[i]
 		validateDirection(sample.mount, `samples[${i}].mount`)
@@ -272,7 +279,9 @@ function normalizeSamples(samples: readonly Readonly<DirectionAlignmentSample>[]
 		baseWeights[i] = weight
 		if (weight > 0) effectiveCount++
 	}
+
 	if (effectiveCount < 2) throw new RangeError('at least two positive-weight samples are required')
+
 	return { mount, world, baseWeights }
 }
 
@@ -288,11 +297,15 @@ function triadInitialRotation(mount: readonly Vec3[], world: readonly Vec3[], we
 	let first = -1
 	let second = -1
 	let bestScore = 0
+
 	for (let i = 0; i < mount.length - 1; i++) {
 		if (weights[i] <= 0) continue
+
 		for (let j = i + 1; j < mount.length; j++) {
 			if (weights[j] <= 0) continue
+
 			const score = Math.min(vecCrossLength(mount[i], mount[j]), vecCrossLength(world[i], world[j]))
+
 			if (score > bestScore) {
 				bestScore = score
 				first = i
@@ -300,7 +313,9 @@ function triadInitialRotation(mount: readonly Vec3[], world: readonly Vec3[], we
 			}
 		}
 	}
+
 	if (first < 0 || second < 0 || bestScore < TRIAD_MINIMUM_CROSS) throw new RangeError('alignment directions are collinear or antipodal')
+
 	const mountBasis = triadBasis(mount[first], mount[second])
 	const worldBasis = triadBasis(world[first], world[second])
 	return matMul(worldBasis, matTranspose(mountBasis))
@@ -318,10 +333,12 @@ function triadBasis(first: Vec3, second: Vec3): Mat3 {
 function alignmentResiduals(rotation: Mat3, mount: readonly Vec3[], world: readonly Vec3[]): Float64Array {
 	const residuals = new Float64Array(mount.length)
 	const predicted: MutVec3 = [0, 0, 0]
+
 	for (let i = 0; i < mount.length; i++) {
 		matMulVec(rotation, mount[i], predicted)
 		residuals[i] = Math.atan2(vecCrossLength(predicted, world[i]), Math.max(-1, Math.min(1, vecDot(predicted, world[i]))))
 	}
+
 	return residuals
 }
 
@@ -332,9 +349,12 @@ function finalWeights(residuals: Readonly<Float64Array>, baseWeights: Readonly<F
 		weights.set(baseWeights)
 		return weights
 	}
+
 	const scale = Math.max(alignmentRobustScale(residuals), controls.tolerance, 1e-12)
+
 	for (let i = 0; i < residuals.length; i++) {
 		const normalized = residuals[i] / (scale * controls.tuning)
+
 		let robustWeight: number
 		if (controls.robust === 'huber') robustWeight = normalized <= 1 ? 1 : 1 / normalized
 		else if (normalized >= 1) robustWeight = 0
@@ -342,8 +362,10 @@ function finalWeights(residuals: Readonly<Float64Array>, baseWeights: Readonly<F
 			const t = 1 - normalized * normalized
 			robustWeight = t * t
 		}
+
 		weights[i] = baseWeights[i] * robustWeight
 	}
+
 	return weights
 }
 
@@ -351,10 +373,12 @@ function finalWeights(residuals: Readonly<Float64Array>, baseWeights: Readonly<F
 function alignmentRobustScale(residuals: Readonly<Float64Array>): number {
 	const absolute = new Float64Array(residuals.length)
 	let sumSquares = 0
+
 	for (let i = 0; i < residuals.length; i++) {
 		absolute[i] = Math.abs(residuals[i])
 		sumSquares += residuals[i] * residuals[i]
 	}
+
 	const scale = medianOf(absolute.sort()) / ROBUST_MAD_SCALE
 	return scale > 0 ? scale : Math.sqrt(sumSquares / residuals.length)
 }
@@ -373,9 +397,12 @@ function tangentNormal(rotation: Mat3, mount: readonly Vec3[], world: readonly V
 	const rhs: MutVec3 = [0, 0, 0]
 	const predicted: MutVec3 = [0, 0, 0]
 	const cross: MutVec3 = [0, 0, 0]
+
 	for (let i = 0; i < mount.length; i++) {
 		const weight = weights[i]
+
 		if (weight <= 0) continue
+
 		matMulVec(rotation, mount[i], predicted)
 		const x = predicted[0]
 		const y = predicted[1]
@@ -391,6 +418,7 @@ function tangentNormal(rotation: Mat3, mount: readonly Vec3[], world: readonly V
 		rhs[1] += weight * cross[1]
 		rhs[2] += weight * cross[2]
 	}
+
 	return { matrix, rhs }
 }
 
@@ -437,11 +465,13 @@ function residualDiagnostics(residuals: Readonly<Float64Array>, weights: Readonl
 	let weightedSquares = 0
 	let weightSum = 0
 	let maximum = 0
+
 	for (let i = 0; i < residuals.length; i++) {
 		weightedSquares += weights[i] * residuals[i] * residuals[i]
 		weightSum += weights[i]
 		maximum = Math.max(maximum, residuals[i])
 	}
+
 	return { rms: Math.sqrt(weightedSquares / weightSum), maximum }
 }
 

@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test'
+import { PIOVERTWO } from '../../../src/core/constants'
 import { deg } from '../../../src/math/units/angle'
 import { createCanonicalEquatorialGeometry, mountDirectionFromEncoders } from '../../../src/observation/mount/kinematics'
 import { applyTakiFabricationErrors } from '../../../src/observation/mount/kinematics.taki'
@@ -36,7 +37,7 @@ test('small fabrication errors follow their first-order directions', () => {
 
 	expectVectorClose(mountDirectionFromEncoders(collimated, { primary: 0, secondary: 0 }), [1, epsilon, 0], 12)
 	expectVectorClose(mountDirectionFromEncoders(indexed, { primary: 0, secondary: 0 }), [1, 0, epsilon], 12)
-	expectVectorClose(mountDirectionFromEncoders(nonPerpendicular, { primary: 0, secondary: Math.PI / 2 }), [0, -epsilon, 1], 12)
+	expectVectorClose(mountDirectionFromEncoders(nonPerpendicular, { primary: 0, secondary: PIOVERTWO }), [0, -epsilon, 1], 12)
 })
 
 test('non-finite Taki errors are rejected', () => {

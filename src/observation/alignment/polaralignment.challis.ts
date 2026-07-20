@@ -1,6 +1,6 @@
 import { refractedAltitude, type RefractionParameters } from '../../astronomy/coordinates/astrometry'
 import { enuToTakiMatrix, enuVectorToHorizontal, horizontalToEnuVector, takiToEnuMatrix } from '../../astronomy/coordinates/frame.local'
-import { PIOVERTWO, TAU } from '../../core/constants'
+import { PI, PIOVERTWO, TAU } from '../../core/constants'
 import { validateFinite, validateInRange } from '../../core/validation'
 import { matMulVec } from '../../math/linear-algebra/mat3'
 import { vecMulScalar, vecNormalize, type Vec3 } from '../../math/linear-algebra/vec3'
@@ -74,16 +74,16 @@ export interface ChallisPolarAlignmentResult {
 }
 
 // Minimum reliable geometric altitude for the existing refraction model, in radians.
-const MINIMUM_REFRACTION_ALTITUDE = -Math.PI / 180
+const MINIMUM_REFRACTION_ALTITUDE = -PI / 180
 
 // Hour-angle separation below which observations count as the same effective instant.
 const DISTINCT_HOUR_ANGLE_EPSILON = 1e-8
 
 // Coverage below 30 degrees is reported as weak.
-const MINIMUM_RECOMMENDED_COVERAGE = Math.PI / 6
+const MINIMUM_RECOMMENDED_COVERAGE = PI / 6
 
 // Small-angle magnitudes above five degrees are reported as outside the intended approximation.
-const SMALL_ANGLE_WARNING_LIMIT = (5 * Math.PI) / 180
+const SMALL_ANGLE_WARNING_LIMIT = (5 * PI) / 180
 
 // Fits shared Taki u/v components and one independent declination intercept per star.
 export function fitChallisPolarAlignment(observations: readonly Readonly<ChallisObservation>[], latitude: Angle, options: Readonly<ChallisFitOptions> = {}): ChallisPolarAlignmentResult {
@@ -116,11 +116,13 @@ export function fitChallisPolarAlignment(observations: readonly Readonly<Challis
 		target[i] = observation.mountDeclination - (observation.correction ?? 0)
 		baseWeights[i] = weight
 	}
+
 	if (positiveWeightCount < columnCount) throw new RangeError(`at least ${columnCount} positive-weight observations are required`)
 
 	const robust = options.robust ?? 'none'
 	let fit: LinearLeastSquaresResult
 	let weights: Float64Array
+
 	if (robust === 'none') {
 		fit = linearLeastSquares(design, target, { weights: baseWeights })
 		weights = Float64Array.from(baseWeights)
@@ -129,6 +131,7 @@ export function fitChallisPolarAlignment(observations: readonly Readonly<Challis
 		fit = robustFit
 		weights = Float64Array.from(robustFit.weights)
 	}
+
 	if (fit.rankDeficient || !Number.isFinite(fit.conditionNumber)) throw new RangeError('Challis design matrix is rank deficient')
 	const u = fit.coefficients[columnCount - 2]
 	const v = fit.coefficients[columnCount - 1]
@@ -146,6 +149,7 @@ export function fitChallisPolarAlignment(observations: readonly Readonly<Challis
 
 	const residuals = Float64Array.from(fit.residuals)
 	const warnings = challisWarnings(observations, weights, fit, magnitude)
+
 	return {
 		u,
 		v,
@@ -198,19 +202,26 @@ function validateFitOptions(options: Readonly<ChallisFitOptions>): void {
 	}
 }
 
+function effectiveAngleComparator(a: number, b: number) {
+	return a - b
+}
+
 // Produces non-fatal diagnostics from hour-angle coverage, final weights, conditioning, and scale.
 function challisWarnings(observations: readonly Readonly<ChallisObservation>[], weights: Readonly<Float64Array>, fit: Readonly<LinearLeastSquaresResult>, magnitude: Angle): readonly string[] {
 	const warnings: string[] = []
 	const effectiveAngles: number[] = []
 	let weightSum = 0
 	let maximumWeight = 0
+
 	for (let i = 0; i < observations.length; i++) {
 		if (weights[i] <= 0) continue
 		effectiveAngles.push(normalizeAngle(observations[i].hourAngle))
 		weightSum += weights[i]
 		maximumWeight = Math.max(maximumWeight, weights[i])
 	}
-	effectiveAngles.sort((a, b) => a - b)
+
+	effectiveAngles.sort(effectiveAngleComparator)
+
 	let distinctCount = effectiveAngles.length > 0 ? 1 : 0
 	for (let i = 1; i < effectiveAngles.length; i++) if (effectiveAngles[i] - effectiveAngles[i - 1] > DISTINCT_HOUR_ANGLE_EPSILON) distinctCount++
 	if (distinctCount > 1 && effectiveAngles[0] + TAU - effectiveAngles.at(-1)! <= DISTINCT_HOUR_ANGLE_EPSILON) distinctCount--

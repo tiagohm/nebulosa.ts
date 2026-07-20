@@ -49,9 +49,11 @@ export function rigidRotationAroundAxis(pivot: Vec3, axis: Vec3, angle: Angle): 
 	validateVector(pivot)
 	validateVector(axis)
 	validateFinite(angle)
+
 	if (vecLength(axis) === 0) throw new RangeError('axis must be non-zero')
 
 	const rotation = matRodriguesRotation(axis, angle)
-	const translation = vecMinus(pivot, matMulVec(rotation, pivot))
+	const translation: MutVec3 = [0, 0, 0]
+	vecMinus(pivot, matMulVec(rotation, pivot, translation), translation)
 	return { rotation, translation }
 }

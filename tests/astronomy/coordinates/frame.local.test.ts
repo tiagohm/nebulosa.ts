@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test'
 import { equatorialToHorizontal } from '../../../src/astronomy/coordinates/coordinate'
 import { eraS2c } from '../../../src/astronomy/coordinates/erfa/erfa'
 import { enuToEquatorialMatrix, enuToTakiMatrix, enuVectorToHorizontal, equatorialToEnuMatrix, horizontalToEnuVector, takiToEnuMatrix } from '../../../src/astronomy/coordinates/frame.local'
-import { PIOVERTWO } from '../../../src/core/constants'
+import { PI, PIOVERTWO } from '../../../src/core/constants'
 import { matDeterminant, matIdentity, matMul, matMulVec, matTranspose } from '../../../src/math/linear-algebra/mat3'
 import { deg } from '../../../src/math/units/angle'
 
@@ -21,7 +21,7 @@ function expectMatrixClose(actual: readonly number[], expected: readonly number[
 test('horizontal cardinal directions follow ENU', () => {
 	expectVectorClose(horizontalToEnuVector(0, 0), [0, 1, 0])
 	expectVectorClose(horizontalToEnuVector(PIOVERTWO, 0), [1, 0, 0])
-	expectVectorClose(horizontalToEnuVector(Math.PI, 0), [0, -1, 0])
+	expectVectorClose(horizontalToEnuVector(PI, 0), [0, -1, 0])
 	expectVectorClose(horizontalToEnuVector(3 * PIOVERTWO, 0), [-1, 0, 0])
 	expectVectorClose(horizontalToEnuVector(0, PIOVERTWO), [0, 0, 1])
 })

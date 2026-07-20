@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { PIOVERTWO } from '../../../src/core/constants'
+import { PI, PIOVERTWO } from '../../../src/core/constants'
 import { matRodriguesRotation } from '../../../src/math/linear-algebra/mat3'
 import type { RigidTransform3 } from '../../../src/math/linear-algebra/rigid3'
 import { deg } from '../../../src/math/units/angle'
@@ -17,7 +17,7 @@ test('ideal altaz geometry follows north-through-east azimuth and altitude', () 
 	const cases = [
 		[0, 0, [0, 1, 0]],
 		[PIOVERTWO, 0, [1, 0, 0]],
-		[Math.PI, 0, [0, -1, 0]],
+		[PI, 0, [0, -1, 0]],
 		[3 * PIOVERTWO, 0, [-1, 0, 0]],
 		[0, PIOVERTWO, [0, 0, 1]],
 	] as const

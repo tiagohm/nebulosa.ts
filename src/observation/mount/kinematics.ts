@@ -1,7 +1,8 @@
+import { PI } from '../../core/constants'
 import { validateFinite, validateVector } from '../../core/validation'
 import { matMulVec, matRodriguesRotation } from '../../math/linear-algebra/mat3'
 import { rigidIdentity, rigidRotationAroundAxis, rigidTransformDirection, rigidTransformPoint, type RigidTransform3 } from '../../math/linear-algebra/rigid3'
-import { type MutVec3, vecClone, vecCross, vecCrossLength, vecDot, vecLength, vecMinus, vecNormalize, type Vec3 } from '../../math/linear-algebra/vec3'
+import { type MutVec3, vecClone, vecCross, vecCrossLength, vecDot, vecLength, vecMinus, vecNormalize, type Vec3, vecNegateMut } from '../../math/linear-algebra/vec3'
 import type { Angle } from '../../math/units/angle'
 
 // Forward and inverse kinematics for a serial two-axis telescope mount. Geometry is expressed in a
@@ -108,7 +109,7 @@ const DEFAULT_MAX_ITERATIONS = 32
 const DEFAULT_TOLERANCE = 1e-10
 
 // Default maximum Euclidean encoder update in radians.
-const DEFAULT_MAX_STEP = Math.PI / 12
+const DEFAULT_MAX_STEP = PI / 12
 
 // Relative determinant threshold used to reject a locally rank-deficient 3x2 Jacobian.
 const JACOBIAN_RELATIVE_EPSILON = 64 * Number.EPSILON
@@ -175,8 +176,8 @@ export function solveMountEncoders(geometry: Readonly<TwoAxisMountGeometry>, wor
 		iterations = iteration + 1
 		const primaryJacobian = vecCross(pose.primaryAxis, pose.direction)
 		const secondaryJacobian = vecCross(pose.secondaryAxis, pose.direction)
-		if ((geometry.primaryDirection ?? 1) < 0) negateVector(primaryJacobian)
-		if ((geometry.secondaryDirection ?? 1) < 0) negateVector(secondaryJacobian)
+		if ((geometry.primaryDirection ?? 1) < 0) vecNegateMut(primaryJacobian)
+		if ((geometry.secondaryDirection ?? 1) < 0) vecNegateMut(secondaryJacobian)
 		const error = vecMinus(target, pose.direction)
 		const aa = vecDot(primaryJacobian, primaryJacobian)
 		const ab = vecDot(primaryJacobian, secondaryJacobian)
@@ -202,6 +203,7 @@ export function solveMountEncoders(geometry: Readonly<TwoAxisMountGeometry>, wor
 		let candidateSecondary = secondary
 		let candidatePose = pose
 		let candidateResidual = residual
+
 		for (let backtracking = 0; backtracking <= MAX_BACKTRACKING_STEPS; backtracking++) {
 			candidatePrimary = clampToRange(primary + primaryStep, controls.primaryRange)
 			candidateSecondary = clampToRange(secondary + secondaryStep, controls.secondaryRange)
@@ -215,17 +217,20 @@ export function solveMountEncoders(geometry: Readonly<TwoAxisMountGeometry>, wor
 			primaryStep *= 0.5
 			secondaryStep *= 0.5
 		}
+
 		if (!accepted) break
 
 		primary = candidatePrimary
 		secondary = candidateSecondary
 		pose = candidatePose
 		residual = candidateResidual
+
 		if (residual < bestResidual) {
 			bestPrimary = primary
 			bestSecondary = secondary
 			bestResidual = residual
 		}
+
 		if (residual <= controls.tolerance) return makeSolution(primary, secondary, true, iteration + 1, residual)
 	}
 
@@ -318,13 +323,6 @@ function physicalSecondaryAngle(geometry: Readonly<TwoAxisMountGeometry>, encode
 // Computes stable angular separation between unit directions in radians.
 function directionResidual(current: Vec3, target: Vec3): Angle {
 	return Math.atan2(vecCrossLength(current, target), Math.max(-1, Math.min(1, vecDot(current, target))))
-}
-
-// Negates a mutable vector in place.
-function negateVector(vector: MutVec3): void {
-	vector[0] = -vector[0]
-	vector[1] = -vector[1]
-	vector[2] = -vector[2]
 }
 
 // Restricts an unwrapped encoder angle to an optional inclusive range.
