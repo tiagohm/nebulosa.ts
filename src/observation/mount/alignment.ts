@@ -350,7 +350,7 @@ function finalWeights(residuals: Readonly<Float64Array>, baseWeights: Readonly<F
 		return weights
 	}
 
-	const scale = Math.max(alignmentRobustScale(residuals), controls.tolerance, 1e-12)
+	const scale = Math.max(alignmentRobustScale(residuals, baseWeights), controls.tolerance, 1e-12)
 
 	for (let i = 0; i < residuals.length; i++) {
 		const normalized = residuals[i] / (scale * controls.tuning)
@@ -369,18 +369,22 @@ function finalWeights(residuals: Readonly<Float64Array>, baseWeights: Readonly<F
 	return weights
 }
 
-// Estimates angular residual scale with median absolute deviation and an RMS fallback.
-function alignmentRobustScale(residuals: Readonly<Float64Array>): number {
-	const absolute = new Float64Array(residuals.length)
+// Estimates positive-base-weight angular residual scale with median absolute deviation and an RMS fallback.
+function alignmentRobustScale(residuals: Readonly<Float64Array>, baseWeights: Readonly<Float64Array>): number {
+	let count = 0
+	for (let i = 0; i < baseWeights.length; i++) if (baseWeights[i] > 0) count++
+	const absolute = new Float64Array(count)
 	let sumSquares = 0
+	let index = 0
 
 	for (let i = 0; i < residuals.length; i++) {
-		absolute[i] = Math.abs(residuals[i])
+		if (baseWeights[i] <= 0) continue
+		absolute[index++] = Math.abs(residuals[i])
 		sumSquares += residuals[i] * residuals[i]
 	}
 
 	const scale = medianOf(absolute.sort()) / ROBUST_MAD_SCALE
-	return scale > 0 ? scale : Math.sqrt(sumSquares / residuals.length)
+	return scale > 0 ? scale : Math.sqrt(sumSquares / count)
 }
 
 // Ensures robust weighting retains enough correspondences to determine a rotation.

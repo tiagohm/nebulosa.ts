@@ -96,6 +96,27 @@ test('Tukey weighting rejects an outlier and protects the clean rotation', () =>
 	expect(robust.maximumResidual).toBeGreaterThan(robust.rms)
 })
 
+test('zero-weight outliers do not inflate the robust residual scale', () => {
+	const samples: DirectionAlignmentSample[] = []
+	const axes = [
+		[1, 0, 0],
+		[0, 1, 0],
+		[0, 0, 1],
+	] as const
+
+	for (let i = 0; i < 24; i++) {
+		const axis = axes[i % axes.length]
+		samples.push({ mount: axis, world: axis })
+	}
+
+	const weightedOutlier = samples.push({ mount: [1, 0, 0], world: [-1, 0, 0] }) - 1
+	const zeroWeightOutlier = samples.push({ mount: [0, 1, 0], world: [0, -1, 0], weight: 0 }) - 1
+	const result = fitDirectionAlignment(samples, { robust: 'tukey' })
+
+	expect(result.weights[weightedOutlier]).toBe(0)
+	expect(result.weights[zeroWeightOutlier]).toBe(0)
+})
+
 test('mount observations fit base-to-ENU orientation and preserve translation when applied', () => {
 	const expected = matRodriguesRotation([0.2, 0.5, -0.3], deg(11))
 	const geometry = createIdealAltAzGeometry({ baseToWorld: { rotation: matRodriguesRotation([1, 0, 0], 0.1), translation: [4, 5, 6] } })
