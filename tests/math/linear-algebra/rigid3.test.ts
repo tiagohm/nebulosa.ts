@@ -68,6 +68,17 @@ test('point and direction outputs may alias their inputs', () => {
 	expectVectorClose(direction, [0, 1, 0])
 })
 
+test('point output may alias the transform translation', () => {
+	const translation: MutVec3 = [3, 4, 5]
+	const transform: RigidTransform3 = {
+		rotation: matRodriguesRotation([0, 0, 1], PIOVERTWO),
+		translation,
+	}
+
+	expect(rigidTransformPoint(transform, [1, 0, 0], translation)).toBe(translation)
+	expectVectorClose(translation, [3, 5, 5])
+})
+
 test('rotation around an invalid axis is rejected', () => {
 	expect(() => rigidRotationAroundAxis([0, 0, 0], [0, 0, 0], 1)).toThrow()
 	expect(() => rigidRotationAroundAxis([0, 0, 0], [Number.NaN, 0, 1], 1)).toThrow()

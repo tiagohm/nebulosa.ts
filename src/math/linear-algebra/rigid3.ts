@@ -33,9 +33,17 @@ export function rigidInverse(transform: Readonly<RigidTransform3>): RigidTransfo
 	return { rotation, translation }
 }
 
-// Transforms a point and writes into out when supplied; the returned value aliases out.
+// Transforms a point and writes into out when supplied; the returned value aliases out, which may
+// also alias the input point or transform translation.
 export function rigidTransformPoint(transform: Readonly<RigidTransform3>, point: Vec3, out?: MutVec3): MutVec3 {
-	return vecPlus(matMulVec(transform.rotation, point, out), transform.translation, out)
+	const translationX = transform.translation[0]
+	const translationY = transform.translation[1]
+	const translationZ = transform.translation[2]
+	const result = matMulVec(transform.rotation, point, out)
+	result[0] += translationX
+	result[1] += translationY
+	result[2] += translationZ
+	return result
 }
 
 // Transforms a direction without translation or normalization and writes into out when supplied.
