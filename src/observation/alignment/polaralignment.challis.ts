@@ -3,7 +3,7 @@ import { enuToTakiMatrix, enuVectorToHorizontal, horizontalToEnuVector, takiToEn
 import { PI, PIOVERTWO, TAU } from '../../core/constants'
 import { validateFinite, validateInRange } from '../../core/validation'
 import { matMulVec } from '../../math/linear-algebra/mat3'
-import { vecMulScalar, vecNormalize, type Vec3 } from '../../math/linear-algebra/vec3'
+import { vecAngleUnit, vecMulScalar, vecNormalize, type Vec3 } from '../../math/linear-algebra/vec3'
 import { linearLeastSquares, robustLinearLeastSquares, type LinearLeastSquaresResult } from '../../math/numerical/least.squares'
 import { normalizeAngle, type Angle } from '../../math/units/angle'
 import { decomposePolarErrorGeodesic } from './polaralignment.util'
@@ -55,10 +55,12 @@ export interface ChallisPolarAlignmentResult {
 	readonly azimuth: Angle
 	// Pole altitude above the horizon in radians.
 	readonly altitude: Angle
-	// Signed geodesic component along positive azimuth adjustment, in radians.
-	readonly azimuthError: Angle
-	// Signed geodesic component along positive altitude adjustment, in radians.
-	readonly altitudeError: Angle
+	// Signed geodesic component along positive azimuth adjustment, in radians; undefined when the
+	// local adjustment tangent is singular, including at a geographic pole.
+	readonly azimuthError?: Angle
+	// Signed geodesic component along positive altitude adjustment, in radians; undefined when the
+	// local adjustment tangent is singular, including at a geographic pole.
+	readonly altitudeError?: Angle
 	// Great-circle separation from the physical celestial pole, in radians.
 	readonly totalError: Angle
 	// Estimated condition number of the weighted design matrix.
@@ -145,10 +147,11 @@ export function fitChallisPolarAlignment(observations: readonly Readonly<Challis
 	const targetEnu = matMulVec(takiToEnuMatrix(latitude), [0, 0, hemisphere])
 	const horizontal = enuVectorToHorizontal(poleEnu)
 	const error = decomposePolarErrorGeodesic(poleEnu, targetEnu, [0, 0, 1], [1, 0, 0])
-	if (!error) throw new RangeError('polar error decomposition is singular at this latitude')
+	const totalError = vecAngleUnit(targetEnu, poleEnu)
 
 	const residuals = Float64Array.from(fit.residuals)
-	const warnings = challisWarnings(observations, weights, fit, magnitude)
+	const warnings = [...challisWarnings(observations, weights, fit, magnitude)]
+	if (!error) warnings.push('polar error adjustment components are undefined at this latitude')
 
 	return {
 		u,
@@ -159,9 +162,9 @@ export function fitChallisPolarAlignment(observations: readonly Readonly<Challis
 		poleEnu,
 		azimuth: horizontal.azimuth,
 		altitude: horizontal.altitude,
-		azimuthError: error.azimuth,
-		altitudeError: error.altitude,
-		totalError: error.total,
+		azimuthError: error?.azimuth,
+		altitudeError: error?.altitude,
+		totalError,
 		conditionNumber: fit.conditionNumber,
 		rankDeficient: fit.rankDeficient,
 		residuals,

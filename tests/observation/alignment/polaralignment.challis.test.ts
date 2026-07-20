@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { PI } from '../../../src/core/constants'
+import { PI, PIOVERTWO } from '../../../src/core/constants'
 import { deg } from '../../../src/math/units/angle'
 import { challisRefractionCorrection, fitChallisPolarAlignment, type ChallisObservation } from '../../../src/observation/alignment/polaralignment.challis'
 
@@ -71,6 +71,21 @@ test('north and south results publish the physical pole above the horizon', () =
 	expect(south.poleEnu[2]).toBeGreaterThan(0)
 	expect(north.altitude).toBeGreaterThan(0)
 	expect(south.altitude).toBeGreaterThan(0)
+})
+
+test('polar fits retain total error when adjustment components are singular', () => {
+	const u = 0.003
+	const v = 0.004
+	const observations = syntheticObservations(u, v, { star: 0.2 }, [deg(-90), 0, deg(90)])
+
+	for (const latitude of [-PIOVERTWO, PIOVERTWO]) {
+		const result = fitChallisPolarAlignment(observations, latitude)
+		expect(result.u).toBeCloseTo(u, 12)
+		expect(result.v).toBeCloseTo(v, 12)
+		expect(result.totalError).toBeCloseTo(Math.atan(Math.hypot(u, v)), 12)
+		expect(result.azimuthError).toBeUndefined()
+		expect(result.altitudeError).toBeUndefined()
+	}
 })
 
 test('refraction correction uses the shared atmosphere model and rejects deep-below-horizon data', () => {
