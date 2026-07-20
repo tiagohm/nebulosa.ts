@@ -125,7 +125,7 @@ export function robustLinearLeastSquares(
 
 	if (method === 'none' || rows === 0) {
 		const result = linearLeastSquares(design, target, { weights: baseWeights, ridge })
-		return { ...result, weights: baseWeights, iterations: 1, scale: robustResidualScale(result.residuals) }
+		return { ...result, weights: baseWeights, iterations: 1, scale: robustResidualScale(result.residuals, baseWeights) }
 	}
 
 	let currentWeights = new Float64Array(baseWeights)
@@ -138,7 +138,7 @@ export function robustLinearLeastSquares(
 		// expensive condition-number estimate; it is computed once for the returned result below.
 		const coefficients = solveLinearLeastSquares(design, target, currentWeights, ridge)
 		const residuals = leastSquaresResiduals(design, target, coefficients, rows)
-		scale = robustResidualScale(residuals)
+		scale = robustResidualScale(residuals, baseWeights)
 
 		if (!Number.isFinite(scale) || scale === 0) {
 			const result = linearLeastSquares(design, target, { weights: currentWeights, ridge })
@@ -427,16 +427,19 @@ function symmetricEigenvalues(matrix: Matrix) {
 	return eigenvalues
 }
 
-// Estimates the residual scale with MAD and falls back to RMS when needed.
-function robustResidualScale(residuals: Readonly<NumberArray>) {
-	const length = residuals.length
+// Estimates positive-base-weight residual scale with MAD and falls back to RMS when needed.
+function robustResidualScale(residuals: Readonly<NumberArray>, baseWeights: Readonly<NumberArray>) {
+	let length = 0
+	for (let i = 0; i < baseWeights.length; i++) if (baseWeights[i] > 0) length++
 
 	if (length === 0) return 0
 
 	const absoluteResiduals = new Float64Array(length)
+	let index = 0
 
-	for (let i = 0; i < length; i++) {
-		absoluteResiduals[i] = Math.abs(residuals[i])
+	for (let i = 0; i < residuals.length; i++) {
+		if (baseWeights[i] <= 0) continue
+		absoluteResiduals[index++] = Math.abs(residuals[i])
 	}
 
 	let scale = medianOf(absoluteResiduals.sort()) / ROBUST_MAD_SCALE
@@ -444,7 +447,8 @@ function robustResidualScale(residuals: Readonly<NumberArray>) {
 	if (scale <= 0) {
 		let sumSquares = 0
 
-		for (let i = 0; i < length; i++) {
+		for (let i = 0; i < residuals.length; i++) {
+			if (baseWeights[i] <= 0) continue
 			sumSquares += residuals[i] * residuals[i]
 		}
 

@@ -45,6 +45,33 @@ test('zero-weighted samples are excluded from the fit', () => {
 	expect(fit.coefficients[1]).toBeCloseTo(2, 6)
 })
 
+test('zero-weighted residuals do not inflate the robust scale', () => {
+	const design: Float64Array[] = []
+	const target: number[] = []
+	const weights: number[] = []
+
+	for (let i = 0; i < 24; i++) {
+		design.push(new Float64Array([1]))
+		target.push(1)
+		weights.push(1)
+	}
+
+	design.push(new Float64Array([1]))
+	target.push(5)
+	weights.push(1)
+	const weightedOutlier = weights.length - 1
+
+	for (let i = 0; i < 30; i++) {
+		design.push(new Float64Array([1]))
+		target.push(1_000)
+		weights.push(0)
+	}
+
+	const fit = robustLinearLeastSquares(design, target, { weights, method: 'tukey' })
+	expect(fit.coefficients[0]).toBeCloseTo(1, 10)
+	expect(fit.weights[weightedOutlier]).toBe(0)
+})
+
 test('robust huber fit also resists outliers', () => {
 	const design = [new Float64Array([1, 0]), new Float64Array([1, 1]), new Float64Array([1, 2]), new Float64Array([1, 3]), new Float64Array([1, 4])]
 	const target = new Float64Array([1, 3, 5, 7, 100])
