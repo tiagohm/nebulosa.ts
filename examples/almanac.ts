@@ -873,7 +873,7 @@ function jupiterGreatRedSpotTransit() {
 	const grsLongitude = deg(52) // observed System II longitude of the Great Red Spot
 	const cm = toDeg(jupiterCentralMeridian('II', NOW, jupiterToObserver(NOW)))
 	const [next] = greatRedSpotTransits(grsLongitude, jupiterToObserver, NOW, timeShift(NOW, 1))
-	console.info('Jupiter System II central meridian (deg):', cm, 'next GRS transit:', next)
+	console.info('Jupiter System II central meridian (deg):', cm, 'next GRS transit:', formatTemporal(temporalFromTime(next)))
 }
 
 // ##### Sun and Moon helpers #####
@@ -1897,8 +1897,8 @@ function satelliteIlluminationState() {
 // each eclipse over the window.
 function satelliteShadowEntryAndExit() {
 	const eclipses = satelliteEclipses(recordFromTLE(ISS_TLE), geocentricSun, SAT_TIME, timeShift(SAT_TIME, 1))
-	const eclipse = eclipses.find((e) => e.entry !== undefined && e.exit !== undefined)
-	console.info('ISS umbra entry:', eclipse?.entry, 'exit:', eclipse?.exit)
+	const eclipse = eclipses.find((e) => e.entry !== undefined && e.exit !== undefined)!
+	console.info('ISS umbra entry:', formatTemporal(temporalFromTime(eclipse.entry!)), 'exit:', formatTemporal(temporalFromTime(eclipse.exit!)))
 }
 
 // Satellite Angular Speed: topocentric angular rate (finite difference).

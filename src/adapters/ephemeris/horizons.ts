@@ -470,13 +470,13 @@ function makeParametersFromInput(parameters: HorizonsQueryParameters, input: str
 // https://ssd.jpl.nasa.gov/horizons/manual.html#time
 function makeParametersFromStartAndStopTime(parameters: HorizonsQueryParameters, startTime: Temporal | Time, endTime: Temporal | Time) {
 	if (typeof startTime === 'number') {
-		parameters.START_TIME = formatTemporal(startTime, undefined, 0)
+		parameters.START_TIME = formatTemporal(startTime)
 	} else {
 		parameters.START_TIME = `JD ${startTime.day + startTime.fraction}`
 	}
 
 	if (typeof endTime === 'number') {
-		parameters.STOP_TIME = formatTemporal(endTime, undefined, 0)
+		parameters.STOP_TIME = formatTemporal(endTime)
 	} else {
 		parameters.STOP_TIME = `JD ${endTime.day + endTime.fraction}`
 	}
