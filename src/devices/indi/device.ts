@@ -640,7 +640,7 @@ export function isGPS(device: Device): device is GPS {
 // undefined; otherwise WEST when the target is east of the meridian (hour angle in [0,12)h), else EAST.
 export function expectedPierSide(rightAscension: Angle, declination: Angle, lst: Angle): PierSide {
 	if (Math.abs(declination) === PIOVERTWO) return 'NEITHER'
-	return (toHour(rightAscension - lst) + 24) % 24 < 12 ? 'WEST' : 'EAST'
+	return toHour(normalizeAngle(rightAscension - lst)) < 12 ? 'WEST' : 'EAST'
 }
 
 // Remaining clock time, in seconds, until the object next transits the upper meridian.

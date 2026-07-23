@@ -295,6 +295,8 @@ describe('expectedPierSide', () => {
 		expect(expectedPierSide(lst + PI / 12, 0, lst)).toBe('WEST')
 		// Object one hour west of the meridian: already transited, HA > 0, so RA < LST.
 		expect(expectedPierSide(lst - PI / 12, 0, lst)).toBe('EAST')
+		// Non-normalized angle
+		expect(expectedPierSide(-2.5514969015400077, -1.1425696098724025, 4.698006446414635)).toBe('EAST')
 	})
 
 	test('the pole is undefined', () => {
