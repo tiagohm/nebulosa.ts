@@ -141,7 +141,7 @@ test('iersAB clear empties both source tables and load is unsupported', () => {
 })
 
 test('iersA load keeps zero-valued finals columns', async () => {
-	const rows = [
+	const lines = [
 		fixedWidthLine(188, [
 			[7, 15, '60000'],
 			[18, 27, '2.0'],
@@ -160,10 +160,10 @@ test('iersA load keeps zero-valued finals columns', async () => {
 			[144, 154, '2.0'],
 			[154, 165, '3.0'],
 		]),
-	].join('\n')
+	]
 
 	const iers = new IersA()
-	await iers.load(bufferSource(Buffer.from(rows)))
+	await iers.load(lines)
 
 	const t = timeMJD(60000.5, Timescale.UTC)
 	expectDut1(iers.dut1(t), 1.5)
@@ -171,7 +171,7 @@ test('iersA load keeps zero-valued finals columns', async () => {
 })
 
 test('iersB load keeps zero-valued rows', async () => {
-	const rows = [
+	const lines = [
 		fixedWidthLine(219, [
 			[16, 26, '60000'],
 			[26, 38, '0.0'],
@@ -184,10 +184,10 @@ test('iersB load keeps zero-valued rows', async () => {
 			[38, 50, '2.0'],
 			[50, 62, '3.0'],
 		]),
-	].join('\n')
+	]
 
 	const iers = new IersB()
-	await iers.load(bufferSource(Buffer.from(rows)))
+	await iers.load(lines)
 
 	const t = timeMJD(60000.5, Timescale.UTC)
 	expectDut1(iers.dut1(t), 1.5)
