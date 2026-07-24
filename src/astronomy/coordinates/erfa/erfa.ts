@@ -1022,9 +1022,8 @@ export function eraGst94(ut11: number, ut12: number) {
 }
 
 // Greenwich apparent sidereal time (consistent with IAU 2000 and 2006 resolutions).
-export function eraGst06a(ut11: number, ut12: number, tt1: number, tt2: number): Angle {
-	const rnpb = eraPnm06a(tt1, tt2)
-	return eraGst06(ut11, ut12, tt1, tt2, rnpb)
+export function eraGst06a(ut11: number, ut12: number, tt1: number, tt2: number, rnpb?: Mat3): Angle {
+	return eraGst06(ut11, ut12, tt1, tt2, rnpb ?? eraPnm06a(tt1, tt2))
 }
 
 // Greenwich apparent sidereal time, IAU 2006, given the NPB matrix.
@@ -1108,8 +1107,8 @@ export function eraEe06a(date1: number, date2: number): Angle {
 }
 
 // Equation of the origins using IAU 2006 precession and IAU 2000A nutation.
-export function eraEo06a(date1: number, date2: number): Angle {
-	const rnpb = eraPnm06a(date1, date2)
+export function eraEo06a(date1: number, date2: number, rnpb?: Mat3): Angle {
+	rnpb ??= eraPnm06a(date1, date2)
 	const [x, y] = eraBpn2xy(rnpb)
 	return eraEors(rnpb, eraS06(date1, date2, x, y))
 }
