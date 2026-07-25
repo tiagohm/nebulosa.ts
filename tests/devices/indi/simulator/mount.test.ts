@@ -333,20 +333,129 @@ describe('mount simulator pointing errors', () => {
 
 			const start = mount.mechanical.declination
 
-			// Each pulse is stepped for less than its duration, because expiry runs before the motion
-			// and a step as long as the pulse would retire it without applying anything.
-			mount.pulse('NORTH', 200)
-			mount.advance(0.1)
+			// Each pulse runs to completion inside its step, so it contributes its whole 100 ms of
+			// travel, about 0.75 arcsec. Two of those stay under the two-arcsecond threshold.
+			mount.pulse('NORTH', 100)
+			mount.advance(0.15)
 			expect(mount.mechanical.declination).toBe(start)
 
-			mount.pulse('NORTH', 200)
-			mount.advance(0.1)
+			mount.pulse('NORTH', 100)
+			mount.advance(0.15)
 			expect(mount.mechanical.declination).toBe(start)
 
-			// Enough travel has now built up for the axis to release, and it arrives all at once.
-			mount.pulse('NORTH', 600)
-			mount.advance(0.3)
+			// The third crosses it, and everything held back arrives at once.
+			mount.pulse('NORTH', 100)
+			mount.advance(0.15)
 			expect(mount.mechanical.declination).toBeGreaterThan(start)
+		} finally {
+			mount.dispose()
+		}
+	})
+
+	test('delivers a guide pulse shorter than the simulation step', () => {
+		const { mount } = makeMount('mount.guiding.subtick')
+
+		try {
+			mount.setTrackingEnabled(true)
+			const start = mount.mechanical.declination
+
+			// Thirty milliseconds at half the sidereal rate is about 0.23 arcsec. Stepping a whole second
+			// must still deliver exactly that, not a second's worth and not nothing.
+			mount.pulse('NORTH', 30)
+			mount.advance(1)
+
+			const moved = mount.mechanical.declination - start
+			expect(toArcsec(moved)).toBeCloseTo(0.03 * 0.5 * 15.041, 3)
+		} finally {
+			mount.dispose()
+		}
+	})
+
+	test('discards pulses below the minimum and rounds the rest', () => {
+		const { client, mount } = makeMount('mount.guiding.admission')
+
+		try {
+			client.sendNumber({ device: mount.name, name: 'MOUNT_GUIDING', elements: { MINIMUM_PULSE: 100, QUANTIZATION: 100 } })
+			mount.setTrackingEnabled(true)
+
+			const start = mount.mechanical.declination
+
+			mount.pulse('NORTH', 50)
+			mount.advance(1)
+			expect(mount.mechanical.declination).toBe(start)
+
+			// 120 ms survives the minimum and rounds to 100 ms.
+			mount.pulse('NORTH', 120)
+			mount.advance(1)
+			expect(toArcsec(mount.mechanical.declination - start)).toBeCloseTo(0.1 * 0.5 * 15.041, 3)
+		} finally {
+			mount.dispose()
+		}
+	})
+
+	test('delays a pulse by the configured latency', () => {
+		const { client, mount } = makeMount('mount.guiding.latency')
+
+		try {
+			client.sendNumber({ device: mount.name, name: 'MOUNT_GUIDING', elements: { LATENCY: 500 } })
+			mount.setTrackingEnabled(true)
+
+			const start = mount.mechanical.declination
+
+			// Nothing happens while the command is still in flight.
+			mount.pulse('NORTH', 200)
+			mount.advance(0.4)
+			expect(mount.mechanical.declination).toBe(start)
+
+			// Past the latency the pulse runs in full.
+			mount.advance(0.4)
+			expect(toArcsec(mount.mechanical.declination - start)).toBeCloseTo(0.2 * 0.5 * 15.041, 3)
+		} finally {
+			mount.dispose()
+		}
+	})
+
+	test('applies asymmetric gains per direction', () => {
+		const { client, mount } = makeMount('mount.guiding.gain')
+
+		try {
+			// A declination axis that responds at half strength going south.
+			client.sendNumber({ device: mount.name, name: 'MOUNT_GUIDING', elements: { GAIN_SOUTH: 0.5 } })
+			mount.setTrackingEnabled(true)
+
+			const start = mount.mechanical.declination
+			mount.pulse('NORTH', 400)
+			mount.advance(0.5)
+			const north = mount.mechanical.declination - start
+
+			const beforeSouth = mount.mechanical.declination
+			mount.pulse('SOUTH', 400)
+			mount.advance(0.5)
+			const south = mount.mechanical.declination - beforeSouth
+
+			expect(north).toBeGreaterThan(0)
+			expect(south).toBeLessThan(0)
+			expect(-south / north).toBeCloseTo(0.5, 6)
+		} finally {
+			mount.dispose()
+		}
+	})
+
+	test('adds overlapping pulses on the same axis instead of replacing them', () => {
+		const { mount } = makeMount('mount.guiding.overlap')
+
+		try {
+			mount.setTrackingEnabled(true)
+			const start = mount.mechanical.declination
+
+			// Two 400 ms pulses issued 200 ms apart overlap for 200 ms, so the axis is driven for a total
+			// of 800 ms of pulse time even though only 600 ms of wall time passes.
+			mount.pulse('NORTH', 400)
+			mount.advance(0.2)
+			mount.pulse('NORTH', 400)
+			mount.advance(0.6)
+
+			expect(toArcsec(mount.mechanical.declination - start)).toBeCloseTo(0.8 * 0.5 * 15.041, 3)
 		} finally {
 			mount.dispose()
 		}

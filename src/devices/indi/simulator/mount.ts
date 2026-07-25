@@ -5,15 +5,17 @@ import { formatTemporal, TIMEZONE } from '../../../astronomy/time/temporal'
 import { timeUnix } from '../../../astronomy/time/time'
 import { ASEC2RAD, DAYSEC, PIOVERTWO, TAU } from '../../../core/constants'
 import { clamp } from '../../../math/numerical/math'
+import { mulberry32 } from '../../../math/numerical/random'
 import { type Angle, deg, hour, normalizeAngle, normalizePI, toDeg, toHour } from '../../../math/units/angle'
 import { meter } from '../../../math/units/distance'
 import { handleDefNumberVector, type IndiClientHandler } from '../client'
 import { DeviceInterfaceType, expectedPierSide, type GuideDirection, type NameAndLabel, type PierSide, type TrackMode, type UTCTime } from '../device'
 import { findOnSwitch, makeNumberVector, makeSwitchVector, makeTextVector, type NewNumberVector, type NewSwitchVector, type NewTextVector, selectOnSwitch } from '../types'
 import type { ClientSimulator } from './client'
-import { KING_DRIFT_RATE, LUNAR_DRIFT_RATE, MAIN_CONTROL, MAX_GUIDE_RATE, SIDEREAL_DRIFT_RATE, SIMULATION, SLEW_RATES, SLEW_SPEED_FACTOR, SOLAR_DRIFT_RATE, TICK_INTERVAL_MS } from './constants'
+import { GUIDE_JITTER_SEED, KING_DRIFT_RATE, LUNAR_DRIFT_RATE, MAIN_CONTROL, MAX_GUIDE_RATE, MAX_QUEUED_GUIDE_PULSES, SIDEREAL_DRIFT_RATE, SIMULATION, SLEW_RATES, SLEW_SPEED_FACTOR, SOLAR_DRIFT_RATE, TICK_INTERVAL_MS } from './constants'
 import { DeviceSimulator } from './device'
 import { advanceMechanicalAxis, IDENTITY_MECHANICAL_AXIS_CONFIG, loadMechanicalAxis, type MechanicalAxisConfig, mechanicalAxisState, resetMechanicalAxisMotion } from './mount.axis'
+import { type GuidePulse, type GuideResponseConfig, IDENTITY_GUIDE_RESPONSE_CONFIG, integrateGuidePulses, quantizeGuideDuration, retireGuidePulses } from './mount.guiding'
 import type { AxisDirection, CoordSetMode, DeviceSimulatorOptions, MountPointingState, SimulatorProperty, SlewMode } from './types'
 import { applyNumberVectorValues, clampDeclination, periodicErrorAtPhase } from './util'
 
@@ -65,6 +67,11 @@ export class MountSimulator extends DeviceSimulator {
 	// time stopped and reverses on every dither.
 	// oxfmt-ignore
 	readonly #mechanics = makeNumberVector('', 'MOUNT_MECHANICS', 'Mechanics', SIMULATION, 'rw', ['BACKLASH_RA', 'RA Backlash (arcsec)', 0, 0, 3600, 0.1, '%.3f'], ['BACKLASH_DEC', 'DEC Backlash (arcsec)', 0, 0, 3600, 0.1, '%.3f'], ['TAKE_UP_RATE', 'Backlash Take-up Rate', 1, 0.01, 1, 0.01, '%.3f'], ['STICTION_RA', 'RA Stiction (arcsec)', 0, 0, 60, 0.01, '%.3f'], ['STICTION_DEC', 'DEC Stiction (arcsec)', 0, 0, 60, 0.01, '%.3f'])
+	// Fidelity of the guide-pulse path between the command and the motor: how late it starts, how much
+	// of the requested duration survives, and how the real rate compares to the configured one in each
+	// direction. Defaults reproduce an ideal controller.
+	// oxfmt-ignore
+	readonly #guiding = makeNumberVector('', 'MOUNT_GUIDING', 'Guiding', SIMULATION, 'rw', ['LATENCY', 'Latency (ms)', 0, 0, 5000, 1, '%.0f'], ['LATENCY_JITTER', 'Latency Jitter (ms)', 0, 0, 1000, 1, '%.0f'], ['MINIMUM_PULSE', 'Minimum Pulse (ms)', 0, 0, 1000, 1, '%.0f'], ['QUANTIZATION', 'Duration Quantization (ms)', 0, 0, 1000, 1, '%.0f'], ['GAIN_NORTH', 'North Gain', 1, 0, 2, 0.01, '%.3f'], ['GAIN_SOUTH', 'South Gain', 1, 0, 2, 0.01, '%.3f'], ['GAIN_EAST', 'East Gain', 1, 0, 2, 0.01, '%.3f'], ['GAIN_WEST', 'West Gain', 1, 0, 2, 0.01, '%.3f'])
 
 	protected readonly properties: readonly SimulatorProperty[] = [
 		this.#onCoordSet,
@@ -88,11 +95,12 @@ export class MountSimulator extends DeviceSimulator {
 		this.#periodicError,
 		this.#wormPhaseVector,
 		this.#mechanics,
+		this.#guiding,
 	]
 	// The error-model configuration is persisted along with track mode and guide rate, so a simulated
 	// mount keeps its mechanical character across reconnections. The worm phase is not: it is live
 	// mechanical state, and a power cycle is exactly when a real mount loses track of it.
-	protected propertiesToNotSave = this.properties.filter((e) => e !== this.#trackMode && e !== this.#guideRate && e !== this.#alignment && e !== this.#periodicError && e !== this.#mechanics)
+	protected propertiesToNotSave = this.properties.filter((e) => e !== this.#trackMode && e !== this.#guideRate && e !== this.#alignment && e !== this.#periodicError && e !== this.#mechanics && e !== this.#guiding)
 
 	#timer?: NodeJS.Timeout
 	#lastTick = 0
@@ -101,10 +109,17 @@ export class MountSimulator extends DeviceSimulator {
 	#slewTarget?: EquatorialCoordinate
 	#manualNorthSouth: AxisDirection = 0
 	#manualWestEast: AxisDirection = 0
-	#pulseNorthSouth: AxisDirection = 0
-	#pulseWestEast: AxisDirection = 0
-	#pulseNorthSouthUntil = 0
-	#pulseWestEastUntil = 0
+	// Accepted guide pulses per axis, ordered by acceptance and retired once the simulated clock has
+	// passed them. A queue rather than a single deadline, so that a pulse arriving before the previous
+	// one finishes adds to it instead of silently replacing it.
+	readonly #northSouthPulses: GuidePulse[] = []
+	readonly #westEastPulses: GuidePulse[] = []
+	// Guide contribution of the interval just integrated, radians per second per axis. Kept so that the
+	// motor rate, the worm phase and the transmission all see the same value within a step.
+	#guideRateNorthSouth = 0
+	#guideRateWestEast = 0
+	// Deterministic source for the latency jitter, so a simulated session is reproducible.
+	readonly #random = mulberry32(GUIDE_JITTER_SEED)
 	// True orientation of the mechanical axes. This is the authoritative state: tracking, slewing,
 	// manual motion and guiding all move it, and both the reported coordinate and the boresight are
 	// derived from it.
@@ -367,6 +382,9 @@ export class MountSimulator extends DeviceSimulator {
 					this.#refreshTransmission()
 					this.notify(this.#mechanics)
 				}
+				return
+			case 'MOUNT_GUIDING':
+				if (applyNumberVectorValues(this.#guiding, vector.elements)) this.notify(this.#guiding)
 		}
 	}
 
@@ -604,28 +622,56 @@ export class MountSimulator extends DeviceSimulator {
 		this.#setManualWestEast(enable ? 1 : 0)
 	}
 
-	// Starts a pulse guiding correction for the requested direction.
+	// Queues a pulse-guiding correction for the requested direction, with `duration` in milliseconds.
+	//
+	// The command passes through the configured response first: pulses shorter than the minimum are
+	// discarded outright, the surviving duration is rounded to the controller's step, and the start is
+	// pushed out by the latency and its jitter. Everything is timed on the simulated clock, so stepping
+	// the simulation directly behaves exactly as the timer does.
+	//
+	// The pulse is appended rather than replacing whatever is already running on that axis, so
+	// overlapping corrections add up. A queue that is already full drops the new pulse, which is the
+	// behaviour of a controller being commanded faster than it can execute.
 	pulse(direction: GuideDirection, duration: number) {
-		if (!this.isConnected || this.isParked || duration <= 0) return
-		// Deadline on the simulated clock, like every other timed quantity here, so that stepping the
-		// simulation directly expires pulses as the timer would.
-		const until = this.#utcTime + duration
+		if (!this.isConnected || this.isParked) return
 
-		if (direction === 'NORTH') {
-			this.#pulseNorthSouth = 1
-			this.#pulseNorthSouthUntil = until
-		} else if (direction === 'SOUTH') {
-			this.#pulseNorthSouth = -1
-			this.#pulseNorthSouthUntil = until
-		} else if (direction === 'EAST') {
-			this.#pulseWestEast = 1
-			this.#pulseWestEastUntil = until
-		} else {
-			this.#pulseWestEast = -1
-			this.#pulseWestEastUntil = until
+		const config = this.#guideResponse
+		const executed = quantizeGuideDuration(duration, config)
+		if (executed <= 0) return
+
+		const northSouth = direction === 'NORTH' || direction === 'SOUTH'
+		const pulses = northSouth ? this.#northSouthPulses : this.#westEastPulses
+		if (pulses.length >= MAX_QUEUED_GUIDE_PULSES) return
+
+		const sign = direction === 'NORTH' || direction === 'EAST' ? 1 : -1
+		const gain = direction === 'NORTH' ? config.northGain : direction === 'SOUTH' ? config.southGain : direction === 'EAST' ? config.eastGain : config.westGain
+		const guideRate = northSouth ? this.guideRateDeclination : this.guideRateRightAscension
+		// Uniform over the full jitter width, centred on the configured latency and never negative.
+		const jitter = config.latencyJitter > 0 ? (this.#random() * 2 - 1) * config.latencyJitter : 0
+		const start = this.#utcTime + Math.max(0, config.latency + jitter)
+
+		pulses.push({ start, end: start + executed, rate: sign * gain * guideRate * SIDEREAL_DRIFT_RATE })
+		this.#updatePulsing()
+	}
+
+	// Guide-pulse response assembled from MOUNT_GUIDING. Read once per command, which is a cold path.
+	get #guideResponse(): GuideResponseConfig {
+		const { LATENCY, LATENCY_JITTER, MINIMUM_PULSE, QUANTIZATION, GAIN_NORTH, GAIN_SOUTH, GAIN_EAST, GAIN_WEST } = this.#guiding.elements
+
+		if (LATENCY.value === 0 && LATENCY_JITTER.value === 0 && MINIMUM_PULSE.value === 0 && QUANTIZATION.value === 0 && GAIN_NORTH.value === 1 && GAIN_SOUTH.value === 1 && GAIN_EAST.value === 1 && GAIN_WEST.value === 1) {
+			return IDENTITY_GUIDE_RESPONSE_CONFIG
 		}
 
-		this.#updatePulsing()
+		return {
+			latency: LATENCY.value,
+			latencyJitter: LATENCY_JITTER.value,
+			minimumPulse: MINIMUM_PULSE.value,
+			durationQuantization: QUANTIZATION.value,
+			northGain: GAIN_NORTH.value,
+			southGain: GAIN_SOUTH.value,
+			eastGain: GAIN_EAST.value,
+			westGain: GAIN_WEST.value,
+		}
 	}
 
 	// Aborts any active slew or manual motion.
@@ -653,7 +699,7 @@ export class MountSimulator extends DeviceSimulator {
 		this.advance(dtSeconds)
 	}
 
-	// Advances the whole simulation by `dtSeconds`: the simulated clock, pulse-guide expiry, the worm
+	// Advances the whole simulation by `dtSeconds`: the simulated clock, the guide pulses, the worm
 	// phase and the motion of both axes.
 	//
 	// Driven by the timer during normal operation, and callable directly to step the simulation
@@ -662,11 +708,17 @@ export class MountSimulator extends DeviceSimulator {
 	advance(dtSeconds: number) {
 		if (dtSeconds <= 0) return
 
+		const startTime = this.#utcTime
 		this.#utcTime += Math.trunc(dtSeconds * 1000)
 
 		if (!this.isConnected) return
 
-		this.#expirePulseGuide(this.#utcTime)
+		// Guide pulses are integrated over the interval that just elapsed rather than sampled at its
+		// end, so a pulse shorter than the step still delivers exactly its own share of motion. The
+		// result is reduced to an equivalent rate for the rest of the step, which lets the transmission
+		// see the travel a partly covered interval really produced.
+		this.#guideRateWestEast = integrateGuidePulses(this.#westEastPulses, startTime, this.#utcTime) / dtSeconds
+		this.#guideRateNorthSouth = integrateGuidePulses(this.#northSouthPulses, startTime, this.#utcTime) / dtSeconds
 
 		// Integrated before the motion advances, so the phase covers the interval the axes are about to
 		// run at the rate the motion is about to apply.
@@ -677,6 +729,12 @@ export class MountSimulator extends DeviceSimulator {
 		} else {
 			this.#advanceFreeMotion(dtSeconds)
 		}
+
+		// Retired only after the interval has been accounted for, so the tail of a pulse is never lost.
+		// Both axes are always visited: short-circuiting the second call would leave its queue growing.
+		const westEastPending = retireGuidePulses(this.#westEastPulses, this.#utcTime)
+		const northSouthPending = retireGuidePulses(this.#northSouthPulses, this.#utcTime)
+		this.#setPulsing(westEastPending || northSouthPending)
 	}
 
 	// Rate of the right-ascension motor, in radians per second of its contribution to the coordinate.
@@ -693,7 +751,7 @@ export class MountSimulator extends DeviceSimulator {
 
 		let rate = this.isTracking ? this.#trackingDriftRate() - SIDEREAL_DRIFT_RATE : 0
 		if (this.#manualWestEast !== 0) rate += this.#manualWestEast * this.#manualSlewSpeed()
-		if (this.#pulseWestEast !== 0) rate += this.#pulseWestEast * this.guideRateRightAscension * SIDEREAL_DRIFT_RATE
+		rate += this.#guideRateWestEast
 		return rate
 	}
 
@@ -794,7 +852,7 @@ export class MountSimulator extends DeviceSimulator {
 		let declinationMotorRate = 0
 
 		if (this.#manualNorthSouth !== 0) declinationMotorRate += this.#manualNorthSouth * this.#manualSlewSpeed()
-		if (this.#pulseNorthSouth !== 0) declinationMotorRate += this.#pulseNorthSouth * this.guideRateDeclination * SIDEREAL_DRIFT_RATE
+		declinationMotorRate += this.#guideRateNorthSouth
 
 		const rightAscensionStep = advanceMechanicalAxis(this.#rightAscensionAxis, rightAscensionMotorRate, dtSeconds, this.#rightAscensionTransmission)
 		const declinationStep = advanceMechanicalAxis(this.#declinationAxis, declinationMotorRate, dtSeconds, this.#declinationTransmission)
@@ -874,30 +932,9 @@ export class MountSimulator extends DeviceSimulator {
 		return 0
 	}
 
-	// Expires pulse guide commands once their duration elapses.
-	#expirePulseGuide(now: number) {
-		let changed = false
-
-		if (this.#pulseNorthSouth !== 0 && now >= this.#pulseNorthSouthUntil) {
-			this.#pulseNorthSouth = 0
-			this.#pulseNorthSouthUntil = 0
-			changed = true
-		}
-
-		if (this.#pulseWestEast !== 0 && now >= this.#pulseWestEastUntil) {
-			this.#pulseWestEast = 0
-			this.#pulseWestEastUntil = 0
-			changed = true
-		}
-
-		if (changed) {
-			this.#updatePulsing()
-		}
-	}
-
-	// Updates the combined pulse-guiding state.
+	// Updates the combined pulse-guiding state from the queues.
 	#updatePulsing() {
-		this.#setPulsing(this.#pulseNorthSouth !== 0 || this.#pulseWestEast !== 0)
+		this.#setPulsing(this.#northSouthPulses.length > 0 || this.#westEastPulses.length > 0)
 	}
 
 	// Sets the active north/south manual motion state.
@@ -926,10 +963,10 @@ export class MountSimulator extends DeviceSimulator {
 
 	// Clears active pulse-guiding commands.
 	#clearPulseGuide() {
-		this.#pulseNorthSouth = 0
-		this.#pulseWestEast = 0
-		this.#pulseNorthSouthUntil = 0
-		this.#pulseWestEastUntil = 0
+		this.#northSouthPulses.length = 0
+		this.#westEastPulses.length = 0
+		this.#guideRateNorthSouth = 0
+		this.#guideRateWestEast = 0
 		this.#setPulsing(false)
 	}
 

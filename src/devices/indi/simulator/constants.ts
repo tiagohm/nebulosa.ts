@@ -11,6 +11,11 @@ export const LUNAR_DRIFT_RATE = TAU / (MOON_SIDEREAL_DAYS * DAYSEC)
 export const KING_DRIFT_RATE = (SIDEREAL_RATE - 15.0369) * ASEC2RAD
 // Maximum guide rate as a fraction of sidereal.
 export const MAX_GUIDE_RATE = 1
+// Most guide pulses that can be outstanding on one axis at a time. Beyond this the queue is full and
+// further commands are dropped, which is what a controller does when driven faster than it executes.
+export const MAX_QUEUED_GUIDE_PULSES = 8
+// Seed of the deterministic generator used for guide-latency jitter, so sessions are reproducible.
+export const GUIDE_JITTER_SEED = 0x5f3a1c27
 // Multiplier applied to the selected manual slew rate when running an automatic goto, home or park,
 // so that a commanded slew is faster than nudging the axes by hand.
 export const SLEW_SPEED_FACTOR = 3
