@@ -13,6 +13,7 @@ import { findOnSwitch, makeNumberVector, makeSwitchVector, makeTextVector, type 
 import type { ClientSimulator } from './client'
 import { KING_DRIFT_RATE, LUNAR_DRIFT_RATE, MAIN_CONTROL, MAX_GUIDE_RATE, SIDEREAL_DRIFT_RATE, SIMULATION, SLEW_RATES, SLEW_SPEED_FACTOR, SOLAR_DRIFT_RATE, TICK_INTERVAL_MS } from './constants'
 import { DeviceSimulator } from './device'
+import { advanceMechanicalAxis, IDENTITY_MECHANICAL_AXIS_CONFIG, loadMechanicalAxis, type MechanicalAxisConfig, mechanicalAxisState, resetMechanicalAxisMotion } from './mount.axis'
 import type { AxisDirection, CoordSetMode, DeviceSimulatorOptions, MountPointingState, SimulatorProperty, SlewMode } from './types'
 import { applyNumberVectorValues, clampDeclination, periodicErrorAtPhase } from './util'
 
@@ -58,6 +59,12 @@ export class MountSimulator extends DeviceSimulator {
 	// Live phase of the right-ascension worm, in degrees. Read-only: it is integrated from the motion of
 	// the axis, not from the clock, so it stands still while the mount is parked and speeds up during a slew.
 	readonly #wormPhaseVector = makeNumberVector('', 'MOUNT_WORM_PHASE', 'Worm Phase', SIMULATION, 'ro', ['PHASE', 'Phase (deg)', 0, 0, 360, 0.1, '%.3f'])
+	// Imperfections of the transmission between motor and axis, per axis and in arcseconds. Backlash is
+	// the slack a reversal has to run through; stiction is the motor travel a stopped axis needs before
+	// it breaks free. Declination is normally the worse of the two, since that axis spends most of its
+	// time stopped and reverses on every dither.
+	// oxfmt-ignore
+	readonly #mechanics = makeNumberVector('', 'MOUNT_MECHANICS', 'Mechanics', SIMULATION, 'rw', ['BACKLASH_RA', 'RA Backlash (arcsec)', 0, 0, 3600, 0.1, '%.3f'], ['BACKLASH_DEC', 'DEC Backlash (arcsec)', 0, 0, 3600, 0.1, '%.3f'], ['TAKE_UP_RATE', 'Backlash Take-up Rate', 1, 0.01, 1, 0.01, '%.3f'], ['STICTION_RA', 'RA Stiction (arcsec)', 0, 0, 60, 0.01, '%.3f'], ['STICTION_DEC', 'DEC Stiction (arcsec)', 0, 0, 60, 0.01, '%.3f'])
 
 	protected readonly properties: readonly SimulatorProperty[] = [
 		this.#onCoordSet,
@@ -80,11 +87,12 @@ export class MountSimulator extends DeviceSimulator {
 		this.#alignment,
 		this.#periodicError,
 		this.#wormPhaseVector,
+		this.#mechanics,
 	]
 	// The error-model configuration is persisted along with track mode and guide rate, so a simulated
 	// mount keeps its mechanical character across reconnections. The worm phase is not: it is live
 	// mechanical state, and a power cycle is exactly when a real mount loses track of it.
-	protected propertiesToNotSave = this.properties.filter((e) => e !== this.#trackMode && e !== this.#guideRate && e !== this.#alignment && e !== this.#periodicError)
+	protected propertiesToNotSave = this.properties.filter((e) => e !== this.#trackMode && e !== this.#guideRate && e !== this.#alignment && e !== this.#periodicError && e !== this.#mechanics)
 
 	#timer?: NodeJS.Timeout
 	#lastTick = 0
@@ -110,6 +118,14 @@ export class MountSimulator extends DeviceSimulator {
 	// Accumulated angle of the right-ascension worm, radians in [0, TAU). Physical state integrated
 	// from the motion of the axis, so it survives a disconnection and only a new simulator resets it.
 	#wormPhase: Angle = 0
+	// Live transmission state of each axis: how much slack is open, which flank is loaded, and whether
+	// the axis is currently stuck.
+	readonly #rightAscensionAxis = mechanicalAxisState()
+	readonly #declinationAxis = mechanicalAxisState()
+	// Transmission configuration per axis, rebuilt from MOUNT_MECHANICS whenever it changes so that the
+	// simulation step allocates nothing.
+	#rightAscensionTransmission: MechanicalAxisConfig = IDENTITY_MECHANICAL_AXIS_CONFIG
+	#declinationTransmission: MechanicalAxisConfig = IDENTITY_MECHANICAL_AXIS_CONFIG
 
 	minimumNotifyCoordinateInterval = 1000
 
@@ -345,7 +361,21 @@ export class MountSimulator extends DeviceSimulator {
 				return
 			case 'MOUNT_PERIODIC_ERROR':
 				if (applyNumberVectorValues(this.#periodicError, vector.elements)) this.notify(this.#periodicError)
+				return
+			case 'MOUNT_MECHANICS':
+				if (applyNumberVectorValues(this.#mechanics, vector.elements)) {
+					this.#refreshTransmission()
+					this.notify(this.#mechanics)
+				}
 		}
+	}
+
+	// Rebuilds the per-axis transmission configuration from MOUNT_MECHANICS. Called only when the
+	// property changes, so the per-step path reads plain fields and allocates nothing.
+	#refreshTransmission() {
+		const { BACKLASH_RA, BACKLASH_DEC, TAKE_UP_RATE, STICTION_RA, STICTION_DEC } = this.#mechanics.elements
+		this.#rightAscensionTransmission = { backlash: BACKLASH_RA.value * ASEC2RAD, takeUpRate: TAKE_UP_RATE.value, staticThreshold: STICTION_RA.value * ASEC2RAD }
+		this.#declinationTransmission = { backlash: BACKLASH_DEC.value * ASEC2RAD, takeUpRate: TAKE_UP_RATE.value, staticThreshold: STICTION_DEC.value * ASEC2RAD }
 	}
 
 	// Handles mount switch commands: connection, slew/sync mode, abort, track mode/state, home, park,
@@ -721,6 +751,10 @@ export class MountSimulator extends DeviceSimulator {
 
 		if (span <= maxStep || span === 0) {
 			this.#setMechanical(target.rightAscension, target.declination)
+			// The axes come to a stop, so static friction has to be overcome again before the tracking
+			// or guiding that follows produces any motion.
+			resetMechanicalAxisMotion(this.#rightAscensionAxis)
+			resetMechanicalAxisMotion(this.#declinationAxis)
 			const mode = this.#slewMode
 			this.#slewMode = undefined
 			this.#slewTarget = undefined
@@ -737,46 +771,37 @@ export class MountSimulator extends DeviceSimulator {
 			return
 		}
 
+		// A slew drives the axes directly rather than through the transmission model, since backlash is
+		// negligible against a slew and its own dynamics belong with the slew profile. The load
+		// direction is still recorded, so a slew leaves the slack open on the flank it ended on and the
+		// motion that follows pays for it, which is the reloaded backlash a real mount shows after a goto.
+		loadMechanicalAxis(this.#rightAscensionAxis, Math.sign(deltaRightAscension) as AxisDirection, this.#rightAscensionTransmission)
+		loadMechanicalAxis(this.#declinationAxis, Math.sign(deltaDeclination) as AxisDirection, this.#declinationTransmission)
+
 		const scale = maxStep / span
 		this.#setMechanical(this.#mechanical.rightAscension + deltaRightAscension * scale, this.#mechanical.declination + deltaDeclination * scale)
 	}
 
 	// Advances tracking, manual motion and pulse guiding when not slewing.
+	//
+	// The motors and the sky are accounted for separately, because backlash and stiction sit between
+	// the motor and the axis while the sky turns regardless of what the transmission does. The motor
+	// rates go through the transmission model, and the sidereal drift is added to the result: with the
+	// motors stopped the coordinate still drifts eastward, and a perfectly tracking mount is one whose
+	// motor exactly cancels that drift.
 	#advanceFreeMotion(dtSeconds: number) {
-		let { rightAscension, declination } = this.#mechanical
-		let moved = false
+		const rightAscensionMotorRate = this.#rightAscensionMotorRate()
+		let declinationMotorRate = 0
 
-		if (this.#manualWestEast !== 0) {
-			rightAscension += this.#manualWestEast * this.#manualSlewSpeed() * dtSeconds
-			moved = true
-		}
+		if (this.#manualNorthSouth !== 0) declinationMotorRate += this.#manualNorthSouth * this.#manualSlewSpeed()
+		if (this.#pulseNorthSouth !== 0) declinationMotorRate += this.#pulseNorthSouth * this.guideRateDeclination * SIDEREAL_DRIFT_RATE
 
-		if (this.#manualNorthSouth !== 0) {
-			declination += this.#manualNorthSouth * this.#manualSlewSpeed() * dtSeconds
-			moved = true
-		}
+		const rightAscensionStep = advanceMechanicalAxis(this.#rightAscensionAxis, rightAscensionMotorRate, dtSeconds, this.#rightAscensionTransmission)
+		const declinationStep = advanceMechanicalAxis(this.#declinationAxis, declinationMotorRate, dtSeconds, this.#declinationTransmission)
+		const rightAscensionDelta = SIDEREAL_DRIFT_RATE * dtSeconds + rightAscensionStep
 
-		if (this.#pulseWestEast !== 0) {
-			rightAscension += this.#pulseWestEast * this.guideRateRightAscension * SIDEREAL_DRIFT_RATE * dtSeconds
-			moved = true
-		}
-
-		if (this.#pulseNorthSouth !== 0) {
-			declination += this.#pulseNorthSouth * this.guideRateDeclination * SIDEREAL_DRIFT_RATE * dtSeconds
-			moved = true
-		}
-
-		if (!moved) {
-			const trackingDrift = this.#trackingDriftRate()
-
-			if (trackingDrift !== 0) {
-				rightAscension += trackingDrift * dtSeconds
-				moved = true
-			}
-		}
-
-		if (moved) {
-			this.#setMechanical(rightAscension, declination)
+		if (rightAscensionDelta !== 0 || declinationStep !== 0) {
+			this.#setMechanical(this.#mechanical.rightAscension + rightAscensionDelta, this.#mechanical.declination + declinationStep)
 		}
 	}
 

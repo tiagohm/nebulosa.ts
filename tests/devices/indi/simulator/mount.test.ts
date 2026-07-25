@@ -212,6 +212,11 @@ describe.skipIf(SKIP)('mount simulator', () => {
 		mountManager.syncTo(mount, hour(3), deg(0))
 		await waitUntil(() => closeTo(mount.equatorialCoordinate.rightAscension, hour(3), 1e-9))
 
+		// Guiding is only meaningful while tracking. With the motors stopped the sky keeps turning, so
+		// the sidereal drift would swamp a guide pulse instead of the pulse showing up on its own.
+		mountManager.tracking(mount, true)
+		await waitUntil(() => mount.tracking)
+
 		let pulseDeclination = mount.equatorialCoordinate.declination
 		guideOutputManager.pulseNorth(mount, 350)
 		await waitUntil(() => mount.pulsing)
@@ -283,6 +288,65 @@ describe('mount simulator pointing errors', () => {
 			// the resolution of that encoding rather than bit for bit.
 			expect(reported.rightAscension).toBeCloseTo(mechanical.rightAscension, 12)
 			expect(reported.declination).toBeCloseTo(mechanical.declination, 12)
+		} finally {
+			mount.dispose()
+		}
+	})
+
+	test('delays declination guiding after a reversal by the configured backlash', () => {
+		const { client, mount } = makeMount('mount.backlash.declination')
+
+		try {
+			// Thirty arcseconds of slack. The declination guide rate is half sidereal, so about
+			// 7.5 arcsec/s, and taking up that slack costs roughly four seconds of motor travel.
+			client.sendNumber({ device: mount.name, name: 'MOUNT_MECHANICS', elements: { BACKLASH_DEC: 30 } })
+			mount.setTrackingEnabled(true)
+
+			// Load the transmission northwards first, so the reversal below has slack to open.
+			mount.pulse('NORTH', 4000)
+			for (let i = 0; i < 8; i++) mount.advance(0.5)
+
+			const afterNorth = mount.mechanical.declination
+
+			// Two seconds of reversal is only half the slack, so the axis must not move at all.
+			mount.pulse('SOUTH', 2000)
+			for (let i = 0; i < 4; i++) mount.advance(0.5)
+			expect(mount.mechanical.declination).toBe(afterNorth)
+
+			// Four more seconds take up the rest and the axis finally follows.
+			mount.pulse('SOUTH', 4000)
+			for (let i = 0; i < 8; i++) mount.advance(0.5)
+			expect(mount.mechanical.declination).toBeLessThan(afterNorth)
+		} finally {
+			mount.dispose()
+		}
+	})
+
+	test('holds a stuck declination axis until the accumulated pulses break it free', () => {
+		const { client, mount } = makeMount('mount.stiction.declination')
+
+		try {
+			// Two arcseconds of stiction. The declination guide rate is half sidereal, about
+			// 7.5 arcsec/s, so a tenth of a second of travel is well under the threshold.
+			client.sendNumber({ device: mount.name, name: 'MOUNT_MECHANICS', elements: { STICTION_DEC: 2 } })
+			mount.setTrackingEnabled(true)
+
+			const start = mount.mechanical.declination
+
+			// Each pulse is stepped for less than its duration, because expiry runs before the motion
+			// and a step as long as the pulse would retire it without applying anything.
+			mount.pulse('NORTH', 200)
+			mount.advance(0.1)
+			expect(mount.mechanical.declination).toBe(start)
+
+			mount.pulse('NORTH', 200)
+			mount.advance(0.1)
+			expect(mount.mechanical.declination).toBe(start)
+
+			// Enough travel has now built up for the axis to release, and it arrives all at once.
+			mount.pulse('NORTH', 600)
+			mount.advance(0.3)
+			expect(mount.mechanical.declination).toBeGreaterThan(start)
 		} finally {
 			mount.dispose()
 		}
