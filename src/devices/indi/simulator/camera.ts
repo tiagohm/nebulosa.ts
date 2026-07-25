@@ -1,10 +1,8 @@
 import { equatorialToJ2000 } from '../../../astronomy/coordinates/coordinate'
 import { pixelScale } from '../../../astronomy/formulas'
-import { localSiderealTime } from '../../../astronomy/observer/location'
 import { Gnomonic } from '../../../astronomy/projections/projection'
 import { formatTemporal } from '../../../astronomy/time/temporal'
-import { timeUnix } from '../../../astronomy/time/time'
-import { ASEC2RAD, DAYSEC, DEG2RAD, PIOVERTWO, TAU } from '../../../core/constants'
+import { DEG2RAD, PIOVERTWO, TAU } from '../../../core/constants'
 import { writeImageToFits, writeImageToXisf } from '../../../imaging/model/image'
 import type { CfaPattern, Image, ImageRawType } from '../../../imaging/model/types'
 import { colorIndexToRgbWeights, gaussianSigmaFromHfd, plotStar, type PlotStarOptions } from '../../../imaging/stars/generator'
@@ -18,7 +16,6 @@ import type { Point } from '../../../math/numerical/geometry'
 import { clamp } from '../../../math/numerical/math'
 import { mulberry32 } from '../../../math/numerical/random'
 import { type Angle, arcsec, formatDEC, formatRA, normalizeAngle, toDeg, toHour } from '../../../math/units/angle'
-import { polarAlignmentError } from '../../../observation/alignment/polaralignment'
 import { handleSetBlobVector, type IndiClientHandler } from '../client'
 import { DeviceInterfaceType, type FrameType, type GuideDirection } from '../device'
 import type { FocuserManager, GuideOutputManager, MountManager, RotatorManager, WheelManager } from '../manager'
@@ -28,8 +25,9 @@ import type { ClientSimulator } from './client'
 import { CAMERA_AMBIENT_TEMPERATURE, CAMERA_BLOB_PADDING, CAMERA_DEFAULT_TARGET_TEMPERATURE, CAMERA_MAX_BIN, CAMERA_MAX_EXPOSURE, CAMERA_MAX_SCENE_MARGIN, CAMERA_MIN_EXPOSURE, CAMERA_PIXEL_SIZE, CAMERA_SCENE_SEED, CAMERA_SENSOR_HEIGHT, CAMERA_SENSOR_WIDTH, GENERAL_INFO, MAIN_CONTROL, SIMULATION, TICK_INTERVAL_MS } from './constants'
 import { DeviceSimulator } from './device'
 import { FocuserSimulator } from './focuser'
+import { MountSimulator } from './mount'
 import type { CatalogSource, CatalogSourceStar, CatalogSourceType, DeviceSimulatorOptions, ReadoutMode, SimulatorProperty, TransferFormat } from './types'
-import { applyExclusiveSwitchValues, applyMultiSwitchValues, applyNumberVectorValues, periodicErrorOffset, pointingOffsetInPixels } from './util'
+import { applyExclusiveSwitchValues, applyMultiSwitchValues, applyNumberVectorValues, pointingOffsetInPixels } from './util'
 
 // Simulated astronomical camera acquisition, cooling, guiding, and synthetic image generation.
 
@@ -116,19 +114,6 @@ export class CameraSimulator extends DeviceSimulator {
 	// oxfmt-ignore
 	readonly #aberrationShape = makeNumberVector('', 'SIMULATOR_ABERRATION_SHAPE', 'Aberration Shape', SIMULATION, 'rw', ['BACKFOCUS', 'Backfocus', 0, -1, 1, 0.01, '%.3f'], ['BACKFOCUS_BLUR', 'Backfocus Blur (px)', 4, 0, 100, 0.1, '%.2f'], ['BACKFOCUS_ELLIPTICITY', 'Backfocus Ellipticity', 0.35, 0, 0.8, 0.01, '%.3f'], ['COMA', 'Coma', 0, 0, 1, 0.01, '%.3f'], ['ASTIGMATISM', 'Astigmatism', 0, -0.8, 0.8, 0.01, '%.3f'], ['ASTIGMATISM_BLUR', 'Astigmatism Blur (px)', 4, 0, 100, 0.1, '%.2f'], ['ASTIGMATISM_ANGLE', 'Astigmatism Angle (rad)', 0, -TAU, TAU, 0.01, '%.3f'], ['DECENTER_X', 'Decenter X', 0, -0.5, 0.5, 0.01, '%.3f'], ['DECENTER_Y', 'Decenter Y', 0, -0.5, 0.5, 0.01, '%.3f'], ['COLLIMATION', 'Collimation', 0, 0, 1, 0.01, '%.3f'], ['COLLIMATION_ANGLE', 'Collimation Angle (rad)', 0, -TAU, TAU, 0.01, '%.3f'])
 	readonly #telescopeInfo = makeNumberVector('', 'TELESCOPE_INFO', 'Telescope Info', SIMULATION, 'rw', ['FOCAL_LENGTH', 'Focal Length (mm)', 500, 1, 10000, 1, '%.0f'], ['APERTURE', 'Aperture (mm)', 80, 1, 3000, 1, '%.0f'])
-	readonly #telescopeEffects = makeNumberVector(
-		'',
-		'TELESCOPE_EFFECTS',
-		'Telescope Effects',
-		SIMULATION,
-		'rw',
-		['PAE_AZ', 'PAE Azimuth (arcsec)', 0, -36000, 36000, 0.1, '%.3f'],
-		['PAE_AL', 'PAE Altitude (arcsec)', 0, -36000, 36000, 0.1, '%.3f'],
-		['PE_WE_PERIOD', 'PE W/E Period (s)', 0, 0, DAYSEC, 1, '%.0f'],
-		['PE_WE_AMPLITUDE', 'PE W/E Amplitude (arcsec)', 0, 0, 3600, 0.1, '%.3f'],
-		['PE_NS_PERIOD', 'PE N/S Period (s)', 0, 0, DAYSEC, 1, '%.0f'],
-		['PE_NS_AMPLITUDE', 'PE N/S Amplitude (arcsec)', 0, 0, 3600, 0.1, '%.3f'],
-	)
 
 	protected readonly properties: readonly SimulatorProperty[] = [
 		this.#info,
@@ -174,7 +159,6 @@ export class CameraSimulator extends DeviceSimulator {
 		this.#aberrationFocus,
 		this.#aberrationShape,
 		this.#telescopeInfo,
-		this.#telescopeEffects,
 	]
 
 	protected readonly propertiesToNotSave: readonly SimulatorProperty[] = [this.#info, this.#cooler, this.#abort, this.#exposure, this.#coolerPower, this.#temperature, this.#cfa, this.#guideNS, this.#guideWE, this.#image]
@@ -227,6 +211,18 @@ export class CameraSimulator extends DeviceSimulator {
 	get activeMount() {
 		const mount = this.#mountManager?.get(this.client, this.snoopDevices.elements.ACTIVE_TELESCOPE.value)
 		return mount?.connected ? mount : undefined
+	}
+
+	// Concrete simulator behind the active mount, when it is one of ours. The snooped INDI state only
+	// carries the reported coordinate, while the error model, the boresight and the simulated clock
+	// live on the simulator itself; rendering needs those, so it reaches for the instance the same way
+	// #focusPosition reaches for the focuser. Undefined for a real mount, where the reported coordinate
+	// is all there is.
+	get activeMountSimulator() {
+		const mount = this.activeMount
+		if (mount === undefined) return undefined
+		const simulator = this.client.get(mount.name)
+		return simulator instanceof MountSimulator ? simulator : undefined
 	}
 
 	get activeFocuser() {
@@ -372,9 +368,6 @@ export class CameraSimulator extends DeviceSimulator {
 				return
 			case 'TELESCOPE_INFO':
 				if (applyNumberVectorValues(this.#telescopeInfo, vector.elements)) this.notify(this.#telescopeInfo)
-				return
-			case 'TELESCOPE_EFFECTS':
-				if (applyNumberVectorValues(this.#telescopeEffects, vector.elements)) this.notify(this.#telescopeEffects)
 		}
 	}
 
@@ -830,7 +823,9 @@ export class CameraSimulator extends DeviceSimulator {
 
 	// Builds a compact astronomical image header for synthetic output.
 	#imageHeader(width: number, height: number, channels: 1 | 3, exposureTime: number): FitsHeader {
-		const now = Date.now()
+		// Timestamped on the mount's simulated clock when there is one, so that TIME_UTC governs the
+		// frame metadata as well as the geometry. Falls back to the wall clock without a mount.
+		const now = this.activeMountSimulator?.utcTime ?? Date.now()
 		const mount = this.activeMount
 		const focuser = this.activeFocuser
 		const rotator = this.activeRotator
@@ -1116,11 +1111,6 @@ export class CameraSimulator extends DeviceSimulator {
 		return projected
 	}
 
-	// Computes the current local sidereal time from the simulated clock.
-	#siderealTime(utcTime: number, longitude: Angle) {
-		return localSiderealTime(timeUnix(utcTime / 1000, true), longitude)
-	}
-
 	// Rebuilds the deterministic catalog only when scene parameters change.
 	//
 	// The catalog is queried and cached around the mount's nominal (reported) coordinate, never around
@@ -1251,62 +1241,39 @@ export class CameraSimulator extends DeviceSimulator {
 		this.#setPulsing(false)
 	}
 
-	// Direction the optical axis really points, given the mount's nominal coordinate and the configured
-	// polar-alignment and periodic errors, evaluated at `utcTime` (UTC milliseconds).
-	//
-	// The periodic offsets are absolute, not incremental: the nominal coordinate is re-read from the
-	// mount on every call and never carries a previous offset, so adding only the delta would collapse
-	// the error to the difference between consecutive evaluations.
-	#boresight(rightAscension: Angle, declination: Angle, latitude: Angle, longitude: Angle, utcTime: number) {
-		const { elements } = this.#telescopeEffects
-
-		if (elements.PAE_AZ.value !== 0 || elements.PAE_AL.value !== 0) {
-			;[rightAscension, declination] = polarAlignmentError(rightAscension, declination, latitude, this.#siderealTime(utcTime, longitude), elements.PAE_AZ.value * ASEC2RAD, elements.PAE_AL.value * ASEC2RAD)
-		}
-
-		rightAscension += periodicErrorOffset(elements.PE_WE_PERIOD.value, elements.PE_WE_AMPLITUDE.value, utcTime)
-		declination += periodicErrorOffset(elements.PE_NS_PERIOD.value, elements.PE_NS_AMPLITUDE.value, utcTime)
-		return [rightAscension, declination] as const
-	}
-
 	// Margin, in unbinned pixels, by which the synthetic star field extends beyond every sensor edge.
 	//
 	// A pointing error shifts the whole field on the sensor, so without a margin its trailing edge
-	// would be swept clean of stars. The margin is sized from the configured error rather than fixed:
-	// it costs nothing when the mount points perfectly, which is the common case, and it grows only as
-	// far as the error can actually displace the field.
+	// would be swept clean of stars. The margin is sized from the mount's own bound on that error
+	// rather than fixed: it costs nothing when the mount points perfectly, which is the common case,
+	// and it grows only as far as the error can actually displace the field.
 	//
-	// The bound is the worst case over all hour angles. The polar-alignment terms contribute at most
-	// |MA| + |ME| to each of the two axes, hence the sqrt(2) for their combined magnitude, and each
-	// periodic error contributes its own amplitude to its own axis. `pixelScale` is radians per
-	// unbinned pixel; the result is capped by CAMERA_MAX_SCENE_MARGIN to keep the star count bounded.
+	// `pixelScale` is radians per unbinned pixel; the result is capped by CAMERA_MAX_SCENE_MARGIN to
+	// keep the star count bounded.
 	#sceneMargin(pixelScale: Angle) {
-		const { elements } = this.#telescopeEffects
-		const bound = Math.SQRT2 * (Math.abs(elements.PAE_AZ.value) + Math.abs(elements.PAE_AL.value)) + elements.PE_WE_AMPLITUDE.value + elements.PE_NS_AMPLITUDE.value
+		const bound = this.activeMountSimulator?.pointingErrorBound ?? 0
 		if (bound <= 0 || pixelScale <= 0) return 0
-		return Math.min(CAMERA_MAX_SCENE_MARGIN, Math.ceil(arcsec(bound) / pixelScale))
+		return Math.min(CAMERA_MAX_SCENE_MARGIN, Math.ceil(bound / pixelScale))
 	}
 
-	// Displacement, in unbinned sensor pixels, that the pointing errors introduce in the rendered field.
+	// Displacement, in unbinned sensor pixels, that the mount's pointing error introduces in the
+	// rendered field.
 	//
-	// `pixelScale` is radians per unbinned pixel and `exposureTime` is seconds. The errors are sampled
-	// at the middle of the exposure, which is the representative instant for an instantaneous
-	// transformation standing in for an integration over the whole window. Writes into `o` and returns
-	// whether any displacement applies; `o` is left untouched when it does not.
+	// `pixelScale` is radians per unbinned pixel and `exposureTime` is seconds. The boresight is
+	// sampled at the middle of the exposure, which is the representative instant for an instantaneous
+	// transformation standing in for an integration over the whole window, and on the mount's own
+	// simulated clock rather than the wall clock, so that changing TIME_UTC moves the field. Writes
+	// into `o` and returns whether any displacement applies; `o` is left untouched when it does not.
 	#pointingOffsetInPixels(pixelScale: Angle, exposureTime: number, o: Point) {
-		const mount = this.activeMount
-		if (mount === undefined) return false
+		const simulator = this.activeMountSimulator
+		if (simulator === undefined) return false
 
-		const { elements } = this.#telescopeEffects
-		if (elements.PAE_AZ.value === 0 && elements.PAE_AL.value === 0 && elements.PE_WE_AMPLITUDE.value === 0 && elements.PE_NS_AMPLITUDE.value === 0) return false
-
-		const midExposure = Date.now() - Math.trunc(exposureTime * 500)
-		const { rightAscension, declination } = mount.equatorialCoordinate
-		const [boresightRightAscension, boresightDeclination] = this.#boresight(rightAscension, declination, mount.geographicCoordinate.latitude, mount.geographicCoordinate.longitude, midExposure)
+		const midExposure = simulator.utcTime - Math.trunc(exposureTime * 500)
+		const { rightAscension, declination } = simulator.boresightAt(midExposure)
 
 		// Computed in the current equatorial frame: both directions receive the same J2000 rotation, so
 		// it cancels in a difference of a few arcseconds.
-		return pointingOffsetInPixels(rightAscension, declination, boresightRightAscension, boresightDeclination, pixelScale, o)
+		return pointingOffsetInPixels(simulator.rightAscension, simulator.declination, rightAscension, declination, pixelScale, o)
 	}
 
 	get cfaPattern() {

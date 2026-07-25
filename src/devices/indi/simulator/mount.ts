@@ -1,8 +1,9 @@
 import type { EquatorialCoordinate } from '../../../astronomy/coordinates/coordinate'
+import { applyEquatorialPointingError, type EquatorialPointingModel, IDENTITY_EQUATORIAL_POINTING_MODEL } from '../../../astronomy/coordinates/pointing'
 import { localSiderealTime } from '../../../astronomy/observer/location'
 import { formatTemporal, TIMEZONE } from '../../../astronomy/time/temporal'
 import { timeUnix } from '../../../astronomy/time/time'
-import { PIOVERTWO } from '../../../core/constants'
+import { ASEC2RAD, DAYSEC, PIOVERTWO } from '../../../core/constants'
 import { clamp } from '../../../math/numerical/math'
 import { type Angle, deg, hour, normalizeAngle, normalizePI, toDeg, toHour } from '../../../math/units/angle'
 import { meter } from '../../../math/units/distance'
@@ -10,10 +11,10 @@ import { handleDefNumberVector, type IndiClientHandler } from '../client'
 import { DeviceInterfaceType, expectedPierSide, type GuideDirection, type NameAndLabel, type PierSide, type TrackMode, type UTCTime } from '../device'
 import { findOnSwitch, makeNumberVector, makeSwitchVector, makeTextVector, type NewNumberVector, type NewSwitchVector, type NewTextVector, selectOnSwitch } from '../types'
 import type { ClientSimulator } from './client'
-import { KING_DRIFT_RATE, LUNAR_DRIFT_RATE, MAIN_CONTROL, MAX_GUIDE_RATE, SIDEREAL_DRIFT_RATE, SLEW_RATES, SOLAR_DRIFT_RATE, TICK_INTERVAL_MS } from './constants'
+import { KING_DRIFT_RATE, LUNAR_DRIFT_RATE, MAIN_CONTROL, MAX_GUIDE_RATE, SIDEREAL_DRIFT_RATE, SIMULATION, SLEW_RATES, SOLAR_DRIFT_RATE, TICK_INTERVAL_MS } from './constants'
 import { DeviceSimulator } from './device'
 import type { AxisDirection, CoordSetMode, DeviceSimulatorOptions, SimulatorProperty, SlewMode } from './types'
-import { applyNumberVectorValues, clampDeclination } from './util'
+import { applyNumberVectorValues, clampDeclination, periodicErrorOffset } from './util'
 
 // Simulated equatorial mount, tracking, slewing, site, and pulse-guiding behavior.
 
@@ -42,6 +43,15 @@ export class MountSimulator extends DeviceSimulator {
 	readonly #guideNS = makeNumberVector('', 'TELESCOPE_TIMED_GUIDE_NS', 'Guide N/S', MAIN_CONTROL, 'rw', ['TIMED_GUIDE_N', 'North (ms)', 0, 0, 60000, 1, '%.0f'], ['TIMED_GUIDE_S', 'South (ms)', 0, 0, 60000, 1, '%.0f'])
 	readonly #guideWE = makeNumberVector('', 'TELESCOPE_TIMED_GUIDE_WE', 'Guide W/E', MAIN_CONTROL, 'rw', ['TIMED_GUIDE_W', 'West (ms)', 0, 0, 60000, 1, '%.0f'], ['TIMED_GUIDE_E', 'East (ms)', 0, 0, 60000, 1, '%.0f'])
 
+	// Orientation of the polar axis relative to the true celestial pole. Signed arcseconds; the range
+	// spans ten degrees, far beyond any usable alignment, so gross misalignment can be exercised.
+	// oxfmt-ignore
+	readonly #alignment = makeNumberVector('', 'MOUNT_ALIGNMENT', 'Alignment', SIMULATION, 'rw', ['POLAR_AZIMUTH_ERROR', 'Polar Azimuth Error (arcsec)', 0, -36000, 36000, 0.1, '%.3f'], ['POLAR_ALTITUDE_ERROR', 'Polar Altitude Error (arcsec)', 0, -36000, 36000, 0.1, '%.3f'])
+	// Periodic error of the transmission on each axis: cycle duration in seconds and semi-amplitude in
+	// arcseconds. A zero period or amplitude disables the axis.
+	// oxfmt-ignore
+	readonly #periodicError = makeNumberVector('', 'MOUNT_PERIODIC_ERROR', 'Periodic Error', SIMULATION, 'rw', ['RA_PERIOD', 'RA Period (s)', 0, 0, DAYSEC, 1, '%.0f'], ['RA_AMPLITUDE', 'RA Amplitude (arcsec)', 0, 0, 3600, 0.1, '%.3f'], ['DEC_PERIOD', 'DEC Period (s)', 0, 0, DAYSEC, 1, '%.0f'], ['DEC_AMPLITUDE', 'DEC Amplitude (arcsec)', 0, 0, 3600, 0.1, '%.3f'])
+
 	protected readonly properties: readonly SimulatorProperty[] = [
 		this.#onCoordSet,
 		this.#equatorialCoordinate,
@@ -60,8 +70,12 @@ export class MountSimulator extends DeviceSimulator {
 		this.#guideNS,
 		this.#guideWE,
 		this.#guideRate,
+		this.#alignment,
+		this.#periodicError,
 	]
-	protected propertiesToNotSave = this.properties.filter((e) => e !== this.#trackMode && e !== this.#guideRate)
+	// The error-model configuration is persisted along with track mode and guide rate, so a simulated
+	// mount keeps its mechanical character across reconnections.
+	protected propertiesToNotSave = this.properties.filter((e) => e !== this.#trackMode && e !== this.#guideRate && e !== this.#alignment && e !== this.#periodicError)
 
 	#timer?: NodeJS.Timeout
 	#lastTick = 0
@@ -168,6 +182,78 @@ export class MountSimulator extends DeviceSimulator {
 		return findOnSwitch(this.#slewRate)[0]
 	}
 
+	// Simulated UTC clock, in milliseconds since the epoch. Advances with the ticks and is what
+	// TIME_UTC sets, so consumers that need the mount's notion of time must read it instead of the
+	// wall clock.
+	get utcTime() {
+		return this.#utcTime
+	}
+
+	// Direction the optical axis really points now: the reported coordinate perturbed by the
+	// configured polar-alignment and periodic errors. See boresightAt for the semantics.
+	get boresight(): EquatorialCoordinate {
+		return this.boresightAt(this.#utcTime)
+	}
+
+	// Direction the optical axis really points at `utcTime` (milliseconds since the epoch), i.e. the
+	// reported coordinate perturbed by the configured errors.
+	//
+	// The periodic offsets are absolute rather than incremental: this reads the current coordinate on
+	// every call, so the returned value is a function of the time alone and evaluating twice at the
+	// same instant yields the same result. The declination is left unclamped; a polar error pushing it
+	// past the pole is a real, if degenerate, configuration and clamping would silently hide it.
+	boresightAt(utcTime: number): EquatorialCoordinate {
+		const { RA_PERIOD, RA_AMPLITUDE, DEC_PERIOD, DEC_AMPLITUDE } = this.#periodicError.elements
+		const model = this.pointingModel
+		let rightAscension = this.rightAscension
+		let declination = this.declination
+
+		if (model !== IDENTITY_EQUATORIAL_POINTING_MODEL) {
+			;[rightAscension, declination] = applyEquatorialPointingError(rightAscension, declination, this.siderealTimeAt(utcTime), model)
+		}
+
+		rightAscension += periodicErrorOffset(RA_PERIOD.value, RA_AMPLITUDE.value, utcTime)
+		declination += periodicErrorOffset(DEC_PERIOD.value, DEC_AMPLITUDE.value, utcTime)
+		return { rightAscension, declination }
+	}
+
+	// Geometric pointing model built from the configured alignment errors.
+	//
+	// The polar-axis knob errors map onto the TPoint terms as MA = azimuth * cos(latitude) and
+	// ME = -altitude, plus a constant hour-angle term azimuth * sin(latitude). That last term is the
+	// addition Ralph Pass makes to the Trueblood and Genet formulation, and keeping it here reproduces
+	// `polarAlignmentError` exactly, which is the convention the rest of the project already uses and
+	// tests against the published two-star reference.
+	//
+	// Returns the shared identity model when nothing is configured, so callers can skip the whole
+	// computation with a reference comparison.
+	get pointingModel(): EquatorialPointingModel {
+		const { POLAR_AZIMUTH_ERROR, POLAR_ALTITUDE_ERROR } = this.#alignment.elements
+		if (POLAR_AZIMUTH_ERROR.value === 0 && POLAR_ALTITUDE_ERROR.value === 0) return IDENTITY_EQUATORIAL_POINTING_MODEL
+
+		const azimuthError = POLAR_AZIMUTH_ERROR.value * ASEC2RAD
+		const altitudeError = POLAR_ALTITUDE_ERROR.value * ASEC2RAD
+		const latitude = this.latitude
+
+		return {
+			...IDENTITY_EQUATORIAL_POINTING_MODEL,
+			polarAzimuthError: azimuthError * Math.cos(latitude),
+			polarAltitudeError: -altitudeError,
+			indexHourAngle: azimuthError * Math.sin(latitude),
+		}
+	}
+
+	// Upper bound (radians) of how far the configured errors can displace the optical axis, over all
+	// hour angles. The polar-alignment terms contribute at most the sum of their magnitudes to each of
+	// the two axes, hence the sqrt(2) on their combined magnitude, and each periodic error adds its own
+	// amplitude to its own axis. Consumers use it to size buffers and margins without having to know
+	// the error model.
+	get pointingErrorBound(): Angle {
+		const { POLAR_AZIMUTH_ERROR, POLAR_ALTITUDE_ERROR } = this.#alignment.elements
+		const { RA_AMPLITUDE, DEC_AMPLITUDE } = this.#periodicError.elements
+		return (Math.SQRT2 * (Math.abs(POLAR_AZIMUTH_ERROR.value) + Math.abs(POLAR_ALTITUDE_ERROR.value)) + RA_AMPLITUDE.value + DEC_AMPLITUDE.value) * ASEC2RAD
+	}
+
 	// Current pier side derived from the pier-side property.
 	get pierSide(): PierSide {
 		return this.#pierSide.elements.PIER_EAST.value ? 'EAST' : this.#pierSide.elements.PIER_WEST.value ? 'WEST' : 'NEITHER'
@@ -216,6 +302,12 @@ export class MountSimulator extends DeviceSimulator {
 			case 'TELESCOPE_TIMED_GUIDE_WE':
 				if ((vector.elements.TIMED_GUIDE_W ?? 0) > 0) this.pulse('WEST', vector.elements.TIMED_GUIDE_W)
 				else if ((vector.elements.TIMED_GUIDE_E ?? 0) > 0) this.pulse('EAST', vector.elements.TIMED_GUIDE_E)
+				return
+			case 'MOUNT_ALIGNMENT':
+				if (applyNumberVectorValues(this.#alignment, vector.elements)) this.notify(this.#alignment)
+				return
+			case 'MOUNT_PERIODIC_ERROR':
+				if (applyNumberVectorValues(this.#periodicError, vector.elements)) this.notify(this.#periodicError)
 		}
 	}
 
@@ -602,7 +694,12 @@ export class MountSimulator extends DeviceSimulator {
 
 	// Computes the current local sidereal time from the simulated clock.
 	#siderealTime() {
-		return localSiderealTime(timeUnix(this.#utcTime / 1000, true), this.longitude)
+		return this.siderealTimeAt(this.#utcTime)
+	}
+
+	// Local sidereal time at `utcTime` (milliseconds since the epoch) for the configured site.
+	siderealTimeAt(utcTime: number) {
+		return localSiderealTime(timeUnix(utcTime / 1000, true), this.longitude)
 	}
 
 	// Returns the active free-slew speed in radians per second.
