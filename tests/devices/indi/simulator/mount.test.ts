@@ -267,13 +267,53 @@ describe('mount simulator pointing errors', () => {
 		return { client, mount }
 	}
 
-	test('reports a boresight equal to the coordinate when no error is configured', () => {
+	test('collapses the three directions onto one another when no error is configured', () => {
 		const { mount } = makeMount('mount.boresight.identity')
 
 		try {
+			const { reported, mechanical, boresight } = mount.pointingState
+
 			expect(mount.pointingErrorBound).toBe(0)
-			expect(mount.boresight.rightAscension).toBe(mount.rightAscension)
-			expect(mount.boresight.declination).toBe(mount.declination)
+
+			// With perfect geometry the boresight is the mechanical orientation itself, exactly.
+			expect(boresight.rightAscension).toBe(mechanical.rightAscension)
+			expect(boresight.declination).toBe(mechanical.declination)
+
+			// The reported coordinate round-trips through the hours/degrees INDI vector, so it agrees to
+			// the resolution of that encoding rather than bit for bit.
+			expect(reported.rightAscension).toBeCloseTo(mechanical.rightAscension, 12)
+			expect(reported.declination).toBeCloseTo(mechanical.declination, 12)
+		} finally {
+			mount.dispose()
+		}
+	})
+
+	test('keeps guiding on the mechanical axes while the polar error stays in the boresight', () => {
+		const { client, mount } = makeMount('mount.boresight.guiding')
+
+		try {
+			client.sendNumber({ device: mount.name, name: 'MOUNT_ALIGNMENT', elements: { POLAR_AZIMUTH_ERROR: 600, POLAR_ALTITUDE_ERROR: 400 } })
+
+			const before = mount.pointingState
+			const residualBefore = before.boresight.declination - before.mechanical.declination
+			expect(Math.abs(residualBefore)).toBeGreaterThan(arcsec(1))
+
+			// A guide pulse moves the axes. This is the invariant the separation exists for: the
+			// correction lands on the mechanical orientation, and the polar error keeps reappearing in
+			// the boresight instead of being cancelled by it.
+			// Stepped finely rather than in one jump: expiry runs before the motion, so a step longer
+			// than the pulse would retire it without ever applying it. Integrating the overlap instead
+			// of sampling it is what removes that quantization, and it belongs with the guide-response
+			// model.
+			mount.pulse('NORTH', 2000)
+			for (let i = 0; i < 4; i++) mount.advance(0.5)
+
+			const after = mount.pointingState
+			expect(after.mechanical.declination).not.toBe(before.mechanical.declination)
+
+			const residualAfter = after.boresight.declination - after.mechanical.declination
+			expect(Math.abs(residualAfter)).toBeGreaterThan(arcsec(1))
+			expect(residualAfter).toBeCloseTo(residualBefore, 6)
 		} finally {
 			mount.dispose()
 		}

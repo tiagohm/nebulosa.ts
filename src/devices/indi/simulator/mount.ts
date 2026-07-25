@@ -13,7 +13,7 @@ import { findOnSwitch, makeNumberVector, makeSwitchVector, makeTextVector, type 
 import type { ClientSimulator } from './client'
 import { KING_DRIFT_RATE, LUNAR_DRIFT_RATE, MAIN_CONTROL, MAX_GUIDE_RATE, SIDEREAL_DRIFT_RATE, SIMULATION, SLEW_RATES, SLEW_SPEED_FACTOR, SOLAR_DRIFT_RATE, TICK_INTERVAL_MS } from './constants'
 import { DeviceSimulator } from './device'
-import type { AxisDirection, CoordSetMode, DeviceSimulatorOptions, SimulatorProperty, SlewMode } from './types'
+import type { AxisDirection, CoordSetMode, DeviceSimulatorOptions, MountPointingState, SimulatorProperty, SlewMode } from './types'
 import { applyNumberVectorValues, clampDeclination, periodicErrorAtPhase } from './util'
 
 // Simulated equatorial mount, tracking, slewing, site, and pulse-guiding behavior.
@@ -97,6 +97,11 @@ export class MountSimulator extends DeviceSimulator {
 	#pulseWestEast: AxisDirection = 0
 	#pulseNorthSouthUntil = 0
 	#pulseWestEastUntil = 0
+	// True orientation of the mechanical axes. This is the authoritative state: tracking, slewing,
+	// manual motion and guiding all move it, and both the reported coordinate and the boresight are
+	// derived from it.
+	readonly #mechanical: EquatorialCoordinate = { rightAscension: 0, declination: PIOVERTWO }
+	// Home and park are stored as mechanical positions, since that is what the axes return to.
 	readonly #homeCoordinate: EquatorialCoordinate = { rightAscension: 0, declination: PIOVERTWO }
 	readonly #parkCoordinate: EquatorialCoordinate = { rightAscension: 0, declination: PIOVERTWO }
 	#utcTime = Date.now()
@@ -127,13 +132,30 @@ export class MountSimulator extends DeviceSimulator {
 		this.driverInfo.elements.DRIVER_EXEC.value = 'mount.simulator'
 	}
 
-	// Current equatorial coordinate (radians) decoded from the RA-hours/Dec-degrees property.
+	// Reported equatorial coordinate (radians) decoded from the RA-hours/Dec-degrees property. This is
+	// what the controller believes and what INDI clients see, not the true orientation of the axes; see
+	// `mechanical` and `boresight` for those.
 	get rightAscension() {
 		return hour(this.#equatorialCoordinate.elements.RA.value)
 	}
 
 	get declination() {
 		return deg(this.#equatorialCoordinate.elements.DEC.value)
+	}
+
+	// True orientation of the mechanical axes (radians). Aliases internal state, so callers must treat
+	// it as read-only and copy it if they need to keep it.
+	get mechanical(): Readonly<EquatorialCoordinate> {
+		return this.#mechanical
+	}
+
+	// The three directions of the mount at this instant, evaluated on the simulated clock.
+	get pointingState(): MountPointingState {
+		return {
+			reported: { rightAscension: this.rightAscension, declination: this.declination },
+			mechanical: { rightAscension: this.#mechanical.rightAscension, declination: this.#mechanical.declination },
+			boresight: this.boresight,
+		}
 	}
 
 	// Park/track/home/slew/pulse/parking state flags derived from the corresponding property values/states.
@@ -216,8 +238,8 @@ export class MountSimulator extends DeviceSimulator {
 	// past the pole is a real, if degenerate, configuration and clamping would silently hide it.
 	boresightAt(utcTime: number): EquatorialCoordinate {
 		const model = this.pointingModel
-		let rightAscension = this.rightAscension
-		let declination = this.declination
+		let rightAscension = this.#mechanical.rightAscension
+		let declination = this.#mechanical.declination
 
 		if (model !== IDENTITY_EQUATORIAL_POINTING_MODEL) {
 			;[rightAscension, declination] = applyEquatorialPointingError(rightAscension, declination, this.siderealTimeAt(utcTime), model)
@@ -427,9 +449,16 @@ export class MountSimulator extends DeviceSimulator {
 	}
 
 	// Applies a sync immediately without any slew time.
+	//
+	// Places the axes at the requested orientation rather than only correcting the controller's
+	// bookkeeping. A real sync leaves the mount where it is and shifts what it reports, which is how it
+	// absorbs a pointing error at one place in the sky while leaving it visible everywhere else; that
+	// belongs with the index-error terms and is deferred until they exist. Doing it here instead would
+	// strand the axes at the pole they home to, where declination is clamped and the geometry is
+	// degenerate, and only the reported coordinate would ever move.
 	syncTo(rightAscension: Angle, declination: Angle) {
 		if (!this.isConnected) return
-		this.#setCoordinate(normalizeAngle(rightAscension), clampDeclination(declination))
+		this.#setMechanical(rightAscension, declination)
 	}
 
 	// Slews to the configured home position.
@@ -442,10 +471,10 @@ export class MountSimulator extends DeviceSimulator {
 		this.#setParking(false)
 	}
 
-	// Stores the current coordinate as the new home position.
+	// Stores the current mechanical orientation as the new home position.
 	setHome() {
-		this.#homeCoordinate.rightAscension = this.rightAscension
-		this.#homeCoordinate.declination = this.declination
+		this.#homeCoordinate.rightAscension = this.#mechanical.rightAscension
+		this.#homeCoordinate.declination = this.#mechanical.declination
 	}
 
 	// Parks the mount at the configured park position.
@@ -466,10 +495,10 @@ export class MountSimulator extends DeviceSimulator {
 		this.#setParking(false)
 	}
 
-	// Stores the current coordinate as the park position.
+	// Stores the current mechanical orientation as the park position.
 	setPark() {
-		this.#parkCoordinate.rightAscension = this.rightAscension
-		this.#parkCoordinate.declination = this.declination
+		this.#parkCoordinate.rightAscension = this.#mechanical.rightAscension
+		this.#parkCoordinate.declination = this.#mechanical.declination
 	}
 
 	// Enables or disables sidereal-style tracking.
@@ -686,12 +715,12 @@ export class MountSimulator extends DeviceSimulator {
 
 		const speed = this.#manualSlewSpeed() * SLEW_SPEED_FACTOR
 		const maxStep = speed * dtSeconds
-		const deltaRightAscension = normalizePI(target.rightAscension - this.rightAscension)
-		const deltaDeclination = target.declination - this.declination
+		const deltaRightAscension = normalizePI(target.rightAscension - this.#mechanical.rightAscension)
+		const deltaDeclination = target.declination - this.#mechanical.declination
 		const span = Math.max(Math.abs(deltaRightAscension), Math.abs(deltaDeclination))
 
 		if (span <= maxStep || span === 0) {
-			this.#setCoordinate(target.rightAscension, target.declination)
+			this.#setMechanical(target.rightAscension, target.declination)
 			const mode = this.#slewMode
 			this.#slewMode = undefined
 			this.#slewTarget = undefined
@@ -709,12 +738,12 @@ export class MountSimulator extends DeviceSimulator {
 		}
 
 		const scale = maxStep / span
-		this.#setCoordinate(this.rightAscension + deltaRightAscension * scale, this.declination + deltaDeclination * scale)
+		this.#setMechanical(this.#mechanical.rightAscension + deltaRightAscension * scale, this.#mechanical.declination + deltaDeclination * scale)
 	}
 
 	// Advances tracking, manual motion and pulse guiding when not slewing.
 	#advanceFreeMotion(dtSeconds: number) {
-		let { rightAscension, declination } = this
+		let { rightAscension, declination } = this.#mechanical
 		let moved = false
 
 		if (this.#manualWestEast !== 0) {
@@ -747,14 +776,21 @@ export class MountSimulator extends DeviceSimulator {
 		}
 
 		if (moved) {
-			this.#setCoordinate(normalizeAngle(rightAscension), clampDeclination(declination))
+			this.#setMechanical(rightAscension, declination)
 		}
 	}
 
-	// Applies a coordinate update and notifies listeners when required.
-	#setCoordinate(rightAscension: Angle, declination: Angle, notify: boolean = true) {
-		this.#equatorialCoordinate.elements.RA.value = toHour(normalizeAngle(rightAscension))
-		this.#equatorialCoordinate.elements.DEC.value = toDeg(clampDeclination(declination))
+	// Moves the mechanical axes and republishes everything derived from them.
+	//
+	// The reported coordinate currently mirrors the mechanical orientation exactly. It is kept as a
+	// separate concept because that is where the index errors and the imperfect telemetry will apply,
+	// and because clients must never be handed the boresight: a frame whose true centre differs from
+	// the reported coordinate is precisely what lets plate solving measure the error.
+	#setMechanical(rightAscension: Angle, declination: Angle, notify: boolean = true) {
+		this.#mechanical.rightAscension = normalizeAngle(rightAscension)
+		this.#mechanical.declination = clampDeclination(declination)
+		this.#equatorialCoordinate.elements.RA.value = toHour(this.#mechanical.rightAscension)
+		this.#equatorialCoordinate.elements.DEC.value = toDeg(this.#mechanical.declination)
 		const pierSideChanged = this.#updatePierSide()
 
 		if (notify && this.#utcTime - this.#notifyCoordinateLastTime >= this.minimumNotifyCoordinateInterval) {
@@ -774,7 +810,9 @@ export class MountSimulator extends DeviceSimulator {
 
 	// Keeps the simulated pier side consistent with the current sky position.
 	#updatePierSide() {
-		const pierSide = expectedPierSide(this.rightAscension, this.declination, this.#siderealTime())
+		// Derived from the mechanical orientation: which side of the pier the tube is on is a fact about
+		// the axes, not about what the controller believes it is reporting.
+		const pierSide = expectedPierSide(this.#mechanical.rightAscension, this.#mechanical.declination, this.#siderealTime())
 		if (pierSide === this.pierSide) return false
 
 		if (pierSide === 'EAST') selectOnSwitch(this.#pierSide, 'PIER_EAST')
@@ -928,6 +966,6 @@ export class MountSimulator extends DeviceSimulator {
 	#refreshDynamicCoordinates(notify: boolean) {
 		this.#homeCoordinate.rightAscension = this.#siderealTime()
 		this.#parkCoordinate.rightAscension = this.#homeCoordinate.rightAscension
-		this.#setCoordinate(this.#homeCoordinate.rightAscension, this.#homeCoordinate.declination, notify)
+		this.#setMechanical(this.#homeCoordinate.rightAscension, this.#homeCoordinate.declination, notify)
 	}
 }

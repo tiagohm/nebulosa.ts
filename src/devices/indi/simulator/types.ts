@@ -32,6 +32,23 @@ export type CatalogSourceStar = Omit<AstronomicalImageStar, 'x' | 'y'> & Readonl
 // Provides stars within a cone (RA, Dec, radius in radians) to render into a synthetic frame.
 export type CatalogSource = (rightAscension: Angle, declination: Angle, radius: Angle) => PromiseLike<readonly CatalogSourceStar[]> | readonly CatalogSourceStar[]
 
+// The three distinct directions a mount has at any instant, all in the equatorial frame of date.
+//
+// Keeping them apart is what makes guiding physically coherent: a correction acts on the mechanical
+// axes, while a pointing error keeps reappearing in the boresight as residual drift. Collapsed into a
+// single coordinate, a correction and the error it should cancel live in different spaces and never
+// meet.
+export interface MountPointingState {
+	// Coordinate the controller believes it is pointing at, and the one published over INDI. Differs
+	// from the mechanical orientation by whatever offset the last sync established.
+	readonly reported: Readonly<EquatorialCoordinate>
+	// True orientation of the mechanical axes, which is what tracking, slewing and guiding move.
+	readonly mechanical: Readonly<EquatorialCoordinate>
+	// Direction the optical axis really points, after the geometric pointing model and the periodic
+	// error. This is what a camera images and what a plate solve would recover.
+	readonly boresight: Readonly<EquatorialCoordinate>
+}
+
 // Persistence hooks shared by all simulators for saving/loading property snapshots.
 export interface DeviceSimulatorOptions {
 	readonly save?: (name: string, properties: readonly SimulatorProperty[]) => void
