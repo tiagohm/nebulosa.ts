@@ -16,6 +16,7 @@ import { GUIDE_JITTER_SEED, KING_DRIFT_RATE, LUNAR_DRIFT_RATE, MAIN_CONTROL, MAX
 import { DeviceSimulator } from './device'
 import { advanceMechanicalAxis, IDENTITY_MECHANICAL_AXIS_CONFIG, loadMechanicalAxis, type MechanicalAxisConfig, mechanicalAxisState, resetMechanicalAxisMotion } from './mount.axis'
 import { type GuidePulse, type GuideResponseConfig, IDENTITY_GUIDE_RESPONSE_CONFIG, integrateGuidePulses, quantizeGuideDuration, retireGuidePulses } from './mount.guiding'
+import { advanceSettling, exciteSettling, IDENTITY_SETTLING_CONFIG, resetSettling, type SettlingConfig, settlingState } from './mount.settling'
 import { boresightHistory, clearBoresightHistory, recordBoresightSample, sampleBoresightTrajectory } from './mount.trajectory'
 import type { AxisDirection, CoordSetMode, DeviceSimulatorOptions, MountPointingState, SimulatorProperty, SlewMode } from './types'
 import { applyNumberVectorValues, clampDeclination, periodicErrorAtPhase } from './util'
@@ -77,6 +78,11 @@ export class MountSimulator extends DeviceSimulator {
 	// direction. Defaults reproduce an ideal controller.
 	// oxfmt-ignore
 	readonly #guiding = makeNumberVector('', 'MOUNT_GUIDING', 'Guiding', SIMULATION, 'rw', ['LATENCY', 'Latency (ms)', 0, 0, 5000, 1, '%.0f'], ['LATENCY_JITTER', 'Latency Jitter (ms)', 0, 0, 1000, 1, '%.0f'], ['MINIMUM_PULSE', 'Minimum Pulse (ms)', 0, 0, 1000, 1, '%.0f'], ['QUANTIZATION', 'Duration Quantization (ms)', 0, 0, 1000, 1, '%.0f'], ['GAIN_NORTH', 'North Gain', 1, 0, 2, 0.01, '%.3f'], ['GAIN_SOUTH', 'South Gain', 1, 0, 2, 0.01, '%.3f'], ['GAIN_EAST', 'East Gain', 1, 0, 2, 0.01, '%.3f'], ['GAIN_WEST', 'West Gain', 1, 0, 2, 0.01, '%.3f'])
+	// Elastic response of the structure to an abrupt stop: a telescope on a tripod is a spring, so it
+	// overshoots and rings before coming to rest. A zero overshoot or frequency makes it perfectly
+	// stiff, which is how it behaved before.
+	// oxfmt-ignore
+	readonly #settling = makeNumberVector('', 'MOUNT_SETTLING', 'Settling', SIMULATION, 'rw', ['OVERSHOOT', 'Overshoot (arcsec)', 0, 0, 600, 0.1, '%.3f'], ['FREQUENCY', 'Frequency (Hz)', 2, 0, 50, 0.1, '%.2f'], ['DAMPING_RATIO', 'Damping Ratio', 0.2, 0, 1, 0.01, '%.3f'])
 
 	protected readonly properties: readonly SimulatorProperty[] = [
 		this.#onCoordSet,
@@ -101,11 +107,12 @@ export class MountSimulator extends DeviceSimulator {
 		this.#wormPhaseVector,
 		this.#mechanics,
 		this.#guiding,
+		this.#settling,
 	]
 	// The error-model configuration is persisted along with track mode and guide rate, so a simulated
 	// mount keeps its mechanical character across reconnections. The worm phase is not: it is live
 	// mechanical state, and a power cycle is exactly when a real mount loses track of it.
-	protected propertiesToNotSave = this.properties.filter((e) => e !== this.#trackMode && e !== this.#guideRate && e !== this.#alignment && e !== this.#periodicError && e !== this.#mechanics && e !== this.#guiding)
+	protected propertiesToNotSave = this.properties.filter((e) => e !== this.#trackMode && e !== this.#guideRate && e !== this.#alignment && e !== this.#periodicError && e !== this.#mechanics && e !== this.#guiding && e !== this.#settling)
 
 	#timer?: NodeJS.Timeout
 	#lastTick = 0
@@ -128,6 +135,11 @@ export class MountSimulator extends DeviceSimulator {
 	// Rolling record of where the optical axis actually pointed, so a camera can integrate an exposure
 	// over the motion that happened rather than over a single instant.
 	readonly #boresightHistory = boresightHistory(MOUNT_TRAJECTORY_CAPACITY)
+	// Elastic ring-down of each axis after an abrupt stop.
+	readonly #rightAscensionSettling = settlingState()
+	readonly #declinationSettling = settlingState()
+	// Settling configuration, rebuilt from MOUNT_SETTLING whenever it changes so the step allocates nothing.
+	#settlingConfig: SettlingConfig = IDENTITY_SETTLING_CONFIG
 	// True orientation of the mechanical axes. This is the authoritative state: tracking, slewing,
 	// manual motion and guiding all move it, and both the reported coordinate and the boresight are
 	// derived from it.
@@ -414,7 +426,20 @@ export class MountSimulator extends DeviceSimulator {
 				return
 			case 'MOUNT_GUIDING':
 				if (applyNumberVectorValues(this.#guiding, vector.elements)) this.notify(this.#guiding)
+				return
+			case 'MOUNT_SETTLING':
+				if (applyNumberVectorValues(this.#settling, vector.elements)) {
+					this.#refreshSettling()
+					this.notify(this.#settling)
+				}
 		}
+	}
+
+	// Rebuilds the settling configuration from MOUNT_SETTLING. Called only when the property changes,
+	// so the per-step path reads a plain field.
+	#refreshSettling() {
+		const { OVERSHOOT, FREQUENCY, DAMPING_RATIO } = this.#settling.elements
+		this.#settlingConfig = { overshoot: OVERSHOOT.value * ASEC2RAD, frequency: FREQUENCY.value, dampingRatio: DAMPING_RATIO.value }
 	}
 
 	// Rebuilds the per-axis transmission configuration from MOUNT_MECHANICS. Called only when the
@@ -767,6 +792,16 @@ export class MountSimulator extends DeviceSimulator {
 			this.#advanceFreeMotion(dtSeconds)
 		}
 
+		// Applied as the change in the residual offset rather than as the offset itself, so the ringing
+		// rides on top of whatever the axes are doing and pays itself back: once it has died away the
+		// mount sits exactly where it was commanded.
+		const rightAscensionRing = advanceSettling(this.#rightAscensionSettling, dtSeconds, this.#settlingConfig)
+		const declinationRing = advanceSettling(this.#declinationSettling, dtSeconds, this.#settlingConfig)
+
+		if (rightAscensionRing !== 0 || declinationRing !== 0) {
+			this.#setMechanical(this.#mechanical.rightAscension + rightAscensionRing, this.#mechanical.declination + declinationRing)
+		}
+
 		// Retired only after the interval has been accounted for, so the tail of a pulse is never lost.
 		// Both axes are always visited: short-circuiting the second call would leave its queue growing.
 		const westEastPending = retireGuidePulses(this.#westEastPulses, this.#utcTime)
@@ -854,6 +889,16 @@ export class MountSimulator extends DeviceSimulator {
 			// or guiding that follows produces any motion.
 			resetMechanicalAxisMotion(this.#rightAscensionAxis)
 			resetMechanicalAxisMotion(this.#declinationAxis)
+			// Arriving is abrupt, so the structure carries on and rings. How hard depends on how fast the
+			// axes were running, which is why a slow slew settles more gently than a fast one; each axis
+			// is excited in proportion to its own share of the motion. A zero span means the mount was
+			// already on target and never moved, so nothing is excited.
+			if (span > 0) {
+				const severity = this.#manualSlewSpeed() / SLEW_RATES.at(-1)!.speed
+				exciteSettling(this.#rightAscensionSettling, (severity * Math.abs(deltaRightAscension)) / span, this.#settlingConfig)
+				exciteSettling(this.#declinationSettling, (severity * Math.abs(deltaDeclination)) / span, this.#settlingConfig)
+			}
+
 			const mode = this.#slewMode
 			this.#slewMode = undefined
 			this.#slewTarget = undefined
@@ -1079,6 +1124,9 @@ export class MountSimulator extends DeviceSimulator {
 	// previous run says nothing about this one, and syncing, which repositions the axes instantly. The
 	// seed sample makes the trajectory usable before the first tick has run.
 	#resetBoresightHistory() {
+		// Any ring-down in progress belongs to the position that was just abandoned.
+		resetSettling(this.#rightAscensionSettling)
+		resetSettling(this.#declinationSettling)
 		clearBoresightHistory(this.#boresightHistory)
 		const boresight = this.boresightAt(this.#utcTime)
 		recordBoresightSample(this.#boresightHistory, this.#utcTime, boresight.rightAscension, boresight.declination)

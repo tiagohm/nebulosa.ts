@@ -352,6 +352,70 @@ describe('mount simulator pointing errors', () => {
 		}
 	})
 
+	test('overshoots and rings after a slew, then lands exactly on target', () => {
+		const { client, mount } = makeMount('mount.settling.slew')
+
+		try {
+			// A springy mount: half an arcminute of overshoot at two hertz, lightly damped.
+			client.sendNumber({ device: mount.name, name: 'MOUNT_SETTLING', elements: { OVERSHOOT: 30, FREQUENCY: 2, DAMPING_RATIO: 0.15 } })
+			mount.setSlewRate('SPEED_7')
+
+			const target = mount.declination + deg(10)
+			mount.goTo(mount.rightAscension, target)
+
+			let overshoot = 0
+			let arrived = false
+
+			// Stepped finely enough to resolve a two hertz ring-down.
+			for (let i = 0; i < 2000; i++) {
+				mount.advance(0.01)
+				if (!mount.isSlewing) {
+					arrived = true
+					overshoot = Math.max(overshoot, Math.abs(mount.mechanical.declination - target))
+				}
+			}
+
+			expect(arrived).toBeTrue()
+
+			// It went past the target on the way in.
+			expect(toArcsec(overshoot)).toBeGreaterThan(5)
+
+			// And came back to it: the excursion is borrowed and paid back, so a goto still lands where
+			// it was told to once the ringing dies away.
+			expect(toArcsec(Math.abs(mount.mechanical.declination - target))).toBeLessThan(0.01)
+		} finally {
+			mount.dispose()
+		}
+	})
+
+	test('settles more gently after a slow slew than a fast one', () => {
+		function overshootAt(rate: string, name: string) {
+			const { client, mount } = makeMount(name)
+
+			try {
+				client.sendNumber({ device: mount.name, name: 'MOUNT_SETTLING', elements: { OVERSHOOT: 30, FREQUENCY: 2, DAMPING_RATIO: 0.15 } })
+				mount.setSlewRate(rate)
+
+				const target = mount.declination + deg(1)
+				mount.goTo(mount.rightAscension, target)
+
+				let overshoot = 0
+
+				for (let i = 0; i < 2000; i++) {
+					mount.advance(0.01)
+					if (!mount.isSlewing) overshoot = Math.max(overshoot, Math.abs(mount.mechanical.declination - target))
+				}
+
+				return overshoot
+			} finally {
+				mount.dispose()
+			}
+		}
+
+		// The excitation scales with the speed the axes were running at, not with how far they went.
+		expect(overshootAt('SPEED_1', 'mount.settling.slow')).toBeLessThan(overshootAt('SPEED_7', 'mount.settling.fast'))
+	})
+
 	test('separates the reported coordinate from the axes by the encoder index errors', () => {
 		const { client, mount } = makeMount('mount.index.error')
 
