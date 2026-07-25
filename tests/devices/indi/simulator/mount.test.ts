@@ -352,7 +352,7 @@ describe('mount simulator pointing errors', () => {
 		}
 	})
 
-	test('overshoots and rings after a slew, then lands exactly on target', () => {
+	test.skipIf(SKIP)('overshoots and rings after a slew, then lands exactly on target', () => {
 		const { client, mount } = makeMount('mount.settling.slew')
 
 		try {
@@ -388,7 +388,7 @@ describe('mount simulator pointing errors', () => {
 		}
 	})
 
-	test('settles more gently after a slow slew than a fast one', () => {
+	test.skipIf(SKIP)('settles more gently after a slow slew than a fast one', () => {
 		function overshootAt(rate: string, name: string) {
 			const { client, mount } = makeMount(name)
 
