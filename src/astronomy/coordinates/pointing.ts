@@ -1,5 +1,4 @@
 import { DEG2RAD } from '../../core/constants'
-import type { MutVec2 } from '../../math/linear-algebra/vec2'
 import { clamp } from '../../math/numerical/math'
 import { type Angle, normalizeAngle } from '../../math/units/angle'
 
@@ -46,6 +45,26 @@ export const IDENTITY_EQUATORIAL_POINTING_MODEL: EquatorialPointingModel = {
 	polarAltitudeError: 0,
 }
 
+// Builds the pointing model of a mount whose polar axis is misaligned by the given knob errors.
+//
+// `azimuthError` and `altitudeError` are the misalignment of the polar axis in the horizontal and
+// vertical planes as an observer would read them off the adjusters, and `latitude` is the site
+// latitude; all radians. They map onto the model as MA = azimuth·cos(latitude) and
+// ME = -altitude, plus a constant hour-angle term azimuth·sin(latitude).
+//
+// That last term is the addition Ralph Pass makes to the Trueblood and Genet formulation. It is not
+// part of the canonical six-term TPoint model, and it is carried in `indexHourAngle` because that is
+// where a constant hour-angle offset belongs; callers wanting to add an encoder zero error of their
+// own must sum it in rather than overwrite it.
+export function polarAlignmentPointingModel(azimuthError: Angle, altitudeError: Angle, latitude: Angle): EquatorialPointingModel {
+	return {
+		...IDENTITY_EQUATORIAL_POINTING_MODEL,
+		polarAzimuthError: azimuthError * Math.cos(latitude),
+		polarAltitudeError: -altitudeError,
+		indexHourAngle: azimuthError * Math.sin(latitude),
+	}
+}
+
 // Whether the model has any non-zero term. Callers use it to skip the whole computation on the
 // common perfect-geometry path.
 export function isIdentityEquatorialPointingModel(model: EquatorialPointingModel) {
@@ -63,7 +82,7 @@ export function isIdentityEquatorialPointingModel(model: EquatorialPointingModel
 //
 // The declination fed to the sec δ / tan δ terms is clamped to ±MAX_POINTING_DECLINATION, so the
 // result stays finite at the poles. When `o` is provided it receives the result and is returned.
-export function equatorialPointingError(hourAngle: Angle, declination: Angle, model: EquatorialPointingModel, o?: MutVec2): readonly [Angle, Angle] {
+export function equatorialPointingError(hourAngle: Angle, declination: Angle, model: EquatorialPointingModel, o?: [Angle, Angle]): [Angle, Angle] {
 	const cosHourAngle = Math.cos(hourAngle)
 	const sinHourAngle = Math.sin(hourAngle)
 
@@ -92,16 +111,9 @@ export function equatorialPointingError(hourAngle: Angle, declination: Angle, mo
 // ascension error, hence `RA − ΔH`. The returned right ascension is normalized to [0, TAU); the
 // declination is left unwrapped so callers can detect and handle a crossing of the pole themselves.
 // When `o` is provided it receives the result and is returned.
-export function applyEquatorialPointingError(rightAscension: Angle, declination: Angle, lst: Angle, model: EquatorialPointingModel, o?: MutVec2): readonly [Angle, Angle] {
-	const [deltaHourAngle, deltaDeclination] = equatorialPointingError(lst - rightAscension, declination, model)
-	const resultRightAscension = normalizeAngle(rightAscension - deltaHourAngle)
-	const resultDeclination = declination + deltaDeclination
-
-	if (o) {
-		o[0] = resultRightAscension
-		o[1] = resultDeclination
-		return o
-	}
-
-	return [resultRightAscension, resultDeclination]
+export function applyEquatorialPointingError(rightAscension: Angle, declination: Angle, lst: Angle, model: EquatorialPointingModel, o?: [Angle, Angle]): readonly [Angle, Angle] {
+	const error = equatorialPointingError(lst - rightAscension, declination, model, o)
+	error[0] = normalizeAngle(rightAscension - error[0])
+	error[1] += declination
+	return error
 }

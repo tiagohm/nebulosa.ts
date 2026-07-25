@@ -352,6 +352,88 @@ describe('mount simulator pointing errors', () => {
 		}
 	})
 
+	test('separates the reported coordinate from the axes by the encoder index errors', () => {
+		const { client, mount } = makeMount('mount.index.error')
+
+		try {
+			client.sendNumber({ device: mount.name, name: 'MOUNT_ALIGNMENT', elements: { RA_INDEX_ERROR: 120, DEC_INDEX_ERROR: -90 } })
+
+			// Syncing places the axes so the controller reports what was asked, which with a non-zero
+			// index error is a different orientation.
+			mount.syncTo(hour(5), deg(20))
+
+			const { reported, mechanical, boresight } = mount.pointingState
+
+			expect(toArcsec(normalizePI(reported.rightAscension - hour(5)))).toBeCloseTo(0, 3)
+			expect(toArcsec(reported.declination - deg(20))).toBeCloseTo(0, 3)
+
+			// The axes sit one index error away from what is reported.
+			expect(toArcsec(normalizePI(reported.rightAscension - mechanical.rightAscension))).toBeCloseTo(120, 3)
+			expect(toArcsec(reported.declination - mechanical.declination)).toBeCloseTo(-90, 3)
+
+			// An index error is bookkeeping, not optics: it must not move the boresight off the axes.
+			expect(boresight.rightAscension).toBe(mechanical.rightAscension)
+			expect(boresight.declination).toBe(mechanical.declination)
+		} finally {
+			mount.dispose()
+		}
+	})
+
+	test('drives a goto to the orientation that makes the controller report the target', () => {
+		const { client, mount } = makeMount('mount.index.goto')
+
+		try {
+			client.sendNumber({ device: mount.name, name: 'MOUNT_ALIGNMENT', elements: { RA_INDEX_ERROR: 120, DEC_INDEX_ERROR: -90 } })
+			mount.setSlewRate('SPEED_7')
+			mount.goTo(hour(6), deg(25))
+
+			for (let i = 0; i < 20 && mount.isSlewing; i++) mount.advance(1)
+
+			expect(mount.isSlewing).toBeFalse()
+			expect(toArcsec(normalizePI(mount.rightAscension - hour(6)))).toBeCloseTo(0, 3)
+			expect(toArcsec(mount.declination - deg(25))).toBeCloseTo(0, 3)
+		} finally {
+			mount.dispose()
+		}
+	})
+
+	test('scales the cone error as the secant of the declination', () => {
+		const { client, mount } = makeMount('mount.cone.error')
+
+		try {
+			client.sendNumber({ device: mount.name, name: 'MOUNT_ALIGNMENT', elements: { CONE_ERROR: 60 } })
+
+			// The hour-angle error grows as sec of the declination, but converting it to an on-sky angle
+			// multiplies by cos, so the displacement of the boresight is the coefficient itself.
+			for (const declination of [deg(0), deg(45), deg(60)]) {
+				mount.syncTo(hour(5), declination)
+				const { mechanical, boresight } = mount.pointingState
+				const onSky = normalizePI(boresight.rightAscension - mechanical.rightAscension) * Math.cos(declination)
+				expect(toArcsec(onSky)).toBeCloseTo(-60, 3)
+				expect(boresight.declination).toBe(mechanical.declination)
+			}
+		} finally {
+			mount.dispose()
+		}
+	})
+
+	test('scales the axis non-orthogonality as the tangent of the declination', () => {
+		const { client, mount } = makeMount('mount.axis.orthogonality')
+
+		try {
+			client.sendNumber({ device: mount.name, name: 'MOUNT_ALIGNMENT', elements: { AXIS_NON_ORTHOGONALITY: 90 } })
+
+			// Vanishes at the equator and equals the coefficient at 45 degrees, where tan is one.
+			mount.syncTo(hour(5), 0)
+			expect(toArcsec(normalizePI(mount.boresight.rightAscension - mount.mechanical.rightAscension))).toBeCloseTo(0, 6)
+
+			mount.syncTo(hour(5), deg(45))
+			expect(toArcsec(normalizePI(mount.boresight.rightAscension - mount.mechanical.rightAscension))).toBeCloseTo(-90, 3)
+		} finally {
+			mount.dispose()
+		}
+	})
+
 	test('delivers a guide pulse shorter than the simulation step', () => {
 		const { mount } = makeMount('mount.guiding.subtick')
 

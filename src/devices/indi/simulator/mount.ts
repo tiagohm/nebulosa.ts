@@ -1,5 +1,5 @@
 import type { EquatorialCoordinate } from '../../../astronomy/coordinates/coordinate'
-import { applyEquatorialPointingError, type EquatorialPointingModel, IDENTITY_EQUATORIAL_POINTING_MODEL } from '../../../astronomy/coordinates/pointing'
+import { applyEquatorialPointingError, type EquatorialPointingModel, IDENTITY_EQUATORIAL_POINTING_MODEL, polarAlignmentPointingModel } from '../../../astronomy/coordinates/pointing'
 import { localSiderealTime } from '../../../astronomy/observer/location'
 import { formatTemporal, TIMEZONE } from '../../../astronomy/time/temporal'
 import { timeUnix } from '../../../astronomy/time/time'
@@ -45,10 +45,14 @@ export class MountSimulator extends DeviceSimulator {
 	readonly #guideRate = makeNumberVector('', 'GUIDE_RATE', 'Guiding Rate', MAIN_CONTROL, 'rw', ['GUIDE_RATE_WE', 'W/E Rate', 0.5, 0, 1, 0.1, '%.8f'], ['GUIDE_RATE_NS', 'N/E Rate', 0.5, 0, 1, 0.1, '%.0f'])
 	readonly #guideNS = makeNumberVector('', 'TELESCOPE_TIMED_GUIDE_NS', 'Guide N/S', MAIN_CONTROL, 'rw', ['TIMED_GUIDE_N', 'North (ms)', 0, 0, 60000, 1, '%.0f'], ['TIMED_GUIDE_S', 'South (ms)', 0, 0, 60000, 1, '%.0f'])
 	readonly #guideWE = makeNumberVector('', 'TELESCOPE_TIMED_GUIDE_WE', 'Guide W/E', MAIN_CONTROL, 'rw', ['TIMED_GUIDE_W', 'West (ms)', 0, 0, 60000, 1, '%.0f'], ['TIMED_GUIDE_E', 'East (ms)', 0, 0, 60000, 1, '%.0f'])
-	// Orientation of the polar axis relative to the true celestial pole. Signed arcseconds; the range
-	// spans ten degrees, far beyond any usable alignment, so gross misalignment can be exercised.
+	// Geometric imperfections of the mount, all signed arcseconds. The polar-axis range spans ten
+	// degrees, far beyond any usable alignment, so gross misalignment can be exercised.
+	// Two groups that act in different places. The polar-axis, cone and non-perpendicularity errors are
+	// optical geometry: they move the boresight away from where the axes mechanically point. The index
+	// errors are encoder zero offsets: they do not move the telescope at all, they change what the
+	// controller reports about it. Together they are the six basic TPoint terms, MA, ME, CH, NP, IH and ID.
 	// oxfmt-ignore
-	readonly #alignment = makeNumberVector('', 'MOUNT_ALIGNMENT', 'Alignment', SIMULATION, 'rw', ['POLAR_AZIMUTH_ERROR', 'Polar Azimuth Error (arcsec)', 0, -36000, 36000, 0.1, '%.3f'], ['POLAR_ALTITUDE_ERROR', 'Polar Altitude Error (arcsec)', 0, -36000, 36000, 0.1, '%.3f'])
+	readonly #alignment = makeNumberVector('', 'MOUNT_ALIGNMENT', 'Alignment', SIMULATION, 'rw', ['POLAR_AZIMUTH_ERROR', 'Polar Azimuth Error (arcsec)', 0, -36000, 36000, 0.1, '%.3f'], ['POLAR_ALTITUDE_ERROR', 'Polar Altitude Error (arcsec)', 0, -36000, 36000, 0.1, '%.3f'], ['CONE_ERROR', 'Cone Error (arcsec)', 0, -3600, 3600, 0.1, '%.3f'], ['AXIS_NON_ORTHOGONALITY', 'Axis Non-orthogonality (arcsec)', 0, -3600, 3600, 0.1, '%.3f'], ['RA_INDEX_ERROR', 'RA Index Error (arcsec)', 0, -3600, 3600, 0.1, '%.3f'], ['DEC_INDEX_ERROR', 'DEC Index Error (arcsec)', 0, -3600, 3600, 0.1, '%.3f'])
 	// Periodic error of the right-ascension worm: the time it takes to complete one revolution while
 	// tracking at the sidereal rate, in seconds, and the semi-amplitude of the resulting error, in
 	// arcseconds. A zero period or amplitude disables it.
@@ -286,30 +290,32 @@ export class MountSimulator extends DeviceSimulator {
 		return this.#wormPhase
 	}
 
-	// Geometric pointing model built from the configured alignment errors.
+	// Optical pointing model built from the configured geometric errors: how far the boresight sits
+	// from where the axes mechanically point.
 	//
-	// The polar-axis knob errors map onto the TPoint terms as MA = azimuth * cos(latitude) and
-	// ME = -altitude, plus a constant hour-angle term azimuth * sin(latitude). That last term is the
-	// addition Ralph Pass makes to the Trueblood and Genet formulation, and keeping it here reproduces
-	// `polarAlignmentError` exactly, which is the convention the rest of the project already uses and
-	// tests against the published two-star reference.
+	// Covers the polar-axis misalignment, the cone error and the non-perpendicularity of the two axes.
+	// The encoder index errors are deliberately absent: they change what the controller reports, not
+	// where the telescope looks, and are applied when the reported coordinate is derived instead.
 	//
 	// Returns the shared identity model when nothing is configured, so callers can skip the whole
 	// computation with a reference comparison.
 	get pointingModel(): EquatorialPointingModel {
-		const { POLAR_AZIMUTH_ERROR, POLAR_ALTITUDE_ERROR } = this.#alignment.elements
-		if (POLAR_AZIMUTH_ERROR.value === 0 && POLAR_ALTITUDE_ERROR.value === 0) return IDENTITY_EQUATORIAL_POINTING_MODEL
+		const { POLAR_AZIMUTH_ERROR, POLAR_ALTITUDE_ERROR, CONE_ERROR, AXIS_NON_ORTHOGONALITY } = this.#alignment.elements
+		if (POLAR_AZIMUTH_ERROR.value === 0 && POLAR_ALTITUDE_ERROR.value === 0 && CONE_ERROR.value === 0 && AXIS_NON_ORTHOGONALITY.value === 0) return IDENTITY_EQUATORIAL_POINTING_MODEL
 
-		const azimuthError = POLAR_AZIMUTH_ERROR.value * ASEC2RAD
-		const altitudeError = POLAR_ALTITUDE_ERROR.value * ASEC2RAD
-		const latitude = this.latitude
+		const model = polarAlignmentPointingModel(POLAR_AZIMUTH_ERROR.value * ASEC2RAD, POLAR_ALTITUDE_ERROR.value * ASEC2RAD, this.latitude)
+		return { ...model, coneError: CONE_ERROR.value * ASEC2RAD, axisNonPerpendicularity: AXIS_NON_ORTHOGONALITY.value * ASEC2RAD }
+	}
 
-		return {
-			...IDENTITY_EQUATORIAL_POINTING_MODEL,
-			polarAzimuthError: azimuthError * Math.cos(latitude),
-			polarAltitudeError: -altitudeError,
-			indexHourAngle: azimuthError * Math.sin(latitude),
-		}
+	// Encoder zero offsets, radians, added to the mechanical orientation to obtain what the controller
+	// reports. Not an optical effect: the telescope does not move, the bookkeeping is off, which is what
+	// a bad home sensor, an imperfect sync or a miscalibrated controller leave behind.
+	get #indexErrorRightAscension(): Angle {
+		return this.#alignment.elements.RA_INDEX_ERROR.value * ASEC2RAD
+	}
+
+	get #indexErrorDeclination(): Angle {
+		return this.#alignment.elements.DEC_INDEX_ERROR.value * ASEC2RAD
 	}
 
 	// Upper bound (radians) of how far the configured errors can displace the optical axis, over all
@@ -318,8 +324,15 @@ export class MountSimulator extends DeviceSimulator {
 	// amplitude to its own axis. Consumers use it to size buffers and margins without having to know
 	// the error model.
 	get pointingErrorBound(): Angle {
-		const { POLAR_AZIMUTH_ERROR, POLAR_ALTITUDE_ERROR } = this.#alignment.elements
-		return (Math.SQRT2 * (Math.abs(POLAR_AZIMUTH_ERROR.value) + Math.abs(POLAR_ALTITUDE_ERROR.value)) + this.#periodicError.elements.RA_AMPLITUDE.value) * ASEC2RAD
+		const { POLAR_AZIMUTH_ERROR, POLAR_ALTITUDE_ERROR, CONE_ERROR, AXIS_NON_ORTHOGONALITY, RA_INDEX_ERROR, DEC_INDEX_ERROR } = this.#alignment.elements
+		// The cone and non-perpendicularity terms scale as sec and tan of the declination, which cancel
+		// against the cos that converts a hour-angle error to an on-sky angle, so each is bounded by its
+		// own coefficient. The index errors count too, because consumers compare the boresight against
+		// the reported coordinate and the offsets sit between them.
+		const polar = Math.SQRT2 * (Math.abs(POLAR_AZIMUTH_ERROR.value) + Math.abs(POLAR_ALTITUDE_ERROR.value))
+		const geometry = Math.abs(CONE_ERROR.value) + Math.abs(AXIS_NON_ORTHOGONALITY.value)
+		const index = Math.abs(RA_INDEX_ERROR.value) + Math.abs(DEC_INDEX_ERROR.value)
+		return (polar + geometry + index + this.#periodicError.elements.RA_AMPLITUDE.value) * ASEC2RAD
 	}
 
 	// Current pier side derived from the pier-side property.
@@ -484,13 +497,17 @@ export class MountSimulator extends DeviceSimulator {
 	}
 
 	// Starts a time-based slew to the requested equatorial coordinate.
+	//
+	// The target is given in reported coordinates, which is what a client commands, so it is converted
+	// back through the encoder offsets into the mechanical orientation the axes must reach for the
+	// controller to end up reporting it.
 	goTo(rightAscension: Angle, declination: Angle) {
 		if (!this.isConnected || this.isParked) return
 
 		this.#clearManualMotion()
 		this.#clearPulseGuide()
 		this.#slewMode = 'GOTO'
-		this.#slewTarget = { rightAscension: normalizeAngle(rightAscension), declination: clampDeclination(declination) }
+		this.#slewTarget = { rightAscension: normalizeAngle(rightAscension - this.#indexErrorRightAscension), declination: clampDeclination(declination - this.#indexErrorDeclination) }
 		this.#setSlewing(true)
 		this.#setHoming(false)
 		this.#setParking(false)
@@ -498,15 +515,15 @@ export class MountSimulator extends DeviceSimulator {
 
 	// Applies a sync immediately without any slew time.
 	//
-	// Places the axes at the requested orientation rather than only correcting the controller's
-	// bookkeeping. A real sync leaves the mount where it is and shifts what it reports, which is how it
-	// absorbs a pointing error at one place in the sky while leaving it visible everywhere else; that
-	// belongs with the index-error terms and is deferred until they exist. Doing it here instead would
-	// strand the axes at the pole they home to, where declination is clamped and the geometry is
-	// degenerate, and only the reported coordinate would ever move.
+	// Places the axes so that the controller ends up reporting the requested coordinate, which with a
+	// configured index error is not the same orientation. A real sync leaves the mount where it is and
+	// only rewrites its bookkeeping, but here it is also how the simulated mount gets positioned at
+	// all: doing it the other way would strand the axes at the pole they home to, where declination is
+	// clamped and the geometry is degenerate. The index errors carry the "bad bookkeeping" behaviour
+	// instead, as a configured quantity rather than a side effect of syncing.
 	syncTo(rightAscension: Angle, declination: Angle) {
 		if (!this.isConnected) return
-		this.#setMechanical(rightAscension, declination)
+		this.#setMechanical(rightAscension - this.#indexErrorRightAscension, declination - this.#indexErrorDeclination)
 	}
 
 	// Slews to the configured home position.
@@ -865,15 +882,15 @@ export class MountSimulator extends DeviceSimulator {
 
 	// Moves the mechanical axes and republishes everything derived from them.
 	//
-	// The reported coordinate currently mirrors the mechanical orientation exactly. It is kept as a
-	// separate concept because that is where the index errors and the imperfect telemetry will apply,
-	// and because clients must never be handed the boresight: a frame whose true centre differs from
-	// the reported coordinate is precisely what lets plate solving measure the error.
+	// The reported coordinate is the mechanical orientation seen through the encoder zero offsets, so a
+	// configured index error makes the controller disagree with the axes without the telescope having
+	// moved. Clients are never handed the boresight: a frame whose true centre differs from the
+	// reported coordinate is precisely what lets plate solving measure the error.
 	#setMechanical(rightAscension: Angle, declination: Angle, notify: boolean = true) {
 		this.#mechanical.rightAscension = normalizeAngle(rightAscension)
 		this.#mechanical.declination = clampDeclination(declination)
-		this.#equatorialCoordinate.elements.RA.value = toHour(this.#mechanical.rightAscension)
-		this.#equatorialCoordinate.elements.DEC.value = toDeg(this.#mechanical.declination)
+		this.#equatorialCoordinate.elements.RA.value = toHour(normalizeAngle(this.#mechanical.rightAscension + this.#indexErrorRightAscension))
+		this.#equatorialCoordinate.elements.DEC.value = toDeg(clampDeclination(this.#mechanical.declination + this.#indexErrorDeclination))
 		const pierSideChanged = this.#updatePierSide()
 
 		if (notify && this.#utcTime - this.#notifyCoordinateLastTime >= this.minimumNotifyCoordinateInterval) {

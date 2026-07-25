@@ -1,7 +1,7 @@
 import { cirsToObserved, DEFAULT_REFRACTION_PARAMETERS, type RefractionParameters, refractedAltitude } from '../../astronomy/coordinates/astrometry'
 import type { HorizontalCoordinate } from '../../astronomy/coordinates/coordinate'
 import { eraS2c } from '../../astronomy/coordinates/erfa/erfa'
-import { MAX_POINTING_DECLINATION } from '../../astronomy/coordinates/pointing'
+import { applyEquatorialPointingError, polarAlignmentPointingModel } from '../../astronomy/coordinates/pointing'
 import { pixelScale } from '../../astronomy/formulas'
 import type { GeographicPosition } from '../../astronomy/observer/location'
 import { cirsRotationMatrix, gcrsToItrsRotationMatrix, type Time } from '../../astronomy/time/time'
@@ -44,20 +44,12 @@ function referencePoleAltitude(location: GeographicPosition, refraction: Refract
 // Based on formulas from Ralph Pass documented at https://rppass.com/align.pdf.
 // They are based on the book "Telescope Control" by Trueblood and Genet, p.111
 // Ralph added sin(latitude) term in the equation for the error in RA.
-// Equivalent to the MA/ME terms of the TPoint model in `pointing.ts`, with MA = azimuthError·cos φ
-// and ME = -altitudeError, plus the extra azimuthError·sin φ term noted above. The declination is
-// clamped to MAX_POINTING_DECLINATION for the same reason described there: tan δ diverges at the
-// pole and would otherwise return a meaningless right ascension.
+//
+// Expressed through the shared TPoint model in `astronomy/coordinates/pointing`, which carries the
+// same terms and clamps the declination away from the pole, where tan diverges and the hour-angle
+// error would otherwise come back meaningless.
 export function polarAlignmentError(rightAscension: Angle, declination: Angle, latitude: Angle, lst: Angle, azimuthError: Angle, altitudeError: Angle): readonly [Angle, Angle] {
-	const ha = lst - rightAscension
-	const cosHA = Math.cos(ha)
-	const sinHA = Math.sin(ha)
-	const tanDEC = Math.tan(clamp(declination, -MAX_POINTING_DECLINATION, MAX_POINTING_DECLINATION))
-	const cosLat = Math.cos(latitude)
-	const sinLat = Math.sin(latitude)
-	const dRA = -altitudeError * (tanDEC * sinHA) + azimuthError * (sinLat - cosLat * tanDEC * cosHA)
-	const dDEC = -altitudeError * cosHA + azimuthError * cosLat * sinHA
-	return [rightAscension - dRA, declination + dDEC]
+	return applyEquatorialPointingError(rightAscension, declination, lst, polarAlignmentPointingModel(azimuthError, altitudeError, latitude))
 }
 
 // Computes the initial polar-alignment error from three plate-solved ICRF points (each [RA, Dec] in
