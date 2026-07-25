@@ -24,11 +24,12 @@ import { DeviceInterfaceType, type FrameType, type GuideDirection } from '../dev
 import type { FocuserManager, GuideOutputManager, MountManager, RotatorManager, WheelManager } from '../manager'
 import { findOnSwitch, makeBlobVector, makeNumberVector, makeSwitchVector, makeTextVector, type NewNumberVector, type NewSwitchVector, type NewTextVector } from '../types'
 import type { ClientSimulator } from './client'
-import { CAMERA_AMBIENT_TEMPERATURE, CAMERA_BLOB_PADDING, CAMERA_DEFAULT_TARGET_TEMPERATURE, CAMERA_MAX_BIN, CAMERA_MAX_EXPOSURE, CAMERA_MIN_EXPOSURE, CAMERA_PIXEL_SIZE, CAMERA_SCENE_SEED, CAMERA_SENSOR_HEIGHT, CAMERA_SENSOR_WIDTH, GENERAL_INFO, MAIN_CONTROL, SIMULATION, TICK_INTERVAL_MS } from './constants'
+// oxfmt-ignore
+import { CAMERA_AMBIENT_TEMPERATURE, CAMERA_BLOB_PADDING, CAMERA_DEFAULT_TARGET_TEMPERATURE, CAMERA_MAX_BIN, CAMERA_MAX_EXPOSURE, CAMERA_MIN_EXPOSURE, CAMERA_PIXEL_SIZE, CAMERA_SCENE_MARGIN, CAMERA_SCENE_SEED, CAMERA_SENSOR_HEIGHT, CAMERA_SENSOR_WIDTH, GENERAL_INFO, MAIN_CONTROL, SIMULATION, TICK_INTERVAL_MS } from './constants'
 import { DeviceSimulator } from './device'
 import { FocuserSimulator } from './focuser'
 import type { CatalogSource, CatalogSourceStar, CatalogSourceType, DeviceSimulatorOptions, ReadoutMode, SimulatorProperty, TransferFormat } from './types'
-import { applyExclusiveSwitchValues, applyMultiSwitchValues, applyNumberVectorValues, periodicErrorOffset } from './util'
+import { applyExclusiveSwitchValues, applyMultiSwitchValues, applyNumberVectorValues, periodicErrorOffset, pointingOffsetInPixels } from './util'
 
 // Simulated astronomical camera acquisition, cooling, guiding, and synthetic image generation.
 
@@ -1037,9 +1038,10 @@ export class CameraSimulator extends DeviceSimulator {
 		return resolveSyntheticAberration(config)
 	}
 
-	// Rotates the master catalog on the full sensor, then applies aberration, subframe, and binning.
+	// Shifts the master catalog by the pointing error, rotates it on the full sensor, then applies
+	// aberration, subframe, and binning.
 	async #collectFrameStars(exposureTime: number, rotatorAngle: number) {
-		const stars = await this.#ensureCatalog(exposureTime)
+		const stars = await this.#ensureCatalog()
 		const frameX = this.#frame.elements.X.value
 		const frameY = this.#frame.elements.Y.value
 		const frameWidth = this.#frame.elements.WIDTH.value
@@ -1063,12 +1065,22 @@ export class CameraSimulator extends DeviceSimulator {
 		const annularPaddingY = annularRadius + annularSoftness * Math.sqrt(binY / binX)
 		const aberrationResult: SyntheticStarAberration = { defocus: 0, focusOffset: 0, covarianceXX: 0, covarianceXY: 0, covarianceYY: 0, coma: 0, comaTheta: 0 }
 
+		// The pointing error moves the sky relative to the sensor, so it is applied before the rotator
+		// angle, which moves the sensor relative to the sky.
+		const pointingOffset: Point = { x: 0, y: 0 }
+		const shift = this.#pointingOffsetInPixels(arcsec(pixelScale(CAMERA_PIXEL_SIZE, this.telescopeFocalLength)), exposureTime, pointingOffset)
+
 		for (let i = 0; i < stars.length; i++) {
 			const star = stars[i]
 
 			if (star === undefined) continue
 			let sensorX = star.x
 			let sensorY = star.y
+
+			if (shift) {
+				sensorX += pointingOffset.x
+				sensorY += pointingOffset.y
+			}
 
 			if (rotate) {
 				const dx = sensorX - centerX
@@ -1111,30 +1123,23 @@ export class CameraSimulator extends DeviceSimulator {
 
 	// Rebuilds the deterministic catalog only when scene parameters change.
 	//
-	// The pointing errors are sampled at the middle of the exposure, not at its end: they are applied
-	// here as an instantaneous transformation, and the mid-exposure value is the one that best
-	// represents the whole integration window.
-	async #ensureCatalog(exposureTime: number) {
-		const { elements } = this.#telescopeEffects
+	// The catalog is queried and cached around the mount's nominal (reported) coordinate, never around
+	// the perturbed one. Keying the cache on a coordinate that the periodic error moves every frame
+	// would defeat the cache entirely and, for a network-backed source, issue one query per exposure.
+	// The pointing error is applied later as a pixel displacement, in #pointingOffsetInPixels.
+	async #ensureCatalog() {
 		const mount = this.activeMount
 		let centerRightAscension = mount?.equatorialCoordinate.rightAscension
 		let centerDeclination = mount?.equatorialCoordinate.declination
 
 		if (mount !== undefined) {
-			const midExposure = Date.now() - Math.trunc(exposureTime * 500)
-			const latitude = mount.geographicCoordinate.latitude
-			const longitude = mount.geographicCoordinate.longitude
-
-			if (elements.PAE_AZ.value !== 0 || elements.PAE_AL.value !== 0) {
-				;[centerRightAscension, centerDeclination] = polarAlignmentError(centerRightAscension!, centerDeclination!, latitude, this.#siderealTime(midExposure, longitude), elements.PAE_AZ.value * ASEC2RAD, elements.PAE_AL.value * ASEC2RAD)
-			}
-
-			;[centerRightAscension, centerDeclination] = this.#applyTelescopePeriodicError(centerRightAscension!, centerDeclination!, midExposure)
-			;[centerRightAscension, centerDeclination] = equatorialToJ2000(centerRightAscension, centerDeclination)
+			;[centerRightAscension, centerDeclination] = equatorialToJ2000(centerRightAscension!, centerDeclination!)
 		}
 
 		const ps = arcsec(pixelScale(CAMERA_PIXEL_SIZE, this.telescopeFocalLength))
-		const radius = Math.hypot(this.sensorWidth, this.sensorHeight) * ps * 0.5
+		// Includes the scene margin so a pointing error that shifts the field still finds catalog stars
+		// on the trailing edge.
+		const radius = Math.hypot(this.sensorWidth + 2 * CAMERA_SCENE_MARGIN, this.sensorHeight + 2 * CAMERA_SCENE_MARGIN) * ps * 0.5
 		const key = this.#makeCatalogKey(centerRightAscension, centerDeclination, radius)
 		if (this.#catalog && !this.#catalogDirty && this.#catalogKey === key) return this.#catalog
 
@@ -1162,7 +1167,9 @@ export class CameraSimulator extends DeviceSimulator {
 
 			const x = halfWidth - point.x / pixelScale
 			const y = halfHeight - point.y / pixelScale
-			if (x < 0 || x >= sensorWidth || y < 0 || y >= sensorHeight) return undefined
+			// Kept to the same margin as the synthetic scene, so a pointing error can pull stars in
+			// from outside the sensor instead of exposing an empty edge.
+			if (x < -CAMERA_SCENE_MARGIN || x >= sensorWidth + CAMERA_SCENE_MARGIN || y < -CAMERA_SCENE_MARGIN || y >= sensorHeight + CAMERA_SCENE_MARGIN) return undefined
 			point.x = x
 			point.y = y
 			Object.assign(s, point)
@@ -1178,10 +1185,15 @@ export class CameraSimulator extends DeviceSimulator {
 	}
 
 	// Generates a deterministic in-memory star field.
+	//
+	// The field extends CAMERA_SCENE_MARGIN pixels beyond every sensor edge so that a pointing error
+	// shifting the scene brings real stars in from outside instead of leaving an empty border. The
+	// star count grows with the enlarged area, which keeps the on-sensor density at the configured
+	// value.
 	#randomSource() {
 		const random = mulberry32(this.#scene.elements.SCENE_SEED.value >>> 0)
-		const width = this.sensorWidth
-		const height = this.sensorHeight
+		const width = this.sensorWidth + 2 * CAMERA_SCENE_MARGIN
+		const height = this.sensorHeight + 2 * CAMERA_SCENE_MARGIN
 		const density = this.#scene.elements.STAR_DENSITY.value
 		const count = Math.max(1, Math.trunc(width * height * density))
 		const minHfd = this.#scene.elements.HFD_MIN.value
@@ -1196,8 +1208,8 @@ export class CameraSimulator extends DeviceSimulator {
 			const brightness = 1 - random()
 
 			stars[i] = {
-				x: random() * maxWidth,
-				y: random() * maxHeight,
+				x: random() * maxWidth - CAMERA_SCENE_MARGIN,
+				y: random() * maxHeight - CAMERA_SCENE_MARGIN,
 				flux: minFlux + (maxFlux - minFlux) * brightness ** 6,
 				hfd: minHfd + (maxHfd - minHfd) * random(),
 				snr: 12 + brightness * 180,
@@ -1235,16 +1247,44 @@ export class CameraSimulator extends DeviceSimulator {
 		this.#setPulsing(false)
 	}
 
-	// Applies the configurable mount periodic error model as an absolute offset at `utcTime`.
+	// Direction the optical axis really points, given the mount's nominal coordinate and the configured
+	// polar-alignment and periodic errors, evaluated at `utcTime` (UTC milliseconds).
 	//
-	// The offset is absolute rather than incremental: the coordinate this receives is re-read from the
-	// mount on every call and therefore never carries the previous offset, so adding only the delta
-	// would collapse the error to the difference between consecutive evaluations.
-	#applyTelescopePeriodicError(rightAscension: Angle, declination: Angle, utcTime: number) {
+	// The periodic offsets are absolute, not incremental: the nominal coordinate is re-read from the
+	// mount on every call and never carries a previous offset, so adding only the delta would collapse
+	// the error to the difference between consecutive evaluations.
+	#boresight(rightAscension: Angle, declination: Angle, latitude: Angle, longitude: Angle, utcTime: number) {
 		const { elements } = this.#telescopeEffects
+
+		if (elements.PAE_AZ.value !== 0 || elements.PAE_AL.value !== 0) {
+			;[rightAscension, declination] = polarAlignmentError(rightAscension, declination, latitude, this.#siderealTime(utcTime, longitude), elements.PAE_AZ.value * ASEC2RAD, elements.PAE_AL.value * ASEC2RAD)
+		}
+
 		rightAscension += periodicErrorOffset(elements.PE_WE_PERIOD.value, elements.PE_WE_AMPLITUDE.value, utcTime)
 		declination += periodicErrorOffset(elements.PE_NS_PERIOD.value, elements.PE_NS_AMPLITUDE.value, utcTime)
 		return [rightAscension, declination] as const
+	}
+
+	// Displacement, in unbinned sensor pixels, that the pointing errors introduce in the rendered field.
+	//
+	// `pixelScale` is radians per unbinned pixel and `exposureTime` is seconds. The errors are sampled
+	// at the middle of the exposure, which is the representative instant for an instantaneous
+	// transformation standing in for an integration over the whole window. Writes into `o` and returns
+	// whether any displacement applies; `o` is left untouched when it does not.
+	#pointingOffsetInPixels(pixelScale: Angle, exposureTime: number, o: Point) {
+		const mount = this.activeMount
+		if (mount === undefined) return false
+
+		const { elements } = this.#telescopeEffects
+		if (elements.PAE_AZ.value === 0 && elements.PAE_AL.value === 0 && elements.PE_WE_AMPLITUDE.value === 0 && elements.PE_NS_AMPLITUDE.value === 0) return false
+
+		const midExposure = Date.now() - Math.trunc(exposureTime * 500)
+		const { rightAscension, declination } = mount.equatorialCoordinate
+		const [boresightRightAscension, boresightDeclination] = this.#boresight(rightAscension, declination, mount.geographicCoordinate.latitude, mount.geographicCoordinate.longitude, midExposure)
+
+		// Computed in the current equatorial frame: both directions receive the same J2000 rotation, so
+		// it cancels in a difference of a few arcseconds.
+		return pointingOffsetInPixels(rightAscension, declination, boresightRightAscension, boresightDeclination, pixelScale, o)
 	}
 
 	get cfaPattern() {

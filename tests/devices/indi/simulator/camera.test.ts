@@ -381,6 +381,98 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		}
 	}, 5000)
 
+	test('displaces the synthetic scene by the configured pointing error', async () => {
+		const handler = new IndiClientHandlerSet()
+		const mountManager = new MountManager()
+		const cameraManager = new CameraManager()
+		using client = new ClientSimulator('camera.pointing.error.simulator', handler)
+		const frameReceiver = new CameraFrameReceiver()
+
+		handler.add(mountManager)
+		handler.add(cameraManager)
+
+		cameraManager.addHandler(frameReceiver)
+
+		// A single star exactly at the queried centre lands on the sensor centre when the mount points
+		// perfectly, so any displacement of the brightest pixel is the pointing error itself.
+		const catalogProvider: CatalogSource = (rightAscension, declination) => [{ snr: 200, hfd: 2, flux: 4000, rightAscension, declination }]
+
+		using mountSimulator = new MountSimulator('Mount Simulator', client)
+		using cameraSimulator = new CameraSimulator('Camera Simulator', client, { mountManager, catalogSources: { CENTERED: catalogProvider } })
+		const mount = mountManager.get(client, mountSimulator.name)!
+		const camera = cameraManager.get(client, cameraSimulator.name)!
+
+		mountSimulator.connect()
+		cameraSimulator.connect()
+		await waitUntil(() => mount.connected && camera.connected)
+
+		// Away from the pole, where the polar-alignment model is well conditioned.
+		mountSimulator.syncTo(hour(5), deg(20))
+		await waitUntil(() => closeTo(mount.equatorialCoordinate.declination, deg(20), 1e-9))
+
+		cameraManager.snoop(camera, mount)
+		await waitUntil(() => cameraManager.properties.get(camera)?.ACTIVE_DEVICES?.elements.ACTIVE_TELESCOPE.value === mount.name)
+
+		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_NOISE_FEATURES', elements: { SKY_ENABLED: false, LIGHT_POLLUTION_ENABLED: false } })
+
+		try {
+			// Baseline with perfect pointing: the star sits at the centre of the sensor.
+			client.sendSwitch({ device: camera.name, name: 'SIMULATOR_CATALOG_SOURCE', elements: { CENTERED: true } })
+			await waitUntil(() => cameraManager.properties.get(camera)?.SIMULATOR_CATALOG_SOURCE?.elements.CENTERED.value === true)
+
+			cameraSimulator.startExposure(0.05)
+			await waitUntil(() => frameReceiver.length > 0, 10000, 50)
+			const centered = await readImageFromBuffer(frameReceiver.lastFrame)
+			const [centeredX, centeredY] = brightestPixel(centered!.raw, centered!.header.NAXIS1 as number, centered!.metadata.channels)
+
+			expect(centeredX).toBeCloseTo((1280 - 1) * 0.5, -1)
+			expect(centeredY).toBeCloseTo((1024 - 1) * 0.5, -1)
+
+			// A large polar-alignment error must move the star measurably. The exact displacement
+			// depends on the hour angle at render time, so only its presence and bound are asserted.
+			client.sendNumber({ device: camera.name, name: 'TELESCOPE_EFFECTS', elements: { PAE_AZ: 1800, PAE_AL: 1800 } })
+			await waitUntil(() => cameraManager.properties.get(camera)?.TELESCOPE_EFFECTS?.elements.PAE_AZ.value === 1800)
+
+			cameraSimulator.startExposure(0.05)
+			await waitUntil(() => frameReceiver.length > 1, 10000, 50)
+			const shifted = await readImageFromBuffer(frameReceiver.lastFrame)
+			const [shiftedX, shiftedY] = brightestPixel(shifted!.raw, shifted!.header.NAXIS1 as number, shifted!.metadata.channels)
+
+			const displacement = Math.hypot(shiftedX - centeredX, shiftedY - centeredY)
+			expect(displacement).toBeGreaterThan(5)
+			expect(displacement).toBeLessThan(1400)
+
+			// The built-in RANDOM scene must react to the same error. It generates stars directly in
+			// pixel space and ignores the catalog centre, so before the displacement moved to the
+			// projection stage it was the one source the pointing errors could not reach at all.
+			client.sendSwitch({ device: camera.name, name: 'SIMULATOR_CATALOG_SOURCE', elements: { RANDOM: true } })
+			await waitUntil(() => cameraManager.properties.get(camera)?.SIMULATOR_CATALOG_SOURCE?.elements.RANDOM.value === true)
+			client.sendNumber({ device: camera.name, name: 'TELESCOPE_EFFECTS', elements: { PAE_AZ: 0, PAE_AL: 0 } })
+			await waitUntil(() => cameraManager.properties.get(camera)?.TELESCOPE_EFFECTS?.elements.PAE_AZ.value === 0)
+
+			cameraSimulator.startExposure(0.05)
+			await waitUntil(() => frameReceiver.length > 2, 10000, 50)
+			const randomAligned = await readImageFromBuffer(frameReceiver.lastFrame)
+
+			client.sendNumber({ device: camera.name, name: 'TELESCOPE_EFFECTS', elements: { PAE_AZ: 1800, PAE_AL: 1800 } })
+			await waitUntil(() => cameraManager.properties.get(camera)?.TELESCOPE_EFFECTS?.elements.PAE_AZ.value === 1800)
+
+			cameraSimulator.startExposure(0.05)
+			await waitUntil(() => frameReceiver.length > 3, 10000, 50)
+			const randomShifted = await readImageFromBuffer(frameReceiver.lastFrame)
+
+			let changed = 0
+			for (let i = 0; i < randomAligned!.raw.length; i++) {
+				if (randomAligned!.raw[i] !== randomShifted!.raw[i]) changed++
+			}
+
+			expect(changed).toBeGreaterThan(0)
+		} finally {
+			cameraSimulator.dispose()
+			mountSimulator.dispose()
+		}
+	}, 15000)
+
 	test('renders a defocused annular collimation pattern with anisotropic binning', async () => {
 		const handler = new IndiClientHandlerSet()
 		const mountManager = new MountManager()
