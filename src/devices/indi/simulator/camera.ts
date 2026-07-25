@@ -22,7 +22,7 @@ import type { FocuserManager, GuideOutputManager, MountManager, RotatorManager, 
 import { findOnSwitch, makeBlobVector, makeNumberVector, makeSwitchVector, makeTextVector, type NewNumberVector, type NewSwitchVector, type NewTextVector } from '../types'
 import type { ClientSimulator } from './client'
 // oxfmt-ignore
-import { CAMERA_AMBIENT_TEMPERATURE, CAMERA_BLOB_PADDING, CAMERA_DEFAULT_TARGET_TEMPERATURE, CAMERA_MAX_BIN, CAMERA_MAX_EXPOSURE, CAMERA_MAX_SCENE_MARGIN, CAMERA_MIN_EXPOSURE, CAMERA_PIXEL_SIZE, CAMERA_SCENE_SEED, CAMERA_SENSOR_HEIGHT, CAMERA_SENSOR_WIDTH, GENERAL_INFO, MAIN_CONTROL, SIMULATION, TICK_INTERVAL_MS } from './constants'
+import { CAMERA_AMBIENT_TEMPERATURE, CAMERA_BLOB_PADDING, CAMERA_DEFAULT_TARGET_TEMPERATURE, CAMERA_MAX_BIN, CAMERA_MAX_EXPOSURE, CAMERA_MAX_SCENE_MARGIN, CAMERA_MIN_EXPOSURE, CAMERA_PIXEL_SIZE, CAMERA_SCENE_SEED, CAMERA_SENSOR_HEIGHT, CAMERA_SENSOR_WIDTH, GENERAL_INFO, MAIN_CONTROL, MAX_TRAJECTORY_SAMPLES, SIMULATION, TICK_INTERVAL_MS, TRAJECTORY_PIXELS_PER_SAMPLE, TRAJECTORY_PROBE_SAMPLES } from './constants'
 import { DeviceSimulator } from './device'
 import { FocuserSimulator } from './focuser'
 import { MountSimulator } from './mount'
@@ -30,6 +30,10 @@ import type { CatalogSource, CatalogSourceStar, CatalogSourceType, DeviceSimulat
 import { applyExclusiveSwitchValues, applyMultiSwitchValues, applyNumberVectorValues, pointingOffsetInPixels } from './util'
 
 // Simulated astronomical camera acquisition, cooling, guiding, and synthetic image generation.
+
+// A single, stationary trajectory sample at the origin. Used when there is no simulated mount to
+// integrate over, so the rendering path always has exactly one offset pair to work with.
+const NO_EXPOSURE_OFFSET = new Float64Array(2)
 
 // Camera simulator options: star catalog sources plus the related device managers used to read the
 // simulated mount/guider/focuser/rotator/wheel state when rendering a frame.
@@ -172,6 +176,10 @@ export class CameraSimulator extends DeviceSimulator {
 	#catalogDirty = true
 	#pulseNorthSouthUntil = 0
 	#pulseWestEastUntil = 0
+	// Scratch for the exposure trajectory, reused across frames: it holds boresight pairs first and the
+	// pixel offsets they convert to afterwards, so a rendering allocates nothing for it.
+	readonly #trajectoryBuffer = new Float64Array(MAX_TRAJECTORY_SAMPLES * 2)
+	readonly #trajectoryOffset: Point = { x: 0, y: 0 }
 
 	readonly #mountManager?: MountManager
 	readonly #focuserManager?: FocuserManager
@@ -1060,52 +1068,57 @@ export class CameraSimulator extends DeviceSimulator {
 		const annularPaddingY = annularRadius + annularSoftness * Math.sqrt(binY / binX)
 		const aberrationResult: SyntheticStarAberration = { defocus: 0, focusOffset: 0, covarianceXX: 0, covarianceXY: 0, covarianceYY: 0, coma: 0, comaTheta: 0 }
 
-		// The pointing error moves the sky relative to the sensor, so it is applied before the rotator
-		// angle, which moves the sensor relative to the sky.
-		const pointingOffset: Point = { x: 0, y: 0 }
-		const shift = this.#pointingOffsetInPixels(arcsec(pixelScale(CAMERA_PIXEL_SIZE, this.telescopeFocalLength)), exposureTime, pointingOffset)
+		// Where the field sat at each instant of the exposure, in pixels relative to the catalog centre.
+		// The sky moves relative to the sensor, so this is applied before the rotator angle, which moves
+		// the sensor relative to the sky.
+		const offsets = this.#exposureOffsets(arcsec(pixelScale(CAMERA_PIXEL_SIZE, this.telescopeFocalLength)), exposureTime)
+		const sampleCount = offsets.length / 2
+		// Splitting a star across the trajectory must not create light: each sample carries its share of
+		// the total, so the integrated flux is the same whether the field moved or stood still.
+		const sampleFlux = (gainFactor * exposureScale) / sampleCount
+		const sampleSnr = Math.sqrt(Math.max(exposureScale, 0.01))
 
 		for (let i = 0; i < stars.length; i++) {
 			const star = stars[i]
 
 			if (star === undefined) continue
-			let sensorX = star.x
-			let sensorY = star.y
 
-			if (shift) {
-				sensorX += pointingOffset.x
-				sensorY += pointingOffset.y
+			for (let sample = 0; sample < sampleCount; sample++) {
+				let sensorX = star.x + offsets[sample * 2]
+				let sensorY = star.y + offsets[sample * 2 + 1]
+
+				if (rotate) {
+					const dx = sensorX - centerX
+					const dy = sensorY - centerY
+					sensorX = centerX + dx * cosAngle - dy * sinAngle
+					sensorY = centerY + dx * sinAngle + dy * cosAngle
+				}
+
+				if (sensorX < frameX - annularPaddingX || sensorX >= frameX + frameWidth + annularPaddingX || sensorY < frameY - annularPaddingY || sensorY >= frameY + frameHeight + annularPaddingY) continue
+				if (aberration.enabled) evaluateSyntheticAberration(sensorX, sensorY, this.sensorWidth, this.sensorHeight, currentFocus, bestFocus, aberration, aberrationResult)
+				const comaX = aberration.enabled ? Math.cos(aberrationResult.comaTheta) / binX : 0
+				const comaY = aberration.enabled ? Math.sin(aberrationResult.comaTheta) / binY : 0
+				const projectedStar: AstronomicalImageStar = {
+					x: (sensorX - frameX) / binX,
+					y: (sensorY - frameY) / binY,
+					flux: star.flux * sampleFlux,
+					hfd: star.hfd,
+					// Not divided by the sample count: the signal-to-noise ratio sets the width of the
+					// point spread function, not how much light it carries.
+					snr: star.snr * sampleSnr,
+					colorIndex: star.colorIndex,
+					scaleX: 1 / binX,
+					scaleY: 1 / binY,
+					defocus: aberration.focusEnabled ? aberrationResult.defocus : undefined,
+					covarianceXX: aberration.enabled ? aberrationResult.covarianceXX / (binX * binX) : undefined,
+					covarianceXY: aberration.enabled ? aberrationResult.covarianceXY / (binX * binY) : undefined,
+					covarianceYY: aberration.enabled ? aberrationResult.covarianceYY / (binY * binY) : undefined,
+					coma: aberration.enabled ? aberrationResult.coma : undefined,
+					comaTheta: aberration.enabled && aberrationResult.coma > 0 ? Math.atan2(comaY, comaX) : undefined,
+				}
+
+				projected.push(projectedStar)
 			}
-
-			if (rotate) {
-				const dx = sensorX - centerX
-				const dy = sensorY - centerY
-				sensorX = centerX + dx * cosAngle - dy * sinAngle
-				sensorY = centerY + dx * sinAngle + dy * cosAngle
-			}
-
-			if (sensorX < frameX - annularPaddingX || sensorX >= frameX + frameWidth + annularPaddingX || sensorY < frameY - annularPaddingY || sensorY >= frameY + frameHeight + annularPaddingY) continue
-			if (aberration.enabled) evaluateSyntheticAberration(sensorX, sensorY, this.sensorWidth, this.sensorHeight, currentFocus, bestFocus, aberration, aberrationResult)
-			const comaX = aberration.enabled ? Math.cos(aberrationResult.comaTheta) / binX : 0
-			const comaY = aberration.enabled ? Math.sin(aberrationResult.comaTheta) / binY : 0
-			const projectedStar: AstronomicalImageStar = {
-				x: (sensorX - frameX) / binX,
-				y: (sensorY - frameY) / binY,
-				flux: star.flux * gainFactor * exposureScale,
-				hfd: star.hfd,
-				snr: star.snr * Math.sqrt(Math.max(exposureScale, 0.01)),
-				colorIndex: star.colorIndex,
-				scaleX: 1 / binX,
-				scaleY: 1 / binY,
-				defocus: aberration.focusEnabled ? aberrationResult.defocus : undefined,
-				covarianceXX: aberration.enabled ? aberrationResult.covarianceXX / (binX * binX) : undefined,
-				covarianceXY: aberration.enabled ? aberrationResult.covarianceXY / (binX * binY) : undefined,
-				covarianceYY: aberration.enabled ? aberrationResult.covarianceYY / (binY * binY) : undefined,
-				coma: aberration.enabled ? aberrationResult.coma : undefined,
-				comaTheta: aberration.enabled && aberrationResult.coma > 0 ? Math.atan2(comaY, comaX) : undefined,
-			}
-
-			projected.push(projectedStar)
 		}
 
 		return projected
@@ -1256,24 +1269,60 @@ export class CameraSimulator extends DeviceSimulator {
 		return Math.min(CAMERA_MAX_SCENE_MARGIN, Math.ceil(bound / pixelScale))
 	}
 
-	// Displacement, in unbinned sensor pixels, that the mount's pointing error introduces in the
-	// rendered field.
+	// Where the field sat, in unbinned sensor pixels relative to the catalog centre, at each instant the
+	// exposure is integrated over.
 	//
-	// `pixelScale` is radians per unbinned pixel and `exposureTime` is seconds. The boresight is
-	// sampled at the middle of the exposure, which is the representative instant for an instantaneous
-	// transformation standing in for an integration over the whole window, and on the mount's own
-	// simulated clock rather than the wall clock, so that changing TIME_UTC moves the field. Writes
-	// into `o` and returns whether any displacement applies; `o` is left untouched when it does not.
-	#pointingOffsetInPixels(pixelScale: Angle, exposureTime: number, o: Point) {
+	// Returns pairs of x and y offsets. A field that barely moves gets a single pair, taken at the
+	// middle of the exposure; one that drifts or trails gets enough pairs to keep consecutive positions
+	// within TRAJECTORY_PIXELS_PER_SAMPLE of each other, so the trail comes out continuous rather than
+	// as a row of separate dots. Without a simulated mount there is nothing to integrate and the single
+	// pair is zero.
+	//
+	// The sample count is decided from a coarse probe of the trajectory rather than from its endpoints,
+	// because a periodic error can swing well away and come back to where it started. `pixelScale` is
+	// radians per unbinned pixel and `exposureTime` is seconds.
+	#exposureOffsets(pixelScale: Angle, exposureTime: number) {
 		const simulator = this.activeMountSimulator
-		if (simulator === undefined) return false
+		if (simulator === undefined) return NO_EXPOSURE_OFFSET
 
-		const midExposure = simulator.utcTime - Math.trunc(exposureTime * 500)
-		const { rightAscension, declination } = simulator.boresightAt(midExposure)
+		const endTime = simulator.utcTime
+		const startTime = endTime - Math.trunc(exposureTime * 1000)
+		const probes = simulator.sampleBoresightTrajectory(startTime, endTime, TRAJECTORY_PROBE_SAMPLES, this.#trajectoryBuffer)
+		if (probes === 0) return NO_EXPOSURE_OFFSET
 
-		// Computed in the current equatorial frame: both directions receive the same J2000 rotation, so
-		// it cancels in a difference of a few arcseconds.
-		return pointingOffsetInPixels(simulator.rightAscension, simulator.declination, rightAscension, declination, pixelScale, o)
+		const path = this.#trajectoryToOffsets(simulator, pixelScale, probes)
+		let length = 0
+		for (let i = 1; i < probes; i++) length += Math.hypot(path[i * 2] - path[i * 2 - 2], path[i * 2 + 1] - path[i * 2 - 1])
+
+		const count = clamp(Math.ceil(length / TRAJECTORY_PIXELS_PER_SAMPLE) + 1, 1, MAX_TRAJECTORY_SAMPLES)
+		if (count === TRAJECTORY_PROBE_SAMPLES) return path.subarray(0, probes * 2)
+
+		const samples = simulator.sampleBoresightTrajectory(startTime, endTime, count, this.#trajectoryBuffer)
+		if (samples === 0) return NO_EXPOSURE_OFFSET
+		return this.#trajectoryToOffsets(simulator, pixelScale, samples).subarray(0, samples * 2)
+	}
+
+	// Converts the boresight samples held in the trajectory buffer into field offsets in pixels, in
+	// place. Each offset is measured against the mount's reported coordinate, which is what the catalog
+	// was built around.
+	//
+	// Computed in the current equatorial frame: both directions receive the same J2000 rotation, so it
+	// cancels in a difference of a few arcseconds.
+	#trajectoryToOffsets(simulator: MountSimulator, pixelScale: Angle, count: number) {
+		const buffer = this.#trajectoryBuffer
+		const offset = this.#trajectoryOffset
+
+		for (let i = 0; i < count; i++) {
+			if (pointingOffsetInPixels(simulator.rightAscension, simulator.declination, buffer[i * 2], buffer[i * 2 + 1], pixelScale, offset)) {
+				buffer[i * 2] = offset.x
+				buffer[i * 2 + 1] = offset.y
+			} else {
+				buffer[i * 2] = 0
+				buffer[i * 2 + 1] = 0
+			}
+		}
+
+		return buffer
 	}
 
 	get cfaPattern() {

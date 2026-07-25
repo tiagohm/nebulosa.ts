@@ -16,6 +16,20 @@ export const MAX_GUIDE_RATE = 1
 export const MAX_QUEUED_GUIDE_PULSES = 8
 // Seed of the deterministic generator used for guide-latency jitter, so sessions are reproducible.
 export const GUIDE_JITTER_SEED = 0x5f3a1c27
+// Boresight samples a mount keeps for exposure integration. At the default tick this covers a bit
+// over three minutes, which spans a typical sub-exposure; a longer one trails only over the retained
+// window. Three Float64Array of this length cost about 49 KB per simulated mount.
+export const MOUNT_TRAJECTORY_CAPACITY = 2048
+// Positions probed to estimate how far the field moves during an exposure, before deciding how finely
+// to integrate it. More than the two endpoints, so that a periodic error wiggling back to where it
+// started is not mistaken for a stationary field.
+export const TRAJECTORY_PROBE_SAMPLES = 8
+// Most positions an exposure is integrated over. Bounds the cost of a badly drifting mount, at the
+// price of under-resolving a trail longer than half this many pixels.
+export const MAX_TRAJECTORY_SAMPLES = 64
+// Field displacement, in unbinned pixels, that each integration sample is allowed to cover. Half a
+// pixel keeps a trail continuous without over-sampling a field that barely moves.
+export const TRAJECTORY_PIXELS_PER_SAMPLE = 0.5
 // Multiplier applied to the selected manual slew rate when running an automatic goto, home or park,
 // so that a commanded slew is faster than nudging the axes by hand.
 export const SLEW_SPEED_FACTOR = 3

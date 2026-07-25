@@ -500,6 +500,102 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		}
 	}, 15000)
 
+	test('conserves flux and trails the stars when the field moves during the exposure', async () => {
+		const handler = new IndiClientHandlerSet()
+		const mountManager = new MountManager()
+		const cameraManager = new CameraManager()
+		using client = new ClientSimulator('camera.trailing.simulator', handler)
+		const frameReceiver = new CameraFrameReceiver()
+
+		handler.add(mountManager)
+		handler.add(cameraManager)
+
+		cameraManager.addHandler(frameReceiver)
+
+		// Faint enough that no pixel saturates even when the whole exposure lands on one spot, so the
+		// totals stay linear and the two frames are comparable.
+		const catalogProvider: CatalogSource = (rightAscension, declination) => [{ snr: 200, hfd: 2, flux: 0.05, rightAscension, declination }]
+
+		using mountSimulator = new MountSimulator('Mount Simulator', client)
+		using cameraSimulator = new CameraSimulator('Camera Simulator', client, { mountManager, catalogSources: { CENTERED: catalogProvider } })
+		const mount = mountManager.get(client, mountSimulator.name)!
+		const camera = cameraManager.get(client, cameraSimulator.name)!
+
+		mountSimulator.connect()
+		cameraSimulator.connect()
+		await waitUntil(() => mount.connected && camera.connected)
+
+		mountSimulator.syncTo(hour(5), deg(20))
+		mountSimulator.setTrackingEnabled(true)
+		await waitUntil(() => closeTo(mount.equatorialCoordinate.declination, deg(20), 1e-9))
+
+		cameraManager.snoop(camera, mount)
+		await waitUntil(() => cameraManager.properties.get(camera)?.ACTIVE_DEVICES?.elements.ACTIVE_TELESCOPE.value === mount.name)
+
+		// A bare, unclipped star field: any change in the total signal then comes from the star itself
+		// rather than from noise or from saturation flattening the peak.
+		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_NOISE_FEATURES', elements: { SKY_ENABLED: false, LIGHT_POLLUTION_ENABLED: false } })
+		client.sendNumber({ device: camera.name, name: 'SIMULATOR_NOISE_SENSOR', elements: { READ_NOISE: 0, BIAS_ELECTRONS: 0, BLACK_LEVEL_ELECTRONS: 0, DARK_CURRENT_AT_REFERENCE_TEMP: 0 } })
+		// Without this the brightest pixel of a thinly spread trail is a hot pixel rather than the star.
+		client.sendNumber({ device: camera.name, name: 'SIMULATOR_NOISE_ARTIFACTS', elements: { FIXED_PATTERN_NOISE_STRENGTH: 0, ROW_NOISE_STRENGTH: 0, COLUMN_NOISE_STRENGTH: 0, BANDING_STRENGTH: 0, HOT_PIXEL_RATE: 0, WARM_PIXEL_RATE: 0, DEAD_PIXEL_RATE: 0 } })
+		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_NOISE_CLAMP_MODE', elements: { NONE: true } })
+		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_CATALOG_SOURCE', elements: { CENTERED: true } })
+		await waitUntil(() => cameraManager.properties.get(camera)?.SIMULATOR_CATALOG_SOURCE?.elements.CENTERED.value === true)
+
+		try {
+			// Both frames run for the same time, so the expected ratio of their totals is exactly one and
+			// the comparison isolates the trajectory split from any exposure scaling.
+			const exposure = 2
+
+			// Matching the reference exposure makes the flux scale exactly one, leaving the trajectory
+			// split as the only thing that can change the total.
+			client.sendNumber({ device: camera.name, name: 'SIMULATOR_NOISE_EXPOSURE', elements: { EXPOSURE_TIME: exposure } })
+			await waitUntil(() => cameraManager.properties.get(camera)?.SIMULATOR_NOISE_EXPOSURE?.elements.EXPOSURE_TIME.value === exposure)
+
+			// A long focal length so the sidereal drift of this exposure spans many times the width of
+			// the point spread function. At the default 500 mm the trail is comparable to the star and
+			// only shows as a slight elongation.
+			client.sendNumber({ device: camera.name, name: 'TELESCOPE_INFO', elements: { FOCAL_LENGTH: 2000 } })
+			await waitUntil(() => cameraManager.properties.get(camera)?.TELESCOPE_INFO?.elements.FOCAL_LENGTH.value === 2000)
+
+			// Stationary reference: the mount tracks, so the field barely moves and one sample is used.
+			cameraSimulator.startExposure(exposure)
+			await waitUntil(() => frameReceiver.length > 0, 20000, 50)
+			const stationary = await readImageFromBuffer(frameReceiver.lastFrame)
+			const stationaryFlux = sumPixels(stationary!.raw)
+			const [, , stationaryPeak] = brightestPixel(stationary!.raw, stationary!.header.NAXIS1 as number, stationary!.metadata.channels)
+
+			expect(stationaryFlux).toBeGreaterThan(0)
+
+			// With tracking off the sky runs at the sidereal rate, which over this exposure is several
+			// pixels of drift and therefore a trail spread over many samples.
+			mountSimulator.setTrackingEnabled(false)
+			await waitUntil(() => !mount.tracking)
+
+			cameraSimulator.startExposure(exposure)
+			await waitUntil(() => frameReceiver.length > 1, 20000, 50)
+			const trailed = await readImageFromBuffer(frameReceiver.lastFrame)
+			const trailedFlux = sumPixels(trailed!.raw)
+			const [, , trailedPeak] = brightestPixel(trailed!.raw, trailed!.header.NAXIS1 as number, trailed!.metadata.channels)
+
+			// Spread along a trail, the same light no longer piles onto one pixel, so the peak drops.
+			expect(trailedPeak).toBeLessThan(stationaryPeak * 0.5)
+
+			// Yet it is only redistributed, never created or lost. Without dividing each sample's flux by
+			// the sample count this would come out multiplied by the number of samples, so the bound is
+			// wide enough for the rounding and still nowhere near that.
+			//
+			// The residual excess is quantization: spread along a trail, faint wing pixels that rounded
+			// down to zero when concentrated now sit above half a count and round up instead.
+			const ratio = trailedFlux / stationaryFlux
+			expect(ratio).toBeGreaterThan(0.85)
+			expect(ratio).toBeLessThan(1.2)
+		} finally {
+			cameraSimulator.dispose()
+			mountSimulator.dispose()
+		}
+	}, 30000)
+
 	test('renders a defocused annular collimation pattern with anisotropic binning', async () => {
 		const handler = new IndiClientHandlerSet()
 		const mountManager = new MountManager()

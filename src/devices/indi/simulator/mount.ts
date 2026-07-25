@@ -12,10 +12,11 @@ import { handleDefNumberVector, type IndiClientHandler } from '../client'
 import { DeviceInterfaceType, expectedPierSide, type GuideDirection, type NameAndLabel, type PierSide, type TrackMode, type UTCTime } from '../device'
 import { findOnSwitch, makeNumberVector, makeSwitchVector, makeTextVector, type NewNumberVector, type NewSwitchVector, type NewTextVector, selectOnSwitch } from '../types'
 import type { ClientSimulator } from './client'
-import { GUIDE_JITTER_SEED, KING_DRIFT_RATE, LUNAR_DRIFT_RATE, MAIN_CONTROL, MAX_GUIDE_RATE, MAX_QUEUED_GUIDE_PULSES, SIDEREAL_DRIFT_RATE, SIMULATION, SLEW_RATES, SLEW_SPEED_FACTOR, SOLAR_DRIFT_RATE, TICK_INTERVAL_MS } from './constants'
+import { GUIDE_JITTER_SEED, KING_DRIFT_RATE, LUNAR_DRIFT_RATE, MAIN_CONTROL, MAX_GUIDE_RATE, MAX_QUEUED_GUIDE_PULSES, MOUNT_TRAJECTORY_CAPACITY, SIDEREAL_DRIFT_RATE, SIMULATION, SLEW_RATES, SLEW_SPEED_FACTOR, SOLAR_DRIFT_RATE, TICK_INTERVAL_MS } from './constants'
 import { DeviceSimulator } from './device'
 import { advanceMechanicalAxis, IDENTITY_MECHANICAL_AXIS_CONFIG, loadMechanicalAxis, type MechanicalAxisConfig, mechanicalAxisState, resetMechanicalAxisMotion } from './mount.axis'
 import { type GuidePulse, type GuideResponseConfig, IDENTITY_GUIDE_RESPONSE_CONFIG, integrateGuidePulses, quantizeGuideDuration, retireGuidePulses } from './mount.guiding'
+import { boresightHistory, clearBoresightHistory, recordBoresightSample, sampleBoresightTrajectory } from './mount.trajectory'
 import type { AxisDirection, CoordSetMode, DeviceSimulatorOptions, MountPointingState, SimulatorProperty, SlewMode } from './types'
 import { applyNumberVectorValues, clampDeclination, periodicErrorAtPhase } from './util'
 
@@ -124,6 +125,9 @@ export class MountSimulator extends DeviceSimulator {
 	#guideRateWestEast = 0
 	// Deterministic source for the latency jitter, so a simulated session is reproducible.
 	readonly #random = mulberry32(GUIDE_JITTER_SEED)
+	// Rolling record of where the optical axis actually pointed, so a camera can integrate an exposure
+	// over the motion that happened rather than over a single instant.
+	readonly #boresightHistory = boresightHistory(MOUNT_TRAJECTORY_CAPACITY)
 	// True orientation of the mechanical axes. This is the authoritative state: tracking, slewing,
 	// manual motion and guiding all move it, and both the reported coordinate and the boresight are
 	// derived from it.
@@ -288,6 +292,18 @@ export class MountSimulator extends DeviceSimulator {
 	// motion of the axis rather than from the clock.
 	get wormPhase(): Angle {
 		return this.#wormPhase
+	}
+
+	// Samples where the optical axis pointed across `[startTime, endTime]`, both milliseconds on the
+	// simulated clock, writing `count` consecutive right ascension and declination pairs into `out` and
+	// returning how many were written.
+	//
+	// Reads the recorded history rather than recomputing, because backlash, stiction and the guide
+	// queue have no closed form to run backwards. Times before the retained window clamp to its oldest
+	// sample, so an exposure longer than the history trails only over the part that is still known.
+	// Returns 0 when nothing has been recorded yet, which is the case until the first tick.
+	sampleBoresightTrajectory(startTime: number, endTime: number, count: number, out: Float64Array) {
+		return sampleBoresightTrajectory(this.#boresightHistory, startTime, endTime, count, out)
 	}
 
 	// Optical pointing model built from the configured geometric errors: how far the boresight sits
@@ -524,6 +540,10 @@ export class MountSimulator extends DeviceSimulator {
 	syncTo(rightAscension: Angle, declination: Angle) {
 		if (!this.isConnected) return
 		this.#setMechanical(rightAscension - this.#indexErrorRightAscension, declination - this.#indexErrorDeclination)
+		// A sync is a discontinuity rather than motion, so the recorded past no longer describes where
+		// this telescope has been. Keeping it would let an exposure straddling the sync integrate a jump
+		// across the sky as if the tube had swept through it.
+		this.#resetBoresightHistory()
 	}
 
 	// Slews to the configured home position.
@@ -752,6 +772,10 @@ export class MountSimulator extends DeviceSimulator {
 		const westEastPending = retireGuidePulses(this.#westEastPulses, this.#utcTime)
 		const northSouthPending = retireGuidePulses(this.#northSouthPulses, this.#utcTime)
 		this.#setPulsing(westEastPending || northSouthPending)
+
+		// Recorded last, so the sample reflects the state at the end of the interval just simulated.
+		const boresight = this.boresightAt(this.#utcTime)
+		recordBoresightSample(this.#boresightHistory, this.#utcTime, boresight.rightAscension, boresight.declination)
 	}
 
 	// Rate of the right-ascension motor, in radians per second of its contribution to the coordinate.
@@ -1046,5 +1070,17 @@ export class MountSimulator extends DeviceSimulator {
 		this.#homeCoordinate.rightAscension = this.#siderealTime()
 		this.#parkCoordinate.rightAscension = this.#homeCoordinate.rightAscension
 		this.#setMechanical(this.#homeCoordinate.rightAscension, this.#homeCoordinate.declination, notify)
+		this.#resetBoresightHistory()
+	}
+
+	// Drops the recorded trajectory and seeds it with the present.
+	//
+	// Used wherever the boresight moves discontinuously instead of travelling: connecting, where the
+	// previous run says nothing about this one, and syncing, which repositions the axes instantly. The
+	// seed sample makes the trajectory usable before the first tick has run.
+	#resetBoresightHistory() {
+		clearBoresightHistory(this.#boresightHistory)
+		const boresight = this.boresightAt(this.#utcTime)
+		recordBoresightSample(this.#boresightHistory, this.#utcTime, boresight.rightAscension, boresight.declination)
 	}
 }
