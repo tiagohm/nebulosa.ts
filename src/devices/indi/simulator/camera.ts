@@ -25,7 +25,7 @@ import type { FocuserManager, GuideOutputManager, MountManager, RotatorManager, 
 import { findOnSwitch, makeBlobVector, makeNumberVector, makeSwitchVector, makeTextVector, type NewNumberVector, type NewSwitchVector, type NewTextVector } from '../types'
 import type { ClientSimulator } from './client'
 // oxfmt-ignore
-import { CAMERA_AMBIENT_TEMPERATURE, CAMERA_BLOB_PADDING, CAMERA_DEFAULT_TARGET_TEMPERATURE, CAMERA_MAX_BIN, CAMERA_MAX_EXPOSURE, CAMERA_MIN_EXPOSURE, CAMERA_PIXEL_SIZE, CAMERA_SCENE_MARGIN, CAMERA_SCENE_SEED, CAMERA_SENSOR_HEIGHT, CAMERA_SENSOR_WIDTH, GENERAL_INFO, MAIN_CONTROL, SIMULATION, TICK_INTERVAL_MS } from './constants'
+import { CAMERA_AMBIENT_TEMPERATURE, CAMERA_BLOB_PADDING, CAMERA_DEFAULT_TARGET_TEMPERATURE, CAMERA_MAX_BIN, CAMERA_MAX_EXPOSURE, CAMERA_MAX_SCENE_MARGIN, CAMERA_MIN_EXPOSURE, CAMERA_PIXEL_SIZE, CAMERA_SCENE_SEED, CAMERA_SENSOR_HEIGHT, CAMERA_SENSOR_WIDTH, GENERAL_INFO, MAIN_CONTROL, SIMULATION, TICK_INTERVAL_MS } from './constants'
 import { DeviceSimulator } from './device'
 import { FocuserSimulator } from './focuser'
 import type { CatalogSource, CatalogSourceStar, CatalogSourceType, DeviceSimulatorOptions, ReadoutMode, SimulatorProperty, TransferFormat } from './types'
@@ -1137,22 +1137,24 @@ export class CameraSimulator extends DeviceSimulator {
 		}
 
 		const ps = arcsec(pixelScale(CAMERA_PIXEL_SIZE, this.telescopeFocalLength))
-		// Includes the scene margin so a pointing error that shifts the field still finds catalog stars
-		// on the trailing edge.
-		const radius = Math.hypot(this.sensorWidth + 2 * CAMERA_SCENE_MARGIN, this.sensorHeight + 2 * CAMERA_SCENE_MARGIN) * ps * 0.5
-		const key = this.#makeCatalogKey(centerRightAscension, centerDeclination, radius)
+		// Sized from the configured pointing error so a shifted field still finds stars on its trailing
+		// edge. It takes part in the cache key because changing it changes the generated scene.
+		const margin = this.#sceneMargin(ps)
+		const radius = Math.hypot(this.sensorWidth + 2 * margin, this.sensorHeight + 2 * margin) * ps * 0.5
+		const key = this.#makeCatalogKey(centerRightAscension, centerDeclination, radius, margin)
 		if (this.#catalog && !this.#catalogDirty && this.#catalogKey === key) return this.#catalog
 
 		const type = this.catalogSourceType
 		const catalogSource = this.options?.catalogSources?.[type]
-		const stars = catalogSource && centerRightAscension !== undefined && centerDeclination !== undefined && radius > 0 ? this.#mapCatalogCatalogStarsToAstronomicalImageStars(await catalogSource(centerRightAscension, centerDeclination, radius), centerRightAscension, centerDeclination, ps) : this.#randomSource()
+		const stars =
+			catalogSource && centerRightAscension !== undefined && centerDeclination !== undefined && radius > 0 ? this.#mapCatalogCatalogStarsToAstronomicalImageStars(await catalogSource(centerRightAscension, centerDeclination, radius), centerRightAscension, centerDeclination, ps, margin) : this.#randomSource(margin)
 		this.#catalog = stars
 		this.#catalogKey = key
 		this.#catalogDirty = false
 		return stars
 	}
 
-	#mapCatalogCatalogStarsToAstronomicalImageStars(stars: readonly CatalogSourceStar[], centerRightAscension: Angle, centerDeclination: Angle, pixelScale: Angle): readonly (AstronomicalImageStar | undefined)[] {
+	#mapCatalogCatalogStarsToAstronomicalImageStars(stars: readonly CatalogSourceStar[], centerRightAscension: Angle, centerDeclination: Angle, pixelScale: Angle, margin: number): readonly (AstronomicalImageStar | undefined)[] {
 		const sensorWidth = this.sensorWidth
 		const sensorHeight = this.sensorHeight
 		const halfWidth = (sensorWidth - 1) * 0.5
@@ -1169,7 +1171,7 @@ export class CameraSimulator extends DeviceSimulator {
 			const y = halfHeight - point.y / pixelScale
 			// Kept to the same margin as the synthetic scene, so a pointing error can pull stars in
 			// from outside the sensor instead of exposing an empty edge.
-			if (x < -CAMERA_SCENE_MARGIN || x >= sensorWidth + CAMERA_SCENE_MARGIN || y < -CAMERA_SCENE_MARGIN || y >= sensorHeight + CAMERA_SCENE_MARGIN) return undefined
+			if (x < -margin || x >= sensorWidth + margin || y < -margin || y >= sensorHeight + margin) return undefined
 			point.x = x
 			point.y = y
 			Object.assign(s, point)
@@ -1177,23 +1179,25 @@ export class CameraSimulator extends DeviceSimulator {
 		})
 	}
 
-	// Builds a cache key for the currently selected catalog source.
-	#makeCatalogKey(centerRightAscension?: Angle, centerDeclination?: Angle, radius?: Angle) {
+	// Builds a cache key for the currently selected catalog source. The margin takes part in the key
+	// because it sets the extent of the generated field and the clipping window of a mapped catalog,
+	// so a change to the configured pointing error must rebuild the scene.
+	#makeCatalogKey(centerRightAscension: Angle | undefined, centerDeclination: Angle | undefined, radius: Angle | undefined, margin: number) {
 		const catalogSource = this.catalogSourceType
-		if (catalogSource === 'RANDOM' || centerRightAscension === undefined || centerDeclination === undefined || radius === undefined || radius === 0) return `RANDOM:${this.#scene.elements.SCENE_SEED.value}`
-		else return `${catalogSource}:${toHour(normalizeAngle(centerRightAscension)).toFixed(6)}:${toDeg(centerDeclination).toFixed(6)}:${toDeg(radius).toFixed(6)}`
+		if (catalogSource === 'RANDOM' || centerRightAscension === undefined || centerDeclination === undefined || radius === undefined || radius === 0) return `RANDOM:${this.#scene.elements.SCENE_SEED.value}:${margin}`
+		else return `${catalogSource}:${toHour(normalizeAngle(centerRightAscension)).toFixed(6)}:${toDeg(centerDeclination).toFixed(6)}:${toDeg(radius).toFixed(6)}:${margin}`
 	}
 
 	// Generates a deterministic in-memory star field.
 	//
-	// The field extends CAMERA_SCENE_MARGIN pixels beyond every sensor edge so that a pointing error
-	// shifting the scene brings real stars in from outside instead of leaving an empty border. The
-	// star count grows with the enlarged area, which keeps the on-sensor density at the configured
-	// value.
-	#randomSource() {
+	// The field extends `margin` pixels beyond every sensor edge so that a pointing error shifting the
+	// scene brings real stars in from outside instead of leaving an empty border. The star count grows
+	// with the enlarged area, which keeps the on-sensor density at the configured value; a zero margin
+	// reproduces exactly the sensor-sized field.
+	#randomSource(margin: number) {
 		const random = mulberry32(this.#scene.elements.SCENE_SEED.value >>> 0)
-		const width = this.sensorWidth + 2 * CAMERA_SCENE_MARGIN
-		const height = this.sensorHeight + 2 * CAMERA_SCENE_MARGIN
+		const width = this.sensorWidth + 2 * margin
+		const height = this.sensorHeight + 2 * margin
 		const density = this.#scene.elements.STAR_DENSITY.value
 		const count = Math.max(1, Math.trunc(width * height * density))
 		const minHfd = this.#scene.elements.HFD_MIN.value
@@ -1208,8 +1212,8 @@ export class CameraSimulator extends DeviceSimulator {
 			const brightness = 1 - random()
 
 			stars[i] = {
-				x: random() * maxWidth - CAMERA_SCENE_MARGIN,
-				y: random() * maxHeight - CAMERA_SCENE_MARGIN,
+				x: random() * maxWidth - margin,
+				y: random() * maxHeight - margin,
 				flux: minFlux + (maxFlux - minFlux) * brightness ** 6,
 				hfd: minHfd + (maxHfd - minHfd) * random(),
 				snr: 12 + brightness * 180,
@@ -1263,6 +1267,24 @@ export class CameraSimulator extends DeviceSimulator {
 		rightAscension += periodicErrorOffset(elements.PE_WE_PERIOD.value, elements.PE_WE_AMPLITUDE.value, utcTime)
 		declination += periodicErrorOffset(elements.PE_NS_PERIOD.value, elements.PE_NS_AMPLITUDE.value, utcTime)
 		return [rightAscension, declination] as const
+	}
+
+	// Margin, in unbinned pixels, by which the synthetic star field extends beyond every sensor edge.
+	//
+	// A pointing error shifts the whole field on the sensor, so without a margin its trailing edge
+	// would be swept clean of stars. The margin is sized from the configured error rather than fixed:
+	// it costs nothing when the mount points perfectly, which is the common case, and it grows only as
+	// far as the error can actually displace the field.
+	//
+	// The bound is the worst case over all hour angles. The polar-alignment terms contribute at most
+	// |MA| + |ME| to each of the two axes, hence the sqrt(2) for their combined magnitude, and each
+	// periodic error contributes its own amplitude to its own axis. `pixelScale` is radians per
+	// unbinned pixel; the result is capped by CAMERA_MAX_SCENE_MARGIN to keep the star count bounded.
+	#sceneMargin(pixelScale: Angle) {
+		const { elements } = this.#telescopeEffects
+		const bound = Math.SQRT2 * (Math.abs(elements.PAE_AZ.value) + Math.abs(elements.PAE_AL.value)) + elements.PE_WE_AMPLITUDE.value + elements.PE_NS_AMPLITUDE.value
+		if (bound <= 0 || pixelScale <= 0) return 0
+		return Math.min(CAMERA_MAX_SCENE_MARGIN, Math.ceil(arcsec(bound) / pixelScale))
 	}
 
 	// Displacement, in unbinned sensor pixels, that the pointing errors introduce in the rendered field.

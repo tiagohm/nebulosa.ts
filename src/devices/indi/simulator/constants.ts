@@ -23,10 +23,12 @@ export const CAMERA_AMBIENT_TEMPERATURE = 18
 export const CAMERA_DEFAULT_TARGET_TEMPERATURE = 0
 export const CAMERA_SCENE_SEED = 0x1d0f3a57
 export const CAMERA_BLOB_PADDING = 16384
-// Margin, in unbinned pixels, by which the synthetic star field extends beyond every sensor edge.
-// A pointing error shifts the whole field on the sensor, and without this margin the trailing edge
-// would be swept clean of stars. Sized to cover a few arcminutes of error at typical pixel scales.
-export const CAMERA_SCENE_MARGIN = 256
+// Upper bound, in unbinned pixels, for the margin by which the synthetic star field extends beyond
+// every sensor edge. The margin itself is derived from the configured pointing error, but the star
+// count grows with the enlarged area, so a multi-degree error would otherwise generate millions of
+// stars. Past this cap the trailing edge of a displaced field thins out, which is an acceptable
+// trade for an error already far larger than the sensor itself.
+export const CAMERA_MAX_SCENE_MARGIN = 1024
 // Simulated focuser: travel range and initial position (steps), move rate (steps/second), and the
 // temperature model (amplitude °C, period s) plus temperature-compensation gain (steps) and hysteresis (°C).
 export const FOCUSER_MAX_POSITION = 100000

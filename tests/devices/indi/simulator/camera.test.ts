@@ -467,6 +467,33 @@ describe.skipIf(SKIP)('camera simulator', () => {
 			}
 
 			expect(changed).toBeGreaterThan(0)
+
+			// The scene margin is derived from the configured error, so the displaced field keeps stars
+			// across the whole frame instead of sweeping its trailing edge clean. Compare the mean
+			// signal of the two halves along each axis: a scene generated only over the sensor would
+			// leave one side markedly darker.
+			const width = randomShifted!.header.NAXIS1 as number
+			const height = randomShifted!.header.NAXIS2 as number
+			const channels = randomShifted!.metadata.channels
+			const raw = randomShifted!.raw
+			let left = 0
+			let right = 0
+			let top = 0
+			let bottom = 0
+
+			for (let y = 0; y < height; y++) {
+				for (let x = 0; x < width; x++) {
+					let value = 0
+					for (let c = 0; c < channels; c++) value += raw[(y * width + x) * channels + c]
+					if (x < width / 2) left += value
+					else right += value
+					if (y < height / 2) top += value
+					else bottom += value
+				}
+			}
+
+			expect(Math.min(left, right) / Math.max(left, right)).toBeGreaterThan(0.5)
+			expect(Math.min(top, bottom) / Math.max(top, bottom)).toBeGreaterThan(0.5)
 		} finally {
 			cameraSimulator.dispose()
 			mountSimulator.dispose()
