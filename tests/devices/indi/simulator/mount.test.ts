@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { PI, PIOVERTWO } from '../../../../src/core/constants'
 import { IndiClientHandlerSet } from '../../../../src/devices/indi/client'
 import { GuideOutputManager, MountManager } from '../../../../src/devices/indi/manager'
 import { ClientSimulator } from '../../../../src/devices/indi/simulator/client'
@@ -299,27 +300,81 @@ describe('mount simulator pointing errors', () => {
 		}
 	})
 
-	test('applies the periodic error as an absolute offset on the simulated clock', () => {
+	test('advances the worm phase with the axis, not with the clock', () => {
+		const { client, mount } = makeMount('mount.worm.phase')
+
+		try {
+			const period = 400
+			client.sendNumber({ device: mount.name, name: 'MOUNT_PERIODIC_ERROR', elements: { RA_PERIOD: period, RA_AMPLITUDE: 8 } })
+
+			expect(mount.wormPhase).toBe(0)
+
+			// Tracking at the sidereal rate turns the worm exactly once per configured period.
+			mount.setTrackingEnabled(true)
+			mount.advance(period / 4)
+			expect(mount.wormPhase).toBeCloseTo(PIOVERTWO, 9)
+
+			mount.advance(period / 4)
+			expect(mount.wormPhase).toBeCloseTo(PI, 9)
+
+			// A full revolution brings it back to where it started.
+			mount.advance(period / 2)
+			expect(normalizePI(mount.wormPhase)).toBeCloseTo(0, 9)
+
+			// With tracking off and nothing commanded the axis is still, so the worm must not move even
+			// though time keeps passing. This is the regression against a clock-driven phase.
+			mount.setTrackingEnabled(false)
+			const parked = mount.wormPhase
+			mount.advance(period)
+			expect(mount.wormPhase).toBe(parked)
+		} finally {
+			mount.dispose()
+		}
+	})
+
+	test('applies the periodic error as an absolute offset of the worm phase', () => {
 		const { client, mount } = makeMount('mount.boresight.periodic')
 
 		try {
-			// A quarter period past the epoch puts the sine at its positive peak.
 			const period = 400
 			const amplitude = 8
 			client.sendNumber({ device: mount.name, name: 'MOUNT_PERIODIC_ERROR', elements: { RA_PERIOD: period, RA_AMPLITUDE: amplitude } })
+			mount.setTrackingEnabled(true)
 
-			const peak = mount.boresightAt(period * 250)
+			// A quarter of a revolution puts the sine at its positive peak.
+			mount.advance(period / 4)
+			const peak = mount.boresightAt(mount.utcTime)
 			expect(toArcsec(normalizePI(peak.rightAscension - mount.rightAscension))).toBeCloseTo(amplitude, 6)
 
 			// Absolute, not incremental: evaluating twice at the same instant gives the same answer.
-			const again = mount.boresightAt(period * 250)
-			expect(again.rightAscension).toBe(peak.rightAscension)
+			expect(mount.boresightAt(mount.utcTime).rightAscension).toBe(peak.rightAscension)
 
-			const trough = mount.boresightAt(period * 750)
+			mount.advance(period / 2)
+			const trough = mount.boresightAt(mount.utcTime)
 			expect(toArcsec(normalizePI(trough.rightAscension - mount.rightAscension))).toBeCloseTo(-amplitude, 6)
+		} finally {
+			mount.dispose()
+		}
+	})
 
-			const zero = mount.boresightAt(period * 500)
-			expect(toArcsec(normalizePI(zero.rightAscension - mount.rightAscension))).toBeCloseTo(0, 6)
+	test('spins the worm faster during a slew than while tracking', () => {
+		const { client, mount } = makeMount('mount.worm.slew')
+
+		try {
+			const period = 400
+			client.sendNumber({ device: mount.name, name: 'MOUNT_PERIODIC_ERROR', elements: { RA_PERIOD: period, RA_AMPLITUDE: 8 } })
+			mount.setTrackingEnabled(true)
+
+			mount.advance(1)
+			const trackingStep = mount.wormPhase
+
+			// A goto far to the east runs the axis at the slew rate, orders of magnitude above sidereal.
+			mount.setSlewRate('SPEED_6')
+			mount.goTo(mount.rightAscension + deg(20), mount.declination)
+			mount.advance(1)
+			const slewStep = mount.wormPhase - trackingStep
+
+			expect(Math.abs(slewStep)).toBeGreaterThan(Math.abs(trackingStep) * 100)
 		} finally {
 			mount.dispose()
 		}

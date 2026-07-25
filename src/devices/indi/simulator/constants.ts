@@ -11,6 +11,9 @@ export const LUNAR_DRIFT_RATE = TAU / (MOON_SIDEREAL_DAYS * DAYSEC)
 export const KING_DRIFT_RATE = (SIDEREAL_RATE - 15.0369) * ASEC2RAD
 // Maximum guide rate as a fraction of sidereal.
 export const MAX_GUIDE_RATE = 1
+// Multiplier applied to the selected manual slew rate when running an automatic goto, home or park,
+// so that a commanded slew is faster than nudging the axes by hand.
+export const SLEW_SPEED_FACTOR = 3
 // Simulated camera sensor geometry and limits: pixels, pixel size (µm), max binning, exposure bounds (s),
 // ambient/default temperatures (°C), the deterministic scene RNG seed, and BLOB padding (bytes).
 export const CAMERA_SENSOR_WIDTH = 1280

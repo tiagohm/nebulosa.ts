@@ -135,15 +135,17 @@ export function pointingOffsetInPixels(rightAscension: Angle, declination: Angle
 	return true
 }
 
-// Sinusoidal periodic error of one axis at an instant, in radians.
+// Sinusoidal periodic error at a given worm phase, in radians.
 //
-// `periodSeconds` is the full cycle duration and `amplitudeArcsec` the semi-amplitude in arcseconds;
-// either being zero disables the error and returns exactly 0. `utcTime` is a UTC timestamp in
-// milliseconds and the phase is taken from it modulo the period, so the value is an absolute offset
-// and not an increment: evaluating twice at the same instant returns the same number.
-export function periodicErrorOffset(periodSeconds: number, amplitudeArcsec: number, utcTime: number) {
-	if (periodSeconds <= 0 || amplitudeArcsec === 0) return 0
-	const periodMilliseconds = periodSeconds * 1000
-	const phase = ((utcTime % periodMilliseconds) * TAU) / periodMilliseconds
+// `phase` is the accumulated angle of the worm in radians and `amplitudeArcsec` the semi-amplitude in
+// arcseconds; a zero amplitude disables the error and returns exactly 0. The error is a function of
+// the phase alone, so it is an absolute offset rather than an increment: evaluating twice at the same
+// phase returns the same number.
+//
+// Taking the phase rather than a timestamp is what ties the error to the mechanics: the worm turns
+// with the axis, so the error stops when the axis stops and runs fast during a slew, instead of
+// advancing with the wall clock.
+export function periodicErrorAtPhase(phase: Angle, amplitudeArcsec: number) {
+	if (amplitudeArcsec === 0) return 0
 	return Math.sin(phase) * amplitudeArcsec * ASEC2RAD
 }

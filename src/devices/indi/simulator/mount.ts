@@ -3,7 +3,7 @@ import { applyEquatorialPointingError, type EquatorialPointingModel, IDENTITY_EQ
 import { localSiderealTime } from '../../../astronomy/observer/location'
 import { formatTemporal, TIMEZONE } from '../../../astronomy/time/temporal'
 import { timeUnix } from '../../../astronomy/time/time'
-import { ASEC2RAD, DAYSEC, PIOVERTWO } from '../../../core/constants'
+import { ASEC2RAD, DAYSEC, PIOVERTWO, TAU } from '../../../core/constants'
 import { clamp } from '../../../math/numerical/math'
 import { type Angle, deg, hour, normalizeAngle, normalizePI, toDeg, toHour } from '../../../math/units/angle'
 import { meter } from '../../../math/units/distance'
@@ -11,10 +11,10 @@ import { handleDefNumberVector, type IndiClientHandler } from '../client'
 import { DeviceInterfaceType, expectedPierSide, type GuideDirection, type NameAndLabel, type PierSide, type TrackMode, type UTCTime } from '../device'
 import { findOnSwitch, makeNumberVector, makeSwitchVector, makeTextVector, type NewNumberVector, type NewSwitchVector, type NewTextVector, selectOnSwitch } from '../types'
 import type { ClientSimulator } from './client'
-import { KING_DRIFT_RATE, LUNAR_DRIFT_RATE, MAIN_CONTROL, MAX_GUIDE_RATE, SIDEREAL_DRIFT_RATE, SIMULATION, SLEW_RATES, SOLAR_DRIFT_RATE, TICK_INTERVAL_MS } from './constants'
+import { KING_DRIFT_RATE, LUNAR_DRIFT_RATE, MAIN_CONTROL, MAX_GUIDE_RATE, SIDEREAL_DRIFT_RATE, SIMULATION, SLEW_RATES, SLEW_SPEED_FACTOR, SOLAR_DRIFT_RATE, TICK_INTERVAL_MS } from './constants'
 import { DeviceSimulator } from './device'
 import type { AxisDirection, CoordSetMode, DeviceSimulatorOptions, SimulatorProperty, SlewMode } from './types'
-import { applyNumberVectorValues, clampDeclination, periodicErrorOffset } from './util'
+import { applyNumberVectorValues, clampDeclination, periodicErrorAtPhase } from './util'
 
 // Simulated equatorial mount, tracking, slewing, site, and pulse-guiding behavior.
 
@@ -42,15 +42,22 @@ export class MountSimulator extends DeviceSimulator {
 	readonly #guideRate = makeNumberVector('', 'GUIDE_RATE', 'Guiding Rate', MAIN_CONTROL, 'rw', ['GUIDE_RATE_WE', 'W/E Rate', 0.5, 0, 1, 0.1, '%.8f'], ['GUIDE_RATE_NS', 'N/E Rate', 0.5, 0, 1, 0.1, '%.0f'])
 	readonly #guideNS = makeNumberVector('', 'TELESCOPE_TIMED_GUIDE_NS', 'Guide N/S', MAIN_CONTROL, 'rw', ['TIMED_GUIDE_N', 'North (ms)', 0, 0, 60000, 1, '%.0f'], ['TIMED_GUIDE_S', 'South (ms)', 0, 0, 60000, 1, '%.0f'])
 	readonly #guideWE = makeNumberVector('', 'TELESCOPE_TIMED_GUIDE_WE', 'Guide W/E', MAIN_CONTROL, 'rw', ['TIMED_GUIDE_W', 'West (ms)', 0, 0, 60000, 1, '%.0f'], ['TIMED_GUIDE_E', 'East (ms)', 0, 0, 60000, 1, '%.0f'])
-
 	// Orientation of the polar axis relative to the true celestial pole. Signed arcseconds; the range
 	// spans ten degrees, far beyond any usable alignment, so gross misalignment can be exercised.
 	// oxfmt-ignore
 	readonly #alignment = makeNumberVector('', 'MOUNT_ALIGNMENT', 'Alignment', SIMULATION, 'rw', ['POLAR_AZIMUTH_ERROR', 'Polar Azimuth Error (arcsec)', 0, -36000, 36000, 0.1, '%.3f'], ['POLAR_ALTITUDE_ERROR', 'Polar Altitude Error (arcsec)', 0, -36000, 36000, 0.1, '%.3f'])
-	// Periodic error of the transmission on each axis: cycle duration in seconds and semi-amplitude in
-	// arcseconds. A zero period or amplitude disables the axis.
+	// Periodic error of the right-ascension worm: the time it takes to complete one revolution while
+	// tracking at the sidereal rate, in seconds, and the semi-amplitude of the resulting error, in
+	// arcseconds. A zero period or amplitude disables it.
+	// There is deliberately no declination counterpart. Classic periodic error comes from the worm of
+	// the axis that turns continuously, which during tracking is only right ascension; the declination
+	// axis stands still and moves only for corrections, dithers and slews, so what dominates there is
+	// backlash and stiction, not a periodic term.
 	// oxfmt-ignore
-	readonly #periodicError = makeNumberVector('', 'MOUNT_PERIODIC_ERROR', 'Periodic Error', SIMULATION, 'rw', ['RA_PERIOD', 'RA Period (s)', 0, 0, DAYSEC, 1, '%.0f'], ['RA_AMPLITUDE', 'RA Amplitude (arcsec)', 0, 0, 3600, 0.1, '%.3f'], ['DEC_PERIOD', 'DEC Period (s)', 0, 0, DAYSEC, 1, '%.0f'], ['DEC_AMPLITUDE', 'DEC Amplitude (arcsec)', 0, 0, 3600, 0.1, '%.3f'])
+	readonly #periodicError = makeNumberVector('', 'MOUNT_PERIODIC_ERROR', 'Periodic Error', SIMULATION, 'rw', ['RA_PERIOD', 'Worm Period (s)', 0, 0, DAYSEC, 1, '%.0f'], ['RA_AMPLITUDE', 'Amplitude (arcsec)', 0, 0, 3600, 0.1, '%.3f'])
+	// Live phase of the right-ascension worm, in degrees. Read-only: it is integrated from the motion of
+	// the axis, not from the clock, so it stands still while the mount is parked and speeds up during a slew.
+	readonly #wormPhaseVector = makeNumberVector('', 'MOUNT_WORM_PHASE', 'Worm Phase', SIMULATION, 'ro', ['PHASE', 'Phase (deg)', 0, 0, 360, 0.1, '%.3f'])
 
 	protected readonly properties: readonly SimulatorProperty[] = [
 		this.#onCoordSet,
@@ -72,9 +79,11 @@ export class MountSimulator extends DeviceSimulator {
 		this.#guideRate,
 		this.#alignment,
 		this.#periodicError,
+		this.#wormPhaseVector,
 	]
 	// The error-model configuration is persisted along with track mode and guide rate, so a simulated
-	// mount keeps its mechanical character across reconnections.
+	// mount keeps its mechanical character across reconnections. The worm phase is not: it is live
+	// mechanical state, and a power cycle is exactly when a real mount loses track of it.
 	protected propertiesToNotSave = this.properties.filter((e) => e !== this.#trackMode && e !== this.#guideRate && e !== this.#alignment && e !== this.#periodicError)
 
 	#timer?: NodeJS.Timeout
@@ -93,6 +102,9 @@ export class MountSimulator extends DeviceSimulator {
 	#utcTime = Date.now()
 	#utcOffset = TIMEZONE / 60
 	#notifyCoordinateLastTime = 0
+	// Accumulated angle of the right-ascension worm, radians in [0, TAU). Physical state integrated
+	// from the motion of the axis, so it survives a disconnection and only a new simulator resets it.
+	#wormPhase: Angle = 0
 
 	minimumNotifyCoordinateInterval = 1000
 
@@ -203,7 +215,6 @@ export class MountSimulator extends DeviceSimulator {
 	// same instant yields the same result. The declination is left unclamped; a polar error pushing it
 	// past the pole is a real, if degenerate, configuration and clamping would silently hide it.
 	boresightAt(utcTime: number): EquatorialCoordinate {
-		const { RA_PERIOD, RA_AMPLITUDE, DEC_PERIOD, DEC_AMPLITUDE } = this.#periodicError.elements
 		const model = this.pointingModel
 		let rightAscension = this.rightAscension
 		let declination = this.declination
@@ -212,9 +223,14 @@ export class MountSimulator extends DeviceSimulator {
 			;[rightAscension, declination] = applyEquatorialPointingError(rightAscension, declination, this.siderealTimeAt(utcTime), model)
 		}
 
-		rightAscension += periodicErrorOffset(RA_PERIOD.value, RA_AMPLITUDE.value, utcTime)
-		declination += periodicErrorOffset(DEC_PERIOD.value, DEC_AMPLITUDE.value, utcTime)
+		rightAscension += periodicErrorAtPhase(this.#wormPhaseAt(utcTime), this.#periodicError.elements.RA_AMPLITUDE.value)
 		return { rightAscension, declination }
+	}
+
+	// Live phase of the right-ascension worm, in radians normalized to [0, TAU). Integrated from the
+	// motion of the axis rather than from the clock.
+	get wormPhase(): Angle {
+		return this.#wormPhase
 	}
 
 	// Geometric pointing model built from the configured alignment errors.
@@ -250,8 +266,7 @@ export class MountSimulator extends DeviceSimulator {
 	// the error model.
 	get pointingErrorBound(): Angle {
 		const { POLAR_AZIMUTH_ERROR, POLAR_ALTITUDE_ERROR } = this.#alignment.elements
-		const { RA_AMPLITUDE, DEC_AMPLITUDE } = this.#periodicError.elements
-		return (Math.SQRT2 * (Math.abs(POLAR_AZIMUTH_ERROR.value) + Math.abs(POLAR_ALTITUDE_ERROR.value)) + RA_AMPLITUDE.value + DEC_AMPLITUDE.value) * ASEC2RAD
+		return (Math.SQRT2 * (Math.abs(POLAR_AZIMUTH_ERROR.value) + Math.abs(POLAR_ALTITUDE_ERROR.value)) + this.#periodicError.elements.RA_AMPLITUDE.value) * ASEC2RAD
 	}
 
 	// Current pier side derived from the pier-side property.
@@ -533,7 +548,9 @@ export class MountSimulator extends DeviceSimulator {
 	// Starts a pulse guiding correction for the requested direction.
 	pulse(direction: GuideDirection, duration: number) {
 		if (!this.isConnected || this.isParked || duration <= 0) return
-		const until = Date.now() + duration
+		// Deadline on the simulated clock, like every other timed quantity here, so that stepping the
+		// simulation directly expires pulses as the timer would.
+		const until = this.#utcTime + duration
 
 		if (direction === 'NORTH') {
 			this.#pulseNorthSouth = 1
@@ -569,19 +586,32 @@ export class MountSimulator extends DeviceSimulator {
 		super.dispose()
 	}
 
-	// Advances the simulated state using wall-clock time.
+	// Advances the simulated state by the wall-clock interval elapsed since the previous tick.
 	#tick() {
 		const now = Date.now()
 		const dtSeconds = Math.max(0, (now - this.#lastTick) / 1000)
 		this.#lastTick = now
+		this.advance(dtSeconds)
+	}
 
+	// Advances the whole simulation by `dtSeconds`: the simulated clock, pulse-guide expiry, the worm
+	// phase and the motion of both axes.
+	//
+	// Driven by the timer during normal operation, and callable directly to step the simulation
+	// deterministically without waiting on real time, which is how the mechanical behaviour is covered
+	// by tests. A non-positive interval is a no-op.
+	advance(dtSeconds: number) {
 		if (dtSeconds <= 0) return
 
 		this.#utcTime += Math.trunc(dtSeconds * 1000)
 
 		if (!this.isConnected) return
 
-		this.#expirePulseGuide(now)
+		this.#expirePulseGuide(this.#utcTime)
+
+		// Integrated before the motion advances, so the phase covers the interval the axes are about to
+		// run at the rate the motion is about to apply.
+		this.#advanceWormPhase(this.#rightAscensionMotorRate(), dtSeconds)
 
 		if (this.#slewTarget) {
 			this.#advanceSlew(dtSeconds)
@@ -590,13 +620,71 @@ export class MountSimulator extends DeviceSimulator {
 		}
 	}
 
+	// Rate of the right-ascension motor, in radians per second of its contribution to the coordinate.
+	//
+	// This is not the rate at which the coordinate changes. While tracking at the sidereal rate the
+	// motor runs at full speed westward and the coordinate stands still, and with the motor stopped the
+	// coordinate drifts eastward at the sidereal rate as the sky turns underneath. The motor rate is
+	// therefore negative while tracking, and zero when tracking is off and nothing else is commanded.
+	//
+	// During a slew the axis runs at the slew speed, which is what makes the worm spin far faster than
+	// while tracking.
+	#rightAscensionMotorRate() {
+		if (this.#slewTarget) return this.#slewAxisRates()[0]
+
+		let rate = this.isTracking ? this.#trackingDriftRate() - SIDEREAL_DRIFT_RATE : 0
+		if (this.#manualWestEast !== 0) rate += this.#manualWestEast * this.#manualSlewSpeed()
+		if (this.#pulseWestEast !== 0) rate += this.#pulseWestEast * this.guideRateRightAscension * SIDEREAL_DRIFT_RATE
+		return rate
+	}
+
+	// Advances the physical worm phase over `dtSeconds` at the given motor rate (radians per second).
+	//
+	// The worm completes one revolution per configured period while the motor runs at the sidereal
+	// tracking rate, hence the ratio to SIDEREAL_DRIFT_RATE; the sign is chosen so that ordinary
+	// tracking advances the phase. Because the phase follows the axis and not the clock, it stands
+	// still when the mount is parked or not tracking, and it speeds up during a slew.
+	#advanceWormPhase(motorRate: number, dtSeconds: number) {
+		const period = this.#periodicError.elements.RA_PERIOD.value
+		if (period <= 0) return
+		this.#wormPhase = normalizeAngle(this.#wormPhase + (-motorRate / SIDEREAL_DRIFT_RATE) * (TAU / period) * dtSeconds)
+	}
+
+	// Worm phase extrapolated to `utcTime` (milliseconds since the epoch) from the current phase and
+	// motor rate. Exact while the axis runs steadily, which covers tracking and guiding; across an
+	// interval that contains a slew or a direction reversal it is only an approximation, since the
+	// simulator keeps no history of past rates.
+	#wormPhaseAt(utcTime: number) {
+		const period = this.#periodicError.elements.RA_PERIOD.value
+		if (period <= 0) return 0
+		const dtSeconds = (utcTime - this.#utcTime) / 1000
+		return normalizeAngle(this.#wormPhase + (-this.#rightAscensionMotorRate() / SIDEREAL_DRIFT_RATE) * (TAU / period) * dtSeconds)
+	}
+
+	// Signed rates of both axes during a slew, in radians per second. The step is normalized by the
+	// larger of the two deltas, so the axes arrive together and the faster one runs at the full slew
+	// speed.
+	#slewAxisRates(): readonly [number, number] {
+		const target = this.#slewTarget
+		if (!target) return [0, 0]
+
+		const speed = this.#manualSlewSpeed() * SLEW_SPEED_FACTOR
+		const deltaRightAscension = normalizePI(target.rightAscension - this.rightAscension)
+		const deltaDeclination = target.declination - this.declination
+		const span = Math.max(Math.abs(deltaRightAscension), Math.abs(deltaDeclination))
+		if (span === 0) return [0, 0]
+
+		const scale = speed / span
+		return [deltaRightAscension * scale, deltaDeclination * scale]
+	}
+
 	// Moves the mount along the commanded slew vector.
 	#advanceSlew(dtSeconds: number) {
 		const target = this.#slewTarget
 
 		if (!target) return
 
-		const speed = this.#manualSlewSpeed() * 3
+		const speed = this.#manualSlewSpeed() * SLEW_SPEED_FACTOR
 		const maxStep = speed * dtSeconds
 		const deltaRightAscension = normalizePI(target.rightAscension - this.rightAscension)
 		const deltaDeclination = target.declination - this.declination
@@ -669,9 +757,16 @@ export class MountSimulator extends DeviceSimulator {
 		this.#equatorialCoordinate.elements.DEC.value = toDeg(clampDeclination(declination))
 		const pierSideChanged = this.#updatePierSide()
 
-		if (notify && this.#lastTick - this.#notifyCoordinateLastTime >= this.minimumNotifyCoordinateInterval) {
-			this.#notifyCoordinateLastTime = this.#lastTick
+		if (notify && this.#utcTime - this.#notifyCoordinateLastTime >= this.minimumNotifyCoordinateInterval) {
+			this.#notifyCoordinateLastTime = this.#utcTime
 			this.notify(this.#equatorialCoordinate)
+
+			// Published on the coordinate cadence rather than every tick, which keeps the live phase
+			// available to clients without flooding them at the simulation rate.
+			if (this.#periodicError.elements.RA_PERIOD.value > 0) {
+				this.#wormPhaseVector.elements.PHASE.value = toDeg(this.#wormPhase)
+				this.notify(this.#wormPhaseVector)
+			}
 		}
 
 		if (notify && pierSideChanged) this.notify(this.#pierSide)
