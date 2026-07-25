@@ -28,7 +28,7 @@ import { CAMERA_AMBIENT_TEMPERATURE, CAMERA_BLOB_PADDING, CAMERA_DEFAULT_TARGET_
 import { DeviceSimulator } from './device'
 import { FocuserSimulator } from './focuser'
 import type { CatalogSource, CatalogSourceStar, CatalogSourceType, DeviceSimulatorOptions, ReadoutMode, SimulatorProperty, TransferFormat } from './types'
-import { applyExclusiveSwitchValues, applyMultiSwitchValues, applyNumberVectorValues } from './util'
+import { applyExclusiveSwitchValues, applyMultiSwitchValues, applyNumberVectorValues, periodicErrorOffset } from './util'
 
 // Simulated astronomical camera acquisition, cooling, guiding, and synthetic image generation.
 
@@ -187,8 +187,6 @@ export class CameraSimulator extends DeviceSimulator {
 	#catalogDirty = true
 	#pulseNorthSouthUntil = 0
 	#pulseWestEastUntil = 0
-	#mountPeriodicWestEastOffset = 0
-	#mountPeriodicNorthSouthOffset = 0
 
 	readonly #mountManager?: MountManager
 	readonly #focuserManager?: FocuserManager
@@ -1041,7 +1039,7 @@ export class CameraSimulator extends DeviceSimulator {
 
 	// Rotates the master catalog on the full sensor, then applies aberration, subframe, and binning.
 	async #collectFrameStars(exposureTime: number, rotatorAngle: number) {
-		const stars = await this.#ensureCatalog()
+		const stars = await this.#ensureCatalog(exposureTime)
 		const frameX = this.#frame.elements.X.value
 		const frameY = this.#frame.elements.Y.value
 		const frameWidth = this.#frame.elements.WIDTH.value
@@ -1112,22 +1110,26 @@ export class CameraSimulator extends DeviceSimulator {
 	}
 
 	// Rebuilds the deterministic catalog only when scene parameters change.
-	async #ensureCatalog() {
+	//
+	// The pointing errors are sampled at the middle of the exposure, not at its end: they are applied
+	// here as an instantaneous transformation, and the mid-exposure value is the one that best
+	// represents the whole integration window.
+	async #ensureCatalog(exposureTime: number) {
 		const { elements } = this.#telescopeEffects
 		const mount = this.activeMount
 		let centerRightAscension = mount?.equatorialCoordinate.rightAscension
 		let centerDeclination = mount?.equatorialCoordinate.declination
 
 		if (mount !== undefined) {
-			const now = Date.now()
+			const midExposure = Date.now() - Math.trunc(exposureTime * 500)
 			const latitude = mount.geographicCoordinate.latitude
 			const longitude = mount.geographicCoordinate.longitude
 
 			if (elements.PAE_AZ.value !== 0 || elements.PAE_AL.value !== 0) {
-				;[centerRightAscension, centerDeclination] = polarAlignmentError(centerRightAscension!, centerDeclination!, latitude, this.#siderealTime(now, longitude), elements.PAE_AZ.value * ASEC2RAD, elements.PAE_AL.value * ASEC2RAD)
+				;[centerRightAscension, centerDeclination] = polarAlignmentError(centerRightAscension!, centerDeclination!, latitude, this.#siderealTime(midExposure, longitude), elements.PAE_AZ.value * ASEC2RAD, elements.PAE_AL.value * ASEC2RAD)
 			}
 
-			;[centerRightAscension, centerDeclination] = this.#applyTelescopePeriodicError(centerRightAscension!, centerDeclination!, now)
+			;[centerRightAscension, centerDeclination] = this.#applyTelescopePeriodicError(centerRightAscension!, centerDeclination!, midExposure)
 			;[centerRightAscension, centerDeclination] = equatorialToJ2000(centerRightAscension, centerDeclination)
 		}
 
@@ -1233,32 +1235,16 @@ export class CameraSimulator extends DeviceSimulator {
 		this.#setPulsing(false)
 	}
 
-	// Applies the configurable mount periodic error model.
+	// Applies the configurable mount periodic error model as an absolute offset at `utcTime`.
+	//
+	// The offset is absolute rather than incremental: the coordinate this receives is re-read from the
+	// mount on every call and therefore never carries the previous offset, so adding only the delta
+	// would collapse the error to the difference between consecutive evaluations.
 	#applyTelescopePeriodicError(rightAscension: Angle, declination: Angle, utcTime: number) {
 		const { elements } = this.#telescopeEffects
-
-		const westEastPeriodicOffset = this.#periodicErrorOffset(elements.PE_WE_PERIOD.value, elements.PE_WE_AMPLITUDE.value, utcTime)
-		const northSouthPeriodicOffset = this.#periodicErrorOffset(elements.PE_NS_PERIOD.value, elements.PE_NS_AMPLITUDE.value, utcTime)
-
-		if (westEastPeriodicOffset !== this.#mountPeriodicWestEastOffset) {
-			rightAscension += westEastPeriodicOffset - this.#mountPeriodicWestEastOffset
-			this.#mountPeriodicWestEastOffset = westEastPeriodicOffset
-		}
-
-		if (northSouthPeriodicOffset !== this.#mountPeriodicNorthSouthOffset) {
-			declination += northSouthPeriodicOffset - this.#mountPeriodicNorthSouthOffset
-			this.#mountPeriodicNorthSouthOffset = northSouthPeriodicOffset
-		}
-
+		rightAscension += periodicErrorOffset(elements.PE_WE_PERIOD.value, elements.PE_WE_AMPLITUDE.value, utcTime)
+		declination += periodicErrorOffset(elements.PE_NS_PERIOD.value, elements.PE_NS_AMPLITUDE.value, utcTime)
 		return [rightAscension, declination] as const
-	}
-
-	// Computes the current periodic offset for one axis in radians.
-	#periodicErrorOffset(periodSeconds: number, amplitudeArcsec: number, utcTime: number) {
-		if (periodSeconds <= 0 || amplitudeArcsec === 0) return 0
-		const periodMilliseconds = periodSeconds * 1000
-		const phase = ((utcTime % periodMilliseconds) * TAU) / periodMilliseconds
-		return Math.sin(phase) * amplitudeArcsec * ASEC2RAD
 	}
 
 	get cfaPattern() {

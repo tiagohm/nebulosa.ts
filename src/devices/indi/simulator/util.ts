@@ -1,4 +1,4 @@
-import { PIOVERTWO } from '../../../core/constants'
+import { ASEC2RAD, PIOVERTWO, TAU } from '../../../core/constants'
 import { clamp } from '../../../math/numerical/math'
 import { handleDefNumberVector, handleDefSwitchVector, handleDefTextVector, type IndiClientHandler } from '../client'
 import { type DefNumberVector, type DefSwitchVector, type DefTextVector, selectOnSwitch } from '../types'
@@ -100,4 +100,17 @@ export function shortestRotatorDelta(target: number, current: number) {
 // Clamps a declination to [-π/2, π/2] radians.
 export function clampDeclination(value: number) {
 	return clamp(value, -PIOVERTWO, PIOVERTWO)
+}
+
+// Sinusoidal periodic error of one axis at an instant, in radians.
+//
+// `periodSeconds` is the full cycle duration and `amplitudeArcsec` the semi-amplitude in arcseconds;
+// either being zero disables the error and returns exactly 0. `utcTime` is a UTC timestamp in
+// milliseconds and the phase is taken from it modulo the period, so the value is an absolute offset
+// and not an increment: evaluating twice at the same instant returns the same number.
+export function periodicErrorOffset(periodSeconds: number, amplitudeArcsec: number, utcTime: number) {
+	if (periodSeconds <= 0 || amplitudeArcsec === 0) return 0
+	const periodMilliseconds = periodSeconds * 1000
+	const phase = ((utcTime % periodMilliseconds) * TAU) / periodMilliseconds
+	return Math.sin(phase) * amplitudeArcsec * ASEC2RAD
 }
