@@ -3,7 +3,7 @@ import { PI, PIOVERTWO, TAU } from '../../../../src/core/constants'
 import { IndiClientHandlerSet } from '../../../../src/devices/indi/client'
 import { GuideOutputManager, MountManager } from '../../../../src/devices/indi/manager'
 import { ClientSimulator } from '../../../../src/devices/indi/simulator/client'
-import { SIDEREAL_DRIFT_RATE } from '../../../../src/devices/indi/simulator/constants'
+import { SIDEREAL_DRIFT_RATE, SLEW_SPEED_FACTOR } from '../../../../src/devices/indi/simulator/constants'
 import { MountSimulator } from '../../../../src/devices/indi/simulator/mount'
 import { TRACKING_RATE_CALIBRATION_TEMPERATURE } from '../../../../src/devices/indi/simulator/mount.tracking'
 import { type Angle, arcsec, deg, hour, normalizeAngle, normalizePI, toArcsec, toDeg } from '../../../../src/math/units/angle'
@@ -1521,8 +1521,10 @@ describe('mount simulator pointing errors', () => {
 			expect(mount.isSlewing).toBe(false)
 
 			// The worm turns once per period at the sidereal rate, so the phase owed is set by how far the
-			// axis went, not by how long the step was.
-			const expected = (travel / SIDEREAL_DRIFT_RATE) * (TAU / period)
+			// motor went, not by how long the step was. What the motor delivers is the coordinate travel
+			// less the sky that turned underneath it while it was travelling.
+			const slewSeconds = travel / (deg(0.5) * SLEW_SPEED_FACTOR)
+			const expected = ((travel - SIDEREAL_DRIFT_RATE * slewSeconds) / SIDEREAL_DRIFT_RATE) * (TAU / period)
 			expect(Math.abs(normalizePI(mount.wormPhase))).toBeCloseTo(expected, 9)
 		} finally {
 			mount.dispose()
