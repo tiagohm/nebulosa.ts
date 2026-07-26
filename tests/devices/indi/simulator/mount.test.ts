@@ -579,6 +579,42 @@ describe('mount simulator pointing errors', () => {
 		}
 	})
 
+	test('rings down only over the part of the step that followed the stop', () => {
+		// Arriving partway through a step and then charging the new ring-down the whole interval shifts
+		// its phase. Compared against the same arrival reached with a fine step, where almost none of the
+		// interval precedes the stop, the two must agree.
+		function overshootAfterArrival(step: number) {
+			const { client, mount } = makeMount(`mount.settling.partial.${step}`, 'SETTLING')
+
+			try {
+				client.sendNumber({ device: mount.name, name: 'MOUNT_SETTLING', elements: { OVERSHOOT: 60, FREQUENCY: 2, DAMPING_RATIO: 0.1 } })
+				mount.setSlewRate('SPEED_6')
+
+				const target = mount.declination + deg(0.5)
+				mount.goTo(mount.rightAscension, target)
+
+				// Runs the slew out, then samples the ring-down a fixed time after it ended.
+				while (mount.isSlewing) mount.advance(step)
+				let peak = 0
+				for (let elapsed = 0; elapsed < 0.5; elapsed += 0.001) {
+					mount.advance(0.001)
+					peak = Math.max(peak, Math.abs(toArcsec(mount.mechanical.declination - target)))
+				}
+
+				return peak
+			} finally {
+				mount.dispose()
+			}
+		}
+
+		const coarse = overshootAfterArrival(0.1)
+		const fine = overshootAfterArrival(0.001)
+
+		// Within a few percent: the arrival instants still differ by up to one coarse step, but the
+		// oscillator is no longer being advanced through time that passed before it was excited.
+		expect(coarse / fine).toBeCloseTo(1, 1)
+	})
+
 	test('re-derives the reported coordinate when the encoder index errors change', () => {
 		const { client, mount } = makeMount('mount.features.index', 'ALIGNMENT')
 

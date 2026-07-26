@@ -1174,8 +1174,14 @@ export class MountSimulator extends DeviceSimulator {
 		// run at the rate the motion is about to apply.
 		this.#advanceWormPhase(this.#rightAscensionMotorRate(), dtSeconds)
 
+		// A slew reports how much of the step was left once it arrived, so a ring-down excited partway
+		// through is integrated only over the time that actually followed the stop. At the default tick a
+		// few-hertz resonance covers a good part of a cycle in one step, so charging it the whole
+		// interval would shift its phase or swallow the first overshoot.
+		let settlingSeconds = dtSeconds
+
 		if (this.#slewTarget) {
-			this.#advanceSlew(dtSeconds)
+			settlingSeconds = this.#advanceSlew(dtSeconds)
 		} else {
 			this.#advanceFreeMotion(dtSeconds)
 		}
@@ -1183,8 +1189,8 @@ export class MountSimulator extends DeviceSimulator {
 		// Applied as the change in the residual offset rather than as the offset itself, so the ringing
 		// rides on top of whatever the axes are doing and pays itself back: once it has died away the
 		// mount sits exactly where it was commanded.
-		const rightAscensionRing = advanceSettling(this.#rightAscensionSettling, dtSeconds, this.#settlingConfig)
-		const declinationRing = advanceSettling(this.#declinationSettling, dtSeconds, this.#settlingConfig)
+		const rightAscensionRing = advanceSettling(this.#rightAscensionSettling, settlingSeconds, this.#settlingConfig)
+		const declinationRing = advanceSettling(this.#declinationSettling, settlingSeconds, this.#settlingConfig)
 
 		if (rightAscensionRing !== 0 || declinationRing !== 0) {
 			this.#setMechanical(this.#mechanical.rightAscension + rightAscensionRing, this.#mechanical.declination + declinationRing)
@@ -1253,12 +1259,15 @@ export class MountSimulator extends DeviceSimulator {
 		return [deltaRightAscension * scale, deltaDeclination * scale]
 	}
 
-	// Moves the mount along the commanded slew vector.
+	// Moves the mount along the commanded slew vector, returning how many seconds of the step were left
+	// unspent once it arrived, which is zero while the slew is still running.
 	#advanceSlew(dtSeconds: number) {
 		const target = this.#slewTarget
 
-		if (!target) return
+		if (!target) return dtSeconds
 
+		// Time left in the step after the slew ends, which is none while it is still running.
+		let remaining = 0
 		const speed = this.#manualSlewSpeed() * SLEW_SPEED_FACTOR
 		const maxStep = speed * dtSeconds
 		const deltaRightAscension = normalizePI(target.rightAscension - this.#mechanical.rightAscension)
@@ -1266,6 +1275,11 @@ export class MountSimulator extends DeviceSimulator {
 		const span = Math.max(Math.abs(deltaRightAscension), Math.abs(deltaDeclination))
 
 		if (span <= maxStep || span === 0) {
+			// Fraction of the step still unspent when the axes reach the target. The ring-down excited
+			// below starts at that instant, not at the beginning of the step, and at the default tick a
+			// few-hertz resonance covers a good part of a cycle in one step, so integrating it over the
+			// whole interval would shift its phase or swallow the first overshoot outright.
+			remaining = maxStep > 0 ? dtSeconds * (1 - span / maxStep) : 0
 			this.#setMechanical(target.rightAscension, target.declination)
 			// The axes come to a stop, so static friction has to be overcome again before the tracking
 			// or guiding that follows produces any motion.
@@ -1300,7 +1314,7 @@ export class MountSimulator extends DeviceSimulator {
 				this.#setParking(false)
 			}
 
-			return
+			return remaining
 		}
 
 		// A slew drives the axes directly rather than through the transmission model, since backlash is
@@ -1312,6 +1326,7 @@ export class MountSimulator extends DeviceSimulator {
 
 		const scale = maxStep / span
 		this.#setMechanical(this.#mechanical.rightAscension + deltaRightAscension * scale, this.#mechanical.declination + deltaDeclination * scale)
+		return 0
 	}
 
 	// Advances tracking, manual motion and pulse guiding when not slewing.
