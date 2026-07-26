@@ -674,12 +674,34 @@ export class MountSimulator extends DeviceSimulator {
 	// properties is restored, since loading writes the vectors directly instead of going through
 	// `sendNumber`, and whenever an error feature is switched, since each of these is gated by one.
 	#refreshErrorConfigurations() {
+		this.#discardDisabledErrorState()
 		this.#refreshTransmission()
 		this.#refreshSettling()
 		this.#refreshTrackingRate()
 		this.#refreshPeriodicError()
 		this.#refreshWind()
 		this.#refreshReportedCoordinate()
+	}
+
+	// Throws away the state a disabled family had accumulated, so switching one off leaves an ideal
+	// mount rather than one frozen wherever the error had already carried it.
+	//
+	// Most families are derived from their vector on every evaluation and stop contributing the moment
+	// the switch does. These two are not: they integrate over time into state of their own, and without
+	// this the drift a drive had walked away, or the offset a home sensor had left, would go on being
+	// added to the boresight by a family that is no longer being simulated. The rate error is worse
+	// still, since the wander of the rate survives in its own state and would keep the drift growing.
+	#discardDisabledErrorState() {
+		if (!this.#simulatesTrackingRate) {
+			resetTrackingRateError(this.#trackingRateErrorState)
+			this.#trackingRateError = 0
+			this.#trackingRateOffset = 0
+		}
+
+		if (!this.#simulatesMechanics) {
+			this.#homeScatterRightAscension = 0
+			this.#homeScatterDeclination = 0
+		}
 	}
 
 	// Re-derives the reported coordinate from the axes without moving them, which is what has to happen

@@ -340,6 +340,41 @@ describe('mount simulator pointing errors', () => {
 		}
 	})
 
+	test('restores an ideal mount when a family that accumulates state is switched off', () => {
+		const { client, mount } = makeMount('mount.features.accumulated', 'TRACKING_RATE', 'MECHANICS')
+
+		try {
+			mount.setTrackingEnabled(true)
+			mount.setSlewRate('SPEED_6')
+			mount.advance(600)
+
+			mount.home()
+			for (let i = 0; i < 300 && mount.isSlewing; i++) mount.advance(1)
+
+			// Both families have now integrated into state of their own rather than staying a function of
+			// their vector, which is what makes them different from the rest.
+			expect(mount.trackingRateOffset).not.toBe(0)
+			expect(mount.boresight.declination).not.toBe(mount.mechanical.declination)
+
+			client.sendSwitch({ device: mount.name, name: 'SIMULATOR_ERROR_FEATURES', elements: { TRACKING_RATE: false, MECHANICS: false } })
+
+			// Switching a family off has to mean the error does not exist, not that it is frozen wherever
+			// it had already carried the mount.
+			expect(mount.trackingRateOffset).toBe(0)
+			expect(mount.boresight.rightAscension).toBe(mount.mechanical.rightAscension)
+			expect(mount.boresight.declination).toBe(mount.mechanical.declination)
+			expect(mount.pointingErrorBound).toBe(0)
+
+			// And it must stay ideal: the wander of the rate lives in its own state, so leaving it behind
+			// would let the drift keep growing under a family that is no longer simulated.
+			mount.advance(600)
+			expect(mount.trackingRateOffset).toBe(0)
+			expect(mount.boresight.rightAscension).toBe(mount.mechanical.rightAscension)
+		} finally {
+			mount.dispose()
+		}
+	})
+
 	test('re-derives the reported coordinate when the encoder index errors change', () => {
 		const { client, mount } = makeMount('mount.features.index', 'ALIGNMENT')
 
