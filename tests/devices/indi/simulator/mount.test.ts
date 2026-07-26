@@ -3,7 +3,9 @@ import { PI, PIOVERTWO } from '../../../../src/core/constants'
 import { IndiClientHandlerSet } from '../../../../src/devices/indi/client'
 import { GuideOutputManager, MountManager } from '../../../../src/devices/indi/manager'
 import { ClientSimulator } from '../../../../src/devices/indi/simulator/client'
+import { SIDEREAL_DRIFT_RATE } from '../../../../src/devices/indi/simulator/constants'
 import { MountSimulator } from '../../../../src/devices/indi/simulator/mount'
+import { TRACKING_RATE_CALIBRATION_TEMPERATURE } from '../../../../src/devices/indi/simulator/mount.tracking'
 import { arcsec, deg, hour, normalizePI, toArcsec } from '../../../../src/math/units/angle'
 import { polarAlignmentError } from '../../../../src/observation/alignment/polaralignment'
 import { isTimeConsumingTestSkipped, waitUntil } from '../../../util'
@@ -753,6 +755,86 @@ describe('mount simulator pointing errors', () => {
 
 			expect(Math.abs(normalizePI(after.rightAscension - before.rightAscension))).toBeGreaterThan(arcsec(1))
 			expect(Math.abs(after.declination - before.declination)).toBeGreaterThan(arcsec(1))
+		} finally {
+			mount.dispose()
+		}
+	})
+
+	test('walks the boresight away from the reported coordinate with a tracking rate error', () => {
+		const { client, mount } = makeMount('mount.rate.bias')
+
+		try {
+			// One percent fast, which is gross but keeps the drift well clear of the noise floor.
+			client.sendNumber({ device: mount.name, name: 'MOUNT_TRACKING_RATE', elements: { BIAS: 10000 } })
+			mount.setTrackingEnabled(true)
+
+			const reported = mount.rightAscension
+			mount.advance(3600)
+
+			// The encoders count exactly the sidereal rate they were told to, so the mount still believes
+			// it is standing still on the sky. That is what makes a rate error invisible without a camera.
+			expect(normalizePI(mount.rightAscension - reported)).toBeCloseTo(0, 12)
+
+			// A drive running fast pushes the tube further west than it should, so the optical axis falls
+			// behind in right ascension by the fraction of the sidereal travel it overshot.
+			const expected = -SIDEREAL_DRIFT_RATE * 3600 * 0.01
+			expect(mount.trackingRateOffset).toBeCloseTo(expected, 12)
+			expect(normalizePI(mount.boresight.rightAscension - reported)).toBeCloseTo(expected, 12)
+
+			// Consumers sizing a margin have to see it, since it is not bounded by any of the geometry.
+			expect(mount.pointingErrorBound).toBeCloseTo(Math.abs(expected), 12)
+		} finally {
+			mount.dispose()
+		}
+	})
+
+	test('accrues no rate drift with the drive stopped', () => {
+		const { client, mount } = makeMount('mount.rate.idle')
+
+		try {
+			client.sendNumber({ device: mount.name, name: 'MOUNT_TRACKING_RATE', elements: { BIAS: 10000 } })
+
+			// Tracking is off, so the motor is not turning: the sky drifts past on its own and there is no
+			// commanded travel for the drive to get wrong.
+			mount.advance(3600)
+			expect(mount.trackingRateOffset).toBe(0)
+		} finally {
+			mount.dispose()
+		}
+	})
+
+	test('shifts the rate error with the temperature', () => {
+		const { client, mount } = makeMount('mount.rate.temperature')
+
+		try {
+			// The bias cancels the temperature term exactly at ten degrees above calibration, so the drive
+			// is perfect there and runs slow beyond it.
+			client.sendNumber({ device: mount.name, name: 'MOUNT_TRACKING_RATE', elements: { BIAS: 1000, TEMPERATURE_COEFFICIENT: -100, TEMPERATURE: TRACKING_RATE_CALIBRATION_TEMPERATURE + 10 } })
+			mount.setTrackingEnabled(true)
+			mount.advance(600)
+			expect(mount.trackingRateOffset).toBeCloseTo(0, 12)
+
+			client.sendNumber({ device: mount.name, name: 'MOUNT_TRACKING_RATE', elements: { TEMPERATURE: TRACKING_RATE_CALIBRATION_TEMPERATURE + 20 } })
+			mount.advance(600)
+			expect(mount.trackingRateOffset).toBeCloseTo(SIDEREAL_DRIFT_RATE * 600 * 1000e-6, 12)
+		} finally {
+			mount.dispose()
+		}
+	})
+
+	test('absorbs the accumulated rate drift into a sync', () => {
+		const { client, mount } = makeMount('mount.rate.sync')
+
+		try {
+			client.sendNumber({ device: mount.name, name: 'MOUNT_TRACKING_RATE', elements: { BIAS: 10000 } })
+			mount.setTrackingEnabled(true)
+			mount.advance(600)
+			expect(mount.trackingRateOffset).not.toBe(0)
+
+			// Re-registering against the sky is exactly what clears an unmodelled drift.
+			mount.syncTo(hour(5), deg(20))
+			expect(mount.trackingRateOffset).toBe(0)
+			expect(mount.boresight.rightAscension).toBe(mount.mechanical.rightAscension)
 		} finally {
 			mount.dispose()
 		}

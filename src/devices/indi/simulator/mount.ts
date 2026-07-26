@@ -5,7 +5,7 @@ import { formatTemporal, TIMEZONE } from '../../../astronomy/time/temporal'
 import { timeUnix } from '../../../astronomy/time/time'
 import { ASEC2RAD, DAYSEC, PIOVERTWO, TAU } from '../../../core/constants'
 import { clamp } from '../../../math/numerical/math'
-import { mulberry32 } from '../../../math/numerical/random'
+import { mulberry32, normal } from '../../../math/numerical/random'
 import { type Angle, deg, hour, normalizeAngle, normalizePI, toDeg, toHour } from '../../../math/units/angle'
 import { meter } from '../../../math/units/distance'
 import { handleDefNumberVector, type IndiClientHandler } from '../client'
@@ -18,6 +18,8 @@ import { advanceMechanicalAxis, IDENTITY_MECHANICAL_AXIS_CONFIG, loadMechanicalA
 import { type GuidePulse, type GuideResponseConfig, IDENTITY_GUIDE_RESPONSE_CONFIG, integrateGuidePulses, quantizeGuideDuration, retireGuidePulses } from './mount.guiding'
 import { advanceSettling, exciteSettling, IDENTITY_SETTLING_CONFIG, resetSettling, type SettlingConfig, settlingState } from './mount.settling'
 import { boresightHistory, clearBoresightHistory, recordBoresightSample, sampleBoresightTrajectory } from './mount.trajectory'
+// oxfmt-ignore
+import { advanceTrackingRateError, IDENTITY_TRACKING_RATE_ERROR_CONFIG, resetTrackingRateError, TRACKING_RATE_CALIBRATION_TEMPERATURE, type TrackingRateErrorConfig, trackingRateErrorState } from './mount.tracking'
 import type { AxisDirection, CoordSetMode, DeviceSimulatorOptions, MountPointingState, SimulatorProperty, SlewMode } from './types'
 import { applyNumberVectorValues, clampDeclination, periodicErrorAtPhase } from './util'
 
@@ -83,6 +85,11 @@ export class MountSimulator extends DeviceSimulator {
 	// stiff, which is how it behaved before.
 	// oxfmt-ignore
 	readonly #settling = makeNumberVector('', 'MOUNT_SETTLING', 'Settling', SIMULATION, 'rw', ['OVERSHOOT', 'Overshoot (arcsec)', 0, 0, 600, 0.1, '%.3f'], ['FREQUENCY', 'Frequency (Hz)', 2, 0, 50, 0.1, '%.2f'], ['DAMPING_RATIO', 'Damping Ratio', 0.2, 0, 1, 0.01, '%.3f'])
+	// Relative error of the tracking drive, in parts per million of the commanded rate, as a constant
+	// bias plus a temperature term plus a random wander. The temperature is the ambient one seen by the
+	// drive; the coefficient acts on its departure from TRACKING_RATE_CALIBRATION_TEMPERATURE.
+	// oxfmt-ignore
+	readonly #trackingRate = makeNumberVector('', 'MOUNT_TRACKING_RATE', 'Tracking Rate', SIMULATION, 'rw', ['BIAS', 'Rate Bias (ppm)', 0, -10000, 10000, 1, '%.2f'], ['TEMPERATURE_COEFFICIENT', 'Temperature Coefficient (ppm/C)', 0, -1000, 1000, 0.1, '%.3f'], ['TEMPERATURE', 'Temperature (C)', TRACKING_RATE_CALIBRATION_TEMPERATURE, -60, 60, 0.1, '%.1f'], ['RANDOM_WALK', 'Random Walk (ppm/sqrt(s))', 0, 0, 1000, 0.1, '%.3f'])
 
 	protected readonly properties: readonly SimulatorProperty[] = [
 		this.#onCoordSet,
@@ -108,11 +115,12 @@ export class MountSimulator extends DeviceSimulator {
 		this.#mechanics,
 		this.#guiding,
 		this.#settling,
+		this.#trackingRate,
 	]
 	// The error-model configuration is persisted along with track mode and guide rate, so a simulated
 	// mount keeps its mechanical character across reconnections. The worm phase is not: it is live
 	// mechanical state, and a power cycle is exactly when a real mount loses track of it.
-	protected propertiesToNotSave = this.properties.filter((e) => e !== this.#trackMode && e !== this.#guideRate && e !== this.#alignment && e !== this.#periodicError && e !== this.#mechanics && e !== this.#guiding && e !== this.#settling)
+	protected propertiesToNotSave = this.properties.filter((e) => e !== this.#trackMode && e !== this.#guideRate && e !== this.#alignment && e !== this.#periodicError && e !== this.#mechanics && e !== this.#guiding && e !== this.#settling && e !== this.#trackingRate)
 
 	#timer?: NodeJS.Timeout
 	#lastTick = 0
@@ -132,6 +140,18 @@ export class MountSimulator extends DeviceSimulator {
 	#guideRateWestEast = 0
 	// Deterministic source for the latency jitter, so a simulated session is reproducible.
 	readonly #random = mulberry32(GUIDE_JITTER_SEED)
+	// Standard normal source for the wander of the tracking rate, drawn from the same seeded generator.
+	readonly #normal = normal(this.#random)
+	// Wandering component of the tracking-rate error, and the total error of the interval just stepped,
+	// both in parts per million.
+	readonly #trackingRateErrorState = trackingRateErrorState()
+	#trackingRateError = 0
+	// Rate-error configuration, rebuilt from MOUNT_TRACKING_RATE whenever it changes.
+	#trackingRateErrorConfig: TrackingRateErrorConfig = IDENTITY_TRACKING_RATE_ERROR_CONFIG
+	// Travel the drive has delivered beyond what the encoders counted, radians of right ascension.
+	// Unbounded on purpose: an uncorrected rate error walks away without limit, which is exactly the
+	// failure an unguided exposure shows.
+	#trackingRateOffset: Angle = 0
 	// Rolling record of where the optical axis actually pointed, so a camera can integrate an exposure
 	// over the motion that happened rather than over a single instant.
 	readonly #boresightHistory = boresightHistory(MOUNT_TRAJECTORY_CAPACITY)
@@ -297,7 +317,17 @@ export class MountSimulator extends DeviceSimulator {
 		}
 
 		rightAscension += periodicErrorAtPhase(this.#wormPhaseAt(utcTime), this.#periodicError.elements.RA_AMPLITUDE.value)
+		// Held constant across the extrapolation window rather than projected forward: over the fraction
+		// of a second a caller extrapolates by, a part-per-million rate error moves nothing measurable.
+		rightAscension += this.#trackingRateOffset
 		return { rightAscension, declination }
+	}
+
+	// Right ascension the drive has delivered beyond what the encoders counted, radians. Grows while
+	// tracking with a non-zero rate error and is cleared by a sync, which is what re-registers the
+	// bookkeeping against the sky.
+	get trackingRateOffset(): Angle {
+		return this.#trackingRateOffset
 	}
 
 	// Live phase of the right-ascension worm, in radians normalized to [0, TAU). Integrated from the
@@ -360,7 +390,9 @@ export class MountSimulator extends DeviceSimulator {
 		const polar = Math.SQRT2 * (Math.abs(POLAR_AZIMUTH_ERROR.value) + Math.abs(POLAR_ALTITUDE_ERROR.value))
 		const geometry = Math.abs(CONE_ERROR.value) + Math.abs(AXIS_NON_ORTHOGONALITY.value)
 		const index = Math.abs(RA_INDEX_ERROR.value) + Math.abs(DEC_INDEX_ERROR.value)
-		return (polar + geometry + index + this.#periodicError.elements.RA_AMPLITUDE.value) * ASEC2RAD
+		// The accumulated rate drift is added as it stands rather than bounded: it has no bound, so the
+		// only honest figure is how far it has walked so far.
+		return (polar + geometry + index + this.#periodicError.elements.RA_AMPLITUDE.value) * ASEC2RAD + Math.abs(this.#trackingRateOffset)
 	}
 
 	// Current pier side derived from the pier-side property.
@@ -432,7 +464,28 @@ export class MountSimulator extends DeviceSimulator {
 					this.#refreshSettling()
 					this.notify(this.#settling)
 				}
+				return
+			case 'MOUNT_TRACKING_RATE':
+				if (applyNumberVectorValues(this.#trackingRate, vector.elements)) {
+					this.#refreshTrackingRate()
+					this.notify(this.#trackingRate)
+				}
 		}
+	}
+
+	// Rebuilds the tracking-rate error configuration from MOUNT_TRACKING_RATE. Called only when the
+	// property changes, so the per-step path reads a plain field.
+	#refreshTrackingRate() {
+		const { BIAS, TEMPERATURE_COEFFICIENT, TEMPERATURE, RANDOM_WALK } = this.#trackingRate.elements
+		this.#trackingRateErrorConfig = { bias: BIAS.value, temperatureCoefficient: TEMPERATURE_COEFFICIENT.value, temperature: TEMPERATURE.value, randomWalk: RANDOM_WALK.value }
+	}
+
+	// Rebuilds every cached configuration after a persisted set of properties has been restored, since
+	// loading writes the vectors directly instead of going through `sendNumber`.
+	protected onPropertiesLoaded() {
+		this.#refreshTransmission()
+		this.#refreshSettling()
+		this.#refreshTrackingRate()
 	}
 
 	// Rebuilds the settling configuration from MOUNT_SETTLING. Called only when the property changes,
@@ -521,6 +574,9 @@ export class MountSimulator extends DeviceSimulator {
 		if (!this.isConnected) return
 
 		this.#lastTick = Date.now()
+		// A power cycle leaves the drive where it was but forgets how far its rate had wandered.
+		resetTrackingRateError(this.#trackingRateErrorState)
+		this.#trackingRateError = 0
 		this.#refreshDynamicCoordinates(false)
 		this.#timer = setInterval(this.#tick.bind(this), TICK_INTERVAL_MS)
 	}
@@ -782,6 +838,9 @@ export class MountSimulator extends DeviceSimulator {
 		this.#guideRateWestEast = integrateGuidePulses(this.#westEastPulses, startTime, this.#utcTime) / dtSeconds
 		this.#guideRateNorthSouth = integrateGuidePulses(this.#northSouthPulses, startTime, this.#utcTime) / dtSeconds
 
+		// Sampled once per step, so every consumer of the interval sees the same rate error.
+		this.#trackingRateError = advanceTrackingRateError(this.#trackingRateErrorState, dtSeconds, this.#trackingRateErrorConfig, this.#normal)
+
 		// Integrated before the motion advances, so the phase covers the interval the axes are about to
 		// run at the rate the motion is about to apply.
 		this.#advanceWormPhase(this.#rightAscensionMotorRate(), dtSeconds)
@@ -943,6 +1002,15 @@ export class MountSimulator extends DeviceSimulator {
 		const rightAscensionStep = advanceMechanicalAxis(this.#rightAscensionAxis, rightAscensionMotorRate, dtSeconds, this.#rightAscensionTransmission)
 		const declinationStep = advanceMechanicalAxis(this.#declinationAxis, declinationMotorRate, dtSeconds, this.#declinationTransmission)
 		const rightAscensionDelta = SIDEREAL_DRIFT_RATE * dtSeconds + rightAscensionStep
+
+		// The drive delivers the travel the transmission let through, times one plus its rate error; the
+		// encoders count only the nominal part. The excess therefore never reaches the reported
+		// coordinate and accumulates as an unmodelled displacement of the optical axis. Scaling the
+		// travel actually delivered rather than the commanded rate means a stuck or backlashed axis
+		// contributes nothing, which is right: a drive that is not moving cannot run fast.
+		if (this.#trackingRateError !== 0 && rightAscensionStep !== 0) {
+			this.#trackingRateOffset += rightAscensionStep * this.#trackingRateError * 1e-6
+		}
 
 		if (rightAscensionDelta !== 0 || declinationStep !== 0) {
 			this.#setMechanical(this.#mechanical.rightAscension + rightAscensionDelta, this.#mechanical.declination + declinationStep)
@@ -1127,6 +1195,10 @@ export class MountSimulator extends DeviceSimulator {
 		// Any ring-down in progress belongs to the position that was just abandoned.
 		resetSettling(this.#rightAscensionSettling)
 		resetSettling(this.#declinationSettling)
+		// A sync re-registers the bookkeeping against the sky, so whatever the drive had silently walked
+		// away is absorbed into the new zero. The wander of the rate itself is not: the drive is still the
+		// same drive and starts walking again from where its rate was.
+		this.#trackingRateOffset = 0
 		clearBoresightHistory(this.#boresightHistory)
 		const boresight = this.boresightAt(this.#utcTime)
 		recordBoresightSample(this.#boresightHistory, this.#utcTime, boresight.rightAscension, boresight.declination)
