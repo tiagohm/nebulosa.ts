@@ -262,17 +262,100 @@ describe.skipIf(SKIP)('mount simulator', () => {
 })
 
 // The error model needs no timers, so it is covered without the time-consuming gate.
+// Every element of a simulation vector neutralized. A test that isolates one term starts from one of
+// these and overrides just that term, since each vector carries realistic defaults for the rest of its
+// family and a neighbouring default would otherwise contaminate the measurement.
+const NO_ALIGNMENT = { POLAR_AZIMUTH_ERROR: 0, POLAR_ALTITUDE_ERROR: 0, CONE_ERROR: 0, AXIS_NON_ORTHOGONALITY: 0, RA_INDEX_ERROR: 0, DEC_INDEX_ERROR: 0 }
+const NO_MECHANICS = { BACKLASH_RA: 0, BACKLASH_DEC: 0, TAKE_UP_RATE: 1, STICTION_RA: 0, STICTION_DEC: 0, HOME_SCATTER: 0 }
+const NO_GUIDING = { LATENCY: 0, LATENCY_JITTER: 0, MINIMUM_PULSE: 0, QUANTIZATION: 0, GAIN_NORTH: 1, GAIN_SOUTH: 1, GAIN_EAST: 1, GAIN_WEST: 1 }
+const NO_PERIODIC_ERROR = { RA_PERIOD: 0, RA_AMPLITUDE: 0, RA_PHASE: 0, RA_AMPLITUDE_2: 0, RA_PHASE_2: 0, RA_AMPLITUDE_3: 0, RA_PHASE_3: 0 }
+const NO_FLEXURE = { TUBE_FLEXURE: 0, PIER_WEST_RA: 0, PIER_WEST_DEC: 0 }
+const NO_TRACKING_RATE = { BIAS: 0, TEMPERATURE_COEFFICIENT: 0, TEMPERATURE: TRACKING_RATE_CALIBRATION_TEMPERATURE, RANDOM_WALK: 0 }
+
 describe('mount simulator pointing errors', () => {
-	// Builds a disconnected simulator parked at a well-conditioned coordinate and site.
-	function makeMount(name: string) {
+	// Builds a connected simulator at a well-conditioned coordinate and site, with the named families of
+	// error switched on.
+	//
+	// Nothing is simulated unless asked for, so a test that names no feature gets a mechanically perfect
+	// mount. The values each family uses are the defaults of its vector unless the test overrides them,
+	// which is what keeps a test from having to invent plausible numbers just to exercise a behaviour.
+	function makeMount(name: string, ...features: readonly string[]) {
 		const handler = new IndiClientHandlerSet()
 		const client = new ClientSimulator(name, handler)
 		const mount = new MountSimulator('Mount Simulator', client)
 		mount.connect()
 		client.sendNumber({ device: mount.name, name: 'GEOGRAPHIC_COORD', elements: { LAT: -22, LONG: -45, ELEV: 0 } })
+
+		if (features.length > 0) {
+			const elements: Record<string, boolean> = {}
+			for (const feature of features) elements[feature] = true
+			client.sendSwitch({ device: mount.name, name: 'SIMULATOR_ERROR_FEATURES', elements })
+		}
+
 		mount.syncTo(hour(5), deg(20))
 		return { client, mount }
 	}
+
+	test('simulates nothing until a feature is switched on, despite carrying realistic values', () => {
+		const { client, mount } = makeMount('mount.features.off')
+
+		try {
+			// The vectors are not empty: they describe a mid-range amateur mount. What keeps the default
+			// simulator perfect is the switch, not the numbers.
+			expect(mount.pointingErrorBound).toBe(0)
+			expect(mount.boresight.rightAscension).toBe(mount.mechanical.rightAscension)
+			expect(mount.boresight.declination).toBe(mount.mechanical.declination)
+
+			// Writing to a family that is off changes nothing either, which is what makes the switch the
+			// single gate rather than one of two things to remember.
+			client.sendNumber({ device: mount.name, name: 'MOUNT_ALIGNMENT', elements: { POLAR_AZIMUTH_ERROR: 3600 } })
+			client.sendNumber({ device: mount.name, name: 'MOUNT_WIND', elements: { AMPLITUDE: 30 } })
+			mount.advance(10)
+
+			expect(mount.pointingErrorBound).toBe(0)
+			expect(mount.boresight.declination).toBe(mount.mechanical.declination)
+		} finally {
+			mount.dispose()
+		}
+	})
+
+	test('brings in a whole family at its defaults when switched on', () => {
+		const { client, mount } = makeMount('mount.features.on')
+
+		try {
+			expect(mount.pointingErrorBound).toBe(0)
+
+			// No numbers given: turning the switch on is enough to get a mount with a plausible polar
+			// misalignment, cone error and index error, which is the point of the defaults.
+			client.sendSwitch({ device: mount.name, name: 'SIMULATOR_ERROR_FEATURES', elements: { ALIGNMENT: true } })
+			expect(mount.pointingErrorBound).toBeGreaterThan(arcsec(100))
+			expect(mount.boresight.declination).not.toBe(mount.mechanical.declination)
+
+			// And switching it back off restores an ideal mount without having to zero anything.
+			client.sendSwitch({ device: mount.name, name: 'SIMULATOR_ERROR_FEATURES', elements: { ALIGNMENT: false } })
+			expect(mount.pointingErrorBound).toBe(0)
+			expect(mount.boresight.declination).toBe(mount.mechanical.declination)
+		} finally {
+			mount.dispose()
+		}
+	})
+
+	test('re-derives the reported coordinate when the encoder index errors change', () => {
+		const { client, mount } = makeMount('mount.features.index', 'ALIGNMENT')
+
+		try {
+			client.sendNumber({ device: mount.name, name: 'MOUNT_ALIGNMENT', elements: { ...NO_ALIGNMENT, RA_INDEX_ERROR: 300 } })
+
+			// An index error is bookkeeping: the axes do not move, but what the controller reports about
+			// them must change at once rather than waiting for the next thing that happens to move them.
+			expect(toArcsec(normalizePI(mount.rightAscension - mount.mechanical.rightAscension))).toBeCloseTo(300, 6)
+
+			client.sendNumber({ device: mount.name, name: 'MOUNT_ALIGNMENT', elements: { ...NO_ALIGNMENT } })
+			expect(toArcsec(normalizePI(mount.rightAscension - mount.mechanical.rightAscension))).toBeCloseTo(0, 6)
+		} finally {
+			mount.dispose()
+		}
+	})
 
 	test('collapses the three directions onto one another when no error is configured', () => {
 		const { mount } = makeMount('mount.boresight.identity')
@@ -296,7 +379,7 @@ describe('mount simulator pointing errors', () => {
 	})
 
 	test('delays declination guiding after a reversal by the configured backlash', () => {
-		const { client, mount } = makeMount('mount.backlash.declination')
+		const { client, mount } = makeMount('mount.backlash.declination', 'MECHANICS')
 
 		try {
 			// Thirty arcseconds of slack. The declination guide rate is half sidereal, so about
@@ -325,7 +408,7 @@ describe('mount simulator pointing errors', () => {
 	})
 
 	test('holds a stuck declination axis until the accumulated pulses break it free', () => {
-		const { client, mount } = makeMount('mount.stiction.declination')
+		const { client, mount } = makeMount('mount.stiction.declination', 'MECHANICS')
 
 		try {
 			// Two arcseconds of stiction. The declination guide rate is half sidereal, about
@@ -355,7 +438,7 @@ describe('mount simulator pointing errors', () => {
 	})
 
 	test.skipIf(SKIP)('overshoots and rings after a slew, then lands exactly on target', () => {
-		const { client, mount } = makeMount('mount.settling.slew')
+		const { client, mount } = makeMount('mount.settling.slew', 'SETTLING')
 
 		try {
 			// A springy mount: half an arcminute of overshoot at two hertz, lightly damped.
@@ -392,7 +475,7 @@ describe('mount simulator pointing errors', () => {
 
 	test.skipIf(SKIP)('settles more gently after a slow slew than a fast one', () => {
 		function overshootAt(rate: string, name: string) {
-			const { client, mount } = makeMount(name)
+			const { client, mount } = makeMount(name, 'SETTLING')
 
 			try {
 				client.sendNumber({ device: mount.name, name: 'MOUNT_SETTLING', elements: { OVERSHOOT: 30, FREQUENCY: 2, DAMPING_RATIO: 0.15 } })
@@ -419,10 +502,10 @@ describe('mount simulator pointing errors', () => {
 	})
 
 	test('separates the reported coordinate from the axes by the encoder index errors', () => {
-		const { client, mount } = makeMount('mount.index.error')
+		const { client, mount } = makeMount('mount.index.error', 'ALIGNMENT')
 
 		try {
-			client.sendNumber({ device: mount.name, name: 'MOUNT_ALIGNMENT', elements: { RA_INDEX_ERROR: 120, DEC_INDEX_ERROR: -90 } })
+			client.sendNumber({ device: mount.name, name: 'MOUNT_ALIGNMENT', elements: { ...NO_ALIGNMENT, RA_INDEX_ERROR: 120, DEC_INDEX_ERROR: -90 } })
 
 			// Syncing places the axes so the controller reports what was asked, which with a non-zero
 			// index error is a different orientation.
@@ -446,10 +529,10 @@ describe('mount simulator pointing errors', () => {
 	})
 
 	test('drives a goto to the orientation that makes the controller report the target', () => {
-		const { client, mount } = makeMount('mount.index.goto')
+		const { client, mount } = makeMount('mount.index.goto', 'ALIGNMENT')
 
 		try {
-			client.sendNumber({ device: mount.name, name: 'MOUNT_ALIGNMENT', elements: { RA_INDEX_ERROR: 120, DEC_INDEX_ERROR: -90 } })
+			client.sendNumber({ device: mount.name, name: 'MOUNT_ALIGNMENT', elements: { ...NO_ALIGNMENT, RA_INDEX_ERROR: 120, DEC_INDEX_ERROR: -90 } })
 			mount.setSlewRate('SPEED_7')
 			mount.goTo(hour(6), deg(25))
 
@@ -464,10 +547,10 @@ describe('mount simulator pointing errors', () => {
 	})
 
 	test('scales the cone error as the secant of the declination', () => {
-		const { client, mount } = makeMount('mount.cone.error')
+		const { client, mount } = makeMount('mount.cone.error', 'ALIGNMENT')
 
 		try {
-			client.sendNumber({ device: mount.name, name: 'MOUNT_ALIGNMENT', elements: { CONE_ERROR: 60 } })
+			client.sendNumber({ device: mount.name, name: 'MOUNT_ALIGNMENT', elements: { ...NO_ALIGNMENT, CONE_ERROR: 60 } })
 
 			// The hour-angle error grows as sec of the declination, but converting it to an on-sky angle
 			// multiplies by cos, so the displacement of the boresight is the coefficient itself.
@@ -484,10 +567,10 @@ describe('mount simulator pointing errors', () => {
 	})
 
 	test('scales the axis non-orthogonality as the tangent of the declination', () => {
-		const { client, mount } = makeMount('mount.axis.orthogonality')
+		const { client, mount } = makeMount('mount.axis.orthogonality', 'ALIGNMENT')
 
 		try {
-			client.sendNumber({ device: mount.name, name: 'MOUNT_ALIGNMENT', elements: { AXIS_NON_ORTHOGONALITY: 90 } })
+			client.sendNumber({ device: mount.name, name: 'MOUNT_ALIGNMENT', elements: { ...NO_ALIGNMENT, AXIS_NON_ORTHOGONALITY: 90 } })
 
 			// Vanishes at the equator and equals the coefficient at 45 degrees, where tan is one.
 			mount.syncTo(hour(5), 0)
@@ -520,10 +603,10 @@ describe('mount simulator pointing errors', () => {
 	})
 
 	test('discards pulses below the minimum and rounds the rest', () => {
-		const { client, mount } = makeMount('mount.guiding.admission')
+		const { client, mount } = makeMount('mount.guiding.admission', 'GUIDING')
 
 		try {
-			client.sendNumber({ device: mount.name, name: 'MOUNT_GUIDING', elements: { MINIMUM_PULSE: 100, QUANTIZATION: 100 } })
+			client.sendNumber({ device: mount.name, name: 'MOUNT_GUIDING', elements: { ...NO_GUIDING, MINIMUM_PULSE: 100, QUANTIZATION: 100 } })
 			mount.setTrackingEnabled(true)
 
 			const start = mount.mechanical.declination
@@ -542,10 +625,10 @@ describe('mount simulator pointing errors', () => {
 	})
 
 	test('delays a pulse by the configured latency', () => {
-		const { client, mount } = makeMount('mount.guiding.latency')
+		const { client, mount } = makeMount('mount.guiding.latency', 'GUIDING')
 
 		try {
-			client.sendNumber({ device: mount.name, name: 'MOUNT_GUIDING', elements: { LATENCY: 500 } })
+			client.sendNumber({ device: mount.name, name: 'MOUNT_GUIDING', elements: { ...NO_GUIDING, LATENCY: 500 } })
 			mount.setTrackingEnabled(true)
 
 			const start = mount.mechanical.declination
@@ -564,11 +647,11 @@ describe('mount simulator pointing errors', () => {
 	})
 
 	test('applies asymmetric gains per direction', () => {
-		const { client, mount } = makeMount('mount.guiding.gain')
+		const { client, mount } = makeMount('mount.guiding.gain', 'GUIDING')
 
 		try {
 			// A declination axis that responds at half strength going south.
-			client.sendNumber({ device: mount.name, name: 'MOUNT_GUIDING', elements: { GAIN_SOUTH: 0.5 } })
+			client.sendNumber({ device: mount.name, name: 'MOUNT_GUIDING', elements: { ...NO_GUIDING, GAIN_SOUTH: 0.5 } })
 			mount.setTrackingEnabled(true)
 
 			const start = mount.mechanical.declination
@@ -610,7 +693,7 @@ describe('mount simulator pointing errors', () => {
 	})
 
 	test('keeps guiding on the mechanical axes while the polar error stays in the boresight', () => {
-		const { client, mount } = makeMount('mount.boresight.guiding')
+		const { client, mount } = makeMount('mount.boresight.guiding', 'ALIGNMENT')
 
 		try {
 			client.sendNumber({ device: mount.name, name: 'MOUNT_ALIGNMENT', elements: { POLAR_AZIMUTH_ERROR: 600, POLAR_ALTITUDE_ERROR: 400 } })
@@ -641,12 +724,12 @@ describe('mount simulator pointing errors', () => {
 	})
 
 	test('reproduces polarAlignmentError for the configured polar axis errors', () => {
-		const { client, mount } = makeMount('mount.boresight.polar')
+		const { client, mount } = makeMount('mount.boresight.polar', 'ALIGNMENT')
 
 		try {
 			const azimuthError = 900
 			const altitudeError = -600
-			client.sendNumber({ device: mount.name, name: 'MOUNT_ALIGNMENT', elements: { POLAR_AZIMUTH_ERROR: azimuthError, POLAR_ALTITUDE_ERROR: altitudeError } })
+			client.sendNumber({ device: mount.name, name: 'MOUNT_ALIGNMENT', elements: { ...NO_ALIGNMENT, POLAR_AZIMUTH_ERROR: azimuthError, POLAR_ALTITUDE_ERROR: altitudeError } })
 
 			const utcTime = mount.utcTime
 			const lst = mount.siderealTimeAt(utcTime)
@@ -662,11 +745,11 @@ describe('mount simulator pointing errors', () => {
 	})
 
 	test('advances the worm phase with the axis, not with the clock', () => {
-		const { client, mount } = makeMount('mount.worm.phase')
+		const { client, mount } = makeMount('mount.worm.phase', 'PERIODIC_ERROR')
 
 		try {
 			const period = 400
-			client.sendNumber({ device: mount.name, name: 'MOUNT_PERIODIC_ERROR', elements: { RA_PERIOD: period, RA_AMPLITUDE: 8 } })
+			client.sendNumber({ device: mount.name, name: 'MOUNT_PERIODIC_ERROR', elements: { ...NO_PERIODIC_ERROR, RA_PERIOD: period, RA_AMPLITUDE: 8 } })
 
 			expect(mount.wormPhase).toBe(0)
 
@@ -694,12 +777,12 @@ describe('mount simulator pointing errors', () => {
 	})
 
 	test('applies the periodic error as an absolute offset of the worm phase', () => {
-		const { client, mount } = makeMount('mount.boresight.periodic')
+		const { client, mount } = makeMount('mount.boresight.periodic', 'PERIODIC_ERROR')
 
 		try {
 			const period = 400
 			const amplitude = 8
-			client.sendNumber({ device: mount.name, name: 'MOUNT_PERIODIC_ERROR', elements: { RA_PERIOD: period, RA_AMPLITUDE: amplitude } })
+			client.sendNumber({ device: mount.name, name: 'MOUNT_PERIODIC_ERROR', elements: { ...NO_PERIODIC_ERROR, RA_PERIOD: period, RA_AMPLITUDE: amplitude } })
 			mount.setTrackingEnabled(true)
 
 			// A quarter of a revolution puts the sine at its positive peak.
@@ -719,13 +802,13 @@ describe('mount simulator pointing errors', () => {
 	})
 
 	test('adds the higher harmonics of the worm to the boresight', () => {
-		const { client, mount } = makeMount('mount.boresight.harmonics')
+		const { client, mount } = makeMount('mount.boresight.harmonics', 'PERIODIC_ERROR')
 
 		try {
 			const period = 400
 			// A second harmonic phased to peak at the start of the revolution, where the fundamental is
 			// crossing zero, so the two are separable by inspection.
-			client.sendNumber({ device: mount.name, name: 'MOUNT_PERIODIC_ERROR', elements: { RA_PERIOD: period, RA_AMPLITUDE: 8, RA_AMPLITUDE_2: 3, RA_PHASE_2: 90 } })
+			client.sendNumber({ device: mount.name, name: 'MOUNT_PERIODIC_ERROR', elements: { ...NO_PERIODIC_ERROR, RA_PERIOD: period, RA_AMPLITUDE: 8, RA_AMPLITUDE_2: 3, RA_PHASE_2: 90 } })
 			mount.setTrackingEnabled(true)
 
 			const atZero = toArcsec(normalizePI(mount.boresight.rightAscension - mount.rightAscension))
@@ -744,11 +827,11 @@ describe('mount simulator pointing errors', () => {
 	})
 
 	test('cancels the trained periodic error and leaves what the table cannot represent', () => {
-		const { client, mount } = makeMount('mount.boresight.pec')
+		const { client, mount } = makeMount('mount.boresight.pec', 'PERIODIC_ERROR')
 
 		try {
 			const period = 400
-			client.sendNumber({ device: mount.name, name: 'MOUNT_PERIODIC_ERROR', elements: { RA_PERIOD: period, RA_AMPLITUDE: 8, RA_AMPLITUDE_3: 3 } })
+			client.sendNumber({ device: mount.name, name: 'MOUNT_PERIODIC_ERROR', elements: { ...NO_PERIODIC_ERROR, RA_PERIOD: period, RA_AMPLITUDE: 8, RA_AMPLITUDE_3: 3 } })
 			mount.setTrackingEnabled(true)
 
 			// Peak of the residual over one revolution, which is what a trained mount is judged by.
@@ -783,11 +866,11 @@ describe('mount simulator pointing errors', () => {
 	})
 
 	test('spins the worm faster during a slew than while tracking', () => {
-		const { client, mount } = makeMount('mount.worm.slew')
+		const { client, mount } = makeMount('mount.worm.slew', 'PERIODIC_ERROR')
 
 		try {
 			const period = 400
-			client.sendNumber({ device: mount.name, name: 'MOUNT_PERIODIC_ERROR', elements: { RA_PERIOD: period, RA_AMPLITUDE: 8 } })
+			client.sendNumber({ device: mount.name, name: 'MOUNT_PERIODIC_ERROR', elements: { ...NO_PERIODIC_ERROR, RA_PERIOD: period, RA_AMPLITUDE: 8 } })
 			mount.setTrackingEnabled(true)
 
 			mount.advance(1)
@@ -806,10 +889,10 @@ describe('mount simulator pointing errors', () => {
 	})
 
 	test('drives the boresight from the simulated clock, not the wall clock', () => {
-		const { client, mount } = makeMount('mount.boresight.clock')
+		const { client, mount } = makeMount('mount.boresight.clock', 'ALIGNMENT')
 
 		try {
-			client.sendNumber({ device: mount.name, name: 'MOUNT_ALIGNMENT', elements: { POLAR_AZIMUTH_ERROR: 1800, POLAR_ALTITUDE_ERROR: 1800 } })
+			client.sendNumber({ device: mount.name, name: 'MOUNT_ALIGNMENT', elements: { ...NO_ALIGNMENT, POLAR_AZIMUTH_ERROR: 1800, POLAR_ALTITUDE_ERROR: 1800 } })
 
 			const before = mount.boresight
 
@@ -825,10 +908,10 @@ describe('mount simulator pointing errors', () => {
 	})
 
 	test('sags the boresight towards the horizon and not at all at the zenith', () => {
-		const { client, mount } = makeMount('mount.boresight.flexure')
+		const { client, mount } = makeMount('mount.boresight.flexure', 'FLEXURE')
 
 		try {
-			client.sendNumber({ device: mount.name, name: 'MOUNT_FLEXURE', elements: { TUBE_FLEXURE: 120 } })
+			client.sendNumber({ device: mount.name, name: 'MOUNT_FLEXURE', elements: { ...NO_FLEXURE, TUBE_FLEXURE: 120 } })
 
 			// The site is at latitude -22, so a target on the meridian at that declination is at the
 			// zenith and the tube hangs straight down its own axis with nothing to bend.
@@ -849,10 +932,10 @@ describe('mount simulator pointing errors', () => {
 	})
 
 	test('offsets the boresight on one side of the pier only', () => {
-		const { client, mount } = makeMount('mount.boresight.pierside')
+		const { client, mount } = makeMount('mount.boresight.pierside', 'FLEXURE')
 
 		try {
-			client.sendNumber({ device: mount.name, name: 'MOUNT_FLEXURE', elements: { PIER_WEST_DEC: 90 } })
+			client.sendNumber({ device: mount.name, name: 'MOUNT_FLEXURE', elements: { ...NO_FLEXURE, PIER_WEST_DEC: 90 } })
 
 			// Two hours west of the meridian, where a German mount carries the tube on the east side.
 			const lst = mount.siderealTimeAt(mount.utcTime)
@@ -872,7 +955,7 @@ describe('mount simulator pointing errors', () => {
 	})
 
 	test('buffets the boresight without letting it wander off', () => {
-		const { client, mount } = makeMount('mount.boresight.wind')
+		const { client, mount } = makeMount('mount.boresight.wind', 'WIND')
 
 		try {
 			client.sendNumber({ device: mount.name, name: 'MOUNT_WIND', elements: { AMPLITUDE: 3, CORRELATION_TIME: 4 } })
@@ -906,7 +989,7 @@ describe('mount simulator pointing errors', () => {
 	})
 
 	test('keeps blowing across a sync, unlike the errors a sync absorbs', () => {
-		const { client, mount } = makeMount('mount.boresight.wind.sync')
+		const { client, mount } = makeMount('mount.boresight.wind.sync', 'WIND')
 
 		try {
 			client.sendNumber({ device: mount.name, name: 'MOUNT_WIND', elements: { AMPLITUDE: 5, CORRELATION_TIME: 30 } })
@@ -923,10 +1006,10 @@ describe('mount simulator pointing errors', () => {
 	})
 
 	test('lands a little off the home position, differently every time', () => {
-		const { client, mount } = makeMount('mount.home.scatter')
+		const { client, mount } = makeMount('mount.home.scatter', 'MECHANICS')
 
 		try {
-			client.sendNumber({ device: mount.name, name: 'MOUNT_MECHANICS', elements: { HOME_SCATTER: 30 } })
+			client.sendNumber({ device: mount.name, name: 'MOUNT_MECHANICS', elements: { ...NO_MECHANICS, HOME_SCATTER: 30 } })
 			mount.setSlewRate('SPEED_6')
 
 			// Homes the mount and returns how far the optical axis ended up from where the controller
@@ -972,11 +1055,11 @@ describe('mount simulator pointing errors', () => {
 	})
 
 	test('walks the boresight away from the reported coordinate with a tracking rate error', () => {
-		const { client, mount } = makeMount('mount.rate.bias')
+		const { client, mount } = makeMount('mount.rate.bias', 'TRACKING_RATE')
 
 		try {
 			// One percent fast, which is gross but keeps the drift well clear of the noise floor.
-			client.sendNumber({ device: mount.name, name: 'MOUNT_TRACKING_RATE', elements: { BIAS: 10000 } })
+			client.sendNumber({ device: mount.name, name: 'MOUNT_TRACKING_RATE', elements: { ...NO_TRACKING_RATE, BIAS: 10000 } })
 			mount.setTrackingEnabled(true)
 
 			const reported = mount.rightAscension
@@ -1000,10 +1083,10 @@ describe('mount simulator pointing errors', () => {
 	})
 
 	test('accrues no rate drift with the drive stopped', () => {
-		const { client, mount } = makeMount('mount.rate.idle')
+		const { client, mount } = makeMount('mount.rate.idle', 'TRACKING_RATE')
 
 		try {
-			client.sendNumber({ device: mount.name, name: 'MOUNT_TRACKING_RATE', elements: { BIAS: 10000 } })
+			client.sendNumber({ device: mount.name, name: 'MOUNT_TRACKING_RATE', elements: { ...NO_TRACKING_RATE, BIAS: 10000 } })
 
 			// Tracking is off, so the motor is not turning: the sky drifts past on its own and there is no
 			// commanded travel for the drive to get wrong.
@@ -1015,12 +1098,12 @@ describe('mount simulator pointing errors', () => {
 	})
 
 	test('shifts the rate error with the temperature', () => {
-		const { client, mount } = makeMount('mount.rate.temperature')
+		const { client, mount } = makeMount('mount.rate.temperature', 'TRACKING_RATE')
 
 		try {
 			// The bias cancels the temperature term exactly at ten degrees above calibration, so the drive
 			// is perfect there and runs slow beyond it.
-			client.sendNumber({ device: mount.name, name: 'MOUNT_TRACKING_RATE', elements: { BIAS: 1000, TEMPERATURE_COEFFICIENT: -100, TEMPERATURE: TRACKING_RATE_CALIBRATION_TEMPERATURE + 10 } })
+			client.sendNumber({ device: mount.name, name: 'MOUNT_TRACKING_RATE', elements: { ...NO_TRACKING_RATE, BIAS: 1000, TEMPERATURE_COEFFICIENT: -100, TEMPERATURE: TRACKING_RATE_CALIBRATION_TEMPERATURE + 10 } })
 			mount.setTrackingEnabled(true)
 			mount.advance(600)
 			expect(mount.trackingRateOffset).toBeCloseTo(0, 12)
@@ -1034,10 +1117,10 @@ describe('mount simulator pointing errors', () => {
 	})
 
 	test('absorbs the accumulated rate drift into a sync', () => {
-		const { client, mount } = makeMount('mount.rate.sync')
+		const { client, mount } = makeMount('mount.rate.sync', 'TRACKING_RATE')
 
 		try {
-			client.sendNumber({ device: mount.name, name: 'MOUNT_TRACKING_RATE', elements: { BIAS: 10000 } })
+			client.sendNumber({ device: mount.name, name: 'MOUNT_TRACKING_RATE', elements: { ...NO_TRACKING_RATE, BIAS: 10000 } })
 			mount.setTrackingEnabled(true)
 			mount.advance(600)
 			expect(mount.trackingRateOffset).not.toBe(0)

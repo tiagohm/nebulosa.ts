@@ -430,7 +430,8 @@ describe.skipIf(SKIP)('camera simulator', () => {
 
 			// A large polar-alignment error must move the star measurably. The exact displacement
 			// depends on the hour angle at render time, so only its presence and bound are asserted.
-			client.sendNumber({ device: mount.name, name: 'MOUNT_ALIGNMENT', elements: { POLAR_AZIMUTH_ERROR: 1800, POLAR_ALTITUDE_ERROR: 1800 } })
+			client.sendSwitch({ device: mount.name, name: 'SIMULATOR_ERROR_FEATURES', elements: { ALIGNMENT: true } })
+			client.sendNumber({ device: mount.name, name: 'MOUNT_ALIGNMENT', elements: { POLAR_AZIMUTH_ERROR: 1800, POLAR_ALTITUDE_ERROR: 1800, CONE_ERROR: 0, AXIS_NON_ORTHOGONALITY: 0, RA_INDEX_ERROR: 0, DEC_INDEX_ERROR: 0 } })
 			await waitUntil(() => mountSimulator.pointingErrorBound > 0)
 
 			cameraSimulator.startExposure(0.05)
@@ -447,14 +448,14 @@ describe.skipIf(SKIP)('camera simulator', () => {
 			// projection stage it was the one source the pointing errors could not reach at all.
 			client.sendSwitch({ device: camera.name, name: 'SIMULATOR_CATALOG_SOURCE', elements: { RANDOM: true } })
 			await waitUntil(() => cameraManager.properties.get(camera)?.SIMULATOR_CATALOG_SOURCE?.elements.RANDOM.value === true)
-			client.sendNumber({ device: mount.name, name: 'MOUNT_ALIGNMENT', elements: { POLAR_AZIMUTH_ERROR: 0, POLAR_ALTITUDE_ERROR: 0 } })
+			client.sendNumber({ device: mount.name, name: 'MOUNT_ALIGNMENT', elements: { POLAR_AZIMUTH_ERROR: 0, POLAR_ALTITUDE_ERROR: 0, CONE_ERROR: 0, AXIS_NON_ORTHOGONALITY: 0, RA_INDEX_ERROR: 0, DEC_INDEX_ERROR: 0 } })
 			await waitUntil(() => mountSimulator.pointingErrorBound === 0)
 
 			cameraSimulator.startExposure(0.05)
 			await waitUntil(() => frameReceiver.length > 2, 10000, 50)
 			const randomAligned = await readImageFromBuffer(frameReceiver.lastFrame)
 
-			client.sendNumber({ device: mount.name, name: 'MOUNT_ALIGNMENT', elements: { POLAR_AZIMUTH_ERROR: 1800, POLAR_ALTITUDE_ERROR: 1800 } })
+			client.sendNumber({ device: mount.name, name: 'MOUNT_ALIGNMENT', elements: { POLAR_AZIMUTH_ERROR: 1800, POLAR_ALTITUDE_ERROR: 1800, CONE_ERROR: 0, AXIS_NON_ORTHOGONALITY: 0, RA_INDEX_ERROR: 0, DEC_INDEX_ERROR: 0 } })
 			await waitUntil(() => mountSimulator.pointingErrorBound > 0)
 
 			cameraSimulator.startExposure(0.05)

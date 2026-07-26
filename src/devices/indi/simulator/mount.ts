@@ -25,7 +25,7 @@ import { advanceWind, IDENTITY_WIND_CONFIG, resetWind, type WindConfig, windStat
 // oxfmt-ignore
 import { advanceTrackingRateError, IDENTITY_TRACKING_RATE_ERROR_CONFIG, resetTrackingRateError, TRACKING_RATE_CALIBRATION_TEMPERATURE, type TrackingRateErrorConfig, trackingRateErrorState } from './mount.tracking'
 import type { AxisDirection, CoordSetMode, DeviceSimulatorOptions, MountPointingState, SimulatorProperty, SlewMode } from './types'
-import { applyNumberVectorValues, clampDeclination } from './util'
+import { applyMultiSwitchValues, applyNumberVectorValues, clampDeclination } from './util'
 
 // Simulated equatorial mount, tracking, slewing, site, and pulse-guiding behavior.
 
@@ -53,6 +53,16 @@ export class MountSimulator extends DeviceSimulator {
 	readonly #guideRate = makeNumberVector('', 'GUIDE_RATE', 'Guiding Rate', MAIN_CONTROL, 'rw', ['GUIDE_RATE_WE', 'W/E Rate', 0.5, 0, 1, 0.1, '%.8f'], ['GUIDE_RATE_NS', 'N/E Rate', 0.5, 0, 1, 0.1, '%.0f'])
 	readonly #guideNS = makeNumberVector('', 'TELESCOPE_TIMED_GUIDE_NS', 'Guide N/S', MAIN_CONTROL, 'rw', ['TIMED_GUIDE_N', 'North (ms)', 0, 0, 60000, 1, '%.0f'], ['TIMED_GUIDE_S', 'South (ms)', 0, 0, 60000, 1, '%.0f'])
 	readonly #guideWE = makeNumberVector('', 'TELESCOPE_TIMED_GUIDE_WE', 'Guide W/E', MAIN_CONTROL, 'rw', ['TIMED_GUIDE_W', 'West (ms)', 0, 0, 60000, 1, '%.0f'], ['TIMED_GUIDE_E', 'East (ms)', 0, 0, 60000, 1, '%.0f'])
+	// Which families of error are simulated. Everything is off by default, so a fresh mount is
+	// mechanically perfect and behaves exactly as an ideal one; turning a member on brings in the whole
+	// family at the values its vector carries.
+	//
+	// This is what makes the defaults of those vectors useful. They describe a mid-range amateur German
+	// equatorial rather than a perfect machine, so exercising a realistic mount is one switch rather
+	// than a dozen numbers somebody has to invent. It is also the single authoritative gate for each
+	// family: without it, "disabled" was inferred from a magic zero in half a dozen scattered places.
+	// oxfmt-ignore
+	readonly #errorFeatures = makeSwitchVector('', 'SIMULATOR_ERROR_FEATURES', 'Error Features', SIMULATION, 'AnyOfMany', 'rw', ['ALIGNMENT', 'Alignment', false], ['PERIODIC_ERROR', 'Periodic Error', false], ['MECHANICS', 'Mechanics', false], ['GUIDING', 'Guiding', false], ['SETTLING', 'Settling', false], ['FLEXURE', 'Flexure', false], ['WIND', 'Wind', false], ['TRACKING_RATE', 'Tracking Rate', false])
 	// Geometric imperfections of the mount, all signed arcseconds. The polar-axis range spans ten
 	// degrees, far beyond any usable alignment, so gross misalignment can be exercised.
 	// Two groups that act in different places. The polar-axis, cone and non-perpendicularity errors are
@@ -60,7 +70,7 @@ export class MountSimulator extends DeviceSimulator {
 	// errors are encoder zero offsets: they do not move the telescope at all, they change what the
 	// controller reports about it. Together they are the six basic TPoint terms, MA, ME, CH, NP, IH and ID.
 	// oxfmt-ignore
-	readonly #alignment = makeNumberVector('', 'MOUNT_ALIGNMENT', 'Alignment', SIMULATION, 'rw', ['POLAR_AZIMUTH_ERROR', 'Polar Azimuth Error (arcsec)', 0, -36000, 36000, 0.1, '%.3f'], ['POLAR_ALTITUDE_ERROR', 'Polar Altitude Error (arcsec)', 0, -36000, 36000, 0.1, '%.3f'], ['CONE_ERROR', 'Cone Error (arcsec)', 0, -3600, 3600, 0.1, '%.3f'], ['AXIS_NON_ORTHOGONALITY', 'Axis Non-orthogonality (arcsec)', 0, -3600, 3600, 0.1, '%.3f'], ['RA_INDEX_ERROR', 'RA Index Error (arcsec)', 0, -3600, 3600, 0.1, '%.3f'], ['DEC_INDEX_ERROR', 'DEC Index Error (arcsec)', 0, -3600, 3600, 0.1, '%.3f'])
+	readonly #alignment = makeNumberVector('', 'MOUNT_ALIGNMENT', 'Alignment', SIMULATION, 'rw', ['POLAR_AZIMUTH_ERROR', 'Polar Azimuth Error (arcsec)', 120, -36000, 36000, 0.1, '%.3f'], ['POLAR_ALTITUDE_ERROR', 'Polar Altitude Error (arcsec)', 120, -36000, 36000, 0.1, '%.3f'], ['CONE_ERROR', 'Cone Error (arcsec)', 60, -3600, 3600, 0.1, '%.3f'], ['AXIS_NON_ORTHOGONALITY', 'Axis Non-orthogonality (arcsec)', 30, -3600, 3600, 0.1, '%.3f'], ['RA_INDEX_ERROR', 'RA Index Error (arcsec)', 120, -3600, 3600, 0.1, '%.3f'], ['DEC_INDEX_ERROR', 'DEC Index Error (arcsec)', 120, -3600, 3600, 0.1, '%.3f'])
 	// Periodic error of the right-ascension worm: the time it takes to complete one revolution while
 	// tracking at the sidereal rate, in seconds, and the harmonic content of the resulting error, as a
 	// semi-amplitude in arcseconds and a phase in degrees per order. Order 1 turns once per worm
@@ -71,7 +81,7 @@ export class MountSimulator extends DeviceSimulator {
 	// axis stands still and moves only for corrections, dithers and slews, so what dominates there is
 	// backlash and stiction, not a periodic term.
 	// oxfmt-ignore
-	readonly #periodicError = makeNumberVector('', 'MOUNT_PERIODIC_ERROR', 'Periodic Error', SIMULATION, 'rw', ['RA_PERIOD', 'Worm Period (s)', 0, 0, DAYSEC, 1, '%.0f'], ['RA_AMPLITUDE', 'Amplitude (arcsec)', 0, 0, 3600, 0.1, '%.3f'], ['RA_PHASE', 'Phase (deg)', 0, 0, 360, 1, '%.1f'], ['RA_AMPLITUDE_2', '2nd Harmonic (arcsec)', 0, 0, 3600, 0.1, '%.3f'], ['RA_PHASE_2', '2nd Harmonic Phase (deg)', 0, 0, 360, 1, '%.1f'], ['RA_AMPLITUDE_3', '3rd Harmonic (arcsec)', 0, 0, 3600, 0.1, '%.3f'], ['RA_PHASE_3', '3rd Harmonic Phase (deg)', 0, 0, 360, 1, '%.1f'])
+	readonly #periodicError = makeNumberVector('', 'MOUNT_PERIODIC_ERROR', 'Periodic Error', SIMULATION, 'rw', ['RA_PERIOD', 'Worm Period (s)', 480, 0, DAYSEC, 1, '%.0f'], ['RA_AMPLITUDE', 'Amplitude (arcsec)', 7.5, 0, 3600, 0.1, '%.3f'], ['RA_PHASE', 'Phase (deg)', 0, 0, 360, 1, '%.1f'], ['RA_AMPLITUDE_2', '2nd Harmonic (arcsec)', 2.5, 0, 3600, 0.1, '%.3f'], ['RA_PHASE_2', '2nd Harmonic Phase (deg)', 60, 0, 360, 1, '%.1f'], ['RA_AMPLITUDE_3', '3rd Harmonic (arcsec)', 1, 0, 3600, 0.1, '%.3f'], ['RA_PHASE_3', '3rd Harmonic Phase (deg)', 210, 0, 360, 1, '%.1f'])
 	// Periodic error correction the controller plays back. SAMPLES is the length of the recorded table
 	// over one worm revolution and GAIN how much of the error the recording captured; zero samples means
 	// an untrained mount. A short table cannot represent the higher harmonics, so they survive playback,
@@ -86,20 +96,18 @@ export class MountSimulator extends DeviceSimulator {
 	// it breaks free. Declination is normally the worse of the two, since that axis spends most of its
 	// time stopped and reverses on every dither.
 	// oxfmt-ignore
-	readonly #mechanics = makeNumberVector('', 'MOUNT_MECHANICS', 'Mechanics', SIMULATION, 'rw', ['BACKLASH_RA', 'RA Backlash (arcsec)', 0, 0, 3600, 0.1, '%.3f'], ['BACKLASH_DEC', 'DEC Backlash (arcsec)', 0, 0, 3600, 0.1, '%.3f'], ['TAKE_UP_RATE', 'Backlash Take-up Rate', 1, 0.01, 1, 0.01, '%.3f'], ['STICTION_RA', 'RA Stiction (arcsec)', 0, 0, 60, 0.01, '%.3f'], ['STICTION_DEC', 'DEC Stiction (arcsec)', 0, 0, 60, 0.01, '%.3f'], ['HOME_SCATTER', 'Home Repeatability (arcsec)', 0, 0, 600, 0.1, '%.3f'])
+	readonly #mechanics = makeNumberVector('', 'MOUNT_MECHANICS', 'Mechanics', SIMULATION, 'rw', ['BACKLASH_RA', 'RA Backlash (arcsec)', 30, 0, 3600, 0.1, '%.3f'], ['BACKLASH_DEC', 'DEC Backlash (arcsec)', 60, 0, 3600, 0.1, '%.3f'], ['TAKE_UP_RATE', 'Backlash Take-up Rate', 0.7, 0.01, 1, 0.01, '%.3f'], ['STICTION_RA', 'RA Stiction (arcsec)', 1, 0, 60, 0.01, '%.3f'], ['STICTION_DEC', 'DEC Stiction (arcsec)', 2, 0, 60, 0.01, '%.3f'], ['HOME_SCATTER', 'Home Repeatability (arcsec)', 20, 0, 600, 0.1, '%.3f'])
 	// Fidelity of the guide-pulse path between the command and the motor: how late it starts, how much
 	// of the requested duration survives, and how the real rate compares to the configured one in each
-	// direction. Defaults reproduce an ideal controller.
+	// direction. Unlike the other families this one is not an error but a degree of realism, so the
+	// feature being off means a perfect controller rather than an absent one.
 	// oxfmt-ignore
-	readonly #guiding = makeNumberVector('', 'MOUNT_GUIDING', 'Guiding', SIMULATION, 'rw', ['LATENCY', 'Latency (ms)', 0, 0, 5000, 1, '%.0f'], ['LATENCY_JITTER', 'Latency Jitter (ms)', 0, 0, 1000, 1, '%.0f'], ['MINIMUM_PULSE', 'Minimum Pulse (ms)', 0, 0, 1000, 1, '%.0f'], ['QUANTIZATION', 'Duration Quantization (ms)', 0, 0, 1000, 1, '%.0f'], ['GAIN_NORTH', 'North Gain', 1, 0, 2, 0.01, '%.3f'], ['GAIN_SOUTH', 'South Gain', 1, 0, 2, 0.01, '%.3f'], ['GAIN_EAST', 'East Gain', 1, 0, 2, 0.01, '%.3f'], ['GAIN_WEST', 'West Gain', 1, 0, 2, 0.01, '%.3f'])
+	readonly #guiding = makeNumberVector('', 'MOUNT_GUIDING', 'Guiding', SIMULATION, 'rw', ['LATENCY', 'Latency (ms)', 250, 0, 5000, 1, '%.0f'], ['LATENCY_JITTER', 'Latency Jitter (ms)', 50, 0, 1000, 1, '%.0f'], ['MINIMUM_PULSE', 'Minimum Pulse (ms)', 20, 0, 1000, 1, '%.0f'], ['QUANTIZATION', 'Duration Quantization (ms)', 10, 0, 1000, 1, '%.0f'], ['GAIN_NORTH', 'North Gain', 0.95, 0, 2, 0.01, '%.3f'], ['GAIN_SOUTH', 'South Gain', 1.05, 0, 2, 0.01, '%.3f'], ['GAIN_EAST', 'East Gain', 1, 0, 2, 0.01, '%.3f'], ['GAIN_WEST', 'West Gain', 1, 0, 2, 0.01, '%.3f'])
 	// Elastic response of the structure to an abrupt stop: a telescope on a tripod is a spring, so it
 	// overshoots and rings before coming to rest. A zero overshoot or frequency makes it perfectly
-	// stiff, which is how it behaved before.
+	// stiff, as does leaving the feature off.
 	// oxfmt-ignore
-	readonly #settling = makeNumberVector('', 'MOUNT_SETTLING', 'Settling', SIMULATION, 'rw', ['OVERSHOOT', 'Overshoot (arcsec)', 0, 0, 600, 0.1, '%.3f'], ['FREQUENCY', 'Frequency (Hz)', 2, 0, 50, 0.1, '%.2f'], ['DAMPING_RATIO', 'Damping Ratio', 0.2, 0, 1, 0.01, '%.3f'])
-	// Relative error of the tracking drive, in parts per million of the commanded rate, as a constant
-	// bias plus a temperature term plus a random wander. The temperature is the ambient one seen by the
-	// drive; the coefficient acts on its departure from TRACKING_RATE_CALIBRATION_TEMPERATURE.
+	readonly #settling = makeNumberVector('', 'MOUNT_SETTLING', 'Settling', SIMULATION, 'rw', ['OVERSHOOT', 'Overshoot (arcsec)', 3, 0, 600, 0.1, '%.3f'], ['FREQUENCY', 'Frequency (Hz)', 2, 0, 50, 0.1, '%.2f'], ['DAMPING_RATIO', 'Damping Ratio', 0.2, 0, 1, 0.01, '%.3f'])
 	// Effects that depend on where the tube is rather than on the geometry of the axes. TUBE_FLEXURE is
 	// the droop of the optical axis at the horizon, falling to nothing at the zenith, and acts in the
 	// vertical, so converting it to equatorial coordinates goes through the parallactic angle. The pier
@@ -107,15 +115,18 @@ export class MountSimulator extends DeviceSimulator {
 	// other side of the mount; they are right-ascension and declination offsets, not on-sky angles, on
 	// the same convention as the index errors.
 	// oxfmt-ignore
-	readonly #flexure = makeNumberVector('', 'MOUNT_FLEXURE', 'Flexure', SIMULATION, 'rw', ['TUBE_FLEXURE', 'Tube Flexure (arcsec)', 0, -3600, 3600, 0.1, '%.3f'], ['PIER_WEST_RA', 'Pier West RA Offset (arcsec)', 0, -3600, 3600, 0.1, '%.3f'], ['PIER_WEST_DEC', 'Pier West DEC Offset (arcsec)', 0, -3600, 3600, 0.1, '%.3f'])
+	readonly #flexure = makeNumberVector('', 'MOUNT_FLEXURE', 'Flexure', SIMULATION, 'rw', ['TUBE_FLEXURE', 'Tube Flexure (arcsec)', 30, -3600, 3600, 0.1, '%.3f'], ['PIER_WEST_RA', 'Pier West RA Offset (arcsec)', 20, -3600, 3600, 0.1, '%.3f'], ['PIER_WEST_DEC', 'Pier West DEC Offset (arcsec)', 20, -3600, 3600, 0.1, '%.3f'])
 	// Buffeting of the telescope by wind, as a bounded random deflection of the optical axis with a
 	// memory of its own. Distinct from every other term here: static geometry cannot produce it, the
 	// worm repeats too regularly, and the tracking-rate walk has no bound. A zero amplitude makes the
 	// site perfectly still. Doubles as the centroid wander of seeing, which behaves the same way.
 	// oxfmt-ignore
-	readonly #wind = makeNumberVector('', 'MOUNT_WIND', 'Wind', SIMULATION, 'rw', ['AMPLITUDE', 'Amplitude (arcsec)', 0, 0, 600, 0.1, '%.3f'], ['CORRELATION_TIME', 'Correlation Time (s)', 2, 0.1, 300, 0.1, '%.2f'])
+	readonly #wind = makeNumberVector('', 'MOUNT_WIND', 'Wind', SIMULATION, 'rw', ['AMPLITUDE', 'Amplitude (arcsec)', 1.5, 0, 600, 0.1, '%.3f'], ['CORRELATION_TIME', 'Correlation Time (s)', 3, 0.1, 300, 0.1, '%.2f'])
+	// Relative error of the tracking drive, in parts per million of the commanded rate, as a constant
+	// bias plus a temperature term plus a random wander. The temperature is the ambient one seen by the
+	// drive; the coefficient acts on its departure from TRACKING_RATE_CALIBRATION_TEMPERATURE.
 	// oxfmt-ignore
-	readonly #trackingRate = makeNumberVector('', 'MOUNT_TRACKING_RATE', 'Tracking Rate', SIMULATION, 'rw', ['BIAS', 'Rate Bias (ppm)', 0, -10000, 10000, 1, '%.2f'], ['TEMPERATURE_COEFFICIENT', 'Temperature Coefficient (ppm/C)', 0, -1000, 1000, 0.1, '%.3f'], ['TEMPERATURE', 'Temperature (C)', TRACKING_RATE_CALIBRATION_TEMPERATURE, -60, 60, 0.1, '%.1f'], ['RANDOM_WALK', 'Random Walk (ppm/sqrt(s))', 0, 0, 1000, 0.1, '%.3f'])
+	readonly #trackingRate = makeNumberVector('', 'MOUNT_TRACKING_RATE', 'Tracking Rate', SIMULATION, 'rw', ['BIAS', 'Rate Bias (ppm)', 50, -10000, 10000, 1, '%.2f'], ['TEMPERATURE_COEFFICIENT', 'Temperature Coefficient (ppm/C)', 2, -1000, 1000, 0.1, '%.3f'], ['TEMPERATURE', 'Temperature (C)', TRACKING_RATE_CALIBRATION_TEMPERATURE, -60, 60, 0.1, '%.1f'], ['RANDOM_WALK', 'Random Walk (ppm/sqrt(s))', 0.5, 0, 1000, 0.1, '%.3f'])
 
 	protected readonly properties: readonly SimulatorProperty[] = [
 		this.#onCoordSet,
@@ -135,6 +146,7 @@ export class MountSimulator extends DeviceSimulator {
 		this.#guideNS,
 		this.#guideWE,
 		this.#guideRate,
+		this.#errorFeatures,
 		this.#alignment,
 		this.#periodicError,
 		this.#periodicErrorCorrection,
@@ -150,7 +162,19 @@ export class MountSimulator extends DeviceSimulator {
 	// mount keeps its mechanical character across reconnections. The worm phase is not: it is live
 	// mechanical state, and a power cycle is exactly when a real mount loses track of it.
 	protected propertiesToNotSave = this.properties.filter(
-		(e) => e !== this.#trackMode && e !== this.#guideRate && e !== this.#alignment && e !== this.#periodicError && e !== this.#periodicErrorCorrection && e !== this.#mechanics && e !== this.#guiding && e !== this.#settling && e !== this.#trackingRate && e !== this.#flexure && e !== this.#wind,
+		(e) =>
+			e !== this.#trackMode &&
+			e !== this.#guideRate &&
+			e !== this.#errorFeatures &&
+			e !== this.#alignment &&
+			e !== this.#periodicError &&
+			e !== this.#periodicErrorCorrection &&
+			e !== this.#mechanics &&
+			e !== this.#guiding &&
+			e !== this.#settling &&
+			e !== this.#trackingRate &&
+			e !== this.#flexure &&
+			e !== this.#wind,
 	)
 
 	#timer?: NodeJS.Timeout
@@ -246,6 +270,41 @@ export class MountSimulator extends DeviceSimulator {
 		}
 
 		this.driverInfo.elements.DRIVER_EXEC.value = 'mount.simulator'
+	}
+
+	// Whether a family of error is being simulated. Every consumer gates on one of these rather than on
+	// a value being zero, so a family is off when the switch says so and not when somebody happened to
+	// leave a number blank.
+	get #simulatesAlignment() {
+		return this.#errorFeatures.elements.ALIGNMENT.value
+	}
+
+	get #simulatesPeriodicError() {
+		return this.#errorFeatures.elements.PERIODIC_ERROR.value
+	}
+
+	get #simulatesMechanics() {
+		return this.#errorFeatures.elements.MECHANICS.value
+	}
+
+	get #simulatesGuiding() {
+		return this.#errorFeatures.elements.GUIDING.value
+	}
+
+	get #simulatesSettling() {
+		return this.#errorFeatures.elements.SETTLING.value
+	}
+
+	get #simulatesFlexure() {
+		return this.#errorFeatures.elements.FLEXURE.value
+	}
+
+	get #simulatesWind() {
+		return this.#errorFeatures.elements.WIND.value
+	}
+
+	get #simulatesTrackingRate() {
+		return this.#errorFeatures.elements.TRACKING_RATE.value
 	}
 
 	// Reported equatorial coordinate (radians) decoded from the RA-hours/Dec-degrees property. This is
@@ -354,18 +413,19 @@ export class MountSimulator extends DeviceSimulator {
 	// past the pole is a real, if degenerate, configuration and clamping would silently hide it.
 	boresightAt(utcTime: number): EquatorialCoordinate {
 		const model = this.pointingModel
+		const flexureEnabled = this.#simulatesFlexure
 		const { TUBE_FLEXURE, PIER_WEST_RA, PIER_WEST_DEC } = this.#flexure.elements
 		let rightAscension = this.#mechanical.rightAscension
 		let declination = this.#mechanical.declination
 
-		if (model !== IDENTITY_EQUATORIAL_POINTING_MODEL || TUBE_FLEXURE.value !== 0 || PIER_WEST_RA.value !== 0 || PIER_WEST_DEC.value !== 0) {
+		if (model !== IDENTITY_EQUATORIAL_POINTING_MODEL || (flexureEnabled && (TUBE_FLEXURE.value !== 0 || PIER_WEST_RA.value !== 0 || PIER_WEST_DEC.value !== 0))) {
 			const lst = this.siderealTimeAt(utcTime)
 
 			if (model !== IDENTITY_EQUATORIAL_POINTING_MODEL) {
 				;[rightAscension, declination] = applyEquatorialPointingError(rightAscension, declination, lst, model)
 			}
 
-			if (TUBE_FLEXURE.value !== 0) {
+			if (flexureEnabled && TUBE_FLEXURE.value !== 0) {
 				// Evaluated at the mechanical orientation rather than at the partly corrected one: the tube
 				// sags according to where it is actually aimed, and the geometric terms are arcseconds, far
 				// too small to change how much it sags.
@@ -377,7 +437,7 @@ export class MountSimulator extends DeviceSimulator {
 			// The pier offset applies on one side only, so what it really configures is the difference
 			// between the two sides. That difference is what a pointing model fitted across a meridian
 			// flip has to absorb, and what a client that forgets to re-solve after one walks into.
-			if ((PIER_WEST_RA.value !== 0 || PIER_WEST_DEC.value !== 0) && expectedPierSide(this.#mechanical.rightAscension, this.#mechanical.declination, lst) === 'WEST') {
+			if (flexureEnabled && (PIER_WEST_RA.value !== 0 || PIER_WEST_DEC.value !== 0) && expectedPierSide(this.#mechanical.rightAscension, this.#mechanical.declination, lst) === 'WEST') {
 				rightAscension += PIER_WEST_RA.value * ASEC2RAD
 				declination += PIER_WEST_DEC.value * ASEC2RAD
 			}
@@ -441,6 +501,8 @@ export class MountSimulator extends DeviceSimulator {
 	// Returns the shared identity model when nothing is configured, so callers can skip the whole
 	// computation with a reference comparison.
 	get pointingModel(): EquatorialPointingModel {
+		if (!this.#simulatesAlignment) return IDENTITY_EQUATORIAL_POINTING_MODEL
+
 		const { POLAR_AZIMUTH_ERROR, POLAR_ALTITUDE_ERROR, CONE_ERROR, AXIS_NON_ORTHOGONALITY } = this.#alignment.elements
 		if (POLAR_AZIMUTH_ERROR.value === 0 && POLAR_ALTITUDE_ERROR.value === 0 && CONE_ERROR.value === 0 && AXIS_NON_ORTHOGONALITY.value === 0) return IDENTITY_EQUATORIAL_POINTING_MODEL
 
@@ -452,11 +514,11 @@ export class MountSimulator extends DeviceSimulator {
 	// reports. Not an optical effect: the telescope does not move, the bookkeeping is off, which is what
 	// a bad home sensor, an imperfect sync or a miscalibrated controller leave behind.
 	get #indexErrorRightAscension(): Angle {
-		return this.#alignment.elements.RA_INDEX_ERROR.value * ASEC2RAD
+		return this.#simulatesAlignment ? this.#alignment.elements.RA_INDEX_ERROR.value * ASEC2RAD : 0
 	}
 
 	get #indexErrorDeclination(): Angle {
-		return this.#alignment.elements.DEC_INDEX_ERROR.value * ASEC2RAD
+		return this.#simulatesAlignment ? this.#alignment.elements.DEC_INDEX_ERROR.value * ASEC2RAD : 0
 	}
 
 	// Upper bound (radians) of how far the configured errors can displace the optical axis, over all
@@ -466,16 +528,20 @@ export class MountSimulator extends DeviceSimulator {
 	// having to know the error model.
 	get pointingErrorBound(): Angle {
 		const { POLAR_AZIMUTH_ERROR, POLAR_ALTITUDE_ERROR, CONE_ERROR, AXIS_NON_ORTHOGONALITY, RA_INDEX_ERROR, DEC_INDEX_ERROR } = this.#alignment.elements
+		// Each family counts only while it is being simulated, so a disabled one cannot inflate the
+		// margin a camera sizes from this.
+		const alignmentScale = this.#simulatesAlignment ? 1 : 0
+		const flexureScale = this.#simulatesFlexure ? 1 : 0
 		// The cone and non-perpendicularity terms scale as sec and tan of the declination, which cancel
 		// against the cos that converts a hour-angle error to an on-sky angle, so each is bounded by its
 		// own coefficient. The index errors count too, because consumers compare the boresight against
 		// the reported coordinate and the offsets sit between them.
-		const polar = Math.SQRT2 * (Math.abs(POLAR_AZIMUTH_ERROR.value) + Math.abs(POLAR_ALTITUDE_ERROR.value))
-		const geometry = Math.abs(CONE_ERROR.value) + Math.abs(AXIS_NON_ORTHOGONALITY.value)
-		const index = Math.abs(RA_INDEX_ERROR.value) + Math.abs(DEC_INDEX_ERROR.value)
+		const polar = alignmentScale * Math.SQRT2 * (Math.abs(POLAR_AZIMUTH_ERROR.value) + Math.abs(POLAR_ALTITUDE_ERROR.value))
+		const geometry = alignmentScale * (Math.abs(CONE_ERROR.value) + Math.abs(AXIS_NON_ORTHOGONALITY.value))
+		const index = alignmentScale * (Math.abs(RA_INDEX_ERROR.value) + Math.abs(DEC_INDEX_ERROR.value))
 		// Flexure peaks at the horizon and the pier offset applies on one side, so both count in full.
 		const { TUBE_FLEXURE, PIER_WEST_RA, PIER_WEST_DEC } = this.#flexure.elements
-		const gravity = Math.abs(TUBE_FLEXURE.value) + Math.abs(PIER_WEST_RA.value) + Math.abs(PIER_WEST_DEC.value)
+		const gravity = flexureScale * (Math.abs(TUBE_FLEXURE.value) + Math.abs(PIER_WEST_RA.value) + Math.abs(PIER_WEST_DEC.value))
 		// The rate drift and the home scatter are added as they stand rather than bounded: neither has a
 		// bound, so the only honest figure is how far each has actually gone. The wind has no hard bound
 		// either, being Gaussian, so it contributes three standard deviations, which it stays within
@@ -534,7 +600,13 @@ export class MountSimulator extends DeviceSimulator {
 				else if ((vector.elements.TIMED_GUIDE_E ?? 0) > 0) this.pulse('EAST', vector.elements.TIMED_GUIDE_E)
 				return
 			case 'MOUNT_ALIGNMENT':
-				if (applyNumberVectorValues(this.#alignment, vector.elements)) this.notify(this.#alignment)
+				if (applyNumberVectorValues(this.#alignment, vector.elements)) {
+					// The index errors sit between the axes and what the controller reports, and the reported
+					// coordinate is derived once and cached. Changing them has to re-derive it: the telescope
+					// has not moved, but what the mount believes about it just changed.
+					this.#refreshReportedCoordinate()
+					this.notify(this.#alignment)
+				}
 				return
 			case 'MOUNT_PERIODIC_ERROR':
 				if (applyNumberVectorValues(this.#periodicError, vector.elements)) {
@@ -583,6 +655,11 @@ export class MountSimulator extends DeviceSimulator {
 	// Rebuilds the tracking-rate error configuration from MOUNT_TRACKING_RATE. Called only when the
 	// property changes, so the per-step path reads a plain field.
 	#refreshTrackingRate() {
+		if (!this.#simulatesTrackingRate) {
+			this.#trackingRateErrorConfig = IDENTITY_TRACKING_RATE_ERROR_CONFIG
+			return
+		}
+
 		const { BIAS, TEMPERATURE_COEFFICIENT, TEMPERATURE, RANDOM_WALK } = this.#trackingRate.elements
 		this.#trackingRateErrorConfig = { bias: BIAS.value, temperatureCoefficient: TEMPERATURE_COEFFICIENT.value, temperature: TEMPERATURE.value, randomWalk: RANDOM_WALK.value }
 	}
@@ -590,11 +667,26 @@ export class MountSimulator extends DeviceSimulator {
 	// Rebuilds every cached configuration after a persisted set of properties has been restored, since
 	// loading writes the vectors directly instead of going through `sendNumber`.
 	protected onPropertiesLoaded() {
+		this.#refreshErrorConfigurations()
+	}
+
+	// Rebuilds every configuration cached from a property vector. Called whenever a persisted set of
+	// properties is restored, since loading writes the vectors directly instead of going through
+	// `sendNumber`, and whenever an error feature is switched, since each of these is gated by one.
+	#refreshErrorConfigurations() {
 		this.#refreshTransmission()
 		this.#refreshSettling()
 		this.#refreshTrackingRate()
 		this.#refreshPeriodicError()
 		this.#refreshWind()
+		this.#refreshReportedCoordinate()
+	}
+
+	// Re-derives the reported coordinate from the axes without moving them, which is what has to happen
+	// when the encoder index errors change: the telescope stays where it is and only the bookkeeping
+	// between it and the controller moves.
+	#refreshReportedCoordinate() {
+		this.#setMechanical(this.#mechanical.rightAscension, this.#mechanical.declination)
 	}
 
 	// Rebuilds the wind configuration from MOUNT_WIND and reseeds the deflection from the settled
@@ -602,7 +694,7 @@ export class MountSimulator extends DeviceSimulator {
 	// spending several correlation times warming up from whatever the old conditions had left.
 	#refreshWind() {
 		const { AMPLITUDE, CORRELATION_TIME } = this.#wind.elements
-		this.#windConfig = AMPLITUDE.value > 0 ? { amplitude: AMPLITUDE.value * ASEC2RAD, correlationTime: CORRELATION_TIME.value } : IDENTITY_WIND_CONFIG
+		this.#windConfig = this.#simulatesWind && AMPLITUDE.value > 0 ? { amplitude: AMPLITUDE.value * ASEC2RAD, correlationTime: CORRELATION_TIME.value } : IDENTITY_WIND_CONFIG
 		resetWind(this.#windState, this.#windConfig, this.#normal)
 	}
 
@@ -614,7 +706,7 @@ export class MountSimulator extends DeviceSimulator {
 	#refreshPeriodicError() {
 		const { RA_AMPLITUDE, RA_PHASE, RA_AMPLITUDE_2, RA_PHASE_2, RA_AMPLITUDE_3, RA_PHASE_3 } = this.#periodicError.elements
 
-		if (RA_AMPLITUDE.value === 0 && RA_AMPLITUDE_2.value === 0 && RA_AMPLITUDE_3.value === 0) {
+		if (!this.#simulatesPeriodicError || (RA_AMPLITUDE.value === 0 && RA_AMPLITUDE_2.value === 0 && RA_AMPLITUDE_3.value === 0)) {
 			this.#periodicErrorCurve = IDENTITY_PERIODIC_ERROR_CURVE
 			return
 		}
@@ -635,6 +727,11 @@ export class MountSimulator extends DeviceSimulator {
 	// Rebuilds the settling configuration from MOUNT_SETTLING. Called only when the property changes,
 	// so the per-step path reads a plain field.
 	#refreshSettling() {
+		if (!this.#simulatesSettling) {
+			this.#settlingConfig = IDENTITY_SETTLING_CONFIG
+			return
+		}
+
 		const { OVERSHOOT, FREQUENCY, DAMPING_RATIO } = this.#settling.elements
 		this.#settlingConfig = { overshoot: OVERSHOOT.value * ASEC2RAD, frequency: FREQUENCY.value, dampingRatio: DAMPING_RATIO.value }
 	}
@@ -642,6 +739,12 @@ export class MountSimulator extends DeviceSimulator {
 	// Rebuilds the per-axis transmission configuration from MOUNT_MECHANICS. Called only when the
 	// property changes, so the per-step path reads plain fields and allocates nothing.
 	#refreshTransmission() {
+		if (!this.#simulatesMechanics) {
+			this.#rightAscensionTransmission = IDENTITY_MECHANICAL_AXIS_CONFIG
+			this.#declinationTransmission = IDENTITY_MECHANICAL_AXIS_CONFIG
+			return
+		}
+
 		const { BACKLASH_RA, BACKLASH_DEC, TAKE_UP_RATE, STICTION_RA, STICTION_DEC } = this.#mechanics.elements
 		this.#rightAscensionTransmission = { backlash: BACKLASH_RA.value * ASEC2RAD, takeUpRate: TAKE_UP_RATE.value, staticThreshold: STICTION_RA.value * ASEC2RAD }
 		this.#declinationTransmission = { backlash: BACKLASH_DEC.value * ASEC2RAD, takeUpRate: TAKE_UP_RATE.value, staticThreshold: STICTION_DEC.value * ASEC2RAD }
@@ -702,6 +805,14 @@ export class MountSimulator extends DeviceSimulator {
 			case 'TELESCOPE_TRACK_STATE':
 				if (vector.elements.TRACK_ON === true) this.setTrackingEnabled(true)
 				else if (vector.elements.TRACK_OFF === true) this.setTrackingEnabled(false)
+				return
+			case 'SIMULATOR_ERROR_FEATURES':
+				if (applyMultiSwitchValues(this.#errorFeatures, vector.elements)) {
+					// Every cached configuration is gated by one of these, so they all have to be rebuilt
+					// rather than only the one whose switch moved.
+					this.#refreshErrorConfigurations()
+					this.notify(this.#errorFeatures)
+				}
 				return
 			case 'ON_COORD_SET':
 				if (vector.elements.SYNC === true) this.#coordSetMode = 'SYNC'
@@ -918,6 +1029,8 @@ export class MountSimulator extends DeviceSimulator {
 
 	// Guide-pulse response assembled from MOUNT_GUIDING. Read once per command, which is a cold path.
 	get #guideResponse(): GuideResponseConfig {
+		if (!this.#simulatesGuiding) return IDENTITY_GUIDE_RESPONSE_CONFIG
+
 		const { LATENCY, LATENCY_JITTER, MINIMUM_PULSE, QUANTIZATION, GAIN_NORTH, GAIN_SOUTH, GAIN_EAST, GAIN_WEST } = this.#guiding.elements
 
 		if (LATENCY.value === 0 && LATENCY_JITTER.value === 0 && MINIMUM_PULSE.value === 0 && QUANTIZATION.value === 0 && GAIN_NORTH.value === 1 && GAIN_SOUTH.value === 1 && GAIN_EAST.value === 1 && GAIN_WEST.value === 1) {
@@ -1045,7 +1158,7 @@ export class MountSimulator extends DeviceSimulator {
 	// still when the mount is parked or not tracking, and it speeds up during a slew.
 	#advanceWormPhase(motorRate: number, dtSeconds: number) {
 		const period = this.#periodicError.elements.RA_PERIOD.value
-		if (period <= 0) return
+		if (period <= 0 || !this.#simulatesPeriodicError) return
 		this.#wormPhase = normalizeAngle(this.#wormPhase + (-motorRate / SIDEREAL_DRIFT_RATE) * (TAU / period) * dtSeconds)
 	}
 
@@ -1055,7 +1168,7 @@ export class MountSimulator extends DeviceSimulator {
 	// simulator keeps no history of past rates.
 	#wormPhaseAt(utcTime: number) {
 		const period = this.#periodicError.elements.RA_PERIOD.value
-		if (period <= 0) return 0
+		if (period <= 0 || !this.#simulatesPeriodicError) return 0
 		const dtSeconds = (utcTime - this.#utcTime) / 1000
 		return normalizeAngle(this.#wormPhase + (-this.#rightAscensionMotorRate() / SIDEREAL_DRIFT_RATE) * (TAU / period) * dtSeconds)
 	}
@@ -1189,7 +1302,7 @@ export class MountSimulator extends DeviceSimulator {
 
 			// Published on the coordinate cadence rather than every tick, which keeps the live phase
 			// available to clients without flooding them at the simulation rate.
-			if (this.#periodicError.elements.RA_PERIOD.value > 0) {
+			if (this.#simulatesPeriodicError && this.#periodicError.elements.RA_PERIOD.value > 0) {
 				this.#wormPhaseVector.elements.PHASE.value = toDeg(this.#wormPhase)
 				this.notify(this.#wormPhaseVector)
 			}
@@ -1203,7 +1316,7 @@ export class MountSimulator extends DeviceSimulator {
 	// Gaussian on each axis with the configured repeatability as its standard deviation. A zero
 	// repeatability makes the sensor perfect and clears any scatter left by an earlier home.
 	#scatterHome() {
-		const scatter = this.#mechanics.elements.HOME_SCATTER.value * ASEC2RAD
+		const scatter = this.#simulatesMechanics ? this.#mechanics.elements.HOME_SCATTER.value * ASEC2RAD : 0
 
 		if (scatter > 0) {
 			this.#homeScatterRightAscension = this.#normal() * scatter
