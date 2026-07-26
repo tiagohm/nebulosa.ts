@@ -780,6 +780,37 @@ describe('mount simulator pointing errors', () => {
 		}
 	})
 
+	test('keeps publishing coordinates after the clock is set backwards', () => {
+		const handler = new IndiClientHandlerSet()
+		const mountManager = new MountManager()
+		handler.add(mountManager)
+
+		const client = new ClientSimulator('mount.rewind', handler)
+		const simulator = new MountSimulator('Mount Simulator', client)
+
+		try {
+			simulator.connect()
+			// Long enough that the throttle governs every update in this test.
+			simulator.minimumNotifyCoordinateInterval = 1000
+			simulator.syncTo(hour(5), deg(20))
+
+			const mount = mountManager.get(client, simulator.name)!
+
+			// An hour backwards. The throttle measures against the simulated clock, so without a new epoch
+			// every later update looks like it happened before the previous one.
+			simulator.setTime({ utc: simulator.utcTime - 3600_000, offset: 0 })
+			const published = mount.equatorialCoordinate.rightAscension
+
+			// With the motors stopped the sky keeps turning, so ten seconds move the coordinate by far
+			// more than the client could miss, over ten notification intervals.
+			for (let i = 0; i < 20; i++) simulator.advance(0.5)
+
+			expect(normalizePI(mount.equatorialCoordinate.rightAscension - published)).toBeGreaterThan(1e-5)
+		} finally {
+			simulator.dispose()
+		}
+	})
+
 	test('sets the clock without absorbing the errors only a sync absorbs', () => {
 		const { client, mount } = makeMount('mount.settime.errors', 'TRACKING_RATE', 'SETTLING')
 

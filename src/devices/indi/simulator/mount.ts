@@ -1047,6 +1047,12 @@ export class MountSimulator extends DeviceSimulator {
 		// progress are facts about the mount, and clearing them here made the optical axis jump back
 		// towards the reported coordinate whenever a client set the clock or its UTC offset.
 		this.#resetBoresightHistory()
+		// Coordinate notifications are throttled against the simulated clock, so moving it invalidates
+		// the epoch they are measured from. A rewind is the dangerous direction: every later update
+		// would see a negative interval and publish nothing until simulated time caught up with where it
+		// had been, which can be hours of a mount moving in silence. Republishing here both hands
+		// clients the coordinate for the new sidereal time and re-registers that epoch.
+		this.#refreshReportedCoordinate()
 		this.notify(this.#time)
 	}
 
