@@ -1039,13 +1039,25 @@ export class MountSimulator extends DeviceSimulator {
 
 	// Updates the simulated UTC clock.
 	setTime(value: UTCTime) {
-		if (this.#utcTime === value.utc && this.#utcOffset === value.offset) return
-		this.#utcTime = value.utc
-		// The carried fraction belongs to the clock that was just replaced.
-		this.#utcTimeRemainder = 0
+		const utcChanged = this.#utcTime !== value.utc
+		if (!utcChanged && this.#utcOffset === value.offset) return
+
 		this.#utcOffset = value.offset
 		this.#time.elements.UTC.value = formatTemporal(value.utc, 'YYYY-MM-DDTHH:mm:ss.SSSZ')
 		this.#time.elements.OFFSET.value = (value.offset / 60).toFixed(2)
+
+		// Everything below belongs to the clock itself. The UTC offset is a timezone for display: no
+		// geometry reads it, no timestamp moves with it, and every sample already recorded stays exactly
+		// as valid as it was. Clearing the trajectory for it erased the earlier part of the trail of an
+		// exposure in progress because somebody changed which local time the mount reports.
+		if (!utcChanged) {
+			this.notify(this.#time)
+			return
+		}
+
+		this.#utcTime = value.utc
+		// The carried fraction belongs to the clock that was just replaced.
+		this.#utcTimeRemainder = 0
 		this.#lastTick = Date.now()
 		this.#updatePierSide()
 		// The recorded trajectory is indexed by the simulated clock and searched assuming its timestamps

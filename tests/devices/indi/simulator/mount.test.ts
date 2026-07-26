@@ -908,6 +908,29 @@ describe('mount simulator pointing errors', () => {
 		}
 	})
 
+	test('keeps the recorded trajectory when only the UTC offset changes', () => {
+		const { mount } = makeMount('mount.settime.offset')
+
+		try {
+			// With the motors stopped the sky keeps turning, so a couple of seconds leave a measurable
+			// trail behind in the history.
+			const startTime = mount.utcTime
+			mount.advance(2)
+			const endTime = mount.utcTime
+			const path = mount.boresightPathLength(startTime, endTime)
+			expect(toArcsec(path)).toBeGreaterThan(20)
+
+			// A UTC offset is a timezone for display: no timestamp moves with it and no geometry reads it,
+			// so every sample already recorded is still exactly where and when it was. Dropping the
+			// trajectory for it erased the earlier part of the trail of an exposure in progress.
+			mount.setTime({ utc: mount.utcTime, offset: 120 })
+
+			expect(mount.boresightPathLength(startTime, endTime)).toBeCloseTo(path, 12)
+		} finally {
+			mount.dispose()
+		}
+	})
+
 	test('keeps publishing coordinates after the clock is set backwards', () => {
 		const handler = new IndiClientHandlerSet()
 		const mountManager = new MountManager()
