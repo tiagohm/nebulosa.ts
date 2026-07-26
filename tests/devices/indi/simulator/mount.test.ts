@@ -1051,6 +1051,31 @@ describe('mount simulator pointing errors', () => {
 		}
 	})
 
+	test('turns the worm only while the slew is actually moving', () => {
+		const { client, mount } = makeMount('mount.worm.arrival', 'PERIODIC_ERROR')
+
+		try {
+			const period = 400
+			client.sendNumber({ device: mount.name, name: 'MOUNT_PERIODIC_ERROR', elements: { ...NO_PERIODIC_ERROR, RA_PERIOD: period, RA_AMPLITUDE: 8 } })
+
+			// A goto far shorter than the step: at the slowest rate the axis covers this in a tenth of a
+			// second and spends the remaining nine tenths standing still.
+			const travel = deg(0.15)
+			mount.setSlewRate('SPEED_1')
+			mount.goTo(mount.rightAscension + travel, mount.declination)
+			mount.advance(1)
+
+			expect(mount.isSlewing).toBe(false)
+
+			// The worm turns once per period at the sidereal rate, so the phase owed is set by how far the
+			// axis went, not by how long the step was.
+			const expected = (travel / SIDEREAL_DRIFT_RATE) * (TAU / period)
+			expect(Math.abs(normalizePI(mount.wormPhase))).toBeCloseTo(expected, 9)
+		} finally {
+			mount.dispose()
+		}
+	})
+
 	test('treats a worm that never turns as having no periodic error', () => {
 		const { client, mount } = makeMount('mount.worm.noperiod', 'PERIODIC_ERROR')
 
@@ -1174,11 +1199,13 @@ describe('mount simulator pointing errors', () => {
 			mount.advance(1)
 			const trackingStep = mount.wormPhase
 
-			// A goto far to the east runs the axis at the slew rate, orders of magnitude above sidereal.
+			// A goto to the east runs the axis at the slew rate, orders of magnitude above sidereal. Kept
+			// under half a revolution of the worm so the phase, which is normalized, still tells the
+			// increment apart from its own wrap.
 			mount.setSlewRate('SPEED_6')
-			mount.goTo(mount.rightAscension + deg(20), mount.declination)
+			mount.goTo(mount.rightAscension + deg(0.5), mount.declination)
 			mount.advance(1)
-			const slewStep = mount.wormPhase - trackingStep
+			const slewStep = normalizePI(mount.wormPhase - trackingStep)
 
 			expect(Math.abs(slewStep)).toBeGreaterThan(Math.abs(trackingStep) * 100)
 		} finally {

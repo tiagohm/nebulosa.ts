@@ -1175,10 +1175,6 @@ export class MountSimulator extends DeviceSimulator {
 		// The wind blows regardless of what the mount is doing, so this runs even while parked.
 		advanceWind(this.#windState, dtSeconds, this.#windConfig, this.#normal)
 
-		// Integrated before the motion advances, so the phase covers the interval the axes are about to
-		// run at the rate the motion is about to apply.
-		this.#advanceWormPhase(this.#rightAscensionMotorRate(), dtSeconds)
-
 		// A slew reports how much of the step was left once it arrived, so a ring-down excited partway
 		// through is integrated only over the time that actually followed the stop. At the default tick a
 		// few-hertz resonance covers a good part of a cycle in one step, so charging it the whole
@@ -1186,8 +1182,19 @@ export class MountSimulator extends DeviceSimulator {
 		let settlingSeconds = dtSeconds
 
 		if (this.#slewTarget) {
+			// The worm follows the axis, so it turns only while the axis does. The rate has to be read
+			// before the move, since arriving clears the target that defines it, and the phase is then
+			// charged for the part of the step the axis spent travelling. Charging the whole step instead
+			// let a goto shorter than one tick spin the worm through the slew rate for the entire
+			// interval — tens of degrees of phase for an axis that moved a few arcseconds — and step the
+			// periodic error to somewhere unrelated to where the mount actually stopped.
+			const slewRate = this.#rightAscensionMotorRate()
 			settlingSeconds = this.#advanceSlew(dtSeconds)
+			this.#advanceWormPhase(slewRate, dtSeconds - settlingSeconds)
 		} else {
+			// Integrated before the motion advances, so the phase covers the interval the axes are about
+			// to run at the rate the motion is about to apply.
+			this.#advanceWormPhase(this.#rightAscensionMotorRate(), dtSeconds)
 			this.#advanceFreeMotion(dtSeconds)
 		}
 
