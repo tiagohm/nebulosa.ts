@@ -444,6 +444,36 @@ describe('mount simulator pointing errors', () => {
 		}
 	})
 
+	test('drops the recorded trajectory when the simulated clock jumps', () => {
+		const { mount } = makeMount('mount.trajectory.clock')
+
+		try {
+			mount.advance(1)
+			mount.advance(1)
+
+			// Rewinding the clock would otherwise append a sample older than the ones already held, and
+			// the history is searched assuming its timestamps only increase.
+			const rewound = mount.utcTime - 3600 * 1000
+			mount.setTime({ utc: rewound, offset: 0 })
+
+			const samples = new Float64Array(8)
+			expect(mount.sampleBoresightTrajectory(rewound - 1000, rewound, 4, samples)).toBe(4)
+
+			// Everything retained is the seed at the new time, so nothing interpolates across the jump.
+			const boresight = mount.boresight
+			for (let i = 0; i < 4; i++) {
+				expect(samples[i * 2]).toBeCloseTo(boresight.rightAscension, 12)
+				expect(samples[i * 2 + 1]).toBeCloseTo(boresight.declination, 12)
+			}
+
+			// And the timestamps that follow stay ordered, so the search invariant holds again.
+			mount.advance(1)
+			expect(mount.utcTime).toBeGreaterThan(rewound)
+		} finally {
+			mount.dispose()
+		}
+	})
+
 	test('re-derives the reported coordinate when the encoder index errors change', () => {
 		const { client, mount } = makeMount('mount.features.index', 'ALIGNMENT')
 

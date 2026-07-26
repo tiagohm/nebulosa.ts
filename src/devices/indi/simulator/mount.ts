@@ -1004,6 +1004,12 @@ export class MountSimulator extends DeviceSimulator {
 		this.#time.elements.OFFSET.value = (value.offset / 60).toFixed(2)
 		this.#lastTick = Date.now()
 		this.#updatePierSide()
+		// The recorded trajectory is indexed by the simulated clock and searched assuming its timestamps
+		// only ever increase. Setting the clock backwards would append a sample older than the ones
+		// already held and break that, leaving an exposure to clamp onto a stale sample or interpolate
+		// the wrong pair; setting it forward leaves a gap the mount never actually travelled. Either way
+		// the history no longer describes this telescope, which is the same reason a sync drops it.
+		this.#resetBoresightHistory()
 		this.notify(this.#time)
 	}
 
