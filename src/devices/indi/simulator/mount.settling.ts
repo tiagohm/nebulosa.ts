@@ -55,20 +55,22 @@ export function resetSettling(state: SettlingState) {
 	state.velocity = 0
 }
 
-// Kicks the axis so that it overshoots by `severity` of the configured peak, with `severity` in [0, 1]
-// scaling with how fast the axis was moving when it stopped.
+// Kicks the axis so that it overshoots by `severity` of the configured peak, with `severity` in
+// [-1, 1]: its magnitude scales with how fast the axis was moving when it stopped and its sign is the
+// direction it was moving in, since momentum carries the tube on past the target rather than back the
+// way it came.
 //
 // The kick is delivered as velocity rather than displacement, which is what an abrupt stop does: the
 // axis is on target at that instant and its momentum carries it past. For a release from zero offset
 // the peak of the response is the initial velocity divided by the damped frequency, so that relation
 // is inverted here to hit the requested excursion.
 export function exciteSettling(state: SettlingState, severity: number, config: SettlingConfig) {
-	if (config.frequency <= 0 || config.overshoot <= 0 || severity <= 0) return
+	if (config.frequency <= 0 || config.overshoot <= 0 || severity === 0) return
 
 	const naturalFrequency = TAU * config.frequency
 	const dampingRatio = clamp(config.dampingRatio, 0, MAX_DAMPING_RATIO)
 	const dampedFrequency = naturalFrequency * Math.sqrt(1 - dampingRatio * dampingRatio)
-	state.velocity += config.overshoot * Math.min(severity, 1) * dampedFrequency
+	state.velocity += config.overshoot * clamp(severity, -1, 1) * dampedFrequency
 }
 
 // Advances the ring-down by `dtSeconds` and returns how far the axis moved during it, radians.

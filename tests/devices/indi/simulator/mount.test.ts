@@ -6,7 +6,7 @@ import { ClientSimulator } from '../../../../src/devices/indi/simulator/client'
 import { SIDEREAL_DRIFT_RATE } from '../../../../src/devices/indi/simulator/constants'
 import { MountSimulator } from '../../../../src/devices/indi/simulator/mount'
 import { TRACKING_RATE_CALIBRATION_TEMPERATURE } from '../../../../src/devices/indi/simulator/mount.tracking'
-import { arcsec, deg, hour, normalizeAngle, normalizePI, toArcsec } from '../../../../src/math/units/angle'
+import { type Angle, arcsec, deg, hour, normalizeAngle, normalizePI, toArcsec } from '../../../../src/math/units/angle'
 import { polarAlignmentError } from '../../../../src/observation/alignment/polaralignment'
 import { isTimeConsumingTestSkipped, waitUntil } from '../../../util'
 
@@ -746,6 +746,38 @@ describe('mount simulator pointing errors', () => {
 		} finally {
 			mount.dispose()
 		}
+	})
+
+	test('overshoots in the direction the axis was travelling', () => {
+		// Peak excursion past the target, signed, over the quarter cycle that follows a slew of `span`.
+		function excursionAfter(name: string, span: Angle) {
+			const { client, mount } = makeMount(name, 'SETTLING')
+
+			try {
+				client.sendNumber({ device: mount.name, name: 'MOUNT_SETTLING', elements: { OVERSHOOT: 30, FREQUENCY: 2, DAMPING_RATIO: 0.15 } })
+				mount.setSlewRate('SPEED_7')
+
+				const target = mount.declination + span
+				mount.goTo(mount.rightAscension, target)
+				for (let i = 0; i < 100 && mount.isSlewing; i++) mount.advance(0.01)
+
+				let excursion = 0
+				for (let i = 0; i < 25; i++) {
+					mount.advance(0.005)
+					const offset = mount.mechanical.declination - target
+					if (Math.abs(offset) > Math.abs(excursion)) excursion = offset
+				}
+
+				return toArcsec(excursion)
+			} finally {
+				mount.dispose()
+			}
+		}
+
+		// Momentum carries the tube on past the target, so which way it first goes is which way it was
+		// already going.
+		expect(excursionAfter('mount.settling.north', deg(10))).toBeGreaterThan(5)
+		expect(excursionAfter('mount.settling.south', deg(-10))).toBeLessThan(-5)
 	})
 
 	test('lands on a second target commanded while the first is still ringing', () => {

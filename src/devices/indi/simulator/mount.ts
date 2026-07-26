@@ -1304,10 +1304,15 @@ export class MountSimulator extends DeviceSimulator {
 			// axes were running, which is why a slow slew settles more gently than a fast one; each axis
 			// is excited in proportion to its own share of the motion. A zero span means the mount was
 			// already on target and never moved, so nothing is excited.
+			//
+			// The share is signed, because an overshoot carries on in the direction the axis was
+			// travelling. Feeding the magnitude alone made every stop ring north and west first, so a
+			// southward slew began by moving north of its target, which is a rebound rather than an
+			// overshoot.
 			if (span > 0) {
 				const severity = this.#manualSlewSpeed() / SLEW_RATES.at(-1)!.speed
-				exciteSettling(this.#rightAscensionSettling, (severity * Math.abs(deltaRightAscension)) / span, this.#settlingConfig)
-				exciteSettling(this.#declinationSettling, (severity * Math.abs(deltaDeclination)) / span, this.#settlingConfig)
+				exciteSettling(this.#rightAscensionSettling, (severity * deltaRightAscension) / span, this.#settlingConfig)
+				exciteSettling(this.#declinationSettling, (severity * deltaDeclination) / span, this.#settlingConfig)
 			}
 
 			const mode = this.#slewMode
