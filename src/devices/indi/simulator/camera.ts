@@ -1254,34 +1254,46 @@ export class CameraSimulator extends DeviceSimulator {
 	// Generates a deterministic in-memory star field.
 	//
 	// The field extends `margin` pixels beyond every sensor edge so that a pointing error shifting the
-	// scene brings real stars in from outside instead of leaving an empty border. The star count grows
-	// with the enlarged area, which keeps the on-sensor density at the configured value; a zero margin
-	// reproduces exactly the sensor-sized field.
+	// scene brings real stars in from outside instead of leaving an empty border. The density on the
+	// sensor is the configured one whatever the margin.
+	//
+	// The layout is drawn for the largest scene that can ever be asked for and then filtered down to the
+	// one that was, so where a star sits depends on the seed alone. Scaling the coordinates by the
+	// requested margin instead moved every star whenever the margin changed, and the margin now follows
+	// how far the field travels during each exposure: consecutive frames of the same field came back
+	// with the whole sky rearranged, and a mount that returned to its own coordinate did not return to
+	// its own stars. Each star consumes the same draws whether or not it survives the filter, which is
+	// what keeps the positions stable rather than merely the count.
+	//
+	// The cost is drawing the full extent every time the scene is rebuilt: a few thousand stars at the
+	// default density, against a frame that then has a million pixels of noise generated over it.
 	#randomSource(margin: number) {
 		const random = mulberry32(this.#scene.elements.SCENE_SEED.value >>> 0)
-		const width = this.sensorWidth + 2 * margin
-		const height = this.sensorHeight + 2 * margin
+		const sensorWidth = this.sensorWidth
+		const sensorHeight = this.sensorHeight
+		const width = sensorWidth + 2 * CAMERA_MAX_SCENE_MARGIN
+		const height = sensorHeight + 2 * CAMERA_MAX_SCENE_MARGIN
 		const density = this.#scene.elements.STAR_DENSITY.value
 		const count = Math.max(1, Math.trunc(width * height * density))
 		const minHfd = this.#scene.elements.HFD_MIN.value
 		const maxHfd = Math.max(minHfd, this.#scene.elements.HFD_MAX.value)
 		const minFlux = this.#scene.elements.FLUX_MIN.value
 		const maxFlux = Math.max(minFlux, this.#scene.elements.FLUX_MAX.value)
-		const stars = new Array<AstronomicalImageStar>(count)
+		const stars: AstronomicalImageStar[] = []
 		const maxWidth = Math.max(0, width - 1)
 		const maxHeight = Math.max(0, height - 1)
 
 		for (let i = 0; i < count; i++) {
 			const brightness = 1 - random()
+			const x = random() * maxWidth - CAMERA_MAX_SCENE_MARGIN
+			const y = random() * maxHeight - CAMERA_MAX_SCENE_MARGIN
+			const flux = minFlux + (maxFlux - minFlux) * brightness ** 6
+			const hfd = minHfd + (maxHfd - minHfd) * random()
+			const colorIndex = -0.25 + random() * 1.9
 
-			stars[i] = {
-				x: random() * maxWidth - margin,
-				y: random() * maxHeight - margin,
-				flux: minFlux + (maxFlux - minFlux) * brightness ** 6,
-				hfd: minHfd + (maxHfd - minHfd) * random(),
-				snr: 12 + brightness * 180,
-				colorIndex: -0.25 + random() * 1.9,
-			}
+			if (x < -margin || x >= sensorWidth + margin || y < -margin || y >= sensorHeight + margin) continue
+
+			stars.push({ x, y, flux, hfd, snr: 12 + brightness * 180, colorIndex })
 		}
 
 		return stars

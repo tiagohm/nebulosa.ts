@@ -663,6 +663,64 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		expect(delayed[2]).toBeCloseTo(immediate[2], 6)
 	}, 20000)
 
+	test('leaves the seeded star field where it was when the scene margin grows', async () => {
+		const handler = new IndiClientHandlerSet()
+		const mountManager = new MountManager()
+		const cameraManager = new CameraManager()
+		using client = new ClientSimulator('camera.margin.stability', handler)
+		const frameReceiver = new CameraFrameReceiver()
+
+		handler.add(mountManager)
+		handler.add(cameraManager)
+		cameraManager.addHandler(frameReceiver)
+
+		using mountSimulator = new MountSimulator('Mount Simulator', client)
+		using cameraSimulator = new CameraSimulator('Camera Simulator', client, { mountManager })
+		const mount = mountManager.get(client, mountSimulator.name)!
+		const camera = cameraManager.get(client, cameraSimulator.name)!
+
+		mountSimulator.connect()
+		cameraSimulator.connect()
+		await waitUntil(() => mount.connected && camera.connected)
+
+		mountSimulator.syncTo(hour(5), deg(20))
+		cameraManager.snoop(camera, mount)
+		await waitUntil(() => cameraManager.properties.get(camera)?.ACTIVE_DEVICES?.elements.ACTIVE_TELESCOPE.value === mount.name)
+
+		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_NOISE_FEATURES', elements: { SKY_ENABLED: false, LIGHT_POLLUTION_ENABLED: false } })
+		// Bright enough that the brightest pixel of the frame is the brightest star rather than the read
+		// noise, and spread over a wide flux range so that one star stands well clear of the rest.
+		client.sendNumber({ device: camera.name, name: 'SIMULATOR_SCENE', elements: { FLUX_MIN: 0.05, FLUX_MAX: 100 } })
+
+		// A periodic error at phase zero sizes the scene margin without displacing the field: the worm
+		// stands still with the motors stopped, and the curve is zero where it starts. Changing only its
+		// amplitude therefore changes how far beyond the sensor the scene reaches and nothing else.
+		client.sendSwitch({ device: mountSimulator.name, name: 'SIMULATOR_ERROR_FEATURES', elements: { PERIODIC_ERROR: true } })
+		client.sendNumber({ device: mountSimulator.name, name: 'MOUNT_PERIODIC_ERROR', elements: { RA_PERIOD: 400, RA_AMPLITUDE: 30, RA_PHASE: 0, RA_AMPLITUDE_2: 0, RA_AMPLITUDE_3: 0 } })
+		expect(mountSimulator.boresight.rightAscension).toBe(mountSimulator.mechanical.rightAscension)
+
+		async function brightestStar() {
+			const seen = frameReceiver.length
+			cameraSimulator.startExposure(0.001)
+			await waitUntil(() => frameReceiver.length > seen, 10000, 20)
+			const frame = await readImageFromBuffer(frameReceiver.lastFrame)
+			return brightestPixel(frame!.raw, frame!.header.NAXIS1 as number, frame!.metadata.channels)
+		}
+
+		const narrow = await brightestStar()
+
+		// Twenty times the margin, and still not a pixel of displacement of the field itself.
+		client.sendNumber({ device: mountSimulator.name, name: 'MOUNT_PERIODIC_ERROR', elements: { RA_AMPLITUDE: 600 } })
+		expect(mountSimulator.boresight.rightAscension).toBe(mountSimulator.mechanical.rightAscension)
+
+		const wide = await brightestStar()
+
+		// Deriving the layout from the margin rescaled every coordinate, so widening the scene rearranged
+		// the sky rather than extending it.
+		expect(wide[0]).toBe(narrow[0])
+		expect(wide[1]).toBe(narrow[1])
+	}, 15000)
+
 	test('queries the catalog at the epoch the mount believes in', async () => {
 		const handler = new IndiClientHandlerSet()
 		const mountManager = new MountManager()
