@@ -436,7 +436,10 @@ describe('mount simulator pointing errors', () => {
 			mount.goTo(mount.rightAscension, mount.declination)
 			mount.advance(1)
 
-			expect(mount.mechanical.rightAscension).toBeCloseTo(mechanical.rightAscension, 12)
+			// Nothing was travelled under command, so the axes never moved and the worm never turned. The
+			// coordinate still follows the sky, which keeps turning over a mount that is not tracking:
+			// arriving early hands the rest of the step back to ordinary motion rather than to nothing.
+			expect(normalizePI(mount.mechanical.rightAscension - mechanical.rightAscension)).toBeCloseTo(SIDEREAL_DRIFT_RATE, 9)
 			expect(mount.mechanical.declination).toBeCloseTo(mechanical.declination, 12)
 			expect(mount.wormPhase).toBe(phase)
 		} finally {
@@ -1143,6 +1146,10 @@ describe('mount simulator pointing errors', () => {
 		try {
 			client.sendNumber({ device: mount.name, name: 'MOUNT_ALIGNMENT', elements: { ...NO_ALIGNMENT, RA_INDEX_ERROR: 120, DEC_INDEX_ERROR: -90 } })
 			mount.setSlewRate('SPEED_7')
+			// Tracking, as a client commanding a goto would be: the slew arrives partway through a step and
+			// the rest of it goes to ordinary motion, which for an untracked mount is the sky drifting the
+			// coordinate away from the target it just reached.
+			mount.setTrackingEnabled(true)
 			mount.goTo(hour(6), deg(25))
 
 			for (let i = 0; i < 20 && mount.isSlewing; i++) mount.advance(1)
@@ -1380,6 +1387,31 @@ describe('mount simulator pointing errors', () => {
 			const parked = mount.wormPhase
 			mount.advance(period)
 			expect(mount.wormPhase).toBe(parked)
+		} finally {
+			mount.dispose()
+		}
+	})
+
+	test('spends the rest of the step tracking once the slew has arrived', () => {
+		const { client, mount } = makeMount('mount.slew.remainder', 'PERIODIC_ERROR')
+
+		try {
+			const period = 400
+			client.sendNumber({ device: mount.name, name: 'MOUNT_PERIODIC_ERROR', elements: { ...NO_PERIODIC_ERROR, RA_PERIOD: period, RA_AMPLITUDE: 8 } })
+			mount.setTrackingEnabled(true)
+
+			mount.advance(1)
+			const oneSecond = mount.wormPhase
+			expect(oneSecond).toBeCloseTo(TAU / period, 9)
+
+			// A goto to the coordinate already being reported arrives before the step has begun, so the
+			// whole of it is tracking. Handing the step to the slew and stopping there stopped the clock
+			// for the mount alone.
+			mount.goTo(mount.rightAscension, mount.declination)
+			mount.advance(1)
+
+			expect(mount.isSlewing).toBeFalse()
+			expect(mount.wormPhase - oneSecond).toBeCloseTo(oneSecond, 9)
 		} finally {
 			mount.dispose()
 		}

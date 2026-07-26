@@ -1238,6 +1238,16 @@ export class MountSimulator extends DeviceSimulator {
 			const slewRate = this.#rightAscensionMotorRate()
 			settlingSeconds = this.#advanceSlew(dtSeconds)
 			this.#advanceWormPhase(slewRate, dtSeconds - settlingSeconds)
+
+			// The rest of the step belongs to whatever the mount does when it is not slewing, which is
+			// normally tracking. Dropping it stopped the clock for the mount alone: a goto to the
+			// coordinate already being reported swallowed a whole step without turning the worm or letting
+			// the drive accumulate any of its rate error, and a goto that finished early lost the tracking
+			// for the remainder of its tick.
+			if (settlingSeconds > 0) {
+				this.#advanceWormPhase(this.#rightAscensionMotorRate(), settlingSeconds)
+				this.#advanceFreeMotion(settlingSeconds)
+			}
 		} else {
 			// Integrated before the motion advances, so the phase covers the interval the axes are about
 			// to run at the rate the motion is about to apply.
