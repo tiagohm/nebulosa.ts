@@ -243,6 +243,9 @@ export class MountSimulator extends DeviceSimulator {
 	#utcTimeRemainder = 0
 	#utcOffset = TIMEZONE / 60
 	#notifyCoordinateLastTime = 0
+	// Simulated time the worm phase was last published at, throttled separately from the coordinate
+	// because the phase keeps moving in the very mode that holds the coordinate still.
+	#notifyWormPhaseLastTime = 0
 	// Accumulated angle of the right-ascension worm, radians in [0, TAU). Physical state integrated
 	// from the motion of the axis, so it survives a disconnection and only a new simulator resets it.
 	#wormPhase: Angle = 0
@@ -1229,6 +1232,8 @@ export class MountSimulator extends DeviceSimulator {
 		const northSouthPending = retireGuidePulses(this.#northSouthPulses, this.#utcTime)
 		this.#setPulsing(westEastPending || northSouthPending)
 
+		this.#notifyWormPhase()
+
 		// Recorded last, so the sample reflects the state at the end of the interval just simulated.
 		const boresight = this.boresight
 		recordBoresightSample(this.#boresightHistory, this.#utcTime, boresight.rightAscension, boresight.declination)
@@ -1414,16 +1419,29 @@ export class MountSimulator extends DeviceSimulator {
 		if (notify && (force || this.#utcTime - this.#notifyCoordinateLastTime >= this.minimumNotifyCoordinateInterval)) {
 			this.#notifyCoordinateLastTime = this.#utcTime
 			this.notify(this.#equatorialCoordinate)
-
-			// Published on the coordinate cadence rather than every tick, which keeps the live phase
-			// available to clients without flooding them at the simulation rate.
-			if (this.#simulatesPeriodicError && this.#periodicError.elements.RA_PERIOD.value > 0) {
-				this.#wormPhaseVector.elements.PHASE.value = toDeg(this.#wormPhase)
-				this.notify(this.#wormPhaseVector)
-			}
 		}
 
 		if (notify && pierSideChanged) this.notify(this.#pierSide)
+	}
+
+	// Publishes the live worm phase, at most once per coordinate interval.
+	//
+	// Driven from the simulation step rather than from `#setMechanical`, because the mount's primary
+	// mode is exactly the one in which the coordinate stands still: while tracking at the sidereal rate
+	// the motor travel and the sky cancel, nothing calls `#setMechanical`, and the phase that the
+	// periodic error is being computed from would sit at its old published value indefinitely.
+	//
+	// A clock set backwards makes the elapsed interval negative, which publishes and re-registers the
+	// epoch rather than going quiet until simulated time catches up.
+	#notifyWormPhase() {
+		if (!this.#simulatesPeriodicError || this.#periodicError.elements.RA_PERIOD.value <= 0) return
+
+		const elapsed = this.#utcTime - this.#notifyWormPhaseLastTime
+		if (elapsed >= 0 && elapsed < this.minimumNotifyCoordinateInterval) return
+
+		this.#notifyWormPhaseLastTime = this.#utcTime
+		this.#wormPhaseVector.elements.PHASE.value = toDeg(this.#wormPhase)
+		this.notify(this.#wormPhaseVector)
 	}
 
 	// Draws how far the axes really sat from the home position on this homing, in radians.

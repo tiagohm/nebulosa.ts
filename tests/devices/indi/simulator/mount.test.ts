@@ -6,7 +6,7 @@ import { ClientSimulator } from '../../../../src/devices/indi/simulator/client'
 import { SIDEREAL_DRIFT_RATE } from '../../../../src/devices/indi/simulator/constants'
 import { MountSimulator } from '../../../../src/devices/indi/simulator/mount'
 import { TRACKING_RATE_CALIBRATION_TEMPERATURE } from '../../../../src/devices/indi/simulator/mount.tracking'
-import { type Angle, arcsec, deg, hour, normalizeAngle, normalizePI, toArcsec } from '../../../../src/math/units/angle'
+import { type Angle, arcsec, deg, hour, normalizeAngle, normalizePI, toArcsec, toDeg } from '../../../../src/math/units/angle'
 import { polarAlignmentError } from '../../../../src/observation/alignment/polaralignment'
 import { isTimeConsumingTestSkipped, waitUntil } from '../../../util'
 
@@ -777,6 +777,45 @@ describe('mount simulator pointing errors', () => {
 			expect(toArcsec(Math.abs(mount.mechanical.declination - target))).toBeLessThan(0.01)
 		} finally {
 			mount.dispose()
+		}
+	})
+
+	test('publishes the worm phase while sidereal tracking holds the coordinate still', () => {
+		const handler = new IndiClientHandlerSet()
+		const published: number[] = []
+
+		handler.add({
+			numberVector: (_, message) => {
+				if (message.name === 'MOUNT_WORM_PHASE' && message.elements.PHASE !== undefined) published.push(message.elements.PHASE.value)
+			},
+		})
+
+		const client = new ClientSimulator('mount.worm.notify', handler)
+		const simulator = new MountSimulator('Mount Simulator', client)
+
+		try {
+			simulator.connect()
+			simulator.minimumNotifyCoordinateInterval = 1000
+			client.sendSwitch({ device: simulator.name, name: 'SIMULATOR_ERROR_FEATURES', elements: { PERIODIC_ERROR: true } })
+			client.sendNumber({ device: simulator.name, name: 'MOUNT_PERIODIC_ERROR', elements: { ...NO_PERIODIC_ERROR, RA_PERIOD: 400, RA_AMPLITUDE: 8 } })
+			simulator.syncTo(hour(5), deg(20))
+
+			// Tracking at the sidereal rate is the one mode in which the motor and the sky cancel exactly,
+			// so the reported coordinate never changes while the worm keeps turning underneath it.
+			simulator.setTrackingEnabled(true)
+			published.length = 0
+			for (let i = 0; i < 100; i++) simulator.advance(0.1)
+
+			expect(simulator.wormPhase).toBeGreaterThan(0)
+			expect(published.length).toBeGreaterThan(5)
+
+			// The phase turns 0.9 degrees per second here, so a value within a degree of the live one is a
+			// value published inside the last notification interval rather than a stale one.
+			const phase = toDeg(simulator.wormPhase)
+			expect(published.at(-1)!).toBeLessThanOrEqual(phase)
+			expect(published.at(-1)!).toBeGreaterThan(phase - 1)
+		} finally {
+			simulator.dispose()
 		}
 	})
 
