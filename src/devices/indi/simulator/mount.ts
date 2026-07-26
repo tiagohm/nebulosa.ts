@@ -916,6 +916,7 @@ export class MountSimulator extends DeviceSimulator {
 
 		this.#clearManualMotion()
 		this.#clearPulseGuide()
+		this.#takeSlewControl()
 		this.#slewMode = 'GOTO'
 		this.#slewTarget = { rightAscension: normalizeAngle(rightAscension - this.#indexErrorRightAscension), declination: clampDeclination(declination - this.#indexErrorDeclination) }
 		this.#setSlewing(true)
@@ -943,6 +944,7 @@ export class MountSimulator extends DeviceSimulator {
 	// Slews to the configured home position.
 	home() {
 		if (!this.isConnected || this.isParked) return
+		this.#takeSlewControl()
 		this.#slewMode = 'HOME'
 		this.#slewTarget = { rightAscension: this.#homeCoordinate.rightAscension, declination: this.#homeCoordinate.declination }
 		this.#setSlewing(true)
@@ -961,6 +963,7 @@ export class MountSimulator extends DeviceSimulator {
 		if (!this.isConnected || this.isParked) return
 		this.#clearManualMotion()
 		this.#clearPulseGuide()
+		this.#takeSlewControl()
 		this.#slewMode = 'PARK'
 		this.#slewTarget = { rightAscension: this.#parkCoordinate.rightAscension, declination: this.#parkCoordinate.declination }
 		this.#setSlewing(true)
@@ -1494,6 +1497,19 @@ export class MountSimulator extends DeviceSimulator {
 		this.#guideRateNorthSouth = 0
 		this.#guideRateWestEast = 0
 		this.#setPulsing(false)
+	}
+
+	// Hands the structure over to a slew that is taking control of the axes.
+	//
+	// A ring-down is a residual offset the axes carry away from where they were commanded, and the
+	// oscillator pays it back as it decays so that the episode nets out to nothing. A slew that
+	// interrupts one drives to its own target from wherever the axes happen to be, which absorbs that
+	// residual into the move: there is no longer anything owed. Leaving the oscillator running would
+	// subtract the old offset a second time as it decayed, so the mount would settle permanently short
+	// of the new target by however far it had sprung from the previous one.
+	#takeSlewControl() {
+		resetSettling(this.#rightAscensionSettling)
+		resetSettling(this.#declinationSettling)
 	}
 
 	// Cancels any goto, home or park slew.

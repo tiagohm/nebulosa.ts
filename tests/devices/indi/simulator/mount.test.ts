@@ -748,6 +748,36 @@ describe('mount simulator pointing errors', () => {
 		}
 	})
 
+	test('lands on a second target commanded while the first is still ringing', () => {
+		const { client, mount } = makeMount('mount.settling.interrupted', 'SETTLING')
+
+		try {
+			client.sendNumber({ device: mount.name, name: 'MOUNT_SETTLING', elements: { OVERSHOOT: 30, FREQUENCY: 2, DAMPING_RATIO: 0.15 } })
+			mount.setSlewRate('SPEED_7')
+
+			const first = mount.declination + deg(10)
+			mount.goTo(mount.rightAscension, first)
+			for (let i = 0; i < 100 && mount.isSlewing; i++) mount.advance(0.01)
+
+			expect(mount.isSlewing).toBeFalse()
+
+			// Partway into the ring-down, so the axes sit measurably off the target they just reached.
+			mount.advance(0.05)
+			expect(toArcsec(Math.abs(mount.mechanical.declination - first))).toBeGreaterThan(5)
+
+			// A second goto takes the axes over from there. The excursion it interrupted has been absorbed
+			// by the move, so nothing is owed on it and the mount must land on the new target: an
+			// oscillator left running would pay the old offset back a second time and stop short.
+			const second = first + deg(1)
+			mount.goTo(mount.rightAscension, second)
+			for (let i = 0; i < 2000; i++) mount.advance(0.01)
+
+			expect(toArcsec(Math.abs(mount.mechanical.declination - second))).toBeLessThan(0.01)
+		} finally {
+			mount.dispose()
+		}
+	})
+
 	test.skipIf(SKIP)('settles more gently after a slow slew than a fast one', () => {
 		function overshootAt(rate: string, name: string) {
 			const { client, mount } = makeMount(name, 'SETTLING')
