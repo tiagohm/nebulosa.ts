@@ -402,20 +402,18 @@ export class MountSimulator extends DeviceSimulator {
 		return this.#utcTime
 	}
 
-	// Direction the optical axis really points now: the reported coordinate perturbed by the
-	// configured polar-alignment and periodic errors. See boresightAt for the semantics.
-	get boresight(): EquatorialCoordinate {
-		return this.boresightAt(this.#utcTime)
-	}
-
-	// Direction the optical axis really points at `utcTime` (milliseconds since the epoch), i.e. the
-	// reported coordinate perturbed by the configured errors.
+	// Direction the optical axis really points at this instant: the mechanical orientation perturbed by
+	// every error being simulated.
 	//
-	// The periodic offsets are absolute rather than incremental: this reads the current coordinate on
-	// every call, so the returned value is a function of the time alone and evaluating twice at the
-	// same instant yields the same result. The declination is left unclamped; a polar error pushing it
+	// Evaluated at the present and only at the present. The mount cannot say where it pointed a moment
+	// ago from its current state alone, since backlash, the guide queue and the wind are all
+	// path-dependent, and `sampleBoresightTrajectory` answers that from the recorded history instead;
+	// for the same reason it cannot say where it will point either.
+	//
+	// The offsets are absolute rather than incremental, so evaluating twice without advancing the
+	// simulation yields the same result. The declination is left unclamped; a polar error pushing it
 	// past the pole is a real, if degenerate, configuration and clamping would silently hide it.
-	boresightAt(utcTime: number): EquatorialCoordinate {
+	get boresight(): EquatorialCoordinate {
 		const model = this.pointingModel
 		const flexureEnabled = this.#simulatesFlexure
 		const { TUBE_FLEXURE, PIER_WEST_RA, PIER_WEST_DEC } = this.#flexure.elements
@@ -423,7 +421,7 @@ export class MountSimulator extends DeviceSimulator {
 		let declination = this.#mechanical.declination
 
 		if (model !== IDENTITY_EQUATORIAL_POINTING_MODEL || (flexureEnabled && (TUBE_FLEXURE.value !== 0 || PIER_WEST_RA.value !== 0 || PIER_WEST_DEC.value !== 0))) {
-			const lst = this.siderealTimeAt(utcTime)
+			const lst = this.#siderealTime()
 
 			if (model !== IDENTITY_EQUATORIAL_POINTING_MODEL) {
 				;[rightAscension, declination] = applyEquatorialPointingError(rightAscension, declination, lst, model)
@@ -448,7 +446,7 @@ export class MountSimulator extends DeviceSimulator {
 		}
 
 		if (this.#periodicErrorCurve !== IDENTITY_PERIODIC_ERROR_CURVE) {
-			rightAscension += periodicErrorAt(this.#wormPhaseAt(utcTime), this.#periodicErrorCurve)
+			rightAscension += periodicErrorAt(this.#wormPhase, this.#periodicErrorCurve)
 		}
 
 		// Held constant across the extrapolation window rather than projected forward: over the fraction
@@ -1199,7 +1197,7 @@ export class MountSimulator extends DeviceSimulator {
 		this.#setPulsing(westEastPending || northSouthPending)
 
 		// Recorded last, so the sample reflects the state at the end of the interval just simulated.
-		const boresight = this.boresightAt(this.#utcTime)
+		const boresight = this.boresight
 		recordBoresightSample(this.#boresightHistory, this.#utcTime, boresight.rightAscension, boresight.declination)
 	}
 
@@ -1231,17 +1229,6 @@ export class MountSimulator extends DeviceSimulator {
 		const period = this.#periodicError.elements.RA_PERIOD.value
 		if (period <= 0 || !this.#simulatesPeriodicError) return
 		this.#wormPhase = normalizeAngle(this.#wormPhase + (-motorRate / SIDEREAL_DRIFT_RATE) * (TAU / period) * dtSeconds)
-	}
-
-	// Worm phase extrapolated to `utcTime` (milliseconds since the epoch) from the current phase and
-	// motor rate. Exact while the axis runs steadily, which covers tracking and guiding; across an
-	// interval that contains a slew or a direction reversal it is only an approximation, since the
-	// simulator keeps no history of past rates.
-	#wormPhaseAt(utcTime: number) {
-		const period = this.#periodicError.elements.RA_PERIOD.value
-		if (period <= 0 || !this.#simulatesPeriodicError) return 0
-		const dtSeconds = (utcTime - this.#utcTime) / 1000
-		return normalizeAngle(this.#wormPhase + (-this.#rightAscensionMotorRate() / SIDEREAL_DRIFT_RATE) * (TAU / period) * dtSeconds)
 	}
 
 	// Signed rates of both axes during a slew, in radians per second. The step is normalized by the
@@ -1564,7 +1551,7 @@ export class MountSimulator extends DeviceSimulator {
 		this.#homeScatterRightAscension = 0
 		this.#homeScatterDeclination = 0
 		clearBoresightHistory(this.#boresightHistory)
-		const boresight = this.boresightAt(this.#utcTime)
+		const boresight = this.boresight
 		recordBoresightSample(this.#boresightHistory, this.#utcTime, boresight.rightAscension, boresight.declination)
 	}
 }

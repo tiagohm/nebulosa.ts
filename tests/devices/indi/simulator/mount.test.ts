@@ -973,7 +973,7 @@ describe('mount simulator pointing errors', () => {
 			const utcTime = mount.utcTime
 			const lst = mount.siderealTimeAt(utcTime)
 			const [expectedRightAscension, expectedDeclination] = polarAlignmentError(mount.rightAscension, mount.declination, mount.latitude, lst, arcsec(azimuthError), arcsec(altitudeError))
-			const boresight = mount.boresightAt(utcTime)
+			const boresight = mount.boresight
 
 			expect(normalizePI(boresight.rightAscension - expectedRightAscension)).toBeCloseTo(0, 12)
 			expect(boresight.declination - expectedDeclination).toBeCloseTo(0, 12)
@@ -1026,14 +1026,14 @@ describe('mount simulator pointing errors', () => {
 
 			// A quarter of a revolution puts the sine at its positive peak.
 			mount.advance(period / 4)
-			const peak = mount.boresightAt(mount.utcTime)
+			const peak = mount.boresight
 			expect(toArcsec(normalizePI(peak.rightAscension - mount.rightAscension))).toBeCloseTo(amplitude, 6)
 
 			// Absolute, not incremental: evaluating twice at the same instant gives the same answer.
-			expect(mount.boresightAt(mount.utcTime).rightAscension).toBe(peak.rightAscension)
+			expect(mount.boresight.rightAscension).toBe(peak.rightAscension)
 
 			mount.advance(period / 2)
-			const trough = mount.boresightAt(mount.utcTime)
+			const trough = mount.boresight
 			expect(toArcsec(normalizePI(trough.rightAscension - mount.rightAscension))).toBeCloseTo(-amplitude, 6)
 		} finally {
 			mount.dispose()
