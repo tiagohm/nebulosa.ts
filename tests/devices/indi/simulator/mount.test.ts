@@ -579,6 +579,35 @@ describe('mount simulator pointing errors', () => {
 		}
 	})
 
+	test('times a guide pulse from the carried fraction of the clock', () => {
+		const { mount } = makeMount('mount.guide.fraction')
+
+		try {
+			mount.setTrackingEnabled(true)
+
+			// Half a millisecond in, the axes have moved but the published clock has not. A pulse issued
+			// now belongs to that instant: scheduling it at the last whole millisecond would place its
+			// start in a stretch that has already elapsed.
+			mount.advance(0.0005)
+			const before = mount.mechanical.declination
+			mount.pulse('NORTH', 1)
+
+			// Half of the pulse falls inside this step and half is still to come.
+			mount.advance(0.0005)
+			expect(mount.isPulsing).toBeTrue()
+
+			const half = mount.mechanical.declination - before
+			expect(half).toBeGreaterThan(0)
+
+			// The rest is delivered by the following half step, and the pulse retires exactly there.
+			mount.advance(0.0005)
+			expect(mount.isPulsing).toBeFalse()
+			expect(mount.mechanical.declination - before).toBeCloseTo(2 * half, 15)
+		} finally {
+			mount.dispose()
+		}
+	})
+
 	test('rings down only over the part of the step that followed the stop', () => {
 		// Arriving partway through a step and then charging the new ring-down the whole interval shifts
 		// its phase. Compared against the same arrival reached with a fine step, where almost none of the

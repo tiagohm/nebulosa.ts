@@ -1105,7 +1105,9 @@ export class MountSimulator extends DeviceSimulator {
 		const guideRate = northSouth ? this.guideRateDeclination : this.guideRateRightAscension
 		// Uniform over the full jitter width, centred on the configured latency and never negative.
 		const jitter = config.latencyJitter > 0 ? (this.#random() * 2 - 1) * config.latencyJitter : 0
-		const start = this.#utcTime + Math.max(0, config.latency + jitter)
+		// Timed from the exact clock, remainder included: a command issued after a partial step happens
+		// at the instant the axes have reached, not at the last whole millisecond behind them.
+		const start = this.#utcTime + this.#utcTimeRemainder + Math.max(0, config.latency + jitter)
 
 		pulses.push({ start, end: start + executed, rate: sign * gain * guideRate * SIDEREAL_DRIFT_RATE })
 		this.#updatePulsing()
@@ -1167,16 +1169,20 @@ export class MountSimulator extends DeviceSimulator {
 	advance(dtSeconds: number) {
 		if (dtSeconds <= 0) return
 
-		const startTime = this.#utcTime
-		// The clock is whole milliseconds, since that is what INDI timestamps and the guide queue are
-		// expressed in, but the remainder is carried rather than discarded. Truncating each step on its
-		// own would let a sub-millisecond interval move the axes while leaving the clock still, so the
-		// guide queue would see an empty interval and two half-millisecond steps would not add up to one
-		// of a millisecond.
+		// The published clock is whole milliseconds, since that is what INDI timestamps are expressed in,
+		// but the remainder is carried rather than discarded. Truncating each step on its own would let a
+		// sub-millisecond interval move the axes while leaving the clock still, so two half-millisecond
+		// steps would not add up to one of a millisecond.
+		const startTime = this.#utcTime + this.#utcTimeRemainder
 		this.#utcTimeRemainder += dtSeconds * 1000
 		const elapsed = Math.trunc(this.#utcTimeRemainder)
 		this.#utcTimeRemainder -= elapsed
 		this.#utcTime += elapsed
+		// The guide queue is timed on the exact clock rather than the published one, so its interval is
+		// the interval the axes were actually advanced over. Rounding it down to whole milliseconds made
+		// a pulse issued after a partial step start retroactively, at the beginning of a stretch that had
+		// already elapsed, and delivered more of it than the step was long.
+		const endTime = this.#utcTime + this.#utcTimeRemainder
 
 		if (!this.isConnected) return
 
@@ -1184,8 +1190,8 @@ export class MountSimulator extends DeviceSimulator {
 		// end, so a pulse shorter than the step still delivers exactly its own share of motion. The
 		// result is reduced to an equivalent rate for the rest of the step, which lets the transmission
 		// see the travel a partly covered interval really produced.
-		this.#guideRateWestEast = integrateGuidePulses(this.#westEastPulses, startTime, this.#utcTime) / dtSeconds
-		this.#guideRateNorthSouth = integrateGuidePulses(this.#northSouthPulses, startTime, this.#utcTime) / dtSeconds
+		this.#guideRateWestEast = integrateGuidePulses(this.#westEastPulses, startTime, endTime) / dtSeconds
+		this.#guideRateNorthSouth = integrateGuidePulses(this.#northSouthPulses, startTime, endTime) / dtSeconds
 
 		// Sampled once per step, so every consumer of the interval sees the same rate error.
 		this.#trackingRateError = advanceTrackingRateError(this.#trackingRateErrorState, dtSeconds, this.#trackingRateErrorConfig, this.#normal)
@@ -1228,8 +1234,8 @@ export class MountSimulator extends DeviceSimulator {
 
 		// Retired only after the interval has been accounted for, so the tail of a pulse is never lost.
 		// Both axes are always visited: short-circuiting the second call would leave its queue growing.
-		const westEastPending = retireGuidePulses(this.#westEastPulses, this.#utcTime)
-		const northSouthPending = retireGuidePulses(this.#northSouthPulses, this.#utcTime)
+		const westEastPending = retireGuidePulses(this.#westEastPulses, endTime)
+		const northSouthPending = retireGuidePulses(this.#northSouthPulses, endTime)
 		this.#setPulsing(westEastPending || northSouthPending)
 
 		this.#notifyWormPhase()
