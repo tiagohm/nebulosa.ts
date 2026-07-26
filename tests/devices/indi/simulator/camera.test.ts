@@ -501,6 +501,75 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		}
 	}, 15000)
 
+	test('renders the same frame whether the catalog resolves at once or slowly', async () => {
+		// A CatalogSource is explicitly allowed to be asynchronous and network-backed, and the mount
+		// keeps ticking while one resolves. Reading the trajectory after the query came back would end
+		// the trail at the wrong instant and measure it against a coordinate the mount had since left,
+		// so a slow provider would place the field somewhere a fast one did not.
+		async function centreOfStar(disturb: boolean, name: string) {
+			const handler = new IndiClientHandlerSet()
+			const mountManager = new MountManager()
+			const cameraManager = new CameraManager()
+			using client = new ClientSimulator(name, handler)
+			const frameReceiver = new CameraFrameReceiver()
+
+			handler.add(mountManager)
+			handler.add(cameraManager)
+			cameraManager.addHandler(frameReceiver)
+
+			// Slews the mount while the query is in flight, which is what makes the two readings differ:
+			// the interval that follows the query is nothing like the one the exposure covered.
+			const catalogProvider: CatalogSource = async (rightAscension, declination) => {
+				if (disturb) {
+					mountSimulator.setSlewRate('SPEED_6')
+					mountSimulator.goTo(mountSimulator.rightAscension + deg(60), mountSimulator.declination)
+					await Bun.sleep(600)
+				}
+
+				return [{ snr: 200, hfd: 2, flux: 400, rightAscension, declination }]
+			}
+
+			using mountSimulator = new MountSimulator('Mount Simulator', client)
+			using cameraSimulator = new CameraSimulator('Camera Simulator', client, { mountManager, catalogSources: { CENTERED: catalogProvider } })
+			const mount = mountManager.get(client, mountSimulator.name)!
+			const camera = cameraManager.get(client, cameraSimulator.name)!
+
+			mountSimulator.connect()
+			cameraSimulator.connect()
+			await waitUntil(() => mount.connected && camera.connected)
+
+			mountSimulator.syncTo(hour(5), deg(20))
+			await waitUntil(() => closeTo(mount.equatorialCoordinate.declination, deg(20), 1e-9))
+
+			cameraManager.snoop(camera, mount)
+			await waitUntil(() => cameraManager.properties.get(camera)?.ACTIVE_DEVICES?.elements.ACTIVE_TELESCOPE.value === mount.name)
+
+			client.sendSwitch({ device: camera.name, name: 'SIMULATOR_NOISE_FEATURES', elements: { SKY_ENABLED: false, LIGHT_POLLUTION_ENABLED: false } })
+			client.sendSwitch({ device: camera.name, name: 'SIMULATOR_CATALOG_SOURCE', elements: { CENTERED: true } })
+			await waitUntil(() => cameraManager.properties.get(camera)?.SIMULATOR_CATALOG_SOURCE?.elements.CENTERED.value === true)
+
+			cameraSimulator.startExposure(0.05)
+			await waitUntil(() => frameReceiver.length > 0, 10000, 50)
+			const frame = await readImageFromBuffer(frameReceiver.lastFrame)
+			const [x, y, v] = brightestPixel(frame!.raw, frame!.header.NAXIS1 as number, frame!.metadata.channels)
+
+			cameraSimulator.dispose()
+			mountSimulator.dispose()
+			return [x, y, v] as const
+		}
+
+		const immediate = await centreOfStar(false, 'camera.catalog.fast')
+		const delayed = await centreOfStar(true, 'camera.catalog.slow')
+
+		// The exposure was over before either query went out, so what the mount did afterwards must not
+		// reach the frame. Reading the trajectory after the await measured a slew that was still running
+		// when the query came back, smearing a star that had in fact been sitting still, so the peak
+		// collapsed and the point source left the middle of the sensor.
+		expect(delayed[0]).toBe(immediate[0])
+		expect(delayed[1]).toBe(immediate[1])
+		expect(delayed[2]).toBeCloseTo(immediate[2], 6)
+	}, 20000)
+
 	test('conserves flux and trails the stars when the field moves during the exposure', async () => {
 		const handler = new IndiClientHandlerSet()
 		const mountManager = new MountManager()

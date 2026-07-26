@@ -1044,6 +1044,15 @@ export class CameraSimulator extends DeviceSimulator {
 	// Shifts the master catalog by the pointing error, rotates it on the full sensor, then applies
 	// aberration, subframe, and binning.
 	async #collectFrameStars(exposureTime: number, rotatorAngle: number) {
+		// Where the field sat at each instant of the exposure, in pixels relative to the catalog centre.
+		// The sky moves relative to the sensor, so this is applied before the rotator angle, which moves
+		// the sensor relative to the sky.
+		//
+		// Read before the catalog is awaited. A CatalogSource is explicitly allowed to be asynchronous
+		// and network-backed, and the mount keeps ticking while it resolves; reading the trajectory
+		// afterwards would end the trail when the query came back rather than when the exposure did, and
+		// would measure it against a coordinate the mount had since left.
+		const offsets = this.#exposureOffsets(arcsec(pixelScale(CAMERA_PIXEL_SIZE, this.telescopeFocalLength)), exposureTime)
 		const stars = await this.#ensureCatalog()
 		const frameX = this.#frame.elements.X.value
 		const frameY = this.#frame.elements.Y.value
@@ -1068,10 +1077,6 @@ export class CameraSimulator extends DeviceSimulator {
 		const annularPaddingY = annularRadius + annularSoftness * Math.sqrt(binY / binX)
 		const aberrationResult: SyntheticStarAberration = { defocus: 0, focusOffset: 0, covarianceXX: 0, covarianceXY: 0, covarianceYY: 0, coma: 0, comaTheta: 0 }
 
-		// Where the field sat at each instant of the exposure, in pixels relative to the catalog centre.
-		// The sky moves relative to the sensor, so this is applied before the rotator angle, which moves
-		// the sensor relative to the sky.
-		const offsets = this.#exposureOffsets(arcsec(pixelScale(CAMERA_PIXEL_SIZE, this.telescopeFocalLength)), exposureTime)
 		const sampleCount = offsets.length / 2
 		// Splitting a star across the trajectory must not create light: each sample carries its share of
 		// the total, so the integrated flux is the same whether the field moved or stood still.
