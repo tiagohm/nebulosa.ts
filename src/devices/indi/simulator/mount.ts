@@ -1316,9 +1316,12 @@ export class MountSimulator extends DeviceSimulator {
 	// therefore negative while tracking, and zero when tracking is off and nothing else is commanded.
 	//
 	// During a slew the axis runs at the slew speed, which is what makes the worm spin far faster than
-	// while tracking.
+	// while tracking. The sidereal baseline is subtracted there too: a slew changes the coordinate at
+	// its own rate, and the motor has to cancel the sky on top of that, exactly as tracking does.
+	// Leaving it out let the worm drift out of step over a long goto — a minute of slewing put the
+	// periodic error about forty-five degrees of phase away from where the axis had really taken it.
 	#rightAscensionMotorRate() {
-		if (this.#slewTarget) return this.#slewAxisRates()[0]
+		if (this.#slewTarget) return this.#slewAxisRates()[0] - SIDEREAL_DRIFT_RATE
 
 		let rate = this.isTracking ? this.#trackingDriftRate() - SIDEREAL_DRIFT_RATE : 0
 		if (this.#manualWestEast !== 0) rate += this.#manualWestEast * this.#manualSlewSpeed()

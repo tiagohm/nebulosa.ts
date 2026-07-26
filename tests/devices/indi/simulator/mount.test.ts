@@ -1471,6 +1471,39 @@ describe('mount simulator pointing errors', () => {
 		}
 	})
 
+	test('turns the worm by the travel of the motor, including the sky it cancels', () => {
+		const { client, mount } = makeMount('mount.worm.sidereal', 'PERIODIC_ERROR')
+
+		try {
+			const period = 480
+			client.sendNumber({ device: mount.name, name: 'MOUNT_PERIODIC_ERROR', elements: { ...NO_PERIODIC_ERROR, RA_PERIOD: period, RA_AMPLITUDE: 8 } })
+			mount.setTrackingEnabled(true)
+			mount.setSlewRate('SPEED_1')
+
+			const startTime = mount.utcTime
+			const startRightAscension = mount.rightAscension
+
+			// Out and back, so the coordinate ends exactly where it began. Whatever the axis did in
+			// between, the motor has then delivered nothing but the sky it cancelled all along, and the
+			// worm must stand exactly where simply tracking for the same time would have left it.
+			mount.goTo(startRightAscension + deg(3), mount.declination)
+			for (let i = 0; i < 100 && mount.isSlewing; i++) mount.advance(0.1)
+			mount.goTo(startRightAscension, mount.declination)
+			for (let i = 0; i < 100 && mount.isSlewing; i++) mount.advance(0.1)
+
+			expect(mount.isSlewing).toBeFalse()
+			expect(toArcsec(normalizePI(mount.rightAscension - startRightAscension))).toBeCloseTo(0, 6)
+
+			// Dropping the sidereal baseline from the slew rate leaves the two legs cancelling each other
+			// exactly, so the worm comes back to where it started instead of where the sky took it.
+			const elapsed = (mount.utcTime - startTime) / 1000
+			expect(elapsed).toBeGreaterThan(3)
+			expect(mount.wormPhase).toBeCloseTo((elapsed * TAU) / period, 6)
+		} finally {
+			mount.dispose()
+		}
+	})
+
 	test('turns the worm only while the slew is actually moving', () => {
 		const { client, mount } = makeMount('mount.worm.arrival', 'PERIODIC_ERROR')
 
