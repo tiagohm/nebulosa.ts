@@ -16,7 +16,7 @@ import type { ClientSimulator } from './client'
 import { GUIDE_JITTER_SEED, KING_DRIFT_RATE, LUNAR_DRIFT_RATE, MAIN_CONTROL, MAX_GUIDE_RATE, MAX_QUEUED_GUIDE_PULSES, MOUNT_TRAJECTORY_CAPACITY, SIDEREAL_DRIFT_RATE, SIMULATION, SLEW_RATES, SLEW_SPEED_FACTOR, SOLAR_DRIFT_RATE, TICK_INTERVAL_MS } from './constants'
 import { DeviceSimulator } from './device'
 // oxfmt-ignore
-import { advanceMechanicalAxis, clearMechanicalAxis, IDENTITY_MECHANICAL_AXIS_CONFIG, loadMechanicalAxis, type MechanicalAxisConfig, mechanicalAxisState, resetMechanicalAxisMotion } from './mount.axis'
+import { advanceMechanicalAxis, clearMechanicalAxis, driveMechanicalAxis, IDENTITY_MECHANICAL_AXIS_CONFIG, type MechanicalAxisConfig, mechanicalAxisState, resetMechanicalAxisMotion } from './mount.axis'
 import { type GuidePulse, type GuideResponseConfig, IDENTITY_GUIDE_RESPONSE_CONFIG, integrateGuidePulses, quantizeGuideDuration, retireGuidePulses } from './mount.guiding'
 // oxfmt-ignore
 import { IDENTITY_PERIODIC_ERROR_CURVE, PERIODIC_ERROR_HARMONICS, periodicErrorAt, periodicErrorBound, type PeriodicErrorCurve, trainPeriodicErrorCorrection } from './mount.periodic'
@@ -1323,16 +1323,18 @@ export class MountSimulator extends DeviceSimulator {
 		const span = Math.max(Math.abs(deltaRightAscension), Math.abs(deltaDeclination))
 
 		// A slew drives the axes directly rather than through the transmission model, since backlash is
-		// negligible against a slew and its own dynamics belong with the slew profile. The load direction
-		// is still recorded, so a slew leaves the slack open on the flank it ended on and the motion that
-		// follows pays for it, which is the reloaded backlash a real mount shows after a goto.
+		// negligible against a slew and its own dynamics belong with the slew profile. The travel is still
+		// reported to the transmission, which leaves it in the state a real mount is in after a goto: the
+		// slack taken up on the flank the slew ran on, so continuing that way is immediate and reversing
+		// costs the full backlash.
 		//
-		// Recorded before the arrival branch, because a goto short enough to fit inside one step goes
+		// Reported before the arrival branch, because a goto short enough to fit inside one step goes
 		// through that branch and never reaches the code below it. The transmission was then left loaded
 		// by whatever moved the axes before the goto, so a reversing pulse afterwards moved at once
 		// instead of spending itself on the slack the slew had just opened.
-		loadMechanicalAxis(this.#rightAscensionAxis, Math.sign(deltaRightAscension) as AxisDirection, this.#rightAscensionTransmission)
-		loadMechanicalAxis(this.#declinationAxis, Math.sign(deltaDeclination) as AxisDirection, this.#declinationTransmission)
+		const travelled = span > 0 ? Math.min(1, maxStep / span) : 0
+		driveMechanicalAxis(this.#rightAscensionAxis, Math.sign(deltaRightAscension) as AxisDirection, Math.abs(deltaRightAscension) * travelled, this.#rightAscensionTransmission)
+		driveMechanicalAxis(this.#declinationAxis, Math.sign(deltaDeclination) as AxisDirection, Math.abs(deltaDeclination) * travelled, this.#declinationTransmission)
 
 		if (span <= maxStep || span === 0) {
 			// Fraction of the step still unspent when the axes reach the target. The ring-down excited

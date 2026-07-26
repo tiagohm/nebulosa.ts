@@ -68,13 +68,21 @@ export function clearMechanicalAxis(state: MechanicalAxisState) {
 	state.moving = false
 }
 
-// Records that the axis is being driven in `direction` without moving it, reloading the slack if that
-// reverses the current load.
+// Records `travel` radians of motion the axis made in `direction` under direct drive, without moving
+// it here.
 //
 // Used by motion that drives the axes directly rather than through the transmission, such as a slew,
-// so that the state is left consistent for whatever follows: resuming in the same direction is
-// immediate, and reversing still costs the full backlash.
-export function loadMechanicalAxis(state: MechanicalAxisState, direction: AxisDirection, config: MechanicalAxisConfig) {
+// so that the state is left consistent for whatever follows. A reversal opens the slack on the other
+// flank as usual, and the travel then closes it again: the axis physically moved that far in the new
+// direction, which it could not have done through a gap that was still open. Recording the reversal
+// without the travel left a goto owing its own backlash, so the tracking that resumed in the very
+// direction the slew had just run stalled for as long as it took to take up slack that was no longer
+// there.
+//
+// A zero travel therefore records the flank alone, and a slew longer than the backlash closes it
+// completely, which is the state a real mount is left in after a goto: immediate in that direction,
+// costing the full backlash to reverse.
+export function driveMechanicalAxis(state: MechanicalAxisState, direction: AxisDirection, travel: Angle, config: MechanicalAxisConfig) {
 	if (direction === 0) return
 
 	if (state.loadDirection !== 0 && state.loadDirection !== direction) {
@@ -82,6 +90,7 @@ export function loadMechanicalAxis(state: MechanicalAxisState, direction: AxisDi
 	}
 
 	state.loadDirection = direction
+	if (state.backlashRemaining > 0) state.backlashRemaining = Math.max(0, state.backlashRemaining - Math.abs(travel))
 }
 
 // Advances one axis by `dtSeconds` under a motor running at `motorRate`, and returns the angle the

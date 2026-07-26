@@ -743,6 +743,38 @@ describe('mount simulator pointing errors', () => {
 		}
 	})
 
+	test('takes up the slack it drove through during the slew itself', () => {
+		const { client, mount } = makeMount('mount.backlash.driven', 'MECHANICS')
+
+		try {
+			client.sendNumber({ device: mount.name, name: 'MOUNT_MECHANICS', elements: { ...NO_MECHANICS, BACKLASH_DEC: 60 } })
+			mount.setTrackingEnabled(true)
+
+			// Load the transmission northwards, so the southward goto below is a reversal.
+			mount.pulse('NORTH', 8000)
+			for (let i = 0; i < 16; i++) mount.advance(0.5)
+
+			// A degree southwards is sixty times the slack, so the axis cannot have moved that far with the
+			// gap still open: the slew closed it on the way.
+			mount.setSlewRate('SPEED_7')
+			mount.goTo(mount.rightAscension, mount.declination - deg(1))
+			mount.advance(1)
+
+			expect(mount.isSlewing).toBeFalse()
+
+			const afterGoto = mount.mechanical.declination
+
+			// Continuing southwards must therefore move at once. Charging the backlash again here stalled
+			// the guiding that follows a goto for as long as it took to take up slack that was not there.
+			mount.pulse('SOUTH', 1000)
+			for (let i = 0; i < 2; i++) mount.advance(0.5)
+
+			expect(mount.mechanical.declination).toBeLessThan(afterGoto)
+		} finally {
+			mount.dispose()
+		}
+	})
+
 	test('holds a stuck declination axis until the accumulated pulses break it free', () => {
 		const { client, mount } = makeMount('mount.stiction.declination', 'MECHANICS')
 
