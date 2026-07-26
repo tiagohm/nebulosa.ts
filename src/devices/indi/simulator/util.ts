@@ -1,5 +1,5 @@
 import { Gnomonic } from '../../../astronomy/projections/projection'
-import { ASEC2RAD, PIOVERTWO, TAU } from '../../../core/constants'
+import { PIOVERTWO, TAU } from '../../../core/constants'
 import type { Point } from '../../../math/numerical/geometry'
 import { clamp } from '../../../math/numerical/math'
 import type { Angle } from '../../../math/units/angle'
@@ -133,19 +133,4 @@ export function pointingOffsetInPixels(rightAscension: Angle, declination: Angle
 	o.x = -o.x / pixelScale
 	o.y = -o.y / pixelScale
 	return true
-}
-
-// Sinusoidal periodic error at a given worm phase, in radians.
-//
-// `phase` is the accumulated angle of the worm in radians and `amplitudeArcsec` the semi-amplitude in
-// arcseconds; a zero amplitude disables the error and returns exactly 0. The error is a function of
-// the phase alone, so it is an absolute offset rather than an increment: evaluating twice at the same
-// phase returns the same number.
-//
-// Taking the phase rather than a timestamp is what ties the error to the mechanics: the worm turns
-// with the axis, so the error stops when the axis stops and runs fast during a slew, instead of
-// advancing with the wall clock.
-export function periodicErrorAtPhase(phase: Angle, amplitudeArcsec: number) {
-	if (amplitudeArcsec === 0) return 0
-	return Math.sin(phase) * amplitudeArcsec * ASEC2RAD
 }

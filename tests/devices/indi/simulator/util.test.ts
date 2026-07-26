@@ -1,47 +1,12 @@
 import { describe, expect, test } from 'bun:test'
 import { Gnomonic } from '../../../../src/astronomy/projections/projection'
-import { PI, PIOVERTWO, TAU } from '../../../../src/core/constants'
-import { clampDeclination, periodicErrorAtPhase, pointingOffsetInPixels, shortestRotatorDelta, wrapRotatorAngle } from '../../../../src/devices/indi/simulator/util'
+import { PIOVERTWO } from '../../../../src/core/constants'
+import { clampDeclination, pointingOffsetInPixels, shortestRotatorDelta, wrapRotatorAngle } from '../../../../src/devices/indi/simulator/util'
 import type { Point } from '../../../../src/math/numerical/geometry'
 import { arcsec, deg, hour, toArcsec } from '../../../../src/math/units/angle'
 
 // Unit coverage for the numerical helpers shared by the device simulators. These are pure functions,
 // so they run without the timers and connections the simulator integration tests need.
-
-describe('periodic error at phase', () => {
-	// A 5 arcsec semi-amplitude is typical of a small equatorial mount.
-	const amplitude = 5
-
-	test('follows the sine over one full worm revolution', () => {
-		expect(toArcsec(periodicErrorAtPhase(0, amplitude))).toBeCloseTo(0, 9)
-		expect(toArcsec(periodicErrorAtPhase(PIOVERTWO, amplitude))).toBeCloseTo(amplitude, 9)
-		expect(toArcsec(periodicErrorAtPhase(PI, amplitude))).toBeCloseTo(0, 9)
-		expect(toArcsec(periodicErrorAtPhase(3 * PIOVERTWO, amplitude))).toBeCloseTo(-amplitude, 9)
-	})
-
-	test('is periodic across revolution boundaries', () => {
-		for (const phase of [0.3, 1.7, PI, 5.2]) {
-			expect(periodicErrorAtPhase(phase + TAU * 7, amplitude)).toBeCloseTo(periodicErrorAtPhase(phase, amplitude), 12)
-		}
-	})
-
-	test('is an absolute offset, not an increment', () => {
-		// The regression this guards: the offset used to be applied as the difference from the previous
-		// evaluation, so a second call at the same point returned zero instead of the same value.
-		const phase = 1.234
-		const first = periodicErrorAtPhase(phase, amplitude)
-		expect(periodicErrorAtPhase(phase, amplitude)).toBe(first)
-		expect(first).not.toBe(0)
-	})
-
-	test('is disabled by a zero amplitude', () => {
-		expect(periodicErrorAtPhase(1.234, 0)).toBe(0)
-	})
-
-	test('scales linearly with the amplitude', () => {
-		expect(periodicErrorAtPhase(PIOVERTWO, 2 * amplitude)).toBeCloseTo(2 * periodicErrorAtPhase(PIOVERTWO, amplitude), 15)
-	})
-})
 
 describe('pointing offset in pixels', () => {
 	// 2 arcsec/pixel is a typical wide-field imaging scale.

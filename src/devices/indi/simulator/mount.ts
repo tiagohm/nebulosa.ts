@@ -16,12 +16,14 @@ import { GUIDE_JITTER_SEED, KING_DRIFT_RATE, LUNAR_DRIFT_RATE, MAIN_CONTROL, MAX
 import { DeviceSimulator } from './device'
 import { advanceMechanicalAxis, IDENTITY_MECHANICAL_AXIS_CONFIG, loadMechanicalAxis, type MechanicalAxisConfig, mechanicalAxisState, resetMechanicalAxisMotion } from './mount.axis'
 import { type GuidePulse, type GuideResponseConfig, IDENTITY_GUIDE_RESPONSE_CONFIG, integrateGuidePulses, quantizeGuideDuration, retireGuidePulses } from './mount.guiding'
+// oxfmt-ignore
+import { IDENTITY_PERIODIC_ERROR_CURVE, PERIODIC_ERROR_HARMONICS, periodicErrorAt, periodicErrorBound, type PeriodicErrorCurve, trainPeriodicErrorCorrection } from './mount.periodic'
 import { advanceSettling, exciteSettling, IDENTITY_SETTLING_CONFIG, resetSettling, type SettlingConfig, settlingState } from './mount.settling'
 import { boresightHistory, clearBoresightHistory, recordBoresightSample, sampleBoresightTrajectory } from './mount.trajectory'
 // oxfmt-ignore
 import { advanceTrackingRateError, IDENTITY_TRACKING_RATE_ERROR_CONFIG, resetTrackingRateError, TRACKING_RATE_CALIBRATION_TEMPERATURE, type TrackingRateErrorConfig, trackingRateErrorState } from './mount.tracking'
 import type { AxisDirection, CoordSetMode, DeviceSimulatorOptions, MountPointingState, SimulatorProperty, SlewMode } from './types'
-import { applyNumberVectorValues, clampDeclination, periodicErrorAtPhase } from './util'
+import { applyNumberVectorValues, clampDeclination } from './util'
 
 // Simulated equatorial mount, tracking, slewing, site, and pulse-guiding behavior.
 
@@ -58,14 +60,22 @@ export class MountSimulator extends DeviceSimulator {
 	// oxfmt-ignore
 	readonly #alignment = makeNumberVector('', 'MOUNT_ALIGNMENT', 'Alignment', SIMULATION, 'rw', ['POLAR_AZIMUTH_ERROR', 'Polar Azimuth Error (arcsec)', 0, -36000, 36000, 0.1, '%.3f'], ['POLAR_ALTITUDE_ERROR', 'Polar Altitude Error (arcsec)', 0, -36000, 36000, 0.1, '%.3f'], ['CONE_ERROR', 'Cone Error (arcsec)', 0, -3600, 3600, 0.1, '%.3f'], ['AXIS_NON_ORTHOGONALITY', 'Axis Non-orthogonality (arcsec)', 0, -3600, 3600, 0.1, '%.3f'], ['RA_INDEX_ERROR', 'RA Index Error (arcsec)', 0, -3600, 3600, 0.1, '%.3f'], ['DEC_INDEX_ERROR', 'DEC Index Error (arcsec)', 0, -3600, 3600, 0.1, '%.3f'])
 	// Periodic error of the right-ascension worm: the time it takes to complete one revolution while
-	// tracking at the sidereal rate, in seconds, and the semi-amplitude of the resulting error, in
-	// arcseconds. A zero period or amplitude disables it.
+	// tracking at the sidereal rate, in seconds, and the harmonic content of the resulting error, as a
+	// semi-amplitude in arcseconds and a phase in degrees per order. Order 1 turns once per worm
+	// revolution, order 2 twice and order 3 three times; a real curve is lumpy because the wheel teeth
+	// and the gears driving the worm add to its own eccentricity. A zero period disables the whole term.
 	// There is deliberately no declination counterpart. Classic periodic error comes from the worm of
 	// the axis that turns continuously, which during tracking is only right ascension; the declination
 	// axis stands still and moves only for corrections, dithers and slews, so what dominates there is
 	// backlash and stiction, not a periodic term.
 	// oxfmt-ignore
-	readonly #periodicError = makeNumberVector('', 'MOUNT_PERIODIC_ERROR', 'Periodic Error', SIMULATION, 'rw', ['RA_PERIOD', 'Worm Period (s)', 0, 0, DAYSEC, 1, '%.0f'], ['RA_AMPLITUDE', 'Amplitude (arcsec)', 0, 0, 3600, 0.1, '%.3f'])
+	readonly #periodicError = makeNumberVector('', 'MOUNT_PERIODIC_ERROR', 'Periodic Error', SIMULATION, 'rw', ['RA_PERIOD', 'Worm Period (s)', 0, 0, DAYSEC, 1, '%.0f'], ['RA_AMPLITUDE', 'Amplitude (arcsec)', 0, 0, 3600, 0.1, '%.3f'], ['RA_PHASE', 'Phase (deg)', 0, 0, 360, 1, '%.1f'], ['RA_AMPLITUDE_2', '2nd Harmonic (arcsec)', 0, 0, 3600, 0.1, '%.3f'], ['RA_PHASE_2', '2nd Harmonic Phase (deg)', 0, 0, 360, 1, '%.1f'], ['RA_AMPLITUDE_3', '3rd Harmonic (arcsec)', 0, 0, 3600, 0.1, '%.3f'], ['RA_PHASE_3', '3rd Harmonic Phase (deg)', 0, 0, 360, 1, '%.1f'])
+	// Periodic error correction the controller plays back. SAMPLES is the length of the recorded table
+	// over one worm revolution and GAIN how much of the error the recording captured; zero samples means
+	// an untrained mount. A short table cannot represent the higher harmonics, so they survive playback,
+	// which is why a trained mount still shows residual error.
+	// oxfmt-ignore
+	readonly #periodicErrorCorrection = makeNumberVector('', 'MOUNT_PEC', 'PEC', SIMULATION, 'rw', ['SAMPLES', 'Recorded Samples', 0, 0, 1024, 1, '%.0f'], ['GAIN', 'Playback Gain', 1, 0, 1, 0.01, '%.3f'])
 	// Live phase of the right-ascension worm, in degrees. Read-only: it is integrated from the motion of
 	// the axis, not from the clock, so it stands still while the mount is parked and speeds up during a slew.
 	readonly #wormPhaseVector = makeNumberVector('', 'MOUNT_WORM_PHASE', 'Worm Phase', SIMULATION, 'ro', ['PHASE', 'Phase (deg)', 0, 0, 360, 0.1, '%.3f'])
@@ -111,6 +121,7 @@ export class MountSimulator extends DeviceSimulator {
 		this.#guideRate,
 		this.#alignment,
 		this.#periodicError,
+		this.#periodicErrorCorrection,
 		this.#wormPhaseVector,
 		this.#mechanics,
 		this.#guiding,
@@ -120,7 +131,7 @@ export class MountSimulator extends DeviceSimulator {
 	// The error-model configuration is persisted along with track mode and guide rate, so a simulated
 	// mount keeps its mechanical character across reconnections. The worm phase is not: it is live
 	// mechanical state, and a power cycle is exactly when a real mount loses track of it.
-	protected propertiesToNotSave = this.properties.filter((e) => e !== this.#trackMode && e !== this.#guideRate && e !== this.#alignment && e !== this.#periodicError && e !== this.#mechanics && e !== this.#guiding && e !== this.#settling && e !== this.#trackingRate)
+	protected propertiesToNotSave = this.properties.filter((e) => e !== this.#trackMode && e !== this.#guideRate && e !== this.#alignment && e !== this.#periodicError && e !== this.#periodicErrorCorrection && e !== this.#mechanics && e !== this.#guiding && e !== this.#settling && e !== this.#trackingRate)
 
 	#timer?: NodeJS.Timeout
 	#lastTick = 0
@@ -146,6 +157,9 @@ export class MountSimulator extends DeviceSimulator {
 	// both in parts per million.
 	readonly #trackingRateErrorState = trackingRateErrorState()
 	#trackingRateError = 0
+	// Harmonic content of the worm and the trained correction, rebuilt from MOUNT_PERIODIC_ERROR and
+	// MOUNT_PEC whenever either changes, so evaluating the boresight allocates nothing.
+	#periodicErrorCurve: PeriodicErrorCurve = IDENTITY_PERIODIC_ERROR_CURVE
 	// Rate-error configuration, rebuilt from MOUNT_TRACKING_RATE whenever it changes.
 	#trackingRateErrorConfig: TrackingRateErrorConfig = IDENTITY_TRACKING_RATE_ERROR_CONFIG
 	// Travel the drive has delivered beyond what the encoders counted, radians of right ascension.
@@ -316,7 +330,10 @@ export class MountSimulator extends DeviceSimulator {
 			;[rightAscension, declination] = applyEquatorialPointingError(rightAscension, declination, this.siderealTimeAt(utcTime), model)
 		}
 
-		rightAscension += periodicErrorAtPhase(this.#wormPhaseAt(utcTime), this.#periodicError.elements.RA_AMPLITUDE.value)
+		if (this.#periodicErrorCurve !== IDENTITY_PERIODIC_ERROR_CURVE) {
+			rightAscension += periodicErrorAt(this.#wormPhaseAt(utcTime), this.#periodicErrorCurve)
+		}
+
 		// Held constant across the extrapolation window rather than projected forward: over the fraction
 		// of a second a caller extrapolates by, a part-per-million rate error moves nothing measurable.
 		rightAscension += this.#trackingRateOffset
@@ -378,9 +395,9 @@ export class MountSimulator extends DeviceSimulator {
 
 	// Upper bound (radians) of how far the configured errors can displace the optical axis, over all
 	// hour angles. The polar-alignment terms contribute at most the sum of their magnitudes to each of
-	// the two axes, hence the sqrt(2) on their combined magnitude, and each periodic error adds its own
-	// amplitude to its own axis. Consumers use it to size buffers and margins without having to know
-	// the error model.
+	// the two axes, hence the sqrt(2) on their combined magnitude, and the worm adds the sum of its
+	// harmonic amplitudes to right ascension. Consumers use it to size buffers and margins without
+	// having to know the error model.
 	get pointingErrorBound(): Angle {
 		const { POLAR_AZIMUTH_ERROR, POLAR_ALTITUDE_ERROR, CONE_ERROR, AXIS_NON_ORTHOGONALITY, RA_INDEX_ERROR, DEC_INDEX_ERROR } = this.#alignment.elements
 		// The cone and non-perpendicularity terms scale as sec and tan of the declination, which cancel
@@ -392,7 +409,7 @@ export class MountSimulator extends DeviceSimulator {
 		const index = Math.abs(RA_INDEX_ERROR.value) + Math.abs(DEC_INDEX_ERROR.value)
 		// The accumulated rate drift is added as it stands rather than bounded: it has no bound, so the
 		// only honest figure is how far it has walked so far.
-		return (polar + geometry + index + this.#periodicError.elements.RA_AMPLITUDE.value) * ASEC2RAD + Math.abs(this.#trackingRateOffset)
+		return (polar + geometry + index) * ASEC2RAD + periodicErrorBound(this.#periodicErrorCurve) + Math.abs(this.#trackingRateOffset)
 	}
 
 	// Current pier side derived from the pier-side property.
@@ -448,7 +465,16 @@ export class MountSimulator extends DeviceSimulator {
 				if (applyNumberVectorValues(this.#alignment, vector.elements)) this.notify(this.#alignment)
 				return
 			case 'MOUNT_PERIODIC_ERROR':
-				if (applyNumberVectorValues(this.#periodicError, vector.elements)) this.notify(this.#periodicError)
+				if (applyNumberVectorValues(this.#periodicError, vector.elements)) {
+					this.#refreshPeriodicError()
+					this.notify(this.#periodicError)
+				}
+				return
+			case 'MOUNT_PEC':
+				if (applyNumberVectorValues(this.#periodicErrorCorrection, vector.elements)) {
+					this.#refreshPeriodicError()
+					this.notify(this.#periodicErrorCorrection)
+				}
 				return
 			case 'MOUNT_MECHANICS':
 				if (applyNumberVectorValues(this.#mechanics, vector.elements)) {
@@ -486,6 +512,33 @@ export class MountSimulator extends DeviceSimulator {
 		this.#refreshTransmission()
 		this.#refreshSettling()
 		this.#refreshTrackingRate()
+		this.#refreshPeriodicError()
+	}
+
+	// Rebuilds the worm curve from MOUNT_PERIODIC_ERROR and retrains the correction from MOUNT_PEC.
+	//
+	// Retraining on every change is what a controller does when the mechanics change under it, and it
+	// keeps the table consistent with the curve it is meant to cancel. Collapses to the shared identity
+	// curve when no harmonic has any amplitude, so the boresight path can skip it by reference.
+	#refreshPeriodicError() {
+		const { RA_AMPLITUDE, RA_PHASE, RA_AMPLITUDE_2, RA_PHASE_2, RA_AMPLITUDE_3, RA_PHASE_3 } = this.#periodicError.elements
+
+		if (RA_AMPLITUDE.value === 0 && RA_AMPLITUDE_2.value === 0 && RA_AMPLITUDE_3.value === 0) {
+			this.#periodicErrorCurve = IDENTITY_PERIODIC_ERROR_CURVE
+			return
+		}
+
+		const amplitudes = new Float64Array(PERIODIC_ERROR_HARMONICS)
+		const phases = new Float64Array(PERIODIC_ERROR_HARMONICS)
+		amplitudes[0] = RA_AMPLITUDE.value * ASEC2RAD
+		amplitudes[1] = RA_AMPLITUDE_2.value * ASEC2RAD
+		amplitudes[2] = RA_AMPLITUDE_3.value * ASEC2RAD
+		phases[0] = deg(RA_PHASE.value)
+		phases[1] = deg(RA_PHASE_2.value)
+		phases[2] = deg(RA_PHASE_3.value)
+
+		const { SAMPLES, GAIN } = this.#periodicErrorCorrection.elements
+		this.#periodicErrorCurve = trainPeriodicErrorCorrection({ amplitudes, phases }, SAMPLES.value, GAIN.value)
 	}
 
 	// Rebuilds the settling configuration from MOUNT_SETTLING. Called only when the property changes,

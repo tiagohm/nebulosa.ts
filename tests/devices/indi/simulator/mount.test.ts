@@ -718,6 +718,70 @@ describe('mount simulator pointing errors', () => {
 		}
 	})
 
+	test('adds the higher harmonics of the worm to the boresight', () => {
+		const { client, mount } = makeMount('mount.boresight.harmonics')
+
+		try {
+			const period = 400
+			// A second harmonic phased to peak at the start of the revolution, where the fundamental is
+			// crossing zero, so the two are separable by inspection.
+			client.sendNumber({ device: mount.name, name: 'MOUNT_PERIODIC_ERROR', elements: { RA_PERIOD: period, RA_AMPLITUDE: 8, RA_AMPLITUDE_2: 3, RA_PHASE_2: 90 } })
+			mount.setTrackingEnabled(true)
+
+			const atZero = toArcsec(normalizePI(mount.boresight.rightAscension - mount.rightAscension))
+			expect(atZero).toBeCloseTo(3, 6)
+
+			// A quarter revolution puts the fundamental at its peak and the second harmonic, turning
+			// twice as fast, back at its own trough.
+			mount.advance(period / 4)
+			expect(toArcsec(normalizePI(mount.boresight.rightAscension - mount.rightAscension))).toBeCloseTo(8 - 3, 6)
+
+			// The margin a consumer sizes from has to cover both.
+			expect(toArcsec(mount.pointingErrorBound)).toBeCloseTo(11, 6)
+		} finally {
+			mount.dispose()
+		}
+	})
+
+	test('cancels the trained periodic error and leaves what the table cannot represent', () => {
+		const { client, mount } = makeMount('mount.boresight.pec')
+
+		try {
+			const period = 400
+			client.sendNumber({ device: mount.name, name: 'MOUNT_PERIODIC_ERROR', elements: { RA_PERIOD: period, RA_AMPLITUDE: 8, RA_AMPLITUDE_3: 3 } })
+			mount.setTrackingEnabled(true)
+
+			// Peak of the residual over one revolution, which is what a trained mount is judged by.
+			function peakOverOneRevolution() {
+				let peak = 0
+
+				for (let i = 0; i < 64; i++) {
+					mount.advance(period / 64)
+					peak = Math.max(peak, Math.abs(toArcsec(normalizePI(mount.boresight.rightAscension - mount.rightAscension))))
+				}
+
+				return peak
+			}
+
+			// Untrained, the mount shows the whole curve.
+			const uncorrected = peakOverOneRevolution()
+			expect(uncorrected).toBeGreaterThan(6)
+
+			// A table of four bins resolves the fundamental and nothing above it, so playback removes the
+			// dominant term and the third harmonic survives.
+			client.sendNumber({ device: mount.name, name: 'MOUNT_PEC', elements: { SAMPLES: 4, GAIN: 1 } })
+			const partial = peakOverOneRevolution()
+			expect(partial).toBeLessThan(uncorrected)
+			expect(partial).toBeGreaterThan(2)
+
+			// With enough bins to resolve every harmonic, almost nothing is left.
+			client.sendNumber({ device: mount.name, name: 'MOUNT_PEC', elements: { SAMPLES: 256, GAIN: 1 } })
+			expect(peakOverOneRevolution()).toBeLessThan(0.05)
+		} finally {
+			mount.dispose()
+		}
+	})
+
 	test('spins the worm faster during a slew than while tracking', () => {
 		const { client, mount } = makeMount('mount.worm.slew')
 
