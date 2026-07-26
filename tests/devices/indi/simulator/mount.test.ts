@@ -682,6 +682,38 @@ describe('mount simulator pointing errors', () => {
 		}
 	})
 
+	test('leaves the slack open on the flank a goto ended on, even when it fits in one step', () => {
+		const { client, mount } = makeMount('mount.backlash.goto', 'MECHANICS')
+
+		try {
+			client.sendNumber({ device: mount.name, name: 'MOUNT_MECHANICS', elements: { ...NO_MECHANICS, BACKLASH_DEC: 60 } })
+			mount.setTrackingEnabled(true)
+
+			// Load the transmission northwards, so the southward goto below is a reversal.
+			mount.pulse('NORTH', 8000)
+			for (let i = 0; i < 16; i++) mount.advance(0.5)
+
+			// A degree at the fastest rate takes a tenth of a second, so the whole goto happens inside a
+			// single step and never gets past the arrival branch.
+			mount.setSlewRate('SPEED_7')
+			mount.goTo(mount.rightAscension, mount.declination - deg(1))
+			mount.advance(1)
+
+			expect(mount.isSlewing).toBeFalse()
+
+			const afterGoto = mount.mechanical.declination
+
+			// Fifteen arcseconds of motor travel northwards, against a minute of slack the southward slew
+			// left open: the axis must not move at all until that slack is closed.
+			mount.pulse('NORTH', 2000)
+			for (let i = 0; i < 4; i++) mount.advance(0.5)
+
+			expect(mount.mechanical.declination).toBe(afterGoto)
+		} finally {
+			mount.dispose()
+		}
+	})
+
 	test('holds a stuck declination axis until the accumulated pulses break it free', () => {
 		const { client, mount } = makeMount('mount.stiction.declination', 'MECHANICS')
 

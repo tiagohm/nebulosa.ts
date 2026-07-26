@@ -1289,6 +1289,18 @@ export class MountSimulator extends DeviceSimulator {
 		const deltaDeclination = target.declination - this.#mechanical.declination
 		const span = Math.max(Math.abs(deltaRightAscension), Math.abs(deltaDeclination))
 
+		// A slew drives the axes directly rather than through the transmission model, since backlash is
+		// negligible against a slew and its own dynamics belong with the slew profile. The load direction
+		// is still recorded, so a slew leaves the slack open on the flank it ended on and the motion that
+		// follows pays for it, which is the reloaded backlash a real mount shows after a goto.
+		//
+		// Recorded before the arrival branch, because a goto short enough to fit inside one step goes
+		// through that branch and never reaches the code below it. The transmission was then left loaded
+		// by whatever moved the axes before the goto, so a reversing pulse afterwards moved at once
+		// instead of spending itself on the slack the slew had just opened.
+		loadMechanicalAxis(this.#rightAscensionAxis, Math.sign(deltaRightAscension) as AxisDirection, this.#rightAscensionTransmission)
+		loadMechanicalAxis(this.#declinationAxis, Math.sign(deltaDeclination) as AxisDirection, this.#declinationTransmission)
+
 		if (span <= maxStep || span === 0) {
 			// Fraction of the step still unspent when the axes reach the target. The ring-down excited
 			// below starts at that instant, not at the beginning of the step, and at the default tick a
@@ -1336,13 +1348,6 @@ export class MountSimulator extends DeviceSimulator {
 
 			return remaining
 		}
-
-		// A slew drives the axes directly rather than through the transmission model, since backlash is
-		// negligible against a slew and its own dynamics belong with the slew profile. The load
-		// direction is still recorded, so a slew leaves the slack open on the flank it ended on and the
-		// motion that follows pays for it, which is the reloaded backlash a real mount shows after a goto.
-		loadMechanicalAxis(this.#rightAscensionAxis, Math.sign(deltaRightAscension) as AxisDirection, this.#rightAscensionTransmission)
-		loadMechanicalAxis(this.#declinationAxis, Math.sign(deltaDeclination) as AxisDirection, this.#declinationTransmission)
 
 		const scale = maxStep / span
 		this.#setMechanical(this.#mechanical.rightAscension + deltaRightAscension * scale, this.#mechanical.declination + deltaDeclination * scale)
