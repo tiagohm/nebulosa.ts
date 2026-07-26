@@ -1361,6 +1361,32 @@ describe('mount simulator pointing errors', () => {
 		}
 	})
 
+	test('keeps the worm turning while its error is switched off', () => {
+		const { client, mount } = makeMount('mount.worm.hidden', 'PERIODIC_ERROR')
+
+		try {
+			const period = 400
+			client.sendNumber({ device: mount.name, name: 'MOUNT_PERIODIC_ERROR', elements: { ...NO_PERIODIC_ERROR, RA_PERIOD: period, RA_AMPLITUDE: 8 } })
+			mount.setTrackingEnabled(true)
+
+			// The worm is a piece of the mount, not a piece of the error model: with the family switched
+			// off it is the error that stops being applied, while the axis goes on driving it.
+			client.sendSwitch({ device: mount.name, name: 'SIMULATOR_ERROR_FEATURES', elements: { PERIODIC_ERROR: false } })
+			expect(mount.boresight.rightAscension).toBe(mount.mechanical.rightAscension)
+
+			mount.advance(period / 2)
+			expect(mount.wormPhase).toBeCloseTo(PI, 9)
+
+			// Switching it back on picks the curve up where the worm has actually got to, rather than
+			// where it was left standing half a revolution ago.
+			client.sendSwitch({ device: mount.name, name: 'SIMULATOR_ERROR_FEATURES', elements: { PERIODIC_ERROR: true } })
+			expect(mount.wormPhase).toBeCloseTo(PI, 9)
+			expect(toArcsec(normalizePI(mount.boresight.rightAscension - mount.mechanical.rightAscension))).toBeCloseTo(8 * Math.sin(PI), 6)
+		} finally {
+			mount.dispose()
+		}
+	})
+
 	test('treats a worm that never turns as having no periodic error', () => {
 		const { client, mount } = makeMount('mount.worm.noperiod', 'PERIODIC_ERROR')
 

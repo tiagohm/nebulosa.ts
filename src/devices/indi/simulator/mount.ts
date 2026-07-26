@@ -1280,9 +1280,15 @@ export class MountSimulator extends DeviceSimulator {
 	// tracking rate, hence the ratio to SIDEREAL_DRIFT_RATE; the sign is chosen so that ordinary
 	// tracking advances the phase. Because the phase follows the axis and not the clock, it stands
 	// still when the mount is parked or not tracking, and it speeds up during a slew.
+	//
+	// Integrated whether or not the periodic error is being simulated, because the worm is a piece of
+	// the mount and goes on turning while its error is merely not being applied. Freezing it here made
+	// re-enabling the family resume from a phase unrelated to where the axis had since travelled: half a
+	// revolution of tracking with the feature off and the curve came back at zero instead of at pi. Only
+	// the contribution to the boresight and the published property are gated by the switch.
 	#advanceWormPhase(motorRate: number, dtSeconds: number) {
 		const period = this.#periodicError.elements.RA_PERIOD.value
-		if (period <= 0 || !this.#simulatesPeriodicError) return
+		if (period <= 0) return
 		this.#wormPhase = normalizeAngle(this.#wormPhase + (-motorRate / SIDEREAL_DRIFT_RATE) * (TAU / period) * dtSeconds)
 	}
 
