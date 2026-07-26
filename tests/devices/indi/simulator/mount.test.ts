@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { PI, PIOVERTWO } from '../../../../src/core/constants'
+import { PI, PIOVERTWO, TAU } from '../../../../src/core/constants'
 import { IndiClientHandlerSet } from '../../../../src/devices/indi/client'
 import { GuideOutputManager, MountManager } from '../../../../src/devices/indi/manager'
 import { ClientSimulator } from '../../../../src/devices/indi/simulator/client'
@@ -392,6 +392,28 @@ describe('mount simulator pointing errors', () => {
 			// Changing the weather itself still takes effect at once.
 			client.sendNumber({ device: mount.name, name: 'MOUNT_WIND', elements: { AMPLITUDE: 60 } })
 			expect(mount.boresight.declination).not.toBe(before)
+		} finally {
+			mount.dispose()
+		}
+	})
+
+	test('normalizes the boresight right ascension past the wrap', () => {
+		const { client, mount } = makeMount('mount.boresight.wrap', 'TRACKING_RATE')
+
+		try {
+			// A grossly fast drive, so ten minutes of tracking walks the boresight further west than the
+			// arcsecond of right ascension the mount starts east of zero.
+			client.sendNumber({ device: mount.name, name: 'MOUNT_TRACKING_RATE', elements: { ...NO_TRACKING_RATE, BIAS: 10000 } })
+			mount.syncTo(arcsec(1), deg(20))
+			mount.setTrackingEnabled(true)
+			mount.advance(600)
+
+			const { rightAscension } = mount.boresight
+			expect(rightAscension).toBeGreaterThanOrEqual(0)
+			expect(rightAscension).toBeLessThan(TAU)
+
+			// It really did wrap rather than staying comfortably inside the range.
+			expect(rightAscension).toBeGreaterThan(TAU - arcsec(120))
 		} finally {
 			mount.dispose()
 		}

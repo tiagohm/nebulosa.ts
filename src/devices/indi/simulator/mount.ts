@@ -441,8 +441,6 @@ export class MountSimulator extends DeviceSimulator {
 				rightAscension += PIER_WEST_RA.value * ASEC2RAD
 				declination += PIER_WEST_DEC.value * ASEC2RAD
 			}
-
-			rightAscension = normalizeAngle(rightAscension)
 		}
 
 		if (this.#periodicErrorCurve !== IDENTITY_PERIODIC_ERROR_CURVE) {
@@ -463,7 +461,10 @@ export class MountSimulator extends DeviceSimulator {
 			declination += this.#windState.declination
 		}
 
-		return { rightAscension, declination }
+		// Normalized once here rather than after the geometric terms, so every contribution is inside the
+		// wrap. The terms that follow them are small but signed, and a mount sitting just east of zero
+		// used to come back with a negative right ascension.
+		return { rightAscension: normalizeAngle(rightAscension), declination }
 	}
 
 	// Right ascension the drive has delivered beyond what the encoders counted, radians. Grows while
