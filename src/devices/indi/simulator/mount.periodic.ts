@@ -19,6 +19,13 @@ export const PERIODIC_ERROR_HARMONICS = 3
 // controller asking for fewer bins is treated as having no training at all.
 const MIN_CORRECTION_SAMPLES = 4
 
+// Largest correction table that will be built, matching the upper bound of the MOUNT_PEC property.
+// Well past the point of diminishing returns: at this many bins the residual of every harmonic
+// modelled here is already far below the seeing. The cap exists because the count sizes an allocation,
+// and an exported helper must not turn a caller's bad number into a multi-gigabyte array or a
+// RangeError from the typed-array constructor.
+const MAX_CORRECTION_SAMPLES = 1024
+
 // Harmonic content of a worm, and the correction a controller has learned for it.
 export interface PeriodicErrorCurve {
 	// Semi-amplitude of each harmonic, radians. Index i is the harmonic of order i + 1, so index 0 turns
@@ -81,8 +88,12 @@ export function periodicErrorAt(phase: Angle, curve: PeriodicErrorCurve): Angle 
 // more interesting limit: a short table cannot represent a harmonic whose period is comparable to the
 // bin spacing, so the higher orders survive playback almost untouched no matter how good the training
 // was. Fewer than MIN_CORRECTION_SAMPLES bins, or a non-positive gain, leaves the curve untrained.
+//
+// `samples` is capped at MAX_CORRECTION_SAMPLES, so asking for more bins than that, or for an infinite
+// number of them, produces the largest table rather than an allocation the size of the request. A
+// count that is not a number at all is treated as no training.
 export function trainPeriodicErrorCorrection(curve: PeriodicErrorCurve, samples: number, gain: number): PeriodicErrorCurve {
-	const count = Math.trunc(samples)
+	const count = Number.isNaN(samples) ? 0 : Math.min(Math.trunc(samples), MAX_CORRECTION_SAMPLES)
 	if (count < MIN_CORRECTION_SAMPLES || !(gain > 0)) return { amplitudes: curve.amplitudes, phases: curve.phases }
 
 	const correction = new Float64Array(count)

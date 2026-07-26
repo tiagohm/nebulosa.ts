@@ -167,4 +167,17 @@ describe('periodic error correction', () => {
 		expect(trainPeriodicErrorCorrection(worm, 0, 1).correction).toBeUndefined()
 		expect(trainPeriodicErrorCorrection(worm, 256, 0).correction).toBeUndefined()
 	})
+
+	test('caps the size of the table it will build', () => {
+		const worm = curve([5])
+
+		// The count sizes an allocation, and this is exported: an infinite or absurd request has to come
+		// back as the largest table rather than as a RangeError or a multi-gigabyte array.
+		expect(trainPeriodicErrorCorrection(worm, Infinity, 1).correction).toHaveLength(1024)
+		expect(trainPeriodicErrorCorrection(worm, 1e12, 1).correction).toHaveLength(1024)
+		expect(trainPeriodicErrorCorrection(worm, 1024, 1).correction).toHaveLength(1024)
+
+		// A count that is not a number is no instruction at all, so nothing is trained.
+		expect(trainPeriodicErrorCorrection(worm, NaN, 1).correction).toBeUndefined()
+	})
 })
