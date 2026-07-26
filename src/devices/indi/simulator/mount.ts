@@ -1263,9 +1263,13 @@ export class MountSimulator extends DeviceSimulator {
 
 		this.#notifyWormPhase()
 
-		// Recorded last, so the sample reflects the state at the end of the interval just simulated.
+		// Recorded last, so the sample reflects the state at the end of the interval just simulated, and
+		// stamped with the exact clock rather than the published one. Two sub-millisecond steps otherwise
+		// recorded two different positions under one timestamp, and the history is searched assuming a
+		// timestamp identifies a position: an east-then-west excursion made of two half-millisecond steps
+		// came back as a path of zero length.
 		const boresight = this.boresight
-		recordBoresightSample(this.#boresightHistory, this.#utcTime, boresight.rightAscension, boresight.declination)
+		recordBoresightSample(this.#boresightHistory, endTime, boresight.rightAscension, boresight.declination)
 	}
 
 	// Rate of the right-ascension motor, in radians per second of its contribution to the coordinate.
@@ -1659,7 +1663,9 @@ export class MountSimulator extends DeviceSimulator {
 	#resetBoresightHistory() {
 		clearBoresightHistory(this.#boresightHistory)
 		const boresight = this.boresight
-		recordBoresightSample(this.#boresightHistory, this.#utcTime, boresight.rightAscension, boresight.declination)
+		// Seeded on the same exact clock the samples are recorded with, so the first step after a reset
+		// cannot land on a timestamp at or before the seed.
+		recordBoresightSample(this.#boresightHistory, this.#utcTime + this.#utcTimeRemainder, boresight.rightAscension, boresight.declination)
 	}
 
 	// Re-registers the bookkeeping against the sky, as a sync does, and drops the trajectory with it.

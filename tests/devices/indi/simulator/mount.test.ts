@@ -574,6 +574,32 @@ describe('mount simulator pointing errors', () => {
 		}
 	})
 
+	test('records where the boresight went between two sub-millisecond steps', () => {
+		const { mount } = makeMount('mount.trajectory.subms')
+
+		try {
+			mount.setTrackingEnabled(true)
+			mount.setSlewRate('SPEED_7')
+
+			const startTime = mount.utcTime
+
+			// Half a millisecond east and half a millisecond back west. The mount ends where it started,
+			// so only the recorded path says the excursion happened at all.
+			mount.moveEast(true)
+			mount.advance(0.0005)
+			mount.moveWest(true)
+			mount.advance(0.0005)
+			mount.moveWest(false)
+
+			// Stamping both samples with the truncated clock put two different positions under one
+			// timestamp, and the history reads a timestamp as identifying a position: the excursion
+			// vanished and the path came back empty.
+			expect(toArcsec(mount.boresightPathLength(startTime, mount.utcTime + 1))).toBeGreaterThan(50)
+		} finally {
+			mount.dispose()
+		}
+	})
+
 	test('carries sub-millisecond steps instead of discarding them', () => {
 		const coarse = makeMount('mount.clock.coarse')
 		const fine = makeMount('mount.clock.fine')
