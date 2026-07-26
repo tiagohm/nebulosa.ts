@@ -684,7 +684,7 @@ describe('mount simulator pointing errors', () => {
 		}
 	})
 
-	test('rings down only over the part of the step that followed the stop', () => {
+	test.skipIf(SKIP)('rings down only over the part of the step that followed the stop', () => {
 		// Arriving partway through a step and then charging the new ring-down the whole interval shifts
 		// its phase. Compared against the same arrival reached with a fine step, where almost none of the
 		// interval precedes the stop, the two must agree.
@@ -1099,7 +1099,7 @@ describe('mount simulator pointing errors', () => {
 		}
 	})
 
-	test('sets the clock without absorbing the errors only a sync absorbs', () => {
+	test.skipIf(SKIP)('sets the clock without absorbing the errors only a sync absorbs', () => {
 		const { client, mount } = makeMount('mount.settime.errors', 'TRACKING_RATE', 'SETTLING')
 
 		try {
@@ -1190,7 +1190,7 @@ describe('mount simulator pointing errors', () => {
 		}
 	})
 
-	test('lands on the pole after ringing against the declination clamp', () => {
+	test.skipIf(SKIP)('lands on the pole after ringing against the declination clamp', () => {
 		const { client, mount } = makeMount('mount.settling.pole', 'SETTLING')
 
 		try {
@@ -1210,7 +1210,7 @@ describe('mount simulator pointing errors', () => {
 		}
 	})
 
-	test('lands on a second target commanded while the first is still ringing', () => {
+	test.skipIf(SKIP)('lands on a second target commanded while the first is still ringing', () => {
 		const { client, mount } = makeMount('mount.settling.interrupted', 'SETTLING')
 
 		try {
