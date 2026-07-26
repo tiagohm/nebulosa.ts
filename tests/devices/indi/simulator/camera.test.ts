@@ -11,7 +11,7 @@ import type { CatalogSource } from '../../../../src/devices/indi/simulator/types
 import { readImageFromBuffer } from '../../../../src/imaging/model/image'
 import type { ImageRawType } from '../../../../src/imaging/model/types'
 import { mulberry32 } from '../../../../src/math/numerical/random'
-import { deg, formatDEC, formatRA, hour } from '../../../../src/math/units/angle'
+import { arcsec, deg, formatDEC, formatRA, hour } from '../../../../src/math/units/angle'
 import { CameraFrameReceiver, isTimeConsumingTestSkipped, waitUntil } from '../../../util'
 
 // Integration coverage for simulated camera acquisition, rendering, metadata, and related devices.
@@ -495,6 +495,97 @@ describe.skipIf(SKIP)('camera simulator', () => {
 
 			expect(Math.min(left, right) / Math.max(left, right)).toBeGreaterThan(0.5)
 			expect(Math.min(top, bottom) / Math.max(top, bottom)).toBeGreaterThan(0.5)
+		} finally {
+			cameraSimulator.dispose()
+			mountSimulator.dispose()
+		}
+	}, 15000)
+
+	test('keeps stars on the leading edge when the field sweeps during the exposure', async () => {
+		const handler = new IndiClientHandlerSet()
+		const mountManager = new MountManager()
+		const cameraManager = new CameraManager()
+		using client = new ClientSimulator('camera.travel.simulator', handler)
+		const frameReceiver = new CameraFrameReceiver()
+
+		handler.add(mountManager)
+		handler.add(cameraManager)
+		cameraManager.addHandler(frameReceiver)
+
+		// One star at the queried centre and one on each side, just outside the sensor. The outer pair is
+		// only reachable because the field sweeps during the exposure, so whether either survives the
+		// catalog is exactly the question the margin decides.
+		const outerPixels = 700
+		const catalogProvider: CatalogSource = (rightAscension, declination) => {
+			const offset = arcsec(outerPixels * 2.145) / Math.cos(declination)
+			return [
+				{ snr: 200, hfd: 2, flux: 40000, rightAscension, declination },
+				{ snr: 200, hfd: 2, flux: 40000, rightAscension: rightAscension + offset, declination },
+				{ snr: 200, hfd: 2, flux: 40000, rightAscension: rightAscension - offset, declination },
+			]
+		}
+
+		using mountSimulator = new MountSimulator('Mount Simulator', client)
+		using cameraSimulator = new CameraSimulator('Camera Simulator', client, { mountManager, catalogSources: { SPREAD: catalogProvider } })
+		const mount = mountManager.get(client, mountSimulator.name)!
+		const camera = cameraManager.get(client, cameraSimulator.name)!
+
+		mountSimulator.connect()
+		cameraSimulator.connect()
+		await waitUntil(() => mount.connected && camera.connected)
+
+		mountSimulator.syncTo(hour(5), deg(20))
+		await waitUntil(() => closeTo(mount.equatorialCoordinate.declination, deg(20), 1e-9))
+
+		cameraManager.snoop(camera, mount)
+		await waitUntil(() => cameraManager.properties.get(camera)?.ACTIVE_DEVICES?.elements.ACTIVE_TELESCOPE.value === mount.name)
+
+		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_NOISE_FEATURES', elements: { SKY_ENABLED: false, LIGHT_POLLUTION_ENABLED: false } })
+		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_CATALOG_SOURCE', elements: { SPREAD: true } })
+		await waitUntil(() => cameraManager.properties.get(camera)?.SIMULATOR_CATALOG_SOURCE?.elements.SPREAD.value === true)
+
+		try {
+			// The mount points perfectly, so the pointing error contributes no margin at all. What sweeps
+			// the field is commanded motion, which the error bound knows nothing about.
+			expect(mountSimulator.pointingErrorBound).toBe(0)
+
+			// Half a degree per second for a fifth of a second is a couple of hundred pixels of travel,
+			// enough to pull one of the outer stars onto a sensor it started sixty pixels clear of.
+			mountSimulator.setSlewRate('SPEED_1')
+			mountSimulator.moveWest(true)
+			cameraSimulator.startExposure(0.2)
+			await waitUntil(() => frameReceiver.length > 0, 10000, 50)
+			mountSimulator.moveWest(false)
+
+			const frame = await readImageFromBuffer(frameReceiver.lastFrame)
+			const width = frame!.header.NAXIS1 as number
+			const height = frame!.header.NAXIS2 as number
+			const channels = frame!.metadata.channels
+			const raw = frame!.raw
+			// Measured against the brightest pixel in the frame rather than an absolute level, since the
+			// background sits well above zero even with the sky and light pollution switched off. Every
+			// star carries the same flux, so a core anywhere reaches a comparable peak.
+			let peak = 0
+			for (let i = 0; i < raw.length; i += channels) {
+				let value = 0
+				for (let c = 0; c < channels; c++) value += raw[i + c]
+				peak = Math.max(peak, value)
+			}
+
+			let outerLit = 0
+
+			for (let y = 0; y < height; y++) {
+				for (let x = 0; x < width; x++) {
+					if (x >= 200 && x < width - 200) continue
+					let value = 0
+					for (let c = 0; c < channels; c++) value += raw[(y * width + x) * channels + c]
+					if (value > peak * 0.5) outerLit++
+				}
+			}
+
+			// A scene sized to the sensor alone drops both outer stars before the trail can translate
+			// them, so the edges come out with nothing but background.
+			expect(outerLit).toBeGreaterThan(0)
 		} finally {
 			cameraSimulator.dispose()
 			mountSimulator.dispose()

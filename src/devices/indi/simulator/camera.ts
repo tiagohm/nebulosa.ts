@@ -35,6 +35,17 @@ import { applyExclusiveSwitchValues, applyMultiSwitchValues, applyNumberVectorVa
 // integrate over, so the rendering path always has exactly one offset pair to work with.
 const NO_EXPOSURE_OFFSET = new Float64Array(2)
 
+// Furthest the field strayed from the catalog centre over an exposure, in unbinned pixels.
+//
+// `offsets` holds consecutive x and y pairs. The largest magnitude rather than the total path length,
+// since what a scene margin has to cover is how far off centre the field ever got, not how far it
+// travelled getting there and back.
+function exposureTravel(offsets: Readonly<Float64Array>) {
+	let travel = 0
+	for (let i = 0; i < offsets.length; i += 2) travel = Math.max(travel, Math.hypot(offsets[i], offsets[i + 1]))
+	return travel
+}
+
 // Camera simulator options: star catalog sources plus the related device managers used to read the
 // simulated mount/guider/focuser/rotator/wheel state when rendering a frame.
 export interface CameraSimulatorOptions extends DeviceSimulatorOptions {
@@ -1053,7 +1064,7 @@ export class CameraSimulator extends DeviceSimulator {
 		// afterwards would end the trail when the query came back rather than when the exposure did, and
 		// would measure it against a coordinate the mount had since left.
 		const offsets = this.#exposureOffsets(arcsec(pixelScale(CAMERA_PIXEL_SIZE, this.telescopeFocalLength)), exposureTime)
-		const stars = await this.#ensureCatalog()
+		const stars = await this.#ensureCatalog(exposureTravel(offsets))
 		const frameX = this.#frame.elements.X.value
 		const frameY = this.#frame.elements.Y.value
 		const frameWidth = this.#frame.elements.WIDTH.value
@@ -1135,7 +1146,7 @@ export class CameraSimulator extends DeviceSimulator {
 	// the perturbed one. Keying the cache on a coordinate that the periodic error moves every frame
 	// would defeat the cache entirely and, for a network-backed source, issue one query per exposure.
 	// The pointing error is applied later as a pixel displacement, in #pointingOffsetInPixels.
-	async #ensureCatalog() {
+	async #ensureCatalog(travel: number = 0) {
 		const mount = this.activeMount
 		let centerRightAscension = mount?.equatorialCoordinate.rightAscension
 		let centerDeclination = mount?.equatorialCoordinate.declination
@@ -1145,9 +1156,10 @@ export class CameraSimulator extends DeviceSimulator {
 		}
 
 		const ps = arcsec(pixelScale(CAMERA_PIXEL_SIZE, this.telescopeFocalLength))
-		// Sized from the configured pointing error so a shifted field still finds stars on its trailing
-		// edge. It takes part in the cache key because changing it changes the generated scene.
-		const margin = this.#sceneMargin(ps)
+		// Sized from the configured pointing error and from how far the field travelled during the
+		// exposure, so a shifted or trailed field still finds stars on its leading edge. It takes part in
+		// the cache key because changing it changes the generated scene.
+		const margin = this.#sceneMargin(ps, travel)
 		const radius = Math.hypot(this.sensorWidth + 2 * margin, this.sensorHeight + 2 * margin) * ps * 0.5
 		const key = this.#makeCatalogKey(centerRightAscension, centerDeclination, radius, margin)
 		if (this.#catalog && !this.#catalogDirty && this.#catalogKey === key) return this.#catalog
@@ -1266,12 +1278,20 @@ export class CameraSimulator extends DeviceSimulator {
 	// rather than fixed: it costs nothing when the mount points perfectly, which is the common case,
 	// and it grows only as far as the error can actually displace the field.
 	//
+	// `travel` covers the other half of the problem: the field also moves during the exposure itself,
+	// by an amount the pointing error knows nothing about. Tracking left off, a guided correction or a
+	// drift-alignment leg all sweep the field across the sensor under command, so a scene built only to
+	// the error bound would be clipped before those translations were applied and would lose stars and
+	// flux at the leading edge. It is measured in unbinned pixels from the trajectory of the exposure
+	// being rendered.
+	//
 	// `pixelScale` is radians per unbinned pixel; the result is capped by CAMERA_MAX_SCENE_MARGIN to
 	// keep the star count bounded.
-	#sceneMargin(pixelScale: Angle) {
+	#sceneMargin(pixelScale: Angle, travel: number = 0) {
+		if (pixelScale <= 0) return 0
 		const bound = this.activeMountSimulator?.pointingErrorBound ?? 0
-		if (bound <= 0 || pixelScale <= 0) return 0
-		return Math.min(CAMERA_MAX_SCENE_MARGIN, Math.ceil(bound / pixelScale))
+		const margin = (bound > 0 ? Math.ceil(bound / pixelScale) : 0) + Math.ceil(Math.max(0, travel))
+		return margin > 0 ? Math.min(CAMERA_MAX_SCENE_MARGIN, margin) : 0
 	}
 
 	// Where the field sat, in unbinned sensor pixels relative to the catalog centre, at each instant the
