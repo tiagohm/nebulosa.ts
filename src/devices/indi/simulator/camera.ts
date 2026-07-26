@@ -47,6 +47,24 @@ function exposureTravel(offsets: Readonly<Float64Array>) {
 	return travel
 }
 
+// Everything one exposure is rendered from, fixed when the shutter opens and closes rather than read
+// again while the frame is being drawn.
+//
+// The mount goes on moving throughout, and the camera notices completion on its own tick, so reading
+// any of these at render time describes a different sky from the one that was exposed.
+interface ExposureContext {
+	// Instant the exposure began, in milliseconds on the mount's simulated clock, or the wall clock
+	// without a simulated mount.
+	readonly startTime: number
+	// How long it ran, in seconds.
+	readonly exposureTime: number
+	// Reported coordinate the scene is built around, radians in the equatorial frame of date, or
+	// undefined without an active mount.
+	readonly center: readonly [Angle, Angle] | undefined
+	// Epoch that coordinate belongs to, and the one every conversion into J2000 uses.
+	readonly time: Time
+}
+
 // Camera simulator options: star catalog sources plus the related device managers used to read the
 // simulated mount/guider/focuser/rotator/wheel state when rendering a frame.
 export interface CameraSimulatorOptions extends DeviceSimulatorOptions {
@@ -182,6 +200,10 @@ export class CameraSimulator extends DeviceSimulator {
 	#timer?: NodeJS.Timeout
 	#exposureEndTime = 0
 	#exposureDuration = 0
+	// What the exposure in progress is to be rendered from, captured when the shutter opened. The camera
+	// notices completion on its own tick and renders after that, so everything here has to be taken when
+	// the exposure began rather than read back when the frame is drawn.
+	#exposureContext?: ExposureContext
 	#targetTemperature = CAMERA_DEFAULT_TARGET_TEMPERATURE
 	#catalog?: readonly (AstronomicalImageStar | undefined)[]
 	#catalogKey = ''
@@ -508,6 +530,10 @@ export class CameraSimulator extends DeviceSimulator {
 		duration = clamp(duration, this.#exposure.elements.CCD_EXPOSURE_VALUE.min, this.#exposure.elements.CCD_EXPOSURE_VALUE.max)
 		this.#exposureDuration = duration
 		this.#exposureEndTime = Date.now() + Math.trunc(duration * 1000)
+		// The frame belongs to the sky the shutter was open on: where the mount reported it was pointing
+		// then, the epoch that coordinate belongs to, and when on the simulated clock it began. Read at
+		// render time instead, all three describe wherever the mount has got to since.
+		this.#exposureContext = { startTime: this.activeMountSimulator?.utcTime ?? Date.now(), exposureTime: duration, center: this.reportedCenter, time: this.sceneTime }
 		this.#exposure.state = 'Busy'
 		this.#exposure.elements.CCD_EXPOSURE_VALUE.value = duration
 		this.#image.state = 'Busy'
@@ -665,10 +691,16 @@ export class CameraSimulator extends DeviceSimulator {
 		this.#exposure.elements.CCD_EXPOSURE_VALUE.value = 0
 		this.notify(this.#exposure)
 
+		// Taken over here, before the exposure is marked complete and a client is free to start the next
+		// one: what follows describes this frame and must not be overwritten by the one after it. The
+		// fallback covers a frame rendered without a shutter, which has nothing but the present.
+		const exposure: ExposureContext = this.#exposureContext ?? { startTime: this.activeMountSimulator?.utcTime ?? Date.now(), exposureTime, center: this.reportedCenter, time: this.sceneTime }
+		this.#exposureContext = undefined
+
 		try {
 			this.#image.state = 'Ok'
 			this.#exposure.state = 'Ok'
-			const blob = await this.#renderImage(exposureTime)
+			const blob = await this.#renderImage(exposure)
 			this.#image.elements.CCD1.size = blob.byteLength.toFixed(0)
 			this.#image.elements.CCD1.format = this.transferFormat === 'XISF' ? '.xisf' : '.fits'
 			this.#image.elements.CCD1.value = blob
@@ -686,7 +718,8 @@ export class CameraSimulator extends DeviceSimulator {
 	}
 
 	// Renders the configured frame and encodes it as FITS or XISF.
-	async #renderImage(exposureTime: number) {
+	async #renderImage(exposure: ExposureContext) {
+		const exposureTime = exposure.exposureTime
 		const channels = this.channels
 		const width = this.imageWidth
 		const height = this.imageHeight
@@ -694,14 +727,9 @@ export class CameraSimulator extends DeviceSimulator {
 		const frameType = this.frameType
 		const noiseConfig = this.#noiseConfig(frameType, exposureTime)
 		const rotatorAngle = (this.activeRotator?.angle.value ?? 0) * DEG2RAD
-		// Read once for the whole frame, so the scene, the trail it is drawn along and the header that
-		// describes it all speak of one centre at one instant. The mount keeps moving while the frame is
-		// rendered, and reading any of them again afterwards would describe a different sky.
-		const center = this.reportedCenter
-		const time = this.sceneTime
 
 		if (frameType === 'LIGHT') {
-			const stars = await this.#collectFrameStars(exposureTime, rotatorAngle, center, time)
+			const stars = await this.#collectFrameStars(exposure, rotatorAngle)
 			if (this.#plotPsfModel.elements.ANNULAR.value) {
 				const saturationLevel = this.#renderAnnularStars(raw, width, height, channels, stars)
 				const seeingSigma = gaussianSigmaFromHfd(this.seeing)
@@ -716,7 +744,7 @@ export class CameraSimulator extends DeviceSimulator {
 			generateNoiseImage(raw, width, height, channels, noiseConfig)
 		}
 
-		const image = this.#imageModel(raw, width, height, channels, exposureTime, center, time)
+		const image = this.#imageModel(raw, width, height, channels, exposure)
 		const output = Buffer.allocUnsafe(raw.length * 2 + CAMERA_BLOB_PADDING)
 		const sink = bufferSink(output)
 
@@ -854,12 +882,12 @@ export class CameraSimulator extends DeviceSimulator {
 	}
 
 	// Builds an image model suitable for the FITS/XISF writers.
-	#imageModel(raw: ImageRawType, width: number, height: number, channels: 1 | 3, exposureTime: number, center: readonly [Angle, Angle] | undefined, time: Time): Image {
+	#imageModel(raw: ImageRawType, width: number, height: number, channels: 1 | 3, exposure: ExposureContext): Image {
 		const pixelSizeInBytes = 2
 
 		return {
 			raw,
-			header: this.#imageHeader(width, height, channels, exposureTime, center, time),
+			header: this.#imageHeader(width, height, channels, exposure),
 			metadata: {
 				width,
 				height,
@@ -876,21 +904,21 @@ export class CameraSimulator extends DeviceSimulator {
 
 	// Builds a compact astronomical image header for synthetic output.
 	//
-	// `center` is the reported coordinate the frame was rendered around, in radians of the equatorial
-	// frame of date, and `time` the instant it was rendered for. Both are passed in rather than read
-	// here so the header describes the frame that was actually drawn: read afresh, the coordinate would
-	// be whatever the mount had reached by the end of the render, and the conversion into J2000 would be
-	// rotated at the wall clock while the timestamps below came from the mount's own clock — a mount set
-	// to the year 2000 reported a centre tens of arcminutes from the field in its own pixels.
-	#imageHeader(width: number, height: number, channels: 1 | 3, exposureTime: number, center: readonly [Angle, Angle] | undefined, time: Time): FitsHeader {
+	// The centre, the epoch and the start of the exposure all come from the context rather than being
+	// read here, so the header describes the frame that was actually drawn: read afresh, the coordinate
+	// would be whatever the mount had reached by the end of the render, the conversion into J2000 would
+	// be rotated at the wall clock while the timestamps below came from the mount's own clock — a mount
+	// set to the year 2000 reported a centre tens of arcminutes from the field in its own pixels — and
+	// the start of the exposure would be measured back from whenever the camera noticed it had finished.
+	#imageHeader(width: number, height: number, channels: 1 | 3, exposure: ExposureContext): FitsHeader {
+		const { startTime: start, exposureTime, center, time } = exposure
 		// Timestamped on the mount's simulated clock when there is one, so that TIME_UTC governs the
 		// frame metadata as well as the geometry. Falls back to the wall clock without a mount.
-		const now = this.activeMountSimulator?.utcTime ?? Date.now()
+		const now = start + Math.trunc(exposureTime * 1000)
 		const mount = this.activeMount
 		const focuser = this.activeFocuser
 		const rotator = this.activeRotator
 		const filter = this.activeFilter ? this.activeFilter.names[this.activeFilter.position] : undefined
-		const start = now - Math.trunc(exposureTime * 1000)
 		let rightAscension: Angle | undefined
 		let declination: Angle | undefined
 
@@ -1095,7 +1123,8 @@ export class CameraSimulator extends DeviceSimulator {
 
 	// Shifts the master catalog by the pointing error, rotates it on the full sensor, then applies
 	// aberration, subframe, and binning.
-	async #collectFrameStars(exposureTime: number, rotatorAngle: number, center: readonly [Angle, Angle] | undefined, time: Time) {
+	async #collectFrameStars(exposure: ExposureContext, rotatorAngle: number) {
+		const { exposureTime, center, time } = exposure
 		// Where the field sat at each instant of the exposure, in pixels relative to the catalog centre.
 		// The sky moves relative to the sensor, so this is applied before the rotator angle, which moves
 		// the sensor relative to the sky.
@@ -1111,7 +1140,7 @@ export class CameraSimulator extends DeviceSimulator {
 		// scene was not built for. The instant is shared for the same reason — the scene and the offsets
 		// are both taken into J2000, and doing that at two instants would rotate one against the other —
 		// and reusing one `Time` computes the precession-nutation matrix once for every conversion.
-		const offsets = this.#exposureOffsets(arcsec(pixelScale(CAMERA_PIXEL_SIZE, this.telescopeFocalLength)), exposureTime, center, time)
+		const offsets = this.#exposureOffsets(arcsec(pixelScale(CAMERA_PIXEL_SIZE, this.telescopeFocalLength)), exposure)
 		const stars = await this.#ensureCatalog(exposureTravel(offsets), center, time)
 		const frameX = this.#frame.elements.X.value
 		const frameY = this.#frame.elements.Y.value
@@ -1390,12 +1419,17 @@ export class CameraSimulator extends DeviceSimulator {
 	// catalog, and an exposure is marked complete before its frame has been rendered, so a second
 	// exposure accepted in the meantime reaches this method and would otherwise overwrite the offsets
 	// the first frame is still waiting to be drawn with.
-	#exposureOffsets(pixelScale: Angle, exposureTime: number, center: readonly [Angle, Angle] | undefined = this.reportedCenter, time: Time) {
+	#exposureOffsets(pixelScale: Angle, exposure: ExposureContext) {
+		const { startTime, exposureTime, center, time } = exposure
 		const simulator = this.activeMountSimulator
 		if (simulator === undefined || center === undefined) return NO_EXPOSURE_OFFSET
 
-		const endTime = simulator.utcTime
-		const startTime = endTime - Math.trunc(exposureTime * 1000)
+		// Anchored to when the shutter opened, not measured back from now. The camera notices completion
+		// on its own tick, up to a tick after the exposure was due to end, so measuring backwards shifted
+		// the whole window late: an exposure shorter than a tick was integrated over an interval that lay
+		// entirely after it had closed, missing the motion it covered and drawing a guide correction that
+		// happened afterwards.
+		const endTime = startTime + Math.trunc(exposureTime * 1000)
 		// Taken from the samples the mount recorded, which are the finest the simulation ever knew, so
 		// nothing can slip between them. Divided by the pixel scale to become a length on the sensor,
 		// which is what decides how many positions the trail has to be drawn from.

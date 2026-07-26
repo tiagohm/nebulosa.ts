@@ -701,6 +701,11 @@ export class MountSimulator extends DeviceSimulator {
 		this.#refreshPeriodicError()
 		this.#refreshWind()
 		this.#refreshReportedCoordinate()
+		// Most of these move the optical axis, and they move it now rather than on the next tick. The
+		// trajectory is otherwise only written when the simulation steps, so an exposure beginning in the
+		// same tick as the change was integrated over the boresight the mount had before it: switching a
+		// pointing error on and exposing immediately produced a frame with no sign of the error in it.
+		this.#recordBoresight()
 	}
 
 	// Throws away the state a disabled family had accumulated, so switching one off leaves an ideal
@@ -1291,13 +1296,19 @@ export class MountSimulator extends DeviceSimulator {
 
 		this.#notifyWormPhase()
 
-		// Recorded last, so the sample reflects the state at the end of the interval just simulated, and
-		// stamped with the exact clock rather than the published one. Two sub-millisecond steps otherwise
-		// recorded two different positions under one timestamp, and the history is searched assuming a
-		// timestamp identifies a position: an east-then-west excursion made of two half-millisecond steps
-		// came back as a path of zero length.
+		// Recorded last, so the sample reflects the state at the end of the interval just simulated.
+		this.#recordBoresight()
+	}
+
+	// Appends where the optical axis points now to the trajectory.
+	//
+	// Stamped with the exact clock rather than the published one. Two sub-millisecond steps otherwise
+	// recorded two different positions under one timestamp, and the history is searched assuming a
+	// timestamp identifies a position: an east-then-west excursion made of two half-millisecond steps
+	// came back as a path of zero length.
+	#recordBoresight() {
 		const boresight = this.boresight
-		recordBoresightSample(this.#boresightHistory, endTime, boresight.rightAscension, boresight.declination)
+		recordBoresightSample(this.#boresightHistory, this.#utcTime + this.#utcTimeRemainder, boresight.rightAscension, boresight.declination)
 	}
 
 	// Rate of the right-ascension motor, in radians per second of its contribution to the coordinate.
@@ -1701,10 +1712,9 @@ export class MountSimulator extends DeviceSimulator {
 	// excursion a structure was in the middle of both have to survive it.
 	#resetBoresightHistory() {
 		clearBoresightHistory(this.#boresightHistory)
-		const boresight = this.boresight
 		// Seeded on the same exact clock the samples are recorded with, so the first step after a reset
 		// cannot land on a timestamp at or before the seed.
-		recordBoresightSample(this.#boresightHistory, this.#utcTime + this.#utcTimeRemainder, boresight.rightAscension, boresight.declination)
+		this.#recordBoresight()
 	}
 
 	// Re-registers the bookkeeping against the sky, as a sync does, and drops the trajectory with it.

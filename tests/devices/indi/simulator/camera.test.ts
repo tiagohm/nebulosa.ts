@@ -660,7 +660,10 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		// collapsed and the point source left the middle of the sensor.
 		expect(delayed[0]).toBe(immediate[0])
 		expect(delayed[1]).toBe(immediate[1])
-		expect(delayed[2]).toBeCloseTo(immediate[2], 6)
+		// The peak is compared in relative terms: the two runs open their shutters at different points of
+		// the sidereal drift, so the trail falls on slightly different sub-pixel positions. The failure
+		// this guards against collapsed the peak by orders of magnitude.
+		expect(Math.abs(delayed[2] / immediate[2] - 1)).toBeLessThan(1e-3)
 	}, 20000)
 
 	test('leaves the seeded star field where it was when the scene margin grows', async () => {
@@ -692,33 +695,115 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		// noise, and spread over a wide flux range so that one star stands well clear of the rest.
 		client.sendNumber({ device: camera.name, name: 'SIMULATOR_SCENE', elements: { FLUX_MIN: 0.05, FLUX_MAX: 100 } })
 
-		// A periodic error at phase zero sizes the scene margin without displacing the field: the worm
-		// stands still with the motors stopped, and the curve is zero where it starts. Changing only its
-		// amplitude therefore changes how far beyond the sensor the scene reaches and nothing else.
-		client.sendSwitch({ device: mountSimulator.name, name: 'SIMULATOR_ERROR_FEATURES', elements: { PERIODIC_ERROR: true } })
-		client.sendNumber({ device: mountSimulator.name, name: 'MOUNT_PERIODIC_ERROR', elements: { RA_PERIOD: 400, RA_AMPLITUDE: 30, RA_PHASE: 0, RA_AMPLITUDE_2: 0, RA_AMPLITUDE_3: 0 } })
-		expect(mountSimulator.boresight.rightAscension).toBe(mountSimulator.mechanical.rightAscension)
+		// Tracking, so the field holds still between the two frames and any difference between them is
+		// the scene changing rather than the sky turning.
+		mountSimulator.setTrackingEnabled(true)
 
-		async function brightestStar() {
+		// A periodic error sizes the scene margin, and a worm a day long barely turns over the couple of
+		// seconds this takes: the curve stays within a thousandth of a pixel of where it started, so
+		// changing its amplitude changes how far beyond the sensor the scene reaches and nothing else.
+		client.sendSwitch({ device: mountSimulator.name, name: 'SIMULATOR_ERROR_FEATURES', elements: { PERIODIC_ERROR: true } })
+		client.sendNumber({ device: mountSimulator.name, name: 'MOUNT_PERIODIC_ERROR', elements: { RA_PERIOD: 86400, RA_AMPLITUDE: 30, RA_PHASE: 0, RA_AMPLITUDE_2: 0, RA_AMPLITUDE_3: 0 } })
+
+		async function frameOfStars() {
 			const seen = frameReceiver.length
-			cameraSimulator.startExposure(0.001)
+			cameraSimulator.startExposure(0.5)
 			await waitUntil(() => frameReceiver.length > seen, 10000, 20)
 			const frame = await readImageFromBuffer(frameReceiver.lastFrame)
-			return brightestPixel(frame!.raw, frame!.header.NAXIS1 as number, frame!.metadata.channels)
+			return frame!.raw
 		}
 
-		const narrow = await brightestStar()
+		const narrow = await frameOfStars()
 
-		// Twenty times the margin, and still not a pixel of displacement of the field itself.
+		// Twenty times the margin, and the field itself must not move.
 		client.sendNumber({ device: mountSimulator.name, name: 'MOUNT_PERIODIC_ERROR', elements: { RA_AMPLITUDE: 600 } })
-		expect(mountSimulator.boresight.rightAscension).toBe(mountSimulator.mechanical.rightAscension)
 
-		const wide = await brightestStar()
+		const wide = await frameOfStars()
 
-		// Deriving the layout from the margin rescaled every coordinate, so widening the scene rearranged
-		// the sky rather than extending it.
-		expect(wide[0]).toBe(narrow[0])
-		expect(wide[1]).toBe(narrow[1])
+		// However far the worm did turn, it is nothing beside a pixel.
+		expect(toArcsec(Math.abs(normalizePI(mountSimulator.boresight.rightAscension - mountSimulator.mechanical.rightAscension)))).toBeLessThan(0.2)
+
+		// Compared over the whole frame rather than by the brightest pixel, which several saturated stars
+		// can tie for. A star core stands far above the read noise, so a pixel that differs by a quarter
+		// of the peak between the two frames is one where a star is present in one and absent in the
+		// other. Deriving the layout from the margin rescaled every coordinate, so widening the scene
+		// rearranged the sky instead of extending it and every core showed up here.
+		let peak = 0
+		for (let i = 0; i < narrow.length; i++) peak = Math.max(peak, narrow[i])
+
+		let moved = 0
+		for (let i = 0; i < narrow.length; i++) if (Math.abs(narrow[i] - wide[i]) > peak * 0.25) moved++
+
+		expect(peak).toBeGreaterThan(0.1)
+		expect(moved).toBe(0)
+	}, 15000)
+
+	test('integrates the interval the shutter was open, not the one before the frame arrived', async () => {
+		const handler = new IndiClientHandlerSet()
+		const mountManager = new MountManager()
+		const cameraManager = new CameraManager()
+		using client = new ClientSimulator('camera.deadline', handler)
+		const frameReceiver = new CameraFrameReceiver()
+
+		handler.add(mountManager)
+		handler.add(cameraManager)
+		cameraManager.addHandler(frameReceiver)
+
+		// One star, pinned to wherever the very first query was centred and then never moving again, so
+		// where it lands on the sensor reports which coordinate the frame was built around. It has to be
+		// learnt from a query rather than written down here, because a catalog is queried and projected
+		// in J2000 while the mount reports the frame of date.
+		let anchor: readonly [number, number] | undefined
+		const catalogProvider: CatalogSource = (rightAscension, declination) => {
+			anchor ??= [rightAscension, declination]
+			return [{ snr: 200, hfd: 2, flux: 400, rightAscension: anchor[0], declination: anchor[1] }]
+		}
+
+		using mountSimulator = new MountSimulator('Mount Simulator', client)
+		using cameraSimulator = new CameraSimulator('Camera Simulator', client, { mountManager, catalogSources: { CENTERED: catalogProvider } })
+		const mount = mountManager.get(client, mountSimulator.name)!
+		const camera = cameraManager.get(client, cameraSimulator.name)!
+
+		mountSimulator.connect()
+		cameraSimulator.connect()
+		await waitUntil(() => mount.connected && camera.connected)
+
+		mountSimulator.syncTo(hour(5), deg(20))
+		mountSimulator.setTrackingEnabled(true)
+		cameraManager.snoop(camera, mount)
+		await waitUntil(() => cameraManager.properties.get(camera)?.ACTIVE_DEVICES?.elements.ACTIVE_TELESCOPE.value === mount.name)
+
+		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_NOISE_FEATURES', elements: { SKY_ENABLED: false, LIGHT_POLLUTION_ENABLED: false } })
+		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_CATALOG_SOURCE', elements: { CENTERED: true } })
+		await waitUntil(() => cameraManager.properties.get(camera)?.SIMULATOR_CATALOG_SOURCE?.elements.CENTERED.value === true)
+
+		// A first frame, taken with the mount still, teaches the provider where the field is.
+		cameraSimulator.startExposure(0.001)
+		await waitUntil(() => frameReceiver.length > 0, 10000, 20)
+		expect(anchor).toBeDefined()
+
+		// A millisecond of exposure, and then the mount is driven while the camera has not yet noticed
+		// that the shutter closed: its tick is a hundred times the exposure. None of that motion belongs
+		// in the frame.
+		cameraSimulator.startExposure(0.001)
+		mountSimulator.setSlewRate('SPEED_1')
+		mountSimulator.moveEast(true)
+
+		await waitUntil(() => frameReceiver.length > 1, 10000, 20)
+		mountSimulator.moveEast(false)
+
+		const frame = await readImageFromBuffer(frameReceiver.lastFrame)
+		const [x, y] = brightestPixel(frame!.raw, frame!.header.NAXIS1 as number, frame!.metadata.channels)
+
+		// Measuring the window back from the moment the frame was rendered put it entirely after the
+		// exposure, so the star was drawn along a slew it never saw: it ended up 583 pixels away, most of
+		// the way to the edge of the sensor.
+		//
+		// A dozen pixels of leakage survive, and are the resolution of the simulation rather than of the
+		// anchoring: the mount records its trajectory once per tick, so a one-millisecond exposure is a
+		// one per cent slice of a tick through which the mount is interpolated as having moved evenly.
+		expect(Math.abs(x - (1280 - 1) * 0.5)).toBeLessThan(20)
+		expect(Math.abs(y - (1024 - 1) * 0.5)).toBeLessThan(20)
 	}, 15000)
 
 	test('queries the catalog at the epoch the mount believes in', async () => {
