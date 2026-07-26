@@ -293,7 +293,7 @@ describe('mount simulator pointing errors', () => {
 		}
 
 		mount.syncTo(hour(5), deg(20))
-		return { client, mount }
+		return { client, handler, mount }
 	}
 
 	test('simulates nothing until a feature is switched on, despite carrying realistic values', () => {
@@ -469,6 +469,40 @@ describe('mount simulator pointing errors', () => {
 			// And the timestamps that follow stay ordered, so the search invariant holds again.
 			mount.advance(1)
 			expect(mount.utcTime).toBeGreaterThan(rewound)
+		} finally {
+			mount.dispose()
+		}
+	})
+
+	test('notifies a bookkeeping change even when nothing will move again', () => {
+		const { client, handler, mount } = makeMount('mount.index.notify', 'ALIGNMENT')
+
+		try {
+			// Long enough that the ordinary coordinate cadence would swallow the update.
+			mount.minimumNotifyCoordinateInterval = 3600_000
+
+			let notified = 0
+			let reported = 0
+
+			handler.add({
+				numberVector: (_, message) => {
+					if (message.name !== 'EQUATORIAL_EOD_COORD') return
+					notified++
+					reported = hour(message.elements.RA.value)
+				},
+			})
+
+			// A mount tracking perfectly at the sidereal rate never moves an axis, so nothing calls back
+			// into the coordinate path. A throttled notification here would simply be lost and clients
+			// would sit on the old coordinate for as long as the mount kept tracking.
+			mount.setTrackingEnabled(true)
+			client.sendNumber({ device: mount.name, name: 'MOUNT_ALIGNMENT', elements: { ...NO_ALIGNMENT, RA_INDEX_ERROR: 600 } })
+
+			expect(notified).toBeGreaterThan(0)
+			expect(toArcsec(normalizePI(reported - mount.mechanical.rightAscension))).toBeCloseTo(600, 3)
+
+			mount.advance(10)
+			expect(toArcsec(normalizePI(reported - mount.mechanical.rightAscension))).toBeCloseTo(600, 3)
 		} finally {
 			mount.dispose()
 		}

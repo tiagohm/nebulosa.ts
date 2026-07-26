@@ -708,8 +708,14 @@ export class MountSimulator extends DeviceSimulator {
 	// Re-derives the reported coordinate from the axes without moving them, which is what has to happen
 	// when the encoder index errors change: the telescope stays where it is and only the bookkeeping
 	// between it and the controller moves.
+	//
+	// Notified unconditionally rather than on the usual coordinate cadence. That cadence exists to keep
+	// continuous motion from flooding clients, and it works because motion keeps calling back. This has
+	// no such follow-up: a mount tracking perfectly at the sidereal rate never moves an axis, so
+	// `#setMechanical` is never reached again and a throttled notification here would simply be lost,
+	// leaving clients on the old coordinate for as long as the mount kept tracking.
 	#refreshReportedCoordinate() {
-		this.#setMechanical(this.#mechanical.rightAscension, this.#mechanical.declination)
+		this.#setMechanical(this.#mechanical.rightAscension, this.#mechanical.declination, true, true)
 	}
 
 	// Rebuilds the wind configuration from MOUNT_WIND, reseeding the deflection from the settled
@@ -1332,14 +1338,14 @@ export class MountSimulator extends DeviceSimulator {
 	// configured index error makes the controller disagree with the axes without the telescope having
 	// moved. Clients are never handed the boresight: a frame whose true centre differs from the
 	// reported coordinate is precisely what lets plate solving measure the error.
-	#setMechanical(rightAscension: Angle, declination: Angle, notify: boolean = true) {
+	#setMechanical(rightAscension: Angle, declination: Angle, notify: boolean = true, force: boolean = false) {
 		this.#mechanical.rightAscension = normalizeAngle(rightAscension)
 		this.#mechanical.declination = clampDeclination(declination)
 		this.#equatorialCoordinate.elements.RA.value = toHour(normalizeAngle(this.#mechanical.rightAscension + this.#indexErrorRightAscension))
 		this.#equatorialCoordinate.elements.DEC.value = toDeg(clampDeclination(this.#mechanical.declination + this.#indexErrorDeclination))
 		const pierSideChanged = this.#updatePierSide()
 
-		if (notify && this.#utcTime - this.#notifyCoordinateLastTime >= this.minimumNotifyCoordinateInterval) {
+		if (notify && (force || this.#utcTime - this.#notifyCoordinateLastTime >= this.minimumNotifyCoordinateInterval)) {
 			this.#notifyCoordinateLastTime = this.#utcTime
 			this.notify(this.#equatorialCoordinate)
 
