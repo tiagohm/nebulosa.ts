@@ -1312,7 +1312,13 @@ export class CameraSimulator extends DeviceSimulator {
 
 		const endTime = simulator.utcTime
 		const startTime = endTime - Math.trunc(exposureTime * 1000)
-		const probes = simulator.sampleBoresightTrajectory(startTime, endTime, TRAJECTORY_PROBE_SAMPLES, this.#trajectoryBuffer)
+		// Probed no coarser than the trajectory was recorded, so periodic motion cannot slip between
+		// probes. A fixed grid aliases: an exposure spanning a whole number of worm revolutions lands
+		// every probe on the same phase, measures a path length of zero and renders a field that
+		// oscillated across the sensor as if it had stood still. The tick cadence is the finest the
+		// history holds, so matching it is enough, and the floor keeps short exposures exactly as before.
+		const probeCount = clamp(Math.ceil((endTime - startTime) / TICK_INTERVAL_MS) + 1, TRAJECTORY_PROBE_SAMPLES, MAX_TRAJECTORY_SAMPLES)
+		const probes = simulator.sampleBoresightTrajectory(startTime, endTime, probeCount, this.#trajectoryBuffer)
 		if (probes === 0) return NO_EXPOSURE_OFFSET
 
 		const path = this.#trajectoryToOffsets(simulator, pixelScale, probes)
@@ -1320,7 +1326,7 @@ export class CameraSimulator extends DeviceSimulator {
 		for (let i = 1; i < probes; i++) length += Math.hypot(path[i * 2] - path[i * 2 - 2], path[i * 2 + 1] - path[i * 2 - 1])
 
 		const count = clamp(Math.ceil(length / TRAJECTORY_PIXELS_PER_SAMPLE) + 1, 1, MAX_TRAJECTORY_SAMPLES)
-		if (count === TRAJECTORY_PROBE_SAMPLES) return path.subarray(0, probes * 2)
+		if (count === probes) return path.subarray(0, probes * 2)
 
 		const samples = simulator.sampleBoresightTrajectory(startTime, endTime, count, this.#trajectoryBuffer)
 		if (samples === 0) return NO_EXPOSURE_OFFSET
