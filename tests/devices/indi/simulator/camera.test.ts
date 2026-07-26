@@ -730,11 +730,14 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		handler.add(mountManager)
 		handler.add(cameraManager)
 
+		const frameReceiver = new CameraFrameReceiver()
+		cameraManager.addHandler(frameReceiver)
+
 		let queried: readonly [number, number] | undefined
 
 		const catalogProvider: CatalogSource = (rightAscension, declination) => {
 			queried = [rightAscension, declination]
-			return []
+			return [{ snr: 200, hfd: 2, flux: 400, rightAscension, declination }]
 		}
 
 		using mountSimulator = new MountSimulator('Mount Simulator', client)
@@ -776,6 +779,13 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		// is not pointing at, in a frame stamped with the mount's own timestamp.
 		const [atWallClock] = equatorialToJ2000(hour(5), deg(20), timeNow(true))
 		expect(toArcsec(Math.abs(normalizePI(atWallClock - atMountEpoch)))).toBeGreaterThan(300)
+
+		// And the header has to name the field that was drawn, on the same epoch: a frame whose RA/DEC
+		// keywords disagree with its own pixels is worse than one with none at all.
+		await waitUntil(() => frameReceiver.length > 0, 10000, 20)
+		const frame = await readImageFromBuffer(frameReceiver.lastFrame)
+		expect(toArcsec(Math.abs(normalizePI(deg(frame!.header.RA as number) - atMountEpoch)))).toBeLessThan(0.1)
+		expect(toArcsec(Math.abs(deg(frame!.header.DEC as number) - atMountEpochDeclination))).toBeLessThan(0.1)
 	}, 15000)
 
 	test('centres the catalog on the coordinate the trajectory is measured against', async () => {

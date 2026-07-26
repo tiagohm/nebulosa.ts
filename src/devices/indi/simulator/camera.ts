@@ -694,9 +694,14 @@ export class CameraSimulator extends DeviceSimulator {
 		const frameType = this.frameType
 		const noiseConfig = this.#noiseConfig(frameType, exposureTime)
 		const rotatorAngle = (this.activeRotator?.angle.value ?? 0) * DEG2RAD
+		// Read once for the whole frame, so the scene, the trail it is drawn along and the header that
+		// describes it all speak of one centre at one instant. The mount keeps moving while the frame is
+		// rendered, and reading any of them again afterwards would describe a different sky.
+		const center = this.reportedCenter
+		const time = this.sceneTime
 
 		if (frameType === 'LIGHT') {
-			const stars = await this.#collectFrameStars(exposureTime, rotatorAngle)
+			const stars = await this.#collectFrameStars(exposureTime, rotatorAngle, center, time)
 			if (this.#plotPsfModel.elements.ANNULAR.value) {
 				const saturationLevel = this.#renderAnnularStars(raw, width, height, channels, stars)
 				const seeingSigma = gaussianSigmaFromHfd(this.seeing)
@@ -711,7 +716,7 @@ export class CameraSimulator extends DeviceSimulator {
 			generateNoiseImage(raw, width, height, channels, noiseConfig)
 		}
 
-		const image = this.#imageModel(raw, width, height, channels, exposureTime)
+		const image = this.#imageModel(raw, width, height, channels, exposureTime, center, time)
 		const output = Buffer.allocUnsafe(raw.length * 2 + CAMERA_BLOB_PADDING)
 		const sink = bufferSink(output)
 
@@ -849,12 +854,12 @@ export class CameraSimulator extends DeviceSimulator {
 	}
 
 	// Builds an image model suitable for the FITS/XISF writers.
-	#imageModel(raw: ImageRawType, width: number, height: number, channels: 1 | 3, exposureTime: number): Image {
+	#imageModel(raw: ImageRawType, width: number, height: number, channels: 1 | 3, exposureTime: number, center: readonly [Angle, Angle] | undefined, time: Time): Image {
 		const pixelSizeInBytes = 2
 
 		return {
 			raw,
-			header: this.#imageHeader(width, height, channels, exposureTime),
+			header: this.#imageHeader(width, height, channels, exposureTime, center, time),
 			metadata: {
 				width,
 				height,
@@ -870,7 +875,14 @@ export class CameraSimulator extends DeviceSimulator {
 	}
 
 	// Builds a compact astronomical image header for synthetic output.
-	#imageHeader(width: number, height: number, channels: 1 | 3, exposureTime: number): FitsHeader {
+	//
+	// `center` is the reported coordinate the frame was rendered around, in radians of the equatorial
+	// frame of date, and `time` the instant it was rendered for. Both are passed in rather than read
+	// here so the header describes the frame that was actually drawn: read afresh, the coordinate would
+	// be whatever the mount had reached by the end of the render, and the conversion into J2000 would be
+	// rotated at the wall clock while the timestamps below came from the mount's own clock — a mount set
+	// to the year 2000 reported a centre tens of arcminutes from the field in its own pixels.
+	#imageHeader(width: number, height: number, channels: 1 | 3, exposureTime: number, center: readonly [Angle, Angle] | undefined, time: Time): FitsHeader {
 		// Timestamped on the mount's simulated clock when there is one, so that TIME_UTC governs the
 		// frame metadata as well as the geometry. Falls back to the wall clock without a mount.
 		const now = this.activeMountSimulator?.utcTime ?? Date.now()
@@ -882,8 +894,8 @@ export class CameraSimulator extends DeviceSimulator {
 		let rightAscension: Angle | undefined
 		let declination: Angle | undefined
 
-		if (mount) {
-			;[rightAscension, declination] = equatorialToJ2000(mount.equatorialCoordinate.rightAscension, mount.equatorialCoordinate.declination)
+		if (center !== undefined) {
+			;[rightAscension, declination] = equatorialToJ2000(center[0], center[1], time)
 		}
 
 		return {
@@ -1083,7 +1095,7 @@ export class CameraSimulator extends DeviceSimulator {
 
 	// Shifts the master catalog by the pointing error, rotates it on the full sensor, then applies
 	// aberration, subframe, and binning.
-	async #collectFrameStars(exposureTime: number, rotatorAngle: number) {
+	async #collectFrameStars(exposureTime: number, rotatorAngle: number, center: readonly [Angle, Angle] | undefined, time: Time) {
 		// Where the field sat at each instant of the exposure, in pixels relative to the catalog centre.
 		// The sky moves relative to the sensor, so this is applied before the rotator angle, which moves
 		// the sensor relative to the sky.
@@ -1093,15 +1105,12 @@ export class CameraSimulator extends DeviceSimulator {
 		// afterwards would end the trail when the query came back rather than when the exposure did, and
 		// would measure it against a coordinate the mount had since left.
 		//
-		// Read once for both, since the offsets are pixel displacements from the very centre the catalog
-		// is projected around: taking that centre twice would let the mount move between the readings and
-		// leave every star at an offset measured from somewhere the scene was not built for.
-		//
-		// The instant is shared for the same reason: the scene and the offsets are both taken into J2000,
-		// and doing that at two instants would rotate one against the other. Built once here so the
-		// precession-nutation matrix is computed once and reused by every conversion.
-		const center = this.reportedCenter
-		const time = this.sceneTime
+		// `center` and `time` come from the caller for both, since the offsets are pixel displacements
+		// from the very centre the catalog is projected around: reading that centre twice would let the
+		// mount move between the readings and leave every star at an offset measured from somewhere the
+		// scene was not built for. The instant is shared for the same reason — the scene and the offsets
+		// are both taken into J2000, and doing that at two instants would rotate one against the other —
+		// and reusing one `Time` computes the precession-nutation matrix once for every conversion.
 		const offsets = this.#exposureOffsets(arcsec(pixelScale(CAMERA_PIXEL_SIZE, this.telescopeFocalLength)), exposureTime, center, time)
 		const stars = await this.#ensureCatalog(exposureTravel(offsets), center, time)
 		const frameX = this.#frame.elements.X.value
