@@ -546,6 +546,39 @@ describe('mount simulator pointing errors', () => {
 		}
 	})
 
+	test('carries sub-millisecond steps instead of discarding them', () => {
+		const coarse = makeMount('mount.clock.coarse')
+		const fine = makeMount('mount.clock.fine')
+
+		try {
+			for (const mount of [coarse.mount, fine.mount]) mount.setTrackingEnabled(false)
+
+			// Each simulator starts from its own wall clock, so only the elapsed time is comparable.
+			const coarseStart = coarse.mount.utcTime
+			const fineStart = fine.mount.utcTime
+
+			coarse.mount.advance(0.001)
+			for (let i = 0; i < 2; i++) fine.mount.advance(0.0005)
+
+			// Two half-millisecond steps have to add up to one of a millisecond. Truncating each step on
+			// its own froze the clock while the axes still moved, so physical state ran ahead of the
+			// timestamps and the guide queue saw an empty interval.
+			expect(coarse.mount.utcTime - coarseStart).toBe(1)
+			expect(fine.mount.utcTime - fineStart).toBe(1)
+
+			// A run of steps below the resolution still advances the clock by the time that passed, rather
+			// than losing all of it. At most the fraction still in flight is outstanding, which is under
+			// one millisecond by construction.
+			for (let i = 0; i < 1000; i++) fine.mount.advance(0.0001)
+			const elapsed = fine.mount.utcTime - fineStart
+			expect(elapsed).toBeGreaterThan(100 - 1)
+			expect(elapsed).toBeLessThanOrEqual(101)
+		} finally {
+			coarse.mount.dispose()
+			fine.mount.dispose()
+		}
+	})
+
 	test('re-derives the reported coordinate when the encoder index errors change', () => {
 		const { client, mount } = makeMount('mount.features.index', 'ALIGNMENT')
 

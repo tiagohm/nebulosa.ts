@@ -238,6 +238,9 @@ export class MountSimulator extends DeviceSimulator {
 	readonly #homeCoordinate: EquatorialCoordinate = { rightAscension: 0, declination: PIOVERTWO }
 	readonly #parkCoordinate: EquatorialCoordinate = { rightAscension: 0, declination: PIOVERTWO }
 	#utcTime = Date.now()
+	// Fraction of a millisecond not yet handed to the clock, in [0, 1). Carried between steps so a run
+	// of intervals shorter than the clock resolution still adds up to the time that really passed.
+	#utcTimeRemainder = 0
 	#utcOffset = TIMEZONE / 60
 	#notifyCoordinateLastTime = 0
 	// Accumulated angle of the right-ascension worm, radians in [0, TAU). Physical state integrated
@@ -1019,6 +1022,8 @@ export class MountSimulator extends DeviceSimulator {
 	setTime(value: UTCTime) {
 		if (this.#utcTime === value.utc && this.#utcOffset === value.offset) return
 		this.#utcTime = value.utc
+		// The carried fraction belongs to the clock that was just replaced.
+		this.#utcTimeRemainder = 0
 		this.#utcOffset = value.offset
 		this.#time.elements.UTC.value = formatTemporal(value.utc, 'YYYY-MM-DDTHH:mm:ss.SSSZ')
 		this.#time.elements.OFFSET.value = (value.offset / 60).toFixed(2)
@@ -1142,7 +1147,15 @@ export class MountSimulator extends DeviceSimulator {
 		if (dtSeconds <= 0) return
 
 		const startTime = this.#utcTime
-		this.#utcTime += Math.trunc(dtSeconds * 1000)
+		// The clock is whole milliseconds, since that is what INDI timestamps and the guide queue are
+		// expressed in, but the remainder is carried rather than discarded. Truncating each step on its
+		// own would let a sub-millisecond interval move the axes while leaving the clock still, so the
+		// guide queue would see an empty interval and two half-millisecond steps would not add up to one
+		// of a millisecond.
+		this.#utcTimeRemainder += dtSeconds * 1000
+		const elapsed = Math.trunc(this.#utcTimeRemainder)
+		this.#utcTimeRemainder -= elapsed
+		this.#utcTime += elapsed
 
 		if (!this.isConnected) return
 
