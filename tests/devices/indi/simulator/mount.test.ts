@@ -546,6 +546,34 @@ describe('mount simulator pointing errors', () => {
 		}
 	})
 
+	test('ignores an interval that is not a finite positive number', () => {
+		const { mount } = makeMount('mount.clock.nonfinite')
+
+		try {
+			mount.setTrackingEnabled(true)
+			mount.advance(1)
+
+			const utcTime = mount.utcTime
+			const { rightAscension, declination } = mount.mechanical
+
+			// The simulation is stepped from a clock reading, and one bad reading must cost a step rather
+			// than the mount: a non-finite interval propagates into the motor calculation and leaves both
+			// the mechanical and the reported coordinate permanently NaN.
+			for (const interval of [Number.NaN, Infinity, -Infinity, -1, 0]) mount.advance(interval)
+
+			expect(mount.utcTime).toBe(utcTime)
+			expect(mount.mechanical.rightAscension).toBe(rightAscension)
+			expect(mount.mechanical.declination).toBe(declination)
+			expect(mount.rightAscension).toBeFinite()
+
+			// And the mount still works afterwards.
+			mount.advance(1)
+			expect(mount.utcTime).toBe(utcTime + 1000)
+		} finally {
+			mount.dispose()
+		}
+	})
+
 	test('carries sub-millisecond steps instead of discarding them', () => {
 		const coarse = makeMount('mount.clock.coarse')
 		const fine = makeMount('mount.clock.fine')

@@ -1174,9 +1174,11 @@ export class MountSimulator extends DeviceSimulator {
 	//
 	// Driven by the timer during normal operation, and callable directly to step the simulation
 	// deterministically without waiting on real time, which is how the mechanical behaviour is covered
-	// by tests. A non-positive interval is a no-op.
+	// by tests. A non-positive interval is a no-op, and so is one that is not a finite number: the
+	// simulation is stepped by a timer, and turning a bad reading of the clock into a coordinate of
+	// `NaN` would poison the mechanical state permanently rather than costing one step.
 	advance(dtSeconds: number) {
-		if (dtSeconds <= 0) return
+		if (!(dtSeconds > 0) || !Number.isFinite(dtSeconds)) return
 
 		// The published clock is whole milliseconds, since that is what INDI timestamps are expressed in,
 		// but the remainder is carried rather than discarded. Truncating each step on its own would let a
