@@ -93,6 +93,16 @@ export function driveMechanicalAxis(state: MechanicalAxisState, direction: AxisD
 	if (state.backlashRemaining > 0) state.backlashRemaining = Math.max(0, state.backlashRemaining - Math.abs(travel))
 }
 
+// Reconciles the live state of an axis with a configuration that has just changed, in place.
+//
+// The slack still to be taken up cannot exceed the slack the transmission now has. Reducing the
+// backlash while a reversal is only partly worked through would otherwise leave the axis grinding
+// against a gap that no longer exists, and switching the family off and back on would bring the old
+// gap back with it, both while the property reported a smaller one.
+export function reconcileMechanicalAxis(state: MechanicalAxisState, config: MechanicalAxisConfig) {
+	if (state.backlashRemaining > config.backlash) state.backlashRemaining = config.backlash
+}
+
 // Advances one axis by `dtSeconds` under a motor running at `motorRate`, and returns the angle the
 // axis actually moved, radians, signed in the same sense as the rate.
 //

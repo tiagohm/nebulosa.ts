@@ -832,6 +832,34 @@ describe('mount simulator pointing errors', () => {
 		}
 	})
 
+	test('shrinks the slack still open when the configured backlash shrinks', () => {
+		const { client, mount } = makeMount('mount.backlash.reconfigured', 'MECHANICS')
+
+		try {
+			client.sendNumber({ device: mount.name, name: 'MOUNT_MECHANICS', elements: { ...NO_MECHANICS, BACKLASH_DEC: 600 } })
+			mount.setTrackingEnabled(true)
+
+			// Load northwards, then reverse: ten arcminutes of slack open, barely touched.
+			mount.pulse('NORTH', 4000)
+			for (let i = 0; i < 8; i++) mount.advance(0.5)
+			mount.pulse('SOUTH', 1000)
+			for (let i = 0; i < 2; i++) mount.advance(0.5)
+
+			const stalled = mount.mechanical.declination
+
+			// The mount is now declared to have a tenth of that backlash. The gap standing open belongs to
+			// the transmission that had ten times as much, so it cannot outlive it: two seconds of
+			// southward guiding is fifteen arcseconds, which clears sixty and moves the axis.
+			client.sendNumber({ device: mount.name, name: 'MOUNT_MECHANICS', elements: { BACKLASH_DEC: 60 } })
+			mount.pulse('SOUTH', 8000)
+			for (let i = 0; i < 16; i++) mount.advance(0.5)
+
+			expect(mount.mechanical.declination).toBeLessThan(stalled)
+		} finally {
+			mount.dispose()
+		}
+	})
+
 	test('drives the transmission in the order the pulses arrived, not by their sum', () => {
 		const { client, mount } = makeMount('mount.guide.ordering', 'MECHANICS', 'GUIDING')
 

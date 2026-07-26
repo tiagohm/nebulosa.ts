@@ -14,7 +14,7 @@ import { findOnSwitch, makeNumberVector, makeSwitchVector, makeTextVector, type 
 import type { ClientSimulator } from './client'
 import { GUIDE_JITTER_SEED, KING_DRIFT_RATE, LUNAR_DRIFT_RATE, MAIN_CONTROL, MAX_GUIDE_RATE, MAX_QUEUED_GUIDE_PULSES, MOUNT_TRAJECTORY_CAPACITY, SIDEREAL_DRIFT_RATE, SIMULATION, SLEW_RATES, SLEW_SPEED_FACTOR, SOLAR_DRIFT_RATE, TICK_INTERVAL_MS } from './constants'
 import { DeviceSimulator } from './device'
-import { advanceMechanicalAxis, clearMechanicalAxis, driveMechanicalAxis, IDENTITY_MECHANICAL_AXIS_CONFIG, type MechanicalAxisConfig, mechanicalAxisState, resetMechanicalAxisMotion } from './mount.axis'
+import { advanceMechanicalAxis, clearMechanicalAxis, driveMechanicalAxis, IDENTITY_MECHANICAL_AXIS_CONFIG, type MechanicalAxisConfig, mechanicalAxisState, reconcileMechanicalAxis, resetMechanicalAxisMotion } from './mount.axis'
 import { type GuidePulse, type GuideResponseConfig, IDENTITY_GUIDE_RESPONSE_CONFIG, integrateGuidePulses, nextGuidePulseBoundary, quantizeGuideDuration, retireGuidePulses } from './mount.guiding'
 import { IDENTITY_PERIODIC_ERROR_CURVE, PERIODIC_ERROR_HARMONICS, periodicErrorAt, periodicErrorBound, type PeriodicErrorCurve, trainPeriodicErrorCorrection } from './mount.periodic'
 import { advanceSettling, exciteSettling, IDENTITY_SETTLING_CONFIG, resetSettling, type SettlingConfig, settlingState } from './mount.settling'
@@ -827,6 +827,10 @@ export class MountSimulator extends DeviceSimulator {
 		const { BACKLASH_RA, BACKLASH_DEC, TAKE_UP_RATE, STICTION_RA, STICTION_DEC } = this.#mechanics.elements
 		this.#rightAscensionTransmission = { backlash: BACKLASH_RA.value * ASEC2RAD, takeUpRate: TAKE_UP_RATE.value, staticThreshold: STICTION_RA.value * ASEC2RAD }
 		this.#declinationTransmission = { backlash: BACKLASH_DEC.value * ASEC2RAD, takeUpRate: TAKE_UP_RATE.value, staticThreshold: STICTION_DEC.value * ASEC2RAD }
+		// The slack a reversal has left open belongs to the transmission that was configured when it
+		// opened, so shrinking the backlash has to shrink it too.
+		reconcileMechanicalAxis(this.#rightAscensionAxis, this.#rightAscensionTransmission)
+		reconcileMechanicalAxis(this.#declinationAxis, this.#declinationTransmission)
 	}
 
 	// Handles mount switch commands: connection, slew/sync mode, abort, track mode/state, home, park,
