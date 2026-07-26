@@ -1,6 +1,6 @@
 import type { EquatorialCoordinate } from '../../../astronomy/coordinates/coordinate'
 // oxfmt-ignore
-import { applyEquatorialPointingError, type EquatorialPointingModel, IDENTITY_EQUATORIAL_POINTING_MODEL, polarAlignmentPointingModel, tubeFlexureError } from '../../../astronomy/coordinates/pointing'
+import { applyEquatorialPointingError, type EquatorialPointingModel, IDENTITY_EQUATORIAL_POINTING_MODEL, MAX_POINTING_DECLINATION, polarAlignmentPointingModel, tubeFlexureError } from '../../../astronomy/coordinates/pointing'
 import { localSiderealTime } from '../../../astronomy/observer/location'
 import { formatTemporal, TIMEZONE } from '../../../astronomy/time/temporal'
 import { timeUnix } from '../../../astronomy/time/time'
@@ -21,6 +21,7 @@ import { type GuidePulse, type GuideResponseConfig, IDENTITY_GUIDE_RESPONSE_CONF
 import { IDENTITY_PERIODIC_ERROR_CURVE, PERIODIC_ERROR_HARMONICS, periodicErrorAt, periodicErrorBound, type PeriodicErrorCurve, trainPeriodicErrorCorrection } from './mount.periodic'
 import { advanceSettling, exciteSettling, IDENTITY_SETTLING_CONFIG, resetSettling, type SettlingConfig, settlingState } from './mount.settling'
 import { boresightHistory, clearBoresightHistory, recordBoresightSample, sampleBoresightTrajectory } from './mount.trajectory'
+import { advanceWind, IDENTITY_WIND_CONFIG, resetWind, type WindConfig, windState } from './mount.wind'
 // oxfmt-ignore
 import { advanceTrackingRateError, IDENTITY_TRACKING_RATE_ERROR_CONFIG, resetTrackingRateError, TRACKING_RATE_CALIBRATION_TEMPERATURE, type TrackingRateErrorConfig, trackingRateErrorState } from './mount.tracking'
 import type { AxisDirection, CoordSetMode, DeviceSimulatorOptions, MountPointingState, SimulatorProperty, SlewMode } from './types'
@@ -85,7 +86,7 @@ export class MountSimulator extends DeviceSimulator {
 	// it breaks free. Declination is normally the worse of the two, since that axis spends most of its
 	// time stopped and reverses on every dither.
 	// oxfmt-ignore
-	readonly #mechanics = makeNumberVector('', 'MOUNT_MECHANICS', 'Mechanics', SIMULATION, 'rw', ['BACKLASH_RA', 'RA Backlash (arcsec)', 0, 0, 3600, 0.1, '%.3f'], ['BACKLASH_DEC', 'DEC Backlash (arcsec)', 0, 0, 3600, 0.1, '%.3f'], ['TAKE_UP_RATE', 'Backlash Take-up Rate', 1, 0.01, 1, 0.01, '%.3f'], ['STICTION_RA', 'RA Stiction (arcsec)', 0, 0, 60, 0.01, '%.3f'], ['STICTION_DEC', 'DEC Stiction (arcsec)', 0, 0, 60, 0.01, '%.3f'])
+	readonly #mechanics = makeNumberVector('', 'MOUNT_MECHANICS', 'Mechanics', SIMULATION, 'rw', ['BACKLASH_RA', 'RA Backlash (arcsec)', 0, 0, 3600, 0.1, '%.3f'], ['BACKLASH_DEC', 'DEC Backlash (arcsec)', 0, 0, 3600, 0.1, '%.3f'], ['TAKE_UP_RATE', 'Backlash Take-up Rate', 1, 0.01, 1, 0.01, '%.3f'], ['STICTION_RA', 'RA Stiction (arcsec)', 0, 0, 60, 0.01, '%.3f'], ['STICTION_DEC', 'DEC Stiction (arcsec)', 0, 0, 60, 0.01, '%.3f'], ['HOME_SCATTER', 'Home Repeatability (arcsec)', 0, 0, 600, 0.1, '%.3f'])
 	// Fidelity of the guide-pulse path between the command and the motor: how late it starts, how much
 	// of the requested duration survives, and how the real rate compares to the configured one in each
 	// direction. Defaults reproduce an ideal controller.
@@ -103,10 +104,16 @@ export class MountSimulator extends DeviceSimulator {
 	// the droop of the optical axis at the horizon, falling to nothing at the zenith, and acts in the
 	// vertical, so converting it to equatorial coordinates goes through the parallactic angle. The pier
 	// terms are the constant offset of the west side relative to the east, from the tube hanging on the
-	// other side of the mount; they are hour-angle and declination offsets, not on-sky angles, on the
-	// same convention as the index errors.
+	// other side of the mount; they are right-ascension and declination offsets, not on-sky angles, on
+	// the same convention as the index errors.
 	// oxfmt-ignore
 	readonly #flexure = makeNumberVector('', 'MOUNT_FLEXURE', 'Flexure', SIMULATION, 'rw', ['TUBE_FLEXURE', 'Tube Flexure (arcsec)', 0, -3600, 3600, 0.1, '%.3f'], ['PIER_WEST_RA', 'Pier West RA Offset (arcsec)', 0, -3600, 3600, 0.1, '%.3f'], ['PIER_WEST_DEC', 'Pier West DEC Offset (arcsec)', 0, -3600, 3600, 0.1, '%.3f'])
+	// Buffeting of the telescope by wind, as a bounded random deflection of the optical axis with a
+	// memory of its own. Distinct from every other term here: static geometry cannot produce it, the
+	// worm repeats too regularly, and the tracking-rate walk has no bound. A zero amplitude makes the
+	// site perfectly still. Doubles as the centroid wander of seeing, which behaves the same way.
+	// oxfmt-ignore
+	readonly #wind = makeNumberVector('', 'MOUNT_WIND', 'Wind', SIMULATION, 'rw', ['AMPLITUDE', 'Amplitude (arcsec)', 0, 0, 600, 0.1, '%.3f'], ['CORRELATION_TIME', 'Correlation Time (s)', 2, 0.1, 300, 0.1, '%.2f'])
 	// oxfmt-ignore
 	readonly #trackingRate = makeNumberVector('', 'MOUNT_TRACKING_RATE', 'Tracking Rate', SIMULATION, 'rw', ['BIAS', 'Rate Bias (ppm)', 0, -10000, 10000, 1, '%.2f'], ['TEMPERATURE_COEFFICIENT', 'Temperature Coefficient (ppm/C)', 0, -1000, 1000, 0.1, '%.3f'], ['TEMPERATURE', 'Temperature (C)', TRACKING_RATE_CALIBRATION_TEMPERATURE, -60, 60, 0.1, '%.1f'], ['RANDOM_WALK', 'Random Walk (ppm/sqrt(s))', 0, 0, 1000, 0.1, '%.3f'])
 
@@ -136,13 +143,14 @@ export class MountSimulator extends DeviceSimulator {
 		this.#guiding,
 		this.#settling,
 		this.#flexure,
+		this.#wind,
 		this.#trackingRate,
 	]
 	// The error-model configuration is persisted along with track mode and guide rate, so a simulated
 	// mount keeps its mechanical character across reconnections. The worm phase is not: it is live
 	// mechanical state, and a power cycle is exactly when a real mount loses track of it.
 	protected propertiesToNotSave = this.properties.filter(
-		(e) => e !== this.#trackMode && e !== this.#guideRate && e !== this.#alignment && e !== this.#periodicError && e !== this.#periodicErrorCorrection && e !== this.#mechanics && e !== this.#guiding && e !== this.#settling && e !== this.#trackingRate && e !== this.#flexure,
+		(e) => e !== this.#trackMode && e !== this.#guideRate && e !== this.#alignment && e !== this.#periodicError && e !== this.#periodicErrorCorrection && e !== this.#mechanics && e !== this.#guiding && e !== this.#settling && e !== this.#trackingRate && e !== this.#flexure && e !== this.#wind,
 	)
 
 	#timer?: NodeJS.Timeout
@@ -177,6 +185,14 @@ export class MountSimulator extends DeviceSimulator {
 	#periodicErrorCurve: PeriodicErrorCurve = IDENTITY_PERIODIC_ERROR_CURVE
 	// Rate-error configuration, rebuilt from MOUNT_TRACKING_RATE whenever it changes.
 	#trackingRateErrorConfig: TrackingRateErrorConfig = IDENTITY_TRACKING_RATE_ERROR_CONFIG
+	// Current deflection of the optical axis by the wind, and the conditions producing it.
+	readonly #windState = windState()
+	#windConfig: WindConfig = IDENTITY_WIND_CONFIG
+	// How far the axes really sat from the home position the last time the mount homed, radians. A home
+	// sensor has hysteresis, so the mount zeroes its encoders a little short of where it did last time
+	// and every subsequent coordinate inherits the difference. This is where index errors come from.
+	#homeScatterRightAscension: Angle = 0
+	#homeScatterDeclination: Angle = 0
 	// Travel the drive has delivered beyond what the encoders counted, radians of right ascension.
 	// Unbounded on purpose: an uncorrected rate error walks away without limit, which is exactly the
 	// failure an unguided exposure shows.
@@ -375,7 +391,18 @@ export class MountSimulator extends DeviceSimulator {
 
 		// Held constant across the extrapolation window rather than projected forward: over the fraction
 		// of a second a caller extrapolates by, a part-per-million rate error moves nothing measurable.
-		rightAscension += this.#trackingRateOffset
+		// The same applies to the wind and to the home scatter, which is constant until the next home.
+		rightAscension += this.#trackingRateOffset + this.#homeScatterRightAscension
+		declination += this.#homeScatterDeclination
+
+		if (this.#windState.rightAscension !== 0 || this.#windState.declination !== 0) {
+			// The wind pushes the tube by an angle on the sky, so the east-west component has to be
+			// divided by the cosine of the declination to become a right-ascension offset. The home
+			// scatter above needs no such conversion: it is an error of the axis angles themselves.
+			rightAscension += this.#windState.rightAscension / Math.cos(clamp(declination, -MAX_POINTING_DECLINATION, MAX_POINTING_DECLINATION))
+			declination += this.#windState.declination
+		}
+
 		return { rightAscension, declination }
 	}
 
@@ -449,9 +476,12 @@ export class MountSimulator extends DeviceSimulator {
 		// Flexure peaks at the horizon and the pier offset applies on one side, so both count in full.
 		const { TUBE_FLEXURE, PIER_WEST_RA, PIER_WEST_DEC } = this.#flexure.elements
 		const gravity = Math.abs(TUBE_FLEXURE.value) + Math.abs(PIER_WEST_RA.value) + Math.abs(PIER_WEST_DEC.value)
-		// The accumulated rate drift is added as it stands rather than bounded: it has no bound, so the
-		// only honest figure is how far it has walked so far.
-		return (polar + geometry + index + gravity) * ASEC2RAD + periodicErrorBound(this.#periodicErrorCurve) + Math.abs(this.#trackingRateOffset)
+		// The rate drift and the home scatter are added as they stand rather than bounded: neither has a
+		// bound, so the only honest figure is how far each has actually gone. The wind has no hard bound
+		// either, being Gaussian, so it contributes three standard deviations, which it stays within
+		// better than 99% of the time.
+		const realized = Math.abs(this.#trackingRateOffset) + Math.abs(this.#homeScatterRightAscension) + Math.abs(this.#homeScatterDeclination)
+		return (polar + geometry + index + gravity) * ASEC2RAD + periodicErrorBound(this.#periodicErrorCurve) + realized + 3 * this.#windConfig.amplitude
 	}
 
 	// Current pier side derived from the pier-side property.
@@ -521,6 +551,12 @@ export class MountSimulator extends DeviceSimulator {
 			case 'MOUNT_FLEXURE':
 				if (applyNumberVectorValues(this.#flexure, vector.elements)) this.notify(this.#flexure)
 				return
+			case 'MOUNT_WIND':
+				if (applyNumberVectorValues(this.#wind, vector.elements)) {
+					this.#refreshWind()
+					this.notify(this.#wind)
+				}
+				return
 			case 'MOUNT_MECHANICS':
 				if (applyNumberVectorValues(this.#mechanics, vector.elements)) {
 					this.#refreshTransmission()
@@ -558,6 +594,16 @@ export class MountSimulator extends DeviceSimulator {
 		this.#refreshSettling()
 		this.#refreshTrackingRate()
 		this.#refreshPeriodicError()
+		this.#refreshWind()
+	}
+
+	// Rebuilds the wind configuration from MOUNT_WIND and reseeds the deflection from the settled
+	// distribution of the new conditions, so a change of weather takes effect at once instead of
+	// spending several correlation times warming up from whatever the old conditions had left.
+	#refreshWind() {
+		const { AMPLITUDE, CORRELATION_TIME } = this.#wind.elements
+		this.#windConfig = AMPLITUDE.value > 0 ? { amplitude: AMPLITUDE.value * ASEC2RAD, correlationTime: CORRELATION_TIME.value } : IDENTITY_WIND_CONFIG
+		resetWind(this.#windState, this.#windConfig, this.#normal)
 	}
 
 	// Rebuilds the worm curve from MOUNT_PERIODIC_ERROR and retrains the correction from MOUNT_PEC.
@@ -939,6 +985,9 @@ export class MountSimulator extends DeviceSimulator {
 		// Sampled once per step, so every consumer of the interval sees the same rate error.
 		this.#trackingRateError = advanceTrackingRateError(this.#trackingRateErrorState, dtSeconds, this.#trackingRateErrorConfig, this.#normal)
 
+		// The wind blows regardless of what the mount is doing, so this runs even while parked.
+		advanceWind(this.#windState, dtSeconds, this.#windConfig, this.#normal)
+
 		// Integrated before the motion advances, so the phase covers the interval the axes are about to
 		// run at the rate the motion is about to apply.
 		this.#advanceWormPhase(this.#rightAscensionMotorRate(), dtSeconds)
@@ -1062,6 +1111,12 @@ export class MountSimulator extends DeviceSimulator {
 			this.#setSlewing(false)
 			this.#setHoming(false)
 
+			// Homing zeroes the encoders on a sensor that does not trip in exactly the same place twice,
+			// so the mount ends up believing it is at the home position while the axes sit a little off
+			// it. Every coordinate derived afterwards inherits that difference, which is where an index
+			// error comes from in the first place. Redrawn on each home, so two homings in a row disagree.
+			if (mode === 'HOME') this.#scatterHome()
+
 			if (mode === 'PARK') {
 				this.#setParking(false, true)
 				this.setTrackingEnabled(false)
@@ -1141,6 +1196,22 @@ export class MountSimulator extends DeviceSimulator {
 		}
 
 		if (notify && pierSideChanged) this.notify(this.#pierSide)
+	}
+
+	// Draws how far the axes really sat from the home position on this homing, in radians.
+	//
+	// Gaussian on each axis with the configured repeatability as its standard deviation. A zero
+	// repeatability makes the sensor perfect and clears any scatter left by an earlier home.
+	#scatterHome() {
+		const scatter = this.#mechanics.elements.HOME_SCATTER.value * ASEC2RAD
+
+		if (scatter > 0) {
+			this.#homeScatterRightAscension = this.#normal() * scatter
+			this.#homeScatterDeclination = this.#normal() * scatter
+		} else {
+			this.#homeScatterRightAscension = 0
+			this.#homeScatterDeclination = 0
+		}
 	}
 
 	// Keeps the simulated pier side consistent with the current sky position.
@@ -1293,10 +1364,16 @@ export class MountSimulator extends DeviceSimulator {
 		// Any ring-down in progress belongs to the position that was just abandoned.
 		resetSettling(this.#rightAscensionSettling)
 		resetSettling(this.#declinationSettling)
-		// A sync re-registers the bookkeeping against the sky, so whatever the drive had silently walked
-		// away is absorbed into the new zero. The wander of the rate itself is not: the drive is still the
-		// same drive and starts walking again from where its rate was.
+		// A sync re-registers the bookkeeping against the sky, so every error that lives in the
+		// bookkeeping is absorbed into the new zero: the travel the drive walked away silently, and the
+		// offset the home sensor left behind.
+		//
+		// Two things deliberately survive it. The wander of the rate itself, because the drive is still
+		// the same drive and starts walking again from where its rate was. And the wind, because it is a
+		// live disturbance rather than an accumulated error: syncing does not make the air still.
 		this.#trackingRateOffset = 0
+		this.#homeScatterRightAscension = 0
+		this.#homeScatterDeclination = 0
 		clearBoresightHistory(this.#boresightHistory)
 		const boresight = this.boresightAt(this.#utcTime)
 		recordBoresightSample(this.#boresightHistory, this.#utcTime, boresight.rightAscension, boresight.declination)

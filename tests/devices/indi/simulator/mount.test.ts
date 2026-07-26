@@ -871,6 +871,106 @@ describe('mount simulator pointing errors', () => {
 		}
 	})
 
+	test('buffets the boresight without letting it wander off', () => {
+		const { client, mount } = makeMount('mount.boresight.wind')
+
+		try {
+			client.sendNumber({ device: mount.name, name: 'MOUNT_WIND', elements: { AMPLITUDE: 3, CORRELATION_TIME: 4 } })
+			mount.setTrackingEnabled(true)
+
+			let peak = 0
+			let reversals = 0
+			let previous = 0
+
+			for (let i = 0; i < 400; i++) {
+				mount.advance(1)
+				const offset = toArcsec(mount.boresight.declination - mount.mechanical.declination)
+				if (i > 0 && offset > 0 !== previous > 0) reversals++
+				previous = offset
+				peak = Math.max(peak, Math.abs(offset))
+			}
+
+			// It moves, and it keeps changing its mind, which a static error never does.
+			expect(peak).toBeGreaterThan(2)
+			expect(reversals).toBeGreaterThan(5)
+
+			// And after four hundred seconds, a hundred correlation times, it is still within a few
+			// standard deviations rather than metres away. That is the whole point of the term.
+			expect(peak).toBeLessThan(15)
+
+			// The reported coordinate never sees any of it: the encoders cannot feel the wind.
+			expect(mount.pointingErrorBound).toBeGreaterThan(arcsec(8))
+		} finally {
+			mount.dispose()
+		}
+	})
+
+	test('keeps blowing across a sync, unlike the errors a sync absorbs', () => {
+		const { client, mount } = makeMount('mount.boresight.wind.sync')
+
+		try {
+			client.sendNumber({ device: mount.name, name: 'MOUNT_WIND', elements: { AMPLITUDE: 5, CORRELATION_TIME: 30 } })
+			mount.advance(1)
+			expect(mount.boresight.declination).not.toBe(mount.mechanical.declination)
+
+			// Re-registering against the sky cannot make the air still, so unlike the rate drift and the
+			// home scatter this one survives.
+			mount.syncTo(hour(5), deg(20))
+			expect(mount.boresight.declination).not.toBe(mount.mechanical.declination)
+		} finally {
+			mount.dispose()
+		}
+	})
+
+	test('lands a little off the home position, differently every time', () => {
+		const { client, mount } = makeMount('mount.home.scatter')
+
+		try {
+			client.sendNumber({ device: mount.name, name: 'MOUNT_MECHANICS', elements: { HOME_SCATTER: 30 } })
+			mount.setSlewRate('SPEED_6')
+
+			// Homes the mount and returns how far the optical axis ended up from where the controller
+			// believes it parked itself, in arcseconds per axis.
+			function homeAndMeasure() {
+				mount.home()
+				for (let i = 0; i < 200 && mount.isSlewing; i++) mount.advance(1)
+				expect(mount.isSlewing).toBeFalse()
+				return [toArcsec(normalizePI(mount.boresight.rightAscension - mount.mechanical.rightAscension)), toArcsec(mount.boresight.declination - mount.mechanical.declination)] as const
+			}
+
+			const first = homeAndMeasure()
+			expect(Math.abs(first[0])).toBeGreaterThan(0)
+			expect(Math.abs(first[1])).toBeGreaterThan(0)
+
+			// Not repeatable: the sensor does not trip in the same place twice.
+			const second = homeAndMeasure()
+			expect(second[0]).not.toBe(first[0])
+			expect(second[1]).not.toBe(first[1])
+
+			// A sync re-registers the bookkeeping, which is exactly what absorbs it.
+			mount.syncTo(hour(5), deg(20))
+			expect(mount.boresight.rightAscension).toBe(mount.mechanical.rightAscension)
+			expect(mount.boresight.declination).toBe(mount.mechanical.declination)
+		} finally {
+			mount.dispose()
+		}
+	})
+
+	test('homes exactly onto the home position with a perfect sensor', () => {
+		const { mount } = makeMount('mount.home.repeatable')
+
+		try {
+			mount.setSlewRate('SPEED_6')
+			mount.home()
+			for (let i = 0; i < 200 && mount.isSlewing; i++) mount.advance(1)
+
+			expect(mount.boresight.rightAscension).toBe(mount.mechanical.rightAscension)
+			expect(mount.boresight.declination).toBe(mount.mechanical.declination)
+		} finally {
+			mount.dispose()
+		}
+	})
+
 	test('walks the boresight away from the reported coordinate with a tracking rate error', () => {
 		const { client, mount } = makeMount('mount.rate.bias')
 
