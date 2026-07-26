@@ -216,6 +216,11 @@ export class MountSimulator extends DeviceSimulator {
 	// Elastic ring-down of each axis after an abrupt stop.
 	readonly #rightAscensionSettling = settlingState()
 	readonly #declinationSettling = settlingState()
+	// How much of each oscillator's excursion is currently present in the mechanical coordinate,
+	// radians. Not simply the oscillator's own offset: the declination is clamped at the poles, so an
+	// axis ringing there receives less than was asked for, and only what it received may be taken back.
+	#appliedRightAscensionRing: Angle = 0
+	#appliedDeclinationRing: Angle = 0
 	// Settling configuration, rebuilt from MOUNT_SETTLING whenever it changes so the step allocates nothing.
 	#settlingConfig: SettlingConfig = IDENTITY_SETTLING_CONFIG
 	// True orientation of the mechanical axes. This is the authoritative state: tracking, slewing,
@@ -727,8 +732,7 @@ export class MountSimulator extends DeviceSimulator {
 		if (!this.#simulatesSettling) {
 			// A ring-down in progress is likewise only frozen by an identity configuration, and would
 			// carry its old offset and velocity into whatever the mount does next.
-			resetSettling(this.#rightAscensionSettling)
-			resetSettling(this.#declinationSettling)
+			this.#resetSettlingState()
 		}
 	}
 
@@ -1258,11 +1262,25 @@ export class MountSimulator extends DeviceSimulator {
 		// Applied as the change in the residual offset rather than as the offset itself, so the ringing
 		// rides on top of whatever the axes are doing and pays itself back: once it has died away the
 		// mount sits exactly where it was commanded.
-		const rightAscensionRing = advanceSettling(this.#rightAscensionSettling, settlingSeconds, this.#settlingConfig)
-		const declinationRing = advanceSettling(this.#declinationSettling, settlingSeconds, this.#settlingConfig)
+		//
+		// The change is measured against how much of the excursion is currently in the coordinate rather
+		// than against the oscillator alone, because the declination is clamped at the poles and the
+		// clamp is one-sided. An axis ringing at +90 had its northward swing discarded and then paid it
+		// back anyway, so a mount homing to the pole with settling enabled came to rest permanently short
+		// of it. Crediting only the motion that survived the clamp means nothing is owed for motion that
+		// never happened.
+		advanceSettling(this.#rightAscensionSettling, settlingSeconds, this.#settlingConfig)
+		advanceSettling(this.#declinationSettling, settlingSeconds, this.#settlingConfig)
+
+		const rightAscensionRing = this.#rightAscensionSettling.offset - this.#appliedRightAscensionRing
+		const declinationRing = this.#declinationSettling.offset - this.#appliedDeclinationRing
 
 		if (rightAscensionRing !== 0 || declinationRing !== 0) {
-			this.#setMechanical(this.#mechanical.rightAscension + rightAscensionRing, this.#mechanical.declination + declinationRing)
+			const rightAscension = this.#mechanical.rightAscension
+			const declination = this.#mechanical.declination
+			this.#setMechanical(rightAscension + rightAscensionRing, declination + declinationRing)
+			this.#appliedRightAscensionRing += normalizePI(this.#mechanical.rightAscension - rightAscension)
+			this.#appliedDeclinationRing += this.#mechanical.declination - declination
 		}
 
 		// Retired only after the interval has been accounted for, so the tail of a pulse is never lost.
@@ -1595,8 +1613,19 @@ export class MountSimulator extends DeviceSimulator {
 	// subtract the old offset a second time as it decayed, so the mount would settle permanently short
 	// of the new target by however far it had sprung from the previous one.
 	#takeSlewControl() {
+		this.#resetSettlingState()
+	}
+
+	// Puts both oscillators back on target and forgets what they had put into the coordinate.
+	//
+	// The two go together: the excursion currently present in the mechanical coordinate is only owed
+	// back while the oscillator that produced it is still running. Clearing one without the other would
+	// either leave a debt nothing will pay or pay one that was already settled.
+	#resetSettlingState() {
 		resetSettling(this.#rightAscensionSettling)
 		resetSettling(this.#declinationSettling)
+		this.#appliedRightAscensionRing = 0
+		this.#appliedDeclinationRing = 0
 	}
 
 	// Cancels any goto, home or park slew.
@@ -1688,8 +1717,7 @@ export class MountSimulator extends DeviceSimulator {
 	// same drive and starts walking again from where its rate was. And the wind, because it is a live
 	// disturbance rather than an accumulated error: syncing does not make the air still.
 	#absorbAccumulatedError() {
-		resetSettling(this.#rightAscensionSettling)
-		resetSettling(this.#declinationSettling)
+		this.#resetSettlingState()
 		this.#trackingRateOffset = 0
 		this.#homeScatterRightAscension = 0
 		this.#homeScatterDeclination = 0

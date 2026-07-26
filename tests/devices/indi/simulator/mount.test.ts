@@ -1055,6 +1055,26 @@ describe('mount simulator pointing errors', () => {
 		expect(excursionAfter('mount.settling.south', deg(-10))).toBeLessThan(-5)
 	})
 
+	test('lands on the pole after ringing against the declination clamp', () => {
+		const { client, mount } = makeMount('mount.settling.pole', 'SETTLING')
+
+		try {
+			client.sendNumber({ device: mount.name, name: 'MOUNT_SETTLING', elements: { OVERSHOOT: 30, FREQUENCY: 2, DAMPING_RATIO: 0.15 } })
+			mount.setSlewRate('SPEED_7')
+
+			// Homing points at the pole, so this is the ordinary path rather than an exotic one. The
+			// northward half of the ring-down is discarded by the declination clamp; paying it back anyway
+			// left the mount permanently short of the pole it had reached.
+			mount.goTo(mount.rightAscension, PIOVERTWO)
+			for (let i = 0; i < 2000; i++) mount.advance(0.01)
+
+			expect(mount.isSlewing).toBeFalse()
+			expect(toArcsec(PIOVERTWO - mount.mechanical.declination)).toBeCloseTo(0, 6)
+		} finally {
+			mount.dispose()
+		}
+	})
+
 	test('lands on a second target commanded while the first is still ringing', () => {
 		const { client, mount } = makeMount('mount.settling.interrupted', 'SETTLING')
 
