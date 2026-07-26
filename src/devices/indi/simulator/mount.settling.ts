@@ -61,16 +61,24 @@ export function resetSettling(state: SettlingState) {
 // way it came.
 //
 // The kick is delivered as velocity rather than displacement, which is what an abrupt stop does: the
-// axis is on target at that instant and its momentum carries it past. For a release from zero offset
-// the peak of the response is the initial velocity divided by the damped frequency, so that relation
-// is inverted here to hit the requested excursion.
+// axis is on target at that instant and its momentum carries it past.
+//
+// A release from zero offset follows (v₀/ω_d)·e^(−ζω_n t)·sin(ω_d t), whose first maximum is not
+// v₀/ω_d: the envelope has already decayed by the time the sinusoid gets there. Peaking at
+// tan(ω_d t) = ω_d/ζω_n gives an excursion of (v₀/ω_n)·e^(−ζθ/√(1−ζ²)) with θ = atan(√(1−ζ²)/ζ), so
+// that attenuation is divided out here and the axis reaches the configured overshoot for any damping.
+// Ignoring it made a mount configured for three arcseconds overshoot 2.2 at a damping ratio of 0.2 and
+// 0.8 at 0.8, and the shortfall grew precisely with the stiffness somebody had asked for.
 export function exciteSettling(state: SettlingState, severity: number, config: SettlingConfig) {
 	if (config.frequency <= 0 || config.overshoot <= 0 || severity === 0) return
 
 	const naturalFrequency = TAU * config.frequency
 	const dampingRatio = clamp(config.dampingRatio, 0, MAX_DAMPING_RATIO)
-	const dampedFrequency = naturalFrequency * Math.sqrt(1 - dampingRatio * dampingRatio)
-	state.velocity += config.overshoot * clamp(severity, -1, 1) * dampedFrequency
+	const damped = Math.sqrt(1 - dampingRatio * dampingRatio)
+	// Peak of the free response as a fraction of v₀/ω_n. One without damping, and 1/e as the ratio
+	// approaches the critical value, which is the closed-form limit of the same expression.
+	const attenuation = Math.exp((-dampingRatio * Math.atan2(damped, dampingRatio)) / damped)
+	state.velocity += (config.overshoot * clamp(severity, -1, 1) * naturalFrequency) / attenuation
 }
 
 // Advances the ring-down by `dtSeconds` and returns how far the axis moved during it, radians.

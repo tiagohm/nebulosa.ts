@@ -42,13 +42,14 @@ describe('axis settling', () => {
 		expect(advanceSettling(state, -1, SPRINGY)).toBe(0)
 	})
 
-	test('overshoots by about the configured peak', () => {
-		const { peak } = ringDown(SPRINGY)
-
-		// The relation between the initial velocity and the peak is exact only without damping, so a
-		// lightly damped axis falls a little short of the requested excursion.
-		expect(toArcsec(peak)).toBeGreaterThan(3.5)
-		expect(toArcsec(peak)).toBeLessThan(5)
+	test('overshoots by the configured peak at any damping', () => {
+		// The excursion the configuration asks for is the one the axis reaches, however stiff it is: the
+		// envelope decays before the sinusoid peaks, and the excitation compensates for exactly that.
+		// Stepped finely enough that the sampled maximum is the real one.
+		for (const dampingRatio of [0, 0.05, 0.15, 0.2, 0.5, 0.8, 0.99]) {
+			const { peak } = ringDown({ ...SPRINGY, dampingRatio }, 1, 0.0005)
+			expect(toArcsec(peak)).toBeCloseTo(5, 2)
+		}
 	})
 
 	test('scales the overshoot with the severity of the stop', () => {
