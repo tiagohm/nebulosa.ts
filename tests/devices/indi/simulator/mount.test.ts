@@ -1051,6 +1051,29 @@ describe('mount simulator pointing errors', () => {
 		}
 	})
 
+	test('treats a worm that never turns as having no periodic error', () => {
+		const { client, mount } = makeMount('mount.worm.noperiod', 'PERIODIC_ERROR')
+
+		try {
+			// A zero period leaves the phase frozen, so amplitudes that survived it would show up as a
+			// constant displacement of the optical axis rather than as a periodic error.
+			client.sendNumber({ device: mount.name, name: 'MOUNT_PERIODIC_ERROR', elements: { ...NO_PERIODIC_ERROR, RA_PERIOD: 0, RA_AMPLITUDE_2: 10, RA_PHASE_2: 90 } })
+			mount.setTrackingEnabled(true)
+			mount.advance(10)
+
+			expect(mount.wormPhase).toBe(0)
+			expect(mount.boresight.rightAscension).toBe(mount.mechanical.rightAscension)
+			expect(mount.pointingErrorBound).toBe(0)
+
+			// Giving it a period brings the same amplitudes back, which is what makes the period the gate
+			// rather than the amplitudes being ignored outright.
+			client.sendNumber({ device: mount.name, name: 'MOUNT_PERIODIC_ERROR', elements: { RA_PERIOD: 400 } })
+			expect(toArcsec(mount.pointingErrorBound)).toBeCloseTo(10, 9)
+		} finally {
+			mount.dispose()
+		}
+	})
+
 	test('applies the periodic error as an absolute offset of the worm phase', () => {
 		const { client, mount } = makeMount('mount.boresight.periodic', 'PERIODIC_ERROR')
 

@@ -756,10 +756,15 @@ export class MountSimulator extends DeviceSimulator {
 	// Retraining on every change is what a controller does when the mechanics change under it, and it
 	// keeps the table consistent with the curve it is meant to cancel. Collapses to the shared identity
 	// curve when no harmonic has any amplitude, so the boresight path can skip it by reference.
+	//
+	// A worm that never turns collapses the same way. The period is what turns axis travel into phase,
+	// so without one the phase is frozen wherever it stood and the harmonics stop being periodic at all:
+	// they become a constant offset of the boresight, which is an index error rather than a periodic
+	// one. The property documents a zero period as disabling the term, and this is where that holds.
 	#refreshPeriodicError() {
-		const { RA_AMPLITUDE, RA_PHASE, RA_AMPLITUDE_2, RA_PHASE_2, RA_AMPLITUDE_3, RA_PHASE_3 } = this.#periodicError.elements
+		const { RA_PERIOD, RA_AMPLITUDE, RA_PHASE, RA_AMPLITUDE_2, RA_PHASE_2, RA_AMPLITUDE_3, RA_PHASE_3 } = this.#periodicError.elements
 
-		if (!this.#simulatesPeriodicError || (RA_AMPLITUDE.value === 0 && RA_AMPLITUDE_2.value === 0 && RA_AMPLITUDE_3.value === 0)) {
+		if (!this.#simulatesPeriodicError || RA_PERIOD.value <= 0 || (RA_AMPLITUDE.value === 0 && RA_AMPLITUDE_2.value === 0 && RA_AMPLITUDE_3.value === 0)) {
 			this.#periodicErrorCurve = IDENTITY_PERIODIC_ERROR_CURVE
 			return
 		}
