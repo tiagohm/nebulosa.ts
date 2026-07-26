@@ -738,6 +738,60 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		expect(moved).toBe(0)
 	}, 15000)
 
+	test('keeps integrating the mount the exposure began on', async () => {
+		const handler = new IndiClientHandlerSet()
+		const mountManager = new MountManager()
+		const cameraManager = new CameraManager()
+		using client = new ClientSimulator('camera.mount.switch', handler)
+		const frameReceiver = new CameraFrameReceiver()
+
+		handler.add(mountManager)
+		handler.add(cameraManager)
+		cameraManager.addHandler(frameReceiver)
+
+		const catalogProvider: CatalogSource = (rightAscension, declination) => [{ snr: 200, hfd: 2, flux: 400, rightAscension, declination }]
+
+		using first = new MountSimulator('Mount A', client)
+		using second = new MountSimulator('Mount B', client)
+		using cameraSimulator = new CameraSimulator('Camera Simulator', client, { mountManager, catalogSources: { CENTERED: catalogProvider } })
+		const mountA = mountManager.get(client, first.name)!
+		const mountB = mountManager.get(client, second.name)!
+		const camera = cameraManager.get(client, cameraSimulator.name)!
+
+		first.connect()
+		second.connect()
+		cameraSimulator.connect()
+		await waitUntil(() => mountA.connected && mountB.connected && camera.connected)
+
+		// An hour of right ascension apart: fifteen degrees, hundreds of sensors' worth.
+		first.syncTo(hour(5), deg(20))
+		first.setTrackingEnabled(true)
+		second.syncTo(hour(6), deg(20))
+		second.setTrackingEnabled(true)
+
+		cameraManager.snoop(camera, mountA)
+		await waitUntil(() => cameraManager.properties.get(camera)?.ACTIVE_DEVICES?.elements.ACTIVE_TELESCOPE.value === first.name)
+
+		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_NOISE_FEATURES', elements: { SKY_ENABLED: false, LIGHT_POLLUTION_ENABLED: false } })
+		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_CATALOG_SOURCE', elements: { CENTERED: true } })
+		await waitUntil(() => cameraManager.properties.get(camera)?.SIMULATOR_CATALOG_SOURCE?.elements.CENTERED.value === true)
+
+		// The shutter opens on A, and the telescope is switched under it before the camera has noticed
+		// the exposure finished.
+		cameraSimulator.startExposure(0.001)
+		cameraManager.snoop(camera, mountB)
+		await waitUntil(() => cameraManager.properties.get(camera)?.ACTIVE_DEVICES?.elements.ACTIVE_TELESCOPE.value === second.name)
+
+		await waitUntil(() => frameReceiver.length > 0, 10000, 20)
+		const frame = await readImageFromBuffer(frameReceiver.lastFrame)
+		const [x, y] = brightestPixel(frame!.raw, frame!.header.NAXIS1 as number, frame!.metadata.channels)
+
+		// Looking the mount up again at render time drew B's trajectory around A's catalog centre, which
+		// is fifteen degrees of offset and throws the star clean off the sensor.
+		expect(Math.abs(x - (1280 - 1) * 0.5)).toBeLessThan(5)
+		expect(Math.abs(y - (1024 - 1) * 0.5)).toBeLessThan(5)
+	}, 15000)
+
 	test('integrates the interval the shutter was open, not the one before the frame arrived', async () => {
 		const handler = new IndiClientHandlerSet()
 		const mountManager = new MountManager()

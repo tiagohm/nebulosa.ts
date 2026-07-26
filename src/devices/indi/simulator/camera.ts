@@ -63,6 +63,11 @@ interface ExposureContext {
 	readonly center: readonly [Angle, Angle] | undefined
 	// Epoch that coordinate belongs to, and the one every conversion into J2000 uses.
 	readonly time: Time
+	// Mount the exposure was taken through, or undefined when there was none. Held rather than looked up
+	// again, because the snooped telescope can be changed, or disconnected, while the shutter is open:
+	// the frame would then be drawn from one mount's trajectory around another mount's centre, or fall
+	// back to a still field, and either way stop describing the exposure.
+	readonly simulator?: MountSimulator
 }
 
 // Camera simulator options: star catalog sources plus the related device managers used to read the
@@ -533,7 +538,8 @@ export class CameraSimulator extends DeviceSimulator {
 		// The frame belongs to the sky the shutter was open on: where the mount reported it was pointing
 		// then, the epoch that coordinate belongs to, and when on the simulated clock it began. Read at
 		// render time instead, all three describe wherever the mount has got to since.
-		this.#exposureContext = { startTime: this.activeMountSimulator?.utcTime ?? Date.now(), exposureTime: duration, center: this.reportedCenter, time: this.sceneTime }
+		const simulator = this.activeMountSimulator
+		this.#exposureContext = { startTime: simulator?.utcTime ?? Date.now(), exposureTime: duration, center: this.reportedCenter, time: this.sceneTime, simulator }
 		this.#exposure.state = 'Busy'
 		this.#exposure.elements.CCD_EXPOSURE_VALUE.value = duration
 		this.#image.state = 'Busy'
@@ -694,7 +700,8 @@ export class CameraSimulator extends DeviceSimulator {
 		// Taken over here, before the exposure is marked complete and a client is free to start the next
 		// one: what follows describes this frame and must not be overwritten by the one after it. The
 		// fallback covers a frame rendered without a shutter, which has nothing but the present.
-		const exposure: ExposureContext = this.#exposureContext ?? { startTime: this.activeMountSimulator?.utcTime ?? Date.now(), exposureTime, center: this.reportedCenter, time: this.sceneTime }
+		const simulator = this.activeMountSimulator
+		const exposure: ExposureContext = this.#exposureContext ?? { startTime: simulator?.utcTime ?? Date.now(), exposureTime, center: this.reportedCenter, time: this.sceneTime, simulator }
 		this.#exposureContext = undefined
 
 		try {
@@ -1141,7 +1148,7 @@ export class CameraSimulator extends DeviceSimulator {
 		// are both taken into J2000, and doing that at two instants would rotate one against the other —
 		// and reusing one `Time` computes the precession-nutation matrix once for every conversion.
 		const offsets = this.#exposureOffsets(arcsec(pixelScale(CAMERA_PIXEL_SIZE, this.telescopeFocalLength)), exposure)
-		const stars = await this.#ensureCatalog(exposureTravel(offsets), center, time)
+		const stars = await this.#ensureCatalog(exposureTravel(offsets), exposure)
 		const frameX = this.#frame.elements.X.value
 		const frameY = this.#frame.elements.Y.value
 		const frameWidth = this.#frame.elements.WIDTH.value
@@ -1234,7 +1241,8 @@ export class CameraSimulator extends DeviceSimulator {
 	// of date. Passed in rather than read here, so that a caller which also converts the trajectory into
 	// pixels uses one coordinate for both and the exposure cannot straddle a change of the mount's
 	// position between the two readings.
-	async #ensureCatalog(travel: number = 0, center: readonly [Angle, Angle] | undefined = this.reportedCenter, time: Time) {
+	async #ensureCatalog(travel: number, exposure: ExposureContext) {
+		const { center, time, simulator } = exposure
 		let centerRightAscension = center?.[0]
 		let centerDeclination = center?.[1]
 
@@ -1246,7 +1254,7 @@ export class CameraSimulator extends DeviceSimulator {
 		// Sized from the configured pointing error and from how far the field travelled during the
 		// exposure, so a shifted or trailed field still finds stars on its leading edge. It takes part in
 		// the cache key because changing it changes the generated scene.
-		const margin = this.#sceneMargin(ps, travel)
+		const margin = this.#sceneMargin(ps, travel, simulator)
 		const radius = Math.hypot(this.sensorWidth + 2 * margin, this.sensorHeight + 2 * margin) * ps * 0.5
 		const key = this.#makeCatalogKey(centerRightAscension, centerDeclination, radius, margin)
 		if (this.#catalog && !this.#catalogDirty && this.#catalogKey === key) return this.#catalog
@@ -1386,9 +1394,9 @@ export class CameraSimulator extends DeviceSimulator {
 	//
 	// `pixelScale` is radians per unbinned pixel; the result is capped by CAMERA_MAX_SCENE_MARGIN to
 	// keep the star count bounded.
-	#sceneMargin(pixelScale: Angle, travel: number = 0) {
+	#sceneMargin(pixelScale: Angle, travel: number, simulator: MountSimulator | undefined) {
 		if (pixelScale <= 0) return 0
-		const bound = this.activeMountSimulator?.pointingErrorBound ?? 0
+		const bound = simulator?.pointingErrorBound ?? 0
 		const margin = (bound > 0 ? Math.ceil(bound / pixelScale) : 0) + Math.ceil(Math.max(0, travel))
 		return margin > 0 ? Math.min(CAMERA_MAX_SCENE_MARGIN, margin) : 0
 	}
@@ -1420,8 +1428,7 @@ export class CameraSimulator extends DeviceSimulator {
 	// exposure accepted in the meantime reaches this method and would otherwise overwrite the offsets
 	// the first frame is still waiting to be drawn with.
 	#exposureOffsets(pixelScale: Angle, exposure: ExposureContext) {
-		const { startTime, exposureTime, center, time } = exposure
-		const simulator = this.activeMountSimulator
+		const { startTime, exposureTime, center, time, simulator } = exposure
 		if (simulator === undefined || center === undefined) return NO_EXPOSURE_OFFSET
 
 		// Anchored to when the shutter opened, not measured back from now. The camera notices completion
