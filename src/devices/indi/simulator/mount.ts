@@ -1213,8 +1213,13 @@ export class MountSimulator extends DeviceSimulator {
 		if (!target) return [0, 0]
 
 		const speed = this.#manualSlewSpeed() * SLEW_SPEED_FACTOR
-		const deltaRightAscension = normalizePI(target.rightAscension - this.rightAscension)
-		const deltaDeclination = target.declination - this.declination
+		// Measured from the axes, not from the reported coordinate. The target was converted into a
+		// mechanical orientation when the slew was commanded, so comparing it against what the
+		// controller reports mixes the two sides of the encoder index error: a goto to the coordinate
+		// already being reported would come back with a non-zero rate and spin the worm while
+		// `#advanceSlew`, which does use the axes, correctly finds nothing to travel.
+		const deltaRightAscension = normalizePI(target.rightAscension - this.#mechanical.rightAscension)
+		const deltaDeclination = target.declination - this.#mechanical.declination
 		const span = Math.max(Math.abs(deltaRightAscension), Math.abs(deltaDeclination))
 		if (span === 0) return [0, 0]
 

@@ -419,6 +419,31 @@ describe('mount simulator pointing errors', () => {
 		}
 	})
 
+	test('leaves the worm alone on a goto to the coordinate already reported', () => {
+		const { client, mount } = makeMount('mount.slew.noop', 'ALIGNMENT', 'PERIODIC_ERROR')
+
+		try {
+			client.sendNumber({ device: mount.name, name: 'MOUNT_ALIGNMENT', elements: { ...NO_ALIGNMENT, RA_INDEX_ERROR: 600, DEC_INDEX_ERROR: 600 } })
+			client.sendNumber({ device: mount.name, name: 'MOUNT_PERIODIC_ERROR', elements: { ...NO_PERIODIC_ERROR, RA_PERIOD: 480, RA_AMPLITUDE: 8 } })
+
+			const mechanical = { ...mount.mechanical }
+			const phase = mount.wormPhase
+
+			// The target is converted into a mechanical orientation when commanded, so a goto to the
+			// coordinate the controller is already reporting has nothing to travel. Measuring the slew
+			// rate against the reported coordinate instead would report a rate of its own and spin the
+			// worm through a slew that never moves an axis.
+			mount.goTo(mount.rightAscension, mount.declination)
+			mount.advance(1)
+
+			expect(mount.mechanical.rightAscension).toBeCloseTo(mechanical.rightAscension, 12)
+			expect(mount.mechanical.declination).toBeCloseTo(mechanical.declination, 12)
+			expect(mount.wormPhase).toBe(phase)
+		} finally {
+			mount.dispose()
+		}
+	})
+
 	test('re-derives the reported coordinate when the encoder index errors change', () => {
 		const { client, mount } = makeMount('mount.features.index', 'ALIGNMENT')
 
