@@ -149,6 +149,192 @@ function segmentLength(rightAscensionA: Angle, declinationA: Angle, rightAscensi
 	return Math.hypot(deltaRightAscension, deltaDeclination)
 }
 
+// Samples `count` boresight positions across `[startTime, endTime]`, spaced by equal path length
+// rather than by equal time, writing right ascension, declination and weight triples into `out`.
+//
+// Spacing them evenly in time resolves the trail only where the motion is evenly spread. A dither, a
+// guide correction or any brief out-and-back excursion inside a long exposure falls between uniform
+// samples, so the trail it left is missing from the frame however many samples were asked for; placing
+// the samples along the path instead puts them where the motion is, by construction.
+//
+// The weight is the share of the exposure the boresight spent within the stretch of path that sample
+// stands for, and the weights sum to one. It is what keeps the photometry right once the samples are
+// no longer evenly spaced: a trail is brighter where the mount lingered, and an excursion it spent a
+// moment on is faint. A consumer must scale each sample's flux by it rather than dividing the total by
+// the sample count.
+//
+// A single sample is taken at the midpoint of the interval and carries the whole weight. Returns the
+// number of triples written, which is 0 when the history is empty or `out` is too small.
+export function sampleBoresightPath(history: BoresightHistory, startTime: number, endTime: number, count: number, out: Float64Array) {
+	const samples = Math.max(1, Math.trunc(count))
+	if (history.count === 0 || out.length < samples * 3) return 0
+
+	const pair: [Angle, Angle] = [0, 0]
+
+	if (samples === 1) {
+		sampleBoresightAt(history, (startTime + endTime) / 2, pair)
+		out[0] = pair[0]
+		out[1] = pair[1]
+		out[2] = 1
+		return 1
+	}
+
+	const span = endTime - startTime
+	const total = boresightPathLength(history, startTime, endTime)
+
+	// The times are laid down first, in the slot the weight will take, because the positions are read
+	// from them and the weights are then measured along the path rather than from the times at all.
+	if (total > 0) markEqualPathTimes(history, startTime, endTime, samples, total, out)
+	else for (let i = 0; i < samples; i++) out[i * 3 + 2] = startTime + (span / (samples - 1)) * i
+
+	for (let i = 0; i < samples; i++) {
+		sampleBoresightAt(history, out[i * 3 + 2], pair)
+		out[i * 3] = pair[0]
+		out[i * 3 + 1] = pair[1]
+		out[i * 3 + 2] = 0
+	}
+
+	if (total > 0 && span > 0) {
+		accumulatePathDwell(history, startTime, endTime, samples, total, out)
+		for (let i = 0; i < samples; i++) out[i * 3 + 2] /= span
+	} else {
+		for (let i = 0; i < samples; i++) out[i * 3 + 2] = 1 / samples
+	}
+
+	return samples
+}
+
+// Adds to `out[i * 3 + 2]` the time, in milliseconds, that the boresight spent within the stretch of
+// path that sample i stands for, which is the half step of arc length on either side of it.
+//
+// Time, not arc length, because that is what an exposure integrates: a field resting at one end of a
+// trail deposits light there for as long as it rests, however short the path around that point is.
+// Dividing the interval up by the sample times instead would hand each of the two long stationary
+// stretches half of its duration to the sample at the far end of it — a dither lasting one per cent of
+// an exposure came out a quarter as bright as the star itself.
+//
+// Within one recorded segment the boresight moves at a constant rate, so its duration is split between
+// the stretches it crosses in proportion to the arc in each; a segment that does not move at all
+// deposits its whole duration on the stretch it sits in.
+function accumulatePathDwell(history: BoresightHistory, startTime: number, endTime: number, samples: number, total: number, out: Float64Array) {
+	const pair: [Angle, Angle] = [0, 0]
+	sampleBoresightAt(history, startTime, pair)
+
+	const step = total / (samples - 1)
+	let previousRightAscension = pair[0]
+	let previousDeclination = pair[1]
+	let segmentStartTime = startTime
+	let travelled = 0
+
+	for (let i = 0; i <= history.count; i++) {
+		let time: number
+		let rightAscension: Angle
+		let declination: Angle
+
+		if (i === history.count) {
+			time = endTime
+			sampleBoresightAt(history, endTime, pair)
+			rightAscension = pair[0]
+			declination = pair[1]
+		} else {
+			const index = physicalIndex(history, i)
+			time = history.times[index]
+			if (time <= segmentStartTime || time >= endTime) continue
+			rightAscension = history.rightAscensions[index]
+			declination = history.declinations[index]
+		}
+
+		const length = segmentLength(previousRightAscension, previousDeclination, rightAscension, declination)
+		const duration = time - segmentStartTime
+
+		if (duration > 0) {
+			if (length > 0) {
+				const end = travelled + length
+				let arc = travelled
+
+				while (arc < end) {
+					const index = dwellIndex(arc, step, samples)
+					const boundary = Math.min(end, (index + 0.5) * step)
+					// Never below `arc`, so a stretch boundary landing exactly on it cannot stall the walk.
+					const next = boundary > arc ? boundary : Math.min(end, arc + step * 0.5)
+					out[index * 3 + 2] += (duration * (next - arc)) / length
+					arc = next
+				}
+			} else {
+				out[dwellIndex(travelled, step, samples) * 3 + 2] += duration
+			}
+		}
+
+		travelled += length
+		previousRightAscension = rightAscension
+		previousDeclination = declination
+		segmentStartTime = time
+	}
+}
+
+// Sample whose stretch of path contains the arc length `travelled`, given a spacing of `step` and
+// `samples` samples. The stretches meet halfway between neighbours, so the nearest sample owns it.
+function dwellIndex(travelled: number, step: number, samples: number) {
+	return Math.min(samples - 1, Math.max(0, Math.round(travelled / step)))
+}
+
+// Writes into `out[i * 3 + 2]` the times at which the boresight had travelled i/(samples - 1) of
+// `total`, walking the recorded samples of `[startTime, endTime]` once.
+//
+// The history interpolates linearly between samples, so time runs linearly along each segment and the
+// crossing is found by proportion within it. Targets left unreached by rounding are clamped to the end
+// of the interval, where they take a zero weight and change nothing.
+function markEqualPathTimes(history: BoresightHistory, startTime: number, endTime: number, samples: number, total: number, out: Float64Array) {
+	const pair: [Angle, Angle] = [0, 0]
+	sampleBoresightAt(history, startTime, pair)
+
+	const step = total / (samples - 1)
+	let previousRightAscension = pair[0]
+	let previousDeclination = pair[1]
+	let segmentStartTime = startTime
+	let travelled = 0
+	let target = 1
+
+	out[2] = startTime
+
+	for (let i = 0; i <= history.count; i++) {
+		let time: number
+		let rightAscension: Angle
+		let declination: Angle
+
+		// The last pass closes the walk on the end of the interval rather than on a recorded sample.
+		if (i === history.count) {
+			time = endTime
+			sampleBoresightAt(history, endTime, pair)
+			rightAscension = pair[0]
+			declination = pair[1]
+		} else {
+			const index = physicalIndex(history, i)
+			time = history.times[index]
+			if (time <= segmentStartTime) continue
+			if (time >= endTime) continue
+			rightAscension = history.rightAscensions[index]
+			declination = history.declinations[index]
+		}
+
+		const length = segmentLength(previousRightAscension, previousDeclination, rightAscension, declination)
+
+		while (target < samples - 1 && travelled + length >= target * step) {
+			const fraction = length > 0 ? (target * step - travelled) / length : 0
+			out[target * 3 + 2] = segmentStartTime + (time - segmentStartTime) * fraction
+			target++
+		}
+
+		travelled += length
+		previousRightAscension = rightAscension
+		previousDeclination = declination
+		segmentStartTime = time
+	}
+
+	while (target < samples - 1) out[target++ * 3 + 2] = endTime
+	out[(samples - 1) * 3 + 2] = endTime
+}
+
 // Samples `count` boresight positions evenly across `[startTime, endTime]`, writing them into `out` as
 // consecutive right ascension and declination pairs.
 //

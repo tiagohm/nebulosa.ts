@@ -21,7 +21,7 @@ import { type GuidePulse, type GuideResponseConfig, IDENTITY_GUIDE_RESPONSE_CONF
 // oxfmt-ignore
 import { IDENTITY_PERIODIC_ERROR_CURVE, PERIODIC_ERROR_HARMONICS, periodicErrorAt, periodicErrorBound, type PeriodicErrorCurve, trainPeriodicErrorCorrection } from './mount.periodic'
 import { advanceSettling, exciteSettling, IDENTITY_SETTLING_CONFIG, resetSettling, type SettlingConfig, settlingState } from './mount.settling'
-import { boresightHistory, boresightPathLength, clearBoresightHistory, recordBoresightSample, sampleBoresightTrajectory } from './mount.trajectory'
+import { boresightHistory, boresightPathLength, clearBoresightHistory, recordBoresightSample, sampleBoresightPath, sampleBoresightTrajectory } from './mount.trajectory'
 import { advanceWind, IDENTITY_WIND_CONFIG, resetWind, type WindConfig, windState } from './mount.wind'
 // oxfmt-ignore
 import { advanceTrackingRateError, IDENTITY_TRACKING_RATE_ERROR_CONFIG, resetTrackingRateError, TRACKING_RATE_CALIBRATION_TEMPERATURE, type TrackingRateErrorConfig, trackingRateErrorState } from './mount.tracking'
@@ -495,6 +495,17 @@ export class MountSimulator extends DeviceSimulator {
 	// Returns 0 when nothing has been recorded yet, which is the case until the first tick.
 	sampleBoresightTrajectory(startTime: number, endTime: number, count: number, out: Float64Array) {
 		return sampleBoresightTrajectory(this.#boresightHistory, startTime, endTime, count, out)
+	}
+
+	// Samples where the optical axis pointed across `[startTime, endTime]`, both milliseconds on the
+	// simulated clock, spacing `count` samples by equal path length rather than by equal time and
+	// writing right ascension, declination and time-weight triples into `out`.
+	//
+	// This is what an exposure integrates over: the samples land where the motion is, so a brief
+	// excursion is drawn rather than falling between them, and each carries its own share of the
+	// exposure time so that the trail is bright where the mount lingered. Returns how many were written.
+	sampleBoresightPath(startTime: number, endTime: number, count: number, out: Float64Array) {
+		return sampleBoresightPath(this.#boresightHistory, startTime, endTime, count, out)
 	}
 
 	// Length of the path the optical axis swept across `[startTime, endTime]`, radians on the sky, both

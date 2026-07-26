@@ -32,18 +32,18 @@ import { applyExclusiveSwitchValues, applyMultiSwitchValues, applyNumberVectorVa
 
 // Simulated astronomical camera acquisition, cooling, guiding, and synthetic image generation.
 
-// A single, stationary trajectory sample at the origin. Used when there is no simulated mount to
-// integrate over, so the rendering path always has exactly one offset pair to work with.
-const NO_EXPOSURE_OFFSET = new Float64Array(2)
+// A single, stationary trajectory sample at the origin, carrying the whole exposure. Used when there
+// is no simulated mount to integrate over, so the rendering path always has exactly one sample.
+const NO_EXPOSURE_OFFSET = new Float64Array([0, 0, 1])
 
 // Furthest the field strayed from the catalog centre over an exposure, in unbinned pixels.
 //
-// `offsets` holds consecutive x and y pairs. The largest magnitude rather than the total path length,
-// since what a scene margin has to cover is how far off centre the field ever got, not how far it
-// travelled getting there and back.
+// `offsets` holds consecutive x, y and weight triples. The largest magnitude rather than the total
+// path length, since what a scene margin has to cover is how far off centre the field ever got, not
+// how far it travelled getting there and back.
 function exposureTravel(offsets: Readonly<Float64Array>) {
 	let travel = 0
-	for (let i = 0; i < offsets.length; i += 2) travel = Math.max(travel, Math.hypot(offsets[i], offsets[i + 1]))
+	for (let i = 0; i < offsets.length; i += 3) travel = Math.max(travel, Math.hypot(offsets[i], offsets[i + 1]))
 	return travel
 }
 
@@ -190,7 +190,7 @@ export class CameraSimulator extends DeviceSimulator {
 	#pulseWestEastUntil = 0
 	// Scratch for the exposure trajectory, reused across frames: it holds boresight pairs first and the
 	// pixel offsets they convert to afterwards, so a rendering allocates nothing for it.
-	readonly #trajectoryBuffer = new Float64Array(MAX_TRAJECTORY_SAMPLES * 2)
+	readonly #trajectoryBuffer = new Float64Array(MAX_TRAJECTORY_SAMPLES * 3)
 	readonly #trajectoryOffset: Point = { x: 0, y: 0 }
 
 	readonly #mountManager?: MountManager
@@ -1127,10 +1127,13 @@ export class CameraSimulator extends DeviceSimulator {
 		const annularPaddingY = annularRadius + annularSoftness * Math.sqrt(binY / binX)
 		const aberrationResult: SyntheticStarAberration = { defocus: 0, focusOffset: 0, covarianceXX: 0, covarianceXY: 0, covarianceYY: 0, coma: 0, comaTheta: 0 }
 
-		const sampleCount = offsets.length / 2
-		// Splitting a star across the trajectory must not create light: each sample carries its share of
-		// the total, so the integrated flux is the same whether the field moved or stood still.
-		const sampleFlux = (gainFactor * exposureScale) / sampleCount
+		const sampleCount = offsets.length / 3
+		// Splitting a star across the trajectory must not create light: each sample carries the share of
+		// the exposure its own position was held for, and those shares sum to one, so the integrated flux
+		// is the same whether the field moved or stood still. Weighted rather than divided evenly because
+		// the samples are spaced along the path and not in time: a trail is brighter where the mount
+		// lingered than where it swung through.
+		const sampleFlux = gainFactor * exposureScale
 		const sampleSnr = Math.sqrt(Math.max(exposureScale, 0.01))
 
 		for (let i = 0; i < stars.length; i++) {
@@ -1139,8 +1142,11 @@ export class CameraSimulator extends DeviceSimulator {
 			if (star === undefined) continue
 
 			for (let sample = 0; sample < sampleCount; sample++) {
-				let sensorX = star.x + offsets[sample * 2]
-				let sensorY = star.y + offsets[sample * 2 + 1]
+				const weight = offsets[sample * 3 + 2]
+				if (weight <= 0) continue
+
+				let sensorX = star.x + offsets[sample * 3]
+				let sensorY = star.y + offsets[sample * 3 + 1]
 
 				if (rotate) {
 					const dx = sensorX - centerX
@@ -1156,7 +1162,7 @@ export class CameraSimulator extends DeviceSimulator {
 				const projectedStar: AstronomicalImageStar = {
 					x: (sensorX - frameX) / binX,
 					y: (sensorY - frameY) / binY,
-					flux: star.flux * sampleFlux,
+					flux: star.flux * sampleFlux * weight,
 					hfd: star.hfd,
 					// Not divided by the sample count: the signal-to-noise ratio sets the width of the
 					// point spread function, not how much light it carries.
@@ -1352,11 +1358,17 @@ export class CameraSimulator extends DeviceSimulator {
 	// Where the field sat, in unbinned sensor pixels relative to the catalog centre, at each instant the
 	// exposure is integrated over.
 	//
-	// Returns pairs of x and y offsets. A field that barely moves gets a single pair, taken at the
-	// middle of the exposure; one that drifts or trails gets enough pairs to keep consecutive positions
-	// within TRAJECTORY_PIXELS_PER_SAMPLE of each other, so the trail comes out continuous rather than
-	// as a row of separate dots. Without a simulated mount there is nothing to integrate and the single
-	// pair is zero.
+	// Returns triples of x, y and the share of the exposure time that position carries. A field that
+	// barely moves gets a single triple, taken at the middle of the exposure and carrying all of it; one
+	// that drifts or trails gets enough of them to keep consecutive positions within
+	// TRAJECTORY_PIXELS_PER_SAMPLE of each other, so the trail comes out continuous rather than as a row
+	// of separate dots. Without a simulated mount there is nothing to integrate and the single triple is
+	// the stationary origin.
+	//
+	// The positions are spaced along the recorded path rather than evenly in time, so that a dither or a
+	// guide correction lasting a fraction of a long exposure is drawn instead of falling between
+	// samples, and each carries its own share of the exposure so the photometry survives the uneven
+	// spacing: the trail is bright where the mount lingered and faint where it hurried through.
 	//
 	// The sample count is decided from the length of the path the mount actually recorded, not from the
 	// endpoints and not from a probe grid of this method's own choosing. A periodic error can swing well
@@ -1380,14 +1392,15 @@ export class CameraSimulator extends DeviceSimulator {
 		// which is what decides how many positions the trail has to be drawn from.
 		const length = simulator.boresightPathLength(startTime, endTime) / pixelScale
 		const count = clamp(Math.ceil(length / TRAJECTORY_PIXELS_PER_SAMPLE) + 1, 1, MAX_TRAJECTORY_SAMPLES)
-		const samples = simulator.sampleBoresightTrajectory(startTime, endTime, count, this.#trajectoryBuffer)
+		const samples = simulator.sampleBoresightPath(startTime, endTime, count, this.#trajectoryBuffer)
 		if (samples === 0) return NO_EXPOSURE_OFFSET
-		return this.#trajectoryToOffsets(center, pixelScale, samples, time).slice(0, samples * 2)
+		return this.#trajectoryToOffsets(center, pixelScale, samples, time).slice(0, samples * 3)
 	}
 
 	// Converts the boresight samples held in the trajectory buffer into field offsets in pixels, in
 	// place. Each offset is measured against `center`, the reported coordinate the catalog was built
-	// around, in radians of the equatorial frame of date, at the instant `time`.
+	// around, in radians of the equatorial frame of date, at the instant `time`. The weight in the third
+	// slot of each triple is left untouched.
 	//
 	// Taken into the J2000 tangent plane the scene is drawn in, since leaving them in the frame of date
 	// rotates the trail against the stars it runs through; `boresightOffsetInPixels` documents by how
@@ -1397,12 +1410,12 @@ export class CameraSimulator extends DeviceSimulator {
 		const offset = this.#trajectoryOffset
 
 		for (let i = 0; i < count; i++) {
-			if (boresightOffsetInPixels(center[0], center[1], buffer[i * 2], buffer[i * 2 + 1], pixelScale, time, offset)) {
-				buffer[i * 2] = offset.x
-				buffer[i * 2 + 1] = offset.y
+			if (boresightOffsetInPixels(center[0], center[1], buffer[i * 3], buffer[i * 3 + 1], pixelScale, time, offset)) {
+				buffer[i * 3] = offset.x
+				buffer[i * 3 + 1] = offset.y
 			} else {
-				buffer[i * 2] = 0
-				buffer[i * 2 + 1] = 0
+				buffer[i * 3] = 0
+				buffer[i * 3 + 1] = 0
 			}
 		}
 

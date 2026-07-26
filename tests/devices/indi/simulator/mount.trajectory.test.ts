@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { boresightHistory, boresightHistorySpan, boresightPathLength, clearBoresightHistory, recordBoresightSample, sampleBoresightAt, sampleBoresightTrajectory } from '../../../../src/devices/indi/simulator/mount.trajectory'
+import { boresightHistory, boresightHistorySpan, boresightPathLength, sampleBoresightPath, clearBoresightHistory, recordBoresightSample, sampleBoresightAt, sampleBoresightTrajectory } from '../../../../src/devices/indi/simulator/mount.trajectory'
 import { deg, hour, normalizePI, toDeg } from '../../../../src/math/units/angle'
 
 // Unit coverage for the rolling boresight history: ring wrap, interpolation, clamping outside the
@@ -172,5 +172,80 @@ describe('boresight path length', () => {
 
 		// Nothing is known before or after the window, so the extra time adds no path.
 		expect(toDeg(boresightPathLength(history, 0, 3000))).toBeCloseTo(1, 6)
+	})
+})
+
+describe('boresight path sampling', () => {
+	// A field that sits still for a second, darts half a degree away and back over twenty milliseconds,
+	// then sits still for another second. The excursion is 1% of the interval and all of the motion.
+	function dithering() {
+		const history = boresightHistory(16)
+		recordBoresightSample(history, 0, deg(10), deg(0))
+		recordBoresightSample(history, 1000, deg(10), deg(0))
+		recordBoresightSample(history, 1010, deg(10.5), deg(0))
+		recordBoresightSample(history, 1020, deg(10), deg(0))
+		recordBoresightSample(history, 2000, deg(10), deg(0))
+		return history
+	}
+
+	test('refuses to write past the end of the output', () => {
+		expect(sampleBoresightPath(dithering(), 0, 2000, 5, new Float64Array(14))).toBe(0)
+		expect(sampleBoresightPath(boresightHistory(4), 0, 2000, 5, new Float64Array(15))).toBe(0)
+	})
+
+	test('gives a single sample the whole exposure, at the middle of it', () => {
+		const out = new Float64Array(3)
+		expect(sampleBoresightPath(dithering(), 0, 2000, 1, out)).toBe(1)
+		expect(toDeg(out[0])).toBeCloseTo(10, 9)
+		expect(out[2]).toBe(1)
+	})
+
+	test('places the samples on the motion rather than on the clock', () => {
+		const out = new Float64Array(15)
+		expect(sampleBoresightPath(dithering(), 0, 2000, 5, out)).toBe(5)
+
+		// Spaced evenly along the path, so the excursion is drawn: a quarter of the way along it, at its
+		// far point, and a quarter of the way back. Sampling evenly in time would have put every one of
+		// these on the resting position and rendered a star that never moved.
+		expect(toDeg(out[3])).toBeCloseTo(10.25, 6)
+		expect(toDeg(out[6])).toBeCloseTo(10.5, 6)
+		expect(toDeg(out[9])).toBeCloseTo(10.25, 6)
+
+		// The endpoints are still the ends of the interval, where the field was at rest.
+		expect(toDeg(out[0])).toBeCloseTo(10, 9)
+		expect(toDeg(out[12])).toBeCloseTo(10, 9)
+	})
+
+	test('weights each sample by the share of the exposure it was held for', () => {
+		const out = new Float64Array(15)
+		sampleBoresightPath(dithering(), 0, 2000, 5, out)
+
+		let total = 0
+		for (let i = 0; i < 5; i++) total += out[i * 3 + 2]
+		expect(total).toBeCloseTo(1, 12)
+
+		// The mount spent 1% of the exposure on the excursion, so its samples are faint and the two
+		// resting positions carry almost all of the light. Weighting them equally would have painted a
+		// dither as bright as the star.
+		expect(out[8]).toBeLessThan(0.01)
+		expect(out[2] + out[14]).toBeGreaterThan(0.98)
+	})
+
+	test('falls back to even times for a field that never moved', () => {
+		const history = boresightHistory(8)
+		recordBoresightSample(history, 0, deg(10), deg(20))
+		recordBoresightSample(history, 2000, deg(10), deg(20))
+
+		const out = new Float64Array(9)
+		expect(sampleBoresightPath(history, 0, 2000, 3, out)).toBe(3)
+
+		let total = 0
+
+		for (let i = 0; i < 3; i++) {
+			expect(toDeg(out[i * 3])).toBeCloseTo(10, 9)
+			total += out[i * 3 + 2]
+		}
+
+		expect(total).toBeCloseTo(1, 12)
 	})
 })
