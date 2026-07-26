@@ -22,7 +22,7 @@ import type { FocuserManager, GuideOutputManager, MountManager, RotatorManager, 
 import { findOnSwitch, makeBlobVector, makeNumberVector, makeSwitchVector, makeTextVector, type NewNumberVector, type NewSwitchVector, type NewTextVector } from '../types'
 import type { ClientSimulator } from './client'
 // oxfmt-ignore
-import { CAMERA_AMBIENT_TEMPERATURE, CAMERA_BLOB_PADDING, CAMERA_DEFAULT_TARGET_TEMPERATURE, CAMERA_MAX_BIN, CAMERA_MAX_EXPOSURE, CAMERA_MAX_SCENE_MARGIN, CAMERA_MIN_EXPOSURE, CAMERA_PIXEL_SIZE, CAMERA_SCENE_SEED, CAMERA_SENSOR_HEIGHT, CAMERA_SENSOR_WIDTH, GENERAL_INFO, MAIN_CONTROL, MAX_TRAJECTORY_SAMPLES, SIMULATION, TICK_INTERVAL_MS, TRAJECTORY_PIXELS_PER_SAMPLE, TRAJECTORY_PROBE_SAMPLES } from './constants'
+import { CAMERA_AMBIENT_TEMPERATURE, CAMERA_BLOB_PADDING, CAMERA_DEFAULT_TARGET_TEMPERATURE, CAMERA_MAX_BIN, CAMERA_MAX_EXPOSURE, CAMERA_MAX_SCENE_MARGIN, CAMERA_MIN_EXPOSURE, CAMERA_PIXEL_SIZE, CAMERA_SCENE_SEED, CAMERA_SENSOR_HEIGHT, CAMERA_SENSOR_WIDTH, GENERAL_INFO, MAIN_CONTROL, MAX_TRAJECTORY_SAMPLES, SIMULATION, TICK_INTERVAL_MS, TRAJECTORY_PIXELS_PER_SAMPLE } from './constants'
 import { DeviceSimulator } from './device'
 import { FocuserSimulator } from './focuser'
 import { MountSimulator } from './mount'
@@ -1327,8 +1327,11 @@ export class CameraSimulator extends DeviceSimulator {
 	// as a row of separate dots. Without a simulated mount there is nothing to integrate and the single
 	// pair is zero.
 	//
-	// The sample count is decided from a coarse probe of the trajectory rather than from its endpoints,
-	// because a periodic error can swing well away and come back to where it started. `pixelScale` is
+	// The sample count is decided from the length of the path the mount actually recorded, not from the
+	// endpoints and not from a probe grid of this method's own choosing. A periodic error can swing well
+	// away and come back to where it started, and any evenly spaced grid can land on the same phase of
+	// it every time: an exposure spanning a whole number of worm revolutions would then measure a path
+	// of zero and render a field that crossed the sensor as if it had stood still. `pixelScale` is
 	// radians per unbinned pixel and `exposureTime` is seconds.
 	//
 	// The result is a copy rather than a view of the shared trajectory buffer. Rendering awaits the
@@ -1341,22 +1344,11 @@ export class CameraSimulator extends DeviceSimulator {
 
 		const endTime = simulator.utcTime
 		const startTime = endTime - Math.trunc(exposureTime * 1000)
-		// Probed no coarser than the trajectory was recorded, so periodic motion cannot slip between
-		// probes. A fixed grid aliases: an exposure spanning a whole number of worm revolutions lands
-		// every probe on the same phase, measures a path length of zero and renders a field that
-		// oscillated across the sensor as if it had stood still. The tick cadence is the finest the
-		// history holds, so matching it is enough, and the floor keeps short exposures exactly as before.
-		const probeCount = clamp(Math.ceil((endTime - startTime) / TICK_INTERVAL_MS) + 1, TRAJECTORY_PROBE_SAMPLES, MAX_TRAJECTORY_SAMPLES)
-		const probes = simulator.sampleBoresightTrajectory(startTime, endTime, probeCount, this.#trajectoryBuffer)
-		if (probes === 0) return NO_EXPOSURE_OFFSET
-
-		const path = this.#trajectoryToOffsets(center, pixelScale, probes)
-		let length = 0
-		for (let i = 1; i < probes; i++) length += Math.hypot(path[i * 2] - path[i * 2 - 2], path[i * 2 + 1] - path[i * 2 - 1])
-
+		// Taken from the samples the mount recorded, which are the finest the simulation ever knew, so
+		// nothing can slip between them. Divided by the pixel scale to become a length on the sensor,
+		// which is what decides how many positions the trail has to be drawn from.
+		const length = simulator.boresightPathLength(startTime, endTime) / pixelScale
 		const count = clamp(Math.ceil(length / TRAJECTORY_PIXELS_PER_SAMPLE) + 1, 1, MAX_TRAJECTORY_SAMPLES)
-		if (count === probes) return path.slice(0, probes * 2)
-
 		const samples = simulator.sampleBoresightTrajectory(startTime, endTime, count, this.#trajectoryBuffer)
 		if (samples === 0) return NO_EXPOSURE_OFFSET
 		return this.#trajectoryToOffsets(center, pixelScale, samples).slice(0, samples * 2)

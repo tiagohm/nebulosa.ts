@@ -21,7 +21,7 @@ import { type GuidePulse, type GuideResponseConfig, IDENTITY_GUIDE_RESPONSE_CONF
 // oxfmt-ignore
 import { IDENTITY_PERIODIC_ERROR_CURVE, PERIODIC_ERROR_HARMONICS, periodicErrorAt, periodicErrorBound, type PeriodicErrorCurve, trainPeriodicErrorCorrection } from './mount.periodic'
 import { advanceSettling, exciteSettling, IDENTITY_SETTLING_CONFIG, resetSettling, type SettlingConfig, settlingState } from './mount.settling'
-import { boresightHistory, clearBoresightHistory, recordBoresightSample, sampleBoresightTrajectory } from './mount.trajectory'
+import { boresightHistory, boresightPathLength, clearBoresightHistory, recordBoresightSample, sampleBoresightTrajectory } from './mount.trajectory'
 import { advanceWind, IDENTITY_WIND_CONFIG, resetWind, type WindConfig, windState } from './mount.wind'
 // oxfmt-ignore
 import { advanceTrackingRateError, IDENTITY_TRACKING_RATE_ERROR_CONFIG, resetTrackingRateError, TRACKING_RATE_CALIBRATION_TEMPERATURE, type TrackingRateErrorConfig, trackingRateErrorState } from './mount.tracking'
@@ -495,6 +495,16 @@ export class MountSimulator extends DeviceSimulator {
 	// Returns 0 when nothing has been recorded yet, which is the case until the first tick.
 	sampleBoresightTrajectory(startTime: number, endTime: number, count: number, out: Float64Array) {
 		return sampleBoresightTrajectory(this.#boresightHistory, startTime, endTime, count, out)
+	}
+
+	// Length of the path the optical axis swept across `[startTime, endTime]`, radians on the sky, both
+	// milliseconds on the simulated clock.
+	//
+	// Measured over every sample the history retains inside the window, so a consumer deciding how
+	// finely to integrate an exposure gets the real path rather than one read off a grid of its own
+	// choosing, which can alias against a periodic error and report a swinging field as a still one.
+	boresightPathLength(startTime: number, endTime: number): Angle {
+		return boresightPathLength(this.#boresightHistory, startTime, endTime)
 	}
 
 	// Optical pointing model built from the configured geometric errors: how far the boresight sits

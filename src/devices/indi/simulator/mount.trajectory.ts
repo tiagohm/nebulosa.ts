@@ -102,6 +102,53 @@ export function sampleBoresightAt(history: BoresightHistory, time: number, o: [A
 	return o
 }
 
+// Length of the path the boresight swept across `[startTime, endTime]`, radians on the sky.
+//
+// Summed over every recorded sample inside the window, plus the interpolated endpoints, rather than
+// over a grid of a fixed size. That is what makes it immune to aliasing: an evenly spaced probe can
+// land on the same phase of a periodic error every time and measure a field that oscillated across the
+// sensor as having stood still, whereas the recorded samples are the finest the simulation ever knew.
+//
+// Small-angle throughout, which holds for the arcseconds of a trail: the right-ascension difference is
+// scaled by the cosine of the declination so that the result is a length on the sky rather than in
+// coordinate units. Returns 0 when the history is empty or the interval is not positive.
+export function boresightPathLength(history: BoresightHistory, startTime: number, endTime: number): Angle {
+	if (history.count === 0 || endTime <= startTime) return 0
+
+	const pair: [Angle, Angle] = [0, 0]
+	if (sampleBoresightAt(history, startTime, pair) === undefined) return 0
+
+	let previousRightAscension = pair[0]
+	let previousDeclination = pair[1]
+	let length = 0
+
+	// Walks the retained samples in time order, taking only those strictly inside the window; the two
+	// endpoints are interpolated so a window falling between samples still measures its own share.
+	for (let i = 0; i < history.count; i++) {
+		const index = physicalIndex(history, i)
+		const time = history.times[index]
+		if (time <= startTime) continue
+		if (time >= endTime) break
+
+		const rightAscension = history.rightAscensions[index]
+		const declination = history.declinations[index]
+		length += segmentLength(previousRightAscension, previousDeclination, rightAscension, declination)
+		previousRightAscension = rightAscension
+		previousDeclination = declination
+	}
+
+	sampleBoresightAt(history, endTime, pair)
+	return length + segmentLength(previousRightAscension, previousDeclination, pair[0], pair[1])
+}
+
+// Angular distance between two nearby directions, radians, in the small-angle approximation used by
+// `boresightPathLength`. The declination of the midpoint scales the right-ascension difference.
+function segmentLength(rightAscensionA: Angle, declinationA: Angle, rightAscensionB: Angle, declinationB: Angle): Angle {
+	const deltaDeclination = declinationB - declinationA
+	const deltaRightAscension = normalizePI(rightAscensionB - rightAscensionA) * Math.cos((declinationA + declinationB) / 2)
+	return Math.hypot(deltaRightAscension, deltaDeclination)
+}
+
 // Samples `count` boresight positions evenly across `[startTime, endTime]`, writing them into `out` as
 // consecutive right ascension and declination pairs.
 //

@@ -26,11 +26,6 @@ export const GUIDE_JITTER_SEED = 0x5f3a1c27
 // minutes per leg and a window that merely spanned a typical sub-exposure truncated a third of the
 // trail.
 export const MOUNT_TRAJECTORY_CAPACITY = 8192
-// Fewest positions probed to estimate how far the field moves during an exposure, before deciding how
-// finely to integrate it. More than the two endpoints, so that a periodic error wiggling back to where
-// it started is not mistaken for a stationary field. A longer exposure is probed at the tick cadence
-// instead, since any fixed grid aliases against some worm period.
-export const TRAJECTORY_PROBE_SAMPLES = 8
 // Most positions an exposure is integrated over. Bounds the cost of a badly drifting mount, at the
 // price of under-resolving a trail longer than half this many pixels.
 //

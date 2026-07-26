@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { boresightHistory, boresightHistorySpan, clearBoresightHistory, recordBoresightSample, sampleBoresightAt, sampleBoresightTrajectory } from '../../../../src/devices/indi/simulator/mount.trajectory'
+import { boresightHistory, boresightHistorySpan, boresightPathLength, clearBoresightHistory, recordBoresightSample, sampleBoresightAt, sampleBoresightTrajectory } from '../../../../src/devices/indi/simulator/mount.trajectory'
 import { deg, hour, normalizePI, toDeg } from '../../../../src/math/units/angle'
 
 // Unit coverage for the rolling boresight history: ring wrap, interpolation, clamping outside the
@@ -124,5 +124,53 @@ describe('boresight trajectory sampling', () => {
 			expect(toDeg(out[i * 2])).toBeCloseTo(10, 9)
 			expect(toDeg(out[i * 2 + 1])).toBeCloseTo(20, 9)
 		}
+	})
+})
+
+describe('boresight path length', () => {
+	test('measures nothing without samples or over an empty interval', () => {
+		expect(boresightPathLength(boresightHistory(4), 0, 1000)).toBe(0)
+
+		const history = boresightHistory(4)
+		recordBoresightSample(history, 1000, deg(10), deg(20))
+		expect(boresightPathLength(history, 1000, 1000)).toBe(0)
+	})
+
+	test('scales the right ascension by the cosine of the declination', () => {
+		const history = boresightHistory(4)
+		recordBoresightSample(history, 0, deg(10), deg(60))
+		recordBoresightSample(history, 1000, deg(11), deg(60))
+
+		// One degree of right ascension at sixty degrees of declination is half a degree on the sky.
+		expect(toDeg(boresightPathLength(history, 0, 1000))).toBeCloseTo(0.5, 6)
+	})
+
+	test('sums the path rather than the displacement of its endpoints', () => {
+		const history = boresightHistory(8)
+		recordBoresightSample(history, 0, deg(10), deg(0))
+		recordBoresightSample(history, 1000, deg(11), deg(0))
+		recordBoresightSample(history, 2000, deg(10), deg(0))
+
+		// The field swung a degree away and came back, so the endpoints coincide and the path is two
+		// degrees. This is the case a fixed probe grid can miss entirely.
+		expect(toDeg(boresightPathLength(history, 0, 2000))).toBeCloseTo(2, 6)
+	})
+
+	test('measures only the part of the path inside the window', () => {
+		const history = boresightHistory(8)
+		recordBoresightSample(history, 0, deg(10), deg(0))
+		recordBoresightSample(history, 1000, deg(12), deg(0))
+
+		// Half of an evenly travelled interval, with both endpoints interpolated between samples.
+		expect(toDeg(boresightPathLength(history, 250, 750))).toBeCloseTo(1, 6)
+	})
+
+	test('clamps to the retained window instead of extrapolating', () => {
+		const history = boresightHistory(8)
+		recordBoresightSample(history, 1000, deg(10), deg(0))
+		recordBoresightSample(history, 2000, deg(11), deg(0))
+
+		// Nothing is known before or after the window, so the extra time adds no path.
+		expect(toDeg(boresightPathLength(history, 0, 3000))).toBeCloseTo(1, 6)
 	})
 })
