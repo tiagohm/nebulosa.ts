@@ -577,6 +577,25 @@ describe('mount simulator pointing errors', () => {
 		}
 	})
 
+	test('reads a pointing error switched on as a jump rather than as travel', () => {
+		const { client, mount } = makeMount('mount.trajectory.jump')
+
+		try {
+			// `makeMount` syncs, which reseeds the history, so the switch below lands on the very instant
+			// the trajectory begins at. The boresight moves and the clock does not.
+			client.sendSwitch({ device: mount.name, name: 'SIMULATOR_ERROR_FEATURES', elements: { ALIGNMENT: true } })
+			expect(mount.boresight.declination).not.toBe(mount.mechanical.declination)
+
+			// An exposure beginning here integrates a field that is displaced and still. Holding both
+			// positions at one timestamp made a lookup there answer with the superseded one, so the frame
+			// came out as a trail running from where the telescope used to point.
+			const startTime = mount.utcTime
+			expect(toArcsec(mount.boresightPathLength(startTime, startTime + 100))).toBeCloseTo(0, 9)
+		} finally {
+			mount.dispose()
+		}
+	})
+
 	test('records where the boresight went between two sub-millisecond steps', () => {
 		const { mount } = makeMount('mount.trajectory.subms')
 

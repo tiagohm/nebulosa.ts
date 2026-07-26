@@ -26,7 +26,23 @@ export function boresightHistory(capacity: number): BoresightHistory {
 
 // Appends a sample, overwriting the oldest once the ring is full. Callers must record in
 // non-decreasing time order, which the simulation tick guarantees.
+//
+// A sample landing on the instant already at the head replaces it rather than joining it. The history
+// is read as a function of time, and two positions under one timestamp make it ambiguous: a lookup at
+// or before that instant answered with the position that had been superseded, so an exposure beginning
+// there was drawn as a trail from where the boresight used to be. That happens whenever the optical
+// axis moves without the clock advancing, which is what switching a pointing error on does.
 export function recordBoresightSample(history: BoresightHistory, time: number, rightAscension: Angle, declination: Angle) {
+	if (history.count > 0) {
+		const newest = physicalIndex(history, history.count - 1)
+
+		if (history.times[newest] === time) {
+			history.rightAscensions[newest] = rightAscension
+			history.declinations[newest] = declination
+			return
+		}
+	}
+
 	history.times[history.head] = time
 	history.rightAscensions[history.head] = rightAscension
 	history.declinations[history.head] = declination

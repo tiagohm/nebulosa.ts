@@ -249,3 +249,23 @@ describe('boresight path sampling', () => {
 		expect(total).toBeCloseTo(1, 12)
 	})
 })
+
+describe('boresight recording', () => {
+	test('replaces the sample already held at the same instant', () => {
+		const history = boresightHistory(8)
+		recordBoresightSample(history, 1000, deg(10), deg(20))
+		recordBoresightSample(history, 1000, deg(11), deg(21))
+
+		// One instant, one position: the history is read as a function of time, and a lookup at or before
+		// a duplicated instant answered with the position that had already been superseded.
+		expect(history.count).toBe(1)
+
+		const pair: [number, number] = [0, 0]
+		sampleBoresightAt(history, 1000, pair)
+		expect(toDeg(pair[0])).toBeCloseTo(11, 9)
+		expect(toDeg(pair[1])).toBeCloseTo(21, 9)
+
+		sampleBoresightAt(history, 0, pair)
+		expect(toDeg(pair[0])).toBeCloseTo(11, 9)
+	})
+})
