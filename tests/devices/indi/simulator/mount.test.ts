@@ -1117,6 +1117,33 @@ describe('mount simulator pointing errors', () => {
 		expect(excursionAfter('mount.settling.south', deg(-10))).toBeLessThan(-5)
 	})
 
+	test('returns the axis to its target when settling is switched off mid ring-down', () => {
+		const { client, mount } = makeMount('mount.settling.disabled', 'SETTLING')
+
+		try {
+			client.sendNumber({ device: mount.name, name: 'MOUNT_SETTLING', elements: { OVERSHOOT: 30, FREQUENCY: 2, DAMPING_RATIO: 0.15 } })
+			mount.setSlewRate('SPEED_7')
+
+			const target = mount.declination + deg(10)
+			mount.goTo(mount.rightAscension, target)
+			for (let i = 0; i < 100 && mount.isSlewing; i++) mount.advance(0.01)
+
+			mount.advance(0.05)
+			expect(toArcsec(Math.abs(mount.mechanical.declination - target))).toBeGreaterThan(5)
+
+			// An oscillator only ever borrows its displacement and pays it back as it decays. Switching the
+			// family off must not keep the loan: leaving it stopped the mount at whatever instant of the
+			// overshoot the switch was thrown, permanently off the position it had been commanded to.
+			client.sendSwitch({ device: mount.name, name: 'SIMULATOR_ERROR_FEATURES', elements: { SETTLING: false } })
+			expect(toArcsec(Math.abs(mount.mechanical.declination - target))).toBeCloseTo(0, 9)
+
+			mount.advance(1)
+			expect(toArcsec(Math.abs(mount.mechanical.declination - target))).toBeCloseTo(0, 9)
+		} finally {
+			mount.dispose()
+		}
+	})
+
 	test('lands on the pole after ringing against the declination clamp', () => {
 		const { client, mount } = makeMount('mount.settling.pole', 'SETTLING')
 

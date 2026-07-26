@@ -737,6 +737,16 @@ export class MountSimulator extends DeviceSimulator {
 		if (!this.#simulatesSettling) {
 			// A ring-down in progress is likewise only frozen by an identity configuration, and would
 			// carry its old offset and velocity into whatever the mount does next.
+			//
+			// The part of the excursion already written into the coordinate has to come back out with it.
+			// An oscillator is only ever borrowing: it pays its displacement back as it decays. Dropping
+			// it while the axis was displaced left the mount stopped at whatever instant of the overshoot
+			// the switch was thrown, permanently off the position it had been commanded to, which is the
+			// opposite of what switching the family off is supposed to leave behind.
+			if (this.#appliedRightAscensionRing !== 0 || this.#appliedDeclinationRing !== 0) {
+				this.#setMechanical(this.#mechanical.rightAscension - this.#appliedRightAscensionRing, this.#mechanical.declination - this.#appliedDeclinationRing)
+			}
+
 			this.#resetSettlingState()
 		}
 	}
