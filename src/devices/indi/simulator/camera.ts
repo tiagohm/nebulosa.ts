@@ -1306,6 +1306,11 @@ export class CameraSimulator extends DeviceSimulator {
 	// The sample count is decided from a coarse probe of the trajectory rather than from its endpoints,
 	// because a periodic error can swing well away and come back to where it started. `pixelScale` is
 	// radians per unbinned pixel and `exposureTime` is seconds.
+	//
+	// The result is a copy rather than a view of the shared trajectory buffer. Rendering awaits the
+	// catalog, and an exposure is marked complete before its frame has been rendered, so a second
+	// exposure accepted in the meantime reaches this method and would otherwise overwrite the offsets
+	// the first frame is still waiting to be drawn with.
 	#exposureOffsets(pixelScale: Angle, exposureTime: number) {
 		const simulator = this.activeMountSimulator
 		if (simulator === undefined) return NO_EXPOSURE_OFFSET
@@ -1326,11 +1331,11 @@ export class CameraSimulator extends DeviceSimulator {
 		for (let i = 1; i < probes; i++) length += Math.hypot(path[i * 2] - path[i * 2 - 2], path[i * 2 + 1] - path[i * 2 - 1])
 
 		const count = clamp(Math.ceil(length / TRAJECTORY_PIXELS_PER_SAMPLE) + 1, 1, MAX_TRAJECTORY_SAMPLES)
-		if (count === probes) return path.subarray(0, probes * 2)
+		if (count === probes) return path.slice(0, probes * 2)
 
 		const samples = simulator.sampleBoresightTrajectory(startTime, endTime, count, this.#trajectoryBuffer)
 		if (samples === 0) return NO_EXPOSURE_OFFSET
-		return this.#trajectoryToOffsets(simulator, pixelScale, samples).subarray(0, samples * 2)
+		return this.#trajectoryToOffsets(simulator, pixelScale, samples).slice(0, samples * 2)
 	}
 
 	// Converts the boresight samples held in the trajectory buffer into field offsets in pixels, in

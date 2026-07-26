@@ -661,6 +661,80 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		expect(delayed[2]).toBeCloseTo(immediate[2], 6)
 	}, 20000)
 
+	test('keeps its own trajectory when a second exposure starts while the catalog is pending', async () => {
+		// An exposure is marked complete before its frame has been rendered, so a client is free to start
+		// the next one while the first is still waiting on a network-backed catalog. The second exposure
+		// then computes its own offsets, and the first must not be rendered with them.
+		async function centreOfStar(disturb: boolean, name: string) {
+			const handler = new IndiClientHandlerSet()
+			const mountManager = new MountManager()
+			const cameraManager = new CameraManager()
+			using client = new ClientSimulator(name, handler)
+			const frameReceiver = new CameraFrameReceiver()
+
+			handler.add(mountManager)
+			handler.add(cameraManager)
+			cameraManager.addHandler(frameReceiver)
+
+			let queries = 0
+
+			// Only the first query is slow, which is what leaves the first frame pending while the second
+			// exposure runs to completion.
+			const catalogProvider: CatalogSource = async (rightAscension, declination) => {
+				if (++queries === 1) await Bun.sleep(600)
+				return [{ snr: 200, hfd: 2, flux: 400, rightAscension, declination }]
+			}
+
+			using mountSimulator = new MountSimulator('Mount Simulator', client)
+			using cameraSimulator = new CameraSimulator('Camera Simulator', client, { mountManager, catalogSources: { CENTERED: catalogProvider } })
+			const mount = mountManager.get(client, mountSimulator.name)!
+			const camera = cameraManager.get(client, cameraSimulator.name)!
+
+			mountSimulator.connect()
+			cameraSimulator.connect()
+			await waitUntil(() => mount.connected && camera.connected)
+
+			mountSimulator.syncTo(hour(5), deg(20))
+			await waitUntil(() => closeTo(mount.equatorialCoordinate.declination, deg(20), 1e-9))
+
+			cameraManager.snoop(camera, mount)
+			await waitUntil(() => cameraManager.properties.get(camera)?.ACTIVE_DEVICES?.elements.ACTIVE_TELESCOPE.value === mount.name)
+
+			client.sendSwitch({ device: camera.name, name: 'SIMULATOR_NOISE_FEATURES', elements: { SKY_ENABLED: false, LIGHT_POLLUTION_ENABLED: false } })
+			client.sendSwitch({ device: camera.name, name: 'SIMULATOR_CATALOG_SOURCE', elements: { CENTERED: true } })
+			await waitUntil(() => cameraManager.properties.get(camera)?.SIMULATOR_CATALOG_SOURCE?.elements.CENTERED.value === true)
+
+			cameraSimulator.startExposure(0.05)
+			await waitUntil(() => queries > 0, 5000, 5)
+
+			if (disturb) {
+				// A second exposure taken over a long slew, so its trail sweeps the field right across the
+				// sensor and is nothing like the still field the first exposure saw.
+				mountSimulator.setSlewRate('SPEED_6')
+				mountSimulator.goTo(mountSimulator.rightAscension + deg(60), mountSimulator.declination)
+				cameraSimulator.startExposure(0.3)
+				await waitUntil(() => frameReceiver.length > 0, 5000, 10)
+			}
+
+			// The first frame resolves last, since only its query was slow.
+			await waitUntil(() => frameReceiver.length > (disturb ? 1 : 0), 10000, 50)
+			const frame = await readImageFromBuffer(frameReceiver.lastFrame)
+			const [x, y] = brightestPixel(frame!.raw, frame!.header.NAXIS1 as number, frame!.metadata.channels)
+
+			cameraSimulator.dispose()
+			mountSimulator.dispose()
+			return [x, y] as const
+		}
+
+		const alone = await centreOfStar(false, 'camera.offsets.alone')
+		const overlapped = await centreOfStar(true, 'camera.offsets.overlapped')
+
+		// Handing back a view of the shared trajectory buffer let the second exposure rewrite the first
+		// exposure's offsets under it, so the still field was drawn along the slew the second one covered.
+		expect(overlapped[0]).toBe(alone[0])
+		expect(overlapped[1]).toBe(alone[1])
+	}, 30000)
+
 	test('conserves flux and trails the stars when the field moves during the exposure', async () => {
 		const handler = new IndiClientHandlerSet()
 		const mountManager = new MountManager()
