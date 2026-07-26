@@ -178,6 +178,6 @@ describe('periodic error correction', () => {
 		expect(trainPeriodicErrorCorrection(worm, 1024, 1).correction).toHaveLength(1024)
 
 		// A count that is not a number is no instruction at all, so nothing is trained.
-		expect(trainPeriodicErrorCorrection(worm, NaN, 1).correction).toBeUndefined()
+		expect(trainPeriodicErrorCorrection(worm, Number.NaN, 1).correction).toBeUndefined()
 	})
 })
