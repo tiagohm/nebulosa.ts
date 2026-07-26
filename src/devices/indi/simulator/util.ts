@@ -1,4 +1,6 @@
+import { equatorialToJ2000 } from '../../../astronomy/coordinates/coordinate'
 import { Gnomonic } from '../../../astronomy/projections/projection'
+import type { Time } from '../../../astronomy/time/time'
 import { PIOVERTWO, TAU } from '../../../core/constants'
 import type { Point } from '../../../math/numerical/geometry'
 import { clamp } from '../../../math/numerical/math'
@@ -133,4 +135,23 @@ export function pointingOffsetInPixels(rightAscension: Angle, declination: Angle
 	o.x = -o.x / pixelScale
 	o.y = -o.y / pixelScale
 	return true
+}
+
+// Field offset in unbinned pixels of a boresight direction from the reported centre, expressed in the
+// J2000 tangent plane the synthetic scene is drawn in.
+//
+// Both directions are given in the equatorial frame of date at `time`, which is what a mount reports
+// and what its recorded trajectory holds, and both are taken into J2000 before being projected. A
+// catalog is queried and projected around the J2000 centre, so that is the frame the pixel axes belong
+// to. Precession and nutation rotate the local tangent basis as well as moving the point, so the
+// rotation does not cancel out of a difference of pixel components the way a common translation would:
+// left in the frame of date, a hundred pixels of eastward travel acquired about a quarter pixel of
+// north-south displacement in 2026, growing with the length of the trail and with the epoch.
+//
+// `pixelScale` is radians per unbinned pixel. Writes into `o` and returns whether any offset applies,
+// leaving `o` untouched when it does not.
+export function boresightOffsetInPixels(centerRightAscension: Angle, centerDeclination: Angle, rightAscension: Angle, declination: Angle, pixelScale: Angle, time: Time, o: Point) {
+	const [center, centerDec] = equatorialToJ2000(centerRightAscension, centerDeclination, time)
+	const [boresight, boresightDec] = equatorialToJ2000(rightAscension, declination, time)
+	return pointingOffsetInPixels(center, centerDec, boresight, boresightDec, pixelScale, o)
 }

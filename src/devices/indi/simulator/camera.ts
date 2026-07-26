@@ -2,6 +2,7 @@ import { equatorialToJ2000 } from '../../../astronomy/coordinates/coordinate'
 import { pixelScale } from '../../../astronomy/formulas'
 import { Gnomonic } from '../../../astronomy/projections/projection'
 import { formatTemporal } from '../../../astronomy/time/temporal'
+import { type Time, timeNow } from '../../../astronomy/time/time'
 import { DEG2RAD, PIOVERTWO, TAU } from '../../../core/constants'
 import { writeImageToFits, writeImageToXisf } from '../../../imaging/model/image'
 import type { CfaPattern, Image, ImageRawType } from '../../../imaging/model/types'
@@ -27,7 +28,7 @@ import { DeviceSimulator } from './device'
 import { FocuserSimulator } from './focuser'
 import { MountSimulator } from './mount'
 import type { CatalogSource, CatalogSourceStar, CatalogSourceType, DeviceSimulatorOptions, ReadoutMode, SimulatorProperty, TransferFormat } from './types'
-import { applyExclusiveSwitchValues, applyMultiSwitchValues, applyNumberVectorValues, pointingOffsetInPixels } from './util'
+import { applyExclusiveSwitchValues, applyMultiSwitchValues, applyNumberVectorValues, boresightOffsetInPixels } from './util'
 
 // Simulated astronomical camera acquisition, cooling, guiding, and synthetic image generation.
 
@@ -1082,9 +1083,14 @@ export class CameraSimulator extends DeviceSimulator {
 		// Read once for both, since the offsets are pixel displacements from the very centre the catalog
 		// is projected around: taking that centre twice would let the mount move between the readings and
 		// leave every star at an offset measured from somewhere the scene was not built for.
+		//
+		// The instant is shared for the same reason: the scene and the offsets are both taken into J2000,
+		// and doing that at two instants would rotate one against the other. Built once here so the
+		// precession-nutation matrix is computed once and reused by every conversion.
 		const center = this.reportedCenter
-		const offsets = this.#exposureOffsets(arcsec(pixelScale(CAMERA_PIXEL_SIZE, this.telescopeFocalLength)), exposureTime, center)
-		const stars = await this.#ensureCatalog(exposureTravel(offsets), center)
+		const time = timeNow(true)
+		const offsets = this.#exposureOffsets(arcsec(pixelScale(CAMERA_PIXEL_SIZE, this.telescopeFocalLength)), exposureTime, center, time)
+		const stars = await this.#ensureCatalog(exposureTravel(offsets), center, time)
 		const frameX = this.#frame.elements.X.value
 		const frameY = this.#frame.elements.Y.value
 		const frameWidth = this.#frame.elements.WIDTH.value
@@ -1171,12 +1177,12 @@ export class CameraSimulator extends DeviceSimulator {
 	// of date. Passed in rather than read here, so that a caller which also converts the trajectory into
 	// pixels uses one coordinate for both and the exposure cannot straddle a change of the mount's
 	// position between the two readings.
-	async #ensureCatalog(travel: number = 0, center: readonly [Angle, Angle] | undefined = this.reportedCenter) {
+	async #ensureCatalog(travel: number = 0, center: readonly [Angle, Angle] | undefined = this.reportedCenter, time: Time) {
 		let centerRightAscension = center?.[0]
 		let centerDeclination = center?.[1]
 
 		if (center !== undefined) {
-			;[centerRightAscension, centerDeclination] = equatorialToJ2000(center[0], center[1])
+			;[centerRightAscension, centerDeclination] = equatorialToJ2000(center[0], center[1], time)
 		}
 
 		const ps = arcsec(pixelScale(CAMERA_PIXEL_SIZE, this.telescopeFocalLength))
@@ -1338,7 +1344,7 @@ export class CameraSimulator extends DeviceSimulator {
 	// catalog, and an exposure is marked complete before its frame has been rendered, so a second
 	// exposure accepted in the meantime reaches this method and would otherwise overwrite the offsets
 	// the first frame is still waiting to be drawn with.
-	#exposureOffsets(pixelScale: Angle, exposureTime: number, center: readonly [Angle, Angle] | undefined = this.reportedCenter) {
+	#exposureOffsets(pixelScale: Angle, exposureTime: number, center: readonly [Angle, Angle] | undefined = this.reportedCenter, time: Time) {
 		const simulator = this.activeMountSimulator
 		if (simulator === undefined || center === undefined) return NO_EXPOSURE_OFFSET
 
@@ -1351,21 +1357,22 @@ export class CameraSimulator extends DeviceSimulator {
 		const count = clamp(Math.ceil(length / TRAJECTORY_PIXELS_PER_SAMPLE) + 1, 1, MAX_TRAJECTORY_SAMPLES)
 		const samples = simulator.sampleBoresightTrajectory(startTime, endTime, count, this.#trajectoryBuffer)
 		if (samples === 0) return NO_EXPOSURE_OFFSET
-		return this.#trajectoryToOffsets(center, pixelScale, samples).slice(0, samples * 2)
+		return this.#trajectoryToOffsets(center, pixelScale, samples, time).slice(0, samples * 2)
 	}
 
 	// Converts the boresight samples held in the trajectory buffer into field offsets in pixels, in
 	// place. Each offset is measured against `center`, the reported coordinate the catalog was built
-	// around, in radians of the equatorial frame of date.
+	// around, in radians of the equatorial frame of date, at the instant `time`.
 	//
-	// Computed in the current equatorial frame: both directions receive the same J2000 rotation, so it
-	// cancels in a difference of a few arcseconds.
-	#trajectoryToOffsets(center: readonly [Angle, Angle], pixelScale: Angle, count: number) {
+	// Taken into the J2000 tangent plane the scene is drawn in, since leaving them in the frame of date
+	// rotates the trail against the stars it runs through; `boresightOffsetInPixels` documents by how
+	// much. The shared `time` keeps every sample and the catalog centre on one rotation.
+	#trajectoryToOffsets(center: readonly [Angle, Angle], pixelScale: Angle, count: number, time: Time) {
 		const buffer = this.#trajectoryBuffer
 		const offset = this.#trajectoryOffset
 
 		for (let i = 0; i < count; i++) {
-			if (pointingOffsetInPixels(center[0], center[1], buffer[i * 2], buffer[i * 2 + 1], pixelScale, offset)) {
+			if (boresightOffsetInPixels(center[0], center[1], buffer[i * 2], buffer[i * 2 + 1], pixelScale, time, offset)) {
 				buffer[i * 2] = offset.x
 				buffer[i * 2 + 1] = offset.y
 			} else {

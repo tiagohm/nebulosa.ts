@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'bun:test'
 import { Gnomonic } from '../../../../src/astronomy/projections/projection'
+import { timeNow } from '../../../../src/astronomy/time/time'
 import { PIOVERTWO } from '../../../../src/core/constants'
-import { clampDeclination, pointingOffsetInPixels, shortestRotatorDelta, wrapRotatorAngle } from '../../../../src/devices/indi/simulator/util'
+import { boresightOffsetInPixels, clampDeclination, pointingOffsetInPixels, shortestRotatorDelta, wrapRotatorAngle } from '../../../../src/devices/indi/simulator/util'
 import type { Point } from '../../../../src/math/numerical/geometry'
 import { arcsec, deg, hour, toArcsec } from '../../../../src/math/units/angle'
 
@@ -108,5 +109,39 @@ describe('declination clamp', () => {
 		expect(clampDeclination(PIOVERTWO * 2)).toBe(PIOVERTWO)
 		expect(clampDeclination(-PIOVERTWO * 2)).toBe(-PIOVERTWO)
 		expect(clampDeclination(0.5)).toBe(0.5)
+	})
+})
+
+describe('boresight offset in pixels', () => {
+	// About two arcseconds per pixel, the scale of the simulated camera on its default telescope.
+	const PIXEL_SCALE = arcsec(2.1454)
+
+	test('expresses the offset in the J2000 plane the scene is drawn in', () => {
+		const time = timeNow(true)
+		const center: readonly [number, number] = [hour(5), deg(20)]
+		// A hundred pixels due east of the centre, on the sky of date.
+		const sample: readonly [number, number] = [center[0] + (100 * PIXEL_SCALE) / Math.cos(center[1]), center[1]]
+
+		const offset: Point = { x: 0, y: 0 }
+		expect(boresightOffsetInPixels(center[0], center[1], sample[0], sample[1], PIXEL_SCALE, time, offset)).toBeTrue()
+
+		// Same displacement projected in the frame of date, which is what the catalog is not drawn in.
+		const ofDate: Point = { x: 0, y: 0 }
+		pointingOffsetInPixels(center[0], center[1], sample[0], sample[1], PIXEL_SCALE, ofDate)
+
+		// The travel itself survives the change of frame, since it is the same angle on the sky.
+		expect(offset.x).toBeCloseTo(ofDate.x, 2)
+
+		// The tangent basis does not: precession and nutation rotate it, so a purely eastward move of a
+		// hundred pixels acquires a fraction of a pixel of north-south displacement in the frame the
+		// stars were projected into. Leaving the samples in the frame of date drops exactly this.
+		expect(Math.abs(offset.y - ofDate.y)).toBeGreaterThan(0.2)
+		expect(Math.abs(offset.y - ofDate.y)).toBeLessThan(1)
+	})
+
+	test('reports no offset for a boresight on the centre', () => {
+		const offset: Point = { x: 0, y: 0 }
+		expect(boresightOffsetInPixels(hour(5), deg(20), hour(5), deg(20), PIXEL_SCALE, timeNow(true), offset)).toBeFalse()
+		expect(boresightOffsetInPixels(hour(5), deg(20), hour(5) + arcsec(10), deg(20), 0, timeNow(true), offset)).toBeFalse()
 	})
 })
