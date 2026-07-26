@@ -1306,7 +1306,7 @@ export class MountManager extends DeviceManager<Mount> {
 					}
 				}
 
-				if (elements.GO) {
+				if (elements.GO || elements.FIND) {
 					if (handleSwitchValue(device, 'homing', message.state === 'Busy')) {
 						this.updated(device, 'homing', message.state)
 					}
