@@ -661,6 +661,81 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		expect(delayed[2]).toBeCloseTo(immediate[2], 6)
 	}, 20000)
 
+	test('centres the catalog on the coordinate the trajectory is measured against', async () => {
+		// The catalog is projected around the reported coordinate and the trajectory offsets are measured
+		// from it, so the two have to be the same reading. Taking the catalog centre from the snooped INDI
+		// state instead lets it lag by up to a notification interval, which puts the whole star field at
+		// an offset from a centre it was never projected around.
+		async function centreOfStar(notifyInterval: number, name: string) {
+			const handler = new IndiClientHandlerSet()
+			const mountManager = new MountManager()
+			const cameraManager = new CameraManager()
+			using client = new ClientSimulator(name, handler)
+			const frameReceiver = new CameraFrameReceiver()
+
+			handler.add(mountManager)
+			handler.add(cameraManager)
+			cameraManager.addHandler(frameReceiver)
+
+			// A star fixed on the sky rather than at whatever the query asks for, so where it lands on the
+			// sensor reports which coordinate the scene was built around.
+			const catalogProvider: CatalogSource = () => [{ snr: 200, hfd: 2, flux: 400, rightAscension: hour(5), declination: deg(20) }]
+
+			using mountSimulator = new MountSimulator('Mount Simulator', client)
+			using cameraSimulator = new CameraSimulator('Camera Simulator', client, { mountManager, catalogSources: { FIXED: catalogProvider } })
+			const mount = mountManager.get(client, mountSimulator.name)!
+			const camera = cameraManager.get(client, cameraSimulator.name)!
+
+			mountSimulator.connect()
+			cameraSimulator.connect()
+			await waitUntil(() => mount.connected && camera.connected)
+
+			mountSimulator.syncTo(hour(5), deg(20))
+			await waitUntil(() => closeTo(mount.equatorialCoordinate.declination, deg(20), 1e-9))
+
+			cameraManager.snoop(camera, mount)
+			await waitUntil(() => cameraManager.properties.get(camera)?.ACTIVE_DEVICES?.elements.ACTIVE_TELESCOPE.value === mount.name)
+
+			client.sendSwitch({ device: camera.name, name: 'SIMULATOR_NOISE_FEATURES', elements: { SKY_ENABLED: false, LIGHT_POLLUTION_ENABLED: false } })
+			client.sendSwitch({ device: camera.name, name: 'SIMULATOR_CATALOG_SOURCE', elements: { FIXED: true } })
+			await waitUntil(() => cameraManager.properties.get(camera)?.SIMULATOR_CATALOG_SOURCE?.elements.FIXED.value === true)
+
+			// Moved by the sky rather than by a command, because starting and finishing a slew publishes
+			// the coordinate vector on its own and would refresh the snooped copy no matter the throttle.
+			// Run back to back with no await between them, so the simulation timer cannot fire in the
+			// middle and both runs see exactly the same twenty seconds of drift; tracking then freezes the
+			// coordinate so the frame does not depend on when the exposure is taken.
+			mountSimulator.minimumNotifyCoordinateInterval = notifyInterval
+			mountSimulator.setTrackingEnabled(false)
+			mountSimulator.syncTo(hour(5), deg(20))
+			mountSimulator.advance(20)
+			mountSimulator.setTrackingEnabled(true)
+
+			cameraSimulator.startExposure(0.001)
+			await waitUntil(() => frameReceiver.length > 0, 10000, 20)
+			const frame = await readImageFromBuffer(frameReceiver.lastFrame)
+			const [x, y] = brightestPixel(frame!.raw, frame!.header.NAXIS1 as number, frame!.metadata.channels)
+
+			cameraSimulator.dispose()
+			mountSimulator.dispose()
+			return [x, y] as const
+		}
+
+		// Twenty seconds of sidereal drift is five arcminutes, and at about two arcseconds per pixel that
+		// is well over a hundred pixels: a star fixed on the sky has to land far from the middle of a
+		// sensor centred where the mount now points, and lands in the middle of one centred where the
+		// snooped copy still thinks it does.
+		const published = await centreOfStar(1, 'camera.centre.fresh')
+		const lagging = await centreOfStar(60000, 'camera.centre.stale')
+
+		expect(Math.abs(published[0] - 639)).toBeGreaterThan(100)
+
+		// Compared to within a pixel rather than exactly: which pixel of a star core comes out brightest
+		// depends on the noise, and the sensor temperature moves with the wall clock between the two runs.
+		expect(Math.abs(lagging[0] - published[0])).toBeLessThanOrEqual(1)
+		expect(Math.abs(lagging[1] - published[1])).toBeLessThanOrEqual(1)
+	}, 30000)
+
 	test('keeps its own trajectory when a second exposure starts while the catalog is pending', async () => {
 		// An exposure is marked complete before its frame has been rendered, so a client is free to start
 		// the next one while the first is still waiting on a network-backed catalog. The second exposure

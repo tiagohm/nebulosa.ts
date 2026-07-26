@@ -244,6 +244,21 @@ export class CameraSimulator extends DeviceSimulator {
 		return simulator instanceof MountSimulator ? simulator : undefined
 	}
 
+	// Coordinate the mount reports it is pointing at, radians, or undefined without an active mount.
+	//
+	// Taken from the simulator when there is one, rather than from the snooped INDI state, because the
+	// snooped copy is only refreshed on the notification cadence and lags the simulator by up to that
+	// interval. Both the catalog and the trajectory offsets are measured against this, and measuring
+	// them against two coordinates that disagree puts every star at an offset from a centre it was not
+	// projected around.
+	get reportedCenter(): readonly [Angle, Angle] | undefined {
+		const simulator = this.activeMountSimulator
+		if (simulator !== undefined) return [simulator.rightAscension, simulator.declination]
+		const mount = this.activeMount
+		if (mount === undefined) return undefined
+		return [mount.equatorialCoordinate.rightAscension, mount.equatorialCoordinate.declination]
+	}
+
 	get activeFocuser() {
 		const focuser = this.#focuserManager?.get(this.client, this.snoopDevices.elements.ACTIVE_FOCUSER.value)
 		return focuser?.connected ? focuser : undefined
@@ -1063,8 +1078,13 @@ export class CameraSimulator extends DeviceSimulator {
 		// and network-backed, and the mount keeps ticking while it resolves; reading the trajectory
 		// afterwards would end the trail when the query came back rather than when the exposure did, and
 		// would measure it against a coordinate the mount had since left.
-		const offsets = this.#exposureOffsets(arcsec(pixelScale(CAMERA_PIXEL_SIZE, this.telescopeFocalLength)), exposureTime)
-		const stars = await this.#ensureCatalog(exposureTravel(offsets))
+		//
+		// Read once for both, since the offsets are pixel displacements from the very centre the catalog
+		// is projected around: taking that centre twice would let the mount move between the readings and
+		// leave every star at an offset measured from somewhere the scene was not built for.
+		const center = this.reportedCenter
+		const offsets = this.#exposureOffsets(arcsec(pixelScale(CAMERA_PIXEL_SIZE, this.telescopeFocalLength)), exposureTime, center)
+		const stars = await this.#ensureCatalog(exposureTravel(offsets), center)
 		const frameX = this.#frame.elements.X.value
 		const frameY = this.#frame.elements.Y.value
 		const frameWidth = this.#frame.elements.WIDTH.value
@@ -1146,13 +1166,17 @@ export class CameraSimulator extends DeviceSimulator {
 	// the perturbed one. Keying the cache on a coordinate that the periodic error moves every frame
 	// would defeat the cache entirely and, for a network-backed source, issue one query per exposure.
 	// The pointing error is applied later as a pixel displacement, in #pointingOffsetInPixels.
-	async #ensureCatalog(travel: number = 0) {
-		const mount = this.activeMount
-		let centerRightAscension = mount?.equatorialCoordinate.rightAscension
-		let centerDeclination = mount?.equatorialCoordinate.declination
+	//
+	// `center` is the reported coordinate the scene is built around, in radians of the equatorial frame
+	// of date. Passed in rather than read here, so that a caller which also converts the trajectory into
+	// pixels uses one coordinate for both and the exposure cannot straddle a change of the mount's
+	// position between the two readings.
+	async #ensureCatalog(travel: number = 0, center: readonly [Angle, Angle] | undefined = this.reportedCenter) {
+		let centerRightAscension = center?.[0]
+		let centerDeclination = center?.[1]
 
-		if (mount !== undefined) {
-			;[centerRightAscension, centerDeclination] = equatorialToJ2000(centerRightAscension!, centerDeclination!)
+		if (center !== undefined) {
+			;[centerRightAscension, centerDeclination] = equatorialToJ2000(center[0], center[1])
 		}
 
 		const ps = arcsec(pixelScale(CAMERA_PIXEL_SIZE, this.telescopeFocalLength))
@@ -1311,9 +1335,9 @@ export class CameraSimulator extends DeviceSimulator {
 	// catalog, and an exposure is marked complete before its frame has been rendered, so a second
 	// exposure accepted in the meantime reaches this method and would otherwise overwrite the offsets
 	// the first frame is still waiting to be drawn with.
-	#exposureOffsets(pixelScale: Angle, exposureTime: number) {
+	#exposureOffsets(pixelScale: Angle, exposureTime: number, center: readonly [Angle, Angle] | undefined = this.reportedCenter) {
 		const simulator = this.activeMountSimulator
-		if (simulator === undefined) return NO_EXPOSURE_OFFSET
+		if (simulator === undefined || center === undefined) return NO_EXPOSURE_OFFSET
 
 		const endTime = simulator.utcTime
 		const startTime = endTime - Math.trunc(exposureTime * 1000)
@@ -1326,7 +1350,7 @@ export class CameraSimulator extends DeviceSimulator {
 		const probes = simulator.sampleBoresightTrajectory(startTime, endTime, probeCount, this.#trajectoryBuffer)
 		if (probes === 0) return NO_EXPOSURE_OFFSET
 
-		const path = this.#trajectoryToOffsets(simulator, pixelScale, probes)
+		const path = this.#trajectoryToOffsets(center, pixelScale, probes)
 		let length = 0
 		for (let i = 1; i < probes; i++) length += Math.hypot(path[i * 2] - path[i * 2 - 2], path[i * 2 + 1] - path[i * 2 - 1])
 
@@ -1335,21 +1359,21 @@ export class CameraSimulator extends DeviceSimulator {
 
 		const samples = simulator.sampleBoresightTrajectory(startTime, endTime, count, this.#trajectoryBuffer)
 		if (samples === 0) return NO_EXPOSURE_OFFSET
-		return this.#trajectoryToOffsets(simulator, pixelScale, samples).slice(0, samples * 2)
+		return this.#trajectoryToOffsets(center, pixelScale, samples).slice(0, samples * 2)
 	}
 
 	// Converts the boresight samples held in the trajectory buffer into field offsets in pixels, in
-	// place. Each offset is measured against the mount's reported coordinate, which is what the catalog
-	// was built around.
+	// place. Each offset is measured against `center`, the reported coordinate the catalog was built
+	// around, in radians of the equatorial frame of date.
 	//
 	// Computed in the current equatorial frame: both directions receive the same J2000 rotation, so it
 	// cancels in a difference of a few arcseconds.
-	#trajectoryToOffsets(simulator: MountSimulator, pixelScale: Angle, count: number) {
+	#trajectoryToOffsets(center: readonly [Angle, Angle], pixelScale: Angle, count: number) {
 		const buffer = this.#trajectoryBuffer
 		const offset = this.#trajectoryOffset
 
 		for (let i = 0; i < count; i++) {
-			if (pointingOffsetInPixels(simulator.rightAscension, simulator.declination, buffer[i * 2], buffer[i * 2 + 1], pixelScale, offset)) {
+			if (pointingOffsetInPixels(center[0], center[1], buffer[i * 2], buffer[i * 2 + 1], pixelScale, offset)) {
 				buffer[i * 2] = offset.x
 				buffer[i * 2 + 1] = offset.y
 			} else {
