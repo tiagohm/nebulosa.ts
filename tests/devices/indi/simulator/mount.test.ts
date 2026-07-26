@@ -832,6 +832,40 @@ describe('mount simulator pointing errors', () => {
 		}
 	})
 
+	test('drives the transmission in the order the pulses arrived, not by their sum', () => {
+		const { client, mount } = makeMount('mount.guide.ordering', 'MECHANICS', 'GUIDING')
+
+		try {
+			client.sendNumber({ device: mount.name, name: 'MOUNT_MECHANICS', elements: { ...NO_MECHANICS, BACKLASH_DEC: 60 } })
+			client.sendNumber({ device: mount.name, name: 'MOUNT_GUIDING', elements: { ...NO_GUIDING, LATENCY: 50 } })
+			mount.setGuideRate(1, 1)
+			mount.setTrackingEnabled(true)
+
+			// Load the transmission northwards and close the slack.
+			mount.pulse('NORTH', 2000)
+			for (let i = 0; i < 8; i++) mount.advance(0.5)
+
+			// A north pulse whose tail runs into the next step, and then a south pulse that starts after
+			// that tail has ended. Both fall inside the coarse step below, one after the other, which the
+			// controller's own latency is what makes possible.
+			mount.pulse('NORTH', 200)
+			mount.advance(0.1)
+			client.sendNumber({ device: mount.name, name: 'MOUNT_GUIDING', elements: { LATENCY: 200 } })
+			mount.pulse('SOUTH', 400)
+
+			const before = mount.mechanical.declination
+			mount.advance(1)
+
+			// Taken in order, the axis first runs a further 150 ms northwards on a closed flank, and the
+			// southward pulse that follows is swallowed whole by the slack it reopens. Summed into one
+			// average rate, the step is a single southward command: the northward travel the mount really
+			// made is cancelled against a reversal it never saw, and nothing moves at all.
+			expect(toArcsec(mount.mechanical.declination - before)).toBeGreaterThan(2)
+		} finally {
+			mount.dispose()
+		}
+	})
+
 	test('holds a stuck declination axis until the accumulated pulses break it free', () => {
 		const { client, mount } = makeMount('mount.stiction.declination', 'MECHANICS')
 

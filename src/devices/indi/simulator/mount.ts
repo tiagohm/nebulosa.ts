@@ -15,7 +15,7 @@ import type { ClientSimulator } from './client'
 import { GUIDE_JITTER_SEED, KING_DRIFT_RATE, LUNAR_DRIFT_RATE, MAIN_CONTROL, MAX_GUIDE_RATE, MAX_QUEUED_GUIDE_PULSES, MOUNT_TRAJECTORY_CAPACITY, SIDEREAL_DRIFT_RATE, SIMULATION, SLEW_RATES, SLEW_SPEED_FACTOR, SOLAR_DRIFT_RATE, TICK_INTERVAL_MS } from './constants'
 import { DeviceSimulator } from './device'
 import { advanceMechanicalAxis, clearMechanicalAxis, driveMechanicalAxis, IDENTITY_MECHANICAL_AXIS_CONFIG, type MechanicalAxisConfig, mechanicalAxisState, resetMechanicalAxisMotion } from './mount.axis'
-import { type GuidePulse, type GuideResponseConfig, IDENTITY_GUIDE_RESPONSE_CONFIG, integrateGuidePulses, quantizeGuideDuration, retireGuidePulses } from './mount.guiding'
+import { type GuidePulse, type GuideResponseConfig, IDENTITY_GUIDE_RESPONSE_CONFIG, integrateGuidePulses, nextGuidePulseBoundary, quantizeGuideDuration, retireGuidePulses } from './mount.guiding'
 import { IDENTITY_PERIODIC_ERROR_CURVE, PERIODIC_ERROR_HARMONICS, periodicErrorAt, periodicErrorBound, type PeriodicErrorCurve, trainPeriodicErrorCorrection } from './mount.periodic'
 import { advanceSettling, exciteSettling, IDENTITY_SETTLING_CONFIG, resetSettling, type SettlingConfig, settlingState } from './mount.settling'
 import { advanceTrackingRateError, IDENTITY_TRACKING_RATE_ERROR_CONFIG, resetTrackingRateError, TRACKING_RATE_CALIBRATION_TEMPERATURE, type TrackingRateErrorConfig, trackingRateErrorState } from './mount.tracking'
@@ -1258,10 +1258,7 @@ export class MountSimulator extends DeviceSimulator {
 				this.#advanceFreeMotion(settlingSeconds)
 			}
 		} else {
-			// Integrated before the motion advances, so the phase covers the interval the axes are about
-			// to run at the rate the motion is about to apply.
-			this.#advanceWormPhase(this.#rightAscensionMotorRate(), dtSeconds)
-			this.#advanceFreeMotion(dtSeconds)
+			this.#advanceGuidedMotion(startTime, endTime)
 		}
 
 		// Applied as the change in the residual offset rather than as the offset itself, so the ringing
@@ -1449,6 +1446,39 @@ export class MountSimulator extends DeviceSimulator {
 		const scale = maxStep / span
 		this.#setMechanical(this.#mechanical.rightAscension + deltaRightAscension * scale, this.#mechanical.declination + deltaDeclination * scale)
 		return 0
+	}
+
+	// Advances everything the mount does when it is not slewing, in the order it happened, over the step
+	// `[startTime, endTime]` in milliseconds of the simulated clock.
+	//
+	// The step is cut at every instant a queued pulse starts or ends, and each piece is driven at the
+	// guiding that was actually in force across it. Reducing the whole step to one net rate is only
+	// sound for a linear axis, and the transmission is not one: backlash and stiction depend on the
+	// order the commands arrived in. A north pulse followed by a south pulse inside one tick averaged
+	// out to a single southward command, so the reversal between them was never seen, the slack was
+	// never reopened, and the northward travel the mount really made disappeared into it.
+	//
+	// The pieces are cheap: at most one boundary per queued pulse, and the queue holds a handful.
+	#advanceGuidedMotion(startTime: number, endTime: number) {
+		let from = startTime
+
+		while (from < endTime) {
+			let to = nextGuidePulseBoundary(this.#westEastPulses, from, endTime)
+			to = nextGuidePulseBoundary(this.#northSouthPulses, from, to)
+
+			// Guide pulses are integrated over the piece rather than sampled at its end, so a pulse
+			// shorter than it still delivers exactly its own share of motion. The result is reduced to an
+			// equivalent rate, which lets the transmission see the travel a partly covered piece produced.
+			const dtSeconds = (to - from) / 1000
+			this.#guideRateWestEast = integrateGuidePulses(this.#westEastPulses, from, to) / dtSeconds
+			this.#guideRateNorthSouth = integrateGuidePulses(this.#northSouthPulses, from, to) / dtSeconds
+
+			// Integrated before the motion advances, so the phase covers the interval the axes are about
+			// to run at the rate the motion is about to apply.
+			this.#advanceWormPhase(this.#rightAscensionMotorRate(), dtSeconds)
+			this.#advanceFreeMotion(dtSeconds)
+			from = to
+		}
 	}
 
 	// Advances tracking, manual motion and pulse guiding when not slewing.

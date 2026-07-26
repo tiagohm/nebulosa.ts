@@ -92,3 +92,20 @@ export function retireGuidePulses(pulses: GuidePulse[], time: number) {
 	pulses.length = kept
 	return kept > 0
 }
+
+// Earliest instant strictly after `from` and before `limit` at which a queued pulse starts or ends, or
+// `limit` when none does. Times are milliseconds on the simulated clock.
+//
+// Used to cut a simulation step at the moments its guiding changes, so the transmission is driven in
+// the order the commands actually arrived rather than by their sum over the whole step.
+export function nextGuidePulseBoundary(pulses: readonly GuidePulse[], from: number, limit: number) {
+	let boundary = limit
+
+	for (let i = 0; i < pulses.length; i++) {
+		const { start, end } = pulses[i]
+		if (start > from && start < boundary) boundary = start
+		if (end > from && end < boundary) boundary = end
+	}
+
+	return boundary
+}

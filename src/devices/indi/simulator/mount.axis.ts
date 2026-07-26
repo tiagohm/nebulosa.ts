@@ -106,8 +106,12 @@ export function advanceMechanicalAxis(state: MechanicalAxisState, motorRate: num
 	const commanded = motorRate * dtSeconds
 
 	if (commanded === 0 || dtSeconds <= 0) {
+		// The axis comes to rest, so static friction has to be overcome again before it moves. What has
+		// already been commanded against that friction stays wound up: that is what lets a series of
+		// pulses too small to move the axis on their own add up until it releases, which is the whole
+		// point of the model and is not undone by the gaps between them. A reversal still discards it,
+		// since the load moves to the other flank.
 		state.moving = false
-		state.pendingCommand = 0
 		return 0
 	}
 
