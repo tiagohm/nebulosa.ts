@@ -6,7 +6,7 @@ import { ClientSimulator } from '../../../../src/devices/indi/simulator/client'
 import { SIDEREAL_DRIFT_RATE } from '../../../../src/devices/indi/simulator/constants'
 import { MountSimulator } from '../../../../src/devices/indi/simulator/mount'
 import { TRACKING_RATE_CALIBRATION_TEMPERATURE } from '../../../../src/devices/indi/simulator/mount.tracking'
-import { arcsec, deg, hour, normalizePI, toArcsec } from '../../../../src/math/units/angle'
+import { arcsec, deg, hour, normalizeAngle, normalizePI, toArcsec } from '../../../../src/math/units/angle'
 import { polarAlignmentError } from '../../../../src/observation/alignment/polaralignment'
 import { isTimeConsumingTestSkipped, waitUntil } from '../../../util'
 
@@ -819,6 +819,53 @@ describe('mount simulator pointing errors', () => {
 
 			expect(Math.abs(normalizePI(after.rightAscension - before.rightAscension))).toBeGreaterThan(arcsec(1))
 			expect(Math.abs(after.declination - before.declination)).toBeGreaterThan(arcsec(1))
+		} finally {
+			mount.dispose()
+		}
+	})
+
+	test('sags the boresight towards the horizon and not at all at the zenith', () => {
+		const { client, mount } = makeMount('mount.boresight.flexure')
+
+		try {
+			client.sendNumber({ device: mount.name, name: 'MOUNT_FLEXURE', elements: { TUBE_FLEXURE: 120 } })
+
+			// The site is at latitude -22, so a target on the meridian at that declination is at the
+			// zenith and the tube hangs straight down its own axis with nothing to bend.
+			mount.syncTo(mount.siderealTimeAt(mount.utcTime), deg(-22))
+			const atZenith = mount.boresight
+			expect(toArcsec(Math.abs(atZenith.declination - mount.mechanical.declination))).toBeCloseTo(0, 6)
+
+			// Thirty degrees down from the zenith the droop is sin(30) of the full value, and on the
+			// meridian it is entirely in declination, pushing the boresight away from the zenith.
+			mount.syncTo(mount.siderealTimeAt(mount.utcTime), deg(-52))
+			const offMeridian = mount.boresight
+			expect(toArcsec(offMeridian.declination - mount.mechanical.declination)).toBeCloseTo(-120 * Math.sin(deg(30)), 3)
+
+			expect(toArcsec(mount.pointingErrorBound)).toBeCloseTo(120, 6)
+		} finally {
+			mount.dispose()
+		}
+	})
+
+	test('offsets the boresight on one side of the pier only', () => {
+		const { client, mount } = makeMount('mount.boresight.pierside')
+
+		try {
+			client.sendNumber({ device: mount.name, name: 'MOUNT_FLEXURE', elements: { PIER_WEST_DEC: 90 } })
+
+			// Two hours west of the meridian, where a German mount carries the tube on the east side.
+			const lst = mount.siderealTimeAt(mount.utcTime)
+			mount.syncTo(normalizeAngle(lst - hour(2)), deg(-20))
+			expect(mount.pierSide).toBe('EAST')
+			expect(mount.boresight.declination).toBe(mount.mechanical.declination)
+
+			// The same target two hours east of the meridian puts it on the other side of the pier, which
+			// is where the offset applies. What the pair really configures is the difference between the
+			// two, and that difference is what survives a meridian flip.
+			mount.syncTo(normalizeAngle(lst + hour(2)), deg(-20))
+			expect(mount.pierSide).toBe('WEST')
+			expect(toArcsec(mount.boresight.declination - mount.mechanical.declination)).toBeCloseTo(90, 6)
 		} finally {
 			mount.dispose()
 		}

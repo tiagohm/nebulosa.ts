@@ -1,6 +1,7 @@
 import { DEG2RAD } from '../../core/constants'
 import { clamp } from '../../math/numerical/math'
 import { type Angle, normalizeAngle } from '../../math/units/angle'
+import { parallacticAngle } from './astrometry'
 
 // Geometric pointing-error model for equatorial mounts, following the six basic TPoint terms.
 // Describes how the mechanical orientation of the axes maps to the direction the optical axis
@@ -93,6 +94,52 @@ export function equatorialPointingError(hourAngle: Angle, declination: Angle, mo
 
 	const deltaHourAngle = model.indexHourAngle + model.coneError * secDeclination + model.axisNonPerpendicularity * tanDeclination - model.polarAzimuthError * cosHourAngle * tanDeclination + model.polarAltitudeError * sinHourAngle * tanDeclination
 	const deltaDeclination = model.indexDeclination + model.polarAzimuthError * sinHourAngle + model.polarAltitudeError * cosHourAngle
+
+	if (o) {
+		o[0] = deltaHourAngle
+		o[1] = deltaDeclination
+		return o
+	}
+
+	return [deltaHourAngle, deltaDeclination]
+}
+
+// Computes the pointing error produced by gravitational flexure of the tube.
+//
+// `hourAngle` and `declination` describe where the axes mechanically are, `latitude` is the site
+// latitude and `flexure` the droop at the horizon; all radians. Returns `[ΔH, Δδ]` in radians, on the
+// same convention as `equatorialPointingError`, so the two can simply be summed.
+//
+// Unlike the six geometric terms, flexure is not a property of the mount's axes but of gravity, so it
+// acts in the vertical: the tube sags away from the zenith by `flexure·sin z`, which vanishes when
+// pointing straight up and is largest near the horizon. That is the TF term of the TPoint model.
+// Expressing a vertical displacement in equatorial coordinates needs the parallactic angle q, the
+// position angle of the zenith at that point, since the zenith direction is `cos q` north plus
+// `sin q` east:
+//
+//   Δδ = −flexure·sin z·cos q
+//   ΔH = +flexure·sin z·sin q / cos δ
+//
+// The sign of ΔH is opposite because H = LST − RA. The declination fed to the `cos δ` division is
+// clamped to ±MAX_POINTING_DECLINATION so the hour-angle error stays finite at the poles, where it is
+// unobservable anyway. A zero flexure returns exactly `[0, 0]`. When `o` is provided it receives the
+// result and is returned.
+export function tubeFlexureError(hourAngle: Angle, declination: Angle, latitude: Angle, flexure: Angle, o?: [Angle, Angle]): [Angle, Angle] {
+	let deltaHourAngle = 0
+	let deltaDeclination = 0
+
+	if (flexure !== 0) {
+		const cosZenithDistance = Math.sin(latitude) * Math.sin(declination) + Math.cos(latitude) * Math.cos(declination) * Math.cos(hourAngle)
+		// From the cosine rather than an inverse trig call, and clamped because rounding can push the
+		// dot product a hair outside [-1, 1] when the target passes through the zenith or the nadir.
+		const sinZenithDistance = Math.sqrt(Math.max(0, 1 - cosZenithDistance * cosZenithDistance))
+		const droop = flexure * sinZenithDistance
+		const q = parallacticAngle(hourAngle, declination, latitude)
+		const clampedDeclination = clamp(declination, -MAX_POINTING_DECLINATION, MAX_POINTING_DECLINATION)
+
+		deltaHourAngle = (droop * Math.sin(q)) / Math.cos(clampedDeclination)
+		deltaDeclination = -droop * Math.cos(q)
+	}
 
 	if (o) {
 		o[0] = deltaHourAngle

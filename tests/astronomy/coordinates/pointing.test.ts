@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
-import { applyEquatorialPointingError, equatorialPointingError, type EquatorialPointingModel, IDENTITY_EQUATORIAL_POINTING_MODEL, isIdentityEquatorialPointingModel, MAX_POINTING_DECLINATION } from '../../../src/astronomy/coordinates/pointing'
+// oxfmt-ignore
+import { applyEquatorialPointingError, equatorialPointingError, type EquatorialPointingModel, IDENTITY_EQUATORIAL_POINTING_MODEL, isIdentityEquatorialPointingModel, MAX_POINTING_DECLINATION, tubeFlexureError } from '../../../src/astronomy/coordinates/pointing'
 import { PIOVERTWO } from '../../../src/core/constants'
 import { arcsec, deg, hour, normalizePI, toArcsec } from '../../../src/math/units/angle'
 import { polarAlignmentError } from '../../../src/observation/alignment/polaralignment'
@@ -149,4 +150,77 @@ describe('equatorial pointing error', () => {
 		const applied: [number, number] = [0, 0]
 		expect(applyEquatorialPointingError(hour(1), deg(20), hour(3), IDENTITY_EQUATORIAL_POINTING_MODEL, applied)).toBe(applied)
 	})
+})
+
+describe('tube flexure', () => {
+	// Mid-northern site, so the zenith and the pole are well separated.
+	const latitude = deg(45)
+	// A gross droop, chosen so the geometry is legible rather than realistic.
+	const flexure = arcsec(120)
+
+	test('vanishes at the zenith, where the tube points straight up', () => {
+		const [deltaHourAngle, deltaDeclination] = tubeFlexureError(0, latitude, latitude, flexure)
+		expect(toArcsec(deltaHourAngle)).toBeCloseTo(0, 6)
+		expect(toArcsec(deltaDeclination)).toBeCloseTo(0, 6)
+	})
+
+	test('is exactly zero without any flexure', () => {
+		expect(tubeFlexureError(hour(2), deg(20), latitude, 0)).toEqual([0, 0])
+	})
+
+	test('droops towards the horizon on the meridian, where the zenith is due north', () => {
+		// On the meridian below the zenith the parallactic angle is zero, so the whole droop lands in
+		// declination and none of it in hour angle. The tube sags away from the zenith, which here means
+		// southwards, so the declination decreases.
+		const declination = latitude - deg(30)
+		const [deltaHourAngle, deltaDeclination] = tubeFlexureError(0, declination, latitude, flexure)
+
+		expect(toArcsec(deltaHourAngle)).toBeCloseTo(0, 9)
+		expect(toArcsec(deltaDeclination)).toBeCloseTo(-flexureAt(deg(30)), 6)
+	})
+
+	test('reverses in declination above the zenith, where the zenith lies south of the target', () => {
+		// Past the zenith the parallactic angle flips to 180 degrees, so sagging away from the zenith now
+		// increases the declination instead of decreasing it.
+		const [, deltaDeclination] = tubeFlexureError(0, latitude + deg(30), latitude, flexure)
+		expect(toArcsec(deltaDeclination)).toBeCloseTo(flexureAt(deg(30)), 6)
+	})
+
+	test('grows with the zenith distance', () => {
+		const near = Math.abs(tubeFlexureError(0, latitude - deg(10), latitude, flexure)[1])
+		const far = Math.abs(tubeFlexureError(0, latitude - deg(60), latitude, flexure)[1])
+		expect(far).toBeGreaterThan(near)
+		// sin(60) / sin(10) for the two zenith distances.
+		expect(far / near).toBeCloseTo(Math.sin(deg(60)) / Math.sin(deg(10)), 6)
+	})
+
+	test('mirrors across the meridian', () => {
+		// Same zenith distance either side of the meridian: the declination component is identical and
+		// the hour-angle component changes sign, which is what makes flexure fit as an even term.
+		const west = tubeFlexureError(hour(2), deg(20), latitude, flexure)
+		const east = tubeFlexureError(hour(-2), deg(20), latitude, flexure)
+
+		expect(east[0]).toBeCloseTo(-west[0], 12)
+		expect(east[1]).toBeCloseTo(west[1], 12)
+		expect(Math.abs(toArcsec(west[0]))).toBeGreaterThan(1)
+	})
+
+	test('stays finite at the pole', () => {
+		// cos(declination) divides the hour-angle term, so the clamp is what keeps this from diverging.
+		const [deltaHourAngle, deltaDeclination] = tubeFlexureError(hour(3), PIOVERTWO, latitude, flexure)
+		expect(Number.isFinite(deltaHourAngle)).toBeTrue()
+		expect(Math.abs(toArcsec(deltaHourAngle))).toBeLessThan(1e5)
+		expect(Math.abs(toArcsec(deltaDeclination))).toBeLessThanOrEqual(toArcsec(flexure))
+	})
+
+	test('writes into the optional output parameter and returns it', () => {
+		const output: [number, number] = [0, 0]
+		expect(tubeFlexureError(hour(2), deg(20), latitude, flexure, output)).toBe(output)
+		expect(output[1]).not.toBe(0)
+	})
+
+	// Droop expected at a given zenith distance, arcseconds.
+	function flexureAt(zenithDistance: number) {
+		return toArcsec(flexure) * Math.sin(zenithDistance)
+	}
 })

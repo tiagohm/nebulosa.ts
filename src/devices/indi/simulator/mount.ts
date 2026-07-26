@@ -1,5 +1,6 @@
 import type { EquatorialCoordinate } from '../../../astronomy/coordinates/coordinate'
-import { applyEquatorialPointingError, type EquatorialPointingModel, IDENTITY_EQUATORIAL_POINTING_MODEL, polarAlignmentPointingModel } from '../../../astronomy/coordinates/pointing'
+// oxfmt-ignore
+import { applyEquatorialPointingError, type EquatorialPointingModel, IDENTITY_EQUATORIAL_POINTING_MODEL, polarAlignmentPointingModel, tubeFlexureError } from '../../../astronomy/coordinates/pointing'
 import { localSiderealTime } from '../../../astronomy/observer/location'
 import { formatTemporal, TIMEZONE } from '../../../astronomy/time/temporal'
 import { timeUnix } from '../../../astronomy/time/time'
@@ -47,7 +48,7 @@ export class MountSimulator extends DeviceSimulator {
 	readonly #geographicCoordinate = makeNumberVector('', 'GEOGRAPHIC_COORD', 'Location', MAIN_CONTROL, 'rw', ['LAT', 'Latitude (deg)', 0, -90, 90, 0.1, '%12.8f'], ['LONG', 'Longitude (deg)', 0, 0, 360, 0.1, '%12.8f'], ['ELEV', 'Elevation (m)', 0, -200, 10000, 1, '%.1f'])
 	readonly #park = makeSwitchVector('', 'TELESCOPE_PARK', 'Parking', MAIN_CONTROL, 'OneOfMany', 'rw', ['PARK', 'Park', false], ['UNPARK', 'Unpark', true])
 	readonly #parkOptions = makeSwitchVector('', 'TELESCOPE_PARK_OPTION', 'Park Options', MAIN_CONTROL, 'AtMostOne', 'rw', ['PARK_CURRENT', 'Current', false])
-	readonly #pierSide = makeSwitchVector('', 'TELESCOPE_PIER_SIDE', 'Pier Side', MAIN_CONTROL, 'AtMostOne', 'ro', ['PIER_EAST', 'East', false], ['PIER_WEST', 'West', false])
+	readonly #pierSide = makeSwitchVector('', 'TELESCOPE_PIER_SIDE', 'Pier Side', MAIN_CONTROL, 'OneOfMany', 'ro', ['PIER_EAST', 'East', false], ['PIER_WEST', 'West', false])
 	readonly #guideRate = makeNumberVector('', 'GUIDE_RATE', 'Guiding Rate', MAIN_CONTROL, 'rw', ['GUIDE_RATE_WE', 'W/E Rate', 0.5, 0, 1, 0.1, '%.8f'], ['GUIDE_RATE_NS', 'N/E Rate', 0.5, 0, 1, 0.1, '%.0f'])
 	readonly #guideNS = makeNumberVector('', 'TELESCOPE_TIMED_GUIDE_NS', 'Guide N/S', MAIN_CONTROL, 'rw', ['TIMED_GUIDE_N', 'North (ms)', 0, 0, 60000, 1, '%.0f'], ['TIMED_GUIDE_S', 'South (ms)', 0, 0, 60000, 1, '%.0f'])
 	readonly #guideWE = makeNumberVector('', 'TELESCOPE_TIMED_GUIDE_WE', 'Guide W/E', MAIN_CONTROL, 'rw', ['TIMED_GUIDE_W', 'West (ms)', 0, 0, 60000, 1, '%.0f'], ['TIMED_GUIDE_E', 'East (ms)', 0, 0, 60000, 1, '%.0f'])
@@ -98,6 +99,14 @@ export class MountSimulator extends DeviceSimulator {
 	// Relative error of the tracking drive, in parts per million of the commanded rate, as a constant
 	// bias plus a temperature term plus a random wander. The temperature is the ambient one seen by the
 	// drive; the coefficient acts on its departure from TRACKING_RATE_CALIBRATION_TEMPERATURE.
+	// Effects that depend on where the tube is rather than on the geometry of the axes. TUBE_FLEXURE is
+	// the droop of the optical axis at the horizon, falling to nothing at the zenith, and acts in the
+	// vertical, so converting it to equatorial coordinates goes through the parallactic angle. The pier
+	// terms are the constant offset of the west side relative to the east, from the tube hanging on the
+	// other side of the mount; they are hour-angle and declination offsets, not on-sky angles, on the
+	// same convention as the index errors.
+	// oxfmt-ignore
+	readonly #flexure = makeNumberVector('', 'MOUNT_FLEXURE', 'Flexure', SIMULATION, 'rw', ['TUBE_FLEXURE', 'Tube Flexure (arcsec)', 0, -3600, 3600, 0.1, '%.3f'], ['PIER_WEST_RA', 'Pier West RA Offset (arcsec)', 0, -3600, 3600, 0.1, '%.3f'], ['PIER_WEST_DEC', 'Pier West DEC Offset (arcsec)', 0, -3600, 3600, 0.1, '%.3f'])
 	// oxfmt-ignore
 	readonly #trackingRate = makeNumberVector('', 'MOUNT_TRACKING_RATE', 'Tracking Rate', SIMULATION, 'rw', ['BIAS', 'Rate Bias (ppm)', 0, -10000, 10000, 1, '%.2f'], ['TEMPERATURE_COEFFICIENT', 'Temperature Coefficient (ppm/C)', 0, -1000, 1000, 0.1, '%.3f'], ['TEMPERATURE', 'Temperature (C)', TRACKING_RATE_CALIBRATION_TEMPERATURE, -60, 60, 0.1, '%.1f'], ['RANDOM_WALK', 'Random Walk (ppm/sqrt(s))', 0, 0, 1000, 0.1, '%.3f'])
 
@@ -126,12 +135,15 @@ export class MountSimulator extends DeviceSimulator {
 		this.#mechanics,
 		this.#guiding,
 		this.#settling,
+		this.#flexure,
 		this.#trackingRate,
 	]
 	// The error-model configuration is persisted along with track mode and guide rate, so a simulated
 	// mount keeps its mechanical character across reconnections. The worm phase is not: it is live
 	// mechanical state, and a power cycle is exactly when a real mount loses track of it.
-	protected propertiesToNotSave = this.properties.filter((e) => e !== this.#trackMode && e !== this.#guideRate && e !== this.#alignment && e !== this.#periodicError && e !== this.#periodicErrorCorrection && e !== this.#mechanics && e !== this.#guiding && e !== this.#settling && e !== this.#trackingRate)
+	protected propertiesToNotSave = this.properties.filter(
+		(e) => e !== this.#trackMode && e !== this.#guideRate && e !== this.#alignment && e !== this.#periodicError && e !== this.#periodicErrorCorrection && e !== this.#mechanics && e !== this.#guiding && e !== this.#settling && e !== this.#trackingRate && e !== this.#flexure,
+	)
 
 	#timer?: NodeJS.Timeout
 	#lastTick = 0
@@ -157,6 +169,9 @@ export class MountSimulator extends DeviceSimulator {
 	// both in parts per million.
 	readonly #trackingRateErrorState = trackingRateErrorState()
 	#trackingRateError = 0
+	// Scratch tuple for the flexure term, reused because the boresight is evaluated on every tick and
+	// once per trajectory sample of an exposure.
+	readonly #flexureError: [Angle, Angle] = [0, 0]
 	// Harmonic content of the worm and the trained correction, rebuilt from MOUNT_PERIODIC_ERROR and
 	// MOUNT_PEC whenever either changes, so evaluating the boresight allocates nothing.
 	#periodicErrorCurve: PeriodicErrorCurve = IDENTITY_PERIODIC_ERROR_CURVE
@@ -323,11 +338,35 @@ export class MountSimulator extends DeviceSimulator {
 	// past the pole is a real, if degenerate, configuration and clamping would silently hide it.
 	boresightAt(utcTime: number): EquatorialCoordinate {
 		const model = this.pointingModel
+		const { TUBE_FLEXURE, PIER_WEST_RA, PIER_WEST_DEC } = this.#flexure.elements
 		let rightAscension = this.#mechanical.rightAscension
 		let declination = this.#mechanical.declination
 
-		if (model !== IDENTITY_EQUATORIAL_POINTING_MODEL) {
-			;[rightAscension, declination] = applyEquatorialPointingError(rightAscension, declination, this.siderealTimeAt(utcTime), model)
+		if (model !== IDENTITY_EQUATORIAL_POINTING_MODEL || TUBE_FLEXURE.value !== 0 || PIER_WEST_RA.value !== 0 || PIER_WEST_DEC.value !== 0) {
+			const lst = this.siderealTimeAt(utcTime)
+
+			if (model !== IDENTITY_EQUATORIAL_POINTING_MODEL) {
+				;[rightAscension, declination] = applyEquatorialPointingError(rightAscension, declination, lst, model)
+			}
+
+			if (TUBE_FLEXURE.value !== 0) {
+				// Evaluated at the mechanical orientation rather than at the partly corrected one: the tube
+				// sags according to where it is actually aimed, and the geometric terms are arcseconds, far
+				// too small to change how much it sags.
+				const flexure = tubeFlexureError(lst - this.#mechanical.rightAscension, this.#mechanical.declination, this.latitude, TUBE_FLEXURE.value * ASEC2RAD, this.#flexureError)
+				rightAscension -= flexure[0]
+				declination += flexure[1]
+			}
+
+			// The pier offset applies on one side only, so what it really configures is the difference
+			// between the two sides. That difference is what a pointing model fitted across a meridian
+			// flip has to absorb, and what a client that forgets to re-solve after one walks into.
+			if ((PIER_WEST_RA.value !== 0 || PIER_WEST_DEC.value !== 0) && expectedPierSide(this.#mechanical.rightAscension, this.#mechanical.declination, lst) === 'WEST') {
+				rightAscension += PIER_WEST_RA.value * ASEC2RAD
+				declination += PIER_WEST_DEC.value * ASEC2RAD
+			}
+
+			rightAscension = normalizeAngle(rightAscension)
 		}
 
 		if (this.#periodicErrorCurve !== IDENTITY_PERIODIC_ERROR_CURVE) {
@@ -407,9 +446,12 @@ export class MountSimulator extends DeviceSimulator {
 		const polar = Math.SQRT2 * (Math.abs(POLAR_AZIMUTH_ERROR.value) + Math.abs(POLAR_ALTITUDE_ERROR.value))
 		const geometry = Math.abs(CONE_ERROR.value) + Math.abs(AXIS_NON_ORTHOGONALITY.value)
 		const index = Math.abs(RA_INDEX_ERROR.value) + Math.abs(DEC_INDEX_ERROR.value)
+		// Flexure peaks at the horizon and the pier offset applies on one side, so both count in full.
+		const { TUBE_FLEXURE, PIER_WEST_RA, PIER_WEST_DEC } = this.#flexure.elements
+		const gravity = Math.abs(TUBE_FLEXURE.value) + Math.abs(PIER_WEST_RA.value) + Math.abs(PIER_WEST_DEC.value)
 		// The accumulated rate drift is added as it stands rather than bounded: it has no bound, so the
 		// only honest figure is how far it has walked so far.
-		return (polar + geometry + index) * ASEC2RAD + periodicErrorBound(this.#periodicErrorCurve) + Math.abs(this.#trackingRateOffset)
+		return (polar + geometry + index + gravity) * ASEC2RAD + periodicErrorBound(this.#periodicErrorCurve) + Math.abs(this.#trackingRateOffset)
 	}
 
 	// Current pier side derived from the pier-side property.
@@ -475,6 +517,9 @@ export class MountSimulator extends DeviceSimulator {
 					this.#refreshPeriodicError()
 					this.notify(this.#periodicErrorCorrection)
 				}
+				return
+			case 'MOUNT_FLEXURE':
+				if (applyNumberVectorValues(this.#flexure, vector.elements)) this.notify(this.#flexure)
 				return
 			case 'MOUNT_MECHANICS':
 				if (applyNumberVectorValues(this.#mechanics, vector.elements)) {
