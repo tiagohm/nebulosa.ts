@@ -1,5 +1,4 @@
 import type { EquatorialCoordinate } from '../../../astronomy/coordinates/coordinate'
-// oxfmt-ignore
 import { applyEquatorialPointingError, type EquatorialPointingModel, IDENTITY_EQUATORIAL_POINTING_MODEL, MAX_POINTING_DECLINATION, polarAlignmentPointingModel, tubeFlexureError } from '../../../astronomy/coordinates/pointing'
 import { localSiderealTime } from '../../../astronomy/observer/location'
 import { formatTemporal, TIMEZONE } from '../../../astronomy/time/temporal'
@@ -15,16 +14,13 @@ import { findOnSwitch, makeNumberVector, makeSwitchVector, makeTextVector, type 
 import type { ClientSimulator } from './client'
 import { GUIDE_JITTER_SEED, KING_DRIFT_RATE, LUNAR_DRIFT_RATE, MAIN_CONTROL, MAX_GUIDE_RATE, MAX_QUEUED_GUIDE_PULSES, MOUNT_TRAJECTORY_CAPACITY, SIDEREAL_DRIFT_RATE, SIMULATION, SLEW_RATES, SLEW_SPEED_FACTOR, SOLAR_DRIFT_RATE, TICK_INTERVAL_MS } from './constants'
 import { DeviceSimulator } from './device'
-// oxfmt-ignore
 import { advanceMechanicalAxis, clearMechanicalAxis, driveMechanicalAxis, IDENTITY_MECHANICAL_AXIS_CONFIG, type MechanicalAxisConfig, mechanicalAxisState, resetMechanicalAxisMotion } from './mount.axis'
 import { type GuidePulse, type GuideResponseConfig, IDENTITY_GUIDE_RESPONSE_CONFIG, integrateGuidePulses, quantizeGuideDuration, retireGuidePulses } from './mount.guiding'
-// oxfmt-ignore
 import { IDENTITY_PERIODIC_ERROR_CURVE, PERIODIC_ERROR_HARMONICS, periodicErrorAt, periodicErrorBound, type PeriodicErrorCurve, trainPeriodicErrorCorrection } from './mount.periodic'
 import { advanceSettling, exciteSettling, IDENTITY_SETTLING_CONFIG, resetSettling, type SettlingConfig, settlingState } from './mount.settling'
+import { advanceTrackingRateError, IDENTITY_TRACKING_RATE_ERROR_CONFIG, resetTrackingRateError, TRACKING_RATE_CALIBRATION_TEMPERATURE, type TrackingRateErrorConfig, trackingRateErrorState } from './mount.tracking'
 import { boresightHistory, boresightPathLength, clearBoresightHistory, recordBoresightSample, sampleBoresightPath, sampleBoresightTrajectory } from './mount.trajectory'
 import { advanceWind, IDENTITY_WIND_CONFIG, resetWind, type WindConfig, windState } from './mount.wind'
-// oxfmt-ignore
-import { advanceTrackingRateError, IDENTITY_TRACKING_RATE_ERROR_CONFIG, resetTrackingRateError, TRACKING_RATE_CALIBRATION_TEMPERATURE, type TrackingRateErrorConfig, trackingRateErrorState } from './mount.tracking'
 import type { AxisDirection, CoordSetMode, DeviceSimulatorOptions, MountPointingState, SimulatorProperty, SlewMode } from './types'
 import { applyMultiSwitchValues, applyNumberVectorValues, clampDeclination } from './util'
 
@@ -50,18 +46,10 @@ export class MountSimulator extends DeviceSimulator {
 	readonly #geographicCoordinate = makeNumberVector('', 'GEOGRAPHIC_COORD', 'Location', MAIN_CONTROL, 'rw', ['LAT', 'Latitude (deg)', 0, -90, 90, 0.1, '%12.8f'], ['LONG', 'Longitude (deg)', 0, 0, 360, 0.1, '%12.8f'], ['ELEV', 'Elevation (m)', 0, -200, 10000, 1, '%.1f'])
 	readonly #park = makeSwitchVector('', 'TELESCOPE_PARK', 'Parking', MAIN_CONTROL, 'OneOfMany', 'rw', ['PARK', 'Park', false], ['UNPARK', 'Unpark', true])
 	readonly #parkOptions = makeSwitchVector('', 'TELESCOPE_PARK_OPTION', 'Park Options', MAIN_CONTROL, 'AtMostOne', 'rw', ['PARK_CURRENT', 'Current', false])
-	readonly #pierSide = makeSwitchVector('', 'TELESCOPE_PIER_SIDE', 'Pier Side', MAIN_CONTROL, 'OneOfMany', 'ro', ['PIER_EAST', 'East', false], ['PIER_WEST', 'West', false])
+	readonly #pierSide = makeSwitchVector('', 'TELESCOPE_PIER_SIDE', 'Pier Side', MAIN_CONTROL, 'AtMostOne', 'ro', ['PIER_EAST', 'East', false], ['PIER_WEST', 'West', false])
 	readonly #guideRate = makeNumberVector('', 'GUIDE_RATE', 'Guiding Rate', MAIN_CONTROL, 'rw', ['GUIDE_RATE_WE', 'W/E Rate', 0.5, 0, 1, 0.1, '%.8f'], ['GUIDE_RATE_NS', 'N/E Rate', 0.5, 0, 1, 0.1, '%.0f'])
 	readonly #guideNS = makeNumberVector('', 'TELESCOPE_TIMED_GUIDE_NS', 'Guide N/S', MAIN_CONTROL, 'rw', ['TIMED_GUIDE_N', 'North (ms)', 0, 0, 60000, 1, '%.0f'], ['TIMED_GUIDE_S', 'South (ms)', 0, 0, 60000, 1, '%.0f'])
 	readonly #guideWE = makeNumberVector('', 'TELESCOPE_TIMED_GUIDE_WE', 'Guide W/E', MAIN_CONTROL, 'rw', ['TIMED_GUIDE_W', 'West (ms)', 0, 0, 60000, 1, '%.0f'], ['TIMED_GUIDE_E', 'East (ms)', 0, 0, 60000, 1, '%.0f'])
-	// Which families of error are simulated. Everything is off by default, so a fresh mount is
-	// mechanically perfect and behaves exactly as an ideal one; turning a member on brings in the whole
-	// family at the values its vector carries.
-	//
-	// This is what makes the defaults of those vectors useful. They describe a mid-range amateur German
-	// equatorial rather than a perfect machine, so exercising a realistic mount is one switch rather
-	// than a dozen numbers somebody has to invent. It is also the single authoritative gate for each
-	// family: without it, "disabled" was inferred from a magic zero in half a dozen scattered places.
 	// oxfmt-ignore
 	readonly #errorFeatures = makeSwitchVector('', 'SIMULATOR_ERROR_FEATURES', 'Error Features', SIMULATION, 'AnyOfMany', 'rw', ['ALIGNMENT', 'Alignment', false], ['PERIODIC_ERROR', 'Periodic Error', false], ['MECHANICS', 'Mechanics', false], ['GUIDING', 'Guiding', false], ['SETTLING', 'Settling', false], ['FLEXURE', 'Flexure', false], ['WIND', 'Wind', false], ['TRACKING_RATE', 'Tracking Rate', false])
 	// Geometric imperfections of the mount, all signed arcseconds. The polar-axis range spans ten
@@ -1496,12 +1484,8 @@ export class MountSimulator extends DeviceSimulator {
 		const pierSide = expectedPierSide(this.#mechanical.rightAscension, this.#mechanical.declination, this.#siderealTime())
 		if (pierSide === this.pierSide) return false
 
-		if (pierSide === 'EAST') selectOnSwitch(this.#pierSide, 'PIER_EAST')
-		else if (pierSide === 'WEST') selectOnSwitch(this.#pierSide, 'PIER_WEST')
-		else {
-			this.#pierSide.elements.PIER_EAST.value = false
-			this.#pierSide.elements.PIER_WEST.value = false
-		}
+		this.#pierSide.elements.PIER_EAST.value = pierSide === 'EAST'
+		this.#pierSide.elements.PIER_WEST.value = pierSide === 'WEST'
 
 		return true
 	}
