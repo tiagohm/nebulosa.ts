@@ -55,6 +55,19 @@ export function resetMechanicalAxisMotion(state: MechanicalAxisState) {
 	state.moving = false
 }
 
+// Returns an axis to a perfect transmission: no slack open, no flank loaded, nothing stuck.
+//
+// Unlike `resetMechanicalAxisMotion`, which stops the axis but keeps it loaded where it was, this
+// discards the slack as well. Used when the transmission stops being simulated at all, where leaving
+// the state behind would let a later re-enable resume from slack taken up under a mount that no
+// longer had any.
+export function clearMechanicalAxis(state: MechanicalAxisState) {
+	state.backlashRemaining = 0
+	state.loadDirection = 0
+	state.pendingCommand = 0
+	state.moving = false
+}
+
 // Records that the axis is being driven in `direction` without moving it, reloading the slack if that
 // reverses the current load.
 //

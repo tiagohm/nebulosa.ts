@@ -508,6 +508,44 @@ describe('mount simulator pointing errors', () => {
 		}
 	})
 
+	test('discards latent transmission and ring-down state when their families are disabled', () => {
+		const { client, mount } = makeMount('mount.features.latent', 'MECHANICS', 'SETTLING')
+
+		try {
+			client.sendNumber({ device: mount.name, name: 'MOUNT_MECHANICS', elements: { ...NO_MECHANICS, BACKLASH_DEC: 120 } })
+			mount.setTrackingEnabled(true)
+
+			// Open the slack in one direction and start a ring-down, so both families hold live state
+			// rather than merely carrying a configuration.
+			mount.pulse('NORTH', 4000)
+			mount.advance(2)
+			mount.setSlewRate('SPEED_6')
+			mount.goTo(mount.rightAscension, mount.declination + deg(1))
+			for (let i = 0; i < 50 && mount.isSlewing; i++) mount.advance(0.1)
+			mount.advance(0.05)
+
+			client.sendSwitch({ device: mount.name, name: 'SIMULATOR_ERROR_FEATURES', elements: { MECHANICS: false, SETTLING: false } })
+
+			// An identity configuration only stops the state growing. Left behind, the ring-down would
+			// carry its old velocity into the next motion and the slack would still be open on the flank
+			// it was driven onto, so re-enabling would resume mid-response instead of from rest.
+			const before = { ...mount.mechanical }
+			mount.advance(1)
+			expect(mount.mechanical.declination).toBeCloseTo(before.declination, 12)
+
+			// With the transmission perfect, a reversal now moves the axis immediately instead of first
+			// paying for slack that was taken up while it still had some.
+			client.sendSwitch({ device: mount.name, name: 'SIMULATOR_ERROR_FEATURES', elements: { MECHANICS: true } })
+			client.sendNumber({ device: mount.name, name: 'MOUNT_MECHANICS', elements: { ...NO_MECHANICS } })
+			const reversed = mount.declination
+			mount.pulse('SOUTH', 2000)
+			mount.advance(1)
+			expect(mount.declination).toBeLessThan(reversed)
+		} finally {
+			mount.dispose()
+		}
+	})
+
 	test('re-derives the reported coordinate when the encoder index errors change', () => {
 		const { client, mount } = makeMount('mount.features.index', 'ALIGNMENT')
 

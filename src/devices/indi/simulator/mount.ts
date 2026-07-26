@@ -15,7 +15,8 @@ import { findOnSwitch, makeNumberVector, makeSwitchVector, makeTextVector, type 
 import type { ClientSimulator } from './client'
 import { GUIDE_JITTER_SEED, KING_DRIFT_RATE, LUNAR_DRIFT_RATE, MAIN_CONTROL, MAX_GUIDE_RATE, MAX_QUEUED_GUIDE_PULSES, MOUNT_TRAJECTORY_CAPACITY, SIDEREAL_DRIFT_RATE, SIMULATION, SLEW_RATES, SLEW_SPEED_FACTOR, SOLAR_DRIFT_RATE, TICK_INTERVAL_MS } from './constants'
 import { DeviceSimulator } from './device'
-import { advanceMechanicalAxis, IDENTITY_MECHANICAL_AXIS_CONFIG, loadMechanicalAxis, type MechanicalAxisConfig, mechanicalAxisState, resetMechanicalAxisMotion } from './mount.axis'
+// oxfmt-ignore
+import { advanceMechanicalAxis, clearMechanicalAxis, IDENTITY_MECHANICAL_AXIS_CONFIG, loadMechanicalAxis, type MechanicalAxisConfig, mechanicalAxisState, resetMechanicalAxisMotion } from './mount.axis'
 import { type GuidePulse, type GuideResponseConfig, IDENTITY_GUIDE_RESPONSE_CONFIG, integrateGuidePulses, quantizeGuideDuration, retireGuidePulses } from './mount.guiding'
 // oxfmt-ignore
 import { IDENTITY_PERIODIC_ERROR_CURVE, PERIODIC_ERROR_HARMONICS, periodicErrorAt, periodicErrorBound, type PeriodicErrorCurve, trainPeriodicErrorCorrection } from './mount.periodic'
@@ -702,6 +703,19 @@ export class MountSimulator extends DeviceSimulator {
 		if (!this.#simulatesMechanics) {
 			this.#homeScatterRightAscension = 0
 			this.#homeScatterDeclination = 0
+			// Slack that is open, the flank it is open on, and a stopped axis waiting to break free are
+			// all live state of the transmission. Replacing its configuration with the identity stops any
+			// of it growing but leaves what was already there, so re-enabling the family would resume
+			// from slack that was taken up under a mount that no longer had any.
+			clearMechanicalAxis(this.#rightAscensionAxis)
+			clearMechanicalAxis(this.#declinationAxis)
+		}
+
+		if (!this.#simulatesSettling) {
+			// A ring-down in progress is likewise only frozen by an identity configuration, and would
+			// carry its old offset and velocity into whatever the mount does next.
+			resetSettling(this.#rightAscensionSettling)
+			resetSettling(this.#declinationSettling)
 		}
 	}
 
