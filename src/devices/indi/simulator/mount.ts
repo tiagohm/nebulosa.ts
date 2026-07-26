@@ -1271,10 +1271,13 @@ export class MountSimulator extends DeviceSimulator {
 			// coordinate already being reported swallowed a whole step without turning the worm or letting
 			// the drive accumulate any of its rate error, and a goto that finished early lost the tracking
 			// for the remainder of its tick.
-			if (settlingSeconds > 0) {
-				this.#advanceWormPhase(this.#rightAscensionMotorRate(), settlingSeconds)
-				this.#advanceFreeMotion(settlingSeconds)
-			}
+			//
+			// Integrated over the interval that was really left, not merely for its duration: the guide
+			// rates standing in the fields were averaged over the whole step, and applying them to the
+			// remainder alone charged every pulse twice for the part of the step the slew had taken. A
+			// pulse confined to the last tenth of a step arrived at a tenth of its strength, and one that
+			// had already finished before the mount arrived went on moving the axes afterwards.
+			if (settlingSeconds > 0) this.#advanceGuidedMotion(endTime - settlingSeconds * 1000, endTime)
 		} else {
 			this.#advanceGuidedMotion(startTime, endTime)
 		}

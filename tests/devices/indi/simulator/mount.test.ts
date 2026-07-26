@@ -1547,6 +1547,32 @@ describe('mount simulator pointing errors', () => {
 		}
 	})
 
+	test('delivers a pulse that falls entirely after the slew arrived', () => {
+		const { client, mount } = makeMount('mount.slew.remainder.pulse', 'GUIDING')
+
+		try {
+			client.sendNumber({ device: mount.name, name: 'MOUNT_GUIDING', elements: { ...NO_GUIDING, LATENCY: 90 } })
+			mount.setGuideRate(1, 1)
+			mount.setTrackingEnabled(true)
+			mount.setSlewRate('SPEED_1')
+
+			// The goto takes nine tenths of the step, and the pulse falls inside the tenth that is left.
+			const target = mount.declination + deg(0.135)
+			mount.goTo(mount.rightAscension, target)
+			mount.pulse('NORTH', 10)
+			mount.advance(0.1)
+
+			expect(mount.isSlewing).toBeFalse()
+
+			// Ten milliseconds at the full guide rate is about 0.15 arcseconds. Charging the remainder with
+			// a rate averaged over the whole step instead attenuated the pulse by the fraction of the step
+			// the slew had taken, delivering a tenth of it.
+			expect(toArcsec(mount.mechanical.declination - target)).toBeCloseTo(0.15, 2)
+		} finally {
+			mount.dispose()
+		}
+	})
+
 	test('spends the rest of the step tracking once the slew has arrived', () => {
 		const { client, mount } = makeMount('mount.slew.remainder', 'PERIODIC_ERROR')
 
