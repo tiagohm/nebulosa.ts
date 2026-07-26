@@ -17,15 +17,26 @@ export const MAX_QUEUED_GUIDE_PULSES = 8
 // Seed of the deterministic generator used for guide-latency jitter, so sessions are reproducible.
 export const GUIDE_JITTER_SEED = 0x5f3a1c27
 // Boresight samples a mount keeps for exposure integration. At the default tick this covers a bit
-// over three minutes, which spans a typical sub-exposure; a longer one trails only over the retained
-// window. Three Float64Array of this length cost about 49 KB per simulated mount.
-export const MOUNT_TRAJECTORY_CAPACITY = 2048
+// over thirteen minutes; an exposure longer than that trails only over the retained window, with
+// everything before it collapsed onto the oldest sample. Three Float64Array of this length cost about
+// 197 KB per simulated mount.
+//
+// Sized for a DARV run rather than for an ordinary sub-exposure. A drift-alignment leg is chosen to
+// make a small polar error visible, not to keep the field still, so its exposure runs to several
+// minutes per leg and a window that merely spanned a typical sub-exposure truncated a third of the
+// trail.
+export const MOUNT_TRAJECTORY_CAPACITY = 8192
 // Positions probed to estimate how far the field moves during an exposure, before deciding how finely
 // to integrate it. More than the two endpoints, so that a periodic error wiggling back to where it
 // started is not mistaken for a stationary field.
 export const TRAJECTORY_PROBE_SAMPLES = 8
 // Most positions an exposure is integrated over. Bounds the cost of a badly drifting mount, at the
 // price of under-resolving a trail longer than half this many pixels.
+//
+// Known limit: a drift-alignment run deliberately sweeps the field hundreds of pixels, so its trail
+// comes out as this many discrete images of each star rather than a continuous line. Rendering one
+// faithfully would need a sample per pixel of trail, or segments instead of points in the image
+// generator; neither is worth it for a case the rest of the simulator does not depend on.
 export const MAX_TRAJECTORY_SAMPLES = 64
 // Field displacement, in unbinned pixels, that each integration sample is allowed to cover. Half a
 // pixel keeps a trail continuous without over-sampling a field that barely moves.
