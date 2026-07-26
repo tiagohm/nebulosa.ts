@@ -15,7 +15,7 @@ import type { ClientSimulator } from './client'
 import { GUIDE_JITTER_SEED, KING_DRIFT_RATE, LUNAR_DRIFT_RATE, MAIN_CONTROL, MAX_GUIDE_RATE, MAX_QUEUED_GUIDE_PULSES, MOUNT_TRAJECTORY_CAPACITY, SIDEREAL_DRIFT_RATE, SIMULATION, SLEW_RATES, SLEW_SPEED_FACTOR, SOLAR_DRIFT_RATE, TICK_INTERVAL_MS } from './constants'
 import { DeviceSimulator } from './device'
 import { advanceMechanicalAxis, clearMechanicalAxis, driveMechanicalAxis, IDENTITY_MECHANICAL_AXIS_CONFIG, type MechanicalAxisConfig, mechanicalAxisState, reconcileMechanicalAxis, resetMechanicalAxisMotion } from './mount.axis'
-import { type GuidePulse, type GuideResponseConfig, IDENTITY_GUIDE_RESPONSE_CONFIG, integrateGuidePulses, nextGuidePulseBoundary, quantizeGuideDuration, retireGuidePulses } from './mount.guiding'
+import { type GuidePulse, type GuideResponseConfig, IDENTITY_GUIDE_RESPONSE_CONFIG, integrateGuidePulses, nextGuidePulseBoundary, quantizeGuideDuration, retireGuidePulses, shiftGuidePulses } from './mount.guiding'
 import { IDENTITY_PERIODIC_ERROR_CURVE, PERIODIC_ERROR_HARMONICS, periodicErrorAt, periodicErrorBound, type PeriodicErrorCurve, trainPeriodicErrorCorrection } from './mount.periodic'
 import { advanceSettling, exciteSettling, IDENTITY_SETTLING_CONFIG, resetSettling, type SettlingConfig, settlingState } from './mount.settling'
 import { advanceTrackingRateError, IDENTITY_TRACKING_RATE_ERROR_CONFIG, resetTrackingRateError, TRACKING_RATE_CALIBRATION_TEMPERATURE, type TrackingRateErrorConfig, trackingRateErrorState } from './mount.tracking'
@@ -1078,6 +1078,10 @@ export class MountSimulator extends DeviceSimulator {
 			return
 		}
 
+		// Carried onto the new timeline before the clock moves under them. A pulse is a command to run
+		// for its own duration, not until a particular reading of a clock a client is free to change.
+		shiftGuidePulses(this.#westEastPulses, value.utc - this.#utcTime)
+		shiftGuidePulses(this.#northSouthPulses, value.utc - this.#utcTime)
 		this.#utcTime = value.utc
 		// The carried fraction belongs to the clock that was just replaced.
 		this.#utcTimeRemainder = 0

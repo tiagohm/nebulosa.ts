@@ -109,3 +109,19 @@ export function nextGuidePulseBoundary(pulses: readonly GuidePulse[], from: numb
 
 	return boundary
 }
+
+// Moves every queued pulse by `delta` milliseconds, in place.
+//
+// The queue is timed on absolute instants of the simulated clock, so replacing that clock has to carry
+// the pulses with it: a pulse was commanded to run for its own duration, not until a particular
+// reading of a clock somebody is free to change. Left on the old timeline, a forward jump retires a
+// pulse without ever delivering the rest of its motion, and a backward one leaves the guide vectors
+// busy until the clock catches up, which can be hours.
+export function shiftGuidePulses(pulses: GuidePulse[], delta: number) {
+	if (delta === 0) return
+
+	for (let i = 0; i < pulses.length; i++) {
+		pulses[i].start += delta
+		pulses[i].end += delta
+	}
+}

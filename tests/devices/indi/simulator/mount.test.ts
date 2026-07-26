@@ -999,6 +999,33 @@ describe('mount simulator pointing errors', () => {
 		}
 	})
 
+	test('carries a running guide pulse onto the new clock', () => {
+		const { mount } = makeMount('mount.settime.pulse')
+
+		try {
+			mount.setTrackingEnabled(true)
+
+			const start = mount.mechanical.declination
+			mount.pulse('NORTH', 2000)
+			mount.advance(0.5)
+			expect(mount.isPulsing).toBeTrue()
+
+			// An hour forward, mid pulse. The pulse was commanded to run for two seconds, not until a
+			// particular reading of a clock: left on the old timeline it is already long over, so it would
+			// be retired without ever delivering the rest of its motion.
+			mount.setTime({ utc: mount.utcTime + 3600_000, offset: 0 })
+			expect(mount.isPulsing).toBeTrue()
+
+			mount.advance(1.5)
+			expect(mount.isPulsing).toBeFalse()
+
+			// The declination guide rate is half sidereal, so two full seconds are about fifteen arcseconds.
+			expect(toArcsec(mount.mechanical.declination - start)).toBeCloseTo(15.04, 1)
+		} finally {
+			mount.dispose()
+		}
+	})
+
 	test('keeps the recorded trajectory when only the UTC offset changes', () => {
 		const { mount } = makeMount('mount.settime.offset')
 
