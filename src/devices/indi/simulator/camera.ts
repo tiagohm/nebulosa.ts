@@ -2,7 +2,7 @@ import { equatorialToJ2000 } from '../../../astronomy/coordinates/coordinate'
 import { pixelScale } from '../../../astronomy/formulas'
 import { Gnomonic } from '../../../astronomy/projections/projection'
 import { formatTemporal } from '../../../astronomy/time/temporal'
-import { type Time, timeNow } from '../../../astronomy/time/time'
+import { type Time, timeNow, timeUnix } from '../../../astronomy/time/time'
 import { DEG2RAD, PIOVERTWO, TAU } from '../../../core/constants'
 import { writeImageToFits, writeImageToXisf } from '../../../imaging/model/image'
 import type { CfaPattern, Image, ImageRawType } from '../../../imaging/model/types'
@@ -258,6 +258,19 @@ export class CameraSimulator extends DeviceSimulator {
 		const mount = this.activeMount
 		if (mount === undefined) return undefined
 		return [mount.equatorialCoordinate.rightAscension, mount.equatorialCoordinate.declination]
+	}
+
+	// Instant the scene is built for, taken from the mount's simulated clock when there is one.
+	//
+	// The reported coordinate is in the equatorial frame of date, and turning it into the J2000 the
+	// catalog is queried and projected in is a rotation by however far the epoch is from J2000. That
+	// epoch is the mount's, not the wall clock's: a simulator whose TIME_UTC has been set elsewhere
+	// reports coordinates for the date it believes in, and rotating them by today's precession would
+	// query a field decades away from the one it is pointing at, while stamping the frame with its own
+	// timestamp. Falls back to the wall clock for a real mount, which has no simulated clock to read.
+	get sceneTime(): Time {
+		const simulator = this.activeMountSimulator
+		return simulator !== undefined ? timeUnix(simulator.utcTime / 1000, true) : timeNow(true)
 	}
 
 	get activeFocuser() {
@@ -1088,7 +1101,7 @@ export class CameraSimulator extends DeviceSimulator {
 		// and doing that at two instants would rotate one against the other. Built once here so the
 		// precession-nutation matrix is computed once and reused by every conversion.
 		const center = this.reportedCenter
-		const time = timeNow(true)
+		const time = this.sceneTime
 		const offsets = this.#exposureOffsets(arcsec(pixelScale(CAMERA_PIXEL_SIZE, this.telescopeFocalLength)), exposureTime, center, time)
 		const stars = await this.#ensureCatalog(exposureTravel(offsets), center, time)
 		const frameX = this.#frame.elements.X.value

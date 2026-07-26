@@ -1,4 +1,6 @@
 import { describe, expect, test } from 'bun:test'
+import { equatorialToJ2000 } from '../../../../src/astronomy/coordinates/coordinate'
+import { timeNow, timeUnix } from '../../../../src/astronomy/time/time'
 import { IndiClientHandlerSet } from '../../../../src/devices/indi/client'
 import type { GuideOutput, Thermometer } from '../../../../src/devices/indi/device'
 import { CameraManager, type DeviceProvider, FocuserManager, GuideOutputManager, MountManager, RotatorManager, ThermometerManager } from '../../../../src/devices/indi/manager'
@@ -11,7 +13,7 @@ import type { CatalogSource } from '../../../../src/devices/indi/simulator/types
 import { readImageFromBuffer } from '../../../../src/imaging/model/image'
 import type { ImageRawType } from '../../../../src/imaging/model/types'
 import { mulberry32 } from '../../../../src/math/numerical/random'
-import { arcsec, deg, formatDEC, formatRA, hour } from '../../../../src/math/units/angle'
+import { arcsec, deg, formatDEC, formatRA, hour, normalizePI, toArcsec } from '../../../../src/math/units/angle'
 import { CameraFrameReceiver, isTimeConsumingTestSkipped, waitUntil } from '../../../util'
 
 // Integration coverage for simulated camera acquisition, rendering, metadata, and related devices.
@@ -660,6 +662,63 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		expect(delayed[1]).toBe(immediate[1])
 		expect(delayed[2]).toBeCloseTo(immediate[2], 6)
 	}, 20000)
+
+	test('queries the catalog at the epoch the mount believes in', async () => {
+		const handler = new IndiClientHandlerSet()
+		const mountManager = new MountManager()
+		const cameraManager = new CameraManager()
+		using client = new ClientSimulator('camera.epoch', handler)
+
+		handler.add(mountManager)
+		handler.add(cameraManager)
+
+		let queried: readonly [number, number] | undefined
+
+		const catalogProvider: CatalogSource = (rightAscension, declination) => {
+			queried = [rightAscension, declination]
+			return []
+		}
+
+		using mountSimulator = new MountSimulator('Mount Simulator', client)
+		using cameraSimulator = new CameraSimulator('Camera Simulator', client, { mountManager, catalogSources: { EPOCH: catalogProvider } })
+		const mount = mountManager.get(client, mountSimulator.name)!
+		const camera = cameraManager.get(client, cameraSimulator.name)!
+
+		mountSimulator.connect()
+		cameraSimulator.connect()
+		await waitUntil(() => mount.connected && camera.connected)
+
+		mountSimulator.syncTo(hour(5), deg(20))
+		// Tracking holds the reported coordinate at exactly the synced one, so the query can be compared
+		// against a conversion of that coordinate rather than of wherever the sky had carried it.
+		mountSimulator.setTrackingEnabled(true)
+		await waitUntil(() => closeTo(mount.equatorialCoordinate.declination, deg(20), 1e-9))
+
+		cameraManager.snoop(camera, mount)
+		await waitUntil(() => cameraManager.properties.get(camera)?.ACTIVE_DEVICES?.elements.ACTIVE_TELESCOPE.value === mount.name)
+
+		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_CATALOG_SOURCE', elements: { EPOCH: true } })
+		await waitUntil(() => cameraManager.properties.get(camera)?.SIMULATOR_CATALOG_SOURCE?.elements.EPOCH.value === true)
+
+		// The mount is told it is 2000, a quarter century before the wall clock.
+		const utc = Date.parse('2000-01-01T12:00:00Z')
+		mountSimulator.setTime({ utc, offset: 0 })
+
+		cameraSimulator.startExposure(0.001)
+		await waitUntil(() => queried !== undefined, 10000, 20)
+
+		// The coordinate the mount reports belongs to the frame of its own date, so that is the epoch the
+		// rotation into J2000 has to use. Nutation still moves it by a few arcseconds at this epoch, which
+		// is why the query is compared against the conversion rather than against the coordinate itself.
+		const [atMountEpoch, atMountEpochDeclination] = equatorialToJ2000(hour(5), deg(20), timeUnix(utc / 1000, true))
+		expect(toArcsec(Math.abs(normalizePI(queried![0] - atMountEpoch)))).toBeLessThan(0.1)
+		expect(toArcsec(Math.abs(queried![1] - atMountEpochDeclination))).toBeLessThan(0.1)
+
+		// Rotating by today's precession instead lands about twenty arcminutes away, on a field the mount
+		// is not pointing at, in a frame stamped with the mount's own timestamp.
+		const [atWallClock] = equatorialToJ2000(hour(5), deg(20), timeNow(true))
+		expect(toArcsec(Math.abs(normalizePI(atWallClock - atMountEpoch)))).toBeGreaterThan(300)
+	}, 15000)
 
 	test('centres the catalog on the coordinate the trajectory is measured against', async () => {
 		// The catalog is projected around the reported coordinate and the trajectory offsets are measured
