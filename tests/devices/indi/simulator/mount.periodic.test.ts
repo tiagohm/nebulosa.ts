@@ -140,6 +140,27 @@ describe('periodic error correction', () => {
 		expect(periodicErrorCorrectionAt(1.2 + TAU * 3, trained)).toBeCloseTo(periodicErrorCorrectionAt(1.2, trained), 12)
 	})
 
+	test('bounds a residual that playback made worse than the raw curve', () => {
+		// Four bins cannot represent a third harmonic, so the correction reconstructs it wrongly between
+		// its samples and opposes the raw curve there, leaving more error than there was to begin with.
+		// A bound that ignored the correction would understate this and under-size a camera margin.
+		const worm = curve([0, 0, 5])
+		const trained = trainPeriodicErrorCorrection(worm, 4, 1)
+
+		const residual = peakResidual(trained)
+		expect(residual).toBeGreaterThan(toArcsec(periodicErrorBound(worm)))
+		expect(residual).toBeLessThanOrEqual(toArcsec(periodicErrorBound(trained)))
+	})
+
+	test('bounds the residual of every training length', () => {
+		for (const samples of [4, 5, 8, 16, 64, 256]) {
+			for (const gain of [0.5, 1]) {
+				const trained = trainPeriodicErrorCorrection(curve([5, 2, 1]), samples, gain)
+				expect(peakResidual(trained)).toBeLessThanOrEqual(toArcsec(periodicErrorBound(trained)))
+			}
+		}
+	})
+
 	test('refuses to train from a table too short or a non-positive gain', () => {
 		const worm = curve([5])
 		expect(trainPeriodicErrorCorrection(worm, 3, 1).correction).toBeUndefined()

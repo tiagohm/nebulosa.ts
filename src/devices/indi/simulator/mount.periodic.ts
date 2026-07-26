@@ -95,13 +95,30 @@ export function trainPeriodicErrorCorrection(curve: PeriodicErrorCurve, samples:
 	return { amplitudes: curve.amplitudes, phases: curve.phases, correction }
 }
 
-// Largest error the curve can produce, radians, being the sum of the harmonic semi-amplitudes.
+// Largest error the curve can leave on the sky, radians.
 //
-// Reached only where the harmonics happen to peak together, so it overstates a typical curve; that is
-// the right direction for a caller sizing a buffer or a margin. The correction is ignored, since it
-// can only reduce the residual.
+// The raw part is the sum of the harmonic semi-amplitudes, reached only where the harmonics happen to
+// peak together, so it already overstates a typical curve; that is the right direction for a caller
+// sizing a buffer or a margin.
+//
+// The correction is added rather than subtracted, because playback does not only reduce the error. A
+// table too short to represent a harmonic reconstructs it wrongly between its samples and can oppose
+// the raw curve there, leaving more than was there to begin with: a unit third harmonic trained into
+// four bins peaks at about 1.36 times its own amplitude. Since interpolation never leaves the range
+// of the samples, the magnitude of the largest one bounds the correction everywhere, and the sum
+// bounds the residual. That is loose for a well-trained mount, where the two nearly cancel, but a
+// margin that is too generous costs a little memory while one that is too small loses stars.
 export function periodicErrorBound(curve: PeriodicErrorCurve): Angle {
 	let bound = 0
 	for (let i = 0; i < curve.amplitudes.length; i++) bound += Math.abs(curve.amplitudes[i])
+
+	const table = curve.correction
+
+	if (table !== undefined) {
+		let peak = 0
+		for (let i = 0; i < table.length; i++) peak = Math.max(peak, Math.abs(table[i]))
+		bound += peak
+	}
+
 	return bound
 }
