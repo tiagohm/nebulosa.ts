@@ -937,8 +937,9 @@ export class MountSimulator extends DeviceSimulator {
 		this.#setMechanical(rightAscension - this.#indexErrorRightAscension, declination - this.#indexErrorDeclination)
 		// A sync is a discontinuity rather than motion, so the recorded past no longer describes where
 		// this telescope has been. Keeping it would let an exposure straddling the sync integrate a jump
-		// across the sky as if the tube had swept through it.
-		this.#resetBoresightHistory()
+		// across the sky as if the tube had swept through it, and it is also where the errors that live
+		// in the bookkeeping are re-registered against the sky.
+		this.#absorbAccumulatedError()
 	}
 
 	// Slews to the configured home position.
@@ -1040,6 +1041,11 @@ export class MountSimulator extends DeviceSimulator {
 		// already held and break that, leaving an exposure to clamp onto a stale sample or interpolate
 		// the wrong pair; setting it forward leaves a gap the mount never actually travelled. Either way
 		// the history no longer describes this telescope, which is the same reason a sync drops it.
+		//
+		// Only the history, though. A sync also absorbs the errors that live in the bookkeeping, and
+		// saying what time it is does not: the drift the drive had walked away and any ring-down in
+		// progress are facts about the mount, and clearing them here made the optical axis jump back
+		// towards the reported coordinate whenever a client set the clock or its UTC offset.
 		this.#resetBoresightHistory()
 		this.notify(this.#time)
 	}
@@ -1581,30 +1587,39 @@ export class MountSimulator extends DeviceSimulator {
 		this.#homeCoordinate.rightAscension = this.#siderealTime()
 		this.#parkCoordinate.rightAscension = this.#homeCoordinate.rightAscension
 		this.#setMechanical(this.#homeCoordinate.rightAscension, this.#homeCoordinate.declination, notify)
-		this.#resetBoresightHistory()
+		this.#absorbAccumulatedError()
 	}
 
 	// Drops the recorded trajectory and seeds it with the present.
 	//
-	// Used wherever the boresight moves discontinuously instead of travelling: connecting, where the
-	// previous run says nothing about this one, and syncing, which repositions the axes instantly. The
-	// seed sample makes the trajectory usable before the first tick has run.
+	// Used wherever the recorded past stops describing this telescope: connecting, syncing, and setting
+	// the clock the samples are indexed by. The seed sample makes the trajectory usable before the
+	// first tick has run.
+	//
+	// Nothing but the trajectory is touched here. Rewinding or advancing the clock is a statement about
+	// what time it is, not a command to the mount, so the drift a drive had walked away and the
+	// excursion a structure was in the middle of both have to survive it.
 	#resetBoresightHistory() {
-		// Any ring-down in progress belongs to the position that was just abandoned.
-		resetSettling(this.#rightAscensionSettling)
-		resetSettling(this.#declinationSettling)
-		// A sync re-registers the bookkeeping against the sky, so every error that lives in the
-		// bookkeeping is absorbed into the new zero: the travel the drive walked away silently, and the
-		// offset the home sensor left behind.
-		//
-		// Two things deliberately survive it. The wander of the rate itself, because the drive is still
-		// the same drive and starts walking again from where its rate was. And the wind, because it is a
-		// live disturbance rather than an accumulated error: syncing does not make the air still.
-		this.#trackingRateOffset = 0
-		this.#homeScatterRightAscension = 0
-		this.#homeScatterDeclination = 0
 		clearBoresightHistory(this.#boresightHistory)
 		const boresight = this.boresight
 		recordBoresightSample(this.#boresightHistory, this.#utcTime, boresight.rightAscension, boresight.declination)
+	}
+
+	// Re-registers the bookkeeping against the sky, as a sync does, and drops the trajectory with it.
+	//
+	// Every error that lives in the bookkeeping is absorbed into the new zero: the travel the drive
+	// walked away silently, the offset the home sensor left behind, and any ring-down in progress,
+	// which belongs to the position that was just abandoned.
+	//
+	// Two things deliberately survive it. The wander of the rate itself, because the drive is still the
+	// same drive and starts walking again from where its rate was. And the wind, because it is a live
+	// disturbance rather than an accumulated error: syncing does not make the air still.
+	#absorbAccumulatedError() {
+		resetSettling(this.#rightAscensionSettling)
+		resetSettling(this.#declinationSettling)
+		this.#trackingRateOffset = 0
+		this.#homeScatterRightAscension = 0
+		this.#homeScatterDeclination = 0
+		this.#resetBoresightHistory()
 	}
 }

@@ -780,6 +780,38 @@ describe('mount simulator pointing errors', () => {
 		}
 	})
 
+	test('sets the clock without absorbing the errors only a sync absorbs', () => {
+		const { client, mount } = makeMount('mount.settime.errors', 'TRACKING_RATE', 'SETTLING')
+
+		try {
+			client.sendNumber({ device: mount.name, name: 'MOUNT_TRACKING_RATE', elements: { ...NO_TRACKING_RATE, BIAS: 5000 } })
+			client.sendNumber({ device: mount.name, name: 'MOUNT_SETTLING', elements: { OVERSHOOT: 30, FREQUENCY: 2, DAMPING_RATIO: 0.15 } })
+
+			// Let the drive walk some travel away unnoticed, and leave the structure mid ring-down.
+			mount.setTrackingEnabled(true)
+			mount.advance(10)
+			expect(Math.abs(toArcsec(mount.trackingRateOffset))).toBeGreaterThan(0.5)
+
+			mount.setSlewRate('SPEED_7')
+			const target = mount.declination + deg(10)
+			mount.goTo(mount.rightAscension, target)
+			for (let i = 0; i < 100 && mount.isSlewing; i++) mount.advance(0.01)
+			mount.advance(0.05)
+			expect(toArcsec(Math.abs(mount.mechanical.declination - target))).toBeGreaterThan(5)
+
+			// Saying what time it is is not a command to the mount: neither error is registered against
+			// the sky by it, so the drift stands and the ring-down still has to be paid back.
+			const drift = mount.trackingRateOffset
+			mount.setTime({ utc: mount.utcTime + 3600_000, offset: 0 })
+			expect(mount.trackingRateOffset).toBe(drift)
+
+			for (let i = 0; i < 2000; i++) mount.advance(0.01)
+			expect(toArcsec(Math.abs(mount.mechanical.declination - target))).toBeLessThan(0.01)
+		} finally {
+			mount.dispose()
+		}
+	})
+
 	test('overshoots in the direction the axis was travelling', () => {
 		// Peak excursion past the target, signed, over the quarter cycle that follows a slew of `span`.
 		function excursionAfter(name: string, span: Angle) {
