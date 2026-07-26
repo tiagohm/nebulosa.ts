@@ -375,6 +375,28 @@ describe('mount simulator pointing errors', () => {
 		}
 	})
 
+	test('keeps the wind blowing steadily across an unrelated feature switch', () => {
+		const { client, mount } = makeMount('mount.features.wind', 'WIND')
+
+		try {
+			mount.advance(1)
+			const before = mount.boresight.declination
+
+			// The wind is a live process, not a value read back from its vector, so rebuilding the cached
+			// configurations must not restart it. Teleporting the optical axis here would be the same
+			// failure a sync used to cause: an exposure straddling the jump integrates across it and
+			// paints a trail the telescope never followed.
+			client.sendSwitch({ device: mount.name, name: 'SIMULATOR_ERROR_FEATURES', elements: { SETTLING: true } })
+			expect(mount.boresight.declination).toBe(before)
+
+			// Changing the weather itself still takes effect at once.
+			client.sendNumber({ device: mount.name, name: 'MOUNT_WIND', elements: { AMPLITUDE: 60 } })
+			expect(mount.boresight.declination).not.toBe(before)
+		} finally {
+			mount.dispose()
+		}
+	})
+
 	test('re-derives the reported coordinate when the encoder index errors change', () => {
 		const { client, mount } = makeMount('mount.features.index', 'ALIGNMENT')
 

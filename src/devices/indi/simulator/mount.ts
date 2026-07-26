@@ -711,13 +711,22 @@ export class MountSimulator extends DeviceSimulator {
 		this.#setMechanical(this.#mechanical.rightAscension, this.#mechanical.declination)
 	}
 
-	// Rebuilds the wind configuration from MOUNT_WIND and reseeds the deflection from the settled
-	// distribution of the new conditions, so a change of weather takes effect at once instead of
-	// spending several correlation times warming up from whatever the old conditions had left.
+	// Rebuilds the wind configuration from MOUNT_WIND, reseeding the deflection from the settled
+	// distribution when the conditions actually changed, so a change of weather takes effect at once
+	// instead of spending several correlation times warming up from whatever the old one had left.
+	//
+	// Only when they changed, because this runs whenever any cached configuration is rebuilt, including
+	// on an unrelated feature switch. Reseeding unconditionally teleported the optical axis by about an
+	// arcsecond every time some other family was toggled, and an exposure straddling that jump would
+	// integrate across it and paint a trail the telescope never followed.
 	#refreshWind() {
 		const { AMPLITUDE, CORRELATION_TIME } = this.#wind.elements
+		const previous = this.#windConfig
 		this.#windConfig = this.#simulatesWind && AMPLITUDE.value > 0 ? { amplitude: AMPLITUDE.value * ASEC2RAD, correlationTime: CORRELATION_TIME.value } : IDENTITY_WIND_CONFIG
-		resetWind(this.#windState, this.#windConfig, this.#normal)
+
+		if (this.#windConfig.amplitude !== previous.amplitude || this.#windConfig.correlationTime !== previous.correlationTime) {
+			resetWind(this.#windState, this.#windConfig, this.#normal)
+		}
 	}
 
 	// Rebuilds the worm curve from MOUNT_PERIODIC_ERROR and retrains the correction from MOUNT_PEC.
