@@ -161,11 +161,23 @@ describe('periodic error correction', () => {
 		}
 	})
 
-	test('refuses to train from a table too short or a non-positive gain', () => {
+	test('refuses to train from a table too short or a gain that is not positive and finite', () => {
 		const worm = curve([5])
 		expect(trainPeriodicErrorCorrection(worm, 3, 1).correction).toBeUndefined()
 		expect(trainPeriodicErrorCorrection(worm, 0, 1).correction).toBeUndefined()
 		expect(trainPeriodicErrorCorrection(worm, 256, 0).correction).toBeUndefined()
+
+		// An infinite gain would fill the table with infinities, and with NaN at every bin where the raw
+		// error sampled exactly zero, and the mount would then be pointing nowhere at all.
+		const infinite = trainPeriodicErrorCorrection(worm, 8, Infinity)
+		expect(infinite.correction).toBeUndefined()
+		expect(Number.isFinite(periodicErrorBound(infinite))).toBeTrue()
+
+		for (let i = 0; i < 64; i++) {
+			expect(Number.isFinite(periodicErrorAt((i * TAU) / 64, infinite))).toBeTrue()
+		}
+
+		expect(trainPeriodicErrorCorrection(worm, 8, Number.NaN).correction).toBeUndefined()
 	})
 
 	test('caps the size of the table it will build', () => {

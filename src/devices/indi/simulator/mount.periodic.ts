@@ -87,14 +87,17 @@ export function periodicErrorAt(phase: Angle, curve: PeriodicErrorCurve): Angle 
 // error the recording never captured, from seeing and guiding noise during the run. The bins are the
 // more interesting limit: a short table cannot represent a harmonic whose period is comparable to the
 // bin spacing, so the higher orders survive playback almost untouched no matter how good the training
-// was. Fewer than MIN_CORRECTION_SAMPLES bins, or a non-positive gain, leaves the curve untrained.
+// was. Fewer than MIN_CORRECTION_SAMPLES bins leaves the curve untrained, and so does a gain that is
+// not a positive finite number: an infinite gain would write a table of infinities, and NaN wherever
+// the raw error sampled exactly zero, which `periodicErrorAt` would then hand out as the error left on
+// the sky.
 //
 // `samples` is capped at MAX_CORRECTION_SAMPLES, so asking for more bins than that, or for an infinite
 // number of them, produces the largest table rather than an allocation the size of the request. A
 // count that is not a number at all is treated as no training.
 export function trainPeriodicErrorCorrection(curve: PeriodicErrorCurve, samples: number, gain: number): PeriodicErrorCurve {
 	const count = Number.isNaN(samples) ? 0 : Math.min(Math.trunc(samples), MAX_CORRECTION_SAMPLES)
-	if (count < MIN_CORRECTION_SAMPLES || !(gain > 0)) return { amplitudes: curve.amplitudes, phases: curve.phases }
+	if (count < MIN_CORRECTION_SAMPLES || !(gain > 0) || !Number.isFinite(gain)) return { amplitudes: curve.amplitudes, phases: curve.phases }
 
 	const correction = new Float64Array(count)
 	const step = TAU / count
