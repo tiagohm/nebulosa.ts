@@ -13,7 +13,7 @@ import type { CatalogSource } from '../../../../src/devices/indi/simulator/types
 import { readImageFromBuffer } from '../../../../src/imaging/model/image'
 import type { ImageRawType } from '../../../../src/imaging/model/types'
 import { mulberry32 } from '../../../../src/math/numerical/random'
-import { arcsec, deg, formatDEC, formatRA, hour, normalizePI, toArcsec } from '../../../../src/math/units/angle'
+import { arcsec, deg, formatDEC, formatRA, hour, normalizePI, toArcsec, toDeg } from '../../../../src/math/units/angle'
 import { CameraFrameReceiver, isTimeConsumingTestSkipped, waitUntil } from '../../../util'
 
 // Integration coverage for simulated camera acquisition, rendering, metadata, and related devices.
@@ -763,6 +763,11 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		cameraSimulator.connect()
 		await waitUntil(() => mountA.connected && mountB.connected && camera.connected)
 
+		// Two mounts at two sites, so the header can be checked to describe one of them and not the other.
+		client.sendNumber({ device: first.name, name: 'GEOGRAPHIC_COORD', elements: { LAT: -22, LONG: 315, ELEV: 0 } })
+		client.sendNumber({ device: second.name, name: 'GEOGRAPHIC_COORD', elements: { LAT: 40, LONG: 250, ELEV: 0 } })
+		await waitUntil(() => mountA.geographicCoordinate.latitude !== 0 && mountB.geographicCoordinate.latitude !== 0)
+
 		// An hour of right ascension apart: fifteen degrees, hundreds of sensors' worth.
 		first.syncTo(hour(5), deg(20))
 		first.setTrackingEnabled(true)
@@ -790,6 +795,12 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		// is fifteen degrees of offset and throws the star clean off the sensor.
 		expect(Math.abs(x - (1280 - 1) * 0.5)).toBeLessThan(5)
 		expect(Math.abs(y - (1024 - 1) * 0.5)).toBeLessThan(5)
+
+		// And the header names the mount whose sky this is. Stamping A's geometry with B's name and site
+		// would leave nothing in the file to reveal the mismatch.
+		expect(frame!.header.TELESCOP).toBe(first.name)
+		expect(frame!.header.SITELAT).toBeCloseTo(toDeg(mountA.geographicCoordinate.latitude), 6)
+		expect(frame!.header.SITELONG).toBeCloseTo(toDeg(mountA.geographicCoordinate.longitude), 6)
 	}, 15000)
 
 	test('integrates the interval the shutter was open, not the one before the frame arrived', async () => {

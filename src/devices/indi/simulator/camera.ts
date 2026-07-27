@@ -18,7 +18,7 @@ import { clamp } from '../../../math/numerical/math'
 import { mulberry32 } from '../../../math/numerical/random'
 import { type Angle, arcsec, formatDEC, formatRA, normalizeAngle, toDeg, toHour } from '../../../math/units/angle'
 import { handleSetBlobVector, type IndiClientHandler } from '../client'
-import { DeviceInterfaceType, type FrameType, type GuideDirection } from '../device'
+import { DeviceInterfaceType, type FrameType, type GuideDirection, type PierSide } from '../device'
 import type { FocuserManager, GuideOutputManager, MountManager, RotatorManager, WheelManager } from '../manager'
 import { findOnSwitch, makeBlobVector, makeNumberVector, makeSwitchVector, makeTextVector, type NewNumberVector, type NewSwitchVector, type NewTextVector } from '../types'
 import type { ClientSimulator } from './client'
@@ -47,6 +47,23 @@ function exposureTravel(offsets: Readonly<Float64Array>) {
 	return travel
 }
 
+// What the frame header says about the mount it was taken through, read when the shutter opened.
+//
+// Copied rather than held as a device reference, so that the header describes the mount the exposure
+// was actually taken through even if the snooped telescope is swapped, disconnected or moved while the
+// shutter is open. Stamping the geometry of one mount with the name and site of another is worse than
+// either alone, since nothing in the file then reveals the mismatch.
+interface ExposureMountMetadata {
+	// Device name of the mount, stamped into TELESCOP.
+	readonly name: string
+	// Latitude of the observing site, radians, positive north.
+	readonly latitude: Angle
+	// Longitude of the observing site, radians, positive east.
+	readonly longitude: Angle
+	// Side of the pier the mount was on, 'NEITHER' when it does not report one.
+	readonly pierSide: PierSide
+}
+
 // Everything one exposure is rendered from, fixed when the shutter opens and closes rather than read
 // again while the frame is being drawn.
 //
@@ -68,6 +85,8 @@ interface ExposureContext {
 	// the frame would then be drawn from one mount's trajectory around another mount's centre, or fall
 	// back to a still field, and either way stop describing the exposure.
 	readonly simulator?: MountSimulator
+	// Header metadata of that mount, or undefined when there was no active mount.
+	readonly mount?: ExposureMountMetadata
 }
 
 // Camera simulator options: star catalog sources plus the related device managers used to read the
@@ -298,6 +317,14 @@ export class CameraSimulator extends DeviceSimulator {
 	get sceneTime(): Time {
 		const simulator = this.activeMountSimulator
 		return simulator !== undefined ? timeUnix(simulator.utcTime / 1000, true) : timeNow(true)
+	}
+
+	// Header metadata of the active mount, copied out of the device, or undefined when there is none.
+	#mountMetadata(): ExposureMountMetadata | undefined {
+		const mount = this.activeMount
+		if (mount === undefined) return undefined
+		const { latitude, longitude } = mount.geographicCoordinate
+		return { name: mount.name, latitude, longitude, pierSide: mount.pierSide }
 	}
 
 	get activeFocuser() {
@@ -536,10 +563,11 @@ export class CameraSimulator extends DeviceSimulator {
 		this.#exposureDuration = duration
 		this.#exposureEndTime = Date.now() + Math.trunc(duration * 1000)
 		// The frame belongs to the sky the shutter was open on: where the mount reported it was pointing
-		// then, the epoch that coordinate belongs to, and when on the simulated clock it began. Read at
-		// render time instead, all three describe wherever the mount has got to since.
+		// then, the epoch that coordinate belongs to, when on the simulated clock it began, and which
+		// mount it was. Read at render time instead, all of them describe wherever the mount has got to
+		// since, or another mount entirely.
 		const simulator = this.activeMountSimulator
-		this.#exposureContext = { startTime: simulator?.utcTime ?? Date.now(), exposureTime: duration, center: this.reportedCenter, time: this.sceneTime, simulator }
+		this.#exposureContext = { startTime: simulator?.utcTime ?? Date.now(), exposureTime: duration, center: this.reportedCenter, time: this.sceneTime, simulator, mount: this.#mountMetadata() }
 		this.#exposure.state = 'Busy'
 		this.#exposure.elements.CCD_EXPOSURE_VALUE.value = duration
 		this.#image.state = 'Busy'
@@ -701,7 +729,7 @@ export class CameraSimulator extends DeviceSimulator {
 		// one: what follows describes this frame and must not be overwritten by the one after it. The
 		// fallback covers a frame rendered without a shutter, which has nothing but the present.
 		const simulator = this.activeMountSimulator
-		const exposure: ExposureContext = this.#exposureContext ?? { startTime: simulator?.utcTime ?? Date.now(), exposureTime, center: this.reportedCenter, time: this.sceneTime, simulator }
+		const exposure: ExposureContext = this.#exposureContext ?? { startTime: simulator?.utcTime ?? Date.now(), exposureTime, center: this.reportedCenter, time: this.sceneTime, simulator, mount: this.#mountMetadata() }
 		this.#exposureContext = undefined
 
 		try {
@@ -911,18 +939,19 @@ export class CameraSimulator extends DeviceSimulator {
 
 	// Builds a compact astronomical image header for synthetic output.
 	//
-	// The centre, the epoch and the start of the exposure all come from the context rather than being
-	// read here, so the header describes the frame that was actually drawn: read afresh, the coordinate
-	// would be whatever the mount had reached by the end of the render, the conversion into J2000 would
-	// be rotated at the wall clock while the timestamps below came from the mount's own clock — a mount
-	// set to the year 2000 reported a centre tens of arcminutes from the field in its own pixels — and
-	// the start of the exposure would be measured back from whenever the camera noticed it had finished.
+	// The centre, the epoch, the start of the exposure and the mount itself all come from the context
+	// rather than being read here, so the header describes the frame that was actually drawn: read
+	// afresh, the coordinate would be whatever the mount had reached by the end of the render, the
+	// conversion into J2000 would be rotated at the wall clock while the timestamps below came from the
+	// mount's own clock — a mount set to the year 2000 reported a centre tens of arcminutes from the
+	// field in its own pixels — the start of the exposure would be measured back from whenever the
+	// camera noticed it had finished, and a telescope swapped under the open shutter would put its name,
+	// its site and its pier side on a frame drawn from the geometry of the mount before it.
 	#imageHeader(width: number, height: number, channels: 1 | 3, exposure: ExposureContext): FitsHeader {
-		const { startTime: start, exposureTime, center, time } = exposure
+		const { startTime: start, exposureTime, center, time, mount } = exposure
 		// Timestamped on the mount's simulated clock when there is one, so that TIME_UTC governs the
 		// frame metadata as well as the geometry. Falls back to the wall clock without a mount.
 		const now = start + Math.trunc(exposureTime * 1000)
-		const mount = this.activeMount
 		const focuser = this.activeFocuser
 		const rotator = this.activeRotator
 		const filter = this.activeFilter ? this.activeFilter.names[this.activeFilter.position] : undefined
@@ -954,8 +983,8 @@ export class CameraSimulator extends DeviceSimulator {
 			FRAME: this.frameType,
 			IMAGETYP: `${this.frameType === 'LIGHT' ? 'Light' : this.frameType === 'DARK' ? 'Dark' : this.frameType === 'FLAT' ? 'Flat' : 'Bias'} Frame`,
 			'CCD-TEMP': this.#temperature.elements.CCD_TEMPERATURE_VALUE.value,
-			SITELAT: mount ? toDeg(mount.geographicCoordinate.latitude) : undefined,
-			SITELONG: mount ? toDeg(mount.geographicCoordinate.longitude) : undefined,
+			SITELAT: mount ? toDeg(mount.latitude) : undefined,
+			SITELONG: mount ? toDeg(mount.longitude) : undefined,
 			OBJCTRA: rightAscension !== undefined ? formatRA(rightAscension) : undefined,
 			OBJCTDEC: declination !== undefined ? formatDEC(declination) : undefined,
 			RA: rightAscension !== undefined ? toDeg(normalizeAngle(rightAscension)) : undefined,
