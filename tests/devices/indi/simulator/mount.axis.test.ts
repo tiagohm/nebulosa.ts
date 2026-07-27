@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { advanceMechanicalAxis, IDENTITY_MECHANICAL_AXIS_CONFIG, type MechanicalAxisConfig, mechanicalAxisState, resetMechanicalAxisMotion } from '../../../../src/devices/indi/simulator/mount.axis'
+import { advanceMechanicalAxis, driveMechanicalAxis, IDENTITY_MECHANICAL_AXIS_CONFIG, type MechanicalAxisConfig, mechanicalAxisState, resetMechanicalAxisMotion } from '../../../../src/devices/indi/simulator/mount.axis'
 import { arcsec, toArcsec } from '../../../../src/math/units/angle'
 
 // Unit coverage for the mechanical transmission of a mount axis. Pure state stepping, so no timers.
@@ -83,6 +83,22 @@ describe('mechanical axis', () => {
 			const state = mechanicalAxisState()
 			advanceMechanicalAxis(state, arcsec(10), 1, degenerate)
 			expect(toArcsec(advanceMechanicalAxis(state, arcsec(-50), 1, degenerate))).toBeCloseTo(-20, 9)
+		})
+
+		test('closes the slack after a direct drive, however short the travel', () => {
+			const state = mechanicalAxisState()
+			advanceMechanicalAxis(state, arcsec(10), 1, backlashConfig)
+
+			// A goto reverses and moves the axis by five arcseconds, a sixth of the slack. The axis could
+			// not have moved at all through a gap that was still open, so the gap is closed by the end of
+			// it and a pulse in that same direction is delivered immediately.
+			driveMechanicalAxis(state, -1, arcsec(5), backlashConfig)
+			expect(state.backlashRemaining).toBe(0)
+			expect(toArcsec(advanceMechanicalAxis(state, arcsec(-1), 1, backlashConfig))).toBeCloseTo(-1, 9)
+
+			// A reversal that moves nothing records the flank alone and still owes the whole gap.
+			driveMechanicalAxis(state, 1, 0, backlashConfig)
+			expect(toArcsec(state.backlashRemaining)).toBeCloseTo(30, 9)
 		})
 
 		test('keeps the transmission loaded across a stop', () => {

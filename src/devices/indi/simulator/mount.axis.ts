@@ -73,15 +73,17 @@ export function clearMechanicalAxis(state: MechanicalAxisState) {
 //
 // Used by motion that drives the axes directly rather than through the transmission, such as a slew,
 // so that the state is left consistent for whatever follows. A reversal opens the slack on the other
-// flank as usual, and the travel then closes it again: the axis physically moved that far in the new
-// direction, which it could not have done through a gap that was still open. Recording the reversal
-// without the travel left a goto owing its own backlash, so the tracking that resumed in the very
-// direction the slew had just run stalled for as long as it took to take up slack that was no longer
-// there.
+// flank as usual, and any travel at all then closes it completely: `travel` is what the axis itself
+// moved, not what the motor turned, and an axis cannot move through a gap that is still open. However
+// short the goto, the gears were engaged on that flank by the end of it.
 //
-// A zero travel therefore records the flank alone, and a slew longer than the backlash closes it
-// completely, which is the state a real mount is left in after a goto: immediate in that direction,
-// costing the full backlash to reverse.
+// Subtracting the travel instead left a goto shorter than the backlash owing most of it, so the
+// tracking or guiding that resumed in the very direction the slew had just run stalled taking up slack
+// that the slew itself had already closed.
+//
+// A zero travel therefore records the flank alone, which is a reversal with nothing to show for it,
+// while any real travel leaves the state a real mount is left in after a goto: immediate in that
+// direction, costing the full backlash to reverse.
 export function driveMechanicalAxis(state: MechanicalAxisState, direction: AxisDirection, travel: Angle, config: MechanicalAxisConfig) {
 	if (direction === 0) return
 
@@ -90,7 +92,7 @@ export function driveMechanicalAxis(state: MechanicalAxisState, direction: AxisD
 	}
 
 	state.loadDirection = direction
-	if (state.backlashRemaining > 0) state.backlashRemaining = Math.max(0, state.backlashRemaining - Math.abs(travel))
+	if (travel !== 0 && state.backlashRemaining > 0) state.backlashRemaining = 0
 }
 
 // Reconciles the live state of an axis with a configuration that has just changed, in place.
