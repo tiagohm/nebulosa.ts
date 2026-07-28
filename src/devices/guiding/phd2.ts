@@ -543,7 +543,7 @@ export class PHD2Client implements Disposable {
 
 	dither(amount: number, raOnly: boolean = false, settle: Partial<PHD2Settle> = DEFAULT_PHD2_SETTLE, timeout: number = DEFAULT_TIMEOUT) {
 		settle = { ...DEFAULT_PHD2_SETTLE, ...settle }
-		return this.send<number>('dither', { amount, raOnly, settle, timeout })
+		return this.send<number>('dither', { amount, raOnly, settle }, timeout)
 	}
 
 	flipCalibration() {
