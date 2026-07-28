@@ -12,6 +12,24 @@ describe('boresight history', () => {
 		expect(sampleBoresightTrajectory(boresightHistory(4), 0, 1000, 4, new Float64Array(8))).toBe(0)
 	})
 
+	test('holds the present whatever capacity it is asked for', () => {
+		// The capacity sizes three allocations and this is exported, so a caller's bad number has to come
+		// back as a usable ring rather than as a RangeError or as buffers of zero length whose modular
+		// arithmetic leaves the head NaN and retains nothing at all.
+		for (const capacity of [Number.NaN, 0, -5, Infinity, -Infinity]) {
+			const history = boresightHistory(capacity)
+			expect(history.times.length).toBeGreaterThanOrEqual(1)
+
+			recordBoresightSample(history, 1000, deg(10), deg(20))
+			expect(history.count).toBe(1)
+			expect(boresightHistorySpan(history)).toEqual([1000, 1000])
+
+			const pair: [number, number] = [0, 0]
+			expect(sampleBoresightAt(history, 1000, pair)).toBeDefined()
+			expect(toDeg(pair[0])).toBeCloseTo(10, 9)
+		}
+	})
+
 	test('keeps only the most recent samples once the ring wraps', () => {
 		const history = boresightHistory(3)
 

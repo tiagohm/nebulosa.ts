@@ -1,3 +1,4 @@
+import { clamp } from '../../../math/numerical/math'
 import { type Angle, normalizeAngle, normalizePI } from '../../../math/units/angle'
 
 // Recent history of where a mount's optical axis actually pointed, so that a consumer integrating over
@@ -17,10 +18,19 @@ export interface BoresightHistory {
 	head: number
 }
 
-// Allocates a history holding at most `capacity` samples. A capacity below one is raised to one, so
-// the history always has room for the present.
+// Largest history that will be allocated, in samples. Three Float64 arrays, so this is 24 MB of ring
+// buffer, already far beyond the longest exposure any simulated mount is stepped through at the tick
+// rate. The cap exists because the capacity sizes three allocations, and an exported helper must not
+// turn a caller's bad number into a RangeError from the typed-array constructor.
+const MAX_BORESIGHT_HISTORY_CAPACITY = 1 << 20
+
+// Allocates a history holding at most `capacity` samples, clamped to [1, MAX_BORESIGHT_HISTORY_CAPACITY]
+// so that the history always has room for the present and never for an absurd request. A capacity that
+// is not a number at all is treated as the minimum: NaN reached the typed-array constructors as a zero
+// length, and the ring arithmetic then divided by that length and left the head NaN, which is a
+// history that silently retains nothing.
 export function boresightHistory(capacity: number): BoresightHistory {
-	const size = Math.max(1, Math.trunc(capacity))
+	const size = Number.isNaN(capacity) ? 1 : clamp(Math.trunc(capacity), 1, MAX_BORESIGHT_HISTORY_CAPACITY)
 	return { times: new Float64Array(size), rightAscensions: new Float64Array(size), declinations: new Float64Array(size), count: 0, head: 0 }
 }
 
