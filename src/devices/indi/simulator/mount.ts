@@ -1282,6 +1282,13 @@ export class MountSimulator extends DeviceSimulator {
 			settlingSeconds = this.#advanceSlew(dtSeconds)
 			this.#advanceWormPhase(slewRate, dtSeconds - settlingSeconds)
 
+			// Arriving is a moment inside the step, and the trajectory has to say so. Recorded only at the
+			// end of the step, the arrival was left between two samples a whole tick apart and the history
+			// interpolated the goto evenly across all of it: a ten millisecond slew inside a hundred
+			// millisecond step read as still halfway to the target at fifty, so an exposure spanning it put
+			// the field in places the mount had already left and lingered there.
+			if (settlingSeconds > 0) this.#recordBoresightAt(endTime - settlingSeconds * 1000)
+
 			// The rest of the step belongs to whatever the mount does when it is not slewing, which is
 			// normally tracking. Dropping it stopped the clock for the mount alone: a goto to the
 			// coordinate already being reported swallowed a whole step without turning the worm or letting

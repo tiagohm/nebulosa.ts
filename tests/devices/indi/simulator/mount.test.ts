@@ -647,6 +647,34 @@ describe('mount simulator pointing errors', () => {
 		}
 	})
 
+	test('records the instant a slew reached its target', () => {
+		const { mount } = makeMount('mount.trajectory.arrival')
+
+		try {
+			mount.setTrackingEnabled(true)
+			mount.setSlewRate('SPEED_7')
+
+			const startTime = mount.utcTime
+
+			// Ninety-six degrees a second, so this goto is over ten milliseconds into a hundred
+			// millisecond step and the mount spends the other ninety standing on the target.
+			mount.goTo(mount.rightAscension, mount.declination + deg(0.96))
+			mount.advance(0.1)
+			expect(mount.isSlewing).toBeFalse()
+
+			// The second half of the step is one the mount spent already arrived. Recorded only at the end
+			// of the step, the arrival sat between two samples a tick apart and the history interpolated
+			// the goto evenly across all of it, so this stretch read as a quarter of a degree of travel
+			// that had finished long before it began.
+			expect(toArcsec(mount.boresightPathLength(startTime + 50, startTime + 100))).toBeLessThan(1)
+
+			// The travel is still there, in the stretch it really happened in.
+			expect(toDeg(mount.boresightPathLength(startTime, startTime + 50))).toBeCloseTo(0.96, 3)
+		} finally {
+			mount.dispose()
+		}
+	})
+
 	test('records where the boresight went at every guide boundary inside a step', () => {
 		const { client, mount } = makeMount('mount.trajectory.pulses', 'GUIDING')
 
