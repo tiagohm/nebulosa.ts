@@ -1325,8 +1325,15 @@ export class MountSimulator extends DeviceSimulator {
 	// timestamp identifies a position: an east-then-west excursion made of two half-millisecond steps
 	// came back as a path of zero length.
 	#recordBoresight() {
+		this.#recordBoresightAt(this.#utcTime + this.#utcTimeRemainder)
+	}
+
+	// Appends where the optical axis points now under the timestamp `time`, in milliseconds on the
+	// simulated clock. Used to record the end of a piece of a step that was cut short of the clock the
+	// step as a whole will end on, which is where the guiding changed inside it.
+	#recordBoresightAt(time: number) {
 		const boresight = this.boresight
-		recordBoresightSample(this.#boresightHistory, this.#utcTime + this.#utcTimeRemainder, boresight.rightAscension, boresight.declination)
+		recordBoresightSample(this.#boresightHistory, time, boresight.rightAscension, boresight.declination)
 	}
 
 	// Rate of the right-ascension motor, in radians per second of its contribution to the coordinate.
@@ -1501,6 +1508,14 @@ export class MountSimulator extends DeviceSimulator {
 			// to run at the rate the motion is about to apply.
 			this.#advanceWormPhase(this.#rightAscensionMotorRate(), dtSeconds)
 			this.#advanceFreeMotion(dtSeconds)
+
+			// Each piece ends at a position of its own, and the trajectory is what a camera integrates an
+			// exposure over. Recording only the state at the end of the step described a north pulse
+			// followed by a south one inside one tick as no motion at all: the axis came back to where it
+			// started, so the path measured zero and the frame was drawn from a single point instead of
+			// from the out-and-back trail it really traced. The last piece ends at the end of the step and
+			// is replaced there by the sample taken once settling has been applied.
+			this.#recordBoresightAt(to)
 			from = to
 		}
 	}

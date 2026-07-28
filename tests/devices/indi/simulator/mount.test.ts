@@ -622,6 +622,34 @@ describe('mount simulator pointing errors', () => {
 		}
 	})
 
+	test('records where the boresight went at every guide boundary inside a step', () => {
+		const { client, mount } = makeMount('mount.trajectory.pulses', 'GUIDING')
+
+		try {
+			// An ideal controller apart from the latency, which is what lets the second pulse be queued to
+			// start after the first has finished rather than alongside it.
+			client.sendNumber({ device: mount.name, name: 'MOUNT_GUIDING', elements: { LATENCY: 0, LATENCY_JITTER: 0, MINIMUM_PULSE: 0, QUANTIZATION: 0, GAIN_NORTH: 1, GAIN_SOUTH: 1 } })
+			mount.setTrackingEnabled(true)
+
+			const startTime = mount.utcTime
+			const declination = mount.mechanical.declination
+
+			// Four hundred milliseconds north, then four hundred back south, both inside the one step below.
+			mount.pulse('NORTH', 400)
+			client.sendNumber({ device: mount.name, name: 'MOUNT_GUIDING', elements: { LATENCY: 400 } })
+			mount.pulse('SOUTH', 400)
+			mount.advance(1)
+
+			// The axis ends where it began, so only the recorded path says the excursion happened at all:
+			// three arcseconds out at half the sidereal rate and three back, which a frame exposed over
+			// this step has to be drawn as a trail rather than as a point.
+			expect(toArcsec(Math.abs(mount.mechanical.declination - declination))).toBeCloseTo(0, 9)
+			expect(toArcsec(mount.boresightPathLength(startTime, mount.utcTime))).toBeCloseTo(6, 1)
+		} finally {
+			mount.dispose()
+		}
+	})
+
 	test('carries sub-millisecond steps instead of discarding them', () => {
 		const coarse = makeMount('mount.clock.coarse')
 		const fine = makeMount('mount.clock.fine')
