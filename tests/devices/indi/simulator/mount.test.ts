@@ -675,6 +675,33 @@ describe('mount simulator pointing errors', () => {
 		}
 	})
 
+	test('spreads the wind across the pieces of a step rather than onto the first', () => {
+		const { client, mount } = makeMount('mount.trajectory.wind', 'WIND')
+
+		try {
+			client.sendNumber({ device: mount.name, name: 'MOUNT_WIND', elements: { AMPLITUDE: 30, CORRELATION_TIME: 4 } })
+			// A guide rate of zero, so the pulse below moves nothing and cuts the step without disturbing
+			// it: every bit of motion left in the tick is wind.
+			mount.setGuideRate(0, 0)
+			mount.setTrackingEnabled(true)
+
+			const startTime = mount.utcTime
+
+			// The pulse ends halfway through the step, which is where the step is cut.
+			mount.pulse('NORTH', 50)
+			mount.advance(0.1)
+
+			// The second half of the step has to have some wind in it. Blowing the whole tick at once,
+			// before the pieces are walked, stamped the deflection reached at the end of the step onto the
+			// sample taken at the middle of it: all of the buffeting landed in the first half and the
+			// mount stood perfectly still through the second.
+			expect(toArcsec(mount.boresightPathLength(startTime + 50, startTime + 100))).toBeGreaterThan(0)
+			expect(toArcsec(mount.boresightPathLength(startTime, startTime + 50))).toBeGreaterThan(0)
+		} finally {
+			mount.dispose()
+		}
+	})
+
 	test('records where the boresight went at every guide boundary inside a step', () => {
 		const { client, mount } = makeMount('mount.trajectory.pulses', 'GUIDING')
 

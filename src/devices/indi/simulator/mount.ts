@@ -1262,9 +1262,6 @@ export class MountSimulator extends DeviceSimulator {
 		// Sampled once per step, so every consumer of the interval sees the same rate error.
 		this.#trackingRateError = advanceTrackingRateError(this.#trackingRateErrorState, dtSeconds, this.#trackingRateErrorConfig, this.#normal)
 
-		// The wind blows regardless of what the mount is doing, so this runs even while parked.
-		advanceWind(this.#windState, dtSeconds, this.#windConfig, this.#normal)
-
 		// A slew reports how much of the step was left once it arrived, so a ring-down excited partway
 		// through is integrated only over the time that actually followed the stop. At the default tick a
 		// few-hertz resonance covers a good part of a cycle in one step, so charging it the whole
@@ -1281,6 +1278,9 @@ export class MountSimulator extends DeviceSimulator {
 			const slewRate = this.#rightAscensionMotorRate()
 			settlingSeconds = this.#advanceSlew(dtSeconds)
 			this.#advanceWormPhase(slewRate, dtSeconds - settlingSeconds)
+			// The wind blows regardless of what the mount is doing, so it is charged for the travelling
+			// part of the step here and for the rest of it below.
+			advanceWind(this.#windState, dtSeconds - settlingSeconds, this.#windConfig, this.#normal)
 
 			// Arriving is a moment inside the step, and the trajectory has to say so. Recorded only at the
 			// end of the step, the arrival was left between two samples a whole tick apart and the history
@@ -1541,6 +1541,13 @@ export class MountSimulator extends DeviceSimulator {
 			// Integrated before the motion advances, so the phase covers the interval the axes are about
 			// to run at the rate the motion is about to apply.
 			this.#advanceWormPhase(this.#rightAscensionMotorRate(), dtSeconds)
+			// The wind is charged piece by piece for the same reason the sample below is taken piece by
+			// piece: it blows during each of them, and its process is exact over any interval, so
+			// splitting one costs nothing. Advanced once for the whole step instead, every intermediate
+			// sample was stamped with the deflection the telescope only reached at the end of it, which
+			// dropped a tick's worth of buffeting onto the first piece and left the rest of the step
+			// perfectly still.
+			advanceWind(this.#windState, dtSeconds, this.#windConfig, this.#normal)
 			this.#advanceFreeMotion(dtSeconds)
 
 			// Each piece ends at a position of its own, and the trajectory is what a camera integrates an
