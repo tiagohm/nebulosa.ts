@@ -36,6 +36,15 @@ import { applyExclusiveSwitchValues, applyMultiSwitchValues, applyNumberVectorVa
 // is no simulated mount to integrate over, so the rendering path always has exactly one sample.
 const NO_EXPOSURE_OFFSET = new Float64Array([0, 0, 1])
 
+// Longest the render will wait, in milliseconds of real time, for the mount to finish simulating the
+// interval the shutter was open. Two ticks: one covers the ordinary case of the camera's timer running
+// ahead of the mount's, and the second is slack for a loaded event loop.
+const CAMERA_TRAJECTORY_WAIT_MS = 2 * TICK_INTERVAL_MS
+
+// How often that wait rechecks the mount's clock, in milliseconds. Short enough not to add a visible
+// delay of its own to an exposure that only needed the mount to take one more step.
+const CAMERA_TRAJECTORY_POLL_MS = 2
+
 // Furthest the field strayed from the catalog centre over an exposure, in unbinned pixels.
 //
 // `offsets` holds consecutive x, y and weight triples. The largest magnitude rather than the total
@@ -731,6 +740,7 @@ export class CameraSimulator extends DeviceSimulator {
 		const simulator = this.activeMountSimulator
 		const exposure: ExposureContext = this.#exposureContext ?? { startTime: simulator?.utcTime ?? Date.now(), exposureTime, center: this.reportedCenter, time: this.sceneTime, simulator, mount: this.#mountMetadata() }
 		this.#exposureContext = undefined
+		await this.#awaitExposedTrajectory(exposure)
 
 		try {
 			this.#image.state = 'Ok'
@@ -750,6 +760,31 @@ export class CameraSimulator extends DeviceSimulator {
 		}
 
 		this.notify(this.#exposure)
+	}
+
+	// Waits for the mount to have simulated the whole interval the shutter was open, giving up after
+	// CAMERA_TRAJECTORY_WAIT_MS of real time.
+	//
+	// The two devices are stepped by separate timers, and the camera notices its own exposure has
+	// finished without knowing whether the mount has caught up. Whenever the camera's tick runs first,
+	// an exposure shorter than one tick closes while the mount's newest sample still predates it: the
+	// trajectory is clamped at its ends rather than extrapolated, so the whole window collapsed onto one
+	// position and the frame was rendered as if the mount had stood still for it, losing every bit of
+	// motion the shutter had actually been open for.
+	//
+	// Bounded rather than open-ended, because nothing guarantees the mount will tick again: it may have
+	// been disconnected or disposed while the shutter was open, and a frame drawn from a truncated
+	// trajectory is still better than one that never arrives.
+	async #awaitExposedTrajectory(exposure: ExposureContext) {
+		const { simulator, startTime, exposureTime } = exposure
+		if (simulator === undefined) return
+
+		const endTime = startTime + Math.trunc(exposureTime * 1000)
+		const deadline = Date.now() + CAMERA_TRAJECTORY_WAIT_MS
+
+		while (simulator.utcTime < endTime && Date.now() < deadline) {
+			await Bun.sleep(CAMERA_TRAJECTORY_POLL_MS)
+		}
 	}
 
 	// Renders the configured frame and encodes it as FITS or XISF.

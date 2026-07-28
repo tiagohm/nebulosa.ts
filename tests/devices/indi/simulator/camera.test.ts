@@ -871,6 +871,86 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		expect(Math.abs(y - (1024 - 1) * 0.5)).toBeLessThan(20)
 	}, 15000)
 
+	test('waits for the mount to simulate the interval the shutter was open', async () => {
+		const handler = new IndiClientHandlerSet()
+		const mountManager = new MountManager()
+		const cameraManager = new CameraManager()
+		using client = new ClientSimulator('camera.trajectory.race', handler)
+		const frameReceiver = new CameraFrameReceiver()
+
+		handler.add(mountManager)
+		handler.add(cameraManager)
+		cameraManager.addHandler(frameReceiver)
+
+		const catalogProvider: CatalogSource = (rightAscension, declination) => [{ snr: 200, hfd: 2, flux: 0.4, rightAscension, declination }]
+
+		using mountSimulator = new MountSimulator('Mount Simulator', client)
+		using cameraSimulator = new CameraSimulator('Camera Simulator', client, { mountManager, catalogSources: { CENTERED: catalogProvider } })
+		const mount = mountManager.get(client, mountSimulator.name)!
+		const camera = cameraManager.get(client, cameraSimulator.name)!
+
+		// Both devices step on their own timer of one tick, and the two are deliberately put out of phase
+		// here: the camera is connected most of a tick after the mount, so its tick lands in the middle of
+		// the gap between two of the mount's. That is the ordinary case this has to survive — the camera
+		// noticing its own exposure has finished before the mount has stepped through the interval the
+		// shutter was open for — and putting the two ticks nearly on top of each other would decide it on
+		// a millisecond of scheduling.
+		mountSimulator.connect()
+		await Bun.sleep(70)
+		cameraSimulator.connect()
+		await waitUntil(() => mount.connected && camera.connected)
+
+		mountSimulator.syncTo(hour(5), deg(20))
+		mountSimulator.setTrackingEnabled(true)
+		cameraManager.snoop(camera, mount)
+		await waitUntil(() => cameraManager.properties.get(camera)?.ACTIVE_DEVICES?.elements.ACTIVE_TELESCOPE.value === mount.name)
+
+		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_NOISE_FEATURES', elements: { SKY_ENABLED: false, LIGHT_POLLUTION_ENABLED: false } })
+		client.sendNumber({ device: camera.name, name: 'SIMULATOR_NOISE_SENSOR', elements: { READ_NOISE: 0, BIAS_ELECTRONS: 0, BLACK_LEVEL_ELECTRONS: 0, DARK_CURRENT_AT_REFERENCE_TEMP: 0 } })
+		client.sendNumber({ device: camera.name, name: 'SIMULATOR_NOISE_ARTIFACTS', elements: { FIXED_PATTERN_NOISE_STRENGTH: 0, ROW_NOISE_STRENGTH: 0, COLUMN_NOISE_STRENGTH: 0, BANDING_STRENGTH: 0, HOT_PIXEL_RATE: 0, WARM_PIXEL_RATE: 0, DEAD_PIXEL_RATE: 0 } })
+		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_NOISE_CLAMP_MODE', elements: { NONE: true } })
+		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_CATALOG_SOURCE', elements: { CENTERED: true } })
+		await waitUntil(() => cameraManager.properties.get(camera)?.SIMULATOR_CATALOG_SOURCE?.elements.CENTERED.value === true)
+
+		// Half a tick of exposure, and the reference the flux is scaled against, so the frame carries the
+		// light of a whole one.
+		const exposure = 0.05
+		client.sendNumber({ device: camera.name, name: 'SIMULATOR_NOISE_EXPOSURE', elements: { EXPOSURE_TIME: exposure } })
+		await waitUntil(() => cameraManager.properties.get(camera)?.SIMULATOR_NOISE_EXPOSURE?.elements.EXPOSURE_TIME.value === exposure)
+
+		try {
+			// A degree and a half per second, which over this exposure is a trail hundreds of pixels long.
+			mountSimulator.setSlewRate('SPEED_1')
+			mountSimulator.moveEast(true)
+
+			// Opened just after the mount has stepped, so its next step falls beyond the end of the
+			// exposure: nothing in the retained history covers the window when the camera's own tick
+			// notices the shutter has closed. This is the first frame of the run, before any render has
+			// pushed the camera's tick past the mount's and taken the two out of that order.
+			const stepped = mountSimulator.utcTime
+			await waitUntil(() => mountSimulator.utcTime !== stepped, 5000, 1)
+			cameraSimulator.startExposure(exposure)
+
+			await waitUntil(() => frameReceiver.length > 0, 10000, 5)
+			mountSimulator.moveEast(false)
+
+			const frame = (await readImageFromBuffer(frameReceiver.lastFrame))!
+			const [, , peak] = brightestPixel(frame.raw, frame.header.NAXIS1 as number, frame.metadata.channels)
+			expect(peak).toBeGreaterThan(0)
+
+			// Rendered before the mount had simulated the window, every sample of it clamped to the one
+			// position the history knew and the star came out as a point a handful of pixels across. Drawn
+			// over the motion that really happened, the same light is spread along hundreds of pixels of
+			// trail, and far more of them stand above half of a much lower peak.
+			let lit = 0
+			for (let i = 0; i < frame.raw.length; i++) if (frame.raw[i] >= peak * 0.5) lit++
+			expect(lit).toBeGreaterThan(40)
+		} finally {
+			cameraSimulator.dispose()
+			mountSimulator.dispose()
+		}
+	}, 30000)
+
 	test('queries the catalog at the epoch the mount believes in', async () => {
 		const handler = new IndiClientHandlerSet()
 		const mountManager = new MountManager()
