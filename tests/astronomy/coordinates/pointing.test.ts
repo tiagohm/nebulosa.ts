@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 // oxfmt-ignore
 import { applyEquatorialPointingError, equatorialPointingError, type EquatorialPointingModel, IDENTITY_EQUATORIAL_POINTING_MODEL, isIdentityEquatorialPointingModel, MAX_POINTING_DECLINATION, tubeFlexureError } from '../../../src/astronomy/coordinates/pointing'
+import { angularDistance } from '../../../src/astronomy/coordinates/coordinate'
 import { PIOVERTWO } from '../../../src/core/constants'
 import { arcsec, deg, hour, normalizePI, toArcsec } from '../../../src/math/units/angle'
 import { polarAlignmentError } from '../../../src/observation/alignment/polaralignment'
@@ -124,6 +125,28 @@ describe('equatorial pointing error', () => {
 		// Without the clamp this would explode: tan(PIOVERTWO) is about 1.6e16 in double precision.
 		const [poleDeltaHourAngle] = equatorialPointingError(0, PIOVERTWO, model({ polarAzimuthError: arcsec(600) }))
 		expect(Math.abs(toArcsec(poleDeltaHourAngle))).toBeLessThan(4e5)
+	})
+
+	test('keeps a cone error on the sky right up to the pole', () => {
+		// A cone error tilts the optical axis by its own size wherever the mount is pointing: written as
+		// a hour-angle offset it grows as sec δ, and the sky it covers is that times cos δ, which is the
+		// same sixty arcseconds everywhere. Applying the offset at the true declination multiplied it by
+		// cos δ a second time, so it faded away over the last tenth of a degree and vanished outright at
+		// the pole, where turning about the polar axis moves nothing at all.
+		const cone = model({ coneError: arcsec(60) })
+		const lst = hour(3)
+		const rightAscension = hour(1)
+
+		// A tenth of an arcsecond of tolerance rather than an exact match: a displacement in hour angle
+		// runs along a parallel of declination and not along a great circle, so measured as an angle on
+		// the sky it falls a little short of the offset it was written as. That is the convention the
+		// model is defined in, and it is under a tenth of an arcsecond even at the last declination it is
+		// applied at.
+		for (const declination of [deg(45), deg(89), deg(89.9), deg(89.99), deg(89.999), PIOVERTWO, -PIOVERTWO]) {
+			const [shiftedRightAscension, shiftedDeclination] = applyEquatorialPointingError(rightAscension, declination, lst, cone)
+			const separated = toArcsec(angularDistance(rightAscension, declination, shiftedRightAscension, shiftedDeclination))
+			expect(Math.abs(separated - 60)).toBeLessThan(0.1)
+		}
 	})
 
 	test('applies the hour-angle error with the right ascension sign convention', () => {

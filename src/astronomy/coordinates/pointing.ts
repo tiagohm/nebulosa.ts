@@ -159,8 +159,70 @@ export function tubeFlexureError(hourAngle: Angle, declination: Angle, latitude:
 // declination is left unwrapped so callers can detect and handle a crossing of the pole themselves.
 // When `o` is provided it receives the result and is returned.
 export function applyEquatorialPointingError(rightAscension: Angle, declination: Angle, lst: Angle, model: EquatorialPointingModel, o?: [Angle, Angle]): readonly [Angle, Angle] {
-	const error = equatorialPointingError(lst - rightAscension, declination, model, o)
+	const hourAngle = lst - rightAscension
+	const error = equatorialPointingError(hourAngle, declination, model, o)
+
+	if (Math.abs(declination) > MAX_POINTING_DECLINATION) {
+		return applyPolarPointingError(rightAscension, declination, hourAngle, model, error)
+	}
+
 	error[0] = normalizeAngle(rightAscension - error[0])
 	error[1] += declination
+	return error
+}
+
+// Applies the pointing model within MAX_POINTING_DECLINATION of a pole, where the hour-angle
+// convention it is written in cannot express the error at all.
+//
+// The sec δ and tan δ terms describe a real tilt of the optical axis, and their displacement on the
+// sky is that expression times cos δ, which stays finite everywhere: a cone error moves the tube by
+// CH whatever it is pointing at. Written as a hour-angle offset and applied at the true declination
+// it is multiplied by cos δ again, so it faded out over the last tenth of a degree and vanished
+// exactly at the pole, where turning the mount about its polar axis moves nothing. A mount homed to
+// the pole came back pointing exactly at it however badly its optics were aligned.
+//
+// Here the same displacement is applied as a great-circle offset from the mechanical direction, which
+// is what the axes physically do and is well defined at the pole itself: the east basis of the tangent
+// plane still exists there, it is simply the meridian the hour angle picks out. The result crosses the
+// pole by itself when the error pushes it past, coming back on the opposite meridian rather than as a
+// declination beyond ±90°.
+//
+// `error` receives the result and is returned. Only used where cos δ is below a thousandth, so the
+// cost of the vector form is never paid on the ordinary path.
+function applyPolarPointingError(rightAscension: Angle, declination: Angle, hourAngle: Angle, model: EquatorialPointingModel, error: [Angle, Angle]): readonly [Angle, Angle] {
+	const cosHourAngle = Math.cos(hourAngle)
+	const sinHourAngle = Math.sin(hourAngle)
+	const cosDeclination = Math.cos(declination)
+	const sinDeclination = Math.sin(declination)
+
+	// The same six terms as `equatorialPointingError`, each multiplied by cos δ so that it becomes a
+	// displacement on the sky rather than one in hour angle, which is what removes the divergence: sec δ
+	// becomes one and tan δ becomes sin δ. Negated because H = LST − RA, so a positive hour-angle error
+	// displaces the tube towards the east, which is the direction of increasing right ascension.
+	const east = -(model.indexHourAngle * cosDeclination + model.coneError + (model.axisNonPerpendicularity - model.polarAzimuthError * cosHourAngle + model.polarAltitudeError * sinHourAngle) * sinDeclination)
+	const north = model.indexDeclination + model.polarAzimuthError * sinHourAngle + model.polarAltitudeError * cosHourAngle
+	const offset = Math.hypot(east, north)
+
+	if (offset === 0) {
+		error[0] = normalizeAngle(rightAscension)
+		error[1] = declination
+		return error
+	}
+
+	// Rotation of the unit vector by `offset` towards the direction of the displacement. Both basis
+	// vectors are perpendicular to it and to each other, so the rotated vector is simply the two scaled
+	// by the cosine and the sine, and no normalization is needed.
+	const cosRightAscension = Math.cos(rightAscension)
+	const sinRightAscension = Math.sin(rightAscension)
+	const scale = Math.sin(offset) / offset
+	const cosOffset = Math.cos(offset)
+
+	// Unit vector of the mechanical direction, and the east and north tangent vectors at it.
+	const x = cosDeclination * cosRightAscension * cosOffset + scale * (-east * sinRightAscension - north * sinDeclination * cosRightAscension)
+	const y = cosDeclination * sinRightAscension * cosOffset + scale * (east * cosRightAscension - north * sinDeclination * sinRightAscension)
+	const z = sinDeclination * cosOffset + scale * north * cosDeclination
+
+	error[0] = normalizeAngle(Math.atan2(y, x))
+	error[1] = Math.atan2(z, Math.hypot(x, y))
 	return error
 }
