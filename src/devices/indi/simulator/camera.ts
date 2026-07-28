@@ -22,7 +22,7 @@ import { polarAlignmentError } from '../../../observation/alignment/polaralignme
 import { handleSetBlobVector, type IndiClientHandler } from '../client'
 import { DeviceInterfaceType, type FrameType, type GuideDirection } from '../device'
 import type { FocuserManager, GuideOutputManager, MountManager, RotatorManager, WheelManager } from '../manager'
-import { findOnSwitch, makeBlobVector, makeNumberVector, makeSwitchVector, makeTextVector, type NewNumberVector, type NewSwitchVector, type NewTextVector } from '../types'
+import { findOnSwitch, makeBlobVector, makeNumberVector, makeSwitchVector, makeTextVector, type EnableBlob, type NewNumberVector, type NewSwitchVector, type NewTextVector } from '../types'
 import type { ClientSimulator } from './client'
 import { CAMERA_AMBIENT_TEMPERATURE, CAMERA_BLOB_PADDING, CAMERA_DEFAULT_TARGET_TEMPERATURE, CAMERA_MAX_BIN, CAMERA_MAX_EXPOSURE, CAMERA_MIN_EXPOSURE, CAMERA_PIXEL_SIZE, CAMERA_SCENE_SEED, CAMERA_SENSOR_HEIGHT, CAMERA_SENSOR_WIDTH, GENERAL_INFO, MAIN_CONTROL, SIMULATION, TICK_INTERVAL_MS } from './constants'
 import { DeviceSimulator } from './device'
@@ -189,6 +189,8 @@ export class CameraSimulator extends DeviceSimulator {
 	#pulseWestEastUntil = 0
 	#mountPeriodicWestEastOffset = 0
 	#mountPeriodicNorthSouthOffset = 0
+	#onlyBlob = false
+	#ignoreBlob = false
 
 	readonly #mountManager?: MountManager
 	readonly #focuserManager?: FocuserManager
@@ -223,6 +225,20 @@ export class CameraSimulator extends DeviceSimulator {
 		this.#rotatorManager = options?.rotatorManager
 		this.#guideOutputManager = options?.guideOutputManager
 		this.#wheelManager = options?.wheelManager
+	}
+
+	enableBlob(command: EnableBlob) {
+		this.#onlyBlob = command.value === 'Only'
+		this.#ignoreBlob = command.value === 'Never'
+	}
+
+	protected notify(message: SimulatorProperty) {
+		if (this.#onlyBlob) return
+		super.notify(message)
+	}
+
+	#notifyImage() {
+		handleSetBlobVector(this.client, this.handler, this.#image)
 	}
 
 	get activeMount() {
@@ -625,21 +641,24 @@ export class CameraSimulator extends DeviceSimulator {
 		this.#exposure.elements.CCD_EXPOSURE_VALUE.value = 0
 		this.notify(this.#exposure)
 
-		try {
-			this.#image.state = 'Ok'
-			this.#exposure.state = 'Ok'
-			const blob = await this.#renderImage(exposureTime)
-			this.#image.elements.CCD1.size = blob.byteLength.toFixed(0)
-			this.#image.elements.CCD1.format = this.transferFormat === 'XISF' ? '.xisf' : '.fits'
-			this.#image.elements.CCD1.value = blob
-			this.#image.elements.CCD1.encoding = 'raw'
-			handleSetBlobVector(this.client, this.handler, this.#image)
-		} catch (e) {
-			this.#image.state = 'Alert'
-			this.#image.elements.CCD1.size = '0'
-			this.#image.elements.CCD1.value = undefined
-			this.#exposure.state = 'Alert'
-			console.error('failed to render image', e)
+		this.#exposure.state = 'Ok'
+
+		if (!this.#ignoreBlob) {
+			try {
+				this.#image.state = 'Ok'
+				const blob = await this.#renderImage(exposureTime)
+				this.#image.elements.CCD1.size = blob.byteLength.toFixed(0)
+				this.#image.elements.CCD1.format = this.transferFormat === 'XISF' ? '.xisf' : '.fits'
+				this.#image.elements.CCD1.value = blob
+				this.#image.elements.CCD1.encoding = 'raw'
+				this.#notifyImage()
+			} catch (e) {
+				this.#image.state = 'Alert'
+				this.#image.elements.CCD1.size = '0'
+				this.#image.elements.CCD1.value = undefined
+				this.#exposure.state = 'Alert'
+				console.error('failed to render image', e)
+			}
 		}
 
 		this.notify(this.#exposure)

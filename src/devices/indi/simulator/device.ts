@@ -1,6 +1,6 @@
 import { handleDefSwitchVector, handleDefTextVector, handleDelProperty, handleSetNumberVector, handleSetSwitchVector, handleSetTextVector, type IndiClientHandler } from '../client'
 import { DeviceInterfaceType, type DeviceType } from '../device'
-import { makeSwitchVector, makeTextVector, type NewNumberVector, type NewSwitchVector, type NewTextVector, selectOnSwitch } from '../types'
+import { type EnableBlob, makeSwitchVector, makeTextVector, type NewNumberVector, type NewSwitchVector, type NewTextVector, selectOnSwitch } from '../types'
 import type { ClientSimulator } from './client'
 import { GENERAL_INFO, MAIN_CONTROL } from './constants'
 import type { DeviceSimulatorOptions, SimulatorProperty } from './types'
@@ -49,6 +49,8 @@ export abstract class DeviceSimulator implements Disposable {
 	get isConnected() {
 		return this.connection.elements.CONNECT.value
 	}
+
+	enableBlob(command: EnableBlob) {}
 
 	// Base text handling: updates the snooped-device names. Subclasses override and call super.
 	sendText(vector: NewTextVector) {
