@@ -1915,6 +1915,39 @@ describe('mount simulator pointing errors', () => {
 		}
 	})
 
+	test('keeps the pier side a target crosses the meridian on', () => {
+		const { client, mount } = makeMount('mount.boresight.transit', 'FLEXURE')
+
+		try {
+			client.sendNumber({ device: mount.name, name: 'MOUNT_FLEXURE', elements: { ...NO_FLEXURE, PIER_WEST_DEC: 300 } })
+
+			// Thirty arcseconds east of the meridian, which the sky carries across in two seconds.
+			const lst = mount.siderealTimeAt(mount.utcTime)
+			mount.syncTo(normalizeAngle(lst + arcsec(30)), deg(20))
+			mount.setTrackingEnabled(true)
+			expect(mount.pierSide).toBe('WEST')
+
+			let previous = mount.boresight.declination
+			let jump = 0
+
+			for (let i = 0; i < 40; i++) {
+				mount.advance(0.1)
+				const declination = mount.boresight.declination
+				jump = Math.max(jump, Math.abs(declination - previous))
+				previous = declination
+			}
+
+			// Nothing flipped: the mount tracked the same target through transit on the side it was already
+			// on, so the pier term of the flexure model stays where it was. Predicted from the hour angle
+			// instead, it vanished in one step and took the boresight five arcminutes with it.
+			expect(mount.pierSide).toBe('WEST')
+			expect(toArcsec(jump)).toBeLessThan(1)
+			expect(toArcsec(mount.boresight.declination - mount.mechanical.declination)).toBeCloseTo(300, 6)
+		} finally {
+			mount.dispose()
+		}
+	})
+
 	test('buffets the boresight without letting it wander off', () => {
 		const { client, mount } = makeMount('mount.boresight.wind', 'WIND')
 

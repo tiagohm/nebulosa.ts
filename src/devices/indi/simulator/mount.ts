@@ -435,7 +435,11 @@ export class MountSimulator extends DeviceSimulator {
 			// The pier offset applies on one side only, so what it really configures is the difference
 			// between the two sides. That difference is what a pointing model fitted across a meridian
 			// flip has to absorb, and what a client that forgets to re-solve after one walks into.
-			if (flexureEnabled && (PIER_WEST_RA.value !== 0 || PIER_WEST_DEC.value !== 0) && expectedPierSide(this.#mechanical.rightAscension, this.#mechanical.declination, lst) === 'WEST') {
+			//
+			// Read from the side the mount is actually on, not predicted from the hour angle: a tracked
+			// target crosses the meridian by itself, and predicting the side there took the offset away
+			// from a mount that had not flipped, in one step and in the middle of an exposure.
+			if (flexureEnabled && (PIER_WEST_RA.value !== 0 || PIER_WEST_DEC.value !== 0) && this.pierSide === 'WEST') {
 				rightAscension += PIER_WEST_RA.value * ASEC2RAD
 				declination += PIER_WEST_DEC.value * ASEC2RAD
 			}
@@ -604,7 +608,7 @@ export class MountSimulator extends DeviceSimulator {
 			}
 			case 'GEOGRAPHIC_COORD':
 				if (applyNumberVectorValues(this.#geographicCoordinate, vector.elements)) {
-					this.#updatePierSide()
+					this.#refreshPierSide()
 					this.notify(this.#geographicCoordinate)
 				}
 				return
@@ -926,6 +930,8 @@ export class MountSimulator extends DeviceSimulator {
 		resetTrackingRateError(this.#trackingRateErrorState)
 		this.#trackingRateError = 0
 		this.#refreshDynamicCoordinates(false)
+		// Seeds the side from wherever the axes were left, since nothing has placed them this session.
+		this.#refreshPierSide()
 		this.#timer = setInterval(this.#tick.bind(this), TICK_INTERVAL_MS)
 	}
 
@@ -970,6 +976,9 @@ export class MountSimulator extends DeviceSimulator {
 	syncTo(rightAscension: Angle, declination: Angle) {
 		if (!this.isConnected) return
 		this.#setMechanical(rightAscension - this.#indexErrorRightAscension, declination - this.#indexErrorDeclination)
+		// A sync is also how this simulator places the axes, so it is one of the moments the side of the
+		// pier is decided rather than inherited.
+		this.#refreshPierSide()
 		// A sync is a discontinuity rather than motion, so the recorded past no longer describes where
 		// this telescope has been. Keeping it would let an exposure straddling the sync integrate a jump
 		// across the sky as if the tube had swept through it, and it is also where the errors that live
@@ -1086,7 +1095,7 @@ export class MountSimulator extends DeviceSimulator {
 		// The carried fraction belongs to the clock that was just replaced.
 		this.#utcTimeRemainder = 0
 		this.#lastTick = Date.now()
-		this.#updatePierSide()
+		this.#refreshPierSide()
 		// The recorded trajectory is indexed by the simulated clock and searched assuming its timestamps
 		// only ever increase. Setting the clock backwards would append a sample older than the ones
 		// already held and break that, leaving an exposure to clamp onto a stale sample or interpolate
@@ -1433,6 +1442,10 @@ export class MountSimulator extends DeviceSimulator {
 			// whole interval would shift its phase or swallow the first overshoot outright.
 			remaining = maxStep > 0 ? dtSeconds * (1 - span / maxStep) : 0
 			this.#setMechanical(target.rightAscension, target.declination)
+			// Arriving is where a mount ends up on a side of the pier: the controller chooses one for the
+			// destination, and a goto across the meridian is the flip. Between two gotos the side is
+			// whatever this one left behind, however far the sky turns underneath.
+			this.#refreshPierSide()
 			// The axes come to a stop, so static friction has to be overcome again before the tracking
 			// or guiding that follows produces any motion.
 			resetMechanicalAxisMotion(this.#rightAscensionAxis)
@@ -1563,14 +1576,11 @@ export class MountSimulator extends DeviceSimulator {
 		this.#mechanical.declination = clampDeclination(declination)
 		this.#equatorialCoordinate.elements.RA.value = toHour(normalizeAngle(this.#mechanical.rightAscension + this.#indexErrorRightAscension))
 		this.#equatorialCoordinate.elements.DEC.value = toDeg(clampDeclination(this.#mechanical.declination + this.#indexErrorDeclination))
-		const pierSideChanged = this.#updatePierSide()
 
 		if (notify && (force || this.#utcTime - this.#notifyCoordinateLastTime >= this.minimumNotifyCoordinateInterval)) {
 			this.#notifyCoordinateLastTime = this.#utcTime
 			this.notify(this.#equatorialCoordinate)
 		}
-
-		if (notify && pierSideChanged) this.notify(this.#pierSide)
 	}
 
 	// Publishes the live worm phase, at most once per coordinate interval.
@@ -1609,17 +1619,27 @@ export class MountSimulator extends DeviceSimulator {
 		}
 	}
 
-	// Keeps the simulated pier side consistent with the current sky position.
-	#updatePierSide() {
-		// Derived from the mechanical orientation: which side of the pier the tube is on is a fact about
-		// the axes, not about what the controller believes it is reporting.
+	// Decides which side of the pier the tube is on from where the axes now sit, and publishes it when
+	// it changed.
+	//
+	// Called only where the mount is actually placed on a side: the arrival of a goto, a sync, and a
+	// change of site or clock, which redefine what an orientation means at all. Never while the axes are
+	// merely running, because a German mount tracking a target through the meridian does not flip. The
+	// hour angle of that target crosses zero on its own, so re-deriving the side from it turned a mount
+	// that had not moved into one on the other side of the pier at transit: the pier term of the flexure
+	// model appeared or disappeared in a single step, jumping the boresight by the whole configured
+	// offset and trailing every exposure that spanned it, while the published property announced a flip
+	// that never happened.
+	//
+	// Derived from the mechanical orientation: which side of the pier the tube is on is a fact about the
+	// axes, not about what the controller believes it is reporting.
+	#refreshPierSide() {
 		const pierSide = expectedPierSide(this.#mechanical.rightAscension, this.#mechanical.declination, this.#siderealTime())
-		if (pierSide === this.pierSide) return false
+		if (pierSide === this.pierSide) return
 
 		this.#pierSide.elements.PIER_EAST.value = pierSide === 'EAST'
 		this.#pierSide.elements.PIER_WEST.value = pierSide === 'WEST'
-
-		return true
+		this.notify(this.#pierSide)
 	}
 
 	// Computes the current local sidereal time from the simulated clock.
