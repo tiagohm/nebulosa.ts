@@ -622,6 +622,31 @@ describe('mount simulator pointing errors', () => {
 		}
 	})
 
+	test('reads a pointing error rewritten as a jump rather than as travel', () => {
+		const { client, mount } = makeMount('mount.trajectory.rewrite', 'ALIGNMENT')
+
+		try {
+			// One tick of an already configured error, so the history holds a sample of the mount as it was.
+			mount.setTrackingEnabled(true)
+			mount.advance(0.1)
+
+			const startTime = mount.utcTime
+			const before = mount.boresight.declination
+
+			// The value is rewritten and the boresight moves at once, with the clock standing still.
+			client.sendNumber({ device: mount.name, name: 'MOUNT_ALIGNMENT', elements: { POLAR_ALTITUDE_ERROR: 3600 } })
+			expect(toArcsec(Math.abs(mount.boresight.declination - before))).toBeGreaterThan(100)
+
+			// An exposure over the tick that follows sees a mount that was already pointing there. Recorded
+			// only on the next step, the jump was left between two samples a tick apart and the history
+			// interpolated across it, drawing the frame as a trail from the error the mount used to have.
+			mount.advance(0.1)
+			expect(toArcsec(mount.boresightPathLength(startTime, mount.utcTime))).toBeLessThan(1)
+		} finally {
+			mount.dispose()
+		}
+	})
+
 	test('records where the boresight went at every guide boundary inside a step', () => {
 		const { client, mount } = makeMount('mount.trajectory.pulses', 'GUIDING')
 

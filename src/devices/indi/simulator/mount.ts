@@ -629,27 +629,34 @@ export class MountSimulator extends DeviceSimulator {
 					// coordinate is derived once and cached. Changing them has to re-derive it: the telescope
 					// has not moved, but what the mount believes about it just changed.
 					this.#refreshReportedCoordinate()
+					this.#recordBoresight()
 					this.notify(this.#alignment)
 				}
 				return
 			case 'MOUNT_PERIODIC_ERROR':
 				if (applyNumberVectorValues(this.#periodicError, vector.elements)) {
 					this.#refreshPeriodicError()
+					this.#recordBoresight()
 					this.notify(this.#periodicError)
 				}
 				return
 			case 'MOUNT_PEC':
 				if (applyNumberVectorValues(this.#periodicErrorCorrection, vector.elements)) {
 					this.#refreshPeriodicError()
+					this.#recordBoresight()
 					this.notify(this.#periodicErrorCorrection)
 				}
 				return
 			case 'MOUNT_FLEXURE':
-				if (applyNumberVectorValues(this.#flexure, vector.elements)) this.notify(this.#flexure)
+				if (applyNumberVectorValues(this.#flexure, vector.elements)) {
+					this.#recordBoresight()
+					this.notify(this.#flexure)
+				}
 				return
 			case 'MOUNT_WIND':
 				if (applyNumberVectorValues(this.#wind, vector.elements)) {
 					this.#refreshWind()
+					this.#recordBoresight()
 					this.notify(this.#wind)
 				}
 				return
@@ -1328,6 +1335,13 @@ export class MountSimulator extends DeviceSimulator {
 	}
 
 	// Appends where the optical axis points now to the trajectory.
+	//
+	// Called from the simulation step, and from every configuration change that moves the optical axis
+	// without the clock advancing: switching an error family on, and writing a value into one that is
+	// already on. The sample already standing at this instant is replaced, so the history goes on holding
+	// one position per instant. Left to the next step instead, the change was recorded a whole tick late
+	// and the history interpolated across it, so an exposure taken right after a value was written came
+	// out trailed from the error the mount used to have to the one it now has.
 	//
 	// Stamped with the exact clock rather than the published one. Two sub-millisecond steps otherwise
 	// recorded two different positions under one timestamp, and the history is searched assuming a
