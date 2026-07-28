@@ -20,8 +20,8 @@ import { type AxisPulse, type DeclinationGuideMode, type GuideCommand, type Guid
 // guiding assistant — while emitting PHD2-shaped events. Distances are pixels; pulse durations and
 // timing are milliseconds; pixel scale is arcsec/pixel.
 
-// Default guide exposure when none has been set, in seconds.
-const DEFAULT_GUIDER_EXPOSURE = 1
+// Default guide exposure when none has been set, in milliseconds.
+const DEFAULT_GUIDER_EXPOSURE = 1000
 // Default star-image search-region side, in pixels.
 const DEFAULT_SEARCH_REGION = 64
 
@@ -227,14 +227,15 @@ export class GuiderClient {
 		return this.#lockPosition
 	}
 
-	// Starts one exposure and stores it as the default cadence for looping/guiding.
-	startCapture(exposure: number) {
+	// Starts one exposure (in milliseconds) and stores it as the default cadence for looping/guiding.
+	startExposureLoop(exposure: number) {
 		if (exposure > 0 && Number.isFinite(exposure)) {
 			this.#exposure = exposure
 		}
 
 		if (this.#camera !== undefined) {
-			this.cameraManager.startExposure(this.#camera, this.#exposure)
+			// Camera requires exposure in seconds.
+			this.cameraManager.startExposure(this.#camera, this.#exposure / 1000)
 			return true
 		}
 
@@ -243,6 +244,8 @@ export class GuiderClient {
 
 	// Stops camera exposure and clears active guiding/looping state.
 	stopCapture() {
+		if (this.#appState === 'Stopped') return true
+
 		if (this.#guidingAssistant !== undefined) {
 			this.#finishGuidingAssistant(false, 'capture stopped', this.#guidingAssistant.measuringBacklash)
 		}
@@ -268,6 +271,8 @@ export class GuiderClient {
 		if (this.#guider.currentState.ditherActive) {
 			this.#guider.stopDither()
 		}
+
+		return true
 	}
 
 	// Clears the solved calibration and resets the guider/calibrator state machines.
@@ -398,10 +403,11 @@ export class GuiderClient {
 		return this.#declinationGuideMode
 	}
 
-	// Returns the current exposure cadence in seconds.
+	// Returns the current exposure cadence in milliseconds.
 	getExposure() {
 		const exposure = this.#camera?.exposure.value ?? 0
-		return exposure > 0 ? exposure : this.#exposure
+		// Camera exposure is in seconds. Convert to milliseconds.
+		return exposure > 0 ? exposure * 1000 : this.#exposure
 	}
 
 	// Returns whether pulse output is enabled.
@@ -545,7 +551,7 @@ export class GuiderClient {
 			this.#setAppState('Guiding')
 		}
 
-		this.startCapture(this.#exposure)
+		this.startExposureLoop(this.#exposure)
 
 		return true
 	}
@@ -582,7 +588,7 @@ export class GuiderClient {
 		this.#lockShiftOffsetX = 0
 		this.#lockShiftOffsetY = 0
 		this.#setAppState(this.#lockPosition === undefined ? 'Looping' : 'Selected')
-		this.startCapture(this.#exposure)
+		this.startExposureLoop(this.#exposure)
 
 		return true
 	}
@@ -740,7 +746,7 @@ export class GuiderClient {
 		this.#setAppState(this.#resumeState === 'Paused' ? 'Looping' : this.#resumeState)
 
 		if (this.#appState !== 'Stopped' && this.#camera !== undefined) {
-			this.startCapture(this.#exposure)
+			this.startExposureLoop(this.#exposure)
 		}
 
 		return true
@@ -1141,7 +1147,7 @@ export class GuiderClient {
 	async #queueNextExposure(delay: number): Promise<void> {
 		if (delay > 0) await Bun.sleep(delay)
 		if (!this.#connected || this.#camera === undefined || this.#appState === 'Stopped' || (this.#appState === 'Paused' && this.#fullPause)) return
-		this.cameraManager.startExposure(this.#camera, this.#exposure)
+		this.cameraManager.startExposure(this.#camera, this.#exposure / 1000)
 	}
 
 	// Resets transient guider state while optionally dropping calibration.

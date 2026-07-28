@@ -259,26 +259,26 @@ describe('connect / disconnect', () => {
 })
 
 describe('capture control', () => {
-	test('startCapture requires a bound camera', () => {
-		expect(harness.client.startCapture(2)).toBeFalse()
+	test('startExposureLoop requires a bound camera', () => {
+		expect(harness.client.startExposureLoop(2000)).toBeFalse()
 		connect(harness)
-		expect(harness.client.startCapture(2)).toBeTrue()
+		expect(harness.client.startExposureLoop(2000)).toBeTrue()
 		expect(harness.cameraManager.startExposureCalls.at(-1)).toBe(2)
 	})
 
-	test('startCapture keeps the previous cadence for non-positive or non-finite exposures', () => {
+	test('startExposureLoop keeps the previous cadence for non-positive or non-finite exposures', () => {
 		connect(harness)
-		harness.client.startCapture(3)
-		harness.client.startCapture(0)
-		harness.client.startCapture(Number.NaN)
+		harness.client.startExposureLoop(3000)
+		harness.client.startExposureLoop(0)
+		harness.client.startExposureLoop(Number.NaN)
 		expect(harness.cameraManager.startExposureCalls).toEqual([3, 3, 3])
-		expect(harness.client.getExposure()).toBe(3)
+		expect(harness.client.getExposure()).toBe(3000)
 	})
 
 	test('stopCapture stops exposures, returns to Stopped and emits the looping stop', () => {
 		connect(harness)
 		harness.client.loop()
-		harness.client.stopCapture()
+		expect(harness.client.stopCapture()).toBeTrue()
 		expect(harness.client.getAppState()).toBe('Stopped')
 		expect(harness.cameraManager.stopExposureCount).toBeGreaterThanOrEqual(1)
 		expect(eventsOf(harness.events, 'LoopingExposuresStopped')).toHaveLength(1)
@@ -290,7 +290,7 @@ describe('exposure', () => {
 		expect(harness.client.setExposure(0)).toBeFalse()
 		expect(harness.client.setExposure(-1)).toBeFalse()
 		expect(harness.client.setExposure(Number.POSITIVE_INFINITY)).toBeFalse()
-		expect(harness.client.getExposure()).toBe(1)
+		expect(harness.client.getExposure()).toBe(1000)
 	})
 
 	test('setExposure stores the cadence and emits parameter-change events', () => {
@@ -302,11 +302,11 @@ describe('exposure', () => {
 
 	test('getExposure prefers a live camera exposure when reported', () => {
 		connect(harness)
-		harness.client.setExposure(4)
+		harness.client.setExposure(4000)
 		harness.camera.exposure.value = 7
-		expect(harness.client.getExposure()).toBe(7)
+		expect(harness.client.getExposure()).toBe(7000)
 		harness.camera.exposure.value = 0
-		expect(harness.client.getExposure()).toBe(4)
+		expect(harness.client.getExposure()).toBe(4000)
 	})
 })
 
