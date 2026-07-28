@@ -167,6 +167,16 @@ export function boresightPathLength(history: BoresightHistory, startTime: number
 	return length + segmentLength(previousRightAscension, previousDeclination, pair[0], pair[1])
 }
 
+// Samples an exported helper will actually take for a requested `count`, at least one.
+//
+// A count that is not a number is no instruction at all and is treated as the minimum. Left to flow
+// through, NaN passed the size check against the output buffer, ran every loop zero times and came
+// back as the number of samples written, so a caller reading that count indexed a buffer nothing had
+// been written into. An infinite count survives here and is rejected by that size check instead.
+function trajectorySampleCount(count: number) {
+	return Number.isNaN(count) ? 1 : Math.max(1, Math.trunc(count))
+}
+
 // Angular distance between two nearby directions, radians, in the small-angle approximation used by
 // `boresightPathLength`. The declination of the midpoint scales the right-ascension difference.
 function segmentLength(rightAscensionA: Angle, declinationA: Angle, rightAscensionB: Angle, declinationB: Angle): Angle {
@@ -192,7 +202,7 @@ function segmentLength(rightAscensionA: Angle, declinationA: Angle, rightAscensi
 // A single sample is taken at the midpoint of the interval and carries the whole weight. Returns the
 // number of triples written, which is 0 when the history is empty or `out` is too small.
 export function sampleBoresightPath(history: BoresightHistory, startTime: number, endTime: number, count: number, out: Float64Array) {
-	const samples = Math.max(1, Math.trunc(count))
+	const samples = trajectorySampleCount(count)
 	if (history.count === 0 || out.length < samples * 3) return 0
 
 	const pair: [Angle, Angle] = [0, 0]
@@ -368,7 +378,7 @@ function markEqualPathTimes(history: BoresightHistory, startTime: number, endTim
 // representative instant when the motion is not being resolved. Returns the number of pairs written,
 // which is 0 when the history is empty or `out` is too small.
 export function sampleBoresightTrajectory(history: BoresightHistory, startTime: number, endTime: number, count: number, out: Float64Array) {
-	const samples = Math.max(1, Math.trunc(count))
+	const samples = trajectorySampleCount(count)
 	if (history.count === 0 || out.length < samples * 2) return 0
 
 	const pair: [Angle, Angle] = [0, 0]

@@ -30,6 +30,28 @@ describe('boresight history', () => {
 		}
 	})
 
+	test('takes a usable number of samples whatever count it is asked for', () => {
+		const history = boresightHistory(8)
+		for (let i = 0; i < 4; i++) recordBoresightSample(history, i * 100, deg(i), deg(-i))
+
+		const path = new Float64Array(3)
+		const trajectory = new Float64Array(2)
+
+		// The count is returned as the number of triples written, and a caller indexes the buffer by it.
+		// NaN passed the size check, ran every loop zero times and came back as NaN, which is a count of
+		// samples nothing had been written for.
+		expect(sampleBoresightPath(history, 0, 300, Number.NaN, path)).toBe(1)
+		expect(toDeg(path[0])).toBeCloseTo(1.5, 9)
+		expect(path[2]).toBe(1)
+
+		expect(sampleBoresightTrajectory(history, 0, 300, Number.NaN, trajectory)).toBe(1)
+		expect(toDeg(trajectory[0])).toBeCloseTo(1.5, 9)
+
+		// An infinite count is a buffer that cannot hold it, which is already refused.
+		expect(sampleBoresightPath(history, 0, 300, Infinity, path)).toBe(0)
+		expect(sampleBoresightTrajectory(history, 0, 300, Infinity, trajectory)).toBe(0)
+	})
+
 	test('keeps only the most recent samples once the ring wraps', () => {
 		const history = boresightHistory(3)
 
