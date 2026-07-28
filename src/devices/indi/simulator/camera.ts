@@ -233,11 +233,6 @@ export class CameraSimulator extends DeviceSimulator {
 	#timer?: NodeJS.Timeout
 	#exposureEndTime = 0
 	#exposureDuration = 0
-	// Whether a frame is being completed. The exposure stays Busy across the awaits that finish it, and
-	// the deadline it was recognized by is already cleared, so without this the next tick would take the
-	// same exposure for another finished one and publish a second frame from a context that has been
-	// taken over.
-	#finishing = false
 	// What the exposure in progress is to be rendered from, captured when the shutter opened. The camera
 	// notices completion on its own tick and renders after that, so everything here has to be taken when
 	// the exposure began rather than read back when the frame is drawn.
@@ -691,7 +686,7 @@ export class CameraSimulator extends DeviceSimulator {
 		this.#advanceTemperature()
 		this.#expirePulseGuide(now)
 
-		if (!this.isExposuring || this.#finishing) return
+		if (!this.isExposuring) return
 
 		const remaining = Math.max(0, (this.#exposureEndTime - now) / 1000)
 		if (Math.abs(this.#exposure.elements.CCD_EXPOSURE_VALUE.value - remaining) >= 1e-3) {
@@ -734,11 +729,6 @@ export class CameraSimulator extends DeviceSimulator {
 
 	// Completes the exposure and publishes the encoded synthetic image BLOB.
 	async #finishExposure() {
-		// Claimed before the first await. The exposure is still Busy while the frame is being completed
-		// and the deadline that identified it as finished is already cleared, so the next tick would
-		// otherwise recognize it as a second finished exposure and publish a second frame, built from a
-		// context this call has already taken over.
-		this.#finishing = true
 		const exposureTime = this.#exposureDuration || this.#noiseExposure.elements.EXPOSURE_TIME.value
 		this.#exposureDuration = 0
 		this.#exposure.elements.CCD_EXPOSURE_VALUE.value = 0
@@ -750,11 +740,19 @@ export class CameraSimulator extends DeviceSimulator {
 		const simulator = this.activeMountSimulator
 		const exposure: ExposureContext = this.#exposureContext ?? { startTime: simulator?.utcTime ?? Date.now(), exposureTime, center: this.reportedCenter, time: this.sceneTime, simulator, mount: this.#mountMetadata() }
 		this.#exposureContext = undefined
+
+		// The shutter has closed and everything this frame is drawn from has been taken over, so the
+		// exposure is finished as far as a client is concerned and the next one is free to start.
+		//
+		// Marked before the awaits below rather than after them. An exposure left Busy while its frame is
+		// being completed, with the deadline that identified it as finished already cleared, is one the
+		// next tick recognizes as a second finished exposure: it called this again, found the context
+		// gone, rebuilt one from the present and published an extra frame for a single shutter.
+		this.#image.state = 'Ok'
+		this.#exposure.state = 'Ok'
 		await this.#awaitExposedTrajectory(exposure)
 
 		try {
-			this.#image.state = 'Ok'
-			this.#exposure.state = 'Ok'
 			const blob = await this.#renderImage(exposure)
 			this.#image.elements.CCD1.size = blob.byteLength.toFixed(0)
 			this.#image.elements.CCD1.format = this.transferFormat === 'XISF' ? '.xisf' : '.fits'
@@ -767,8 +765,6 @@ export class CameraSimulator extends DeviceSimulator {
 			this.#image.elements.CCD1.value = undefined
 			this.#exposure.state = 'Alert'
 			console.error('failed to render image', e)
-		} finally {
-			this.#finishing = false
 		}
 
 		this.notify(this.#exposure)
