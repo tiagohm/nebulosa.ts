@@ -1183,6 +1183,74 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		}
 	}, 30000)
 
+	test('does not draw the field it left back at the centre of the frame', async () => {
+		const handler = new IndiClientHandlerSet()
+		const mountManager = new MountManager()
+		const cameraManager = new CameraManager()
+		using client = new ClientSimulator('camera.offdomain.simulator', handler)
+		const frameReceiver = new CameraFrameReceiver()
+
+		handler.add(mountManager)
+		handler.add(cameraManager)
+		cameraManager.addHandler(frameReceiver)
+
+		const catalogProvider: CatalogSource = (rightAscension, declination) => [{ snr: 200, hfd: 2, flux: 0.05, rightAscension, declination }]
+
+		using mountSimulator = new MountSimulator('Mount Simulator', client)
+		using cameraSimulator = new CameraSimulator('Camera Simulator', client, { mountManager, catalogSources: { CENTERED: catalogProvider } })
+		const mount = mountManager.get(client, mountSimulator.name)!
+		const camera = cameraManager.get(client, cameraSimulator.name)!
+
+		mountSimulator.connect()
+		cameraSimulator.connect()
+		await waitUntil(() => mount.connected && camera.connected)
+
+		// On the equator, so a difference of right ascension is the same angle on the sky.
+		mountSimulator.syncTo(hour(5), 0)
+		mountSimulator.setTrackingEnabled(true)
+		mountSimulator.setSlewRate('SPEED_7')
+		await waitUntil(() => closeTo(mount.equatorialCoordinate.rightAscension, hour(5), 1e-9))
+
+		cameraManager.snoop(camera, mount)
+		await waitUntil(() => cameraManager.properties.get(camera)?.ACTIVE_DEVICES?.elements.ACTIVE_TELESCOPE.value === mount.name)
+
+		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_NOISE_FEATURES', elements: { SKY_ENABLED: false, LIGHT_POLLUTION_ENABLED: false } })
+		client.sendNumber({ device: camera.name, name: 'SIMULATOR_NOISE_SENSOR', elements: { READ_NOISE: 0, BIAS_ELECTRONS: 0, BLACK_LEVEL_ELECTRONS: 0, DARK_CURRENT_AT_REFERENCE_TEMP: 0 } })
+		client.sendNumber({ device: camera.name, name: 'SIMULATOR_NOISE_ARTIFACTS', elements: { FIXED_PATTERN_NOISE_STRENGTH: 0, ROW_NOISE_STRENGTH: 0, COLUMN_NOISE_STRENGTH: 0, BANDING_STRENGTH: 0, HOT_PIXEL_RATE: 0, WARM_PIXEL_RATE: 0, DEAD_PIXEL_RATE: 0 } })
+		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_NOISE_CLAMP_MODE', elements: { NONE: true } })
+		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_CATALOG_SOURCE', elements: { CENTERED: true } })
+		await waitUntil(() => cameraManager.properties.get(camera)?.SIMULATOR_CATALOG_SOURCE?.elements.CENTERED.value === true)
+
+		try {
+			const exposure = 2
+			client.sendNumber({ device: camera.name, name: 'SIMULATOR_NOISE_EXPOSURE', elements: { EXPOSURE_TIME: exposure } })
+			await waitUntil(() => cameraManager.properties.get(camera)?.SIMULATOR_NOISE_EXPOSURE?.elements.EXPOSURE_TIME.value === exposure)
+
+			// All of the light, in the field the scene is built around: the scale the slewed frame below is
+			// measured against.
+			cameraSimulator.startExposure(exposure)
+			await waitUntil(() => frameReceiver.length > 0, 20000, 50)
+			const stationary = await readImageFromBuffer(frameReceiver.lastFrame)
+			const stationaryFlux = sumPixels(stationary!.raw)
+			expect(stationaryFlux).toBeGreaterThan(0)
+
+			// The shutter opens and the mount is sent a hundred and fifty degrees away, well outside the
+			// gnomonic domain of the field it started in, where it then sits for the rest of the exposure.
+			cameraSimulator.startExposure(exposure)
+			mountSimulator.goTo(hour(15), 0)
+			await waitUntil(() => frameReceiver.length > 1, 20000, 50)
+			const slewed = await readImageFromBuffer(frameReceiver.lastFrame)
+
+			// This field crossed the sensor in the first few milliseconds of the goto and was gone. Mapping
+			// the samples the projection could not answer for onto the centre of the sensor instead put it
+			// back, at the weight of the whole stretch the mount spent parked at the far end.
+			expect(sumPixels(slewed!.raw)).toBeLessThan(stationaryFlux * 0.05)
+		} finally {
+			cameraSimulator.dispose()
+			mountSimulator.dispose()
+		}
+	}, 30000)
+
 	test('renders a defocused annular collimation pattern with anisotropic binning', async () => {
 		const handler = new IndiClientHandlerSet()
 		const mountManager = new MountManager()

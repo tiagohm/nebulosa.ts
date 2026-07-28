@@ -1484,17 +1484,30 @@ export class CameraSimulator extends DeviceSimulator {
 	// Taken into the J2000 tangent plane the scene is drawn in, since leaving them in the frame of date
 	// rotates the trail against the stars it runs through; `boresightOffsetInPixels` documents by how
 	// much. The shared `time` keeps every sample and the catalog centre on one rotation.
+	// A sample the projection has no answer for is not an unshifted one. `boresightOffsetInPixels`
+	// reports failure both for a boresight that coincides with the centre and for one outside the
+	// gnomonic domain, which is everything more than a right angle away, and treating the two alike put
+	// the far ones at the centre of the sensor: an exposure spanning a long slew rendered the field it
+	// had left at full strength in the middle of the frame, for as long as the mount sat at the far end
+	// of the goto. Those samples carry no light from this field at all, so their weight is dropped
+	// instead. The shares of the remaining samples are left as they are, and no longer sum to one, which
+	// is the point: the exposure really was spent pointing somewhere this scene does not cover.
 	#trajectoryToOffsets(center: readonly [Angle, Angle], pixelScale: Angle, count: number, time: Time) {
 		const buffer = this.#trajectoryBuffer
 		const offset = this.#trajectoryOffset
 
 		for (let i = 0; i < count; i++) {
-			if (boresightOffsetInPixels(center[0], center[1], buffer[i * 3], buffer[i * 3 + 1], pixelScale, time, offset)) {
-				buffer[i * 3] = offset.x
-				buffer[i * 3 + 1] = offset.y
-			} else {
-				buffer[i * 3] = 0
-				buffer[i * 3 + 1] = 0
+			const index = i * 3
+			const rightAscension = buffer[index]
+			const declination = buffer[index + 1]
+			buffer[index] = 0
+			buffer[index + 1] = 0
+
+			if (boresightOffsetInPixels(center[0], center[1], rightAscension, declination, pixelScale, time, offset)) {
+				buffer[index] = offset.x
+				buffer[index + 1] = offset.y
+			} else if (rightAscension !== center[0] || declination !== center[1]) {
+				buffer[index + 2] = 0
 			}
 		}
 
