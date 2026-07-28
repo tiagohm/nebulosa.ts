@@ -12,12 +12,12 @@ import { handleDefNumberVector, type IndiClientHandler } from '../client'
 import { DeviceInterfaceType, expectedPierSide, type GuideDirection, type NameAndLabel, type PierSide, type TrackMode, type UTCTime } from '../device'
 import { findOnSwitch, makeNumberVector, makeSwitchVector, makeTextVector, type NewNumberVector, type NewSwitchVector, type NewTextVector, selectOnSwitch } from '../types'
 import type { ClientSimulator } from './client'
-import { GUIDE_JITTER_SEED, KING_DRIFT_RATE, LUNAR_DRIFT_RATE, MAIN_CONTROL, MAX_GUIDE_RATE, MAX_QUEUED_GUIDE_PULSES, MOUNT_TRAJECTORY_CAPACITY, SIDEREAL_DRIFT_RATE, SIMULATION, SLEW_RATES, SLEW_SPEED_FACTOR, SOLAR_DRIFT_RATE, TICK_INTERVAL_MS } from './constants'
+import { GUIDE_JITTER_SEED, KING_DRIFT_RATE, LUNAR_DRIFT_RATE, MAIN_CONTROL, MAX_GUIDE_RATE, MAX_QUEUED_GUIDE_PULSES, MAX_SETTLING_STEPS, MOUNT_TRAJECTORY_CAPACITY, SETTLING_SAMPLES_PER_CYCLE, SIDEREAL_DRIFT_RATE, SIMULATION, SLEW_RATES, SLEW_SPEED_FACTOR, SOLAR_DRIFT_RATE, TICK_INTERVAL_MS } from './constants'
 import { DeviceSimulator } from './device'
 import { advanceMechanicalAxis, clearMechanicalAxis, driveMechanicalAxis, IDENTITY_MECHANICAL_AXIS_CONFIG, type MechanicalAxisConfig, mechanicalAxisState, reconcileMechanicalAxis, resetMechanicalAxisMotion } from './mount.axis'
 import { type GuidePulse, type GuideResponseConfig, IDENTITY_GUIDE_RESPONSE_CONFIG, integrateGuidePulses, nextGuidePulseBoundary, quantizeGuideDuration, retireGuidePulses, shiftGuidePulses } from './mount.guiding'
 import { IDENTITY_PERIODIC_ERROR_CURVE, PERIODIC_ERROR_HARMONICS, periodicErrorAt, periodicErrorBound, type PeriodicErrorCurve, trainPeriodicErrorCorrection } from './mount.periodic'
-import { advanceSettling, exciteSettling, IDENTITY_SETTLING_CONFIG, resetSettling, type SettlingConfig, settlingState } from './mount.settling'
+import { advanceSettling, exciteSettling, IDENTITY_SETTLING_CONFIG, isSettling, resetSettling, type SettlingConfig, settlingState } from './mount.settling'
 import { advanceTrackingRateError, IDENTITY_TRACKING_RATE_ERROR_CONFIG, resetTrackingRateError, TRACKING_RATE_CALIBRATION_TEMPERATURE, type TrackingRateErrorConfig, trackingRateErrorState } from './mount.tracking'
 import { boresightHistory, boresightPathLength, clearBoresightHistory, recordBoresightSample, sampleBoresightPath, sampleBoresightTrajectory } from './mount.trajectory'
 import { advanceWind, IDENTITY_WIND_CONFIG, resetWind, type WindConfig, windState } from './mount.wind'
@@ -1262,10 +1262,11 @@ export class MountSimulator extends DeviceSimulator {
 		// Sampled once per step, so every consumer of the interval sees the same rate error.
 		this.#trackingRateError = advanceTrackingRateError(this.#trackingRateErrorState, dtSeconds, this.#trackingRateErrorConfig, this.#normal)
 
-		// A slew reports how much of the step was left once it arrived, so a ring-down excited partway
-		// through is integrated only over the time that actually followed the stop. At the default tick a
-		// few-hertz resonance covers a good part of a cycle in one step, so charging it the whole
-		// interval would shift its phase or swallow the first overshoot.
+		// A slew reports how much of the step was left once it arrived, and everything that is not the
+		// slew itself — the guiding, the wind and a ring-down excited by the arrival — is then walked over
+		// exactly that remainder. At the default tick a few-hertz resonance covers a good part of a cycle
+		// in one step, so charging it the whole interval would shift its phase or swallow the first
+		// overshoot.
 		let settlingSeconds = dtSeconds
 
 		if (this.#slewTarget) {
@@ -1305,30 +1306,6 @@ export class MountSimulator extends DeviceSimulator {
 			this.#advanceGuidedMotion(startTime, endTime)
 		}
 
-		// Applied as the change in the residual offset rather than as the offset itself, so the ringing
-		// rides on top of whatever the axes are doing and pays itself back: once it has died away the
-		// mount sits exactly where it was commanded.
-		//
-		// The change is measured against how much of the excursion is currently in the coordinate rather
-		// than against the oscillator alone, because the declination is clamped at the poles and the
-		// clamp is one-sided. An axis ringing at +90 had its northward swing discarded and then paid it
-		// back anyway, so a mount homing to the pole with settling enabled came to rest permanently short
-		// of it. Crediting only the motion that survived the clamp means nothing is owed for motion that
-		// never happened.
-		advanceSettling(this.#rightAscensionSettling, settlingSeconds, this.#settlingConfig)
-		advanceSettling(this.#declinationSettling, settlingSeconds, this.#settlingConfig)
-
-		const rightAscensionRing = this.#rightAscensionSettling.offset - this.#appliedRightAscensionRing
-		const declinationRing = this.#declinationSettling.offset - this.#appliedDeclinationRing
-
-		if (rightAscensionRing !== 0 || declinationRing !== 0) {
-			const rightAscension = this.#mechanical.rightAscension
-			const declination = this.#mechanical.declination
-			this.#setMechanical(rightAscension + rightAscensionRing, declination + declinationRing)
-			this.#appliedRightAscensionRing += normalizePI(this.#mechanical.rightAscension - rightAscension)
-			this.#appliedDeclinationRing += this.#mechanical.declination - declination
-		}
-
 		// Retired only after the interval has been accounted for, so the tail of a pulse is never lost.
 		// Both axes are always visited: short-circuiting the second call would leave its queue growing.
 		const westEastPending = retireGuidePulses(this.#westEastPulses, endTime)
@@ -1339,6 +1316,19 @@ export class MountSimulator extends DeviceSimulator {
 
 		// Recorded last, so the sample reflects the state at the end of the interval just simulated.
 		this.#recordBoresight()
+	}
+
+	// Sub-steps a ring-down of `dtSeconds` is advanced and recorded in, so that a resonance faster than
+	// the simulation tick is resolved on the trajectory rather than aliased by it.
+	//
+	// Enough for SETTLING_SAMPLES_PER_CYCLE points on the fastest cycle the configuration asks for,
+	// capped at MAX_SETTLING_STEPS: the top of the allowed frequency range then gets fewer points per
+	// cycle, but the excursion is still there rather than sampled away. One step, which is what the rest
+	// of the simulation uses, whenever nothing is ringing, so an idle mount costs exactly what it did.
+	#settlingSteps(dtSeconds: number) {
+		if (!isSettling(this.#rightAscensionSettling) && !isSettling(this.#declinationSettling)) return 1
+		const cycles = dtSeconds * this.#settlingConfig.frequency
+		return clamp(Math.ceil(cycles * SETTLING_SAMPLES_PER_CYCLE), 1, MAX_SETTLING_STEPS)
 	}
 
 	// Appends where the optical axis points now to the trajectory.
@@ -1538,26 +1528,66 @@ export class MountSimulator extends DeviceSimulator {
 			this.#guideRateWestEast = integrateGuidePulses(this.#westEastPulses, from, to) / dtSeconds
 			this.#guideRateNorthSouth = integrateGuidePulses(this.#northSouthPulses, from, to) / dtSeconds
 
-			// Integrated before the motion advances, so the phase covers the interval the axes are about
-			// to run at the rate the motion is about to apply.
-			this.#advanceWormPhase(this.#rightAscensionMotorRate(), dtSeconds)
-			// The wind is charged piece by piece for the same reason the sample below is taken piece by
-			// piece: it blows during each of them, and its process is exact over any interval, so
-			// splitting one costs nothing. Advanced once for the whole step instead, every intermediate
-			// sample was stamped with the deflection the telescope only reached at the end of it, which
-			// dropped a tick's worth of buffeting onto the first piece and left the rest of the step
-			// perfectly still.
-			advanceWind(this.#windState, dtSeconds, this.#windConfig, this.#normal)
-			this.#advanceFreeMotion(dtSeconds)
+			// A ring-down is the one motion modelled here that can be faster than the tick, so the piece is
+			// walked in sub-steps fast enough for it. The guiding is constant across them by construction,
+			// since a piece is exactly a stretch between two changes of it.
+			const steps = this.#settlingSteps(dtSeconds)
+			const stepSeconds = dtSeconds / steps
+			const stepMilliseconds = (to - from) / steps
 
-			// Each piece ends at a position of its own, and the trajectory is what a camera integrates an
-			// exposure over. Recording only the state at the end of the step described a north pulse
-			// followed by a south one inside one tick as no motion at all: the axis came back to where it
-			// started, so the path measured zero and the frame was drawn from a single point instead of
-			// from the out-and-back trail it really traced. The last piece ends at the end of the step and
-			// is replaced there by the sample taken once settling has been applied.
-			this.#recordBoresightAt(to)
+			for (let step = 1; step <= steps; step++) {
+				// Integrated before the motion advances, so the phase covers the interval the axes are
+				// about to run at the rate the motion is about to apply.
+				this.#advanceWormPhase(this.#rightAscensionMotorRate(), stepSeconds)
+				// The wind is charged sub-step by sub-step for the same reason the sample below is taken
+				// there: it blows during each of them, and its process is exact over any interval, so
+				// splitting one costs nothing. Advanced once for the whole step instead, every
+				// intermediate sample was stamped with the deflection the telescope only reached at the
+				// end of it, which dropped a tick's worth of buffeting onto the first piece and left the
+				// rest of the step perfectly still.
+				advanceWind(this.#windState, stepSeconds, this.#windConfig, this.#normal)
+				this.#advanceFreeMotion(stepSeconds)
+				this.#advanceRingDown(stepSeconds)
+
+				// Each sub-step ends at a position of its own, and the trajectory is what a camera
+				// integrates an exposure over. Recording only the state at the end of the step described a
+				// north pulse followed by a south one inside one tick as no motion at all: the axis came
+				// back to where it started, so the path measured zero and the frame was drawn from a
+				// single point instead of from the out-and-back trail it really traced. The last sample
+				// lands on the end of the step and is replaced there by the one taken after it.
+				this.#recordBoresightAt(from + stepMilliseconds * step)
+			}
+
 			from = to
+		}
+	}
+
+	// Advances both settling oscillators by `dtSeconds` and moves the axes by however much of their
+	// excursion is not already in the coordinate.
+	//
+	// Applied as the change in the residual offset rather than as the offset itself, so the ringing
+	// rides on top of whatever the axes are doing and pays itself back: once it has died away the mount
+	// sits exactly where it was commanded.
+	//
+	// The change is measured against how much of the excursion is currently in the coordinate rather
+	// than against the oscillator alone, because the declination is clamped at the poles and the clamp
+	// is one-sided. An axis ringing at +90 had its northward swing discarded and then paid it back
+	// anyway, so a mount homing to the pole with settling enabled came to rest permanently short of it.
+	// Crediting only the motion that survived the clamp means nothing is owed for motion that never
+	// happened.
+	#advanceRingDown(dtSeconds: number) {
+		advanceSettling(this.#rightAscensionSettling, dtSeconds, this.#settlingConfig)
+		advanceSettling(this.#declinationSettling, dtSeconds, this.#settlingConfig)
+
+		const rightAscensionRing = this.#rightAscensionSettling.offset - this.#appliedRightAscensionRing
+		const declinationRing = this.#declinationSettling.offset - this.#appliedDeclinationRing
+
+		if (rightAscensionRing !== 0 || declinationRing !== 0) {
+			const rightAscension = this.#mechanical.rightAscension
+			const declination = this.#mechanical.declination
+			this.#setMechanical(rightAscension + rightAscensionRing, declination + declinationRing)
+			this.#appliedRightAscensionRing += normalizePI(this.#mechanical.rightAscension - rightAscension)
+			this.#appliedDeclinationRing += this.#mechanical.declination - declination
 		}
 	}
 

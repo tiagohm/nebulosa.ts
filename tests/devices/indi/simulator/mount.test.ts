@@ -702,6 +702,37 @@ describe('mount simulator pointing errors', () => {
 		}
 	})
 
+	test('resolves a ring-down faster than the simulation tick', () => {
+		const { client, mount } = makeMount('mount.trajectory.settling', 'SETTLING')
+
+		try {
+			// Ten hertz and no damping: a tenth of a second is exactly one cycle, so the oscillator returns
+			// to where it started and a step that only looks at its endpoints sees nothing at all.
+			client.sendNumber({ device: mount.name, name: 'MOUNT_SETTLING', elements: { OVERSHOOT: 60, FREQUENCY: 10, DAMPING_RATIO: 0 } })
+			mount.setTrackingEnabled(true)
+			mount.setSlewRate('SPEED_7')
+
+			// A goto that arrives inside its first step, leaving the mount ringing.
+			mount.goTo(mount.rightAscension, mount.declination + deg(0.1))
+			mount.advance(0.1)
+			expect(mount.isSlewing).toBeFalse()
+
+			const startTime = mount.utcTime
+			const declination = mount.boresight.declination
+
+			// One whole cycle of ringing, which ends where it began.
+			mount.advance(0.1)
+			expect(toArcsec(Math.abs(mount.boresight.declination - declination))).toBeLessThan(1)
+
+			// The mount swung a full overshoot each way through that tick, and an exposure taken over it
+			// has to be blurred by that. Advancing the oscillator in one closed-form jump left the
+			// trajectory with two identical endpoints and no sign of the excursion between them.
+			expect(toArcsec(mount.boresightPathLength(startTime, mount.utcTime))).toBeGreaterThan(100)
+		} finally {
+			mount.dispose()
+		}
+	})
+
 	test('records where the boresight went at every guide boundary inside a step', () => {
 		const { client, mount } = makeMount('mount.trajectory.pulses', 'GUIDING')
 

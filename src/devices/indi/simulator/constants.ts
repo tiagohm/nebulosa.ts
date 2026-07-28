@@ -37,6 +37,14 @@ export const MAX_TRAJECTORY_SAMPLES = 64
 // Field displacement, in unbinned pixels, that each integration sample is allowed to cover. Half a
 // pixel keeps a trail continuous without over-sampling a field that barely moves.
 export const TRAJECTORY_PIXELS_PER_SAMPLE = 0.5
+// Points a simulation step puts on one cycle of a ring-down, which is the only motion modelled here
+// that can be faster than the tick. Eight resolves the excursion and its direction; fewer starts to
+// understate the peak, and the trajectory is only ever read as a path length and a set of dwells.
+export const SETTLING_SAMPLES_PER_CYCLE = 8
+// Most sub-steps one simulation step is split into for a ring-down. Reached only near the top of the
+// allowed frequency range, where the excursion is resolved more coarsely rather than not at all; the
+// cap is what keeps a step from writing hundreds of trajectory samples and emptying the history.
+export const MAX_SETTLING_STEPS = 32
 // Multiplier applied to the selected manual slew rate when running an automatic goto, home or park,
 // so that a commanded slew is faster than nudging the axes by hand.
 export const SLEW_SPEED_FACTOR = 3
