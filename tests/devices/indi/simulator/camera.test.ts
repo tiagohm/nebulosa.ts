@@ -951,6 +951,56 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		}
 	}, 30000)
 
+	test('publishes one frame even when the mount never catches up', async () => {
+		const handler = new IndiClientHandlerSet()
+		const mountManager = new MountManager()
+		const cameraManager = new CameraManager()
+		using client = new ClientSimulator('camera.finish.once', handler)
+		const frameReceiver = new CameraFrameReceiver()
+
+		handler.add(mountManager)
+		handler.add(cameraManager)
+		cameraManager.addHandler(frameReceiver)
+
+		const catalogProvider: CatalogSource = (rightAscension, declination) => [{ snr: 200, hfd: 2, flux: 400, rightAscension, declination }]
+
+		using mountSimulator = new MountSimulator('Mount Simulator', client)
+		using cameraSimulator = new CameraSimulator('Camera Simulator', client, { mountManager, catalogSources: { CENTERED: catalogProvider } })
+		const mount = mountManager.get(client, mountSimulator.name)!
+		const camera = cameraManager.get(client, cameraSimulator.name)!
+
+		mountSimulator.connect()
+		cameraSimulator.connect()
+		await waitUntil(() => mount.connected && camera.connected)
+
+		mountSimulator.syncTo(hour(5), deg(20))
+		mountSimulator.setTrackingEnabled(true)
+		cameraManager.snoop(camera, mount)
+		await waitUntil(() => cameraManager.properties.get(camera)?.ACTIVE_DEVICES?.elements.ACTIVE_TELESCOPE.value === mount.name)
+
+		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_NOISE_FEATURES', elements: { SKY_ENABLED: false, LIGHT_POLLUTION_ENABLED: false } })
+		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_CATALOG_SOURCE', elements: { CENTERED: true } })
+		await waitUntil(() => cameraManager.properties.get(camera)?.SIMULATOR_CATALOG_SOURCE?.elements.CENTERED.value === true)
+
+		try {
+			// The mount is stopped with the shutter open, so its clock never reaches the end of the
+			// exposure and the render waits out its whole allowance. The exposure stays Busy across that
+			// wait, with the deadline that identified it as finished already cleared, which is exactly the
+			// state a tick must not mistake for another finished frame.
+			cameraSimulator.startExposure(0.05)
+			mountSimulator.disconnect()
+
+			await waitUntil(() => frameReceiver.length > 0, 10000, 5)
+
+			// Well past both the wait and several ticks: a second frame would have arrived by now.
+			await Bun.sleep(500)
+			expect(frameReceiver.length).toBe(1)
+		} finally {
+			cameraSimulator.dispose()
+			mountSimulator.dispose()
+		}
+	}, 20000)
+
 	test('queries the catalog at the epoch the mount believes in', async () => {
 		const handler = new IndiClientHandlerSet()
 		const mountManager = new MountManager()
