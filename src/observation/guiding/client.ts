@@ -145,6 +145,22 @@ export class GuiderClient {
 		this.#eventHandler = options?.handler?.event
 	}
 
+	get camera() {
+		return this.#camera
+	}
+
+	get guideOutput() {
+		return this.#guideOutput
+	}
+
+	attachHandler() {
+		this.cameraManager.addHandler(this.#cameraHandler)
+	}
+
+	detachHandler() {
+		this.cameraManager.removeHandler(this.#cameraHandler)
+	}
+
 	// Binds the active camera and guide output, enables image BLOBs, and starts listening.
 	connect(camera: Camera, guideOutput: GuideOutput, options?: GuiderClientConnectOptions) {
 		if (this.#connected) return false
@@ -154,7 +170,7 @@ export class GuiderClient {
 		this.#focalLength = resolveFocalLength(options)
 		this.#pixelSize = resolveConfiguredPixelSize(options)
 		this.#connected = true
-		this.cameraManager.addHandler(this.#cameraHandler)
+		this.attachHandler()
 		this.cameraManager.enableBlob(camera)
 		this.#resetRuntimeState(true)
 		this.emitEvent('ConfigurationChange')
@@ -174,7 +190,7 @@ export class GuiderClient {
 		}
 
 		this.#connected = false
-		this.cameraManager.removeHandler(this.#cameraHandler)
+		this.detachHandler()
 
 		if (camera !== undefined) {
 			this.cameraManager.stopExposure(camera)
