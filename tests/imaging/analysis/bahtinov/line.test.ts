@@ -1,10 +1,11 @@
 import { expect, test } from 'bun:test'
+import { PI } from '../../../../src/core/constants'
 import { bahtinovAxialAngleDistance } from '../../../../src/imaging/analysis/bahtinov/geometry'
 import { detectBahtinovHoughCandidates } from '../../../../src/imaging/analysis/bahtinov/hough'
 import { fitBahtinovLines } from '../../../../src/imaging/analysis/bahtinov/line'
 import { preprocessBahtinov } from '../../../../src/imaging/analysis/bahtinov/preprocess'
 import type { Image } from '../../../../src/imaging/model/types'
-import { plotBahtinovSpikes } from '../../../../src/imaging/stars/generator'
+import { plotBahtinovSpikes } from '../../../../src/imaging/stars/bahtinov'
 
 function image(raw: Float64Array, width: number, height: number): Image {
 	return {
@@ -31,7 +32,7 @@ test('robustly fits global spike lines with finite support metrics', () => {
 	const top = 17
 	const raw = new Float64Array(width * height)
 	raw.fill(0.015)
-	const expected = [Math.PI / 12, 0, (Math.PI * 11) / 12] as const
+	const expected = [PI / 12, 0, (PI * 11) / 12] as const
 	plotBahtinovSpikes(raw, width, height, 1, 60, 55, 160, -2.5, undefined, { normalAngles: expected, halfLength: 36, taperLength: 6, fwhm: 2 })
 	raw[30 * width + 30] += 5
 	raw[70 * width + 82] += 4
@@ -47,7 +48,7 @@ test('robustly fits global spike lines with finite support metrics', () => {
 		for (const candidate of fitted) {
 			if (bahtinovAxialAngleDistance(candidate.line.normalAngle, angle) < bahtinovAxialAngleDistance(best.normalAngle, angle)) best = candidate.line
 		}
-		expect(bahtinovAxialAngleDistance(best.normalAngle, angle)).toBeLessThan(Math.PI / 360)
+		expect(bahtinovAxialAngleDistance(best.normalAngle, angle)).toBeLessThan(PI / 360)
 		expect(best.segment[0].x).toBeGreaterThanOrEqual(area.left)
 		expect(best.segment[1].x).toBeLessThanOrEqual(area.right - 1)
 		expect(best.coverage).toBeGreaterThan(0.3)

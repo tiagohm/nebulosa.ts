@@ -1,7 +1,8 @@
 import { expect, test } from 'bun:test'
+import { PI } from '../../../../src/core/constants'
 import { createBahtinovWorkspace, preprocessBahtinov, resolveBahtinovArea } from '../../../../src/imaging/analysis/bahtinov/preprocess'
 import type { Image } from '../../../../src/imaging/model/types'
-import { plotBahtinovSpikes } from '../../../../src/imaging/stars/generator'
+import { plotBahtinovSpikes } from '../../../../src/imaging/stars/bahtinov'
 
 function image(raw: Float32Array | Float64Array, width: number, height: number, channels: 1 | 3 = 1, bayer?: Image['metadata']['bayer']): Image {
 	const bytes = raw.BYTES_PER_ELEMENT
@@ -23,7 +24,7 @@ function image(raw: Float32Array | Float64Array, width: number, height: number, 
 }
 
 test('creates a capacity-described reusable workspace', () => {
-	const workspace = createBahtinovWorkspace(64, 48, { precision: 64, maximumRidgePoints: 512, angleStep: Math.PI / 90, distanceStep: 1 })
+	const workspace = createBahtinovWorkspace(64, 48, { precision: 64, maximumRidgePoints: 512, angleStep: PI / 90, distanceStep: 1 })
 	expect(workspace.source).toBeInstanceOf(Float64Array)
 	expect(workspace.source.length).toBe(64 * 48)
 	expect(workspace.maximumRidgePoints).toBe(512)
@@ -143,7 +144,7 @@ test('rejects a workspace whose recorded capacity is insufficient', () => {
 	const width = 64
 	const height = 64
 	const source = image(new Float32Array(width * height), width, height)
-	const workspace = createBahtinovWorkspace(width, height, { maximumRidgePoints: 128, angleStep: Math.PI / 90, distanceStep: 1 })
+	const workspace = createBahtinovWorkspace(width, height, { maximumRidgePoints: 128, angleStep: PI / 90, distanceStep: 1 })
 	expect(() => preprocessBahtinov({ image: source, area: { left: 0, top: 0, right: width, bottom: height } }, { workspace, maximumRidgePoints: 256 })).toThrow(RangeError)
-	expect(() => preprocessBahtinov({ image: source, area: { left: 0, top: 0, right: width, bottom: height } }, { workspace, angleStep: Math.PI / 180 })).toThrow(RangeError)
+	expect(() => preprocessBahtinov({ image: source, area: { left: 0, top: 0, right: width, bottom: height } }, { workspace, angleStep: PI / 180 })).toThrow(RangeError)
 })

@@ -1,7 +1,8 @@
 import { expect, test } from 'bun:test'
+import { PI, PIOVERTWO } from '../../../../src/core/constants'
 import { compareBahtinovChromatic } from '../../../../src/imaging/analysis/bahtinov/chromatic'
 import type { Image } from '../../../../src/imaging/model/types'
-import { plotBahtinovSpikes } from '../../../../src/imaging/stars/generator'
+import { plotBahtinovSpikes } from '../../../../src/imaging/stars/bahtinov'
 
 function rgbBahtinov(errors: readonly [number, number, number], omittedChannel?: number): Image {
 	const width = 128
@@ -12,7 +13,7 @@ function rgbBahtinov(errors: readonly [number, number, number], omittedChannel?:
 		if (channel === omittedChannel) continue
 		const mono = new Float64Array(width * height)
 		plotBahtinovSpikes(mono, width, height, 1, 63.5, 63.5, 180, errors[channel], undefined, {
-			normalAngles: [(Math.PI * 5) / 12, Math.PI / 2, (Math.PI * 7) / 12],
+			normalAngles: [(PI * 5) / 12, PIOVERTWO, (PI * 7) / 12],
 			central: 1,
 			fwhm: 2,
 			halfLength: 44,

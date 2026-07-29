@@ -1,4 +1,5 @@
-import type { Point, Rect } from '../../../math/numerical/geometry'
+import { PI, PIOVERTWO, TAU } from '../../../core/constants'
+import { euclideanSquaredDistance, type Point, type Rect } from '../../../math/numerical/geometry'
 import type { Angle } from '../../../math/units/angle'
 
 // Geometry primitives for Bahtinov normal-form lines. Public coordinates use full-image pixel
@@ -43,38 +44,35 @@ export interface BahtinovFocusGeometry {
 }
 
 // Normalizes an axial line angle to `[0, PI)` while preserving the represented equation.
-//
 // `normalAngle` is in radians and `distance` is in pixels. The returned object is fresh.
 export function canonicalizeBahtinovLine(normalAngle: Angle, distance: number): BahtinovNormalLine {
 	if (!Number.isFinite(normalAngle)) throw new RangeError('normalAngle must be finite')
 	if (!Number.isFinite(distance)) throw new RangeError('distance must be finite')
 
-	const tau = Math.PI * 2
-	let angle = normalAngle % tau
-	if (angle < 0) angle += tau
+	let angle = normalAngle % TAU
+	if (angle < 0) angle += TAU
 
 	let canonicalDistance = distance
-	if (angle >= Math.PI) {
-		angle -= Math.PI
+
+	if (angle >= PI) {
+		angle -= PI
 		canonicalDistance = -canonicalDistance
 	}
 
-	if (angle === Math.PI) angle = 0
+	if (angle === PI) angle = 0
 	return { normalAngle: angle, distance: canonicalDistance }
 }
 
 // Computes the unsigned axial separation of two line normals in `[0, PI / 2]`.
-//
 // Both input angles are radians and may be outside the canonical range.
 export function bahtinovAxialAngleDistance(angleA: Angle, angleB: Angle): Angle {
 	if (!Number.isFinite(angleA) || !Number.isFinite(angleB)) throw new RangeError('line angles must be finite')
-	let delta = Math.abs(angleA - angleB) % Math.PI
-	if (delta > Math.PI / 2) delta = Math.PI - delta
+	let delta = Math.abs(angleA - angleB) % PI
+	if (delta > PIOVERTWO) delta = PI - delta
 	return delta
 }
 
 // Converts a local-ROI normal distance to the equivalent full-image distance.
-//
 // `localDistance` and ROI offsets are pixels; `normalAngle` is radians.
 export function bahtinovGlobalLineDistance(localDistance: number, normalAngle: Angle, area: Readonly<Rect>): number {
 	if (!Number.isFinite(localDistance) || !Number.isFinite(normalAngle)) throw new RangeError('line parameters must be finite')
@@ -83,7 +81,6 @@ export function bahtinovGlobalLineDistance(localDistance: number, normalAngle: A
 }
 
 // Intersects two normal-form lines or returns undefined when their unit normals are too parallel.
-//
 // `minimumDeterminant` is dimensionless and must lie in `(0, 1]`.
 export function intersectBahtinovLines(first: BahtinovNormalLine, second: BahtinovNormalLine, minimumDeterminant: number = DEFAULT_MINIMUM_INTERSECTION_DETERMINANT): BahtinovLineIntersection | undefined {
 	validateNormalLine(first)
@@ -105,23 +102,21 @@ export function intersectBahtinovLines(first: BahtinovNormalLine, second: Bahtin
 }
 
 // Returns the two axial normal-angle bisectors of a pair of non-parallel line axes.
-//
 // Returned angles are radians in `[0, PI)` and are separated by `PI / 2`.
 export function bahtinovAxialBisectors(angleA: Angle, angleB: Angle): readonly [Angle, Angle] {
 	if (!Number.isFinite(angleA) || !Number.isFinite(angleB)) throw new RangeError('line angles must be finite')
 	const first = canonicalizeBahtinovLine(angleA, 0).normalAngle
 	const second = canonicalizeBahtinovLine(angleB, 0).normalAngle
 	let delta = second - first
-	if (delta > Math.PI / 2) delta -= Math.PI
-	else if (delta < -Math.PI / 2) delta += Math.PI
+	if (delta > PIOVERTWO) delta -= PI
+	else if (delta < -PIOVERTWO) delta += PI
 
 	const primary = canonicalizeBahtinovLine(first + delta * 0.5, 0).normalAngle
-	const secondary = canonicalizeBahtinovLine(primary + Math.PI / 2, 0).normalAngle
+	const secondary = canonicalizeBahtinovLine(primary + PIOVERTWO, 0).normalAngle
 	return [primary, secondary]
 }
 
 // Clips an infinite normal-form line to the inclusive pixel-center domain of a half-open ROI.
-//
 // Returns the farthest two finite boundary intersections, or undefined when no segment exists.
 export function clipBahtinovLineToArea(line: BahtinovNormalLine, area: Readonly<Rect>): readonly [Readonly<Point>, Readonly<Point>] | undefined {
 	validateNormalLine(line)
@@ -149,11 +144,11 @@ export function clipBahtinovLineToArea(line: BahtinovNormalLine, area: Readonly<
 
 	let first = points[0]
 	let second = points[1]
-	let maximumSquaredDistance = squaredDistance(first, second)
+	let maximumSquaredDistance = euclideanSquaredDistance(first, second)
 
 	for (let i = 0; i < points.length - 1; i++) {
 		for (let j = i + 1; j < points.length; j++) {
-			const squared = squaredDistance(points[i], points[j])
+			const squared = euclideanSquaredDistance(points[i], points[j])
 			if (squared > maximumSquaredDistance) {
 				first = points[i]
 				second = points[j]
@@ -171,7 +166,6 @@ export function clipBahtinovLineToArea(line: BahtinovNormalLine, area: Readonly<
 }
 
 // Computes a stable continuous focus-proximity measure from absolute pixel error and tolerance.
-//
 // Returns 1 at zero error, 0.5 at the tolerance, and approaches 0 monotonically.
 export function bahtinovFocusProximity(absoluteError: number, focusTolerance: number): number {
 	if (!Number.isFinite(absoluteError) || absoluteError < 0) throw new RangeError('absoluteError must be finite and non-negative')
@@ -187,7 +181,6 @@ export function bahtinovFocusProximity(absoluteError: number, focusTolerance: nu
 }
 
 // Derives finite reference, signed error, proximity, and intersection conditioning from three lines.
-//
 // Distances and `focusTolerance` are pixels. Returns undefined for ill-conditioned external lines.
 export function computeBahtinovFocusGeometry(central: BahtinovNormalLine, externalFirst: BahtinovNormalLine, externalSecond: BahtinovNormalLine, focusTolerance: number, minimumDeterminant: number = DEFAULT_MINIMUM_INTERSECTION_DETERMINANT): BahtinovFocusGeometry | undefined {
 	validateNormalLine(central)
@@ -227,15 +220,6 @@ function addClipPoint(points: Point[], x: number, y: number, xMinimum: number, x
 
 	const clampedX = Math.min(xMaximum, Math.max(xMinimum, x))
 	const clampedY = Math.min(yMaximum, Math.max(yMinimum, y))
-	for (let i = 0; i < points.length; i++) {
-		if (Math.abs(points[i].x - clampedX) <= CLIP_POINT_EPSILON && Math.abs(points[i].y - clampedY) <= CLIP_POINT_EPSILON) return
-	}
+	for (let i = 0; i < points.length; i++) if (Math.abs(points[i].x - clampedX) <= CLIP_POINT_EPSILON && Math.abs(points[i].y - clampedY) <= CLIP_POINT_EPSILON) return
 	points.push({ x: clampedX, y: clampedY })
-}
-
-// Computes squared Euclidean distance without a square root for segment selection.
-function squaredDistance(first: Readonly<Point>, second: Readonly<Point>): number {
-	const dx = first.x - second.x
-	const dy = first.y - second.y
-	return dx * dx + dy * dy
 }

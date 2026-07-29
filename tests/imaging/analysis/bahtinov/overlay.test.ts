@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test'
+import { PI, PIOVERFOUR } from '../../../../src/core/constants'
 import { createBahtinovOverlayGeometry } from '../../../../src/imaging/analysis/bahtinov/overlay'
 import type { BahtinovAnalysisSuccess, BahtinovLine, BahtinovQuality } from '../../../../src/imaging/analysis/bahtinov/types'
 
@@ -38,7 +39,7 @@ function analysis(error: number = 3): BahtinovAnalysisSuccess {
 		area: { left: 0, top: 0, right: 21, bottom: 21 },
 		reference: { x: 10, y: 10 },
 		centralLine: line(0, 10 - error, 4, 10 - error, 0, 10 - error, 20),
-		externalLines: [line(Math.PI / 4, 10 * Math.SQRT2, 6, 0, 20, 20, 0), line((Math.PI * 3) / 4, 0, 8, 0, 0, 20, 20)],
+		externalLines: [line(PIOVERFOUR, 10 * Math.SQRT2, 6, 0, 20, 20, 0), line((PI * 3) / 4, 0, 8, 0, 0, 20, 20)],
 		error,
 		absoluteError: Math.abs(error),
 		focusProximity: 1 / (1 + Math.abs(error)),

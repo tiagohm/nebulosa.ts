@@ -1,9 +1,10 @@
 import { expect, test } from 'bun:test'
+import { PI, PIOVERTWO } from '../../../../src/core/constants'
 import { analyzeBahtinov } from '../../../../src/imaging/analysis/bahtinov/bahtinov'
 import { createBahtinovOverlayGeometry } from '../../../../src/imaging/analysis/bahtinov/overlay'
 import { createBahtinovWorkspace } from '../../../../src/imaging/analysis/bahtinov/preprocess'
 import type { CfaPattern, Image, ImageRawType } from '../../../../src/imaging/model/types'
-import { plotBahtinovSpikes } from '../../../../src/imaging/stars/generator'
+import { plotBahtinovSpikes } from '../../../../src/imaging/stars/bahtinov'
 
 function image(raw: ImageRawType, width: number, height: number, bayer?: CfaPattern): Image {
 	return {
@@ -27,7 +28,7 @@ function synthetic(error: number, width: number = 128, height: number = 128): Im
 	const raw = new Float64Array(width * height)
 	raw.fill(0.01)
 	plotBahtinovSpikes(raw, width, height, 1, (width - 1) * 0.5, (height - 1) * 0.5, 180, error, undefined, {
-		normalAngles: [(Math.PI * 5) / 12, Math.PI / 2, (Math.PI * 7) / 12],
+		normalAngles: [(PI * 5) / 12, PIOVERTWO, (PI * 7) / 12],
 		central: 1,
 		fwhm: 2,
 		halfLength: 44,

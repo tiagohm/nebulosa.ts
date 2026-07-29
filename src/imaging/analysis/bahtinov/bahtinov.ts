@@ -1,9 +1,10 @@
+import { PI, PIOVERTWO } from '../../../core/constants'
 import type { Point, Rect } from '../../../math/numerical/geometry'
 import { bahtinovAxialAngleDistance, bahtinovAxialBisectors, computeBahtinovFocusGeometry, intersectBahtinovLines } from './geometry'
 import { detectBahtinovHoughCandidates } from './hough'
 import { fitBahtinovLines, type BahtinovFittedCandidate } from './line'
 import { preprocessBahtinov, type BahtinovPreprocessSuccess } from './preprocess'
-import type { BahtinovAnalysisFailure, BahtinovAnalysisInput, BahtinovAnalysisOptions, BahtinovAnalysisResult, BahtinovAnalysisSuccess, BahtinovDebugData, BahtinovExpectedPattern, BahtinovFocusState, BahtinovLine, BahtinovQuality, BahtinovWarning } from './types'
+import type { BahtinovAnalysisFailure, BahtinovAnalysisInput, BahtinovAnalysisOptions, BahtinovAnalysisResult, BahtinovDebugData, BahtinovExpectedPattern, BahtinovFocusState, BahtinovLine, BahtinovQuality, BahtinovWarning } from './types'
 
 // Stateless Bahtinov analyzer facade. The pipeline preprocesses a normalized ROI, detects and fits
 // line candidates, selects one conditioned symmetric triplet, propagates line covariance into pixel
@@ -12,9 +13,9 @@ import type { BahtinovAnalysisFailure, BahtinovAnalysisInput, BahtinovAnalysisOp
 // Default minimum robust line signal-to-noise ratio.
 const DEFAULT_MINIMUM_SIGNAL_TO_NOISE = 3
 // Default minimum distinct axial normal separation, in radians.
-const DEFAULT_MINIMUM_AXIAL_SEPARATION = Math.PI / 36
+const DEFAULT_MINIMUM_AXIAL_SEPARATION = PI / 36
 // Default maximum central-to-bisector normal error, in radians.
-const DEFAULT_MAXIMUM_BISECTOR_ERROR = Math.PI / 60
+const DEFAULT_MAXIMUM_BISECTOR_ERROR = PI / 60
 // Default intersection margin outside the ROI, in pixels.
 const DEFAULT_INTERSECTION_MARGIN = 0
 // Default minimum relative best-to-runner-up triplet score separation.
@@ -87,7 +88,6 @@ interface ResolvedBahtinovDecisionOptions {
 }
 
 // Analyzes one normalized image for a three-line Bahtinov diffraction pattern.
-//
 // Structural input and option errors throw. Missing or ambiguous image evidence returns a
 // discriminated failure without fabricated lines, reference points, or focus values.
 export function analyzeBahtinov(input: BahtinovAnalysisInput, options: BahtinovAnalysisOptions = {}): BahtinovAnalysisResult {
@@ -164,8 +164,8 @@ function resolveDecisionOptions(options: BahtinovAnalysisOptions): ResolvedBahti
 		minimumConfidence: options.minimumConfidence ?? DEFAULT_MINIMUM_CONFIDENCE,
 	}
 	if (!Number.isFinite(resolved.minimumSignalToNoise) || resolved.minimumSignalToNoise <= 0) throw new RangeError('minimumSignalToNoise must be finite and positive')
-	if (!Number.isFinite(resolved.minimumAxialSeparation) || resolved.minimumAxialSeparation <= 0 || resolved.minimumAxialSeparation > Math.PI / 2) throw new RangeError('minimumAxialSeparation must be in (0, PI / 2]')
-	if (!Number.isFinite(resolved.maximumBisectorError) || resolved.maximumBisectorError <= 0 || resolved.maximumBisectorError > Math.PI / 2) throw new RangeError('maximumBisectorError must be in (0, PI / 2]')
+	if (!Number.isFinite(resolved.minimumAxialSeparation) || resolved.minimumAxialSeparation <= 0 || resolved.minimumAxialSeparation > PIOVERTWO) throw new RangeError('minimumAxialSeparation must be in (0, PI / 2]')
+	if (!Number.isFinite(resolved.maximumBisectorError) || resolved.maximumBisectorError <= 0 || resolved.maximumBisectorError > PIOVERTWO) throw new RangeError('maximumBisectorError must be in (0, PI / 2]')
 	if (!Number.isFinite(resolved.intersectionMargin) || resolved.intersectionMargin < 0) throw new RangeError('intersectionMargin must be finite and non-negative')
 	validateUnitInterval(resolved.minimumCandidateSeparation, 'minimumCandidateSeparation')
 	validateUnitInterval(resolved.minimumCoverage, 'minimumCoverage')
@@ -259,7 +259,7 @@ function pointInsideExpandedArea(point: Readonly<Point>, area: Readonly<Rect>, m
 function expectedPatternMismatch(central: BahtinovLine, first: BahtinovLine, second: BahtinovLine, expected: BahtinovExpectedPattern | undefined): number {
 	if (!expected) return 0
 	if (!Number.isFinite(expected.centralNormalAngle) || !Number.isFinite(expected.externalNormalAngles[0]) || !Number.isFinite(expected.externalNormalAngles[1])) throw new RangeError('expected Bahtinov angles must be finite')
-	if (expected.maximumAngleDelta !== undefined && (!Number.isFinite(expected.maximumAngleDelta) || expected.maximumAngleDelta <= 0 || expected.maximumAngleDelta > Math.PI / 2)) throw new RangeError('expected maximumAngleDelta must be in (0, PI / 2]')
+	if (expected.maximumAngleDelta !== undefined && (!Number.isFinite(expected.maximumAngleDelta) || expected.maximumAngleDelta <= 0 || expected.maximumAngleDelta > PIOVERTWO)) throw new RangeError('expected maximumAngleDelta must be in (0, PI / 2]')
 	const centralDifference = bahtinovAxialAngleDistance(central.normalAngle, expected.centralNormalAngle)
 	const direct = Math.max(bahtinovAxialAngleDistance(first.normalAngle, expected.externalNormalAngles[0]), bahtinovAxialAngleDistance(second.normalAngle, expected.externalNormalAngles[1]))
 	const swapped = Math.max(bahtinovAxialAngleDistance(first.normalAngle, expected.externalNormalAngles[1]), bahtinovAxialAngleDistance(second.normalAngle, expected.externalNormalAngles[0]))

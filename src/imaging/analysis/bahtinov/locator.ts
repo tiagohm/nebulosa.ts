@@ -1,3 +1,4 @@
+import { PI } from '../../../core/constants'
 import type { Point } from '../../../math/numerical/geometry'
 import { grayscaleFromChannel, type Image } from '../../model/types'
 import { detectStars } from '../../stars/detector'
@@ -36,7 +37,6 @@ interface BahtinovLocatorCandidate extends Point {
 }
 
 // Finds independently measurable Bahtinov patterns across a normalized mono, RGB, or CFA image.
-//
 // The search is bounded by `maximumCandidates`; returned coordinates are full-image pixels and the
 // input image is never mutated.
 export function locateBahtinovPatterns(image: Image, options: BahtinovLocatorOptions = {}): BahtinovLocation[] {
@@ -129,7 +129,7 @@ function forEachGridCenter(width: number, height: number, roiSize: number, gridS
 // Computes contrast of the three strongest diameter orientations against the angular median.
 function computeLinearEnergy(image: Image, centerX: number, centerY: number, radius: number, responses: Float64Array): number {
 	for (let angleIndex = 0; angleIndex < LINE_ENERGY_ANGLE_COUNT; angleIndex++) {
-		const angle = (angleIndex * Math.PI) / LINE_ENERGY_ANGLE_COUNT
+		const angle = (angleIndex * PI) / LINE_ENERGY_ANGLE_COUNT
 		const cosAngle = Math.cos(angle)
 		const sinAngle = Math.sin(angle)
 		let sum = 0

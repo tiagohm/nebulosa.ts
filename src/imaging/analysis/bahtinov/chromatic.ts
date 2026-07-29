@@ -7,7 +7,6 @@ import type { BahtinovAnalysisInput, BahtinovAnalysisOptions, BahtinovAnalysisRe
 // reconstruction rather than the green-only detection path.
 
 // Compares independently fitted red, green, and blue Bahtinov focus errors.
-//
 // The green channel is the signed reference. Shared options, ROI, expected mask layout, and reusable
 // workspace are applied sequentially without mutating the image or retaining analyzer state.
 export function compareBahtinovChromatic(input: BahtinovAnalysisInput, options: BahtinovChromaticOptions = {}): BahtinovChromaticResult {

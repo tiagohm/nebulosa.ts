@@ -1,7 +1,9 @@
 import { expect, test } from 'bun:test'
+import { PI, PIOVERTWO } from '../../../../src/core/constants'
 import { locateBahtinovPatterns } from '../../../../src/imaging/analysis/bahtinov/locator'
 import type { Image } from '../../../../src/imaging/model/types'
-import { plotBahtinovSpikes, plotStar } from '../../../../src/imaging/stars/generator'
+import { plotBahtinovSpikes } from '../../../../src/imaging/stars/bahtinov'
+import { plotStar } from '../../../../src/imaging/stars/generator'
 
 function image(raw: Float64Array, width: number, height: number): Image {
 	return {
@@ -41,7 +43,7 @@ test('locates an off-center pattern from line energy when star seeds are disable
 	const raw = new Float64Array(width * height)
 	raw.fill(0.01)
 	plotBahtinovSpikes(raw, width, height, 1, center.x, center.y, 180, -3, undefined, {
-		normalAngles: [(Math.PI * 5) / 12, Math.PI / 2, (Math.PI * 7) / 12],
+		normalAngles: [(PI * 5) / 12, PIOVERTWO, (PI * 7) / 12],
 		central: 1,
 		fwhm: 2,
 		halfLength: 44,

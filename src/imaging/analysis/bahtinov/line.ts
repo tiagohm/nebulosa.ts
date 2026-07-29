@@ -1,4 +1,6 @@
-import type { Point, Rect } from '../../../math/numerical/geometry'
+import { PI, PIOVERTWO } from '../../../core/constants'
+import { medianOf, STANDARD_DEVIATION_SCALE } from '../../../core/util'
+import type { Rect } from '../../../math/numerical/geometry'
 import { bahtinovAxialAngleDistance, bahtinovGlobalLineDistance, canonicalizeBahtinovLine, clipBahtinovLineToArea } from './geometry'
 import type { BahtinovHoughCandidate } from './hough'
 import type { BahtinovLine, BahtinovRidgePoints, BahtinovWorkspace } from './types'
@@ -39,7 +41,6 @@ export interface BahtinovFittedCandidate {
 }
 
 // Robustly refines one local Hough candidate and returns a full-image line.
-//
 // `responseDeviation` is the signed-DoG noise scale and `area` is a half-open full-image ROI.
 export function fitBahtinovLine(candidate: BahtinovHoughCandidate, ridgePoints: BahtinovRidgePoints, area: Readonly<Rect>, responseDeviation: number, workspace: BahtinovWorkspace, options: BahtinovLineFitOptions = {}): BahtinovLine | undefined {
 	validateFitInput(candidate, ridgePoints, area, responseDeviation, workspace)
@@ -63,14 +64,14 @@ export function fitBahtinovLine(candidate: BahtinovHoughCandidate, ridgePoints: 
 		supportCount = collectResiduals(ridgePoints, candidate, normalAngle, distance, supportRadius, workspace.statistics)
 		if (supportCount < minimumSupport) return undefined
 		workspace.statistics.subarray(0, supportCount).sort()
-		robustScale = sortedMedian(workspace.statistics, supportCount) * 1.482602218505602
+		robustScale = medianOf(workspace.statistics, supportCount) * STANDARD_DEVIATION_SCALE
 		const moments = weightedImageMoments(candidate, normalAngle, distance, supportRadius, robustScale, localWidth, localHeight, workspace)
 		if (!moments || moments.count < minimumSupport) return undefined
 
 		const tangentAngle = 0.5 * Math.atan2(2 * moments.covarianceXY, moments.covarianceXX - moments.covarianceYY)
-		const fitted = canonicalizeBahtinovLine(tangentAngle + Math.PI / 2, 0)
+		const fitted = canonicalizeBahtinovLine(tangentAngle + PIOVERTWO, 0)
 		const nextDistance = moments.centerX * Math.cos(fitted.normalAngle) + moments.centerY * Math.sin(fitted.normalAngle)
-		if (!Number.isFinite(nextDistance) || bahtinovAxialAngleDistance(candidate.normalAngle, fitted.normalAngle) > Math.PI / 12) return undefined
+		if (!Number.isFinite(nextDistance) || bahtinovAxialAngleDistance(candidate.normalAngle, fitted.normalAngle) > PI / 12) return undefined
 		normalAngle = fitted.normalAngle
 		distance = nextDistance
 	}
@@ -301,12 +302,6 @@ function lineMetrics(
 	longitudinalMean /= effectiveWeight
 	const longitudinalVariance = Math.max(0, longitudinalSquared / effectiveWeight - longitudinalMean * longitudinalMean)
 	return { count, strength, effectiveWeight, residual, fwhm, coverage, balance, longitudinalVariance }
-}
-
-// Returns the exact median of a sorted finite scratch prefix.
-function sortedMedian(sorted: Float32Array | Float64Array, count: number): number {
-	const middle = count >>> 1
-	return count % 2 === 0 ? (sorted[middle - 1] + sorted[middle]) * 0.5 : sorted[middle]
 }
 
 // Validates finite candidate, ridge, ROI, noise, and scratch capacity before fitting.

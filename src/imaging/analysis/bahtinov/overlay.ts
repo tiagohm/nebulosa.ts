@@ -55,7 +55,6 @@ export interface BahtinovOverlayGeometry {
 }
 
 // Derives fresh image-coordinate overlay primitives from one successful analysis.
-//
 // Radii are image pixels and never scale the measured error. The result shares no mutable point,
 // segment, or ROI object with `analysis`; image and debug buffers are neither read nor copied.
 export function createBahtinovOverlayGeometry(analysis: BahtinovAnalysisSuccess, options: BahtinovOverlayOptions = {}): BahtinovOverlayGeometry {

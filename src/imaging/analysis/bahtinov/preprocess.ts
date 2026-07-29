@@ -1,6 +1,8 @@
+import { PI, PIOVERTWO } from '../../../core/constants'
+import { medianOf, STANDARD_DEVIATION_SCALE } from '../../../core/util'
 import type { Rect } from '../../../math/numerical/geometry'
 import type { Angle } from '../../../math/units/angle'
-import { grayscaleFromChannel, makeImageRawTypedArray, type CfaPattern, type Image, type ImageMetadata, type ImageRawType } from '../../model/types'
+import { grayscaleFromChannel, makeImageRawTypedArray, type Image, type ImageMetadata, type ImageRawType } from '../../model/types'
 import { separableSmoothing, separableSmoothingKernel, type SeparableSmoothingKernel } from '../../processing/convolution'
 import type { BahtinovAnalysisInput, BahtinovAnalysisOptions, BahtinovBackground, BahtinovFailureReason, BahtinovPlane, BahtinovRidgePoints, BahtinovWorkspace, BahtinovWorkspaceOptions } from './types'
 
@@ -29,11 +31,9 @@ const DEFAULT_RIDGE_SIGMA = 3
 // Default maximum ridge-point capacity.
 const DEFAULT_MAXIMUM_RIDGE_POINTS = 4096
 // Default coarse Hough angle step in radians.
-const DEFAULT_ANGLE_STEP = Math.PI / 180
+const DEFAULT_ANGLE_STEP = PI / 180
 // Default Hough normal-distance bin size in pixels.
 const DEFAULT_DISTANCE_STEP = 0.5
-// Normalized MAD scale for Gaussian-equivalent standard deviation.
-const NORMALIZED_MAD_SCALE = 1.482602218505602
 // Saturated source sample bit in the reusable mask.
 const MASK_SATURATED = 1
 // Dilated saturation-support bit in the reusable mask.
@@ -105,7 +105,6 @@ interface BahtinovKernelCache {
 type ResolvedBahtinovPlane = Exclude<BahtinovPlane, 'auto'> | 'greenBoth'
 
 // Allocates reusable buffers and Hough capacity for a maximum ROI.
-//
 // Dimensions are pixels, `angleStep` is radians, and `distanceStep` is pixels.
 export function createBahtinovWorkspace(width: number, height: number, options: BahtinovWorkspaceOptions = {}): BahtinovWorkspace {
 	if (!Number.isInteger(width) || width < MINIMUM_ROI_SIDE) throw new RangeError(`width must be an integer at least ${MINIMUM_ROI_SIDE}`)
@@ -117,10 +116,10 @@ export function createBahtinovWorkspace(width: number, height: number, options: 
 	if (!Number.isInteger(maximumRidgePoints) || maximumRidgePoints < 3 || maximumRidgePoints > pixelCount) throw new RangeError('maximumRidgePoints must be an integer from 3 to width * height')
 	const angleStep = options.angleStep ?? DEFAULT_ANGLE_STEP
 	const distanceStep = options.distanceStep ?? DEFAULT_DISTANCE_STEP
-	if (!Number.isFinite(angleStep) || angleStep <= 0 || angleStep > Math.PI / 2) throw new RangeError('angleStep must be finite and in (0, PI / 2]')
+	if (!Number.isFinite(angleStep) || angleStep <= 0 || angleStep > PIOVERTWO) throw new RangeError('angleStep must be finite and in (0, PI / 2]')
 	if (!Number.isFinite(distanceStep) || distanceStep <= 0) throw new RangeError('distanceStep must be finite and positive')
 
-	const angleCount = Math.ceil(Math.PI / angleStep)
+	const angleCount = Math.ceil(PI / angleStep)
 	const rhoMax = Math.hypot(width - 1, height - 1)
 	const distanceBinCount = Math.ceil((2 * rhoMax) / distanceStep) + 1
 	const accumulatorLength = angleCount * distanceBinCount
@@ -155,7 +154,6 @@ export function createBahtinovWorkspace(width: number, height: number, options: 
 }
 
 // Resolves and validates the half-open full-image ROI for one analysis input.
-//
 // `defaultSize` is a positive integer side in pixels used when the input omits `size`.
 export function resolveBahtinovArea(input: BahtinovAnalysisInput, defaultSize: number = DEFAULT_ROI_SIZE): Readonly<Rect> {
 	const { width, height } = input.image.metadata
@@ -182,7 +180,6 @@ export function resolveBahtinovArea(input: BahtinovAnalysisInput, defaultSize: n
 }
 
 // Extracts, masks, filters, and spatially samples one Bahtinov ROI.
-//
 // The result aliases reusable workspace arrays and remains valid only until that workspace is reused.
 export function preprocessBahtinov(input: BahtinovAnalysisInput, options: BahtinovAnalysisOptions = {}): BahtinovPreprocessResult {
 	validateImageLayout(input.image)
@@ -329,9 +326,45 @@ function fillSourcePlane(image: Image, area: Readonly<Rect>, plane: ResolvedBaht
 	return finiteCount
 }
 
+// Row-major `(x, y)` offsets of the two green samples in one CFA `2 x 2` tile.
+const CFA_GREEN_OFFSETS = {
+	RGGB: [
+		[1, 0],
+		[0, 1],
+	],
+	BGGR: [
+		[1, 0],
+		[0, 1],
+	],
+	GBRG: [
+		[0, 0],
+		[1, 1],
+	],
+	GRBG: [
+		[0, 0],
+		[1, 1],
+	],
+	GRGB: [
+		[0, 0],
+		[0, 1],
+	],
+	GBGR: [
+		[0, 0],
+		[0, 1],
+	],
+	RGBG: [
+		[1, 0],
+		[1, 1],
+	],
+	BGRG: [
+		[1, 0],
+		[1, 1],
+	],
+} as const
+
 // Reconstructs one or both physical green sublattices densely over the full-resolution sensor ROI.
 function fillCfaGreenPlane(image: Image, area: Readonly<Rect>, plane: ResolvedBahtinovPlane, output: ImageRawType, mask: Uint8Array): number {
-	const offsets = cfaGreenOffsets(image.metadata.bayer!)
+	const offsets = CFA_GREEN_OFFSETS[image.metadata.bayer!]
 	let target = 0
 	let finiteCount = 0
 	for (let y = area.top; y < area.bottom; y++) {
@@ -349,36 +382,6 @@ function fillCfaGreenPlane(image: Image, area: Readonly<Rect>, plane: ResolvedBa
 		}
 	}
 	return finiteCount
-}
-
-// Returns row-major `(x, y)` offsets of the two green samples in one CFA `2 x 2` tile.
-function cfaGreenOffsets(pattern: CfaPattern): readonly [readonly [number, number], readonly [number, number]] {
-	switch (pattern) {
-		case 'RGGB':
-		case 'BGGR':
-			return [
-				[1, 0],
-				[0, 1],
-			]
-		case 'GBRG':
-		case 'GRBG':
-			return [
-				[0, 0],
-				[1, 1],
-			]
-		case 'GRGB':
-		case 'GBGR':
-			return [
-				[0, 0],
-				[0, 1],
-			]
-		case 'RGBG':
-		case 'BGRG':
-			return [
-				[1, 0],
-				[1, 1],
-			]
-	}
 }
 
 // Bilinearly interpolates one physical CFA sublattice at a full-resolution sensor coordinate.
@@ -504,10 +507,10 @@ function estimateBackground(source: ImageRawType, mask: Uint8Array, scratch: Ima
 	count = copyEligibleSamples(source, mask, scratch, pixelCount, cutoff)
 	if (count < 8) return undefined
 	scratch.subarray(0, count).sort()
-	const level = sortedMedian(scratch, count)
+	const level = medianOf(scratch, count)
 	for (let index = 0; index < count; index++) scratch[index] = Math.abs(scratch[index] - level)
 	scratch.subarray(0, count).sort()
-	const deviation = sortedMedian(scratch, count) * NORMALIZED_MAD_SCALE
+	const deviation = medianOf(scratch, count) * STANDARD_DEVIATION_SCALE
 	if (!Number.isFinite(level) || !Number.isFinite(deviation)) return undefined
 	return { level, deviation, sampleCount: count }
 }
@@ -577,10 +580,10 @@ function estimateMedianAndDeviation(response: ImageRawType, mask: Uint8Array, sc
 	const count = copyEligibleSamples(response, mask, scratch, pixelCount, Number.POSITIVE_INFINITY)
 	if (count < 8) return undefined
 	scratch.subarray(0, count).sort()
-	const center = sortedMedian(scratch, count)
+	const center = medianOf(scratch, count)
 	for (let index = 0; index < count; index++) scratch[index] = Math.abs(scratch[index] - center)
 	scratch.subarray(0, count).sort()
-	const deviation = sortedMedian(scratch, count) * NORMALIZED_MAD_SCALE
+	const deviation = medianOf(scratch, count) * STANDARD_DEVIATION_SCALE
 	if (!Number.isFinite(center) || !Number.isFinite(deviation)) return undefined
 	return { center, deviation }
 }
@@ -628,10 +631,4 @@ function sortedQuantile(sorted: ImageRawType, count: number, quantile: number): 
 	const upper = Math.ceil(position)
 	const fraction = position - lower
 	return sorted[lower] + (sorted[upper] - sorted[lower]) * fraction
-}
-
-// Returns the exact median of a sorted scratch prefix.
-function sortedMedian(sorted: ImageRawType, count: number): number {
-	const middle = count >>> 1
-	return count % 2 === 0 ? (sorted[middle - 1] + sorted[middle]) * 0.5 : sorted[middle]
 }

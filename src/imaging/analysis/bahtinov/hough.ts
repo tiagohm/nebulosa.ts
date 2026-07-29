@@ -1,3 +1,4 @@
+import { PI, PIOVERTWO } from '../../../core/constants'
 import type { Angle } from '../../../math/units/angle'
 import { bahtinovAxialAngleDistance, canonicalizeBahtinovLine, clipBahtinovLineToArea } from './geometry'
 import type { BahtinovRidgePoints, BahtinovWorkspace } from './types'
@@ -8,11 +9,11 @@ import type { BahtinovRidgePoints, BahtinovWorkspace } from './types'
 // Default maximum number of angular candidates retained after circular NMS.
 const DEFAULT_MAXIMUM_CANDIDATES = 8
 // Default minimum axial separation between retained candidate normals, in radians.
-const DEFAULT_MINIMUM_AXIAL_SEPARATION = Math.PI / 36
+const DEFAULT_MINIMUM_AXIAL_SEPARATION = PI / 36
 // Default half-range for local angular refinement, in radians.
-const DEFAULT_REFINEMENT_RANGE = Math.PI / 180
+const DEFAULT_REFINEMENT_RANGE = PI / 180
 // Default local angular refinement step, in radians.
-const DEFAULT_REFINEMENT_STEP = Math.PI / 3600
+const DEFAULT_REFINEMENT_STEP = PI / 3600
 // Distance from a Hough peak used to measure longitudinal support, in distance bins.
 const SUPPORT_DISTANCE_BINS = 2
 
@@ -45,7 +46,6 @@ export interface BahtinovHoughOptions {
 }
 
 // Detects and refines weighted line candidates from local ROI ridge samples.
-//
 // `width` and `height` are ROI pixels. The ridge arrays and workspace remain caller-owned.
 export function detectBahtinovHoughCandidates(ridgePoints: BahtinovRidgePoints, width: number, height: number, workspace: BahtinovWorkspace, options: BahtinovHoughOptions = {}): readonly BahtinovHoughCandidate[] {
 	validateHoughInput(ridgePoints, width, height, workspace)
@@ -54,7 +54,7 @@ export function detectBahtinovHoughCandidates(ridgePoints: BahtinovRidgePoints, 
 	const refinementRange = options.refinementRange ?? DEFAULT_REFINEMENT_RANGE
 	const refinementStep = options.refinementStep ?? DEFAULT_REFINEMENT_STEP
 	if (!Number.isInteger(maximumCandidates) || maximumCandidates < 3 || maximumCandidates > workspace.angleCount) throw new RangeError('maximumCandidates must be an integer from 3 to angleCount')
-	if (!Number.isFinite(minimumAxialSeparation) || minimumAxialSeparation <= 0 || minimumAxialSeparation > Math.PI / 2) throw new RangeError('minimumAxialSeparation must be in (0, PI / 2]')
+	if (!Number.isFinite(minimumAxialSeparation) || minimumAxialSeparation <= 0 || minimumAxialSeparation > PIOVERTWO) throw new RangeError('minimumAxialSeparation must be in (0, PI / 2]')
 	if (!Number.isFinite(refinementRange) || refinementRange < 0 || refinementRange > minimumAxialSeparation * 0.5) throw new RangeError('refinementRange must be finite and no greater than half the candidate separation')
 	if (!Number.isFinite(refinementStep) || refinementStep <= 0 || (refinementRange > 0 && refinementStep > refinementRange)) throw new RangeError('refinementStep must be finite, positive, and no greater than refinementRange')
 
