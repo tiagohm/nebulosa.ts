@@ -31,7 +31,7 @@ test('creates a capacity-described reusable workspace', () => {
 	expect(workspace.maximumRidgePoints).toBe(512)
 	expect(workspace.angleCount).toBe(90)
 	expect(workspace.distanceBinCount).toBe(Math.ceil(2 * Math.hypot(63, 47)) + 1)
-	expect(workspace.accumulator.length).toBe(workspace.angleCount * workspace.distanceBinCount)
+	expect(workspace.accumulator.length).toBe(workspace.distanceBinCount)
 })
 
 test('resolves a shifted square ROI without losing the requested size', () => {

@@ -61,11 +61,10 @@ export function detectBahtinovHoughCandidates(ridgePoints: BahtinovRidgePoints, 
 	const angleCount = workspace.angleCount
 	const binCount = workspace.distanceBinCount
 	const accumulator = workspace.accumulator
-	accumulator.fill(0)
 	workspace.angleScore.fill(0)
 
 	for (let angleIndex = 0; angleIndex < angleCount; angleIndex++) {
-		const peak = accumulateHoughAngle(ridgePoints, workspace.angleCos[angleIndex], workspace.angleSin[angleIndex], workspace.rhoMax, workspace.distanceStep, accumulator, angleIndex * binCount, binCount)
+		const peak = accumulateHoughAngle(ridgePoints, workspace.angleCos[angleIndex], workspace.angleSin[angleIndex], workspace.rhoMax, workspace.distanceStep, accumulator, binCount)
 		workspace.angleScore[angleIndex] = peak.score
 		workspace.angleDistance[angleIndex] = peak.distance
 	}
@@ -101,8 +100,8 @@ export function detectBahtinovHoughCandidates(ridgePoints: BahtinovRidgePoints, 
 }
 
 // Accumulates interpolated normal-distance votes for one angle and returns its peak.
-function accumulateHoughAngle(ridgePoints: BahtinovRidgePoints, normalX: number, normalY: number, rhoMax: number, distanceStep: number, accumulator: Float64Array, offset: number, binCount: number): { readonly score: number; readonly distance: number } {
-	accumulator.fill(0, offset, offset + binCount)
+function accumulateHoughAngle(ridgePoints: BahtinovRidgePoints, normalX: number, normalY: number, rhoMax: number, distanceStep: number, accumulator: Float64Array, binCount: number): { readonly score: number; readonly distance: number } {
+	accumulator.fill(0, 0, binCount)
 	for (let index = 0; index < ridgePoints.count; index++) {
 		const rho = ridgePoints.x[index] * normalX + ridgePoints.y[index] * normalY
 		const position = (rho + rhoMax) / distanceStep
@@ -110,14 +109,14 @@ function accumulateHoughAngle(ridgePoints: BahtinovRidgePoints, normalX: number,
 		if (lower < 0 || lower >= binCount) continue
 		const fraction = position - lower
 		const weight = ridgePoints.weight[index]
-		accumulator[offset + lower] += weight * (1 - fraction)
-		if (lower + 1 < binCount) accumulator[offset + lower + 1] += weight * fraction
+		accumulator[lower] += weight * (1 - fraction)
+		if (lower + 1 < binCount) accumulator[lower + 1] += weight * fraction
 	}
 
 	let peakBin = 0
-	let peakScore = accumulator[offset]
+	let peakScore = accumulator[0]
 	for (let bin = 1; bin < binCount; bin++) {
-		const score = accumulator[offset + bin]
+		const score = accumulator[bin]
 		if (score > peakScore) {
 			peakBin = bin
 			peakScore = score
@@ -126,9 +125,9 @@ function accumulateHoughAngle(ridgePoints: BahtinovRidgePoints, normalX: number,
 
 	let subBin = 0
 	if (peakBin > 0 && peakBin + 1 < binCount) {
-		const left = accumulator[offset + peakBin - 1]
+		const left = accumulator[peakBin - 1]
 		const center = peakScore
-		const right = accumulator[offset + peakBin + 1]
+		const right = accumulator[peakBin + 1]
 		const denominator = left - 2 * center + right
 		if (denominator < 0 && Number.isFinite(denominator)) subBin = Math.max(-0.5, Math.min(0.5, (0.5 * (left - right)) / denominator))
 	}
@@ -189,7 +188,7 @@ function refineCandidate(candidate: BahtinovHoughCandidate, ridgePoints: Bahtino
 	const sampleCount = Math.ceil((range * 2) / step)
 	for (let sample = 0; sample <= sampleCount; sample++) {
 		const angle = canonicalizeBahtinovLine(candidate.normalAngle - range + sample * step, 0).normalAngle
-		const peak = accumulateHoughAngle(ridgePoints, Math.cos(angle), Math.sin(angle), workspace.rhoMax, workspace.distanceStep, workspace.accumulator, 0, workspace.distanceBinCount)
+		const peak = accumulateHoughAngle(ridgePoints, Math.cos(angle), Math.sin(angle), workspace.rhoMax, workspace.distanceStep, workspace.accumulator, workspace.distanceBinCount)
 		if (!(peak.score > 0)) continue
 		const support = measureHoughSupport(ridgePoints, width, height, angle, peak.distance, workspace.distanceStep)
 		const score = peak.score * Math.sqrt(support.coverage * support.balance)
@@ -212,5 +211,5 @@ function validateHoughInput(ridgePoints: BahtinovRidgePoints, width: number, hei
 	if (!Number.isInteger(ridgePoints.count) || ridgePoints.count < 3 || ridgePoints.count > workspace.maximumRidgePoints || ridgePoints.x.length < ridgePoints.count || ridgePoints.y.length < ridgePoints.count || ridgePoints.weight.length < ridgePoints.count) {
 		throw new RangeError('invalid Bahtinov ridge-point arrays')
 	}
-	if (workspace.accumulator.length < workspace.angleCount * workspace.distanceBinCount || workspace.angleScore.length < workspace.angleCount || workspace.angleDistance.length < workspace.angleCount) throw new RangeError('Bahtinov Hough workspace capacity is inconsistent')
+	if (workspace.accumulator.length < workspace.distanceBinCount || workspace.angleScore.length < workspace.angleCount || workspace.angleDistance.length < workspace.angleCount) throw new RangeError('Bahtinov Hough workspace capacity is inconsistent')
 }

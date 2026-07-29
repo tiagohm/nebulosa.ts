@@ -388,7 +388,7 @@ export interface BahtinovWorkspace {
 	readonly ridgeY: Float32Array
 	// Weights of retained ridge points.
 	readonly ridgeWeight: Float32Array
-	// Coarse Hough accumulator.
+	// Reusable normal-distance accumulator for one coarse Hough angle.
 	readonly accumulator: Float64Array
 	// Best score per coarse normal angle.
 	readonly angleScore: Float64Array

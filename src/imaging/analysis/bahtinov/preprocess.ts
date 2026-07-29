@@ -122,8 +122,7 @@ export function createBahtinovWorkspace(width: number, height: number, options: 
 	const angleCount = Math.ceil(PI / angleStep)
 	const rhoMax = Math.hypot(width - 1, height - 1)
 	const distanceBinCount = Math.ceil((2 * rhoMax) / distanceStep) + 1
-	const accumulatorLength = angleCount * distanceBinCount
-	if (!Number.isSafeInteger(accumulatorLength)) throw new RangeError('Bahtinov accumulator capacity is too large')
+	if (!Number.isSafeInteger(distanceBinCount)) throw new RangeError('Bahtinov accumulator capacity is too large')
 
 	const source = makeImageRawTypedArray(precision, pixelCount)
 	return {
@@ -145,7 +144,7 @@ export function createBahtinovWorkspace(width: number, height: number, options: 
 		ridgeX: new Float32Array(maximumRidgePoints),
 		ridgeY: new Float32Array(maximumRidgePoints),
 		ridgeWeight: new Float32Array(maximumRidgePoints),
-		accumulator: new Float64Array(accumulatorLength),
+		accumulator: new Float64Array(distanceBinCount),
 		angleScore: new Float64Array(angleCount),
 		angleDistance: new Float64Array(angleCount),
 		angleSin: createAngleLookup(angleCount, angleStep, true),
