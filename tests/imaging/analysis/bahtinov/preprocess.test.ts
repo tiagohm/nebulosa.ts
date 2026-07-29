@@ -142,6 +142,26 @@ test('analyzes spikes through CFA green reconstruction and masks saturated suppo
 	}
 })
 
+test('dilates saturated samples with bounded square support', () => {
+	const width = 64
+	const height = 64
+	const raw = new Float32Array(width * height)
+	raw.fill(0.01)
+	plotBahtinovSpikes(raw, width, height, 1, 32, 32, 100, 0, undefined, { halfLength: 20, taperLength: 4 })
+	raw[9 * width + 8] = 1
+	const workspace = createBahtinovWorkspace(width, height)
+	preprocessBahtinov({ image: image(raw, width, height), area: { left: 0, top: 0, right: width, bottom: height }, center: { x: 32, y: 32 } }, { workspace, saturationLevel: 0.9, saturationDilation: 2, coreRadius: 2, ridgeSigma: 2 })
+	expect(workspace.mask[7 * width + 6]).not.toBe(0)
+	expect(workspace.mask[11 * width + 10]).not.toBe(0)
+	expect(workspace.mask[6 * width + 8]).toBe(0)
+	expect(workspace.mask[9 * width + 11]).toBe(0)
+
+	raw.fill(0.01)
+	raw[0] = 1
+	preprocessBahtinov({ image: image(raw, width, height), area: { left: 0, top: 0, right: width, bottom: height }, center: { x: 32, y: 32 } }, { workspace, saturationLevel: 0.9, saturationDilation: 100, coreRadius: 0 })
+	expect(workspace.mask.every((value) => value !== 0)).toBeTrue()
+})
+
 test('rejects a workspace whose recorded capacity is insufficient', () => {
 	const width = 64
 	const height = 64

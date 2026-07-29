@@ -215,7 +215,7 @@ export function preprocessBahtinov(input: BahtinovAnalysisInput, options: Bahtin
 			saturatedCount++
 		}
 	}
-	dilateSaturation(mask, width, height, saturationDilation)
+	dilateSaturation(mask, width, height, saturationDilation, workspace.statistics)
 
 	const centerX = input.center.x - area.left
 	const centerY = input.center.y - area.top
@@ -445,20 +445,34 @@ function validateWorkspaceCapacity(workspace: BahtinovWorkspace, width: number, 
 	if ((options.distanceStep ?? workspace.distanceStep) < workspace.distanceStep) throw new RangeError('Bahtinov workspace distance grid is too coarse')
 }
 
-// Dilates only original saturated samples without recursively expanding newly written pixels.
-function dilateSaturation(mask: Uint8Array, width: number, height: number, radius: number): void {
+// Dilates original saturated samples with a separable square window in linear time.
+function dilateSaturation(mask: Uint8Array, width: number, height: number, radius: number, scratch: ImageRawType): void {
 	if (radius === 0) return
+	const horizontalRadius = Math.min(radius, width - 1)
+	const verticalRadius = Math.min(radius, height - 1)
 	for (let y = 0; y < height; y++) {
+		const row = y * width
+		let saturated = 0
+		for (let x = 0; x <= horizontalRadius; x++) {
+			if ((mask[row + x] & MASK_SATURATED) !== 0) saturated++
+		}
 		for (let x = 0; x < width; x++) {
-			const index = y * width + x
-			if ((mask[index] & MASK_SATURATED) === 0) continue
-			const minimumY = Math.max(0, y - radius)
-			const maximumY = Math.min(height - 1, y + radius)
-			const minimumX = Math.max(0, x - radius)
-			const maximumX = Math.min(width - 1, x + radius)
-			for (let targetY = minimumY; targetY <= maximumY; targetY++) {
-				for (let targetX = minimumX; targetX <= maximumX; targetX++) mask[targetY * width + targetX] |= MASK_DILATED
-			}
+			scratch[row + x] = saturated > 0 ? 1 : 0
+			const leaving = x - horizontalRadius
+			if (leaving >= 0 && (mask[row + leaving] & MASK_SATURATED) !== 0) saturated--
+			const entering = x + horizontalRadius + 1
+			if (entering < width && (mask[row + entering] & MASK_SATURATED) !== 0) saturated++
+		}
+	}
+	for (let x = 0; x < width; x++) {
+		let saturated = 0
+		for (let y = 0; y <= verticalRadius; y++) saturated += scratch[y * width + x]
+		for (let y = 0; y < height; y++) {
+			if (saturated > 0) mask[y * width + x] |= MASK_DILATED
+			const leaving = y - verticalRadius
+			if (leaving >= 0) saturated -= scratch[leaving * width + x]
+			const entering = y + verticalRadius + 1
+			if (entering < height) saturated += scratch[entering * width + x]
 		}
 	}
 }
