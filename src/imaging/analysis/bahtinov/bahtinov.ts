@@ -217,8 +217,8 @@ function selectTriplets(fitted: readonly BahtinovFittedCandidate[], preprocessed
 
 				const intersection = intersectBahtinovLines(firstLine, secondLine)
 				if (!intersection || !pointInsideExpandedArea(intersection.point, preprocessed.area, options.intersectionMargin)) continue
-				const bisectors = bahtinovAxialBisectors(firstLine.normalAngle, secondLine.normalAngle)
-				const bisectorError = Math.min(bahtinovAxialAngleDistance(centralLine.normalAngle, bisectors[0]), bahtinovAxialAngleDistance(centralLine.normalAngle, bisectors[1]))
+				const [shortArcBisector] = bahtinovAxialBisectors(firstLine.normalAngle, secondLine.normalAngle)
+				const bisectorError = bahtinovAxialAngleDistance(centralLine.normalAngle, shortArcBisector)
 				if (bisectorError > options.maximumBisectorError) continue
 
 				const expectedMismatch = expectedPatternMismatch(centralLine, firstLine, secondLine, expected)

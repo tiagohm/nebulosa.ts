@@ -101,7 +101,7 @@ export function intersectBahtinovLines(first: BahtinovNormalLine, second: Bahtin
 	return { point: { x, y }, determinant, condition }
 }
 
-// Returns the two axial normal-angle bisectors of a pair of non-parallel line axes.
+// Returns the short-arc and perpendicular axial bisectors of two non-parallel line axes.
 // Returned angles are radians in `[0, PI)` and are separated by `PI / 2`.
 export function bahtinovAxialBisectors(angleA: Angle, angleB: Angle): readonly [Angle, Angle] {
 	if (!Number.isFinite(angleA) || !Number.isFinite(angleB)) throw new RangeError('line angles must be finite')

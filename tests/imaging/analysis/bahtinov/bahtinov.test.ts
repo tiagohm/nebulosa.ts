@@ -279,6 +279,31 @@ test('uses expected angles as a prior without a hard mismatch limit', () => {
 	}
 })
 
+test('rejects a central spike on the perpendicular external bisector', () => {
+	const width = 128
+	const height = 128
+	const raw = new Float64Array(width * height)
+	raw.fill(0.01)
+	plotBahtinovSpikes(raw, width, height, 1, 63.5, 63.5, 180, 0, undefined, {
+		normalAngles: [PI / 12, PIOVERTWO, (PI * 11) / 12],
+		central: 1,
+		fwhm: 2,
+		halfLength: 44,
+		taperLength: 7,
+	})
+	const result = analyzeBahtinov(
+		{
+			image: image(raw, width, height),
+			area: { left: 0, top: 0, right: width, bottom: height },
+			center: { x: 63.5, y: 63.5 },
+			expected: { centralNormalAngle: PIOVERTWO, externalNormalAngles: [PI / 12, (PI * 11) / 12], maximumAngleDelta: PI / 180 },
+		},
+		ANALYSIS_OPTIONS,
+	)
+	expect(result.success).toBeFalse()
+	if (!result.success) expect(result.reason).toBe('patternNotFound')
+})
+
 test('validates preprocessing and Hough options before content failures', () => {
 	const width = 64
 	const height = 64
