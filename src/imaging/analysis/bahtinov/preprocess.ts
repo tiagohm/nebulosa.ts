@@ -62,12 +62,18 @@ export interface BahtinovPreprocessSuccess {
 	readonly threshold: number
 	// Fraction of finite ROI samples at or above the saturation level.
 	readonly saturationFraction: number
+	// Whether an original saturated sample belongs to the connected or initial stellar core.
+	readonly coreSaturated: boolean
+	// Fraction of finite ROI samples saturated outside the core mask.
+	readonly spikeSaturationFraction: number
 	// Fraction of ROI samples remaining finite and unmasked.
 	readonly retainedFraction: number
 	// Local spatially sampled ridge points backed by the workspace.
 	readonly ridgePoints: BahtinovRidgePoints
 	// Workspace containing the extracted plane, response, mask, and ridge arrays.
 	readonly workspace: BahtinovWorkspace
+	// Extracted mono source snapshot before masking and transformation when debug is enabled.
+	readonly debugSource?: ImageRawType
 }
 
 // Content-level preprocessing failure with the resolved ROI when available.
@@ -214,9 +220,17 @@ export function preprocessBahtinov(input: BahtinovAnalysisInput, options: Bahtin
 	const centerX = (input.center?.x ?? (area.left + area.right - 1) * 0.5) - area.left
 	const centerY = (input.center?.y ?? (area.top + area.bottom - 1) * 0.5) - area.top
 	markCore(mask, width, height, centerX, centerY, coreRadius, options.autoCoreRadius !== false, workspace.statistics)
+	let coreSaturated = false
+	let spikeSaturatedCount = 0
+	for (let index = 0; index < pixelCount; index++) {
+		if ((mask[index] & MASK_SATURATED) === 0) continue
+		if ((mask[index] & MASK_CORE) !== 0) coreSaturated = true
+		else spikeSaturatedCount++
+	}
 
 	const background = estimateBackground(source, mask, workspace.statistics, pixelCount, backgroundUpperQuantile)
 	if (!background) return { success: false, reason: 'lowSignal', area }
+	const debugSource = options.includeDebug ? source.slice() : undefined
 	transformSource(source, mask, background.level, options.transform ?? 'sqrt')
 
 	const kernels = resolveKernels(workspace, smallBlurSigma, largeBlurSigma)
@@ -246,9 +260,12 @@ export function preprocessBahtinov(input: BahtinovAnalysisInput, options: Bahtin
 		responseDeviation: responseStatistics.deviation,
 		threshold,
 		saturationFraction: saturatedCount / finiteCount,
+		coreSaturated,
+		spikeSaturationFraction: spikeSaturatedCount / finiteCount,
 		retainedFraction: retainedCount / pixelCount,
 		ridgePoints,
 		workspace,
+		debugSource,
 	}
 }
 

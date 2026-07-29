@@ -8,7 +8,7 @@ import type { BahtinovLine, BahtinovRidgePoints, BahtinovWorkspace } from './typ
 // local covariance approximation. Caller-owned scratch buffers are reused and never escape.
 
 // Default normal-distance band around a Hough peak used to collect ridge support, in pixels.
-const DEFAULT_SUPPORT_RADIUS = 4
+const DEFAULT_SUPPORT_RADIUS = 3
 // Default number of Huber reweighting iterations.
 const DEFAULT_ROBUST_ITERATIONS = 5
 // Standard Huber transition in normalized residual units.
@@ -64,7 +64,7 @@ export function fitBahtinovLine(candidate: BahtinovHoughCandidate, ridgePoints: 
 		if (supportCount < minimumSupport) return undefined
 		workspace.statistics.subarray(0, supportCount).sort()
 		robustScale = sortedMedian(workspace.statistics, supportCount) * 1.482602218505602
-		const moments = weightedMoments(ridgePoints, candidate, normalAngle, distance, supportRadius, robustScale)
+		const moments = weightedImageMoments(candidate, normalAngle, distance, supportRadius, robustScale, localWidth, localHeight, workspace)
 		if (!moments || moments.count < minimumSupport) return undefined
 
 		const tangentAngle = 0.5 * Math.atan2(2 * moments.covarianceXY, moments.covarianceXX - moments.covarianceYY)
@@ -81,9 +81,7 @@ export function fitBahtinovLine(candidate: BahtinovHoughCandidate, ridgePoints: 
 	const segment = clipBahtinovLineToArea({ normalAngle, distance: globalDistance }, area)
 	if (!segment) return undefined
 	const signalToNoise = metrics.strength / Math.max(NUMERICAL_FLOOR, responseDeviation * Math.sqrt(metrics.count))
-	const varianceDistance = (metrics.residual * metrics.residual) / Math.max(NUMERICAL_FLOOR, metrics.effectiveWeight)
-	const varianceAngle = metrics.longitudinalVariance > NUMERICAL_FLOOR ? varianceDistance / metrics.longitudinalVariance : Number.POSITIVE_INFINITY
-	const covariance = Number.isFinite(varianceAngle) && Number.isFinite(varianceDistance) ? ([varianceAngle, 0, varianceDistance] as const) : undefined
+	const covariance = imageFitCovariance(candidate, normalAngle, distance, supportRadius, localWidth, localHeight, workspace)
 
 	return {
 		normalAngle,
@@ -97,6 +95,46 @@ export function fitBahtinovLine(candidate: BahtinovHoughCandidate, ridgePoints: 
 		covariance,
 		segment,
 	}
+}
+
+// Estimates scale-invariant line-parameter covariance from positive profile samples.
+function imageFitCovariance(candidate: BahtinovHoughCandidate, normalAngle: number, distance: number, supportRadius: number, width: number, height: number, workspace: BahtinovWorkspace): readonly [number, number, number] | undefined {
+	const candidateX = Math.cos(candidate.normalAngle)
+	const candidateY = Math.sin(candidate.normalAngle)
+	const normalX = Math.cos(normalAngle)
+	const normalY = Math.sin(normalAngle)
+	const tangentX = -normalY
+	const tangentY = normalX
+	let weightSum = 0
+	let squaredWeightSum = 0
+	let tangentMean = 0
+	let squaredResidual = 0
+	let tangentSquared = 0
+
+	for (let y = 0; y < height; y++) {
+		const row = y * width
+		for (let x = 0; x < width; x++) {
+			const index = row + x
+			const weight = workspace.response[index]
+			if (workspace.mask[index] !== 0 || !(weight > 0) || Math.abs(x * candidateX + y * candidateY - candidate.distance) > supportRadius) continue
+			const residual = x * normalX + y * normalY - distance
+			const tangent = x * tangentX + y * tangentY
+			weightSum += weight
+			squaredWeightSum += weight * weight
+			tangentMean += weight * tangent
+			tangentSquared += weight * tangent * tangent
+			squaredResidual += weight * residual * residual
+		}
+	}
+	if (!(weightSum > 0) || !(squaredWeightSum > 0)) return undefined
+	tangentMean /= weightSum
+	const longitudinalVariance = Math.max(0, tangentSquared / weightSum - tangentMean * tangentMean)
+	const residualVariance = squaredResidual / weightSum
+	const effectiveCount = (weightSum * weightSum) / squaredWeightSum
+	if (!(longitudinalVariance > NUMERICAL_FLOOR) || !(effectiveCount > 2) || !Number.isFinite(residualVariance)) return undefined
+	const varianceDistance = residualVariance / effectiveCount
+	const varianceAngle = varianceDistance / longitudinalVariance
+	return Number.isFinite(varianceAngle) && Number.isFinite(varianceDistance) ? [varianceAngle, 0, varianceDistance] : undefined
 }
 
 // Refines all Hough candidates and retains only finite accepted lines.
@@ -124,14 +162,16 @@ function collectResiduals(ridgePoints: BahtinovRidgePoints, candidate: BahtinovH
 	return count
 }
 
-// Computes Huber-reweighted centroid and covariance for candidate-band ridge points.
-function weightedMoments(
-	ridgePoints: BahtinovRidgePoints,
+// Computes Huber-reweighted centroid and covariance from positive signed-DoG samples.
+function weightedImageMoments(
 	candidate: BahtinovHoughCandidate,
 	normalAngle: number,
 	distance: number,
 	supportRadius: number,
 	robustScale: number,
+	width: number,
+	height: number,
+	workspace: BahtinovWorkspace,
 ): { readonly count: number; readonly centerX: number; readonly centerY: number; readonly covarianceXX: number; readonly covarianceXY: number; readonly covarianceYY: number } | undefined {
 	const candidateX = Math.cos(candidate.normalAngle)
 	const candidateY = Math.sin(candidate.normalAngle)
@@ -143,18 +183,21 @@ function weightedMoments(
 	let centerX = 0
 	let centerY = 0
 
-	for (let index = 0; index < ridgePoints.count; index++) {
-		const x = ridgePoints.x[index]
-		const y = ridgePoints.y[index]
-		if (Math.abs(x * candidateX + y * candidateY - candidate.distance) > supportRadius) continue
-		const residual = Math.abs(x * normalX + y * normalY - distance)
-		const robustWeight = residual <= huberLimit ? 1 : huberLimit / residual
-		const weight = ridgePoints.weight[index] * robustWeight
-		if (!(weight > 0)) continue
-		weightSum += weight
-		centerX += weight * x
-		centerY += weight * y
-		count++
+	for (let y = 0; y < height; y++) {
+		const row = y * width
+		for (let x = 0; x < width; x++) {
+			const index = row + x
+			if (workspace.mask[index] !== 0 || !(workspace.response[index] > 0)) continue
+			if (Math.abs(x * candidateX + y * candidateY - candidate.distance) > supportRadius) continue
+			const residual = Math.abs(x * normalX + y * normalY - distance)
+			const robustWeight = residual <= huberLimit ? 1 : huberLimit / residual
+			const weight = workspace.response[index] * robustWeight
+			if (!(weight > 0)) continue
+			weightSum += weight
+			centerX += weight * x
+			centerY += weight * y
+			count++
+		}
 	}
 	if (!(weightSum > 0)) return undefined
 	centerX /= weightSum
@@ -163,19 +206,22 @@ function weightedMoments(
 	let covarianceXX = 0
 	let covarianceXY = 0
 	let covarianceYY = 0
-	for (let index = 0; index < ridgePoints.count; index++) {
-		const x = ridgePoints.x[index]
-		const y = ridgePoints.y[index]
-		if (Math.abs(x * candidateX + y * candidateY - candidate.distance) > supportRadius) continue
-		const residual = Math.abs(x * normalX + y * normalY - distance)
-		const robustWeight = residual <= huberLimit ? 1 : huberLimit / residual
-		const weight = ridgePoints.weight[index] * robustWeight
-		if (!(weight > 0)) continue
-		const dx = x - centerX
-		const dy = y - centerY
-		covarianceXX += weight * dx * dx
-		covarianceXY += weight * dx * dy
-		covarianceYY += weight * dy * dy
+	for (let y = 0; y < height; y++) {
+		const row = y * width
+		for (let x = 0; x < width; x++) {
+			const index = row + x
+			if (workspace.mask[index] !== 0 || !(workspace.response[index] > 0)) continue
+			if (Math.abs(x * candidateX + y * candidateY - candidate.distance) > supportRadius) continue
+			const residual = Math.abs(x * normalX + y * normalY - distance)
+			const robustWeight = residual <= huberLimit ? 1 : huberLimit / residual
+			const weight = workspace.response[index] * robustWeight
+			if (!(weight > 0)) continue
+			const dx = x - centerX
+			const dy = y - centerY
+			covarianceXX += weight * dx * dx
+			covarianceXY += weight * dx * dy
+			covarianceYY += weight * dy * dy
+		}
 	}
 	return { count, centerX, centerY, covarianceXX: covarianceXX / weightSum, covarianceXY: covarianceXY / weightSum, covarianceYY: covarianceYY / weightSum }
 }

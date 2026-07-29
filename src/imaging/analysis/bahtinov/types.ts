@@ -83,6 +83,10 @@ export interface BahtinovAnalysisOptions {
 	readonly minimumAxialSeparation?: Angle
 	// Maximum central-spike difference from an external-line bisector, in radians.
 	readonly maximumBisectorError?: Angle
+	// Non-negative pixel margin allowing the external intersection outside the ROI.
+	readonly intersectionMargin?: number
+	// Minimum relative score separation between the chosen and runner-up triplets, from 0 to 1.
+	readonly minimumCandidateSeparation?: number
 	// Minimum longitudinal segment coverage, from 0 to 1.
 	readonly minimumCoverage?: number
 	// Minimum bilateral support balance, from 0 to 1.

@@ -88,6 +88,8 @@ test('rejects CFA until its dedicated phase and masks saturated support', () => 
 	expect(saturated.success).toBeTrue()
 	if (saturated.success) {
 		expect(saturated.saturationFraction).toBeGreaterThan(0)
+		expect(saturated.coreSaturated).toBeTrue()
+		expect(saturated.spikeSaturationFraction).toBe(0)
 		expect(saturated.workspace.mask[32 * width + 32]).not.toBe(0)
 	}
 })
