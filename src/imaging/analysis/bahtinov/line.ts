@@ -88,7 +88,8 @@ export function fitBahtinovLine(candidate: BahtinovHoughCandidate, ridgePoints: 
 	const segment = clipBahtinovLineToArea({ normalAngle, distance: globalDistance }, area)
 	if (!segment) return undefined
 	const signalToNoise = metrics.strength / Math.max(NUMERICAL_FLOOR, responseDeviation * Math.sqrt(metrics.count))
-	const covariance = imageFitCovariance(candidate, normalAngle, distance, supportRadius, localWidth, localHeight, workspace)
+	const localCovariance = imageFitCovariance(candidate, normalAngle, distance, supportRadius, localWidth, localHeight, workspace)
+	const covariance = localCovariance ? globalLineCovariance(localCovariance, normalAngle, area.left, area.top) : undefined
 
 	return {
 		normalAngle,
@@ -102,6 +103,16 @@ export function fitBahtinovLine(candidate: BahtinovHoughCandidate, ridgePoints: 
 		covariance,
 		segment,
 	}
+}
+
+// Transforms angle-distance covariance from ROI-local to full-image line coordinates.
+// `left` and `top` are the ROI origin in pixels; the returned tuple follows `[var(angle), cov(angle, distance), var(distance)]`.
+function globalLineCovariance(covariance: readonly [number, number, number], normalAngle: number, left: number, top: number): readonly [number, number, number] | undefined {
+	const [varianceAngle, covarianceAngleDistance, varianceDistance] = covariance
+	const distanceAngleDerivative = -left * Math.sin(normalAngle) + top * Math.cos(normalAngle)
+	const globalCovarianceAngleDistance = covarianceAngleDistance + distanceAngleDerivative * varianceAngle
+	const globalVarianceDistance = varianceDistance + 2 * distanceAngleDerivative * covarianceAngleDistance + distanceAngleDerivative * distanceAngleDerivative * varianceAngle
+	return Number.isFinite(globalCovarianceAngleDistance) && Number.isFinite(globalVarianceDistance) && globalVarianceDistance >= 0 ? [varianceAngle, globalCovarianceAngleDistance, globalVarianceDistance] : undefined
 }
 
 // Estimates scale-invariant line-parameter covariance from positive profile samples.

@@ -51,6 +51,21 @@ function synthetic(error: number, width: number = 128, height: number = 128): Im
 	return image(raw, width, height)
 }
 
+function translatedSynthetic(error: number, left: number, top: number): Image {
+	const width = 512
+	const height = 512
+	const raw = new Float64Array(width * height)
+	raw.fill(0.01)
+	plotBahtinovSpikes(raw, width, height, 1, left + 63.5, top + 63.5, 180, error, undefined, {
+		normalAngles: [(PI * 5) / 12, PIOVERTWO, (PI * 7) / 12],
+		central: 1,
+		fwhm: 2,
+		halfLength: 44,
+		taperLength: 7,
+	})
+	return image(raw, width, height)
+}
+
 const ANALYSIS_OPTIONS = {
 	transform: 'linear' as const,
 	coreRadius: 3,
@@ -81,6 +96,17 @@ test('recovers zero and signed synthetic focus errors end to end', () => {
 		const overlay = createBahtinovOverlayGeometry(result)
 		expect(Math.hypot(overlay.reference.x - overlay.centralProjection.x, overlay.reference.y - overlay.centralProjection.y)).toBeCloseTo(result.absoluteError, 10)
 	}
+})
+
+test('preserves uncertainty and classification when the ROI is translated', () => {
+	const first = analyzeBahtinov({ image: translatedSynthetic(3, 0, 0), area: { left: 0, top: 0, right: 128, bottom: 128 }, center: { x: 63.5, y: 63.5 } }, ANALYSIS_OPTIONS)
+	const second = analyzeBahtinov({ image: translatedSynthetic(3, 300, 250), area: { left: 300, top: 250, right: 428, bottom: 378 }, center: { x: 363.5, y: 313.5 } }, ANALYSIS_OPTIONS)
+	expect(first.success).toBeTrue()
+	expect(second.success).toBeTrue()
+	if (!first.success || !second.success) return
+	expect(second.error).toBeCloseTo(first.error, 10)
+	expect(second.uncertainty).toBeCloseTo(first.uncertainty!, 6)
+	expect(second.focusState).toBe(first.focusState)
 })
 
 test('recovers focus error from a raw CFA green mosaic', () => {
