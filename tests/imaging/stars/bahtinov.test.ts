@@ -98,3 +98,17 @@ test('plotBahtinovSpikes bounds extreme finite normalization support', () => {
 	expect(plotBahtinovSpikes(raw, 5, 5, 1, Number.MAX_VALUE, 2, 10, 0)).toBeFalse()
 	expect(Array.from(raw)).toEqual(new Array(25).fill(0))
 })
+
+test('plotBahtinovSpikes validates every spike before modifying the buffer', () => {
+	const raw = new Float64Array(25)
+	raw.fill(3)
+	const before = raw.slice()
+	expect(() =>
+		plotBahtinovSpikes(raw, 5, 5, 1, 2, 2, 10, 0, undefined, {
+			normalAngles: [0, Math.PI / 4, Math.PI / 2],
+			halfLength: 500_000,
+			taperLength: 0,
+		}),
+	).toThrow(RangeError)
+	expect(raw).toEqual(before)
+})

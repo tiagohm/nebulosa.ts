@@ -83,6 +83,28 @@ export function plotBahtinovSpikes(raw: ImageRawType, width: number, height: num
 	let blueWeight = 1
 	if (channels === 3) [redWeight, greenWeight, blueWeight] = colorIndexToRgbWeights(colorIndex, options.gammaCompensation)
 
+	// Preflight every enabled spike so a later invalid support cannot leave a partially rendered image.
+	for (let index = 0; index < 3; index++) {
+		if (strengths[index] <= 0) continue
+		const angle = canonicalBahtinovNormalAngle(normalAngles[index])
+		const normalX = Math.cos(angle)
+		const normalY = Math.sin(angle)
+		const tangentX = -normalY
+		const tangentY = normalX
+		const centerX = x - (index === central ? error * normalX : 0)
+		const centerY = y - (index === central ? error * normalY : 0)
+		const extentX = Math.abs(tangentX) * halfLength + Math.abs(normalX) * cutoffDistance
+		const extentY = Math.abs(tangentY) * halfLength + Math.abs(normalY) * cutoffDistance
+		const supportMinimumX = centerX - extentX
+		const supportMaximumX = centerX + extentX
+		const supportMinimumY = centerY - extentY
+		const supportMaximumY = centerY + extentY
+		if (!Number.isFinite(centerX) || !Number.isFinite(centerY) || !Number.isFinite(extentX) || !Number.isFinite(extentY) || !Number.isFinite(supportMinimumX) || !Number.isFinite(supportMaximumX) || !Number.isFinite(supportMinimumY) || !Number.isFinite(supportMaximumY))
+			throw new RangeError('Bahtinov spike support must remain finite')
+		if (supportMaximumX < 0 || supportMinimumX > width - 1 || supportMaximumY < 0 || supportMinimumY > height - 1) continue
+		validateBahtinovNormalizationBounds(Math.floor(supportMinimumX), Math.ceil(supportMaximumX), Math.floor(supportMinimumY), Math.ceil(supportMaximumY))
+	}
+
 	let rendered = false
 	for (let index = 0; index < 3; index++) {
 		const relativeStrength = strengths[index] / strengthSum
