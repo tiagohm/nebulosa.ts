@@ -55,6 +55,11 @@ test('creates a capacity-described reusable workspace', () => {
 	expect(workspace.accumulator.length).toBe(workspace.distanceBinCount)
 })
 
+test('rejects excessive Hough grid capacities before allocation', () => {
+	expect(() => createBahtinovWorkspace(64, 64, { angleStep: 1e-8 })).toThrow(RangeError)
+	expect(() => createBahtinovWorkspace(64, 64, { distanceStep: 1e-12 })).toThrow(RangeError)
+})
+
 test('resolves a shifted square ROI without losing the requested size', () => {
 	const source = image(new Float32Array(100 * 80), 100, 80)
 	expect(resolveBahtinovArea({ image: source, center: { x: 2, y: 77 }, size: 32 })).toEqual({ left: 0, top: 48, right: 32, bottom: 80 })

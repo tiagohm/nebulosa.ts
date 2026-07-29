@@ -14,6 +14,10 @@ import { DEFAULT_BAHTINOV_ANALYSIS_OPTIONS, type BahtinovAnalysisInput, type Bah
 const DEFAULT_ROI_SIZE = 256
 // Smallest ROI side that can support the initial kernels and three line segments.
 const MINIMUM_ROI_SIDE = 16
+// Maximum coarse angular samples retained across the four angle work arrays.
+const MAXIMUM_HOUGH_ANGLE_COUNT = 65536
+// Maximum normal-distance bins retained in the reusable accumulator.
+const MAXIMUM_HOUGH_DISTANCE_BIN_COUNT = 1048576
 // Connected saturated samples outside the initial core that indicate erased spike support.
 const MINIMUM_CONNECTED_SATURATED_SPIKE_SAMPLES = 32
 // Saturated source sample bit in the reusable mask.
@@ -105,9 +109,10 @@ export function createBahtinovWorkspace(width: number, height: number, options: 
 
 	const angleCount = Math.ceil(PI / angleStep)
 	if (angleCount < 3) throw new RangeError('angleStep must produce at least three Hough angle bins')
+	if (!Number.isSafeInteger(angleCount) || angleCount > MAXIMUM_HOUGH_ANGLE_COUNT) throw new RangeError(`Bahtinov angle grid must not exceed ${MAXIMUM_HOUGH_ANGLE_COUNT} samples`)
 	const rhoMax = Math.hypot(width - 1, height - 1)
 	const distanceBinCount = Math.ceil((2 * rhoMax) / distanceStep) + 1
-	if (!Number.isSafeInteger(distanceBinCount)) throw new RangeError('Bahtinov accumulator capacity is too large')
+	if (!Number.isSafeInteger(distanceBinCount) || distanceBinCount > MAXIMUM_HOUGH_DISTANCE_BIN_COUNT) throw new RangeError(`Bahtinov distance grid must not exceed ${MAXIMUM_HOUGH_DISTANCE_BIN_COUNT} bins`)
 
 	const source = makeImageRawTypedArray(precision, pixelCount)
 	const blurredLarge = makeImageRawTypedArray(source, pixelCount)
