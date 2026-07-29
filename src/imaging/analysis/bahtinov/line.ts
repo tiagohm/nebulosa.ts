@@ -1,0 +1,272 @@
+import type { Point, Rect } from '../../../math/numerical/geometry'
+import { bahtinovAxialAngleDistance, bahtinovGlobalLineDistance, canonicalizeBahtinovLine, clipBahtinovLineToArea } from './geometry'
+import type { BahtinovHoughCandidate } from './hough'
+import type { BahtinovLine, BahtinovRidgePoints, BahtinovWorkspace } from './types'
+
+// Robust weighted TLS refinement for Bahtinov Hough candidates. Fits use local ROI samples and
+// return canonical full-image lines with clipped segments, pixel widths, support metrics, and a
+// local covariance approximation. Caller-owned scratch buffers are reused and never escape.
+
+// Default normal-distance band around a Hough peak used to collect ridge support, in pixels.
+const DEFAULT_SUPPORT_RADIUS = 4
+// Default number of Huber reweighting iterations.
+const DEFAULT_ROBUST_ITERATIONS = 5
+// Standard Huber transition in normalized residual units.
+const HUBER_TUNING = 1.345
+// Gaussian FWHM-to-sigma factor.
+const SIGMA_TO_FWHM = 2.3548200450309493
+// Small positive floor used only in robust scale and covariance denominators.
+const NUMERICAL_FLOOR = 1e-12
+
+// Controls for robust local line fitting and acceptance.
+export interface BahtinovLineFitOptions {
+	// Maximum normal distance from the Hough candidate used as support, in pixels.
+	readonly supportRadius?: number
+	// Number of Huber reweighting iterations.
+	readonly robustIterations?: number
+	// Minimum number of ridge points required by a fitted line.
+	readonly minimumSupport?: number
+	// Maximum allowed robust RMS orthogonal residual in pixels.
+	readonly maximumResidual?: number
+}
+
+// One fitted line paired with the Hough score that seeded it.
+export interface BahtinovFittedCandidate {
+	// Canonical fitted line in full-image coordinates.
+	readonly line: BahtinovLine
+	// Coarse-to-fine Hough score used for candidate ranking.
+	readonly houghScore: number
+}
+
+// Robustly refines one local Hough candidate and returns a full-image line.
+//
+// `responseDeviation` is the signed-DoG noise scale and `area` is a half-open full-image ROI.
+export function fitBahtinovLine(candidate: BahtinovHoughCandidate, ridgePoints: BahtinovRidgePoints, area: Readonly<Rect>, responseDeviation: number, workspace: BahtinovWorkspace, options: BahtinovLineFitOptions = {}): BahtinovLine | undefined {
+	validateFitInput(candidate, ridgePoints, area, responseDeviation, workspace)
+	const supportRadius = options.supportRadius ?? DEFAULT_SUPPORT_RADIUS
+	const robustIterations = options.robustIterations ?? DEFAULT_ROBUST_ITERATIONS
+	const minimumSupport = options.minimumSupport ?? 8
+	const maximumResidual = options.maximumResidual ?? Number.POSITIVE_INFINITY
+	if (!Number.isFinite(supportRadius) || supportRadius <= 0) throw new RangeError('supportRadius must be finite and positive')
+	if (!Number.isInteger(robustIterations) || robustIterations < 1 || robustIterations > 20) throw new RangeError('robustIterations must be an integer from 1 to 20')
+	if (!Number.isInteger(minimumSupport) || minimumSupport < 3) throw new RangeError('minimumSupport must be an integer at least 3')
+	if (!(maximumResidual > 0) || Number.isNaN(maximumResidual)) throw new RangeError('maximumResidual must be positive')
+
+	const localWidth = area.right - area.left
+	const localHeight = area.bottom - area.top
+	let normalAngle = candidate.normalAngle
+	let distance = candidate.distance
+	let supportCount = 0
+	let robustScale = 0
+
+	for (let iteration = 0; iteration < robustIterations; iteration++) {
+		supportCount = collectResiduals(ridgePoints, candidate, normalAngle, distance, supportRadius, workspace.statistics)
+		if (supportCount < minimumSupport) return undefined
+		workspace.statistics.subarray(0, supportCount).sort()
+		robustScale = sortedMedian(workspace.statistics, supportCount) * 1.482602218505602
+		const moments = weightedMoments(ridgePoints, candidate, normalAngle, distance, supportRadius, robustScale)
+		if (!moments || moments.count < minimumSupport) return undefined
+
+		const tangentAngle = 0.5 * Math.atan2(2 * moments.covarianceXY, moments.covarianceXX - moments.covarianceYY)
+		const fitted = canonicalizeBahtinovLine(tangentAngle + Math.PI / 2, 0)
+		const nextDistance = moments.centerX * Math.cos(fitted.normalAngle) + moments.centerY * Math.sin(fitted.normalAngle)
+		if (!Number.isFinite(nextDistance) || bahtinovAxialAngleDistance(candidate.normalAngle, fitted.normalAngle) > Math.PI / 12) return undefined
+		normalAngle = fitted.normalAngle
+		distance = nextDistance
+	}
+
+	const metrics = lineMetrics(ridgePoints, candidate, normalAngle, distance, supportRadius, robustScale, localWidth, localHeight)
+	if (!metrics || metrics.count < minimumSupport || metrics.residual > maximumResidual) return undefined
+	const globalDistance = bahtinovGlobalLineDistance(distance, normalAngle, area)
+	const segment = clipBahtinovLineToArea({ normalAngle, distance: globalDistance }, area)
+	if (!segment) return undefined
+	const signalToNoise = metrics.strength / Math.max(NUMERICAL_FLOOR, responseDeviation * Math.sqrt(metrics.count))
+	const varianceDistance = (metrics.residual * metrics.residual) / Math.max(NUMERICAL_FLOOR, metrics.effectiveWeight)
+	const varianceAngle = metrics.longitudinalVariance > NUMERICAL_FLOOR ? varianceDistance / metrics.longitudinalVariance : Number.POSITIVE_INFINITY
+	const covariance = Number.isFinite(varianceAngle) && Number.isFinite(varianceDistance) ? ([varianceAngle, 0, varianceDistance] as const) : undefined
+
+	return {
+		normalAngle,
+		distance: globalDistance,
+		strength: metrics.strength,
+		signalToNoise,
+		fwhm: metrics.fwhm,
+		coverage: metrics.coverage,
+		balance: metrics.balance,
+		residual: metrics.residual,
+		covariance,
+		segment,
+	}
+}
+
+// Refines all Hough candidates and retains only finite accepted lines.
+export function fitBahtinovLines(candidates: readonly BahtinovHoughCandidate[], ridgePoints: BahtinovRidgePoints, area: Readonly<Rect>, responseDeviation: number, workspace: BahtinovWorkspace, options: BahtinovLineFitOptions = {}): readonly BahtinovFittedCandidate[] {
+	const fitted: BahtinovFittedCandidate[] = []
+	for (let index = 0; index < candidates.length; index++) {
+		const line = fitBahtinovLine(candidates[index], ridgePoints, area, responseDeviation, workspace, options)
+		if (line) fitted.push({ line, houghScore: candidates[index].score })
+	}
+	return fitted
+}
+
+// Collects absolute residuals of points selected by the original Hough support band.
+function collectResiduals(ridgePoints: BahtinovRidgePoints, candidate: BahtinovHoughCandidate, normalAngle: number, distance: number, supportRadius: number, scratch: Float32Array | Float64Array): number {
+	const candidateX = Math.cos(candidate.normalAngle)
+	const candidateY = Math.sin(candidate.normalAngle)
+	const normalX = Math.cos(normalAngle)
+	const normalY = Math.sin(normalAngle)
+	let count = 0
+	for (let index = 0; index < ridgePoints.count; index++) {
+		const candidateResidual = ridgePoints.x[index] * candidateX + ridgePoints.y[index] * candidateY - candidate.distance
+		if (Math.abs(candidateResidual) > supportRadius) continue
+		scratch[count++] = Math.abs(ridgePoints.x[index] * normalX + ridgePoints.y[index] * normalY - distance)
+	}
+	return count
+}
+
+// Computes Huber-reweighted centroid and covariance for candidate-band ridge points.
+function weightedMoments(
+	ridgePoints: BahtinovRidgePoints,
+	candidate: BahtinovHoughCandidate,
+	normalAngle: number,
+	distance: number,
+	supportRadius: number,
+	robustScale: number,
+): { readonly count: number; readonly centerX: number; readonly centerY: number; readonly covarianceXX: number; readonly covarianceXY: number; readonly covarianceYY: number } | undefined {
+	const candidateX = Math.cos(candidate.normalAngle)
+	const candidateY = Math.sin(candidate.normalAngle)
+	const normalX = Math.cos(normalAngle)
+	const normalY = Math.sin(normalAngle)
+	const huberLimit = HUBER_TUNING * Math.max(NUMERICAL_FLOOR, robustScale)
+	let count = 0
+	let weightSum = 0
+	let centerX = 0
+	let centerY = 0
+
+	for (let index = 0; index < ridgePoints.count; index++) {
+		const x = ridgePoints.x[index]
+		const y = ridgePoints.y[index]
+		if (Math.abs(x * candidateX + y * candidateY - candidate.distance) > supportRadius) continue
+		const residual = Math.abs(x * normalX + y * normalY - distance)
+		const robustWeight = residual <= huberLimit ? 1 : huberLimit / residual
+		const weight = ridgePoints.weight[index] * robustWeight
+		if (!(weight > 0)) continue
+		weightSum += weight
+		centerX += weight * x
+		centerY += weight * y
+		count++
+	}
+	if (!(weightSum > 0)) return undefined
+	centerX /= weightSum
+	centerY /= weightSum
+
+	let covarianceXX = 0
+	let covarianceXY = 0
+	let covarianceYY = 0
+	for (let index = 0; index < ridgePoints.count; index++) {
+		const x = ridgePoints.x[index]
+		const y = ridgePoints.y[index]
+		if (Math.abs(x * candidateX + y * candidateY - candidate.distance) > supportRadius) continue
+		const residual = Math.abs(x * normalX + y * normalY - distance)
+		const robustWeight = residual <= huberLimit ? 1 : huberLimit / residual
+		const weight = ridgePoints.weight[index] * robustWeight
+		if (!(weight > 0)) continue
+		const dx = x - centerX
+		const dy = y - centerY
+		covarianceXX += weight * dx * dx
+		covarianceXY += weight * dx * dy
+		covarianceYY += weight * dy * dy
+	}
+	return { count, centerX, centerY, covarianceXX: covarianceXX / weightSum, covarianceXY: covarianceXY / weightSum, covarianceYY: covarianceYY / weightSum }
+}
+
+// Computes final residual, width, coverage, balance, strength, and covariance evidence.
+function lineMetrics(
+	ridgePoints: BahtinovRidgePoints,
+	candidate: BahtinovHoughCandidate,
+	normalAngle: number,
+	distance: number,
+	supportRadius: number,
+	robustScale: number,
+	width: number,
+	height: number,
+):
+	| {
+			readonly count: number
+			readonly strength: number
+			readonly effectiveWeight: number
+			readonly residual: number
+			readonly fwhm: number
+			readonly coverage: number
+			readonly balance: number
+			readonly longitudinalVariance: number
+	  }
+	| undefined {
+	const segment = clipBahtinovLineToArea({ normalAngle, distance }, { left: 0, top: 0, right: width, bottom: height })
+	if (!segment) return undefined
+	const candidateX = Math.cos(candidate.normalAngle)
+	const candidateY = Math.sin(candidate.normalAngle)
+	const normalX = Math.cos(normalAngle)
+	const normalY = Math.sin(normalAngle)
+	const tangentX = -normalY
+	const tangentY = normalX
+	const middleX = (segment[0].x + segment[1].x) * 0.5
+	const middleY = (segment[0].y + segment[1].y) * 0.5
+	const huberLimit = HUBER_TUNING * Math.max(NUMERICAL_FLOOR, robustScale)
+	let count = 0
+	let strength = 0
+	let effectiveWeight = 0
+	let squaredResidual = 0
+	let longitudinalMean = 0
+	let longitudinalSquared = 0
+	let minimumTangent = Number.POSITIVE_INFINITY
+	let maximumTangent = Number.NEGATIVE_INFINITY
+	let negativeStrength = 0
+	let positiveStrength = 0
+
+	for (let index = 0; index < ridgePoints.count; index++) {
+		const x = ridgePoints.x[index]
+		const y = ridgePoints.y[index]
+		if (Math.abs(x * candidateX + y * candidateY - candidate.distance) > supportRadius) continue
+		const residual = x * normalX + y * normalY - distance
+		const absoluteResidual = Math.abs(residual)
+		const robustWeight = absoluteResidual <= huberLimit ? 1 : huberLimit / absoluteResidual
+		const baseWeight = ridgePoints.weight[index]
+		const weight = baseWeight * robustWeight
+		const tangent = (x - middleX) * tangentX + (y - middleY) * tangentY
+		count++
+		strength += baseWeight
+		effectiveWeight += weight
+		squaredResidual += weight * residual * residual
+		longitudinalMean += weight * tangent
+		longitudinalSquared += weight * tangent * tangent
+		minimumTangent = Math.min(minimumTangent, tangent)
+		maximumTangent = Math.max(maximumTangent, tangent)
+		if (tangent < 0) negativeStrength += baseWeight
+		else positiveStrength += baseWeight
+	}
+	if (!(effectiveWeight > 0) || !Number.isFinite(minimumTangent) || !Number.isFinite(maximumTangent)) return undefined
+	const residual = Math.sqrt(squaredResidual / effectiveWeight)
+	const fwhm = residual * SIGMA_TO_FWHM
+	const segmentLength = Math.hypot(segment[1].x - segment[0].x, segment[1].y - segment[0].y)
+	const coverage = segmentLength > 0 ? Math.min(1, Math.max(0, (maximumTangent - minimumTangent) / segmentLength)) : 0
+	const stronger = Math.max(negativeStrength, positiveStrength)
+	const balance = stronger > 0 ? Math.min(negativeStrength, positiveStrength) / stronger : 0
+	longitudinalMean /= effectiveWeight
+	const longitudinalVariance = Math.max(0, longitudinalSquared / effectiveWeight - longitudinalMean * longitudinalMean)
+	return { count, strength, effectiveWeight, residual, fwhm, coverage, balance, longitudinalVariance }
+}
+
+// Returns the exact median of a sorted finite scratch prefix.
+function sortedMedian(sorted: Float32Array | Float64Array, count: number): number {
+	const middle = count >>> 1
+	return count % 2 === 0 ? (sorted[middle - 1] + sorted[middle]) * 0.5 : sorted[middle]
+}
+
+// Validates finite candidate, ridge, ROI, noise, and scratch capacity before fitting.
+function validateFitInput(candidate: BahtinovHoughCandidate, ridgePoints: BahtinovRidgePoints, area: Readonly<Rect>, responseDeviation: number, workspace: BahtinovWorkspace): void {
+	if (!Number.isFinite(candidate.normalAngle) || !Number.isFinite(candidate.distance) || !Number.isFinite(candidate.score)) throw new RangeError('Bahtinov Hough candidate must be finite')
+	if (!Number.isInteger(ridgePoints.count) || ridgePoints.count < 3 || ridgePoints.count > workspace.statistics.length) throw new RangeError('invalid ridge-point count for line fitting')
+	if (!Number.isInteger(area.left) || !Number.isInteger(area.top) || !Number.isInteger(area.right) || !Number.isInteger(area.bottom) || area.left >= area.right || area.top >= area.bottom) throw new RangeError('invalid Bahtinov fit area')
+	if (!Number.isFinite(responseDeviation) || responseDeviation < 0) throw new RangeError('responseDeviation must be finite and non-negative')
+}
