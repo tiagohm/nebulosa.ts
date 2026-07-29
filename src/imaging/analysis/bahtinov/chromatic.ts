@@ -1,10 +1,15 @@
+import { PI } from '../../../core/constants'
 import { analyzeBahtinov } from './bahtinov'
-import type { BahtinovAnalysisInput, BahtinovAnalysisOptions, BahtinovAnalysisResult, BahtinovChromaticOptions, BahtinovChromaticResult, BahtinovPlane, BahtinovWorkspace } from './types'
+import { bahtinovAxialAngleDistance } from './geometry'
+import type { BahtinovAnalysisInput, BahtinovAnalysisOptions, BahtinovAnalysisResult, BahtinovAnalysisSuccess, BahtinovChromaticOptions, BahtinovChromaticResult, BahtinovPlane, BahtinovWorkspace } from './types'
 
 // Workspace-backed chromatic comparison for an already registered RGB image. Each channel runs
 // through the same geometric analyzer and remains independently inspectable; offsets use signed focus
 // pixels and full-image reference coordinates. CFA input is excluded because it requires a calibrated
 // color reconstruction rather than the green-only detection path.
+
+// Largest accepted axial role difference between independently fitted RGB patterns, in radians.
+const MAXIMUM_CHANNEL_PATTERN_DELTA = PI / 36
 
 // Compares independently fitted red, green, and blue Bahtinov focus errors.
 // The green channel is the signed reference. Shared options, ROI, expected mask layout, and reusable
@@ -21,6 +26,9 @@ export function compareBahtinovChromatic(input: BahtinovAnalysisInput, workspace
 	if (!green.success) failedChannels.push('green')
 	if (!blue.success) failedChannels.push('blue')
 	if (!red.success || !green.success || !blue.success) return { success: false, channels: channelResults, failedChannels }
+	if (!channelPatternMatches(red, green)) failedChannels.push('red')
+	if (!channelPatternMatches(blue, green)) failedChannels.push('blue')
+	if (failedChannels.length > 0) return { success: false, channels: channelResults, failedChannels }
 
 	const redError = alignedFocusError(red.error, red.centralLine.normalAngle, green.centralLine.normalAngle)
 	const greenError = green.error
@@ -37,6 +45,14 @@ export function compareBahtinovChromatic(input: BahtinovAnalysisInput, workspace
 		blueReferenceOffset: { x: blue.reference.x - green.reference.x, y: blue.reference.y - green.reference.y },
 		confidence: Math.min(red.confidence, green.confidence, blue.confidence),
 	}
+}
+
+// Checks that central and unordered external spike roles agree axially with the green reference.
+function channelPatternMatches(channel: BahtinovAnalysisSuccess, reference: BahtinovAnalysisSuccess): boolean {
+	if (bahtinovAxialAngleDistance(channel.centralLine.normalAngle, reference.centralLine.normalAngle) > MAXIMUM_CHANNEL_PATTERN_DELTA) return false
+	const direct = Math.max(bahtinovAxialAngleDistance(channel.externalLines[0].normalAngle, reference.externalLines[0].normalAngle), bahtinovAxialAngleDistance(channel.externalLines[1].normalAngle, reference.externalLines[1].normalAngle))
+	const swapped = Math.max(bahtinovAxialAngleDistance(channel.externalLines[0].normalAngle, reference.externalLines[1].normalAngle), bahtinovAxialAngleDistance(channel.externalLines[1].normalAngle, reference.externalLines[0].normalAngle))
+	return Math.min(direct, swapped) <= MAXIMUM_CHANNEL_PATTERN_DELTA
 }
 
 // Aligns one signed focus error with the orientation of a reference axial normal.

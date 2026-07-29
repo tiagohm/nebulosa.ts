@@ -107,6 +107,25 @@ test('retains per-channel failures without fabricating chromatic offsets', () =>
 	}
 })
 
+test('rejects independently detected channel patterns with different rotations', () => {
+	const result = compareBahtinovChromatic(
+		{
+			image: rgbBahtinov([0, 0, 0], undefined, [PIOVERTWO, PIOVERTWO, PIOVERTWO + PI / 6]),
+			area: { left: 0, top: 0, right: 128, bottom: 128 },
+			center: { x: 63.5, y: 63.5 },
+		},
+		OPTIONS,
+	)
+	expect(result.success).toBeFalse()
+	if (!result.success) {
+		expect(result.failedChannels).toEqual(['blue'])
+		expect(result.channels.red.success).toBeTrue()
+		expect(result.channels.green.success).toBeTrue()
+		expect(result.channels.blue.success).toBeTrue()
+		expect('blueMinusGreen' in result).toBeFalse()
+	}
+})
+
 test('rejects mono input for chromatic comparison', () => {
 	const rgb = rgbBahtinov([0, 0, 0])
 	const mono: Image = { ...rgb, raw: new Float64Array(128 * 128), metadata: { ...rgb.metadata, channels: 1, stride: 128, pixelCount: 128 * 128 } }
