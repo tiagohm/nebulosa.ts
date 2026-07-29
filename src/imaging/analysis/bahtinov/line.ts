@@ -1,5 +1,5 @@
 import { PI, PIOVERTWO } from '../../../core/constants'
-import { medianOf, STANDARD_DEVIATION_SCALE } from '../../../core/util'
+import { medianBySelectionOf, STANDARD_DEVIATION_SCALE } from '../../../core/util'
 import type { Rect } from '../../../math/numerical/geometry'
 import { bahtinovAxialAngleDistance, bahtinovGlobalLineDistance, canonicalizeBahtinovLine, clipBahtinovLineToArea } from './geometry'
 import type { BahtinovHoughCandidate } from './hough'
@@ -67,8 +67,7 @@ export function fitBahtinovLine(candidate: BahtinovHoughCandidate, ridgePoints: 
 	for (let iteration = 0; iteration < robustIterations; iteration++) {
 		supportCount = collectResiduals(ridgePoints, candidate, normalAngle, distance, supportRadius, workspace.statistics)
 		if (supportCount < minimumSupport) return undefined
-		workspace.statistics.subarray(0, supportCount).sort()
-		robustScale = medianOf(workspace.statistics, supportCount) * STANDARD_DEVIATION_SCALE
+		robustScale = medianBySelectionOf(workspace.statistics, supportCount) * STANDARD_DEVIATION_SCALE
 		const moments = weightedImageMoments(candidate, normalAngle, distance, supportRadius, robustScale, localWidth, localHeight, workspace)
 		if (!moments || moments.count < minimumSupport) return undefined
 

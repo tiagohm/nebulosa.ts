@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { binarySearch, binarySearchWithComparator, isNumberArray, maxOf, meanOf, medianOf, minOf, NumberComparator, NumberComparatorDescending, percentileOf, rmsOf, standardDeviationOf } from '../../src/core/util'
+import { binarySearch, binarySearchWithComparator, isNumberArray, maxOf, meanOf, medianBySelectionOf, medianOf, minOf, NumberComparator, NumberComparatorDescending, percentileOf, quickSelect, rmsOf, standardDeviationOf } from '../../src/core/util'
 
 test('is number array', () => {
 	expect(isNumberArray([1, 2, 3])).toBeTrue()
@@ -88,6 +88,25 @@ test('median of', () => {
 	expect(medianOf([1, 2, 3, 4])).toBe(2.5)
 	expect(medianOf([1, 2, 100, 200], 2)).toBe(1.5)
 	expect(medianOf([])).toBeNaN()
+})
+
+test('quick select', () => {
+	const values = new Float64Array([7, 2, 5, 2, 9, 1, Number.NaN, 100])
+	expect(quickSelect(values, 7, 3)).toBe(5)
+	expect(values[7]).toBe(100)
+	for (let index = 0; index < 3; index++) expect(values[index]).toBeLessThanOrEqual(5)
+	for (let index = 4; index < 7; index++) expect(Number.isNaN(values[index]) || values[index] >= 5).toBeTrue()
+	expect(quickSelect(values, 7, 6)).toBeNaN()
+	expect(() => quickSelect(values, 0, 0)).toThrow(RangeError)
+	expect(() => quickSelect(values, 7, 7)).toThrow(RangeError)
+})
+
+test('median by selection of', () => {
+	expect(medianBySelectionOf(new Float64Array([9, 1, 5]))).toBe(5)
+	expect(medianBySelectionOf(new Float64Array([9, 1, 5, 3]))).toBe(4)
+	expect(medianBySelectionOf(new Float64Array([9, 1, 100]), 2)).toBe(5)
+	expect(medianBySelectionOf(new Float64Array([1, Number.NaN]))).toBeNaN()
+	expect(medianBySelectionOf([])).toBeNaN()
 })
 
 test('standard deviation of', () => {

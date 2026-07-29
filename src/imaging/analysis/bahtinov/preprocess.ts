@@ -1,5 +1,5 @@
 import { PI, PIOVERTWO } from '../../../core/constants'
-import { medianOf, STANDARD_DEVIATION_SCALE } from '../../../core/util'
+import { medianBySelectionOf, quickSelect, STANDARD_DEVIATION_SCALE } from '../../../core/util'
 import type { Rect } from '../../../math/numerical/geometry'
 import type { Angle } from '../../../math/units/angle'
 import { grayscaleFromChannel, makeImageRawTypedArray, type Image, type ImageMetadata, type ImageRawType } from '../../model/types'
@@ -529,15 +529,12 @@ function queueConnectedCore(index: number, mask: Uint8Array, queue: ImageRawType
 function estimateBackground(source: ImageRawType, mask: Uint8Array, scratch: ImageRawType, pixelCount: number, upperQuantile: number): BahtinovBackground | undefined {
 	let count = copyEligibleSamples(source, mask, scratch, pixelCount, Number.POSITIVE_INFINITY)
 	if (count < 8) return undefined
-	scratch.subarray(0, count).sort()
-	const cutoff = sortedQuantile(scratch, count, upperQuantile)
+	const cutoff = selectedQuantile(scratch, count, upperQuantile)
 	count = copyEligibleSamples(source, mask, scratch, pixelCount, cutoff)
 	if (count < 8) return undefined
-	scratch.subarray(0, count).sort()
-	const level = medianOf(scratch, count)
+	const level = medianBySelectionOf(scratch, count)
 	for (let index = 0; index < count; index++) scratch[index] = Math.abs(scratch[index] - level)
-	scratch.subarray(0, count).sort()
-	const deviation = medianOf(scratch, count) * STANDARD_DEVIATION_SCALE
+	const deviation = medianBySelectionOf(scratch, count) * STANDARD_DEVIATION_SCALE
 	if (!Number.isFinite(level) || !Number.isFinite(deviation)) return undefined
 	return { level, deviation, sampleCount: count }
 }
@@ -606,11 +603,9 @@ function roiMetadata(width: number, height: number, bytesPerElement: number): Im
 function estimateMedianAndDeviation(response: ImageRawType, mask: Uint8Array, scratch: ImageRawType, pixelCount: number): { readonly center: number; readonly deviation: number } | undefined {
 	const count = copyEligibleSamples(response, mask, scratch, pixelCount, Number.POSITIVE_INFINITY)
 	if (count < 8) return undefined
-	scratch.subarray(0, count).sort()
-	const center = medianOf(scratch, count)
+	const center = medianBySelectionOf(scratch, count)
 	for (let index = 0; index < count; index++) scratch[index] = Math.abs(scratch[index] - center)
-	scratch.subarray(0, count).sort()
-	const deviation = medianOf(scratch, count) * STANDARD_DEVIATION_SCALE
+	const deviation = medianBySelectionOf(scratch, count) * STANDARD_DEVIATION_SCALE
 	if (!Number.isFinite(center) || !Number.isFinite(deviation)) return undefined
 	return { center, deviation }
 }
@@ -651,11 +646,14 @@ function selectRidgePoints(response: ImageRawType, mask: Uint8Array, width: numb
 	return { x: workspace.ridgeX, y: workspace.ridgeY, weight: workspace.ridgeWeight, count }
 }
 
-// Returns one linearly interpolated quantile from a sorted scratch prefix.
-function sortedQuantile(sorted: ImageRawType, count: number, quantile: number): number {
+// Selects one linearly interpolated quantile while rearranging only the active scratch prefix.
+function selectedQuantile(values: ImageRawType, count: number, quantile: number): number {
 	const position = (count - 1) * quantile
 	const lower = Math.floor(position)
 	const upper = Math.ceil(position)
 	const fraction = position - lower
-	return sorted[lower] + (sorted[upper] - sorted[lower]) * fraction
+	const lowerValue = quickSelect(values, count, lower)
+	if (lower === upper) return lowerValue
+	const upperValue = quickSelect(values, count, upper)
+	return lowerValue + (upperValue - lowerValue) * fraction
 }
