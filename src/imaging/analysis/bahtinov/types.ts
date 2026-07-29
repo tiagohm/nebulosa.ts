@@ -319,7 +319,7 @@ export interface BahtinovWorkspace {
 	readonly distanceBinCount: number
 	// Largest local normal distance represented by the accumulator, in pixels.
 	readonly rhoMax: number
-	// Extracted mono ROI.
+	// Extracted mono ROI, overwritten by the signed DoG response after both smoothing passes.
 	readonly source: ImageRawType
 	// Separable-convolution intermediate buffer.
 	readonly intermediate: ImageRawType
@@ -327,7 +327,7 @@ export interface BahtinovWorkspace {
 	readonly blurredSmall: ImageRawType
 	// Wide Gaussian response.
 	readonly blurredLarge: ImageRawType
-	// Signed Difference-of-Gaussians response.
+	// Signed Difference-of-Gaussians response; aliases `source` to avoid another ROI-sized buffer.
 	readonly response: ImageRawType
 	// Reusable scratch for robust statistics.
 	readonly statistics: ImageRawType

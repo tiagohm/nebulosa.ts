@@ -43,6 +43,7 @@ test('creates a capacity-described reusable workspace', () => {
 	const workspace = createBahtinovWorkspace(64, 48, { precision: 64, maximumRidgePoints: 512, angleStep: PI / 90, distanceStep: 1 })
 	expect(workspace.source).toBeInstanceOf(Float64Array)
 	expect(workspace.source.length).toBe(64 * 48)
+	expect(workspace.response).toBe(workspace.source)
 	expect(workspace.maximumRidgePoints).toBe(512)
 	expect(workspace.angleCount).toBe(90)
 	expect(workspace.distanceBinCount).toBe(Math.ceil(2 * Math.hypot(63, 47)) + 1)

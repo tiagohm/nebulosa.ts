@@ -136,7 +136,7 @@ export function createBahtinovWorkspace(width: number, height: number, options: 
 		intermediate: makeImageRawTypedArray(source, pixelCount),
 		blurredSmall: makeImageRawTypedArray(source, pixelCount),
 		blurredLarge: makeImageRawTypedArray(source, pixelCount),
-		response: makeImageRawTypedArray(source, pixelCount),
+		response: source,
 		statistics: makeImageRawTypedArray(source, pixelCount),
 		mask: new Uint8Array(pixelCount),
 		ridgeX: new Float32Array(maximumRidgePoints),
