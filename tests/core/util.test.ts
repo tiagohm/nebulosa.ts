@@ -107,6 +107,8 @@ test('median by selection of', () => {
 	expect(medianBySelectionOf(new Float64Array([9, 1, 100]), 2)).toBe(5)
 	expect(medianBySelectionOf(new Float64Array([1, Number.NaN]))).toBeNaN()
 	expect(medianBySelectionOf([])).toBeNaN()
+	expect(medianBySelectionOf([Number.MAX_VALUE, Number.MAX_VALUE])).toBe(Number.MAX_VALUE)
+	expect(medianBySelectionOf([-Number.MAX_VALUE, Number.MAX_VALUE])).toBe(0)
 })
 
 test('standard deviation of', () => {

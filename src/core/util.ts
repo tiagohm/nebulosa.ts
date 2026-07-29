@@ -83,7 +83,7 @@ export function medianBySelectionOf(values: NumberArray, count = values.length):
 		const value = values[index]
 		if (value > lower) lower = value
 	}
-	return (lower + upper) * 0.5
+	return lower * 0.5 + upper * 0.5
 }
 
 // Finds the minimum value and its index in a numeric array, returned as [value, index].
