@@ -90,3 +90,32 @@ test('recovers broad synthetic FWHM outside the fixed fit-support band', () => {
 	expect(Math.abs(measured[1] - 4)).toBeLessThan(1)
 	expect(Math.abs(measured[2] - 8)).toBeLessThan(1)
 })
+
+test('rejects a source width unresolved beneath the profile blur', () => {
+	const width = 128
+	const height = 128
+	const raw = new Float64Array(width * height)
+	raw.fill(0.015)
+	plotBahtinovSpikes(raw, width, height, 1, 63, 63.5, 1, 0, undefined, {
+		normalAngles: [PI / 12, 0, (PI * 11) / 12],
+		central: 1,
+		fwhm: 0.1,
+		halfLength: 44,
+		taperLength: 7,
+		strengths: [0, 1, 0],
+	})
+	const area = { left: 0, top: 0, right: width, bottom: height }
+	const workspace = createBahtinovWorkspace(width, height, { precision: 64, maximumRidgePoints: 2048 })
+	const preprocessed = preprocessBahtinov({ image: image(raw, width, height), area, center: { x: 63, y: 63.5 } }, workspace, { coreRadius: 3, ridgeSigma: 2, maximumRidgePoints: 2048 })
+	expect(preprocessed.success).toBeTrue()
+	if (!preprocessed.success) return
+	const candidates = detectBahtinovHoughCandidates(preprocessed.ridgePoints, width, height, preprocessed.workspace, { center: preprocessed.center })
+	expect(candidates.some((candidate) => bahtinovAxialAngleDistance(candidate.normalAngle, 0) < PI / 360)).toBeTrue()
+	const fitted = fitBahtinovLines(candidates, preprocessed.ridgePoints, area, preprocessed.responseDeviation, preprocessed.workspace, {
+		supportRadius: 3,
+		maximumResidual: 2,
+		profileBlurSigma: preprocessed.profileBlurSigma * 2,
+		center: preprocessed.center,
+	})
+	expect(fitted.some((candidate) => bahtinovAxialAngleDistance(candidate.line.normalAngle, 0) < PI / 360)).toBeFalse()
+})

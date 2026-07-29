@@ -247,7 +247,7 @@ function transverseProfileFwhm(normalAngle: number, distance: number, supportRad
 	if (!(profileBlurSigma > 0)) return observedFwhm
 	const observedSigmaSquared = (observedFwhm / SIGMA_TO_FWHM) ** 2
 	const sourceSigmaSquared = observedSigmaSquared - profileBlurSigma * profileBlurSigma
-	return sourceSigmaSquared > 0 ? Math.sqrt(sourceSigmaSquared) * SIGMA_TO_FWHM : observedFwhm
+	return sourceSigmaSquared > 0 ? Math.sqrt(sourceSigmaSquared) * SIGMA_TO_FWHM : undefined
 }
 
 // Linearly interpolates one half-maximum crossing between adjacent profile bins.
