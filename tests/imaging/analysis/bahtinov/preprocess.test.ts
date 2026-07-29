@@ -74,17 +74,62 @@ test('extracts RGB with explicit and BT.709 planes', () => {
 	if (red.success && luminance.success) expect(red.background.level).not.toBe(luminance.background.level)
 })
 
-test('rejects CFA until its dedicated phase and masks saturated support', () => {
+test('reconstructs all eight CFA patterns from both physical green lattices', () => {
+	const patterns: readonly NonNullable<Image['metadata']['bayer']>[] = ['RGGB', 'BGGR', 'GBRG', 'GRBG', 'GRGB', 'GBGR', 'RGBG', 'BGRG']
+	const width = 32
+	const height = 32
+	for (const pattern of patterns) {
+		const raw = new Float32Array(width * height)
+		const greenOffsets =
+			pattern === 'RGGB' || pattern === 'BGGR'
+				? ([
+						[1, 0],
+						[0, 1],
+					] as const)
+				: pattern === 'GBRG' || pattern === 'GRBG'
+					? ([
+							[0, 0],
+							[1, 1],
+						] as const)
+					: pattern === 'GRGB' || pattern === 'GBGR'
+						? ([
+								[0, 0],
+								[0, 1],
+							] as const)
+						: ([
+								[1, 0],
+								[1, 1],
+							] as const)
+		for (let y = 0; y < height; y++) {
+			for (let x = 0; x < width; x++) {
+				if (x % 2 === greenOffsets[0][0] && y % 2 === greenOffsets[0][1]) raw[y * width + x] = 0.04
+				else if (x % 2 === greenOffsets[1][0] && y % 2 === greenOffsets[1][1]) raw[y * width + x] = 0.09
+				else raw[y * width + x] = 0.8
+			}
+		}
+		const source = image(raw, width, height, 1, pattern)
+		const first = preprocessBahtinov({ image: source, area: { left: 0, top: 0, right: width, bottom: height } }, { plane: 'green1', coreRadius: 0, ridgeSigma: 2 })
+		const second = preprocessBahtinov({ image: source, area: { left: 0, top: 0, right: width, bottom: height } }, { plane: 'green2', coreRadius: 0, ridgeSigma: 2 })
+		const combined = preprocessBahtinov({ image: source, area: { left: 0, top: 0, right: width, bottom: height } }, { plane: 'auto', coreRadius: 0, ridgeSigma: 2 })
+		expect(first.success).toBeFalse()
+		expect(second.success).toBeFalse()
+		expect(combined.success).toBeFalse()
+		if (!first.success && !second.success && !combined.success) {
+			expect(first.reason).toBe('insufficientSupport')
+			expect(second.reason).toBe('insufficientSupport')
+			expect(combined.reason).toBe('insufficientSupport')
+		}
+	}
+})
+
+test('analyzes spikes through CFA green reconstruction and masks saturated support', () => {
 	const width = 64
 	const height = 64
-	const cfa = preprocessBahtinov({ image: image(new Float32Array(width * height), width, height, 1, 'RGGB'), area: { left: 0, top: 0, right: width, bottom: height } })
-	expect(cfa).toEqual({ success: false, reason: 'unsupportedPlane', area: { left: 0, top: 0, right: width, bottom: height } })
-
 	const raw = new Float32Array(width * height)
 	raw.fill(0.01)
 	plotBahtinovSpikes(raw, width, height, 1, 32, 32, 100, 0, undefined, { halfLength: 20, taperLength: 4 })
 	raw[32 * width + 32] = 1
-	const saturated = preprocessBahtinov({ image: image(raw, width, height), area: { left: 0, top: 0, right: width, bottom: height }, center: { x: 32, y: 32 } }, { saturationLevel: 0.9, saturationDilation: 2, coreRadius: 2, ridgeSigma: 2 })
+	const saturated = preprocessBahtinov({ image: image(raw, width, height, 1, 'RGGB'), area: { left: 0, top: 0, right: width, bottom: height }, center: { x: 32, y: 32 } }, { saturationLevel: 0.9, saturationDilation: 2, coreRadius: 2, ridgeSigma: 2 })
 	expect(saturated.success).toBeTrue()
 	if (saturated.success) {
 		expect(saturated.saturationFraction).toBeGreaterThan(0)

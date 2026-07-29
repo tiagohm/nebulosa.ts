@@ -2,10 +2,10 @@ import { expect, test } from 'bun:test'
 import { analyzeBahtinov } from '../../../../src/imaging/analysis/bahtinov/bahtinov'
 import { createBahtinovOverlayGeometry } from '../../../../src/imaging/analysis/bahtinov/overlay'
 import { createBahtinovWorkspace } from '../../../../src/imaging/analysis/bahtinov/preprocess'
-import type { Image } from '../../../../src/imaging/model/types'
+import type { CfaPattern, Image, ImageRawType } from '../../../../src/imaging/model/types'
 import { plotBahtinovSpikes } from '../../../../src/imaging/stars/generator'
 
-function image(raw: Float64Array, width: number, height: number): Image {
+function image(raw: ImageRawType, width: number, height: number, bayer?: CfaPattern): Image {
 	return {
 		raw,
 		header: {},
@@ -18,7 +18,7 @@ function image(raw: Float64Array, width: number, height: number): Image {
 			strideInBytes: width * 8,
 			pixelSizeInBytes: 8,
 			bitpix: -64,
-			bayer: undefined,
+			bayer,
 		},
 	}
 }
@@ -66,6 +66,19 @@ test('recovers zero and signed synthetic focus errors end to end', () => {
 		const overlay = createBahtinovOverlayGeometry(result)
 		expect(Math.hypot(overlay.reference.x - overlay.centralProjection.x, overlay.reference.y - overlay.centralProjection.y)).toBeCloseTo(result.absoluteError, 10)
 	}
+})
+
+test('recovers focus error from a raw CFA green mosaic', () => {
+	const source = synthetic(-3)
+	for (let y = 0; y < source.metadata.height; y++) {
+		for (let x = 0; x < source.metadata.width; x++) {
+			if ((x & 1) === (y & 1)) source.raw[y * source.metadata.stride + x] = 0.7
+		}
+	}
+	const cfa = image(source.raw, source.metadata.width, source.metadata.height, 'RGGB')
+	const result = analyzeBahtinov({ image: cfa, area: { left: 0, top: 0, right: 128, bottom: 128 }, center: { x: 63.5, y: 63.5 } }, ANALYSIS_OPTIONS)
+	expect(result.success).toBeTrue()
+	if (result.success) expect(Math.abs(result.error + 3)).toBeLessThan(0.5)
 })
 
 test('returns explicit content failures without fabricated geometry', () => {

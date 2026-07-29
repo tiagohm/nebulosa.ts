@@ -1,6 +1,6 @@
 import type { Rect } from '../../../math/numerical/geometry'
 import type { Angle } from '../../../math/units/angle'
-import { grayscaleFromChannel, makeImageRawTypedArray, type Image, type ImageMetadata, type ImageRawType } from '../../model/types'
+import { grayscaleFromChannel, makeImageRawTypedArray, type CfaPattern, type Image, type ImageMetadata, type ImageRawType } from '../../model/types'
 import { separableSmoothing, separableSmoothingKernel, type SeparableSmoothingKernel } from '../../processing/convolution'
 import type { BahtinovAnalysisInput, BahtinovAnalysisOptions, BahtinovBackground, BahtinovFailureReason, BahtinovPlane, BahtinovRidgePoints, BahtinovWorkspace, BahtinovWorkspaceOptions } from './types'
 
@@ -100,6 +100,9 @@ interface BahtinovKernelCache {
 	// Wide normalized separable kernel.
 	readonly large: SeparableSmoothingKernel
 }
+
+// Resolved mono, RGB, or reconstructed CFA plane used by ROI extraction.
+type ResolvedBahtinovPlane = Exclude<BahtinovPlane, 'auto'> | 'greenBoth'
 
 // Allocates reusable buffers and Hough capacity for a maximum ROI.
 //
@@ -290,16 +293,22 @@ function validateCenterInArea(x: number, y: number, area: Readonly<Rect>): void 
 	if (!Number.isFinite(x) || !Number.isFinite(y) || x < area.left || x > area.right - 1 || y < area.top || y > area.bottom - 1) throw new RangeError('Bahtinov center must be finite and inside the area pixel-center domain')
 }
 
-// Resolves a supported mono or RGB plane; CFA variants are deferred to the dedicated phase.
-function resolvePlane(image: Image, plane: BahtinovPlane): Exclude<BahtinovPlane, 'auto' | 'green1' | 'green2'> | undefined {
-	if (image.metadata.bayer) return undefined
+// Resolves a supported mono, RGB, or green-lattice CFA plane.
+function resolvePlane(image: Image, plane: BahtinovPlane): ResolvedBahtinovPlane | undefined {
+	if (image.metadata.bayer) {
+		if (image.metadata.channels !== 1) return undefined
+		if (plane === 'auto' || plane === 'GRAY') return 'greenBoth'
+		return plane === 'green1' || plane === 'green2' ? plane : undefined
+	}
 	if (image.metadata.channels === 1) return plane === 'auto' || plane === 'GRAY' ? 'GRAY' : undefined
 	if (plane === 'green1' || plane === 'green2' || plane === 'GRAY') return undefined
 	return plane === 'auto' ? 'BT709' : plane
 }
 
 // Copies only the selected full-image ROI into a dense local mono plane.
-function fillSourcePlane(image: Image, area: Readonly<Rect>, plane: Exclude<BahtinovPlane, 'auto' | 'green1' | 'green2'>, output: ImageRawType, mask: Uint8Array): number {
+function fillSourcePlane(image: Image, area: Readonly<Rect>, plane: ResolvedBahtinovPlane, output: ImageRawType, mask: Uint8Array): number {
+	if (image.metadata.bayer) return fillCfaGreenPlane(image, area, plane, output, mask)
+	if (plane === 'green1' || plane === 'green2' || plane === 'greenBoth') throw new RangeError('CFA green planes require Bayer metadata')
 	const { channels, stride } = image.metadata
 	const weights = channels === 3 ? grayscaleFromChannel(plane) : undefined
 	let target = 0
@@ -318,6 +327,101 @@ function fillSourcePlane(image: Image, area: Readonly<Rect>, plane: Exclude<Baht
 		}
 	}
 	return finiteCount
+}
+
+// Reconstructs one or both physical green sublattices densely over the full-resolution sensor ROI.
+function fillCfaGreenPlane(image: Image, area: Readonly<Rect>, plane: ResolvedBahtinovPlane, output: ImageRawType, mask: Uint8Array): number {
+	const offsets = cfaGreenOffsets(image.metadata.bayer!)
+	let target = 0
+	let finiteCount = 0
+	for (let y = area.top; y < area.bottom; y++) {
+		for (let x = area.left; x < area.right; x++, target++) {
+			const first = plane === 'green2' ? Number.NaN : interpolateCfaLattice(image, x, y, offsets[0][0], offsets[0][1])
+			const second = plane === 'green1' ? Number.NaN : interpolateCfaLattice(image, x, y, offsets[1][0], offsets[1][1])
+			const value = plane === 'green1' ? first : plane === 'green2' ? second : Number.isFinite(first) && Number.isFinite(second) ? Math.sqrt(Math.max(0, first) * Math.max(0, second)) : Number.NaN
+			if (Number.isFinite(value)) {
+				output[target] = value
+				finiteCount++
+			} else {
+				output[target] = 0
+				mask[target] |= MASK_INVALID
+			}
+		}
+	}
+	return finiteCount
+}
+
+// Returns row-major `(x, y)` offsets of the two green samples in one CFA `2 x 2` tile.
+function cfaGreenOffsets(pattern: CfaPattern): readonly [readonly [number, number], readonly [number, number]] {
+	switch (pattern) {
+		case 'RGGB':
+		case 'BGGR':
+			return [
+				[1, 0],
+				[0, 1],
+			]
+		case 'GBRG':
+		case 'GRBG':
+			return [
+				[0, 0],
+				[1, 1],
+			]
+		case 'GRGB':
+		case 'GBGR':
+			return [
+				[0, 0],
+				[0, 1],
+			]
+		case 'RGBG':
+		case 'BGRG':
+			return [
+				[1, 0],
+				[1, 1],
+			]
+	}
+}
+
+// Bilinearly interpolates one physical CFA sublattice at a full-resolution sensor coordinate.
+function interpolateCfaLattice(image: Image, x: number, y: number, offsetX: number, offsetY: number): number {
+	const { width, height, stride } = image.metadata
+	const firstX = offsetX
+	const firstY = offsetY
+	const lastX = firstX + Math.floor((width - 1 - firstX) / 2) * 2
+	const lastY = firstY + Math.floor((height - 1 - firstY) / 2) * 2
+	if (lastX < firstX || lastY < firstY) return Number.NaN
+	const lowerX = Math.max(firstX, Math.min(lastX, Math.floor((x - firstX) / 2) * 2 + firstX))
+	const lowerY = Math.max(firstY, Math.min(lastY, Math.floor((y - firstY) / 2) * 2 + firstY))
+	const upperX = Math.min(lastX, lowerX + 2)
+	const upperY = Math.min(lastY, lowerY + 2)
+	const fractionX = upperX === lowerX ? 0 : (x - lowerX) / (upperX - lowerX)
+	const fractionY = upperY === lowerY ? 0 : (y - lowerY) / (upperY - lowerY)
+	const topLeft = image.raw[lowerY * stride + lowerX]
+	const topRight = image.raw[lowerY * stride + upperX]
+	const bottomLeft = image.raw[upperY * stride + lowerX]
+	const bottomRight = image.raw[upperY * stride + upperX]
+	let weighted = 0
+	let weightSum = 0
+	const topLeftWeight = (1 - fractionX) * (1 - fractionY)
+	const topRightWeight = fractionX * (1 - fractionY)
+	const bottomLeftWeight = (1 - fractionX) * fractionY
+	const bottomRightWeight = fractionX * fractionY
+	if (Number.isFinite(topLeft) && topLeftWeight > 0) {
+		weighted += topLeft * topLeftWeight
+		weightSum += topLeftWeight
+	}
+	if (Number.isFinite(topRight) && topRightWeight > 0) {
+		weighted += topRight * topRightWeight
+		weightSum += topRightWeight
+	}
+	if (Number.isFinite(bottomLeft) && bottomLeftWeight > 0) {
+		weighted += bottomLeft * bottomLeftWeight
+		weightSum += bottomLeftWeight
+	}
+	if (Number.isFinite(bottomRight) && bottomRightWeight > 0) {
+		weighted += bottomRight * bottomRightWeight
+		weightSum += bottomRightWeight
+	}
+	return weightSum > 0 ? weighted / weightSum : Number.NaN
 }
 
 // Validates preprocessing thresholds whose relationships affect finite filtering.
