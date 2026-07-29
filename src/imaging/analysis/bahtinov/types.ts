@@ -333,6 +333,10 @@ export interface BahtinovWorkspace {
 	readonly statistics: ImageRawType
 	// Saturation and core mask.
 	readonly mask: Uint8Array
+	// CFA x-neighbor bounds for both green lattices, stored as four indices per ROI column.
+	readonly cfaX: Int32Array
+	// CFA y-neighbor bounds for both green lattices, stored as four indices per ROI row.
+	readonly cfaY: Int32Array
 	// Local x coordinates of retained ridge points.
 	readonly ridgeX: Float32Array
 	// Local y coordinates of retained ridge points.

@@ -139,6 +139,8 @@ export function createBahtinovWorkspace(width: number, height: number, options: 
 		response: source,
 		statistics: makeImageRawTypedArray(source, pixelCount),
 		mask: new Uint8Array(pixelCount),
+		cfaX: new Int32Array(width * 4),
+		cfaY: new Int32Array(height * 4),
 		ridgeX: new Float32Array(maximumRidgePoints),
 		ridgeY: new Float32Array(maximumRidgePoints),
 		ridgeWeight: new Float32Array(maximumRidgePoints),
@@ -193,7 +195,7 @@ export function preprocessBahtinov(input: BahtinovAnalysisInput, workspace: Baht
 	const source = workspace.source.subarray(0, pixelCount)
 	const mask = workspace.mask.subarray(0, pixelCount)
 	mask.fill(0)
-	const finiteCount = fillSourcePlane(input.image, area, plane, source, mask)
+	const finiteCount = fillSourcePlane(input.image, area, plane, source, mask, workspace)
 	if (finiteCount < Math.max(16, pixelCount >>> 3)) return { success: false, reason: 'insufficientSupport', area }
 
 	const saturationLevel = options.saturationLevel ?? DEFAULT_SATURATION_LEVEL
@@ -298,8 +300,8 @@ function resolvePlane(image: Image, plane: BahtinovPlane): ResolvedBahtinovPlane
 }
 
 // Copies only the selected full-image ROI into a dense local mono plane.
-function fillSourcePlane(image: Image, area: Readonly<Rect>, plane: ResolvedBahtinovPlane, output: ImageRawType, mask: Uint8Array): number {
-	if (image.metadata.bayer) return fillCfaGreenPlane(image, area, plane, output, mask)
+function fillSourcePlane(image: Image, area: Readonly<Rect>, plane: ResolvedBahtinovPlane, output: ImageRawType, mask: Uint8Array, workspace: BahtinovWorkspace): number {
+	if (image.metadata.bayer) return fillCfaGreenPlane(image, area, plane, output, mask, workspace)
 	if (plane === 'green1' || plane === 'green2' || plane === 'greenBoth') throw new RangeError('CFA green planes require Bayer metadata')
 	const { channels, stride } = image.metadata
 	const weights = channels === 3 ? grayscaleFromChannel(plane) : undefined
@@ -358,21 +360,31 @@ const CFA_GREEN_OFFSETS = {
 } as const
 
 // Reconstructs one or both physical green sublattices densely over the full-resolution sensor ROI.
-function fillCfaGreenPlane(image: Image, area: Readonly<Rect>, plane: ResolvedBahtinovPlane, output: ImageRawType, mask: Uint8Array): number {
+function fillCfaGreenPlane(image: Image, area: Readonly<Rect>, plane: ResolvedBahtinovPlane, output: ImageRawType, mask: Uint8Array, workspace: BahtinovWorkspace): number {
 	const offsets = CFA_GREEN_OFFSETS[image.metadata.bayer!]
 	const { width, height, stride } = image.metadata
 	const firstLastX = width - 1 < offsets[0][0] ? -1 : width - 1 - ((width - 1 - offsets[0][0]) & 1)
 	const firstLastY = height - 1 < offsets[0][1] ? -1 : height - 1 - ((height - 1 - offsets[0][1]) & 1)
 	const secondLastX = width - 1 < offsets[1][0] ? -1 : width - 1 - ((width - 1 - offsets[1][0]) & 1)
 	const secondLastY = height - 1 < offsets[1][1] ? -1 : height - 1 - ((height - 1 - offsets[1][1]) & 1)
+	const roiWidth = area.right - area.left
+	const roiHeight = area.bottom - area.top
+	fillCfaAxisNeighbors(workspace.cfaX, area.left, roiWidth, offsets[0][0], firstLastX, offsets[1][0], secondLastX)
+	fillCfaAxisNeighbors(workspace.cfaY, area.top, roiHeight, offsets[0][1], firstLastY, offsets[1][1], secondLastY)
 	const useFirst = plane !== 'green2'
 	const useSecond = plane !== 'green1'
 	let target = 0
 	let finiteCount = 0
-	for (let y = area.top; y < area.bottom; y++) {
-		for (let x = area.left; x < area.right; x++, target++) {
-			const first = useFirst ? interpolateCfaLattice(image.raw, stride, x, y, offsets[0][0], offsets[0][1], firstLastX, firstLastY) : Number.NaN
-			const second = useSecond ? interpolateCfaLattice(image.raw, stride, x, y, offsets[1][0], offsets[1][1], secondLastX, secondLastY) : Number.NaN
+	for (let localY = 0; localY < roiHeight; localY++) {
+		const yBounds = localY * 4
+		const firstLowerY = workspace.cfaY[yBounds]
+		const firstUpperY = workspace.cfaY[yBounds + 1]
+		const secondLowerY = workspace.cfaY[yBounds + 2]
+		const secondUpperY = workspace.cfaY[yBounds + 3]
+		for (let localX = 0; localX < roiWidth; localX++, target++) {
+			const xBounds = localX * 4
+			const first = useFirst ? interpolateCfaLattice(image.raw, stride, workspace.cfaX[xBounds], workspace.cfaX[xBounds + 1], firstLowerY, firstUpperY) : Number.NaN
+			const second = useSecond ? interpolateCfaLattice(image.raw, stride, workspace.cfaX[xBounds + 2], workspace.cfaX[xBounds + 3], secondLowerY, secondUpperY) : Number.NaN
 			const value = useFirst && useSecond ? (Number.isFinite(first) && Number.isFinite(second) ? Math.sqrt(Math.max(0, first) * Math.max(0, second)) : Number.NaN) : useFirst ? first : second
 			if (Number.isFinite(value)) {
 				output[target] = value
@@ -386,28 +398,39 @@ function fillCfaGreenPlane(image: Image, area: Readonly<Rect>, plane: ResolvedBa
 	return finiteCount
 }
 
-// Interpolates one period-two CFA lattice using only parity-selected nearest samples.
-function interpolateCfaLattice(raw: ImageRawType, stride: number, x: number, y: number, offsetX: number, offsetY: number, lastX: number, lastY: number): number {
-	if (lastX < offsetX || lastY < offsetY) return Number.NaN
-	let lowerX: number
-	let upperX: number
-	if ((x & 1) === offsetX) lowerX = upperX = x
-	else if (x < offsetX) lowerX = upperX = offsetX
-	else if (x > lastX) lowerX = upperX = lastX
-	else {
-		lowerX = x - 1
-		upperX = x + 1
+// Pre-resolves lower and upper sensor coordinates for both period-two CFA lattices on one ROI axis.
+function fillCfaAxisNeighbors(output: Int32Array, origin: number, count: number, firstOffset: number, firstLast: number, secondOffset: number, secondLast: number): void {
+	for (let index = 0; index < count; index++) {
+		const coordinate = origin + index
+		const target = index * 4
+		fillCfaAxisBounds(output, target, coordinate, firstOffset, firstLast)
+		fillCfaAxisBounds(output, target + 2, coordinate, secondOffset, secondLast)
 	}
-	let lowerY: number
-	let upperY: number
-	if ((y & 1) === offsetY) lowerY = upperY = y
-	else if (y < offsetY) lowerY = upperY = offsetY
-	else if (y > lastY) lowerY = upperY = lastY
-	else {
-		lowerY = y - 1
-		upperY = y + 1
-	}
+}
 
+// Stores the clamped nearest lattice coordinates for one sensor-axis position.
+function fillCfaAxisBounds(output: Int32Array, target: number, coordinate: number, offset: number, last: number): void {
+	if (last < offset) {
+		output[target] = -1
+		output[target + 1] = -1
+	} else if ((coordinate & 1) === offset) {
+		output[target] = coordinate
+		output[target + 1] = coordinate
+	} else if (coordinate < offset) {
+		output[target] = offset
+		output[target + 1] = offset
+	} else if (coordinate > last) {
+		output[target] = last
+		output[target + 1] = last
+	} else {
+		output[target] = coordinate - 1
+		output[target + 1] = coordinate + 1
+	}
+}
+
+// Interpolates one CFA lattice from pre-resolved x and y neighbor bounds.
+function interpolateCfaLattice(raw: ImageRawType, stride: number, lowerX: number, upperX: number, lowerY: number, upperY: number): number {
+	if (lowerX < 0 || lowerY < 0) return Number.NaN
 	let sum = 0
 	let count = 0
 	const topLeft = raw[lowerY * stride + lowerX]
