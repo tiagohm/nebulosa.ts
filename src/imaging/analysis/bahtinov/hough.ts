@@ -105,7 +105,7 @@ export function validateBahtinovHoughOptions(workspace: BahtinovWorkspace, optio
 
 // Resolves and validates the Hough controls shared by boundary validation and detection.
 function resolveHoughOptions(workspace: BahtinovWorkspace, options: BahtinovHoughOptions): { maximumCandidates: number; minimumAxialSeparation: Angle; refinementRange: Angle; refinementStep: Angle } {
-	const maximumCandidates = options.maximumCandidates ?? DEFAULT_MAXIMUM_CANDIDATES
+	const maximumCandidates = options.maximumCandidates ?? Math.min(DEFAULT_MAXIMUM_CANDIDATES, workspace.angleCount)
 	const minimumAxialSeparation = options.minimumAxialSeparation ?? DEFAULT_MINIMUM_AXIAL_SEPARATION
 	const refinementRange = options.refinementRange ?? DEFAULT_REFINEMENT_RANGE
 	const refinementStep = options.refinementStep ?? DEFAULT_REFINEMENT_STEP

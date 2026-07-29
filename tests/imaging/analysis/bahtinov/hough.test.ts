@@ -71,3 +71,24 @@ test('handles axial NMS across zero and PI', () => {
 	const boundaryCandidates = candidates.filter((candidate) => bahtinovAxialAngleDistance(candidate.normalAngle, 0) < PI / 36)
 	expect(boundaryCandidates.length).toBe(1)
 })
+
+test('caps default candidates to coarse workspaces and rejects fewer than three bins', () => {
+	const width = 80
+	const height = 80
+	expect(() => createBahtinovWorkspace(width, height, { angleStep: PIOVERTWO })).toThrow(RangeError)
+
+	const raw = new Float64Array(width * height)
+	raw.fill(0.01)
+	plotBahtinovSpikes(raw, width, height, 1, 39.5, 39.5, 100, 0, undefined, {
+		normalAngles: [0, PI / 3, (PI * 2) / 3],
+		central: 1,
+		halfLength: 28,
+		taperLength: 4,
+	})
+	const workspace = createBahtinovWorkspace(width, height, { precision: 64, angleStep: PI / 6 })
+	const preprocessed = preprocessBahtinov({ image: image(raw, width, height), area: { left: 0, top: 0, right: width, bottom: height }, center: { x: 39.5, y: 39.5 } }, workspace, { coreRadius: 2, ridgeSigma: 2 })
+	expect(preprocessed.success).toBeTrue()
+	if (!preprocessed.success) return
+	const candidates = detectBahtinovHoughCandidates(preprocessed.ridgePoints, width, height, workspace, { center: preprocessed.center })
+	expect(candidates.length).toBeLessThanOrEqual(workspace.angleCount)
+})

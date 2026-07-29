@@ -120,6 +120,7 @@ export function createBahtinovWorkspace(width: number, height: number, options: 
 	if (!Number.isFinite(distanceStep) || distanceStep <= 0) throw new RangeError('distanceStep must be finite and positive')
 
 	const angleCount = Math.ceil(PI / angleStep)
+	if (angleCount < 3) throw new RangeError('angleStep must produce at least three Hough angle bins')
 	const rhoMax = Math.hypot(width - 1, height - 1)
 	const distanceBinCount = Math.ceil((2 * rhoMax) / distanceStep) + 1
 	if (!Number.isSafeInteger(distanceBinCount)) throw new RangeError('Bahtinov accumulator capacity is too large')
