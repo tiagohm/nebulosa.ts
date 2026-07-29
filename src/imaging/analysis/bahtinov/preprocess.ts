@@ -365,13 +365,20 @@ const CFA_GREEN_OFFSETS = {
 // Reconstructs one or both physical green sublattices densely over the full-resolution sensor ROI.
 function fillCfaGreenPlane(image: Image, area: Readonly<Rect>, plane: ResolvedBahtinovPlane, output: ImageRawType, mask: Uint8Array): number {
 	const offsets = CFA_GREEN_OFFSETS[image.metadata.bayer!]
+	const { width, height, stride } = image.metadata
+	const firstLastX = width - 1 < offsets[0][0] ? -1 : width - 1 - ((width - 1 - offsets[0][0]) & 1)
+	const firstLastY = height - 1 < offsets[0][1] ? -1 : height - 1 - ((height - 1 - offsets[0][1]) & 1)
+	const secondLastX = width - 1 < offsets[1][0] ? -1 : width - 1 - ((width - 1 - offsets[1][0]) & 1)
+	const secondLastY = height - 1 < offsets[1][1] ? -1 : height - 1 - ((height - 1 - offsets[1][1]) & 1)
+	const useFirst = plane !== 'green2'
+	const useSecond = plane !== 'green1'
 	let target = 0
 	let finiteCount = 0
 	for (let y = area.top; y < area.bottom; y++) {
 		for (let x = area.left; x < area.right; x++, target++) {
-			const first = plane === 'green2' ? Number.NaN : interpolateCfaLattice(image, x, y, offsets[0][0], offsets[0][1])
-			const second = plane === 'green1' ? Number.NaN : interpolateCfaLattice(image, x, y, offsets[1][0], offsets[1][1])
-			const value = plane === 'green1' ? first : plane === 'green2' ? second : Number.isFinite(first) && Number.isFinite(second) ? Math.sqrt(Math.max(0, first) * Math.max(0, second)) : Number.NaN
+			const first = useFirst ? interpolateCfaLattice(image.raw, stride, x, y, offsets[0][0], offsets[0][1], firstLastX, firstLastY) : Number.NaN
+			const second = useSecond ? interpolateCfaLattice(image.raw, stride, x, y, offsets[1][0], offsets[1][1], secondLastX, secondLastY) : Number.NaN
+			const value = useFirst && useSecond ? (Number.isFinite(first) && Number.isFinite(second) ? Math.sqrt(Math.max(0, first) * Math.max(0, second)) : Number.NaN) : useFirst ? first : second
 			if (Number.isFinite(value)) {
 				output[target] = value
 				finiteCount++
@@ -384,47 +391,57 @@ function fillCfaGreenPlane(image: Image, area: Readonly<Rect>, plane: ResolvedBa
 	return finiteCount
 }
 
-// Bilinearly interpolates one physical CFA sublattice at a full-resolution sensor coordinate.
-function interpolateCfaLattice(image: Image, x: number, y: number, offsetX: number, offsetY: number): number {
-	const { width, height, stride } = image.metadata
-	const firstX = offsetX
-	const firstY = offsetY
-	const lastX = firstX + Math.floor((width - 1 - firstX) / 2) * 2
-	const lastY = firstY + Math.floor((height - 1 - firstY) / 2) * 2
-	if (lastX < firstX || lastY < firstY) return Number.NaN
-	const lowerX = Math.max(firstX, Math.min(lastX, Math.floor((x - firstX) / 2) * 2 + firstX))
-	const lowerY = Math.max(firstY, Math.min(lastY, Math.floor((y - firstY) / 2) * 2 + firstY))
-	const upperX = Math.min(lastX, lowerX + 2)
-	const upperY = Math.min(lastY, lowerY + 2)
-	const fractionX = upperX === lowerX ? 0 : (x - lowerX) / (upperX - lowerX)
-	const fractionY = upperY === lowerY ? 0 : (y - lowerY) / (upperY - lowerY)
-	const topLeft = image.raw[lowerY * stride + lowerX]
-	const topRight = image.raw[lowerY * stride + upperX]
-	const bottomLeft = image.raw[upperY * stride + lowerX]
-	const bottomRight = image.raw[upperY * stride + upperX]
-	let weighted = 0
-	let weightSum = 0
-	const topLeftWeight = (1 - fractionX) * (1 - fractionY)
-	const topRightWeight = fractionX * (1 - fractionY)
-	const bottomLeftWeight = (1 - fractionX) * fractionY
-	const bottomRightWeight = fractionX * fractionY
-	if (Number.isFinite(topLeft) && topLeftWeight > 0) {
-		weighted += topLeft * topLeftWeight
-		weightSum += topLeftWeight
+// Interpolates one period-two CFA lattice using only parity-selected nearest samples.
+function interpolateCfaLattice(raw: ImageRawType, stride: number, x: number, y: number, offsetX: number, offsetY: number, lastX: number, lastY: number): number {
+	if (lastX < offsetX || lastY < offsetY) return Number.NaN
+	let lowerX: number
+	let upperX: number
+	if ((x & 1) === offsetX) lowerX = upperX = x
+	else if (x < offsetX) lowerX = upperX = offsetX
+	else if (x > lastX) lowerX = upperX = lastX
+	else {
+		lowerX = x - 1
+		upperX = x + 1
 	}
-	if (Number.isFinite(topRight) && topRightWeight > 0) {
-		weighted += topRight * topRightWeight
-		weightSum += topRightWeight
+	let lowerY: number
+	let upperY: number
+	if ((y & 1) === offsetY) lowerY = upperY = y
+	else if (y < offsetY) lowerY = upperY = offsetY
+	else if (y > lastY) lowerY = upperY = lastY
+	else {
+		lowerY = y - 1
+		upperY = y + 1
 	}
-	if (Number.isFinite(bottomLeft) && bottomLeftWeight > 0) {
-		weighted += bottomLeft * bottomLeftWeight
-		weightSum += bottomLeftWeight
+
+	let sum = 0
+	let count = 0
+	const topLeft = raw[lowerY * stride + lowerX]
+	if (Number.isFinite(topLeft)) {
+		sum += topLeft
+		count++
 	}
-	if (Number.isFinite(bottomRight) && bottomRightWeight > 0) {
-		weighted += bottomRight * bottomRightWeight
-		weightSum += bottomRightWeight
+	if (upperX !== lowerX) {
+		const topRight = raw[lowerY * stride + upperX]
+		if (Number.isFinite(topRight)) {
+			sum += topRight
+			count++
+		}
 	}
-	return weightSum > 0 ? weighted / weightSum : Number.NaN
+	if (upperY !== lowerY) {
+		const bottomLeft = raw[upperY * stride + lowerX]
+		if (Number.isFinite(bottomLeft)) {
+			sum += bottomLeft
+			count++
+		}
+		if (upperX !== lowerX) {
+			const bottomRight = raw[upperY * stride + upperX]
+			if (Number.isFinite(bottomRight)) {
+				sum += bottomRight
+				count++
+			}
+		}
+	}
+	return count > 0 ? sum / count : Number.NaN
 }
 
 // Validates preprocessing thresholds whose relationships affect finite filtering.

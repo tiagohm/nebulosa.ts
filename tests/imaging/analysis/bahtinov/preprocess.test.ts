@@ -125,6 +125,30 @@ test('reconstructs all eight CFA patterns from both physical green lattices', ()
 	}
 })
 
+test('reconstructs CFA parity midpoints at sensor edges and odd ROI origins', () => {
+	const width = 20
+	const height = 20
+	const raw = new Float32Array(width * height)
+	raw.fill(Number.NaN)
+	raw[1] = 1
+	raw[3] = 3
+	raw[2 * width + 1] = 5
+	const source = image(raw, width, height, 1, 'RGGB')
+	const workspace = createBahtinovWorkspace(width, height)
+	const full = preprocessBahtinov({ image: source, area: { left: 0, top: 0, right: width, bottom: height }, center: { x: 8, y: 8 } }, { plane: 'green1', workspace, coreRadius: 0 })
+	expect(full.success).toBeFalse()
+	expect(workspace.source[0]).toBe(1)
+	expect(workspace.source[2]).toBe(2)
+	expect(workspace.source[width + 1]).toBe(3)
+	expect(workspace.source[width + 2]).toBe(3)
+
+	const area = { left: 1, top: 1, right: 17, bottom: 17 }
+	const shifted = preprocessBahtinov({ image: source, area, center: { x: 8, y: 8 } }, { plane: 'green1', workspace, coreRadius: 0 })
+	expect(shifted.success).toBeFalse()
+	expect(workspace.source[0]).toBe(3)
+	expect(workspace.source[1]).toBe(3)
+})
+
 test('analyzes spikes through CFA green reconstruction and masks saturated support', () => {
 	const width = 64
 	const height = 64
