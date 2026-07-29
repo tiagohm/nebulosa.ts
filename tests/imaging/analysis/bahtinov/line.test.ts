@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test'
 import { PI } from '../../../../src/core/constants'
+import { STANDARD_DEVIATION_SCALE } from '../../../../src/core/util'
 import { bahtinovAxialAngleDistance } from '../../../../src/imaging/analysis/bahtinov/geometry'
 import { detectBahtinovHoughCandidates } from '../../../../src/imaging/analysis/bahtinov/hough'
 import { fitBahtinovLines } from '../../../../src/imaging/analysis/bahtinov/line'
@@ -58,6 +59,69 @@ test('robustly fits global spike lines with finite support metrics', () => {
 		expect(best.fwhm).toBeGreaterThan(0)
 		expect(best.covariance?.every(Number.isFinite)).toBeTrue()
 	}
+})
+
+test('recomputes the robust scale for the final one-iteration fit', () => {
+	const width = 128
+	const height = 128
+	const raw = new Float64Array(width * height)
+	raw.fill(0.015)
+	plotBahtinovSpikes(raw, width, height, 1, 63.5, 63.5, 160, 0, undefined, {
+		normalAngles: [PI / 12, 0, (PI * 11) / 12],
+		central: 1,
+		halfLength: 44,
+		taperLength: 7,
+		fwhm: 2,
+		strengths: [0, 1, 0],
+	})
+	const area = { left: 0, top: 0, right: width, bottom: height }
+	const workspace = createBahtinovWorkspace(width, height, { precision: 64, maximumRidgePoints: 2048 })
+	const preprocessed = preprocessBahtinov({ image: image(raw, width, height), area, center: { x: 63.5, y: 63.5 } }, workspace, { transform: 'linear', coreRadius: 3, ridgeSigma: 2, maximumRidgePoints: 2048 })
+	expect(preprocessed.success).toBeTrue()
+	if (!preprocessed.success) return
+	const candidates = detectBahtinovHoughCandidates(preprocessed.ridgePoints, width, height, preprocessed.workspace, { center: preprocessed.center })
+	let seed = candidates[0]
+	for (const candidate of candidates) if (bahtinovAxialAngleDistance(candidate.normalAngle, 0) < bahtinovAxialAngleDistance(seed.normalAngle, 0)) seed = candidate
+	const offsetSeed = { ...seed, distance: seed.distance + 4 }
+	const baseCount = preprocessed.ridgePoints.count
+	for (let index = 0; index < 8; index++) {
+		preprocessed.ridgePoints.x[baseCount + index] = seed.distance + 6
+		preprocessed.ridgePoints.y[baseCount + index] = 16 + index * 12
+		preprocessed.ridgePoints.weight[baseCount + index] = 10
+	}
+	const ridgePoints = { ...preprocessed.ridgePoints, count: baseCount + 8 }
+	const fitted = fitBahtinovLines([{ ...offsetSeed }], ridgePoints, area, preprocessed.responseDeviation, preprocessed.workspace, {
+		supportRadius: 6,
+		robustIterations: 1,
+		maximumResidual: 10,
+		profileBlurSigma: preprocessed.profileBlurSigma,
+		center: preprocessed.center,
+	})
+	expect(fitted).toHaveLength(1)
+	const line = fitted[0].line
+	const candidateCos = Math.cos(offsetSeed.normalAngle)
+	const candidateSin = Math.sin(offsetSeed.normalAngle)
+	const normalCos = Math.cos(line.normalAngle)
+	const normalSin = Math.sin(line.normalAngle)
+	const residuals: number[] = []
+	for (let index = 0; index < ridgePoints.count; index++) {
+		if (Math.abs(ridgePoints.x[index] * candidateCos + ridgePoints.y[index] * candidateSin - offsetSeed.distance) <= 6) residuals.push(Math.abs(ridgePoints.x[index] * normalCos + ridgePoints.y[index] * normalSin - line.distance))
+	}
+	residuals.sort((first, second) => first - second)
+	const middle = residuals.length >> 1
+	const median = residuals.length % 2 === 0 ? (residuals[middle - 1] + residuals[middle]) * 0.5 : residuals[middle]
+	const huberLimit = 1.345 * Math.max(1e-12, median * STANDARD_DEVIATION_SCALE)
+	let weightedSquaredResidual = 0
+	let effectiveWeight = 0
+	for (let index = 0; index < ridgePoints.count; index++) {
+		if (Math.abs(ridgePoints.x[index] * candidateCos + ridgePoints.y[index] * candidateSin - offsetSeed.distance) > 6) continue
+		const residual = ridgePoints.x[index] * normalCos + ridgePoints.y[index] * normalSin - line.distance
+		const absoluteResidual = Math.abs(residual)
+		const weight = ridgePoints.weight[index] * (absoluteResidual <= huberLimit ? 1 : huberLimit / absoluteResidual)
+		weightedSquaredResidual += weight * residual * residual
+		effectiveWeight += weight
+	}
+	expect(line.residual).toBeCloseTo(Math.sqrt(weightedSquaredResidual / effectiveWeight), 12)
 })
 
 test('recovers broad synthetic FWHM outside the fixed fit-support band', () => {

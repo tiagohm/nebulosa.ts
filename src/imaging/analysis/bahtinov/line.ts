@@ -93,6 +93,9 @@ export function fitBahtinovLine(candidate: BahtinovHoughCandidate, ridgePoints: 
 		if (angleChange <= ANGLE_CONVERGENCE_TOLERANCE && distanceChange <= DISTANCE_CONVERGENCE_TOLERANCE) break
 	}
 
+	supportCount = collectResiduals(ridgePoints, candidate, normalAngle, distance, supportRadius, workspace.statistics)
+	if (supportCount < minimumSupport) return undefined
+	robustScale = medianBySelectionOf(workspace.statistics, supportCount) * STANDARD_DEVIATION_SCALE
 	const metrics = lineMetrics(ridgePoints, candidate, normalAngle, distance, supportRadius, robustScale, localWidth, localHeight, centerX, centerY)
 	if (!metrics || metrics.count < minimumSupport || metrics.residual > maximumResidual) return undefined
 	const globalDistance = bahtinovGlobalLineDistance(distance, normalAngle, area)
