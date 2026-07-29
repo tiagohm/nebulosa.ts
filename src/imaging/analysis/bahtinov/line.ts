@@ -168,7 +168,9 @@ function imageFitCovariance(candidate: BahtinovHoughCandidate, normalAngle: numb
 	if (!(longitudinalVariance > NUMERICAL_FLOOR) || !(effectiveCount > 2) || !Number.isFinite(residualVariance)) return undefined
 	const varianceDistance = residualVariance / effectiveCount
 	const varianceAngle = varianceDistance / longitudinalVariance
-	return Number.isFinite(varianceAngle) && Number.isFinite(varianceDistance) ? [varianceAngle, 0, varianceDistance] : undefined
+	const covarianceAngleDistance = tangentMean * varianceAngle
+	const originVarianceDistance = varianceDistance + tangentMean * tangentMean * varianceAngle
+	return Number.isFinite(varianceAngle) && Number.isFinite(covarianceAngleDistance) && Number.isFinite(originVarianceDistance) ? [varianceAngle, covarianceAngleDistance, originVarianceDistance] : undefined
 }
 
 // Refines all Hough candidates and retains only finite accepted lines.

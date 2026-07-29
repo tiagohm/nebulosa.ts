@@ -130,6 +130,17 @@ test('preserves uncertainty and classification when the ROI is translated', () =
 	expect(second.focusState).toBe(first.focusState)
 })
 
+test('preserves uncertainty when a contained pattern moves within one ROI', () => {
+	const first = analyzeBahtinov({ image: offCenterSynthetic(3, 50, 55), area: { left: 0, top: 0, right: 128, bottom: 128 }, center: { x: 50, y: 55 } }, ANALYSIS_OPTIONS)
+	const second = analyzeBahtinov({ image: offCenterSynthetic(3, 70, 73), area: { left: 0, top: 0, right: 128, bottom: 128 }, center: { x: 70, y: 73 } }, ANALYSIS_OPTIONS)
+	expect(first.success).toBeTrue()
+	expect(second.success).toBeTrue()
+	if (!first.success || !second.success) return
+	expect(Math.abs(second.error - first.error)).toBeLessThan(0.03)
+	expect(Math.abs(second.uncertainty! - first.uncertainty!) / first.uncertainty!).toBeLessThan(5e-4)
+	expect(second.focusState).toBe(first.focusState)
+})
+
 test('recovers a cropped pattern away from the ROI midpoint', () => {
 	const result = analyzeBahtinov({ image: offCenterSynthetic(2, 20, 63.5), area: { left: 0, top: 0, right: 128, bottom: 128 }, center: { x: 20, y: 63.5 } }, ANALYSIS_OPTIONS)
 	expect(result.success).toBeTrue()
