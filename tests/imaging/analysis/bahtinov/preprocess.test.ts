@@ -276,6 +276,27 @@ test('rejects a workspace whose recorded capacity is insufficient', () => {
 	expect(() => preprocessBahtinov({ image: source, area: { left: 0, top: 0, right: width, bottom: height }, center: { x: 32, y: 32 } }, { angleStep: PI / 90, distanceStep: 1 }, workspace)).not.toThrow()
 })
 
+test('bounds a wide ridge grid by the point-buffer capacity', () => {
+	const width = 4096
+	const height = 16
+	const raw = new Float64Array(width * height)
+	raw.fill(0.01)
+	plotBahtinovSpikes(raw, width, height, 1, 3500, 7.5, 200, 0, undefined, {
+		normalAngles: [PI / 12, PI / 2, (PI * 11) / 12],
+		central: 1,
+		strengths: [0, 1, 0],
+		fwhm: 1,
+		halfLength: 1500,
+		taperLength: 10,
+	})
+	const result = preprocessBahtinov({ image: image(raw, width, height), area: { left: 0, top: 0, right: width, bottom: height }, center: { x: 3500, y: 7.5 } }, { transform: 'linear', coreRadius: 1, smallBlurSigma: 0.5, largeBlurSigma: 2, ridgeSigma: 1, maximumRidgePoints: 32 })
+	expect(result.success).toBeTrue()
+	if (result.success) {
+		expect(result.ridgePoints.count).toBeLessThanOrEqual(32)
+		expect(Math.max(...result.ridgePoints.x.subarray(0, result.ridgePoints.count))).toBeGreaterThan(3000)
+	}
+})
+
 test('rejects Gaussian kernels whose support exceeds the active ROI', () => {
 	const width = 64
 	const height = 64

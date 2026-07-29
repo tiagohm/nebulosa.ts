@@ -750,7 +750,7 @@ function estimateMedianAndDeviation(response: ImageRawType, mask: Uint8Array, sc
 
 // Spatially keeps the strongest positive ridge response in each bounded grid cell.
 function selectRidgePoints(response: ImageRawType, mask: Uint8Array, width: number, height: number, threshold: number, maximumPoints: number, workspace: BahtinovWorkspace): BahtinovRidgePoints {
-	const columns = Math.max(1, Math.min(width, Math.floor(Math.sqrt((maximumPoints * width) / height))))
+	const columns = Math.max(1, Math.min(width, maximumPoints, Math.floor(Math.sqrt((maximumPoints * width) / height))))
 	const rows = Math.max(1, Math.min(height, Math.floor(maximumPoints / columns)))
 	const cellCount = columns * rows
 	workspace.ridgeWeight.fill(0, 0, cellCount)
