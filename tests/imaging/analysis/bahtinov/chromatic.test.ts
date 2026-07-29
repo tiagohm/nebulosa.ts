@@ -4,6 +4,7 @@ import { compareBahtinovChromatic as compareBahtinovChromaticWithWorkspace } fro
 import { createBahtinovWorkspace, resolveBahtinovArea } from '../../../../src/imaging/analysis/bahtinov/preprocess'
 import type { BahtinovAnalysisInput, BahtinovChromaticOptions } from '../../../../src/imaging/analysis/bahtinov/types'
 import type { Image } from '../../../../src/imaging/model/types'
+import { debayer } from '../../../../src/imaging/processing/debayer'
 import { plotBahtinovSpikes } from '../../../../src/imaging/stars/bahtinov'
 
 function rgbBahtinov(errors: readonly [number, number, number], omittedChannel?: number, centralNormals?: readonly [number, number, number]): Image {
@@ -124,6 +125,40 @@ test('rejects independently detected channel patterns with different rotations',
 		expect(result.channels.blue.success).toBeTrue()
 		expect('blueMinusGreen' in result).toBeFalse()
 	}
+})
+
+test('compares an RGB image produced by debayer', () => {
+	const width = 128
+	const height = 128
+	const raw = new Float64Array(width * height)
+	raw.fill(0.01)
+	plotBahtinovSpikes(raw, width, height, 1, 63.5, 63.5, 180, 0, undefined, {
+		normalAngles: [(PI * 5) / 12, PIOVERTWO, (PI * 7) / 12],
+		central: 1,
+		fwhm: 2,
+		halfLength: 44,
+		taperLength: 7,
+	})
+	const source = debayer({
+		raw,
+		header: {},
+		metadata: {
+			width,
+			height,
+			channels: 1,
+			stride: width,
+			pixelCount: width * height,
+			strideInBytes: width * 8,
+			pixelSizeInBytes: 8,
+			bitpix: -64,
+			bayer: 'RGGB',
+		},
+	})
+	expect(source).toBeDefined()
+	if (!source) return
+	expect(source.metadata.bayer).toBe('RGGB')
+	const result = compareBahtinovChromatic({ image: source, area: { left: 0, top: 0, right: width, bottom: height }, center: { x: 63.5, y: 63.5 } }, OPTIONS)
+	expect(result.success).toBeTrue()
 })
 
 test('rejects mono input for chromatic comparison', () => {

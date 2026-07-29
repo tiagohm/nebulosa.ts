@@ -371,8 +371,7 @@ function validateCenterInArea(x: number, y: number, area: Readonly<Rect>): void 
 
 // Resolves a supported mono, RGB, or green-lattice CFA plane.
 function resolvePlane(image: Image, plane: BahtinovPlane): ResolvedBahtinovPlane | undefined {
-	if (image.metadata.bayer) {
-		if (image.metadata.channels !== 1) return undefined
+	if (image.metadata.channels === 1 && image.metadata.bayer) {
 		if (plane === 'auto' || plane === 'GRAY') return 'greenBoth'
 		return plane === 'green1' || plane === 'green2' ? plane : undefined
 	}
@@ -383,7 +382,7 @@ function resolvePlane(image: Image, plane: BahtinovPlane): ResolvedBahtinovPlane
 
 // Copies only the selected full-image ROI into a dense local mono plane.
 function fillSourcePlane(image: Image, area: Readonly<Rect>, plane: ResolvedBahtinovPlane, saturationLevel: number, output: ImageRawType, mask: Uint8Array, workspace: BahtinovWorkspace): number {
-	if (image.metadata.bayer) return fillCfaGreenPlane(image, area, plane, saturationLevel, output, mask, workspace)
+	if (image.metadata.channels === 1 && image.metadata.bayer) return fillCfaGreenPlane(image, area, plane, saturationLevel, output, mask, workspace)
 	if (plane === 'green1' || plane === 'green2' || plane === 'greenBoth') throw new RangeError('CFA green planes require Bayer metadata')
 	const { channels, stride } = image.metadata
 	const selectedChannel = channels === 3 && (plane === 'RED' || plane === 'GREEN' || plane === 'BLUE') ? channelIndex(plane) : -1

@@ -6,6 +6,7 @@ import { createBahtinovOverlayGeometry } from '../../../../src/imaging/analysis/
 import { createBahtinovWorkspace, resolveBahtinovArea } from '../../../../src/imaging/analysis/bahtinov/preprocess'
 import { DEFAULT_BAHTINOV_ANALYSIS_OPTIONS, type BahtinovAnalysisInput, type BahtinovAnalysisOptions } from '../../../../src/imaging/analysis/bahtinov/types'
 import type { CfaPattern, Image, ImageRawType } from '../../../../src/imaging/model/types'
+import { debayer } from '../../../../src/imaging/processing/debayer'
 import { plotBahtinovSpikes } from '../../../../src/imaging/stars/bahtinov'
 
 function image(raw: ImageRawType, width: number, height: number, bayer?: CfaPattern): Image {
@@ -207,6 +208,16 @@ test('recovers focus error from a raw CFA green mosaic', () => {
 	const result = analyzeBahtinov({ image: cfa, area: { left: 0, top: 0, right: 128, bottom: 128 }, center: { x: 63.5, y: 63.5 } }, ANALYSIS_OPTIONS)
 	expect(result.success).toBeTrue()
 	if (result.success) expect(Math.abs(result.error + 3)).toBeLessThan(0.5)
+})
+
+test('analyzes an RGB image produced by debayer', () => {
+	const mono = synthetic(0)
+	const source = debayer(image(mono.raw, 128, 128, 'RGGB'))
+	expect(source).toBeDefined()
+	if (!source) return
+	expect(source.metadata.bayer).toBe('RGGB')
+	const result = analyzeBahtinov({ image: source, area: { left: 0, top: 0, right: 128, bottom: 128 }, center: { x: 63.5, y: 63.5 } }, ANALYSIS_OPTIONS)
+	expect(result.success).toBeTrue()
 })
 
 test('returns explicit content failures without fabricated geometry', () => {

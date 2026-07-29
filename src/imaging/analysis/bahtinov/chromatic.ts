@@ -5,8 +5,8 @@ import type { BahtinovAnalysisInput, BahtinovAnalysisOptions, BahtinovAnalysisRe
 
 // Workspace-backed chromatic comparison for an already registered RGB image. Each channel runs
 // through the same geometric analyzer and remains independently inspectable; offsets use signed focus
-// pixels and full-image reference coordinates. CFA input is excluded because it requires a calibrated
-// color reconstruction rather than the green-only detection path.
+// pixels and full-image reference coordinates. Single-channel CFA input is excluded because it
+// requires a calibrated color reconstruction rather than the green-only detection path.
 
 // Largest accepted axial role difference between independently fitted RGB patterns, in radians.
 const MAXIMUM_CHANNEL_PATTERN_DELTA = PI / 36
@@ -15,8 +15,7 @@ const MAXIMUM_CHANNEL_PATTERN_DELTA = PI / 36
 // The green channel is the signed reference. Shared options, ROI, expected mask layout, and reusable
 // workspace are applied sequentially without mutating the image or retaining analyzer state.
 export function compareBahtinovChromatic(input: BahtinovAnalysisInput, workspace: BahtinovWorkspace, options: BahtinovChromaticOptions = {}): BahtinovChromaticResult {
-	const { channels, bayer } = input.image.metadata
-	if (channels !== 3 || bayer) throw new RangeError('Bahtinov chromatic comparison requires a non-CFA RGB image')
+	if (input.image.metadata.channels !== 3) throw new RangeError('Bahtinov chromatic comparison requires an RGB image')
 	const red = analyzeChromaticPlane(input, workspace, options, 'RED')
 	const green = analyzeChromaticPlane(input, workspace, options, 'GREEN')
 	const blue = analyzeChromaticPlane(input, workspace, options, 'BLUE')
