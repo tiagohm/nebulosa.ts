@@ -182,7 +182,7 @@ function imageFitCovariance(candidate: BahtinovHoughCandidate, normalAngle: numb
 	return Number.isFinite(varianceAngle) && Number.isFinite(covarianceAngleDistance) && Number.isFinite(originVarianceDistance) ? [varianceAngle, covarianceAngleDistance, originVarianceDistance] : undefined
 }
 
-// Measures transverse half-maximum crossings from the full narrow-blur profile and removes known blur.
+// Measures transverse half-maximum crossings from the linear narrow-blur profile and removes known blur.
 function transverseProfileFwhm(normalAngle: number, distance: number, supportRadius: number, profileBlurSigma: number, width: number, height: number, workspace: BahtinovWorkspace): number | undefined {
 	const normalX = Math.cos(normalAngle)
 	const normalY = Math.sin(normalAngle)
@@ -204,7 +204,7 @@ function transverseProfileFwhm(normalAngle: number, distance: number, supportRad
 		for (let x = 0; x < width; x++) {
 			const index = row + x
 			if (workspace.mask[index] !== 0) continue
-			const value = workspace.blurredSmall[index]
+			const value = workspace.profile[index]
 			if (!Number.isFinite(value) || value < 0) continue
 			const bin = Math.round((x * normalX + y * normalY - distance - minimumBin) / PROFILE_BIN_STEP)
 			if (bin < 0 || bin >= binCount) continue

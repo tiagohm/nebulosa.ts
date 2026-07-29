@@ -110,6 +110,7 @@ export function createBahtinovWorkspace(width: number, height: number, options: 
 	if (!Number.isSafeInteger(distanceBinCount)) throw new RangeError('Bahtinov accumulator capacity is too large')
 
 	const source = makeImageRawTypedArray(precision, pixelCount)
+	const blurredLarge = makeImageRawTypedArray(source, pixelCount)
 	return {
 		width,
 		height,
@@ -122,7 +123,8 @@ export function createBahtinovWorkspace(width: number, height: number, options: 
 		source,
 		intermediate: makeImageRawTypedArray(source, pixelCount),
 		blurredSmall: makeImageRawTypedArray(source, pixelCount),
-		blurredLarge: makeImageRawTypedArray(source, pixelCount),
+		blurredLarge,
+		profile: blurredLarge,
 		response: source,
 		statistics: makeImageRawTypedArray(source, pixelCount),
 		mask: new Uint8Array(pixelCount),
@@ -252,6 +254,7 @@ export function preprocessBahtinov(input: BahtinovAnalysisInput, workspace: Baht
 	const maximumRidgePoints = Math.min(options.maximumRidgePoints ?? workspace.maximumRidgePoints, workspace.maximumRidgePoints)
 	const ridgePoints = selectRidgePoints(response, mask, width, height, threshold, maximumRidgePoints, workspace)
 	if (ridgePoints.count < 3) return { success: false, reason: 'insufficientSupport', area }
+	prepareLinearProfile(input.image, area, plane, saturationLevel, background.level, mask, metadata, kernels.small, workspace)
 
 	let retainedCount = 0
 	for (let index = 0; index < pixelCount; index++) if (mask[index] === 0) retainedCount++
@@ -271,6 +274,22 @@ export function preprocessBahtinov(input: BahtinovAnalysisInput, workspace: Baht
 		ridgePoints,
 		workspace,
 	}
+}
+
+// Rebuilds the background-subtracted linear narrow-blur profile after DoG ridge extraction.
+// The wide-blur buffer is reused because its transformed response is no longer needed.
+function prepareLinearProfile(image: Image, area: Readonly<Rect>, plane: ResolvedBahtinovPlane, saturationLevel: number, background: number, mask: Uint8Array, metadata: ImageMetadata, kernel: SeparableSmoothingKernel, workspace: BahtinovWorkspace): void {
+	const pixelCount = metadata.pixelCount
+	const source = workspace.blurredSmall.subarray(0, pixelCount)
+	const profile = workspace.profile.subarray(0, pixelCount)
+	const intermediate = workspace.intermediate.subarray(0, pixelCount)
+	const normalization = workspace.statistics.subarray(0, pixelCount)
+	fillSourcePlane(image, area, plane, saturationLevel, source, mask, workspace)
+	transformSource(source, mask, background, 'linear')
+	separableSmoothing(source, profile, intermediate, metadata, kernel)
+	fillValidity(source, mask)
+	separableSmoothing(source, normalization, intermediate, metadata, kernel)
+	normalizeBlurredSupport(profile, normalization)
 }
 
 // Measures the clean longitudinal fraction of one selected spike's saturation-support band.

@@ -71,7 +71,7 @@ test('recovers broad synthetic FWHM outside the fixed fit-support band', () => {
 		plotBahtinovSpikes(raw, width, height, 1, 63.5, 63.5, 160, 0, undefined, { normalAngles: expected, halfLength: 44, taperLength: 7, fwhm, strengths: [0, 1, 0] })
 		const area = { left: 0, top: 0, right: width, bottom: height }
 		const workspace = createBahtinovWorkspace(width, height, { precision: 64, maximumRidgePoints: 2048 })
-		const preprocessed = preprocessBahtinov({ image: image(raw, width, height), area, center: { x: 63.5, y: 63.5 } }, workspace, { transform: 'linear', coreRadius: 3, ridgeSigma: 2, maximumRidgePoints: 2048 })
+		const preprocessed = preprocessBahtinov({ image: image(raw, width, height), area, center: { x: 63.5, y: 63.5 } }, workspace, { coreRadius: 3, ridgeSigma: 2, maximumRidgePoints: 2048 })
 		expect(preprocessed.success).toBeTrue()
 		if (!preprocessed.success) continue
 		const candidates = detectBahtinovHoughCandidates(preprocessed.ridgePoints, width, height, preprocessed.workspace, { center: preprocessed.center })

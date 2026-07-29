@@ -363,6 +363,8 @@ export interface BahtinovWorkspace {
 	readonly blurredSmall: ImageRawType
 	// Wide Gaussian response.
 	readonly blurredLarge: ImageRawType
+	// Background-subtracted linear narrow-blur profile; aliases `blurredLarge` after DoG extraction.
+	readonly profile: ImageRawType
 	// Signed Difference-of-Gaussians response; aliases `source` to avoid another ROI-sized buffer.
 	readonly response: ImageRawType
 	// Reusable scratch for robust statistics.
