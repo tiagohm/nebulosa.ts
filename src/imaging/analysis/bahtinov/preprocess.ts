@@ -376,7 +376,7 @@ function resolvePlane(image: Image, plane: BahtinovPlane): ResolvedBahtinovPlane
 		return plane === 'green1' || plane === 'green2' ? plane : undefined
 	}
 	if (image.metadata.channels === 1) return plane === 'auto' || plane === 'GRAY' ? 'GRAY' : undefined
-	if (plane === 'green1' || plane === 'green2' || plane === 'GRAY') return undefined
+	if (plane === 'green1' || plane === 'green2') return undefined
 	return plane === 'auto' ? 'BT709' : plane
 }
 

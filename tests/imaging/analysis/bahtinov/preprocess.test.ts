@@ -90,9 +90,18 @@ test('extracts RGB with explicit and BT.709 planes', () => {
 	const source = image(raw, width, height, 3)
 	const red = preprocessBahtinov({ image: source, area: { left: 0, top: 0, right: width, bottom: height }, center: { x: 32, y: 32 } }, { plane: 'RED', coreRadius: 2, ridgeSigma: 2 })
 	const luminance = preprocessBahtinov({ image: source, area: { left: 0, top: 0, right: width, bottom: height }, center: { x: 32, y: 32 } }, { plane: 'auto', coreRadius: 2, ridgeSigma: 2 })
+	const gray = preprocessBahtinov({ image: source, area: { left: 0, top: 0, right: width, bottom: height }, center: { x: 32, y: 32 } }, { plane: 'GRAY', coreRadius: 2, ridgeSigma: 2 })
 	expect(red.success).toBeTrue()
 	expect(luminance.success).toBeTrue()
+	expect(gray.success).toBeTrue()
 	if (red.success && luminance.success) expect(red.background.level).not.toBe(luminance.background.level)
+	if (gray.success && luminance.success) {
+		expect(gray.background).toEqual(luminance.background)
+		expect(gray.responseCenter).toBe(luminance.responseCenter)
+		expect(gray.responseDeviation).toBe(luminance.responseDeviation)
+		expect(gray.threshold).toBe(luminance.threshold)
+		expect(gray.ridgePoints.count).toBe(luminance.ridgePoints.count)
+	}
 })
 
 test('reconstructs all eight CFA patterns from both physical green lattices', () => {
