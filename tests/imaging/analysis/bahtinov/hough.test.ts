@@ -61,7 +61,7 @@ test('handles axial NMS across zero and PI', () => {
 		halfLength: 28,
 		taperLength: 4,
 	})
-	const preprocessed = preprocessBahtinov({ image: image(raw, width, height), area: { left: 0, top: 0, right: width, bottom: height } }, { coreRadius: 2, ridgeSigma: 2 })
+	const preprocessed = preprocessBahtinov({ image: image(raw, width, height), area: { left: 0, top: 0, right: width, bottom: height }, center: { x: 40, y: 40 } }, { coreRadius: 2, ridgeSigma: 2 })
 	expect(preprocessed.success).toBeTrue()
 	if (!preprocessed.success) return
 	const candidates = detectBahtinovHoughCandidates(preprocessed.ridgePoints, width, height, preprocessed.workspace, { minimumAxialSeparation: PI / 18 })

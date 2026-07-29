@@ -18,26 +18,24 @@ export interface BahtinovExpectedPattern {
 	readonly maximumAngleDelta?: Angle
 }
 
-// Analysis request using either an explicit half-open ROI or an approximate center and square size.
+// Analysis request anchored by a required approximate star center and either an explicit ROI or size.
 export type BahtinovAnalysisInput = {
 	// Normalized mono, RGB, or CFA image. The analyzer never mutates it.
 	readonly image: Image
+	// Required approximate star center in full-image pixel coordinates.
+	readonly center: Readonly<Point>
 	// Optional mask-layout prior used only to rank otherwise supported candidates.
 	readonly expected?: BahtinovExpectedPattern
 } & (
 	| {
 			// Half-open full-image ROI `[left, right) x [top, bottom)`.
 			readonly area: Readonly<Rect>
-			// Optional approximate star center in full-image pixel coordinates.
-			readonly center?: Readonly<Point>
 			// Disallowed when an explicit area is supplied.
 			readonly size?: undefined
 	  }
 	| {
 			// Omitted when the analyzer must construct a square ROI around `center`.
 			readonly area?: undefined
-			// Approximate star center in full-image pixel coordinates.
-			readonly center: Readonly<Point>
 			// Requested square ROI side in pixels; defaults to the analyzer ROI size.
 			readonly size?: number
 	  }
@@ -283,43 +281,6 @@ export interface BahtinovAnalysisFailure {
 
 // Discriminated result of one stateless analysis.
 export type BahtinovAnalysisResult = BahtinovAnalysisSuccess | BahtinovAnalysisFailure
-
-// Origin of an automatically located Bahtinov candidate.
-export type BahtinovLocationSource = 'star' | 'lineEnergy' | 'combined'
-
-// Controls the bounded full-frame search for independently measurable Bahtinov patterns.
-export interface BahtinovLocatorOptions {
-	// Square analysis ROI side in pixels.
-	readonly roiSize?: number
-	// Full-frame grid spacing in pixels used by the line-energy fallback.
-	readonly gridStep?: number
-	// Maximum merged star and grid candidates submitted to the analyzer.
-	readonly maximumCandidates?: number
-	// Maximum distinct successful patterns returned.
-	readonly maximumPatterns?: number
-	// Candidate and result deduplication distance in pixels.
-	readonly minimumCandidateDistance?: number
-	// Minimum dimensionless angular line-energy contrast accepted from grid candidates.
-	readonly minimumLinearEnergy?: number
-	// Minimum SNR passed to the broad star detector.
-	readonly minimumStarSignalToNoise?: number
-	// Optional known mask-layout prior forwarded to each ROI analysis.
-	readonly expected?: BahtinovExpectedPattern
-	// Analyzer thresholds and workspace reused across candidate ROIs.
-	readonly analysis?: BahtinovAnalysisOptions
-}
-
-// One automatically located and independently validated Bahtinov pattern.
-export interface BahtinovLocation {
-	// Approximate full-image seed used to construct the analysis ROI.
-	readonly candidateCenter: Readonly<Point>
-	// Evidence source that retained the candidate.
-	readonly source: BahtinovLocationSource
-	// Combined normalized locator and analyzer evidence from 0 to 1.
-	readonly score: number
-	// Successful finite analysis for the candidate ROI.
-	readonly analysis: BahtinovAnalysisSuccess
-}
 
 // Analyzer options shared by RGB channel comparisons; the comparison selects each plane itself.
 export type BahtinovChromaticOptions = Omit<BahtinovAnalysisOptions, 'plane'>

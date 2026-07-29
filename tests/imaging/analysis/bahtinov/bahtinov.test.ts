@@ -85,7 +85,7 @@ test('recovers focus error from a raw CFA green mosaic', () => {
 test('returns explicit content failures without fabricated geometry', () => {
 	const width = 64
 	const height = 64
-	const result = analyzeBahtinov({ image: image(new Float64Array(width * height), width, height), area: { left: 0, top: 0, right: width, bottom: height } })
+	const result = analyzeBahtinov({ image: image(new Float64Array(width * height), width, height), area: { left: 0, top: 0, right: width, bottom: height }, center: { x: 31.5, y: 31.5 } })
 	expect(result.success).toBeFalse()
 	if (!result.success) {
 		expect(['lowSignal', 'insufficientSupport', 'patternNotFound']).toContain(result.reason)
@@ -98,26 +98,36 @@ test('keeps debug snapshots detached across workspace reuse', () => {
 	const width = 128
 	const height = 128
 	const workspace = createBahtinovWorkspace(width, height, { precision: 64, maximumRidgePoints: 2048 })
-	const first = analyzeBahtinov({ image: synthetic(2), area: { left: 0, top: 0, right: width, bottom: height } }, { ...ANALYSIS_OPTIONS, workspace, includeDebug: true })
+	const first = analyzeBahtinov({ image: synthetic(2), area: { left: 0, top: 0, right: width, bottom: height }, center: { x: 63.5, y: 63.5 } }, { ...ANALYSIS_OPTIONS, workspace, includeDebug: true })
 	expect(first.success).toBeTrue()
 	if (!first.success || !first.debug?.response || !first.debug.mask || !first.debug.source) return
 	const response = first.debug.response.slice()
 	const mask = first.debug.mask.slice()
 	const source = first.debug.source.slice()
-	analyzeBahtinov({ image: synthetic(-3), area: { left: 0, top: 0, right: width, bottom: height } }, { ...ANALYSIS_OPTIONS, workspace })
+	analyzeBahtinov({ image: synthetic(-3), area: { left: 0, top: 0, right: width, bottom: height }, center: { x: 63.5, y: 63.5 } }, { ...ANALYSIS_OPTIONS, workspace })
 	expect(first.debug.response).toEqual(response)
 	expect(first.debug.mask).toEqual(mask)
 	expect(first.debug.source).toEqual(source)
 })
 
 test('uses uncertainty rather than raw error alone for focus classification', () => {
-	const result = analyzeBahtinov({ image: synthetic(0.4), area: { left: 0, top: 0, right: 128, bottom: 128 } }, { ...ANALYSIS_OPTIONS, focusTolerance: 0.5, focusSigma: 10, maximumUncertainty: 10 })
+	const result = analyzeBahtinov({ image: synthetic(0.4), area: { left: 0, top: 0, right: 128, bottom: 128 }, center: { x: 63.5, y: 63.5 } }, { ...ANALYSIS_OPTIONS, focusTolerance: 0.5, focusSigma: 10, maximumUncertainty: 10 })
 	expect(result.success).toBeTrue()
 	if (result.success) expect(['focused', 'indeterminate']).toContain(result.focusState)
 })
 
 test('validates triplet decision options before preprocessing', () => {
 	const source = synthetic(0)
-	expect(() => analyzeBahtinov({ image: source, area: { left: 0, top: 0, right: 128, bottom: 128 } }, { intersectionMargin: -1 })).toThrow(RangeError)
-	expect(() => analyzeBahtinov({ image: source, area: { left: 0, top: 0, right: 128, bottom: 128 } }, { minimumCandidateSeparation: 2 })).toThrow(RangeError)
+	expect(() => analyzeBahtinov({ image: source, area: { left: 0, top: 0, right: 128, bottom: 128 }, center: { x: 63.5, y: 63.5 } }, { intersectionMargin: -1 })).toThrow(RangeError)
+	expect(() => analyzeBahtinov({ image: source, area: { left: 0, top: 0, right: 128, bottom: 128 }, center: { x: 63.5, y: 63.5 } }, { minimumCandidateSeparation: 2 })).toThrow(RangeError)
+})
+
+test('uses an approximate center only to anchor the analysis region', () => {
+	for (const offset of [0, 12, 24]) {
+		const result = analyzeBahtinov({ image: synthetic(3, 256, 256), center: { x: 127.5 + offset, y: 127.5 - offset }, size: 128 }, ANALYSIS_OPTIONS)
+		expect(result.success).toBeTrue()
+		if (!result.success) continue
+		expect(Math.hypot(result.reference.x - 127.5, result.reference.y - 127.5)).toBeLessThan(0.2)
+		expect(Math.abs(result.error - 3)).toBeLessThan(0.25)
+	}
 })

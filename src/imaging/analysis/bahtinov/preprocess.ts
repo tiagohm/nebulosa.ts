@@ -159,17 +159,18 @@ export function resolveBahtinovArea(input: BahtinovAnalysisInput, defaultSize: n
 	const { width, height } = input.image.metadata
 	if (!Number.isInteger(width) || width <= 0 || !Number.isInteger(height) || height <= 0) throw new RangeError('image dimensions must be positive integers')
 	if (!Number.isInteger(defaultSize) || defaultSize < MINIMUM_ROI_SIDE) throw new RangeError(`defaultSize must be an integer at least ${MINIMUM_ROI_SIDE}`)
+	const center = input.center
+	if (!center || !Number.isFinite(center.x) || !Number.isFinite(center.y) || center.x < 0 || center.x > width - 1 || center.y < 0 || center.y > height - 1) throw new RangeError('Bahtinov center must be finite and inside the image pixel-center domain')
 
 	if (input.area) {
 		const { left, top, right, bottom } = input.area
 		if (!Number.isInteger(left) || !Number.isInteger(top) || !Number.isInteger(right) || !Number.isInteger(bottom)) throw new RangeError('Bahtinov area edges must be integers')
 		if (left < 0 || top < 0 || right > width || bottom > height || right - left < MINIMUM_ROI_SIDE || bottom - top < MINIMUM_ROI_SIDE) throw new RangeError(`Bahtinov area must be in bounds and at least ${MINIMUM_ROI_SIDE} x ${MINIMUM_ROI_SIDE}`)
-		if (input.center) validateCenterInArea(input.center.x, input.center.y, input.area)
+		validateCenterInArea(center.x, center.y, input.area)
 		return { left, top, right, bottom }
 	}
 
-	const { x, y } = input.center
-	if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || x > width - 1 || y < 0 || y > height - 1) throw new RangeError('Bahtinov center must be finite and inside the image pixel-center domain')
+	const { x, y } = center
 	const requestedSize = input.size ?? defaultSize
 	if (!Number.isInteger(requestedSize) || requestedSize < MINIMUM_ROI_SIDE) throw new RangeError(`Bahtinov size must be an integer at least ${MINIMUM_ROI_SIDE}`)
 	const side = Math.min(requestedSize, width, height)
@@ -217,8 +218,8 @@ export function preprocessBahtinov(input: BahtinovAnalysisInput, options: Bahtin
 	}
 	dilateSaturation(mask, width, height, saturationDilation)
 
-	const centerX = (input.center?.x ?? (area.left + area.right - 1) * 0.5) - area.left
-	const centerY = (input.center?.y ?? (area.top + area.bottom - 1) * 0.5) - area.top
+	const centerX = input.center.x - area.left
+	const centerY = input.center.y - area.top
 	markCore(mask, width, height, centerX, centerY, coreRadius, options.autoCoreRadius !== false, workspace.statistics)
 	let coreSaturated = false
 	let spikeSaturatedCount = 0

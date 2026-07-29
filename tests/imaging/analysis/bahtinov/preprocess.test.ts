@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test'
 import { PI } from '../../../../src/core/constants'
 import { createBahtinovWorkspace, preprocessBahtinov, resolveBahtinovArea } from '../../../../src/imaging/analysis/bahtinov/preprocess'
+import type { BahtinovAnalysisInput } from '../../../../src/imaging/analysis/bahtinov/types'
 import type { Image } from '../../../../src/imaging/model/types'
 import { plotBahtinovSpikes } from '../../../../src/imaging/stars/bahtinov'
 
@@ -36,7 +37,8 @@ test('creates a capacity-described reusable workspace', () => {
 test('resolves a shifted square ROI without losing the requested size', () => {
 	const source = image(new Float32Array(100 * 80), 100, 80)
 	expect(resolveBahtinovArea({ image: source, center: { x: 2, y: 77 }, size: 32 })).toEqual({ left: 0, top: 48, right: 32, bottom: 80 })
-	expect(resolveBahtinovArea({ image: source, area: { left: 10, top: 12, right: 50, bottom: 52 } })).toEqual({ left: 10, top: 12, right: 50, bottom: 52 })
+	expect(resolveBahtinovArea({ image: source, area: { left: 10, top: 12, right: 50, bottom: 52 }, center: { x: 20, y: 30 } })).toEqual({ left: 10, top: 12, right: 50, bottom: 52 })
+	expect(() => resolveBahtinovArea({ image: source, area: { left: 10, top: 12, right: 50, bottom: 52 } } as BahtinovAnalysisInput)).toThrow(RangeError)
 })
 
 test('preprocesses deterministic mono spikes with a signed DoG response', () => {
@@ -68,8 +70,8 @@ test('extracts RGB with explicit and BT.709 planes', () => {
 	}
 	plotBahtinovSpikes(raw, width, height, 3, 32, 32, 60, 0, undefined, { halfLength: 22, taperLength: 4 })
 	const source = image(raw, width, height, 3)
-	const red = preprocessBahtinov({ image: source, area: { left: 0, top: 0, right: width, bottom: height } }, { plane: 'RED', coreRadius: 2, ridgeSigma: 2 })
-	const luminance = preprocessBahtinov({ image: source, area: { left: 0, top: 0, right: width, bottom: height } }, { plane: 'auto', coreRadius: 2, ridgeSigma: 2 })
+	const red = preprocessBahtinov({ image: source, area: { left: 0, top: 0, right: width, bottom: height }, center: { x: 32, y: 32 } }, { plane: 'RED', coreRadius: 2, ridgeSigma: 2 })
+	const luminance = preprocessBahtinov({ image: source, area: { left: 0, top: 0, right: width, bottom: height }, center: { x: 32, y: 32 } }, { plane: 'auto', coreRadius: 2, ridgeSigma: 2 })
 	expect(red.success).toBeTrue()
 	expect(luminance.success).toBeTrue()
 	if (red.success && luminance.success) expect(red.background.level).not.toBe(luminance.background.level)
@@ -109,9 +111,9 @@ test('reconstructs all eight CFA patterns from both physical green lattices', ()
 			}
 		}
 		const source = image(raw, width, height, 1, pattern)
-		const first = preprocessBahtinov({ image: source, area: { left: 0, top: 0, right: width, bottom: height } }, { plane: 'green1', coreRadius: 0, ridgeSigma: 2 })
-		const second = preprocessBahtinov({ image: source, area: { left: 0, top: 0, right: width, bottom: height } }, { plane: 'green2', coreRadius: 0, ridgeSigma: 2 })
-		const combined = preprocessBahtinov({ image: source, area: { left: 0, top: 0, right: width, bottom: height } }, { plane: 'auto', coreRadius: 0, ridgeSigma: 2 })
+		const first = preprocessBahtinov({ image: source, area: { left: 0, top: 0, right: width, bottom: height }, center: { x: 15.5, y: 15.5 } }, { plane: 'green1', coreRadius: 0, ridgeSigma: 2 })
+		const second = preprocessBahtinov({ image: source, area: { left: 0, top: 0, right: width, bottom: height }, center: { x: 15.5, y: 15.5 } }, { plane: 'green2', coreRadius: 0, ridgeSigma: 2 })
+		const combined = preprocessBahtinov({ image: source, area: { left: 0, top: 0, right: width, bottom: height }, center: { x: 15.5, y: 15.5 } }, { plane: 'auto', coreRadius: 0, ridgeSigma: 2 })
 		expect(first.success).toBeFalse()
 		expect(second.success).toBeFalse()
 		expect(combined.success).toBeFalse()
@@ -145,6 +147,6 @@ test('rejects a workspace whose recorded capacity is insufficient', () => {
 	const height = 64
 	const source = image(new Float32Array(width * height), width, height)
 	const workspace = createBahtinovWorkspace(width, height, { maximumRidgePoints: 128, angleStep: PI / 90, distanceStep: 1 })
-	expect(() => preprocessBahtinov({ image: source, area: { left: 0, top: 0, right: width, bottom: height } }, { workspace, maximumRidgePoints: 256 })).toThrow(RangeError)
-	expect(() => preprocessBahtinov({ image: source, area: { left: 0, top: 0, right: width, bottom: height } }, { workspace, angleStep: PI / 180 })).toThrow(RangeError)
+	expect(() => preprocessBahtinov({ image: source, area: { left: 0, top: 0, right: width, bottom: height }, center: { x: 32, y: 32 } }, { workspace, maximumRidgePoints: 256 })).toThrow(RangeError)
+	expect(() => preprocessBahtinov({ image: source, area: { left: 0, top: 0, right: width, bottom: height }, center: { x: 32, y: 32 } }, { workspace, angleStep: PI / 180 })).toThrow(RangeError)
 })

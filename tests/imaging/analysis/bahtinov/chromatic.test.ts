@@ -52,7 +52,7 @@ const OPTIONS = {
 }
 
 test('compares signed RGB focus errors relative to green', () => {
-	const result = compareBahtinovChromatic({ image: rgbBahtinov([-2, 0, 3]), area: { left: 0, top: 0, right: 128, bottom: 128 } }, OPTIONS)
+	const result = compareBahtinovChromatic({ image: rgbBahtinov([-2, 0, 3]), area: { left: 0, top: 0, right: 128, bottom: 128 }, center: { x: 63.5, y: 63.5 } }, OPTIONS)
 	expect(result.success).toBeTrue()
 	if (!result.success) return
 	expect(Math.abs(result.redMinusGreen + 2)).toBeLessThan(0.3)
@@ -64,7 +64,7 @@ test('compares signed RGB focus errors relative to green', () => {
 })
 
 test('retains per-channel failures without fabricating chromatic offsets', () => {
-	const result = compareBahtinovChromatic({ image: rgbBahtinov([0, 0, 0], 2), area: { left: 0, top: 0, right: 128, bottom: 128 } }, OPTIONS)
+	const result = compareBahtinovChromatic({ image: rgbBahtinov([0, 0, 0], 2), area: { left: 0, top: 0, right: 128, bottom: 128 }, center: { x: 63.5, y: 63.5 } }, OPTIONS)
 	expect(result.success).toBeFalse()
 	if (!result.success) {
 		expect(result.failedChannels).toEqual(['blue'])
@@ -78,5 +78,5 @@ test('retains per-channel failures without fabricating chromatic offsets', () =>
 test('rejects mono input for chromatic comparison', () => {
 	const rgb = rgbBahtinov([0, 0, 0])
 	const mono: Image = { ...rgb, raw: new Float64Array(128 * 128), metadata: { ...rgb.metadata, channels: 1, stride: 128, pixelCount: 128 * 128 } }
-	expect(() => compareBahtinovChromatic({ image: mono, area: { left: 0, top: 0, right: 128, bottom: 128 } }, OPTIONS)).toThrow(RangeError)
+	expect(() => compareBahtinovChromatic({ image: mono, area: { left: 0, top: 0, right: 128, bottom: 128 }, center: { x: 63.5, y: 63.5 } }, OPTIONS)).toThrow(RangeError)
 })
