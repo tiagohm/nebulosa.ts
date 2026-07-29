@@ -72,6 +72,34 @@ test('handles axial NMS across zero and PI', () => {
 	expect(boundaryCandidates.length).toBe(1)
 })
 
+test('preserves coarse peaks at the exact minimum axial separation', () => {
+	const width = 128
+	const height = 128
+	const center = { x: 63.5, y: 63.5 }
+	const expected = [0, PI / 36, PI / 18] as const
+	const pointCount = expected.length * 33
+	const x = new Float32Array(pointCount)
+	const y = new Float32Array(pointCount)
+	const weight = new Float32Array(pointCount)
+	let point = 0
+	for (const angle of expected) {
+		const tangentX = -Math.sin(angle)
+		const tangentY = Math.cos(angle)
+		for (let sample = -16; sample <= 16; sample++, point++) {
+			x[point] = center.x + sample * 2.5 * tangentX
+			y[point] = center.y + sample * 2.5 * tangentY
+			weight[point] = 1
+		}
+	}
+	const workspace = createBahtinovWorkspace(width, height, { precision: 64, maximumRidgePoints: pointCount })
+	const candidates = detectBahtinovHoughCandidates({ x, y, weight, count: pointCount }, width, height, workspace, {
+		minimumAxialSeparation: PI / 36,
+		refinementRange: 0,
+		center,
+	})
+	for (const angle of expected) expect(candidates.some((candidate) => bahtinovAxialAngleDistance(candidate.normalAngle, angle) < PI / 360)).toBeTrue()
+})
+
 test('caps default candidates to coarse workspaces and rejects fewer than three bins', () => {
 	const width = 80
 	const height = 80

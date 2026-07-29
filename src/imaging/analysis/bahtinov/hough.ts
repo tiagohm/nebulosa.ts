@@ -74,7 +74,7 @@ export function detectBahtinovHoughCandidates(ridgePoints: BahtinovRidgePoints, 
 	const coarse: BahtinovHoughCandidate[] = []
 	for (let angleIndex = 0; angleIndex < angleCount; angleIndex++) {
 		const score = workspace.angleScore[angleIndex]
-		if (!(score > 0) || !isCircularMaximum(workspace.angleScore, angleIndex, nmsRadius)) continue
+		if (!(score > 0) || !isCircularMaximum(workspace.angleScore, angleIndex, nmsRadius, workspace.angleStep, minimumAxialSeparation)) continue
 		const normalAngle = angleIndex * workspace.angleStep
 		const support = measureHoughSupport(ridgePoints, width, height, normalAngle, workspace.angleDistance[angleIndex], workspace.distanceStep, centerX, centerY)
 		if (!(support.strength > 0) || !(support.coverage > 0) || !(support.balance > 0)) continue
@@ -155,14 +155,16 @@ function accumulateHoughAngle(ridgePoints: BahtinovRidgePoints, normalX: number,
 	return { score: peakScore, distance: -rhoMax + (peakBin + subBin) * distanceStep }
 }
 
-// Tests circular angular non-maximum suppression with deterministic lower-index tie breaking.
-function isCircularMaximum(scores: Float64Array, index: number, radius: number): boolean {
+// Tests circular angular NMS strictly inside the configured axial separation.
+function isCircularMaximum(scores: Float64Array, index: number, radius: number, angleStep: Angle, minimumAxialSeparation: Angle): boolean {
 	const count = scores.length
 	const score = scores[index]
+	const angle = index * angleStep
 	for (let delta = 1; delta <= radius; delta++) {
 		const left = (index - delta + count) % count
 		const right = (index + delta) % count
-		if (scores[left] > score || scores[right] > score || (scores[left] === score && left < index) || (scores[right] === score && right < index)) return false
+		if (bahtinovAxialAngleDistance(angle, left * angleStep) < minimumAxialSeparation && (scores[left] > score || (scores[left] === score && left < index))) return false
+		if (bahtinovAxialAngleDistance(angle, right * angleStep) < minimumAxialSeparation && (scores[right] > score || (scores[right] === score && right < index))) return false
 	}
 	return true
 }
