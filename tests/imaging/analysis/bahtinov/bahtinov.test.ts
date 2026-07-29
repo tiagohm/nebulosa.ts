@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import { PI, PIOVERTWO } from '../../../../src/core/constants'
 import { analyzeBahtinov as analyzeBahtinovWithWorkspace } from '../../../../src/imaging/analysis/bahtinov/bahtinov'
-import { bahtinovAxialAngleDistance } from '../../../../src/imaging/analysis/bahtinov/geometry'
+import { bahtinovAxialAngleDistance, bahtinovAxialBisectors } from '../../../../src/imaging/analysis/bahtinov/geometry'
 import { createBahtinovOverlayGeometry } from '../../../../src/imaging/analysis/bahtinov/overlay'
 import { createBahtinovWorkspace, resolveBahtinovArea } from '../../../../src/imaging/analysis/bahtinov/preprocess'
 import { DEFAULT_BAHTINOV_ANALYSIS_OPTIONS, type BahtinovAnalysisInput, type BahtinovAnalysisOptions } from '../../../../src/imaging/analysis/bahtinov/types'
@@ -131,6 +131,26 @@ test('recovers zero and signed synthetic focus errors end to end', () => {
 		const overlay = createBahtinovOverlayGeometry(result)
 		expect(Math.hypot(overlay.reference.x - overlay.centralProjection.x, overlay.reference.y - overlay.centralProjection.y)).toBeCloseTo(result.absoluteError, 10)
 	}
+})
+
+test('preserves triplets at inclusive residual and bisector boundaries', () => {
+	const input = {
+		image: synthetic(2),
+		area: { left: 0, top: 0, right: 128, bottom: 128 },
+		center: { x: 63.5, y: 63.5 },
+	} as const
+	const baseline = analyzeBahtinov(input, ANALYSIS_OPTIONS)
+	expect(baseline.success).toBeTrue()
+	if (!baseline.success) return
+
+	const maximumResidual = Math.max(baseline.centralLine.residual, baseline.externalLines[0].residual, baseline.externalLines[1].residual)
+	const residualBoundary = analyzeBahtinov(input, { ...ANALYSIS_OPTIONS, maximumResidual })
+	expect(residualBoundary.success).toBeTrue()
+
+	const [shortArcBisector] = bahtinovAxialBisectors(baseline.externalLines[0].normalAngle, baseline.externalLines[1].normalAngle)
+	const maximumBisectorError = bahtinovAxialAngleDistance(baseline.centralLine.normalAngle, shortArcBisector)
+	const bisectorBoundary = analyzeBahtinov(input, { ...ANALYSIS_OPTIONS, maximumBisectorError })
+	expect(bisectorBoundary.success).toBeTrue()
 })
 
 test('preserves uncertainty and classification when the ROI is translated', () => {

@@ -16,6 +16,8 @@ const DEFAULT_EXPECTED_PRIOR_SCALE = PI / 12
 const UNCERTAINTY_ANGLE_STEP = 1e-6
 // Relative central-difference step for line distances.
 const UNCERTAINTY_DISTANCE_STEP = 1e-6
+// Smallest score retained for a quality component that already passed its inclusive gate.
+const MINIMUM_ACCEPTED_QUALITY = Number.EPSILON
 
 // One valid central/external assignment and its score before ambiguity classification.
 interface BahtinovTripletCandidate {
@@ -214,8 +216,8 @@ function selectTriplets(fitted: readonly BahtinovFittedCandidate[], preprocessed
 					lineStrength: maximumStrength > 0 ? Math.max(0, Math.min(1, minimumStrength / maximumStrength)) : 0,
 					lineCoverage: minimumCoverage,
 					lineBalance: minimumBalance,
-					lineFit: Math.max(0, 1 - maximumResidual / options.maximumResidual),
-					angularSymmetry: Math.max(0, 1 - bisectorError / options.maximumBisectorError),
+					lineFit: Math.max(MINIMUM_ACCEPTED_QUALITY, 1 - maximumResidual / options.maximumResidual),
+					angularSymmetry: Math.max(MINIMUM_ACCEPTED_QUALITY, 1 - bisectorError / options.maximumBisectorError),
 					intersectionCondition: intersection.condition,
 					saturationRetention,
 					cropCoverage: minimumCropCoverage,
