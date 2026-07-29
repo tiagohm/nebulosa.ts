@@ -316,9 +316,10 @@ export function bahtinovLineSaturationRetention(line: BahtinovLine, preprocessed
 	const sampleCount = Math.max(1, Math.ceil(lastTangent - firstTangent))
 	const normalX = Math.cos(line.normalAngle)
 	const normalY = Math.sin(line.normalAngle)
-	const supportRadius = Math.max(1, Math.ceil(line.fwhm * 0.5))
 	const width = preprocessed.area.right - preprocessed.area.left
 	const height = preprocessed.area.bottom - preprocessed.area.top
+	const maximumSupportRadius = Math.ceil(Math.hypot(width, height))
+	const supportRadius = Math.max(1, Math.min(maximumSupportRadius, Math.ceil(line.fwhm * 0.5)))
 	let retained = 0
 
 	for (let sample = 0; sample <= sampleCount; sample++) {

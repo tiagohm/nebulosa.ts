@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import { PI } from '../../../../src/core/constants'
-import { createBahtinovWorkspace, preprocessBahtinov as preprocessBahtinovWithWorkspace, resolveBahtinovArea } from '../../../../src/imaging/analysis/bahtinov/preprocess'
-import type { BahtinovAnalysisInput, BahtinovAnalysisOptions, BahtinovWorkspace } from '../../../../src/imaging/analysis/bahtinov/types'
+import { bahtinovLineSaturationRetention, createBahtinovWorkspace, preprocessBahtinov as preprocessBahtinovWithWorkspace, resolveBahtinovArea } from '../../../../src/imaging/analysis/bahtinov/preprocess'
+import type { BahtinovAnalysisInput, BahtinovAnalysisOptions, BahtinovLine, BahtinovWorkspace } from '../../../../src/imaging/analysis/bahtinov/types'
 import type { Image } from '../../../../src/imaging/model/types'
 import { plotBahtinovSpikes } from '../../../../src/imaging/stars/bahtinov'
 
@@ -83,6 +83,33 @@ test('preprocesses deterministic mono spikes with a signed DoG response', () => 
 	expect(response.some((sample) => sample > 0)).toBeTrue()
 	expect(response.some((sample) => sample < 0)).toBeTrue()
 	expect(response.every(Number.isFinite)).toBeTrue()
+})
+
+test('bounds saturation-band sampling for an extreme finite FWHM', () => {
+	const width = 64
+	const height = 64
+	const raw = new Float64Array(width * height)
+	raw.fill(0.01)
+	plotBahtinovSpikes(raw, width, height, 1, 31.5, 31.5, 80, 0, undefined, { halfLength: 24, taperLength: 4, fwhm: 2 })
+	const result = preprocessBahtinov({ image: image(raw, width, height), area: { left: 0, top: 0, right: width, bottom: height }, center: { x: 31.5, y: 31.5 } }, { transform: 'linear', coreRadius: 2, ridgeSigma: 2 })
+	expect(result.success).toBeTrue()
+	if (!result.success) return
+	const line: BahtinovLine = {
+		normalAngle: 0,
+		distance: 31.5,
+		strength: 1,
+		signalToNoise: 1,
+		fwhm: Number.MAX_VALUE,
+		coverage: 1,
+		cropCoverage: 1,
+		balance: 1,
+		residual: 0,
+		segment: [
+			{ x: 31.5, y: 0 },
+			{ x: 31.5, y: 63 },
+		],
+	}
+	expect(Number.isFinite(bahtinovLineSaturationRetention(line, result))).toBeTrue()
 })
 
 test('extracts RGB with explicit and BT.709 planes', () => {
