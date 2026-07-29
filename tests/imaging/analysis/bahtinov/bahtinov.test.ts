@@ -66,6 +66,21 @@ function translatedSynthetic(error: number, left: number, top: number): Image {
 	return image(raw, width, height)
 }
 
+function offCenterSynthetic(error: number, centerX: number, centerY: number): Image {
+	const width = 128
+	const height = 128
+	const raw = new Float64Array(width * height)
+	raw.fill(0.01)
+	plotBahtinovSpikes(raw, width, height, 1, centerX, centerY, 180, error, undefined, {
+		normalAngles: [(PI * 5) / 12, PIOVERTWO, (PI * 7) / 12],
+		central: 1,
+		fwhm: 2,
+		halfLength: 44,
+		taperLength: 7,
+	})
+	return image(raw, width, height)
+}
+
 const ANALYSIS_OPTIONS = {
 	transform: 'linear' as const,
 	coreRadius: 3,
@@ -107,6 +122,14 @@ test('preserves uncertainty and classification when the ROI is translated', () =
 	expect(second.error).toBeCloseTo(first.error, 10)
 	expect(second.uncertainty).toBeCloseTo(first.uncertainty!, 6)
 	expect(second.focusState).toBe(first.focusState)
+})
+
+test('recovers a cropped pattern away from the ROI midpoint', () => {
+	const result = analyzeBahtinov({ image: offCenterSynthetic(2, 20, 63.5), area: { left: 0, top: 0, right: 128, bottom: 128 }, center: { x: 20, y: 63.5 } }, ANALYSIS_OPTIONS)
+	expect(result.success).toBeTrue()
+	if (!result.success) return
+	expect(Math.abs(result.error - 2)).toBeLessThan(0.3)
+	expect(Math.hypot(result.reference.x - 20, result.reference.y - 63.5)).toBeLessThan(0.5)
 })
 
 test('recovers focus error from a raw CFA green mosaic', () => {

@@ -103,11 +103,13 @@ export function analyzeBahtinov(input: BahtinovAnalysisInput, workspace: Bahtino
 		minimumAxialSeparation: decision.minimumAxialSeparation,
 		refinementRange: options.refinementRange,
 		refinementStep: options.refinementStep,
+		center: preprocessed.center,
 	})
 	if (houghCandidates.length < 3) return analysisFailure('patternNotFound', preprocessed, [])
 
 	const fitted = fitBahtinovLines(houghCandidates, preprocessed.ridgePoints, preprocessed.area, preprocessed.responseDeviation, preprocessed.workspace, {
 		maximumResidual: decision.maximumResidual,
+		center: preprocessed.center,
 	})
 	if (fitted.length < 3) return analysisFailure('insufficientSupport', preprocessed, [])
 

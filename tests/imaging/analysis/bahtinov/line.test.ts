@@ -41,8 +41,8 @@ test('robustly fits global spike lines with finite support metrics', () => {
 	const preprocessed = preprocessBahtinov({ image: image(raw, width, height), area, center: { x: 60, y: 55 } }, workspace, { transform: 'linear', coreRadius: 3, ridgeSigma: 2, maximumRidgePoints: 2048 })
 	expect(preprocessed.success).toBeTrue()
 	if (!preprocessed.success) return
-	const candidates = detectBahtinovHoughCandidates(preprocessed.ridgePoints, area.right - area.left, area.bottom - area.top, preprocessed.workspace)
-	const fitted = fitBahtinovLines(candidates, preprocessed.ridgePoints, area, preprocessed.responseDeviation, preprocessed.workspace, { supportRadius: 3, maximumResidual: 2 })
+	const candidates = detectBahtinovHoughCandidates(preprocessed.ridgePoints, area.right - area.left, area.bottom - area.top, preprocessed.workspace, { center: preprocessed.center })
+	const fitted = fitBahtinovLines(candidates, preprocessed.ridgePoints, area, preprocessed.responseDeviation, preprocessed.workspace, { supportRadius: 3, maximumResidual: 2, center: preprocessed.center })
 	expect(fitted.length).toBeGreaterThanOrEqual(3)
 	for (const angle of expected) {
 		let best = fitted[0].line

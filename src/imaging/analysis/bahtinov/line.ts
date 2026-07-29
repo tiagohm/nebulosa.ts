@@ -1,6 +1,6 @@
 import { PI, PIOVERTWO } from '../../../core/constants'
 import { medianBySelectionOf, STANDARD_DEVIATION_SCALE } from '../../../core/util'
-import type { Rect } from '../../../math/numerical/geometry'
+import type { Point, Rect } from '../../../math/numerical/geometry'
 import { bahtinovAxialAngleDistance, bahtinovGlobalLineDistance, canonicalizeBahtinovLine, clipBahtinovLineToArea } from './geometry'
 import type { BahtinovHoughCandidate } from './hough'
 import type { BahtinovLine, BahtinovRidgePoints, BahtinovWorkspace } from './types'
@@ -34,6 +34,8 @@ export interface BahtinovLineFitOptions {
 	readonly minimumSupport?: number
 	// Maximum allowed robust RMS orthogonal residual in pixels.
 	readonly maximumResidual?: number
+	// Approximate star center in local ROI pixel coordinates; defaults to the ROI midpoint.
+	readonly center?: Readonly<Point>
 }
 
 // One fitted line paired with the Hough score that seeded it.
@@ -59,6 +61,9 @@ export function fitBahtinovLine(candidate: BahtinovHoughCandidate, ridgePoints: 
 
 	const localWidth = area.right - area.left
 	const localHeight = area.bottom - area.top
+	const centerX = options.center?.x ?? (localWidth - 1) * 0.5
+	const centerY = options.center?.y ?? (localHeight - 1) * 0.5
+	if (!Number.isFinite(centerX) || !Number.isFinite(centerY) || centerX < 0 || centerX > localWidth - 1 || centerY < 0 || centerY > localHeight - 1) throw new RangeError('Bahtinov line-fit center must be finite and inside the local ROI')
 	let normalAngle = candidate.normalAngle
 	let distance = candidate.distance
 	let supportCount = 0
@@ -82,7 +87,7 @@ export function fitBahtinovLine(candidate: BahtinovHoughCandidate, ridgePoints: 
 		if (angleChange <= ANGLE_CONVERGENCE_TOLERANCE && distanceChange <= DISTANCE_CONVERGENCE_TOLERANCE) break
 	}
 
-	const metrics = lineMetrics(ridgePoints, candidate, normalAngle, distance, supportRadius, robustScale, localWidth, localHeight)
+	const metrics = lineMetrics(ridgePoints, candidate, normalAngle, distance, supportRadius, robustScale, localWidth, localHeight, centerX, centerY)
 	if (!metrics || metrics.count < minimumSupport || metrics.residual > maximumResidual) return undefined
 	const globalDistance = bahtinovGlobalLineDistance(distance, normalAngle, area)
 	const segment = clipBahtinovLineToArea({ normalAngle, distance: globalDistance }, area)
@@ -263,6 +268,8 @@ function lineMetrics(
 	robustScale: number,
 	width: number,
 	height: number,
+	centerX: number,
+	centerY: number,
 ):
 	| {
 			readonly count: number
@@ -283,8 +290,6 @@ function lineMetrics(
 	const normalY = Math.sin(normalAngle)
 	const tangentX = -normalY
 	const tangentY = normalX
-	const middleX = (segment[0].x + segment[1].x) * 0.5
-	const middleY = (segment[0].y + segment[1].y) * 0.5
 	const huberLimit = HUBER_TUNING * Math.max(NUMERICAL_FLOOR, robustScale)
 	let count = 0
 	let strength = 0
@@ -306,7 +311,7 @@ function lineMetrics(
 		const robustWeight = absoluteResidual <= huberLimit ? 1 : huberLimit / absoluteResidual
 		const baseWeight = ridgePoints.weight[index]
 		const weight = baseWeight * robustWeight
-		const tangent = (x - middleX) * tangentX + (y - middleY) * tangentY
+		const tangent = (x - centerX) * tangentX + (y - centerY) * tangentY
 		count++
 		strength += baseWeight
 		effectiveWeight += weight

@@ -1,4 +1,5 @@
 import { PI, PIOVERTWO } from '../../../core/constants'
+import type { Point } from '../../../math/numerical/geometry'
 import type { Angle } from '../../../math/units/angle'
 import { bahtinovAxialAngleDistance, canonicalizeBahtinovLine, clipBahtinovLineToArea } from './geometry'
 import type { BahtinovRidgePoints, BahtinovWorkspace } from './types'
@@ -27,7 +28,7 @@ export interface BahtinovHoughCandidate {
 	readonly score: number
 	// Fraction of the visible line segment spanned by supporting ridges, from 0 to 1.
 	readonly coverage: number
-	// Weaker-to-stronger support ratio around the segment midpoint, from 0 to 1.
+	// Weaker-to-stronger support ratio around the approximate pattern center, from 0 to 1.
 	readonly balance: number
 	// Sum of ridge weights close to the candidate line.
 	readonly strength: number
@@ -43,6 +44,8 @@ export interface BahtinovHoughOptions {
 	readonly refinementRange?: Angle
 	// Local normal-angle refinement step in radians.
 	readonly refinementStep?: Angle
+	// Approximate star center in local ROI pixel coordinates; defaults to the ROI midpoint.
+	readonly center?: Readonly<Point>
 }
 
 // Detects and refines weighted line candidates from local ROI ridge samples.
@@ -53,10 +56,13 @@ export function detectBahtinovHoughCandidates(ridgePoints: BahtinovRidgePoints, 
 	const minimumAxialSeparation = options.minimumAxialSeparation ?? DEFAULT_MINIMUM_AXIAL_SEPARATION
 	const refinementRange = options.refinementRange ?? DEFAULT_REFINEMENT_RANGE
 	const refinementStep = options.refinementStep ?? DEFAULT_REFINEMENT_STEP
+	const centerX = options.center?.x ?? (width - 1) * 0.5
+	const centerY = options.center?.y ?? (height - 1) * 0.5
 	if (!Number.isInteger(maximumCandidates) || maximumCandidates < 3 || maximumCandidates > workspace.angleCount) throw new RangeError('maximumCandidates must be an integer from 3 to angleCount')
 	if (!Number.isFinite(minimumAxialSeparation) || minimumAxialSeparation <= 0 || minimumAxialSeparation > PIOVERTWO) throw new RangeError('minimumAxialSeparation must be in (0, PI / 2]')
 	if (!Number.isFinite(refinementRange) || refinementRange < 0 || refinementRange > minimumAxialSeparation * 0.5) throw new RangeError('refinementRange must be finite and no greater than half the candidate separation')
 	if (!Number.isFinite(refinementStep) || refinementStep <= 0 || (refinementRange > 0 && refinementStep > refinementRange)) throw new RangeError('refinementStep must be finite, positive, and no greater than refinementRange')
+	if (!Number.isFinite(centerX) || !Number.isFinite(centerY) || centerX < 0 || centerX > width - 1 || centerY < 0 || centerY > height - 1) throw new RangeError('Bahtinov Hough center must be finite and inside the local ROI')
 
 	const angleCount = workspace.angleCount
 	const binCount = workspace.distanceBinCount
@@ -75,8 +81,8 @@ export function detectBahtinovHoughCandidates(ridgePoints: BahtinovRidgePoints, 
 		const score = workspace.angleScore[angleIndex]
 		if (!(score > 0) || !isCircularMaximum(workspace.angleScore, angleIndex, nmsRadius)) continue
 		const normalAngle = angleIndex * workspace.angleStep
-		const support = measureHoughSupport(ridgePoints, width, height, normalAngle, workspace.angleDistance[angleIndex], workspace.distanceStep)
-		if (!(support.strength > 0)) continue
+		const support = measureHoughSupport(ridgePoints, width, height, normalAngle, workspace.angleDistance[angleIndex], workspace.distanceStep, centerX, centerY)
+		if (!(support.strength > 0) || !(support.coverage > 0) || !(support.balance > 0)) continue
 		insertCandidate(
 			coarse,
 			{
@@ -93,7 +99,7 @@ export function detectBahtinovHoughCandidates(ridgePoints: BahtinovRidgePoints, 
 
 	const refined: BahtinovHoughCandidate[] = []
 	for (let index = 0; index < coarse.length; index++) {
-		const next = refineCandidate(coarse[index], ridgePoints, width, height, workspace, refinementRange, refinementStep)
+		const next = refineCandidate(coarse[index], ridgePoints, width, height, workspace, refinementRange, refinementStep, centerX, centerY)
 		if (!refined.some((candidate) => bahtinovAxialAngleDistance(candidate.normalAngle, next.normalAngle) < minimumAxialSeparation)) insertCandidate(refined, next, maximumCandidates)
 	}
 	return refined
@@ -147,15 +153,13 @@ function isCircularMaximum(scores: Float64Array, index: number, radius: number):
 }
 
 // Measures longitudinal coverage, bilateral balance, and strength around one candidate line.
-function measureHoughSupport(ridgePoints: BahtinovRidgePoints, width: number, height: number, normalAngle: Angle, distance: number, distanceStep: number): { readonly coverage: number; readonly balance: number; readonly strength: number } {
+function measureHoughSupport(ridgePoints: BahtinovRidgePoints, width: number, height: number, normalAngle: Angle, distance: number, distanceStep: number, centerX: number, centerY: number): { readonly coverage: number; readonly balance: number; readonly strength: number } {
 	const normalX = Math.cos(normalAngle)
 	const normalY = Math.sin(normalAngle)
 	const tangentX = -normalY
 	const tangentY = normalX
 	const segment = clipBahtinovLineToArea({ normalAngle, distance }, { left: 0, top: 0, right: width, bottom: height })
 	if (!segment) return { coverage: 0, balance: 0, strength: 0 }
-	const middleX = (segment[0].x + segment[1].x) * 0.5
-	const middleY = (segment[0].y + segment[1].y) * 0.5
 	const supportDistance = distanceStep * SUPPORT_DISTANCE_BINS
 	let minimumTangent = Number.POSITIVE_INFINITY
 	let maximumTangent = Number.NEGATIVE_INFINITY
@@ -165,7 +169,7 @@ function measureHoughSupport(ridgePoints: BahtinovRidgePoints, width: number, he
 	for (let index = 0; index < ridgePoints.count; index++) {
 		const orthogonal = ridgePoints.x[index] * normalX + ridgePoints.y[index] * normalY - distance
 		if (Math.abs(orthogonal) > supportDistance) continue
-		const tangent = (ridgePoints.x[index] - middleX) * tangentX + (ridgePoints.y[index] - middleY) * tangentY
+		const tangent = (ridgePoints.x[index] - centerX) * tangentX + (ridgePoints.y[index] - centerY) * tangentY
 		minimumTangent = Math.min(minimumTangent, tangent)
 		maximumTangent = Math.max(maximumTangent, tangent)
 		if (tangent < 0) negativeStrength += ridgePoints.weight[index]
@@ -182,7 +186,7 @@ function measureHoughSupport(ridgePoints: BahtinovRidgePoints, width: number, he
 }
 
 // Refines one coarse candidate by scanning a bounded local angle window.
-function refineCandidate(candidate: BahtinovHoughCandidate, ridgePoints: BahtinovRidgePoints, width: number, height: number, workspace: BahtinovWorkspace, range: Angle, step: Angle): BahtinovHoughCandidate {
+function refineCandidate(candidate: BahtinovHoughCandidate, ridgePoints: BahtinovRidgePoints, width: number, height: number, workspace: BahtinovWorkspace, range: Angle, step: Angle, centerX: number, centerY: number): BahtinovHoughCandidate {
 	if (range === 0) return candidate
 	let best = candidate
 	const sampleCount = Math.ceil((range * 2) / step)
@@ -190,7 +194,8 @@ function refineCandidate(candidate: BahtinovHoughCandidate, ridgePoints: Bahtino
 		const angle = canonicalizeBahtinovLine(candidate.normalAngle - range + sample * step, 0).normalAngle
 		const peak = accumulateHoughAngle(ridgePoints, Math.cos(angle), Math.sin(angle), workspace.rhoMax, workspace.distanceStep, workspace.accumulator, workspace.distanceBinCount)
 		if (!(peak.score > 0)) continue
-		const support = measureHoughSupport(ridgePoints, width, height, angle, peak.distance, workspace.distanceStep)
+		const support = measureHoughSupport(ridgePoints, width, height, angle, peak.distance, workspace.distanceStep, centerX, centerY)
+		if (!(support.strength > 0) || !(support.coverage > 0) || !(support.balance > 0)) continue
 		const score = peak.score * Math.sqrt(support.coverage * support.balance)
 		if (score > best.score) best = { normalAngle: angle, distance: peak.distance, score, coverage: support.coverage, balance: support.balance, strength: support.strength }
 	}

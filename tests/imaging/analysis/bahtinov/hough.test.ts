@@ -41,6 +41,7 @@ test('detects and refines the three synthetic spike orientations', () => {
 		minimumAxialSeparation: PI / 36,
 		refinementRange: PI / 180,
 		refinementStep: PI / 1800,
+		center: preprocessed.center,
 	})
 	expect(candidates.length).toBeGreaterThanOrEqual(3)
 	for (const angle of expected) {
@@ -66,7 +67,7 @@ test('handles axial NMS across zero and PI', () => {
 	const preprocessed = preprocessBahtinov({ image: image(raw, width, height), area: { left: 0, top: 0, right: width, bottom: height }, center: { x: 40, y: 40 } }, workspace, { coreRadius: 2, ridgeSigma: 2 })
 	expect(preprocessed.success).toBeTrue()
 	if (!preprocessed.success) return
-	const candidates = detectBahtinovHoughCandidates(preprocessed.ridgePoints, width, height, preprocessed.workspace, { minimumAxialSeparation: PI / 18 })
+	const candidates = detectBahtinovHoughCandidates(preprocessed.ridgePoints, width, height, preprocessed.workspace, { minimumAxialSeparation: PI / 18, center: preprocessed.center })
 	const boundaryCandidates = candidates.filter((candidate) => bahtinovAxialAngleDistance(candidate.normalAngle, 0) < PI / 36)
 	expect(boundaryCandidates.length).toBe(1)
 })

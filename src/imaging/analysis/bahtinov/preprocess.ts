@@ -1,6 +1,6 @@
 import { PI, PIOVERTWO } from '../../../core/constants'
 import { medianBySelectionOf, quickSelect, STANDARD_DEVIATION_SCALE } from '../../../core/util'
-import type { Rect } from '../../../math/numerical/geometry'
+import type { Point, Rect } from '../../../math/numerical/geometry'
 import type { Angle } from '../../../math/units/angle'
 import { grayscaleFromChannel, makeImageRawTypedArray, type Image, type ImageMetadata, type ImageRawType } from '../../model/types'
 import { separableSmoothing, separableSmoothingKernel, type SeparableSmoothingKernel } from '../../processing/convolution'
@@ -52,6 +52,8 @@ export interface BahtinovPreprocessSuccess {
 	readonly success: true
 	// Resolved half-open ROI in full-image coordinates.
 	readonly area: Readonly<Rect>
+	// Approximate star center in local ROI pixel coordinates.
+	readonly center: Readonly<Point>
 	// Robust source-plane background estimate.
 	readonly background: BahtinovBackground
 	// Median signed DoG response over finite unmasked samples.
@@ -253,6 +255,7 @@ export function preprocessBahtinov(input: BahtinovAnalysisInput, workspace: Baht
 	return {
 		success: true,
 		area,
+		center: { x: centerX, y: centerY },
 		background,
 		responseCenter: responseStatistics.center,
 		responseDeviation: responseStatistics.deviation,
