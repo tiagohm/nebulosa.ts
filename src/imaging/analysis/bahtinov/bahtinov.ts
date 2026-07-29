@@ -3,7 +3,7 @@ import type { Point, Rect } from '../../../math/numerical/geometry'
 import { bahtinovAxialAngleDistance, bahtinovAxialBisectors, computeBahtinovFocusGeometry, intersectBahtinovLines } from './geometry'
 import { detectBahtinovHoughCandidates, validateBahtinovHoughOptions } from './hough'
 import { fitBahtinovLines, type BahtinovFittedCandidate } from './line'
-import { preprocessBahtinov, type BahtinovPreprocessSuccess } from './preprocess'
+import { bahtinovLineSaturationRetention, preprocessBahtinov, type BahtinovPreprocessSuccess } from './preprocess'
 import type { BahtinovAnalysisFailure, BahtinovAnalysisInput, BahtinovAnalysisOptions, BahtinovAnalysisResult, BahtinovExpectedPattern, BahtinovFocusState, BahtinovLine, BahtinovQuality, BahtinovWarning, BahtinovWorkspace } from './types'
 
 // Workspace-backed Bahtinov analyzer facade. The pipeline preprocesses a normalized ROI, detects and
@@ -191,7 +191,11 @@ function resolveDecisionOptions(options: BahtinovAnalysisOptions): ResolvedBahti
 function selectTriplets(fitted: readonly BahtinovFittedCandidate[], preprocessed: BahtinovPreprocessSuccess, expected: BahtinovExpectedPattern | undefined, options: ResolvedBahtinovDecisionOptions): readonly BahtinovTripletCandidate[] {
 	const triplets: BahtinovTripletCandidate[] = []
 	let maximumStrength = 0
-	for (let index = 0; index < fitted.length; index++) maximumStrength = Math.max(maximumStrength, fitted[index].line.strength)
+	const saturationRetentions = preprocessed.workspace.statistics
+	for (let index = 0; index < fitted.length; index++) {
+		maximumStrength = Math.max(maximumStrength, fitted[index].line.strength)
+		saturationRetentions[index] = bahtinovLineSaturationRetention(fitted[index].line, preprocessed)
+	}
 
 	for (let central = 0; central < fitted.length; central++) {
 		for (let first = 0; first < fitted.length - 1; first++) {
@@ -225,6 +229,7 @@ function selectTriplets(fitted: readonly BahtinovFittedCandidate[], preprocessed
 				const minimumBalance = Math.min(centralLine.balance, firstLine.balance, secondLine.balance)
 				const maximumResidual = Math.max(centralLine.residual, firstLine.residual, secondLine.residual)
 				const minimumSignal = Math.min(centralLine.signalToNoise, firstLine.signalToNoise, secondLine.signalToNoise)
+				const saturationRetention = Math.min(saturationRetentions[central], saturationRetentions[first], saturationRetentions[second])
 				const quality: BahtinovQuality = {
 					signal: saturatingRatio(minimumSignal, options.minimumSignalToNoise),
 					lineStrength: maximumStrength > 0 ? Math.max(0, Math.min(1, minimumStrength / maximumStrength)) : 0,
@@ -233,7 +238,7 @@ function selectTriplets(fitted: readonly BahtinovFittedCandidate[], preprocessed
 					lineFit: Math.max(0, 1 - maximumResidual / options.maximumResidual),
 					angularSymmetry: Math.max(0, 1 - bisectorError / options.maximumBisectorError),
 					intersectionCondition: intersection.condition,
-					saturationRetention: Math.max(0, 1 - preprocessed.saturationFraction),
+					saturationRetention,
 					cropCoverage: minimumCropCoverage,
 					candidateSeparation: 1,
 				}

@@ -214,6 +214,16 @@ test('does not fit saturation-mask boundaries as a defocused pattern', () => {
 	else expect(['saturated', 'insufficientSupport', 'patternNotFound']).toContain(result.reason)
 })
 
+test('measures saturation retention on the selected spike bands', () => {
+	const source = synthetic(0)
+	for (let y = 63; y <= 64; y++) {
+		for (let x = 20; x <= 40; x++) source.raw[y * 128 + x] = 1
+	}
+	const result = analyzeBahtinov({ image: source, area: { left: 0, top: 0, right: 128, bottom: 128 }, center: { x: 63.5, y: 63.5 } }, ANALYSIS_OPTIONS)
+	expect(result.success).toBeTrue()
+	if (result.success) expect(result.quality.saturationRetention).toBeLessThan(0.9)
+})
+
 test('uses uncertainty rather than raw error alone for focus classification', () => {
 	const result = analyzeBahtinov({ image: synthetic(0.4), area: { left: 0, top: 0, right: 128, bottom: 128 }, center: { x: 63.5, y: 63.5 } }, { ...ANALYSIS_OPTIONS, focusTolerance: 0.5, focusSigma: 10, maximumUncertainty: 10 })
 	expect(result.success).toBeTrue()

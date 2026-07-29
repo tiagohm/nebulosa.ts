@@ -4,7 +4,7 @@ import type { Point, Rect } from '../../../math/numerical/geometry'
 import type { Angle } from '../../../math/units/angle'
 import { grayscaleFromChannel, makeImageRawTypedArray, type Image, type ImageMetadata, type ImageRawType } from '../../model/types'
 import { separableSmoothing, separableSmoothingKernel, type SeparableSmoothingKernel } from '../../processing/convolution'
-import type { BahtinovAnalysisInput, BahtinovAnalysisOptions, BahtinovBackground, BahtinovFailureReason, BahtinovPlane, BahtinovRidgePoints, BahtinovWorkspace, BahtinovWorkspaceOptions } from './types'
+import type { BahtinovAnalysisInput, BahtinovAnalysisOptions, BahtinovBackground, BahtinovFailureReason, BahtinovLine, BahtinovPlane, BahtinovRidgePoints, BahtinovWorkspace, BahtinovWorkspaceOptions } from './types'
 
 // Bahtinov ROI extraction and preprocessing. The module converts normalized mono/RGB samples into
 // one reusable mono plane, masks invalid/core/saturated support, computes a signed DoG response, and
@@ -289,6 +289,49 @@ export function preprocessBahtinov(input: BahtinovAnalysisInput, workspace: Baht
 		ridgePoints,
 		workspace,
 	}
+}
+
+// Measures the clean longitudinal fraction of one selected spike's saturation-support band.
+export function bahtinovLineSaturationRetention(line: BahtinovLine, preprocessed: BahtinovPreprocessSuccess): number {
+	const first = line.segment[0]
+	const second = line.segment[1]
+	const deltaX = second.x - first.x
+	const deltaY = second.y - first.y
+	const segmentLength = Math.hypot(deltaX, deltaY)
+	if (!(segmentLength > 0) || !Number.isFinite(segmentLength)) return 0
+	const tangentX = deltaX / segmentLength
+	const tangentY = deltaY / segmentLength
+	const centerX = preprocessed.area.left + preprocessed.center.x
+	const centerY = preprocessed.area.top + preprocessed.center.y
+	const centerTangent = Math.max(0, Math.min(segmentLength, (centerX - first.x) * tangentX + (centerY - first.y) * tangentY))
+	const supportLength = segmentLength * Math.max(0, Math.min(1, line.coverage))
+	const firstTangent = Math.max(0, centerTangent - supportLength * 0.5)
+	const lastTangent = Math.min(segmentLength, centerTangent + supportLength * 0.5)
+	const sampleCount = Math.max(1, Math.ceil(lastTangent - firstTangent))
+	const normalX = Math.cos(line.normalAngle)
+	const normalY = Math.sin(line.normalAngle)
+	const supportRadius = Math.max(1, Math.ceil(line.fwhm * 0.5))
+	const width = preprocessed.area.right - preprocessed.area.left
+	const height = preprocessed.area.bottom - preprocessed.area.top
+	let retained = 0
+
+	for (let sample = 0; sample <= sampleCount; sample++) {
+		const tangent = firstTangent + ((lastTangent - firstTangent) * sample) / sampleCount
+		const x = first.x + tangent * tangentX
+		const y = first.y + tangent * tangentY
+		let saturated = false
+		for (let offset = -supportRadius; offset <= supportRadius; offset++) {
+			const localX = Math.round(x + offset * normalX) - preprocessed.area.left
+			const localY = Math.round(y + offset * normalY) - preprocessed.area.top
+			if (localX < 0 || localX >= width || localY < 0 || localY >= height) continue
+			if ((preprocessed.workspace.mask[localY * width + localX] & (MASK_SATURATED | MASK_DILATED)) !== 0) {
+				saturated = true
+				break
+			}
+		}
+		if (!saturated) retained++
+	}
+	return retained / (sampleCount + 1)
 }
 
 // Writes a unit weight except where saturation masking removed source support.
