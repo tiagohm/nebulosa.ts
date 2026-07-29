@@ -1,0 +1,65 @@
+import { expect, test } from 'bun:test'
+import { bahtinovAxialAngleDistance, bahtinovAxialBisectors, bahtinovFocusProximity, bahtinovGlobalLineDistance, canonicalizeBahtinovLine, clipBahtinovLineToArea, computeBahtinovFocusGeometry, intersectBahtinovLines } from '../../../../src/imaging/analysis/bahtinov/geometry'
+
+test('canonicalizes equivalent normal-form lines', () => {
+	expect(canonicalizeBahtinovLine(Math.PI * 1.25, 7)).toEqual({ normalAngle: Math.PI * 0.25, distance: -7 })
+	expect(canonicalizeBahtinovLine(-Math.PI * 0.75, 7)).toEqual({ normalAngle: Math.PI * 0.25, distance: -7 })
+	expect(canonicalizeBahtinovLine(Math.PI * 2.25, 7)).toEqual({ normalAngle: Math.PI * 0.25, distance: 7 })
+})
+
+test('computes axial distance across the canonical boundary', () => {
+	expect(bahtinovAxialAngleDistance(0.01, Math.PI - 0.01)).toBeCloseTo(0.02, 14)
+	expect(bahtinovAxialAngleDistance(0, Math.PI / 2)).toBeCloseTo(Math.PI / 2, 14)
+})
+
+test('converts local normal distance to global coordinates', () => {
+	const angle = Math.PI / 3
+	const area = { left: 11, top: 17, right: 41, bottom: 57 }
+	const global = bahtinovGlobalLineDistance(5, angle, area)
+	expect(global).toBeCloseTo(5 + 11 * Math.cos(angle) + 17 * Math.sin(angle), 14)
+})
+
+test('intersects finite lines and rejects near-parallel lines', () => {
+	const intersection = intersectBahtinovLines({ normalAngle: 0, distance: 4 }, { normalAngle: Math.PI / 2, distance: 9 })
+	expect(intersection?.point.x).toBeCloseTo(4, 14)
+	expect(intersection?.point.y).toBeCloseTo(9, 14)
+	expect(intersection?.condition).toBeCloseTo(1, 14)
+	expect(intersectBahtinovLines({ normalAngle: 0, distance: 4 }, { normalAngle: 1e-10, distance: 9 })).toBeUndefined()
+})
+
+test('computes both external-line bisectors', () => {
+	const [primary, secondary] = bahtinovAxialBisectors(Math.PI - 0.2, 0.2)
+	expect(bahtinovAxialAngleDistance(primary, 0)).toBeCloseTo(0, 14)
+	expect(bahtinovAxialAngleDistance(primary, secondary)).toBeCloseTo(Math.PI / 2, 14)
+})
+
+test('clips horizontal vertical and diagonal lines to pixel centers', () => {
+	const area = { left: 10, top: 20, right: 15, bottom: 25 }
+	expect(clipBahtinovLineToArea({ normalAngle: Math.PI / 2, distance: 22 }, area)).toEqual([
+		{ x: 10, y: 22 },
+		{ x: 14, y: 22 },
+	])
+	expect(clipBahtinovLineToArea({ normalAngle: 0, distance: 12 }, area)).toEqual([
+		{ x: 12, y: 20 },
+		{ x: 12, y: 24 },
+	])
+
+	const diagonal = clipBahtinovLineToArea({ normalAngle: -Math.PI / 4, distance: -Math.sqrt(50) }, area)
+	expect(diagonal?.[0].x).toBeCloseTo(10, 14)
+	expect(diagonal?.[0].y).toBeCloseTo(20, 14)
+	expect(diagonal?.[1].x).toBeCloseTo(14, 14)
+	expect(diagonal?.[1].y).toBeCloseTo(24, 14)
+})
+
+test('computes signed focus error and stable proximity', () => {
+	const geometry = computeBahtinovFocusGeometry({ normalAngle: 0, distance: 4.5 }, { normalAngle: Math.PI / 4, distance: 0 }, { normalAngle: (Math.PI * 3) / 4, distance: 0 }, 0.5)
+	expect(geometry?.reference.x).toBeCloseTo(0, 14)
+	expect(geometry?.reference.y).toBeCloseTo(0, 14)
+	expect(geometry?.error).toBeCloseTo(-4.5, 14)
+	expect(geometry?.absoluteError).toBeCloseTo(4.5, 14)
+	expect(geometry?.focusProximity).toBeCloseTo(0.1, 14)
+	expect(bahtinovFocusProximity(0, 0.5)).toBe(1)
+	expect(bahtinovFocusProximity(0.5, 0.5)).toBe(0.5)
+	expect(bahtinovFocusProximity(5, 0.5)).toBeCloseTo(1 / 11, 14)
+	expect(bahtinovFocusProximity(Number.MAX_VALUE, Number.MIN_VALUE)).toBe(0)
+})
