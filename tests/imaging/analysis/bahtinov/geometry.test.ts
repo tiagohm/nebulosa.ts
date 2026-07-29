@@ -11,6 +11,10 @@ test('canonicalizes equivalent normal-form lines', () => {
 test('computes axial distance across the canonical boundary', () => {
 	expect(bahtinovAxialAngleDistance(0.01, PI - 0.01)).toBeCloseTo(0.02, 14)
 	expect(bahtinovAxialAngleDistance(0, PIOVERTWO)).toBeCloseTo(PIOVERTWO, 14)
+	const extreme = bahtinovAxialAngleDistance(Number.MAX_VALUE, -Number.MAX_VALUE)
+	expect(Number.isFinite(extreme)).toBeTrue()
+	expect(extreme).toBeGreaterThanOrEqual(0)
+	expect(extreme).toBeLessThanOrEqual(PIOVERTWO)
 })
 
 test('converts local normal distance to global coordinates', () => {

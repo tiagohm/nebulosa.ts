@@ -67,7 +67,7 @@ export function canonicalizeBahtinovLine(normalAngle: Angle, distance: number): 
 // Both input angles are radians and may be outside the canonical range.
 export function bahtinovAxialAngleDistance(angleA: Angle, angleB: Angle): Angle {
 	if (!Number.isFinite(angleA) || !Number.isFinite(angleB)) throw new RangeError('line angles must be finite')
-	let delta = Math.abs(angleA - angleB) % PI
+	let delta = Math.abs((angleA % PI) - (angleB % PI)) % PI
 	if (delta > PIOVERTWO) delta = PI - delta
 	return delta
 }
