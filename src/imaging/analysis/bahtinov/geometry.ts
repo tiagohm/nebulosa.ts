@@ -77,7 +77,9 @@ export function bahtinovAxialAngleDistance(angleA: Angle, angleB: Angle): Angle 
 export function bahtinovGlobalLineDistance(localDistance: number, normalAngle: Angle, area: Readonly<Rect>): number {
 	if (!Number.isFinite(localDistance) || !Number.isFinite(normalAngle)) throw new RangeError('line parameters must be finite')
 	validateBahtinovArea(area)
-	return localDistance + area.left * Math.cos(normalAngle) + area.top * Math.sin(normalAngle)
+	const globalDistance = localDistance + area.left * Math.cos(normalAngle) + area.top * Math.sin(normalAngle)
+	if (!Number.isFinite(globalDistance)) throw new RangeError('global line distance must be finite')
+	return globalDistance
 }
 
 // Intersects two normal-form lines or returns undefined when their unit normals are too parallel.
@@ -206,7 +208,7 @@ export function computeBahtinovFocusGeometry(central: BahtinovNormalLine, extern
 
 // Validates one half-open integer ROI without applying image-bound constraints.
 function validateBahtinovArea(area: Readonly<Rect>): void {
-	if (!Number.isInteger(area.left) || !Number.isInteger(area.top) || !Number.isInteger(area.right) || !Number.isInteger(area.bottom)) throw new RangeError('Bahtinov area edges must be integers')
+	if (!Number.isSafeInteger(area.left) || !Number.isSafeInteger(area.top) || !Number.isSafeInteger(area.right) || !Number.isSafeInteger(area.bottom)) throw new RangeError('Bahtinov area edges must be safe integers')
 	if (area.left >= area.right || area.top >= area.bottom) throw new RangeError('Bahtinov area must have positive width and height')
 }
 

@@ -22,6 +22,7 @@ test('converts local normal distance to global coordinates', () => {
 	const area = { left: 11, top: 17, right: 41, bottom: 57 }
 	const global = bahtinovGlobalLineDistance(5, angle, area)
 	expect(global).toBeCloseTo(5 + 11 * Math.cos(angle) + 17 * Math.sin(angle), 14)
+	expect(() => bahtinovGlobalLineDistance(Number.MAX_VALUE, PI, { left: -Number.MAX_VALUE, top: 0, right: 0, bottom: 1 })).toThrow(RangeError)
 })
 
 test('intersects finite lines and rejects near-parallel lines', () => {
