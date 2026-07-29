@@ -191,8 +191,8 @@ export function computeBahtinovFocusGeometry(central: BahtinovNormalLine, extern
 	const normalY = Math.sin(central.normalAngle)
 	const error = normalX * intersection.point.x + normalY * intersection.point.y - central.distance
 	const absoluteError = Math.abs(error)
-	const focusProximity = bahtinovFocusProximity(absoluteError, focusTolerance)
 	if (!Number.isFinite(error) || !Number.isFinite(absoluteError)) return undefined
+	const focusProximity = bahtinovFocusProximity(absoluteError, focusTolerance)
 
 	return {
 		reference: intersection.point,

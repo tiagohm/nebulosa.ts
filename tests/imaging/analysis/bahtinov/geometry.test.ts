@@ -63,4 +63,5 @@ test('computes signed focus error and stable proximity', () => {
 	expect(bahtinovFocusProximity(0.5, 0.5)).toBe(0.5)
 	expect(bahtinovFocusProximity(5, 0.5)).toBeCloseTo(1 / 11, 14)
 	expect(bahtinovFocusProximity(Number.MAX_VALUE, Number.MIN_VALUE)).toBe(0)
+	expect(computeBahtinovFocusGeometry({ normalAngle: 0, distance: -Number.MAX_VALUE }, { normalAngle: 0, distance: Number.MAX_VALUE }, { normalAngle: PIOVERTWO, distance: 0 }, 0.5)).toBeUndefined()
 })
