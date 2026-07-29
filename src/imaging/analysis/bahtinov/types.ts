@@ -298,6 +298,18 @@ export interface BahtinovWorkspace {
 	readonly width: number
 	// Maximum ROI height in pixels.
 	readonly height: number
+	// Maximum number of retained ridge points.
+	readonly maximumRidgePoints: number
+	// Coarse angular resolution in radians used to allocate lookup tables.
+	readonly angleStep: Angle
+	// Normal-distance resolution in pixels used to allocate the accumulator.
+	readonly distanceStep: number
+	// Number of coarse normal-angle samples.
+	readonly angleCount: number
+	// Number of normal-distance bins available per angle.
+	readonly distanceBinCount: number
+	// Largest local normal distance represented by the accumulator, in pixels.
+	readonly rhoMax: number
 	// Extracted mono ROI.
 	readonly source: ImageRawType
 	// Separable-convolution intermediate buffer.
