@@ -90,3 +90,11 @@ test('plotBahtinovSpikes rejects invalid options without adding image effects', 
 	expect(() => plotBahtinovSpikes(raw, 5, 5, 1, 2, 2, 10, 0, undefined, { strengths: [0, 0, 0] })).toThrow(RangeError)
 	expect(Array.from(raw)).toEqual(new Array(25).fill(0))
 })
+
+test('plotBahtinovSpikes bounds extreme finite normalization support', () => {
+	const raw = new Float64Array(25)
+	expect(() => plotBahtinovSpikes(raw, 5, 5, 1, 2, 2, 10, 0, undefined, { halfLength: 1e9, taperLength: 0 })).toThrow(RangeError)
+	expect(() => plotBahtinovSpikes(raw, 5, 5, 1, 2, 2, 10, 0, undefined, { cutoffSigma: 1e9 })).toThrow(RangeError)
+	expect(plotBahtinovSpikes(raw, 5, 5, 1, Number.MAX_VALUE, 2, 10, 0)).toBeFalse()
+	expect(Array.from(raw)).toEqual(new Array(25).fill(0))
+})

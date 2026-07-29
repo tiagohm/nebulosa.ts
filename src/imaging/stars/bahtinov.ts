@@ -43,6 +43,8 @@ const DEFAULT_BAHTINOV_STRENGTHS: readonly [number, number, number] = [1, 1, 1]
 const DEFAULT_BAHTINOV_CUTOFF_SIGMA = 4
 // Largest finite value representable by a Float32Array sample.
 const MAX_FLOAT32 = 3.4028234663852886e38
+// Maximum nominal discrete samples used to normalize one spike before rendering.
+const MAX_BAHTINOV_NORMALIZATION_SAMPLES = 16_777_216
 
 // Adds only three Bahtinov diffraction spikes to an existing mono or interleaved RGB buffer.
 //
@@ -91,19 +93,27 @@ export function plotBahtinovSpikes(raw: ImageRawType, width: number, height: num
 		const tangentX = -normalY
 		const tangentY = normalX
 		const distance = x * normalX + y * normalY - (index === central ? error : 0)
-		const normalization = bahtinovSpikeDiscreteSum(x, y, normalX, normalY, tangentX, tangentY, distance, sigma, cutoffDistance, halfLength, taperLength)
-		if (!(normalization > 0) || !Number.isFinite(normalization)) continue
-		const amplitude = (totalFlux * relativeStrength) / normalization
-		if (!(amplitude > 0) || !Number.isFinite(amplitude)) continue
-
 		const centerX = x - (index === central ? error * normalX : 0)
 		const centerY = y - (index === central ? error * normalY : 0)
 		const extentX = Math.abs(tangentX) * halfLength + Math.abs(normalX) * cutoffDistance
 		const extentY = Math.abs(tangentY) * halfLength + Math.abs(normalY) * cutoffDistance
-		const minimumX = Math.max(0, Math.floor(centerX - extentX))
-		const maximumX = Math.min(width - 1, Math.ceil(centerX + extentX))
-		const minimumY = Math.max(0, Math.floor(centerY - extentY))
-		const maximumY = Math.min(height - 1, Math.ceil(centerY + extentY))
+		const supportMinimumX = centerX - extentX
+		const supportMaximumX = centerX + extentX
+		const supportMinimumY = centerY - extentY
+		const supportMaximumY = centerY + extentY
+		if (!Number.isFinite(centerX) || !Number.isFinite(centerY) || !Number.isFinite(extentX) || !Number.isFinite(extentY) || !Number.isFinite(supportMinimumX) || !Number.isFinite(supportMaximumX) || !Number.isFinite(supportMinimumY) || !Number.isFinite(supportMaximumY))
+			throw new RangeError('Bahtinov spike support must remain finite')
+		if (supportMaximumX < 0 || supportMinimumX > width - 1 || supportMaximumY < 0 || supportMinimumY > height - 1) continue
+
+		const normalization = bahtinovSpikeDiscreteSum(x, y, normalX, normalY, tangentX, tangentY, distance, centerX, centerY, sigma, cutoffDistance, halfLength, taperLength)
+		if (!(normalization > 0) || !Number.isFinite(normalization)) continue
+		const amplitude = (totalFlux * relativeStrength) / normalization
+		if (!(amplitude > 0) || !Number.isFinite(amplitude)) continue
+
+		const minimumX = Math.max(0, Math.floor(supportMinimumX))
+		const maximumX = Math.min(width - 1, Math.ceil(supportMaximumX))
+		const minimumY = Math.max(0, Math.floor(supportMinimumY))
+		const maximumY = Math.min(height - 1, Math.ceil(supportMaximumY))
 		if (minimumX > maximumX || minimumY > maximumY) continue
 
 		const inverseTwoSigmaSquared = 0.5 / (sigma * sigma)
@@ -135,15 +145,14 @@ export function plotBahtinovSpikes(raw: ImageRawType, width: number, height: num
 }
 
 // Computes nominal discrete support so image-edge clipping never renormalizes visible brightness.
-function bahtinovSpikeDiscreteSum(x: number, y: number, normalX: number, normalY: number, tangentX: number, tangentY: number, distance: number, sigma: number, cutoffDistance: number, halfLength: number, taperLength: number): number {
-	const centerX = x - (x * normalX + y * normalY - distance) * normalX
-	const centerY = y - (x * normalX + y * normalY - distance) * normalY
+function bahtinovSpikeDiscreteSum(x: number, y: number, normalX: number, normalY: number, tangentX: number, tangentY: number, distance: number, centerX: number, centerY: number, sigma: number, cutoffDistance: number, halfLength: number, taperLength: number): number {
 	const extentX = Math.abs(tangentX) * halfLength + Math.abs(normalX) * cutoffDistance
 	const extentY = Math.abs(tangentY) * halfLength + Math.abs(normalY) * cutoffDistance
 	const minimumX = Math.floor(centerX - extentX)
 	const maximumX = Math.ceil(centerX + extentX)
 	const minimumY = Math.floor(centerY - extentY)
 	const maximumY = Math.ceil(centerY + extentY)
+	validateBahtinovNormalizationBounds(minimumX, maximumX, minimumY, maximumY)
 	const inverseTwoSigmaSquared = 0.5 / (sigma * sigma)
 	let sum = 0
 
@@ -159,6 +168,14 @@ function bahtinovSpikeDiscreteSum(x: number, y: number, normalX: number, normalY
 	}
 
 	return sum
+}
+
+// Rejects nominal support rectangles whose integer iteration would be unsafe or unbounded in practice.
+function validateBahtinovNormalizationBounds(minimumX: number, maximumX: number, minimumY: number, maximumY: number): void {
+	if (!Number.isSafeInteger(minimumX) || !Number.isSafeInteger(maximumX) || !Number.isSafeInteger(minimumY) || !Number.isSafeInteger(maximumY)) throw new RangeError('Bahtinov normalization bounds must be safe integers')
+	const width = maximumX - minimumX + 1
+	const height = maximumY - minimumY + 1
+	if (width <= 0 || height <= 0 || width > MAX_BAHTINOV_NORMALIZATION_SAMPLES / height) throw new RangeError('Bahtinov normalization support is too large')
 }
 
 // Evaluates a unit plateau with a smoothstep fade over the final longitudinal taper.
