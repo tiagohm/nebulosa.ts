@@ -101,10 +101,10 @@ export function validateBahtinovHoughOptions(workspace: BahtinovWorkspace, optio
 function resolveHoughOptions(workspace: BahtinovWorkspace, options: BahtinovHoughOptions): { maximumCandidates: number; minimumAxialSeparation: Angle; refinementRange: Angle; refinementStep: Angle } {
 	const maximumCandidates = options.maximumCandidates ?? Math.min(DEFAULT_BAHTINOV_ANALYSIS_OPTIONS.maximumAngleCandidates, workspace.angleCount)
 	const minimumAxialSeparation = options.minimumAxialSeparation ?? DEFAULT_BAHTINOV_ANALYSIS_OPTIONS.minimumAxialSeparation
-	const refinementRange = options.refinementRange ?? DEFAULT_BAHTINOV_ANALYSIS_OPTIONS.refinementRange
-	const refinementStep = options.refinementStep ?? DEFAULT_BAHTINOV_ANALYSIS_OPTIONS.refinementStep
 	if (!Number.isInteger(maximumCandidates) || maximumCandidates < 3 || maximumCandidates > workspace.angleCount) throw new RangeError('maximumCandidates must be an integer from 3 to angleCount')
 	if (!Number.isFinite(minimumAxialSeparation) || minimumAxialSeparation <= 0 || minimumAxialSeparation > PIOVERTWO) throw new RangeError('minimumAxialSeparation must be in (0, PI / 2]')
+	const refinementRange = options.refinementRange ?? Math.min(DEFAULT_BAHTINOV_ANALYSIS_OPTIONS.refinementRange, minimumAxialSeparation * 0.5)
+	const refinementStep = options.refinementStep ?? (refinementRange > 0 ? Math.min(DEFAULT_BAHTINOV_ANALYSIS_OPTIONS.refinementStep, refinementRange) : DEFAULT_BAHTINOV_ANALYSIS_OPTIONS.refinementStep)
 	if (!Number.isFinite(refinementRange) || refinementRange < 0 || refinementRange > minimumAxialSeparation * 0.5) throw new RangeError('refinementRange must be finite and no greater than half the candidate separation')
 	if (!Number.isFinite(refinementStep) || refinementStep <= 0 || (refinementRange > 0 && refinementStep > refinementRange)) throw new RangeError('refinementStep must be finite, positive, and no greater than refinementRange')
 	const refinementSamples = refinementRange === 0 ? 0 : Math.ceil((refinementRange * 2) / refinementStep) + 1

@@ -126,6 +126,11 @@ test('rejects an unsafe local refinement sample count', () => {
 	expect(() => validateBahtinovHoughOptions(workspace, { refinementStep: 1e-300 })).toThrow(RangeError)
 })
 
+test('adapts default refinement to tighter candidate separation', () => {
+	const workspace = createBahtinovWorkspace(80, 80)
+	expect(() => validateBahtinovHoughOptions(workspace, { minimumAxialSeparation: PI / 180 })).not.toThrow()
+})
+
 test('keeps non-divisible refinement steps inside the configured range', () => {
 	const width = 96
 	const height = 96
