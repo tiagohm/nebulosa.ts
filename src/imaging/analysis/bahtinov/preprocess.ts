@@ -198,6 +198,8 @@ export function preprocessBahtinov(input: BahtinovAnalysisInput, workspace: Baht
 	const largeBlurSigma = options.largeBlurSigma ?? DEFAULT_LARGE_BLUR_SIGMA
 	const ridgeSigma = options.ridgeSigma ?? DEFAULT_RIDGE_SIGMA
 	validatePreprocessOptions(saturationLevel, saturationDilation, coreRadius, backgroundUpperQuantile, smallBlurSigma, largeBlurSigma, ridgeSigma)
+	validateGaussianKernelSupport(smallBlurSigma, width, height, 'smallBlurSigma')
+	validateGaussianKernelSupport(largeBlurSigma, width, height, 'largeBlurSigma')
 
 	const plane = resolvePlane(input.image, options.plane ?? 'auto')
 	if (!plane) return { success: false, reason: 'unsupportedPlane', area }
@@ -498,6 +500,13 @@ function validatePreprocessOptions(saturationLevel: number, saturationDilation: 
 	if (!Number.isFinite(backgroundUpperQuantile) || backgroundUpperQuantile <= 0 || backgroundUpperQuantile > 1) throw new RangeError('backgroundUpperQuantile must be in (0, 1]')
 	if (!Number.isFinite(smallBlurSigma) || !Number.isFinite(largeBlurSigma) || smallBlurSigma <= 0 || largeBlurSigma <= smallBlurSigma) throw new RangeError('blur sigmas must satisfy largeBlurSigma > smallBlurSigma > 0')
 	if (!Number.isFinite(ridgeSigma) || ridgeSigma <= 0) throw new RangeError('ridgeSigma must be finite and positive')
+}
+
+// Bounds a three-sigma Gaussian radius to safe integer support no larger than the active ROI.
+function validateGaussianKernelSupport(sigma: number, width: number, height: number, name: string): void {
+	const radius = Math.ceil(sigma * 3)
+	const maximumRadius = Math.max(width, height) - 1
+	if (!Number.isSafeInteger(radius) || radius < 1 || radius > maximumRadius || !Number.isSafeInteger(radius * 2 + 1)) throw new RangeError(`${name} produces Gaussian support larger than the active ROI`)
 }
 
 // Ensures one reusable workspace can represent the requested ROI and search settings.

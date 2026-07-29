@@ -232,3 +232,16 @@ test('rejects a workspace whose recorded capacity is insufficient', () => {
 	expect(() => preprocessBahtinov({ image: source, area: { left: 0, top: 0, right: width, bottom: height }, center: { x: 32, y: 32 } }, { distanceStep: 2 }, workspace)).toThrow(RangeError)
 	expect(() => preprocessBahtinov({ image: source, area: { left: 0, top: 0, right: width, bottom: height }, center: { x: 32, y: 32 } }, { angleStep: PI / 90, distanceStep: 1 }, workspace)).not.toThrow()
 })
+
+test('rejects Gaussian kernels whose support exceeds the active ROI', () => {
+	const width = 64
+	const height = 64
+	const raw = new Float32Array(width * height)
+	raw.fill(0.01)
+	plotBahtinovSpikes(raw, width, height, 1, 32, 32, 100, 0, undefined, { halfLength: 20, taperLength: 4 })
+	const source = image(raw, width, height)
+	const workspace = createBahtinovWorkspace(width, height)
+	const input = { image: source, area: { left: 0, top: 0, right: width, bottom: height }, center: { x: 32, y: 32 } } as const
+	expect(() => preprocessBahtinov(input, { smallBlurSigma: 1e100, largeBlurSigma: 2e100 }, workspace)).toThrow(RangeError)
+	expect(() => preprocessBahtinov(input, { smallBlurSigma: 1, largeBlurSigma: 1e100 }, workspace)).toThrow(RangeError)
+})
