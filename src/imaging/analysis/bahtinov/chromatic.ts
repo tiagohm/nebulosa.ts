@@ -1,4 +1,5 @@
 import { analyzeBahtinov } from './bahtinov'
+import { createBahtinovWorkspace, resolveBahtinovArea } from './preprocess'
 import type { BahtinovAnalysisInput, BahtinovAnalysisOptions, BahtinovAnalysisResult, BahtinovChromaticOptions, BahtinovChromaticResult, BahtinovPlane } from './types'
 
 // Stateless chromatic comparison for an already registered RGB image. Each channel runs through the
@@ -12,9 +13,10 @@ import type { BahtinovAnalysisInput, BahtinovAnalysisOptions, BahtinovAnalysisRe
 export function compareBahtinovChromatic(input: BahtinovAnalysisInput, options: BahtinovChromaticOptions = {}): BahtinovChromaticResult {
 	const { channels, bayer } = input.image.metadata
 	if (channels !== 3 || bayer) throw new RangeError('Bahtinov chromatic comparison requires a non-CFA RGB image')
-	const red = analyzeChromaticPlane(input, options, 'RED')
-	const green = analyzeChromaticPlane(input, options, 'GREEN')
-	const blue = analyzeChromaticPlane(input, options, 'BLUE')
+	const analysisOptions = options.workspace ? options : createChromaticAnalysisOptions(input, options)
+	const red = analyzeChromaticPlane(input, analysisOptions, 'RED')
+	const green = analyzeChromaticPlane(input, analysisOptions, 'GREEN')
+	const blue = analyzeChromaticPlane(input, analysisOptions, 'BLUE')
 	const channelResults = { red, green, blue }
 	const failedChannels: ('red' | 'green' | 'blue')[] = []
 	if (!red.success) failedChannels.push('red')
@@ -33,6 +35,22 @@ export function compareBahtinovChromatic(input: BahtinovAnalysisInput, options: 
 		redReferenceOffset: { x: red.reference.x - green.reference.x, y: red.reference.y - green.reference.y },
 		blueReferenceOffset: { x: blue.reference.x - green.reference.x, y: blue.reference.y - green.reference.y },
 		confidence: Math.min(red.confidence, green.confidence, blue.confidence),
+	}
+}
+
+// Creates one private workspace reused sequentially by all three RGB channels.
+function createChromaticAnalysisOptions(input: BahtinovAnalysisInput, options: BahtinovChromaticOptions): BahtinovChromaticOptions {
+	const area = resolveBahtinovArea(input)
+	const width = area.right - area.left
+	const height = area.bottom - area.top
+	return {
+		...options,
+		workspace: createBahtinovWorkspace(width, height, {
+			precision: input.image.raw.BYTES_PER_ELEMENT === 8 ? 64 : 32,
+			maximumRidgePoints: options.maximumRidgePoints === undefined ? undefined : Math.min(options.maximumRidgePoints, width * height),
+			angleStep: options.angleStep,
+			distanceStep: options.distanceStep,
+		}),
 	}
 }
 
