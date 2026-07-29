@@ -60,27 +60,33 @@ test('robustly fits global spike lines with finite support metrics', () => {
 	}
 })
 
-test('reports monotonic transverse FWHM for known synthetic spike widths', () => {
+test('recovers broad synthetic FWHM outside the fixed fit-support band', () => {
 	const width = 128
 	const height = 128
 	const measured: number[] = []
-	for (const fwhm of [1.5, 3, 5]) {
+	for (const fwhm of [2, 4, 8]) {
 		const raw = new Float64Array(width * height)
 		raw.fill(0.015)
 		const expected = [PI / 12, 0, (PI * 11) / 12] as const
-		plotBahtinovSpikes(raw, width, height, 1, 63.5, 63.5, 160, 0, undefined, { normalAngles: expected, halfLength: 44, taperLength: 7, fwhm })
+		plotBahtinovSpikes(raw, width, height, 1, 63.5, 63.5, 160, 0, undefined, { normalAngles: expected, halfLength: 44, taperLength: 7, fwhm, strengths: [0, 1, 0] })
 		const area = { left: 0, top: 0, right: width, bottom: height }
 		const workspace = createBahtinovWorkspace(width, height, { precision: 64, maximumRidgePoints: 2048 })
 		const preprocessed = preprocessBahtinov({ image: image(raw, width, height), area, center: { x: 63.5, y: 63.5 } }, workspace, { transform: 'linear', coreRadius: 3, ridgeSigma: 2, maximumRidgePoints: 2048 })
 		expect(preprocessed.success).toBeTrue()
 		if (!preprocessed.success) continue
 		const candidates = detectBahtinovHoughCandidates(preprocessed.ridgePoints, width, height, preprocessed.workspace, { center: preprocessed.center })
-		const fitted = fitBahtinovLines(candidates, preprocessed.ridgePoints, area, preprocessed.responseDeviation, preprocessed.workspace, { supportRadius: 6, maximumResidual: 2, center: preprocessed.center })
+		const fitted = fitBahtinovLines(candidates, preprocessed.ridgePoints, area, preprocessed.responseDeviation, preprocessed.workspace, {
+			supportRadius: 3,
+			maximumResidual: 2,
+			profileBlurSigma: preprocessed.profileBlurSigma,
+			center: preprocessed.center,
+		})
 		let central = fitted[0].line
 		for (const candidate of fitted) if (bahtinovAxialAngleDistance(candidate.line.normalAngle, 0) < bahtinovAxialAngleDistance(central.normalAngle, 0)) central = candidate.line
 		measured.push(central.fwhm)
 	}
 	expect(measured).toHaveLength(3)
-	expect(measured[1]).toBeGreaterThan(measured[0])
-	expect(measured[2]).toBeGreaterThan(measured[1])
+	expect(Math.abs(measured[0] - 2)).toBeLessThan(1)
+	expect(Math.abs(measured[1] - 4)).toBeLessThan(1)
+	expect(Math.abs(measured[2] - 8)).toBeLessThan(1)
 })

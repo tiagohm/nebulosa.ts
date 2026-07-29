@@ -23,6 +23,8 @@ const NUMERICAL_FLOOR = 1e-12
 const ANGLE_CONVERGENCE_TOLERANCE = 1e-5
 // Normal-distance change below which robust TLS iteration is considered converged, in pixels.
 const DISTANCE_CONVERGENCE_TOLERANCE = 1e-3
+// Transverse profile bin spacing used for half-maximum interpolation, in pixels.
+const PROFILE_BIN_STEP = 1
 
 // Controls for robust local line fitting and acceptance.
 export interface BahtinovLineFitOptions {
@@ -34,6 +36,8 @@ export interface BahtinovLineFitOptions {
 	readonly minimumSupport?: number
 	// Maximum allowed robust RMS orthogonal residual in pixels.
 	readonly maximumResidual?: number
+	// Gaussian sigma already applied to the source profile, in pixels; used to deconvolve FWHM.
+	readonly profileBlurSigma?: number
 	// Approximate star center in local ROI pixel coordinates; defaults to the ROI midpoint.
 	readonly center?: Readonly<Point>
 }
@@ -54,10 +58,12 @@ export function fitBahtinovLine(candidate: BahtinovHoughCandidate, ridgePoints: 
 	const robustIterations = options.robustIterations ?? DEFAULT_ROBUST_ITERATIONS
 	const minimumSupport = options.minimumSupport ?? 8
 	const maximumResidual = options.maximumResidual ?? Number.POSITIVE_INFINITY
+	const profileBlurSigma = options.profileBlurSigma ?? 0
 	if (!Number.isFinite(supportRadius) || supportRadius <= 0) throw new RangeError('supportRadius must be finite and positive')
 	if (!Number.isInteger(robustIterations) || robustIterations < 1 || robustIterations > 20) throw new RangeError('robustIterations must be an integer from 1 to 20')
 	if (!Number.isInteger(minimumSupport) || minimumSupport < 3) throw new RangeError('minimumSupport must be an integer at least 3')
 	if (!(maximumResidual > 0) || Number.isNaN(maximumResidual)) throw new RangeError('maximumResidual must be positive')
+	if (!Number.isFinite(profileBlurSigma) || profileBlurSigma < 0) throw new RangeError('profileBlurSigma must be finite and non-negative')
 
 	const localWidth = area.right - area.left
 	const localHeight = area.bottom - area.top
@@ -93,16 +99,17 @@ export function fitBahtinovLine(candidate: BahtinovHoughCandidate, ridgePoints: 
 	const segment = clipBahtinovLineToArea({ normalAngle, distance: globalDistance }, area)
 	if (!segment) return undefined
 	const signalToNoise = metrics.strength / Math.max(NUMERICAL_FLOOR, responseDeviation * Math.sqrt(metrics.count))
-	const fitStatistics = imageFitStatistics(candidate, normalAngle, distance, supportRadius, localWidth, localHeight, workspace)
-	if (!fitStatistics) return undefined
-	const covariance = fitStatistics.covariance ? globalLineCovariance(fitStatistics.covariance, normalAngle, area.left, area.top) : undefined
+	const localCovariance = imageFitCovariance(candidate, normalAngle, distance, supportRadius, localWidth, localHeight, workspace)
+	const covariance = localCovariance ? globalLineCovariance(localCovariance, normalAngle, area.left, area.top) : undefined
+	const fwhm = transverseProfileFwhm(normalAngle, distance, supportRadius, profileBlurSigma, localWidth, localHeight, workspace)
+	if (fwhm === undefined) return undefined
 
 	return {
 		normalAngle,
 		distance: globalDistance,
 		strength: metrics.strength,
 		signalToNoise,
-		fwhm: fitStatistics.fwhm,
+		fwhm,
 		coverage: metrics.coverage,
 		cropCoverage: metrics.cropCoverage,
 		balance: metrics.balance,
@@ -122,8 +129,8 @@ function globalLineCovariance(covariance: readonly [number, number, number], nor
 	return Number.isFinite(globalCovarianceAngleDistance) && Number.isFinite(globalVarianceDistance) && globalVarianceDistance >= 0 ? [varianceAngle, globalCovarianceAngleDistance, globalVarianceDistance] : undefined
 }
 
-// Estimates transverse intensity width and line covariance from positive response-profile samples.
-function imageFitStatistics(candidate: BahtinovHoughCandidate, normalAngle: number, distance: number, supportRadius: number, width: number, height: number, workspace: BahtinovWorkspace): { readonly fwhm: number; readonly covariance?: readonly [number, number, number] } | undefined {
+// Estimates line covariance from positive response-profile samples inside the fit-support band.
+function imageFitCovariance(candidate: BahtinovHoughCandidate, normalAngle: number, distance: number, supportRadius: number, width: number, height: number, workspace: BahtinovWorkspace): readonly [number, number, number] | undefined {
 	const candidateX = Math.cos(candidate.normalAngle)
 	const candidateY = Math.sin(candidate.normalAngle)
 	const normalX = Math.cos(normalAngle)
@@ -167,15 +174,86 @@ function imageFitStatistics(candidate: BahtinovHoughCandidate, normalAngle: numb
 	const longitudinalVariance = Math.max(0, tangentVarianceSum / weightSum)
 	const residualVariance = squaredResidual / weightSum
 	const effectiveCount = (weightSum * weightSum) / squaredWeightSum
-	if (!Number.isFinite(residualVariance)) return undefined
-	const fwhm = Math.sqrt(Math.max(0, residualVariance)) * SIGMA_TO_FWHM
-	if (!(longitudinalVariance > NUMERICAL_FLOOR) || !(effectiveCount > 2)) return { fwhm }
+	if (!Number.isFinite(residualVariance) || !(longitudinalVariance > NUMERICAL_FLOOR) || !(effectiveCount > 2)) return undefined
 	const varianceDistance = residualVariance / effectiveCount
 	const varianceAngle = varianceDistance / longitudinalVariance
 	const covarianceAngleDistance = tangentMean * varianceAngle
 	const originVarianceDistance = varianceDistance + tangentMean * tangentMean * varianceAngle
-	const covariance = Number.isFinite(varianceAngle) && Number.isFinite(covarianceAngleDistance) && Number.isFinite(originVarianceDistance) ? ([varianceAngle, covarianceAngleDistance, originVarianceDistance] as const) : undefined
-	return { fwhm, covariance }
+	return Number.isFinite(varianceAngle) && Number.isFinite(covarianceAngleDistance) && Number.isFinite(originVarianceDistance) ? [varianceAngle, covarianceAngleDistance, originVarianceDistance] : undefined
+}
+
+// Measures transverse half-maximum crossings from the full narrow-blur profile and removes known blur.
+function transverseProfileFwhm(normalAngle: number, distance: number, supportRadius: number, profileBlurSigma: number, width: number, height: number, workspace: BahtinovWorkspace): number | undefined {
+	const normalX = Math.cos(normalAngle)
+	const normalY = Math.sin(normalAngle)
+	const first = -distance
+	const second = (width - 1) * normalX - distance
+	const third = (height - 1) * normalY - distance
+	const fourth = (width - 1) * normalX + (height - 1) * normalY - distance
+	const minimumBin = Math.floor(Math.min(first, second, third, fourth))
+	const maximumBin = Math.ceil(Math.max(first, second, third, fourth))
+	const binCount = maximumBin - minimumBin + 1
+	if (!Number.isSafeInteger(binCount) || binCount < 3 || binCount > workspace.statistics.length || binCount > workspace.intermediate.length) return undefined
+	const sums = workspace.statistics
+	const counts = workspace.intermediate
+	sums.fill(0, 0, binCount)
+	counts.fill(0, 0, binCount)
+
+	for (let y = 0; y < height; y++) {
+		const row = y * width
+		for (let x = 0; x < width; x++) {
+			const index = row + x
+			if (workspace.mask[index] !== 0) continue
+			const value = workspace.blurredSmall[index]
+			if (!Number.isFinite(value) || value < 0) continue
+			const bin = Math.round((x * normalX + y * normalY - distance - minimumBin) / PROFILE_BIN_STEP)
+			if (bin < 0 || bin >= binCount) continue
+			sums[bin] += value
+			counts[bin]++
+		}
+	}
+
+	const centerBin = -minimumBin
+	const peakRadius = Math.max(2, Math.ceil(supportRadius))
+	const firstPeakBin = Math.max(0, centerBin - peakRadius)
+	const lastPeakBin = Math.min(binCount - 1, centerBin + peakRadius)
+	let peakBin = firstPeakBin
+	let peak = 0
+	for (let bin = firstPeakBin; bin <= lastPeakBin; bin++) {
+		if (counts[bin] <= 0) continue
+		const value = sums[bin] / counts[bin]
+		sums[bin] = value
+		if (value > peak) {
+			peak = value
+			peakBin = bin
+		}
+	}
+	if (!(peak > 0)) return undefined
+	for (let bin = 0; bin < binCount; bin++) {
+		if (bin >= firstPeakBin && bin <= lastPeakBin) continue
+		sums[bin] = counts[bin] > 0 ? sums[bin] / counts[bin] : 0
+	}
+
+	const halfMaximum = peak * 0.5
+	let leftBin = peakBin
+	while (leftBin > 0 && sums[leftBin] > halfMaximum) leftBin--
+	let rightBin = peakBin
+	while (rightBin + 1 < binCount && sums[rightBin] > halfMaximum) rightBin++
+	if (leftBin === 0 || rightBin === binCount - 1 || leftBin === peakBin || rightBin === peakBin) return undefined
+	const leftCrossing = interpolateProfileCrossing(leftBin, sums[leftBin], leftBin + 1, sums[leftBin + 1], halfMaximum)
+	const rightCrossing = interpolateProfileCrossing(rightBin - 1, sums[rightBin - 1], rightBin, sums[rightBin], halfMaximum)
+	const observedFwhm = (rightCrossing - leftCrossing) * PROFILE_BIN_STEP
+	if (!(observedFwhm > 0) || !Number.isFinite(observedFwhm)) return undefined
+	if (!(profileBlurSigma > 0)) return observedFwhm
+	const observedSigmaSquared = (observedFwhm / SIGMA_TO_FWHM) ** 2
+	const sourceSigmaSquared = observedSigmaSquared - profileBlurSigma * profileBlurSigma
+	return sourceSigmaSquared > 0 ? Math.sqrt(sourceSigmaSquared) * SIGMA_TO_FWHM : observedFwhm
+}
+
+// Linearly interpolates one half-maximum crossing between adjacent profile bins.
+function interpolateProfileCrossing(firstBin: number, firstValue: number, secondBin: number, secondValue: number, target: number): number {
+	const difference = secondValue - firstValue
+	return difference === 0 ? (firstBin + secondBin) * 0.5 : firstBin + (target - firstValue) / difference
 }
 
 // Refines all Hough candidates and retains only finite accepted lines.

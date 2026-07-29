@@ -62,6 +62,8 @@ export interface BahtinovPreprocessSuccess {
 	readonly responseDeviation: number
 	// Minimum positive DoG response retained as a ridge.
 	readonly threshold: number
+	// Narrow Gaussian sigma applied to the transverse source profile, in pixels.
+	readonly profileBlurSigma: number
 	// Fraction of finite ROI samples at or above the saturation level.
 	readonly saturationFraction: number
 	// Whether an original saturated sample belongs to the connected or initial stellar core.
@@ -262,6 +264,7 @@ export function preprocessBahtinov(input: BahtinovAnalysisInput, workspace: Baht
 		responseCenter: responseStatistics.center,
 		responseDeviation: responseStatistics.deviation,
 		threshold,
+		profileBlurSigma: smallBlurSigma,
 		saturationFraction: saturatedCount / finiteCount,
 		coreSaturated,
 		spikeSaturationFraction: spikeSaturatedCount / finiteCount,

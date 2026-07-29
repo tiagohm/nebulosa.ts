@@ -116,6 +116,7 @@ export function analyzeBahtinov(input: BahtinovAnalysisInput, workspace: Bahtino
 
 	const fitted = fitBahtinovLines(houghCandidates, preprocessed.ridgePoints, preprocessed.area, preprocessed.responseDeviation, preprocessed.workspace, {
 		maximumResidual: decision.maximumResidual,
+		profileBlurSigma: preprocessed.profileBlurSigma,
 		center: preprocessed.center,
 	})
 	if (fitted.length < 3) return analysisFailure('insufficientSupport', preprocessed, [])
