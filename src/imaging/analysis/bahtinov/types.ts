@@ -45,7 +45,7 @@ export type BahtinovAnalysisInput = {
 
 // Tunable thresholds and resource controls for one analysis.
 export interface BahtinovAnalysisOptions {
-	// Image plane or luminance weighting; `auto` selects mono or BT.709.
+	// Image plane or luminance weighting; `auto` selects mono, BT.709, or both reconstructed CFA greens.
 	readonly plane?: BahtinovPlane
 	// Minimum robust spike signal-to-noise ratio.
 	readonly minimumSignalToNoise?: number
@@ -283,6 +283,43 @@ export interface BahtinovAnalysisFailure {
 
 // Discriminated result of one stateless analysis.
 export type BahtinovAnalysisResult = BahtinovAnalysisSuccess | BahtinovAnalysisFailure
+
+// Origin of an automatically located Bahtinov candidate.
+export type BahtinovLocationSource = 'star' | 'lineEnergy' | 'combined'
+
+// Controls the bounded full-frame search for independently measurable Bahtinov patterns.
+export interface BahtinovLocatorOptions {
+	// Square analysis ROI side in pixels.
+	readonly roiSize?: number
+	// Full-frame grid spacing in pixels used by the line-energy fallback.
+	readonly gridStep?: number
+	// Maximum merged star and grid candidates submitted to the analyzer.
+	readonly maximumCandidates?: number
+	// Maximum distinct successful patterns returned.
+	readonly maximumPatterns?: number
+	// Candidate and result deduplication distance in pixels.
+	readonly minimumCandidateDistance?: number
+	// Minimum dimensionless angular line-energy contrast accepted from grid candidates.
+	readonly minimumLinearEnergy?: number
+	// Minimum SNR passed to the broad star detector.
+	readonly minimumStarSignalToNoise?: number
+	// Optional known mask-layout prior forwarded to each ROI analysis.
+	readonly expected?: BahtinovExpectedPattern
+	// Analyzer thresholds and workspace reused across candidate ROIs.
+	readonly analysis?: BahtinovAnalysisOptions
+}
+
+// One automatically located and independently validated Bahtinov pattern.
+export interface BahtinovLocation {
+	// Approximate full-image seed used to construct the analysis ROI.
+	readonly candidateCenter: Readonly<Point>
+	// Evidence source that retained the candidate.
+	readonly source: BahtinovLocationSource
+	// Combined normalized locator and analyzer evidence from 0 to 1.
+	readonly score: number
+	// Successful finite analysis for the candidate ROI.
+	readonly analysis: BahtinovAnalysisSuccess
+}
 
 // Capacity and precision controls for reusable analysis storage.
 export interface BahtinovWorkspaceOptions {
