@@ -321,6 +321,62 @@ export interface BahtinovLocation {
 	readonly analysis: BahtinovAnalysisSuccess
 }
 
+// Analyzer options shared by RGB channel comparisons; the comparison selects each plane itself.
+export type BahtinovChromaticOptions = Omit<BahtinovAnalysisOptions, 'plane'>
+
+// Per-channel analysis results retained even when one or more RGB channels fail.
+export interface BahtinovChromaticChannels {
+	// Red-plane analysis.
+	readonly red: BahtinovAnalysisResult
+	// Green-plane analysis.
+	readonly green: BahtinovAnalysisResult
+	// Blue-plane analysis.
+	readonly blue: BahtinovAnalysisResult
+}
+
+// Three successful channel analyses available after a successful comparison.
+export interface BahtinovChromaticSuccessfulChannels {
+	// Successful red-plane analysis.
+	readonly red: BahtinovAnalysisSuccess
+	// Successful green-plane analysis.
+	readonly green: BahtinovAnalysisSuccess
+	// Successful blue-plane analysis.
+	readonly blue: BahtinovAnalysisSuccess
+}
+
+// Successful RGB focus comparison relative to the green channel.
+export interface BahtinovChromaticSuccess {
+	// Success discriminator.
+	readonly success: true
+	// Independent analyses of the three RGB planes.
+	readonly channels: BahtinovChromaticSuccessfulChannels
+	// Signed red-minus-green focus error in pixels.
+	readonly redMinusGreen: number
+	// Signed blue-minus-green focus error in pixels.
+	readonly blueMinusGreen: number
+	// Largest pairwise focus-error separation among channels, in pixels.
+	readonly focusSpan: number
+	// Red reference displacement from green in full-image pixels.
+	readonly redReferenceOffset: Readonly<Point>
+	// Blue reference displacement from green in full-image pixels.
+	readonly blueReferenceOffset: Readonly<Point>
+	// Weakest channel analysis confidence, from 0 to 1.
+	readonly confidence: number
+}
+
+// Partial RGB comparison when at least one channel cannot be measured.
+export interface BahtinovChromaticFailure {
+	// Failure discriminator.
+	readonly success: false
+	// Independent successful or failed channel analyses.
+	readonly channels: BahtinovChromaticChannels
+	// RGB planes that could not produce a trustworthy measurement.
+	readonly failedChannels: readonly ('red' | 'green' | 'blue')[]
+}
+
+// Discriminated result of one stateless RGB Bahtinov comparison.
+export type BahtinovChromaticResult = BahtinovChromaticSuccess | BahtinovChromaticFailure
+
 // Capacity and precision controls for reusable analysis storage.
 export interface BahtinovWorkspaceOptions {
 	// Floating-point precision of radiometric buffers; defaults to 32 bits.
