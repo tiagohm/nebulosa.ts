@@ -44,6 +44,9 @@ test('creates a capacity-described reusable workspace', () => {
 	expect(workspace.source).toBeInstanceOf(Float64Array)
 	expect(workspace.source.length).toBe(64 * 48)
 	expect(workspace.response).toBe(workspace.source)
+	expect(workspace.coreQueue).toBeInstanceOf(Uint32Array)
+	workspace.coreQueue[0] = 2 ** 24 + 1
+	expect(workspace.coreQueue[0]).toBe(2 ** 24 + 1)
 	expect(workspace.cfaX.length).toBe(64 * 4)
 	expect(workspace.cfaY.length).toBe(48 * 4)
 	expect(workspace.maximumRidgePoints).toBe(512)

@@ -335,6 +335,8 @@ export interface BahtinovWorkspace {
 	readonly statistics: ImageRawType
 	// Saturation and core mask.
 	readonly mask: Uint8Array
+	// Reusable integer queue for saturated-core flood fill, storing exact local pixel indices.
+	readonly coreQueue: Uint32Array
 	// CFA x-neighbor bounds for both green lattices, stored as four indices per ROI column.
 	readonly cfaX: Int32Array
 	// CFA y-neighbor bounds for both green lattices, stored as four indices per ROI row.

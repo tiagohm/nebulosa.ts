@@ -146,6 +146,7 @@ export function createBahtinovWorkspace(width: number, height: number, options: 
 		response: source,
 		statistics: makeImageRawTypedArray(source, pixelCount),
 		mask: new Uint8Array(pixelCount),
+		coreQueue: new Uint32Array(pixelCount),
 		cfaX: new Int32Array(width * 4),
 		cfaY: new Int32Array(height * 4),
 		ridgeX: new Float32Array(maximumRidgePoints),
@@ -226,7 +227,7 @@ export function preprocessBahtinov(input: BahtinovAnalysisInput, workspace: Baht
 
 	const centerX = input.center.x - area.left
 	const centerY = input.center.y - area.top
-	markCore(mask, width, height, centerX, centerY, coreRadius, options.autoCoreRadius !== false, workspace.statistics)
+	markCore(mask, width, height, centerX, centerY, coreRadius, options.autoCoreRadius !== false, workspace.coreQueue)
 	let coreSaturated = false
 	let spikeSaturatedCount = 0
 	let connectedSpikeSaturatedCount = 0
@@ -590,6 +591,7 @@ function validateGaussianKernelSupport(sigma: number, width: number, height: num
 // Ensures one reusable workspace can represent the requested ROI and search settings.
 function validateWorkspaceCapacity(workspace: BahtinovWorkspace, width: number, height: number, options: BahtinovAnalysisOptions): void {
 	if (width > workspace.width || height > workspace.height) throw new RangeError('Bahtinov workspace is smaller than the resolved ROI')
+	if (workspace.coreQueue.length < width * height) throw new RangeError('Bahtinov workspace core queue is smaller than the resolved ROI')
 	const maximumRidgePoints = options.maximumRidgePoints ?? workspace.maximumRidgePoints
 	if (!Number.isInteger(maximumRidgePoints) || maximumRidgePoints < 3 || maximumRidgePoints > workspace.maximumRidgePoints) throw new RangeError('maximumRidgePoints must be an integer from 3 to the workspace ridge capacity')
 	if (options.angleStep !== undefined && options.angleStep !== workspace.angleStep) throw new RangeError('Bahtinov analysis angleStep must match the workspace grid')
@@ -629,7 +631,7 @@ function dilateSaturation(mask: Uint8Array, width: number, height: number, radiu
 }
 
 // Marks the initial circular core and optionally floods connected saturated support from it.
-function markCore(mask: Uint8Array, width: number, height: number, centerX: number, centerY: number, radius: number, autoExpand: boolean, queue: ImageRawType): void {
+function markCore(mask: Uint8Array, width: number, height: number, centerX: number, centerY: number, radius: number, autoExpand: boolean, queue: Uint32Array): void {
 	const radiusSquared = radius * radius
 	let queueLength = 0
 	for (let y = 0; y < height; y++) {
@@ -656,7 +658,7 @@ function markCore(mask: Uint8Array, width: number, height: number, centerX: numb
 }
 
 // Marks and appends one not-yet-core saturated neighbor to the flood queue.
-function queueConnectedCore(index: number, mask: Uint8Array, queue: ImageRawType, queueLength: number): boolean {
+function queueConnectedCore(index: number, mask: Uint8Array, queue: Uint32Array, queueLength: number): boolean {
 	if ((mask[index] & MASK_CORE) !== 0 || (mask[index] & (MASK_SATURATED | MASK_DILATED)) === 0) return false
 	mask[index] |= MASK_CORE
 	queue[queueLength] = index
