@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test'
 import { PI, PIOVERTWO } from '../../../../src/core/constants'
 import { analyzeBahtinov as analyzeBahtinovWithWorkspace } from '../../../../src/imaging/analysis/bahtinov/bahtinov'
+import { bahtinovAxialAngleDistance } from '../../../../src/imaging/analysis/bahtinov/geometry'
 import { createBahtinovOverlayGeometry } from '../../../../src/imaging/analysis/bahtinov/overlay'
 import { createBahtinovWorkspace, resolveBahtinovArea } from '../../../../src/imaging/analysis/bahtinov/preprocess'
 import type { BahtinovAnalysisInput, BahtinovAnalysisOptions } from '../../../../src/imaging/analysis/bahtinov/types'
@@ -252,6 +253,30 @@ test('rejects a detected pattern beyond the expected angular limit', () => {
 	)
 	expect(result.success).toBeFalse()
 	if (!result.success) expect(result.reason).toBe('patternNotFound')
+})
+
+test('uses expected angles as a prior without a hard mismatch limit', () => {
+	const width = 192
+	const height = 192
+	const raw = new Float64Array(width * height)
+	raw.fill(0.01)
+	const expected = [(PI * 5) / 12, PIOVERTWO, (PI * 7) / 12] as const
+	plotBahtinovSpikes(raw, width, height, 1, 95.5, 95.5, 110, 2, undefined, { normalAngles: expected, central: 1, fwhm: 2, halfLength: 56, taperLength: 8 })
+	plotBahtinovSpikes(raw, width, height, 1, 95.5, 95.5, 150, -4, undefined, { normalAngles: [PI / 12, PI / 6, PI / 4], central: 1, fwhm: 2, halfLength: 56, taperLength: 8 })
+	const result = analyzeBahtinov(
+		{
+			image: image(raw, width, height),
+			area: { left: 0, top: 0, right: width, bottom: height },
+			center: { x: 95.5, y: 95.5 },
+			expected: { centralNormalAngle: expected[1], externalNormalAngles: [expected[0], expected[2]] },
+		},
+		{ ...ANALYSIS_OPTIONS, maximumRidgePoints: 4096 },
+	)
+	expect(result.success).toBeTrue()
+	if (result.success) {
+		expect(bahtinovAxialAngleDistance(result.centralLine.normalAngle, expected[1])).toBeLessThan(PI / 180)
+		expect(result.error).toBeCloseTo(2, 0)
+	}
 })
 
 test('validates preprocessing and Hough options before content failures', () => {

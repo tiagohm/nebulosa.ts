@@ -16,6 +16,8 @@ const DEFAULT_MINIMUM_SIGNAL_TO_NOISE = 3
 const DEFAULT_MINIMUM_AXIAL_SEPARATION = PI / 36
 // Default maximum central-to-bisector normal error, in radians.
 const DEFAULT_MAXIMUM_BISECTOR_ERROR = PI / 60
+// Angular mismatch scale for expected-pattern ranking when no hard limit is supplied.
+const DEFAULT_EXPECTED_PRIOR_SCALE = PI / 12
 // Default intersection margin outside the ROI, in pixels.
 const DEFAULT_INTERSECTION_MARGIN = 0
 // Default minimum relative best-to-runner-up triplet score separation.
@@ -222,7 +224,8 @@ function selectTriplets(fitted: readonly BahtinovFittedCandidate[], preprocessed
 				const expectedMismatch = expectedPatternMismatch(centralLine, firstLine, secondLine, expected)
 				const expectedLimit = expected?.maximumAngleDelta
 				if (expectedLimit !== undefined && expectedMismatch > expectedLimit) continue
-				const expectedFactor = expectedLimit && expectedLimit > 0 ? Math.max(0.25, 1 - Math.min(1, expectedMismatch / expectedLimit)) : 1
+				const expectedScale = expectedLimit ?? DEFAULT_EXPECTED_PRIOR_SCALE
+				const expectedFactor = expected ? Math.max(0.25, 1 - Math.min(1, expectedMismatch / expectedScale)) : 1
 				const minimumStrength = Math.min(centralLine.strength, firstLine.strength, secondLine.strength)
 				const minimumCoverage = Math.min(centralLine.coverage, firstLine.coverage, secondLine.coverage)
 				const minimumCropCoverage = Math.min(centralLine.cropCoverage, firstLine.cropCoverage, secondLine.cropCoverage)
