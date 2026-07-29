@@ -135,6 +135,17 @@ function validateAnalysisGeometry(analysis: BahtinovAnalysisSuccess): void {
 	validateLine(analysis.externalLines[0], 'externalLines[0]')
 	validateLine(analysis.externalLines[1], 'externalLines[1]')
 	if (!Number.isFinite(analysis.error) || !Number.isFinite(analysis.absoluteError) || analysis.absoluteError < 0) throw new RangeError('Bahtinov focus error must be finite')
+	validatePointLineResidual(analysis.reference, analysis.centralLine, analysis.error, 'centralLine')
+	validatePointLineResidual(analysis.reference, analysis.externalLines[0], 0, 'externalLines[0]')
+	validatePointLineResidual(analysis.reference, analysis.externalLines[1], 0, 'externalLines[1]')
+}
+
+// Verifies one expected signed point-to-line residual with a scale-aware floating-point tolerance.
+function validatePointLineResidual(point: Readonly<Point>, line: BahtinovLine, expected: number, name: string): void {
+	const residual = Math.cos(line.normalAngle) * point.x + Math.sin(line.normalAngle) * point.y - line.distance
+	const scale = Math.abs(point.x) + Math.abs(point.y) + Math.abs(line.distance) + Math.abs(expected) + 1
+	const tolerance = Math.max(1e-9, scale * Number.EPSILON * 64)
+	if (!Number.isFinite(residual) || Math.abs(residual - expected) > tolerance) throw new RangeError(`${name} equation is inconsistent with the Bahtinov reference geometry`)
 }
 
 // Validates one finite line and its finite visible segment.

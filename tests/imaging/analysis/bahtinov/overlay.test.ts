@@ -89,6 +89,8 @@ test('coincides error circles at perfect focus', () => {
 test('rejects inconsistent analysis and invalid visual radii', () => {
 	const source = analysis()
 	expect(() => createBahtinovOverlayGeometry({ ...source, absoluteError: 4 })).toThrow(RangeError)
+	expect(() => createBahtinovOverlayGeometry({ ...source, centralLine: { ...source.centralLine, distance: source.centralLine.distance + 1 } })).toThrow(RangeError)
+	expect(() => createBahtinovOverlayGeometry({ ...source, externalLines: [{ ...source.externalLines[0], distance: source.externalLines[0].distance + 1 }, source.externalLines[1]] })).toThrow(RangeError)
 	expect(() => createBahtinovOverlayGeometry(source, { errorCircleRadius: 0 })).toThrow(RangeError)
 	expect(() => createBahtinovOverlayGeometry(source, { focusRegionRadius: 100 })).toThrow(RangeError)
 })
