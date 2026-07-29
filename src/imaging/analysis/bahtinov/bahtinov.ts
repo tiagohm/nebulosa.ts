@@ -215,6 +215,7 @@ function selectTriplets(fitted: readonly BahtinovFittedCandidate[], preprocessed
 
 				const expectedMismatch = expectedPatternMismatch(centralLine, firstLine, secondLine, expected)
 				const expectedLimit = expected?.maximumAngleDelta
+				if (expectedLimit !== undefined && expectedMismatch > expectedLimit) continue
 				const expectedFactor = expectedLimit && expectedLimit > 0 ? Math.max(0.25, 1 - Math.min(1, expectedMismatch / expectedLimit)) : 1
 				const minimumStrength = Math.min(centralLine.strength, firstLine.strength, secondLine.strength)
 				const minimumCoverage = Math.min(centralLine.coverage, firstLine.coverage, secondLine.coverage)

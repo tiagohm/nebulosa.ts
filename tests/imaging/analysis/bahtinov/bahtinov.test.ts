@@ -220,6 +220,24 @@ test('validates triplet decision options before preprocessing', () => {
 	expect(() => analyzeBahtinov({ image: source, area: { left: 0, top: 0, right: 128, bottom: 128 }, center: { x: 63.5, y: 63.5 } }, { minimumCandidateSeparation: 2 })).toThrow(RangeError)
 })
 
+test('rejects a detected pattern beyond the expected angular limit', () => {
+	const result = analyzeBahtinov(
+		{
+			image: synthetic(2),
+			area: { left: 0, top: 0, right: 128, bottom: 128 },
+			center: { x: 63.5, y: 63.5 },
+			expected: {
+				centralNormalAngle: (PIOVERTWO * 3) / 2,
+				externalNormalAngles: [(PI * 2) / 3, (PI * 5) / 6],
+				maximumAngleDelta: PI / 180,
+			},
+		},
+		ANALYSIS_OPTIONS,
+	)
+	expect(result.success).toBeFalse()
+	if (!result.success) expect(result.reason).toBe('patternNotFound')
+})
+
 test('validates preprocessing and Hough options before content failures', () => {
 	const width = 64
 	const height = 64
