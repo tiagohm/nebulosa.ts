@@ -479,8 +479,8 @@ function validatePreprocessOptions(saturationLevel: number, saturationDilation: 
 function validateWorkspaceCapacity(workspace: BahtinovWorkspace, width: number, height: number, options: BahtinovAnalysisOptions): void {
 	if (width > workspace.width || height > workspace.height) throw new RangeError('Bahtinov workspace is smaller than the resolved ROI')
 	if ((options.maximumRidgePoints ?? workspace.maximumRidgePoints) > workspace.maximumRidgePoints) throw new RangeError('Bahtinov workspace ridge capacity is too small')
-	if ((options.angleStep ?? workspace.angleStep) < workspace.angleStep) throw new RangeError('Bahtinov workspace angular grid is too coarse')
-	if ((options.distanceStep ?? workspace.distanceStep) < workspace.distanceStep) throw new RangeError('Bahtinov workspace distance grid is too coarse')
+	if (options.angleStep !== undefined && options.angleStep !== workspace.angleStep) throw new RangeError('Bahtinov analysis angleStep must match the workspace grid')
+	if (options.distanceStep !== undefined && options.distanceStep !== workspace.distanceStep) throw new RangeError('Bahtinov analysis distanceStep must match the workspace grid')
 }
 
 // Dilates original saturated samples with a separable square window in linear time.

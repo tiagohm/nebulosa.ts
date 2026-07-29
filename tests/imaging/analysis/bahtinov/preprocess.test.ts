@@ -211,4 +211,7 @@ test('rejects a workspace whose recorded capacity is insufficient', () => {
 	const workspace = createBahtinovWorkspace(width, height, { maximumRidgePoints: 128, angleStep: PI / 90, distanceStep: 1 })
 	expect(() => preprocessBahtinov({ image: source, area: { left: 0, top: 0, right: width, bottom: height }, center: { x: 32, y: 32 } }, { maximumRidgePoints: 256 }, workspace)).toThrow(RangeError)
 	expect(() => preprocessBahtinov({ image: source, area: { left: 0, top: 0, right: width, bottom: height }, center: { x: 32, y: 32 } }, { angleStep: PI / 180 }, workspace)).toThrow(RangeError)
+	expect(() => preprocessBahtinov({ image: source, area: { left: 0, top: 0, right: width, bottom: height }, center: { x: 32, y: 32 } }, { angleStep: PI / 45 }, workspace)).toThrow(RangeError)
+	expect(() => preprocessBahtinov({ image: source, area: { left: 0, top: 0, right: width, bottom: height }, center: { x: 32, y: 32 } }, { distanceStep: 2 }, workspace)).toThrow(RangeError)
+	expect(() => preprocessBahtinov({ image: source, area: { left: 0, top: 0, right: width, bottom: height }, center: { x: 32, y: 32 } }, { angleStep: PI / 90, distanceStep: 1 }, workspace)).not.toThrow()
 })

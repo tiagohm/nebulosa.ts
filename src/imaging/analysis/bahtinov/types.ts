@@ -65,13 +65,13 @@ export interface BahtinovAnalysisOptions {
 	readonly largeBlurSigma?: number
 	// Robust response threshold in noise-sigma units.
 	readonly ridgeSigma?: number
-	// Coarse Hough normal-angle step in radians.
+	// Coarse Hough normal-angle step in radians; when provided, must match the workspace grid.
 	readonly angleStep?: Angle
 	// Local normal-angle refinement step in radians.
 	readonly refinementStep?: Angle
 	// Half-range of local normal-angle refinement in radians.
 	readonly refinementRange?: Angle
-	// Hough normal-distance bin size in pixels.
+	// Hough normal-distance bin size in pixels; when provided, must match the workspace grid.
 	readonly distanceStep?: number
 	// Maximum number of angular candidates retained after non-maximum suppression.
 	readonly maximumAngleCandidates?: number
