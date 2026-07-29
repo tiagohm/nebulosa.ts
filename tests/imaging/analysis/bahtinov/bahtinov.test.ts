@@ -200,6 +200,20 @@ test('validates triplet decision options before preprocessing', () => {
 	expect(() => analyzeBahtinov({ image: source, area: { left: 0, top: 0, right: 128, bottom: 128 }, center: { x: 63.5, y: 63.5 } }, { minimumCandidateSeparation: 2 })).toThrow(RangeError)
 })
 
+test('validates preprocessing and Hough options before content failures', () => {
+	const width = 64
+	const height = 64
+	const raw = new Float64Array(width * height)
+	raw.fill(Number.NaN)
+	const source = image(raw, width, height)
+	const input = { image: source, area: { left: 0, top: 0, right: width, bottom: height }, center: { x: 31.5, y: 31.5 } } as const
+	const workspace = createBahtinovWorkspace(width, height)
+	expect(() => analyzeBahtinovWithWorkspace(input, workspace, { saturationLevel: -1 })).toThrow(RangeError)
+	expect(() => analyzeBahtinovWithWorkspace(input, workspace, { ridgeSigma: 0 })).toThrow(RangeError)
+	expect(() => analyzeBahtinovWithWorkspace(input, workspace, { maximumRidgePoints: -1 })).toThrow(RangeError)
+	expect(() => analyzeBahtinovWithWorkspace(input, workspace, { maximumAngleCandidates: 2 })).toThrow(RangeError)
+})
+
 test('uses an approximate center only to anchor the analysis region', () => {
 	for (const offset of [0, 12, 24]) {
 		const result = analyzeBahtinov({ image: synthetic(3, 256, 256), center: { x: 127.5 + offset, y: 127.5 - offset }, size: 128 }, ANALYSIS_OPTIONS)

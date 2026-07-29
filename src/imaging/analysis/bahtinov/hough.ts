@@ -52,16 +52,9 @@ export interface BahtinovHoughOptions {
 // `width` and `height` are ROI pixels. The ridge arrays and workspace remain caller-owned.
 export function detectBahtinovHoughCandidates(ridgePoints: BahtinovRidgePoints, width: number, height: number, workspace: BahtinovWorkspace, options: BahtinovHoughOptions = {}): readonly BahtinovHoughCandidate[] {
 	validateHoughInput(ridgePoints, width, height, workspace)
-	const maximumCandidates = options.maximumCandidates ?? DEFAULT_MAXIMUM_CANDIDATES
-	const minimumAxialSeparation = options.minimumAxialSeparation ?? DEFAULT_MINIMUM_AXIAL_SEPARATION
-	const refinementRange = options.refinementRange ?? DEFAULT_REFINEMENT_RANGE
-	const refinementStep = options.refinementStep ?? DEFAULT_REFINEMENT_STEP
+	const { maximumCandidates, minimumAxialSeparation, refinementRange, refinementStep } = resolveHoughOptions(workspace, options)
 	const centerX = options.center?.x ?? (width - 1) * 0.5
 	const centerY = options.center?.y ?? (height - 1) * 0.5
-	if (!Number.isInteger(maximumCandidates) || maximumCandidates < 3 || maximumCandidates > workspace.angleCount) throw new RangeError('maximumCandidates must be an integer from 3 to angleCount')
-	if (!Number.isFinite(minimumAxialSeparation) || minimumAxialSeparation <= 0 || minimumAxialSeparation > PIOVERTWO) throw new RangeError('minimumAxialSeparation must be in (0, PI / 2]')
-	if (!Number.isFinite(refinementRange) || refinementRange < 0 || refinementRange > minimumAxialSeparation * 0.5) throw new RangeError('refinementRange must be finite and no greater than half the candidate separation')
-	if (!Number.isFinite(refinementStep) || refinementStep <= 0 || (refinementRange > 0 && refinementStep > refinementRange)) throw new RangeError('refinementStep must be finite, positive, and no greater than refinementRange')
 	if (!Number.isFinite(centerX) || !Number.isFinite(centerY) || centerX < 0 || centerX > width - 1 || centerY < 0 || centerY > height - 1) throw new RangeError('Bahtinov Hough center must be finite and inside the local ROI')
 
 	const angleCount = workspace.angleCount
@@ -103,6 +96,24 @@ export function detectBahtinovHoughCandidates(ridgePoints: BahtinovRidgePoints, 
 		if (!refined.some((candidate) => bahtinovAxialAngleDistance(candidate.normalAngle, next.normalAngle) < minimumAxialSeparation)) insertCandidate(refined, next, maximumCandidates)
 	}
 	return refined
+}
+
+// Validates Hough resource and refinement options before image-dependent analysis can exit.
+export function validateBahtinovHoughOptions(workspace: BahtinovWorkspace, options: BahtinovHoughOptions = {}): void {
+	resolveHoughOptions(workspace, options)
+}
+
+// Resolves and validates the Hough controls shared by boundary validation and detection.
+function resolveHoughOptions(workspace: BahtinovWorkspace, options: BahtinovHoughOptions): { maximumCandidates: number; minimumAxialSeparation: Angle; refinementRange: Angle; refinementStep: Angle } {
+	const maximumCandidates = options.maximumCandidates ?? DEFAULT_MAXIMUM_CANDIDATES
+	const minimumAxialSeparation = options.minimumAxialSeparation ?? DEFAULT_MINIMUM_AXIAL_SEPARATION
+	const refinementRange = options.refinementRange ?? DEFAULT_REFINEMENT_RANGE
+	const refinementStep = options.refinementStep ?? DEFAULT_REFINEMENT_STEP
+	if (!Number.isInteger(maximumCandidates) || maximumCandidates < 3 || maximumCandidates > workspace.angleCount) throw new RangeError('maximumCandidates must be an integer from 3 to angleCount')
+	if (!Number.isFinite(minimumAxialSeparation) || minimumAxialSeparation <= 0 || minimumAxialSeparation > PIOVERTWO) throw new RangeError('minimumAxialSeparation must be in (0, PI / 2]')
+	if (!Number.isFinite(refinementRange) || refinementRange < 0 || refinementRange > minimumAxialSeparation * 0.5) throw new RangeError('refinementRange must be finite and no greater than half the candidate separation')
+	if (!Number.isFinite(refinementStep) || refinementStep <= 0 || (refinementRange > 0 && refinementStep > refinementRange)) throw new RangeError('refinementStep must be finite, positive, and no greater than refinementRange')
+	return { maximumCandidates, minimumAxialSeparation, refinementRange, refinementStep }
 }
 
 // Accumulates interpolated normal-distance votes for one angle and returns its peak.

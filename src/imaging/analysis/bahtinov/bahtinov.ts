@@ -1,7 +1,7 @@
 import { PI, PIOVERTWO } from '../../../core/constants'
 import type { Point, Rect } from '../../../math/numerical/geometry'
 import { bahtinovAxialAngleDistance, bahtinovAxialBisectors, computeBahtinovFocusGeometry, intersectBahtinovLines } from './geometry'
-import { detectBahtinovHoughCandidates } from './hough'
+import { detectBahtinovHoughCandidates, validateBahtinovHoughOptions } from './hough'
 import { fitBahtinovLines, type BahtinovFittedCandidate } from './line'
 import { preprocessBahtinov, type BahtinovPreprocessSuccess } from './preprocess'
 import type { BahtinovAnalysisFailure, BahtinovAnalysisInput, BahtinovAnalysisOptions, BahtinovAnalysisResult, BahtinovExpectedPattern, BahtinovFocusState, BahtinovLine, BahtinovQuality, BahtinovWarning, BahtinovWorkspace } from './types'
@@ -93,6 +93,12 @@ interface ResolvedBahtinovDecisionOptions {
 // discriminated failure without fabricated lines, reference points, or focus values.
 export function analyzeBahtinov(input: BahtinovAnalysisInput, workspace: BahtinovWorkspace, options: BahtinovAnalysisOptions = {}): BahtinovAnalysisResult {
 	const decision = resolveDecisionOptions(options)
+	validateBahtinovHoughOptions(workspace, {
+		maximumCandidates: options.maximumAngleCandidates,
+		minimumAxialSeparation: decision.minimumAxialSeparation,
+		refinementRange: options.refinementRange,
+		refinementStep: options.refinementStep,
+	})
 	const preprocessed = preprocessBahtinov(input, workspace, options)
 	if (!preprocessed.success) return { success: false, reason: preprocessed.reason, area: preprocessed.area, warnings: [] }
 

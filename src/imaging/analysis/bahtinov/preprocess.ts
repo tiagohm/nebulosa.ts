@@ -189,6 +189,14 @@ export function preprocessBahtinov(input: BahtinovAnalysisInput, workspace: Baht
 	const width = area.right - area.left
 	const height = area.bottom - area.top
 	validateWorkspaceCapacity(workspace, width, height, options)
+	const saturationLevel = options.saturationLevel ?? DEFAULT_SATURATION_LEVEL
+	const saturationDilation = options.saturationDilation ?? DEFAULT_SATURATION_DILATION
+	const coreRadius = options.coreRadius ?? DEFAULT_CORE_RADIUS
+	const backgroundUpperQuantile = options.backgroundUpperQuantile ?? DEFAULT_BACKGROUND_UPPER_QUANTILE
+	const smallBlurSigma = options.smallBlurSigma ?? DEFAULT_SMALL_BLUR_SIGMA
+	const largeBlurSigma = options.largeBlurSigma ?? DEFAULT_LARGE_BLUR_SIGMA
+	const ridgeSigma = options.ridgeSigma ?? DEFAULT_RIDGE_SIGMA
+	validatePreprocessOptions(saturationLevel, saturationDilation, coreRadius, backgroundUpperQuantile, smallBlurSigma, largeBlurSigma, ridgeSigma)
 
 	const plane = resolvePlane(input.image, options.plane ?? 'auto')
 	if (!plane) return { success: false, reason: 'unsupportedPlane', area }
@@ -197,17 +205,8 @@ export function preprocessBahtinov(input: BahtinovAnalysisInput, workspace: Baht
 	const source = workspace.source.subarray(0, pixelCount)
 	const mask = workspace.mask.subarray(0, pixelCount)
 	mask.fill(0)
-	const saturationLevel = options.saturationLevel ?? DEFAULT_SATURATION_LEVEL
 	const finiteCount = fillSourcePlane(input.image, area, plane, saturationLevel, source, mask, workspace)
 	if (finiteCount < Math.max(16, pixelCount >>> 3)) return { success: false, reason: 'insufficientSupport', area }
-
-	const saturationDilation = options.saturationDilation ?? DEFAULT_SATURATION_DILATION
-	const coreRadius = options.coreRadius ?? DEFAULT_CORE_RADIUS
-	const backgroundUpperQuantile = options.backgroundUpperQuantile ?? DEFAULT_BACKGROUND_UPPER_QUANTILE
-	const smallBlurSigma = options.smallBlurSigma ?? DEFAULT_SMALL_BLUR_SIGMA
-	const largeBlurSigma = options.largeBlurSigma ?? DEFAULT_LARGE_BLUR_SIGMA
-	const ridgeSigma = options.ridgeSigma ?? DEFAULT_RIDGE_SIGMA
-	validatePreprocessOptions(saturationLevel, saturationDilation, coreRadius, backgroundUpperQuantile, smallBlurSigma, largeBlurSigma, ridgeSigma)
 
 	let saturatedCount = 0
 	for (let index = 0; index < pixelCount; index++) {
@@ -503,7 +502,8 @@ function validatePreprocessOptions(saturationLevel: number, saturationDilation: 
 // Ensures one reusable workspace can represent the requested ROI and search settings.
 function validateWorkspaceCapacity(workspace: BahtinovWorkspace, width: number, height: number, options: BahtinovAnalysisOptions): void {
 	if (width > workspace.width || height > workspace.height) throw new RangeError('Bahtinov workspace is smaller than the resolved ROI')
-	if ((options.maximumRidgePoints ?? workspace.maximumRidgePoints) > workspace.maximumRidgePoints) throw new RangeError('Bahtinov workspace ridge capacity is too small')
+	const maximumRidgePoints = options.maximumRidgePoints ?? workspace.maximumRidgePoints
+	if (!Number.isInteger(maximumRidgePoints) || maximumRidgePoints < 3 || maximumRidgePoints > workspace.maximumRidgePoints) throw new RangeError('maximumRidgePoints must be an integer from 3 to the workspace ridge capacity')
 	if (options.angleStep !== undefined && options.angleStep !== workspace.angleStep) throw new RangeError('Bahtinov analysis angleStep must match the workspace grid')
 	if (options.distanceStep !== undefined && options.distanceStep !== workspace.distanceStep) throw new RangeError('Bahtinov analysis distanceStep must match the workspace grid')
 }
