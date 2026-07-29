@@ -206,7 +206,8 @@ function refineCandidate(candidate: BahtinovHoughCandidate, ridgePoints: Bahtino
 	let best = candidate
 	const sampleCount = Math.ceil((range * 2) / step)
 	for (let sample = 0; sample <= sampleCount; sample++) {
-		const angle = canonicalizeBahtinovLine(candidate.normalAngle - range + sample * step, 0).normalAngle
+		const offset = Math.min(range, -range + sample * step)
+		const angle = canonicalizeBahtinovLine(candidate.normalAngle + offset, 0).normalAngle
 		const peak = accumulateHoughAngle(ridgePoints, Math.cos(angle), Math.sin(angle), workspace.rhoMax, workspace.distanceStep, workspace.accumulator, workspace.distanceBinCount)
 		if (!(peak.score > 0)) continue
 		const support = measureHoughSupport(ridgePoints, width, height, angle, peak.distance, workspace.distanceStep, centerX, centerY)

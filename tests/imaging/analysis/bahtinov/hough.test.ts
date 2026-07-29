@@ -97,3 +97,33 @@ test('rejects an unsafe local refinement sample count', () => {
 	const workspace = createBahtinovWorkspace(80, 80)
 	expect(() => validateBahtinovHoughOptions(workspace, { refinementStep: 1e-300 })).toThrow(RangeError)
 })
+
+test('keeps non-divisible refinement steps inside the configured range', () => {
+	const width = 96
+	const height = 96
+	const raw = new Float64Array(width * height)
+	raw.fill(0.01)
+	plotBahtinovSpikes(raw, width, height, 1, 47.5, 47.5, 120, 0, undefined, {
+		normalAngles: [PI / 36, (PI * 13) / 36, (PI * 25) / 36],
+		central: 1,
+		halfLength: 34,
+		taperLength: 5,
+	})
+	const workspace = createBahtinovWorkspace(width, height, { precision: 64, angleStep: PI / 18 })
+	const preprocessed = preprocessBahtinov({ image: image(raw, width, height), area: { left: 0, top: 0, right: width, bottom: height }, center: { x: 47.5, y: 47.5 } }, workspace, { coreRadius: 3, ridgeSigma: 2 })
+	expect(preprocessed.success).toBeTrue()
+	if (!preprocessed.success) return
+	const refinementRange = PI / 45
+	const candidates = detectBahtinovHoughCandidates(preprocessed.ridgePoints, width, height, workspace, {
+		minimumAxialSeparation: PI / 18,
+		refinementRange,
+		refinementStep: PI / 60,
+		center: preprocessed.center,
+	})
+	expect(candidates.length).toBeGreaterThanOrEqual(3)
+	for (const candidate of candidates) {
+		let nearestCoarse = Number.POSITIVE_INFINITY
+		for (let index = 0; index < workspace.angleCount; index++) nearestCoarse = Math.min(nearestCoarse, bahtinovAxialAngleDistance(candidate.normalAngle, index * workspace.angleStep))
+		expect(nearestCoarse).toBeLessThanOrEqual(refinementRange + 1e-12)
+	}
+})
