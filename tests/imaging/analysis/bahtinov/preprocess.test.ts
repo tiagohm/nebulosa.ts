@@ -184,6 +184,23 @@ test('analyzes spikes through CFA green reconstruction and masks saturated suppo
 	}
 })
 
+test('preserves saturation from either native CFA green lattice', () => {
+	const width = 64
+	const height = 64
+	const raw = new Float32Array(width * height)
+	raw.fill(0.01)
+	plotBahtinovSpikes(raw, width, height, 1, 32, 32, 100, 0, undefined, { halfLength: 20, taperLength: 4 })
+	const saturatedX = 9
+	const saturatedY = 8
+	raw[saturatedY * width + saturatedX] = 1
+	const workspace = createBahtinovWorkspace(width, height)
+	const result = preprocessBahtinov({ image: image(raw, width, height, 1, 'RGGB'), area: { left: 0, top: 0, right: width, bottom: height }, center: { x: 32, y: 32 } }, { plane: 'auto', saturationLevel: 0.9, saturationDilation: 0, coreRadius: 0, ridgeSigma: 2 }, workspace)
+	expect(result.success).toBeTrue()
+	expect(workspace.source[saturatedY * width + saturatedX]).toBeLessThan(0.9)
+	expect(workspace.mask[saturatedY * width + saturatedX]).not.toBe(0)
+	if (result.success) expect(result.spikeSaturationFraction).toBeGreaterThan(0)
+})
+
 test('dilates saturated samples with bounded square support', () => {
 	const width = 64
 	const height = 64

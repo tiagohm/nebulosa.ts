@@ -197,10 +197,10 @@ export function preprocessBahtinov(input: BahtinovAnalysisInput, workspace: Baht
 	const source = workspace.source.subarray(0, pixelCount)
 	const mask = workspace.mask.subarray(0, pixelCount)
 	mask.fill(0)
-	const finiteCount = fillSourcePlane(input.image, area, plane, source, mask, workspace)
+	const saturationLevel = options.saturationLevel ?? DEFAULT_SATURATION_LEVEL
+	const finiteCount = fillSourcePlane(input.image, area, plane, saturationLevel, source, mask, workspace)
 	if (finiteCount < Math.max(16, pixelCount >>> 3)) return { success: false, reason: 'insufficientSupport', area }
 
-	const saturationLevel = options.saturationLevel ?? DEFAULT_SATURATION_LEVEL
 	const saturationDilation = options.saturationDilation ?? DEFAULT_SATURATION_DILATION
 	const coreRadius = options.coreRadius ?? DEFAULT_CORE_RADIUS
 	const backgroundUpperQuantile = options.backgroundUpperQuantile ?? DEFAULT_BACKGROUND_UPPER_QUANTILE
@@ -211,7 +211,7 @@ export function preprocessBahtinov(input: BahtinovAnalysisInput, workspace: Baht
 
 	let saturatedCount = 0
 	for (let index = 0; index < pixelCount; index++) {
-		if ((mask[index] & MASK_INVALID) === 0 && source[index] >= saturationLevel) {
+		if ((mask[index] & MASK_INVALID) === 0 && (source[index] >= saturationLevel || (mask[index] & MASK_SATURATED) !== 0)) {
 			mask[index] |= MASK_SATURATED
 			saturatedCount++
 		}
@@ -303,8 +303,8 @@ function resolvePlane(image: Image, plane: BahtinovPlane): ResolvedBahtinovPlane
 }
 
 // Copies only the selected full-image ROI into a dense local mono plane.
-function fillSourcePlane(image: Image, area: Readonly<Rect>, plane: ResolvedBahtinovPlane, output: ImageRawType, mask: Uint8Array, workspace: BahtinovWorkspace): number {
-	if (image.metadata.bayer) return fillCfaGreenPlane(image, area, plane, output, mask, workspace)
+function fillSourcePlane(image: Image, area: Readonly<Rect>, plane: ResolvedBahtinovPlane, saturationLevel: number, output: ImageRawType, mask: Uint8Array, workspace: BahtinovWorkspace): number {
+	if (image.metadata.bayer) return fillCfaGreenPlane(image, area, plane, saturationLevel, output, mask, workspace)
 	if (plane === 'green1' || plane === 'green2' || plane === 'greenBoth') throw new RangeError('CFA green planes require Bayer metadata')
 	const { channels, stride } = image.metadata
 	const weights = channels === 3 ? grayscaleFromChannel(plane) : undefined
@@ -363,7 +363,7 @@ const CFA_GREEN_OFFSETS = {
 } as const
 
 // Reconstructs one or both physical green sublattices densely over the full-resolution sensor ROI.
-function fillCfaGreenPlane(image: Image, area: Readonly<Rect>, plane: ResolvedBahtinovPlane, output: ImageRawType, mask: Uint8Array, workspace: BahtinovWorkspace): number {
+function fillCfaGreenPlane(image: Image, area: Readonly<Rect>, plane: ResolvedBahtinovPlane, saturationLevel: number, output: ImageRawType, mask: Uint8Array, workspace: BahtinovWorkspace): number {
 	const offsets = CFA_GREEN_OFFSETS[image.metadata.bayer!]
 	const { width, height, stride } = image.metadata
 	const firstLastX = width - 1 < offsets[0][0] ? -1 : width - 1 - ((width - 1 - offsets[0][0]) & 1)
@@ -386,11 +386,16 @@ function fillCfaGreenPlane(image: Image, area: Readonly<Rect>, plane: ResolvedBa
 		const secondUpperY = workspace.cfaY[yBounds + 3]
 		for (let localX = 0; localX < roiWidth; localX++, target++) {
 			const xBounds = localX * 4
-			const first = useFirst ? interpolateCfaLattice(image.raw, stride, workspace.cfaX[xBounds], workspace.cfaX[xBounds + 1], firstLowerY, firstUpperY) : Number.NaN
-			const second = useSecond ? interpolateCfaLattice(image.raw, stride, workspace.cfaX[xBounds + 2], workspace.cfaX[xBounds + 3], secondLowerY, secondUpperY) : Number.NaN
+			const firstLowerX = workspace.cfaX[xBounds]
+			const firstUpperX = workspace.cfaX[xBounds + 1]
+			const secondLowerX = workspace.cfaX[xBounds + 2]
+			const secondUpperX = workspace.cfaX[xBounds + 3]
+			const first = useFirst ? interpolateCfaLattice(image.raw, stride, firstLowerX, firstUpperX, firstLowerY, firstUpperY) : Number.NaN
+			const second = useSecond ? interpolateCfaLattice(image.raw, stride, secondLowerX, secondUpperX, secondLowerY, secondUpperY) : Number.NaN
 			const value = useFirst && useSecond ? (Number.isFinite(first) && Number.isFinite(second) ? Math.sqrt(Math.max(0, first) * Math.max(0, second)) : Number.NaN) : useFirst ? first : second
 			if (Number.isFinite(value)) {
 				output[target] = value
+				if ((useFirst && cfaLatticeAtOrAbove(image.raw, stride, firstLowerX, firstUpperX, firstLowerY, firstUpperY, saturationLevel)) || (useSecond && cfaLatticeAtOrAbove(image.raw, stride, secondLowerX, secondUpperX, secondLowerY, secondUpperY, saturationLevel))) mask[target] |= MASK_SATURATED
 				finiteCount++
 			} else {
 				output[target] = 0
@@ -399,6 +404,26 @@ function fillCfaGreenPlane(image: Image, area: Readonly<Rect>, plane: ResolvedBa
 		}
 	}
 	return finiteCount
+}
+
+// Reports whether any finite native sample contributing to one CFA interpolation reaches a threshold.
+function cfaLatticeAtOrAbove(raw: ImageRawType, stride: number, lowerX: number, upperX: number, lowerY: number, upperY: number, threshold: number): boolean {
+	if (lowerX < 0 || lowerY < 0) return false
+	const topLeft = raw[lowerY * stride + lowerX]
+	if (Number.isFinite(topLeft) && topLeft >= threshold) return true
+	if (upperX !== lowerX) {
+		const topRight = raw[lowerY * stride + upperX]
+		if (Number.isFinite(topRight) && topRight >= threshold) return true
+	}
+	if (upperY !== lowerY) {
+		const bottomLeft = raw[upperY * stride + lowerX]
+		if (Number.isFinite(bottomLeft) && bottomLeft >= threshold) return true
+		if (upperX !== lowerX) {
+			const bottomRight = raw[upperY * stride + upperX]
+			if (Number.isFinite(bottomRight) && bottomRight >= threshold) return true
+		}
+	}
+	return false
 }
 
 // Pre-resolves lower and upper sensor coordinates for both period-two CFA lattices on one ROI axis.
