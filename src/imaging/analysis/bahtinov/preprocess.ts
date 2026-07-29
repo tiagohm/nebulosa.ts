@@ -20,6 +20,8 @@ const DEFAULT_BACKGROUND_UPPER_QUANTILE = 0.8
 const DEFAULT_SATURATION_LEVEL = 0.995
 // Default saturation-mask dilation in pixels.
 const DEFAULT_SATURATION_DILATION = 1
+// Connected saturated samples outside the initial core that indicate erased spike support.
+const MINIMUM_CONNECTED_SATURATED_SPIKE_SAMPLES = 32
 // Default circular exclusion radius around the approximate star center, in pixels.
 const DEFAULT_CORE_RADIUS = 6
 // Default narrow Gaussian sigma in pixels.
@@ -227,11 +229,19 @@ export function preprocessBahtinov(input: BahtinovAnalysisInput, workspace: Baht
 	markCore(mask, width, height, centerX, centerY, coreRadius, options.autoCoreRadius !== false, workspace.statistics)
 	let coreSaturated = false
 	let spikeSaturatedCount = 0
+	let connectedSpikeSaturatedCount = 0
+	const coreRadiusSquared = coreRadius * coreRadius
 	for (let index = 0; index < pixelCount; index++) {
 		if ((mask[index] & MASK_SATURATED) === 0) continue
-		if ((mask[index] & MASK_CORE) !== 0) coreSaturated = true
+		const x = index % width
+		const y = Math.floor(index / width)
+		const dx = x - centerX
+		const dy = y - centerY
+		if (dx * dx + dy * dy < coreRadiusSquared) coreSaturated = true
+		else if ((mask[index] & MASK_CORE) !== 0) connectedSpikeSaturatedCount++
 		else spikeSaturatedCount++
 	}
+	if (connectedSpikeSaturatedCount >= MINIMUM_CONNECTED_SATURATED_SPIKE_SAMPLES) return { success: false, reason: 'saturated', area }
 
 	const background = estimateBackground(source, mask, workspace.statistics, pixelCount, backgroundUpperQuantile)
 	if (!background) return { success: false, reason: 'lowSignal', area }
@@ -243,8 +253,15 @@ export function preprocessBahtinov(input: BahtinovAnalysisInput, workspace: Baht
 	const blurredSmall = workspace.blurredSmall.subarray(0, pixelCount)
 	const blurredLarge = workspace.blurredLarge.subarray(0, pixelCount)
 	const response = workspace.response.subarray(0, pixelCount)
+	const normalization = workspace.statistics.subarray(0, pixelCount)
 	separableSmoothing(source, blurredSmall, intermediate, metadata, kernels.small)
+	fillValidity(blurredLarge, mask)
+	separableSmoothing(blurredLarge, normalization, intermediate, metadata, kernels.small)
+	normalizeBlurredSupport(blurredSmall, normalization)
 	separableSmoothing(source, blurredLarge, intermediate, metadata, kernels.large)
+	fillValidity(response, mask)
+	separableSmoothing(response, normalization, intermediate, metadata, kernels.large)
+	normalizeBlurredSupport(blurredLarge, normalization)
 
 	for (let index = 0; index < pixelCount; index++) response[index] = blurredSmall[index] - blurredLarge[index]
 	const responseStatistics = estimateMedianAndDeviation(response, mask, workspace.statistics, pixelCount)
@@ -271,6 +288,19 @@ export function preprocessBahtinov(input: BahtinovAnalysisInput, workspace: Baht
 		retainedFraction: retainedCount / pixelCount,
 		ridgePoints,
 		workspace,
+	}
+}
+
+// Writes a unit weight except where saturation masking removed source support.
+function fillValidity(output: ImageRawType, mask: Uint8Array): void {
+	for (let index = 0; index < output.length; index++) output[index] = (mask[index] & (MASK_SATURATED | MASK_DILATED)) === 0 ? 1 : 0
+}
+
+// Renormalizes a Gaussian result by its convolved valid-support weight.
+function normalizeBlurredSupport(output: ImageRawType, normalization: ImageRawType): void {
+	for (let index = 0; index < output.length; index++) {
+		const weight = normalization[index]
+		output[index] = weight > Number.EPSILON ? output[index] / weight : 0
 	}
 }
 

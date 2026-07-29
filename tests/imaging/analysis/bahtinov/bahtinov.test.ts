@@ -208,6 +208,12 @@ test('returns explicit content failures without fabricated geometry', () => {
 	}
 })
 
+test('does not fit saturation-mask boundaries as a defocused pattern', () => {
+	const result = analyzeBahtinov({ image: synthetic(0), area: { left: 0, top: 0, right: 128, bottom: 128 }, center: { x: 63.5, y: 63.5 } }, { ...ANALYSIS_OPTIONS, saturationLevel: 0.2 })
+	if (result.success) expect(Math.abs(result.error)).toBeLessThan(1)
+	else expect(['saturated', 'insufficientSupport', 'patternNotFound']).toContain(result.reason)
+})
+
 test('uses uncertainty rather than raw error alone for focus classification', () => {
 	const result = analyzeBahtinov({ image: synthetic(0.4), area: { left: 0, top: 0, right: 128, bottom: 128 }, center: { x: 63.5, y: 63.5 } }, { ...ANALYSIS_OPTIONS, focusTolerance: 0.5, focusSigma: 10, maximumUncertainty: 10 })
 	expect(result.success).toBeTrue()
