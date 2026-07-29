@@ -252,6 +252,18 @@ test('validates preprocessing and Hough options before content failures', () => 
 	expect(() => analyzeBahtinovWithWorkspace(input, workspace, { maximumAngleCandidates: 2 })).toThrow(RangeError)
 })
 
+test('validates the expected pattern before content failures', () => {
+	const width = 64
+	const height = 64
+	const raw = new Float64Array(width * height)
+	raw.fill(Number.NaN)
+	const source = image(raw, width, height)
+	const workspace = createBahtinovWorkspace(width, height)
+	const base = { image: source, area: { left: 0, top: 0, right: width, bottom: height }, center: { x: 31.5, y: 31.5 } } as const
+	expect(() => analyzeBahtinovWithWorkspace({ ...base, expected: { centralNormalAngle: Number.NaN, externalNormalAngles: [PI / 3, (PI * 2) / 3] } }, workspace)).toThrow(RangeError)
+	expect(() => analyzeBahtinovWithWorkspace({ ...base, expected: { centralNormalAngle: PIOVERTWO, externalNormalAngles: [PI / 3, (PI * 2) / 3], maximumAngleDelta: PI } }, workspace)).toThrow(RangeError)
+})
+
 test('uses an approximate center only to anchor the analysis region', () => {
 	for (const offset of [0, 12, 24]) {
 		const result = analyzeBahtinov({ image: synthetic(3, 256, 256), center: { x: 127.5 + offset, y: 127.5 - offset }, size: 128 }, ANALYSIS_OPTIONS)

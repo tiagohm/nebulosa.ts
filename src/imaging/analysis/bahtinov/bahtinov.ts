@@ -92,6 +92,7 @@ interface ResolvedBahtinovDecisionOptions {
 // Structural input and option errors throw. Missing or ambiguous image evidence returns a
 // discriminated failure without fabricated lines, reference points, or focus values.
 export function analyzeBahtinov(input: BahtinovAnalysisInput, workspace: BahtinovWorkspace, options: BahtinovAnalysisOptions = {}): BahtinovAnalysisResult {
+	validateExpectedPattern(input.expected)
 	const decision = resolveDecisionOptions(options)
 	validateBahtinovHoughOptions(workspace, {
 		maximumCandidates: options.maximumAngleCandidates,
@@ -267,12 +268,18 @@ function pointInsideExpandedArea(point: Readonly<Point>, area: Readonly<Rect>, m
 // Measures the largest axial difference from an optional expected mask pattern.
 function expectedPatternMismatch(central: BahtinovLine, first: BahtinovLine, second: BahtinovLine, expected: BahtinovExpectedPattern | undefined): number {
 	if (!expected) return 0
-	if (!Number.isFinite(expected.centralNormalAngle) || !Number.isFinite(expected.externalNormalAngles[0]) || !Number.isFinite(expected.externalNormalAngles[1])) throw new RangeError('expected Bahtinov angles must be finite')
-	if (expected.maximumAngleDelta !== undefined && (!Number.isFinite(expected.maximumAngleDelta) || expected.maximumAngleDelta <= 0 || expected.maximumAngleDelta > PIOVERTWO)) throw new RangeError('expected maximumAngleDelta must be in (0, PI / 2]')
 	const centralDifference = bahtinovAxialAngleDistance(central.normalAngle, expected.centralNormalAngle)
 	const direct = Math.max(bahtinovAxialAngleDistance(first.normalAngle, expected.externalNormalAngles[0]), bahtinovAxialAngleDistance(second.normalAngle, expected.externalNormalAngles[1]))
 	const swapped = Math.max(bahtinovAxialAngleDistance(first.normalAngle, expected.externalNormalAngles[1]), bahtinovAxialAngleDistance(second.normalAngle, expected.externalNormalAngles[0]))
 	return Math.max(centralDifference, Math.min(direct, swapped))
+}
+
+// Validates the optional mask-layout contract before any image-dependent pipeline stage.
+function validateExpectedPattern(expected: BahtinovExpectedPattern | undefined): void {
+	if (!expected) return
+	const external = expected.externalNormalAngles
+	if (!external || external.length !== 2 || !Number.isFinite(expected.centralNormalAngle) || !Number.isFinite(external[0]) || !Number.isFinite(external[1])) throw new RangeError('expected Bahtinov angles must be finite')
+	if (expected.maximumAngleDelta !== undefined && (!Number.isFinite(expected.maximumAngleDelta) || expected.maximumAngleDelta <= 0 || expected.maximumAngleDelta > PIOVERTWO)) throw new RangeError('expected maximumAngleDelta must be in (0, PI / 2]')
 }
 
 // Propagates independent line covariances to focus error through central differences.
