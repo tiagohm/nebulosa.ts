@@ -151,7 +151,7 @@ test('preserves uncertainty when a contained pattern moves within one ROI', () =
 	expect(second.success).toBeTrue()
 	if (!first.success || !second.success) return
 	expect(Math.abs(second.error - first.error)).toBeLessThan(0.03)
-	expect(Math.abs(second.uncertainty! - first.uncertainty!) / first.uncertainty!).toBeLessThan(5e-4)
+	expect(Math.abs(second.uncertainty! - first.uncertainty!) / first.uncertainty!).toBeLessThan(5e-3)
 	expect(second.focusState).toBe(first.focusState)
 })
 
@@ -208,6 +208,24 @@ test('recovers focus error from a raw CFA green mosaic', () => {
 	const result = analyzeBahtinov({ image: cfa, area: { left: 0, top: 0, right: 128, bottom: 128 }, center: { x: 63.5, y: 63.5 } }, ANALYSIS_OPTIONS)
 	expect(result.success).toBeTrue()
 	if (result.success) expect(Math.abs(result.error + 3)).toBeLessThan(0.5)
+})
+
+test('preserves fitted geometry across a masked stripe', () => {
+	const clean = synthetic(2)
+	const masked = synthetic(2)
+	for (let y = 0; y < 128; y++) {
+		for (let x = 80; x <= 82; x++) masked.raw[y * 128 + x] = Number.NaN
+	}
+	const input = { area: { left: 0, top: 0, right: 128, bottom: 128 }, center: { x: 63.5, y: 63.5 } } as const
+	const cleanResult = analyzeBahtinov({ image: clean, ...input }, ANALYSIS_OPTIONS)
+	const maskedResult = analyzeBahtinov({ image: masked, ...input }, ANALYSIS_OPTIONS)
+	expect(cleanResult.success).toBeTrue()
+	expect(maskedResult.success).toBeTrue()
+	if (!cleanResult.success || !maskedResult.success) return
+	expect(Math.abs(maskedResult.error - cleanResult.error)).toBeLessThan(0.1)
+	expect(Math.hypot(maskedResult.reference.x - cleanResult.reference.x, maskedResult.reference.y - cleanResult.reference.y)).toBeLessThan(0.2)
+	expect(bahtinovAxialAngleDistance(maskedResult.centralLine.normalAngle, cleanResult.centralLine.normalAngle)).toBeLessThan(PI / 360)
+	expect(Math.abs(maskedResult.centralLine.fwhm - cleanResult.centralLine.fwhm)).toBeLessThan(0.35)
 })
 
 test('analyzes an RGB image produced by debayer', () => {

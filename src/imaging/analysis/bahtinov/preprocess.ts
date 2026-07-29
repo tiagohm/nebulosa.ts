@@ -341,9 +341,9 @@ export function bahtinovLineSaturationRetention(line: BahtinovLine, preprocessed
 	return retained / (sampleCount + 1)
 }
 
-// Writes a unit weight except where saturation masking removed source support.
+// Writes a unit weight only where no saturation, core, or invalid-sample mask removed support.
 function fillValidity(output: ImageRawType, mask: Uint8Array): void {
-	for (let index = 0; index < output.length; index++) output[index] = (mask[index] & (MASK_SATURATED | MASK_DILATED)) === 0 ? 1 : 0
+	for (let index = 0; index < output.length; index++) output[index] = mask[index] === 0 ? 1 : 0
 }
 
 // Renormalizes a Gaussian result by its convolved valid-support weight.

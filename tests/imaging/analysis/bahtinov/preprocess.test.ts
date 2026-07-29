@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { PI } from '../../../../src/core/constants'
+import { PI, PIOVERTWO } from '../../../../src/core/constants'
 import { bahtinovLineSaturationRetention, createBahtinovWorkspace, preprocessBahtinov as preprocessBahtinovWithWorkspace, resolveBahtinovArea } from '../../../../src/imaging/analysis/bahtinov/preprocess'
 import type { BahtinovAnalysisInput, BahtinovAnalysisOptions, BahtinovLine, BahtinovWorkspace } from '../../../../src/imaging/analysis/bahtinov/types'
 import type { Image } from '../../../../src/imaging/model/types'
@@ -83,6 +83,36 @@ test('preprocesses deterministic mono spikes with a signed DoG response', () => 
 	expect(response.some((sample) => sample > 0)).toBeTrue()
 	expect(response.some((sample) => sample < 0)).toBeTrue()
 	expect(response.every(Number.isFinite)).toBeTrue()
+})
+
+test('renormalizes a spike profile across an invalid stripe', () => {
+	const width = 128
+	const height = 128
+	const makePattern = (masked: boolean) => {
+		const raw = new Float64Array(width * height)
+		raw.fill(0.01)
+		plotBahtinovSpikes(raw, width, height, 1, 63.5, 63.5, 100, 0, undefined, {
+			normalAngles: [PI / 12, PIOVERTWO, (PI * 11) / 12],
+			central: 1,
+			strengths: [0, 1, 0],
+			fwhm: 2,
+			halfLength: 54,
+			taperLength: 6,
+		})
+		if (masked) {
+			for (let y = 0; y < height; y++) {
+				for (let x = 80; x <= 82; x++) raw[y * width + x] = Number.NaN
+			}
+		}
+		return preprocessBahtinov({ image: image(raw, width, height), area: { left: 0, top: 0, right: width, bottom: height }, center: { x: 63.5, y: 63.5 } }, { transform: 'linear', coreRadius: 2, ridgeSigma: 2 })
+	}
+	const clean = makePattern(false)
+	const masked = makePattern(true)
+	expect(clean.success).toBeTrue()
+	expect(masked.success).toBeTrue()
+	if (!clean.success || !masked.success) return
+	const sample = 63 * width + 79
+	expect(Math.abs(masked.workspace.profile[sample] - clean.workspace.profile[sample]) / clean.workspace.profile[sample]).toBeLessThan(0.05)
 })
 
 test('bounds saturation-band sampling for an extreme finite FWHM', () => {
