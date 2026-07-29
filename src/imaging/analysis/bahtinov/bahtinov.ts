@@ -218,6 +218,7 @@ function selectTriplets(fitted: readonly BahtinovFittedCandidate[], preprocessed
 				const expectedFactor = expectedLimit && expectedLimit > 0 ? Math.max(0.25, 1 - Math.min(1, expectedMismatch / expectedLimit)) : 1
 				const minimumStrength = Math.min(centralLine.strength, firstLine.strength, secondLine.strength)
 				const minimumCoverage = Math.min(centralLine.coverage, firstLine.coverage, secondLine.coverage)
+				const minimumCropCoverage = Math.min(centralLine.cropCoverage, firstLine.cropCoverage, secondLine.cropCoverage)
 				const minimumBalance = Math.min(centralLine.balance, firstLine.balance, secondLine.balance)
 				const maximumResidual = Math.max(centralLine.residual, firstLine.residual, secondLine.residual)
 				const minimumSignal = Math.min(centralLine.signalToNoise, firstLine.signalToNoise, secondLine.signalToNoise)
@@ -230,7 +231,7 @@ function selectTriplets(fitted: readonly BahtinovFittedCandidate[], preprocessed
 					angularSymmetry: Math.max(0, 1 - bisectorError / options.maximumBisectorError),
 					intersectionCondition: intersection.condition,
 					saturationRetention: Math.max(0, 1 - preprocessed.saturationFraction),
-					cropCoverage: minimumCoverage,
+					cropCoverage: minimumCropCoverage,
 					candidateSeparation: 1,
 				}
 				const score = geometricQualityMean(quality) * expectedFactor
@@ -340,9 +341,10 @@ function buildWarnings(
 	if (preprocessed.spikeSaturationFraction > 0) warnings.push({ code: 'spikesSaturated', values: { fraction: preprocessed.spikeSaturationFraction } })
 	const lines = [central, external[0], external[1]] as const
 	const minimumCoverage = Math.min(lines[0].coverage, lines[1].coverage, lines[2].coverage)
+	const minimumCropCoverage = Math.min(lines[0].cropCoverage, lines[1].cropCoverage, lines[2].cropCoverage)
 	const minimumBalance = Math.min(lines[0].balance, lines[1].balance, lines[2].balance)
 	const maximumResidual = Math.max(lines[0].residual, lines[1].residual, lines[2].residual)
-	if (minimumCoverage < 0.8) warnings.push({ code: 'patternCropped', values: { coverage: minimumCoverage } })
+	if (minimumCropCoverage < 0.8) warnings.push({ code: 'patternCropped', values: { coverage: minimumCropCoverage } })
 	if (minimumCoverage < Math.max(options.minimumCoverage * 1.5, 0.5)) warnings.push({ code: 'lineCoverageLow', values: { coverage: minimumCoverage } })
 	if (minimumBalance < Math.max(options.minimumBalance * 1.5, 0.25)) warnings.push({ code: 'lineSupportUnbalanced', values: { balance: minimumBalance } })
 	if (maximumResidual > options.maximumResidual * 0.75) warnings.push({ code: 'lineResidualHigh', values: { residual: maximumResidual } })

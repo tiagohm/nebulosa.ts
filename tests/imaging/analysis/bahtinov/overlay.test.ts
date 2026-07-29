@@ -24,6 +24,7 @@ function line(normalAngle: number, distance: number, fwhm: number, fromX: number
 		signalToNoise: 20,
 		fwhm,
 		coverage: 1,
+		cropCoverage: 1,
 		balance: 1,
 		residual: 0,
 		segment: [

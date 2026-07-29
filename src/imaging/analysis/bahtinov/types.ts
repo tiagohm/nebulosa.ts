@@ -115,6 +115,8 @@ export interface BahtinovLine {
 	readonly fwhm: number
 	// Fraction of the available longitudinal span supported by ridge samples, from 0 to 1.
 	readonly coverage: number
+	// Boundary-clearance crop score, where 1 has support clear of both ROI ends and 0.5 reaches both.
+	readonly cropCoverage: number
 	// Weaker-to-stronger longitudinal-arm support ratio, from 0 to 1.
 	readonly balance: number
 	// Robust orthogonal fit residual in pixels.

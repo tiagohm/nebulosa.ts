@@ -149,6 +149,26 @@ test('recovers a cropped pattern away from the ROI midpoint', () => {
 	expect(Math.hypot(result.reference.x - 20, result.reference.y - 63.5)).toBeLessThan(0.5)
 })
 
+test('reports crop coverage independently when long spikes reach the ROI boundary', () => {
+	const width = 64
+	const height = 64
+	const raw = new Float64Array(width * height)
+	raw.fill(0.01)
+	plotBahtinovSpikes(raw, width, height, 1, 31.5, 31.5, 180, 2, undefined, {
+		normalAngles: [(PI * 5) / 12, PIOVERTWO, (PI * 7) / 12],
+		central: 1,
+		fwhm: 2,
+		halfLength: 100,
+		taperLength: 7,
+	})
+	const result = analyzeBahtinov({ image: image(raw, width, height), area: { left: 0, top: 0, right: width, bottom: height }, center: { x: 31.5, y: 31.5 } }, { ...ANALYSIS_OPTIONS, maximumRidgePoints: 2048 })
+	expect(result.success).toBeTrue()
+	if (!result.success) return
+	expect(result.quality.lineCoverage).toBeGreaterThan(0.8)
+	expect(result.quality.cropCoverage).toBeLessThanOrEqual(0.5)
+	expect(result.warnings.some((warning) => warning.code === 'patternCropped')).toBeTrue()
+})
+
 test('keeps line signal-to-noise invariant under uniform gain', () => {
 	const low = analyzeBahtinov({ image: scaledSynthetic(2, 0.25), area: { left: 0, top: 0, right: 128, bottom: 128 }, center: { x: 63.5, y: 63.5 } }, ANALYSIS_OPTIONS)
 	const high = analyzeBahtinov({ image: scaledSynthetic(2, 0.5), area: { left: 0, top: 0, right: 128, bottom: 128 }, center: { x: 63.5, y: 63.5 } }, ANALYSIS_OPTIONS)

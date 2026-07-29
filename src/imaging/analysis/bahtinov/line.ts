@@ -104,6 +104,7 @@ export function fitBahtinovLine(candidate: BahtinovHoughCandidate, ridgePoints: 
 		signalToNoise,
 		fwhm: fitStatistics.fwhm,
 		coverage: metrics.coverage,
+		cropCoverage: metrics.cropCoverage,
 		balance: metrics.balance,
 		residual: metrics.residual,
 		covariance,
@@ -283,6 +284,7 @@ function lineMetrics(
 			readonly effectiveWeight: number
 			readonly residual: number
 			readonly coverage: number
+			readonly cropCoverage: number
 			readonly balance: number
 			readonly longitudinalVariance: number
 	  }
@@ -332,11 +334,18 @@ function lineMetrics(
 	const residual = Math.sqrt(squaredResidual / effectiveWeight)
 	const segmentLength = Math.hypot(segment[1].x - segment[0].x, segment[1].y - segment[0].y)
 	const coverage = segmentLength > 0 ? Math.min(1, Math.max(0, (maximumTangent - minimumTangent) / segmentLength)) : 0
+	const firstEndpointTangent = (segment[0].x - centerX) * tangentX + (segment[0].y - centerY) * tangentY
+	const secondEndpointTangent = (segment[1].x - centerX) * tangentX + (segment[1].y - centerY) * tangentY
+	const segmentMinimumTangent = Math.min(firstEndpointTangent, secondEndpointTangent)
+	const segmentMaximumTangent = Math.max(firstEndpointTangent, secondEndpointTangent)
+	const boundaryTolerance = Math.max(1, supportRadius)
+	const boundaryHits = (minimumTangent - segmentMinimumTangent <= boundaryTolerance ? 1 : 0) + (segmentMaximumTangent - maximumTangent <= boundaryTolerance ? 1 : 0)
+	const cropCoverage = 1 - boundaryHits * 0.25
 	const stronger = Math.max(negativeStrength, positiveStrength)
 	const balance = stronger > 0 ? Math.min(negativeStrength, positiveStrength) / stronger : 0
 	longitudinalMean /= effectiveWeight
 	const longitudinalVariance = Math.max(0, longitudinalSquared / effectiveWeight - longitudinalMean * longitudinalMean)
-	return { count, strength, effectiveWeight, residual, coverage, balance, longitudinalVariance }
+	return { count, strength, effectiveWeight, residual, coverage, cropCoverage, balance, longitudinalVariance }
 }
 
 // Validates finite candidate, ridge, ROI, noise, and scratch capacity before fitting.
