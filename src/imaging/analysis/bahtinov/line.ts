@@ -313,7 +313,7 @@ function lineMetrics(
 		const weight = baseWeight * robustWeight
 		const tangent = (x - centerX) * tangentX + (y - centerY) * tangentY
 		count++
-		strength += baseWeight
+		strength += baseWeight * baseWeight
 		effectiveWeight += weight
 		squaredResidual += weight * residual * residual
 		longitudinalMean += weight * tangent

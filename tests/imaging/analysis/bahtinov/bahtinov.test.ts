@@ -81,6 +81,12 @@ function offCenterSynthetic(error: number, centerX: number, centerY: number): Im
 	return image(raw, width, height)
 }
 
+function scaledSynthetic(error: number, gain: number): Image {
+	const source = synthetic(error)
+	for (let index = 0; index < source.raw.length; index++) source.raw[index] = (source.raw[index] + (((index * 37) % 101) - 50) * 1e-5) * gain
+	return source
+}
+
 const ANALYSIS_OPTIONS = {
 	transform: 'linear' as const,
 	coreRadius: 3,
@@ -130,6 +136,20 @@ test('recovers a cropped pattern away from the ROI midpoint', () => {
 	if (!result.success) return
 	expect(Math.abs(result.error - 2)).toBeLessThan(0.3)
 	expect(Math.hypot(result.reference.x - 20, result.reference.y - 63.5)).toBeLessThan(0.5)
+})
+
+test('keeps line signal-to-noise invariant under uniform gain', () => {
+	const low = analyzeBahtinov({ image: scaledSynthetic(2, 0.25), area: { left: 0, top: 0, right: 128, bottom: 128 }, center: { x: 63.5, y: 63.5 } }, ANALYSIS_OPTIONS)
+	const high = analyzeBahtinov({ image: scaledSynthetic(2, 0.5), area: { left: 0, top: 0, right: 128, bottom: 128 }, center: { x: 63.5, y: 63.5 } }, ANALYSIS_OPTIONS)
+	expect(low.success).toBeTrue()
+	expect(high.success).toBeTrue()
+	if (!low.success || !high.success) return
+	const lowLines = [low.centralLine, low.externalLines[0], low.externalLines[1]]
+	const highLines = [high.centralLine, high.externalLines[0], high.externalLines[1]]
+	for (let index = 0; index < lowLines.length; index++) {
+		expect(highLines[index].strength / lowLines[index].strength).toBeCloseTo(2, 6)
+		expect(Math.abs(highLines[index].signalToNoise - lowLines[index].signalToNoise) / lowLines[index].signalToNoise).toBeLessThan(1e-6)
+	}
 })
 
 test('recovers focus error from a raw CFA green mosaic', () => {
