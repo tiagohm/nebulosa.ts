@@ -208,6 +208,22 @@ test('analyzes spikes through CFA green reconstruction and masks saturated suppo
 	}
 })
 
+test('reports saturated samples connected across the initial core boundary', () => {
+	const width = 64
+	const height = 64
+	const raw = new Float32Array(width * height)
+	raw.fill(0.01)
+	plotBahtinovSpikes(raw, width, height, 1, 32, 32, 100, 0, undefined, { halfLength: 20, taperLength: 4 })
+	for (let index = 0; index < raw.length; index++) raw[index] = Math.min(0.5, raw[index])
+	raw[32 * width + 34] = 1
+	const result = preprocessBahtinov({ image: image(raw, width, height), area: { left: 0, top: 0, right: width, bottom: height }, center: { x: 32, y: 32 } }, { saturationLevel: 0.9, saturationDilation: 1, coreRadius: 2, ridgeSigma: 2 })
+	expect(result.success).toBeTrue()
+	if (result.success) {
+		expect(result.coreSaturated).toBeTrue()
+		expect(result.spikeSaturationFraction).toBe(0)
+	}
+})
+
 test('preserves saturation from either native CFA green lattice', () => {
 	const width = 64
 	const height = 64

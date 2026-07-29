@@ -237,9 +237,10 @@ export function preprocessBahtinov(input: BahtinovAnalysisInput, workspace: Baht
 		const y = Math.floor(index / width)
 		const dx = x - centerX
 		const dy = y - centerY
-		if (dx * dx + dy * dy < coreRadiusSquared) coreSaturated = true
-		else if ((mask[index] & MASK_CORE) !== 0) connectedSpikeSaturatedCount++
-		else spikeSaturatedCount++
+		if ((mask[index] & MASK_CORE) !== 0) {
+			coreSaturated = true
+			if (dx * dx + dy * dy >= coreRadiusSquared) connectedSpikeSaturatedCount++
+		} else spikeSaturatedCount++
 	}
 	if (connectedSpikeSaturatedCount >= MINIMUM_CONNECTED_SATURATED_SPIKE_SAMPLES) return { success: false, reason: 'saturated', area }
 
