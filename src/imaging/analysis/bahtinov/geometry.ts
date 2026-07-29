@@ -183,6 +183,7 @@ export function bahtinovFocusProximity(absoluteError: number, focusTolerance: nu
 // Derives finite reference, signed error, proximity, and intersection conditioning from three lines.
 // Distances and `focusTolerance` are pixels. Returns undefined for ill-conditioned external lines.
 export function computeBahtinovFocusGeometry(central: BahtinovNormalLine, externalFirst: BahtinovNormalLine, externalSecond: BahtinovNormalLine, focusTolerance: number, minimumDeterminant: number = DEFAULT_MINIMUM_INTERSECTION_DETERMINANT): BahtinovFocusGeometry | undefined {
+	if (!Number.isFinite(focusTolerance) || focusTolerance <= 0) throw new RangeError('focusTolerance must be finite and positive')
 	validateNormalLine(central)
 	const intersection = intersectBahtinovLines(externalFirst, externalSecond, minimumDeterminant)
 	if (!intersection) return undefined

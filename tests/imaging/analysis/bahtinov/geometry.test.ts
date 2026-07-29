@@ -69,3 +69,11 @@ test('computes signed focus error and stable proximity', () => {
 	expect(bahtinovFocusProximity(Number.MAX_VALUE, Number.MIN_VALUE)).toBe(0)
 	expect(computeBahtinovFocusGeometry({ normalAngle: 0, distance: -Number.MAX_VALUE }, { normalAngle: 0, distance: Number.MAX_VALUE }, { normalAngle: PIOVERTWO, distance: 0 }, 0.5)).toBeUndefined()
 })
+
+test('validates focus tolerance before rejecting parallel external lines', () => {
+	const central = { normalAngle: 0, distance: 0 }
+	const externalFirst = { normalAngle: PIOVERTWO, distance: 1 }
+	const externalSecond = { normalAngle: PIOVERTWO, distance: 2 }
+	expect(() => computeBahtinovFocusGeometry(central, externalFirst, externalSecond, -1)).toThrow(RangeError)
+	expect(() => computeBahtinovFocusGeometry(central, externalFirst, externalSecond, Number.NaN)).toThrow(RangeError)
+})
