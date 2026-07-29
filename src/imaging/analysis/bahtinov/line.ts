@@ -19,6 +19,10 @@ const HUBER_TUNING = 1.345
 const SIGMA_TO_FWHM = 2.3548200450309493
 // Small positive floor used only in robust scale and covariance denominators.
 const NUMERICAL_FLOOR = 1e-12
+// Angular change below which robust TLS iteration is considered converged, in radians.
+const ANGLE_CONVERGENCE_TOLERANCE = 1e-5
+// Normal-distance change below which robust TLS iteration is considered converged, in pixels.
+const DISTANCE_CONVERGENCE_TOLERANCE = 1e-3
 
 // Controls for robust local line fitting and acceptance.
 export interface BahtinovLineFitOptions {
@@ -72,8 +76,11 @@ export function fitBahtinovLine(candidate: BahtinovHoughCandidate, ridgePoints: 
 		const fitted = canonicalizeBahtinovLine(tangentAngle + PIOVERTWO, 0)
 		const nextDistance = moments.centerX * Math.cos(fitted.normalAngle) + moments.centerY * Math.sin(fitted.normalAngle)
 		if (!Number.isFinite(nextDistance) || bahtinovAxialAngleDistance(candidate.normalAngle, fitted.normalAngle) > PI / 12) return undefined
+		const angleChange = bahtinovAxialAngleDistance(normalAngle, fitted.normalAngle)
+		const distanceChange = Math.abs(distance - nextDistance)
 		normalAngle = fitted.normalAngle
 		distance = nextDistance
+		if (angleChange <= ANGLE_CONVERGENCE_TOLERANCE && distanceChange <= DISTANCE_CONVERGENCE_TOLERANCE) break
 	}
 
 	const metrics = lineMetrics(ridgePoints, candidate, normalAngle, distance, supportRadius, robustScale, localWidth, localHeight)
@@ -106,30 +113,41 @@ function imageFitCovariance(candidate: BahtinovHoughCandidate, normalAngle: numb
 	const normalY = Math.sin(normalAngle)
 	const tangentX = -normalY
 	const tangentY = normalX
+	const solveX = Math.abs(candidateX) >= Math.abs(candidateY)
+	const denominator = solveX ? candidateX : candidateY
+	const crossCoefficient = solveX ? candidateY : candidateX
+	const innerLimit = solveX ? width : height
+	const outerLimit = solveX ? height : width
+	const halfSpan = supportRadius / Math.abs(denominator)
 	let weightSum = 0
 	let squaredWeightSum = 0
 	let tangentMean = 0
 	let squaredResidual = 0
-	let tangentSquared = 0
+	let tangentVarianceSum = 0
 
-	for (let y = 0; y < height; y++) {
-		const row = y * width
-		for (let x = 0; x < width; x++) {
-			const index = row + x
+	for (let outer = 0; outer < outerLimit; outer++) {
+		const center = (candidate.distance - crossCoefficient * outer) / denominator
+		const first = Math.max(0, Math.ceil(center - halfSpan))
+		const last = Math.min(innerLimit - 1, Math.floor(center + halfSpan))
+		for (let inner = first; inner <= last; inner++) {
+			const x = solveX ? inner : outer
+			const y = solveX ? outer : inner
+			const index = y * width + x
 			const weight = workspace.response[index]
 			if (workspace.mask[index] !== 0 || !(weight > 0) || Math.abs(x * candidateX + y * candidateY - candidate.distance) > supportRadius) continue
 			const residual = x * normalX + y * normalY - distance
 			const tangent = x * tangentX + y * tangentY
-			weightSum += weight
+			const nextWeightSum = weightSum + weight
+			const tangentDelta = tangent - tangentMean
+			tangentMean += (weight / nextWeightSum) * tangentDelta
+			tangentVarianceSum += weight * tangentDelta * (tangent - tangentMean)
+			weightSum = nextWeightSum
 			squaredWeightSum += weight * weight
-			tangentMean += weight * tangent
-			tangentSquared += weight * tangent * tangent
 			squaredResidual += weight * residual * residual
 		}
 	}
 	if (!(weightSum > 0) || !(squaredWeightSum > 0)) return undefined
-	tangentMean /= weightSum
-	const longitudinalVariance = Math.max(0, tangentSquared / weightSum - tangentMean * tangentMean)
+	const longitudinalVariance = Math.max(0, tangentVarianceSum / weightSum)
 	const residualVariance = squaredResidual / weightSum
 	const effectiveCount = (weightSum * weightSum) / squaredWeightSum
 	if (!(longitudinalVariance > NUMERICAL_FLOOR) || !(effectiveCount > 2) || !Number.isFinite(residualVariance)) return undefined
@@ -179,51 +197,49 @@ function weightedImageMoments(
 	const normalX = Math.cos(normalAngle)
 	const normalY = Math.sin(normalAngle)
 	const huberLimit = HUBER_TUNING * Math.max(NUMERICAL_FLOOR, robustScale)
+	const solveX = Math.abs(candidateX) >= Math.abs(candidateY)
+	const denominator = solveX ? candidateX : candidateY
+	const crossCoefficient = solveX ? candidateY : candidateX
+	const innerLimit = solveX ? width : height
+	const outerLimit = solveX ? height : width
+	const halfSpan = supportRadius / Math.abs(denominator)
 	let count = 0
 	let weightSum = 0
 	let centerX = 0
 	let centerY = 0
+	let covarianceXX = 0
+	let covarianceXY = 0
+	let covarianceYY = 0
 
-	for (let y = 0; y < height; y++) {
-		const row = y * width
-		for (let x = 0; x < width; x++) {
-			const index = row + x
+	for (let outer = 0; outer < outerLimit; outer++) {
+		const center = (candidate.distance - crossCoefficient * outer) / denominator
+		const first = Math.max(0, Math.ceil(center - halfSpan))
+		const last = Math.min(innerLimit - 1, Math.floor(center + halfSpan))
+		for (let inner = first; inner <= last; inner++) {
+			const x = solveX ? inner : outer
+			const y = solveX ? outer : inner
+			const index = y * width + x
 			if (workspace.mask[index] !== 0 || !(workspace.response[index] > 0)) continue
 			if (Math.abs(x * candidateX + y * candidateY - candidate.distance) > supportRadius) continue
 			const residual = Math.abs(x * normalX + y * normalY - distance)
 			const robustWeight = residual <= huberLimit ? 1 : huberLimit / residual
 			const weight = workspace.response[index] * robustWeight
 			if (!(weight > 0)) continue
-			weightSum += weight
-			centerX += weight * x
-			centerY += weight * y
+			const nextWeightSum = weightSum + weight
+			const ratio = weight / nextWeightSum
+			const dx = x - centerX
+			const dy = y - centerY
+			centerX += ratio * dx
+			centerY += ratio * dy
+			const covarianceFactor = weightSum * ratio
+			covarianceXX += covarianceFactor * dx * dx
+			covarianceXY += covarianceFactor * dx * dy
+			covarianceYY += covarianceFactor * dy * dy
+			weightSum = nextWeightSum
 			count++
 		}
 	}
 	if (!(weightSum > 0)) return undefined
-	centerX /= weightSum
-	centerY /= weightSum
-
-	let covarianceXX = 0
-	let covarianceXY = 0
-	let covarianceYY = 0
-	for (let y = 0; y < height; y++) {
-		const row = y * width
-		for (let x = 0; x < width; x++) {
-			const index = row + x
-			if (workspace.mask[index] !== 0 || !(workspace.response[index] > 0)) continue
-			if (Math.abs(x * candidateX + y * candidateY - candidate.distance) > supportRadius) continue
-			const residual = Math.abs(x * normalX + y * normalY - distance)
-			const robustWeight = residual <= huberLimit ? 1 : huberLimit / residual
-			const weight = workspace.response[index] * robustWeight
-			if (!(weight > 0)) continue
-			const dx = x - centerX
-			const dy = y - centerY
-			covarianceXX += weight * dx * dx
-			covarianceXY += weight * dx * dy
-			covarianceYY += weight * dy * dy
-		}
-	}
 	return { count, centerX, centerY, covarianceXX: covarianceXX / weightSum, covarianceXY: covarianceXY / weightSum, covarianceYY: covarianceYY / weightSum }
 }
 
