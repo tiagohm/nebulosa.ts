@@ -93,15 +93,16 @@ export function fitBahtinovLine(candidate: BahtinovHoughCandidate, ridgePoints: 
 	const segment = clipBahtinovLineToArea({ normalAngle, distance: globalDistance }, area)
 	if (!segment) return undefined
 	const signalToNoise = metrics.strength / Math.max(NUMERICAL_FLOOR, responseDeviation * Math.sqrt(metrics.count))
-	const localCovariance = imageFitCovariance(candidate, normalAngle, distance, supportRadius, localWidth, localHeight, workspace)
-	const covariance = localCovariance ? globalLineCovariance(localCovariance, normalAngle, area.left, area.top) : undefined
+	const fitStatistics = imageFitStatistics(candidate, normalAngle, distance, supportRadius, localWidth, localHeight, workspace)
+	if (!fitStatistics) return undefined
+	const covariance = fitStatistics.covariance ? globalLineCovariance(fitStatistics.covariance, normalAngle, area.left, area.top) : undefined
 
 	return {
 		normalAngle,
 		distance: globalDistance,
 		strength: metrics.strength,
 		signalToNoise,
-		fwhm: metrics.fwhm,
+		fwhm: fitStatistics.fwhm,
 		coverage: metrics.coverage,
 		balance: metrics.balance,
 		residual: metrics.residual,
@@ -120,8 +121,8 @@ function globalLineCovariance(covariance: readonly [number, number, number], nor
 	return Number.isFinite(globalCovarianceAngleDistance) && Number.isFinite(globalVarianceDistance) && globalVarianceDistance >= 0 ? [varianceAngle, globalCovarianceAngleDistance, globalVarianceDistance] : undefined
 }
 
-// Estimates scale-invariant line-parameter covariance from positive profile samples.
-function imageFitCovariance(candidate: BahtinovHoughCandidate, normalAngle: number, distance: number, supportRadius: number, width: number, height: number, workspace: BahtinovWorkspace): readonly [number, number, number] | undefined {
+// Estimates transverse intensity width and line covariance from positive response-profile samples.
+function imageFitStatistics(candidate: BahtinovHoughCandidate, normalAngle: number, distance: number, supportRadius: number, width: number, height: number, workspace: BahtinovWorkspace): { readonly fwhm: number; readonly covariance?: readonly [number, number, number] } | undefined {
 	const candidateX = Math.cos(candidate.normalAngle)
 	const candidateY = Math.sin(candidate.normalAngle)
 	const normalX = Math.cos(normalAngle)
@@ -165,12 +166,15 @@ function imageFitCovariance(candidate: BahtinovHoughCandidate, normalAngle: numb
 	const longitudinalVariance = Math.max(0, tangentVarianceSum / weightSum)
 	const residualVariance = squaredResidual / weightSum
 	const effectiveCount = (weightSum * weightSum) / squaredWeightSum
-	if (!(longitudinalVariance > NUMERICAL_FLOOR) || !(effectiveCount > 2) || !Number.isFinite(residualVariance)) return undefined
+	if (!Number.isFinite(residualVariance)) return undefined
+	const fwhm = Math.sqrt(Math.max(0, residualVariance)) * SIGMA_TO_FWHM
+	if (!(longitudinalVariance > NUMERICAL_FLOOR) || !(effectiveCount > 2)) return { fwhm }
 	const varianceDistance = residualVariance / effectiveCount
 	const varianceAngle = varianceDistance / longitudinalVariance
 	const covarianceAngleDistance = tangentMean * varianceAngle
 	const originVarianceDistance = varianceDistance + tangentMean * tangentMean * varianceAngle
-	return Number.isFinite(varianceAngle) && Number.isFinite(covarianceAngleDistance) && Number.isFinite(originVarianceDistance) ? [varianceAngle, covarianceAngleDistance, originVarianceDistance] : undefined
+	const covariance = Number.isFinite(varianceAngle) && Number.isFinite(covarianceAngleDistance) && Number.isFinite(originVarianceDistance) ? ([varianceAngle, covarianceAngleDistance, originVarianceDistance] as const) : undefined
+	return { fwhm, covariance }
 }
 
 // Refines all Hough candidates and retains only finite accepted lines.
@@ -260,7 +264,7 @@ function weightedImageMoments(
 	return { count, centerX, centerY, covarianceXX: covarianceXX / weightSum, covarianceXY: covarianceXY / weightSum, covarianceYY: covarianceYY / weightSum }
 }
 
-// Computes final residual, width, coverage, balance, strength, and covariance evidence.
+// Computes final localization residual, coverage, balance, strength, and covariance evidence.
 function lineMetrics(
 	ridgePoints: BahtinovRidgePoints,
 	candidate: BahtinovHoughCandidate,
@@ -278,7 +282,6 @@ function lineMetrics(
 			readonly strength: number
 			readonly effectiveWeight: number
 			readonly residual: number
-			readonly fwhm: number
 			readonly coverage: number
 			readonly balance: number
 			readonly longitudinalVariance: number
@@ -327,14 +330,13 @@ function lineMetrics(
 	}
 	if (!(effectiveWeight > 0) || !Number.isFinite(minimumTangent) || !Number.isFinite(maximumTangent)) return undefined
 	const residual = Math.sqrt(squaredResidual / effectiveWeight)
-	const fwhm = residual * SIGMA_TO_FWHM
 	const segmentLength = Math.hypot(segment[1].x - segment[0].x, segment[1].y - segment[0].y)
 	const coverage = segmentLength > 0 ? Math.min(1, Math.max(0, (maximumTangent - minimumTangent) / segmentLength)) : 0
 	const stronger = Math.max(negativeStrength, positiveStrength)
 	const balance = stronger > 0 ? Math.min(negativeStrength, positiveStrength) / stronger : 0
 	longitudinalMean /= effectiveWeight
 	const longitudinalVariance = Math.max(0, longitudinalSquared / effectiveWeight - longitudinalMean * longitudinalMean)
-	return { count, strength, effectiveWeight, residual, fwhm, coverage, balance, longitudinalVariance }
+	return { count, strength, effectiveWeight, residual, coverage, balance, longitudinalVariance }
 }
 
 // Validates finite candidate, ridge, ROI, noise, and scratch capacity before fitting.
