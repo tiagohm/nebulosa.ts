@@ -2,7 +2,6 @@ import { expect, test } from 'bun:test'
 import { PI, PIOVERTWO } from '../../../../src/core/constants'
 import { analyzeBahtinov } from '../../../../src/imaging/analysis/bahtinov/bahtinov'
 import { createBahtinovOverlayGeometry } from '../../../../src/imaging/analysis/bahtinov/overlay'
-import { createBahtinovWorkspace } from '../../../../src/imaging/analysis/bahtinov/preprocess'
 import type { CfaPattern, Image, ImageRawType } from '../../../../src/imaging/model/types'
 import { plotBahtinovSpikes } from '../../../../src/imaging/stars/bahtinov'
 
@@ -92,22 +91,6 @@ test('returns explicit content failures without fabricated geometry', () => {
 		expect('reference' in result).toBeFalse()
 		expect('error' in result).toBeFalse()
 	}
-})
-
-test('keeps debug snapshots detached across workspace reuse', () => {
-	const width = 128
-	const height = 128
-	const workspace = createBahtinovWorkspace(width, height, { precision: 64, maximumRidgePoints: 2048 })
-	const first = analyzeBahtinov({ image: synthetic(2), area: { left: 0, top: 0, right: width, bottom: height }, center: { x: 63.5, y: 63.5 } }, { ...ANALYSIS_OPTIONS, workspace, includeDebug: true })
-	expect(first.success).toBeTrue()
-	if (!first.success || !first.debug?.response || !first.debug.mask || !first.debug.source) return
-	const response = first.debug.response.slice()
-	const mask = first.debug.mask.slice()
-	const source = first.debug.source.slice()
-	analyzeBahtinov({ image: synthetic(-3), area: { left: 0, top: 0, right: width, bottom: height }, center: { x: 63.5, y: 63.5 } }, { ...ANALYSIS_OPTIONS, workspace })
-	expect(first.debug.response).toEqual(response)
-	expect(first.debug.mask).toEqual(mask)
-	expect(first.debug.source).toEqual(source)
 })
 
 test('uses uncertainty rather than raw error alone for focus classification', () => {

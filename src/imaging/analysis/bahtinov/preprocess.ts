@@ -72,8 +72,6 @@ export interface BahtinovPreprocessSuccess {
 	readonly ridgePoints: BahtinovRidgePoints
 	// Workspace containing the extracted plane, response, mask, and ridge arrays.
 	readonly workspace: BahtinovWorkspace
-	// Extracted mono source snapshot before masking and transformation when debug is enabled.
-	readonly debugSource?: ImageRawType
 }
 
 // Content-level preprocessing failure with the resolved ROI when available.
@@ -230,7 +228,6 @@ export function preprocessBahtinov(input: BahtinovAnalysisInput, options: Bahtin
 
 	const background = estimateBackground(source, mask, workspace.statistics, pixelCount, backgroundUpperQuantile)
 	if (!background) return { success: false, reason: 'lowSignal', area }
-	const debugSource = options.includeDebug ? source.slice() : undefined
 	transformSource(source, mask, background.level, options.transform ?? 'sqrt')
 
 	const kernels = resolveKernels(workspace, smallBlurSigma, largeBlurSigma)
@@ -265,7 +262,6 @@ export function preprocessBahtinov(input: BahtinovAnalysisInput, options: Bahtin
 		retainedFraction: retainedCount / pixelCount,
 		ridgePoints,
 		workspace,
-		debugSource,
 	}
 }
 

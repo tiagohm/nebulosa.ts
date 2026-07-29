@@ -99,8 +99,6 @@ export interface BahtinovAnalysisOptions {
 	readonly focusSigma?: number
 	// Minimum aggregate confidence required for a determinate focus state, from 0 to 1.
 	readonly minimumConfidence?: number
-	// Whether to snapshot intermediate buffers and candidates.
-	readonly includeDebug?: boolean
 	// Reusable buffers sized for at least the resolved ROI and search grid.
 	readonly workspace?: BahtinovWorkspace
 }
@@ -192,47 +190,6 @@ export interface BahtinovRidgePoints {
 	readonly count: number
 }
 
-// Optional immutable snapshot of intermediate analysis evidence.
-export interface BahtinovDebugData {
-	// Extracted mono ROI before filtering.
-	readonly source?: ImageRawType
-	// Robust background estimate for the ROI.
-	readonly background?: BahtinovBackground
-	// Signed Difference-of-Gaussians response.
-	readonly response?: ImageRawType
-	// Saturation and core exclusion mask.
-	readonly mask?: Uint8Array
-	// Copied valid ridge samples.
-	readonly ridgePoints?: Readonly<{
-		// Local ROI x coordinates in pixels.
-		readonly x: Float32Array
-		// Local ROI y coordinates in pixels.
-		readonly y: Float32Array
-		// Non-negative ridge weights.
-		readonly weight: Float32Array
-	}>
-	// Best normal-distance score for each coarse normal angle.
-	readonly angleScore?: Float64Array
-	// Retained line candidates in local or global coordinates documented by the producer.
-	readonly peaks?: readonly Readonly<{
-		// Candidate normal angle in `[0, PI)`, in radians.
-		readonly normalAngle: Angle
-		// Candidate normal-form distance in pixels.
-		readonly distance: number
-		// Normalized candidate score.
-		readonly score: number
-	}>[]
-	// Ranked triplet index combinations.
-	readonly triplets?: readonly Readonly<{
-		// Candidate index selected as the central spike.
-		readonly central: number
-		// Candidate indices selected as the two external spikes.
-		readonly external: readonly [number, number]
-		// Normalized triplet score.
-		readonly score: number
-	}>[]
-}
-
 // Successful finite Bahtinov measurement in full-image coordinates.
 export interface BahtinovAnalysisSuccess {
 	// Success discriminator.
@@ -261,8 +218,6 @@ export interface BahtinovAnalysisSuccess {
 	readonly quality: BahtinovQuality
 	// Stable non-fatal diagnostics.
 	readonly warnings: readonly BahtinovWarning[]
-	// Optional copied intermediate evidence.
-	readonly debug?: BahtinovDebugData
 }
 
 // Content-level analysis failure without fabricated geometry.
@@ -275,8 +230,6 @@ export interface BahtinovAnalysisFailure {
 	readonly area?: Readonly<Rect>
 	// Stable non-fatal diagnostics collected before failure.
 	readonly warnings: readonly BahtinovWarning[]
-	// Optional copied intermediate evidence.
-	readonly debug?: BahtinovDebugData
 }
 
 // Discriminated result of one stateless analysis.

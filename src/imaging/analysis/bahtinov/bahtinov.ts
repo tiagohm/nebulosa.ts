@@ -4,7 +4,7 @@ import { bahtinovAxialAngleDistance, bahtinovAxialBisectors, computeBahtinovFocu
 import { detectBahtinovHoughCandidates } from './hough'
 import { fitBahtinovLines, type BahtinovFittedCandidate } from './line'
 import { preprocessBahtinov, type BahtinovPreprocessSuccess } from './preprocess'
-import type { BahtinovAnalysisFailure, BahtinovAnalysisInput, BahtinovAnalysisOptions, BahtinovAnalysisResult, BahtinovDebugData, BahtinovExpectedPattern, BahtinovFocusState, BahtinovLine, BahtinovQuality, BahtinovWarning } from './types'
+import type { BahtinovAnalysisFailure, BahtinovAnalysisInput, BahtinovAnalysisOptions, BahtinovAnalysisResult, BahtinovExpectedPattern, BahtinovFocusState, BahtinovLine, BahtinovQuality, BahtinovWarning } from './types'
 
 // Stateless Bahtinov analyzer facade. The pipeline preprocesses a normalized ROI, detects and fits
 // line candidates, selects one conditioned symmetric triplet, propagates line covariance into pixel
@@ -103,32 +103,31 @@ export function analyzeBahtinov(input: BahtinovAnalysisInput, options: BahtinovA
 		refinementRange: options.refinementRange,
 		refinementStep: options.refinementStep,
 	})
-	if (houghCandidates.length < 3) return analysisFailure('patternNotFound', preprocessed, options, [])
+	if (houghCandidates.length < 3) return analysisFailure('patternNotFound', preprocessed, [])
 
 	const fitted = fitBahtinovLines(houghCandidates, preprocessed.ridgePoints, preprocessed.area, preprocessed.responseDeviation, preprocessed.workspace, {
 		maximumResidual: decision.maximumResidual,
 	})
-	if (fitted.length < 3) return analysisFailure('insufficientSupport', preprocessed, options, [], fitted)
+	if (fitted.length < 3) return analysisFailure('insufficientSupport', preprocessed, [])
 
 	const triplets = selectTriplets(fitted, preprocessed, input.expected, decision)
-	if (triplets.length === 0) return analysisFailure('patternNotFound', preprocessed, options, [], fitted)
+	if (triplets.length === 0) return analysisFailure('patternNotFound', preprocessed, [])
 	const best = triplets[0]
 	const candidateSeparation = triplets.length === 1 ? 1 : Math.max(0, Math.min(1, (best.score - triplets[1].score) / Math.max(Number.EPSILON, best.score)))
-	if (candidateSeparation < decision.minimumCandidateSeparation) return analysisFailure('ambiguousPattern', preprocessed, options, [], fitted, triplets)
+	if (candidateSeparation < decision.minimumCandidateSeparation) return analysisFailure('ambiguousPattern', preprocessed, [])
 
 	const centralLine = fitted[best.central].line
 	const firstExternal = fitted[best.external[0]].line
 	const secondExternal = fitted[best.external[1]].line
 	const externalLines = firstExternal.normalAngle <= secondExternal.normalAngle ? ([firstExternal, secondExternal] as const) : ([secondExternal, firstExternal] as const)
 	const focus = computeBahtinovFocusGeometry(centralLine, externalLines[0], externalLines[1], decision.focusTolerance)
-	if (!focus) return analysisFailure('illConditioned', preprocessed, options, [], fitted, triplets)
+	if (!focus) return analysisFailure('illConditioned', preprocessed, [])
 
 	const uncertainty = propagateFocusUncertainty(centralLine, externalLines[0], externalLines[1])
 	const quality = { ...best.quality, candidateSeparation }
 	const confidence = geometricQualityMean(quality)
 	const warnings = buildWarnings(preprocessed, best, centralLine, externalLines, uncertainty, decision, input.expected)
 	const focusState = classifyFocus(focus.absoluteError, uncertainty, confidence, decision)
-	const debug = options.includeDebug ? buildDebug(preprocessed, fitted, triplets) : undefined
 	return {
 		success: true,
 		area: { ...preprocessed.area },
@@ -143,7 +142,6 @@ export function analyzeBahtinov(input: BahtinovAnalysisInput, options: BahtinovA
 		confidence,
 		quality,
 		warnings,
-		debug,
 	}
 }
 
@@ -346,34 +344,13 @@ function buildWarnings(
 	return warnings
 }
 
-// Builds a detached debug snapshot that remains stable after workspace reuse.
-function buildDebug(preprocessed: BahtinovPreprocessSuccess, fitted: readonly BahtinovFittedCandidate[], triplets: readonly BahtinovTripletCandidate[]): BahtinovDebugData {
-	const pixelCount = (preprocessed.area.right - preprocessed.area.left) * (preprocessed.area.bottom - preprocessed.area.top)
-	const ridgeCount = preprocessed.ridgePoints.count
-	return {
-		source: preprocessed.debugSource,
-		background: { ...preprocessed.background },
-		response: preprocessed.workspace.response.slice(0, pixelCount),
-		mask: preprocessed.workspace.mask.slice(0, pixelCount),
-		ridgePoints: {
-			x: preprocessed.ridgePoints.x.slice(0, ridgeCount),
-			y: preprocessed.ridgePoints.y.slice(0, ridgeCount),
-			weight: preprocessed.ridgePoints.weight.slice(0, ridgeCount),
-		},
-		angleScore: preprocessed.workspace.angleScore.slice(),
-		peaks: fitted.map((candidate) => ({ normalAngle: candidate.line.normalAngle, distance: candidate.line.distance, score: candidate.houghScore })),
-		triplets: triplets.map((triplet) => ({ central: triplet.central, external: triplet.external, score: triplet.score })),
-	}
-}
-
-// Creates one content-level failure with an optional detached debug snapshot.
-function analysisFailure(reason: BahtinovAnalysisFailure['reason'], preprocessed: BahtinovPreprocessSuccess, options: BahtinovAnalysisOptions, warnings: readonly BahtinovWarning[], fitted: readonly BahtinovFittedCandidate[] = [], triplets: readonly BahtinovTripletCandidate[] = []): BahtinovAnalysisFailure {
+// Creates one content-level failure after preprocessing succeeded.
+function analysisFailure(reason: BahtinovAnalysisFailure['reason'], preprocessed: BahtinovPreprocessSuccess, warnings: readonly BahtinovWarning[]): BahtinovAnalysisFailure {
 	return {
 		success: false,
 		reason,
 		area: { ...preprocessed.area },
 		warnings,
-		debug: options.includeDebug ? buildDebug(preprocessed, fitted, triplets) : undefined,
 	}
 }
 
