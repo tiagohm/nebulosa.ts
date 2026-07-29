@@ -2,7 +2,7 @@ import { PI, PIOVERTWO } from '../../../core/constants'
 import { medianBySelectionOf, quickSelect, STANDARD_DEVIATION_SCALE } from '../../../core/util'
 import type { Point, Rect } from '../../../math/numerical/geometry'
 import type { Angle } from '../../../math/units/angle'
-import { grayscaleFromChannel, makeImageRawTypedArray, type Image, type ImageMetadata, type ImageRawType } from '../../model/types'
+import { channelIndex, grayscaleFromChannel, makeImageRawTypedArray, type Image, type ImageMetadata, type ImageRawType } from '../../model/types'
 import { separableSmoothing, separableSmoothingKernel, type SeparableSmoothingKernel } from '../../processing/convolution'
 import type { BahtinovAnalysisInput, BahtinovAnalysisOptions, BahtinovBackground, BahtinovFailureReason, BahtinovLine, BahtinovPlane, BahtinovRidgePoints, BahtinovWorkspace, BahtinovWorkspaceOptions } from './types'
 
@@ -385,13 +385,14 @@ function fillSourcePlane(image: Image, area: Readonly<Rect>, plane: ResolvedBaht
 	if (image.metadata.bayer) return fillCfaGreenPlane(image, area, plane, saturationLevel, output, mask, workspace)
 	if (plane === 'green1' || plane === 'green2' || plane === 'greenBoth') throw new RangeError('CFA green planes require Bayer metadata')
 	const { channels, stride } = image.metadata
-	const weights = channels === 3 ? grayscaleFromChannel(plane) : undefined
+	const selectedChannel = channels === 3 && (plane === 'RED' || plane === 'GREEN' || plane === 'BLUE') ? channelIndex(plane) : -1
+	const weights = channels === 3 && selectedChannel < 0 ? grayscaleFromChannel(plane) : undefined
 	let target = 0
 	let finiteCount = 0
 	for (let y = area.top; y < area.bottom; y++) {
 		let source = y * stride + area.left * channels
 		for (let x = area.left; x < area.right; x++, target++, source += channels) {
-			const value = channels === 1 ? image.raw[source] : image.raw[source] * weights!.red + image.raw[source + 1] * weights!.green + image.raw[source + 2] * weights!.blue
+			const value = channels === 1 ? image.raw[source] : selectedChannel >= 0 ? image.raw[source + selectedChannel] : image.raw[source] * weights!.red + image.raw[source + 1] * weights!.green + image.raw[source + 2] * weights!.blue
 			if (Number.isFinite(value)) {
 				output[target] = value
 				finiteCount++

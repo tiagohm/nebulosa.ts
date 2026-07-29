@@ -104,6 +104,21 @@ test('extracts RGB with explicit and BT.709 planes', () => {
 	}
 })
 
+test('ignores non-finite RGB channels outside the selected plane', () => {
+	const width = 64
+	const height = 64
+	const raw = new Float32Array(width * height * 3)
+	for (let index = 0; index < raw.length; index += 3) {
+		raw[index] = 0.01
+		raw[index + 1] = Number.NaN
+		raw[index + 2] = Number.NaN
+	}
+	plotBahtinovSpikes(raw, width, height, 3, 32, 32, 60, 0, undefined, { halfLength: 22, taperLength: 4 })
+	const result = preprocessBahtinov({ image: image(raw, width, height, 3), area: { left: 0, top: 0, right: width, bottom: height }, center: { x: 32, y: 32 } }, { plane: 'RED', coreRadius: 2, ridgeSigma: 2 })
+	expect(result.success).toBeTrue()
+	if (result.success) expect(result.ridgePoints.count).toBeGreaterThan(3)
+})
+
 test('reconstructs all eight CFA patterns from both physical green lattices', () => {
 	const patterns: readonly NonNullable<Image['metadata']['bayer']>[] = ['RGGB', 'BGGR', 'GBRG', 'GRBG', 'GRGB', 'GBGR', 'RGBG', 'BGRG']
 	const width = 32
