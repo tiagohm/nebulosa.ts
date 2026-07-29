@@ -6,7 +6,7 @@ import type { BahtinovAnalysisInput, BahtinovChromaticOptions } from '../../../.
 import type { Image } from '../../../../src/imaging/model/types'
 import { plotBahtinovSpikes } from '../../../../src/imaging/stars/bahtinov'
 
-function rgbBahtinov(errors: readonly [number, number, number], omittedChannel?: number): Image {
+function rgbBahtinov(errors: readonly [number, number, number], omittedChannel?: number, centralNormals?: readonly [number, number, number]): Image {
 	const width = 128
 	const height = 128
 	const raw = new Float64Array(width * height * 3)
@@ -14,8 +14,9 @@ function rgbBahtinov(errors: readonly [number, number, number], omittedChannel?:
 	for (let channel = 0; channel < 3; channel++) {
 		if (channel === omittedChannel) continue
 		const mono = new Float64Array(width * height)
+		const centralNormal = centralNormals?.[channel] ?? PIOVERTWO
 		plotBahtinovSpikes(mono, width, height, 1, 63.5, 63.5, 180, errors[channel], undefined, {
-			normalAngles: [(PI * 5) / 12, PIOVERTWO, (PI * 7) / 12],
+			normalAngles: [(centralNormal - PI / 12 + PI) % PI, centralNormal, (centralNormal + PI / 12) % PI],
 			central: 1,
 			fwhm: 2,
 			halfLength: 44,
@@ -76,6 +77,22 @@ test('compares signed RGB focus errors relative to green', () => {
 	expect(Math.hypot(result.redReferenceOffset.x, result.redReferenceOffset.y)).toBeLessThan(0.1)
 	expect(Math.hypot(result.blueReferenceOffset.x, result.blueReferenceOffset.y)).toBeLessThan(0.1)
 	expect(result.confidence).toBeGreaterThan(0)
+})
+
+test('aligns channel error signs across the axial normal wrap', () => {
+	const result = compareBahtinovChromatic(
+		{
+			image: rgbBahtinov([-2, 2, -2], undefined, [PI - 0.01, 0.01, PI - 0.015]),
+			area: { left: 0, top: 0, right: 128, bottom: 128 },
+			center: { x: 63.5, y: 63.5 },
+		},
+		OPTIONS,
+	)
+	expect(result.success).toBeTrue()
+	if (!result.success) return
+	expect(Math.abs(result.redMinusGreen)).toBeLessThan(0.3)
+	expect(Math.abs(result.blueMinusGreen)).toBeLessThan(0.3)
+	expect(result.focusSpan).toBeLessThan(0.3)
 })
 
 test('retains per-channel failures without fabricating chromatic offsets', () => {
