@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import { PI, PIOVERTWO } from '../../../../src/core/constants'
 import { bahtinovAxialAngleDistance } from '../../../../src/imaging/analysis/bahtinov/geometry'
-import { detectBahtinovHoughCandidates } from '../../../../src/imaging/analysis/bahtinov/hough'
+import { detectBahtinovHoughCandidates, validateBahtinovHoughOptions } from '../../../../src/imaging/analysis/bahtinov/hough'
 import { createBahtinovWorkspace, preprocessBahtinov } from '../../../../src/imaging/analysis/bahtinov/preprocess'
 import type { Image } from '../../../../src/imaging/model/types'
 import { plotBahtinovSpikes } from '../../../../src/imaging/stars/bahtinov'
@@ -91,4 +91,9 @@ test('caps default candidates to coarse workspaces and rejects fewer than three 
 	if (!preprocessed.success) return
 	const candidates = detectBahtinovHoughCandidates(preprocessed.ridgePoints, width, height, workspace, { center: preprocessed.center })
 	expect(candidates.length).toBeLessThanOrEqual(workspace.angleCount)
+})
+
+test('rejects an unsafe local refinement sample count', () => {
+	const workspace = createBahtinovWorkspace(80, 80)
+	expect(() => validateBahtinovHoughOptions(workspace, { refinementStep: 1e-300 })).toThrow(RangeError)
 })

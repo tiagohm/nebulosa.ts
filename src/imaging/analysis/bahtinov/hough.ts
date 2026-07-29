@@ -15,6 +15,8 @@ const DEFAULT_MINIMUM_AXIAL_SEPARATION = PI / 36
 const DEFAULT_REFINEMENT_RANGE = PI / 180
 // Default local angular refinement step, in radians.
 const DEFAULT_REFINEMENT_STEP = PI / 3600
+// Maximum local angle evaluations per coarse Hough candidate.
+const MAXIMUM_REFINEMENT_SAMPLES = 4096
 // Distance from a Hough peak used to measure longitudinal support, in distance bins.
 const SUPPORT_DISTANCE_BINS = 2
 
@@ -113,6 +115,8 @@ function resolveHoughOptions(workspace: BahtinovWorkspace, options: BahtinovHoug
 	if (!Number.isFinite(minimumAxialSeparation) || minimumAxialSeparation <= 0 || minimumAxialSeparation > PIOVERTWO) throw new RangeError('minimumAxialSeparation must be in (0, PI / 2]')
 	if (!Number.isFinite(refinementRange) || refinementRange < 0 || refinementRange > minimumAxialSeparation * 0.5) throw new RangeError('refinementRange must be finite and no greater than half the candidate separation')
 	if (!Number.isFinite(refinementStep) || refinementStep <= 0 || (refinementRange > 0 && refinementStep > refinementRange)) throw new RangeError('refinementStep must be finite, positive, and no greater than refinementRange')
+	const refinementSamples = refinementRange === 0 ? 0 : Math.ceil((refinementRange * 2) / refinementStep) + 1
+	if (!Number.isSafeInteger(refinementSamples) || refinementSamples > MAXIMUM_REFINEMENT_SAMPLES) throw new RangeError(`local Hough refinement must not exceed ${MAXIMUM_REFINEMENT_SAMPLES} angle samples`)
 	return { maximumCandidates, minimumAxialSeparation, refinementRange, refinementStep }
 }
 
