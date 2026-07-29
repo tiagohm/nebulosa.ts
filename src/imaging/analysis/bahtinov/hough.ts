@@ -1,20 +1,12 @@
-import { PI, PIOVERTWO } from '../../../core/constants'
+import { PIOVERTWO } from '../../../core/constants'
 import type { Point } from '../../../math/numerical/geometry'
 import type { Angle } from '../../../math/units/angle'
 import { bahtinovAxialAngleDistance, canonicalizeBahtinovLine, clipBahtinovLineToArea } from './geometry'
-import type { BahtinovRidgePoints, BahtinovWorkspace } from './types'
+import { DEFAULT_BAHTINOV_ANALYSIS_OPTIONS, type BahtinovRidgePoints, type BahtinovWorkspace } from './types'
 
 // Coarse-to-fine weighted Hough search for Bahtinov ridge points. Angles are axial radians in
 // `[0, PI)`, distances use local ROI pixels, and the caller-owned workspace stores accumulators.
 
-// Default maximum number of angular candidates retained after circular NMS.
-const DEFAULT_MAXIMUM_CANDIDATES = 8
-// Default minimum axial separation between retained candidate normals, in radians.
-const DEFAULT_MINIMUM_AXIAL_SEPARATION = PI / 36
-// Default half-range for local angular refinement, in radians.
-const DEFAULT_REFINEMENT_RANGE = PI / 180
-// Default local angular refinement step, in radians.
-const DEFAULT_REFINEMENT_STEP = PI / 3600
 // Maximum local angle evaluations per coarse Hough candidate.
 const MAXIMUM_REFINEMENT_SAMPLES = 4096
 // Distance from a Hough peak used to measure longitudinal support, in distance bins.
@@ -107,10 +99,10 @@ export function validateBahtinovHoughOptions(workspace: BahtinovWorkspace, optio
 
 // Resolves and validates the Hough controls shared by boundary validation and detection.
 function resolveHoughOptions(workspace: BahtinovWorkspace, options: BahtinovHoughOptions): { maximumCandidates: number; minimumAxialSeparation: Angle; refinementRange: Angle; refinementStep: Angle } {
-	const maximumCandidates = options.maximumCandidates ?? Math.min(DEFAULT_MAXIMUM_CANDIDATES, workspace.angleCount)
-	const minimumAxialSeparation = options.minimumAxialSeparation ?? DEFAULT_MINIMUM_AXIAL_SEPARATION
-	const refinementRange = options.refinementRange ?? DEFAULT_REFINEMENT_RANGE
-	const refinementStep = options.refinementStep ?? DEFAULT_REFINEMENT_STEP
+	const maximumCandidates = options.maximumCandidates ?? Math.min(DEFAULT_BAHTINOV_ANALYSIS_OPTIONS.maximumAngleCandidates, workspace.angleCount)
+	const minimumAxialSeparation = options.minimumAxialSeparation ?? DEFAULT_BAHTINOV_ANALYSIS_OPTIONS.minimumAxialSeparation
+	const refinementRange = options.refinementRange ?? DEFAULT_BAHTINOV_ANALYSIS_OPTIONS.refinementRange
+	const refinementStep = options.refinementStep ?? DEFAULT_BAHTINOV_ANALYSIS_OPTIONS.refinementStep
 	if (!Number.isInteger(maximumCandidates) || maximumCandidates < 3 || maximumCandidates > workspace.angleCount) throw new RangeError('maximumCandidates must be an integer from 3 to angleCount')
 	if (!Number.isFinite(minimumAxialSeparation) || minimumAxialSeparation <= 0 || minimumAxialSeparation > PIOVERTWO) throw new RangeError('minimumAxialSeparation must be in (0, PI / 2]')
 	if (!Number.isFinite(refinementRange) || refinementRange < 0 || refinementRange > minimumAxialSeparation * 0.5) throw new RangeError('refinementRange must be finite and no greater than half the candidate separation')

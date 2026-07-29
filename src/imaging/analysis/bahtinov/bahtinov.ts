@@ -4,38 +4,14 @@ import { bahtinovAxialAngleDistance, bahtinovAxialBisectors, computeBahtinovFocu
 import { detectBahtinovHoughCandidates, validateBahtinovHoughOptions } from './hough'
 import { fitBahtinovLines, type BahtinovFittedCandidate } from './line'
 import { bahtinovLineSaturationRetention, preprocessBahtinov, type BahtinovPreprocessSuccess } from './preprocess'
-import type { BahtinovAnalysisFailure, BahtinovAnalysisInput, BahtinovAnalysisOptions, BahtinovAnalysisResult, BahtinovExpectedPattern, BahtinovFocusState, BahtinovLine, BahtinovQuality, BahtinovWarning, BahtinovWorkspace } from './types'
+import { DEFAULT_BAHTINOV_ANALYSIS_OPTIONS, type BahtinovAnalysisFailure, type BahtinovAnalysisInput, type BahtinovAnalysisOptions, type BahtinovAnalysisResult, type BahtinovExpectedPattern, type BahtinovFocusState, type BahtinovLine, type BahtinovQuality, type BahtinovWarning, type BahtinovWorkspace } from './types'
 
 // Workspace-backed Bahtinov analyzer facade. The pipeline preprocesses a normalized ROI, detects and
 // fits line candidates, selects one conditioned symmetric triplet, propagates line covariance into
 // pixel focus uncertainty, and returns only finite full-image geometry.
 
-// Default minimum robust line signal-to-noise ratio.
-const DEFAULT_MINIMUM_SIGNAL_TO_NOISE = 3
-// Default minimum distinct axial normal separation, in radians.
-const DEFAULT_MINIMUM_AXIAL_SEPARATION = PI / 36
-// Default maximum central-to-bisector normal error, in radians.
-const DEFAULT_MAXIMUM_BISECTOR_ERROR = PI / 60
 // Angular mismatch scale for expected-pattern ranking when no hard limit is supplied.
 const DEFAULT_EXPECTED_PRIOR_SCALE = PI / 12
-// Default intersection margin outside the ROI, in pixels.
-const DEFAULT_INTERSECTION_MARGIN = 0
-// Default minimum relative best-to-runner-up triplet score separation.
-const DEFAULT_MINIMUM_CANDIDATE_SEPARATION = 0.05
-// Default minimum fitted longitudinal coverage.
-const DEFAULT_MINIMUM_COVERAGE = 0.2
-// Default minimum fitted bilateral arm balance.
-const DEFAULT_MINIMUM_BALANCE = 0.1
-// Default maximum fitted orthogonal residual, in pixels.
-const DEFAULT_MAXIMUM_RESIDUAL = 2
-// Default absolute focus tolerance, in pixels.
-const DEFAULT_FOCUS_TOLERANCE = 0.25
-// Default maximum uncertainty eligible for classification, in pixels.
-const DEFAULT_MAXIMUM_UNCERTAINTY = 0.5
-// Default uncertainty multiplier used by the focus interval.
-const DEFAULT_FOCUS_SIGMA = 2
-// Default minimum aggregate confidence for a determinate focus state.
-const DEFAULT_MINIMUM_CONFIDENCE = 0.2
 // Relative central-difference step for line angles.
 const UNCERTAINTY_ANGLE_STEP = 1e-6
 // Relative central-difference step for line distances.
@@ -161,18 +137,18 @@ export function analyzeBahtinov(input: BahtinovAnalysisInput, workspace: Bahtino
 // Resolves and validates decision thresholds that are independent of preprocessing.
 function resolveDecisionOptions(options: BahtinovAnalysisOptions): ResolvedBahtinovDecisionOptions {
 	const resolved = {
-		minimumSignalToNoise: options.minimumSignalToNoise ?? DEFAULT_MINIMUM_SIGNAL_TO_NOISE,
-		minimumAxialSeparation: options.minimumAxialSeparation ?? DEFAULT_MINIMUM_AXIAL_SEPARATION,
-		maximumBisectorError: options.maximumBisectorError ?? DEFAULT_MAXIMUM_BISECTOR_ERROR,
-		intersectionMargin: options.intersectionMargin ?? DEFAULT_INTERSECTION_MARGIN,
-		minimumCandidateSeparation: options.minimumCandidateSeparation ?? DEFAULT_MINIMUM_CANDIDATE_SEPARATION,
-		minimumCoverage: options.minimumCoverage ?? DEFAULT_MINIMUM_COVERAGE,
-		minimumBalance: options.minimumBalance ?? DEFAULT_MINIMUM_BALANCE,
-		maximumResidual: options.maximumResidual ?? DEFAULT_MAXIMUM_RESIDUAL,
-		focusTolerance: options.focusTolerance ?? DEFAULT_FOCUS_TOLERANCE,
-		maximumUncertainty: options.maximumUncertainty ?? DEFAULT_MAXIMUM_UNCERTAINTY,
-		focusSigma: options.focusSigma ?? DEFAULT_FOCUS_SIGMA,
-		minimumConfidence: options.minimumConfidence ?? DEFAULT_MINIMUM_CONFIDENCE,
+		minimumSignalToNoise: options.minimumSignalToNoise ?? DEFAULT_BAHTINOV_ANALYSIS_OPTIONS.minimumSignalToNoise,
+		minimumAxialSeparation: options.minimumAxialSeparation ?? DEFAULT_BAHTINOV_ANALYSIS_OPTIONS.minimumAxialSeparation,
+		maximumBisectorError: options.maximumBisectorError ?? DEFAULT_BAHTINOV_ANALYSIS_OPTIONS.maximumBisectorError,
+		intersectionMargin: options.intersectionMargin ?? DEFAULT_BAHTINOV_ANALYSIS_OPTIONS.intersectionMargin,
+		minimumCandidateSeparation: options.minimumCandidateSeparation ?? DEFAULT_BAHTINOV_ANALYSIS_OPTIONS.minimumCandidateSeparation,
+		minimumCoverage: options.minimumCoverage ?? DEFAULT_BAHTINOV_ANALYSIS_OPTIONS.minimumCoverage,
+		minimumBalance: options.minimumBalance ?? DEFAULT_BAHTINOV_ANALYSIS_OPTIONS.minimumBalance,
+		maximumResidual: options.maximumResidual ?? DEFAULT_BAHTINOV_ANALYSIS_OPTIONS.maximumResidual,
+		focusTolerance: options.focusTolerance ?? DEFAULT_BAHTINOV_ANALYSIS_OPTIONS.focusTolerance,
+		maximumUncertainty: options.maximumUncertainty ?? DEFAULT_BAHTINOV_ANALYSIS_OPTIONS.maximumUncertainty,
+		focusSigma: options.focusSigma ?? DEFAULT_BAHTINOV_ANALYSIS_OPTIONS.focusSigma,
+		minimumConfidence: options.minimumConfidence ?? DEFAULT_BAHTINOV_ANALYSIS_OPTIONS.minimumConfidence,
 	}
 	if (!Number.isFinite(resolved.minimumSignalToNoise) || resolved.minimumSignalToNoise <= 0) throw new RangeError('minimumSignalToNoise must be finite and positive')
 	if (!Number.isFinite(resolved.minimumAxialSeparation) || resolved.minimumAxialSeparation <= 0 || resolved.minimumAxialSeparation > PIOVERTWO) throw new RangeError('minimumAxialSeparation must be in (0, PI / 2]')

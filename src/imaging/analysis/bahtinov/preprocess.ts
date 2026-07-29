@@ -4,7 +4,7 @@ import type { Point, Rect } from '../../../math/numerical/geometry'
 import type { Angle } from '../../../math/units/angle'
 import { channelIndex, grayscaleFromChannel, makeImageRawTypedArray, type Image, type ImageMetadata, type ImageRawType } from '../../model/types'
 import { separableSmoothing, separableSmoothingKernel, type SeparableSmoothingKernel } from '../../processing/convolution'
-import type { BahtinovAnalysisInput, BahtinovAnalysisOptions, BahtinovBackground, BahtinovFailureReason, BahtinovLine, BahtinovPlane, BahtinovRidgePoints, BahtinovWorkspace, BahtinovWorkspaceOptions } from './types'
+import { DEFAULT_BAHTINOV_ANALYSIS_OPTIONS, type BahtinovAnalysisInput, type BahtinovAnalysisOptions, type BahtinovBackground, type BahtinovFailureReason, type BahtinovLine, type BahtinovPlane, type BahtinovRidgePoints, type BahtinovWorkspace, type BahtinovWorkspaceOptions } from './types'
 
 // Bahtinov ROI extraction and preprocessing. The module converts normalized mono/RGB samples into
 // one reusable mono plane, masks invalid/core/saturated support, computes a signed DoG response, and
@@ -14,28 +14,8 @@ import type { BahtinovAnalysisInput, BahtinovAnalysisOptions, BahtinovBackground
 const DEFAULT_ROI_SIZE = 256
 // Smallest ROI side that can support the initial kernels and three line segments.
 const MINIMUM_ROI_SIDE = 16
-// Default upper quantile retained for robust background statistics.
-const DEFAULT_BACKGROUND_UPPER_QUANTILE = 0.8
-// Default normalized source level considered saturated.
-const DEFAULT_SATURATION_LEVEL = 0.995
-// Default saturation-mask dilation in pixels.
-const DEFAULT_SATURATION_DILATION = 1
 // Connected saturated samples outside the initial core that indicate erased spike support.
 const MINIMUM_CONNECTED_SATURATED_SPIKE_SAMPLES = 32
-// Default circular exclusion radius around the approximate star center, in pixels.
-const DEFAULT_CORE_RADIUS = 6
-// Default narrow Gaussian sigma in pixels.
-const DEFAULT_SMALL_BLUR_SIGMA = 1
-// Default wide Gaussian sigma in pixels.
-const DEFAULT_LARGE_BLUR_SIGMA = 4
-// Default signed-DoG threshold in robust sigma units.
-const DEFAULT_RIDGE_SIGMA = 3
-// Default maximum ridge-point capacity.
-const DEFAULT_MAXIMUM_RIDGE_POINTS = 4096
-// Default coarse Hough angle step in radians.
-const DEFAULT_ANGLE_STEP = PI / 180
-// Default Hough normal-distance bin size in pixels.
-const DEFAULT_DISTANCE_STEP = 0.5
 // Saturated source sample bit in the reusable mask.
 const MASK_SATURATED = 1
 // Dilated saturation-support bit in the reusable mask.
@@ -116,10 +96,10 @@ export function createBahtinovWorkspace(width: number, height: number, options: 
 	const precision = options.precision ?? 32
 	if (precision !== 32 && precision !== 64) throw new RangeError('precision must be 32 or 64')
 	const pixelCount = width * height
-	const maximumRidgePoints = options.maximumRidgePoints ?? Math.min(DEFAULT_MAXIMUM_RIDGE_POINTS, pixelCount)
+	const maximumRidgePoints = options.maximumRidgePoints ?? Math.min(DEFAULT_BAHTINOV_ANALYSIS_OPTIONS.maximumRidgePoints, pixelCount)
 	if (!Number.isInteger(maximumRidgePoints) || maximumRidgePoints < 3 || maximumRidgePoints > pixelCount) throw new RangeError('maximumRidgePoints must be an integer from 3 to width * height')
-	const angleStep = options.angleStep ?? DEFAULT_ANGLE_STEP
-	const distanceStep = options.distanceStep ?? DEFAULT_DISTANCE_STEP
+	const angleStep = options.angleStep ?? DEFAULT_BAHTINOV_ANALYSIS_OPTIONS.angleStep
+	const distanceStep = options.distanceStep ?? DEFAULT_BAHTINOV_ANALYSIS_OPTIONS.distanceStep
 	if (!Number.isFinite(angleStep) || angleStep <= 0 || angleStep > PIOVERTWO) throw new RangeError('angleStep must be finite and in (0, PI / 2]')
 	if (!Number.isFinite(distanceStep) || distanceStep <= 0) throw new RangeError('distanceStep must be finite and positive')
 
@@ -195,18 +175,18 @@ export function preprocessBahtinov(input: BahtinovAnalysisInput, workspace: Baht
 	const width = area.right - area.left
 	const height = area.bottom - area.top
 	validateWorkspaceCapacity(workspace, width, height, options)
-	const saturationLevel = options.saturationLevel ?? DEFAULT_SATURATION_LEVEL
-	const saturationDilation = options.saturationDilation ?? DEFAULT_SATURATION_DILATION
-	const coreRadius = options.coreRadius ?? DEFAULT_CORE_RADIUS
-	const backgroundUpperQuantile = options.backgroundUpperQuantile ?? DEFAULT_BACKGROUND_UPPER_QUANTILE
-	const smallBlurSigma = options.smallBlurSigma ?? DEFAULT_SMALL_BLUR_SIGMA
-	const largeBlurSigma = options.largeBlurSigma ?? DEFAULT_LARGE_BLUR_SIGMA
-	const ridgeSigma = options.ridgeSigma ?? DEFAULT_RIDGE_SIGMA
+	const saturationLevel = options.saturationLevel ?? DEFAULT_BAHTINOV_ANALYSIS_OPTIONS.saturationLevel
+	const saturationDilation = options.saturationDilation ?? DEFAULT_BAHTINOV_ANALYSIS_OPTIONS.saturationDilation
+	const coreRadius = options.coreRadius ?? DEFAULT_BAHTINOV_ANALYSIS_OPTIONS.coreRadius
+	const backgroundUpperQuantile = options.backgroundUpperQuantile ?? DEFAULT_BAHTINOV_ANALYSIS_OPTIONS.backgroundUpperQuantile
+	const smallBlurSigma = options.smallBlurSigma ?? DEFAULT_BAHTINOV_ANALYSIS_OPTIONS.smallBlurSigma
+	const largeBlurSigma = options.largeBlurSigma ?? DEFAULT_BAHTINOV_ANALYSIS_OPTIONS.largeBlurSigma
+	const ridgeSigma = options.ridgeSigma ?? DEFAULT_BAHTINOV_ANALYSIS_OPTIONS.ridgeSigma
 	validatePreprocessOptions(saturationLevel, saturationDilation, coreRadius, backgroundUpperQuantile, smallBlurSigma, largeBlurSigma, ridgeSigma)
 	validateGaussianKernelSupport(smallBlurSigma, width, height, 'smallBlurSigma')
 	validateGaussianKernelSupport(largeBlurSigma, width, height, 'largeBlurSigma')
 
-	const plane = resolvePlane(input.image, options.plane ?? 'auto')
+	const plane = resolvePlane(input.image, options.plane ?? DEFAULT_BAHTINOV_ANALYSIS_OPTIONS.plane)
 	if (!plane) return { success: false, reason: 'unsupportedPlane', area }
 
 	const pixelCount = width * height
@@ -227,7 +207,7 @@ export function preprocessBahtinov(input: BahtinovAnalysisInput, workspace: Baht
 
 	const centerX = input.center.x - area.left
 	const centerY = input.center.y - area.top
-	markCore(mask, width, height, centerX, centerY, coreRadius, options.autoCoreRadius !== false, workspace.coreQueue)
+	markCore(mask, width, height, centerX, centerY, coreRadius, options.autoCoreRadius ?? DEFAULT_BAHTINOV_ANALYSIS_OPTIONS.autoCoreRadius, workspace.coreQueue)
 	let coreSaturated = false
 	let spikeSaturatedCount = 0
 	let connectedSpikeSaturatedCount = 0
@@ -247,7 +227,7 @@ export function preprocessBahtinov(input: BahtinovAnalysisInput, workspace: Baht
 
 	const background = estimateBackground(source, mask, workspace.statistics, pixelCount, backgroundUpperQuantile)
 	if (!background) return { success: false, reason: 'lowSignal', area }
-	transformSource(source, mask, background.level, options.transform ?? 'sqrt')
+	transformSource(source, mask, background.level, options.transform ?? DEFAULT_BAHTINOV_ANALYSIS_OPTIONS.transform)
 
 	const kernels = resolveKernels(workspace, smallBlurSigma, largeBlurSigma)
 	const metadata = roiMetadata(width, height, source.BYTES_PER_ELEMENT)

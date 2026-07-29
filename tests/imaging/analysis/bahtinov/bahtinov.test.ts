@@ -4,7 +4,7 @@ import { analyzeBahtinov as analyzeBahtinovWithWorkspace } from '../../../../src
 import { bahtinovAxialAngleDistance } from '../../../../src/imaging/analysis/bahtinov/geometry'
 import { createBahtinovOverlayGeometry } from '../../../../src/imaging/analysis/bahtinov/overlay'
 import { createBahtinovWorkspace, resolveBahtinovArea } from '../../../../src/imaging/analysis/bahtinov/preprocess'
-import type { BahtinovAnalysisInput, BahtinovAnalysisOptions } from '../../../../src/imaging/analysis/bahtinov/types'
+import { DEFAULT_BAHTINOV_ANALYSIS_OPTIONS, type BahtinovAnalysisInput, type BahtinovAnalysisOptions } from '../../../../src/imaging/analysis/bahtinov/types'
 import type { CfaPattern, Image, ImageRawType } from '../../../../src/imaging/model/types'
 import { plotBahtinovSpikes } from '../../../../src/imaging/stars/bahtinov'
 
@@ -102,6 +102,18 @@ const ANALYSIS_OPTIONS = {
 	minimumConfidence: 0.05,
 	minimumCandidateSeparation: 0.01,
 }
+
+test('accepts the exported default analysis options end to end', () => {
+	const result = analyzeBahtinov(
+		{
+			image: synthetic(0),
+			center: { x: 63.5, y: 63.5 },
+			size: 128,
+		},
+		DEFAULT_BAHTINOV_ANALYSIS_OPTIONS,
+	)
+	expect(result.success).toBeTrue()
+})
 
 test('recovers zero and signed synthetic focus errors end to end', () => {
 	for (const error of [-4, 0, 3]) {

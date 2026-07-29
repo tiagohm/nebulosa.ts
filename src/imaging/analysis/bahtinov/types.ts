@@ -1,3 +1,4 @@
+import { PI } from '../../../core/constants'
 import type { Point, Rect } from '../../../math/numerical/geometry'
 import type { Angle } from '../../../math/units/angle'
 import type { Image, ImageChannelOrGray, ImageRawType } from '../../model/types'
@@ -100,6 +101,39 @@ export interface BahtinovAnalysisOptions {
 	// Minimum aggregate confidence required for a determinate focus state, from 0 to 1.
 	readonly minimumConfidence?: number
 }
+
+// Default practical thresholds, resource limits, and image controls for Bahtinov analysis.
+// Candidate and ridge-point limits are ideal capacities and remain bounded by the workspace.
+export const DEFAULT_BAHTINOV_ANALYSIS_OPTIONS = {
+	plane: 'auto',
+	minimumSignalToNoise: 3,
+	backgroundUpperQuantile: 0.8,
+	saturationLevel: 0.995,
+	saturationDilation: 1,
+	coreRadius: 6,
+	autoCoreRadius: true,
+	transform: 'sqrt',
+	smallBlurSigma: 1,
+	largeBlurSigma: 4,
+	ridgeSigma: 3,
+	angleStep: PI / 180,
+	refinementStep: PI / 3600,
+	refinementRange: PI / 180,
+	distanceStep: 0.5,
+	maximumAngleCandidates: 8,
+	maximumRidgePoints: 4096,
+	minimumAxialSeparation: PI / 36,
+	maximumBisectorError: PI / 60,
+	intersectionMargin: 0,
+	minimumCandidateSeparation: 0.05,
+	minimumCoverage: 0.2,
+	minimumBalance: 0.1,
+	maximumResidual: 2,
+	focusTolerance: 0.25,
+	maximumUncertainty: 0.5,
+	focusSigma: 2,
+	minimumConfidence: 0.2,
+} as const satisfies Required<BahtinovAnalysisOptions>
 
 // Fitted normal-form line and its measured spike support.
 export interface BahtinovLine {
