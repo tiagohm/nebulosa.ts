@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test'
 import { PI, PIOVERTWO } from '../../../../src/core/constants'
 import { bahtinovAxialAngleDistance } from '../../../../src/imaging/analysis/bahtinov/geometry'
 import { detectBahtinovHoughCandidates } from '../../../../src/imaging/analysis/bahtinov/hough'
-import { preprocessBahtinov } from '../../../../src/imaging/analysis/bahtinov/preprocess'
+import { createBahtinovWorkspace, preprocessBahtinov } from '../../../../src/imaging/analysis/bahtinov/preprocess'
 import type { Image } from '../../../../src/imaging/model/types'
 import { plotBahtinovSpikes } from '../../../../src/imaging/stars/bahtinov'
 
@@ -31,7 +31,8 @@ test('detects and refines the three synthetic spike orientations', () => {
 	raw.fill(0.01)
 	const expected = [PI / 12, 0, (PI * 11) / 12] as const
 	plotBahtinovSpikes(raw, width, height, 1, 48, 48, 120, 2, undefined, { normalAngles: expected, halfLength: 34, taperLength: 5, fwhm: 1.7 })
-	const preprocessed = preprocessBahtinov({ image: image(raw, width, height), area: { left: 0, top: 0, right: width, bottom: height }, center: { x: 48, y: 48 } }, { transform: 'linear', coreRadius: 3, ridgeSigma: 2, maximumRidgePoints: 2048 })
+	const workspace = createBahtinovWorkspace(width, height, { precision: 64, maximumRidgePoints: 2048 })
+	const preprocessed = preprocessBahtinov({ image: image(raw, width, height), area: { left: 0, top: 0, right: width, bottom: height }, center: { x: 48, y: 48 } }, workspace, { transform: 'linear', coreRadius: 3, ridgeSigma: 2, maximumRidgePoints: 2048 })
 	expect(preprocessed.success).toBeTrue()
 	if (!preprocessed.success) return
 
@@ -61,7 +62,8 @@ test('handles axial NMS across zero and PI', () => {
 		halfLength: 28,
 		taperLength: 4,
 	})
-	const preprocessed = preprocessBahtinov({ image: image(raw, width, height), area: { left: 0, top: 0, right: width, bottom: height }, center: { x: 40, y: 40 } }, { coreRadius: 2, ridgeSigma: 2 })
+	const workspace = createBahtinovWorkspace(width, height, { precision: 64 })
+	const preprocessed = preprocessBahtinov({ image: image(raw, width, height), area: { left: 0, top: 0, right: width, bottom: height }, center: { x: 40, y: 40 } }, workspace, { coreRadius: 2, ridgeSigma: 2 })
 	expect(preprocessed.success).toBeTrue()
 	if (!preprocessed.success) return
 	const candidates = detectBahtinovHoughCandidates(preprocessed.ridgePoints, width, height, preprocessed.workspace, { minimumAxialSeparation: PI / 18 })

@@ -1,6 +1,8 @@
 import { expect, test } from 'bun:test'
 import { PI, PIOVERTWO } from '../../../../src/core/constants'
-import { compareBahtinovChromatic } from '../../../../src/imaging/analysis/bahtinov/chromatic'
+import { compareBahtinovChromatic as compareBahtinovChromaticWithWorkspace } from '../../../../src/imaging/analysis/bahtinov/chromatic'
+import { createBahtinovWorkspace, resolveBahtinovArea } from '../../../../src/imaging/analysis/bahtinov/preprocess'
+import type { BahtinovAnalysisInput, BahtinovChromaticOptions } from '../../../../src/imaging/analysis/bahtinov/types'
 import type { Image } from '../../../../src/imaging/model/types'
 import { plotBahtinovSpikes } from '../../../../src/imaging/stars/bahtinov'
 
@@ -36,6 +38,19 @@ function rgbBahtinov(errors: readonly [number, number, number], omittedChannel?:
 			bayer: undefined,
 		},
 	}
+}
+
+function compareBahtinovChromatic(input: BahtinovAnalysisInput, options: BahtinovChromaticOptions = {}) {
+	const area = resolveBahtinovArea(input)
+	const width = area.right - area.left
+	const height = area.bottom - area.top
+	const workspace = createBahtinovWorkspace(width, height, {
+		precision: input.image.raw.BYTES_PER_ELEMENT === 8 ? 64 : 32,
+		maximumRidgePoints: Math.min(options.maximumRidgePoints ?? 4096, width * height),
+		angleStep: options.angleStep,
+		distanceStep: options.distanceStep,
+	})
+	return compareBahtinovChromaticWithWorkspace(input, workspace, options)
 }
 
 const OPTIONS = {

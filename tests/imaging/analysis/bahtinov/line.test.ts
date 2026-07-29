@@ -3,7 +3,7 @@ import { PI } from '../../../../src/core/constants'
 import { bahtinovAxialAngleDistance } from '../../../../src/imaging/analysis/bahtinov/geometry'
 import { detectBahtinovHoughCandidates } from '../../../../src/imaging/analysis/bahtinov/hough'
 import { fitBahtinovLines } from '../../../../src/imaging/analysis/bahtinov/line'
-import { preprocessBahtinov } from '../../../../src/imaging/analysis/bahtinov/preprocess'
+import { createBahtinovWorkspace, preprocessBahtinov } from '../../../../src/imaging/analysis/bahtinov/preprocess'
 import type { Image } from '../../../../src/imaging/model/types'
 import { plotBahtinovSpikes } from '../../../../src/imaging/stars/bahtinov'
 
@@ -37,7 +37,8 @@ test('robustly fits global spike lines with finite support metrics', () => {
 	raw[30 * width + 30] += 5
 	raw[70 * width + 82] += 4
 	const area = { left, top, right: 109, bottom: 101 }
-	const preprocessed = preprocessBahtinov({ image: image(raw, width, height), area, center: { x: 60, y: 55 } }, { transform: 'linear', coreRadius: 3, ridgeSigma: 2, maximumRidgePoints: 2048 })
+	const workspace = createBahtinovWorkspace(area.right - area.left, area.bottom - area.top, { precision: 64, maximumRidgePoints: 2048 })
+	const preprocessed = preprocessBahtinov({ image: image(raw, width, height), area, center: { x: 60, y: 55 } }, workspace, { transform: 'linear', coreRadius: 3, ridgeSigma: 2, maximumRidgePoints: 2048 })
 	expect(preprocessed.success).toBeTrue()
 	if (!preprocessed.success) return
 	const candidates = detectBahtinovHoughCandidates(preprocessed.ridgePoints, area.right - area.left, area.bottom - area.top, preprocessed.workspace)

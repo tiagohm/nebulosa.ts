@@ -179,12 +179,11 @@ export function resolveBahtinovArea(input: BahtinovAnalysisInput, defaultSize: n
 
 // Extracts, masks, filters, and spatially samples one Bahtinov ROI.
 // The result aliases reusable workspace arrays and remains valid only until that workspace is reused.
-export function preprocessBahtinov(input: BahtinovAnalysisInput, options: BahtinovAnalysisOptions = {}): BahtinovPreprocessResult {
+export function preprocessBahtinov(input: BahtinovAnalysisInput, workspace: BahtinovWorkspace, options: BahtinovAnalysisOptions = {}): BahtinovPreprocessResult {
 	validateImageLayout(input.image)
 	const area = resolveBahtinovArea(input)
 	const width = area.right - area.left
 	const height = area.bottom - area.top
-	const workspace = options.workspace ?? createBahtinovWorkspace(width, height, { precision: input.image.raw.BYTES_PER_ELEMENT === 8 ? 64 : 32, maximumRidgePoints: Math.min(options.maximumRidgePoints ?? DEFAULT_MAXIMUM_RIDGE_POINTS, width * height), angleStep: options.angleStep, distanceStep: options.distanceStep })
 	validateWorkspaceCapacity(workspace, width, height, options)
 
 	const plane = resolvePlane(input.image, options.plane ?? 'auto')

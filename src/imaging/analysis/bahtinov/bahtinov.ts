@@ -4,11 +4,11 @@ import { bahtinovAxialAngleDistance, bahtinovAxialBisectors, computeBahtinovFocu
 import { detectBahtinovHoughCandidates } from './hough'
 import { fitBahtinovLines, type BahtinovFittedCandidate } from './line'
 import { preprocessBahtinov, type BahtinovPreprocessSuccess } from './preprocess'
-import type { BahtinovAnalysisFailure, BahtinovAnalysisInput, BahtinovAnalysisOptions, BahtinovAnalysisResult, BahtinovExpectedPattern, BahtinovFocusState, BahtinovLine, BahtinovQuality, BahtinovWarning } from './types'
+import type { BahtinovAnalysisFailure, BahtinovAnalysisInput, BahtinovAnalysisOptions, BahtinovAnalysisResult, BahtinovExpectedPattern, BahtinovFocusState, BahtinovLine, BahtinovQuality, BahtinovWarning, BahtinovWorkspace } from './types'
 
-// Stateless Bahtinov analyzer facade. The pipeline preprocesses a normalized ROI, detects and fits
-// line candidates, selects one conditioned symmetric triplet, propagates line covariance into pixel
-// focus uncertainty, and returns only finite full-image geometry.
+// Workspace-backed Bahtinov analyzer facade. The pipeline preprocesses a normalized ROI, detects and
+// fits line candidates, selects one conditioned symmetric triplet, propagates line covariance into
+// pixel focus uncertainty, and returns only finite full-image geometry.
 
 // Default minimum robust line signal-to-noise ratio.
 const DEFAULT_MINIMUM_SIGNAL_TO_NOISE = 3
@@ -88,11 +88,12 @@ interface ResolvedBahtinovDecisionOptions {
 }
 
 // Analyzes one normalized image for a three-line Bahtinov diffraction pattern.
+// `workspace` must cover the resolved ROI and configured Hough grid and must not be used concurrently.
 // Structural input and option errors throw. Missing or ambiguous image evidence returns a
 // discriminated failure without fabricated lines, reference points, or focus values.
-export function analyzeBahtinov(input: BahtinovAnalysisInput, options: BahtinovAnalysisOptions = {}): BahtinovAnalysisResult {
+export function analyzeBahtinov(input: BahtinovAnalysisInput, workspace: BahtinovWorkspace, options: BahtinovAnalysisOptions = {}): BahtinovAnalysisResult {
 	const decision = resolveDecisionOptions(options)
-	const preprocessed = preprocessBahtinov(input, options)
+	const preprocessed = preprocessBahtinov(input, workspace, options)
 	if (!preprocessed.success) return { success: false, reason: preprocessed.reason, area: preprocessed.area, warnings: [] }
 
 	const width = preprocessed.area.right - preprocessed.area.left

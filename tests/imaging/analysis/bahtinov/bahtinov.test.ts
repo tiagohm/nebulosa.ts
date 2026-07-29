@@ -1,7 +1,9 @@
 import { expect, test } from 'bun:test'
 import { PI, PIOVERTWO } from '../../../../src/core/constants'
-import { analyzeBahtinov } from '../../../../src/imaging/analysis/bahtinov/bahtinov'
+import { analyzeBahtinov as analyzeBahtinovWithWorkspace } from '../../../../src/imaging/analysis/bahtinov/bahtinov'
 import { createBahtinovOverlayGeometry } from '../../../../src/imaging/analysis/bahtinov/overlay'
+import { createBahtinovWorkspace, resolveBahtinovArea } from '../../../../src/imaging/analysis/bahtinov/preprocess'
+import type { BahtinovAnalysisInput, BahtinovAnalysisOptions } from '../../../../src/imaging/analysis/bahtinov/types'
 import type { CfaPattern, Image, ImageRawType } from '../../../../src/imaging/model/types'
 import { plotBahtinovSpikes } from '../../../../src/imaging/stars/bahtinov'
 
@@ -21,6 +23,19 @@ function image(raw: ImageRawType, width: number, height: number, bayer?: CfaPatt
 			bayer,
 		},
 	}
+}
+
+function analyzeBahtinov(input: BahtinovAnalysisInput, options: BahtinovAnalysisOptions = {}) {
+	const area = resolveBahtinovArea(input)
+	const width = area.right - area.left
+	const height = area.bottom - area.top
+	const workspace = createBahtinovWorkspace(width, height, {
+		precision: input.image.raw.BYTES_PER_ELEMENT === 8 ? 64 : 32,
+		maximumRidgePoints: Math.min(options.maximumRidgePoints ?? 4096, width * height),
+		angleStep: options.angleStep,
+		distanceStep: options.distanceStep,
+	})
+	return analyzeBahtinovWithWorkspace(input, workspace, options)
 }
 
 function synthetic(error: number, width: number = 128, height: number = 128): Image {

@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import { PI } from '../../../../src/core/constants'
-import { createBahtinovWorkspace, preprocessBahtinov, resolveBahtinovArea } from '../../../../src/imaging/analysis/bahtinov/preprocess'
-import type { BahtinovAnalysisInput } from '../../../../src/imaging/analysis/bahtinov/types'
+import { createBahtinovWorkspace, preprocessBahtinov as preprocessBahtinovWithWorkspace, resolveBahtinovArea } from '../../../../src/imaging/analysis/bahtinov/preprocess'
+import type { BahtinovAnalysisInput, BahtinovAnalysisOptions, BahtinovWorkspace } from '../../../../src/imaging/analysis/bahtinov/types'
 import type { Image } from '../../../../src/imaging/model/types'
 import { plotBahtinovSpikes } from '../../../../src/imaging/stars/bahtinov'
 
@@ -22,6 +22,21 @@ function image(raw: Float32Array | Float64Array, width: number, height: number, 
 			bayer,
 		},
 	}
+}
+
+function preprocessBahtinov(input: BahtinovAnalysisInput, options: BahtinovAnalysisOptions = {}, suppliedWorkspace?: BahtinovWorkspace) {
+	const area = resolveBahtinovArea(input)
+	const width = area.right - area.left
+	const height = area.bottom - area.top
+	const workspace =
+		suppliedWorkspace ??
+		createBahtinovWorkspace(width, height, {
+			precision: input.image.raw.BYTES_PER_ELEMENT === 8 ? 64 : 32,
+			maximumRidgePoints: Math.min(options.maximumRidgePoints ?? 4096, width * height),
+			angleStep: options.angleStep,
+			distanceStep: options.distanceStep,
+		})
+	return preprocessBahtinovWithWorkspace(input, workspace, options)
 }
 
 test('creates a capacity-described reusable workspace', () => {
@@ -135,7 +150,7 @@ test('reconstructs CFA parity midpoints at sensor edges and odd ROI origins', ()
 	raw[2 * width + 1] = 5
 	const source = image(raw, width, height, 1, 'RGGB')
 	const workspace = createBahtinovWorkspace(width, height)
-	const full = preprocessBahtinov({ image: source, area: { left: 0, top: 0, right: width, bottom: height }, center: { x: 8, y: 8 } }, { plane: 'green1', workspace, coreRadius: 0 })
+	const full = preprocessBahtinov({ image: source, area: { left: 0, top: 0, right: width, bottom: height }, center: { x: 8, y: 8 } }, { plane: 'green1', coreRadius: 0 }, workspace)
 	expect(full.success).toBeFalse()
 	expect(workspace.source[0]).toBe(1)
 	expect(workspace.source[2]).toBe(2)
@@ -143,7 +158,7 @@ test('reconstructs CFA parity midpoints at sensor edges and odd ROI origins', ()
 	expect(workspace.source[width + 2]).toBe(3)
 
 	const area = { left: 1, top: 1, right: 17, bottom: 17 }
-	const shifted = preprocessBahtinov({ image: source, area, center: { x: 8, y: 8 } }, { plane: 'green1', workspace, coreRadius: 0 })
+	const shifted = preprocessBahtinov({ image: source, area, center: { x: 8, y: 8 } }, { plane: 'green1', coreRadius: 0 }, workspace)
 	expect(shifted.success).toBeFalse()
 	expect(workspace.source[0]).toBe(3)
 	expect(workspace.source[1]).toBe(3)
@@ -174,7 +189,7 @@ test('dilates saturated samples with bounded square support', () => {
 	plotBahtinovSpikes(raw, width, height, 1, 32, 32, 100, 0, undefined, { halfLength: 20, taperLength: 4 })
 	raw[9 * width + 8] = 1
 	const workspace = createBahtinovWorkspace(width, height)
-	preprocessBahtinov({ image: image(raw, width, height), area: { left: 0, top: 0, right: width, bottom: height }, center: { x: 32, y: 32 } }, { workspace, saturationLevel: 0.9, saturationDilation: 2, coreRadius: 2, ridgeSigma: 2 })
+	preprocessBahtinov({ image: image(raw, width, height), area: { left: 0, top: 0, right: width, bottom: height }, center: { x: 32, y: 32 } }, { saturationLevel: 0.9, saturationDilation: 2, coreRadius: 2, ridgeSigma: 2 }, workspace)
 	expect(workspace.mask[7 * width + 6]).not.toBe(0)
 	expect(workspace.mask[11 * width + 10]).not.toBe(0)
 	expect(workspace.mask[6 * width + 8]).toBe(0)
@@ -182,7 +197,7 @@ test('dilates saturated samples with bounded square support', () => {
 
 	raw.fill(0.01)
 	raw[0] = 1
-	preprocessBahtinov({ image: image(raw, width, height), area: { left: 0, top: 0, right: width, bottom: height }, center: { x: 32, y: 32 } }, { workspace, saturationLevel: 0.9, saturationDilation: 100, coreRadius: 0 })
+	preprocessBahtinov({ image: image(raw, width, height), area: { left: 0, top: 0, right: width, bottom: height }, center: { x: 32, y: 32 } }, { saturationLevel: 0.9, saturationDilation: 100, coreRadius: 0 }, workspace)
 	expect(workspace.mask.every((value) => value !== 0)).toBeTrue()
 })
 
@@ -191,6 +206,6 @@ test('rejects a workspace whose recorded capacity is insufficient', () => {
 	const height = 64
 	const source = image(new Float32Array(width * height), width, height)
 	const workspace = createBahtinovWorkspace(width, height, { maximumRidgePoints: 128, angleStep: PI / 90, distanceStep: 1 })
-	expect(() => preprocessBahtinov({ image: source, area: { left: 0, top: 0, right: width, bottom: height }, center: { x: 32, y: 32 } }, { workspace, maximumRidgePoints: 256 })).toThrow(RangeError)
-	expect(() => preprocessBahtinov({ image: source, area: { left: 0, top: 0, right: width, bottom: height }, center: { x: 32, y: 32 } }, { workspace, angleStep: PI / 180 })).toThrow(RangeError)
+	expect(() => preprocessBahtinov({ image: source, area: { left: 0, top: 0, right: width, bottom: height }, center: { x: 32, y: 32 } }, { maximumRidgePoints: 256 }, workspace)).toThrow(RangeError)
+	expect(() => preprocessBahtinov({ image: source, area: { left: 0, top: 0, right: width, bottom: height }, center: { x: 32, y: 32 } }, { angleStep: PI / 180 }, workspace)).toThrow(RangeError)
 })

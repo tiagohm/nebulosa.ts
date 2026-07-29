@@ -99,8 +99,6 @@ export interface BahtinovAnalysisOptions {
 	readonly focusSigma?: number
 	// Minimum aggregate confidence required for a determinate focus state, from 0 to 1.
 	readonly minimumConfidence?: number
-	// Reusable buffers sized for at least the resolved ROI and search grid.
-	readonly workspace?: BahtinovWorkspace
 }
 
 // Fitted normal-form line and its measured spike support.

@@ -1,22 +1,20 @@
 import { analyzeBahtinov } from './bahtinov'
-import { createBahtinovWorkspace, resolveBahtinovArea } from './preprocess'
-import type { BahtinovAnalysisInput, BahtinovAnalysisOptions, BahtinovAnalysisResult, BahtinovChromaticOptions, BahtinovChromaticResult, BahtinovPlane } from './types'
+import type { BahtinovAnalysisInput, BahtinovAnalysisOptions, BahtinovAnalysisResult, BahtinovChromaticOptions, BahtinovChromaticResult, BahtinovPlane, BahtinovWorkspace } from './types'
 
-// Stateless chromatic comparison for an already registered RGB image. Each channel runs through the
-// same geometric analyzer and remains independently inspectable; offsets use signed focus pixels and
-// full-image reference coordinates. CFA input is excluded because it requires a calibrated color
-// reconstruction rather than the green-only detection path.
+// Workspace-backed chromatic comparison for an already registered RGB image. Each channel runs
+// through the same geometric analyzer and remains independently inspectable; offsets use signed focus
+// pixels and full-image reference coordinates. CFA input is excluded because it requires a calibrated
+// color reconstruction rather than the green-only detection path.
 
 // Compares independently fitted red, green, and blue Bahtinov focus errors.
 // The green channel is the signed reference. Shared options, ROI, expected mask layout, and reusable
 // workspace are applied sequentially without mutating the image or retaining analyzer state.
-export function compareBahtinovChromatic(input: BahtinovAnalysisInput, options: BahtinovChromaticOptions = {}): BahtinovChromaticResult {
+export function compareBahtinovChromatic(input: BahtinovAnalysisInput, workspace: BahtinovWorkspace, options: BahtinovChromaticOptions = {}): BahtinovChromaticResult {
 	const { channels, bayer } = input.image.metadata
 	if (channels !== 3 || bayer) throw new RangeError('Bahtinov chromatic comparison requires a non-CFA RGB image')
-	const analysisOptions = options.workspace ? options : createChromaticAnalysisOptions(input, options)
-	const red = analyzeChromaticPlane(input, analysisOptions, 'RED')
-	const green = analyzeChromaticPlane(input, analysisOptions, 'GREEN')
-	const blue = analyzeChromaticPlane(input, analysisOptions, 'BLUE')
+	const red = analyzeChromaticPlane(input, workspace, options, 'RED')
+	const green = analyzeChromaticPlane(input, workspace, options, 'GREEN')
+	const blue = analyzeChromaticPlane(input, workspace, options, 'BLUE')
 	const channelResults = { red, green, blue }
 	const failedChannels: ('red' | 'green' | 'blue')[] = []
 	if (!red.success) failedChannels.push('red')
@@ -38,25 +36,9 @@ export function compareBahtinovChromatic(input: BahtinovAnalysisInput, options: 
 	}
 }
 
-// Creates one private workspace reused sequentially by all three RGB channels.
-function createChromaticAnalysisOptions(input: BahtinovAnalysisInput, options: BahtinovChromaticOptions): BahtinovChromaticOptions {
-	const area = resolveBahtinovArea(input)
-	const width = area.right - area.left
-	const height = area.bottom - area.top
-	return {
-		...options,
-		workspace: createBahtinovWorkspace(width, height, {
-			precision: input.image.raw.BYTES_PER_ELEMENT === 8 ? 64 : 32,
-			maximumRidgePoints: options.maximumRidgePoints === undefined ? undefined : Math.min(options.maximumRidgePoints, width * height),
-			angleStep: options.angleStep,
-			distanceStep: options.distanceStep,
-		}),
-	}
-}
-
 // Rebuilds the input union with one explicit RGB plane while preserving ROI and mask prior.
-function analyzeChromaticPlane(input: BahtinovAnalysisInput, options: BahtinovChromaticOptions, plane: BahtinovPlane): BahtinovAnalysisResult {
+function analyzeChromaticPlane(input: BahtinovAnalysisInput, workspace: BahtinovWorkspace, options: BahtinovChromaticOptions, plane: BahtinovPlane): BahtinovAnalysisResult {
 	const analysisOptions: BahtinovAnalysisOptions = { ...options, plane }
-	if (input.area) return analyzeBahtinov({ image: input.image, area: input.area, center: input.center, expected: input.expected }, analysisOptions)
-	return analyzeBahtinov({ image: input.image, center: input.center, size: input.size, expected: input.expected }, analysisOptions)
+	if (input.area) return analyzeBahtinov({ image: input.image, area: input.area, center: input.center, expected: input.expected }, workspace, analysisOptions)
+	return analyzeBahtinov({ image: input.image, center: input.center, size: input.size, expected: input.expected }, workspace, analysisOptions)
 }
