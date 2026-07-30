@@ -103,8 +103,8 @@ export interface PHD2Event<E extends PHD2EventType> {
 
 // PHD2 version/capability announcement sent on connect.
 export interface PHD2VersionEvent extends PHD2Event<'Version'> {
-	readonly PHD2Version: string
-	readonly PHD2Subver: string
+	readonly PHDVersion: string
+	readonly PHDSubver: string
 	readonly OverlapSupport: boolean
 	readonly MsgVersion: number
 }
