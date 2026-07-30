@@ -551,6 +551,27 @@ describe('mode transitions', () => {
 		expect(eventsOf(harness.events, 'SettleBegin')).toHaveLength(1)
 	})
 
+	test('guide without a decoded frame cannot select a star and still starts', () => {
+		connect(harness)
+
+		expect(harness.client.guide()).toBeTrue()
+		// The auto-selection attempt is a no-op until frames arrive; guiding still starts.
+		expect(eventsOf(harness.events, 'StarSelected')).toHaveLength(0)
+		expect(harness.client.getLockPosition()).toBeUndefined()
+		expect(harness.client.getAppState()).toBe('Calibrating')
+	})
+
+	test('guide keeps an already selected star instead of reselecting', async () => {
+		connect(harness)
+		harness.client.loop()
+		await feedFrame(harness)
+		harness.client.setLockPosition(STAR_B[0], STAR_B[1], true)
+
+		expect(harness.client.guide()).toBeTrue()
+		expect(eventsOf(harness.events, 'StarSelected')).toHaveLength(0)
+		expect(harness.client.getLockPosition()).toEqual([STAR_B[0], STAR_B[1]])
+	})
+
 	test('a repeated guide request while still calibrating restarts calibration', () => {
 		connect(harness)
 		harness.client.guide()

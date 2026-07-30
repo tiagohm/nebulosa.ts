@@ -563,6 +563,12 @@ export class GuiderClient {
 		}
 
 		this.#abortGuidingAssistantForTransition('guiding restarted')
+
+		// PHD2 auto-selects a guide star when a guide request arrives with nothing selected. This is a
+		// no-op until a frame has been decoded, matching PHD2's behavior of guiding on the star found
+		// in the frames that follow.
+		if (this.#lockPosition === undefined) this.findStar()
+
 		this.#paused = false
 		this.#fullPause = true
 		this.#resumeState = 'Guiding'
