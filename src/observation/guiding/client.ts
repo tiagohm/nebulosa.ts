@@ -1,6 +1,6 @@
 import { pixelScale } from '../../astronomy/formulas'
 import type { PartialOnly, Writable } from '../../core/types'
-import { DEFAULT_PHD2_SETTLE, type PHD2AppState, type PHD2CalibrationData, type PHD2DeclinationGuideMode, type PHD2EventMap, type PHD2Events, type PHD2GuideDirection, type PHD2LockShiftParams, type PHD2Settle, type PHD2StarImage } from '../../devices/guiding/phd2'
+import { DEFAULT_PHD2_SETTLE, type PHD2AppState, type PHD2CalibrationData, type PHD2DeclinationGuideMode, type PHD2EventMap, type PHD2Events, type PHD2GuideDirection, type PHD2GuideStepEvent, type PHD2LockShiftParams, type PHD2Settle, type PHD2StarImage } from '../../devices/guiding/phd2'
 import type { Camera, GuideDirection, GuideOutput } from '../../devices/indi/device'
 import type { CameraManager, DeviceHandler, GuideOutputManager } from '../../devices/indi/manager'
 import type { BlobEncoding } from '../../devices/indi/types'
@@ -10,8 +10,8 @@ import { detectStars } from '../../imaging/stars/detector'
 import { base64Source, bufferSource } from '../../io/io'
 import { clamp } from '../../math/numerical/math'
 import { GuidingAssistant, type GuidingAssistantConfig, type GuidingAssistantResult } from './assistant'
-import { type CalibrationPulseCommand, flipGuidingCalibration, type GuidingCalibrationDiagnostics, type GuidingCalibrationResult, GuidingCalibrator } from './calibrator'
-import { type AxisPulse, type DeclinationGuideMode, type GuideCommand, type GuideFrame, Guider, type GuideStar } from './guider'
+import { type CalibrationPulseCommand, flipGuidingCalibration, type GuidingCalibrationConfig, type GuidingCalibrationDiagnostics, type GuidingCalibrationResult, GuidingCalibrator } from './calibrator'
+import { type AxisPulse, type DeclinationGuideMode, DEFAULT_GUIDER_CONFIG, type GuideCommand, type GuideFrame, Guider, type GuideStar } from './guider'
 
 // Local autoguiding orchestrator exposing a PHD2-compatible API over INDI camera and guide-output
 // devices. It decodes each camera BLOB, detects stars, drives the GuidingCalibrator and Guider state
@@ -24,6 +24,21 @@ import { type AxisPulse, type DeclinationGuideMode, type GuideCommand, type Guid
 const DEFAULT_GUIDER_EXPOSURE = 1000
 // Default star-image search-region side, in pixels.
 const DEFAULT_SEARCH_REGION = 64
+
+// PHD2 application version announced in the Version event on connect. The local guider is not PHD2,
+// so this reports the PHD2 release whose event protocol it reproduces.
+const PHD2_VERSION = '2.6.13'
+// PHD2 sub-version component of the Version event; empty for a non-PHD2 implementation.
+const PHD2_SUBVER = ''
+// Event protocol message version implemented by this client, matching PHD2's MsgVersion.
+const PHD2_MSG_VERSION = 1
+// Overlapping exposures are not implemented by the local guider.
+const PHD2_OVERLAP_SUPPORT = false
+
+// Exponential smoothing factor PHD2 applies to the guide distance reported as GuideStep.AvgDist.
+// Matches PHD2's Guider::UpdateCurrentDistance, which low-pass filters the per-frame distance so
+// clients see a stability indicator instead of raw frame-to-frame noise.
+const AVG_DISTANCE_SMOOTHING_ALPHA = 0.3
 
 // Placeholder calibration data returned before any calibration is solved.
 const EMPTY_CALIBRATION_DATA: Readonly<PHD2CalibrationData> = {
@@ -59,6 +74,10 @@ export interface GuiderClientOptions {
 	readonly stickyLockPosition?: boolean
 	// Dither pattern used by dither().
 	readonly ditherMode?: GuiderDitherMode
+	// Overrides for the calibration state machine, merged over DEFAULT_GUIDING_CALIBRATOR_CONFIG. Pulse
+	// durations are milliseconds and distances are pixels; an invalid combination throws at
+	// construction. Mounts with a fast guide rate usually only need shorter raPulse/decPulse.
+	readonly calibrator?: Partial<GuidingCalibrationConfig>
 }
 
 // Optics parameters supplied at connect time to derive the guider pixel scale.
@@ -80,7 +99,7 @@ export class GuiderClient {
 	#connected = false
 	#camera?: Camera
 	#guideOutput?: GuideOutput
-	readonly #calibrator = new GuidingCalibrator()
+	readonly #calibrator: GuidingCalibrator
 	#calibration?: GuidingCalibrationResult
 	#frame?: GuideFrame
 	#image?: Image
@@ -92,6 +111,9 @@ export class GuiderClient {
 	#stickyLockPosition = false
 	#appState: PHD2AppState = 'Stopped'
 	#resumeState: PHD2AppState = 'Stopped'
+	#guidingStartTime = 0
+	#avgDistance = 0
+	#avgDistanceNeedReset = true
 	#declinationGuideMode: PHD2DeclinationGuideMode = 'Auto'
 	#guider = this.#makeGuider(undefined)
 	#exposure = DEFAULT_GUIDER_EXPOSURE
@@ -139,6 +161,7 @@ export class GuiderClient {
 		readonly guideOutputManager: GuideOutputManager,
 		readonly options?: GuiderClientOptions,
 	) {
+		this.#calibrator = new GuidingCalibrator(options?.calibrator)
 		this.#searchRegion = clamp(options?.searchRegion || DEFAULT_SEARCH_REGION, 16, 128)
 		this.#stickyLockPosition = options?.stickyLockPosition === true
 		this.#ditherMode = options?.ditherMode ?? 'random'
@@ -173,6 +196,10 @@ export class GuiderClient {
 		this.attachHandler()
 		this.cameraManager.enableBlob(camera)
 		this.#resetRuntimeState(true)
+		// PHD2 greets a newly connected client with Version followed by the current AppState. AppState
+		// is only sent here: afterwards clients track state through the individual lifecycle events.
+		this.emitEvent('Version', { PHDVersion: PHD2_VERSION, PHDSubver: PHD2_SUBVER, MsgVersion: PHD2_MSG_VERSION, OverlapSupport: PHD2_OVERLAP_SUPPORT })
+		this.emitEvent('AppState', { State: this.#appState })
 		this.emitEvent('ConfigurationChange')
 
 		return true
@@ -265,6 +292,9 @@ export class GuiderClient {
 		this.#settleDroppedFrameCount = 0
 		this.#lockShiftTimestamp = 0
 		this.#lockShiftLimitReached = false
+		this.#guidingStartTime = 0
+		this.#avgDistance = 0
+		this.#avgDistanceNeedReset = true
 		this.#resumeState = 'Stopped'
 		this.#setAppState('Stopped')
 
@@ -347,6 +377,10 @@ export class GuiderClient {
 		this.#settleStableSince = 0
 		this.#settleFrameCount = 0
 		this.#settleDroppedFrameCount = 0
+
+		// The lock target jumped, so the smoothed distance is reseeded from the next measured frame
+		// instead of decaying from the pre-dither error.
+		this.#avgDistanceNeedReset = true
 
 		this.emitEvent('GuidingDithered', { dx, dy })
 		this.emitEvent('SettleBegin')
@@ -516,10 +550,30 @@ export class GuiderClient {
 	}
 
 	// Starts guiding and triggers calibration first when requested or when no solution exists yet.
+	// A guide request issued while already guiding does not restart the session: like PHD2, it only
+	// begins a new settle cycle, so the accumulated dither and lock-shift target offsets survive.
 	guide(recalibrate: boolean = false, settle?: Partial<PHD2Settle>) {
 		if (!this.#connected || this.#camera === undefined || this.#guideOutput === undefined) return false
 
+		if (!recalibrate && !this.#paused && this.#calibration !== undefined && (this.#appState === 'Guiding' || this.#appState === 'LostLock')) {
+			this.#settle = { ...DEFAULT_PHD2_SETTLE, ...settle }
+			this.#settling = true
+			this.#settleStartTime = 0
+			this.#settleStableSince = 0
+			this.#settleFrameCount = 0
+			this.#settleDroppedFrameCount = 0
+			this.emitEvent('SettleBegin')
+
+			return true
+		}
+
 		this.#abortGuidingAssistantForTransition('guiding restarted')
+
+		// PHD2 auto-selects a guide star when a guide request arrives with nothing selected. This is a
+		// no-op until a frame has been decoded, matching PHD2's behavior of guiding on the star found
+		// in the frames that follow.
+		if (this.#lockPosition === undefined) this.findStar()
+
 		this.#paused = false
 		this.#fullPause = true
 		this.#resumeState = 'Guiding'
@@ -547,6 +601,8 @@ export class GuiderClient {
 			this.#setAppState('Calibrating')
 		} else {
 			this.#guider = this.#makeGuider(this.#calibration)
+			this.#guidingStartTime = Date.now()
+			this.#avgDistanceNeedReset = true
 			this.emitEvent('StartGuiding')
 			this.#setAppState('Guiding')
 		}
@@ -642,6 +698,7 @@ export class GuiderClient {
 		this.#lockShiftOffsetY = 0
 		this.#lockShiftTimestamp = 0
 		this.#lockShiftLimitReached = false
+		this.#avgDistanceNeedReset = true
 		this.emitEvent('LockPositionSet', { X: lockX, Y: lockY })
 
 		if (this.#appState === 'Guiding' || this.#appState === 'LostLock' || this.#appState === 'Paused') {
@@ -726,13 +783,16 @@ export class GuiderClient {
 	}
 
 	// Pauses or resumes guide pulses, optionally stopping exposures during full pause.
+	// PHD2 reports Paused and Resumed on the pause transition only, so a redundant call is silent.
 	setPaused(paused: boolean, full: boolean = true) {
+		const wasPaused = this.#paused
+
 		if (paused) {
-			if (!this.#paused) this.#resumeState = this.#appState === 'Paused' ? this.#resumeState : this.#appState
+			if (!wasPaused) this.#resumeState = this.#appState === 'Paused' ? this.#resumeState : this.#appState
 			this.#paused = true
 			this.#fullPause = full || this.#resumeState === 'Calibrating'
 			this.#lockShiftTimestamp = 0
-			this.emitEvent('Paused')
+			if (!wasPaused) this.emitEvent('Paused')
 			if (this.#guidingAssistant?.measuringBacklash === true) this.#finishGuidingAssistant(false, 'backlash test paused', true)
 			this.#setAppState('Paused')
 			if (this.#fullPause && this.#camera !== undefined) this.cameraManager.stopExposure(this.#camera)
@@ -742,7 +802,7 @@ export class GuiderClient {
 		this.#paused = false
 		this.#fullPause = true
 		this.#lockShiftTimestamp = 0
-		this.emitEvent('Resumed')
+		if (wasPaused) this.emitEvent('Resumed')
 		this.#setAppState(this.#resumeState === 'Paused' ? 'Looping' : this.#resumeState)
 
 		if (this.#appState !== 'Stopped' && this.#camera !== undefined) {
@@ -826,6 +886,9 @@ export class GuiderClient {
 
 		if (step.failure !== undefined) {
 			this.emitEvent('CalibrationFailed', { Reason: step.failure.message })
+			// PHD2 raises a user-facing alert alongside the failure so clients without a calibration
+			// UI still surface the reason.
+			this.emitEvent('Alert', { Msg: `Calibration failed: ${step.failure.message}`, Type: 'error' })
 
 			if (this.#settling) {
 				this.#settling = false
@@ -840,6 +903,8 @@ export class GuiderClient {
 		if (step.completed !== undefined) {
 			this.#calibration = step.completed
 			this.#guider = this.#makeGuider(this.#calibration)
+			this.#guidingStartTime = Date.now()
+			this.#avgDistanceNeedReset = true
 			this.emitEvent('CalibrationComplete', { Mount: this.#guideOutput?.name ?? '' })
 			this.emitEvent('StartGuiding')
 			this.#resumeState = 'Guiding'
@@ -860,7 +925,10 @@ export class GuiderClient {
 
 		if (command.state === 'lost') {
 			this.#emitStarLostEvent(frame, command)
-			this.emitEvent('LockPositionLost')
+			// PHD2 reports StarLost for every dropped frame but LockPositionLost only once, when the
+			// lock is actually given up. #resumeState tracks the session state even while paused, so
+			// it is the reliable edge test here.
+			if (this.#resumeState !== 'LostLock') this.emitEvent('LockPositionLost')
 			this.#resumeState = 'LostLock'
 			if (!this.#paused) this.#setAppState('LostLock')
 			this.#updateSettling(undefined, undefined, true, true, timestamp)
@@ -868,7 +936,7 @@ export class GuiderClient {
 			return 0
 		}
 
-		this.#emitGuideStepEvent(frame, command)
+		this.#emitGuideStepEvent(frame, command, this.#updateAvgDistance(command.diagnostics.dx ?? 0, command.diagnostics.dy ?? 0))
 		const assistantDelay = this.#processGuidingAssistantFrame(frame, command)
 
 		this.#resumeState = 'Guiding'
@@ -1161,6 +1229,9 @@ export class GuiderClient {
 		this.#exactLockPosition = false
 		this.#appState = 'Stopped'
 		this.#resumeState = 'Stopped'
+		this.#guidingStartTime = 0
+		this.#avgDistance = 0
+		this.#avgDistanceNeedReset = true
 		this.#paused = false
 		this.#fullPause = true
 		this.#guideOutputEnabled = true
@@ -1196,8 +1267,22 @@ export class GuiderClient {
 	#makeGuider(calibration: GuidingCalibrationResult | undefined) {
 		if (calibration === undefined) return new Guider({ decMode: toDeclinationGuideMode(this.#declinationGuideMode), referencePosition: this.#guiderReferencePosition, initialPosition: this.#guiderInitialPosition })
 
+		// The solved image-to-axis matrix converts a pixel error into the milliseconds of pulse that
+		// would reproduce it, while the guider expects a matrix that yields the pulse cancelling it,
+		// so the matrix is negated here; feeding it unchanged closes the loop with positive feedback.
+		// Its output is already in milliseconds, so the per-unit scaling must be neutral: keeping the
+		// uncalibrated default would apply the mount rate twice and saturate every correction. The dead
+		// bands, expressed in pixels for the uncalibrated guider, are converted with the solved rates.
+		const [m00, m01, m10, m11] = calibration.imageToAxis
+		const raRate = calibration.ra.ratePxPerMs
+		const decRate = calibration.dec.ratePxPerMs
+
 		return new Guider({
-			calibration: calibration.imageToAxis,
+			calibration: [-m00, -m01, -m10, -m11],
+			msPerRAUnit: 1,
+			msPerDECUnit: 1,
+			minMoveRA: raRate > 0 ? DEFAULT_GUIDER_CONFIG.minMoveRA / raRate : DEFAULT_GUIDER_CONFIG.minMoveRA,
+			minMoveDEC: decRate > 0 ? DEFAULT_GUIDER_CONFIG.minMoveDEC / decRate : DEFAULT_GUIDER_CONFIG.minMoveDEC,
 			raPositiveDirection: calibration.ra.direction,
 			decPositiveDirection: calibration.dec.direction,
 			decMode: toDeclinationGuideMode(this.#declinationGuideMode),
@@ -1219,25 +1304,26 @@ export class GuiderClient {
 		this.#eventHandler?.(this, event)
 	}
 
-	// Updates the app state and emits the paired PHD2 AppState event once.
+	// Updates the current app state. No event is emitted here on purpose: PHD2 sends AppState only
+	// when a client first connects, and clients are expected to track later transitions through the
+	// individual lifecycle events. See https://github.com/OpenPHDGuiding/phd2/wiki/EventMonitoring#appstate
 	#setAppState(appState: PHD2AppState) {
-		// if (this.#appState === appState) return
 		this.#appState = appState
-		// The AppState notification is only sent when the client first connects to PHD2.
-		// You will need to update its notion of AppState by handling individual notification events.
-		// https://github.com/OpenPHDGuiding/phd2/wiki/EventMonitoring#appstate
-		// this.emitEvent('AppState', { State: appState })
 	}
 
-	// Emits the capture-stop event that matches the current or paused-resume session mode.
+	// Emits the capture-stop events that match the current or paused-resume session mode.
+	// Guiding implies looping in PHD2, so stopping an active guiding session reports both that
+	// guiding ceased and that the exposure loop ceased, in that order.
 	#emitCaptureStoppedEvent() {
 		const appState = this.#appState === 'Paused' ? this.#resumeState : this.#appState
 
-		if (appState === 'Looping' || appState === 'Selected') {
-			this.emitEvent('LoopingExposuresStopped')
-		} else if (appState === 'Calibrating' || appState === 'Guiding' || appState === 'LostLock') {
+		if (appState === 'Stopped') return
+
+		if (appState === 'Calibrating' || appState === 'Guiding' || appState === 'LostLock') {
 			this.emitEvent('GuidingStopped')
 		}
+
+		this.emitEvent('LoopingExposuresStopped')
 	}
 
 	// Emits one passive frame event while exposures are looping.
@@ -1275,7 +1361,7 @@ export class GuiderClient {
 	}
 
 	// Emits one guide-step event using the latest guider command and diagnostics.
-	#emitGuideStepEvent(frame: GuideFrame, command: GuideCommand) {
+	#emitGuideStepEvent(frame: GuideFrame, command: GuideCommand, avgDistance: number) {
 		const { diagnostics, ra, dec } = command
 		const star = frame.stars[0]
 		const dx = diagnostics.dx ?? 0
@@ -1283,10 +1369,15 @@ export class GuiderClient {
 		const outputActive = !this.#paused && this.#guideOutputActive
 		const raDuration = outputActive ? Math.round(ra.duration) : 0
 		const decDuration = outputActive ? Math.round(dec.duration) : 0
+		// An axis is only reported as limited when a pulse was actually issued and clipped by the
+		// per-axis maximum duration, so a suppressed or zero-length pulse never claims a limit.
+		const raLimited = raDuration > 0 && ra.duration >= this.#guider.config.maxPulseMsRA
+		const decLimited = decDuration > 0 && dec.duration >= this.#guider.config.maxPulseMsDEC
 
-		this.emitEvent('GuideStep', {
+		const event: Omit<Writable<PHD2GuideStepEvent>, 'Event' | 'Timestamp' | 'Host' | 'Inst'> = {
 			Frame: frame.frameId ?? 0,
-			Time: (frame.timestamp ?? 0) / 1000,
+			// Seconds since guiding started, matching PHD2's GuideStep.Time.
+			Time: this.#guidingElapsedTime(frame.timestamp ?? 0),
 			// Uses an empty mount name if the guide-output device is unavailable.
 			Mount: this.#guideOutput?.name ?? '',
 			dx,
@@ -1304,30 +1395,59 @@ export class GuiderClient {
 			StarMass: star?.flux ?? 0,
 			SNR: star?.snr ?? 0,
 			HFD: star?.hfd ?? 0,
-			AvgDist: Math.hypot(dx, dy),
-			RALimited: ra.duration >= this.#guider.config.maxPulseMsRA,
-			DecLimited: dec.duration >= this.#guider.config.maxPulseMsDEC,
+			// PHD2 reports the smoothed guide distance here, not the raw current-frame distance.
+			AvgDist: avgDistance,
 			ErrorCode: 0,
-		})
+		}
+
+		// PHD2 includes the limit flags only when the pulse was clipped, so they stay absent
+		// otherwise instead of being reported as false.
+		if (raLimited) event.RALimited = true
+		if (decLimited) event.DecLimited = true
+
+		this.emitEvent('GuideStep', event)
 	}
 
 	// Emits a star-lost event for the current frame.
 	#emitStarLostEvent(frame: GuideFrame, command: GuideCommand) {
 		const star = frame.stars[0]
-		const dx = command.diagnostics.dx ?? 0
-		const dy = command.diagnostics.dy ?? 0
 
 		this.emitEvent('StarLost', {
 			Frame: frame.frameId ?? 0,
-			// Seconds, matching GuideStep.Time and PHD2's convention (frame.timestamp is Date.now() in ms).
-			Time: (frame.timestamp ?? 0) / 1000,
+			// Seconds since guiding started, matching GuideStep.Time and PHD2's convention.
+			Time: this.#guidingElapsedTime(frame.timestamp ?? 0),
 			// Uses zero defaults when the lost-lock frame has no guide star measurement.
 			StarMass: star?.flux ?? 0,
 			SNR: star?.snr ?? 0,
-			AvgDist: Math.hypot(dx, dy),
+			// PHD2 reports the smoothed distance from the last successfully measured frames; a lost
+			// frame has no usable error of its own, so the running average is left untouched.
+			AvgDist: this.#avgDistance,
 			ErrorCode: 1,
 			Status: command.diagnostics.notes.join(','),
 		})
+	}
+
+	// Updates and returns PHD2's smoothed guide distance in pixels from the current frame error.
+	// The average is seeded with the first distance measured after guiding starts or after the lock
+	// target moves, then low-pass filtered so it tracks sustained error instead of single-frame noise.
+	#updateAvgDistance(dx: number, dy: number) {
+		const distance = Math.hypot(dx, dy)
+
+		if (this.#avgDistanceNeedReset) {
+			this.#avgDistanceNeedReset = false
+			this.#avgDistance = distance
+		} else {
+			this.#avgDistance += AVG_DISTANCE_SMOOTHING_ALPHA * (distance - this.#avgDistance)
+		}
+
+		return this.#avgDistance
+	}
+
+	// Converts a frame timestamp (ms since the Unix epoch) into PHD2's guide-relative time in seconds,
+	// measured from the moment guiding started. Returns 0 while no guiding session is running.
+	#guidingElapsedTime(timestamp: number) {
+		if (this.#guidingStartTime === 0 || timestamp <= 0) return 0
+		return (timestamp - this.#guidingStartTime) / 1000
 	}
 
 	// Emits one in-progress settle event using PHD2's time-in-range and requested settle duration fields.
