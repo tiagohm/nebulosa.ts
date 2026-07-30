@@ -551,6 +551,17 @@ describe('mode transitions', () => {
 		expect(eventsOf(harness.events, 'SettleBegin')).toHaveLength(1)
 	})
 
+	test('a repeated guide request while still calibrating restarts calibration', () => {
+		connect(harness)
+		harness.client.guide()
+		harness.client.guide()
+
+		// The re-settle shortcut only applies to an established guiding session, never while the
+		// calibration is still being solved.
+		expect(eventsOf(harness.events, 'StartCalibration')).toHaveLength(2)
+		expect(eventsOf(harness.events, 'SettleBegin')).toHaveLength(2)
+	})
+
 	test('guiding assistant requires the internal guider to be locked', () => {
 		connect(harness)
 		expect(harness.client.guide(false)).toBeTrue()
