@@ -11,7 +11,7 @@ import { base64Source, bufferSource } from '../../io/io'
 import { clamp } from '../../math/numerical/math'
 import { GuidingAssistant, type GuidingAssistantConfig, type GuidingAssistantResult } from './assistant'
 import { type CalibrationPulseCommand, flipGuidingCalibration, type GuidingCalibrationDiagnostics, type GuidingCalibrationResult, GuidingCalibrator } from './calibrator'
-import { type AxisPulse, type DeclinationGuideMode, type GuideCommand, type GuideFrame, Guider, type GuideStar } from './guider'
+import { type AxisPulse, type DeclinationGuideMode, DEFAULT_GUIDER_CONFIG, type GuideCommand, type GuideFrame, Guider, type GuideStar } from './guider'
 
 // Local autoguiding orchestrator exposing a PHD2-compatible API over INDI camera and guide-output
 // devices. It decodes each camera BLOB, detects stars, drives the GuidingCalibrator and Guider state
@@ -1262,8 +1262,22 @@ export class GuiderClient {
 	#makeGuider(calibration: GuidingCalibrationResult | undefined) {
 		if (calibration === undefined) return new Guider({ decMode: toDeclinationGuideMode(this.#declinationGuideMode), referencePosition: this.#guiderReferencePosition, initialPosition: this.#guiderInitialPosition })
 
+		// The solved image-to-axis matrix converts a pixel error into the milliseconds of pulse that
+		// would reproduce it, while the guider expects a matrix that yields the pulse cancelling it,
+		// so the matrix is negated here; feeding it unchanged closes the loop with positive feedback.
+		// Its output is already in milliseconds, so the per-unit scaling must be neutral: keeping the
+		// uncalibrated default would apply the mount rate twice and saturate every correction. The dead
+		// bands, expressed in pixels for the uncalibrated guider, are converted with the solved rates.
+		const [m00, m01, m10, m11] = calibration.imageToAxis
+		const raRate = calibration.ra.ratePxPerMs
+		const decRate = calibration.dec.ratePxPerMs
+
 		return new Guider({
-			calibration: calibration.imageToAxis,
+			calibration: [-m00, -m01, -m10, -m11],
+			msPerRAUnit: 1,
+			msPerDECUnit: 1,
+			minMoveRA: raRate > 0 ? DEFAULT_GUIDER_CONFIG.minMoveRA / raRate : DEFAULT_GUIDER_CONFIG.minMoveRA,
+			minMoveDEC: decRate > 0 ? DEFAULT_GUIDER_CONFIG.minMoveDEC / decRate : DEFAULT_GUIDER_CONFIG.minMoveDEC,
 			raPositiveDirection: calibration.ra.direction,
 			decPositiveDirection: calibration.dec.direction,
 			decMode: toDeclinationGuideMode(this.#declinationGuideMode),
