@@ -886,8 +886,13 @@ describe('closed-loop calibration and guiding', () => {
 	// PHD2's Guider::UpdateCurrentDistance.
 	const AVG_DIST_ALPHA = 0.3
 
-	// Runs a full calibration against the simulated mount and leaves the client guiding.
+	// Creates a dedicated harness, runs a full calibration against its simulated mount and returns it
+	// while the client is guiding. Every test owns its harness so the sessions, which spend nearly all
+	// of their wall time asleep waiting for commanded pulses, can run concurrently without sharing
+	// state through the module-level harness.
 	async function calibrateAndGuide() {
+		const harness = makeHarness()
+
 		connect(harness)
 		harness.client.loop()
 		await feedFrame(harness)
@@ -895,14 +900,14 @@ describe('closed-loop calibration and guiding', () => {
 
 		for (let i = 0; i < MAX_CALIBRATION_FRAMES; i++) {
 			await feedFrame(harness)
-			if (harness.client.getCalibrated()) return
+			if (harness.client.getCalibrated()) return harness
 		}
 
 		throw new Error('calibration did not converge against the simulated mount')
 	}
 
 	// Feeds enough frames for the guider to finish averaging its lock reference.
-	async function establishLockReference() {
+	async function establishLockReference(harness: Harness) {
 		for (let i = 0; i < LOCK_AVERAGING_FRAMES; i++) await feedFrame(harness)
 	}
 
@@ -927,10 +932,10 @@ describe('closed-loop calibration and guiding', () => {
 		return [(distance * dx) / length, (distance * dy) / length] as const
 	}
 
-	test(
+	test.concurrent(
 		'calibration recovers the simulated mount rate and camera angle on both axes',
 		async () => {
-			await calibrateAndGuide()
+			const harness = await calibrateAndGuide()
 
 			const calibration = harness.client.getCalibrationData()
 			expect(calibration.calibrated).toBeTrue()
@@ -950,10 +955,10 @@ describe('closed-loop calibration and guiding', () => {
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test(
+	test.concurrent(
 		'flipping the calibration rotates the solved axes by half a turn',
 		async () => {
-			await calibrateAndGuide()
+			const harness = await calibrateAndGuide()
 
 			const before = harness.client.getCalibrationData()
 			expect(harness.client.flipCalibration()).toBeTrue()
@@ -966,11 +971,11 @@ describe('closed-loop calibration and guiding', () => {
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test(
+	test.concurrent(
 		'guide steps timestamp their frames from the start of guiding',
 		async () => {
-			await calibrateAndGuide()
-			await establishLockReference()
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
 
 			const steps = eventsOf(harness.events, 'GuideStep')
 			expect(steps.length).toBeGreaterThan(1)
@@ -990,11 +995,11 @@ describe('closed-loop calibration and guiding', () => {
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test(
+	test.concurrent(
 		'the reported average distance is a low-pass filter over the per-frame distance',
 		async () => {
-			await calibrateAndGuide()
-			await establishLockReference()
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
 
 			// A steady drift larger than the residual the guider can remove in one frame keeps the
 			// measured error non-zero, so the smoothing is observable.
@@ -1017,11 +1022,11 @@ describe('closed-loop calibration and guiding', () => {
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test(
+	test.concurrent(
 		'axis limit flags are omitted while the pulses stay inside the maximum duration',
 		async () => {
-			await calibrateAndGuide()
-			await establishLockReference()
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
 
 			const steps = eventsOf(harness.events, 'GuideStep')
 			expect(steps.length).toBeGreaterThan(0)
@@ -1035,11 +1040,11 @@ describe('closed-loop calibration and guiding', () => {
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test(
+	test.concurrent(
 		'an error large enough to saturate the right ascension pulse reports RALimited',
 		async () => {
-			await calibrateAndGuide()
-			await establishLockReference()
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
 
 			// Moving the lock target instead of the star creates an arbitrarily large guide error without
 			// tripping the frame-jump rejection, and a sticky lock keeps the guider from re-averaging its
@@ -1069,11 +1074,11 @@ describe('closed-loop calibration and guiding', () => {
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test(
+	test.concurrent(
 		'star-free frames report a lost star every frame but a lost lock position only once',
 		async () => {
-			await calibrateAndGuide()
-			await establishLockReference()
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
 
 			// The guider tolerates a few missing frames before declaring the star lost, so the first
 			// star-free frames produce no StarLost at all.
@@ -1092,11 +1097,11 @@ describe('closed-loop calibration and guiding', () => {
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test(
+	test.concurrent(
 		'guiding recovers the star after a run of star-free frames',
 		async () => {
-			await calibrateAndGuide()
-			await establishLockReference()
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
 
 			for (let i = 0; i < 8; i++) await feedEmptyFrame(harness)
 			expect(harness.client.getAppState()).toBe('LostLock')
@@ -1113,11 +1118,11 @@ describe('closed-loop calibration and guiding', () => {
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test(
+	test.concurrent(
 		'dithering offsets the lock position and starts a new settle cycle',
 		async () => {
-			await calibrateAndGuide()
-			await establishLockReference()
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
 
 			const before = harness.client.getLockPosition()
 			expect(before).toBeDefined()
@@ -1144,11 +1149,11 @@ describe('closed-loop calibration and guiding', () => {
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test(
+	test.concurrent(
 		'stopping a guiding session reports both stop events and keeps the calibration',
 		async () => {
-			await calibrateAndGuide()
-			await establishLockReference()
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
 
 			harness.client.stopCapture()
 
