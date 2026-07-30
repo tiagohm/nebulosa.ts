@@ -282,6 +282,28 @@ describe('capture control', () => {
 		expect(harness.client.getAppState()).toBe('Stopped')
 		expect(harness.cameraManager.stopExposureCount).toBeGreaterThanOrEqual(1)
 		expect(eventsOf(harness.events, 'LoopingExposuresStopped')).toHaveLength(1)
+		expect(eventsOf(harness.events, 'GuidingStopped')).toHaveLength(0)
+	})
+
+	test('stopCapture during a guiding session reports both guiding and looping stops', () => {
+		connect(harness)
+		harness.client.guide()
+		expect(harness.client.getAppState()).toBe('Calibrating')
+
+		expect(harness.client.stopCapture()).toBeTrue()
+		// Guiding implies looping in PHD2, so both stop notifications are sent, guiding first.
+		expect(eventsOf(harness.events, 'GuidingStopped')).toHaveLength(1)
+		expect(eventsOf(harness.events, 'LoopingExposuresStopped')).toHaveLength(1)
+
+		const stops = harness.events.filter((event) => event.Event === 'GuidingStopped' || event.Event === 'LoopingExposuresStopped')
+		expect(stops.map((event) => event.Event)).toEqual(['GuidingStopped', 'LoopingExposuresStopped'])
+	})
+
+	test('stopCapture on an already stopped client emits no stop events', () => {
+		connect(harness)
+		expect(harness.client.stopCapture()).toBeTrue()
+		expect(eventsOf(harness.events, 'GuidingStopped')).toHaveLength(0)
+		expect(eventsOf(harness.events, 'LoopingExposuresStopped')).toHaveLength(0)
 	})
 })
 

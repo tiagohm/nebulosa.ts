@@ -1255,15 +1255,19 @@ export class GuiderClient {
 		// this.emitEvent('AppState', { State: appState })
 	}
 
-	// Emits the capture-stop event that matches the current or paused-resume session mode.
+	// Emits the capture-stop events that match the current or paused-resume session mode.
+	// Guiding implies looping in PHD2, so stopping an active guiding session reports both that
+	// guiding ceased and that the exposure loop ceased, in that order.
 	#emitCaptureStoppedEvent() {
 		const appState = this.#appState === 'Paused' ? this.#resumeState : this.#appState
 
-		if (appState === 'Looping' || appState === 'Selected') {
-			this.emitEvent('LoopingExposuresStopped')
-		} else if (appState === 'Calibrating' || appState === 'Guiding' || appState === 'LostLock') {
+		if (appState === 'Stopped') return
+
+		if (appState === 'Calibrating' || appState === 'Guiding' || appState === 'LostLock') {
 			this.emitEvent('GuidingStopped')
 		}
+
+		this.emitEvent('LoopingExposuresStopped')
 	}
 
 	// Emits one passive frame event while exposures are looping.
