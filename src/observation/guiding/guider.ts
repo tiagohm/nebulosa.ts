@@ -126,11 +126,13 @@ export interface GuideDiagnostics {
 // Row-major 2×2 image-to-axis calibration matrix [a, b, c, d].
 export type CalibrationMatrix = readonly [number, number, number, number]
 
-// Quality and geometry thresholds used to accept or reject guide stars.
+// Quality and geometry thresholds used to accept or reject guide stars. Photometric thresholds
+// (minStarSnr, minFlux, saturationPeak) share the sample scale of the images the stars were
+// measured from; the defaults target the normalized 0..1 processing scale used across imaging.
 export interface StarFilterConfig {
-	// Minimum signal-to-noise ratio.
+	// Minimum signal-to-noise ratio, as reported by the star detector for the frame's sample scale.
 	readonly minStarSnr: number
-	// Minimum integrated flux.
+	// Minimum integrated flux above background, in the frame's sample scale.
 	readonly minFlux: number
 	// Maximum half-flux diameter, in pixels.
 	readonly maxHfd: number
@@ -140,7 +142,7 @@ export interface StarFilterConfig {
 	readonly maxEllipticity: number
 	// Maximum allowed FWHM, in pixels.
 	readonly maxFwhm?: number
-	// Peak value at/above which a star is treated as saturated.
+	// Peak value at/above which a star is treated as saturated, in the frame's sample scale.
 	readonly saturationPeak?: number
 }
 
@@ -365,13 +367,20 @@ export const DEFAULT_GUIDER_CONFIG: Readonly<GuiderConfig> = {
 	decReversalThreshold: 0.08,
 	decBacklashAccumThreshold: 0.32,
 	filter: {
-		minStarSnr: 8,
-		minFlux: 100,
+		// Detector SNR is flux / sqrt(flux + aperturePixels * backgroundVariance), so on the normalized
+		// 0..1 scale it cannot exceed sqrt(flux) and flux itself is bounded by the ~49-pixel aperture.
+		// A usable guide star measures around 2..6 there; 2 keeps faint-but-trackable stars and still
+		// rejects noise blobs, which stay near or below 1.
+		minStarSnr: 2,
+		// Integrated flux above background on the normalized scale; a single-pixel noise excursion
+		// contributes far less than 1, while a trackable star reaches several units.
+		minFlux: 1,
 		maxHfd: 10,
 		borderMarginPx: 10,
 		maxEllipticity: 0.5,
 		maxFwhm: 12,
-		saturationPeak: 65500,
+		// Normalized full-scale clipping level: pixels at or above this are at the sensor ceiling.
+		saturationPeak: 0.98,
 	},
 }
 
