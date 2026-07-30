@@ -25,6 +25,11 @@ const DEFAULT_GUIDER_EXPOSURE = 1000
 // Default star-image search-region side, in pixels.
 const DEFAULT_SEARCH_REGION = 64
 
+// Exponential smoothing factor PHD2 applies to the guide distance reported as GuideStep.AvgDist.
+// Matches PHD2's Guider::UpdateCurrentDistance, which low-pass filters the per-frame distance so
+// clients see a stability indicator instead of raw frame-to-frame noise.
+const AVG_DISTANCE_SMOOTHING_ALPHA = 0.3
+
 // Placeholder calibration data returned before any calibration is solved.
 const EMPTY_CALIBRATION_DATA: Readonly<PHD2CalibrationData> = {
 	calibrated: false,
@@ -93,6 +98,8 @@ export class GuiderClient {
 	#appState: PHD2AppState = 'Stopped'
 	#resumeState: PHD2AppState = 'Stopped'
 	#guidingStartTime = 0
+	#avgDistance = 0
+	#avgDistanceNeedReset = true
 	#declinationGuideMode: PHD2DeclinationGuideMode = 'Auto'
 	#guider = this.#makeGuider(undefined)
 	#exposure = DEFAULT_GUIDER_EXPOSURE
@@ -267,6 +274,8 @@ export class GuiderClient {
 		this.#lockShiftTimestamp = 0
 		this.#lockShiftLimitReached = false
 		this.#guidingStartTime = 0
+		this.#avgDistance = 0
+		this.#avgDistanceNeedReset = true
 		this.#resumeState = 'Stopped'
 		this.#setAppState('Stopped')
 
@@ -349,6 +358,10 @@ export class GuiderClient {
 		this.#settleStableSince = 0
 		this.#settleFrameCount = 0
 		this.#settleDroppedFrameCount = 0
+
+		// The lock target jumped, so the smoothed distance is reseeded from the next measured frame
+		// instead of decaying from the pre-dither error.
+		this.#avgDistanceNeedReset = true
 
 		this.emitEvent('GuidingDithered', { dx, dy })
 		this.emitEvent('SettleBegin')
@@ -550,6 +563,7 @@ export class GuiderClient {
 		} else {
 			this.#guider = this.#makeGuider(this.#calibration)
 			this.#guidingStartTime = Date.now()
+			this.#avgDistanceNeedReset = true
 			this.emitEvent('StartGuiding')
 			this.#setAppState('Guiding')
 		}
@@ -645,6 +659,7 @@ export class GuiderClient {
 		this.#lockShiftOffsetY = 0
 		this.#lockShiftTimestamp = 0
 		this.#lockShiftLimitReached = false
+		this.#avgDistanceNeedReset = true
 		this.emitEvent('LockPositionSet', { X: lockX, Y: lockY })
 
 		if (this.#appState === 'Guiding' || this.#appState === 'LostLock' || this.#appState === 'Paused') {
@@ -844,6 +859,7 @@ export class GuiderClient {
 			this.#calibration = step.completed
 			this.#guider = this.#makeGuider(this.#calibration)
 			this.#guidingStartTime = Date.now()
+			this.#avgDistanceNeedReset = true
 			this.emitEvent('CalibrationComplete', { Mount: this.#guideOutput?.name ?? '' })
 			this.emitEvent('StartGuiding')
 			this.#resumeState = 'Guiding'
@@ -872,7 +888,7 @@ export class GuiderClient {
 			return 0
 		}
 
-		this.#emitGuideStepEvent(frame, command)
+		this.#emitGuideStepEvent(frame, command, this.#updateAvgDistance(command.diagnostics.dx ?? 0, command.diagnostics.dy ?? 0))
 		const assistantDelay = this.#processGuidingAssistantFrame(frame, command)
 
 		this.#resumeState = 'Guiding'
@@ -1166,6 +1182,8 @@ export class GuiderClient {
 		this.#appState = 'Stopped'
 		this.#resumeState = 'Stopped'
 		this.#guidingStartTime = 0
+		this.#avgDistance = 0
+		this.#avgDistanceNeedReset = true
 		this.#paused = false
 		this.#fullPause = true
 		this.#guideOutputEnabled = true
@@ -1280,7 +1298,7 @@ export class GuiderClient {
 	}
 
 	// Emits one guide-step event using the latest guider command and diagnostics.
-	#emitGuideStepEvent(frame: GuideFrame, command: GuideCommand) {
+	#emitGuideStepEvent(frame: GuideFrame, command: GuideCommand, avgDistance: number) {
 		const { diagnostics, ra, dec } = command
 		const star = frame.stars[0]
 		const dx = diagnostics.dx ?? 0
@@ -1310,7 +1328,8 @@ export class GuiderClient {
 			StarMass: star?.flux ?? 0,
 			SNR: star?.snr ?? 0,
 			HFD: star?.hfd ?? 0,
-			AvgDist: Math.hypot(dx, dy),
+			// PHD2 reports the smoothed guide distance here, not the raw current-frame distance.
+			AvgDist: avgDistance,
 			RALimited: ra.duration >= this.#guider.config.maxPulseMsRA,
 			DecLimited: dec.duration >= this.#guider.config.maxPulseMsDEC,
 			ErrorCode: 0,
@@ -1320,8 +1339,6 @@ export class GuiderClient {
 	// Emits a star-lost event for the current frame.
 	#emitStarLostEvent(frame: GuideFrame, command: GuideCommand) {
 		const star = frame.stars[0]
-		const dx = command.diagnostics.dx ?? 0
-		const dy = command.diagnostics.dy ?? 0
 
 		this.emitEvent('StarLost', {
 			Frame: frame.frameId ?? 0,
@@ -1330,10 +1347,28 @@ export class GuiderClient {
 			// Uses zero defaults when the lost-lock frame has no guide star measurement.
 			StarMass: star?.flux ?? 0,
 			SNR: star?.snr ?? 0,
-			AvgDist: Math.hypot(dx, dy),
+			// PHD2 reports the smoothed distance from the last successfully measured frames; a lost
+			// frame has no usable error of its own, so the running average is left untouched.
+			AvgDist: this.#avgDistance,
 			ErrorCode: 1,
 			Status: command.diagnostics.notes.join(','),
 		})
+	}
+
+	// Updates and returns PHD2's smoothed guide distance in pixels from the current frame error.
+	// The average is seeded with the first distance measured after guiding starts or after the lock
+	// target moves, then low-pass filtered so it tracks sustained error instead of single-frame noise.
+	#updateAvgDistance(dx: number, dy: number) {
+		const distance = Math.hypot(dx, dy)
+
+		if (this.#avgDistanceNeedReset) {
+			this.#avgDistanceNeedReset = false
+			this.#avgDistance = distance
+		} else {
+			this.#avgDistance += AVG_DISTANCE_SMOOTHING_ALPHA * (distance - this.#avgDistance)
+		}
+
+		return this.#avgDistance
 	}
 
 	// Converts a frame timestamp (ms since the Unix epoch) into PHD2's guide-relative time in seconds,
