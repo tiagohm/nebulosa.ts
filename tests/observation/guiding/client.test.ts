@@ -296,6 +296,14 @@ describe('construction', () => {
 		expect(defaults.client.getDitherMode()).toBe('random')
 	})
 
+	test('rejects a calibrator configuration the calibrator itself would reject', () => {
+		// The overrides are merged over the calibrator defaults and validated at construction, so an
+		// impossible combination fails immediately instead of on the first calibration frame.
+		expect(() => makeHarness({ calibrator: { raPulse: 0 } })).toThrowError(/invalid guiding calibrator config/)
+		expect(() => makeHarness({ calibrator: { maxRatePxPerMs: 1e-6 } })).toThrowError(/invalid guiding calibrator config/)
+		expect(() => makeHarness({ calibrator: { raPulse: 250, decPulse: 250 } })).not.toThrow()
+	})
+
 	test('starts stopped, uncalibrated, unpaused and without a lock', () => {
 		expect(harness.client.getAppState()).toBe('Stopped')
 		expect(harness.client.getCalibrated()).toBeFalse()
@@ -885,13 +893,20 @@ describe('closed-loop calibration and guiding', () => {
 	// Exponential smoothing factor the guider applies to the reported average distance, matching
 	// PHD2's Guider::UpdateCurrentDistance.
 	const AVG_DIST_ALPHA = 0.3
+	// Calibrator overrides that cut the pulses a session has to command. Almost all of its wall time is
+	// the client sleeping out those pulses, and their total is the required travel divided by the mount
+	// rate. The clearing move only exists to undo the right ascension leg on a real mount, so dropping
+	// it removes a third of the pulses without affecting the solve. The travel thresholds keep their
+	// defaults: shortening them to a single sample per leg leaves the solved camera angle at the mercy
+	// of the centroid error over a seven-pixel baseline.
+	const FAST_CALIBRATION = { clearingMoveEnabled: false } as const
 
 	// Creates a dedicated harness, runs a full calibration against its simulated mount and returns it
 	// while the client is guiding. Every test owns its harness so the sessions, which spend nearly all
 	// of their wall time asleep waiting for commanded pulses, can run concurrently without sharing
 	// state through the module-level harness.
 	async function calibrateAndGuide() {
-		const harness = makeHarness()
+		const harness = makeHarness({ calibrator: FAST_CALIBRATION })
 
 		connect(harness)
 		harness.client.loop()

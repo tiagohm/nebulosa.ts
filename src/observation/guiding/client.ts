@@ -10,7 +10,7 @@ import { detectStars } from '../../imaging/stars/detector'
 import { base64Source, bufferSource } from '../../io/io'
 import { clamp } from '../../math/numerical/math'
 import { GuidingAssistant, type GuidingAssistantConfig, type GuidingAssistantResult } from './assistant'
-import { type CalibrationPulseCommand, flipGuidingCalibration, type GuidingCalibrationDiagnostics, type GuidingCalibrationResult, GuidingCalibrator } from './calibrator'
+import { type CalibrationPulseCommand, flipGuidingCalibration, type GuidingCalibrationConfig, type GuidingCalibrationDiagnostics, type GuidingCalibrationResult, GuidingCalibrator } from './calibrator'
 import { type AxisPulse, type DeclinationGuideMode, DEFAULT_GUIDER_CONFIG, type GuideCommand, type GuideFrame, Guider, type GuideStar } from './guider'
 
 // Local autoguiding orchestrator exposing a PHD2-compatible API over INDI camera and guide-output
@@ -74,6 +74,10 @@ export interface GuiderClientOptions {
 	readonly stickyLockPosition?: boolean
 	// Dither pattern used by dither().
 	readonly ditherMode?: GuiderDitherMode
+	// Overrides for the calibration state machine, merged over DEFAULT_GUIDING_CALIBRATOR_CONFIG. Pulse
+	// durations are milliseconds and distances are pixels; an invalid combination throws at
+	// construction. Mounts with a fast guide rate usually only need shorter raPulse/decPulse.
+	readonly calibrator?: Partial<GuidingCalibrationConfig>
 }
 
 // Optics parameters supplied at connect time to derive the guider pixel scale.
@@ -95,7 +99,7 @@ export class GuiderClient {
 	#connected = false
 	#camera?: Camera
 	#guideOutput?: GuideOutput
-	readonly #calibrator = new GuidingCalibrator()
+	readonly #calibrator: GuidingCalibrator
 	#calibration?: GuidingCalibrationResult
 	#frame?: GuideFrame
 	#image?: Image
@@ -157,6 +161,7 @@ export class GuiderClient {
 		readonly guideOutputManager: GuideOutputManager,
 		readonly options?: GuiderClientOptions,
 	) {
+		this.#calibrator = new GuidingCalibrator(options?.calibrator)
 		this.#searchRegion = clamp(options?.searchRegion || DEFAULT_SEARCH_REGION, 16, 128)
 		this.#stickyLockPosition = options?.stickyLockPosition === true
 		this.#ditherMode = options?.ditherMode ?? 'random'
