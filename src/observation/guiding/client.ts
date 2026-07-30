@@ -778,13 +778,16 @@ export class GuiderClient {
 	}
 
 	// Pauses or resumes guide pulses, optionally stopping exposures during full pause.
+	// PHD2 reports Paused and Resumed on the pause transition only, so a redundant call is silent.
 	setPaused(paused: boolean, full: boolean = true) {
+		const wasPaused = this.#paused
+
 		if (paused) {
-			if (!this.#paused) this.#resumeState = this.#appState === 'Paused' ? this.#resumeState : this.#appState
+			if (!wasPaused) this.#resumeState = this.#appState === 'Paused' ? this.#resumeState : this.#appState
 			this.#paused = true
 			this.#fullPause = full || this.#resumeState === 'Calibrating'
 			this.#lockShiftTimestamp = 0
-			this.emitEvent('Paused')
+			if (!wasPaused) this.emitEvent('Paused')
 			if (this.#guidingAssistant?.measuringBacklash === true) this.#finishGuidingAssistant(false, 'backlash test paused', true)
 			this.#setAppState('Paused')
 			if (this.#fullPause && this.#camera !== undefined) this.cameraManager.stopExposure(this.#camera)
@@ -794,7 +797,7 @@ export class GuiderClient {
 		this.#paused = false
 		this.#fullPause = true
 		this.#lockShiftTimestamp = 0
-		this.emitEvent('Resumed')
+		if (wasPaused) this.emitEvent('Resumed')
 		this.#setAppState(this.#resumeState === 'Paused' ? 'Looping' : this.#resumeState)
 
 		if (this.#appState !== 'Stopped' && this.#camera !== undefined) {

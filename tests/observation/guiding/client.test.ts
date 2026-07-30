@@ -614,6 +614,19 @@ describe('mode transitions', () => {
 		expect(eventsOf(harness.events, 'Resumed')).toHaveLength(1)
 	})
 
+	test('redundant pause and resume requests emit no extra events', () => {
+		connect(harness)
+		harness.client.loop()
+
+		harness.client.setPaused(true)
+		harness.client.setPaused(true)
+		expect(eventsOf(harness.events, 'Paused')).toHaveLength(1)
+
+		harness.client.setPaused(false)
+		harness.client.setPaused(false)
+		expect(eventsOf(harness.events, 'Resumed')).toHaveLength(1)
+	})
+
 	test('a partial pause keeps exposures running', () => {
 		connect(harness)
 		harness.client.loop()
