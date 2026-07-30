@@ -47,8 +47,8 @@ export type PHD2EventType =
 // PHD2 application/guiding state.
 export type PHD2AppState = 'Stopped' | 'Selected' | 'Calibrating' | 'Guiding' | 'LostLock' | 'Paused' | 'Looping'
 
-// Severity of an Alert event.
-export type PHD2AlertType = 'Info' | 'Question' | 'Warning' | 'Error'
+// Severity of an Alert event, using the lowercase values PHD2 sends on the wire.
+export type PHD2AlertType = 'info' | 'question' | 'warning' | 'error'
 
 // Guide pulse direction.
 export type PHD2GuideDirection = 'North' | 'South' | 'West' | 'East'

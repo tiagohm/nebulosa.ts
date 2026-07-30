@@ -881,6 +881,9 @@ export class GuiderClient {
 
 		if (step.failure !== undefined) {
 			this.emitEvent('CalibrationFailed', { Reason: step.failure.message })
+			// PHD2 raises a user-facing alert alongside the failure so clients without a calibration
+			// UI still surface the reason.
+			this.emitEvent('Alert', { Msg: `Calibration failed: ${step.failure.message}`, Type: 'error' })
 
 			if (this.#settling) {
 				this.#settling = false
