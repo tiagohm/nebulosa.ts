@@ -92,6 +92,7 @@ export class GuiderClient {
 	#stickyLockPosition = false
 	#appState: PHD2AppState = 'Stopped'
 	#resumeState: PHD2AppState = 'Stopped'
+	#guidingStartTime = 0
 	#declinationGuideMode: PHD2DeclinationGuideMode = 'Auto'
 	#guider = this.#makeGuider(undefined)
 	#exposure = DEFAULT_GUIDER_EXPOSURE
@@ -265,6 +266,7 @@ export class GuiderClient {
 		this.#settleDroppedFrameCount = 0
 		this.#lockShiftTimestamp = 0
 		this.#lockShiftLimitReached = false
+		this.#guidingStartTime = 0
 		this.#resumeState = 'Stopped'
 		this.#setAppState('Stopped')
 
@@ -547,6 +549,7 @@ export class GuiderClient {
 			this.#setAppState('Calibrating')
 		} else {
 			this.#guider = this.#makeGuider(this.#calibration)
+			this.#guidingStartTime = Date.now()
 			this.emitEvent('StartGuiding')
 			this.#setAppState('Guiding')
 		}
@@ -840,6 +843,7 @@ export class GuiderClient {
 		if (step.completed !== undefined) {
 			this.#calibration = step.completed
 			this.#guider = this.#makeGuider(this.#calibration)
+			this.#guidingStartTime = Date.now()
 			this.emitEvent('CalibrationComplete', { Mount: this.#guideOutput?.name ?? '' })
 			this.emitEvent('StartGuiding')
 			this.#resumeState = 'Guiding'
@@ -1161,6 +1165,7 @@ export class GuiderClient {
 		this.#exactLockPosition = false
 		this.#appState = 'Stopped'
 		this.#resumeState = 'Stopped'
+		this.#guidingStartTime = 0
 		this.#paused = false
 		this.#fullPause = true
 		this.#guideOutputEnabled = true
@@ -1286,7 +1291,8 @@ export class GuiderClient {
 
 		this.emitEvent('GuideStep', {
 			Frame: frame.frameId ?? 0,
-			Time: (frame.timestamp ?? 0) / 1000,
+			// Seconds since guiding started, matching PHD2's GuideStep.Time.
+			Time: this.#guidingElapsedTime(frame.timestamp ?? 0),
 			// Uses an empty mount name if the guide-output device is unavailable.
 			Mount: this.#guideOutput?.name ?? '',
 			dx,
@@ -1319,8 +1325,8 @@ export class GuiderClient {
 
 		this.emitEvent('StarLost', {
 			Frame: frame.frameId ?? 0,
-			// Seconds, matching GuideStep.Time and PHD2's convention (frame.timestamp is Date.now() in ms).
-			Time: (frame.timestamp ?? 0) / 1000,
+			// Seconds since guiding started, matching GuideStep.Time and PHD2's convention.
+			Time: this.#guidingElapsedTime(frame.timestamp ?? 0),
 			// Uses zero defaults when the lost-lock frame has no guide star measurement.
 			StarMass: star?.flux ?? 0,
 			SNR: star?.snr ?? 0,
@@ -1328,6 +1334,13 @@ export class GuiderClient {
 			ErrorCode: 1,
 			Status: command.diagnostics.notes.join(','),
 		})
+	}
+
+	// Converts a frame timestamp (ms since the Unix epoch) into PHD2's guide-relative time in seconds,
+	// measured from the moment guiding started. Returns 0 while no guiding session is running.
+	#guidingElapsedTime(timestamp: number) {
+		if (this.#guidingStartTime === 0 || timestamp <= 0) return 0
+		return (timestamp - this.#guidingStartTime) / 1000
 	}
 
 	// Emits one in-progress settle event using PHD2's time-in-range and requested settle duration fields.
