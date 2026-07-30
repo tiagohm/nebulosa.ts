@@ -1,6 +1,6 @@
 import { pixelScale } from '../../astronomy/formulas'
 import type { PartialOnly, Writable } from '../../core/types'
-import { DEFAULT_PHD2_SETTLE, type PHD2AppState, type PHD2CalibrationData, type PHD2DeclinationGuideMode, type PHD2EventMap, type PHD2Events, type PHD2GuideDirection, type PHD2LockShiftParams, type PHD2Settle, type PHD2StarImage } from '../../devices/guiding/phd2'
+import { DEFAULT_PHD2_SETTLE, type PHD2AppState, type PHD2CalibrationData, type PHD2DeclinationGuideMode, type PHD2EventMap, type PHD2Events, type PHD2GuideDirection, type PHD2GuideStepEvent, type PHD2LockShiftParams, type PHD2Settle, type PHD2StarImage } from '../../devices/guiding/phd2'
 import type { Camera, GuideDirection, GuideOutput } from '../../devices/indi/device'
 import type { CameraManager, DeviceHandler, GuideOutputManager } from '../../devices/indi/manager'
 import type { BlobEncoding } from '../../devices/indi/types'
@@ -1350,8 +1350,12 @@ export class GuiderClient {
 		const outputActive = !this.#paused && this.#guideOutputActive
 		const raDuration = outputActive ? Math.round(ra.duration) : 0
 		const decDuration = outputActive ? Math.round(dec.duration) : 0
+		// An axis is only reported as limited when a pulse was actually issued and clipped by the
+		// per-axis maximum duration, so a suppressed or zero-length pulse never claims a limit.
+		const raLimited = raDuration > 0 && ra.duration >= this.#guider.config.maxPulseMsRA
+		const decLimited = decDuration > 0 && dec.duration >= this.#guider.config.maxPulseMsDEC
 
-		this.emitEvent('GuideStep', {
+		const event: Omit<Writable<PHD2GuideStepEvent>, 'Event' | 'Timestamp' | 'Host' | 'Inst'> = {
 			Frame: frame.frameId ?? 0,
 			// Seconds since guiding started, matching PHD2's GuideStep.Time.
 			Time: this.#guidingElapsedTime(frame.timestamp ?? 0),
@@ -1374,10 +1378,15 @@ export class GuiderClient {
 			HFD: star?.hfd ?? 0,
 			// PHD2 reports the smoothed guide distance here, not the raw current-frame distance.
 			AvgDist: avgDistance,
-			RALimited: ra.duration >= this.#guider.config.maxPulseMsRA,
-			DecLimited: dec.duration >= this.#guider.config.maxPulseMsDEC,
 			ErrorCode: 0,
-		})
+		}
+
+		// PHD2 includes the limit flags only when the pulse was clipped, so they stay absent
+		// otherwise instead of being reported as false.
+		if (raLimited) event.RALimited = true
+		if (decLimited) event.DecLimited = true
+
+		this.emitEvent('GuideStep', event)
 	}
 
 	// Emits a star-lost event for the current frame.

@@ -172,8 +172,9 @@ export interface PHD2GuideStepEvent extends PHD2Event<'GuideStep'> {
 	readonly SNR: number
 	readonly HFD: number
 	readonly AvgDist: number
-	readonly RALimited: boolean
-	readonly DecLimited: boolean
+	// Present only when the corresponding axis pulse was clipped by the maximum-duration limit.
+	readonly RALimited?: boolean
+	readonly DecLimited?: boolean
 	readonly ErrorCode: number
 }
 
