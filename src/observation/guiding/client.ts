@@ -880,7 +880,10 @@ export class GuiderClient {
 
 		if (command.state === 'lost') {
 			this.#emitStarLostEvent(frame, command)
-			this.emitEvent('LockPositionLost')
+			// PHD2 reports StarLost for every dropped frame but LockPositionLost only once, when the
+			// lock is actually given up. #resumeState tracks the session state even while paused, so
+			// it is the reliable edge test here.
+			if (this.#resumeState !== 'LostLock') this.emitEvent('LockPositionLost')
 			this.#resumeState = 'LostLock'
 			if (!this.#paused) this.#setAppState('LostLock')
 			this.#updateSettling(undefined, undefined, true, true, timestamp)
