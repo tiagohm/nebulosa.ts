@@ -224,6 +224,25 @@ describe('connect / disconnect', () => {
 		expect(eventsOf(harness.events, 'ConfigurationChange')).toHaveLength(1)
 	})
 
+	test('greets a connecting client with Version and the current AppState', () => {
+		connect(harness)
+
+		// PHD2 sends Version as the first message, immediately followed by AppState.
+		expect(harness.events[0]).toMatchObject({ Event: 'Version', PHDVersion: '2.6.13', MsgVersion: 1, OverlapSupport: false })
+		expect(harness.events[1]).toMatchObject({ Event: 'AppState', State: 'Stopped' })
+	})
+
+	test('AppState is not re-emitted on later state transitions', () => {
+		connect(harness)
+		harness.client.loop()
+		harness.client.setPaused(true)
+		harness.client.setPaused(false)
+		harness.client.stopCapture()
+
+		// Clients track state through the individual lifecycle events after the initial handshake.
+		expect(eventsOf(harness.events, 'AppState')).toHaveLength(1)
+	})
+
 	test('rejects a second connect while already connected', () => {
 		expect(connect(harness)).toBeTrue()
 		expect(connect(harness)).toBeFalse()

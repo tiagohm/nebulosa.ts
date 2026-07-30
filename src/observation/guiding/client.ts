@@ -25,6 +25,16 @@ const DEFAULT_GUIDER_EXPOSURE = 1000
 // Default star-image search-region side, in pixels.
 const DEFAULT_SEARCH_REGION = 64
 
+// PHD2 application version announced in the Version event on connect. The local guider is not PHD2,
+// so this reports the PHD2 release whose event protocol it reproduces.
+const PHD2_VERSION = '2.6.13'
+// PHD2 sub-version component of the Version event; empty for a non-PHD2 implementation.
+const PHD2_SUBVER = ''
+// Event protocol message version implemented by this client, matching PHD2's MsgVersion.
+const PHD2_MSG_VERSION = 1
+// Overlapping exposures are not implemented by the local guider.
+const PHD2_OVERLAP_SUPPORT = false
+
 // Exponential smoothing factor PHD2 applies to the guide distance reported as GuideStep.AvgDist.
 // Matches PHD2's Guider::UpdateCurrentDistance, which low-pass filters the per-frame distance so
 // clients see a stability indicator instead of raw frame-to-frame noise.
@@ -181,6 +191,10 @@ export class GuiderClient {
 		this.attachHandler()
 		this.cameraManager.enableBlob(camera)
 		this.#resetRuntimeState(true)
+		// PHD2 greets a newly connected client with Version followed by the current AppState. AppState
+		// is only sent here: afterwards clients track state through the individual lifecycle events.
+		this.emitEvent('Version', { PHDVersion: PHD2_VERSION, PHDSubver: PHD2_SUBVER, MsgVersion: PHD2_MSG_VERSION, OverlapSupport: PHD2_OVERLAP_SUPPORT })
+		this.emitEvent('AppState', { State: this.#appState })
 		this.emitEvent('ConfigurationChange')
 
 		return true
@@ -1245,14 +1259,11 @@ export class GuiderClient {
 		this.#eventHandler?.(this, event)
 	}
 
-	// Updates the app state and emits the paired PHD2 AppState event once.
+	// Updates the current app state. No event is emitted here on purpose: PHD2 sends AppState only
+	// when a client first connects, and clients are expected to track later transitions through the
+	// individual lifecycle events. See https://github.com/OpenPHDGuiding/phd2/wiki/EventMonitoring#appstate
 	#setAppState(appState: PHD2AppState) {
-		// if (this.#appState === appState) return
 		this.#appState = appState
-		// The AppState notification is only sent when the client first connects to PHD2.
-		// You will need to update its notion of AppState by handling individual notification events.
-		// https://github.com/OpenPHDGuiding/phd2/wiki/EventMonitoring#appstate
-		// this.emitEvent('AppState', { State: appState })
 	}
 
 	// Emits the capture-stop events that match the current or paused-resume session mode.
