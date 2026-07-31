@@ -239,7 +239,9 @@ test('the local layer survives an export/import round trip and is validated on t
 	expect(() => new MountPointing().import({ ...exported, local: { ...local, directions: [0, 1] } })).toThrow('model.local.directions must hold 3 components per sample')
 	expect(() => new MountPointing().import({ ...exported, local: { ...local, pierSides: ['EAST'] } })).toThrow('model.local.pierSides must have one entry per direction')
 	expect(() => new MountPointing().import({ ...exported, local: { ...local, residualsDy: [0] } })).toThrow('model.local.residualsDy must have')
-	expect(() => new MountPointing().import({ ...exported, local: { ...local, neighbors: 0 } })).toThrow('model.local.neighbors must be a positive integer')
+	expect(() => new MountPointing().import({ ...exported, local: { ...local, neighbors: 0 } })).toThrow('model.local.neighbors must be an integer of at least 2')
+	// One neighbour carries zero tricube weight, so a `k = 1` layer would predict `0 / 0` at every query.
+	expect(() => new MountPointing().import({ ...exported, local: { ...local, neighbors: 1 } })).toThrow('model.local.neighbors must be an integer of at least 2')
 	expect(() => new MountPointing().import({ ...exported, local: { ...local, scale: 0 } })).toThrow('model.local.scale must be a positive finite angle')
 })
 

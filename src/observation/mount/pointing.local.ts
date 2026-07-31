@@ -186,7 +186,9 @@ export function validateLocalPointingResidual(value: unknown): LocalPointingResi
 	validateNumberArray(model.residualsDx, count, 'model.local.residualsDx')
 	validateNumberArray(model.residualsDy, count, 'model.local.residualsDy')
 
-	if (!Number.isInteger(model.neighbors) || (model.neighbors as number) < 1) throw new TypeError('model.local.neighbors must be a positive integer')
+	// Two is the floor `resolveLocalResidualOptions` enforces when fitting: with `k = 1` the bandwidth is
+	// the distance to the only neighbour, whose tricube weight is then zero, leaving a zero total weight.
+	if (!Number.isInteger(model.neighbors) || (model.neighbors as number) < 2) throw new TypeError('model.local.neighbors must be an integer of at least 2')
 	// The scale divides the taper exponent, so a zero would make every local offset `NaN`.
 	if (!Number.isFinite(model.scale) || (model.scale as number) <= 0) throw new TypeError('model.local.scale must be a positive finite angle')
 

@@ -468,6 +468,12 @@ test('an extrapolating correction is truncated instead of sent to the mount', ()
 	expect(clamped.converged).toBeFalse()
 	expect(separation).toBeCloseTo(limit, 12)
 
+	// The reported residual belongs to the command actually returned, not to the pre-clamp candidate the
+	// loop settled on: the truncated command is the one the caller will send, and it misses by much more.
+	// `residual` is the gnomonic `tan(separation)`, hence the `atan` before comparing against an angle.
+	expect(Math.atan(clamped.residual)).toBeCloseTo(landingError(model, clamped, input), 12)
+	expect(clamped.residual).toBeGreaterThan(free.residual * 10)
+
 	// A zero iteration budget still returns a usable command, just an unconverged one.
 	const truncated = correctPointingCoordinate(model, input, { maxIterations: 1 })
 	expect(truncated.iterations).toBe(1)

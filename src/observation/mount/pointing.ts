@@ -303,7 +303,9 @@ export interface CorrectionResult extends Readonly<EquatorialCoordinate> {
 	readonly converged: boolean
 	// Number of fixed-point iterations actually performed. Zero means the first candidate already solved.
 	readonly iterations: number
-	// Final spherical residual (radians) between the target and where the returned command would land.
+	// Final residual between the target and where the returned command would land, including when the
+	// command was clamped. Gnomonic, so it is `tan(separation)` rather than the angle itself, which the
+	// caller can ignore below a degree or so and undo with `atan` above it.
 	readonly residual: Angle
 	// True when the correction hit `maximumCorrection` and was truncated.
 	readonly clamped: boolean
@@ -569,6 +571,8 @@ export function fitPointingModel(samples: readonly PointingSample[], options: Re
 	const resolved = resolveFitOptions(options)
 	const prepared = preparePointingSamples(samples, resolved)
 	const coverage = summarizePointingCoverage(prepared.accepted)
+	// Packed once and shared: the support set keeps them, and the local layer copies them for itself.
+	const { directions, pierSides } = packSampleDirections(prepared.accepted)
 	const basis = resolvePointingBasis(resolved, prepared.supportedContext, prepared.accepted.length)
 	const fit = fitStackedOffsetModel(prepared.accepted, resolved, basis)
 	const physicalCount = basis.semiPhysicalTerms.length
@@ -614,7 +618,7 @@ export function fitPointingModel(samples: readonly PointingSample[], options: Re
 		robust: resolved.robust,
 		ridge: resolved.ridge,
 		trainingSampleCount: prepared.accepted.length,
-		supportSet: buildPointingSupportSet(prepared.accepted),
+		supportSet: buildPointingSupportSet(directions, pierSides),
 		usable: basis.sufficient && !fit.rankDeficient && fit.conditionNumber <= MAXIMUM_USABLE_CONDITION_NUMBER,
 		coverage,
 		diagnostics: emptyDiagnostics(samples.length),
@@ -626,7 +630,7 @@ export function fitPointingModel(samples: readonly PointingSample[], options: Re
 	// What the global model leaves behind at each training sample, computed once and shared: the
 	// diagnostics summarize it and the local layer interpolates it.
 	const residuals = computeModelResiduals(prepared.accepted, provisional)
-	const local = buildLocalResidualLayer(prepared.accepted, residuals, resolved.local, provisional.usable)
+	const local = buildLocalResidualLayer(directions, pierSides, residuals, resolved.local, provisional.usable)
 	const diagnostics = buildPointingDiagnostics(samples.length, prepared, provisional, basis, fit, residuals)
 	return { ...provisional, local, diagnostics }
 }
@@ -721,12 +725,11 @@ export function correctPointingCoordinate(model: FittedPointingModel, input: Rea
 	let iterations = 0
 
 	while (true) {
-		// Where the mount would land if commanded to the current candidate, and how far that misses.
-		const reached = sphericalUnprojectTangentPlane(predictedError.dx, predictedError.dy, command)
-		const offset = sphericalProjectTangentPlane(target, reached)
+		// How the current candidate would miss the target once the mount adds its predicted error.
+		const offset = commandOffset(target, command, predictedError)
 
 		// The candidate ended up more than 90° from the target: the model is not describing a mount.
-		if (offset === false) break
+		if (offset === undefined) break
 
 		residual = Math.hypot(offset.x, offset.y)
 
@@ -746,8 +749,10 @@ export function correctPointingCoordinate(model: FittedPointingModel, input: Rea
 	const total = sphericalProjectTangentPlane(command, target)
 
 	if (total === false) {
-		// A command a quarter turn away from the target is never a correction. Refuse to move at all.
-		return { rightAscension: input.rightAscension, declination: input.declination, predictedError: predictPointingModelError(model, input), converged: false, iterations, residual, clamped: true }
+		// A command a quarter turn away from the target is never a correction. Refuse to move at all, and
+		// report the miss of the uncorrected coordinate that is actually being returned.
+		const uncorrected = predictPointingModelError(model, input)
+		return { rightAscension: input.rightAscension, declination: input.declination, predictedError: uncorrected, converged: false, iterations, residual: Math.hypot(uncorrected.dx, uncorrected.dy), clamped: true }
 	}
 
 	// Gnomonic offsets are `tan(separation)` along the tangent direction, so the clamp compares angles.
@@ -761,7 +766,27 @@ export function correctPointingCoordinate(model: FittedPointingModel, input: Rea
 	}
 
 	const [rightAscension, declination] = eraC2s(...command)
-	return { rightAscension, declination, predictedError: clamped ? predictPointingModelError(model, { ...input, rightAscension, declination }) : predictedError, converged, iterations, residual, clamped }
+
+	if (!clamped) return { rightAscension, declination, predictedError, converged, iterations, residual, clamped }
+
+	// The clamp moved the command away from the candidate the loop settled on, so the residual measured
+	// there no longer describes where the mount would land. Re-measure it against the command actually
+	// returned, which is what the field documents and what a caller judges the correction by. A degenerate
+	// re-projection leaves the loop's value in place, as the loop itself does.
+	const clampedError = predictPointingModelError(model, { ...input, rightAscension, declination })
+	const offset = commandOffset(target, command, clampedError)
+
+	return { rightAscension, declination, predictedError: clampedError, converged, iterations, residual: offset === undefined ? residual : Math.hypot(offset.x, offset.y), clamped }
+}
+
+// Tangent-plane offset from where the mount would land, when commanded to `command` while making the
+// predicted `error`, to `target`. Components are gnomonic, east-positive and north-positive, in radians
+// for the small separations a pointing model deals with. Returns `undefined` when the two directions are
+// more than a quarter turn apart, where the tangent plane cannot represent the offset at all.
+function commandOffset(target: Vec3, command: Vec3, error: Readonly<PointingOffset>) {
+	const reached = sphericalUnprojectTangentPlane(error.dx, error.dy, command)
+	const offset = sphericalProjectTangentPlane(target, reached)
+	return offset === false ? undefined : offset
 }
 
 // Validates a serialized pointing model, throwing a TypeError naming the first offending field.
@@ -1643,20 +1668,8 @@ function computeModelResiduals(samples: readonly PreparedPointingSample[], model
 // An unusable global model predicts zero, so its "residuals" are the raw pointing errors. Letting the
 // local layer interpolate those would turn a model that correctly refuses to correct into one that
 // silently applies a nearest-neighbour correction with no mechanical basis at all.
-function buildLocalResidualLayer(samples: readonly PreparedPointingSample[], residuals: ModelResiduals, options: ResolvedLocalPointingResidualOptions, usable: boolean) {
-	if (!options.enabled || !usable || samples.length === 0) return undefined
-
-	const directions = new Array<number>(samples.length * 3)
-	const pierSides = new Array<PierSide>(samples.length)
-
-	for (let i = 0; i < samples.length; i++) {
-		const direction = samples[i].direction
-		directions[i * 3] = direction[0]
-		directions[i * 3 + 1] = direction[1]
-		directions[i * 3 + 2] = direction[2]
-		pierSides[i] = samples[i].context.pierSide
-	}
-
+function buildLocalResidualLayer(directions: readonly number[], pierSides: readonly PierSide[], residuals: ModelResiduals, options: ResolvedLocalPointingResidualOptions, usable: boolean) {
+	if (!options.enabled || !usable || pierSides.length === 0) return undefined
 	return buildLocalPointingResidual(directions, pierSides, residuals.dx, residuals.dy, options)
 }
 
@@ -1696,7 +1709,9 @@ function buildPointingDiagnostics(totalSamples: number, prepared: PreparedPointi
 		perPierSideSampleCounts[sample.context.pierSide]++
 	}
 
-	const skyCoverage = summarizePointingCoverage(prepared.accepted)
+	// The same summary the model publishes: it is computed from `prepared.accepted`, which has not changed
+	// since, so summarizing the set a second time would only rebuild an identical object.
+	const skyCoverage = model.coverage
 	const conditionNumber = diagnosticConditionNumber(model)
 
 	if (perPierSideSampleCounts.EAST === 0 || perPierSideSampleCounts.WEST === 0) {
@@ -1844,10 +1859,11 @@ function diagnosticConditionNumber(model: FittedPointingModel) {
 	return Math.max(model.physical?.conditionNumber ?? 0, model.residual?.conditionNumberDx ?? 0, model.residual?.conditionNumberDy ?? 0)
 }
 
-// Builds the training-direction set kept on the model for prediction support scoring.
-function buildPointingSupportSet(samples: readonly PreparedPointingSample[]): PointingSupportSet | undefined {
-	if (samples.length === 0) return undefined
-
+// Packs the accepted samples into the flat direction and pier-side arrays both neighbourhood layers work
+// on: `directions` as `[x0, y0, z0, x1, ...]` unit vectors, `pierSides` aligned with it, one entry per
+// sample. The support set and the local residual layer measure different neighbourhoods over the same
+// geometry, so this is built once and passed to both.
+function packSampleDirections(samples: readonly PreparedPointingSample[]) {
 	const directions = new Array<number>(samples.length * 3)
 	const pierSides = new Array<PierSide>(samples.length)
 
@@ -1859,6 +1875,18 @@ function buildPointingSupportSet(samples: readonly PreparedPointingSample[]): Po
 		pierSides[i] = samples[i].context.pierSide
 	}
 
+	return { directions, pierSides }
+}
+
+// Builds the training-direction set kept on the model for prediction support scoring.
+//
+// `directions` is flattened as `[x0, y0, z0, ...]`, one unit vector per entry of `pierSides`. Both arrays
+// are kept on the returned set by reference, so the caller must not mutate them afterwards.
+function buildPointingSupportSet(directions: readonly number[], pierSides: readonly PierSide[]): PointingSupportSet | undefined {
+	const count = pierSides.length
+
+	if (count === 0) return undefined
+
 	// The decay length is the training set's own median k-th neighbour distance, so `support` reads the
 	// same way for a dense 200-point run and a sparse 20-point one: it measures distance in units of the
 	// spacing this particular model was built with.
@@ -1869,10 +1897,10 @@ function buildPointingSupportSet(samples: readonly PreparedPointingSample[]): Po
 	// sampled region — including one sitting on a training sample. A side-less query still measures against
 	// every sample and so scores optimistically, which is the right direction to err for a request that did
 	// not say which side of the mount it applies to.
-	const spacings = new Float64Array(samples.length)
+	const spacings = new Float64Array(count)
 
-	for (let i = 0; i < samples.length; i++) {
-		spacings[i] = neighborDistances(directions, pierSides, samples[i].direction[0], samples[i].direction[1], samples[i].direction[2], pierSides[i], i).kth
+	for (let i = 0; i < count; i++) {
+		spacings[i] = neighborDistances(directions, pierSides, directions[i * 3], directions[i * 3 + 1], directions[i * 3 + 2], pierSides[i], i).kth
 	}
 
 	const scale = medianOf(spacings.sort())
