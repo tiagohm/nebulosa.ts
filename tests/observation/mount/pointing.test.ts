@@ -499,6 +499,32 @@ test('samples reduced in another frame are rejected instead of mixed into the fi
 	expect(predictPointingModelError(declared, { ...sampleInput(samples[2]), frame: 'icrs' }).quality.warnings).not.toContain('prediction is in the icrs frame but the model was fitted in icrs')
 })
 
+test('a fit with nothing left to summarize reports zeros instead of NaN', () => {
+	// Every residual reducer returns NaN for an empty input, so a fit whose samples were all rejected used
+	// to publish NaN in fields a caller reads to decide whether to trust the model at all.
+	const terms: Readonly<Record<SemiPhysicalTermName, Angle>> = { CH: 40 * ASEC2RAD, IH: -60 * ASEC2RAD, ID: 30 * ASEC2RAD, NP: -20 * ASEC2RAD, MA: 50 * ASEC2RAD, ME: -35 * ASEC2RAD, TF: 25 * ASEC2RAD }
+	const samples = generateMechanicalPointingSamples(terms, { count: 30, seed: 91, time: TIME, latitude: LATITUDE, longitude: LONGITUDE })
+	const rejected: PointingSample[] = []
+
+	for (const sample of samples) rejected.push({ ...sample, frame: 'icrs' })
+
+	for (const model of [fitPointingModel([]), fitPointingModel(rejected)]) {
+		expect(model.usable).toBeFalse()
+		expect(model.diagnostics.validSamples).toBe(0)
+		expect(model.diagnostics.angularRms).toBe(0)
+		expect(model.diagnostics.rmsDx).toBe(0)
+		expect(model.diagnostics.rmsDy).toBe(0)
+		expect(model.diagnostics.medianResidual).toBe(0)
+		expect(model.diagnostics.residualPercentiles).toEqual({ p50: 0, p90: 0, p95: 0 })
+		expect(model.diagnostics.looRms).toBeUndefined()
+		expect(model.diagnostics.looResidualPercentiles).toBeUndefined()
+	}
+
+	expect(fitPointingModel(rejected).diagnostics.rejectedSamples).toBe(30)
+	// The strategy comparison must survive the degenerate set too, rather than returning nothing.
+	expect(selectPointingStrategy([]).diagnostics.angularRms).toBe(0)
+})
+
 test('importing a model validates it and can restore the training samples', () => {
 	const terms: Readonly<Record<SemiPhysicalTermName, Angle>> = { CH: 40 * ASEC2RAD, IH: -60 * ASEC2RAD, ID: 30 * ASEC2RAD, NP: -20 * ASEC2RAD, MA: 50 * ASEC2RAD, ME: -35 * ASEC2RAD, TF: 25 * ASEC2RAD }
 	const samples = generateMechanicalPointingSamples(terms, { count: 60, seed: 73, time: TIME, latitude: LATITUDE, longitude: LONGITUDE })

@@ -637,14 +637,27 @@ export function fitPointingModel(samples: readonly PointingSample[], options: Re
 // are added, so choosing by it would always return the most complex model regardless of whether the extra
 // terms describe the mount or the noise. Unusable models are never selected. Falls back to the in-sample
 // RMS only when no candidate could produce leave-one-out residuals.
+//
+// The fallback is all-or-nothing on purpose. Scoring one candidate out of sample and another in sample
+// would compare quantities that are not on the same scale: the in-sample RMS is systematically the
+// smaller of the two, so the candidate whose leverage happened to be unavailable would win on the
+// weakness of its own diagnostics rather than on the quality of its fit.
 export function selectPointingStrategy(samples: readonly PointingSample[], options: Readonly<PointingFitOptions> = {}): FittedPointingModel {
 	const strategies = POINTING_MODEL_STRATEGIES
+	const candidates = new Array<FittedPointingModel>(strategies.length)
+	let comparable = true
+
+	for (let i = 0; i < strategies.length; i++) {
+		candidates[i] = fitPointingModel(samples, { ...options, strategy: strategies[i] })
+		if (candidates[i].diagnostics.looRms === undefined) comparable = false
+	}
+
 	let best: FittedPointingModel | undefined
 	let bestScore = Number.POSITIVE_INFINITY
 
-	for (const strategy of strategies) {
-		const candidate = fitPointingModel(samples, { ...options, strategy })
-		const score = candidate.diagnostics.looRms ?? candidate.diagnostics.angularRms
+	for (let i = 0; i < candidates.length; i++) {
+		const candidate = candidates[i]
+		const score = comparable ? candidate.diagnostics.looRms! : candidate.diagnostics.angularRms
 
 		// A usable model always beats an unusable one, however good the latter's residuals look.
 		if (best && !candidate.usable && best.usable) continue
@@ -1700,23 +1713,32 @@ function buildPointingDiagnostics(totalSamples: number, prepared: PreparedPointi
 	residuals.sort()
 	looResiduals?.sort()
 
+	// Every reducer returns NaN for an empty input, and a fit where no sample survived validation is a
+	// legitimate outcome rather than a numerical failure: `emptyDiagnostics` already reports zeros for
+	// exactly that state. Reporting the same zeros here keeps NaN out of a public field, and out of the
+	// strategy comparison, where it would silently lose every ordering it takes part in.
+	const summarizable = prepared.accepted.length > 0
+	const usableLooResiduals = summarizable ? looResiduals : undefined
+
 	return {
 		supportedContext: prepared.supportedContext,
 		droppedTerms: basis.droppedTerms,
-		looRms: looResiduals && rmsOf(looResiduals),
-		looResidualPercentiles: looResiduals && { p50: percentileOf(looResiduals, 0.5), p90: percentileOf(looResiduals, 0.9), p95: percentileOf(looResiduals, 0.95) },
+		looRms: usableLooResiduals && rmsOf(usableLooResiduals),
+		looResidualPercentiles: usableLooResiduals && { p50: percentileOf(usableLooResiduals, 0.5), p90: percentileOf(usableLooResiduals, 0.9), p95: percentileOf(usableLooResiduals, 0.95) },
 		totalSamples,
 		validSamples: prepared.accepted.length,
 		rejectedSamples: prepared.rejected.length,
-		rmsDx: rmsOf(residualsDx),
-		rmsDy: rmsOf(residualsDy),
-		angularRms: rmsOf(residuals),
-		medianResidual: medianOf(residuals),
-		residualPercentiles: {
-			p50: percentileOf(residuals, 0.5),
-			p90: percentileOf(residuals, 0.9),
-			p95: percentileOf(residuals, 0.95),
-		},
+		rmsDx: summarizable ? rmsOf(residualsDx) : 0,
+		rmsDy: summarizable ? rmsOf(residualsDy) : 0,
+		angularRms: summarizable ? rmsOf(residuals) : 0,
+		medianResidual: summarizable ? medianOf(residuals) : 0,
+		residualPercentiles: summarizable
+			? {
+					p50: percentileOf(residuals, 0.5),
+					p90: percentileOf(residuals, 0.9),
+					p95: percentileOf(residuals, 0.95),
+				}
+			: { p50: 0, p90: 0, p95: 0 },
 		conditionNumber,
 		skyCoverage,
 		perPierSideSampleCounts,
