@@ -237,8 +237,11 @@ test('hybrid fit improves on physical-only and works across both pier sides', ()
 	expect(hybrid.diagnostics.perPierSideSampleCounts.WEST).toBeGreaterThan(0)
 	expect(prediction.dx).toBeCloseTo((prediction.components.physical?.dx ?? 0) + (prediction.components.residual?.dx ?? 0), 10)
 	expect(prediction.dy).toBeCloseTo((prediction.components.physical?.dy ?? 0) + (prediction.components.residual?.dy ?? 0), 10)
-	expect(correction.dx).toBeCloseTo(-prediction.dx, 8)
-	expect(correction.dy).toBeCloseTo(-prediction.dy, 8)
+	// The correction is the solution of `command + error(command) = target`, so it only matches the
+	// negated first-order error to the extent that the error field is locally constant.
+	expect(corrected.converged).toBeTrue()
+	expect(correction.dx).toBeCloseTo(-prediction.dx, 5)
+	expect(correction.dy).toBeCloseTo(-prediction.dy, 5)
 	expect(Math.hypot(targetError.dx - prediction.dx, targetError.dy - prediction.dy)).toBeLessThan(targetError.angularSeparation)
 })
 
@@ -416,6 +419,57 @@ test('strategy selection returns the candidate with the best leave-one-out error
 	expect(empiricalChoice.strategy).not.toBe('semiPhysical')
 	expect(empiricalChoice.diagnostics.looRms!).toBeLessThan(fitPointingModel(empiricalSamples, { ...options, strategy: 'semiPhysical' }).diagnostics.looRms!)
 })
+
+test('command inversion lands on the target instead of only cancelling the error at it', () => {
+	const terms: Readonly<Record<SemiPhysicalTermName, Angle>> = { CH: 120 * ASEC2RAD, IH: -200 * ASEC2RAD, ID: 150 * ASEC2RAD, NP: -90 * ASEC2RAD, MA: 240 * ASEC2RAD, ME: -180 * ASEC2RAD, TF: 160 * ASEC2RAD }
+	const samples = generateMechanicalPointingSamples(terms, { count: 120, seed: 97, time: TIME, latitude: LATITUDE, longitude: LONGITUDE })
+	const model = fitPointingModel(samples, { strategy: 'semiPhysical', robust: { method: 'none' }, ridge: 1e-12, validation: { minimumAltitude: -PI / 2 } })
+	const input = sampleInput(samples[11])
+	const corrected = correctPointingCoordinate(model, input)
+
+	expect(corrected.converged).toBeTrue()
+	expect(corrected.clamped).toBeFalse()
+	expect(corrected.iterations).toBeGreaterThan(0)
+	expect(corrected.residual).toBeLessThan(1e-9)
+
+	// Commanding the corrected coordinate must actually reach the target, which is the property the
+	// first-order inversion does not have when the error varies across the correction.
+	expect(landingError(model, corrected, input)).toBeLessThan(1e-9)
+
+	// The first-order command misses by an amount that grows with the gradient of the error field.
+	const firstOrder = predictPointingModelError(model, input)
+	const naive = eraC2s(...sphericalUnprojectTangentPlane(-firstOrder.dx, -firstOrder.dy, eraS2c(input.rightAscension, input.declination)))
+	expect(landingError(model, { rightAscension: naive[0], declination: naive[1] }, input)).toBeGreaterThan(corrected.residual * 100)
+})
+
+test('an extrapolating correction is truncated instead of sent to the mount', () => {
+	const terms: Readonly<Record<SemiPhysicalTermName, Angle>> = { CH: 120 * ASEC2RAD, IH: -200 * ASEC2RAD, ID: 150 * ASEC2RAD, NP: -90 * ASEC2RAD, MA: 240 * ASEC2RAD, ME: -180 * ASEC2RAD, TF: 160 * ASEC2RAD }
+	const samples = generateMechanicalPointingSamples(terms, { count: 60, seed: 101, time: TIME, latitude: LATITUDE, longitude: LONGITUDE })
+	const model = fitPointingModel(samples, { strategy: 'semiPhysical', robust: { method: 'none' }, validation: { minimumAltitude: -PI / 2 } })
+	const input = sampleInput(samples[5])
+	const limit = 10 * ASEC2RAD
+	const clamped = correctPointingCoordinate(model, input, { maximumCorrection: limit })
+	const free = correctPointingCoordinate(model, input, { maximumCorrection: Number.POSITIVE_INFINITY })
+	const separation = computePointingError(input.rightAscension, input.declination, clamped.rightAscension, clamped.declination).angularSeparation
+
+	expect(free.clamped).toBeFalse()
+	expect(computePointingError(input.rightAscension, input.declination, free.rightAscension, free.declination).angularSeparation).toBeGreaterThan(limit)
+	expect(clamped.clamped).toBeTrue()
+	expect(clamped.converged).toBeFalse()
+	expect(separation).toBeCloseTo(limit, 12)
+
+	// A zero iteration budget still returns a usable command, just an unconverged one.
+	const truncated = correctPointingCoordinate(model, input, { maxIterations: 1 })
+	expect(truncated.iterations).toBe(1)
+	expect(Number.isFinite(truncated.rightAscension)).toBeTrue()
+})
+
+// Angular distance (radians) between the requested target and where `command` would actually land.
+function landingError(model: FittedPointingModel, command: { rightAscension: Angle; declination: Angle }, target: PointingModelInput) {
+	const error = predictPointingModelError(model, { ...target, rightAscension: command.rightAscension, declination: command.declination })
+	const reached = eraC2s(...sphericalUnprojectTangentPlane(error.dx, error.dy, eraS2c(command.rightAscension, command.declination)))
+	return computePointingError(target.rightAscension, target.declination, reached[0], reached[1]).angularSeparation
+}
 
 // Plate-solve grade uncertainty (radians) attached to the trustworthy samples.
 const arcsecUncertainty = 2 * ASEC2RAD

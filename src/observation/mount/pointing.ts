@@ -241,10 +241,35 @@ export interface PredictedPointingError extends PointingError {
 	}
 }
 
+// Tuning for the iterative inversion performed by `correctPointingCoordinate`.
+export interface PointingCorrectionOptions {
+	// Fraction of the spherical residual applied per iteration, in `(0, 1]`. Defaults to 1, which
+	// converges for any error field whose gradient is small compared to 1 - that is, any physically
+	// plausible mount. Lower it only to tame a pathological model.
+	readonly damping?: number
+	// Maximum number of fixed-point iterations. Defaults to 8; convergence normally takes two or three.
+	readonly maxIterations?: number
+	// Spherical residual (radians) below which the inversion is considered converged. Defaults to 1e-9,
+	// about 0.2 mas, far below any mount's mechanical resolution.
+	readonly tolerance?: Angle
+	// Largest correction (radians) the inversion is allowed to return. Defaults to 5°, matching
+	// `maximumSampleSeparation`: anything larger means the model is extrapolating wildly, and truncating
+	// is safer than sending the mount to the wrong place. Use `Infinity` to disable.
+	readonly maximumCorrection?: Angle
+}
+
 // A corrected coordinate together with the error that was applied.
 export interface CorrectionResult extends Readonly<EquatorialCoordinate> {
-	// The predicted local error subtracted to produce this coordinate.
+	// The predicted local error at the returned coordinate, which is what the mount will actually suffer.
 	readonly predictedError: PredictedPointingError
+	// True when the inversion reached `tolerance` within `maxIterations` and was not clamped.
+	readonly converged: boolean
+	// Number of fixed-point iterations actually performed. Zero means the first candidate already solved.
+	readonly iterations: number
+	// Final spherical residual (radians) between the target and where the returned command would land.
+	readonly residual: Angle
+	// True when the correction hit `maximumCorrection` and was truncated.
+	readonly clamped: boolean
 }
 
 // Fitted empirical model: separate dx/dy linear coefficients over the feature basis.
@@ -420,6 +445,15 @@ const SUPPORT_NEIGHBORS = 4
 const MINIMUM_PREDICTION_SUPPORT = 0.35
 // Support decay length used when the training set is too degenerate to measure its own spacing.
 const DEFAULT_SUPPORT_SCALE = 10 * DEG2RAD
+// Fraction of the spherical residual applied per inversion step. One is the undamped Newton-like step,
+// which contracts for any error field whose gradient stays well below 1.
+const DEFAULT_CORRECTION_DAMPING = 1
+// Iteration cap for the command inversion. Real mounts converge in two or three passes.
+const DEFAULT_CORRECTION_MAX_ITERATIONS = 8
+// Spherical residual (radians) accepted as converged: 1e-9 rad is about 0.2 mas.
+const DEFAULT_CORRECTION_TOLERANCE = 1e-9
+// Largest correction (radians) the inversion may return, matching the maximum accepted sample separation.
+const DEFAULT_MAXIMUM_CORRECTION = 5 * DEG2RAD
 // Floor for `1 - leverage` when converting a residual into its leave-one-out counterpart, so a saturated
 // row inflates the metric instead of producing a division by zero.
 const MINIMUM_LEVERAGE_COMPLEMENT = 1e-6
@@ -582,11 +616,71 @@ export function predictPointingModelError(model: FittedPointingModel, input: Rea
 	return { dx, dy, angularSeparation: Math.hypot(dx, dy), representationUsed: model.errorRepresentation, quality, components }
 }
 
-// Applies the predicted local correction to a requested coordinate.
-export function correctPointingCoordinate(model: FittedPointingModel, input: Readonly<PointingModelInput>): CorrectionResult {
-	const predictedError = predictPointingModelError(model, input)
-	const [rightAscension, declination] = eraC2s(...sphericalUnprojectTangentPlane(-predictedError.dx, -predictedError.dy, eraS2c(input.rightAscension, input.declination)))
-	return { rightAscension, declination, predictedError }
+// Solves for the coordinate the mount must be commanded to so that it lands on the requested one.
+//
+// Subtracting the error predicted at the target is only a first-order inversion: it is exact when the
+// error field is constant near the target, which is precisely the case the model exists to contradict.
+// This solves `command + error(command) = target` by fixed-point iteration in the tangent plane, so the
+// error is always evaluated where the mount will actually be commanded.
+//
+// The iteration re-derives the observing context at every step, so terms that depend on hour angle,
+// altitude or pier side are consistent with the returned command rather than with the original target.
+export function correctPointingCoordinate(model: FittedPointingModel, input: Readonly<PointingModelInput>, options: Readonly<PointingCorrectionOptions> = {}): CorrectionResult {
+	const damping = options.damping ?? DEFAULT_CORRECTION_DAMPING
+	const maxIterations = Math.max(1, Math.trunc(options.maxIterations ?? DEFAULT_CORRECTION_MAX_ITERATIONS))
+	const tolerance = options.tolerance ?? DEFAULT_CORRECTION_TOLERANCE
+	const maximumCorrection = options.maximumCorrection ?? DEFAULT_MAXIMUM_CORRECTION
+	const target = eraS2c(input.rightAscension, input.declination)
+
+	let command = target
+	let predictedError = predictPointingModelError(model, input)
+	let residual = Number.POSITIVE_INFINITY
+	let converged = false
+	let clamped = false
+	let iterations = 0
+
+	while (true) {
+		// Where the mount would land if commanded to the current candidate, and how far that misses.
+		const reached = sphericalUnprojectTangentPlane(predictedError.dx, predictedError.dy, command)
+		const offset = sphericalProjectTangentPlane(target, reached)
+
+		// The candidate ended up more than 90° from the target: the model is not describing a mount.
+		if (offset === false) break
+
+		residual = Math.hypot(offset.x, offset.y)
+
+		if (residual <= tolerance) {
+			converged = true
+			break
+		}
+
+		if (iterations >= maxIterations) break
+
+		iterations++
+		command = sphericalUnprojectTangentPlane(damping * offset.x, damping * offset.y, command)
+		const [rightAscension, declination] = eraC2s(...command)
+		predictedError = predictPointingModelError(model, { ...input, rightAscension, declination })
+	}
+
+	const total = sphericalProjectTangentPlane(command, target)
+
+	if (total === false) {
+		// A command a quarter turn away from the target is never a correction. Refuse to move at all.
+		return { rightAscension: input.rightAscension, declination: input.declination, predictedError: predictPointingModelError(model, input), converged: false, iterations, residual, clamped: true }
+	}
+
+	// Gnomonic offsets are `tan(separation)` along the tangent direction, so the clamp compares angles.
+	const distance = Math.hypot(total.x, total.y)
+
+	if (Math.atan(distance) > maximumCorrection) {
+		const scale = Math.tan(maximumCorrection) / distance
+		command = sphericalUnprojectTangentPlane(total.x * scale, total.y * scale, target)
+		clamped = true
+		converged = false
+	}
+
+	const [rightAscension, declination] = eraC2s(...command)
+	return { rightAscension, declination, predictedError: clamped ? predictPointingModelError(model, { ...input, rightAscension, declination }) : predictedError, converged, iterations, residual, clamped }
 }
 
 // Stores samples, fits the configured model, and predicts/corrects future targets.
@@ -631,8 +725,9 @@ export class MountPointing {
 	}
 
 	// Corrects a requested coordinate using the fitted pointing model.
-	correctCoordinate(input: Readonly<PointingModelInput>): CorrectionResult {
-		return this.#fittedModel ? correctPointingCoordinate(this.#fittedModel, input) : { rightAscension: input.rightAscension, declination: input.declination, predictedError: unfittedPrediction(input) }
+	correctCoordinate(input: Readonly<PointingModelInput>, options: Readonly<PointingCorrectionOptions> = {}): CorrectionResult {
+		// Without a model the identity command is exactly right, so it converges trivially in zero steps.
+		return this.#fittedModel ? correctPointingCoordinate(this.#fittedModel, input, options) : { rightAscension: input.rightAscension, declination: input.declination, predictedError: unfittedPrediction(input), converged: true, iterations: 0, residual: 0, clamped: false }
 	}
 
 	// Exports the fitted model into a serializable structure.
