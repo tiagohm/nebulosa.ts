@@ -353,6 +353,37 @@ test('prediction support decays away from the training set and follows the spher
 	expect(wrapped.support).toBeCloseTo(inside.support, 12)
 })
 
+test('support is measured against the same pier side the query is filtered to', () => {
+	// Two pier sides halve the density of every neighbourhood a prediction is actually compared against.
+	// Measuring the training spacing over the whole set would leave the reference roughly a factor of two
+	// tighter than any query can achieve, so even a target sitting exactly on a training sample would score
+	// as having drifted out of the sampled region.
+	const samples = generateSyntheticPointingSamples({ count: 120, seed: 41, strategy: 'empirical', time: TIME, latitude: LATITUDE, longitude: LONGITUDE, featureConfiguration: FEATURE_CONFIGURATION, noiseStd: 0, includeBothPierSides: true })
+	const model = fitPointingModel(samples, { strategy: 'empirical', featureConfiguration: FEATURE_CONFIGURATION, validation: { minimumSamples: 12 } })
+	const supportSet = model.supportSet!
+	const count = supportSet.pierSides.length
+	const supports = new Float64Array(count)
+	let extrapolating = 0
+
+	// Query the accepted training directions themselves, read back from the support set: a target that is
+	// a training sample is the best-supported target that can exist for this model.
+	for (let i = 0; i < count; i++) {
+		const [rightAscension, declination] = eraC2s(supportSet.directions[i * 3], supportSet.directions[i * 3 + 1], supportSet.directions[i * 3 + 2])
+		const quality = predictPointingModelError(model, { rightAscension, declination, time: TIME, latitude: LATITUDE, longitude: LONGITUDE, pierSide: supportSet.pierSides[i] }).quality
+
+		supports[i] = quality.support
+		if (quality.extrapolating) extrapolating++
+	}
+
+	expect(model.diagnostics.perPierSideSampleCounts.EAST).toBeGreaterThan(0)
+	expect(model.diagnostics.perPierSideSampleCounts.WEST).toBeGreaterThan(0)
+	// Each query counts itself as its own nearest neighbour, so its k-th neighbour is never farther than
+	// the value that entered the median. At least half the training set must therefore score a full 1.
+	expect(medianOf(supports.sort())).toBe(1)
+	expect(supports[0]).toBeGreaterThan(0.5)
+	expect(extrapolating).toBe(0)
+})
+
 test('leave-one-out residuals expose the overfitting that the in-sample rms hides', () => {
 	const featureNames = buildEmpiricalPointingFeatureNames(FEATURE_CONFIGURATION)
 	const dx = coefficientsByName(featureNames, { bias: arcmin(1.6), sinHA: arcmin(-0.9) })

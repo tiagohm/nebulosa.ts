@@ -1831,10 +1831,17 @@ function buildPointingSupportSet(samples: readonly PreparedPointingSample[]): Po
 	// The decay length is the training set's own median k-th neighbour distance, so `support` reads the
 	// same way for a dense 200-point run and a sparse 20-point one: it measures distance in units of the
 	// spacing this particular model was built with.
+	//
+	// It is measured per pier side, exactly as a query will measure it. Measuring it over the whole set
+	// instead would compare a two-sided spacing against a one-sided query distance, and since filtering to
+	// one side roughly halves the density, every prediction would score as if it had drifted away from the
+	// sampled region — including one sitting on a training sample. A side-less query still measures against
+	// every sample and so scores optimistically, which is the right direction to err for a request that did
+	// not say which side of the mount it applies to.
 	const spacings = new Float64Array(samples.length)
 
 	for (let i = 0; i < samples.length; i++) {
-		spacings[i] = neighborDistances(directions, pierSides, samples[i].direction[0], samples[i].direction[1], samples[i].direction[2], undefined, i).kth
+		spacings[i] = neighborDistances(directions, pierSides, samples[i].direction[0], samples[i].direction[1], samples[i].direction[2], pierSides[i], i).kth
 	}
 
 	const scale = medianOf(spacings.sort())
