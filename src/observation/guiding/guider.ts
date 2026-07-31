@@ -69,6 +69,11 @@ export interface GuideCommand {
 	readonly dec: AxisPulse
 	// Detailed diagnostics for this frame.
 	readonly diagnostics: GuideDiagnostics
+	// Stars that passed the quality filter on this frame, in detection order. This is the subset the
+	// controller actually measured from, so it excludes low-SNR, saturated, elongated, and border
+	// stars present in `frame.stars`. Undefined only when the command was not produced by
+	// `Guider.processFrame`. The array is owned by the guider and must not be mutated.
+	readonly stars?: readonly GuideStar[]
 }
 
 // Detailed per-frame telemetry for monitoring and testing.
@@ -212,7 +217,8 @@ export interface GuiderConfig {
 
 // Output of star filtering: accepted stars plus rejection statistics.
 export interface FilteredStars {
-	// Stars that passed the filter.
+	// Stars that passed the filter. Freshly allocated by every filterGuideStars call and never
+	// mutated afterwards, so callers may retain it directly instead of copying it.
 	readonly accepted: GuideStar[]
 	// Count of rejected stars by reason.
 	readonly rejectedReasons: Record<string, number>
@@ -250,7 +256,7 @@ interface GuiderInternalState {
 	referenceY: number
 	measurementOriginX: number
 	measurementOriginY: number
-	referenceStars: GuideStar[]
+	referenceStars: readonly GuideStar[]
 	ditherOffsetX: number
 	ditherOffsetY: number
 	ditherActive: boolean
@@ -884,12 +890,12 @@ export class Guider {
 		if (this.state.state === 'idle') {
 			this.state.state = 'initializing'
 			this.state.lockSamples.length = 0
-			this.state.referenceStars.length = 0
+			this.state.referenceStars = []
 		}
 
 		if (this.state.state === 'initializing') {
-			this.#processInitializationFrame(frame)
-			return { state: this.state.state, ra: NO_PULSE, dec: NO_PULSE, diagnostics: this.state.lastDiagnostics }
+			const stars = this.#processInitializationFrame(frame)
+			return { state: this.state.state, ra: NO_PULSE, dec: NO_PULSE, diagnostics: this.state.lastDiagnostics, stars }
 		}
 
 		const filtered = filterGuideStars(frame, this.config.filter)
@@ -919,7 +925,7 @@ export class Guider {
 			this.state.consecutiveBadFrames++
 			if (this.state.consecutiveBadFrames >= this.config.lostStarFrameCount) this.state.state = 'lost'
 			this.#updateDiagnostics(frame, filtered, undefined, droppedFrame, true, notes)
-			return { state: this.state.state, ra: NO_PULSE, dec: NO_PULSE, diagnostics: this.state.lastDiagnostics }
+			return { state: this.state.state, ra: NO_PULSE, dec: NO_PULSE, diagnostics: this.state.lastDiagnostics, stars: filtered.accepted }
 		}
 
 		this.state.consecutiveBadFrames = 0
@@ -928,7 +934,7 @@ export class Guider {
 		this.state.lastGoodMeasurementY = measurement!.y
 		this.state.measurementOriginX = measurement!.x
 		this.state.measurementOriginY = measurement!.y
-		this.state.referenceStars = filtered.accepted.slice()
+		this.state.referenceStars = filtered.accepted
 		const targetX = this.state.referenceX + this.state.ditherOffsetX
 		const targetY = this.state.referenceY + this.state.ditherOffsetY
 		const dx = measurement!.x - targetX
@@ -957,7 +963,7 @@ export class Guider {
 			notes,
 		)
 
-		return { state: this.state.state, ra, dec, diagnostics: this.state.lastDiagnostics }
+		return { state: this.state.state, ra, dec, diagnostics: this.state.lastDiagnostics, stars: filtered.accepted }
 	}
 
 	// Returns a public snapshot of current guider runtime state.
@@ -987,13 +993,14 @@ export class Guider {
 		return selectGuideStar(frame.stars, frame.width, frame.height, undefined, { ...options, filter: { ...this.config.filter, ...options?.filter } })
 	}
 
-	// Consumes frame while the lock reference is being averaged.
-	#processInitializationFrame(frame: GuideFrame) {
+	// Consumes frame while the lock reference is being averaged. Returns the stars accepted by the
+	// quality filter on this frame so callers can surface them even before the lock is acquired.
+	#processInitializationFrame(frame: GuideFrame): readonly GuideStar[] {
 		const filtered = filterGuideStars(frame, this.config.filter)
 
 		if (filtered.accepted.length === 0) {
 			this.#updateDiagnostics(frame, filtered, undefined, false, true, ['init_waiting'])
-			return
+			return filtered.accepted
 		}
 
 		const previous = this.state.lockSamples.at(-1)
@@ -1001,10 +1008,10 @@ export class Guider {
 
 		if (preferred === undefined) {
 			this.#updateDiagnostics(frame, filtered, undefined, false, true, ['init_no_star'])
-			return
+			return filtered.accepted
 		}
 
-		this.state.lockSamples.push({ x: preferred.x, y: preferred.y, stars: filtered.accepted.slice() })
+		this.state.lockSamples.push({ x: preferred.x, y: preferred.y, stars: filtered.accepted })
 
 		const [targetX, targetY] = this.config.referencePosition ?? [preferred.x, preferred.y]
 		const dx = preferred.x - targetX
@@ -1031,7 +1038,7 @@ export class Guider {
 				['init_collecting'],
 			)
 
-			return
+			return filtered.accepted
 		}
 
 		let sumX = 0
@@ -1048,7 +1055,7 @@ export class Guider {
 		this.state.referenceY = this.config.referencePosition?.[1] ?? referenceY
 		this.state.measurementOriginX = preferred.x
 		this.state.measurementOriginY = preferred.y
-		this.state.referenceStars = this.state.lockSamples.at(-1)!.stars.slice()
+		this.state.referenceStars = this.state.lockSamples.at(-1)!.stars
 		this.state.state = 'guiding'
 		this.#updateDiagnostics(
 			frame,
@@ -1069,6 +1076,8 @@ export class Guider {
 			false,
 			['lock_acquired'],
 		)
+
+		return filtered.accepted
 	}
 
 	// Measures current guide position using configured mode with fallback.

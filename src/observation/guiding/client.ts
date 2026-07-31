@@ -59,6 +59,46 @@ const DEFAULT_LOCK_SHIFT_PARAMS: Readonly<PHD2LockShiftParams> = {
 	axes: 'X/Y',
 }
 
+// Snapshot of one processed guide exposure, published for UI rendering. It carries the decoded
+// image plus everything needed to draw the usual guiding overlay: detected stars, the star being
+// tracked, the guide target, and the search window. Distances and positions are image pixels with
+// the origin at the top-left corner of the full frame, matching the detector and PHD2 conventions.
+// The image and star array are the live instances used by the guider for this frame; treat them as
+// read-only and do not retain them across frames.
+export interface GuideFrameImage {
+	// Monotonic frame counter, identical to the Frame field of the GuideStep, StarLost, and
+	// LoopingExposures events emitted for the same exposure, so the UI can correlate both streams.
+	readonly frameId: number
+	// Frame timestamp in milliseconds since the Unix epoch, shared with the GuideFrame given to the
+	// calibrator/guider.
+	readonly timestamp: number
+	// PHD2 application state after this frame was processed, useful to color or label the view.
+	readonly state: PHD2AppState
+	// Decoded guide image. Pixel data lives in `image.raw`; dimensions and channel layout are in
+	// `image.metadata`.
+	readonly image: Image
+	// Every star detected in the frame, before the guider quality thresholds. The star nearest to the
+	// current search position, when there is one, is moved to index 0.
+	readonly stars: readonly GuideStar[]
+	// Subset of `stars` accepted by the quality filter of whichever state machine consumed this frame,
+	// the guider while guiding or the calibrator while calibrating, so the UI can dim the detections
+	// that were ignored. Undefined when the frame reached neither, that is while merely looping.
+	readonly acceptedStars?: readonly GuideStar[]
+	// Star this frame reported as the guide star, that is `stars[0]`, the same source of the StarMass,
+	// SNR, and HFD fields of the emitted event. Undefined when no star was detected. It is not
+	// necessarily present in `acceptedStars`: a rejected star still drives the reported photometry.
+	readonly star?: GuideStar
+	// Current guide target in pixels, that is where the guide star is being held. This is the lock
+	// position including the accumulated dither and lock-shift offsets. Undefined before a lock exists.
+	readonly lockPosition?: readonly [number, number]
+	// Center of the star-search window in pixels. Equal to `lockPosition` in the usual case, but it
+	// follows the measured centroid instead of the target when Sticky Lock Position or an exact lock
+	// position is active.
+	readonly searchPosition?: readonly [number, number]
+	// Side of the square star-search window in pixels, for drawing the selection box.
+	readonly searchRegion: number
+}
+
 // PHD2 dither patterns: independent per-axis uniform random, or an expanding lattice spiral.
 export type GuiderDitherMode = 'random' | 'spiral'
 
@@ -92,6 +132,10 @@ export interface GuiderClientConnectOptions {
 export interface GuiderClientHandler {
 	// Invoked for every emitted PHD2-shaped event.
 	readonly event?: (client: GuiderClient, event: PHD2Events) => void
+	// Invoked once per successfully decoded exposure, after the frame has been processed and after the
+	// PHD2 events for that frame were emitted. Not called when the BLOB fails to decode. Exceptions
+	// thrown here are caught and logged so a failing UI cannot break the exposure loop.
+	readonly frame?: (client: GuiderClient, frame: GuideFrameImage) => void
 }
 
 // GuiderClient adapts local INDI camera/guide-output devices to a PHD2-like API.
@@ -140,9 +184,14 @@ export class GuiderClient {
 	#lockShiftLimitReached = false
 	#focalLength = 0
 	#pixelSize = 0
+	// Stars accepted by the guider or calibrator quality filter on the frame currently being
+	// processed. Cleared at the start of every BLOB so a frame that never reaches either state
+	// machine — plain looping, decode failure — cannot publish the star list of an older frame.
+	#acceptedStars?: readonly GuideStar[]
 	readonly #searchRegion: number
 	readonly #lockShiftParams = { ...DEFAULT_LOCK_SHIFT_PARAMS }
 	readonly #eventHandler?: GuiderClientHandler['event']
+	readonly #frameHandler?: GuiderClientHandler['frame']
 
 	readonly #cameraHandler: DeviceHandler<Camera> = {
 		// Ignores manager-level add callbacks because connect binds one camera explicitly.
@@ -166,6 +215,7 @@ export class GuiderClient {
 		this.#stickyLockPosition = options?.stickyLockPosition === true
 		this.#ditherMode = options?.ditherMode ?? 'random'
 		this.#eventHandler = options?.handler?.event
+		this.#frameHandler = options?.handler?.frame
 	}
 
 	get camera() {
@@ -820,6 +870,7 @@ export class GuiderClient {
 		// previous frame is still being decoded/processed is dropped to avoid interleaved mutation.
 		if (this.#processingBlob) return
 		this.#processingBlob = true
+		this.#acceptedStars = undefined
 
 		try {
 			let image: Image | undefined
@@ -842,6 +893,12 @@ export class GuiderClient {
 			this.#frame = frame
 
 			const pulseDelay = this.#processFrame(frame)
+
+			// Published only for a decoded frame, and only after processing, so the UI sees the same
+			// state the events for this frame already reported. It runs before the pulse delay so the
+			// view is not held back by the settle wait.
+			if (image !== undefined) this.#emitFrameImage(frame, image)
+
 			await this.#queueNextExposure(pulseDelay)
 		} finally {
 			this.#processingBlob = false
@@ -866,6 +923,31 @@ export class GuiderClient {
 		}
 	}
 
+	// Publishes the decoded frame and its overlay geometry to the frame handler. Called after the
+	// frame has been processed so the lock target, the tracked star, and the app state already
+	// reflect this exposure instead of the previous one. Handler failures are contained here because
+	// this runs inside the exposure loop.
+	#emitFrameImage(frame: GuideFrame, image: Image) {
+		if (this.#frameHandler === undefined) return
+
+		try {
+			this.#frameHandler(this, {
+				frameId: frame.frameId ?? 0,
+				timestamp: frame.timestamp ?? Date.now(),
+				state: this.#appState,
+				image,
+				stars: frame.stars,
+				acceptedStars: this.#acceptedStars,
+				star: frame.stars[0],
+				lockPosition: this.#lockPosition,
+				searchPosition: this.#lockSearchPosition ?? this.#lockPosition,
+				searchRegion: this.#searchRegion,
+			})
+		} catch (e) {
+			console.error('guide frame handler failed:', e)
+		}
+	}
+
 	// Routes the current frame to calibration, guiding, or passive looping.
 	#processFrame(frame: GuideFrame) {
 		const appState = this.#appState === 'Paused' && !this.#fullPause ? this.#resumeState : this.#appState
@@ -880,6 +962,8 @@ export class GuiderClient {
 	// Advances the calibration state machine and stores the solved matrix when complete.
 	#processCalibrationFrame(frame: GuideFrame) {
 		const step = this.#calibrator.processFrame(frame)
+		// Retained for #emitFrameImage, which runs after this frame has been fully processed.
+		this.#acceptedStars = step.stars
 
 		this.#updateLockPositionFromCalibration(step.diagnostics)
 		this.#emitCalibratingEvent(step.diagnostics)
@@ -918,6 +1002,8 @@ export class GuiderClient {
 	// Runs the guide controller, applies settle tracking, and returns the max pulse delay.
 	#processGuidingFrame(frame: GuideFrame) {
 		const command = this.#guider.processFrame(frame)
+		// Retained for #emitFrameImage, which runs after this frame has been fully processed.
+		this.#acceptedStars = command.stars
 		const timestamp = frame.timestamp ?? Date.now()
 
 		this.#updateLockPositionFromGuider(command.diagnostics.targetX, command.diagnostics.targetY)
@@ -1223,6 +1309,7 @@ export class GuiderClient {
 		const guidingAssistantResult = preserveGuidingAssistantResult ? this.#guidingAssistantResult : undefined
 		this.#frame = undefined
 		this.#image = undefined
+		this.#acceptedStars = undefined
 		this.#frameId = 0
 		this.#lockPosition = undefined
 		this.#lockSearchPosition = undefined
