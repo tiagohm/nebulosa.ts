@@ -1,6 +1,5 @@
-import { angularDistance, type EquatorialCoordinate, equatorialToHorizontal } from '../../astronomy/coordinates/coordinate'
+import { angularDistance, type EquatorialCoordinate } from '../../astronomy/coordinates/coordinate'
 import { eraC2s, eraS2c } from '../../astronomy/coordinates/erfa/erfa'
-import { localSiderealTime } from '../../astronomy/observer/location'
 import type { Time } from '../../astronomy/time/time'
 import { AMIN2RAD, DEG2RAD, PI, PIOVERTWO, TAU } from '../../core/constants'
 import { medianOf, percentileOf, rmsOf, STANDARD_DEVIATION_SCALE } from '../../core/util'
@@ -10,12 +9,18 @@ import { sphericalProjectTangentPlane, sphericalUnprojectTangentPlane } from '..
 import { linearLeastSquares, predictLinearLeastSquares, type RobustRegressionMethod, robustLinearLeastSquares } from '../../math/numerical/least.squares'
 import type { NumberArray } from '../../math/numerical/math'
 import { type Angle, normalizePI } from '../../math/units/angle'
+// oxfmt-ignore
+import { buildEmpiricalPointingFeatureNames, evaluateSemiPhysicalBasis, extractEmpiricalPointingFeatures, extractPointingContext, normalizePierSide, type PointingContext, type PointingFeatureConfiguration, type PointingModelInput, type PointingOffset, predictSemiPhysicalOffset, type ResolvedPointingFeatureConfiguration, resolveFeatureConfiguration, SEMI_PHYSICAL_TERM_NAMES, semiPhysicalBasis, type SemiPhysicalTermName } from './pointing.basis'
 
 // Telescope mount pointing-model fitting and correction. Takes commanded vs plate-solved sky samples
 // and fits the systematic pointing error as a local tangent-plane offset (dx east, dy north, radians)
 // using three strategies: a linear empirical feature model, a semi-physical TPOINT-style parameter
-// model (IH/ID/MA/ME/NPAE/CONE/FLEXURE), or a hybrid (physical + empirical residual). Provides sample
+// model (CH/IH/ID/NP/MA/ME/TF), or a hybrid (physical + empirical residual). Provides sample
 // validation, robust (IRLS) fitting, sky-coverage diagnostics, and forward correction of new targets.
+// The basis functions themselves live in `pointing.basis`.
+
+// oxfmt-ignore
+export { buildEmpiricalPointingFeatureNames, empiricalFeatureRequirement, extractEmpiricalPointingFeatures, extractPointingContext, type PointingContext, type PointingContextRequirement, type PointingFeatureConfiguration, type PointingFeatureVector, type PointingModelInput, type PointingOffset, predictSemiPhysicalOffset, type ResolvedPointingFeatureConfiguration, resolveFeatureConfiguration, SEMI_PHYSICAL_TERM_NAMES, SEMI_PHYSICAL_TERM_REQUIREMENTS, type SemiPhysicalTermName } from './pointing.basis'
 
 // Fitting strategy: 'empirical' linear features only, 'semiPhysical' TPOINT-style parameters only,
 // 'hybrid' semi-physical model plus an empirical residual correction.
@@ -24,10 +29,6 @@ export type PointingModelStrategy = 'empirical' | 'semiPhysical' | 'hybrid'
 // How the angular pointing error is expressed: full gnomonic tangent-plane projection, or a linearized
 // small-angle (`dRA·cosDec`, `dDec`) approximation.
 export type PointingErrorRepresentation = 'vectorTangent' | 'smallAngle'
-
-// Names of the semi-physical (TPOINT-like) parameters: index/collimation, polar-axis misalignment in
-// azimuth/elevation, non-perpendicularity, optical-axis cone error, and tube flexure.
-export type SemiPhysicalParameterName = 'IH' | 'ID' | 'MA' | 'ME' | 'NPAE' | 'CONE' | 'FLEXURE'
 
 // One commanded-vs-solved calibration point used to fit the model.
 export interface PointingSample {
@@ -49,26 +50,6 @@ export interface PointingSample {
 	pierSide?: PierSide
 }
 
-// A coordinate plus optional context to evaluate or correct with a fitted model.
-export interface PointingModelInput extends EquatorialCoordinate {
-	// Time used to derive hour angle and altitude (radians via LST).
-	time?: Time
-	// Site latitude (radians).
-	latitude?: Angle
-	// Site longitude (radians, positive east).
-	longitude?: Angle
-	// Mount pier side.
-	pierSide?: PierSide
-}
-
-// A local tangent-plane offset in radians: dx toward east, dy toward north.
-export interface PointingOffset {
-	// East-positive tangent offset (radians).
-	readonly dx: number
-	// North-positive tangent offset (radians).
-	readonly dy: number
-}
-
 // A computed pointing error with its great-circle separation and the representation actually used.
 export interface PointingError extends PointingOffset {
 	// Great-circle separation between target and solved positions (radians).
@@ -83,27 +64,6 @@ export interface PointingError extends PointingOffset {
 		readonly vectorDy: number
 	}
 }
-
-// Toggles for which empirical basis terms enter the design matrix.
-export interface PointingFeatureConfiguration {
-	// Include a constant bias term.
-	readonly includeBias?: boolean
-	// Include sin/cos of hour angle.
-	readonly includeHourAngleTerms?: boolean
-	// Include sin/cos of declination.
-	readonly includeDeclinationTerms?: boolean
-	// Include sin/cos of altitude.
-	readonly includeAltitudeTerms?: boolean
-	// Include hour-angle×declination and altitude×declination cross terms.
-	readonly includeCrossTerms?: boolean
-	// Include pier-side terms (and pier-side×angle cross terms when cross terms are enabled).
-	readonly includePierSideTerms?: boolean
-	// Include normalized-angle polynomial terms.
-	readonly includePolynomialTerms?: boolean
-}
-
-// Feature configuration with all flags resolved to concrete booleans.
-export type ResolvedPointingFeatureConfiguration = Required<PointingFeatureConfiguration>
 
 // Thresholds controlling which samples are accepted before fitting.
 export interface PointingValidationOptions {
@@ -143,6 +103,8 @@ export interface PointingFitOptions {
 	errorRepresentation?: PointingErrorRepresentation
 	// Tikhonov ridge regularization applied to the normal equations.
 	ridge?: number
+	// Semi-physical terms to fit (default: every term in `SEMI_PHYSICAL_TERM_NAMES`).
+	semiPhysicalTerms?: readonly SemiPhysicalTermName[]
 	// Empirical feature toggles.
 	featureConfiguration?: PointingFeatureConfiguration
 	// Sample validation thresholds.
@@ -245,54 +207,6 @@ export interface CorrectionResult extends Readonly<EquatorialCoordinate> {
 	readonly predictedError: PredictedPointingError
 }
 
-// A computed empirical feature row plus the context it was derived from.
-export interface PointingFeatureVector {
-	// Ordered feature names matching `values`.
-	readonly names: readonly string[]
-	// Feature values aligned with `names`.
-	readonly values: Readonly<Float64Array>
-	// Geometric context used to build the features.
-	readonly context: PointingContext
-}
-
-// An orthonormal local tangent-plane basis at a sky position.
-export interface PointingTangentBasis {
-	// Unit position vector at the tangent point.
-	readonly origin: Vec3
-	// East-pointing unit basis vector.
-	readonly east: Vec3
-	// North-pointing unit basis vector.
-	readonly north: Vec3
-}
-
-// A tangent-plane projection result that also exposes the gnomonic denominator (for singularity checks).
-export interface TangentPlaneProjection extends PointingOffset {
-	// Gnomonic projection denominator; near zero indicates a degenerate projection.
-	readonly denominator: number
-}
-
-// Geometric state derived from a coordinate and observing context, shared by all model components.
-export interface PointingContext extends Readonly<EquatorialCoordinate> {
-	// Observation time, when available.
-	readonly time?: Time
-	// Normalized pier side ('EAST' | 'WEST' | 'NEITHER').
-	readonly pierSide: PierSide
-	// Numeric pier-side encoding: +1 east, -1 west, 0 neither.
-	readonly pierSideValue: number
-	// Local apparent sidereal time (radians), when derivable.
-	readonly lst?: Angle
-	// Hour angle (radians, normalized to -PI..PI), when derivable.
-	readonly hourAngle?: Angle
-	// Altitude above the horizon (radians), when derivable.
-	readonly altitude?: Angle
-	// Azimuth (radians), when derivable.
-	readonly azimuth?: Angle
-	// Site latitude (radians).
-	readonly latitude?: Angle
-	// Site longitude (radians, positive east).
-	readonly longitude?: Angle
-}
-
 // Fitted empirical model: separate dx/dy linear coefficients over the feature basis.
 export interface EmpiricalPointingModel {
 	// Feature names matching the coefficient order.
@@ -317,9 +231,9 @@ export interface EmpiricalPointingModel {
 
 // Fitted semi-physical model: shared TPOINT-style parameters driving both dx and dy.
 export interface SemiPhysicalPointingModel {
-	// Parameter names (IH/ID/MA/ME/NPAE/CONE/FLEXURE).
-	readonly parameterNames: readonly string[]
-	// Fitted parameter values aligned with `parameterNames`.
+	// TPOINT-style terms fitted, in design-matrix column order.
+	readonly terms: readonly SemiPhysicalTermName[]
+	// Fitted parameter values in radians, aligned with `terms`.
 	readonly parameters: Readonly<NumberArray>
 	// Condition number of the stacked dx/dy normal equations.
 	readonly conditionNumber: number
@@ -408,6 +322,7 @@ interface ResolvedPointingFitOptions {
 	readonly strategy: PointingModelStrategy
 	readonly errorRepresentation: PointingErrorRepresentation
 	readonly ridge: number
+	readonly semiPhysicalTerms: readonly SemiPhysicalTermName[]
 	readonly featureConfiguration: ResolvedPointingFeatureConfiguration
 	readonly validation: ResolvedPointingValidationOptions
 	readonly robust: ResolvedPointingRobustFitConfiguration
@@ -417,16 +332,6 @@ interface ResolvedPointingFitOptions {
 const POINTING_MODEL_VERSION = 1
 // Default Tikhonov ridge applied to the normal equations for numerical stability.
 const DEFAULT_RIDGE = 1e-6
-// Default empirical feature set: all geometric terms on, polynomial terms off.
-const DEFAULT_FEATURE_CONFIGURATION: ResolvedPointingFeatureConfiguration = {
-	includeBias: true,
-	includeHourAngleTerms: true,
-	includeDeclinationTerms: true,
-	includeAltitudeTerms: true,
-	includeCrossTerms: true,
-	includePierSideTerms: true,
-	includePolynomialTerms: false,
-}
 // Default sample-validation thresholds: 10° minimum altitude, 5° max separation, 5′ duplicate radius,
 // and a recommended minimum of 12 samples.
 const DEFAULT_VALIDATION_OPTIONS: ResolvedPointingValidationOptions = {
@@ -449,118 +354,8 @@ const DEFAULT_SIGN_CONVENTION: PointingSignConvention = {
 	correctionDirection: 'subtract-predicted-local-error',
 }
 
-// Ordered semi-physical parameter names; the basis builder relies on these fixed indices.
-export const SEMI_PHYSICAL_PARAMETER_NAMES = ['IH', 'ID', 'MA', 'ME', 'NPAE', 'CONE', 'FLEXURE'] as const
-
 // Number of HA×Dec coverage bins (6 hour-angle × 4 declination) used for the sky-coverage ratio.
 const TOTAL_SKY_BINS = 24
-
-// Extracts the geometric context needed by the empirical and semi-physical models.
-export function extractPointingContext(input: Readonly<PointingModelInput>): PointingContext {
-	const pierSide = normalizePierSide(input.pierSide)
-	const latitude = isFiniteAngle(input.latitude) ? input.latitude : undefined
-	const longitude = isFiniteAngle(input.longitude) ? input.longitude : undefined
-
-	let lst: Angle | undefined
-	let hourAngle: Angle | undefined
-	let azimuth: Angle | undefined
-	let altitude: Angle | undefined
-
-	if (input.time && longitude !== undefined) {
-		lst = localSiderealTime(input.time, longitude, true)
-		hourAngle = normalizePI(lst - input.rightAscension)
-	}
-
-	if (latitude !== undefined && lst !== undefined) {
-		;[azimuth, altitude] = equatorialToHorizontal(input.rightAscension, input.declination, latitude, lst)
-	}
-
-	return { rightAscension: input.rightAscension, declination: input.declination, time: input.time, pierSide, pierSideValue: pierSide === 'EAST' ? 1 : pierSide === 'WEST' ? -1 : 0, lst, hourAngle, azimuth, altitude, latitude, longitude }
-}
-
-// Builds the deterministic empirical feature-name list for the configured model.
-export function buildEmpiricalPointingFeatureNames(configuration: PointingFeatureConfiguration = {}): readonly string[] {
-	const resolved = resolveFeatureConfiguration(configuration)
-	const names: string[] = []
-
-	if (resolved.includeBias) names.push('bias')
-	if (resolved.includeHourAngleTerms) names.push('sinHA', 'cosHA')
-	if (resolved.includeDeclinationTerms) names.push('sinDec', 'cosDec')
-	if (resolved.includeAltitudeTerms) names.push('sinAlt', 'cosAlt')
-	if (resolved.includePierSideTerms) names.push('pierSide')
-	if (resolved.includeCrossTerms) {
-		names.push('sinHA*sinDec', 'sinHA*cosDec', 'cosHA*sinDec', 'cosHA*cosDec')
-		names.push('sinAlt*sinDec', 'cosAlt*cosDec')
-		if (resolved.includePierSideTerms) names.push('pierSide*sinHA', 'pierSide*cosHA', 'pierSide*sinDec', 'pierSide*cosDec')
-	}
-	if (resolved.includePolynomialTerms) names.push('normalizedHA', 'normalizedDec', 'normalizedHA*normalizedDec')
-
-	return names
-}
-
-// Extracts the configured empirical feature vector from the current sky position and mount state.
-export function extractEmpiricalPointingFeatures(input: Readonly<PointingModelInput>, configuration: PointingFeatureConfiguration = {}): PointingFeatureVector {
-	const resolved = resolveFeatureConfiguration(configuration)
-	const context = extractPointingContext(input)
-	const names = buildEmpiricalPointingFeatureNames(resolved)
-	const values = new Float64Array(names.length)
-	let index = 0
-
-	const hourAngle = context.hourAngle ?? 0
-	const altitude = context.altitude ?? 0
-	const normalizedHourAngle = context.hourAngle === undefined ? 0 : hourAngle / PI
-	const normalizedDeclination = input.declination / PIOVERTWO
-	const sinHa = context.hourAngle === undefined ? 0 : Math.sin(hourAngle)
-	const cosHa = context.hourAngle === undefined ? 0 : Math.cos(hourAngle)
-	const sinDec = Math.sin(input.declination)
-	const cosDec = Math.cos(input.declination)
-	const sinAlt = context.altitude === undefined ? 0 : Math.sin(altitude)
-	const cosAlt = context.altitude === undefined ? 0 : Math.cos(altitude)
-	const pierSide = context.pierSideValue
-
-	if (resolved.includeBias) values[index++] = 1
-
-	if (resolved.includeHourAngleTerms) {
-		values[index++] = sinHa
-		values[index++] = cosHa
-	}
-
-	if (resolved.includeDeclinationTerms) {
-		values[index++] = sinDec
-		values[index++] = cosDec
-	}
-
-	if (resolved.includeAltitudeTerms) {
-		values[index++] = sinAlt
-		values[index++] = cosAlt
-	}
-
-	if (resolved.includePierSideTerms) values[index++] = pierSide
-
-	if (resolved.includeCrossTerms) {
-		values[index++] = sinHa * sinDec
-		values[index++] = sinHa * cosDec
-		values[index++] = cosHa * sinDec
-		values[index++] = cosHa * cosDec
-		values[index++] = sinAlt * sinDec
-		values[index++] = cosAlt * cosDec
-
-		if (resolved.includePierSideTerms) {
-			values[index++] = pierSide * sinHa
-			values[index++] = pierSide * cosHa
-			values[index++] = pierSide * sinDec
-			values[index++] = pierSide * cosDec
-		}
-	}
-
-	if (resolved.includePolynomialTerms) {
-		values[index++] = normalizedHourAngle
-		values[index++] = normalizedDeclination
-		values[index++] = normalizedHourAngle * normalizedDeclination
-	}
-
-	return { names, values, context }
-}
 
 // Computes the local pointing error using the selected angular representation.
 export function computePointingError(targetRa: Angle, targetDec: Angle, solvedRa: Angle, solvedDec: Angle, representation: PointingErrorRepresentation = 'vectorTangent'): PointingError {
@@ -700,29 +495,6 @@ export class MountPointing {
 	}
 }
 
-// Normalizes the optional pier-side input.
-function normalizePierSide(pierSide?: PierSide) {
-	return pierSide === 'EAST' || pierSide === 'WEST' ? pierSide : 'NEITHER'
-}
-
-// Checks whether the provided value is a finite angular value.
-function isFiniteAngle(value: number | undefined) {
-	return value !== undefined && Number.isFinite(value)
-}
-
-// Resolves the configured empirical feature flags.
-export function resolveFeatureConfiguration(configuration: PointingFeatureConfiguration = {}): ResolvedPointingFeatureConfiguration {
-	return {
-		includeBias: configuration.includeBias ?? DEFAULT_FEATURE_CONFIGURATION.includeBias,
-		includeHourAngleTerms: configuration.includeHourAngleTerms ?? DEFAULT_FEATURE_CONFIGURATION.includeHourAngleTerms,
-		includeDeclinationTerms: configuration.includeDeclinationTerms ?? DEFAULT_FEATURE_CONFIGURATION.includeDeclinationTerms,
-		includeAltitudeTerms: configuration.includeAltitudeTerms ?? DEFAULT_FEATURE_CONFIGURATION.includeAltitudeTerms,
-		includeCrossTerms: configuration.includeCrossTerms ?? DEFAULT_FEATURE_CONFIGURATION.includeCrossTerms,
-		includePierSideTerms: configuration.includePierSideTerms ?? DEFAULT_FEATURE_CONFIGURATION.includePierSideTerms,
-		includePolynomialTerms: configuration.includePolynomialTerms ?? DEFAULT_FEATURE_CONFIGURATION.includePolynomialTerms,
-	}
-}
-
 // Resolves the configured sample validation thresholds.
 function resolveValidationOptions(validation: PointingValidationOptions = {}): ResolvedPointingValidationOptions {
 	return {
@@ -749,6 +521,7 @@ function resolveFitOptions(options: Readonly<PointingFitOptions> = {}): Resolved
 		strategy: options.strategy ?? 'hybrid',
 		errorRepresentation: options.errorRepresentation ?? 'vectorTangent',
 		ridge: options.ridge ?? DEFAULT_RIDGE,
+		semiPhysicalTerms: options.semiPhysicalTerms?.length ? [...options.semiPhysicalTerms] : SEMI_PHYSICAL_TERM_NAMES,
 		featureConfiguration: resolveFeatureConfiguration(options.featureConfiguration),
 		validation: resolveValidationOptions(options.validation),
 		robust: resolveRobustConfiguration(options.robust),
@@ -835,7 +608,7 @@ function fitEmpiricalResidualModel(samples: readonly PreparedPointingSample[], o
 	const residualTargets = new Array<PointingOffset>(samples.length)
 
 	for (let i = 0; i < samples.length; i++) {
-		const predicted = predictSemiPhysicalOffset(physical.parameters, samples[i].context)
+		const predicted = predictSemiPhysicalOffset(physical.parameters, physical.terms, samples[i].context)
 		residualTargets[i] = { dx: samples[i].error.dx - predicted.dx, dy: samples[i].error.dy - predicted.dy }
 	}
 
@@ -874,22 +647,25 @@ function fitEmpiricalModel(samples: readonly PreparedPointingSample[], options: 
 
 // Fits the shared-parameter semi-physical model.
 function fitSemiPhysicalModel(samples: readonly PreparedPointingSample[], options: ResolvedPointingFitOptions): SemiPhysicalPointingModel {
-	const parameterCount = SEMI_PHYSICAL_PARAMETER_NAMES.length
+	const terms = options.semiPhysicalTerms
+	const parameterCount = terms.length
 	const designRows = new Array<Readonly<Float64Array>>(samples.length * 2)
 	const target = new Float64Array(samples.length * 2)
 	let weights = new Float64Array(samples.length).fill(1)
 
 	for (let i = 0; i < samples.length; i++) {
-		const basis = semiPhysicalBasis(samples[i].context)
-		designRows[i * 2] = basis.dx
-		designRows[i * 2 + 1] = basis.dy
+		const dx = new Float64Array(parameterCount)
+		const dy = new Float64Array(parameterCount)
+		semiPhysicalBasis(samples[i].context, terms, dx, dy)
+		designRows[i * 2] = dx
+		designRows[i * 2 + 1] = dy
 		target[i * 2] = samples[i].error.dx
 		target[i * 2 + 1] = samples[i].error.dy
 	}
 
 	if (samples.length === 0) {
 		return {
-			parameterNames: SEMI_PHYSICAL_PARAMETER_NAMES,
+			terms,
 			parameters: new Array<number>(parameterCount).fill(0),
 			conditionNumber: Number.POSITIVE_INFINITY,
 			rankDeficient: true,
@@ -917,7 +693,7 @@ function fitSemiPhysicalModel(samples: readonly PreparedPointingSample[], option
 
 		for (let i = 0; i < samples.length; i++) {
 			// Reuse the design rows built once above instead of recomputing the basis (trig + allocations) each iteration.
-			const predicted = evaluateSemiPhysicalBasis(parameters, { dx: designRows[i * 2], dy: designRows[i * 2 + 1] })
+			const predicted = evaluateSemiPhysicalBasis(parameters, designRows[i * 2], designRows[i * 2 + 1])
 			residuals[i] = Math.hypot(samples[i].error.dx - predicted.dx, samples[i].error.dy - predicted.dy)
 		}
 
@@ -932,66 +708,13 @@ function fitSemiPhysicalModel(samples: readonly PreparedPointingSample[], option
 	}
 
 	return {
-		parameterNames: SEMI_PHYSICAL_PARAMETER_NAMES,
+		terms,
 		parameters: Array.from(parameters),
 		conditionNumber,
 		rankDeficient,
 		ridge: options.ridge,
 		robustMethod: options.robust.method,
 	}
-}
-
-// Predicts the semi-physical offset from the fitted shared parameters.
-export function predictSemiPhysicalOffset(parameters: Readonly<NumberArray>, context: PointingContext): PointingOffset {
-	return evaluateSemiPhysicalBasis(parameters, semiPhysicalBasis(context))
-}
-
-// Builds the semi-physical basis functions for one sky position and mount state.
-function semiPhysicalBasis(context: PointingContext): Readonly<{ dx: Float64Array; dy: Float64Array }> {
-	const dx = new Float64Array(SEMI_PHYSICAL_PARAMETER_NAMES.length)
-	const dy = new Float64Array(SEMI_PHYSICAL_PARAMETER_NAMES.length)
-	const sinDec = Math.sin(context.declination)
-	const cosDec = Math.cos(context.declination)
-	const hourAngle = context.hourAngle ?? 0
-	const sinHa = context.hourAngle === undefined ? 0 : Math.sin(hourAngle)
-	const cosHa = context.hourAngle === undefined ? 0 : Math.cos(hourAngle)
-	const latitude = context.latitude
-	const sinLat = latitude === undefined ? 0 : Math.sin(latitude)
-	const cosLat = latitude === undefined ? 0 : Math.cos(latitude)
-	const altitude = context.altitude
-
-	dx[0] = 1
-	dy[1] = 1
-	dx[4] = sinDec
-	dx[5] = cosHa * cosDec
-	dy[5] = sinHa
-
-	if (latitude !== undefined && context.hourAngle !== undefined) {
-		// MA and ME reuse the small-angle polar-axis misalignment pattern in tangent coordinates.
-		dx[2] = -sinLat * cosDec + cosLat * sinDec * cosHa
-		dy[2] = cosLat * sinHa
-		dx[3] = sinDec * sinHa
-		dy[3] = -cosHa
-	}
-
-	if (altitude !== undefined) {
-		dy[6] = -Math.cos(altitude)
-	}
-
-	return { dx, dy }
-}
-
-// Evaluates one semi-physical basis instance.
-function evaluateSemiPhysicalBasis(parameters: Readonly<NumberArray>, basis: Readonly<{ dx: Readonly<NumberArray>; dy: Readonly<NumberArray> }>): PointingOffset {
-	let dx = 0
-	let dy = 0
-
-	for (let i = 0; i < parameters.length; i++) {
-		dx += parameters[i] * basis.dx[i]
-		dy += parameters[i] * basis.dy[i]
-	}
-
-	return { dx, dy }
 }
 
 // Duplicates per-sample weights into the stacked dx/dy fit rows.
@@ -1069,7 +792,7 @@ function predictEmpiricalOffset(model: EmpiricalPointingModel, input: Readonly<P
 // Predicts each model component individually for diagnostics and correction metadata.
 function predictModelComponents(model: FittedPointingModel, context: PointingContext) {
 	const input: Readonly<PointingModelInput> = { rightAscension: context.rightAscension, declination: context.declination, time: context.time, latitude: context.latitude, longitude: context.longitude, pierSide: context.pierSide }
-	const physical = model.physical ? predictSemiPhysicalOffset(model.physical.parameters, context) : undefined
+	const physical = model.physical ? predictSemiPhysicalOffset(model.physical.parameters, model.physical.terms, context) : undefined
 	const empirical = model.strategy === 'empirical' && model.empirical ? predictEmpiricalOffset(model.empirical, input, model.featureConfiguration) : undefined
 	const residual = model.strategy === 'hybrid' && model.residual ? predictEmpiricalOffset(model.residual, input, model.featureConfiguration) : undefined
 	return { physical, empirical, residual }

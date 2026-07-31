@@ -2,10 +2,11 @@ import { expect, test } from 'bun:test'
 import { equatorialToHorizontal } from '../../../src/astronomy/coordinates/coordinate'
 import { localSiderealTime } from '../../../src/astronomy/observer/location'
 import { ASEC2RAD, PI } from '../../../src/core/constants'
+import { type Vec3, vecDot, vecNormalizeMut, vecRotateByRodrigues } from '../../../src/math/linear-algebra/vec3'
 import { clamp, lerp, type NumberArray } from '../../../src/math/numerical/math'
 import { type Angle, arcmin, deg, hour, normalizeAngle } from '../../../src/math/units/angle'
 // oxfmt-ignore
-import { buildEmpiricalPointingFeatureNames, computePointingError, correctPointingCoordinate, extractEmpiricalPointingFeatures, extractPointingContext, type FittedPointingModel, fitPointingModel, MountPointing, type PointingFeatureConfiguration, type PointingModelInput, type PointingModelStrategy, type PointingOffset, type PointingSample, predictPointingModelError, predictSemiPhysicalOffset, type ResolvedPointingFeatureConfiguration, resolveFeatureConfiguration, SEMI_PHYSICAL_PARAMETER_NAMES, type SemiPhysicalParameterName, } from '../../../src/observation/mount/pointing'
+import { buildEmpiricalPointingFeatureNames, computePointingError, correctPointingCoordinate, extractEmpiricalPointingFeatures, extractPointingContext, type FittedPointingModel, fitPointingModel, MountPointing, type PointingFeatureConfiguration, type PointingModelInput, type PointingModelStrategy, type PointingOffset, type PointingSample, predictPointingModelError, predictSemiPhysicalOffset, type ResolvedPointingFeatureConfiguration, resolveFeatureConfiguration, SEMI_PHYSICAL_TERM_NAMES, type SemiPhysicalTermName, } from '../../../src/observation/mount/pointing'
 import { eraC2s, eraS2c } from '../../../src/astronomy/coordinates/erfa/erfa'
 import { type Time, timeYMDHMS } from '../../../src/astronomy/time/time'
 import { medianOf } from '../../../src/core/util'
@@ -25,7 +26,7 @@ interface SyntheticPointingOptions {
 	readonly featureConfiguration?: PointingFeatureConfiguration
 	readonly empiricalCoefficientsDx?: Readonly<NumberArray>
 	readonly empiricalCoefficientsDy?: Readonly<NumberArray>
-	readonly semiPhysicalParameters?: Partial<Record<SemiPhysicalParameterName, number>>
+	readonly semiPhysicalParameters?: Partial<Record<SemiPhysicalTermName, number>>
 	readonly noiseStd?: Angle
 	readonly outlierFraction?: number
 	readonly outlierStd?: Angle
@@ -159,15 +160,37 @@ test('robust empirical fit outperforms plain least squares on outlier-contaminat
 })
 
 test('semi-physical fit recovers shared parameters', () => {
-	const parameters = { IH: arcmin(1.5), ID: arcmin(-1.2), MA: arcmin(1.1), ME: arcmin(-0.9), NPAE: arcmin(0.7), CONE: arcmin(0.4), FLEXURE: arcmin(1.3) } as const
+	const parameters = { CH: arcmin(0.9), IH: arcmin(1.5), ID: arcmin(-1.2), NP: arcmin(0.7), MA: arcmin(1.1), ME: arcmin(-0.9), TF: arcmin(1.3) } as const
 	const samples = generateSyntheticPointingSamples({ count: 160, seed: 41, strategy: 'semiPhysical', time: TIME, latitude: LATITUDE, longitude: LONGITUDE, semiPhysicalParameters: parameters, noiseStd: 0, includeBothPierSides: true })
 	const model = fitPointingModel(samples, { strategy: 'semiPhysical', robust: { method: 'none' } })
 
-	expect(model.physical?.parameters[0]).toBeCloseTo(parameters.IH, 5)
-	expect(model.physical?.parameters[1]).toBeCloseTo(parameters.ID, 5)
-	expect(model.physical?.parameters[2]).toBeCloseTo(parameters.MA, 5)
-	expect(model.physical?.parameters[3]).toBeCloseTo(parameters.ME, 5)
-	expect(model.physical?.parameters[6]).toBeCloseTo(parameters.FLEXURE, 5)
+	for (let i = 0; i < SEMI_PHYSICAL_TERM_NAMES.length; i++) {
+		expect(model.physical?.parameters[i]).toBeCloseTo(parameters[SEMI_PHYSICAL_TERM_NAMES[i]], 5)
+	}
+})
+
+// The semi-physical basis must reproduce a mount whose errors were built by composing real finite
+// rotations, not by evaluating the basis itself. Amplitudes stay near 30″ so the first-order basis
+// is expected to match the exact geometry to well under 0.1″.
+test('semi-physical fit recovers mechanical misalignments from an independent geometric simulator', () => {
+	const terms: Readonly<Record<SemiPhysicalTermName, Angle>> = {
+		CH: 34 * ASEC2RAD,
+		IH: -47 * ASEC2RAD,
+		ID: 29 * ASEC2RAD,
+		NP: -18 * ASEC2RAD,
+		MA: 41 * ASEC2RAD,
+		ME: -25 * ASEC2RAD,
+		TF: 33 * ASEC2RAD,
+	}
+	const samples = generateMechanicalPointingSamples(terms, { count: 240, seed: 77, time: TIME, latitude: LATITUDE, longitude: LONGITUDE })
+	const model = fitPointingModel(samples, { strategy: 'semiPhysical', robust: { method: 'none' }, ridge: 1e-12, validation: { minimumAltitude: -PI / 2 } })
+
+	for (let i = 0; i < SEMI_PHYSICAL_TERM_NAMES.length; i++) {
+		const term = SEMI_PHYSICAL_TERM_NAMES[i]
+		expect((model.physical!.parameters[i] - terms[term]) / ASEC2RAD).toBeCloseTo(0, 1)
+	}
+
+	expect(model.diagnostics.angularRms / ASEC2RAD).toBeLessThan(0.1)
 })
 
 test('hybrid fit improves on physical-only and works across both pier sides', () => {
@@ -285,7 +308,7 @@ export function generateSyntheticPointingSamples(options: SyntheticPointingOptio
 		const pierSide = options.includeBothPierSides ? (i % 2 === 0 ? 'EAST' : 'WEST') : 'NEITHER'
 		const input: PointingModelInput = { rightAscension: targetRightAscension, declination: targetDeclination, time, latitude, longitude, pierSide }
 		const context = extractPointingContext(input)
-		const physical = options.strategy === 'empirical' ? { dx: 0, dy: 0 } : predictSemiPhysicalOffset(physicalParameters, context)
+		const physical = options.strategy === 'empirical' ? { dx: 0, dy: 0 } : predictSemiPhysicalOffset(physicalParameters, SEMI_PHYSICAL_TERM_NAMES, context)
 		const empirical = options.strategy === 'semiPhysical' ? { dx: 0, dy: 0 } : predictSyntheticEmpiricalOffset(coefficientsDx, coefficientsDy, featureConfiguration, input)
 		let dx = physical.dx + empirical.dx
 		let dy = physical.dy + empirical.dy
@@ -300,6 +323,65 @@ export function generateSyntheticPointingSamples(options: SyntheticPointingOptio
 
 		const [solvedRightAscension, solvedDeclination] = eraC2s(...sphericalUnprojectTangentPlane(dx, dy, eraS2c(targetRightAscension, targetDeclination)))
 		samples[i] = { targetRightAscension, targetDeclination, solvedRightAscension, solvedDeclination, time, latitude, longitude, pierSide }
+	}
+
+	return samples
+}
+
+// Site and sampling configuration for the independent mechanical simulator.
+interface MechanicalPointingOptions {
+	readonly count: number
+	readonly seed: number
+	readonly time: Time
+	readonly latitude: Angle
+	readonly longitude: Angle
+}
+
+// Simulates the sky direction actually reached by a misaligned equatorial mount commanded to
+// `(hourAngle, declination)`, by composing exact finite rotations rather than evaluating the fitted
+// basis. `terms` are the TPOINT-convention amplitudes in radians and `latitude` is the site geodetic
+// latitude in radians. Works in the mount frame with `x` at the meridian on the equator, `y` at the
+// east point on the equator, and `z` along the ideal polar axis. Returns a unit vector in that frame.
+function simulateMechanicalDirection(hourAngle: Angle, declination: Angle, latitude: Angle, terms: Readonly<Record<SemiPhysicalTermName, Angle>>) {
+	// Collimation tilts the optical axis off the declination axis by a constant cross-axis angle.
+	let v = vecRotateByRodrigues([1, 0, 0], [0, 0, 1], -terms.CH)
+	// Declination axis rotation, offset by the declination index error.
+	v = vecRotateByRodrigues(v, [0, 1, 0], -(declination + terms.ID))
+	// Declination axis not perpendicular to the polar axis.
+	v = vecRotateByRodrigues(v, [1, 0, 0], terms.NP)
+	// Hour angle axis rotation, offset by the hour-angle index error.
+	v = vecRotateByRodrigues(v, [0, 0, 1], -(hourAngle + terms.IH))
+
+	// Polar axis misalignment as a single small rotation about `-(MA x + ME y)`.
+	const misalignment = Math.hypot(terms.MA, terms.ME)
+
+	if (misalignment > 0) {
+		v = vecRotateByRodrigues(v, [-terms.MA, -terms.ME, 0], misalignment)
+	}
+
+	// Tube flexure droops the optical axis away from the zenith by `TF * cos(altitude)`.
+	const zenith: Vec3 = [Math.cos(latitude), 0, Math.sin(latitude)]
+	const sinAltitude = vecDot(zenith, v)
+
+	return vecNormalizeMut([v[0] - terms.TF * (zenith[0] - sinAltitude * v[0]), v[1] - terms.TF * (zenith[1] - sinAltitude * v[1]), v[2] - terms.TF * (zenith[2] - sinAltitude * v[2])])
+}
+
+// Generates pointing samples whose errors come from `simulateMechanicalDirection`, so the fit is
+// validated against real composed geometry instead of against the model's own basis.
+function generateMechanicalPointingSamples(terms: Readonly<Record<SemiPhysicalTermName, Angle>>, options: MechanicalPointingOptions): readonly PointingSample[] {
+	const random = mulberry32(options.seed >>> 0)
+	const lst = localSiderealTime(options.time, options.longitude, true)
+	const samples = new Array<PointingSample>(options.count)
+
+	for (let i = 0; i < options.count; i++) {
+		const hourAngle = lerp(-PI * 0.7, PI * 0.7, random())
+		const targetDeclination = lerp(deg(-70), deg(70), random())
+		const targetRightAscension = normalizeAngle(lst - hourAngle)
+		const v = simulateMechanicalDirection(hourAngle, targetDeclination, options.latitude, terms)
+		const solvedDeclination = Math.asin(clamp(v[2], -1, 1))
+		const solvedRightAscension = normalizeAngle(lst - Math.atan2(-v[1], v[0]))
+
+		samples[i] = { targetRightAscension, targetDeclination, solvedRightAscension, solvedDeclination, time: options.time, latitude: options.latitude, longitude: options.longitude, pierSide: 'NEITHER' }
 	}
 
 	return samples
@@ -324,17 +406,25 @@ function normalizeSyntheticCoefficients(length: number, coefficients?: Readonly<
 	return output
 }
 
-// Normalizes the configured physical-parameter dictionary.
-function synthesizePhysicalParameters(parameters?: Partial<Record<SemiPhysicalParameterName, number>>) {
-	const values = new Float64Array(SEMI_PHYSICAL_PARAMETER_NAMES.length)
+// Default synthetic value of each TPOINT term (radians), used when the caller omits it.
+const DEFAULT_SYNTHETIC_TERMS: Readonly<Record<SemiPhysicalTermName, number>> = {
+	CH: 1.4 * ASEC2RAD,
+	IH: 1.8 * ASEC2RAD,
+	ID: -1.1 * ASEC2RAD,
+	NP: 0.9 * ASEC2RAD,
+	MA: 1.6 * ASEC2RAD,
+	ME: -1.2 * ASEC2RAD,
+	TF: 1.2 * ASEC2RAD,
+}
 
-	values[0] = parameters?.IH ?? 1.8 * ASEC2RAD
-	values[1] = parameters?.ID ?? -1.1 * ASEC2RAD
-	values[2] = parameters?.MA ?? 1.6 * ASEC2RAD
-	values[3] = parameters?.ME ?? -1.2 * ASEC2RAD
-	values[4] = parameters?.NPAE ?? 0.9 * ASEC2RAD
-	values[5] = parameters?.CONE ?? 0.7 * ASEC2RAD
-	values[6] = parameters?.FLEXURE ?? 1.2 * ASEC2RAD
+// Normalizes the configured physical-parameter dictionary into `SEMI_PHYSICAL_TERM_NAMES` order.
+function synthesizePhysicalParameters(parameters?: Partial<Record<SemiPhysicalTermName, number>>) {
+	const values = new Float64Array(SEMI_PHYSICAL_TERM_NAMES.length)
+
+	for (let i = 0; i < SEMI_PHYSICAL_TERM_NAMES.length; i++) {
+		const term = SEMI_PHYSICAL_TERM_NAMES[i]
+		values[i] = parameters?.[term] ?? DEFAULT_SYNTHETIC_TERMS[term]
+	}
 
 	return values
 }
