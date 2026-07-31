@@ -12,7 +12,6 @@ import type { NumberArray } from '../../math/numerical/math'
 import { type Angle, normalizePI } from '../../math/units/angle'
 // oxfmt-ignore
 import { availableContextRequirement, buildEmpiricalPointingFeatureNames, empiricalFeatureRequirement, extractPointingContext, featuresFromContext, normalizePierSide, POINTING_FRAMES, type PointingContext, type PointingContextRequirement, type PointingFeatureConfiguration, type PointingFrame, type PointingModelInput, type PointingOffset, predictSemiPhysicalOffset, type ResolvedPointingFeatureConfiguration, resolveFeatureConfiguration, SEMI_PHYSICAL_TERM_NAMES, SEMI_PHYSICAL_TERM_REQUIREMENTS, semiPhysicalBasis, type SemiPhysicalTermName, satisfiesContextRequirement } from './pointing.basis'
-// oxfmt-ignore
 import { buildLocalPointingResidual, type LocalPointingResidualModel, type LocalPointingResidualOptions, predictLocalPointingResidual, type ResolvedLocalPointingResidualOptions, resolveLocalResidualOptions, validateLocalPointingResidual } from './pointing.local'
 
 // Telescope mount pointing-model fitting and correction. Takes commanded vs plate-solved sky samples
@@ -23,24 +22,19 @@ import { buildLocalPointingResidual, type LocalPointingResidualModel, type Local
 // An optional local kNN layer, off by default, interpolates what the global basis leaves behind.
 // The basis functions live in `pointing.basis` and the local layer in `pointing.local`.
 
-// oxfmt-ignore
-export { buildEmpiricalPointingFeatureNames, empiricalFeatureRequirement, extractEmpiricalPointingFeatures, extractPointingContext, POINTING_FRAMES, type PointingContext, type PointingContextRequirement, type PointingFeatureConfiguration, type PointingFeatureVector, type PointingFrame, type PointingModelInput, type PointingOffset, predictSemiPhysicalOffset, type ResolvedPointingFeatureConfiguration, resolveFeatureConfiguration, SEMI_PHYSICAL_TERM_NAMES, SEMI_PHYSICAL_TERM_REQUIREMENTS, type SemiPhysicalTermName } from './pointing.basis'
-// oxfmt-ignore
-export { DEFAULT_LOCAL_RESIDUAL_OPTIONS, type LocalPointingResidualModel, type LocalPointingResidualOptions, predictLocalPointingResidual, type ResolvedLocalPointingResidualOptions } from './pointing.local'
-
 // Fitting strategy: 'empirical' linear features only, 'semiPhysical' TPOINT-style parameters only,
 // 'hybrid' semi-physical model plus an empirical residual correction.
-export type PointingModelStrategy = 'empirical' | 'semiPhysical' | 'hybrid'
+export type PointingModelStrategy = (typeof POINTING_MODEL_STRATEGIES)[number]
 
 // Every fitting strategy, in the order `selectPointingStrategy` tries them.
-export const POINTING_MODEL_STRATEGIES = ['semiPhysical', 'hybrid', 'empirical'] as const satisfies readonly PointingModelStrategy[]
+export const POINTING_MODEL_STRATEGIES = ['semiPhysical', 'hybrid', 'empirical'] as const
 
 // How the angular pointing error is expressed: full gnomonic tangent-plane projection, or a linearized
 // small-angle (`dRA·cosDec`, `dDec`) approximation.
-export type PointingErrorRepresentation = 'vectorTangent' | 'smallAngle'
+export type PointingErrorRepresentation = (typeof POINTING_ERROR_REPRESENTATIONS)[number]
 
 // Every error representation the model accepts.
-export const POINTING_ERROR_REPRESENTATIONS = ['vectorTangent', 'smallAngle'] as const satisfies readonly PointingErrorRepresentation[]
+export const POINTING_ERROR_REPRESENTATIONS = ['vectorTangent', 'smallAngle'] as const
 
 // Every pier-side state, used to validate deserialized support sets.
 const PIER_SIDES = ['EAST', 'WEST', 'NEITHER'] as const satisfies readonly PierSide[]
@@ -190,11 +184,11 @@ export interface PointingDiagnostics {
 	readonly rmsDx: number
 	// RMS of north residuals (radians).
 	readonly rmsDy: number
-	// RMS of radial residuals (radians).
+	// RMS of radial residuals.
 	readonly angularRms: Angle
-	// Median radial residual (radians).
+	// Median radial residual.
 	readonly medianResidual: Angle
-	// Radial residual percentiles (radians).
+	// Radial residual percentiles.
 	readonly residualPercentiles: {
 		readonly p50: Angle
 		readonly p90: Angle
@@ -484,10 +478,8 @@ interface ResolvedPointingFitOptions {
 	readonly local: ResolvedLocalPointingResidualOptions
 }
 
-// Current model-structure serialization version. Bumped to 2 when `frame` became a required field:
-// a version-1 model cannot be imported, because assuming a frame for it is exactly the mistake the
-// field exists to prevent.
-const POINTING_MODEL_VERSION = 2
+// Current model-structure serialization version.
+const POINTING_MODEL_VERSION = 1
 // Frame assumed when none is declared. Apparent topocentric without refraction: refraction is a
 // function of pressure and temperature, so folding it into a mechanical model makes the fit valid only
 // for the weather it was taken in. It belongs to the astrometric layer.

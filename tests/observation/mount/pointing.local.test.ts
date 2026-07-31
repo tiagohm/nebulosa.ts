@@ -10,8 +10,8 @@ import { sphericalUnprojectTangentPlane } from '../../../src/math/numerical/geom
 import { lerp } from '../../../src/math/numerical/math'
 import { mulberry32 } from '../../../src/math/numerical/random'
 import { type Angle, arcmin, deg, hour, normalizeAngle } from '../../../src/math/units/angle'
-// oxfmt-ignore
-import { computePointingError, extractPointingContext, fitPointingModel, MountPointing, type PointingSample, predictSemiPhysicalOffset, predictPointingModelError, SEMI_PHYSICAL_TERM_NAMES } from '../../../src/observation/mount/pointing'
+import { computePointingError, fitPointingModel, MountPointing, type PointingSample, predictPointingModelError } from '../../../src/observation/mount/pointing'
+import { extractPointingContext, predictSemiPhysicalOffset, SEMI_PHYSICAL_TERM_NAMES } from '../../../src/observation/mount/pointing.basis'
 import { buildLocalPointingResidual, predictLocalPointingResidual, resolveLocalResidualOptions } from '../../../src/observation/mount/pointing.local'
 import { sampleInput } from '../../pointing.util'
 

@@ -9,7 +9,8 @@ import { sphericalUnprojectTangentPlane } from '../../math/numerical/geometry'
 import type { Angle } from '../../math/units/angle'
 import { applyDirectionAlignment, type DirectionAlignmentResult } from './alignment'
 import { mountDirectionFromEncoders, type MountEncoderPosition, type MountEncoderSolution, type MountEncoderSolveOptions, solveMountEncoders, type TwoAxisMountGeometry } from './kinematics'
-import { type CorrectionResult, correctPointingCoordinate, type FittedPointingModel, type PointingCorrectionOptions, type PointingFrame, type PredictedPointingError, predictPointingModelError } from './pointing'
+import { type CorrectionResult, correctPointingCoordinate, type FittedPointingModel, type PointingCorrectionOptions, type PredictedPointingError, predictPointingModelError } from './pointing'
+import type { PointingFrame } from './pointing.basis'
 
 // Composes the three mount layers into the two conversions an application actually performs: sky
 // position to encoder counts and back. Nothing here computes geometry; it wires the rigid base

@@ -91,10 +91,10 @@ export type PointingContextRequirement = 'none' | 'hourAngle' | 'horizon'
 //   MA  polar-axis misalignment in azimuth (left-right);
 //   ME  polar-axis misalignment in elevation (up-down);
 //   TF  tube flexure, drooping the optical axis toward the horizon.
-export type SemiPhysicalTermName = 'CH' | 'IH' | 'ID' | 'NP' | 'MA' | 'ME' | 'TF'
+export type SemiPhysicalTermName = (typeof SEMI_PHYSICAL_TERM_NAMES)[number]
 
 // Ordered default term set. The basis builder maps names to columns through this order.
-export const SEMI_PHYSICAL_TERM_NAMES = ['CH', 'IH', 'ID', 'NP', 'MA', 'ME', 'TF'] as const satisfies readonly SemiPhysicalTermName[]
+export const SEMI_PHYSICAL_TERM_NAMES = ['CH', 'IH', 'ID', 'NP', 'MA', 'ME', 'TF'] as const
 
 // Observing context each semi-physical term requires. MA and ME are hour-angle dependent; TF is
 // referenced to the horizon and therefore also needs the site latitude.

@@ -8,8 +8,9 @@ import { predictLinearLeastSquares } from '../src/math/numerical/least.squares'
 import { clamp, lerp, type NumberArray } from '../src/math/numerical/math'
 import { gaussian, mulberry32 } from '../src/math/numerical/random'
 import { type Angle, arcmin, deg, normalizeAngle } from '../src/math/units/angle'
+import type { PointingSample } from '../src/observation/mount/pointing'
 // oxfmt-ignore
-import { buildEmpiricalPointingFeatureNames, extractEmpiricalPointingFeatures, extractPointingContext, type PointingFeatureConfiguration, type PointingModelInput, type PointingOffset, type PointingSample, predictSemiPhysicalOffset, type ResolvedPointingFeatureConfiguration, resolveFeatureConfiguration, SEMI_PHYSICAL_TERM_NAMES, type SemiPhysicalTermName } from '../src/observation/mount/pointing'
+import { type PointingFeatureConfiguration, type SemiPhysicalTermName, resolveFeatureConfiguration, buildEmpiricalPointingFeatureNames, type PointingModelInput, extractPointingContext, predictSemiPhysicalOffset, SEMI_PHYSICAL_TERM_NAMES, type ResolvedPointingFeatureConfiguration, type PointingOffset, extractEmpiricalPointingFeatures } from '../src/observation/mount/pointing.basis'
 
 // Deterministic pointing-sample generators shared by the pointing model and pipeline suites.
 //

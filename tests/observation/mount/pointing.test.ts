@@ -1,15 +1,15 @@
 import { expect, test } from 'bun:test'
 import { equatorialToHorizontal } from '../../../src/astronomy/coordinates/coordinate'
-import { localSiderealTime } from '../../../src/astronomy/observer/location'
-import { ASEC2RAD, PI } from '../../../src/core/constants'
-import type { NumberArray } from '../../../src/math/numerical/math'
-import { type Angle, arcmin, deg, hour, normalizeAngle } from '../../../src/math/units/angle'
-// oxfmt-ignore
-import { buildEmpiricalPointingFeatureNames, computePointingError, correctPointingCoordinate, extractEmpiricalPointingFeatures, extractPointingContext, type FittedPointingModel, fitPointingModel, MountPointing, type PointingFeatureConfiguration, type PointingModelInput, type PointingModelStrategy, type PointingSample, predictPointingModelError, resolveFeatureConfiguration, SEMI_PHYSICAL_TERM_NAMES, selectPointingStrategy, type SemiPhysicalTermName, type SerializedPointingModel, } from '../../../src/observation/mount/pointing'
 import { eraC2s, eraS2c } from '../../../src/astronomy/coordinates/erfa/erfa'
+import { localSiderealTime } from '../../../src/astronomy/observer/location'
 import { timeYMDHMS } from '../../../src/astronomy/time/time'
+import { ASEC2RAD, PI } from '../../../src/core/constants'
 import { medianOf } from '../../../src/core/util'
 import { sphericalUnprojectTangentPlane } from '../../../src/math/numerical/geometry'
+import type { NumberArray } from '../../../src/math/numerical/math'
+import { type Angle, arcmin, deg, hour, normalizeAngle } from '../../../src/math/units/angle'
+import { computePointingError, correctPointingCoordinate, type FittedPointingModel, fitPointingModel, MountPointing, type PointingModelStrategy, type PointingSample, predictPointingModelError, selectPointingStrategy, type SerializedPointingModel } from '../../../src/observation/mount/pointing'
+import { buildEmpiricalPointingFeatureNames, extractEmpiricalPointingFeatures, resolveFeatureConfiguration, SEMI_PHYSICAL_TERM_NAMES, type PointingFeatureConfiguration, type PointingModelInput, type SemiPhysicalTermName } from '../../../src/observation/mount/pointing.basis'
 import { coefficientsByName, generateMechanicalPointingSamples, generateSyntheticPointingSamples, sampleInput } from '../../pointing.util'
 
 const TIME = timeYMDHMS(2026, 1, 5, 3, 0, 0)
@@ -556,7 +556,7 @@ test('importing a model validates it and can restore the training samples', () =
 
 	// Every structural defect is reported by name rather than installed and used later.
 	expect(() => target.import(undefined)).toThrow('model must be an object')
-	expect(() => target.import({ ...bare, version: 1 })).toThrow('model.version must be 2, got 1')
+	expect(() => target.import({ ...bare, version: 0 })).toThrow('model.version must be 1, got 0')
 	expect(() => target.import({ ...bare, frame: 'bogus' })).toThrow('model.frame must be one of apparentTopocentric, apparentTopocentricRefracted, icrs')
 	expect(() => target.import({ ...bare, strategy: 'magic' })).toThrow('model.strategy must be one of')
 	expect(() => target.import({ ...bare, physical: { ...bare.physical!, parameters: [1, 2] } })).toThrow('model.physical.parameters must have 7 element(s), got 2')
@@ -566,7 +566,7 @@ test('importing a model validates it and can restore the training samples', () =
 	expect(() => target.import({ ...bare, supportSet: { ...bare.supportSet!, pierSides: ['EAST'] } })).toThrow('model.supportSet.pierSides must have one entry per direction')
 
 	// A rejected import leaves the previously loaded model untouched.
-	expect(target.state.fittedModel?.version).toBe(2)
+	expect(target.state.fittedModel?.version).toBe(1)
 })
 
 // Angular distance (radians) between the requested target and where `command` would actually land.
