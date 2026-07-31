@@ -1,8 +1,9 @@
-import { angularDistance, type EquatorialCoordinate } from '../../astronomy/coordinates/coordinate'
+import type { EquatorialCoordinate } from '../../astronomy/coordinates/coordinate'
 import { eraC2s, eraS2c } from '../../astronomy/coordinates/erfa/erfa'
 import type { Time } from '../../astronomy/time/time'
 import { AMIN2RAD, DEG2RAD, PI, PIOVERTWO, TAU } from '../../core/constants'
 import { medianOf, percentileOf, rmsOf, STANDARD_DEVIATION_SCALE } from '../../core/util'
+import { validateNumberArray, validateObject, validateOneOf } from '../../core/validation'
 import type { PierSide } from '../../devices/indi/device'
 import { type Vec3, vecAngle } from '../../math/linear-algebra/vec3'
 import { sphericalProjectTangentPlane, sphericalUnprojectTangentPlane } from '../../math/numerical/geometry'
@@ -10,7 +11,7 @@ import { linearLeastSquares, predictLinearLeastSquares, type RobustRegressionMet
 import type { NumberArray } from '../../math/numerical/math'
 import { type Angle, normalizePI } from '../../math/units/angle'
 // oxfmt-ignore
-import { availableContextRequirement, buildEmpiricalPointingFeatureNames, empiricalFeatureRequirement, extractPointingContext, featuresFromContext, normalizePierSide, type PointingContext, type PointingContextRequirement, type PointingFeatureConfiguration, type PointingModelInput, type PointingOffset, predictSemiPhysicalOffset, type ResolvedPointingFeatureConfiguration, resolveFeatureConfiguration, SEMI_PHYSICAL_TERM_NAMES, SEMI_PHYSICAL_TERM_REQUIREMENTS, semiPhysicalBasis, type SemiPhysicalTermName, satisfiesContextRequirement } from './pointing.basis'
+import { availableContextRequirement, buildEmpiricalPointingFeatureNames, empiricalFeatureRequirement, extractPointingContext, featuresFromContext, normalizePierSide, POINTING_FRAMES, type PointingContext, type PointingContextRequirement, type PointingFeatureConfiguration, type PointingFrame, type PointingModelInput, type PointingOffset, predictSemiPhysicalOffset, type ResolvedPointingFeatureConfiguration, resolveFeatureConfiguration, SEMI_PHYSICAL_TERM_NAMES, SEMI_PHYSICAL_TERM_REQUIREMENTS, semiPhysicalBasis, type SemiPhysicalTermName, satisfiesContextRequirement } from './pointing.basis'
 
 // Telescope mount pointing-model fitting and correction. Takes commanded vs plate-solved sky samples
 // and fits the systematic pointing error as a local tangent-plane offset (dx east, dy north, radians)
@@ -20,15 +21,24 @@ import { availableContextRequirement, buildEmpiricalPointingFeatureNames, empiri
 // The basis functions themselves live in `pointing.basis`.
 
 // oxfmt-ignore
-export { buildEmpiricalPointingFeatureNames, empiricalFeatureRequirement, extractEmpiricalPointingFeatures, extractPointingContext, type PointingContext, type PointingContextRequirement, type PointingFeatureConfiguration, type PointingFeatureVector, type PointingModelInput, type PointingOffset, predictSemiPhysicalOffset, type ResolvedPointingFeatureConfiguration, resolveFeatureConfiguration, SEMI_PHYSICAL_TERM_NAMES, SEMI_PHYSICAL_TERM_REQUIREMENTS, type SemiPhysicalTermName } from './pointing.basis'
+export { buildEmpiricalPointingFeatureNames, empiricalFeatureRequirement, extractEmpiricalPointingFeatures, extractPointingContext, POINTING_FRAMES, type PointingContext, type PointingContextRequirement, type PointingFeatureConfiguration, type PointingFeatureVector, type PointingFrame, type PointingModelInput, type PointingOffset, predictSemiPhysicalOffset, type ResolvedPointingFeatureConfiguration, resolveFeatureConfiguration, SEMI_PHYSICAL_TERM_NAMES, SEMI_PHYSICAL_TERM_REQUIREMENTS, type SemiPhysicalTermName } from './pointing.basis'
 
 // Fitting strategy: 'empirical' linear features only, 'semiPhysical' TPOINT-style parameters only,
 // 'hybrid' semi-physical model plus an empirical residual correction.
 export type PointingModelStrategy = 'empirical' | 'semiPhysical' | 'hybrid'
 
+// Every fitting strategy, in the order `selectPointingStrategy` tries them.
+export const POINTING_MODEL_STRATEGIES = ['semiPhysical', 'hybrid', 'empirical'] as const satisfies readonly PointingModelStrategy[]
+
 // How the angular pointing error is expressed: full gnomonic tangent-plane projection, or a linearized
 // small-angle (`dRA·cosDec`, `dDec`) approximation.
 export type PointingErrorRepresentation = 'vectorTangent' | 'smallAngle'
+
+// Every error representation the model accepts.
+export const POINTING_ERROR_REPRESENTATIONS = ['vectorTangent', 'smallAngle'] as const satisfies readonly PointingErrorRepresentation[]
+
+// Every pier-side state, used to validate deserialized support sets.
+const PIER_SIDES = ['EAST', 'WEST', 'NEITHER'] as const satisfies readonly PierSide[]
 
 // One commanded-vs-solved calibration point used to fit the model.
 export interface PointingSample {
@@ -51,6 +61,10 @@ export interface PointingSample {
 	// Radial 1-sigma uncertainty of the solved position (radians), typically the plate-solve error.
 	// Samples are weighted by `1/uncertainty²`; omitted or non-positive values weigh as the average.
 	uncertainty?: Angle
+	// Frame both coordinates are expressed in. Samples declaring a frame other than the fit's are
+	// rejected rather than mixed, since the difference would enter the fit as mechanical error. Samples
+	// that declare nothing are assumed to be in the fit's frame.
+	frame?: PointingFrame
 }
 
 // A computed pointing error with its great-circle separation and the representation actually used.
@@ -104,6 +118,9 @@ export interface PointingFitOptions {
 	strategy?: PointingModelStrategy
 	// Error representation (default 'vectorTangent').
 	errorRepresentation?: PointingErrorRepresentation
+	// Frame the samples are expressed in (default 'apparentTopocentric'). Samples declaring a different
+	// frame are rejected; the model records the frame so later predictions can be checked against it.
+	frame?: PointingFrame
 	// Tikhonov ridge regularization, relative to the mean design-column energy so its meaning does not
 	// drift with the sample count. Applied to the semi-physical block in a hybrid fit.
 	ridge?: number
@@ -230,7 +247,16 @@ export interface PointingPredictionQuality {
 }
 
 // A predicted error broken down into its model components plus a quality assessment.
-export interface PredictedPointingError extends PointingError {
+//
+// Deliberately not a `PointingError`: that type's `angularSeparation` is the great-circle distance
+// between two measured positions, while a prediction only has an offset, whose magnitude in the
+// tangent plane is `hypot(dx, dy)`. The two agree to first order and diverge with the offset size, so
+// they carry different names.
+export interface PredictedPointingError extends PointingOffset {
+	// Magnitude of the predicted tangent-plane offset (radians), `hypot(dx, dy)`.
+	readonly offsetMagnitude: Angle
+	// Representation the offsets are expressed in.
+	readonly representationUsed: PointingErrorRepresentation
 	// Trust assessment for this prediction.
 	readonly quality: PointingPredictionQuality
 	// Individual contributions from each model component (radians).
@@ -324,6 +350,8 @@ export interface FittedPointingModel {
 	readonly strategy: PointingModelStrategy
 	// Error representation used during fitting.
 	readonly errorRepresentation: PointingErrorRepresentation
+	// Frame every training sample was expressed in, and the frame predictions must be requested in.
+	readonly frame: PointingFrame
 	// Sign/correction conventions of the model.
 	readonly signConvention: PointingSignConvention
 	// Resolved feature configuration used.
@@ -351,6 +379,18 @@ export interface FittedPointingModel {
 	readonly physical?: SemiPhysicalPointingModel
 	// Empirical residual component, present for 'hybrid'.
 	readonly residual?: EmpiricalPointingModel
+}
+
+// A fitted model as it travels outside the process, optionally carrying the dataset that produced it.
+export interface SerializedPointingModel extends FittedPointingModel {
+	// Training samples, present only when the model was exported with `includeSamples`.
+	readonly samples?: readonly PointingSample[]
+}
+
+// Controls what `MountPointing.export` writes out.
+export interface PointingModelExportOptions {
+	// Include the stored training samples so the model can be refitted or audited after import.
+	readonly includeSamples?: boolean
 }
 
 // Snapshot of a MountPointing instance's collection and fit state.
@@ -417,6 +457,7 @@ interface ResolvedPointingBasis {
 interface ResolvedPointingFitOptions {
 	readonly strategy: PointingModelStrategy
 	readonly errorRepresentation: PointingErrorRepresentation
+	readonly frame: PointingFrame
 	readonly ridge: number
 	readonly ridgeEmpirical: number
 	readonly minimumSampleRatio: number
@@ -426,8 +467,14 @@ interface ResolvedPointingFitOptions {
 	readonly robust: ResolvedPointingRobustFitConfiguration
 }
 
-// Current model-structure serialization version.
-const POINTING_MODEL_VERSION = 1
+// Current model-structure serialization version. Bumped to 2 when `frame` became a required field:
+// a version-1 model cannot be imported, because assuming a frame for it is exactly the mistake the
+// field exists to prevent.
+const POINTING_MODEL_VERSION = 2
+// Frame assumed when none is declared. Apparent topocentric without refraction: refraction is a
+// function of pressure and temperature, so folding it into a mechanical model makes the fit valid only
+// for the weather it was taken in. It belongs to the astrometric layer.
+const DEFAULT_POINTING_FRAME: PointingFrame = 'apparentTopocentric'
 // Default Tikhonov ridge, relative to the mean design-column energy, for numerical stability only.
 const DEFAULT_RIDGE = 1e-6
 // Default relative ridge for the empirical block of a hybrid fit: shrinks the nuisance basis without
@@ -545,6 +592,7 @@ export function fitPointingModel(samples: readonly PointingSample[], options: Re
 		version: POINTING_MODEL_VERSION,
 		strategy: resolved.strategy,
 		errorRepresentation: resolved.errorRepresentation,
+		frame: resolved.frame,
 		signConvention: DEFAULT_SIGN_CONVENTION,
 		featureConfiguration: basis.featureConfiguration,
 		validation: resolved.validation,
@@ -571,7 +619,7 @@ export function fitPointingModel(samples: readonly PointingSample[], options: Re
 // terms describe the mount or the noise. Unusable models are never selected. Falls back to the in-sample
 // RMS only when no candidate could produce leave-one-out residuals.
 export function selectPointingStrategy(samples: readonly PointingSample[], options: Readonly<PointingFitOptions> = {}): FittedPointingModel {
-	const strategies: readonly PointingModelStrategy[] = ['semiPhysical', 'hybrid', 'empirical']
+	const strategies = POINTING_MODEL_STRATEGIES
 	let best: FittedPointingModel | undefined
 	let bestScore = Number.POSITIVE_INFINITY
 
@@ -599,12 +647,13 @@ export function predictPointingModelError(model: FittedPointingModel, input: Rea
 	// applying them would move the mount by an amount unrelated to its real error. Predicting zero is
 	// the honest answer: no correction, plus a warning explaining why.
 	if (!model.usable) {
+		const quality = evaluatePredictionQuality(model, context)
 		return {
 			dx: 0,
 			dy: 0,
-			angularSeparation: 0,
+			offsetMagnitude: 0,
 			representationUsed: model.errorRepresentation,
-			quality: { ...evaluatePredictionQuality(model, context), warnings: ['the fitted model is not usable for prediction'] },
+			quality: { ...quality, warnings: [...quality.warnings, 'the fitted model is not usable for prediction'] },
 			components: { physical: { dx: 0, dy: 0 }, empirical: { dx: 0, dy: 0 }, residual: { dx: 0, dy: 0 } },
 		}
 	}
@@ -613,7 +662,7 @@ export function predictPointingModelError(model: FittedPointingModel, input: Rea
 	const dx = (components.physical?.dx ?? 0) + (components.empirical?.dx ?? 0) + (components.residual?.dx ?? 0)
 	const dy = (components.physical?.dy ?? 0) + (components.empirical?.dy ?? 0) + (components.residual?.dy ?? 0)
 	const quality = evaluatePredictionQuality(model, context)
-	return { dx, dy, angularSeparation: Math.hypot(dx, dy), representationUsed: model.errorRepresentation, quality, components }
+	return { dx, dy, offsetMagnitude: Math.hypot(dx, dy), representationUsed: model.errorRepresentation, quality, components }
 }
 
 // Solves for the coordinate the mount must be commanded to so that it lands on the requested one.
@@ -683,6 +732,110 @@ export function correctPointingCoordinate(model: FittedPointingModel, input: Rea
 	return { rightAscension, declination, predictedError: clamped ? predictPointingModelError(model, { ...input, rightAscension, declination }) : predictedError, converged, iterations, residual, clamped }
 }
 
+// Validates a serialized pointing model, throwing a TypeError naming the first offending field.
+//
+// A deserialized model is untrusted input: it may come from an older version, a hand-edited file or a
+// truncated write. Every check here guards a value that the prediction path indexes into or multiplies
+// by, so failing loudly at import is the difference between a clear error and a mount slewing to a
+// coordinate derived from `undefined`. Returns `value` narrowed, without cloning it.
+export function validateFittedPointingModel(value: unknown): FittedPointingModel {
+	const model = validateObject(value, 'model')
+
+	// Older structures are rejected instead of migrated: the fields added since carry meaning that
+	// cannot be inferred from what a previous version stored.
+	if (model.version !== POINTING_MODEL_VERSION) throw new TypeError(`model.version must be ${POINTING_MODEL_VERSION}, got ${String(model.version)}`)
+
+	const strategy = validateOneOf(model.strategy, POINTING_MODEL_STRATEGIES, 'model.strategy')
+	validateOneOf(model.errorRepresentation, POINTING_ERROR_REPRESENTATIONS, 'model.errorRepresentation')
+	validateOneOf(model.frame, POINTING_FRAMES, 'model.frame')
+	validateObject(model.featureConfiguration, 'model.featureConfiguration')
+	validateObject(model.coverage, 'model.coverage')
+	validateObject(model.diagnostics, 'model.diagnostics')
+
+	if (typeof model.usable !== 'boolean') throw new TypeError('model.usable must be a boolean')
+	if (!Number.isInteger(model.trainingSampleCount) || (model.trainingSampleCount as number) < 0) throw new TypeError('model.trainingSampleCount must be a non-negative integer')
+
+	const physical = model.physical === undefined ? undefined : validateSemiPhysicalComponent(model.physical)
+	const physicalCount = physical?.terms.length ?? 0
+	const empirical = model.empirical === undefined ? undefined : validateEmpiricalComponent(model.empirical, 'model.empirical', physicalCount)
+	const residual = model.residual === undefined ? undefined : validateEmpiricalComponent(model.residual, 'model.residual', physicalCount)
+
+	// Components are required only of a usable model. An unusable one legitimately carries none, since
+	// context gating or the complexity ladder may have emptied its basis before the fit ran.
+	if (model.usable) {
+		if ((strategy === 'semiPhysical' || strategy === 'hybrid') && !physical) throw new TypeError(`model.physical is required for the ${strategy} strategy`)
+		if (strategy === 'empirical' && !empirical) throw new TypeError('model.empirical is required for the empirical strategy')
+		if (strategy === 'hybrid' && !residual) throw new TypeError('model.residual is required for the hybrid strategy')
+	}
+
+	if (model.supportSet !== undefined) validatePointingSupportSet(model.supportSet)
+
+	return value as FittedPointingModel
+}
+
+// Validates the semi-physical component of a serialized model. Returns it narrowed.
+function validateSemiPhysicalComponent(value: unknown): SemiPhysicalPointingModel {
+	const component = validateObject(value, 'model.physical')
+	const terms = component.terms
+
+	if (!Array.isArray(terms)) throw new TypeError('model.physical.terms must be an array')
+
+	for (let i = 0; i < terms.length; i++) {
+		validateOneOf(terms[i], SEMI_PHYSICAL_TERM_NAMES, `model.physical.terms[${i}]`)
+	}
+
+	// One shared parameter per term: the semi-physical block drives both axes from the same value.
+	validateNumberArray(component.parameters, terms.length, 'model.physical.parameters')
+	return value as SemiPhysicalPointingModel
+}
+
+// Validates an empirical component of a serialized model, whose orthogonalization matrices must match
+// the `physicalCount` semi-physical terms they were projected against. Returns it narrowed.
+function validateEmpiricalComponent(value: unknown, name: string, physicalCount: number): EmpiricalPointingModel {
+	const component = validateObject(value, name)
+	const featureNames = component.featureNames
+
+	if (!Array.isArray(featureNames)) throw new TypeError(`${name}.featureNames must be an array`)
+
+	for (let i = 0; i < featureNames.length; i++) {
+		if (typeof featureNames[i] !== 'string') throw new TypeError(`${name}.featureNames[${i}] must be a string`)
+	}
+
+	validateNumberArray(component.coefficientsDx, featureNames.length, `${name}.coefficientsDx`)
+	validateNumberArray(component.coefficientsDy, featureNames.length, `${name}.coefficientsDy`)
+
+	// Both projections are required together: predicting with only one would subtract half of the
+	// correction the fit applied and silently bias every physical term.
+	if (component.orthogonalizationDx !== undefined || component.orthogonalizationDy !== undefined) {
+		const size = physicalCount * featureNames.length
+		validateNumberArray(component.orthogonalizationDx, size, `${name}.orthogonalizationDx`)
+		validateNumberArray(component.orthogonalizationDy, size, `${name}.orthogonalizationDy`)
+	}
+
+	return value as EmpiricalPointingModel
+}
+
+// Validates the training-direction support set of a serialized model. Returns it narrowed.
+function validatePointingSupportSet(value: unknown): PointingSupportSet {
+	const supportSet = validateObject(value, 'model.supportSet')
+	const directions = validateNumberArray(supportSet.directions, undefined, 'model.supportSet.directions')
+
+	if (directions.length % 3 !== 0) throw new TypeError('model.supportSet.directions must hold 3 components per sample')
+
+	const pierSides = supportSet.pierSides
+
+	if (!Array.isArray(pierSides) || pierSides.length !== directions.length / 3) throw new TypeError('model.supportSet.pierSides must have one entry per direction')
+
+	for (let i = 0; i < pierSides.length; i++) {
+		validateOneOf(pierSides[i], PIER_SIDES, `model.supportSet.pierSides[${i}]`)
+	}
+
+	// The scale is the denominator of the support decay, so a zero would make every support `NaN`.
+	if (!Number.isFinite(supportSet.scale) || (supportSet.scale as number) <= 0) throw new TypeError('model.supportSet.scale must be a positive finite angle')
+
+	return value as PointingSupportSet
+}
+
 // Stores samples, fits the configured model, and predicts/corrects future targets.
 export class MountPointing {
 	readonly #samples: Readonly<PointingSample>[] = []
@@ -731,16 +884,39 @@ export class MountPointing {
 	}
 
 	// Exports the fitted model into a serializable structure.
-	export() {
-		return this.#fittedModel ? structuredClone(this.#fittedModel) : undefined
+	//
+	// With `includeSamples` the training set travels with the model, so a later session can refit it
+	// under different options or audit which samples produced a given term instead of only inheriting
+	// the coefficients. Omitted by default, since the dataset dwarfs the model.
+	export(options: Readonly<PointingModelExportOptions> = {}): SerializedPointingModel | undefined {
+		if (!this.#fittedModel) return undefined
+		return structuredClone(options.includeSamples ? { ...this.#fittedModel, samples: this.#samples } : this.#fittedModel)
 	}
 
-	// Imports a previously fitted pointing model.
-	import(serialized: FittedPointingModel) {
-		this.#fittedModel = structuredClone(serialized)
-		this.#diagnostics = this.#fittedModel.diagnostics
+	// Imports a previously fitted pointing model, validating it first.
+	//
+	// Throws on anything structurally wrong rather than installing a half-valid model that would only
+	// fail later as a silently wrong slew. A model exported with its samples restores them too, so the
+	// instance can refit without recollecting.
+	import(serialized: unknown) {
+		// The dataset is split off the model rather than cloned into it, so an instance imported from a
+		// sample-carrying export exposes the same model shape as one imported from a bare export.
+		const { samples, ...rest } = validateFittedPointingModel(serialized) as SerializedPointingModel
+		const model = structuredClone(rest) as FittedPointingModel
+
+		this.#fittedModel = model
+		this.#diagnostics = model.diagnostics
 		this.#dirty = false
-		return this.#fittedModel
+
+		if (samples) {
+			this.#samples.length = 0
+
+			for (let i = 0; i < samples.length; i++) {
+				this.#samples.push(structuredClone(samples[i]))
+			}
+		}
+
+		return model
 	}
 
 	// Returns the latest fit diagnostics or the current empty-state diagnostics.
@@ -779,6 +955,7 @@ function resolveFitOptions(options: Readonly<PointingFitOptions> = {}): Resolved
 	return {
 		strategy: options.strategy ?? 'hybrid',
 		errorRepresentation: options.errorRepresentation ?? 'vectorTangent',
+		frame: options.frame ?? DEFAULT_POINTING_FRAME,
 		ridge: options.ridge ?? DEFAULT_RIDGE,
 		ridgeEmpirical: options.ridgeEmpirical ?? DEFAULT_EMPIRICAL_RIDGE,
 		minimumSampleRatio: Math.max(1, options.minimumSampleRatio ?? DEFAULT_MINIMUM_SAMPLE_RATIO),
@@ -797,18 +974,33 @@ function preparePointingSamples(samples: readonly PointingSample[], options: Res
 
 	for (let i = 0; i < samples.length; i++) {
 		const sample = samples[i]
-		const reason = validatePointingSample(sample, accepted, options)
+
+		// The coordinates, the error, the context and the target direction are each derived once and then
+		// handed to the validator, which used to recompute all of them: `extractPointingContext` alone
+		// costs a sidereal-time and a horizontal-coordinate evaluation per call.
+		if (!isFiniteCoordinate(sample.targetRightAscension, sample.targetDeclination) || !isFiniteCoordinate(sample.solvedRightAscension, sample.solvedDeclination)) {
+			rejected.push({ sample, reason: 'invalid coordinate' })
+			continue
+		}
+
+		if (Math.abs(sample.targetDeclination) > PIOVERTWO || Math.abs(sample.solvedDeclination) > PIOVERTWO) {
+			rejected.push({ sample, reason: 'declination outside valid range' })
+			continue
+		}
+
+		const error = computePointingError(sample.targetRightAscension, sample.targetDeclination, sample.solvedRightAscension, sample.solvedDeclination, options.errorRepresentation)
+		const context = extractPointingContext({ rightAscension: sample.targetRightAscension, declination: sample.targetDeclination, time: sample.time, latitude: sample.latitude, longitude: sample.longitude, pierSide: sample.pierSide, frame: sample.frame })
+		const direction = eraS2c(sample.targetRightAscension, sample.targetDeclination)
+		const reason = validatePointingSample(sample, error, context, direction, accepted, options)
 
 		if (reason) {
 			rejected.push({ sample, reason })
 			continue
 		}
 
-		const error = computePointingError(sample.targetRightAscension, sample.targetDeclination, sample.solvedRightAscension, sample.solvedDeclination, options.errorRepresentation)
-		const context = extractPointingContext({ rightAscension: sample.targetRightAscension, declination: sample.targetDeclination, time: sample.time, latitude: sample.latitude, longitude: sample.longitude, pierSide: sample.pierSide })
 		const uncertainty = sample.uncertainty
 		const weight = uncertainty !== undefined && Number.isFinite(uncertainty) && uncertainty > 0 ? 1 / (uncertainty * uncertainty) : 0
-		accepted.push({ sample, context, error, direction: eraS2c(sample.targetRightAscension, sample.targetDeclination), weight })
+		accepted.push({ sample, context, error, direction, weight })
 	}
 
 	// Keep the richest context a majority of samples can supply, then reject the stragglers instead of
@@ -935,18 +1127,12 @@ function resolvePointingBasis(options: ResolvedPointingFitOptions, supportedCont
 	return { semiPhysicalTerms, featureConfiguration: configuration, featureNames, parameterCount, droppedTerms, sufficient }
 }
 
-// Validates one sample against the configured rules.
-function validatePointingSample(sample: Readonly<PointingSample>, accepted: readonly PreparedPointingSample[], options: ResolvedPointingFitOptions) {
-	if (!isFiniteCoordinate(sample.targetRightAscension, sample.targetDeclination) || !isFiniteCoordinate(sample.solvedRightAscension, sample.solvedDeclination)) {
-		return 'invalid coordinate'
-	}
-
-	if (Math.abs(sample.targetDeclination) > PIOVERTWO || Math.abs(sample.solvedDeclination) > PIOVERTWO) {
-		return 'declination outside valid range'
-	}
-
-	const error = computePointingError(sample.targetRightAscension, sample.targetDeclination, sample.solvedRightAscension, sample.solvedDeclination, options.errorRepresentation)
-
+// Validates one sample against the configured rules, given the quantities the caller already derived
+// from it. Returns the rejection reason, or `undefined` when the sample is accepted.
+//
+// `error` is the sample's pointing error, `context` its observing context and `direction` the unit
+// vector of its commanded target, all of which the caller keeps for the accepted sample.
+function validatePointingSample(sample: Readonly<PointingSample>, error: PointingError, context: PointingContext, direction: Vec3, accepted: readonly PreparedPointingSample[], options: ResolvedPointingFitOptions) {
 	if (!Number.isFinite(error.dx) || !Number.isFinite(error.dy)) {
 		return 'unstable tangent-plane geometry'
 	}
@@ -955,19 +1141,33 @@ function validatePointingSample(sample: Readonly<PointingSample>, accepted: read
 		return 'sample separation exceeds configured maximum'
 	}
 
-	const context = extractPointingContext({ rightAscension: sample.targetRightAscension, declination: sample.targetDeclination, time: sample.time, latitude: sample.latitude, longitude: sample.longitude, pierSide: sample.pierSide })
+	// A sample reduced in another frame differs from the fit's by precession, aberration or refraction,
+	// none of which the mount is responsible for. Mixing them would bake that difference into the terms.
+	if (sample.frame !== undefined && sample.frame !== options.frame) {
+		return 'frame differs from the model frame'
+	}
 
 	if (context.altitude !== undefined && context.altitude < options.validation.minimumAltitude) {
 		return 'altitude below configured minimum'
 	}
 
-	for (let i = 0; i < accepted.length; i++) {
-		const previous = accepted[i]
-		const samePierSide = normalizePierSide(previous.sample.pierSide) === normalizePierSide(sample.pierSide)
-		const targetDistance = angularDistance(previous.sample.targetRightAscension, previous.sample.targetDeclination, sample.targetRightAscension, sample.targetDeclination)
+	// Duplicate rejection compares the dot product of the cached unit vectors against `cos(tolerance)`,
+	// which is monotonic in the separation, instead of evaluating an inverse trig function per pair. A
+	// non-positive tolerance disables the check, since no separation can fall below it.
+	if (options.validation.duplicateTolerance > 0) {
+		const cosineTolerance = Math.cos(options.validation.duplicateTolerance)
+		const pierSide = normalizePierSide(sample.pierSide)
 
-		if (samePierSide && targetDistance <= options.validation.duplicateTolerance) {
-			return 'duplicate or near-duplicate sample'
+		for (let i = 0; i < accepted.length; i++) {
+			const previous = accepted[i]
+
+			if (normalizePierSide(previous.sample.pierSide) !== pierSide) continue
+
+			const other = previous.direction
+
+			if (direction[0] * other[0] + direction[1] * other[1] + direction[2] * other[2] >= cosineTolerance) {
+				return 'duplicate or near-duplicate sample'
+			}
 		}
 	}
 
@@ -1342,6 +1542,18 @@ function predictModelComponents(model: FittedPointingModel, context: PointingCon
 	return { physical, empirical, residual }
 }
 
+// Sums every model component into the total predicted offset, with no quality assessment.
+//
+// Diagnostics need exactly this and nothing else. Calling the public prediction instead would evaluate
+// the support geometry per sample and, worse, would have to do it through a model whose `diagnostics`
+// are still the empty placeholder being computed, so the pier-side counts it reads are all zero.
+function predictModelOffset(model: FittedPointingModel, context: PointingContext): PointingOffset {
+	if (!model.usable) return { dx: 0, dy: 0 }
+
+	const { physical, empirical, residual } = predictModelComponents(model, context)
+	return { dx: (physical?.dx ?? 0) + (empirical?.dx ?? 0) + (residual?.dx ?? 0), dy: (physical?.dy ?? 0) + (empirical?.dy ?? 0) + (residual?.dy ?? 0) }
+}
+
 // Rescales one in-sample residual into its leave-one-out counterpart from that row's leverage.
 //
 // Leverage saturates at 1 for a row the fit reproduces exactly on its own, where the hold-out residual is
@@ -1368,7 +1580,7 @@ function buildPointingDiagnostics(totalSamples: number, prepared: PreparedPointi
 
 	for (let i = 0; i < prepared.accepted.length; i++) {
 		const sample = prepared.accepted[i]
-		const prediction = predictPointingModelError(model, sample.context)
+		const prediction = predictModelOffset(model, sample.context)
 		const dx = sample.error.dx - prediction.dx
 		const dy = sample.error.dy - prediction.dy
 		const radial = Math.hypot(dx, dy)
@@ -1603,8 +1815,15 @@ function evaluatePredictionQuality(model: FittedPointingModel, context: Pointing
 	const pierSideCovered = context.pierSide === 'NEITHER' || model.diagnostics.perPierSideSampleCounts[context.pierSide] > 0
 	const supportSet = model.supportSet
 
+	// The correction is only meaningful in the frame the terms were fitted in; a coordinate declaring
+	// another one differs by precession, aberration or refraction, which the model never saw.
+	if (context.frame !== undefined && context.frame !== model.frame) {
+		warnings.push(`prediction is in the ${context.frame} frame but the model was fitted in ${model.frame}`)
+	}
+
 	if (!supportSet || supportSet.pierSides.length === 0) {
-		return { nearestSampleDistance: Number.POSITIVE_INFINITY, kthNeighborDistance: Number.POSITIVE_INFINITY, support: 0, extrapolating: true, pierSideCovered, warnings: ['the model carries no training directions to measure support against'] }
+		warnings.push('the model carries no training directions to measure support against')
+		return { nearestSampleDistance: Number.POSITIVE_INFINITY, kthNeighborDistance: Number.POSITIVE_INFINITY, support: 0, extrapolating: true, pierSideCovered, warnings }
 	}
 
 	const [x, y, z] = eraS2c(context.rightAscension, context.declination)
@@ -1630,7 +1849,7 @@ function unfittedPrediction(input: Readonly<PointingModelInput>): PredictedPoint
 	return {
 		dx: 0,
 		dy: 0,
-		angularSeparation: 0,
+		offsetMagnitude: 0,
 		representationUsed: 'vectorTangent',
 		quality: {
 			nearestSampleDistance: Number.POSITIVE_INFINITY,

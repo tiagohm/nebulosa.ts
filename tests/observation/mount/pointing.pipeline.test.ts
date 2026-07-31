@@ -80,7 +80,7 @@ test('the residual model shifts the encoders away from the purely kinematic solu
 	expect(kinematic.correction.rightAscension).toBe(desired.rightAscension)
 	expect(kinematic.correction.declination).toBe(desired.declination)
 	expect(kinematic.correction.predictedError.dx).toBe(0)
-	expect(encodersToCelestial(buildChain(false), kinematic, CONTEXT).predictedError.angularSeparation).toBe(0)
+	expect(encodersToCelestial(buildChain(false), kinematic, CONTEXT).predictedError.offsetMagnitude).toBe(0)
 })
 
 test('reading back the encoders reports where the mount really points, not what it was commanded', () => {

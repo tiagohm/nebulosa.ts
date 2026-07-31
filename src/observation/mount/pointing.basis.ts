@@ -21,6 +21,20 @@ export interface PointingOffset {
 	readonly dy: number
 }
 
+// Reference frame in which a pointing coordinate is expressed.
+//
+// The mechanical model describes where the tube goes, not how the sky was reduced, so mixing frames
+// makes it absorb precession, aberration or refraction as if they were mechanical error. Declare the
+// frame once and keep every sample and every prediction in it.
+//   'apparentTopocentric'          apparent place of date, topocentric, no refraction — the recommended
+//                                  default, since refraction belongs to the astrometric layer;
+//   'apparentTopocentricRefracted' the same, with refraction already applied to the coordinates;
+//   'icrs'                         catalogue (J2000/ICRS) place, with no apparent-place reduction.
+export type PointingFrame = 'apparentTopocentric' | 'apparentTopocentricRefracted' | 'icrs'
+
+// Every frame the model accepts, in declaration order.
+export const POINTING_FRAMES = ['apparentTopocentric', 'apparentTopocentricRefracted', 'icrs'] as const satisfies readonly PointingFrame[]
+
 // A coordinate plus optional context to evaluate or correct with a fitted model.
 export interface PointingModelInput extends EquatorialCoordinate {
 	// Time used to derive local sidereal time, hour angle and altitude.
@@ -31,6 +45,9 @@ export interface PointingModelInput extends EquatorialCoordinate {
 	longitude?: Angle
 	// Mount pier side.
 	pierSide?: PierSide
+	// Frame the coordinate is expressed in. When given, a prediction warns if it differs from the frame
+	// the model was fitted in; when omitted, the model's frame is assumed.
+	frame?: PointingFrame
 }
 
 // Geometric state derived from a coordinate and observing context, shared by all model components.
@@ -53,6 +70,9 @@ export interface PointingContext extends Readonly<EquatorialCoordinate> {
 	readonly latitude?: Angle
 	// Site longitude (radians, positive east).
 	readonly longitude?: Angle
+	// Frame declared by the input, carried through unchanged. No basis term uses it; it exists so a
+	// prediction can be checked against the frame the model was fitted in.
+	readonly frame?: PointingFrame
 }
 
 // Observing context a basis term needs before it can be evaluated. Terms are dropped from the fit
@@ -206,7 +226,7 @@ export function extractPointingContext(input: Readonly<PointingModelInput>): Poi
 		;[azimuth, altitude] = equatorialToHorizontal(input.rightAscension, input.declination, latitude, lst)
 	}
 
-	return { rightAscension: input.rightAscension, declination: input.declination, time: input.time, pierSide, pierSideValue: pierSide === 'EAST' ? 1 : pierSide === 'WEST' ? -1 : 0, lst, hourAngle, azimuth, altitude, latitude, longitude }
+	return { rightAscension: input.rightAscension, declination: input.declination, time: input.time, pierSide, pierSideValue: pierSide === 'EAST' ? 1 : pierSide === 'WEST' ? -1 : 0, lst, hourAngle, azimuth, altitude, latitude, longitude, frame: input.frame }
 }
 
 // Builds the semi-physical design columns for one sky position, writing the east contribution of

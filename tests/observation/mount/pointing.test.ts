@@ -5,7 +5,7 @@ import { ASEC2RAD, PI } from '../../../src/core/constants'
 import type { NumberArray } from '../../../src/math/numerical/math'
 import { type Angle, arcmin, deg, hour, normalizeAngle } from '../../../src/math/units/angle'
 // oxfmt-ignore
-import { buildEmpiricalPointingFeatureNames, computePointingError, correctPointingCoordinate, extractEmpiricalPointingFeatures, extractPointingContext, type FittedPointingModel, fitPointingModel, MountPointing, type PointingFeatureConfiguration, type PointingModelInput, type PointingModelStrategy, type PointingSample, predictPointingModelError, resolveFeatureConfiguration, SEMI_PHYSICAL_TERM_NAMES, selectPointingStrategy, type SemiPhysicalTermName, } from '../../../src/observation/mount/pointing'
+import { buildEmpiricalPointingFeatureNames, computePointingError, correctPointingCoordinate, extractEmpiricalPointingFeatures, extractPointingContext, type FittedPointingModel, fitPointingModel, MountPointing, type PointingFeatureConfiguration, type PointingModelInput, type PointingModelStrategy, type PointingSample, predictPointingModelError, resolveFeatureConfiguration, SEMI_PHYSICAL_TERM_NAMES, selectPointingStrategy, type SemiPhysicalTermName, type SerializedPointingModel, } from '../../../src/observation/mount/pointing'
 import { eraC2s, eraS2c } from '../../../src/astronomy/coordinates/erfa/erfa'
 import { timeYMDHMS } from '../../../src/astronomy/time/time'
 import { medianOf } from '../../../src/core/util'
@@ -441,6 +441,69 @@ test('an extrapolating correction is truncated instead of sent to the mount', ()
 	const truncated = correctPointingCoordinate(model, input, { maxIterations: 1 })
 	expect(truncated.iterations).toBe(1)
 	expect(Number.isFinite(truncated.rightAscension)).toBeTrue()
+})
+
+test('samples reduced in another frame are rejected instead of mixed into the fit', () => {
+	const terms: Readonly<Record<SemiPhysicalTermName, Angle>> = { CH: 40 * ASEC2RAD, IH: -60 * ASEC2RAD, ID: 30 * ASEC2RAD, NP: -20 * ASEC2RAD, MA: 50 * ASEC2RAD, ME: -35 * ASEC2RAD, TF: 25 * ASEC2RAD }
+	const samples = generateMechanicalPointingSamples(terms, { count: 60, seed: 71, time: TIME, latitude: LATITUDE, longitude: LONGITUDE })
+	const mixed = samples.map((sample, i) => (i % 3 === 0 ? { ...sample, frame: 'icrs' as const } : sample))
+	const model = fitPointingModel(mixed, { strategy: 'semiPhysical', robust: { method: 'none' }, validation: { minimumAltitude: -PI / 2 } })
+
+	// The declared-frame samples differ by the whole apparent-place reduction, which is not mechanical.
+	expect(model.frame).toBe('apparentTopocentric')
+	expect(model.diagnostics.rejectedReasonCounts['frame differs from the model frame']).toBe(20)
+	expect(model.trainingSampleCount).toBe(40)
+
+	// Declaring the same frame the fit uses changes nothing.
+	const declared = fitPointingModel(
+		samples.map((sample) => ({ ...sample, frame: 'icrs' as const })),
+		{ strategy: 'semiPhysical', frame: 'icrs', robust: { method: 'none' }, validation: { minimumAltitude: -PI / 2 } },
+	)
+	expect(declared.frame).toBe('icrs')
+	expect(declared.trainingSampleCount).toBe(60)
+
+	// A prediction requested in the wrong frame is answered, but flagged.
+	const wrong = predictPointingModelError(declared, { ...sampleInput(samples[2]), frame: 'apparentTopocentric' })
+	expect(wrong.quality.warnings).toContain('prediction is in the apparentTopocentric frame but the model was fitted in icrs')
+	expect(predictPointingModelError(declared, { ...sampleInput(samples[2]), frame: 'icrs' }).quality.warnings).not.toContain('prediction is in the icrs frame but the model was fitted in icrs')
+})
+
+test('importing a model validates it and can restore the training samples', () => {
+	const terms: Readonly<Record<SemiPhysicalTermName, Angle>> = { CH: 40 * ASEC2RAD, IH: -60 * ASEC2RAD, ID: 30 * ASEC2RAD, NP: -20 * ASEC2RAD, MA: 50 * ASEC2RAD, ME: -35 * ASEC2RAD, TF: 25 * ASEC2RAD }
+	const samples = generateMechanicalPointingSamples(terms, { count: 60, seed: 73, time: TIME, latitude: LATITUDE, longitude: LONGITUDE })
+	const source = new MountPointing({ strategy: 'hybrid', robust: { method: 'none' }, validation: { minimumAltitude: -PI / 2 } })
+
+	for (const sample of samples) source.add(sample)
+
+	const fitted = source.fit()
+	const bare = source.export()!
+	const withSamples = source.export({ includeSamples: true })!
+
+	expect(bare.samples).toBeUndefined()
+	expect(withSamples.samples).toHaveLength(60)
+
+	// A model imported with its dataset can be refitted without recollecting, and the model itself is
+	// restored without the dataset hanging off it.
+	const target = new MountPointing({ strategy: 'hybrid', robust: { method: 'none' }, validation: { minimumAltitude: -PI / 2 } })
+	const imported = target.import(withSamples)
+
+	expect((imported as SerializedPointingModel).samples).toBeUndefined()
+	expect(target.state.sampleCount).toBe(60)
+	expect(target.fit().physical!.parameters[0]).toBeCloseTo(fitted.physical!.parameters[0], 12)
+
+	// Every structural defect is reported by name rather than installed and used later.
+	expect(() => target.import(undefined)).toThrow('model must be an object')
+	expect(() => target.import({ ...bare, version: 1 })).toThrow('model.version must be 2, got 1')
+	expect(() => target.import({ ...bare, frame: 'bogus' })).toThrow('model.frame must be one of apparentTopocentric, apparentTopocentricRefracted, icrs')
+	expect(() => target.import({ ...bare, strategy: 'magic' })).toThrow('model.strategy must be one of')
+	expect(() => target.import({ ...bare, physical: { ...bare.physical!, parameters: [1, 2] } })).toThrow('model.physical.parameters must have 7 element(s), got 2')
+	expect(() => target.import({ ...bare, residual: { ...bare.residual!, coefficientsDx: [Number.NaN, ...Array.from(bare.residual!.coefficientsDx).slice(1)] } })).toThrow('model.residual.coefficientsDx[0] must be finite')
+	expect(() => target.import({ ...bare, residual: { ...bare.residual!, orthogonalizationDx: [1, 2, 3] } })).toThrow('model.residual.orthogonalizationDx must have')
+	expect(() => target.import({ ...bare, supportSet: { ...bare.supportSet!, scale: 0 } })).toThrow('model.supportSet.scale must be a positive finite angle')
+	expect(() => target.import({ ...bare, supportSet: { ...bare.supportSet!, pierSides: ['EAST'] } })).toThrow('model.supportSet.pierSides must have one entry per direction')
+
+	// A rejected import leaves the previously loaded model untouched.
+	expect(target.state.fittedModel?.version).toBe(2)
 })
 
 // Angular distance (radians) between the requested target and where `command` would actually land.

@@ -9,7 +9,7 @@ import { sphericalUnprojectTangentPlane } from '../../math/numerical/geometry'
 import type { Angle } from '../../math/units/angle'
 import { applyDirectionAlignment, type DirectionAlignmentResult } from './alignment'
 import { mountDirectionFromEncoders, type MountEncoderPosition, type MountEncoderSolution, type MountEncoderSolveOptions, solveMountEncoders, type TwoAxisMountGeometry } from './kinematics'
-import { type CorrectionResult, correctPointingCoordinate, type FittedPointingModel, type PointingCorrectionOptions, type PredictedPointingError, predictPointingModelError } from './pointing'
+import { type CorrectionResult, correctPointingCoordinate, type FittedPointingModel, type PointingCorrectionOptions, type PointingFrame, type PredictedPointingError, predictPointingModelError } from './pointing'
 
 // Composes the three mount layers into the two conversions an application actually performs: sky
 // position to encoder counts and back. Nothing here computes geometry; it wires the rigid base
@@ -50,6 +50,9 @@ export interface MountObservingContext {
 	readonly longitude?: Angle
 	// Mount pier side, forwarded to the pointing model.
 	readonly pierSide?: PierSide
+	// Frame the celestial coordinates are expressed in. Forwarded to the pointing model, which warns
+	// when it differs from the frame it was fitted in.
+	readonly frame?: PointingFrame
 }
 
 // Numerical controls for the whole forward conversion.
@@ -157,7 +160,7 @@ function zeroPredictedError(): PredictedPointingError {
 	return {
 		dx: 0,
 		dy: 0,
-		angularSeparation: 0,
+		offsetMagnitude: 0,
 		representationUsed: 'vectorTangent',
 		quality: { nearestSampleDistance: Number.POSITIVE_INFINITY, kthNeighborDistance: Number.POSITIVE_INFINITY, support: 0, extrapolating: true, pierSideCovered: false, warnings: ['the pointing chain carries no fitted model'] },
 		components: {},

@@ -2,7 +2,24 @@ import { expect, test } from 'bun:test'
 import type { GeographicCoordinate } from '../../src/astronomy/observer/location'
 import { type Time, Timescale } from '../../src/astronomy/time/time'
 import { PI, PIOVERTWO } from '../../src/core/constants'
-import { GEOMETRY_EPSILON, validateFinite, validateInRange, validateInRangeExclusive, validateLatitude, validateLocation, validateLongitude, validateNonNegativeFinite, validateNonNegativeInteger, validatePositiveFinite, validatePositiveInteger, validateTime, validateVector } from '../../src/core/validation'
+import {
+	GEOMETRY_EPSILON,
+	validateFinite,
+	validateInRange,
+	validateInRangeExclusive,
+	validateLatitude,
+	validateLocation,
+	validateLongitude,
+	validateNonNegativeFinite,
+	validateNonNegativeInteger,
+	validateNumberArray,
+	validateObject,
+	validateOneOf,
+	validatePositiveFinite,
+	validatePositiveInteger,
+	validateTime,
+	validateVector,
+} from '../../src/core/validation'
 import type { Vec3 } from '../../src/math/linear-algebra/vec3'
 
 test('validateFinite accepts only finite numbers', () => {
@@ -87,6 +104,40 @@ test('validateVector checks exact length and finite components', () => {
 	expect(() => validateVector([1, 2] as unknown as Vec3)).toThrow('vector must have 3 components')
 	expect(() => validateVector([1, Number.NaN, 3])).toThrow('value must be finite')
 	expect(() => validateVector([1, 2, Number.NEGATIVE_INFINITY])).toThrow('value must be finite')
+})
+
+test('validateObject rejects everything that cannot carry named fields', () => {
+	const value = { a: 1 }
+
+	expect(validateObject(value, 'model')).toBe(value)
+
+	expect(() => validateObject(undefined, 'model')).toThrow('model must be an object')
+	expect(() => validateObject(null, 'model')).toThrow('model must be an object')
+	expect(() => validateObject([1, 2], 'model')).toThrow('model must be an object')
+	expect(() => validateObject('x', 'model.physical')).toThrow('model.physical must be an object')
+})
+
+test('validateOneOf narrows a string to the allowed union', () => {
+	const allowed = ['a', 'b'] as const
+
+	expect(validateOneOf('b', allowed, 'field')).toBe('b')
+
+	expect(() => validateOneOf('c', allowed, 'field')).toThrow('field must be one of a, b')
+	expect(() => validateOneOf(1, allowed, 'field')).toThrow('field must be one of a, b')
+	expect(() => validateOneOf(undefined, allowed, 'field')).toThrow('field must be one of a, b')
+})
+
+test('validateNumberArray checks kind, length, and every element', () => {
+	const value = [1, -2, 3.5]
+
+	expect(validateNumberArray(value, 3, 'coefficients')).toBe(value)
+	expect(validateNumberArray(new Float64Array([1, 2]), undefined, 'coefficients')).toHaveLength(2)
+	expect(validateNumberArray([], 0, 'coefficients')).toHaveLength(0)
+
+	expect(() => validateNumberArray('nope', undefined, 'coefficients')).toThrow('coefficients must be an array of numbers')
+	expect(() => validateNumberArray(value, 2, 'coefficients')).toThrow('coefficients must have 2 element(s), got 3')
+	expect(() => validateNumberArray([1, Number.NaN], undefined, 'coefficients')).toThrow('coefficients[1] must be finite')
+	expect(() => validateNumberArray([Number.POSITIVE_INFINITY], undefined, 'coefficients')).toThrow('coefficients[0] must be finite')
 })
 
 test('validateLocation checks latitude, longitude, and elevation', () => {
