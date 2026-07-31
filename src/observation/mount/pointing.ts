@@ -12,16 +12,21 @@ import type { NumberArray } from '../../math/numerical/math'
 import { type Angle, normalizePI } from '../../math/units/angle'
 // oxfmt-ignore
 import { availableContextRequirement, buildEmpiricalPointingFeatureNames, empiricalFeatureRequirement, extractPointingContext, featuresFromContext, normalizePierSide, POINTING_FRAMES, type PointingContext, type PointingContextRequirement, type PointingFeatureConfiguration, type PointingFrame, type PointingModelInput, type PointingOffset, predictSemiPhysicalOffset, type ResolvedPointingFeatureConfiguration, resolveFeatureConfiguration, SEMI_PHYSICAL_TERM_NAMES, SEMI_PHYSICAL_TERM_REQUIREMENTS, semiPhysicalBasis, type SemiPhysicalTermName, satisfiesContextRequirement } from './pointing.basis'
+// oxfmt-ignore
+import { buildLocalPointingResidual, type LocalPointingResidualModel, type LocalPointingResidualOptions, predictLocalPointingResidual, type ResolvedLocalPointingResidualOptions, resolveLocalResidualOptions, validateLocalPointingResidual } from './pointing.local'
 
 // Telescope mount pointing-model fitting and correction. Takes commanded vs plate-solved sky samples
 // and fits the systematic pointing error as a local tangent-plane offset (dx east, dy north, radians)
 // using three strategies: a linear empirical feature model, a semi-physical TPOINT-style parameter
 // model (CH/IH/ID/NP/MA/ME/TF), or a hybrid (physical + empirical residual). Provides sample
 // validation, robust (IRLS) fitting, sky-coverage diagnostics, and forward correction of new targets.
-// The basis functions themselves live in `pointing.basis`.
+// An optional local kNN layer, off by default, interpolates what the global basis leaves behind.
+// The basis functions live in `pointing.basis` and the local layer in `pointing.local`.
 
 // oxfmt-ignore
 export { buildEmpiricalPointingFeatureNames, empiricalFeatureRequirement, extractEmpiricalPointingFeatures, extractPointingContext, POINTING_FRAMES, type PointingContext, type PointingContextRequirement, type PointingFeatureConfiguration, type PointingFeatureVector, type PointingFrame, type PointingModelInput, type PointingOffset, predictSemiPhysicalOffset, type ResolvedPointingFeatureConfiguration, resolveFeatureConfiguration, SEMI_PHYSICAL_TERM_NAMES, SEMI_PHYSICAL_TERM_REQUIREMENTS, type SemiPhysicalTermName } from './pointing.basis'
+// oxfmt-ignore
+export { DEFAULT_LOCAL_RESIDUAL_OPTIONS, type LocalPointingResidualModel, type LocalPointingResidualOptions, predictLocalPointingResidual, type ResolvedLocalPointingResidualOptions } from './pointing.local'
 
 // Fitting strategy: 'empirical' linear features only, 'semiPhysical' TPOINT-style parameters only,
 // 'hybrid' semi-physical model plus an empirical residual correction.
@@ -137,6 +142,10 @@ export interface PointingFitOptions {
 	validation?: PointingValidationOptions
 	// Robust fitting configuration.
 	robust?: PointingRobustFitConfiguration
+	// Local residual layer, disabled by default. Enable it only for a dense, well spread calibration
+	// run: it interpolates what the global basis could not describe, and with sparse samples that is
+	// mostly plate-solve noise.
+	local?: LocalPointingResidualOptions
 }
 
 // Documents the fixed sign and correction conventions of the produced model.
@@ -264,6 +273,8 @@ export interface PredictedPointingError extends PointingOffset {
 		readonly physical?: PointingOffset
 		readonly empirical?: PointingOffset
 		readonly residual?: PointingOffset
+		// Local kNN layer, present only when the model carries one and is usable.
+		readonly local?: PointingOffset
 	}
 }
 
@@ -379,6 +390,9 @@ export interface FittedPointingModel {
 	readonly physical?: SemiPhysicalPointingModel
 	// Empirical residual component, present for 'hybrid'.
 	readonly residual?: EmpiricalPointingModel
+	// Local residual layer, present only when it was enabled and the sample set was dense enough. It is
+	// applied on top of whatever the other components predict, and never replaces them.
+	readonly local?: LocalPointingResidualModel
 }
 
 // A fitted model as it travels outside the process, optionally carrying the dataset that produced it.
@@ -465,6 +479,7 @@ interface ResolvedPointingFitOptions {
 	readonly featureConfiguration: ResolvedPointingFeatureConfiguration
 	readonly validation: ResolvedPointingValidationOptions
 	readonly robust: ResolvedPointingRobustFitConfiguration
+	readonly local: ResolvedLocalPointingResidualOptions
 }
 
 // Current model-structure serialization version. Bumped to 2 when `frame` became a required field:
@@ -608,8 +623,12 @@ export function fitPointingModel(samples: readonly PointingSample[], options: Re
 		residual: resolved.strategy === 'hybrid' ? empirical : undefined,
 	}
 
-	const diagnostics = buildPointingDiagnostics(samples.length, prepared, provisional, basis, fit)
-	return { ...provisional, diagnostics }
+	// What the global model leaves behind at each training sample, computed once and shared: the
+	// diagnostics summarize it and the local layer interpolates it.
+	const residuals = computeModelResiduals(prepared.accepted, provisional)
+	const local = buildLocalResidualLayer(prepared.accepted, residuals, resolved.local, provisional.usable)
+	const diagnostics = buildPointingDiagnostics(samples.length, prepared, provisional, basis, fit, residuals)
+	return { ...provisional, local, diagnostics }
 }
 
 // Fits every strategy on the same samples and returns the one that generalizes best.
@@ -659,8 +678,8 @@ export function predictPointingModelError(model: FittedPointingModel, input: Rea
 	}
 
 	const components = predictModelComponents(model, context)
-	const dx = (components.physical?.dx ?? 0) + (components.empirical?.dx ?? 0) + (components.residual?.dx ?? 0)
-	const dy = (components.physical?.dy ?? 0) + (components.empirical?.dy ?? 0) + (components.residual?.dy ?? 0)
+	const dx = (components.physical?.dx ?? 0) + (components.empirical?.dx ?? 0) + (components.residual?.dx ?? 0) + (components.local?.dx ?? 0)
+	const dy = (components.physical?.dy ?? 0) + (components.empirical?.dy ?? 0) + (components.residual?.dy ?? 0) + (components.local?.dy ?? 0)
 	const quality = evaluatePredictionQuality(model, context)
 	return { dx, dy, offsetMagnitude: Math.hypot(dx, dy), representationUsed: model.errorRepresentation, quality, components }
 }
@@ -769,6 +788,9 @@ export function validateFittedPointingModel(value: unknown): FittedPointingModel
 	}
 
 	if (model.supportSet !== undefined) validatePointingSupportSet(model.supportSet)
+	// Optional and absent from every model fitted with the layer disabled, so its absence is not a
+	// version mismatch and needs no migration.
+	if (model.local !== undefined) validateLocalPointingResidual(model.local)
 
 	return value as FittedPointingModel
 }
@@ -963,6 +985,7 @@ function resolveFitOptions(options: Readonly<PointingFitOptions> = {}): Resolved
 		featureConfiguration: resolveFeatureConfiguration(options.featureConfiguration),
 		validation: resolveValidationOptions(options.validation),
 		robust: resolveRobustConfiguration(options.robust),
+		local: resolveLocalResidualOptions(options.local),
 	}
 }
 
@@ -1539,14 +1562,18 @@ function predictModelComponents(model: FittedPointingModel, context: PointingCon
 	const physical = model.physical ? predictSemiPhysicalOffset(model.physical.parameters, model.physical.terms, context) : undefined
 	const empirical = model.strategy === 'empirical' && model.empirical ? predictEmpiricalOffset(model.empirical, context, model.featureConfiguration, model.physical?.terms) : undefined
 	const residual = model.strategy === 'hybrid' && model.residual ? predictEmpiricalOffset(model.residual, context, model.featureConfiguration, model.physical?.terms) : undefined
-	return { physical, empirical, residual }
+	const local = model.local ? predictLocalPointingResidual(model.local, context.rightAscension, context.declination, context.pierSide) : undefined
+	return { physical, empirical, residual, local }
 }
 
-// Sums every model component into the total predicted offset, with no quality assessment.
+// Sums the global model components into the total predicted offset, with no quality assessment.
 //
 // Diagnostics need exactly this and nothing else. Calling the public prediction instead would evaluate
 // the support geometry per sample and, worse, would have to do it through a model whose `diagnostics`
 // are still the empty placeholder being computed, so the pier-side counts it reads are all zero.
+//
+// The local layer is excluded on purpose: it is trained on the residuals this function produces, so
+// including it would define the residuals in terms of themselves.
 function predictModelOffset(model: FittedPointingModel, context: PointingContext): PointingOffset {
 	if (!model.usable) return { dx: 0, dy: 0 }
 
@@ -1563,11 +1590,63 @@ function leaveOneOutResidual(residual: number, leverage: number) {
 	return residual / Math.max(1 - leverage, MINIMUM_LEVERAGE_COMPLEMENT)
 }
 
-// Builds fit diagnostics from the fitted model and training samples.
-function buildPointingDiagnostics(totalSamples: number, prepared: PreparedPointingSamples, model: FittedPointingModel, basis: ResolvedPointingBasis, fit: StackedOffsetFit): PointingDiagnostics {
+// Global-model residuals at every accepted training sample, per axis (radians).
+interface ModelResiduals {
+	// East residual of each sample, `error.dx - prediction.dx`.
+	readonly dx: Float64Array
+	// North residual of each sample, `error.dy - prediction.dy`.
+	readonly dy: Float64Array
+}
+
+// Evaluates the global model at every training sample and returns what it failed to explain.
+//
+// The local layer and the diagnostics both need exactly this, and each prediction costs a basis
+// evaluation, so it is computed once for both. The arrays are never sorted in place by either consumer.
+function computeModelResiduals(samples: readonly PreparedPointingSample[], model: FittedPointingModel): ModelResiduals {
+	const dx = new Float64Array(samples.length)
+	const dy = new Float64Array(samples.length)
+
+	for (let i = 0; i < samples.length; i++) {
+		const sample = samples[i]
+		const prediction = predictModelOffset(model, sample.context)
+		dx[i] = sample.error.dx - prediction.dx
+		dy[i] = sample.error.dy - prediction.dy
+	}
+
+	return { dx, dy }
+}
+
+// Builds the local residual layer for a fit, or returns `undefined` when it must not be applied.
+//
+// An unusable global model predicts zero, so its "residuals" are the raw pointing errors. Letting the
+// local layer interpolate those would turn a model that correctly refuses to correct into one that
+// silently applies a nearest-neighbour correction with no mechanical basis at all.
+function buildLocalResidualLayer(samples: readonly PreparedPointingSample[], residuals: ModelResiduals, options: ResolvedLocalPointingResidualOptions, usable: boolean) {
+	if (!options.enabled || !usable || samples.length === 0) return undefined
+
+	const directions = new Array<number>(samples.length * 3)
+	const pierSides = new Array<PierSide>(samples.length)
+
+	for (let i = 0; i < samples.length; i++) {
+		const direction = samples[i].direction
+		directions[i * 3] = direction[0]
+		directions[i * 3 + 1] = direction[1]
+		directions[i * 3 + 2] = direction[2]
+		pierSides[i] = samples[i].context.pierSide
+	}
+
+	return buildLocalPointingResidual(directions, pierSides, residuals.dx, residuals.dy, options)
+}
+
+// Builds fit diagnostics from the global model's residuals and the training samples.
+//
+// The residuals are deliberately those of the global model alone. The local layer interpolates its own
+// training residuals almost exactly, so including it would drive `angularRms` towards zero and report
+// an accuracy that no new target would ever see.
+function buildPointingDiagnostics(totalSamples: number, prepared: PreparedPointingSamples, model: FittedPointingModel, basis: ResolvedPointingBasis, fit: StackedOffsetFit, modelResiduals: ModelResiduals): PointingDiagnostics {
 	const residuals = new Float64Array(prepared.accepted.length)
-	const residualsDx = new Float64Array(prepared.accepted.length)
-	const residualsDy = new Float64Array(prepared.accepted.length)
+	const residualsDx = modelResiduals.dx
+	const residualsDy = modelResiduals.dy
 	const looResiduals = fit.leverage ? new Float64Array(prepared.accepted.length) : undefined
 	const warnings = [...prepared.warnings]
 	const rejectedReasonCounts: Record<string, number> = {}
@@ -1580,14 +1659,10 @@ function buildPointingDiagnostics(totalSamples: number, prepared: PreparedPointi
 
 	for (let i = 0; i < prepared.accepted.length; i++) {
 		const sample = prepared.accepted[i]
-		const prediction = predictModelOffset(model, sample.context)
-		const dx = sample.error.dx - prediction.dx
-		const dy = sample.error.dy - prediction.dy
-		const radial = Math.hypot(dx, dy)
+		const dx = residualsDx[i]
+		const dy = residualsDy[i]
 
-		residualsDx[i] = dx
-		residualsDy[i] = dy
-		residuals[i] = radial
+		residuals[i] = Math.hypot(dx, dy)
 
 		if (looResiduals && fit.leverage) {
 			// `r / (1 - h)` is the residual the fit would have produced with this row held out. Applied per
