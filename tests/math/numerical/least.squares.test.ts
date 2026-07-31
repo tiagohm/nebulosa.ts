@@ -25,6 +25,41 @@ test('flags a rank-deficient design as singular', () => {
 	expect(predictLinearLeastSquares(fit.coefficients, new Float64Array([5, 5]))).toBeCloseTo(10, 6)
 })
 
+test('leverage reproduces leave-one-out residuals without refitting', () => {
+	const design = [new Float64Array([1, 0]), new Float64Array([1, 1]), new Float64Array([1, 2]), new Float64Array([1, 3]), new Float64Array([1, 5]), new Float64Array([1, 9])]
+	const target = new Float64Array([1.1, 2.8, 5.3, 6.9, 11.4, 18.7])
+	const weights = new Float64Array([1, 1, 2, 1, 0.5, 1])
+	const fit = linearLeastSquares(design, target, { weights, leverage: true })
+
+	expect(fit.leverage).toBeDefined()
+
+	// Without a ridge, the hat-matrix diagonal sums to the number of free parameters.
+	let trace = 0
+	for (let i = 0; i < design.length; i++) trace += fit.leverage![i]
+	expect(trace).toBeCloseTo(2, 8)
+
+	for (let i = 0; i < design.length; i++) {
+		const heldOutDesign = design.filter((_, index) => index !== i)
+		const heldOutTarget = target.filter((_, index) => index !== i)
+		const heldOutWeights = weights.filter((_, index) => index !== i)
+		const heldOut = linearLeastSquares(heldOutDesign, heldOutTarget, { weights: heldOutWeights })
+
+		expect(fit.residuals[i] / (1 - fit.leverage![i])).toBeCloseTo(target[i] - predictLinearLeastSquares(heldOut.coefficients, design[i]), 8)
+	}
+})
+
+test('a ridge shrinks leverage below the unregularized value', () => {
+	const design = [new Float64Array([1, 0]), new Float64Array([1, 1]), new Float64Array([1, 2]), new Float64Array([1, 3])]
+	const target = new Float64Array([1, 3, 5, 7])
+	const plain = linearLeastSquares(design, target, { leverage: true })
+	const regularized = linearLeastSquares(design, target, { ridge: 4, leverage: true })
+
+	for (let i = 0; i < design.length; i++) {
+		expect(regularized.leverage![i]).toBeLessThan(plain.leverage![i])
+		expect(regularized.leverage![i]).toBeGreaterThan(0)
+	}
+})
+
 test('robust linear least squares resists outliers', () => {
 	const design = [new Float64Array([1, 0]), new Float64Array([1, 1]), new Float64Array([1, 2]), new Float64Array([1, 3]), new Float64Array([1, 4])]
 	const target = new Float64Array([1, 3, 5, 7, 100])

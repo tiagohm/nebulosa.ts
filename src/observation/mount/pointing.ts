@@ -48,6 +48,9 @@ export interface PointingSample {
 	longitude?: Angle
 	// Mount pier side at the time of the sample.
 	pierSide?: PierSide
+	// Radial 1-sigma uncertainty of the solved position (radians), typically the plate-solve error.
+	// Samples are weighted by `1/uncertainty²`; omitted or non-positive values weigh as the average.
+	uncertainty?: Angle
 }
 
 // A computed pointing error with its great-circle separation and the representation actually used.
@@ -185,16 +188,43 @@ export interface PointingDiagnostics {
 	readonly supportedContext: PointingContextRequirement
 	// Semi-physical terms and empirical features removed before fitting, with the reason.
 	readonly droppedTerms: readonly string[]
+	// RMS of the leave-one-out radial residuals (radians), or `undefined` when leverage was unavailable.
+	// Unlike `angularRms`, this does not fall as parameters are added unless they genuinely predict, so
+	// it is the metric to compare strategies with.
+	readonly looRms?: Angle
+	// Leave-one-out radial residual percentiles (radians).
+	readonly looResidualPercentiles?: {
+		readonly p50: Angle
+		readonly p90: Angle
+		readonly p95: Angle
+	}
+}
+
+// Training directions retained on the model so predictions can measure their distance to real samples.
+export interface PointingSupportSet {
+	// Unit vectors of the accepted training targets, flattened as `[x0, y0, z0, x1, ...]`.
+	readonly directions: readonly number[]
+	// Pier side of each training sample, aligned with `directions`.
+	readonly pierSides: readonly PierSide[]
+	// Characteristic sample spacing (radians): the median k-th neighbour distance of the training set.
+	// Used as the decay length of `PointingPredictionQuality.support`.
+	readonly scale: Angle
 }
 
 // Indicates how trustworthy a single prediction is relative to the training coverage.
 export interface PointingPredictionQuality {
-	// True when the requested point lies inside the sampled HA/Dec/altitude ranges.
-	readonly insideCoverage: boolean
+	// Angular distance to the closest training sample (radians), `Infinity` without support data.
+	readonly nearestSampleDistance: Angle
+	// Angular distance to the k-th closest training sample (radians), with k = `SUPPORT_NEIGHBORS`.
+	readonly kthNeighborDistance: Angle
+	// Continuous support in [0, 1]: `exp(-max(0, kthNeighborDistance - supportScale) / supportScale)`.
+	// Stays at 1 while the direction is as well surrounded as a typical training sample, then decays
+	// smoothly as it moves away from the sampled region, unlike a hard inside/outside test.
+	readonly support: number
+	// True when `support` falls below the usable threshold, meaning the model is extrapolating.
+	readonly extrapolating: boolean
 	// True when the requested pier side was represented during training.
 	readonly pierSideCovered: boolean
-	// Number of training samples backing the model.
-	readonly support: number
 	// Per-prediction warnings.
 	readonly warnings: readonly string[]
 }
@@ -284,6 +314,8 @@ export interface FittedPointingModel {
 	readonly usable: boolean
 	// Number of accepted training samples.
 	readonly trainingSampleCount: number
+	// Training directions used to score how well a prediction is supported by real samples.
+	readonly supportSet?: PointingSupportSet
 	// Sky/site coverage of the training set.
 	readonly coverage: PointingCoverageSummary
 	// Residual diagnostics.
@@ -321,6 +353,11 @@ interface PreparedPointingSample {
 	readonly sample: Readonly<PointingSample>
 	readonly context: PointingContext
 	readonly error: PointingError
+	// Unit vector of the commanded target, cached for coverage and support geometry.
+	readonly direction: Vec3
+	// Inverse-variance weight from `sample.uncertainty`, or 1 when it was not supplied. Normalized to a
+	// mean of 1 at fit time so the ridge and the robust scale keep their meaning.
+	readonly weight: number
 }
 
 // A rejected sample together with the rejection reason.
@@ -375,6 +412,17 @@ const DEFAULT_EMPIRICAL_RIDGE = 1e-3
 const DEFAULT_MINIMUM_SAMPLE_RATIO = 3
 // Condition number above which a fitted model is considered unusable for prediction.
 const MAXIMUM_USABLE_CONDITION_NUMBER = 1e8
+// Neighbour count defining the local sampling density used to score prediction support. Four is enough
+// to describe a neighbourhood on the sphere without being dominated by a single close sample.
+const SUPPORT_NEIGHBORS = 4
+// Support below which a prediction counts as extrapolation. Since support only starts decaying beyond
+// the characteristic spacing, `0.35 ≈ exp(-1.05)` triggers about two spacings outside the sampled region.
+const MINIMUM_PREDICTION_SUPPORT = 0.35
+// Support decay length used when the training set is too degenerate to measure its own spacing.
+const DEFAULT_SUPPORT_SCALE = 10 * DEG2RAD
+// Floor for `1 - leverage` when converting a residual into its leave-one-out counterpart, so a saturated
+// row inflates the metric instead of producing a division by zero.
+const MINIMUM_LEVERAGE_COMPLEMENT = 1e-6
 // Default sample-validation thresholds: 10° minimum altitude, 5° max separation, 5′ duplicate radius,
 // and a recommended minimum of 12 samples.
 const DEFAULT_VALIDATION_OPTIONS: ResolvedPointingValidationOptions = {
@@ -469,6 +517,7 @@ export function fitPointingModel(samples: readonly PointingSample[], options: Re
 		robust: resolved.robust,
 		ridge: resolved.ridge,
 		trainingSampleCount: prepared.accepted.length,
+		supportSet: buildPointingSupportSet(prepared.accepted),
 		usable: basis.sufficient && !fit.rankDeficient && fit.conditionNumber <= MAXIMUM_USABLE_CONDITION_NUMBER,
 		coverage,
 		diagnostics: emptyDiagnostics(samples.length),
@@ -477,8 +526,34 @@ export function fitPointingModel(samples: readonly PointingSample[], options: Re
 		residual: resolved.strategy === 'hybrid' ? empirical : undefined,
 	}
 
-	const diagnostics = buildPointingDiagnostics(samples.length, prepared, provisional, basis)
+	const diagnostics = buildPointingDiagnostics(samples.length, prepared, provisional, basis, fit)
 	return { ...provisional, diagnostics }
+}
+
+// Fits every strategy on the same samples and returns the one that generalizes best.
+//
+// Selection uses the leave-one-out RMS, not the in-sample RMS: the latter can only improve as parameters
+// are added, so choosing by it would always return the most complex model regardless of whether the extra
+// terms describe the mount or the noise. Unusable models are never selected. Falls back to the in-sample
+// RMS only when no candidate could produce leave-one-out residuals.
+export function selectPointingStrategy(samples: readonly PointingSample[], options: Readonly<PointingFitOptions> = {}): FittedPointingModel {
+	const strategies: readonly PointingModelStrategy[] = ['semiPhysical', 'hybrid', 'empirical']
+	let best: FittedPointingModel | undefined
+	let bestScore = Number.POSITIVE_INFINITY
+
+	for (const strategy of strategies) {
+		const candidate = fitPointingModel(samples, { ...options, strategy })
+		const score = candidate.diagnostics.looRms ?? candidate.diagnostics.angularRms
+
+		// A usable model always beats an unusable one, however good the latter's residuals look.
+		if (best && !candidate.usable && best.usable) continue
+		if (best && candidate.usable === best.usable && !(score < bestScore)) continue
+
+		best = candidate
+		bestScore = score
+	}
+
+	return best ?? fitPointingModel(samples, options)
 }
 
 // Predicts the local systematic error for a requested coordinate and mount state.
@@ -636,7 +711,9 @@ function preparePointingSamples(samples: readonly PointingSample[], options: Res
 
 		const error = computePointingError(sample.targetRightAscension, sample.targetDeclination, sample.solvedRightAscension, sample.solvedDeclination, options.errorRepresentation)
 		const context = extractPointingContext({ rightAscension: sample.targetRightAscension, declination: sample.targetDeclination, time: sample.time, latitude: sample.latitude, longitude: sample.longitude, pierSide: sample.pierSide })
-		accepted.push({ sample, context, error })
+		const uncertainty = sample.uncertainty
+		const weight = uncertainty !== undefined && Number.isFinite(uncertainty) && uncertainty > 0 ? 1 / (uncertainty * uncertainty) : 0
+		accepted.push({ sample, context, error, direction: eraS2c(sample.targetRightAscension, sample.targetDeclination), weight })
 	}
 
 	// Keep the richest context a majority of samples can supply, then reject the stragglers instead of
@@ -813,6 +890,8 @@ interface StackedOffsetFit {
 	readonly coefficients: Float64Array
 	readonly conditionNumber: number
 	readonly rankDeficient: boolean
+	// Hat-matrix diagonal over the stacked rows, used for leave-one-out diagnostics.
+	readonly leverage?: Readonly<NumberArray>
 	// Projection of each empirical column onto the semi-physical block, when both blocks are present.
 	readonly orthogonalizationDx?: number[]
 	readonly orthogonalizationDy?: number[]
@@ -893,22 +972,27 @@ function fitStackedOffsetModel(samples: readonly PreparedPointingSample[], optio
 		rows[dataRowCount + column] = row
 	}
 
+	// The Tikhonov rows always weigh 1: their magnitude is already encoded in the appended value.
 	const weights = new Float64Array(rowCount).fill(1)
-	let sampleWeights = new Float64Array(sampleCount).fill(1)
+	const baseWeights = normalizedSampleWeights(samples)
+	let robustWeights = new Float64Array(sampleCount).fill(1)
 	let coefficients = new Float64Array(columnCount)
 	let conditionNumber = Number.POSITIVE_INFINITY
 	let rankDeficient = true
+	let leverage: Readonly<NumberArray> | undefined
 
 	for (let iteration = 0; iteration < Math.max(1, options.robust.maxIterations); iteration++) {
 		for (let i = 0; i < sampleCount; i++) {
-			weights[i * 2] = sampleWeights[i]
-			weights[i * 2 + 1] = sampleWeights[i]
+			const weight = baseWeights[i] * robustWeights[i]
+			weights[i * 2] = weight
+			weights[i * 2 + 1] = weight
 		}
 
-		const fit = linearLeastSquares(rows, target, { weights })
+		const fit = linearLeastSquares(rows, target, { weights, leverage: true })
 		coefficients = new Float64Array(fit.coefficients)
 		conditionNumber = fit.conditionNumber
 		rankDeficient = fit.rankDeficient
+		leverage = fit.leverage
 
 		if (options.robust.method === 'none') break
 
@@ -919,13 +1003,48 @@ function fitStackedOffsetModel(samples: readonly PreparedPointingSample[], optio
 		}
 
 		const nextWeights = robustSampleWeights(residuals, options.robust)
-		const converged = maxWeightDifference(sampleWeights, nextWeights) <= options.robust.tolerance
-		sampleWeights = nextWeights
+		const converged = maxWeightDifference(robustWeights, nextWeights) <= options.robust.tolerance
+		robustWeights = nextWeights
 
 		if (converged) break
 	}
 
-	return { coefficients, conditionNumber, rankDeficient, orthogonalizationDx: orthogonalization?.dx, orthogonalizationDy: orthogonalization?.dy }
+	return { coefficients, conditionNumber, rankDeficient, leverage, orthogonalizationDx: orthogonalization?.dx, orthogonalizationDy: orthogonalization?.dy }
+}
+
+// Turns the per-sample inverse-variance weights into a vector with mean 1.
+//
+// Only the *relative* weights carry information: scaling them all would change the effective ridge and
+// the robust scale estimate without changing the fit's intent. Samples that did not declare an
+// uncertainty take the mean of those that did, so mixing annotated and bare samples does not silently
+// privilege either group.
+function normalizedSampleWeights(samples: readonly PreparedPointingSample[]) {
+	const weights = new Float64Array(samples.length)
+	let specifiedCount = 0
+	let specifiedTotal = 0
+
+	for (let i = 0; i < samples.length; i++) {
+		if (samples[i].weight > 0) {
+			specifiedTotal += samples[i].weight
+			specifiedCount++
+		}
+	}
+
+	const fallback = specifiedCount > 0 ? specifiedTotal / specifiedCount : 1
+	let total = 0
+
+	for (let i = 0; i < samples.length; i++) {
+		const weight = samples[i].weight > 0 ? samples[i].weight : fallback
+		weights[i] = weight
+		total += weight
+	}
+
+	if (total > 0) {
+		const scale = samples.length / total
+		for (let i = 0; i < samples.length; i++) weights[i] *= scale
+	}
+
+	return weights
 }
 
 // Removes from every empirical column the part explained by the semi-physical block, mutating `rows`
@@ -1128,11 +1247,21 @@ function predictModelComponents(model: FittedPointingModel, context: PointingCon
 	return { physical, empirical, residual }
 }
 
+// Rescales one in-sample residual into its leave-one-out counterpart from that row's leverage.
+//
+// Leverage saturates at 1 for a row the fit reproduces exactly on its own, where the hold-out residual is
+// genuinely undefined. Clamping just below 1 keeps the RMS finite and, being large, still flags the row
+// as unsupported rather than hiding it.
+function leaveOneOutResidual(residual: number, leverage: number) {
+	return residual / Math.max(1 - leverage, MINIMUM_LEVERAGE_COMPLEMENT)
+}
+
 // Builds fit diagnostics from the fitted model and training samples.
-function buildPointingDiagnostics(totalSamples: number, prepared: PreparedPointingSamples, model: FittedPointingModel, basis: ResolvedPointingBasis): PointingDiagnostics {
+function buildPointingDiagnostics(totalSamples: number, prepared: PreparedPointingSamples, model: FittedPointingModel, basis: ResolvedPointingBasis, fit: StackedOffsetFit): PointingDiagnostics {
 	const residuals = new Float64Array(prepared.accepted.length)
 	const residualsDx = new Float64Array(prepared.accepted.length)
 	const residualsDy = new Float64Array(prepared.accepted.length)
+	const looResiduals = fit.leverage ? new Float64Array(prepared.accepted.length) : undefined
 	const warnings = [...prepared.warnings]
 	const rejectedReasonCounts: Record<string, number> = {}
 	const perPierSideSampleCounts = { EAST: 0, WEST: 0, NEITHER: 0 }
@@ -1152,6 +1281,13 @@ function buildPointingDiagnostics(totalSamples: number, prepared: PreparedPointi
 		residualsDx[i] = dx
 		residualsDy[i] = dy
 		residuals[i] = radial
+
+		if (looResiduals && fit.leverage) {
+			// `r / (1 - h)` is the residual the fit would have produced with this row held out. Applied per
+			// row rather than per sample: a true block hold-out would also need the east/north cross term of
+			// the hat matrix, which barely moves the result and costs a 2x2 solve per sample.
+			looResiduals[i] = Math.hypot(leaveOneOutResidual(dx, fit.leverage[i * 2]), leaveOneOutResidual(dy, fit.leverage[i * 2 + 1]))
+		}
 
 		perPierSideSampleCounts[sample.context.pierSide]++
 	}
@@ -1180,10 +1316,13 @@ function buildPointingDiagnostics(totalSamples: number, prepared: PreparedPointi
 	}
 
 	residuals.sort()
+	looResiduals?.sort()
 
 	return {
 		supportedContext: prepared.supportedContext,
 		droppedTerms: basis.droppedTerms,
+		looRms: looResiduals && rmsOf(looResiduals),
+		looResidualPercentiles: looResiduals && { p50: percentileOf(looResiduals, 0.5), p90: percentileOf(looResiduals, 0.9), p95: percentileOf(looResiduals, 0.95) },
 		totalSamples,
 		validSamples: prepared.accepted.length,
 		rejectedSamples: prepared.rejected.length,
@@ -1292,35 +1431,103 @@ function diagnosticConditionNumber(model: FittedPointingModel) {
 	return Math.max(model.physical?.conditionNumber ?? 0, model.residual?.conditionNumberDx ?? 0, model.residual?.conditionNumberDy ?? 0)
 }
 
-// Evaluates whether the prediction lies inside or outside the sampled sky region.
+// Builds the training-direction set kept on the model for prediction support scoring.
+function buildPointingSupportSet(samples: readonly PreparedPointingSample[]): PointingSupportSet | undefined {
+	if (samples.length === 0) return undefined
+
+	const directions = new Array<number>(samples.length * 3)
+	const pierSides = new Array<PierSide>(samples.length)
+
+	for (let i = 0; i < samples.length; i++) {
+		const direction = samples[i].direction
+		directions[i * 3] = direction[0]
+		directions[i * 3 + 1] = direction[1]
+		directions[i * 3 + 2] = direction[2]
+		pierSides[i] = samples[i].context.pierSide
+	}
+
+	// The decay length is the training set's own median k-th neighbour distance, so `support` reads the
+	// same way for a dense 200-point run and a sparse 20-point one: it measures distance in units of the
+	// spacing this particular model was built with.
+	const spacings = new Float64Array(samples.length)
+
+	for (let i = 0; i < samples.length; i++) {
+		spacings[i] = neighborDistances(directions, pierSides, samples[i].direction[0], samples[i].direction[1], samples[i].direction[2], undefined, i).kth
+	}
+
+	const scale = medianOf(spacings.sort())
+	return { directions, pierSides, scale: Number.isFinite(scale) && scale > 0 ? scale : DEFAULT_SUPPORT_SCALE }
+}
+
+// Nearest and k-th nearest angular distances from a direction to the support set, optionally limited to
+// one pier side and optionally skipping one index (used when measuring the training set against itself).
+//
+// Brute force over a few hundred unit vectors is faster than any spatial index at this size. Distances
+// come from the chord length through `2*asin(chord/2)`, which stays accurate for small separations where
+// `acos(dot)` loses most of its precision.
+function neighborDistances(directions: readonly number[], pierSides: readonly PierSide[], x: number, y: number, z: number, pierSide: PierSide | undefined, skipIndex: number) {
+	const count = pierSides.length
+	const nearest = new Float64Array(SUPPORT_NEIGHBORS).fill(Number.POSITIVE_INFINITY)
+	let considered = 0
+
+	for (let i = 0; i < count; i++) {
+		if (i === skipIndex) continue
+		if (pierSide !== undefined && pierSides[i] !== pierSide) continue
+
+		const dx = directions[i * 3] - x
+		const dy = directions[i * 3 + 1] - y
+		const dz = directions[i * 3 + 2] - z
+		const distance = 2 * Math.asin(Math.min(1, Math.sqrt(dx * dx + dy * dy + dz * dz) / 2))
+		considered++
+
+		if (distance >= nearest[SUPPORT_NEIGHBORS - 1]) continue
+
+		let slot = SUPPORT_NEIGHBORS - 1
+
+		while (slot > 0 && nearest[slot - 1] > distance) {
+			nearest[slot] = nearest[slot - 1]
+			slot--
+		}
+
+		nearest[slot] = distance
+	}
+
+	// With fewer than k neighbours the k-th slot is still infinite, which would zero the support of an
+	// otherwise well-sampled small set. Fall back to the farthest neighbour actually found.
+	const kth = considered >= SUPPORT_NEIGHBORS ? nearest[SUPPORT_NEIGHBORS - 1] : nearest[Math.max(0, Math.min(considered, SUPPORT_NEIGHBORS) - 1)]
+	return { nearest: nearest[0], kth } as const
+}
+
+// Scores how well the training samples support a prediction, as a continuous spherical measure.
+//
+// This replaces a min/max box over hour angle, declination and altitude, which failed in two ways: hour
+// angle is circular, so samples near both ends made the whole sky look covered, and being inside a range
+// says nothing about being near an actual sample.
 function evaluatePredictionQuality(model: FittedPointingModel, context: PointingContext): PointingPredictionQuality {
 	const warnings: string[] = []
-	const coverage = model.coverage
-	let insideCoverage = true
-
-	if (coverage.declinationRange) {
-		insideCoverage &&= context.declination >= coverage.declinationRange[0] && context.declination <= coverage.declinationRange[1]
-	}
-
-	if (coverage.hourAngleRange && context.hourAngle !== undefined) {
-		insideCoverage &&= context.hourAngle >= coverage.hourAngleRange[0] && context.hourAngle <= coverage.hourAngleRange[1]
-	}
-
-	if (coverage.altitudeRange && context.altitude !== undefined) {
-		insideCoverage &&= context.altitude >= coverage.altitudeRange[0] && context.altitude <= coverage.altitudeRange[1]
-	}
-
 	const pierSideCovered = context.pierSide === 'NEITHER' || model.diagnostics.perPierSideSampleCounts[context.pierSide] > 0
+	const supportSet = model.supportSet
 
-	if (!insideCoverage) {
-		warnings.push('prediction is outside the sampled sky region')
+	if (!supportSet || supportSet.pierSides.length === 0) {
+		return { nearestSampleDistance: Number.POSITIVE_INFINITY, kthNeighborDistance: Number.POSITIVE_INFINITY, support: 0, extrapolating: true, pierSideCovered, warnings: ['the model carries no training directions to measure support against'] }
+	}
+
+	const [x, y, z] = eraS2c(context.rightAscension, context.declination)
+	// Mount flexure differs between pier sides, so support is measured only against samples on the same
+	// side; falling back to the whole set when that side was never sampled would overstate it.
+	const distances = neighborDistances(supportSet.directions, supportSet.pierSides, x, y, z, pierSideCovered && context.pierSide !== 'NEITHER' ? context.pierSide : undefined, -1)
+	const support = Number.isFinite(distances.kth) ? Math.exp(-Math.max(0, distances.kth - supportSet.scale) / supportSet.scale) : 0
+	const extrapolating = support < MINIMUM_PREDICTION_SUPPORT
+
+	if (extrapolating) {
+		warnings.push('prediction is far from the sampled sky region')
 	}
 
 	if (!pierSideCovered) {
 		warnings.push('prediction uses a pier side that was not present during training')
 	}
 
-	return { insideCoverage, pierSideCovered, support: model.trainingSampleCount, warnings }
+	return { nearestSampleDistance: distances.nearest, kthNeighborDistance: distances.kth, support, extrapolating, pierSideCovered, warnings }
 }
 
 // Produces the unfitted-model fallback used before a fit has been computed.
@@ -1331,9 +1538,11 @@ function unfittedPrediction(input: Readonly<PointingModelInput>): PredictedPoint
 		angularSeparation: 0,
 		representationUsed: 'vectorTangent',
 		quality: {
-			insideCoverage: false,
-			pierSideCovered: false,
+			nearestSampleDistance: Number.POSITIVE_INFINITY,
+			kthNeighborDistance: Number.POSITIVE_INFINITY,
 			support: 0,
+			extrapolating: true,
+			pierSideCovered: false,
 			warnings: ['model is not fitted'],
 		},
 		components: { physical: { dx: 0, dy: 0 }, empirical: { dx: 0, dy: 0 }, residual: { dx: 0, dy: 0 } },

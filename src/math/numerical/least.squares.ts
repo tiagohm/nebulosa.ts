@@ -1,5 +1,5 @@
 import { medianOf } from '../../core/util'
-import { gaussianElimination, Matrix, QrDecomposition } from '../linear-algebra/matrix'
+import { gaussianElimination, LuDecomposition, Matrix, QrDecomposition } from '../linear-algebra/matrix'
 import type { NumberArray } from './math'
 
 // Linear least-squares solvers operating on a row-major design matrix (array of feature rows): a
@@ -16,6 +16,9 @@ export interface LinearLeastSquaresOptions {
 	readonly weights?: Readonly<NumberArray>
 	// Non-negative ridge regularization added to the normal matrix diagonal.
 	readonly ridge?: number
+	// Computes the hat-matrix diagonal alongside the fit. Off by default: it costs an extra normal-matrix
+	// inversion, which only callers doing leave-one-out diagnostics need.
+	readonly leverage?: boolean
 }
 
 export interface LinearLeastSquaresResult {
@@ -29,6 +32,10 @@ export interface LinearLeastSquaresResult {
 	readonly conditionNumber: number
 	// Whether the weighted design matrix is numerically rank deficient.
 	readonly rankDeficient: boolean
+	// Hat-matrix diagonal per design row, in `[0, 1]`, present only when `leverage` was requested and the
+	// normal matrix could be inverted. `residual / (1 - leverage)` is the leave-one-out residual, so this
+	// gives out-of-sample diagnostics without refitting.
+	readonly leverage?: Readonly<NumberArray>
 }
 
 export interface RobustLinearLeastSquaresOptions extends LinearLeastSquaresOptions {
@@ -84,7 +91,7 @@ function leastSquaresResiduals(design: readonly Readonly<NumberArray>[], target:
 }
 
 // Solves a weighted linear least-squares problem using QR with a regularized fallback.
-export function linearLeastSquares(design: readonly Readonly<NumberArray>[], target: Readonly<NumberArray>, { weights, ridge = 0 }: LinearLeastSquaresOptions = {}): LinearLeastSquaresResult {
+export function linearLeastSquares(design: readonly Readonly<NumberArray>[], target: Readonly<NumberArray>, { weights, ridge = 0, leverage = false }: LinearLeastSquaresOptions = {}): LinearLeastSquaresResult {
 	if (design.length !== target.length) throw new Error('design matrix row count must match target length')
 	const { rows, cols } = validateLeastSquaresInput(design, weights)
 	const conditionNumber = estimateLeastSquaresConditionNumber(design, weights)
@@ -110,7 +117,51 @@ export function linearLeastSquares(design: readonly Readonly<NumberArray>[], tar
 		residuals[i] = target[i] - value
 	}
 
-	return { coefficients, fitted, residuals, conditionNumber, rankDeficient }
+	return { coefficients, fitted, residuals, conditionNumber, rankDeficient, leverage: leverage ? leastSquaresLeverage(design, weights, Math.max(ridge, 0), rows, cols) : undefined }
+}
+
+// Computes the hat-matrix diagonal `h_i = w_i * a_iᵀ (AᵀWA + ridge*I)⁻¹ a_i` for each design row.
+//
+// The ridge is included so the leverage matches the fit actually performed; with a positive ridge the
+// values are shrunk below the unregularized ones, which is the correct effective degrees of freedom.
+// Returns `undefined` when the normal matrix is singular, in which case leave-one-out residuals are
+// not meaningful anyway.
+function leastSquaresLeverage(design: readonly Readonly<NumberArray>[], weights: Readonly<NumberArray> | undefined, ridge: number, rows: number, cols: number) {
+	const normalMatrix = buildNormalMatrix(design, weights, ridge)
+	let inverse: Matrix
+
+	try {
+		inverse = new LuDecomposition(normalMatrix, true).invert()
+	} catch {
+		return undefined
+	}
+
+	const data = inverse.data
+	const values = new Float64Array(rows)
+
+	for (let i = 0; i < rows; i++) {
+		const weight = weights?.[i] ?? 1
+		if (weight === 0) continue
+
+		const row = design[i]
+		let sum = 0
+
+		for (let j = 0; j < cols; j++) {
+			const xj = row[j]
+			if (xj === 0) continue
+
+			const offset = j * cols
+			let inner = 0
+
+			for (let k = 0; k < cols; k++) inner += data[offset + k] * row[k]
+
+			sum += xj * inner
+		}
+
+		values[i] = weight * sum
+	}
+
+	return values
 }
 
 // Solves a robust linear least-squares problem using iterative reweighted least squares.

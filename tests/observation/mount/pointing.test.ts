@@ -6,7 +6,7 @@ import { type Vec3, vecDot, vecNormalizeMut, vecRotateByRodrigues } from '../../
 import { clamp, lerp, type NumberArray } from '../../../src/math/numerical/math'
 import { type Angle, arcmin, deg, hour, normalizeAngle } from '../../../src/math/units/angle'
 // oxfmt-ignore
-import { buildEmpiricalPointingFeatureNames, computePointingError, correctPointingCoordinate, extractEmpiricalPointingFeatures, extractPointingContext, type FittedPointingModel, fitPointingModel, MountPointing, type PointingFeatureConfiguration, type PointingModelInput, type PointingModelStrategy, type PointingOffset, type PointingSample, predictPointingModelError, predictSemiPhysicalOffset, type ResolvedPointingFeatureConfiguration, resolveFeatureConfiguration, SEMI_PHYSICAL_TERM_NAMES, type SemiPhysicalTermName, } from '../../../src/observation/mount/pointing'
+import { buildEmpiricalPointingFeatureNames, computePointingError, correctPointingCoordinate, extractEmpiricalPointingFeatures, extractPointingContext, type FittedPointingModel, fitPointingModel, MountPointing, type PointingFeatureConfiguration, type PointingModelInput, type PointingModelStrategy, type PointingOffset, type PointingSample, predictPointingModelError, predictSemiPhysicalOffset, type ResolvedPointingFeatureConfiguration, resolveFeatureConfiguration, SEMI_PHYSICAL_TERM_NAMES, selectPointingStrategy, type SemiPhysicalTermName, } from '../../../src/observation/mount/pointing'
 import { eraC2s, eraS2c } from '../../../src/astronomy/coordinates/erfa/erfa'
 import { type Time, timeYMDHMS } from '../../../src/astronomy/time/time'
 import { medianOf } from '../../../src/core/util'
@@ -334,6 +334,109 @@ test('underdetermined fits drop terms, are flagged unusable and predict nothing'
 	expect(prediction.dy).toBe(0)
 	expect(prediction.quality.warnings).toContain('the fitted model is not usable for prediction')
 })
+
+test('a declared uncertainty downweights a corrupted sample', () => {
+	const featureNames = buildEmpiricalPointingFeatureNames(FEATURE_CONFIGURATION)
+	const dx = coefficientsByName(featureNames, { bias: arcmin(2.5), sinHA: arcmin(-1.4), cosHA: arcmin(0.8), pierSide: arcmin(1.2) })
+	const dy = coefficientsByName(featureNames, { bias: arcmin(-1.1), cosHA: arcmin(1.7), sinDec: arcmin(0.6), pierSide: arcmin(-0.9) })
+	const clean = generateSyntheticPointingSamples({ count: 80, seed: 71, strategy: 'empirical', time: TIME, latitude: LATITUDE, longitude: LONGITUDE, featureConfiguration: FEATURE_CONFIGURATION, empiricalCoefficientsDx: dx, empiricalCoefficientsDy: dy, noiseStd: 0, includeBothPierSides: true })
+	// One sample is off by a quarter of a degree, far beyond the plate-solve accuracy of the others.
+	const corrupted = clean.map((sample, index) => (index === 7 ? displacePointingSample(sample, deg(0.25), deg(-0.2)) : sample))
+	const annotated = corrupted.map((sample, index) => ({ ...sample, uncertainty: index === 7 ? deg(0.3) : arcsecUncertainty }))
+	const fitOptions = { strategy: 'empirical', featureConfiguration: FEATURE_CONFIGURATION, robust: { method: 'none' }, validation: { minimumAltitude: -PI / 2 } } as const
+	const blind = fitPointingModel(corrupted, fitOptions)
+	const weighted = fitPointingModel(annotated, fitOptions)
+
+	// Inverse-variance weighting must pull the coefficients back toward the noiseless truth.
+	expect(coefficientError(weighted, dx, dy)).toBeLessThan(coefficientError(blind, dx, dy) / 10)
+})
+
+test('prediction support decays away from the training set and follows the sphere across the RA wrap', () => {
+	// A compact cap of samples: everything more than a few degrees away is an extrapolation.
+	const samples = generateSyntheticPointingSamples({ count: 60, seed: 73, strategy: 'empirical', time: TIME, latitude: LATITUDE, longitude: LONGITUDE, featureConfiguration: FEATURE_CONFIGURATION, hourAngleRange: [deg(-4), deg(4)], declinationRange: [deg(16), deg(24)], noiseStd: 0 })
+	const model = fitPointingModel(samples, { strategy: 'empirical', featureConfiguration: FEATURE_CONFIGURATION, validation: { minimumSamples: 12 } })
+	const inside = predictPointingModelError(model, sampleInput(samples[9])).quality
+	const outside = predictPointingModelError(model, { ...sampleInput(samples[9]), declination: deg(-60) }).quality
+
+	expect(inside.support).toBeGreaterThan(0.9)
+	expect(inside.extrapolating).toBeFalse()
+	expect(outside.support).toBeLessThan(0.01)
+	expect(outside.extrapolating).toBeTrue()
+	expect(outside.warnings).toContain('prediction is far from the sampled sky region')
+
+	// Support is measured between unit vectors, so a right ascension expressed one turn away describes
+	// the same direction. A distance taken on the raw angles would instead report a full circle.
+	const wrapped = predictPointingModelError(model, { ...sampleInput(samples[9]), rightAscension: samples[9].targetRightAscension + 2 * PI }).quality
+	expect(wrapped.kthNeighborDistance).toBeCloseTo(inside.kthNeighborDistance, 12)
+	expect(wrapped.support).toBeCloseTo(inside.support, 12)
+})
+
+test('leave-one-out residuals expose the overfitting that the in-sample rms hides', () => {
+	const featureNames = buildEmpiricalPointingFeatureNames(FEATURE_CONFIGURATION)
+	const dx = coefficientsByName(featureNames, { bias: arcmin(1.6), sinHA: arcmin(-0.9) })
+	const dy = coefficientsByName(featureNames, { bias: arcmin(-0.7), cosHA: arcmin(1.1) })
+	const options = { count: 44, seed: 79, strategy: 'empirical', time: TIME, latitude: LATITUDE, longitude: LONGITUDE, featureConfiguration: FEATURE_CONFIGURATION, empiricalCoefficientsDx: dx, empiricalCoefficientsDy: dy, noiseStd: arcmin(0.5), includeBothPierSides: true } as const
+	const samples = generateSyntheticPointingSamples(options)
+	const fitOptions = { strategy: 'empirical', robust: { method: 'none' }, validation: { minimumAltitude: -PI / 2 } } as const
+	const modest = fitPointingModel(samples, { ...fitOptions, featureConfiguration: FEATURE_CONFIGURATION })
+	const rich = fitPointingModel(samples, { ...fitOptions, featureConfiguration: { ...FEATURE_CONFIGURATION, includeAltitudeTerms: true, includeCrossTerms: true, includePolynomialTerms: true } })
+
+	expect(modest.diagnostics.looRms).toBeDefined()
+	// Holding a sample out can only make its residual worse, never better.
+	expect(modest.diagnostics.looRms!).toBeGreaterThan(modest.diagnostics.angularRms)
+	expect(modest.diagnostics.looResidualPercentiles!.p50).toBeLessThan(modest.diagnostics.looResidualPercentiles!.p95)
+
+	// The richer basis fits the noise better in sample and generalizes worse out of sample.
+	expect(rich.diagnostics.angularRms).toBeLessThan(modest.diagnostics.angularRms)
+	expect(rich.diagnostics.looRms!).toBeGreaterThan(modest.diagnostics.looRms!)
+})
+
+test('strategy selection returns the candidate with the best leave-one-out error', () => {
+	const terms: Readonly<Record<SemiPhysicalTermName, Angle>> = { CH: 25 * ASEC2RAD, IH: -40 * ASEC2RAD, ID: 33 * ASEC2RAD, NP: -14 * ASEC2RAD, MA: 47 * ASEC2RAD, ME: -22 * ASEC2RAD, TF: 30 * ASEC2RAD }
+	const samples = generateMechanicalPointingSamples(terms, { count: 90, seed: 83, time: TIME, latitude: LATITUDE, longitude: LONGITUDE })
+	const options = { featureConfiguration: FEATURE_CONFIGURATION, robust: { method: 'none' }, validation: { minimumAltitude: -PI / 2 } } as const
+	const selected = selectPointingStrategy(samples, options)
+	const candidates: readonly PointingModelStrategy[] = ['semiPhysical', 'hybrid', 'empirical']
+
+	expect(selected.usable).toBeTrue()
+
+	for (const strategy of candidates) {
+		const candidate = fitPointingModel(samples, { ...options, strategy })
+		expect(selected.diagnostics.looRms!).toBeLessThanOrEqual(candidate.diagnostics.looRms!)
+	}
+
+	// A purely empirical mount has nothing for the mechanical basis to explain, so the physical-only
+	// model must lose to the one that can actually describe the data.
+	const featureNames = buildEmpiricalPointingFeatureNames(FEATURE_CONFIGURATION)
+	const dx = coefficientsByName(featureNames, { bias: arcmin(1.9), cosDec: arcmin(-1.3) })
+	const dy = coefficientsByName(featureNames, { bias: arcmin(-1.4), sinDec: arcmin(1.1) })
+	const empiricalSamples = generateSyntheticPointingSamples({ count: 90, seed: 87, strategy: 'empirical', time: TIME, latitude: LATITUDE, longitude: LONGITUDE, featureConfiguration: FEATURE_CONFIGURATION, empiricalCoefficientsDx: dx, empiricalCoefficientsDy: dy, noiseStd: 0 })
+	const empiricalChoice = selectPointingStrategy(empiricalSamples, options)
+
+	expect(empiricalChoice.strategy).not.toBe('semiPhysical')
+	expect(empiricalChoice.diagnostics.looRms!).toBeLessThan(fitPointingModel(empiricalSamples, { ...options, strategy: 'semiPhysical' }).diagnostics.looRms!)
+})
+
+// Plate-solve grade uncertainty (radians) attached to the trustworthy samples.
+const arcsecUncertainty = 2 * ASEC2RAD
+
+// Moves the solved position of `sample` by a tangent-plane offset, keeping everything else intact.
+function displacePointingSample(sample: PointingSample, dx: Angle, dy: Angle): PointingSample {
+	const [solvedRightAscension, solvedDeclination] = eraC2s(...sphericalUnprojectTangentPlane(dx, dy, eraS2c(sample.solvedRightAscension, sample.solvedDeclination)))
+	return { ...sample, solvedRightAscension, solvedDeclination }
+}
+
+// Root-mean-square distance between the fitted empirical coefficients and the synthetic truth.
+function coefficientError(model: FittedPointingModel, dx: Readonly<NumberArray>, dy: Readonly<NumberArray>) {
+	const fitted = model.empirical!
+	let sum = 0
+
+	for (let i = 0; i < dx.length; i++) {
+		sum += (fitted.coefficientsDx[i] - dx[i]) ** 2 + (fitted.coefficientsDy[i] - dy[i]) ** 2
+	}
+
+	return Math.sqrt(sum / (2 * dx.length))
+}
 
 function coefficientsByName(names: readonly string[], values: Record<string, number>) {
 	const coefficients = new Float64Array(names.length)
