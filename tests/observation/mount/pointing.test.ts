@@ -197,7 +197,7 @@ test('hybrid fit improves on physical-only and works across both pier sides', ()
 	const featureNames = buildEmpiricalPointingFeatureNames(FEATURE_CONFIGURATION)
 	const dx = coefficientsByName(featureNames, { bias: arcmin(0.8), sinHA: arcmin(-0.9), pierSide: arcmin(1.1) })
 	const dy = coefficientsByName(featureNames, { bias: arcmin(-0.6), cosHA: arcmin(1.2), sinDec: arcmin(0.5), pierSide: arcmin(-0.7) })
-	const parameters = { IH: arcmin(1.2), ID: arcmin(-1.1), MA: arcmin(0.9), ME: arcmin(-0.8), FLEXURE: arcmin(1.4) } as const
+	const parameters = { IH: arcmin(1.2), ID: arcmin(-1.1), MA: arcmin(0.9), ME: arcmin(-0.8), TF: arcmin(1.4) } as const
 	const training = generateSyntheticPointingSamples({
 		count: 144,
 		seed: 51,
@@ -242,7 +242,81 @@ test('hybrid fit improves on physical-only and works across both pier sides', ()
 	expect(Math.hypot(targetError.dx - prediction.dx, targetError.dy - prediction.dy)).toBeLessThan(targetError.angularSeparation)
 })
 
-test('underdetermined fits produce diagnostics warnings', () => {
+test('hybrid orthogonalization keeps the fitted physical parameters meaningful', () => {
+	const terms: Readonly<Record<SemiPhysicalTermName, Angle>> = {
+		CH: 22 * ASEC2RAD,
+		IH: -63 * ASEC2RAD,
+		ID: 45 * ASEC2RAD,
+		NP: -12 * ASEC2RAD,
+		MA: 58 * ASEC2RAD,
+		ME: -31 * ASEC2RAD,
+		TF: 27 * ASEC2RAD,
+	}
+	const samples = generateMechanicalPointingSamples(terms, { count: 240, seed: 91, time: TIME, latitude: LATITUDE, longitude: LONGITUDE })
+	const model = fitPointingModel(samples, { strategy: 'hybrid', featureConfiguration: FEATURE_CONFIGURATION, robust: { method: 'none' }, ridge: 1e-12, validation: { minimumAltitude: -PI / 2 } })
+
+	// Without orthogonalization the empirical block would soak up `bias` against `CH` and `sinHA`
+	// against `MA`, leaving good predictions on top of physically meaningless parameters.
+	for (let i = 0; i < SEMI_PHYSICAL_TERM_NAMES.length; i++) {
+		expect((model.physical!.parameters[i] - terms[SEMI_PHYSICAL_TERM_NAMES[i]]) / ASEC2RAD).toBeCloseTo(0, 0)
+	}
+
+	expect(model.usable).toBeTrue()
+	expect(model.residual?.orthogonalizationDx).toBeDefined()
+	expect(model.diagnostics.angularRms / ASEC2RAD).toBeLessThan(1)
+
+	// The stored projection must reproduce the fitted design exactly through serialization.
+	const pointing = new MountPointing()
+	pointing.import(model)
+	const direct = predictPointingModelError(model, sampleInput(samples[3]))
+	const roundtrip = pointing.predictError(sampleInput(samples[3]))
+
+	expect(roundtrip.dx).toBeCloseTo(direct.dx, 12)
+	expect(roundtrip.dy).toBeCloseTo(direct.dy, 12)
+})
+
+test('missing observing context drops the terms that need it instead of zeroing them', () => {
+	const terms: Readonly<Record<SemiPhysicalTermName, Angle>> = { CH: 30 * ASEC2RAD, IH: -40 * ASEC2RAD, ID: 20 * ASEC2RAD, NP: -15 * ASEC2RAD, MA: 0, ME: 0, TF: 0 }
+	const full = generateMechanicalPointingSamples(terms, { count: 120, seed: 13, time: TIME, latitude: LATITUDE, longitude: LONGITUDE })
+	const contextless = full.map((sample) => ({ targetRightAscension: sample.targetRightAscension, targetDeclination: sample.targetDeclination, solvedRightAscension: sample.solvedRightAscension, solvedDeclination: sample.solvedDeclination }))
+	const model = fitPointingModel(contextless, { strategy: 'semiPhysical', robust: { method: 'none' }, ridge: 1e-12, validation: { minimumAltitude: -PI / 2 } })
+
+	expect(model.diagnostics.supportedContext).toBe('none')
+	expect(model.physical!.terms).toEqual(['CH', 'IH', 'ID', 'NP'])
+	expect(model.diagnostics.droppedTerms).toContain('MA: requires hourAngle context')
+	expect(model.diagnostics.droppedTerms).toContain('TF: requires horizon context')
+	expect(model.usable).toBeTrue()
+
+	// The surviving terms only depend on declination, so they are still recovered exactly.
+	for (let i = 0; i < model.physical!.terms.length; i++) {
+		expect((model.physical!.parameters[i] - terms[model.physical!.terms[i]]) / ASEC2RAD).toBeCloseTo(0, 1)
+	}
+})
+
+test('ridge shrinkage is invariant to the number of samples', () => {
+	const featureNames = buildEmpiricalPointingFeatureNames(FEATURE_CONFIGURATION)
+	const dx = coefficientsByName(featureNames, { bias: arcmin(2.5), sinHA: arcmin(-1.4), pierSide: arcmin(1.2) })
+	const dy = coefficientsByName(featureNames, { bias: arcmin(-1.1), cosHA: arcmin(1.7), pierSide: arcmin(-0.9) })
+	const options = { strategy: 'empirical', seed: 23, time: TIME, latitude: LATITUDE, longitude: LONGITUDE, featureConfiguration: FEATURE_CONFIGURATION, empiricalCoefficientsDx: dx, empiricalCoefficientsDy: dy, noiseStd: 0, includeBothPierSides: true } as const
+	const small = generateSyntheticPointingSamples({ ...options, count: 40 })
+	// Repeating the very same samples multiplies both the normal matrix and the right-hand side by the
+	// repetition count, so a scale-invariant ridge must return the identical fit. A negative duplicate
+	// tolerance keeps the validator from rejecting the repeats.
+	const large = [...small, ...small, ...small, ...small, ...small]
+	const fitOptions = { strategy: 'empirical', featureConfiguration: FEATURE_CONFIGURATION, robust: { method: 'none' }, ridge: 0.05, validation: { duplicateTolerance: -1, minimumAltitude: -PI / 2 } } as const
+	const smallFit = fitPointingModel(small, fitOptions)
+	const largeFit = fitPointingModel(large, fitOptions)
+
+	expect(largeFit.trainingSampleCount).toBe(smallFit.trainingSampleCount * 5)
+
+	// An absolute ridge would shrink the 40-sample fit five times harder than the 200-sample one.
+	for (let i = 0; i < featureNames.length; i++) {
+		expect(smallFit.empirical!.coefficientsDx[i] / arcmin(1)).toBeCloseTo(largeFit.empirical!.coefficientsDx[i] / arcmin(1), 8)
+		expect(smallFit.empirical!.coefficientsDy[i] / arcmin(1)).toBeCloseTo(largeFit.empirical!.coefficientsDy[i] / arcmin(1), 8)
+	}
+})
+
+test('underdetermined fits drop terms, are flagged unusable and predict nothing', () => {
 	const featureNames = buildEmpiricalPointingFeatureNames(FEATURE_CONFIGURATION)
 	const dx = coefficientsByName(featureNames, { bias: arcmin(2), sinHA: arcmin(-1) })
 	const dy = coefficientsByName(featureNames, { bias: arcmin(-1), cosHA: arcmin(0.8) })
@@ -250,7 +324,15 @@ test('underdetermined fits produce diagnostics warnings', () => {
 	const model = fitPointingModel(samples, { strategy: 'empirical', featureConfiguration: FEATURE_CONFIGURATION, validation: { minimumSamples: 12 } })
 
 	expect(model.diagnostics.warnings.some((warning) => warning.includes('too few samples'))).toBeTrue()
-	expect(model.diagnostics.warnings.some((warning) => warning.includes('underdetermined'))).toBeTrue()
+	expect(model.diagnostics.droppedTerms.length).toBeGreaterThan(0)
+	expect(model.diagnostics.droppedTerms.some((term) => term.includes('too few samples'))).toBeTrue()
+	expect(model.usable).toBeFalse()
+
+	// An unusable model must not move the mount: the prediction is exactly zero and says why.
+	const prediction = predictPointingModelError(model, sampleInput(samples[0]))
+	expect(prediction.dx).toBe(0)
+	expect(prediction.dy).toBe(0)
+	expect(prediction.quality.warnings).toContain('the fitted model is not usable for prediction')
 })
 
 function coefficientsByName(names: readonly string[], values: Record<string, number>) {

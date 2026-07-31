@@ -6,11 +6,11 @@ import { medianOf, percentileOf, rmsOf, STANDARD_DEVIATION_SCALE } from '../../c
 import type { PierSide } from '../../devices/indi/device'
 import { type Vec3, vecAngle } from '../../math/linear-algebra/vec3'
 import { sphericalProjectTangentPlane, sphericalUnprojectTangentPlane } from '../../math/numerical/geometry'
-import { linearLeastSquares, predictLinearLeastSquares, type RobustRegressionMethod, robustLinearLeastSquares } from '../../math/numerical/least.squares'
+import { linearLeastSquares, predictLinearLeastSquares, type RobustRegressionMethod } from '../../math/numerical/least.squares'
 import type { NumberArray } from '../../math/numerical/math'
 import { type Angle, normalizePI } from '../../math/units/angle'
 // oxfmt-ignore
-import { buildEmpiricalPointingFeatureNames, evaluateSemiPhysicalBasis, extractEmpiricalPointingFeatures, extractPointingContext, normalizePierSide, type PointingContext, type PointingFeatureConfiguration, type PointingModelInput, type PointingOffset, predictSemiPhysicalOffset, type ResolvedPointingFeatureConfiguration, resolveFeatureConfiguration, SEMI_PHYSICAL_TERM_NAMES, semiPhysicalBasis, type SemiPhysicalTermName } from './pointing.basis'
+import { availableContextRequirement, buildEmpiricalPointingFeatureNames, empiricalFeatureRequirement, extractPointingContext, featuresFromContext, normalizePierSide, type PointingContext, type PointingContextRequirement, type PointingFeatureConfiguration, type PointingModelInput, type PointingOffset, predictSemiPhysicalOffset, type ResolvedPointingFeatureConfiguration, resolveFeatureConfiguration, SEMI_PHYSICAL_TERM_NAMES, SEMI_PHYSICAL_TERM_REQUIREMENTS, semiPhysicalBasis, type SemiPhysicalTermName, satisfiesContextRequirement } from './pointing.basis'
 
 // Telescope mount pointing-model fitting and correction. Takes commanded vs plate-solved sky samples
 // and fits the systematic pointing error as a local tangent-plane offset (dx east, dy north, radians)
@@ -101,8 +101,14 @@ export interface PointingFitOptions {
 	strategy?: PointingModelStrategy
 	// Error representation (default 'vectorTangent').
 	errorRepresentation?: PointingErrorRepresentation
-	// Tikhonov ridge regularization applied to the normal equations.
+	// Tikhonov ridge regularization, relative to the mean design-column energy so its meaning does not
+	// drift with the sample count. Applied to the semi-physical block in a hybrid fit.
 	ridge?: number
+	// Relative ridge applied to the empirical block of a hybrid fit. Larger than `ridge` on purpose:
+	// the empirical block is a flexible nuisance basis and should be shrunk harder than the physical one.
+	ridgeEmpirical?: number
+	// Minimum accepted-sample to free-parameter ratio required to keep a complexity tier (default 3).
+	minimumSampleRatio?: number
 	// Semi-physical terms to fit (default: every term in `SEMI_PHYSICAL_TERM_NAMES`).
 	semiPhysicalTerms?: readonly SemiPhysicalTermName[]
 	// Empirical feature toggles.
@@ -175,6 +181,10 @@ export interface PointingDiagnostics {
 	readonly warnings: readonly string[]
 	// Count of rejected samples by reason.
 	readonly rejectedReasonCounts: Readonly<Record<string, number>>
+	// Observing context every accepted sample supports; terms needing more were dropped.
+	readonly supportedContext: PointingContextRequirement
+	// Semi-physical terms and empirical features removed before fitting, with the reason.
+	readonly droppedTerms: readonly string[]
 }
 
 // Indicates how trustworthy a single prediction is relative to the training coverage.
@@ -227,6 +237,12 @@ export interface EmpiricalPointingModel {
 	readonly ridge: number
 	// Robust method used.
 	readonly robustMethod: RobustRegressionMethod
+	// Projection of each empirical column onto the semi-physical block, removed before fitting so the
+	// two blocks are identifiable. Flattened row-major as `[semiPhysicalTermCount][featureCount]`, with
+	// separate matrices for the east and north column groups. Present only for the hybrid residual
+	// model; prediction must apply the same subtraction to reproduce the fit.
+	readonly orthogonalizationDx?: readonly number[]
+	readonly orthogonalizationDy?: readonly number[]
 }
 
 // Fitted semi-physical model: shared TPOINT-style parameters driving both dx and dy.
@@ -263,6 +279,9 @@ export interface FittedPointingModel {
 	readonly robust: ResolvedPointingRobustFitConfiguration
 	// Ridge regularization used.
 	readonly ridge: number
+	// False when the fit is too underdetermined or too ill-conditioned to extrapolate from. Prediction
+	// through an unusable model returns a zero offset instead of ridge-amplified noise.
+	readonly usable: boolean
 	// Number of accepted training samples.
 	readonly trainingSampleCount: number
 	// Sky/site coverage of the training set.
@@ -315,6 +334,21 @@ interface PreparedPointingSamples {
 	readonly accepted: readonly PreparedPointingSample[]
 	readonly rejected: readonly RejectedPointingSample[]
 	readonly warnings: readonly string[]
+	// Strongest observing context every accepted sample provides.
+	readonly supportedContext: PointingContextRequirement
+}
+
+// The basis terms and empirical features that survived context gating and the complexity ladder.
+interface ResolvedPointingBasis {
+	readonly semiPhysicalTerms: readonly SemiPhysicalTermName[]
+	readonly featureConfiguration: ResolvedPointingFeatureConfiguration
+	readonly featureNames: readonly string[]
+	// Free parameters the selected basis costs, counting the empirical block once per axis.
+	readonly parameterCount: number
+	// Names removed by context gating or by the complexity ladder, each with its reason.
+	readonly droppedTerms: readonly string[]
+	// False when even the smallest tier still has fewer samples than parameters it needs.
+	readonly sufficient: boolean
 }
 
 // Fully resolved fit options with all defaults applied.
@@ -322,6 +356,8 @@ interface ResolvedPointingFitOptions {
 	readonly strategy: PointingModelStrategy
 	readonly errorRepresentation: PointingErrorRepresentation
 	readonly ridge: number
+	readonly ridgeEmpirical: number
+	readonly minimumSampleRatio: number
 	readonly semiPhysicalTerms: readonly SemiPhysicalTermName[]
 	readonly featureConfiguration: ResolvedPointingFeatureConfiguration
 	readonly validation: ResolvedPointingValidationOptions
@@ -330,8 +366,15 @@ interface ResolvedPointingFitOptions {
 
 // Current model-structure serialization version.
 const POINTING_MODEL_VERSION = 1
-// Default Tikhonov ridge applied to the normal equations for numerical stability.
+// Default Tikhonov ridge, relative to the mean design-column energy, for numerical stability only.
 const DEFAULT_RIDGE = 1e-6
+// Default relative ridge for the empirical block of a hybrid fit: shrinks the nuisance basis without
+// preventing it from describing genuinely unmodelled deformation.
+const DEFAULT_EMPIRICAL_RIDGE = 1e-3
+// Default accepted-sample to free-parameter ratio required before a complexity tier is kept.
+const DEFAULT_MINIMUM_SAMPLE_RATIO = 3
+// Condition number above which a fitted model is considered unusable for prediction.
+const MAXIMUM_USABLE_CONDITION_NUMBER = 1e8
 // Default sample-validation thresholds: 10° minimum altitude, 5° max separation, 5′ duplicate radius,
 // and a recommended minimum of 12 samples.
 const DEFAULT_VALIDATION_OPTIONS: ResolvedPointingValidationOptions = {
@@ -382,35 +425,81 @@ export function fitPointingModel(samples: readonly PointingSample[], options: Re
 	const resolved = resolveFitOptions(options)
 	const prepared = preparePointingSamples(samples, resolved)
 	const coverage = summarizePointingCoverage(prepared.accepted)
-	const empiricalFeatureNames = buildEmpiricalPointingFeatureNames(resolved.featureConfiguration)
-	const physical = resolved.strategy === 'semiPhysical' || resolved.strategy === 'hybrid' ? fitSemiPhysicalModel(prepared.accepted, resolved) : undefined
-	const empirical = resolved.strategy === 'empirical' ? fitEmpiricalModel(prepared.accepted, resolved, undefined) : undefined
-	const residual = resolved.strategy === 'hybrid' ? fitEmpiricalResidualModel(prepared.accepted, resolved, physical) : undefined
+	const basis = resolvePointingBasis(resolved, prepared.supportedContext, prepared.accepted.length)
+	const fit = fitStackedOffsetModel(prepared.accepted, resolved, basis)
+	const physicalCount = basis.semiPhysicalTerms.length
+	const featureCount = basis.featureNames.length
+
+	const physical: SemiPhysicalPointingModel | undefined =
+		physicalCount === 0
+			? undefined
+			: {
+					terms: basis.semiPhysicalTerms,
+					parameters: Array.from(fit.coefficients.subarray(0, physicalCount)),
+					conditionNumber: fit.conditionNumber,
+					rankDeficient: fit.rankDeficient,
+					ridge: resolved.ridge,
+					robustMethod: resolved.robust.method,
+				}
+
+	const empirical: EmpiricalPointingModel | undefined =
+		featureCount === 0
+			? undefined
+			: {
+					featureNames: basis.featureNames,
+					coefficientsDx: Array.from(fit.coefficients.subarray(physicalCount, physicalCount + featureCount)),
+					coefficientsDy: Array.from(fit.coefficients.subarray(physicalCount + featureCount)),
+					conditionNumberDx: fit.conditionNumber,
+					conditionNumberDy: fit.conditionNumber,
+					rankDeficientDx: fit.rankDeficient,
+					rankDeficientDy: fit.rankDeficient,
+					ridge: physicalCount > 0 ? resolved.ridgeEmpirical : resolved.ridge,
+					robustMethod: resolved.robust.method,
+					orthogonalizationDx: fit.orthogonalizationDx,
+					orthogonalizationDy: fit.orthogonalizationDy,
+				}
 
 	const provisional: FittedPointingModel = {
 		version: POINTING_MODEL_VERSION,
 		strategy: resolved.strategy,
 		errorRepresentation: resolved.errorRepresentation,
 		signConvention: DEFAULT_SIGN_CONVENTION,
-		featureConfiguration: resolved.featureConfiguration,
+		featureConfiguration: basis.featureConfiguration,
 		validation: resolved.validation,
 		robust: resolved.robust,
 		ridge: resolved.ridge,
 		trainingSampleCount: prepared.accepted.length,
+		usable: basis.sufficient && !fit.rankDeficient && fit.conditionNumber <= MAXIMUM_USABLE_CONDITION_NUMBER,
 		coverage,
 		diagnostics: emptyDiagnostics(samples.length),
 		empirical: resolved.strategy === 'empirical' ? empirical : undefined,
 		physical,
-		residual,
+		residual: resolved.strategy === 'hybrid' ? empirical : undefined,
 	}
 
-	const diagnostics = buildPointingDiagnostics(samples.length, prepared, provisional, empiricalFeatureNames)
+	const diagnostics = buildPointingDiagnostics(samples.length, prepared, provisional, basis)
 	return { ...provisional, diagnostics }
 }
 
 // Predicts the local systematic error for a requested coordinate and mount state.
 export function predictPointingModelError(model: FittedPointingModel, input: Readonly<PointingModelInput>): PredictedPointingError {
 	const context = extractPointingContext(input)
+
+	// An unusable model is one whose basis could not be constrained by the training set. Its
+	// coefficients are not merely imprecise, they are arbitrary along the unconstrained directions, so
+	// applying them would move the mount by an amount unrelated to its real error. Predicting zero is
+	// the honest answer: no correction, plus a warning explaining why.
+	if (!model.usable) {
+		return {
+			dx: 0,
+			dy: 0,
+			angularSeparation: 0,
+			representationUsed: model.errorRepresentation,
+			quality: { ...evaluatePredictionQuality(model, context), warnings: ['the fitted model is not usable for prediction'] },
+			components: { physical: { dx: 0, dy: 0 }, empirical: { dx: 0, dy: 0 }, residual: { dx: 0, dy: 0 } },
+		}
+	}
+
 	const components = predictModelComponents(model, context)
 	const dx = (components.physical?.dx ?? 0) + (components.empirical?.dx ?? 0) + (components.residual?.dx ?? 0)
 	const dy = (components.physical?.dy ?? 0) + (components.empirical?.dy ?? 0) + (components.residual?.dy ?? 0)
@@ -521,6 +610,8 @@ function resolveFitOptions(options: Readonly<PointingFitOptions> = {}): Resolved
 		strategy: options.strategy ?? 'hybrid',
 		errorRepresentation: options.errorRepresentation ?? 'vectorTangent',
 		ridge: options.ridge ?? DEFAULT_RIDGE,
+		ridgeEmpirical: options.ridgeEmpirical ?? DEFAULT_EMPIRICAL_RIDGE,
+		minimumSampleRatio: Math.max(1, options.minimumSampleRatio ?? DEFAULT_MINIMUM_SAMPLE_RATIO),
 		semiPhysicalTerms: options.semiPhysicalTerms?.length ? [...options.semiPhysicalTerms] : SEMI_PHYSICAL_TERM_NAMES,
 		featureConfiguration: resolveFeatureConfiguration(options.featureConfiguration),
 		validation: resolveValidationOptions(options.validation),
@@ -548,11 +639,128 @@ function preparePointingSamples(samples: readonly PointingSample[], options: Res
 		accepted.push({ sample, context, error })
 	}
 
-	if (accepted.length < options.validation.minimumSamples) {
-		warnings.push(`too few samples: ${accepted.length} valid sample(s) for a recommended minimum of ${options.validation.minimumSamples}`)
+	// Keep the richest context a majority of samples can supply, then reject the stragglers instead of
+	// zero-filling their missing hour angle or altitude, which would alias the constant term.
+	const supportedContext = majorityContextRequirement(accepted)
+	const supported: PreparedPointingSample[] = []
+
+	for (let i = 0; i < accepted.length; i++) {
+		if (satisfiesContextRequirement(availableContextRequirement(accepted[i].context), supportedContext)) supported.push(accepted[i])
+		else rejected.push({ sample: accepted[i].sample, reason: 'insufficient observing context' })
 	}
 
-	return { accepted, rejected, warnings }
+	if (supported.length < options.validation.minimumSamples) {
+		warnings.push(`too few samples: ${supported.length} valid sample(s) for a recommended minimum of ${options.validation.minimumSamples}`)
+	}
+
+	return { accepted: supported, rejected, warnings, supportedContext }
+}
+
+// Ordinal rank of an observing-context requirement, used to compare and aggregate requirements.
+const CONTEXT_REQUIREMENT_RANK: Readonly<Record<PointingContextRequirement, number>> = { none: 0, hourAngle: 1, horizon: 2 }
+// Ordered requirement levels, weakest first, aligned with `CONTEXT_REQUIREMENT_RANK`.
+const CONTEXT_REQUIREMENT_LEVELS = ['none', 'hourAngle', 'horizon'] as const satisfies readonly PointingContextRequirement[]
+
+// Picks the strongest observing context that at least half of the samples can supply. Using the
+// majority rather than the minimum keeps a handful of context-less samples from collapsing the whole
+// model to declination-only terms; those samples are rejected instead.
+function majorityContextRequirement(samples: readonly PreparedPointingSample[]): PointingContextRequirement {
+	if (samples.length === 0) return 'none'
+
+	const counts = [0, 0, 0]
+
+	for (let i = 0; i < samples.length; i++) {
+		counts[CONTEXT_REQUIREMENT_RANK[availableContextRequirement(samples[i].context)]]++
+	}
+
+	const required = Math.ceil(samples.length / 2)
+	let atLeast = 0
+
+	for (let level = 2; level >= 0; level--) {
+		atLeast += counts[level]
+		if (atLeast >= required) return CONTEXT_REQUIREMENT_LEVELS[level]
+	}
+
+	return 'none'
+}
+
+// Empirical feature-flag groups in the order the complexity ladder switches them off: highest-order
+// and least physically motivated first. `bias` is never dropped, so an over-constrained dataset still
+// yields a usable constant offset.
+const EMPIRICAL_FEATURE_GROUPS = [
+	{ flag: 'includePolynomialTerms', names: ['normalizedHA', 'normalizedDec', 'normalizedHA*normalizedDec'] },
+	{ flag: 'includeCrossTerms', names: ['sinHA*sinDec', 'sinAlt*sinDec', 'pierSide*sinHA'] },
+	{ flag: 'includeAltitudeTerms', names: ['sinAlt', 'cosAlt'] },
+	{ flag: 'includePierSideTerms', names: ['pierSide'] },
+	{ flag: 'includeHourAngleTerms', names: ['sinHA', 'cosHA'] },
+	{ flag: 'includeDeclinationTerms', names: ['sinDec', 'cosDec'] },
+] as const satisfies readonly { flag: keyof ResolvedPointingFeatureConfiguration; names: readonly string[] }[]
+
+// Strongest observing context any feature of a group needs; the group is dropped whole when the
+// accepted samples cannot supply it.
+function featureGroupRequirement(names: readonly string[]): PointingContextRequirement {
+	let rank = 0
+
+	for (let i = 0; i < names.length; i++) {
+		rank = Math.max(rank, CONTEXT_REQUIREMENT_RANK[empiricalFeatureRequirement(names[i])])
+	}
+
+	return CONTEXT_REQUIREMENT_LEVELS[rank]
+}
+
+// Selects the basis actually fitted: the configured terms minus those the observing context cannot
+// support, then minus whatever the sample count cannot afford.
+//
+// The affordability rule compares equations to free parameters. A sample contributes two equations
+// (east and north); the semi-physical block costs one parameter per term because it is shared across
+// both, while the empirical block costs one parameter per feature and per axis. A tier is kept when
+// `2 * sampleCount >= minimumSampleRatio * parameterCount`, with an absolute floor of
+// `parameterCount + 3` equations so a very small basis is not blocked by the ratio alone.
+function resolvePointingBasis(options: ResolvedPointingFitOptions, supportedContext: PointingContextRequirement, sampleCount: number): ResolvedPointingBasis {
+	const droppedTerms: string[] = []
+	const semiPhysicalTerms: SemiPhysicalTermName[] = []
+	const usesPhysical = options.strategy === 'semiPhysical' || options.strategy === 'hybrid'
+	const usesEmpirical = options.strategy === 'empirical' || options.strategy === 'hybrid'
+
+	if (usesPhysical) {
+		for (const term of options.semiPhysicalTerms) {
+			if (satisfiesContextRequirement(supportedContext, SEMI_PHYSICAL_TERM_REQUIREMENTS[term])) semiPhysicalTerms.push(term)
+			else droppedTerms.push(`${term}: requires ${SEMI_PHYSICAL_TERM_REQUIREMENTS[term]} context`)
+		}
+	}
+
+	const configuration: Record<keyof ResolvedPointingFeatureConfiguration, boolean> = { ...options.featureConfiguration }
+
+	if (!usesEmpirical) {
+		for (const group of EMPIRICAL_FEATURE_GROUPS) configuration[group.flag] = false
+		configuration.includeBias = false
+	} else {
+		for (const group of EMPIRICAL_FEATURE_GROUPS) {
+			const requirement = featureGroupRequirement(group.names)
+
+			if (configuration[group.flag] && !satisfiesContextRequirement(supportedContext, requirement)) {
+				configuration[group.flag] = false
+				droppedTerms.push(`${group.flag}: requires ${requirement} context`)
+			}
+		}
+	}
+
+	const equations = sampleCount * 2
+	let featureNames = buildEmpiricalPointingFeatureNames(configuration)
+	let parameterCount = semiPhysicalTerms.length + featureNames.length * 2
+
+	for (const group of EMPIRICAL_FEATURE_GROUPS) {
+		if (equations >= Math.max(options.minimumSampleRatio * parameterCount, parameterCount + 3)) break
+		if (!configuration[group.flag]) continue
+
+		configuration[group.flag] = false
+		droppedTerms.push(`${group.flag}: too few samples for ${parameterCount} parameters`)
+		featureNames = buildEmpiricalPointingFeatureNames(configuration)
+		parameterCount = semiPhysicalTerms.length + featureNames.length * 2
+	}
+
+	const sufficient = parameterCount > 0 && equations >= Math.max(options.minimumSampleRatio * parameterCount, parameterCount + 3)
+	return { semiPhysicalTerms, featureConfiguration: configuration, featureNames, parameterCount, droppedTerms, sufficient }
 }
 
 // Validates one sample against the configured rules.
@@ -599,134 +807,222 @@ function isFiniteCoordinate(ra: Angle, dec: Angle) {
 	return Number.isFinite(ra) && Number.isFinite(dec)
 }
 
-// Fits the empirical dx/dy residual model.
-function fitEmpiricalResidualModel(samples: readonly PreparedPointingSample[], options: ResolvedPointingFitOptions, physical: SemiPhysicalPointingModel | undefined): EmpiricalPointingModel {
-	if (!physical) {
-		return fitEmpiricalModel(samples, options, undefined)
-	}
-
-	const residualTargets = new Array<PointingOffset>(samples.length)
-
-	for (let i = 0; i < samples.length; i++) {
-		const predicted = predictSemiPhysicalOffset(physical.parameters, physical.terms, samples[i].context)
-		residualTargets[i] = { dx: samples[i].error.dx - predicted.dx, dy: samples[i].error.dy - predicted.dy }
-	}
-
-	return fitEmpiricalModel(samples, options, residualTargets)
+// Outcome of the joint stacked fit shared by every strategy.
+interface StackedOffsetFit {
+	// Coefficients laid out as [semi-physical | empirical east | empirical north].
+	readonly coefficients: Float64Array
+	readonly conditionNumber: number
+	readonly rankDeficient: boolean
+	// Projection of each empirical column onto the semi-physical block, when both blocks are present.
+	readonly orthogonalizationDx?: number[]
+	readonly orthogonalizationDy?: number[]
 }
 
-// Fits the empirical model with optional precomputed residual targets.
-function fitEmpiricalModel(samples: readonly PreparedPointingSample[], options: ResolvedPointingFitOptions, targets: readonly PointingOffset[] | undefined): EmpiricalPointingModel {
-	const names = buildEmpiricalPointingFeatureNames(options.featureConfiguration)
-	const design = new Array<Readonly<Float64Array>>(samples.length)
-	const dxTarget = new Float64Array(samples.length)
-	const dyTarget = new Float64Array(samples.length)
+// Relative threshold below which a semi-physical column is treated as linearly dependent on the
+// previous ones and excluded from the orthogonalization.
+const ORTHOGONALIZATION_TOLERANCE = 1e-12
 
-	for (let i = 0; i < samples.length; i++) {
-		const features = extractEmpiricalPointingFeatures(samples[i].context, options.featureConfiguration)
-		design[i] = features.values
-		dxTarget[i] = targets?.[i]?.dx ?? samples[i].error.dx
-		dyTarget[i] = targets?.[i]?.dy ?? samples[i].error.dy
+// Fits every model component in one stacked system. Each sample contributes two rows, east and north,
+// so a single robust weight per sample applies to the error vector as a whole rather than to each
+// axis independently. Column layout is [semi-physical | empirical east | empirical north]: the
+// semi-physical parameters are shared across both rows, while each empirical feature gets one
+// coefficient per axis and is zero on the other axis' row.
+//
+// When both blocks are present the empirical block is orthogonalized against the semi-physical block
+// by modified Gram-Schmidt before fitting. Without it the two blocks span overlapping spaces (`bias`
+// competes with `CH`, `sinHA*sinDec` reproduces `MA`, `sinAlt` reproduces `TF`), predictions stay good
+// and the fitted physical parameters become meaningless. After orthogonalization the physical terms
+// absorb everything their basis can explain and the empirical block, by construction, only describes
+// what is left. The projection coefficients are returned so prediction can repeat the subtraction.
+//
+// Ridge is applied per group and relative to the mean column energy of its own block, so the same
+// option means the same amount of shrinkage for 12 samples and for 500. The empirical block is shrunk
+// harder than the physical one, since it is a nuisance basis rather than a mechanical statement.
+function fitStackedOffsetModel(samples: readonly PreparedPointingSample[], options: ResolvedPointingFitOptions, basis: ResolvedPointingBasis): StackedOffsetFit {
+	const terms = basis.semiPhysicalTerms
+	const physicalCount = terms.length
+	const featureCount = basis.featureNames.length
+	const columnCount = physicalCount + featureCount * 2
+	const sampleCount = samples.length
+	const dataRowCount = sampleCount * 2
+	const rowCount = dataRowCount + columnCount
+
+	if (sampleCount === 0 || columnCount === 0) {
+		return { coefficients: new Float64Array(columnCount), conditionNumber: Number.POSITIVE_INFINITY, rankDeficient: true }
 	}
 
-	const dxFit = options.robust.method === 'none' ? linearLeastSquares(design, dxTarget, { ridge: options.ridge }) : robustLinearLeastSquares(design, dxTarget, { ridge: options.ridge, ...options.robust })
-	const dyFit = options.robust.method === 'none' ? linearLeastSquares(design, dyTarget, { ridge: options.ridge }) : robustLinearLeastSquares(design, dyTarget, { ridge: options.ridge, ...options.robust })
+	const rows = new Array<Float64Array>(rowCount)
+	const target = new Float64Array(rowCount)
+	const dxBasis = new Float64Array(physicalCount)
+	const dyBasis = new Float64Array(physicalCount)
+	const features = new Float64Array(featureCount)
 
-	return {
-		featureNames: names,
-		coefficientsDx: dxFit.coefficients,
-		coefficientsDy: dyFit.coefficients,
-		conditionNumberDx: dxFit.conditionNumber,
-		conditionNumberDy: dyFit.conditionNumber,
-		rankDeficientDx: dxFit.rankDeficient,
-		rankDeficientDy: dyFit.rankDeficient,
-		ridge: options.ridge,
-		robustMethod: options.robust.method,
-	}
-}
+	for (let i = 0; i < sampleCount; i++) {
+		const dxRow = new Float64Array(columnCount)
+		const dyRow = new Float64Array(columnCount)
 
-// Fits the shared-parameter semi-physical model.
-function fitSemiPhysicalModel(samples: readonly PreparedPointingSample[], options: ResolvedPointingFitOptions): SemiPhysicalPointingModel {
-	const terms = options.semiPhysicalTerms
-	const parameterCount = terms.length
-	const designRows = new Array<Readonly<Float64Array>>(samples.length * 2)
-	const target = new Float64Array(samples.length * 2)
-	let weights = new Float64Array(samples.length).fill(1)
+		semiPhysicalBasis(samples[i].context, terms, dxBasis, dyBasis)
+		featuresFromContext(samples[i].context, basis.featureConfiguration, features)
 
-	for (let i = 0; i < samples.length; i++) {
-		const dx = new Float64Array(parameterCount)
-		const dy = new Float64Array(parameterCount)
-		semiPhysicalBasis(samples[i].context, terms, dx, dy)
-		designRows[i * 2] = dx
-		designRows[i * 2 + 1] = dy
+		for (let k = 0; k < physicalCount; k++) {
+			dxRow[k] = dxBasis[k]
+			dyRow[k] = dyBasis[k]
+		}
+
+		for (let j = 0; j < featureCount; j++) {
+			dxRow[physicalCount + j] = features[j]
+			dyRow[physicalCount + featureCount + j] = features[j]
+		}
+
+		rows[i * 2] = dxRow
+		rows[i * 2 + 1] = dyRow
 		target[i * 2] = samples[i].error.dx
 		target[i * 2 + 1] = samples[i].error.dy
 	}
 
-	if (samples.length === 0) {
-		return {
-			terms,
-			parameters: new Array<number>(parameterCount).fill(0),
-			conditionNumber: Number.POSITIVE_INFINITY,
-			rankDeficient: true,
-			ridge: options.ridge,
-			robustMethod: options.robust.method,
-		}
+	const orthogonalization = physicalCount > 0 && featureCount > 0 ? orthogonalizeAgainstPhysicalBlock(rows, dataRowCount, physicalCount, featureCount) : undefined
+	const physicalRidge = options.ridge * blockColumnEnergy(rows, dataRowCount, 0, physicalCount)
+	// The heavier empirical shrinkage exists to keep a nuisance basis from competing with the physical
+	// one. With no physical block the empirical basis *is* the model, so it gets the base ridge instead.
+	const empiricalRidge = (physicalCount > 0 ? options.ridgeEmpirical : options.ridge) * blockColumnEnergy(rows, dataRowCount, physicalCount, featureCount * 2)
+
+	// Tikhonov rows appended to the design, one per column, so each block carries its own ridge.
+	for (let column = 0; column < columnCount; column++) {
+		const row = new Float64Array(columnCount)
+		row[column] = Math.sqrt(column < physicalCount ? physicalRidge : empiricalRidge)
+		rows[dataRowCount + column] = row
 	}
 
-	let parameters = new Float64Array(parameterCount)
+	const weights = new Float64Array(rowCount).fill(1)
+	let sampleWeights = new Float64Array(sampleCount).fill(1)
+	let coefficients = new Float64Array(columnCount)
 	let conditionNumber = Number.POSITIVE_INFINITY
 	let rankDeficient = true
 
 	for (let iteration = 0; iteration < Math.max(1, options.robust.maxIterations); iteration++) {
-		const duplicatedWeights = duplicateSampleWeights(weights)
-		const fit = linearLeastSquares(designRows, target, { ridge: options.ridge, weights: duplicatedWeights })
-		parameters = new Float64Array(fit.coefficients)
+		for (let i = 0; i < sampleCount; i++) {
+			weights[i * 2] = sampleWeights[i]
+			weights[i * 2 + 1] = sampleWeights[i]
+		}
+
+		const fit = linearLeastSquares(rows, target, { weights })
+		coefficients = new Float64Array(fit.coefficients)
 		conditionNumber = fit.conditionNumber
 		rankDeficient = fit.rankDeficient
 
-		if (options.robust.method === 'none') {
-			break
-		}
+		if (options.robust.method === 'none') break
 
-		const residuals = new Float64Array(samples.length)
+		const residuals = new Float64Array(sampleCount)
 
-		for (let i = 0; i < samples.length; i++) {
-			// Reuse the design rows built once above instead of recomputing the basis (trig + allocations) each iteration.
-			const predicted = evaluateSemiPhysicalBasis(parameters, designRows[i * 2], designRows[i * 2 + 1])
-			residuals[i] = Math.hypot(samples[i].error.dx - predicted.dx, samples[i].error.dy - predicted.dy)
+		for (let i = 0; i < sampleCount; i++) {
+			residuals[i] = Math.hypot(target[i * 2] - dotRow(rows[i * 2], coefficients), target[i * 2 + 1] - dotRow(rows[i * 2 + 1], coefficients))
 		}
 
 		const nextWeights = robustSampleWeights(residuals, options.robust)
+		const converged = maxWeightDifference(sampleWeights, nextWeights) <= options.robust.tolerance
+		sampleWeights = nextWeights
 
-		if (maxWeightDifference(weights, nextWeights) <= options.robust.tolerance) {
-			weights = nextWeights
-			break
-		}
-
-		weights = nextWeights
+		if (converged) break
 	}
 
-	return {
-		terms,
-		parameters: Array.from(parameters),
-		conditionNumber,
-		rankDeficient,
-		ridge: options.ridge,
-		robustMethod: options.robust.method,
-	}
+	return { coefficients, conditionNumber, rankDeficient, orthogonalizationDx: orthogonalization?.dx, orthogonalizationDy: orthogonalization?.dy }
 }
 
-// Duplicates per-sample weights into the stacked dx/dy fit rows.
-function duplicateSampleWeights(weights: Readonly<NumberArray>) {
-	const duplicated = new Float64Array(weights.length * 2)
+// Removes from every empirical column the part explained by the semi-physical block, mutating `rows`
+// in place over the first `dataRowCount` rows. Returns the projection coefficients expressed in the
+// original semi-physical columns, flattened row-major as `[physicalCount][featureCount]` per axis, so
+// prediction can apply the identical subtraction to a new sample.
+function orthogonalizeAgainstPhysicalBlock(rows: readonly Float64Array[], dataRowCount: number, physicalCount: number, featureCount: number) {
+	// Modified Gram-Schmidt of the semi-physical block: `physical = q * r` with `r` upper triangular.
+	const q = new Array<Float64Array>(physicalCount)
+	const r = new Float64Array(physicalCount * physicalCount)
+	let maximumNorm = 0
 
-	for (let i = 0; i < weights.length; i++) {
-		duplicated[i * 2] = weights[i]
-		duplicated[i * 2 + 1] = weights[i]
+	for (let j = 0; j < physicalCount; j++) {
+		const v = new Float64Array(dataRowCount)
+
+		for (let row = 0; row < dataRowCount; row++) v[row] = rows[row][j]
+
+		for (let k = 0; k < j; k++) {
+			let projection = 0
+			for (let row = 0; row < dataRowCount; row++) projection += q[k][row] * v[row]
+			r[k * physicalCount + j] = projection
+			for (let row = 0; row < dataRowCount; row++) v[row] -= projection * q[k][row]
+		}
+
+		let norm = 0
+		for (let row = 0; row < dataRowCount; row++) norm += v[row] * v[row]
+		norm = Math.sqrt(norm)
+		r[j * physicalCount + j] = norm
+		maximumNorm = Math.max(maximumNorm, norm)
+
+		if (norm > 0) {
+			for (let row = 0; row < dataRowCount; row++) v[row] /= norm
+		}
+
+		q[j] = v
 	}
 
-	return duplicated
+	const tolerance = maximumNorm * ORTHOGONALIZATION_TOLERANCE
+	const dx = new Array<number>(physicalCount * featureCount).fill(0)
+	const dy = new Array<number>(physicalCount * featureCount).fill(0)
+	const projections = new Float64Array(physicalCount)
+	const coefficients = new Float64Array(physicalCount)
+
+	for (let block = 0; block < 2; block++) {
+		const offset = physicalCount + block * featureCount
+		const output = block === 0 ? dx : dy
+
+		for (let j = 0; j < featureCount; j++) {
+			const column = offset + j
+
+			for (let k = 0; k < physicalCount; k++) {
+				let projection = 0
+				for (let row = 0; row < dataRowCount; row++) projection += q[k][row] * rows[row][column]
+				projections[k] = projection
+			}
+
+			// Back-substitute `r * coefficients = projections` to express the projection in the original
+			// semi-physical columns instead of the orthonormal ones.
+			for (let k = physicalCount - 1; k >= 0; k--) {
+				let sum = projections[k]
+				for (let m = k + 1; m < physicalCount; m++) sum -= r[k * physicalCount + m] * coefficients[m]
+				coefficients[k] = r[k * physicalCount + k] > tolerance ? sum / r[k * physicalCount + k] : 0
+			}
+
+			for (let k = 0; k < physicalCount; k++) output[k * featureCount + j] = coefficients[k]
+
+			for (let row = 0; row < dataRowCount; row++) {
+				let correction = 0
+				for (let k = 0; k < physicalCount; k++) correction += coefficients[k] * rows[row][k]
+				rows[row][column] -= correction
+			}
+		}
+	}
+
+	return { dx, dy }
+}
+
+// Mean squared entry of a column block over the data rows, used to make the ridge scale-invariant.
+function blockColumnEnergy(rows: readonly Float64Array[], dataRowCount: number, offset: number, count: number) {
+	if (count === 0 || dataRowCount === 0) return 0
+
+	let energy = 0
+
+	for (let row = 0; row < dataRowCount; row++) {
+		for (let column = offset; column < offset + count; column++) {
+			energy += rows[row][column] * rows[row][column]
+		}
+	}
+
+	return energy / count
+}
+
+// Dot product of one design row with the coefficient vector.
+function dotRow(row: Readonly<Float64Array>, coefficients: Readonly<Float64Array>) {
+	let sum = 0
+	for (let i = 0; i < row.length; i++) sum += row[i] * coefficients[i]
+	return sum
 }
 
 // Builds robust sample weights from radial residuals.
@@ -783,23 +1079,57 @@ function maxWeightDifference(a: Readonly<NumberArray>, b: Readonly<NumberArray>)
 	return difference
 }
 
-// Predicts the empirical model offset from the fitted coefficients.
-function predictEmpiricalOffset(model: EmpiricalPointingModel, input: Readonly<PointingModelInput>, configuration: ResolvedPointingFeatureConfiguration): PointingOffset {
-	const features = extractEmpiricalPointingFeatures(input, configuration)
-	return { dx: predictLinearLeastSquares(model.coefficientsDx, features.values), dy: predictLinearLeastSquares(model.coefficientsDy, features.values) }
+// Predicts the empirical model offset from the fitted coefficients, repeating the orthogonalization
+// applied at fit time when the model carries one.
+//
+// Subtracting the stored projection is equivalent to shifting the semi-physical parameters, because
+// every orthogonalized column is `feature - projection onto the semi-physical block`. Expanding both
+// axes collapses the correction into a single vector `u` over the semi-physical terms, so only one
+// basis evaluation is needed.
+function predictEmpiricalOffset(model: EmpiricalPointingModel, context: PointingContext, configuration: ResolvedPointingFeatureConfiguration, terms: readonly SemiPhysicalTermName[] | undefined): PointingOffset {
+	const featureCount = model.featureNames.length
+	const features = new Float64Array(featureCount)
+	featuresFromContext(context, configuration, features)
+
+	const dx = predictLinearLeastSquares(model.coefficientsDx, features)
+	const dy = predictLinearLeastSquares(model.coefficientsDy, features)
+	const orthogonalizationDx = model.orthogonalizationDx
+	const orthogonalizationDy = model.orthogonalizationDy
+
+	if (!orthogonalizationDx || !orthogonalizationDy || !terms || terms.length === 0) return { dx, dy }
+
+	const physicalCount = terms.length
+	const basisDx = new Float64Array(physicalCount)
+	const basisDy = new Float64Array(physicalCount)
+	semiPhysicalBasis(context, terms, basisDx, basisDy)
+
+	let correctionDx = 0
+	let correctionDy = 0
+
+	for (let k = 0; k < physicalCount; k++) {
+		let u = 0
+
+		for (let j = 0; j < featureCount; j++) {
+			u += model.coefficientsDx[j] * orthogonalizationDx[k * featureCount + j] + model.coefficientsDy[j] * orthogonalizationDy[k * featureCount + j]
+		}
+
+		correctionDx += u * basisDx[k]
+		correctionDy += u * basisDy[k]
+	}
+
+	return { dx: dx - correctionDx, dy: dy - correctionDy }
 }
 
 // Predicts each model component individually for diagnostics and correction metadata.
 function predictModelComponents(model: FittedPointingModel, context: PointingContext) {
-	const input: Readonly<PointingModelInput> = { rightAscension: context.rightAscension, declination: context.declination, time: context.time, latitude: context.latitude, longitude: context.longitude, pierSide: context.pierSide }
 	const physical = model.physical ? predictSemiPhysicalOffset(model.physical.parameters, model.physical.terms, context) : undefined
-	const empirical = model.strategy === 'empirical' && model.empirical ? predictEmpiricalOffset(model.empirical, input, model.featureConfiguration) : undefined
-	const residual = model.strategy === 'hybrid' && model.residual ? predictEmpiricalOffset(model.residual, input, model.featureConfiguration) : undefined
+	const empirical = model.strategy === 'empirical' && model.empirical ? predictEmpiricalOffset(model.empirical, context, model.featureConfiguration, model.physical?.terms) : undefined
+	const residual = model.strategy === 'hybrid' && model.residual ? predictEmpiricalOffset(model.residual, context, model.featureConfiguration, model.physical?.terms) : undefined
 	return { physical, empirical, residual }
 }
 
 // Builds fit diagnostics from the fitted model and training samples.
-function buildPointingDiagnostics(totalSamples: number, prepared: PreparedPointingSamples, model: FittedPointingModel, empiricalFeatureNames: readonly string[]): PointingDiagnostics {
+function buildPointingDiagnostics(totalSamples: number, prepared: PreparedPointingSamples, model: FittedPointingModel, basis: ResolvedPointingBasis): PointingDiagnostics {
 	const residuals = new Float64Array(prepared.accepted.length)
 	const residualsDx = new Float64Array(prepared.accepted.length)
 	const residualsDy = new Float64Array(prepared.accepted.length)
@@ -841,13 +1171,19 @@ function buildPointingDiagnostics(totalSamples: number, prepared: PreparedPointi
 		warnings.push('the fitted model is poorly constrained or ill-conditioned')
 	}
 
-	if (prepared.accepted.length < Math.max(2, empiricalFeatureNames.length)) {
-		warnings.push('the empirical feature matrix is underdetermined for the available samples')
+	if (!basis.sufficient) {
+		warnings.push(`too few samples to fit ${basis.parameterCount} parameter(s); the model is not usable for prediction`)
+	}
+
+	if (basis.droppedTerms.length > 0) {
+		warnings.push(`dropped term(s): ${basis.droppedTerms.join('; ')}`)
 	}
 
 	residuals.sort()
 
 	return {
+		supportedContext: prepared.supportedContext,
+		droppedTerms: basis.droppedTerms,
 		totalSamples,
 		validSamples: prepared.accepted.length,
 		rejectedSamples: prepared.rejected.length,
@@ -1007,6 +1343,8 @@ function unfittedPrediction(input: Readonly<PointingModelInput>): PredictedPoint
 // Produces the default diagnostics object for the empty state.
 function emptyDiagnostics(totalSamples: number): PointingDiagnostics {
 	return {
+		supportedContext: 'none',
+		droppedTerms: [],
 		totalSamples,
 		validSamples: 0,
 		rejectedSamples: totalSamples,
