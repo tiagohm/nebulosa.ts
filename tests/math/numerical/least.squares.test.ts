@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { linearLeastSquares, predictLinearLeastSquares, robustLinearLeastSquares } from '../../../src/math/numerical/least.squares'
+import { leastSquaresCoefficients, linearLeastSquares, predictLinearLeastSquares, robustLinearLeastSquares } from '../../../src/math/numerical/least.squares'
 
 test('linear least squares', () => {
 	const design = [new Float64Array([1, 0]), new Float64Array([1, 1]), new Float64Array([1, 2]), new Float64Array([1, 3])]
@@ -58,6 +58,23 @@ test('a ridge shrinks leverage below the unregularized value', () => {
 		expect(regularized.leverage![i]).toBeLessThan(plain.leverage![i])
 		expect(regularized.leverage![i]).toBeGreaterThan(0)
 	}
+})
+
+test('the coefficients-only solver matches the full solve exactly', () => {
+	const design = [new Float64Array([1, 0, 0]), new Float64Array([1, 1, 1]), new Float64Array([1, 2, 4]), new Float64Array([1, 3, 9]), new Float64Array([1, 4, 16])]
+	const target = new Float64Array([1.1, 2.9, 5.2, 6.8, 9.3])
+	const weights = new Float64Array([1, 0.5, 2, 0.25, 1.5])
+
+	for (const options of [{}, { weights }, { ridge: 0.3 }, { weights, ridge: 0.3 }]) {
+		const full = linearLeastSquares(design, target, options)
+		const cheap = leastSquaresCoefficients(design, target, options)
+
+		expect(cheap.length).toBe(full.coefficients.length)
+
+		for (let i = 0; i < cheap.length; i++) expect(cheap[i]).toBe(full.coefficients[i])
+	}
+
+	expect(() => leastSquaresCoefficients(design, new Float64Array(2))).toThrowError()
 })
 
 test('robust linear least squares resists outliers', () => {

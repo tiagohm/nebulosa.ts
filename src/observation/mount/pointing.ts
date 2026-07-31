@@ -7,7 +7,7 @@ import { validateNumberArray, validateObject, validateOneOf } from '../../core/v
 import type { PierSide } from '../../devices/indi/device'
 import { type Vec3, vecAngle } from '../../math/linear-algebra/vec3'
 import { sphericalProjectTangentPlane, sphericalUnprojectTangentPlane } from '../../math/numerical/geometry'
-import { linearLeastSquares, predictLinearLeastSquares, type RobustRegressionMethod } from '../../math/numerical/least.squares'
+import { leastSquaresCoefficients, linearLeastSquares, predictLinearLeastSquares, type RobustRegressionMethod } from '../../math/numerical/least.squares'
 import type { NumberArray } from '../../math/numerical/math'
 import { type Angle, normalizePI } from '../../math/units/angle'
 // oxfmt-ignore
@@ -1307,27 +1307,21 @@ function fitStackedOffsetModel(samples: readonly PreparedPointingSample[], optio
 	const weights = new Float64Array(rowCount).fill(1)
 	const baseWeights = normalizedSampleWeights(samples)
 	let robustWeights = new Float64Array(sampleCount).fill(1)
-	let coefficients = new Float64Array(columnCount)
-	let conditionNumber = Number.POSITIVE_INFINITY
-	let rankDeficient = true
-	let leverage: Readonly<NumberArray> | undefined
 
-	for (let iteration = 0; iteration < Math.max(1, options.robust.maxIterations); iteration++) {
-		for (let i = 0; i < sampleCount; i++) {
-			const weight = baseWeights[i] * robustWeights[i]
-			weights[i * 2] = weight
-			weights[i * 2 + 1] = weight
-		}
+	applyStackedWeights(weights, baseWeights, robustWeights, sampleCount)
 
-		const fit = linearLeastSquares(rows, target, { weights, leverage: true })
-		coefficients = new Float64Array(fit.coefficients)
-		conditionNumber = fit.conditionNumber
-		rankDeficient = fit.rankDeficient
-		leverage = fit.leverage
+	// Reused by every IRLS pass: one entry per sample, overwritten in place.
+	const residuals = new Float64Array(sampleCount)
 
-		if (options.robust.method === 'none') break
+	// The IRLS passes exist only to settle the weights, and settling them needs nothing but coefficients.
+	// Solving through `linearLeastSquares` instead would re-estimate the condition number and re-invert the
+	// normal matrix on every pass — together the bulk of a solve's cost — and throw both away on all but
+	// the last one. The loop leaves `weights` holding the vector that produced its final coefficients, so
+	// the single full solve below reproduces them exactly.
+	for (let iteration = 0; options.robust.method !== 'none' && iteration < Math.max(1, options.robust.maxIterations); iteration++) {
+		applyStackedWeights(weights, baseWeights, robustWeights, sampleCount)
 
-		const residuals = new Float64Array(sampleCount)
+		const coefficients = leastSquaresCoefficients(rows, target, { weights })
 
 		for (let i = 0; i < sampleCount; i++) {
 			residuals[i] = Math.hypot(target[i * 2] - dotRow(rows[i * 2], coefficients), target[i * 2 + 1] - dotRow(rows[i * 2 + 1], coefficients))
@@ -1340,7 +1334,22 @@ function fitStackedOffsetModel(samples: readonly PreparedPointingSample[], optio
 		if (converged) break
 	}
 
-	return { coefficients, conditionNumber, rankDeficient, leverage, orthogonalizationDx: orthogonalization?.dx, orthogonalizationDy: orthogonalization?.dy }
+	const fit = linearLeastSquares(rows, target, { weights, leverage: true })
+
+	return { coefficients: new Float64Array(fit.coefficients), conditionNumber: fit.conditionNumber, rankDeficient: fit.rankDeficient, leverage: fit.leverage, orthogonalizationDx: orthogonalization?.dx, orthogonalizationDy: orthogonalization?.dy }
+}
+
+// Spreads the per-sample weights over the two stacked rows each sample contributes to the design, leaving
+// the appended Tikhonov rows at their fixed weight of 1.
+//
+// `weights` is mutated in place. `baseWeights` and `robustWeights` hold one entry per sample; `weights`
+// holds one per design row, with the `2 * sampleCount` data rows first.
+function applyStackedWeights(weights: Float64Array, baseWeights: Readonly<NumberArray>, robustWeights: Readonly<NumberArray>, sampleCount: number) {
+	for (let i = 0; i < sampleCount; i++) {
+		const weight = baseWeights[i] * robustWeights[i]
+		weights[i * 2] = weight
+		weights[i * 2 + 1] = weight
+	}
 }
 
 // Turns the per-sample inverse-variance weights into a vector with mean 1.
@@ -1469,7 +1478,7 @@ function blockColumnEnergy(rows: readonly Float64Array[], dataRowCount: number, 
 }
 
 // Dot product of one design row with the coefficient vector.
-function dotRow(row: Readonly<Float64Array>, coefficients: Readonly<Float64Array>) {
+function dotRow(row: Readonly<Float64Array>, coefficients: Readonly<NumberArray>) {
 	let sum = 0
 	for (let i = 0; i < row.length; i++) sum += row[i] * coefficients[i]
 	return sum

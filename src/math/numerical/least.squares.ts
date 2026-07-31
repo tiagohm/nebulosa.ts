@@ -120,6 +120,21 @@ export function linearLeastSquares(design: readonly Readonly<NumberArray>[], tar
 	return { coefficients, fitted, residuals, conditionNumber, rankDeficient, leverage: leverage ? leastSquaresLeverage(design, weights, Math.max(ridge, 0), rows, cols) : undefined }
 }
 
+// Solves a weighted, optionally ridge-regularized least-squares system and returns only the coefficients.
+//
+// `linearLeastSquares` additionally computes the fitted values, the residuals, a condition-number estimate
+// and, on request, the hat-matrix diagonal. The condition number costs a Jacobi eigendecomposition of the
+// normal matrix and the leverage costs an inversion of it, and together they dominate the call. An IRLS
+// loop needs none of them while its weights are still moving, so it can iterate through this and call
+// `linearLeastSquares` once at the end with the weights it settled on.
+//
+// `weights` must be finite and non-negative, one per design row. Throws when the design is not
+// rectangular or does not match `target` in length.
+export function leastSquaresCoefficients(design: readonly Readonly<NumberArray>[], target: Readonly<NumberArray>, { weights, ridge = 0 }: LinearLeastSquaresOptions = {}): Readonly<NumberArray> {
+	if (design.length !== target.length) throw new Error('design matrix row count must match target length')
+	return solveLinearLeastSquares(design, target, weights, ridge)
+}
+
 // Computes the hat-matrix diagonal `h_i = w_i * a_iᵀ (AᵀWA + ridge*I)⁻¹ a_i` for each design row.
 //
 // The ridge is included so the leverage matches the fit actually performed; with a positive ridge the
