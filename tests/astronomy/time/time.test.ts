@@ -461,7 +461,7 @@ test('providers', () => {
 
 	for (let scale = 0; scale <= 6; scale++) {
 		const t = timeYMDHMS(2020, 10, 7, 12, 0, 0, scale)
-		t.providers = providers
+		Object.defineProperty(t, 'providers', { value: providers, enumerable: false, writable: true })
 
 		const a = ut1(t)
 		expect(a.providers).toBe(providers)
@@ -480,6 +480,12 @@ test('providers', () => {
 
 		const f = tdb(e)
 		expect(f.providers).toBe(providers)
+
+		// Providers is not cloneable
+		const cloned = structuredClone(f)
+		expect(cloned.day).toBe(f.day)
+		expect(cloned.fraction).toBe(f.fraction)
+		expect(cloned.scale).toBe(f.scale)
 	}
 }, 100)
 

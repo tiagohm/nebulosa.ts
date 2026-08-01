@@ -47,8 +47,8 @@ export type PHD2EventType =
 // PHD2 application/guiding state.
 export type PHD2AppState = 'Stopped' | 'Selected' | 'Calibrating' | 'Guiding' | 'LostLock' | 'Paused' | 'Looping'
 
-// Severity of an Alert event.
-export type PHD2AlertType = 'Info' | 'Question' | 'Warning' | 'Error'
+// Severity of an Alert event, using the lowercase values PHD2 sends on the wire.
+export type PHD2AlertType = 'info' | 'question' | 'warning' | 'error'
 
 // Guide pulse direction.
 export type PHD2GuideDirection = 'North' | 'South' | 'West' | 'East'
@@ -103,8 +103,8 @@ export interface PHD2Event<E extends PHD2EventType> {
 
 // PHD2 version/capability announcement sent on connect.
 export interface PHD2VersionEvent extends PHD2Event<'Version'> {
-	readonly PHD2Version: string
-	readonly PHD2Subver: string
+	readonly PHDVersion: string
+	readonly PHDSubver: string
 	readonly OverlapSupport: boolean
 	readonly MsgVersion: number
 }
@@ -172,8 +172,9 @@ export interface PHD2GuideStepEvent extends PHD2Event<'GuideStep'> {
 	readonly SNR: number
 	readonly HFD: number
 	readonly AvgDist: number
-	readonly RALimited: boolean
-	readonly DecLimited: boolean
+	// Present only when the corresponding axis pulse was clipped by the maximum-duration limit.
+	readonly RALimited?: boolean
+	readonly DecLimited?: boolean
 	readonly ErrorCode: number
 }
 
