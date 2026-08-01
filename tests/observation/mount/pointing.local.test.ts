@@ -13,7 +13,7 @@ import { type Angle, arcmin, deg, hour, normalizeAngle } from '../../../src/math
 import { computePointingError, fitPointingModel, MountPointing, type PointingSample, predictPointingModelError } from '../../../src/observation/mount/pointing'
 import { extractPointingContext, predictSemiPhysicalOffset, SEMI_PHYSICAL_TERM_NAMES } from '../../../src/observation/mount/pointing.basis'
 import { buildLocalPointingResidual, predictLocalPointingResidual, resolveLocalResidualOptions } from '../../../src/observation/mount/pointing.local'
-import { sampleInput } from '../../pointing.util'
+import { sampleInput } from './pointing.util'
 
 // Covers the local kNN residual layer both in isolation, where the residuals are handed to it directly,
 // and through a full fit, where it must recover a localized error the global basis cannot express.

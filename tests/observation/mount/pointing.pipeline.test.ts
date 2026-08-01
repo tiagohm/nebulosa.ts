@@ -13,7 +13,7 @@ import { createIdealAltAzGeometry } from '../../../src/observation/mount/kinemat
 import { computePointingError, fitPointingModel, type PointingErrorRepresentation } from '../../../src/observation/mount/pointing'
 import type { SemiPhysicalTermName } from '../../../src/observation/mount/pointing.basis'
 import { celestialToEncoders, encodersToCelestial, type MountPointingChain } from '../../../src/observation/mount/pointing.pipeline'
-import { generateMechanicalPointingSamples } from '../../pointing.util'
+import { generateMechanicalPointingSamples } from './pointing.util'
 
 // Exercises the composition of alignment, kinematics and the residual pointing model. The individual
 // layers are covered by their own suites; what matters here is that the two conversions are exact

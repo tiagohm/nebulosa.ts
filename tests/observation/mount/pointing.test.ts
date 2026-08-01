@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test'
+import { describe, expect, test } from 'bun:test'
 import { equatorialToHorizontal } from '../../../src/astronomy/coordinates/coordinate'
 import { eraC2s, eraS2c } from '../../../src/astronomy/coordinates/erfa/erfa'
 import { localSiderealTime } from '../../../src/astronomy/observer/location'
@@ -10,7 +10,7 @@ import type { NumberArray } from '../../../src/math/numerical/math'
 import { type Angle, arcmin, deg, hour, normalizeAngle } from '../../../src/math/units/angle'
 import { applyPointingOffset, computePointingError, correctPointingCoordinate, type FittedPointingModel, fitPointingModel, MountPointing, type PointingModelStrategy, type PointingSample, predictPointingModelError, selectPointingStrategy, type SerializedPointingModel } from '../../../src/observation/mount/pointing'
 import { buildEmpiricalPointingFeatureNames, extractEmpiricalPointingFeatures, resolveFeatureConfiguration, SEMI_PHYSICAL_TERM_NAMES, type PointingFeatureConfiguration, type PointingModelInput, type SemiPhysicalTermName } from '../../../src/observation/mount/pointing.basis'
-import { coefficientsByName, generateMechanicalPointingSamples, generateSyntheticPointingSamples, sampleInput } from '../../pointing.util'
+import { coefficientsByName, generateMechanicalPointingSamples, generateSyntheticPointingSamples, sampleInput } from './pointing.util'
 
 const TIME = timeYMDHMS(2026, 1, 5, 3, 0, 0)
 const LATITUDE = deg(-23)
@@ -157,34 +157,38 @@ test('robust empirical fit outperforms plain least squares on outlier-contaminat
 	expect(medianPredictionResidual(robust, validation)).toBeLessThan(medianPredictionResidual(plain, validation))
 })
 
-test('robust leave-one-out error matches explicit refits on outlier-contaminated data', () => {
+describe('leave-one-out error matches explicit refits for every weighting scheme', () => {
 	const parameters = { CH: arcmin(1.1), IH: arcmin(1.6), ID: arcmin(-1.3), NP: arcmin(0.8), MA: arcmin(1.2), ME: arcmin(-1), TF: arcmin(0.9) } as const
-	// A small, heavily contaminated set: removing one sample there really does move the robust weights of
-	// the ones that remain, which is exactly what the leverage identity cannot represent.
-	const samples = generateSyntheticPointingSamples({ count: 16, seed: 55, strategy: 'semiPhysical', time: TIME, latitude: LATITUDE, longitude: LONGITUDE, semiPhysicalParameters: parameters, noiseStd: arcmin(0.1), outlierFraction: 0.4, outlierStd: deg(0.4), includeBothPierSides: true })
+	const contaminated = generateSyntheticPointingSamples({ count: 16, seed: 55, strategy: 'semiPhysical', time: TIME, latitude: LATITUDE, longitude: LONGITUDE, semiPhysicalParameters: parameters, noiseStd: arcmin(0.1), outlierFraction: 0.4, outlierStd: deg(0.4), includeBothPierSides: true })
+	const sparse = generateSyntheticPointingSamples({ count: 12, seed: 13, strategy: 'semiPhysical', time: TIME, latitude: LATITUDE, longitude: LONGITUDE, semiPhysicalParameters: parameters, noiseStd: arcmin(0.4), includeBothPierSides: true })
 
-	for (const method of ['huber', 'tukey'] as const) {
-		const options = { strategy: 'semiPhysical', robust: { method }, validation: { minimumAltitude: -PI / 2, maximumSampleSeparation: deg(5) } } as const
-		const model = fitPointingModel(samples, options)
+	for (const [method, samples] of [
+		['none', sparse],
+		['huber', contaminated],
+		['tukey', contaminated],
+	] as const) {
+		test(method, () => {
+			const options = { strategy: 'semiPhysical', robust: { method }, validation: { minimumAltitude: -PI / 2, maximumSampleSeparation: deg(5) } } as const
+			const model = fitPointingModel(samples, options)
 
-		expect(model.diagnostics.validSamples).toBe(samples.length)
-		expect(model.diagnostics.looRms).toBeDefined()
+			expect(model.diagnostics.validSamples).toBe(samples.length)
+			expect(model.diagnostics.looRms).toBeDefined()
 
-		// The reference: refit the whole model without each sample and measure what it predicts there.
-		let total = 0
+			let total = 0
 
-		for (let i = 0; i < samples.length; i++) {
-			const fold = fitPointingModel(
-				samples.filter((_, index) => index !== i),
-				options,
-			)
-			const prediction = predictPointingModelError(fold, sampleInput(samples[i]))
-			const error = computePointingError(samples[i].targetRightAscension, samples[i].targetDeclination, samples[i].solvedRightAscension, samples[i].solvedDeclination)
-			total += (error.dx - prediction.dx) ** 2 + (error.dy - prediction.dy) ** 2
-		}
+			for (let i = 0; i < samples.length; i++) {
+				const fold = fitPointingModel(
+					samples.filter((_, index) => index !== i),
+					options,
+				)
+				const prediction = predictPointingModelError(fold, sampleInput(samples[i]))
+				const error = computePointingError(samples[i].targetRightAscension, samples[i].targetDeclination, samples[i].solvedRightAscension, samples[i].solvedDeclination)
+				total += (error.dx - prediction.dx) ** 2 + (error.dy - prediction.dy) ** 2
+			}
 
-		const explicitLooRms = Math.sqrt(total / samples.length)
-		expect(Math.abs(model.diagnostics.looRms! / explicitLooRms - 1)).toBeLessThan(0.02)
+			const explicitLooRms = Math.sqrt(total / samples.length)
+			expect(Math.abs(model.diagnostics.looRms! / explicitLooRms - 1)).toBeLessThan(0.02)
+		})
 	}
 })
 
