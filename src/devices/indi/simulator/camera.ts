@@ -20,7 +20,7 @@ import { type Angle, arcsec, formatDEC, formatRA, normalizeAngle, toDeg, toHour 
 import { handleSetBlobVector, type IndiClientHandler } from '../client'
 import { DeviceInterfaceType, type FrameType, type GuideDirection, type PierSide } from '../device'
 import type { FocuserManager, GuideOutputManager, MountManager, RotatorManager, WheelManager } from '../manager'
-import { findOnSwitch, makeBlobVector, makeNumberVector, makeSwitchVector, makeTextVector, type NewNumberVector, type NewSwitchVector, type NewTextVector } from '../types'
+import { findOnSwitch, makeBlobVector, makeNumberVector, makeSwitchVector, makeTextVector, type EnableBlob, type NewNumberVector, type NewSwitchVector, type NewTextVector } from '../types'
 import type { ClientSimulator } from './client'
 // oxfmt-ignore
 import { CAMERA_AMBIENT_TEMPERATURE, CAMERA_BLOB_PADDING, CAMERA_DEFAULT_TARGET_TEMPERATURE, CAMERA_MAX_BIN, CAMERA_MAX_EXPOSURE, CAMERA_MAX_SCENE_MARGIN, CAMERA_MIN_EXPOSURE, CAMERA_PIXEL_SIZE, CAMERA_SCENE_SEED, CAMERA_SENSOR_HEIGHT, CAMERA_SENSOR_WIDTH, GENERAL_INFO, MAIN_CONTROL, MAX_TRAJECTORY_SAMPLES, SIMULATION, TICK_INTERVAL_MS, TRAJECTORY_PIXELS_PER_SAMPLE } from './constants'
@@ -247,6 +247,8 @@ export class CameraSimulator extends DeviceSimulator {
 	// pixel offsets they convert to afterwards, so a rendering allocates nothing for it.
 	readonly #trajectoryBuffer = new Float64Array(MAX_TRAJECTORY_SAMPLES * 3)
 	readonly #trajectoryOffset: Point = { x: 0, y: 0 }
+	#onlyBlob = false
+	#ignoreBlob = false
 
 	readonly #mountManager?: MountManager
 	readonly #focuserManager?: FocuserManager
@@ -281,6 +283,16 @@ export class CameraSimulator extends DeviceSimulator {
 		this.#rotatorManager = options?.rotatorManager
 		this.#guideOutputManager = options?.guideOutputManager
 		this.#wheelManager = options?.wheelManager
+	}
+
+	enableBlob(command: EnableBlob) {
+		this.#onlyBlob = command.value === 'Only'
+		this.#ignoreBlob = command.value === 'Never'
+	}
+
+	protected notify(message: SimulatorProperty) {
+		if (this.#onlyBlob) return
+		super.notify(message)
 	}
 
 	get activeMount() {
@@ -743,28 +755,30 @@ export class CameraSimulator extends DeviceSimulator {
 
 		// The shutter has closed and everything this frame is drawn from has been taken over, so the
 		// exposure is finished as far as a client is concerned and the next one is free to start.
-		//
 		// Marked before the awaits below rather than after them. An exposure left Busy while its frame is
 		// being completed, with the deadline that identified it as finished already cleared, is one the
 		// next tick recognizes as a second finished exposure: it called this again, found the context
 		// gone, rebuilt one from the present and published an extra frame for a single shutter.
 		this.#image.state = 'Ok'
 		this.#exposure.state = 'Ok'
-		await this.#awaitExposedTrajectory(exposure)
 
-		try {
-			const blob = await this.#renderImage(exposure)
-			this.#image.elements.CCD1.size = blob.byteLength.toFixed(0)
-			this.#image.elements.CCD1.format = this.transferFormat === 'XISF' ? '.xisf' : '.fits'
-			this.#image.elements.CCD1.value = blob
-			this.#image.elements.CCD1.encoding = 'raw'
-			handleSetBlobVector(this.client, this.handler, this.#image)
-		} catch (e) {
-			this.#image.state = 'Alert'
-			this.#image.elements.CCD1.size = '0'
-			this.#image.elements.CCD1.value = undefined
-			this.#exposure.state = 'Alert'
-			console.error('failed to render image', e)
+		if (!this.#ignoreBlob) {
+			await this.#awaitExposedTrajectory(exposure)
+
+			try {
+				const blob = await this.#renderImage(exposure)
+				this.#image.elements.CCD1.size = blob.byteLength.toFixed(0)
+				this.#image.elements.CCD1.format = this.transferFormat === 'XISF' ? '.xisf' : '.fits'
+				this.#image.elements.CCD1.value = blob
+				this.#image.elements.CCD1.encoding = 'raw'
+				handleSetBlobVector(this.client, this.handler, this.#image)
+			} catch (e) {
+				this.#image.state = 'Alert'
+				this.#image.elements.CCD1.size = '0'
+				this.#image.elements.CCD1.value = undefined
+				this.#exposure.state = 'Alert'
+				console.error('failed to render image', e)
+			}
 		}
 
 		this.notify(this.#exposure)

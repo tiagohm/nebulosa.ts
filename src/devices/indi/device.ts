@@ -211,6 +211,7 @@ export interface Parkable {
 export interface Mount extends GuideOutput, GPS, Parkable {
 	readonly type: 'mount'
 	slewing: boolean
+	moving: boolean
 	tracking: boolean
 	homing: boolean
 	canAbort: boolean
@@ -397,6 +398,7 @@ export const DEFAULT_CAMERA: Camera = {
 
 export const DEFAULT_MOUNT: Mount = {
 	slewing: false,
+	moving: false,
 	tracking: false,
 	homing: false,
 	canAbort: false,

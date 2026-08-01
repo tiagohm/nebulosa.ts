@@ -294,6 +294,11 @@ export interface CalibrationStepResult {
 	readonly failure?: GuidingCalibrationFailure
 	// Diagnostics for this step.
 	readonly diagnostics: GuidingCalibrationDiagnostics
+	// Stars that passed the quality filter on this frame, in detection order. This is the subset the
+	// calibrator tracked from, so it excludes the low-SNR, saturated, elongated, and border stars
+	// present in `frame.stars`. Present on every step, including settling, bad, and terminal frames.
+	// The array is owned by the calibrator and must not be mutated.
+	readonly stars: readonly GuideStar[]
 }
 
 // Internal mutable state of the calibration state machine.
@@ -897,7 +902,7 @@ export class GuidingCalibrator {
 			this.#updateDiagnostics(frame, filtered, notes, pulse)
 		}
 
-		return { phase: this.state.phase, pulse, completed: this.state.result, failure: this.state.failure, diagnostics: this.state.lastDiagnostics }
+		return { phase: this.state.phase, pulse, completed: this.state.result, failure: this.state.failure, diagnostics: this.state.lastDiagnostics, stars: filtered.accepted }
 	}
 
 	// Appends a phase transition while avoiding duplicate adjacent entries.

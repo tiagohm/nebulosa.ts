@@ -23,7 +23,9 @@ export class ClientSimulator implements Client {
 	getProperties(command?: GetProperties) {}
 
 	// BLOB streaming is always on in the simulator.
-	enableBlob(command: EnableBlob) {}
+	enableBlob(command: EnableBlob) {
+		for (const device of this.#devices.values()) device.name === command.device && device.enableBlob(command)
+	}
 
 	// Routes a text/number/switch command to the matching device simulator by name.
 	sendText(vector: NewTextVector) {

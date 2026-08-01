@@ -1,10 +1,12 @@
 import { beforeEach, describe, expect, test } from 'bun:test'
 import { pixelScale } from '../../../src/astronomy/formulas'
+import { DEG2RAD } from '../../../src/core/constants'
 import type { PHD2Events } from '../../../src/devices/guiding/phd2'
 import { type Camera, DEFAULT_CAMERA, DEFAULT_GUIDE_OUTPUT, type GuideDirection, type GuideOutput } from '../../../src/devices/indi/device'
 import type { CameraManager, DeviceHandler, GuideOutputManager } from '../../../src/devices/indi/manager'
 import { writeImageToFits } from '../../../src/imaging/model/image'
 import type { Image } from '../../../src/imaging/model/types'
+import { plotStar } from '../../../src/imaging/stars/generator'
 import { bufferSink } from '../../../src/io/io'
 import { GuiderClient, type GuiderClientConnectOptions, type GuiderClientOptions } from '../../../src/observation/guiding/client'
 
@@ -61,33 +63,37 @@ class FakeGuideOutputManager {
 	}
 }
 
-// Star centers (image pixels) plotted into the synthetic guide frame.
+// Star centers (image pixels) plotted into the synthetic guide frame at zero mount offset.
 const STAR_A = [70, 70] as const
 const STAR_B = [165, 150] as const
 const FRAME_WIDTH = 240
 const FRAME_HEIGHT = 240
 
-// Adds one circular Gaussian star to a flat float background, in ADU.
-function plotGaussianStar(raw: Float32Array, width: number, height: number, cx: number, cy: number, peak: number, sigma: number) {
-	const radius = Math.ceil(sigma * 5)
-	const twoSigmaSq = 2 * sigma * sigma
+// Integrated flux of the primary synthetic star, in normalized full-scale units. Chosen so the
+// detector measures SNR ~3 with a peak near 0.6: above the guide-star filter thresholds while
+// staying clear of the saturation ceiling.
+const STAR_FLUX = 10
+// Flux of the secondary star as a fraction of the primary, keeping the two stars distinguishable.
+const SECONDARY_STAR_FLUX_RATIO = 0.6
+// Half-flux diameter of the synthetic stars, in pixels.
+const STAR_HFD = 3
+// Nominal SNR requested from the star plotter; high enough that the rendered profile is noise-free
+// and the detector recovers the plotted centroid exactly.
+const STAR_PLOT_SNR = 80
+// Flat background level under the stars, in normalized full-scale units.
+const FRAME_BACKGROUND = 0.005
 
-	for (let dy = -radius; dy <= radius; dy++) {
-		for (let dx = -radius; dx <= radius; dx++) {
-			const x = cx + dx
-			const y = cy + dy
-			if (x < 0 || y < 0 || x >= width || y >= height) continue
-			raw[y * width + x] += peak * Math.exp(-(dx * dx + dy * dy) / twoSigmaSq)
-		}
+// Builds an in-memory FITS buffer with two well-separated stars on a flat background, both shifted
+// by the same image-space offset (pixels) so a whole-frame mount motion can be simulated. Passing
+// no stars renders an empty background frame, which the detector reports as a lost star.
+async function buildFrameBuffer(offsetX = 0, offsetY = 0, stars = true): Promise<Buffer> {
+	const raw = new Float32Array(FRAME_WIDTH * FRAME_HEIGHT).fill(FRAME_BACKGROUND)
+
+	if (stars) {
+		const options = { background: FRAME_BACKGROUND, saturationLevel: 1 }
+		plotStar(raw, FRAME_WIDTH, FRAME_HEIGHT, 1, STAR_A[0] + offsetX, STAR_A[1] + offsetY, STAR_FLUX, STAR_HFD, STAR_PLOT_SNR, 0, undefined, options)
+		plotStar(raw, FRAME_WIDTH, FRAME_HEIGHT, 1, STAR_B[0] + offsetX, STAR_B[1] + offsetY, STAR_FLUX * SECONDARY_STAR_FLUX_RATIO, STAR_HFD, STAR_PLOT_SNR, 0, undefined, options)
 	}
-}
-
-// Builds an in-memory FITS buffer with two well-separated stars on a flat background.
-// The flat background keeps star detection deterministic (exactly the two plotted centroids).
-async function buildFrameBuffer(): Promise<Buffer> {
-	const raw = new Float32Array(FRAME_WIDTH * FRAME_HEIGHT).fill(300)
-	plotGaussianStar(raw, FRAME_WIDTH, FRAME_HEIGHT, STAR_A[0], STAR_A[1], 30000, 1.5)
-	plotGaussianStar(raw, FRAME_WIDTH, FRAME_HEIGHT, STAR_B[0], STAR_B[1], 21000, 1.6)
 
 	const image: Image = {
 		header: { SIMPLE: true, BITPIX: -32, NAXIS: 2, NAXIS1: FRAME_WIDTH, NAXIS2: FRAME_HEIGHT },
@@ -100,7 +106,55 @@ async function buildFrameBuffer(): Promise<Buffer> {
 	return buffer
 }
 
+// Frame with both stars at their nominal positions, reused by tests that never move the mount.
 const FRAME_BUFFER = await buildFrameBuffer()
+
+// Image-space star displacement produced by one millisecond of guide pulse on either axis, in
+// pixels/ms. The calibrator's default 650 ms pulses then move the star ~7.5 px per step: below its
+// 8 px maximum accepted frame jump, yet large enough that two steps already exceed the minimum net
+// travel each axis requires, which keeps the wall-clock cost of a calibration run low.
+const MOUNT_RATE_PX_PER_MS = 0.0115
+// Camera rotation relative to the mount axes, in radians. A non-zero angle keeps the solved
+// calibration matrix off-diagonal, so an axis mix-up cannot pass unnoticed.
+const MOUNT_ANGLE = 20 * DEG2RAD
+// Unit vector, in image space, along which a west pulse moves the star.
+const RA_AXIS = [Math.cos(MOUNT_ANGLE), Math.sin(MOUNT_ANGLE)] as const
+// Unit vector, in image space, along which a north pulse moves the star; orthogonal to RA_AXIS so
+// the two calibration legs are always well separated.
+const DEC_AXIS = [-Math.sin(MOUNT_ANGLE), Math.cos(MOUNT_ANGLE)] as const
+
+// Turns the pulses recorded by the fake guide output into image-space star motion, so calibration
+// and guiding run against frames that actually respond to the commands the client issues.
+// West and north move the star along the positive axis unit vectors; east and south reverse it.
+class MountSimulator {
+	// Accumulated star displacement, in pixels.
+	offsetX = 0
+	offsetY = 0
+	// Constant open-loop drift added once per rendered frame, in pixels; models a mount the guider
+	// has to correct for.
+	driftX = 0
+	driftY = 0
+
+	// Number of recorded pulses already converted into motion.
+	#consumed = 0
+
+	// Applies every pulse recorded since the previous frame, then the per-frame drift.
+	advance(pulses: readonly PulseRecord[]) {
+		for (let i = this.#consumed; i < pulses.length; i++) {
+			const { direction, duration } = pulses[i]
+			const travel = duration * MOUNT_RATE_PX_PER_MS
+			const axis = direction === 'WEST' || direction === 'EAST' ? RA_AXIS : DEC_AXIS
+			const sign = direction === 'WEST' || direction === 'NORTH' ? 1 : -1
+
+			this.offsetX += sign * travel * axis[0]
+			this.offsetY += sign * travel * axis[1]
+		}
+
+		this.#consumed = pulses.length
+		this.offsetX += this.driftX
+		this.offsetY += this.driftY
+	}
+}
 
 // Builds a connected-capable camera with sensible defaults overridable per test.
 function makeCamera(overrides: Partial<Camera> = {}): Camera {
@@ -133,6 +187,7 @@ interface Harness {
 	readonly events: PHD2Events[]
 	readonly camera: Camera
 	readonly guideOutput: GuideOutput
+	readonly mount: MountSimulator
 	frameCount: number
 }
 
@@ -146,7 +201,7 @@ function makeHarness(options: GuiderClientOptions = {}): Harness {
 		handler: { event: (_client, event) => events.push(event) },
 	})
 
-	return { client, cameraManager, guideOutputManager, events, camera: makeCamera(), guideOutput: makeGuideOutput(), frameCount: 0 }
+	return { client, cameraManager, guideOutputManager, events, camera: makeCamera(), guideOutput: makeGuideOutput(), mount: new MountSimulator(), frameCount: 0 }
 }
 
 // Connects the harness client to its camera/guide output.
@@ -154,21 +209,58 @@ function connect(harness: Harness, options?: GuiderClientConnectOptions) {
 	return harness.client.connect(harness.camera, harness.guideOutput, options)
 }
 
-// Feeds one synthetic frame through the captured blob handler and waits until the client has processed it.
-async function feedFrame(harness: Harness) {
+// Feeds one already-built BLOB through the captured blob handler and waits until the client has
+// fully processed it. Completion is detected by the request for the next exposure, which the client
+// only issues after the frame has been processed and any commanded pulse has elapsed; feeding the
+// next BLOB earlier would simply be dropped as a concurrent frame. States that stop the exposure
+// loop never request another exposure, so a processed frame that produced events also completes.
+async function feedBuffer(harness: Harness, buffer: Buffer) {
 	const handler = harness.cameraManager.handler
 	expect(handler?.blobReceived).toBeDefined()
 
 	const expected = ++harness.frameCount
-	handler!.blobReceived!(harness.camera, FRAME_BUFFER, 'raw')
 
-	for (let i = 0; i < 1000; i++) {
+	for (let attempt = 0; attempt < 100; attempt++) {
+		const eventsBefore = harness.events.length
+		const exposuresBefore = harness.cameraManager.startExposureCalls.length
+		handler!.blobReceived!(harness.camera, buffer, 'raw')
+
+		// Every processed frame emits at least one event while it is being handled, so a short silence
+		// means the BLOB arrived while the previous frame was still processing and was dropped: retry.
+		let accepted = false
+
+		for (let i = 0; i < 100 && !accepted; i++) {
+			accepted = harness.events.length > eventsBefore
+			if (!accepted) await Bun.sleep(1)
+		}
+
+		if (!accepted) continue
+
+		// The frame is only fully processed once the client asks for the next exposure, which happens
+		// after any commanded pulse has elapsed.
+		for (let i = 0; i < 10000; i++) {
+			if (harness.cameraManager.startExposureCalls.length > exposuresBefore) break
+			await Bun.sleep(1)
+		}
+
 		const image = harness.client.getStarImage()
-		if (image !== undefined && image.frame >= expected) return image
-		await Bun.sleep(1)
+		return image !== undefined && image.frame >= expected ? image : undefined
 	}
 
 	throw new Error('frame was not processed in time')
+}
+
+// Advances the simulated mount with the pulses issued so far, renders the resulting frame and feeds
+// it to the client. This closes the loop: the corrections the client commands move the next frame.
+async function feedFrame(harness: Harness) {
+	harness.mount.advance(harness.guideOutputManager.pulses)
+	return await feedBuffer(harness, await buildFrameBuffer(harness.mount.offsetX, harness.mount.offsetY))
+}
+
+// Feeds a star-free frame, which the client must report as a lost star.
+async function feedEmptyFrame(harness: Harness) {
+	harness.mount.advance(harness.guideOutputManager.pulses)
+	return await feedBuffer(harness, await buildFrameBuffer(0, 0, false))
 }
 
 // Returns all recorded events of one type.
@@ -204,6 +296,14 @@ describe('construction', () => {
 		expect(defaults.client.getDitherMode()).toBe('random')
 	})
 
+	test('rejects a calibrator configuration the calibrator itself would reject', () => {
+		// The overrides are merged over the calibrator defaults and validated at construction, so an
+		// impossible combination fails immediately instead of on the first calibration frame.
+		expect(() => makeHarness({ calibrator: { raPulse: 0 } })).toThrowError(/invalid guiding calibrator config/)
+		expect(() => makeHarness({ calibrator: { maxRatePxPerMs: 1e-6 } })).toThrowError(/invalid guiding calibrator config/)
+		expect(() => makeHarness({ calibrator: { raPulse: 250, decPulse: 250 } })).not.toThrow()
+	})
+
 	test('starts stopped, uncalibrated, unpaused and without a lock', () => {
 		expect(harness.client.getAppState()).toBe('Stopped')
 		expect(harness.client.getCalibrated()).toBeFalse()
@@ -222,6 +322,25 @@ describe('connect / disconnect', () => {
 		expect(harness.cameraManager.handler).toBeDefined()
 		expect(harness.client.getConnected()).toBeTrue()
 		expect(eventsOf(harness.events, 'ConfigurationChange')).toHaveLength(1)
+	})
+
+	test('greets a connecting client with Version and the current AppState', () => {
+		connect(harness)
+
+		// PHD2 sends Version as the first message, immediately followed by AppState.
+		expect(harness.events[0]).toMatchObject({ Event: 'Version', PHDVersion: '2.6.13', MsgVersion: 1, OverlapSupport: false })
+		expect(harness.events[1]).toMatchObject({ Event: 'AppState', State: 'Stopped' })
+	})
+
+	test('AppState is not re-emitted on later state transitions', () => {
+		connect(harness)
+		harness.client.loop()
+		harness.client.setPaused(true)
+		harness.client.setPaused(false)
+		harness.client.stopCapture()
+
+		// Clients track state through the individual lifecycle events after the initial handshake.
+		expect(eventsOf(harness.events, 'AppState')).toHaveLength(1)
 	})
 
 	test('rejects a second connect while already connected', () => {
@@ -259,29 +378,51 @@ describe('connect / disconnect', () => {
 })
 
 describe('capture control', () => {
-	test('startCapture requires a bound camera', () => {
-		expect(harness.client.startCapture(2)).toBeFalse()
+	test('startExposureLoop requires a bound camera', () => {
+		expect(harness.client.startExposureLoop(2000)).toBeFalse()
 		connect(harness)
-		expect(harness.client.startCapture(2)).toBeTrue()
+		expect(harness.client.startExposureLoop(2000)).toBeTrue()
 		expect(harness.cameraManager.startExposureCalls.at(-1)).toBe(2)
 	})
 
-	test('startCapture keeps the previous cadence for non-positive or non-finite exposures', () => {
+	test('startExposureLoop keeps the previous cadence for non-positive or non-finite exposures', () => {
 		connect(harness)
-		harness.client.startCapture(3)
-		harness.client.startCapture(0)
-		harness.client.startCapture(Number.NaN)
+		harness.client.startExposureLoop(3000)
+		harness.client.startExposureLoop(0)
+		harness.client.startExposureLoop(Number.NaN)
 		expect(harness.cameraManager.startExposureCalls).toEqual([3, 3, 3])
-		expect(harness.client.getExposure()).toBe(3)
+		expect(harness.client.getExposure()).toBe(3000)
 	})
 
 	test('stopCapture stops exposures, returns to Stopped and emits the looping stop', () => {
 		connect(harness)
 		harness.client.loop()
-		harness.client.stopCapture()
+		expect(harness.client.stopCapture()).toBeTrue()
 		expect(harness.client.getAppState()).toBe('Stopped')
 		expect(harness.cameraManager.stopExposureCount).toBeGreaterThanOrEqual(1)
 		expect(eventsOf(harness.events, 'LoopingExposuresStopped')).toHaveLength(1)
+		expect(eventsOf(harness.events, 'GuidingStopped')).toHaveLength(0)
+	})
+
+	test('stopCapture during a guiding session reports both guiding and looping stops', () => {
+		connect(harness)
+		harness.client.guide()
+		expect(harness.client.getAppState()).toBe('Calibrating')
+
+		expect(harness.client.stopCapture()).toBeTrue()
+		// Guiding implies looping in PHD2, so both stop notifications are sent, guiding first.
+		expect(eventsOf(harness.events, 'GuidingStopped')).toHaveLength(1)
+		expect(eventsOf(harness.events, 'LoopingExposuresStopped')).toHaveLength(1)
+
+		const stops = harness.events.filter((event) => event.Event === 'GuidingStopped' || event.Event === 'LoopingExposuresStopped')
+		expect(stops.map((event) => event.Event)).toEqual(['GuidingStopped', 'LoopingExposuresStopped'])
+	})
+
+	test('stopCapture on an already stopped client emits no stop events', () => {
+		connect(harness)
+		expect(harness.client.stopCapture()).toBeTrue()
+		expect(eventsOf(harness.events, 'GuidingStopped')).toHaveLength(0)
+		expect(eventsOf(harness.events, 'LoopingExposuresStopped')).toHaveLength(0)
 	})
 })
 
@@ -290,7 +431,7 @@ describe('exposure', () => {
 		expect(harness.client.setExposure(0)).toBeFalse()
 		expect(harness.client.setExposure(-1)).toBeFalse()
 		expect(harness.client.setExposure(Number.POSITIVE_INFINITY)).toBeFalse()
-		expect(harness.client.getExposure()).toBe(1)
+		expect(harness.client.getExposure()).toBe(1000)
 	})
 
 	test('setExposure stores the cadence and emits parameter-change events', () => {
@@ -302,11 +443,11 @@ describe('exposure', () => {
 
 	test('getExposure prefers a live camera exposure when reported', () => {
 		connect(harness)
-		harness.client.setExposure(4)
+		harness.client.setExposure(4000)
 		harness.camera.exposure.value = 7
-		expect(harness.client.getExposure()).toBe(7)
+		expect(harness.client.getExposure()).toBe(7000)
 		harness.camera.exposure.value = 0
-		expect(harness.client.getExposure()).toBe(4)
+		expect(harness.client.getExposure()).toBe(4000)
 	})
 })
 
@@ -510,6 +651,38 @@ describe('mode transitions', () => {
 		expect(eventsOf(harness.events, 'SettleBegin')).toHaveLength(1)
 	})
 
+	test('guide without a decoded frame cannot select a star and still starts', () => {
+		connect(harness)
+
+		expect(harness.client.guide()).toBeTrue()
+		// The auto-selection attempt is a no-op until frames arrive; guiding still starts.
+		expect(eventsOf(harness.events, 'StarSelected')).toHaveLength(0)
+		expect(harness.client.getLockPosition()).toBeUndefined()
+		expect(harness.client.getAppState()).toBe('Calibrating')
+	})
+
+	test('guide keeps an already selected star instead of reselecting', async () => {
+		connect(harness)
+		harness.client.loop()
+		await feedFrame(harness)
+		harness.client.setLockPosition(STAR_B[0], STAR_B[1], true)
+
+		expect(harness.client.guide()).toBeTrue()
+		expect(eventsOf(harness.events, 'StarSelected')).toHaveLength(0)
+		expect(harness.client.getLockPosition()).toEqual([STAR_B[0], STAR_B[1]])
+	})
+
+	test('a repeated guide request while still calibrating restarts calibration', () => {
+		connect(harness)
+		harness.client.guide()
+		harness.client.guide()
+
+		// The re-settle shortcut only applies to an established guiding session, never while the
+		// calibration is still being solved.
+		expect(eventsOf(harness.events, 'StartCalibration')).toHaveLength(2)
+		expect(eventsOf(harness.events, 'SettleBegin')).toHaveLength(2)
+	})
+
 	test('guiding assistant requires the internal guider to be locked', () => {
 		connect(harness)
 		expect(harness.client.guide(false)).toBeTrue()
@@ -538,6 +711,19 @@ describe('mode transitions', () => {
 		expect(harness.client.setPaused(false)).toBeTrue()
 		expect(harness.client.getPaused()).toBeFalse()
 		expect(harness.client.getAppState()).toBe('Looping')
+		expect(eventsOf(harness.events, 'Resumed')).toHaveLength(1)
+	})
+
+	test('redundant pause and resume requests emit no extra events', () => {
+		connect(harness)
+		harness.client.loop()
+
+		harness.client.setPaused(true)
+		harness.client.setPaused(true)
+		expect(eventsOf(harness.events, 'Paused')).toHaveLength(1)
+
+		harness.client.setPaused(false)
+		harness.client.setPaused(false)
 		expect(eventsOf(harness.events, 'Resumed')).toHaveLength(1)
 	})
 
@@ -602,7 +788,7 @@ describe('frame-driven behavior', () => {
 	test('getStarImage crops a square ROI sized by the search region', async () => {
 		connect(harness)
 		harness.client.loop()
-		const image = await feedFrame(harness)
+		const image = (await feedFrame(harness))!
 
 		expect(image.width).toBe(64)
 		expect(image.height).toBe(64)
@@ -689,4 +875,309 @@ describe('frame processing robustness', () => {
 		await waitForLoopingExposures(before + 1)
 		expect(harness.client.getStarImage()).toBeUndefined()
 	})
+})
+
+describe('closed-loop calibration and guiding', () => {
+	// Upper bound on the frames a calibration run may consume before the test gives up. The simulated
+	// mount converges in about 14, so this only guards against a run that never completes.
+	const MAX_CALIBRATION_FRAMES = 40
+	// Frames fed after calibration so the guider finishes averaging its lock reference (the guider
+	// default is 6) before a test asserts on measured errors.
+	const LOCK_AVERAGING_FRAMES = 8
+	// Settle parameters that complete as soon as the frame is inside tolerance, so tests do not wait
+	// out the ten-second PHD2 default.
+	const IMMEDIATE_SETTLE = { pixels: 5, time: 0, timeout: 5 } as const
+	// Per-test timeout, in milliseconds. A closed-loop run feeds tens of frames, each waiting for the
+	// commanded pulse to elapse before the next exposure is requested.
+	const CLOSED_LOOP_TIMEOUT = 30000
+	// Exponential smoothing factor the guider applies to the reported average distance, matching
+	// PHD2's Guider::UpdateCurrentDistance.
+	const AVG_DIST_ALPHA = 0.3
+	// Calibrator overrides that cut the pulses a session has to command. Almost all of its wall time is
+	// the client sleeping out those pulses, and their total is the required travel divided by the mount
+	// rate. The clearing move only exists to undo the right ascension leg on a real mount, so dropping
+	// it removes a third of the pulses without affecting the solve. The travel thresholds keep their
+	// defaults: shortening them to a single sample per leg leaves the solved camera angle at the mercy
+	// of the centroid error over a seven-pixel baseline.
+	const FAST_CALIBRATION = { clearingMoveEnabled: false } as const
+
+	// Creates a dedicated harness, runs a full calibration against its simulated mount and returns it
+	// while the client is guiding. Every test owns its harness so the sessions, which spend nearly all
+	// of their wall time asleep waiting for commanded pulses, can run concurrently without sharing
+	// state through the module-level harness.
+	async function calibrateAndGuide() {
+		const harness = makeHarness({ calibrator: FAST_CALIBRATION })
+
+		connect(harness)
+		harness.client.loop()
+		await feedFrame(harness)
+		expect(harness.client.guide(false, IMMEDIATE_SETTLE)).toBeTrue()
+
+		for (let i = 0; i < MAX_CALIBRATION_FRAMES; i++) {
+			await feedFrame(harness)
+			if (harness.client.getCalibrated()) return harness
+		}
+
+		throw new Error('calibration did not converge against the simulated mount')
+	}
+
+	// Feeds enough frames for the guider to finish averaging its lock reference.
+	async function establishLockReference(harness: Harness) {
+		for (let i = 0; i < LOCK_AVERAGING_FRAMES; i++) await feedFrame(harness)
+	}
+
+	// Lock-target displacement, in pixels, large enough that the right ascension share of it asks for
+	// a pulse longer than the guider's 2000 ms maximum on the very first guided frame, even after the
+	// hysteresis filter has damped it. At the simulated mount rate that takes a target well outside
+	// the frame, which is fine: the star itself never moves, so nothing else about the frame changes.
+	const LARGE_LOCK_OFFSET_PX = 250
+
+	// Returns a displacement of `distance` pixels pointing from the star currently locked towards the
+	// far side of it, that is, directly away from the other synthetic star. Moving the lock along it
+	// keeps the locked star the one nearest to the new target, so the guider does not switch stars.
+	function offsetAwayFromOtherStar(harness: Harness, lockX: number, lockY: number, distance: number) {
+		const ax = STAR_A[0] + harness.mount.offsetX
+		const ay = STAR_A[1] + harness.mount.offsetY
+		const bx = STAR_B[0] + harness.mount.offsetX
+		const by = STAR_B[1] + harness.mount.offsetY
+		const lockedOnA = Math.hypot(lockX - ax, lockY - ay) <= Math.hypot(lockX - bx, lockY - by)
+		const dx = lockedOnA ? ax - bx : bx - ax
+		const dy = lockedOnA ? ay - by : by - ay
+		const length = Math.hypot(dx, dy)
+		return [(distance * dx) / length, (distance * dy) / length] as const
+	}
+
+	test.concurrent(
+		'calibration recovers the simulated mount rate and camera angle on both axes',
+		async () => {
+			const harness = await calibrateAndGuide()
+
+			const calibration = harness.client.getCalibrationData()
+			expect(calibration.calibrated).toBeTrue()
+			expect(calibration.xRate).toBeCloseTo(MOUNT_RATE_PX_PER_MS, 3)
+			expect(calibration.yRate).toBeCloseTo(MOUNT_RATE_PX_PER_MS, 3)
+			// Both axes are recovered with the camera rotation baked in, and stay orthogonal.
+			expect(calibration.xAngle).toBeCloseTo(MOUNT_ANGLE, 1)
+			expect(Math.abs(calibration.yAngle - calibration.xAngle)).toBeCloseTo(Math.PI / 2, 1)
+
+			expect(eventsOf(harness.events, 'StartCalibration')).toHaveLength(1)
+			expect(eventsOf(harness.events, 'CalibrationFailed')).toBeEmpty()
+			expect(eventsOf(harness.events, 'Calibrating').length).toBeGreaterThan(1)
+			expect(eventsOf(harness.events, 'CalibrationComplete')).toHaveLength(1)
+			expect(eventsOf(harness.events, 'StartGuiding')).toHaveLength(1)
+			expect(harness.client.getAppState()).toBe('Guiding')
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
+		'flipping the calibration rotates the solved axes by half a turn',
+		async () => {
+			const harness = await calibrateAndGuide()
+
+			const before = harness.client.getCalibrationData()
+			expect(harness.client.flipCalibration()).toBeTrue()
+			const after = harness.client.getCalibrationData()
+
+			expect(after.xRate).toBeCloseTo(before.xRate, 6)
+			expect(Math.cos(after.xAngle - before.xAngle)).toBeCloseTo(-1, 6)
+			expect(eventsOf(harness.events, 'CalibrationDataFlipped')).toHaveLength(1)
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
+		'guide steps timestamp their frames from the start of guiding',
+		async () => {
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
+
+			const steps = eventsOf(harness.events, 'GuideStep')
+			expect(steps.length).toBeGreaterThan(1)
+
+			// PHD2 reports the elapsed guiding time in seconds, so the first step is near zero rather
+			// than an absolute epoch, and the sequence never goes backwards.
+			expect(steps[0].Time).toBeGreaterThanOrEqual(0)
+			expect(steps[0].Time).toBeLessThan(5)
+
+			for (let i = 1; i < steps.length; i++) {
+				expect(steps[i].Time).toBeGreaterThanOrEqual(steps[i - 1].Time)
+				expect(steps[i].Frame).toBeGreaterThan(steps[i - 1].Frame)
+			}
+
+			expect(steps.at(-1)!.Time).toBeGreaterThan(0)
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
+		'the reported average distance is a low-pass filter over the per-frame distance',
+		async () => {
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
+
+			// A steady drift larger than the residual the guider can remove in one frame keeps the
+			// measured error non-zero, so the smoothing is observable.
+			harness.mount.driftX = 3
+			harness.mount.driftY = 2
+
+			for (let i = 0; i < 8; i++) await feedFrame(harness)
+
+			const steps = eventsOf(harness.events, 'GuideStep').slice(-6)
+			expect(steps.length).toBe(6)
+
+			expect(steps.at(-1)!.AvgDist).toBeGreaterThan(0)
+
+			for (let i = 1; i < steps.length; i++) {
+				const distance = Math.hypot(steps[i].dx, steps[i].dy)
+				const expected = steps[i - 1].AvgDist + AVG_DIST_ALPHA * (distance - steps[i - 1].AvgDist)
+				expect(steps[i].AvgDist).toBeCloseTo(expected, 6)
+			}
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
+		'axis limit flags are omitted while the pulses stay inside the maximum duration',
+		async () => {
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
+
+			const steps = eventsOf(harness.events, 'GuideStep')
+			expect(steps.length).toBeGreaterThan(0)
+
+			// PHD2 only serializes RALimited/DecLimited when the pulse was actually clipped.
+			for (const step of steps) {
+				expect(step).not.toHaveProperty('RALimited')
+				expect(step).not.toHaveProperty('DecLimited')
+			}
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
+		'an error large enough to saturate the right ascension pulse reports RALimited',
+		async () => {
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
+
+			// Moving the lock target instead of the star creates an arbitrarily large guide error without
+			// tripping the frame-jump rejection, and a sticky lock keeps the guider from re-averaging its
+			// reference back onto the star. The offset points away from the other star so the guider keeps
+			// tracking the same one, and its right ascension component alone exceeds the axis maximum.
+			harness.client.setStickyLockPositionEnabled(true)
+			const [lockX, lockY] = harness.client.getLockPosition()!
+			const [awayX, awayY] = offsetAwayFromOtherStar(harness, lockX, lockY, LARGE_LOCK_OFFSET_PX)
+			expect(harness.client.setLockPosition(lockX + awayX, lockY + awayY, true)).toBeTrue()
+
+			let steps = eventsOf(harness.events, 'GuideStep')
+			let limited: (typeof steps)[number] | undefined
+
+			// The moved lock target restarts the reference averaging, so the first frames report no error.
+			for (let i = 0; i < 14 && limited === undefined; i++) {
+				await feedFrame(harness)
+				steps = eventsOf(harness.events, 'GuideStep')
+				limited = steps.find((step) => step.RALimited === true)
+			}
+
+			expect(limited).toBeDefined()
+			// The clipped pulse is reported at exactly the configured right ascension maximum, while the
+			// declination axis, which sees a much smaller share of the offset, is never clipped.
+			expect(limited!.RADuration).toBe(2000)
+			expect(limited!.DecLimited).toBeUndefined()
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
+		'star-free frames report a lost star every frame but a lost lock position only once',
+		async () => {
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
+
+			// The guider tolerates a few missing frames before declaring the star lost, so the first
+			// star-free frames produce no StarLost at all.
+			for (let i = 0; i < 10; i++) await feedEmptyFrame(harness)
+
+			expect(harness.client.getAppState()).toBe('LostLock')
+			// PHD2 emits StarLost for every frame the star is missing, but LockPositionLost only on the
+			// transition into the lost-lock state.
+			expect(eventsOf(harness.events, 'StarLost').length).toBeGreaterThanOrEqual(6)
+			expect(eventsOf(harness.events, 'LockPositionLost')).toHaveLength(1)
+
+			const lost = eventsOf(harness.events, 'StarLost')
+
+			for (let i = 1; i < lost.length; i++) expect(lost[i].Frame).toBeGreaterThan(lost[i - 1].Frame)
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
+		'guiding recovers the star after a run of star-free frames',
+		async () => {
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
+
+			for (let i = 0; i < 8; i++) await feedEmptyFrame(harness)
+			expect(harness.client.getAppState()).toBe('LostLock')
+
+			const stepsWhileLost = eventsOf(harness.events, 'GuideStep').length
+
+			for (let i = 0; i < 4; i++) await feedFrame(harness)
+
+			expect(harness.client.getAppState()).toBe('Guiding')
+			expect(eventsOf(harness.events, 'GuideStep').length).toBeGreaterThan(stepsWhileLost)
+			// The recovery does not report a second lost lock position.
+			expect(eventsOf(harness.events, 'LockPositionLost')).toHaveLength(1)
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
+		'dithering offsets the lock position and starts a new settle cycle',
+		async () => {
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
+
+			const before = harness.client.getLockPosition()
+			expect(before).toBeDefined()
+
+			const settleEvents = eventsOf(harness.events, 'SettleBegin').length
+			expect(harness.client.dither(3, false, IMMEDIATE_SETTLE)).toBeTrue()
+
+			const dithered = eventsOf(harness.events, 'GuidingDithered')
+			expect(dithered).toHaveLength(1)
+			expect(Math.hypot(dithered[0].dx, dithered[0].dy)).toBeGreaterThan(0)
+			expect(eventsOf(harness.events, 'SettleBegin').length).toBe(settleEvents + 1)
+
+			const after = harness.client.getLockPosition()!
+			expect(after[0]).toBeCloseTo(before![0] + dithered[0].dx, 6)
+			expect(after[1]).toBeCloseTo(before![1] + dithered[0].dy, 6)
+
+			// The dither moves the lock target, so the guider re-averages its reference before reporting
+			// usable errors again; the settle cycle only completes after those frames.
+			for (let i = 0; i < 10; i++) await feedFrame(harness)
+
+			expect(eventsOf(harness.events, 'SettleDone')).not.toBeEmpty()
+			expect(harness.client.getSettling()).toBeFalse()
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
+		'stopping a guiding session reports both stop events and keeps the calibration',
+		async () => {
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
+
+			harness.client.stopCapture()
+
+			expect(harness.client.getAppState()).toBe('Stopped')
+			expect(eventsOf(harness.events, 'GuidingStopped')).toHaveLength(1)
+			expect(eventsOf(harness.events, 'LoopingExposuresStopped')).toHaveLength(1)
+			// A stop does not invalidate the solved calibration, so guiding can resume without one.
+			expect(harness.client.getCalibrated()).toBeTrue()
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
 })

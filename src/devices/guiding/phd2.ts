@@ -47,8 +47,8 @@ export type PHD2EventType =
 // PHD2 application/guiding state.
 export type PHD2AppState = 'Stopped' | 'Selected' | 'Calibrating' | 'Guiding' | 'LostLock' | 'Paused' | 'Looping'
 
-// Severity of an Alert event.
-export type PHD2AlertType = 'Info' | 'Question' | 'Warning' | 'Error'
+// Severity of an Alert event, using the lowercase values PHD2 sends on the wire.
+export type PHD2AlertType = 'info' | 'question' | 'warning' | 'error'
 
 // Guide pulse direction.
 export type PHD2GuideDirection = 'North' | 'South' | 'West' | 'East'
@@ -88,7 +88,7 @@ export type PHD2SettleBeginEvent = PHD2Event<'SettleBegin'>
 export type PHD2StartGuidingEvent = PHD2Event<'StartGuiding'>
 
 // Outcome of an RPC command: a typed result on success, or an error/timeout on failure.
-export type PHD2CommandResult<T> = { success: false; error: PHD2Error | 'timeout'; result?: never } | { success: true; result: T }
+export type PHD2CommandResult<T> = { success: false; error: PHD2Error | 'timeout' | 'socketUnavailable' | 'socketError'; result?: never } | { success: true; result: T }
 
 // Common fields on every PHD2 event: the event name, timestamp, host, and instance number.
 export interface PHD2Event<E extends PHD2EventType> {
@@ -103,8 +103,8 @@ export interface PHD2Event<E extends PHD2EventType> {
 
 // PHD2 version/capability announcement sent on connect.
 export interface PHD2VersionEvent extends PHD2Event<'Version'> {
-	readonly PHD2Version: string
-	readonly PHD2Subver: string
+	readonly PHDVersion: string
+	readonly PHDSubver: string
 	readonly OverlapSupport: boolean
 	readonly MsgVersion: number
 }
@@ -172,8 +172,9 @@ export interface PHD2GuideStepEvent extends PHD2Event<'GuideStep'> {
 	readonly SNR: number
 	readonly HFD: number
 	readonly AvgDist: number
-	readonly RALimited: boolean
-	readonly DecLimited: boolean
+	// Present only when the corresponding axis pulse was clipped by the maximum-duration limit.
+	readonly RALimited?: boolean
+	readonly DecLimited?: boolean
 	readonly ErrorCode: number
 }
 
@@ -407,6 +408,8 @@ export interface PHD2ClientHandler {
 	readonly close?: (client: PHD2Client, error?: Error) => void
 }
 
+const DEFAULT_TIMEOUT = 15000
+
 // Empty region-of-interest (no subframe).
 export const DEFAULT_ROI: Readonly<Point & Size> = {
 	x: 0,
@@ -484,28 +487,34 @@ export class PHD2Client implements Disposable {
 		this.close()
 	}
 
-	// Sends a JSON-RPC command and awaits its reply, returning the typed result or undefined on
-	// timeout/error (logged). Each command is tracked by a generated id until its reply arrives.
-	async send<T>(method: string, params?: Record<string, unknown> | unknown[], timeout: number = 15000) {
-		if (!this.#socket) return undefined
+	// Sends a JSON-RPC command and awaits its reply, returning the PHD2 command result.
+	// Each command is tracked by a generated id until its reply arrives.
+	async send<T>(method: string, params?: Record<string, unknown> | unknown[], timeout: number = DEFAULT_TIMEOUT): Promise<PHD2CommandResult<T>> {
+		if (!this.#socket) return { success: false, error: 'socketUnavailable' }
 
 		const id = Bun.randomUUIDv7()
 		const command: PHD2Command = { method, params, id }
 
 		const promise = Promise.withResolvers<PHD2CommandResult<T>>()
-		const timer = setTimeout(() => promise.resolve({ success: false, error: 'timeout' }), timeout <= 0 ? 15000 : timeout)
+		const timer = setTimeout(() => promise.resolve({ success: false, error: 'timeout' }), timeout <= 0 || !Number.isFinite(timeout) ? DEFAULT_TIMEOUT : timeout)
 		this.#commands.set(id, { promise, timer, command } as PendingPHD2Command<unknown>)
 
-		this.#socket.write(JSON.stringify(command))
-		this.#socket.write('\r\n')
+		try {
+			this.#socket.write(JSON.stringify(command))
+			this.#socket.write('\r\n')
+		} catch (e) {
+			console.error('socket error:', e)
+			return { success: false, error: 'socketError' }
+		}
 
 		const result = await promise.promise
 
-		if (result.success) return result.result
-		else if (result.error === 'timeout') console.error(method, 'command timed out after', timeout, 'ms')
-		else console.error(method, 'command failed:', result.error.code, result.error.message)
+		if (result.success) return result
 
-		return undefined
+		if (result.error === 'timeout') console.error(method, 'command timed out after', timeout, 'ms')
+		else console.error(method, 'command failed:', result.error)
+
+		return result
 	}
 
 	// RPC command wrappers. Each maps to a PHD2 method of the same intent and returns the typed result.
@@ -533,9 +542,9 @@ export class PHD2Client implements Disposable {
 		return this.send<number>('deselect_star')
 	}
 
-	dither(amount: number, raOnly: boolean = false, settle: Partial<PHD2Settle> = DEFAULT_PHD2_SETTLE) {
+	dither(amount: number, raOnly: boolean = false, settle: Partial<PHD2Settle> = DEFAULT_PHD2_SETTLE, timeout: number = DEFAULT_TIMEOUT) {
 		settle = { ...DEFAULT_PHD2_SETTLE, ...settle }
-		return this.send<number>('dither', { amount, raOnly, settle })
+		return this.send<number>('dither', { amount, raOnly, settle }, timeout)
 	}
 
 	flipCalibration() {

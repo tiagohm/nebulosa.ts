@@ -4,16 +4,25 @@
 
 Nebulosa is a Bun-first, ESM-only TypeScript astronomy library.
 
+- Runtime, package manager, builder, and test runner: **Bun**
+- Modules: **ESM only**
+- Domain: astronomy, imaging, astrometry, catalogs, observation algorithms, and device protocols
+- Native access: TypeScript FFI bindings in `src/bindings` with runtime support in `native/`
+
 The codebase is module-oriented and organized under `src/` into domain-and-responsibility folders that follow the direction of dependencies. Low-level layers (`core`, `math`, `io`) never import from higher ones (`astronomy`, `imaging`, `astrometry`, `catalogs`, `observation`); runtime edges (`devices`, `adapters`, `bindings`) sit on top. Within a folder, related modules keep dot-separated domain names, such as `alpaca.*`, `firmata.*`, `image.*`, `indi.*`, and `star.*`. `tests/` mirrors the `src/` folder layout.
 
 ## Working Principles
 
-- Preserve the existing architecture unless the task explicitly requires a structural change.
-- Prefer small, focused changes that match nearby code patterns.
+- Inspect the live code and nearby patterns before editing. Preserve existing behavior and architecture unless the task explicitly requires a change.
+- Make the smallest cohesive change that fully solves the task. Do not introduce parallel architectures, compatibility wrappers, or speculative abstractions.
+- Deliver finished production code: no TODOs, placeholders, debug artifacts, or unfinished branches.
 - Treat numerical correctness, unit consistency, and performance as first-class requirements.
 - Avoid broad refactors while fixing local issues.
 - Do not introduce unrelated formatting changes, generated files, debug logs, temporary code, or local-only configuration.
+- Preserve unrelated worktree changes. Review and stage only files belonging to the current task.
+- Keep comments for non-obvious behavior, normalization, units, lifecycle cleanup, or interaction details.
 - When behavior changes, update tests and any affected examples in the same task.
+- Minimize new dependencies. Add one only when the existing stack and local primitives cannot solve the problem and the startup, bundle, binary, and operational costs are justified.
 
 ## Code Discovery
 
@@ -24,8 +33,10 @@ Prefer the MCP graph tools for code discovery:
 1. `search_graph` for locating functions, classes, constants, interfaces, and types.
 2. `trace_path` for callers, callees, dependencies, and impact analysis.
 3. `get_code_snippet` for reading exact symbols after discovery.
-4. `query_graph` for broader structural queries.
-5. Fall back to `rg` only for string literals, config files, shell scripts, generated data, or when graph results are insufficient.
+4. `search_code` for scoped code text or JSX usage.
+5. `query_graph` and `get_architecture` for broader structural queries.
+
+Fall back to `rg` for string literals, error messages, configuration, documentation, generated data, and cases the graph cannot answer. Re-run `bun run index` after major file, route, or symbol changes.
 
 ## Repository Map
 
@@ -43,10 +54,10 @@ Prefer the MCP graph tools for code discovery:
 
 - Place new modules in the existing `src/` domain folder that matches their responsibility; do not add new top-level `src/` categories without a clear domain need.
 - Respect the layer dependency direction: `core`, `math`, and `io` must not import from `astronomy`, `imaging`, `astrometry`, `catalogs`, `observation`, `devices`, `adapters`, or `bindings`. `observation` may import `devices`/`adapters`, never the reverse.
+- Keep filesystem, process, device, and other runtime-specific side effects out of core numerical modules.
 - Keep `tests/` mirroring the `src/` folder layout, with shared test helpers (`setup.ts`, `download.ts`, `*.util.ts`) at the `tests/` root.
 - Within a folder, prefer dot-separated filenames for related modules of the same domain, for example `firmata.barometer.ts`, rather than deeper nesting.
-- Prefer direct module imports over new barrel files unless the task explicitly requires an aggregated entrypoint.
-- Preserve existing relative import style without `.ts` extensions.
+- Preserve the existing relative import style without `.ts` extensions, and prefer direct module imports over new barrel files unless the task explicitly requires an aggregated entrypoint.
 - Reuse existing modules before creating new ones, especially in math, time, image, catalog, and coordinate code.
 
 ## Tooling
@@ -59,7 +70,7 @@ Use Bun for installs, scripts, tests, and local execution.
 - Lint and type-check: `bun run lint`
 - Lint with fixes: `bun run lint:fix`
 - Refresh codebase graph: `bun run index`
-- Test all: `bun test`
+- Test full suite: `bun test --parallel`
 - Test one file: `bun test tests/vec3.test.ts`
 
 Additional rules:
@@ -67,8 +78,7 @@ Additional rules:
 - Prefer targeted Bun tests before broader test runs.
 - Tests run through Bun with `bunfig.toml` configured to use `tests/` as the test root and `tests/setup.ts` as preload.
 - Some tests depend on large fixtures in `data/`; missing fixtures may trigger downloads through `tests/download.ts`.
-- Do not introduce another test runner unless the task explicitly requires it.
-- Do not use `bun run compile` as a fallback for linting or type-checking.
+- Do not introduce npm, Yarn, pnpm, Vite, PostCSS, Prettier, ESLint, another test runner, or another bundling layer.
 
 ### Python fixtures and reference values
 
@@ -78,57 +88,97 @@ Additional rules:
 - Keep generated values reproducible: pin the timescale, epoch, location, and ellipsoid in the script, and note the reference library and version in a comment near the generated fixture or expected value.
 - Do not add Python to the project's runtime or test path. `uv` is a local fixture-generation tool only; Bun remains the sole runtime for the library and its tests.
 
+## Architecture
+
+### Layers and Dependency Direction
+
+- Keep low-level math, coordinate, ephemeris, interpolation, and transformation modules free of higher-layer imports.
+- Keep protocol clients, device managers, and adapters at the runtime edge; they may depend on domain layers, never the reverse.
+- Keep `main.ts` out of the implementation path; reusable logic belongs in `src/`.
+- Model expected failures with discriminated result unions instead of exceptions used as routine control flow.
+- Keep large payload paths such as FITS, XISF, SPK, and catalog readers streaming-friendly and avoid unnecessary materialization or deep cloning.
+
+### Code Patterns To Preserve
+
+- Use classes mainly for protocol clients, simulators, device managers, and stateful integrations such as Alpaca, INDI, and Firmata.
+- Prefer top-level pure functions for math-heavy modules.
+- Reuse existing low-level utilities from `vec2.ts`, `vec3.ts`, `mat3.ts`, `math.ts`, `time.ts`, and related core files before adding new helpers.
+- Preserve the `MutX` plus `Readonly<MutX>` pattern for numeric tuples.
+- Preserve the mutable-output convention in hot paths: many vector and matrix helpers accept an optional output parameter such as `out?: MutVec3` or `out?: MutMat3`.
+- Prefer top-level helper functions over local closures when performance matters.
+- Do not replace tight numeric loops with functional abstractions if that adds overhead.
+- Prefer flat numeric structures over nested objects for high-volume calculations.
+
 ## Formatting And TypeScript Style
 
-- Follow OXC formatting: tabs, single quotes, no semicolons, trailing commas, and the configured long line width.
-- For intentionally long imports, add `// oxfmt-ignore` immediately above the import declaration and restore it to a single line when OXC formats it across multiple lines.
-- Preserve existing `// oxfmt-ignore` comments when they protect intentional formatting, especially long grouped imports.
+- Use TypeScript and ESM. Never add CommonJS.
+- Follow OXC formatting: tabs, single quotes, no semicolons, trailing commas, sorted imports, and the configured long line width.
+- For intentionally long imports, add `// oxfmt-ignore` immediately above the import declaration and restore it to a single line when OXC formats it across multiple lines. Preserve existing `// oxfmt-ignore` comments when they protect intentional formatting.
+- Keep strict types. Do not suppress errors with `any`, unchecked assertions, or broad index signatures when `unknown`, generics, narrowing, or explicit shapes work.
 - Always type function and method parameters.
 - Avoid `any`. Use `unknown` when a value cannot be expressed more precisely.
-- Prefer `undefined` over `null` for absent, unavailable, or not-yet-computed values. Use `null` only when it has a distinct documented semantic meaning or an external contract requires it.
 - Prefer inference for primitive and tuple return types unless an explicit return type improves the public contract or protects a branded primitive.
 - Declare explicit return types for structured objects, exported public interfaces, and functions whose inferred type would be unclear or unstable.
-- Prefer `interface` for structured public shapes.
-- Prefer string-literal union types with `camelCase` values, such as `'notStarted' | 'inProgress'`, over enums for finite internal value sets unless a runtime enum or external API contract requires one.
-- Use `readonly` where it communicates API intent without fighting existing mutable-output patterns.
+- Prefer `interface` for structured public shapes and `type` for unions, tuples, mapped types, and aliases.
 - Use tuple aliases and readonly aliases for low-level numeric structures such as vectors and matrices.
+- Use `readonly` where it communicates API intent without fighting existing mutable-output patterns.
+- Prefer `undefined` over `null` for absent, unavailable, or not-yet-computed values. Use `null` only when it has a distinct documented semantic meaning or an external contract requires it.
+- Prefer string-literal union types with `camelCase` values, such as `'notStarted' | 'inProgress'`, over enums for finite internal value sets unless a runtime enum or external API contract requires one. Use discriminated unions and exhaustive switches for state machines and command/result flows.
+- Use `import type`, `export type`, `satisfies`, and `as const` where they preserve intent and inference.
+- Prefer direct module imports over barrel files and broad `export *` surfaces.
+- Preserve the existing relative import style without `.ts` extensions.
+- Validate network, filesystem, environment, process, and third-party input at their boundaries, and nothing else. See "Validation Rules": argument validity is the caller's responsibility, documented rather than enforced.
+- Await promises or mark intentional fire-and-forget work with `void` and error handling. Throw only `Error` instances and normalize unknown failures at logging and API boundaries.
+- Use `performance.now()` for durations and `Date` for wall-clock timestamps.
 
 ## Documentation Comment Style
 
 Use concise, Claude-style documentation comments: explain intent, units, constraints, side effects, and edge cases. Do not restate obvious code.
 
-- Start every new file with a module description comment placed immediately after the imports (or at the top when there are none), following the existing `//` block style used across `src/`. Summarize what the module provides, the domain it belongs to, relevant units or conventions, and whether operations mutate in place or return fresh values. Keep existing module descriptions up to date when a file's responsibility changes.
+- Start every new `/src` file with a module description comment placed immediately after the imports (or at the top when there are none), following the existing `//` block style. Summarize what the module provides, the domain it belongs to, relevant units or conventions, and whether operations mutate in place or return fresh values. Keep existing module descriptions up to date when a file's responsibility changes.
 - Always add a documentation comment above every function, method, class, interface, type alias, enum, and module-level constant.
 - Always comment constants. For local throwaway constants inside a function, comment the surrounding calculation when individual comments would create noise.
 - Prefer the repository's existing `//` comment style. Use multi-line `//` comment blocks instead of `/* ... */` unless the file already uses TSDoc/JSDoc or tooling requires it.
 - A function or method comment should describe what it computes or performs, document each parameter, state relevant units and valid ranges, and mention return semantics.
 - If a function mutates an output parameter such as `o?: MutVec3`, document that mutation and whether the returned value aliases `o`.
 - If a function accepts angles, distances, times, pixel coordinates, magnitudes, rates, or temperatures, document the unit explicitly.
-- If a function assumes normalized vectors, sorted arrays, non-empty inputs, monotonic values, or a specific coordinate frame, document that precondition.
+- If a function assumes normalized vectors, sorted arrays, non-empty inputs, monotonic values, or a specific coordinate frame, document that precondition. The comment is the only thing enforcing it: nothing is validated at runtime, so an undocumented precondition is a real defect while a missing check is not.
 - If a function uses an approximation, tolerance, iteration limit, or precision trade-off, document it near the implementation.
 - A constant comment should explain the physical or algorithmic meaning, unit, source if known, and valid range when applicable.
 - An interface comment should describe the object as a whole, and every property must have an adjacent comment explaining meaning, units, and constraints when relevant.
 - Do not add comments for obvious assignments, loop mechanics, or control flow unless they explain a non-obvious domain decision.
-
-## Code Patterns To Preserve
-
-- Prefer top-level pure functions for math-heavy modules.
-- Use classes mainly for protocol clients, simulators, device managers, and stateful integrations such as Alpaca, INDI, and Firmata.
-- Reuse existing low-level utilities from `vec2.ts`, `vec3.ts`, `mat3.ts`, `math.ts`, `time.ts`, and related core files before adding new helpers.
-- Preserve the `MutX` plus `Readonly<MutX>` pattern for numeric tuples.
-- Preserve the mutable-output convention in hot paths: many vector and matrix helpers accept an optional output parameter such as `o?: MutVec3` or `o?: MutMat3`.
-- Prefer top-level helper functions over local closures when performance matters.
-- Do not replace tight numeric loops with functional abstractions if that adds overhead.
-- Prefer flat numeric structures over nested objects for high-volume calculations.
+- Do not add comments in test files.
 
 ## Validation Rules
 
-- Use shared validators from `src/validation.ts` when runtime validation is required.
-- Before adding inline validation, check whether an existing helper fits.
-- If a reusable validation helper is missing, add it to `src/validation.ts` and cover it with tests.
-- Do not add runtime validation for every interface field by default.
-- Add validation when invalid input would produce misleading public results, non-finite geometry, infinite loops, memory errors, or hard-to-debug numerical failures.
-- Prefer clear interface comments for caller-facing unit, range, and shape expectations when runtime checks are not required.
+This project deliberately carries very little runtime validation. Passing a valid argument is the **caller's** responsibility, not the implementer's and not the reviewer's. The contract is expressed in the documentation comment, not in defensive branches. Do not add validation to satisfy a general sense of robustness, and do not restore validation that was intentionally removed.
+
+### The only two reasons to validate
+
+Add a runtime check only when invalid input would:
+
+1. **Hang or crash the process**: a loop that never terminates, an iteration that never converges, an unbounded or accidentally huge allocation, or a stack overflow. The check exists to fail fast instead of freezing the caller.
+2. **Be nonsensical for the operation in a way the types cannot express**, where continuing would silently produce a plausible-looking but wrong result.
+
+Everything else is documentation, not code.
+
+### Never validate these
+
+- Numeric ranges, bounds, or sign, such as angles outside `-PI..PI`, negative distances, or an out-of-range index.
+- Whether a string-literal union, enum, or discriminant value is one of the allowed members.
+- `null`, `undefined`, or missing optional properties on trusted internal arguments.
+- Array or typed-array lengths, matching dimensions, non-empty inputs, or sortedness.
+- `NaN` and `Infinity` on inputs. Compute normally; the numerical rules still forbid _producing_ them from valid inputs.
+- Object shape, property presence, or type re-checking of a value TypeScript already types.
+
+State the expectation in the documentation comment instead: units, valid range, required frame, expected ordering, and what happens outside the documented domain. A caller violating a documented precondition gets whatever the math gives it, and that is acceptable.
+
+### How to validate when it is warranted
+
+- Use the shared validators from `src/core/validation.ts`. If a reusable helper is missing, add it there and cover it with tests.
+- Check untrusted external input once at the parsing boundary: network payloads, filesystem and protocol decoding, environment and process values, and third-party responses. That boundary is exempt from the rules above because the data is not typed by anything the compiler can see.
+- Validate once, at the entry point of the operation. Never re-check the same value deeper in the call chain or inside a hot path.
+- Comment every check with the failure it prevents, for example the loop that would not terminate. A validation without that justification is noise and should be deleted.
 
 ## Numerical Rules
 
@@ -170,12 +220,16 @@ Use concise, Claude-style documentation comments: explain intent, units, constra
 
 ## Tests
 
+- Use `bun:test`; place tests under `tests` mirroring the `src/` folder layout and module names.
 - Add or update tests in the closest existing `tests/*.test.ts` file whenever possible.
 - Mirror existing test style with Bun's `test` and `expect`.
-- Use `toBeCloseTo` or explicit tolerances for floating-point assertions.
-- Use strict equality for floating-point values only when the result is guaranteed exact.
+- Write the smallest deterministic test that proves behavior at the appropriate unit or integration seam.
+- Prefer focused tests for pure logic and integration-style tests for parsers, serializers, adapters, protocol clients, and IO boundaries.
+- Mock only true external or nondeterministic boundaries. Reuse existing fixtures from `data/` instead of embedding large blobs in tests.
+- Cover success and typed failure paths, including malformed input, missing configuration, timeouts, and upstream failures, for parsers, protocol clients, and other boundary code that really does validate. Do not write tests asserting that a pure function rejects out-of-range or wrong-typed arguments; it does not, by design.
+- Assert behavior and contracts precisely; avoid snapshot-heavy tests.
+- Use `toBeCloseTo` or explicit tolerances for floating-point assertions. Use strict equality for floating-point values only when the result is guaranteed exact.
 - Cover astronomy and geometry edge cases: zero vectors, near-zero separations, poles, zenith/nadir, horizon crossings, antimeridian crossings, wrap-around at `0` and `TAU`, grazing cases, degenerate transforms, identity transforms, and endpoints of validity windows.
-- Reuse existing fixtures from `data/` instead of embedding large blobs in tests.
 - For fixture-backed behavior, prefer the closest real fixture test over only unit-level smoke checks.
 
 ## Verification Before Finishing
@@ -186,6 +240,7 @@ Before finishing a change:
 - Run the closest targeted tests for the files you changed.
 - Run `bun run lint` after TypeScript changes.
 - Run `bun run fmt` when formatting may have changed, then review the resulting diff.
+- Run `git diff --check`.
 - Fix regressions introduced by the change before committing.
 - Review the diff and make sure it contains only intentional changes.
 - Commit only touched changes after relevant checks are green.
@@ -196,6 +251,8 @@ Before finishing a change:
 When asked to review changes, use a strictly limited correctness scope. Report only findings that are actionable, supported by code evidence, and tied to a concrete correctness, numerical, algorithmic, performance, or memory issue in changed code or directly affected code.
 
 Do not report style, naming, formatting, documentation wording, test organization, dependency choices, API design preferences, or speculative alternatives unless the current implementation is demonstrably incorrect, fragile over the valid input domain, or materially less robust than a standard approach for the same astronomical/geometric problem.
+
+**Missing input validation is not a finding.** This project treats argument validity as the caller's responsibility; read "Validation Rules" before reviewing. Never ask for a range check, a bounds check, a union/enum membership check, a `null`/`undefined` guard, a length or dimension check, or a `NaN`/`Infinity` input guard, and never ask for validation to be restored where a commit deliberately removed it. The two exceptions are the two reasons that section allows: input that makes the code hang, never converge, or allocate without bound, and input that is nonsensical for the operation and would yield a plausible-looking wrong result. Report those as the concrete failure they cause — the loop that does not terminate, the frame mismatch that displaces the result — not as "missing validation". Everything else belongs in the documentation comment, so if a precondition is undocumented, that is at most a documentation remark, never a correctness finding.
 
 ### Review Scope
 
@@ -229,8 +286,6 @@ Report issues involving:
 - degenerate and boundary cases such as zero vectors, near-zero separations, poles, zenith/nadir, antimeridian crossings, `0`/`TAU` wrap, grazing limits, near-limb geometry, horizon crossings, very short durations, and identity or degenerate transforms;
 - classification based only on discrete event samples when the physical property is continuous over an interval.
 
-For local eclipse circumstances and similar geometry, geometric events must still be computed even when below the horizon. Horizon visibility should affect observability and classification, not erase the geometric event.
-
 #### Method suitability
 
 Report the chosen method when it is fundamentally unsuitable for the stated astronomical or geometric problem.
@@ -249,7 +304,7 @@ Do not report a different algorithm merely because it is more sophisticated. Rep
 
 #### Performance and memory
 
-Report performance or allocation problems that matter for realistic library usage.
+Report performance or allocation problems that matter for realistic usage.
 
 Report:
 
@@ -260,7 +315,7 @@ Report:
 - repeated recomputation of local state during scans when one sampled table could feed multiple phases;
 - avoidable conversions between object and numeric representations;
 - inefficient structures where flat arrays or `TypedArray` are clearly justified;
-- failure to use mutable output parameters where the codebase convention favors them, such as `o?: MutVec3`.
+- failure to use mutable output parameters where the codebase convention favors them, such as `out?: MutVec3`.
 
 Do not report harmless micro-optimizations or cold-path costs unless they scale poorly or are substantial.
 
@@ -293,11 +348,12 @@ Report concrete logic and implementation bugs, including:
 - incorrect optional output parameter handling;
 - uninitialized state;
 - mutation of values expected to be immutable;
-- exported helpers that can hang or return invalid results for possible inputs;
+- exported helpers that can hang or crash for possible inputs;
 - plausible-looking geometry produced from missing internal state;
-- inconsistent output metadata, such as reporting one selected event while drawing another.
+- inconsistent output metadata, such as reporting one selected event while drawing another;
+- missing cleanup of timers, subscriptions, listeners, observers, or in-flight async work.
 
-If a helper is exported, review it as public correctness surface even if the main call path passes safe arguments.
+If a helper is exported, review it as public correctness surface even if the main call path passes safe arguments. That means its documented domain must produce correct results, and that input outside it must not hang or crash; it does not mean the helper should reject bad arguments.
 
 ### Performance Checklist
 
@@ -448,6 +504,7 @@ Do not report:
 
 - style-only issues;
 - naming-only issues;
+- missing or removed input validation, in any form, outside the two cases the "Validation Rules" section allows;
 - formatting;
 - comments or documentation wording unless it directly causes incorrect interpretation of a public result;
 - test organization;
@@ -467,7 +524,7 @@ Assemble every commit message the same way, in this order:
 
 1. A single subject line.
 2. One blank line, only when a body is present.
-3. A required body of one or more paragraphs.
+3. A required body of one or more paragraphs without break lines.
 4. One blank line before the trailers.
 5. A `Co-Authored-By` trailer identifying the agent that authored the change (name + email).
 
@@ -483,6 +540,17 @@ Co-Authored-By: Agent's name <GitHub agent's email>
 
 - Separate the subject, body, and trailer block with exactly one blank line each. Do not add a blank line before the subject.
 - Wrap body paragraphs at a readable width and use `-` bullets when listing several independent effects.
+
+### Writing The Message Without Corrupting It on Windows
+
+A multi-line message passed inline to `git commit` is routinely mangled by shell quoting. The recurring failure is a PowerShell here-string (`-m @'...'@`) used from a POSIX shell, which turns the subject into a literal `@` and appends a stray `@` at the end.
+
+- Write the message to a temporary file and commit with `git commit -F <file>`. This is the default and works identically in every shell.
+- Write that file with the `Write` tool, or with a quoted heredoc (`<<'EOF'`) in Bash. Never mix a PowerShell here-string with the Bash tool, or a Bash heredoc with the PowerShell tool.
+- Keep the temporary file out of the repository: put it in the scratchpad or temp directory, never in the working tree.
+- Reserve `-m` for a single-line, body-less message, and only when it contains no quotes, backticks, `$`, or `@`.
+- After committing, run `git log -1 --format=%B` and read the message back. A subject that is not the intended sentence means the quoting failed.
+- If the message came out wrong, do not amend: it violates the no-rewrite rule below. Report the mangled message to the user and let them decide.
 
 ### Subject And Body Rules
 
