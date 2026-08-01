@@ -6,7 +6,7 @@ import { medianOf, percentileOf, rmsOf, STANDARD_DEVIATION_SCALE } from '../../c
 import type { PierSide } from '../../devices/indi/device'
 import { type Vec3, vecAngle } from '../../math/linear-algebra/vec3'
 import { sphericalProjectTangentPlane, sphericalUnprojectTangentPlane } from '../../math/numerical/geometry'
-import { leastSquaresCoefficients, linearLeastSquares, predictLinearLeastSquares, type RobustRegressionMethod } from '../../math/numerical/least.squares'
+import { estimateLeastSquaresConditioning, leastSquaresCoefficients, linearLeastSquares, predictLinearLeastSquares, type RobustRegressionMethod } from '../../math/numerical/least.squares'
 import type { NumberArray } from '../../math/numerical/math'
 import { type Angle, normalizePI } from '../../math/units/angle'
 // oxfmt-ignore
@@ -1245,7 +1245,61 @@ function fitStackedOffsetModel(samples: readonly PreparedPointingSample[], optio
 
 	const fit = linearLeastSquares(rows, target, { weights, leverage: true })
 
-	return { coefficients: new Float64Array(fit.coefficients), conditionNumber: fit.conditionNumber, rankDeficient: fit.rankDeficient, leverage: fit.leverage, orthogonalizationDx: orthogonalization?.dx, orthogonalizationDy: orthogonalization?.dy }
+	// Conditioning is measured on the sample rows alone, never on the ridge-augmented system the
+	// coefficients come from. One Tikhonov row per column makes the augmented matrix full rank by
+	// construction and caps its condition number at the ridge, so `fit.conditionNumber` would report a
+	// healthy fit for a dataset that cannot constrain the basis at all — samples taken at a single
+	// declination, for instance, where CH, IH and NP are exactly dependent. The ridge still stabilizes
+	// the solve; it just no longer decides whether the model is usable.
+	const conditioning = estimateLeastSquaresConditioning(informativeDataRows(rows, dataRowCount, columnCount), weights.subarray(0, dataRowCount))
+
+	return { coefficients: new Float64Array(fit.coefficients), conditionNumber: conditioning.conditionNumber, rankDeficient: conditioning.rankDeficient, leverage: fit.leverage, orthogonalizationDx: orthogonalization?.dx, orthogonalizationDy: orthogonalization?.dy }
+}
+
+// Relative column norm below which a design column is treated as identically zero over the data rows
+// and left out of the conditioning diagnostic.
+const VANISHING_COLUMN_TOLERANCE = 1e-13
+
+// Restricts the design to its data rows and to the columns that carry any signal there.
+//
+// Dropping the vanishing columns matters because a zero column is singular yet harmless. Orthogonalizing
+// the empirical block against the physical one annihilates every feature the physical basis reproduces
+// identically — `bias` against `CH`, for instance — and the ridge answers a null direction with a zero
+// coefficient, which contributes zero at every target, not just at the training ones. A column that is
+// merely linearly *dependent* on the others is the dangerous case: the ridge then splits the fitted
+// signal among them arbitrarily, and the split only shows itself away from the sampled region. That case
+// keeps its infinite condition number here, which is the whole point of the diagnostic.
+function informativeDataRows(rows: readonly Float64Array[], dataRowCount: number, columnCount: number) {
+	const norms = new Float64Array(columnCount)
+	let maximumNorm = 0
+
+	for (let row = 0; row < dataRowCount; row++) {
+		const values = rows[row]
+		for (let column = 0; column < columnCount; column++) norms[column] += values[column] * values[column]
+	}
+
+	for (let column = 0; column < columnCount; column++) {
+		norms[column] = Math.sqrt(norms[column])
+		if (norms[column] > maximumNorm) maximumNorm = norms[column]
+	}
+
+	const tolerance = maximumNorm * VANISHING_COLUMN_TOLERANCE
+	const columns: number[] = []
+
+	for (let column = 0; column < columnCount; column++) {
+		if (norms[column] > tolerance) columns.push(column)
+	}
+
+	const design = new Array<Float64Array>(dataRowCount)
+
+	for (let row = 0; row < dataRowCount; row++) {
+		const source = rows[row]
+		const values = new Float64Array(columns.length)
+		for (let i = 0; i < columns.length; i++) values[i] = source[columns[i]]
+		design[row] = values
+	}
+
+	return design
 }
 
 // Spreads the per-sample weights over the two stacked rows each sample contributes to the design, leaving

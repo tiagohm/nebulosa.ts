@@ -11,6 +11,14 @@ import type { NumberArray } from './math'
 // Robust loss used for IRLS reweighting: 'none' (ordinary least squares), Huber, or Tukey biweight.
 export type RobustRegressionMethod = 'none' | 'huber' | 'tukey'
 
+// Conditioning of a weighted design matrix, independent of any regularization applied when solving it.
+export interface LeastSquaresConditioning {
+	// Estimated condition number of the weighted design matrix, `+Infinity` when it is singular.
+	readonly conditionNumber: number
+	// Whether the weighted design matrix is numerically rank deficient.
+	readonly rankDeficient: boolean
+}
+
 export interface LinearLeastSquaresOptions {
 	// Optional per-row weights; values must be finite and non-negative.
 	readonly weights?: Readonly<NumberArray>
@@ -67,6 +75,9 @@ const DEFAULT_ROBUST_TUNING = 1.345
 // Default maximum IRLS iterations and coefficient/weight convergence tolerance.
 const DEFAULT_ROBUST_ITERATIONS = 25
 const DEFAULT_ROBUST_TOLERANCE = 1e-9
+// Condition number above which a design matrix is reported as rank deficient. Double precision carries
+// about 16 digits, so a system this ill-conditioned has no significant digits left in its solution.
+const RANK_DEFICIENT_CONDITION_NUMBER = 1e12
 
 // Evaluates a linear least-squares model for a feature vector.
 export function predictLinearLeastSquares(coefficients: Readonly<NumberArray>, features: Readonly<NumberArray>) {
@@ -94,7 +105,7 @@ function leastSquaresResiduals(design: readonly Readonly<NumberArray>[], target:
 export function linearLeastSquares(design: readonly Readonly<NumberArray>[], target: Readonly<NumberArray>, { weights, ridge = 0, leverage = false }: LinearLeastSquaresOptions = {}): LinearLeastSquaresResult {
 	if (design.length !== target.length) throw new Error('design matrix row count must match target length')
 	const { rows, cols } = validateLeastSquaresInput(design, weights)
-	const conditionNumber = estimateLeastSquaresConditionNumber(design, weights)
+	const { conditionNumber, rankDeficient } = estimateLeastSquaresConditioning(design, weights)
 
 	if (cols === 0) {
 		return {
@@ -106,7 +117,6 @@ export function linearLeastSquares(design: readonly Readonly<NumberArray>[], tar
 		}
 	}
 
-	const rankDeficient = !Number.isFinite(conditionNumber) || conditionNumber > 1e12
 	const coefficients = solveLinearLeastSquares(design, target, weights, ridge)
 	const fitted = new Float64Array(rows)
 	const residuals = new Float64Array(rows)
@@ -383,6 +393,17 @@ function buildNormalVector(design: readonly Readonly<NumberArray>[], target: Rea
 	}
 
 	return vector
+}
+
+// Estimates the conditioning of a weighted design matrix from its normal-matrix eigenvalues.
+//
+// No ridge is applied, so the result describes the data alone. Callers that regularize a solve should
+// diagnose the unregularized design with this: appending Tikhonov rows makes any matrix full rank and
+// bounds its condition number by the ridge, which hides the very degeneracy the diagnostic exists to
+// report. `weights` must hold one non-negative entry per design row.
+export function estimateLeastSquaresConditioning(design: readonly Readonly<NumberArray>[], weights?: Readonly<NumberArray>): LeastSquaresConditioning {
+	const conditionNumber = estimateLeastSquaresConditionNumber(design, weights)
+	return { conditionNumber, rankDeficient: !Number.isFinite(conditionNumber) || conditionNumber > RANK_DEFICIENT_CONDITION_NUMBER }
 }
 
 // Estimates the least-squares condition number from the weighted normal matrix eigenvalues.

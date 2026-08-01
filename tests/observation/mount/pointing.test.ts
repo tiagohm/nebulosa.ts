@@ -317,6 +317,21 @@ test('underdetermined fits drop terms, are flagged unusable and predict nothing'
 	expect(prediction.quality.warnings).toContain('the fitted model is not usable for prediction')
 })
 
+test('a semi-physical fit at a single declination is rejected as degenerate', () => {
+	const declination = deg(20)
+	const samples = generateSyntheticPointingSamples({ count: 96, seed: 83, strategy: 'semiPhysical', time: TIME, latitude: LATITUDE, longitude: LONGITUDE, declinationRange: [declination, declination], noiseStd: 0, includeBothPierSides: false })
+	const model = fitPointingModel(samples, { strategy: 'semiPhysical', robust: { method: 'none' } })
+
+	expect(model.physical!.rankDeficient).toBeTrue()
+	expect(model.physical!.conditionNumber).toBeGreaterThan(1e12)
+	expect(model.usable).toBeFalse()
+	expect(model.diagnostics.warnings).toContain('the fitted model is poorly constrained or ill-conditioned')
+
+	const prediction = predictPointingModelError(model, sampleInput(samples[0]))
+	expect(prediction.dx).toBe(0)
+	expect(prediction.dy).toBe(0)
+})
+
 test('a declared uncertainty downweights a corrupted sample', () => {
 	const featureNames = buildEmpiricalPointingFeatureNames(FEATURE_CONFIGURATION)
 	const dx = coefficientsByName(featureNames, { bias: arcmin(2.5), sinHA: arcmin(-1.4), cosHA: arcmin(0.8), pierSide: arcmin(1.2) })
