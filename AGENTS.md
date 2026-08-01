@@ -127,7 +127,7 @@ Additional rules:
 - Use `import type`, `export type`, `satisfies`, and `as const` where they preserve intent and inference.
 - Prefer direct module imports over barrel files and broad `export *` surfaces.
 - Preserve the existing relative import style without `.ts` extensions.
-- Validate network, filesystem, environment, process, and third-party input at their boundaries.
+- Validate network, filesystem, environment, process, and third-party input at their boundaries, and nothing else. See "Validation Rules": argument validity is the caller's responsibility, documented rather than enforced.
 - Await promises or mark intentional fire-and-forget work with `void` and error handling. Throw only `Error` instances and normalize unknown failures at logging and API boundaries.
 - Use `performance.now()` for durations and `Date` for wall-clock timestamps.
 
@@ -142,7 +142,7 @@ Use concise, Claude-style documentation comments: explain intent, units, constra
 - A function or method comment should describe what it computes or performs, document each parameter, state relevant units and valid ranges, and mention return semantics.
 - If a function mutates an output parameter such as `o?: MutVec3`, document that mutation and whether the returned value aliases `o`.
 - If a function accepts angles, distances, times, pixel coordinates, magnitudes, rates, or temperatures, document the unit explicitly.
-- If a function assumes normalized vectors, sorted arrays, non-empty inputs, monotonic values, or a specific coordinate frame, document that precondition.
+- If a function assumes normalized vectors, sorted arrays, non-empty inputs, monotonic values, or a specific coordinate frame, document that precondition. The comment is the only thing enforcing it: nothing is validated at runtime, so an undocumented precondition is a real defect while a missing check is not.
 - If a function uses an approximation, tolerance, iteration limit, or precision trade-off, document it near the implementation.
 - A constant comment should explain the physical or algorithmic meaning, unit, source if known, and valid range when applicable.
 - An interface comment should describe the object as a whole, and every property must have an adjacent comment explaining meaning, units, and constraints when relevant.
@@ -151,12 +151,34 @@ Use concise, Claude-style documentation comments: explain intent, units, constra
 
 ## Validation Rules
 
-- Use the shared validators from `src/validation.ts` when runtime validation is required. If a reusable validation helper is missing, add it there and cover it with tests.
-- Before adding inline validation, check whether an existing helper fits.
-- Validate untrusted input once at the boundary; do not re-validate the same trusted data deep inside hot paths.
-- Do not add runtime validation for every interface field by default.
-- Only add validation when invalid input would produce infinite loops, unexpected large-memory allocation, or extremely hard-to-debug failures.
-- Prefer clear interface comments for caller-facing unit, range, and shape expectations.
+This project deliberately carries very little runtime validation. Passing a valid argument is the **caller's** responsibility, not the implementer's and not the reviewer's. The contract is expressed in the documentation comment, not in defensive branches. Do not add validation to satisfy a general sense of robustness, and do not restore validation that was intentionally removed.
+
+### The only two reasons to validate
+
+Add a runtime check only when invalid input would:
+
+1. **Hang or crash the process**: a loop that never terminates, an iteration that never converges, an unbounded or accidentally huge allocation, or a stack overflow. The check exists to fail fast instead of freezing the caller.
+2. **Be nonsensical for the operation in a way the types cannot express**, where continuing would silently produce a plausible-looking but wrong result.
+
+Everything else is documentation, not code.
+
+### Never validate these
+
+- Numeric ranges, bounds, or sign, such as angles outside `-PI..PI`, negative distances, or an out-of-range index.
+- Whether a string-literal union, enum, or discriminant value is one of the allowed members.
+- `null`, `undefined`, or missing optional properties on trusted internal arguments.
+- Array or typed-array lengths, matching dimensions, non-empty inputs, or sortedness.
+- `NaN` and `Infinity` on inputs. Compute normally; the numerical rules still forbid _producing_ them from valid inputs.
+- Object shape, property presence, or type re-checking of a value TypeScript already types.
+
+State the expectation in the documentation comment instead: units, valid range, required frame, expected ordering, and what happens outside the documented domain. A caller violating a documented precondition gets whatever the math gives it, and that is acceptable.
+
+### How to validate when it is warranted
+
+- Use the shared validators from `src/core/validation.ts`. If a reusable helper is missing, add it there and cover it with tests.
+- Check untrusted external input once at the parsing boundary: network payloads, filesystem and protocol decoding, environment and process values, and third-party responses. That boundary is exempt from the rules above because the data is not typed by anything the compiler can see.
+- Validate once, at the entry point of the operation. Never re-check the same value deeper in the call chain or inside a hot path.
+- Comment every check with the failure it prevents, for example the loop that would not terminate. A validation without that justification is noise and should be deleted.
 
 ## Numerical Rules
 
@@ -204,7 +226,7 @@ Use concise, Claude-style documentation comments: explain intent, units, constra
 - Write the smallest deterministic test that proves behavior at the appropriate unit or integration seam.
 - Prefer focused tests for pure logic and integration-style tests for parsers, serializers, adapters, protocol clients, and IO boundaries.
 - Mock only true external or nondeterministic boundaries. Reuse existing fixtures from `data/` instead of embedding large blobs in tests.
-- Cover success and typed failure paths, including malformed input, validation errors, missing configuration, timeouts, and upstream failures where relevant.
+- Cover success and typed failure paths, including malformed input, missing configuration, timeouts, and upstream failures, for parsers, protocol clients, and other boundary code that really does validate. Do not write tests asserting that a pure function rejects out-of-range or wrong-typed arguments; it does not, by design.
 - Assert behavior and contracts precisely; avoid snapshot-heavy tests.
 - Use `toBeCloseTo` or explicit tolerances for floating-point assertions. Use strict equality for floating-point values only when the result is guaranteed exact.
 - Cover astronomy and geometry edge cases: zero vectors, near-zero separations, poles, zenith/nadir, horizon crossings, antimeridian crossings, wrap-around at `0` and `TAU`, grazing cases, degenerate transforms, identity transforms, and endpoints of validity windows.
@@ -229,6 +251,8 @@ Before finishing a change:
 When asked to review changes, use a strictly limited correctness scope. Report only findings that are actionable, supported by code evidence, and tied to a concrete correctness, numerical, algorithmic, performance, or memory issue in changed code or directly affected code.
 
 Do not report style, naming, formatting, documentation wording, test organization, dependency choices, API design preferences, or speculative alternatives unless the current implementation is demonstrably incorrect, fragile over the valid input domain, or materially less robust than a standard approach for the same astronomical/geometric problem.
+
+**Missing input validation is not a finding.** This project treats argument validity as the caller's responsibility; read "Validation Rules" before reviewing. Never ask for a range check, a bounds check, a union/enum membership check, a `null`/`undefined` guard, a length or dimension check, or a `NaN`/`Infinity` input guard, and never ask for validation to be restored where a commit deliberately removed it. The two exceptions are the two reasons that section allows: input that makes the code hang, never converge, or allocate without bound, and input that is nonsensical for the operation and would yield a plausible-looking wrong result. Report those as the concrete failure they cause — the loop that does not terminate, the frame mismatch that displaces the result — not as "missing validation". Everything else belongs in the documentation comment, so if a precondition is undocumented, that is at most a documentation remark, never a correctness finding.
 
 ### Review Scope
 
@@ -329,7 +353,7 @@ Report concrete logic and implementation bugs, including:
 - inconsistent output metadata, such as reporting one selected event while drawing another;
 - missing cleanup of timers, subscriptions, listeners, observers, or in-flight async work.
 
-If a helper is exported, review it as public correctness surface even if the main call path passes safe arguments.
+If a helper is exported, review it as public correctness surface even if the main call path passes safe arguments. That means its documented domain must produce correct results, and that input outside it must not hang or crash; it does not mean the helper should reject bad arguments.
 
 ### Performance Checklist
 
@@ -480,7 +504,7 @@ Do not report:
 
 - style-only issues;
 - naming-only issues;
-- validation issues;
+- missing or removed input validation, in any form, outside the two cases the "Validation Rules" section allows;
 - formatting;
 - comments or documentation wording unless it directly causes incorrect interpretation of a public result;
 - test organization;
@@ -516,6 +540,17 @@ Co-Authored-By: Agent's name <GitHub agent's email>
 
 - Separate the subject, body, and trailer block with exactly one blank line each. Do not add a blank line before the subject.
 - Wrap body paragraphs at a readable width and use `-` bullets when listing several independent effects.
+
+### Writing The Message Without Corrupting It on Windows
+
+A multi-line message passed inline to `git commit` is routinely mangled by shell quoting. The recurring failure is a PowerShell here-string (`-m @'...'@`) used from a POSIX shell, which turns the subject into a literal `@` and appends a stray `@` at the end.
+
+- Write the message to a temporary file and commit with `git commit -F <file>`. This is the default and works identically in every shell.
+- Write that file with the `Write` tool, or with a quoted heredoc (`<<'EOF'`) in Bash. Never mix a PowerShell here-string with the Bash tool, or a Bash heredoc with the PowerShell tool.
+- Keep the temporary file out of the repository: put it in the scratchpad or temp directory, never in the working tree.
+- Reserve `-m` for a single-line, body-less message, and only when it contains no quotes, backticks, `$`, or `@`.
+- After committing, run `git log -1 --format=%B` and read the message back. A subject that is not the intended sentence means the quoting failed.
+- If the message came out wrong, do not amend: it violates the no-rewrite rule below. Report the mangled message to the user and let them decide.
 
 ### Subject And Body Rules
 
