@@ -1,5 +1,5 @@
 import { medianOf } from '../../core/util'
-import { gaussianElimination, Matrix, QrDecomposition } from '../linear-algebra/matrix'
+import { gaussianElimination, LuDecomposition, Matrix, QrDecomposition } from '../linear-algebra/matrix'
 import type { NumberArray } from './math'
 
 // Linear least-squares solvers operating on a row-major design matrix (array of feature rows): a
@@ -11,11 +11,22 @@ import type { NumberArray } from './math'
 // Robust loss used for IRLS reweighting: 'none' (ordinary least squares), Huber, or Tukey biweight.
 export type RobustRegressionMethod = 'none' | 'huber' | 'tukey'
 
+// Conditioning of a weighted design matrix, independent of any regularization applied when solving it.
+export interface LeastSquaresConditioning {
+	// Estimated condition number of the weighted design matrix, `+Infinity` when it is singular.
+	readonly conditionNumber: number
+	// Whether the weighted design matrix is numerically rank deficient.
+	readonly rankDeficient: boolean
+}
+
 export interface LinearLeastSquaresOptions {
 	// Optional per-row weights; values must be finite and non-negative.
 	readonly weights?: Readonly<NumberArray>
 	// Non-negative ridge regularization added to the normal matrix diagonal.
 	readonly ridge?: number
+	// Computes the hat-matrix diagonal alongside the fit. Off by default: it costs an extra normal-matrix
+	// inversion, which only callers doing leave-one-out diagnostics need.
+	readonly leverage?: boolean
 }
 
 export interface LinearLeastSquaresResult {
@@ -29,6 +40,10 @@ export interface LinearLeastSquaresResult {
 	readonly conditionNumber: number
 	// Whether the weighted design matrix is numerically rank deficient.
 	readonly rankDeficient: boolean
+	// Hat-matrix diagonal per design row, in `[0, 1]`, present only when `leverage` was requested and the
+	// normal matrix could be inverted. `residual / (1 - leverage)` is the leave-one-out residual, so this
+	// gives out-of-sample diagnostics without refitting.
+	readonly leverage?: Readonly<NumberArray>
 }
 
 export interface RobustLinearLeastSquaresOptions extends LinearLeastSquaresOptions {
@@ -60,6 +75,9 @@ const DEFAULT_ROBUST_TUNING = 1.345
 // Default maximum IRLS iterations and coefficient/weight convergence tolerance.
 const DEFAULT_ROBUST_ITERATIONS = 25
 const DEFAULT_ROBUST_TOLERANCE = 1e-9
+// Condition number above which a design matrix is reported as rank deficient. Double precision carries
+// about 16 digits, so a system this ill-conditioned has no significant digits left in its solution.
+const RANK_DEFICIENT_CONDITION_NUMBER = 1e12
 
 // Evaluates a linear least-squares model for a feature vector.
 export function predictLinearLeastSquares(coefficients: Readonly<NumberArray>, features: Readonly<NumberArray>) {
@@ -84,10 +102,10 @@ function leastSquaresResiduals(design: readonly Readonly<NumberArray>[], target:
 }
 
 // Solves a weighted linear least-squares problem using QR with a regularized fallback.
-export function linearLeastSquares(design: readonly Readonly<NumberArray>[], target: Readonly<NumberArray>, { weights, ridge = 0 }: LinearLeastSquaresOptions = {}): LinearLeastSquaresResult {
+export function linearLeastSquares(design: readonly Readonly<NumberArray>[], target: Readonly<NumberArray>, { weights, ridge = 0, leverage = false }: LinearLeastSquaresOptions = {}): LinearLeastSquaresResult {
 	if (design.length !== target.length) throw new Error('design matrix row count must match target length')
 	const { rows, cols } = validateLeastSquaresInput(design, weights)
-	const conditionNumber = estimateLeastSquaresConditionNumber(design, weights)
+	const { conditionNumber, rankDeficient } = estimateLeastSquaresConditioning(design, weights)
 
 	if (cols === 0) {
 		return {
@@ -99,7 +117,6 @@ export function linearLeastSquares(design: readonly Readonly<NumberArray>[], tar
 		}
 	}
 
-	const rankDeficient = !Number.isFinite(conditionNumber) || conditionNumber > 1e12
 	const coefficients = solveLinearLeastSquares(design, target, weights, ridge)
 	const fitted = new Float64Array(rows)
 	const residuals = new Float64Array(rows)
@@ -110,7 +127,66 @@ export function linearLeastSquares(design: readonly Readonly<NumberArray>[], tar
 		residuals[i] = target[i] - value
 	}
 
-	return { coefficients, fitted, residuals, conditionNumber, rankDeficient }
+	return { coefficients, fitted, residuals, conditionNumber, rankDeficient, leverage: leverage ? leastSquaresLeverage(design, weights, Math.max(ridge, 0), rows, cols) : undefined }
+}
+
+// Solves a weighted, optionally ridge-regularized least-squares system and returns only the coefficients.
+//
+// `linearLeastSquares` additionally computes the fitted values, the residuals, a condition-number estimate
+// and, on request, the hat-matrix diagonal. The condition number costs a Jacobi eigendecomposition of the
+// normal matrix and the leverage costs an inversion of it, and together they dominate the call. An IRLS
+// loop needs none of them while its weights are still moving, so it can iterate through this and call
+// `linearLeastSquares` once at the end with the weights it settled on.
+//
+// `weights` must be finite and non-negative, one per design row. Throws when the design is not
+// rectangular or does not match `target` in length.
+export function leastSquaresCoefficients(design: readonly Readonly<NumberArray>[], target: Readonly<NumberArray>, { weights, ridge = 0 }: LinearLeastSquaresOptions = {}): Readonly<NumberArray> {
+	if (design.length !== target.length) throw new Error('design matrix row count must match target length')
+	return solveLinearLeastSquares(design, target, weights, ridge)
+}
+
+// Computes the hat-matrix diagonal `h_i = w_i * a_iᵀ (AᵀWA + ridge*I)⁻¹ a_i` for each design row.
+//
+// The ridge is included so the leverage matches the fit actually performed; with a positive ridge the
+// values are shrunk below the unregularized ones, which is the correct effective degrees of freedom.
+// Returns `undefined` when the normal matrix is singular, in which case leave-one-out residuals are
+// not meaningful anyway.
+function leastSquaresLeverage(design: readonly Readonly<NumberArray>[], weights: Readonly<NumberArray> | undefined, ridge: number, rows: number, cols: number) {
+	const normalMatrix = buildNormalMatrix(design, weights, ridge)
+	let inverse: Matrix
+
+	try {
+		inverse = new LuDecomposition(normalMatrix, true).invert()
+	} catch {
+		return undefined
+	}
+
+	const data = inverse.data
+	const values = new Float64Array(rows)
+
+	for (let i = 0; i < rows; i++) {
+		const weight = weights?.[i] ?? 1
+		if (weight === 0) continue
+
+		const row = design[i]
+		let sum = 0
+
+		for (let j = 0; j < cols; j++) {
+			const xj = row[j]
+			if (xj === 0) continue
+
+			const offset = j * cols
+			let inner = 0
+
+			for (let k = 0; k < cols; k++) inner += data[offset + k] * row[k]
+
+			sum += xj * inner
+		}
+
+		values[i] = weight * sum
+	}
+
+	return values
 }
 
 // Solves a robust linear least-squares problem using iterative reweighted least squares.
@@ -317,6 +393,17 @@ function buildNormalVector(design: readonly Readonly<NumberArray>[], target: Rea
 	}
 
 	return vector
+}
+
+// Estimates the conditioning of a weighted design matrix from its normal-matrix eigenvalues.
+//
+// No ridge is applied, so the result describes the data alone. Callers that regularize a solve should
+// diagnose the unregularized design with this: appending Tikhonov rows makes any matrix full rank and
+// bounds its condition number by the ridge, which hides the very degeneracy the diagnostic exists to
+// report. `weights` must hold one non-negative entry per design row.
+export function estimateLeastSquaresConditioning(design: readonly Readonly<NumberArray>[], weights?: Readonly<NumberArray>): LeastSquaresConditioning {
+	const conditionNumber = estimateLeastSquaresConditionNumber(design, weights)
+	return { conditionNumber, rankDeficient: !Number.isFinite(conditionNumber) || conditionNumber > RANK_DEFICIENT_CONDITION_NUMBER }
 }
 
 // Estimates the least-squares condition number from the weighted normal matrix eigenvalues.

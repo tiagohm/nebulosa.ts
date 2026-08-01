@@ -129,6 +129,7 @@ export interface Time {
 	readonly scale: Timescale
 
 	// Optional Earth-orientation/scale-offset provider overrides.
+	// To pass it on structuredClone, it should be set with `Object.defineProperty(time, 'providers', { value: providers, enumerable: false, writable: true })`
 	providers?: TimeProviders
 
 	// Optional observer location used for topocentric TDB-TT.
@@ -366,10 +367,14 @@ export function toJulianDay(time: Time) {
 	return time.day + time.fraction
 }
 
+function setTimeProviders(time: Time, value: TimeProviders | undefined | null) {
+	if (value !== undefined && value !== null) Object.defineProperty(time, 'providers', { value, enumerable: false, writable: true })
+}
+
 // Clones a nearby sample instant while preserving custom Earth-orientation providers.
 export function timeShift(time: Time, fraction: number): Time {
 	const normalized = timeNormalize(time.day, time.fraction + fraction, undefined, time.scale)
-	normalized.providers = time.providers
+	setTimeProviders(normalized, time.providers)
 	normalized.location = time.location
 	return normalized
 }
@@ -444,6 +449,7 @@ export function ut1(time: Time) {
 
 	normalizeDayAndFraction(DAY_FRACTION[0], DAY_FRACTION[1], 0, DAY_FRACTION)
 	const ret: Time = { ...time, day: DAY_FRACTION[0], fraction: DAY_FRACTION[1], scale: Timescale.UT1 }
+	setTimeProviders(ret, time.providers)
 
 	timescale(ret, time)
 	timescale(time, ret)
@@ -468,6 +474,7 @@ export function utc(time: Time) {
 
 	normalizeDayAndFraction(DAY_FRACTION[0], DAY_FRACTION[1], 0, DAY_FRACTION)
 	const ret: Time = { ...time, day: DAY_FRACTION[0], fraction: DAY_FRACTION[1], scale: Timescale.UTC }
+	setTimeProviders(ret, time.providers)
 
 	timescale(ret, time)
 	timescale(time, ret)
@@ -494,6 +501,7 @@ export function tai(time: Time) {
 
 	normalizeDayAndFraction(DAY_FRACTION[0], DAY_FRACTION[1], 0, DAY_FRACTION)
 	const ret: Time = { ...time, day: DAY_FRACTION[0], fraction: DAY_FRACTION[1], scale: Timescale.TAI }
+	setTimeProviders(ret, time.providers)
 
 	timescale(ret, time)
 	timescale(time, ret)
@@ -523,6 +531,7 @@ export function tt(time: Time) {
 
 	normalizeDayAndFraction(DAY_FRACTION[0], DAY_FRACTION[1], 0, DAY_FRACTION)
 	const ret: Time = { ...time, day: DAY_FRACTION[0], fraction: DAY_FRACTION[1], scale: Timescale.TT }
+	setTimeProviders(ret, time.providers)
 
 	timescale(ret, time)
 	timescale(time, ret)
@@ -545,6 +554,7 @@ export function tcg(time: Time) {
 
 	normalizeDayAndFraction(DAY_FRACTION[0], DAY_FRACTION[1], 0, DAY_FRACTION)
 	const ret: Time = { ...time, day: DAY_FRACTION[0], fraction: DAY_FRACTION[1], scale: Timescale.TCG }
+	setTimeProviders(ret, time.providers)
 
 	timescale(ret, time)
 	timescale(time, ret)
@@ -569,6 +579,7 @@ export function tdb(time: Time) {
 
 	normalizeDayAndFraction(DAY_FRACTION[0], DAY_FRACTION[1], 0, DAY_FRACTION)
 	const ret: Time = { ...time, day: DAY_FRACTION[0], fraction: DAY_FRACTION[1], scale: Timescale.TDB }
+	setTimeProviders(ret, time.providers)
 
 	timescale(ret, time)
 	timescale(time, ret)
@@ -591,6 +602,7 @@ export function tcb(time: Time) {
 
 	normalizeDayAndFraction(DAY_FRACTION[0], DAY_FRACTION[1], 0, DAY_FRACTION)
 	const ret: Time = { ...time, day: DAY_FRACTION[0], fraction: DAY_FRACTION[1], scale: Timescale.TCB }
+	setTimeProviders(ret, time.providers)
 
 	timescale(ret, time)
 	timescale(time, ret)
