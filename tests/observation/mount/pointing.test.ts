@@ -542,6 +542,31 @@ test('an extrapolating correction is truncated instead of sent to the mount', ()
 	expect(Number.isFinite(truncated.rightAscension)).toBeTrue()
 })
 
+test('a correction that cannot be measured is refused instead of reported as unclamped', () => {
+	const featureConfiguration = { includeBias: true, includeHourAngleTerms: false, includeDeclinationTerms: false, includeAltitudeTerms: false, includeCrossTerms: false, includePierSideTerms: false, includePolynomialTerms: false } as const satisfies PointingFeatureConfiguration
+	const displacement = deg(100)
+	const samples: PointingSample[] = []
+
+	for (let i = 0; i < 16; i++) {
+		const targetRightAscension = hour(i)
+		const targetDeclination = deg(2)
+		samples.push({ targetRightAscension, targetDeclination, solvedRightAscension: normalizeAngle(targetRightAscension + displacement), solvedDeclination: targetDeclination, time: TIME, latitude: LATITUDE, longitude: LONGITUDE, pierSide: 'NEITHER' })
+	}
+
+	const model = fitPointingModel(samples, { strategy: 'empirical', featureConfiguration, errorRepresentation: 'smallAngle', robust: { method: 'none' }, validation: { minimumAltitude: -PI / 2, maximumSampleSeparation: PI } })
+	const input = sampleInput(samples[3])
+	const correction = correctPointingCoordinate(model, input)
+
+	expect(model.usable).toBeTrue()
+	expect(predictPointingModelError(model, input).offsetMagnitude).toBeGreaterThan(PI / 2)
+
+	expect(correction.clamped).toBeTrue()
+	expect(correction.converged).toBeFalse()
+	expect(Number.isFinite(correction.residual)).toBeTrue()
+	expect(correction.rightAscension).toBe(input.rightAscension)
+	expect(correction.declination).toBe(input.declination)
+})
+
 test('samples reduced in another frame are rejected instead of mixed into the fit', () => {
 	const terms: Readonly<Record<SemiPhysicalTermName, Angle>> = { CH: 40 * ASEC2RAD, IH: -60 * ASEC2RAD, ID: 30 * ASEC2RAD, NP: -20 * ASEC2RAD, MA: 50 * ASEC2RAD, ME: -35 * ASEC2RAD, TF: 25 * ASEC2RAD }
 	const samples = generateMechanicalPointingSamples(terms, { count: 60, seed: 71, time: TIME, latitude: LATITUDE, longitude: LONGITUDE })

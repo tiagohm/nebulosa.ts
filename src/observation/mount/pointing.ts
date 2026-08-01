@@ -747,8 +747,10 @@ export function correctPointingCoordinate(model: FittedPointingModel, input: Rea
 		// How the current candidate would miss the target once the mount adds its predicted error.
 		const offset = commandOffset(target, command, predictedError)
 
-		// The candidate ended up more than 90° from the target: the model is not describing a mount.
-		if (offset === undefined) break
+		// The candidate ended up more than 90° from the target: the model is not describing a mount. The
+		// iteration has nothing left to refine, and the candidate it holds cannot even be measured against
+		// the target, so the correction is abandoned instead of returned with an unmeasurable residual.
+		if (offset === undefined) return refusedCorrection(model, input, iterations)
 
 		residual = Math.hypot(offset.x, offset.y)
 
@@ -767,12 +769,8 @@ export function correctPointingCoordinate(model: FittedPointingModel, input: Rea
 
 	const total = sphericalProjectTangentPlane(command, target)
 
-	if (total === false) {
-		// A command a quarter turn away from the target is never a correction. Refuse to move at all, and
-		// report the miss of the uncorrected coordinate that is actually being returned.
-		const uncorrected = predictPointingModelError(model, input)
-		return { rightAscension: input.rightAscension, declination: input.declination, predictedError: uncorrected, converged: false, iterations, residual: Math.hypot(uncorrected.dx, uncorrected.dy), clamped: true }
-	}
+	// A command a quarter turn away from the target is never a correction.
+	if (total === false) return refusedCorrection(model, input, iterations)
 
 	// Gnomonic offsets are `tan(separation)` along the tangent direction, so the clamp compares angles.
 	const distance = Math.hypot(total.x, total.y)
@@ -796,6 +794,18 @@ export function correctPointingCoordinate(model: FittedPointingModel, input: Rea
 	const offset = commandOffset(target, command, clampedError)
 
 	return { rightAscension, declination, predictedError: clampedError, converged, iterations, residual: offset === undefined ? residual : Math.hypot(offset.x, offset.y), clamped }
+}
+
+// Result returned when the inversion cannot produce a command it is able to measure: the target itself,
+// flagged as clamped so a caller refuses the slew.
+//
+// A model predicting a displacement of more than a quarter turn is not describing a mount, and there is
+// no correction to salvage from it. Reporting the target with `clamped` set is the only honest answer,
+// and `residual` becomes the finite miss of the uncorrected coordinate actually being returned, rather
+// than the unmeasurable one of a candidate that was thrown away.
+function refusedCorrection(model: FittedPointingModel, input: Readonly<PointingModelInput>, iterations: number): CorrectionResult {
+	const uncorrected = predictPointingModelError(model, input)
+	return { rightAscension: input.rightAscension, declination: input.declination, predictedError: uncorrected, converged: false, iterations, residual: Math.hypot(uncorrected.dx, uncorrected.dy), clamped: true }
 }
 
 // Tangent-plane offset from where the mount would land, when commanded to `command` while making the
