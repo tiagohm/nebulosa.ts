@@ -1305,7 +1305,7 @@ function fitStackedOffsetModel(samples: readonly PreparedPointingSample[], optio
 	// skipped for a robust fit.
 	const robustFit = options.robust.method !== 'none'
 	const fit = linearLeastSquares(rows, target, { weights, leverage: !robustFit })
-	const looResiduals = robustFit ? robustLeaveOneOutResiduals(rows, target, sampleCount, baseWeights, robustWeights, options.robust) : undefined
+	const looResiduals = robustFit ? robustLeaveOneOutResiduals(rows, target, sampleCount, baseWeights, options.robust) : undefined
 
 	// Conditioning is measured on the sample rows alone, never on the ridge-augmented system the
 	// coefficients come from. One Tikhonov row per column makes the augmented matrix full rank by
@@ -1389,16 +1389,19 @@ function applyStackedWeights(weights: Float64Array, baseWeights: Readonly<Number
 // would compare candidates on a quantity none of them actually has.
 //
 // `rows` and `target` are the full stacked design, Tikhonov rows included, so every fold carries the same
-// regularization as the complete fit. Each fold warm-starts its IRLS from the converged weights of that
-// fit, which is the same fixed point reached from any start and typically settles in one or two passes.
-function robustLeaveOneOutResiduals(rows: readonly Float64Array[], target: Readonly<Float64Array>, sampleCount: number, baseWeights: Readonly<NumberArray>, robustWeights: Readonly<NumberArray>, robust: ResolvedPointingRobustFitConfiguration) {
+// regularization as the complete fit. Each fold starts its IRLS from unit weights, exactly as a fresh fit
+// on the remaining samples would: Tukey's weight function redescends to zero, so its iteration has several
+// fixed points and warm-starting from the full fit's weights would keep the held-out sample's influence on
+// its neighbours and report an optimistically small error. Huber is convex and reaches the same fixed point
+// either way, so it only pays a few extra passes per fold.
+function robustLeaveOneOutResiduals(rows: readonly Float64Array[], target: Readonly<Float64Array>, sampleCount: number, baseWeights: Readonly<NumberArray>, robust: ResolvedPointingRobustFitConfiguration) {
 	const weights = new Float64Array(rows.length).fill(1)
 	const residuals = new Float64Array(sampleCount)
 	const looResiduals = new Float64Array(sampleCount)
 	const maxIterations = Math.max(1, robust.maxIterations)
 
 	for (let heldOut = 0; heldOut < sampleCount; heldOut++) {
-		let foldWeights = Float64Array.from(robustWeights)
+		let foldWeights: Readonly<NumberArray> = new Float64Array(sampleCount).fill(1)
 		let coefficients: Readonly<NumberArray> = []
 
 		for (let iteration = 0; iteration < maxIterations; iteration++) {
