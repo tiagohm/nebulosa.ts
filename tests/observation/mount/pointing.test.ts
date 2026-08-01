@@ -3,12 +3,12 @@ import { equatorialToHorizontal } from '../../../src/astronomy/coordinates/coord
 import { eraC2s, eraS2c } from '../../../src/astronomy/coordinates/erfa/erfa'
 import { localSiderealTime } from '../../../src/astronomy/observer/location'
 import { timeYMDHMS } from '../../../src/astronomy/time/time'
-import { ASEC2RAD, PI } from '../../../src/core/constants'
+import { ASEC2RAD, PI, TAU } from '../../../src/core/constants'
 import { medianOf } from '../../../src/core/util'
 import { sphericalUnprojectTangentPlane } from '../../../src/math/numerical/geometry'
 import type { NumberArray } from '../../../src/math/numerical/math'
 import { type Angle, arcmin, deg, hour, normalizeAngle } from '../../../src/math/units/angle'
-import { computePointingError, correctPointingCoordinate, type FittedPointingModel, fitPointingModel, MountPointing, type PointingModelStrategy, type PointingSample, predictPointingModelError, selectPointingStrategy, type SerializedPointingModel } from '../../../src/observation/mount/pointing'
+import { applyPointingOffset, computePointingError, correctPointingCoordinate, type FittedPointingModel, fitPointingModel, MountPointing, type PointingModelStrategy, type PointingSample, predictPointingModelError, selectPointingStrategy, type SerializedPointingModel } from '../../../src/observation/mount/pointing'
 import { buildEmpiricalPointingFeatureNames, extractEmpiricalPointingFeatures, resolveFeatureConfiguration, SEMI_PHYSICAL_TERM_NAMES, type PointingFeatureConfiguration, type PointingModelInput, type SemiPhysicalTermName } from '../../../src/observation/mount/pointing.basis'
 import { coefficientsByName, generateMechanicalPointingSamples, generateSyntheticPointingSamples, sampleInput } from '../../pointing.util'
 
@@ -39,6 +39,25 @@ test('pointing error uses east-positive and north-positive signs', () => {
 	expect(eastError.dy).toBeCloseTo(0, 8)
 	expect(northError.dx).toBeCloseTo(0, 8)
 	expect(northError.dy).toBeCloseTo(arcmin(7), 8)
+})
+
+test('applying an offset across the right ascension wrap stays in 0..TAU and inverts the error', () => {
+	const declination = deg(12)
+
+	for (const representation of ['vectorTangent', 'smallAngle'] as const) {
+		const west = applyPointingOffset(0.001, declination, arcmin(-40), arcmin(3), representation)
+		const east = applyPointingOffset(TAU - 0.001, declination, arcmin(40), arcmin(-3), representation)
+
+		expect(west.rightAscension).toBeGreaterThan(TAU - 0.02)
+		expect(west.rightAscension).toBeLessThan(TAU)
+		expect(east.rightAscension).toBeGreaterThan(0)
+		expect(east.rightAscension).toBeLessThan(0.02)
+
+		const error = computePointingError(0.001, declination, west.rightAscension, west.declination, representation)
+
+		expect(error.dx).toBeCloseTo(arcmin(-40), 10)
+		expect(error.dy).toBeCloseTo(arcmin(3), 10)
+	}
 })
 
 test('feature extraction computes HA altitude and pier side', () => {

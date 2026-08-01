@@ -572,8 +572,10 @@ export function computePointingError(targetRa: Angle, targetDec: Angle, solvedRa
 // is normalized to `0..TAU` and the declination is clamped to `±PI/2`.
 export function applyPointingOffset(rightAscension: Angle, declination: Angle, dx: number, dy: number, representation: PointingErrorRepresentation = 'vectorTangent'): EquatorialCoordinate {
 	if (representation !== 'smallAngle') {
+		// `eraC2s` returns an `atan2` longitude in `-PI..PI`, which an offset crossing right ascension zero
+		// lands on, so the wrap is undone here rather than handed to the caller.
 		const [ra, dec] = eraC2s(...sphericalUnprojectTangentPlane(dx, dy, eraS2c(rightAscension, declination)))
-		return { rightAscension: ra, declination: dec }
+		return { rightAscension: normalizeAngle(ra), declination: dec }
 	}
 
 	// `dx` was scaled by this same cosine, so the division is exact except at the pole itself, where the
