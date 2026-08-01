@@ -70,7 +70,7 @@ Use Bun for installs, scripts, tests, and local execution.
 - Lint and type-check: `bun run lint`
 - Lint with fixes: `bun run lint:fix`
 - Refresh codebase graph: `bun run index`
-- Test all: `bun test`
+- Test full suite: `bun test --parallel`
 - Test one file: `bun test tests/vec3.test.ts`
 
 Additional rules:
