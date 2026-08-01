@@ -8,7 +8,7 @@ import { type Vec3, vecAngle } from '../../math/linear-algebra/vec3'
 import { sphericalProjectTangentPlane, sphericalUnprojectTangentPlane } from '../../math/numerical/geometry'
 import { estimateLeastSquaresConditioning, leastSquaresCoefficients, linearLeastSquares, predictLinearLeastSquares, type RobustRegressionMethod } from '../../math/numerical/least.squares'
 import type { NumberArray } from '../../math/numerical/math'
-import { type Angle, normalizePI } from '../../math/units/angle'
+import { type Angle, normalizeAngle, normalizePI } from '../../math/units/angle'
 // oxfmt-ignore
 import { availableContextRequirement, buildEmpiricalPointingFeatureNames, empiricalFeatureRequirement, extractPointingContext, featuresFromContext, normalizePierSide, type PointingContext, type PointingContextRequirement, type PointingFeatureConfiguration, type PointingFrame, type PointingModelInput, type PointingOffset, predictSemiPhysicalOffset, type ResolvedPointingFeatureConfiguration, resolveFeatureConfiguration, SEMI_PHYSICAL_TERM_NAMES, SEMI_PHYSICAL_TERM_REQUIREMENTS, semiPhysicalBasis, type SemiPhysicalTermName, satisfiesContextRequirement } from './pointing.basis'
 import { buildLocalPointingResidual, type LocalPointingResidualModel, type LocalPointingResidualOptions, predictLocalPointingResidual, type ResolvedLocalPointingResidualOptions, resolveLocalResidualOptions } from './pointing.local'
@@ -513,6 +513,9 @@ const DEFAULT_MAXIMUM_CORRECTION = 5 * DEG2RAD
 // Floor for `1 - leverage` when converting a residual into its leave-one-out counterpart, so a saturated
 // row inflates the metric instead of producing a division by zero.
 const MINIMUM_LEVERAGE_COMPLEMENT = 1e-6
+// Floor for `cos(declination)` when undoing the small-angle scaling of a right-ascension offset. Below
+// it the coordinate is within a few microarcseconds of the pole, where right ascension is meaningless.
+const MINIMUM_DECLINATION_COSINE = 1e-10
 // Default sample-validation thresholds: 10° minimum altitude, 5° max separation, 5′ duplicate radius,
 // and a recommended minimum of 12 samples.
 const DEFAULT_VALIDATION_OPTIONS: ResolvedPointingValidationOptions = {
@@ -556,6 +559,28 @@ export function computePointingError(targetRa: Angle, targetDec: Angle, solvedRa
 		representationUsed: projection === false ? 'smallAngle' : representation,
 		comparison: { smallAngleDx: simpleDx, smallAngleDy: simpleDy, vectorDx, vectorDy },
 	}
+}
+
+// Adds a pointing offset to the coordinate it refers to, inverting `computePointingError` for the same
+// representation.
+//
+// `rightAscension` and `declination` (radians) are the target the offset was measured or predicted at,
+// `dx` and `dy` (radians) are east-positive and north-positive. `representation` must match the one the
+// offset was produced with: a `smallAngle` offset is a plain difference of spherical coordinates scaled
+// by `cos(declination)`, while a `vectorTangent` one is gnomonic, and applying the wrong inverse leaves
+// a second-order error that grows with the declination and the offset size. The returned right ascension
+// is normalized to `0..TAU` and the declination is clamped to `±PI/2`.
+export function applyPointingOffset(rightAscension: Angle, declination: Angle, dx: number, dy: number, representation: PointingErrorRepresentation = 'vectorTangent'): EquatorialCoordinate {
+	if (representation !== 'smallAngle') {
+		const [ra, dec] = eraC2s(...sphericalUnprojectTangentPlane(dx, dy, eraS2c(rightAscension, declination)))
+		return { rightAscension: ra, declination: dec }
+	}
+
+	// `dx` was scaled by this same cosine, so the division is exact except at the pole itself, where the
+	// scaling annihilates any offset and no right ascension can be recovered from it.
+	const cosDec = Math.cos(declination)
+	const ra = Math.abs(cosDec) < MINIMUM_DECLINATION_COSINE ? rightAscension : rightAscension + dx / cosDec
+	return { rightAscension: normalizeAngle(ra), declination: Math.min(PIOVERTWO, Math.max(-PIOVERTWO, declination + dy)) }
 }
 
 // Fits a complete pointing model from the current sample set.
@@ -775,8 +800,23 @@ export function correctPointingCoordinate(model: FittedPointingModel, input: Rea
 // predicted `error`, to `target`. Components are gnomonic, east-positive and north-positive, in radians
 // for the small separations a pointing model deals with. Returns `undefined` when the two directions are
 // more than a quarter turn apart, where the tangent plane cannot represent the offset at all.
-function commandOffset(target: Vec3, command: Vec3, error: Readonly<PointingOffset>) {
-	const reached = sphericalUnprojectTangentPlane(error.dx, error.dy, command)
+//
+// The error is applied with the inverse of its own representation, so the fixed point the iteration
+// converges to is the coordinate the mount really reaches under the model that was fitted. The offset
+// itself stays gnomonic regardless: it parameterizes the search step, not the mount's error.
+function commandOffset(target: Vec3, command: Vec3, error: Readonly<PredictedPointingError>) {
+	let reached: Vec3
+
+	if (error.representationUsed === 'smallAngle') {
+		const [commandRa, commandDec] = eraC2s(...command)
+		const { rightAscension, declination } = applyPointingOffset(commandRa, commandDec, error.dx, error.dy, 'smallAngle')
+		reached = eraS2c(rightAscension, declination)
+	} else {
+		// The gnomonic case works directly on the direction vector, avoiding a spherical round trip in a
+		// loop that runs once per correction iteration.
+		reached = sphericalUnprojectTangentPlane(error.dx, error.dy, command)
+	}
+
 	const offset = sphericalProjectTangentPlane(target, reached)
 	return offset === false ? undefined : offset
 }

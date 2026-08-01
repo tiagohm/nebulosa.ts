@@ -6,10 +6,11 @@ import { localSiderealTime } from '../../../src/astronomy/observer/location'
 import { timeYMDHMS, tt } from '../../../src/astronomy/time/time'
 import { ASEC2RAD, PI } from '../../../src/core/constants'
 import { matMulVec, matRodriguesRotation } from '../../../src/math/linear-algebra/mat3'
-import { type Angle, arcmin, deg, hour } from '../../../src/math/units/angle'
+import { sphericalUnprojectTangentPlane } from '../../../src/math/numerical/geometry'
+import { type Angle, arcmin, deg, hour, normalizePI } from '../../../src/math/units/angle'
 import { fitDirectionAlignment } from '../../../src/observation/mount/alignment'
 import { createIdealAltAzGeometry } from '../../../src/observation/mount/kinematics'
-import { computePointingError, fitPointingModel } from '../../../src/observation/mount/pointing'
+import { computePointingError, fitPointingModel, type PointingErrorRepresentation } from '../../../src/observation/mount/pointing'
 import type { SemiPhysicalTermName } from '../../../src/observation/mount/pointing.basis'
 import { celestialToEncoders, encodersToCelestial, type MountPointingChain } from '../../../src/observation/mount/pointing.pipeline'
 import { generateMechanicalPointingSamples } from '../../pointing.util'
@@ -35,14 +36,14 @@ const TERMS: Readonly<Record<SemiPhysicalTermName, Angle>> = {
 }
 
 // Builds a chain whose base is tilted away from ENU, so the alignment is doing real work.
-function buildChain(withModel: boolean): MountPointingChain {
+function buildChain(withModel: boolean, errorRepresentation: PointingErrorRepresentation = 'vectorTangent'): MountPointingChain {
 	const rotation = matRodriguesRotation([0.2, -0.5, 1], deg(3))
 	const alignment = fitDirectionAlignment([
 		{ mount: [1, 0, 0], world: matMulVecLocal(rotation, [1, 0, 0]) },
 		{ mount: [0, 0.4, 1], world: matMulVecLocal(rotation, [0, 0.4, 1]) },
 	])
 	const samples = generateMechanicalPointingSamples(TERMS, { count: 120, seed: 131, time: TIME, latitude: LATITUDE, longitude: LONGITUDE })
-	const model = fitPointingModel(samples, { strategy: 'semiPhysical', robust: { method: 'none' }, ridge: 1e-12, validation: { minimumAltitude: -PI / 2 } })
+	const model = fitPointingModel(samples, { strategy: 'semiPhysical', robust: { method: 'none' }, ridge: 1e-12, errorRepresentation, validation: { minimumAltitude: -PI / 2 } })
 
 	return { geometry: createIdealAltAzGeometry(), alignment, model: withModel ? model : undefined }
 }
@@ -95,6 +96,26 @@ test('reading back the encoders reports where the mount really points, not what 
 	expect(offset.dx).toBeCloseTo(reached.predictedError.dx, 10)
 	expect(offset.dy).toBeCloseTo(reached.predictedError.dy, 10)
 	expect(offset.angularSeparation).toBeGreaterThan(arcmin(0.5))
+})
+
+test('the encoder readback undoes a small-angle model with the small-angle inverse', () => {
+	const chain = buildChain(true, 'smallAngle')
+	const desired = { rightAscension: hour(20.5), declination: deg(85), ...CONTEXT }
+	const reached = encodersToCelestial(chain, celestialToEncoders(chain, desired), CONTEXT)
+	const cosDec = Math.cos(reached.commanded.declination)
+
+	expect(reached.predictedError.representationUsed).toBe('smallAngle')
+	expect(reached.predictedError.offsetMagnitude).toBeGreaterThan(arcmin(1))
+	expect(reached.declination - reached.commanded.declination).toBeCloseTo(reached.predictedError.dy, 12)
+	expect(normalizePI(reached.rightAscension - reached.commanded.rightAscension) * cosDec).toBeCloseTo(reached.predictedError.dx, 12)
+
+	// The gnomonic inverse of the same offset lands somewhere else entirely near the pole.
+	const [gnomonicRa, gnomonicDec] = eraC2s(...sphericalUnprojectTangentPlane(reached.predictedError.dx, reached.predictedError.dy, eraS2c(reached.commanded.rightAscension, reached.commanded.declination)))
+
+	expect(computePointingError(reached.rightAscension, reached.declination, gnomonicRa, gnomonicDec).angularSeparation / ASEC2RAD).toBeGreaterThan(1)
+
+	// Both conversions share that inverse, so the round trip is still exact at this declination.
+	expect(computePointingError(desired.rightAscension, desired.declination, reached.rightAscension, reached.declination).angularSeparation / ASEC2RAD).toBeLessThan(1e-3)
 })
 
 test('the equatorial world frame skips the horizon and needs no observing context', () => {

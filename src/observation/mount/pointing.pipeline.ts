@@ -5,11 +5,10 @@ import { localSiderealTime } from '../../astronomy/observer/location'
 import type { Time } from '../../astronomy/time/time'
 import type { PierSide } from '../../devices/indi/device'
 import type { Vec3 } from '../../math/linear-algebra/vec3'
-import { sphericalUnprojectTangentPlane } from '../../math/numerical/geometry'
 import type { Angle } from '../../math/units/angle'
 import { applyDirectionAlignment, type DirectionAlignmentResult } from './alignment'
 import { mountDirectionFromEncoders, type MountEncoderPosition, type MountEncoderSolution, type MountEncoderSolveOptions, solveMountEncoders, type TwoAxisMountGeometry } from './kinematics'
-import { type CorrectionResult, correctPointingCoordinate, type FittedPointingModel, type PointingCorrectionOptions, type PredictedPointingError, predictPointingModelError } from './pointing'
+import { applyPointingOffset, type CorrectionResult, correctPointingCoordinate, type FittedPointingModel, type PointingCorrectionOptions, type PredictedPointingError, predictPointingModelError } from './pointing'
 import type { PointingFrame } from './pointing.basis'
 
 // Composes the three mount layers into the two conversions an application actually performs: sky
@@ -108,7 +107,10 @@ export function encodersToCelestial(chain: Readonly<MountPointingChain>, encoder
 	}
 
 	const predictedError = predictPointingModelError(chain.model, { ...context, ...commanded })
-	const [rightAscension, declination] = eraC2s(...sphericalOffset(commanded, predictedError.dx, predictedError.dy))
+	// The offset must be undone with the inverse of the representation it was predicted in: a small-angle
+	// model expresses `dx` as `Δα·cos δ` and `dy` as `Δδ`, which the gnomonic unprojection would misread by
+	// a term growing with the declination and the offset size.
+	const { rightAscension, declination } = applyPointingOffset(commanded.rightAscension, commanded.declination, predictedError.dx, predictedError.dy, predictedError.representationUsed)
 	return { rightAscension, declination, commanded, predictedError }
 }
 
@@ -169,11 +171,6 @@ function worldDirectionToCelestial(frame: MountWorldFrame, direction: Vec3, cont
 	const horizontal = enuVectorToHorizontal(direction)
 	const [rightAscension, declination] = horizontalToEquatorial(horizontal.azimuth, horizontal.altitude, latitude, localSiderealTime(time, longitude, true))
 	return { rightAscension, declination }
-}
-
-// Applies a tangent-plane offset (radians, east-positive and north-positive) around a coordinate.
-function sphericalOffset(coordinate: Readonly<EquatorialCoordinate>, dx: number, dy: number) {
-	return sphericalUnprojectTangentPlane(dx, dy, eraS2c(coordinate.rightAscension, coordinate.declination))
 }
 
 // Correction returned when the chain carries no model: the command is the target, exactly.
