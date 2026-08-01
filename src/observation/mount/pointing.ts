@@ -207,9 +207,10 @@ export interface PointingDiagnostics {
 	readonly supportedContext: PointingContextRequirement
 	// Semi-physical terms and empirical features removed before fitting, with the reason.
 	readonly droppedTerms: readonly string[]
-	// RMS of the leave-one-out radial residuals (radians), or `undefined` when leverage was unavailable.
+	// RMS of the leave-one-out radial residuals (radians), or `undefined` when they could not be produced.
 	// Unlike `angularRms`, this does not fall as parameters are added unless they genuinely predict, so
-	// it is the metric to compare strategies with.
+	// it is the metric to compare strategies with. A robust fit obtains it from one refit per sample; a
+	// fixed-weight fit from the leverage identity, which is exact there.
 	readonly looRms?: Angle
 	// Leave-one-out radial residual percentiles (radians).
 	readonly looResidualPercentiles?: {
@@ -1130,8 +1131,12 @@ interface StackedOffsetFit {
 	readonly coefficients: Float64Array
 	readonly conditionNumber: number
 	readonly rankDeficient: boolean
-	// Hat-matrix diagonal over the stacked rows, used for leave-one-out diagnostics.
+	// Hat-matrix diagonal over the stacked rows, present only for a fixed-weight fit, where the leverage
+	// identity is exact and leave-one-out residuals can be derived from it.
 	readonly leverage?: Readonly<NumberArray>
+	// Radial leave-one-out residual of each sample (radians), from real fold refits. Present only for a
+	// robust fit, where the leverage identity does not hold.
+	readonly looResiduals?: Readonly<NumberArray>
 	// Projection of each empirical column onto the semi-physical block, when both blocks are present.
 	readonly orthogonalizationDx?: number[]
 	readonly orthogonalizationDy?: number[]
@@ -1243,7 +1248,12 @@ function fitStackedOffsetModel(samples: readonly PreparedPointingSample[], optio
 		if (converged) break
 	}
 
-	const fit = linearLeastSquares(rows, target, { weights, leverage: true })
+	// Leave-one-out residuals come from real fold refits whenever the weights are not fixed, and from the
+	// leverage identity otherwise; only one of the two is ever needed, so the hat-matrix inversion is
+	// skipped for a robust fit.
+	const robustFit = options.robust.method !== 'none'
+	const fit = linearLeastSquares(rows, target, { weights, leverage: !robustFit })
+	const looResiduals = robustFit ? robustLeaveOneOutResiduals(rows, target, sampleCount, baseWeights, robustWeights, options.robust) : undefined
 
 	// Conditioning is measured on the sample rows alone, never on the ridge-augmented system the
 	// coefficients come from. One Tikhonov row per column makes the augmented matrix full rank by
@@ -1253,7 +1263,7 @@ function fitStackedOffsetModel(samples: readonly PreparedPointingSample[], optio
 	// the solve; it just no longer decides whether the model is usable.
 	const conditioning = estimateLeastSquaresConditioning(informativeDataRows(rows, dataRowCount, columnCount), weights.subarray(0, dataRowCount))
 
-	return { coefficients: new Float64Array(fit.coefficients), conditionNumber: conditioning.conditionNumber, rankDeficient: conditioning.rankDeficient, leverage: fit.leverage, orthogonalizationDx: orthogonalization?.dx, orthogonalizationDy: orthogonalization?.dy }
+	return { coefficients: new Float64Array(fit.coefficients), conditionNumber: conditioning.conditionNumber, rankDeficient: conditioning.rankDeficient, leverage: fit.leverage, looResiduals, orthogonalizationDx: orthogonalization?.dx, orthogonalizationDy: orthogonalization?.dy }
 }
 
 // Relative column norm below which a design column is treated as identically zero over the data rows
@@ -1306,13 +1316,58 @@ function informativeDataRows(rows: readonly Float64Array[], dataRowCount: number
 // the appended Tikhonov rows at their fixed weight of 1.
 //
 // `weights` is mutated in place. `baseWeights` and `robustWeights` hold one entry per sample; `weights`
-// holds one per design row, with the `2 * sampleCount` data rows first.
-function applyStackedWeights(weights: Float64Array, baseWeights: Readonly<NumberArray>, robustWeights: Readonly<NumberArray>, sampleCount: number) {
+// holds one per design row, with the `2 * sampleCount` data rows first. `heldOut` is the index of a
+// sample to remove from the fit, or `-1` to keep them all: a zero-weighted row contributes nothing to
+// either side of the normal equations, so zeroing it is exactly deleting it.
+function applyStackedWeights(weights: Float64Array, baseWeights: Readonly<NumberArray>, robustWeights: Readonly<NumberArray>, sampleCount: number, heldOut: number = -1) {
 	for (let i = 0; i < sampleCount; i++) {
-		const weight = baseWeights[i] * robustWeights[i]
+		const weight = i === heldOut ? 0 : baseWeights[i] * robustWeights[i]
 		weights[i * 2] = weight
 		weights[i * 2 + 1] = weight
 	}
+}
+
+// Refits the stacked model once per sample with that sample removed, and returns the radial residual
+// each refit leaves at the sample it never saw (radians, one entry per sample).
+//
+// A robust fit cannot use the `r / (1 - h)` leverage identity: that identity assumes the row weights are
+// fixed, whereas IRLS derives every weight and the residual scale from the whole dataset. Removing a
+// sample — an outlier above all — moves the weights of the samples that remain, so the leverage-corrected
+// residual is not the error a leave-one-out robust refit would produce, and scoring strategies with it
+// would compare candidates on a quantity none of them actually has.
+//
+// `rows` and `target` are the full stacked design, Tikhonov rows included, so every fold carries the same
+// regularization as the complete fit. Each fold warm-starts its IRLS from the converged weights of that
+// fit, which is the same fixed point reached from any start and typically settles in one or two passes.
+function robustLeaveOneOutResiduals(rows: readonly Float64Array[], target: Readonly<Float64Array>, sampleCount: number, baseWeights: Readonly<NumberArray>, robustWeights: Readonly<NumberArray>, robust: ResolvedPointingRobustFitConfiguration) {
+	const weights = new Float64Array(rows.length).fill(1)
+	const residuals = new Float64Array(sampleCount)
+	const looResiduals = new Float64Array(sampleCount)
+	const maxIterations = Math.max(1, robust.maxIterations)
+
+	for (let heldOut = 0; heldOut < sampleCount; heldOut++) {
+		let foldWeights = Float64Array.from(robustWeights)
+		let coefficients: Readonly<NumberArray> = []
+
+		for (let iteration = 0; iteration < maxIterations; iteration++) {
+			applyStackedWeights(weights, baseWeights, foldWeights, sampleCount, heldOut)
+			coefficients = leastSquaresCoefficients(rows, target, { weights })
+
+			for (let i = 0; i < sampleCount; i++) {
+				residuals[i] = i === heldOut ? 0 : Math.hypot(target[i * 2] - dotRow(rows[i * 2], coefficients), target[i * 2 + 1] - dotRow(rows[i * 2 + 1], coefficients))
+			}
+
+			const nextWeights = robustSampleWeights(residuals, robust, heldOut)
+			const converged = maxWeightDifference(foldWeights, nextWeights) <= robust.tolerance
+			foldWeights = nextWeights
+
+			if (converged) break
+		}
+
+		looResiduals[heldOut] = Math.hypot(target[heldOut * 2] - dotRow(rows[heldOut * 2], coefficients), target[heldOut * 2 + 1] - dotRow(rows[heldOut * 2 + 1], coefficients))
+	}
+
+	return looResiduals
 }
 
 // Turns the per-sample inverse-variance weights into a vector with mean 1.
@@ -1448,17 +1503,24 @@ function dotRow(row: Readonly<Float64Array>, coefficients: Readonly<NumberArray>
 }
 
 // Builds robust sample weights from radial residuals.
-function robustSampleWeights(residuals: Readonly<NumberArray>, robust: ResolvedPointingRobustFitConfiguration) {
+//
+// `heldOut` is the index of a sample excluded from the fit, or `-1` when none is. Its residual takes no
+// part in the scale estimate and its weight is returned as zero, so a leave-one-out refit derives its
+// weighting from the samples it actually saw.
+function robustSampleWeights(residuals: Readonly<NumberArray>, robust: ResolvedPointingRobustFitConfiguration, heldOut: number = -1) {
 	if (robust.method === 'none' || residuals.length === 0) {
 		const weights = new Float64Array(residuals.length)
 		weights.fill(1)
+		if (heldOut >= 0) weights[heldOut] = 0
 		return weights
 	}
 
-	const scale = robustResidualScale(residuals)
+	const scale = robustResidualScale(residuals, heldOut)
 	const weights = new Float64Array(residuals.length)
 
 	for (let i = 0; i < residuals.length; i++) {
+		if (i === heldOut) continue
+
 		const normalizedResidual = Math.abs(residuals[i]) / (Math.max(scale, Number.EPSILON) * robust.tuning)
 
 		if (robust.method === 'tukey') {
@@ -1475,18 +1537,20 @@ function robustSampleWeights(residuals: Readonly<NumberArray>, robust: ResolvedP
 	return weights
 }
 
-// Computes a robust scale estimate for residual magnitudes.
-function robustResidualScale(values: Readonly<NumberArray>) {
-	if (values.length === 0) return 0
+// Computes a robust scale estimate for residual magnitudes, skipping `heldOut` when it is not `-1`.
+function robustResidualScale(values: Readonly<NumberArray>, heldOut: number = -1) {
+	const count = values.length - (heldOut >= 0 && heldOut < values.length ? 1 : 0)
 
-	const sorted = new Float64Array(values.length)
+	if (count <= 0) return 0
 
-	for (let i = 0; i < values.length; i++) {
-		sorted[i] = Math.abs(values[i])
+	const sorted = new Float64Array(count)
+
+	for (let i = 0, j = 0; i < values.length; i++) {
+		if (i !== heldOut) sorted[j++] = Math.abs(values[i])
 	}
 
 	const median = medianOf(sorted.sort())
-	return median > 0 ? median * STANDARD_DEVIATION_SCALE : rmsOf(values)
+	return median > 0 ? median * STANDARD_DEVIATION_SCALE : rmsOf(sorted)
 }
 
 // Computes the maximum absolute delta between two weight vectors.
@@ -1620,7 +1684,7 @@ function buildPointingDiagnostics(totalSamples: number, prepared: PreparedPointi
 	const residuals = new Float64Array(prepared.accepted.length)
 	const residualsDx = modelResiduals.dx
 	const residualsDy = modelResiduals.dy
-	const looResiduals = fit.leverage ? new Float64Array(prepared.accepted.length) : undefined
+	const looResiduals = fit.leverage || fit.looResiduals ? new Float64Array(prepared.accepted.length) : undefined
 	const warnings = [...prepared.warnings]
 	const rejectedReasonCounts: Record<string, number> = {}
 	const perPierSideSampleCounts = { EAST: 0, WEST: 0, NEITHER: 0 }
@@ -1637,11 +1701,18 @@ function buildPointingDiagnostics(totalSamples: number, prepared: PreparedPointi
 
 		residuals[i] = Math.hypot(dx, dy)
 
-		if (looResiduals && fit.leverage) {
-			// `r / (1 - h)` is the residual the fit would have produced with this row held out. Applied per
-			// row rather than per sample: a true block hold-out would also need the east/north cross term of
-			// the hat matrix, which barely moves the result and costs a 2x2 solve per sample.
-			looResiduals[i] = Math.hypot(leaveOneOutResidual(dx, fit.leverage[i * 2]), leaveOneOutResidual(dy, fit.leverage[i * 2 + 1]))
+		if (looResiduals) {
+			if (fit.looResiduals) {
+				// A robust fit measures its hold-out error by refitting without the sample, so the value is
+				// already the residual of a model that never saw it.
+				looResiduals[i] = fit.looResiduals[i]
+			} else if (fit.leverage) {
+				// With fixed weights, `r / (1 - h)` is exactly the residual the fit would have produced with
+				// this row held out. Applied per row rather than per sample: a true block hold-out would also
+				// need the east/north cross term of the hat matrix, which barely moves the result and costs a
+				// 2x2 solve per sample.
+				looResiduals[i] = Math.hypot(leaveOneOutResidual(dx, fit.leverage[i * 2]), leaveOneOutResidual(dy, fit.leverage[i * 2 + 1]))
+			}
 		}
 
 		perPierSideSampleCounts[sample.context.pierSide]++
