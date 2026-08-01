@@ -98,38 +98,6 @@ export function validatePositiveAltitude(value: number) {
 	return value
 }
 
-// Throws TypeError unless `value` is a non-null, non-array object. `name` names the field in the
-// message so a failure points at the offending property of a deserialized structure. Returns `value`
-// narrowed to an indexable record.
-export function validateObject(value: unknown, name: string): Record<string, unknown> {
-	if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new TypeError(`${name} must be an object`)
-	return value as Record<string, unknown>
-}
-
-// Throws TypeError unless `value` is one of `allowed`. Intended for string-literal unions arriving from
-// serialized data. `name` names the field in the message. Returns `value` narrowed to the union.
-export function validateOneOf<T extends string>(value: unknown, allowed: readonly T[], name: string): T {
-	if (typeof value !== 'string' || !allowed.includes(value as T)) throw new TypeError(`${name} must be one of ${allowed.join(', ')}`)
-	return value as T
-}
-
-// Throws TypeError unless `value` is an array or typed array of the expected `length` whose elements
-// are all finite numbers. Pass `length` as `undefined` to accept any length. `name` names the field in
-// the message. Returns `value` as an indexable numeric sequence.
-export function validateNumberArray(value: unknown, length: number | undefined, name: string): ArrayLike<number> {
-	if (!Array.isArray(value) && !ArrayBuffer.isView(value)) throw new TypeError(`${name} must be an array of numbers`)
-
-	const values = value as ArrayLike<number>
-
-	if (length !== undefined && values.length !== length) throw new TypeError(`${name} must have ${length} element(s), got ${values.length}`)
-
-	for (let i = 0; i < values.length; i++) {
-		if (!Number.isFinite(values[i])) throw new TypeError(`${name}[${i}] must be finite`)
-	}
-
-	return values
-}
-
 // Validates an observer location: latitude, longitude, and a finite elevation (meters). Returns `location`.
 export function validateLocation(location: Required<GeographicCoordinate>) {
 	validateLatitude(location.latitude)

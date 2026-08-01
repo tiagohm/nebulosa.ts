@@ -3,7 +3,6 @@ import { eraC2s, eraS2c } from '../../astronomy/coordinates/erfa/erfa'
 import type { Time } from '../../astronomy/time/time'
 import { AMIN2RAD, DEG2RAD, PI, PIOVERTWO, TAU } from '../../core/constants'
 import { medianOf, percentileOf, rmsOf, STANDARD_DEVIATION_SCALE } from '../../core/util'
-import { validateNumberArray, validateObject, validateOneOf } from '../../core/validation'
 import type { PierSide } from '../../devices/indi/device'
 import { type Vec3, vecAngle } from '../../math/linear-algebra/vec3'
 import { sphericalProjectTangentPlane, sphericalUnprojectTangentPlane } from '../../math/numerical/geometry'
@@ -11,8 +10,8 @@ import { leastSquaresCoefficients, linearLeastSquares, predictLinearLeastSquares
 import type { NumberArray } from '../../math/numerical/math'
 import { type Angle, normalizePI } from '../../math/units/angle'
 // oxfmt-ignore
-import { availableContextRequirement, buildEmpiricalPointingFeatureNames, empiricalFeatureRequirement, extractPointingContext, featuresFromContext, normalizePierSide, POINTING_FRAMES, type PointingContext, type PointingContextRequirement, type PointingFeatureConfiguration, type PointingFrame, type PointingModelInput, type PointingOffset, predictSemiPhysicalOffset, type ResolvedPointingFeatureConfiguration, resolveFeatureConfiguration, SEMI_PHYSICAL_TERM_NAMES, SEMI_PHYSICAL_TERM_REQUIREMENTS, semiPhysicalBasis, type SemiPhysicalTermName, satisfiesContextRequirement } from './pointing.basis'
-import { buildLocalPointingResidual, type LocalPointingResidualModel, type LocalPointingResidualOptions, predictLocalPointingResidual, type ResolvedLocalPointingResidualOptions, resolveLocalResidualOptions, validateLocalPointingResidual } from './pointing.local'
+import { availableContextRequirement, buildEmpiricalPointingFeatureNames, empiricalFeatureRequirement, extractPointingContext, featuresFromContext, normalizePierSide, type PointingContext, type PointingContextRequirement, type PointingFeatureConfiguration, type PointingFrame, type PointingModelInput, type PointingOffset, predictSemiPhysicalOffset, type ResolvedPointingFeatureConfiguration, resolveFeatureConfiguration, SEMI_PHYSICAL_TERM_NAMES, SEMI_PHYSICAL_TERM_REQUIREMENTS, semiPhysicalBasis, type SemiPhysicalTermName, satisfiesContextRequirement } from './pointing.basis'
+import { buildLocalPointingResidual, type LocalPointingResidualModel, type LocalPointingResidualOptions, predictLocalPointingResidual, type ResolvedLocalPointingResidualOptions, resolveLocalResidualOptions } from './pointing.local'
 
 // Telescope mount pointing-model fitting and correction. Takes commanded vs plate-solved sky samples
 // and fits the systematic pointing error as a local tangent-plane offset (dx east, dy north, radians)
@@ -781,113 +780,6 @@ function commandOffset(target: Vec3, command: Vec3, error: Readonly<PointingOffs
 	return offset === false ? undefined : offset
 }
 
-// Validates a serialized pointing model, throwing a TypeError naming the first offending field.
-//
-// A deserialized model is untrusted input: it may come from an older version, a hand-edited file or a
-// truncated write. Every check here guards a value that the prediction path indexes into or multiplies
-// by, so failing loudly at import is the difference between a clear error and a mount slewing to a
-// coordinate derived from `undefined`. Returns `value` narrowed, without cloning it.
-export function validateFittedPointingModel(value: unknown): FittedPointingModel {
-	const model = validateObject(value, 'model')
-
-	// Older structures are rejected instead of migrated: the fields added since carry meaning that
-	// cannot be inferred from what a previous version stored.
-	if (model.version !== POINTING_MODEL_VERSION) throw new TypeError(`model.version must be ${POINTING_MODEL_VERSION}, got ${String(model.version)}`)
-
-	const strategy = validateOneOf(model.strategy, POINTING_MODEL_STRATEGIES, 'model.strategy')
-	validateOneOf(model.errorRepresentation, POINTING_ERROR_REPRESENTATIONS, 'model.errorRepresentation')
-	validateOneOf(model.frame, POINTING_FRAMES, 'model.frame')
-	validateObject(model.featureConfiguration, 'model.featureConfiguration')
-	validateObject(model.coverage, 'model.coverage')
-	validateObject(model.diagnostics, 'model.diagnostics')
-
-	if (typeof model.usable !== 'boolean') throw new TypeError('model.usable must be a boolean')
-	if (!Number.isInteger(model.trainingSampleCount) || (model.trainingSampleCount as number) < 0) throw new TypeError('model.trainingSampleCount must be a non-negative integer')
-
-	const physical = model.physical === undefined ? undefined : validateSemiPhysicalComponent(model.physical)
-	const physicalCount = physical?.terms.length ?? 0
-	const empirical = model.empirical === undefined ? undefined : validateEmpiricalComponent(model.empirical, 'model.empirical', physicalCount)
-	const residual = model.residual === undefined ? undefined : validateEmpiricalComponent(model.residual, 'model.residual', physicalCount)
-
-	// Components are required only of a usable model. An unusable one legitimately carries none, since
-	// context gating or the complexity ladder may have emptied its basis before the fit ran.
-	if (model.usable) {
-		if ((strategy === 'semiPhysical' || strategy === 'hybrid') && !physical) throw new TypeError(`model.physical is required for the ${strategy} strategy`)
-		if (strategy === 'empirical' && !empirical) throw new TypeError('model.empirical is required for the empirical strategy')
-		if (strategy === 'hybrid' && !residual) throw new TypeError('model.residual is required for the hybrid strategy')
-	}
-
-	if (model.supportSet !== undefined) validatePointingSupportSet(model.supportSet)
-	// Optional and absent from every model fitted with the layer disabled, so its absence is not a
-	// version mismatch and needs no migration.
-	if (model.local !== undefined) validateLocalPointingResidual(model.local)
-
-	return value as FittedPointingModel
-}
-
-// Validates the semi-physical component of a serialized model. Returns it narrowed.
-function validateSemiPhysicalComponent(value: unknown): SemiPhysicalPointingModel {
-	const component = validateObject(value, 'model.physical')
-	const terms = component.terms
-
-	if (!Array.isArray(terms)) throw new TypeError('model.physical.terms must be an array')
-
-	for (let i = 0; i < terms.length; i++) {
-		validateOneOf(terms[i], SEMI_PHYSICAL_TERM_NAMES, `model.physical.terms[${i}]`)
-	}
-
-	// One shared parameter per term: the semi-physical block drives both axes from the same value.
-	validateNumberArray(component.parameters, terms.length, 'model.physical.parameters')
-	return value as SemiPhysicalPointingModel
-}
-
-// Validates an empirical component of a serialized model, whose orthogonalization matrices must match
-// the `physicalCount` semi-physical terms they were projected against. Returns it narrowed.
-function validateEmpiricalComponent(value: unknown, name: string, physicalCount: number): EmpiricalPointingModel {
-	const component = validateObject(value, name)
-	const featureNames = component.featureNames
-
-	if (!Array.isArray(featureNames)) throw new TypeError(`${name}.featureNames must be an array`)
-
-	for (let i = 0; i < featureNames.length; i++) {
-		if (typeof featureNames[i] !== 'string') throw new TypeError(`${name}.featureNames[${i}] must be a string`)
-	}
-
-	validateNumberArray(component.coefficientsDx, featureNames.length, `${name}.coefficientsDx`)
-	validateNumberArray(component.coefficientsDy, featureNames.length, `${name}.coefficientsDy`)
-
-	// Both projections are required together: predicting with only one would subtract half of the
-	// correction the fit applied and silently bias every physical term.
-	if (component.orthogonalizationDx !== undefined || component.orthogonalizationDy !== undefined) {
-		const size = physicalCount * featureNames.length
-		validateNumberArray(component.orthogonalizationDx, size, `${name}.orthogonalizationDx`)
-		validateNumberArray(component.orthogonalizationDy, size, `${name}.orthogonalizationDy`)
-	}
-
-	return value as EmpiricalPointingModel
-}
-
-// Validates the training-direction support set of a serialized model. Returns it narrowed.
-function validatePointingSupportSet(value: unknown): PointingSupportSet {
-	const supportSet = validateObject(value, 'model.supportSet')
-	const directions = validateNumberArray(supportSet.directions, undefined, 'model.supportSet.directions')
-
-	if (directions.length % 3 !== 0) throw new TypeError('model.supportSet.directions must hold 3 components per sample')
-
-	const pierSides = supportSet.pierSides
-
-	if (!Array.isArray(pierSides) || pierSides.length !== directions.length / 3) throw new TypeError('model.supportSet.pierSides must have one entry per direction')
-
-	for (let i = 0; i < pierSides.length; i++) {
-		validateOneOf(pierSides[i], PIER_SIDES, `model.supportSet.pierSides[${i}]`)
-	}
-
-	// The scale is the denominator of the support decay, so a zero would make every support `NaN`.
-	if (!Number.isFinite(supportSet.scale) || (supportSet.scale as number) <= 0) throw new TypeError('model.supportSet.scale must be a positive finite angle')
-
-	return value as PointingSupportSet
-}
-
 // Stores samples, fits the configured model, and predicts/corrects future targets.
 export class MountPointing {
 	readonly #samples: Readonly<PointingSample>[] = []
@@ -950,10 +842,10 @@ export class MountPointing {
 	// Throws on anything structurally wrong rather than installing a half-valid model that would only
 	// fail later as a silently wrong slew. A model exported with its samples restores them too, so the
 	// instance can refit without recollecting.
-	import(serialized: unknown) {
+	import(serialized: SerializedPointingModel) {
 		// The dataset is split off the model rather than cloned into it, so an instance imported from a
 		// sample-carrying export exposes the same model shape as one imported from a bare export.
-		const { samples, ...rest } = validateFittedPointingModel(serialized) as SerializedPointingModel
+		const { samples, ...rest } = serialized
 		const model = structuredClone(rest) as FittedPointingModel
 
 		this.#fittedModel = model

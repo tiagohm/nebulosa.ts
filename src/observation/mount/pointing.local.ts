@@ -1,6 +1,5 @@
 import { eraS2c } from '../../astronomy/coordinates/erfa/erfa'
 import { medianOf } from '../../core/util'
-import { validateNumberArray, validateObject, validateOneOf } from '../../core/validation'
 import type { PierSide } from '../../devices/indi/device'
 import type { Angle } from '../../math/units/angle'
 import { normalizePierSide, type PointingOffset } from './pointing.basis'
@@ -164,39 +163,6 @@ export function predictLocalPointingResidual(model: Readonly<LocalPointingResidu
 	const taper = Math.exp(-Math.max(0, neighbors.bandwidth - model.scale) / model.scale)
 	return { dx: dx * taper, dy: dy * taper }
 }
-
-// Validates a serialized local residual layer, throwing a TypeError naming the first offending field.
-// Returns `value` narrowed, without cloning it.
-export function validateLocalPointingResidual(value: unknown): LocalPointingResidualModel {
-	const model = validateObject(value, 'model.local')
-	const directions = validateNumberArray(model.directions, undefined, 'model.local.directions')
-
-	if (directions.length % 3 !== 0) throw new TypeError('model.local.directions must hold 3 components per sample')
-
-	const count = directions.length / 3
-	const pierSides = model.pierSides
-
-	if (!Array.isArray(pierSides) || pierSides.length !== count) throw new TypeError('model.local.pierSides must have one entry per direction')
-
-	for (let i = 0; i < pierSides.length; i++) {
-		validateOneOf(pierSides[i], LOCAL_PIER_SIDES, `model.local.pierSides[${i}]`)
-	}
-
-	// One residual per axis per sample: prediction indexes both by the neighbour's direction index.
-	validateNumberArray(model.residualsDx, count, 'model.local.residualsDx')
-	validateNumberArray(model.residualsDy, count, 'model.local.residualsDy')
-
-	// Two is the floor `resolveLocalResidualOptions` enforces when fitting: with `k = 1` the bandwidth is
-	// the distance to the only neighbour, whose tricube weight is then zero, leaving a zero total weight.
-	if (!Number.isInteger(model.neighbors) || (model.neighbors as number) < 2) throw new TypeError('model.local.neighbors must be an integer of at least 2')
-	// The scale divides the taper exponent, so a zero would make every local offset `NaN`.
-	if (!Number.isFinite(model.scale) || (model.scale as number) <= 0) throw new TypeError('model.local.scale must be a positive finite angle')
-
-	return value as LocalPointingResidualModel
-}
-
-// Every pier-side state, used to validate deserialized layers.
-const LOCAL_PIER_SIDES = ['EAST', 'WEST', 'NEITHER'] as const satisfies readonly PierSide[]
 
 // The `k` nearest training samples to a direction, optionally limited to one pier side and optionally
 // skipping one index (used when measuring the training set against itself).

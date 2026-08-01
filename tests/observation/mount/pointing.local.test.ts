@@ -214,7 +214,7 @@ test('an unusable model never carries a local layer', () => {
 	expect(model.local).toBeUndefined()
 })
 
-test('the local layer survives an export/import round trip and is validated on the way in', () => {
+test('the local layer survives an export/import round trip', () => {
 	const samples = generateBumpedSamples(80, 94, deg(16), arcmin(2), deg(6))
 	const pointing = new MountPointing({ strategy: 'semiPhysical', robust: { method: 'none' }, local: { enabled: true } })
 
@@ -233,16 +233,6 @@ test('the local layer survives an export/import round trip and is validated on t
 	expect(Math.hypot(before.components.local!.dx, before.components.local!.dy)).toBeGreaterThan(0)
 	expect(after.dx).toBeCloseTo(before.dx, 12)
 	expect(after.dy).toBeCloseTo(before.dy, 12)
-
-	const local = exported.local!
-
-	expect(() => new MountPointing().import({ ...exported, local: { ...local, directions: [0, 1] } })).toThrow('model.local.directions must hold 3 components per sample')
-	expect(() => new MountPointing().import({ ...exported, local: { ...local, pierSides: ['EAST'] } })).toThrow('model.local.pierSides must have one entry per direction')
-	expect(() => new MountPointing().import({ ...exported, local: { ...local, residualsDy: [0] } })).toThrow('model.local.residualsDy must have')
-	expect(() => new MountPointing().import({ ...exported, local: { ...local, neighbors: 0 } })).toThrow('model.local.neighbors must be an integer of at least 2')
-	// One neighbour carries zero tricube weight, so a `k = 1` layer would predict `0 / 0` at every query.
-	expect(() => new MountPointing().import({ ...exported, local: { ...local, neighbors: 1 } })).toThrow('model.local.neighbors must be an integer of at least 2')
-	expect(() => new MountPointing().import({ ...exported, local: { ...local, scale: 0 } })).toThrow('model.local.scale must be a positive finite angle')
 })
 
 test('unused site context does not leak into the local layer', () => {
