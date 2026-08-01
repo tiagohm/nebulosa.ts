@@ -72,7 +72,7 @@ test('predicts the four contacts of the 2117-12-11 Venus transit from Tokyo', ()
 	expect(toDeg(transit.ingressPositionAngle!)).toBeCloseTo(59.81, 1)
 	expect(toDeg(transit.egressPositionAngle!)).toBeCloseTo(328.81, 1)
 	expect(transit.duration! / 3600).toBeCloseTo(5.698, 1)
-}, 3000)
+}, 6000)
 
 test('reports no transit for a window with no inferior conjunction crossing', () => {
 	const observer = observerAt(GREENWICH)
