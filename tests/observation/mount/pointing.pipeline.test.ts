@@ -1,10 +1,11 @@
 import { expect, test } from 'bun:test'
 import { equatorialToHorizontal } from '../../../src/astronomy/coordinates/coordinate'
+import { eraC2s, eraPnm06a, eraS2c } from '../../../src/astronomy/coordinates/erfa/erfa'
 import { horizontalToEnuVector } from '../../../src/astronomy/coordinates/frame.local'
 import { localSiderealTime } from '../../../src/astronomy/observer/location'
-import { timeYMDHMS } from '../../../src/astronomy/time/time'
+import { timeYMDHMS, tt } from '../../../src/astronomy/time/time'
 import { ASEC2RAD, PI } from '../../../src/core/constants'
-import { matRodriguesRotation } from '../../../src/math/linear-algebra/mat3'
+import { matMulVec, matRodriguesRotation } from '../../../src/math/linear-algebra/mat3'
 import { type Angle, arcmin, deg, hour } from '../../../src/math/units/angle'
 import { fitDirectionAlignment } from '../../../src/observation/mount/alignment'
 import { createIdealAltAzGeometry } from '../../../src/observation/mount/kinematics'
@@ -111,6 +112,28 @@ test('the horizon frame refuses to guess a missing observing context', () => {
 
 	expect(() => celestialToEncoders(chain, { rightAscension: hour(9), declination: deg(40) })).toThrow('the horizontalEnu world frame requires time, latitude and longitude')
 	expect(() => encodersToCelestial(chain, { primary: 0.3, secondary: 0.2 })).toThrow('the horizontalEnu world frame requires time, latitude and longitude')
+})
+
+test('the horizon frame refuses a coordinate that is not an apparent place of date', () => {
+	const chain = buildChain(false)
+	const rightAscension = hour(9)
+	const declination = deg(40)
+
+	expect(() => celestialToEncoders(chain, { rightAscension, declination, ...CONTEXT, frame: 'icrs' })).toThrow('the horizontalEnu world frame requires an apparent place of date, got icrs')
+	expect(() => encodersToCelestial(chain, { primary: 0.3, secondary: 0.2 }, { ...CONTEXT, frame: 'icrs' })).toThrow('the horizontalEnu world frame requires an apparent place of date, got icrs')
+
+	// Both apparent variants are accepted, and an undeclared frame is taken as apparent.
+	expect(() => celestialToEncoders(chain, { rightAscension, declination, ...CONTEXT, frame: 'apparentTopocentric' })).not.toThrow()
+	expect(() => celestialToEncoders(chain, { rightAscension, declination, ...CONTEXT, frame: 'apparentTopocentricRefracted' })).not.toThrow()
+	expect(() => celestialToEncoders(chain, { rightAscension, declination, ...CONTEXT })).not.toThrow()
+
+	// The reduction the chain refuses to skip: bias-precession-nutation alone, without aberration, already
+	// moves a catalogue position by a quarter of a degree at this epoch, dwarfing any mechanical error.
+	const t = tt(TIME)
+	const apparent = matMulVec(eraPnm06a(t.day, t.fraction), eraS2c(rightAscension, declination))
+	const [apparentRightAscension, apparentDeclination] = eraC2s(...apparent)
+
+	expect(computePointingError(rightAscension, declination, apparentRightAscension, apparentDeclination).angularSeparation).toBeGreaterThan(arcmin(10))
 })
 
 test('the kinematic chain reproduces the horizontal direction the alignment was fitted against', () => {

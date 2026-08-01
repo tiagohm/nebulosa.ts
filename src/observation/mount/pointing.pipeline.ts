@@ -52,7 +52,9 @@ export interface MountObservingContext {
 	// Mount pier side, forwarded to the pointing model.
 	readonly pierSide?: PierSide
 	// Frame the celestial coordinates are expressed in. Forwarded to the pointing model, which warns
-	// when it differs from the frame it was fitted in.
+	// when it differs from the frame it was fitted in. The `horizontalEnu` chain additionally requires
+	// it to be an apparent place of date, since that is the only thing its rotation can transform;
+	// omitting it declares the coordinates apparent.
 	readonly frame?: PointingFrame
 }
 
@@ -124,11 +126,32 @@ function celestialToWorldDirection(frame: MountWorldFrame, rightAscension: Angle
 		throw new Error('the horizontalEnu world frame requires time, latitude and longitude')
 	}
 
+	requireApparentFrame(context.frame)
+
 	const [azimuth, altitude] = equatorialToHorizontal(rightAscension, declination, latitude, localSiderealTime(time, longitude, true))
 	return horizontalToEnuVector(azimuth, altitude)
 }
 
+// Rejects a coordinate frame the horizon rotation cannot transform.
+//
+// `equatorialToHorizontal` is a rigid rotation about the polar axis by the apparent sidereal time, which
+// is the correct transform for an apparent place of date and for nothing else. Feeding it an ICRS
+// catalogue position rotates it as though precession, nutation, aberration and the topocentric reduction
+// had already been applied, and at a modern epoch those amount to many arcminutes — larger than the
+// pointing error the chain exists to model. Reducing the coordinate here instead would pull an ephemeris
+// into a module that only wires the three mount layers together, so the reduction stays where it belongs,
+// in the astrometric layer, and the chain insists on being handed its result. An undeclared frame is taken
+// as apparent, matching the pointing model's own default.
+function requireApparentFrame(frame: PointingFrame | undefined) {
+	if (frame !== undefined && frame !== 'apparentTopocentric' && frame !== 'apparentTopocentricRefracted') {
+		throw new Error(`the horizontalEnu world frame requires an apparent place of date, got ${frame}`)
+	}
+}
+
 // Turns a world-frame unit direction back into a celestial coordinate, inverting `celestialToWorldDirection`.
+//
+// The coordinate it returns is an apparent place of date, so a caller declaring anything else is refused
+// rather than silently handed a coordinate in a frame it did not ask for.
 function worldDirectionToCelestial(frame: MountWorldFrame, direction: Vec3, context: Readonly<MountObservingContext>): Readonly<EquatorialCoordinate> {
 	if (frame === 'equatorial') {
 		const [rightAscension, declination] = eraC2s(...direction)
@@ -140,6 +163,8 @@ function worldDirectionToCelestial(frame: MountWorldFrame, direction: Vec3, cont
 	if (time === undefined || latitude === undefined || longitude === undefined) {
 		throw new Error('the horizontalEnu world frame requires time, latitude and longitude')
 	}
+
+	requireApparentFrame(context.frame)
 
 	const horizontal = enuVectorToHorizontal(direction)
 	const [rightAscension, declination] = horizontalToEquatorial(horizontal.azimuth, horizontal.altitude, latitude, localSiderealTime(time, longitude, true))
