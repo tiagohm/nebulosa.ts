@@ -324,7 +324,7 @@ Report concrete logic and implementation bugs, including:
 - incorrect optional output parameter handling;
 - uninitialized state;
 - mutation of values expected to be immutable;
-- exported helpers that can hang or return invalid results for possible inputs;
+- exported helpers that can hang or crash for possible inputs;
 - plausible-looking geometry produced from missing internal state;
 - inconsistent output metadata, such as reporting one selected event while drawing another;
 - missing cleanup of timers, subscriptions, listeners, observers, or in-flight async work.
