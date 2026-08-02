@@ -34,6 +34,8 @@ describe('del property', () => {
 
 		expect(manager).toHaveLength(1)
 		expect(manager.get(client, device.name)).toBe(device)
+		expect(manager.get(client, device.id)).toBe(device)
+		expect(manager.get(client, device.hardwareId)).toBe(device)
 		expect(added).toBe(device)
 
 		manager.close(client, true)

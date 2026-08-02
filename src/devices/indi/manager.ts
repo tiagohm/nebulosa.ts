@@ -42,7 +42,7 @@ export interface DeviceProvider<D extends Device> {
 }
 
 // Maps an INDI DRIVER_INTERFACE bit to the default device template used to seed a newly seen device.
-const DEVICES = {
+const MODEL_DEVICES = {
 	[DeviceInterfaceType.TELESCOPE]: DEFAULT_MOUNT,
 	[DeviceInterfaceType.CCD]: DEFAULT_CAMERA,
 	[DeviceInterfaceType.FOCUSER]: DEFAULT_FOCUSER,
@@ -258,12 +258,13 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 		return devices
 	}
 
-	// Resolves a managed device by id or, scoped to a client, by name.
+	// Resolves a managed device by id or hardware id or, scoped to a client, by name.
 	get(client: Client | string | undefined, id: string) {
 		client = typeof client === 'string' ? this.#clients.get(client) : client
 
 		for (const device of this.#devices.values()) {
 			if (device.id === id) return device
+			if (device.hardwareId === id) return device
 			if (device[CLIENT] === client && device.name === id) return device
 		}
 
@@ -363,10 +364,15 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 		let device = this.get(client, name)
 
 		if (isInterfaceType(type, interfaceType)) {
+			const modelDevice = MODEL_DEVICES[interfaceType as keyof typeof MODEL_DEVICES] as unknown as D | undefined
+
+			if (!modelDevice) return
+
 			if (device === undefined) {
-				device = structuredClone<D>(DEVICES[interfaceType as never])
+				device = structuredClone<D>(modelDevice)
+				const hardwareId = Bun.MD5.hash(`${client.id}:${name}`, 'hex')
 				const id = Bun.MD5.hash(`${client.id}:${device.type}:${name}`, 'hex')
-				device = { ...device, id, name, [CLIENT]: client, driver: { executable: elements.DRIVER_EXEC.value, version: elements.DRIVER_VERSION.value }, client: { type: client.type, id: client.id } }
+				device = { ...device, id, hardwareId, name, [CLIENT]: client, driver: { executable: elements.DRIVER_EXEC.value, version: elements.DRIVER_VERSION.value }, client: { type: client.type, id: client.id } }
 
 				this.add(device)
 				this.ask(device)
@@ -2407,10 +2413,12 @@ function proxyDevice<D extends Device>(parent: D, id: string, type: DeviceType) 
 			if (prop === 'parent') return parent
 			return Reflect.get(target, prop)
 		},
-		// Used to make parentId show up in Object.keys() and similar functions, which is useful for debugging and serialization
+		// parentId is never set, so this is used show up in Object.keys() and similar functions, which is useful for debugging and serialization
 		// JSON.stringify ignores properties that don't show up in Object.keys()
 		ownKeys(target) {
-			return [...Reflect.ownKeys(target), 'parentId']
+			const keys = Reflect.ownKeys(target)
+			keys.push('parentId')
+			return keys
 		},
 		getOwnPropertyDescriptor(target, prop) {
 			if (prop === 'parentId') {

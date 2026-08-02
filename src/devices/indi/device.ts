@@ -104,7 +104,8 @@ export const CLIENT = Symbol('CLIENT')
 
 // Common base shared by every device: identity, type, connection state, and driver/client metadata.
 export interface Device {
-	id: string // MD5(client ip address + client port + type + name)
+	id: string // MD5(client id + type + name): unique per interface view
+	hardwareId: string // MD5(client id + name): the physical device behind every view
 	readonly parentId?: string
 	type: DeviceType
 	name: string
@@ -388,6 +389,7 @@ export const DEFAULT_CAMERA: Camera = {
 	},
 	type: 'camera',
 	id: '',
+	hardwareId: '',
 	name: '',
 	connected: false,
 	driver: structuredClone(DEFAULT_DRIVER_INFO),
@@ -433,6 +435,7 @@ export const DEFAULT_MOUNT: Mount = {
 	pulsing: false,
 	type: 'mount',
 	id: '',
+	hardwareId: '',
 	name: '',
 	connected: false,
 	driver: structuredClone(DEFAULT_DRIVER_INFO),
@@ -454,6 +457,7 @@ export const DEFAULT_MOUNT: Mount = {
 export const DEFAULT_WHEEL: Wheel = {
 	type: 'wheel',
 	id: '',
+	hardwareId: '',
 	name: '',
 	connected: false,
 	driver: structuredClone(DEFAULT_DRIVER_INFO),
@@ -468,6 +472,7 @@ export const DEFAULT_WHEEL: Wheel = {
 export const DEFAULT_FOCUSER: Focuser = {
 	type: 'focuser',
 	id: '',
+	hardwareId: '',
 	name: '',
 	connected: false,
 	driver: structuredClone(DEFAULT_DRIVER_INFO),
@@ -495,6 +500,7 @@ export const DEFAULT_COVER: Cover = {
 	dutyCycle: structuredClone(DEFAULT_MIN_MAX_VALUE_PROPERTY),
 	type: 'cover',
 	id: '',
+	hardwareId: '',
 	name: '',
 	connected: false,
 	driver: structuredClone(DEFAULT_DRIVER_INFO),
@@ -506,6 +512,7 @@ export const DEFAULT_FLAT_PANEL: FlatPanel = {
 	intensity: structuredClone(DEFAULT_MIN_MAX_VALUE_PROPERTY),
 	type: 'flatPanel',
 	id: '',
+	hardwareId: '',
 	name: '',
 	connected: false,
 	driver: structuredClone(DEFAULT_DRIVER_INFO),
@@ -523,6 +530,7 @@ export const DEFAULT_ROTATOR: Rotator = {
 	hasBacklashCompensation: false,
 	type: 'rotator',
 	id: '',
+	hardwareId: '',
 	name: '',
 	connected: false,
 	driver: structuredClone(DEFAULT_DRIVER_INFO),
@@ -541,6 +549,7 @@ export const DEFAULT_POWER: Power = {
 	hasPowerCycle: false,
 	type: 'power',
 	id: '',
+	hardwareId: '',
 	name: '',
 	connected: false,
 	driver: structuredClone(DEFAULT_DRIVER_INFO),
@@ -552,6 +561,7 @@ export const DEFAULT_THERMOMETER: Thermometer = {
 	temperature: 0,
 	type: 'thermometer',
 	id: '',
+	hardwareId: '',
 	name: '',
 	connected: false,
 	driver: structuredClone(DEFAULT_DRIVER_INFO),
@@ -563,6 +573,7 @@ export const DEFAULT_GUIDE_OUTPUT: GuideOutput = {
 	pulsing: false,
 	type: 'guideOutput',
 	id: '',
+	hardwareId: '',
 	name: '',
 	connected: false,
 	hasGuideRate: false,
@@ -580,6 +591,7 @@ export const DEFAULT_DEW_HEATER: DewHeater = {
 	dutyCycle: structuredClone(DEFAULT_MIN_MAX_VALUE_PROPERTY),
 	type: 'dewHeater',
 	id: '',
+	hardwareId: '',
 	name: '',
 	connected: false,
 	driver: structuredClone(DEFAULT_DRIVER_INFO),
