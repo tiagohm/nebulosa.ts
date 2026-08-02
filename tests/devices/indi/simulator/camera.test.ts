@@ -530,6 +530,15 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		await waitUntil(() => !mount.pulsing, 1000)
 		await waitUntil(() => !camera.pulsing, 1000)
 
+		guideOutputManager.pulseSouth(camera, 10000)
+		guideOutputManager.pulseEast(camera, 10000)
+		await waitUntil(() => camera.pulsing)
+		await waitUntil(() => mount.pulsing)
+		guideOutputManager.pulseSouth(camera, 0)
+		guideOutputManager.pulseEast(camera, 0)
+		await waitUntil(() => !mount.pulsing, 10)
+		await waitUntil(() => !camera.pulsing, 10)
+
 		const guideOutput = guideOutputManager.get(client, camera.name)
 		expect(guideOutput).toBeDefined()
 		expect(guideOutput!.type).toBe('guideOutput')

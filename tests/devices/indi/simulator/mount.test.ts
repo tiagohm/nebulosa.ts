@@ -242,6 +242,13 @@ describe.skipIf(SKIP)('mount simulator', () => {
 		expect(pulseDrift).toBeLessThan(5e-6)
 		expect(pulseDrift).toBeGreaterThan(-1e-4)
 
+		guideOutputManager.pulseEast(mount, 10000)
+		guideOutputManager.pulseSouth(mount, 10000)
+		await waitUntil(() => mount.pulsing)
+		guideOutputManager.pulseEast(mount, 0)
+		guideOutputManager.pulseSouth(mount, 0)
+		await waitUntil(() => !mount.pulsing, 10)
+
 		const guideOutput = guideOutputManager.get(client, mount.name)
 		expect(guideOutput).toBeDefined()
 		expect(guideOutput!.type).toBe('guideOutput')

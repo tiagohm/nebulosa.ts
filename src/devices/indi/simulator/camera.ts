@@ -326,12 +326,12 @@ export class CameraSimulator extends DeviceSimulator {
 				if (applyNumberVectorValues(this.#offset, vector.elements)) this.notify(this.#offset)
 				return
 			case 'TELESCOPE_TIMED_GUIDE_NS':
-				if ((vector.elements.TIMED_GUIDE_N ?? 0) > 0) this.pulse('NORTH', vector.elements.TIMED_GUIDE_N)
-				else if ((vector.elements.TIMED_GUIDE_S ?? 0) > 0) this.pulse('SOUTH', vector.elements.TIMED_GUIDE_S)
+				if (vector.elements.TIMED_GUIDE_N !== undefined && vector.elements.TIMED_GUIDE_N >= 0) this.pulse('NORTH', vector.elements.TIMED_GUIDE_N)
+				else if (vector.elements.TIMED_GUIDE_S !== undefined && vector.elements.TIMED_GUIDE_S >= 0) this.pulse('SOUTH', vector.elements.TIMED_GUIDE_S)
 				return
 			case 'TELESCOPE_TIMED_GUIDE_WE':
-				if ((vector.elements.TIMED_GUIDE_W ?? 0) > 0) this.pulse('WEST', vector.elements.TIMED_GUIDE_W)
-				else if ((vector.elements.TIMED_GUIDE_E ?? 0) > 0) this.pulse('EAST', vector.elements.TIMED_GUIDE_E)
+				if (vector.elements.TIMED_GUIDE_W !== undefined && vector.elements.TIMED_GUIDE_W >= 0) this.pulse('WEST', vector.elements.TIMED_GUIDE_W)
+				else if (vector.elements.TIMED_GUIDE_E !== undefined && vector.elements.TIMED_GUIDE_E >= 0) this.pulse('EAST', vector.elements.TIMED_GUIDE_E)
 				return
 			case 'SIMULATOR_SCENE':
 				if (applyNumberVectorValues(this.#scene, vector.elements)) {
@@ -571,12 +571,21 @@ export class CameraSimulator extends DeviceSimulator {
 
 	// Starts a pulse-guiding interval on the requested axis.
 	pulse(direction: GuideDirection, duration: number) {
-		if (!this.isConnected || duration <= 0) return
+		if (!this.isConnected) return
 
 		const mount = this.activeMount
 
 		if (mount !== undefined) {
 			this.#guideOutputManager?.pulse(mount, direction, duration)
+		}
+
+		if (duration <= 0) {
+			if (direction === 'NORTH' || direction === 'SOUTH') this.#pulseNorthSouthUntil = 0
+			else this.#pulseWestEastUntil = 0
+
+			if (this.#pulseNorthSouthUntil === 0 && this.#pulseWestEastUntil === 0) this.#setPulsing(false)
+
+			return
 		}
 
 		const until = Date.now() + Math.trunc(duration)

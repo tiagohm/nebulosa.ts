@@ -210,12 +210,12 @@ export class MountSimulator extends DeviceSimulator {
 				this.setGuideRate(vector.elements.GUIDE_RATE_WE ?? this.guideRateRightAscension, vector.elements.GUIDE_RATE_NS ?? this.guideRateDeclination)
 				return
 			case 'TELESCOPE_TIMED_GUIDE_NS':
-				if ((vector.elements.TIMED_GUIDE_N ?? 0) > 0) this.pulse('NORTH', vector.elements.TIMED_GUIDE_N)
-				else if ((vector.elements.TIMED_GUIDE_S ?? 0) > 0) this.pulse('SOUTH', vector.elements.TIMED_GUIDE_S)
+				if (vector.elements.TIMED_GUIDE_N !== undefined && vector.elements.TIMED_GUIDE_N >= 0) this.pulse('NORTH', vector.elements.TIMED_GUIDE_N)
+				else if (vector.elements.TIMED_GUIDE_S !== undefined && vector.elements.TIMED_GUIDE_S >= 0) this.pulse('SOUTH', vector.elements.TIMED_GUIDE_S)
 				return
 			case 'TELESCOPE_TIMED_GUIDE_WE':
-				if ((vector.elements.TIMED_GUIDE_W ?? 0) > 0) this.pulse('WEST', vector.elements.TIMED_GUIDE_W)
-				else if ((vector.elements.TIMED_GUIDE_E ?? 0) > 0) this.pulse('EAST', vector.elements.TIMED_GUIDE_E)
+				if (vector.elements.TIMED_GUIDE_W !== undefined && vector.elements.TIMED_GUIDE_W >= 0) this.pulse('WEST', vector.elements.TIMED_GUIDE_W)
+				else if (vector.elements.TIMED_GUIDE_E !== undefined && vector.elements.TIMED_GUIDE_E >= 0) this.pulse('EAST', vector.elements.TIMED_GUIDE_E)
 		}
 	}
 
@@ -440,7 +440,27 @@ export class MountSimulator extends DeviceSimulator {
 
 	// Starts a pulse guiding correction for the requested direction.
 	pulse(direction: GuideDirection, duration: number) {
-		if (!this.isConnected || this.isParked || duration <= 0) return
+		if (!this.isConnected || this.isParked) return
+
+		if (duration <= 0) {
+			if (direction === 'NORTH') {
+				this.#pulseNorthSouth = 0
+				this.#pulseNorthSouthUntil = 0
+			} else if (direction === 'SOUTH') {
+				this.#pulseNorthSouth = 0
+				this.#pulseNorthSouthUntil = 0
+			} else if (direction === 'EAST') {
+				this.#pulseWestEast = 0
+				this.#pulseWestEastUntil = 0
+			} else {
+				this.#pulseWestEast = 0
+				this.#pulseWestEastUntil = 0
+			}
+
+			this.#updatePulsing()
+			return
+		}
+
 		const until = Date.now() + duration
 
 		if (direction === 'NORTH') {
