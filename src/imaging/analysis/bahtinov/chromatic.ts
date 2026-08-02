@@ -27,6 +27,7 @@ export function compareBahtinovChromatic(input: BahtinovAnalysisInput, workspace
 	if (!red.success || !green.success || !blue.success) return { success: false, channels: channelResults, failedChannels }
 	if (!channelPatternMatches(red, green)) failedChannels.push('red')
 	if (!channelPatternMatches(blue, green)) failedChannels.push('blue')
+	if (failedChannels.length === 0 && !channelPatternMatches(red, blue)) failedChannels.push('red', 'blue')
 	if (failedChannels.length > 0) return { success: false, channels: channelResults, failedChannels }
 
 	const redError = alignedFocusError(red.error, red.centralLine.normalAngle, green.centralLine.normalAngle)

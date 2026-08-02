@@ -127,6 +127,24 @@ test('rejects independently detected channel patterns with different rotations',
 	}
 })
 
+test('rejects red and blue patterns that diverge beyond their shared limit', () => {
+	const result = compareBahtinovChromatic(
+		{
+			image: rgbBahtinov([0, 0, 0], undefined, [PIOVERTWO - PI / 40, PIOVERTWO, PIOVERTWO + PI / 40]),
+			area: { left: 0, top: 0, right: 128, bottom: 128 },
+			center: { x: 63.5, y: 63.5 },
+		},
+		OPTIONS,
+	)
+	expect(result.success).toBeFalse()
+	if (!result.success) {
+		expect(result.failedChannels).toEqual(['red', 'blue'])
+		expect(result.channels.red.success).toBeTrue()
+		expect(result.channels.green.success).toBeTrue()
+		expect(result.channels.blue.success).toBeTrue()
+	}
+})
+
 test('compares an RGB image produced by debayer', () => {
 	const width = 128
 	const height = 128
