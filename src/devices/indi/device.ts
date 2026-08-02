@@ -107,7 +107,8 @@ export interface Device {
 	id: string // MD5(client id + type + name): unique per interface view
 	hardwareId: string // MD5(client id + name): the physical device behind every view
 	readonly parentId?: string
-	type: DeviceType
+	readonly type: DeviceType // Main device type
+	interfaces: DeviceType[] //  Combination of device types the driver advertises in the interface bitmask
 	name: string
 	connected: boolean
 	readonly driver: Readonly<DriverInfo>
@@ -318,6 +319,21 @@ export function isInterfaceType(value: number, type: DeviceInterfaceType): value
 	return (value & type) !== 0
 }
 
+// Returns all device types from an interface bitmask.
+export function findDeviceTypes(value: number) {
+	const types: DeviceType[] = []
+	if (isInterfaceType(value, DeviceInterfaceType.CCD)) types.push('camera')
+	if (isInterfaceType(value, DeviceInterfaceType.TELESCOPE)) types.push('mount')
+	if (isInterfaceType(value, DeviceInterfaceType.FILTER)) types.push('wheel')
+	if (isInterfaceType(value, DeviceInterfaceType.FOCUSER)) types.push('focuser')
+	if (isInterfaceType(value, DeviceInterfaceType.ROTATOR)) types.push('rotator')
+	if (isInterfaceType(value, DeviceInterfaceType.LIGHTBOX)) types.push('flatPanel')
+	if (isInterfaceType(value, DeviceInterfaceType.DUSTCAP)) types.push('cover')
+	if (isInterfaceType(value, DeviceInterfaceType.DOME)) types.push('dome')
+	if (isInterfaceType(value, DeviceInterfaceType.POWER)) types.push('power')
+	return types
+}
+
 // Empty driver-info template.
 export const DEFAULT_DRIVER_INFO: DriverInfo = {
 	executable: '',
@@ -388,6 +404,7 @@ export const DEFAULT_CAMERA: Camera = {
 		declination: 0,
 	},
 	type: 'camera',
+	interfaces: ['camera'],
 	id: '',
 	hardwareId: '',
 	name: '',
@@ -434,6 +451,7 @@ export const DEFAULT_MOUNT: Mount = {
 	canPulseGuide: false,
 	pulsing: false,
 	type: 'mount',
+	interfaces: ['mount'],
 	id: '',
 	hardwareId: '',
 	name: '',
@@ -456,6 +474,7 @@ export const DEFAULT_MOUNT: Mount = {
 
 export const DEFAULT_WHEEL: Wheel = {
 	type: 'wheel',
+	interfaces: ['wheel'],
 	id: '',
 	hardwareId: '',
 	name: '',
@@ -471,6 +490,7 @@ export const DEFAULT_WHEEL: Wheel = {
 
 export const DEFAULT_FOCUSER: Focuser = {
 	type: 'focuser',
+	interfaces: ['focuser'],
 	id: '',
 	hardwareId: '',
 	name: '',
@@ -499,6 +519,7 @@ export const DEFAULT_COVER: Cover = {
 	hasDewHeater: false,
 	dutyCycle: structuredClone(DEFAULT_MIN_MAX_VALUE_PROPERTY),
 	type: 'cover',
+	interfaces: ['cover'],
 	id: '',
 	hardwareId: '',
 	name: '',
@@ -511,6 +532,7 @@ export const DEFAULT_FLAT_PANEL: FlatPanel = {
 	enabled: false,
 	intensity: structuredClone(DEFAULT_MIN_MAX_VALUE_PROPERTY),
 	type: 'flatPanel',
+	interfaces: ['flatPanel'],
 	id: '',
 	hardwareId: '',
 	name: '',
@@ -529,6 +551,7 @@ export const DEFAULT_ROTATOR: Rotator = {
 	canHome: false,
 	hasBacklashCompensation: false,
 	type: 'rotator',
+	interfaces: ['rotator'],
 	id: '',
 	hardwareId: '',
 	name: '',
@@ -548,6 +571,7 @@ export const DEFAULT_POWER: Power = {
 	usb: [],
 	hasPowerCycle: false,
 	type: 'power',
+	interfaces: ['power'],
 	id: '',
 	hardwareId: '',
 	name: '',
@@ -560,6 +584,7 @@ export const DEFAULT_THERMOMETER: Thermometer = {
 	hasThermometer: false,
 	temperature: 0,
 	type: 'thermometer',
+	interfaces: ['thermometer'],
 	id: '',
 	hardwareId: '',
 	name: '',
@@ -572,6 +597,7 @@ export const DEFAULT_GUIDE_OUTPUT: GuideOutput = {
 	canPulseGuide: false,
 	pulsing: false,
 	type: 'guideOutput',
+	interfaces: ['guideOutput'],
 	id: '',
 	hardwareId: '',
 	name: '',
@@ -590,6 +616,7 @@ export const DEFAULT_DEW_HEATER: DewHeater = {
 	hasDewHeater: false,
 	dutyCycle: structuredClone(DEFAULT_MIN_MAX_VALUE_PROPERTY),
 	type: 'dewHeater',
+	interfaces: ['dewHeater'],
 	id: '',
 	hardwareId: '',
 	name: '',
