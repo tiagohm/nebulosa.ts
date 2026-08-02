@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { PI, PIOVERFOUR } from '../../../../src/core/constants'
+import { PI, PIOVERFOUR, PIOVERTWO } from '../../../../src/core/constants'
 import { createBahtinovOverlayGeometry } from '../../../../src/imaging/analysis/bahtinov/overlay'
 import type { BahtinovAnalysisSuccess, BahtinovLine, BahtinovQuality } from '../../../../src/imaging/analysis/bahtinov/types'
 
@@ -93,4 +93,20 @@ test('rejects inconsistent analysis and invalid visual radii', () => {
 	expect(() => createBahtinovOverlayGeometry({ ...source, externalLines: [{ ...source.externalLines[0], distance: source.externalLines[0].distance + 1 }, source.externalLines[1]] })).toThrow(RangeError)
 	expect(() => createBahtinovOverlayGeometry(source, { errorCircleRadius: 0 })).toThrow(RangeError)
 	expect(() => createBahtinovOverlayGeometry(source, { focusRegionRadius: 100 })).toThrow(RangeError)
+})
+
+test('rejects an overflowed central projection', () => {
+	const reference = { x: -Number.MAX_VALUE, y: Number.MAX_VALUE }
+	const normalAngle = PI / 3
+	const error = reference.x * Math.cos(normalAngle) + reference.y * Math.sin(normalAngle)
+	const source = analysis(error)
+	expect(() =>
+		createBahtinovOverlayGeometry({
+			...source,
+			reference,
+			centralLine: line(normalAngle, 0, 4, 0, 0, 1, 1),
+			externalLines: [line(0, reference.x, 6, 0, 0, 1, 1), line(PIOVERTWO, reference.y, 8, 0, 0, 1, 1)],
+			absoluteError: Math.abs(error),
+		}),
+	).toThrow(RangeError)
 })

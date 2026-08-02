@@ -68,6 +68,8 @@ export function createBahtinovOverlayGeometry(analysis: BahtinovAnalysisSuccess,
 		x: reference.x - analysis.error * normalX,
 		y: reference.y - analysis.error * normalY,
 	}
+	// Prevent finite analysis geometry from exporting non-renderable image coordinates after arithmetic overflow.
+	if (!Number.isFinite(centralProjection.x) || !Number.isFinite(centralProjection.y)) throw new RangeError('Bahtinov central projection must be finite')
 	const expectedAbsoluteError = Math.abs(analysis.error)
 	const errorConsistencyTolerance = Math.max(1e-9, expectedAbsoluteError * 1e-12)
 	if (Math.abs(expectedAbsoluteError - analysis.absoluteError) > errorConsistencyTolerance) throw new RangeError('Bahtinov absoluteError is inconsistent with error')
