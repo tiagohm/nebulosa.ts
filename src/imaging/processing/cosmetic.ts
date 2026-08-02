@@ -1,4 +1,4 @@
-import { medianOf, STANDARD_DEVIATION_SCALE, standardDeviationOf } from '../../core/util'
+import { medianOf, quickSelect, STANDARD_DEVIATION_SCALE, standardDeviationOf } from '../../core/util'
 import { clamp, type NumberArray } from '../../math/numerical/math'
 import type { Image } from '../model/types'
 
@@ -366,45 +366,6 @@ function sortSmallPrefix(values: Float64Array, count: number) {
 
 		values[j + 1] = value
 	}
-}
-
-// Selects the kth value in ascending numeric order, mutating only the first `count` entries. A three-way
-// partition avoids quadratic behavior on flat frames where many samples equal the pivot.
-function quickSelect(values: Float64Array, count: number, k: number) {
-	let left = 0
-	let right = count - 1
-
-	while (left < right) {
-		const pivot = values[(left + right) >>> 1]
-		let lt = left
-		let i = left
-		let gt = right
-
-		while (i <= gt) {
-			const cmp = values[i] - pivot
-
-			if (cmp < 0) {
-				const value = values[lt]
-				values[lt] = values[i]
-				values[i] = value
-				lt++
-				i++
-			} else if (cmp > 0) {
-				const value = values[i]
-				values[i] = values[gt]
-				values[gt] = value
-				gt--
-			} else {
-				i++
-			}
-		}
-
-		if (k < lt) right = lt - 1
-		else if (k > gt) left = gt + 1
-		else return values[k]
-	}
-
-	return values[left]
 }
 
 // Median of the first `count` scratch values without a full sort. Even counts select both middle order

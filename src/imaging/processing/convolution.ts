@@ -159,15 +159,16 @@ export function separableSmoothing(source: ImageRawType, output: ImageRawType, i
 		const row = y * stride
 
 		for (let x = 0; x < width; x++) {
+			// Restrict the tap loop to samples that fall inside the row. Interior pixels use the
+			// full kernel and its precomputed divisor without rescanning the weights.
+			const firstTap = x >= effectiveRadius ? 0 : Math.max(0, Math.ceil(radius - x / step))
+			const lastTap = x + effectiveRadius < width ? weights.length : Math.min(weights.length, Math.floor(radius + (width - 1 - x) / step) + 1)
 			let divisor = kernel.divisor
 
-			if (dynamicDivisorForEdges) {
+			if (dynamicDivisorForEdges && (firstTap !== 0 || lastTap !== weights.length)) {
 				divisor = 0
 
-				for (let tap = 0; tap < weights.length; tap++) {
-					const sampleX = x + (tap - radius) * step
-					if (sampleX >= 0 && sampleX < width) divisor += weights[tap]
-				}
+				for (let tap = firstTap; tap < lastTap; tap++) divisor += weights[tap]
 
 				// A valid non-negative kernel can still have no positive in-bounds weight.
 				if (divisor === 0) divisor = kernel.divisor
@@ -177,13 +178,11 @@ export function separableSmoothing(source: ImageRawType, output: ImageRawType, i
 
 			for (let channel = 0; channel < channels; channel++) {
 				let sum = 0
+				let sampleX = x + (firstTap - radius) * step
 
-				for (let tap = 0; tap < weights.length; tap++) {
-					const sampleX = x + (tap - radius) * step
-
-					if (sampleX >= 0 && sampleX < width) {
-						sum += weights[tap] * source[row + sampleX * channels + channel]
-					}
+				for (let tap = firstTap; tap < lastTap; tap++) {
+					sum += weights[tap] * source[row + sampleX * channels + channel]
+					sampleX += step
 				}
 
 				intermediate[pixel + channel] = sum / divisor
@@ -192,15 +191,15 @@ export function separableSmoothing(source: ImageRawType, output: ImageRawType, i
 	}
 
 	for (let y = 0; y < height; y++) {
+		// Vertical bounds are shared by every pixel and channel in the row.
+		const firstTap = y >= effectiveRadius ? 0 : Math.max(0, Math.ceil(radius - y / step))
+		const lastTap = y + effectiveRadius < height ? weights.length : Math.min(weights.length, Math.floor(radius + (height - 1 - y) / step) + 1)
 		let divisor = kernel.divisor
 
-		if (dynamicDivisorForEdges) {
+		if (dynamicDivisorForEdges && (firstTap !== 0 || lastTap !== weights.length)) {
 			divisor = 0
 
-			for (let tap = 0; tap < weights.length; tap++) {
-				const sampleY = y + (tap - radius) * step
-				if (sampleY >= 0 && sampleY < height) divisor += weights[tap]
-			}
+			for (let tap = firstTap; tap < lastTap; tap++) divisor += weights[tap]
 
 			if (divisor === 0) divisor = kernel.divisor
 		}
@@ -212,13 +211,11 @@ export function separableSmoothing(source: ImageRawType, output: ImageRawType, i
 
 			for (let channel = 0; channel < channels; channel++) {
 				let sum = 0
+				let sampleY = y + (firstTap - radius) * step
 
-				for (let tap = 0; tap < weights.length; tap++) {
-					const sampleY = y + (tap - radius) * step
-
-					if (sampleY >= 0 && sampleY < height) {
-						sum += weights[tap] * intermediate[sampleY * stride + x * channels + channel]
-					}
+				for (let tap = firstTap; tap < lastTap; tap++) {
+					sum += weights[tap] * intermediate[sampleY * stride + x * channels + channel]
+					sampleY += step
 				}
 
 				output[pixel + channel] = sum / divisor
