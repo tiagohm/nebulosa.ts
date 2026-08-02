@@ -7,6 +7,7 @@ import { timeUnix } from '../../../astronomy/time/time'
 import { ASEC2RAD, DAYSEC, DEG2RAD, PIOVERTWO, TAU } from '../../../core/constants'
 import { writeImageToFits, writeImageToXisf } from '../../../imaging/model/image'
 import type { CfaPattern, Image, ImageRawType } from '../../../imaging/model/types'
+import { plotBahtinovSpikes } from '../../../imaging/stars/bahtinov'
 import { colorIndexToRgbWeights, gaussianSigmaFromHfd, plotStar, type PlotStarOptions } from '../../../imaging/stars/generator'
 import { evaluateSyntheticAberration, type ResolvedSyntheticAberration, resolveSyntheticAberration, type SyntheticAberrationConfig, type SyntheticStarAberration } from '../../../imaging/synthetic/aberration'
 import { applySyntheticCollimationBlur, applySyntheticCollimationSaturation, renderSyntheticCollimationPattern, renderValidatedSyntheticCollimationPattern, type SyntheticCollimationPattern } from '../../../imaging/synthetic/collimation'
@@ -31,6 +32,15 @@ import type { CatalogSource, CatalogSourceStar, CatalogSourceType, DeviceSimulat
 import { applyExclusiveSwitchValues, applyMultiSwitchValues, applyNumberVectorValues } from './util'
 
 // Simulated astronomical camera acquisition, cooling, guiding, and synthetic image generation.
+
+// Star projected into the active camera frame with its signed local best-focus offset.
+interface CameraFrameStar extends AstronomicalImageStar {
+	// Local best-focus displacement in focuser steps from sensor tilt or field curvature.
+	readonly focusOffset?: number
+}
+
+// Fixed indices of the three independently transformed Bahtinov spikes.
+const BAHTINOV_SPIKE_INDICES = [0, 1, 2] as const
 
 // Camera simulator options: star catalog sources plus the related device managers used to read the
 // simulated mount/guider/focuser/rotator/wheel state when rendering a frame.
@@ -105,7 +115,9 @@ export class CameraSimulator extends DeviceSimulator {
 	// oxfmt-ignore
 	readonly #plotOptions = makeNumberVector('', 'SIMULATOR_STAR_PLOT_OPTIONS', 'Star Plot', SIMULATION, 'rw', ['BACKGROUND', 'Background', 0, 0, 10, 0.001, '%.4f'], ['SATURATION_LEVEL', 'Saturation Level', 1, 0, 10, 0.01, '%.3f'], ['FOCUS_STEP', 'Focus Step', 50000, 0, 100000, 1, '%.0f'], ['BEST_FOCUS', 'Best Focus', 50000, 0, 100000, 1, '%.0f'], ['PEAK_SCALE', 'Peak Scale', 1, 0.01, 20, 0.01, '%.3f'], ['ELLIPTICITY', 'Ellipticity', 0, 0, 0.8, 0.01, '%.3f'], ['THETA', 'Theta', 0, -TAU, TAU, 0.01, '%.3f'], ['SOFT_CORE', 'Soft Core', 0, 0, 10, 0.01, '%.3f'], ['BETA', 'Beta', 2.5, 1.05, 20, 0.01, '%.3f'], ['HALO_STRENGTH', 'Halo Strength', 0, 0, 5, 0.01, '%.3f'], ['HALO_SCALE', 'Halo Scale', 2.8, 1.1, 20, 0.01, '%.3f'], ['JITTER_X', 'Jitter X', 0, -5, 5, 0.01, '%.3f'], ['JITTER_Y', 'Jitter Y', 0, -5, 5, 0.01, '%.3f'], ['GAIN', 'Plot Gain', 1, 0.01, 20, 0.01, '%.3f'], ['GAMMA_COMPENSATION', 'Gamma Compensation', 2.2, 0.1, 10, 0.01, '%.3f'], ['ADDITIVE_NOISE_HINT', 'Additive Noise Hint', 0, 0, 20, 0.01, '%.3f'], ['MIN_PLOT_RADIUS', 'Min Radius', 2, 0, 50, 1, '%.0f'], ['MAX_PLOT_RADIUS', 'Max Radius', 24, 0, 100, 1, '%.0f'], ['CUTOFF_SIGMA', 'Cutoff Sigma', 4.25, 2.5, 10, 0.01, '%.3f'])
 	readonly #plotFlags = makeSwitchVector('', 'SIMULATOR_STAR_PLOT_FLAGS', 'Star Plot Flags', SIMULATION, 'AnyOfMany', 'rw', ['SATURATION_ENABLED', 'Saturation', false], ['GAMMA_ENABLED', 'Gamma', false])
-	readonly #plotPsfModel = makeSwitchVector('', 'SIMULATOR_STAR_PLOT_PSF_MODEL', 'Star PSF Model', SIMULATION, 'OneOfMany', 'rw', ['GAUSSIAN', 'Gaussian', true], ['MOFFAT', 'Moffat', false], ['ANNULAR', 'Annular', false])
+	readonly #plotPsfModel = makeSwitchVector('', 'SIMULATOR_STAR_PLOT_PSF_MODEL', 'Star PSF Model', SIMULATION, 'OneOfMany', 'rw', ['GAUSSIAN', 'Gaussian', true], ['MOFFAT', 'Moffat', false], ['ANNULAR', 'Annular', false], ['BAHTINOV', 'Bahtinov', false])
+	// oxfmt-ignore
+	readonly #bahtinovPattern = makeNumberVector('', 'SIMULATOR_BAHTINOV_PATTERN', 'Bahtinov Pattern', SIMULATION, 'rw', ['NORMAL_ANGLE_1', 'Normal Angle 1 (deg)', 15, -360, 360, 0.1, '%.2f'], ['NORMAL_ANGLE_2', 'Normal Angle 2 (deg)', 0, -360, 360, 0.1, '%.2f'], ['NORMAL_ANGLE_3', 'Normal Angle 3 (deg)', -15, -360, 360, 0.1, '%.2f'], ['FWHM', 'FWHM (sensor px)', 2, 0.1, 64, 0.1, '%.2f'], ['HALF_LENGTH', 'Half Length (sensor px)', 60, 1, 2048, 1, '%.0f'], ['TAPER_LENGTH', 'Taper Length (sensor px)', 12, 0, 2048, 1, '%.0f'], ['STRENGTH_1', 'Strength 1', 1, 0, 10, 0.01, '%.3f'], ['STRENGTH_2', 'Strength 2', 1, 0, 10, 0.01, '%.3f'], ['STRENGTH_3', 'Strength 3', 1, 0, 10, 0.01, '%.3f'], ['SPIKE_FLUX_RATIO', 'Spike Flux Ratio', 1, 0, 10, 0.01, '%.3f'], ['FOCUS_STEPS_PER_PIXEL', 'Focus Steps/Pixel', 200, 1, 100000, 1, '%.0f'], ['CUTOFF_SIGMA', 'Cutoff Sigma', 4, 1, 10, 0.1, '%.2f'])
 	// oxfmt-ignore
 	readonly #collimationPattern = makeNumberVector('', 'SIMULATOR_COLLIMATION_PATTERN', 'Collimation Pattern', SIMULATION, 'rw', ['MAX_RADIUS', 'Maximum Radius (px)', 48, 2, 512, 1, '%.0f'], ['OBSTRUCTION_RATIO', 'Obstruction Ratio', 0.35, 0.05, 0.9, 0.01, '%.3f'], ['EDGE_SOFTNESS', 'Edge Softness (px)', 0.8, 0.05, 20, 0.05, '%.2f'], ['SPIDER_VANES', 'Spider Vanes', 0, 0, 12, 1, '%.0f'], ['SPIDER_WIDTH', 'Spider Width (px)', 1.5, 0, 20, 0.1, '%.2f'], ['SPIDER_ANGLE', 'Spider Angle (rad)', 0, -TAU, TAU, 0.01, '%.3f'], ['SPIDER_ATTENUATION', 'Spider Attenuation', 0.9, 0, 1, 0.01, '%.3f'])
 	// oxfmt-ignore
@@ -168,6 +180,7 @@ export class CameraSimulator extends DeviceSimulator {
 		this.#plotOptions,
 		this.#plotFlags,
 		this.#plotPsfModel,
+		this.#bahtinovPattern,
 		this.#collimationPattern,
 		this.#aberrationFeatures,
 		this.#aberrationFocus,
@@ -377,6 +390,9 @@ export class CameraSimulator extends DeviceSimulator {
 				return
 			case 'SIMULATOR_STAR_PLOT_OPTIONS':
 				if (applyNumberVectorValues(this.#plotOptions, vector.elements)) this.notify(this.#plotOptions)
+				return
+			case 'SIMULATOR_BAHTINOV_PATTERN':
+				if (applyNumberVectorValues(this.#bahtinovPattern, vector.elements)) this.notify(this.#bahtinovPattern)
 				return
 			case 'SIMULATOR_COLLIMATION_PATTERN':
 				if (applyNumberVectorValues(this.#collimationPattern, vector.elements)) this.notify(this.#collimationPattern)
@@ -676,7 +692,10 @@ export class CameraSimulator extends DeviceSimulator {
 
 		if (frameType === 'LIGHT') {
 			const stars = await this.#collectFrameStars(exposureTime, rotatorAngle)
-			if (this.#plotPsfModel.elements.ANNULAR.value) {
+			if (this.#plotPsfModel.elements.BAHTINOV.value) {
+				this.#renderBahtinovStars(raw, width, height, channels, stars)
+				generateNoiseImage(raw, width, height, channels, noiseConfig)
+			} else if (this.#plotPsfModel.elements.ANNULAR.value) {
 				const saturationLevel = this.#renderAnnularStars(raw, width, height, channels, stars)
 				const seeingSigma = gaussianSigmaFromHfd(this.seeing)
 				applySyntheticCollimationBlur(raw, width, height, channels, { sigmaX: seeingSigma / this.#bin.elements.HOR_BIN.value, sigmaY: seeingSigma / this.#bin.elements.VER_BIN.value })
@@ -698,6 +717,66 @@ export class CameraSimulator extends DeviceSimulator {
 		else await writeImageToFits(image, sink)
 
 		return output.subarray(0, sink.position)
+	}
+
+	// Renders Gaussian star cores and adds a sensor-scaled Bahtinov pattern to the brightest visible star.
+	#renderBahtinovStars(raw: ImageRawType, width: number, height: number, channels: 1 | 3, stars: readonly CameraFrameStar[]): void {
+		const plotOptions = this.#makePlotOptions()
+		const saturationLevel = plotOptions.saturationLevel
+		const corePlotOptions: PlotStarOptions = saturationLevel === undefined ? plotOptions : { ...plotOptions, saturationLevel: undefined }
+		let brightest: CameraFrameStar | undefined
+
+		for (let i = 0; i < stars.length; i++) {
+			const star = stars[i]
+			plotStar(raw, width, height, channels, star.x, star.y, star.flux, star.hfd, star.snr, this.seeing, star.colorIndex, corePlotOptions, star)
+			if (star.x >= 0 && star.x < width && star.y >= 0 && star.y < height && (brightest === undefined || star.flux > brightest.flux)) brightest = star
+		}
+
+		if (brightest !== undefined) this.#renderBahtinovSpikes(raw, width, height, channels, brightest, plotOptions)
+		applySyntheticCollimationSaturation(raw, saturationLevel)
+	}
+
+	// Adds three independently transformed spikes so sensor-space geometry survives anisotropic binning.
+	#renderBahtinovSpikes(raw: ImageRawType, width: number, height: number, channels: 1 | 3, star: CameraFrameStar, plotOptions: PlotStarOptions): void {
+		const pattern = this.#bahtinovPattern.elements
+		const normalAngles = [pattern.NORMAL_ANGLE_1.value * DEG2RAD, pattern.NORMAL_ANGLE_2.value * DEG2RAD, pattern.NORMAL_ANGLE_3.value * DEG2RAD] as const
+		const strengths = [pattern.STRENGTH_1.value, pattern.STRENGTH_2.value, pattern.STRENGTH_3.value] as const
+		const strengthSum = strengths[0] + strengths[1] + strengths[2]
+		const spikeFlux = star.flux * pattern.SPIKE_FLUX_RATIO.value
+		if (!(strengthSum > 0) || !(spikeFlux > 0)) return
+
+		const binX = this.#bin.elements.HOR_BIN.value
+		const binY = this.#bin.elements.VER_BIN.value
+		const bestFocus = this.#plotOptions.elements.BEST_FOCUS.value
+		const currentFocus = this.#focusPosition() ?? this.#plotOptions.elements.FOCUS_STEP.value
+		const errorSensor = bestFocus === 0 ? 0 : (currentFocus - (bestFocus + (star.focusOffset ?? 0))) / pattern.FOCUS_STEPS_PER_PIXEL.value
+		const centerX = star.x + (plotOptions.jitterX ?? 0)
+		const centerY = star.y + (plotOptions.jitterY ?? 0)
+		const taperLength = Math.min(pattern.TAPER_LENGTH.value, pattern.HALF_LENGTH.value)
+
+		for (const index of BAHTINOV_SPIKE_INDICES) {
+			const strength = strengths[index]
+			if (!(strength > 0)) continue
+			const angle = normalAngles[index]
+			const cosAngle = Math.cos(angle)
+			const sinAngle = Math.sin(angle)
+			const normalScale = Math.hypot(binX * cosAngle, binY * sinAngle)
+			const tangentScale = Math.hypot(sinAngle / binX, cosAngle / binY)
+			const imageAngle = Math.atan2(binY * sinAngle, binX * cosAngle)
+
+			plotBahtinovSpikes(raw, width, height, channels, centerX, centerY, spikeFlux, index === 1 ? errorSensor / normalScale : 0, star.colorIndex, {
+				normalAngles: [imageAngle, imageAngle, imageAngle],
+				central: 1,
+				spike: index,
+				fwhm: pattern.FWHM.value / normalScale,
+				halfLength: pattern.HALF_LENGTH.value * tangentScale,
+				taperLength: taperLength * tangentScale,
+				strengths,
+				gain: plotOptions.gain,
+				cutoffSigma: pattern.CUTOFF_SIGMA.value,
+				gammaCompensation: plotOptions.gammaCompensation,
+			})
+		}
 	}
 
 	// Renders deterministic full-sensor flat illumination before the shared camera-noise pipeline.
@@ -1069,7 +1148,7 @@ export class CameraSimulator extends DeviceSimulator {
 		const binY = this.#bin.elements.VER_BIN.value
 		const gainFactor = 1 + this.#gain.elements.GAIN.value / 100
 		const exposureScale = exposureTime / this.#noiseExposure.elements.EXPOSURE_TIME.value
-		const projected: AstronomicalImageStar[] = []
+		const projected: CameraFrameStar[] = []
 		const centerX = (this.sensorWidth - 1) * 0.5
 		const centerY = (this.sensorHeight - 1) * 0.5
 		const rotate = Math.abs(rotatorAngle) >= 1e-12
@@ -1102,7 +1181,7 @@ export class CameraSimulator extends DeviceSimulator {
 			if (aberration.enabled) evaluateSyntheticAberration(sensorX, sensorY, this.sensorWidth, this.sensorHeight, currentFocus, bestFocus, aberration, aberrationResult)
 			const comaX = aberration.enabled ? Math.cos(aberrationResult.comaTheta) / binX : 0
 			const comaY = aberration.enabled ? Math.sin(aberrationResult.comaTheta) / binY : 0
-			const projectedStar: AstronomicalImageStar = {
+			const projectedStar: CameraFrameStar = {
 				x: (sensorX - frameX) / binX,
 				y: (sensorY - frameY) / binY,
 				flux: star.flux * gainFactor * exposureScale,
@@ -1112,6 +1191,7 @@ export class CameraSimulator extends DeviceSimulator {
 				scaleX: 1 / binX,
 				scaleY: 1 / binY,
 				defocus: aberration.focusEnabled ? aberrationResult.defocus : undefined,
+				focusOffset: aberration.focusEnabled ? aberrationResult.focusOffset : undefined,
 				covarianceXX: aberration.enabled ? aberrationResult.covarianceXX / (binX * binX) : undefined,
 				covarianceXY: aberration.enabled ? aberrationResult.covarianceXY / (binX * binY) : undefined,
 				covarianceYY: aberration.enabled ? aberrationResult.covarianceYY / (binY * binY) : undefined,

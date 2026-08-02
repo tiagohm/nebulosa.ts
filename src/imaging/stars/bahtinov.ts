@@ -3,12 +3,17 @@ import type { Angle } from '../../math/units/angle'
 import type { ImageRawType } from '../model/types'
 import { colorIndexToRgbWeights } from './generator'
 
+// Index of the each spike.
+export type BahtinovSpikeIndex = 0 | 1 | 2
+
 // Options controlling three additive Bahtinov diffraction spikes on an existing image.
 export interface PlotBahtinovSpikesOptions {
 	// Normal angles of the three spikes in radians; each is canonicalized modulo PI.
 	readonly normalAngles?: readonly [Angle, Angle, Angle]
 	// Index of the central spike whose normal distance receives `error`.
-	readonly central?: 0 | 1 | 2
+	readonly central?: BahtinovSpikeIndex
+	// Single spike to render, or undefined to render the complete three-spike pattern.
+	readonly spike?: BahtinovSpikeIndex
 	// Transverse full width at half maximum in pixels.
 	readonly fwhm?: number
 	// Nominal half-length of every spike in pixels.
@@ -44,7 +49,7 @@ const DEFAULT_BAHTINOV_CUTOFF_SIGMA = 4
 // Largest finite value representable by a Float32Array sample.
 const MAX_FLOAT32 = 3.4028234663852886e38
 // Maximum nominal discrete samples used to normalize one spike before rendering.
-const MAX_BAHTINOV_NORMALIZATION_SAMPLES = 16_777_216
+const MAX_BAHTINOV_NORMALIZATION_SAMPLES = 16777216
 
 // Adds only three Bahtinov diffraction spikes to an existing mono or interleaved RGB buffer.
 //
@@ -62,6 +67,7 @@ export function plotBahtinovSpikes(raw: ImageRawType, width: number, height: num
 
 	const normalAngles = options.normalAngles ?? DEFAULT_BAHTINOV_NORMAL_ANGLES
 	const central = options.central ?? DEFAULT_BAHTINOV_CENTRAL
+	const selectedSpike = options.spike
 	const fwhm = options.fwhm ?? DEFAULT_BAHTINOV_FWHM
 	const halfLength = options.halfLength ?? DEFAULT_BAHTINOV_HALF_LENGTH
 	const taperLength = options.taperLength ?? DEFAULT_BAHTINOV_TAPER_LENGTH
@@ -83,8 +89,11 @@ export function plotBahtinovSpikes(raw: ImageRawType, width: number, height: num
 	let blueWeight = 1
 	if (channels === 3) [redWeight, greenWeight, blueWeight] = colorIndexToRgbWeights(colorIndex, options.gammaCompensation)
 
+	const initialIndex = selectedSpike ?? 0
+	const maxIndex = selectedSpike === undefined ? 3 : initialIndex + 1
+
 	// Preflight every enabled spike so a later invalid support cannot leave a partially rendered image.
-	for (let index = 0; index < 3; index++) {
+	for (let index = initialIndex; index < maxIndex; index++) {
 		if (strengths[index] <= 0) continue
 		const angle = canonicalBahtinovNormalAngle(normalAngles[index])
 		const normalX = Math.cos(angle)
@@ -106,7 +115,8 @@ export function plotBahtinovSpikes(raw: ImageRawType, width: number, height: num
 	}
 
 	let rendered = false
-	for (let index = 0; index < 3; index++) {
+
+	for (let index = initialIndex; index < maxIndex; index++) {
 		const relativeStrength = strengths[index] / strengthSum
 		if (relativeStrength <= 0) continue
 		const angle = canonicalBahtinovNormalAngle(normalAngles[index])

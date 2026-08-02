@@ -46,6 +46,32 @@ test('plotBahtinovSpikes encodes the requested signed central-line error', () =>
 	}
 })
 
+test('plotBahtinovSpikes can render one spike while preserving full-pattern flux fractions', () => {
+	const width = 101
+	const height = 101
+	const full = new Float64Array(width * height)
+	const combined = new Float64Array(width * height)
+	const options = {
+		normalAngles: [Math.PI / 5, Math.PI / 2, (Math.PI * 4) / 5] as const,
+		central: 1 as const,
+		fwhm: 2,
+		halfLength: 30,
+		taperLength: 5,
+		strengths: [1, 2, 3] as const,
+	}
+
+	expect(plotBahtinovSpikes(full, width, height, 1, 50, 50, 240, 3, undefined, options)).toBeTrue()
+	for (const spike of [0, 1, 2] as const) {
+		const selected = new Float64Array(width * height)
+		expect(plotBahtinovSpikes(selected, width, height, 1, 50, 50, 240, 3, undefined, { ...options, spike })).toBeTrue()
+		for (let index = 0; index < combined.length; index++) combined[index] += selected[index]
+	}
+
+	let maximumDifference = 0
+	for (let index = 0; index < full.length; index++) maximumDifference = Math.max(maximumDifference, Math.abs(combined[index] - full[index]))
+	expect(maximumDifference).toBeLessThan(1e-12)
+})
+
 test('plotBahtinovSpikes does not renormalize a spike clipped along its length', () => {
 	const options = {
 		normalAngles: [Math.PI / 4, 0, (Math.PI * 3) / 4] as const,
