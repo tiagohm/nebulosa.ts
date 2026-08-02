@@ -108,7 +108,7 @@ export interface Device {
 	hardwareId: string // MD5(client id + name): the physical device behind every view
 	readonly parentId?: string
 	readonly type: DeviceType // Main device type
-	interfaces: DeviceType[] //  Combination of device types the driver advertises in the interface bitmask
+	interfaces: readonly DeviceType[] //  Combination of device types the driver advertises in the interface bitmask
 	name: string
 	connected: boolean
 	readonly driver: Readonly<DriverInfo>
