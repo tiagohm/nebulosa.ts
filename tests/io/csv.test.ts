@@ -222,7 +222,9 @@ describe('quoted edge cases', () => {
 test('IAU-CSN', async () => {
 	const rows: CsvRow[] = []
 
-	for await (const row of readCsvStream(fileHandleSource(await fs.open('data/IAU-CSN.tsv', 'r')), { delimiter: TSV_DELIMITER, skipFirstLine: false })) {
+	await using source = fileHandleSource(await fs.open('data/IAU-CSN.tsv', 'r'))
+
+	for await (const row of readCsvStream(source, { delimiter: TSV_DELIMITER, skipFirstLine: false })) {
 		rows.push(row)
 	}
 
