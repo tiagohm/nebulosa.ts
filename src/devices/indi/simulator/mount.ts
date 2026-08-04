@@ -629,6 +629,9 @@ export class MountSimulator extends DeviceSimulator {
 			case 'GEOGRAPHIC_COORD':
 				if (applyNumberVectorValues(this.#geographicCoordinate, vector.elements)) {
 					this.#refreshPierSide()
+					// Alignment and flexure depend on the site and can move the optical axis immediately even
+					// though the mechanics have not advanced. Preserve that change as a trajectory step.
+					this.#recordBoresight()
 					this.notify(this.#geographicCoordinate)
 				}
 				return

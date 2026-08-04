@@ -655,6 +655,29 @@ describe('mount simulator pointing errors', () => {
 		}
 	})
 
+	test('records a site-induced boresight change at the command time', () => {
+		const { client, mount } = makeMount('mount.trajectory.site', 'ALIGNMENT')
+
+		try {
+			client.sendNumber({ device: mount.name, name: 'MOUNT_ALIGNMENT', elements: { ...NO_ALIGNMENT, POLAR_AZIMUTH_ERROR: 3600 } })
+			mount.setTrackingEnabled(true)
+			mount.advance(0.1)
+
+			const changeTime = mount.utcTime
+			const before = mount.boresight
+			client.sendNumber({ device: mount.name, name: 'GEOGRAPHIC_COORD', elements: { LONG: 45 } })
+			const after = mount.boresight
+			expect(angularDistance(before.rightAscension, before.declination, after.rightAscension, after.declination)).toBeGreaterThan(arcsec(100))
+
+			mount.advance(0.1)
+			expect(toArcsec(mount.boresightPathLength(changeTime - 50, changeTime))).toBeLessThan(1)
+			expect(toArcsec(mount.boresightPathLength(changeTime, changeTime + 50))).toBeLessThan(1)
+			expect(toArcsec(mount.boresightPathLength(changeTime - 50, changeTime + 50))).toBeGreaterThan(100)
+		} finally {
+			mount.dispose()
+		}
+	})
+
 	test('records the instant a slew reached its target', () => {
 		const { mount } = makeMount('mount.trajectory.arrival')
 
