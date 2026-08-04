@@ -80,6 +80,14 @@ export const FILTER_WHEEL_SLOT_NAMES = ['L', 'R', 'G', 'B', 'Ha', 'SII', 'OIII',
 export const FILTER_WHEEL_MOVE_TIME_MS = 250
 // Simulated rotator slew rate (degrees/second).
 export const ROTATOR_MOVE_RATE = 90
+// Simulated dome rotation speed limits (RPM) and shutter transition duration.
+export const DOME_DEFAULT_SPEED_RPM = 6
+export const DOME_MIN_SPEED_RPM = 0.1
+export const DOME_MAX_SPEED_RPM = 12
+export const DOME_SHUTTER_MOVE_TIME_MS = 1500
+// Simulated dome home and park azimuths (degrees).
+export const DOME_DEFAULT_HOME_AZIMUTH = 0
+export const DOME_DEFAULT_PARK_AZIMUTH = 180
 // Simulated cover open/close time (ms) and flat-panel maximum intensity.
 export const COVER_MOVE_TIME_MS = 500
 export const PANEL_MAX_INTENSITY = 255
