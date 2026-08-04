@@ -60,22 +60,6 @@ type DomeParkProperties = {
 	hasHome?: boolean
 }
 
-// Tracks park aliases and writable properties for each dome without adding backend details to the model.
-const DOME_PARK_PROPERTIES = new WeakMap<Dome, DomeParkProperties>()
-const DOME_WRITABLE_PROPERTIES = new WeakMap<Dome, Set<string>>()
-
-// Returns the writable-property set for a dome, creating it on first use.
-function domeWritableProperties(dome: Dome) {
-	let properties = DOME_WRITABLE_PROPERTIES.get(dome)
-
-	if (properties === undefined) {
-		properties = new Set<string>()
-		DOME_WRITABLE_PROPERTIES.set(dome, properties)
-	}
-
-	return properties
-}
-
 // Tracks the raw INDI property vectors per device and notifies property-level handlers on
 // define/update/delete. Backs each DeviceManager's `properties` view.
 export class DevicePropertyManager<D extends Device> implements IndiClientHandler, DevicePropertyHandler<D> {
@@ -233,9 +217,41 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 	readonly #clients = new Map<string, Client>()
 	readonly #devices = new Map<string, D>()
 	readonly #handlers = new Set<DeviceHandler<D>>()
-
 	// Per-device raw property view.
 	readonly properties = new DevicePropertyManager(this)
+	// Track writable properties for each device.
+	readonly #writableProperties = new WeakMap<Device, Set<string>>()
+
+	protected hasWritableProperty(device: Device, name: string) {
+		return this.#writableProperties.get(device)?.has(name) === true
+	}
+
+	protected addWritableProperty(device: Device, name: string) {
+		let writable = this.#writableProperties.get(device)
+
+		if (writable === undefined) {
+			writable = new Set()
+			this.#writableProperties.set(device, writable)
+		}
+
+		writable.add(name)
+	}
+
+	protected removeWritableProperty(device: Device, name: string) {
+		const writable = this.#writableProperties.get(device)
+
+		if (writable !== undefined) {
+			writable.delete(name)
+
+			if (writable.size === 0) {
+				this.#writableProperties.delete(device)
+			}
+		}
+	}
+
+	protected clearWritableProperty(device: Device) {
+		return this.#writableProperties.delete(device)
+	}
 
 	// Number of managed devices.
 	get length() {
@@ -1517,6 +1533,9 @@ export class MountManager extends DeviceManager<Mount> {
 // INDI dome manager: maps heterogeneous dome properties into the shared dome model and sends commands
 // in INDI units. Angles are converted between model radians and property degrees at this boundary.
 export class DomeManager extends DeviceManager<Dome> {
+	// Tracks park aliases for each dome without adding backend details to the model.
+	readonly #parkProperties = new WeakMap<Dome, DomeParkProperties>()
+
 	// Slews to an absolute azimuth in radians, normalized to [0, TAU).
 	moveTo(dome: Dome, azimuth: Angle, client = dome[CLIENT]!) {
 		if (dome.canSetAzimuth && !dome.slaved) {
@@ -1540,7 +1559,7 @@ export class DomeManager extends DeviceManager<Dome> {
 
 	// Sets the dome rotation speed in RPM when the driver exposes a writable speed property.
 	speed(dome: Dome, value: number, client = dome[CLIENT]!) {
-		if (domeWritableProperties(dome).has('DOME_SPEED')) {
+		if (this.hasWritableProperty(dome, 'DOME_SPEED')) {
 			client.sendNumber({ device: dome.name, name: 'DOME_SPEED', elements: { DOME_SPEED_VALUE: value } })
 		}
 	}
@@ -1562,7 +1581,7 @@ export class DomeManager extends DeviceManager<Dome> {
 	// Starts a move to the configured park position using the driver's advertised park property.
 	park(dome: Dome, client = dome[CLIENT]!) {
 		if (dome.canPark && !dome.slaved) {
-			const name = DOME_PARK_PROPERTIES.get(dome)?.park ?? 'DOME_PARK'
+			const name = this.#parkProperties.get(dome)?.park ?? 'DOME_PARK'
 			client.sendSwitch({ device: dome.name, name, elements: { [name === 'DOME_PARK' ? 'PARK' : 'DOME_PARK']: true } })
 		}
 	}
@@ -1579,13 +1598,12 @@ export class DomeManager extends DeviceManager<Dome> {
 		if (!dome.canSetPark) return
 
 		const azimuth = toDeg(normalizeAngle(dome.azimuth.value))
-		const writable = domeWritableProperties(dome)
 
-		if (writable.has('DOME_PARK_OPTION')) {
+		if (this.hasWritableProperty(dome, 'DOME_PARK_OPTION')) {
 			client.sendSwitch({ device: dome.name, name: 'DOME_PARK_OPTION', elements: { PARK_CURRENT: true } })
-		} else if (writable.has('DOME_PARK_POSITION')) {
+		} else if (this.hasWritableProperty(dome, 'DOME_PARK_POSITION')) {
 			client.sendNumber({ device: dome.name, name: 'DOME_PARK_POSITION', elements: { PARK_AZ: azimuth } })
-		} else if (writable.has('DOME_PARAMS')) {
+		} else if (this.hasWritableProperty(dome, 'DOME_PARAMS')) {
 			client.sendNumber({ device: dome.name, name: 'DOME_PARAMS', elements: { PARK_POSITION: azimuth } })
 		}
 	}
@@ -1607,7 +1625,7 @@ export class DomeManager extends DeviceManager<Dome> {
 	// Enables or disables driver-side slaving.
 	slave(dome: Dome, enabled: boolean, client = dome[CLIENT]!) {
 		if (dome.canSlave) {
-			client.sendSwitch({ device: dome.name, name: 'DOME_AUTOSYNC', elements: { [enabled ? 'INDI_ENABLED' : 'INDI_DISABLED']: true } })
+			client.sendSwitch({ device: dome.name, name: 'DOME_AUTO_SYNC', elements: { [enabled ? 'INDI_ENABLED' : 'INDI_DISABLED']: true } })
 		}
 	}
 
@@ -1620,14 +1638,14 @@ export class DomeManager extends DeviceManager<Dome> {
 
 	// Enables or disables controller backlash compensation.
 	backlash(dome: Dome, enabled: boolean, client = dome[CLIENT]!) {
-		if (domeWritableProperties(dome).has('DOME_BACKLASH_TOGGLE')) {
+		if (this.hasWritableProperty(dome, 'DOME_BACKLASH_TOGGLE')) {
 			client.sendSwitch({ device: dome.name, name: 'DOME_BACKLASH_TOGGLE', elements: { [enabled ? 'INDI_ENABLED' : 'INDI_DISABLED']: true } })
 		}
 	}
 
 	// Sets controller backlash in raw driver steps.
 	backlashSteps(dome: Dome, steps: number, client = dome[CLIENT]!) {
-		if (domeWritableProperties(dome).has('DOME_BACKLASH_STEPS')) {
+		if (this.hasWritableProperty(dome, 'DOME_BACKLASH_STEPS')) {
 			client.sendNumber({ device: dome.name, name: 'DOME_BACKLASH_STEPS', elements: { DOME_BACKLASH_VALUE: steps } })
 		}
 	}
@@ -1643,8 +1661,8 @@ export class DomeManager extends DeviceManager<Dome> {
 		const definition = tag[0] === 'd' ? (message as DefSwitchVector) : undefined
 
 		if (definition) {
-			domeWritableProperties(dome).delete(message.name)
-			if (definition.permission !== 'ro') domeWritableProperties(dome).add(message.name)
+			if (definition.permission !== 'ro') this.addWritableProperty(dome, message.name)
+			else this.removeWritableProperty(dome, message.name)
 		}
 
 		switch (message.name) {
@@ -1684,10 +1702,10 @@ export class DomeManager extends DeviceManager<Dome> {
 				const hasPark = message.elements.DOME_PARK !== undefined
 
 				if (definition) {
-					const parkProperties = DOME_PARK_PROPERTIES.get(dome) ?? {}
+					const parkProperties = this.#parkProperties.get(dome) ?? {}
 					parkProperties.hasHome = hasHome
 					if (hasPark && parkProperties.park === undefined) parkProperties.park = 'DOME_GOTO'
-					DOME_PARK_PROPERTIES.set(dome, parkProperties)
+					this.#parkProperties.set(dome, parkProperties)
 				}
 
 				if (definition && handleSwitchValue(dome, 'canFindHome', hasHome && definition.permission !== 'ro')) this.updated(dome, 'canFindHome', message.state)
@@ -1711,7 +1729,7 @@ export class DomeManager extends DeviceManager<Dome> {
 				const hasUnpark = message.elements.UNPARK !== undefined
 
 				if (definition) {
-					DOME_PARK_PROPERTIES.set(dome, { park: 'DOME_PARK', hasHome: DOME_PARK_PROPERTIES.get(dome)?.hasHome })
+					this.#parkProperties.set(dome, { park: 'DOME_PARK', hasHome: this.#parkProperties.get(dome)?.hasHome })
 				}
 
 				if (definition && handleSwitchValue(dome, 'canPark', hasPark && definition.permission !== 'ro')) this.updated(dome, 'canPark', message.state)
@@ -1724,7 +1742,7 @@ export class DomeManager extends DeviceManager<Dome> {
 				updateDomeSlewing(this, dome, message.state)
 				return
 			}
-			case 'DOME_AUTOSYNC':
+			case 'DOME_AUTO_SYNC':
 				if (definition && handleSwitchValue(dome, 'canSlave', definition.permission !== 'ro')) this.updated(dome, 'canSlave', message.state)
 				if (handleSwitchValue(dome, 'slaved', message.elements.INDI_ENABLED?.value ?? message.elements.ENABLE?.value)) this.updated(dome, 'slaved', message.state)
 				return
@@ -1753,8 +1771,8 @@ export class DomeManager extends DeviceManager<Dome> {
 		const definition = tag[0] === 'd' ? (message as DefNumberVector) : undefined
 
 		if (definition) {
-			domeWritableProperties(dome).delete(message.name)
-			if (definition.permission !== 'ro') domeWritableProperties(dome).add(message.name)
+			if (definition.permission !== 'ro') this.addWritableProperty(dome, message.name)
+			else this.removeWritableProperty(dome, message.name)
 		}
 
 		switch (message.name) {
@@ -1835,14 +1853,14 @@ export class DomeManager extends DeviceManager<Dome> {
 
 		const name = message.name
 		const full = !name
-		const writable = DOME_WRITABLE_PROPERTIES.get(dome)
 
 		if (full) {
-			DOME_PARK_PROPERTIES.delete(dome)
-			DOME_WRITABLE_PROPERTIES.delete(dome)
+			this.#parkProperties.delete(dome)
+			this.clearWritableProperty(dome)
 		} else {
-			writable?.delete(name)
-			const parkProperties = DOME_PARK_PROPERTIES.get(dome)
+			this.removeWritableProperty(dome, name)
+
+			const parkProperties = this.#parkProperties.get(dome)
 			if (name === 'DOME_PARK' && parkProperties?.park === 'DOME_PARK') parkProperties.park = undefined
 			if (name === 'DOME_GOTO' && parkProperties?.park === 'DOME_GOTO') parkProperties.park = undefined
 			if (name === 'DOME_GOTO' && parkProperties) parkProperties.hasHome = false
@@ -1870,7 +1888,7 @@ export class DomeManager extends DeviceManager<Dome> {
 			resetDeviceValue(this, dome, 'canFindHome', DEFAULT_DOME.canFindHome)
 			resetDeviceValue(this, dome, 'homing', DEFAULT_DOME.homing)
 			resetDeviceValue(this, dome, 'atHome', DEFAULT_DOME.atHome)
-			if (DOME_PARK_PROPERTIES.get(dome)?.park === undefined) {
+			if (this.#parkProperties.get(dome)?.park === undefined) {
 				resetDeviceValue(this, dome, 'canPark', DEFAULT_DOME.canPark)
 				resetDeviceValue(this, dome, 'parking', DEFAULT_DOME.parking)
 				resetDeviceValue(this, dome, 'parked', DEFAULT_DOME.parked)
@@ -1878,7 +1896,7 @@ export class DomeManager extends DeviceManager<Dome> {
 		}
 		if (full || name === 'DOME_PARK') {
 			resetDeviceValue(this, dome, 'canUnpark', DEFAULT_DOME.canUnpark)
-			if (DOME_PARK_PROPERTIES.get(dome)?.park !== 'DOME_GOTO') {
+			if (this.#parkProperties.get(dome)?.park !== 'DOME_GOTO') {
 				resetDeviceValue(this, dome, 'canPark', DEFAULT_DOME.canPark)
 				resetDeviceValue(this, dome, 'parking', DEFAULT_DOME.parking)
 				resetDeviceValue(this, dome, 'parked', DEFAULT_DOME.parked)
@@ -1895,7 +1913,7 @@ export class DomeManager extends DeviceManager<Dome> {
 			resetDeviceValue(this, dome, 'canSetAltitude', DEFAULT_DOME.canSetAltitude)
 			resetDeviceValue(this, dome, 'altitude', DEFAULT_DOME.altitude)
 		}
-		if (full || name === 'DOME_AUTOSYNC') {
+		if (full || name === 'DOME_AUTO_SYNC') {
 			resetDeviceValue(this, dome, 'canSlave', DEFAULT_DOME.canSlave)
 			resetDeviceValue(this, dome, 'slaved', DEFAULT_DOME.slaved)
 		}

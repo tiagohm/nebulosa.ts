@@ -1653,14 +1653,11 @@ export class AlpacaServer {
 		return makeAlpacaResponse(res)
 	}
 
-	#domeSetSlaved(id: number, data: { Slaved?: string }) {
+	#domeSetSlaved(id: number, data: { Slaved: string }) {
 		const registered = this.#requireDomeCapability(id, 'canSlave', 'Dome does not support slaving')
 		if (registered instanceof Response) return registered
 
-		const slaved = parseAlpacaBoolean(data.Slaved)
-		if (slaved === undefined) return makeAlpacaErrorResponse(AlpacaException.InvalidValue, 'Slaved must be True or False')
-
-		this.options.dome?.slave(registered.device, slaved)
+		this.options.dome?.slave(registered.device, isTrue(data.Slaved))
 		return makeAlpacaResponse(undefined)
 	}
 
@@ -2060,17 +2057,8 @@ export function makeImageBytesFromFits(source: Buffer) {
 }
 
 // Case-insensitive boolean parse of an Alpaca 'True'/'False' form value.
-function isTrue(value: string) {
-	return value.toLowerCase() === 'true'
-}
-
-// Parses the two boolean literals accepted by the Alpaca form-encoded API.
-
-function parseAlpacaBoolean(value: string | undefined) {
-	if (value === undefined) return undefined
-	if (value.toLowerCase() === 'true') return true
-	if (value.toLowerCase() === 'false') return false
-	return undefined
+function isTrue(value: string | undefined | null) {
+	return value?.toLowerCase() === 'true'
 }
 
 // Wraps a value in the Alpaca JSON response envelope.

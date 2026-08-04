@@ -128,6 +128,6 @@ describe.skipIf(SKIP)('dome simulator', () => {
 
 		simulator.saveProperties()
 
-		expect(saved).toEqual(['DOME_SPEED', 'DOME_PARAMS', 'DOME_AUTOSYNC', 'DOME_PARK_POSITION', 'DOME_BACKLASH_TOGGLE', 'DOME_BACKLASH_STEPS', 'DOME_MEASUREMENTS', 'DM_OTA_SIDE'])
+		expect(saved).toEqual(['DOME_SPEED', 'DOME_PARAMS', 'DOME_AUTO_SYNC', 'DOME_PARK_POSITION', 'DOME_BACKLASH_TOGGLE', 'DOME_BACKLASH_STEPS', 'DOME_MEASUREMENTS', 'DM_OTA_SIDE'])
 	})
 })

@@ -7,7 +7,7 @@ import { computeRemainingBytes, FITS_BLOCK_SIZE, FITS_HEADER_CARD_SIZE, type Fit
 import { bitpixInBytes } from '../../io/formats/fits/util'
 import { type Angle, formatDEC, formatRA, normalizeAngle, toDeg } from '../../math/units/angle'
 import { handleDefNumberVector, handleDefSwitchVector, handleDefTextVector, handleDelProperty, handleSetBlobVector, handleSetNumberVector, handleSetSwitchVector, handleSetTextVector, type IndiClientHandler } from '../indi/client'
-import type { Camera, Client, Device, Dome, Focuser, Mount, Rotator, Wheel } from '../indi/device'
+import type { Camera, Client, Device, Focuser, Mount, Rotator, Wheel } from '../indi/device'
 import type { DeviceProvider } from '../indi/manager'
 // oxfmt-ignore
 import { type DefSwitchVector, type DefVector, type EnableBlob, findOnSwitch, type GetProperties, makeBlobVector, makeNumberVector, makeSwitchVector, makeTextVector, type NewNumberVector, type NewSwitchVector, type NewTextVector, type PropertyState, type ValueType, type VectorType } from '../indi/types'
@@ -1950,24 +1950,11 @@ class AlpacaDome extends AlpacaDevice {
 	readonly #park = makeSwitchVector('', 'DOME_PARK', 'Park', MAIN_CONTROL, 'OneOfMany', 'rw', ['PARK', 'Park', false])
 	readonly #parkOption = makeSwitchVector('', 'DOME_PARK_OPTION', 'Park option', MAIN_CONTROL, 'OneOfMany', 'rw', ['PARK_CURRENT', 'Park current position', false])
 	readonly #shutter = makeSwitchVector('', 'DOME_SHUTTER', 'Shutter', MAIN_CONTROL, 'OneOfMany', 'rw', ['SHUTTER_OPEN', 'Open', false], ['SHUTTER_CLOSE', 'Close', true])
-	readonly #autosync = makeSwitchVector('', 'DOME_AUTOSYNC', 'Slaved', MAIN_CONTROL, 'OneOfMany', 'rw', ['INDI_ENABLED', 'Enabled', false], ['INDI_DISABLED', 'Disabled', true])
+	readonly #autoSync = makeSwitchVector('', 'DOME_AUTO_SYNC', 'Slaved', MAIN_CONTROL, 'OneOfMany', 'rw', ['INDI_ENABLED', 'Enabled', false], ['INDI_DISABLED', 'Disabled', true])
 	readonly #sync = makeNumberVector('', 'DOME_SYNC', 'Sync', MAIN_CONTROL, 'rw', ['DOME_SYNC_VALUE', 'Degrees', 0, 0, 360, 0.01, '%.2f'])
 	readonly #abort = makeSwitchVector('', 'DOME_ABORT_MOTION', 'Abort', MAIN_CONTROL, 'AtMostOne', 'rw', ['ABORT', 'Abort', false])
 
-	protected readonly state: AlpacaClientDomeState = {
-		Connected: false,
-		DeviceState: undefined,
-		Step: 0,
-		CanFindHome: false,
-		CanPark: false,
-		CanSetAltitude: false,
-		CanSetAzimuth: false,
-		CanSetPark: false,
-		CanSetShutter: false,
-		CanSlave: false,
-		CanSyncAzimuth: false,
-		Slewing: false,
-	}
+	protected readonly state: AlpacaClientDomeState = { Connected: false, DeviceState: undefined, Step: 0, CanFindHome: false, CanPark: false, CanSetAltitude: false, CanSetAzimuth: false, CanSetPark: false, CanSetShutter: false, CanSlave: false, CanSyncAzimuth: false, Slewing: false }
 	protected readonly initialEndpoints = ['CanFindHome', 'CanPark', 'CanSetAltitude', 'CanSetAzimuth', 'CanSetPark', 'CanSetShutter', 'CanSlave', 'CanSyncAzimuth'] as const
 	protected readonly deviceStateEndpoints = ['Altitude', 'AtHome', 'AtPark', 'Azimuth', 'ShutterStatus', 'Slaved', 'Slewing'] as const
 	protected readonly runningEndpoints = ['Slaved'] as const
@@ -1982,7 +1969,7 @@ class AlpacaDome extends AlpacaDevice {
 		this.#park.device = device.DeviceName
 		this.#parkOption.device = device.DeviceName
 		this.#shutter.device = device.DeviceName
-		this.#autosync.device = device.DeviceName
+		this.#autoSync.device = device.DeviceName
 		this.#sync.device = device.DeviceName
 		this.#abort.device = device.DeviceName
 
@@ -2021,7 +2008,7 @@ class AlpacaDome extends AlpacaDevice {
 			if (CanPark) this.sendDefProperty(this.#park)
 			if (CanSetPark) this.sendDefProperty(this.#parkOption)
 			if (CanSetShutter) this.sendDefProperty(this.#shutter)
-			if (CanSlave) this.sendDefProperty(this.#autosync)
+			if (CanSlave) this.sendDefProperty(this.#autoSync)
 			if (CanSyncAzimuth) this.sendDefProperty(this.#sync)
 			this.sendDefProperty(this.#abort)
 
@@ -2060,9 +2047,9 @@ class AlpacaDome extends AlpacaDevice {
 				updated && this.sendSetProperty(this.#shutter)
 			}
 
-			if (this.properties.has(this.#autosync) && Slaved !== undefined) {
-				const updated = this.updatePropertyValue(this.#autosync, Slaved ? 'INDI_ENABLED' : 'INDI_DISABLED', true)
-				updated && this.sendSetProperty(this.#autosync)
+			if (this.properties.has(this.#autoSync) && Slaved !== undefined) {
+				const updated = this.updatePropertyValue(this.#autoSync, Slaved ? 'INDI_ENABLED' : 'INDI_DISABLED', true)
+				updated && this.sendSetProperty(this.#autoSync)
 			}
 		}
 
@@ -2087,7 +2074,7 @@ class AlpacaDome extends AlpacaDevice {
 				if (vector.elements.SHUTTER_OPEN === true && this.state.CanSetShutter) void this.api.openShutter(this.id)
 				else if (vector.elements.SHUTTER_CLOSE === true && this.state.CanSetShutter) void this.api.closeShutter(this.id)
 				break
-			case 'DOME_AUTOSYNC':
+			case 'DOME_AUTO_SYNC':
 				if (this.state.CanSlave) {
 					if (vector.elements.INDI_ENABLED === true) void this.api.setSlaved(this.id, true)
 					else if (vector.elements.INDI_DISABLED === true) void this.api.setSlaved(this.id, false)
@@ -2120,15 +2107,15 @@ class AlpacaDome extends AlpacaDevice {
 function alpacaDomeShutterStatus(status: AlpacaDomeShutterState) {
 	switch (status) {
 		case AlpacaDomeShutterState.OPEN:
-			return { open: true, closed: false, state: 'Idle' as const }
+			return { open: true, closed: false, state: 'Idle' } as const
 		case AlpacaDomeShutterState.CLOSED:
-			return { open: false, closed: true, state: 'Idle' as const }
+			return { open: false, closed: true, state: 'Idle' } as const
 		case AlpacaDomeShutterState.OPENING:
-			return { open: true, closed: false, state: 'Busy' as const }
+			return { open: true, closed: false, state: 'Busy' } as const
 		case AlpacaDomeShutterState.CLOSING:
-			return { open: false, closed: true, state: 'Busy' as const }
+			return { open: false, closed: true, state: 'Busy' } as const
 		case AlpacaDomeShutterState.ERROR:
-			return { open: false, closed: false, state: 'Alert' as const }
+			return { open: false, closed: false, state: 'Alert' } as const
 	}
 }
 

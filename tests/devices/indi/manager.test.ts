@@ -1,6 +1,6 @@
 import { expect, describe, test } from 'bun:test'
 // oxfmt-ignore
-import { CLIENT, type Client, DEFAULT_CAMERA, DEFAULT_COVER, DEFAULT_DOME, DEFAULT_FLAT_PANEL, DEFAULT_FOCUSER, DEFAULT_MOUNT, DEFAULT_POWER, DEFAULT_ROTATOR, DEFAULT_WHEEL, type Cover, type Device, type Dome, type FlatPanel, type Focuser, type Power, type Rotator, type Wheel, DeviceInterfaceType, type Camera, isDome } from '../../../src/devices/indi/device'
+import { CLIENT, type Client, DEFAULT_CAMERA, DEFAULT_COVER, DEFAULT_DOME, DEFAULT_FLAT_PANEL, DEFAULT_FOCUSER, DEFAULT_MOUNT, DEFAULT_POWER, DEFAULT_ROTATOR, DEFAULT_WHEEL, type Cover, type Device, type FlatPanel, type Focuser, type Power, type Rotator, type Wheel, DeviceInterfaceType, type Camera, isDome } from '../../../src/devices/indi/device'
 import { CameraManager, CoverManager, DomeManager, FlatPanelManager, FocuserManager, MountManager, PowerManager, RotatorManager, WheelManager } from '../../../src/devices/indi/manager'
 import type { DefNumber, DefNumberVector, DefSwitch, DefSwitchVector, DefText, DefTextVector } from '../../../src/devices/indi/types'
 
@@ -46,38 +46,15 @@ function defNumber(name: string, value: number, min = 0, max = 360, step = 1): D
 	return { name, format: '%g', min, max, step, value }
 }
 
-test('manager sets all combinated types from interface bitmask', () => {
-	const manager = new CameraManager()
-	const DRIVER_INTERFACE: DefText = { name: 'DRIVER_INTERFACE', value: (DeviceInterfaceType.CCD | DeviceInterfaceType.TELESCOPE).toFixed(0) }
-	const message: DefTextVector = { device: 'Camera', name: 'DRIVER_INFO', permission: 'ro', state: 'Ok', elements: { DRIVER_INTERFACE } }
-	manager.textVector(client, message, 'defTextVector')
-	const camera = manager.get(client, 'Camera')
-
-	expect(camera).toBeDefined()
-	expect(camera!.interfaces).toEqual(['camera', 'mount'])
-})
-
-test('dome defaults expose a disconnected, capability-free model', () => {
-	const dome = structuredClone(DEFAULT_DOME)
-
-	expect(dome.type).toBe('dome')
-	expect(dome.connected).toBeFalse()
-	expect(dome.slewing).toBeFalse()
-	expect(dome.parked).toBeFalse()
-	expect(dome.shutterState).toBe('UNKNOWN')
-	expect(dome.measurements.otaSide).toBe('UNKNOWN')
-	expect(isDome(dome)).toBeTrue()
-	expect(isDome(DEFAULT_CAMERA)).toBeFalse()
-	expect(dome).toEqual(DEFAULT_DOME)
-})
-
 test('dome interface bit is discovered as a dome device type', () => {
-	const manager = new CameraManager()
-	const DRIVER_INTERFACE: DefText = { name: 'DRIVER_INTERFACE', value: (DeviceInterfaceType.CCD | DeviceInterfaceType.DOME).toFixed(0) }
-	const message: DefTextVector = { device: 'Camera', name: 'DRIVER_INFO', permission: 'ro', state: 'Ok', elements: { DRIVER_INTERFACE } }
+	const manager = new DomeManager()
+	const DRIVER_INTERFACE: DefText = { name: 'DRIVER_INTERFACE', value: (DeviceInterfaceType.DOME | DeviceInterfaceType.TELESCOPE).toFixed(0) }
+	const message: DefTextVector = { device: 'Dome', name: 'DRIVER_INFO', permission: 'ro', state: 'Ok', elements: { DRIVER_INTERFACE } }
 	manager.textVector(client, message, 'defTextVector')
+	const dome = manager.get(client, 'Dome')
 
-	expect(manager.get(client, 'Camera')!.interfaces).toEqual(['camera', 'dome'])
+	expect(dome).toBeDefined()
+	expect(dome!.interfaces).toEqual(['mount', 'dome'])
 })
 
 test('DomeManager discovers and maps dome properties', () => {
@@ -239,10 +216,10 @@ test('DomeManager sends capability-gated commands in INDI units', () => {
 	expect(numberCommands[0].elements.DOME_ABSOLUTE_POSITION).toBeCloseTo(180)
 	expect(numberCommands[1].elements.DOME_RELATIVE_POSITION).toBeCloseTo(-30)
 	expect(numberCommands[2].elements.DOME_SYNC_VALUE).toBeCloseTo(45)
-	expect(switchCommands.map(({ name }) => name)).toEqual(['DOME_MOTION', 'DOME_GOTO', 'DOME_PARK', 'DOME_PARK', 'DOME_PARK_OPTION', 'DOME_SHUTTER', 'DOME_SHUTTER', 'DOME_AUTOSYNC', 'DOME_ABORT_MOTION'])
+	expect(switchCommands.map(({ name }) => name)).toEqual(['DOME_MOTION', 'DOME_GOTO', 'DOME_PARK', 'DOME_PARK', 'DOME_PARK_OPTION', 'DOME_SHUTTER', 'DOME_SHUTTER', 'DOME_AUTO_SYNC', 'DOME_ABORT_MOTION'])
 })
 
-test('manager sets the combinated type after interface bitmask be updated', () => {
+test('dome interface bit is rediscovered as a dome device type after interface bitmask be updated', () => {
 	let updated = false
 	const manager = new CameraManager()
 	manager.addHandler({

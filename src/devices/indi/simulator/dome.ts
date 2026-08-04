@@ -24,36 +24,17 @@ export class DomeSimulator extends DeviceSimulator {
 	readonly #abort = makeSwitchVector('', 'DOME_ABORT_MOTION', 'Abort', MAIN_CONTROL, 'AtMostOne', 'rw', ['ABORT', 'Abort', false])
 	readonly #shutter = makeSwitchVector('', 'DOME_SHUTTER', 'Shutter', MAIN_CONTROL, 'OneOfMany', 'rw', ['SHUTTER_OPEN', 'Open', false], ['SHUTTER_CLOSE', 'Close', true])
 	readonly #goto = makeSwitchVector('', 'DOME_GOTO', 'Home/Park', MAIN_CONTROL, 'OneOfMany', 'rw', ['DOME_HOME', 'Home', false], ['DOME_PARK', 'Park', false])
-	readonly #params = makeNumberVector(
-		'',
-		'DOME_PARAMS',
-		'Parameters',
-		MAIN_CONTROL,
-		'rw',
-		['HOME_POSITION', 'Home position', DOME_DEFAULT_HOME_AZIMUTH, 0, 360, 0.1, '%.2f'],
-		['PARK_POSITION', 'Park position', DOME_DEFAULT_PARK_AZIMUTH, 0, 360, 0.1, '%.2f'],
-		['AUTOSYNC_THRESHOLD', 'Auto-sync threshold', 1, 0, 360, 0.1, '%.2f'],
-	)
-	readonly #autosync = makeSwitchVector('', 'DOME_AUTOSYNC', 'Auto-sync', MAIN_CONTROL, 'OneOfMany', 'rw', ['INDI_ENABLED', 'Enabled', false], ['INDI_DISABLED', 'Disabled', true])
+	// oxfmt-ignore
+	readonly #params = makeNumberVector('', 'DOME_PARAMS', 'Parameters',MAIN_CONTROL, 'rw', ['HOME_POSITION', 'Home position', DOME_DEFAULT_HOME_AZIMUTH, 0, 360, 0.1, '%.2f'], ['PARK_POSITION', 'Park position', DOME_DEFAULT_PARK_AZIMUTH, 0, 360, 0.1, '%.2f'], ['AUTO_SYNC_THRESHOLD', 'Auto-sync threshold', 1, 0, 360, 0.1, '%.2f'])
+	readonly #autoSync = makeSwitchVector('', 'DOME_AUTO_SYNC', 'Auto-sync', MAIN_CONTROL, 'OneOfMany', 'rw', ['INDI_ENABLED', 'Enabled', false], ['INDI_DISABLED', 'Disabled', true])
 	readonly #sync = makeNumberVector('', 'DOME_SYNC', 'Sync', MAIN_CONTROL, 'rw', ['DOME_SYNC_VALUE', 'Degrees', 0, 0, 360, 0.1, '%.2f'])
 	readonly #park = makeSwitchVector('', 'DOME_PARK', 'Park', MAIN_CONTROL, 'OneOfMany', 'rw', ['PARK', 'Park', false], ['UNPARK', 'Unpark', true])
 	readonly #parkPosition = makeNumberVector('', 'DOME_PARK_POSITION', 'Park position', MAIN_CONTROL, 'rw', ['PARK_AZ', 'Degrees', DOME_DEFAULT_PARK_AZIMUTH, 0, 360, 0.1, '%.2f'])
 	readonly #parkOption = makeSwitchVector('', 'DOME_PARK_OPTION', 'Park option', MAIN_CONTROL, 'OneOfMany', 'rw', ['PARK_CURRENT', 'Park current position', false])
 	readonly #backlashToggle = makeSwitchVector('', 'DOME_BACKLASH_TOGGLE', 'Backlash', MAIN_CONTROL, 'OneOfMany', 'rw', ['INDI_ENABLED', 'Enabled', false], ['INDI_DISABLED', 'Disabled', true])
 	readonly #backlashSteps = makeNumberVector('', 'DOME_BACKLASH_STEPS', 'Backlash steps', MAIN_CONTROL, 'rw', ['DOME_BACKLASH_VALUE', 'Steps', 0, 0, 1000, 1, '%.0f'])
-	readonly #measurements = makeNumberVector(
-		'',
-		'DOME_MEASUREMENTS',
-		'Measurements',
-		MAIN_CONTROL,
-		'ro',
-		['DOME_RADIUS', 'Radius', 3, 0, 100, 0.01, '%.2f'],
-		['DOME_SHUTTER_WIDTH', 'Shutter width', 1, 0, 100, 0.01, '%.2f'],
-		['DOME_NORTH_DISPLACEMENT', 'North displacement', 0, -100, 100, 0.01, '%.2f'],
-		['DOME_EAST_DISPLACEMENT', 'East displacement', 0, -100, 100, 0.01, '%.2f'],
-		['DOME_UP_DISPLACEMENT', 'Up displacement', 0, -100, 100, 0.01, '%.2f'],
-		['DOME_OTA_OFFSET', 'OTA offset', 0, -100, 100, 0.01, '%.2f'],
-	)
+	// oxfmt-ignore
+	readonly #measurements = makeNumberVector('', 'DOME_MEASUREMENTS', 'Measurements', MAIN_CONTROL, 'ro', ['DOME_RADIUS', 'Radius', 3, 0, 100, 0.01, '%.2f'], ['DOME_SHUTTER_WIDTH', 'Shutter width', 1, 0, 100, 0.01, '%.2f'],		['DOME_NORTH_DISPLACEMENT', 'North displacement', 0, -100, 100, 0.01, '%.2f'],		['DOME_EAST_DISPLACEMENT', 'East displacement', 0, -100, 100, 0.01, '%.2f'],		['DOME_UP_DISPLACEMENT', 'Up displacement', 0, -100, 100, 0.01, '%.2f'],		['DOME_OTA_OFFSET', 'OTA offset', 0, -100, 100, 0.01, '%.2f']	)
 	readonly #otaSide = makeSwitchVector('', 'DM_OTA_SIDE', 'OTA side', MAIN_CONTROL, 'OneOfMany', 'rw', ['DM_OTA_EAST', 'East', false], ['DM_OTA_WEST', 'West', false])
 
 	protected readonly properties: readonly SimulatorProperty[] = [
@@ -65,7 +46,7 @@ export class DomeSimulator extends DeviceSimulator {
 		this.#shutter,
 		this.#goto,
 		this.#params,
-		this.#autosync,
+		this.#autoSync,
 		this.#sync,
 		this.#park,
 		this.#parkPosition,
@@ -181,8 +162,8 @@ export class DomeSimulator extends DeviceSimulator {
 				if (vector.elements.PARK === true) this.park()
 				else if (vector.elements.UNPARK === true) this.unpark()
 				return
-			case 'DOME_AUTOSYNC':
-				if (applyExclusiveSwitchValues(this.#autosync, vector.elements)) this.notify(this.#autosync)
+			case 'DOME_AUTO_SYNC':
+				if (applyExclusiveSwitchValues(this.#autoSync, vector.elements)) this.notify(this.#autoSync)
 				return
 			case 'DOME_PARK_OPTION':
 				if (vector.elements.PARK_CURRENT === true) this.setPark()
@@ -298,9 +279,9 @@ export class DomeSimulator extends DeviceSimulator {
 	stop(alert = true) {
 		const moving = this.stopMotion(alert)
 		const shutterMoving = this.stopShutter(alert)
-		const slaved = this.#autosync.elements.INDI_ENABLED.value
+		const slaved = this.#autoSync.elements.INDI_ENABLED.value
 
-		if (slaved && applyExclusiveSwitchValues(this.#autosync, { INDI_DISABLED: true })) this.notify(this.#autosync)
+		if (slaved && applyExclusiveSwitchValues(this.#autoSync, { INDI_DISABLED: true })) this.notify(this.#autoSync)
 
 		if (moving || shutterMoving) {
 			this.#abort.state = alert ? 'Ok' : 'Idle'
