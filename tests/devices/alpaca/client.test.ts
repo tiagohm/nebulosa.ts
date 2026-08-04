@@ -373,6 +373,48 @@ describe.skipIf(SKIP)('client', async () => {
 		TEST_OPTIONS,
 	)
 
+	test(
+		'dome',
+		async () => {
+			const dome = domeManager.list(client).values().next().value
+			if (!dome) return
+
+			domeManager.connect(dome)
+			await expectUntil(dome, 'connected', true)
+			await Bun.sleep(2000)
+
+			expect(dome.canAbort).toBeTrue()
+			expect(dome.canSetAzimuth).toBeTrue()
+			expect(dome.canFindHome).toBeTrue()
+			expect(dome.canPark).toBeTrue()
+			expect(dome.canSetShutter).toBeTrue()
+			expect(dome.canSlave).toBeTrue()
+
+			domeManager.moveTo(dome, deg(90))
+			await expectUntil(dome, 'moving', true)
+			await expectUntil(dome, 'moving', false, 15000)
+			expect(dome.azimuth.value).toBeCloseTo(deg(90), 2)
+
+			domeManager.home(dome)
+			await expectUntil(dome, 'atHome', true, 15000)
+			domeManager.park(dome)
+			await expectUntil(dome, 'parked', true, 15000)
+
+			domeManager.openShutter(dome)
+			await expectUntil(dome, 'shutterState', 'OPEN', 10000)
+			domeManager.closeShutter(dome)
+			await expectUntil(dome, 'shutterState', 'CLOSED', 10000)
+
+			domeManager.slave(dome, true)
+			await expectUntil(dome, 'slaved', true, 10000)
+			domeManager.stop(dome)
+			await expectUntil(dome, 'slaved', false, 10000)
+			domeManager.disconnect(dome)
+			await expectUntil(dome, 'connected', false)
+		},
+		TEST_OPTIONS,
+	)
+
 	// Rotation Rate = 36 deg/sec
 	test(
 		'rotator',
