@@ -1,4 +1,6 @@
 import { describe, expect, test } from 'bun:test'
+import { equatorialToJ2000 } from '../../../../src/astronomy/coordinates/coordinate'
+import { timeNow, timeUnix } from '../../../../src/astronomy/time/time'
 import { PI } from '../../../../src/core/constants'
 import { IndiClientHandlerSet } from '../../../../src/devices/indi/client'
 import type { GuideOutput, Thermometer } from '../../../../src/devices/indi/device'
@@ -16,7 +18,7 @@ import type { BahtinovAnalysisInput, BahtinovAnalysisOptions } from '../../../..
 import { readImageFromBuffer } from '../../../../src/imaging/model/image'
 import type { Image, ImageRawType } from '../../../../src/imaging/model/types'
 import { mulberry32 } from '../../../../src/math/numerical/random'
-import { deg, formatDEC, formatRA, hour } from '../../../../src/math/units/angle'
+import { arcsec, deg, formatDEC, formatRA, hour, normalizePI, toArcsec, toDeg } from '../../../../src/math/units/angle'
 import { CameraFrameReceiver, isTimeConsumingTestSkipped, waitUntil } from '../../../util'
 
 // Integration coverage for simulated camera acquisition, rendering, metadata, and related devices.
@@ -395,6 +397,1004 @@ describe.skipIf(SKIP)('camera simulator', () => {
 			mountSimulator.dispose()
 		}
 	}, 5000)
+
+	test('displaces the synthetic scene by the configured pointing error', async () => {
+		const handler = new IndiClientHandlerSet()
+		const mountManager = new MountManager()
+		const cameraManager = new CameraManager()
+		using client = new ClientSimulator('camera.pointing.error.simulator', handler)
+		const frameReceiver = new CameraFrameReceiver()
+
+		handler.add(mountManager)
+		handler.add(cameraManager)
+
+		cameraManager.addHandler(frameReceiver)
+
+		// A single star exactly at the queried centre lands on the sensor centre when the mount points
+		// perfectly, so any displacement of the brightest pixel is the pointing error itself.
+		const catalogProvider: CatalogSource = (rightAscension, declination) => [{ snr: 200, hfd: 2, flux: 4000, rightAscension, declination }]
+
+		using mountSimulator = new MountSimulator('Mount Simulator', client)
+		using cameraSimulator = new CameraSimulator('Camera Simulator', client, { mountManager, catalogSources: { CENTERED: catalogProvider } })
+		const mount = mountManager.get(client, mountSimulator.name)!
+		const camera = cameraManager.get(client, cameraSimulator.name)!
+
+		mountSimulator.connect()
+		cameraSimulator.connect()
+		await waitUntil(() => mount.connected && camera.connected)
+
+		// Away from the pole, where the polar-alignment model is well conditioned.
+		mountSimulator.syncTo(hour(5), deg(20))
+		await waitUntil(() => closeTo(mount.equatorialCoordinate.declination, deg(20), 1e-9))
+
+		cameraManager.snoop(camera, mount)
+		await waitUntil(() => cameraManager.properties.get(camera)?.ACTIVE_DEVICES?.elements.ACTIVE_TELESCOPE.value === mount.name)
+
+		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_NOISE_FEATURES', elements: { SKY_ENABLED: false, LIGHT_POLLUTION_ENABLED: false } })
+
+		try {
+			// Baseline with perfect pointing: the star sits at the centre of the sensor.
+			client.sendSwitch({ device: camera.name, name: 'SIMULATOR_CATALOG_SOURCE', elements: { CENTERED: true } })
+			await waitUntil(() => cameraManager.properties.get(camera)?.SIMULATOR_CATALOG_SOURCE?.elements.CENTERED.value === true)
+
+			cameraSimulator.startExposure(0.05)
+			await waitUntil(() => frameReceiver.length > 0, 10000, 50)
+			const centered = await readImageFromBuffer(frameReceiver.lastFrame)
+			const [centeredX, centeredY] = brightestPixel(centered!.raw, centered!.header.NAXIS1 as number, centered!.metadata.channels)
+
+			expect(centeredX).toBeCloseTo((1280 - 1) * 0.5, -1)
+			expect(centeredY).toBeCloseTo((1024 - 1) * 0.5, -1)
+
+			// A large polar-alignment error must move the star measurably. The exact displacement
+			// depends on the hour angle at render time, so only its presence and bound are asserted.
+			client.sendSwitch({ device: mount.name, name: 'SIMULATOR_ERROR_FEATURES', elements: { ALIGNMENT: true } })
+			client.sendNumber({ device: mount.name, name: 'MOUNT_ALIGNMENT', elements: { POLAR_AZIMUTH_ERROR: 1800, POLAR_ALTITUDE_ERROR: 1800, CONE_ERROR: 0, AXIS_NON_ORTHOGONALITY: 0, RA_INDEX_ERROR: 0, DEC_INDEX_ERROR: 0 } })
+			await waitUntil(() => mountSimulator.pointingErrorBound > 0)
+
+			cameraSimulator.startExposure(0.05)
+			await waitUntil(() => frameReceiver.length > 1, 10000, 50)
+			const shifted = await readImageFromBuffer(frameReceiver.lastFrame)
+			const [shiftedX, shiftedY] = brightestPixel(shifted!.raw, shifted!.header.NAXIS1 as number, shifted!.metadata.channels)
+
+			const displacement = Math.hypot(shiftedX - centeredX, shiftedY - centeredY)
+			expect(displacement).toBeGreaterThan(5)
+			expect(displacement).toBeLessThan(1400)
+
+			// The built-in RANDOM scene must react to the same error. It generates stars directly in
+			// pixel space and ignores the catalog centre, so before the displacement moved to the
+			// projection stage it was the one source the pointing errors could not reach at all.
+			client.sendSwitch({ device: camera.name, name: 'SIMULATOR_CATALOG_SOURCE', elements: { RANDOM: true } })
+			await waitUntil(() => cameraManager.properties.get(camera)?.SIMULATOR_CATALOG_SOURCE?.elements.RANDOM.value === true)
+			client.sendNumber({ device: mount.name, name: 'MOUNT_ALIGNMENT', elements: { POLAR_AZIMUTH_ERROR: 0, POLAR_ALTITUDE_ERROR: 0, CONE_ERROR: 0, AXIS_NON_ORTHOGONALITY: 0, RA_INDEX_ERROR: 0, DEC_INDEX_ERROR: 0 } })
+			await waitUntil(() => mountSimulator.pointingErrorBound === 0)
+
+			cameraSimulator.startExposure(0.05)
+			await waitUntil(() => frameReceiver.length > 2, 10000, 50)
+			const randomAligned = await readImageFromBuffer(frameReceiver.lastFrame)
+
+			client.sendNumber({ device: mount.name, name: 'MOUNT_ALIGNMENT', elements: { POLAR_AZIMUTH_ERROR: 1800, POLAR_ALTITUDE_ERROR: 1800, CONE_ERROR: 0, AXIS_NON_ORTHOGONALITY: 0, RA_INDEX_ERROR: 0, DEC_INDEX_ERROR: 0 } })
+			await waitUntil(() => mountSimulator.pointingErrorBound > 0)
+
+			cameraSimulator.startExposure(0.05)
+			await waitUntil(() => frameReceiver.length > 3, 10000, 50)
+			const randomShifted = await readImageFromBuffer(frameReceiver.lastFrame)
+
+			let changed = 0
+			for (let i = 0; i < randomAligned!.raw.length; i++) {
+				if (randomAligned!.raw[i] !== randomShifted!.raw[i]) changed++
+			}
+
+			expect(changed).toBeGreaterThan(0)
+
+			// The scene margin is derived from the configured error, so the displaced field keeps stars
+			// across the whole frame instead of sweeping its trailing edge clean. Compare the mean
+			// signal of the two halves along each axis: a scene generated only over the sensor would
+			// leave one side markedly darker.
+			const width = randomShifted!.header.NAXIS1 as number
+			const height = randomShifted!.header.NAXIS2 as number
+			const channels = randomShifted!.metadata.channels
+			const raw = randomShifted!.raw
+			let left = 0
+			let right = 0
+			let top = 0
+			let bottom = 0
+
+			for (let y = 0; y < height; y++) {
+				for (let x = 0; x < width; x++) {
+					let value = 0
+					for (let c = 0; c < channels; c++) value += raw[(y * width + x) * channels + c]
+					if (x < width / 2) left += value
+					else right += value
+					if (y < height / 2) top += value
+					else bottom += value
+				}
+			}
+
+			expect(Math.min(left, right) / Math.max(left, right)).toBeGreaterThan(0.5)
+			expect(Math.min(top, bottom) / Math.max(top, bottom)).toBeGreaterThan(0.5)
+		} finally {
+			cameraSimulator.dispose()
+			mountSimulator.dispose()
+		}
+	}, 15000)
+
+	test('keeps stars on the leading edge when the field sweeps during the exposure', async () => {
+		const handler = new IndiClientHandlerSet()
+		const mountManager = new MountManager()
+		const cameraManager = new CameraManager()
+		using client = new ClientSimulator('camera.travel.simulator', handler)
+		const frameReceiver = new CameraFrameReceiver()
+
+		handler.add(mountManager)
+		handler.add(cameraManager)
+		cameraManager.addHandler(frameReceiver)
+
+		// One star at the queried centre and one on each side, just outside the sensor. The outer pair is
+		// only reachable because the field sweeps during the exposure, so whether either survives the
+		// catalog is exactly the question the margin decides.
+		const outerPixels = 700
+		const catalogProvider: CatalogSource = (rightAscension, declination) => {
+			const offset = arcsec(outerPixels * 2.145) / Math.cos(declination)
+			return [
+				{ snr: 200, hfd: 2, flux: 40000, rightAscension, declination },
+				{ snr: 200, hfd: 2, flux: 40000, rightAscension: rightAscension + offset, declination },
+				{ snr: 200, hfd: 2, flux: 40000, rightAscension: rightAscension - offset, declination },
+			]
+		}
+
+		using mountSimulator = new MountSimulator('Mount Simulator', client)
+		using cameraSimulator = new CameraSimulator('Camera Simulator', client, { mountManager, catalogSources: { SPREAD: catalogProvider } })
+		const mount = mountManager.get(client, mountSimulator.name)!
+		const camera = cameraManager.get(client, cameraSimulator.name)!
+
+		mountSimulator.connect()
+		cameraSimulator.connect()
+		await waitUntil(() => mount.connected && camera.connected)
+
+		mountSimulator.syncTo(hour(5), deg(20))
+		await waitUntil(() => closeTo(mount.equatorialCoordinate.declination, deg(20), 1e-9))
+
+		cameraManager.snoop(camera, mount)
+		await waitUntil(() => cameraManager.properties.get(camera)?.ACTIVE_DEVICES?.elements.ACTIVE_TELESCOPE.value === mount.name)
+
+		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_NOISE_FEATURES', elements: { SKY_ENABLED: false, LIGHT_POLLUTION_ENABLED: false } })
+		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_CATALOG_SOURCE', elements: { SPREAD: true } })
+		await waitUntil(() => cameraManager.properties.get(camera)?.SIMULATOR_CATALOG_SOURCE?.elements.SPREAD.value === true)
+
+		try {
+			// The mount points perfectly, so the pointing error contributes no margin at all. What sweeps
+			// the field is commanded motion, which the error bound knows nothing about.
+			expect(mountSimulator.pointingErrorBound).toBe(0)
+
+			// Half a degree per second for a fifth of a second is a couple of hundred pixels of travel,
+			// enough to pull one of the outer stars onto a sensor it started sixty pixels clear of.
+			mountSimulator.setSlewRate('SPEED_1')
+			mountSimulator.moveWest(true)
+			cameraSimulator.startExposure(0.2)
+			await waitUntil(() => frameReceiver.length > 0, 10000, 50)
+			mountSimulator.moveWest(false)
+
+			const frame = await readImageFromBuffer(frameReceiver.lastFrame)
+			const width = frame!.header.NAXIS1 as number
+			const height = frame!.header.NAXIS2 as number
+			const channels = frame!.metadata.channels
+			const raw = frame!.raw
+			// Measured against the brightest pixel in the frame rather than an absolute level, since the
+			// background sits well above zero even with the sky and light pollution switched off. Every
+			// star carries the same flux, so a core anywhere reaches a comparable peak.
+			let peak = 0
+			for (let i = 0; i < raw.length; i += channels) {
+				let value = 0
+				for (let c = 0; c < channels; c++) value += raw[i + c]
+				peak = Math.max(peak, value)
+			}
+
+			let outerLit = 0
+
+			for (let y = 0; y < height; y++) {
+				for (let x = 0; x < width; x++) {
+					if (x >= 200 && x < width - 200) continue
+					let value = 0
+					for (let c = 0; c < channels; c++) value += raw[(y * width + x) * channels + c]
+					if (value > peak * 0.5) outerLit++
+				}
+			}
+
+			// A scene sized to the sensor alone drops both outer stars before the trail can translate
+			// them, so the edges come out with nothing but background.
+			expect(outerLit).toBeGreaterThan(0)
+		} finally {
+			cameraSimulator.dispose()
+			mountSimulator.dispose()
+		}
+	}, 15000)
+
+	test('renders the same frame whether the catalog resolves at once or slowly', async () => {
+		// A CatalogSource is explicitly allowed to be asynchronous and network-backed, and the mount
+		// keeps ticking while one resolves. Reading the trajectory after the query came back would end
+		// the trail at the wrong instant and measure it against a coordinate the mount had since left,
+		// so a slow provider would place the field somewhere a fast one did not.
+		async function centreOfStar(disturb: boolean, name: string) {
+			const handler = new IndiClientHandlerSet()
+			const mountManager = new MountManager()
+			const cameraManager = new CameraManager()
+			using client = new ClientSimulator(name, handler)
+			const frameReceiver = new CameraFrameReceiver()
+
+			handler.add(mountManager)
+			handler.add(cameraManager)
+			cameraManager.addHandler(frameReceiver)
+
+			// Slews the mount while the query is in flight, which is what makes the two readings differ:
+			// the interval that follows the query is nothing like the one the exposure covered.
+			const catalogProvider: CatalogSource = async (rightAscension, declination) => {
+				if (disturb) {
+					mountSimulator.setSlewRate('SPEED_6')
+					mountSimulator.goTo(mountSimulator.rightAscension + deg(60), mountSimulator.declination)
+					await Bun.sleep(600)
+				}
+
+				return [{ snr: 200, hfd: 2, flux: 400, rightAscension, declination }]
+			}
+
+			using mountSimulator = new MountSimulator('Mount Simulator', client)
+			using cameraSimulator = new CameraSimulator('Camera Simulator', client, { mountManager, catalogSources: { CENTERED: catalogProvider } })
+			const mount = mountManager.get(client, mountSimulator.name)!
+			const camera = cameraManager.get(client, cameraSimulator.name)!
+
+			mountSimulator.connect()
+			cameraSimulator.connect()
+			await waitUntil(() => mount.connected && camera.connected)
+
+			mountSimulator.syncTo(hour(5), deg(20))
+			await waitUntil(() => closeTo(mount.equatorialCoordinate.declination, deg(20), 1e-9))
+
+			cameraManager.snoop(camera, mount)
+			await waitUntil(() => cameraManager.properties.get(camera)?.ACTIVE_DEVICES?.elements.ACTIVE_TELESCOPE.value === mount.name)
+
+			client.sendSwitch({ device: camera.name, name: 'SIMULATOR_NOISE_FEATURES', elements: { SKY_ENABLED: false, LIGHT_POLLUTION_ENABLED: false } })
+			client.sendSwitch({ device: camera.name, name: 'SIMULATOR_CATALOG_SOURCE', elements: { CENTERED: true } })
+			await waitUntil(() => cameraManager.properties.get(camera)?.SIMULATOR_CATALOG_SOURCE?.elements.CENTERED.value === true)
+
+			cameraSimulator.startExposure(0.05)
+			await waitUntil(() => frameReceiver.length > 0, 10000, 50)
+			const frame = await readImageFromBuffer(frameReceiver.lastFrame)
+			const [x, y, v] = brightestPixel(frame!.raw, frame!.header.NAXIS1 as number, frame!.metadata.channels)
+
+			cameraSimulator.dispose()
+			mountSimulator.dispose()
+			return [x, y, v] as const
+		}
+
+		const immediate = await centreOfStar(false, 'camera.catalog.fast')
+		const delayed = await centreOfStar(true, 'camera.catalog.slow')
+
+		// The exposure was over before either query went out, so what the mount did afterwards must not
+		// reach the frame. Reading the trajectory after the await measured a slew that was still running
+		// when the query came back, smearing a star that had in fact been sitting still, so the peak
+		// collapsed and the point source left the middle of the sensor.
+		expect(delayed[0]).toBe(immediate[0])
+		expect(delayed[1]).toBe(immediate[1])
+		// The peak is compared in relative terms: the two runs open their shutters at different points of
+		// the sidereal drift, so the trail falls on slightly different sub-pixel positions. The failure
+		// this guards against collapsed the peak by orders of magnitude.
+		expect(Math.abs(delayed[2] / immediate[2] - 1)).toBeLessThan(1e-3)
+	}, 20000)
+
+	test('leaves the seeded star field where it was when the scene margin grows', async () => {
+		const handler = new IndiClientHandlerSet()
+		const mountManager = new MountManager()
+		const cameraManager = new CameraManager()
+		using client = new ClientSimulator('camera.margin.stability', handler)
+		const frameReceiver = new CameraFrameReceiver()
+
+		handler.add(mountManager)
+		handler.add(cameraManager)
+		cameraManager.addHandler(frameReceiver)
+
+		using mountSimulator = new MountSimulator('Mount Simulator', client)
+		using cameraSimulator = new CameraSimulator('Camera Simulator', client, { mountManager })
+		const mount = mountManager.get(client, mountSimulator.name)!
+		const camera = cameraManager.get(client, cameraSimulator.name)!
+
+		mountSimulator.connect()
+		cameraSimulator.connect()
+		await waitUntil(() => mount.connected && camera.connected)
+
+		mountSimulator.syncTo(hour(5), deg(20))
+		cameraManager.snoop(camera, mount)
+		await waitUntil(() => cameraManager.properties.get(camera)?.ACTIVE_DEVICES?.elements.ACTIVE_TELESCOPE.value === mount.name)
+
+		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_NOISE_FEATURES', elements: { SKY_ENABLED: false, LIGHT_POLLUTION_ENABLED: false } })
+		// Bright enough that the brightest pixel of the frame is the brightest star rather than the read
+		// noise, and spread over a wide flux range so that one star stands well clear of the rest.
+		client.sendNumber({ device: camera.name, name: 'SIMULATOR_SCENE', elements: { FLUX_MIN: 0.05, FLUX_MAX: 100 } })
+
+		// Tracking, so the field holds still between the two frames and any difference between them is
+		// the scene changing rather than the sky turning.
+		mountSimulator.setTrackingEnabled(true)
+
+		// A periodic error sizes the scene margin, and a worm a day long barely turns over the couple of
+		// seconds this takes: the curve stays within a thousandth of a pixel of where it started, so
+		// changing its amplitude changes how far beyond the sensor the scene reaches and nothing else.
+		client.sendSwitch({ device: mountSimulator.name, name: 'SIMULATOR_ERROR_FEATURES', elements: { PERIODIC_ERROR: true } })
+		client.sendNumber({ device: mountSimulator.name, name: 'MOUNT_PERIODIC_ERROR', elements: { RA_PERIOD: 86400, RA_AMPLITUDE: 30, RA_PHASE: 0, RA_AMPLITUDE_2: 0, RA_AMPLITUDE_3: 0 } })
+
+		async function frameOfStars() {
+			const seen = frameReceiver.length
+			cameraSimulator.startExposure(0.5)
+			await waitUntil(() => frameReceiver.length > seen, 10000, 20)
+			const frame = await readImageFromBuffer(frameReceiver.lastFrame)
+			return frame!.raw
+		}
+
+		const narrow = await frameOfStars()
+
+		// Twenty times the margin, and the field itself must not move.
+		client.sendNumber({ device: mountSimulator.name, name: 'MOUNT_PERIODIC_ERROR', elements: { RA_AMPLITUDE: 600 } })
+
+		const wide = await frameOfStars()
+
+		// However far the worm did turn, it is nothing beside a pixel.
+		expect(toArcsec(Math.abs(normalizePI(mountSimulator.boresight.rightAscension - mountSimulator.mechanical.rightAscension)))).toBeLessThan(0.2)
+
+		// Compared over the whole frame rather than by the brightest pixel, which several saturated stars
+		// can tie for. A star core stands far above the read noise, so a pixel that differs by a quarter
+		// of the peak between the two frames is one where a star is present in one and absent in the
+		// other. Deriving the layout from the margin rescaled every coordinate, so widening the scene
+		// rearranged the sky instead of extending it and every core showed up here.
+		let peak = 0
+		for (let i = 0; i < narrow.length; i++) peak = Math.max(peak, narrow[i])
+
+		let moved = 0
+		for (let i = 0; i < narrow.length; i++) if (Math.abs(narrow[i] - wide[i]) > peak * 0.25) moved++
+
+		expect(peak).toBeGreaterThan(0.1)
+		expect(moved).toBe(0)
+	}, 15000)
+
+	test('keeps integrating the mount the exposure began on', async () => {
+		const handler = new IndiClientHandlerSet()
+		const mountManager = new MountManager()
+		const cameraManager = new CameraManager()
+		using client = new ClientSimulator('camera.mount.switch', handler)
+		const frameReceiver = new CameraFrameReceiver()
+
+		handler.add(mountManager)
+		handler.add(cameraManager)
+		cameraManager.addHandler(frameReceiver)
+
+		const catalogProvider: CatalogSource = (rightAscension, declination) => [{ snr: 200, hfd: 2, flux: 400, rightAscension, declination }]
+
+		using first = new MountSimulator('Mount A', client)
+		using second = new MountSimulator('Mount B', client)
+		using cameraSimulator = new CameraSimulator('Camera Simulator', client, { mountManager, catalogSources: { CENTERED: catalogProvider } })
+		const mountA = mountManager.get(client, first.name)!
+		const mountB = mountManager.get(client, second.name)!
+		const camera = cameraManager.get(client, cameraSimulator.name)!
+
+		first.connect()
+		second.connect()
+		cameraSimulator.connect()
+		await waitUntil(() => mountA.connected && mountB.connected && camera.connected)
+
+		// Two mounts at two sites, so the header can be checked to describe one of them and not the other.
+		client.sendNumber({ device: first.name, name: 'GEOGRAPHIC_COORD', elements: { LAT: -22, LONG: 315, ELEV: 0 } })
+		client.sendNumber({ device: second.name, name: 'GEOGRAPHIC_COORD', elements: { LAT: 40, LONG: 250, ELEV: 0 } })
+		await waitUntil(() => mountA.geographicCoordinate.latitude !== 0 && mountB.geographicCoordinate.latitude !== 0)
+
+		// An hour of right ascension apart: fifteen degrees, hundreds of sensors' worth.
+		first.syncTo(hour(5), deg(20))
+		first.setTrackingEnabled(true)
+		second.syncTo(hour(6), deg(20))
+		second.setTrackingEnabled(true)
+
+		cameraManager.snoop(camera, mountA)
+		await waitUntil(() => cameraManager.properties.get(camera)?.ACTIVE_DEVICES?.elements.ACTIVE_TELESCOPE.value === first.name)
+
+		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_NOISE_FEATURES', elements: { SKY_ENABLED: false, LIGHT_POLLUTION_ENABLED: false } })
+		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_CATALOG_SOURCE', elements: { CENTERED: true } })
+		await waitUntil(() => cameraManager.properties.get(camera)?.SIMULATOR_CATALOG_SOURCE?.elements.CENTERED.value === true)
+
+		// The shutter opens on A, and the telescope is switched under it before the camera has noticed
+		// the exposure finished.
+		cameraSimulator.startExposure(0.001)
+		cameraManager.snoop(camera, mountB)
+		await waitUntil(() => cameraManager.properties.get(camera)?.ACTIVE_DEVICES?.elements.ACTIVE_TELESCOPE.value === second.name)
+
+		await waitUntil(() => frameReceiver.length > 0, 10000, 20)
+		const frame = await readImageFromBuffer(frameReceiver.lastFrame)
+		const [x, y] = brightestPixel(frame!.raw, frame!.header.NAXIS1 as number, frame!.metadata.channels)
+
+		// Looking the mount up again at render time drew B's trajectory around A's catalog centre, which
+		// is fifteen degrees of offset and throws the star clean off the sensor.
+		expect(Math.abs(x - (1280 - 1) * 0.5)).toBeLessThan(5)
+		expect(Math.abs(y - (1024 - 1) * 0.5)).toBeLessThan(5)
+
+		// And the header names the mount whose sky this is. Stamping A's geometry with B's name and site
+		// would leave nothing in the file to reveal the mismatch.
+		expect(frame!.header.TELESCOP).toBe(first.name)
+		expect(frame!.header.SITELAT).toBeCloseTo(toDeg(mountA.geographicCoordinate.latitude), 6)
+		expect(frame!.header.SITELONG).toBeCloseTo(toDeg(mountA.geographicCoordinate.longitude), 6)
+	}, 15000)
+
+	test('integrates the interval the shutter was open, not the one before the frame arrived', async () => {
+		const handler = new IndiClientHandlerSet()
+		const mountManager = new MountManager()
+		const cameraManager = new CameraManager()
+		using client = new ClientSimulator('camera.deadline', handler)
+		const frameReceiver = new CameraFrameReceiver()
+
+		handler.add(mountManager)
+		handler.add(cameraManager)
+		cameraManager.addHandler(frameReceiver)
+
+		// One star, pinned to wherever the very first query was centred and then never moving again, so
+		// where it lands on the sensor reports which coordinate the frame was built around. It has to be
+		// learnt from a query rather than written down here, because a catalog is queried and projected
+		// in J2000 while the mount reports the frame of date.
+		let anchor: readonly [number, number] | undefined
+		const catalogProvider: CatalogSource = (rightAscension, declination) => {
+			anchor ??= [rightAscension, declination]
+			return [{ snr: 200, hfd: 2, flux: 400, rightAscension: anchor[0], declination: anchor[1] }]
+		}
+
+		using mountSimulator = new MountSimulator('Mount Simulator', client)
+		using cameraSimulator = new CameraSimulator('Camera Simulator', client, { mountManager, catalogSources: { CENTERED: catalogProvider } })
+		const mount = mountManager.get(client, mountSimulator.name)!
+		const camera = cameraManager.get(client, cameraSimulator.name)!
+
+		mountSimulator.connect()
+		cameraSimulator.connect()
+		await waitUntil(() => mount.connected && camera.connected)
+
+		mountSimulator.syncTo(hour(5), deg(20))
+		mountSimulator.setTrackingEnabled(true)
+		cameraManager.snoop(camera, mount)
+		await waitUntil(() => cameraManager.properties.get(camera)?.ACTIVE_DEVICES?.elements.ACTIVE_TELESCOPE.value === mount.name)
+
+		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_NOISE_FEATURES', elements: { SKY_ENABLED: false, LIGHT_POLLUTION_ENABLED: false } })
+		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_CATALOG_SOURCE', elements: { CENTERED: true } })
+		await waitUntil(() => cameraManager.properties.get(camera)?.SIMULATOR_CATALOG_SOURCE?.elements.CENTERED.value === true)
+
+		// A first frame, taken with the mount still, teaches the provider where the field is.
+		cameraSimulator.startExposure(0.001)
+		await waitUntil(() => frameReceiver.length > 0, 10000, 20)
+		expect(anchor).toBeDefined()
+
+		// A millisecond of exposure, and then the mount is driven while the camera has not yet noticed
+		// that the shutter closed: its tick is a hundred times the exposure. None of that motion belongs
+		// in the frame.
+		cameraSimulator.startExposure(0.001)
+		mountSimulator.setSlewRate('SPEED_1')
+		mountSimulator.moveEast(true)
+
+		await waitUntil(() => frameReceiver.length > 1, 10000, 20)
+		mountSimulator.moveEast(false)
+
+		const frame = await readImageFromBuffer(frameReceiver.lastFrame)
+		const [x, y] = brightestPixel(frame!.raw, frame!.header.NAXIS1 as number, frame!.metadata.channels)
+
+		// Measuring the window back from the moment the frame was rendered put it entirely after the
+		// exposure, so the star was drawn along a slew it never saw: it ended up 583 pixels away, most of
+		// the way to the edge of the sensor.
+		//
+		// A dozen pixels of leakage survive, and are the resolution of the simulation rather than of the
+		// anchoring: the mount records its trajectory once per tick, so a one-millisecond exposure is a
+		// one per cent slice of a tick through which the mount is interpolated as having moved evenly.
+		expect(Math.abs(x - (1280 - 1) * 0.5)).toBeLessThan(20)
+		expect(Math.abs(y - (1024 - 1) * 0.5)).toBeLessThan(20)
+	}, 15000)
+
+	test('waits for the mount to simulate the interval the shutter was open', async () => {
+		const handler = new IndiClientHandlerSet()
+		const mountManager = new MountManager()
+		const cameraManager = new CameraManager()
+		using client = new ClientSimulator('camera.trajectory.race', handler)
+		const frameReceiver = new CameraFrameReceiver()
+
+		handler.add(mountManager)
+		handler.add(cameraManager)
+		cameraManager.addHandler(frameReceiver)
+
+		const catalogProvider: CatalogSource = (rightAscension, declination) => [{ snr: 200, hfd: 2, flux: 0.4, rightAscension, declination }]
+
+		using mountSimulator = new MountSimulator('Mount Simulator', client)
+		using cameraSimulator = new CameraSimulator('Camera Simulator', client, { mountManager, catalogSources: { CENTERED: catalogProvider } })
+		const mount = mountManager.get(client, mountSimulator.name)!
+		const camera = cameraManager.get(client, cameraSimulator.name)!
+
+		// Both devices step on their own timer of one tick, and the two are deliberately put out of phase
+		// here: the camera is connected most of a tick after the mount, so its tick lands in the middle of
+		// the gap between two of the mount's. That is the ordinary case this has to survive — the camera
+		// noticing its own exposure has finished before the mount has stepped through the interval the
+		// shutter was open for — and putting the two ticks nearly on top of each other would decide it on
+		// a millisecond of scheduling.
+		mountSimulator.connect()
+		await Bun.sleep(70)
+		cameraSimulator.connect()
+		await waitUntil(() => mount.connected && camera.connected)
+
+		mountSimulator.syncTo(hour(5), deg(20))
+		mountSimulator.setTrackingEnabled(true)
+		cameraManager.snoop(camera, mount)
+		await waitUntil(() => cameraManager.properties.get(camera)?.ACTIVE_DEVICES?.elements.ACTIVE_TELESCOPE.value === mount.name)
+
+		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_NOISE_FEATURES', elements: { SKY_ENABLED: false, LIGHT_POLLUTION_ENABLED: false } })
+		client.sendNumber({ device: camera.name, name: 'SIMULATOR_NOISE_SENSOR', elements: { READ_NOISE: 0, BIAS_ELECTRONS: 0, BLACK_LEVEL_ELECTRONS: 0, DARK_CURRENT_AT_REFERENCE_TEMP: 0 } })
+		client.sendNumber({ device: camera.name, name: 'SIMULATOR_NOISE_ARTIFACTS', elements: { FIXED_PATTERN_NOISE_STRENGTH: 0, ROW_NOISE_STRENGTH: 0, COLUMN_NOISE_STRENGTH: 0, BANDING_STRENGTH: 0, HOT_PIXEL_RATE: 0, WARM_PIXEL_RATE: 0, DEAD_PIXEL_RATE: 0 } })
+		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_NOISE_CLAMP_MODE', elements: { NONE: true } })
+		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_CATALOG_SOURCE', elements: { CENTERED: true } })
+		await waitUntil(() => cameraManager.properties.get(camera)?.SIMULATOR_CATALOG_SOURCE?.elements.CENTERED.value === true)
+
+		// Half a tick of exposure, and the reference the flux is scaled against, so the frame carries the
+		// light of a whole one.
+		const exposure = 0.05
+		client.sendNumber({ device: camera.name, name: 'SIMULATOR_NOISE_EXPOSURE', elements: { EXPOSURE_TIME: exposure } })
+		await waitUntil(() => cameraManager.properties.get(camera)?.SIMULATOR_NOISE_EXPOSURE?.elements.EXPOSURE_TIME.value === exposure)
+
+		try {
+			// A degree and a half per second, which over this exposure is a trail hundreds of pixels long.
+			mountSimulator.setSlewRate('SPEED_1')
+			mountSimulator.moveEast(true)
+
+			// Opened just after the mount has stepped, so its next step falls beyond the end of the
+			// exposure: nothing in the retained history covers the window when the camera's own tick
+			// notices the shutter has closed. This is the first frame of the run, before any render has
+			// pushed the camera's tick past the mount's and taken the two out of that order.
+			const stepped = mountSimulator.utcTime
+			await waitUntil(() => mountSimulator.utcTime !== stepped, 5000, 1)
+			cameraSimulator.startExposure(exposure)
+
+			await waitUntil(() => frameReceiver.length > 0, 10000, 5)
+			mountSimulator.moveEast(false)
+
+			const frame = (await readImageFromBuffer(frameReceiver.lastFrame))!
+			const [, , peak] = brightestPixel(frame.raw, frame.header.NAXIS1 as number, frame.metadata.channels)
+			expect(peak).toBeGreaterThan(0)
+
+			// Rendered before the mount had simulated the window, every sample of it clamped to the one
+			// position the history knew and the star came out as a point a handful of pixels across. Drawn
+			// over the motion that really happened, the same light is spread along hundreds of pixels of
+			// trail, and far more of them stand above half of a much lower peak.
+			let lit = 0
+			for (let i = 0; i < frame.raw.length; i++) if (frame.raw[i] >= peak * 0.5) lit++
+			expect(lit).toBeGreaterThan(40)
+		} finally {
+			cameraSimulator.dispose()
+			mountSimulator.dispose()
+		}
+	}, 30000)
+
+	test('publishes one frame even when the mount never catches up', async () => {
+		const handler = new IndiClientHandlerSet()
+		const mountManager = new MountManager()
+		const cameraManager = new CameraManager()
+		using client = new ClientSimulator('camera.finish.once', handler)
+		const frameReceiver = new CameraFrameReceiver()
+
+		handler.add(mountManager)
+		handler.add(cameraManager)
+		cameraManager.addHandler(frameReceiver)
+
+		const catalogProvider: CatalogSource = (rightAscension, declination) => [{ snr: 200, hfd: 2, flux: 400, rightAscension, declination }]
+
+		using mountSimulator = new MountSimulator('Mount Simulator', client)
+		using cameraSimulator = new CameraSimulator('Camera Simulator', client, { mountManager, catalogSources: { CENTERED: catalogProvider } })
+		const mount = mountManager.get(client, mountSimulator.name)!
+		const camera = cameraManager.get(client, cameraSimulator.name)!
+
+		mountSimulator.connect()
+		cameraSimulator.connect()
+		await waitUntil(() => mount.connected && camera.connected)
+
+		mountSimulator.syncTo(hour(5), deg(20))
+		mountSimulator.setTrackingEnabled(true)
+		cameraManager.snoop(camera, mount)
+		await waitUntil(() => cameraManager.properties.get(camera)?.ACTIVE_DEVICES?.elements.ACTIVE_TELESCOPE.value === mount.name)
+
+		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_NOISE_FEATURES', elements: { SKY_ENABLED: false, LIGHT_POLLUTION_ENABLED: false } })
+		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_CATALOG_SOURCE', elements: { CENTERED: true } })
+		await waitUntil(() => cameraManager.properties.get(camera)?.SIMULATOR_CATALOG_SOURCE?.elements.CENTERED.value === true)
+
+		try {
+			// The mount is stopped with the shutter open, so its clock never reaches the end of the
+			// exposure and the render waits out its whole allowance. The exposure stays Busy across that
+			// wait, with the deadline that identified it as finished already cleared, which is exactly the
+			// state a tick must not mistake for another finished frame.
+			cameraSimulator.startExposure(0.05)
+			mountSimulator.disconnect()
+
+			await waitUntil(() => frameReceiver.length > 0, 10000, 5)
+
+			// Well past both the wait and several ticks: a second frame would have arrived by now.
+			await Bun.sleep(500)
+			expect(frameReceiver.length).toBe(1)
+		} finally {
+			cameraSimulator.dispose()
+			mountSimulator.dispose()
+		}
+	}, 20000)
+
+	test('queries the catalog at the epoch the mount believes in', async () => {
+		const handler = new IndiClientHandlerSet()
+		const mountManager = new MountManager()
+		const cameraManager = new CameraManager()
+		using client = new ClientSimulator('camera.epoch', handler)
+
+		handler.add(mountManager)
+		handler.add(cameraManager)
+
+		const frameReceiver = new CameraFrameReceiver()
+		cameraManager.addHandler(frameReceiver)
+
+		let queried: readonly [number, number] | undefined
+
+		const catalogProvider: CatalogSource = (rightAscension, declination) => {
+			queried = [rightAscension, declination]
+			return [{ snr: 200, hfd: 2, flux: 400, rightAscension, declination }]
+		}
+
+		using mountSimulator = new MountSimulator('Mount Simulator', client)
+		using cameraSimulator = new CameraSimulator('Camera Simulator', client, { mountManager, catalogSources: { EPOCH: catalogProvider } })
+		const mount = mountManager.get(client, mountSimulator.name)!
+		const camera = cameraManager.get(client, cameraSimulator.name)!
+
+		mountSimulator.connect()
+		cameraSimulator.connect()
+		await waitUntil(() => mount.connected && camera.connected)
+
+		mountSimulator.syncTo(hour(5), deg(20))
+		// Tracking holds the reported coordinate at exactly the synced one, so the query can be compared
+		// against a conversion of that coordinate rather than of wherever the sky had carried it.
+		mountSimulator.setTrackingEnabled(true)
+		await waitUntil(() => closeTo(mount.equatorialCoordinate.declination, deg(20), 1e-9))
+
+		cameraManager.snoop(camera, mount)
+		await waitUntil(() => cameraManager.properties.get(camera)?.ACTIVE_DEVICES?.elements.ACTIVE_TELESCOPE.value === mount.name)
+
+		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_CATALOG_SOURCE', elements: { EPOCH: true } })
+		await waitUntil(() => cameraManager.properties.get(camera)?.SIMULATOR_CATALOG_SOURCE?.elements.EPOCH.value === true)
+
+		// The mount is told it is 2000, a quarter century before the wall clock.
+		const utc = Date.parse('2000-01-01T12:00:00Z')
+		mountSimulator.setTime({ utc, offset: 0 })
+
+		cameraSimulator.startExposure(0.001)
+		await waitUntil(() => queried !== undefined, 10000, 20)
+
+		// The coordinate the mount reports belongs to the frame of its own date, so that is the epoch the
+		// rotation into J2000 has to use. Nutation still moves it by a few arcseconds at this epoch, which
+		// is why the query is compared against the conversion rather than against the coordinate itself.
+		const [atMountEpoch, atMountEpochDeclination] = equatorialToJ2000(hour(5), deg(20), timeUnix(utc / 1000, true))
+		expect(toArcsec(Math.abs(normalizePI(queried![0] - atMountEpoch)))).toBeLessThan(0.1)
+		expect(toArcsec(Math.abs(queried![1] - atMountEpochDeclination))).toBeLessThan(0.1)
+
+		// Rotating by today's precession instead lands about twenty arcminutes away, on a field the mount
+		// is not pointing at, in a frame stamped with the mount's own timestamp.
+		const [atWallClock] = equatorialToJ2000(hour(5), deg(20), timeNow(true))
+		expect(toArcsec(Math.abs(normalizePI(atWallClock - atMountEpoch)))).toBeGreaterThan(300)
+
+		// And the header has to name the field that was drawn, on the same epoch: a frame whose RA/DEC
+		// keywords disagree with its own pixels is worse than one with none at all.
+		await waitUntil(() => frameReceiver.length > 0, 10000, 20)
+		const frame = await readImageFromBuffer(frameReceiver.lastFrame)
+		expect(toArcsec(Math.abs(normalizePI(deg(frame!.header.RA as number) - atMountEpoch)))).toBeLessThan(0.1)
+		expect(toArcsec(Math.abs(deg(frame!.header.DEC as number) - atMountEpochDeclination))).toBeLessThan(0.1)
+	}, 15000)
+
+	test('centres the catalog on the coordinate the trajectory is measured against', async () => {
+		// The catalog is projected around the reported coordinate and the trajectory offsets are measured
+		// from it, so the two have to be the same reading. Taking the catalog centre from the snooped INDI
+		// state instead lets it lag by up to a notification interval, which puts the whole star field at
+		// an offset from a centre it was never projected around.
+		async function centreOfStar(notifyInterval: number, name: string) {
+			const handler = new IndiClientHandlerSet()
+			const mountManager = new MountManager()
+			const cameraManager = new CameraManager()
+			using client = new ClientSimulator(name, handler)
+			const frameReceiver = new CameraFrameReceiver()
+
+			handler.add(mountManager)
+			handler.add(cameraManager)
+			cameraManager.addHandler(frameReceiver)
+
+			// A star fixed on the sky rather than at whatever the query asks for, so where it lands on the
+			// sensor reports which coordinate the scene was built around.
+			const catalogProvider: CatalogSource = () => [{ snr: 200, hfd: 2, flux: 400, rightAscension: hour(5), declination: deg(20) }]
+
+			using mountSimulator = new MountSimulator('Mount Simulator', client)
+			using cameraSimulator = new CameraSimulator('Camera Simulator', client, { mountManager, catalogSources: { FIXED: catalogProvider } })
+			const mount = mountManager.get(client, mountSimulator.name)!
+			const camera = cameraManager.get(client, cameraSimulator.name)!
+
+			mountSimulator.connect()
+			cameraSimulator.connect()
+			await waitUntil(() => mount.connected && camera.connected)
+
+			mountSimulator.syncTo(hour(5), deg(20))
+			await waitUntil(() => closeTo(mount.equatorialCoordinate.declination, deg(20), 1e-9))
+
+			cameraManager.snoop(camera, mount)
+			await waitUntil(() => cameraManager.properties.get(camera)?.ACTIVE_DEVICES?.elements.ACTIVE_TELESCOPE.value === mount.name)
+
+			client.sendSwitch({ device: camera.name, name: 'SIMULATOR_NOISE_FEATURES', elements: { SKY_ENABLED: false, LIGHT_POLLUTION_ENABLED: false } })
+			client.sendSwitch({ device: camera.name, name: 'SIMULATOR_CATALOG_SOURCE', elements: { FIXED: true } })
+			await waitUntil(() => cameraManager.properties.get(camera)?.SIMULATOR_CATALOG_SOURCE?.elements.FIXED.value === true)
+
+			// Moved by the sky rather than by a command, because starting and finishing a slew publishes
+			// the coordinate vector on its own and would refresh the snooped copy no matter the throttle.
+			// Run back to back with no await between them, so the simulation timer cannot fire in the
+			// middle and both runs see exactly the same twenty seconds of drift; tracking then freezes the
+			// coordinate so the frame does not depend on when the exposure is taken.
+			mountSimulator.minimumNotifyCoordinateInterval = notifyInterval
+			mountSimulator.setTrackingEnabled(false)
+			mountSimulator.syncTo(hour(5), deg(20))
+			mountSimulator.advance(20)
+			mountSimulator.setTrackingEnabled(true)
+
+			cameraSimulator.startExposure(0.001)
+			await waitUntil(() => frameReceiver.length > 0, 10000, 20)
+			const frame = await readImageFromBuffer(frameReceiver.lastFrame)
+			const [x, y] = brightestPixel(frame!.raw, frame!.header.NAXIS1 as number, frame!.metadata.channels)
+
+			cameraSimulator.dispose()
+			mountSimulator.dispose()
+			return [x, y] as const
+		}
+
+		// Twenty seconds of sidereal drift is five arcminutes, and at about two arcseconds per pixel that
+		// is well over a hundred pixels: a star fixed on the sky has to land far from the middle of a
+		// sensor centred where the mount now points, and lands in the middle of one centred where the
+		// snooped copy still thinks it does.
+		const published = await centreOfStar(1, 'camera.centre.fresh')
+		const lagging = await centreOfStar(60000, 'camera.centre.stale')
+
+		expect(Math.abs(published[0] - 639)).toBeGreaterThan(100)
+
+		// Compared to within a pixel rather than exactly: which pixel of a star core comes out brightest
+		// depends on the noise, and the sensor temperature moves with the wall clock between the two runs.
+		expect(Math.abs(lagging[0] - published[0])).toBeLessThanOrEqual(1)
+		expect(Math.abs(lagging[1] - published[1])).toBeLessThanOrEqual(1)
+	}, 30000)
+
+	test('keeps its own trajectory when a second exposure starts while the catalog is pending', async () => {
+		// An exposure is marked complete before its frame has been rendered, so a client is free to start
+		// the next one while the first is still waiting on a network-backed catalog. The second exposure
+		// then computes its own offsets, and the first must not be rendered with them.
+		async function centreOfStar(disturb: boolean, name: string) {
+			const handler = new IndiClientHandlerSet()
+			const mountManager = new MountManager()
+			const cameraManager = new CameraManager()
+			using client = new ClientSimulator(name, handler)
+			const frameReceiver = new CameraFrameReceiver()
+
+			handler.add(mountManager)
+			handler.add(cameraManager)
+			cameraManager.addHandler(frameReceiver)
+
+			let queries = 0
+
+			// Only the first query is slow, which is what leaves the first frame pending while the second
+			// exposure runs to completion.
+			const catalogProvider: CatalogSource = async (rightAscension, declination) => {
+				if (++queries === 1) await Bun.sleep(600)
+				return [{ snr: 200, hfd: 2, flux: 400, rightAscension, declination }]
+			}
+
+			using mountSimulator = new MountSimulator('Mount Simulator', client)
+			using cameraSimulator = new CameraSimulator('Camera Simulator', client, { mountManager, catalogSources: { CENTERED: catalogProvider } })
+			const mount = mountManager.get(client, mountSimulator.name)!
+			const camera = cameraManager.get(client, cameraSimulator.name)!
+
+			mountSimulator.connect()
+			cameraSimulator.connect()
+			await waitUntil(() => mount.connected && camera.connected)
+
+			mountSimulator.syncTo(hour(5), deg(20))
+			await waitUntil(() => closeTo(mount.equatorialCoordinate.declination, deg(20), 1e-9))
+
+			cameraManager.snoop(camera, mount)
+			await waitUntil(() => cameraManager.properties.get(camera)?.ACTIVE_DEVICES?.elements.ACTIVE_TELESCOPE.value === mount.name)
+
+			client.sendSwitch({ device: camera.name, name: 'SIMULATOR_NOISE_FEATURES', elements: { SKY_ENABLED: false, LIGHT_POLLUTION_ENABLED: false } })
+			client.sendSwitch({ device: camera.name, name: 'SIMULATOR_CATALOG_SOURCE', elements: { CENTERED: true } })
+			await waitUntil(() => cameraManager.properties.get(camera)?.SIMULATOR_CATALOG_SOURCE?.elements.CENTERED.value === true)
+
+			cameraSimulator.startExposure(0.05)
+			await waitUntil(() => queries > 0, 5000, 5)
+
+			if (disturb) {
+				// A second exposure taken over a long slew, so its trail sweeps the field right across the
+				// sensor and is nothing like the still field the first exposure saw.
+				mountSimulator.setSlewRate('SPEED_6')
+				mountSimulator.goTo(mountSimulator.rightAscension + deg(60), mountSimulator.declination)
+				cameraSimulator.startExposure(0.3)
+				await waitUntil(() => frameReceiver.length > 0, 5000, 10)
+			}
+
+			// The first frame resolves last, since only its query was slow.
+			await waitUntil(() => frameReceiver.length > (disturb ? 1 : 0), 10000, 50)
+			const frame = await readImageFromBuffer(frameReceiver.lastFrame)
+			const [x, y] = brightestPixel(frame!.raw, frame!.header.NAXIS1 as number, frame!.metadata.channels)
+
+			cameraSimulator.dispose()
+			mountSimulator.dispose()
+			return [x, y] as const
+		}
+
+		const alone = await centreOfStar(false, 'camera.offsets.alone')
+		const overlapped = await centreOfStar(true, 'camera.offsets.overlapped')
+
+		// Handing back a view of the shared trajectory buffer let the second exposure rewrite the first
+		// exposure's offsets under it, so the still field was drawn along the slew the second one covered.
+		expect(overlapped[0]).toBe(alone[0])
+		expect(overlapped[1]).toBe(alone[1])
+	}, 30000)
+
+	test('conserves flux and trails the stars when the field moves during the exposure', async () => {
+		const handler = new IndiClientHandlerSet()
+		const mountManager = new MountManager()
+		const cameraManager = new CameraManager()
+		using client = new ClientSimulator('camera.trailing.simulator', handler)
+		const frameReceiver = new CameraFrameReceiver()
+
+		handler.add(mountManager)
+		handler.add(cameraManager)
+
+		cameraManager.addHandler(frameReceiver)
+
+		// Faint enough that no pixel saturates even when the whole exposure lands on one spot, so the
+		// totals stay linear and the two frames are comparable.
+		const catalogProvider: CatalogSource = (rightAscension, declination) => [{ snr: 200, hfd: 2, flux: 0.05, rightAscension, declination }]
+
+		using mountSimulator = new MountSimulator('Mount Simulator', client)
+		using cameraSimulator = new CameraSimulator('Camera Simulator', client, { mountManager, catalogSources: { CENTERED: catalogProvider } })
+		const mount = mountManager.get(client, mountSimulator.name)!
+		const camera = cameraManager.get(client, cameraSimulator.name)!
+
+		mountSimulator.connect()
+		cameraSimulator.connect()
+		await waitUntil(() => mount.connected && camera.connected)
+
+		mountSimulator.syncTo(hour(5), deg(20))
+		mountSimulator.setTrackingEnabled(true)
+		await waitUntil(() => closeTo(mount.equatorialCoordinate.declination, deg(20), 1e-9))
+
+		cameraManager.snoop(camera, mount)
+		await waitUntil(() => cameraManager.properties.get(camera)?.ACTIVE_DEVICES?.elements.ACTIVE_TELESCOPE.value === mount.name)
+
+		// A bare, unclipped star field: any change in the total signal then comes from the star itself
+		// rather than from noise or from saturation flattening the peak.
+		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_NOISE_FEATURES', elements: { SKY_ENABLED: false, LIGHT_POLLUTION_ENABLED: false } })
+		client.sendNumber({ device: camera.name, name: 'SIMULATOR_NOISE_SENSOR', elements: { READ_NOISE: 0, BIAS_ELECTRONS: 0, BLACK_LEVEL_ELECTRONS: 0, DARK_CURRENT_AT_REFERENCE_TEMP: 0 } })
+		// Without this the brightest pixel of a thinly spread trail is a hot pixel rather than the star.
+		client.sendNumber({ device: camera.name, name: 'SIMULATOR_NOISE_ARTIFACTS', elements: { FIXED_PATTERN_NOISE_STRENGTH: 0, ROW_NOISE_STRENGTH: 0, COLUMN_NOISE_STRENGTH: 0, BANDING_STRENGTH: 0, HOT_PIXEL_RATE: 0, WARM_PIXEL_RATE: 0, DEAD_PIXEL_RATE: 0 } })
+		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_NOISE_CLAMP_MODE', elements: { NONE: true } })
+		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_CATALOG_SOURCE', elements: { CENTERED: true } })
+		await waitUntil(() => cameraManager.properties.get(camera)?.SIMULATOR_CATALOG_SOURCE?.elements.CENTERED.value === true)
+
+		try {
+			// Both frames run for the same time, so the expected ratio of their totals is exactly one and
+			// the comparison isolates the trajectory split from any exposure scaling.
+			const exposure = 2
+
+			// Matching the reference exposure makes the flux scale exactly one, leaving the trajectory
+			// split as the only thing that can change the total.
+			client.sendNumber({ device: camera.name, name: 'SIMULATOR_NOISE_EXPOSURE', elements: { EXPOSURE_TIME: exposure } })
+			await waitUntil(() => cameraManager.properties.get(camera)?.SIMULATOR_NOISE_EXPOSURE?.elements.EXPOSURE_TIME.value === exposure)
+
+			// A long focal length so the sidereal drift of this exposure spans many times the width of
+			// the point spread function. At the default 500 mm the trail is comparable to the star and
+			// only shows as a slight elongation.
+			client.sendNumber({ device: camera.name, name: 'TELESCOPE_INFO', elements: { FOCAL_LENGTH: 2000 } })
+			await waitUntil(() => cameraManager.properties.get(camera)?.TELESCOPE_INFO?.elements.FOCAL_LENGTH.value === 2000)
+
+			// Stationary reference: the mount tracks, so the field barely moves and one sample is used.
+			cameraSimulator.startExposure(exposure)
+			await waitUntil(() => frameReceiver.length > 0, 20000, 50)
+			const stationary = await readImageFromBuffer(frameReceiver.lastFrame)
+			const stationaryFlux = sumPixels(stationary!.raw)
+			const [, , stationaryPeak] = brightestPixel(stationary!.raw, stationary!.header.NAXIS1 as number, stationary!.metadata.channels)
+
+			expect(stationaryFlux).toBeGreaterThan(0)
+
+			// With tracking off the sky runs at the sidereal rate, which over this exposure is several
+			// pixels of drift and therefore a trail spread over many samples.
+			mountSimulator.setTrackingEnabled(false)
+			await waitUntil(() => !mount.tracking)
+
+			cameraSimulator.startExposure(exposure)
+			await waitUntil(() => frameReceiver.length > 1, 20000, 50)
+			const trailed = await readImageFromBuffer(frameReceiver.lastFrame)
+			const trailedFlux = sumPixels(trailed!.raw)
+			const [, , trailedPeak] = brightestPixel(trailed!.raw, trailed!.header.NAXIS1 as number, trailed!.metadata.channels)
+
+			// Spread along a trail, the same light no longer piles onto one pixel, so the peak drops.
+			expect(trailedPeak).toBeLessThan(stationaryPeak * 0.5)
+
+			// Yet it is only redistributed, never created or lost. Without dividing each sample's flux by
+			// the sample count this would come out multiplied by the number of samples, so the bound is
+			// wide enough for the rounding and still nowhere near that.
+			//
+			// The residual excess is quantization: spread along a trail, faint wing pixels that rounded
+			// down to zero when concentrated now sit above half a count and round up instead.
+			const ratio = trailedFlux / stationaryFlux
+			expect(ratio).toBeGreaterThan(0.85)
+			expect(ratio).toBeLessThan(1.2)
+		} finally {
+			cameraSimulator.dispose()
+			mountSimulator.dispose()
+		}
+	}, 30000)
+
+	test('does not draw the field it left back at the centre of the frame', async () => {
+		const handler = new IndiClientHandlerSet()
+		const mountManager = new MountManager()
+		const cameraManager = new CameraManager()
+		using client = new ClientSimulator('camera.offdomain.simulator', handler)
+		const frameReceiver = new CameraFrameReceiver()
+
+		handler.add(mountManager)
+		handler.add(cameraManager)
+		cameraManager.addHandler(frameReceiver)
+
+		const catalogProvider: CatalogSource = (rightAscension, declination) => [{ snr: 200, hfd: 2, flux: 0.05, rightAscension, declination }]
+
+		using mountSimulator = new MountSimulator('Mount Simulator', client)
+		using cameraSimulator = new CameraSimulator('Camera Simulator', client, { mountManager, catalogSources: { CENTERED: catalogProvider } })
+		const mount = mountManager.get(client, mountSimulator.name)!
+		const camera = cameraManager.get(client, cameraSimulator.name)!
+
+		mountSimulator.connect()
+		cameraSimulator.connect()
+		await waitUntil(() => mount.connected && camera.connected)
+
+		// On the equator, so a difference of right ascension is the same angle on the sky.
+		mountSimulator.syncTo(hour(5), 0)
+		mountSimulator.setTrackingEnabled(true)
+		mountSimulator.setSlewRate('SPEED_7')
+		await waitUntil(() => closeTo(mount.equatorialCoordinate.rightAscension, hour(5), 1e-9))
+
+		cameraManager.snoop(camera, mount)
+		await waitUntil(() => cameraManager.properties.get(camera)?.ACTIVE_DEVICES?.elements.ACTIVE_TELESCOPE.value === mount.name)
+
+		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_NOISE_FEATURES', elements: { SKY_ENABLED: false, LIGHT_POLLUTION_ENABLED: false } })
+		client.sendNumber({ device: camera.name, name: 'SIMULATOR_NOISE_SENSOR', elements: { READ_NOISE: 0, BIAS_ELECTRONS: 0, BLACK_LEVEL_ELECTRONS: 0, DARK_CURRENT_AT_REFERENCE_TEMP: 0 } })
+		client.sendNumber({ device: camera.name, name: 'SIMULATOR_NOISE_ARTIFACTS', elements: { FIXED_PATTERN_NOISE_STRENGTH: 0, ROW_NOISE_STRENGTH: 0, COLUMN_NOISE_STRENGTH: 0, BANDING_STRENGTH: 0, HOT_PIXEL_RATE: 0, WARM_PIXEL_RATE: 0, DEAD_PIXEL_RATE: 0 } })
+		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_NOISE_CLAMP_MODE', elements: { NONE: true } })
+		client.sendSwitch({ device: camera.name, name: 'SIMULATOR_CATALOG_SOURCE', elements: { CENTERED: true } })
+		await waitUntil(() => cameraManager.properties.get(camera)?.SIMULATOR_CATALOG_SOURCE?.elements.CENTERED.value === true)
+
+		try {
+			const exposure = 2
+			client.sendNumber({ device: camera.name, name: 'SIMULATOR_NOISE_EXPOSURE', elements: { EXPOSURE_TIME: exposure } })
+			await waitUntil(() => cameraManager.properties.get(camera)?.SIMULATOR_NOISE_EXPOSURE?.elements.EXPOSURE_TIME.value === exposure)
+
+			// All of the light, in the field the scene is built around: the scale the slewed frame below is
+			// measured against.
+			cameraSimulator.startExposure(exposure)
+			await waitUntil(() => frameReceiver.length > 0, 20000, 50)
+			const stationary = await readImageFromBuffer(frameReceiver.lastFrame)
+			const stationaryFlux = sumPixels(stationary!.raw)
+			expect(stationaryFlux).toBeGreaterThan(0)
+
+			// The shutter opens and the mount is sent a hundred and fifty degrees away, well outside the
+			// gnomonic domain of the field it started in, where it then sits for the rest of the exposure.
+			cameraSimulator.startExposure(exposure)
+			mountSimulator.goTo(hour(15), 0)
+			await waitUntil(() => frameReceiver.length > 1, 20000, 50)
+			const slewed = await readImageFromBuffer(frameReceiver.lastFrame)
+
+			// This field crossed the sensor in the first few milliseconds of the goto and was gone. Mapping
+			// the samples the projection could not answer for onto the centre of the sensor instead put it
+			// back, at the weight of the whole stretch the mount spent parked at the far end.
+			expect(sumPixels(slewed!.raw)).toBeLessThan(stationaryFlux * 0.05)
+		} finally {
+			cameraSimulator.dispose()
+			mountSimulator.dispose()
+		}
+	}, 30000)
 
 	test('renders a defocused annular collimation pattern with anisotropic binning', async () => {
 		const handler = new IndiClientHandlerSet()

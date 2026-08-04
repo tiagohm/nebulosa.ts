@@ -1,10 +1,9 @@
 import { equatorialToJ2000 } from '../../../astronomy/coordinates/coordinate'
 import { pixelScale } from '../../../astronomy/formulas'
-import { localSiderealTime } from '../../../astronomy/observer/location'
 import { Gnomonic } from '../../../astronomy/projections/projection'
 import { formatTemporal } from '../../../astronomy/time/temporal'
-import { timeUnix } from '../../../astronomy/time/time'
-import { ASEC2RAD, DAYSEC, DEG2RAD, PIOVERTWO, TAU } from '../../../core/constants'
+import { type Time, timeNow, timeUnix } from '../../../astronomy/time/time'
+import { DEG2RAD, PIOVERTWO, TAU } from '../../../core/constants'
 import { writeImageToFits, writeImageToXisf } from '../../../imaging/model/image'
 import type { CfaPattern, Image, ImageRawType } from '../../../imaging/model/types'
 import { plotBahtinovSpikes } from '../../../imaging/stars/bahtinov'
@@ -19,19 +18,86 @@ import type { Point } from '../../../math/numerical/geometry'
 import { clamp } from '../../../math/numerical/math'
 import { mulberry32 } from '../../../math/numerical/random'
 import { type Angle, arcsec, formatDEC, formatRA, normalizeAngle, toDeg, toHour } from '../../../math/units/angle'
-import { polarAlignmentError } from '../../../observation/alignment/polaralignment'
 import { handleSetBlobVector, type IndiClientHandler } from '../client'
-import { DeviceInterfaceType, type FrameType, type GuideDirection } from '../device'
+import { DeviceInterfaceType, type FrameType, type GuideDirection, type PierSide } from '../device'
 import type { FocuserManager, GuideOutputManager, MountManager, RotatorManager, WheelManager } from '../manager'
 import { findOnSwitch, makeBlobVector, makeNumberVector, makeSwitchVector, makeTextVector, type EnableBlob, type NewNumberVector, type NewSwitchVector, type NewTextVector } from '../types'
 import type { ClientSimulator } from './client'
-import { CAMERA_AMBIENT_TEMPERATURE, CAMERA_BLOB_PADDING, CAMERA_DEFAULT_TARGET_TEMPERATURE, CAMERA_MAX_BIN, CAMERA_MAX_EXPOSURE, CAMERA_MIN_EXPOSURE, CAMERA_PIXEL_SIZE, CAMERA_SCENE_SEED, CAMERA_SENSOR_HEIGHT, CAMERA_SENSOR_WIDTH, GENERAL_INFO, MAIN_CONTROL, SIMULATION, TICK_INTERVAL_MS } from './constants'
+// oxfmt-ignore
+import { CAMERA_AMBIENT_TEMPERATURE, CAMERA_BLOB_PADDING, CAMERA_DEFAULT_TARGET_TEMPERATURE, CAMERA_MAX_BIN, CAMERA_MAX_EXPOSURE, CAMERA_MAX_SCENE_MARGIN, CAMERA_MIN_EXPOSURE, CAMERA_PIXEL_SIZE, CAMERA_SCENE_SEED, CAMERA_SENSOR_HEIGHT, CAMERA_SENSOR_WIDTH, GENERAL_INFO, MAIN_CONTROL, MAX_TRAJECTORY_SAMPLES, SIMULATION, TICK_INTERVAL_MS, TRAJECTORY_PIXELS_PER_SAMPLE } from './constants'
 import { DeviceSimulator } from './device'
 import { FocuserSimulator } from './focuser'
+import { MountSimulator } from './mount'
 import type { CatalogSource, CatalogSourceStar, CatalogSourceType, DeviceSimulatorOptions, ReadoutMode, SimulatorProperty, TransferFormat } from './types'
-import { applyExclusiveSwitchValues, applyMultiSwitchValues, applyNumberVectorValues } from './util'
+import { applyExclusiveSwitchValues, applyMultiSwitchValues, applyNumberVectorValues, boresightOffsetInPixels } from './util'
 
 // Simulated astronomical camera acquisition, cooling, guiding, and synthetic image generation.
+
+// A single, stationary trajectory sample at the origin, carrying the whole exposure. Used when there
+// is no simulated mount to integrate over, so the rendering path always has exactly one sample.
+const NO_EXPOSURE_OFFSET = new Float64Array([0, 0, 1])
+
+// Longest the render will wait, in milliseconds of real time, for the mount to finish simulating the
+// interval the shutter was open. Two ticks: one covers the ordinary case of the camera's timer running
+// ahead of the mount's, and the second is slack for a loaded event loop.
+const CAMERA_TRAJECTORY_WAIT_MS = 2 * TICK_INTERVAL_MS
+
+// How often that wait rechecks the mount's clock, in milliseconds. Short enough not to add a visible
+// delay of its own to an exposure that only needed the mount to take one more step.
+const CAMERA_TRAJECTORY_POLL_MS = 2
+
+// Furthest the field strayed from the catalog centre over an exposure, in unbinned pixels.
+//
+// `offsets` holds consecutive x, y and weight triples. The largest magnitude rather than the total
+// path length, since what a scene margin has to cover is how far off centre the field ever got, not
+// how far it travelled getting there and back.
+function exposureTravel(offsets: Readonly<Float64Array>) {
+	let travel = 0
+	for (let i = 0; i < offsets.length; i += 3) travel = Math.max(travel, Math.hypot(offsets[i], offsets[i + 1]))
+	return travel
+}
+
+// What the frame header says about the mount it was taken through, read when the shutter opened.
+//
+// Copied rather than held as a device reference, so that the header describes the mount the exposure
+// was actually taken through even if the snooped telescope is swapped, disconnected or moved while the
+// shutter is open. Stamping the geometry of one mount with the name and site of another is worse than
+// either alone, since nothing in the file then reveals the mismatch.
+interface ExposureMountMetadata {
+	// Device name of the mount, stamped into TELESCOP.
+	readonly name: string
+	// Latitude of the observing site, radians, positive north.
+	readonly latitude: Angle
+	// Longitude of the observing site, radians, positive east.
+	readonly longitude: Angle
+	// Side of the pier the mount was on, 'NEITHER' when it does not report one.
+	readonly pierSide: PierSide
+}
+
+// Everything one exposure is rendered from, fixed when the shutter opens and closes rather than read
+// again while the frame is being drawn.
+//
+// The mount goes on moving throughout, and the camera notices completion on its own tick, so reading
+// any of these at render time describes a different sky from the one that was exposed.
+interface ExposureContext {
+	// Instant the exposure began, in milliseconds on the mount's simulated clock, or the wall clock
+	// without a simulated mount.
+	readonly startTime: number
+	// How long it ran, in seconds.
+	readonly exposureTime: number
+	// Reported coordinate the scene is built around, radians in the equatorial frame of date, or
+	// undefined without an active mount.
+	readonly center: readonly [Angle, Angle] | undefined
+	// Epoch that coordinate belongs to, and the one every conversion into J2000 uses.
+	readonly time: Time
+	// Mount the exposure was taken through, or undefined when there was none. Held rather than looked up
+	// again, because the snooped telescope can be changed, or disconnected, while the shutter is open:
+	// the frame would then be drawn from one mount's trajectory around another mount's centre, or fall
+	// back to a still field, and either way stop describing the exposure.
+	readonly simulator?: MountSimulator
+	// Header metadata of that mount, or undefined when there was no active mount.
+	readonly mount?: ExposureMountMetadata
+}
 
 // Star projected into the active camera frame with its signed local best-focus offset.
 interface CameraFrameStar extends AstronomicalImageStar {
@@ -127,19 +193,6 @@ export class CameraSimulator extends DeviceSimulator {
 	// oxfmt-ignore
 	readonly #aberrationShape = makeNumberVector('', 'SIMULATOR_ABERRATION_SHAPE', 'Aberration Shape', SIMULATION, 'rw', ['BACKFOCUS', 'Backfocus', 0, -1, 1, 0.01, '%.3f'], ['BACKFOCUS_BLUR', 'Backfocus Blur (px)', 4, 0, 100, 0.1, '%.2f'], ['BACKFOCUS_ELLIPTICITY', 'Backfocus Ellipticity', 0.35, 0, 0.8, 0.01, '%.3f'], ['COMA', 'Coma', 0, 0, 1, 0.01, '%.3f'], ['ASTIGMATISM', 'Astigmatism', 0, -0.8, 0.8, 0.01, '%.3f'], ['ASTIGMATISM_BLUR', 'Astigmatism Blur (px)', 4, 0, 100, 0.1, '%.2f'], ['ASTIGMATISM_ANGLE', 'Astigmatism Angle (rad)', 0, -TAU, TAU, 0.01, '%.3f'], ['DECENTER_X', 'Decenter X', 0, -0.5, 0.5, 0.01, '%.3f'], ['DECENTER_Y', 'Decenter Y', 0, -0.5, 0.5, 0.01, '%.3f'], ['COLLIMATION', 'Collimation', 0, 0, 1, 0.01, '%.3f'], ['COLLIMATION_ANGLE', 'Collimation Angle (rad)', 0, -TAU, TAU, 0.01, '%.3f'])
 	readonly #telescopeInfo = makeNumberVector('', 'TELESCOPE_INFO', 'Telescope Info', SIMULATION, 'rw', ['FOCAL_LENGTH', 'Focal Length (mm)', 500, 1, 10000, 1, '%.0f'], ['APERTURE', 'Aperture (mm)', 80, 1, 3000, 1, '%.0f'])
-	readonly #telescopeEffects = makeNumberVector(
-		'',
-		'TELESCOPE_EFFECTS',
-		'Telescope Effects',
-		SIMULATION,
-		'rw',
-		['PAE_AZ', 'PAE Azimuth (arcsec)', 0, -36000, 36000, 0.1, '%.3f'],
-		['PAE_AL', 'PAE Altitude (arcsec)', 0, -36000, 36000, 0.1, '%.3f'],
-		['PE_WE_PERIOD', 'PE W/E Period (s)', 0, 0, DAYSEC, 1, '%.0f'],
-		['PE_WE_AMPLITUDE', 'PE W/E Amplitude (arcsec)', 0, 0, 3600, 0.1, '%.3f'],
-		['PE_NS_PERIOD', 'PE N/S Period (s)', 0, 0, DAYSEC, 1, '%.0f'],
-		['PE_NS_AMPLITUDE', 'PE N/S Amplitude (arcsec)', 0, 0, 3600, 0.1, '%.3f'],
-	)
 
 	protected readonly properties: readonly SimulatorProperty[] = [
 		this.#info,
@@ -186,7 +239,6 @@ export class CameraSimulator extends DeviceSimulator {
 		this.#aberrationFocus,
 		this.#aberrationShape,
 		this.#telescopeInfo,
-		this.#telescopeEffects,
 	]
 
 	protected readonly propertiesToNotSave: readonly SimulatorProperty[] = [this.#info, this.#cooler, this.#abort, this.#exposure, this.#coolerPower, this.#temperature, this.#cfa, this.#guideNS, this.#guideWE, this.#image]
@@ -194,14 +246,20 @@ export class CameraSimulator extends DeviceSimulator {
 	#timer?: NodeJS.Timeout
 	#exposureEndTime = 0
 	#exposureDuration = 0
+	// What the exposure in progress is to be rendered from, captured when the shutter opened. The camera
+	// notices completion on its own tick and renders after that, so everything here has to be taken when
+	// the exposure began rather than read back when the frame is drawn.
+	#exposureContext?: ExposureContext
 	#targetTemperature = CAMERA_DEFAULT_TARGET_TEMPERATURE
 	#catalog?: readonly (AstronomicalImageStar | undefined)[]
 	#catalogKey = ''
 	#catalogDirty = true
 	#pulseNorthSouthUntil = 0
 	#pulseWestEastUntil = 0
-	#mountPeriodicWestEastOffset = 0
-	#mountPeriodicNorthSouthOffset = 0
+	// Scratch for the exposure trajectory, reused across frames: it holds boresight pairs first and the
+	// pixel offsets they convert to afterwards, so a rendering allocates nothing for it.
+	readonly #trajectoryBuffer = new Float64Array(MAX_TRAJECTORY_SAMPLES * 3)
+	readonly #trajectoryOffset: Point = { x: 0, y: 0 }
 	#onlyBlob = false
 	#ignoreBlob = false
 
@@ -250,13 +308,57 @@ export class CameraSimulator extends DeviceSimulator {
 		super.notify(message)
 	}
 
-	#notifyImage() {
-		handleSetBlobVector(this.client, this.handler, this.#image)
-	}
-
 	get activeMount() {
 		const mount = this.#mountManager?.get(this.client, this.snoopDevices.elements.ACTIVE_TELESCOPE.value)
 		return mount?.connected ? mount : undefined
+	}
+
+	// Concrete simulator behind the active mount, when it is one of ours. The snooped INDI state only
+	// carries the reported coordinate, while the error model, the boresight and the simulated clock
+	// live on the simulator itself; rendering needs those, so it reaches for the instance the same way
+	// #focusPosition reaches for the focuser. Undefined for a real mount, where the reported coordinate
+	// is all there is.
+	get activeMountSimulator() {
+		const mount = this.activeMount
+		if (mount === undefined) return undefined
+		const simulator = this.client.get(mount.name)
+		return simulator instanceof MountSimulator ? simulator : undefined
+	}
+
+	// Coordinate the mount reports it is pointing at, radians, or undefined without an active mount.
+	//
+	// Taken from the simulator when there is one, rather than from the snooped INDI state, because the
+	// snooped copy is only refreshed on the notification cadence and lags the simulator by up to that
+	// interval. Both the catalog and the trajectory offsets are measured against this, and measuring
+	// them against two coordinates that disagree puts every star at an offset from a centre it was not
+	// projected around.
+	get reportedCenter(): readonly [Angle, Angle] | undefined {
+		const simulator = this.activeMountSimulator
+		if (simulator !== undefined) return [simulator.rightAscension, simulator.declination]
+		const mount = this.activeMount
+		if (mount === undefined) return undefined
+		return [mount.equatorialCoordinate.rightAscension, mount.equatorialCoordinate.declination]
+	}
+
+	// Instant the scene is built for, taken from the mount's simulated clock when there is one.
+	//
+	// The reported coordinate is in the equatorial frame of date, and turning it into the J2000 the
+	// catalog is queried and projected in is a rotation by however far the epoch is from J2000. That
+	// epoch is the mount's, not the wall clock's: a simulator whose TIME_UTC has been set elsewhere
+	// reports coordinates for the date it believes in, and rotating them by today's precession would
+	// query a field decades away from the one it is pointing at, while stamping the frame with its own
+	// timestamp. Falls back to the wall clock for a real mount, which has no simulated clock to read.
+	get sceneTime(): Time {
+		const simulator = this.activeMountSimulator
+		return simulator !== undefined ? timeUnix(simulator.utcTime / 1000, true) : timeNow(true)
+	}
+
+	// Header metadata of the active mount, copied out of the device, or undefined when there is none.
+	#mountMetadata(): ExposureMountMetadata | undefined {
+		const mount = this.activeMount
+		if (mount === undefined) return undefined
+		const { latitude, longitude } = mount.geographicCoordinate
+		return { name: mount.name, latitude, longitude, pierSide: mount.pierSide }
 	}
 
 	get activeFocuser() {
@@ -405,9 +507,6 @@ export class CameraSimulator extends DeviceSimulator {
 				return
 			case 'TELESCOPE_INFO':
 				if (applyNumberVectorValues(this.#telescopeInfo, vector.elements)) this.notify(this.#telescopeInfo)
-				return
-			case 'TELESCOPE_EFFECTS':
-				if (applyNumberVectorValues(this.#telescopeEffects, vector.elements)) this.notify(this.#telescopeEffects)
 		}
 	}
 
@@ -500,6 +599,12 @@ export class CameraSimulator extends DeviceSimulator {
 		duration = clamp(duration, this.#exposure.elements.CCD_EXPOSURE_VALUE.min, this.#exposure.elements.CCD_EXPOSURE_VALUE.max)
 		this.#exposureDuration = duration
 		this.#exposureEndTime = Date.now() + Math.trunc(duration * 1000)
+		// The frame belongs to the sky the shutter was open on: where the mount reported it was pointing
+		// then, the epoch that coordinate belongs to, when on the simulated clock it began, and which
+		// mount it was. Read at render time instead, all of them describe wherever the mount has got to
+		// since, or another mount entirely.
+		const simulator = this.activeMountSimulator
+		this.#exposureContext = { startTime: simulator?.utcTime ?? Date.now(), exposureTime: duration, center: this.reportedCenter, time: this.sceneTime, simulator, mount: this.#mountMetadata() }
 		this.#exposure.state = 'Busy'
 		this.#exposure.elements.CCD_EXPOSURE_VALUE.value = duration
 		this.#image.state = 'Busy'
@@ -666,17 +771,32 @@ export class CameraSimulator extends DeviceSimulator {
 		this.#exposure.elements.CCD_EXPOSURE_VALUE.value = 0
 		this.notify(this.#exposure)
 
+		// Taken over here, before the exposure is marked complete and a client is free to start the next
+		// one: what follows describes this frame and must not be overwritten by the one after it. The
+		// fallback covers a frame rendered without a shutter, which has nothing but the present.
+		const simulator = this.activeMountSimulator
+		const exposure: ExposureContext = this.#exposureContext ?? { startTime: simulator?.utcTime ?? Date.now(), exposureTime, center: this.reportedCenter, time: this.sceneTime, simulator, mount: this.#mountMetadata() }
+		this.#exposureContext = undefined
+
+		// The shutter has closed and everything this frame is drawn from has been taken over, so the
+		// exposure is finished as far as a client is concerned and the next one is free to start.
+		// Marked before the awaits below rather than after them. An exposure left Busy while its frame is
+		// being completed, with the deadline that identified it as finished already cleared, is one the
+		// next tick recognizes as a second finished exposure: it called this again, found the context
+		// gone, rebuilt one from the present and published an extra frame for a single shutter.
+		this.#image.state = 'Ok'
 		this.#exposure.state = 'Ok'
 
 		if (!this.#ignoreBlob) {
+			await this.#awaitExposedTrajectory(exposure)
+
 			try {
-				this.#image.state = 'Ok'
-				const blob = await this.#renderImage(exposureTime)
+				const blob = await this.#renderImage(exposure)
 				this.#image.elements.CCD1.size = blob.byteLength.toFixed(0)
 				this.#image.elements.CCD1.format = this.transferFormat === 'XISF' ? '.xisf' : '.fits'
 				this.#image.elements.CCD1.value = blob
 				this.#image.elements.CCD1.encoding = 'raw'
-				this.#notifyImage()
+				handleSetBlobVector(this.client, this.handler, this.#image)
 			} catch (e) {
 				this.#image.state = 'Alert'
 				this.#image.elements.CCD1.size = '0'
@@ -689,8 +809,34 @@ export class CameraSimulator extends DeviceSimulator {
 		this.notify(this.#exposure)
 	}
 
+	// Waits for the mount to have simulated the whole interval the shutter was open, giving up after
+	// CAMERA_TRAJECTORY_WAIT_MS of real time.
+	//
+	// The two devices are stepped by separate timers, and the camera notices its own exposure has
+	// finished without knowing whether the mount has caught up. Whenever the camera's tick runs first,
+	// an exposure shorter than one tick closes while the mount's newest sample still predates it: the
+	// trajectory is clamped at its ends rather than extrapolated, so the whole window collapsed onto one
+	// position and the frame was rendered as if the mount had stood still for it, losing every bit of
+	// motion the shutter had actually been open for.
+	//
+	// Bounded rather than open-ended, because nothing guarantees the mount will tick again: it may have
+	// been disconnected or disposed while the shutter was open, and a frame drawn from a truncated
+	// trajectory is still better than one that never arrives.
+	async #awaitExposedTrajectory(exposure: ExposureContext) {
+		const { simulator, startTime, exposureTime } = exposure
+		if (simulator === undefined) return
+
+		const endTime = startTime + Math.trunc(exposureTime * 1000)
+		const deadline = Date.now() + CAMERA_TRAJECTORY_WAIT_MS
+
+		while (simulator.utcTime < endTime && Date.now() < deadline) {
+			await Bun.sleep(CAMERA_TRAJECTORY_POLL_MS)
+		}
+	}
+
 	// Renders the configured frame and encodes it as FITS or XISF.
-	async #renderImage(exposureTime: number) {
+	async #renderImage(exposure: ExposureContext) {
+		const exposureTime = exposure.exposureTime
 		const channels = this.channels
 		const width = this.imageWidth
 		const height = this.imageHeight
@@ -700,7 +846,8 @@ export class CameraSimulator extends DeviceSimulator {
 		const rotatorAngle = (this.activeRotator?.angle.value ?? 0) * DEG2RAD
 
 		if (frameType === 'LIGHT') {
-			const stars = await this.#collectFrameStars(exposureTime, rotatorAngle)
+			const stars = await this.#collectFrameStars(exposure, rotatorAngle)
+
 			if (this.#plotPsfModel.elements.BAHTINOV.value) {
 				this.#renderBahtinovStars(raw, width, height, channels, stars)
 				generateNoiseImage(raw, width, height, channels, noiseConfig)
@@ -718,7 +865,7 @@ export class CameraSimulator extends DeviceSimulator {
 			generateNoiseImage(raw, width, height, channels, noiseConfig)
 		}
 
-		const image = this.#imageModel(raw, width, height, channels, exposureTime)
+		const image = this.#imageModel(raw, width, height, channels, exposure)
 		const output = Buffer.allocUnsafe(raw.length * 2 + CAMERA_BLOB_PADDING)
 		const sink = bufferSink(output)
 
@@ -916,12 +1063,12 @@ export class CameraSimulator extends DeviceSimulator {
 	}
 
 	// Builds an image model suitable for the FITS/XISF writers.
-	#imageModel(raw: ImageRawType, width: number, height: number, channels: 1 | 3, exposureTime: number): Image {
+	#imageModel(raw: ImageRawType, width: number, height: number, channels: 1 | 3, exposure: ExposureContext): Image {
 		const pixelSizeInBytes = 2
 
 		return {
 			raw,
-			header: this.#imageHeader(width, height, channels, exposureTime),
+			header: this.#imageHeader(width, height, channels, exposure),
 			metadata: {
 				width,
 				height,
@@ -937,18 +1084,28 @@ export class CameraSimulator extends DeviceSimulator {
 	}
 
 	// Builds a compact astronomical image header for synthetic output.
-	#imageHeader(width: number, height: number, channels: 1 | 3, exposureTime: number): FitsHeader {
-		const now = Date.now()
-		const mount = this.activeMount
+	//
+	// The centre, the epoch, the start of the exposure and the mount itself all come from the context
+	// rather than being read here, so the header describes the frame that was actually drawn: read
+	// afresh, the coordinate would be whatever the mount had reached by the end of the render, the
+	// conversion into J2000 would be rotated at the wall clock while the timestamps below came from the
+	// mount's own clock — a mount set to the year 2000 reported a centre tens of arcminutes from the
+	// field in its own pixels — the start of the exposure would be measured back from whenever the
+	// camera noticed it had finished, and a telescope swapped under the open shutter would put its name,
+	// its site and its pier side on a frame drawn from the geometry of the mount before it.
+	#imageHeader(width: number, height: number, channels: 1 | 3, exposure: ExposureContext): FitsHeader {
+		const { startTime: start, exposureTime, center, time, mount } = exposure
+		// Timestamped on the mount's simulated clock when there is one, so that TIME_UTC governs the
+		// frame metadata as well as the geometry. Falls back to the wall clock without a mount.
+		const now = start + Math.trunc(exposureTime * 1000)
 		const focuser = this.activeFocuser
 		const rotator = this.activeRotator
 		const filter = this.activeFilter ? this.activeFilter.names[this.activeFilter.position] : undefined
-		const start = now - Math.trunc(exposureTime * 1000)
 		let rightAscension: Angle | undefined
 		let declination: Angle | undefined
 
-		if (mount) {
-			;[rightAscension, declination] = equatorialToJ2000(mount.equatorialCoordinate.rightAscension, mount.equatorialCoordinate.declination)
+		if (center !== undefined) {
+			;[rightAscension, declination] = equatorialToJ2000(center[0], center[1], time)
 		}
 
 		return {
@@ -972,8 +1129,8 @@ export class CameraSimulator extends DeviceSimulator {
 			FRAME: this.frameType,
 			IMAGETYP: `${this.frameType === 'LIGHT' ? 'Light' : this.frameType === 'DARK' ? 'Dark' : this.frameType === 'FLAT' ? 'Flat' : 'Bias'} Frame`,
 			'CCD-TEMP': this.#temperature.elements.CCD_TEMPERATURE_VALUE.value,
-			SITELAT: mount ? toDeg(mount.geographicCoordinate.latitude) : undefined,
-			SITELONG: mount ? toDeg(mount.geographicCoordinate.longitude) : undefined,
+			SITELAT: mount ? toDeg(mount.latitude) : undefined,
+			SITELONG: mount ? toDeg(mount.longitude) : undefined,
 			OBJCTRA: rightAscension !== undefined ? formatRA(rightAscension) : undefined,
 			OBJCTDEC: declination !== undefined ? formatDEC(declination) : undefined,
 			RA: rightAscension !== undefined ? toDeg(normalizeAngle(rightAscension)) : undefined,
@@ -1146,9 +1303,27 @@ export class CameraSimulator extends DeviceSimulator {
 		return resolveSyntheticAberration(config)
 	}
 
-	// Rotates the master catalog on the full sensor, then applies aberration, subframe, and binning.
-	async #collectFrameStars(exposureTime: number, rotatorAngle: number) {
-		const stars = await this.#ensureCatalog()
+	// Shifts the master catalog by the pointing error, rotates it on the full sensor, then applies
+	// aberration, subframe, and binning.
+	async #collectFrameStars(exposure: ExposureContext, rotatorAngle: number) {
+		const { exposureTime, center, time } = exposure
+		// Where the field sat at each instant of the exposure, in pixels relative to the catalog centre.
+		// The sky moves relative to the sensor, so this is applied before the rotator angle, which moves
+		// the sensor relative to the sky.
+		//
+		// Read before the catalog is awaited. A CatalogSource is explicitly allowed to be asynchronous
+		// and network-backed, and the mount keeps ticking while it resolves; reading the trajectory
+		// afterwards would end the trail when the query came back rather than when the exposure did, and
+		// would measure it against a coordinate the mount had since left.
+		//
+		// `center` and `time` come from the caller for both, since the offsets are pixel displacements
+		// from the very centre the catalog is projected around: reading that centre twice would let the
+		// mount move between the readings and leave every star at an offset measured from somewhere the
+		// scene was not built for. The instant is shared for the same reason — the scene and the offsets
+		// are both taken into J2000, and doing that at two instants would rotate one against the other —
+		// and reusing one `Time` computes the precession-nutation matrix once for every conversion.
+		const offsets = this.#exposureOffsets(arcsec(pixelScale(CAMERA_PIXEL_SIZE, this.telescopeFocalLength)), exposure)
+		const stars = await this.#ensureCatalog(exposureTravel(offsets), exposure)
 		const frameX = this.#frame.elements.X.value
 		const frameY = this.#frame.elements.Y.value
 		const frameWidth = this.#frame.elements.WIDTH.value
@@ -1172,88 +1347,105 @@ export class CameraSimulator extends DeviceSimulator {
 		const annularPaddingY = annularRadius + annularSoftness * Math.sqrt(binY / binX)
 		const aberrationResult: SyntheticStarAberration = { defocus: 0, focusOffset: 0, covarianceXX: 0, covarianceXY: 0, covarianceYY: 0, coma: 0, comaTheta: 0 }
 
+		const sampleCount = offsets.length / 3
+		// Splitting a star across the trajectory must not create light: each sample carries the share of
+		// the exposure its own position was held for, and those shares sum to one, so the integrated flux
+		// is the same whether the field moved or stood still. Weighted rather than divided evenly because
+		// the samples are spaced along the path and not in time: a trail is brighter where the mount
+		// lingered than where it swung through.
+		const sampleFlux = gainFactor * exposureScale
+		const sampleSnr = Math.sqrt(Math.max(exposureScale, 0.01))
+
 		for (let i = 0; i < stars.length; i++) {
 			const star = stars[i]
 
 			if (star === undefined) continue
-			let sensorX = star.x
-			let sensorY = star.y
 
-			if (rotate) {
-				const dx = sensorX - centerX
-				const dy = sensorY - centerY
-				sensorX = centerX + dx * cosAngle - dy * sinAngle
-				sensorY = centerY + dx * sinAngle + dy * cosAngle
+			for (let sample = 0; sample < sampleCount; sample++) {
+				const weight = offsets[sample * 3 + 2]
+				if (weight <= 0) continue
+
+				let sensorX = star.x + offsets[sample * 3]
+				let sensorY = star.y + offsets[sample * 3 + 1]
+
+				if (rotate) {
+					const dx = sensorX - centerX
+					const dy = sensorY - centerY
+					sensorX = centerX + dx * cosAngle - dy * sinAngle
+					sensorY = centerY + dx * sinAngle + dy * cosAngle
+				}
+
+				if (sensorX < frameX - annularPaddingX || sensorX >= frameX + frameWidth + annularPaddingX || sensorY < frameY - annularPaddingY || sensorY >= frameY + frameHeight + annularPaddingY) continue
+				if (aberration.enabled) evaluateSyntheticAberration(sensorX, sensorY, this.sensorWidth, this.sensorHeight, currentFocus, bestFocus, aberration, aberrationResult)
+				const comaX = aberration.enabled ? Math.cos(aberrationResult.comaTheta) / binX : 0
+				const comaY = aberration.enabled ? Math.sin(aberrationResult.comaTheta) / binY : 0
+				const projectedStar: CameraFrameStar = {
+					x: (sensorX - frameX) / binX,
+					y: (sensorY - frameY) / binY,
+					flux: star.flux * sampleFlux * weight,
+					hfd: star.hfd,
+					// Not divided by the sample count: the signal-to-noise ratio sets the width of the
+					// point spread function, not how much light it carries.
+					snr: star.snr * sampleSnr,
+					colorIndex: star.colorIndex,
+					scaleX: 1 / binX,
+					scaleY: 1 / binY,
+					defocus: aberration.focusEnabled ? aberrationResult.defocus : undefined,
+					focusOffset: aberration.focusEnabled ? aberrationResult.focusOffset : undefined,
+					covarianceXX: aberration.enabled ? aberrationResult.covarianceXX / (binX * binX) : undefined,
+					covarianceXY: aberration.enabled ? aberrationResult.covarianceXY / (binX * binY) : undefined,
+					covarianceYY: aberration.enabled ? aberrationResult.covarianceYY / (binY * binY) : undefined,
+					coma: aberration.enabled ? aberrationResult.coma : undefined,
+					comaTheta: aberration.enabled && aberrationResult.coma > 0 ? Math.atan2(comaY, comaX) : undefined,
+				}
+
+				projected.push(projectedStar)
 			}
-
-			if (sensorX < frameX - annularPaddingX || sensorX >= frameX + frameWidth + annularPaddingX || sensorY < frameY - annularPaddingY || sensorY >= frameY + frameHeight + annularPaddingY) continue
-			if (aberration.enabled) evaluateSyntheticAberration(sensorX, sensorY, this.sensorWidth, this.sensorHeight, currentFocus, bestFocus, aberration, aberrationResult)
-			const comaX = aberration.enabled ? Math.cos(aberrationResult.comaTheta) / binX : 0
-			const comaY = aberration.enabled ? Math.sin(aberrationResult.comaTheta) / binY : 0
-			const projectedStar: CameraFrameStar = {
-				x: (sensorX - frameX) / binX,
-				y: (sensorY - frameY) / binY,
-				flux: star.flux * gainFactor * exposureScale,
-				hfd: star.hfd,
-				snr: star.snr * Math.sqrt(Math.max(exposureScale, 0.01)),
-				colorIndex: star.colorIndex,
-				scaleX: 1 / binX,
-				scaleY: 1 / binY,
-				defocus: aberration.focusEnabled ? aberrationResult.defocus : undefined,
-				focusOffset: aberration.focusEnabled ? aberrationResult.focusOffset : undefined,
-				covarianceXX: aberration.enabled ? aberrationResult.covarianceXX / (binX * binX) : undefined,
-				covarianceXY: aberration.enabled ? aberrationResult.covarianceXY / (binX * binY) : undefined,
-				covarianceYY: aberration.enabled ? aberrationResult.covarianceYY / (binY * binY) : undefined,
-				coma: aberration.enabled ? aberrationResult.coma : undefined,
-				comaTheta: aberration.enabled && aberrationResult.coma > 0 ? Math.atan2(comaY, comaX) : undefined,
-			}
-
-			projected.push(projectedStar)
 		}
 
 		return projected
 	}
 
-	// Computes the current local sidereal time from the simulated clock.
-	#siderealTime(utcTime: number, longitude: Angle) {
-		return localSiderealTime(timeUnix(utcTime / 1000, true), longitude)
-	}
-
 	// Rebuilds the deterministic catalog only when scene parameters change.
-	async #ensureCatalog() {
-		const { elements } = this.#telescopeEffects
-		const mount = this.activeMount
-		let centerRightAscension = mount?.equatorialCoordinate.rightAscension
-		let centerDeclination = mount?.equatorialCoordinate.declination
+	//
+	// The catalog is queried and cached around the mount's nominal (reported) coordinate, never around
+	// the perturbed one. Keying the cache on a coordinate that the periodic error moves every frame
+	// would defeat the cache entirely and, for a network-backed source, issue one query per exposure.
+	// The pointing error is applied later as a pixel displacement, in #pointingOffsetInPixels.
+	//
+	// `center` is the reported coordinate the scene is built around, in radians of the equatorial frame
+	// of date. Passed in rather than read here, so that a caller which also converts the trajectory into
+	// pixels uses one coordinate for both and the exposure cannot straddle a change of the mount's
+	// position between the two readings.
+	async #ensureCatalog(travel: number, exposure: ExposureContext) {
+		const { center, time, simulator } = exposure
+		let centerRightAscension = center?.[0]
+		let centerDeclination = center?.[1]
 
-		if (mount !== undefined) {
-			const now = Date.now()
-			const latitude = mount.geographicCoordinate.latitude
-			const longitude = mount.geographicCoordinate.longitude
-
-			if (elements.PAE_AZ.value !== 0 || elements.PAE_AL.value !== 0) {
-				;[centerRightAscension, centerDeclination] = polarAlignmentError(centerRightAscension!, centerDeclination!, latitude, this.#siderealTime(now, longitude), elements.PAE_AZ.value * ASEC2RAD, elements.PAE_AL.value * ASEC2RAD)
-			}
-
-			;[centerRightAscension, centerDeclination] = this.#applyTelescopePeriodicError(centerRightAscension!, centerDeclination!, now)
-			;[centerRightAscension, centerDeclination] = equatorialToJ2000(centerRightAscension, centerDeclination)
+		if (center !== undefined) {
+			;[centerRightAscension, centerDeclination] = equatorialToJ2000(center[0], center[1], time)
 		}
 
 		const ps = arcsec(pixelScale(CAMERA_PIXEL_SIZE, this.telescopeFocalLength))
-		const radius = Math.hypot(this.sensorWidth, this.sensorHeight) * ps * 0.5
-		const key = this.#makeCatalogKey(centerRightAscension, centerDeclination, radius)
+		// Sized from the configured pointing error and from how far the field travelled during the
+		// exposure, so a shifted or trailed field still finds stars on its leading edge. It takes part in
+		// the cache key because changing it changes the generated scene.
+		const margin = this.#sceneMargin(ps, travel, simulator)
+		const radius = Math.hypot(this.sensorWidth + 2 * margin, this.sensorHeight + 2 * margin) * ps * 0.5
+		const key = this.#makeCatalogKey(centerRightAscension, centerDeclination, radius, margin)
 		if (this.#catalog && !this.#catalogDirty && this.#catalogKey === key) return this.#catalog
 
 		const type = this.catalogSourceType
 		const catalogSource = this.options?.catalogSources?.[type]
-		const stars = catalogSource && centerRightAscension !== undefined && centerDeclination !== undefined && radius > 0 ? this.#mapCatalogCatalogStarsToAstronomicalImageStars(await catalogSource(centerRightAscension, centerDeclination, radius), centerRightAscension, centerDeclination, ps) : this.#randomSource()
+		const stars =
+			catalogSource && centerRightAscension !== undefined && centerDeclination !== undefined && radius > 0 ? this.#mapCatalogCatalogStarsToAstronomicalImageStars(await catalogSource(centerRightAscension, centerDeclination, radius), centerRightAscension, centerDeclination, ps, margin) : this.#randomSource(margin)
 		this.#catalog = stars
 		this.#catalogKey = key
 		this.#catalogDirty = false
 		return stars
 	}
 
-	#mapCatalogCatalogStarsToAstronomicalImageStars(stars: readonly CatalogSourceStar[], centerRightAscension: Angle, centerDeclination: Angle, pixelScale: Angle): readonly (AstronomicalImageStar | undefined)[] {
+	#mapCatalogCatalogStarsToAstronomicalImageStars(stars: readonly CatalogSourceStar[], centerRightAscension: Angle, centerDeclination: Angle, pixelScale: Angle, margin: number): readonly (AstronomicalImageStar | undefined)[] {
 		const sensorWidth = this.sensorWidth
 		const sensorHeight = this.sensorHeight
 		const halfWidth = (sensorWidth - 1) * 0.5
@@ -1268,7 +1460,9 @@ export class CameraSimulator extends DeviceSimulator {
 
 			const x = halfWidth - point.x / pixelScale
 			const y = halfHeight - point.y / pixelScale
-			if (x < 0 || x >= sensorWidth || y < 0 || y >= sensorHeight) return undefined
+			// Kept to the same margin as the synthetic scene, so a pointing error can pull stars in
+			// from outside the sensor instead of exposing an empty edge.
+			if (x < -margin || x >= sensorWidth + margin || y < -margin || y >= sensorHeight + margin) return undefined
 			point.x = x
 			point.y = y
 			Object.assign(s, point)
@@ -1276,39 +1470,58 @@ export class CameraSimulator extends DeviceSimulator {
 		})
 	}
 
-	// Builds a cache key for the currently selected catalog source.
-	#makeCatalogKey(centerRightAscension?: Angle, centerDeclination?: Angle, radius?: Angle) {
+	// Builds a cache key for the currently selected catalog source. The margin takes part in the key
+	// because it sets the extent of the generated field and the clipping window of a mapped catalog,
+	// so a change to the configured pointing error must rebuild the scene.
+	#makeCatalogKey(centerRightAscension: Angle | undefined, centerDeclination: Angle | undefined, radius: Angle | undefined, margin: number) {
 		const catalogSource = this.catalogSourceType
-		if (catalogSource === 'RANDOM' || centerRightAscension === undefined || centerDeclination === undefined || radius === undefined || radius === 0) return `RANDOM:${this.#scene.elements.SCENE_SEED.value}`
-		else return `${catalogSource}:${toHour(normalizeAngle(centerRightAscension)).toFixed(6)}:${toDeg(centerDeclination).toFixed(6)}:${toDeg(radius).toFixed(6)}`
+		if (catalogSource === 'RANDOM' || centerRightAscension === undefined || centerDeclination === undefined || radius === undefined || radius === 0) return `RANDOM:${this.#scene.elements.SCENE_SEED.value}:${margin}`
+		else return `${catalogSource}:${toHour(normalizeAngle(centerRightAscension)).toFixed(6)}:${toDeg(centerDeclination).toFixed(6)}:${toDeg(radius).toFixed(6)}:${margin}`
 	}
 
 	// Generates a deterministic in-memory star field.
-	#randomSource() {
+	//
+	// The field extends `margin` pixels beyond every sensor edge so that a pointing error shifting the
+	// scene brings real stars in from outside instead of leaving an empty border. The density on the
+	// sensor is the configured one whatever the margin.
+	//
+	// The layout is drawn for the largest scene that can ever be asked for and then filtered down to the
+	// one that was, so where a star sits depends on the seed alone. Scaling the coordinates by the
+	// requested margin instead moved every star whenever the margin changed, and the margin now follows
+	// how far the field travels during each exposure: consecutive frames of the same field came back
+	// with the whole sky rearranged, and a mount that returned to its own coordinate did not return to
+	// its own stars. Each star consumes the same draws whether or not it survives the filter, which is
+	// what keeps the positions stable rather than merely the count.
+	//
+	// The cost is drawing the full extent every time the scene is rebuilt: a few thousand stars at the
+	// default density, against a frame that then has a million pixels of noise generated over it.
+	#randomSource(margin: number) {
 		const random = mulberry32(this.#scene.elements.SCENE_SEED.value >>> 0)
-		const width = this.sensorWidth
-		const height = this.sensorHeight
+		const sensorWidth = this.sensorWidth
+		const sensorHeight = this.sensorHeight
+		const width = sensorWidth + 2 * CAMERA_MAX_SCENE_MARGIN
+		const height = sensorHeight + 2 * CAMERA_MAX_SCENE_MARGIN
 		const density = this.#scene.elements.STAR_DENSITY.value
 		const count = Math.max(1, Math.trunc(width * height * density))
 		const minHfd = this.#scene.elements.HFD_MIN.value
 		const maxHfd = Math.max(minHfd, this.#scene.elements.HFD_MAX.value)
 		const minFlux = this.#scene.elements.FLUX_MIN.value
 		const maxFlux = Math.max(minFlux, this.#scene.elements.FLUX_MAX.value)
-		const stars = new Array<AstronomicalImageStar>(count)
+		const stars: AstronomicalImageStar[] = []
 		const maxWidth = Math.max(0, width - 1)
 		const maxHeight = Math.max(0, height - 1)
 
 		for (let i = 0; i < count; i++) {
 			const brightness = 1 - random()
+			const x = random() * maxWidth - CAMERA_MAX_SCENE_MARGIN
+			const y = random() * maxHeight - CAMERA_MAX_SCENE_MARGIN
+			const flux = minFlux + (maxFlux - minFlux) * brightness ** 6
+			const hfd = minHfd + (maxHfd - minHfd) * random()
+			const colorIndex = -0.25 + random() * 1.9
 
-			stars[i] = {
-				x: random() * maxWidth,
-				y: random() * maxHeight,
-				flux: minFlux + (maxFlux - minFlux) * brightness ** 6,
-				hfd: minHfd + (maxHfd - minHfd) * random(),
-				snr: 12 + brightness * 180,
-				colorIndex: -0.25 + random() * 1.9,
-			}
+			if (x < -margin || x >= sensorWidth + margin || y < -margin || y >= sensorHeight + margin) continue
+
+			stars.push({ x, y, flux, hfd, snr: 12 + brightness * 180, colorIndex })
 		}
 
 		return stars
@@ -1341,32 +1554,111 @@ export class CameraSimulator extends DeviceSimulator {
 		this.#setPulsing(false)
 	}
 
-	// Applies the configurable mount periodic error model.
-	#applyTelescopePeriodicError(rightAscension: Angle, declination: Angle, utcTime: number) {
-		const { elements } = this.#telescopeEffects
-
-		const westEastPeriodicOffset = this.#periodicErrorOffset(elements.PE_WE_PERIOD.value, elements.PE_WE_AMPLITUDE.value, utcTime)
-		const northSouthPeriodicOffset = this.#periodicErrorOffset(elements.PE_NS_PERIOD.value, elements.PE_NS_AMPLITUDE.value, utcTime)
-
-		if (westEastPeriodicOffset !== this.#mountPeriodicWestEastOffset) {
-			rightAscension += westEastPeriodicOffset - this.#mountPeriodicWestEastOffset
-			this.#mountPeriodicWestEastOffset = westEastPeriodicOffset
-		}
-
-		if (northSouthPeriodicOffset !== this.#mountPeriodicNorthSouthOffset) {
-			declination += northSouthPeriodicOffset - this.#mountPeriodicNorthSouthOffset
-			this.#mountPeriodicNorthSouthOffset = northSouthPeriodicOffset
-		}
-
-		return [rightAscension, declination] as const
+	// Margin, in unbinned pixels, by which the synthetic star field extends beyond every sensor edge.
+	//
+	// A pointing error shifts the whole field on the sensor, so without a margin its trailing edge
+	// would be swept clean of stars. The margin is sized from the mount's own bound on that error
+	// rather than fixed: it costs nothing when the mount points perfectly, which is the common case,
+	// and it grows only as far as the error can actually displace the field.
+	//
+	// `travel` covers the other half of the problem: the field also moves during the exposure itself,
+	// by an amount the pointing error knows nothing about. Tracking left off, a guided correction or a
+	// drift-alignment leg all sweep the field across the sensor under command, so a scene built only to
+	// the error bound would be clipped before those translations were applied and would lose stars and
+	// flux at the leading edge. It is measured in unbinned pixels from the trajectory of the exposure
+	// being rendered.
+	//
+	// `pixelScale` is radians per unbinned pixel; the result is capped by CAMERA_MAX_SCENE_MARGIN to
+	// keep the star count bounded.
+	#sceneMargin(pixelScale: Angle, travel: number, simulator: MountSimulator | undefined) {
+		if (pixelScale <= 0) return 0
+		const bound = simulator?.pointingErrorBound ?? 0
+		const margin = (bound > 0 ? Math.ceil(bound / pixelScale) : 0) + Math.ceil(Math.max(0, travel))
+		return margin > 0 ? Math.min(CAMERA_MAX_SCENE_MARGIN, margin) : 0
 	}
 
-	// Computes the current periodic offset for one axis in radians.
-	#periodicErrorOffset(periodSeconds: number, amplitudeArcsec: number, utcTime: number) {
-		if (periodSeconds <= 0 || amplitudeArcsec === 0) return 0
-		const periodMilliseconds = periodSeconds * 1000
-		const phase = ((utcTime % periodMilliseconds) * TAU) / periodMilliseconds
-		return Math.sin(phase) * amplitudeArcsec * ASEC2RAD
+	// Where the field sat, in unbinned sensor pixels relative to the catalog centre, at each instant the
+	// exposure is integrated over.
+	//
+	// Returns triples of x, y and the share of the exposure time that position carries. A field that
+	// barely moves gets a single triple, taken at the middle of the exposure and carrying all of it; one
+	// that drifts or trails gets enough of them to keep consecutive positions within
+	// TRAJECTORY_PIXELS_PER_SAMPLE of each other, so the trail comes out continuous rather than as a row
+	// of separate dots. Without a simulated mount there is nothing to integrate and the single triple is
+	// the stationary origin.
+	//
+	// The positions are spaced along the recorded path rather than evenly in time, so that a dither or a
+	// guide correction lasting a fraction of a long exposure is drawn instead of falling between
+	// samples, and each carries its own share of the exposure so the photometry survives the uneven
+	// spacing: the trail is bright where the mount lingered and faint where it hurried through.
+	//
+	// The sample count is decided from the length of the path the mount actually recorded, not from the
+	// endpoints and not from a probe grid of this method's own choosing. A periodic error can swing well
+	// away and come back to where it started, and any evenly spaced grid can land on the same phase of
+	// it every time: an exposure spanning a whole number of worm revolutions would then measure a path
+	// of zero and render a field that crossed the sensor as if it had stood still. `pixelScale` is
+	// radians per unbinned pixel and `exposureTime` is seconds.
+	//
+	// The result is a copy rather than a view of the shared trajectory buffer. Rendering awaits the
+	// catalog, and an exposure is marked complete before its frame has been rendered, so a second
+	// exposure accepted in the meantime reaches this method and would otherwise overwrite the offsets
+	// the first frame is still waiting to be drawn with.
+	#exposureOffsets(pixelScale: Angle, exposure: ExposureContext) {
+		const { startTime, exposureTime, center, time, simulator } = exposure
+		if (simulator === undefined || center === undefined) return NO_EXPOSURE_OFFSET
+
+		// Anchored to when the shutter opened, not measured back from now. The camera notices completion
+		// on its own tick, up to a tick after the exposure was due to end, so measuring backwards shifted
+		// the whole window late: an exposure shorter than a tick was integrated over an interval that lay
+		// entirely after it had closed, missing the motion it covered and drawing a guide correction that
+		// happened afterwards.
+		const endTime = startTime + Math.trunc(exposureTime * 1000)
+		// Taken from the samples the mount recorded, which are the finest the simulation ever knew, so
+		// nothing can slip between them. Divided by the pixel scale to become a length on the sensor,
+		// which is what decides how many positions the trail has to be drawn from.
+		const length = simulator.boresightPathLength(startTime, endTime) / pixelScale
+		const count = clamp(Math.ceil(length / TRAJECTORY_PIXELS_PER_SAMPLE) + 1, 1, MAX_TRAJECTORY_SAMPLES)
+		const samples = simulator.sampleBoresightPath(startTime, endTime, count, this.#trajectoryBuffer)
+		if (samples === 0) return NO_EXPOSURE_OFFSET
+		return this.#trajectoryToOffsets(center, pixelScale, samples, time).slice(0, samples * 3)
+	}
+
+	// Converts the boresight samples held in the trajectory buffer into field offsets in pixels, in
+	// place. Each offset is measured against `center`, the reported coordinate the catalog was built
+	// around, in radians of the equatorial frame of date, at the instant `time`. The weight in the third
+	// slot of each triple is left untouched.
+	//
+	// Taken into the J2000 tangent plane the scene is drawn in, since leaving them in the frame of date
+	// rotates the trail against the stars it runs through; `boresightOffsetInPixels` documents by how
+	// much. The shared `time` keeps every sample and the catalog centre on one rotation.
+	// A sample the projection has no answer for is not an unshifted one. `boresightOffsetInPixels`
+	// reports failure both for a boresight that coincides with the centre and for one outside the
+	// gnomonic domain, which is everything more than a right angle away, and treating the two alike put
+	// the far ones at the centre of the sensor: an exposure spanning a long slew rendered the field it
+	// had left at full strength in the middle of the frame, for as long as the mount sat at the far end
+	// of the goto. Those samples carry no light from this field at all, so their weight is dropped
+	// instead. The shares of the remaining samples are left as they are, and no longer sum to one, which
+	// is the point: the exposure really was spent pointing somewhere this scene does not cover.
+	#trajectoryToOffsets(center: readonly [Angle, Angle], pixelScale: Angle, count: number, time: Time) {
+		const buffer = this.#trajectoryBuffer
+		const offset = this.#trajectoryOffset
+
+		for (let i = 0; i < count; i++) {
+			const index = i * 3
+			const rightAscension = buffer[index]
+			const declination = buffer[index + 1]
+			buffer[index] = 0
+			buffer[index + 1] = 0
+
+			if (boresightOffsetInPixels(center[0], center[1], rightAscension, declination, pixelScale, time, offset)) {
+				buffer[index] = offset.x
+				buffer[index + 1] = offset.y
+			} else if (rightAscension !== center[0] || declination !== center[1]) {
+				buffer[index + 2] = 0
+			}
+		}
+
+		return buffer
 	}
 
 	get cfaPattern() {

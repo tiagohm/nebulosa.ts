@@ -1,13 +1,15 @@
 import { cirsToObserved, DEFAULT_REFRACTION_PARAMETERS, type RefractionParameters, refractedAltitude } from '../../astronomy/coordinates/astrometry'
 import type { HorizontalCoordinate } from '../../astronomy/coordinates/coordinate'
 import { eraS2c } from '../../astronomy/coordinates/erfa/erfa'
+import { applyEquatorialPointingError, polarAlignmentPointingModel } from '../../astronomy/coordinates/pointing'
 import { pixelScale } from '../../astronomy/formulas'
 import type { GeographicPosition } from '../../astronomy/observer/location'
 import { cirsRotationMatrix, gcrsToItrsRotationMatrix, type Time } from '../../astronomy/time/time'
 import { PI, PIOVERTWO, SIDEREAL_RATE } from '../../core/constants'
-import { validateInRange, validateLatitude, validatePositiveFinite } from '../../core/validation'
+import { validateFinite, validateInRange, validateLatitude, validatePositiveFinite } from '../../core/validation'
 import { matMulVec, matTransposeMulVec } from '../../math/linear-algebra/mat3'
 import { type Vec3, vecCross, vecDot, vecLength, vecMinus, vecNegateMut, vecNormalizeMut, vecPlane, vecRotateByRodrigues } from '../../math/linear-algebra/vec3'
+import { clamp } from '../../math/numerical/math'
 import { type Angle, normalizePI } from '../../math/units/angle'
 
 // Three-Point Polar Alignment Algorithm (ICRF-based)
@@ -42,16 +44,12 @@ function referencePoleAltitude(location: GeographicPosition, refraction: Refract
 // Based on formulas from Ralph Pass documented at https://rppass.com/align.pdf.
 // They are based on the book "Telescope Control" by Trueblood and Genet, p.111
 // Ralph added sin(latitude) term in the equation for the error in RA.
+//
+// Expressed through the shared TPoint model in `astronomy/coordinates/pointing`, which carries the
+// same terms and clamps the declination away from the pole, where tan diverges and the hour-angle
+// error would otherwise come back meaningless.
 export function polarAlignmentError(rightAscension: Angle, declination: Angle, latitude: Angle, lst: Angle, azimuthError: Angle, altitudeError: Angle): readonly [Angle, Angle] {
-	const ha = lst - rightAscension
-	const cosHA = Math.cos(ha)
-	const sinHA = Math.sin(ha)
-	const tanDEC = Math.tan(declination)
-	const cosLat = Math.cos(latitude)
-	const sinLat = Math.sin(latitude)
-	const dRA = -altitudeError * (tanDEC * sinHA) + azimuthError * (sinLat - cosLat * tanDEC * cosHA)
-	const dDEC = -altitudeError * cosHA + azimuthError * cosLat * sinHA
-	return [rightAscension - dRA, declination + dDEC]
+	return applyEquatorialPointingError(rightAscension, declination, lst, polarAlignmentPointingModel(azimuthError, altitudeError, latitude))
 }
 
 // Computes the initial polar-alignment error from three plate-solved ICRF points (each [RA, Dec] in
@@ -210,9 +208,10 @@ export class ThreePointPolarAlignment {
 	}
 }
 
-// DEC drift rate produced by a 1-arcmin polar-alignment error, in arcseconds per second.
-// Worst-case meridian geometry gives dDEC/dt ≈ ω⊕ · error, with ω⊕ = 15.041 arcsec/s (sidereal)
-// and 1 arcmin = 2.9089e-4 rad, so 15.041 · 2.9089e-4 ≈ 0.004375. Used only as a visibility
+// DEC drift rate produced by a 1-arcmin polar-alignment error at the hour angle where that error
+// drifts fastest, in arcseconds per second. Best-case geometry gives dDEC/dt ≈ ω⊕ · error, with
+// ω⊕ = 15.041 arcsec/s (sidereal) and 1 arcmin = 2.9089e-4 rad, so 15.041 · 2.9089e-4 ≈ 0.004375.
+// The hour-angle dependency is carried separately by the geometry factor. Used only as a visibility
 // threshold for DARV exposure estimation, not as a precise drift model.
 export const DRIFT_ARCSEC_PER_SECOND_PER_ARCMIN = 0.004375
 // Minimum |cos(declination)| for a usable DARV target; below it RA motion is too small near the pole.
@@ -277,6 +276,11 @@ export interface DarvExposureInput {
 	pixelSize: number
 	// Star declination, in radians. Stars very close to the celestial pole are not suitable DARV targets.
 	declination: Angle
+	// Star hour angle, in radians, positive west of the meridian. Which star is worth pointing at
+	// depends on the mode, and picking the wrong one makes the drift vanish rather than merely shrink:
+	// an azimuth error drifts fastest on the meridian and not at all six hours from it, and an altitude
+	// error the other way round. Passing it is what lets that be reported instead of silently assumed.
+	hourAngle: Angle
 	// Observer latitude, in radians.
 	latitude: Angle
 	// Polar-alignment adjustment mode whose geometry controls the expected DEC drift.
@@ -291,7 +295,9 @@ export interface DarvExposureEstimate {
 	readonly imageScale: number
 	// Usable RA trail speed magnitude, in arcseconds per second.
 	readonly raVelocity: number
-	// Alignment-mode geometry factor applied to the DEC drift estimate.
+	// Geometry factor applied to the DEC drift estimate for the alignment mode and hour angle, in
+	// [0, 1]. A value near zero means the star is in the wrong part of the sky for this mode and drifts
+	// too slowly to measure, which is reported as a range error rather than a very long exposure.
 	readonly geometryFactor: number
 	// Estimated DEC drift from the target polar-error threshold, in arcseconds per second.
 	readonly driftDec: number
@@ -314,11 +320,21 @@ function validateDarvExposurePreset(preset: DarvExposureInput['preset']): DarvEx
 	return preset
 }
 
-// DEC-drift geometry factor for the alignment mode: azimuth errors scale by cos(latitude), altitude
-// errors by 1.
-function computeDarvGeometryFactor(mode: DarvExposureMode, latitude: Angle) {
-	if (mode === 'azimuth') return Math.abs(Math.cos(latitude))
-	if (mode === 'altitude') return 1
+// DEC-drift geometry factor for the alignment mode at a given hour angle, dimensionless and never
+// negative, since DARV shows a separation whichever way the drift goes.
+//
+// Differentiating the declination term of the pointing model, Δδ = MA·sin H + ME·cos H, against the
+// hour angle gives dΔδ/dt = ω⊕·(MA·cos H − ME·sin H). With MA = azimuthError·cos(latitude) and
+// ME = −altitudeError, one knob at a time leaves:
+//
+//   azimuth:  |cos(latitude)·cos(H)|, largest on the meridian and zero six hours from it
+//   altitude: |sin(H)|, the other way round
+//
+// Which is the geometric reason drift alignment asks for a star near the meridian to set azimuth and
+// one near the eastern or western horizon to set altitude.
+function computeDarvGeometryFactor(mode: DarvExposureMode, latitude: Angle, hourAngle: Angle) {
+	if (mode === 'azimuth') return Math.abs(Math.cos(latitude) * Math.cos(hourAngle))
+	if (mode === 'altitude') return Math.abs(Math.sin(hourAngle))
 	throw new TypeError('DARV exposure mode must be azimuth or altitude')
 }
 
@@ -347,9 +363,10 @@ export function estimateDarvExposure(input: Readonly<DarvExposureInput>): DarvEx
 	validatePositiveFinite(input.focalLength)
 	validatePositiveFinite(input.pixelSize)
 	validateInRange(input.declination, -PIOVERTWO, PIOVERTWO)
+	validateFinite(input.hourAngle)
 	validateLatitude(input.latitude)
 	const preset = validateDarvExposurePreset(input.preset)
-	const geometryFactor = computeDarvGeometryFactor(input.mode, input.latitude)
+	const geometryFactor = computeDarvGeometryFactor(input.mode, input.latitude, input.hourAngle)
 	const imageScale = pixelScale(input.pixelSize, input.focalLength)
 	const raVelocity = computeDarvRaVelocity(input.declination, preset.guideRateSidereal)
 	const driftDec = computeDarvDriftDec(preset.targetPolarError, geometryFactor)

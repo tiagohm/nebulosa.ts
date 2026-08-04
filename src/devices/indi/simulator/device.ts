@@ -141,7 +141,18 @@ export abstract class DeviceSimulator implements Disposable {
 
 				updated && this.notify(actual)
 			}
+
+			this.onPropertiesLoaded()
 		}
+	}
+
+	// Hook called once the persisted values have been written back into the property vectors.
+	//
+	// Loading bypasses the send* handlers, so a device that caches anything derived from a property
+	// must rebuild it here or it would keep running with the defaults while reporting the loaded
+	// values. Does nothing by default.
+	protected onPropertiesLoaded() {
+		// Nothing to rebuild for a device whose behaviour reads the vectors directly.
 	}
 
 	[Symbol.dispose]() {
