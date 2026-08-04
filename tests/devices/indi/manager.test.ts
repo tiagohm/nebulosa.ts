@@ -1,20 +1,75 @@
 import { expect, describe, test } from 'bun:test'
-import { CLIENT, type Client, DEFAULT_CAMERA, DEFAULT_COVER, DEFAULT_FLAT_PANEL, DEFAULT_FOCUSER, DEFAULT_MOUNT, DEFAULT_POWER, DEFAULT_ROTATOR, DEFAULT_WHEEL, type Cover, type Device, type FlatPanel, type Focuser, type Power, type Rotator, type Wheel } from '../../../src/devices/indi/device'
+// oxfmt-ignore
+import { CLIENT, type Client, DEFAULT_CAMERA, DEFAULT_COVER, DEFAULT_FLAT_PANEL, DEFAULT_FOCUSER, DEFAULT_MOUNT, DEFAULT_POWER, DEFAULT_ROTATOR, DEFAULT_WHEEL, type Cover, type Device, type FlatPanel, type Focuser, type Power, type Rotator, type Wheel, DeviceInterfaceType, type Camera } from '../../../src/devices/indi/device'
 import { CameraManager, CoverManager, FlatPanelManager, FocuserManager, MountManager, PowerManager, RotatorManager, WheelManager } from '../../../src/devices/indi/manager'
+import type { DefText, DefTextVector } from '../../../src/devices/indi/types'
+
+const client: Client = {
+	type: 'INDI',
+	id: 'client',
+	description: '',
+	getProperties() {},
+	enableBlob() {},
+	sendText() {},
+	sendNumber() {},
+	sendSwitch() {},
+	[Symbol.dispose]() {},
+}
+
+test('manager sets all combinated types from interface bitmask', () => {
+	const manager = new CameraManager()
+	const DRIVER_INTERFACE: DefText = { name: 'DRIVER_INTERFACE', value: (DeviceInterfaceType.CCD | DeviceInterfaceType.TELESCOPE).toFixed(0) }
+	const message: DefTextVector = { device: 'Camera', name: 'DRIVER_INFO', permission: 'ro', state: 'Ok', elements: { DRIVER_INTERFACE } }
+	manager.textVector(client, message, 'defTextVector')
+	const camera = manager.get(client, 'Camera')
+
+	expect(camera).toBeDefined()
+	expect(camera!.interfaces).toEqual(['camera', 'mount'])
+})
+
+test('manager sets the combinated type after interface bitmask be updated', () => {
+	let updated = false
+	const manager = new CameraManager()
+	manager.addHandler({
+		added: function (device: Camera) {},
+		updated(device, property, state) {
+			if (property === 'interfaces' && device.interfaces.length >= 2) updated = true
+		},
+		removed: function (device: Camera) {},
+	})
+	const DRIVER_INTERFACE: DefText = { name: 'DRIVER_INTERFACE', value: DeviceInterfaceType.CCD.toFixed(0) }
+	const elements = { DRIVER_INTERFACE }
+	const message: DefTextVector = { device: 'Camera', name: 'DRIVER_INFO', permission: 'ro', state: 'Ok', elements }
+	manager.textVector(client, message, 'defTextVector')
+	const camera = manager.get(client, 'Camera')
+
+	expect(camera).toBeDefined()
+	expect(camera!.interfaces).toEqual(['camera'])
+
+	DRIVER_INTERFACE.value = (DeviceInterfaceType.CCD | DeviceInterfaceType.FILTER).toFixed(0)
+	manager.textVector(client, message, 'defTextVector')
+
+	expect(camera!.interfaces).toEqual(['camera', 'wheel'])
+	expect(updated).toBeTrue()
+
+	updated = false
+
+	DRIVER_INTERFACE.value = (DeviceInterfaceType.CCD | DeviceInterfaceType.FILTER | DeviceInterfaceType.FOCUSER).toFixed(0)
+	manager.textVector(client, message, 'setTextVector')
+
+	expect(camera!.interfaces).toEqual(['camera', 'wheel', 'focuser'])
+	expect(updated).toBeTrue()
+
+	updated = false
+
+	DRIVER_INTERFACE.value = (DeviceInterfaceType.CCD | DeviceInterfaceType.ROTATOR).toFixed(0)
+	manager.textVector(client, message, 'setTextVector')
+
+	expect(camera!.interfaces).toEqual(['camera', 'rotator'])
+	expect(updated).toBeTrue()
+})
 
 describe('del property', () => {
-	const client: Client = {
-		type: 'INDI',
-		id: 'client',
-		description: '',
-		getProperties() {},
-		enableBlob() {},
-		sendText() {},
-		sendNumber() {},
-		sendSwitch() {},
-		[Symbol.dispose]() {},
-	}
-
 	function setupDevice<D extends Device>(device: D, owner: Client = client) {
 		device.id = Bun.randomUUIDv7()
 		device.name = device.type
@@ -34,6 +89,8 @@ describe('del property', () => {
 
 		expect(manager).toHaveLength(1)
 		expect(manager.get(client, device.name)).toBe(device)
+		expect(manager.get(client, device.id)).toBe(device)
+		expect(manager.get(client, device.hardwareId)).toBe(device)
 		expect(added).toBe(device)
 
 		manager.close(client, true)

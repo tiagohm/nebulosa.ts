@@ -616,12 +616,12 @@ export class MountSimulator extends DeviceSimulator {
 				this.setGuideRate(vector.elements.GUIDE_RATE_WE ?? this.guideRateRightAscension, vector.elements.GUIDE_RATE_NS ?? this.guideRateDeclination)
 				return
 			case 'TELESCOPE_TIMED_GUIDE_NS':
-				if ((vector.elements.TIMED_GUIDE_N ?? 0) > 0) this.pulse('NORTH', vector.elements.TIMED_GUIDE_N)
-				else if ((vector.elements.TIMED_GUIDE_S ?? 0) > 0) this.pulse('SOUTH', vector.elements.TIMED_GUIDE_S)
+				if (vector.elements.TIMED_GUIDE_N !== undefined && vector.elements.TIMED_GUIDE_N >= 0) this.pulse('NORTH', vector.elements.TIMED_GUIDE_N)
+				else if (vector.elements.TIMED_GUIDE_S !== undefined && vector.elements.TIMED_GUIDE_S >= 0) this.pulse('SOUTH', vector.elements.TIMED_GUIDE_S)
 				return
 			case 'TELESCOPE_TIMED_GUIDE_WE':
-				if ((vector.elements.TIMED_GUIDE_W ?? 0) > 0) this.pulse('WEST', vector.elements.TIMED_GUIDE_W)
-				else if ((vector.elements.TIMED_GUIDE_E ?? 0) > 0) this.pulse('EAST', vector.elements.TIMED_GUIDE_E)
+				if (vector.elements.TIMED_GUIDE_W !== undefined && vector.elements.TIMED_GUIDE_W >= 0) this.pulse('WEST', vector.elements.TIMED_GUIDE_W)
+				else if (vector.elements.TIMED_GUIDE_E !== undefined && vector.elements.TIMED_GUIDE_E >= 0) this.pulse('EAST', vector.elements.TIMED_GUIDE_E)
 				return
 			case 'MOUNT_ALIGNMENT':
 				if (applyNumberVectorValues(this.#alignment, vector.elements)) {
@@ -1155,6 +1155,17 @@ export class MountSimulator extends DeviceSimulator {
 	// behaviour of a controller being commanded faster than it can execute.
 	pulse(direction: GuideDirection, duration: number) {
 		if (!this.isConnected || this.isParked) return
+
+		if (duration <= 0) {
+			if (direction === 'NORTH' || direction === 'SOUTH') {
+				this.#northSouthPulses.length = 0
+			} else {
+				this.#westEastPulses.length = 0
+			}
+
+			this.#updatePulsing()
+			return
+		}
 
 		const config = this.#guideResponse
 		const executed = quantizeGuideDuration(duration, config)

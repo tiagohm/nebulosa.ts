@@ -1,0 +1,162 @@
+import { expect, test } from 'bun:test'
+import { PI, PIOVERTWO } from '../../../../src/core/constants'
+import { bahtinovAxialAngleDistance } from '../../../../src/imaging/analysis/bahtinov/geometry'
+import { detectBahtinovHoughCandidates, validateBahtinovHoughOptions } from '../../../../src/imaging/analysis/bahtinov/hough'
+import { createBahtinovWorkspace, preprocessBahtinov } from '../../../../src/imaging/analysis/bahtinov/preprocess'
+import type { Image } from '../../../../src/imaging/model/types'
+import { plotBahtinovSpikes } from '../../../../src/imaging/stars/bahtinov'
+
+function image(raw: Float64Array, width: number, height: number): Image {
+	return {
+		raw,
+		header: {},
+		metadata: {
+			width,
+			height,
+			channels: 1,
+			stride: width,
+			pixelCount: width * height,
+			strideInBytes: width * 8,
+			pixelSizeInBytes: 8,
+			bitpix: -64,
+			bayer: undefined,
+		},
+	}
+}
+
+test('detects and refines the three synthetic spike orientations', () => {
+	const width = 96
+	const height = 96
+	const raw = new Float64Array(width * height)
+	raw.fill(0.01)
+	const expected = [PI / 12, 0, (PI * 11) / 12] as const
+	plotBahtinovSpikes(raw, width, height, 1, 48, 48, 120, 2, undefined, { normalAngles: expected, halfLength: 34, taperLength: 5, fwhm: 1.7 })
+	const workspace = createBahtinovWorkspace(width, height, { precision: 64, maximumRidgePoints: 2048 })
+	const preprocessed = preprocessBahtinov({ image: image(raw, width, height), area: { left: 0, top: 0, right: width, bottom: height }, center: { x: 48, y: 48 } }, workspace, { transform: 'linear', coreRadius: 3, ridgeSigma: 2, maximumRidgePoints: 2048 })
+	expect(preprocessed.success).toBeTrue()
+	if (!preprocessed.success) return
+
+	const candidates = detectBahtinovHoughCandidates(preprocessed.ridgePoints, width, height, preprocessed.workspace, {
+		maximumCandidates: 8,
+		minimumAxialSeparation: PI / 36,
+		refinementRange: PI / 180,
+		refinementStep: PI / 1800,
+		center: preprocessed.center,
+	})
+	expect(candidates.length).toBeGreaterThanOrEqual(3)
+	for (const angle of expected) {
+		let best = Number.POSITIVE_INFINITY
+		for (const candidate of candidates) best = Math.min(best, bahtinovAxialAngleDistance(candidate.normalAngle, angle))
+		expect(best).toBeLessThan(PI / 360)
+	}
+	expect(candidates.every((candidate) => candidate.coverage > 0 && candidate.balance > 0 && Number.isFinite(candidate.distance))).toBeTrue()
+})
+
+test('handles axial NMS across zero and PI', () => {
+	const width = 80
+	const height = 80
+	const raw = new Float64Array(width * height)
+	raw.fill(0.01)
+	plotBahtinovSpikes(raw, width, height, 1, 40, 40, 100, 0, undefined, {
+		normalAngles: [0.01, PIOVERTWO, PI - 0.01],
+		central: 1,
+		halfLength: 28,
+		taperLength: 4,
+	})
+	const workspace = createBahtinovWorkspace(width, height, { precision: 64 })
+	const preprocessed = preprocessBahtinov({ image: image(raw, width, height), area: { left: 0, top: 0, right: width, bottom: height }, center: { x: 40, y: 40 } }, workspace, { coreRadius: 2, ridgeSigma: 2 })
+	expect(preprocessed.success).toBeTrue()
+	if (!preprocessed.success) return
+	const candidates = detectBahtinovHoughCandidates(preprocessed.ridgePoints, width, height, preprocessed.workspace, { minimumAxialSeparation: PI / 18, center: preprocessed.center })
+	const boundaryCandidates = candidates.filter((candidate) => bahtinovAxialAngleDistance(candidate.normalAngle, 0) < PI / 36)
+	expect(boundaryCandidates.length).toBe(1)
+})
+
+test('preserves coarse peaks at the exact minimum axial separation', () => {
+	const width = 128
+	const height = 128
+	const center = { x: 63.5, y: 63.5 }
+	const expected = [0, PI / 36, PI / 18] as const
+	const pointCount = expected.length * 33
+	const x = new Float32Array(pointCount)
+	const y = new Float32Array(pointCount)
+	const weight = new Float32Array(pointCount)
+	let point = 0
+	for (const angle of expected) {
+		const tangentX = -Math.sin(angle)
+		const tangentY = Math.cos(angle)
+		for (let sample = -16; sample <= 16; sample++, point++) {
+			x[point] = center.x + sample * 2.5 * tangentX
+			y[point] = center.y + sample * 2.5 * tangentY
+			weight[point] = 1
+		}
+	}
+	const workspace = createBahtinovWorkspace(width, height, { precision: 64, maximumRidgePoints: pointCount })
+	const candidates = detectBahtinovHoughCandidates({ x, y, weight, count: pointCount }, width, height, workspace, {
+		minimumAxialSeparation: PI / 36,
+		refinementRange: 0,
+		center,
+	})
+	for (const angle of expected) expect(candidates.some((candidate) => bahtinovAxialAngleDistance(candidate.normalAngle, angle) < PI / 360)).toBeTrue()
+})
+
+test('caps default candidates to coarse workspaces and rejects fewer than three bins', () => {
+	const width = 80
+	const height = 80
+	expect(() => createBahtinovWorkspace(width, height, { angleStep: PIOVERTWO })).toThrow(RangeError)
+
+	const raw = new Float64Array(width * height)
+	raw.fill(0.01)
+	plotBahtinovSpikes(raw, width, height, 1, 39.5, 39.5, 100, 0, undefined, {
+		normalAngles: [0, PI / 3, (PI * 2) / 3],
+		central: 1,
+		halfLength: 28,
+		taperLength: 4,
+	})
+	const workspace = createBahtinovWorkspace(width, height, { precision: 64, angleStep: PI / 6 })
+	const preprocessed = preprocessBahtinov({ image: image(raw, width, height), area: { left: 0, top: 0, right: width, bottom: height }, center: { x: 39.5, y: 39.5 } }, workspace, { coreRadius: 2, ridgeSigma: 2 })
+	expect(preprocessed.success).toBeTrue()
+	if (!preprocessed.success) return
+	const candidates = detectBahtinovHoughCandidates(preprocessed.ridgePoints, width, height, workspace, { center: preprocessed.center })
+	expect(candidates.length).toBeLessThanOrEqual(workspace.angleCount)
+})
+
+test('rejects an unsafe local refinement sample count', () => {
+	const workspace = createBahtinovWorkspace(80, 80)
+	expect(() => validateBahtinovHoughOptions(workspace, { refinementStep: 1e-300 })).toThrow(RangeError)
+})
+
+test('adapts default refinement to tighter candidate separation', () => {
+	const workspace = createBahtinovWorkspace(80, 80)
+	expect(() => validateBahtinovHoughOptions(workspace, { minimumAxialSeparation: PI / 180 })).not.toThrow()
+})
+
+test('keeps non-divisible refinement steps inside the configured range', () => {
+	const width = 96
+	const height = 96
+	const raw = new Float64Array(width * height)
+	raw.fill(0.01)
+	plotBahtinovSpikes(raw, width, height, 1, 47.5, 47.5, 120, 0, undefined, {
+		normalAngles: [PI / 36, (PI * 13) / 36, (PI * 25) / 36],
+		central: 1,
+		halfLength: 34,
+		taperLength: 5,
+	})
+	const workspace = createBahtinovWorkspace(width, height, { precision: 64, angleStep: PI / 18 })
+	const preprocessed = preprocessBahtinov({ image: image(raw, width, height), area: { left: 0, top: 0, right: width, bottom: height }, center: { x: 47.5, y: 47.5 } }, workspace, { coreRadius: 3, ridgeSigma: 2 })
+	expect(preprocessed.success).toBeTrue()
+	if (!preprocessed.success) return
+	const refinementRange = PI / 45
+	const candidates = detectBahtinovHoughCandidates(preprocessed.ridgePoints, width, height, workspace, {
+		minimumAxialSeparation: PI / 18,
+		refinementRange,
+		refinementStep: PI / 60,
+		center: preprocessed.center,
+	})
+	expect(candidates.length).toBeGreaterThanOrEqual(3)
+	for (const candidate of candidates) {
+		let nearestCoarse = Number.POSITIVE_INFINITY
+		for (let index = 0; index < workspace.angleCount; index++) nearestCoarse = Math.min(nearestCoarse, bahtinovAxialAngleDistance(candidate.normalAngle, index * workspace.angleStep))
+		expect(nearestCoarse).toBeLessThanOrEqual(refinementRange + 1e-12)
+	}
+})

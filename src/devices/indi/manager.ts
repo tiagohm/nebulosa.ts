@@ -6,11 +6,11 @@ import { type Angle, deg, hour, normalizeAngle, normalizePI, parseAngle, toDeg, 
 import { meter, toMeter } from '../../math/units/distance'
 import type { IndiClientHandler } from './client'
 // oxfmt-ignore
-import { type Camera, type CameraTransferFormat, CLIENT, type Client, type Cover, DEFAULT_CAMERA, DEFAULT_COVER, DEFAULT_DEW_HEATER, DEFAULT_FLAT_PANEL, DEFAULT_FOCUSER, DEFAULT_GUIDE_OUTPUT, DEFAULT_MOUNT, DEFAULT_POWER, DEFAULT_ROTATOR, DEFAULT_THERMOMETER, DEFAULT_WHEEL, type Device, DeviceInterfaceType, type DeviceProperties, type DeviceProperty, type DeviceType, type DewHeater, type FlatPanel, type Focuser, type FrameType, type GPS, type GuideDirection, type GuideOutput, isInterfaceType, type MinMaxValueProperty, type Mount, type MountTargetCoordinate, type NameAndLabel, type Parkable, type Power, type PowerChannel, type PowerChannelType, type Rotator, type SubDevice, type Thermometer, type TrackMode, type Wheel } from './device'
+import { type Camera, type CameraTransferFormat, CLIENT, type Client, type Cover, DEFAULT_CAMERA, DEFAULT_COVER, DEFAULT_DEW_HEATER, DEFAULT_FLAT_PANEL, DEFAULT_FOCUSER, DEFAULT_GUIDE_OUTPUT, DEFAULT_MOUNT, DEFAULT_POWER, DEFAULT_ROTATOR, DEFAULT_THERMOMETER, DEFAULT_WHEEL, type Device, DeviceInterfaceType, type DeviceProperties, type DeviceProperty, type DeviceType, type DewHeater, findDeviceTypes, type FlatPanel, type Focuser, type FrameType, type GPS, type GuideDirection, type GuideOutput, isInterfaceType, type MinMaxValueProperty, type Mount, type MountTargetCoordinate, type NameAndLabel, type Parkable, type Power, type PowerChannel, type PowerChannelType, type Rotator, type SubDevice, type Thermometer, type TrackMode, type Wheel } from './device'
 import type { GeographicCoordinate } from '../../astronomy/observer/location'
 import { formatTemporal, parseTemporal } from '../../astronomy/time/temporal'
 import { type Time, timeNow } from '../../astronomy/time/time'
-import type { PickByValue } from '../../core/types'
+import type { PickByValue, Writable } from '../../core/types'
 // oxfmt-ignore
 import { findOnSwitch, type BlobEncoding, type DefBlobVector, type DefElement, type DefNumber, type DefNumberVector, type DefSwitch, type DefSwitchVector, type DefTextVector, type DefVector, type DelProperty, type OneNumber, type PropertyState, type SetBlobVector, type SetNumberVector, type SetSwitchVector, type SetTextVector, type SetVector, type ValueType } from './types'
 
@@ -42,7 +42,7 @@ export interface DeviceProvider<D extends Device> {
 }
 
 // Maps an INDI DRIVER_INTERFACE bit to the default device template used to seed a newly seen device.
-const DEVICES = {
+const MODEL_DEVICES = {
 	[DeviceInterfaceType.TELESCOPE]: DEFAULT_MOUNT,
 	[DeviceInterfaceType.CCD]: DEFAULT_CAMERA,
 	[DeviceInterfaceType.FOCUSER]: DEFAULT_FOCUSER,
@@ -258,12 +258,13 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 		return devices
 	}
 
-	// Resolves a managed device by id or, scoped to a client, by name.
+	// Resolves a managed device by id or hardware id or, scoped to a client, by name.
 	get(client: Client | string | undefined, id: string) {
 		client = typeof client === 'string' ? this.#clients.get(client) : client
 
 		for (const device of this.#devices.values()) {
 			if (device.id === id) return device
+			if (device.hardwareId === id) return device
 			if (device[CLIENT] === client && device.name === id) return device
 		}
 
@@ -360,16 +361,31 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 		const { elements } = message
 		const type = +elements.DRIVER_INTERFACE.value
 		const name = message.device
-		let device = this.get(client, name)
+		let device: Writable<D> | undefined = this.get(client, name)
 
 		if (isInterfaceType(type, interfaceType)) {
+			const modelDevice = MODEL_DEVICES[interfaceType as keyof typeof MODEL_DEVICES] as unknown as D | undefined
+
+			if (!modelDevice) return
+
+			const interfaces = findDeviceTypes(type)
+
 			if (device === undefined) {
-				device = structuredClone<D>(DEVICES[interfaceType as never])
-				const id = Bun.MD5.hash(`${client.id}:${device.type}:${name}`, 'hex')
-				device = { ...device, id, name, [CLIENT]: client, driver: { executable: elements.DRIVER_EXEC.value, version: elements.DRIVER_VERSION.value }, client: { type: client.type, id: client.id } }
+				device = structuredClone<D>(modelDevice)
+
+				device.id = Bun.MD5.hash(`${client.id}:${device.type}:${name}`, 'hex')
+				device.hardwareId = Bun.MD5.hash(`${client.id}:${name}`, 'hex')
+				device.name = name
+				device.interfaces = interfaces
+				device[CLIENT] = client
+				device.driver = { executable: elements.DRIVER_EXEC?.value ?? '', version: elements.DRIVER_VERSION?.value ?? '' }
+				device.client = { type: client.type, id: client.id }
 
 				this.add(device)
 				this.ask(device)
+			} else if (device.interfaces.length !== interfaces.length) {
+				device.interfaces = interfaces
+				this.updated(device, 'interfaces', undefined)
 			}
 		} else if (device !== undefined) {
 			this.remove(device)
@@ -2407,10 +2423,12 @@ function proxyDevice<D extends Device>(parent: D, id: string, type: DeviceType) 
 			if (prop === 'parent') return parent
 			return Reflect.get(target, prop)
 		},
-		// Used to make parentId show up in Object.keys() and similar functions, which is useful for debugging and serialization
+		// parentId is never set, so this is used show up in Object.keys() and similar functions, which is useful for debugging and serialization
 		// JSON.stringify ignores properties that don't show up in Object.keys()
 		ownKeys(target) {
-			return [...Reflect.ownKeys(target), 'parentId']
+			const keys = Reflect.ownKeys(target)
+			keys.push('parentId')
+			return keys
 		},
 		getOwnPropertyDescriptor(target, prop) {
 			if (prop === 'parentId') {
