@@ -1,20 +1,20 @@
 // oxfmt-ignore
-import { type AlpacaAxisRate, AlpacaCameraState, type AlpacaConfiguredDevice, type AlpacaDeviceNumberProvider, type AlpacaDeviceType, AlpacaError, AlpacaException, type AlpacaFocuserAction, AlpacaImageElementType, type AlpacaServerStartOptions, type AlpacaStateItem, type AlpacaWheelAction, defaultDeviceNumberProvider, SUPPORTED_FOCUSER_ACTIONS, SUPPORTED_WHEEL_ACTIONS } from './types'
+import { type AlpacaAxisRate, AlpacaCameraState, type AlpacaConfiguredDevice, type AlpacaDeviceNumberProvider, type AlpacaDeviceType, AlpacaDomeShutterState, AlpacaError, AlpacaException, type AlpacaFocuserAction, AlpacaImageElementType, type AlpacaServerStartOptions, type AlpacaStateItem, type AlpacaWheelAction, defaultDeviceNumberProvider, SUPPORTED_FOCUSER_ACTIONS, SUPPORTED_WHEEL_ACTIONS } from './types'
 import { observedToCirs } from '../../astronomy/coordinates/astrometry'
 import { type EquatorialCoordinate, equatorialToHorizontal } from '../../astronomy/coordinates/coordinate'
 import { Bitpix, computeRemainingBytes, FitsKeywordReader } from '../../io/formats/fits/fits'
 import { bitpixInBytes } from '../../io/formats/fits/util'
-import { type Angle, deg, hour, toDeg, toHour } from '../../math/units/angle'
+import { type Angle, deg, hour, normalizeAngle, toDeg, toHour } from '../../math/units/angle'
 import { meter, toMeter } from '../../math/units/distance'
 // oxfmt-ignore
-import { type Camera, type Cover, type Device, type DeviceType, expectedPierSide, type FlatPanel, type Focuser, type GuideDirection, type GuideOutput, isCamera, isFocuser, isMount, isWheel, type Mount, type NameAndLabel, type PierSide, type Rotator, type TrackMode, type Wheel } from '../indi/device'
+import { type Camera, type Cover, type Device, type DeviceType, expectedPierSide, type Dome, type FlatPanel, type Focuser, type GuideDirection, type GuideOutput, isCamera, isFocuser, isMount, isWheel, type Mount, type NameAndLabel, type PierSide, type Rotator, type TrackMode, type Wheel } from '../indi/device'
 import { type GeographicCoordinate, localSiderealTime } from '../../astronomy/observer/location'
 import { type Time, timeNow } from '../../astronomy/time/time'
-import type { CameraManager, CoverManager, DeviceHandler, DeviceManager, FlatPanelManager, FocuserManager, GuideOutputManager, MountManager, RotatorManager, WheelManager } from '../indi/manager'
+import type { CameraManager, CoverManager, DeviceHandler, DeviceManager, DomeManager, FlatPanelManager, FocuserManager, GuideOutputManager, MountManager, RotatorManager, WheelManager } from '../indi/manager'
 import type { BlobEncoding } from '../indi/types'
 
 // Embedded ASCOM Alpaca server: exposes the app's INDI devices (camera, mount, focuser, wheel, rotator,
-// cover/calibrator) over the Alpaca REST API so external Alpaca clients can control them. Subscribes to
+// dome, cover/calibrator) over the Alpaca REST API so external Alpaca clients can control them. Subscribes to
 // the device managers to track devices, maintains per-device Alpaca state, and serves the management and
 // per-device endpoints via Bun.serve. Internal radians/AU/etc. are converted to the Alpaca spec units.
 
@@ -34,6 +34,7 @@ export interface AlpacaServerOptions {
 	focuser?: FocuserManager
 	wheel?: WheelManager
 	rotator?: RotatorManager
+	dome?: DomeManager
 	flatPanel?: FlatPanelManager
 	cover?: CoverManager
 	guideOutput?: GuideOutputManager
@@ -102,7 +103,7 @@ export class AlpacaServer {
 		focuser: new Map<Device, AlpacaRegisteredDevice<Focuser>>(),
 		filterwheel: new Map<Device, AlpacaRegisteredDevice<Wheel>>(),
 		rotator: new Map<Device, AlpacaRegisteredDevice<Rotator>>(),
-		dome: new Map<Device, AlpacaRegisteredDevice>(),
+		dome: new Map<Device, AlpacaRegisteredDevice<Dome>>(),
 		switch: new Map<Device, AlpacaRegisteredDevice>(),
 		covercalibrator: new Map<Device, AlpacaRegisteredDevice<Cover | FlatPanel>>(),
 		observingconditions: new Map<Device, AlpacaRegisteredDevice>(),
@@ -223,8 +224,22 @@ export class AlpacaServer {
 		},
 	}
 
+	readonly #domeHandler: DeviceHandler<Dome> = {
+		added: (device: Dome) => {
+			this.#makeConfiguredDeviceFromDevice(device, 'dome')
+		},
+		updated: (device, property) => {
+			if (property === 'connected') {
+				this.#handleConnectedEvent(device, 'dome')
+			}
+		},
+		removed: (device: Dome) => {
+			this.#removeConfiguredDevice(device, 'dome')
+		},
+	}
+
 	constructor(readonly options: AlpacaServerOptions) {
-		this.#deviceManager = (options.camera ?? options.mount ?? options.focuser ?? options.wheel ?? options.flatPanel ?? options.cover ?? options.rotator) as unknown as DeviceManager<Device>
+		this.#deviceManager = (options.camera ?? options.mount ?? options.focuser ?? options.wheel ?? options.flatPanel ?? options.cover ?? options.rotator ?? options.dome) as unknown as DeviceManager<Device>
 
 		if (!this.#deviceManager) throw new Error('at least one device manager must be provided.')
 
@@ -395,6 +410,32 @@ export class AlpacaServer {
 		'/api/v1/telescope/:id/synctocoordinates': { PUT: async (req) => this.#mountSyncToCoordinates(+req.params.id, await params(req)) },
 		'/api/v1/telescope/:id/synctotarget': { PUT: (req) => this.#mountSyncToTarget(+req.params.id) },
 		'/api/v1/telescope/:id/unpark': { PUT: (req) => this.#mountUnpark(+req.params.id) },
+		// Dome
+		'/api/v1/dome/:id/altitude': { GET: (req) => this.#domeGetAltitude(+req.params.id) },
+		'/api/v1/dome/:id/athome': { GET: (req) => this.#domeIsAtHome(+req.params.id) },
+		'/api/v1/dome/:id/atpark': { GET: (req) => this.#domeIsAtPark(+req.params.id) },
+		'/api/v1/dome/:id/azimuth': { GET: (req) => this.#domeGetAzimuth(+req.params.id) },
+		'/api/v1/dome/:id/canfindhome': { GET: (req) => this.#domeCanFindHome(+req.params.id) },
+		'/api/v1/dome/:id/canpark': { GET: (req) => this.#domeCanPark(+req.params.id) },
+		'/api/v1/dome/:id/cansetaltitude': { GET: (req) => this.#domeCanSetAltitude(+req.params.id) },
+		'/api/v1/dome/:id/cansetazimuth': { GET: (req) => this.#domeCanSetAzimuth(+req.params.id) },
+		'/api/v1/dome/:id/cansetpark': { GET: (req) => this.#domeCanSetPark(+req.params.id) },
+		'/api/v1/dome/:id/cansetshutter': { GET: (req) => this.#domeCanSetShutter(+req.params.id) },
+		'/api/v1/dome/:id/canslave': { GET: (req) => this.#domeCanSlave(+req.params.id) },
+		'/api/v1/dome/:id/cansyncazimuth': { GET: (req) => this.#domeCanSyncAzimuth(+req.params.id) },
+		'/api/v1/dome/:id/devicestate': { GET: (req) => this.#domeGetDeviceState(+req.params.id) },
+		'/api/v1/dome/:id/shutterstatus': { GET: (req) => this.#domeGetShutterStatus(+req.params.id) },
+		'/api/v1/dome/:id/slaved': { GET: (req) => this.#domeIsSlaved(+req.params.id), PUT: async (req) => this.#domeSetSlaved(+req.params.id, await params(req)) },
+		'/api/v1/dome/:id/slewing': { GET: (req) => this.#domeIsSlewing(+req.params.id) },
+		'/api/v1/dome/:id/abortslew': { PUT: (req) => this.#domeAbort(+req.params.id) },
+		'/api/v1/dome/:id/closeshutter': { PUT: (req) => this.#domeCloseShutter(+req.params.id) },
+		'/api/v1/dome/:id/findhome': { PUT: (req) => this.#domeFindHome(+req.params.id) },
+		'/api/v1/dome/:id/openshutter': { PUT: (req) => this.#domeOpenShutter(+req.params.id) },
+		'/api/v1/dome/:id/park': { PUT: (req) => this.#domePark(+req.params.id) },
+		'/api/v1/dome/:id/setpark': { PUT: (req) => this.#domeSetPark(+req.params.id) },
+		'/api/v1/dome/:id/slewtoaltitude': { PUT: async (req) => this.#domeSlewToAltitude(+req.params.id, await params(req)) },
+		'/api/v1/dome/:id/slewtoazimuth': { PUT: async (req) => this.#domeSlewToAzimuth(+req.params.id, await params(req)) },
+		'/api/v1/dome/:id/synctoazimuth': { PUT: async (req) => this.#domeSyncToAzimuth(+req.params.id, await params(req)) },
 		// Focuser
 		'/api/v1/focuser/:id/absolute': { GET: (req) => this.#focuserCanAbsolute(+req.params.id) },
 		'/api/v1/focuser/:id/devicestate': { GET: (req) => this.#focuserGetDeviceState(+req.params.id) },
@@ -459,6 +500,7 @@ export class AlpacaServer {
 		this.options.focuser?.addHandler(this.#focuserHandler)
 		this.options.cover?.addHandler(this.#coverHandler)
 		this.options.flatPanel?.addHandler(this.#flatPanelHandler)
+		this.options.dome?.addHandler(this.#domeHandler)
 
 		this.configuredDevices()
 
@@ -475,14 +517,15 @@ export class AlpacaServer {
 		this.options.focuser?.removeHandler(this.#focuserHandler)
 		this.options.cover?.removeHandler(this.#coverHandler)
 		this.options.flatPanel?.removeHandler(this.#flatPanelHandler)
+		this.options.dome?.removeHandler(this.#domeHandler)
 
 		this.#equipment.camera.clear()
 		this.#equipment.telescope.clear()
 		this.#equipment.filterwheel.clear()
 		this.#equipment.focuser.clear()
 		this.#equipment.rotator.clear()
+		this.#equipment.dome.clear()
 		this.#equipment.covercalibrator.clear()
-		// this.equipment.dome.clear()
 		// this.equipment.switch.clear()
 		// this.equipment.observingconditions.clear()
 		// this.equipment.safetymonitor.clear()
@@ -546,6 +589,10 @@ export class AlpacaServer {
 		return this.#device<FlatPanel>(key, 'covercalibrator', 'flatPanel')
 	}
 
+	#dome(key: Device | number) {
+		return this.#device<Dome>(key, 'dome')
+	}
+
 	#guideOutput(key: Device | number, type: 'camera' | 'telescope') {
 		return this.#device<GuideOutput>(key, type)
 	}
@@ -602,6 +649,7 @@ export class AlpacaServer {
 		if (this.options.focuser) for (const e of this.options.focuser.list()) add(e, 'focuser')
 		if (this.options.wheel) for (const e of this.options.wheel.list()) add(e, 'filterwheel')
 		if (this.options.rotator) for (const e of this.options.rotator.list()) add(e, 'rotator')
+		if (this.options.dome) for (const e of this.options.dome.list()) add(e, 'dome')
 		if (this.options.flatPanel) for (const e of this.options.flatPanel.list()) add(e, 'covercalibrator')
 		if (this.options.cover) for (const e of this.options.cover.list()) add(e, 'covercalibrator')
 
@@ -1489,6 +1537,217 @@ export class AlpacaServer {
 		return makeAlpacaResponse(undefined)
 	}
 
+	// Dome API
+
+	#requireDomeConnected(id: number): AlpacaRegisteredDevice<Dome> | Response {
+		const registered = this.#dome(id)
+
+		if (!registered) return makeAlpacaErrorResponse(AlpacaException.InvalidOperation, 'Dome is not present')
+		if (!registered.device.connected) return makeAlpacaErrorResponse(AlpacaException.NotConnected, 'Dome is not connected')
+
+		return registered
+	}
+
+	#requireDomeCapability(id: number, capability: 'canFindHome' | 'canPark' | 'canSetAltitude' | 'canSetAzimuth' | 'canSetPark' | 'canSetShutter' | 'canSlave' | 'canSync' | 'hasShutter', message: string): AlpacaRegisteredDevice<Dome> | Response {
+		const registered = this.#requireDomeConnected(id)
+
+		if (registered instanceof Response) return registered
+		if (!registered.device[capability]) return makeAlpacaErrorResponse(AlpacaException.MethodOrPropertyNotImplemented, message)
+
+		return registered
+	}
+
+	#requireDomeNotSlaved(registered: AlpacaRegisteredDevice<Dome>) {
+		return registered.device.slaved ? makeAlpacaErrorResponse(AlpacaException.Slaved, 'Dome is slaved') : registered
+	}
+
+	#domeGetAltitude(id: number) {
+		const registered = this.#requireDomeConnected(id)
+		return registered instanceof Response ? registered : makeAlpacaResponse(toDeg(registered.device.altitude.value))
+	}
+
+	#domeIsAtHome(id: number) {
+		const registered = this.#requireDomeConnected(id)
+		return registered instanceof Response ? registered : makeAlpacaResponse(registered.device.atHome)
+	}
+
+	#domeIsAtPark(id: number) {
+		const registered = this.#requireDomeConnected(id)
+		return registered instanceof Response ? registered : makeAlpacaResponse(registered.device.parked)
+	}
+
+	#domeGetAzimuth(id: number) {
+		const registered = this.#requireDomeConnected(id)
+		return registered instanceof Response ? registered : makeAlpacaResponse(toDeg(normalizeAngle(registered.device.azimuth.value)))
+	}
+
+	#domeCanFindHome(id: number) {
+		const registered = this.#requireDomeConnected(id)
+		return registered instanceof Response ? registered : makeAlpacaResponse(registered.device.canFindHome)
+	}
+
+	#domeCanPark(id: number) {
+		const registered = this.#requireDomeConnected(id)
+		return registered instanceof Response ? registered : makeAlpacaResponse(registered.device.canPark)
+	}
+
+	#domeCanSetAltitude(id: number) {
+		const registered = this.#requireDomeConnected(id)
+		return registered instanceof Response ? registered : makeAlpacaResponse(registered.device.canSetAltitude)
+	}
+
+	#domeCanSetAzimuth(id: number) {
+		const registered = this.#requireDomeConnected(id)
+		return registered instanceof Response ? registered : makeAlpacaResponse(registered.device.canSetAzimuth)
+	}
+
+	#domeCanSetPark(id: number) {
+		const registered = this.#requireDomeConnected(id)
+		return registered instanceof Response ? registered : makeAlpacaResponse(registered.device.canSetPark)
+	}
+
+	#domeCanSetShutter(id: number) {
+		const registered = this.#requireDomeConnected(id)
+		return registered instanceof Response ? registered : makeAlpacaResponse(registered.device.canSetShutter)
+	}
+
+	#domeCanSlave(id: number) {
+		const registered = this.#requireDomeConnected(id)
+		return registered instanceof Response ? registered : makeAlpacaResponse(registered.device.canSlave)
+	}
+
+	#domeCanSyncAzimuth(id: number) {
+		const registered = this.#requireDomeConnected(id)
+		return registered instanceof Response ? registered : makeAlpacaResponse(registered.device.canSync)
+	}
+
+	#domeGetShutterStatus(id: number) {
+		const registered = this.#requireDomeCapability(id, 'hasShutter', 'Dome does not have a shutter')
+		return registered instanceof Response ? registered : makeAlpacaResponse(mapDomeShutterState(registered.device.shutterState))
+	}
+
+	#domeIsSlaved(id: number) {
+		const registered = this.#requireDomeCapability(id, 'canSlave', 'Dome does not support slaving')
+		return registered instanceof Response ? registered : makeAlpacaResponse(registered.device.slaved)
+	}
+
+	#domeIsSlewing(id: number) {
+		const registered = this.#requireDomeConnected(id)
+		return registered instanceof Response ? registered : makeAlpacaResponse(registered.device.slewing)
+	}
+
+	// Returns only values represented by the connected dome and omits unsupported optional properties.
+	#domeGetDeviceState(id: number) {
+		const registered = this.#requireDomeConnected(id)
+		if (registered instanceof Response) return registered
+
+		const { device } = registered
+		const res: AlpacaStateItem[] = []
+
+		if (device.canSetAltitude || device.altitude.max > device.altitude.min) res.push({ Name: 'Altitude', Value: toDeg(device.altitude.value) })
+		if (device.canFindHome) res.push({ Name: 'AtHome', Value: device.atHome })
+		if (device.canPark) res.push({ Name: 'AtPark', Value: device.parked })
+		if (device.canSetAzimuth) res.push({ Name: 'Azimuth', Value: toDeg(normalizeAngle(device.azimuth.value)) })
+		if (device.hasShutter) res.push({ Name: 'ShutterStatus', Value: mapDomeShutterState(device.shutterState) })
+		res.push({ Name: 'Slewing', Value: device.slewing }, { Name: 'TimeStamp', Value: '' })
+		return makeAlpacaResponse(res)
+	}
+
+	#domeSetSlaved(id: number, data: { Slaved: string }) {
+		const registered = this.#requireDomeCapability(id, 'canSlave', 'Dome does not support slaving')
+		if (registered instanceof Response) return registered
+
+		this.options.dome?.slave(registered.device, isTrue(data.Slaved))
+		return makeAlpacaResponse(undefined)
+	}
+
+	#domeAbort(id: number) {
+		const registered = this.#requireDomeConnected(id)
+		if (registered instanceof Response) return registered
+		if (!registered.device.canAbort) return makeAlpacaErrorResponse(AlpacaException.InvalidOperation, 'Dome cannot interrupt movement')
+
+		const wasSlaved = registered.device.slaved
+		this.options.dome?.stop(registered.device)
+		if (wasSlaved && registered.device.canSlave) this.options.dome?.slave(registered.device, false)
+		return makeAlpacaResponse(undefined)
+	}
+
+	#domeCloseShutter(id: number) {
+		const registered = this.#requireDomeCapability(id, 'canSetShutter', 'Dome does not support shutter control')
+		return registered instanceof Response ? registered : (this.options.dome?.closeShutter(registered.device), makeAlpacaResponse(undefined))
+	}
+
+	#domeFindHome(id: number) {
+		const registered = this.#requireDomeCapability(id, 'canFindHome', 'Dome does not support finding home')
+		if (registered instanceof Response) return registered
+
+		const movable = this.#requireDomeNotSlaved(registered)
+		return movable instanceof Response ? movable : (this.options.dome?.home(movable.device), makeAlpacaResponse(undefined))
+	}
+
+	#domeOpenShutter(id: number) {
+		const registered = this.#requireDomeCapability(id, 'canSetShutter', 'Dome does not support shutter control')
+		return registered instanceof Response ? registered : (this.options.dome?.openShutter(registered.device), makeAlpacaResponse(undefined))
+	}
+
+	#domePark(id: number) {
+		const registered = this.#requireDomeCapability(id, 'canPark', 'Dome does not support parking')
+		if (registered instanceof Response) return registered
+
+		const movable = this.#requireDomeNotSlaved(registered)
+		if (movable instanceof Response) return movable
+
+		this.options.dome?.park(movable.device)
+		return makeAlpacaResponse(undefined)
+	}
+
+	#domeSetPark(id: number) {
+		const registered = this.#requireDomeCapability(id, 'canSetPark', 'Dome does not support setting park')
+		return registered instanceof Response ? registered : (this.options.dome?.setPark(registered.device), makeAlpacaResponse(undefined))
+	}
+
+	#domeSlewToAltitude(id: number, data: { Altitude: string }) {
+		const registered = this.#requireDomeCapability(id, 'canSetAltitude', 'Dome does not support altitude movement')
+		if (registered instanceof Response) return registered
+
+		const movable = this.#requireDomeNotSlaved(registered)
+		if (movable instanceof Response) return movable
+
+		const altitude = +data.Altitude
+		if (!Number.isFinite(altitude) || altitude < 0 || altitude > 90) return makeAlpacaErrorResponse(AlpacaException.InvalidValue, 'Altitude must be between 0 and 90 degrees')
+
+		this.options.dome?.moveToAltitude(movable.device, deg(altitude))
+		return makeAlpacaResponse(undefined)
+	}
+
+	#domeSlewToAzimuth(id: number, data: { Azimuth: string }) {
+		const registered = this.#requireDomeCapability(id, 'canSetAzimuth', 'Dome does not support azimuth movement')
+		if (registered instanceof Response) return registered
+
+		const movable = this.#requireDomeNotSlaved(registered)
+		if (movable instanceof Response) return movable
+
+		const azimuth = +data.Azimuth
+		if (!Number.isFinite(azimuth) || azimuth < 0 || azimuth > 360) return makeAlpacaErrorResponse(AlpacaException.InvalidValue, 'Azimuth must be between 0 and 360 degrees')
+
+		this.options.dome?.moveTo(movable.device, deg(azimuth))
+		return makeAlpacaResponse(undefined)
+	}
+
+	#domeSyncToAzimuth(id: number, data: { Azimuth: string }) {
+		const registered = this.#requireDomeCapability(id, 'canSync', 'Dome does not support azimuth synchronization')
+		if (registered instanceof Response) return registered
+
+		const movable = this.#requireDomeNotSlaved(registered)
+		if (movable instanceof Response) return movable
+
+		const azimuth = +data.Azimuth
+		if (!Number.isFinite(azimuth) || azimuth < 0 || azimuth > 360) return makeAlpacaErrorResponse(AlpacaException.InvalidValue, 'Azimuth must be between 0 and 360 degrees')
+
+		this.options.dome?.syncTo(movable.device, deg(azimuth))
+		return makeAlpacaResponse(undefined)
+	}
+
 	// Focuser
 
 	#focuserCanAbsolute(id: number) {
@@ -1802,8 +2061,8 @@ export function makeImageBytesFromFits(source: Buffer) {
 }
 
 // Case-insensitive boolean parse of an Alpaca 'True'/'False' form value.
-function isTrue(value: string) {
-	return value.toLowerCase() === 'true'
+function isTrue(value: string | undefined | null) {
+	return value?.toLowerCase() === 'true'
 }
 
 // Wraps a value in the Alpaca JSON response envelope.
@@ -1839,6 +2098,23 @@ function mapAlpacaEnumToGuideDirection(value: number): GuideDirection {
 // Track mode → Alpaca enum: SIDEREAL=0, LUNAR=1, SOLAR=2, KING=3.
 function mapTrackModeToAlpacaEnum(value: TrackMode) {
 	return value === 'SIDEREAL' ? 0 : value === 'LUNAR' ? 1 : value === 'SOLAR' ? 2 : 3
+}
+
+// Converts the shared dome shutter state to the Alpaca numeric enum; unknown and driver-error
+// states use Alpaca's ERROR value because the protocol has no UNKNOWN member.
+function mapDomeShutterState(value: Dome['shutterState']) {
+	switch (value) {
+		case 'OPEN':
+			return AlpacaDomeShutterState.OPEN
+		case 'CLOSED':
+			return AlpacaDomeShutterState.CLOSED
+		case 'OPENING':
+			return AlpacaDomeShutterState.OPENING
+		case 'CLOSING':
+			return AlpacaDomeShutterState.CLOSING
+		default:
+			return AlpacaDomeShutterState.ERROR
+	}
 }
 
 // Alpaca enum → track mode (inverse of mapTrackModeToAlpacaEnum).

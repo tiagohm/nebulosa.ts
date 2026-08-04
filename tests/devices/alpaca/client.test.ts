@@ -3,7 +3,7 @@ import { timeYMDHMS } from '../../../src/astronomy/time/time'
 import { AlpacaClient, type AlpacaClientHandler, makeFitsFromImageBytes } from '../../../src/devices/alpaca/client'
 import { makeImageBytesFromFits } from '../../../src/devices/alpaca/server'
 import { CLIENT, type Client, DEFAULT_CAMERA, DEFAULT_MOUNT, type Device, type DeviceType } from '../../../src/devices/indi/device'
-import { CameraManager, CoverManager, type DeviceProvider, FlatPanelManager, FocuserManager, GuideOutputManager, MountManager, RotatorManager, ThermometerManager, WheelManager } from '../../../src/devices/indi/manager'
+import { CameraManager, CoverManager, type DeviceProvider, DomeManager, FlatPanelManager, FocuserManager, GuideOutputManager, MountManager, RotatorManager, ThermometerManager, WheelManager } from '../../../src/devices/indi/manager'
 import type { PropertyState } from '../../../src/devices/indi/types'
 import { readImageFromBuffer } from '../../../src/imaging/model/image'
 import { debayer } from '../../../src/imaging/processing/debayer'
@@ -80,6 +80,7 @@ const focuserManager = new FocuserManager()
 const flatPanelManager = new FlatPanelManager()
 const coverManager = new CoverManager()
 const rotatorManager = new RotatorManager()
+const domeManager = new DomeManager()
 
 const guideOutput = new GuideOutputManager({
 	get: (client: Client | string | undefined, name: string) => mountManager.get(client, name) ?? cameraManager.get(client, name),
@@ -98,6 +99,7 @@ const handler: AlpacaClientHandler = {
 		flatPanelManager.textVector(client, message, tag)
 		coverManager.textVector(client, message, tag)
 		rotatorManager.textVector(client, message, tag)
+		domeManager.textVector(client, message, tag)
 	},
 	numberVector: (client, message, tag) => {
 		cameraManager.numberVector(client, message, tag)
@@ -106,6 +108,7 @@ const handler: AlpacaClientHandler = {
 		focuserManager.numberVector(client, message, tag)
 		flatPanelManager.numberVector(client, message, tag)
 		rotatorManager.numberVector(client, message, tag)
+		domeManager.numberVector(client, message, tag)
 		guideOutput.numberVector(client, message, tag)
 		thermometerManager.numberVector(client, message, tag)
 	},
@@ -117,6 +120,7 @@ const handler: AlpacaClientHandler = {
 		flatPanelManager.switchVector(client, message, tag)
 		coverManager.switchVector(client, message, tag)
 		rotatorManager.switchVector(client, message, tag)
+		domeManager.switchVector(client, message, tag)
 		guideOutput.switchVector(client, message, tag)
 		thermometerManager.switchVector(client, message, tag)
 	},
@@ -134,6 +138,7 @@ const deviceProvider: DeviceProvider<Device> = {
 		else if (type === 'flatPanel') return flatPanelManager.get(client, name)
 		else if (type === 'cover') return coverManager.get(client, name)
 		else if (type === 'rotator') return rotatorManager.get(client, name)
+		else if (type === 'dome') return domeManager.get(client, name)
 		return undefined
 	},
 }
@@ -364,6 +369,48 @@ describe.skipIf(SKIP)('client', async () => {
 
 			mountManager.tracking(mount, false)
 			await expectUntil(mount, 'tracking', false)
+		},
+		TEST_OPTIONS,
+	)
+
+	test(
+		'dome',
+		async () => {
+			const dome = domeManager.list(client).values().next().value
+			if (!dome) return
+
+			domeManager.connect(dome)
+			await expectUntil(dome, 'connected', true)
+			await Bun.sleep(2000)
+
+			expect(dome.canAbort).toBeTrue()
+			expect(dome.canSetAzimuth).toBeTrue()
+			expect(dome.canFindHome).toBeTrue()
+			expect(dome.canPark).toBeTrue()
+			expect(dome.canSetShutter).toBeTrue()
+			expect(dome.canSlave).toBeTrue()
+
+			domeManager.moveTo(dome, deg(90))
+			await expectUntil(dome, 'moving', true)
+			await expectUntil(dome, 'moving', false, 15000)
+			expect(dome.azimuth.value).toBeCloseTo(deg(90), 2)
+
+			domeManager.home(dome)
+			await expectUntil(dome, 'atHome', true, 15000)
+			domeManager.park(dome)
+			await expectUntil(dome, 'parked', true, 15000)
+
+			domeManager.openShutter(dome)
+			await expectUntil(dome, 'shutterState', 'OPEN', 10000)
+			domeManager.closeShutter(dome)
+			await expectUntil(dome, 'shutterState', 'CLOSED', 10000)
+
+			domeManager.slave(dome, true)
+			await expectUntil(dome, 'slaved', true, 10000)
+			domeManager.stop(dome)
+			await expectUntil(dome, 'slaved', false, 10000)
+			domeManager.disconnect(dome)
+			await expectUntil(dome, 'connected', false)
 		},
 		TEST_OPTIONS,
 	)

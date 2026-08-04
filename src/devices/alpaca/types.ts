@@ -117,6 +117,15 @@ export enum AlpacaTelescopePierSide {
 	WEST,
 }
 
+// Dome shutter state reported by the Alpaca Dome interface.
+export enum AlpacaDomeShutterState {
+	OPEN,
+	CLOSED,
+	OPENING,
+	CLOSING,
+	ERROR,
+}
+
 // Mechanical axis selector for MoveAxis and axis-rate queries.
 export enum AlpacaTelescopeAxis {
 	PRIMARY,

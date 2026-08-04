@@ -1,6 +1,6 @@
-import { AlpacaCameraApi, AlpacaCoverCalibratorApi, type AlpacaDeviceApi, AlpacaFilterWheelApi, AlpacaFocuserApi, AlpacaManagementApi, AlpacaRotatorApi, AlpacaTelescopeApi } from './api'
+import { AlpacaCameraApi, AlpacaCoverCalibratorApi, AlpacaDomeApi, type AlpacaDeviceApi, AlpacaFilterWheelApi, AlpacaFocuserApi, AlpacaManagementApi, AlpacaRotatorApi, AlpacaTelescopeApi } from './api'
 // oxfmt-ignore
-import { type AlpacaAxisRate, type AlpacaCameraSensorType, type AlpacaCameraState, type AlpacaConfiguredDevice, type AlpacaDeviceType, type AlpacaStateItem, type AlpacaTelescopeEquatorialCoordinateType, type AlpacaTelescopePierSide, type AlpacaTelescopeTrackingRate, alpacaImageElementTypeToBitpix, type ImageBytesMetadata } from './types'
+import { type AlpacaAxisRate, type AlpacaCameraSensorType, type AlpacaCameraState, type AlpacaConfiguredDevice, type AlpacaDeviceType, AlpacaDomeShutterState, type AlpacaStateItem, type AlpacaTelescopeEquatorialCoordinateType, type AlpacaTelescopePierSide, type AlpacaTelescopeTrackingRate, alpacaImageElementTypeToBitpix, type ImageBytesMetadata } from './types'
 import { equatorialFromJ2000, equatorialToJ2000 } from '../../astronomy/coordinates/coordinate'
 import { SIDEREAL_RATE } from '../../core/constants'
 import { computeRemainingBytes, FITS_BLOCK_SIZE, FITS_HEADER_CARD_SIZE, type FitsHeader, FitsKeywordWriter } from '../../io/formats/fits/fits'
@@ -113,6 +113,8 @@ export class AlpacaClient implements Client {
 					device = new AlpacaCoverCalibrator(this, configuredDevice)
 				} else if (type === 'rotator') {
 					device = new AlpacaRotator(this, configuredDevice)
+				} else if (type === 'dome') {
+					device = new AlpacaDome(this, configuredDevice)
 				}
 
 				if (device) {
@@ -1916,6 +1918,214 @@ class AlpacaRotator extends AlpacaDevice {
 				if (vector.elements.ANGLE !== undefined) void this.api.sync(this.id, vector.elements.ANGLE)
 				break
 		}
+	}
+}
+
+// Polled Alpaca Dome state, with optional values for properties that the device does not expose.
+interface AlpacaClientDomeState extends AlpacaClientDeviceState {
+	readonly Altitude?: number
+	readonly AtHome?: boolean
+	readonly AtPark?: boolean
+	readonly Azimuth?: number
+	readonly CanFindHome: boolean
+	readonly CanPark: boolean
+	readonly CanSetAltitude: boolean
+	readonly CanSetAzimuth: boolean
+	readonly CanSetPark: boolean
+	readonly CanSetShutter: boolean
+	readonly CanSlave: boolean
+	readonly CanSyncAzimuth: boolean
+	readonly ShutterStatus?: AlpacaDomeShutterState
+	readonly Slaved?: boolean
+	readonly Slewing: boolean
+}
+
+// Alpaca Dome wrapper: conditionally publishes INDI dome vectors and routes them to REST operations.
+class AlpacaDome extends AlpacaDevice {
+	protected readonly api: AlpacaDomeApi
+
+	readonly #angle = makeNumberVector('', 'ABS_DOME_POSITION', 'Azimuth', MAIN_CONTROL, 'rw', ['DOME_ABSOLUTE_POSITION', 'Degrees', 0, 0, 360, 0.01, '%.2f'])
+	readonly #altitude = makeNumberVector('', 'DOME_ALTITUDE', 'Altitude', MAIN_CONTROL, 'rw', ['DOME_ALTITUDE_VALUE', 'Degrees', 0, 0, 90, 0.01, '%.2f'])
+	readonly #goto = makeSwitchVector('', 'DOME_GOTO', 'Home', MAIN_CONTROL, 'OneOfMany', 'rw', ['DOME_HOME', 'Home', false])
+	readonly #park = makeSwitchVector('', 'DOME_PARK', 'Park', MAIN_CONTROL, 'OneOfMany', 'rw', ['PARK', 'Park', false])
+	readonly #parkOption = makeSwitchVector('', 'DOME_PARK_OPTION', 'Park option', MAIN_CONTROL, 'OneOfMany', 'rw', ['PARK_CURRENT', 'Park current position', false])
+	readonly #shutter = makeSwitchVector('', 'DOME_SHUTTER', 'Shutter', MAIN_CONTROL, 'OneOfMany', 'rw', ['SHUTTER_OPEN', 'Open', false], ['SHUTTER_CLOSE', 'Close', true])
+	readonly #autoSync = makeSwitchVector('', 'DOME_AUTOSYNC', 'Slaved', MAIN_CONTROL, 'OneOfMany', 'rw', ['INDI_ENABLED', 'Enabled', false], ['INDI_DISABLED', 'Disabled', true])
+	readonly #sync = makeNumberVector('', 'DOME_SYNC', 'Sync', MAIN_CONTROL, 'rw', ['DOME_SYNC_VALUE', 'Degrees', 0, 0, 360, 0.01, '%.2f'])
+	readonly #abort = makeSwitchVector('', 'DOME_ABORT_MOTION', 'Abort', MAIN_CONTROL, 'AtMostOne', 'rw', ['ABORT', 'Abort', false])
+
+	protected readonly state: AlpacaClientDomeState = { Connected: false, DeviceState: undefined, Step: 0, CanFindHome: false, CanPark: false, CanSetAltitude: false, CanSetAzimuth: false, CanSetPark: false, CanSetShutter: false, CanSlave: false, CanSyncAzimuth: false, Slewing: false }
+	protected readonly initialEndpoints = ['CanFindHome', 'CanPark', 'CanSetAltitude', 'CanSetAzimuth', 'CanSetPark', 'CanSetShutter', 'CanSlave', 'CanSyncAzimuth'] as const
+	protected readonly deviceStateEndpoints = ['Altitude', 'AtHome', 'AtPark', 'Azimuth', 'ShutterStatus', 'Slewing'] as const
+
+	constructor(client: AlpacaClient, device: AlpacaConfiguredDevice) {
+		super(client, device, client.options.handler)
+
+		const api = new AlpacaDomeApi(client.url)
+		this.#angle.device = device.DeviceName
+		this.#altitude.device = device.DeviceName
+		this.#goto.device = device.DeviceName
+		this.#park.device = device.DeviceName
+		this.#parkOption.device = device.DeviceName
+		this.#shutter.device = device.DeviceName
+		this.#autoSync.device = device.DeviceName
+		this.#sync.device = device.DeviceName
+		this.#abort.device = device.DeviceName
+
+		this.runner.registerEndpoint('Altitude', api.getAltitude.bind(api, this.id), false)
+		this.runner.registerEndpoint('AtHome', api.isAtHome.bind(api, this.id), false)
+		this.runner.registerEndpoint('AtPark', api.isAtPark.bind(api, this.id), false)
+		this.runner.registerEndpoint('Azimuth', api.getAzimuth.bind(api, this.id), false)
+		this.runner.registerEndpoint('CanFindHome', api.canFindHome.bind(api, this.id), false)
+		this.runner.registerEndpoint('CanPark', api.canPark.bind(api, this.id), false)
+		this.runner.registerEndpoint('CanSetAltitude', api.canSetAltitude.bind(api, this.id), false)
+		this.runner.registerEndpoint('CanSetAzimuth', api.canSetAzimuth.bind(api, this.id), false)
+		this.runner.registerEndpoint('CanSetPark', api.canSetPark.bind(api, this.id), false)
+		this.runner.registerEndpoint('CanSetShutter', api.canSetShutter.bind(api, this.id), false)
+		this.runner.registerEndpoint('CanSlave', api.canSlave.bind(api, this.id), false)
+		this.runner.registerEndpoint('CanSyncAzimuth', api.canSyncAzimuth.bind(api, this.id), false)
+		this.runner.registerEndpoint('ShutterStatus', api.getShutterStatus.bind(api, this.id), false)
+		this.runner.registerEndpoint('Slaved', api.isSlaved.bind(api, this.id), false)
+		this.runner.registerEndpoint('Slewing', api.isSlewing.bind(api, this.id), false)
+
+		this.api = api
+	}
+
+	// Defines supported vectors after capability discovery and publishes all operational state updates.
+	protected handleEndpointsAfterRun() {
+		if (!super.handleEndpointsAfterRun()) return false
+
+		const { Step, Azimuth, Altitude, AtHome, AtPark, CanFindHome, CanPark, CanSetAltitude, CanSetAzimuth, CanSetPark, CanSetShutter, CanSlave, CanSyncAzimuth, ShutterStatus, Slaved, Slewing } = this.state
+
+		if (Step === 1) {
+			if (Azimuth !== undefined) {
+				this.#angle.permission = CanSetAzimuth ? 'rw' : 'ro'
+				this.sendDefProperty(this.#angle)
+			}
+			if (Altitude !== undefined) {
+				this.#altitude.permission = CanSetAltitude ? 'rw' : 'ro'
+				this.sendDefProperty(this.#altitude)
+			}
+			if (CanFindHome) this.sendDefProperty(this.#goto)
+			if (CanPark) this.sendDefProperty(this.#park)
+			if (CanSetPark) this.sendDefProperty(this.#parkOption)
+			if (CanSetShutter) this.sendDefProperty(this.#shutter)
+			if (CanSlave) this.sendDefProperty(this.#autoSync)
+			if (CanSyncAzimuth) this.sendDefProperty(this.#sync)
+			this.sendDefProperty(this.#abort)
+			if (CanSlave) this.enableEndpoints('Slaved')
+			else this.disableEndpoints('Slaved')
+
+			this.disableEndpoints(...this.initialEndpoints)
+			this.state.Step = 2
+		} else if (Step === 2) {
+			if (this.properties.has(this.#angle)) {
+				let updated = this.updatePropertyState(this.#angle, Slewing ? 'Busy' : 'Idle')
+				updated = this.updatePropertyValue(this.#angle, 'DOME_ABSOLUTE_POSITION', Azimuth) || updated
+				updated && this.sendSetProperty(this.#angle)
+			}
+
+			if (this.properties.has(this.#altitude)) {
+				let updated = this.updatePropertyState(this.#altitude, Slewing ? 'Busy' : 'Idle')
+				updated = this.updatePropertyValue(this.#altitude, 'DOME_ALTITUDE_VALUE', Altitude) || updated
+				updated && this.sendSetProperty(this.#altitude)
+			}
+
+			if (this.properties.has(this.#goto)) {
+				let updated = this.updatePropertyState(this.#goto, Slewing ? 'Busy' : 'Idle')
+				updated = this.updatePropertyValue(this.#goto, 'DOME_HOME', AtHome) || updated
+				updated && this.sendSetProperty(this.#goto)
+			}
+
+			if (this.properties.has(this.#park)) {
+				let updated = this.updatePropertyState(this.#park, Slewing ? 'Busy' : 'Idle')
+				updated = this.updatePropertyValue(this.#park, 'PARK', AtPark) || updated
+				updated && this.sendSetProperty(this.#park)
+			}
+
+			if (this.properties.has(this.#shutter) && ShutterStatus !== undefined) {
+				const status = alpacaDomeShutterStatus(ShutterStatus)
+				let updated = this.updatePropertyState(this.#shutter, status.state)
+				updated = this.updatePropertyValue(this.#shutter, 'SHUTTER_OPEN', status.open) || updated
+				updated = this.updatePropertyValue(this.#shutter, 'SHUTTER_CLOSE', status.closed) || updated
+				updated && this.sendSetProperty(this.#shutter)
+			}
+
+			if (this.properties.has(this.#autoSync) && Slaved !== undefined) {
+				const updated = this.updatePropertyValue(this.#autoSync, Slaved ? 'INDI_ENABLED' : 'INDI_DISABLED', true)
+				updated && this.sendSetProperty(this.#autoSync)
+			}
+		}
+
+		return true
+	}
+
+	// Stops optional slaving polling as part of the regular disconnect cleanup.
+	protected onDisconnect() {
+		super.onDisconnect()
+		this.disableEndpoints('Slaved')
+	}
+
+	// Routes synthesized INDI switch commands to Alpaca Dome operations.
+	sendSwitch(vector: NewSwitchVector) {
+		super.sendSwitch(vector)
+
+		switch (vector.name) {
+			case 'DOME_GOTO':
+				if (vector.elements.DOME_HOME === true && this.state.CanFindHome) void this.api.findHome(this.id)
+				break
+			case 'DOME_PARK':
+				if (vector.elements.PARK === true && this.state.CanPark) void this.api.park(this.id)
+				break
+			case 'DOME_PARK_OPTION':
+				if (vector.elements.PARK_CURRENT === true && this.state.CanSetPark) void this.api.setPark(this.id)
+				break
+			case 'DOME_SHUTTER':
+				if (vector.elements.SHUTTER_OPEN === true && this.state.CanSetShutter) void this.api.openShutter(this.id)
+				else if (vector.elements.SHUTTER_CLOSE === true && this.state.CanSetShutter) void this.api.closeShutter(this.id)
+				break
+			case 'DOME_AUTOSYNC':
+				if (this.state.CanSlave) {
+					if (vector.elements.INDI_ENABLED === true) void this.api.setSlaved(this.id, true)
+					else if (vector.elements.INDI_DISABLED === true) void this.api.setSlaved(this.id, false)
+					this.enableEndpoints('Slaved')
+				}
+				break
+			case 'DOME_ABORT_MOTION':
+				if (vector.elements.ABORT === true) void this.api.abortSlew(this.id)
+		}
+	}
+
+	// Routes synthesized INDI number commands to Alpaca Dome operations in degrees.
+	sendNumber(vector: NewNumberVector) {
+		super.sendNumber(vector)
+
+		switch (vector.name) {
+			case 'ABS_DOME_POSITION':
+				if (vector.elements.DOME_ABSOLUTE_POSITION !== undefined && this.state.CanSetAzimuth) void this.api.slewToAzimuth(this.id, vector.elements.DOME_ABSOLUTE_POSITION)
+				break
+			case 'DOME_ALTITUDE':
+				if (vector.elements.DOME_ALTITUDE_VALUE !== undefined && this.state.CanSetAltitude) void this.api.slewToAltitude(this.id, vector.elements.DOME_ALTITUDE_VALUE)
+				break
+			case 'DOME_SYNC':
+				if (vector.elements.DOME_SYNC_VALUE !== undefined && this.state.CanSyncAzimuth) void this.api.syncToAzimuth(this.id, vector.elements.DOME_SYNC_VALUE)
+		}
+	}
+}
+
+// Converts an Alpaca shutter enum to the corresponding INDI switch selection and state.
+function alpacaDomeShutterStatus(status: AlpacaDomeShutterState) {
+	switch (status) {
+		case AlpacaDomeShutterState.OPEN:
+			return { open: true, closed: false, state: 'Idle' } as const
+		case AlpacaDomeShutterState.CLOSED:
+			return { open: false, closed: true, state: 'Idle' } as const
+		case AlpacaDomeShutterState.OPENING:
+			return { open: true, closed: false, state: 'Busy' } as const
+		case AlpacaDomeShutterState.CLOSING:
+			return { open: false, closed: true, state: 'Busy' } as const
+		case AlpacaDomeShutterState.ERROR:
+			return { open: false, closed: false, state: 'Alert' } as const
 	}
 }
 

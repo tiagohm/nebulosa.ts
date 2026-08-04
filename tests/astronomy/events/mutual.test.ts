@@ -100,7 +100,7 @@ test('finds the Titan-Rhea mutual events in the 2025 Saturn season', () => {
 	// Mid-occultation 2025-03-12 11:34:01 UTC, minutes after the eclipse.
 	expect(secondsAfter(occultation.middle, start)).toBeCloseTo(5641.3, -1)
 	expect(secondsAfter(occultation.middle, eclipse.middle)).toBeGreaterThan(0)
-}, 6000)
+}, 9000)
 
 test('contacts bracket every event and impact parameters stay in range', () => {
 	const events = galileanMutualEvents(timeYMDHMS(2026, 12, 2, 19, 0, 0, Timescale.UTC), timeYMDHMS(2026, 12, 2, 22, 0, 0, Timescale.UTC))

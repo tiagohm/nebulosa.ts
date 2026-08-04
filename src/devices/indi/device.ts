@@ -8,8 +8,8 @@ import type { DefBlobVector, DefLightVector, DefNumber, DefNumberVector, DefSwit
 
 // Device model shared across all client backends (INDI, Alpaca, simulator, Firmata): the device-type
 // union, per-device-type interfaces (camera, mount, focuser, etc.) describing their capabilities and
-// state, default-value templates, and type-guard/geometry helpers. Angles are radians; temperature is
-// degrees Celsius.
+// state, default-value templates, and type-guard/geometry helpers. Angles are radians; dome speed is
+// RPM; dome measurements are metres; dome backlash is controller steps; temperature is degrees Celsius.
 
 // Logical device category.
 export type DeviceType = 'camera' | 'mount' | 'wheel' | 'focuser' | 'rotator' | 'gps' | 'dome' | 'guideOutput' | 'flatPanel' | 'cover' | 'power' | 'thermometer' | 'dewHeater'
@@ -46,6 +46,15 @@ export type MountTargetCoordinate<T = string> = Partial<Record<MountTargetCoordi
 
 // Pulse-guide direction.
 export type GuideDirection = 'NORTH' | 'SOUTH' | 'WEST' | 'EAST'
+
+// Direction used by a dome's continuous rotation control.
+export type DomeDirection = 'CLOCKWISE' | 'COUNTER_CLOCKWISE'
+
+// Shutter state shared by INDI and Alpaca dome adapters.
+export type DomeShutterState = 'UNKNOWN' | 'OPEN' | 'CLOSED' | 'OPENING' | 'CLOSING' | 'ERROR'
+
+// OTA side used by optional dome geometry measurements.
+export type DomeOTASide = 'EAST' | 'WEST' | 'UNKNOWN'
 
 // A numeric property reduced to its value and min/max/step range.
 export type MinMaxValueProperty = Pick<DefNumber, 'min' | 'max' | 'value' | 'step'>
@@ -206,6 +215,52 @@ export interface Parkable {
 	canSetPark: boolean
 	parking: boolean
 	parked: boolean
+}
+
+// Optional geometric measurements reported by an INDI dome. Distances are metres and OTA offset is an
+// unsigned distance along the dome convention used by the driver.
+export interface DomeMeasurements {
+	radius: number
+	shutterWidth: number
+	northDisplacement: number
+	eastDisplacement: number
+	upDisplacement: number
+	otaOffset: number
+	otaSide: DomeOTASide
+}
+
+// Dome device: rotational and optional altitude motion, shutter control, parking, slaving, and geometry.
+// Angles are radians, speed is RPM, measurements are metres, and backlash is controller steps.
+export interface Dome extends Device, Parkable {
+	readonly type: 'dome'
+	slewing: boolean
+	moving: boolean
+	homing: boolean
+	atHome: boolean
+	direction?: DomeDirection
+	canAbort: boolean
+	canMove: boolean
+	canRelativeMove: boolean
+	canSetAzimuth: boolean
+	canSetAltitude: boolean
+	canFindHome: boolean
+	canSync: boolean
+	canUnpark: boolean
+	hasShutter: boolean
+	canSetShutter: boolean
+	shutterState: DomeShutterState
+	canSlave: boolean
+	slaved: boolean
+	readonly azimuth: MinMaxValueProperty
+	readonly altitude: MinMaxValueProperty
+	readonly speed: MinMaxValueProperty
+	readonly homePosition: MinMaxValueProperty
+	readonly parkPosition: MinMaxValueProperty
+	readonly autoSyncThreshold: MinMaxValueProperty
+	backlashEnabled: boolean
+	readonly backlash: MinMaxValueProperty
+	hasMeasurements: boolean
+	readonly measurements: DomeMeasurements
 }
 
 // Mount/telescope device: slew/sync/goto/track/park/home capabilities, slew rates, track modes, pier
@@ -472,6 +527,57 @@ export const DEFAULT_MOUNT: Mount = {
 	parked: false,
 }
 
+// Default, fully-disconnected dome template with zeroed numeric properties and no advertised capability.
+export const DEFAULT_DOME: Dome = {
+	type: 'dome',
+	interfaces: ['dome'],
+	id: '',
+	hardwareId: '',
+	name: '',
+	connected: false,
+	driver: structuredClone(DEFAULT_DRIVER_INFO),
+	client: structuredClone(DEFAULT_CLIENT_INFO),
+	slewing: false,
+	moving: false,
+	homing: false,
+	atHome: false,
+	canAbort: false,
+	canMove: false,
+	canRelativeMove: false,
+	canSetAzimuth: false,
+	canSetAltitude: false,
+	canFindHome: false,
+	canSync: false,
+	canUnpark: false,
+	canPark: false,
+	canSetPark: false,
+	parking: false,
+	parked: false,
+	hasShutter: false,
+	canSetShutter: false,
+	shutterState: 'UNKNOWN',
+	canSlave: false,
+	slaved: false,
+	azimuth: structuredClone(DEFAULT_MIN_MAX_VALUE_PROPERTY),
+	altitude: structuredClone(DEFAULT_MIN_MAX_VALUE_PROPERTY),
+	speed: structuredClone(DEFAULT_MIN_MAX_VALUE_PROPERTY),
+	homePosition: structuredClone(DEFAULT_MIN_MAX_VALUE_PROPERTY),
+	parkPosition: structuredClone(DEFAULT_MIN_MAX_VALUE_PROPERTY),
+	autoSyncThreshold: structuredClone(DEFAULT_MIN_MAX_VALUE_PROPERTY),
+	backlashEnabled: false,
+	backlash: structuredClone(DEFAULT_MIN_MAX_VALUE_PROPERTY),
+	hasMeasurements: false,
+	measurements: {
+		radius: 0,
+		shutterWidth: 0,
+		northDisplacement: 0,
+		eastDisplacement: 0,
+		upDisplacement: 0,
+		otaOffset: 0,
+		otaSide: 'UNKNOWN',
+	},
+}
+
 export const DEFAULT_WHEEL: Wheel = {
 	type: 'wheel',
 	interfaces: ['wheel'],
@@ -652,6 +758,11 @@ export function isFlatPanel(device: Device): device is FlatPanel {
 
 export function isRotator(device: Device): device is Rotator {
 	return device.type === 'rotator'
+}
+
+// Type guard narrowing a device to a dome by its primary type.
+export function isDome(device: Device): device is Dome {
+	return device.type === 'dome'
 }
 
 export function isPower(device: Device): device is Power {
