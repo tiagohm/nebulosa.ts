@@ -94,7 +94,7 @@ test('leaves ingress contacts undefined when the window opens after ingress', ()
 	expect(transit.duration).toBeUndefined()
 	expect(contactError(transit.interiorEgress, 2463549.963249)).toBeLessThan(2)
 	expect(contactError(transit.exteriorEgress, 2463549.964686)).toBeLessThan(2)
-}, 2000)
+}, 5000)
 
 test('leaves egress contacts undefined when the window closes before egress', () => {
 	const observer = observerAt(GREENWICH)

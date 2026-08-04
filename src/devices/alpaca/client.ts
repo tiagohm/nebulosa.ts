@@ -1950,14 +1950,13 @@ class AlpacaDome extends AlpacaDevice {
 	readonly #park = makeSwitchVector('', 'DOME_PARK', 'Park', MAIN_CONTROL, 'OneOfMany', 'rw', ['PARK', 'Park', false])
 	readonly #parkOption = makeSwitchVector('', 'DOME_PARK_OPTION', 'Park option', MAIN_CONTROL, 'OneOfMany', 'rw', ['PARK_CURRENT', 'Park current position', false])
 	readonly #shutter = makeSwitchVector('', 'DOME_SHUTTER', 'Shutter', MAIN_CONTROL, 'OneOfMany', 'rw', ['SHUTTER_OPEN', 'Open', false], ['SHUTTER_CLOSE', 'Close', true])
-	readonly #autoSync = makeSwitchVector('', 'DOME_AUTO_SYNC', 'Slaved', MAIN_CONTROL, 'OneOfMany', 'rw', ['INDI_ENABLED', 'Enabled', false], ['INDI_DISABLED', 'Disabled', true])
+	readonly #autoSync = makeSwitchVector('', 'DOME_AUTOSYNC', 'Slaved', MAIN_CONTROL, 'OneOfMany', 'rw', ['INDI_ENABLED', 'Enabled', false], ['INDI_DISABLED', 'Disabled', true])
 	readonly #sync = makeNumberVector('', 'DOME_SYNC', 'Sync', MAIN_CONTROL, 'rw', ['DOME_SYNC_VALUE', 'Degrees', 0, 0, 360, 0.01, '%.2f'])
 	readonly #abort = makeSwitchVector('', 'DOME_ABORT_MOTION', 'Abort', MAIN_CONTROL, 'AtMostOne', 'rw', ['ABORT', 'Abort', false])
 
 	protected readonly state: AlpacaClientDomeState = { Connected: false, DeviceState: undefined, Step: 0, CanFindHome: false, CanPark: false, CanSetAltitude: false, CanSetAzimuth: false, CanSetPark: false, CanSetShutter: false, CanSlave: false, CanSyncAzimuth: false, Slewing: false }
 	protected readonly initialEndpoints = ['CanFindHome', 'CanPark', 'CanSetAltitude', 'CanSetAzimuth', 'CanSetPark', 'CanSetShutter', 'CanSlave', 'CanSyncAzimuth'] as const
-	protected readonly deviceStateEndpoints = ['Altitude', 'AtHome', 'AtPark', 'Azimuth', 'ShutterStatus', 'Slaved', 'Slewing'] as const
-	protected readonly runningEndpoints = ['Slaved'] as const
+	protected readonly deviceStateEndpoints = ['Altitude', 'AtHome', 'AtPark', 'Azimuth', 'ShutterStatus', 'Slewing'] as const
 
 	constructor(client: AlpacaClient, device: AlpacaConfiguredDevice) {
 		super(client, device, client.options.handler)
@@ -2003,7 +2002,10 @@ class AlpacaDome extends AlpacaDevice {
 				this.#angle.permission = CanSetAzimuth ? 'rw' : 'ro'
 				this.sendDefProperty(this.#angle)
 			}
-			if (CanSetAltitude) this.sendDefProperty(this.#altitude)
+			if (Altitude !== undefined) {
+				this.#altitude.permission = CanSetAltitude ? 'rw' : 'ro'
+				this.sendDefProperty(this.#altitude)
+			}
 			if (CanFindHome) this.sendDefProperty(this.#goto)
 			if (CanPark) this.sendDefProperty(this.#park)
 			if (CanSetPark) this.sendDefProperty(this.#parkOption)
@@ -2011,6 +2013,8 @@ class AlpacaDome extends AlpacaDevice {
 			if (CanSlave) this.sendDefProperty(this.#autoSync)
 			if (CanSyncAzimuth) this.sendDefProperty(this.#sync)
 			this.sendDefProperty(this.#abort)
+			if (CanSlave) this.enableEndpoints('Slaved')
+			else this.disableEndpoints('Slaved')
 
 			this.disableEndpoints(...this.initialEndpoints)
 			this.state.Step = 2
@@ -2056,6 +2060,12 @@ class AlpacaDome extends AlpacaDevice {
 		return true
 	}
 
+	// Stops optional slaving polling as part of the regular disconnect cleanup.
+	protected onDisconnect() {
+		super.onDisconnect()
+		this.disableEndpoints('Slaved')
+	}
+
 	// Routes synthesized INDI switch commands to Alpaca Dome operations.
 	sendSwitch(vector: NewSwitchVector) {
 		super.sendSwitch(vector)
@@ -2074,7 +2084,7 @@ class AlpacaDome extends AlpacaDevice {
 				if (vector.elements.SHUTTER_OPEN === true && this.state.CanSetShutter) void this.api.openShutter(this.id)
 				else if (vector.elements.SHUTTER_CLOSE === true && this.state.CanSetShutter) void this.api.closeShutter(this.id)
 				break
-			case 'DOME_AUTO_SYNC':
+			case 'DOME_AUTOSYNC':
 				if (this.state.CanSlave) {
 					if (vector.elements.INDI_ENABLED === true) void this.api.setSlaved(this.id, true)
 					else if (vector.elements.INDI_DISABLED === true) void this.api.setSlaved(this.id, false)

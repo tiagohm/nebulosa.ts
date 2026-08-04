@@ -60,6 +60,9 @@ type DomeParkProperties = {
 	hasHome?: boolean
 }
 
+// Element names used by a dome driver's autosync switch vector.
+type DomeSlavingProperties = readonly [enabled: string, disabled: string]
+
 // Tracks the raw INDI property vectors per device and notifies property-level handlers on
 // define/update/delete. Backs each DeviceManager's `properties` view.
 export class DevicePropertyManager<D extends Device> implements IndiClientHandler, DevicePropertyHandler<D> {
@@ -1535,11 +1538,20 @@ export class MountManager extends DeviceManager<Mount> {
 export class DomeManager extends DeviceManager<Dome> {
 	// Tracks park aliases for each dome without adding backend details to the model.
 	readonly #parkProperties = new WeakMap<Dome, DomeParkProperties>()
+	// Tracks the driver's actual element names for enabling and disabling slaving.
+	readonly #slavingProperties = new WeakMap<Dome, DomeSlavingProperties>()
 
 	// Slews to an absolute azimuth in radians, normalized to [0, TAU).
 	moveTo(dome: Dome, azimuth: Angle, client = dome[CLIENT]!) {
 		if (dome.canSetAzimuth && !dome.slaved) {
 			client.sendNumber({ device: dome.name, name: 'ABS_DOME_POSITION', elements: { DOME_ABSOLUTE_POSITION: toDeg(normalizeAngle(azimuth)) } })
+		}
+	}
+
+	// Slews to an absolute altitude in radians when the driver exposes the optional altitude vector.
+	moveToAltitude(dome: Dome, altitude: Angle, client = dome[CLIENT]!) {
+		if (dome.canSetAltitude && !dome.slaved) {
+			client.sendNumber({ device: dome.name, name: 'DOME_ALTITUDE', elements: { DOME_ALTITUDE_VALUE: toDeg(altitude) } })
 		}
 	}
 
@@ -1624,8 +1636,9 @@ export class DomeManager extends DeviceManager<Dome> {
 
 	// Enables or disables driver-side slaving.
 	slave(dome: Dome, enabled: boolean, client = dome[CLIENT]!) {
-		if (dome.canSlave) {
-			client.sendSwitch({ device: dome.name, name: 'DOME_AUTO_SYNC', elements: { [enabled ? 'INDI_ENABLED' : 'INDI_DISABLED']: true } })
+		const properties = this.#slavingProperties.get(dome)
+		if (dome.canSlave && properties) {
+			client.sendSwitch({ device: dome.name, name: 'DOME_AUTOSYNC', elements: { [enabled ? properties[0] : properties[1]]: true } })
 		}
 	}
 
@@ -1713,12 +1726,13 @@ export class DomeManager extends DeviceManager<Dome> {
 
 				const home = message.elements.DOME_HOME?.value === true
 				const parked = message.elements.DOME_PARK?.value === true
+				const completed = message.state !== 'Busy' && message.state !== 'Alert'
 				if (handleSwitchValue(dome, 'homing', home && message.state === 'Busy')) this.updated(dome, 'homing', message.state)
-				if (handleSwitchValue(dome, 'atHome', home && message.state !== 'Busy')) this.updated(dome, 'atHome', message.state)
+				if (handleSwitchValue(dome, 'atHome', home && completed)) this.updated(dome, 'atHome', message.state)
 
 				if (hasPark) {
 					if (handleSwitchValue(dome, 'parking', parked && message.state === 'Busy')) this.updated(dome, 'parking', message.state)
-					if (handleSwitchValue(dome, 'parked', parked && message.state !== 'Busy')) this.updated(dome, 'parked', message.state)
+					if (handleSwitchValue(dome, 'parked', parked && completed)) this.updated(dome, 'parked', message.state)
 				}
 
 				updateDomeSlewing(this, dome, message.state)
@@ -1736,16 +1750,29 @@ export class DomeManager extends DeviceManager<Dome> {
 				if (definition && handleSwitchValue(dome, 'canUnpark', hasUnpark && definition.permission !== 'ro')) this.updated(dome, 'canUnpark', message.state)
 
 				const parked = message.elements.PARK?.value === true
-				if (handleSwitchValue(dome, 'parking', message.state === 'Busy')) this.updated(dome, 'parking', message.state)
-				if (handleSwitchValue(dome, 'parked', parked && message.state !== 'Busy')) this.updated(dome, 'parked', message.state)
+				const completed = message.state !== 'Busy' && message.state !== 'Alert'
+				if (handleSwitchValue(dome, 'parking', parked && message.state === 'Busy')) this.updated(dome, 'parking', message.state)
+				if (handleSwitchValue(dome, 'parked', parked && completed)) this.updated(dome, 'parked', message.state)
 
 				updateDomeSlewing(this, dome, message.state)
 				return
 			}
-			case 'DOME_AUTO_SYNC':
-				if (definition && handleSwitchValue(dome, 'canSlave', definition.permission !== 'ro')) this.updated(dome, 'canSlave', message.state)
-				if (handleSwitchValue(dome, 'slaved', message.elements.INDI_ENABLED?.value ?? message.elements.ENABLE?.value)) this.updated(dome, 'slaved', message.state)
+			case 'DOME_AUTOSYNC': {
+				if (definition) {
+					const enabled = message.elements.INDI_ENABLED !== undefined ? 'INDI_ENABLED' : message.elements.ENABLE !== undefined ? 'ENABLE' : undefined
+					const disabled = message.elements.INDI_DISABLED !== undefined ? 'INDI_DISABLED' : message.elements.DISABLE !== undefined ? 'DISABLE' : undefined
+
+					if (enabled !== undefined && disabled !== undefined) this.#slavingProperties.set(dome, [enabled, disabled])
+					else this.#slavingProperties.delete(dome)
+
+					if (handleSwitchValue(dome, 'canSlave', enabled !== undefined && disabled !== undefined && definition.permission !== 'ro')) this.updated(dome, 'canSlave', message.state)
+				}
+
+				const enabled = this.#slavingProperties.get(dome)?.[0]
+				const slaved = enabled === undefined ? (message.elements.INDI_ENABLED?.value ?? message.elements.ENABLE?.value) : message.elements[enabled]?.value
+				if (slaved !== undefined && handleSwitchValue(dome, 'slaved', slaved)) this.updated(dome, 'slaved', message.state)
 				return
+			}
 			case 'DOME_PARK_OPTION':
 				if (definition && handleSwitchValue(dome, 'canSetPark', message.elements.PARK_CURRENT !== undefined && definition.permission !== 'ro')) this.updated(dome, 'canSetPark', message.state)
 				return
@@ -1856,6 +1883,7 @@ export class DomeManager extends DeviceManager<Dome> {
 
 		if (full) {
 			this.#parkProperties.delete(dome)
+			this.#slavingProperties.delete(dome)
 			this.clearWritableProperty(dome)
 		} else {
 			this.removeWritableProperty(dome, name)
@@ -1864,6 +1892,7 @@ export class DomeManager extends DeviceManager<Dome> {
 			if (name === 'DOME_PARK' && parkProperties?.park === 'DOME_PARK') parkProperties.park = undefined
 			if (name === 'DOME_GOTO' && parkProperties?.park === 'DOME_GOTO') parkProperties.park = undefined
 			if (name === 'DOME_GOTO' && parkProperties) parkProperties.hasHome = false
+			if (name === 'DOME_AUTOSYNC') this.#slavingProperties.delete(dome)
 		}
 
 		if (full || name === 'DOME_MOTION') {
@@ -1913,7 +1942,7 @@ export class DomeManager extends DeviceManager<Dome> {
 			resetDeviceValue(this, dome, 'canSetAltitude', DEFAULT_DOME.canSetAltitude)
 			resetDeviceValue(this, dome, 'altitude', DEFAULT_DOME.altitude)
 		}
-		if (full || name === 'DOME_AUTO_SYNC') {
+		if (full || name === 'DOME_AUTOSYNC') {
 			resetDeviceValue(this, dome, 'canSlave', DEFAULT_DOME.canSlave)
 			resetDeviceValue(this, dome, 'slaved', DEFAULT_DOME.slaved)
 		}
@@ -2883,10 +2912,9 @@ function domeOTASide(message: DefSwitchVector | SetSwitchVector): DomeOTASide {
 	return 'UNKNOWN'
 }
 
-// Recomputes the aggregate motion flag after any rotational, home/park, or shutter update.
+// Recomputes the aggregate rotational/home/park motion flag after a related property update.
 function updateDomeSlewing(manager: DeviceManager<Dome>, dome: Dome, state?: PropertyState) {
-	const shutterMoving = dome.shutterState === 'OPENING' || dome.shutterState === 'CLOSING'
-	const slewing = dome.moving || dome.homing || dome.parking || shutterMoving
+	const slewing = dome.moving || dome.homing || dome.parking
 
 	if (handleSwitchValue(dome, 'slewing', slewing, state)) manager.updated(dome, 'slewing', state)
 }

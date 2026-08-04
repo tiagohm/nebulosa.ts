@@ -1,9 +1,10 @@
 import { describe, expect, test } from 'bun:test'
 import { IndiClientHandlerSet } from '../../../../src/devices/indi/client'
-import { DomeManager } from '../../../../src/devices/indi/manager'
+import { DomeManager, MountManager } from '../../../../src/devices/indi/manager'
 import { ClientSimulator } from '../../../../src/devices/indi/simulator/client'
 import { DomeSimulator } from '../../../../src/devices/indi/simulator/dome'
-import { deg } from '../../../../src/math/units/angle'
+import { MountSimulator } from '../../../../src/devices/indi/simulator/mount'
+import { deg, hour } from '../../../../src/math/units/angle'
 import { isTimeConsumingTestSkipped, waitUntil } from '../../../util'
 
 const SKIP = isTimeConsumingTestSkipped()
@@ -12,10 +13,17 @@ describe.skipIf(SKIP)('dome simulator', () => {
 	test('integrates dome movement, shutter, park, slaving, and abort controls', async () => {
 		const handler = new IndiClientHandlerSet()
 		const manager = new DomeManager()
+		const mountManager = new MountManager()
 		handler.add(manager)
+		handler.add(mountManager)
 
 		using client = new ClientSimulator('dome', handler)
-		using simulator = new DomeSimulator('Dome Simulator', client)
+		using mountSimulator = new MountSimulator('Mount Simulator', client)
+		using simulator = new DomeSimulator('Dome Simulator', client, { mountManager })
+		const mount = mountManager.get(client, mountSimulator.name)!
+		mountManager.connect(mount)
+		await waitUntil(() => mount.connected)
+		client.sendText({ device: simulator.name, name: 'ACTIVE_DEVICES', elements: { ACTIVE_TELESCOPE: mount.name } })
 		const dome = manager.get(client, simulator.name)!
 
 		manager.connect(dome)
@@ -29,6 +37,7 @@ describe.skipIf(SKIP)('dome simulator', () => {
 		expect(dome.canUnpark).toBeTrue()
 		expect(dome.canSetShutter).toBeTrue()
 		expect(dome.canSlave).toBeTrue()
+		expect(dome.autoSyncThreshold.value).toBeCloseTo(deg(1))
 		expect(dome.canAbort).toBeTrue()
 		expect(dome.hasMeasurements).toBeTrue()
 
@@ -87,7 +96,7 @@ describe.skipIf(SKIP)('dome simulator', () => {
 
 		manager.openShutter(dome)
 		await waitUntil(() => dome.shutterState === 'OPENING')
-		expect(dome.slewing).toBeTrue()
+		expect(dome.slewing).toBeFalse()
 		await waitUntil(() => dome.shutterState === 'OPEN', 2500)
 		await waitUntil(() => !dome.slewing)
 
@@ -95,8 +104,12 @@ describe.skipIf(SKIP)('dome simulator', () => {
 		await waitUntil(() => dome.shutterState === 'CLOSING')
 		await waitUntil(() => dome.shutterState === 'CLOSED', 2500)
 
+		mountManager.syncTo(mount, hour(4), deg(20))
 		manager.slave(dome, true)
 		await waitUntil(() => dome.slaved)
+		await waitUntil(() => dome.moving, 2500)
+		mountManager.syncTo(mount, hour(10), deg(20))
+		await waitUntil(() => dome.moving, 2500)
 		manager.stop(dome)
 		await waitUntil(() => !dome.slaved)
 
@@ -119,7 +132,9 @@ describe.skipIf(SKIP)('dome simulator', () => {
 		const saved: string[] = []
 		const handler = new IndiClientHandlerSet()
 		using client = new ClientSimulator('dome.persistence', handler)
+		const mountManager = new MountManager()
 		using simulator = new DomeSimulator('Dome Simulator', client, {
+			mountManager,
 			save(name, properties) {
 				expect(name).toBe('Dome Simulator')
 				saved.push(...properties.map(({ name: propertyName }) => propertyName))
@@ -128,6 +143,6 @@ describe.skipIf(SKIP)('dome simulator', () => {
 
 		simulator.saveProperties()
 
-		expect(saved).toEqual(['DOME_SPEED', 'DOME_PARAMS', 'DOME_AUTO_SYNC', 'DOME_PARK_POSITION', 'DOME_BACKLASH_TOGGLE', 'DOME_BACKLASH_STEPS', 'DOME_MEASUREMENTS', 'DM_OTA_SIDE'])
+		expect(saved).toEqual(['DOME_SPEED', 'DOME_PARAMS', 'DOME_AUTOSYNC', 'DOME_PARK_POSITION', 'DOME_BACKLASH_TOGGLE', 'DOME_BACKLASH_STEPS', 'DOME_MEASUREMENTS', 'DM_OTA_SIDE'])
 	})
 })

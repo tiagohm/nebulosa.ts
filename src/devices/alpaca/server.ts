@@ -1644,7 +1644,7 @@ export class AlpacaServer {
 		const { device } = registered
 		const res: AlpacaStateItem[] = []
 
-		if (device.canSetAltitude) res.push({ Name: 'Altitude', Value: toDeg(device.altitude.value) })
+		if (device.canSetAltitude || device.altitude.max > device.altitude.min) res.push({ Name: 'Altitude', Value: toDeg(device.altitude.value) })
 		if (device.canFindHome) res.push({ Name: 'AtHome', Value: device.atHome })
 		if (device.canPark) res.push({ Name: 'AtPark', Value: device.parked })
 		if (device.canSetAzimuth) res.push({ Name: 'Azimuth', Value: toDeg(normalizeAngle(device.azimuth.value)) })
@@ -1679,7 +1679,10 @@ export class AlpacaServer {
 
 	#domeFindHome(id: number) {
 		const registered = this.#requireDomeCapability(id, 'canFindHome', 'Dome does not support finding home')
-		return registered instanceof Response ? registered : (this.options.dome?.home(registered.device), makeAlpacaResponse(undefined))
+		if (registered instanceof Response) return registered
+
+		const movable = this.#requireDomeNotSlaved(registered)
+		return movable instanceof Response ? movable : (this.options.dome?.home(movable.device), makeAlpacaResponse(undefined))
 	}
 
 	#domeOpenShutter(id: number) {
@@ -1713,7 +1716,8 @@ export class AlpacaServer {
 		const altitude = +data.Altitude
 		if (!Number.isFinite(altitude) || altitude < 0 || altitude > 90) return makeAlpacaErrorResponse(AlpacaException.InvalidValue, 'Altitude must be between 0 and 90 degrees')
 
-		return makeAlpacaErrorResponse(AlpacaException.MethodOrPropertyNotImplemented, 'Dome altitude movement is not supported by the INDI manager')
+		this.options.dome?.moveToAltitude(movable.device, deg(altitude))
+		return makeAlpacaResponse(undefined)
 	}
 
 	#domeSlewToAzimuth(id: number, data: { Azimuth: string }) {

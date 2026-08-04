@@ -1,5 +1,9 @@
+import { equatorialToHorizontal } from '../../../astronomy/coordinates/coordinate'
+import { localSiderealTime } from '../../../astronomy/observer/location'
+import { timeUnix } from '../../../astronomy/time/time'
 import type { IndiClientHandler } from '../client'
 import { DeviceInterfaceType, type DomeDirection } from '../device'
+import type { MountManager } from '../manager'
 import { makeNumberVector, makeSwitchVector, type NewNumberVector, type NewSwitchVector, type PropertyState } from '../types'
 import type { ClientSimulator } from './client'
 import { DOME_DEFAULT_HOME_AZIMUTH, DOME_DEFAULT_PARK_AZIMUTH, DOME_DEFAULT_SPEED_RPM, DOME_MAX_SPEED_RPM, DOME_MIN_SPEED_RPM, DOME_SHUTTER_MOVE_TIME_MS, MAIN_CONTROL, TICK_INTERVAL_MS } from './constants'
@@ -13,6 +17,12 @@ import { applyExclusiveSwitchValues, applyNumberVectorValues, shortestRotatorDel
 type DomeOperation = 'slew' | 'relative' | 'home' | 'park'
 type DomeShutterTarget = 'OPEN' | 'CLOSED'
 
+// Optional dome simulator integrations, including the mount manager used for autosync.
+export interface DomeSimulatorOptions extends DeviceSimulatorOptions {
+	// Resolves the active telescope named by ACTIVE_TELESCOPE for simulated slaving.
+	readonly mountManager?: MountManager
+}
+
 // Simulates a dome controller whose movement and shutter transitions are observable through INDI vectors.
 export class DomeSimulator extends DeviceSimulator {
 	readonly type = 'dome'
@@ -25,8 +35,8 @@ export class DomeSimulator extends DeviceSimulator {
 	readonly #shutter = makeSwitchVector('', 'DOME_SHUTTER', 'Shutter', MAIN_CONTROL, 'OneOfMany', 'rw', ['SHUTTER_OPEN', 'Open', false], ['SHUTTER_CLOSE', 'Close', true])
 	readonly #goto = makeSwitchVector('', 'DOME_GOTO', 'Home/Park', MAIN_CONTROL, 'OneOfMany', 'rw', ['DOME_HOME', 'Home', false], ['DOME_PARK', 'Park', false])
 	// oxfmt-ignore
-	readonly #params = makeNumberVector('', 'DOME_PARAMS', 'Parameters',MAIN_CONTROL, 'rw', ['HOME_POSITION', 'Home position', DOME_DEFAULT_HOME_AZIMUTH, 0, 360, 0.1, '%.2f'], ['PARK_POSITION', 'Park position', DOME_DEFAULT_PARK_AZIMUTH, 0, 360, 0.1, '%.2f'], ['AUTO_SYNC_THRESHOLD', 'Auto-sync threshold', 1, 0, 360, 0.1, '%.2f'])
-	readonly #autoSync = makeSwitchVector('', 'DOME_AUTO_SYNC', 'Auto-sync', MAIN_CONTROL, 'OneOfMany', 'rw', ['INDI_ENABLED', 'Enabled', false], ['INDI_DISABLED', 'Disabled', true])
+	readonly #params = makeNumberVector('', 'DOME_PARAMS', 'Parameters',MAIN_CONTROL, 'rw', ['HOME_POSITION', 'Home position', DOME_DEFAULT_HOME_AZIMUTH, 0, 360, 0.1, '%.2f'], ['PARK_POSITION', 'Park position', DOME_DEFAULT_PARK_AZIMUTH, 0, 360, 0.1, '%.2f'], ['AUTOSYNC_THRESHOLD', 'Auto-sync threshold', 1, 0, 360, 0.1, '%.2f'])
+	readonly #autoSync = makeSwitchVector('', 'DOME_AUTOSYNC', 'Auto-sync', MAIN_CONTROL, 'OneOfMany', 'rw', ['INDI_ENABLED', 'Enabled', false], ['INDI_DISABLED', 'Disabled', true])
 	readonly #sync = makeNumberVector('', 'DOME_SYNC', 'Sync', MAIN_CONTROL, 'rw', ['DOME_SYNC_VALUE', 'Degrees', 0, 0, 360, 0.1, '%.2f'])
 	readonly #park = makeSwitchVector('', 'DOME_PARK', 'Park', MAIN_CONTROL, 'OneOfMany', 'rw', ['PARK', 'Park', false], ['UNPARK', 'Unpark', true])
 	readonly #parkPosition = makeNumberVector('', 'DOME_PARK_POSITION', 'Park position', MAIN_CONTROL, 'rw', ['PARK_AZ', 'Degrees', DOME_DEFAULT_PARK_AZIMUTH, 0, 360, 0.1, '%.2f'])
@@ -37,27 +47,10 @@ export class DomeSimulator extends DeviceSimulator {
 	readonly #measurements = makeNumberVector('', 'DOME_MEASUREMENTS', 'Measurements', MAIN_CONTROL, 'ro', ['DOME_RADIUS', 'Radius', 3, 0, 100, 0.01, '%.2f'], ['DOME_SHUTTER_WIDTH', 'Shutter width', 1, 0, 100, 0.01, '%.2f'],		['DOME_NORTH_DISPLACEMENT', 'North displacement', 0, -100, 100, 0.01, '%.2f'],		['DOME_EAST_DISPLACEMENT', 'East displacement', 0, -100, 100, 0.01, '%.2f'],		['DOME_UP_DISPLACEMENT', 'Up displacement', 0, -100, 100, 0.01, '%.2f'],		['DOME_OTA_OFFSET', 'OTA offset', 0, -100, 100, 0.01, '%.2f']	)
 	readonly #otaSide = makeSwitchVector('', 'DM_OTA_SIDE', 'OTA side', MAIN_CONTROL, 'OneOfMany', 'rw', ['DM_OTA_EAST', 'East', false], ['DM_OTA_WEST', 'West', false])
 
-	protected readonly properties: readonly SimulatorProperty[] = [
-		this.#speed,
-		this.#motion,
-		this.#relative,
-		this.#absolute,
-		this.#abort,
-		this.#shutter,
-		this.#goto,
-		this.#params,
-		this.#autoSync,
-		this.#sync,
-		this.#park,
-		this.#parkPosition,
-		this.#parkOption,
-		this.#backlashToggle,
-		this.#backlashSteps,
-		this.#measurements,
-		this.#otaSide,
-	]
+	protected readonly properties: readonly SimulatorProperty[]
+	protected readonly propertiesToNotSave: readonly SimulatorProperty[] = [this.#motion, this.#relative, this.#absolute, this.#abort, this.#shutter, this.#goto, this.#sync, this.#park, this.#parkOption]
 
-	protected propertiesToNotSave: readonly SimulatorProperty[] = [this.#motion, this.#relative, this.#absolute, this.#abort, this.#shutter, this.#goto, this.#sync, this.#park, this.#parkOption]
+	readonly #mountManager?: MountManager
 
 	#timer?: NodeJS.Timeout
 	#lastTick = 0
@@ -71,10 +64,31 @@ export class DomeSimulator extends DeviceSimulator {
 	constructor(
 		name: string,
 		client: ClientSimulator,
-		readonly options?: DeviceSimulatorOptions,
+		readonly options?: DomeSimulatorOptions,
 		handler: IndiClientHandler = client.handler,
 	) {
 		super(name, client, handler, DeviceInterfaceType.DOME)
+
+		this.#mountManager = options?.mountManager
+		this.properties = [
+			this.#speed,
+			this.#motion,
+			this.#relative,
+			this.#absolute,
+			this.#abort,
+			this.#shutter,
+			this.#goto,
+			this.#params,
+			...(this.#mountManager ? [this.#autoSync] : []),
+			this.#sync,
+			this.#park,
+			this.#parkPosition,
+			this.#parkOption,
+			this.#backlashToggle,
+			this.#backlashSteps,
+			this.#measurements,
+			this.#otaSide,
+		]
 
 		for (const property of this.properties) property.device = name
 
@@ -89,6 +103,12 @@ export class DomeSimulator extends DeviceSimulator {
 	// Current shutter target, if an asynchronous transition is active.
 	get shutterTarget() {
 		return this.#shutterTarget
+	}
+
+	// Returns the connected mount selected by ACTIVE_TELESCOPE, when autosync was configured.
+	get activeMount() {
+		const mount = this.#mountManager?.get(this.client, this.snoopDevices.elements.ACTIVE_TELESCOPE.value)
+		return mount?.connected ? mount : undefined
 	}
 
 	// Whether azimuth or shutter motion is active.
@@ -162,8 +182,12 @@ export class DomeSimulator extends DeviceSimulator {
 				if (vector.elements.PARK === true) this.park()
 				else if (vector.elements.UNPARK === true) this.unpark()
 				return
-			case 'DOME_AUTO_SYNC':
-				if (applyExclusiveSwitchValues(this.#autoSync, vector.elements)) this.notify(this.#autoSync)
+			case 'DOME_AUTOSYNC':
+				if (this.#mountManager && applyExclusiveSwitchValues(this.#autoSync, vector.elements)) {
+					this.notify(this.#autoSync)
+					if (this.#autoSync.elements.INDI_ENABLED.value) this.updateSlavedTarget()
+					else if (this.#operation === 'slew') this.stopMotion(false)
+				}
 				return
 			case 'DOME_PARK_OPTION':
 				if (vector.elements.PARK_CURRENT === true) this.setPark()
@@ -297,6 +321,7 @@ export class DomeSimulator extends DeviceSimulator {
 		const dtSeconds = Math.max(0, (now - this.#lastTick) / 1000)
 		this.#lastTick = now
 
+		this.updateSlavedTarget()
 		this.tickShutter(now)
 		if (dtSeconds <= 0) return
 
@@ -333,6 +358,33 @@ export class DomeSimulator extends DeviceSimulator {
 	// Current rotation speed converted from RPM to degrees per second (one RPM is six degrees/s).
 	private get speedDegreesPerSecond() {
 		return this.#speed.elements.DOME_SPEED_VALUE.value * 6
+	}
+
+	// Converts the active mount's reported equatorial position into the dome azimuth to follow.
+	private slavedAzimuth() {
+		const mount = this.activeMount
+		if (mount === undefined) return undefined
+
+		const time = timeUnix(mount.time.utc / 1000)
+		const [azimuth] = equatorialToHorizontal(mount.equatorialCoordinate.rightAscension, mount.equatorialCoordinate.declination, mount.geographicCoordinate.latitude, localSiderealTime(time, mount.geographicCoordinate))
+		return (azimuth * 180) / Math.PI
+	}
+
+	// Starts or retargets a simulated slew while autosync is enabled and a mount is available.
+	private updateSlavedTarget() {
+		if (!this.#autoSync.elements.INDI_ENABLED.value) return
+
+		const target = this.slavedAzimuth()
+		if (target === undefined) {
+			if (this.#operation === 'slew') this.stopMotion(false)
+			return
+		}
+
+		const threshold = this.#params.elements.AUTOSYNC_THRESHOLD.value
+		if (this.#targetAzimuth !== undefined && Math.abs(shortestRotatorDelta(target, this.#targetAzimuth)) <= threshold) return
+		if (Math.abs(shortestRotatorDelta(target, this.azimuth)) <= threshold) return
+
+		this.startTarget(target, 'slew')
 	}
 
 	// Starts an absolute, relative, home, or park operation and publishes all affected Busy vectors.

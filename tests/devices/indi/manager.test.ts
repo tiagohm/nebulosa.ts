@@ -117,7 +117,7 @@ test('DomeManager maps motion, angular ranges, shutter, and measurements', () =>
 	expect(dome.hasShutter).toBeTrue()
 	expect(dome.canSetShutter).toBeTrue()
 	expect(dome.shutterState).toBe('OPENING')
-	expect(dome.slewing).toBeTrue()
+	expect(dome.slewing).toBeFalse()
 
 	manager.switchVector(recordingClient, { ...shutter, state: 'Ok', elements: { SHUTTER_OPEN: defSwitch('SHUTTER_OPEN', true), SHUTTER_CLOSE: defSwitch('SHUTTER_CLOSE', false) } }, 'setSwitchVector')
 	expect(dome.shutterState).toBe('OPEN')
@@ -150,6 +150,7 @@ test('DomeManager sends capability-gated commands in INDI units', () => {
 	const manager = new DomeManager()
 	const dome = setupDome(manager)
 	dome.canSetAzimuth = true
+	dome.canSetAltitude = true
 	dome.canRelativeMove = true
 	dome.canMove = true
 	dome.canSync = true
@@ -161,6 +162,18 @@ test('DomeManager sends capability-gated commands in INDI units', () => {
 	dome.canSlave = true
 	dome.canAbort = true
 	dome.azimuth.value = Math.PI / 2
+	manager.switchVector(
+		recordingClient,
+		{
+			device: dome.name,
+			name: 'DOME_AUTOSYNC',
+			permission: 'rw',
+			rule: 'OneOfMany',
+			state: 'Ok',
+			elements: { INDI_ENABLED: defSwitch('INDI_ENABLED', false), INDI_DISABLED: defSwitch('INDI_DISABLED', true) },
+		},
+		'defSwitchVector',
+	)
 
 	manager.numberVector(
 		recordingClient,
@@ -198,6 +211,7 @@ test('DomeManager sends capability-gated commands in INDI units', () => {
 	)
 
 	manager.moveTo(dome, Math.PI * 3)
+	manager.moveToAltitude(dome, Math.PI / 6)
 	manager.moveBy(dome, -Math.PI / 6)
 	manager.syncTo(dome, Math.PI / 4)
 	manager.speed(dome, 2)
@@ -212,11 +226,113 @@ test('DomeManager sends capability-gated commands in INDI units', () => {
 	manager.slave(dome, true)
 	manager.stop(dome)
 
-	expect(numberCommands.map(({ name }) => name)).toEqual(['ABS_DOME_POSITION', 'REL_DOME_POSITION', 'DOME_SYNC', 'DOME_SPEED', 'DOME_BACKLASH_STEPS'])
+	expect(numberCommands.map(({ name }) => name)).toEqual(['ABS_DOME_POSITION', 'DOME_ALTITUDE', 'REL_DOME_POSITION', 'DOME_SYNC', 'DOME_SPEED', 'DOME_BACKLASH_STEPS'])
 	expect(numberCommands[0].elements.DOME_ABSOLUTE_POSITION).toBeCloseTo(180)
-	expect(numberCommands[1].elements.DOME_RELATIVE_POSITION).toBeCloseTo(-30)
-	expect(numberCommands[2].elements.DOME_SYNC_VALUE).toBeCloseTo(45)
-	expect(switchCommands.map(({ name }) => name)).toEqual(['DOME_MOTION', 'DOME_GOTO', 'DOME_PARK', 'DOME_PARK', 'DOME_PARK_OPTION', 'DOME_SHUTTER', 'DOME_SHUTTER', 'DOME_AUTO_SYNC', 'DOME_ABORT_MOTION'])
+	expect(numberCommands[1].elements.DOME_ALTITUDE_VALUE).toBeCloseTo(30)
+	expect(numberCommands[2].elements.DOME_RELATIVE_POSITION).toBeCloseTo(-30)
+	expect(numberCommands[3].elements.DOME_SYNC_VALUE).toBeCloseTo(45)
+	expect(switchCommands.map(({ name }) => name)).toEqual(['DOME_MOTION', 'DOME_GOTO', 'DOME_PARK', 'DOME_PARK', 'DOME_PARK_OPTION', 'DOME_SHUTTER', 'DOME_SHUTTER', 'DOME_AUTOSYNC', 'DOME_ABORT_MOTION'])
+})
+
+test('DomeManager preserves driver-specific slaving element names', () => {
+	numberCommands.length = 0
+	switchCommands.length = 0
+
+	const manager = new DomeManager()
+	const dome = setupDome(manager)
+	manager.switchVector(
+		recordingClient,
+		{
+			device: dome.name,
+			name: 'DOME_AUTOSYNC',
+			permission: 'rw',
+			rule: 'OneOfMany',
+			state: 'Ok',
+			elements: { ENABLE: defSwitch('ENABLE', false), DISABLE: defSwitch('DISABLE', true) },
+		},
+		'defSwitchVector',
+	)
+
+	manager.slave(dome, true)
+	manager.slave(dome, false)
+
+	expect(switchCommands.map(({ elements }) => elements)).toEqual([{ ENABLE: true }, { DISABLE: true }])
+})
+
+test('DomeManager does not complete failed home or park operations', () => {
+	const manager = new DomeManager()
+	const dome = setupDome(manager)
+
+	manager.switchVector(
+		recordingClient,
+		{
+			device: dome.name,
+			name: 'DOME_GOTO',
+			permission: 'rw',
+			rule: 'OneOfMany',
+			state: 'Busy',
+			elements: { DOME_HOME: defSwitch('DOME_HOME', true), DOME_PARK: defSwitch('DOME_PARK', false) },
+		},
+		'defSwitchVector',
+	)
+	manager.switchVector(
+		recordingClient,
+		{
+			device: dome.name,
+			name: 'DOME_GOTO',
+			permission: 'rw',
+			rule: 'OneOfMany',
+			state: 'Alert',
+			elements: { DOME_HOME: defSwitch('DOME_HOME', true), DOME_PARK: defSwitch('DOME_PARK', false) },
+		},
+		'setSwitchVector',
+	)
+
+	expect(dome.homing).toBeFalse()
+	expect(dome.atHome).toBeFalse()
+
+	manager.switchVector(
+		recordingClient,
+		{
+			device: dome.name,
+			name: 'DOME_PARK',
+			permission: 'rw',
+			rule: 'OneOfMany',
+			state: 'Busy',
+			elements: { PARK: defSwitch('PARK', true), UNPARK: defSwitch('UNPARK', false) },
+		},
+		'defSwitchVector',
+	)
+	manager.switchVector(
+		recordingClient,
+		{
+			device: dome.name,
+			name: 'DOME_PARK',
+			permission: 'rw',
+			rule: 'OneOfMany',
+			state: 'Alert',
+			elements: { PARK: defSwitch('PARK', true), UNPARK: defSwitch('UNPARK', false) },
+		},
+		'setSwitchVector',
+	)
+
+	expect(dome.parking).toBeFalse()
+	expect(dome.parked).toBeFalse()
+
+	manager.switchVector(
+		recordingClient,
+		{
+			device: dome.name,
+			name: 'DOME_PARK',
+			permission: 'rw',
+			rule: 'OneOfMany',
+			state: 'Busy',
+			elements: { PARK: defSwitch('PARK', false), UNPARK: defSwitch('UNPARK', true) },
+		},
+		'setSwitchVector',
+	)
+
+	expect(dome.parking).toBeFalse()
 })
 
 test('dome interface bit is rediscovered as a dome device type after interface bitmask be updated', () => {
