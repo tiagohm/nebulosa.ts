@@ -1,5 +1,5 @@
 // oxfmt-ignore
-import type { AlpacaAxisRate, AlpacaCameraSensorType, AlpacaCameraState, AlpacaConfiguredDevice, AlpacaGuideDirection, AlpacaResponse, AlpacaStateItem, AlpacaTelescopeAlignmentMode, AlpacaTelescopeAxis, AlpacaTelescopeEquatorialCoordinateType, AlpacaTelescopePierSide, AlpacaTelescopeTrackingRate } from './types'
+import type { AlpacaAxisRate, AlpacaCameraSensorType, AlpacaCameraState, AlpacaConfiguredDevice, AlpacaDomeShutterState, AlpacaGuideDirection, AlpacaResponse, AlpacaStateItem, AlpacaTelescopeAlignmentMode, AlpacaTelescopeAxis, AlpacaTelescopeEquatorialCoordinateType, AlpacaTelescopePierSide, AlpacaTelescopeTrackingRate } from './types'
 
 // Thin typed HTTP client for the ASCOM Alpaca REST API. Each class wraps one device type and exposes a
 // method per Alpaca property/operation; the methods are intentionally one-line mappings onto the shared
@@ -21,6 +21,7 @@ export class AlpacaApi {
 	readonly focuser: AlpacaFocuserApi
 	readonly coverCalibrator: AlpacaCoverCalibratorApi
 	readonly rotator: AlpacaRotatorApi
+	readonly dome: AlpacaDomeApi
 
 	constructor(readonly url: string | URL) {
 		this.management = new AlpacaManagementApi(url)
@@ -30,6 +31,7 @@ export class AlpacaApi {
 		this.focuser = new AlpacaFocuserApi(url)
 		this.coverCalibrator = new AlpacaCoverCalibratorApi(url)
 		this.rotator = new AlpacaRotatorApi(url)
+		this.dome = new AlpacaDomeApi(url)
 	}
 }
 
@@ -879,6 +881,113 @@ export class AlpacaRotatorApi extends AlpacaDeviceApi {
 
 	sync(id: number, Position: number) {
 		return request<void>(this.url, `${id}/sync`, 'PUT', { Position })
+	}
+}
+
+// Alpaca Dome endpoints: altitude/azimuth, home/park, shutter, slaving, and asynchronous motion.
+export class AlpacaDomeApi extends AlpacaDeviceApi {
+	constructor(url: string | URL) {
+		super(new URL('/api/v1/dome/', url))
+	}
+
+	getAltitude(id: number) {
+		return request<number>(this.url, `${id}/altitude`, 'GET')
+	}
+
+	isAtHome(id: number) {
+		return request<boolean>(this.url, `${id}/athome`, 'GET')
+	}
+
+	isAtPark(id: number) {
+		return request<boolean>(this.url, `${id}/atpark`, 'GET')
+	}
+
+	getAzimuth(id: number) {
+		return request<number>(this.url, `${id}/azimuth`, 'GET')
+	}
+
+	canFindHome(id: number) {
+		return request<boolean>(this.url, `${id}/canfindhome`, 'GET')
+	}
+
+	canPark(id: number) {
+		return request<boolean>(this.url, `${id}/canpark`, 'GET')
+	}
+
+	canSetAltitude(id: number) {
+		return request<boolean>(this.url, `${id}/cansetaltitude`, 'GET')
+	}
+
+	canSetAzimuth(id: number) {
+		return request<boolean>(this.url, `${id}/cansetazimuth`, 'GET')
+	}
+
+	canSetPark(id: number) {
+		return request<boolean>(this.url, `${id}/cansetpark`, 'GET')
+	}
+
+	canSetShutter(id: number) {
+		return request<boolean>(this.url, `${id}/cansetshutter`, 'GET')
+	}
+
+	canSlave(id: number) {
+		return request<boolean>(this.url, `${id}/canslave`, 'GET')
+	}
+
+	canSyncAzimuth(id: number) {
+		return request<boolean>(this.url, `${id}/cansyncazimuth`, 'GET')
+	}
+
+	getShutterStatus(id: number) {
+		return request<AlpacaDomeShutterState>(this.url, `${id}/shutterstatus`, 'GET')
+	}
+
+	isSlaved(id: number) {
+		return request<boolean>(this.url, `${id}/slaved`, 'GET')
+	}
+
+	isSlewing(id: number) {
+		return request<boolean>(this.url, `${id}/slewing`, 'GET')
+	}
+
+	setSlaved(id: number, Slaved: boolean) {
+		return request<void>(this.url, `${id}/slaved`, 'PUT', { Slaved })
+	}
+
+	abortSlew(id: number) {
+		return request<void>(this.url, `${id}/abortslew`, 'PUT')
+	}
+
+	closeShutter(id: number) {
+		return request<void>(this.url, `${id}/closeshutter`, 'PUT')
+	}
+
+	findHome(id: number) {
+		return request<void>(this.url, `${id}/findhome`, 'PUT')
+	}
+
+	openShutter(id: number) {
+		return request<void>(this.url, `${id}/openshutter`, 'PUT')
+	}
+
+	park(id: number) {
+		return request<void>(this.url, `${id}/park`, 'PUT')
+	}
+
+	setPark(id: number) {
+		return request<void>(this.url, `${id}/setpark`, 'PUT')
+	}
+
+	slewToAltitude(id: number, Altitude: number) {
+		return request<void>(this.url, `${id}/slewtoaltitude`, 'PUT', { Altitude })
+	}
+
+	slewToAzimuth(id: number, Azimuth: number) {
+		return request<void>(this.url, `${id}/slewtoazimuth`, 'PUT', { Azimuth })
+	}
+
+	syncToAzimuth(id: number, Azimuth: number) {
+		return request<void>(this.url, `${id}/synctoazimuth`, 'PUT', { Azimuth })
 	}
 }
 

@@ -3,7 +3,7 @@ import { timeYMDHMS } from '../../../src/astronomy/time/time'
 import { AlpacaClient, type AlpacaClientHandler, makeFitsFromImageBytes } from '../../../src/devices/alpaca/client'
 import { makeImageBytesFromFits } from '../../../src/devices/alpaca/server'
 import { CLIENT, type Client, DEFAULT_CAMERA, DEFAULT_MOUNT, type Device, type DeviceType } from '../../../src/devices/indi/device'
-import { CameraManager, CoverManager, type DeviceProvider, FlatPanelManager, FocuserManager, GuideOutputManager, MountManager, RotatorManager, ThermometerManager, WheelManager } from '../../../src/devices/indi/manager'
+import { CameraManager, CoverManager, type DeviceProvider, DomeManager, FlatPanelManager, FocuserManager, GuideOutputManager, MountManager, RotatorManager, ThermometerManager, WheelManager } from '../../../src/devices/indi/manager'
 import type { PropertyState } from '../../../src/devices/indi/types'
 import { readImageFromBuffer } from '../../../src/imaging/model/image'
 import { debayer } from '../../../src/imaging/processing/debayer'
@@ -80,6 +80,7 @@ const focuserManager = new FocuserManager()
 const flatPanelManager = new FlatPanelManager()
 const coverManager = new CoverManager()
 const rotatorManager = new RotatorManager()
+const domeManager = new DomeManager()
 
 const guideOutput = new GuideOutputManager({
 	get: (client: Client | string | undefined, name: string) => mountManager.get(client, name) ?? cameraManager.get(client, name),
@@ -98,6 +99,7 @@ const handler: AlpacaClientHandler = {
 		flatPanelManager.textVector(client, message, tag)
 		coverManager.textVector(client, message, tag)
 		rotatorManager.textVector(client, message, tag)
+		domeManager.textVector(client, message, tag)
 	},
 	numberVector: (client, message, tag) => {
 		cameraManager.numberVector(client, message, tag)
@@ -106,6 +108,7 @@ const handler: AlpacaClientHandler = {
 		focuserManager.numberVector(client, message, tag)
 		flatPanelManager.numberVector(client, message, tag)
 		rotatorManager.numberVector(client, message, tag)
+		domeManager.numberVector(client, message, tag)
 		guideOutput.numberVector(client, message, tag)
 		thermometerManager.numberVector(client, message, tag)
 	},
@@ -117,6 +120,7 @@ const handler: AlpacaClientHandler = {
 		flatPanelManager.switchVector(client, message, tag)
 		coverManager.switchVector(client, message, tag)
 		rotatorManager.switchVector(client, message, tag)
+		domeManager.switchVector(client, message, tag)
 		guideOutput.switchVector(client, message, tag)
 		thermometerManager.switchVector(client, message, tag)
 	},
@@ -134,6 +138,7 @@ const deviceProvider: DeviceProvider<Device> = {
 		else if (type === 'flatPanel') return flatPanelManager.get(client, name)
 		else if (type === 'cover') return coverManager.get(client, name)
 		else if (type === 'rotator') return rotatorManager.get(client, name)
+		else if (type === 'dome') return domeManager.get(client, name)
 		return undefined
 	},
 }

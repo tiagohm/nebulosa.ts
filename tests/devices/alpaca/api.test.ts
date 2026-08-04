@@ -20,6 +20,7 @@ test('builds device API endpoint roots without contacting a server', () => {
 	expect(api.focuser.url.toString()).toBe('http://example.test:11111/api/v1/focuser/')
 	expect(api.coverCalibrator.url.toString()).toBe('http://example.test:11111/api/v1/covercalibrator/')
 	expect(api.rotator.url.toString()).toBe('http://example.test:11111/api/v1/rotator/')
+	expect(api.dome.url.toString()).toBe('http://example.test:11111/api/v1/dome/')
 })
 
 if (filterWheel) {
