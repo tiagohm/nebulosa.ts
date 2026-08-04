@@ -1653,7 +1653,7 @@ export class AlpacaServer {
 		return makeAlpacaResponse(res)
 	}
 
-	#domeSetSlaved(id: number, data: { Slaved: string }) {
+	#domeSetSlaved(id: number, data: { Slaved?: string }) {
 		const registered = this.#requireDomeCapability(id, 'canSlave', 'Dome does not support slaving')
 		if (registered instanceof Response) return registered
 
@@ -1669,8 +1669,9 @@ export class AlpacaServer {
 		if (registered instanceof Response) return registered
 		if (!registered.device.canAbort) return makeAlpacaErrorResponse(AlpacaException.InvalidOperation, 'Dome cannot interrupt movement')
 
+		const wasSlaved = registered.device.slaved
 		this.options.dome?.stop(registered.device)
-		if (registered.device.slaved && registered.device.canSlave) this.options.dome?.slave(registered.device, false)
+		if (wasSlaved && registered.device.canSlave) this.options.dome?.slave(registered.device, false)
 		return makeAlpacaResponse(undefined)
 	}
 
@@ -2064,7 +2065,9 @@ function isTrue(value: string) {
 }
 
 // Parses the two boolean literals accepted by the Alpaca form-encoded API.
-function parseAlpacaBoolean(value: string) {
+
+function parseAlpacaBoolean(value: string | undefined) {
+	if (value === undefined) return undefined
 	if (value.toLowerCase() === 'true') return true
 	if (value.toLowerCase() === 'false') return false
 	return undefined
