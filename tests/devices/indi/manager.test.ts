@@ -1,6 +1,6 @@
 import { expect, describe, test } from 'bun:test'
 // oxfmt-ignore
-import { CLIENT, type Client, DEFAULT_CAMERA, DEFAULT_COVER, DEFAULT_FLAT_PANEL, DEFAULT_FOCUSER, DEFAULT_MOUNT, DEFAULT_POWER, DEFAULT_ROTATOR, DEFAULT_WHEEL, type Cover, type Device, type FlatPanel, type Focuser, type Power, type Rotator, type Wheel, DeviceInterfaceType, type Camera } from '../../../src/devices/indi/device'
+import { CLIENT, type Client, DEFAULT_CAMERA, DEFAULT_COVER, DEFAULT_DOME, DEFAULT_FLAT_PANEL, DEFAULT_FOCUSER, DEFAULT_MOUNT, DEFAULT_POWER, DEFAULT_ROTATOR, DEFAULT_WHEEL, type Cover, type Device, type FlatPanel, type Focuser, type Power, type Rotator, type Wheel, DeviceInterfaceType, type Camera, isDome } from '../../../src/devices/indi/device'
 import { CameraManager, CoverManager, FlatPanelManager, FocuserManager, MountManager, PowerManager, RotatorManager, WheelManager } from '../../../src/devices/indi/manager'
 import type { DefText, DefTextVector } from '../../../src/devices/indi/types'
 
@@ -25,6 +25,29 @@ test('manager sets all combinated types from interface bitmask', () => {
 
 	expect(camera).toBeDefined()
 	expect(camera!.interfaces).toEqual(['camera', 'mount'])
+})
+
+test('dome defaults expose a disconnected, capability-free model', () => {
+	const dome = structuredClone(DEFAULT_DOME)
+
+	expect(dome.type).toBe('dome')
+	expect(dome.connected).toBeFalse()
+	expect(dome.slewing).toBeFalse()
+	expect(dome.parked).toBeFalse()
+	expect(dome.shutterState).toBe('UNKNOWN')
+	expect(dome.measurements.otaSide).toBe('UNKNOWN')
+	expect(isDome(dome)).toBeTrue()
+	expect(isDome(DEFAULT_CAMERA)).toBeFalse()
+	expect(dome).toEqual(DEFAULT_DOME)
+})
+
+test('dome interface bit is discovered as a dome device type', () => {
+	const manager = new CameraManager()
+	const DRIVER_INTERFACE: DefText = { name: 'DRIVER_INTERFACE', value: (DeviceInterfaceType.CCD | DeviceInterfaceType.DOME).toFixed(0) }
+	const message: DefTextVector = { device: 'Camera', name: 'DRIVER_INFO', permission: 'ro', state: 'Ok', elements: { DRIVER_INTERFACE } }
+	manager.textVector(client, message, 'defTextVector')
+
+	expect(manager.get(client, 'Camera')!.interfaces).toEqual(['camera', 'dome'])
 })
 
 test('manager sets the combinated type after interface bitmask be updated', () => {
