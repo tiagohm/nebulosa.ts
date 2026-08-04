@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { angularDistance } from '../../../../src/astronomy/coordinates/coordinate'
 import { PI, PIOVERTWO, TAU } from '../../../../src/core/constants'
 import { IndiClientHandlerSet } from '../../../../src/devices/indi/client'
 import { GuideOutputManager, MountManager } from '../../../../src/devices/indi/manager'
@@ -2124,6 +2125,30 @@ describe('mount simulator pointing errors', () => {
 
 			// The reported coordinate never sees any of it: the encoders cannot feel the wind.
 			expect(mount.pointingErrorBound).toBeGreaterThan(arcsec(8))
+		} finally {
+			mount.dispose()
+		}
+	})
+
+	test('preserves the wind deflection at the celestial pole', () => {
+		const { client, mount } = makeMount('mount.boresight.wind.pole', 'WIND')
+
+		try {
+			client.sendNumber({ device: mount.name, name: 'MOUNT_WIND', elements: { AMPLITUDE: 60, CORRELATION_TIME: 30 } })
+			mount.syncTo(hour(5), 0)
+
+			const equatorMechanical = mount.mechanical
+			const equatorBoresight = mount.boresight
+			const expected = angularDistance(equatorMechanical.rightAscension, equatorMechanical.declination, equatorBoresight.rightAscension, equatorBoresight.declination)
+			expect(toArcsec(Math.abs(normalizePI(equatorBoresight.rightAscension - equatorMechanical.rightAscension)))).toBeGreaterThan(1)
+
+			mount.syncTo(hour(5), PIOVERTWO)
+			const poleMechanical = mount.mechanical
+			const poleBoresight = mount.boresight
+			const actual = angularDistance(poleMechanical.rightAscension, poleMechanical.declination, poleBoresight.rightAscension, poleBoresight.declination)
+
+			expect(actual).toBeFinite()
+			expect(toArcsec(actual)).toBeCloseTo(toArcsec(expected), 6)
 		} finally {
 			mount.dispose()
 		}

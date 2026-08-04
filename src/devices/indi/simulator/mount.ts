@@ -1,5 +1,5 @@
 import type { EquatorialCoordinate } from '../../../astronomy/coordinates/coordinate'
-import { applyEquatorialPointingError, type EquatorialPointingModel, IDENTITY_EQUATORIAL_POINTING_MODEL, MAX_POINTING_DECLINATION, polarAlignmentPointingModel, tubeFlexureError } from '../../../astronomy/coordinates/pointing'
+import { applyEquatorialPointingError, type EquatorialPointingModel, IDENTITY_EQUATORIAL_POINTING_MODEL, polarAlignmentPointingModel, tubeFlexureError } from '../../../astronomy/coordinates/pointing'
 import { localSiderealTime } from '../../../astronomy/observer/location'
 import { formatTemporal, TIMEZONE } from '../../../astronomy/time/temporal'
 import { timeUnix } from '../../../astronomy/time/time'
@@ -463,11 +463,24 @@ export class MountSimulator extends DeviceSimulator {
 		declination += this.#homeScatterDeclination
 
 		if (this.#windState.rightAscension !== 0 || this.#windState.declination !== 0) {
-			// The wind pushes the tube by an angle on the sky, so the east-west component has to be
-			// divided by the cosine of the declination to become a right-ascension offset. The home
-			// scatter above needs no such conversion: it is an error of the axis angles themselves.
-			rightAscension += this.#windState.rightAscension / Math.cos(clamp(declination, -MAX_POINTING_DECLINATION, MAX_POINTING_DECLINATION))
-			declination += this.#windState.declination
+			// Wind components are physical east/north angles on the sky, so rotate the boresight along its
+			// tangent plane. Converting east to right ascension by dividing by cos(declination) loses that
+			// component at a pole, where every right ascension names the same direction.
+			const east = this.#windState.rightAscension
+			const north = this.#windState.declination
+			const offset = Math.hypot(east, north)
+			const cosRightAscension = Math.cos(rightAscension)
+			const sinRightAscension = Math.sin(rightAscension)
+			const cosDeclination = Math.cos(declination)
+			const sinDeclination = Math.sin(declination)
+			const scale = Math.sin(offset) / offset
+			const cosOffset = Math.cos(offset)
+			const x = cosDeclination * cosRightAscension * cosOffset + scale * (-east * sinRightAscension - north * sinDeclination * cosRightAscension)
+			const y = cosDeclination * sinRightAscension * cosOffset + scale * (east * cosRightAscension - north * sinDeclination * sinRightAscension)
+			const z = sinDeclination * cosOffset + scale * north * cosDeclination
+
+			rightAscension = Math.atan2(y, x)
+			declination = Math.atan2(z, Math.hypot(x, y))
 		}
 
 		// Normalized once here rather than after the geometric terms, so every contribution is inside the
