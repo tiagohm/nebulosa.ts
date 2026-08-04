@@ -1353,15 +1353,14 @@ export class MountSimulator extends DeviceSimulator {
 	//
 	// Called from the simulation step, and from every configuration change that moves the optical axis
 	// without the clock advancing: switching an error family on, and writing a value into one that is
-	// already on. The sample already standing at this instant is replaced, so the history goes on holding
-	// one position per instant. Left to the next step instead, the change was recorded a whole tick late
+	// already on. A changed sample at the same instant is appended after the old one, preserving the two
+	// sides as a discontinuity. Left to the next step instead, the change was recorded a whole tick late
 	// and the history interpolated across it, so an exposure taken right after a value was written came
 	// out trailed from the error the mount used to have to the one it now has.
 	//
 	// Stamped with the exact clock rather than the published one. Two sub-millisecond steps otherwise
-	// recorded two different positions under one timestamp, and the history is searched assuming a
-	// timestamp identifies a position: an east-then-west excursion made of two half-millisecond steps
-	// came back as a path of zero length.
+	// recorded distinct physical intervals under one timestamp, making a real east-then-west excursion
+	// of two half-millisecond steps indistinguishable from an instantaneous configuration jump.
 	#recordBoresight() {
 		this.#recordBoresightAt(this.#utcTime + this.#utcTimeRemainder)
 	}

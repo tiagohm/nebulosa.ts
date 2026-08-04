@@ -4,7 +4,8 @@ import { type Angle, normalizeAngle, normalizePI } from '../../../math/units/ang
 // Recent history of where a mount's optical axis actually pointed, so that a consumer integrating over
 // an interval, such as a camera accumulating an exposure, can ask where the boresight was rather than
 // only where it is now. Samples are held in ring buffers of a fixed capacity and interpolated
-// linearly; times are milliseconds on the simulated clock and coordinates are radians.
+// linearly between distinct timestamps; equal timestamps preserve the two sides of an instantaneous
+// jump. Times are milliseconds on the simulated clock and coordinates are radians.
 
 // Rolling record of boresight samples. Parallel typed arrays rather than an array of objects, since
 // this is written on every simulation tick and read in bulk.
@@ -24,33 +25,28 @@ export interface BoresightHistory {
 // turn a caller's bad number into a RangeError from the typed-array constructor.
 const MAX_BORESIGHT_HISTORY_CAPACITY = 1 << 20
 
-// Allocates a history holding at most `capacity` samples, clamped to [1, MAX_BORESIGHT_HISTORY_CAPACITY]
-// so that the history always has room for the present and never for an absurd request. A capacity that
-// is not a number at all is treated as the minimum: NaN reached the typed-array constructors as a zero
-// length, and the ring arithmetic then divided by that length and left the head NaN, which is a
-// history that silently retains nothing.
+// Allocates a history holding at most `capacity` samples, clamped to [2, MAX_BORESIGHT_HISTORY_CAPACITY]
+// so that the history always has room for both sides of a jump and never for an absurd request. A
+// capacity that is not a number at all is treated as the minimum: NaN reached the typed-array
+// constructors as a zero length, and the ring arithmetic then divided by that length and left the head
+// NaN, which is a history that silently retains nothing.
 export function boresightHistory(capacity: number): BoresightHistory {
-	const size = Number.isNaN(capacity) ? 1 : clamp(Math.trunc(capacity), 1, MAX_BORESIGHT_HISTORY_CAPACITY)
+	const size = Number.isNaN(capacity) ? 2 : clamp(Math.trunc(capacity), 2, MAX_BORESIGHT_HISTORY_CAPACITY)
 	return { times: new Float64Array(size), rightAscensions: new Float64Array(size), declinations: new Float64Array(size), count: 0, head: 0 }
 }
 
 // Appends a sample, overwriting the oldest once the ring is full. Callers must record in
 // non-decreasing time order, which the simulation tick guarantees.
 //
-// A sample landing on the instant already at the head replaces it rather than joining it. The history
-// is read as a function of time, and two positions under one timestamp make it ambiguous: a lookup at
-// or before that instant answered with the position that had been superseded, so an exposure beginning
-// there was drawn as a trail from where the boresight used to be. That happens whenever the optical
-// axis moves without the clock advancing, which is what switching a pointing error on does.
+// A different sample landing on the newest timestamp is appended after it. The ordered pair is a
+// discontinuity: an interval ending there sees the old side and one beginning there sees the new side,
+// without spreading the jump over the preceding segment. An identical sample is ignored so the final
+// recording of a split simulation step does not consume another slot.
 export function recordBoresightSample(history: BoresightHistory, time: number, rightAscension: Angle, declination: Angle) {
 	if (history.count > 0) {
 		const newest = physicalIndex(history, history.count - 1)
 
-		if (history.times[newest] === time) {
-			history.rightAscensions[newest] = rightAscension
-			history.declinations[newest] = declination
-			return
-		}
+		if (history.times[newest] === time && history.rightAscensions[newest] === rightAscension && history.declinations[newest] === declination) return
 	}
 
 	history.times[history.head] = time
@@ -89,12 +85,20 @@ export function boresightHistorySpan(history: BoresightHistory): readonly [numbe
 // motion instead of inventing it. Right ascension is interpolated along the shorter arc, so a sample
 // pair straddling zero behaves.
 export function sampleBoresightAt(history: BoresightHistory, time: number, o: [Angle, Angle]): [Angle, Angle] | undefined {
+	return sampleBoresightAtSide(history, time, true, o)
+}
+
+// Interpolates at `time`, choosing the state after an equal-timestamp jump when `rightSide` is true
+// and the state before it otherwise. The returned tuple aliases `o`; an empty history returns
+// undefined. This endpoint choice gives an exposure the new state at its opening instant and the old
+// state at its closing instant, so a zero-duration configuration jump contributes no fictitious trail.
+function sampleBoresightAtSide(history: BoresightHistory, time: number, rightSide: boolean, o: [Angle, Angle]): [Angle, Angle] | undefined {
 	if (history.count === 0) return undefined
 
 	const last = history.count - 1
 	const first = physicalIndex(history, 0)
 
-	if (time <= history.times[first]) {
+	if (time < history.times[first] || (time === history.times[first] && !rightSide)) {
 		o[0] = history.rightAscensions[first]
 		o[1] = history.declinations[first]
 		return o
@@ -102,26 +106,37 @@ export function sampleBoresightAt(history: BoresightHistory, time: number, o: [A
 
 	const newest = physicalIndex(history, last)
 
-	if (time >= history.times[newest]) {
+	if (time > history.times[newest] || (time === history.times[newest] && rightSide)) {
 		o[0] = history.rightAscensions[newest]
 		o[1] = history.declinations[newest]
 		return o
 	}
 
-	// Binary search for the last sample at or before `time`; the times increase with the logical index.
+	// The boundary is the first sample after `time` on the right side and the first sample at or after it
+	// on the left side. Equal timestamps are therefore resolved to the requested side of the jump.
 	let low = 0
-	let high = last
+	let high = history.count
 
-	while (high - low > 1) {
+	while (low < high) {
 		const middle = (low + high) >> 1
-		if (history.times[physicalIndex(history, middle)] <= time) low = middle
+		const sampleTime = history.times[physicalIndex(history, middle)]
+		if (sampleTime < time || (rightSide && sampleTime === time)) low = middle + 1
 		else high = middle
 	}
 
-	const a = physicalIndex(history, low)
-	const b = physicalIndex(history, high)
+	if (!rightSide && low < history.count) {
+		const at = physicalIndex(history, low)
+		if (history.times[at] === time) {
+			o[0] = history.rightAscensions[at]
+			o[1] = history.declinations[at]
+			return o
+		}
+	}
+
+	const a = physicalIndex(history, low - 1)
+	const b = physicalIndex(history, low)
 	const span = history.times[b] - history.times[a]
-	const fraction = span > 0 ? (time - history.times[a]) / span : 0
+	const fraction = (time - history.times[a]) / span
 
 	o[0] = normalizeAngle(history.rightAscensions[a] + normalizePI(history.rightAscensions[b] - history.rightAscensions[a]) * fraction)
 	o[1] = history.declinations[a] + (history.declinations[b] - history.declinations[a]) * fraction
@@ -142,7 +157,7 @@ export function boresightPathLength(history: BoresightHistory, startTime: number
 	if (history.count === 0 || endTime <= startTime) return 0
 
 	const pair: [Angle, Angle] = [0, 0]
-	if (sampleBoresightAt(history, startTime, pair) === undefined) return 0
+	if (sampleBoresightAtSide(history, startTime, true, pair) === undefined) return 0
 
 	let previousRightAscension = pair[0]
 	let previousDeclination = pair[1]
@@ -163,7 +178,7 @@ export function boresightPathLength(history: BoresightHistory, startTime: number
 		previousDeclination = declination
 	}
 
-	sampleBoresightAt(history, endTime, pair)
+	sampleBoresightAtSide(history, endTime, false, pair)
 	return length + segmentLength(previousRightAscension, previousDeclination, pair[0], pair[1])
 }
 
@@ -218,17 +233,17 @@ export function sampleBoresightPath(history: BoresightHistory, startTime: number
 	const span = endTime - startTime
 	const total = boresightPathLength(history, startTime, endTime)
 
-	// The times are laid down first, in the slot the weight will take, because the positions are read
-	// from them and the weights are then measured along the path rather than from the times at all.
-	if (total > 0) markEqualPathTimes(history, startTime, endTime, samples, total, out)
-	else for (let i = 0; i < samples; i++) out[i * 3 + 2] = startTime + (span / (samples - 1)) * i
-
-	for (let i = 0; i < samples; i++) {
-		sampleBoresightAt(history, out[i * 3 + 2], pair)
-		out[i * 3] = pair[0]
-		out[i * 3 + 1] = pair[1]
-		out[i * 3 + 2] = 0
+	if (total > 0) markEqualPathSamples(history, startTime, endTime, samples, total, out)
+	else {
+		for (let i = 0; i < samples; i++) {
+			const time = startTime + (span / (samples - 1)) * i
+			sampleBoresightAtSide(history, time, i < samples - 1, pair)
+			out[i * 3] = pair[0]
+			out[i * 3 + 1] = pair[1]
+		}
 	}
+
+	for (let i = 0; i < samples; i++) out[i * 3 + 2] = 0
 
 	if (total > 0 && span > 0) {
 		accumulatePathDwell(history, startTime, endTime, samples, total, out)
@@ -254,7 +269,7 @@ export function sampleBoresightPath(history: BoresightHistory, startTime: number
 // deposits its whole duration on the stretch it sits in.
 function accumulatePathDwell(history: BoresightHistory, startTime: number, endTime: number, samples: number, total: number, out: Float64Array) {
 	const pair: [Angle, Angle] = [0, 0]
-	sampleBoresightAt(history, startTime, pair)
+	sampleBoresightAtSide(history, startTime, true, pair)
 
 	const step = total / (samples - 1)
 	let previousRightAscension = pair[0]
@@ -269,13 +284,13 @@ function accumulatePathDwell(history: BoresightHistory, startTime: number, endTi
 
 		if (i === history.count) {
 			time = endTime
-			sampleBoresightAt(history, endTime, pair)
+			sampleBoresightAtSide(history, endTime, false, pair)
 			rightAscension = pair[0]
 			declination = pair[1]
 		} else {
 			const index = physicalIndex(history, i)
 			time = history.times[index]
-			if (time <= segmentStartTime || time >= endTime) continue
+			if (time <= startTime || time >= endTime) continue
 			rightAscension = history.rightAscensions[index]
 			declination = history.declinations[index]
 		}
@@ -314,15 +329,15 @@ function dwellIndex(travelled: number, step: number, samples: number) {
 	return Math.min(samples - 1, Math.max(0, Math.round(travelled / step)))
 }
 
-// Writes into `out[i * 3 + 2]` the times at which the boresight had travelled i/(samples - 1) of
-// `total`, walking the recorded samples of `[startTime, endTime]` once.
+// Writes positions at i/(samples - 1) of `total` into the first two slots of every output triple,
+// walking the recorded samples of `[startTime, endTime]` once.
 //
-// The history interpolates linearly between samples, so time runs linearly along each segment and the
-// crossing is found by proportion within it. Targets left unreached by rounding are clamped to the end
-// of the interval, where they take a zero weight and change nothing.
-function markEqualPathTimes(history: BoresightHistory, startTime: number, endTime: number, samples: number, total: number, out: Float64Array) {
+// Ordinary segments are interpolated linearly. Equal-timestamp segments are discontinuities, so a
+// target on their abstract arc snaps to one of the two real endpoints instead of inventing a direction
+// the telescope never crossed. Targets left unreached by rounding clamp to the closing direction.
+function markEqualPathSamples(history: BoresightHistory, startTime: number, endTime: number, samples: number, total: number, out: Float64Array) {
 	const pair: [Angle, Angle] = [0, 0]
-	sampleBoresightAt(history, startTime, pair)
+	sampleBoresightAtSide(history, startTime, true, pair)
 
 	const step = total / (samples - 1)
 	let previousRightAscension = pair[0]
@@ -331,7 +346,8 @@ function markEqualPathTimes(history: BoresightHistory, startTime: number, endTim
 	let travelled = 0
 	let target = 1
 
-	out[2] = startTime
+	out[0] = pair[0]
+	out[1] = pair[1]
 
 	for (let i = 0; i <= history.count; i++) {
 		let time: number
@@ -341,13 +357,13 @@ function markEqualPathTimes(history: BoresightHistory, startTime: number, endTim
 		// The last pass closes the walk on the end of the interval rather than on a recorded sample.
 		if (i === history.count) {
 			time = endTime
-			sampleBoresightAt(history, endTime, pair)
+			sampleBoresightAtSide(history, endTime, false, pair)
 			rightAscension = pair[0]
 			declination = pair[1]
 		} else {
 			const index = physicalIndex(history, i)
 			time = history.times[index]
-			if (time <= segmentStartTime) continue
+			if (time <= startTime) continue
 			if (time >= endTime) continue
 			rightAscension = history.rightAscensions[index]
 			declination = history.declinations[index]
@@ -357,7 +373,21 @@ function markEqualPathTimes(history: BoresightHistory, startTime: number, endTim
 
 		while (target < samples - 1 && travelled + length >= target * step) {
 			const fraction = length > 0 ? (target * step - travelled) / length : 0
-			out[target * 3 + 2] = segmentStartTime + (time - segmentStartTime) * fraction
+			const offset = target * 3
+
+			if (time === segmentStartTime) {
+				if (fraction < 0.5) {
+					out[offset] = previousRightAscension
+					out[offset + 1] = previousDeclination
+				} else {
+					out[offset] = rightAscension
+					out[offset + 1] = declination
+				}
+			} else {
+				out[offset] = normalizeAngle(previousRightAscension + normalizePI(rightAscension - previousRightAscension) * fraction)
+				out[offset + 1] = previousDeclination + (declination - previousDeclination) * fraction
+			}
+
 			target++
 		}
 
@@ -367,8 +397,11 @@ function markEqualPathTimes(history: BoresightHistory, startTime: number, endTim
 		segmentStartTime = time
 	}
 
-	while (target < samples - 1) out[target++ * 3 + 2] = endTime
-	out[(samples - 1) * 3 + 2] = endTime
+	while (target < samples) {
+		out[target * 3] = pair[0]
+		out[target * 3 + 1] = pair[1]
+		target++
+	}
 }
 
 // Samples `count` boresight positions evenly across `[startTime, endTime]`, writing them into `out` as
@@ -393,7 +426,7 @@ export function sampleBoresightTrajectory(history: BoresightHistory, startTime: 
 	const step = (endTime - startTime) / (samples - 1)
 
 	for (let i = 0; i < samples; i++) {
-		sampleBoresightAt(history, startTime + step * i, pair)
+		sampleBoresightAtSide(history, startTime + step * i, i < samples - 1, pair)
 		out[i * 2] = pair[0]
 		out[i * 2 + 1] = pair[1]
 	}

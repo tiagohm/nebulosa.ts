@@ -291,21 +291,60 @@ describe('boresight path sampling', () => {
 })
 
 describe('boresight recording', () => {
-	test('replaces the sample already held at the same instant', () => {
+	test('preserves both sides of a discontinuity recorded at the same instant', () => {
 		const history = boresightHistory(8)
 		recordBoresightSample(history, 1000, deg(10), deg(20))
 		recordBoresightSample(history, 1000, deg(11), deg(21))
 
-		// One instant, one position: the history is read as a function of time, and a lookup at or before
-		// a duplicated instant answered with the position that had already been superseded.
-		expect(history.count).toBe(1)
+		expect(history.count).toBe(2)
 
 		const pair: [number, number] = [0, 0]
 		sampleBoresightAt(history, 1000, pair)
 		expect(toDeg(pair[0])).toBeCloseTo(11, 9)
 		expect(toDeg(pair[1])).toBeCloseTo(21, 9)
 
-		sampleBoresightAt(history, 0, pair)
-		expect(toDeg(pair[0])).toBeCloseTo(11, 9)
+		sampleBoresightAt(history, 999, pair)
+		expect(toDeg(pair[0])).toBeCloseTo(10, 9)
+		expect(toDeg(pair[1])).toBeCloseTo(20, 9)
+	})
+
+	test('keeps a jump at the closing instant out of the preceding exposure', () => {
+		const history = boresightHistory(8)
+		recordBoresightSample(history, 0, deg(10), deg(20))
+		recordBoresightSample(history, 1000, deg(10), deg(20))
+		recordBoresightSample(history, 1000, deg(11), deg(21))
+
+		expect(boresightPathLength(history, 0, 1000)).toBe(0)
+
+		const out = new Float64Array(9)
+		expect(sampleBoresightPath(history, 0, 1000, 3, out)).toBe(3)
+		for (let i = 0; i < 3; i++) {
+			expect(toDeg(out[i * 3])).toBeCloseTo(10, 9)
+			expect(toDeg(out[i * 3 + 1])).toBeCloseTo(20, 9)
+		}
+	})
+
+	test('samples an interior discontinuity only at its two real positions', () => {
+		const history = boresightHistory(8)
+		recordBoresightSample(history, 0, deg(10), deg(20))
+		recordBoresightSample(history, 500, deg(10), deg(20))
+		recordBoresightSample(history, 500, deg(20), deg(30))
+		recordBoresightSample(history, 1000, deg(20), deg(30))
+
+		const out = new Float64Array(15)
+		expect(sampleBoresightPath(history, 0, 1000, 5, out)).toBe(5)
+
+		let weight = 0
+		for (let i = 0; i < 5; i++) {
+			const rightAscension = toDeg(out[i * 3])
+			const declination = toDeg(out[i * 3 + 1])
+			expect(Math.min(Math.abs(rightAscension - 10), Math.abs(rightAscension - 20))).toBeLessThan(1e-9)
+			expect(Math.min(Math.abs(declination - 20), Math.abs(declination - 30))).toBeLessThan(1e-9)
+			weight += out[i * 3 + 2]
+		}
+
+		expect(out[2]).toBeCloseTo(0.5, 12)
+		expect(out[14]).toBeCloseTo(0.5, 12)
+		expect(weight).toBeCloseTo(1, 12)
 	})
 })
