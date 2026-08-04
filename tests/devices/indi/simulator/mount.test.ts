@@ -768,6 +768,35 @@ describe('mount simulator pointing errors', () => {
 		}
 	})
 
+	test('evaluates intermediate trajectory samples at their own sidereal times', () => {
+		const { client, mount } = makeMount('mount.trajectory.sidereal', 'ALIGNMENT', 'GUIDING')
+
+		try {
+			client.sendNumber({ device: mount.name, name: 'MOUNT_ALIGNMENT', elements: { ...NO_ALIGNMENT, POLAR_AZIMUTH_ERROR: 3600, POLAR_ALTITUDE_ERROR: -2400 } })
+			client.sendNumber({ device: mount.name, name: 'MOUNT_GUIDING', elements: { ...NO_GUIDING } })
+			mount.setGuideRate(0, 0)
+			mount.setTrackingEnabled(true)
+
+			const startTime = mount.utcTime
+			mount.pulse('NORTH', 250)
+			client.sendNumber({ device: mount.name, name: 'MOUNT_GUIDING', elements: { LATENCY: 250 } })
+			mount.pulse('SOUTH', 250)
+			mount.advance(1)
+
+			const samples = new Float64Array(10)
+			expect(mount.sampleBoresightTrajectory(startTime, mount.utcTime, 5, samples)).toBe(5)
+
+			for (let i = 0; i < 5; i++) {
+				const time = startTime + i * 250
+				const [rightAscension, declination] = polarAlignmentError(mount.mechanical.rightAscension, mount.mechanical.declination, mount.latitude, mount.siderealTimeAt(time), arcsec(3600), arcsec(-2400))
+				expect(normalizePI(samples[i * 2] - rightAscension)).toBeCloseTo(0, 11)
+				expect(samples[i * 2 + 1] - declination).toBeCloseTo(0, 11)
+			}
+		} finally {
+			mount.dispose()
+		}
+	})
+
 	test('carries sub-millisecond steps instead of discarding them', () => {
 		const coarse = makeMount('mount.clock.coarse')
 		const fine = makeMount('mount.clock.fine')

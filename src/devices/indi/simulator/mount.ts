@@ -410,6 +410,13 @@ export class MountSimulator extends DeviceSimulator {
 	// simulation yields the same result. The declination is left unclamped; a polar error pushing it
 	// past the pole is a real, if degenerate, configuration and clamping would silently hide it.
 	get boresight(): EquatorialCoordinate {
+		return this.#boresightAt(this.#utcTime + this.#utcTimeRemainder)
+	}
+
+	// Evaluates the current mechanical and dynamic state at `time`, in milliseconds on the simulated
+	// clock. The state itself must already have been advanced to that instant; the timestamp supplies the
+	// sidereal angle used by alignment and flexure terms when an interval is recorded in pieces.
+	#boresightAt(time: number): EquatorialCoordinate {
 		const model = this.pointingModel
 		const flexureEnabled = this.#simulatesFlexure
 		const { TUBE_FLEXURE, PIER_WEST_RA, PIER_WEST_DEC } = this.#flexure.elements
@@ -417,7 +424,7 @@ export class MountSimulator extends DeviceSimulator {
 		let declination = this.#mechanical.declination
 
 		if (model !== IDENTITY_EQUATORIAL_POINTING_MODEL || (flexureEnabled && (TUBE_FLEXURE.value !== 0 || PIER_WEST_RA.value !== 0 || PIER_WEST_DEC.value !== 0))) {
-			const lst = this.#siderealTime()
+			const lst = this.siderealTimeAt(time)
 
 			if (model !== IDENTITY_EQUATORIAL_POINTING_MODEL) {
 				;[rightAscension, declination] = applyEquatorialPointingError(rightAscension, declination, lst, model)
@@ -1363,7 +1370,7 @@ export class MountSimulator extends DeviceSimulator {
 	// simulated clock. Used to record the end of a piece of a step that was cut short of the clock the
 	// step as a whole will end on, which is where the guiding changed inside it.
 	#recordBoresightAt(time: number) {
-		const boresight = this.boresight
+		const boresight = this.#boresightAt(time)
 		recordBoresightSample(this.#boresightHistory, time, boresight.rightAscension, boresight.declination)
 	}
 
