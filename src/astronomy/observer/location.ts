@@ -48,7 +48,7 @@ export interface GeographicCoordinate<T = Angle, D = Distance> {
 // A resolved observer position on a specific ellipsoid, with memoized derived geometry.
 export interface GeographicPosition extends Readonly<GeographicCoordinate> {
 	// Reference ellipsoid the coordinates are defined on.
-	readonly ellipsoid: Ellipsoid
+	readonly ellipsoid?: Ellipsoid
 
 	// Cached geocentric ITRS position vector (AU).
 	itrs?: Vec3
@@ -141,7 +141,7 @@ export function polarRadius(ellipsoid: Ellipsoid): Distance {
 export function rhoCosPhi(location: GeographicPosition) {
 	const cached = location.rhoCosPhi
 	if (cached !== undefined) return cached
-	const { latitude, elevation, ellipsoid } = location
+	const { latitude, elevation, ellipsoid = 3 } = location
 	const { radius, oneMinusFlattening } = ELLIPSOID_PARAMETERS[ellipsoid]
 	const u = Math.atan(oneMinusFlattening * Math.tan(latitude))
 	location.rhoCosPhi = Math.cos(u) + (elevation / radius) * Math.cos(latitude)
@@ -153,7 +153,7 @@ export function rhoCosPhi(location: GeographicPosition) {
 export function rhoSinPhi(location: GeographicPosition) {
 	const cached = location.rhoSinPhi
 	if (cached !== undefined) return cached
-	const { latitude, elevation, ellipsoid } = location
+	const { latitude, elevation, ellipsoid = 3 } = location
 	const { radius, oneMinusFlattening } = ELLIPSOID_PARAMETERS[ellipsoid]
 	const u = Math.atan(oneMinusFlattening * Math.tan(latitude))
 	location.rhoSinPhi = oneMinusFlattening * Math.sin(u) + (elevation / radius) * Math.sin(latitude)

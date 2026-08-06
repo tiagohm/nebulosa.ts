@@ -2,6 +2,11 @@
 // readonly/writable/required transforms, value-based key filtering, and union manipulation helpers.
 // These are compile-time-only constructs with no runtime footprint.
 
+export type JsonPrimitive = string | number | boolean | null
+export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue }
+export type JsonObject = Record<string, JsonValue>
+export type JsonArray = JsonValue[]
+
 // Nominally tags type `T` with marker `U` so structurally identical primitives stay distinguishable.
 export type Brand<T, U> = T & { __brand: U }
 // Recursively marks every property of `T` (and nested objects) as readonly.

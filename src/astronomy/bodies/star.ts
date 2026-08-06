@@ -79,7 +79,7 @@ export function observeStar<T extends Star | StarPositionAndVelocity>(star: T, t
 	if (!time.location) throw new Error('time.location is required')
 	const a = tt(time)
 	const b = ut1(time)
-	const { longitude, latitude, elevation, ellipsoid } = time.location
+	const { longitude, latitude, elevation, ellipsoid = 3 } = time.location
 	const [sp, xp, yp] = pmAngles(time)
 	const { radius, flattening } = ELLIPSOID_PARAMETERS[ellipsoid]
 

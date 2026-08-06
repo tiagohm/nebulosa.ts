@@ -8,7 +8,7 @@ import { clamp } from '../../../math/numerical/math'
 import { mulberry32, normal } from '../../../math/numerical/random'
 import { type Angle, deg, hour, normalizeAngle, normalizePI, toDeg, toHour } from '../../../math/units/angle'
 import { meter } from '../../../math/units/distance'
-import { handleDefNumberVector, type IndiClientHandler } from '../client'
+import { handleSetNumberVector, type IndiClientHandler } from '../client'
 import { DeviceInterfaceType, expectedPierSide, type GuideDirection, type NameAndLabel, type PierSide, type TrackMode, type UTCTime } from '../device'
 import { findOnSwitch, makeNumberVector, makeSwitchVector, makeTextVector, type NewNumberVector, type NewSwitchVector, type NewTextVector, selectOnSwitch } from '../types'
 import type { ClientSimulator } from './client'
@@ -1095,7 +1095,7 @@ export class MountSimulator extends DeviceSimulator {
 		}
 
 		if (updated) {
-			handleDefNumberVector(this.client, this.handler, this.#guideRate)
+			handleSetNumberVector(this.client, this.handler, this.#guideRate)
 		}
 	}
 

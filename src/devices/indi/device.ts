@@ -731,7 +731,6 @@ export const DEFAULT_DEW_HEATER: DewHeater = {
 	client: structuredClone(DEFAULT_CLIENT_INFO),
 }
 
-// Type guards narrowing a Device by its discrete `type`.
 export function isCamera(device: Device): device is Camera {
 	return device.type === 'camera'
 }
@@ -760,7 +759,6 @@ export function isRotator(device: Device): device is Rotator {
 	return device.type === 'rotator'
 }
 
-// Type guard narrowing a device to a dome by its primary type.
 export function isDome(device: Device): device is Dome {
 	return device.type === 'dome'
 }
@@ -769,8 +767,6 @@ export function isPower(device: Device): device is Power {
 	return device.type === 'power'
 }
 
-// Capability guards narrowing by the presence of a sub-interface marker rather than the device type, so
-// composite devices (e.g. a camera that is also a thermometer/guide output) are recognized.
 export function isThermometer(device: Device): device is Thermometer {
 	return 'hasThermometer' in device && device.hasThermometer !== undefined
 }

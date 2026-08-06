@@ -206,7 +206,7 @@ export function icrsToObserved(icrs: Vec3 | readonly [Angle, Angle], time: Time,
 		const temperature = refraction === false ? 0 : (refraction.temperature ?? DEFAULT_REFRACTION_PARAMETERS.temperature)
 		const relativeHumidity = refraction === false ? 0 : (refraction.relativeHumidity ?? DEFAULT_REFRACTION_PARAMETERS.relativeHumidity)
 		const wl = refraction === false ? 0 : (refraction.wl ?? DEFAULT_REFRACTION_PARAMETERS.wl)
-		const { radius, flattening } = ELLIPSOID_PARAMETERS[time.location!.ellipsoid]
+		const { radius, flattening } = ELLIPSOID_PARAMETERS[time.location?.ellipsoid ?? 3]
 
 		// First set up the astrometry context for observed<->CIRS
 		astrom = eraApco13(a.day, a.fraction, b.day, b.fraction, longitude, latitude, elevation, xp, yp, sp, pressure, temperature, relativeHumidity, wl, ebpv, ehp, radius, flattening)

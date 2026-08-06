@@ -276,3 +276,17 @@ export function NumberComparator<T extends number | bigint>(left: T, right: T) {
 export function NumberComparatorDescending<T extends number | bigint>(left: T, right: T) {
 	return left < right ? 1 : left > right ? -1 : 0
 }
+
+// Converts an unknown exception to diagnostic text.
+export function errorMessage(error: unknown) {
+	if (Error.isError(error)) return error.message
+	if (typeof error === 'string') return error
+	if (typeof error === 'symbol') return error.description ?? 'Unknown error'
+
+	try {
+		return String(error)
+	} catch (e) {
+		// console.error('failed to convert error into text', e)
+		return 'Unknown error'
+	}
+}

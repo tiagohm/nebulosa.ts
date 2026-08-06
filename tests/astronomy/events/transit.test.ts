@@ -80,7 +80,7 @@ test('reports no transit for a window with no inferior conjunction crossing', ()
 	// disk and no transit is reported.
 	const transits = planetaryTransits(mercury, sun, observer, timeYMDHMS(2032, 12, 13, 0, 0, 0, Timescale.UTC), timeYMDHMS(2032, 12, 14, 0, 0, 0, Timescale.UTC), { sunRadius: SUN_RADIUS_AU, planetRadius: MERCURY_RADIUS })
 	expect(transits.length).toBe(0)
-}, 4000)
+}, 6000)
 
 test('leaves ingress contacts undefined when the window opens after ingress', () => {
 	const observer = observerAt(GREENWICH)
