@@ -1,8 +1,8 @@
 import { expect, describe, test } from 'bun:test'
 // oxfmt-ignore
-import { CLIENT, type Client, DEFAULT_CAMERA, DEFAULT_COVER, DEFAULT_DOME, DEFAULT_FLAT_PANEL, DEFAULT_FOCUSER, DEFAULT_MOUNT, DEFAULT_POWER, DEFAULT_ROTATOR, DEFAULT_WHEEL, type Cover, type Device, type FlatPanel, type Focuser, type Power, type Rotator, type Wheel, DeviceInterfaceType, type Camera, isDome } from '../../../src/devices/indi/device'
-import { CameraManager, CoverManager, DomeManager, FlatPanelManager, FocuserManager, MountManager, PowerManager, RotatorManager, WheelManager } from '../../../src/devices/indi/manager'
-import type { DefNumber, DefNumberVector, DefSwitch, DefSwitchVector, DefText, DefTextVector } from '../../../src/devices/indi/types'
+import { CLIENT, type Client, DEFAULT_CAMERA, DEFAULT_COVER, DEFAULT_DOME, DEFAULT_FLAT_PANEL, DEFAULT_FOCUSER, DEFAULT_MOUNT, DEFAULT_POWER, DEFAULT_ROTATOR, DEFAULT_WHEEL, type Cover, type Device, type FlatPanel, type Focuser, type Power, type Rotator, type Wheel, DeviceInterfaceType, type Camera, isDome, type SafetyMonitor } from '../../../src/devices/indi/device'
+import { CameraManager, CoverManager, DomeManager, FlatPanelManager, FocuserManager, MountManager, PowerManager, RotatorManager, SafetyMonitorManager, WheelManager, type DeviceHandler } from '../../../src/devices/indi/manager'
+import type { DefLightVector, DefNumber, DefNumberVector, DefSwitch, DefSwitchVector, DefText, DefTextVector, SetLightVector } from '../../../src/devices/indi/types'
 
 const client: Client = {
 	type: 'INDI',
@@ -45,6 +45,76 @@ function defSwitch(name: string, value: boolean): DefSwitch {
 function defNumber(name: string, value: number, min = 0, max = 360, step = 1): DefNumber {
 	return { name, format: '%g', min, max, step, value }
 }
+
+function driverInfo(device: string, interfaceType: DeviceInterfaceType): DefTextVector {
+	return {
+		device,
+		name: 'DRIVER_INFO',
+		permission: 'ro',
+		state: 'Ok',
+		elements: {
+			DRIVER_INTERFACE: { name: 'DRIVER_INTERFACE', value: interfaceType.toFixed(0) },
+			DRIVER_EXEC: { name: 'DRIVER_EXEC', value: 'driver' },
+			DRIVER_VERSION: { name: 'DRIVER_VERSION', value: '1.0' },
+		},
+	}
+}
+
+function safetyStatus(device: string, state: DefLightVector['state']): DefLightVector {
+	return { device, name: 'SAFETY_STATUS', state, elements: { SAFETY: { name: 'SAFETY', value: state } } }
+}
+
+test('SafetyMonitorManager creates only AUXILIARY native INDI standalones', () => {
+	const manager = new SafetyMonitorManager({ get: () => undefined })
+
+	manager.lightVector(client, safetyStatus('Safety', 'Ok'), 'defLightVector')
+	expect(manager.get(client, 'Safety')).toBeUndefined()
+
+	manager.textVector(client, driverInfo('Safety', DeviceInterfaceType.AUXILIARY), 'defTextVector')
+	expect(manager.get(client, 'Safety')).toBeDefined()
+
+	manager.textVector(client, driverInfo('Not Auxiliary', DeviceInterfaceType.CCD), 'defTextVector')
+	manager.lightVector(client, safetyStatus('Not Auxiliary', 'Ok'), 'defLightVector')
+	expect(manager.get(client, 'Not Auxiliary')).toBeUndefined()
+})
+
+test('SafetyMonitorManager creates a proxy without replacing parent interfaces', () => {
+	let cameraUpdated = 0
+
+	const handler: DeviceHandler<SafetyMonitor> = {
+		added: function (device: SafetyMonitor) {},
+		updated: function (device: SafetyMonitor, property: string) {
+			if (property === 'safe' && device.type === 'camera') cameraUpdated++
+		},
+		removed: function (device: SafetyMonitor) {},
+	}
+
+	const cameraManager = new CameraManager()
+	cameraManager.textVector(client, driverInfo('Camera', DeviceInterfaceType.CCD), 'defTextVector')
+	const camera = cameraManager.get(client, 'Camera')!
+	const manager = new SafetyMonitorManager(cameraManager)
+	manager.addHandler(handler)
+
+	manager.lightVector(client, safetyStatus('Camera', 'Ok'), 'defLightVector')
+	const safety = manager.get(client, 'Camera')!
+	expect(safety).toBeDefined()
+	expect(safety.safe).toBeTrue()
+
+	expect(camera).not.toContainKey('safe')
+
+	const partial: SetLightVector = { device: 'Camera', name: 'SAFETY_STATUS', elements: { SAFETY: { name: 'SAFETY', value: 'Alert' } } }
+	manager.lightVector(client, partial, 'setLightVector')
+	expect(safety.safe).toBeTrue()
+
+	manager.lightVector(client, { ...partial, state: 'Alert' }, 'setLightVector')
+	expect(safety.safe).toBeFalse()
+
+	manager.delProperty(client, { device: 'Camera', name: 'SAFETY_STATUS' })
+	expect(manager.get(client, 'Camera')).toBeUndefined()
+	expect(camera).not.toContainKey('safe')
+
+	expect(cameraUpdated).toBe(0)
+})
 
 test('dome interface bit is discovered as a dome device type', () => {
 	const manager = new DomeManager()

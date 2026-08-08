@@ -348,6 +348,13 @@ export function makeTextVector(device: string, name: string, label: string, grou
 	return { type: 'TEXT', device, name, label, group, permission, state: 'Idle', timeout: 60, elements }
 }
 
+// Builds a passive light vector from [name, label, state] tuples. Defaults the aggregate state to Idle.
+export function makeLightVector(device: string, name: string, label: string, group: string, ...properties: readonly [string, string, PropertyState][]): DefLightVector & SetLightVector & { type: 'LIGHT' } {
+	const elements: Record<string, DefLight> = {}
+	for (const [name, label, value] of properties) elements[name] = { name, label, value }
+	return { type: 'LIGHT', device, name, label, group, state: 'Idle', elements }
+}
+
 // Builds a BLOB vector from [name, label] tuples (elements start empty, format 'fits'). Defaults to Idle
 // and a 60 s timeout.
 export function makeBlobVector(device: string, name: string, label: string, group: string, permission: PropertyPermission, ...properties: readonly [string, string][]): Omit<DefBlobVector, 'elements'> & SetBlobVector & { type: 'BLOB' } {

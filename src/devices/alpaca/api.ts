@@ -22,6 +22,7 @@ export class AlpacaApi {
 	readonly coverCalibrator: AlpacaCoverCalibratorApi
 	readonly rotator: AlpacaRotatorApi
 	readonly dome: AlpacaDomeApi
+	readonly safetyMonitor: AlpacaSafetyMonitorApi
 
 	constructor(readonly url: string | URL) {
 		this.management = new AlpacaManagementApi(url)
@@ -32,6 +33,7 @@ export class AlpacaApi {
 		this.coverCalibrator = new AlpacaCoverCalibratorApi(url)
 		this.rotator = new AlpacaRotatorApi(url)
 		this.dome = new AlpacaDomeApi(url)
+		this.safetyMonitor = new AlpacaSafetyMonitorApi(url)
 	}
 }
 
@@ -65,6 +67,17 @@ export class AlpacaDeviceApi {
 
 	deviceState(id: number) {
 		return request<readonly AlpacaStateItem[]>(this.url, `${id}/devicestate`, 'GET')
+	}
+}
+
+// SafetyMonitor device endpoints. IsSafe is read-only and false includes warning/unknown conditions.
+export class AlpacaSafetyMonitorApi extends AlpacaDeviceApi {
+	constructor(url: string | URL) {
+		super(new URL('/api/v1/safetymonitor/', url))
+	}
+
+	isSafe(id: number) {
+		return request<boolean>(this.url, `${id}/issafe`, 'GET')
 	}
 }
 

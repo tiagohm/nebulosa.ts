@@ -1,4 +1,4 @@
-import { handleDefSwitchVector, handleDefTextVector, handleDelProperty, handleSetNumberVector, handleSetSwitchVector, handleSetTextVector, type IndiClientHandler } from '../client'
+import { handleDefSwitchVector, handleDefTextVector, handleDelProperty, handleSetLightVector, handleSetNumberVector, handleSetSwitchVector, handleSetTextVector, type IndiClientHandler } from '../client'
 import { DeviceInterfaceType, type DeviceType } from '../device'
 import { type EnableBlob, makeSwitchVector, makeTextVector, type NewNumberVector, type NewSwitchVector, type NewTextVector, selectOnSwitch } from '../types'
 import type { ClientSimulator } from './client'
@@ -107,6 +107,7 @@ export abstract class DeviceSimulator implements Disposable {
 		if (type === 'S') handleSetSwitchVector(this.client, this.handler, message as never)
 		else if (type === 'N') handleSetNumberVector(this.client, this.handler, message as never)
 		else if (type === 'T') handleSetTextVector(this.client, this.handler, message as never)
+		else if (type === 'L') handleSetLightVector(this.client, this.handler, message as never)
 	}
 
 	// Persists the savable properties via the save hook, if provided.

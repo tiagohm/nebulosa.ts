@@ -6,13 +6,13 @@ import { type Angle, deg, hour, normalizeAngle, normalizePI, parseAngle, toDeg, 
 import { meter, toMeter } from '../../math/units/distance'
 import type { IndiClientHandler } from './client'
 // oxfmt-ignore
-import { type Camera, type CameraTransferFormat, CLIENT, type Client, type Cover, DEFAULT_CAMERA, DEFAULT_COVER, DEFAULT_DEW_HEATER, DEFAULT_DOME, DEFAULT_FLAT_PANEL, DEFAULT_FOCUSER, DEFAULT_GUIDE_OUTPUT, DEFAULT_MOUNT, DEFAULT_POWER, DEFAULT_ROTATOR, DEFAULT_THERMOMETER, DEFAULT_WHEEL, type Device, DeviceInterfaceType, type DeviceProperties, type DeviceProperty, type DeviceType, type DewHeater, type Dome, type DomeDirection, type DomeOTASide, type DomeShutterState, findDeviceTypes, type FlatPanel, type Focuser, type FrameType, type GPS, type GuideDirection, type GuideOutput, isInterfaceType, type MinMaxValueProperty, type Mount, type MountTargetCoordinate, type NameAndLabel, type Parkable, type Power, type PowerChannel, type PowerChannelType, type Rotator, type SubDevice, type Thermometer, type TrackMode, type Wheel } from './device'
+import { type Camera, type CameraTransferFormat, CLIENT, type Client, type Cover, DEFAULT_CAMERA, DEFAULT_COVER, DEFAULT_DEW_HEATER, DEFAULT_DOME, DEFAULT_FLAT_PANEL, DEFAULT_FOCUSER, DEFAULT_GUIDE_OUTPUT, DEFAULT_MOUNT, DEFAULT_POWER, DEFAULT_ROTATOR, DEFAULT_SAFETY_MONITOR, DEFAULT_THERMOMETER, DEFAULT_WHEEL, type Device, DeviceInterfaceType, type DeviceProperties, type DeviceProperty, type DeviceType, type DewHeater, type Dome, type DomeDirection, type DomeOTASide, type DomeShutterState, findDeviceTypes, type FlatPanel, type Focuser, type FrameType, type GPS, type GuideDirection, type GuideOutput, isInterfaceType, isSafetyMonitor, isSubDevice, type MinMaxValueProperty, type Mount, type MountTargetCoordinate, type NameAndLabel, type Parkable, type Power, type PowerChannel, type PowerChannelType, type Rotator, type SafetyMonitor, type SubDevice, type Thermometer, type TrackMode, type Wheel } from './device'
 import type { GeographicCoordinate } from '../../astronomy/observer/location'
 import { formatTemporal, parseTemporal } from '../../astronomy/time/temporal'
 import { type Time, timeNow } from '../../astronomy/time/time'
 import type { PickByValue, Writable } from '../../core/types'
 // oxfmt-ignore
-import { findOnSwitch, type BlobEncoding, type DefBlobVector, type DefElement, type DefNumber, type DefNumberVector, type DefSwitch, type DefSwitchVector, type DefTextVector, type DefVector, type DelProperty, type OneNumber, type PropertyState, type SetBlobVector, type SetNumberVector, type SetSwitchVector, type SetTextVector, type SetVector, type ValueType } from './types'
+import { findOnSwitch, type BlobEncoding, type DefBlobVector, type DefElement, type DefLightVector, type DefNumber, type DefNumberVector, type DefSwitch, type DefSwitchVector, type DefText, type DefTextVector, type DefVector, type DelProperty, type OneNumber, type PropertyState, type SetBlobVector, type SetLightVector, type SetNumberVector, type SetSwitchVector, type SetTextVector, type SetVector, type ValueType } from './types'
 
 // Device managers that turn the raw INDI property stream into typed device state. A DeviceManager per
 // device type consumes def*/set* vectors as an IndiClientHandler, maintains the device objects, applies
@@ -413,15 +413,8 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 			const interfaces = findDeviceTypes(type)
 
 			if (device === undefined) {
-				device = structuredClone<D>(modelDevice)
-
-				device.id = Bun.MD5.hash(`${client.id}:${device.type}:${name}`, 'hex')
-				device.hardwareId = Bun.MD5.hash(`${client.id}:${name}`, 'hex')
-				device.name = name
+				device = makeDevice(modelDevice, client, name, elements)
 				device.interfaces = interfaces
-				device[CLIENT] = client
-				device.driver = { executable: elements.DRIVER_EXEC?.value ?? '', version: elements.DRIVER_VERSION?.value ?? '' }
-				device.client = { type: client.type, id: client.id }
 
 				this.add(device)
 				this.ask(device)
@@ -511,8 +504,7 @@ export class GuideOutputManager extends DeviceManager<GuideOutput> {
 	}
 
 	#addProxy(client: Client, parent: GuideOutput) {
-		const id = Bun.MD5.hash(`${client.id}:guideOutput:${parent.name}`, 'hex')
-
+		const id = makeDeviceId(client, 'guideOutput', parent.name)
 		const device = proxyDevice(parent, id, 'guideOutput')
 
 		if (this.add(device)) {
@@ -638,7 +630,7 @@ export class ThermometerManager extends DeviceManager<Thermometer> {
 	}
 
 	#addProxy(client: Client, parent: Thermometer) {
-		const id = Bun.MD5.hash(`${client.id}:thermometer:${parent.name}`, 'hex')
+		const id = makeDeviceId(client, 'thermometer', parent.name)
 
 		const device = proxyDevice(parent, id, 'thermometer')
 
@@ -713,6 +705,174 @@ export class ThermometerManager extends DeviceManager<Thermometer> {
 		}
 
 		super.delProperty(client, message)
+	}
+}
+
+// Cached discovery vectors used when a safety property arrives before driver identity or connection.
+interface PendingSafetyMonitor {
+	// Latest driver metadata used to classify INDI standalone devices and populate identity.
+	driverInfo?: DefTextVector | SetTextVector
+	// Latest connection vector used to seed standalone connection state.
+	connection?: DefSwitchVector | SetSwitchVector
+	// Latest safety vector used to seed the fail-closed domain state.
+	safetyStatus?: DefLightVector | SetLightVector
+}
+
+// Manager for the transversal INDI SAFETY_STATUS light property. Known primary devices are exposed through
+// a safety-monitor proxy; a native INDI standalone is created only for an AUXILIARY driver.
+export class SafetyMonitorManager extends DeviceManager<SafetyMonitor> {
+	// Discovery state is isolated by client and released when that client closes.
+	readonly #pendingByClient = new WeakMap<Client, Map<string, PendingSafetyMonitor>>()
+
+	// Parent provider must cover the primary device managers and must not resolve this manager itself.
+	constructor(readonly provider: DeviceProvider<Device>) {
+		super()
+	}
+
+	// Returns the cached discovery state for one physical device, creating it when requested.
+	#pending(client: Client, name: string, create: boolean = true) {
+		let devices = this.#pendingByClient.get(client)
+
+		if (devices === undefined) {
+			if (!create) return undefined
+			devices = new Map()
+			this.#pendingByClient.set(client, devices)
+		}
+
+		let pending = devices.get(name)
+
+		if (pending === undefined && create) {
+			pending = {}
+			devices.set(name, pending)
+		}
+
+		return pending
+	}
+
+	// Whether the cached driver identity authorizes a parentless standalone for this backend.
+	#canCreateStandalone(client: Client, pending: PendingSafetyMonitor) {
+		if (client.type === 'ALPACA') return true
+		const value = pending.driverInfo?.elements.DRIVER_INTERFACE?.value
+		return value !== undefined && isInterfaceType(+value, DeviceInterfaceType.AUXILIARY)
+	}
+
+	// Creates a proxy or authorized standalone, or migrates a standalone when its primary parent appears.
+	// TODO: SafetyMonitorManager.#materialize() exige que SAFETY_STATUS já tenha sido recebido.
+	// Porém, tanto o driver INDI quanto AlpacaSafetyMonitor publicam essa propriedade somente depois da conexão.
+	// Assim, o dispositivo não entra no manager, e o consumidor não consegue obter o dispositivo para chamar connect() — um ciclo impossível.
+	// A documentação do driver confirma que SAFETY_STATUS é definido em updateProperties() apenas quando conectado.
+	// Solução: criar um Auxiliary e AuxiliaryManager e fazer a conexão dele em vez do SafetyMonitor (pois não existe ainda no SafetyMonitorManager)
+	#materialize(client: Client, name: string) {
+		const parent = this.provider.get(client, name)
+		let device = this.get(client, name)
+
+		if (device !== undefined && parent !== undefined && device.parentId === undefined) {
+			this.remove(device)
+			device = undefined
+		}
+
+		if (device !== undefined) return device
+
+		const pending = this.#pending(client, name)!
+		if (pending.safetyStatus === undefined) return undefined
+
+		const state = pending.safetyStatus?.state
+
+		if (parent !== undefined) {
+			const id = makeDeviceId(client, 'safetyMonitor', parent.name)
+			device = proxyDevice(parent, id, 'safetyMonitor') as SubDevice<SafetyMonitor, Device>
+			device.safe = state === 'Ok'
+		} else if (this.#canCreateStandalone(client, pending)) {
+			const standalone = makeDevice(DEFAULT_SAFETY_MONITOR, client, name, pending.driverInfo?.elements)
+			standalone.connected = pending.connection?.elements.CONNECT?.value === true
+			standalone.safe = state === 'Ok'
+			device = standalone
+		} else {
+			return undefined
+		}
+
+		this.add(device, client)
+
+		return device
+	}
+
+	// Caches driver identity, materializes pending devices, and refreshes standalone driver metadata.
+	textVector(client: Client, message: DefTextVector | SetTextVector, tag: string) {
+		if (message.name !== 'DRIVER_INFO') return
+
+		this.#pending(client, message.device)!.driverInfo = message
+		this.#materialize(client, message.device)
+	}
+
+	// Caches and applies the common CONNECTION switch after a safety device can be materialized.
+	switchVector(client: Client, message: DefSwitchVector | SetSwitchVector, tag: string) {
+		if (message.name !== 'CONNECTION') return
+
+		this.#pending(client, message.device)!.connection = message
+		const device = this.#materialize(client, message.device)
+
+		if (device !== undefined) {
+			super.switchVector(client, message, tag)
+		}
+	}
+
+	// Applies the aggregate SAFETY_STATUS state; omitted set-vector states preserve the previous value.
+	lightVector(client: Client, message: DefLightVector | SetLightVector, tag: string) {
+		if (message.name !== 'SAFETY_STATUS') return
+
+		this.#pending(client, message.device)!.safetyStatus = message
+		const device = this.#materialize(client, message.device)
+
+		if (device === undefined) return
+
+		if (message.state !== undefined) {
+			const safe = message.state === 'Ok'
+
+			if (device.safe !== safe) {
+				device.safe = safe
+				this.updated(device, 'safe', message.state)
+
+				if (isSubDevice<SafetyMonitor>(device) && isSafetyMonitor(device.parent)) {
+					this.updated(device.parent, 'safe', message.state)
+				}
+			}
+		}
+	}
+
+	// Removes a safety capability fail-closed while retaining driver metadata for a later redefinition.
+	delProperty(client: Client, message: DelProperty) {
+		if (message.name && message.name !== 'SAFETY_STATUS') {
+			super.delProperty(client, message)
+			return
+		}
+
+		const device = this.get(client, message.device)
+
+		if (device !== undefined) {
+			device.safe = false
+			this.updated(device, 'safe', 'Idle')
+
+			if (isSubDevice<SafetyMonitor>(device) && isSafetyMonitor(device.parent)) {
+				this.updated(device.parent, 'safe', 'Idle')
+			}
+
+			super.delProperty(client, message.name ? { ...message, name: undefined } : message)
+		}
+
+		const devices = this.#pendingByClient.get(client)
+
+		if (message.name) {
+			const pending = devices?.get(message.device)
+			if (pending !== undefined) pending.safetyStatus = undefined
+		} else {
+			devices?.delete(message.device)
+		}
+	}
+
+	// Drops all managed devices, raw properties, and discovery vectors belonging to a closed client.
+	close(client: Client, server: boolean) {
+		super.close(client, server)
+		this.#pendingByClient.delete(client)
 	}
 }
 
@@ -2436,8 +2596,7 @@ export class DewHeaterManager extends DeviceManager<DewHeater> {
 	}
 
 	#addProxy(client: Client, parent: DewHeater, message: DefSwitchVector | SetNumberVector) {
-		const id = Bun.MD5.hash(`${client.id}:dewHeater:${parent.name}`, 'hex')
-
+		const id = makeDeviceId(client, 'dewHeater', parent.name)
 		const device = proxyDevice(parent, id, 'dewHeater')
 
 		if (this.add(device)) {
@@ -2927,27 +3086,63 @@ function parseUTCOffset(text: string) {
 	return hour + minute
 }
 
+export function makeDeviceId(client: Client, type: DeviceType, name: string) {
+	return Bun.MD5.hash(`${client.id}:${type}:${name}`, 'hex')
+}
+
+function makeDevice<D extends Device>(model: D, client: Client, name: string, driver?: Record<string, DefText>, id?: string) {
+	const device = structuredClone<D>(model) as Writable<D>
+
+	device.id = id || makeDeviceId(client, device.type, name)
+	device.hardwareId = Bun.MD5.hash(`${client.id}:${name}`, 'hex')
+	device.name = name
+	device[CLIENT] = client
+	device.driver = { executable: driver?.DRIVER_EXEC?.value ?? '', version: driver?.DRIVER_VERSION?.value ?? '' }
+	device.client = { type: client.type, id: client.id }
+
+	return device
+}
+
 // Wraps a parent device in a proxy presenting a distinct id/type and a `parent`/`parentId` link, so a
 // sub-interface (e.g. a guide output of a mount) appears as its own device while sharing the parent's
 // fields. parentId is made enumerable so it survives Object.keys()/JSON.stringify.
 function proxyDevice<D extends Device>(parent: D, id: string, type: DeviceType) {
+	const current = Object.create(null)
+
 	return new Proxy(parent, {
 		get(target, prop) {
 			if (prop === 'id') return id
 			if (prop === 'parentId') return parent.id
 			if (prop === 'type') return type
 			if (prop === 'parent') return parent
+			if (prop in current) return current[prop]
 			return Reflect.get(target, prop)
+		},
+		set(target, p, newValue, receiver) {
+			if (Reflect.has(target, p)) {
+				return Reflect.set(target, p, newValue, receiver)
+			} else {
+				current[p] = newValue
+				return true
+			}
+		},
+		deleteProperty(target, p) {
+			if (p in current) delete current[p]
+			return Reflect.deleteProperty(target, p)
 		},
 		// parentId is never set, so this is used show up in Object.keys() and similar functions, which is useful for debugging and serialization
 		// JSON.stringify ignores properties that don't show up in Object.keys()
 		ownKeys(target) {
 			const keys = Reflect.ownKeys(target)
 			keys.push('parentId')
+			for (const key of Reflect.ownKeys(current)) keys.push(key)
 			return keys
 		},
+		has(target, p) {
+			return p === 'parent' || p in current || Reflect.has(target, p)
+		},
 		getOwnPropertyDescriptor(target, prop) {
-			if (prop === 'parentId') {
+			if (prop === 'parentId' || prop in current) {
 				return { enumerable: true, configurable: true }
 			}
 
