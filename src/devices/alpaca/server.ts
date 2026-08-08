@@ -7,10 +7,10 @@ import { bitpixInBytes } from '../../io/formats/fits/util'
 import { type Angle, deg, hour, normalizeAngle, toDeg, toHour } from '../../math/units/angle'
 import { meter, toMeter } from '../../math/units/distance'
 // oxfmt-ignore
-import { type Camera, type Cover, type Device, type DeviceType, expectedPierSide, type Dome, type FlatPanel, type Focuser, type GuideDirection, type GuideOutput, isCamera, isFocuser, isMount, isWheel, type Mount, type NameAndLabel, type PierSide, type Rotator, type TrackMode, type Wheel } from '../indi/device'
+import { type Camera, type Cover, type Device, type DeviceType, expectedPierSide, type Dome, type FlatPanel, type Focuser, type GuideDirection, type GuideOutput, isCamera, isFocuser, isMount, isWheel, type Mount, type NameAndLabel, type PierSide, type Rotator, type SafetyMonitor, type TrackMode, type Wheel } from '../indi/device'
 import { type GeographicCoordinate, localSiderealTime } from '../../astronomy/observer/location'
 import { type Time, timeNow } from '../../astronomy/time/time'
-import type { CameraManager, CoverManager, DeviceHandler, DeviceManager, DomeManager, FlatPanelManager, FocuserManager, GuideOutputManager, MountManager, RotatorManager, WheelManager } from '../indi/manager'
+import type { CameraManager, CoverManager, DeviceHandler, DeviceManager, DomeManager, FlatPanelManager, FocuserManager, GuideOutputManager, MountManager, RotatorManager, SafetyMonitorManager, WheelManager } from '../indi/manager'
 import type { BlobEncoding } from '../indi/types'
 
 // Embedded ASCOM Alpaca server: exposes the app's INDI devices (camera, mount, focuser, wheel, rotator,
@@ -38,6 +38,8 @@ export interface AlpacaServerOptions {
 	flatPanel?: FlatPanelManager
 	cover?: CoverManager
 	guideOutput?: GuideOutputManager
+	// Read-only safety monitors exposed through the Alpaca SafetyMonitor interface.
+	safetyMonitor?: SafetyMonitorManager
 	// Strategy for assigning Alpaca device numbers; defaults to a stable hash of type+name.
 	deviceNumberProvider?: AlpacaDeviceNumberProvider
 	handler?: AlpacaServerHandler
@@ -107,7 +109,7 @@ export class AlpacaServer {
 		switch: new Map<Device, AlpacaRegisteredDevice>(),
 		covercalibrator: new Map<Device, AlpacaRegisteredDevice<Cover | FlatPanel>>(),
 		observingconditions: new Map<Device, AlpacaRegisteredDevice>(),
-		safetymonitor: new Map<Device, AlpacaRegisteredDevice>(),
+		safetymonitor: new Map<Device, AlpacaRegisteredDevice<SafetyMonitor>>(),
 		video: new Map<Device, AlpacaRegisteredDevice>(),
 	} as const
 
@@ -238,8 +240,21 @@ export class AlpacaServer {
 		},
 	}
 
+	// Registers safety monitors and resolves common connection tasks; IsSafe reads live device state.
+	readonly #safetyMonitorHandler: DeviceHandler<SafetyMonitor> = {
+		added: (device) => {
+			this.#makeConfiguredDeviceFromDevice(device, 'safetymonitor')
+		},
+		updated: (device, property) => {
+			if (property === 'connected') this.#handleConnectedEvent(device, 'safetymonitor')
+		},
+		removed: (device) => {
+			this.#removeConfiguredDevice(device, 'safetymonitor')
+		},
+	}
+
 	constructor(readonly options: AlpacaServerOptions) {
-		this.#deviceManager = (options.camera ?? options.mount ?? options.focuser ?? options.wheel ?? options.flatPanel ?? options.cover ?? options.rotator ?? options.dome) as unknown as DeviceManager<Device>
+		this.#deviceManager = (options.camera ?? options.mount ?? options.focuser ?? options.wheel ?? options.flatPanel ?? options.cover ?? options.rotator ?? options.dome ?? options.safetyMonitor) as unknown as DeviceManager<Device>
 
 		if (!this.#deviceManager) throw new Error('at least one device manager must be provided.')
 
@@ -462,6 +477,9 @@ export class AlpacaServer {
 		'/api/v1/covercalibrator/:id/closecover': { PUT: (req) => this.#coverCalibratorClose(+req.params.id) },
 		'/api/v1/covercalibrator/:id/haltcover': { PUT: (req) => this.#coverCalibratorHalt(+req.params.id) },
 		'/api/v1/covercalibrator/:id/opencover': { PUT: (req) => this.#coverCalibratorOpen(+req.params.id) },
+		// Safety Monitor
+		'/api/v1/safetymonitor/:id/issafe': { GET: (req) => this.#safetyMonitorIsSafe(+req.params.id) },
+		'/api/v1/safetymonitor/:id/devicestate': { GET: (req) => this.#safetyMonitorGetDeviceState(+req.params.id) },
 	}
 
 	// Starts the HTTP server on the given host/port (0 = ephemeral) and begins listening for devices.
@@ -501,6 +519,7 @@ export class AlpacaServer {
 		this.options.cover?.addHandler(this.#coverHandler)
 		this.options.flatPanel?.addHandler(this.#flatPanelHandler)
 		this.options.dome?.addHandler(this.#domeHandler)
+		this.options.safetyMonitor?.addHandler(this.#safetyMonitorHandler)
 
 		this.configuredDevices()
 
@@ -518,6 +537,7 @@ export class AlpacaServer {
 		this.options.cover?.removeHandler(this.#coverHandler)
 		this.options.flatPanel?.removeHandler(this.#flatPanelHandler)
 		this.options.dome?.removeHandler(this.#domeHandler)
+		this.options.safetyMonitor?.removeHandler(this.#safetyMonitorHandler)
 
 		this.#equipment.camera.clear()
 		this.#equipment.telescope.clear()
@@ -526,9 +546,9 @@ export class AlpacaServer {
 		this.#equipment.rotator.clear()
 		this.#equipment.dome.clear()
 		this.#equipment.covercalibrator.clear()
+		this.#equipment.safetymonitor.clear()
 		// this.equipment.switch.clear()
 		// this.equipment.observingconditions.clear()
-		// this.equipment.safetymonitor.clear()
 		// this.equipment.video.clear()
 
 		clearInterval(this.#timer)
@@ -593,6 +613,11 @@ export class AlpacaServer {
 		return this.#device<Dome>(key, 'dome')
 	}
 
+	// Resolves a registered safety monitor by device instance or Alpaca device number.
+	#safetyMonitor(key: Device | number) {
+		return this.#device<SafetyMonitor>(key, 'safetymonitor')
+	}
+
 	#guideOutput(key: Device | number, type: 'camera' | 'telescope') {
 		return this.#device<GuideOutput>(key, type)
 	}
@@ -652,6 +677,7 @@ export class AlpacaServer {
 		if (this.options.dome) for (const e of this.options.dome.list()) add(e, 'dome')
 		if (this.options.flatPanel) for (const e of this.options.flatPanel.list()) add(e, 'covercalibrator')
 		if (this.options.cover) for (const e of this.options.cover.list()) add(e, 'covercalibrator')
+		if (this.options.safetyMonitor) for (const e of this.options.safetyMonitor.list()) add(e, 'safetymonitor')
 
 		return configuredDevices
 	}
@@ -749,6 +775,27 @@ export class AlpacaServer {
 
 	#guideOutputIsPulseGuiding(id: number, type: 'camera' | 'telescope') {
 		return makeAlpacaResponse(this.#guideOutput(id, type).device.pulsing)
+	}
+
+	// Safety Monitor API
+
+	// Returns IsSafe only for a connected, registered safety monitor.
+	#safetyMonitorIsSafe(id: number) {
+		const registered = this.#safetyMonitor(id)
+		if (!registered?.device) return makeAlpacaErrorResponse(AlpacaException.InvalidValue, `Invalid device number: ${id}`)
+		if (!registered.device.connected) return makeAlpacaErrorResponse(AlpacaException.NotConnected, 'SafetyMonitor is not connected')
+		return makeAlpacaResponse(registered.device.safe)
+	}
+
+	// Returns the bulk SafetyMonitor state required by Alpaca DeviceState clients.
+	#safetyMonitorGetDeviceState(id: number) {
+		const registered = this.#safetyMonitor(id)
+		if (!registered?.device) return makeAlpacaErrorResponse(AlpacaException.InvalidValue, `Invalid device number: ${id}`)
+		if (!registered.device.connected) return makeAlpacaErrorResponse(AlpacaException.NotConnected, 'SafetyMonitor is not connected')
+		return makeAlpacaResponse([
+			{ Name: 'IsSafe', Value: registered.device.safe },
+			{ Name: 'TimeStamp', Value: '' },
+		])
 	}
 
 	// Camera API

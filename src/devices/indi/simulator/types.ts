@@ -1,7 +1,7 @@
 import type { EquatorialCoordinate } from '../../../astronomy/coordinates/coordinate'
 import type { AstronomicalImageStar } from '../../../imaging/synthetic/generator'
 import type { Angle } from '../../../math/units/angle'
-import { makeBlobVector, makeNumberVector, makeSwitchVector, makeTextVector } from '../types'
+import { makeBlobVector, makeLightVector, makeNumberVector, makeSwitchVector, makeTextVector } from '../types'
 
 // Public contracts shared by the in-process INDI device simulators.
 
@@ -24,7 +24,7 @@ export type ReadoutMode = 'MONO' | 'RGB'
 export type CatalogSourceType = 'RANDOM' | (string & {})
 
 // Any property vector a simulator can own.
-export type SimulatorProperty = ReturnType<typeof makeNumberVector> | ReturnType<typeof makeSwitchVector> | ReturnType<typeof makeTextVector> | ReturnType<typeof makeBlobVector>
+export type SimulatorProperty = ReturnType<typeof makeNumberVector> | ReturnType<typeof makeSwitchVector> | ReturnType<typeof makeTextVector> | ReturnType<typeof makeLightVector> | ReturnType<typeof makeBlobVector>
 
 // A catalog star with sky coordinates instead of pixel coordinates.
 export type CatalogSourceStar = Omit<AstronomicalImageStar, 'x' | 'y'> & Readonly<EquatorialCoordinate>

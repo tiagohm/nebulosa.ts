@@ -1,4 +1,4 @@
-import { AlpacaCameraApi, AlpacaCoverCalibratorApi, AlpacaDomeApi, type AlpacaDeviceApi, AlpacaFilterWheelApi, AlpacaFocuserApi, AlpacaManagementApi, AlpacaRotatorApi, AlpacaTelescopeApi } from './api'
+import { AlpacaCameraApi, AlpacaCoverCalibratorApi, AlpacaDomeApi, type AlpacaDeviceApi, AlpacaFilterWheelApi, AlpacaFocuserApi, AlpacaManagementApi, AlpacaRotatorApi, AlpacaSafetyMonitorApi, AlpacaTelescopeApi } from './api'
 // oxfmt-ignore
 import { type AlpacaAxisRate, type AlpacaCameraSensorType, type AlpacaCameraState, type AlpacaConfiguredDevice, type AlpacaDeviceType, AlpacaDomeShutterState, type AlpacaStateItem, type AlpacaTelescopeEquatorialCoordinateType, type AlpacaTelescopePierSide, type AlpacaTelescopeTrackingRate, alpacaImageElementTypeToBitpix, type ImageBytesMetadata } from './types'
 import { equatorialFromJ2000, equatorialToJ2000 } from '../../astronomy/coordinates/coordinate'
@@ -6,11 +6,11 @@ import { SIDEREAL_RATE } from '../../core/constants'
 import { computeRemainingBytes, FITS_BLOCK_SIZE, FITS_HEADER_CARD_SIZE, type FitsHeader, FitsKeywordWriter } from '../../io/formats/fits/fits'
 import { bitpixInBytes } from '../../io/formats/fits/util'
 import { type Angle, formatDEC, formatRA, normalizeAngle, toDeg } from '../../math/units/angle'
-import { handleDefNumberVector, handleDefSwitchVector, handleDefTextVector, handleDelProperty, handleSetBlobVector, handleSetNumberVector, handleSetSwitchVector, handleSetTextVector, type IndiClientHandler } from '../indi/client'
+import { handleDefLightVector, handleDefNumberVector, handleDefSwitchVector, handleDefTextVector, handleDelProperty, handleSetBlobVector, handleSetLightVector, handleSetNumberVector, handleSetSwitchVector, handleSetTextVector, type IndiClientHandler } from '../indi/client'
 import type { Camera, Client, Device, Focuser, Mount, Rotator, Wheel } from '../indi/device'
 import type { DeviceProvider } from '../indi/manager'
 // oxfmt-ignore
-import { type DefSwitchVector, type DefVector, type EnableBlob, findOnSwitch, type GetProperties, makeBlobVector, makeNumberVector, makeSwitchVector, makeTextVector, type NewNumberVector, type NewSwitchVector, type NewTextVector, type PropertyState, type ValueType, type VectorType } from '../indi/types'
+import { type DefSwitchVector, type DefVector, type EnableBlob, findOnSwitch, type GetProperties, makeBlobVector, makeLightVector, makeNumberVector, makeSwitchVector, makeTextVector, type NewNumberVector, type NewSwitchVector, type NewTextVector, type PropertyState, type ValueType, type VectorType } from '../indi/types'
 import { formatTemporal, TIMEZONE } from '../../astronomy/time/temporal'
 import { type Time, timeNow } from '../../astronomy/time/time'
 import { roundToNthDecimal } from '../../math/numerical/math'
@@ -115,6 +115,8 @@ export class AlpacaClient implements Client {
 					device = new AlpacaRotator(this, configuredDevice)
 				} else if (type === 'dome') {
 					device = new AlpacaDome(this, configuredDevice)
+				} else if (type === 'safetymonitor') {
+					device = new AlpacaSafetyMonitor(this, configuredDevice)
 				}
 
 				if (device) {
@@ -260,7 +262,8 @@ abstract class AlpacaDevice {
 	protected sendDefProperty(message: DefVector & { type: Uppercase<VectorType> }) {
 		if (message.type[0] === 'S') handleDefSwitchVector(this.client, this.handler, message as never)
 		else if (message.type[0] === 'N') handleDefNumberVector(this.client, this.handler, message as never)
-		else handleDefTextVector(this.client, this.handler, message as never)
+		else if (message.type[0] === 'T') handleDefTextVector(this.client, this.handler, message as never)
+		else if (message.type[0] === 'L') handleDefLightVector(this.client, this.handler, message as never)
 
 		this.properties.add(message)
 	}
@@ -269,7 +272,8 @@ abstract class AlpacaDevice {
 	protected sendSetProperty(message: DefVector & { type: Uppercase<VectorType> }) {
 		if (message.type[0] === 'S') handleSetSwitchVector(this.client, this.handler, message as never)
 		else if (message.type[0] === 'N') handleSetNumberVector(this.client, this.handler, message as never)
-		else handleSetTextVector(this.client, this.handler, message as never)
+		else if (message.type[0] === 'T') handleSetTextVector(this.client, this.handler, message as never)
+		else if (message.type[0] === 'L') handleSetLightVector(this.client, this.handler, message as never)
 	}
 
 	// Emits an INDI delProperty event for each currently-defined property and forgets it.
@@ -2126,6 +2130,73 @@ function alpacaDomeShutterStatus(status: AlpacaDomeShutterState) {
 			return { open: false, closed: true, state: 'Busy' } as const
 		case AlpacaDomeShutterState.ERROR:
 			return { open: false, closed: false, state: 'Alert' } as const
+	}
+}
+
+// Polled SafetyMonitor state. IsSafe remains absent until DeviceState or the individual endpoint returns.
+interface AlpacaClientSafetyMonitorState extends AlpacaClientDeviceState {
+	IsSafe?: boolean
+}
+
+function hasIsSafe(item: AlpacaStateItem) {
+	return item.Name === 'IsSafe'
+}
+
+// SafetyMonitor wrapper exposing the read-only Alpaca IsSafe property as the standard INDI
+// SAFETY_STATUS LightVector. Unknown state is fail-closed until the first successful poll.
+class AlpacaSafetyMonitor extends AlpacaDevice {
+	readonly #safetyStatus = makeLightVector('', 'SAFETY_STATUS', 'Safety', MAIN_CONTROL, ['SAFETY', 'Safety', 'Idle'])
+
+	protected readonly api: AlpacaSafetyMonitorApi
+	protected readonly state: AlpacaClientSafetyMonitorState = { Connected: false, DeviceState: undefined, Step: 0, IsSafe: undefined }
+	protected readonly initialEndpoints = [] as const
+	protected readonly deviceStateEndpoints = ['IsSafe'] as const
+
+	constructor(client: AlpacaClient, device: AlpacaConfiguredDevice) {
+		super(client, device, client.options.handler)
+
+		const api = new AlpacaSafetyMonitorApi(client.url)
+		this.#safetyStatus.device = device.DeviceName
+		this.runner.registerEndpoint('IsSafe', api.isSafe.bind(api, this.id), false)
+		this.api = api
+	}
+
+	// Defines a fail-closed LightVector whenever the Alpaca device becomes connected.
+	protected onConnect() {
+		super.onConnect()
+		this.state.IsSafe = undefined
+		this.#safetyStatus.state = 'Idle'
+		this.#safetyStatus.elements.SAFETY.value = 'Idle'
+		this.sendDefProperty(this.#safetyStatus)
+	}
+
+	// Clears cached safety state before the base removes all published properties.
+	protected onDisconnect() {
+		this.state.IsSafe = undefined
+		super.onDisconnect()
+	}
+
+	// Uses DeviceState when it contains IsSafe, otherwise enables the individual endpoint fallback.
+	protected handleEndpointsAfterRun() {
+		if (!super.handleEndpointsAfterRun()) return false
+
+		const bulkHasIsSafe = this.state.DeviceState?.some(hasIsSafe) === true
+
+		if (bulkHasIsSafe) {
+			if (this.runner.isEndpointEnabled('IsSafe')) this.disableEndpoints('IsSafe')
+		} else if (this.state.IsSafe === undefined && !this.runner.isEndpointEnabled('IsSafe')) {
+			this.enableEndpoints('IsSafe')
+			return false
+		}
+
+		const isSafe = this.state.IsSafe
+		if (isSafe === undefined) return false
+
+		const state = isSafe ? 'Ok' : 'Alert'
+		let updated = this.updatePropertyState(this.#safetyStatus, state)
+		updated = this.updatePropertyValue(this.#safetyStatus, 'SAFETY', state) || updated
+		if (updated) this.sendSetProperty(this.#safetyStatus)
+		return true
 	}
 }
 

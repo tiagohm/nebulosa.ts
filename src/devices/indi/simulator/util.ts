@@ -5,7 +5,7 @@ import { PIOVERTWO, TAU } from '../../../core/constants'
 import type { Point } from '../../../math/numerical/geometry'
 import { clamp } from '../../../math/numerical/math'
 import type { Angle } from '../../../math/units/angle'
-import { handleDefNumberVector, handleDefSwitchVector, handleDefTextVector, type IndiClientHandler } from '../client'
+import { handleDefLightVector, handleDefNumberVector, handleDefSwitchVector, handleDefTextVector, type IndiClientHandler } from '../client'
 import { type DefNumberVector, type DefSwitchVector, type DefTextVector, selectOnSwitch } from '../types'
 import type { ClientSimulator } from './client'
 import type { SimulatorProperty } from './types'
@@ -17,6 +17,7 @@ export function sendDefinition(client: ClientSimulator, handler: IndiClientHandl
 	if (property.type === 'NUMBER') handleDefNumberVector(client, handler, property)
 	else if (property.type === 'SWITCH') handleDefSwitchVector(client, handler, property)
 	else if (property.type === 'TEXT') handleDefTextVector(client, handler, property)
+	else if (property.type === 'LIGHT') handleDefLightVector(client, handler, property)
 	// Don't handle DefBlobVector
 }
 

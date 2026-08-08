@@ -12,7 +12,7 @@ import type { DefBlobVector, DefLightVector, DefNumber, DefNumberVector, DefSwit
 // RPM; dome measurements are metres; dome backlash is controller steps; temperature is degrees Celsius.
 
 // Logical device category.
-export type DeviceType = 'camera' | 'mount' | 'wheel' | 'focuser' | 'rotator' | 'gps' | 'dome' | 'guideOutput' | 'flatPanel' | 'cover' | 'power' | 'thermometer' | 'dewHeater'
+export type DeviceType = 'camera' | 'mount' | 'wheel' | 'focuser' | 'rotator' | 'gps' | 'dome' | 'guideOutput' | 'flatPanel' | 'cover' | 'power' | 'thermometer' | 'dewHeater' | 'safetyMonitor'
 
 // A defined property vector tagged with its concrete type.
 export type DeviceProperty = (DefTextVector & { type: 'TEXT' }) | (DefNumberVector & { type: 'NUMBER' }) | (DefSwitchVector & { type: 'SWITCH' }) | (DefLightVector & { type: 'LIGHT' }) | (DefBlobVector & { type: 'BLOB' })
@@ -157,6 +157,13 @@ export interface Thermometer extends Device {
 	readonly type: 'thermometer' | 'camera' | 'focuser'
 	hasThermometer: boolean
 	temperature: number
+}
+
+// Safety-monitoring capability. Unknown, disconnected, warning and alert states are represented as
+// false; only an explicit safe status is true.
+export interface SafetyMonitor extends Device {
+	readonly type: DeviceType
+	safe: boolean
 }
 
 // Camera device: cooling, frame format/type, subframe, binning, gain/offset, exposure, plus the guide
@@ -699,6 +706,19 @@ export const DEFAULT_THERMOMETER: Thermometer = {
 	client: structuredClone(DEFAULT_CLIENT_INFO),
 }
 
+// Default fail-closed safety monitor.
+export const DEFAULT_SAFETY_MONITOR: SafetyMonitor = {
+	type: 'safetyMonitor',
+	interfaces: ['safetyMonitor'],
+	id: '',
+	hardwareId: '',
+	name: '',
+	connected: false,
+	driver: structuredClone(DEFAULT_DRIVER_INFO),
+	client: structuredClone(DEFAULT_CLIENT_INFO),
+	safe: false,
+}
+
 export const DEFAULT_GUIDE_OUTPUT: GuideOutput = {
 	canPulseGuide: false,
 	pulsing: false,
@@ -771,6 +791,11 @@ export function isThermometer(device: Device): device is Thermometer {
 	return 'hasThermometer' in device && device.hasThermometer !== undefined
 }
 
+// Whether a device exposes the safety-monitoring capability.
+export function isSafetyMonitor(device: Device): device is SafetyMonitor {
+	return device.type === 'safetyMonitor' || ('safe' in device && device.safe !== undefined)
+}
+
 export function isGuideOutput(device: Device): device is GuideOutput {
 	return 'canPulseGuide' in device && device.canPulseGuide !== undefined
 }
@@ -781,6 +806,10 @@ export function isDewHeater(device: Device): device is DewHeater {
 
 export function isGPS(device: Device): device is GPS {
 	return device.type === 'gps' || ('hasGPS' in device && device.hasGPS !== undefined)
+}
+
+export function isSubDevice<D extends Device>(device: Device): device is SubDevice<D, Device> {
+	return 'parent' in device && device.parent !== undefined
 }
 
 // Predicts the pier side a German equatorial mount would use for the given coordinates and local
