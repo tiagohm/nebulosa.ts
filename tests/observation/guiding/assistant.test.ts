@@ -250,22 +250,22 @@ test('measures compensable DEC backlash from delayed south motion', () => {
 	assistant.addSample(frame(0, 1), command(0, 0))
 
 	let step = assistant.startBacklashTest()
-	expect(step.pulse?.dec.direction).toBe('north')
+	expect(step.pulse?.dec.direction).toBe('NORTH')
 
 	step = assistant.addSample(frame(1000, 2), command(0, 0.6))
-	expect(step.pulse?.dec.direction).toBe('north')
+	expect(step.pulse?.dec.direction).toBe('NORTH')
 
 	step = assistant.addSample(frame(2000, 3), command(0, 1.2))
-	expect(step.pulse?.dec.direction).toBe('south')
+	expect(step.pulse?.dec.direction).toBe('SOUTH')
 
 	step = assistant.addSample(frame(3000, 4), command(0, 1.2))
-	expect(step.pulse?.dec.direction).toBe('south')
+	expect(step.pulse?.dec.direction).toBe('SOUTH')
 
 	step = assistant.addSample(frame(4000, 5), command(0, 1.2))
-	expect(step.pulse?.dec.direction).toBe('south')
+	expect(step.pulse?.dec.direction).toBe('SOUTH')
 
 	step = assistant.addSample(frame(5000, 6), command(0, 0.6))
-	expect(step.pulse?.dec.direction).toBe('south')
+	expect(step.pulse?.dec.direction).toBe('SOUTH')
 
 	step = assistant.addSample(frame(6000, 7), command(0, 0.1))
 	expect(step.result.status).toBe('completed')
@@ -275,21 +275,21 @@ test('measures compensable DEC backlash from delayed south motion', () => {
 })
 
 test('uses DEC calibration sign when measuring backlash motion', () => {
-	const assistant = new GuidingAssistant({ measureBacklash: true, decPositiveDirection: 'south', backlashTarget: 1, backlashReturnTolerance: 0.2, backlashPulse: 100, backlashMaxPulsesPerDirection: 8 })
+	const assistant = new GuidingAssistant({ measureBacklash: true, decPositiveDirection: 'SOUTH', backlashTarget: 1, backlashReturnTolerance: 0.2, backlashPulse: 100, backlashMaxPulsesPerDirection: 8 })
 	assistant.start(0)
 	assistant.addSample(frame(0, 1), command(0, 0))
 
 	let step = assistant.startBacklashTest()
-	expect(step.pulse?.dec.direction).toBe('north')
+	expect(step.pulse?.dec.direction).toBe('NORTH')
 
 	step = assistant.addSample(frame(1000, 2), command(0, -0.6))
-	expect(step.pulse?.dec.direction).toBe('north')
+	expect(step.pulse?.dec.direction).toBe('NORTH')
 
 	step = assistant.addSample(frame(2000, 3), command(0, -1.2))
-	expect(step.pulse?.dec.direction).toBe('south')
+	expect(step.pulse?.dec.direction).toBe('SOUTH')
 
 	step = assistant.addSample(frame(3000, 4), command(0, -0.6))
-	expect(step.pulse?.dec.direction).toBe('south')
+	expect(step.pulse?.dec.direction).toBe('SOUTH')
 
 	step = assistant.addSample(frame(4000, 5), command(0, -0.1))
 	expect(step.result.status).toBe('completed')
@@ -302,10 +302,10 @@ test('uses calibrated DEC-axis errors for backlash despite rotated image deltas'
 	assistant.addSample(frame(0, 1), command(0, 0, { dx: 0, dy: 0 }))
 
 	let step = assistant.startBacklashTest()
-	expect(step.pulse?.dec.direction).toBe('north')
+	expect(step.pulse?.dec.direction).toBe('NORTH')
 
 	step = assistant.addSample(frame(1000, 2), command(0, 1.2, { dx: 1.2, dy: 0 }))
-	expect(step.pulse?.dec.direction).toBe('south')
+	expect(step.pulse?.dec.direction).toBe('SOUTH')
 
 	step = assistant.addSample(frame(2000, 3), command(0, 0.1, { dx: 0.1, dy: 0 }))
 	expect(step.result.status).toBe('completed')
@@ -318,10 +318,10 @@ test('completes DEC backlash when south return overshoots the origin', () => {
 	assistant.addSample(frame(0, 1), command(0, 0))
 
 	let step = assistant.startBacklashTest()
-	expect(step.pulse?.dec.direction).toBe('north')
+	expect(step.pulse?.dec.direction).toBe('NORTH')
 
 	step = assistant.addSample(frame(1000, 2), command(0, 1))
-	expect(step.pulse?.dec.direction).toBe('south')
+	expect(step.pulse?.dec.direction).toBe('SOUTH')
 
 	step = assistant.addSample(frame(2000, 3), command(0, -0.6))
 	expect(step.result.status).toBe('completed')
@@ -336,12 +336,12 @@ test('keeps DEC backlash running until the south return is within tolerance', ()
 	assistant.startBacklashTest()
 
 	let step = assistant.addSample(frame(1000, 2), command(0, 4))
-	expect(step.pulse?.dec.direction).toBe('south')
+	expect(step.pulse?.dec.direction).toBe('SOUTH')
 
 	step = assistant.addSample(frame(2000, 3), command(0, 0.4))
 	expect(step.result.status).toBe('backlash')
 	expect(step.result.backlash).toBeUndefined()
-	expect(step.pulse?.dec.direction).toBe('south')
+	expect(step.pulse?.dec.direction).toBe('SOUTH')
 })
 
 test('waits for a valid frame before aligning the first backlash pulse', () => {
@@ -350,7 +350,7 @@ test('waits for a valid frame before aligning the first backlash pulse', () => {
 	assistant.addSample(frame(0, 1), command(0, 0))
 
 	let step = assistant.startBacklashTest()
-	expect(step.pulse?.dec.direction).toBe('north')
+	expect(step.pulse?.dec.direction).toBe('NORTH')
 
 	const badAlignment = assistant.alignBacklashOrigin(frame(1000, 2), command(0, 3, { badFrame: true }))
 	expect(badAlignment.aligned).toBeFalse()
@@ -360,7 +360,7 @@ test('waits for a valid frame before aligning the first backlash pulse', () => {
 	expect(goodAlignment.aligned).toBeTrue()
 
 	step = assistant.addSample(frame(3000, 4), command(0, 1.4))
-	expect(step.pulse?.dec.direction).toBe('north')
+	expect(step.pulse?.dec.direction).toBe('NORTH')
 	expect(step.result.status).toBe('backlash')
 })
 
@@ -370,14 +370,14 @@ test('aligns the first backlash pulse to the current frame boundary', () => {
 	assistant.addSample(frame(0, 1), command(0, 0))
 
 	let step = assistant.startBacklashTest()
-	expect(step.pulse?.dec.direction).toBe('north')
+	expect(step.pulse?.dec.direction).toBe('NORTH')
 
 	const alignment = assistant.alignBacklashOrigin(frame(1000, 2), command(0, 0.4))
 	expect(alignment.aligned).toBeTrue()
 
 	step = assistant.addSample(frame(2000, 3), command(0, 1.4))
 
-	expect(step.pulse?.dec.direction).toBe('north')
+	expect(step.pulse?.dec.direction).toBe('NORTH')
 	expect(step.result.status).toBe('backlash')
 })
 
@@ -407,7 +407,7 @@ test('fails DEC backlash when south motion never returns', () => {
 	assistant.addSample(frame(1000, 2), command(0, 0.6))
 
 	let step = assistant.addSample(frame(2000, 3), command(0, 0.6))
-	expect(step.pulse?.dec.direction).toBe('south')
+	expect(step.pulse?.dec.direction).toBe('SOUTH')
 	step = assistant.addSample(frame(3000, 4), command(0, 0.6))
 	expect(step.result.status).toBe('failed')
 	expect(step.result.backlash?.phase).toBe('failed')
@@ -736,11 +736,11 @@ test('recommends single-direction guiding for excessive DEC backlash', () => {
 	expect(decMode?.appliesTo).toBe('decGuideMode')
 	expect(decMode?.actionable).toBeTrue()
 	expect(decMode?.message).toContain('one Dec direction')
-	expect(decMode?.message).toContain('currently north')
+	expect(decMode?.message).toContain('currently NORTH')
 })
 
 test('maps excessive-backlash one-direction advice through south-positive DEC calibration', () => {
-	const assistant = new GuidingAssistant({ measureBacklash: true, decPositiveDirection: 'south', backlashTarget: 1, backlashReturnTolerance: 0.2, backlashPulse: 2000, backlashMaxPulsesPerDirection: 20 })
+	const assistant = new GuidingAssistant({ measureBacklash: true, decPositiveDirection: 'SOUTH', backlashTarget: 1, backlashReturnTolerance: 0.2, backlashPulse: 2000, backlashMaxPulsesPerDirection: 20 })
 	assistant.start(0)
 	assistant.addSample(frame(0, 1), command(0, 0))
 	assistant.startBacklashTest()
@@ -754,7 +754,7 @@ test('maps excessive-backlash one-direction advice through south-positive DEC ca
 	expect(step.result.backlash?.backlash).toBe(4000)
 
 	const decMode = step.result.recommendations.find((recommendation) => recommendation.kind === 'dec-mode')
-	expect(decMode?.message).toContain('currently south')
+	expect(decMode?.message).toContain('currently SOUTH')
 })
 
 test('floors recommended DEC backlash compensation to 10 ms', () => {

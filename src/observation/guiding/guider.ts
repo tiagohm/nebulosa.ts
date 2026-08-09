@@ -12,10 +12,10 @@ import { clamp } from '../../math/numerical/math'
 // Image coordinates are pixels; pulse durations are milliseconds; calibration is dimensionless.
 
 // RA correction direction.
-export type GuideDirectionRA = 'west' | 'east'
+export type GuideDirectionRA = 'WEST' | 'EAST'
 
 // DEC correction direction.
-export type GuideDirectionDEC = 'north' | 'south'
+export type GuideDirectionDEC = 'NORTH' | 'SOUTH'
 
 // DEC guiding policy; restricts or disables corrections to manage backlash.
 export type DeclinationGuideMode = 'auto' | 'north-only' | 'south-only' | 'off'
@@ -367,8 +367,8 @@ export const DEFAULT_GUIDER_CONFIG: Readonly<GuiderConfig> = {
 	maxPulseMsRA: 2000,
 	minPulseMsDEC: 30,
 	maxPulseMsDEC: 2500,
-	raPositiveDirection: 'west',
-	decPositiveDirection: 'north',
+	raPositiveDirection: 'WEST',
+	decPositiveDirection: 'NORTH',
 	decMode: 'auto',
 	decReversalThreshold: 0.08,
 	decBacklashAccumThreshold: 0.32,
@@ -1154,8 +1154,8 @@ export class Guider {
 		if (magnitude < this.config.minMoveDEC) return NO_PULSE
 
 		const direction = this.state.filteredDEC >= 0 ? this.config.decPositiveDirection : oppositeDEC(this.config.decPositiveDirection)
-		if (this.config.decMode === 'north-only' && direction !== 'north') return NO_PULSE
-		if (this.config.decMode === 'south-only' && direction !== 'south') return NO_PULSE
+		if (this.config.decMode === 'north-only' && direction !== 'NORTH') return NO_PULSE
+		if (this.config.decMode === 'south-only' && direction !== 'SOUTH') return NO_PULSE
 
 		const last = this.state.lastDecDirection
 
@@ -1212,10 +1212,10 @@ function pickInitialLockStar(stars: readonly GuideStar[], referencePosition?: re
 
 // Gets opposite RA guide direction.
 export function oppositeRA(direction: GuideDirectionRA) {
-	return direction === 'west' ? 'east' : 'west'
+	return direction === 'WEST' ? 'EAST' : 'WEST'
 }
 
 // Gets opposite DEC guide direction.
 export function oppositeDEC(direction: GuideDirectionDEC) {
-	return direction === 'north' ? 'south' : 'north'
+	return direction === 'NORTH' ? 'SOUTH' : 'NORTH'
 }

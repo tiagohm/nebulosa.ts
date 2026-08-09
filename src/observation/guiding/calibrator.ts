@@ -348,8 +348,8 @@ interface GuidingCalibrationConfigIssue {
 export const DEFAULT_GUIDING_CALIBRATOR_CONFIG: Readonly<GuidingCalibrationConfig> = {
 	raPulse: 650,
 	decPulse: 650,
-	raDirection: 'west',
-	decDirection: 'north',
+	raDirection: 'WEST',
+	decDirection: 'NORTH',
 	maxRaSteps: 20,
 	maxDecSteps: 20,
 	maxRaNoMotionSteps: 4,
