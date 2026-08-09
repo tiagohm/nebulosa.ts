@@ -109,12 +109,12 @@ test('dec reversal suppression requires accumulated opposite error', () => {
 	guider.processFrame(guideFrame(BASE_STARS, 0))
 	let cmd = guider.processFrame(guideFrame(shiftStars(BASE_STARS, 0, 0.4), 1000))
 	expect(cmd.dec.duration).toBeGreaterThan(0)
-	expect(cmd.dec.direction).toBe('north')
+	expect(cmd.dec.direction).toBe('NORTH')
 	cmd = guider.processFrame(guideFrame(shiftStars(BASE_STARS, 0, -0.08), 2000))
 	expect(cmd.dec.duration).toBe(0)
 	cmd = guider.processFrame(guideFrame(shiftStars(BASE_STARS, 0, -0.18), 3000))
 	expect(cmd.dec.duration).toBeGreaterThan(0)
-	expect(cmd.dec.direction).toBe('south')
+	expect(cmd.dec.direction).toBe('SOUTH')
 })
 
 test('lost-star state and reacquisition flow', () => {
@@ -180,8 +180,8 @@ test('bad calibration sign flips correction direction', () => {
 	const guider = new Guider({ lockAveragingFrames: 1, calibration: [-1, 0, 0, -1], hysteresisRA: 0, hysteresisDEC: 0, minMoveRA: 0.01, minMoveDEC: 0.01 })
 	guider.processFrame(guideFrame(BASE_STARS, 0))
 	const cmd = guider.processFrame(guideFrame(shiftStars(BASE_STARS, 0.5, 0.5), 1000))
-	expect(cmd.ra.direction).toBe('east')
-	expect(cmd.dec.direction).toBe('south')
+	expect(cmd.ra.direction).toBe('EAST')
+	expect(cmd.dec.direction).toBe('SOUTH')
 })
 
 describe('math and calibration foundations', () => {
@@ -421,10 +421,10 @@ describe('ra and dec controller fundamentals', () => {
 		expect(cmd.ra.duration).toBe(0)
 		cmd = g.processFrame(guideFrame(shiftStars(BASE_STARS, 0.25, 0), 2000))
 		expect(cmd.ra.duration).toBe(25)
-		expect(cmd.ra.direction).toBe('west')
+		expect(cmd.ra.direction).toBe('WEST')
 		cmd = g.processFrame(guideFrame(shiftStars(BASE_STARS, -1.2, 0), 3000))
 		expect(cmd.ra.duration).toBe(50)
-		expect(cmd.ra.direction).toBe('east')
+		expect(cmd.ra.direction).toBe('EAST')
 	})
 
 	test('ra hysteresis smooths pulses and cadence scaling responds to dropped cadence', () => {
@@ -440,11 +440,11 @@ describe('ra and dec controller fundamentals', () => {
 		const g = guider({ decMode: 'auto', decReversalThreshold: 0.05, decBacklashAccumThreshold: 0.25, minMoveDEC: 0.01 })
 		g.processFrame(guideFrame(BASE_STARS, 0))
 		let cmd = g.processFrame(guideFrame(shiftStars(BASE_STARS, 0, 0.3), 1000))
-		expect(cmd.dec.direction).toBe('north')
+		expect(cmd.dec.direction).toBe('NORTH')
 		cmd = g.processFrame(guideFrame(shiftStars(BASE_STARS, 0, -0.1), 2000))
 		expect(cmd.dec.duration).toBe(0)
 		cmd = g.processFrame(guideFrame(shiftStars(BASE_STARS, 0, -0.2), 3000))
-		expect(cmd.dec.direction).toBe('south')
+		expect(cmd.dec.direction).toBe('SOUTH')
 
 		const northOnly = guider({ decMode: 'north-only' })
 		northOnly.processFrame(guideFrame(BASE_STARS, 0))
@@ -564,8 +564,8 @@ describe('configuration and regression tests', () => {
 		const g = guider({ calibration: [-1, 0, 0, -1] })
 		g.processFrame(guideFrame(BASE_STARS, 0))
 		const cmd = g.processFrame(guideFrame(shiftStars(BASE_STARS, 0.5, 0.5), 1000))
-		expect(cmd.ra.direction).toBe('east')
-		expect(cmd.dec.direction).toBe('south')
+		expect(cmd.ra.direction).toBe('EAST')
+		expect(cmd.dec.direction).toBe('SOUTH')
 	})
 
 	test('reset clears dither, loss counters, and controller memory before reacquiring', () => {
@@ -617,7 +617,7 @@ describe('deterministic simulation scenarios', () => {
 		let maxPulse = 0
 		for (let i = 1; i <= 12; i++) {
 			const cmd = g.processFrame(guideFrame(shiftStars(BASE_STARS, i * 0.15, 0), ts, i))
-			expect(cmd.ra.direction).toBe('west')
+			expect(cmd.ra.direction).toBe('WEST')
 			maxPulse = Math.max(maxPulse, cmd.ra.duration)
 			ts += 1000
 		}
@@ -665,7 +665,7 @@ describe('deterministic simulation scenarios', () => {
 
 		for (let i = 0; i < sequence.length; i++) {
 			const cmd = g.processFrame(guideFrame(shiftStars(BASE_STARS, 0, sequence[i]), (i + 1) * 1000))
-			if (cmd.dec.duration > 0 && cmd.dec.direction === 'south') reversalCount++
+			if (cmd.dec.duration > 0 && cmd.dec.direction === 'SOUTH') reversalCount++
 		}
 
 		expect(reversalCount).toBe(0)

@@ -8,7 +8,10 @@ import { writeImageToFits } from '../../../src/imaging/model/image'
 import type { Image } from '../../../src/imaging/model/types'
 import { plotStar } from '../../../src/imaging/stars/generator'
 import { bufferSink } from '../../../src/io/io'
+import type { GuidingCalibrationResult } from '../../../src/observation/guiding/calibrator'
 import { GuiderClient, type GuiderClientConnectOptions, type GuiderClientOptions } from '../../../src/observation/guiding/client'
+import { ditherPulsePlanFromCalibration } from '../../../src/observation/guiding/dither.pulse'
+import type { GuideDirectionDEC, GuideDirectionRA } from '../../../src/observation/guiding/guider'
 
 // One recorded pulse issued through the fake guide-output manager.
 interface PulseRecord {
@@ -905,8 +908,8 @@ describe('closed-loop calibration and guiding', () => {
 	// while the client is guiding. Every test owns its harness so the sessions, which spend nearly all
 	// of their wall time asleep waiting for commanded pulses, can run concurrently without sharing
 	// state through the module-level harness.
-	async function calibrateAndGuide() {
-		const harness = makeHarness({ calibrator: FAST_CALIBRATION })
+	async function calibrateAndGuide(options: GuiderClientOptions = {}) {
+		const harness = makeHarness({ ...options, calibrator: FAST_CALIBRATION })
 
 		connect(harness)
 		harness.client.loop()
@@ -924,6 +927,66 @@ describe('closed-loop calibration and guiding', () => {
 	// Feeds enough frames for the guider to finish averaging its lock reference.
 	async function establishLockReference(harness: Harness) {
 		for (let i = 0; i < LOCK_AVERAGING_FRAMES; i++) await feedFrame(harness)
+	}
+
+	// Dither size, in pixels. Large enough that the resulting pulses dwarf the sub-pixel corrections
+	// the guider keeps issuing, and small enough to stay well inside the maximum frame jump.
+	const DITHER_AMOUNT_PX = 3
+	// Frames fed after a dither: the guider first re-averages its lock reference and only then walks
+	// the star onto the shifted target, which the aggressiveness and hysteresis filters spread out.
+	const DITHER_SETTLE_FRAMES = 28
+	// Band the accumulated pulse time on the driven axis must fall into, as a fraction of the duration
+	// the standalone conversion computes. The guider approaches the shifted target asymptotically and
+	// stops inside its minimum-move deadband, so it always commands slightly less than the closed form;
+	// the band is still tight enough to catch a wrong rate, a wrong unit or a missing axis projection.
+	const DITHER_PULSE_BAND = [0.6, 1.3] as const
+	// Largest share of the driven axis' total pulse time the orthogonal axis may accumulate. The
+	// residual corrections there are sub-pixel while the dither itself is DITHER_AMOUNT_PX.
+	const CROSS_AXIS_PULSE_RATIO = 0.25
+	// Pulse ceiling handed to the standalone conversion, matching the guider's own axis maximum.
+	const MAX_DITHER_PULSE_MS = 2000
+
+	// Rebuilds the calibration fields the standalone conversion reads from the solution the client
+	// itself published, so the comparison uses the very calibration the guider is guiding with.
+	function solvedCalibration(harness: Harness) {
+		const { xRate, yRate, xParity, yParity } = harness.client.getCalibrationData()
+
+		return {
+			ra: { ratePxPerMs: xRate, direction: xParity === '+' ? 'WEST' : 'EAST' },
+			dec: { ratePxPerMs: yRate, direction: yParity === '+' ? 'NORTH' : 'SOUTH' },
+		} as unknown as GuidingCalibrationResult
+	}
+
+	// Collapses recorded pulses into signed milliseconds per axis, positive towards west and north.
+	function axisPulseTotals(pulses: readonly PulseRecord[]) {
+		let ra = 0
+		let dec = 0
+
+		for (const { direction, duration } of pulses) {
+			if (direction === 'WEST') ra += duration
+			else if (direction === 'EAST') ra -= duration
+			else if (direction === 'NORTH') dec += duration
+			else dec -= duration
+		}
+
+		return [ra, dec] as const
+	}
+
+	// Names the direction a signed axis total corresponds to, so it can be compared with a plan.
+	function pulseDirection(total: number, positive: GuideDirectionRA | GuideDirectionDEC, negative: GuideDirectionRA | GuideDirectionDEC) {
+		return total > 0 ? positive : negative
+	}
+
+	// Commands one dither, feeds the frames the guider needs to reach the shifted target and returns
+	// the reported image-space offset together with the pulses the correction consumed.
+	async function ditherAndSettle(harness: Harness, amount: number) {
+		const from = harness.guideOutputManager.pulses.length
+		expect(harness.client.dither(amount, false, IMMEDIATE_SETTLE)).toBeTrue()
+
+		for (let i = 0; i < DITHER_SETTLE_FRAMES; i++) await feedFrame(harness)
+
+		const { dx, dy } = eventsOf(harness.events, 'GuidingDithered').at(-1)!
+		return { dx, dy, totals: axisPulseTotals(harness.guideOutputManager.pulses.slice(from)) }
 	}
 
 	// Lock-target displacement, in pixels, large enough that the right ascension share of it asks for
@@ -1160,6 +1223,48 @@ describe('closed-loop calibration and guiding', () => {
 
 			expect(eventsOf(harness.events, 'SettleDone')).not.toBeEmpty()
 			expect(harness.client.getSettling()).toBeFalse()
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
+		'a spiral dither walks the lattice and pulses the axes the standalone plan computes',
+		async () => {
+			const harness = await calibrateAndGuide({ ditherMode: 'spiral' })
+			await establishLockReference(harness)
+
+			const calibration = solvedCalibration(harness)
+			const first = await ditherAndSettle(harness, DITHER_AMOUNT_PX)
+
+			// The spiral opens with a declination-only step, so the guider must drive declination alone,
+			// in the direction and for the duration the standalone conversion computes from the same
+			// calibration. This is the end-to-end guard on the sign convention: an inverted rule would
+			// keep the magnitudes and flip the direction.
+			const decPlan = ditherPulsePlanFromCalibration({ rightAscension: 0, declination: DITHER_AMOUNT_PX }, calibration, MAX_DITHER_PULSE_MS)!
+			expect(decPlan.rightAscension).toBeUndefined()
+			expect(pulseDirection(first.totals[1], 'NORTH', 'SOUTH')).toBe(decPlan.declination!.direction)
+			expect(Math.abs(first.totals[1])).toBeGreaterThan(DITHER_PULSE_BAND[0] * decPlan.declination!.duration)
+			expect(Math.abs(first.totals[1])).toBeLessThan(DITHER_PULSE_BAND[1] * decPlan.declination!.duration)
+			expect(Math.abs(first.totals[0])).toBeLessThan(CROSS_AXIS_PULSE_RATIO * Math.abs(first.totals[1]))
+			expect(Math.hypot(first.dx, first.dy)).toBeCloseTo(DITHER_AMOUNT_PX, 6)
+
+			const second = await ditherAndSettle(harness, DITHER_AMOUNT_PX)
+
+			// The second lattice step is right ascension only and orthogonal to the first.
+			const raPlan = ditherPulsePlanFromCalibration({ rightAscension: DITHER_AMOUNT_PX, declination: 0 }, calibration, MAX_DITHER_PULSE_MS)!
+			expect(raPlan.declination).toBeUndefined()
+			expect(pulseDirection(second.totals[0], 'WEST', 'EAST')).toBe(raPlan.rightAscension!.direction)
+			expect(Math.abs(second.totals[0])).toBeGreaterThan(DITHER_PULSE_BAND[0] * raPlan.rightAscension!.duration)
+			expect(Math.abs(second.totals[0])).toBeLessThan(DITHER_PULSE_BAND[1] * raPlan.rightAscension!.duration)
+			expect(Math.abs(second.totals[1])).toBeLessThan(CROSS_AXIS_PULSE_RATIO * Math.abs(second.totals[0]))
+			expect(first.dx * second.dx + first.dy * second.dy).toBeCloseTo(0, 6)
+
+			// Re-selecting the same mode restarts the lattice, so the next dither repeats the first step.
+			harness.client.setDitherMode('spiral')
+			const third = await ditherAndSettle(harness, DITHER_AMOUNT_PX)
+
+			expect(third.dx).toBeCloseTo(first.dx, 6)
+			expect(third.dy).toBeCloseTo(first.dy, 6)
 		},
 		CLOSED_LOOP_TIMEOUT,
 	)

@@ -11,6 +11,7 @@ import { base64Source, bufferSource } from '../../io/io'
 import { clamp } from '../../math/numerical/math'
 import { GuidingAssistant, type GuidingAssistantConfig, type GuidingAssistantResult } from './assistant'
 import { type CalibrationPulseCommand, flipGuidingCalibration, type GuidingCalibrationConfig, type GuidingCalibrationDiagnostics, type GuidingCalibrationResult, GuidingCalibrator } from './calibrator'
+import { DitherGenerator, type DitherMode } from './dither'
 import { type AxisPulse, type DeclinationGuideMode, DEFAULT_GUIDER_CONFIG, type GuideCommand, type GuideFrame, Guider, type GuideStar } from './guider'
 
 // Local autoguiding orchestrator exposing a PHD2-compatible API over INDI camera and guide-output
@@ -99,9 +100,6 @@ export interface GuideFrameImage {
 	readonly searchRegion: number
 }
 
-// PHD2 dither patterns: independent per-axis uniform random, or an expanding lattice spiral.
-export type GuiderDitherMode = 'random' | 'spiral'
-
 // Construction options for a GuiderClient.
 export interface GuiderClientOptions {
 	// Optional event handler receiving PHD2-shaped notifications.
@@ -113,7 +111,7 @@ export interface GuiderClientOptions {
 	// Whether to preserve the exact lock position across guider re-initialization.
 	readonly stickyLockPosition?: boolean
 	// Dither pattern used by dither().
-	readonly ditherMode?: GuiderDitherMode
+	readonly ditherMode?: DitherMode
 	// Overrides for the calibration state machine, merged over DEFAULT_GUIDING_CALIBRATOR_CONFIG. Pulse
 	// durations are milliseconds and distances are pixels; an invalid combination throws at
 	// construction. Mounts with a fast guide rate usually only need shorter raPulse/decPulse.
@@ -174,8 +172,9 @@ export class GuiderClient {
 	#settleStableSince = 0
 	#settleFrameCount = 0
 	#settleDroppedFrameCount = 0
-	#ditherMode: GuiderDitherMode = 'random'
-	#spiralDither = makeSpiralDitherState()
+	// Constructed in the constructor body, not as a field initializer: field initializers run before the
+	// constructor body, so the initial mode from options would be lost.
+	readonly #dither: DitherGenerator
 	#ditherOffsetX = 0
 	#ditherOffsetY = 0
 	#lockShiftOffsetX = 0
@@ -213,7 +212,7 @@ export class GuiderClient {
 		this.#calibrator = new GuidingCalibrator(options?.calibrator)
 		this.#searchRegion = clamp(options?.searchRegion || DEFAULT_SEARCH_REGION, 16, 128)
 		this.#stickyLockPosition = options?.stickyLockPosition === true
-		this.#ditherMode = options?.ditherMode ?? 'random'
+		this.#dither = new DitherGenerator({ mode: options?.ditherMode })
 		this.#eventHandler = options?.handler?.event
 		this.#frameHandler = options?.handler?.frame
 	}
@@ -364,7 +363,7 @@ export class GuiderClient {
 		this.#guider = this.#makeGuider(undefined)
 		this.#ditherOffsetX = 0
 		this.#ditherOffsetY = 0
-		this.#spiralDither = makeSpiralDitherState()
+		this.#dither.reset()
 		this.#lockShiftOffsetX = 0
 		this.#lockShiftOffsetY = 0
 		this.#lockShiftTimestamp = 0
@@ -389,7 +388,7 @@ export class GuiderClient {
 		this.#exactLockPosition = false
 		this.#ditherOffsetX = 0
 		this.#ditherOffsetY = 0
-		this.#spiralDither = makeSpiralDitherState()
+		this.#dither.reset()
 		this.#lockShiftOffsetX = 0
 		this.#lockShiftOffsetY = 0
 		this.#lockShiftTimestamp = 0
@@ -414,8 +413,8 @@ export class GuiderClient {
 		if (this.#guidingAssistant !== undefined || this.#calibration === undefined || this.#guider.currentState.state !== 'guiding' || amount <= 0 || !Number.isFinite(amount)) return false
 
 		const { referenceX, referenceY } = this.#guider.currentState
-		const [dRa, dDec] = this.#ditherMode === 'spiral' ? nextSpiralDither(this.#spiralDither, amount, raOnly) : makeRandomDither(amount, raOnly)
-		const [dx, dy] = ditherImageOffset(this.#calibration, dRa, dDec)
+		const offset = this.#dither.next(amount, raOnly)
+		const [dx, dy] = ditherImageOffset(this.#calibration, offset.rightAscension, offset.declination)
 
 		this.#ditherOffsetX += dx
 		this.#ditherOffsetY += dy
@@ -512,7 +511,7 @@ export class GuiderClient {
 			exposure: this.getExposure(),
 			multiStar: this.#guider.config.mode === 'multi-star',
 			suspectCalibration: this.#calibration === undefined,
-			decPositiveDirection: this.#calibration?.dec.direction ?? 'north',
+			decPositiveDirection: this.#calibration?.dec.direction ?? 'NORTH',
 			...config,
 		})
 
@@ -639,7 +638,7 @@ export class GuiderClient {
 		// not inherit a stale constant offset once lock-shift is later applied.
 		this.#ditherOffsetX = 0
 		this.#ditherOffsetY = 0
-		this.#spiralDither = makeSpiralDitherState()
+		this.#dither.reset()
 		this.#lockShiftOffsetX = 0
 		this.#lockShiftOffsetY = 0
 		this.emitEvent('SettleBegin')
@@ -690,7 +689,7 @@ export class GuiderClient {
 		// a subsequent guiding run.
 		this.#ditherOffsetX = 0
 		this.#ditherOffsetY = 0
-		this.#spiralDither = makeSpiralDitherState()
+		this.#dither.reset()
 		this.#lockShiftOffsetX = 0
 		this.#lockShiftOffsetY = 0
 		this.#setAppState(this.#lockPosition === undefined ? 'Looping' : 'Selected')
@@ -743,7 +742,7 @@ export class GuiderClient {
 		const [lockX, lockY] = this.#lockPosition
 		this.#ditherOffsetX = 0
 		this.#ditherOffsetY = 0
-		this.#spiralDither = makeSpiralDitherState()
+		this.#dither.reset()
 		this.#lockShiftOffsetX = 0
 		this.#lockShiftOffsetY = 0
 		this.#lockShiftTimestamp = 0
@@ -765,13 +764,12 @@ export class GuiderClient {
 
 	// Returns the configured dither pattern used by dither().
 	getDitherMode() {
-		return this.#ditherMode
+		return this.#dither.mode
 	}
 
 	// Selects the dither pattern (PHD2 random or spiral) and restarts the spiral generator.
-	setDitherMode(mode: GuiderDitherMode) {
-		this.#ditherMode = mode
-		this.#spiralDither = makeSpiralDitherState()
+	setDitherMode(mode: DitherMode) {
+		this.#dither.setMode(mode)
 		this.emitEvent('GuideParamChange', { Name: 'DitherMode', Value: mode })
 		this.emitEvent('ConfigurationChange')
 	}
@@ -1336,7 +1334,7 @@ export class GuiderClient {
 		this.#settleDroppedFrameCount = 0
 		this.#ditherOffsetX = 0
 		this.#ditherOffsetY = 0
-		this.#spiralDither = makeSpiralDitherState()
+		this.#dither.reset()
 		this.#lockShiftOffsetX = 0
 		this.#lockShiftOffsetY = 0
 		this.#lockShiftTimestamp = 0
@@ -1566,71 +1564,11 @@ function calibrationResultToPHD2Data(calibration: GuidingCalibrationResult): PHD
 		calibrated: true,
 		xAngle: calibration.ra.angle,
 		xRate: calibration.ra.ratePxPerMs,
-		xParity: calibration.ra.direction === 'west' ? '+' : '-',
+		xParity: calibration.ra.direction === 'WEST' ? '+' : '-',
 		yAngle: calibration.dec.angle,
 		yRate: calibration.dec.ratePxPerMs,
-		yParity: calibration.dec.direction === 'north' ? '+' : '-',
+		yParity: calibration.dec.direction === 'NORTH' ? '+' : '-',
 	}
-}
-
-// PHD2 DitherSpiral generator state, advanced across successive dithers to walk an expanding lattice spiral.
-interface SpiralDitherState {
-	x: number
-	y: number
-	dx: number
-	dy: number
-	prevRaOnly: boolean
-}
-
-// Creates the initial PHD2 DitherSpiral state.
-function makeSpiralDitherState(): SpiralDitherState {
-	return { x: 0, y: 0, dx: -1, dy: 0, prevRaOnly: false }
-}
-
-// Draws a per-axis uniform random RA/DEC dither in pixels along the mount axes, following PHD2's
-// DITHER_RANDOM (DEC held at zero for RA-only dithers).
-function makeRandomDither(amount: number, raOnly: boolean) {
-	const dRa = amount * (Math.random() * 2 - 1)
-	const dDec = raOnly ? 0 : amount * (Math.random() * 2 - 1)
-	return [dRa, dDec] as const
-}
-
-// Advances PHD2's DitherSpiral one step and returns the RA/DEC offset in pixels along the mount axes.
-// The generator resets when toggling between RA-only and RA/DEC, mirroring DitherSpiral::GetDither.
-function nextSpiralDither(state: SpiralDitherState, amount: number, raOnly: boolean) {
-	if (raOnly !== state.prevRaOnly) {
-		state.x = 0
-		state.y = 0
-		state.dx = -1
-		state.dy = 0
-		state.prevRaOnly = raOnly
-	}
-
-	if (raOnly) {
-		// ROT(dx, dy): rotate the step direction 90 degrees.
-		const t = -state.dx
-		state.dx = state.dy
-		state.dy = t
-
-		// x = 0, 1, -1, -2, 2, 3, -3, -4, 4, 5, ...
-		const x0 = state.x
-		if (state.dy === 0) state.x = -state.x
-		else state.x += state.dy
-
-		return [(state.x - x0) * amount, 0] as const
-	}
-
-	if (state.x === state.y || (state.x > 0 && state.x === -state.y) || (state.x <= 0 && state.y === 1 - state.x)) {
-		// ROT(dx, dy): turn at the spiral arm boundary.
-		const t = -state.dx
-		state.dx = state.dy
-		state.dy = t
-	}
-
-	state.x += state.dx
-	state.y += state.dy
-
-	return [state.dx * amount, state.dy * amount] as const
 }
 
 // Rotates a mount-axis RA/DEC dither offset (pixels) into image X/Y with the calibrated axis unit vectors.
@@ -1691,7 +1629,7 @@ function calibrationDistanceOf(diagnostics: GuidingCalibrationDiagnostics) {
 
 // Converts local pulse directions to PHD2 casing and falls back to a mandatory default direction on no-pulse frames.
 function toPHD2GuideDirection(direction: AxisPulse['direction'], fallback: PHD2GuideDirection): PHD2GuideDirection {
-	return direction === 'east' ? 'East' : direction === 'north' ? 'North' : direction === 'south' ? 'South' : direction === 'west' ? 'West' : fallback
+	return direction === 'EAST' ? 'East' : direction === 'NORTH' ? 'North' : direction === 'SOUTH' ? 'South' : direction === 'WEST' ? 'West' : fallback
 }
 
 // Resolves the focal length in mm from explicit focal length or aperture/focal-ratio geometry.

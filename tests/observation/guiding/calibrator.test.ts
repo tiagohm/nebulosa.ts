@@ -160,7 +160,7 @@ test('flips calibration matrices and reverses DEC output direction', () => {
 	const flipped = flipGuidingCalibration(completed, true)
 
 	expect(flipped.ra.direction).toBe(completed.ra.direction)
-	expect(flipped.dec.direction).toBe('south')
+	expect(flipped.dec.direction).toBe('SOUTH')
 	expect(flipped.ra.unitX).toBeCloseTo(-completed.ra.unitX, 8)
 	expect(flipped.ra.unitY).toBeCloseTo(-completed.ra.unitY, 8)
 	expect(flipped.dec.unitX).toBeCloseTo(completed.dec.unitX, 8)
