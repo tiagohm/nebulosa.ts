@@ -1,6 +1,7 @@
 import { equatorialToHorizontal } from '../../../astronomy/coordinates/coordinate'
 import { localSiderealTime } from '../../../astronomy/observer/location'
 import { timeUnix } from '../../../astronomy/time/time'
+import { RAD2DEG } from '../../../core/constants'
 import type { IndiClientHandler } from '../client'
 import { DeviceInterfaceType, type DomeDirection } from '../device'
 import type { MountManager } from '../manager'
@@ -367,7 +368,7 @@ export class DomeSimulator extends DeviceSimulator {
 
 		const time = timeUnix(mount.time.utc / 1000)
 		const [azimuth] = equatorialToHorizontal(mount.equatorialCoordinate.rightAscension, mount.equatorialCoordinate.declination, mount.geographicCoordinate.latitude, localSiderealTime(time, mount.geographicCoordinate))
-		return (azimuth * 180) / Math.PI
+		return azimuth * RAD2DEG
 	}
 
 	// Starts or retargets a simulated slew while autosync is enabled and a mount is available.

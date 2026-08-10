@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { PI } from '../../../src/core/constants'
 import { colorIndexToRgbWeights, plotStar } from '../../../src/imaging/stars/generator'
 import { applySyntheticCollimationBlur, applySyntheticCollimationSaturation, generateSyntheticCollimationImage, renderSyntheticCollimationPattern, renderValidatedSyntheticCollimationPattern, type SyntheticCollimationPattern } from '../../../src/imaging/synthetic/collimation'
 
@@ -49,7 +50,7 @@ describe('synthetic collimation image', () => {
 
 	test('moves the obstruction independently in all eight directions', () => {
 		for (let i = 0; i < 8; i++) {
-			const angle = (i * Math.PI) / 4
+			const angle = (i * PI) / 4
 			const dx = Math.cos(angle) * 4
 			const dy = Math.sin(angle) * 4
 			const pattern = fixture({

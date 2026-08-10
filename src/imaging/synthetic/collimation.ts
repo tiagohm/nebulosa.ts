@@ -1,3 +1,4 @@
+import { TAU } from '../../core/constants'
 import type { Point, Rect } from '../../math/numerical/geometry'
 import { mulberry32 } from '../../math/numerical/random'
 import type { Angle } from '../../math/units/angle'
@@ -466,7 +467,7 @@ function annulusWeight(x: number, y: number, outer: ResolvedEllipse, obstruction
 	if (spider !== undefined && spider.vanes > 0 && spider.width > 0 && spider.attenuation > 0) {
 		let insideVane = false
 		for (let i = 0; i < spider.vanes; i++) {
-			const angle = spider.angle + (i * Math.PI * 2) / spider.vanes
+			const angle = spider.angle + (i * TAU) / spider.vanes
 			const along = dx * Math.cos(angle) + dy * Math.sin(angle)
 			const across = Math.abs(-dx * Math.sin(angle) + dy * Math.cos(angle))
 			if (along >= 0 && across <= spider.width * 0.5) {
@@ -593,7 +594,7 @@ function applyNoiseAndOutputEffects(raw: ImageRawType, pattern: SyntheticCollima
 				spare = undefined
 			} else {
 				const radius = Math.sqrt(-2 * Math.log(Math.max(random(), Number.MIN_VALUE)))
-				const angle = Math.PI * 2 * random()
+				const angle = TAU * random()
 				gaussian = radius * Math.cos(angle)
 				spare = radius * Math.sin(angle)
 			}

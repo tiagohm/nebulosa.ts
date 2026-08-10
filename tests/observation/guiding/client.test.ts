@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, test } from 'bun:test'
 import { pixelScale } from '../../../src/astronomy/formulas'
-import { DEG2RAD } from '../../../src/core/constants'
+import { DEG2RAD, PIOVERTWO } from '../../../src/core/constants'
 import type { PHD2Events } from '../../../src/devices/guiding/phd2'
 import { type Camera, DEFAULT_CAMERA, DEFAULT_GUIDE_OUTPUT, type GuideDirection, type GuideOutput } from '../../../src/devices/indi/device'
 import type { CameraManager, DeviceHandler, GuideOutputManager } from '../../../src/devices/indi/manager'
@@ -1021,7 +1021,7 @@ describe('closed-loop calibration and guiding', () => {
 			expect(calibration.yRate).toBeCloseTo(MOUNT_RATE_PX_PER_MS, 3)
 			// Both axes are recovered with the camera rotation baked in, and stay orthogonal.
 			expect(calibration.xAngle).toBeCloseTo(MOUNT_ANGLE, 1)
-			expect(Math.abs(calibration.yAngle - calibration.xAngle)).toBeCloseTo(Math.PI / 2, 1)
+			expect(Math.abs(calibration.yAngle - calibration.xAngle)).toBeCloseTo(PIOVERTWO, 1)
 
 			expect(eventsOf(harness.events, 'StartCalibration')).toHaveLength(1)
 			expect(eventsOf(harness.events, 'CalibrationFailed')).toBeEmpty()

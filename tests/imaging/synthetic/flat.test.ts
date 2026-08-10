@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test'
+import { PIOVERTWO } from '../../../src/core/constants'
 import type { CfaPattern } from '../../../src/imaging/model/types'
 import { generateSyntheticFlatImage, renderSyntheticFlat, type SyntheticFlatModel } from '../../../src/imaging/synthetic/flat'
 
@@ -58,7 +59,7 @@ test('combines circular, elliptical, overlapping, and edge dust shadows', () => 
 			signal: 100,
 			dustMotes: [
 				{ center: { x: 4, y: 4 }, sigmaX: 2, sigmaY: 2, contrast: 0.5 },
-				{ center: { x: 4, y: 4 }, sigmaX: 3, sigmaY: 1, angle: Math.PI / 2, contrast: 0.2 },
+				{ center: { x: 4, y: 4 }, sigmaX: 3, sigmaY: 1, angle: PIOVERTWO, contrast: 0.2 },
 				{ center: { x: 0, y: 0 }, sigmaX: 1, sigmaY: 1, contrast: 0.4 },
 			],
 		}),
@@ -70,12 +71,12 @@ test('combines circular, elliptical, overlapping, and edge dust shadows', () => 
 })
 
 test('produces independent row and column banding with known periods', () => {
-	const row = generateSyntheticFlatImage(fixture({ width: 3, height: 4, bias: 0, signal: 100, rowBanding: { amplitude: 0.25, period: 4, phase: Math.PI / 2 } }))
+	const row = generateSyntheticFlatImage(fixture({ width: 3, height: 4, bias: 0, signal: 100, rowBanding: { amplitude: 0.25, period: 4, phase: PIOVERTWO } }))
 	expect(Array.from(row.raw.subarray(0, 3))).toEqual([125, 125, 125])
 	expect(Array.from(row.raw.subarray(3, 6))).toEqual([100, 100, 100])
 	expect(Array.from(row.raw.subarray(6, 9))).toEqual([75, 75, 75])
 
-	const mixed = generateSyntheticFlatImage(fixture({ width: 4, height: 4, bias: 0, signal: 100, rowBanding: { amplitude: 0.1, period: 4 }, columnBanding: { amplitude: 0.2, period: 4, phase: Math.PI / 2 } }))
+	const mixed = generateSyntheticFlatImage(fixture({ width: 4, height: 4, bias: 0, signal: 100, rowBanding: { amplitude: 0.1, period: 4 }, columnBanding: { amplitude: 0.2, period: 4, phase: PIOVERTWO } }))
 	expect(mixed.raw[0]).toBeCloseTo(120, 12)
 	expect(mixed.raw[1]).toBeCloseTo(100, 12)
 	expect(mixed.raw[4]).toBeCloseTo(130, 12)

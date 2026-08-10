@@ -1731,7 +1731,7 @@ export class DomeManager extends DeviceManager<Dome> {
 
 	// Sets the dome rotation speed in RPM when the driver exposes a writable speed property.
 	speed(dome: Dome, value: number, client = dome[CLIENT]!) {
-		if (this.hasWritableProperty(dome, 'DOME_SPEED')) {
+		if (dome.canSetSpeed) {
 			client.sendNumber({ device: dome.name, name: 'DOME_SPEED', elements: { DOME_SPEED_VALUE: value } })
 		}
 	}
@@ -1811,14 +1811,14 @@ export class DomeManager extends DeviceManager<Dome> {
 
 	// Enables or disables controller backlash compensation.
 	backlash(dome: Dome, enabled: boolean, client = dome[CLIENT]!) {
-		if (this.hasWritableProperty(dome, 'DOME_BACKLASH_TOGGLE')) {
+		if (dome.hasBacklash) {
 			client.sendSwitch({ device: dome.name, name: 'DOME_BACKLASH_TOGGLE', elements: { [enabled ? 'INDI_ENABLED' : 'INDI_DISABLED']: true } })
 		}
 	}
 
 	// Sets controller backlash in raw driver steps.
 	backlashSteps(dome: Dome, steps: number, client = dome[CLIENT]!) {
-		if (this.hasWritableProperty(dome, 'DOME_BACKLASH_STEPS')) {
+		if (dome.hasBacklash) {
 			client.sendNumber({ device: dome.name, name: 'DOME_BACKLASH_STEPS', elements: { DOME_BACKLASH_VALUE: steps } })
 		}
 	}
@@ -1937,6 +1937,7 @@ export class DomeManager extends DeviceManager<Dome> {
 				if (definition && handleSwitchValue(dome, 'canSetPark', message.elements.PARK_CURRENT !== undefined && definition.permission !== 'ro')) this.updated(dome, 'canSetPark', message.state)
 				return
 			case 'DOME_BACKLASH_TOGGLE':
+				if (definition && handleSwitchValue(dome, 'hasBacklash', definition.permission !== 'ro')) this.updated(dome, 'hasBacklash', message.state)
 				if (handleSwitchValue(dome, 'backlashEnabled', message.elements.INDI_ENABLED?.value ?? message.elements.ENABLE?.value)) this.updated(dome, 'backlashEnabled', message.state)
 				return
 			case 'DM_OTA_SIDE': {
@@ -1973,6 +1974,7 @@ export class DomeManager extends DeviceManager<Dome> {
 				if (definition && handleSwitchValue(dome, 'canRelativeMove', definition.permission !== 'ro')) this.updated(dome, 'canRelativeMove', message.state)
 				return
 			case 'DOME_SPEED':
+				if (definition && handleSwitchValue(dome, 'canSetSpeed', definition.permission !== 'ro')) this.updated(dome, 'canSetSpeed', message.state)
 				if (handleMinMaxValue(dome.speed, message.elements.DOME_SPEED_VALUE, tag)) this.updated(dome, 'speed', message.state)
 				return
 			case 'DOME_SYNC':
@@ -2066,7 +2068,10 @@ export class DomeManager extends DeviceManager<Dome> {
 			resetDeviceValue(this, dome, 'azimuth', DEFAULT_DOME.azimuth)
 			resetDeviceValue(this, dome, 'moving', DEFAULT_DOME.moving)
 		}
-		if (full || name === 'DOME_SPEED') resetDeviceValue(this, dome, 'speed', DEFAULT_DOME.speed)
+		if (full || name === 'DOME_SPEED') {
+			resetDeviceValue(this, dome, 'canSetSpeed', DEFAULT_DOME.canSetSpeed)
+			resetDeviceValue(this, dome, 'speed', DEFAULT_DOME.speed)
+		}
 		if (full || name === 'DOME_ABORT_MOTION') resetDeviceValue(this, dome, 'canAbort', DEFAULT_DOME.canAbort)
 		if (full || name === 'DOME_SHUTTER') {
 			resetDeviceValue(this, dome, 'hasShutter', DEFAULT_DOME.hasShutter)
@@ -2106,7 +2111,10 @@ export class DomeManager extends DeviceManager<Dome> {
 			resetDeviceValue(this, dome, 'canSlave', DEFAULT_DOME.canSlave)
 			resetDeviceValue(this, dome, 'slaved', DEFAULT_DOME.slaved)
 		}
-		if (full || name === 'DOME_BACKLASH_TOGGLE') resetDeviceValue(this, dome, 'backlashEnabled', DEFAULT_DOME.backlashEnabled)
+		if (full || name === 'DOME_BACKLASH_TOGGLE') {
+			resetDeviceValue(this, dome, 'hasBacklash', DEFAULT_DOME.hasBacklash)
+			resetDeviceValue(this, dome, 'backlashEnabled', DEFAULT_DOME.backlashEnabled)
+		}
 		if (full || name === 'DOME_BACKLASH_STEPS') resetDeviceValue(this, dome, 'backlash', DEFAULT_DOME.backlash)
 		if (full || name === 'DOME_MEASUREMENTS') {
 			resetDeviceValue(this, dome, 'hasMeasurements', DEFAULT_DOME.hasMeasurements)

@@ -251,8 +251,10 @@ export interface Dome extends Device, Parkable {
 	canSetAzimuth: boolean
 	canSetAltitude: boolean
 	canFindHome: boolean
+	canSetSpeed: boolean
 	canSync: boolean
 	canUnpark: boolean
+	hasBacklash: boolean
 	hasShutter: boolean
 	canSetShutter: boolean
 	shutterState: DomeShutterState
@@ -554,12 +556,14 @@ export const DEFAULT_DOME: Dome = {
 	canSetAzimuth: false,
 	canSetAltitude: false,
 	canFindHome: false,
+	canSetSpeed: false,
 	canSync: false,
 	canUnpark: false,
 	canPark: false,
 	canSetPark: false,
 	parking: false,
 	parked: false,
+	hasBacklash: false,
 	hasShutter: false,
 	canSetShutter: false,
 	shutterState: 'UNKNOWN',

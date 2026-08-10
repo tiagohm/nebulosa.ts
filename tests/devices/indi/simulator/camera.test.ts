@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { equatorialToJ2000 } from '../../../../src/astronomy/coordinates/coordinate'
 import { timeNow, timeUnix } from '../../../../src/astronomy/time/time'
-import { PI } from '../../../../src/core/constants'
+import { PI, PIOVERTWO } from '../../../../src/core/constants'
 import { IndiClientHandlerSet } from '../../../../src/devices/indi/client'
 import type { GuideOutput, Thermometer } from '../../../../src/devices/indi/device'
 import { CameraManager, type DeviceProvider, FocuserManager, GuideOutputManager, MountManager, RotatorManager, ThermometerManager } from '../../../../src/devices/indi/manager'
@@ -284,7 +284,7 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		client.sendNumber({ device: camera.name, name: 'SIMULATOR_NOISE_EXPOSURE', elements: { EXPOSURE_TIME: 1 } })
 		client.sendNumber({ device: camera.name, name: 'SIMULATOR_FLAT_FIELD', elements: { REFERENCE_SIGNAL: 0.5, VIGNETTING: 0, CENTER_OFFSET_X: 0, CENTER_OFFSET_Y: 0, GRADIENT_X: 0, GRADIENT_Y: 0, PRNU: 0 } })
 		client.sendNumber({ device: camera.name, name: 'SIMULATOR_FLAT_DUST', elements: { COUNT: 0, SIGMA_X: 8, SIGMA_Y: 8, ANGLE: 0, CONTRAST: 0.5 } })
-		client.sendNumber({ device: camera.name, name: 'SIMULATOR_FLAT_BANDING', elements: { ROW_AMPLITUDE: 0, ROW_PERIOD: 16, ROW_PHASE: Math.PI / 2, COLUMN_AMPLITUDE: 0 } })
+		client.sendNumber({ device: camera.name, name: 'SIMULATOR_FLAT_BANDING', elements: { ROW_AMPLITUDE: 0, ROW_PERIOD: 16, ROW_PHASE: PIOVERTWO, COLUMN_AMPLITUDE: 0 } })
 		client.sendNumber({ device: camera.name, name: 'SIMULATOR_NOISE_SENSOR', elements: { READ_NOISE: 0, BIAS_ELECTRONS: 0, BLACK_LEVEL_ELECTRONS: 0, DARK_CURRENT_AT_REFERENCE_TEMP: 0, DARK_SIGNAL_NON_UNIFORMITY: 0 } })
 		client.sendNumber({
 			device: camera.name,

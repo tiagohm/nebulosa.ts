@@ -1,6 +1,7 @@
 import { expect, describe, test } from 'bun:test'
 // oxfmt-ignore
 import { CLIENT, type Client, DEFAULT_CAMERA, DEFAULT_COVER, DEFAULT_DOME, DEFAULT_FLAT_PANEL, DEFAULT_FOCUSER, DEFAULT_MOUNT, DEFAULT_POWER, DEFAULT_ROTATOR, DEFAULT_WHEEL, type Cover, type Device, type FlatPanel, type Focuser, type Power, type Rotator, type Wheel, DeviceInterfaceType, type Camera, isDome, type SafetyMonitor } from '../../../src/devices/indi/device'
+import { PI, PIOVERFOUR, PIOVERTWO, TAU } from '../../../src/core/constants'
 import { CameraManager, CoverManager, DomeManager, FlatPanelManager, FocuserManager, MountManager, PowerManager, RotatorManager, SafetyMonitorManager, WheelManager, type DeviceHandler } from '../../../src/devices/indi/manager'
 import type { DefLightVector, DefNumber, DefNumberVector, DefSwitch, DefSwitchVector, DefText, DefTextVector, SetLightVector } from '../../../src/devices/indi/types'
 
@@ -168,9 +169,9 @@ test('DomeManager maps motion, angular ranges, shutter, and measurements', () =>
 	manager.numberVector(recordingClient, position, 'defNumberVector')
 
 	expect(dome.canSetAzimuth).toBeTrue()
-	expect(dome.azimuth.value).toBeCloseTo(Math.PI / 2)
+	expect(dome.azimuth.value).toBeCloseTo(PIOVERTWO)
 	expect(dome.azimuth.min).toBe(0)
-	expect(dome.azimuth.max).toBeCloseTo(Math.PI * 2)
+	expect(dome.azimuth.max).toBeCloseTo(TAU)
 	expect(dome.moving).toBeFalse()
 	expect(dome.slewing).toBeFalse()
 
@@ -231,7 +232,9 @@ test('DomeManager sends capability-gated commands in INDI units', () => {
 	dome.canSetShutter = true
 	dome.canSlave = true
 	dome.canAbort = true
-	dome.azimuth.value = Math.PI / 2
+	dome.canSetSpeed = true
+	dome.hasBacklash = true
+	dome.azimuth.value = PIOVERTWO
 	manager.switchVector(
 		recordingClient,
 		{
@@ -280,10 +283,10 @@ test('DomeManager sends capability-gated commands in INDI units', () => {
 		'defSwitchVector',
 	)
 
-	manager.moveTo(dome, Math.PI * 3)
-	manager.moveToAltitude(dome, Math.PI / 6)
-	manager.moveBy(dome, -Math.PI / 6)
-	manager.syncTo(dome, Math.PI / 4)
+	manager.moveTo(dome, PI * 3)
+	manager.moveToAltitude(dome, PI / 6)
+	manager.moveBy(dome, -PI / 6)
+	manager.syncTo(dome, PIOVERFOUR)
 	manager.speed(dome, 2)
 	manager.backlashSteps(dome, 12)
 	manager.move(dome, 'CLOCKWISE', true)

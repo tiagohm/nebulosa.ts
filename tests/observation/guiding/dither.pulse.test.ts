@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { ASEC2RAD, DEG2RAD, SIDEREAL_RATE } from '../../../src/core/constants'
+import { ASEC2RAD, DEG2RAD, PIOVERTWO, SIDEREAL_RATE } from '../../../src/core/constants'
 import { flipGuidingCalibration, type GuidingCalibrationResult } from '../../../src/observation/guiding/calibrator'
 import type { DitherOffset } from '../../../src/observation/guiding/dither'
 import { type DitherGuideRateContext, ditherPulsePlanFromCalibration, ditherPulsePlanFromGuideRate } from '../../../src/observation/guiding/dither.pulse'
@@ -10,7 +10,7 @@ const MAX_DURATION = 10000
 
 function makeCalibration(raRate = RA_RATE_PX_PER_MS, decRate = DEC_RATE_PX_PER_MS): GuidingCalibrationResult {
 	const ra = { unitX: 1, unitY: 0, ratePxPerMs: raRate, totalTravelPx: 100, totalPulse: 100 / raRate, angle: 0, rmsOrthogonalResidualPx: 0, negativeProjectionCount: 0, direction: 'WEST' } as const
-	const dec = { unitX: 0, unitY: 1, ratePxPerMs: decRate, totalTravelPx: 80, totalPulse: 80 / decRate, angle: Math.PI / 2, rmsOrthogonalResidualPx: 0, negativeProjectionCount: 0, direction: 'NORTH' } as const
+	const dec = { unitX: 0, unitY: 1, ratePxPerMs: decRate, totalTravelPx: 80, totalPulse: 80 / decRate, angle: PIOVERTWO, rmsOrthogonalResidualPx: 0, negativeProjectionCount: 0, direction: 'NORTH' } as const
 	const [m00, m01, m10, m11] = [ra.unitX * raRate, dec.unitX * decRate, ra.unitY * raRate, dec.unitY * decRate]
 	const determinant = m00 * m11 - m01 * m10
 
@@ -152,14 +152,14 @@ describe('from guide rate', () => {
 	})
 
 	test('rejects a right ascension dither at the pole', () => {
-		const context = makeGuideRateContext({ declination: Math.PI / 2 })
+		const context = makeGuideRateContext({ declination: PIOVERTWO })
 
 		expect(ditherPulsePlanFromGuideRate(offset(1e-4, 0), context, MAX_DURATION)).toBeUndefined()
 		expect(ditherPulsePlanFromGuideRate(offset(1e-4, 0), makeGuideRateContext({ declination: 89.9999 * DEG2RAD }), MAX_DURATION)).toBeUndefined()
 	})
 
 	test('still dithers in declination at the pole', () => {
-		const plan = ditherPulsePlanFromGuideRate(offset(0, 1e-4), makeGuideRateContext({ declination: Math.PI / 2 }), MAX_DURATION)
+		const plan = ditherPulsePlanFromGuideRate(offset(0, 1e-4), makeGuideRateContext({ declination: PIOVERTWO }), MAX_DURATION)
 
 		expect(plan?.declination).toBeDefined()
 	})

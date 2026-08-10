@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test'
+import { PI, PIOVERFOUR, PIOVERTWO, TAU } from '../../../src/core/constants'
 import { plotBahtinovSpikes } from '../../../src/imaging/stars/bahtinov'
 import { colorIndexToRgbWeights } from '../../../src/imaging/stars/generator'
 
@@ -22,7 +23,7 @@ test('plotBahtinovSpikes encodes the requested signed central-line error', () =>
 		const raw = new Float64Array(width * height)
 		expect(
 			plotBahtinovSpikes(raw, width, height, 1, 50, 50, 100, error, undefined, {
-				normalAngles: [Math.PI / 4, 0, (Math.PI * 3) / 4],
+				normalAngles: [PIOVERFOUR, 0, (PI * 3) / 4],
 				central: 1,
 				fwhm: 1.5,
 				halfLength: 25,
@@ -52,7 +53,7 @@ test('plotBahtinovSpikes can render one spike while preserving full-pattern flux
 	const full = new Float64Array(width * height)
 	const combined = new Float64Array(width * height)
 	const options = {
-		normalAngles: [Math.PI / 5, Math.PI / 2, (Math.PI * 4) / 5] as const,
+		normalAngles: [PI / 5, PIOVERTWO, (TAU * 2) / 5] as const,
 		central: 1 as const,
 		fwhm: 2,
 		halfLength: 30,
@@ -74,7 +75,7 @@ test('plotBahtinovSpikes can render one spike while preserving full-pattern flux
 
 test('plotBahtinovSpikes does not renormalize a spike clipped along its length', () => {
 	const options = {
-		normalAngles: [Math.PI / 4, 0, (Math.PI * 3) / 4] as const,
+		normalAngles: [PIOVERFOUR, 0, (PI * 3) / 4] as const,
 		central: 1 as const,
 		fwhm: 2,
 		halfLength: 30,
@@ -131,7 +132,7 @@ test('plotBahtinovSpikes validates every spike before modifying the buffer', () 
 	const before = raw.slice()
 	expect(() =>
 		plotBahtinovSpikes(raw, 5, 5, 1, 2, 2, 10, 0, undefined, {
-			normalAngles: [0, Math.PI / 4, Math.PI / 2],
+			normalAngles: [0, PIOVERFOUR, PIOVERTWO],
 			halfLength: 500_000,
 			taperLength: 0,
 		}),
