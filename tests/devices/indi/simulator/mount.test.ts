@@ -4,9 +4,10 @@ import { PI, PIOVERTWO, TAU } from '../../../../src/core/constants'
 import { IndiClientHandlerSet } from '../../../../src/devices/indi/client'
 import { GuideOutputManager, MountManager } from '../../../../src/devices/indi/manager'
 import { ClientSimulator } from '../../../../src/devices/indi/simulator/client'
-import { SIDEREAL_DRIFT_RATE, SLEW_SPEED_FACTOR } from '../../../../src/devices/indi/simulator/constants'
+import { SIDEREAL_DRIFT_RATE, SLEW_RATES, SLEW_SPEED_FACTOR } from '../../../../src/devices/indi/simulator/constants'
 import { MountSimulator } from '../../../../src/devices/indi/simulator/mount'
 import { TRACKING_RATE_CALIBRATION_TEMPERATURE } from '../../../../src/devices/indi/simulator/mount.tracking'
+import type { SimulatorProperty } from '../../../../src/devices/indi/simulator/types'
 import { type Angle, arcsec, deg, hour, normalizeAngle, normalizePI, toArcsec, toDeg } from '../../../../src/math/units/angle'
 import { polarAlignmentError } from '../../../../src/observation/alignment/polaralignment'
 import { isTimeConsumingTestSkipped, waitUntil } from '../../../util'
@@ -267,6 +268,353 @@ describe.skipIf(SKIP)('mount simulator', () => {
 		expect(mount.parentId).toBeUndefined()
 		expect(JSON.stringify(guideOutput)).toContain('parentId')
 	}, 3000)
+})
+
+const FAST_FLIP_DURATION = PI / (SLEW_RATES.at(-1)!.speed * SLEW_SPEED_FACTOR)
+
+describe('mount simulator meridian flip', () => {
+	test('advertises and executes an explicit flip through the mount manager', () => {
+		const { manager, mount, simulator } = makeMeridianFlipMount('mount.flip.explicit')
+
+		try {
+			const lst = simulator.siderealTimeAt(simulator.utcTime)
+			simulator.syncTo(normalizeAngle(lst + hour(1)), deg(20))
+			simulator.setTrackingEnabled(true)
+			const coordinate = { rightAscension: simulator.rightAscension, declination: simulator.declination }
+			const wormPhase = simulator.wormPhase
+
+			expect(mount.canFlip).toBeTrue()
+			expect(mount.pierSide).toBe('WEST')
+			manager.flipTo(mount, coordinate.rightAscension, coordinate.declination)
+			expect(simulator.isSlewing).toBeTrue()
+			expect(mount.slewing).toBeTrue()
+
+			simulator.advance(FAST_FLIP_DURATION / 2)
+			expect(simulator.isSlewing).toBeTrue()
+			expect(simulator.pierSide).toBe('WEST')
+
+			simulator.advance(FAST_FLIP_DURATION / 2 + 1e-6)
+			expect(simulator.isSlewing).toBeFalse()
+			expect(mount.slewing).toBeFalse()
+			expect(simulator.pierSide).toBe('EAST')
+			expect(mount.pierSide).toBe('EAST')
+			expect(simulator.isTracking).toBeTrue()
+			expect(normalizePI(simulator.rightAscension - coordinate.rightAscension)).toBeCloseTo(0, 12)
+			expect(simulator.declination).toBeCloseTo(coordinate.declination, 12)
+			expect(simulator.wormPhase).not.toBe(wormPhase)
+
+			const returnTarget = { rightAscension: normalizeAngle(lst - hour(1)), declination: coordinate.declination + deg(5) }
+			manager.flipTo(mount, returnTarget.rightAscension, returnTarget.declination)
+			simulator.advance(FAST_FLIP_DURATION + 1e-6)
+			expect(simulator.pierSide).toBe('WEST')
+			expect(normalizePI(simulator.rightAscension - returnTarget.rightAscension)).toBeCloseTo(0, 12)
+			expect(simulator.declination).toBeCloseTo(returnTarget.declination, 12)
+
+			manager.flipTo(mount, simulator.rightAscension, simulator.declination)
+			simulator.advance(FAST_FLIP_DURATION / 2)
+			manager.stop(mount)
+			expect(simulator.isSlewing).toBeFalse()
+			expect(simulator.pierSide).toBe('WEST')
+			simulator.advance(FAST_FLIP_DURATION)
+			expect(simulator.pierSide).toBe('WEST')
+		} finally {
+			simulator.dispose()
+		}
+	})
+
+	test('uses virtual half-turn travel only when a goto changes pier side', () => {
+		const { simulator } = makeMeridianFlipMount('mount.flip.goto')
+
+		try {
+			const lst = simulator.siderealTimeAt(simulator.utcTime)
+			simulator.syncTo(normalizeAngle(lst + hour(1)), deg(20))
+			simulator.setTrackingEnabled(true)
+
+			const sameSideTarget = normalizeAngle(lst + hour(2))
+			simulator.goTo(sameSideTarget, deg(20))
+			simulator.advance(0.2)
+			expect(simulator.isSlewing).toBeFalse()
+			expect(simulator.pierSide).toBe('WEST')
+			expect(normalizePI(simulator.rightAscension - sameSideTarget)).toBeCloseTo(0, 12)
+
+			simulator.flipTo(simulator.rightAscension, simulator.declination)
+			simulator.advance(FAST_FLIP_DURATION + 1e-6)
+			expect(simulator.pierSide).toBe('EAST')
+			const currentTarget = { rightAscension: simulator.rightAscension, declination: simulator.declination }
+			simulator.goTo(currentTarget.rightAscension, currentTarget.declination)
+			simulator.advance(FAST_FLIP_DURATION / 2)
+			expect(simulator.isSlewing).toBeTrue()
+			expect(simulator.pierSide).toBe('EAST')
+			simulator.advance(FAST_FLIP_DURATION / 2 + 1e-6)
+			expect(simulator.isSlewing).toBeFalse()
+			expect(simulator.pierSide).toBe('WEST')
+			expect(normalizePI(simulator.rightAscension - currentTarget.rightAscension)).toBeCloseTo(0, 12)
+			expect(simulator.declination).toBeCloseTo(currentTarget.declination, 12)
+
+			const oppositeSideTarget = normalizeAngle(lst - hour(1))
+			simulator.goTo(oppositeSideTarget, deg(25))
+			simulator.advance(FAST_FLIP_DURATION / 2)
+			expect(simulator.isSlewing).toBeTrue()
+			expect(simulator.pierSide).toBe('WEST')
+
+			simulator.advance(FAST_FLIP_DURATION / 2 + 1e-6)
+			expect(simulator.isSlewing).toBeFalse()
+			expect(simulator.pierSide).toBe('EAST')
+			expect(normalizePI(simulator.rightAscension - oppositeSideTarget)).toBeCloseTo(0, 12)
+			expect(simulator.declination).toBeCloseTo(deg(25), 12)
+		} finally {
+			simulator.dispose()
+		}
+	})
+
+	test('commits pier-side flexure and trajectory only when the flip arrives', () => {
+		const { client, simulator } = makeMeridianFlipMount('mount.flip.flexure')
+
+		try {
+			client.sendSwitch({ device: simulator.name, name: 'SIMULATOR_ERROR_FEATURES', elements: { FLEXURE: true } })
+			client.sendNumber({ device: simulator.name, name: 'MOUNT_FLEXURE', elements: { TUBE_FLEXURE: 0, PIER_WEST_RA: 0, PIER_WEST_DEC: 90 } })
+			const lst = simulator.siderealTimeAt(simulator.utcTime)
+			simulator.syncTo(normalizeAngle(lst + hour(1)), deg(20))
+			const startTime = simulator.utcTime
+
+			expect(toArcsec(simulator.boresight.declination - simulator.mechanical.declination)).toBeCloseTo(90, 6)
+			simulator.flipTo(simulator.rightAscension, simulator.declination)
+			simulator.advance(FAST_FLIP_DURATION / 2)
+			expect(toArcsec(simulator.boresight.declination - simulator.mechanical.declination)).toBeCloseTo(90, 6)
+
+			simulator.advance(FAST_FLIP_DURATION / 2 + 1e-6)
+			expect(simulator.pierSide).toBe('EAST')
+			expect(toArcsec(simulator.boresight.declination - simulator.mechanical.declination)).toBeCloseTo(0, 6)
+			expect(simulator.boresightPathLength(startTime, simulator.utcTime)).toBeGreaterThan(arcsec(80))
+		} finally {
+			simulator.dispose()
+		}
+	})
+
+	test('keeps automatic flips disabled by default and triggers at signed thresholds', () => {
+		for (const thresholdDegrees of [-1, 0, 1]) {
+			const { client, simulator } = makeMeridianFlipMount(`mount.flip.auto.${thresholdDegrees}`)
+
+			try {
+				const initialHourAngleDegrees = Math.min(-0.1, thresholdDegrees - 0.1)
+				const lst = simulator.siderealTimeAt(simulator.utcTime)
+				simulator.syncTo(normalizeAngle(lst - deg(initialHourAngleDegrees)), deg(20))
+				simulator.setTrackingEnabled(true)
+				const secondsToThreshold = deg(thresholdDegrees - initialHourAngleDegrees + 0.01) / SIDEREAL_DRIFT_RATE
+
+				simulator.advance(secondsToThreshold)
+				expect(simulator.isSlewing).toBeFalse()
+				expect(simulator.pierSide).toBe('WEST')
+
+				simulator.syncTo(normalizeAngle(simulator.siderealTimeAt(simulator.utcTime) - deg(initialHourAngleDegrees)), deg(20))
+				client.sendNumber({ device: simulator.name, name: 'MOUNT_MERIDIAN_FLIP_SETTINGS', elements: { HOUR_ANGLE: thresholdDegrees } })
+				client.sendSwitch({ device: simulator.name, name: 'MOUNT_AUTO_MERIDIAN_FLIP', elements: { INDI_ENABLED: true } })
+				simulator.advance(secondsToThreshold)
+				expect(simulator.isSlewing).toBeTrue()
+				expect(simulator.pierSide).toBe('WEST')
+
+				simulator.advance(FAST_FLIP_DURATION + 1e-6)
+				expect(simulator.isSlewing).toBeFalse()
+				expect(simulator.pierSide).toBe('EAST')
+				simulator.advance(60)
+				expect(simulator.isSlewing).toBeFalse()
+			} finally {
+				simulator.dispose()
+			}
+		}
+	})
+
+	test('disarms an aborted automatic flip until target or toggle rearming', () => {
+		const { client, simulator } = makeMeridianFlipMount('mount.flip.auto.abort')
+
+		try {
+			let lst = simulator.siderealTimeAt(simulator.utcTime)
+			simulator.syncTo(normalizeAngle(lst + arcsec(30)), deg(20))
+			simulator.setTrackingEnabled(true)
+			client.sendSwitch({ device: simulator.name, name: 'MOUNT_AUTO_MERIDIAN_FLIP', elements: { INDI_ENABLED: true } })
+			simulator.advance(4)
+			expect(simulator.isSlewing).toBeTrue()
+
+			simulator.stop()
+			simulator.advance(1)
+			expect(simulator.isSlewing).toBeFalse()
+			expect(simulator.pierSide).toBe('WEST')
+
+			client.sendSwitch({ device: simulator.name, name: 'MOUNT_AUTO_MERIDIAN_FLIP', elements: { INDI_DISABLED: true } })
+			client.sendSwitch({ device: simulator.name, name: 'MOUNT_AUTO_MERIDIAN_FLIP', elements: { INDI_ENABLED: true } })
+			simulator.advance(0.1)
+			expect(simulator.isSlewing).toBeTrue()
+			simulator.stop()
+
+			lst = simulator.siderealTimeAt(simulator.utcTime)
+			simulator.syncTo(normalizeAngle(lst + deg(0.1)), deg(20))
+			simulator.advance(0.1)
+			simulator.advance(deg(0.2) / SIDEREAL_DRIFT_RATE)
+			expect(simulator.isSlewing).toBeTrue()
+			expect(simulator.pierSide).toBe('WEST')
+		} finally {
+			simulator.dispose()
+		}
+	})
+
+	test('requires tracking, an unparked mount, and a defined pier side for automatic flips', () => {
+		const { client, simulator } = makeMeridianFlipMount('mount.flip.auto.eligibility')
+
+		try {
+			let lst = simulator.siderealTimeAt(simulator.utcTime)
+			simulator.syncTo(normalizeAngle(lst + arcsec(30)), deg(20))
+			client.sendSwitch({ device: simulator.name, name: 'MOUNT_AUTO_MERIDIAN_FLIP', elements: { INDI_ENABLED: true } })
+			simulator.setTime({ utc: simulator.utcTime + 10_000, offset: 0 })
+			simulator.advance(0.1)
+			expect(simulator.isSlewing).toBeFalse()
+
+			simulator.setTrackingEnabled(true)
+			simulator.advance(0.1)
+			expect(simulator.isSlewing).toBeTrue()
+			simulator.stop()
+
+			simulator.syncTo(hour(5), PIOVERTWO)
+			client.sendSwitch({ device: simulator.name, name: 'MOUNT_AUTO_MERIDIAN_FLIP', elements: { INDI_DISABLED: true } })
+			client.sendSwitch({ device: simulator.name, name: 'MOUNT_AUTO_MERIDIAN_FLIP', elements: { INDI_ENABLED: true } })
+			simulator.advance(1)
+			expect(simulator.isSlewing).toBeFalse()
+
+			lst = simulator.siderealTimeAt(simulator.utcTime)
+			simulator.syncTo(normalizeAngle(lst + arcsec(30)), deg(20))
+			simulator.setPark()
+			simulator.park()
+			simulator.advance(0.1)
+			expect(simulator.isParked).toBeTrue()
+			simulator.setTime({ utc: simulator.utcTime + 10_000, offset: 0 })
+			simulator.advance(1)
+			expect(simulator.isSlewing).toBeFalse()
+			expect(simulator.pierSide).toBe('WEST')
+		} finally {
+			simulator.dispose()
+		}
+	})
+
+	test('rejects a pole flip with Alert and clears it on the next valid operation', () => {
+		const { handler, manager, mount, simulator } = makeMeridianFlipMount('mount.flip.alert')
+		let coordinateState: string | undefined = 'Idle'
+		handler.add({
+			numberVector: (_, message) => {
+				if (message.name === 'EQUATORIAL_EOD_COORD') coordinateState = message.state
+			},
+		})
+
+		try {
+			simulator.syncTo(hour(5), PIOVERTWO)
+			expect(simulator.pierSide).toBe('NEITHER')
+			manager.flipTo(mount, simulator.rightAscension, simulator.declination)
+			expect(simulator.isSlewing).toBeFalse()
+			expect(coordinateState).toBe('Alert')
+
+			const lst = simulator.siderealTimeAt(simulator.utcTime)
+			simulator.syncTo(normalizeAngle(lst + hour(1)), deg(20))
+			manager.flipTo(mount, simulator.rightAscension, PIOVERTWO)
+			expect(simulator.isSlewing).toBeFalse()
+			expect(coordinateState).toBe('Alert')
+
+			manager.flipTo(mount, simulator.rightAscension, simulator.declination)
+			expect(simulator.isSlewing).toBeTrue()
+			expect(coordinateState).toBe('Busy')
+		} finally {
+			simulator.dispose()
+		}
+	})
+
+	test('does not change pier side when only time, location, or an aborted replacement changes', () => {
+		const { client, simulator } = makeMeridianFlipMount('mount.flip.side.lifecycle')
+
+		try {
+			const lst = simulator.siderealTimeAt(simulator.utcTime)
+			simulator.syncTo(normalizeAngle(lst + hour(1)), deg(20))
+			expect(simulator.pierSide).toBe('WEST')
+
+			simulator.setTime({ utc: simulator.utcTime + 2 * 3600_000, offset: 0 })
+			client.sendNumber({ device: simulator.name, name: 'GEOGRAPHIC_COORD', elements: { LONG: 120 } })
+			expect(simulator.pierSide).toBe('WEST')
+
+			simulator.flipTo(simulator.rightAscension, simulator.declination)
+			simulator.advance(FAST_FLIP_DURATION / 2)
+			const replacement = normalizeAngle(simulator.siderealTimeAt(simulator.utcTime) + hour(1))
+			simulator.goTo(replacement, simulator.declination)
+			simulator.advance(2)
+			expect(simulator.pierSide).toBe('WEST')
+			expect(simulator.isSlewing).toBeFalse()
+		} finally {
+			simulator.dispose()
+		}
+	})
+
+	test('clears pending pier-side changes when manual, home, park, or disconnect supersedes a flip', () => {
+		const { simulator } = makeMeridianFlipMount('mount.flip.superseded')
+
+		try {
+			let lst = simulator.siderealTimeAt(simulator.utcTime)
+			simulator.syncTo(normalizeAngle(lst + hour(1)), deg(20))
+			simulator.flipTo(simulator.rightAscension, simulator.declination)
+			simulator.advance(FAST_FLIP_DURATION / 2)
+			simulator.moveEast(true)
+			simulator.moveEast(false)
+			simulator.advance(FAST_FLIP_DURATION)
+			expect(simulator.pierSide).toBe('WEST')
+
+			simulator.flipTo(simulator.rightAscension, simulator.declination)
+			simulator.advance(FAST_FLIP_DURATION / 2)
+			simulator.home()
+			simulator.advance(2)
+			expect(simulator.isHoming).toBeFalse()
+			expect(simulator.pierSide).toBe('NEITHER')
+
+			lst = simulator.siderealTimeAt(simulator.utcTime)
+			simulator.syncTo(normalizeAngle(lst + hour(1)), deg(20))
+			simulator.setPark()
+			simulator.syncTo(normalizeAngle(lst + hour(2)), deg(20))
+			simulator.flipTo(simulator.rightAscension, simulator.declination)
+			simulator.advance(FAST_FLIP_DURATION / 2)
+			simulator.park()
+			simulator.advance(2)
+			expect(simulator.isParked).toBeTrue()
+			expect(simulator.pierSide).toBe('WEST')
+
+			simulator.unpark()
+			simulator.flipTo(simulator.rightAscension, simulator.declination)
+			simulator.advance(FAST_FLIP_DURATION / 2)
+			simulator.disconnect()
+			simulator.advance(FAST_FLIP_DURATION)
+			expect(simulator.isConnected).toBeFalse()
+			expect(simulator.isSlewing).toBeFalse()
+			expect(simulator.pierSide).toBe('WEST')
+		} finally {
+			simulator.dispose()
+		}
+	})
+
+	test('persists automatic flip configuration without transient operation state', () => {
+		const saved: string[] = []
+		let savedProperties: readonly SimulatorProperty[] = []
+		const handler = new IndiClientHandlerSet()
+		using client = new ClientSimulator('mount.flip.persistence', handler)
+		using simulator = new MountSimulator('Mount Simulator', client, {
+			save(_, properties) {
+				savedProperties = properties
+				saved.push(...properties.map(({ name }) => name))
+			},
+		})
+
+		client.sendSwitch({ device: simulator.name, name: 'MOUNT_AUTO_MERIDIAN_FLIP', elements: { INDI_ENABLED: true } })
+		client.sendNumber({ device: simulator.name, name: 'MOUNT_MERIDIAN_FLIP_SETTINGS', elements: { HOUR_ANGLE: 3.5 } })
+		simulator.saveProperties()
+
+		expect(saved).toContain('MOUNT_AUTO_MERIDIAN_FLIP')
+		expect(saved).toContain('MOUNT_MERIDIAN_FLIP_SETTINGS')
+		expect(saved).not.toContain('ON_COORD_SET')
+		expect(saved).not.toContain('EQUATORIAL_EOD_COORD')
+		expect(savedProperties.find(({ name }) => name === 'MOUNT_AUTO_MERIDIAN_FLIP')?.elements.INDI_ENABLED.value).toBeTrue()
+		expect(savedProperties.find(({ name }) => name === 'MOUNT_MERIDIAN_FLIP_SETTINGS')?.elements.HOUR_ANGLE.value).toBe(3.5)
+	})
 })
 
 // The error model needs no timers, so it is covered without the time-consuming gate.
@@ -2323,6 +2671,18 @@ describe('mount simulator pointing errors', () => {
 		}
 	})
 })
+
+function makeMeridianFlipMount(id: string) {
+	const handler = new IndiClientHandlerSet()
+	const manager = new MountManager()
+	handler.add(manager)
+	const client = new ClientSimulator(id, handler)
+	const simulator = new MountSimulator('Mount Simulator', client)
+	const mount = manager.get(client, simulator.name)!
+	simulator.connect()
+	simulator.setSlewRate('SPEED_7')
+	return { client, handler, manager, mount, simulator }
+}
 
 function closeTo(a: number, b: number, tolerance: number) {
 	return Math.abs(a - b) <= tolerance
