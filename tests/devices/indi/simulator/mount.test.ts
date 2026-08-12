@@ -424,7 +424,7 @@ describe('mount simulator meridian flip', () => {
 		}
 	})
 
-	test('disarms an aborted automatic flip until target or toggle rearming', () => {
+	test('disarms an aborted automatic flip until target or explicit enable rearming', () => {
 		const { client, simulator } = makeMeridianFlipMount('mount.flip.auto.abort')
 
 		try {
@@ -440,7 +440,6 @@ describe('mount simulator meridian flip', () => {
 			expect(simulator.isSlewing).toBeFalse()
 			expect(simulator.pierSide).toBe('WEST')
 
-			client.sendSwitch({ device: simulator.name, name: 'MOUNT_AUTO_MERIDIAN_FLIP', elements: { INDI_DISABLED: true } })
 			client.sendSwitch({ device: simulator.name, name: 'MOUNT_AUTO_MERIDIAN_FLIP', elements: { INDI_ENABLED: true } })
 			simulator.advance(0.1)
 			expect(simulator.isSlewing).toBeTrue()

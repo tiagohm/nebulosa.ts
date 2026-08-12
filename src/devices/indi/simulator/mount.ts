@@ -1818,10 +1818,10 @@ export class MountSimulator extends DeviceSimulator {
 	// Enables or disables autonomous Meridian Flip triggering and rearms it on every explicit enable.
 	#setAutomaticFlipEnabled(enabled: boolean) {
 		const selected = enabled ? 'INDI_ENABLED' : 'INDI_DISABLED'
-		if (!selectOnSwitch(this.#autoMeridianFlip, selected)) return
+		const changed = selectOnSwitch(this.#autoMeridianFlip, selected)
 
 		if (enabled) this.#automaticFlipArmed = true
-		this.notify(this.#autoMeridianFlip)
+		if (changed) this.notify(this.#autoMeridianFlip)
 	}
 
 	// Starts one autonomous WEST-to-EAST flip after the configured signed hour-angle threshold.
