@@ -652,14 +652,17 @@ export class MountSimulator extends DeviceSimulator {
 
 				return
 			}
-			case 'GEOGRAPHIC_COORD':
+			case 'GEOGRAPHIC_COORD': {
+				const hourAngle = normalizePI(this.#siderealTime() - this.rightAscension)
 				if (applyNumberVectorValues(this.#geographicCoordinate, vector.elements)) {
+					this.#shiftAutomaticFlipHourAngle(normalizePI(this.#siderealTime() - this.rightAscension - hourAngle))
 					// Alignment and flexure depend on the site and can move the optical axis immediately even
 					// though the mechanics have not advanced. Preserve that change as a trajectory step.
 					this.#recordBoresight()
 					this.notify(this.#geographicCoordinate)
 				}
 				return
+			}
 			case 'MOUNT_MERIDIAN_FLIP_SETTINGS':
 				if (applyNumberVectorValues(this.#meridianFlipSettings, vector.elements)) this.notify(this.#meridianFlipSettings)
 				return
@@ -674,16 +677,19 @@ export class MountSimulator extends DeviceSimulator {
 				if (vector.elements.TIMED_GUIDE_W !== undefined && vector.elements.TIMED_GUIDE_W >= 0) this.pulse('WEST', vector.elements.TIMED_GUIDE_W)
 				else if (vector.elements.TIMED_GUIDE_E !== undefined && vector.elements.TIMED_GUIDE_E >= 0) this.pulse('EAST', vector.elements.TIMED_GUIDE_E)
 				return
-			case 'MOUNT_ALIGNMENT':
+			case 'MOUNT_ALIGNMENT': {
+				const hourAngle = normalizePI(this.#siderealTime() - this.rightAscension)
 				if (applyNumberVectorValues(this.#alignment, vector.elements)) {
 					// The index errors sit between the axes and what the controller reports, and the reported
 					// coordinate is derived once and cached. Changing them has to re-derive it: the telescope
 					// has not moved, but what the mount believes about it just changed.
 					this.#refreshReportedCoordinate()
+					this.#shiftAutomaticFlipHourAngle(normalizePI(this.#siderealTime() - this.rightAscension - hourAngle))
 					this.#recordBoresight()
 					this.notify(this.#alignment)
 				}
 				return
+			}
 			case 'MOUNT_PERIODIC_ERROR':
 				if (applyNumberVectorValues(this.#periodicError, vector.elements)) {
 					this.#refreshPeriodicError()
@@ -1911,6 +1917,14 @@ export class MountSimulator extends DeviceSimulator {
 	#resetAutomaticFlipHourAngle(time: number = this.#utcTime) {
 		this.#automaticFlipHourAngle = normalizePI(this.siderealTimeAt(time) - this.rightAscension)
 		this.#automaticFlipMaximumHourAngle = this.#automaticFlipHourAngle
+	}
+
+	// Shifts the retained automatic-flip policy into a changed reported-coordinate frame.
+	// `delta` is the signed change in reported hour angle, in radians normalized to -PI..PI. Applying it
+	// to both the live value and its maximum preserves crossings accumulated before the frame changed.
+	#shiftAutomaticFlipHourAngle(delta: Angle) {
+		this.#automaticFlipHourAngle += delta
+		this.#automaticFlipMaximumHourAngle += delta
 	}
 
 	// Starts one autonomous WEST-to-EAST flip after the configured signed hour-angle threshold.

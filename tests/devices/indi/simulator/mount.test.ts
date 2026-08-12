@@ -703,6 +703,33 @@ describe('mount simulator meridian flip', () => {
 		}
 	})
 
+	test('shifts automatic flip policy with longitude and right ascension index changes', () => {
+		for (const frame of ['longitude', 'index'] as const) {
+			const { client, simulator } = makeMeridianFlipMount(`mount.flip.auto.frame.${frame}`)
+
+			try {
+				if (frame === 'index') {
+					client.sendSwitch({ device: simulator.name, name: 'SIMULATOR_ERROR_FEATURES', elements: { ALIGNMENT: true } })
+					client.sendNumber({ device: simulator.name, name: 'MOUNT_ALIGNMENT', elements: { ...NO_ALIGNMENT } })
+				}
+
+				const lst = simulator.siderealTimeAt(simulator.utcTime)
+				simulator.syncTo(normalizeAngle(lst + deg(0.5)), deg(20))
+				simulator.setTrackingEnabled(true)
+				client.sendSwitch({ device: simulator.name, name: 'MOUNT_AUTO_MERIDIAN_FLIP', elements: { INDI_ENABLED: true } })
+
+				if (frame === 'longitude') client.sendNumber({ device: simulator.name, name: 'GEOGRAPHIC_COORD', elements: { LONG: 1 } })
+				else client.sendNumber({ device: simulator.name, name: 'MOUNT_ALIGNMENT', elements: { RA_INDEX_ERROR: -3600 } })
+				simulator.advance(0.1)
+
+				expect(simulator.isSlewing).toBeTrue()
+				expect(simulator.pierSide).toBe('WEST')
+			} finally {
+				simulator.dispose()
+			}
+		}
+	})
+
 	test('disarms an aborted automatic flip until target or explicit enable rearming', () => {
 		const { client, simulator } = makeMeridianFlipMount('mount.flip.auto.abort')
 
