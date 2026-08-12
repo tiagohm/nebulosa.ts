@@ -1365,7 +1365,7 @@ export class MountSimulator extends DeviceSimulator {
 		if (!this.isConnected) return
 
 		const automaticFlipStartHourAngle =
-			this.#autoMeridianFlip.elements.INDI_ENABLED.value && this.#automaticFlipArmed && this.isTracking && !this.isParked && !this.isSlewing && !this.isHoming && !this.isParking && this.pierSide === 'WEST' ? normalizePI(this.siderealTimeAt(startTime) - this.#mechanical.rightAscension) : undefined
+			this.#autoMeridianFlip.elements.INDI_ENABLED.value && this.#automaticFlipArmed && this.isTracking && !this.isParked && !this.isSlewing && !this.isHoming && !this.isParking && this.pierSide === 'WEST' ? normalizePI(this.siderealTimeAt(startTime) - this.rightAscension) : undefined
 		this.#automaticFlipHourAngleTravel = 0
 		this.#automaticFlipMaximumHourAngleTravel = 0
 
@@ -1869,7 +1869,7 @@ export class MountSimulator extends DeviceSimulator {
 		if (!this.#autoMeridianFlip.elements.INDI_ENABLED.value) return
 
 		const threshold = deg(this.#meridianFlipSettings.elements.HOUR_ANGLE.value)
-		const hourAngle = normalizePI(this.#siderealTime() - this.#mechanical.rightAscension)
+		const hourAngle = normalizePI(this.#siderealTime() - this.rightAscension)
 		const reachedThreshold = startHourAngle === undefined ? hourAngle >= threshold : startHourAngle >= threshold || startHourAngle + maximumHourAngleTravel >= threshold
 
 		if (!reachedThreshold) {
