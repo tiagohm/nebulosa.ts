@@ -1530,7 +1530,7 @@ export class MountSimulator extends DeviceSimulator {
 		const deltaRightAscension = normalizePI(target.rightAscension - this.#mechanical.rightAscension)
 		const deltaDeclination = target.declination - this.#mechanical.declination
 		const rightAscensionMotorDelta = this.#flipDirection === 0 ? deltaRightAscension : this.#flipDirection * (Math.abs(deltaRightAscension) + this.#flipTravelRemaining)
-		const declinationMotorDelta = this.#flipDeclinationDirection === 0 ? deltaDeclination : this.#flipDeclinationDirection * this.#flipDeclinationTravelRemaining
+		const declinationMotorDelta = this.#flipDeclinationDirection === 0 ? deltaDeclination * declinationShaftFrameSign(this.pierSide) : this.#flipDeclinationDirection * this.#flipDeclinationTravelRemaining
 		const span = Math.max(Math.abs(rightAscensionMotorDelta), Math.abs(declinationMotorDelta))
 		if (span === 0) return [0, 0]
 
@@ -1558,7 +1558,7 @@ export class MountSimulator extends DeviceSimulator {
 		const flipDeclinationTravelRemaining = this.#flipDeclinationTravelRemaining
 		const flipDeclinationDirection = this.#flipDeclinationDirection
 		const rightAscensionMotorDelta = flipDirection === 0 ? deltaRightAscension : flipDirection * (Math.abs(deltaRightAscension) + flipTravelRemaining)
-		const declinationMotorDelta = flipDeclinationDirection === 0 ? deltaDeclination : flipDeclinationDirection * flipDeclinationTravelRemaining
+		const declinationMotorDelta = flipDeclinationDirection === 0 ? deltaDeclination * declinationShaftFrameSign(this.pierSide) : flipDeclinationDirection * flipDeclinationTravelRemaining
 		const span = Math.max(Math.abs(rightAscensionMotorDelta), Math.abs(declinationMotorDelta))
 
 		// A slew drives the axes directly rather than through the transmission model, since backlash is
@@ -1739,13 +1739,15 @@ export class MountSimulator extends DeviceSimulator {
 	// motor exactly cancels that drift.
 	#advanceFreeMotion(dtSeconds: number) {
 		const rightAscensionMotorRate = this.#rightAscensionMotorRate()
-		let declinationMotorRate = 0
+		let declinationCelestialRate = 0
 
-		if (this.#manualNorthSouth !== 0) declinationMotorRate += this.#manualNorthSouth * this.#manualSlewSpeed()
-		declinationMotorRate += this.#guideRateNorthSouth
+		if (this.#manualNorthSouth !== 0) declinationCelestialRate += this.#manualNorthSouth * this.#manualSlewSpeed()
+		declinationCelestialRate += this.#guideRateNorthSouth
 
+		const declinationFrameSign = declinationShaftFrameSign(this.pierSide)
 		const rightAscensionStep = advanceMechanicalAxis(this.#rightAscensionAxis, rightAscensionMotorRate, dtSeconds, this.#rightAscensionTransmission)
-		const declinationStep = advanceMechanicalAxis(this.#declinationAxis, declinationMotorRate, dtSeconds, this.#declinationTransmission)
+		const declinationShaftStep = advanceMechanicalAxis(this.#declinationAxis, declinationCelestialRate * declinationFrameSign, dtSeconds, this.#declinationTransmission)
+		const declinationStep = declinationShaftStep * declinationFrameSign
 		const rightAscensionDelta = SIDEREAL_DRIFT_RATE * dtSeconds + rightAscensionStep
 		this.#automaticFlipHourAngleTravel -= rightAscensionStep
 		this.#automaticFlipMaximumHourAngleTravel = Math.max(this.#automaticFlipMaximumHourAngleTravel, this.#automaticFlipHourAngleTravel)
@@ -2084,4 +2086,10 @@ export class MountSimulator extends DeviceSimulator {
 function declinationShaftAngle(pierSide: PierSide, declination: Angle) {
 	if (pierSide === 'WEST') return declination
 	return declination >= 0 ? PI - declination : -PI - declination
+}
+
+// Gives the sign converting celestial declination motion to physical shaft motion on one pier side.
+// EAST reverses the shaft direction; WEST and the pole-neutral state preserve it.
+function declinationShaftFrameSign(pierSide: PierSide): AxisDirection {
+	return pierSide === 'EAST' ? -1 : 1
 }

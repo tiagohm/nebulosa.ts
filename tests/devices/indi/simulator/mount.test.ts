@@ -417,6 +417,40 @@ describe('mount simulator meridian flip', () => {
 		}
 	})
 
+	test('guides declination through the transmission shaft frame after a flip', () => {
+		function flippedMount(id: string) {
+			const setup = makeMeridianFlipMount(id)
+			const { client, simulator } = setup
+			client.sendSwitch({ device: simulator.name, name: 'SIMULATOR_ERROR_FEATURES', elements: { MECHANICS: true } })
+			client.sendNumber({ device: simulator.name, name: 'MOUNT_MECHANICS', elements: { ...NO_MECHANICS, BACKLASH_DEC: 60 } })
+			simulator.setGuideRate(1, 1)
+			const lst = simulator.siderealTimeAt(simulator.utcTime)
+			simulator.syncTo(normalizeAngle(lst + hour(1)), deg(20))
+			simulator.flipTo(simulator.rightAscension, simulator.declination)
+			simulator.advance(FAST_FLIP_DURATION + 1e-6)
+			expect(simulator.pierSide).toBe('EAST')
+			return setup
+		}
+
+		const north = flippedMount('mount.flip.guide.north')
+		const south = flippedMount('mount.flip.guide.south')
+
+		try {
+			const northStart = north.simulator.mechanical.declination
+			north.simulator.pulse('NORTH', 1000)
+			north.simulator.advance(1)
+			expect(north.simulator.mechanical.declination).toBe(northStart)
+
+			const southStart = south.simulator.mechanical.declination
+			south.simulator.pulse('SOUTH', 1000)
+			south.simulator.advance(1)
+			expect(south.simulator.mechanical.declination).toBeLessThan(southStart)
+		} finally {
+			north.simulator.dispose()
+			south.simulator.dispose()
+		}
+	})
+
 	test('keeps automatic flips disabled by default and triggers at signed thresholds', () => {
 		for (const thresholdDegrees of [-1, 0, 1]) {
 			const { client, simulator } = makeMeridianFlipMount(`mount.flip.auto.${thresholdDegrees}`)
