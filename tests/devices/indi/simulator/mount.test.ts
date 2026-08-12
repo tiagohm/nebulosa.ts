@@ -354,17 +354,42 @@ describe('mount simulator meridian flip', () => {
 			expect(simulator.declination).toBeCloseTo(currentTarget.declination, 12)
 
 			const oppositeSideTarget = normalizeAngle(lst - hour(1))
-			const oppositeSideDuration = (PI + Math.abs(normalizePI(oppositeSideTarget - simulator.mechanical.rightAscension))) / FAST_SLEW_SPEED
+			const oppositeSideDuration = Math.abs(PI + normalizePI(oppositeSideTarget - simulator.mechanical.rightAscension)) / FAST_SLEW_SPEED
 			simulator.goTo(oppositeSideTarget, deg(25))
-			simulator.advance(FAST_FLIP_DURATION + 1e-6)
+			simulator.advance(oppositeSideDuration / 2)
 			expect(simulator.isSlewing).toBeTrue()
 			expect(simulator.pierSide).toBe('WEST')
 
-			simulator.advance(oppositeSideDuration - FAST_FLIP_DURATION + 1e-6)
+			simulator.advance(oppositeSideDuration / 2 + 1e-6)
 			expect(simulator.isSlewing).toBeFalse()
 			expect(simulator.pierSide).toBe('EAST')
 			expect(normalizePI(simulator.rightAscension - oppositeSideTarget)).toBeCloseTo(0, 12)
 			expect(simulator.declination).toBeCloseTo(deg(25), 12)
+		} finally {
+			simulator.dispose()
+		}
+	})
+
+	test('composes opposite celestial and flip travel on the right ascension shaft', () => {
+		const { simulator } = makeMeridianFlipMount('mount.flip.goto.composed')
+
+		try {
+			const lst = simulator.siderealTimeAt(simulator.utcTime)
+			simulator.syncTo(normalizeAngle(lst + deg(15)), deg(20))
+			simulator.setTrackingEnabled(true)
+			simulator.setSlewRate('SPEED_7')
+
+			const target = normalizeAngle(lst - deg(15))
+			const duration = deg(150) / FAST_SLEW_SPEED
+			simulator.goTo(target, simulator.declination)
+			simulator.advance(duration - 1e-6)
+			expect(simulator.isSlewing).toBeTrue()
+			expect(simulator.pierSide).toBe('WEST')
+
+			simulator.advance(2e-6)
+			expect(simulator.isSlewing).toBeFalse()
+			expect(simulator.pierSide).toBe('EAST')
+			expect(normalizePI(simulator.rightAscension - target)).toBeCloseTo(0, 8)
 		} finally {
 			simulator.dispose()
 		}

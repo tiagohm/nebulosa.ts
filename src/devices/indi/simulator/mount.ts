@@ -1057,9 +1057,10 @@ export class MountSimulator extends DeviceSimulator {
 	// PI-radian RA half-turn and maps declination through the destination shaft frame, exactly as the live
 	// slew state initialized by `#startCoordinateSlew` does.
 	#coordinateSlewDuration(target: EquatorialCoordinate, targetPierSide: PierSide) {
-		const deltaRightAscension = Math.abs(normalizePI(target.rightAscension - this.#mechanical.rightAscension))
+		const deltaRightAscension = normalizePI(target.rightAscension - this.#mechanical.rightAscension)
 		const changesPierSide = this.pierSide !== 'NEITHER' && targetPierSide !== 'NEITHER' && targetPierSide !== this.pierSide
-		const rightAscensionTravel = deltaRightAscension + (changesPierSide ? PI : 0)
+		const flipDirection = targetPierSide === 'EAST' ? 1 : -1
+		const rightAscensionTravel = Math.abs(deltaRightAscension + (changesPierSide ? flipDirection * PI : 0))
 		const declinationTravel = changesPierSide ? Math.abs(normalizePI(declinationShaftAngle(targetPierSide, target.declination) - declinationShaftAngle(this.pierSide, this.#mechanical.declination))) : Math.abs(target.declination - this.#mechanical.declination)
 		return Math.max(rightAscensionTravel, declinationTravel) / (this.#manualSlewSpeed() * SLEW_SPEED_FACTOR)
 	}
@@ -1573,7 +1574,7 @@ export class MountSimulator extends DeviceSimulator {
 		// `#advanceSlew`, which does use the axes, correctly finds nothing to travel.
 		const deltaRightAscension = normalizePI(target.rightAscension - this.#mechanical.rightAscension)
 		const deltaDeclination = target.declination - this.#mechanical.declination
-		const rightAscensionMotorDelta = this.#flipDirection === 0 ? deltaRightAscension : this.#flipDirection * (Math.abs(deltaRightAscension) + this.#flipTravelRemaining)
+		const rightAscensionMotorDelta = deltaRightAscension + this.#flipDirection * this.#flipTravelRemaining
 		const declinationMotorDelta = this.#flipDeclinationDirection === 0 ? deltaDeclination * declinationShaftFrameSign(this.pierSide) : this.#flipDeclinationDirection * this.#flipDeclinationTravelRemaining
 		const span = Math.max(Math.abs(rightAscensionMotorDelta), Math.abs(declinationMotorDelta))
 		if (span === 0) return [0, 0]
@@ -1602,7 +1603,7 @@ export class MountSimulator extends DeviceSimulator {
 		const flipDirection = this.#flipDirection
 		const flipDeclinationTravelRemaining = this.#flipDeclinationTravelRemaining
 		const flipDeclinationDirection = this.#flipDeclinationDirection
-		const rightAscensionMotorDelta = flipDirection === 0 ? deltaRightAscension : flipDirection * (Math.abs(deltaRightAscension) + flipTravelRemaining)
+		const rightAscensionMotorDelta = deltaRightAscension + flipDirection * flipTravelRemaining
 		const declinationMotorDelta = flipDeclinationDirection === 0 ? deltaDeclination * declinationShaftFrameSign(this.pierSide) : flipDeclinationDirection * flipDeclinationTravelRemaining
 		const span = Math.max(Math.abs(rightAscensionMotorDelta), Math.abs(declinationMotorDelta))
 
@@ -1619,7 +1620,7 @@ export class MountSimulator extends DeviceSimulator {
 		const travelled = span > 0 ? Math.min(1, maxStep / span) : 0
 		const flipTravel = flipTravelRemaining * travelled
 		const flipDeclinationTravel = flipDeclinationTravelRemaining * travelled
-		const rightAscensionMotorTravel = flipDirection === 0 ? deltaRightAscension * travelled : flipDirection * (Math.abs(deltaRightAscension) * travelled + flipTravel)
+		const rightAscensionMotorTravel = deltaRightAscension * travelled + flipDirection * flipTravel
 		const declinationMotorTravel = declinationMotorDelta * travelled
 		driveMechanicalAxis(this.#rightAscensionAxis, Math.sign(rightAscensionMotorTravel) as AxisDirection, Math.abs(rightAscensionMotorTravel), this.#rightAscensionTransmission)
 		driveMechanicalAxis(this.#declinationAxis, Math.sign(declinationMotorTravel) as AxisDirection, Math.abs(declinationMotorTravel), this.#declinationTransmission)
