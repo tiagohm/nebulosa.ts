@@ -1080,6 +1080,7 @@ export class MountSimulator extends DeviceSimulator {
 	// instead, as a configured quantity rather than a side effect of syncing.
 	syncTo(rightAscension: Angle, declination: Angle) {
 		if (!this.isConnected) return
+		const pierSide = this.pierSide
 		this.#abortSlew()
 		this.#setSlewing(false)
 		this.#setHoming(false)
@@ -1088,6 +1089,10 @@ export class MountSimulator extends DeviceSimulator {
 		// A sync is also how this simulator places the axes, so it is one of the moments the side of the
 		// pier is decided rather than inherited.
 		this.#refreshPierSide()
+		// Declination motor directions are expressed in the shaft frame, whose sign reverses with the
+		// pier side. A sync is a discontinuous placement rather than motion through that reversal, so no
+		// previously loaded flank, open backlash, or pending stiction command is meaningful afterwards.
+		if (this.pierSide !== pierSide) clearMechanicalAxis(this.#declinationAxis)
 		this.#resetAutomaticFlipHourAngle()
 		// A sync is a discontinuity rather than motion, so the recorded past no longer describes where
 		// this telescope has been. Keeping it would let an exposure straddling the sync integrate a jump
