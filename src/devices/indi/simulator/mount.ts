@@ -1037,7 +1037,8 @@ export class MountSimulator extends DeviceSimulator {
 
 	// Gives a coordinate slew exclusive control of both axes and initializes its pier-side travel.
 	// `target` is a mechanical equatorial coordinate in radians. When `changesPierSide` is true, the
-	// virtual PI-radian dimension advances alongside the celestial axes and controls the minimum duration.
+	// virtual PI-radian half-turn is added to the physical RA-axis travel while both celestial axes
+	// advance proportionally towards the target.
 	#startCoordinateSlew(mode: 'GOTO' | 'FLIP', target: EquatorialCoordinate, targetPierSide: PierSide, changesPierSide: boolean, automatic: boolean) {
 		this.#clearManualMotion()
 		this.#clearPulseGuide()
@@ -1498,8 +1499,8 @@ export class MountSimulator extends DeviceSimulator {
 	}
 
 	// Signed rates of both axes during a slew, in radians per second. The step is normalized by the
-	// largest celestial or virtual flip delta, so every component arrives together and the longest
-	// one runs at the full slew speed.
+	// combined physical RA-axis travel or the declination delta, whichever is larger, so neither motor
+	// exceeds the selected slew speed and both axes arrive together.
 	#slewAxisRates(): readonly [number, number] {
 		const target = this.#slewTarget
 		if (!target) return [0, 0]
@@ -1513,7 +1514,7 @@ export class MountSimulator extends DeviceSimulator {
 		const deltaRightAscension = normalizePI(target.rightAscension - this.#mechanical.rightAscension)
 		const deltaDeclination = target.declination - this.#mechanical.declination
 		const rightAscensionMotorDelta = this.#flipDirection === 0 ? deltaRightAscension : this.#flipDirection * (Math.abs(deltaRightAscension) + this.#flipTravelRemaining)
-		const span = Math.max(Math.abs(deltaRightAscension), Math.abs(deltaDeclination), this.#flipTravelRemaining)
+		const span = Math.max(Math.abs(rightAscensionMotorDelta), Math.abs(deltaDeclination))
 		if (span === 0) return [0, 0]
 
 		const scale = speed / span
@@ -1537,7 +1538,8 @@ export class MountSimulator extends DeviceSimulator {
 		const deltaDeclination = target.declination - this.#mechanical.declination
 		const flipTravelRemaining = this.#flipTravelRemaining
 		const flipDirection = this.#flipDirection
-		const span = Math.max(Math.abs(deltaRightAscension), Math.abs(deltaDeclination), flipTravelRemaining)
+		const rightAscensionMotorDelta = flipDirection === 0 ? deltaRightAscension : flipDirection * (Math.abs(deltaRightAscension) + flipTravelRemaining)
+		const span = Math.max(Math.abs(rightAscensionMotorDelta), Math.abs(deltaDeclination))
 
 		// A slew drives the axes directly rather than through the transmission model, since backlash is
 		// negligible against a slew and its own dynamics belong with the slew profile. The travel is still
@@ -1583,7 +1585,6 @@ export class MountSimulator extends DeviceSimulator {
 			// overshoot.
 			if (span > 0) {
 				const severity = this.#manualSlewSpeed() / SLEW_RATES.at(-1)!.speed
-				const rightAscensionMotorDelta = flipDirection === 0 ? deltaRightAscension : flipDirection * (Math.abs(deltaRightAscension) + flipTravelRemaining)
 				const rightAscensionShare = clamp(rightAscensionMotorDelta / span, -1, 1)
 				exciteSettling(this.#rightAscensionSettling, severity * rightAscensionShare, this.#settlingConfig)
 				exciteSettling(this.#declinationSettling, (severity * deltaDeclination) / span, this.#settlingConfig)

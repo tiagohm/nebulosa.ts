@@ -270,7 +270,8 @@ describe.skipIf(SKIP)('mount simulator', () => {
 	}, 3000)
 })
 
-const FAST_FLIP_DURATION = PI / (SLEW_RATES.at(-1)!.speed * SLEW_SPEED_FACTOR)
+const FAST_SLEW_SPEED = SLEW_RATES.at(-1)!.speed * SLEW_SPEED_FACTOR
+const FAST_FLIP_DURATION = PI / FAST_SLEW_SPEED
 
 describe('mount simulator meridian flip', () => {
 	test('advertises and executes an explicit flip through the mount manager', () => {
@@ -304,8 +305,9 @@ describe('mount simulator meridian flip', () => {
 			expect(simulator.wormPhase).not.toBe(wormPhase)
 
 			const returnTarget = { rightAscension: normalizeAngle(lst - hour(1)), declination: coordinate.declination + deg(5) }
+			const returnDuration = (PI + Math.abs(normalizePI(returnTarget.rightAscension - simulator.mechanical.rightAscension))) / FAST_SLEW_SPEED
 			manager.flipTo(mount, returnTarget.rightAscension, returnTarget.declination)
-			simulator.advance(FAST_FLIP_DURATION + 1e-6)
+			simulator.advance(returnDuration + 1e-6)
 			expect(simulator.pierSide).toBe('WEST')
 			expect(normalizePI(simulator.rightAscension - returnTarget.rightAscension)).toBeCloseTo(0, 12)
 			expect(simulator.declination).toBeCloseTo(returnTarget.declination, 12)
@@ -352,12 +354,13 @@ describe('mount simulator meridian flip', () => {
 			expect(simulator.declination).toBeCloseTo(currentTarget.declination, 12)
 
 			const oppositeSideTarget = normalizeAngle(lst - hour(1))
+			const oppositeSideDuration = (PI + Math.abs(normalizePI(oppositeSideTarget - simulator.mechanical.rightAscension))) / FAST_SLEW_SPEED
 			simulator.goTo(oppositeSideTarget, deg(25))
-			simulator.advance(FAST_FLIP_DURATION / 2)
+			simulator.advance(FAST_FLIP_DURATION + 1e-6)
 			expect(simulator.isSlewing).toBeTrue()
 			expect(simulator.pierSide).toBe('WEST')
 
-			simulator.advance(FAST_FLIP_DURATION / 2 + 1e-6)
+			simulator.advance(oppositeSideDuration - FAST_FLIP_DURATION + 1e-6)
 			expect(simulator.isSlewing).toBeFalse()
 			expect(simulator.pierSide).toBe('EAST')
 			expect(normalizePI(simulator.rightAscension - oppositeSideTarget)).toBeCloseTo(0, 12)
