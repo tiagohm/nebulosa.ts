@@ -1122,7 +1122,7 @@ export class MountSimulator extends DeviceSimulator {
 		if (!this.isConnected) return
 		const pierSide = this.pierSide
 		this.#abortSlew()
-		this.#setSlewing(false)
+		this.#refreshSlewingState()
 		this.#setHoming(false)
 		this.#setParking(false)
 		this.#setMechanical(rightAscension - this.#indexErrorRightAscension, declination - this.#indexErrorDeclination)

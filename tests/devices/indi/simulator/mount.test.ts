@@ -274,6 +274,27 @@ const FAST_SLEW_SPEED = SLEW_RATES.at(-1)!.speed * SLEW_SPEED_FACTOR
 const FAST_FLIP_DURATION = PI / FAST_SLEW_SPEED
 
 describe('mount simulator meridian flip', () => {
+	test('keeps manual motion Busy across a sync', () => {
+		const { simulator } = makeMeridianFlipMount('mount.sync.manual')
+
+		try {
+			simulator.setSlewRate('SPEED_7')
+			simulator.moveEast(true)
+			expect(simulator.isSlewing).toBeTrue()
+
+			simulator.syncTo(hour(5), deg(20))
+			const synced = simulator.mechanical.rightAscension
+			expect(simulator.isSlewing).toBeTrue()
+			simulator.advance(0.1)
+			expect(normalizePI(simulator.mechanical.rightAscension - synced)).toBeGreaterThan(0)
+
+			simulator.moveEast(false)
+			expect(simulator.isSlewing).toBeFalse()
+		} finally {
+			simulator.dispose()
+		}
+	})
+
 	test('advertises and executes an explicit flip through the mount manager', () => {
 		const { manager, mount, simulator } = makeMeridianFlipMount('mount.flip.explicit')
 
