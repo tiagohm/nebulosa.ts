@@ -971,14 +971,17 @@ export class MountSimulator extends DeviceSimulator {
 				if (vector.elements.INDI_ENABLED === true) this.#setAutomaticFlipEnabled(true)
 				else if (vector.elements.INDI_DISABLED === true) this.#setAutomaticFlipEnabled(false)
 				return
-			case 'SIMULATOR_ERROR_FEATURES':
+			case 'SIMULATOR_ERROR_FEATURES': {
+				const hourAngle = normalizePI(this.#siderealTime() - this.rightAscension)
 				if (applyMultiSwitchValues(this.#errorFeatures, vector.elements)) {
 					// Every cached configuration is gated by one of these, so they all have to be rebuilt
 					// rather than only the one whose switch moved.
 					this.#refreshErrorConfigurations()
+					this.#shiftAutomaticFlipHourAngle(normalizePI(this.#siderealTime() - this.rightAscension - hourAngle))
 					this.notify(this.#errorFeatures)
 				}
 				return
+			}
 			case 'ON_COORD_SET':
 				if (vector.elements.SYNC === true) this.#coordSetMode = 'SYNC'
 				else if (vector.elements.FLIP === true) this.#coordSetMode = 'FLIP'

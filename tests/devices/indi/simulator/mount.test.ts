@@ -753,6 +753,26 @@ describe('mount simulator meridian flip', () => {
 		}
 	})
 
+	test('shifts automatic flip policy when alignment simulation is toggled', () => {
+		const { client, simulator } = makeMeridianFlipMount('mount.flip.auto.alignment.toggle')
+
+		try {
+			client.sendNumber({ device: simulator.name, name: 'MOUNT_ALIGNMENT', elements: { ...NO_ALIGNMENT, RA_INDEX_ERROR: -120 } })
+			const lst = simulator.siderealTimeAt(simulator.utcTime)
+			simulator.syncTo(normalizeAngle(lst + arcsec(60)), deg(20))
+			simulator.setTrackingEnabled(true)
+			client.sendSwitch({ device: simulator.name, name: 'MOUNT_AUTO_MERIDIAN_FLIP', elements: { INDI_ENABLED: true } })
+
+			client.sendSwitch({ device: simulator.name, name: 'SIMULATOR_ERROR_FEATURES', elements: { ALIGNMENT: true } })
+			simulator.advance(0.1)
+
+			expect(simulator.isSlewing).toBeTrue()
+			expect(simulator.pierSide).toBe('WEST')
+		} finally {
+			simulator.dispose()
+		}
+	})
+
 	test('disarms an aborted automatic flip until target or explicit enable rearming', () => {
 		const { client, simulator } = makeMeridianFlipMount('mount.flip.auto.abort')
 
