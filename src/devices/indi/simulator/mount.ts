@@ -1028,7 +1028,7 @@ export class MountSimulator extends DeviceSimulator {
 		const pierSide = this.pierSide
 		const target = { rightAscension: normalizeAngle(rightAscension - this.#indexErrorRightAscension), declination: clampDeclination(declination - this.#indexErrorDeclination) }
 		if (pierSide === 'NEITHER' || expectedPierSide(target.rightAscension, target.declination, this.#siderealTime()) === 'NEITHER') {
-			this.#setCoordinateState('Alert')
+			if (!this.isSlewing) this.#setCoordinateState('Alert')
 			return
 		}
 

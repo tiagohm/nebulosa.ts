@@ -545,6 +545,38 @@ describe('mount simulator meridian flip', () => {
 		}
 	})
 
+	test('keeps an active coordinate operation Busy when rejecting a pole flip', () => {
+		const { handler, simulator } = makeMeridianFlipMount('mount.flip.alert.busy')
+		let coordinateState: string | undefined = 'Idle'
+		handler.add({
+			numberVector: (_, message) => {
+				if (message.name === 'EQUATORIAL_EOD_COORD') coordinateState = message.state
+			},
+		})
+
+		try {
+			const lst = simulator.siderealTimeAt(simulator.utcTime)
+			simulator.syncTo(normalizeAngle(lst + hour(2)), deg(20))
+			simulator.setTrackingEnabled(true)
+			const target = normalizeAngle(lst + hour(1))
+			simulator.goTo(target, deg(25))
+			expect(simulator.isSlewing).toBeTrue()
+			expect(coordinateState).toBe('Busy')
+
+			simulator.flipTo(target, PIOVERTWO)
+			expect(simulator.isSlewing).toBeTrue()
+			expect(coordinateState).toBe('Busy')
+
+			simulator.advance(FAST_FLIP_DURATION)
+			expect(simulator.isSlewing).toBeFalse()
+			expect(coordinateState).toBe('Idle')
+			expect(normalizePI(simulator.rightAscension - target)).toBeCloseTo(0, 12)
+			expect(simulator.declination).toBeCloseTo(deg(25), 12)
+		} finally {
+			simulator.dispose()
+		}
+	})
+
 	test('does not change pier side when only time, location, or an aborted replacement changes', () => {
 		const { client, simulator } = makeMeridianFlipMount('mount.flip.side.lifecycle')
 
