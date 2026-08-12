@@ -1010,6 +1010,34 @@ describe('mount simulator meridian flip', () => {
 		}
 	})
 
+	test('returns home and park to the pier side on which each pose was saved', () => {
+		for (const operation of ['home', 'park'] as const) {
+			const { simulator } = makeMeridianFlipMount(`mount.flip.saved.${operation}.side`)
+
+			try {
+				const lst = simulator.siderealTimeAt(simulator.utcTime)
+				simulator.syncTo(normalizeAngle(lst + arcsec(30)), deg(20))
+				simulator.setSlewRate('SPEED_7')
+				if (operation === 'home') simulator.setHome()
+				else simulator.setPark()
+				simulator.setTrackingEnabled(true)
+				simulator.advance(5)
+				expect(simulator.pierSide).toBe('WEST')
+
+				if (operation === 'home') simulator.home()
+				else simulator.park()
+				simulator.advance(0.01)
+
+				expect(simulator.isSlewing).toBeFalse()
+				expect(simulator.pierSide).toBe('WEST')
+				if (operation === 'home') expect(simulator.isHoming).toBeFalse()
+				else expect(simulator.isParked).toBeTrue()
+			} finally {
+				simulator.dispose()
+			}
+		}
+	})
+
 	test('persists automatic flip configuration without transient operation state', () => {
 		const saved: string[] = []
 		let savedProperties: readonly SimulatorProperty[] = []

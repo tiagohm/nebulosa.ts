@@ -252,9 +252,12 @@ export class MountSimulator extends DeviceSimulator {
 	// manual motion and guiding all move it, and both the reported coordinate and the boresight are
 	// derived from it.
 	readonly #mechanical: EquatorialCoordinate = { rightAscension: 0, declination: PIOVERTWO }
-	// Home and park are stored as mechanical positions, since that is what the axes return to.
+	// Home and park are stored as mechanical poses, since both coordinates and pier side determine the
+	// physical axis configuration the mount returns to.
 	readonly #homeCoordinate: EquatorialCoordinate = { rightAscension: 0, declination: PIOVERTWO }
 	readonly #parkCoordinate: EquatorialCoordinate = { rightAscension: 0, declination: PIOVERTWO }
+	#homePierSide: PierSide = 'NEITHER'
+	#parkPierSide: PierSide = 'NEITHER'
 	#utcTime = Date.now()
 	// Fraction of a millisecond not yet handed to the clock, in [0, 1). Carried between steps so a run
 	// of intervals shorter than the clock resolution still adds up to the time that really passed.
@@ -1154,7 +1157,7 @@ export class MountSimulator extends DeviceSimulator {
 	home() {
 		if (!this.isConnected || this.isParked) return
 		const target = { rightAscension: this.#homeCoordinate.rightAscension, declination: this.#homeCoordinate.declination }
-		const targetPierSide = this.#gotoPierSide(target)
+		const targetPierSide = this.#homePierSide
 		const changesPierSide = this.pierSide !== 'NEITHER' && targetPierSide !== 'NEITHER' && targetPierSide !== this.pierSide
 		this.#startCoordinateSlew('HOME', target, targetPierSide, changesPierSide, false)
 		this.#setHoming(true)
@@ -1164,13 +1167,14 @@ export class MountSimulator extends DeviceSimulator {
 	setHome() {
 		this.#homeCoordinate.rightAscension = this.#mechanical.rightAscension
 		this.#homeCoordinate.declination = this.#mechanical.declination
+		this.#homePierSide = this.pierSide
 	}
 
 	// Parks the mount at the configured park position.
 	park() {
 		if (!this.isConnected || this.isParked) return
 		const target = { rightAscension: this.#parkCoordinate.rightAscension, declination: this.#parkCoordinate.declination }
-		const targetPierSide = this.#gotoPierSide(target)
+		const targetPierSide = this.#parkPierSide
 		const changesPierSide = this.pierSide !== 'NEITHER' && targetPierSide !== 'NEITHER' && targetPierSide !== this.pierSide
 		this.#startCoordinateSlew('PARK', target, targetPierSide, changesPierSide, false)
 		this.#setParking(true, false)
@@ -1186,6 +1190,7 @@ export class MountSimulator extends DeviceSimulator {
 	setPark() {
 		this.#parkCoordinate.rightAscension = this.#mechanical.rightAscension
 		this.#parkCoordinate.declination = this.#mechanical.declination
+		this.#parkPierSide = this.pierSide
 	}
 
 	// Enables or disables sidereal-style tracking.
@@ -2106,6 +2111,8 @@ export class MountSimulator extends DeviceSimulator {
 	#refreshDynamicCoordinates(notify: boolean) {
 		this.#homeCoordinate.rightAscension = this.#siderealTime()
 		this.#parkCoordinate.rightAscension = this.#homeCoordinate.rightAscension
+		this.#homePierSide = 'NEITHER'
+		this.#parkPierSide = 'NEITHER'
 		this.#setMechanical(this.#homeCoordinate.rightAscension, this.#homeCoordinate.declination, notify)
 		this.#absorbAccumulatedError()
 	}
