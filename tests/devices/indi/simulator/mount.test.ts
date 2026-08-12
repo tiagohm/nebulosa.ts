@@ -506,6 +506,33 @@ describe('mount simulator meridian flip', () => {
 		}
 	})
 
+	test('retains automatic flip threshold crossings while disabled and across clock updates', () => {
+		for (const crossing of ['advance', 'clock'] as const) {
+			const { client, simulator } = makeMeridianFlipMount(`mount.flip.auto.disabled.${crossing}`)
+
+			try {
+				const lst = simulator.siderealTimeAt(simulator.utcTime)
+				simulator.syncTo(normalizeAngle(lst + deg(1)), deg(20))
+				simulator.setTrackingEnabled(true)
+				client.sendNumber({ device: simulator.name, name: 'MOUNT_MERIDIAN_FLIP_SETTINGS', elements: { HOUR_ANGLE: 90 } })
+
+				const crossingSeconds = deg(186) / SIDEREAL_DRIFT_RATE
+				if (crossing === 'advance') simulator.advance(crossingSeconds)
+				else simulator.setTime({ utc: simulator.utcTime + crossingSeconds * 1000, offset: 0 })
+
+				expect(normalizePI(simulator.siderealTimeAt(simulator.utcTime) - simulator.rightAscension)).toBeCloseTo(deg(-175), 4)
+				expect(simulator.isSlewing).toBeFalse()
+				client.sendSwitch({ device: simulator.name, name: 'MOUNT_AUTO_MERIDIAN_FLIP', elements: { INDI_ENABLED: true } })
+				simulator.advance(0.1)
+
+				expect(simulator.isSlewing).toBeTrue()
+				expect(simulator.pierSide).toBe('WEST')
+			} finally {
+				simulator.dispose()
+			}
+		}
+	})
+
 	test('uses actual guided hour-angle travel when evaluating an automatic flip', () => {
 		const { client, simulator } = makeMeridianFlipMount('mount.flip.auto.guide')
 

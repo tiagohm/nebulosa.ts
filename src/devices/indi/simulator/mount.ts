@@ -192,10 +192,10 @@ export class MountSimulator extends DeviceSimulator {
 	#flipDeclinationDirection: AxisDirection = 0
 	// One-shot latch preventing an aborted or completed automatic flip from immediately restarting.
 	#automaticFlipArmed = true
-	// Net signed hour-angle travel accumulated during the current simulation step, in radians.
-	#automaticFlipHourAngleTravel: Angle = 0
-	// Furthest positive hour-angle excursion reached during the current simulation step, in radians.
-	#automaticFlipMaximumHourAngleTravel: Angle = 0
+	// Unwrapped reported hour angle retained across simulation steps and configuration changes, in radians.
+	#automaticFlipHourAngle: Angle = 0
+	// Furthest positive reported hour angle reached since the last coordinate placement, in radians.
+	#automaticFlipMaximumHourAngle: Angle = 0
 	#manualNorthSouth: AxisDirection = 0
 	#manualWestEast: AxisDirection = 0
 	// Accepted guide pulses per axis, ordered by acceptance and retired once the simulated clock has
@@ -995,6 +995,7 @@ export class MountSimulator extends DeviceSimulator {
 		this.#refreshDynamicCoordinates(false)
 		// Seeds the side from wherever the axes were left, since nothing has placed them this session.
 		this.#refreshPierSide()
+		this.#resetAutomaticFlipHourAngle()
 		this.#timer = setInterval(this.#tick.bind(this), TICK_INTERVAL_MS)
 	}
 
@@ -1087,6 +1088,7 @@ export class MountSimulator extends DeviceSimulator {
 		// A sync is also how this simulator places the axes, so it is one of the moments the side of the
 		// pier is decided rather than inherited.
 		this.#refreshPierSide()
+		this.#resetAutomaticFlipHourAngle()
 		// A sync is a discontinuity rather than motion, so the recorded past no longer describes where
 		// this telescope has been. Keeping it would let an exposure straddling the sync integrate a jump
 		// across the sky as if the tube had swept through it, and it is also where the errors that live
@@ -1199,8 +1201,11 @@ export class MountSimulator extends DeviceSimulator {
 
 		// Carried onto the new timeline before the clock moves under them. A pulse is a command to run
 		// for its own duration, not until a particular reading of a clock a client is free to change.
-		shiftGuidePulses(this.#westEastPulses, value.utc - this.#utcTime)
-		shiftGuidePulses(this.#northSouthPulses, value.utc - this.#utcTime)
+		const clockDelta = value.utc - this.#utcTime
+		shiftGuidePulses(this.#westEastPulses, clockDelta)
+		shiftGuidePulses(this.#northSouthPulses, clockDelta)
+		this.#automaticFlipHourAngle += (clockDelta / 1000) * SIDEREAL_DRIFT_RATE
+		this.#automaticFlipMaximumHourAngle = Math.max(this.#automaticFlipMaximumHourAngle, this.#automaticFlipHourAngle)
 		this.#utcTime = value.utc
 		// The carried fraction belongs to the clock that was just replaced.
 		this.#utcTimeRemainder = 0
@@ -1364,11 +1369,6 @@ export class MountSimulator extends DeviceSimulator {
 
 		if (!this.isConnected) return
 
-		const automaticFlipStartHourAngle =
-			this.#autoMeridianFlip.elements.INDI_ENABLED.value && this.#automaticFlipArmed && this.isTracking && !this.isParked && !this.isSlewing && !this.isHoming && !this.isParking && this.pierSide === 'WEST' ? normalizePI(this.siderealTimeAt(startTime) - this.rightAscension) : undefined
-		this.#automaticFlipHourAngleTravel = 0
-		this.#automaticFlipMaximumHourAngleTravel = 0
-
 		// Guide pulses are integrated over the interval that just elapsed rather than sampled at its
 		// end, so a pulse shorter than the step still delivers exactly its own share of motion. The
 		// result is reduced to an equivalent rate for the rest of the step, which lets the transmission
@@ -1435,7 +1435,7 @@ export class MountSimulator extends DeviceSimulator {
 		this.#recordBoresight()
 		// Autonomous flips begin after the interval has been fully accounted for, so crossing the threshold
 		// starts a Busy operation for the following tick instead of retroactively consuming elapsed time.
-		this.#updateAutomaticMeridianFlip(automaticFlipStartHourAngle, this.#automaticFlipMaximumHourAngleTravel)
+		this.#updateAutomaticMeridianFlip()
 	}
 
 	// Sub-steps a ring-down of `dtSeconds` is advanced and recorded in, so that a resonance faster than
@@ -1749,8 +1749,8 @@ export class MountSimulator extends DeviceSimulator {
 		const declinationShaftStep = advanceMechanicalAxis(this.#declinationAxis, declinationCelestialRate * declinationFrameSign, dtSeconds, this.#declinationTransmission)
 		const declinationStep = declinationShaftStep * declinationFrameSign
 		const rightAscensionDelta = SIDEREAL_DRIFT_RATE * dtSeconds + rightAscensionStep
-		this.#automaticFlipHourAngleTravel -= rightAscensionStep
-		this.#automaticFlipMaximumHourAngleTravel = Math.max(this.#automaticFlipMaximumHourAngleTravel, this.#automaticFlipHourAngleTravel)
+		this.#automaticFlipHourAngle -= rightAscensionStep
+		this.#automaticFlipMaximumHourAngle = Math.max(this.#automaticFlipMaximumHourAngle, this.#automaticFlipHourAngle)
 
 		// The drive delivers the travel the transmission let through, times one plus its rate error; the
 		// encoders count only the nominal part. The excess therefore never reaches the reported
@@ -1856,28 +1856,34 @@ export class MountSimulator extends DeviceSimulator {
 		if (changed) this.notify(this.#autoMeridianFlip)
 	}
 
-	// Starts one autonomous WEST-to-EAST flip after the configured signed hour-angle threshold.
+	// Re-registers the unwrapped automatic-flip hour angle after a coordinate discontinuity.
 	//
-	// `startHourAngle` is the signed hour angle in radians at the start of an otherwise eligible step,
-	// or undefined when another operation owned the mount. `maximumHourAngleTravel` is the furthest
-	// positive actual hour-angle excursion during that step, in radians, and preserves genuine threshold
-	// crossings that ended beyond the signed-angle wrap.
+	// `time` is the simulated UTC instant in milliseconds whose sidereal angle corresponds to the
+	// current reported coordinate. Later physical drive travel and clock changes advance it without
+	// normalizing, preserving threshold crossings through the signed-angle wrap.
+	#resetAutomaticFlipHourAngle(time: number = this.#utcTime) {
+		this.#automaticFlipHourAngle = normalizePI(this.siderealTimeAt(time) - this.rightAscension)
+		this.#automaticFlipMaximumHourAngle = this.#automaticFlipHourAngle
+	}
+
+	// Starts one autonomous WEST-to-EAST flip after the configured signed hour-angle threshold.
 	//
 	// The latch rearms only while the target is back before the threshold on WEST, or when the feature
 	// is explicitly enabled again. An aborted attempt therefore cannot restart on the following tick.
-	#updateAutomaticMeridianFlip(startHourAngle: Angle | undefined, maximumHourAngleTravel: Angle) {
+	#updateAutomaticMeridianFlip() {
 		if (!this.#autoMeridianFlip.elements.INDI_ENABLED.value) return
 
 		const threshold = deg(this.#meridianFlipSettings.elements.HOUR_ANGLE.value)
-		const hourAngle = normalizePI(this.#siderealTime() - this.rightAscension)
-		const reachedThreshold = startHourAngle === undefined ? hourAngle >= threshold : startHourAngle >= threshold || startHourAngle + maximumHourAngleTravel >= threshold
 
-		if (!reachedThreshold) {
-			if (this.pierSide === 'WEST') this.#automaticFlipArmed = true
+		if (!this.#automaticFlipArmed) {
+			if (this.pierSide === 'WEST' && this.#automaticFlipHourAngle < threshold) {
+				this.#automaticFlipArmed = true
+				this.#automaticFlipMaximumHourAngle = this.#automaticFlipHourAngle
+			}
 			return
 		}
 
-		if (!this.#automaticFlipArmed || !this.isTracking || this.isParked || this.isSlewing || this.isHoming || this.isParking || this.pierSide !== 'WEST') return
+		if (this.#automaticFlipMaximumHourAngle < threshold || !this.isTracking || this.isParked || this.isSlewing || this.isHoming || this.isParking || this.pierSide !== 'WEST') return
 
 		const target = { rightAscension: this.#mechanical.rightAscension, declination: this.#mechanical.declination }
 		this.#startCoordinateSlew('FLIP', target, 'EAST', true, true)
