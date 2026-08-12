@@ -370,6 +370,31 @@ describe('mount simulator meridian flip', () => {
 		}
 	})
 
+	test('selects the goto pier side from the estimated arrival time', () => {
+		const { client, simulator } = makeMeridianFlipMount('mount.flip.goto.arrival')
+
+		try {
+			const lst = simulator.siderealTimeAt(simulator.utcTime)
+			simulator.syncTo(normalizeAngle(lst - hour(8)), deg(20))
+			simulator.setTrackingEnabled(true)
+			simulator.setSlewRate('SPEED_7')
+			client.sendSwitch({ device: simulator.name, name: 'MOUNT_AUTO_MERIDIAN_FLIP', elements: { INDI_ENABLED: true } })
+			expect(simulator.pierSide).toBe('EAST')
+
+			const target = normalizeAngle(lst + SIDEREAL_DRIFT_RATE)
+			const duration = Math.abs(normalizePI(target - simulator.mechanical.rightAscension)) / FAST_SLEW_SPEED
+			expect(duration).toBeGreaterThan(1)
+			simulator.goTo(target, simulator.declination)
+			simulator.advance(duration + 1e-6)
+
+			expect(simulator.isSlewing).toBeFalse()
+			expect(simulator.pierSide).toBe('EAST')
+			expect(normalizePI(simulator.rightAscension - target)).toBeCloseTo(0, 12)
+		} finally {
+			simulator.dispose()
+		}
+	})
+
 	test('commits pier-side flexure and trajectory only when the flip arrives', () => {
 		const { client, simulator } = makeMeridianFlipMount('mount.flip.flexure')
 

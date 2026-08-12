@@ -1020,9 +1020,48 @@ export class MountSimulator extends DeviceSimulator {
 		if (!this.isConnected || this.isParked) return
 
 		const target = { rightAscension: normalizeAngle(rightAscension - this.#indexErrorRightAscension), declination: clampDeclination(declination - this.#indexErrorDeclination) }
-		const targetPierSide = expectedPierSide(target.rightAscension, target.declination, this.#siderealTime())
+		const targetPierSide = this.#gotoPierSide(target)
 		const changesPierSide = this.pierSide !== 'NEITHER' && targetPierSide !== 'NEITHER' && targetPierSide !== this.pierSide
 		this.#startCoordinateSlew('GOTO', target, targetPierSide, changesPierSide, false)
+	}
+
+	// Selects the side on which a GOTO target will be valid when the axes actually arrive.
+	//
+	// `target` is a mechanical equatorial coordinate in radians. Each candidate is evaluated with the
+	// physical duration of its own route, including the virtual half-turn and mirrored declination-shaft
+	// travel when it changes side. If a target transits during a would-be flip and neither route is
+	// self-consistent, retaining the present side avoids completing a flip that is already obsolete.
+	#gotoPierSide(target: EquatorialCoordinate): PierSide {
+		const expectedNow = expectedPierSide(target.rightAscension, target.declination, this.#siderealTime())
+		if (expectedNow === 'NEITHER') return 'NEITHER'
+
+		const current = this.pierSide
+		if (current === 'NEITHER') return this.#expectedPierSideAtSlewArrival(target, expectedNow)
+		if (this.#expectedPierSideAtSlewArrival(target, current) === current) return current
+
+		const opposite = current === 'EAST' ? 'WEST' : 'EAST'
+		if (this.#expectedPierSideAtSlewArrival(target, opposite) === opposite) return opposite
+		return current
+	}
+
+	// Predicts the target's pier side after following one candidate physical GOTO route.
+	// `target` is mechanical RA/Dec in radians and `targetPierSide` is the side committed at arrival.
+	#expectedPierSideAtSlewArrival(target: EquatorialCoordinate, targetPierSide: PierSide): PierSide {
+		const duration = this.#coordinateSlewDuration(target, targetPierSide)
+		return expectedPierSide(target.rightAscension, target.declination, this.#siderealTime() + SIDEREAL_DRIFT_RATE * duration)
+	}
+
+	// Returns the physical GOTO duration for one destination side, in seconds.
+	//
+	// `target` is mechanical RA/Dec in radians. A destination opposite the current defined side adds a
+	// PI-radian RA half-turn and maps declination through the destination shaft frame, exactly as the live
+	// slew state initialized by `#startCoordinateSlew` does.
+	#coordinateSlewDuration(target: EquatorialCoordinate, targetPierSide: PierSide) {
+		const deltaRightAscension = Math.abs(normalizePI(target.rightAscension - this.#mechanical.rightAscension))
+		const changesPierSide = this.pierSide !== 'NEITHER' && targetPierSide !== 'NEITHER' && targetPierSide !== this.pierSide
+		const rightAscensionTravel = deltaRightAscension + (changesPierSide ? PI : 0)
+		const declinationTravel = changesPierSide ? Math.abs(normalizePI(declinationShaftAngle(targetPierSide, target.declination) - declinationShaftAngle(this.pierSide, this.#mechanical.declination))) : Math.abs(target.declination - this.#mechanical.declination)
+		return Math.max(rightAscensionTravel, declinationTravel) / (this.#manualSlewSpeed() * SLEW_SPEED_FACTOR)
 	}
 
 	// Starts a forced pier-side change while slewing to the requested reported coordinate.
