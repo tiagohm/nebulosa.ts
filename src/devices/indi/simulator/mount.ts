@@ -1438,7 +1438,7 @@ export class MountSimulator extends DeviceSimulator {
 			// interval — tens of degrees of phase for an axis that moved a few arcseconds — and step the
 			// periodic error to somewhere unrelated to where the mount actually stopped.
 			const slewRate = this.#rightAscensionMotorRate()
-			settlingSeconds = this.#advanceSlew(dtSeconds)
+			settlingSeconds = this.#advanceSlew(dtSeconds, endTime)
 			this.#advanceWormPhase(slewRate, dtSeconds - settlingSeconds)
 			// The wind blows regardless of what the mount is doing, so it is charged for the travelling
 			// part of the step here and for the rest of it below.
@@ -1585,8 +1585,9 @@ export class MountSimulator extends DeviceSimulator {
 	}
 
 	// Moves the mount along the commanded slew vector, returning how many seconds of the step were left
-	// unspent once it arrived, which is zero while the slew is still running.
-	#advanceSlew(dtSeconds: number) {
+	// unspent once it arrived, which is zero while the slew is still running. `endTime` is the simulated
+	// UTC instant at the end of the step, in milliseconds, used to register a GOTO at its exact arrival.
+	#advanceSlew(dtSeconds: number, endTime: number) {
 		const target = this.#slewTarget
 
 		if (!target) return dtSeconds
@@ -1659,6 +1660,7 @@ export class MountSimulator extends DeviceSimulator {
 			}
 
 			const mode = this.#slewMode
+			if (mode === 'GOTO') this.#resetAutomaticFlipHourAngle(endTime - remaining * 1000)
 			this.#slewMode = undefined
 			this.#slewTarget = undefined
 			this.#clearFlipMotion()
