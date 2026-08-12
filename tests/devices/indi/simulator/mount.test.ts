@@ -952,6 +952,44 @@ describe('mount simulator meridian flip', () => {
 		}
 	})
 
+	test('includes pier-side travel when homing and parking', () => {
+		const { simulator } = makeMeridianFlipMount('mount.flip.home.park')
+
+		try {
+			const lst = simulator.siderealTimeAt(simulator.utcTime)
+			simulator.syncTo(normalizeAngle(lst + hour(1)), deg(20))
+			simulator.setSlewRate('SPEED_7')
+			simulator.setHome()
+			simulator.setPark()
+
+			simulator.flipTo(simulator.rightAscension, simulator.declination)
+			simulator.advance(FAST_FLIP_DURATION + 1e-6)
+			expect(simulator.pierSide).toBe('EAST')
+
+			simulator.home()
+			simulator.advance(FAST_FLIP_DURATION / 2)
+			expect(simulator.isHoming).toBeTrue()
+			expect(simulator.pierSide).toBe('EAST')
+			simulator.advance(FAST_FLIP_DURATION / 2 + 1e-6)
+			expect(simulator.isHoming).toBeFalse()
+			expect(simulator.pierSide).toBe('WEST')
+
+			simulator.flipTo(simulator.rightAscension, simulator.declination)
+			simulator.advance(FAST_FLIP_DURATION + 1e-6)
+			simulator.park()
+			simulator.advance(FAST_FLIP_DURATION / 2)
+			expect(simulator.isParking).toBeTrue()
+			expect(simulator.isParked).toBeFalse()
+			expect(simulator.pierSide).toBe('EAST')
+			simulator.advance(FAST_FLIP_DURATION / 2 + 1e-6)
+			expect(simulator.isParking).toBeFalse()
+			expect(simulator.isParked).toBeTrue()
+			expect(simulator.pierSide).toBe('WEST')
+		} finally {
+			simulator.dispose()
+		}
+	})
+
 	test('persists automatic flip configuration without transient operation state', () => {
 		const saved: string[] = []
 		let savedProperties: readonly SimulatorProperty[] = []

@@ -1095,7 +1095,7 @@ export class MountSimulator extends DeviceSimulator {
 	// virtual PI-radian half-turn is added to the physical RA-axis travel while the declination shaft
 	// follows the equivalent orientation on the destination side. Both celestial axes advance
 	// proportionally towards the target without exposing those physical rotations as sky-coordinate motion.
-	#startCoordinateSlew(mode: 'GOTO' | 'FLIP', target: EquatorialCoordinate, targetPierSide: PierSide, changesPierSide: boolean, automatic: boolean) {
+	#startCoordinateSlew(mode: SlewMode, target: EquatorialCoordinate, targetPierSide: PierSide, changesPierSide: boolean, automatic: boolean) {
 		this.#clearManualMotion()
 		this.#clearPulseGuide()
 		this.#takeSlewControl()
@@ -1150,13 +1150,11 @@ export class MountSimulator extends DeviceSimulator {
 	// Slews to the configured home position.
 	home() {
 		if (!this.isConnected || this.isParked) return
-		this.#takeSlewControl()
-		this.#clearFlipMotion()
-		this.#slewMode = 'HOME'
-		this.#slewTarget = { rightAscension: this.#homeCoordinate.rightAscension, declination: this.#homeCoordinate.declination }
-		this.#setSlewing(true)
+		const target = { rightAscension: this.#homeCoordinate.rightAscension, declination: this.#homeCoordinate.declination }
+		const targetPierSide = this.#gotoPierSide(target)
+		const changesPierSide = this.pierSide !== 'NEITHER' && targetPierSide !== 'NEITHER' && targetPierSide !== this.pierSide
+		this.#startCoordinateSlew('HOME', target, targetPierSide, changesPierSide, false)
 		this.#setHoming(true)
-		this.#setParking(false)
 	}
 
 	// Stores the current mechanical orientation as the new home position.
@@ -1168,14 +1166,10 @@ export class MountSimulator extends DeviceSimulator {
 	// Parks the mount at the configured park position.
 	park() {
 		if (!this.isConnected || this.isParked) return
-		this.#clearManualMotion()
-		this.#clearPulseGuide()
-		this.#takeSlewControl()
-		this.#clearFlipMotion()
-		this.#slewMode = 'PARK'
-		this.#slewTarget = { rightAscension: this.#parkCoordinate.rightAscension, declination: this.#parkCoordinate.declination }
-		this.#setSlewing(true)
-		this.#setHoming(false)
+		const target = { rightAscension: this.#parkCoordinate.rightAscension, declination: this.#parkCoordinate.declination }
+		const targetPierSide = this.#gotoPierSide(target)
+		const changesPierSide = this.pierSide !== 'NEITHER' && targetPierSide !== 'NEITHER' && targetPierSide !== this.pierSide
+		this.#startCoordinateSlew('PARK', target, targetPierSide, changesPierSide, false)
 		this.#setParking(true, false)
 	}
 
