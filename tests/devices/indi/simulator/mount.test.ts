@@ -411,7 +411,7 @@ describe('mount simulator meridian flip', () => {
 			expect(simulator.pierSide).toBe('EAST')
 
 			simulator.advance(0.05)
-			expect(toArcsec(Math.abs(simulator.mechanical.declination - target))).toBeGreaterThan(5)
+			expect(toArcsec(target - simulator.mechanical.declination)).toBeGreaterThan(5)
 		} finally {
 			simulator.dispose()
 		}
