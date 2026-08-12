@@ -394,6 +394,29 @@ describe('mount simulator meridian flip', () => {
 		}
 	})
 
+	test('carries declination-shaft momentum through a pier-side flip', () => {
+		const { client, simulator } = makeMeridianFlipMount('mount.flip.declination')
+
+		try {
+			client.sendSwitch({ device: simulator.name, name: 'SIMULATOR_ERROR_FEATURES', elements: { SETTLING: true } })
+			client.sendNumber({ device: simulator.name, name: 'MOUNT_SETTLING', elements: { OVERSHOOT: 30, FREQUENCY: 2, DAMPING_RATIO: 0.15 } })
+			const lst = simulator.siderealTimeAt(simulator.utcTime)
+			simulator.syncTo(normalizeAngle(lst + hour(1)), deg(20))
+			simulator.setTrackingEnabled(true)
+			const target = simulator.declination
+
+			simulator.flipTo(simulator.rightAscension, target)
+			simulator.advance(FAST_FLIP_DURATION + 1e-6)
+			expect(simulator.isSlewing).toBeFalse()
+			expect(simulator.pierSide).toBe('EAST')
+
+			simulator.advance(0.05)
+			expect(toArcsec(Math.abs(simulator.mechanical.declination - target))).toBeGreaterThan(5)
+		} finally {
+			simulator.dispose()
+		}
+	})
+
 	test('keeps automatic flips disabled by default and triggers at signed thresholds', () => {
 		for (const thresholdDegrees of [-1, 0, 1]) {
 			const { client, simulator } = makeMeridianFlipMount(`mount.flip.auto.${thresholdDegrees}`)

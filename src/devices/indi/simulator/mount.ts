@@ -186,6 +186,10 @@ export class MountSimulator extends DeviceSimulator {
 	#flipTravelRemaining: Angle = 0
 	// Signed virtual RA-axis direction used by transmission, worm phase, and settling models.
 	#flipDirection: AxisDirection = 0
+	// Remaining physical declination-shaft travel of a pier-side change, in radians.
+	#flipDeclinationTravelRemaining: Angle = 0
+	// Signed declination-shaft direction used by transmission and settling models during a flip.
+	#flipDeclinationDirection: AxisDirection = 0
 	// One-shot latch preventing an aborted or completed automatic flip from immediately restarting.
 	#automaticFlipArmed = true
 	// Net signed hour-angle travel accumulated during the current simulation step, in radians.
@@ -1041,8 +1045,9 @@ export class MountSimulator extends DeviceSimulator {
 
 	// Gives a coordinate slew exclusive control of both axes and initializes its pier-side travel.
 	// `target` is a mechanical equatorial coordinate in radians. When `changesPierSide` is true, the
-	// virtual PI-radian half-turn is added to the physical RA-axis travel while both celestial axes
-	// advance proportionally towards the target.
+	// virtual PI-radian half-turn is added to the physical RA-axis travel while the declination shaft
+	// follows the equivalent orientation on the destination side. Both celestial axes advance
+	// proportionally towards the target without exposing those physical rotations as sky-coordinate motion.
 	#startCoordinateSlew(mode: 'GOTO' | 'FLIP', target: EquatorialCoordinate, targetPierSide: PierSide, changesPierSide: boolean, automatic: boolean) {
 		this.#clearManualMotion()
 		this.#clearPulseGuide()
@@ -1053,6 +1058,11 @@ export class MountSimulator extends DeviceSimulator {
 		this.#slewTargetPierSide = targetPierSide
 		this.#flipTravelRemaining = changesPierSide ? PI : 0
 		this.#flipDirection = changesPierSide ? (targetPierSide === 'EAST' ? 1 : -1) : 0
+		if (changesPierSide) {
+			const declinationMotorDelta = normalizePI(declinationShaftAngle(targetPierSide, target.declination) - declinationShaftAngle(this.pierSide, this.#mechanical.declination))
+			this.#flipDeclinationTravelRemaining = Math.abs(declinationMotorDelta)
+			this.#flipDeclinationDirection = Math.sign(declinationMotorDelta) as AxisDirection
+		}
 		if (automatic) this.#automaticFlipArmed = false
 		this.#setSlewing(true)
 		this.#setHoming(false)
@@ -1505,8 +1515,8 @@ export class MountSimulator extends DeviceSimulator {
 	}
 
 	// Signed rates of both axes during a slew, in radians per second. The step is normalized by the
-	// combined physical RA-axis travel or the declination delta, whichever is larger, so neither motor
-	// exceeds the selected slew speed and both axes arrive together.
+	// physical travel of either axis, whichever is larger, so neither motor exceeds the selected slew
+	// speed and both axes arrive together.
 	#slewAxisRates(): readonly [number, number] {
 		const target = this.#slewTarget
 		if (!target) return [0, 0]
@@ -1520,13 +1530,14 @@ export class MountSimulator extends DeviceSimulator {
 		const deltaRightAscension = normalizePI(target.rightAscension - this.#mechanical.rightAscension)
 		const deltaDeclination = target.declination - this.#mechanical.declination
 		const rightAscensionMotorDelta = this.#flipDirection === 0 ? deltaRightAscension : this.#flipDirection * (Math.abs(deltaRightAscension) + this.#flipTravelRemaining)
-		const span = Math.max(Math.abs(rightAscensionMotorDelta), Math.abs(deltaDeclination))
+		const declinationMotorDelta = this.#flipDeclinationDirection === 0 ? deltaDeclination : this.#flipDeclinationDirection * this.#flipDeclinationTravelRemaining
+		const span = Math.max(Math.abs(rightAscensionMotorDelta), Math.abs(declinationMotorDelta))
 		if (span === 0) return [0, 0]
 
 		const scale = speed / span
-		// The virtual half-turn does not alter the reported sky coordinate, but it is real motor travel for
-		// worm phase, transmission state, and settling. It therefore contributes only to the motor rate.
-		return [rightAscensionMotorDelta * scale, deltaDeclination * scale]
+		// The virtual pier-side path does not alter the reported sky coordinate, but it is real motor travel
+		// for worm phase, transmission state, and settling. It therefore contributes only to motor rates.
+		return [rightAscensionMotorDelta * scale, declinationMotorDelta * scale]
 	}
 
 	// Moves the mount along the commanded slew vector, returning how many seconds of the step were left
@@ -1544,8 +1555,11 @@ export class MountSimulator extends DeviceSimulator {
 		const deltaDeclination = target.declination - this.#mechanical.declination
 		const flipTravelRemaining = this.#flipTravelRemaining
 		const flipDirection = this.#flipDirection
+		const flipDeclinationTravelRemaining = this.#flipDeclinationTravelRemaining
+		const flipDeclinationDirection = this.#flipDeclinationDirection
 		const rightAscensionMotorDelta = flipDirection === 0 ? deltaRightAscension : flipDirection * (Math.abs(deltaRightAscension) + flipTravelRemaining)
-		const span = Math.max(Math.abs(rightAscensionMotorDelta), Math.abs(deltaDeclination))
+		const declinationMotorDelta = flipDeclinationDirection === 0 ? deltaDeclination : flipDeclinationDirection * flipDeclinationTravelRemaining
+		const span = Math.max(Math.abs(rightAscensionMotorDelta), Math.abs(declinationMotorDelta))
 
 		// A slew drives the axes directly rather than through the transmission model, since backlash is
 		// negligible against a slew and its own dynamics belong with the slew profile. The travel is still
@@ -1559,10 +1573,13 @@ export class MountSimulator extends DeviceSimulator {
 		// instead of spending itself on the slack the slew had just opened.
 		const travelled = span > 0 ? Math.min(1, maxStep / span) : 0
 		const flipTravel = flipTravelRemaining * travelled
+		const flipDeclinationTravel = flipDeclinationTravelRemaining * travelled
 		const rightAscensionMotorTravel = flipDirection === 0 ? deltaRightAscension * travelled : flipDirection * (Math.abs(deltaRightAscension) * travelled + flipTravel)
+		const declinationMotorTravel = declinationMotorDelta * travelled
 		driveMechanicalAxis(this.#rightAscensionAxis, Math.sign(rightAscensionMotorTravel) as AxisDirection, Math.abs(rightAscensionMotorTravel), this.#rightAscensionTransmission)
-		driveMechanicalAxis(this.#declinationAxis, Math.sign(deltaDeclination) as AxisDirection, Math.abs(deltaDeclination) * travelled, this.#declinationTransmission)
+		driveMechanicalAxis(this.#declinationAxis, Math.sign(declinationMotorTravel) as AxisDirection, Math.abs(declinationMotorTravel), this.#declinationTransmission)
 		this.#flipTravelRemaining = Math.max(0, flipTravelRemaining - flipTravel)
+		this.#flipDeclinationTravelRemaining = Math.max(0, flipDeclinationTravelRemaining - flipDeclinationTravel)
 
 		if (span <= maxStep || span === 0) {
 			// Fraction of the step still unspent when the axes reach the target. The ring-down excited
@@ -1592,8 +1609,9 @@ export class MountSimulator extends DeviceSimulator {
 			if (span > 0) {
 				const severity = this.#manualSlewSpeed() / SLEW_RATES.at(-1)!.speed
 				const rightAscensionShare = clamp(rightAscensionMotorDelta / span, -1, 1)
+				const declinationShare = clamp(declinationMotorDelta / span, -1, 1)
 				exciteSettling(this.#rightAscensionSettling, severity * rightAscensionShare, this.#settlingConfig)
-				exciteSettling(this.#declinationSettling, (severity * deltaDeclination) / span, this.#settlingConfig)
+				exciteSettling(this.#declinationSettling, severity * declinationShare, this.#settlingConfig)
 			}
 
 			const mode = this.#slewMode
@@ -1942,6 +1960,8 @@ export class MountSimulator extends DeviceSimulator {
 		this.#slewTargetPierSide = undefined
 		this.#flipTravelRemaining = 0
 		this.#flipDirection = 0
+		this.#flipDeclinationTravelRemaining = 0
+		this.#flipDeclinationDirection = 0
 	}
 
 	// Puts both oscillators back on target and forgets what they had put into the coordinate.
@@ -2056,4 +2076,12 @@ export class MountSimulator extends DeviceSimulator {
 		this.#homeScatterDeclination = 0
 		this.#resetBoresightHistory()
 	}
+}
+
+// Maps a reported declination to the equivalent physical shaft angle for one pier side.
+// `pierSide` must be EAST or WEST and `declination` is in radians within the celestial range. The
+// returned angle is in radians, with the EAST representation mirrored across the nearest pole.
+function declinationShaftAngle(pierSide: PierSide, declination: Angle) {
+	if (pierSide === 'WEST') return declination
+	return declination >= 0 ? PI - declination : -PI - declination
 }
