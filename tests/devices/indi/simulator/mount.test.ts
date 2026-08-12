@@ -465,6 +465,29 @@ describe('mount simulator meridian flip', () => {
 		}
 	})
 
+	test('rebases automatic flip policy when an explicit flip arrives', () => {
+		const { client, simulator } = makeMeridianFlipMount('mount.flip.explicit.rebase')
+
+		try {
+			const lst = simulator.siderealTimeAt(simulator.utcTime)
+			simulator.syncTo(normalizeAngle(lst + arcsec(30)), deg(20))
+			simulator.setTrackingEnabled(true)
+			simulator.setSlewRate('SPEED_7')
+			client.sendSwitch({ device: simulator.name, name: 'MOUNT_AUTO_MERIDIAN_FLIP', elements: { INDI_ENABLED: true } })
+
+			simulator.flipTo(simulator.rightAscension, simulator.declination)
+			simulator.advance(FAST_FLIP_DURATION + 1e-6)
+			expect(simulator.pierSide).toBe('EAST')
+			simulator.flipTo(simulator.rightAscension, simulator.declination)
+			simulator.advance(FAST_FLIP_DURATION + 1e-6)
+
+			expect(simulator.pierSide).toBe('WEST')
+			expect(simulator.isSlewing).toBeTrue()
+		} finally {
+			simulator.dispose()
+		}
+	})
+
 	test('commits pier-side flexure and trajectory only when the flip arrives', () => {
 		const { client, simulator } = makeMeridianFlipMount('mount.flip.flexure')
 

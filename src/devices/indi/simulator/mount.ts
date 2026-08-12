@@ -1667,7 +1667,7 @@ export class MountSimulator extends DeviceSimulator {
 			}
 
 			const mode = this.#slewMode
-			if (mode === 'GOTO') this.#resetAutomaticFlipHourAngle(endTime - remaining * 1000)
+			this.#resetAutomaticFlipHourAngle(endTime - remaining * 1000)
 			this.#slewMode = undefined
 			this.#slewTarget = undefined
 			this.#clearFlipMotion()
