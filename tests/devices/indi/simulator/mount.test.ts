@@ -449,6 +449,30 @@ describe('mount simulator meridian flip', () => {
 		}
 	})
 
+	test('uses actual guided hour-angle travel when evaluating an automatic flip', () => {
+		const { client, simulator } = makeMeridianFlipMount('mount.flip.auto.guide')
+
+		try {
+			const lst = simulator.siderealTimeAt(simulator.utcTime)
+			simulator.syncTo(normalizeAngle(lst + deg(0.02)), deg(20))
+			simulator.setTrackingEnabled(true)
+			simulator.setGuideRate(1, 1)
+			client.sendSwitch({ device: simulator.name, name: 'MOUNT_AUTO_MERIDIAN_FLIP', elements: { INDI_ENABLED: true } })
+			simulator.pulse('EAST', 10_000)
+
+			simulator.advance(10)
+
+			expect(normalizePI(simulator.siderealTimeAt(simulator.utcTime) - simulator.mechanical.rightAscension)).toBeCloseTo(deg(-0.02), 8)
+			expect(simulator.isSlewing).toBeFalse()
+			expect(simulator.pierSide).toBe('WEST')
+
+			simulator.advance(10)
+			expect(simulator.isSlewing).toBeTrue()
+		} finally {
+			simulator.dispose()
+		}
+	})
+
 	test('disarms an aborted automatic flip until target or explicit enable rearming', () => {
 		const { client, simulator } = makeMeridianFlipMount('mount.flip.auto.abort')
 
