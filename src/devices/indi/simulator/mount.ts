@@ -1349,6 +1349,9 @@ export class MountSimulator extends DeviceSimulator {
 
 		if (!this.isConnected) return
 
+		const automaticFlipStartHourAngle =
+			this.#autoMeridianFlip.elements.INDI_ENABLED.value && this.#automaticFlipArmed && this.isTracking && !this.isParked && !this.isSlewing && !this.isHoming && !this.isParking && this.pierSide === 'WEST' ? normalizePI(this.siderealTimeAt(startTime) - this.#mechanical.rightAscension) : undefined
+
 		// Guide pulses are integrated over the interval that just elapsed rather than sampled at its
 		// end, so a pulse shorter than the step still delivers exactly its own share of motion. The
 		// result is reduced to an equivalent rate for the rest of the step, which lets the transmission
@@ -1415,7 +1418,7 @@ export class MountSimulator extends DeviceSimulator {
 		this.#recordBoresight()
 		// Autonomous flips begin after the interval has been fully accounted for, so crossing the threshold
 		// starts a Busy operation for the following tick instead of retroactively consuming elapsed time.
-		this.#updateAutomaticMeridianFlip()
+		this.#updateAutomaticMeridianFlip(automaticFlipStartHourAngle, dtSeconds)
 	}
 
 	// Sub-steps a ring-down of `dtSeconds` is advanced and recorded in, so that a resonance faster than
@@ -1826,15 +1829,20 @@ export class MountSimulator extends DeviceSimulator {
 
 	// Starts one autonomous WEST-to-EAST flip after the configured signed hour-angle threshold.
 	//
+	// `startHourAngle` is the signed hour angle in radians at the start of an otherwise eligible step,
+	// or undefined when another operation owned the mount. `elapsedSeconds` is the duration of that step
+	// in seconds and preserves threshold crossings that ended beyond the signed-angle wrap.
+	//
 	// The latch rearms only while the target is back before the threshold on WEST, or when the feature
 	// is explicitly enabled again. An aborted attempt therefore cannot restart on the following tick.
-	#updateAutomaticMeridianFlip() {
+	#updateAutomaticMeridianFlip(startHourAngle: Angle | undefined, elapsedSeconds: number) {
 		if (!this.#autoMeridianFlip.elements.INDI_ENABLED.value) return
 
 		const threshold = deg(this.#meridianFlipSettings.elements.HOUR_ANGLE.value)
 		const hourAngle = normalizePI(this.#siderealTime() - this.#mechanical.rightAscension)
+		const reachedThreshold = hourAngle >= threshold || (startHourAngle !== undefined && (startHourAngle >= threshold || SIDEREAL_DRIFT_RATE * elapsedSeconds >= threshold - startHourAngle))
 
-		if (hourAngle < threshold) {
+		if (!reachedThreshold) {
 			if (this.pierSide === 'WEST') this.#automaticFlipArmed = true
 			return
 		}
