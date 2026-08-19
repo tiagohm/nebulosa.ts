@@ -569,6 +569,30 @@ describe('mount simulator meridian flip', () => {
 		}
 	})
 
+	test('initializes east-side declination shaft travel when leaving a pole', () => {
+		const { client, simulator } = makeMeridianFlipMount('mount.flip.pole.east.shaft')
+
+		try {
+			client.sendSwitch({ device: simulator.name, name: 'SIMULATOR_ERROR_FEATURES', elements: { MECHANICS: true } })
+			client.sendNumber({ device: simulator.name, name: 'MOUNT_MECHANICS', elements: { ...NO_MECHANICS, BACKLASH_DEC: 60 } })
+			simulator.setGuideRate(1, 1)
+			const lst = simulator.siderealTimeAt(simulator.utcTime)
+			simulator.syncTo(lst, PIOVERTWO)
+			expect(simulator.pierSide).toBe('NEITHER')
+
+			simulator.goTo(normalizeAngle(lst - hour(1)), deg(20))
+			simulator.advance(deg(70) / FAST_SLEW_SPEED + 1e-6)
+			expect(simulator.pierSide).toBe('EAST')
+
+			const start = simulator.mechanical.declination
+			simulator.pulse('NORTH', 1000)
+			simulator.advance(1)
+			expect(simulator.mechanical.declination).toBe(start)
+		} finally {
+			simulator.dispose()
+		}
+	})
+
 	test('clears declination transmission state when sync changes pier side', () => {
 		const { client, simulator } = makeMeridianFlipMount('mount.flip.sync.transmission')
 
