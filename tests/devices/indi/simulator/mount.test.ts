@@ -1018,6 +1018,34 @@ describe('mount simulator meridian flip', () => {
 		}
 	})
 
+	test('rebases automatic flip history when aborting a partial coordinate slew', () => {
+		const { client, simulator } = makeMeridianFlipMount('mount.flip.auto.abort.rebase')
+
+		try {
+			const lst = simulator.siderealTimeAt(simulator.utcTime)
+			simulator.syncTo(normalizeAngle(lst + deg(30)), deg(20))
+			simulator.setTrackingEnabled(true)
+			simulator.setSlewRate('SPEED_7')
+			client.sendSwitch({ device: simulator.name, name: 'MOUNT_AUTO_MERIDIAN_FLIP', elements: { INDI_ENABLED: true } })
+
+			const target = normalizeAngle(lst - deg(30))
+			const duration = Math.abs(PI + normalizePI(target - simulator.mechanical.rightAscension)) / FAST_SLEW_SPEED
+			simulator.goTo(target, simulator.declination)
+			simulator.advance(duration * 0.62)
+			expect(normalizePI(simulator.siderealTimeAt(simulator.utcTime) - simulator.rightAscension)).toBeGreaterThan(0)
+
+			simulator.stop()
+			expect(simulator.isSlewing).toBeFalse()
+			expect(simulator.pierSide).toBe('WEST')
+
+			simulator.advance(0.1)
+			expect(simulator.isSlewing).toBeTrue()
+			expect(simulator.pierSide).toBe('WEST')
+		} finally {
+			simulator.dispose()
+		}
+	})
+
 	test('rearms an aborted automatic flip after reconnect', () => {
 		const { client, simulator } = makeMeridianFlipMount('mount.flip.auto.reconnect')
 

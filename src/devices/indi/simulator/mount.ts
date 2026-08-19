@@ -2129,9 +2129,11 @@ export class MountSimulator extends DeviceSimulator {
 
 	// Cancels any goto, flip, home, or park slew without committing a pending pier-side change.
 	#abortSlew() {
+		const hadCoordinateSlew = this.#slewTarget !== undefined
 		this.#slewMode = undefined
 		this.#slewTarget = undefined
 		this.#clearFlipMotion()
+		if (hadCoordinateSlew) this.#resetAutomaticFlipHourAngle(this.#utcTime + this.#utcTimeRemainder, false)
 		this.#setHoming(false)
 		this.#setParking(false)
 	}
