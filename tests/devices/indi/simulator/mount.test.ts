@@ -1049,6 +1049,31 @@ describe('mount simulator meridian flip', () => {
 		}
 	})
 
+	test('clears pier side when settling reaches a pole', () => {
+		const { client, simulator } = makeMeridianFlipMount('mount.flip.auto.settling.pole')
+
+		try {
+			client.sendSwitch({ device: simulator.name, name: 'SIMULATOR_ERROR_FEATURES', elements: { SETTLING: true } })
+			client.sendNumber({ device: simulator.name, name: 'MOUNT_SETTLING', elements: { OVERSHOOT: 600, FREQUENCY: 2, DAMPING_RATIO: 0.15 } })
+			client.sendNumber({ device: simulator.name, name: 'MOUNT_MERIDIAN_FLIP_SETTINGS', elements: { HOUR_ANGLE: -0.01 } })
+			const lst = simulator.siderealTimeAt(simulator.utcTime)
+			simulator.syncTo(normalizeAngle(lst + arcsec(30)), PIOVERTWO - deg(1))
+			expect(simulator.pierSide).toBe('WEST')
+			simulator.setTrackingEnabled(true)
+			simulator.setSlewRate('SPEED_7')
+			client.sendSwitch({ device: simulator.name, name: 'MOUNT_AUTO_MERIDIAN_FLIP', elements: { INDI_ENABLED: true } })
+
+			simulator.goTo(simulator.rightAscension, PIOVERTWO - arcsec(1))
+			for (let i = 0; i < 50 && simulator.isSlewing; i++) simulator.advance(0.01)
+
+			expect(simulator.isSlewing).toBeFalse()
+			expect(simulator.pierSide).toBe('NEITHER')
+			expect(simulator.mechanical.declination).toBe(PIOVERTWO)
+		} finally {
+			simulator.dispose()
+		}
+	})
+
 	test('rejects a pole flip with Alert and clears it on the next valid operation', () => {
 		const { handler, manager, mount, simulator } = makeMeridianFlipMount('mount.flip.alert')
 		let coordinateState: string | undefined = 'Idle'

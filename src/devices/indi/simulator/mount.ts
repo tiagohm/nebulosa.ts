@@ -1786,12 +1786,15 @@ export class MountSimulator extends DeviceSimulator {
 		if (rightAscensionRing !== 0 || declinationRing !== 0) {
 			const rightAscension = this.#mechanical.rightAscension
 			const declination = this.#mechanical.declination
+			const priorPierSide = this.pierSide
 			this.#setMechanical(rightAscension + rightAscensionRing, declination + declinationRing)
 			const appliedRightAscensionRing = normalizePI(this.#mechanical.rightAscension - rightAscension)
 			this.#automaticFlipHourAngle -= appliedRightAscensionRing
 			this.#automaticFlipMaximumHourAngle = Math.max(this.#automaticFlipMaximumHourAngle, this.#automaticFlipHourAngle)
 			this.#appliedRightAscensionRing += appliedRightAscensionRing
-			this.#appliedDeclinationRing += this.#mechanical.declination - declination
+			const appliedDeclinationRing = this.#mechanical.declination - declination
+			this.#appliedDeclinationRing += appliedDeclinationRing
+			this.#reconcilePierSideAfterPoleMotion(priorPierSide, appliedDeclinationRing)
 		}
 	}
 
@@ -1829,18 +1832,28 @@ export class MountSimulator extends DeviceSimulator {
 
 		if (rightAscensionDelta !== 0 || declinationStep !== 0) {
 			this.#setMechanical(this.#mechanical.rightAscension + rightAscensionDelta, this.#mechanical.declination + declinationStep)
-			const pierSide = expectedPierSide(this.#mechanical.rightAscension, this.#mechanical.declination, this.#siderealTime())
-			if (priorPierSide === 'NEITHER' || pierSide === 'NEITHER') {
-				this.#setPierSide(pierSide)
-				if (pierSide === 'EAST' && declinationStep !== 0) {
-					// The pole-neutral step was integrated in the WEST shaft frame; EAST mirrors it.
-					clearMechanicalAxis(this.#declinationAxis)
-					driveMechanicalAxis(this.#declinationAxis, Math.sign(-declinationStep) as AxisDirection, Math.abs(declinationStep), this.#declinationTransmission)
-				} else if (priorPierSide === 'EAST' && pierSide === 'NEITHER') {
-					// At the pole the pier side, and therefore the EAST shaft frame, is undefined.
-					clearMechanicalAxis(this.#declinationAxis)
-				}
-			}
+			this.#reconcilePierSideAfterPoleMotion(priorPierSide, declinationStep)
+		}
+	}
+
+	// Reconciles pier-side state for physical motion into or out of a celestial pole.
+	//
+	// `priorPierSide` is the side before the step and `declinationStep` is the applied mechanical
+	// declination travel in radians. A pole has no pier side, so entering it clears side-specific
+	// declination transmission state; leaving it can establish a side for the first time. EAST mirrors
+	// the neutral shaft frame used while the pole had no side.
+	#reconcilePierSideAfterPoleMotion(priorPierSide: PierSide, declinationStep: Angle) {
+		const pierSide = expectedPierSide(this.#mechanical.rightAscension, this.#mechanical.declination, this.#siderealTime())
+		if (priorPierSide !== 'NEITHER' && pierSide !== 'NEITHER') return
+
+		this.#setPierSide(pierSide)
+		if (priorPierSide === 'NEITHER' && pierSide === 'EAST' && declinationStep !== 0) {
+			// The pole-neutral step was integrated in the WEST shaft frame; EAST mirrors it.
+			clearMechanicalAxis(this.#declinationAxis)
+			driveMechanicalAxis(this.#declinationAxis, Math.sign(-declinationStep) as AxisDirection, Math.abs(declinationStep), this.#declinationTransmission)
+		} else if (priorPierSide !== 'NEITHER' && pierSide === 'NEITHER') {
+			// At the pole the pier side, and therefore the declination shaft frame, is undefined.
+			clearMechanicalAxis(this.#declinationAxis)
 		}
 	}
 
