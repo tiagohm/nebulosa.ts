@@ -441,6 +441,30 @@ describe('mount simulator meridian flip', () => {
 		}
 	})
 
+	test('keeps an active goto on the slew rate used for its pier-side prediction', () => {
+		const { simulator } = makeMeridianFlipMount('mount.flip.goto.rate.lock')
+
+		try {
+			const lst = simulator.siderealTimeAt(simulator.utcTime)
+			simulator.syncTo(normalizeAngle(lst + deg(57.4)), deg(20))
+			simulator.setTrackingEnabled(true)
+			simulator.setSlewRate('SPEED_7')
+			expect(simulator.pierSide).toBe('WEST')
+
+			const target = normalizeAngle(lst + deg(0.1))
+			const duration = Math.abs(normalizePI(target - simulator.mechanical.rightAscension)) / FAST_SLEW_SPEED
+			simulator.goTo(target, simulator.declination)
+			simulator.setSlewRate('SPEED_1')
+			simulator.advance(duration + 0.01)
+
+			expect(simulator.isSlewing).toBeFalse()
+			expect(simulator.pierSide).toBe('WEST')
+			expect(normalizePI(simulator.rightAscension - target)).toBeCloseTo(0, 8)
+		} finally {
+			simulator.dispose()
+		}
+	})
+
 	test('rebases automatic flip policy when a goto arrives', () => {
 		const { client, simulator } = makeMeridianFlipMount('mount.flip.goto.rebase')
 

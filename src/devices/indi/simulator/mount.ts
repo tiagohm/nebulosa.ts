@@ -182,6 +182,8 @@ export class MountSimulator extends DeviceSimulator {
 	#slewTarget?: EquatorialCoordinate
 	// Pier side committed only after the active slew reaches its destination.
 	#slewTargetPierSide?: PierSide
+	// Physical speed of the active coordinate slew, in radians per second.
+	#slewSpeed = 0
 	// Remaining virtual half-turn of a pier-side change, in radians of physical travel.
 	#flipTravelRemaining: Angle = 0
 	// Signed virtual RA-axis direction used by transmission, worm phase, and settling models.
@@ -1130,6 +1132,7 @@ export class MountSimulator extends DeviceSimulator {
 		this.#slewMode = mode
 		this.#slewTarget = target
 		this.#slewTargetPierSide = targetPierSide
+		this.#slewSpeed = this.#manualSlewSpeed() * SLEW_SPEED_FACTOR
 		this.#flipTravelRemaining = changesPierSide ? PI : 0
 		this.#flipDirection = changesPierSide ? (targetPierSide === 'EAST' ? 1 : -1) : 0
 		if (targetPierSide !== 'NEITHER' && targetPierSide !== this.pierSide) {
@@ -1614,7 +1617,7 @@ export class MountSimulator extends DeviceSimulator {
 		const target = this.#slewTarget
 		if (!target) return [0, 0]
 
-		const speed = this.#manualSlewSpeed() * SLEW_SPEED_FACTOR
+		const speed = this.#slewSpeed
 		// Measured from the axes, not from the reported coordinate. The target was converted into a
 		// mechanical orientation when the slew was commanded, so comparing it against what the
 		// controller reports mixes the two sides of the encoder index error: a goto to the coordinate
@@ -1643,7 +1646,7 @@ export class MountSimulator extends DeviceSimulator {
 
 		// Time left in the step after the slew ends, which is none while it is still running.
 		let remaining = 0
-		const speed = this.#manualSlewSpeed() * SLEW_SPEED_FACTOR
+		const speed = this.#slewSpeed
 		const maxStep = speed * dtSeconds
 		const deltaRightAscension = normalizePI(target.rightAscension - this.#mechanical.rightAscension)
 		const deltaDeclination = target.declination - this.#mechanical.declination
@@ -1703,7 +1706,7 @@ export class MountSimulator extends DeviceSimulator {
 			// southward slew began by moving north of its target, which is a rebound rather than an
 			// overshoot.
 			if (span > 0) {
-				const severity = this.#manualSlewSpeed() / SLEW_RATES.at(-1)!.speed
+				const severity = speed / (SLEW_SPEED_FACTOR * SLEW_RATES.at(-1)!.speed)
 				const rightAscensionShare = clamp(rightAscensionMotorDelta / span, -1, 1)
 				const declinationShare = clamp((declinationMotorDelta * declinationShaftFrameSign(this.pierSide)) / span, -1, 1)
 				exciteSettling(this.#rightAscensionSettling, severity * rightAscensionShare, this.#settlingConfig)
@@ -2101,9 +2104,10 @@ export class MountSimulator extends DeviceSimulator {
 		this.#resetSettlingState()
 	}
 
-	// Clears pier-side travel belonging to a superseded or completed slew without changing the side.
+	// Clears transient travel and speed belonging to a superseded or completed slew without changing the side.
 	#clearFlipMotion() {
 		this.#slewTargetPierSide = undefined
+		this.#slewSpeed = 0
 		this.#flipTravelRemaining = 0
 		this.#flipDirection = 0
 		this.#flipDeclinationTravelRemaining = 0
