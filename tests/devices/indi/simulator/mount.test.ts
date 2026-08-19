@@ -506,7 +506,12 @@ describe('mount simulator meridian flip', () => {
 			simulator.advance(FAST_FLIP_DURATION / 2 + 1e-6)
 			expect(simulator.pierSide).toBe('EAST')
 			expect(toArcsec(simulator.boresight.declination - simulator.mechanical.declination)).toBeCloseTo(0, 6)
-			expect(simulator.boresightPathLength(startTime, simulator.utcTime)).toBeGreaterThan(arcsec(80))
+			const trajectory = new Float64Array(6)
+			const arrivalTime = startTime + FAST_FLIP_DURATION * 1000
+			expect(simulator.sampleBoresightTrajectory(startTime, arrivalTime, 3, trajectory)).toBe(3)
+			expect(toArcsec(trajectory[3] - simulator.mechanical.declination)).toBeCloseTo(90, 6)
+			expect(toArcsec(trajectory[5] - simulator.mechanical.declination)).toBeCloseTo(90, 6)
+			expect(simulator.boresightPathLength(startTime, arrivalTime + 1)).toBeGreaterThan(arcsec(80))
 		} finally {
 			simulator.dispose()
 		}

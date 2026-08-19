@@ -1648,10 +1648,13 @@ export class MountSimulator extends DeviceSimulator {
 			// few-hertz resonance covers a good part of a cycle in one step, so integrating it over the
 			// whole interval would shift its phase or swallow the first overshoot outright.
 			remaining = maxStep > 0 ? dtSeconds * (1 - span / maxStep) : 0
+			const arrivalTime = endTime - remaining * 1000
+			const priorPierSide = this.pierSide
 			this.#setMechanical(target.rightAscension, target.declination)
 			// A coordinate slew selected its destination side before it began, so the old side remains valid
 			// throughout the virtual half-turn and is committed only at arrival. Home and park have no stored
 			// side and derive one from where their axes finished instead.
+			if (this.#slewTargetPierSide !== undefined && this.#slewTargetPierSide !== priorPierSide) this.#recordBoresightAt(arrivalTime)
 			if (this.#slewTargetPierSide === undefined) this.#refreshPierSide()
 			else this.#setPierSide(this.#slewTargetPierSide)
 			// The axes come to a stop, so static friction has to be overcome again before the tracking
