@@ -728,6 +728,31 @@ describe('mount simulator meridian flip', () => {
 		}
 	})
 
+	test('includes right ascension settling in automatic flip hour angle', () => {
+		const { client, simulator } = makeMeridianFlipMount('mount.flip.auto.settling')
+
+		try {
+			client.sendSwitch({ device: simulator.name, name: 'SIMULATOR_ERROR_FEATURES', elements: { SETTLING: true } })
+			client.sendNumber({ device: simulator.name, name: 'MOUNT_SETTLING', elements: { OVERSHOOT: 60, FREQUENCY: 2, DAMPING_RATIO: 0.15 } })
+			const lst = simulator.siderealTimeAt(simulator.utcTime)
+			simulator.syncTo(normalizeAngle(lst + deg(1)), deg(20))
+			simulator.setTrackingEnabled(true)
+			simulator.setSlewRate('SPEED_7')
+			client.sendSwitch({ device: simulator.name, name: 'MOUNT_AUTO_MERIDIAN_FLIP', elements: { INDI_ENABLED: true } })
+
+			const target = normalizeAngle(lst + arcsec(20))
+			const duration = Math.abs(normalizePI(target - simulator.mechanical.rightAscension)) / FAST_SLEW_SPEED
+			simulator.goTo(target, simulator.declination)
+			simulator.advance(duration + 0.05)
+
+			expect(normalizePI(simulator.siderealTimeAt(simulator.utcTime) - simulator.rightAscension)).toBeGreaterThan(0)
+			expect(simulator.isSlewing).toBeTrue()
+			expect(simulator.pierSide).toBe('WEST')
+		} finally {
+			simulator.dispose()
+		}
+	})
+
 	test('evaluates automatic flip thresholds from the reported right ascension', () => {
 		const { client, simulator } = makeMeridianFlipMount('mount.flip.auto.reported')
 

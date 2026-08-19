@@ -1780,7 +1780,10 @@ export class MountSimulator extends DeviceSimulator {
 			const rightAscension = this.#mechanical.rightAscension
 			const declination = this.#mechanical.declination
 			this.#setMechanical(rightAscension + rightAscensionRing, declination + declinationRing)
-			this.#appliedRightAscensionRing += normalizePI(this.#mechanical.rightAscension - rightAscension)
+			const appliedRightAscensionRing = normalizePI(this.#mechanical.rightAscension - rightAscension)
+			this.#automaticFlipHourAngle -= appliedRightAscensionRing
+			this.#automaticFlipMaximumHourAngle = Math.max(this.#automaticFlipMaximumHourAngle, this.#automaticFlipHourAngle)
+			this.#appliedRightAscensionRing += appliedRightAscensionRing
 			this.#appliedDeclinationRing += this.#mechanical.declination - declination
 		}
 	}
