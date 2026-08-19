@@ -1804,6 +1804,7 @@ export class MountSimulator extends DeviceSimulator {
 	#advanceFreeMotion(dtSeconds: number) {
 		const rightAscensionMotorRate = this.#rightAscensionMotorRate()
 		let declinationCelestialRate = 0
+		const wasPoleNeutral = this.pierSide === 'NEITHER'
 
 		if (this.#manualNorthSouth !== 0) declinationCelestialRate += this.#manualNorthSouth * this.#manualSlewSpeed()
 		declinationCelestialRate += this.#guideRateNorthSouth
@@ -1827,6 +1828,7 @@ export class MountSimulator extends DeviceSimulator {
 
 		if (rightAscensionDelta !== 0 || declinationStep !== 0) {
 			this.#setMechanical(this.#mechanical.rightAscension + rightAscensionDelta, this.#mechanical.declination + declinationStep)
+			if (wasPoleNeutral) this.#refreshPierSide()
 		}
 	}
 
@@ -1887,14 +1889,15 @@ export class MountSimulator extends DeviceSimulator {
 	// Decides which side of the pier the tube is on from where the axes now sit, and publishes it when
 	// it changed.
 	//
-	// Called only where the mount is actually placed on a side: connection seeding and a sync. Slew
-	// arrivals commit their already-selected destination explicitly. Never while the axes are merely
-	// running, because a German mount tracking a target through the meridian does not flip. The
-	// hour angle of that target crosses zero on its own, so re-deriving the side from it turned a mount
-	// that had not moved into one on the other side of the pier at transit: the pier term of the flexure
-	// model appeared or disappeared in a single step, jumping the boresight by the whole configured
-	// offset and trailing every exposure that spanned it, while the published property announced a flip
-	// that never happened.
+	// Called only where the mount is actually placed on a side: connection seeding, a sync, and the
+	// first physical free-motion step that leaves a pole-neutral coordinate. Slew arrivals commit their
+	// already-selected destination explicitly. Never while a mount that already has a side is merely
+	// running, because a German mount tracking a target through the meridian does not flip. The hour
+	// angle of that target crosses zero on its own, so re-deriving the side from it turned a mount that
+	// had not moved into one on the other side of the pier at transit: the pier term of the flexure model
+	// appeared or disappeared in a single step, jumping the boresight by the whole configured offset and
+	// trailing every exposure that spanned it, while the published property announced a flip that never
+	// happened.
 	//
 	// Derived from the mechanical orientation: which side of the pier the tube is on is a fact about the
 	// axes, not about what the controller believes it is reporting.

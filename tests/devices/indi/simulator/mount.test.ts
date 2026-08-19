@@ -953,6 +953,29 @@ describe('mount simulator meridian flip', () => {
 		}
 	})
 
+	test('establishes pier side after manual motion leaves a pole', () => {
+		const { client, simulator } = makeMeridianFlipMount('mount.flip.auto.pole.manual')
+
+		try {
+			const lst = simulator.siderealTimeAt(simulator.utcTime)
+			simulator.syncTo(normalizeAngle(lst + arcsec(30)), PIOVERTWO)
+			expect(simulator.pierSide).toBe('NEITHER')
+			simulator.setTrackingEnabled(true)
+			client.sendSwitch({ device: simulator.name, name: 'MOUNT_AUTO_MERIDIAN_FLIP', elements: { INDI_ENABLED: true } })
+
+			simulator.moveSouth(true)
+			simulator.advance(0.1)
+			expect(simulator.pierSide).toBe('WEST')
+			simulator.moveSouth(false)
+
+			simulator.advance(3)
+			expect(simulator.isSlewing).toBeTrue()
+			expect(simulator.pierSide).toBe('WEST')
+		} finally {
+			simulator.dispose()
+		}
+	})
+
 	test('rejects a pole flip with Alert and clears it on the next valid operation', () => {
 		const { handler, manager, mount, simulator } = makeMeridianFlipMount('mount.flip.alert')
 		let coordinateState: string | undefined = 'Idle'
