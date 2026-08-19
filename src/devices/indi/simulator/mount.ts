@@ -1847,6 +1847,7 @@ export class MountSimulator extends DeviceSimulator {
 		if (priorPierSide !== 'NEITHER' && pierSide !== 'NEITHER') return
 
 		this.#setPierSide(pierSide)
+		if (priorPierSide === 'NEITHER' && pierSide !== 'NEITHER') this.#resetAutomaticFlipHourAngle()
 		if (priorPierSide === 'NEITHER' && pierSide === 'EAST' && declinationStep !== 0) {
 			// The pole-neutral step was integrated in the WEST shaft frame; EAST mirrors it.
 			clearMechanicalAxis(this.#declinationAxis)

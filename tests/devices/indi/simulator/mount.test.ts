@@ -1026,6 +1026,37 @@ describe('mount simulator meridian flip', () => {
 		}
 	})
 
+	test('rebases automatic flip history when manual motion leaves a pole', () => {
+		const { client, simulator } = makeMeridianFlipMount('mount.flip.auto.pole.history')
+
+		try {
+			const lst = simulator.siderealTimeAt(simulator.utcTime)
+			simulator.syncTo(normalizeAngle(lst - arcsec(30)), PIOVERTWO)
+			expect(simulator.pierSide).toBe('NEITHER')
+			simulator.setTrackingEnabled(true)
+			client.sendSwitch({ device: simulator.name, name: 'MOUNT_AUTO_MERIDIAN_FLIP', elements: { INDI_ENABLED: true } })
+
+			simulator.moveEast(true)
+			simulator.advance(0.01)
+			simulator.moveEast(false)
+			expect(normalizePI(simulator.siderealTimeAt(simulator.utcTime) - simulator.rightAscension)).toBeLessThan(0)
+
+			simulator.moveSouth(true)
+			simulator.advance(0.1)
+			expect(simulator.pierSide).toBe('WEST')
+			simulator.moveSouth(false)
+			simulator.advance(0.1)
+			expect(simulator.isSlewing).toBeFalse()
+
+			const secondsToThreshold = -normalizePI(simulator.siderealTimeAt(simulator.utcTime) - simulator.rightAscension) / SIDEREAL_DRIFT_RATE + 0.1
+			simulator.advance(secondsToThreshold)
+			expect(simulator.isSlewing).toBeTrue()
+			expect(simulator.pierSide).toBe('WEST')
+		} finally {
+			simulator.dispose()
+		}
+	})
+
 	test('clears pier side when manual motion reaches a pole', () => {
 		const { client, simulator } = makeMeridianFlipMount('mount.flip.auto.manual.pole')
 
