@@ -1804,7 +1804,7 @@ export class MountSimulator extends DeviceSimulator {
 	#advanceFreeMotion(dtSeconds: number) {
 		const rightAscensionMotorRate = this.#rightAscensionMotorRate()
 		let declinationCelestialRate = 0
-		const wasPoleNeutral = this.pierSide === 'NEITHER'
+		const priorPierSide = this.pierSide
 
 		if (this.#manualNorthSouth !== 0) declinationCelestialRate += this.#manualNorthSouth * this.#manualSlewSpeed()
 		declinationCelestialRate += this.#guideRateNorthSouth
@@ -1828,13 +1828,16 @@ export class MountSimulator extends DeviceSimulator {
 
 		if (rightAscensionDelta !== 0 || declinationStep !== 0) {
 			this.#setMechanical(this.#mechanical.rightAscension + rightAscensionDelta, this.#mechanical.declination + declinationStep)
-			if (wasPoleNeutral) {
-				const pierSide = expectedPierSide(this.#mechanical.rightAscension, this.#mechanical.declination, this.#siderealTime())
+			const pierSide = expectedPierSide(this.#mechanical.rightAscension, this.#mechanical.declination, this.#siderealTime())
+			if (priorPierSide === 'NEITHER' || pierSide === 'NEITHER') {
 				this.#setPierSide(pierSide)
 				if (pierSide === 'EAST' && declinationStep !== 0) {
 					// The pole-neutral step was integrated in the WEST shaft frame; EAST mirrors it.
 					clearMechanicalAxis(this.#declinationAxis)
 					driveMechanicalAxis(this.#declinationAxis, Math.sign(-declinationStep) as AxisDirection, Math.abs(declinationStep), this.#declinationTransmission)
+				} else if (priorPierSide === 'EAST' && pierSide === 'NEITHER') {
+					// At the pole the pier side, and therefore the EAST shaft frame, is undefined.
+					clearMechanicalAxis(this.#declinationAxis)
 				}
 			}
 		}
