@@ -761,7 +761,20 @@ export class MountSimulator extends DeviceSimulator {
 	// loading writes the vectors directly instead of going through `sendNumber`.
 	protected onPropertiesLoaded() {
 		this.#refreshErrorConfigurations()
-		this.#resetAutomaticFlipHourAngle()
+		this.#resetAutomaticFlipHourAngle(this.#utcTime, false)
+	}
+
+	// Loads persisted mount properties while preserving the automatic-flip abort latch.
+	//
+	// A load that turns the feature on is equivalent to an explicit enable and arms it. A load that
+	// merely rewrites other configuration while automatic flip is already enabled only rebases the
+	// hour-angle cache; it must not restart an aborted automatic flip on the next tick.
+	override async loadProperties() {
+		const automaticFlipWasEnabled = this.#autoMeridianFlip.elements.INDI_ENABLED.value
+
+		await super.loadProperties()
+
+		if (!automaticFlipWasEnabled && this.#autoMeridianFlip.elements.INDI_ENABLED.value) this.#automaticFlipArmed = true
 	}
 
 	// Rebuilds every configuration cached from a property vector. Called whenever a persisted set of
@@ -1977,10 +1990,10 @@ export class MountSimulator extends DeviceSimulator {
 	// `time` is the simulated UTC instant in milliseconds whose sidereal angle corresponds to the
 	// current reported coordinate. Later physical drive travel and clock changes advance it without
 	// normalizing, preserving threshold crossings through the signed-angle wrap.
-	#resetAutomaticFlipHourAngle(time: number = this.#utcTime) {
+	#resetAutomaticFlipHourAngle(time: number = this.#utcTime, rearm: boolean = true) {
 		this.#automaticFlipHourAngle = normalizePI(this.siderealTimeAt(time) - this.rightAscension)
 		this.#automaticFlipMaximumHourAngle = this.#automaticFlipHourAngle
-		this.#automaticFlipArmed = true
+		if (rearm) this.#automaticFlipArmed = true
 	}
 
 	// Shifts the retained automatic-flip policy into a changed reported-coordinate frame.

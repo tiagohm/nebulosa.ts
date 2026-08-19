@@ -918,6 +918,50 @@ describe('mount simulator meridian flip', () => {
 		expect(simulator.pierSide).toBe('WEST')
 	})
 
+	test('preserves an aborted automatic flip latch when loading persisted configuration', async () => {
+		let savedProperties: readonly SimulatorProperty[] = []
+		{
+			const handler = new IndiClientHandlerSet()
+			using client = new ClientSimulator('mount.flip.auto.abort.save', handler)
+			using simulator = new MountSimulator('Mount Simulator', client, {
+				save(_, properties) {
+					savedProperties = properties
+				},
+			})
+			simulator.connect()
+			client.sendSwitch({ device: simulator.name, name: 'MOUNT_AUTO_MERIDIAN_FLIP', elements: { INDI_ENABLED: true } })
+			simulator.saveProperties()
+		}
+
+		const handler = new IndiClientHandlerSet()
+		using client = new ClientSimulator('mount.flip.auto.abort.load', handler)
+		using simulator = new MountSimulator('Mount Simulator', client, {
+			load() {
+				return savedProperties
+			},
+		})
+		simulator.connect()
+		await simulator.loadProperties()
+		const lst = simulator.siderealTimeAt(simulator.utcTime)
+		simulator.syncTo(normalizeAngle(lst + arcsec(30)), deg(20))
+		simulator.setTrackingEnabled(true)
+		simulator.advance(4)
+		expect(simulator.isSlewing).toBeTrue()
+
+		simulator.stop()
+		simulator.advance(1)
+		expect(simulator.isSlewing).toBeFalse()
+
+		await simulator.loadProperties()
+		simulator.advance(0.1)
+		expect(simulator.isSlewing).toBeFalse()
+		expect(simulator.pierSide).toBe('WEST')
+
+		client.sendSwitch({ device: simulator.name, name: 'MOUNT_AUTO_MERIDIAN_FLIP', elements: { INDI_ENABLED: true } })
+		simulator.advance(0.1)
+		expect(simulator.isSlewing).toBeTrue()
+	})
+
 	test('disarms an aborted automatic flip until target or explicit enable rearming', () => {
 		const { client, simulator } = makeMeridianFlipMount('mount.flip.auto.abort')
 
