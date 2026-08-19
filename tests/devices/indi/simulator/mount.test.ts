@@ -679,6 +679,31 @@ describe('mount simulator meridian flip', () => {
 		}
 	})
 
+	test('rebases automatic flip maximum when rewinding simulated time', () => {
+		const { client, simulator } = makeMeridianFlipMount('mount.flip.auto.rewind')
+
+		try {
+			const startTime = simulator.utcTime
+			const lst = simulator.siderealTimeAt(startTime)
+			simulator.syncTo(normalizeAngle(lst + arcsec(30)), deg(20))
+			simulator.setTrackingEnabled(true)
+
+			simulator.advance(10)
+			simulator.setTime({ utc: startTime, offset: 0 })
+			client.sendSwitch({ device: simulator.name, name: 'MOUNT_AUTO_MERIDIAN_FLIP', elements: { INDI_ENABLED: true } })
+			simulator.advance(0.1)
+
+			expect(simulator.isSlewing).toBeFalse()
+			expect(normalizePI(simulator.siderealTimeAt(simulator.utcTime) - simulator.rightAscension)).toBeLessThan(0)
+
+			simulator.advance(3)
+			expect(simulator.isSlewing).toBeTrue()
+			expect(simulator.pierSide).toBe('WEST')
+		} finally {
+			simulator.dispose()
+		}
+	})
+
 	test('uses actual guided hour-angle travel when evaluating an automatic flip', () => {
 		const { client, simulator } = makeMeridianFlipMount('mount.flip.auto.guide')
 

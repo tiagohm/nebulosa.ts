@@ -1258,7 +1258,7 @@ export class MountSimulator extends DeviceSimulator {
 		shiftGuidePulses(this.#westEastPulses, clockDelta)
 		shiftGuidePulses(this.#northSouthPulses, clockDelta)
 		this.#automaticFlipHourAngle += (clockDelta / 1000) * SIDEREAL_DRIFT_RATE
-		this.#automaticFlipMaximumHourAngle = Math.max(this.#automaticFlipMaximumHourAngle, this.#automaticFlipHourAngle)
+		this.#automaticFlipMaximumHourAngle = clockDelta < 0 ? this.#automaticFlipHourAngle : Math.max(this.#automaticFlipMaximumHourAngle, this.#automaticFlipHourAngle)
 		this.#utcTime = value.utc
 		// The carried fraction belongs to the clock that was just replaced.
 		this.#utcTimeRemainder = 0
