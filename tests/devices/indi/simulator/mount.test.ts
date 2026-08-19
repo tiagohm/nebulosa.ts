@@ -492,8 +492,9 @@ describe('mount simulator meridian flip', () => {
 		const { client, simulator } = makeMeridianFlipMount('mount.flip.flexure')
 
 		try {
-			client.sendSwitch({ device: simulator.name, name: 'SIMULATOR_ERROR_FEATURES', elements: { FLEXURE: true } })
+			client.sendSwitch({ device: simulator.name, name: 'SIMULATOR_ERROR_FEATURES', elements: { FLEXURE: true, PERIODIC_ERROR: true } })
 			client.sendNumber({ device: simulator.name, name: 'MOUNT_FLEXURE', elements: { TUBE_FLEXURE: 0, PIER_WEST_RA: 0, PIER_WEST_DEC: 90 } })
+			client.sendNumber({ device: simulator.name, name: 'MOUNT_PERIODIC_ERROR', elements: { RA_PERIOD: 10, RA_AMPLITUDE: 60, RA_PHASE: 90, RA_AMPLITUDE_2: 0, RA_AMPLITUDE_3: 0 } })
 			const lst = simulator.siderealTimeAt(simulator.utcTime)
 			simulator.syncTo(normalizeAngle(lst + hour(1)), deg(20))
 			const startTime = simulator.utcTime
@@ -511,6 +512,10 @@ describe('mount simulator meridian flip', () => {
 			expect(simulator.sampleBoresightTrajectory(startTime, arrivalTime, 3, trajectory)).toBe(3)
 			expect(toArcsec(trajectory[3] - simulator.mechanical.declination)).toBeCloseTo(90, 6)
 			expect(toArcsec(trajectory[5] - simulator.mechanical.declination)).toBeCloseTo(90, 6)
+			const jump = new Float64Array(4)
+			expect(simulator.sampleBoresightTrajectory(arrivalTime, arrivalTime, 2, jump)).toBe(2)
+			expect(toArcsec(normalizePI(jump[0] - jump[2]))).toBeCloseTo(0, 6)
+			expect(toArcsec(jump[3] - jump[1])).toBeCloseTo(90, 6)
 			expect(simulator.boresightPathLength(startTime, arrivalTime + 1)).toBeGreaterThan(arcsec(80))
 		} finally {
 			simulator.dispose()

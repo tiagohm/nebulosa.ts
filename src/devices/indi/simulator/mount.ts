@@ -190,6 +190,8 @@ export class MountSimulator extends DeviceSimulator {
 	#flipDeclinationTravelRemaining: Angle = 0
 	// Signed declination-shaft direction used by transmission and settling models during a flip.
 	#flipDeclinationDirection: AxisDirection = 0
+	// Prior side to record at the exact arrival timestamp after dynamic errors have reached it.
+	#arrivalBoresightPierSide?: PierSide
 	// One-shot latch preventing an aborted or completed automatic flip from immediately restarting.
 	#automaticFlipArmed = true
 	// Unwrapped reported hour angle retained across simulation steps and configuration changes, in radians.
@@ -444,7 +446,7 @@ export class MountSimulator extends DeviceSimulator {
 	// Evaluates the current mechanical and dynamic state at `time`, in milliseconds on the simulated
 	// clock. The state itself must already have been advanced to that instant; the timestamp supplies the
 	// sidereal angle used by alignment and flexure terms when an interval is recorded in pieces.
-	#boresightAt(time: number): EquatorialCoordinate {
+	#boresightAt(time: number, pierSide: PierSide = this.pierSide): EquatorialCoordinate {
 		const model = this.pointingModel
 		const flexureEnabled = this.#simulatesFlexure
 		const { TUBE_FLEXURE, PIER_WEST_RA, PIER_WEST_DEC } = this.#flexure.elements
@@ -474,7 +476,7 @@ export class MountSimulator extends DeviceSimulator {
 			// Read from the side the mount is actually on, not predicted from the hour angle: a tracked
 			// target crosses the meridian by itself, and predicting the side there took the offset away
 			// from a mount that had not flipped, in one step and in the middle of an exposure.
-			if (flexureEnabled && (PIER_WEST_RA.value !== 0 || PIER_WEST_DEC.value !== 0) && this.pierSide === 'WEST') {
+			if (flexureEnabled && (PIER_WEST_RA.value !== 0 || PIER_WEST_DEC.value !== 0) && pierSide === 'WEST') {
 				rightAscension += PIER_WEST_RA.value * ASEC2RAD
 				declination += PIER_WEST_DEC.value * ASEC2RAD
 			}
@@ -1465,7 +1467,11 @@ export class MountSimulator extends DeviceSimulator {
 			// interpolated the goto evenly across all of it: a ten millisecond slew inside a hundred
 			// millisecond step read as still halfway to the target at fifty, so an exposure spanning it put
 			// the field in places the mount had already left and lingered there.
-			if (settlingSeconds > 0) this.#recordBoresightAt(endTime - settlingSeconds * 1000)
+			if (settlingSeconds > 0) {
+				const arrivalTime = endTime - settlingSeconds * 1000
+				this.#recordArrivalBoresightAt(arrivalTime)
+				this.#recordBoresightAt(arrivalTime)
+			}
 
 			// The rest of the step belongs to whatever the mount does when it is not slewing, which is
 			// normally tracking. Dropping it stopped the clock for the mount alone: a goto to the
@@ -1492,6 +1498,7 @@ export class MountSimulator extends DeviceSimulator {
 		this.#notifyWormPhase()
 
 		// Recorded last, so the sample reflects the state at the end of the interval just simulated.
+		this.#recordArrivalBoresightAt(this.#utcTime + this.#utcTimeRemainder)
 		this.#recordBoresight()
 		// Autonomous flips begin after the interval has been fully accounted for, so crossing the threshold
 		// starts a Busy operation for the following tick instead of retroactively consuming elapsed time.
@@ -1527,11 +1534,24 @@ export class MountSimulator extends DeviceSimulator {
 		this.#recordBoresightAt(this.#utcTime + this.#utcTimeRemainder)
 	}
 
+	// Records the old side of an instantaneous pier-side jump after dynamic errors reach `time`.
+	//
+	// `time` is milliseconds on the simulated clock. The live mount has already committed the new side
+	// when this runs; `#arrivalBoresightPierSide` temporarily supplies the prior side only to the
+	// boresight evaluation, so flexure changes are kept as a timestamped discontinuity without moving
+	// the published pier-side property backwards.
+	#recordArrivalBoresightAt(time: number) {
+		if (this.#arrivalBoresightPierSide === undefined) return
+
+		this.#recordBoresightAt(time, this.#arrivalBoresightPierSide)
+		this.#arrivalBoresightPierSide = undefined
+	}
+
 	// Appends where the optical axis points now under the timestamp `time`, in milliseconds on the
 	// simulated clock. Used to record the end of a piece of a step that was cut short of the clock the
 	// step as a whole will end on, which is where the guiding changed inside it.
-	#recordBoresightAt(time: number) {
-		const boresight = this.#boresightAt(time)
+	#recordBoresightAt(time: number, pierSide: PierSide = this.pierSide) {
+		const boresight = this.#boresightAt(time, pierSide)
 		recordBoresightSample(this.#boresightHistory, time, boresight.rightAscension, boresight.declination)
 	}
 
@@ -1648,13 +1668,12 @@ export class MountSimulator extends DeviceSimulator {
 			// few-hertz resonance covers a good part of a cycle in one step, so integrating it over the
 			// whole interval would shift its phase or swallow the first overshoot outright.
 			remaining = maxStep > 0 ? dtSeconds * (1 - span / maxStep) : 0
-			const arrivalTime = endTime - remaining * 1000
 			const priorPierSide = this.pierSide
 			this.#setMechanical(target.rightAscension, target.declination)
 			// A coordinate slew selected its destination side before it began, so the old side remains valid
 			// throughout the virtual half-turn and is committed only at arrival. Home and park have no stored
 			// side and derive one from where their axes finished instead.
-			if (this.#slewTargetPierSide !== undefined && this.#slewTargetPierSide !== priorPierSide) this.#recordBoresightAt(arrivalTime)
+			const arrivalBoresightPierSide = this.#slewTargetPierSide !== undefined && this.#slewTargetPierSide !== priorPierSide ? priorPierSide : undefined
 			if (this.#slewTargetPierSide === undefined) this.#refreshPierSide()
 			else this.#setPierSide(this.#slewTargetPierSide)
 			// The axes come to a stop, so static friction has to be overcome again before the tracking
@@ -1683,6 +1702,7 @@ export class MountSimulator extends DeviceSimulator {
 			this.#slewMode = undefined
 			this.#slewTarget = undefined
 			this.#clearFlipMotion()
+			this.#arrivalBoresightPierSide = arrivalBoresightPierSide
 			this.#setSlewing(false)
 			this.#setHoming(false)
 
@@ -2075,6 +2095,7 @@ export class MountSimulator extends DeviceSimulator {
 		this.#flipDirection = 0
 		this.#flipDeclinationTravelRemaining = 0
 		this.#flipDeclinationDirection = 0
+		this.#arrivalBoresightPierSide = undefined
 	}
 
 	// Puts both oscillators back on target and forgets what they had put into the coordinate.
