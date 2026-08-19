@@ -1009,6 +1009,7 @@ export class MountSimulator extends DeviceSimulator {
 		// Seeds the side from wherever the axes were left, since nothing has placed them this session.
 		this.#refreshPierSide()
 		this.#resetAutomaticFlipHourAngle()
+		this.#automaticFlipArmed = true
 		this.#timer = setInterval(this.#tick.bind(this), TICK_INTERVAL_MS)
 	}
 

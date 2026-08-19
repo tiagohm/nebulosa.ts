@@ -940,6 +940,32 @@ describe('mount simulator meridian flip', () => {
 		}
 	})
 
+	test('rearms an aborted automatic flip after reconnect', () => {
+		const { client, simulator } = makeMeridianFlipMount('mount.flip.auto.reconnect')
+
+		try {
+			const lst = simulator.siderealTimeAt(simulator.utcTime)
+			simulator.syncTo(normalizeAngle(lst + arcsec(30)), deg(20))
+			simulator.setTrackingEnabled(true)
+			client.sendSwitch({ device: simulator.name, name: 'MOUNT_AUTO_MERIDIAN_FLIP', elements: { INDI_ENABLED: true } })
+			simulator.advance(4)
+			expect(simulator.isSlewing).toBeTrue()
+
+			simulator.disconnect()
+			simulator.connect()
+			const reconnectedLst = simulator.siderealTimeAt(simulator.utcTime)
+			simulator.syncTo(normalizeAngle(reconnectedLst + arcsec(30)), deg(20))
+			simulator.setTime({ utc: simulator.utcTime + 10_000, offset: 0 })
+			simulator.setTrackingEnabled(true)
+			simulator.advance(0.1)
+
+			expect(simulator.isSlewing).toBeTrue()
+			expect(simulator.pierSide).toBe('WEST')
+		} finally {
+			simulator.dispose()
+		}
+	})
+
 	test('requires tracking, an unparked mount, and a defined pier side for automatic flips', () => {
 		const { client, simulator } = makeMeridianFlipMount('mount.flip.auto.eligibility')
 
