@@ -1828,7 +1828,15 @@ export class MountSimulator extends DeviceSimulator {
 
 		if (rightAscensionDelta !== 0 || declinationStep !== 0) {
 			this.#setMechanical(this.#mechanical.rightAscension + rightAscensionDelta, this.#mechanical.declination + declinationStep)
-			if (wasPoleNeutral) this.#refreshPierSide()
+			if (wasPoleNeutral) {
+				const pierSide = expectedPierSide(this.#mechanical.rightAscension, this.#mechanical.declination, this.#siderealTime())
+				this.#setPierSide(pierSide)
+				if (pierSide === 'EAST' && declinationStep !== 0) {
+					// The pole-neutral step was integrated in the WEST shaft frame; EAST mirrors it.
+					clearMechanicalAxis(this.#declinationAxis)
+					driveMechanicalAxis(this.#declinationAxis, Math.sign(-declinationStep) as AxisDirection, Math.abs(declinationStep), this.#declinationTransmission)
+				}
+			}
 		}
 	}
 
