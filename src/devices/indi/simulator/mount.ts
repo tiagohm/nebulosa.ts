@@ -759,6 +759,7 @@ export class MountSimulator extends DeviceSimulator {
 	// loading writes the vectors directly instead of going through `sendNumber`.
 	protected onPropertiesLoaded() {
 		this.#refreshErrorConfigurations()
+		this.#resetAutomaticFlipHourAngle()
 	}
 
 	// Rebuilds every configuration cached from a property vector. Called whenever a persisted set of
