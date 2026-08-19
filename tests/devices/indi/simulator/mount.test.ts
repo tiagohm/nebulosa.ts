@@ -966,6 +966,35 @@ describe('mount simulator meridian flip', () => {
 		}
 	})
 
+	test('rearms automatic flip after a successful automatic flip and goto placement', () => {
+		const { client, simulator } = makeMeridianFlipMount('mount.flip.auto.success.rearm')
+
+		try {
+			const lst = simulator.siderealTimeAt(simulator.utcTime)
+			simulator.syncTo(normalizeAngle(lst + arcsec(30)), deg(20))
+			simulator.setTrackingEnabled(true)
+			simulator.setSlewRate('SPEED_7')
+			client.sendNumber({ device: simulator.name, name: 'MOUNT_MERIDIAN_FLIP_SETTINGS', elements: { HOUR_ANGLE: -7.5 } })
+			client.sendSwitch({ device: simulator.name, name: 'MOUNT_AUTO_MERIDIAN_FLIP', elements: { INDI_ENABLED: true } })
+			simulator.advance(4)
+			expect(simulator.isSlewing).toBeTrue()
+
+			simulator.advance(FAST_FLIP_DURATION + 1e-6)
+			expect(simulator.isSlewing).toBeFalse()
+			expect(simulator.pierSide).toBe('EAST')
+
+			const target = normalizeAngle(simulator.siderealTimeAt(simulator.utcTime) + deg(5))
+			simulator.goTo(target, simulator.declination)
+			simulator.advance(FAST_FLIP_DURATION + deg(5) / FAST_SLEW_SPEED + 0.1)
+
+			expect(normalizePI(simulator.rightAscension - target)).toBeCloseTo(0, 6)
+			expect(simulator.pierSide).toBe('WEST')
+			expect(simulator.isSlewing).toBeTrue()
+		} finally {
+			simulator.dispose()
+		}
+	})
+
 	test('requires tracking, an unparked mount, and a defined pier side for automatic flips', () => {
 		const { client, simulator } = makeMeridianFlipMount('mount.flip.auto.eligibility')
 

@@ -1957,6 +1957,7 @@ export class MountSimulator extends DeviceSimulator {
 	#resetAutomaticFlipHourAngle(time: number = this.#utcTime) {
 		this.#automaticFlipHourAngle = normalizePI(this.siderealTimeAt(time) - this.rightAscension)
 		this.#automaticFlipMaximumHourAngle = this.#automaticFlipHourAngle
+		this.#automaticFlipArmed = true
 	}
 
 	// Shifts the retained automatic-flip policy into a changed reported-coordinate frame.
