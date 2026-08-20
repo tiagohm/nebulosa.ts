@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 // oxfmt-ignore
-import { asteroidMagnitudeEstimate, airmass, airmassKastenYoung, airyDiskInPixels, airyDiskSize, altitudeAtTransit, atmosphericExtinction, atmosphericRefraction, cometMagnitudeEstimate, criticalFocusZone, dawesLimit, dewPoint, dynamicRange, dynamicRangeInStops, effectiveApertureWithObstruction, exitPupil, exitPupilFromApertureAndMagnification, exitPupilFromEyepieceAndFocalRatio, eyepieceTrueFovViaFieldStop, eyepieceView, focalLength, focalRatio, guidingErrorInPixels, hourAngleAtAltitude, lightGraspRatio, limitingMagnitude, MAGNUS_MIN_CELSIUS, magnification, maxExposureBeforeTrail, mosaicPanelCount, objectAngularDiameter, obstructionRatio, periodicErrorInPixels, pixelScale, plateScale, rayleighLimit, recommendedFocalLength, relativeHumidity, requiredSubframeCount, samplingRatio, saturationTime, sensorDiagonalFov, sensorFieldOfView, signalToNoiseRatio, skyLimitedExposure, stackingMagnitudeGain, stackingSnrGain, starTrailLength, subframeCount, surfaceBrightness, totalIntegrationTime } from '../../src/astronomy/formulas'
+import { asteroidMagnitudeEstimate, airmass, airmassKastenYoung, airyDiskInPixels, airyDiskSize, altitudeAtTransit, atmosphericExtinction, atmosphericRefraction, cometMagnitudeEstimate, criticalFocusZone, dawesLimit, dewPoint, dynamicRange, dynamicRangeInStops, effectiveApertureWithObstruction, exitPupil, exitPupilFromApertureAndMagnification, exitPupilFromEyepieceAndFocalRatio, eyepieceTrueFovViaFieldStop, eyepieceView, focalLength, focalRatio, guidingErrorInPixels, hourAngleAtAltitude, lightGraspRatio, isMagnusDomain, limitingMagnitude, MAGNUS_MAX_CELSIUS, MAGNUS_MIN_CELSIUS, magnification, maxExposureBeforeTrail, mosaicPanelCount, objectAngularDiameter, obstructionRatio, periodicErrorInPixels, pixelScale, plateScale, rayleighLimit, recommendedFocalLength, relativeHumidity, requiredSubframeCount, samplingRatio, saturationTime, sensorDiagonalFov, sensorFieldOfView, signalToNoiseRatio, skyLimitedExposure, stackingMagnitudeGain, stackingSnrGain, starTrailLength, subframeCount, surfaceBrightness, totalIntegrationTime } from '../../src/astronomy/formulas'
 import { DEG2RAD, PIOVERTWO, RAD2DEG } from '../../src/core/constants'
 
 test('visual astronomy and optical planning formulas return expected values', () => {
@@ -114,11 +114,10 @@ test('formulas reject invalid inputs and denominators consistently', () => {
 	expect(() => dewPoint(20, 101)).toThrow('relative humidity must be within')
 	expect(() => relativeHumidity(Number.NaN, 10)).toThrow('value must be finite')
 	expect(() => relativeHumidity(20, Number.POSITIVE_INFINITY)).toThrow('value must be finite')
-	expect(() => relativeHumidity(MAGNUS_MIN_CELSIUS, 0)).toThrow('value must be greater than')
-	expect(() => relativeHumidity(0, MAGNUS_MIN_CELSIUS)).toThrow('value must be greater than')
-	expect(() => relativeHumidity(MAGNUS_MIN_CELSIUS, MAGNUS_MIN_CELSIUS)).toThrow('value must be greater than')
-	expect(() => relativeHumidity(-250, 0)).toThrow('value must be greater than')
-	expect(() => dewPoint(MAGNUS_MIN_CELSIUS, 50)).toThrow('value must be greater than')
+	expect(() => relativeHumidity(MAGNUS_MIN_CELSIUS - 0.001, 0)).toThrow('value must be within')
+	expect(() => relativeHumidity(0, MAGNUS_MAX_CELSIUS + 0.001)).toThrow('value must be within')
+	expect(() => relativeHumidity(-243.04 + 0.1, 0)).toThrow('value must be within')
+	expect(() => dewPoint(MAGNUS_MIN_CELSIUS - 0.001, 50)).toThrow('value must be within')
 	expect(() => altitudeAtTransit(100 * DEG2RAD, 0)).toThrow('value must be within')
 	expect(() => objectAngularDiameter(1391400, 0)).toThrow('value must be positive')
 	expect(() => surfaceBrightness(10, 0)).toThrow('value must be positive')
@@ -151,6 +150,28 @@ test('dew point and relative humidity invert each other over the useful domain',
 		for (const humidity of [1, 17.5, 50, 82.3, 100]) {
 			expect(relativeHumidity(temperature, dewPoint(temperature, humidity))).toBeCloseTo(humidity, 10)
 		}
+	}
+})
+
+test('relative humidity stays finite and positive across its whole domain', () => {
+	// The Magnus terms are unbounded near the -243.04 C singularity, so the domain has to be narrow enough
+	// that the inverse relation's exponential cannot overflow. The extremes are the worst case.
+	expect(relativeHumidity(MAGNUS_MIN_CELSIUS, MAGNUS_MAX_CELSIUS)).toBeFinite()
+	expect(relativeHumidity(MAGNUS_MAX_CELSIUS, MAGNUS_MIN_CELSIUS)).toBeGreaterThan(0)
+	expect(isMagnusDomain(MAGNUS_MIN_CELSIUS)).toBeTrue()
+	expect(isMagnusDomain(MAGNUS_MAX_CELSIUS)).toBeTrue()
+	expect(isMagnusDomain(-243.04 + 0.1)).toBeFalse()
+	expect(isMagnusDomain(Number.NaN)).toBeFalse()
+
+	for (let temperature = MAGNUS_MIN_CELSIUS; temperature <= MAGNUS_MAX_CELSIUS; temperature += 5) {
+		for (let dew = MAGNUS_MIN_CELSIUS; dew <= MAGNUS_MAX_CELSIUS; dew += 5) {
+			const humidity = relativeHumidity(temperature, dew)
+			expect(humidity).toBeFinite()
+			expect(humidity).toBeGreaterThan(0)
+		}
+
+		expect(dewPoint(temperature, 1)).toBeFinite()
+		expect(dewPoint(temperature, 100)).toBeFinite()
 	}
 })
 

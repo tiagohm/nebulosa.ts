@@ -274,15 +274,18 @@ describe('observing conditions server', () => {
 		await using fixture = await startAlpacaServer(ALPACA_WEATHER)
 		const base = fixture.path
 
-		// The Magnus terms divide by zero at -243.04 C. A driver reporting there must leave the derived
-		// member without a value instead of serializing Infinity or NaN as a successful reading, but the
-		// sensor itself is still implemented.
+		// The Magnus terms are unbounded near their -243.04 C singularity, so the relation is only defined
+		// within +-100 C. A driver reporting outside it must leave the derived member without a value
+		// instead of serializing Infinity or NaN as a successful reading, but the sensor stays implemented.
 		fixture.device.dewPoint = undefined
-		fixture.device.temperature = -243.04
+		fixture.device.temperature = -150
 		expect((await fixture.get(`${base}/dewpoint`)).ErrorNumber).toBe(AlpacaException.ValueNotSet)
 
 		fixture.device.dewPoint = 6.9
 		fixture.device.humidity = undefined
+		expect((await fixture.get(`${base}/humidity`)).ErrorNumber).toBe(AlpacaException.ValueNotSet)
+
+		fixture.device.temperature = -242.94
 		expect((await fixture.get(`${base}/humidity`)).ErrorNumber).toBe(AlpacaException.ValueNotSet)
 
 		fixture.device.temperature = 16.8

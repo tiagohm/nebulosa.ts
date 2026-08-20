@@ -2,8 +2,7 @@ import { expect, test } from 'bun:test'
 import type { GeographicCoordinate } from '../../src/astronomy/observer/location'
 import { type Time, Timescale } from '../../src/astronomy/time/time'
 import { PI, PIOVERTWO } from '../../src/core/constants'
-// oxfmt-ignore
-import { GEOMETRY_EPSILON, validateFinite, validateGreaterThan, validateInRange, validateInRangeExclusive, validateLatitude, validateLocation, validateLongitude, validateNonNegativeFinite, validateNonNegativeInteger, validatePositiveFinite, validatePositiveInteger, validateTime, validateVector } from '../../src/core/validation'
+import { GEOMETRY_EPSILON, validateFinite, validateInRange, validateInRangeExclusive, validateLatitude, validateLocation, validateLongitude, validateNonNegativeFinite, validateNonNegativeInteger, validatePositiveFinite, validatePositiveInteger, validateTime, validateVector } from '../../src/core/validation'
 import type { Vec3 } from '../../src/math/linear-algebra/vec3'
 
 test('validateFinite accepts only finite numbers', () => {
@@ -52,13 +51,6 @@ test('range validators include and exclude endpoints correctly', () => {
 	expect(() => validateInRangeExclusive(1, 1, 2)).toThrow('value must be within (1, 2)')
 	expect(() => validateInRangeExclusive(2, 1, 2)).toThrow('value must be within (1, 2)')
 	expect(() => validateInRangeExclusive(Number.POSITIVE_INFINITY, 1, 2)).toThrow('value must be finite')
-
-	expect(validateGreaterThan(1.5, 1)).toBe(1.5)
-	expect(validateGreaterThan(0, -1)).toBe(0)
-	expect(() => validateGreaterThan(1, 1)).toThrow('value must be greater than 1')
-	expect(() => validateGreaterThan(0.5, 1)).toThrow('value must be greater than 1')
-	expect(() => validateGreaterThan(Number.POSITIVE_INFINITY, 1)).toThrow('value must be finite')
-	expect(() => validateGreaterThan(Number.NaN, 1)).toThrow('value must be finite')
 })
 
 test('angle validators allow geometry tolerance at geographic limits', () => {
