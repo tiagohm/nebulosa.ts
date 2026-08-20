@@ -644,7 +644,12 @@ describe('mount simulator meridian flip', () => {
 
 			simulator.goTo(normalizeAngle(lst - hour(1)), deg(20))
 			simulator.advance(deg(70) / FAST_SLEW_SPEED + 1e-6)
+			expect(simulator.isSlewing).toBeTrue()
+			expect(simulator.pierSide).toBe('NEITHER')
+			simulator.advance(deg(95) / FAST_SLEW_SPEED)
 			expect(simulator.pierSide).toBe('EAST')
+			expect(normalizePI(simulator.mechanical.rightAscension - normalizeAngle(lst - hour(1)))).toBeCloseTo(0, 9)
+			expect(simulator.mechanical.declination).toBeCloseTo(deg(20), 12)
 
 			const start = simulator.mechanical.declination
 			simulator.pulse('NORTH', 1000)
