@@ -1264,6 +1264,28 @@ describe('mount simulator meridian flip', () => {
 		}
 	})
 
+	test('preserves celestial settling direction when an east-side slew reaches a pole', () => {
+		const { client, simulator } = makeMeridianFlipMount('mount.flip.settling.east.pole')
+
+		try {
+			client.sendSwitch({ device: simulator.name, name: 'SIMULATOR_ERROR_FEATURES', elements: { SETTLING: true } })
+			client.sendNumber({ device: simulator.name, name: 'MOUNT_SETTLING', elements: { OVERSHOOT: 600, FREQUENCY: 2, DAMPING_RATIO: 0.15 } })
+			const lst = simulator.siderealTimeAt(simulator.utcTime)
+			simulator.syncTo(normalizeAngle(lst - hour(1)), PIOVERTWO - deg(1))
+			expect(simulator.pierSide).toBe('EAST')
+			simulator.setSlewRate('SPEED_7')
+
+			simulator.goTo(simulator.rightAscension, PIOVERTWO)
+			simulator.advance(deg(1) / FAST_SLEW_SPEED + 0.02)
+
+			expect(simulator.isSlewing).toBeFalse()
+			expect(simulator.pierSide).toBe('NEITHER')
+			expect(simulator.mechanical.declination).toBe(PIOVERTWO)
+		} finally {
+			simulator.dispose()
+		}
+	})
+
 	test('rejects a pole flip with Alert and clears it on the next valid operation', () => {
 		const { handler, manager, mount, simulator } = makeMeridianFlipMount('mount.flip.alert')
 		let coordinateState: string | undefined = 'Idle'

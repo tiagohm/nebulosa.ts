@@ -1711,7 +1711,8 @@ export class MountSimulator extends DeviceSimulator {
 			if (span > 0) {
 				const severity = speed / (SLEW_SPEED_FACTOR * SLEW_RATES.at(-1)!.speed)
 				const rightAscensionShare = clamp(rightAscensionMotorDelta / span, -1, 1)
-				const declinationShare = clamp((declinationMotorDelta * declinationShaftFrameSign(this.pierSide)) / span, -1, 1)
+				const declinationSettlingPierSide = this.pierSide === 'NEITHER' ? priorPierSide : this.pierSide
+				const declinationShare = clamp((declinationMotorDelta * declinationShaftFrameSign(declinationSettlingPierSide)) / span, -1, 1)
 				exciteSettling(this.#rightAscensionSettling, severity * rightAscensionShare, this.#settlingConfig)
 				exciteSettling(this.#declinationSettling, severity * declinationShare, this.#settlingConfig)
 			}
