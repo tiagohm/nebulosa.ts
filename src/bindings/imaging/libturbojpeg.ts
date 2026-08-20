@@ -223,7 +223,7 @@ export class Jpeg {
 				// return new Uint8Array(toArrayBuffer(p as never, 0, size), 0, size)
 				return jpeg.subarray(0, Number(p[1]))
 			} else {
-				console.error('JPEG compression failed:', this.#lib.tjGetErrorStr().toString())
+				console.error('JPEG compression failed:', this.#lib.tjGetErrorStr()?.toString())
 			}
 		} finally {
 			this.#lib.tjDestroy(pointer)
@@ -254,7 +254,7 @@ export class Jpeg {
 			if (decompressed === 0) {
 				return { data, width, height, format }
 			} else {
-				console.error('JPEG decompression failed:', this.#lib.tjGetErrorStr().toString())
+				console.error('JPEG decompression failed:', this.#lib.tjGetErrorStr()?.toString())
 			}
 		} finally {
 			this.#lib.tjDestroy(pointer)
@@ -266,12 +266,12 @@ export class Jpeg {
 	// Shared header-parsing core reusing an already-initialized decompressor handle. Packs the four
 	// int32 outputs (width, height, subsampling, colorspace) into a 16-byte scratch buffer. The caller
 	// owns the handle's lifecycle. Returns undefined on native error or unrecognized enums.
-	#readHeader(pointer: Pointer, jpeg: NodeJS.TypedArray | DataView): JpegHeader | undefined {
+	#readHeader(pointer: Pointer | bigint, jpeg: NodeJS.TypedArray | DataView): JpegHeader | undefined {
 		const header = Buffer.allocUnsafe(16)
 		const result = this.#lib.tjDecompressHeader3(pointer, jpeg, jpeg.byteLength, ptr(header, 0), ptr(header, 4), ptr(header, 8), ptr(header, 12))
 
 		if (result !== 0) {
-			console.error('JPEG header decompression failed:', this.#lib.tjGetErrorStr().toString())
+			console.error('JPEG header decompression failed:', this.#lib.tjGetErrorStr()?.toString())
 			return undefined
 		}
 
