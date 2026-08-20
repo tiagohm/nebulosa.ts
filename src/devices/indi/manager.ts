@@ -3057,7 +3057,15 @@ export class WeatherManager extends DeviceManager<Weather> {
 
 	// Applies every mapped element of a WEATHER_PARAMETERS vector. Unmapped elements stay reachable
 	// through the raw property view but never reach the typed interface.
-	#handleParameters(device: Weather, message: DefNumberVector | SetNumberVector) {
+	//
+	// `definition` marks a defNumberVector. A definition published Busy carries the driver's declared
+	// defaults rather than a reading: the Firmata adapter defines every measurement Busy with zero
+	// placeholders and settles it to Idle on the first hardware sample. Storing those would announce
+	// 0 °C, 0 % and 0 hPa as freshly observed and start TimeSinceLastUpdate on values no sensor ever
+	// produced, so a Busy definition declares the property and nothing else.
+	#handleParameters(device: Weather, message: DefNumberVector | SetNumberVector, definition: boolean) {
+		if (definition && message.state === 'Busy') return
+
 		const stamps = this.#stamps(device)
 		const now = Date.now()
 		const { elements } = message
@@ -3118,7 +3126,7 @@ export class WeatherManager extends DeviceManager<Weather> {
 
 		switch (message.name) {
 			case 'WEATHER_PARAMETERS':
-				this.#handleParameters(device, message)
+				this.#handleParameters(device, message, definition !== undefined)
 				return
 			case 'WEATHER_UPDATE': {
 				// The property is absent until the driver defines it, so `updatePeriod` doubles as the

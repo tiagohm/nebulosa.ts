@@ -778,6 +778,43 @@ describe('WeatherManager', () => {
 		expect(updates).toEqual(['pressure'])
 	})
 
+	test('ignores the placeholder values of a Busy definition', () => {
+		const manager = new WeatherManager()
+		const weather = weatherDevice(manager)
+
+		// The Firmata adapter defines its weather vector Busy with zero placeholders before the first
+		// hardware reply, then settles it to Idle on the first real sample.
+		const placeholders = weatherParameters(weather.name, {
+			WEATHER_TEMPERATURE: defNumber('WEATHER_TEMPERATURE', 0, -55, 125),
+			WEATHER_HUMIDITY: defNumber('WEATHER_HUMIDITY', 0, 0, 100),
+			WEATHER_PRESSURE: defNumber('WEATHER_PRESSURE', 0, 0, 2000),
+		})
+
+		placeholders.state = 'Busy'
+		manager.numberVector(recordingClient, placeholders, 'defNumberVector')
+
+		expect(weather).not.toContainKey('humidity')
+		expect(weather).not.toContainKey('pressure')
+		expect(weather.hasThermometer).toBeFalse()
+		expect(manager.updatedAt(weather, 'temperature')).toBeUndefined()
+		expect(manager.lastUpdatedAt(weather)).toBeUndefined()
+
+		const readings = weatherParameters(weather.name, {
+			WEATHER_TEMPERATURE: defNumber('WEATHER_TEMPERATURE', 21.5, -55, 125),
+			WEATHER_HUMIDITY: defNumber('WEATHER_HUMIDITY', 47, 0, 100),
+			WEATHER_PRESSURE: defNumber('WEATHER_PRESSURE', 1011.8, 0, 2000),
+		})
+
+		readings.state = 'Idle'
+		manager.numberVector(recordingClient, readings, 'setNumberVector')
+
+		expect(weather.temperature).toBe(21.5)
+		expect(weather.humidity).toBe(47)
+		expect(weather.pressure).toBe(1011.8)
+		expect(weather.hasThermometer).toBeTrue()
+		expect(manager.updatedAt(weather, 'temperature')).toBeGreaterThan(0)
+	})
+
 	test('advances freshness even when the driver repeats a value', async () => {
 		const manager = new WeatherManager()
 		const weather = weatherDevice(manager)
