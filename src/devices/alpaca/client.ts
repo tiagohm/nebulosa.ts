@@ -8,7 +8,7 @@ import { bitpixInBytes } from '../../io/formats/fits/util'
 import { type Angle, formatDEC, formatRA, normalizeAngle, toDeg } from '../../math/units/angle'
 import { handleDefLightVector, handleDefNumberVector, handleDefSwitchVector, handleDefTextVector, handleDelProperty, handleSetBlobVector, handleSetLightVector, handleSetNumberVector, handleSetSwitchVector, handleSetTextVector, type IndiClientHandler } from '../indi/client'
 import type { Camera, Client, Device, Focuser, Mount, Rotator, WeatherSensor, Wheel } from '../indi/device'
-import { type DeviceProvider, WEATHER_SENSORS } from '../indi/manager'
+import { type DeviceProvider, WEATHER_SENSORS, type WeatherSensorMapping } from '../indi/manager'
 // oxfmt-ignore
 import { type DefSwitchVector, type DefVector, type EnableBlob, findOnSwitch, type GetProperties, makeBlobVector, makeLightVector, makeNumberVector, makeSwitchVector, makeTextVector, type NewNumberVector, type NewSwitchVector, type NewTextVector, type PropertyState, type ValueType, type VectorType } from '../indi/types'
 import { formatTemporal, TIMEZONE } from '../../astronomy/time/temporal'
@@ -2369,6 +2369,24 @@ class AlpacaObservingConditions extends AlpacaDevice {
 		this.#applyAveragePeriod()
 	}
 
+	// The INDI value of one sensor from the readings polled this cycle, or undefined when it has none.
+	//
+	// ASCOM reports north as 360 and reserves 0 for calm air, so a 0 WindDirection never carries a
+	// direction and is reported as "no reading" rather than as north. That keeps the last known direction
+	// on the far side once one exists, and, before any exists, keeps the element out of the definition
+	// instead of publishing its placeholder zero as an observed northerly wind. It does not depend on
+	// WindSpeed: consulting it would republish the calm sentinel as north whenever the speed is
+	// unimplemented or not yet read. A real north arrives as 360 and reduces to 0 here, which is 0 radians
+	// once the manager converts it.
+	#sensorValue(sensor: WeatherSensorMapping) {
+		const value = this.state[sensor.ascom as keyof AlpacaClientObservingConditionsState] as number | undefined
+
+		if (value === undefined || sensor.field !== 'windDirection') return value
+		if (value === 0) return undefined
+
+		return value % 360
+	}
+
 	// Publishes WEATHER_PARAMETERS with the supported sensors that have a reading, extending an already
 	// published vector with the ones that have since produced their first.
 	//
@@ -2379,13 +2397,12 @@ class AlpacaObservingConditions extends AlpacaDevice {
 	// expresses as a redefinition of the same property; the endpoint keeps being polled meanwhile.
 	#publishParameters() {
 		const labels = this.#labels!
-		const { state } = this
 		let parameters = this.#parameters
 		let added = false
 
 		for (const sensor of WEATHER_SENSORS) {
 			if (this.unsupported.has(sensor.ascom)) continue
-			if (state[sensor.ascom as keyof AlpacaClientObservingConditionsState] === undefined) continue
+			if (this.#sensorValue(sensor) === undefined) continue
 			if (parameters?.elements[sensor.indi] !== undefined) continue
 
 			if (parameters === undefined) {
@@ -2405,26 +2422,15 @@ class AlpacaObservingConditions extends AlpacaDevice {
 		this.sendDefProperty(parameters)
 	}
 
-	// Writes the polled readings into the vector elements, without emitting anything.
+	// Writes the polled readings into the vector elements, without emitting anything. An element whose
+	// sensor has no reading this cycle keeps its last value.
 	#fillParameters(parameters: ReturnType<typeof makeNumberVector>) {
-		const { state } = this
-
 		for (const sensor of WEATHER_SENSORS) {
 			if (parameters.elements[sensor.indi] === undefined) continue
 
-			let value = state[sensor.ascom as keyof AlpacaClientObservingConditionsState] as number | undefined
+			const value = this.#sensorValue(sensor)
 
 			if (value === undefined) continue
-
-			if (sensor.field === 'windDirection') {
-				// ASCOM reports north as 360 and reserves 0 for calm air, so a 0 never carries a direction
-				// and the last known one is kept instead. This does not depend on WindSpeed: consulting it
-				// would republish the calm sentinel as a northerly wind whenever the speed is
-				// unimplemented or not yet read. A real north arrives as 360 and reduces to 0 below, which
-				// is 0 radians once the manager converts it.
-				if (value === 0) continue
-				value %= 360
-			}
 
 			this.updatePropertyValue(parameters, sensor.indi, value)
 		}

@@ -563,6 +563,28 @@ describe.skipIf(isTimeConsumingTestSkipped())('observing conditions client', () 
 		expect(remote.device()!.windDirection).toBeCloseTo(PIOVERTWO, 9)
 	}, 10000)
 
+	test('withholds an initially calm wind direction instead of publishing north', async () => {
+		await using server = await startAlpacaServer(ALPACA_WEATHER)
+
+		// ASCOM reserves 0 for calm air, and the server reports it whenever the wind speed is 0. Until a
+		// real direction arrives the element must stay out of the vector: the placeholder 0 it would be
+		// defined with is exactly what WeatherManager reads as due north.
+		server.simulator.setParameter('WEATHER_WIND_SPEED', 0)
+
+		await using remote = await startAlpacaClient(server.url, ALPACA_WEATHER)
+		await waitUntil(() => remote.device()?.cloudCover === 15, WEATHER_TIMEOUT)
+
+		expect(weatherParametersOf(remote, remote.device()!)!.elements).not.toContainKey('WEATHER_WIND_DIRECTION')
+		expect(remote.device()!.windDirection).toBeUndefined()
+		expect(remote.device()!.windSpeed).toBe(0)
+
+		// The wind picks up and the real direction joins the vector.
+		server.simulator.setParameter('WEATHER_WIND_SPEED', 2.6)
+		await waitUntil(() => remote.device()!.windDirection !== undefined, WEATHER_TIMEOUT)
+
+		expect(remote.device()!.windDirection).toBeCloseTo(135 * DEG2RAD, 9)
+	}, 15000)
+
 	test('keeps an unimplemented sensor out of the synthesized vector', async () => {
 		await using server = await startAlpacaServer(ALPACA_WEATHER)
 
