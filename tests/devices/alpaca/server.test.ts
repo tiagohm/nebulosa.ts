@@ -270,6 +270,25 @@ describe('observing conditions server', () => {
 		expect(humidity.Value).toBe(100)
 	})
 
+	test('drops the derived member for a reading outside the Magnus domain', async () => {
+		await using fixture = await startAlpacaServer(ALPACA_WEATHER)
+		const base = fixture.path
+
+		// The Magnus terms divide by zero at -243.04 C. A driver reporting there must leave the derived
+		// member absent instead of serializing Infinity or NaN as a successful reading.
+		fixture.device.dewPoint = undefined
+		fixture.device.temperature = -243.04
+		expect((await fixture.get(`${base}/dewpoint`)).ErrorNumber).toBe(AlpacaException.MethodOrPropertyNotImplemented)
+
+		fixture.device.dewPoint = 6.9
+		fixture.device.humidity = undefined
+		expect((await fixture.get(`${base}/humidity`)).ErrorNumber).toBe(AlpacaException.MethodOrPropertyNotImplemented)
+
+		fixture.device.temperature = 16.8
+		fixture.device.dewPoint = -300
+		expect((await fixture.get(`${base}/humidity`)).ErrorNumber).toBe(AlpacaException.MethodOrPropertyNotImplemented)
+	})
+
 	test('reports the freshness of a derived sensor from the one it is derived from', async () => {
 		await using fixture = await startAlpacaServer(ALPACA_WEATHER)
 		const base = fixture.path

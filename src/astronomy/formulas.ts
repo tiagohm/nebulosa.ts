@@ -1,5 +1,5 @@
 import { ARCSEC_PER_RADIAN, DEG2RAD, PIOVERTWO, RAD2DEG, SIDEREAL_RATE } from '../core/constants'
-import { validateDeclination, validateFinite, validateInRange, validateNonNegativeFinite, validatePositiveAltitude, validatePositiveFinite } from '../core/validation'
+import { validateDeclination, validateFinite, validateGreaterThan, validateInRange, validateNonNegativeFinite, validatePositiveAltitude, validatePositiveFinite } from '../core/validation'
 import type { Angle } from '../math/units/angle'
 import type { Distance } from '../math/units/distance'
 
@@ -16,6 +16,10 @@ const MAX_EXPOSURE_COSINE_EPSILON = 1e-12
 // Magnus formula coefficients for the dew-point approximation over water (dimensionless a, b in °C).
 const MAGNUS_A_WATER = 17.625
 const MAGNUS_B_CELSIUS = 243.04
+// Exclusive lower bound of the Magnus domain, in degrees Celsius. The a*T/(b+T) term divides by zero at
+// exactly -b, so that point returns a non-finite value and everything below it flips the term's sign; both
+// are outside the approximation's domain. It sits at -243.04 °C, some 200 K below any weather reading.
+export const MAGNUS_MIN_CELSIUS = -MAGNUS_B_CELSIUS
 
 export interface EyepieceView {
 	// Visual magnification, dimensionless.
@@ -349,10 +353,11 @@ export function atmosphericRefraction(altitude: Angle) {
 }
 
 // Dew Point. Magnus approximation dew_point = b * alpha / (a - alpha).
-// Parameters: temperatureCelsius is finite ambient temperature in degrees Celsius, and relativeHumidityPercent is within (0, 100].
+// Parameters: temperatureCelsius is an ambient temperature in degrees Celsius above the Magnus singularity
+// at -243.04, and relativeHumidityPercent is within (0, 100].
 // Returns: estimated dew point in degrees Celsius.
 export function dewPoint(temperatureCelsius: number, relativeHumidityPercent: number) {
-	const temperature = validateFinite(temperatureCelsius)
+	const temperature = validateGreaterThan(temperatureCelsius, MAGNUS_MIN_CELSIUS)
 	const humidity = validateFinite(relativeHumidityPercent)
 	if (humidity <= 0 || humidity > 100) throw new RangeError('relative humidity must be within (0, 100]')
 	const alpha = (MAGNUS_A_WATER * temperature) / (MAGNUS_B_CELSIUS + temperature) + Math.log(humidity / 100)
@@ -360,15 +365,17 @@ export function dewPoint(temperatureCelsius: number, relativeHumidityPercent: nu
 }
 
 // Relative Humidity. Inverse of the Magnus dew-point approximation, RH = 100 * exp(alpha_dew - alpha_temperature).
-// Parameters: temperatureCelsius is finite ambient temperature in degrees Celsius, and dewPointCelsius is a
-// finite dew point in degrees Celsius.
+// Parameters: temperatureCelsius and dewPointCelsius are in degrees Celsius, both above the Magnus
+// singularity at -243.04. Both are rejected there and below, where the approximation is not defined and the
+// result would be non-finite; the bound is some 200 K below any weather reading, so it never excludes a
+// physically meaningful input.
 // Returns: estimated relative humidity in percent, above 0 and reaching exactly 100 at saturation, where the
 // dew point equals the ambient temperature. A dew point above the ambient temperature is supersaturated air
 // and returns above 100 rather than failing, which also keeps the function usable on a saturated reading
 // whose dew point exceeds the temperature only by rounding. Callers bound by a 0..100 contract clamp.
 export function relativeHumidity(temperatureCelsius: number, dewPointCelsius: number) {
-	const temperature = validateFinite(temperatureCelsius)
-	const dew = validateFinite(dewPointCelsius)
+	const temperature = validateGreaterThan(temperatureCelsius, MAGNUS_MIN_CELSIUS)
+	const dew = validateGreaterThan(dewPointCelsius, MAGNUS_MIN_CELSIUS)
 	const alpha = (MAGNUS_A_WATER * dew) / (MAGNUS_B_CELSIUS + dew) - (MAGNUS_A_WATER * temperature) / (MAGNUS_B_CELSIUS + temperature)
 	return 100 * Math.exp(alpha)
 }

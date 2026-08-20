@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 // oxfmt-ignore
-import { asteroidMagnitudeEstimate, airmass, airmassKastenYoung, airyDiskInPixels, airyDiskSize, altitudeAtTransit, atmosphericExtinction, atmosphericRefraction, cometMagnitudeEstimate, criticalFocusZone, dawesLimit, dewPoint, dynamicRange, dynamicRangeInStops, effectiveApertureWithObstruction, exitPupil, exitPupilFromApertureAndMagnification, exitPupilFromEyepieceAndFocalRatio, eyepieceTrueFovViaFieldStop, eyepieceView, focalLength, focalRatio, guidingErrorInPixels, hourAngleAtAltitude, lightGraspRatio, limitingMagnitude, magnification, maxExposureBeforeTrail, mosaicPanelCount, objectAngularDiameter, obstructionRatio, periodicErrorInPixels, pixelScale, plateScale, rayleighLimit, recommendedFocalLength, relativeHumidity, requiredSubframeCount, samplingRatio, saturationTime, sensorDiagonalFov, sensorFieldOfView, signalToNoiseRatio, skyLimitedExposure, stackingMagnitudeGain, stackingSnrGain, starTrailLength, subframeCount, surfaceBrightness, totalIntegrationTime } from '../../src/astronomy/formulas'
+import { asteroidMagnitudeEstimate, airmass, airmassKastenYoung, airyDiskInPixels, airyDiskSize, altitudeAtTransit, atmosphericExtinction, atmosphericRefraction, cometMagnitudeEstimate, criticalFocusZone, dawesLimit, dewPoint, dynamicRange, dynamicRangeInStops, effectiveApertureWithObstruction, exitPupil, exitPupilFromApertureAndMagnification, exitPupilFromEyepieceAndFocalRatio, eyepieceTrueFovViaFieldStop, eyepieceView, focalLength, focalRatio, guidingErrorInPixels, hourAngleAtAltitude, lightGraspRatio, limitingMagnitude, MAGNUS_MIN_CELSIUS, magnification, maxExposureBeforeTrail, mosaicPanelCount, objectAngularDiameter, obstructionRatio, periodicErrorInPixels, pixelScale, plateScale, rayleighLimit, recommendedFocalLength, relativeHumidity, requiredSubframeCount, samplingRatio, saturationTime, sensorDiagonalFov, sensorFieldOfView, signalToNoiseRatio, skyLimitedExposure, stackingMagnitudeGain, stackingSnrGain, starTrailLength, subframeCount, surfaceBrightness, totalIntegrationTime } from '../../src/astronomy/formulas'
 import { DEG2RAD, PIOVERTWO, RAD2DEG } from '../../src/core/constants'
 
 test('visual astronomy and optical planning formulas return expected values', () => {
@@ -114,6 +114,11 @@ test('formulas reject invalid inputs and denominators consistently', () => {
 	expect(() => dewPoint(20, 101)).toThrow('relative humidity must be within')
 	expect(() => relativeHumidity(Number.NaN, 10)).toThrow('value must be finite')
 	expect(() => relativeHumidity(20, Number.POSITIVE_INFINITY)).toThrow('value must be finite')
+	expect(() => relativeHumidity(MAGNUS_MIN_CELSIUS, 0)).toThrow('value must be greater than')
+	expect(() => relativeHumidity(0, MAGNUS_MIN_CELSIUS)).toThrow('value must be greater than')
+	expect(() => relativeHumidity(MAGNUS_MIN_CELSIUS, MAGNUS_MIN_CELSIUS)).toThrow('value must be greater than')
+	expect(() => relativeHumidity(-250, 0)).toThrow('value must be greater than')
+	expect(() => dewPoint(MAGNUS_MIN_CELSIUS, 50)).toThrow('value must be greater than')
 	expect(() => altitudeAtTransit(100 * DEG2RAD, 0)).toThrow('value must be within')
 	expect(() => objectAngularDiameter(1391400, 0)).toThrow('value must be positive')
 	expect(() => surfaceBrightness(10, 0)).toThrow('value must be positive')

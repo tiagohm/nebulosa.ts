@@ -62,6 +62,13 @@ export function validateNonNegativeInteger(value: number) {
 	return value
 }
 
+// Throws unless `value` is finite and strictly greater than `min`. Returns `value`.
+export function validateGreaterThan(value: number, min: number) {
+	validateFinite(value)
+	if (value <= min) throw new RangeError(`value must be greater than ${min}`)
+	return value
+}
+
 // Throws unless `value` is finite and within the inclusive range [min, max]. Returns `value`.
 export function validateInRange(value: number, min: number, max: number) {
 	validateFinite(value)

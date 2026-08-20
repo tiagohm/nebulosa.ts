@@ -8,7 +8,7 @@ import { type Angle, deg, hour, normalizeAngle, toDeg, toHour } from '../../math
 import { meter, toMeter } from '../../math/units/distance'
 // oxfmt-ignore
 import { type Camera, type Cover, type Device, type DeviceType, expectedPierSide, type Dome, type FlatPanel, type Focuser, type GuideDirection, type GuideOutput, isCamera, isFocuser, isMount, isWheel, type Mount, type NameAndLabel, type PierSide, type Rotator, type SafetyMonitor, type TrackMode, type Weather, type WeatherSensor, type Wheel } from '../indi/device'
-import { dewPoint, relativeHumidity } from '../../astronomy/formulas'
+import { dewPoint, MAGNUS_MIN_CELSIUS, relativeHumidity } from '../../astronomy/formulas'
 import { type GeographicCoordinate, localSiderealTime } from '../../astronomy/observer/location'
 import { type Time, timeNow } from '../../astronomy/time/time'
 import type { CameraManager, CoverManager, DeviceHandler, DeviceManager, DomeManager, FlatPanelManager, FocuserManager, GuideOutputManager, MountManager, RotatorManager, SafetyMonitorManager, WeatherManager, WheelManager } from '../indi/manager'
@@ -2299,9 +2299,10 @@ export function makeImageBytesFromFits(source: Buffer) {
 //   other and the ambient temperature. Only when that derivation is impossible are both reported absent.
 //
 // Both derivations clamp their input rather than refusing it. The Magnus relation is only undefined at
-// zero relative humidity; a reading slightly above 100% is saturated air, which a fogged-in station really
-// does report, and dropping the derived member there would make DewPoint flap to "not implemented" for a
-// sensor that is working. An Alpaca client that latches 1024 as a capability would then never ask again.
+// zero relative humidity and at or below its -243.04 °C singularity; a reading slightly above 100% is
+// saturated air, which a fogged-in station really does report, and dropping the derived member there would
+// make DewPoint flap to "not implemented" for a sensor that is working. An Alpaca client that latches 1024
+// as a capability would then never ask again.
 function weatherSensorValue(device: Weather, sensor: WeatherSensor): number | undefined {
 	switch (sensor) {
 		case 'temperature':
@@ -2317,11 +2318,15 @@ function weatherSensorValue(device: Weather, sensor: WeatherSensor): number | un
 		case 'humidity': {
 			if (device.humidity !== undefined) return device.humidity
 			if (device.dewPoint === undefined || !device.hasThermometer) return undefined
+			// A driver reading at or below the Magnus singularity is outside the approximation's domain, so
+			// the derived member is reported absent instead of letting the formula reject it mid-request.
+			if (device.temperature <= MAGNUS_MIN_CELSIUS || device.dewPoint <= MAGNUS_MIN_CELSIUS) return undefined
 			return Math.min(100, relativeHumidity(device.temperature, device.dewPoint))
 		}
 		case 'dewPoint': {
 			if (device.dewPoint !== undefined) return device.dewPoint
 			if (device.humidity === undefined || !device.hasThermometer || device.humidity <= 0) return undefined
+			if (device.temperature <= MAGNUS_MIN_CELSIUS) return undefined
 			return dewPoint(device.temperature, Math.min(100, device.humidity))
 		}
 		default:
