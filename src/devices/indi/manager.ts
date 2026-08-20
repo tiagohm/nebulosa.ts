@@ -3077,13 +3077,14 @@ export class WeatherManager extends DeviceManager<Weather> {
 		return stamps
 	}
 
-	// Applies one sensor reading. Notifies only on a real change, but always refreshes the freshness
-	// stamp, so TimeSinceLastUpdate advances even when the driver repeats a value.
+	// Applies one sensor reading. Notifies only on a real change, but refreshes the freshness stamp on
+	// every report, so TimeSinceLastUpdate advances even when the driver repeats a value. `stamps` is
+	// undefined for a report that is not an observation, which applies the value without dating it.
 	//
 	// Deliberately does not use handleMinMaxValue: the min/max of a WEATHER_PARAMETERS element are the
 	// driver's alarm thresholds from addParameter(name, label, min, max, percentWarning), not a display
 	// range, and clamping to them would truncate exactly the out-of-range reading that matters.
-	#handleSensor(device: Weather, mapping: WeatherSensorMapping, element: DefNumber | OneNumber | undefined, state: PropertyState | undefined, stamps: WeatherUpdatedAt, now: number, elapsed: number) {
+	#handleSensor(device: Weather, mapping: WeatherSensorMapping, element: DefNumber | OneNumber | undefined, state: PropertyState | undefined, stamps: WeatherUpdatedAt | undefined, now: number, elapsed: number) {
 		if (element === undefined) return
 
 		const { field } = mapping
@@ -3096,8 +3097,10 @@ export class WeatherManager extends DeviceManager<Weather> {
 			this.updated(device, field, state)
 		}
 
-		stamps.at[field] = now
-		stamps.elapsed[field] = elapsed
+		if (stamps !== undefined) {
+			stamps.at[field] = now
+			stamps.elapsed[field] = elapsed
+		}
 	}
 
 	// Applies every mapped element of a WEATHER_PARAMETERS vector. Unmapped elements stay reachable
@@ -3131,7 +3134,14 @@ export class WeatherManager extends DeviceManager<Weather> {
 			if (message.state === 'Busy') return
 		}
 
-		const stamps = this.#stamps(device)
+		// An Alert vector is the driver reporting that its hardware read failed. The INDI Weather
+		// interface applies WEATHER_PARAMETERS unchanged in that case and retries every five seconds, so
+		// its elements are the previous readings restated rather than new observations - the alarm status
+		// of a reading lives in WEATHER_STATUS, not in this state. The values are still applied, because a
+		// driver that sampled part of them before failing did observe those, but their freshness must not
+		// advance: a station whose sensor died would otherwise keep reporting a near-zero
+		// TimeSinceLastUpdate for the whole outage and hide it from every safety check.
+		const stamps = message.state === 'Alert' ? undefined : this.#stamps(device)
 		// Both clocks are read once per vector: the wall-clock stamp is what a timestamp reports, the
 		// monotonic one is what every age is measured from.
 		const now = Date.now()

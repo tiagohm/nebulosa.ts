@@ -890,6 +890,46 @@ describe('WeatherManager', () => {
 		expect(manager.updatedAt(weather, 'temperature')!).toBeGreaterThan(first)
 	})
 
+	test('does not date a failed report as an observation', async () => {
+		const manager = new WeatherManager()
+		const weather = weatherDevice(manager)
+
+		// The driver's very first hardware read fails, so it applies the vector in Alert with the declared
+		// defaults. The declaration counts, the placeholder reading does not.
+		const failed = weatherParameters(weather.name, { WEATHER_TEMPERATURE: defNumber('WEATHER_TEMPERATURE', 0, -60, 60) })
+		failed.state = 'Alert'
+		manager.numberVector(recordingClient, failed, 'defNumberVector')
+
+		expect(weather.hasThermometer).toBeTrue()
+		expect(manager.updatedAt(weather, 'temperature')).toBeUndefined()
+		expect(manager.lastUpdatedAt(weather)).toBeUndefined()
+		expect(manager.elapsedSince(weather, 'temperature')).toBeUndefined()
+
+		const parameters = weatherParameters(weather.name, { WEATHER_TEMPERATURE: defNumber('WEATHER_TEMPERATURE', 10, -60, 60) })
+		manager.numberVector(recordingClient, parameters, 'setNumberVector')
+
+		const first = manager.updatedAt(weather, 'temperature')!
+		expect(weather.temperature).toBe(10)
+		expect(first).toBeGreaterThan(0)
+
+		await Bun.sleep(5)
+
+		// A later failure restates the previous readings, and the driver retries every five seconds: the
+		// value survives, but the sensor did not report and its age has to keep growing.
+		failed.elements.WEATHER_TEMPERATURE.value = 11
+		manager.numberVector(recordingClient, failed, 'setNumberVector')
+
+		expect(weather.temperature).toBe(11)
+		expect(manager.updatedAt(weather, 'temperature')).toBe(first)
+		expect(manager.lastUpdatedAt(weather)).toBe(first)
+		expect(manager.elapsedSince(weather, 'temperature')!).toBeGreaterThanOrEqual(5)
+
+		// The next successful read dates it again.
+		manager.numberVector(recordingClient, parameters, 'setNumberVector')
+
+		expect(manager.updatedAt(weather, 'temperature')!).toBeGreaterThan(first)
+	})
+
 	test('measures sensor age on the monotonic clock', async () => {
 		const manager = new WeatherManager()
 		const weather = weatherDevice(manager)
