@@ -433,6 +433,26 @@ describe('observing conditions server', () => {
 		expect(dewPointAge).toBeGreaterThan(fresh)
 	})
 
+	test('refreshes the wind direction when the wind speed alone reports calm', async () => {
+		await using fixture = await startAlpacaServer(ALPACA_WEATHER)
+		const base = fixture.path
+
+		await Bun.sleep(20)
+
+		const stale = (await fixture.get(`${base}/timesincelastupdate?SensorName=WindDirection`)).Value as number
+		expect(stale).toBeGreaterThan(0.01)
+
+		// ASCOM reserves 0 for calm air, so a lone wind-speed report of zero swaps the published direction
+		// from the measured bearing to that sentinel: the endpoint moved even though the direction element
+		// was not reported.
+		fixture.manager.numberVector(fixture.indiClient, { device: fixture.simulator.name, name: 'WEATHER_PARAMETERS', elements: { WEATHER_WIND_SPEED: { name: 'WEATHER_WIND_SPEED', value: 0 } } }, 'setNumberVector')
+
+		expect((await fixture.get(`${base}/winddirection`)).Value).toBe(0)
+
+		const fresh = (await fixture.get(`${base}/timesincelastupdate?SensorName=WindDirection`)).Value as number
+		expect(fresh).toBeLessThan(stale)
+	})
+
 	test('reports no age for a derived sensor whose source never reported', async () => {
 		await using fixture = await startAlpacaServer(ALPACA_WEATHER)
 		const base = fixture.path

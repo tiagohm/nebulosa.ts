@@ -2408,8 +2408,22 @@ function weatherSensorImplemented(manager: WeatherManager | undefined, device: W
 // new temperature moves the derived value even when the source did not; the newer of the two readings is
 // therefore the moment the derived value last changed. It also consumes both, so a member missing either
 // one was never derived and has no age at all.
+//
+// The published wind direction is the other reading that is not a lone field: ASCOM reserves 0 for calm
+// air, so the wind speed selects between that sentinel and the measured bearing and a speed report
+// reaching or leaving zero moves the endpoint without the direction element being reported at all.
 function weatherSensorElapsedSince(manager: WeatherManager | undefined, device: Weather, sensor: WeatherSensor) {
 	if (manager === undefined) return undefined
+
+	if (sensor === 'windDirection') {
+		const at = manager.elapsedSince(device, 'windDirection')
+
+		if (at === undefined) return undefined
+
+		const speed = manager.elapsedSince(device, 'windSpeed')
+
+		return speed === undefined ? at : Math.min(at, speed)
+	}
 
 	const source = sensor === 'humidity' && device.humidity === undefined ? 'dewPoint' : sensor === 'dewPoint' && device.dewPoint === undefined ? 'humidity' : undefined
 
