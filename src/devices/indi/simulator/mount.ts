@@ -836,7 +836,7 @@ export class MountSimulator extends DeviceSimulator {
 				const priorPierSide = this.pierSide
 				const declinationStep = -this.#appliedDeclinationRing
 				this.#setMechanical(this.#mechanical.rightAscension - this.#appliedRightAscensionRing, this.#mechanical.declination - this.#appliedDeclinationRing)
-				this.#reconcilePierSideAfterPoleMotion(priorPierSide, declinationStep)
+				this.#reconcilePierSideAfterPoleMotion(priorPierSide, declinationStep, this.#utcTime + this.#utcTimeRemainder)
 			}
 
 			this.#resetSettlingState()
@@ -1789,8 +1789,9 @@ export class MountSimulator extends DeviceSimulator {
 				// end of it, which dropped a tick's worth of buffeting onto the first piece and left the
 				// rest of the step perfectly still.
 				advanceWind(this.#windState, stepSeconds, this.#windConfig, this.#normal)
-				this.#advanceFreeMotion(stepSeconds)
-				this.#advanceRingDown(stepSeconds)
+				const stepTime = from + stepMilliseconds * step
+				this.#advanceFreeMotion(stepSeconds, stepTime)
+				this.#advanceRingDown(stepSeconds, stepTime)
 
 				// Each sub-step ends at a position of its own, and the trajectory is what a camera
 				// integrates an exposure over. Recording only the state at the end of the step described a
@@ -1798,7 +1799,7 @@ export class MountSimulator extends DeviceSimulator {
 				// back to where it started, so the path measured zero and the frame was drawn from a
 				// single point instead of from the out-and-back trail it really traced. The last sample
 				// lands on the end of the step and is replaced there by the one taken after it.
-				this.#recordBoresightAt(from + stepMilliseconds * step)
+				this.#recordBoresightAt(stepTime)
 			}
 
 			from = to
@@ -1818,7 +1819,7 @@ export class MountSimulator extends DeviceSimulator {
 	// anyway, so a mount homing to the pole with settling enabled came to rest permanently short of it.
 	// Crediting only the motion that survived the clamp means nothing is owed for motion that never
 	// happened.
-	#advanceRingDown(dtSeconds: number) {
+	#advanceRingDown(dtSeconds: number, time: number) {
 		advanceSettling(this.#rightAscensionSettling, dtSeconds, this.#settlingConfig)
 		advanceSettling(this.#declinationSettling, dtSeconds, this.#settlingConfig)
 
@@ -1836,7 +1837,7 @@ export class MountSimulator extends DeviceSimulator {
 			this.#appliedRightAscensionRing += appliedRightAscensionRing
 			const appliedDeclinationRing = this.#mechanical.declination - declination
 			this.#appliedDeclinationRing += appliedDeclinationRing
-			this.#reconcilePierSideAfterPoleMotion(priorPierSide, appliedDeclinationRing)
+			this.#reconcilePierSideAfterPoleMotion(priorPierSide, appliedDeclinationRing, time)
 		}
 	}
 
@@ -1847,7 +1848,7 @@ export class MountSimulator extends DeviceSimulator {
 	// rates go through the transmission model, and the sidereal drift is added to the result: with the
 	// motors stopped the coordinate still drifts eastward, and a perfectly tracking mount is one whose
 	// motor exactly cancels that drift.
-	#advanceFreeMotion(dtSeconds: number) {
+	#advanceFreeMotion(dtSeconds: number, time: number) {
 		const rightAscensionMotorRate = this.#rightAscensionMotorRate()
 		let declinationCelestialRate = 0
 		const priorPierSide = this.pierSide
@@ -1874,22 +1875,23 @@ export class MountSimulator extends DeviceSimulator {
 
 		if (rightAscensionDelta !== 0 || declinationStep !== 0) {
 			this.#setMechanical(this.#mechanical.rightAscension + rightAscensionDelta, this.#mechanical.declination + declinationStep)
-			this.#reconcilePierSideAfterPoleMotion(priorPierSide, declinationStep)
+			this.#reconcilePierSideAfterPoleMotion(priorPierSide, declinationStep, time)
 		}
 	}
 
 	// Reconciles pier-side state for physical motion into or out of a celestial pole.
 	//
-	// `priorPierSide` is the side before the step and `declinationStep` is the applied mechanical
-	// declination travel in radians. A pole has no pier side, so entering it clears side-specific
-	// declination transmission state; leaving it can establish a side for the first time. EAST mirrors
-	// the neutral shaft frame used while the pole had no side.
-	#reconcilePierSideAfterPoleMotion(priorPierSide: PierSide, declinationStep: Angle) {
-		const pierSide = expectedPierSide(this.#mechanical.rightAscension, this.#mechanical.declination, this.#siderealTime())
+	// `priorPierSide` is the side before the step, `declinationStep` is the applied mechanical
+	// declination travel in radians, and `time` is the simulated UTC instant in milliseconds at which
+	// the motion reached the current coordinate. A pole has no pier side, so entering it clears
+	// side-specific declination transmission state; leaving it can establish a side for the first time.
+	// EAST mirrors the neutral shaft frame used while the pole had no side.
+	#reconcilePierSideAfterPoleMotion(priorPierSide: PierSide, declinationStep: Angle, time: number) {
+		const pierSide = expectedPierSide(this.#mechanical.rightAscension, this.#mechanical.declination, this.siderealTimeAt(time))
 		if (priorPierSide !== 'NEITHER' && pierSide !== 'NEITHER') return
 
 		this.#setPierSide(pierSide)
-		if (priorPierSide === 'NEITHER' && pierSide !== 'NEITHER') this.#resetAutomaticFlipHourAngle()
+		if (priorPierSide === 'NEITHER' && pierSide !== 'NEITHER') this.#resetAutomaticFlipHourAngle(time)
 		if (priorPierSide === 'NEITHER' && pierSide === 'EAST' && declinationStep !== 0) {
 			// The pole-neutral step was integrated in the WEST shaft frame; EAST mirrors it.
 			clearMechanicalAxis(this.#declinationAxis)

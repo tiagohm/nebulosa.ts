@@ -1161,6 +1161,26 @@ describe('mount simulator meridian flip', () => {
 		}
 	})
 
+	test('classifies pole departures at the sub-step timestamp', () => {
+		const { simulator } = makeMeridianFlipMount('mount.flip.auto.pole.timestamp')
+
+		try {
+			const lst = simulator.siderealTimeAt(simulator.utcTime)
+			simulator.syncTo(normalizeAngle(lst + SIDEREAL_DRIFT_RATE), PIOVERTWO)
+			expect(simulator.pierSide).toBe('NEITHER')
+			simulator.setTrackingEnabled(true)
+			simulator.setGuideRate(1, 1)
+
+			simulator.pulse('SOUTH', 100)
+			simulator.advance(2)
+
+			expect(simulator.pierSide).toBe('WEST')
+			expect(simulator.mechanical.declination).toBeLessThan(PIOVERTWO)
+		} finally {
+			simulator.dispose()
+		}
+	})
+
 	test('rebases automatic flip history when manual motion leaves a pole', () => {
 		const { client, simulator } = makeMeridianFlipMount('mount.flip.auto.pole.history')
 
