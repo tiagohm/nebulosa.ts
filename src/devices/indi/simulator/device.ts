@@ -129,6 +129,8 @@ export abstract class DeviceSimulator implements Disposable {
 				if (actual === undefined || this.propertiesToNotSave.includes(actual)) continue
 				let updated = false
 
+				this.onPropertyLoading(actual, property)
+
 				for (const key in actual.elements) {
 					const value = property.elements[key]
 					if (value === undefined) continue
@@ -146,6 +148,14 @@ export abstract class DeviceSimulator implements Disposable {
 			this.onPropertiesLoaded()
 		}
 	}
+
+	// Hook called immediately before one persisted property is written into the live vector.
+	//
+	// Subclasses use this when the distinction between a property loaded from storage and an
+	// overlapping client command matters. The live property still contains the value present at the
+	// instant loading resumes, while the persisted property contains the value that is about to be
+	// applied.
+	protected onPropertyLoading(actual: SimulatorProperty, persisted: SimulatorProperty) {}
 
 	// Hook called once the persisted values have been written back into the property vectors.
 	//

@@ -1011,6 +1011,57 @@ describe('mount simulator meridian flip', () => {
 		expect(simulator.isSlewing).toBeTrue()
 	})
 
+	test('preserves an aborted automatic flip latch across concurrent property loading', async () => {
+		let savedProperties: readonly SimulatorProperty[] = []
+		{
+			const handler = new IndiClientHandlerSet()
+			using client = new ClientSimulator('mount.flip.auto.abort.concurrent.save', handler)
+			using simulator = new MountSimulator('Mount Simulator', client, {
+				save(_, properties) {
+					savedProperties = properties
+				},
+			})
+			simulator.connect()
+			client.sendSwitch({ device: simulator.name, name: 'MOUNT_AUTO_MERIDIAN_FLIP', elements: { INDI_ENABLED: true } })
+			simulator.saveProperties()
+		}
+
+		let loadCount = 0
+		let finishLoad!: () => void
+		const handler = new IndiClientHandlerSet()
+		using client = new ClientSimulator('mount.flip.auto.abort.concurrent.load', handler)
+		using simulator = new MountSimulator('Mount Simulator', client, {
+			load() {
+				loadCount++
+				if (loadCount === 1) return []
+				return new Promise<readonly SimulatorProperty[]>((resolve) => {
+					finishLoad = () => resolve(savedProperties)
+				})
+			},
+		})
+		simulator.connect()
+		await Promise.resolve()
+
+		const loadProperties = simulator.loadProperties()
+		const lst = simulator.siderealTimeAt(simulator.utcTime)
+		simulator.syncTo(normalizeAngle(lst + arcsec(30)), deg(20))
+		simulator.setTrackingEnabled(true)
+		client.sendSwitch({ device: simulator.name, name: 'MOUNT_AUTO_MERIDIAN_FLIP', elements: { INDI_ENABLED: true } })
+		simulator.advance(4)
+		expect(simulator.isSlewing).toBeTrue()
+
+		simulator.stop()
+		simulator.advance(1)
+		expect(simulator.isSlewing).toBeFalse()
+
+		finishLoad()
+		await loadProperties
+		simulator.advance(0.1)
+
+		expect(simulator.isSlewing).toBeFalse()
+		expect(simulator.pierSide).toBe('WEST')
+	})
+
 	test('disarms an aborted automatic flip until target or explicit enable rearming', () => {
 		const { client, simulator } = makeMeridianFlipMount('mount.flip.auto.abort')
 

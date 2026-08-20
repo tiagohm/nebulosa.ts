@@ -196,6 +196,9 @@ export class MountSimulator extends DeviceSimulator {
 	#arrivalBoresightPierSide?: PierSide
 	// One-shot latch preventing an aborted or completed automatic flip from immediately restarting.
 	#automaticFlipArmed = true
+
+	// Whether the in-flight property load itself changed automatic flip from disabled to enabled.
+	#automaticFlipEnabledByLoad = false
 	// Unwrapped reported hour angle retained across simulation steps and configuration changes, in radians.
 	#automaticFlipHourAngle: Angle = 0
 	// Furthest positive reported hour angle reached since the last coordinate placement, in radians.
@@ -766,17 +769,25 @@ export class MountSimulator extends DeviceSimulator {
 		this.#resetAutomaticFlipHourAngle(this.#utcTime, false)
 	}
 
+	// Captures automatic-flip enables caused by persisted data, not by commands that race with the
+	// asynchronous load. The live vector is still pre-load here, so a disabled-to-enabled transition
+	// means the loaded property itself is responsible for rearming the automatic flip latch.
+	protected onPropertyLoading(actual: SimulatorProperty, persisted: SimulatorProperty) {
+		if (actual === this.#autoMeridianFlip && !this.#autoMeridianFlip.elements.INDI_ENABLED.value && persisted.elements.INDI_ENABLED?.value === true) this.#automaticFlipEnabledByLoad = true
+	}
+
 	// Loads persisted mount properties while preserving the automatic-flip abort latch.
 	//
 	// A load that turns the feature on is equivalent to an explicit enable and arms it. A load that
 	// merely rewrites other configuration while automatic flip is already enabled only rebases the
 	// hour-angle cache; it must not restart an aborted automatic flip on the next tick.
 	override async loadProperties() {
-		const automaticFlipWasEnabled = this.#autoMeridianFlip.elements.INDI_ENABLED.value
+		this.#automaticFlipEnabledByLoad = false
 
 		await super.loadProperties()
 
-		if (!automaticFlipWasEnabled && this.#autoMeridianFlip.elements.INDI_ENABLED.value) this.#automaticFlipArmed = true
+		if (this.#automaticFlipEnabledByLoad) this.#automaticFlipArmed = true
+		this.#automaticFlipEnabledByLoad = false
 	}
 
 	// Rebuilds every configuration cached from a property vector. Called whenever a persisted set of
