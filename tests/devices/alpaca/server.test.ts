@@ -433,6 +433,34 @@ describe('observing conditions server', () => {
 		expect(dewPointAge).toBeGreaterThan(fresh)
 	})
 
+	test('reports no age for a derived sensor whose source never reported', async () => {
+		await using fixture = await startAlpacaServer(ALPACA_WEATHER)
+		const base = fixture.path
+
+		fixture.manager.delProperty(fixture.indiClient, { device: fixture.simulator.name, name: 'WEATHER_PARAMETERS' })
+
+		// The driver declares a hygrometer and a thermometer, then settles only the temperature on its
+		// first hardware reply. Humidity has neither a reading of its own nor a dew point to be derived
+		// from, so it is implemented but has never produced a value.
+		const placeholders = {
+			device: fixture.simulator.name,
+			name: 'WEATHER_PARAMETERS',
+			permission: 'ro',
+			state: 'Busy',
+			elements: { WEATHER_TEMPERATURE: { name: 'WEATHER_TEMPERATURE', label: 'Temperature (C)', value: 0, min: -55, max: 125, step: 0.01, format: '%.2f' }, WEATHER_HUMIDITY: { name: 'WEATHER_HUMIDITY', label: 'Humidity (%)', value: 0, min: 0, max: 100, step: 0.1, format: '%.1f' } },
+		} as const
+		fixture.manager.numberVector(fixture.indiClient, placeholders, 'defNumberVector')
+		fixture.manager.vector(fixture.indiClient, placeholders, 'defNumberVector')
+
+		fixture.manager.numberVector(fixture.indiClient, { device: fixture.simulator.name, name: 'WEATHER_PARAMETERS', state: 'Ok', elements: { WEATHER_TEMPERATURE: { name: 'WEATHER_TEMPERATURE', value: 21.5 } } }, 'setNumberVector')
+
+		expect((await fixture.get(`${base}/humidity`)).ErrorNumber).toBe(AlpacaException.ValueNotSet)
+		expect((await fixture.get(`${base}/timesincelastupdate?SensorName=Humidity`)).Value).toBe(-1)
+
+		// The temperature did report, so its own age is a real one.
+		expect((await fixture.get(`${base}/timesincelastupdate?SensorName=Temperature`)).Value as number).toBeGreaterThanOrEqual(0)
+	})
+
 	test('drops its registrations when the server stops listening', async () => {
 		await using fixture = await startAlpacaServer(ALPACA_WEATHER)
 		const base = fixture.path

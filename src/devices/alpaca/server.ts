@@ -2406,7 +2406,8 @@ function weatherSensorImplemented(manager: WeatherManager | undefined, device: W
 // stamp of its own: reporting the source's age keeps TimeSinceLastUpdate meaningful instead of a
 // permanent -1. The derivation is a function of both the direct source and the ambient temperature, so a
 // new temperature moves the derived value even when the source did not; the newer of the two readings is
-// therefore the moment the derived value last changed.
+// therefore the moment the derived value last changed. It also consumes both, so a member missing either
+// one was never derived and has no age at all.
 function weatherSensorElapsedSince(manager: WeatherManager | undefined, device: Weather, sensor: WeatherSensor) {
 	if (manager === undefined) return undefined
 
@@ -2417,8 +2418,10 @@ function weatherSensorElapsedSince(manager: WeatherManager | undefined, device: 
 	const at = manager.elapsedSince(device, source)
 	const temperature = manager.elapsedSince(device, 'temperature')
 
-	if (at === undefined) return temperature
-	if (temperature === undefined) return at
+	// A declared member whose pair partner or ambient temperature never reported has no derived value -
+	// the getter answers ValueNotSet for it - so dating it from the half that did report would announce a
+	// fresh reading the sensor has never produced.
+	if (at === undefined || temperature === undefined) return undefined
 
 	return Math.min(at, temperature)
 }
