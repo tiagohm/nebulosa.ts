@@ -1,4 +1,4 @@
-import { dlopen, type Pointer, read } from 'bun:ffi'
+import { dlopen, type FFIFunction, type Pointer, read } from 'bun:ffi'
 import fs from 'fs/promises'
 import { tmpdir } from 'os'
 import { basename, join } from 'path'
@@ -130,9 +130,9 @@ export function unload() {
 // so it implements Disposable; reuse across solves is supported (each solve resets and reloads state).
 export class AstrometryNet implements Disposable {
 	// Native solver_t pointer; undefined once disposed.
-	#pointer?: Pointer
+	#pointer?: FFIFunction['ptr']
 	// Native index_t pointers loaded for the current solve, freed on dispose.
-	readonly #indexes: Pointer[] = []
+	readonly #indexes: FFIFunction['ptr'][] = []
 	// Guards against use after dispose; cleared when a fresh solver is loaded.
 	#disposed = false
 	readonly #lib = load()
@@ -207,7 +207,7 @@ export class AstrometryNet implements Disposable {
 		}
 
 		for (const index of this.#indexes) {
-			this.#lib.index_free(index)
+			this.#lib.index_free(index!)
 		}
 
 		this.#indexes.length = 0
@@ -284,7 +284,7 @@ export class AstrometryNet implements Disposable {
 		const output = join(tmpdir(), `${Bun.randomUUIDv7()}.wcs`)
 		const sip = read.ptr(match, MATCHOBJ_SIP_OFFSET) as Pointer
 		let result = sip ? this.#lib.sip_write_to_file(sip, cstring(output)) : -1
-		if (result !== 0) result = this.#lib.tan_write_to_file((match + MATCHOBJ_WCSTAN_OFFSET) as Pointer, cstring(output))
+		if (result !== 0) result = this.#lib.tan_write_to_file((Number(match) + MATCHOBJ_WCSTAN_OFFSET) as Pointer, cstring(output))
 
 		try {
 			if (result !== 0) return undefined
