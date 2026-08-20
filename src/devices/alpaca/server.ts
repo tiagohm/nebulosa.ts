@@ -930,8 +930,10 @@ export class AlpacaServer {
 			return makeAlpacaErrorResponse(AlpacaException.MethodOrPropertyNotImplemented, `${sensor.ascom} is not available`)
 		}
 
-		const parameters = this.options.weather?.properties.get(device)?.WEATHER_PARAMETERS
-		const label = parameters?.type === 'NUMBER' ? parameters.elements[sensor.indi]?.label : undefined
+		// The element is looked up under the aliases too, exactly as capability detection does: a driver
+		// that declares WEATHER_DEWPOINT rather than the canonical WEATHER_DEW_POINT still published a
+		// label, and answering the generic ASCOM name for it would hide the description it provided.
+		const label = weatherSensorElement(this.options.weather, device, sensor.field)?.label
 
 		return makeAlpacaResponse(label || sensor.ascom)
 	}
@@ -2347,6 +2349,30 @@ function weatherSensorValue(device: Weather, sensor: WeatherSensor): number | un
 	}
 }
 
+// The WEATHER_PARAMETERS element the driver declares for `sensor`, under its INDI name or any accepted
+// alias, or undefined when the driver declares none.
+//
+// The INDI Weather interface does not standardize parameter names - every driver names its own through
+// addParameter() - so every lookup that reads the declaration has to accept the same alias set, otherwise
+// a sensor detected through an alias would be described through the canonical name it never published.
+function weatherSensorElement(manager: WeatherManager | undefined, device: Weather, sensor: WeatherSensor) {
+	const parameters = manager?.properties.get(device)?.WEATHER_PARAMETERS
+
+	if (parameters?.type !== 'NUMBER') return undefined
+
+	const mapping = WEATHER_SENSORS_BY_FIELD.get(sensor)!
+	const element = parameters.elements[mapping.indi]
+
+	if (element !== undefined) return element
+
+	for (const alias of mapping.aliases) {
+		const aliased = parameters.elements[alias]
+		if (aliased !== undefined) return aliased
+	}
+
+	return undefined
+}
+
 // Whether the driver's WEATHER_PARAMETERS definition declares `sensor`, under its INDI name or any alias.
 //
 // The element set is the driver stating which sensors exist, and it says so before any of them has a
@@ -2354,16 +2380,7 @@ function weatherSensorValue(device: Weather, sensor: WeatherSensor): number | un
 // Firmata adapter does exactly that until its first hardware reply - so WeatherManager deliberately leaves
 // the typed fields undefined meanwhile. The declaration is what survives that gap.
 function weatherSensorDeclared(manager: WeatherManager | undefined, device: Weather, sensor: WeatherSensor) {
-	const parameters = manager?.properties.get(device)?.WEATHER_PARAMETERS
-
-	if (parameters?.type !== 'NUMBER') return false
-
-	const mapping = WEATHER_SENSORS_BY_FIELD.get(sensor)!
-
-	if (parameters.elements[mapping.indi] !== undefined) return true
-	for (const alias of mapping.aliases) if (parameters.elements[alias] !== undefined) return true
-
-	return false
+	return weatherSensorElement(manager, device, sensor) !== undefined
 }
 
 // Whether the backend implements `sensor` at all, independently of whether it has a usable value right

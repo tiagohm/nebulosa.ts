@@ -210,6 +210,14 @@ describe('observing conditions server', () => {
 
 		expect((await fixture.get(`${base}/sensordescription?SensorName=Wobble`)).ErrorNumber).toBe(AlpacaException.InvalidValue)
 		expect((await fixture.get(`${base}/sensordescription`)).ErrorNumber).toBe(AlpacaException.InvalidValue)
+
+		// A driver naming its parameter WEATHER_DEWPOINT is detected through the alias, so its label has to
+		// be read through the alias as well instead of falling back to the generic ASCOM name.
+		const aliased = { device: fixture.simulator.name, name: 'WEATHER_PARAMETERS', permission: 'ro', state: 'Ok', elements: { WEATHER_DEWPOINT: { name: 'WEATHER_DEWPOINT', label: 'Dew point (C)', value: 6.9, min: -60, max: 60, step: 0.1, format: '%.1f' } } } as const
+		fixture.manager.numberVector(fixture.indiClient, aliased, 'defNumberVector')
+		fixture.manager.vector(fixture.indiClient, aliased, 'defNumberVector')
+
+		expect((await fixture.get(`${base}/sensordescription?SensorName=DewPoint`)).Value).toBe('Dew point (C)')
 	})
 
 	test('reports the time since each sensor was last updated', async () => {
