@@ -2537,12 +2537,20 @@ class AlpacaObservingConditions extends AlpacaDevice {
 		this.#refresh.elements.REFRESH.value = false
 	}
 
+	// Discards every sensor reading from the state bag, so a value can only come from a poll of the
+	// current session.
+	#clearSensorState() {
+		const state = this.state as unknown as Record<string, undefined>
+		for (const name of WEATHER_ASCOM_NAMES) state[name] = undefined
+	}
+
 	protected onConnect() {
 		super.onConnect()
 		this.#generation++
 		this.#parameters = undefined
 		this.#labels = undefined
 		this.#defining = false
+		this.#clearSensorState()
 		this.#resetCommands()
 	}
 
@@ -2557,6 +2565,15 @@ class AlpacaObservingConditions extends AlpacaDevice {
 
 	// Waits for the capability discovery to settle before mirroring any reading.
 	protected handleEndpointsAfterRun() {
+		// A DeviceState snapshot is the whole truth for the tick it describes, but the base merge only
+		// writes the names it carries. A sensor that drops out of a snapshot - which this repository's own
+		// server does for a derived DewPoint at 0 % relative humidity - would otherwise keep its previous
+		// value and be reported, and restamped, as a fresh observation on every later tick. Clearing the
+		// sensor keys before the merge makes an omission read as "no reading this cycle", which is what a
+		// failed per-sensor poll already produces in the fallback path. A failed bulk request leaves the
+		// snapshot undefined, and the base skips the whole tick, so nothing is cleared there.
+		if (this.state.DeviceState !== undefined) this.#clearSensorState()
+
 		if (!super.handleEndpointsAfterRun()) return false
 
 		if (this.#labels === undefined) {

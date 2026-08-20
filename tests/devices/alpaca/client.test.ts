@@ -676,6 +676,34 @@ describe.skipIf(isTimeConsumingTestSkipped())('observing conditions client', () 
 		expect(weatherParametersOf(remote, remote.device()!)!.elements.WEATHER_STAR_FWHM.label).toBe('Star FWHM (arcsec)')
 	}, 15000)
 
+	test('stops refreshing a sensor a later bulk snapshot omits', async () => {
+		await using server = await startAlpacaServer(ALPACA_WEATHER)
+
+		// Derive the dew point from humidity, so it leaves DeviceState the moment the Magnus relation
+		// cannot produce it. A bulk snapshot only carries the names it can report, and the base merge
+		// writes only those, so an omission must not leave the previous reading in place.
+		server.device.dewPoint = undefined
+
+		await using remote = await startAlpacaClient(server.url, ALPACA_WEATHER)
+		await waitUntil(() => remote.device()?.dewPoint !== undefined, WEATHER_TIMEOUT)
+
+		const far = remote.device()!
+		const changed = Date.now()
+		server.device.humidity = 0
+		await waitUntil(() => remote.manager.updatedAt(far, 'temperature')! > changed, WEATHER_TIMEOUT)
+
+		const stale = remote.manager.updatedAt(far, 'dewPoint')!
+		const mark = Date.now()
+		await waitUntil(() => remote.manager.updatedAt(far, 'temperature')! > mark, WEATHER_TIMEOUT)
+
+		expect(remote.manager.updatedAt(far, 'dewPoint')).toBe(stale)
+		expect(far.dewPoint).toBeCloseTo(6.9, 1)
+
+		// It recovers on its own once the snapshot carries it again.
+		server.device.humidity = 52
+		await waitUntil(() => remote.manager.updatedAt(far, 'dewPoint')! > stale, WEATHER_TIMEOUT)
+	}, 15000)
+
 	test('stops refreshing a sensor whose endpoint starts failing', async () => {
 		await using server = await startAlpacaServer(ALPACA_WEATHER)
 
