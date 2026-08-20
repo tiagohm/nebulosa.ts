@@ -1215,7 +1215,7 @@ describe('mount simulator meridian flip', () => {
 		}
 	})
 
-	test('clears pier side when settling reaches a pole', () => {
+	test('reconciles pier side when settling reaches or leaves a pole', () => {
 		const { client, simulator } = makeMeridianFlipMount('mount.flip.auto.settling.pole')
 
 		try {
@@ -1235,6 +1235,10 @@ describe('mount simulator meridian flip', () => {
 			expect(simulator.isSlewing).toBeFalse()
 			expect(simulator.pierSide).toBe('NEITHER')
 			expect(simulator.mechanical.declination).toBe(PIOVERTWO)
+
+			client.sendSwitch({ device: simulator.name, name: 'SIMULATOR_ERROR_FEATURES', elements: { SETTLING: false } })
+			expect(simulator.pierSide).toBe('WEST')
+			expect(simulator.mechanical.declination).toBeLessThan(PIOVERTWO)
 		} finally {
 			simulator.dispose()
 		}

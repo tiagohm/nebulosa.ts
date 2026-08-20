@@ -833,7 +833,10 @@ export class MountSimulator extends DeviceSimulator {
 			// the switch was thrown, permanently off the position it had been commanded to, which is the
 			// opposite of what switching the family off is supposed to leave behind.
 			if (this.#appliedRightAscensionRing !== 0 || this.#appliedDeclinationRing !== 0) {
+				const priorPierSide = this.pierSide
+				const declinationStep = -this.#appliedDeclinationRing
 				this.#setMechanical(this.#mechanical.rightAscension - this.#appliedRightAscensionRing, this.#mechanical.declination - this.#appliedDeclinationRing)
+				this.#reconcilePierSideAfterPoleMotion(priorPierSide, declinationStep)
 			}
 
 			this.#resetSettlingState()
