@@ -316,6 +316,37 @@ describe('firmata indi client', () => {
 		const { events, handler } = createRecorder()
 		using client = new FirmataIndiClient(firmata as never, 'Board', { handler })
 
+		// A luxmeter is not an observing condition, so ILLUMINANCE keeps the change-only behavior its
+		// consumers expect.
+		const peripheral = new FakeLuxmeter('BH1750', firmata as never)
+		const device = client.createPeripheral(peripheral)
+		await device.connect()
+
+		peripheral.lux = 320
+		peripheral.emit()
+
+		let sets = events.filter((e) => e.tag === 'setNumber' && e.name === 'ILLUMINANCE')
+		expect(sets).toHaveLength(1)
+		expect(sets[0].value).toBe(320)
+
+		// Same value: no duplicate event.
+		peripheral.emit()
+		sets = events.filter((e) => e.tag === 'setNumber' && e.name === 'ILLUMINANCE')
+		expect(sets).toHaveLength(1)
+
+		// New value: another event.
+		peripheral.lux = 410
+		peripheral.emit()
+		sets = events.filter((e) => e.tag === 'setNumber' && e.name === 'ILLUMINANCE')
+		expect(sets).toHaveLength(2)
+		expect(sets[1].value).toBe(410)
+	})
+
+	test('weather parameters report every valid sample, unlike the other measurements', async () => {
+		const firmata = new FakeFirmata()
+		const { events, handler } = createRecorder()
+		using client = new FirmataIndiClient(firmata as never, 'Board', { handler })
+
 		const peripheral = new FakeThermometer('LM35', firmata as never)
 		const device = client.createPeripheral(peripheral)
 		await device.connect()
@@ -327,17 +358,60 @@ describe('firmata indi client', () => {
 		expect(sets).toHaveLength(1)
 		expect(sets[0].value).toBe(25)
 
-		// Same value: no duplicate event.
+		// A weather consumer reads the arrival of a report as the sensor's freshness, so a station holding
+		// a steady reading must keep reporting rather than looking like it stopped.
 		peripheral.emit()
-		sets = events.filter((e) => e.tag === 'setNumber' && e.name === 'WEATHER_PARAMETERS')
-		expect(sets).toHaveLength(1)
+		peripheral.emit()
 
-		// New value: another event.
-		peripheral.temperature = 26
-		peripheral.emit()
 		sets = events.filter((e) => e.tag === 'setNumber' && e.name === 'WEATHER_PARAMETERS')
-		expect(sets).toHaveLength(2)
-		expect(sets[1].value).toBe(26)
+		expect(sets).toHaveLength(3)
+		expect(sets[2].value).toBe(25)
+
+		// An out-of-range frame is still refused, and its last valid value is kept.
+		peripheral.temperature = 999
+		peripheral.emit()
+
+		sets = events.filter((e) => e.tag === 'setNumber' && e.name === 'WEATHER_PARAMETERS')
+		expect(sets).toHaveLength(3)
+	})
+
+	test('a steady weather peripheral keeps reporting on the report interval', async () => {
+		const firmata = new FakeFirmata()
+		const { events, handler } = createRecorder()
+		using client = new FirmataIndiClient(firmata as never, 'Board', { handler, reportInterval: 20 })
+
+		const peripheral = new FakeThermometer('LM35', firmata as never)
+		peripheral.temperature = 21.5
+		const device = client.createPeripheral(peripheral)
+		await device.connect()
+
+		// Peripherals suppress an unchanged read, so nothing arrives through the listener. The interval is
+		// what keeps WeatherManager's freshness, and Alpaca TimeSinceLastUpdate, advancing.
+		const before = events.filter((e) => e.tag === 'setNumber' && e.name === 'WEATHER_PARAMETERS').length
+		await waitUntil(() => events.filter((e) => e.tag === 'setNumber' && e.name === 'WEATHER_PARAMETERS').length >= before + 2, 2000)
+
+		const reports = events.filter((e) => e.tag === 'setNumber' && e.name === 'WEATHER_PARAMETERS')
+		expect(reports.at(-1)!.value).toBe(21.5)
+
+		// The interval belongs to the connection and must not outlive it.
+		device.disconnect()
+		const settled = events.filter((e) => e.tag === 'setNumber' && e.name === 'WEATHER_PARAMETERS').length
+		await Bun.sleep(80)
+		expect(events.filter((e) => e.tag === 'setNumber' && e.name === 'WEATHER_PARAMETERS')).toHaveLength(settled)
+	})
+
+	test('a non-weather device arms no report interval', async () => {
+		const firmata = new FakeFirmata()
+		const { events, handler } = createRecorder()
+		using client = new FirmataIndiClient(firmata as never, 'Board', { handler, reportInterval: 20 })
+
+		const peripheral = new FakeLuxmeter('BH1750', firmata as never)
+		peripheral.lux = 320
+		await client.createPeripheral(peripheral).connect()
+
+		const before = events.filter((e) => e.tag === 'setNumber' && e.name === 'ILLUMINANCE').length
+		await Bun.sleep(80)
+		expect(events.filter((e) => e.tag === 'setNumber' && e.name === 'ILLUMINANCE')).toHaveLength(before)
 	})
 
 	test('a synchronous first reading during start settles the vector to Idle, def before set', async () => {

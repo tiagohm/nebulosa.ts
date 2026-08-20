@@ -22,6 +22,11 @@ const SENSORS = 'Sensors'
 // non-positive timeout fails immediately when the board is not currently ready.
 const DEFAULT_CONNECTION_TIMEOUT = 5000
 
+// How often, in milliseconds, a connected device republishes its alwaysReport measurements while the
+// peripheral produces no new event. 60 s is the update period an INDI Weather driver publishes on by
+// default, which is what a weather consumer expects to see freshness advance at.
+const DEFAULT_REPORT_INTERVAL = 60000
+
 // One element of a measurement vector, bound to the peripheral reading that fills it.
 interface FirmataElementRead<D extends ListenablePeripheral<D>> {
 	// Name of the element within the owning vector.
@@ -42,6 +47,16 @@ interface FirmataMeasurement<D extends ListenablePeripheral<D>> {
 	// returns false the vector is published Busy with its declared defaults rather than sampled, and it
 	// settles to Idle on the first reading for which this returns true.
 	readonly isValid?: (peripheral: D) => boolean
+	// Whether every valid sample must be reported, including one that moved no element, and whether the
+	// measurement is republished on the device's report interval while the peripheral stays silent.
+	//
+	// Set for WEATHER_PARAMETERS only. A weather consumer reads the arrival of a report as the sensor's
+	// freshness - WeatherManager stamps its sensors from it, and Alpaca derives TimeSinceLastUpdate from
+	// those stamps - so a station holding a steady temperature, humidity and pressure would otherwise
+	// look like it stopped reporting. The peripherals themselves are change-only (Peripheral.commit
+	// suppresses an unchanged read), which is why the interval, not the listener, is what guarantees the
+	// cadence. Every other measurement stays change-only: its consumers care about transitions.
+	readonly alwaysReport?: boolean
 }
 
 // Shared, empty handler used when no consumer handler is supplied, so the def*/set* helpers can run
@@ -54,6 +69,11 @@ export interface FirmataIndiClientOptions {
 	// Time, in milliseconds, a connect waits for the board to become ready. Defaults to
 	// DEFAULT_CONNECTION_TIMEOUT. A non-positive value fails immediately when not currently ready.
 	readonly connectionTimeout?: number
+	// How often, in milliseconds, a connected device republishes the measurements marked alwaysReport
+	// (WEATHER_PARAMETERS) while its peripheral reports nothing new. Defaults to
+	// DEFAULT_REPORT_INTERVAL. A non-positive value disables the republish, leaving those measurements
+	// change-only.
+	readonly reportInterval?: number
 }
 
 // Local, event-driven INDI adapter that exposes Firmata peripherals as virtual INDI devices.
@@ -344,6 +364,11 @@ class FirmataVirtualDevice<D extends ListenablePeripheral<D>> {
 
 	// Stable listener reference so removeListener removes exactly the callback that was added.
 	readonly #listener: PeripheralListener<D>
+	// Periodic republish of the alwaysReport measurements while the peripheral stays silent. Armed by a
+	// successful connect and cleared by #teardown, so it never outlives the connection.
+	#reporter?: Timer
+	// Stable callback for that interval, bound once like #listener.
+	readonly #reporterListener: () => void
 	#started = false
 	#connecting = false
 	// Set when a disconnect or dispose arrives while a connect is awaiting board readiness, so the
@@ -365,6 +390,7 @@ class FirmataVirtualDevice<D extends ListenablePeripheral<D>> {
 		readonly measurements: readonly FirmataMeasurement<D>[],
 	) {
 		this.#listener = this.#onReading.bind(this)
+		this.#reporterListener = this.#onReport.bind(this)
 
 		this.#driverInfo.device = name
 		this.#driverInfo.elements.DRIVER_NAME.value = name
@@ -522,6 +548,8 @@ class FirmataVirtualDevice<D extends ListenablePeripheral<D>> {
 				return
 			}
 
+			this.#startReporting()
+
 			selectOnSwitch(this.#connection, 'CONNECT')
 			this.#connection.state = 'Idle'
 			handleSetSwitchVector(this.client, this.handler, this.#connection)
@@ -570,6 +598,7 @@ class FirmataVirtualDevice<D extends ListenablePeripheral<D>> {
 	// returns the connection switch to DISCONNECT/Idle, optionally publishing it.
 	#teardown(publishConnection: boolean) {
 		this.peripheral.removeListener(this.#listener)
+		this.#stopReporting()
 
 		if (this.#started) {
 			this.peripheral.stop()
@@ -585,6 +614,27 @@ class FirmataVirtualDevice<D extends ListenablePeripheral<D>> {
 		selectOnSwitch(this.#connection, 'DISCONNECT')
 		this.#connection.state = 'Idle'
 		if (publishConnection) handleSetSwitchVector(this.client, this.handler, this.#connection)
+	}
+
+	// Arms the periodic republish, if this device owns a measurement that must report on a cadence and
+	// the client did not disable it with a non-positive interval. Unreferenced so a connected sensor
+	// never keeps the process alive on its own.
+	#startReporting() {
+		if (this.#reporter !== undefined) return
+
+		const interval = this.client.options?.reportInterval ?? DEFAULT_REPORT_INTERVAL
+
+		if (interval <= 0) return
+		if (!this.measurements.some(isAlwaysReported)) return
+
+		this.#reporter = setInterval(this.#reporterListener, interval)
+		this.#reporter.unref?.()
+	}
+
+	// Cancels the periodic republish. Idempotent, so every teardown path can call it unconditionally.
+	#stopReporting() {
+		clearInterval(this.#reporter)
+		this.#reporter = undefined
 	}
 
 	// Reacts to a Firmata reset/close by disconnecting if currently connected, keeping the device
@@ -604,10 +654,27 @@ class FirmataVirtualDevice<D extends ListenablePeripheral<D>> {
 		this.client.unregister(this)
 	}
 
-	// Applies a peripheral reading: updates only changed element values and publishes one
-	// setNumberVector per vector that actually changed. No event is emitted when nothing changed.
+	// Applies a peripheral reading to every measurement.
 	#onReading(peripheral: D) {
+		this.#publishReadings(peripheral, false)
+	}
+
+	// Republishes the alwaysReport measurements on the report interval, whether or not the peripheral
+	// produced an event since the last one. Peripherals notify only on change, so without this a station
+	// holding a steady reading would stop advancing its consumers' freshness. A vector still Busy has
+	// never had a valid sample and stays unpublished, exactly as on a reading.
+	#onReport() {
+		this.#publishReadings(this.peripheral, true)
+	}
+
+	// Samples the measurements and publishes one setNumberVector per vector that changed, plus every
+	// alwaysReport vector whether or not it changed. Nothing is emitted for a measurement that produced
+	// no change and does not always report. `report` restricts the pass to the alwaysReport measurements,
+	// which is what the interval needs and a peripheral event does not.
+	#publishReadings(peripheral: D, report: boolean) {
 		for (const measurement of this.measurements) {
+			if (report && !measurement.alwaysReport) continue
+
 			// Ignore any reading a measurement deems invalid, not just while still Busy: before the first
 			// valid sample this keeps the vector Busy, and afterwards it rejects a later corrupt frame (for
 			// example a DS3231/DS1307 frame decoding month/day as 0, outside the vector range) instead of
@@ -632,7 +699,7 @@ class FirmataVirtualDevice<D extends ListenablePeripheral<D>> {
 				changed = true
 			}
 
-			if (changed) {
+			if (changed || measurement.alwaysReport) {
 				handleSetNumberVector(this.client, this.handler, measurement.vector)
 				if (!this.#started || this.#disposed) return
 			}
@@ -895,7 +962,15 @@ function weatherMeasurement<D extends ListenablePeripheral<D>>(peripheral: D): F
 		reads.push({ element: 'WEATHER_PRESSURE', read: (e) => (e as unknown as Barometer).pressure })
 	}
 
-	return { vector: makeNumberVector('', 'WEATHER_PARAMETERS', 'Parameters', WEATHER, 'ro', ...elements), reads }
+	// A weather consumer reads the arrival of a report as the sensor's freshness, so this vector must keep
+	// reporting even while the readings hold still.
+	return { vector: makeNumberVector('', 'WEATHER_PARAMETERS', 'Parameters', WEATHER, 'ro', ...elements), reads, alwaysReport: true }
+}
+
+// Whether a measurement must report every valid sample and be republished on the device's report
+// interval. Hoisted so #startReporting does not allocate a closure per connect.
+function isAlwaysReported<D extends ListenablePeripheral<D>>(measurement: FirmataMeasurement<D>) {
+	return measurement.alwaysReport === true
 }
 
 // Builds the ALTITUDE measurement (meters, converted from the project's Distance unit in AU). Altitude is
