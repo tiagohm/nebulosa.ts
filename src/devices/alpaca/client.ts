@@ -41,14 +41,11 @@ export class AlpacaClient implements Client {
 	readonly remoteHost: string
 	readonly remotePort: number
 
-	// Every wrapper, keyed by its Alpaca identity (type plus device number), which is what the protocol
+	// Every wrapper, keyed by its Alpaca identity (name + type + device number), which is what the protocol
 	// guarantees unique. DeviceName is not: an ASCOM station implementing several interfaces is listed once
 	// per type under the same display name, and this repository's own server does that for a
 	// multi-interface INDI driver.
 	readonly #devices = new Map<string, AlpacaDevice>()
-	// The wrappers sharing one INDI device name, which is what an inbound command addresses. A name with
-	// several wrappers is one INDI device with several interfaces, so a command fans out to all of them.
-	readonly #byName = new Map<string, AlpacaDevice[]>()
 	readonly #management: AlpacaManagementApi
 	#timer?: NodeJS.Timeout
 
@@ -68,7 +65,7 @@ export class AlpacaClient implements Client {
 	// INDI getProperties: replays the definitions of one device (or all) to the handler.
 	getProperties(command?: GetProperties) {
 		if (command?.device) {
-			for (const device of this.#byName.get(command.device) ?? []) device.sendProperties(command.name)
+			this.#devices.get(command.device)?.sendProperties(command.name)
 		} else {
 			for (const device of this.#devices.values()) device.sendProperties(command?.name)
 		}
@@ -79,15 +76,15 @@ export class AlpacaClient implements Client {
 
 	// Routes an INDI text/number/switch command to the addressed device wrapper.
 	sendText(vector: NewTextVector) {
-		for (const device of this.#byName.get(vector.device) ?? []) device.sendText(vector)
+		this.#devices.get(vector.device)?.sendText(vector)
 	}
 
 	sendNumber(vector: NewNumberVector) {
-		for (const device of this.#byName.get(vector.device) ?? []) device.sendNumber(vector)
+		this.#devices.get(vector.device)?.sendNumber(vector)
 	}
 
 	sendSwitch(vector: NewSwitchVector) {
-		for (const device of this.#byName.get(vector.device) ?? []) device.sendSwitch(vector)
+		this.#devices.get(vector.device)?.sendSwitch(vector)
 	}
 
 	// Queries the server's configured devices and begins polling. Returns false if already started or the
@@ -102,56 +99,34 @@ export class AlpacaClient implements Client {
 
 	// Builds a wrapper for each new device, initializes it, and (re)starts the polling timer.
 	//
-	// Several configured devices may share a DeviceName, which is how ASCOM lists one station that
-	// implements several interfaces. They become one INDI device with the union of their interface bits,
-	// so the interfaces are recomputed and republished before anything is initialized: a wrapper
-	// advertising only its own bit would make every manager that owns one of the others drop the device
-	// as soon as it saw that definition.
+	// Each wrapper publishes under its own INDI device name, built from the display name plus the device
+	// type and number. DeviceName alone is ambiguous: ASCOM lists a station implementing several
+	// interfaces once per type under the same name, and two devices of one type may share a name as well,
+	// so keying on it left every entry after the first without a wrapper, polling or properties. Alpaca's
+	// identity - type plus device number - is unique, so folding it into the name yields one INDI device
+	// per configured device, each carrying only its own interface bit. That name is also what an inbound
+	// command addresses, which is why it is the map key.
+	//
+	// A multi-interface driver therefore arrives at the far end as one INDI device per interface rather
+	// than a single device with several bits, which is the only mapping Alpaca can express.
 	#initialize(configuredDevices: readonly AlpacaConfiguredDevice[]) {
-		const created: AlpacaDevice[] = []
-
 		for (const configuredDevice of configuredDevices) {
-			const key = `${configuredDevice.DeviceType}:${configuredDevice.DeviceNumber}`
+			const name = `${configuredDevice.DeviceName} (${formatAlpacaDeviceType(configuredDevice.DeviceType)} ${configuredDevice.DeviceNumber})`
 
-			if (this.#devices.has(key)) continue
+			if (this.#devices.has(name)) continue
 
-			const device = makeAlpacaDevice(this, configuredDevice)
+			const device = makeAlpacaDevice(this, configuredDevice, name)
 
 			if (device === undefined) continue
 
-			this.#devices.set(key, device)
+			this.#devices.set(name, device)
 
-			const shared = this.#byName.get(configuredDevice.DeviceName)
-
-			if (shared === undefined) this.#byName.set(configuredDevice.DeviceName, [device])
-			else shared.push(device)
-
-			created.push(device)
-		}
-
-		for (const device of created) {
-			this.#applyInterfaces(device.device.DeviceName)
 			device.onInit()
 		}
 
 		clearInterval(this.#timer)
 		this.#timer = setInterval(this.#update.bind(this), Math.max(1000, this.options?.poolingInterval ?? 1000))
 		this.#update()
-	}
-
-	// Gives every wrapper of one INDI device name the union of their interface bits, and republishes
-	// DRIVER_INFO for the ones already initialized so a late sibling does not leave a stale bitmask
-	// behind. A name with a single wrapper keeps exactly the bits of its own type.
-	#applyInterfaces(name: string) {
-		const shared = this.#byName.get(name)
-
-		if (shared === undefined || shared.length < 2) return
-
-		let interfaces = 0
-
-		for (const device of shared) interfaces |= +device.driverInterface
-
-		for (const device of shared) device.setDriverInterface(interfaces.toFixed(0))
 	}
 
 	// One polling tick: advances every device wrapper.
@@ -168,7 +143,6 @@ export class AlpacaClient implements Client {
 
 			for (const device of this.#devices.values()) device.close()
 			this.#devices.clear()
-			this.#byName.clear()
 
 			this.options?.handler?.close?.(this, server)
 		}
@@ -180,26 +154,26 @@ export class AlpacaClient implements Client {
 }
 
 // Builds the wrapper for one configured device, or undefined for a type this client does not implement.
-function makeAlpacaDevice(client: AlpacaClient, configuredDevice: AlpacaConfiguredDevice): AlpacaDevice | undefined {
+function makeAlpacaDevice(client: AlpacaClient, configuredDevice: AlpacaConfiguredDevice, name: string): AlpacaDevice | undefined {
 	switch (configuredDevice.DeviceType) {
 		case 'camera':
-			return new AlpacaCamera(client, configuredDevice)
+			return new AlpacaCamera(client, configuredDevice, name)
 		case 'telescope':
-			return new AlpacaTelescope(client, configuredDevice)
+			return new AlpacaTelescope(client, configuredDevice, name)
 		case 'filterwheel':
-			return new AlpacaFilterWheel(client, configuredDevice)
+			return new AlpacaFilterWheel(client, configuredDevice, name)
 		case 'focuser':
-			return new AlpacaFocuser(client, configuredDevice)
+			return new AlpacaFocuser(client, configuredDevice, name)
 		case 'covercalibrator':
-			return new AlpacaCoverCalibrator(client, configuredDevice)
+			return new AlpacaCoverCalibrator(client, configuredDevice, name)
 		case 'rotator':
-			return new AlpacaRotator(client, configuredDevice)
+			return new AlpacaRotator(client, configuredDevice, name)
 		case 'dome':
-			return new AlpacaDome(client, configuredDevice)
+			return new AlpacaDome(client, configuredDevice, name)
 		case 'safetymonitor':
-			return new AlpacaSafetyMonitor(client, configuredDevice)
+			return new AlpacaSafetyMonitor(client, configuredDevice, name)
 		case 'observingconditions':
-			return new AlpacaObservingConditions(client, configuredDevice)
+			return new AlpacaObservingConditions(client, configuredDevice, name)
 		default:
 			return undefined
 	}
@@ -272,16 +246,17 @@ abstract class AlpacaDevice {
 		readonly client: AlpacaClient,
 		readonly device: AlpacaConfiguredDevice,
 		readonly handler: AlpacaClientHandler,
+		readonly name: string,
 	) {
 		this.id = device.DeviceNumber
 
-		this.driverInfo.device = device.DeviceName
-		this.driverInfo.elements.DRIVER_NAME.value = device.DeviceName
+		this.driverInfo.device = name
+		this.driverInfo.elements.DRIVER_NAME.value = name
 		this.driverInfo.elements.DRIVER_EXEC.value = device.UniqueID
 		this.driverInfo.elements.DRIVER_INTERFACE.value = DRIVER_INTERFACES[device.DeviceType.toUpperCase() as never]
 
-		this.connection.device = device.DeviceName
-		this.snoopDevices.device = device.DeviceName
+		this.connection.device = name
+		this.snoopDevices.device = name
 
 		this.runner.registerHandler(this.handleEndpointsAfterRun.bind(this))
 	}
@@ -289,22 +264,6 @@ abstract class AlpacaDevice {
 	// True when the connection switch reports the device as connected.
 	get isConnected() {
 		return this.connection.elements.CONNECT.value === true
-	}
-
-	// The INDI interface bitmask currently advertised, as the string DRIVER_INFO carries.
-	get driverInterface() {
-		return this.driverInfo.elements.DRIVER_INTERFACE.value
-	}
-
-	// Replaces the advertised interface bitmask, republishing DRIVER_INFO when the property is already
-	// defined. The client uses it to give every wrapper of one device name their union, so a manager that
-	// owns one of the interfaces does not drop the device on seeing a sibling's narrower definition.
-	setDriverInterface(value: string) {
-		if (this.driverInfo.elements.DRIVER_INTERFACE.value === value) return
-
-		this.driverInfo.elements.DRIVER_INTERFACE.value = value
-
-		if (this.properties.has(this.driverInfo)) this.sendDefProperty(this.driverInfo)
 	}
 
 	// Resolves the currently snooped mount/wheel/focuser/rotator device, or undefined when unset.
@@ -483,7 +442,7 @@ abstract class AlpacaDevice {
 					this.enableEndpoints(...this.deviceStateEndpoints)
 					this.disableEndpoints('DeviceState')
 					this.deviceStateHasBeenDisabled()
-					console.info(this.device.DeviceName, 'does not support DeviceState')
+					console.info(this.name, 'does not support DeviceState')
 				}
 
 				this.enableEndpoints(...this.initialEndpoints)
@@ -672,27 +631,27 @@ class AlpacaCamera extends AlpacaDevice {
 
 	readonly #now = timeNow() // Used in the conversion from JNOW to J2000. Changes in precession/nutation angles are negligible.
 
-	constructor(client: AlpacaClient, device: AlpacaConfiguredDevice) {
-		super(client, device, client.options.handler)
+	constructor(client: AlpacaClient, device: AlpacaConfiguredDevice, name: string) {
+		super(client, device, client.options.handler, name)
 
 		const api = new AlpacaCameraApi(client.url)
 
-		this.#info.device = device.DeviceName
-		this.#cooler.device = device.DeviceName
-		this.#frameType.device = device.DeviceName
-		this.#frameFormat.device = device.DeviceName
-		this.#abort.device = device.DeviceName
-		this.#exposure.device = device.DeviceName
-		this.#coolerPower.device = device.DeviceName
-		this.#temperature.device = device.DeviceName
-		this.#frame.device = device.DeviceName
-		this.#bin.device = device.DeviceName
-		this.#gain.device = device.DeviceName
-		this.#offset.device = device.DeviceName
-		this.#cfa.device = device.DeviceName
-		this.#guideNS.device = device.DeviceName
-		this.#guideWE.device = device.DeviceName
-		this.#image.device = device.DeviceName
+		this.#info.device = this.name
+		this.#cooler.device = this.name
+		this.#frameType.device = this.name
+		this.#frameFormat.device = this.name
+		this.#abort.device = this.name
+		this.#exposure.device = this.name
+		this.#coolerPower.device = this.name
+		this.#temperature.device = this.name
+		this.#frame.device = this.name
+		this.#bin.device = this.name
+		this.#gain.device = this.name
+		this.#offset.device = this.name
+		this.#cfa.device = this.name
+		this.#guideNS.device = this.name
+		this.#guideWE.device = this.name
+		this.#image.device = this.name
 
 		this.registerEndpoint('BayerOffsetX', () => api.getBayerOffsetX(this.id), false)
 		this.registerEndpoint('BayerOffsetY', () => api.getBayerOffsetY(this.id), false)
@@ -1092,7 +1051,7 @@ class AlpacaCamera extends AlpacaDevice {
 
 		if (buffer.ok) {
 			this.#image.state = 'Ok'
-			const camera = this.client.provider.get(this.client, this.device.DeviceName, 'camera') as Camera
+			const camera = this.client.provider.get(this.client, this.name, 'camera') as Camera
 			const lastExposureDuration = this.state.ExposureDuration // await this.api.getLastExposureDuration(this.id)
 			const fits = makeFitsFromImageBytes(buffer.value, this.#now, camera, this.activeMount, this.activeWheel, this.activeFocuser, this.activeRotator, lastExposureDuration)
 			this.#image.elements.CCD1.value = fits
@@ -1172,27 +1131,27 @@ class AlpacaTelescope extends AlpacaDevice {
 
 	readonly #now = timeNow() // Used in the conversion from J2000 to JNOW. Changes in precession/nutation angles are negligible.
 
-	constructor(client: AlpacaClient, device: AlpacaConfiguredDevice) {
-		super(client, device, client.options.handler)
+	constructor(client: AlpacaClient, device: AlpacaConfiguredDevice, name: string) {
+		super(client, device, client.options.handler, name)
 
 		const api = new AlpacaTelescopeApi(client.url)
 
-		this.#onCoordSet.device = device.DeviceName
-		this.#equatorialCoordinate.device = device.DeviceName
-		this.#abort.device = device.DeviceName
-		this.#trackMode.device = device.DeviceName
-		this.#tracking.device = device.DeviceName
-		this.#home.device = device.DeviceName
-		this.#motionNS.device = device.DeviceName
-		this.#motionWE.device = device.DeviceName
-		this.#slewRate.device = device.DeviceName
-		this.#time.device = device.DeviceName
-		this.#geographicCoordinate.device = device.DeviceName
-		this.#park.device = device.DeviceName
-		this.#pierSide.device = device.DeviceName
-		this.#guideRate.device = device.DeviceName
-		this.#guideNS.device = device.DeviceName
-		this.#guideWE.device = device.DeviceName
+		this.#onCoordSet.device = this.name
+		this.#equatorialCoordinate.device = this.name
+		this.#abort.device = this.name
+		this.#trackMode.device = this.name
+		this.#tracking.device = this.name
+		this.#home.device = this.name
+		this.#motionNS.device = this.name
+		this.#motionWE.device = this.name
+		this.#slewRate.device = this.name
+		this.#time.device = this.name
+		this.#geographicCoordinate.device = this.name
+		this.#park.device = this.name
+		this.#pierSide.device = this.name
+		this.#guideRate.device = this.name
+		this.#guideNS.device = this.name
+		this.#guideWE.device = this.name
 
 		// The mount can be moved by hand when either axis accepts MoveAxis.
 		async function canMoveAxis(id: number): Promise<AlpacaRequestResult<boolean>> {
@@ -1584,13 +1543,13 @@ class AlpacaFilterWheel extends AlpacaDevice {
 	protected readonly initialEndpoints = ['Names'] as const
 	protected readonly deviceStateEndpoints = ['Position'] as const
 
-	constructor(client: AlpacaClient, device: AlpacaConfiguredDevice) {
-		super(client, device, client.options.handler)
+	constructor(client: AlpacaClient, device: AlpacaConfiguredDevice, name: string) {
+		super(client, device, client.options.handler, name)
 
 		const api = new AlpacaFilterWheelApi(client.url)
 
-		this.#position.device = device.DeviceName
-		this.#names.device = device.DeviceName
+		this.#position.device = this.name
+		this.#names.device = this.name
 
 		this.registerEndpoint('Names', () => api.getNames(this.id), false)
 		this.registerEndpoint('Position', () => api.getPosition(this.id), false)
@@ -1673,16 +1632,16 @@ class AlpacaFocuser extends AlpacaDevice {
 	protected readonly initialEndpoints = ['MaxStep', 'IsAbsolute'] as const
 	protected readonly deviceStateEndpoints = ['IsMoving', 'Position', 'Temperature'] as const
 
-	constructor(client: AlpacaClient, device: AlpacaConfiguredDevice) {
-		super(client, device, client.options.handler)
+	constructor(client: AlpacaClient, device: AlpacaConfiguredDevice, name: string) {
+		super(client, device, client.options.handler, name)
 
 		const api = new AlpacaFocuserApi(client.url)
 
-		this.#absolutePosition.device = device.DeviceName
-		this.#relativePosition.device = device.DeviceName
-		this.#temperature.device = device.DeviceName
-		this.#abort.device = device.DeviceName
-		this.#direction.device = device.DeviceName
+		this.#absolutePosition.device = this.name
+		this.#relativePosition.device = this.name
+		this.#temperature.device = this.name
+		this.#abort.device = this.name
+		this.#direction.device = this.name
 
 		this.registerEndpoint('Temperature', () => api.getTemperature(this.id), false)
 		this.registerEndpoint('IsAbsolute', () => api.isAbsolute(this.id), false)
@@ -1814,15 +1773,15 @@ class AlpacaCoverCalibrator extends AlpacaDevice {
 	protected readonly initialEndpoints = ['MaxBrightness'] as const
 	protected readonly deviceStateEndpoints = ['Brightness', 'CalibratorState', 'CoverMoving', 'CoverState'] as const
 
-	constructor(client: AlpacaClient, device: AlpacaConfiguredDevice) {
-		super(client, device, client.options.handler)
+	constructor(client: AlpacaClient, device: AlpacaConfiguredDevice, name: string) {
+		super(client, device, client.options.handler, name)
 
 		const api = new AlpacaCoverCalibratorApi(client.url)
 
-		this.#light.device = device.DeviceName
-		this.#brightness.device = device.DeviceName
-		this.#park.device = device.DeviceName
-		this.#abort.device = device.DeviceName
+		this.#light.device = this.name
+		this.#brightness.device = this.name
+		this.#park.device = this.name
+		this.#abort.device = this.name
 
 		this.registerEndpoint('MaxBrightness', () => api.getMaxBrightness(this.id), false)
 		this.registerEndpoint('Brightness', () => api.getBrightness(this.id), false)
@@ -1955,15 +1914,15 @@ class AlpacaRotator extends AlpacaDevice {
 	protected readonly deviceStateEndpoints = ['IsMoving', 'Position'] as const
 	protected readonly runningEndpoints = ['IsReverse'] as const
 
-	constructor(client: AlpacaClient, device: AlpacaConfiguredDevice) {
-		super(client, device, client.options.handler)
+	constructor(client: AlpacaClient, device: AlpacaConfiguredDevice, name: string) {
+		super(client, device, client.options.handler, name)
 
 		const api = new AlpacaRotatorApi(client.url)
 
-		this.#angle.device = device.DeviceName
-		this.#reverse.device = device.DeviceName
-		this.#abort.device = device.DeviceName
-		this.#sync.device = device.DeviceName
+		this.#angle.device = this.name
+		this.#reverse.device = this.name
+		this.#abort.device = this.name
+		this.#sync.device = this.name
 
 		this.registerEndpoint('IsMoving', () => api.isMoving(this.id), false)
 		this.registerEndpoint('Position', () => api.getPosition(this.id), false)
@@ -2076,19 +2035,20 @@ class AlpacaDome extends AlpacaDevice {
 	protected readonly initialEndpoints = ['CanFindHome', 'CanPark', 'CanSetAltitude', 'CanSetAzimuth', 'CanSetPark', 'CanSetShutter', 'CanSlave', 'CanSyncAzimuth'] as const
 	protected readonly deviceStateEndpoints = ['Altitude', 'AtHome', 'AtPark', 'Azimuth', 'ShutterStatus', 'Slewing'] as const
 
-	constructor(client: AlpacaClient, device: AlpacaConfiguredDevice) {
-		super(client, device, client.options.handler)
+	constructor(client: AlpacaClient, device: AlpacaConfiguredDevice, name: string) {
+		super(client, device, client.options.handler, name)
 
 		const api = new AlpacaDomeApi(client.url)
-		this.#angle.device = device.DeviceName
-		this.#altitude.device = device.DeviceName
-		this.#goto.device = device.DeviceName
-		this.#park.device = device.DeviceName
-		this.#parkOption.device = device.DeviceName
-		this.#shutter.device = device.DeviceName
-		this.#autoSync.device = device.DeviceName
-		this.#sync.device = device.DeviceName
-		this.#abort.device = device.DeviceName
+
+		this.#angle.device = this.name
+		this.#altitude.device = this.name
+		this.#goto.device = this.name
+		this.#park.device = this.name
+		this.#parkOption.device = this.name
+		this.#shutter.device = this.name
+		this.#autoSync.device = this.name
+		this.#sync.device = this.name
+		this.#abort.device = this.name
 
 		this.registerEndpoint('Altitude', () => api.getAltitude(this.id), false)
 		this.registerEndpoint('AtHome', () => api.isAtHome(this.id), false)
@@ -2266,11 +2226,12 @@ class AlpacaSafetyMonitor extends AlpacaDevice {
 	protected readonly initialEndpoints = [] as const
 	protected readonly deviceStateEndpoints = ['IsSafe'] as const
 
-	constructor(client: AlpacaClient, device: AlpacaConfiguredDevice) {
-		super(client, device, client.options.handler)
+	constructor(client: AlpacaClient, device: AlpacaConfiguredDevice, name: string) {
+		super(client, device, client.options.handler, name)
 
 		const api = new AlpacaSafetyMonitorApi(client.url)
-		this.#safetyStatus.device = device.DeviceName
+
+		this.#safetyStatus.device = this.name
 		this.registerEndpoint('IsSafe', () => api.isSafe(this.id), false)
 		this.api = api
 	}
@@ -2381,12 +2342,13 @@ class AlpacaObservingConditions extends AlpacaDevice {
 	readonly #averagePeriod = makeNumberVector('', 'WEATHER_AVERAGE_PERIOD', 'Average Period', MAIN_CONTROL, 'rw', ['AVERAGE_PERIOD', 'Period (h)', 0, 0, 24, 0.1, '%.2f'])
 	readonly #refresh = makeSwitchVector('', 'WEATHER_REFRESH', 'Refresh', MAIN_CONTROL, 'AtMostOne', 'rw', ['REFRESH', 'Refresh', false])
 
-	constructor(client: AlpacaClient, device: AlpacaConfiguredDevice) {
-		super(client, device, client.options.handler)
+	constructor(client: AlpacaClient, device: AlpacaConfiguredDevice, name: string) {
+		super(client, device, client.options.handler, name)
 
 		const api = new AlpacaObservingConditionsApi(client.url)
-		this.#averagePeriod.device = device.DeviceName
-		this.#refresh.device = device.DeviceName
+
+		this.#averagePeriod.device = this.name
+		this.#refresh.device = this.name
 
 		this.registerEndpoint('AveragePeriod', () => api.getAveragePeriod(this.id), false)
 
@@ -2470,7 +2432,7 @@ class AlpacaObservingConditions extends AlpacaDevice {
 			if (parameters?.elements[sensor.indi] !== undefined) continue
 
 			if (parameters === undefined) {
-				parameters = makeNumberVector(this.device.DeviceName, 'WEATHER_PARAMETERS', 'Parameters', MAIN_CONTROL, 'ro')
+				parameters = makeNumberVector(this.name, 'WEATHER_PARAMETERS', 'Parameters', MAIN_CONTROL, 'ro')
 				this.#parameters = parameters
 			}
 
@@ -2932,5 +2894,39 @@ class AlpacaApiRunner {
 		for (const handler of this.#handlers) {
 			handler()
 		}
+	}
+}
+
+// Human-readable label for an Alpaca device type, used to disambiguate an INDI device name.
+//
+// The labels follow the INDI vocabulary rather than the Alpaca path segment, so `telescope` reads as
+// Mount and `observingconditions` as Weather. A type without a label falls back to its Alpaca tag, which
+// keeps the generated name usable rather than embedding `undefined` in it.
+function formatAlpacaDeviceType(type: AlpacaDeviceType) {
+	switch (type) {
+		case 'camera':
+			return 'Camera'
+		case 'telescope':
+			return 'Mount'
+		case 'focuser':
+			return 'Focuser'
+		case 'filterwheel':
+			return 'Filter Wheel'
+		case 'rotator':
+			return 'Rotator'
+		case 'dome':
+			return 'Dome'
+		case 'switch':
+			return 'Switch'
+		case 'covercalibrator':
+			return 'Cover Calibrator'
+		case 'observingconditions':
+			return 'Weather'
+		case 'safetymonitor':
+			return 'Safety Monitor'
+		case 'video':
+			return 'Video'
+		default:
+			return type
 	}
 }

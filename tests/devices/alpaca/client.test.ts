@@ -798,15 +798,40 @@ describe.skipIf(isTimeConsumingTestSkipped())('observing conditions client', () 
 		expect(emitted).not.toContain('defNumberVector:WEATHER_PARAMETERS')
 	}, 15000)
 
-	test('wraps a station listed under two device types with the same name', async () => {
+	test('never turns a weather station into a safety monitor', async () => {
+		await using server = await startAlpacaServer(ALPACA_WEATHER)
+		await using remote = await startAlpacaClient(server.url, ALPACA_WEATHER)
+
+		await waitUntil(() => remote.device()?.cloudCover === 15, WEATHER_TIMEOUT)
+
+		expect(remote.device()).not.toContainKey('safe')
+		expect(remote.manager.properties.get(remote.device()!)).not.toContainKey('SAFETY_STATUS')
+	}, 10000)
+})
+
+describe.skipIf(isTimeConsumingTestSkipped())('alpaca client device naming', () => {
+	test('names a device after its display name, type and device number', async () => {
+		await using server = await startAlpacaServer(ALPACA_WEATHER)
+		await using remote = await startAlpacaClient(server.url, ALPACA_WEATHER)
+
+		await waitUntil(() => remote.device()?.cloudCover === 15, WEATHER_TIMEOUT)
+
+		// DeviceName alone is ambiguous in a management listing, so the Alpaca identity is folded into the
+		// INDI name. The far end must see that name, not the bare display name.
+		const far = remote.device()!
+		expect(far.name).toBe(`Weather Simulator (Weather ${server.deviceNumber})`)
+		expect(weatherParametersOf(remote, far)!.device).toBe(far.name)
+	}, 10000)
+
+	test('wraps every device sharing one display name', async () => {
 		await using server = await startAlpacaServer(ALPACA_WEATHER)
 
 		const configured = ((await (await fetch(`${server.url}/management/v1/configureddevices`)).json()) as { Value: AlpacaConfiguredDevice[] }).Value
 		const station = configured.find((e) => e.DeviceType === 'observingconditions')!
 
-		// One INDI driver implementing Weather and Dome is listed once per Alpaca type under the same
-		// display name, which is exactly what this repository's own server does for a multi-interface
-		// device. The dome is listed first, so before this the weather half claimed no wrapper at all.
+		// One driver implementing Weather and Dome is listed once per Alpaca type under the same display
+		// name, which is exactly what this repository's own server does for a multi-interface device. The
+		// dome is listed first, so keying wrappers on that name left the weather half with none.
 		await using proxy = startAlpacaProxy(server.url, {
 			respond: (path) => {
 				if (path.endsWith('/configureddevices')) return { value: [{ ...station, DeviceType: 'dome' }, station] }
@@ -818,24 +843,16 @@ describe.skipIf(isTimeConsumingTestSkipped())('observing conditions client', () 
 		await using remote = await startAlpacaClient(proxy.url, ALPACA_WEATHER)
 		await waitUntil(() => remote.device()?.cloudCover === 15, WEATHER_TIMEOUT)
 
+		// Each entry becomes its own INDI device, so the weather half is wrapped, polled and published
+		// even though the dome half claimed the display name first.
 		const far = remote.device()!
+		expect(far.name).toBe(`Weather Simulator (Weather ${station.DeviceNumber})`)
 		expect(far.temperature).toBe(16.8)
 		expect(weatherParametersOf(remote, far)!.elements).toContainKey('WEATHER_TEMPERATURE')
 
-		// Both halves are advertised together: a wrapper publishing only its own bit would make the
-		// WeatherManager drop the device the moment it saw the dome's definition.
-		expect(far.interfaces).toEqual(['dome', 'weather'])
+		// The dome half is a separate device carrying only its own bit, so it never joins this one.
+		expect(far.interfaces).toEqual(['weather'])
 	}, 15000)
-
-	test('never turns a weather station into a safety monitor', async () => {
-		await using server = await startAlpacaServer(ALPACA_WEATHER)
-		await using remote = await startAlpacaClient(server.url, ALPACA_WEATHER)
-
-		await waitUntil(() => remote.device()?.cloudCover === 15, WEATHER_TIMEOUT)
-
-		expect(remote.device()).not.toContainKey('safe')
-		expect(remote.manager.properties.get(remote.device()!)).not.toContainKey('SAFETY_STATUS')
-	}, 10000)
 })
 
 describe.skipIf(isTimeConsumingTestSkipped())('alpaca client capability and polling regressions', () => {
