@@ -790,11 +790,12 @@ export class MountSimulator extends DeviceSimulator {
 		this.#automaticFlipEnabledByLoad = false
 	}
 
-	// Rebuilds every configuration cached from a property vector. Called whenever a persisted set of
+	// Rebuilds every configuration cached from a property vector. Returns whether the rebuild rebased
+	// the automatic-flip hour-angle history as a side effect. Called whenever a persisted set of
 	// properties is restored, since loading writes the vectors directly instead of going through
 	// `sendNumber`, and whenever an error feature is switched, since each of these is gated by one.
 	#refreshErrorConfigurations() {
-		this.#discardDisabledErrorState()
+		const automaticFlipHourAngleRebased = this.#discardDisabledErrorState()
 		this.#refreshTransmission()
 		this.#refreshSettling()
 		this.#refreshTrackingRate()
@@ -806,10 +807,12 @@ export class MountSimulator extends DeviceSimulator {
 		// same tick as the change was integrated over the boresight the mount had before it: switching a
 		// pointing error on and exposing immediately produced a frame with no sign of the error in it.
 		this.#recordBoresight()
+		return automaticFlipHourAngleRebased
 	}
 
-	// Throws away the state a disabled family had accumulated, so switching one off leaves an ideal
-	// mount rather than one frozen wherever the error had already carried it.
+	// Throws away the state a disabled family had accumulated, returning whether the automatic-flip
+	// hour-angle history was rebased. Switching an error off leaves an ideal mount rather than one
+	// frozen wherever the error had already carried it.
 	//
 	// Most families are derived from their vector on every evaluation and stop contributing the moment
 	// the switch does. These two are not: they integrate over time into state of their own, and without
@@ -817,6 +820,8 @@ export class MountSimulator extends DeviceSimulator {
 	// added to the boresight by a family that is no longer being simulated. The rate error is worse
 	// still, since the wander of the rate survives in its own state and would keep the drift growing.
 	#discardDisabledErrorState() {
+		let automaticFlipHourAngleRebased = false
+
 		if (!this.#simulatesTrackingRate) {
 			resetTrackingRateError(this.#trackingRateErrorState)
 			this.#trackingRateError = 0
@@ -847,11 +852,13 @@ export class MountSimulator extends DeviceSimulator {
 				const priorPierSide = this.pierSide
 				const declinationStep = -this.#appliedDeclinationRing
 				this.#setMechanical(this.#mechanical.rightAscension - this.#appliedRightAscensionRing, this.#mechanical.declination - this.#appliedDeclinationRing)
-				this.#reconcilePierSideAfterPoleMotion(priorPierSide, declinationStep, this.#utcTime + this.#utcTimeRemainder)
+				automaticFlipHourAngleRebased = this.#reconcilePierSideAfterPoleMotion(priorPierSide, declinationStep, this.#utcTime + this.#utcTimeRemainder) || automaticFlipHourAngleRebased
 			}
 
 			this.#resetSettlingState()
 		}
+
+		return automaticFlipHourAngleRebased
 	}
 
 	// Re-derives the reported coordinate from the axes without moving them, which is what has to happen
@@ -1011,8 +1018,8 @@ export class MountSimulator extends DeviceSimulator {
 				if (applyMultiSwitchValues(this.#errorFeatures, vector.elements)) {
 					// Every cached configuration is gated by one of these, so they all have to be rebuilt
 					// rather than only the one whose switch moved.
-					this.#refreshErrorConfigurations()
-					this.#shiftAutomaticFlipHourAngle(normalizePI(this.#siderealTime() - this.rightAscension - hourAngle))
+					const automaticFlipHourAngleRebased = this.#refreshErrorConfigurations()
+					if (!automaticFlipHourAngleRebased) this.#shiftAutomaticFlipHourAngle(normalizePI(this.#siderealTime() - this.rightAscension - hourAngle))
 					this.notify(this.#errorFeatures)
 				}
 				return
@@ -1899,13 +1906,18 @@ export class MountSimulator extends DeviceSimulator {
 	// declination travel in radians, and `time` is the simulated UTC instant in milliseconds at which
 	// the motion reached the current coordinate. A pole has no pier side, so entering it clears
 	// side-specific declination transmission state; leaving it can establish a side for the first time.
-	// EAST mirrors the neutral shaft frame used while the pole had no side.
+	// EAST mirrors the neutral shaft frame used while the pole had no side. Returns whether leaving a
+	// pole rebased automatic-flip hour-angle history.
 	#reconcilePierSideAfterPoleMotion(priorPierSide: PierSide, declinationStep: Angle, time: number) {
 		const pierSide = expectedPierSide(this.#mechanical.rightAscension, this.#mechanical.declination, this.siderealTimeAt(time))
-		if (priorPierSide !== 'NEITHER' && pierSide !== 'NEITHER') return
+		if (priorPierSide !== 'NEITHER' && pierSide !== 'NEITHER') return false
 
 		this.#setPierSide(pierSide)
-		if (priorPierSide === 'NEITHER' && pierSide !== 'NEITHER') this.#resetAutomaticFlipHourAngle(time)
+		let automaticFlipHourAngleRebased = false
+		if (priorPierSide === 'NEITHER' && pierSide !== 'NEITHER') {
+			this.#resetAutomaticFlipHourAngle(time)
+			automaticFlipHourAngleRebased = true
+		}
 		if (priorPierSide === 'NEITHER' && pierSide === 'EAST' && declinationStep !== 0) {
 			// The pole-neutral step was integrated in the WEST shaft frame; EAST mirrors it.
 			clearMechanicalAxis(this.#declinationAxis)
@@ -1914,6 +1926,7 @@ export class MountSimulator extends DeviceSimulator {
 			// At the pole the pier side, and therefore the declination shaft frame, is undefined.
 			clearMechanicalAxis(this.#declinationAxis)
 		}
+		return automaticFlipHourAngleRebased
 	}
 
 	// Moves the mechanical axes and republishes everything derived from them.

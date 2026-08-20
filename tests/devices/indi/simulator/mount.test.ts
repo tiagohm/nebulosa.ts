@@ -1340,6 +1340,33 @@ describe('mount simulator meridian flip', () => {
 		}
 	})
 
+	test('does not double-shift automatic flip history when disabling settling after a pole clamp', () => {
+		const { client, simulator } = makeMeridianFlipMount('mount.flip.auto.settling.pole.shift')
+
+		try {
+			client.sendSwitch({ device: simulator.name, name: 'SIMULATOR_ERROR_FEATURES', elements: { SETTLING: true } })
+			client.sendNumber({ device: simulator.name, name: 'MOUNT_SETTLING', elements: { OVERSHOOT: 600, FREQUENCY: 2, DAMPING_RATIO: 0.15 } })
+			client.sendNumber({ device: simulator.name, name: 'MOUNT_MERIDIAN_FLIP_SETTINGS', elements: { HOUR_ANGLE: toDeg(arcsec(-88.9)) } })
+			const lst = simulator.siderealTimeAt(simulator.utcTime)
+			simulator.syncTo(normalizeAngle(lst + arcsec(30)), PIOVERTWO - deg(1))
+			simulator.setTrackingEnabled(true)
+			client.sendSwitch({ device: simulator.name, name: 'MOUNT_AUTO_MERIDIAN_FLIP', elements: { INDI_ENABLED: true } })
+
+			simulator.goTo(normalizeAngle(simulator.rightAscension + arcsec(60)), PIOVERTWO - arcsec(1))
+			for (let i = 0; i < 100 && simulator.isSlewing; i++) simulator.advance(0.01)
+			expect(simulator.pierSide).toBe('NEITHER')
+
+			client.sendSwitch({ device: simulator.name, name: 'SIMULATOR_ERROR_FEATURES', elements: { SETTLING: false } })
+			expect(simulator.pierSide).toBe('WEST')
+			expect(normalizePI(simulator.siderealTimeAt(simulator.utcTime) - simulator.rightAscension)).toBeLessThan(arcsec(-88.9))
+
+			simulator.advance(0.001)
+			expect(simulator.isSlewing).toBeFalse()
+		} finally {
+			simulator.dispose()
+		}
+	})
+
 	test('preserves celestial settling direction when an east-side slew reaches a pole', () => {
 		const { client, simulator } = makeMeridianFlipMount('mount.flip.settling.east.pole')
 
