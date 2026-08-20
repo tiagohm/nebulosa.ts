@@ -3064,11 +3064,30 @@ export class WeatherManager extends DeviceManager<Weather> {
 	// 0 °C, 0 % and 0 hPa as freshly observed and start TimeSinceLastUpdate on values no sensor ever
 	// produced, so a Busy definition declares the property and nothing else.
 	#handleParameters(device: Weather, message: DefNumberVector | SetNumberVector, definition: boolean) {
-		if (definition && message.state === 'Busy') return
+		const { elements } = message
+
+		// A definition replaces the whole element set, as the raw property manager does with the vector
+		// itself, so a sensor the driver no longer declares has to leave the typed view as well. Without
+		// this the field and its freshness stamp would survive indefinitely and advertise a parameter the
+		// current definition does not provide. A set vector is a partial update and never removes
+		// anything: drivers legitimately report a subset of their parameters.
+		if (definition) {
+			const declared = new Set<WeatherSensor>()
+
+			for (const key in elements) {
+				const mapping = WEATHER_SENSORS_BY_INDI_NAME.get(key)
+				if (mapping !== undefined) declared.add(mapping.field)
+			}
+
+			for (const sensor of WEATHER_SENSORS) {
+				if (!declared.has(sensor.field)) this.#resetSensor(device, sensor.field)
+			}
+
+			if (message.state === 'Busy') return
+		}
 
 		const stamps = this.#stamps(device)
 		const now = Date.now()
-		const { elements } = message
 
 		for (const key in elements) {
 			const mapping = WEATHER_SENSORS_BY_INDI_NAME.get(key)

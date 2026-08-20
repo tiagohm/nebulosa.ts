@@ -778,6 +778,63 @@ describe('WeatherManager', () => {
 		expect(updates).toEqual(['pressure'])
 	})
 
+	test('clears the sensors a replacement definition no longer declares', () => {
+		const manager = new WeatherManager()
+		const weather = weatherDevice(manager)
+		const updates: string[] = []
+
+		manager.numberVector(
+			recordingClient,
+			weatherParameters(weather.name, {
+				WEATHER_TEMPERATURE: defNumber('WEATHER_TEMPERATURE', 12.25, -60, 60),
+				WEATHER_HUMIDITY: defNumber('WEATHER_HUMIDITY', 61, 0, 100),
+				WEATHER_PRESSURE: defNumber('WEATHER_PRESSURE', 1008.4, 0, 2000),
+			}),
+			'defNumberVector',
+		)
+
+		expect(weather.humidity).toBe(61)
+		expect(manager.updatedAt(weather, 'humidity')).toBeGreaterThan(0)
+
+		manager.addHandler({ added: () => {}, removed: () => {}, updated: (_, property) => updates.push(property) })
+
+		// The driver redefines the vector without its hygrometer, so the reading and its freshness must go
+		// with it instead of outliving the definition that produced them.
+		manager.numberVector(
+			recordingClient,
+			weatherParameters(weather.name, {
+				WEATHER_TEMPERATURE: defNumber('WEATHER_TEMPERATURE', 12.25, -60, 60),
+				WEATHER_PRESSURE: defNumber('WEATHER_PRESSURE', 1009.1, 0, 2000),
+			}),
+			'defNumberVector',
+		)
+
+		expect(weather.humidity).toBeUndefined()
+		expect(manager.updatedAt(weather, 'humidity')).toBeUndefined()
+		expect(updates).toEqual(['humidity', 'pressure'])
+
+		// The surviving sensors keep their readings and freshness.
+		expect(weather.temperature).toBe(12.25)
+		expect(weather.hasThermometer).toBeTrue()
+		expect(weather.pressure).toBe(1009.1)
+		expect(manager.updatedAt(weather, 'temperature')).toBeGreaterThan(0)
+
+		// A set vector is a partial update: reporting one parameter must not withdraw the others.
+		updates.length = 0
+		manager.numberVector(recordingClient, weatherParameters(weather.name, { WEATHER_PRESSURE: defNumber('WEATHER_PRESSURE', 1010, 0, 2000) }), 'setNumberVector')
+
+		expect(weather.temperature).toBe(12.25)
+		expect(weather.pressure).toBe(1010)
+		expect(updates).toEqual(['pressure'])
+
+		// Dropping the thermometer restores the capability default rather than leaving a stale reading.
+		manager.numberVector(recordingClient, weatherParameters(weather.name, { WEATHER_PRESSURE: defNumber('WEATHER_PRESSURE', 1010, 0, 2000) }), 'defNumberVector')
+
+		expect(weather.hasThermometer).toBeFalse()
+		expect(weather.temperature).toBe(0)
+		expect(manager.updatedAt(weather, 'temperature')).toBeUndefined()
+	})
+
 	test('ignores the placeholder values of a Busy definition', () => {
 		const manager = new WeatherManager()
 		const weather = weatherDevice(manager)
