@@ -1,5 +1,5 @@
 import type { BitpixOrZero } from '../../io/formats/fits/fits'
-import type { Cover, Device, FlatPanel } from '../indi/device'
+import type { Cover, Device, FlatPanel, WeatherSensor } from '../indi/device'
 import { WEATHER_SENSORS, type WeatherSensorMapping } from '../indi/manager'
 
 // Shared type definitions for the ASCOM Alpaca protocol: device-type tags, error codes, the enumerated
@@ -248,6 +248,14 @@ export const WEATHER_SENSORS_BY_ASCOM_NAME = new Map<string, WeatherSensorMappin
 
 for (const sensor of WEATHER_SENSORS) {
 	WEATHER_SENSORS_BY_ASCOM_NAME.set(sensor.ascom.toLowerCase(), sensor)
+}
+
+// Lookup by typed field, so a route that names its sensor directly resolves the mapping (its INDI element
+// name and aliases) without scanning the table.
+export const WEATHER_SENSORS_BY_FIELD = new Map<WeatherSensor, WeatherSensorMapping>()
+
+for (const sensor of WEATHER_SENSORS) {
+	WEATHER_SENSORS_BY_FIELD.set(sensor.field, sensor)
 }
 
 // Resolves a sensor from an ASCOM SensorName, case-insensitively. Returns undefined for an unknown name.

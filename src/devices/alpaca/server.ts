@@ -1,5 +1,5 @@
 // oxfmt-ignore
-import { type AlpacaAxisRate, AlpacaCameraState, type AlpacaConfiguredDevice, type AlpacaDeviceNumberProvider, type AlpacaDeviceType, AlpacaDomeShutterState, AlpacaError, AlpacaException, type AlpacaFocuserAction, AlpacaImageElementType, type AlpacaServerStartOptions, type AlpacaStateItem, type AlpacaWheelAction, defaultDeviceNumberProvider, findWeatherSensor, SUPPORTED_FOCUSER_ACTIONS, SUPPORTED_WHEEL_ACTIONS, WEATHER_SENSORS } from './types'
+import { type AlpacaAxisRate, AlpacaCameraState, type AlpacaConfiguredDevice, type AlpacaDeviceNumberProvider, type AlpacaDeviceType, AlpacaDomeShutterState, AlpacaError, AlpacaException, type AlpacaFocuserAction, AlpacaImageElementType, type AlpacaServerStartOptions, type AlpacaStateItem, type AlpacaWheelAction, defaultDeviceNumberProvider, findWeatherSensor, SUPPORTED_FOCUSER_ACTIONS, SUPPORTED_WHEEL_ACTIONS, WEATHER_SENSORS, WEATHER_SENSORS_BY_FIELD } from './types'
 import { observedToCirs } from '../../astronomy/coordinates/astrometry'
 import { type EquatorialCoordinate, equatorialToHorizontal } from '../../astronomy/coordinates/coordinate'
 import { Bitpix, computeRemainingBytes, FitsKeywordReader } from '../../io/formats/fits/fits'
@@ -864,7 +864,7 @@ export class AlpacaServer {
 		const value = weatherSensorValue(registered.device, sensor)
 
 		if (value === undefined) {
-			if (weatherSensorImplemented(registered.device, sensor)) return makeAlpacaErrorResponse(AlpacaException.ValueNotSet, `${sensor} has no current value`)
+			if (weatherSensorImplemented(this.options.weather, registered.device, sensor)) return makeAlpacaErrorResponse(AlpacaException.ValueNotSet, `${sensor} has no current value`)
 			return makeAlpacaErrorResponse(AlpacaException.MethodOrPropertyNotImplemented, `${sensor} is not available`)
 		}
 
@@ -921,7 +921,7 @@ export class AlpacaServer {
 
 		const { device } = registered
 
-		if (!weatherSensorImplemented(device, sensor.field)) {
+		if (!weatherSensorImplemented(this.options.weather, device, sensor.field)) {
 			return makeAlpacaErrorResponse(AlpacaException.MethodOrPropertyNotImplemented, `${sensor.ascom} is not available`)
 		}
 
@@ -948,7 +948,7 @@ export class AlpacaServer {
 
 			if (sensor === undefined) return makeAlpacaErrorResponse(AlpacaException.InvalidValue, `Invalid sensor name: ${name}`)
 
-			if (!weatherSensorImplemented(device, sensor.field)) {
+			if (!weatherSensorImplemented(this.options.weather, device, sensor.field)) {
 				return makeAlpacaErrorResponse(AlpacaException.MethodOrPropertyNotImplemented, `${sensor.ascom} is not available`)
 			}
 
@@ -2338,16 +2338,36 @@ function weatherSensorValue(device: Weather, sensor: WeatherSensor): number | un
 	}
 }
 
+// Whether the driver's WEATHER_PARAMETERS definition declares `sensor`, under its INDI name or any alias.
+//
+// The element set is the driver stating which sensors exist, and it says so before any of them has a
+// value: a definition published Busy carries the driver's declared defaults rather than readings - the
+// Firmata adapter does exactly that until its first hardware reply - so WeatherManager deliberately leaves
+// the typed fields undefined meanwhile. The declaration is what survives that gap.
+function weatherSensorDeclared(manager: WeatherManager | undefined, device: Weather, sensor: WeatherSensor) {
+	const parameters = manager?.properties.get(device)?.WEATHER_PARAMETERS
+
+	if (parameters?.type !== 'NUMBER') return false
+
+	const mapping = WEATHER_SENSORS_BY_FIELD.get(sensor)!
+
+	if (parameters.elements[mapping.indi] !== undefined) return true
+	for (const alias of mapping.aliases) if (parameters.elements[alias] !== undefined) return true
+
+	return false
+}
+
 // Whether the backend implements `sensor` at all, independently of whether it has a usable value right
 // now.
 //
-// The distinction only matters for the humidity/dew-point pair: the member being derived stays implemented
-// as soon as the other member and an ambient temperature exist, even for a reading the Magnus relation
-// cannot transform (0 % relative humidity, or a temperature outside its ±100 °C domain). Those are
-// singular readings, not capability changes, and an Alpaca client latches MethodOrPropertyNotImplemented
-// for the life of the connection, so answering 1024 there would disable a working sensor for good. Every
-// other sensor is implemented exactly when it has a value.
-function weatherSensorImplemented(device: Weather, sensor: WeatherSensor) {
+// A sensor the driver declares is implemented even before its first reading. Beyond that, the distinction
+// matters for the humidity/dew-point pair: the member being derived stays implemented as soon as the other
+// member and an ambient temperature exist, even for a reading the Magnus relation cannot transform (0 %
+// relative humidity, or a temperature outside its ±100 °C domain). None of those are capability changes,
+// and an Alpaca client latches MethodOrPropertyNotImplemented for the life of the connection, so answering
+// 1024 there would disable a working sensor for good. Any other sensor is implemented when it has a value.
+function weatherSensorImplemented(manager: WeatherManager | undefined, device: Weather, sensor: WeatherSensor) {
+	if (weatherSensorDeclared(manager, device, sensor)) return true
 	if (sensor === 'humidity') return device.humidity !== undefined || (device.dewPoint !== undefined && device.hasThermometer)
 	if (sensor === 'dewPoint') return device.dewPoint !== undefined || (device.humidity !== undefined && device.hasThermometer)
 	return weatherSensorValue(device, sensor) !== undefined

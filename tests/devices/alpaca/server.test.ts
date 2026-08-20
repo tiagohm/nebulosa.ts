@@ -5,11 +5,12 @@ import { type AlpacaConfiguredDevice, AlpacaException, AlpacaImageElementType, t
 import type { Device } from '../../../src/devices/indi/device'
 import type { DeviceManager } from '../../../src/devices/indi/manager'
 import type { DeviceSimulator } from '../../../src/devices/indi/simulator/device'
+import type { DefNumberVector } from '../../../src/devices/indi/types'
 import { bitpixInBytes } from '../../../src/io/formats/fits/util'
 import { downloadPerTag } from '../../download'
 import { saveAndCompareHash } from '../../imaging/util'
 import { waitUntil } from '../../util'
-import { ALPACA_CAMERA, ALPACA_COVER, ALPACA_DOME, ALPACA_FLAT_PANEL, ALPACA_FOCUSER, ALPACA_MOUNT, ALPACA_ROTATOR, ALPACA_SAFETY_MONITOR, ALPACA_WEATHER, ALPACA_WHEEL, type AlpacaTestDevice, startAlpacaServer } from './util'
+import { ALPACA_CAMERA, ALPACA_COVER, ALPACA_DOME, ALPACA_FLAT_PANEL, ALPACA_FOCUSER, ALPACA_MOUNT, ALPACA_ROTATOR, ALPACA_SAFETY_MONITOR, ALPACA_WEATHER, ALPACA_WHEEL, type AlpacaTestDevice, type AlpacaWeatherServer, startAlpacaServer } from './util'
 
 await downloadPerTag('alpaca.server')
 
@@ -60,6 +61,19 @@ test('make image bytes from fits', async () => {
 		}
 	}
 }, 5000)
+
+// Redefines WEATHER_PARAMETERS without the named elements, which is how an INDI driver withdraws a sensor.
+// Removing the typed field alone would not: the definition is what states which sensors the driver has.
+function withdrawWeatherSensors(fixture: AlpacaWeatherServer, ...names: readonly string[]) {
+	const parameters = fixture.manager.properties.get(fixture.device)!.WEATHER_PARAMETERS as DefNumberVector
+	const elements = { ...parameters.elements }
+
+	for (const name of names) delete elements[name]
+
+	const message = { ...parameters, elements }
+	fixture.manager.numberVector(fixture.indiClient, message, 'defNumberVector')
+	fixture.manager.vector(fixture.indiClient, message, 'defNumberVector')
+}
 
 describe('observing conditions server', () => {
 	test('lists the station in the management API with interface version 2', async () => {
@@ -146,14 +160,10 @@ describe('observing conditions server', () => {
 		const derivedHumidity = (await fixture.get(`${base}/humidity`)).Value as number
 		expect(derivedHumidity).toBeCloseTo(52, 0)
 
-		// Without an ambient temperature neither can be derived, so both must report not implemented.
-		fixture.device.humidity = undefined
-		fixture.device.dewPoint = 6.9
-		fixture.device.hasThermometer = false
+		// A driver declaring neither member, and no ambient temperature to derive one from, has no pair at
+		// all: both must report not implemented.
+		withdrawWeatherSensors(fixture, 'WEATHER_HUMIDITY', 'WEATHER_DEW_POINT', 'WEATHER_TEMPERATURE')
 		expect((await fixture.get(`${base}/humidity`)).ErrorNumber).toBe(AlpacaException.MethodOrPropertyNotImplemented)
-
-		fixture.device.dewPoint = undefined
-		fixture.device.humidity = 52
 		expect((await fixture.get(`${base}/dewpoint`)).ErrorNumber).toBe(AlpacaException.MethodOrPropertyNotImplemented)
 	})
 
@@ -190,7 +200,7 @@ describe('observing conditions server', () => {
 		expect(described.ErrorNumber).toBe(0)
 		expect(described.Value).toBe('Temperature (C)')
 
-		fixture.device.starFWHM = undefined
+		withdrawWeatherSensors(fixture, 'WEATHER_STAR_FWHM')
 		expect((await fixture.get(`${base}/sensordescription?SensorName=StarFWHM`)).ErrorNumber).toBe(AlpacaException.MethodOrPropertyNotImplemented)
 
 		expect((await fixture.get(`${base}/sensordescription?SensorName=Wobble`)).ErrorNumber).toBe(AlpacaException.InvalidValue)
@@ -312,10 +322,40 @@ describe('observing conditions server', () => {
 		expect(recovered.ErrorNumber).toBe(0)
 		expect(recovered.Value as number).toBeCloseTo(6.9, 1)
 
-		// Without an ambient temperature the pair really is unimplemented.
-		fixture.device.humidity = 0
-		fixture.device.hasThermometer = false
+		// A driver that declares neither member really has no dew point to report.
+		withdrawWeatherSensors(fixture, 'WEATHER_HUMIDITY', 'WEATHER_DEW_POINT', 'WEATHER_TEMPERATURE')
 		expect((await fixture.get(`${base}/dewpoint`)).ErrorNumber).toBe(AlpacaException.MethodOrPropertyNotImplemented)
+	})
+
+	test('keeps a sensor declared by a Busy definition implemented until its first reading', async () => {
+		await using fixture = await startAlpacaServer(ALPACA_WEATHER)
+		const base = fixture.path
+
+		// A Firmata weather peripheral defines WEATHER_PARAMETERS Busy with placeholder zeros and settles
+		// it on its first hardware reply. WeatherManager stores no value meanwhile, but the element set is
+		// the driver stating that the sensor exists, so the capability must survive that gap: 1024 is what
+		// a capability-caching client latches for the rest of the connection.
+		fixture.manager.delProperty(fixture.indiClient, { device: fixture.simulator.name, name: 'WEATHER_PARAMETERS' })
+
+		const placeholders = { device: fixture.simulator.name, name: 'WEATHER_PARAMETERS', permission: 'ro', state: 'Busy', elements: { WEATHER_TEMPERATURE: { name: 'WEATHER_TEMPERATURE', label: 'Temperature (C)', value: 0, min: -55, max: 125, step: 0.01, format: '%.2f' } } } as const
+		fixture.manager.numberVector(fixture.indiClient, placeholders, 'defNumberVector')
+		fixture.manager.vector(fixture.indiClient, placeholders, 'defNumberVector')
+
+		expect(fixture.device.hasThermometer).toBeFalse()
+
+		expect((await fixture.get(`${base}/temperature`)).ErrorNumber).toBe(AlpacaException.ValueNotSet)
+		expect((await fixture.get(`${base}/sensordescription?SensorName=Temperature`)).Value).toBe('Temperature (C)')
+		expect((await fixture.get(`${base}/timesincelastupdate?SensorName=Temperature`)).Value).toBe(-1)
+
+		// A sensor the definition does not declare stays genuinely unimplemented.
+		expect((await fixture.get(`${base}/cloudcover`)).ErrorNumber).toBe(AlpacaException.MethodOrPropertyNotImplemented)
+
+		// The first hardware sample settles it.
+		fixture.manager.numberVector(fixture.indiClient, { device: fixture.simulator.name, name: 'WEATHER_PARAMETERS', state: 'Ok', elements: { WEATHER_TEMPERATURE: { name: 'WEATHER_TEMPERATURE', value: 21.5 } } }, 'setNumberVector')
+
+		const temperature = await fixture.get(`${base}/temperature`)
+		expect(temperature.ErrorNumber).toBe(0)
+		expect(temperature.Value).toBe(21.5)
 	})
 
 	test('reports the freshness of a derived sensor from the one it is derived from', async () => {
