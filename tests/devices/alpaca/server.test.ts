@@ -275,18 +275,44 @@ describe('observing conditions server', () => {
 		const base = fixture.path
 
 		// The Magnus terms divide by zero at -243.04 C. A driver reporting there must leave the derived
-		// member absent instead of serializing Infinity or NaN as a successful reading.
+		// member without a value instead of serializing Infinity or NaN as a successful reading, but the
+		// sensor itself is still implemented.
 		fixture.device.dewPoint = undefined
 		fixture.device.temperature = -243.04
-		expect((await fixture.get(`${base}/dewpoint`)).ErrorNumber).toBe(AlpacaException.MethodOrPropertyNotImplemented)
+		expect((await fixture.get(`${base}/dewpoint`)).ErrorNumber).toBe(AlpacaException.ValueNotSet)
 
 		fixture.device.dewPoint = 6.9
 		fixture.device.humidity = undefined
-		expect((await fixture.get(`${base}/humidity`)).ErrorNumber).toBe(AlpacaException.MethodOrPropertyNotImplemented)
+		expect((await fixture.get(`${base}/humidity`)).ErrorNumber).toBe(AlpacaException.ValueNotSet)
 
 		fixture.device.temperature = 16.8
 		fixture.device.dewPoint = -300
-		expect((await fixture.get(`${base}/humidity`)).ErrorNumber).toBe(AlpacaException.MethodOrPropertyNotImplemented)
+		expect((await fixture.get(`${base}/humidity`)).ErrorNumber).toBe(AlpacaException.ValueNotSet)
+	})
+
+	test('keeps a derived dew point implemented at zero humidity', async () => {
+		await using fixture = await startAlpacaServer(ALPACA_WEATHER)
+		const base = fixture.path
+
+		// The Magnus relation is undefined at 0 % RH, but that is a reading, not a capability: this repo's
+		// own client latches MethodOrPropertyNotImplemented and would never ask for DewPoint again.
+		fixture.device.dewPoint = undefined
+		fixture.device.humidity = 0
+
+		expect((await fixture.get(`${base}/dewpoint`)).ErrorNumber).toBe(AlpacaException.ValueNotSet)
+		expect((await fixture.get(`${base}/sensordescription?SensorName=DewPoint`)).ErrorNumber).toBe(0)
+		expect((await fixture.get(`${base}/timesincelastupdate?SensorName=DewPoint`)).ErrorNumber).toBe(0)
+
+		// The sensor recovers by itself as soon as the humidity rises again.
+		fixture.device.humidity = 52
+		const recovered = await fixture.get(`${base}/dewpoint`)
+		expect(recovered.ErrorNumber).toBe(0)
+		expect(recovered.Value as number).toBeCloseTo(6.9, 1)
+
+		// Without an ambient temperature the pair really is unimplemented.
+		fixture.device.humidity = 0
+		fixture.device.hasThermometer = false
+		expect((await fixture.get(`${base}/dewpoint`)).ErrorNumber).toBe(AlpacaException.MethodOrPropertyNotImplemented)
 	})
 
 	test('reports the freshness of a derived sensor from the one it is derived from', async () => {

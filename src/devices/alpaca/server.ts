@@ -855,14 +855,18 @@ export class AlpacaServer {
 	}
 
 	// Returns one sensor value in ASCOM units, or MethodOrPropertyNotImplemented when the backend does
-	// not provide it.
+	// not provide the sensor at all. An implemented sensor whose current reading cannot be turned into a
+	// value reports ValueNotSet instead, because 1024 is a capability answer that clients latch.
 	#weatherGetSensor(id: number, sensor: WeatherSensor) {
 		const registered = this.#requireWeatherConnected(id)
 		if (registered instanceof Response) return registered
 
 		const value = weatherSensorValue(registered.device, sensor)
 
-		if (value === undefined) return makeAlpacaErrorResponse(AlpacaException.MethodOrPropertyNotImplemented, `${sensor} is not available`)
+		if (value === undefined) {
+			if (weatherSensorImplemented(registered.device, sensor)) return makeAlpacaErrorResponse(AlpacaException.ValueNotSet, `${sensor} has no current value`)
+			return makeAlpacaErrorResponse(AlpacaException.MethodOrPropertyNotImplemented, `${sensor} is not available`)
+		}
 
 		return makeAlpacaResponse(value)
 	}
@@ -917,7 +921,7 @@ export class AlpacaServer {
 
 		const { device } = registered
 
-		if (weatherSensorValue(device, sensor.field) === undefined) {
+		if (!weatherSensorImplemented(device, sensor.field)) {
 			return makeAlpacaErrorResponse(AlpacaException.MethodOrPropertyNotImplemented, `${sensor.ascom} is not available`)
 		}
 
@@ -944,7 +948,7 @@ export class AlpacaServer {
 
 			if (sensor === undefined) return makeAlpacaErrorResponse(AlpacaException.InvalidValue, `Invalid sensor name: ${name}`)
 
-			if (weatherSensorValue(device, sensor.field) === undefined) {
+			if (!weatherSensorImplemented(device, sensor.field)) {
 				return makeAlpacaErrorResponse(AlpacaException.MethodOrPropertyNotImplemented, `${sensor.ascom} is not available`)
 			}
 
@@ -2332,6 +2336,21 @@ function weatherSensorValue(device: Weather, sensor: WeatherSensor): number | un
 		default:
 			return device[sensor]
 	}
+}
+
+// Whether the backend implements `sensor` at all, independently of whether it has a usable value right
+// now.
+//
+// The distinction only matters for the humidity/dew-point pair: the member being derived stays implemented
+// as soon as the other member and an ambient temperature exist, even for a reading the Magnus relation
+// cannot transform (0 % relative humidity, or a temperature at the -243.04 °C singularity). Those are
+// singular readings, not capability changes, and an Alpaca client latches MethodOrPropertyNotImplemented
+// for the life of the connection, so answering 1024 there would disable a working sensor for good. Every
+// other sensor is implemented exactly when it has a value.
+function weatherSensorImplemented(device: Weather, sensor: WeatherSensor) {
+	if (sensor === 'humidity') return device.humidity !== undefined || (device.dewPoint !== undefined && device.hasThermometer)
+	if (sensor === 'dewPoint') return device.dewPoint !== undefined || (device.humidity !== undefined && device.hasThermometer)
+	return weatherSensorValue(device, sensor) !== undefined
 }
 
 // Epoch milliseconds of the newest reading backing `sensor`, or undefined when it was never reported.
