@@ -10,7 +10,7 @@ import { handleDefLightVector, handleDefNumberVector, handleDefSwitchVector, han
 import type { Camera, Client, Device, Focuser, Mount, Rotator, WeatherSensor, Wheel } from '../indi/device'
 import { type DeviceProvider, WEATHER_SENSORS, type WeatherSensorMapping } from '../indi/manager'
 // oxfmt-ignore
-import { type DefSwitchVector, type DefVector, type EnableBlob, findOnSwitch, type GetProperties, makeBlobVector, makeLightVector, makeNumberVector, makeSwitchVector, makeTextVector, type NewNumberVector, type NewSwitchVector, type NewTextVector, type PropertyState, type ValueType, type VectorType } from '../indi/types'
+import { type DefNumber, type DefSwitchVector, type DefVector, type EnableBlob, findOnSwitch, type GetProperties, makeBlobVector, makeLightVector, makeNumberVector, makeSwitchVector, makeTextVector, type NewNumberVector, type NewSwitchVector, type NewTextVector, type PropertyState, type ValueType, type VectorType } from '../indi/types'
 import { formatTemporal, TIMEZONE } from '../../astronomy/time/temporal'
 import { type Time, timeNow } from '../../astronomy/time/time'
 import { roundToNthDecimal } from '../../math/numerical/math'
@@ -2424,27 +2424,49 @@ class AlpacaObservingConditions extends AlpacaDevice {
 
 	// Writes the polled readings into the vector elements, without emitting anything. An element whose
 	// sensor has no reading this cycle keeps its last value.
+	//
+	// Returns the elements that did carry a reading, or undefined when none did. That subset is what a
+	// report may cover: an element left out of it holds a value from an earlier cycle, so restating it
+	// would be a claim about the present that the poll did not support.
 	#fillParameters(parameters: ReturnType<typeof makeNumberVector>) {
+		let reported: Record<string, DefNumber> | undefined
+
 		for (const sensor of WEATHER_SENSORS) {
-			if (parameters.elements[sensor.indi] === undefined) continue
+			const element = parameters.elements[sensor.indi] as DefNumber | undefined
+
+			if (element === undefined) continue
 
 			const value = this.#sensorValue(sensor)
 
 			if (value === undefined) continue
 
 			this.updatePropertyValue(parameters, sensor.indi, value)
+
+			reported ??= {}
+			reported[sensor.indi] = element
 		}
+
+		return reported
 	}
 
 	// Mirrors the polled readings into WEATHER_PARAMETERS.
 	//
-	// The vector is re-emitted every tick even when no value moved. The property object is reused, so the
-	// INDI side treats it as a fresh report of the same values, which is what keeps a downstream
-	// TimeSinceLastUpdate advancing while the weather is steady.
+	// The sensors that answered are re-reported every tick even when no value moved, which is what keeps a
+	// downstream TimeSinceLastUpdate advancing while the weather is steady.
+	//
+	// Only those sensors are reported. A set vector is a partial update, so leaving an element out keeps
+	// its last value on the far side while its freshness stops advancing - exactly what a sensor whose
+	// endpoint started failing should look like. Reporting the whole reused vector instead would restamp
+	// its stale value as a new observation on every tick and hide the outage for the life of the
+	// connection.
 	#applyParameters() {
 		const parameters = this.#parameters!
-		this.#fillParameters(parameters)
-		this.sendSetProperty(parameters)
+		const elements = this.#fillParameters(parameters)
+
+		// Every endpoint failed this cycle: there is no fresh observation to mirror.
+		if (elements === undefined) return
+
+		this.sendSetProperty({ ...parameters, elements })
 	}
 
 	// Publishes the averaging window, defining the vector the first time a value arrives. A server

@@ -676,6 +676,40 @@ describe.skipIf(isTimeConsumingTestSkipped())('observing conditions client', () 
 		expect(weatherParametersOf(remote, remote.device()!)!.elements.WEATHER_STAR_FWHM.label).toBe('Star FWHM (arcsec)')
 	}, 15000)
 
+	test('stops refreshing a sensor whose endpoint starts failing', async () => {
+		await using server = await startAlpacaServer(ALPACA_WEATHER)
+
+		let failing = false
+
+		await using proxy = startAlpacaProxy(server.url, {
+			notImplemented: ['/devicestate'],
+			respond: (path) => (failing && path.endsWith('/starfwhm') ? { status: 500 } : undefined),
+		})
+
+		await using remote = await startAlpacaClient(proxy.url, ALPACA_WEATHER)
+		await waitUntil(() => remote.device()?.starFWHM === 2.4, WEATHER_TIMEOUT)
+
+		const far = remote.device()!
+		const attempts = proxy.countOf('/starfwhm')
+
+		// Seeing stops answering. It is not unimplemented, so it keeps being polled, but its last value
+		// must not ride along on the reports the other sensors keep producing.
+		failing = true
+		await waitUntil(() => proxy.countOf('/starfwhm') >= attempts + 2, WEATHER_TIMEOUT)
+
+		const stale = remote.manager.updatedAt(far, 'starFWHM')!
+		expect(stale).toBeGreaterThan(0)
+
+		await waitUntil(() => remote.manager.updatedAt(far, 'temperature')! > stale, WEATHER_TIMEOUT)
+
+		expect(remote.manager.updatedAt(far, 'starFWHM')).toBe(stale)
+		expect(far.starFWHM).toBe(2.4)
+
+		// It recovers by itself, without a redefinition, once the endpoint answers again.
+		failing = false
+		await waitUntil(() => remote.manager.updatedAt(far, 'starFWHM')! > stale, WEATHER_TIMEOUT)
+	}, 15000)
+
 	test('forwards the average period and the refresh command back to the server', async () => {
 		await using server = await startAlpacaServer(ALPACA_WEATHER)
 		await using remote = await startAlpacaClient(server.url, ALPACA_WEATHER)
