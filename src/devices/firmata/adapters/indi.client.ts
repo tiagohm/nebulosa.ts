@@ -661,8 +661,7 @@ class FirmataVirtualDevice<D extends ListenablePeripheral<D>> {
 
 	// Republishes the alwaysReport measurements on the report interval, whether or not the peripheral
 	// produced an event since the last one. Peripherals notify only on change, so without this a station
-	// holding a steady reading would stop advancing its consumers' freshness. A vector still Busy has
-	// never had a valid sample and stays unpublished, exactly as on a reading.
+	// holding a steady reading would stop advancing its consumers' freshness.
 	#onReport() {
 		this.#publishReadings(this.peripheral, true)
 	}
@@ -674,6 +673,12 @@ class FirmataVirtualDevice<D extends ListenablePeripheral<D>> {
 	#publishReadings(peripheral: D, report: boolean) {
 		for (const measurement of this.measurements) {
 			if (report && !measurement.alwaysReport) continue
+
+			// Only a listener event may settle a vector out of Busy, because only that proves the values
+			// came from hardware. The declared defaults a Busy definition carries are in range for a
+			// weather vector (0 C, 0 %, 0 hPa all are), so an interval firing before the first hardware
+			// reply would otherwise settle it to Idle and publish those placeholders as observed weather.
+			if (report && measurement.vector.state === 'Busy') continue
 
 			// Ignore any reading a measurement deems invalid, not just while still Busy: before the first
 			// valid sample this keeps the vector Busy, and afterwards it rejects a later corrupt frame (for

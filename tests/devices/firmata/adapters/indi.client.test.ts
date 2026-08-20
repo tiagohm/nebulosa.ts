@@ -385,8 +385,11 @@ describe('firmata indi client', () => {
 		const device = client.createPeripheral(peripheral)
 		await device.connect()
 
-		// Peripherals suppress an unchanged read, so nothing arrives through the listener. The interval is
-		// what keeps WeatherManager's freshness, and Alpaca TimeSinceLastUpdate, advancing.
+		// One hardware reading settles the vector; from there the readings hold still.
+		peripheral.emit()
+
+		// Peripherals suppress an unchanged read, so nothing more arrives through the listener. The
+		// interval is what keeps WeatherManager's freshness, and Alpaca TimeSinceLastUpdate, advancing.
 		const before = events.filter((e) => e.tag === 'setNumber' && e.name === 'WEATHER_PARAMETERS').length
 		await waitUntil(() => events.filter((e) => e.tag === 'setNumber' && e.name === 'WEATHER_PARAMETERS').length >= before + 2, 2000)
 
@@ -398,6 +401,35 @@ describe('firmata indi client', () => {
 		const settled = events.filter((e) => e.tag === 'setNumber' && e.name === 'WEATHER_PARAMETERS').length
 		await Bun.sleep(80)
 		expect(events.filter((e) => e.tag === 'setNumber' && e.name === 'WEATHER_PARAMETERS')).toHaveLength(settled)
+	})
+
+	test('the report interval waits for the first hardware sample', async () => {
+		const firmata = new FakeFirmata()
+		const { events, handler } = createRecorder()
+		using client = new FirmataIndiClient(firmata as never, 'Board', { handler, reportInterval: 20 })
+
+		const peripheral = new FakeThermometer('LM35', firmata as never)
+		const device = client.createPeripheral(peripheral)
+		await device.connect()
+
+		// The vector is defined Busy with the declared default 0, which is a valid temperature. Until a
+		// listener event proves a reading came from hardware, the interval must publish nothing: settling
+		// it would announce 0 C as observed weather with a fresh timestamp.
+		const def = events.find((e) => e.tag === 'defNumber' && e.name === 'WEATHER_PARAMETERS')
+		expect(def!.state).toBe('Busy')
+
+		await Bun.sleep(80)
+		expect(events.filter((e) => e.tag === 'setNumber' && e.name === 'WEATHER_PARAMETERS')).toHaveLength(0)
+
+		// The first real reading settles it, and only then does the interval take over.
+		peripheral.temperature = 21.5
+		peripheral.emit()
+
+		const settled = events.filter((e) => e.tag === 'setNumber' && e.name === 'WEATHER_PARAMETERS')
+		expect(settled).toHaveLength(1)
+		expect(settled[0].state).toBe('Idle')
+
+		await waitUntil(() => events.filter((e) => e.tag === 'setNumber' && e.name === 'WEATHER_PARAMETERS').length >= 3, 2000)
 	})
 
 	test('a non-weather device arms no report interval', async () => {
