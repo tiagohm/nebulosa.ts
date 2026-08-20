@@ -739,6 +739,36 @@ describe.skipIf(isTimeConsumingTestSkipped())('observing conditions client', () 
 		await waitUntil(() => remote.manager.updatedAt(far, 'starFWHM')! > stale, WEATHER_TIMEOUT)
 	}, 15000)
 
+	test('withdraws a sensor whose endpoint starts answering as unimplemented', async () => {
+		await using server = await startAlpacaServer(ALPACA_WEATHER)
+
+		let withdrawn = false
+
+		await using proxy = startAlpacaProxy(server.url, {
+			notImplemented: ['/devicestate'],
+			respond: (path) => (withdrawn && path.endsWith('/starfwhm') ? { errorNumber: AlpacaException.MethodOrPropertyNotImplemented } : undefined),
+		})
+
+		await using remote = await startAlpacaClient(proxy.url, ALPACA_WEATHER)
+		await waitUntil(() => remote.device()?.starFWHM === 2.4, WEATHER_TIMEOUT)
+
+		const far = remote.device()!
+		expect(weatherParametersOf(remote, far)!.elements).toContainKey('WEATHER_STAR_FWHM')
+
+		// The station drops the sensor from its own parameters, so the endpoint starts answering
+		// MethodOrPropertyNotImplemented. The capability has to be withdrawn from the mirrored vector
+		// instead of its last reading being restated as a fresh observation for the rest of the session.
+		withdrawn = true
+		await waitUntil(() => far.starFWHM === undefined, WEATHER_TIMEOUT)
+
+		expect(weatherParametersOf(remote, far)!.elements).not.toContainKey('WEATHER_STAR_FWHM')
+		expect(remote.manager.updatedAt(far, 'starFWHM')).toBeUndefined()
+
+		// The sensors that still answer keep flowing.
+		expect(far.temperature).toBe(16.8)
+		await waitUntil(() => remote.manager.updatedAt(far, 'temperature') !== undefined, WEATHER_TIMEOUT)
+	}, 15000)
+
 	test('forwards the average period and the refresh command back to the server', async () => {
 		await using server = await startAlpacaServer(ALPACA_WEATHER)
 		await using remote = await startAlpacaClient(server.url, ALPACA_WEATHER)

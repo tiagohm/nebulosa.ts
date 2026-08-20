@@ -2414,7 +2414,8 @@ class AlpacaObservingConditions extends AlpacaDevice {
 	}
 
 	// Publishes WEATHER_PARAMETERS with the supported sensors that have a reading, extending an already
-	// published vector with the ones that have since produced their first.
+	// published vector with the ones that have since produced their first and withdrawing the ones the
+	// server has since stopped implementing.
 	//
 	// A supported sensor whose poll failed transiently is correctly not recorded as unsupported, but it
 	// has no value either. Declaring its element anyway would publish a fabricated zero as a fresh
@@ -2424,7 +2425,39 @@ class AlpacaObservingConditions extends AlpacaDevice {
 	#publishParameters() {
 		const labels = this.#labels!
 		let parameters = this.#parameters
-		let added = false
+		let changed = false
+
+		// A sensor that answered readings and only later reports MethodOrPropertyNotImplemented - the
+		// backing INDI driver withdrew it from its own WEATHER_PARAMETERS, for one - has to leave the
+		// vector it was published in. #read stops polling it, but its last reading stays in the state bag
+		// and #fillParameters restates every element it still finds a value for, so the far side would go
+		// on advertising the capability and restamping that value as a fresh observation for the life of
+		// the connection.
+		if (parameters !== undefined && this.unsupported.size > 0) {
+			const state = this.state as unknown as Record<string, undefined>
+			let withdrawn = false
+
+			for (const sensor of WEATHER_SENSORS) {
+				if (!this.unsupported.has(sensor.ascom)) continue
+				if (parameters.elements[sensor.indi] === undefined) continue
+
+				delete parameters.elements[sensor.indi]
+				state[sensor.ascom] = undefined
+				withdrawn = true
+			}
+
+			// Nothing is left to publish: the property goes away instead of being redefined empty, which
+			// is how INDI says the device no longer offers any parameter at all.
+			if (withdrawn && Object.keys(parameters.elements).length === 0) {
+				this.#parameters = undefined
+				this.sendDelProperty(parameters)
+				return
+			}
+
+			// Otherwise the smaller element set is redefined, which is how a consumer such as
+			// WeatherManager drops the sensor and its freshness.
+			changed = withdrawn
+		}
 
 		for (const sensor of WEATHER_SENSORS) {
 			if (this.unsupported.has(sensor.ascom)) continue
@@ -2437,10 +2470,10 @@ class AlpacaObservingConditions extends AlpacaDevice {
 			}
 
 			parameters.elements[sensor.indi] = { name: sensor.indi, label: labels.get(sensor.ascom) ?? sensor.ascom, value: 0, min: sensor.min, max: sensor.max, step: sensor.step, format: sensor.format }
-			added = true
+			changed = true
 		}
 
-		if (!added || parameters === undefined) return
+		if (!changed || parameters === undefined) return
 
 		// Seed the elements from the readings already polled, so the definition itself carries real
 		// values instead of publishing a zero for one whole tick.
