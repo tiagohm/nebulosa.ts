@@ -546,12 +546,15 @@ describe('mount simulator meridian flip', () => {
 			client.sendNumber({ device: simulator.name, name: 'MOUNT_PERIODIC_ERROR', elements: { RA_PERIOD: 10, RA_AMPLITUDE: 60, RA_PHASE: 90, RA_AMPLITUDE_2: 0, RA_AMPLITUDE_3: 0 } })
 			const lst = simulator.siderealTimeAt(simulator.utcTime)
 			simulator.syncTo(normalizeAngle(lst + hour(1)), deg(20))
+			const targetRightAscension = simulator.mechanical.rightAscension
 			const startTime = simulator.utcTime
 
 			expect(toArcsec(simulator.boresight.declination - simulator.mechanical.declination)).toBeCloseTo(90, 6)
 			simulator.flipTo(simulator.rightAscension, simulator.declination)
 			simulator.advance(FAST_FLIP_DURATION / 2)
 			expect(toArcsec(simulator.boresight.declination - simulator.mechanical.declination)).toBeCloseTo(90, 6)
+			expect(toArcsec(PIOVERTWO - simulator.mechanical.declination)).toBeCloseTo(0, 6)
+			expect(toDeg(Math.abs(normalizePI(simulator.mechanical.rightAscension - targetRightAscension)))).toBeCloseTo(90, 6)
 
 			simulator.advance(FAST_FLIP_DURATION / 2 + 1e-6)
 			expect(simulator.pierSide).toBe('EAST')
@@ -559,13 +562,13 @@ describe('mount simulator meridian flip', () => {
 			const trajectory = new Float64Array(6)
 			const arrivalTime = startTime + FAST_FLIP_DURATION * 1000
 			expect(simulator.sampleBoresightTrajectory(startTime, arrivalTime, 3, trajectory)).toBe(3)
-			expect(toArcsec(trajectory[3] - simulator.mechanical.declination)).toBeCloseTo(90, 6)
+			expect(toArcsec(PIOVERTWO - trajectory[3])).toBeCloseTo(-90, 6)
 			expect(toArcsec(trajectory[5] - simulator.mechanical.declination)).toBeCloseTo(90, 6)
 			const jump = new Float64Array(4)
 			expect(simulator.sampleBoresightTrajectory(arrivalTime, arrivalTime, 2, jump)).toBe(2)
 			expect(toArcsec(normalizePI(jump[0] - jump[2]))).toBeCloseTo(0, 6)
 			expect(toArcsec(jump[3] - jump[1])).toBeCloseTo(90, 6)
-			expect(simulator.boresightPathLength(startTime, arrivalTime + 1)).toBeGreaterThan(arcsec(80))
+			expect(simulator.boresightPathLength(startTime, arrivalTime + 1)).toBeGreaterThan(deg(100))
 		} finally {
 			simulator.dispose()
 		}
@@ -1492,7 +1495,7 @@ describe('mount simulator meridian flip', () => {
 			simulator.flipTo(simulator.rightAscension, simulator.declination)
 			simulator.advance(FAST_FLIP_DURATION / 2)
 			const replacement = normalizeAngle(simulator.siderealTimeAt(simulator.utcTime) + hour(1))
-			simulator.goTo(replacement, simulator.declination)
+			simulator.goTo(replacement, deg(20))
 			simulator.advance(2)
 			expect(simulator.pierSide).toBe('WEST')
 			expect(simulator.isSlewing).toBeFalse()
