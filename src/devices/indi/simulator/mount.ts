@@ -1057,14 +1057,24 @@ export class MountSimulator extends DeviceSimulator {
 
 	// Disconnects the simulated mount and removes its dynamic properties.
 	disconnect() {
-		if (!this.#timer) return
+		this.pauseAutomaticTicking()
+		if (!this.isConnected) return
 
-		clearInterval(this.#timer)
-		this.#timer = undefined
 		this.stop()
 		this.setTrackingEnabled(false)
 
 		super.disconnect()
+	}
+
+	// Stops the wall-clock interval while keeping the simulated mount connected.
+	//
+	// Tests that advance the mount manually use this to keep exact slew boundaries deterministic. Normal
+	// clients should leave the interval running so real time continues to drive the simulation.
+	pauseAutomaticTicking() {
+		if (!this.#timer) return
+
+		clearInterval(this.#timer)
+		this.#timer = undefined
 	}
 
 	// Starts a time-based slew to the requested equatorial coordinate.

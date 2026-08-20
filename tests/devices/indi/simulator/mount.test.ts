@@ -1515,6 +1515,7 @@ describe('mount simulator meridian flip', () => {
 		try {
 			let lst = simulator.siderealTimeAt(simulator.utcTime)
 			simulator.syncTo(normalizeAngle(lst + hour(1)), deg(20))
+			simulator.setTrackingEnabled(true)
 			simulator.flipTo(simulator.rightAscension, simulator.declination)
 			simulator.advance(FAST_FLIP_DURATION / 2)
 			simulator.moveEast(true)
@@ -3707,6 +3708,7 @@ function makeMeridianFlipMount(id: string) {
 	const simulator = new MountSimulator('Mount Simulator', client)
 	const mount = manager.get(client, simulator.name)!
 	simulator.connect()
+	simulator.pauseAutomaticTicking()
 	simulator.setSlewRate('SPEED_7')
 	return { client, handler, manager, mount, simulator }
 }
