@@ -775,6 +775,28 @@ describe.skipIf(isTimeConsumingTestSkipped())('observing conditions client', () 
 		expect(far.cloudCover).toBe(15)
 	}, 10000)
 
+	test('a stopped client discards a weather definition still in flight', async () => {
+		await using server = await startAlpacaServer(ALPACA_WEATHER)
+
+		// Hold the sensor descriptions so the definition is unmistakably in flight when the client stops.
+		await using proxy = startAlpacaProxy(server.url, { delay: (path) => (path.endsWith('/sensordescription') ? 500 : undefined) })
+
+		const emitted: string[] = []
+		await using remote = await startAlpacaClient(proxy.url, ALPACA_WEATHER, { numberVector: (_, message, tag) => emitted.push(`${tag}:${message.name}`) })
+
+		await waitUntil(() => remote.device() !== undefined, WEATHER_TIMEOUT)
+		await waitUntil(() => proxy.countOf('/sensordescription') > 0, WEATHER_TIMEOUT)
+		expect(emitted).not.toContain('defNumberVector:WEATHER_PARAMETERS')
+
+		// stop() closes its wrappers rather than disconnecting them, so close() is the only hook that can
+		// end the session. A run that resolves afterwards must publish nothing: a restart on the same URL
+		// reuses the client id, so a stale definition, set, or deletion would land in the new session.
+		remote.client.stop()
+		await Bun.sleep(900)
+
+		expect(emitted).not.toContain('defNumberVector:WEATHER_PARAMETERS')
+	}, 15000)
+
 	test('never turns a weather station into a safety monitor', async () => {
 		await using server = await startAlpacaServer(ALPACA_WEATHER)
 		await using remote = await startAlpacaClient(server.url, ALPACA_WEATHER)

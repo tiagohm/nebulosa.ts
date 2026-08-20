@@ -1,7 +1,7 @@
 import { AlpacaClient } from '../../../src/devices/alpaca/client'
 import { AlpacaServer, type AlpacaServerOptions } from '../../../src/devices/alpaca/server'
 import { type AlpacaDeviceType, AlpacaException, type AlpacaResponse } from '../../../src/devices/alpaca/types'
-import { IndiClientHandlerSet } from '../../../src/devices/indi/client'
+import { type IndiClientHandler, IndiClientHandlerSet } from '../../../src/devices/indi/client'
 import type { Camera, Cover, Device, DeviceProperties, Dome, FlatPanel, Focuser, Mount, Rotator, SafetyMonitor, Weather, Wheel } from '../../../src/devices/indi/device'
 import { CameraManager, CoverManager, type DeviceManager, DomeManager, FlatPanelManager, FocuserManager, MountManager, RotatorManager, SafetyMonitorManager, WeatherManager, WheelManager } from '../../../src/devices/indi/manager'
 import { CameraSimulator } from '../../../src/devices/indi/simulator/camera'
@@ -237,10 +237,13 @@ export interface AlpacaTestClient<D extends Device, M extends DeviceManager<D>> 
 
 // Points a real AlpacaClient at `url` and feeds its synthesized INDI vectors into a second manager of the
 // same type, which is the far end of the simulator to manager to server to client to manager round-trip.
-export async function startAlpacaClient<D extends Device, M extends DeviceManager<D>, S extends DeviceSimulator>(url: string, kind: AlpacaTestDevice<D, M, S>): Promise<AlpacaTestClient<D, M>> {
+// `spy` is attached alongside the far-end manager, for a suite that has to assert on the raw INDI events
+// the wrapper emits rather than on the state the manager derives from them.
+export async function startAlpacaClient<D extends Device, M extends DeviceManager<D>, S extends DeviceSimulator>(url: string, kind: AlpacaTestDevice<D, M, S>, spy?: IndiClientHandler): Promise<AlpacaTestClient<D, M>> {
 	const handler = new IndiClientHandlerSet()
 	const manager = kind.makeManager()
 	handler.add(manager)
+	if (spy) handler.add(spy)
 
 	const client = new AlpacaClient(url, { handler }, { get: () => undefined })
 	await client.start()
@@ -274,6 +277,9 @@ export interface AlpacaTestProxyOptions {
 	// produce: an asymmetric capability, a value outside the server's own conventions, or a transient
 	// fault. Returning undefined forwards the request unchanged.
 	readonly respond?: (path: string, url: URL) => AlpacaTestProxyResponse | undefined
+	// Milliseconds to hold a request before answering it, so a suite can keep one call in flight while it
+	// drives a disconnect, a stop, or a reconnect. Returning undefined or 0 answers immediately.
+	readonly delay?: (path: string, url: URL) => number | undefined
 }
 
 export interface AlpacaTestProxy extends AsyncDisposable {
@@ -297,6 +303,10 @@ export function startAlpacaProxy(target: string, options?: AlpacaTestProxyOption
 		async fetch(req) {
 			const url = new URL(req.url)
 			paths.push(url.pathname)
+
+			const delay = options?.delay?.(url.pathname, url)
+
+			if (delay) await Bun.sleep(delay)
 
 			if (notImplemented.some((suffix) => url.pathname.endsWith(suffix))) {
 				return Response.json({ Value: null, ClientTransactionID: 0, ServerTransactionID: 0, ErrorNumber: AlpacaException.MethodOrPropertyNotImplemented, ErrorMessage: `${url.pathname} is not implemented` })

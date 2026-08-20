@@ -2544,8 +2544,9 @@ class AlpacaObservingConditions extends AlpacaDevice {
 		for (const name of WEATHER_ASCOM_NAMES) state[name] = undefined
 	}
 
-	protected onConnect() {
-		super.onConnect()
+	// Ends the current session: an in-flight description fetch or command resolves into a generation that
+	// no longer matches and is discarded, and the next session rediscovers and redefines everything.
+	#invalidate() {
 		this.#generation++
 		this.#parameters = undefined
 		this.#labels = undefined
@@ -2554,13 +2555,23 @@ class AlpacaObservingConditions extends AlpacaDevice {
 		this.#resetCommands()
 	}
 
+	protected onConnect() {
+		super.onConnect()
+		this.#invalidate()
+	}
+
 	protected onDisconnect() {
-		this.#generation++
-		this.#parameters = undefined
-		this.#labels = undefined
-		this.#defining = false
-		this.#resetCommands()
+		this.#invalidate()
 		super.onDisconnect()
+	}
+
+	// The client shuts its wrappers down through close(), not through a disconnect, so this is the only
+	// hook that runs on AlpacaClient.stop(). Without it the generation would never be bumped and
+	// isConnected would stay true, letting a description fetch or a command that resolves after a stop
+	// define, set, or delete properties on behalf of a session that is over - including into the one a
+	// restart has since established.
+	close() {
+		this.#invalidate()
 	}
 
 	// Waits for the capability discovery to settle before mirroring any reading.
