@@ -16,6 +16,7 @@ import { RotatorSimulator } from '../../../src/devices/indi/simulator/rotator'
 import { SafetyMonitorSimulator } from '../../../src/devices/indi/simulator/safetymonitor'
 import { WeatherSimulator } from '../../../src/devices/indi/simulator/weather'
 import { WheelSimulator } from '../../../src/devices/indi/simulator/wheel'
+import type { DefNumberVector } from '../../../src/devices/indi/types'
 import { waitUntil } from '../../util'
 
 // Fixtures that stand an INDI device simulator up behind its manager and expose it through the real
@@ -149,6 +150,20 @@ export interface AlpacaTestServer<D extends Device, M extends DeviceManager<D>, 
 	readonly properties: () => DeviceProperties | undefined
 	readonly get: (path: string) => Promise<AlpacaResponse<unknown>>
 	readonly put: (path: string, body?: Record<string, string>) => Promise<AlpacaResponse<unknown>>
+}
+
+// Redefines WEATHER_PARAMETERS without the named INDI elements, which is how a driver withdraws a sensor.
+// Clearing the typed field alone does not: the element set is what states which sensors the driver has, so
+// a sensor it still declares stays implemented and reports ValueNotSet rather than 1024.
+export function withdrawWeatherSensors(fixture: AlpacaWeatherServer, ...names: readonly string[]) {
+	const parameters = fixture.manager.properties.get(fixture.device)!.WEATHER_PARAMETERS as DefNumberVector
+	const elements = { ...parameters.elements }
+
+	for (const name of names) delete elements[name]
+
+	const message = { ...parameters, elements }
+	fixture.manager.numberVector(fixture.indiClient, message, 'defNumberVector')
+	fixture.manager.vector(fixture.indiClient, message, 'defNumberVector')
 }
 
 // Starts one simulated device behind the embedded Alpaca server on an ephemeral loopback port.

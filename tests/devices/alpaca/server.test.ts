@@ -5,12 +5,11 @@ import { type AlpacaConfiguredDevice, AlpacaException, AlpacaImageElementType, t
 import type { Device } from '../../../src/devices/indi/device'
 import type { DeviceManager } from '../../../src/devices/indi/manager'
 import type { DeviceSimulator } from '../../../src/devices/indi/simulator/device'
-import type { DefNumberVector } from '../../../src/devices/indi/types'
 import { bitpixInBytes } from '../../../src/io/formats/fits/util'
 import { downloadPerTag } from '../../download'
 import { saveAndCompareHash } from '../../imaging/util'
 import { waitUntil } from '../../util'
-import { ALPACA_CAMERA, ALPACA_COVER, ALPACA_DOME, ALPACA_FLAT_PANEL, ALPACA_FOCUSER, ALPACA_MOUNT, ALPACA_ROTATOR, ALPACA_SAFETY_MONITOR, ALPACA_WEATHER, ALPACA_WHEEL, type AlpacaTestDevice, type AlpacaWeatherServer, startAlpacaServer } from './util'
+import { ALPACA_CAMERA, ALPACA_COVER, ALPACA_DOME, ALPACA_FLAT_PANEL, ALPACA_FOCUSER, ALPACA_MOUNT, ALPACA_ROTATOR, ALPACA_SAFETY_MONITOR, ALPACA_WEATHER, ALPACA_WHEEL, type AlpacaTestDevice, type AlpacaWeatherServer, startAlpacaServer, withdrawWeatherSensors } from './util'
 
 await downloadPerTag('alpaca.server')
 
@@ -61,19 +60,6 @@ test('make image bytes from fits', async () => {
 		}
 	}
 }, 5000)
-
-// Redefines WEATHER_PARAMETERS without the named elements, which is how an INDI driver withdraws a sensor.
-// Removing the typed field alone would not: the definition is what states which sensors the driver has.
-function withdrawWeatherSensors(fixture: AlpacaWeatherServer, ...names: readonly string[]) {
-	const parameters = fixture.manager.properties.get(fixture.device)!.WEATHER_PARAMETERS as DefNumberVector
-	const elements = { ...parameters.elements }
-
-	for (const name of names) delete elements[name]
-
-	const message = { ...parameters, elements }
-	fixture.manager.numberVector(fixture.indiClient, message, 'defNumberVector')
-	fixture.manager.vector(fixture.indiClient, message, 'defNumberVector')
-}
 
 describe('observing conditions server', () => {
 	test('lists the station in the management API with interface version 2', async () => {

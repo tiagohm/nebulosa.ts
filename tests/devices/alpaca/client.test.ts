@@ -14,7 +14,7 @@ import { deg, hour } from '../../../src/math/units/angle'
 import { downloadPerTag } from '../../download'
 import { saveImageAndCompareHash } from '../../imaging/util'
 import { isNonWindowsSkipped, isTimeConsumingTestSkipped, waitUntil } from '../../util'
-import { ALPACA_MOUNT, ALPACA_WEATHER, type AlpacaWeatherClient, startAlpacaClient, startAlpacaProxy, startAlpacaServer } from './util'
+import { ALPACA_MOUNT, ALPACA_WEATHER, type AlpacaWeatherClient, startAlpacaClient, startAlpacaProxy, startAlpacaServer, withdrawWeatherSensors } from './util'
 
 await downloadPerTag('alpaca.client')
 
@@ -588,8 +588,8 @@ describe.skipIf(isTimeConsumingTestSkipped())('observing conditions client', () 
 	test('keeps an unimplemented sensor out of the synthesized vector', async () => {
 		await using server = await startAlpacaServer(ALPACA_WEATHER)
 
-		// The station stops reporting seeing before the client ever connects.
-		server.device.starFWHM = undefined
+		// The driver withdraws seeing from its definition before the client ever connects.
+		withdrawWeatherSensors(server, 'WEATHER_STAR_FWHM')
 
 		await using remote = await startAlpacaClient(server.url, ALPACA_WEATHER)
 		await waitUntil(() => remote.device()?.cloudCover === 15, WEATHER_TIMEOUT)
@@ -605,7 +605,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('observing conditions client', () 
 
 	test('probes an unimplemented sensor once when the server has no DeviceState', async () => {
 		await using server = await startAlpacaServer(ALPACA_WEATHER)
-		server.device.starFWHM = undefined
+		withdrawWeatherSensors(server, 'WEATHER_STAR_FWHM')
 
 		await using proxy = startAlpacaProxy(server.url, { notImplemented: ['/devicestate'] })
 		await using remote = await startAlpacaClient(proxy.url, ALPACA_WEATHER)
