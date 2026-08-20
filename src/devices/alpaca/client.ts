@@ -2303,6 +2303,10 @@ class AlpacaObservingConditions extends AlpacaDevice {
 	// Defined once the supported set is known, because a vector whose elements later disappear is worse
 	// than one that arrives a tick late.
 	#parameters?: ReturnType<typeof makeNumberVector>
+	// Element labels from SensorDescription, keyed by the ASCOM sensor name and fetched once per session.
+	// Its presence is what marks the capability discovery as settled; a supported sensor still without a
+	// reading joins WEATHER_PARAMETERS on a later tick and needs its label then.
+	#labels?: ReadonlyMap<string, string>
 	#defining = false
 	// Bumped on every connect and disconnect. #defineParameters awaits the sensor descriptions and the two
 	// command handlers await their PUT, and a disconnect followed by a reconnect inside any of those
@@ -2355,21 +2359,54 @@ class AlpacaObservingConditions extends AlpacaDevice {
 		// flight. Either way this run belongs to a finished session and must not define anything.
 		if (generation !== this.#generation || !this.isConnected) return
 
-		const elements = supported.map((sensor, i) => {
+		const map = new Map<string, string>()
+
+		for (let i = 0; i < supported.length; i++) {
 			const label = labels[i]
-			return [sensor.indi, (label.ok && label.value) || sensor.ascom, 0, sensor.min, sensor.max, sensor.step, sensor.format] as [string, string, number, number, number, number, string]
-		})
+			map.set(supported[i].ascom, (label.ok && label.value) || supported[i].ascom)
+		}
 
-		const parameters = makeNumberVector(this.device.DeviceName, 'WEATHER_PARAMETERS', 'Parameters', MAIN_CONTROL, 'ro', ...elements)
+		this.#labels = map
 
-		this.#parameters = parameters
+		this.#publishParameters()
+		this.sendDefProperty(this.#refresh)
+		this.#applyAveragePeriod()
+	}
+
+	// Publishes WEATHER_PARAMETERS with the supported sensors that have a reading, extending an already
+	// published vector with the ones that have since produced their first.
+	//
+	// A supported sensor whose poll failed transiently is correctly not recorded as unsupported, but it
+	// has no value either. Declaring its element anyway would publish a fabricated zero as a fresh
+	// observation, because #fillParameters skips an undefined reading while the vector is emitted
+	// regardless. Such a sensor therefore joins on the tick its first real reading arrives, which INDI
+	// expresses as a redefinition of the same property; the endpoint keeps being polled meanwhile.
+	#publishParameters() {
+		const labels = this.#labels!
+		const { state } = this
+		let parameters = this.#parameters
+		let added = false
+
+		for (const sensor of WEATHER_SENSORS) {
+			if (this.unsupported.has(sensor.ascom)) continue
+			if (state[sensor.ascom as keyof AlpacaClientObservingConditionsState] === undefined) continue
+			if (parameters?.elements[sensor.indi] !== undefined) continue
+
+			if (parameters === undefined) {
+				parameters = makeNumberVector(this.device.DeviceName, 'WEATHER_PARAMETERS', 'Parameters', MAIN_CONTROL, 'ro')
+				this.#parameters = parameters
+			}
+
+			parameters.elements[sensor.indi] = { name: sensor.indi, label: labels.get(sensor.ascom) ?? sensor.ascom, value: 0, min: sensor.min, max: sensor.max, step: sensor.step, format: sensor.format }
+			added = true
+		}
+
+		if (!added || parameters === undefined) return
 
 		// Seed the elements from the readings already polled, so the definition itself carries real
 		// values instead of publishing a zero for one whole tick.
 		this.#fillParameters(parameters)
 		this.sendDefProperty(parameters)
-		this.sendDefProperty(this.#refresh)
-		this.#applyAveragePeriod()
 	}
 
 	// Writes the polled readings into the vector elements, without emitting anything.
@@ -2480,6 +2517,7 @@ class AlpacaObservingConditions extends AlpacaDevice {
 		super.onConnect()
 		this.#generation++
 		this.#parameters = undefined
+		this.#labels = undefined
 		this.#defining = false
 		this.#resetCommands()
 	}
@@ -2487,6 +2525,7 @@ class AlpacaObservingConditions extends AlpacaDevice {
 	protected onDisconnect() {
 		this.#generation++
 		this.#parameters = undefined
+		this.#labels = undefined
 		this.#defining = false
 		this.#resetCommands()
 		super.onDisconnect()
@@ -2496,7 +2535,7 @@ class AlpacaObservingConditions extends AlpacaDevice {
 	protected handleEndpointsAfterRun() {
 		if (!super.handleEndpointsAfterRun()) return false
 
-		if (this.#parameters === undefined) {
+		if (this.#labels === undefined) {
 			if (!this.#defining) {
 				this.#defining = true
 				void this.#defineParameters(this.#generation)
@@ -2504,6 +2543,12 @@ class AlpacaObservingConditions extends AlpacaDevice {
 
 			return false
 		}
+
+		// A supported sensor that had no reading when the vector was published joins it on the tick its
+		// first one arrives, so the definition is revisited before every mirror.
+		this.#publishParameters()
+
+		if (this.#parameters === undefined) return false
 
 		this.#applyAveragePeriod()
 		this.#applyParameters()

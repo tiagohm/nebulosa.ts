@@ -600,6 +600,36 @@ describe.skipIf(isTimeConsumingTestSkipped())('observing conditions client', () 
 		expect(remote.device()!.hasThermometer).toBeTrue()
 	}, 10000)
 
+	test('withholds a transiently unread sensor instead of publishing a zero', async () => {
+		await using server = await startAlpacaServer(ALPACA_WEATHER)
+
+		// Without DeviceState the capabilities come from the per-sensor fallback. A transport failure is
+		// not MethodOrPropertyNotImplemented, so seeing stays supported and keeps being polled, but it has
+		// no reading yet and must not reach the vector as a fresh 0.
+		let failures = 3
+
+		await using proxy = startAlpacaProxy(server.url, {
+			notImplemented: ['/devicestate'],
+			respond: (path) => {
+				if (!path.endsWith('/starfwhm') || failures <= 0) return undefined
+				failures--
+				return { status: 500 }
+			},
+		})
+
+		await using remote = await startAlpacaClient(proxy.url, ALPACA_WEATHER)
+		await waitUntil(() => remote.device()?.cloudCover === 15, WEATHER_TIMEOUT)
+
+		expect(weatherParametersOf(remote, remote.device()!)!.elements).not.toContainKey('WEATHER_STAR_FWHM')
+		expect(remote.device()!.starFWHM).toBeUndefined()
+		expect(weatherParametersOf(remote, remote.device()!)!.elements).toContainKey('WEATHER_TEMPERATURE')
+
+		// The endpoint recovers on its own and the sensor joins the vector with its real reading.
+		await waitUntil(() => remote.device()!.starFWHM !== undefined, WEATHER_TIMEOUT)
+		expect(remote.device()!.starFWHM).toBe(2.4)
+		expect(weatherParametersOf(remote, remote.device()!)!.elements.WEATHER_STAR_FWHM.label).toBe('Star FWHM (arcsec)')
+	}, 15000)
+
 	test('forwards the average period and the refresh command back to the server', async () => {
 		await using server = await startAlpacaServer(ALPACA_WEATHER)
 		await using remote = await startAlpacaClient(server.url, ALPACA_WEATHER)
