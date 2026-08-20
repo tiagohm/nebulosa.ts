@@ -1,10 +1,15 @@
-import { expect, test } from 'bun:test'
+import { describe, expect, test } from 'bun:test'
 import { Jpeg } from '../../../src/bindings/imaging/libturbojpeg'
 import { makeImageBytesFromFits } from '../../../src/devices/alpaca/server'
-import { AlpacaImageElementType } from '../../../src/devices/alpaca/types'
+import { type AlpacaConfiguredDevice, AlpacaException, AlpacaImageElementType, type AlpacaStateItem } from '../../../src/devices/alpaca/types'
+import type { Device } from '../../../src/devices/indi/device'
+import type { DeviceManager } from '../../../src/devices/indi/manager'
+import type { DeviceSimulator } from '../../../src/devices/indi/simulator/device'
 import { bitpixInBytes } from '../../../src/io/formats/fits/util'
 import { downloadPerTag } from '../../download'
 import { saveAndCompareHash } from '../../imaging/util'
+import { waitUntil } from '../../util'
+import { ALPACA_CAMERA, ALPACA_COVER, ALPACA_DOME, ALPACA_FLAT_PANEL, ALPACA_FOCUSER, ALPACA_MOUNT, ALPACA_ROTATOR, ALPACA_SAFETY_MONITOR, ALPACA_WEATHER, ALPACA_WHEEL, type AlpacaTestDevice, startAlpacaServer } from './util'
 
 await downloadPerTag('alpaca.server')
 
@@ -55,3 +60,266 @@ test('make image bytes from fits', async () => {
 		}
 	}
 }, 5000)
+
+describe('observing conditions server', () => {
+	test('lists the station in the management API with interface version 2', async () => {
+		await using fixture = await startAlpacaServer(ALPACA_WEATHER)
+
+		const configured = (await fixture.get('/management/v1/configureddevices')).Value as AlpacaConfiguredDevice[]
+		const station = configured.find((e) => e.DeviceType === 'observingconditions')!
+
+		expect(station).toBeDefined()
+		expect(station.DeviceName).toBe('Weather Simulator')
+		expect(station.UniqueID).toBe(fixture.device.id)
+
+		const version = await fixture.get(`/api/v1/observingconditions/${fixture.deviceNumber}/interfaceversion`)
+		expect(version.ErrorNumber).toBe(0)
+		expect(version.Value).toBe(2)
+	})
+
+	test('serves every sensor in ASCOM units', async () => {
+		await using fixture = await startAlpacaServer(ALPACA_WEATHER)
+		const base = fixture.path
+
+		expect((await fixture.get(`${base}/cloudcover`)).Value).toBe(15)
+		expect((await fixture.get(`${base}/dewpoint`)).Value).toBe(6.9)
+		expect((await fixture.get(`${base}/humidity`)).Value).toBe(52)
+		expect((await fixture.get(`${base}/pressure`)).Value).toBe(1013.2)
+		expect((await fixture.get(`${base}/rainrate`)).Value).toBe(0)
+		expect((await fixture.get(`${base}/skybrightness`)).Value).toBe(0.002)
+		expect((await fixture.get(`${base}/skyquality`)).Value).toBe(21.3)
+		expect((await fixture.get(`${base}/skytemperature`)).Value).toBe(-22.4)
+		expect((await fixture.get(`${base}/starfwhm`)).Value).toBe(2.4)
+		expect((await fixture.get(`${base}/temperature`)).Value).toBe(16.8)
+		expect((await fixture.get(`${base}/windgust`)).Value).toBe(4.2)
+		expect((await fixture.get(`${base}/windspeed`)).Value).toBe(2.6)
+
+		// Radians in, degrees out.
+		expect((await fixture.get(`${base}/winddirection`)).Value as number).toBeCloseTo(135, 9)
+	})
+
+	test('follows the ASCOM wind direction convention for north and calm', async () => {
+		await using fixture = await startAlpacaServer(ALPACA_WEATHER)
+		const base = fixture.path
+
+		// North is reported as 360, because 0 is reserved for calm air.
+		fixture.simulator.setParameter('WEATHER_WIND_DIRECTION', 0)
+		await waitUntil(() => fixture.device.windDirection === 0)
+		expect((await fixture.get(`${base}/winddirection`)).Value).toBe(360)
+
+		// With no wind there is no direction, and 0 is the ASCOM way of saying so.
+		fixture.simulator.setParameter('WEATHER_WIND_SPEED', 0)
+		await waitUntil(() => fixture.device.windSpeed === 0)
+		expect((await fixture.get(`${base}/winddirection`)).Value).toBe(0)
+
+		fixture.simulator.setParameter('WEATHER_WIND_DIRECTION', 270)
+		fixture.simulator.setParameter('WEATHER_WIND_SPEED', 3)
+		await waitUntil(() => fixture.device.windSpeed === 3)
+		expect((await fixture.get(`${base}/winddirection`)).Value as number).toBeCloseTo(270, 9)
+	})
+
+	test('reports an unreported sensor as not implemented', async () => {
+		await using fixture = await startAlpacaServer(ALPACA_WEATHER)
+		const base = fixture.path
+
+		fixture.manager.delProperty(fixture.indiClient, { device: fixture.simulator.name, name: 'WEATHER_PARAMETERS' })
+
+		const response = await fixture.get(`${base}/cloudcover`)
+		expect(response.ErrorNumber).toBe(AlpacaException.MethodOrPropertyNotImplemented)
+
+		const temperature = await fixture.get(`${base}/temperature`)
+		expect(temperature.ErrorNumber).toBe(AlpacaException.MethodOrPropertyNotImplemented)
+	})
+
+	test('keeps humidity and dew point implemented as a pair', async () => {
+		await using fixture = await startAlpacaServer(ALPACA_WEATHER)
+		const base = fixture.path
+
+		// Drop the dew point: it must be derived from humidity and the ambient temperature.
+		fixture.device.dewPoint = undefined
+		const derivedDewPoint = (await fixture.get(`${base}/dewpoint`)).Value as number
+		expect(derivedDewPoint).toBeCloseTo(6.9, 1)
+
+		// Drop humidity instead: the inverse derivation must round-trip.
+		fixture.device.dewPoint = 6.9
+		fixture.device.humidity = undefined
+		const derivedHumidity = (await fixture.get(`${base}/humidity`)).Value as number
+		expect(derivedHumidity).toBeCloseTo(52, 0)
+
+		// Without an ambient temperature neither can be derived, so both must report not implemented.
+		fixture.device.humidity = undefined
+		fixture.device.dewPoint = 6.9
+		fixture.device.hasThermometer = false
+		expect((await fixture.get(`${base}/humidity`)).ErrorNumber).toBe(AlpacaException.MethodOrPropertyNotImplemented)
+
+		fixture.device.dewPoint = undefined
+		fixture.device.humidity = 52
+		expect((await fixture.get(`${base}/dewpoint`)).ErrorNumber).toBe(AlpacaException.MethodOrPropertyNotImplemented)
+	})
+
+	test('accepts an instantaneous average period and rejects a window it cannot configure', async () => {
+		await using fixture = await startAlpacaServer(ALPACA_WEATHER)
+		const base = fixture.path
+
+		expect((await fixture.get(`${base}/averageperiod`)).Value).toBe(0)
+		expect((await fixture.put(`${base}/averageperiod`, { AveragePeriod: '0' })).ErrorNumber).toBe(0)
+		expect((await fixture.put(`${base}/averageperiod`, { AveragePeriod: '1.5' })).ErrorNumber).toBe(AlpacaException.InvalidValue)
+		expect((await fixture.put(`${base}/averageperiod`, { AveragePeriod: 'abc' })).ErrorNumber).toBe(AlpacaException.InvalidValue)
+	})
+
+	test('forwards refresh to the INDI switch', async () => {
+		await using fixture = await startAlpacaServer(ALPACA_WEATHER)
+		const base = fixture.path
+
+		const before = fixture.manager.lastUpdatedAt(fixture.device)!
+		await Bun.sleep(5)
+
+		expect((await fixture.put(`${base}/refresh`)).ErrorNumber).toBe(0)
+		expect(fixture.manager.lastUpdatedAt(fixture.device)!).toBeGreaterThan(before)
+
+		// Without a writable WEATHER_REFRESH the member is not implemented.
+		fixture.manager.delProperty(fixture.indiClient, { device: fixture.simulator.name, name: 'WEATHER_REFRESH' })
+		expect((await fixture.put(`${base}/refresh`)).ErrorNumber).toBe(AlpacaException.MethodOrPropertyNotImplemented)
+	})
+
+	test('describes sensors by their driver label and validates the sensor name', async () => {
+		await using fixture = await startAlpacaServer(ALPACA_WEATHER)
+		const base = fixture.path
+
+		const described = await fixture.get(`${base}/sensordescription?SensorName=temperature`)
+		expect(described.ErrorNumber).toBe(0)
+		expect(described.Value).toBe('Temperature (C)')
+
+		fixture.device.starFWHM = undefined
+		expect((await fixture.get(`${base}/sensordescription?SensorName=StarFWHM`)).ErrorNumber).toBe(AlpacaException.MethodOrPropertyNotImplemented)
+
+		expect((await fixture.get(`${base}/sensordescription?SensorName=Wobble`)).ErrorNumber).toBe(AlpacaException.InvalidValue)
+		expect((await fixture.get(`${base}/sensordescription`)).ErrorNumber).toBe(AlpacaException.InvalidValue)
+	})
+
+	test('reports the time since each sensor was last updated', async () => {
+		await using fixture = await startAlpacaServer(ALPACA_WEATHER)
+		const base = fixture.path
+
+		await Bun.sleep(20)
+
+		const one = (await fixture.get(`${base}/timesincelastupdate?SensorName=Temperature`)).Value as number
+		expect(one).toBeGreaterThan(0)
+		expect(one).toBeLessThan(5)
+
+		const any = (await fixture.get(`${base}/timesincelastupdate?SensorName=`)).Value as number
+		expect(any).toBeGreaterThan(0)
+
+		expect((await fixture.get(`${base}/timesincelastupdate?SensorName=Wobble`)).ErrorNumber).toBe(AlpacaException.InvalidValue)
+
+		// Implemented but never reported: a negative value, not an error.
+		fixture.manager.delProperty(fixture.indiClient, { device: fixture.simulator.name, name: 'WEATHER_PARAMETERS' })
+		fixture.device.cloudCover = 10
+		expect((await fixture.get(`${base}/timesincelastupdate?SensorName=CloudCover`)).Value).toBe(-1)
+	})
+
+	test('serves the bulk device state with only the known sensors', async () => {
+		await using fixture = await startAlpacaServer(ALPACA_WEATHER)
+		const base = fixture.path
+
+		const state = (await fixture.get(`${base}/devicestate`)).Value as AlpacaStateItem[]
+		const names = state.map((e) => e.Name)
+
+		expect(names).toEqual(['CloudCover', 'DewPoint', 'Humidity', 'Pressure', 'RainRate', 'SkyBrightness', 'SkyQuality', 'SkyTemperature', 'StarFWHM', 'Temperature', 'WindDirection', 'WindGust', 'WindSpeed', 'TimeStamp'])
+		expect(state.find((e) => e.Name === 'Temperature')!.Value).toBe(16.8)
+		expect(Number.isNaN(Date.parse(state.at(-1)!.Value as string))).toBeFalse()
+
+		// AveragePeriod configures the device rather than describing the weather.
+		expect(names).not.toContain('AveragePeriod')
+
+		fixture.device.skyQuality = undefined
+		const reduced = (await fixture.get(`${base}/devicestate`)).Value as AlpacaStateItem[]
+		expect(reduced.map((e) => e.Name)).not.toContain('SkyQuality')
+	})
+
+	test('fails every member with NotConnected while disconnected', async () => {
+		await using fixture = await startAlpacaServer(ALPACA_WEATHER, { connect: false })
+		const base = fixture.path
+
+		for (const path of ['temperature', 'averageperiod', 'devicestate', 'sensordescription?SensorName=Temperature', 'timesincelastupdate?SensorName=']) {
+			expect((await fixture.get(`${base}/${path}`)).ErrorNumber).toBe(AlpacaException.NotConnected)
+		}
+
+		expect((await fixture.put(`${base}/refresh`)).ErrorNumber).toBe(AlpacaException.NotConnected)
+		expect((await fixture.get(`/api/v1/observingconditions/9999/temperature`)).ErrorNumber).toBe(AlpacaException.InvalidValue)
+	})
+
+	test('derives a saturated dew point instead of dropping the member', async () => {
+		await using fixture = await startAlpacaServer(ALPACA_WEATHER)
+		const base = fixture.path
+
+		// A fogged-in station can read a hair above 100%. The pair must stay implemented: this repo's own
+		// client latches MethodOrPropertyNotImplemented as a permanent capability.
+		fixture.device.dewPoint = undefined
+		fixture.device.humidity = 100.4
+
+		const response = await fixture.get(`${base}/dewpoint`)
+		expect(response.ErrorNumber).toBe(0)
+		expect(response.Value as number).toBeCloseTo(fixture.device.temperature, 6)
+
+		// The mirrored direction was already clamped; assert both halves behave the same way.
+		fixture.device.humidity = undefined
+		fixture.device.dewPoint = fixture.device.temperature + 0.4
+		const humidity = await fixture.get(`${base}/humidity`)
+		expect(humidity.ErrorNumber).toBe(0)
+		expect(humidity.Value).toBe(100)
+	})
+
+	test('reports the freshness of a derived sensor from the one it is derived from', async () => {
+		await using fixture = await startAlpacaServer(ALPACA_WEATHER)
+		const base = fixture.path
+
+		// Humidity is derived from the dew point, so it is refreshed exactly when the dew point is.
+		fixture.device.humidity = undefined
+		await Bun.sleep(20)
+
+		const derived = (await fixture.get(`${base}/timesincelastupdate?SensorName=Humidity`)).Value as number
+		expect(derived).toBeGreaterThan(0)
+		expect(derived).toBeLessThan(5)
+
+		const source = (await fixture.get(`${base}/timesincelastupdate?SensorName=DewPoint`)).Value as number
+		expect(derived).toBeCloseTo(source, 1)
+	})
+
+	test('drops its registrations when the server stops listening', async () => {
+		await using fixture = await startAlpacaServer(ALPACA_WEATHER)
+		const base = fixture.path
+
+		expect((await fixture.get(`${base}/temperature`)).ErrorNumber).toBe(0)
+
+		fixture.server.unlisten()
+		expect((await fixture.get(`${base}/temperature`)).ErrorNumber).toBe(AlpacaException.InvalidValue)
+	})
+})
+
+async function expectFixtureServesDevice<D extends Device, M extends DeviceManager<D>, S extends DeviceSimulator>(kind: AlpacaTestDevice<D, M, S>) {
+	await using fixture = await startAlpacaServer(kind)
+
+	expect(fixture.device.connected).toBeTrue()
+	expect(fixture.path).toBe(`/api/v1/${kind.type}/${fixture.deviceNumber}`)
+	expect(fixture.properties()).toBeDefined()
+
+	expect((await fixture.get(`${fixture.path}/connected`)).Value).toBeTrue()
+	expect((await fixture.get(`${fixture.path}/name`)).Value).toBe(kind.name)
+
+	const configured = Array.from(fixture.server.configuredDevices())
+	expect(configured.some((e) => e.DeviceType === kind.type && e.DeviceNumber === fixture.deviceNumber)).toBeTrue()
+}
+
+test('the alpaca fixtures stand up every simulated device type', async () => {
+	await expectFixtureServesDevice(ALPACA_CAMERA)
+	await expectFixtureServesDevice(ALPACA_MOUNT)
+	await expectFixtureServesDevice(ALPACA_FOCUSER)
+	await expectFixtureServesDevice(ALPACA_WHEEL)
+	await expectFixtureServesDevice(ALPACA_ROTATOR)
+	await expectFixtureServesDevice(ALPACA_DOME)
+	await expectFixtureServesDevice(ALPACA_COVER)
+	await expectFixtureServesDevice(ALPACA_FLAT_PANEL)
+	await expectFixtureServesDevice(ALPACA_SAFETY_MONITOR)
+	await expectFixtureServesDevice(ALPACA_WEATHER)
+}, 30000)

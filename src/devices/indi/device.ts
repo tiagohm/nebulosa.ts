@@ -12,7 +12,7 @@ import type { DefBlobVector, DefLightVector, DefNumber, DefNumberVector, DefSwit
 // RPM; dome measurements are metres; dome backlash is controller steps; temperature is degrees Celsius.
 
 // Logical device category.
-export type DeviceType = 'camera' | 'mount' | 'wheel' | 'focuser' | 'rotator' | 'gps' | 'dome' | 'guideOutput' | 'flatPanel' | 'cover' | 'power' | 'thermometer' | 'dewHeater' | 'safetyMonitor'
+export type DeviceType = 'camera' | 'mount' | 'wheel' | 'focuser' | 'rotator' | 'gps' | 'dome' | 'guideOutput' | 'flatPanel' | 'cover' | 'power' | 'thermometer' | 'dewHeater' | 'safetyMonitor' | 'weather'
 
 // A defined property vector tagged with its concrete type.
 export type DeviceProperty = (DefTextVector & { type: 'TEXT' }) | (DefNumberVector & { type: 'NUMBER' }) | (DefSwitchVector & { type: 'SWITCH' }) | (DefLightVector & { type: 'LIGHT' }) | (DefBlobVector & { type: 'BLOB' })
@@ -154,7 +154,7 @@ export interface GuideOutput extends Device {
 
 // Temperature-sensing capability; temperature in degrees Celsius.
 export interface Thermometer extends Device {
-	readonly type: 'thermometer' | 'camera' | 'focuser'
+	readonly type: 'thermometer' | 'camera' | 'focuser' | 'weather'
 	hasThermometer: boolean
 	temperature: number
 }
@@ -378,6 +378,57 @@ export interface Power extends Device, Record<PowerChannelType, PowerChannel[]> 
 	hasPowerCycle: boolean
 }
 
+// One of the thirteen ASCOM ObservingConditions sensors, named by its field in Weather. Used as the key
+// for per-sensor capability, freshness and name mapping across the INDI and Alpaca backends.
+export type WeatherSensor = 'cloudCover' | 'dewPoint' | 'humidity' | 'pressure' | 'rainRate' | 'skyBrightness' | 'skyQuality' | 'skyTemperature' | 'starFWHM' | 'temperature' | 'windDirection' | 'windGust' | 'windSpeed'
+
+// Weather station / ASCOM ObservingConditions device. Every sensor is optional: an absent field means
+// the backend does not provide that sensor, never that its value is zero or NaN. Ambient temperature is
+// carried by the Thermometer capability instead, gated by `hasThermometer`. Each field documents its own
+// unit; readings are whatever the station measured, never clamped to the driver's alarm thresholds.
+export interface Weather extends Device, Thermometer {
+	readonly type: 'weather'
+
+	// Backend averaging window in hours; 0 means an instantaneous reading. Absent when the backend has
+	// no such concept (plain INDI).
+	averagePeriod?: number
+
+	// INDI driver re-read period (WEATHER_UPDATE/PERIOD) in seconds. Absent on Alpaca.
+	readonly updatePeriod?: MinMaxValueProperty
+
+	// Fraction of the sky covered by cloud, percent in [0, 100].
+	cloudCover?: number
+	// Temperature at which the ambient air would saturate, degrees Celsius. Never above `temperature`,
+	// except by rounding on saturated air. Forms a pair with `humidity`: a backend providing only one of
+	// the two lets the other be derived from it and the ambient temperature.
+	dewPoint?: number
+	// Relative humidity of the ambient air, percent in [0, 100]. Paired with `dewPoint`.
+	humidity?: number
+	// Atmospheric pressure at the observatory altitude, hPa. Never reduced to sea level.
+	pressure?: number
+	// Rain falling at the site, mm/h. INDI drivers usually report accumulation over the last hour, which
+	// is numerically the same quantity.
+	rainRate?: number
+	// Sky brightness measured by a photometer, lux.
+	skyBrightness?: number
+	// Sky darkness measured by a sky-quality meter, magnitudes per square arcsecond. Larger is darker,
+	// with a pristine site around 22.
+	skyQuality?: number
+	// Sky temperature from an infrared sensor, degrees Celsius. Far below ambient under a clear sky and
+	// close to ambient under cloud, which is what makes it a cloud indicator.
+	skyTemperature?: number
+	// Seeing, as the full width at half maximum of a star image, arcsec.
+	starFWHM?: number
+	// Direction the wind blows *from*, radians normalized to [0, TAU), clockwise from north. The ASCOM
+	// boundary convention (north reported as 360°, 0° reserved for calm) is applied only by the Alpaca
+	// client and server; it never leaks into this field.
+	windDirection?: Angle
+	// Peak wind speed over the backend's sampling window, m/s. At least `windSpeed`.
+	windGust?: number
+	// Mean wind speed, m/s. Zero means calm, in which case `windDirection` carries no information.
+	windSpeed?: number
+}
+
 // Tests whether an interface bitmask includes a given DeviceInterfaceType bit.
 export function isInterfaceType(value: number, type: DeviceInterfaceType): value is DeviceInterfaceType {
 	return (value & type) !== 0
@@ -395,6 +446,7 @@ export function findDeviceTypes(value: number) {
 	if (isInterfaceType(value, DeviceInterfaceType.DUSTCAP)) types.push('cover')
 	if (isInterfaceType(value, DeviceInterfaceType.DOME)) types.push('dome')
 	if (isInterfaceType(value, DeviceInterfaceType.POWER)) types.push('power')
+	if (isInterfaceType(value, DeviceInterfaceType.WEATHER)) types.push('weather')
 	return types
 }
 
@@ -697,6 +749,21 @@ export const DEFAULT_POWER: Power = {
 	client: structuredClone(DEFAULT_CLIENT_INFO),
 }
 
+// Default weather station template. Only the mandatory Device and Thermometer fields are seeded: the
+// optional sensors stay absent so that "not reported yet" is never confused with a real zero reading.
+export const DEFAULT_WEATHER: Weather = {
+	type: 'weather',
+	interfaces: ['weather'],
+	id: '',
+	hardwareId: '',
+	name: '',
+	connected: false,
+	driver: structuredClone(DEFAULT_DRIVER_INFO),
+	client: structuredClone(DEFAULT_CLIENT_INFO),
+	hasThermometer: false,
+	temperature: 0,
+}
+
 export const DEFAULT_THERMOMETER: Thermometer = {
 	hasThermometer: false,
 	temperature: 0,
@@ -789,6 +856,10 @@ export function isDome(device: Device): device is Dome {
 
 export function isPower(device: Device): device is Power {
 	return device.type === 'power'
+}
+
+export function isWeather(device: Device): device is Weather {
+	return device.type === 'weather'
 }
 
 export function isThermometer(device: Device): device is Thermometer {

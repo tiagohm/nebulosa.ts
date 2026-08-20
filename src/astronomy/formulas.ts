@@ -359,6 +359,20 @@ export function dewPoint(temperatureCelsius: number, relativeHumidityPercent: nu
 	return (MAGNUS_B_CELSIUS * alpha) / (MAGNUS_A_WATER - alpha)
 }
 
+// Relative Humidity. Inverse of the Magnus dew-point approximation, RH = 100 * exp(alpha_dew - alpha_temperature).
+// Parameters: temperatureCelsius is finite ambient temperature in degrees Celsius, and dewPointCelsius is a
+// finite dew point in degrees Celsius.
+// Returns: estimated relative humidity in percent, above 0 and reaching exactly 100 at saturation, where the
+// dew point equals the ambient temperature. A dew point above the ambient temperature is supersaturated air
+// and returns above 100 rather than failing, which also keeps the function usable on a saturated reading
+// whose dew point exceeds the temperature only by rounding. Callers bound by a 0..100 contract clamp.
+export function relativeHumidity(temperatureCelsius: number, dewPointCelsius: number) {
+	const temperature = validateFinite(temperatureCelsius)
+	const dew = validateFinite(dewPointCelsius)
+	const alpha = (MAGNUS_A_WATER * dew) / (MAGNUS_B_CELSIUS + dew) - (MAGNUS_A_WATER * temperature) / (MAGNUS_B_CELSIUS + temperature)
+	return 100 * Math.exp(alpha)
+}
+
 // Altitude at Transit. Planning formula alt = 90deg - abs(latitude - declination).
 // Parameters: latitude and declination are within [-pi/2, pi/2] radians.
 // Returns: altitude at meridian transit in radians.

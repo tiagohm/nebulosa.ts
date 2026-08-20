@@ -424,7 +424,7 @@ export class AlpacaDiscoveryClient implements Disposable {
 
 			try {
 				const devices = await api.configuredDevices()
-				if (devices) onDiscovery({ address, port, devices })
+				if (devices.ok) onDiscovery({ address, port, devices: devices.value })
 			} catch (e) {
 				console.error('failed to fetch configured devices at', url, e)
 			}

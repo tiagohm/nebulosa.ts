@@ -1,8 +1,9 @@
 import { type TestOptions, describe, expect, test } from 'bun:test'
 import { timeYMDHMS } from '../../../src/astronomy/time/time'
+import { DEG2RAD, PIOVERTWO } from '../../../src/core/constants'
 import { AlpacaClient, type AlpacaClientHandler, makeFitsFromImageBytes } from '../../../src/devices/alpaca/client'
 import { makeImageBytesFromFits } from '../../../src/devices/alpaca/server'
-import { CLIENT, type Client, DEFAULT_CAMERA, DEFAULT_MOUNT, type Device, type DeviceType } from '../../../src/devices/indi/device'
+import { CLIENT, type Client, DEFAULT_CAMERA, DEFAULT_MOUNT, type Device, type DeviceType, type Weather } from '../../../src/devices/indi/device'
 import { CameraManager, CoverManager, type DeviceProvider, DomeManager, FlatPanelManager, FocuserManager, GuideOutputManager, MountManager, RotatorManager, ThermometerManager, WheelManager } from '../../../src/devices/indi/manager'
 import type { PropertyState } from '../../../src/devices/indi/types'
 import { readImageFromBuffer } from '../../../src/imaging/model/image'
@@ -12,7 +13,8 @@ import { roundToNthDecimal } from '../../../src/math/numerical/math'
 import { deg, hour } from '../../../src/math/units/angle'
 import { downloadPerTag } from '../../download'
 import { saveImageAndCompareHash } from '../../imaging/util'
-import { isNonWindowsSkipped } from '../../util'
+import { isNonWindowsSkipped, isTimeConsumingTestSkipped, waitUntil } from '../../util'
+import { ALPACA_MOUNT, ALPACA_WEATHER, type AlpacaWeatherClient, startAlpacaClient, startAlpacaProxy, startAlpacaServer } from './util'
 
 await downloadPerTag('alpaca.client')
 
@@ -495,3 +497,228 @@ async function expectUntil<D, K extends keyof D>(device: D, key: K, value: D[K],
 		expect(timeout).toBeGreaterThan(0)
 	}
 }
+
+const WEATHER_TIMEOUT = 30000
+
+function weatherParametersOf(fixture: AlpacaWeatherClient, device: Weather) {
+	const property = fixture.manager.properties.get(device)?.WEATHER_PARAMETERS
+	return property?.type === 'NUMBER' ? property : undefined
+}
+
+describe.skipIf(isTimeConsumingTestSkipped())('observing conditions client', () => {
+	test('consumes an ObservingConditions device and normalizes every sensor', async () => {
+		await using server = await startAlpacaServer(ALPACA_WEATHER)
+		await using remote = await startAlpacaClient(server.url, ALPACA_WEATHER)
+
+		await waitUntil(() => remote.device()?.cloudCover === 15, WEATHER_TIMEOUT)
+
+		const near = server.device
+		const far = remote.device()!
+
+		expect(far.type).toBe('weather')
+		expect(far.interfaces).toEqual(['weather'])
+		expect(far.connected).toBeTrue()
+		expect(far.driver.executable).toBe(near.id)
+
+		expect(far.cloudCover).toBe(near.cloudCover)
+		expect(far.dewPoint).toBe(near.dewPoint)
+		expect(far.humidity).toBe(near.humidity)
+		expect(far.pressure).toBe(near.pressure)
+		expect(far.rainRate).toBe(near.rainRate)
+		expect(far.skyBrightness).toBe(near.skyBrightness)
+		expect(far.skyQuality).toBe(near.skyQuality)
+		expect(far.skyTemperature).toBe(near.skyTemperature)
+		expect(far.starFWHM).toBe(near.starFWHM)
+		expect(far.temperature).toBe(near.temperature)
+		expect(far.hasThermometer).toBeTrue()
+		expect(far.windGust).toBe(near.windGust)
+		expect(far.windSpeed).toBe(near.windSpeed)
+
+		// Radians at both ends, degrees only on the wire.
+		expect(far.windDirection).toBeCloseTo(near.windDirection!, 9)
+		expect(weatherParametersOf(remote, far)!.elements.WEATHER_WIND_DIRECTION.value).toBeCloseTo(135, 9)
+
+		expect(far.averagePeriod).toBe(0)
+	}, 10000)
+
+	test('round-trips a northerly wind without turning it into calm', async () => {
+		await using server = await startAlpacaServer(ALPACA_WEATHER)
+		await using remote = await startAlpacaClient(server.url, ALPACA_WEATHER)
+
+		await waitUntil(() => remote.device()?.windSpeed === 2.6, WEATHER_TIMEOUT)
+
+		// 0 rad leaves as 360 deg (north) and must come back as 0 rad, not as the calm sentinel.
+		server.simulator.setParameter('WEATHER_WIND_DIRECTION', 0)
+		await waitUntil(() => server.device.windDirection === 0, WEATHER_TIMEOUT)
+		await waitUntil(() => remote.device()!.windDirection === 0, WEATHER_TIMEOUT)
+
+		expect(remote.device()!.windSpeed).toBe(2.6)
+
+		// A calm reading carries no direction, so the last known one must survive untouched.
+		server.simulator.setParameter('WEATHER_WIND_DIRECTION', 90)
+		await waitUntil(() => remote.device()!.windDirection !== 0, WEATHER_TIMEOUT)
+		server.simulator.setParameter('WEATHER_WIND_SPEED', 0)
+		await waitUntil(() => remote.device()!.windSpeed === 0, WEATHER_TIMEOUT)
+
+		expect(remote.device()!.windDirection).toBeCloseTo(PIOVERTWO, 9)
+	}, 10000)
+
+	test('keeps an unimplemented sensor out of the synthesized vector', async () => {
+		await using server = await startAlpacaServer(ALPACA_WEATHER)
+
+		// The station stops reporting seeing before the client ever connects.
+		server.device.starFWHM = undefined
+
+		await using remote = await startAlpacaClient(server.url, ALPACA_WEATHER)
+		await waitUntil(() => remote.device()?.cloudCover === 15, WEATHER_TIMEOUT)
+
+		const parameters = weatherParametersOf(remote, remote.device()!)!
+		expect(parameters.elements).not.toContainKey('WEATHER_STAR_FWHM')
+		expect(parameters.elements).toContainKey('WEATHER_TEMPERATURE')
+		expect(remote.device()!.starFWHM).toBeUndefined()
+
+		// The label comes from the driver, through SensorDescription.
+		expect(parameters.elements.WEATHER_TEMPERATURE.label).toBe('Temperature (C)')
+	}, 10000)
+
+	test('probes an unimplemented sensor once when the server has no DeviceState', async () => {
+		await using server = await startAlpacaServer(ALPACA_WEATHER)
+		server.device.starFWHM = undefined
+
+		await using proxy = startAlpacaProxy(server.url, { notImplemented: ['/devicestate'] })
+		await using remote = await startAlpacaClient(proxy.url, ALPACA_WEATHER)
+
+		await waitUntil(() => remote.device()?.cloudCover === 15, WEATHER_TIMEOUT)
+		await waitUntil(() => proxy.countOf('/temperature') >= 3, WEATHER_TIMEOUT)
+
+		// Probed once, answered MethodOrPropertyNotImplemented, never polled again.
+		expect(proxy.countOf('/starfwhm')).toBe(1)
+		expect(weatherParametersOf(remote, remote.device()!)!.elements).not.toContainKey('WEATHER_STAR_FWHM')
+
+		// The supported sensors keep flowing through the per-endpoint fallback.
+		expect(remote.device()!.temperature).toBe(16.8)
+		expect(remote.device()!.hasThermometer).toBeTrue()
+	}, 10000)
+
+	test('forwards the average period and the refresh command back to the server', async () => {
+		await using server = await startAlpacaServer(ALPACA_WEATHER)
+		await using remote = await startAlpacaClient(server.url, ALPACA_WEATHER)
+
+		await waitUntil(() => remote.device()?.cloudCover === 15, WEATHER_TIMEOUT)
+
+		const far = remote.device()!
+		expect(far.averagePeriod).toBe(0)
+
+		// The INDI station cannot average, so the server refuses a non-zero window and the mirrored
+		// value stays at the instantaneous 0.
+		remote.manager.setAveragePeriod(far, 2)
+		await Bun.sleep(1500)
+		expect(far.averagePeriod).toBe(0)
+
+		// Refresh must reach the simulator and advance its freshness without moving any value.
+		const before = server.manager.lastUpdatedAt(server.device)!
+		expect(remote.manager.refresh(far)).toBeTrue()
+		await waitUntil(() => server.manager.lastUpdatedAt(server.device)! > before, WEATHER_TIMEOUT)
+		expect(server.device.cloudCover).toBe(15)
+	}, 10000)
+
+	test('keeps the far end fresh while the weather holds still', async () => {
+		await using server = await startAlpacaServer(ALPACA_WEATHER)
+		await using remote = await startAlpacaClient(server.url, ALPACA_WEATHER)
+
+		await waitUntil(() => remote.device()?.cloudCover === 15, WEATHER_TIMEOUT)
+
+		const far = remote.device()!
+		const first = remote.manager.lastUpdatedAt(far)!
+		expect(first).toBeGreaterThan(0)
+
+		// Nothing changes, yet a downstream TimeSinceLastUpdate must keep advancing.
+		await waitUntil(() => remote.manager.lastUpdatedAt(far)! > first, WEATHER_TIMEOUT)
+		expect(far.cloudCover).toBe(15)
+	}, 10000)
+
+	test('never turns a weather station into a safety monitor', async () => {
+		await using server = await startAlpacaServer(ALPACA_WEATHER)
+		await using remote = await startAlpacaClient(server.url, ALPACA_WEATHER)
+
+		await waitUntil(() => remote.device()?.cloudCover === 15, WEATHER_TIMEOUT)
+
+		expect(remote.device()).not.toContainKey('safe')
+		expect(remote.manager.properties.get(remote.device()!)).not.toContainKey('SAFETY_STATUS')
+	}, 10000)
+})
+
+describe.skipIf(isTimeConsumingTestSkipped())('alpaca client capability and polling regressions', () => {
+	test('a mount that only moves its secondary axis still gets the motion controls', async () => {
+		await using server = await startAlpacaServer(ALPACA_MOUNT)
+
+		// The simulator answers the same value for both axes, so the asymmetric driver is scripted.
+		await using proxy = startAlpacaProxy(server.url, {
+			respond: (path, url) => (path.endsWith('/canmoveaxis') ? { value: url.searchParams.get('Axis') === '1' } : undefined),
+		})
+
+		await using remote = await startAlpacaClient(proxy.url, ALPACA_MOUNT)
+
+		await waitUntil(() => remote.device()?.connected === true, WEATHER_TIMEOUT)
+
+		// canMove is set from TELESCOPE_MOTION_NS/WE, which the wrapper only defines when the mount
+		// reports at least one movable axis.
+		await waitUntil(() => remote.device()!.canMove, WEATHER_TIMEOUT)
+		expect(proxy.countOf('/canmoveaxis')).toBeGreaterThanOrEqual(2)
+	}, 10000)
+
+	test('a transient DeviceState failure is skipped instead of crashing the poll', async () => {
+		await using server = await startAlpacaServer(ALPACA_WEATHER)
+
+		let deviceStateCalls = 0
+
+		// Fail the third bulk read only: the handshake needs the first ones to settle the capability.
+		await using proxy = startAlpacaProxy(server.url, {
+			respond: (path) => {
+				if (!path.endsWith('/devicestate')) return undefined
+				deviceStateCalls++
+				return deviceStateCalls === 3 ? { status: 503 } : undefined
+			},
+		})
+
+		await using remote = await startAlpacaClient(proxy.url, ALPACA_WEATHER)
+
+		await waitUntil(() => remote.device()?.cloudCover === 15, WEATHER_TIMEOUT)
+		await waitUntil(() => deviceStateCalls > 3, WEATHER_TIMEOUT)
+
+		// The gap must not stop the poll: a later reading still reaches the far end.
+		server.simulator.setParameter('WEATHER_CLOUD_COVER', 62)
+		await waitUntil(() => remote.device()!.cloudCover === 62, WEATHER_TIMEOUT)
+	}, 10000)
+
+	test('the calm wind sentinel is never republished as a northerly wind', async () => {
+		await using server = await startAlpacaServer(ALPACA_WEATHER)
+
+		let directionCalls = 0
+
+		// A driver that reports a real direction and then the ASCOM calm sentinel, while leaving
+		// WindSpeed unimplemented. Nothing about a zero direction says north, so the last real
+		// direction must survive.
+		await using proxy = startAlpacaProxy(server.url, {
+			notImplemented: ['/devicestate', '/windspeed'],
+			respond: (path) => {
+				if (!path.endsWith('/winddirection')) return undefined
+				directionCalls++
+				return { value: directionCalls <= 2 ? 135 : 0 }
+			},
+		})
+
+		await using remote = await startAlpacaClient(proxy.url, ALPACA_WEATHER)
+
+		await waitUntil(() => remote.device()?.windDirection !== undefined, WEATHER_TIMEOUT)
+		expect(remote.device()!.windDirection).toBeCloseTo(135 * DEG2RAD, 9)
+
+		// Let several calm sentinels arrive.
+		await waitUntil(() => directionCalls >= 5, WEATHER_TIMEOUT)
+
+		expect(remote.device()!.windDirection).toBeCloseTo(135 * DEG2RAD, 9)
+		expect(remote.device()!.windSpeed).toBeUndefined()
+		// An unimplemented sensor is probed once and dropped from the vector.
+		expect(proxy.countOf('/windspeed')).toBe(1)
+	}, 10000)
+})

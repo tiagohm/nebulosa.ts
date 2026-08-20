@@ -1,14 +1,14 @@
-import { AlpacaCameraApi, AlpacaCoverCalibratorApi, AlpacaDomeApi, type AlpacaDeviceApi, AlpacaFilterWheelApi, AlpacaFocuserApi, AlpacaManagementApi, AlpacaRotatorApi, AlpacaSafetyMonitorApi, AlpacaTelescopeApi } from './api'
+import { AlpacaCameraApi, AlpacaCoverCalibratorApi, AlpacaDomeApi, type AlpacaDeviceApi, AlpacaFilterWheelApi, AlpacaFocuserApi, AlpacaManagementApi, AlpacaObservingConditionsApi, AlpacaRotatorApi, AlpacaSafetyMonitorApi, AlpacaTelescopeApi } from './api'
 // oxfmt-ignore
-import { type AlpacaAxisRate, type AlpacaCameraSensorType, type AlpacaCameraState, type AlpacaConfiguredDevice, type AlpacaDeviceType, AlpacaDomeShutterState, type AlpacaStateItem, type AlpacaTelescopeEquatorialCoordinateType, type AlpacaTelescopePierSide, type AlpacaTelescopeTrackingRate, alpacaImageElementTypeToBitpix, type ImageBytesMetadata } from './types'
+import { type AlpacaAxisRate, type AlpacaCameraSensorType, type AlpacaCameraState, type AlpacaConfiguredDevice, type AlpacaDeviceType, AlpacaDomeShutterState, AlpacaException, type AlpacaRequestResult, type AlpacaStateItem, type AlpacaTelescopeEquatorialCoordinateType, type AlpacaTelescopePierSide, type AlpacaTelescopeTrackingRate, alpacaImageElementTypeToBitpix, type ImageBytesMetadata } from './types'
 import { equatorialFromJ2000, equatorialToJ2000 } from '../../astronomy/coordinates/coordinate'
 import { SIDEREAL_RATE } from '../../core/constants'
 import { computeRemainingBytes, FITS_BLOCK_SIZE, FITS_HEADER_CARD_SIZE, type FitsHeader, FitsKeywordWriter } from '../../io/formats/fits/fits'
 import { bitpixInBytes } from '../../io/formats/fits/util'
 import { type Angle, formatDEC, formatRA, normalizeAngle, toDeg } from '../../math/units/angle'
 import { handleDefLightVector, handleDefNumberVector, handleDefSwitchVector, handleDefTextVector, handleDelProperty, handleSetBlobVector, handleSetLightVector, handleSetNumberVector, handleSetSwitchVector, handleSetTextVector, type IndiClientHandler } from '../indi/client'
-import type { Camera, Client, Device, Focuser, Mount, Rotator, Wheel } from '../indi/device'
-import type { DeviceProvider } from '../indi/manager'
+import type { Camera, Client, Device, Focuser, Mount, Rotator, WeatherSensor, Wheel } from '../indi/device'
+import { type DeviceProvider, WEATHER_SENSORS } from '../indi/manager'
 // oxfmt-ignore
 import { type DefSwitchVector, type DefVector, type EnableBlob, findOnSwitch, type GetProperties, makeBlobVector, makeLightVector, makeNumberVector, makeSwitchVector, makeTextVector, type NewNumberVector, type NewSwitchVector, type NewTextVector, type PropertyState, type ValueType, type VectorType } from '../indi/types'
 import { formatTemporal, TIMEZONE } from '../../astronomy/time/temporal'
@@ -88,8 +88,8 @@ export class AlpacaClient implements Client {
 	async start() {
 		if (this.#timer) return false
 		const configuredDevices = await this.#management.configuredDevices()
-		if (!configuredDevices?.length) return false
-		this.#initialize(configuredDevices)
+		if (!configuredDevices.ok || configuredDevices.value.length === 0) return false
+		this.#initialize(configuredDevices.value)
 		return true
 	}
 
@@ -117,6 +117,8 @@ export class AlpacaClient implements Client {
 					device = new AlpacaDome(this, configuredDevice)
 				} else if (type === 'safetymonitor') {
 					device = new AlpacaSafetyMonitor(this, configuredDevice)
+				} else if (type === 'observingconditions') {
+					device = new AlpacaObservingConditions(this, configuredDevice)
 				}
 
 				if (device) {
@@ -196,6 +198,10 @@ abstract class AlpacaDevice {
 	protected readonly runner = new AlpacaApiRunner()
 	// All INDI property vectors currently defined for this device.
 	protected readonly properties = new Set<DefVector & { readonly type: Uppercase<VectorType> }>()
+	// Endpoint keys the server answered MethodOrPropertyNotImplemented for, which is the only definitive
+	// statement that a member does not exist. Cleared on every (re)connect, since a different driver may
+	// answer for the same device number.
+	protected readonly unsupported = new Set<string>()
 
 	// REST API wrapper for this device type.
 	protected abstract readonly api: AlpacaDeviceApi
@@ -339,8 +345,8 @@ abstract class AlpacaDevice {
 		this.sendDefProperty(this.driverInfo)
 		this.sendDefProperty(this.connection)
 
-		this.runner.registerEndpoint('Connected', this.api.isConnected.bind(this.api, this.id), true)
-		this.runner.registerEndpoint('DeviceState', this.api.deviceState.bind(this.api, this.id), false)
+		this.registerEndpoint('Connected', () => this.api.isConnected(this.id), true)
+		this.registerEndpoint('DeviceState', () => this.api.deviceState(this.id), false)
 	}
 
 	// Clears the handshake step and cached DeviceState so the init sequence runs again.
@@ -348,6 +354,7 @@ abstract class AlpacaDevice {
 		this.state.Step = 0
 		this.#hasDeviceState = 0
 		this.state.DeviceState = undefined
+		this.unsupported.clear()
 	}
 
 	// Hook run when the device transitions to connected; subclasses may extend.
@@ -422,7 +429,14 @@ abstract class AlpacaDevice {
 
 				return false
 			} else if (this.#hasDeviceState === true) {
-				for (const item of this.state.DeviceState!) {
+				// A transient /devicestate failure leaves the bag empty for this tick. Skip it and keep the
+				// previous values rather than iterating undefined, which would throw inside the async
+				// after-run handler and skip every remaining handler.
+				const bulk = this.state.DeviceState
+
+				if (bulk === undefined) return false
+
+				for (const item of bulk) {
 					this.state[item.Name as never] = item.Value as never
 				}
 			}
@@ -431,6 +445,31 @@ abstract class AlpacaDevice {
 		}
 
 		return false
+	}
+
+	// Registers a polled endpoint, unwrapping its AlpacaRequestResult into the plain value the state bag
+	// holds. `enabled` sets initial polling; `interval` polls every Nth tick (1 = every tick).
+	protected registerEndpoint<T>(key: string, call: () => Promise<AlpacaRequestResult<T>>, enabled: boolean, interval: number = 1) {
+		this.runner.registerEndpoint(key, () => this.#read(key, call), enabled, interval)
+	}
+
+	// Runs one polled call and reduces it to the value, or undefined when it failed.
+	//
+	// An endpoint the server reports as unimplemented is recorded and disabled for good, which is what
+	// keeps an optional member from being re-requested on every tick for the life of the connection.
+	// Nothing else is definitive: a timeout, a 5xx, or ValueNotSet leaves the endpoint polling so it can
+	// recover on its own.
+	async #read<T>(key: string, call: () => Promise<AlpacaRequestResult<T>>) {
+		const result = await call()
+
+		if (result.ok) return result.value
+
+		if (result.errorNumber === AlpacaException.MethodOrPropertyNotImplemented) {
+			this.unsupported.add(key)
+			this.disableEndpoints(key)
+		}
+
+		return undefined
 	}
 
 	// Enables the named endpoints and clears their cached state values so the next poll refetches them.
@@ -479,7 +518,7 @@ abstract class AlpacaDevice {
 		this.connection.state = 'Busy'
 		this.sendSetProperty(this.connection)
 
-		const ok = (await this.api[mode](this.id)) === true
+		const { ok } = await this.api[mode](this.id)
 		this.connection.state = ok ? 'Idle' : 'Alert'
 		this.sendSetProperty(this.connection)
 	}
@@ -591,44 +630,44 @@ class AlpacaCamera extends AlpacaDevice {
 		this.#guideWE.device = device.DeviceName
 		this.#image.device = device.DeviceName
 
-		this.runner.registerEndpoint('BayerOffsetX', api.getBayerOffsetX.bind(api, this.id), false)
-		this.runner.registerEndpoint('BayerOffsetY', api.getBayerOffsetY.bind(api, this.id), false)
-		this.runner.registerEndpoint('SensorType', api.getSensorType.bind(api, this.id), false)
-		this.runner.registerEndpoint('BinX', api.getBinX.bind(api, this.id), false, 60)
-		this.runner.registerEndpoint('BinY', api.getBinY.bind(api, this.id), false, 60)
-		this.runner.registerEndpoint('CameraXSize', api.getCameraXSize.bind(api, this.id), false)
-		this.runner.registerEndpoint('CameraYSize', api.getCameraYSize.bind(api, this.id), false)
-		this.runner.registerEndpoint('CanGetCoolerPower', api.canGetCoolerPower.bind(api, this.id), false)
-		this.runner.registerEndpoint('CanPulseGuide', api.canPulseGuide.bind(api, this.id), false)
-		this.runner.registerEndpoint('CanSetCcdTemperature', api.canSetCcdTemperature.bind(api, this.id), false)
-		this.runner.registerEndpoint('CanStopExposure', api.canStopExposure.bind(api, this.id), false)
-		this.runner.registerEndpoint('IsCoolerOn', api.isCoolerOn.bind(api, this.id), false, 60)
-		this.runner.registerEndpoint('ExposureMax', api.getExposureMax.bind(api, this.id), false)
-		this.runner.registerEndpoint('ExposureMin', api.getExposureMin.bind(api, this.id), false)
-		this.runner.registerEndpoint('Gain', api.getGain.bind(api, this.id), false, 60)
-		this.runner.registerEndpoint('GainMax', api.getGainMax.bind(api, this.id), false)
-		this.runner.registerEndpoint('GainMin', api.getGainMin.bind(api, this.id), false)
-		this.runner.registerEndpoint('Gains', api.getGains.bind(api, this.id), false)
-		this.runner.registerEndpoint('MaxBinX', api.getMaxBinX.bind(api, this.id), false)
-		this.runner.registerEndpoint('MaxBinY', api.getMaxBinY.bind(api, this.id), false)
-		this.runner.registerEndpoint('NumX', api.getNumX.bind(api, this.id), false, 60)
-		this.runner.registerEndpoint('NumY', api.getNumY.bind(api, this.id), false, 60)
-		this.runner.registerEndpoint('Offset', api.getOffset.bind(api, this.id), false, 60)
-		this.runner.registerEndpoint('OffsetMax', api.getOffsetMax.bind(api, this.id), false)
-		this.runner.registerEndpoint('OffsetMin', api.getOffsetMin.bind(api, this.id), false)
-		this.runner.registerEndpoint('Offsets', api.getOffsets.bind(api, this.id), false)
-		this.runner.registerEndpoint('PixelSizeX', api.getPixelSizeX.bind(api, this.id), false)
-		this.runner.registerEndpoint('PixelSizeY', api.getPixelSizeY.bind(api, this.id), false)
-		this.runner.registerEndpoint('ReadoutMode', api.getReadoutMode.bind(api, this.id), false, 60)
-		this.runner.registerEndpoint('ReadoutModes', api.getReadoutModes.bind(api, this.id), false)
-		this.runner.registerEndpoint('StartX', api.getStartX.bind(api, this.id), false, 60)
-		this.runner.registerEndpoint('StartY', api.getStartY.bind(api, this.id), false, 60)
-		this.runner.registerEndpoint('CameraState', api.getCameraState.bind(api, this.id), false)
-		this.runner.registerEndpoint('CCDTemperature', api.getCcdTemperature.bind(api, this.id), false)
-		this.runner.registerEndpoint('CoolerPower', api.getCoolerPower.bind(api, this.id), false)
-		this.runner.registerEndpoint('ImageReady', api.isImageReady.bind(api, this.id), false)
-		this.runner.registerEndpoint('IsPulseGuiding', api.isPulseGuiding.bind(api, this.id), false)
-		this.runner.registerEndpoint('PercentCompleted', api.getPercentCompleted.bind(api, this.id), false)
+		this.registerEndpoint('BayerOffsetX', () => api.getBayerOffsetX(this.id), false)
+		this.registerEndpoint('BayerOffsetY', () => api.getBayerOffsetY(this.id), false)
+		this.registerEndpoint('SensorType', () => api.getSensorType(this.id), false)
+		this.registerEndpoint('BinX', () => api.getBinX(this.id), false, 60)
+		this.registerEndpoint('BinY', () => api.getBinY(this.id), false, 60)
+		this.registerEndpoint('CameraXSize', () => api.getCameraXSize(this.id), false)
+		this.registerEndpoint('CameraYSize', () => api.getCameraYSize(this.id), false)
+		this.registerEndpoint('CanGetCoolerPower', () => api.canGetCoolerPower(this.id), false)
+		this.registerEndpoint('CanPulseGuide', () => api.canPulseGuide(this.id), false)
+		this.registerEndpoint('CanSetCcdTemperature', () => api.canSetCcdTemperature(this.id), false)
+		this.registerEndpoint('CanStopExposure', () => api.canStopExposure(this.id), false)
+		this.registerEndpoint('IsCoolerOn', () => api.isCoolerOn(this.id), false, 60)
+		this.registerEndpoint('ExposureMax', () => api.getExposureMax(this.id), false)
+		this.registerEndpoint('ExposureMin', () => api.getExposureMin(this.id), false)
+		this.registerEndpoint('Gain', () => api.getGain(this.id), false, 60)
+		this.registerEndpoint('GainMax', () => api.getGainMax(this.id), false)
+		this.registerEndpoint('GainMin', () => api.getGainMin(this.id), false)
+		this.registerEndpoint('Gains', () => api.getGains(this.id), false)
+		this.registerEndpoint('MaxBinX', () => api.getMaxBinX(this.id), false)
+		this.registerEndpoint('MaxBinY', () => api.getMaxBinY(this.id), false)
+		this.registerEndpoint('NumX', () => api.getNumX(this.id), false, 60)
+		this.registerEndpoint('NumY', () => api.getNumY(this.id), false, 60)
+		this.registerEndpoint('Offset', () => api.getOffset(this.id), false, 60)
+		this.registerEndpoint('OffsetMax', () => api.getOffsetMax(this.id), false)
+		this.registerEndpoint('OffsetMin', () => api.getOffsetMin(this.id), false)
+		this.registerEndpoint('Offsets', () => api.getOffsets(this.id), false)
+		this.registerEndpoint('PixelSizeX', () => api.getPixelSizeX(this.id), false)
+		this.registerEndpoint('PixelSizeY', () => api.getPixelSizeY(this.id), false)
+		this.registerEndpoint('ReadoutMode', () => api.getReadoutMode(this.id), false, 60)
+		this.registerEndpoint('ReadoutModes', () => api.getReadoutModes(this.id), false)
+		this.registerEndpoint('StartX', () => api.getStartX(this.id), false, 60)
+		this.registerEndpoint('StartY', () => api.getStartY(this.id), false, 60)
+		this.registerEndpoint('CameraState', () => api.getCameraState(this.id), false)
+		this.registerEndpoint('CCDTemperature', () => api.getCcdTemperature(this.id), false)
+		this.registerEndpoint('CoolerPower', () => api.getCoolerPower(this.id), false)
+		this.registerEndpoint('ImageReady', () => api.isImageReady(this.id), false)
+		this.registerEndpoint('IsPulseGuiding', () => api.isPulseGuiding(this.id), false)
+		this.registerEndpoint('PercentCompleted', () => api.getPercentCompleted(this.id), false)
 
 		this.api = api
 	}
@@ -905,8 +944,8 @@ class AlpacaCamera extends AlpacaDevice {
 					this.state.ExposureStarted = true
 					this.state.ExposureDuration = Math.max(this.#exposure.elements.CCD_EXPOSURE_VALUE.min, Math.min(vector.elements.CCD_EXPOSURE_VALUE, this.#exposure.elements.CCD_EXPOSURE_VALUE.max))
 
-					void this.api.startExposure(this.id, this.state.ExposureDuration, this.isLight).then((ok) => {
-						if (ok === true) {
+					void this.api.startExposure(this.id, this.state.ExposureDuration, this.isLight).then(({ ok }) => {
+						if (ok) {
 							this.updatePropertyState(this.#exposure, 'Busy')
 							this.updatePropertyValue(this.#exposure, 'CCD_EXPOSURE_VALUE', this.state.ExposureDuration)
 						} else {
@@ -987,11 +1026,11 @@ class AlpacaCamera extends AlpacaDevice {
 	async #readImageDataAsFits() {
 		const buffer = await this.api.getImageArray(this.id)
 
-		if (buffer) {
+		if (buffer.ok) {
 			this.#image.state = 'Ok'
 			const camera = this.client.provider.get(this.client, this.device.DeviceName, 'camera') as Camera
 			const lastExposureDuration = this.state.ExposureDuration // await this.api.getLastExposureDuration(this.id)
-			const fits = makeFitsFromImageBytes(buffer, this.#now, camera, this.activeMount, this.activeWheel, this.activeFocuser, this.activeRotator, lastExposureDuration)
+			const fits = makeFitsFromImageBytes(buffer.value, this.#now, camera, this.activeMount, this.activeWheel, this.activeFocuser, this.activeRotator, lastExposureDuration)
 			this.#image.elements.CCD1.value = fits
 		} else {
 			this.#image.state = 'Alert'
@@ -1091,36 +1130,47 @@ class AlpacaTelescope extends AlpacaDevice {
 		this.#guideNS.device = device.DeviceName
 		this.#guideWE.device = device.DeviceName
 
-		async function canMoveAxis(id: number) {
-			return (await api.canMoveAxis(id, 0)) || (await api.canMoveAxis(id, 1))
+		// The mount can be moved by hand when either axis accepts MoveAxis.
+		async function canMoveAxis(id: number): Promise<AlpacaRequestResult<boolean>> {
+			const primary = await api.canMoveAxis(id, 0)
+
+			if (primary.ok && primary.value) return primary
+
+			const secondary = await api.canMoveAxis(id, 1)
+
+			// Report the first failure rather than a bogus false, so a transient fault is not mistaken for
+			// a mount that cannot move.
+			if (!primary.ok) return secondary.ok && secondary.value ? secondary : primary
+
+			return secondary
 		}
 
-		this.runner.registerEndpoint('CanHome', api.canFindHome.bind(api, this.id), false)
-		this.runner.registerEndpoint('CanPark', api.canPark.bind(api, this.id), false)
-		this.runner.registerEndpoint('CanMoveAxis', canMoveAxis.bind(undefined, this.id), false)
-		this.runner.registerEndpoint('CanPulseGuide', api.canPulseGuide.bind(api, this.id), false)
-		this.runner.registerEndpoint('CanTrack', api.canSetTracking.bind(api, this.id), false)
-		this.runner.registerEndpoint('CanSlew', api.canSlew.bind(api, this.id), false)
-		this.runner.registerEndpoint('CanSync', api.canSync.bind(api, this.id), false)
-		this.runner.registerEndpoint('CanSetGuideRate', api.canSetGuideRates.bind(api, this.id), false)
-		this.runner.registerEndpoint('SlewRates', api.getAxisRates.bind(api, this.id, 0), false)
-		this.runner.registerEndpoint('TrackingRates', api.getTrackingRates.bind(api, this.id), false)
-		this.runner.registerEndpoint('TrackingRate', api.getTrackingRate.bind(api, this.id), false, 60)
-		this.runner.registerEndpoint('CanSetSideOfPier', api.canSetSideOfPier.bind(api, this.id), false)
-		this.runner.registerEndpoint('Latitude', api.getSiteLatitude.bind(api, this.id), false, 60)
-		this.runner.registerEndpoint('Longitude', api.getSiteLongitude.bind(api, this.id), false, 60)
-		this.runner.registerEndpoint('Elevation', api.getSiteElevation.bind(api, this.id), false, 60)
-		this.runner.registerEndpoint('GuideRateRA', api.getGuideRateRightAscension.bind(api, this.id), false, 60)
-		this.runner.registerEndpoint('GuideRateDEC', api.getGuideRateDeclination.bind(api, this.id), false, 60)
-		this.runner.registerEndpoint('AtPark', api.isAtPark.bind(api, this.id), false)
-		this.runner.registerEndpoint('Declination', api.getDeclination.bind(api, this.id), false)
-		this.runner.registerEndpoint('IsPulseGuiding', api.isPulseGuiding.bind(api, this.id), false)
-		this.runner.registerEndpoint('RightAscension', api.getRightAscension.bind(api, this.id), false)
-		this.runner.registerEndpoint('SideOfPier', api.getSideOfPier.bind(api, this.id), false)
-		this.runner.registerEndpoint('Slewing', api.isSlewing.bind(api, this.id), false)
-		this.runner.registerEndpoint('Tracking', api.isTracking.bind(api, this.id), false)
-		this.runner.registerEndpoint('UTCDate', api.getUtcDate.bind(api, this.id), false, 60)
-		this.runner.registerEndpoint('EquatorialSystem', api.getEquatorialSystem.bind(api, this.id), false)
+		this.registerEndpoint('CanHome', () => api.canFindHome(this.id), false)
+		this.registerEndpoint('CanPark', () => api.canPark(this.id), false)
+		this.registerEndpoint('CanMoveAxis', () => canMoveAxis(this.id), false)
+		this.registerEndpoint('CanPulseGuide', () => api.canPulseGuide(this.id), false)
+		this.registerEndpoint('CanTrack', () => api.canSetTracking(this.id), false)
+		this.registerEndpoint('CanSlew', () => api.canSlew(this.id), false)
+		this.registerEndpoint('CanSync', () => api.canSync(this.id), false)
+		this.registerEndpoint('CanSetGuideRate', () => api.canSetGuideRates(this.id), false)
+		this.registerEndpoint('SlewRates', () => api.getAxisRates(this.id, 0), false)
+		this.registerEndpoint('TrackingRates', () => api.getTrackingRates(this.id), false)
+		this.registerEndpoint('TrackingRate', () => api.getTrackingRate(this.id), false, 60)
+		this.registerEndpoint('CanSetSideOfPier', () => api.canSetSideOfPier(this.id), false)
+		this.registerEndpoint('Latitude', () => api.getSiteLatitude(this.id), false, 60)
+		this.registerEndpoint('Longitude', () => api.getSiteLongitude(this.id), false, 60)
+		this.registerEndpoint('Elevation', () => api.getSiteElevation(this.id), false, 60)
+		this.registerEndpoint('GuideRateRA', () => api.getGuideRateRightAscension(this.id), false, 60)
+		this.registerEndpoint('GuideRateDEC', () => api.getGuideRateDeclination(this.id), false, 60)
+		this.registerEndpoint('AtPark', () => api.isAtPark(this.id), false)
+		this.registerEndpoint('Declination', () => api.getDeclination(this.id), false)
+		this.registerEndpoint('IsPulseGuiding', () => api.isPulseGuiding(this.id), false)
+		this.registerEndpoint('RightAscension', () => api.getRightAscension(this.id), false)
+		this.registerEndpoint('SideOfPier', () => api.getSideOfPier(this.id), false)
+		this.registerEndpoint('Slewing', () => api.isSlewing(this.id), false)
+		this.registerEndpoint('Tracking', () => api.isTracking(this.id), false)
+		this.registerEndpoint('UTCDate', () => api.getUtcDate(this.id), false, 60)
+		this.registerEndpoint('EquatorialSystem', () => api.getEquatorialSystem(this.id), false)
 
 		this.api = api
 	}
@@ -1478,8 +1528,8 @@ class AlpacaFilterWheel extends AlpacaDevice {
 		this.#position.device = device.DeviceName
 		this.#names.device = device.DeviceName
 
-		this.runner.registerEndpoint('Names', api.getNames.bind(api, this.id), false)
-		this.runner.registerEndpoint('Position', api.getPosition.bind(api, this.id), false)
+		this.registerEndpoint('Names', () => api.getNames(this.id), false)
+		this.registerEndpoint('Position', () => api.getPosition(this.id), false)
 
 		this.api = api
 	}
@@ -1570,11 +1620,11 @@ class AlpacaFocuser extends AlpacaDevice {
 		this.#abort.device = device.DeviceName
 		this.#direction.device = device.DeviceName
 
-		this.runner.registerEndpoint('Temperature', api.getTemperature.bind(api, this.id), false)
-		this.runner.registerEndpoint('IsAbsolute', api.isAbsolute.bind(api, this.id), false)
-		this.runner.registerEndpoint('MaxStep', api.getMaxStep.bind(api, this.id), false)
-		this.runner.registerEndpoint('Position', api.getPosition.bind(api, this.id), false)
-		this.runner.registerEndpoint('IsMoving', api.isMoving.bind(api, this.id), false)
+		this.registerEndpoint('Temperature', () => api.getTemperature(this.id), false)
+		this.registerEndpoint('IsAbsolute', () => api.isAbsolute(this.id), false)
+		this.registerEndpoint('MaxStep', () => api.getMaxStep(this.id), false)
+		this.registerEndpoint('Position', () => api.getPosition(this.id), false)
+		this.registerEndpoint('IsMoving', () => api.isMoving(this.id), false)
 
 		this.api = api
 	}
@@ -1710,12 +1760,12 @@ class AlpacaCoverCalibrator extends AlpacaDevice {
 		this.#park.device = device.DeviceName
 		this.#abort.device = device.DeviceName
 
-		this.runner.registerEndpoint('MaxBrightness', api.getMaxBrightness.bind(api, this.id), false)
-		this.runner.registerEndpoint('Brightness', api.getBrightness.bind(api, this.id), false)
-		// this.runner.registerEndpoint('CalibratorChanging', api.isChanging.bind(api, this.id), false)
-		this.runner.registerEndpoint('CalibratorState', api.getCalibratorState.bind(api, this.id), false)
-		this.runner.registerEndpoint('CoverMoving', api.isMoving.bind(api, this.id), false)
-		this.runner.registerEndpoint('CoverState', api.getCoverState.bind(api, this.id), false)
+		this.registerEndpoint('MaxBrightness', () => api.getMaxBrightness(this.id), false)
+		this.registerEndpoint('Brightness', () => api.getBrightness(this.id), false)
+		// this.registerEndpoint('CalibratorChanging', () => api.isChanging(this.id), false)
+		this.registerEndpoint('CalibratorState', () => api.getCalibratorState(this.id), false)
+		this.registerEndpoint('CoverMoving', () => api.isMoving(this.id), false)
+		this.registerEndpoint('CoverState', () => api.getCoverState(this.id), false)
 
 		this.api = api
 	}
@@ -1851,10 +1901,10 @@ class AlpacaRotator extends AlpacaDevice {
 		this.#abort.device = device.DeviceName
 		this.#sync.device = device.DeviceName
 
-		this.runner.registerEndpoint('IsMoving', api.isMoving.bind(api, this.id), false)
-		this.runner.registerEndpoint('Position', api.getPosition.bind(api, this.id), false)
-		this.runner.registerEndpoint('CanReverse', api.canReverse.bind(api, this.id), false)
-		this.runner.registerEndpoint('IsReverse', api.isReverse.bind(api, this.id), false, 60)
+		this.registerEndpoint('IsMoving', () => api.isMoving(this.id), false)
+		this.registerEndpoint('Position', () => api.getPosition(this.id), false)
+		this.registerEndpoint('CanReverse', () => api.canReverse(this.id), false)
+		this.registerEndpoint('IsReverse', () => api.isReverse(this.id), false, 60)
 
 		this.api = api
 	}
@@ -1976,21 +2026,21 @@ class AlpacaDome extends AlpacaDevice {
 		this.#sync.device = device.DeviceName
 		this.#abort.device = device.DeviceName
 
-		this.runner.registerEndpoint('Altitude', api.getAltitude.bind(api, this.id), false)
-		this.runner.registerEndpoint('AtHome', api.isAtHome.bind(api, this.id), false)
-		this.runner.registerEndpoint('AtPark', api.isAtPark.bind(api, this.id), false)
-		this.runner.registerEndpoint('Azimuth', api.getAzimuth.bind(api, this.id), false)
-		this.runner.registerEndpoint('CanFindHome', api.canFindHome.bind(api, this.id), false)
-		this.runner.registerEndpoint('CanPark', api.canPark.bind(api, this.id), false)
-		this.runner.registerEndpoint('CanSetAltitude', api.canSetAltitude.bind(api, this.id), false)
-		this.runner.registerEndpoint('CanSetAzimuth', api.canSetAzimuth.bind(api, this.id), false)
-		this.runner.registerEndpoint('CanSetPark', api.canSetPark.bind(api, this.id), false)
-		this.runner.registerEndpoint('CanSetShutter', api.canSetShutter.bind(api, this.id), false)
-		this.runner.registerEndpoint('CanSlave', api.canSlave.bind(api, this.id), false)
-		this.runner.registerEndpoint('CanSyncAzimuth', api.canSyncAzimuth.bind(api, this.id), false)
-		this.runner.registerEndpoint('ShutterStatus', api.getShutterStatus.bind(api, this.id), false)
-		this.runner.registerEndpoint('Slaved', api.isSlaved.bind(api, this.id), false)
-		this.runner.registerEndpoint('Slewing', api.isSlewing.bind(api, this.id), false)
+		this.registerEndpoint('Altitude', () => api.getAltitude(this.id), false)
+		this.registerEndpoint('AtHome', () => api.isAtHome(this.id), false)
+		this.registerEndpoint('AtPark', () => api.isAtPark(this.id), false)
+		this.registerEndpoint('Azimuth', () => api.getAzimuth(this.id), false)
+		this.registerEndpoint('CanFindHome', () => api.canFindHome(this.id), false)
+		this.registerEndpoint('CanPark', () => api.canPark(this.id), false)
+		this.registerEndpoint('CanSetAltitude', () => api.canSetAltitude(this.id), false)
+		this.registerEndpoint('CanSetAzimuth', () => api.canSetAzimuth(this.id), false)
+		this.registerEndpoint('CanSetPark', () => api.canSetPark(this.id), false)
+		this.registerEndpoint('CanSetShutter', () => api.canSetShutter(this.id), false)
+		this.registerEndpoint('CanSlave', () => api.canSlave(this.id), false)
+		this.registerEndpoint('CanSyncAzimuth', () => api.canSyncAzimuth(this.id), false)
+		this.registerEndpoint('ShutterStatus', () => api.getShutterStatus(this.id), false)
+		this.registerEndpoint('Slaved', () => api.isSlaved(this.id), false)
+		this.registerEndpoint('Slewing', () => api.isSlewing(this.id), false)
 
 		this.api = api
 	}
@@ -2157,7 +2207,7 @@ class AlpacaSafetyMonitor extends AlpacaDevice {
 
 		const api = new AlpacaSafetyMonitorApi(client.url)
 		this.#safetyStatus.device = device.DeviceName
-		this.runner.registerEndpoint('IsSafe', api.isSafe.bind(api, this.id), false)
+		this.registerEndpoint('IsSafe', () => api.isSafe(this.id), false)
 		this.api = api
 	}
 
@@ -2197,6 +2247,257 @@ class AlpacaSafetyMonitor extends AlpacaDevice {
 		updated = this.updatePropertyValue(this.#safetyStatus, 'SAFETY', state) || updated
 		if (updated) this.sendSetProperty(this.#safetyStatus)
 		return true
+	}
+}
+
+// Polled ObservingConditions state. The keys are the canonical ASCOM names so a bulk DeviceState
+// response spreads straight into the bag, and every sensor stays absent until it is first read.
+interface AlpacaClientObservingConditionsState extends AlpacaClientDeviceState {
+	AveragePeriod?: number
+	CloudCover?: number
+	DewPoint?: number
+	Humidity?: number
+	Pressure?: number
+	RainRate?: number
+	SkyBrightness?: number
+	SkyQuality?: number
+	SkyTemperature?: number
+	StarFWHM?: number
+	Temperature?: number
+	WindDirection?: number
+	WindGust?: number
+	WindSpeed?: number
+}
+
+// The thirteen ASCOM sensor names, in the order of the shared mapping table.
+const WEATHER_ASCOM_NAMES = WEATHER_SENSORS.map((e) => e.ascom)
+
+// Alpaca getter per sensor, so the polling endpoints are registered straight from the shared table.
+const WEATHER_SENSOR_READERS: Readonly<Record<WeatherSensor, (api: AlpacaObservingConditionsApi, id: number) => Promise<AlpacaRequestResult<number>>>> = {
+	cloudCover: (api, id) => api.getCloudCover(id),
+	dewPoint: (api, id) => api.getDewPoint(id),
+	humidity: (api, id) => api.getHumidity(id),
+	pressure: (api, id) => api.getPressure(id),
+	rainRate: (api, id) => api.getRainRate(id),
+	skyBrightness: (api, id) => api.getSkyBrightness(id),
+	skyQuality: (api, id) => api.getSkyQuality(id),
+	skyTemperature: (api, id) => api.getSkyTemperature(id),
+	starFWHM: (api, id) => api.getStarFWHM(id),
+	temperature: (api, id) => api.getTemperature(id),
+	windDirection: (api, id) => api.getWindDirection(id),
+	windGust: (api, id) => api.getWindGust(id),
+	windSpeed: (api, id) => api.getWindSpeed(id),
+}
+
+// ObservingConditions wrapper exposing an ASCOM weather station as the INDI WEATHER_PARAMETERS vector,
+// plus the synthesized WEATHER_AVERAGE_PERIOD and WEATHER_REFRESH controls.
+//
+// Values are published in the INDI units the WeatherManager expects, which for wind direction means
+// degrees: converting to radians here would double-convert once the manager parses the vector.
+class AlpacaObservingConditions extends AlpacaDevice {
+	protected readonly api: AlpacaObservingConditionsApi
+	protected readonly state: AlpacaClientObservingConditionsState = { Connected: false, DeviceState: undefined, Step: 0 }
+	protected readonly initialEndpoints = ['AveragePeriod'] as const
+	protected readonly deviceStateEndpoints = WEATHER_ASCOM_NAMES
+
+	// Defined once the supported set is known, because a vector whose elements later disappear is worse
+	// than one that arrives a tick late.
+	#parameters?: ReturnType<typeof makeNumberVector>
+	#defining = false
+	// Bumped on every connect and disconnect. #defineParameters awaits the sensor descriptions, and a
+	// disconnect followed by a reconnect inside that window leaves isConnected true again, so the
+	// generation is what tells a resolved-too-late run that its session is over.
+	#generation = 0
+
+	readonly #averagePeriod = makeNumberVector('', 'WEATHER_AVERAGE_PERIOD', 'Average Period', MAIN_CONTROL, 'rw', ['AVERAGE_PERIOD', 'Period (h)', 0, 0, 24, 0.1, '%.2f'])
+	readonly #refresh = makeSwitchVector('', 'WEATHER_REFRESH', 'Refresh', MAIN_CONTROL, 'AtMostOne', 'rw', ['REFRESH', 'Refresh', false])
+
+	constructor(client: AlpacaClient, device: AlpacaConfiguredDevice) {
+		super(client, device, client.options.handler)
+
+		const api = new AlpacaObservingConditionsApi(client.url)
+		this.#averagePeriod.device = device.DeviceName
+		this.#refresh.device = device.DeviceName
+
+		this.registerEndpoint('AveragePeriod', () => api.getAveragePeriod(this.id), false)
+
+		for (const sensor of WEATHER_SENSORS) {
+			this.registerEndpoint(sensor.ascom, () => WEATHER_SENSOR_READERS[sensor.field](api, this.id), false)
+		}
+
+		this.api = api
+	}
+
+	// Determines the supported sensors, labels them, and publishes WEATHER_PARAMETERS.
+	//
+	// When the server answers DeviceState, the names it omits are exactly the sensors it does not
+	// implement, which settles every capability in one request. Otherwise the per-sensor endpoints have
+	// already run once by the time this is reached, so the definitive 1024s are already recorded.
+	// SensorDescription is used only for the element label, never as a capability probe: drivers that
+	// return an empty string instead of an error would silently drop a working sensor.
+	async #defineParameters(generation: number) {
+		const bulk = this.state.DeviceState
+
+		if (bulk) {
+			const present = new Set(bulk.map((e) => e.Name))
+			for (const sensor of WEATHER_SENSORS) if (!present.has(sensor.ascom)) this.unsupported.add(sensor.ascom)
+		}
+
+		const supported = WEATHER_SENSORS.filter((e) => !this.unsupported.has(e.ascom))
+		const unsupported = WEATHER_SENSORS.filter((e) => this.unsupported.has(e.ascom)).map((e) => e.ascom)
+
+		if (unsupported.length > 0) this.disableEndpoints(...unsupported)
+
+		const labels = await Promise.all(supported.map((e) => this.api.sensorDescription(this.id, e.ascom)))
+
+		// The device may have gone away, or gone away and come back, while the descriptions were in
+		// flight. Either way this run belongs to a finished session and must not define anything.
+		if (generation !== this.#generation || !this.isConnected) return
+
+		const elements = supported.map((sensor, i) => {
+			const label = labels[i]
+			return [sensor.indi, (label.ok && label.value) || sensor.ascom, 0, sensor.min, sensor.max, sensor.step, sensor.format] as [string, string, number, number, number, number, string]
+		})
+
+		const parameters = makeNumberVector(this.device.DeviceName, 'WEATHER_PARAMETERS', 'Parameters', MAIN_CONTROL, 'ro', ...elements)
+
+		this.#parameters = parameters
+
+		// Seed the elements from the readings already polled, so the definition itself carries real
+		// values instead of publishing a zero for one whole tick.
+		this.#fillParameters(parameters)
+		this.sendDefProperty(parameters)
+		this.sendDefProperty(this.#refresh)
+		this.#applyAveragePeriod()
+	}
+
+	// Writes the polled readings into the vector elements, without emitting anything.
+	#fillParameters(parameters: ReturnType<typeof makeNumberVector>) {
+		const { state } = this
+
+		for (const sensor of WEATHER_SENSORS) {
+			if (parameters.elements[sensor.indi] === undefined) continue
+
+			let value = state[sensor.ascom as keyof AlpacaClientObservingConditionsState] as number | undefined
+
+			if (value === undefined) continue
+
+			if (sensor.field === 'windDirection') {
+				// ASCOM reports north as 360 and reserves 0 for calm air, so a 0 never carries a direction
+				// and the last known one is kept instead. This does not depend on WindSpeed: consulting it
+				// would republish the calm sentinel as a northerly wind whenever the speed is
+				// unimplemented or not yet read. A real north arrives as 360 and reduces to 0 below, which
+				// is 0 radians once the manager converts it.
+				if (value === 0) continue
+				value %= 360
+			}
+
+			this.updatePropertyValue(parameters, sensor.indi, value)
+		}
+	}
+
+	// Mirrors the polled readings into WEATHER_PARAMETERS.
+	//
+	// The vector is re-emitted every tick even when no value moved. The property object is reused, so the
+	// INDI side treats it as a fresh report of the same values, which is what keeps a downstream
+	// TimeSinceLastUpdate advancing while the weather is steady.
+	#applyParameters() {
+		const parameters = this.#parameters!
+		this.#fillParameters(parameters)
+		this.sendSetProperty(parameters)
+	}
+
+	// Publishes the averaging window, defining the vector the first time a value arrives. A server
+	// without AveragePeriod never defines it.
+	#applyAveragePeriod() {
+		const value = this.state.AveragePeriod
+
+		if (value === undefined) return
+
+		const defined = this.properties.has(this.#averagePeriod)
+		const updated = this.updatePropertyValue(this.#averagePeriod, 'AVERAGE_PERIOD', value)
+
+		if (!defined) this.sendDefProperty(this.#averagePeriod)
+		else if (updated) this.sendSetProperty(this.#averagePeriod)
+	}
+
+	// Forwards an averaging-window change. The endpoint keeps polling, so the effective value returns on
+	// the next tick whether or not the server accepted the request.
+	async #handleAveragePeriod(hours: number) {
+		this.#averagePeriod.state = 'Busy'
+		this.sendSetProperty(this.#averagePeriod)
+
+		const result = await this.api.setAveragePeriod(this.id, hours)
+
+		this.#averagePeriod.state = result.ok ? 'Ok' : 'Alert'
+		this.sendSetProperty(this.#averagePeriod)
+	}
+
+	// Forwards a refresh request. A server without Refresh withdraws the switch, so the WeatherManager
+	// correctly reports that the device offers no explicit refresh.
+	async #handleRefresh() {
+		this.#refresh.state = 'Busy'
+		this.sendSetProperty(this.#refresh)
+
+		const result = await this.api.refresh(this.id)
+
+		this.#refresh.elements.REFRESH.value = false
+
+		if (!result.ok && result.errorNumber === AlpacaException.MethodOrPropertyNotImplemented) {
+			this.sendDelProperty(this.#refresh)
+			return
+		}
+
+		this.#refresh.state = result.ok ? 'Ok' : 'Alert'
+		this.sendSetProperty(this.#refresh)
+	}
+
+	protected onConnect() {
+		super.onConnect()
+		this.#generation++
+		this.#parameters = undefined
+		this.#defining = false
+	}
+
+	protected onDisconnect() {
+		this.#generation++
+		this.#parameters = undefined
+		this.#defining = false
+		super.onDisconnect()
+	}
+
+	// Waits for the capability discovery to settle before mirroring any reading.
+	protected handleEndpointsAfterRun() {
+		if (!super.handleEndpointsAfterRun()) return false
+
+		if (this.#parameters === undefined) {
+			if (!this.#defining) {
+				this.#defining = true
+				void this.#defineParameters(this.#generation)
+			}
+
+			return false
+		}
+
+		this.#applyAveragePeriod()
+		this.#applyParameters()
+
+		return true
+	}
+
+	sendNumber(vector: NewNumberVector) {
+		if (vector.name === 'WEATHER_AVERAGE_PERIOD') {
+			const hours = vector.elements.AVERAGE_PERIOD
+			if (hours !== undefined) void this.#handleAveragePeriod(hours)
+		}
+	}
+
+	sendSwitch(vector: NewSwitchVector) {
+		super.sendSwitch(vector)
+
+		if (vector.name === 'WEATHER_REFRESH' && vector.elements.REFRESH === true) {
+			void this.#handleRefresh()
+		}
 	}
 }
 

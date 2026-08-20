@@ -753,11 +753,14 @@ class RealTimeClockVirtualDevice<D extends ListenablePeripheral<D>> extends Firm
 }
 
 // Builds the read-only sensor measurements implied by the interfaces a peripheral implements.
+//
+// Temperature, humidity and pressure are published together in the standard WEATHER_PARAMETERS vector
+// rather than one vector each, because that is the shape INDI's Weather interface defines and the only
+// one a Weather consumer recognizes. Altitude has no ObservingConditions counterpart and keeps its own
+// vector, as do the non-atmospheric quantities.
 function sensorMeasurements<D extends ListenablePeripheral<D>>(peripheral: D): FirmataMeasurement<D>[] {
 	const measurements: FirmataMeasurement<D>[] = []
-	if (isThermometer(peripheral)) measurements.push(temperatureMeasurement<D>())
-	if (isHygrometer(peripheral)) measurements.push(humidityMeasurement<D>())
-	if (isBarometer(peripheral)) measurements.push(pressureMeasurement<D>())
+	if (hasWeatherParameters(peripheral)) measurements.push(weatherMeasurement<D>(peripheral))
 	if (isAltimeter(peripheral)) measurements.push(altitudeMeasurement<D>())
 	if (isAmmeter(peripheral)) measurements.push(currentMeasurement<D>())
 	if (isLuxmeter(peripheral)) measurements.push(illuminanceMeasurement<D>())
@@ -767,9 +770,18 @@ function sensorMeasurements<D extends ListenablePeripheral<D>>(peripheral: D): F
 	return measurements
 }
 
-// Picks the closest INDI interface for a sensor: WEATHER for weather-oriented quantities, otherwise AUXILIARY.
+// Whether the peripheral reports at least one quantity that ASCOM ObservingConditions defines, which is
+// what makes it a weather station rather than a generic sensor. An altimeter alone does not qualify:
+// altitude is not one of the observing conditions, so a bare altimeter stays auxiliary.
+function hasWeatherParameters<D extends ListenablePeripheral<D>>(peripheral: D) {
+	return isThermometer(peripheral) || isHygrometer(peripheral) || isBarometer(peripheral)
+}
+
+// Picks the closest INDI interface for a sensor: WEATHER for a peripheral that reports observing
+// conditions, otherwise plain AUXILIARY. WEATHER is what makes it discoverable as a Weather device, and
+// AUXILIARY is kept alongside because the board is still a generic auxiliary device.
 function sensorInterfaceType<D extends ListenablePeripheral<D>>(peripheral: D) {
-	return isThermometer(peripheral) || isHygrometer(peripheral) || isBarometer(peripheral) || isAltimeter(peripheral) ? DeviceInterfaceType.WEATHER | DeviceInterfaceType.AUXILIARY : DeviceInterfaceType.AUXILIARY
+	return hasWeatherParameters(peripheral) ? DeviceInterfaceType.WEATHER | DeviceInterfaceType.AUXILIARY : DeviceInterfaceType.AUXILIARY
 }
 
 // Checks whether every element can be sampled without publishing non-finite or out-of-range values.
@@ -852,29 +864,45 @@ function timeMeasurement<D extends ListenablePeripheral<D>>(): FirmataMeasuremen
 	}
 }
 
-// Builds the TEMPERATURE measurement (degrees Celsius). The peripheral is read through the marker
-// interface; callers gate optional measurements with the runtime guards below.
-function temperatureMeasurement<D extends ListenablePeripheral<D>>(): FirmataMeasurement<D> {
-	const vector = makeNumberVector('', 'TEMPERATURE', 'Temperature', WEATHER, 'ro', ['TEMPERATURE', 'Temperature', 0, -55, 125, 0.01, '%.2f'])
-	return { vector, reads: [{ element: 'TEMPERATURE', read: (peripheral) => (peripheral as unknown as Thermometer).temperature }] }
+// Builds the standard INDI WEATHER_PARAMETERS measurement from whichever observing conditions the
+// peripheral reports: temperature (degrees Celsius), humidity (percent) and pressure (hPa, the project's
+// Pressure unit, at the sensor's own altitude and never reduced to sea level).
+//
+// The element names are the ones INDI Weather drivers publish, which is what lets a Weather consumer map
+// them without knowing anything about Firmata. Only the elements the peripheral actually reports are
+// declared, so a bare thermometer publishes a one-element vector.
+//
+// Grouping them in a single vector means the shared range guard is all-or-nothing: a frame with one
+// out-of-range field suppresses the whole reading rather than just that quantity. That matches the other
+// multi-axis measurements here, and a corrupt I2C frame from a combined sensor rarely spoils one field
+// alone.
+function weatherMeasurement<D extends ListenablePeripheral<D>>(peripheral: D): FirmataMeasurement<D> {
+	const elements: [string, string, number, number, number, number, string][] = []
+	const reads: FirmataElementRead<D>[] = []
+
+	if (isThermometer(peripheral)) {
+		elements.push(['WEATHER_TEMPERATURE', 'Temperature (C)', 0, -55, 125, 0.01, '%.2f'])
+		reads.push({ element: 'WEATHER_TEMPERATURE', read: (e) => (e as unknown as Thermometer).temperature })
+	}
+
+	if (isHygrometer(peripheral)) {
+		elements.push(['WEATHER_HUMIDITY', 'Humidity (%)', 0, 0, 100, 0.1, '%.1f'])
+		reads.push({ element: 'WEATHER_HUMIDITY', read: (e) => (e as unknown as Hygrometer).humidity })
+	}
+
+	if (isBarometer(peripheral)) {
+		elements.push(['WEATHER_PRESSURE', 'Pressure (hPa)', 0, 0, 2000, 0.01, '%.2f'])
+		reads.push({ element: 'WEATHER_PRESSURE', read: (e) => (e as unknown as Barometer).pressure })
+	}
+
+	return { vector: makeNumberVector('', 'WEATHER_PARAMETERS', 'Parameters', WEATHER, 'ro', ...elements), reads }
 }
 
-// Builds the PRESSURE measurement (hPa, the project's Pressure unit).
-function pressureMeasurement<D extends ListenablePeripheral<D>>(): FirmataMeasurement<D> {
-	const vector = makeNumberVector('', 'PRESSURE', 'Pressure', WEATHER, 'ro', ['PRESSURE', 'Pressure (hPa)', 0, 0, 2000, 0.01, '%.2f'])
-	return { vector, reads: [{ element: 'PRESSURE', read: (peripheral) => (peripheral as unknown as Barometer).pressure }] }
-}
-
-// Builds the ALTITUDE measurement (meters, converted from the project's Distance unit in AU).
+// Builds the ALTITUDE measurement (meters, converted from the project's Distance unit in AU). Altitude is
+// not an observing condition, so it stays outside WEATHER_PARAMETERS.
 function altitudeMeasurement<D extends ListenablePeripheral<D>>(): FirmataMeasurement<D> {
 	const vector = makeNumberVector('', 'ALTITUDE', 'Altitude', WEATHER, 'ro', ['ALTITUDE', 'Altitude (m)', 0, -1000, 100000, 0.01, '%.2f'])
 	return { vector, reads: [{ element: 'ALTITUDE', read: (peripheral) => toMeter((peripheral as unknown as Altimeter).altitude) }] }
-}
-
-// Builds the RELATIVE_HUMIDITY measurement (percent, 0..100).
-function humidityMeasurement<D extends ListenablePeripheral<D>>(): FirmataMeasurement<D> {
-	const vector = makeNumberVector('', 'RELATIVE_HUMIDITY', 'Relative Humidity', WEATHER, 'ro', ['HUMIDITY', 'Humidity (%)', 0, 0, 100, 0.1, '%.1f'])
-	return { vector, reads: [{ element: 'HUMIDITY', read: (peripheral) => (peripheral as unknown as Hygrometer).humidity }] }
 }
 
 // Builds the CURRENT measurement (amperes).
