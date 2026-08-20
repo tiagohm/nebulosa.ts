@@ -2304,9 +2304,10 @@ class AlpacaObservingConditions extends AlpacaDevice {
 	// than one that arrives a tick late.
 	#parameters?: ReturnType<typeof makeNumberVector>
 	#defining = false
-	// Bumped on every connect and disconnect. #defineParameters awaits the sensor descriptions, and a
-	// disconnect followed by a reconnect inside that window leaves isConnected true again, so the
-	// generation is what tells a resolved-too-late run that its session is over.
+	// Bumped on every connect and disconnect. #defineParameters awaits the sensor descriptions and the two
+	// command handlers await their PUT, and a disconnect followed by a reconnect inside any of those
+	// windows leaves isConnected true again, so the generation is what tells a resolved-too-late run that
+	// its session is over.
 	#generation = 0
 
 	readonly #averagePeriod = makeNumberVector('', 'WEATHER_AVERAGE_PERIOD', 'Average Period', MAIN_CONTROL, 'rw', ['AVERAGE_PERIOD', 'Period (h)', 0, 0, 24, 0.1, '%.2f'])
@@ -2424,10 +2425,18 @@ class AlpacaObservingConditions extends AlpacaDevice {
 	// Forwards an averaging-window change. The endpoint keeps polling, so the effective value returns on
 	// the next tick whether or not the server accepted the request.
 	async #handleAveragePeriod(hours: number) {
+		const generation = this.#generation
+
 		this.#averagePeriod.state = 'Busy'
 		this.sendSetProperty(this.#averagePeriod)
 
 		const result = await this.api.setAveragePeriod(this.id, hours)
+
+		// The session ended while the request was in flight, so this answer describes a device that is
+		// gone. Emitting it would either set a property that is currently deleted or stamp the outcome of
+		// the old session onto the one a reconnect just redefined. #resetCommands has already released the
+		// vector, so there is nothing left to undo here.
+		if (generation !== this.#generation) return
 
 		this.#averagePeriod.state = result.ok ? 'Ok' : 'Alert'
 		this.sendSetProperty(this.#averagePeriod)
@@ -2436,10 +2445,16 @@ class AlpacaObservingConditions extends AlpacaDevice {
 	// Forwards a refresh request. A server without Refresh withdraws the switch, so the WeatherManager
 	// correctly reports that the device offers no explicit refresh.
 	async #handleRefresh() {
+		const generation = this.#generation
+
 		this.#refresh.state = 'Busy'
 		this.sendSetProperty(this.#refresh)
 
 		const result = await this.api.refresh(this.id)
+
+		// See #handleAveragePeriod. An unimplemented answer is the damaging one: it deletes the property,
+		// which for a stale run would withdraw the refresh control the new session just defined.
+		if (generation !== this.#generation) return
 
 		this.#refresh.elements.REFRESH.value = false
 
@@ -2452,17 +2467,28 @@ class AlpacaObservingConditions extends AlpacaDevice {
 		this.sendSetProperty(this.#refresh)
 	}
 
+	// Returns the two command vectors to rest. They are single objects reused across sessions, so a
+	// command still in flight when the session ends would otherwise leave its Busy state, or a latched
+	// momentary switch, on the definition the next session publishes.
+	#resetCommands() {
+		this.#averagePeriod.state = 'Idle'
+		this.#refresh.state = 'Idle'
+		this.#refresh.elements.REFRESH.value = false
+	}
+
 	protected onConnect() {
 		super.onConnect()
 		this.#generation++
 		this.#parameters = undefined
 		this.#defining = false
+		this.#resetCommands()
 	}
 
 	protected onDisconnect() {
 		this.#generation++
 		this.#parameters = undefined
 		this.#defining = false
+		this.#resetCommands()
 		super.onDisconnect()
 	}
 
