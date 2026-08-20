@@ -2960,10 +2960,23 @@ for (const sensor of WEATHER_SENSORS) {
 	for (const alias of sensor.aliases) WEATHER_SENSORS_BY_INDI_NAME.set(alias, sensor)
 }
 
-// Epoch milliseconds of the last report of each sensor. Zero means never reported, which is unambiguous
-// because the Unix epoch cannot be a real observation time. Every key is present so the object keeps a
-// stable shape.
-type WeatherUpdatedAt = Record<WeatherSensor, number>
+// Freshness bookkeeping for one device, on the two clocks it needs.
+//
+// `at` is the epoch millisecond of the last report of each sensor, which is what a wall-clock timestamp
+// such as Alpaca's DeviceState.TimeStamp has to carry. Zero means never reported, which is unambiguous
+// because the Unix epoch cannot be a real observation time.
+//
+// `elapsed` is the performance.now() millisecond of the same report, and every age is measured from it:
+// a system clock corrected backward would otherwise make a sensor look updated in the future, and a
+// forward correction would make a fresh one look arbitrarily stale. It is only meaningful where the
+// matching `at` is non-zero, because performance.now() may legitimately read 0 in the first millisecond
+// of the process.
+//
+// Every key of both records is present so the objects keep a stable shape.
+interface WeatherUpdatedAt {
+	readonly at: Record<WeatherSensor, number>
+	readonly elapsed: Record<WeatherSensor, number>
+}
 
 // Manager for weather stations (INDI Weather interface / ASCOM ObservingConditions). Reflects
 // WEATHER_PARAMETERS onto the typed sensor fields, tracks per-sensor freshness, and drives the driver's
@@ -2974,9 +2987,10 @@ export class WeatherManager extends DeviceManager<Weather> {
 	readonly #updatedAt = new WeakMap<Weather, WeatherUpdatedAt>()
 
 	// Epoch milliseconds of the last report of `sensor`, or undefined when it was never reported. A
-	// repeated identical reading still advances this, unlike the `updated` event.
+	// repeated identical reading still advances this, unlike the `updated` event. Use elapsedSince for a
+	// duration: this stamp is wall-clock and moves with the system clock.
 	updatedAt(device: Weather, sensor: WeatherSensor) {
-		const at = this.#updatedAt.get(device)?.[sensor]
+		const at = this.#updatedAt.get(device)?.at[sensor]
 		return at ? at : undefined
 	}
 
@@ -2989,11 +3003,41 @@ export class WeatherManager extends DeviceManager<Weather> {
 		let last = 0
 
 		for (const sensor of WEATHER_SENSORS) {
-			const at = stamps[sensor.field]
+			const at = stamps.at[sensor.field]
 			if (at > last) last = at
 		}
 
 		return last ? last : undefined
+	}
+
+	// Milliseconds since the last report of `sensor`, or undefined when it was never reported. Measured
+	// on the monotonic clock, so a system clock adjustment cannot make the age negative or stale.
+	elapsedSince(device: Weather, sensor: WeatherSensor) {
+		const stamps = this.#updatedAt.get(device)
+
+		if (stamps === undefined || !stamps.at[sensor]) return undefined
+
+		return performance.now() - stamps.elapsed[sensor]
+	}
+
+	// Milliseconds since the most recent report of any sensor, or undefined when none was reported. Also
+	// monotonic; see elapsedSince.
+	lastElapsedSince(device: Weather) {
+		const stamps = this.#updatedAt.get(device)
+
+		if (stamps === undefined) return undefined
+
+		// A zero `at` marks a sensor that was never reported, and only those are skipped: a real
+		// performance.now() stamp can be 0 and still be a genuine reading.
+		let last: number | undefined
+
+		for (const sensor of WEATHER_SENSORS) {
+			const { field } = sensor
+			const elapsed = stamps.elapsed[field]
+			if (stamps.at[field] && (last === undefined || elapsed > last)) last = elapsed
+		}
+
+		return last === undefined ? undefined : performance.now() - last
 	}
 
 	// Sets the driver's hardware re-read period, in seconds. Returns false when the driver has no
@@ -3025,8 +3069,8 @@ export class WeatherManager extends DeviceManager<Weather> {
 		let stamps = this.#updatedAt.get(device)
 
 		if (stamps === undefined) {
-			stamps = {} as WeatherUpdatedAt
-			for (const sensor of WEATHER_SENSORS) stamps[sensor.field] = 0
+			stamps = { at: {}, elapsed: {} } as WeatherUpdatedAt
+			for (const sensor of WEATHER_SENSORS) stamps.at[sensor.field] = stamps.elapsed[sensor.field] = 0
 			this.#updatedAt.set(device, stamps)
 		}
 
@@ -3039,7 +3083,7 @@ export class WeatherManager extends DeviceManager<Weather> {
 	// Deliberately does not use handleMinMaxValue: the min/max of a WEATHER_PARAMETERS element are the
 	// driver's alarm thresholds from addParameter(name, label, min, max, percentWarning), not a display
 	// range, and clamping to them would truncate exactly the out-of-range reading that matters.
-	#handleSensor(device: Weather, mapping: WeatherSensorMapping, element: DefNumber | OneNumber | undefined, state: PropertyState | undefined, stamps: WeatherUpdatedAt, now: number) {
+	#handleSensor(device: Weather, mapping: WeatherSensorMapping, element: DefNumber | OneNumber | undefined, state: PropertyState | undefined, stamps: WeatherUpdatedAt, now: number, elapsed: number) {
 		if (element === undefined) return
 
 		const { field } = mapping
@@ -3052,7 +3096,8 @@ export class WeatherManager extends DeviceManager<Weather> {
 			this.updated(device, field, state)
 		}
 
-		stamps[field] = now
+		stamps.at[field] = now
+		stamps.elapsed[field] = elapsed
 	}
 
 	// Applies every mapped element of a WEATHER_PARAMETERS vector. Unmapped elements stay reachable
@@ -3087,11 +3132,14 @@ export class WeatherManager extends DeviceManager<Weather> {
 		}
 
 		const stamps = this.#stamps(device)
+		// Both clocks are read once per vector: the wall-clock stamp is what a timestamp reports, the
+		// monotonic one is what every age is measured from.
 		const now = Date.now()
+		const elapsed = performance.now()
 
 		for (const key in elements) {
 			const mapping = WEATHER_SENSORS_BY_INDI_NAME.get(key)
-			if (mapping !== undefined) this.#handleSensor(device, mapping, elements[key], message.state, stamps, now)
+			if (mapping !== undefined) this.#handleSensor(device, mapping, elements[key], message.state, stamps, now, elapsed)
 		}
 	}
 
@@ -3105,7 +3153,11 @@ export class WeatherManager extends DeviceManager<Weather> {
 		}
 
 		const stamps = this.#updatedAt.get(device)
-		if (stamps !== undefined) stamps[field] = 0
+
+		if (stamps !== undefined) {
+			stamps.at[field] = 0
+			stamps.elapsed[field] = 0
+		}
 	}
 
 	// Creates/updates the weather device from DRIVER_INFO.

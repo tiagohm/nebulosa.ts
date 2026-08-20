@@ -233,6 +233,30 @@ describe('observing conditions server', () => {
 		expect((await fixture.get(`${base}/timesincelastupdate?SensorName=CloudCover`)).Value).toBe(-1)
 	})
 
+	test('keeps the sensor age immune to a system clock correction', async () => {
+		await using fixture = await startAlpacaServer(ALPACA_WEATHER)
+		const base = fixture.path
+
+		await Bun.sleep(5)
+
+		// The readings were stamped before the correction, so a wall-clock subtraction would answer an age
+		// an hour in the future for a sensor that was just reported.
+		const now = Date.now
+		Date.now = () => now() - 3_600_000
+
+		try {
+			const one = (await fixture.get(`${base}/timesincelastupdate?SensorName=Temperature`)).Value as number
+			expect(one).toBeGreaterThan(0)
+			expect(one).toBeLessThan(5)
+
+			const any = (await fixture.get(`${base}/timesincelastupdate?SensorName=`)).Value as number
+			expect(any).toBeGreaterThan(0)
+			expect(any).toBeLessThan(5)
+		} finally {
+			Date.now = now
+		}
+	})
+
 	test('serves the bulk device state with only the known sensors', async () => {
 		await using fixture = await startAlpacaServer(ALPACA_WEATHER)
 		const base = fixture.path

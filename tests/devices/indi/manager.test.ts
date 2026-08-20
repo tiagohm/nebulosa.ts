@@ -890,6 +890,36 @@ describe('WeatherManager', () => {
 		expect(manager.updatedAt(weather, 'temperature')!).toBeGreaterThan(first)
 	})
 
+	test('measures sensor age on the monotonic clock', async () => {
+		const manager = new WeatherManager()
+		const weather = weatherDevice(manager)
+		const parameters = weatherParameters(weather.name, { WEATHER_TEMPERATURE: defNumber('WEATHER_TEMPERATURE', 10, -60, 60) })
+
+		expect(manager.elapsedSince(weather, 'temperature')).toBeUndefined()
+		expect(manager.lastElapsedSince(weather)).toBeUndefined()
+
+		const now = Date.now
+
+		try {
+			Date.now = () => now() - 3_600_000
+			manager.numberVector(recordingClient, parameters, 'defNumberVector')
+		} finally {
+			Date.now = now
+		}
+
+		expect(manager.updatedAt(weather, 'humidity')).toBeUndefined()
+		expect(manager.elapsedSince(weather, 'humidity')).toBeUndefined()
+
+		expect(manager.updatedAt(weather, 'temperature')!).toBeLessThan(Date.now() - 3_000_000)
+		expect(manager.elapsedSince(weather, 'temperature')!).toBeLessThan(1000)
+		expect(manager.lastElapsedSince(weather)!).toBeLessThan(1000)
+
+		await Bun.sleep(5)
+
+		expect(manager.elapsedSince(weather, 'temperature')!).toBeGreaterThanOrEqual(5)
+		expect(manager.lastElapsedSince(weather)!).toBeGreaterThanOrEqual(5)
+	})
+
 	test('accepts a partial parameter vector from an auxiliary sensor board', () => {
 		const manager = new WeatherManager()
 		const weather = weatherDevice(manager, 'Sensor', DeviceInterfaceType.WEATHER | DeviceInterfaceType.AUXILIARY)

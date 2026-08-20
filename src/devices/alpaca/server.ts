@@ -938,16 +938,20 @@ export class AlpacaServer {
 
 	// Seconds since the sensor was last reported, or since any sensor was for the empty name. A negative
 	// value means the sensor is implemented but has never produced a reading.
+	//
+	// The age comes from the backend's monotonic stamps rather than from the wall-clock ones: a system
+	// clock corrected backward between the reading and this request would otherwise answer a negative
+	// duration for a fresh sensor, and a forward correction would report it as arbitrarily stale.
 	#weatherGetTimeSinceLastUpdate(id: number, data: { SensorName?: string }) {
 		const registered = this.#requireWeatherConnected(id)
 		if (registered instanceof Response) return registered
 
 		const { device } = registered
 		const name = data.SensorName ?? ''
-		let updatedAt: number | undefined
+		let elapsed: number | undefined
 
 		if (name === '') {
-			updatedAt = this.options.weather?.lastUpdatedAt(device)
+			elapsed = this.options.weather?.lastElapsedSince(device)
 		} else {
 			const sensor = findWeatherSensor(name)
 
@@ -957,10 +961,10 @@ export class AlpacaServer {
 				return makeAlpacaErrorResponse(AlpacaException.MethodOrPropertyNotImplemented, `${sensor.ascom} is not available`)
 			}
 
-			updatedAt = weatherSensorUpdatedAt(this.options.weather, device, sensor.field)
+			elapsed = weatherSensorElapsedSince(this.options.weather, device, sensor.field)
 		}
 
-		return makeAlpacaResponse(updatedAt === undefined ? -1 : (Date.now() - updatedAt) / 1000)
+		return makeAlpacaResponse(elapsed === undefined ? -1 : elapsed / 1000)
 	}
 
 	// Bulk state with only the implemented sensors, under their canonical ASCOM names. AveragePeriod is
@@ -2378,27 +2382,28 @@ function weatherSensorImplemented(manager: WeatherManager | undefined, device: W
 	return weatherSensorValue(device, sensor) !== undefined
 }
 
-// Epoch milliseconds of the newest reading backing `sensor`, or undefined when it was never reported.
+// Milliseconds since the newest reading backing `sensor`, or undefined when it was never reported. The
+// age is monotonic, as WeatherManager measures it, so the newest of several readings is the smallest one.
 //
 // Every sensor is its own source except a derived member of the humidity/dew-point pair, which has no
-// stamp of its own: reporting the source's stamp keeps TimeSinceLastUpdate meaningful instead of a
+// stamp of its own: reporting the source's age keeps TimeSinceLastUpdate meaningful instead of a
 // permanent -1. The derivation is a function of both the direct source and the ambient temperature, so a
-// new temperature moves the derived value even when the source did not; the newer of the two stamps is
+// new temperature moves the derived value even when the source did not; the newer of the two readings is
 // therefore the moment the derived value last changed.
-function weatherSensorUpdatedAt(manager: WeatherManager | undefined, device: Weather, sensor: WeatherSensor) {
+function weatherSensorElapsedSince(manager: WeatherManager | undefined, device: Weather, sensor: WeatherSensor) {
 	if (manager === undefined) return undefined
 
 	const source = sensor === 'humidity' && device.humidity === undefined ? 'dewPoint' : sensor === 'dewPoint' && device.dewPoint === undefined ? 'humidity' : undefined
 
-	if (source === undefined) return manager.updatedAt(device, sensor)
+	if (source === undefined) return manager.elapsedSince(device, sensor)
 
-	const at = manager.updatedAt(device, source)
-	const temperature = manager.updatedAt(device, 'temperature')
+	const at = manager.elapsedSince(device, source)
+	const temperature = manager.elapsedSince(device, 'temperature')
 
 	if (at === undefined) return temperature
 	if (temperature === undefined) return at
 
-	return Math.max(at, temperature)
+	return Math.min(at, temperature)
 }
 
 // Case-insensitive boolean parse of an Alpaca 'True'/'False' form value.
