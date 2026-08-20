@@ -948,7 +948,7 @@ export class AlpacaServer {
 				return makeAlpacaErrorResponse(AlpacaException.MethodOrPropertyNotImplemented, `${sensor.ascom} is not available`)
 			}
 
-			updatedAt = this.options.weather?.updatedAt(device, weatherSensorSource(device, sensor.field))
+			updatedAt = weatherSensorUpdatedAt(this.options.weather, device, sensor.field)
 		}
 
 		return makeAlpacaResponse(updatedAt === undefined ? -1 : (Date.now() - updatedAt) / 1000)
@@ -2334,13 +2334,27 @@ function weatherSensorValue(device: Weather, sensor: WeatherSensor): number | un
 	}
 }
 
-// The sensor whose freshness backs `sensor`, which differs only for a derived member of the
-// humidity/dew-point pair: the derived one is refreshed exactly when its source is, so reporting the
-// source's stamp keeps TimeSinceLastUpdate meaningful instead of a permanent -1.
-function weatherSensorSource(device: Weather, sensor: WeatherSensor): WeatherSensor {
-	if (sensor === 'humidity' && device.humidity === undefined) return 'dewPoint'
-	if (sensor === 'dewPoint' && device.dewPoint === undefined) return 'humidity'
-	return sensor
+// Epoch milliseconds of the newest reading backing `sensor`, or undefined when it was never reported.
+//
+// Every sensor is its own source except a derived member of the humidity/dew-point pair, which has no
+// stamp of its own: reporting the source's stamp keeps TimeSinceLastUpdate meaningful instead of a
+// permanent -1. The derivation is a function of both the direct source and the ambient temperature, so a
+// new temperature moves the derived value even when the source did not; the newer of the two stamps is
+// therefore the moment the derived value last changed.
+function weatherSensorUpdatedAt(manager: WeatherManager | undefined, device: Weather, sensor: WeatherSensor) {
+	if (manager === undefined) return undefined
+
+	const source = sensor === 'humidity' && device.humidity === undefined ? 'dewPoint' : sensor === 'dewPoint' && device.dewPoint === undefined ? 'humidity' : undefined
+
+	if (source === undefined) return manager.updatedAt(device, sensor)
+
+	const at = manager.updatedAt(device, source)
+	const temperature = manager.updatedAt(device, 'temperature')
+
+	if (at === undefined) return temperature
+	if (temperature === undefined) return at
+
+	return Math.max(at, temperature)
 }
 
 // Case-insensitive boolean parse of an Alpaca 'True'/'False' form value.

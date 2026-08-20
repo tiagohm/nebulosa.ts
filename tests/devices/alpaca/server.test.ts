@@ -305,6 +305,28 @@ describe('observing conditions server', () => {
 		expect(derived).toBeCloseTo(source, 1)
 	})
 
+	test('refreshes a derived sensor when only the ambient temperature is reported', async () => {
+		await using fixture = await startAlpacaServer(ALPACA_WEATHER)
+		const base = fixture.path
+
+		// Humidity derived from the dew point is also a function of the ambient temperature, so a lone
+		// temperature report moves it even though the dew point did not change.
+		fixture.device.humidity = undefined
+		await Bun.sleep(20)
+
+		const stale = (await fixture.get(`${base}/timesincelastupdate?SensorName=Humidity`)).Value as number
+		expect(stale).toBeGreaterThan(0.01)
+
+		fixture.manager.numberVector(fixture.indiClient, { device: fixture.simulator.name, name: 'WEATHER_PARAMETERS', elements: { WEATHER_TEMPERATURE: { name: 'WEATHER_TEMPERATURE', value: 17.4 } } }, 'setNumberVector')
+
+		const fresh = (await fixture.get(`${base}/timesincelastupdate?SensorName=Humidity`)).Value as number
+		expect(fresh).toBeLessThan(stale)
+
+		// The dew point itself is still the older reading, which is what the derived member used to report.
+		const dewPointAge = (await fixture.get(`${base}/timesincelastupdate?SensorName=DewPoint`)).Value as number
+		expect(dewPointAge).toBeGreaterThan(fresh)
+	})
+
 	test('drops its registrations when the server stops listening', async () => {
 		await using fixture = await startAlpacaServer(ALPACA_WEATHER)
 		const base = fixture.path
