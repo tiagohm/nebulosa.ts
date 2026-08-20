@@ -171,10 +171,29 @@ describe('observing conditions server', () => {
 		await using fixture = await startAlpacaServer(ALPACA_WEATHER)
 		const base = fixture.path
 
+		// The driver has no WEATHER_AVERAGE_PERIOD, so it reads as instantaneous and only 0 is a no-op.
 		expect((await fixture.get(`${base}/averageperiod`)).Value).toBe(0)
 		expect((await fixture.put(`${base}/averageperiod`, { AveragePeriod: '0' })).ErrorNumber).toBe(0)
 		expect((await fixture.put(`${base}/averageperiod`, { AveragePeriod: '1.5' })).ErrorNumber).toBe(AlpacaException.InvalidValue)
 		expect((await fixture.put(`${base}/averageperiod`, { AveragePeriod: 'abc' })).ErrorNumber).toBe(AlpacaException.InvalidValue)
+	})
+
+	test('rejects zero averaging against a read-only non-zero window', async () => {
+		await using fixture = await startAlpacaServer(ALPACA_WEATHER)
+		const base = fixture.path
+
+		// A driver that reports a fixed two-hour window and does not let it be written.
+		fixture.manager.numberVector(fixture.indiClient, { device: fixture.simulator.name, name: 'WEATHER_AVERAGE_PERIOD', permission: 'ro', state: 'Ok', elements: { AVERAGE_PERIOD: { name: 'AVERAGE_PERIOD', value: 2, min: 0, max: 24, step: 0.1, format: '%.2f' } } }, 'defNumberVector')
+
+		expect((await fixture.get(`${base}/averageperiod`)).Value).toBe(2)
+
+		// Nothing would change on the INDI side, so answering success would be a lie: the next GET still
+		// returns two hours.
+		expect((await fixture.put(`${base}/averageperiod`, { AveragePeriod: '0' })).ErrorNumber).toBe(AlpacaException.InvalidValue)
+		expect((await fixture.get(`${base}/averageperiod`)).Value).toBe(2)
+
+		// Asking for the window it already reports is a genuine no-op.
+		expect((await fixture.put(`${base}/averageperiod`, { AveragePeriod: '2' })).ErrorNumber).toBe(0)
 	})
 
 	test('forwards refresh to the INDI switch', async () => {

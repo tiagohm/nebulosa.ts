@@ -880,8 +880,13 @@ export class AlpacaServer {
 		return makeAlpacaResponse(registered.device.averagePeriod ?? 0)
 	}
 
-	// Accepts 0 (instantaneous) unconditionally; any other window needs a backend that can configure
-	// averaging, which is what setAveragePeriod reports.
+	// Writes the averaging window through the backend, which is what setAveragePeriod reports on.
+	//
+	// A backend that cannot configure averaging can still honor a request for the window it already
+	// reports, which is a no-op rather than a refusal. That is usually 0, because a driver without a
+	// WEATHER_AVERAGE_PERIOD reads as instantaneous, but a driver exposing a read-only non-zero window
+	// must reject 0: nothing would change on the INDI side and the next GET would still return the
+	// original window, making a successful response a lie.
 	#weatherSetAveragePeriod(id: number, data: { AveragePeriod: string }) {
 		const registered = this.#requireWeatherConnected(id)
 		if (registered instanceof Response) return registered
@@ -890,7 +895,7 @@ export class AlpacaServer {
 
 		if (!Number.isFinite(hours) || hours < 0) return makeAlpacaErrorResponse(AlpacaException.InvalidValue, `Invalid average period: ${data.AveragePeriod}`)
 
-		if (this.options.weather?.setAveragePeriod(registered.device, hours) !== true && hours !== 0) {
+		if (this.options.weather?.setAveragePeriod(registered.device, hours) !== true && hours !== (registered.device.averagePeriod ?? 0)) {
 			return makeAlpacaErrorResponse(AlpacaException.InvalidValue, 'ObservingConditions cannot configure an averaging window')
 		}
 
