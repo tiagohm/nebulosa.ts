@@ -465,6 +465,31 @@ describe('mount simulator meridian flip', () => {
 		}
 	})
 
+	test('records sidereal right ascension motor travel during coordinate slews', () => {
+		const { client, simulator } = makeMeridianFlipMount('mount.flip.goto.ra.transmission')
+
+		try {
+			client.sendSwitch({ device: simulator.name, name: 'SIMULATOR_ERROR_FEATURES', elements: { MECHANICS: true } })
+			client.sendNumber({ device: simulator.name, name: 'MOUNT_MECHANICS', elements: { ...NO_MECHANICS, BACKLASH_RA: 60 } })
+			simulator.setTrackingEnabled(true)
+			simulator.setGuideRate(1, 1)
+			simulator.pulse('EAST', 2000)
+			simulator.advance(2)
+
+			const target = simulator.declination + deg(1)
+			simulator.goTo(simulator.rightAscension, target)
+			simulator.advance(deg(1) / FAST_SLEW_SPEED + 1e-6)
+			expect(simulator.isSlewing).toBeFalse()
+
+			const arrived = simulator.rightAscension
+			simulator.advance(1)
+
+			expect(normalizePI(simulator.rightAscension - arrived)).toBeCloseTo(0, 8)
+		} finally {
+			simulator.dispose()
+		}
+	})
+
 	test('rebases automatic flip policy when a goto arrives', () => {
 		const { client, simulator } = makeMeridianFlipMount('mount.flip.goto.rebase')
 

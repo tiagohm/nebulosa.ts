@@ -1672,9 +1672,10 @@ export class MountSimulator extends DeviceSimulator {
 		// by whatever moved the axes before the goto, so a reversing pulse afterwards moved at once
 		// instead of spending itself on the slack the slew had just opened.
 		const travelled = span > 0 ? Math.min(1, maxStep / span) : 0
+		const slewSeconds = span > 0 && speed > 0 ? Math.min(dtSeconds, span / speed) : 0
 		const flipTravel = flipTravelRemaining * travelled
 		const flipDeclinationTravel = flipDeclinationTravelRemaining * travelled
-		const rightAscensionMotorTravel = deltaRightAscension * travelled + flipDirection * flipTravel
+		const rightAscensionMotorTravel = deltaRightAscension * travelled + flipDirection * flipTravel - SIDEREAL_DRIFT_RATE * slewSeconds
 		const declinationMotorTravel = declinationMotorDelta * travelled
 		driveMechanicalAxis(this.#rightAscensionAxis, Math.sign(rightAscensionMotorTravel) as AxisDirection, Math.abs(rightAscensionMotorTravel), this.#rightAscensionTransmission)
 		driveMechanicalAxis(this.#declinationAxis, Math.sign(declinationMotorTravel) as AxisDirection, Math.abs(declinationMotorTravel), this.#declinationTransmission)
