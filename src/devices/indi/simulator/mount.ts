@@ -1695,6 +1695,7 @@ export class MountSimulator extends DeviceSimulator {
 			const arrivalBoresightPierSide = this.#slewTargetPierSide !== undefined && this.#slewTargetPierSide !== priorPierSide ? priorPierSide : undefined
 			if (this.#slewTargetPierSide === undefined) this.#refreshPierSide()
 			else this.#setPierSide(this.#slewTargetPierSide)
+			if (priorPierSide !== 'NEITHER' && this.pierSide === 'NEITHER') clearMechanicalAxis(this.#declinationAxis)
 			// The axes come to a stop, so static friction has to be overcome again before the tracking
 			// or guiding that follows produces any motion.
 			resetMechanicalAxisMotion(this.#rightAscensionAxis)

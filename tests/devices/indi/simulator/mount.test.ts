@@ -1286,6 +1286,32 @@ describe('mount simulator meridian flip', () => {
 		}
 	})
 
+	test('clears declination transmission state when a coordinate slew reaches a pole', () => {
+		const { client, simulator } = makeMeridianFlipMount('mount.flip.goto.pole.transmission')
+
+		try {
+			client.sendSwitch({ device: simulator.name, name: 'SIMULATOR_ERROR_FEATURES', elements: { MECHANICS: true } })
+			client.sendNumber({ device: simulator.name, name: 'MOUNT_MECHANICS', elements: { ...NO_MECHANICS, BACKLASH_DEC: 60 } })
+			simulator.setGuideRate(1, 1)
+			const lst = simulator.siderealTimeAt(simulator.utcTime)
+			simulator.syncTo(normalizeAngle(lst + hour(1)), PIOVERTWO - deg(1))
+			expect(simulator.pierSide).toBe('WEST')
+			simulator.setSlewRate('SPEED_7')
+
+			simulator.goTo(simulator.rightAscension, PIOVERTWO)
+			simulator.advance(deg(1) / FAST_SLEW_SPEED + 1e-6)
+			expect(simulator.pierSide).toBe('NEITHER')
+
+			simulator.pulse('SOUTH', 1000)
+			simulator.advance(1)
+
+			expect(simulator.pierSide).toBe('WEST')
+			expect(simulator.mechanical.declination).toBeLessThan(PIOVERTWO)
+		} finally {
+			simulator.dispose()
+		}
+	})
+
 	test('rejects a pole flip with Alert and clears it on the next valid operation', () => {
 		const { handler, manager, mount, simulator } = makeMeridianFlipMount('mount.flip.alert')
 		let coordinateState: string | undefined = 'Idle'
