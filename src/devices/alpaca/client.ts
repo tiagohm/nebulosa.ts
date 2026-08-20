@@ -2333,21 +2333,17 @@ class AlpacaObservingConditions extends AlpacaDevice {
 		this.api = api
 	}
 
-	// Determines the supported sensors, labels them, and publishes WEATHER_PARAMETERS.
+	// Labels the sensors and publishes WEATHER_PARAMETERS.
 	//
-	// When the server answers DeviceState, the names it omits are exactly the sensors it does not
-	// implement, which settles every capability in one request. Otherwise the per-sensor endpoints have
-	// already run once by the time this is reached, so the definitive 1024s are already recorded.
+	// Only MethodOrPropertyNotImplemented settles a capability, which #read records while the per-sensor
+	// endpoints run. A DeviceState snapshot is not a capability answer: a server omits the sensors it does
+	// not implement and equally any whose current reading it cannot produce - this repository's own server
+	// omits a derived DewPoint at 0 % relative humidity - so an omission only means "not published yet",
+	// and #publishParameters takes the sensor in on the first snapshot that carries it.
+	//
 	// SensorDescription is used only for the element label, never as a capability probe: drivers that
 	// return an empty string instead of an error would silently drop a working sensor.
 	async #defineParameters(generation: number) {
-		const bulk = this.state.DeviceState
-
-		if (bulk) {
-			const present = new Set(bulk.map((e) => e.Name))
-			for (const sensor of WEATHER_SENSORS) if (!present.has(sensor.ascom)) this.unsupported.add(sensor.ascom)
-		}
-
 		const supported = WEATHER_SENSORS.filter((e) => !this.unsupported.has(e.ascom))
 		const unsupported = WEATHER_SENSORS.filter((e) => this.unsupported.has(e.ascom)).map((e) => e.ascom)
 

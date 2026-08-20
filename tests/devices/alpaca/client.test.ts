@@ -600,6 +600,30 @@ describe.skipIf(isTimeConsumingTestSkipped())('observing conditions client', () 
 		expect(remote.device()!.hasThermometer).toBeTrue()
 	}, 10000)
 
+	test('recovers a sensor the first bulk state could not report', async () => {
+		await using server = await startAlpacaServer(ALPACA_WEATHER)
+
+		// The station derives its dew point from humidity, and the Magnus relation is undefined at 0 % RH,
+		// so DeviceState cannot carry DewPoint while the client is discovering capabilities. An omission is
+		// not MethodOrPropertyNotImplemented and must not disable the sensor for the connection.
+		server.device.dewPoint = undefined
+		server.device.humidity = 0
+
+		await using remote = await startAlpacaClient(server.url, ALPACA_WEATHER)
+		await waitUntil(() => remote.device()?.cloudCover === 15, WEATHER_TIMEOUT)
+
+		expect(weatherParametersOf(remote, remote.device()!)!.elements).not.toContainKey('WEATHER_DEW_POINT')
+		expect(remote.device()!.dewPoint).toBeUndefined()
+		expect(remote.device()!.humidity).toBe(0)
+
+		// The humidity rises, the server can derive again, and the sensor must join the vector.
+		server.device.humidity = 52
+		await waitUntil(() => remote.device()!.dewPoint !== undefined, WEATHER_TIMEOUT)
+
+		expect(remote.device()!.dewPoint).toBeCloseTo(6.9, 1)
+		expect(weatherParametersOf(remote, remote.device()!)!.elements.WEATHER_DEW_POINT.label).toBe('Dew point (C)')
+	}, 15000)
+
 	test('withholds a transiently unread sensor instead of publishing a zero', async () => {
 		await using server = await startAlpacaServer(ALPACA_WEATHER)
 
