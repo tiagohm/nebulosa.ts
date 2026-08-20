@@ -41,7 +41,14 @@ export class AlpacaClient implements Client {
 	readonly remoteHost: string
 	readonly remotePort: number
 
+	// Every wrapper, keyed by its Alpaca identity (type plus device number), which is what the protocol
+	// guarantees unique. DeviceName is not: an ASCOM station implementing several interfaces is listed once
+	// per type under the same display name, and this repository's own server does that for a
+	// multi-interface INDI driver.
 	readonly #devices = new Map<string, AlpacaDevice>()
+	// The wrappers sharing one INDI device name, which is what an inbound command addresses. A name with
+	// several wrappers is one INDI device with several interfaces, so a command fans out to all of them.
+	readonly #byName = new Map<string, AlpacaDevice[]>()
 	readonly #management: AlpacaManagementApi
 	#timer?: NodeJS.Timeout
 
@@ -61,9 +68,9 @@ export class AlpacaClient implements Client {
 	// INDI getProperties: replays the definitions of one device (or all) to the handler.
 	getProperties(command?: GetProperties) {
 		if (command?.device) {
-			this.#devices.get(command.device)?.sendProperties(command.name)
+			for (const device of this.#byName.get(command.device) ?? []) device.sendProperties(command.name)
 		} else {
-			for (const device of this.#devices) device[1].sendProperties(command?.name)
+			for (const device of this.#devices.values()) device.sendProperties(command?.name)
 		}
 	}
 
@@ -72,15 +79,15 @@ export class AlpacaClient implements Client {
 
 	// Routes an INDI text/number/switch command to the addressed device wrapper.
 	sendText(vector: NewTextVector) {
-		this.#devices.get(vector.device)?.sendText(vector)
+		for (const device of this.#byName.get(vector.device) ?? []) device.sendText(vector)
 	}
 
 	sendNumber(vector: NewNumberVector) {
-		this.#devices.get(vector.device)?.sendNumber(vector)
+		for (const device of this.#byName.get(vector.device) ?? []) device.sendNumber(vector)
 	}
 
 	sendSwitch(vector: NewSwitchVector) {
-		this.#devices.get(vector.device)?.sendSwitch(vector)
+		for (const device of this.#byName.get(vector.device) ?? []) device.sendSwitch(vector)
 	}
 
 	// Queries the server's configured devices and begins polling. Returns false if already started or the
@@ -94,38 +101,37 @@ export class AlpacaClient implements Client {
 	}
 
 	// Builds a wrapper for each new device, initializes it, and (re)starts the polling timer.
+	//
+	// Several configured devices may share a DeviceName, which is how ASCOM lists one station that
+	// implements several interfaces. They become one INDI device with the union of their interface bits,
+	// so the interfaces are recomputed and republished before anything is initialized: a wrapper
+	// advertising only its own bit would make every manager that owns one of the others drop the device
+	// as soon as it saw that definition.
 	#initialize(configuredDevices: readonly AlpacaConfiguredDevice[]) {
+		const created: AlpacaDevice[] = []
+
 		for (const configuredDevice of configuredDevices) {
-			let device = this.#devices.get(configuredDevice.DeviceName)
+			const key = `${configuredDevice.DeviceType}:${configuredDevice.DeviceNumber}`
 
-			if (!device) {
-				const type = configuredDevice.DeviceType
+			if (this.#devices.has(key)) continue
 
-				if (type === 'camera') {
-					device = new AlpacaCamera(this, configuredDevice)
-				} else if (type === 'telescope') {
-					device = new AlpacaTelescope(this, configuredDevice)
-				} else if (type === 'filterwheel') {
-					device = new AlpacaFilterWheel(this, configuredDevice)
-				} else if (type === 'focuser') {
-					device = new AlpacaFocuser(this, configuredDevice)
-				} else if (type === 'covercalibrator') {
-					device = new AlpacaCoverCalibrator(this, configuredDevice)
-				} else if (type === 'rotator') {
-					device = new AlpacaRotator(this, configuredDevice)
-				} else if (type === 'dome') {
-					device = new AlpacaDome(this, configuredDevice)
-				} else if (type === 'safetymonitor') {
-					device = new AlpacaSafetyMonitor(this, configuredDevice)
-				} else if (type === 'observingconditions') {
-					device = new AlpacaObservingConditions(this, configuredDevice)
-				}
+			const device = makeAlpacaDevice(this, configuredDevice)
 
-				if (device) {
-					this.#devices.set(configuredDevice.DeviceName, device)
-					device.onInit()
-				}
-			}
+			if (device === undefined) continue
+
+			this.#devices.set(key, device)
+
+			const shared = this.#byName.get(configuredDevice.DeviceName)
+
+			if (shared === undefined) this.#byName.set(configuredDevice.DeviceName, [device])
+			else shared.push(device)
+
+			created.push(device)
+		}
+
+		for (const device of created) {
+			this.#applyInterfaces(device.device.DeviceName)
+			device.onInit()
 		}
 
 		clearInterval(this.#timer)
@@ -133,9 +139,24 @@ export class AlpacaClient implements Client {
 		this.#update()
 	}
 
+	// Gives every wrapper of one INDI device name the union of their interface bits, and republishes
+	// DRIVER_INFO for the ones already initialized so a late sibling does not leave a stale bitmask
+	// behind. A name with a single wrapper keeps exactly the bits of its own type.
+	#applyInterfaces(name: string) {
+		const shared = this.#byName.get(name)
+
+		if (shared === undefined || shared.length < 2) return
+
+		let interfaces = 0
+
+		for (const device of shared) interfaces |= +device.driverInterface
+
+		for (const device of shared) device.setDriverInterface(interfaces.toFixed(0))
+	}
+
 	// One polling tick: advances every device wrapper.
 	#update() {
-		for (const device of this.#devices) device[1].update()
+		for (const device of this.#devices.values()) device.update()
 	}
 
 	// Stops polling, closes and clears all devices, and notifies the handler. `server` flags whether the
@@ -145,8 +166,9 @@ export class AlpacaClient implements Client {
 			clearInterval(this.#timer)
 			this.#timer = undefined
 
-			for (const device of this.#devices) device[1].close()
+			for (const device of this.#devices.values()) device.close()
 			this.#devices.clear()
+			this.#byName.clear()
 
 			this.options?.handler?.close?.(this, server)
 		}
@@ -154,6 +176,32 @@ export class AlpacaClient implements Client {
 
 	[Symbol.dispose]() {
 		this.stop()
+	}
+}
+
+// Builds the wrapper for one configured device, or undefined for a type this client does not implement.
+function makeAlpacaDevice(client: AlpacaClient, configuredDevice: AlpacaConfiguredDevice): AlpacaDevice | undefined {
+	switch (configuredDevice.DeviceType) {
+		case 'camera':
+			return new AlpacaCamera(client, configuredDevice)
+		case 'telescope':
+			return new AlpacaTelescope(client, configuredDevice)
+		case 'filterwheel':
+			return new AlpacaFilterWheel(client, configuredDevice)
+		case 'focuser':
+			return new AlpacaFocuser(client, configuredDevice)
+		case 'covercalibrator':
+			return new AlpacaCoverCalibrator(client, configuredDevice)
+		case 'rotator':
+			return new AlpacaRotator(client, configuredDevice)
+		case 'dome':
+			return new AlpacaDome(client, configuredDevice)
+		case 'safetymonitor':
+			return new AlpacaSafetyMonitor(client, configuredDevice)
+		case 'observingconditions':
+			return new AlpacaObservingConditions(client, configuredDevice)
+		default:
+			return undefined
 	}
 }
 
@@ -241,6 +289,22 @@ abstract class AlpacaDevice {
 	// True when the connection switch reports the device as connected.
 	get isConnected() {
 		return this.connection.elements.CONNECT.value === true
+	}
+
+	// The INDI interface bitmask currently advertised, as the string DRIVER_INFO carries.
+	get driverInterface() {
+		return this.driverInfo.elements.DRIVER_INTERFACE.value
+	}
+
+	// Replaces the advertised interface bitmask, republishing DRIVER_INFO when the property is already
+	// defined. The client uses it to give every wrapper of one device name their union, so a manager that
+	// owns one of the interfaces does not drop the device on seeing a sibling's narrower definition.
+	setDriverInterface(value: string) {
+		if (this.driverInfo.elements.DRIVER_INTERFACE.value === value) return
+
+		this.driverInfo.elements.DRIVER_INTERFACE.value = value
+
+		if (this.properties.has(this.driverInfo)) this.sendDefProperty(this.driverInfo)
 	}
 
 	// Resolves the currently snooped mount/wheel/focuser/rotator device, or undefined when unset.

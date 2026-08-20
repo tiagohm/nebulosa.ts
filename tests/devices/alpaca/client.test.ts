@@ -3,6 +3,7 @@ import { timeYMDHMS } from '../../../src/astronomy/time/time'
 import { DEG2RAD, PIOVERTWO } from '../../../src/core/constants'
 import { AlpacaClient, type AlpacaClientHandler, makeFitsFromImageBytes } from '../../../src/devices/alpaca/client'
 import { makeImageBytesFromFits } from '../../../src/devices/alpaca/server'
+import { type AlpacaConfiguredDevice, AlpacaException } from '../../../src/devices/alpaca/types'
 import { CLIENT, type Client, DEFAULT_CAMERA, DEFAULT_MOUNT, type Device, type DeviceType, type Weather } from '../../../src/devices/indi/device'
 import { CameraManager, CoverManager, type DeviceProvider, DomeManager, FlatPanelManager, FocuserManager, GuideOutputManager, MountManager, RotatorManager, ThermometerManager, WheelManager } from '../../../src/devices/indi/manager'
 import type { PropertyState } from '../../../src/devices/indi/types'
@@ -795,6 +796,35 @@ describe.skipIf(isTimeConsumingTestSkipped())('observing conditions client', () 
 		await Bun.sleep(900)
 
 		expect(emitted).not.toContain('defNumberVector:WEATHER_PARAMETERS')
+	}, 15000)
+
+	test('wraps a station listed under two device types with the same name', async () => {
+		await using server = await startAlpacaServer(ALPACA_WEATHER)
+
+		const configured = ((await (await fetch(`${server.url}/management/v1/configureddevices`)).json()) as { Value: AlpacaConfiguredDevice[] }).Value
+		const station = configured.find((e) => e.DeviceType === 'observingconditions')!
+
+		// One INDI driver implementing Weather and Dome is listed once per Alpaca type under the same
+		// display name, which is exactly what this repository's own server does for a multi-interface
+		// device. The dome is listed first, so before this the weather half claimed no wrapper at all.
+		await using proxy = startAlpacaProxy(server.url, {
+			respond: (path) => {
+				if (path.endsWith('/configureddevices')) return { value: [{ ...station, DeviceType: 'dome' }, station] }
+				if (!path.includes('/dome/')) return undefined
+				return path.endsWith('/connected') ? { value: true } : { errorNumber: AlpacaException.MethodOrPropertyNotImplemented }
+			},
+		})
+
+		await using remote = await startAlpacaClient(proxy.url, ALPACA_WEATHER)
+		await waitUntil(() => remote.device()?.cloudCover === 15, WEATHER_TIMEOUT)
+
+		const far = remote.device()!
+		expect(far.temperature).toBe(16.8)
+		expect(weatherParametersOf(remote, far)!.elements).toContainKey('WEATHER_TEMPERATURE')
+
+		// Both halves are advertised together: a wrapper publishing only its own bit would make the
+		// WeatherManager drop the device the moment it saw the dome's definition.
+		expect(far.interfaces).toEqual(['dome', 'weather'])
 	}, 15000)
 
 	test('never turns a weather station into a safety monitor', async () => {
