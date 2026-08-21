@@ -567,19 +567,20 @@ describe.skipIf(isTimeConsumingTestSkipped())('observing conditions client', () 
 	test('withholds an initially calm wind direction instead of publishing north', async () => {
 		await using server = await startAlpacaServer(ALPACA_WEATHER)
 
-		// ASCOM reserves 0 for calm air, and the server reports it whenever the wind speed is 0. Until a
-		// real direction arrives the element must stay out of the vector: the placeholder 0 it would be
-		// defined with is exactly what WeatherManager reads as due north.
+		// ASCOM reserves 0 for calm air, and the server reports it whenever the wind speed is 0. The
+		// sensor exists, so its element is declared, but that sentinel carries no bearing and must never
+		// be reported as a reading: the placeholder 0 is exactly what WeatherManager reads as due north.
 		server.simulator.setParameter('WEATHER_WIND_SPEED', 0)
 
 		await using remote = await startAlpacaClient(server.url, ALPACA_WEATHER)
 		await waitUntil(() => remote.device()?.cloudCover === 15, WEATHER_TIMEOUT)
 
-		expect(weatherParametersOf(remote, remote.device()!)!.elements).not.toContainKey('WEATHER_WIND_DIRECTION')
+		expect(weatherParametersOf(remote, remote.device()!)!.elements).toContainKey('WEATHER_WIND_DIRECTION')
 		expect(remote.device()!.windDirection).toBeUndefined()
+		expect(remote.manager.updatedAt(remote.device()!, 'windDirection')).toBeUndefined()
 		expect(remote.device()!.windSpeed).toBe(0)
 
-		// The wind picks up and the real direction joins the vector.
+		// The wind picks up and the real direction is reported at last.
 		server.simulator.setParameter('WEATHER_WIND_SPEED', 2.6)
 		await waitUntil(() => remote.device()!.windDirection !== undefined, WEATHER_TIMEOUT)
 
@@ -635,11 +636,14 @@ describe.skipIf(isTimeConsumingTestSkipped())('observing conditions client', () 
 		await using remote = await startAlpacaClient(server.url, ALPACA_WEATHER)
 		await waitUntil(() => remote.device()?.cloudCover === 15, WEATHER_TIMEOUT)
 
-		expect(weatherParametersOf(remote, remote.device()!)!.elements).not.toContainKey('WEATHER_DEW_POINT')
+		// SensorDescription answers for it, so the capability is declared even while the snapshots cannot
+		// carry a value: an omission is not MethodOrPropertyNotImplemented.
+		expect(weatherParametersOf(remote, remote.device()!)!.elements).toContainKey('WEATHER_DEW_POINT')
 		expect(remote.device()!.dewPoint).toBeUndefined()
+		expect(remote.manager.updatedAt(remote.device()!, 'dewPoint')).toBeUndefined()
 		expect(remote.device()!.humidity).toBe(0)
 
-		// The humidity rises, the server can derive again, and the sensor must join the vector.
+		// The humidity rises and the server derives it again, so the reading finally arrives.
 		server.device.humidity = 52
 		await waitUntil(() => remote.device()!.dewPoint !== undefined, WEATHER_TIMEOUT)
 
@@ -650,9 +654,9 @@ describe.skipIf(isTimeConsumingTestSkipped())('observing conditions client', () 
 	test('withholds a transiently unread sensor instead of publishing a zero', async () => {
 		await using server = await startAlpacaServer(ALPACA_WEATHER)
 
-		// Without DeviceState the capabilities come from the per-sensor fallback. A transport failure is
-		// not MethodOrPropertyNotImplemented, so seeing stays supported and keeps being polled, but it has
-		// no reading yet and must not reach the vector as a fresh 0.
+		// Without DeviceState the readings come from the per-sensor fallback. A transport failure is not
+		// MethodOrPropertyNotImplemented, so seeing stays supported and keeps being polled: its described
+		// capability is declared, but it has no reading yet and must not be reported as a fresh 0.
 		let failures = 3
 
 		await using proxy = startAlpacaProxy(server.url, {
@@ -667,15 +671,49 @@ describe.skipIf(isTimeConsumingTestSkipped())('observing conditions client', () 
 		await using remote = await startAlpacaClient(proxy.url, ALPACA_WEATHER)
 		await waitUntil(() => remote.device()?.cloudCover === 15, WEATHER_TIMEOUT)
 
-		expect(weatherParametersOf(remote, remote.device()!)!.elements).not.toContainKey('WEATHER_STAR_FWHM')
+		expect(weatherParametersOf(remote, remote.device()!)!.elements).toContainKey('WEATHER_STAR_FWHM')
 		expect(remote.device()!.starFWHM).toBeUndefined()
+		expect(remote.manager.updatedAt(remote.device()!, 'starFWHM')).toBeUndefined()
 		expect(weatherParametersOf(remote, remote.device()!)!.elements).toContainKey('WEATHER_TEMPERATURE')
 
-		// The endpoint recovers on its own and the sensor joins the vector with its real reading.
+		// The endpoint recovers on its own and the sensor reports its real reading.
 		await waitUntil(() => remote.device()!.starFWHM !== undefined, WEATHER_TIMEOUT)
 		expect(remote.device()!.starFWHM).toBe(2.4)
 		expect(weatherParametersOf(remote, remote.device()!)!.elements.WEATHER_STAR_FWHM.label).toBe('Star FWHM (arcsec)')
 	}, 15000)
+
+	test('declares a described sensor whose reading has not arrived yet', async () => {
+		await using server = await startAlpacaServer(ALPACA_WEATHER)
+
+		let unset = true
+
+		// The station describes its seeing sensor and answers ValueNotSet for it, which is a reading it
+		// cannot produce right now rather than a member it does not implement.
+		await using proxy = startAlpacaProxy(server.url, {
+			notImplemented: ['/devicestate'],
+			respond: (path) => (unset && path.endsWith('/starfwhm') ? { errorNumber: AlpacaException.ValueNotSet } : undefined),
+		})
+
+		await using remote = await startAlpacaClient(proxy.url, ALPACA_WEATHER)
+		await waitUntil(() => remote.device()?.temperature === 16.8, WEATHER_TIMEOUT)
+
+		const far = remote.device()!
+
+		// The description already established the capability, so the element is declared instead of
+		// waiting for a reading: an Alpaca server layered over this adapter would otherwise see neither a
+		// declaration nor a value and answer 1024, which a capability-caching client latches for good.
+		expect(weatherParametersOf(remote, far)!.elements).toContainKey('WEATHER_STAR_FWHM')
+		expect(weatherParametersOf(remote, far)!.elements.WEATHER_STAR_FWHM.label).toBe('Star FWHM (arcsec)')
+
+		// Declaring it fabricates nothing: the sensor has no value and no freshness until it reports.
+		expect(far.starFWHM).toBeUndefined()
+		expect(remote.manager.updatedAt(far, 'starFWHM')).toBeUndefined()
+
+		unset = false
+		await waitUntil(() => far.starFWHM === 2.4, WEATHER_TIMEOUT)
+
+		expect(remote.manager.updatedAt(far, 'starFWHM')!).toBeGreaterThan(0)
+	}, 25000)
 
 	test('does not restamp a silent sensor when the vector is redefined', async () => {
 		await using server = await startAlpacaServer(ALPACA_WEATHER)
@@ -685,7 +723,10 @@ describe.skipIf(isTimeConsumingTestSkipped())('observing conditions client', () 
 
 		await using proxy = startAlpacaProxy(server.url, {
 			notImplemented: ['/devicestate'],
-			respond: (path) => {
+			respond: (path, url) => {
+				// The seeing description fails too, so the sensor is not declared up front and its first
+				// reading is what adds it to the vector, which is the redefinition this test needs.
+				if (path.endsWith('/sensordescription') && url.searchParams.get('SensorName') === 'StarFWHM') return { status: 500 }
 				if (!seeing && path.endsWith('/starfwhm')) return { status: 500 }
 				if (!quality && path.endsWith('/skyquality')) return { status: 500 }
 				return undefined

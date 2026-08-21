@@ -2374,6 +2374,11 @@ class AlpacaObservingConditions extends AlpacaDevice {
 	// Its presence is what marks the capability discovery as settled; a supported sensor still without a
 	// reading joins WEATHER_PARAMETERS on a later tick and needs its label then.
 	#labels?: ReadonlyMap<string, string>
+	// Sensors whose SensorDescription answered, which is the server stating that the member exists. Used
+	// only positively: a failed description proves nothing, because a driver may answer an empty string
+	// for a working sensor, but a successful one is a capability the vector must declare even before the
+	// first reading arrives.
+	#described?: ReadonlySet<string>
 	#defining = false
 
 	readonly #averagePeriod = makeNumberVector('', 'WEATHER_AVERAGE_PERIOD', 'Average Period', MAIN_CONTROL, 'rw', ['AVERAGE_PERIOD', 'Period (h)', 0, 0, 24, 0.1, '%.2f'])
@@ -2419,13 +2424,18 @@ class AlpacaObservingConditions extends AlpacaDevice {
 		if (session !== this.session || !this.isConnected) return
 
 		const map = new Map<string, string>()
+		const described = new Set<string>()
 
 		for (let i = 0; i < supported.length; i++) {
 			const label = labels[i]
-			map.set(supported[i].ascom, (label.ok && label.value) || supported[i].ascom)
+			const { ascom } = supported[i]
+
+			map.set(ascom, (label.ok && label.value) || ascom)
+			if (label.ok) described.add(ascom)
 		}
 
 		this.#labels = map
+		this.#described = described
 
 		this.#publishParameters()
 
@@ -2455,17 +2465,23 @@ class AlpacaObservingConditions extends AlpacaDevice {
 		return value % 360
 	}
 
-	// Publishes WEATHER_PARAMETERS with the supported sensors that have a reading, extending an already
-	// published vector with the ones that have since produced their first and withdrawing the ones the
-	// server has since stopped implementing.
+	// Publishes WEATHER_PARAMETERS with the sensors the server described or answered a reading for,
+	// extending an already published vector with the ones that have since appeared and withdrawing the
+	// ones the server has since stopped implementing.
 	//
-	// A supported sensor whose poll failed transiently is correctly not recorded as unsupported, but it
-	// has no value either. Declaring its element anyway would publish a fabricated zero as a fresh
-	// observation, because #fillParameters skips an undefined reading while the vector is emitted
-	// regardless. Such a sensor therefore joins on the tick its first real reading arrives, which INDI
-	// expresses as a redefinition of the same property; the endpoint keeps being polled meanwhile.
+	// A described sensor is declared even before its first reading. The description is the server stating
+	// that the member exists, and a sensor that is only ValueNotSet for now - or a wind direction reading
+	// the calm sentinel, which carries no bearing - would otherwise reach an Alpaca server layered over
+	// this adapter as neither a declaration nor a value, so it would answer 1024 and a client that caches
+	// capabilities would never ask for it again. Nothing is fabricated by declaring it: the definition is
+	// published Busy and #fillParameters reports only the sensors that produced a reading, so the element
+	// carries no observation until one does.
+	//
+	// A sensor whose description failed is only taken in once it produces a reading, which INDI expresses
+	// as a redefinition of the same property; its endpoint keeps being polled meanwhile.
 	#publishParameters() {
 		const labels = this.#labels!
+		const described = this.#described!
 		let parameters = this.#parameters
 		let changed = false
 
@@ -2503,7 +2519,7 @@ class AlpacaObservingConditions extends AlpacaDevice {
 
 		for (const sensor of WEATHER_SENSORS) {
 			if (this.unsupported.has(sensor.ascom)) continue
-			if (this.#sensorValue(sensor) === undefined) continue
+			if (!described.has(sensor.ascom) && this.#sensorValue(sensor) === undefined) continue
 			if (parameters?.elements[sensor.indi] !== undefined) continue
 
 			if (parameters === undefined) {
@@ -2676,6 +2692,7 @@ class AlpacaObservingConditions extends AlpacaDevice {
 	#invalidate() {
 		this.#parameters = undefined
 		this.#labels = undefined
+		this.#described = undefined
 		this.#defining = false
 		this.#clearSensorState()
 		this.#resetCommands()
