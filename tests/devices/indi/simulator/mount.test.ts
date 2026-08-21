@@ -1559,6 +1559,27 @@ describe('mount simulator meridian flip', () => {
 		}
 	})
 
+	test('preserves state when connecting an already paused connected mount', () => {
+		const { simulator } = makeMeridianFlipMount('mount.flip.connect.paused')
+
+		try {
+			const lst = simulator.siderealTimeAt(simulator.utcTime)
+			simulator.syncTo(normalizeAngle(lst + hour(1)), deg(20))
+			const rightAscension = simulator.rightAscension
+			const declination = simulator.declination
+			const pierSide = simulator.pierSide
+
+			simulator.connect()
+
+			expect(simulator.isConnected).toBeTrue()
+			expect(simulator.rightAscension).toBe(rightAscension)
+			expect(simulator.declination).toBe(declination)
+			expect(simulator.pierSide).toBe(pierSide)
+		} finally {
+			simulator.dispose()
+		}
+	})
+
 	test('starts a replacement goto from the in-flight flip shaft pose', () => {
 		const { simulator } = makeMeridianFlipMount('mount.flip.replacement.shaft.pose')
 

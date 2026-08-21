@@ -1039,7 +1039,7 @@ export class MountSimulator extends DeviceSimulator {
 
 	// Connects the simulated mount and publishes its supported properties.
 	connect() {
-		if (this.#timer) return
+		if (this.isConnected) return
 
 		super.connect()
 
