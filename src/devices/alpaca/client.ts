@@ -2428,6 +2428,11 @@ class AlpacaObservingConditions extends AlpacaDevice {
 		this.#labels = map
 
 		this.#publishParameters()
+
+		// The definition declares the sensors without dating them, so the first readings follow at once
+		// rather than a whole tick later.
+		if (this.#parameters !== undefined) this.#applyParameters()
+
 		this.sendDefProperty(this.#refresh)
 		this.#applyAveragePeriod()
 	}
@@ -2512,10 +2517,19 @@ class AlpacaObservingConditions extends AlpacaDevice {
 
 		if (!changed || parameters === undefined) return
 
-		// Seed the elements from the readings already polled, so the definition itself carries real
-		// values instead of publishing a zero for one whole tick.
+		// Seed the elements from the readings already polled, so the definition carries the current
+		// numbers rather than zeros, and publish it Busy.
+		//
+		// A definition has to carry the whole element set, that being what declares the sensors, but a
+		// consumer such as WeatherManager reads every element of a settled definition as an observation,
+		// and an element whose sensor produced nothing this cycle still holds the value of an earlier one.
+		// Redefining Idle would restamp those as fresh readings, which is exactly what #applyParameters
+		// refuses to do when it reports only the sensors that answered. Busy declares them without dating
+		// any of them, and the readings that did arrive follow in the set vector.
 		this.#fillParameters(parameters)
+		parameters.state = 'Busy'
 		this.sendDefProperty(parameters)
+		parameters.state = 'Idle'
 	}
 
 	// Writes the polled readings into the vector elements, without emitting anything. An element whose

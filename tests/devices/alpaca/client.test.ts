@@ -677,6 +677,43 @@ describe.skipIf(isTimeConsumingTestSkipped())('observing conditions client', () 
 		expect(weatherParametersOf(remote, remote.device()!)!.elements.WEATHER_STAR_FWHM.label).toBe('Star FWHM (arcsec)')
 	}, 15000)
 
+	test('does not restamp a silent sensor when the vector is redefined', async () => {
+		await using server = await startAlpacaServer(ALPACA_WEATHER)
+
+		let seeing = false
+		let quality = true
+
+		await using proxy = startAlpacaProxy(server.url, {
+			notImplemented: ['/devicestate'],
+			respond: (path) => {
+				if (!seeing && path.endsWith('/starfwhm')) return { status: 500 }
+				if (!quality && path.endsWith('/skyquality')) return { status: 500 }
+				return undefined
+			},
+		})
+
+		await using remote = await startAlpacaClient(proxy.url, ALPACA_WEATHER)
+		await waitUntil(() => remote.device()?.skyQuality === 21.3, WEATHER_TIMEOUT)
+
+		const far = remote.device()!
+		expect(weatherParametersOf(remote, far)!.elements).not.toContainKey('WEATHER_STAR_FWHM')
+
+		// The sky-quality endpoint stops answering, so it produces no reading in the cycles that follow.
+		quality = false
+		await waitUntil(() => remote.manager.updatedAt(far, 'temperature')! > remote.manager.updatedAt(far, 'skyQuality')!, WEATHER_TIMEOUT)
+
+		const stale = remote.manager.updatedAt(far, 'skyQuality')!
+
+		// Seeing produces its first reading and joins the vector, which INDI expresses as a redefinition.
+		// That definition carries every element, including the cached sky quality, but only the sensors
+		// that answered this cycle are observations.
+		seeing = true
+		await waitUntil(() => far.starFWHM === 2.4, WEATHER_TIMEOUT)
+
+		expect(remote.manager.updatedAt(far, 'skyQuality')).toBe(stale)
+		expect(far.skyQuality).toBe(21.3)
+	}, 25000)
+
 	test('stops refreshing a sensor a later bulk snapshot omits', async () => {
 		await using server = await startAlpacaServer(ALPACA_WEATHER)
 
