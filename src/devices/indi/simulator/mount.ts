@@ -198,6 +198,8 @@ export class MountSimulator extends DeviceSimulator {
 	#slewTargetDeclinationShaft: Angle = 0
 	// Prior side to record at the exact arrival timestamp after dynamic errors have reached it.
 	#arrivalBoresightPierSide?: PierSide
+	// Mid-slew shaft sample waiting for worm and wind state to reach the same timestamp.
+	#slewMidpointSample?: { time: number; rightAscension: Angle; declination: Angle }
 	// One-shot latch preventing an aborted or completed automatic flip from immediately restarting.
 	#automaticFlipArmed = true
 
@@ -1521,10 +1523,27 @@ export class MountSimulator extends DeviceSimulator {
 			// periodic error to somewhere unrelated to where the mount actually stopped.
 			const slewRate = this.#rightAscensionMotorRate()
 			settlingSeconds = this.#advanceSlew(dtSeconds, endTime)
-			this.#advanceWormPhase(slewRate, dtSeconds - settlingSeconds)
-			// The wind blows regardless of what the mount is doing, so it is charged for the travelling
-			// part of the step here and for the rest of it below.
-			advanceWind(this.#windState, dtSeconds - settlingSeconds, this.#windConfig, this.#normal)
+			const slewSeconds = dtSeconds - settlingSeconds
+			const midpointSample = this.#slewMidpointSample
+			if (midpointSample && slewSeconds > 0) {
+				const midpointSeconds = clamp((midpointSample.time - startTime) / 1000, 0, slewSeconds)
+				this.#advanceWormPhase(slewRate, midpointSeconds)
+				advanceWind(this.#windState, midpointSeconds, this.#windConfig, this.#normal)
+				const finalRightAscension = this.#mechanical.rightAscension
+				const finalDeclination = this.#mechanical.declination
+				this.#setMechanical(midpointSample.rightAscension, midpointSample.declination, false)
+				this.#recordBoresightAt(midpointSample.time)
+				this.#setMechanical(finalRightAscension, finalDeclination, false)
+				const remainingSlewSeconds = slewSeconds - midpointSeconds
+				this.#advanceWormPhase(slewRate, remainingSlewSeconds)
+				advanceWind(this.#windState, remainingSlewSeconds, this.#windConfig, this.#normal)
+			} else {
+				this.#advanceWormPhase(slewRate, slewSeconds)
+				// The wind blows regardless of what the mount is doing, so it is charged for the travelling
+				// part of the step here and for the rest of it below.
+				advanceWind(this.#windState, slewSeconds, this.#windConfig, this.#normal)
+			}
+			this.#slewMidpointSample = undefined
 
 			// Arriving is a moment inside the step, and the trajectory has to say so. Recorded only at the
 			// end of the step, the arrival was left between two samples a whole tick apart and the history
@@ -1685,6 +1704,7 @@ export class MountSimulator extends DeviceSimulator {
 		const target = this.#slewTarget
 
 		if (!target) return dtSeconds
+		this.#slewMidpointSample = undefined
 
 		// Time left in the step after the slew ends, which is none while it is still running.
 		let remaining = 0
@@ -1732,8 +1752,7 @@ export class MountSimulator extends DeviceSimulator {
 				const shaftSampleTime = endTime - (remaining + slewSeconds / 2) * 1000
 				const shaftSampleRightAscension = initialRightAscensionShaft + rightAscensionMotorDelta * travelled * 0.5
 				const shaftSampleDeclination = initialDeclinationShaft + declinationMotorDelta * travelled * 0.5
-				this.#setMechanical(rightAscensionFromShaftPose(shaftSampleRightAscension, shaftSampleDeclination), declinationFromShaftAngle(shaftSampleDeclination), false)
-				this.#recordBoresightAt(shaftSampleTime)
+				this.#slewMidpointSample = { time: shaftSampleTime, rightAscension: rightAscensionFromShaftPose(shaftSampleRightAscension, shaftSampleDeclination), declination: declinationFromShaftAngle(shaftSampleDeclination) }
 			}
 			this.#setMechanical(target.rightAscension, target.declination)
 			// A coordinate slew selected its destination side before it began, so the old side remains valid

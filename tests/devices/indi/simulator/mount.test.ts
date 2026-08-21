@@ -595,6 +595,34 @@ describe('mount simulator meridian flip', () => {
 		}
 	})
 
+	test('records a single-step flip midpoint after advancing dynamic errors', () => {
+		const full = makeMeridianFlipMount('mount.flip.single.step.midpoint.full')
+		const stepped = makeMeridianFlipMount('mount.flip.single.step.midpoint.stepped')
+
+		try {
+			for (const { client, simulator } of [full, stepped]) {
+				client.sendSwitch({ device: simulator.name, name: 'SIMULATOR_ERROR_FEATURES', elements: { PERIODIC_ERROR: true } })
+				client.sendNumber({ device: simulator.name, name: 'MOUNT_PERIODIC_ERROR', elements: { ...NO_PERIODIC_ERROR, RA_PERIOD: 400, RA_AMPLITUDE: 600 } })
+				const lst = simulator.siderealTimeAt(simulator.utcTime)
+				simulator.syncTo(normalizeAngle(lst + hour(1)), deg(20))
+				simulator.flipTo(simulator.rightAscension, simulator.declination)
+			}
+
+			const startTime = full.simulator.utcTime
+			const midpointTime = startTime + (FAST_FLIP_DURATION * 1000) / 2
+			full.simulator.advance(FAST_FLIP_DURATION + 1e-6)
+			stepped.simulator.advance(FAST_FLIP_DURATION / 2)
+
+			const trajectory = new Float64Array(6)
+			expect(full.simulator.sampleBoresightTrajectory(startTime, startTime + FAST_FLIP_DURATION * 1000, 3, trajectory)).toBe(3)
+			expect(toArcsec(angularDistance(trajectory[2], trajectory[3], stepped.simulator.boresight.rightAscension, stepped.simulator.boresight.declination))).toBeCloseTo(0, 0)
+			expect(full.simulator.sampleBoresightTrajectory(midpointTime, midpointTime, 1, trajectory)).toBe(1)
+		} finally {
+			full.simulator.dispose()
+			stepped.simulator.dispose()
+		}
+	})
+
 	test('carries declination-shaft momentum through a pier-side flip', () => {
 		const { client, simulator } = makeMeridianFlipMount('mount.flip.declination')
 
