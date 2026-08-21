@@ -1522,9 +1522,37 @@ describe('mount simulator meridian flip', () => {
 			simulator.advance(FAST_FLIP_DURATION / 2)
 			const replacement = normalizeAngle(simulator.siderealTimeAt(simulator.utcTime) + hour(1))
 			simulator.goTo(replacement, deg(20))
-			simulator.advance(2)
+			simulator.advance(FAST_FLIP_DURATION + 2)
 			expect(simulator.pierSide).toBe('WEST')
 			expect(simulator.isSlewing).toBeFalse()
+		} finally {
+			simulator.dispose()
+		}
+	})
+
+	test('starts a replacement goto from the in-flight flip shaft pose', () => {
+		const { simulator } = makeMeridianFlipMount('mount.flip.replacement.shaft.pose')
+
+		try {
+			const lst = simulator.siderealTimeAt(simulator.utcTime)
+			simulator.syncTo(normalizeAngle(lst + hour(1)), deg(20))
+			const targetRightAscension = simulator.rightAscension
+			const targetDeclination = simulator.declination
+
+			simulator.flipTo(targetRightAscension, targetDeclination)
+			simulator.advance(FAST_FLIP_DURATION * 0.75)
+			expect(simulator.pierSide).toBe('WEST')
+
+			simulator.goTo(targetRightAscension, targetDeclination)
+			simulator.advance(deg(120) / FAST_SLEW_SPEED + 1e-6)
+			expect(simulator.isSlewing).toBeTrue()
+			expect(simulator.pierSide).toBe('WEST')
+
+			simulator.advance(deg(20) / FAST_SLEW_SPEED + 1e-6)
+			expect(simulator.isSlewing).toBeFalse()
+			expect(simulator.pierSide).toBe('WEST')
+			expect(normalizePI(simulator.rightAscension - targetRightAscension)).toBeCloseTo(0, 4)
+			expect(simulator.declination).toBeCloseTo(targetDeclination, 12)
 		} finally {
 			simulator.dispose()
 		}
