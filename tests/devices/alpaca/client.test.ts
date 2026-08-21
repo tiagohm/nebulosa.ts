@@ -829,6 +829,59 @@ describe.skipIf(isTimeConsumingTestSkipped())('observing conditions client', () 
 		expect(server.device.cloudCover).toBe(15)
 	}, 10000)
 
+	test('drops a polling cycle that resolves after a newer one', async () => {
+		await using server = await startAlpacaServer(ALPACA_WEATHER)
+
+		let release: (() => void) | undefined
+		const held = new Promise<void>((resolve) => {
+			release = resolve
+		})
+		let armed = false
+
+		// Holds one temperature poll and answers it with the reading of the moment it was issued, which by
+		// then the station has already moved past.
+		await using proxy = startAlpacaProxy(server.url, {
+			notImplemented: ['/devicestate'],
+			respond: async (path) => {
+				if (!armed || !path.endsWith('/temperature')) return undefined
+				armed = false
+				await held
+				return { value: 16.8 }
+			},
+		})
+
+		const emitted: number[] = []
+		await using remote = await startAlpacaClient(proxy.url, ALPACA_WEATHER, {
+			numberVector: (_, message) => {
+				if (message.name !== 'WEATHER_PARAMETERS') return
+				const element = message.elements.WEATHER_TEMPERATURE
+				if (element !== undefined) emitted.push(element.value)
+			},
+		})
+
+		await waitUntil(() => remote.device()?.temperature === 16.8, WEATHER_TIMEOUT)
+
+		const far = remote.device()!
+		const polls = proxy.countOf('/temperature')
+		armed = true
+		await waitUntil(() => proxy.countOf('/temperature') > polls, WEATHER_TIMEOUT)
+
+		// The station warms up while that poll is held, and the cycles that follow it publish the change.
+		server.simulator.setParameter('WEATHER_TEMPERATURE', 21.5)
+		await waitUntil(() => far.temperature === 21.5, WEATHER_TIMEOUT)
+
+		// The held cycle resolves last carrying the older reading. A later cycle already applied its
+		// results, so nothing from this one may reach the state bag or the published vector.
+		const mark = emitted.length
+		release!()
+		await Bun.sleep(1500)
+
+		const published = emitted.slice(mark)
+		expect(published.length).toBeGreaterThan(0)
+		expect(published).not.toContain(16.8)
+		expect(far.temperature).toBe(21.5)
+	}, 25000)
+
 	test('discards a sensor answer that outlived its session', async () => {
 		await using server = await startAlpacaServer(ALPACA_WEATHER)
 

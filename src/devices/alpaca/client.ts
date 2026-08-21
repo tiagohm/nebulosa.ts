@@ -2920,6 +2920,12 @@ class AlpacaApiRunner {
 	readonly #count: number[] = []
 	readonly #result: (PromiseLike<unknown> | undefined)[] = []
 	readonly #handlers = new Set<AlpacaApiRunnerHandlerAfterRun>()
+	// Ordinal of the run being fired and of the newest one whose results were applied. A tick starts its
+	// run without awaiting the previous one, so a call that outlives the polling interval can resolve
+	// after a later run already did: applying it would move the device back to an older snapshot and, for
+	// a weather station, restamp an older reading as the newest one.
+	#sequence = 0
+	#applied = 0
 
 	// Registers or replaces an endpoint under `key`. `enabled` sets initial polling; `interval` polls
 	// every Nth tick (1 = every tick).
@@ -2983,6 +2989,7 @@ class AlpacaApiRunner {
 	// One polling cycle: fires the due endpoints (respecting their intervals), then applies results and
 	// runs the handlers. Returns the promise that resolves once results are applied.
 	run(state: Record<string, ValueType>) {
+		const sequence = ++this.#sequence
 		const n = this.#keys.length
 
 		for (let i = 0; i < n; i++) {
@@ -2995,14 +3002,22 @@ class AlpacaApiRunner {
 			this.#count[i]++
 		}
 
-		return this.#handleEndpointsAfterRun(state)
+		return this.#handleEndpointsAfterRun(state, sequence)
 	}
 
 	// Awaits all in-flight endpoint results, writes each enabled endpoint's value into the state bag under
-	// its key, then invokes the after-run handlers.
-	async #handleEndpointsAfterRun(state: Record<string, ValueType>) {
+	// its key, then invokes the after-run handlers. A run that resolves after a newer one applies nothing:
+	// see #sequence.
+	async #handleEndpointsAfterRun(state: Record<string, ValueType>, sequence: number) {
 		// oxlint-disable-next-line typescript/await-thenable
 		const result = await Promise.all(this.#result)
+
+		// A later run already applied its results, so these are stale: the state bag holds fresher values
+		// for the same keys and every handler has seen them.
+		if (sequence < this.#applied) return
+
+		this.#applied = sequence
+
 		const n = result.length
 
 		for (let i = 0; i < n; i++) {
