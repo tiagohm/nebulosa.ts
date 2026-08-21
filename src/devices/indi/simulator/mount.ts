@@ -2331,9 +2331,7 @@ function rightAscensionShaftAngle(pierSide: PierSide, rightAscension: Angle) {
 // Maps a physical declination shaft angle back to the celestial declination it points at.
 // `declinationShaft` is in radians in the continuous shaft frame used during a coordinate slew.
 function declinationFromShaftAngle(declinationShaft: Angle) {
-	if (declinationShaft > PIOVERTWO) return PI - declinationShaft
-	if (declinationShaft < -PIOVERTWO) return -PI - declinationShaft
-	return declinationShaft
+	return Math.asin(Math.sin(declinationShaft))
 }
 
 // Maps a physical RA shaft angle back to sky right ascension for the declination-shaft branch.

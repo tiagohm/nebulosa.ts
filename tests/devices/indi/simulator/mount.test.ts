@@ -1741,6 +1741,32 @@ describe('mount simulator meridian flip', () => {
 		}
 	})
 
+	test('folds repeated declination shaft branches before a flip arrives', () => {
+		const { simulator } = makeMeridianFlipMount('mount.flip.repeated.dec.branch')
+
+		try {
+			const lst = simulator.siderealTimeAt(simulator.utcTime)
+			const targetRightAscension = normalizeAngle(lst - hour(1))
+			simulator.syncTo(targetRightAscension, deg(-80))
+			expect(simulator.pierSide).toBe('EAST')
+
+			simulator.flipTo(targetRightAscension, deg(85))
+			simulator.advance(FAST_FLIP_DURATION * 0.99)
+
+			expect(simulator.isSlewing).toBeTrue()
+			expect(simulator.pierSide).toBe('EAST')
+			expect(simulator.mechanical.declination).toBeCloseTo(deg(86.75), 10)
+			expect(simulator.mechanical.declination).toBeLessThan(PIOVERTWO)
+
+			simulator.advance(FAST_FLIP_DURATION * 0.02)
+			expect(simulator.isSlewing).toBeFalse()
+			expect(simulator.pierSide).toBe('WEST')
+			expect(simulator.declination).toBeCloseTo(deg(85), 12)
+		} finally {
+			simulator.dispose()
+		}
+	})
+
 	test('keeps the right ascension half-turn for a near-pole side-changing flip', () => {
 		const { simulator } = makeMeridianFlipMount('mount.flip.near.pole.half.turn')
 
