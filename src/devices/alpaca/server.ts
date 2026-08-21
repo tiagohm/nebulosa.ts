@@ -2394,9 +2394,25 @@ function weatherSensorDeclared(manager: WeatherManager | undefined, device: Weat
 // 1024 there would disable a working sensor for good. Any other sensor is implemented when it has a value.
 function weatherSensorImplemented(manager: WeatherManager | undefined, device: Weather, sensor: WeatherSensor) {
 	if (weatherSensorDeclared(manager, device, sensor)) return true
-	if (sensor === 'humidity') return device.humidity !== undefined || (device.dewPoint !== undefined && device.hasThermometer)
-	if (sensor === 'dewPoint') return device.dewPoint !== undefined || (device.humidity !== undefined && device.hasThermometer)
+	if (sensor === 'humidity') return device.humidity !== undefined || weatherPairDerivable(manager, device, 'dewPoint')
+	if (sensor === 'dewPoint') return device.dewPoint !== undefined || weatherPairDerivable(manager, device, 'humidity')
 	return weatherSensorValue(device, sensor) !== undefined
+}
+
+// Whether the missing member of the humidity/dew-point pair can be derived, now or as soon as the driver
+// reports. `source` is the other member of the pair; the derivation also needs an ambient temperature.
+//
+// A declaration counts as much as a value here. A driver that declares only its hygrometer and thermometer,
+// Busy and without readings - the Firmata weather path does exactly that until its first hardware reply -
+// derives its dew point from that first sample, so answering 1024 meanwhile would let a capability-caching
+// client disable the member for the whole connection. Until the sample arrives the member is implemented
+// and simply has no value, which is ValueNotSet.
+function weatherPairDerivable(manager: WeatherManager | undefined, device: Weather, source: 'humidity' | 'dewPoint') {
+	const reported = source === 'humidity' ? device.humidity !== undefined : device.dewPoint !== undefined
+
+	if (!reported && !weatherSensorDeclared(manager, device, source)) return false
+
+	return device.hasThermometer || weatherSensorDeclared(manager, device, 'temperature')
 }
 
 // Milliseconds since the newest reading backing `sensor`, or undefined when it was never reported. The

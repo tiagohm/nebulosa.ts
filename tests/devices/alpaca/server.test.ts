@@ -364,6 +364,39 @@ describe('observing conditions server', () => {
 		expect((await fixture.get(`${base}/dewpoint`)).ErrorNumber).toBe(AlpacaException.MethodOrPropertyNotImplemented)
 	})
 
+	test('keeps the derived dew point implemented before the pair has reported', async () => {
+		await using fixture = await startAlpacaServer(ALPACA_WEATHER)
+		const base = fixture.path
+
+		fixture.manager.delProperty(fixture.indiClient, { device: fixture.simulator.name, name: 'WEATHER_PARAMETERS' })
+
+		// A station with a hygrometer and a thermometer and no dew-point element of its own, declared Busy
+		// before its first hardware reply. The pair is what makes DewPoint exist, and it will be derivable
+		// from that first sample, so answering 1024 now would let a capability-caching client disable the
+		// member for the rest of the connection.
+		const placeholders = {
+			device: fixture.simulator.name,
+			name: 'WEATHER_PARAMETERS',
+			permission: 'ro',
+			state: 'Busy',
+			elements: { WEATHER_TEMPERATURE: { name: 'WEATHER_TEMPERATURE', label: 'Temperature (C)', value: 0, min: -55, max: 125, step: 0.01, format: '%.2f' }, WEATHER_HUMIDITY: { name: 'WEATHER_HUMIDITY', label: 'Humidity (%)', value: 0, min: 0, max: 100, step: 0.1, format: '%.1f' } },
+		} as const
+		fixture.manager.numberVector(fixture.indiClient, placeholders, 'defNumberVector')
+		fixture.manager.vector(fixture.indiClient, placeholders, 'defNumberVector')
+
+		expect((await fixture.get(`${base}/dewpoint`)).ErrorNumber).toBe(AlpacaException.ValueNotSet)
+		expect((await fixture.get(`${base}/sensordescription?SensorName=DewPoint`)).ErrorNumber).toBe(0)
+		expect((await fixture.get(`${base}/timesincelastupdate?SensorName=DewPoint`)).Value).toBe(-1)
+
+		// The first sample makes the derivation possible, and the member that was never withdrawn produces
+		// a value.
+		fixture.manager.numberVector(fixture.indiClient, { device: fixture.simulator.name, name: 'WEATHER_PARAMETERS', state: 'Ok', elements: { WEATHER_TEMPERATURE: { name: 'WEATHER_TEMPERATURE', value: 16.8 }, WEATHER_HUMIDITY: { name: 'WEATHER_HUMIDITY', value: 52 } } }, 'setNumberVector')
+
+		const dewPoint = await fixture.get(`${base}/dewpoint`)
+		expect(dewPoint.ErrorNumber).toBe(0)
+		expect(dewPoint.Value as number).toBeCloseTo(6.9, 1)
+	})
+
 	test('keeps a sensor declared by a Busy definition implemented until its first reading', async () => {
 		await using fixture = await startAlpacaServer(ALPACA_WEATHER)
 		const base = fixture.path
