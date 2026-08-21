@@ -1130,7 +1130,7 @@ export class MountSimulator extends DeviceSimulator {
 		const currentDeclinationShaftAngle = hasActiveCoordinateSlew ? this.#slewDeclinationShaft : this.pierSide === 'NEITHER' ? this.#mechanical.declination : declinationShaftAngle(this.pierSide, this.#mechanical.declination)
 		const targetDeclinationShaftAngle = targetPierSide === 'NEITHER' ? target.declination : declinationShaftAngle(targetPierSide, target.declination)
 		const deltaRightAscension = normalizePI(target.rightAscension - rightAscensionFromShaftPose(currentRightAscensionShaftAngle, currentDeclinationShaftAngle))
-		const shaftFrameTravel = retainsPoleRightAscensionFrame(target.declination, declinationFromShaftAngle(currentDeclinationShaftAngle)) ? 0 : rightAscensionShaftFrameTravel(currentDeclinationShaftAngle, targetDeclinationShaftAngle)
+		const shaftFrameTravel = retainsPoleRightAscensionFrame(targetPierSide, target.declination, declinationFromShaftAngle(currentDeclinationShaftAngle)) ? 0 : rightAscensionShaftFrameTravel(currentDeclinationShaftAngle, targetDeclinationShaftAngle)
 		const changesDeclinationShaftFrame = targetPierSide !== 'NEITHER' && targetPierSide !== this.pierSide
 		const rightAscensionTravel = Math.abs(deltaRightAscension + shaftFrameTravel)
 		const declinationTravel = changesDeclinationShaftFrame ? Math.abs(normalizePI(targetDeclinationShaftAngle - currentDeclinationShaftAngle)) : Math.abs(target.declination - this.#mechanical.declination)
@@ -1182,7 +1182,7 @@ export class MountSimulator extends DeviceSimulator {
 		this.#slewRightAscensionShaft = initialRightAscensionShaft
 		this.#slewDeclinationShaft = initialDeclinationShaft
 		const deltaRightAscension = normalizePI(target.rightAscension - currentRightAscension)
-		const shaftFrameTravel = retainsPoleRightAscensionFrame(target.declination, declinationFromShaftAngle(this.#slewDeclinationShaft)) ? 0 : rightAscensionShaftFrameTravel(this.#slewDeclinationShaft, targetDeclinationShaft)
+		const shaftFrameTravel = retainsPoleRightAscensionFrame(targetPierSide, target.declination, declinationFromShaftAngle(this.#slewDeclinationShaft)) ? 0 : rightAscensionShaftFrameTravel(this.#slewDeclinationShaft, targetDeclinationShaft)
 		this.#slewTargetRightAscensionShaft = this.#slewRightAscensionShaft + deltaRightAscension + shaftFrameTravel
 		const declinationMotorDelta = normalizeDeclinationShaftDelta(targetDeclinationShaft - this.#slewDeclinationShaft)
 		if (targetPierSide !== 'NEITHER' && targetPierSide !== this.pierSide) {
@@ -2361,12 +2361,12 @@ const POLE_RIGHT_ASCENSION_FRAME_RETENTION_DISTANCE = 7200 * ASEC2RAD
 // The value is in radians and only distinguishes a requested pole from an ordinary near-pole target.
 const POLE_TARGET_TOLERANCE = ASEC2RAD
 
-// Reports whether a pole target can keep the current RA shaft frame.
-// Both declinations are mechanical sky declinations in radians. Only pole targets already within
-// two degrees of the pole retain the current frame; farther home/park moves still travel to the neutral
-// RA shaft pose.
-function retainsPoleRightAscensionFrame(targetDeclination: Angle, currentDeclination: Angle) {
-	return Math.abs(Math.abs(targetDeclination) - PIOVERTWO) <= POLE_TARGET_TOLERANCE && Math.abs(Math.abs(currentDeclination) - PIOVERTWO) <= POLE_RIGHT_ASCENSION_FRAME_RETENTION_DISTANCE
+// Reports whether a pole-neutral target can keep the current RA shaft frame.
+// Both declinations are mechanical sky declinations in radians. Only NEITHER targets already within
+// two degrees of the pole retain the current frame; near-pole side-changing targets still travel
+// through their physical RA half-turn.
+function retainsPoleRightAscensionFrame(targetPierSide: PierSide, targetDeclination: Angle, currentDeclination: Angle) {
+	return targetPierSide === 'NEITHER' && Math.abs(Math.abs(targetDeclination) - PIOVERTWO) <= POLE_TARGET_TOLERANCE && Math.abs(Math.abs(currentDeclination) - PIOVERTWO) <= POLE_RIGHT_ASCENSION_FRAME_RETENTION_DISTANCE
 }
 
 // Returns the physical RA half-turn needed when moving between declination-shaft branches.
