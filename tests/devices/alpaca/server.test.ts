@@ -466,6 +466,25 @@ describe('observing conditions server', () => {
 		expect(dewPointAge).toBeGreaterThan(fresh)
 	})
 
+	test('keeps a silent wind direction stale while the anemometer reports', async () => {
+		await using fixture = await startAlpacaServer(ALPACA_WEATHER)
+		const base = fixture.path
+
+		await Bun.sleep(20)
+
+		const stale = (await fixture.get(`${base}/timesincelastupdate?SensorName=WindDirection`)).Value as number
+		expect(stale).toBeGreaterThan(0.01)
+
+		// The direction sensor stops reporting while the anemometer keeps sampling a moving wind. Those
+		// speeds never touch the calm sentinel, so the published direction is still the bearing measured
+		// before the outage and its age has to keep growing.
+		fixture.manager.numberVector(fixture.indiClient, { device: fixture.simulator.name, name: 'WEATHER_PARAMETERS', elements: { WEATHER_WIND_SPEED: { name: 'WEATHER_WIND_SPEED', value: 4.1 } } }, 'setNumberVector')
+
+		const after = (await fixture.get(`${base}/timesincelastupdate?SensorName=WindDirection`)).Value as number
+		expect(after).toBeGreaterThanOrEqual(stale)
+		expect((await fixture.get(`${base}/winddirection`)).Value as number).toBeCloseTo(135, 6)
+	})
+
 	test('refreshes the wind direction when the wind speed alone reports calm', async () => {
 		await using fixture = await startAlpacaServer(ALPACA_WEATHER)
 		const base = fixture.path

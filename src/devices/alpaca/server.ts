@@ -2426,8 +2426,11 @@ function weatherPairDerivable(manager: WeatherManager | undefined, device: Weath
 // one was never derived and has no age at all.
 //
 // The published wind direction is the other reading that is not a lone field: ASCOM reserves 0 for calm
-// air, so the wind speed selects between that sentinel and the measured bearing and a speed report
-// reaching or leaving zero moves the endpoint without the direction element being reported at all.
+// air, so while the anemometer reads zero the endpoint publishes that sentinel and the wind-speed reading
+// is what produced it. Any other speed leaves the measured bearing as the published value, and only the
+// direction reading dates it: a speed that merely moves between two non-zero values changes nothing there,
+// so letting it count would make a direction sensor that stopped reporting look fresh for as long as the
+// anemometer keeps answering.
 function weatherSensorElapsedSince(manager: WeatherManager | undefined, device: Weather, sensor: WeatherSensor) {
 	if (manager === undefined) return undefined
 
@@ -2435,10 +2438,10 @@ function weatherSensorElapsedSince(manager: WeatherManager | undefined, device: 
 		const at = manager.elapsedSince(device, 'windDirection')
 
 		if (at === undefined) return undefined
+		if (device.windSpeed !== 0) return at
 
-		const speed = manager.elapsedSince(device, 'windSpeed')
-
-		return speed === undefined ? at : Math.min(at, speed)
+		// Calm air: the published 0 came from the anemometer, so its reading is what dates the endpoint.
+		return manager.elapsedSince(device, 'windSpeed') ?? at
 	}
 
 	const source = sensor === 'humidity' && device.humidity === undefined ? 'dewPoint' : sensor === 'dewPoint' && device.dewPoint === undefined ? 'humidity' : undefined
