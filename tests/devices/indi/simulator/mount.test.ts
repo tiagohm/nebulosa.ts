@@ -574,6 +574,27 @@ describe('mount simulator meridian flip', () => {
 		}
 	})
 
+	test('records a same-coordinate flip path that finishes in one advance', () => {
+		const { simulator } = makeMeridianFlipMount('mount.flip.single.step.path')
+
+		try {
+			const lst = simulator.siderealTimeAt(simulator.utcTime)
+			simulator.syncTo(normalizeAngle(lst + hour(1)), deg(20))
+			const startTime = simulator.utcTime
+			const target = { rightAscension: simulator.rightAscension, declination: simulator.declination }
+
+			simulator.flipTo(target.rightAscension, target.declination)
+			simulator.advance(FAST_FLIP_DURATION + 1e-6)
+
+			expect(simulator.pierSide).toBe('EAST')
+			expect(normalizePI(simulator.rightAscension - target.rightAscension)).toBeCloseTo(0, 9)
+			expect(simulator.declination).toBeCloseTo(target.declination, 12)
+			expect(simulator.boresightPathLength(startTime, simulator.utcTime)).toBeGreaterThan(deg(100))
+		} finally {
+			simulator.dispose()
+		}
+	})
+
 	test('carries declination-shaft momentum through a pier-side flip', () => {
 		const { client, simulator } = makeMeridianFlipMount('mount.flip.declination')
 

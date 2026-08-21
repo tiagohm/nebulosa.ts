@@ -1686,6 +1686,8 @@ export class MountSimulator extends DeviceSimulator {
 		let remaining = 0
 		const speed = this.#slewSpeed
 		const maxStep = speed * dtSeconds
+		const initialRightAscensionShaft = this.#slewRightAscensionShaft
+		const initialDeclinationShaft = this.#slewDeclinationShaft
 		const rightAscensionMotorDelta = this.#slewTargetRightAscensionShaft - this.#slewRightAscensionShaft
 		const declinationMotorDelta = this.#slewTargetDeclinationShaft - this.#slewDeclinationShaft
 		const flipTravelRemaining = this.#flipTravelRemaining
@@ -1722,6 +1724,13 @@ export class MountSimulator extends DeviceSimulator {
 			// whole interval would shift its phase or swallow the first overshoot outright.
 			remaining = maxStep > 0 ? dtSeconds * (1 - span / maxStep) : 0
 			const priorPierSide = this.pierSide
+			if (span > 0 && slewSeconds > 0) {
+				const shaftSampleTime = endTime - (remaining + slewSeconds / 2) * 1000
+				const shaftSampleRightAscension = initialRightAscensionShaft + rightAscensionMotorDelta * travelled * 0.5
+				const shaftSampleDeclination = initialDeclinationShaft + declinationMotorDelta * travelled * 0.5
+				this.#setMechanical(rightAscensionFromShaftPose(shaftSampleRightAscension, shaftSampleDeclination), declinationFromShaftAngle(shaftSampleDeclination), false)
+				this.#recordBoresightAt(shaftSampleTime)
+			}
 			this.#setMechanical(target.rightAscension, target.declination)
 			// A coordinate slew selected its destination side before it began, so the old side remains valid
 			// throughout the virtual half-turn and is committed only at arrival. Home and park have no stored
