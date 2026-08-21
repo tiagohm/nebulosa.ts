@@ -200,6 +200,8 @@ export class MountSimulator extends DeviceSimulator {
 	#arrivalBoresightPierSide?: PierSide
 	// Mid-slew shaft sample waiting for worm and wind state to reach the same timestamp.
 	#slewMidpointSample?: { time: number; rightAscension: Angle; declination: Angle; pierSide: PierSide }
+	// HOME arrival waiting until any deferred midpoint sample has been recorded.
+	#pendingHomeScatter = false
 	// One-shot latch preventing an aborted or completed automatic flip from immediately restarting.
 	#automaticFlipArmed = true
 
@@ -1544,6 +1546,10 @@ export class MountSimulator extends DeviceSimulator {
 				advanceWind(this.#windState, slewSeconds, this.#windConfig, this.#normal)
 			}
 			this.#slewMidpointSample = undefined
+			if (this.#pendingHomeScatter) {
+				this.#pendingHomeScatter = false
+				this.#scatterHome()
+			}
 
 			// Arriving is a moment inside the step, and the trajectory has to say so. Recorded only at the
 			// end of the step, the arrival was left between two samples a whole tick apart and the history
@@ -1797,7 +1803,7 @@ export class MountSimulator extends DeviceSimulator {
 			// so the mount ends up believing it is at the home position while the axes sit a little off
 			// it. Every coordinate derived afterwards inherits that difference, which is where an index
 			// error comes from in the first place. Redrawn on each home, so two homings in a row disagree.
-			if (mode === 'HOME') this.#scatterHome()
+			this.#pendingHomeScatter = mode === 'HOME'
 
 			if (mode === 'PARK') {
 				this.#setParking(false, true)

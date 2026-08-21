@@ -624,6 +624,38 @@ describe('mount simulator meridian flip', () => {
 		}
 	})
 
+	test('records a single-step home midpoint before drawing home scatter', () => {
+		const full = makeMeridianFlipMount('mount.home.single.step.midpoint.full')
+		const stepped = makeMeridianFlipMount('mount.home.single.step.midpoint.stepped')
+
+		try {
+			const homeRightAscension = normalizeAngle(full.simulator.siderealTimeAt(full.simulator.utcTime) + hour(1))
+			const startRightAscension = normalizeAngle(homeRightAscension + deg(1))
+			for (const { client, simulator } of [full, stepped]) {
+				client.sendSwitch({ device: simulator.name, name: 'SIMULATOR_ERROR_FEATURES', elements: { MECHANICS: true } })
+				client.sendNumber({ device: simulator.name, name: 'MOUNT_MECHANICS', elements: { ...NO_MECHANICS, HOME_SCATTER: 600 } })
+				simulator.syncTo(homeRightAscension, deg(20))
+				simulator.setHome()
+				simulator.syncTo(startRightAscension, deg(20))
+				simulator.home()
+			}
+
+			const duration = deg(1) / FAST_SLEW_SPEED
+			const startTime = full.simulator.utcTime
+			const midpointTime = startTime + (duration * 1000) / 2
+			full.simulator.advance(duration + 1e-6)
+			stepped.simulator.advance(duration / 2)
+
+			const trajectory = new Float64Array(6)
+			expect(full.simulator.sampleBoresightTrajectory(startTime, startTime + duration * 1000, 3, trajectory)).toBe(3)
+			expect(toArcsec(angularDistance(trajectory[2], trajectory[3], stepped.simulator.boresight.rightAscension, stepped.simulator.boresight.declination))).toBeCloseTo(0, 0)
+			expect(full.simulator.sampleBoresightTrajectory(midpointTime, midpointTime, 1, trajectory)).toBe(1)
+		} finally {
+			full.simulator.dispose()
+			stepped.simulator.dispose()
+		}
+	})
+
 	test('carries declination-shaft momentum through a pier-side flip', () => {
 		const { client, simulator } = makeMeridianFlipMount('mount.flip.declination')
 
