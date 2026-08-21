@@ -125,7 +125,7 @@ describe('weather simulator', () => {
 	})
 
 	test('emits no reading while the device is disconnected', async () => {
-		const { manager, client, simulator } = setup()
+		const { handler, manager, client, simulator } = setup()
 
 		simulator.connect()
 		await waitUntil(() => manager.get(client, simulator.name)?.connected === true)
@@ -149,6 +149,14 @@ describe('weather simulator', () => {
 		expect(manager.lastUpdatedAt(weather)).toBeUndefined()
 		expect(weather.hasThermometer).toBeFalse()
 		expect(weather.humidity).toBeUndefined()
+
+		// The common controls are not deleted with the connection, so they must keep acknowledging their
+		// writes: a client that mutates one and never sees the resulting state has no way to read it back.
+		const emitted: string[] = []
+		handler.add({ setTextVector: (_, message) => void emitted.push(message.name) })
+		client.sendText({ device: simulator.name, name: 'ACTIVE_DEVICES', elements: { ACTIVE_TELESCOPE: 'Mount Simulator' } })
+
+		expect(emitted).toContain('ACTIVE_DEVICES')
 
 		// The controls kept the values, which is what the next connection publishes.
 		simulator.connect()

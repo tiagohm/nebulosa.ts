@@ -77,15 +77,19 @@ export class WeatherSimulator extends DeviceSimulator {
 		this.driverInfo.elements.DRIVER_EXEC.value = 'weather.simulator'
 	}
 
-	// Drops every emission while the device is disconnected.
+	// Drops the emissions of the disconnected properties.
 	//
-	// disconnect() deletes the simulated properties, but setParameter, refresh and the writable controls
+	// disconnect() deletes this device's own vectors, but setParameter, refresh and the writable controls
 	// stay callable, and a weather consumer applies a set vector whether or not it ever saw the matching
 	// definition: WeatherManager would repopulate every typed sensor, and restart its freshness, for a
 	// station reporting itself disconnected, on properties that no longer exist. The controls keep
 	// accepting values, so the next connect defines the vectors carrying the current readings.
+	//
+	// The gate covers only those vectors. The common ones - the connection switch, the snooped devices and
+	// the config actions - stay defined across a disconnection, so their acknowledgements must keep
+	// flowing or a client would write them and never see the result.
 	protected notify(message: SimulatorProperty) {
-		if (this.isConnected) super.notify(message)
+		if (this.isConnected || !this.properties.includes(message)) super.notify(message)
 	}
 
 	// Copies the simulator controls into the public readings and notifies. `force` re-emits the vector
