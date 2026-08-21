@@ -369,6 +369,10 @@ class FirmataVirtualDevice<D extends ListenablePeripheral<D>> {
 	#reporter?: Timer
 	// Stable callback for that interval, bound once like #listener.
 	readonly #reporterListener: () => void
+	// Peripheral sample count covered by the last periodic republish, so the interval can tell a reading
+	// that did not move from a peripheral that stopped answering. Reset on connect, because a reconnect
+	// re-arms the interval against whatever the peripheral has sampled by then.
+	#reportedSamples = 0
 	#started = false
 	#connecting = false
 	// Set when a disconnect or dispose arrives while a connect is awaiting board readiness, so the
@@ -627,6 +631,9 @@ class FirmataVirtualDevice<D extends ListenablePeripheral<D>> {
 		if (interval <= 0) return
 		if (!this.measurements.some(isAlwaysReported)) return
 
+		// Whatever the peripheral sampled while this device was disconnected belongs to no report of this
+		// connection, so the first tick republishes only if a sample arrives after it was armed.
+		this.#reportedSamples = this.peripheral.samples
 		this.#reporter = setInterval(this.#reporterListener, interval)
 		this.#reporter.unref?.()
 	}
@@ -662,7 +669,17 @@ class FirmataVirtualDevice<D extends ListenablePeripheral<D>> {
 	// Republishes the alwaysReport measurements on the report interval, whether or not the peripheral
 	// produced an event since the last one. Peripherals notify only on change, so without this a station
 	// holding a steady reading would stop advancing its consumers' freshness.
+	//
+	// A sample must still have arrived since the last republish. The interval exists to keep a steady
+	// reading's freshness advancing, not to synthesize it for a peripheral that stopped answering while
+	// the board stayed connected: a weather consumer dates its sensors from these reports, so republishing
+	// the cached fields forever would hold TimeSinceLastUpdate near zero for the whole outage.
 	#onReport() {
+		const { samples } = this.peripheral
+
+		if (samples === this.#reportedSamples) return
+
+		this.#reportedSamples = samples
 		this.#publishReadings(this.peripheral, true)
 	}
 

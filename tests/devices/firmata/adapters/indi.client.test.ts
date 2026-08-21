@@ -47,6 +47,7 @@ class FakeFirmata {
 abstract class FakeListenable<D extends ListenablePeripheral<D>> implements Peripheral {
 	started = 0
 	stopped = 0
+	samples = 0
 	readonly #listeners = new Set<PeripheralListener<D>>()
 
 	constructor(
@@ -75,7 +76,14 @@ abstract class FakeListenable<D extends ListenablePeripheral<D>> implements Peri
 	}
 
 	emit() {
+		this.samples++
 		for (const listener of this.#listeners) listener(this as never)
+	}
+
+	// A completed hardware reading that moved no value: counted as a sample without notifying anyone,
+	// which is what PeripheralBase.commit does for an unchanged read.
+	sample() {
+		this.samples++
 	}
 
 	[Symbol.dispose]() {
@@ -389,9 +397,16 @@ describe('firmata indi client', () => {
 		peripheral.emit()
 
 		// Peripherals suppress an unchanged read, so nothing more arrives through the listener. The
-		// interval is what keeps WeatherManager's freshness, and Alpaca TimeSinceLastUpdate, advancing.
+		// interval is what keeps WeatherManager's freshness, and Alpaca TimeSinceLastUpdate, advancing,
+		// for as long as the hardware really is answering: the sensor keeps sampling the same value here.
+		const sampling = setInterval(() => peripheral.sample(), 5)
 		const before = events.filter((e) => e.tag === 'setNumber' && e.name === 'WEATHER_PARAMETERS').length
-		await waitUntil(() => events.filter((e) => e.tag === 'setNumber' && e.name === 'WEATHER_PARAMETERS').length >= before + 2, 2000)
+
+		try {
+			await waitUntil(() => events.filter((e) => e.tag === 'setNumber' && e.name === 'WEATHER_PARAMETERS').length >= before + 2, 2000)
+		} finally {
+			clearInterval(sampling)
+		}
 
 		const reports = events.filter((e) => e.tag === 'setNumber' && e.name === 'WEATHER_PARAMETERS')
 		expect(reports.at(-1)!.value).toBe(21.5)
@@ -429,7 +444,40 @@ describe('firmata indi client', () => {
 		expect(settled).toHaveLength(1)
 		expect(settled[0].state).toBe('Idle')
 
-		await waitUntil(() => events.filter((e) => e.tag === 'setNumber' && e.name === 'WEATHER_PARAMETERS').length >= 3, 2000)
+		const sampling = setInterval(() => peripheral.sample(), 5)
+
+		try {
+			await waitUntil(() => events.filter((e) => e.tag === 'setNumber' && e.name === 'WEATHER_PARAMETERS').length >= 3, 2000)
+		} finally {
+			clearInterval(sampling)
+		}
+	})
+
+	test('a silent weather peripheral stops reporting', async () => {
+		const firmata = new FakeFirmata()
+		const { events, handler } = createRecorder()
+		using client = new FirmataIndiClient(firmata as never, 'Board', { handler, reportInterval: 20 })
+
+		const peripheral = new FakeThermometer('LM35', firmata as never)
+		peripheral.temperature = 21.5
+		const device = client.createPeripheral(peripheral)
+		await device.connect()
+
+		peripheral.emit()
+
+		// The sensor stops answering while the board stays connected. The interval exists to keep a steady
+		// reading's freshness advancing, not to invent it: a weather consumer dates its sensors from these
+		// reports, so republishing the cached fields would hold TimeSinceLastUpdate near zero for the whole
+		// outage and hide it.
+		await Bun.sleep(80)
+		const reports = events.filter((e) => e.tag === 'setNumber' && e.name === 'WEATHER_PARAMETERS').length
+		await Bun.sleep(80)
+
+		expect(events.filter((e) => e.tag === 'setNumber' && e.name === 'WEATHER_PARAMETERS')).toHaveLength(reports)
+
+		// It comes back on its own as soon as the hardware answers again.
+		peripheral.sample()
+		await waitUntil(() => events.filter((e) => e.tag === 'setNumber' && e.name === 'WEATHER_PARAMETERS').length > reports, 2000)
 	})
 
 	test('a non-weather device arms no report interval', async () => {
