@@ -1715,6 +1715,32 @@ describe('mount simulator meridian flip', () => {
 		}
 	})
 
+	test('folds an east-to-west equatorial flip through the nearest declination branch', () => {
+		const { simulator } = makeMeridianFlipMount('mount.flip.east.west.equator.branch')
+
+		try {
+			const lst = simulator.siderealTimeAt(simulator.utcTime)
+			const targetRightAscension = normalizeAngle(lst - hour(1))
+			simulator.syncTo(targetRightAscension, 0)
+			expect(simulator.pierSide).toBe('EAST')
+
+			simulator.flipTo(targetRightAscension, 0)
+			simulator.advance(FAST_FLIP_DURATION / 4)
+			expect(simulator.mechanical.declination).toBeCloseTo(PIOVERTWO / 2, 12)
+			simulator.advance(FAST_FLIP_DURATION / 4)
+			expect(simulator.mechanical.declination).toBeCloseTo(PIOVERTWO, 12)
+			simulator.advance(FAST_FLIP_DURATION / 4)
+			expect(simulator.mechanical.declination).toBeCloseTo(PIOVERTWO / 2, 12)
+			simulator.advance(FAST_FLIP_DURATION / 4 + 1e-6)
+
+			expect(simulator.isSlewing).toBeFalse()
+			expect(simulator.pierSide).toBe('WEST')
+			expect(simulator.declination).toBeCloseTo(0, 12)
+		} finally {
+			simulator.dispose()
+		}
+	})
+
 	test('returns home and park to the pier side on which each pose was saved', () => {
 		for (const operation of ['home', 'park'] as const) {
 			const { simulator } = makeMeridianFlipMount(`mount.flip.saved.${operation}.side`)

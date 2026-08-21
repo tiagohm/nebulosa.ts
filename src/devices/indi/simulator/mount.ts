@@ -1184,7 +1184,7 @@ export class MountSimulator extends DeviceSimulator {
 		const deltaRightAscension = normalizePI(target.rightAscension - currentRightAscension)
 		const shaftFrameTravel = retainsPoleRightAscensionFrame(target.declination, declinationFromShaftAngle(this.#slewDeclinationShaft)) ? 0 : rightAscensionShaftFrameTravel(this.#slewDeclinationShaft, targetDeclinationShaft)
 		this.#slewTargetRightAscensionShaft = this.#slewRightAscensionShaft + deltaRightAscension + shaftFrameTravel
-		const declinationMotorDelta = normalizePI(targetDeclinationShaft - this.#slewDeclinationShaft)
+		const declinationMotorDelta = normalizeDeclinationShaftDelta(targetDeclinationShaft - this.#slewDeclinationShaft)
 		if (targetPierSide !== 'NEITHER' && targetPierSide !== this.pierSide) {
 			this.#slewTargetDeclinationShaft = this.#slewDeclinationShaft + declinationMotorDelta
 			this.#flipDeclinationTravelRemaining = Math.abs(declinationMotorDelta)
@@ -2340,6 +2340,15 @@ function declinationFromShaftAngle(declinationShaft: Angle) {
 // `rightAscensionShaft` and `declinationShaft` are radians in the continuous physical shaft frame.
 function rightAscensionFromShaftPose(rightAscensionShaft: Angle, declinationShaft: Angle) {
 	return normalizeAngle(Math.abs(declinationShaft) > PIOVERTWO ? rightAscensionShaft - PI : rightAscensionShaft)
+}
+
+// Normalizes declination shaft travel to the nearest half-turn while preserving exact tie direction.
+// `delta` is a physical shaft-angle difference in radians. `normalizePI` maps both +PI and -PI to +PI,
+// but an EAST equator-to-WEST equator move needs the negative half-turn to stay inside the folded shaft
+// branch that `declinationFromShaftAngle` models continuously.
+function normalizeDeclinationShaftDelta(delta: Angle) {
+	const normalized = normalizePI(delta)
+	return normalized === PI && delta < 0 ? -PI : normalized
 }
 
 // Sets the declination band where a slew into the exact pole may keep its current RA shaft frame.
