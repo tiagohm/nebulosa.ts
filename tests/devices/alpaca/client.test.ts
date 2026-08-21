@@ -829,6 +829,54 @@ describe.skipIf(isTimeConsumingTestSkipped())('observing conditions client', () 
 		expect(server.device.cloudCover).toBe(15)
 	}, 10000)
 
+	test('discards a sensor answer that outlived its session', async () => {
+		await using server = await startAlpacaServer(ALPACA_WEATHER)
+
+		let release: (() => void) | undefined
+		const held = new Promise<void>((resolve) => {
+			release = resolve
+		})
+		let armed = false
+
+		// Holds one seeing poll until this test releases it, then answers it as unimplemented, which is
+		// the one verdict a client latches for the rest of a session.
+		await using proxy = startAlpacaProxy(server.url, {
+			notImplemented: ['/devicestate'],
+			respond: async (path) => {
+				if (!armed || !path.endsWith('/starfwhm')) return undefined
+				armed = false
+				await held
+				return { errorNumber: AlpacaException.MethodOrPropertyNotImplemented }
+			},
+		})
+
+		await using remote = await startAlpacaClient(proxy.url, ALPACA_WEATHER)
+		await waitUntil(() => remote.device()?.starFWHM === 2.4, WEATHER_TIMEOUT)
+
+		const far = remote.device()!
+		const polls = proxy.countOf('/starfwhm')
+		armed = true
+		await waitUntil(() => proxy.countOf('/starfwhm') > polls, WEATHER_TIMEOUT)
+
+		// The station drops the connection and comes back while that poll is still held. A reconnect
+		// clears the recorded capabilities, because the same device number may now be a different driver.
+		server.simulator.disconnect()
+		await waitUntil(() => far.connected === false, WEATHER_TIMEOUT)
+		server.simulator.connect()
+		await waitUntil(() => far.connected === true, WEATHER_TIMEOUT)
+		await waitUntil(() => far.starFWHM === 2.4, WEATHER_TIMEOUT)
+
+		// The held answer describes the previous session, so latching it would withdraw, for the whole new
+		// one, a sensor the reconnected station does implement.
+		release!()
+
+		const stamp = remote.manager.updatedAt(far, 'starFWHM')!
+		await waitUntil(() => remote.manager.updatedAt(far, 'starFWHM')! > stamp, WEATHER_TIMEOUT)
+
+		expect(weatherParametersOf(remote, far)!.elements).toContainKey('WEATHER_STAR_FWHM')
+		expect(far.starFWHM).toBe(2.4)
+	}, 25000)
+
 	test('withdraws the averaging write when the server refuses to configure it', async () => {
 		await using server = await startAlpacaServer(ALPACA_WEATHER)
 

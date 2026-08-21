@@ -242,12 +242,18 @@ abstract class AlpacaDevice {
 
 	#hasDeviceState: 0 | boolean = 0 // 0 = not checked yet
 
+	// Bumped on every connect, disconnect and close, so a call still in flight can tell whether the
+	// session that started it is the one still running. A request outliving its session answers about a
+	// device that is gone, or about the previous driver behind the same device number, and a reconnect
+	// leaves isConnected true again, so nothing but this counter separates the two.
+	#session = 0
+
 	// Set by close(), which is how AlpacaClient.stop() shuts a wrapper down.
 	//
 	// A poll fired before the stop still resolves after it and would run the whole after-run
 	// reconciliation for a session that is over: it republishes properties, and a subclass that
 	// rediscovers its capabilities there - the observing conditions wrapper does - starts new asynchronous
-	// work whose generation check passes, because the stop bumped that generation before the run
+	// work whose session check passes, because the stop bumped the session before the run
 	// resolved, and whose connection check passes too, because the connection switch still reads
 	// connected. A restart reuses the same INDI device names, so that late work lands on the devices the
 	// new session has just published.
@@ -270,6 +276,13 @@ abstract class AlpacaDevice {
 		this.snoopDevices.device = name
 
 		this.runner.registerHandler(this.handleEndpointsAfterRun.bind(this))
+	}
+
+	// Identifier of the current session, bumped on every connect, disconnect and close. Read it before
+	// an awaited call and compare it afterwards to tell an answer that still belongs to this session from
+	// one that outlived it.
+	protected get session() {
+		return this.#session
 	}
 
 	// True when the connection switch reports the device as connected.
@@ -383,8 +396,10 @@ abstract class AlpacaDevice {
 		this.registerEndpoint('DeviceState', () => this.api.deviceState(this.id), false)
 	}
 
-	// Clears the handshake step and cached DeviceState so the init sequence runs again.
+	// Clears the handshake step and cached DeviceState so the init sequence runs again, and starts a new
+	// session so nothing in flight from the previous one is applied.
 	protected reset() {
+		this.#session++
 		this.state.Step = 0
 		this.#hasDeviceState = 0
 		this.state.DeviceState = undefined
@@ -499,8 +514,16 @@ abstract class AlpacaDevice {
 	// keeps an optional member from being re-requested on every tick for the life of the connection.
 	// Nothing else is definitive: a timeout, a 5xx, or ValueNotSet leaves the endpoint polling so it can
 	// recover on its own.
+	//
+	// A tick starts its run without awaiting the previous one, so a slow call can outlive the session that
+	// started it. Its answer is dropped: the value describes a device that is gone, and the unimplemented
+	// verdict is the damaging half, because a reconnect clears the recorded set and this one would
+	// silently withdraw, for the whole new session, a member the reconnected device does implement.
 	async #read<T>(key: string, call: () => Promise<AlpacaRequestResult<T>>) {
+		const session = this.#session
 		const result = await call()
+
+		if (session !== this.#session) return undefined
 
 		if (result.ok) return result.value
 
@@ -566,6 +589,7 @@ abstract class AlpacaDevice {
 	// Shuts the wrapper down. AlpacaClient.stop() calls it instead of a disconnect, so it is the only
 	// hook that ends a session that way. Subclasses that hold session state override it and call super.
 	close() {
+		this.#session++
 		this.#closed = true
 	}
 }
@@ -2351,11 +2375,6 @@ class AlpacaObservingConditions extends AlpacaDevice {
 	// reading joins WEATHER_PARAMETERS on a later tick and needs its label then.
 	#labels?: ReadonlyMap<string, string>
 	#defining = false
-	// Bumped on every connect and disconnect. #defineParameters awaits the sensor descriptions and the two
-	// command handlers await their PUT, and a disconnect followed by a reconnect inside any of those
-	// windows leaves isConnected true again, so the generation is what tells a resolved-too-late run that
-	// its session is over.
-	#generation = 0
 
 	readonly #averagePeriod = makeNumberVector('', 'WEATHER_AVERAGE_PERIOD', 'Average Period', MAIN_CONTROL, 'rw', ['AVERAGE_PERIOD', 'Period (h)', 0, 0, 24, 0.1, '%.2f'])
 	readonly #refresh = makeSwitchVector('', 'WEATHER_REFRESH', 'Refresh', MAIN_CONTROL, 'AtMostOne', 'rw', ['REFRESH', 'Refresh', false])
@@ -2387,7 +2406,7 @@ class AlpacaObservingConditions extends AlpacaDevice {
 	//
 	// SensorDescription is used only for the element label, never as a capability probe: drivers that
 	// return an empty string instead of an error would silently drop a working sensor.
-	async #defineParameters(generation: number) {
+	async #defineParameters(session: number) {
 		const supported = WEATHER_SENSORS.filter((e) => !this.unsupported.has(e.ascom))
 		const unsupported = WEATHER_SENSORS.filter((e) => this.unsupported.has(e.ascom)).map((e) => e.ascom)
 
@@ -2397,7 +2416,7 @@ class AlpacaObservingConditions extends AlpacaDevice {
 
 		// The device may have gone away, or gone away and come back, while the descriptions were in
 		// flight. Either way this run belongs to a finished session and must not define anything.
-		if (generation !== this.#generation || !this.isConnected) return
+		if (session !== this.session || !this.isConnected) return
 
 		const map = new Map<string, string>()
 
@@ -2569,7 +2588,7 @@ class AlpacaObservingConditions extends AlpacaDevice {
 	// at all, and an Alpaca server layered back over this client would otherwise keep answering success
 	// to writes whose every forwarded PUT is refused.
 	async #handleAveragePeriod(hours: number) {
-		const generation = this.#generation
+		const session = this.session
 
 		this.#averagePeriod.state = 'Busy'
 		this.sendSetProperty(this.#averagePeriod)
@@ -2580,7 +2599,7 @@ class AlpacaObservingConditions extends AlpacaDevice {
 		// gone. Emitting it would either set a property that is currently deleted or stamp the outcome of
 		// the old session onto the one a reconnect just redefined. #resetCommands has already released the
 		// vector, so there is nothing left to undo here.
-		if (generation !== this.#generation) return
+		if (session !== this.session) return
 
 		if (!result.ok && result.errorNumber === AlpacaException.MethodOrPropertyNotImplemented) {
 			this.#averagePeriod.permission = 'ro'
@@ -2596,7 +2615,7 @@ class AlpacaObservingConditions extends AlpacaDevice {
 	// Forwards a refresh request. A server without Refresh withdraws the switch, so the WeatherManager
 	// correctly reports that the device offers no explicit refresh.
 	async #handleRefresh() {
-		const generation = this.#generation
+		const session = this.session
 
 		this.#refresh.state = 'Busy'
 		this.sendSetProperty(this.#refresh)
@@ -2605,7 +2624,7 @@ class AlpacaObservingConditions extends AlpacaDevice {
 
 		// See #handleAveragePeriod. An unimplemented answer is the damaging one: it deletes the property,
 		// which for a stale run would withdraw the refresh control the new session just defined.
-		if (generation !== this.#generation) return
+		if (session !== this.session) return
 
 		this.#refresh.elements.REFRESH.value = false
 
@@ -2637,10 +2656,10 @@ class AlpacaObservingConditions extends AlpacaDevice {
 		for (const name of WEATHER_ASCOM_NAMES) state[name] = undefined
 	}
 
-	// Ends the current session: an in-flight description fetch or command resolves into a generation that
-	// no longer matches and is discarded, and the next session rediscovers and redefines everything.
+	// Releases the session state. The caller has already started a new session, so an in-flight
+	// description fetch or command resolves into a session that no longer matches and is discarded, and
+	// the next one rediscovers and redefines everything.
 	#invalidate() {
-		this.#generation++
 		this.#parameters = undefined
 		this.#labels = undefined
 		this.#defining = false
@@ -2659,10 +2678,9 @@ class AlpacaObservingConditions extends AlpacaDevice {
 	}
 
 	// The client shuts its wrappers down through close(), not through a disconnect, so this is the only
-	// hook that runs on AlpacaClient.stop(). Without it the generation would never be bumped and
-	// isConnected would stay true, letting a description fetch or a command that resolves after a stop
-	// define, set, or delete properties on behalf of a session that is over - including into the one a
-	// restart has since established.
+	// hook that releases the session state on AlpacaClient.stop(). Without it a description fetch or a
+	// command resolving after a stop would define, set, or delete properties on behalf of a session that
+	// is over - including into the one a restart has since established.
 	close() {
 		super.close()
 		this.#invalidate()
@@ -2684,7 +2702,7 @@ class AlpacaObservingConditions extends AlpacaDevice {
 		if (this.#labels === undefined) {
 			if (!this.#defining) {
 				this.#defining = true
-				void this.#defineParameters(this.#generation)
+				void this.#defineParameters(this.session)
 			}
 
 			return false
