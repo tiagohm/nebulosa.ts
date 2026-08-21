@@ -829,6 +829,38 @@ describe.skipIf(isTimeConsumingTestSkipped())('observing conditions client', () 
 		expect(server.device.cloudCover).toBe(15)
 	}, 10000)
 
+	test('withdraws the averaging write when the server refuses to configure it', async () => {
+		await using server = await startAlpacaServer(ALPACA_WEATHER)
+
+		// A station that publishes its averaging window and answers the setter as unimplemented, which the
+		// INDI simulator behind the server cannot express on its own.
+		await using proxy = startAlpacaProxy(server.url, {
+			respond: (path, _, method) => (method === 'PUT' && path.endsWith('/averageperiod') ? { errorNumber: AlpacaException.MethodOrPropertyNotImplemented } : undefined),
+		})
+
+		await using remote = await startAlpacaClient(proxy.url, ALPACA_WEATHER)
+		await waitUntil(() => remote.device()?.cloudCover === 15, WEATHER_TIMEOUT)
+
+		const far = remote.device()!
+		const permission = () => {
+			const property = remote.manager.properties.get(far)?.WEATHER_AVERAGE_PERIOD
+			return property?.type === 'NUMBER' ? property.permission : undefined
+		}
+
+		await waitUntil(() => permission() !== undefined, WEATHER_TIMEOUT)
+		expect(permission()).toBe('rw')
+		expect(remote.manager.setAveragePeriod(far, 2)).toBeTrue()
+
+		// The refusal is a capability, not a rejected value: the write has to be withdrawn, or every later
+		// request is accepted downstream while every forwarded PUT keeps failing.
+		await waitUntil(() => permission() === 'ro', WEATHER_TIMEOUT)
+
+		expect(remote.manager.setAveragePeriod(far, 2)).toBeFalse()
+
+		// The reading itself survives, because only the setter is unimplemented.
+		expect(far.averagePeriod).toBe(0)
+	}, 15000)
+
 	test('keeps the far end fresh while the weather holds still', async () => {
 		await using server = await startAlpacaServer(ALPACA_WEATHER)
 		await using remote = await startAlpacaClient(server.url, ALPACA_WEATHER)

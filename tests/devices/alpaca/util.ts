@@ -275,8 +275,9 @@ export interface AlpacaTestProxyOptions {
 	readonly notImplemented?: readonly string[]
 	// Answers a request instead of forwarding it, so a suite can script a driver the simulator cannot
 	// produce: an asymmetric capability, a value outside the server's own conventions, or a transient
-	// fault. Returning undefined forwards the request unchanged.
-	readonly respond?: (path: string, url: URL) => AlpacaTestProxyResponse | undefined
+	// fault. `method` tells a read from a write on the same path, which is what an Alpaca member with a
+	// getter and a setter needs. Returning undefined forwards the request unchanged.
+	readonly respond?: (path: string, url: URL, method: string) => AlpacaTestProxyResponse | undefined
 	// Milliseconds to hold a request before answering it, so a suite can keep one call in flight while it
 	// drives a disconnect, a stop, or a reconnect. Returning undefined or 0 answers immediately.
 	readonly delay?: (path: string, url: URL) => number | undefined
@@ -312,7 +313,7 @@ export function startAlpacaProxy(target: string, options?: AlpacaTestProxyOption
 				return Response.json({ Value: null, ClientTransactionID: 0, ServerTransactionID: 0, ErrorNumber: AlpacaException.MethodOrPropertyNotImplemented, ErrorMessage: `${url.pathname} is not implemented` })
 			}
 
-			const scripted = options?.respond?.(url.pathname, url)
+			const scripted = options?.respond?.(url.pathname, url, req.method)
 
 			if (scripted !== undefined) {
 				if ('status' in scripted) return new Response('scripted failure', { status: scripted.status })

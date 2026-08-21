@@ -2562,6 +2562,12 @@ class AlpacaObservingConditions extends AlpacaDevice {
 
 	// Forwards an averaging-window change. The endpoint keeps polling, so the effective value returns on
 	// the next tick whether or not the server accepted the request.
+	//
+	// A station may publish the window and still refuse to configure it. That refusal is a capability,
+	// unlike a rejected value, so the property is redefined read-only rather than left writable and
+	// Alert: a consumer such as WeatherManager decides from the permission whether averaging can be set
+	// at all, and an Alpaca server layered back over this client would otherwise keep answering success
+	// to writes whose every forwarded PUT is refused.
 	async #handleAveragePeriod(hours: number) {
 		const generation = this.#generation
 
@@ -2575,6 +2581,13 @@ class AlpacaObservingConditions extends AlpacaDevice {
 		// the old session onto the one a reconnect just redefined. #resetCommands has already released the
 		// vector, so there is nothing left to undo here.
 		if (generation !== this.#generation) return
+
+		if (!result.ok && result.errorNumber === AlpacaException.MethodOrPropertyNotImplemented) {
+			this.#averagePeriod.permission = 'ro'
+			this.#averagePeriod.state = 'Idle'
+			this.sendDefProperty(this.#averagePeriod)
+			return
+		}
 
 		this.#averagePeriod.state = result.ok ? 'Ok' : 'Alert'
 		this.sendSetProperty(this.#averagePeriod)
@@ -2610,6 +2623,9 @@ class AlpacaObservingConditions extends AlpacaDevice {
 	// momentary switch, on the definition the next session publishes.
 	#resetCommands() {
 		this.#averagePeriod.state = 'Idle'
+		// The vectors outlive the session, so a window withdrawn by one server must not stay read-only for
+		// the next one: a reconnect may reach a different driver behind the same device number.
+		this.#averagePeriod.permission = 'rw'
 		this.#refresh.state = 'Idle'
 		this.#refresh.elements.REFRESH.value = false
 	}
