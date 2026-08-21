@@ -242,6 +242,17 @@ abstract class AlpacaDevice {
 
 	#hasDeviceState: 0 | boolean = 0 // 0 = not checked yet
 
+	// Set by close(), which is how AlpacaClient.stop() shuts a wrapper down.
+	//
+	// A poll fired before the stop still resolves after it and would run the whole after-run
+	// reconciliation for a session that is over: it republishes properties, and a subclass that
+	// rediscovers its capabilities there - the observing conditions wrapper does - starts new asynchronous
+	// work whose generation check passes, because the stop bumped that generation before the run
+	// resolved, and whose connection check passes too, because the connection switch still reads
+	// connected. A restart reuses the same INDI device names, so that late work lands on the devices the
+	// new session has just published.
+	#closed = false
+
 	constructor(
 		readonly client: AlpacaClient,
 		readonly device: AlpacaConfiguredDevice,
@@ -395,8 +406,10 @@ abstract class AlpacaDevice {
 		this.sendDelProperty(...this.properties)
 	}
 
-	// One polling tick: runs the enabled endpoints, which then invoke handleEndpointsAfterRun.
+	// One polling tick: runs the enabled endpoints, which then invoke handleEndpointsAfterRun. A closed
+	// wrapper polls nothing: its session is over.
 	update() {
+		if (this.#closed) return
 		void this.runner.run(this.state as never)
 	}
 
@@ -408,6 +421,10 @@ abstract class AlpacaDevice {
 	// probes DeviceState support, step 1 enables the device endpoints), and spreads bulk DeviceState into
 	// the state bag. Returns true once steady-state polling should proceed for this tick.
 	protected handleEndpointsAfterRun() {
+		// The run that produced these results was started before close(); nothing it carries describes a
+		// live session, so no property is published and no discovery is started from it.
+		if (this.#closed) return false
+
 		const { Connected, Step } = this.state
 
 		if (Connected === undefined) {
@@ -546,8 +563,11 @@ abstract class AlpacaDevice {
 		this.sendSetProperty(this.connection)
 	}
 
-	// Releases device-specific resources on shutdown; the base has none.
-	close() {}
+	// Shuts the wrapper down. AlpacaClient.stop() calls it instead of a disconnect, so it is the only
+	// hook that ends a session that way. Subclasses that hold session state override it and call super.
+	close() {
+		this.#closed = true
+	}
 }
 
 // https://github.com/indilib/indi/blob/master/libs/indibase/indiccd.cpp
@@ -1509,8 +1529,6 @@ class AlpacaTelescope extends AlpacaDevice {
 				break
 		}
 	}
-
-	close() {}
 
 	// Slews or syncs to the requested equatorial target (RA hours, Dec degrees). Converts JNOW input to
 	// J2000 when the mount reports a JNOW equatorial system; the slew/sync choice follows ON_COORD_SET.
@@ -2630,6 +2648,7 @@ class AlpacaObservingConditions extends AlpacaDevice {
 	// define, set, or delete properties on behalf of a session that is over - including into the one a
 	// restart has since established.
 	close() {
+		super.close()
 		this.#invalidate()
 	}
 

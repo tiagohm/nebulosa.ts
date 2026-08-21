@@ -828,6 +828,37 @@ describe.skipIf(isTimeConsumingTestSkipped())('observing conditions client', () 
 		expect(emitted).not.toContain('defNumberVector:WEATHER_PARAMETERS')
 	}, 15000)
 
+	test('a stopped client starts no discovery from a poll still in flight', async () => {
+		await using server = await startAlpacaServer(ALPACA_WEATHER)
+
+		let slow = false
+
+		// The bulk snapshot is held so a poll is unmistakably in flight when the client stops.
+		await using proxy = startAlpacaProxy(server.url, { delay: (path) => (slow && path.endsWith('/devicestate') ? 800 : undefined) })
+
+		const emitted: string[] = []
+		await using remote = await startAlpacaClient(proxy.url, ALPACA_WEATHER, { numberVector: (_, message, tag) => emitted.push(`${tag}:${message.name}`) })
+
+		await waitUntil(() => remote.device()?.cloudCover === 15, WEATHER_TIMEOUT)
+
+		slow = true
+		const polls = proxy.countOf('/devicestate')
+		await waitUntil(() => proxy.countOf('/devicestate') > polls, WEATHER_TIMEOUT)
+
+		// The run resolves after the stop. Its results describe a session that is over, so it must neither
+		// republish anything nor rediscover the sensors: the stop cleared the labels and bumped the
+		// generation, so a discovery started here would pass its own generation check and redefine the
+		// vector - onto the device a restart on the same URL has since published under the same name.
+		const descriptions = proxy.countOf('/sensordescription')
+		remote.client.stop()
+		emitted.length = 0
+
+		await Bun.sleep(1500)
+
+		expect(emitted).toBeEmpty()
+		expect(proxy.countOf('/sensordescription')).toBe(descriptions)
+	}, 20000)
+
 	test('never turns a weather station into a safety monitor', async () => {
 		await using server = await startAlpacaServer(ALPACA_WEATHER)
 		await using remote = await startAlpacaClient(server.url, ALPACA_WEATHER)
