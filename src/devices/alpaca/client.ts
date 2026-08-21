@@ -2680,10 +2680,46 @@ class AlpacaObservingConditions extends AlpacaDevice {
 
 		if (this.#parameters === undefined) return false
 
+		// Only in bulk mode: the per-sensor endpoints are the source of the readings otherwise, and are
+		// already polled and disabled by their own answers.
+		if (this.state.DeviceState !== undefined) this.#probeOmittedSensors()
+
 		this.#applyAveragePeriod()
 		this.#applyParameters()
 
 		return true
+	}
+
+	// Asks the server itself about a published sensor its bulk snapshots have stopped carrying.
+	//
+	// An omission is ambiguous on its own: the server may be unable to produce that reading this cycle -
+	// this repository's own omits a derived DewPoint at 0 % relative humidity - or it may have stopped
+	// implementing the sensor, which only MethodOrPropertyNotImplemented states. While bulk state is
+	// supported the per-sensor endpoints are disabled, so nothing would ever ask, and the withdrawn sensor
+	// would keep its element, its last value and its capability on the far side for the rest of the
+	// session.
+	//
+	// The endpoint is therefore polled again for as long as the omission lasts, and disabled once a
+	// snapshot carries the sensor again. A 1024 answer records it as unsupported, which #publishParameters
+	// turns into a redefinition without it; any other answer changes nothing, because the snapshot remains
+	// the source of every reading - a value read by a probe is dropped with the rest before the next
+	// merge.
+	#probeOmittedSensors() {
+		const parameters = this.#parameters!
+		const state = this.state as unknown as Record<string, number | undefined>
+
+		for (const sensor of WEATHER_SENSORS) {
+			if (parameters.elements[sensor.indi] === undefined) continue
+			if (this.unsupported.has(sensor.ascom)) continue
+
+			const enabled = this.runner.isEndpointEnabled(sensor.ascom)
+
+			if (state[sensor.ascom] === undefined) {
+				if (!enabled) this.enableEndpoints(sensor.ascom)
+			} else if (enabled) {
+				this.disableEndpoints(sensor.ascom)
+			}
+		}
 	}
 
 	sendNumber(vector: NewNumberVector) {

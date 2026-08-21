@@ -739,6 +739,44 @@ describe.skipIf(isTimeConsumingTestSkipped())('observing conditions client', () 
 		await waitUntil(() => remote.manager.updatedAt(far, 'starFWHM')! > stale, WEATHER_TIMEOUT)
 	}, 15000)
 
+	test('withdraws a sensor the bulk snapshots stop carrying for good', async () => {
+		await using server = await startAlpacaServer(ALPACA_WEATHER)
+		await using remote = await startAlpacaClient(server.url, ALPACA_WEATHER)
+
+		await waitUntil(() => remote.device()?.starFWHM === 2.4, WEATHER_TIMEOUT)
+
+		const far = remote.device()!
+		expect(weatherParametersOf(remote, far)!.elements).toContainKey('WEATHER_STAR_FWHM')
+
+		// The driver drops the parameter, so the server stops implementing the sensor: it leaves every
+		// bulk snapshot and its own endpoint starts answering MethodOrPropertyNotImplemented. Bulk state
+		// alone cannot tell that apart from a reading the server merely cannot produce this cycle, so the
+		// omission has to be probed before the capability is withdrawn.
+		withdrawWeatherSensors(server, 'WEATHER_STAR_FWHM')
+
+		await waitUntil(() => far.starFWHM === undefined, WEATHER_TIMEOUT)
+
+		expect(weatherParametersOf(remote, far)!.elements).not.toContainKey('WEATHER_STAR_FWHM')
+		expect(remote.manager.updatedAt(far, 'starFWHM')).toBeUndefined()
+
+		// A transient omission must not withdraw anything: the dew point is derived, so it leaves the
+		// snapshots at 0 % relative humidity while its own endpoint keeps answering, with ValueNotSet
+		// rather than "not implemented". Its freshness stops advancing, and nothing else changes.
+		server.device.dewPoint = undefined
+		server.device.humidity = 0
+
+		const stale = remote.manager.updatedAt(far, 'dewPoint')!
+		await waitUntil(() => remote.manager.updatedAt(far, 'temperature')! > stale, WEATHER_TIMEOUT)
+
+		expect(remote.manager.updatedAt(far, 'dewPoint')).toBe(stale)
+		expect(weatherParametersOf(remote, far)!.elements).toContainKey('WEATHER_DEW_POINT')
+
+		// It recovers by itself once the snapshots carry it again.
+		server.device.humidity = 52
+		await waitUntil(() => remote.manager.updatedAt(far, 'dewPoint')! > stale, WEATHER_TIMEOUT)
+		expect(far.dewPoint).toBeCloseTo(6.9, 1)
+	}, 30000)
+
 	test('withdraws a sensor whose endpoint starts answering as unimplemented', async () => {
 		await using server = await startAlpacaServer(ALPACA_WEATHER)
 
