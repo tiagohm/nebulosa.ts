@@ -2995,19 +2995,30 @@ export class WeatherManager extends DeviceManager<Weather> {
 	}
 
 	// Epoch milliseconds of the most recent report of any sensor, or undefined when none was reported.
+	//
+	// Which report is the most recent is decided on the monotonic clock and only its wall-clock stamp is
+	// returned: after the system clock is corrected backward, a sensor reported before the correction
+	// carries the numerically larger epoch, and picking that one would answer an instant older than the
+	// reading that just arrived - possibly one still in the future.
 	lastUpdatedAt(device: Weather) {
 		const stamps = this.#updatedAt.get(device)
 
 		if (stamps === undefined) return undefined
 
-		let last = 0
+		let last: number | undefined
+		let at: number | undefined
 
 		for (const sensor of WEATHER_SENSORS) {
-			const at = stamps.at[sensor.field]
-			if (at > last) last = at
+			const { field } = sensor
+			const elapsed = stamps.elapsed[field]
+
+			if (stamps.at[field] && (last === undefined || elapsed > last)) {
+				last = elapsed
+				at = stamps.at[field]
+			}
 		}
 
-		return last ? last : undefined
+		return at
 	}
 
 	// Milliseconds since the last report of `sensor`, or undefined when it was never reported. Measured

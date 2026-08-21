@@ -960,6 +960,34 @@ describe('WeatherManager', () => {
 		expect(manager.lastElapsedSince(weather)!).toBeGreaterThanOrEqual(5)
 	})
 
+	test('dates the newest report by the monotonic clock', async () => {
+		const manager = new WeatherManager()
+		const weather = weatherDevice(manager)
+
+		manager.numberVector(recordingClient, weatherParameters(weather.name, { WEATHER_TEMPERATURE: defNumber('WEATHER_TEMPERATURE', 10, -60, 60), WEATHER_HUMIDITY: defNumber('WEATHER_HUMIDITY', 50, 0, 100) }), 'defNumberVector')
+
+		const first = manager.updatedAt(weather, 'temperature')!
+		expect(manager.lastUpdatedAt(weather)).toBe(first)
+
+		await Bun.sleep(5)
+
+		// The system clock is corrected an hour backward and only the hygrometer reports afterwards: the
+		// temperature keeps the numerically larger pre-correction epoch even though it is the older
+		// reading.
+		const now = Date.now
+
+		try {
+			Date.now = () => now() - 3_600_000
+			manager.numberVector(recordingClient, weatherParameters(weather.name, { WEATHER_HUMIDITY: defNumber('WEATHER_HUMIDITY', 51, 0, 100) }), 'setNumberVector')
+		} finally {
+			Date.now = now
+		}
+
+		const humidity = manager.updatedAt(weather, 'humidity')!
+		expect(humidity).toBeLessThan(first)
+		expect(manager.lastUpdatedAt(weather)).toBe(humidity)
+	})
+
 	test('accepts a partial parameter vector from an auxiliary sensor board', () => {
 		const manager = new WeatherManager()
 		const weather = weatherDevice(manager, 'Sensor', DeviceInterfaceType.WEATHER | DeviceInterfaceType.AUXILIARY)
