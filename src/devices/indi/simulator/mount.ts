@@ -1184,12 +1184,12 @@ export class MountSimulator extends DeviceSimulator {
 		const deltaRightAscension = normalizePI(target.rightAscension - currentRightAscension)
 		const shaftFrameTravel = retainsPoleRightAscensionFrame(target.declination, declinationFromShaftAngle(this.#slewDeclinationShaft)) ? 0 : rightAscensionShaftFrameTravel(this.#slewDeclinationShaft, targetDeclinationShaft)
 		this.#slewTargetRightAscensionShaft = this.#slewRightAscensionShaft + deltaRightAscension + shaftFrameTravel
+		const declinationMotorDelta = normalizePI(targetDeclinationShaft - this.#slewDeclinationShaft)
 		if (targetPierSide !== 'NEITHER' && targetPierSide !== this.pierSide) {
-			const declinationMotorDelta = normalizePI(targetDeclinationShaft - this.#slewDeclinationShaft)
 			this.#slewTargetDeclinationShaft = this.#slewDeclinationShaft + declinationMotorDelta
 			this.#flipDeclinationTravelRemaining = Math.abs(declinationMotorDelta)
 		} else {
-			this.#slewTargetDeclinationShaft = targetDeclinationShaft
+			this.#slewTargetDeclinationShaft = this.#slewDeclinationShaft + declinationMotorDelta
 		}
 		if (automatic) this.#automaticFlipArmed = false
 		this.#setSlewing(true)
