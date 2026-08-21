@@ -124,6 +124,44 @@ describe('weather simulator', () => {
 		client[Symbol.dispose]()
 	})
 
+	test('emits no reading while the device is disconnected', async () => {
+		const { manager, client, simulator } = setup()
+
+		simulator.connect()
+		await waitUntil(() => manager.get(client, simulator.name)?.connected === true)
+
+		const weather = manager.get(client, simulator.name)!
+		expect(weather.temperature).toBe(16.8)
+
+		simulator.disconnect()
+		await waitUntil(() => manager.get(client, simulator.name)?.connected === false)
+
+		expect(manager.properties.get(weather)?.WEATHER_PARAMETERS).toBeUndefined()
+		expect(manager.lastUpdatedAt(weather)).toBeUndefined()
+
+		// The properties went away with the connection. A forced refresh or a control write must not
+		// repopulate the sensors and their freshness for a station reporting itself disconnected.
+		simulator.setParameter('WEATHER_TEMPERATURE', 21.5)
+		simulator.refresh()
+		client.sendNumber({ device: simulator.name, name: 'SIMULATOR_WEATHER', elements: { WEATHER_HUMIDITY: 61 } })
+
+		expect(manager.properties.get(weather)?.WEATHER_PARAMETERS).toBeUndefined()
+		expect(manager.lastUpdatedAt(weather)).toBeUndefined()
+		expect(weather.hasThermometer).toBeFalse()
+		expect(weather.humidity).toBeUndefined()
+
+		// The controls kept the values, which is what the next connection publishes.
+		simulator.connect()
+		await waitUntil(() => manager.get(client, simulator.name)?.connected === true)
+
+		expect(weather.temperature).toBe(21.5)
+		expect(weather.humidity).toBe(61)
+		expect(manager.lastUpdatedAt(weather)!).toBeGreaterThan(0)
+
+		simulator.dispose()
+		client[Symbol.dispose]()
+	})
+
 	test('stores the update period without scheduling a timer', async () => {
 		const { manager, client, simulator } = setup()
 
