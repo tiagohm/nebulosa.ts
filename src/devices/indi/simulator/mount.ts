@@ -1123,8 +1123,9 @@ export class MountSimulator extends DeviceSimulator {
 	// frames represented by the current and target declination branches, so pole crossings and side
 	// changes include the virtual PI-radian half-turn that the live slew state will perform.
 	#coordinateSlewDuration(target: EquatorialCoordinate, targetPierSide: PierSide) {
-		const currentRightAscensionShaftAngle = rightAscensionShaftAngle(this.pierSide, this.#mechanical.rightAscension)
-		const currentDeclinationShaftAngle = this.pierSide === 'NEITHER' ? this.#mechanical.declination : declinationShaftAngle(this.pierSide, this.#mechanical.declination)
+		const hasActiveCoordinateSlew = this.#slewTarget !== undefined
+		const currentRightAscensionShaftAngle = hasActiveCoordinateSlew ? this.#slewRightAscensionShaft : rightAscensionShaftAngle(this.pierSide, this.#mechanical.rightAscension)
+		const currentDeclinationShaftAngle = hasActiveCoordinateSlew ? this.#slewDeclinationShaft : this.pierSide === 'NEITHER' ? this.#mechanical.declination : declinationShaftAngle(this.pierSide, this.#mechanical.declination)
 		const targetDeclinationShaftAngle = targetPierSide === 'NEITHER' ? target.declination : declinationShaftAngle(targetPierSide, target.declination)
 		const deltaRightAscension = normalizePI(target.rightAscension - rightAscensionFromShaftPose(currentRightAscensionShaftAngle, currentDeclinationShaftAngle))
 		const shaftFrameTravel = retainsPoleRightAscensionFrame(target.declination, declinationFromShaftAngle(currentDeclinationShaftAngle)) ? 0 : rightAscensionShaftFrameTravel(currentDeclinationShaftAngle, targetDeclinationShaftAngle)
