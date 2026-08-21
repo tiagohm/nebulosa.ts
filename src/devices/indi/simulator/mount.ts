@@ -1123,11 +1123,12 @@ export class MountSimulator extends DeviceSimulator {
 	// PI-radian RA half-turn and maps declination through the destination shaft frame, exactly as the live
 	// slew state initialized by `#startCoordinateSlew` does. Leaving a pole-neutral pose for EAST also
 	// enters the EAST RA shaft frame, because that physical pose represents the same sky RA with a PI
-	// offset.
+	// offset. Returning from EAST to a pole-neutral pose leaves that mirrored RA shaft frame and
+	// therefore subtracts the same PI offset.
 	#coordinateSlewDuration(target: EquatorialCoordinate, targetPierSide: PierSide) {
 		const deltaRightAscension = normalizePI(target.rightAscension - this.#mechanical.rightAscension)
 		const changesPierSide = this.pierSide !== 'NEITHER' && targetPierSide !== 'NEITHER' && targetPierSide !== this.pierSide
-		const changesRightAscensionShaftFrame = changesPierSide || (this.pierSide === 'NEITHER' && targetPierSide === 'EAST')
+		const changesRightAscensionShaftFrame = changesPierSide || (this.pierSide === 'NEITHER' && targetPierSide === 'EAST') || (this.pierSide === 'EAST' && targetPierSide === 'NEITHER')
 		const changesDeclinationShaftFrame = targetPierSide !== 'NEITHER' && targetPierSide !== this.pierSide
 		const flipDirection = targetPierSide === 'EAST' ? 1 : -1
 		const rightAscensionTravel = Math.abs(deltaRightAscension + (changesRightAscensionShaftFrame ? flipDirection * PI : 0))
@@ -1160,8 +1161,9 @@ export class MountSimulator extends DeviceSimulator {
 	// virtual PI-radian half-turn is added to the physical RA-axis travel while the declination shaft
 	// follows the equivalent orientation on the destination side. A pole-neutral mount has no committed
 	// side, but leaving it for EAST still initializes the destination pose in the EAST RA and declination
-	// shaft frames. The in-flight mechanical coordinate is derived from the interpolated physical shaft
-	// pose, so camera trajectories see the tube sweep away from and back to a same-coordinate flip target.
+	// shaft frames. Returning from EAST to a pole-neutral target leaves the EAST RA shaft frame the same
+	// way. The in-flight mechanical coordinate is derived from the interpolated physical shaft pose, so
+	// camera trajectories see the tube sweep away from and back to a same-coordinate flip target.
 	#startCoordinateSlew(mode: SlewMode, target: EquatorialCoordinate, targetPierSide: PierSide, changesPierSide: boolean, automatic: boolean) {
 		this.#clearManualMotion()
 		this.#clearPulseGuide()
@@ -1175,7 +1177,7 @@ export class MountSimulator extends DeviceSimulator {
 		this.#slewRightAscensionShaft = rightAscensionShaftAngle(this.pierSide, this.#mechanical.rightAscension)
 		this.#slewDeclinationShaft = this.pierSide === 'NEITHER' ? this.#mechanical.declination : declinationShaftAngle(this.pierSide, this.#mechanical.declination)
 		const deltaRightAscension = normalizePI(target.rightAscension - this.#mechanical.rightAscension)
-		const rightAscensionShaftFrameTravel = changesPierSide || (this.pierSide === 'NEITHER' && targetPierSide === 'EAST') ? (targetPierSide === 'EAST' ? PI : -PI) : 0
+		const rightAscensionShaftFrameTravel = changesPierSide || (this.pierSide === 'NEITHER' && targetPierSide === 'EAST') || (this.pierSide === 'EAST' && targetPierSide === 'NEITHER') ? (targetPierSide === 'EAST' ? PI : -PI) : 0
 		this.#slewTargetRightAscensionShaft = this.#slewRightAscensionShaft + deltaRightAscension + rightAscensionShaftFrameTravel
 		const targetDeclinationShaft = targetPierSide === 'NEITHER' ? target.declination : declinationShaftAngle(targetPierSide, target.declination)
 		if (targetPierSide !== 'NEITHER' && targetPierSide !== this.pierSide) {

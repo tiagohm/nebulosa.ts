@@ -1613,6 +1613,30 @@ describe('mount simulator meridian flip', () => {
 		}
 	})
 
+	test('returns an east-side mount to a neutral pole through the neutral RA shaft frame', () => {
+		const { simulator } = makeMeridianFlipMount('mount.flip.east.neutral.home')
+
+		try {
+			const lst = simulator.siderealTimeAt(simulator.utcTime)
+			simulator.syncTo(normalizeAngle(lst + hour(1)), deg(20))
+			simulator.flipTo(simulator.rightAscension, simulator.declination)
+			simulator.advance(FAST_FLIP_DURATION + 1e-6)
+			expect(simulator.pierSide).toBe('EAST')
+
+			simulator.home()
+			simulator.advance(deg(70) / FAST_SLEW_SPEED + 1e-6)
+			expect(simulator.isHoming).toBeTrue()
+			expect(simulator.pierSide).toBe('EAST')
+
+			simulator.advance(deg(125) / FAST_SLEW_SPEED + 1e-6)
+			expect(simulator.isHoming).toBeFalse()
+			expect(simulator.pierSide).toBe('NEITHER')
+			expect(simulator.mechanical.declination).toBeCloseTo(PIOVERTWO, 12)
+		} finally {
+			simulator.dispose()
+		}
+	})
+
 	test('returns home and park to the pier side on which each pose was saved', () => {
 		for (const operation of ['home', 'park'] as const) {
 			const { simulator } = makeMeridianFlipMount(`mount.flip.saved.${operation}.side`)
