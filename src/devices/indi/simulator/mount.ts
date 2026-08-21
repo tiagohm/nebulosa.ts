@@ -199,7 +199,7 @@ export class MountSimulator extends DeviceSimulator {
 	// Prior side to record at the exact arrival timestamp after dynamic errors have reached it.
 	#arrivalBoresightPierSide?: PierSide
 	// Mid-slew shaft sample waiting for worm and wind state to reach the same timestamp.
-	#slewMidpointSample?: { time: number; rightAscension: Angle; declination: Angle }
+	#slewMidpointSample?: { time: number; rightAscension: Angle; declination: Angle; pierSide: PierSide }
 	// One-shot latch preventing an aborted or completed automatic flip from immediately restarting.
 	#automaticFlipArmed = true
 
@@ -1532,7 +1532,7 @@ export class MountSimulator extends DeviceSimulator {
 				const finalRightAscension = this.#mechanical.rightAscension
 				const finalDeclination = this.#mechanical.declination
 				this.#setMechanical(midpointSample.rightAscension, midpointSample.declination, false)
-				this.#recordBoresightAt(midpointSample.time)
+				this.#recordBoresightAt(midpointSample.time, midpointSample.pierSide)
 				this.#setMechanical(finalRightAscension, finalDeclination, false)
 				const remainingSlewSeconds = slewSeconds - midpointSeconds
 				this.#advanceWormPhase(slewRate, remainingSlewSeconds)
@@ -1752,7 +1752,7 @@ export class MountSimulator extends DeviceSimulator {
 				const shaftSampleTime = endTime - (remaining + slewSeconds / 2) * 1000
 				const shaftSampleRightAscension = initialRightAscensionShaft + rightAscensionMotorDelta * travelled * 0.5
 				const shaftSampleDeclination = initialDeclinationShaft + declinationMotorDelta * travelled * 0.5
-				this.#slewMidpointSample = { time: shaftSampleTime, rightAscension: rightAscensionFromShaftPose(shaftSampleRightAscension, shaftSampleDeclination), declination: declinationFromShaftAngle(shaftSampleDeclination) }
+				this.#slewMidpointSample = { time: shaftSampleTime, rightAscension: rightAscensionFromShaftPose(shaftSampleRightAscension, shaftSampleDeclination), declination: declinationFromShaftAngle(shaftSampleDeclination), pierSide: priorPierSide }
 			}
 			this.#setMechanical(target.rightAscension, target.declination)
 			// A coordinate slew selected its destination side before it began, so the old side remains valid

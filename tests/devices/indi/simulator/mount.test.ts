@@ -601,7 +601,8 @@ describe('mount simulator meridian flip', () => {
 
 		try {
 			for (const { client, simulator } of [full, stepped]) {
-				client.sendSwitch({ device: simulator.name, name: 'SIMULATOR_ERROR_FEATURES', elements: { PERIODIC_ERROR: true } })
+				client.sendSwitch({ device: simulator.name, name: 'SIMULATOR_ERROR_FEATURES', elements: { FLEXURE: true, PERIODIC_ERROR: true } })
+				client.sendNumber({ device: simulator.name, name: 'MOUNT_FLEXURE', elements: { TUBE_FLEXURE: 0, PIER_WEST_RA: 0, PIER_WEST_DEC: 90 } })
 				client.sendNumber({ device: simulator.name, name: 'MOUNT_PERIODIC_ERROR', elements: { ...NO_PERIODIC_ERROR, RA_PERIOD: 400, RA_AMPLITUDE: 600 } })
 				const lst = simulator.siderealTimeAt(simulator.utcTime)
 				simulator.syncTo(normalizeAngle(lst + hour(1)), deg(20))
