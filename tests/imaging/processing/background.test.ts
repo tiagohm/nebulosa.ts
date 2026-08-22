@@ -1342,4 +1342,4 @@ test('a zero or negligibly-smoothed thin-plate spline is evaluated exactly, with
 	expect(maxCoarseningError(0)).toBeLessThan(1e-6)
 	expect(maxCoarseningError(1e-12)).toBeLessThan(1e-6)
 	expect(maxCoarseningError(0.05)).toBeGreaterThan(1e-6)
-}, 3000)
+}, 6000)

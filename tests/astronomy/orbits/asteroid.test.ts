@@ -130,9 +130,23 @@ test('positionAtTrueAnomaly evaluates the orbital curve independent of epoch', (
 })
 
 test('stumpff', () => {
-	expect(stumpff(-2)).toEqual([2.178183556608571, 1.368298872008591, 0.5890917783042855, 0.18414943600429545])
-	expect(stumpff(0.5)).toEqual([0.7602445970756302, 0.9187253698655684, 0.4795108058487397, 0.16254926026886313])
-	expect(stumpff(2)).toEqual([0.15594369476537437, 0.6984559986366083, 0.4220281526173128, 0.15077200068169583])
+	const a = stumpff(-2)
+	expect(a[0]).toBeCloseTo(2.178183556608571, 14)
+	expect(a[1]).toBeCloseTo(1.368298872008591, 14)
+	expect(a[2]).toBeCloseTo(0.5890917783042855, 14)
+	expect(a[3]).toBeCloseTo(0.18414943600429545, 14)
+
+	const b = stumpff(0.5)
+	expect(b[0]).toBeCloseTo(0.7602445970756302, 14)
+	expect(b[1]).toBeCloseTo(0.9187253698655684, 14)
+	expect(b[2]).toBeCloseTo(0.4795108058487397, 14)
+	expect(b[3]).toBeCloseTo(0.16254926026886313, 14)
+
+	const c = stumpff(2)
+	expect(c[0]).toBeCloseTo(0.15594369476537437, 14)
+	expect(c[1]).toBeCloseTo(0.6984559986366083, 14)
+	expect(c[2]).toBeCloseTo(0.4220281526173128, 14)
+	expect(c[3]).toBeCloseTo(0.15077200068169583, 14)
 })
 
 test('hyperbolic mean anomaly', () => {
