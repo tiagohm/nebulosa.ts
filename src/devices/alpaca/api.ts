@@ -1,10 +1,15 @@
+import { errorMessage } from '../../core/util'
 // oxfmt-ignore
-import type { AlpacaAxisRate, AlpacaCameraSensorType, AlpacaCameraState, AlpacaConfiguredDevice, AlpacaDomeShutterState, AlpacaGuideDirection, AlpacaResponse, AlpacaStateItem, AlpacaTelescopeAlignmentMode, AlpacaTelescopeAxis, AlpacaTelescopeEquatorialCoordinateType, AlpacaTelescopePierSide, AlpacaTelescopeTrackingRate } from './types'
+import type { AlpacaAxisRate, AlpacaCameraSensorType, AlpacaCameraState, AlpacaConfiguredDevice, AlpacaDomeShutterState, AlpacaGuideDirection, AlpacaRequestFailedResult, AlpacaRequestResult, AlpacaResponse, AlpacaStateItem, AlpacaTelescopeAlignmentMode, AlpacaTelescopeAxis, AlpacaTelescopeEquatorialCoordinateType, AlpacaTelescopePierSide, AlpacaTelescopeTrackingRate } from './types'
 
 // Thin typed HTTP client for the ASCOM Alpaca REST API. Each class wraps one device type and exposes a
 // method per Alpaca property/operation; the methods are intentionally one-line mappings onto the shared
 // request() helper, so they are self-documenting and not individually commented. Values are passed
 // through unchanged (units follow the Alpaca spec). See the class comments for per-device scope.
+//
+// Every method returns an AlpacaRequestResult rather than collapsing a failure to undefined, because the
+// distinction matters: ErrorNumber 1024 means the member does not exist on that driver and is a permanent
+// capability fact, while a timeout, a 5xx, or ValueNotSet is transient and must not disable anything.
 // https://ascom-standards.org/api/
 
 // Accept header that requests the binary ImageBytes encoding for camera image downloads.
@@ -23,6 +28,7 @@ export class AlpacaApi {
 	readonly rotator: AlpacaRotatorApi
 	readonly dome: AlpacaDomeApi
 	readonly safetyMonitor: AlpacaSafetyMonitorApi
+	readonly observingConditions: AlpacaObservingConditionsApi
 
 	constructor(readonly url: string | URL) {
 		this.management = new AlpacaManagementApi(url)
@@ -34,6 +40,7 @@ export class AlpacaApi {
 		this.rotator = new AlpacaRotatorApi(url)
 		this.dome = new AlpacaDomeApi(url)
 		this.safetyMonitor = new AlpacaSafetyMonitorApi(url)
+		this.observingConditions = new AlpacaObservingConditionsApi(url)
 	}
 }
 
@@ -43,9 +50,9 @@ export class AlpacaManagementApi {
 
 	// Lists the devices the server exposes, normalizing DeviceType to lowercase to match AlpacaDeviceType.
 	async configuredDevices() {
-		const devices = await request<readonly AlpacaConfiguredDevice[]>(this.url, 'management/v1/configureddevices', 'GET')
-		if (devices) for (const device of devices) (device as unknown as Record<string, string>).DeviceType = device.DeviceType.toLowerCase()
-		return devices
+		const result = await request<readonly AlpacaConfiguredDevice[]>(this.url, 'management/v1/configureddevices', 'GET')
+		if (result.ok) for (const device of result.value) (device as unknown as Record<string, string>).DeviceType = device.DeviceType.toLowerCase()
+		return result
 	}
 }
 
@@ -78,6 +85,93 @@ export class AlpacaSafetyMonitorApi extends AlpacaDeviceApi {
 
 	isSafe(id: number) {
 		return request<boolean>(this.url, `${id}/issafe`, 'GET')
+	}
+}
+
+// ObservingConditions device endpoints (ASCOM IObservingConditionsV2). Every sensor is optional, so this
+// is the device where telling 1024 apart from a transient fault decides what gets polled at all.
+//
+// Units follow the ASCOM spec: percent for CloudCover and Humidity, degrees Celsius for DewPoint,
+// SkyTemperature and Temperature, hPa for Pressure, mm/h for RainRate, lux for SkyBrightness,
+// mag/arcsec² for SkyQuality, arcsec for StarFWHM, m/s for WindSpeed and WindGust, and hours for
+// AveragePeriod. WindDirection is degrees clockwise from north, where north is reported as 360 and 0 is
+// reserved for calm (WindSpeed of zero).
+export class AlpacaObservingConditionsApi extends AlpacaDeviceApi {
+	constructor(url: string | URL) {
+		super(new URL('/api/v1/observingconditions/', url))
+	}
+
+	getAveragePeriod(id: number) {
+		return request<number>(this.url, `${id}/averageperiod`, 'GET')
+	}
+
+	setAveragePeriod(id: number, AveragePeriod: number) {
+		return request<void>(this.url, `${id}/averageperiod`, 'PUT', { AveragePeriod })
+	}
+
+	getCloudCover(id: number) {
+		return request<number>(this.url, `${id}/cloudcover`, 'GET')
+	}
+
+	getDewPoint(id: number) {
+		return request<number>(this.url, `${id}/dewpoint`, 'GET')
+	}
+
+	getHumidity(id: number) {
+		return request<number>(this.url, `${id}/humidity`, 'GET')
+	}
+
+	getPressure(id: number) {
+		return request<number>(this.url, `${id}/pressure`, 'GET')
+	}
+
+	getRainRate(id: number) {
+		return request<number>(this.url, `${id}/rainrate`, 'GET')
+	}
+
+	getSkyBrightness(id: number) {
+		return request<number>(this.url, `${id}/skybrightness`, 'GET')
+	}
+
+	getSkyQuality(id: number) {
+		return request<number>(this.url, `${id}/skyquality`, 'GET')
+	}
+
+	getSkyTemperature(id: number) {
+		return request<number>(this.url, `${id}/skytemperature`, 'GET')
+	}
+
+	getStarFWHM(id: number) {
+		return request<number>(this.url, `${id}/starfwhm`, 'GET')
+	}
+
+	getTemperature(id: number) {
+		return request<number>(this.url, `${id}/temperature`, 'GET')
+	}
+
+	getWindDirection(id: number) {
+		return request<number>(this.url, `${id}/winddirection`, 'GET')
+	}
+
+	getWindGust(id: number) {
+		return request<number>(this.url, `${id}/windgust`, 'GET')
+	}
+
+	getWindSpeed(id: number) {
+		return request<number>(this.url, `${id}/windspeed`, 'GET')
+	}
+
+	refresh(id: number) {
+		return request<void>(this.url, `${id}/refresh`, 'PUT')
+	}
+
+	sensorDescription(id: number, SensorName: string) {
+		return request<string>(this.url, `${id}/sensordescription`, 'GET', { SensorName })
+	}
+
+	// An empty SensorName asks for the time since the most recent update of any sensor.
+	timeSinceLastUpdate(id: number, SensorName: string = '') {
+		return request<number>(this.url, `${id}/timesincelastupdate`, 'GET', { SensorName })
 	}
 }
 
@@ -223,18 +317,19 @@ export class AlpacaCameraApi extends AlpacaDeviceApi {
 		return request<number>(this.url, `${id}/heatsinktemperature`, 'GET')
 	}
 
-	// Downloads the last exposure as a raw ImageBytes ArrayBuffer (binary, not JSON). Returns undefined on
-	// failure. Decoding the header/pixels is the caller's responsibility.
-	async getImageArray(id: number) {
-		const response = await fetch(new URL(`${id}/imagearray`, this.url), { headers: IMAGE_ARRAY_HEADERS })
+	// Downloads the last exposure as a raw ImageBytes ArrayBuffer. The response is binary rather than the
+	// JSON envelope, so this is the one endpoint that cannot go through request, but it reports the
+	// same result shape. Decoding the header and pixels is the caller's responsibility.
+	async getImageArray(id: number): Promise<AlpacaRequestResult<ArrayBuffer>> {
+		const url = new URL(`${id}/imagearray`, this.url)
 
-		if (response.ok) {
-			return await response.arrayBuffer()
+		try {
+			const response = await fetch(url, { headers: IMAGE_ARRAY_HEADERS })
+			if (!response.ok) return failed('GET', url, (await response.text()) || `status ${response.status}`)
+			return { ok: true, value: await response.arrayBuffer() }
+		} catch (e) {
+			return failed('GET', url, e instanceof Error ? e.message : String(e))
 		}
-
-		console.error('failed to fetch image array:', await response.text())
-
-		return undefined
 	}
 
 	isImageReady(id: number) {
@@ -728,7 +823,7 @@ export class AlpacaFilterWheelApi extends AlpacaDeviceApi {
 	}
 
 	setPosition(id: number, Position: number) {
-		return request(this.url, `${id}/position`, 'PUT', { Position })
+		return request<void>(this.url, `${id}/position`, 'PUT', { Position })
 	}
 }
 
@@ -1024,34 +1119,42 @@ function makeFormDataFromParams(params: Record<string, string | number | boolean
 	return new URLSearchParams(params as never)
 }
 
-// Performs one Alpaca REST call and unwraps the AlpacaResponse envelope. Returns the Value on success
-// (or defaultValue when Value is null), and undefined on any HTTP, transport, or Alpaca error (logged).
-async function request<T>(url: string | URL, path: string, method: 'GET' | 'PUT', body?: Record<string, string | number | boolean>, headers?: HeadersInit, defaultValue?: T) {
-	url = new URL(path, url)
+// Builds a failure result, logging everything except an unimplemented member.
+//
+// MethodOrPropertyNotImplemented (1024) is the normal answer for an optional Alpaca member, not an error:
+// capability discovery hits it once per unsupported property, and logging those would flood the console
+// on every connect for no benefit. Every other failure is a real one and stays visible.
+function failed(method: string, url: URL, errorMessage: string, errorNumber?: number): AlpacaRequestFailedResult {
+	if (errorNumber !== 1024) {
+		console.error('request failed:', method, url.href, errorNumber ?? '', errorMessage)
+	}
+
+	return { ok: false, errorNumber, errorMessage }
+}
+
+// Performs one Alpaca REST call and unwraps the AlpacaResponse envelope, preserving why it failed so the
+// caller can tell an unimplemented member from a transient fault. Parameters are sent as a form body on
+// PUT and as a query string on GET, which is how ASCOM passes SensorName and friends.
+async function request<T>(url: string | URL, path: string, method: 'GET' | 'PUT', body?: Record<string, string | number | boolean>, headers?: HeadersInit, defaultValue?: T): Promise<AlpacaRequestResult<T>> {
+	const target = new URL(path, url)
+	const params = body && makeFormDataFromParams(body)
+
+	if (params && method === 'GET') target.search = params.toString()
 
 	try {
-		const response = await fetch(url, { method, headers, body: body && method === 'PUT' ? makeFormDataFromParams(body) : undefined })
+		const response = await fetch(target, { method, headers, body: method === 'PUT' ? params : undefined })
 
 		const text = await response.text()
 
-		if (response.ok) {
-			if (text) {
-				const json = JSON.parse(text) as AlpacaResponse<T>
+		if (!response.ok) return failed(method, target, text || `status ${response.status}`)
+		if (!text) return failed(method, target, 'empty response')
 
-				if (json.ErrorNumber === 0) {
-					return json.Value ?? defaultValue
-				}
+		const json = JSON.parse(text) as AlpacaResponse<T>
 
-				console.error('response error:', method, url.href, json.ErrorNumber, json.ErrorMessage)
-			} else {
-				console.error('request without response:', method, url.href)
-			}
-		} else {
-			console.error('request failed:', method, url.href, text)
-		}
+		if (json.ErrorNumber !== 0) return failed(method, target, json.ErrorMessage, json.ErrorNumber)
+
+		return { ok: true, value: (json.Value ?? defaultValue) as T }
 	} catch (e) {
-		console.error('failed to fetch:', method, url.href, e)
+		return failed(method, target, errorMessage(e))
 	}
-
-	return undefined
 }

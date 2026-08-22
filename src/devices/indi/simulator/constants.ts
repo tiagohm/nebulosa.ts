@@ -91,6 +91,11 @@ export const DOME_DEFAULT_PARK_AZIMUTH = 180
 // Simulated cover open/close time (ms) and flat-panel maximum intensity.
 export const COVER_MOVE_TIME_MS = 500
 export const PANEL_MAX_INTENSITY = 255
+// Simulated weather station driver re-read period (seconds): default plus the range advertised on
+// WEATHER_UPDATE. The simulator only stores the value; it schedules nothing from it.
+export const WEATHER_DEFAULT_UPDATE_PERIOD = 60
+export const WEATHER_MIN_UPDATE_PERIOD = 1
+export const WEATHER_MAX_UPDATE_PERIOD = 3600
 
 // Mount slew-rate presets (name/label and angular speed in radians/second).
 export const SLEW_RATES = [
