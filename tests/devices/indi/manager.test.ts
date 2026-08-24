@@ -1426,61 +1426,6 @@ describe('MountManager INDI alignment', () => {
 		])
 	})
 
-	test('sends nothing when a required property is missing or read-only', () => {
-		const manager = new MountManager()
-		const mount = setupMount(manager)
-
-		manager.switchVector(recordingClient, activeVector(mount.name, true, 'ro'), 'defSwitchVector')
-		manager.switchVector(recordingClient, pluginsVector(mount.name, 'INBUILT_MATH_PLUGIN', 'ro'), 'defSwitchVector')
-		manager.numberVector(recordingClient, sizeVector(mount.name, 3), 'defNumberVector')
-
-		expect(mount.alignment.available).toBeTrue()
-
-		manager.alignmentActive(mount, true)
-		manager.alignmentPlugin(mount, 'SVD Math Plugin')
-		manager.alignmentInitialize(mount)
-		manager.alignmentClear(mount)
-		manager.alignmentDeletePoint(mount, 0)
-
-		expect(commands).toBeEmpty()
-	})
-
-	test('does not move the driver pointer when the action or pointer is read-only', () => {
-		const manager = new MountManager()
-		const mount = setupAlignment(manager, 3)
-
-		manager.switchVector(recordingClient, actionVector(mount.name, 'ro'), 'defSwitchVector')
-		commands.length = 0
-
-		manager.alignmentDeletePoint(mount, 1)
-		expect(commands).toBeEmpty()
-
-		manager.switchVector(recordingClient, actionVector(mount.name), 'defSwitchVector')
-		manager.numberVector(recordingClient, pointerVector(mount.name, 'ro'), 'defNumberVector')
-		commands.length = 0
-
-		manager.alignmentDeletePoint(mount, 1)
-		expect(commands).toBeEmpty()
-
-		manager.alignmentClear(mount)
-		expect(commands).toHaveLength(3)
-	})
-
-	test('completes a database action even without a writable initialize', () => {
-		const manager = new MountManager()
-		const mount = setupAlignment(manager, 1)
-
-		manager.delProperty(recordingClient, { device: mount.name, name: 'ALIGNMENT_SUBSYSTEM_MATH_PLUGIN_INITIALISE' })
-		commands.length = 0
-
-		manager.alignmentClear(mount)
-
-		expect(commands).toEqual([
-			['switch', 'ALIGNMENT_POINTSET_ACTION', { CLEAR: true }],
-			['switch', 'ALIGNMENT_POINTSET_COMMIT', { ALIGNMENT_POINTSET_COMMIT: true }],
-		])
-	})
-
 	test('resets the alignment state on property deletion', () => {
 		const manager = new MountManager()
 		const mount = setupAlignment(manager, 3)

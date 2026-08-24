@@ -1412,7 +1412,7 @@ export class MountManager extends DeviceManager<Mount> {
 	// an unknown member. The local `alignment.active` is not changed optimistically: it only follows the
 	// driver's own set vector, since the driver may refuse the change.
 	alignmentActive(mount: Mount, active: boolean, client = mount[CLIENT]!) {
-		if (mount.alignment.available && this.hasWritableProperty(mount, 'ALIGNMENT_SUBSYSTEM_ACTIVE')) {
+		if (mount.alignment.available) {
 			const element = this.#alignmentActiveElements.get(mount) ?? ALIGNMENT_SUBSYSTEM_ACTIVE
 			client.sendSwitch({ device: mount.name, name: 'ALIGNMENT_SUBSYSTEM_ACTIVE', elements: { [element]: active } })
 		}
@@ -1424,7 +1424,7 @@ export class MountManager extends DeviceManager<Mount> {
 	// that refuses the plugin reverts to its inbuilt one, which is why `alignment.plugin` is not set
 	// optimistically.
 	alignmentPlugin(mount: Mount, plugin: NameAndLabel | string, client = mount[CLIENT]!) {
-		if (!mount.alignment.available || !this.hasWritableProperty(mount, 'ALIGNMENT_SUBSYSTEM_MATH_PLUGINS')) return
+		if (!mount.alignment.available) return
 
 		const name = typeof plugin === 'string' ? plugin : plugin.name
 		const { plugins } = mount.alignment
@@ -1441,7 +1441,7 @@ export class MountManager extends DeviceManager<Mount> {
 	// does not expose the subsystem or the momentary switch is absent/read-only. Used as the best-effort
 	// tail of every database-mutating sequence, where its absence must not undo the action already sent.
 	alignmentInitialize(mount: Mount, client = mount[CLIENT]!) {
-		if (mount.alignment.available && this.hasWritableProperty(mount, 'ALIGNMENT_SUBSYSTEM_MATH_PLUGIN_INITIALISE')) {
+		if (mount.alignment.available) {
 			client.sendSwitch({ device: mount.name, name: 'ALIGNMENT_SUBSYSTEM_MATH_PLUGIN_INITIALISE', elements: { ALIGNMENT_SUBSYSTEM_MATH_PLUGIN_INITIALISE: true } })
 		}
 	}
@@ -1491,8 +1491,6 @@ export class MountManager extends DeviceManager<Mount> {
 	// the caller.
 	#alignmentAction(mount: Mount, action: AlignmentPointSetAction, reinitialize: boolean, client: Client, index?: number) {
 		if (!mount.alignment.available) return
-		if (!this.hasWritableProperty(mount, 'ALIGNMENT_POINTSET_ACTION') || !this.hasWritableProperty(mount, 'ALIGNMENT_POINTSET_COMMIT')) return
-		if (index !== undefined && !this.hasWritableProperty(mount, 'ALIGNMENT_POINTSET_CURRENT_ENTRY')) return
 
 		if (index !== undefined) {
 			client.sendNumber({ device: mount.name, name: 'ALIGNMENT_POINTSET_CURRENT_ENTRY', elements: { ALIGNMENT_POINTSET_CURRENT_ENTRY: index } })
@@ -1512,12 +1510,6 @@ export class MountManager extends DeviceManager<Mount> {
 		if (device === undefined) return
 
 		super.switchVector(client, message, tag)
-
-		// Writability is only known from a def vector and gates the alignment command methods.
-		if (tag[0] === 'd') {
-			if ((message as DefSwitchVector).permission !== 'ro') this.addWritableProperty(device, message.name)
-			else this.removeWritableProperty(device, message.name)
-		}
 
 		const { elements } = message
 
@@ -1738,12 +1730,6 @@ export class MountManager extends DeviceManager<Mount> {
 		const device = this.get(client, message.device)
 
 		if (device === undefined) return
-
-		// Writability is only known from a def vector and gates the alignment command methods.
-		if (tag[0] === 'd') {
-			if ((message as DefNumberVector).permission !== 'ro') this.addWritableProperty(device, message.name)
-			else this.removeWritableProperty(device, message.name)
-		}
 
 		switch (message.name) {
 			case 'ALIGNMENT_POINTSET_SIZE': {
