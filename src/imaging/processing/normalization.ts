@@ -520,7 +520,7 @@ function evaluateGainAtCells(surface: ScalarSurfaceModel | undefined, range: rea
 
 		const x = cellX[cell]
 		const y = cellY[cell]
-		out[cell] = anchorScale * Math.exp(clamp(sampleSupport(support, x, y) * evaluator.at(x, y), range[0], range[1]))
+		out[cell] = anchorScale * Math.exp(sampleSupport(support, x, y) * clamp(evaluator.at(x, y), range[0], range[1]))
 	}
 
 	return out
@@ -1166,9 +1166,15 @@ function buildLocalNormalizationFields(model: LocalNormalizationModel): LocalNor
 			// Each field is weighted by its own support: the gain field is constrained only by the cells that
 			// cleared the dynamic-range gate, so it must fade to the anchor across the regions that produced
 			// an offset but no gain rather than extrapolating over them at full confidence.
+			//
+			// The surface is clamped BEFORE the confidence scales it. Clamping the product instead lets a
+			// large extrapolation cancel a low confidence — a valid pixel just outside the fitted domain,
+			// where the surface overshoots most and the support has already decayed, would still receive a
+			// correction as large as the clamp allows. Scaling the clamped value keeps the correction bounded
+			// by `support * range`, so it genuinely fades toward the anchor.
 			if (scaleEvaluator !== undefined) {
 				scaleEvaluator.fillRow(py, surfaceRow, 0, 1)
-				for (let i = 0; i < columns; i++) scale[row + i] = anchor.scale * Math.exp(clamp(sampleSupport(scaleSupport, i * stepX, py) * surfaceRow[i], scaleRange![0], scaleRange![1]))
+				for (let i = 0; i < columns; i++) scale[row + i] = anchor.scale * Math.exp(sampleSupport(scaleSupport, i * stepX, py) * clamp(surfaceRow[i], scaleRange![0], scaleRange![1]))
 			} else {
 				scale.fill(anchor.scale, row, row + columns)
 			}
@@ -1180,7 +1186,7 @@ function buildLocalNormalizationFields(model: LocalNormalizationModel): LocalNor
 
 			if (offsetEvaluator !== undefined) {
 				offsetEvaluator.fillRow(py, surfaceRow, 0, 1)
-				for (let i = 0; i < columns; i++) offset[row + i] = anchor.offset + clamp(sampleSupport(offsetSupport, i * stepX, py) * surfaceRow[i], offsetRange![0], offsetRange![1]) - (scale[row + i] - anchor.scale) * pivot
+				for (let i = 0; i < columns; i++) offset[row + i] = anchor.offset + sampleSupport(offsetSupport, i * stepX, py) * clamp(surfaceRow[i], offsetRange![0], offsetRange![1]) - (scale[row + i] - anchor.scale) * pivot
 			} else {
 				for (let i = 0; i < columns; i++) offset[row + i] = anchor.offset - (scale[row + i] - anchor.scale) * pivot
 			}

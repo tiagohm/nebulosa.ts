@@ -579,6 +579,70 @@ describe('local normalization', () => {
 		expect(boundaryCount).toBeGreaterThan(1000)
 		expect(boundary / boundaryCount).toBeLessThan(2e-3)
 	})
+
+	test('the correction stays bounded by the confidence in the transition band', () => {
+		// Only a strip of the frame is valid, so the offset surface is fitted there and extrapolates
+		// outside it, where the support has already decayed. A pixel in that band must receive at most
+		// `support * range`: clamping the product instead would let the overshoot cancel the low
+		// confidence and apply a full-range correction exactly where the fit is least trustworthy.
+		const reference = referencePlane()
+		const current = inverseTransform(
+			reference,
+			() => 1.15,
+			(x, y) => 0.01 + 0.05 * (x / WIDTH) - 0.04 * (y / HEIGHT),
+		)
+		const mask = new Uint8Array(WIDTH * HEIGHT).fill(1)
+		for (let y = 0; y < HEIGHT; y++) {
+			for (let x = 0; x < WIDTH; x++) {
+				if (y < 40 || y > 110) mask[y * WIDTH + x] = 0
+			}
+		}
+
+		const model = fitMono(reference, current, { offsetDegree: 3 }, mask)
+		expect(model.diagnostics[0].fallback).toBe(false)
+
+		const support = model.offsetSupportGrids[0]
+		const [lo, hi] = model.offsetRanges[0]!
+		const bound = Math.max(Math.abs(lo), Math.abs(hi))
+		const { scale, offset } = model.global[0]
+
+		// Probe a constant frame: the deviation from the anchor is exactly the applied offset residual.
+		const probe = new Float64Array(WIDTH * HEIGHT).fill(0.3)
+		const expected = 0.3 * scale + offset
+		applyLocalNormalizationInPlace(probe, undefined, model)
+
+		let violations = 0
+		for (let y = 0; y < HEIGHT; y++) {
+			for (let x = 0; x < WIDTH; x += 7) {
+				const w = sampleSupportAt(support, x, y)
+				if (w > 0.9) continue
+				const applied = Math.abs(probe[y * WIDTH + x] - expected)
+				// A small tolerance covers the node-grid interpolation between confidence samples.
+				if (applied > w * bound + 1e-4) violations++
+			}
+		}
+
+		expect(violations).toBe(0)
+	})
+
+	// Mirrors the module's own bilinear-plus-smoothstep confidence sampling.
+	function sampleSupportAt(grid: { columns: number; rows: number; originX: number; originY: number; stepX: number; stepY: number; values: Float32Array }, x: number, y: number) {
+		const fx = grid.columns > 1 ? (x - grid.originX) / grid.stepX : 0
+		const fy = grid.rows > 1 ? (y - grid.originY) / grid.stepY : 0
+		const i0 = Math.min(Math.max(Math.floor(fx), 0), Math.max(0, grid.columns - 2))
+		const j0 = Math.min(Math.max(Math.floor(fy), 0), Math.max(0, grid.rows - 2))
+		const i1 = Math.min(i0 + 1, grid.columns - 1)
+		const j1 = Math.min(j0 + 1, grid.rows - 1)
+		const tx = Math.min(Math.max(fx - i0, 0), 1)
+		const ty = Math.min(Math.max(fy - j0, 0), 1)
+		const r0 = j0 * grid.columns
+		const r1 = j1 * grid.columns
+		const top = grid.values[r0 + i0] + (grid.values[r0 + i1] - grid.values[r0 + i0]) * tx
+		const bottom = grid.values[r1 + i0] + (grid.values[r1 + i1] - grid.values[r1 + i0]) * tx
+		const w = top + (bottom - top) * ty
+		return w * w * (3 - 2 * w)
+	}
+
 	test('the coarse node grid agrees with a dense one', () => {
 		const reference = referencePlane()
 		const current = inverseTransform(
