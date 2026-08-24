@@ -234,6 +234,15 @@ describe('thin-plate spline', () => {
 		expect(model.rejectedSamples).toBe(samples.length - model.acceptedSamples)
 	})
 
+	test('a cap at the spline minimum still yields a fittable set', () => {
+		const samples = sampleGrid(64, 64, 6, 6, (x, y) => 0.2 + 0.001 * (x + y))
+
+		// floor(sqrt(3)) collapses the coverage grid to a single bucket, which would leave one control
+		// point and fail a layout a three-point spline fits perfectly well.
+		const model = fitOrThrow(samples, 64, 64, { model: 'thinPlateSpline', smoothing: 0.1, maxControlPoints: 3 })
+		expect(model.controlPoints!.length / 2).toBe(3)
+	})
+
 	test('a smoothing spline keeps every sample accepted under the cap', () => {
 		const samples = sampleGrid(256, 256, 12, 12, (x, y) => 0.2 + 0.0005 * (x - y))
 		const model = fitOrThrow(samples, 256, 256, { model: 'thinPlateSpline', smoothing: 0.5, maxControlPoints: 16 })

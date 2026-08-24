@@ -169,6 +169,10 @@ export interface ScalarSurfaceEvaluator {
 // grids. Chosen as a perfect square so the spatial buckets below tile evenly.
 export const SURFACE_MAX_CONTROL_POINTS = 1024
 
+// Control points a thin-plate spline needs before its affine part is determined. Also the floor the
+// control-point subsampling tops up to, so a small cap cannot turn a fittable layout into a failure.
+const MIN_CONTROL_POINTS = 3
+
 // Minimum 2D spread (RMS extent along the least-covered direction, in the normalized [-1, 1] domain)
 // the accepted samples must have for the system to be well-posed. Samples confined to a thin strip
 // give one basis direction almost no variation, so the surface is unconstrained across the rest of the
@@ -389,7 +393,7 @@ export function subsampleSurfaceControlPoints(set: SurfaceSampleSet, maxPoints: 
 
 	const g = Math.max(1, Math.floor(Math.sqrt(maxPoints)))
 	const seen = new Uint8Array(g * g)
-	const chosen = new Uint32Array(g * g)
+	const chosen = new Uint32Array(Math.max(g * g, MIN_CONTROL_POINTS))
 	let n = 0
 
 	for (let i = 0; i < set.count; i++) {
@@ -401,6 +405,39 @@ export function subsampleSurfaceControlPoints(set: SurfaceSampleSet, maxPoints: 
 		if (seen[b]) continue
 		seen[b] = 1
 		chosen[n++] = i
+	}
+
+	// A cap below 4 collapses the bucket grid to a single cell, so the sweep returns one control point and
+	// a layout a three-point spline fits perfectly well is reported as unfittable. Top the selection up to
+	// the spline minimum. Picking the next samples in index order would line them up along a grid row and
+	// leave the system singular, so each addition is the active sample farthest from those already chosen,
+	// which extends the same spatial coverage the buckets exist to preserve. Unreachable for any larger
+	// cap, where a layout that passed the 2D coverage check necessarily spans several buckets.
+	while (n < MIN_CONTROL_POINTS) {
+		let best = -1
+		let bestDistance = -1
+
+		for (let i = 0; i < set.count; i++) {
+			if (set.active[i] === 0) continue
+
+			let nearest = Infinity
+			for (let k = 0; k < n; k++) {
+				const j = chosen[k]
+				const du = set.u[i] - set.u[j]
+				const dv = set.v[i] - set.v[j]
+				const distance = du * du + dv * dv
+				if (distance < nearest) nearest = distance
+			}
+
+			// A zero nearest distance means `i` is already chosen (or duplicates one that is).
+			if (nearest > bestDistance) {
+				bestDistance = nearest
+				best = i
+			}
+		}
+
+		if (best < 0 || bestDistance <= 0) break
+		chosen[n++] = best
 	}
 
 	return chosen.subarray(0, n)
@@ -599,7 +636,7 @@ export function fitThinPlateSplineSurface(set: SurfaceSampleSet, indices: Uint32
 	}
 
 	const k = us.length
-	if (k < 3) return 'too-few-samples'
+	if (k < MIN_CONTROL_POINTS) return 'too-few-samples'
 
 	const size = k + 3
 	const L = new Matrix(size, size)
