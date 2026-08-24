@@ -1000,8 +1000,15 @@ export function fitScalarSurface(samples: readonly SurfaceSample[], width: numbe
 	const base = { width, height, domain, degree, smoothing }
 
 	if (model === 'thinPlateSpline') {
+		// Sample count is tested before spread so a sparse set is reported as `too-few-samples` rather than
+		// as a degenerate layout: the spread predicate fails for both and cannot tell them apart, and the
+		// two mean different things to the caller. Dedup needs no second count check, since a layout with
+		// real 2D spread already holds three non-collinear distinct points and dedup drops only duplicates.
+		if (activeSurfaceSampleCount(set) < MIN_CONTROL_POINTS) return { ok: false, reason: 'too-few-samples' }
 		if (!hasSurfaceTwoDimensionalCoverage(set)) return { ok: false, reason: 'degenerate-layout' }
+
 		deduplicateSurfaceSamples(set)
+
 		if (!hasSurfaceTwoDimensionalCoverage(set)) return { ok: false, reason: 'degenerate-layout' }
 
 		const indices = subsampleSurfaceControlPoints(set, maxControlPoints)

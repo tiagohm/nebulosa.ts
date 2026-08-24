@@ -190,6 +190,14 @@ describe('degenerate layouts', () => {
 		]
 		expect(fitScalarSurface(collinear, 32, 32, { model: 'thinPlateSpline' })).toEqual({ ok: false, reason: 'degenerate-layout' })
 	})
+
+	test('a sparse spline set reports too few samples, not a degenerate layout', () => {
+		for (const count of [0, 1, 2]) {
+			const samples: SurfaceSample[] = []
+			for (let i = 0; i < count; i++) samples.push({ x: i * 20, y: i * 13, value: 0.2 })
+			expect(fitScalarSurface(samples, 64, 64, { model: 'thinPlateSpline' })).toEqual({ ok: false, reason: 'too-few-samples' })
+		}
+	})
 })
 
 describe('thin-plate spline', () => {
