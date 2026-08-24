@@ -363,4 +363,18 @@ describe('stacker normalization modes', () => {
 			expect(withOptions.diagnostics[1].normalization!.local).toBeUndefined()
 		}
 	})
+
+	test('a stale local configuration is ignored outside local mode', () => {
+		const image = makeImage(10, 10, 1, () => 1)
+		const frames = [makeFrame(image, makeStars())]
+		const stale = { gridSize: Number.NaN, relativeScaleRange: [2, 0.5] } as const
+
+		for (const mode of ['none', 'scale', 'background-scale', 'percentile'] as const) {
+			expect(() => stackFrames(frames, { ...DEFAULT_STACK_OPTIONS, normalizationMode: mode, localNormalization: stale })).not.toThrow()
+			expect(() => new LiveStacker({ ...DEFAULT_STACK_OPTIONS, normalizationMode: mode, localNormalization: stale })).not.toThrow()
+		}
+
+		// The same block is still validated when local mode actually uses it.
+		expect(() => new LiveStacker({ ...DEFAULT_STACK_OPTIONS, normalizationMode: 'local', localNormalization: stale })).toThrow()
+	})
 })

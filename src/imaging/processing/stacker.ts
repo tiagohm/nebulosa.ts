@@ -304,7 +304,10 @@ function resolveStackingOptions(options: StackingOptions = {}): ResolvedStacking
 		maxShear: Math.max(0, options.maxShear ?? DEFAULT_STACKING_OPTIONS.maxShear),
 		samplePrecision: options.samplePrecision ?? DEFAULT_STACKING_OPTIONS.samplePrecision,
 		matchStarsConfig: { ...DEFAULT_STACKING_OPTIONS.matchStarsConfig, ...options.matchStarsConfig },
-		localNormalization: resolveLocalNormalizationOptions(options.localNormalization),
+		// `localNormalization` is documented as ignored outside local mode, so it is only resolved — and
+		// therefore only validated — when that mode is selected. Otherwise switching a configuration away
+		// from `local` would still be rejected by a stale local block it no longer uses.
+		localNormalization: (options.normalizationMode ?? DEFAULT_STACKING_OPTIONS.normalizationMode) === 'local' ? resolveLocalNormalizationOptions(options.localNormalization) : DEFAULT_LOCAL_NORMALIZATION_OPTIONS,
 	}
 }
 
