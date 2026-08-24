@@ -1248,10 +1248,24 @@ export class CameraManager extends DeviceManager<Camera> {
 
 // https://github.com/indilib/indi/blob/master/libs/indibase/inditelescope.cpp
 
+// ALIGNMENT_POINTSET_ACTION members supported by the manager. The vector is OneOfMany and the driver
+// keeps the last selection, so every commit must be preceded by its own action.
+type AlignmentPointSetAction = 'DELETE' | 'CLEAR' | 'LOAD DATABASE' | 'SAVE DATABASE'
+
+// Element name of the ALIGNMENT_SUBSYSTEM_ACTIVE switch. INDI declares it with spaces, unlike every
+// other alignment element, so it must be spelled exactly like this.
+const ALIGNMENT_SUBSYSTEM_ACTIVE = 'ALIGNMENT SUBSYSTEM ACTIVE'
+
 // Manager for mounts/telescopes. Command methods slew/sync/goto (converting target frames to the mount's
 // equatorial frame), track, park/home, move axes, and pulse-guide; property handling maps coordinate,
 // tracking, pier-side, site/time, and capability vectors onto the Mount state. Angles are radians.
+// The INDI Alignment Subsystem is exposed as administrative commands over Mount.alignment.
 export class MountManager extends DeviceManager<Mount> {
+	// Tracks the driver's actual element name for the alignment subsystem's active switch. The read path
+	// tolerates a driver that renamed it, so the write path must target the name really defined instead of
+	// the INDI constant, which such a driver would ignore.
+	readonly #alignmentActiveElements = new WeakMap<Mount, string>()
+
 	tracking(mount: Mount, enable: boolean, client = mount[CLIENT]!) {
 		client.sendSwitch({ device: mount.name, name: 'TELESCOPE_TRACK_STATE', elements: { [enable ? 'TRACK_ON' : 'TRACK_OFF']: true } })
 	}
@@ -1392,8 +1406,104 @@ export class MountManager extends DeviceManager<Mount> {
 		}
 	}
 
+	// Enables or disables the INDI Alignment Subsystem. No-op when the mount does not expose it or the
+	// switch is read-only. Targets the element name the driver actually defined, so a driver that renamed
+	// the INDI member — the same case the read path tolerates — is commanded instead of silently ignoring
+	// an unknown member. The local `alignment.active` is not changed optimistically: it only follows the
+	// driver's own set vector, since the driver may refuse the change.
+	alignmentActive(mount: Mount, active: boolean, client = mount[CLIENT]!) {
+		if (mount.alignment.available) {
+			const element = this.#alignmentActiveElements.get(mount) ?? ALIGNMENT_SUBSYSTEM_ACTIVE
+			client.sendSwitch({ device: mount.name, name: 'ALIGNMENT_SUBSYSTEM_ACTIVE', elements: { [element]: active } })
+		}
+	}
+
+	// Selects one of the math plugins advertised in `alignment.plugins`. Accepts the element itself or its
+	// name. No-op for an unknown plugin, or when the vector is absent/read-only. The driver initialises the
+	// newly loaded plugin with the current database, so no explicit initialize is issued here; a driver
+	// that refuses the plugin reverts to its inbuilt one, which is why `alignment.plugin` is not set
+	// optimistically.
+	alignmentPlugin(mount: Mount, plugin: NameAndLabel | string, client = mount[CLIENT]!) {
+		if (!mount.alignment.available) return
+
+		const name = typeof plugin === 'string' ? plugin : plugin.name
+		const { plugins } = mount.alignment
+
+		for (let i = 0; i < plugins.length; i++) {
+			if (plugins[i].name === name) {
+				client.sendSwitch({ device: mount.name, name: 'ALIGNMENT_SUBSYSTEM_MATH_PLUGINS', elements: { [name]: true } })
+				return
+			}
+		}
+	}
+
+	// Re-initialises the current math plugin against the current alignment database. No-op when the mount
+	// does not expose the subsystem or the momentary switch is absent/read-only. Used as the best-effort
+	// tail of every database-mutating sequence, where its absence must not undo the action already sent.
+	alignmentInitialize(mount: Mount, client = mount[CLIENT]!) {
+		if (mount.alignment.available) {
+			client.sendSwitch({ device: mount.name, name: 'ALIGNMENT_SUBSYSTEM_MATH_PLUGIN_INITIALISE', elements: { ALIGNMENT_SUBSYSTEM_MATH_PLUGIN_INITIALISE: true } })
+		}
+	}
+
+	// Deletes the alignment point at `index` (0-based) and re-initialises the math plugin. No-op when the
+	// index is not an integer within [0, pointCount), when the subsystem is unavailable, or when any of the
+	// pointer/action/commit properties is absent or read-only. The bounds check is required: an index past
+	// the end makes the driver delete a different entry or leave its pointer displaced, producing a
+	// plausible-looking but wrong database. `pointCount` is not decremented locally; it follows the
+	// driver's ALIGNMENT_POINTSET_SIZE.
+	alignmentDeletePoint(mount: Mount, index: number, client = mount[CLIENT]!) {
+		if (!Number.isInteger(index) || index < 0 || index >= mount.alignment.pointCount) return
+		this.#alignmentAction(mount, 'DELETE', true, client, index)
+	}
+
+	// Deletes the last alignment point, if any. This is the primitive an application can use to undo a
+	// mistaken SYNC, but only after confirming that the SYNC actually appended a point: not every driver
+	// routes SYNC through the alignment database.
+	alignmentDeleteLastPoint(mount: Mount, client = mount[CLIENT]!) {
+		const { pointCount } = mount.alignment
+		if (pointCount > 0) this.alignmentDeletePoint(mount, pointCount - 1, client)
+	}
+
+	// Deletes every alignment point and re-initialises the math plugin. `pointCount` is not zeroed locally.
+	alignmentClear(mount: Mount, client = mount[CLIENT]!) {
+		this.#alignmentAction(mount, 'CLEAR', true, client)
+	}
+
+	// Persists the in-memory alignment database to the driver's local storage. The math plugin is not
+	// re-initialised because the in-memory database did not change.
+	alignmentSave(mount: Mount, client = mount[CLIENT]!) {
+		this.#alignmentAction(mount, 'SAVE DATABASE', false, client)
+	}
+
+	// Reloads the alignment database from the driver's local storage and re-initialises the math plugin.
+	// The explicit initialize is idempotent and keeps the outcome deterministic across driver versions that
+	// may or may not re-initialise on their own. The point count is not assumed to be preserved; it follows
+	// the driver's ALIGNMENT_POINTSET_SIZE.
+	alignmentLoad(mount: Mount, client = mount[CLIENT]!) {
+		this.#alignmentAction(mount, 'LOAD DATABASE', true, client)
+	}
+
+	// Sends one pointset action followed by its commit, optionally preceded by the entry pointer and
+	// followed by a math plugin re-initialisation. Every gate is evaluated before the first send, so the
+	// sequence is all-or-nothing: sending the pointer before knowing the action is writable would leave the
+	// driver's current entry displaced with no matching operation. `index` is assumed already validated by
+	// the caller.
+	#alignmentAction(mount: Mount, action: AlignmentPointSetAction, reinitialize: boolean, client: Client, index?: number) {
+		if (!mount.alignment.available) return
+
+		if (index !== undefined) {
+			client.sendNumber({ device: mount.name, name: 'ALIGNMENT_POINTSET_CURRENT_ENTRY', elements: { ALIGNMENT_POINTSET_CURRENT_ENTRY: index } })
+		}
+
+		client.sendSwitch({ device: mount.name, name: 'ALIGNMENT_POINTSET_ACTION', elements: { [action]: true } })
+		client.sendSwitch({ device: mount.name, name: 'ALIGNMENT_POINTSET_COMMIT', elements: { ALIGNMENT_POINTSET_COMMIT: true } })
+
+		if (reinitialize) this.alignmentInitialize(mount, client)
+	}
+
 	// Applies mount switch vectors: slew rate, track mode/state, pier side, park/park-option, abort, home,
-	// slew-vs-sync mode, and axis motion.
+	// slew-vs-sync mode, axis motion, and the alignment subsystem's active/math-plugin switches.
 	switchVector(client: Client, message: DefSwitchVector | SetSwitchVector, tag: string) {
 		const device = this.get(client, message.device)
 
@@ -1404,6 +1514,57 @@ export class MountManager extends DeviceManager<Mount> {
 		const { elements } = message
 
 		switch (message.name) {
+			case 'ALIGNMENT_SUBSYSTEM_ACTIVE': {
+				const { alignment } = device
+				let updated = tag[0] === 'd' && handleSwitchValue(alignment, 'available', true, message.state)
+
+				// Only a definition carries the driver's element names. The vector is AtMostOne with a single
+				// member, so a renamed member is the first (and only) key.
+				if (tag[0] === 'd') {
+					const defined = ALIGNMENT_SUBSYSTEM_ACTIVE in elements ? ALIGNMENT_SUBSYSTEM_ACTIVE : Object.keys(elements)[0]
+					if (defined !== undefined) this.#alignmentActiveElements.set(device, defined)
+				}
+
+				// The known element wins whenever it is present: an explicit Off must never be overridden by
+				// the any-switch-on fallback, which only covers a driver that renamed the element.
+				const element = elements[ALIGNMENT_SUBSYSTEM_ACTIVE]
+				const active = element !== undefined ? element.value === true : findOnSwitch(message).length > 0
+
+				updated = handleSwitchValue(alignment, 'active', active, message.state) || updated
+
+				if (updated) this.updated(device, 'alignment', message.state)
+
+				return
+			}
+			case 'ALIGNMENT_SUBSYSTEM_MATH_PLUGINS': {
+				const { alignment } = device
+				let updated = false
+
+				if (tag[0] === 'd') {
+					const plugins: NameAndLabel[] = []
+
+					for (const key in elements) {
+						const element = elements[key] as DefSwitch
+						plugins.push({ name: element.name, label: element.label ?? element.name })
+					}
+
+					alignment.plugins = plugins
+					updated = true
+				}
+
+				// The vector is OneOfMany and INDI always echoes every member, so "none on" really means no
+				// plugin is selected. Assigned directly because handleTextValue cannot clear a field.
+				const plugin = findOnSwitch(message)[0]
+
+				if (alignment.plugin !== plugin) {
+					alignment.plugin = plugin
+					updated = true
+				}
+
+				if (updated || message.state === 'Alert') this.updated(device, 'alignment', message.state)
+
+				return
+			}
 			case 'TELESCOPE_SLEW_RATE':
 				if (tag[0] === 'd') {
 					const rates: NameAndLabel[] = []
@@ -1563,14 +1724,27 @@ export class MountManager extends DeviceManager<Mount> {
 		}
 	}
 
-	// Applies mount number vectors: the equatorial (JNOW) coordinate and slewing state, and the site
-	// geographic coordinate.
+	// Applies mount number vectors: the equatorial (JNOW) coordinate and slewing state, the site geographic
+	// coordinate, and the alignment point count.
 	numberVector(client: Client, message: DefNumberVector | SetNumberVector, tag: string) {
 		const device = this.get(client, message.device)
 
 		if (device === undefined) return
 
 		switch (message.name) {
+			case 'ALIGNMENT_POINTSET_SIZE': {
+				const value = message.elements.ALIGNMENT_POINTSET_SIZE?.value
+
+				// Protocol decoding boundary: Infinity would survive the clamp and leak into the public
+				// state, and a NaN sample must be ignored rather than reset a known count to zero.
+				if (value !== undefined && Number.isFinite(value)) {
+					if (handleNumberValue(device.alignment, 'pointCount', value, message.state, alignmentPointCount)) {
+						this.updated(device, 'alignment', message.state)
+					}
+				}
+
+				return
+			}
 			case 'EQUATORIAL_EOD_COORD': {
 				if (handleSwitchValue(device, 'slewing', message.state === 'Busy')) {
 					this.updated(device, 'slewing', message.state)
@@ -1635,6 +1809,39 @@ export class MountManager extends DeviceManager<Mount> {
 
 		const name = message.name
 		const full = !name
+
+		if (full) this.clearWritableProperty(device)
+		else this.removeWritableProperty(device, name)
+
+		if (full || name === 'ALIGNMENT_SUBSYSTEM_ACTIVE') this.#alignmentActiveElements.delete(device)
+
+		if (full) {
+			resetDeviceValue(this, device, 'alignment', DEFAULT_MOUNT.alignment)
+		} else {
+			// Partial resets cannot go through resetDeviceValue, which only replaces top-level device fields.
+			const { alignment } = device
+			let updated = false
+
+			if (name === 'ALIGNMENT_SUBSYSTEM_ACTIVE') {
+				updated = handleSwitchValue(alignment, 'available', false) || updated
+				updated = handleSwitchValue(alignment, 'active', false) || updated
+			}
+			if (name === 'ALIGNMENT_SUBSYSTEM_MATH_PLUGINS') {
+				if (alignment.plugins.length > 0) {
+					alignment.plugins = DEFAULT_MOUNT.alignment.plugins
+					updated = true
+				}
+				if (alignment.plugin !== undefined) {
+					alignment.plugin = undefined
+					updated = true
+				}
+			}
+			if (name === 'ALIGNMENT_POINTSET_SIZE') {
+				updated = handleNumberValue(alignment, 'pointCount', DEFAULT_MOUNT.alignment.pointCount) || updated
+			}
+
+			if (updated) this.updated(device, 'alignment')
+		}
 
 		if (full || name === 'TELESCOPE_SLEW_RATE') {
 			resetDeviceValue(this, device, 'slewRates', DEFAULT_MOUNT.slewRates)
@@ -3370,6 +3577,12 @@ function handlePropertyValue<D, T extends string | number | boolean>(device: D, 
 	}
 
 	return state === 'Alert'
+}
+
+// Normalizes ALIGNMENT_POINTSET_SIZE into a non-negative integer count. The property is declared as a
+// float by INDI, so a driver may report a fractional or (after a failed commit) negative value.
+function alignmentPointCount(value: number) {
+	return value > 0 ? Math.trunc(value) : 0
 }
 
 // Typed wrappers over handlePropertyValue: switch coerces undefined to false; number applies an optional

@@ -272,6 +272,16 @@ export interface Dome extends Device, Parkable {
 	readonly measurements: DomeMeasurements
 }
 
+// Observable state of a mount's INDI Alignment Subsystem. Mirrors only what the driver advertises
+// through the ALIGNMENT_* properties; it carries neither the alignment points nor the math model.
+export interface MountAlignmentState {
+	available: boolean // Driver defined ALIGNMENT_SUBSYSTEM_ACTIVE, i.e. it exposes the subsystem
+	active: boolean // Logical state of the ALIGNMENT SUBSYSTEM ACTIVE switch, never the vector state
+	plugins: readonly NameAndLabel[] // Math plugins advertised by ALIGNMENT_SUBSYSTEM_MATH_PLUGINS, in driver order
+	plugin?: NameAndLabel['name'] // Name of the currently selected math plugin, or undefined when none is on
+	pointCount: number // ALIGNMENT_POINTSET_SIZE, normalized to a non-negative integer
+}
+
 // Mount/telescope device: slew/sync/goto/track/park/home capabilities, slew rates, track modes, pier
 // side, and the current equatorial coordinate (radians). Also a guide output and GPS/site source.
 export interface Mount extends GuideOutput, GPS, Parkable {
@@ -298,6 +308,7 @@ export interface Mount extends GuideOutput, GPS, Parkable {
 	canSetPierSide: boolean
 	pierSide: PierSide
 	readonly equatorialCoordinate: EquatorialCoordinate
+	readonly alignment: MountAlignmentState
 }
 
 // Filter-wheel device: slot count, filter names, and current 0-based slot position.
@@ -563,6 +574,13 @@ export const DEFAULT_MOUNT: Mount = {
 	equatorialCoordinate: {
 		rightAscension: 0,
 		declination: 0,
+	},
+	alignment: {
+		available: false,
+		active: false,
+		plugins: [],
+		plugin: undefined,
+		pointCount: 0,
 	},
 	canPulseGuide: false,
 	pulsing: false,
