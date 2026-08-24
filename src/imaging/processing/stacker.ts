@@ -558,17 +558,11 @@ export function stackFrames(frames: readonly StackingFrame[], options: StackingO
 			continue
 		}
 
-		const aligned = createAlignedFrame(frame, i, quality, referenceFrame, registration, resolved)
-
-		if (aligned === undefined) {
-			// The frame registered fine and only its normalization failed, so report the coverage it had
-			// rather than 0, which would read as a no-overlap frame.
-			const covered = registration.coveredPixels / Math.max(registration.validityMask.length, 1)
-			diagnostics.push({ accepted: false, frameIndex: i, frameId: frame.id, overlapFraction: covered, quality, reason: 'normalization-failed', transform: registration.transform.summary })
-			continue
-		}
-
-		const overlapFraction = aligned.coveredPixels / Math.max(aligned.valid.length, 1)
+		// Coverage decides acceptance before the frame is normalized, matching the live path: a frame that
+		// cannot contribute keeps its documented rejection reason instead of being reported as a
+		// normalization failure, and an expensive local fit never runs on a frame that is about to be
+		// dropped anyway.
+		const overlapFraction = registration.coveredPixels / Math.max(registration.validityMask.length, 1)
 
 		if (overlapFraction <= 0) {
 			diagnostics.push({ accepted: false, frameIndex: i, frameId: frame.id, overlapFraction: 0, quality, reason: 'no-overlap' })
@@ -577,6 +571,15 @@ export function stackFrames(frames: readonly StackingFrame[], options: StackingO
 
 		if (overlapFraction < resolved.minOverlapFraction) {
 			diagnostics.push({ accepted: false, frameIndex: i, frameId: frame.id, overlapFraction, quality, reason: 'insufficient-overlap', transform: registration.transform.summary })
+			continue
+		}
+
+		const aligned = createAlignedFrame(frame, i, quality, referenceFrame, registration, resolved)
+
+		if (aligned === undefined) {
+			// The frame registered and covered enough of the reference; only its normalization failed, so
+			// report the coverage it had rather than 0, which would read as a no-overlap frame.
+			diagnostics.push({ accepted: false, frameIndex: i, frameId: frame.id, overlapFraction, quality, reason: 'normalization-failed', transform: registration.transform.summary })
 			continue
 		}
 

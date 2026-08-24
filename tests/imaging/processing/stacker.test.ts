@@ -290,6 +290,28 @@ describe('stacker normalization modes', () => {
 		expect(liveSummary.local!.channels).toEqual(batchSummary.local!.channels)
 	})
 
+	test('overlap rejection outranks a local normalization failure in both paths', () => {
+		// The frame registers but covers too little of the reference, and its local fit would fail too.
+		// Coverage is the documented reason, and batch must agree with live on that precedence.
+		const { reference } = localFrames(
+			() => 1.2,
+			() => 0.01,
+		)
+		const shifted = translateImage(reference, -56, 56)
+		const frames = [makeFrame(reference, makeStars()), makeFrame(shifted, makeStars(56, -56))]
+		const options = {
+			...LOCAL_OPTIONS,
+			minOverlapFraction: 0.95,
+			localNormalization: { gridSize: 4, minSamplesPerCell: 100000, fallback: 'reject' },
+		} as const satisfies StackingOptions
+
+		const batch = stackFrames(frames, options)
+		expect(batch.diagnostics[1].reason).toBe('insufficient-overlap')
+
+		const live = new LiveStacker(options)
+		live.add(frames[0])
+		expect(live.add(frames[1]).reason).toBe('insufficient-overlap')
+	})
 	test('a reject fallback drops the frame as normalization-failed', () => {
 		const { reference, current } = localFrames(
 			() => 1.2,
