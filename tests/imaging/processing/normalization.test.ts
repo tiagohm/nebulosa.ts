@@ -394,6 +394,41 @@ describe('local normalization', () => {
 		}
 	})
 
+	test('a diagonal partial overlap is corrected as accurately at its boundary as inside', () => {
+		// A diagonal overlap boundary leaves the boundary cells clipped, with centroids well off their
+		// nominal grid centers, and every axis-aligned mask test above misses that case.
+		const reference = referencePlane()
+		const scale = (x: number, y: number) => 1.1 + 0.09 * (x / WIDTH) - 0.06 * (y / HEIGHT)
+		const current = inverseTransform(reference, scale, (x) => 0.01 + 0.015 * (x / WIDTH))
+
+		const mask = new Uint8Array(WIDTH * HEIGHT)
+		for (let y = 0; y < HEIGHT; y++) {
+			for (let x = 0; x < WIDTH; x++) {
+				if (x + y > 96 && x + y < 300) mask[y * WIDTH + x] = 1
+			}
+		}
+
+		const model = fitMono(reference, current, {}, mask)
+		expect(model.diagnostics[0].fallback).toBe(false)
+
+		applyLocalNormalizationInPlace(current, mask, model)
+
+		// Boundary cells must be corrected as accurately as interior ones.
+		let boundary = 0
+		let boundaryCount = 0
+		for (let y = 0; y < HEIGHT; y++) {
+			for (let x = 0; x < WIDTH; x++) {
+				const s = x + y
+				if (mask[y * WIDTH + x] === 0) continue
+				if (s > 110 && s < 286) continue
+				boundary += Math.abs(current[y * WIDTH + x] - reference[y * WIDTH + x])
+				boundaryCount++
+			}
+		}
+
+		expect(boundaryCount).toBeGreaterThan(1000)
+		expect(boundary / boundaryCount).toBeLessThan(2e-3)
+	})
 	test('the coarse node grid agrees with a dense one', () => {
 		const reference = referencePlane()
 		const current = inverseTransform(

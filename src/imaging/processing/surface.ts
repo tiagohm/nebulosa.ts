@@ -784,6 +784,37 @@ export function createScalarSurfaceEvaluator(model: ScalarSurfaceModel, table: S
 	return model.type === 'thinPlateSpline' ? new ThinPlateSplineSurfaceEvaluator(model, table) : new PolynomialSurfaceEvaluator(model, table)
 }
 
+// Evaluates a fitted surface at arbitrary, irregularly placed points.
+export interface ScalarSurfacePointEvaluator {
+	// Value of the surface at one pixel position, which may be fractional. Allocates nothing.
+	readonly at: (x: number, y: number) => number
+}
+
+// Creates a point evaluator for `model`, reusing its own scratch across calls. Use it for scattered
+// positions; a regular row of points is cheaper through `createScalarSurfaceEvaluator`, which shares
+// one precomputed Chebyshev basis across every row.
+export function createScalarSurfacePointEvaluator(model: ScalarSurfaceModel): ScalarSurfacePointEvaluator {
+	const su = domainScale(model.domain.x0, model.domain.x1)
+	const sv = domainScale(model.domain.y0, model.domain.y1)
+	const { x0, y0 } = model.domain
+
+	if (model.type === 'thinPlateSpline') {
+		const controlPoints = model.controlPoints!
+		const k = controlPoints.length / 2
+		return { at: (x, y) => evaluateThinPlateSplineAt(model.coefficients, controlPoints, k, (x - x0) * su - 1, (y - y0) * sv - 1) }
+	}
+
+	const degree = model.degree
+	const terms = basisTermCount(degree)
+	const ti = new Uint8Array(terms)
+	const tj = new Uint8Array(terms)
+	fillBasisExponents(degree, ti, tj)
+	const uCheb = new Float64Array(degree + 1)
+	const vCheb = new Float64Array(degree + 1)
+
+	return { at: (x, y) => evaluatePolynomialSurfaceAt(model.coefficients, (x - x0) * su - 1, (y - y0) * sv - 1, degree, terms, ti, tj, uCheb, vCheb) }
+}
+
 // Coarse evaluation step in pixels for a spline with `k` control points over a width*height plane.
 // Nodes are spaced a fraction of the mean control-point spacing sqrt(area/k). Returns 1 (evaluate
 // every pixel directly) for small planes or degenerate axes, where coarsening would not pay off.

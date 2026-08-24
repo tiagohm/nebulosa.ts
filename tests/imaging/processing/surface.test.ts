@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 // oxfmt-ignore
-import { basisTermCount, createScalarSurfaceEvaluator, createSurfaceColumnTable, evaluateScalarSurfaceInto, fillBasisExponents, fillChebyshev, fitScalarSurface, fullSurfaceDomain, type SurfaceFitOptions, type SurfaceSample } from '../../../src/imaging/processing/surface'
+import { basisTermCount, createScalarSurfaceEvaluator, createScalarSurfacePointEvaluator, createSurfaceColumnTable, evaluateScalarSurfaceInto, fillBasisExponents, fillChebyshev, fitScalarSurface, fullSurfaceDomain, type SurfaceFitOptions, type SurfaceSample } from '../../../src/imaging/processing/surface'
 
 function sampleGrid(width: number, height: number, columns: number, rows: number, value: (x: number, y: number) => number, weight?: (x: number, y: number) => number) {
 	const samples: SurfaceSample[] = []
@@ -316,5 +316,42 @@ describe('evaluation', () => {
 		expect(table.u[0]).toBeCloseTo(-1, 12)
 		expect(table.u[63]).toBeCloseTo(1, 12)
 		expect(table.u[32]).toBeCloseTo((32 * 2) / 63 - 1, 12)
+	})
+
+	test('the point evaluator matches the row evaluator', () => {
+		const field = (x: number, y: number) => 0.1 + 0.002 * x - 0.004 * y + 0.00003 * x * y
+		const model = fitOrThrow(sampleGrid(64, 64, 8, 8, field), 64, 64, { degree: 2 })
+
+		const table = createSurfaceColumnTable(model.degree, model.domain, 64)
+		const evaluator = createScalarSurfaceEvaluator(model, table)
+		const point = createScalarSurfacePointEvaluator(model)
+		const row = new Float64Array(64)
+
+		for (const y of [0, 13.5, 31, 63]) {
+			evaluator.fillRow(y, row, 0, 1)
+			for (let x = 0; x < 64; x += 7) expect(point.at(x, y)).toBeCloseTo(row[x], 12)
+		}
+
+		// Off-grid positions the row evaluator cannot reach.
+		expect(point.at(12.25, 7.75)).toBeCloseTo(field(12.25, 7.75), 8)
+	})
+
+	test('the point evaluator honors a restricted domain and the spline model', () => {
+		const samples = sampleGrid(64, 64, 6, 6, (x, y) => 0.2 + 0.002 * x * Math.cos(y / 9))
+		const domain = { x0: 4, y0: 4, x1: 60, y1: 60 }
+
+		for (const options of [
+			{ degree: 2, domain },
+			{ model: 'thinPlateSpline', smoothing: 0.2, domain },
+		] as const) {
+			const model = fitOrThrow(samples, 64, 64, options)
+			const table = createSurfaceColumnTable(model.degree, model.domain, 64)
+			const evaluator = createScalarSurfaceEvaluator(model, table)
+			const point = createScalarSurfacePointEvaluator(model)
+			const row = new Float64Array(64)
+
+			evaluator.fillRow(21.5, row, 0, 1)
+			for (let x = 0; x < 64; x += 9) expect(point.at(x, 21.5)).toBeCloseTo(row[x], 10)
+		}
 	})
 })

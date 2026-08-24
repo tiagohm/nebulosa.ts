@@ -2,7 +2,7 @@ import { medianBySelectionOf, medianOf, quickSelect, STANDARD_DEVIATION_SCALE } 
 import { clamp } from '../../math/numerical/math'
 import { DEFAULT_GRAYSCALE, type Image, type ImageRawType } from '../model/types'
 // oxfmt-ignore
-import { createScalarSurfaceEvaluator, createSurfaceColumnTable, fitScalarSurface, type ScalarSurfaceModel, type SurfaceDomain, type SurfaceModelType, type SurfaceSample } from './surface'
+import { createScalarSurfaceEvaluator, createScalarSurfacePointEvaluator, createSurfaceColumnTable, fitScalarSurface, type ScalarSurfaceModel, type SurfaceDomain, type SurfaceModelType, type SurfaceSample } from './surface'
 
 // Photometric normalization of a frame against a reference frame, applied after registration and
 // before combination:
@@ -470,7 +470,7 @@ function isSignificantGainField(model: ScalarSurfaceModel, sigma: number) {
 // that will actually be applied there. Returns a constant anchor gain when there is no gain field. The
 // cell centers form a regular grid, so one column table drives the whole sweep with no allocation per
 // cell. Confidence is 1 at an accepted cell by construction, so it is not applied here.
-function evaluateGainAtCells(surface: ScalarSurfaceModel | undefined, range: readonly [number, number] | undefined, anchorScale: number, grid: LocalGrid, cellCount: number) {
+function evaluateGainAtCells(surface: ScalarSurfaceModel | undefined, range: readonly [number, number] | undefined, anchorScale: number, cellX: Float64Array, cellY: Float64Array, mask: Uint8Array, cellCount: number) {
 	const out = new Float64Array(cellCount)
 
 	if (surface === undefined || range === undefined) {
@@ -478,15 +478,18 @@ function evaluateGainAtCells(surface: ScalarSurfaceModel | undefined, range: rea
 		return out
 	}
 
-	const { columns, rows, cellW, cellH } = grid
-	const table = createSurfaceColumnTable(surface.degree, surface.domain, columns, cellW / 2, cellW)
-	const evaluator = createScalarSurfaceEvaluator(surface, table)
-	const row = new Float64Array(columns)
+	// Each cell is evaluated at the centroid of its valid pixel pairs, the same position its gain sample
+	// was fitted at. A cell clipped by the validity mask — the norm along a registration boundary — sits
+	// well off its nominal grid center, and the gain read there is what rotates its offset residual.
+	const evaluator = createScalarSurfacePointEvaluator(surface)
 
-	for (let r = 0; r < rows; r++) {
-		evaluator.fillRow(cellH / 2 + r * cellH, row, 0, 1)
-		const base = r * columns
-		for (let c = 0; c < columns; c++) out[base + c] = anchorScale * Math.exp(clamp(row[c], range[0], range[1]))
+	for (let cell = 0; cell < cellCount; cell++) {
+		if (mask[cell] === 0) {
+			out[cell] = anchorScale
+			continue
+		}
+
+		out[cell] = anchorScale * Math.exp(clamp(evaluator.at(cellX[cell], cellY[cell]), range[0], range[1]))
 	}
 
 	return out
@@ -930,7 +933,7 @@ export function fitLocalNormalizationRaw(referenceRaw: ImageRawType, currentRaw:
 			const pivot = pivots[plane]
 			const levels = cellLevel[plane]
 			const offsets = cellOffset[plane]
-			const gainAtCell = evaluateGainAtCells(scaleSurface, scaleRange, anchor.scale, grid, cellCount)
+			const gainAtCell = evaluateGainAtCells(scaleSurface, scaleRange, anchor.scale, cellX, cellY, mask, cellCount)
 			const samples: SurfaceSample[] = []
 
 			for (let cell = 0; cell < cellCount; cell++) {
