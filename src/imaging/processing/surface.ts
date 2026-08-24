@@ -394,6 +394,7 @@ export function subsampleSurfaceControlPoints(set: SurfaceSampleSet, maxPoints: 
 
 	const g = Math.max(1, Math.floor(Math.sqrt(maxPoints)))
 	const seen = new Uint8Array(g * g)
+	const limit = Math.max(maxPoints, MIN_CONTROL_POINTS)
 	const chosen = new Uint32Array(Math.max(g * g, MIN_CONTROL_POINTS))
 	let n = 0
 
@@ -408,59 +409,37 @@ export function subsampleSurfaceControlPoints(set: SurfaceSampleSet, maxPoints: 
 		chosen[n++] = i
 	}
 
-	// The bucket sweep guarantees spatial coverage of the whole ACTIVE set, but not of the SELECTION it
-	// returns, and the spline is solved from the selection alone. Two ways it can come back degenerate:
-	// a cap below 4 collapses the grid to a single bucket and yields one control point, and a set whose
-	// occupied buckets happen to line up can have its first-in-bucket representatives be collinear even
-	// though later samples in those same buckets give the whole set genuine 2D spread. Either leaves the
-	// saddle-point system singular for a layout the uncapped fit handles, so the selection is repaired
-	// against its own coverage rather than the set's.
-	if (n > 0 && (n < MIN_CONTROL_POINTS || !isSpanningSelection(set, chosen, n))) {
-		// The anchor pair fixes the longest axis of the selection: its first point and whichever point is
-		// farthest from it. Both come from the selection when it has two, so a good spread is preserved.
-		let anchor = chosen[0]
-		let far = -1
-		let bestDistance = 0
+	// The bucket sweep spreads the selection over the sampled region, but nothing about it constrains the
+	// SELECTION to span two dimensions, and the spline is solved from the selection alone. A cap below 4
+	// collapses the grid to one bucket; a set whose occupied buckets line up yields collinear
+	// first-in-bucket representatives even when later samples in those same buckets give the whole set
+	// genuine spread. Either way the saddle-point system comes out singular for a layout the uncapped fit
+	// handles.
+	//
+	// So the spanning triple is not a repair applied when the selection looks bad — it is computed from
+	// the active set and always merged in. That makes non-collinearity a property of how the selection is
+	// built rather than something to detect afterwards, which is what repeatedly left holes: every
+	// conditional repair had a path where an earlier fix was undone by a later one. The cost is at most
+	// three bucket representatives, and the triple consists of extreme points, which a spline wants as
+	// control points anyway. Stability beyond mere solvability stays where it belongs, in the coverage
+	// check the caller runs over the whole active set before subsampling.
+	const triple = spanningTriple(set)
 
-		for (let i = 0; i < set.count; i++) {
-			if (set.active[i] === 0) continue
-			const du = set.u[i] - set.u[anchor]
-			const dv = set.v[i] - set.v[anchor]
-			const distance = du * du + dv * dv
-			if (distance > bestDistance) {
-				bestDistance = distance
-				far = i
+	if (triple !== undefined) {
+		for (const index of triple) {
+			if (containsIndex(chosen, n, index)) continue
+
+			if (n < limit && n < chosen.length) {
+				chosen[n++] = index
+				continue
 			}
-		}
 
-		if (far >= 0) {
-			if (n < 2) chosen[n++] = far
-			else if (!containsIndex(chosen, n, far)) chosen[1] = far
-
-			// The third control maximizes triangle area with the anchor pair, which is the property the
-			// spline actually needs. Choosing it by distance instead would happily land on the midpoint of a
-			// long collinear run whenever the off-line samples cluster near an endpoint.
-			anchor = chosen[0]
-			const u0 = set.u[anchor]
-			const v0 = set.v[anchor]
-			const du1 = set.u[chosen[1]] - u0
-			const dv1 = set.v[chosen[1]] - v0
-			let best = -1
-			let bestArea = 0
-
-			for (let i = 0; i < set.count; i++) {
-				if (set.active[i] === 0) continue
-				// Twice the triangle area, as the magnitude of the 2D cross product.
-				const area = Math.abs(du1 * (set.v[i] - v0) - dv1 * (set.u[i] - u0))
-				if (area > bestArea) {
-					bestArea = area
-					best = i
+			// No room left: drop a representative that is not itself part of the triple.
+			for (let k = n - 1; k >= 0; k--) {
+				if (triple[0] !== chosen[k] && triple[1] !== chosen[k] && triple[2] !== chosen[k]) {
+					chosen[k] = index
+					break
 				}
-			}
-
-			if (best >= 0) {
-				if (n < MIN_CONTROL_POINTS) chosen[n++] = best
-				else if (!containsIndex(chosen, n, best)) chosen[2] = best
 			}
 		}
 	}
@@ -468,37 +447,67 @@ export function subsampleSurfaceControlPoints(set: SurfaceSampleSet, maxPoints: 
 	return chosen.subarray(0, n)
 }
 
-// Whether the first `n` entries of `chosen` span a genuine 2D region, using the same spread threshold as
-// the sample-set predicate.
-function isSpanningSelection(set: SurfaceSampleSet, chosen: Uint32Array, n: number) {
-	if (n < MIN_CONTROL_POINTS) return false
-
-	let su = 0
-	let sv = 0
-	for (let k = 0; k < n; k++) {
-		su += set.u[chosen[k]]
-		sv += set.v[chosen[k]]
+// The three active samples spanning the largest triangle this construction can find: an extreme point,
+// the point farthest from it, and the point maximizing triangle area with that pair. Returns undefined
+// only when the active samples are all coincident or collinear, in which case no spanning triple exists
+// and the spline is genuinely unfittable. The two-pass farthest-point search is the standard diameter
+// approximation, so the pair straddles the layout's longest axis.
+function spanningTriple(set: SurfaceSampleSet) {
+	let first = -1
+	for (let i = 0; i < set.count; i++) {
+		if (set.active[i] !== 0) {
+			first = i
+			break
+		}
 	}
-	const mu = su / n
-	const mv = sv / n
 
-	let cuu = 0
-	let cvv = 0
-	let cuv = 0
-	for (let k = 0; k < n; k++) {
-		const du = set.u[chosen[k]] - mu
-		const dv = set.v[chosen[k]] - mv
-		cuu += du * du
-		cvv += dv * dv
-		cuv += du * dv
+	if (first < 0) return undefined
+
+	const p = farthestActiveSample(set, first)
+	if (p < 0) return undefined
+
+	const q = farthestActiveSample(set, p)
+	if (q < 0) return undefined
+
+	const u0 = set.u[p]
+	const v0 = set.v[p]
+	const du = set.u[q] - u0
+	const dv = set.v[q] - v0
+	let r = -1
+	let bestArea = 0
+
+	for (let i = 0; i < set.count; i++) {
+		if (set.active[i] === 0) continue
+		// Twice the triangle area, as the magnitude of the 2D cross product.
+		const area = Math.abs(du * (set.v[i] - v0) - dv * (set.u[i] - u0))
+		if (area > bestArea) {
+			bestArea = area
+			r = i
+		}
 	}
-	cuu /= n
-	cvv /= n
-	cuv /= n
 
-	const tr = cuu + cvv
-	const disc = Math.sqrt(Math.max(0, (tr * tr) / 4 - (cuu * cvv - cuv * cuv)))
-	return Math.sqrt(Math.max(0, tr / 2 - disc)) >= MIN_SAMPLE_SPREAD
+	return r < 0 ? undefined : ([p, q, r] as const)
+}
+
+// Index of the active sample farthest from `from`, or -1 when every active sample coincides with it.
+function farthestActiveSample(set: SurfaceSampleSet, from: number) {
+	const u0 = set.u[from]
+	const v0 = set.v[from]
+	let best = -1
+	let bestDistance = 0
+
+	for (let i = 0; i < set.count; i++) {
+		if (set.active[i] === 0) continue
+		const du = set.u[i] - u0
+		const dv = set.v[i] - v0
+		const distance = du * du + dv * dv
+		if (distance > bestDistance) {
+			bestDistance = distance
+			best = i
+		}
+	}
+
+	return best
 }
 
 // Whether index `value` is among the first `n` entries of `chosen`.

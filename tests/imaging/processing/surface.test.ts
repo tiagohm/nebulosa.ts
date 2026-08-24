@@ -321,6 +321,60 @@ describe('thin-plate spline', () => {
 		expect(maxArea).toBeGreaterThan(0)
 	})
 
+	test('a capped selection always spans a triangle, over many layouts and caps', () => {
+		// The class of bugs this closes came from repairing the selection only when it looked degenerate.
+		// The spanning triple is now merged in unconditionally, so the property is checked broadly rather
+		// than through one more hand-built arrangement.
+		const random = (() => {
+			let state = 20240517
+			return () => {
+				state = (state * 1664525 + 1013904223) >>> 0
+				return state / 4294967296
+			}
+		})()
+
+		for (let trial = 0; trial < 120; trial++) {
+			const samples: SurfaceSample[] = []
+			// A dominant collinear run plus a few off-line samples: the layout family that kept slipping
+			// through, with the run's direction, length and the off-line cluster all varying.
+			const angle = random() * Math.PI
+			const dx = Math.cos(angle)
+			const dy = Math.sin(angle)
+			const runLength = 6 + Math.floor(random() * 20)
+			for (let i = 0; i < runLength; i++) {
+				const t = (i / (runLength - 1)) * 50
+				samples.push({ x: 32 + dx * (t - 25), y: 32 + dy * (t - 25), value: 0.2 + 0.001 * t })
+			}
+			const offCount = 1 + Math.floor(random() * 4)
+			for (let i = 0; i < offCount; i++) {
+				const t = random() * 50 - 25
+				const push = (0.5 + random() * 6) * (random() < 0.5 ? 1 : -1)
+				samples.push({ x: 32 + dx * t - dy * push, y: 32 + dy * t + dx * push, value: 0.25 })
+			}
+
+			const uncapped = fitScalarSurface(samples, 64, 64, { model: 'thinPlateSpline', smoothing: 0.1 })
+			if (!uncapped.ok) continue
+
+			for (const maxControlPoints of [3, 4, 9, 16]) {
+				const capped = fitScalarSurface(samples, 64, 64, { model: 'thinPlateSpline', smoothing: 0.1, maxControlPoints })
+				expect(capped.ok).toBe(true)
+				if (!capped.ok) continue
+
+				const points = capped.model.controlPoints!
+				const k = points.length / 2
+				let maxArea = 0
+				for (let a = 0; a < k; a++) {
+					for (let b = a + 1; b < k; b++) {
+						for (let c = b + 1; c < k; c++) {
+							maxArea = Math.max(maxArea, Math.abs((points[2 * b] - points[2 * a]) * (points[2 * c + 1] - points[2 * a + 1]) - (points[2 * b + 1] - points[2 * a + 1]) * (points[2 * c] - points[2 * a])))
+						}
+					}
+				}
+				expect(maxArea).toBeGreaterThan(0)
+			}
+		}
+	})
+
 	test('a smoothing spline rejects the samples the cap dropped', () => {
 		const samples = sampleGrid(256, 256, 12, 12, (x, y) => 0.2 + 0.0005 * (x - y))
 		const model = fitOrThrow(samples, 256, 256, { model: 'thinPlateSpline', smoothing: 0.5, maxControlPoints: 16 })
