@@ -632,6 +632,25 @@ function fillAxisBounds(n: number, cell: number, extent: number, boxPixels: numb
 	return maxBox
 }
 
+// Per-axis sampling strides that keep a box of `boxW` x `boxH` pixels within `maxSamples` pairs while
+// preserving its aspect ratio, plus the exact number of pairs the strided scan can yield.
+//
+// The x budget is `sqrt(maxSamples * boxW / boxH)`, capped by the box width and by the budget itself so
+// an extremely wide box cannot claim more columns than the whole budget. Whatever the x pass leaves is
+// then spent on y, which keeps `columns * rows <= maxSamples` exactly.
+function resolveCellStride(boxW: number, boxH: number, maxSamples: number) {
+	if (boxW * boxH <= maxSamples) return { strideX: 1, strideY: 1, capacity: boxW * boxH }
+
+	const targetX = clamp(Math.floor(Math.sqrt((maxSamples * boxW) / boxH)), 1, Math.min(boxW, maxSamples))
+	const strideX = Math.max(1, Math.ceil(boxW / targetX))
+	const columns = Math.ceil(boxW / strideX)
+	const targetY = Math.max(1, Math.floor(maxSamples / columns))
+	const strideY = Math.max(1, Math.ceil(boxH / targetY))
+	const rows = Math.ceil(boxH / strideY)
+
+	return { strideX, strideY, capacity: columns * rows }
+}
+
 // Builds the cell grid: roughly square cells along the longer axis, with a floor of `minCellsPerAxis`
 // cells per axis so a high-aspect frame still yields a 2D layout the surface fit can use, and a ceiling
 // of one cell per pixel so an extreme `gridSize` cannot blow the cell count up.
@@ -768,9 +787,12 @@ export function fitLocalNormalizationRaw(referenceRaw: ImageRawType, currentRaw:
 	const cellCount = columns * rows
 
 	// Stride the box down to the sample budget BEFORE reading any pixel, so collection cost scales with
-	// `maxSamplesPerCell` rather than with the box area.
-	const stride = Math.max(1, Math.ceil(Math.sqrt((grid.maxBoxW * grid.maxBoxH) / maxSamplesPerCell)))
-	const capacity = Math.ceil(grid.maxBoxW / stride) * Math.ceil(grid.maxBoxH / stride)
+	// `maxSamplesPerCell` rather than with the box area. The two axes are strided independently: one
+	// stride derived from the box area only honors the budget for a roughly square box, and overshoots it
+	// by the aspect ratio otherwise — a 1-pixel-wide cell of a very tall frame would collect thousands of
+	// pairs against a budget of 1024, sizing every buffer and the whole pixel scan accordingly. For a
+	// square box the split reproduces the single stride exactly.
+	const { strideX, strideY, capacity } = resolveCellStride(grid.maxBoxW, grid.maxBoxH, maxSamplesPerCell)
 
 	const refBuf = new Float64Array(planes * capacity)
 	const curBuf = new Float64Array(planes * capacity)
@@ -828,10 +850,10 @@ export function fitLocalNormalizationRaw(referenceRaw: ImageRawType, currentRaw:
 			let sumX = 0
 			let sumY = 0
 
-			for (let y = by0; y <= by1; y += stride) {
+			for (let y = by0; y <= by1; y += strideY) {
 				const rowBase = y * width
 
-				for (let x = bx0; x <= bx1; x += stride) {
+				for (let x = bx0; x <= bx1; x += strideX) {
 					visited++
 					const pixel = rowBase + x
 					if (valid !== undefined && valid[pixel] === 0) continue

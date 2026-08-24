@@ -660,6 +660,33 @@ describe('local normalization', () => {
 		// offset clamp, whose kink makes the interpolation error fall linearly rather than quadratically.
 		expect(maxAbsoluteError(coarse, dense)).toBeLessThan(3e-4)
 	})
+
+	test('a very anisotropic frame still honors the per-cell sample budget', () => {
+		// A single stride derived from the box area only honors the budget for a roughly square box; on a
+		// 1-pixel-wide frame each cell would otherwise collect thousands of pairs against a cap of 1024,
+		// sizing every buffer and the whole pixel scan by the aspect ratio instead of by the cap.
+		const width = 1
+		const height = 40000
+		const reference = new Float64Array(width * height)
+		const current = new Float64Array(width * height)
+		const noise = rng(3)
+		for (let i = 0; i < reference.length; i++) {
+			reference[i] = 0.1 + 0.05 * (i / height) + 0.01 * (noise() - 0.5)
+			current[i] = (reference[i] - 0.01) / 1.2
+		}
+
+		const resolved = resolveLocalNormalizationOptions({ maxSamplesPerCell: 1024 })
+		const model = fitLocalNormalizationRaw(reference, current, width, height, 1, 'per-channel', undefined, resolved)
+
+		// The layout has one cell column, so no 2D surface is possible and the plane falls back — but it
+		// must reach that verdict without ever sizing a buffer past the budget.
+		expect(model.diagnostics[0].fallback).toBe(true)
+
+		// A frame this thin cannot support a surface; the point is that the fit completes promptly.
+		const started = performance.now()
+		fitLocalNormalizationRaw(reference, current, width, height, 1, 'per-channel', undefined, resolved)
+		expect(performance.now() - started).toBeLessThan(2000)
+	})
 })
 
 describe('color handling', () => {
