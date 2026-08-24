@@ -1067,9 +1067,16 @@ export function fitScalarSurface(samples: readonly SurfaceSample[], width: numbe
 		if (activeSurfaceSampleCount(set) < MIN_CONTROL_POINTS) return { ok: false, reason: 'too-few-samples' }
 		if (!hasSurfaceTwoDimensionalCoverage(set)) return { ok: false, reason: 'degenerate-layout' }
 
-		deduplicateSurfaceSamples(set)
-
-		if (!hasSurfaceTwoDimensionalCoverage(set)) return { ok: false, reason: 'degenerate-layout' }
+		// Coincident samples are dropped only for an interpolating spline, where two identical rows make
+		// the system singular because the zero diagonal cannot break the tie. A smoothing spline adds
+		// `smoothing / weight` to each diagonal entry, so coincident points are perfectly solvable and
+		// keeping them is what lets the fit average repeated measurements at one location. Dropping all
+		// but the first would instead make the result depend on input order: four zero-valued corners plus
+		// centre samples of 0 and 10 fit a centre of 0 in one order and 9.55 in the other.
+		if (smoothing <= TPS_EXACT_SMOOTHING_MAX) {
+			deduplicateSurfaceSamples(set)
+			if (!hasSurfaceTwoDimensionalCoverage(set)) return { ok: false, reason: 'degenerate-layout' }
+		}
 
 		const indices = subsampleSurfaceControlPoints(set, maxControlPoints)
 		const tps = fitThinPlateSplineSurface(set, indices, smoothing)

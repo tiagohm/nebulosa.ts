@@ -224,13 +224,41 @@ describe('thin-plate spline', () => {
 		expect(smoothed.residual).toBeGreaterThan(exact.residual)
 	})
 
-	test('duplicate coordinates are deduplicated instead of making the system singular', () => {
+	test('an interpolating spline deduplicates coordinates instead of going singular', () => {
 		const samples = [...sampleGrid(64, 64, 5, 5, (x, y) => 0.2 + 0.001 * (x + y))]
 		samples.push({ ...samples[7] })
 		samples.push({ ...samples[12] })
 
-		const model = fitOrThrow(samples, 64, 64, { model: 'thinPlateSpline', smoothing: 0.1 })
+		const model = fitOrThrow(samples, 64, 64, { model: 'thinPlateSpline', smoothing: 0 })
 		expect(model.rejectedSamples).toBe(2)
+	})
+
+	test('a smoothing spline keeps coincident observations and averages them', () => {
+		// The regularized diagonal makes coincident points solvable, so they are real repeated
+		// measurements rather than a degeneracy to remove.
+		const samples = [...sampleGrid(64, 64, 5, 5, (x, y) => 0.2 + 0.001 * (x + y))]
+		samples.push({ ...samples[7] })
+
+		expect(fitOrThrow(samples, 64, 64, { model: 'thinPlateSpline', smoothing: 0.1 }).rejectedSamples).toBe(0)
+
+		// Dropping all but the first would make the fit depend on which duplicate came first.
+		function centerOf(first: number, second: number) {
+			const corners: SurfaceSample[] = [
+				{ x: 0, y: 0, value: 0 },
+				{ x: 63, y: 0, value: 0 },
+				{ x: 0, y: 63, value: 0 },
+				{ x: 63, y: 63, value: 0 },
+				{ x: 32, y: 32, value: first },
+				{ x: 32, y: 32, value: second },
+			]
+			return createScalarSurfacePointEvaluator(fitOrThrow(corners, 64, 64, { model: 'thinPlateSpline', smoothing: 0.1 })).at(32, 32)
+		}
+
+		const forward = centerOf(0, 10)
+		expect(centerOf(10, 0)).toBeCloseTo(forward, 9)
+		// The two observations are averaged, so the fit sits between them rather than on either.
+		expect(forward).toBeGreaterThan(1)
+		expect(forward).toBeLessThan(9)
 	})
 
 	test('control points are capped and the dropped samples are reported', () => {
