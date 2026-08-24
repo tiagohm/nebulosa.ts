@@ -1261,6 +1261,11 @@ const ALIGNMENT_SUBSYSTEM_ACTIVE = 'ALIGNMENT SUBSYSTEM ACTIVE'
 // tracking, pier-side, site/time, and capability vectors onto the Mount state. Angles are radians.
 // The INDI Alignment Subsystem is exposed as administrative commands over Mount.alignment.
 export class MountManager extends DeviceManager<Mount> {
+	// Tracks the driver's actual element name for the alignment subsystem's active switch. The read path
+	// tolerates a driver that renamed it, so the write path must target the name really defined instead of
+	// the INDI constant, which such a driver would ignore.
+	readonly #alignmentActiveElements = new WeakMap<Mount, string>()
+
 	tracking(mount: Mount, enable: boolean, client = mount[CLIENT]!) {
 		client.sendSwitch({ device: mount.name, name: 'TELESCOPE_TRACK_STATE', elements: { [enable ? 'TRACK_ON' : 'TRACK_OFF']: true } })
 	}
@@ -1402,11 +1407,14 @@ export class MountManager extends DeviceManager<Mount> {
 	}
 
 	// Enables or disables the INDI Alignment Subsystem. No-op when the mount does not expose it or the
-	// switch is read-only. The local `alignment.active` is not changed optimistically: it only follows the
+	// switch is read-only. Targets the element name the driver actually defined, so a driver that renamed
+	// the INDI member — the same case the read path tolerates — is commanded instead of silently ignoring
+	// an unknown member. The local `alignment.active` is not changed optimistically: it only follows the
 	// driver's own set vector, since the driver may refuse the change.
 	alignmentActive(mount: Mount, active: boolean, client = mount[CLIENT]!) {
 		if (mount.alignment.available && this.hasWritableProperty(mount, 'ALIGNMENT_SUBSYSTEM_ACTIVE')) {
-			client.sendSwitch({ device: mount.name, name: 'ALIGNMENT_SUBSYSTEM_ACTIVE', elements: { [ALIGNMENT_SUBSYSTEM_ACTIVE]: active } })
+			const element = this.#alignmentActiveElements.get(mount) ?? ALIGNMENT_SUBSYSTEM_ACTIVE
+			client.sendSwitch({ device: mount.name, name: 'ALIGNMENT_SUBSYSTEM_ACTIVE', elements: { [element]: active } })
 		}
 	}
 
@@ -1517,6 +1525,13 @@ export class MountManager extends DeviceManager<Mount> {
 			case 'ALIGNMENT_SUBSYSTEM_ACTIVE': {
 				const { alignment } = device
 				let updated = tag[0] === 'd' && handleSwitchValue(alignment, 'available', true, message.state)
+
+				// Only a definition carries the driver's element names. The vector is AtMostOne with a single
+				// member, so a renamed member is the first (and only) key.
+				if (tag[0] === 'd') {
+					const defined = ALIGNMENT_SUBSYSTEM_ACTIVE in elements ? ALIGNMENT_SUBSYSTEM_ACTIVE : Object.keys(elements)[0]
+					if (defined !== undefined) this.#alignmentActiveElements.set(device, defined)
+				}
 
 				// The known element wins whenever it is present: an explicit Off must never be overridden by
 				// the any-switch-on fallback, which only covers a driver that renamed the element.
@@ -1811,6 +1826,8 @@ export class MountManager extends DeviceManager<Mount> {
 
 		if (full) this.clearWritableProperty(device)
 		else this.removeWritableProperty(device, name)
+
+		if (full || name === 'ALIGNMENT_SUBSYSTEM_ACTIVE') this.#alignmentActiveElements.delete(device)
 
 		if (full) {
 			resetDeviceValue(this, device, 'alignment', DEFAULT_MOUNT.alignment)

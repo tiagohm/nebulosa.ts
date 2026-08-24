@@ -1228,6 +1228,30 @@ describe('MountManager INDI alignment', () => {
 		expect(mount.alignment.active).toBeTrue()
 	})
 
+	test('commands the active switch through the element the driver defined', () => {
+		const manager = new MountManager()
+		const mount = setupMount(manager)
+
+		manager.switchVector(recordingClient, { device: mount.name, name: 'ALIGNMENT_SUBSYSTEM_ACTIVE', permission: 'rw', rule: 'AtMostOne', state: 'Ok', elements: { RENAMED: defSwitch('RENAMED', false) } }, 'defSwitchVector')
+		manager.alignmentActive(mount, true)
+
+		expect(switchCommands).toEqual([{ device: mount.name, name: 'ALIGNMENT_SUBSYSTEM_ACTIVE', elements: { RENAMED: true } }])
+
+		// The INDI member wins over any other advertised element.
+		manager.switchVector(recordingClient, activeVector(mount.name, false), 'defSwitchVector')
+		switchCommands.length = 0
+		manager.alignmentActive(mount, true)
+
+		expect(switchCommands).toEqual([{ device: mount.name, name: 'ALIGNMENT_SUBSYSTEM_ACTIVE', elements: { 'ALIGNMENT SUBSYSTEM ACTIVE': true } }])
+
+		// A deletion drops the remembered name along with the capability.
+		manager.delProperty(recordingClient, { device: mount.name, name: 'ALIGNMENT_SUBSYSTEM_ACTIVE' })
+		switchCommands.length = 0
+		manager.alignmentActive(mount, true)
+
+		expect(switchCommands).toBeEmpty()
+	})
+
 	test('reflects the advertised math plugins and the selected one', () => {
 		const manager = new MountManager()
 		const mount = setupMount(manager)
