@@ -871,9 +871,15 @@ export function createScalarSurfacePointEvaluator(model: ScalarSurfaceModel): Sc
 // Coarse evaluation step in pixels for a spline with `k` control points over a width*height plane.
 // Nodes are spaced a fraction of the mean control-point spacing sqrt(area/k). Returns 1 (evaluate
 // every pixel directly) for small planes or degenerate axes, where coarsening would not pay off.
-function tpsCoarseStep(width: number, height: number, k: number) {
+function tpsCoarseStep(width: number, height: number, domain: SurfaceDomain, k: number) {
 	if (k <= 0 || width < 2 || height < 2) return 1
-	const spacing = Math.sqrt((width * height) / k)
+	// The spacing must come from the area the control points actually occupy, which is the fitted domain,
+	// not the output plane. A spline fitted over a small covered region of a large frame has its control
+	// points packed into that region; scaling by the plane would space the nodes far wider than them and
+	// the bilinear upsample would no longer track the fitted surface even inside the supported area. The
+	// domain spans pixel centers, so its inclusive extent is what matches the plane's pixel count, and a
+	// full-frame domain reproduces `width * height` exactly.
+	const spacing = Math.sqrt(((domain.x1 - domain.x0 + 1) * (domain.y1 - domain.y0 + 1)) / k)
 	return Math.max(1, Math.floor(spacing * TPS_COARSE_FRACTION))
 }
 
@@ -891,7 +897,7 @@ function evaluateThinPlateSplineInto(model: ScalarSurfaceModel, output: Float64A
 	const k = controlPoints.length / 2
 	const su = domainScale(domain.x0, domain.x1)
 	const sv = domainScale(domain.y0, domain.y1)
-	const step = exact ? 1 : tpsCoarseStep(width, height, k)
+	const step = exact ? 1 : tpsCoarseStep(width, height, domain, k)
 
 	if (step <= 1) {
 		for (let y = 0; y < height; y++) {

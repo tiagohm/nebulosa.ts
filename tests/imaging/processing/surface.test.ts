@@ -271,6 +271,35 @@ describe('thin-plate spline', () => {
 })
 
 describe('evaluation', () => {
+	test('a spline over a restricted domain materializes to its fitted values', () => {
+		// The control points are packed into a small corner of a large plane. Spacing the coarse nodes by
+		// the plane area instead of the domain area puts them far wider than the control points, and the
+		// bilinear upsample stops tracking the fitted surface inside the covered region.
+		const field = (x: number, y: number) => 0.2 + 0.02 * Math.sin(x / 3) * Math.cos(y / 3)
+		const samples: SurfaceSample[] = []
+		for (let r = 0; r < 7; r++) {
+			for (let c = 0; c < 7; c++) {
+				const x = 10 + c * 4
+				const y = 10 + r * 4
+				samples.push({ x, y, value: field(x, y) })
+			}
+		}
+
+		const domain = { x0: 10, y0: 10, x1: 34, y1: 34 }
+		const model = fitOrThrow(samples, 512, 512, { model: 'thinPlateSpline', smoothing: 0.05, domain })
+
+		const plane = new Float64Array(512 * 512)
+		evaluateScalarSurfaceInto(model, plane)
+
+		const point = createScalarSurfacePointEvaluator(model)
+		let maxDelta = 0
+		for (let y = 10; y <= 34; y++) {
+			for (let x = 10; x <= 34; x++) maxDelta = Math.max(maxDelta, Math.abs(plane[y * 512 + x] - point.at(x, y)))
+		}
+
+		// Well below the fit's own amplitude, which spans about 0.04.
+		expect(maxDelta).toBeLessThan(1e-3)
+	})
 	test('strided writes match contiguous writes', () => {
 		const model = fitOrThrow(
 			sampleGrid(40, 30, 8, 6, (x, y) => 0.2 + 0.003 * x - 0.001 * y),
