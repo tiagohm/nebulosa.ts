@@ -739,12 +739,17 @@ function buildSupportGrid(mask: Uint8Array, columns: number, rows: number, origi
 		}
 	}
 
+	// The smoothing exists to soften the step OUTSIDE the supported region, so a supported cell is
+	// restored to full confidence afterwards. Left blurred, the last accepted cell along a boundary would
+	// drop to 0.75 — 0.59 where two boundaries meet — and the correction would be attenuated by 16 to 41%
+	// inside valid overlap, putting a photometric seam exactly along the registration edge, on cells that
+	// constrained the surface directly.
 	const values = new Float32Array(columns * rows)
 	for (let r = 0; r < rows; r++) {
 		const up = Math.max(0, r - 1) * columns
 		const down = Math.min(rows - 1, r + 1) * columns
 		const base = r * columns
-		for (let c = 0; c < columns; c++) values[base + c] = 0.25 * scratch[up + c] + 0.5 * scratch[base + c] + 0.25 * scratch[down + c]
+		for (let c = 0; c < columns; c++) values[base + c] = filled[base + c] !== 0 ? 1 : 0.25 * scratch[up + c] + 0.5 * scratch[base + c] + 0.25 * scratch[down + c]
 	}
 
 	return { columns, rows, originX, originY, stepX, stepY, values }

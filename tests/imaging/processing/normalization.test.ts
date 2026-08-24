@@ -471,6 +471,46 @@ describe('local normalization', () => {
 		expect(maxJump).toBeLessThan(1e-3)
 	})
 
+	test('an accepted cell keeps full confidence even on a two-axis boundary', () => {
+		// Confidence smoothing must soften the step outside the supported region, not eat into it. A cell
+		// that produced an estimate constrained the surface directly, so attenuating it would scale the
+		// correction down along the registration edge and leave a photometric seam there.
+		const reference = referencePlane()
+		const current = inverseTransform(
+			reference,
+			() => 1.2,
+			() => 0.01,
+		)
+		const mask = new Uint8Array(WIDTH * HEIGHT)
+		for (let y = 0; y < HEIGHT / 2; y++) {
+			for (let x = 0; x < WIDTH / 2; x++) mask[y * WIDTH + x] = 1
+		}
+
+		const model = fitMono(reference, current, {}, mask)
+		const support = model.offsetSupportGrids[0]
+		const { columns, rows, values } = support
+
+		// Every cell that was accepted, including the two corner cells of the quadrant, reads exactly 1.
+		let accepted = 0
+		for (let r = 0; r < rows; r++) {
+			for (let c = 0; c < columns; c++) {
+				const centerX = support.originX + c * support.stepX
+				const centerY = support.originY + r * support.stepY
+				if (centerX >= WIDTH / 2 || centerY >= HEIGHT / 2) continue
+				expect(values[r * columns + c]).toBe(1)
+				accepted++
+			}
+		}
+		expect(accepted).toBeGreaterThan(3)
+
+		// Outside the quadrant the confidence still decays rather than stepping straight to zero.
+		let ramp = 0
+		for (const value of values) {
+			if (value > 0 && value < 1) ramp++
+		}
+		expect(ramp).toBeGreaterThan(0)
+	})
+
 	test('cells without enough valid pixels are dropped and the region keeps the anchor', () => {
 		const reference = referencePlane()
 		const current = inverseTransform(
@@ -617,8 +657,10 @@ describe('local normalization', () => {
 				const w = sampleSupportAt(support, x, y)
 				if (w > 0.9) continue
 				const applied = Math.abs(probe[y * WIDTH + x] - expected)
-				// A small tolerance covers the node-grid interpolation between confidence samples.
-				if (applied > w * bound + 1e-4) violations++
+				// The bound holds exactly at the evaluation nodes; between them both fields are interpolated,
+				// so the slack is a small fraction of the field amplitude. Clamping the product instead of
+				// the surface overshoots by a fraction of the bound itself, which is far larger.
+				if (applied > w * bound + bound * 0.01) violations++
 			}
 		}
 
