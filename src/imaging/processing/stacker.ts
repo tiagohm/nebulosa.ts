@@ -429,7 +429,7 @@ export class LiveStacker {
 		if (overlapFraction < this.#options.minOverlapFraction) return this.#reject(frameIndex, frame, quality, 'insufficient-overlap')
 
 		const normalization = computeNormalization(raw, valid, frame, this.#referenceFrame, quality, this.#options)
-		if (normalization.transform.kind === 'rejected') return this.#reject(frameIndex, frame, quality, 'normalization-failed')
+		if (normalization.transform.kind === 'rejected') return this.#reject(frameIndex, frame, quality, 'normalization-failed', overlapFraction)
 		applyNormalizationInPlace(raw, valid, frame.image.metadata.channels, normalization.transform)
 		accumulateAlignedFrame(this.#referenceFrame.image.metadata.channels, raw, valid, this.#sum!, this.#weightSum!, this.#coverageMap, this.#options.combinationMethod, normalization.summary.weight)
 
@@ -471,10 +471,12 @@ export class LiveStacker {
 		accumulateAlignedFrame(channels, frame.image.raw, fullMask(pixelCount), this.#sum, this.#weightSum, this.#coverageMap, this.#options.combinationMethod, weight)
 	}
 
-	// Records a structured rejection result.
-	#reject(frameIndex: number, frame: StackingFrame, quality: StackingFrameQualityMetrics, reason: FrameRejectionReason): FrameAcceptanceResult {
+	// Records a structured rejection result. `overlapFraction` defaults to 0 for the failures that happen
+	// before registration measures any coverage; a frame dropped after a successful registration passes
+	// the coverage it actually had, so the diagnostics stay distinguishable from a no-overlap frame.
+	#reject(frameIndex: number, frame: StackingFrame, quality: StackingFrameQualityMetrics, reason: FrameRejectionReason, overlapFraction = 0): FrameAcceptanceResult {
 		this.#rejectedFrames++
-		const result: FrameAcceptanceResult = { accepted: false, frameIndex, frameId: frame.id, overlapFraction: 0, quality, reason }
+		const result: FrameAcceptanceResult = { accepted: false, frameIndex, frameId: frame.id, overlapFraction, quality, reason }
 		this.#diagnostics.push(result)
 		return result
 	}
@@ -559,7 +561,10 @@ export function stackFrames(frames: readonly StackingFrame[], options: StackingO
 		const aligned = createAlignedFrame(frame, i, quality, referenceFrame, registration, resolved)
 
 		if (aligned === undefined) {
-			diagnostics.push({ accepted: false, frameIndex: i, frameId: frame.id, overlapFraction: 0, quality, reason: 'normalization-failed', transform: registration.transform.summary })
+			// The frame registered fine and only its normalization failed, so report the coverage it had
+			// rather than 0, which would read as a no-overlap frame.
+			const covered = registration.coveredPixels / Math.max(registration.validityMask.length, 1)
+			diagnostics.push({ accepted: false, frameIndex: i, frameId: frame.id, overlapFraction: covered, quality, reason: 'normalization-failed', transform: registration.transform.summary })
 			continue
 		}
 

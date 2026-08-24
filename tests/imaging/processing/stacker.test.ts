@@ -377,4 +377,23 @@ describe('stacker normalization modes', () => {
 		// The same block is still validated when local mode actually uses it.
 		expect(() => new LiveStacker({ ...DEFAULT_STACK_OPTIONS, normalizationMode: 'local', localNormalization: stale })).toThrow()
 	})
+
+	test('a normalization rejection reports the coverage the frame actually had', () => {
+		const { reference, current } = localFrames(
+			() => 1.2,
+			() => 0.01,
+		)
+		const frames = [makeFrame(reference, makeStars()), makeFrame(current, makeStars())]
+		const options = { ...LOCAL_OPTIONS, localNormalization: { gridSize: 4, minSamplesPerCell: 100000, fallback: 'reject' } } as const satisfies StackingOptions
+
+		const batch = stackFrames(frames, options)
+		const rejected = batch.diagnostics[1]
+		expect(rejected.reason).toBe('normalization-failed')
+		// The frames are identical in geometry, so coverage is full and must not read as no-overlap.
+		expect(rejected.overlapFraction).toBeGreaterThan(0.9)
+
+		const live = new LiveStacker(options)
+		live.add(frames[0])
+		expect(live.add(frames[1]).overlapFraction).toBeGreaterThan(0.9)
+	})
 })
