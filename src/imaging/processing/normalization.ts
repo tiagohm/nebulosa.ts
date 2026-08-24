@@ -792,6 +792,8 @@ export function fitLocalNormalizationRaw(referenceRaw: ImageRawType, currentRaw:
 	}
 
 	const { red, green, blue } = DEFAULT_GRAYSCALE
+	// Whether any cell saw a valid pixel pair at all, regardless of whether it went on to be usable.
+	let observedValidPairs = false
 
 	for (let r = 0; r < rows; r++) {
 		const by0 = grid.y0[r]
@@ -843,6 +845,10 @@ export function fitLocalNormalizationRaw(referenceRaw: ImageRawType, currentRaw:
 					count++
 				}
 			}
+
+			// Recorded before the cell thresholds so the fallback can tell "the frames do not overlap" from
+			// "they overlap but no cell was usable", which are different problems with different fixes.
+			if (count > 0) observedValidPairs = true
 
 			if (count < minSamplesPerCell || visited === 0) continue
 			const validFraction = count / visited
@@ -903,7 +909,7 @@ export function fitLocalNormalizationRaw(referenceRaw: ImageRawType, currentRaw:
 		let scaleFitted = false
 
 		if (!(anchor.scale > 0) || !Number.isFinite(anchor.offset)) reason = 'invalid-global-solution'
-		else if (accepted === 0) reason = 'no-valid-overlap'
+		else if (accepted === 0) reason = observedValidPairs ? 'insufficient-valid-cells' : 'no-valid-overlap'
 
 		const mask = masks[plane]
 		const gains = cellGain[plane]

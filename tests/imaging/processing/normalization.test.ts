@@ -596,6 +596,36 @@ describe('fallback', () => {
 		return { reference, current, mask, model: fitMono(reference, current, { fallback }, mask) }
 	}
 
+	test('fully overlapping frames whose cells are all too small report unusable cells', () => {
+		// A 64x64 pair under the default 16x16 grid gives 4x4 cells, far below `minSamplesPerCell`. The
+		// frames overlap completely, so the reason must be about the cells, not about the overlap.
+		const size = 64
+		const reference = referencePlane(3, size, size)
+		const current = inverseTransform(
+			reference,
+			() => 1.2,
+			() => 0.01,
+			size,
+			size,
+		)
+		const model = fitLocalNormalizationRaw(reference, current, size, size, 1, 'per-channel', undefined, resolveLocalNormalizationOptions({}))
+
+		expect(model.diagnostics[0].acceptedCells).toBe(0)
+		expect(model.diagnostics[0].reason).toBe('insufficient-valid-cells')
+	})
+
+	test('no valid pixels at all still reports absent overlap', () => {
+		const reference = referencePlane()
+		const current = inverseTransform(
+			reference,
+			() => 1.2,
+			() => 0.01,
+		)
+		const model = fitMono(reference, current, {}, new Uint8Array(WIDTH * HEIGHT))
+
+		expect(model.diagnostics[0].reason).toBe('no-valid-overlap')
+	})
+
 	test('global falls back to the anchor and reports the reason', () => {
 		const { model } = emptyOverlapModel('global')
 
