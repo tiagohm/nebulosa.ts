@@ -105,8 +105,8 @@ export interface LocalNormalizationChannelDiagnostics {
 	readonly reason?: LocalNormalizationFallbackReason
 }
 
-// Spatial confidence of the local model, one value per grid cell, in [0, 1]. It multiplies both
-// residual fields, so an unsupported region converges to the global anchor instead of relying on the
+// Spatial confidence of one residual field, one value per grid cell, in [0, 1]. It multiplies that
+// field, so an unsupported region converges to the global anchor instead of relying on the
 // surface extrapolating there. Interior holes (a cell rejected because a bright object fills it) are
 // filled back to full confidence: the surface interpolates them correctly from their neighbors, and
 // forcing them back to the anchor would put a step right where the correction should be smoothest.
@@ -160,7 +160,13 @@ export interface LocalNormalizationModel {
 	// Clamp range of the residual offset per plane, in image units, always containing 0.
 	readonly offsetRanges: readonly (readonly [number, number] | undefined)[]
 	// Spatial confidence grid per plane.
-	readonly supportGrids: readonly LocalNormalizationSupportGrid[]
+	// Spatial confidence of the OFFSET field per plane, from the cells that produced a usable estimate.
+	readonly offsetSupportGrids: readonly LocalNormalizationSupportGrid[]
+	// Spatial confidence of the GAIN field per plane, from the cells that cleared the dynamic-range gate.
+	// Tracked separately because those are a subset: a frame whose texture sits in one region produces
+	// gain samples only there, and reusing the offset support would apply the gain surface at full
+	// confidence across regions that never constrained it.
+	readonly scaleSupportGrids: readonly LocalNormalizationSupportGrid[]
 	// Node spacing, in pixels, at which the final fields are materialized before interpolation.
 	readonly evaluationStep: number
 	// Per-plane fit diagnostics.
@@ -470,7 +476,7 @@ function isSignificantGainField(model: ScalarSurfaceModel, sigma: number) {
 // that will actually be applied there. Returns a constant anchor gain when there is no gain field. The
 // cell centers form a regular grid, so one column table drives the whole sweep with no allocation per
 // cell. Confidence is 1 at an accepted cell by construction, so it is not applied here.
-function evaluateGainAtCells(surface: ScalarSurfaceModel | undefined, range: readonly [number, number] | undefined, anchorScale: number, cellX: Float64Array, cellY: Float64Array, mask: Uint8Array, cellCount: number) {
+function evaluateGainAtCells(surface: ScalarSurfaceModel | undefined, range: readonly [number, number] | undefined, anchorScale: number, support: LocalNormalizationSupportGrid, cellX: Float64Array, cellY: Float64Array, mask: Uint8Array, cellCount: number) {
 	const out = new Float64Array(cellCount)
 
 	if (surface === undefined || range === undefined) {
@@ -481,6 +487,9 @@ function evaluateGainAtCells(surface: ScalarSurfaceModel | undefined, range: rea
 	// Each cell is evaluated at the centroid of its valid pixel pairs, the same position its gain sample
 	// was fitted at. A cell clipped by the validity mask — the norm along a registration boundary — sits
 	// well off its nominal grid center, and the gain read there is what rotates its offset residual.
+	//
+	// The gain confidence is applied here for the same reason: this must be the gain the reconstruction
+	// will actually use at that cell, and a cell that produced no gain sample of its own gets a faded one.
 	const evaluator = createScalarSurfacePointEvaluator(surface)
 
 	for (let cell = 0; cell < cellCount; cell++) {
@@ -489,7 +498,9 @@ function evaluateGainAtCells(surface: ScalarSurfaceModel | undefined, range: rea
 			continue
 		}
 
-		out[cell] = anchorScale * Math.exp(clamp(evaluator.at(cellX[cell], cellY[cell]), range[0], range[1]))
+		const x = cellX[cell]
+		const y = cellY[cell]
+		out[cell] = anchorScale * Math.exp(clamp(sampleSupport(support, x, y) * evaluator.at(x, y), range[0], range[1]))
 	}
 
 	return out
@@ -760,6 +771,8 @@ export function fitLocalNormalizationRaw(referenceRaw: ImageRawType, currentRaw:
 	const cellX = new Float64Array(cellCount)
 	const cellY = new Float64Array(cellCount)
 	const masks: Uint8Array[] = []
+	// Cells that also cleared the dynamic-range gate, which is what constrains the gain field.
+	const gainMasks: Uint8Array[] = []
 	const acceptedCells = new Int32Array(planes)
 	const scaleCells = new Int32Array(planes)
 	// Per-plane windows into the shared collection buffers, built once instead of per cell. The selection
@@ -773,6 +786,7 @@ export function fitLocalNormalizationRaw(referenceRaw: ImageRawType, currentRaw:
 		cellLevel.push(new Float64Array(cellCount))
 		cellWeight.push(new Float64Array(cellCount))
 		masks.push(new Uint8Array(cellCount))
+		gainMasks.push(new Uint8Array(cellCount))
 		refViews.push(refBuf.subarray(plane * capacity, (plane + 1) * capacity))
 		curViews.push(curBuf.subarray(plane * capacity, (plane + 1) * capacity))
 	}
@@ -854,7 +868,11 @@ export function fitLocalNormalizationRaw(referenceRaw: ImageRawType, currentRaw:
 				cellGain[plane][cellIndex] = estimate.gain
 				cellLevel[plane][cellIndex] = estimate.medianCurrent
 				cellWeight[plane][cellIndex] = estimate.weight
-				if (Number.isFinite(estimate.gain)) scaleCells[plane]++
+
+				if (Number.isFinite(estimate.gain)) {
+					gainMasks[plane][cellIndex] = 1
+					scaleCells[plane]++
+				}
 			}
 		}
 	}
@@ -867,7 +885,8 @@ export function fitLocalNormalizationRaw(referenceRaw: ImageRawType, currentRaw:
 	const offsetSurfaces: (ScalarSurfaceModel | undefined)[] = []
 	const scaleLogRanges: ([number, number] | undefined)[] = []
 	const offsetRanges: ([number, number] | undefined)[] = []
-	const supportGrids: LocalNormalizationSupportGrid[] = []
+	const offsetSupportGrids: LocalNormalizationSupportGrid[] = []
+	const scaleSupportGrids: LocalNormalizationSupportGrid[] = []
 	const diagnostics: LocalNormalizationChannelDiagnostics[] = []
 	const reportedPivots: (number | undefined)[] = []
 
@@ -889,6 +908,10 @@ export function fitLocalNormalizationRaw(referenceRaw: ImageRawType, currentRaw:
 		const mask = masks[plane]
 		const gains = cellGain[plane]
 		const weights = cellWeight[plane]
+		// Built before the fits because stage 2 needs the gain confidence to rotate its residuals onto the
+		// gain the reconstruction will actually apply.
+		const offsetSupport = buildSupportGrid(mask, columns, rows, cellW / 2, cellH / 2, cellW, cellH)
+		const scaleSupport = buildSupportGrid(gainMasks[plane], columns, rows, cellW / 2, cellH / 2, cellW, cellH)
 
 		// Stage 1: the gain field, from the cells that cleared the dynamic-range gate. It is kept only when
 		// it is significant against the scatter of those cells; an insignificant field would multiply
@@ -933,7 +956,7 @@ export function fitLocalNormalizationRaw(referenceRaw: ImageRawType, currentRaw:
 			const pivot = pivots[plane]
 			const levels = cellLevel[plane]
 			const offsets = cellOffset[plane]
-			const gainAtCell = evaluateGainAtCells(scaleSurface, scaleRange, anchor.scale, cellX, cellY, mask, cellCount)
+			const gainAtCell = evaluateGainAtCells(scaleSurface, scaleRange, anchor.scale, scaleSupport, cellX, cellY, mask, cellCount)
 			const samples: SurfaceSample[] = []
 
 			for (let cell = 0; cell < cellCount; cell++) {
@@ -977,7 +1000,8 @@ export function fitLocalNormalizationRaw(referenceRaw: ImageRawType, currentRaw:
 		offsetSurfaces.push(offsetSurface)
 		scaleLogRanges.push(scaleRange)
 		offsetRanges.push(offsetRange)
-		supportGrids.push(buildSupportGrid(masks[plane], columns, rows, cellW / 2, cellH / 2, cellW, cellH))
+		offsetSupportGrids.push(offsetSupport)
+		scaleSupportGrids.push(scaleSupport)
 		reportedPivots.push(hasOffset && !failed ? pivots[plane] : undefined)
 
 		diagnostics.push({
@@ -1008,7 +1032,8 @@ export function fitLocalNormalizationRaw(referenceRaw: ImageRawType, currentRaw:
 		offsetSurfaces,
 		scaleLogRanges,
 		offsetRanges,
-		supportGrids,
+		offsetSupportGrids,
+		scaleSupportGrids,
 		evaluationStep,
 		diagnostics,
 	}
@@ -1083,7 +1108,6 @@ function buildLocalNormalizationFields(model: LocalNormalizationModel): LocalNor
 	const scale = new Float64Array(planes * nodes)
 	const offset = new Float64Array(planes * nodes)
 	const surfaceRow = new Float64Array(columns)
-	const supportRow = new Float64Array(columns)
 
 	for (let plane = 0; plane < planes; plane++) {
 		const anchor = model.global[plane]
@@ -1098,7 +1122,8 @@ function buildLocalNormalizationFields(model: LocalNormalizationModel): LocalNor
 			continue
 		}
 
-		const support = model.supportGrids[plane]
+		const offsetSupport = model.offsetSupportGrids[plane]
+		const scaleSupport = model.scaleSupportGrids[plane]
 		const scaleSurface = model.scaleSurfaces[plane]
 		const offsetSurface = model.offsetSurfaces[plane]
 		const scaleRange = model.scaleLogRanges[plane]
@@ -1112,14 +1137,12 @@ function buildLocalNormalizationFields(model: LocalNormalizationModel): LocalNor
 			const py = j * stepY
 			const row = base + j * columns
 
-			// The confidence is shared by both fields, so sample it once per node.
-			if (scaleEvaluator !== undefined || offsetEvaluator !== undefined) {
-				for (let i = 0; i < columns; i++) supportRow[i] = sampleSupport(support, i * stepX, py)
-			}
-
+			// Each field is weighted by its own support: the gain field is constrained only by the cells that
+			// cleared the dynamic-range gate, so it must fade to the anchor across the regions that produced
+			// an offset but no gain rather than extrapolating over them at full confidence.
 			if (scaleEvaluator !== undefined) {
 				scaleEvaluator.fillRow(py, surfaceRow, 0, 1)
-				for (let i = 0; i < columns; i++) scale[row + i] = anchor.scale * Math.exp(clamp(supportRow[i] * surfaceRow[i], scaleRange![0], scaleRange![1]))
+				for (let i = 0; i < columns; i++) scale[row + i] = anchor.scale * Math.exp(clamp(sampleSupport(scaleSupport, i * stepX, py) * surfaceRow[i], scaleRange![0], scaleRange![1]))
 			} else {
 				scale.fill(anchor.scale, row, row + columns)
 			}
@@ -1131,7 +1154,7 @@ function buildLocalNormalizationFields(model: LocalNormalizationModel): LocalNor
 
 			if (offsetEvaluator !== undefined) {
 				offsetEvaluator.fillRow(py, surfaceRow, 0, 1)
-				for (let i = 0; i < columns; i++) offset[row + i] = anchor.offset + clamp(supportRow[i] * surfaceRow[i], offsetRange![0], offsetRange![1]) - (scale[row + i] - anchor.scale) * pivot
+				for (let i = 0; i < columns; i++) offset[row + i] = anchor.offset + clamp(sampleSupport(offsetSupport, i * stepX, py) * surfaceRow[i], offsetRange![0], offsetRange![1]) - (scale[row + i] - anchor.scale) * pivot
 			} else {
 				for (let i = 0; i < columns; i++) offset[row + i] = anchor.offset - (scale[row + i] - anchor.scale) * pivot
 			}

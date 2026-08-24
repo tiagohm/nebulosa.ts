@@ -204,6 +204,60 @@ describe('local normalization', () => {
 		expect(meanAbsoluteError(current, reference)).toBeLessThan(meanAbsoluteError(globalOnly, reference) / 3)
 	})
 
+	test('the gain field is supported only by the cells that constrained it', () => {
+		// Structure in the left half, flat sky in the right, and independent noise in each frame as a real
+		// pair has. Every cell yields an offset, but only the textured ones clear the dynamic-range gate,
+		// so only they constrain the gain field. Weighting the gain by the wider offset support would
+		// apply the extrapolated gain across a region that never constrained it.
+		const referenceNoise = rng(11)
+		const currentNoise = rng(29)
+		const reference = new Float64Array(WIDTH * HEIGHT)
+		const current = new Float64Array(WIDTH * HEIGHT)
+		const gain = (x: number) => 1.1 + 0.12 * (x / WIDTH)
+
+		for (let y = 0; y < HEIGHT; y++) {
+			for (let x = 0; x < WIDTH; x++) {
+				const i = y * WIDTH + x
+				const signal = 0.1 + (x < WIDTH / 2 ? 0.09 * Math.sin(x / 5) * Math.cos(y / 6) : 0)
+				reference[i] = signal + 0.004 * (referenceNoise() - 0.5)
+				current[i] = signal / gain(x) + 0.004 * (currentNoise() - 0.5)
+			}
+		}
+
+		// Splits this frame exactly down the middle; the default is stricter and gates every cell here.
+		const model = fitMono(reference, current, { dynamicRangeSigma: 2 })
+		const columns = model.offsetSupportGrids[0].columns
+		const rows = model.offsetSupportGrids[0].rows
+
+		expect(model.diagnostics[0].acceptedCells).toBe(columns * rows)
+		expect(model.diagnostics[0].scaleCells).toBe((columns * rows) / 2)
+		expect(model.scaleSurfaces[0]).toBeDefined()
+
+		// Every cell produced an offset, so the offset field is supported everywhere.
+		for (const value of model.offsetSupportGrids[0].values) expect(value).toBeCloseTo(1, 6)
+
+		// The gain confidence follows the texture instead, high on the left and gone on the right.
+		const gainSupport = model.scaleSupportGrids[0].values
+		for (let r = 0; r < rows; r++) {
+			expect(gainSupport[r * columns]).toBeGreaterThan(0.9)
+			expect(gainSupport[r * columns + columns - 1]).toBeLessThan(0.1)
+		}
+
+		// Two constant probes isolate the applied gain from the offset field: it must sit closer to the
+		// anchor on the unsupported side than on the side that actually constrained it.
+		const low = new Float64Array(WIDTH * HEIGHT).fill(0)
+		const high = new Float64Array(WIDTH * HEIGHT).fill(1)
+		applyLocalNormalizationInPlace(low, undefined, model)
+		applyLocalNormalizationInPlace(high, undefined, model)
+
+		const anchor = model.global[0].scale
+		const row = 100 * WIDTH
+		const unsupported = Math.abs(high[row + WIDTH - 1] - low[row + WIDTH - 1] - anchor)
+		const supported = Math.abs(high[row] - low[row] - anchor)
+
+		expect(unsupported).toBeLessThan(supported / 10)
+	})
+
 	test('a subpixel-resampled frame with no photometric difference gets no gain field', () => {
 		// Half-pixel bilinear resampling attenuates the noise, which a per-cell span ratio would read as a
 		// gain and fit into a spurious field. Nothing here differs photometrically, so nothing must.
@@ -301,7 +355,7 @@ describe('local normalization', () => {
 		}
 
 		const model = fitMono(reference, current)
-		const support = model.supportGrids[0]
+		const support = model.offsetSupportGrids[0]
 
 		// The hole is filled back to full confidence, so the whole interior stays fully supported.
 		let interiorMinimum = 1
@@ -484,7 +538,8 @@ describe('color handling', () => {
 
 		expect(model.global).toHaveLength(1)
 		expect(model.diagnostics).toHaveLength(1)
-		expect(model.supportGrids).toHaveLength(1)
+		expect(model.offsetSupportGrids).toHaveLength(1)
+		expect(model.scaleSupportGrids).toHaveLength(1)
 
 		applyLocalNormalizationInPlace(current, undefined, model)
 		for (let p = 0; p < WIDTH * HEIGHT; p++) {
