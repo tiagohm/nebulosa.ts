@@ -408,56 +408,103 @@ export function subsampleSurfaceControlPoints(set: SurfaceSampleSet, maxPoints: 
 		chosen[n++] = i
 	}
 
-	// A cap below 4 collapses the bucket grid to a single cell, so the sweep returns one control point and
-	// a layout a three-point spline fits perfectly well is reported as unfittable. Top the selection up to
-	// the spline minimum. Unreachable for any larger cap, where a layout that passed the 2D coverage check
-	// necessarily spans several buckets.
-	//
-	// The two criteria differ because the spline needs three points that span a triangle, not three points
-	// that are merely far apart. The second control point is the one farthest from the first, which fixes
-	// the longest axis of the layout. The third maximizes the triangle area instead: picking it by
-	// distance too would happily land on the midpoint of a long collinear run whenever the off-line
-	// samples cluster near an endpoint, leaving the saddle-point system singular.
-	if (n < MIN_CONTROL_POINTS && n > 0) {
-		let best = -1
+	// The bucket sweep guarantees spatial coverage of the whole ACTIVE set, but not of the SELECTION it
+	// returns, and the spline is solved from the selection alone. Two ways it can come back degenerate:
+	// a cap below 4 collapses the grid to a single bucket and yields one control point, and a set whose
+	// occupied buckets happen to line up can have its first-in-bucket representatives be collinear even
+	// though later samples in those same buckets give the whole set genuine 2D spread. Either leaves the
+	// saddle-point system singular for a layout the uncapped fit handles, so the selection is repaired
+	// against its own coverage rather than the set's.
+	if (n > 0 && (n < MIN_CONTROL_POINTS || !isSpanningSelection(set, chosen, n))) {
+		// The anchor pair fixes the longest axis of the selection: its first point and whichever point is
+		// farthest from it. Both come from the selection when it has two, so a good spread is preserved.
+		let anchor = chosen[0]
+		let far = -1
 		let bestDistance = 0
 
 		for (let i = 0; i < set.count; i++) {
 			if (set.active[i] === 0) continue
-			const du = set.u[i] - set.u[chosen[0]]
-			const dv = set.v[i] - set.v[chosen[0]]
+			const du = set.u[i] - set.u[anchor]
+			const dv = set.v[i] - set.v[anchor]
 			const distance = du * du + dv * dv
 			if (distance > bestDistance) {
 				bestDistance = distance
-				best = i
+				far = i
 			}
 		}
 
-		if (best >= 0) chosen[n++] = best
-	}
+		if (far >= 0) {
+			if (n < 2) chosen[n++] = far
+			else if (!containsIndex(chosen, n, far)) chosen[1] = far
 
-	if (n < MIN_CONTROL_POINTS && n > 1) {
-		const u0 = set.u[chosen[0]]
-		const v0 = set.v[chosen[0]]
-		const du1 = set.u[chosen[1]] - u0
-		const dv1 = set.v[chosen[1]] - v0
-		let best = -1
-		let bestArea = 0
+			// The third control maximizes triangle area with the anchor pair, which is the property the
+			// spline actually needs. Choosing it by distance instead would happily land on the midpoint of a
+			// long collinear run whenever the off-line samples cluster near an endpoint.
+			anchor = chosen[0]
+			const u0 = set.u[anchor]
+			const v0 = set.v[anchor]
+			const du1 = set.u[chosen[1]] - u0
+			const dv1 = set.v[chosen[1]] - v0
+			let best = -1
+			let bestArea = 0
 
-		for (let i = 0; i < set.count; i++) {
-			if (set.active[i] === 0) continue
-			// Twice the triangle area, as the magnitude of the 2D cross product.
-			const area = Math.abs(du1 * (set.v[i] - v0) - dv1 * (set.u[i] - u0))
-			if (area > bestArea) {
-				bestArea = area
-				best = i
+			for (let i = 0; i < set.count; i++) {
+				if (set.active[i] === 0) continue
+				// Twice the triangle area, as the magnitude of the 2D cross product.
+				const area = Math.abs(du1 * (set.v[i] - v0) - dv1 * (set.u[i] - u0))
+				if (area > bestArea) {
+					bestArea = area
+					best = i
+				}
+			}
+
+			if (best >= 0) {
+				if (n < MIN_CONTROL_POINTS) chosen[n++] = best
+				else if (!containsIndex(chosen, n, best)) chosen[2] = best
 			}
 		}
-
-		if (best >= 0) chosen[n++] = best
 	}
 
 	return chosen.subarray(0, n)
+}
+
+// Whether the first `n` entries of `chosen` span a genuine 2D region, using the same spread threshold as
+// the sample-set predicate.
+function isSpanningSelection(set: SurfaceSampleSet, chosen: Uint32Array, n: number) {
+	if (n < MIN_CONTROL_POINTS) return false
+
+	let su = 0
+	let sv = 0
+	for (let k = 0; k < n; k++) {
+		su += set.u[chosen[k]]
+		sv += set.v[chosen[k]]
+	}
+	const mu = su / n
+	const mv = sv / n
+
+	let cuu = 0
+	let cvv = 0
+	let cuv = 0
+	for (let k = 0; k < n; k++) {
+		const du = set.u[chosen[k]] - mu
+		const dv = set.v[chosen[k]] - mv
+		cuu += du * du
+		cvv += dv * dv
+		cuv += du * dv
+	}
+	cuu /= n
+	cvv /= n
+	cuv /= n
+
+	const tr = cuu + cvv
+	const disc = Math.sqrt(Math.max(0, (tr * tr) / 4 - (cuu * cvv - cuv * cuv)))
+	return Math.sqrt(Math.max(0, tr / 2 - disc)) >= MIN_SAMPLE_SPREAD
+}
+
+// Whether index `value` is among the first `n` entries of `chosen`.
+function containsIndex(chosen: Uint32Array, n: number, value: number) {
+	for (let k = 0; k < n; k++) if (chosen[k] === value) return true
+	return false
 }
 
 // Fits a 2D Chebyshev surface to the active samples by weighted least squares (QR). Returns the

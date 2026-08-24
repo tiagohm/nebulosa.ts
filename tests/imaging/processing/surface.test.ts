@@ -286,6 +286,41 @@ describe('thin-plate spline', () => {
 		expect(area).toBeGreaterThan(0)
 	})
 
+	test('a capped selection whose bucket representatives are collinear is repaired', () => {
+		// Only the three diagonal buckets of the 3x3 grid a cap of 9 builds are occupied, and the FIRST
+		// sample in each sits on the main diagonal. Later samples in the same buckets give the whole set
+		// genuine 2D spread, so the set passes the coverage check while the selection alone would not.
+		const samples: SurfaceSample[] = []
+		const centers = [
+			[8, 8],
+			[32, 32],
+			[56, 56],
+		]
+		for (const [cx, cy] of centers) samples.push({ x: cx, y: cy, value: 0.2 + 0.001 * cx })
+		for (const [cx, cy] of centers) {
+			for (let k = 1; k <= 4; k++) samples.push({ x: cx + k, y: cy - k, value: 0.2 + 0.001 * (cx + k) })
+		}
+
+		expect(fitScalarSurface(samples, 64, 64, { model: 'thinPlateSpline', smoothing: 0.1 }).ok).toBe(true)
+
+		const model = fitOrThrow(samples, 64, 64, { model: 'thinPlateSpline', smoothing: 0.1, maxControlPoints: 9 })
+		const points = model.controlPoints!
+		const k = points.length / 2
+		expect(k).toBeGreaterThanOrEqual(3)
+
+		// Some triple of the selected controls must span a real triangle.
+		let maxArea = 0
+		for (let a = 0; a < k; a++) {
+			for (let b = a + 1; b < k; b++) {
+				for (let c = b + 1; c < k; c++) {
+					const area = Math.abs((points[2 * b] - points[2 * a]) * (points[2 * c + 1] - points[2 * a + 1]) - (points[2 * b + 1] - points[2 * a + 1]) * (points[2 * c] - points[2 * a]))
+					maxArea = Math.max(maxArea, area)
+				}
+			}
+		}
+		expect(maxArea).toBeGreaterThan(0)
+	})
+
 	test('a smoothing spline keeps every sample accepted under the cap', () => {
 		const samples = sampleGrid(256, 256, 12, 12, (x, y) => 0.2 + 0.0005 * (x - y))
 		const model = fitOrThrow(samples, 256, 256, { model: 'thinPlateSpline', smoothing: 0.5, maxControlPoints: 16 })
