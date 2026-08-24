@@ -88,7 +88,8 @@ export interface SurfaceFitOptions {
 	readonly smoothing?: number
 	// Residual rejection settings. Applies to the polynomial model only.
 	readonly rejection?: SurfaceRejectionOptions
-	// Upper bound on thin-plate spline control points. Defaults to `SURFACE_MAX_CONTROL_POINTS`.
+	// Upper bound on thin-plate spline control points. Defaults to, and is clamped to,
+	// `SURFACE_MAX_CONTROL_POINTS`: that constant is the fit's tractability ceiling, not a preference.
 	readonly maxControlPoints?: number
 	// Coordinate normalization rectangle. Defaults to the full frame (0, 0)..(width-1, height-1).
 	readonly domain?: SurfaceDomain
@@ -985,7 +986,10 @@ export function fitScalarSurface(samples: readonly SurfaceSample[], width: numbe
 	const model = options.model ?? 'polynomial'
 	const degree = options.degree ?? 4
 	const smoothing = model === 'thinPlateSpline' ? (options.smoothing ?? 0.1) : 0
-	const maxControlPoints = options.maxControlPoints ?? SURFACE_MAX_CONTROL_POINTS
+	// Clamped to the module's tractability ceiling rather than replacing it: the spline builds a dense
+	// (k+3)x(k+3) matrix and solves it in O(k^3), so an unclamped 4096 would allocate about 134 MB and a
+	// larger value would exhaust the process outright. The floor keeps a spline-sized cap fittable.
+	const maxControlPoints = Math.min(Math.max(options.maxControlPoints ?? SURFACE_MAX_CONTROL_POINTS, MIN_CONTROL_POINTS), SURFACE_MAX_CONTROL_POINTS)
 	const domain = options.domain ?? fullSurfaceDomain(width, height)
 
 	const set = createSurfaceSampleSet(samples.length)

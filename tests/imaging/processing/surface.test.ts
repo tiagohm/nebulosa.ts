@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 // oxfmt-ignore
-import { basisTermCount, createScalarSurfaceEvaluator, createScalarSurfacePointEvaluator, createSurfaceColumnTable, evaluateScalarSurfaceInto, fillBasisExponents, fillChebyshev, fitScalarSurface, fullSurfaceDomain, type SurfaceFitOptions, type SurfaceSample } from '../../../src/imaging/processing/surface'
+import { basisTermCount, createScalarSurfaceEvaluator, createScalarSurfacePointEvaluator, createSurfaceColumnTable, evaluateScalarSurfaceInto, fillBasisExponents, fillChebyshev, fitScalarSurface, fullSurfaceDomain, SURFACE_MAX_CONTROL_POINTS, type SurfaceFitOptions, type SurfaceSample } from '../../../src/imaging/processing/surface'
 
 function sampleGrid(width: number, height: number, columns: number, rows: number, value: (x: number, y: number) => number, weight?: (x: number, y: number) => number) {
 	const samples: SurfaceSample[] = []
@@ -240,6 +240,22 @@ describe('thin-plate spline', () => {
 		expect(model.controlPoints!.length / 2).toBeLessThanOrEqual(16)
 		expect(model.acceptedSamples).toBe(model.controlPoints!.length / 2)
 		expect(model.rejectedSamples).toBe(samples.length - model.acceptedSamples)
+	})
+
+	test('the control cap is clamped to the tractability ceiling', () => {
+		// Enough samples that an unclamped cap would size the dense system by the caller's value.
+		const side = Math.ceil(Math.sqrt(SURFACE_MAX_CONTROL_POINTS)) + 20
+		const samples = sampleGrid(2048, 2048, side, side, (x, y) => 0.2 + 0.00001 * (x - y))
+		expect(samples.length).toBeGreaterThan(SURFACE_MAX_CONTROL_POINTS)
+
+		const model = fitOrThrow(samples, 2048, 2048, { model: 'thinPlateSpline', smoothing: 0.5, maxControlPoints: 1_000_000 })
+		expect(model.controlPoints!.length / 2).toBeLessThanOrEqual(SURFACE_MAX_CONTROL_POINTS)
+	})
+
+	test('a cap below the spline minimum is raised to it', () => {
+		const samples = sampleGrid(64, 64, 6, 6, (x, y) => 0.2 + 0.001 * (x + y))
+		const model = fitOrThrow(samples, 64, 64, { model: 'thinPlateSpline', smoothing: 0.1, maxControlPoints: 1 })
+		expect(model.controlPoints!.length / 2).toBe(3)
 	})
 
 	test('a cap at the spline minimum still yields a fittable set', () => {
