@@ -570,6 +570,47 @@ describe('fallback', () => {
 			expect(current[10 * WIDTH + x]).toBe(before[10 * WIDTH + x])
 		}
 	})
+
+	test('a gain field suppressed as insignificant is not a failure', () => {
+		// `scale` has no offset field, so the gain field is the whole model. A frame that needs no local
+		// gain correction still fits one; it is only suppressed as insignificant, which must stay a
+		// successful global-anchor result rather than a fallback.
+		const reference = referencePlane()
+		const current = inverseTransform(
+			reference,
+			() => 1.35,
+			() => 0,
+		)
+
+		for (const fallback of ['global', 'identity', 'reject'] as const) {
+			const model = fitMono(reference, current, { estimator: 'scale', scaleSignificance: 1e9, fallback })
+
+			expect(model.diagnostics[0].scaleCells).toBeGreaterThan(0)
+			expect(model.scaleSurfaces[0]).toBeUndefined()
+			expect(model.diagnostics[0].fallback).toBe(false)
+			expect(model.diagnostics[0].reason).toBeUndefined()
+			expect(isLocalNormalizationFallback(model)).toBe(false)
+
+			// The global exposure correction is still applied, under every fallback policy.
+			const probe = new Float64Array(reference.length).fill(0.4)
+			applyLocalNormalizationInPlace(probe, undefined, model)
+			for (const value of probe) expect(value).toBeCloseTo(0.4 * model.global[0].scale, 9)
+		}
+	})
+
+	test('a gain field that cannot be fitted at all is still a failure', () => {
+		const reference = referencePlane()
+		const current = inverseTransform(
+			reference,
+			() => 1.35,
+			() => 0,
+		)
+		const mask = new Uint8Array(WIDTH * HEIGHT)
+		const model = fitMono(reference, current, { estimator: 'scale' }, mask)
+
+		expect(model.diagnostics[0].fallback).toBe(true)
+		expect(model.diagnostics[0].reason).toBeDefined()
+	})
 })
 
 describe('image API', () => {

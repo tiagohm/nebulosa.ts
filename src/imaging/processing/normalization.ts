@@ -876,6 +876,9 @@ export function fitLocalNormalizationRaw(referenceRaw: ImageRawType, currentRaw:
 		let offsetSurface: ScalarSurfaceModel | undefined
 		let scaleRange: [number, number] | undefined
 		let offsetRange: [number, number] | undefined
+		// Whether the gain field solved at all, tracked apart from whether it was kept: the significance
+		// test clears `scaleSurface` for a perfectly good fit that simply carries no usable signal.
+		let scaleFitted = false
 
 		if (!(anchor.scale > 0) || !Number.isFinite(anchor.offset)) reason = 'invalid-global-solution'
 		else if (accepted === 0) reason = 'no-valid-overlap'
@@ -895,8 +898,13 @@ export function fitLocalNormalizationRaw(referenceRaw: ImageRawType, currentRaw:
 			}
 
 			const fit = fitScalarSurface(samples, width, height, { model: surfaceModel, degree: scaleDegree, smoothing, rejection, domain: sampleDomain(samples) })
-			if (fit.ok) scaleSurface = isSignificantGainField(fit.model, scaleSignificance) ? fit.model : undefined
-			else if (!hasOffset) reason = fit.reason === 'too-few-samples' ? 'insufficient-valid-cells' : fit.reason === 'degenerate-layout' ? 'insufficient-spatial-coverage' : 'surface-fit-failed'
+
+			if (fit.ok) {
+				scaleFitted = true
+				scaleSurface = isSignificantGainField(fit.model, scaleSignificance) ? fit.model : undefined
+			} else if (!hasOffset) {
+				reason = fit.reason === 'too-few-samples' ? 'insufficient-valid-cells' : fit.reason === 'degenerate-layout' ? 'insufficient-spatial-coverage' : 'surface-fit-failed'
+			}
 		}
 
 		// The gain clamp is the data-supported extent intersected with the policy bound, widened to include
@@ -936,7 +944,12 @@ export function fitLocalNormalizationRaw(referenceRaw: ImageRawType, currentRaw:
 			else reason = fit.reason === 'too-few-samples' ? 'insufficient-valid-cells' : fit.reason === 'degenerate-layout' ? 'insufficient-spatial-coverage' : 'surface-fit-failed'
 		}
 
-		if (reason === undefined && !hasOffset && scaleSurface === undefined) reason = 'insufficient-valid-cells'
+		// `scale` has no offset field, so the gain field is the whole model and its failure is the plane's
+		// failure. A gain field that fitted and was then suppressed as insignificant is NOT a failure: the
+		// frame simply needs no local gain correction, and the global anchor is the correct answer. Treating
+		// it as one would drop a well-supported frame under `reject`, or discard its valid global exposure
+		// correction under `identity`.
+		if (reason === undefined && !hasOffset && !scaleFitted) reason = 'insufficient-valid-cells'
 
 		if (offsetSurface !== undefined) {
 			let lo = 0
