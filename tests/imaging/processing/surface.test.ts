@@ -321,11 +321,26 @@ describe('thin-plate spline', () => {
 		expect(maxArea).toBeGreaterThan(0)
 	})
 
-	test('a smoothing spline keeps every sample accepted under the cap', () => {
+	test('a smoothing spline rejects the samples the cap dropped', () => {
 		const samples = sampleGrid(256, 256, 12, 12, (x, y) => 0.2 + 0.0005 * (x - y))
 		const model = fitOrThrow(samples, 256, 256, { model: 'thinPlateSpline', smoothing: 0.5, maxControlPoints: 16 })
+		const controls = model.controlPoints!.length / 2
 
-		expect(model.acceptedSamples).toBe(samples.length)
+		// Acceptance means the sample fed the final fit, and a capped-out sample did not, smoothing or not.
+		expect(controls).toBeLessThanOrEqual(16)
+		expect(model.acceptedSamples).toBe(controls)
+		expect(model.rejectedSamples).toBe(samples.length - controls)
+		expect(model.samples.filter((sample) => sample.accepted)).toHaveLength(controls)
+	})
+
+	test('the residual still covers the samples the cap dropped', () => {
+		// A plane fits every sample exactly, so a residual measured only over the controls would be zero.
+		const exact = sampleGrid(256, 256, 12, 12, (x, y) => 0.2 + 0.0005 * (x - y))
+		expect(fitOrThrow(exact, 256, 256, { model: 'thinPlateSpline', smoothing: 0.5, maxControlPoints: 16 }).residual).toBeCloseTo(0, 6)
+
+		// Displacing the samples the cap will drop must show up in the residual.
+		const scattered = sampleGrid(256, 256, 12, 12, (x, y) => 0.2 + 0.0005 * (x - y) + (((Math.round(x) + Math.round(y)) % 7) - 3) * 0.01)
+		expect(fitOrThrow(scattered, 256, 256, { model: 'thinPlateSpline', smoothing: 0.5, maxControlPoints: 16 }).residual).toBeGreaterThan(1e-3)
 	})
 })
 

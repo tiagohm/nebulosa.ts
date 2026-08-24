@@ -1066,15 +1066,9 @@ export function fitScalarSurface(samples: readonly SurfaceSample[], width: numbe
 		const tps = fitThinPlateSplineSurface(set, indices, smoothing)
 		if (typeof tps === 'string') return { ok: false, reason: tps }
 
-		// An exact (interpolating) spline only passes through its control points. When the cap dropped some
-		// active samples, mark those rejected so the reported accepted set matches the interpolated set.
-		// A genuine smoothing spline interpolates nothing, so its dropped samples legitimately stay accepted.
-		if (indices !== undefined && smoothing <= TPS_EXACT_SMOOTHING_MAX) {
-			const kept = new Uint8Array(set.count)
-			for (const i of indices) kept[i] = 1
-			for (let i = 0; i < set.count; i++) if (kept[i] === 0) set.active[i] = 0
-		}
-
+		// Residuals are measured over everything that survived rejection and dedup, before the control cap
+		// is accounted for. A capped-out sample did not feed the solve, but it is still real data, and for
+		// a smoothing spline its deviation is exactly what makes the residual a useful fit diagnostic.
 		const k = tps.controlPoints.length / 2
 		const residuals = new Float64Array(set.count)
 		const scratch = new Float64Array(set.count)
@@ -1084,6 +1078,15 @@ export function fitScalarSurface(samples: readonly SurfaceSample[], width: numbe
 			residuals[n++] = set.value[i] - evaluateThinPlateSplineAt(tps.coefficients, tps.controlPoints, k, set.u[i], set.v[i])
 		}
 		const dispersion = computeResidualDispersion(residuals, scratch, n)
+
+		// Acceptance means the sample fed the final fit, so the cap rejects whatever it dropped, whether or
+		// not the spline interpolates. Applied after the residuals so the diagnostic keeps its full set.
+		if (indices !== undefined) {
+			const kept = new Uint8Array(set.count)
+			for (const i of indices) kept[i] = 1
+			for (let i = 0; i < set.count; i++) if (kept[i] === 0) set.active[i] = 0
+		}
+
 		const accepted = activeSurfaceSampleCount(set)
 
 		return {
