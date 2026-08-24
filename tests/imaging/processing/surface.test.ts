@@ -243,6 +243,25 @@ describe('thin-plate spline', () => {
 		expect(model.controlPoints!.length / 2).toBe(3)
 	})
 
+	test('a cap at the minimum picks non-collinear controls from a mostly linear layout', () => {
+		// A long collinear run whose off-line samples cluster near one endpoint. The midpoint of the run is
+		// farther from both endpoints than any off-line sample, so choosing the third control by distance
+		// would take it and leave the saddle-point system singular.
+		const samples: SurfaceSample[] = []
+		for (let i = 0; i <= 20; i++) samples.push({ x: i * 5, y: 0, value: 0.2 + 0.001 * i })
+		for (let i = 0; i < 4; i++) samples.push({ x: 2 + i, y: 18 + i, value: 0.25 })
+
+		expect(fitScalarSurface(samples, 128, 128, { model: 'thinPlateSpline', smoothing: 0.1 }).ok).toBe(true)
+
+		const model = fitOrThrow(samples, 128, 128, { model: 'thinPlateSpline', smoothing: 0.1, maxControlPoints: 3 })
+		const points = model.controlPoints!
+		expect(points.length / 2).toBe(3)
+
+		// The three controls must span a real triangle.
+		const area = Math.abs((points[2] - points[0]) * (points[5] - points[1]) - (points[3] - points[1]) * (points[4] - points[0]))
+		expect(area).toBeGreaterThan(0)
+	})
+
 	test('a smoothing spline keeps every sample accepted under the cap', () => {
 		const samples = sampleGrid(256, 256, 12, 12, (x, y) => 0.2 + 0.0005 * (x - y))
 		const model = fitOrThrow(samples, 256, 256, { model: 'thinPlateSpline', smoothing: 0.5, maxControlPoints: 16 })

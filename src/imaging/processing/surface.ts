@@ -409,35 +409,51 @@ export function subsampleSurfaceControlPoints(set: SurfaceSampleSet, maxPoints: 
 
 	// A cap below 4 collapses the bucket grid to a single cell, so the sweep returns one control point and
 	// a layout a three-point spline fits perfectly well is reported as unfittable. Top the selection up to
-	// the spline minimum. Picking the next samples in index order would line them up along a grid row and
-	// leave the system singular, so each addition is the active sample farthest from those already chosen,
-	// which extends the same spatial coverage the buckets exist to preserve. Unreachable for any larger
-	// cap, where a layout that passed the 2D coverage check necessarily spans several buckets.
-	while (n < MIN_CONTROL_POINTS) {
+	// the spline minimum. Unreachable for any larger cap, where a layout that passed the 2D coverage check
+	// necessarily spans several buckets.
+	//
+	// The two criteria differ because the spline needs three points that span a triangle, not three points
+	// that are merely far apart. The second control point is the one farthest from the first, which fixes
+	// the longest axis of the layout. The third maximizes the triangle area instead: picking it by
+	// distance too would happily land on the midpoint of a long collinear run whenever the off-line
+	// samples cluster near an endpoint, leaving the saddle-point system singular.
+	if (n < MIN_CONTROL_POINTS && n > 0) {
 		let best = -1
-		let bestDistance = -1
+		let bestDistance = 0
 
 		for (let i = 0; i < set.count; i++) {
 			if (set.active[i] === 0) continue
-
-			let nearest = Infinity
-			for (let k = 0; k < n; k++) {
-				const j = chosen[k]
-				const du = set.u[i] - set.u[j]
-				const dv = set.v[i] - set.v[j]
-				const distance = du * du + dv * dv
-				if (distance < nearest) nearest = distance
-			}
-
-			// A zero nearest distance means `i` is already chosen (or duplicates one that is).
-			if (nearest > bestDistance) {
-				bestDistance = nearest
+			const du = set.u[i] - set.u[chosen[0]]
+			const dv = set.v[i] - set.v[chosen[0]]
+			const distance = du * du + dv * dv
+			if (distance > bestDistance) {
+				bestDistance = distance
 				best = i
 			}
 		}
 
-		if (best < 0 || bestDistance <= 0) break
-		chosen[n++] = best
+		if (best >= 0) chosen[n++] = best
+	}
+
+	if (n < MIN_CONTROL_POINTS && n > 1) {
+		const u0 = set.u[chosen[0]]
+		const v0 = set.v[chosen[0]]
+		const du1 = set.u[chosen[1]] - u0
+		const dv1 = set.v[chosen[1]] - v0
+		let best = -1
+		let bestArea = 0
+
+		for (let i = 0; i < set.count; i++) {
+			if (set.active[i] === 0) continue
+			// Twice the triangle area, as the magnitude of the 2D cross product.
+			const area = Math.abs(du1 * (set.v[i] - v0) - dv1 * (set.u[i] - u0))
+			if (area > bestArea) {
+				bestArea = area
+				best = i
+			}
+		}
+
+		if (best >= 0) chosen[n++] = best
 	}
 
 	return chosen.subarray(0, n)
