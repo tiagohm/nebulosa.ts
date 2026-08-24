@@ -258,6 +258,102 @@ describe('local normalization', () => {
 		expect(unsupported).toBeLessThan(supported / 10)
 	})
 
+	// A star field: high-frequency content, which is what registration resampling attenuates.
+	function starField(seed: number) {
+		const noise = rng(seed)
+		const raw = new Float64Array(WIDTH * HEIGHT)
+		for (let y = 0; y < HEIGHT; y++) {
+			for (let x = 0; x < WIDTH; x++) raw[y * WIDTH + x] = 0.1 + 0.02 * (x / WIDTH) + 0.01 * (noise() - 0.5)
+		}
+
+		const star = rng(seed * 7 + 1)
+		for (let i = 0; i < 500; i++) {
+			const cx = star() * WIDTH
+			const cy = star() * HEIGHT
+			const amplitude = 0.2 + 0.6 * star()
+			const sigma = 1.1 + 0.6 * star()
+			for (let y = Math.max(0, (cy | 0) - 5); y < Math.min(HEIGHT, (cy | 0) + 6); y++) {
+				for (let x = Math.max(0, (cx | 0) - 5); x < Math.min(WIDTH, (cx | 0) + 6); x++) {
+					raw[y * WIDTH + x] += amplitude * Math.exp(-((x - cx) ** 2 + (y - cy) ** 2) / (2 * sigma * sigma))
+				}
+			}
+		}
+
+		return raw
+	}
+
+	// Bilinear resampling through a rotation, exactly what registration applies to a frame.
+	function rotate(src: Float64Array, degrees: number) {
+		const out = new Float64Array(src.length)
+		const theta = (degrees * Math.PI) / 180
+		const ct = Math.cos(theta)
+		const st = Math.sin(theta)
+		const cx = (WIDTH - 1) / 2
+		const cy = (HEIGHT - 1) / 2
+
+		for (let y = 0; y < HEIGHT; y++) {
+			for (let x = 0; x < WIDTH; x++) {
+				const sx = cx + ct * (x - cx) - st * (y - cy)
+				const sy = cy + st * (x - cx) + ct * (y - cy)
+				const x0 = Math.floor(sx)
+				const y0 = Math.floor(sy)
+				const tx = sx - x0
+				const ty = sy - y0
+				const xa = clampIndex(x0, WIDTH)
+				const xb = clampIndex(x0 + 1, WIDTH)
+				const ya = clampIndex(y0, HEIGHT)
+				const yb = clampIndex(y0 + 1, HEIGHT)
+				const top = src[ya * WIDTH + xa] + (src[ya * WIDTH + xb] - src[ya * WIDTH + xa]) * tx
+				const bottom = src[yb * WIDTH + xa] + (src[yb * WIDTH + xb] - src[yb * WIDTH + xa]) * tx
+				out[y * WIDTH + x] = top + (bottom - top) * ty
+			}
+		}
+
+		return out
+	}
+
+	function clampIndex(value: number, limit: number) {
+		return Math.min(Math.max(value, 0), limit - 1)
+	}
+
+	test('registration resampling alone never produces a gain field', () => {
+		// Registration resamples the current frame, attenuating its high-frequency content by an amount
+		// that depends on the subpixel phase and so varies across a rotated frame. Every second-moment
+		// gain estimator reads that as a gain, and the dynamic-range gate cannot help: a star profile is
+		// attenuated just like a noise sample. These frames differ by nothing but that resampling, so any
+		// gain field at all is spurious and would rescale stars across the frame.
+		const reference = starField(5)
+
+		for (const degrees of [0.5, 2, 5]) {
+			const current = rotate(rotate(reference, degrees), -degrees)
+			const model = fitMono(reference, current)
+
+			expect(model.diagnostics[0].scaleCells).toBeGreaterThan(0)
+			expect(model.scaleSurfaces[0]).toBeUndefined()
+
+			// With no gain field the applied gain is the anchor everywhere.
+			const low = new Float64Array(reference.length).fill(0)
+			const high = new Float64Array(reference.length).fill(1)
+			applyLocalNormalizationInPlace(low, undefined, model)
+			applyLocalNormalizationInPlace(high, undefined, model)
+			for (let i = 0; i < reference.length; i += 977) expect(high[i] - low[i]).toBeCloseTo(model.global[0].scale, 9)
+		}
+	})
+
+	test('a gain field large enough to be real still survives the significance test', () => {
+		const reference = starField(5)
+		const current = new Float64Array(reference.length)
+		for (let y = 0; y < HEIGHT; y++) {
+			for (let x = 0; x < WIDTH; x++) {
+				const i = y * WIDTH + x
+				current[i] = reference[i] / (1.1 + 0.2 * (x / WIDTH))
+			}
+		}
+
+		const model = fitMono(reference, current)
+		expect(model.scaleSurfaces[0]).toBeDefined()
+	})
+
 	test('a subpixel-resampled frame with no photometric difference gets no gain field', () => {
 		// Half-pixel bilinear resampling attenuates the noise, which a per-cell span ratio would read as a
 		// gain and fit into a spurious field. Nothing here differs photometrically, so nothing must.
@@ -496,8 +592,9 @@ describe('local normalization', () => {
 		applyLocalNormalizationInPlace(coarse, undefined, fitMono(reference, current))
 		applyLocalNormalizationInPlace(dense, undefined, fitMono(reference, current, { evaluationStepFraction: 0.01 }))
 
-		// Well below the fit's own residual, which is of order 1e-3 for this frame.
-		expect(maxAbsoluteError(coarse, dense)).toBeLessThan(1.5e-4)
+		// Well below the fit's own residual, which is of order 1e-3 for this frame. The bound is set by the
+		// offset clamp, whose kink makes the interpolation error fall linearly rather than quadratically.
+		expect(maxAbsoluteError(coarse, dense)).toBeLessThan(3e-4)
 	})
 })
 

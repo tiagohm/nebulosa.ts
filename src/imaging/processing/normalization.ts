@@ -456,20 +456,40 @@ function selectQuantile(values: Float64Array, count: number, q: number) {
 
 // Whether a fitted gain field carries more signal than the scatter of the cells that produced it.
 //
-// The peak-to-peak amplitude of a Chebyshev surface on [-1, 1]^2 is bounded by twice the L1 norm of its
-// non-constant coefficients, since every |T_i| <= 1; at degree 1 that bound is exact. The standard error
-// of the fit is its residual dispersion divided by the square root of the sample count. A field whose
-// amplitude does not clear `sigma` standard errors is consistent with a constant gain, and applying it
-// would multiply per-cell estimation noise into every pixel. The bound is only meaningful for the
-// polynomial model, so a spline field is always accepted.
+// This is the only thing standing between the output and a resampling artifact, so the comparison has to
+// be calibrated properly. Registration resamples the current frame, which attenuates its high-frequency
+// content by an amount that depends on the subpixel phase and therefore varies across a rotated or
+// scaled frame. Every second-moment gain estimator — the quantile span used here, an ordinary
+// least-squares slope on the pairs, orthogonal regression — reads that spectral change as a gain, and
+// the dynamic-range gate does not prevent it, because a star profile is attenuated just as a noise
+// sample is. What separates the artifact from a real gain field is coherence: a real field agrees from
+// cell to cell, while the artifact scatters wildly and only survives as a low-amplitude fit through very
+// noisy samples.
+//
+// So each non-constant coefficient must clear `sigma` standard errors on its own. The comparison is made
+// on the mean absolute coefficient against the per-coefficient standard error, which is the residual
+// dispersion over the square root of the sample count. Comparing the surface's whole peak-to-peak
+// amplitude against a single standard error instead — twice the L1 norm of the non-constant Chebyshev
+// coefficients, since every |T_i| <= 1 — asks each coefficient to clear only `sigma / (2 * terms)`, well
+// under one sigma at the default, which is how a rotation with no photometric difference at all produced
+// a 4% gain field. The bound is only meaningful for the polynomial model, so a spline field is always
+// accepted.
 function isSignificantGainField(model: ScalarSurfaceModel, sigma: number) {
 	if (sigma <= 0 || model.type !== 'polynomial') return true
 	if (!(model.residual > 0) || model.acceptedSamples <= 0) return true
 
 	let amplitude = 0
-	for (let k = 1; k < model.coefficients.length; k++) amplitude += Math.abs(model.coefficients[k])
+	let terms = 0
 
-	return 2 * amplitude >= (sigma * model.residual) / Math.sqrt(model.acceptedSamples)
+	for (let k = 1; k < model.coefficients.length; k++) {
+		amplitude += Math.abs(model.coefficients[k])
+		terms++
+	}
+
+	// A surface with no non-constant term carries no spatial correction at all.
+	if (terms === 0) return false
+
+	return amplitude / terms >= (sigma * model.residual) / Math.sqrt(model.acceptedSamples)
 }
 
 // Evaluates the fitted gain at every cell center, so the offset residuals can be rotated onto the gain
