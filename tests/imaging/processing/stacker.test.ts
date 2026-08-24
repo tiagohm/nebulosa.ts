@@ -200,3 +200,167 @@ describe('stacker batch mode', () => {
 		expectRawClose(result.finalImage!.raw, reference.raw)
 	})
 })
+
+describe('stacker normalization modes', () => {
+	// A frame large enough for a local grid, with enough structure for the cell estimators.
+	function localFrames(scale: (x: number, y: number) => number, offset: (x: number, y: number) => number) {
+		const reference = makeImage(64, 64, 1, (x, y) => 0.1 + 0.05 * (x / 64) + 0.06 * Math.sin(x / 7) * Math.cos(y / 9) + (((x * 7 + y * 13) % 17) / 17) * 0.01)
+		const current = makeImage(64, 64, 1, (x, y) => (reference.raw[y * 64 + x] - offset(x, y)) / scale(x, y))
+		return { reference, current }
+	}
+
+	function meanError(actual: ArrayLike<number>, expected: ArrayLike<number>) {
+		let sum = 0
+		for (let i = 0; i < actual.length; i++) sum += Math.abs(actual[i] - expected[i])
+		return sum / actual.length
+	}
+
+	const LOCAL_OPTIONS = {
+		...DEFAULT_STACK_OPTIONS,
+		combinationMethod: 'average',
+		normalizationMode: 'local',
+		localNormalization: { gridSize: 4, minSamplesPerCell: 32, offsetDegree: 2, scaleDegree: 1 },
+	} as const satisfies StackingOptions
+
+	test('local mode reports the global anchor and local diagnostics', () => {
+		const { reference, current } = localFrames(
+			() => 1.3,
+			(x) => 0.01 + 0.02 * (x / 64),
+		)
+		const result = stackFrames([makeFrame(reference, makeStars()), makeFrame(current, makeStars())], LOCAL_OPTIONS)
+
+		expect(result.acceptedFrames).toBe(2)
+
+		const summary = result.diagnostics[1].normalization
+		expect(summary).toBeDefined()
+		expect(summary!.scales).toHaveLength(1)
+		expect(summary!.local).toBeDefined()
+		expect(summary!.local!.estimator).toBe('background-scale')
+		expect(summary!.local!.model).toBe('polynomial')
+		expect(summary!.local!.channels).toHaveLength(1)
+		expect(summary!.local!.fallback).toBe(false)
+	})
+
+	test('local diagnostics stay compact and never retain the full model', () => {
+		const { reference, current } = localFrames(
+			() => 1.2,
+			() => 0.02,
+		)
+		const result = stackFrames([makeFrame(reference, makeStars()), makeFrame(current, makeStars())], LOCAL_OPTIONS)
+
+		const summary = result.diagnostics[1].normalization!
+		expect(Object.keys(summary).sort()).toEqual(['local', 'offsets', 'scales', 'weight'])
+		expect(Object.keys(summary.local!).sort()).toEqual(['channels', 'estimator', 'fallback', 'model'])
+		for (const channel of summary.local!.channels) {
+			expect(Object.keys(channel)).not.toContain('coefficients')
+			expect(Object.keys(channel)).not.toContain('samples')
+		}
+	})
+
+	test('local mode corrects a spatial offset field better than the global mode', () => {
+		const offset = (x: number, y: number) => 0.01 + 0.02 * (x / 64) - 0.015 * (y / 64)
+		const { reference, current } = localFrames(() => 1, offset)
+		const frames = [makeFrame(reference, makeStars()), makeFrame(current, makeStars())]
+
+		const local = stackFrames(frames, LOCAL_OPTIONS)
+		const global = stackFrames(frames, { ...DEFAULT_STACK_OPTIONS, combinationMethod: 'average', normalizationMode: 'background-scale' })
+
+		expect(meanError(local.finalImage!.raw, reference.raw)).toBeLessThan(meanError(global.finalImage!.raw, reference.raw))
+	})
+
+	test('live and batch produce the same local normalization', () => {
+		const { reference, current } = localFrames(
+			(x) => 1.1 + 0.1 * (x / 64),
+			(x) => 0.01 * (x / 64),
+		)
+		const frames = [makeFrame(reference, makeStars()), makeFrame(current, makeStars())]
+
+		const batch = stackFrames(frames, LOCAL_OPTIONS)
+
+		const live = new LiveStacker(LOCAL_OPTIONS)
+		for (const frame of frames) live.add(frame)
+		const snapshot = live.snapshot()!
+
+		expectRawClose(snapshot.finalImage!.raw, batch.finalImage!.raw, 1e-9)
+
+		const batchSummary = batch.diagnostics[1].normalization!
+		const liveSummary = snapshot.diagnostics[1].normalization!
+		expect(liveSummary.scales).toEqual(batchSummary.scales)
+		expect(liveSummary.offsets).toEqual(batchSummary.offsets)
+		expect(liveSummary.local!.channels).toEqual(batchSummary.local!.channels)
+	})
+
+	test('a reject fallback drops the frame as normalization-failed', () => {
+		const { reference, current } = localFrames(
+			() => 1.2,
+			() => 0.01,
+		)
+		const frames = [makeFrame(reference, makeStars()), makeFrame(current, makeStars())]
+		// No cell can supply that many pairs, so every plane falls back.
+		const options = { ...LOCAL_OPTIONS, localNormalization: { gridSize: 4, minSamplesPerCell: 100000, fallback: 'reject' } } as const satisfies StackingOptions
+
+		const batch = stackFrames(frames, options)
+		expect(batch.acceptedFrames).toBe(1)
+		expect(batch.diagnostics[1].reason).toBe('normalization-failed')
+
+		const live = new LiveStacker(options)
+		live.add(frames[0])
+		expect(live.add(frames[1]).reason).toBe('normalization-failed')
+	})
+
+	test('a global fallback keeps the frame and flags the diagnostics', () => {
+		const { reference, current } = localFrames(
+			() => 1.2,
+			() => 0.01,
+		)
+		const frames = [makeFrame(reference, makeStars()), makeFrame(current, makeStars())]
+		const options = { ...LOCAL_OPTIONS, localNormalization: { gridSize: 4, minSamplesPerCell: 100000, fallback: 'global' } } as const satisfies StackingOptions
+
+		const result = stackFrames(frames, options)
+		expect(result.acceptedFrames).toBe(2)
+		expect(result.diagnostics[1].normalization!.local!.fallback).toBe(true)
+		expect(result.diagnostics[1].normalization!.local!.channels[0].reason).toBeDefined()
+	})
+
+	test('the reference frame keeps identity in local mode', () => {
+		const { reference, current } = localFrames(
+			() => 1.4,
+			() => 0.03,
+		)
+		const referenceCopy = Float32Array.from(reference.raw)
+		const result = stackFrames([makeFrame(reference, makeStars()), makeFrame(current, makeStars())], LOCAL_OPTIONS)
+
+		expect(result.diagnostics[0].normalization!.scales).toEqual([1])
+		expect(result.diagnostics[0].normalization!.offsets).toEqual([0])
+		expectRawClose(reference.raw, referenceCopy, 0)
+	})
+
+	test('RGB local normalization runs per channel and in luminance', () => {
+		const reference = makeImage(64, 64, 3, (x, y, channel) => 0.1 + 0.03 * channel + 0.05 * (x / 64) + 0.05 * Math.sin(x / 7) * Math.cos(y / 9))
+		const current = makeImage(64, 64, 3, (x, y, channel) => (reference.raw[(y * 64 + x) * 3 + channel] - 0.01) / 1.2)
+		const frames = [makeFrame(reference, makeStars()), makeFrame(current, makeStars())]
+
+		const perChannel = stackFrames(frames, LOCAL_OPTIONS)
+		expect(perChannel.diagnostics[1].normalization!.local!.channels).toHaveLength(3)
+
+		const luminance = stackFrames(frames, { ...LOCAL_OPTIONS, colorHandlingMode: 'luminance' })
+		expect(luminance.diagnostics[1].normalization!.local!.channels).toHaveLength(1)
+		expect(luminance.diagnostics[1].normalization!.scales).toHaveLength(3)
+	})
+
+	test('global modes are unaffected by local normalization options', () => {
+		const { reference, current } = localFrames(
+			() => 1.3,
+			() => 0.02,
+		)
+		const frames = [makeFrame(reference, makeStars()), makeFrame(current, makeStars())]
+
+		for (const mode of ['none', 'scale', 'background-scale', 'percentile'] as const) {
+			const plain = stackFrames(frames, { ...DEFAULT_STACK_OPTIONS, combinationMethod: 'average', normalizationMode: mode })
+			const withOptions = stackFrames(frames, { ...DEFAULT_STACK_OPTIONS, combinationMethod: 'average', normalizationMode: mode, localNormalization: { gridSize: 4 } })
+
+			expectRawClose(withOptions.finalImage!.raw, plain.finalImage!.raw, 0)
+			expect(withOptions.diagnostics[1].normalization!.local).toBeUndefined()
+		}
+	})
+})

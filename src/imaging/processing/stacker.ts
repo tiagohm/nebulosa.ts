@@ -7,6 +7,8 @@ import { clamp } from '../../math/numerical/math'
 import type { Image, ImageRawPrecision, ImageRawType } from '../model/types'
 import type { DetectedStar } from '../stars/detector'
 import type { SigmaClipCenterMethod, SigmaClipDispersionMethod } from './computation'
+// oxfmt-ignore
+import { applyGlobalNormalizationInPlace, applyLocalNormalizationInPlace, broadcastNormalizationPlanes, DEFAULT_LOCAL_NORMALIZATION_OPTIONS, type FrameNormalizationSummary, fitLocalNormalizationRaw, type GlobalNormalizationMode, isLocalNormalizationFallback, type LocalNormalizationFallbackReason, type LocalNormalizationModel, type LocalNormalizationOptions, localNormalizationFailureReason, localNormalizationSummary, type NormalizationColorMode, resolveLocalNormalizationOptions, solveGlobalNormalizationPlanes } from './normalization'
 import { type ImageInterpolationMode, type ImageRegistrationFailureReason, type ImageRegistrationSuccess, registerImage } from './registration'
 import { measureSubframeQuality, type SubframeQualityMetrics } from './subframe.selector'
 
@@ -24,20 +26,34 @@ export type StackingInterpolationMode = ImageInterpolationMode
 // Output extent: the union (full coverage) or intersection (common area) of the frames.
 export type StackingCropMode = 'union' | 'intersection'
 
-// Per-frame normalization strategy applied before combination.
-export type StackingNormalizationMode = 'none' | 'scale' | 'background-scale' | 'percentile'
+// Per-frame normalization strategy applied before combination. The global estimators match the whole
+// overlap with one scale/offset pair per channel; `local` keeps that pair as its anchor and additionally
+// models the smooth spatial residual around it (see `LocalNormalizationOptions`).
+export type StackingNormalizationMode = 'none' | GlobalNormalizationMode | 'local'
 
 // Per-frame weighting strategy in weighted combinations.
 export type StackingWeightingMode = 'none' | 'snr' | 'inverse-hfd' | 'stars' | 'quality'
 
 // How color images are combined: each channel independently or via a shared luminance alignment.
-export type StackingColorHandlingMode = 'per-channel' | 'luminance'
+export type StackingColorHandlingMode = NormalizationColorMode
 
 // How the reference frame for a batch is chosen.
 export type BatchReferenceSelectionMode = 'first-accepted' | 'best-quality' | 'index'
 
 // Reason a frame was rejected from the stack.
-export type FrameRejectionReason = 'combination-method-not-supported-in-live-mode' | 'invalid-image-shape' | 'channel-mismatch' | 'too-few-stars' | 'reference-has-no-stars' | 'match-failed' | 'invalid-transform' | 'transform-error-too-high' | 'transform-out-of-bounds' | 'no-overlap' | 'insufficient-overlap'
+export type FrameRejectionReason =
+	| 'combination-method-not-supported-in-live-mode'
+	| 'invalid-image-shape'
+	| 'channel-mismatch'
+	| 'too-few-stars'
+	| 'reference-has-no-stars'
+	| 'match-failed'
+	| 'invalid-transform'
+	| 'transform-error-too-high'
+	| 'transform-out-of-bounds'
+	| 'no-overlap'
+	| 'insufficient-overlap'
+	| 'normalization-failed'
 
 // One input frame: its image, detected stars, and optional identity/weight.
 export interface StackingFrame {
@@ -97,13 +113,6 @@ export interface StackingTransformSummary {
 
 // Quality metrics estimated for one frame.
 export type StackingFrameQualityMetrics = SubframeQualityMetrics
-
-// Per-channel normalization scales/offsets and the resulting frame weight.
-export interface FrameNormalizationSummary {
-	readonly scales: readonly number[]
-	readonly offsets: readonly number[]
-	readonly weight: number
-}
 
 // Acceptance outcome and diagnostics for one frame.
 export interface FrameAcceptanceResult {
@@ -171,6 +180,8 @@ export interface StackingOptions {
 	// Minimum per-pixel coverage to keep an output pixel.
 	readonly minimumCoverage?: number
 	readonly normalizationMode?: StackingNormalizationMode
+	// Tuning for `normalizationMode: 'local'`; ignored by every other mode.
+	readonly localNormalization?: LocalNormalizationOptions
 	readonly weightingMode?: StackingWeightingMode
 	readonly colorHandlingMode?: StackingColorHandlingMode
 	// Retain per-pixel coverage/validity statistics in the result.
@@ -189,13 +200,14 @@ export interface StackingOptions {
 }
 
 // StackingOptions with every field resolved to a concrete value.
-interface ResolvedStackingOptions extends Required<Omit<StackingOptions, 'sigmaClip' | 'minMaxRejection' | 'winsorization' | 'percentileClip' | 'batchReference' | 'matchStarsConfig'>> {
+interface ResolvedStackingOptions extends Required<Omit<StackingOptions, 'sigmaClip' | 'minMaxRejection' | 'winsorization' | 'percentileClip' | 'batchReference' | 'matchStarsConfig' | 'localNormalization'>> {
 	readonly sigmaClip: Required<SigmaClipStackingOptions>
 	readonly minMaxRejection: Required<MinMaxRejectionOptions>
 	readonly winsorization: Required<PercentileRangeOptions>
 	readonly percentileClip: Required<PercentileRangeOptions>
 	readonly batchReference: Required<BatchReferenceSelection>
 	readonly matchStarsConfig: StarMatchingConfig
+	readonly localNormalization: Required<LocalNormalizationOptions>
 }
 
 // One frame after warping onto the reference grid: its resampled pixels, validity, and per-frame metadata.
@@ -233,6 +245,7 @@ const DEFAULT_STACKING_OPTIONS: ResolvedStackingOptions = {
 	cropMode: 'union',
 	minimumCoverage: 0,
 	normalizationMode: 'background-scale',
+	localNormalization: DEFAULT_LOCAL_NORMALIZATION_OPTIONS,
 	weightingMode: 'none',
 	colorHandlingMode: 'per-channel',
 	keepPerPixelStatistics: true,
@@ -248,8 +261,6 @@ const DEFAULT_STACKING_OPTIONS: ResolvedStackingOptions = {
 
 // Small epsilon guarding divisions and degeneracy tests.
 const FLOAT_EPSILON = 1e-12
-// Maximum pixels sampled when estimating normalization scale/offset.
-const NORMALIZATION_SAMPLE_LIMIT = 8192
 
 // Resolves caller overrides into deterministic internal defaults.
 function resolveStackingOptions(options: StackingOptions = {}): ResolvedStackingOptions {
@@ -293,6 +304,7 @@ function resolveStackingOptions(options: StackingOptions = {}): ResolvedStacking
 		maxShear: Math.max(0, options.maxShear ?? DEFAULT_STACKING_OPTIONS.maxShear),
 		samplePrecision: options.samplePrecision ?? DEFAULT_STACKING_OPTIONS.samplePrecision,
 		matchStarsConfig: { ...DEFAULT_STACKING_OPTIONS.matchStarsConfig, ...options.matchStarsConfig },
+		localNormalization: resolveLocalNormalizationOptions(options.localNormalization),
 	}
 }
 
@@ -414,8 +426,9 @@ export class LiveStacker {
 		if (overlapFraction < this.#options.minOverlapFraction) return this.#reject(frameIndex, frame, quality, 'insufficient-overlap')
 
 		const normalization = computeNormalization(raw, valid, frame, this.#referenceFrame, quality, this.#options)
-		applyNormalizationInPlace(raw, valid, frame.image.metadata.channels, normalization.scales, normalization.offsets)
-		accumulateAlignedFrame(this.#referenceFrame.image.metadata.channels, raw, valid, this.#sum!, this.#weightSum!, this.#coverageMap, this.#options.combinationMethod, normalization.weight)
+		if (normalization.transform.kind === 'rejected') return this.#reject(frameIndex, frame, quality, 'normalization-failed')
+		applyNormalizationInPlace(raw, valid, frame.image.metadata.channels, normalization.transform)
+		accumulateAlignedFrame(this.#referenceFrame.image.metadata.channels, raw, valid, this.#sum!, this.#weightSum!, this.#coverageMap, this.#options.combinationMethod, normalization.summary.weight)
 
 		this.#acceptedFrames++
 
@@ -426,7 +439,7 @@ export class LiveStacker {
 			overlapFraction,
 			quality,
 			transform: registration.transform.summary,
-			normalization,
+			normalization: normalization.summary,
 		}
 
 		this.#diagnostics.push(accepted)
@@ -541,6 +554,12 @@ export function stackFrames(frames: readonly StackingFrame[], options: StackingO
 		}
 
 		const aligned = createAlignedFrame(frame, i, quality, referenceFrame, registration, resolved)
+
+		if (aligned === undefined) {
+			diagnostics.push({ accepted: false, frameIndex: i, frameId: frame.id, overlapFraction: 0, quality, reason: 'normalization-failed', transform: registration.transform.summary })
+			continue
+		}
+
 		const overlapFraction = aligned.coveredPixels / Math.max(aligned.valid.length, 1)
 
 		if (overlapFraction <= 0) {
@@ -639,15 +658,17 @@ function makeAlignedReference(frame: StackingFrame, index: number, quality: Stac
 	return { raw, valid, weight: normalization.weight, coveredPixels: pixelCount, index, id: frame.id, quality, normalization, transform: identityTransformSummary() }
 }
 
-// Creates an aligned and normalized batch sample against the reference frame grid.
-function createAlignedFrame(frame: StackingFrame, index: number, quality: StackingFrameQualityMetrics, referenceFrame: StackingFrame, registration: ImageRegistrationSuccess, options: ResolvedStackingOptions): AlignedFrame {
+// Creates an aligned and normalized batch sample against the reference frame grid. Returns undefined
+// when a `reject` local-normalization fallback fired, so the caller can drop the frame.
+function createAlignedFrame(frame: StackingFrame, index: number, quality: StackingFrameQualityMetrics, referenceFrame: StackingFrame, registration: ImageRegistrationSuccess, options: ResolvedStackingOptions): AlignedFrame | undefined {
 	const { channels } = referenceFrame.image.metadata
 	const { raw } = registration.image
 	const valid = registration.validityMask
 	const coveredPixels = registration.coveredPixels
 	const normalization = computeNormalization(raw, valid, frame, referenceFrame, quality, options)
-	applyNormalizationInPlace(raw, valid, channels, normalization.scales, normalization.offsets)
-	return { raw, valid, weight: normalization.weight, coveredPixels, index, id: frame.id, quality, normalization, transform: registration.transform.summary }
+	if (normalization.transform.kind === 'rejected') return undefined
+	applyNormalizationInPlace(raw, valid, channels, normalization.transform)
+	return { raw, valid, weight: normalization.summary.weight, coveredPixels, index, id: frame.id, quality, normalization: normalization.summary, transform: registration.transform.summary }
 }
 
 // Builds the current live result from online accumulators.
@@ -846,110 +867,66 @@ function combineSigmaClip(values: Float64Array, count: number, options: Required
 	return meanOf(values.subarray(0, active))
 }
 
-// Computes normalization parameters from overlap samples against the reference frame.
-function computeNormalization(alignedRaw: ImageRawType, valid: Uint8Array, frame: StackingFrame, referenceFrame: StackingFrame, quality: StackingFrameQualityMetrics, options: ResolvedStackingOptions): FrameNormalizationSummary {
+// How a frame's pixels are transformed before combination. Kept separate from the retained summary so
+// the full local model — coefficients, control points, node grids, per-cell samples — stays transient
+// and never accumulates in the per-frame diagnostics of a long live session.
+type NormalizationTransform =
+	| {
+			readonly kind: 'global'
+			readonly scales: readonly number[]
+			readonly offsets: readonly number[]
+	  }
+	| {
+			readonly kind: 'local'
+			readonly model: LocalNormalizationModel
+	  }
+	| {
+			readonly kind: 'rejected'
+			readonly reason: LocalNormalizationFallbackReason
+	  }
+
+// The transform to apply plus the compact summary to retain for the frame.
+interface ComputedNormalization {
+	readonly transform: NormalizationTransform
+	readonly summary: FrameNormalizationSummary
+}
+
+// Computes the normalization of one aligned frame against the reference.
+//
+// In `local` mode the global solution is still computed first and reported as `scales`/`offsets`: it is
+// the anchor the local model corrects around, and it is what a caller inspecting the summary expects to
+// see. A `reject` fallback surfaces here as a `rejected` transform, not as an exception.
+function computeNormalization(alignedRaw: ImageRawType, valid: Uint8Array, frame: StackingFrame, referenceFrame: StackingFrame, quality: StackingFrameQualityMetrics, options: ResolvedStackingOptions): ComputedNormalization {
 	const weight = resolveFrameWeight(frame, quality, options)
-	const channels = referenceFrame.image.metadata.channels
-	if (options.normalizationMode === 'none') return { scales: channelArray(channels, 1), offsets: channelArray(channels, 0), weight }
+	const { width, height, channels } = referenceFrame.image.metadata
 
-	const overlap = collectNormalizationSamples(alignedRaw, valid, referenceFrame.image.raw, channels, referenceFrame.image.metadata.width, referenceFrame.image.metadata.height, options.colorHandlingMode)
-	if (overlap.reference.length === 0 || overlap.current.length === 0) return { scales: channelArray(channels, 1), offsets: channelArray(channels, 0), weight }
-
-	if (options.colorHandlingMode === 'luminance' && channels === 3) {
-		const parameters = solveNormalization(overlap.reference[0], overlap.current[0], options.normalizationMode)
-		return { scales: channelArray(channels, parameters.scale), offsets: channelArray(channels, parameters.offset), weight }
+	if (options.normalizationMode === 'none') {
+		const scales = channelArray(channels, 1)
+		const offsets = channelArray(channels, 0)
+		return { transform: { kind: 'global', scales, offsets }, summary: { scales, offsets, weight } }
 	}
 
-	const scales = new Array<number>(channels)
-	const offsets = new Array<number>(channels)
+	if (options.normalizationMode === 'local') {
+		const model = fitLocalNormalizationRaw(referenceFrame.image.raw, alignedRaw, width, height, channels, options.colorHandlingMode, valid, options.localNormalization)
+		const { scales, offsets } = broadcastNormalizationPlanes(model.global, channels)
+		const summary: FrameNormalizationSummary = { scales, offsets, weight, local: localNormalizationSummary(model) }
 
-	for (let channel = 0; channel < channels; channel++) {
-		const parameters = solveNormalization(overlap.reference[channel], overlap.current[channel], options.normalizationMode)
-		scales[channel] = parameters.scale
-		offsets[channel] = parameters.offset
+		if (options.localNormalization.fallback === 'reject' && isLocalNormalizationFallback(model)) {
+			return { transform: { kind: 'rejected', reason: localNormalizationFailureReason(model) ?? 'surface-fit-failed' }, summary }
+		}
+
+		return { transform: { kind: 'local', model }, summary }
 	}
 
-	return { scales, offsets, weight }
+	const planes = solveGlobalNormalizationPlanes(alignedRaw, valid, referenceFrame.image.raw, channels, width, height, options.normalizationMode, options.colorHandlingMode)
+	const { scales, offsets } = broadcastNormalizationPlanes(planes, channels)
+	return { transform: { kind: 'global', scales, offsets }, summary: { scales, offsets, weight } }
 }
 
-// Collects overlap samples for robust normalization.
-function collectNormalizationSamples(alignedRaw: ImageRawType, valid: Uint8Array, referenceRaw: ImageRawType, channels: number, width: number, height: number, colorMode: StackingColorHandlingMode) {
-	const step = Math.max(1, Math.floor(Math.sqrt((width * height) / NORMALIZATION_SAMPLE_LIMIT)))
-	const current: number[][] = colorMode === 'luminance' && channels === 3 ? [[]] : new Array<number[]>(channels)
-	const reference: number[][] = colorMode === 'luminance' && channels === 3 ? [[]] : new Array<number[]>(channels)
-
-	if (!(colorMode === 'luminance' && channels === 3)) {
-		for (let channel = 0; channel < channels; channel++) {
-			current[channel] = []
-			reference[channel] = []
-		}
-	}
-
-	for (let y = 0; y < height; y += step) {
-		for (let x = 0; x < width; x += step) {
-			const pixel = y * width + x
-			if (valid[pixel] === 0) continue
-			const base = pixel * channels
-
-			if (colorMode === 'luminance' && channels === 3) {
-				const currentLum = 0.2125 * alignedRaw[base] + 0.7154 * alignedRaw[base + 1] + 0.0721 * alignedRaw[base + 2]
-				const referenceLum = 0.2125 * referenceRaw[base] + 0.7154 * referenceRaw[base + 1] + 0.0721 * referenceRaw[base + 2]
-				current[0].push(currentLum)
-				reference[0].push(referenceLum)
-			} else {
-				for (let channel = 0; channel < channels; channel++) {
-					current[channel].push(alignedRaw[base + channel])
-					reference[channel].push(referenceRaw[base + channel])
-				}
-			}
-		}
-	}
-
-	return { current, reference }
-}
-
-// Solves a robust linear normalization y = scale * x + offset.
-function solveNormalization(reference: readonly number[], current: readonly number[], mode: StackingNormalizationMode) {
-	if (reference.length === 0 || current.length === 0) return { scale: 1, offset: 0 }
-
-	const ref = Float64Array.from(reference).sort()
-	const cur = Float64Array.from(current).sort()
-	const refMedian = medianOf(ref)
-	const curMedian = medianOf(cur)
-
-	switch (mode) {
-		case 'scale': {
-			const scale = Math.abs(curMedian) > FLOAT_EPSILON ? refMedian / curMedian : 1
-			return { scale: finiteOr(scale, 1), offset: 0 }
-		}
-		case 'background-scale': {
-			const refBg = percentileSorted(ref, ref.length, 0.25)
-			const curBg = percentileSorted(cur, cur.length, 0.25)
-			const refSpan = Math.max(percentileSorted(ref, ref.length, 0.75) - refBg, FLOAT_EPSILON)
-			const curSpan = Math.max(percentileSorted(cur, cur.length, 0.75) - curBg, FLOAT_EPSILON)
-			const scale = refSpan / curSpan
-			return { scale: finiteOr(scale, 1), offset: refBg - scale * curBg }
-		}
-		case 'percentile': {
-			const refBg = percentileSorted(ref, ref.length, 0.1)
-			const curBg = percentileSorted(cur, cur.length, 0.1)
-			const refSpan = Math.max(percentileSorted(ref, ref.length, 0.9) - refBg, FLOAT_EPSILON)
-			const curSpan = Math.max(percentileSorted(cur, cur.length, 0.9) - curBg, FLOAT_EPSILON)
-			const scale = refSpan / curSpan
-			return { scale: finiteOr(scale, 1), offset: refBg - scale * curBg }
-		}
-		default:
-			return { scale: 1, offset: 0 }
-	}
-}
-
-// Applies per-channel normalization in place on aligned sample data.
-function applyNormalizationInPlace(raw: ImageRawType, valid: Uint8Array, channels: number, scales: readonly number[], offsets: readonly number[]) {
-	for (let pixel = 0; pixel < valid.length; pixel++) {
-		if (valid[pixel] === 0) continue
-		const base = pixel * channels
-		for (let channel = 0; channel < channels; channel++) raw[base + channel] = raw[base + channel] * scales[channel] + offsets[channel]
-	}
+// Applies a computed transform in place on aligned sample data. A rejected frame is never applied.
+function applyNormalizationInPlace(raw: ImageRawType, valid: Uint8Array, channels: number, transform: NormalizationTransform) {
+	if (transform.kind === 'global') applyGlobalNormalizationInPlace(raw, valid, channels, transform.scales, transform.offsets)
+	else if (transform.kind === 'local') applyLocalNormalizationInPlace(raw, valid, transform.model)
 }
 
 // Resolves the deterministic weight attached to one frame.
@@ -1162,9 +1139,4 @@ function channelArray(channels: number, value: number) {
 // Returns the deterministic identity transform summary.
 function identityTransformSummary(): StackingTransformSummary {
 	return { model: 'identity', translationX: 0, translationY: 0, scaleX: 1, scaleY: 1, rotation: 0, shear: 0, mirrored: false, inlierCount: 0, rmsError: 0 }
-}
-
-// Replaces non-finite scalars with a stable fallback.
-function finiteOr(value: number, fallback: number) {
-	return Number.isFinite(value) ? value : fallback
 }
