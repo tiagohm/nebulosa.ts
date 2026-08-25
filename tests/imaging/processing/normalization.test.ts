@@ -1348,6 +1348,28 @@ describe('local normalization', () => {
 		expect(model.diagnostics[0].fallback).toBe(false)
 		expect(model.diagnostics[0].acceptedCells).toBe(model.diagnostics[0].candidateCells)
 	})
+
+	test('alternate phases reach masks that reject every even lattice residue', () => {
+		const size = 64
+		const reference = referencePlane(19, size, size)
+		const current = inverseTransform(
+			reference,
+			() => 1.2,
+			(x, y) => 0.01 + 0.02 * (x / size) + 0.015 * (y / size),
+			size,
+			size,
+		)
+		const mask = new Uint8Array(size * size)
+
+		for (let y = 0; y < size; y++) {
+			for (let x = 0; x < size; x++) mask[y * size + x] = (x & 1) === 1 || (y & 1) === 1 ? 1 : 0
+		}
+
+		const model = fitLocalNormalizationRaw(reference, current, size, size, 1, 'per-channel', mask, resolveLocalNormalizationOptions({ gridSize: 4, maxSamplesPerCell: 16, minSamplesPerCell: 16 }))
+
+		expect(model.diagnostics[0].fallback).toBe(false)
+		expect(model.diagnostics[0].acceptedCells).toBe(model.diagnostics[0].candidateCells)
+	})
 })
 
 describe('color handling', () => {

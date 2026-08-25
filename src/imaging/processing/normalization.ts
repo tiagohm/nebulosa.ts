@@ -797,6 +797,54 @@ function resolveCellStride(boxW: number, boxH: number, maxSamples: number) {
 	return { strideX, strideY, capacity: columns * rows }
 }
 
+// Adds one unique sparse-scan phase residue in [0, stride). Returns the updated count.
+function addCellPhaseOffset(offsets: Int32Array, count: number, stride: number, offset: number) {
+	const bounded = clamp(offset, 0, Math.max(0, stride - 1))
+	for (let i = 0; i < count; i++) if (offsets[i] === bounded) return count
+	offsets[count] = bounded
+	return count + 1
+}
+
+// Sparse-scan residues for one axis. The origin keeps the common path unchanged; half and quarter
+// residues reach masks aligned to even/odd classes while keeping the phase product bounded.
+function buildCellPhaseOffsets(stride: number, offsets: Int32Array) {
+	let count = 1
+	offsets[0] = 0
+	if (stride > 1) count = addCellPhaseOffset(offsets, count, stride, stride >> 1)
+	if (stride > 2) count = addCellPhaseOffset(offsets, count, stride, stride >> 2)
+	if (stride > 3) count = addCellPhaseOffset(offsets, count, stride, Math.floor((3 * stride) / 4))
+	return count
+}
+
+// Adds one unique sparse-scan phase pair. Returns the updated count.
+function addCellPhasePair(offsetsX: Int32Array, offsetsY: Int32Array, count: number, offsetX: number, offsetY: number) {
+	for (let i = 0; i < count; i++) if (offsetsX[i] === offsetX && offsetsY[i] === offsetY) return count
+	offsetsX[count] = offsetX
+	offsetsY[count] = offsetY
+	return count + 1
+}
+
+// Sparse-scan phase pairs for a cell, preserving the historical zero/half-stride order before adding
+// the quarter residues. That keeps cells whose first alternate lattice already clears the thresholds
+// from visiting later phases that would only dilute the measured valid fraction.
+function buildCellPhasePairs(strideX: number, strideY: number, offsetsX: Int32Array, offsetsY: Int32Array) {
+	const axisX = new Int32Array(4)
+	const axisY = new Int32Array(4)
+	const countX = buildCellPhaseOffsets(strideX, axisX)
+	const countY = buildCellPhaseOffsets(strideY, axisY)
+	let count = addCellPhasePair(offsetsX, offsetsY, 0, 0, 0)
+
+	if (countX > 1 || countY > 1) count = addCellPhasePair(offsetsX, offsetsY, count, axisX[Math.min(1, countX - 1)], axisY[Math.min(1, countY - 1)])
+	if (countX > 1) count = addCellPhasePair(offsetsX, offsetsY, count, axisX[1], 0)
+	if (countY > 1) count = addCellPhasePair(offsetsX, offsetsY, count, 0, axisY[1])
+
+	for (let y = 0; y < countY; y++) {
+		for (let x = 0; x < countX; x++) count = addCellPhasePair(offsetsX, offsetsY, count, axisX[x], axisY[y])
+	}
+
+	return count
+}
+
 // Builds the cell grid: roughly square cells along the longer axis, with a floor of `minCellsPerAxis`
 // cells per axis so a high-aspect frame still yields a 2D layout the surface fit can use, and a ceiling
 // of one cell per pixel so an extreme `gridSize` cannot blow the cell count up.
@@ -971,24 +1019,13 @@ export function fitLocalNormalizationRaw(referenceRaw: ImageRawType, currentRaw:
 	// Offsets of the alternate sampling phases inside a cell. The strided scan reads one pixel out of
 	// `strideX * strideY`, so a validity mask aligned to that same lattice can hide every valid pixel from
 	// a scan anchored at the box origin: a frame three quarters valid then reports no overlap at all.
-	// A cell that collected too little is rescanned from half-stride phases, which costs bounded extra
+	// A cell that collected too little is rescanned from alternate sparse phases, which costs bounded extra
 	// passes over exactly the cells that have no result to lose, unlike a dense rescan that would cost the
-	// full box area on every genuinely empty cell. Mixed-axis phases cover masks that reject both
-	// diagonal lattices while still bounding collection to at most four sparse passes.
-	const phaseX = strideX >> 1
-	const phaseY = strideY >> 1
-	const phaseOffsetsX = new Int32Array(4)
-	const phaseOffsetsY = new Int32Array(4)
-	let phases = 1
-	if (phaseX > 0 || phaseY > 0) {
-		phaseOffsetsX[phases] = phaseX
-		phaseOffsetsY[phases++] = phaseY
-		if (phaseX > 0 && phaseY > 0) {
-			phaseOffsetsX[phases] = phaseX
-			phases++
-			phaseOffsetsY[phases++] = phaseY
-		}
-	}
+	// full box area on every genuinely empty cell. Quarter residues cover masks that reject all even
+	// lattice classes while still bounding collection to at most sixteen sparse passes.
+	const phaseOffsetsX = new Int32Array(16)
+	const phaseOffsetsY = new Int32Array(16)
+	const phases = buildCellPhasePairs(strideX, strideY, phaseOffsetsX, phaseOffsetsY)
 
 	const refBuf = new Float64Array(planes * capacity)
 	const curBuf = new Float64Array(planes * capacity)
