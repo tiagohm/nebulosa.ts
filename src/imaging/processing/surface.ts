@@ -937,9 +937,11 @@ export function createScalarSurfacePointEvaluator(model: ScalarSurfaceModel): Sc
 	return { at: (x, y) => evaluatePolynomialSurfaceAt(model.coefficients, (x - x0) * su - 1, (y - y0) * sv - 1, degree, terms, ti, tj, uCheb, vCheb) }
 }
 
-// Fraction of the surface's own amplitude the coarse-grid approximation is allowed to deviate by at the
-// control points. The grid is refined until it holds, so this is the materialization's actual accuracy
-// contract rather than an estimate.
+// Fraction of the surface's own amplitude the coarse-grid approximation is allowed to deviate by. The
+// grid is refined until it holds, so this is the materialization's accuracy contract rather than an
+// estimate. Verification samples each cell's centre, where bilinear interpolation is furthest from the
+// function it interpolates, so the realized bound is this tolerance within a small margin rather than
+// exactly it.
 const TPS_COARSE_TOLERANCE = 0.005
 
 // Kernel evaluations an exact (interpolating) spline may spend materializing a plane before it gives up
@@ -1014,43 +1016,46 @@ function sampleTpsCoarseGrid(grid: TpsCoarseGrid, x: number, y: number) {
 	return top + (bottom - top) * ty
 }
 
+// Deviation the coarse grid is allowed at any point, as a fraction of the surface's range across its
+// control points. That range is the scale of the data the spline was fitted to; the grid's own range
+// would be the wrong reference, since a spline extrapolating toward a frame corner can swing far past
+// its data and scaling the tolerance by that overshoot loosens the check exactly where the surface is
+// least trustworthy.
+function tpsCoarseTolerance(model: ScalarSurfaceModel, su: number, sv: number, k: number) {
+	const { domain, coefficients } = model
+	const controlPoints = model.controlPoints!
+	let low = Infinity
+	let high = -Infinity
+
+	for (let c = 0; c < k; c++) {
+		const direct = evaluateThinPlateSplineAt(coefficients, controlPoints, k, controlPoints[2 * c], controlPoints[2 * c + 1])
+		if (direct < low) low = direct
+		if (direct > high) high = direct
+	}
+
+	const amplitude = high - low
+	return TPS_COARSE_TOLERANCE * (amplitude > 0 && Number.isFinite(amplitude) ? amplitude : 1)
+}
+
+// Pixel position of one control point, clamped to the plane the grid covers.
+function tpsControlPixel(model: ScalarSurfaceModel, su: number, sv: number, c: number, axisX: boolean) {
+	const controlPoints = model.controlPoints!
+	return axisX ? clamp((controlPoints[2 * c] + 1) / su + model.domain.x0, 0, model.width - 1) : clamp((controlPoints[2 * c + 1] + 1) / sv + model.domain.y0, 0, model.height - 1)
+}
+
 // Whether the coarse grid reproduces the spline everywhere it will be read from.
 //
 // Two families of points are checked. The centre of each coarse cell is where bilinear interpolation is
 // furthest from the function it interpolates, so that is where the grid's own accuracy is decided;
-// checking only the control points bounds nothing between them, and a random eight-control layout was
-// found deviating by 1.46% of its amplitude while every control agreed. The control points are then
-// checked too, because that is where the surface carries whatever local structure it has, and a step
-// derived from a mean spacing the controls do not follow steps straight over it.
+// checking only the control points bounds nothing between them. The control points are then checked too,
+// because that is where the surface carries whatever local structure it has, and a step derived from a
+// mean spacing the controls do not follow steps straight over it.
 //
-// The scan returns on the first violation, so a grid that needs refining is rejected cheaply.
-function tpsCoarseGridAgrees(model: ScalarSurfaceModel, grid: TpsCoarseGrid, su: number, sv: number, k: number) {
-	const { width, height, domain, coefficients } = model
+// Returns on the first violation, so a grid that needs refining is rejected cheaply.
+function tpsCoarseGridAgrees(model: ScalarSurfaceModel, grid: TpsCoarseGrid, su: number, sv: number, k: number, tolerance: number) {
+	const { domain, coefficients } = model
 	const controlPoints = model.controlPoints!
 	const { columns, rows, stepX, stepY } = grid
-
-	// The tolerance is relative to the surface's range across its control points, which is the scale of
-	// the data it was fitted to. The grid's own range would be the wrong reference: a spline extrapolating
-	// toward a frame corner can swing far past its data, and scaling the tolerance by that overshoot would
-	// loosen the check exactly where the surface is least trustworthy.
-	let low = Infinity
-	let high = -Infinity
-	let worst = 0
-
-	for (let c = 0; c < k; c++) {
-		// Back to pixel coordinates, clamped to the plane the grid covers.
-		const x = clamp((controlPoints[2 * c] + 1) / su + domain.x0, 0, width - 1)
-		const y = clamp((controlPoints[2 * c + 1] + 1) / sv + domain.y0, 0, height - 1)
-		const direct = evaluateThinPlateSplineAt(coefficients, controlPoints, k, (x - domain.x0) * su - 1, (y - domain.y0) * sv - 1)
-		if (direct < low) low = direct
-		if (direct > high) high = direct
-		const deviation = Math.abs(sampleTpsCoarseGrid(grid, x, y) - direct)
-		if (deviation > worst) worst = deviation
-	}
-
-	const amplitude = high - low
-	const tolerance = TPS_COARSE_TOLERANCE * (amplitude > 0 ? amplitude : 1)
-	if (worst > tolerance) return false
 
 	for (let j = 0; j < rows - 1; j++) {
 		const y = (j + 0.5) * stepY
@@ -1063,7 +1068,56 @@ function tpsCoarseGridAgrees(model: ScalarSurfaceModel, grid: TpsCoarseGrid, su:
 		}
 	}
 
+	for (let c = 0; c < k; c++) {
+		const x = tpsControlPixel(model, su, sv, c, true)
+		const y = tpsControlPixel(model, su, sv, c, false)
+		const direct = evaluateThinPlateSplineAt(coefficients, controlPoints, k, (x - domain.x0) * su - 1, (y - domain.y0) * sv - 1)
+		if (Math.abs(sampleTpsCoarseGrid(grid, x, y) - direct) > tolerance) return false
+	}
+
 	return true
+}
+
+// Marks the coarse cells the grid does not reproduce within `tolerance`, using the same two families of
+// points. Unlike the predicate above it never short-circuits, because the caller needs the whole map.
+function markFailingTpsCells(model: ScalarSurfaceModel, grid: TpsCoarseGrid, su: number, sv: number, k: number, tolerance: number) {
+	const { domain, coefficients } = model
+	const controlPoints = model.controlPoints!
+	const { columns, rows, stepX, stepY } = grid
+	const cellColumns = columns - 1
+	const failing = new Uint8Array(cellColumns * (rows - 1))
+	let count = 0
+
+	for (let j = 0; j < rows - 1; j++) {
+		const y = (j + 0.5) * stepY
+		const v = (y - domain.y0) * sv - 1
+
+		for (let i = 0; i < cellColumns; i++) {
+			const x = (i + 0.5) * stepX
+			const direct = evaluateThinPlateSplineAt(coefficients, controlPoints, k, (x - domain.x0) * su - 1, v)
+
+			if (Math.abs(sampleTpsCoarseGrid(grid, x, y) - direct) > tolerance) {
+				failing[j * cellColumns + i] = 1
+				count++
+			}
+		}
+	}
+
+	for (let c = 0; c < k; c++) {
+		const x = tpsControlPixel(model, su, sv, c, true)
+		const y = tpsControlPixel(model, su, sv, c, false)
+		const direct = evaluateThinPlateSplineAt(coefficients, controlPoints, k, (x - domain.x0) * su - 1, (y - domain.y0) * sv - 1)
+		if (Math.abs(sampleTpsCoarseGrid(grid, x, y) - direct) <= tolerance) continue
+
+		const i = Math.min(cellColumns - 1, Math.floor(x / stepX))
+		const j = Math.min(rows - 2, Math.floor(y / stepY))
+		if (failing[j * cellColumns + i] === 0) {
+			failing[j * cellColumns + i] = 1
+			count++
+		}
+	}
+
+	return count === 0 ? undefined : failing
 }
 
 // Materializes a fitted spline over the whole plane, writing into `output[offset + p * stride]` in
@@ -1071,13 +1125,24 @@ function tpsCoarseGridAgrees(model: ScalarSurfaceModel, grid: TpsCoarseGrid, su:
 // surface is smooth, this instead evaluates the exact spline on a coarse grid and bilinearly upsamples
 // to full resolution, cutting the cost by the squared coarsening factor.
 //
-// The starting step comes from the mean control spacing, which assumes the controls are evenly spread.
-// Where they are not, the grid is checked against the spline at the control points and halved until it
-// agrees within `TPS_COARSE_TOLERANCE`, falling back to per-pixel evaluation if it never does. That
-// keeps the cheap path cheap — an even layout passes the first check — while making the accuracy a
-// verified property rather than an assumption. When `exact` is set (a zero-smoothing, interpolating
-// spline), coarsening is disabled so the materialized surface passes through the accepted samples as the
-// interpolation contract requires.
+// The accuracy is a verified property, not an assumption. The starting step comes from the mean control
+// spacing, which assumes the controls are evenly spread; where they are not, the grid is checked against
+// the spline and halved until it agrees within `TPS_COARSE_TOLERANCE`. An even layout passes the first
+// check, so the cheap path stays cheap.
+//
+// Two bounds meet at the floor. Evaluating the spline anywhere costs O(points * controls) and nothing
+// about the fit bounds that product — the control cap keeps the SOLVE tractable and says nothing about
+// the plane it is evaluated over, so a 4096x4096 plane against the 1024 cap is 17 billion kernel
+// evaluations. `minStep` is therefore the finest grid whose build stays inside the work budget. When even
+// that grid fails to verify, the answer is neither to accept it (the tolerance is the contract) nor to
+// sweep the whole plane per pixel (the work bound is too): only the cells that actually failed are
+// evaluated directly, and the rest still interpolate. Structure too fine for the affordable grid is
+// localized around the controls that carry it, so the exact work is proportional to the region that
+// needs it rather than to the plane.
+//
+// When `exact` is set (a zero-smoothing, interpolating spline) and the budget allows it, coarsening is
+// skipped entirely so the materialized surface passes through the accepted samples as the interpolation
+// contract requires.
 function evaluateThinPlateSplineInto(model: ScalarSurfaceModel, output: Float64Array | Float32Array, offset: number, stride: number, exact: boolean) {
 	const { width, height, domain } = model
 	const coefficients = model.coefficients
@@ -1086,41 +1151,32 @@ function evaluateThinPlateSplineInto(model: ScalarSurfaceModel, output: Float64A
 	const su = domainScale(domain.x0, domain.x1)
 	const sv = domainScale(domain.y0, domain.y1)
 
-	// Evaluating the spline anywhere costs O(points * controls), and nothing about the fit bounds that
-	// product: the control cap keeps the SOLVE tractable and says nothing about the plane it is evaluated
-	// over. A 4096x4096 plane against the 1024 cap is 17 billion kernel evaluations, logarithm included.
-	//
-	// `minStep` is the finest node grid whose build stays inside the work budget, since a grid of that
-	// step costs (width/step) * (height/step) * k. Every path below respects it: the starting step, the
-	// refinement loop, and the decision to evaluate per pixel at all. Per-pixel evaluation is exactly a
-	// step of 1, so it is reachable only when the budget says a step of 1 is affordable.
 	const minStep = Math.max(1, Math.ceil(Math.sqrt((width * height * k) / MAX_EXACT_TPS_WORK)))
 
-	// An exact spline is materialized per pixel so it passes through its control points; past the budget
-	// it gives that up for the verified coarse path, trading exact interpolation for the same tolerance
-	// every other spline is held to. A stall is not an option the caller can use.
 	let grid: TpsCoarseGrid | undefined
+	let failing: Uint8Array | undefined
 	let step = exact && minStep <= 1 ? 1 : Math.max(minStep, tpsCoarseStep(width, height, domain, k))
 
-	while (step > 1) {
-		const candidate = buildTpsCoarseGrid(model, su, sv, k, step)
+	if (step > 1) {
+		const tolerance = tpsCoarseTolerance(model, su, sv, k)
 
-		if (tpsCoarseGridAgrees(model, candidate, su, sv, k)) {
-			grid = candidate
-			break
+		while (step > 1) {
+			const candidate = buildTpsCoarseGrid(model, su, sv, k, step)
+
+			if (tpsCoarseGridAgrees(model, candidate, su, sv, k, tolerance)) {
+				grid = candidate
+				break
+			}
+
+			if (step <= minStep) {
+				// Nothing finer is affordable, so keep this grid and evaluate exactly only where it failed.
+				grid = candidate
+				failing = markFailingTpsCells(model, candidate, su, sv, k, tolerance)
+				break
+			}
+
+			step = Math.max(minStep, Math.floor(step / 2))
 		}
-
-		// At the budget floor there is nothing finer to try. The work bound outranks the tolerance here:
-		// the alternative is an unbounded per-pixel sweep, so the closest affordable grid is kept even
-		// though it did not verify. That only happens when the plane and control count are together large
-		// enough to price a verifying grid out of the budget, which no realistic fit reaches; the tolerance
-		// is otherwise a guarantee.
-		if (step <= minStep) {
-			grid = candidate
-			break
-		}
-
-		step = Math.max(minStep, Math.floor(step / 2))
 	}
 
 	if (grid === undefined) {
@@ -1132,9 +1188,26 @@ function evaluateThinPlateSplineInto(model: ScalarSurfaceModel, output: Float64A
 		return
 	}
 
+	if (failing === undefined) {
+		for (let y = 0; y < height; y++) {
+			let idx = y * width * stride + offset
+			for (let x = 0; x < width; x++, idx += stride) output[idx] = sampleTpsCoarseGrid(grid, x, y)
+		}
+		return
+	}
+
+	const cellColumns = grid.columns - 1
+
 	for (let y = 0; y < height; y++) {
+		const j = Math.min(grid.rows - 2, Math.floor(y / grid.stepY))
+		const row = j * cellColumns
+		const v = (y - domain.y0) * sv - 1
 		let idx = y * width * stride + offset
-		for (let x = 0; x < width; x++, idx += stride) output[idx] = sampleTpsCoarseGrid(grid, x, y)
+
+		for (let x = 0; x < width; x++, idx += stride) {
+			const i = Math.min(cellColumns - 1, Math.floor(x / grid.stepX))
+			output[idx] = failing[row + i] === 0 ? sampleTpsCoarseGrid(grid, x, y) : evaluateThinPlateSplineAt(coefficients, controlPoints, k, (x - domain.x0) * su - 1, v)
+		}
 	}
 }
 

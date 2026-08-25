@@ -633,11 +633,12 @@ describe('evaluation', () => {
 		}
 
 		// A per-pixel sweep reproduces direct evaluation exactly, so a nonzero deviation is what shows the
-		// bounded grid was used instead. The deviation is not held to the materialization tolerance here:
-		// this layout prices a verifying grid out of the work budget, and the bound outranks the tolerance
-		// rather than falling back to an unbounded sweep. It still tracks the surface's own scale.
+		// bounded grid was used instead. It still honors the materialization tolerance: this layout prices
+		// a verifying grid out of the work budget, so the cells that failed are evaluated directly and only
+		// the rest interpolate. The margin is there because verification samples each cell's centre, which
+		// bounds the peak bilinear error closely rather than exactly.
 		expect(worst).toBeGreaterThan(0)
-		expect(worst).toBeLessThan(high - low)
+		expect(worst).toBeLessThanOrEqual(0.005 * 1.1 * (high - low))
 	}, 60000)
 
 	test('an exact spline under the work budget still interpolates its controls', () => {
