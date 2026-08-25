@@ -931,6 +931,14 @@ export function fitLocalNormalizationRaw(referenceRaw: ImageRawType, currentRaw:
 	const counts = new Int32Array(planes)
 	const sumX = new Float64Array(planes)
 	const sumY = new Float64Array(planes)
+	// Strided pixels the phase that filled each plane walked, which is what its valid fraction is measured
+	// against. Phases visit different pixel counts near the box edge, so one shared total would misreport
+	// the fraction for a plane the retry filled.
+	const visited = new Int32Array(planes)
+	// Planes still looking for pairs, as a compact list of plane indices. Iterating the list rather than
+	// testing a per-plane flag keeps the inner loop free of a branch it would take on every pixel of the
+	// common single-phase case.
+	const pending = new Int32Array(planes)
 	const masks: Uint8Array[] = []
 	// Cells that also cleared the dynamic-range gate, which is what constrains the gain field.
 	const gainMasks: Uint8Array[] = []
@@ -966,27 +974,33 @@ export function fitLocalNormalizationRaw(referenceRaw: ImageRawType, currentRaw:
 			const bx0 = grid.x0[c]
 			const bx1 = grid.x1[c]
 
-			let visited = 0
-			let collected = false
+			// Counted per plane. A pixel non-finite in one channel says nothing about the others, and the
+			// global solve already treats planes independently, so letting one damaged channel drop the
+			// pixel everywhere would lose the spatial correction on the healthy ones too. Each plane
+			// therefore keeps its own pair count, its own buffer prefix, and its own sample centroid.
+			//
+			// The phases are also per plane: a plane that found nothing is retried on the alternate lattice
+			// while the planes that already have their pairs are dropped from the scan and keep them. One
+			// shared "something was collected" flag would let a healthy channel cancel the retry the damaged
+			// one needs, which is the very case the retry exists for.
+			counts.fill(0)
+			sumX.fill(0)
+			sumY.fill(0)
+			visited.fill(0)
 
-			for (let phase = 0; phase < phases && !collected; phase++) {
-				// Counted per plane. A pixel non-finite in one channel says nothing about the others, and the
-				// global solve already treats planes independently, so letting one damaged channel drop the
-				// pixel everywhere would lose the spatial correction on the healthy ones too. Each plane
-				// therefore keeps its own pair count, its own buffer prefix, and its own sample centroid.
-				counts.fill(0)
-				sumX.fill(0)
-				sumY.fill(0)
-				visited = 0
+			let pendingCount = planes
+			for (let plane = 0; plane < planes; plane++) pending[plane] = plane
 
+			for (let phase = 0; phase < phases; phase++) {
 				const originX = phase === 0 ? bx0 : Math.min(bx0 + phaseX, bx1)
 				const originY = phase === 0 ? by0 : Math.min(by0 + phaseY, by1)
+				let phaseVisited = 0
 
 				for (let y = originY; y <= by1; y += strideY) {
 					const rowBase = y * width
 
 					for (let x = originX; x <= bx1; x += strideX) {
-						visited++
+						phaseVisited++
 						const pixel = rowBase + x
 						if (valid !== undefined && valid[pixel] === 0) continue
 						const base = pixel * channels
@@ -1001,7 +1015,8 @@ export function fitLocalNormalizationRaw(referenceRaw: ImageRawType, currentRaw:
 							sumX[0] += x
 							sumY[0] += y
 						} else {
-							for (let plane = 0; plane < planes; plane++) {
+							for (let i = 0; i < pendingCount; i++) {
+								const plane = pending[i]
 								const cv = currentRaw[base + plane]
 								const rv = referenceRaw[base + plane]
 								if (!Number.isFinite(cv) || !Number.isFinite(rv)) continue
@@ -1015,26 +1030,27 @@ export function fitLocalNormalizationRaw(referenceRaw: ImageRawType, currentRaw:
 					}
 				}
 
-				for (let plane = 0; plane < planes; plane++) {
-					if (counts[plane] > 0) {
-						collected = true
-						break
-					}
+				let remaining = 0
+				for (let i = 0; i < pendingCount; i++) {
+					const plane = pending[i]
+					visited[plane] = phaseVisited
+					if (counts[plane] === 0) pending[remaining++] = plane
 				}
+
+				pendingCount = remaining
+				if (pendingCount === 0) break
 			}
 
 			// Recorded before the cell thresholds so the fallback can tell "the frames do not overlap" from
 			// "they overlap but no cell was usable", which are different problems with different fixes.
-			if (collected) observedValidPairs = true
-
-			if (visited === 0) continue
+			if (pendingCount < planes) observedValidPairs = true
 
 			const cellIndex = r * columns + c
 
 			for (let plane = 0; plane < planes; plane++) {
 				const count = counts[plane]
-				if (count < minSamplesPerCell) continue
-				const validFraction = count / visited
+				if (count < minSamplesPerCell || visited[plane] === 0) continue
+				const validFraction = count / visited[plane]
 				if (validFraction < minValidFraction) continue
 
 				cellX[plane][cellIndex] = sumX[plane] / count

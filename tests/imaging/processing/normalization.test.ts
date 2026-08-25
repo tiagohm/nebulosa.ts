@@ -1132,6 +1132,53 @@ describe('color handling', () => {
 		}
 	})
 
+	test('each channel retries the alternate sampling phase on its own', () => {
+		const planes = [referencePlane(1), referencePlane(2)]
+		const currents = planes.map((plane, index) =>
+			inverseTransform(
+				plane,
+				() => 1.1 + 0.1 * index,
+				(x, y) => 0.01 + 0.02 * (x / WIDTH) + 0.015 * (y / HEIGHT),
+			),
+		)
+
+		// Channel 0 is finite on the phase-0 lattice, channel 1 only on the alternate one. A shared
+		// "something was collected" flag lets channel 0 cancel the retry that channel 1 needs.
+		for (let y = 0; y < HEIGHT; y += 2) {
+			for (let x = 0; x < WIDTH; x += 2) currents[1][y * WIDTH + x] = Number.NaN
+		}
+
+		const reference = interleave(planes)
+		const current = interleave(currents)
+
+		const model = fitLocalNormalizationRaw(reference, current, WIDTH, HEIGHT, 2, 'per-channel', undefined, options({ maxSamplesPerCell: 144 }))
+
+		for (let c = 0; c < 2; c++) {
+			expect(model.diagnostics[c].fallback).toBe(false)
+			expect(model.diagnostics[c].acceptedCells).toBe(model.diagnostics[c].candidateCells)
+		}
+
+		const anchored = new Float64Array(current.length)
+		for (let c = 0; c < 2; c++) {
+			const { scale, offset } = model.global[c]
+			for (let q = 0; q < WIDTH * HEIGHT; q++) anchored[q * 2 + c] = current[q * 2 + c] * scale + offset
+		}
+
+		applyLocalNormalizationInPlace(current, undefined, model)
+
+		for (let c = 0; c < 2; c++) {
+			let local = 0
+			let global = 0
+			for (let q = 0; q < WIDTH * HEIGHT; q++) {
+				const value = current[q * 2 + c]
+				if (!Number.isFinite(value)) continue
+				local += Math.abs(value - reference[q * 2 + c])
+				global += Math.abs(anchored[q * 2 + c] - reference[q * 2 + c])
+			}
+			expect(local).toBeLessThan(global / 3)
+		}
+	})
+
 	test('luminance falls back to per-channel for non-RGB images', () => {
 		const reference = referencePlane()
 		const current = inverseTransform(
