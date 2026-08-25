@@ -172,6 +172,11 @@ export interface ScalarSurfaceEvaluator {
 // grids. Chosen as a perfect square so the spatial buckets below tile evenly.
 export const SURFACE_MAX_CONTROL_POINTS = 1024
 
+// Kernel evaluations the TPS fit may spend on its residual diagnostic after the solve. The control cap
+// bounds the solve, not this post-fit pass: a million active samples against 1024 controls is still a
+// billion kernel/log evaluations for a number used only as a fit-quality estimate.
+const MAX_TPS_RESIDUAL_WORK = 1_000_000
+
 // Control points a thin-plate spline needs before its affine part is determined. Also the floor the
 // control-point subsampling tops up to, so a small cap cannot turn a fittable layout into a failure.
 const MIN_CONTROL_POINTS = 3
@@ -327,6 +332,43 @@ export function computeResidualDispersion(values: Float64Array, scratch: Float64
 	for (let i = 0; i < count; i++) scratch[i] = Math.abs(values[i] - median)
 	scratch.subarray(0, count).sort()
 	return STANDARD_DEVIATION_SCALE * medianOf(scratch, count)
+}
+
+// Number of active samples to use for a TPS residual diagnostic with `k` controls.
+function thinPlateSplineResidualLimit(active: number, k: number) {
+	return Math.min(active, Math.max(k, Math.floor(MAX_TPS_RESIDUAL_WORK / k), MIN_CONTROL_POINTS))
+}
+
+// Fills `residuals` with either every active TPS residual or an evenly spaced bounded subset.
+function collectThinPlateSplineResiduals(set: SurfaceSampleSet, coefficients: Float64Array, controlPoints: Float64Array, k: number, active: number, residuals: Float64Array) {
+	const { u, v, value } = set
+	const limit = residuals.length
+	let n = 0
+
+	if (active <= limit) {
+		for (let i = 0; i < set.count; i++) {
+			if (set.active[i] === 0) continue
+			residuals[n++] = value[i] - evaluateThinPlateSplineAt(coefficients, controlPoints, k, u[i], v[i])
+		}
+		return n
+	}
+
+	const stride = active / limit
+	let next = 0.5 * stride
+	let ordinal = 0
+
+	for (let i = 0; i < set.count && n < limit; i++) {
+		if (set.active[i] === 0) continue
+
+		if (ordinal >= Math.floor(next)) {
+			residuals[n++] = value[i] - evaluateThinPlateSplineAt(coefficients, controlPoints, k, u[i], v[i])
+			next = (n + 0.5) * stride
+		}
+
+		ordinal++
+	}
+
+	return n
 }
 
 // RMS extent of the active samples along their least-covered direction: sqrt of the smaller eigenvalue
@@ -1302,17 +1344,16 @@ export function fitScalarSurface(samples: readonly SurfaceSample[], width: numbe
 		const tps = fitThinPlateSplineSurface(set, indices, smoothing)
 		if (typeof tps === 'string') return { ok: false, reason: tps }
 
-		// Residuals are measured over everything that survived rejection and dedup, before the control cap
-		// is accounted for. A capped-out sample did not feed the solve, but it is still real data, and for
-		// a smoothing spline its deviation is exactly what makes the residual a useful fit diagnostic.
+		// Residuals are measured before the control cap changes the accepted flags. A capped-out sample did
+		// not feed the solve, but it is still real data, and for a smoothing spline its deviation is exactly
+		// what makes the residual a useful fit diagnostic. Very dense inputs use a bounded, evenly spaced
+		// subset so the diagnostic cannot undo the tractability gained by capping the controls.
 		const k = tps.controlPoints.length / 2
-		const residuals = new Float64Array(set.count)
-		const scratch = new Float64Array(set.count)
-		let n = 0
-		for (let i = 0; i < set.count; i++) {
-			if (set.active[i] === 0) continue
-			residuals[n++] = set.value[i] - evaluateThinPlateSplineAt(tps.coefficients, tps.controlPoints, k, set.u[i], set.v[i])
-		}
+		const active = activeSurfaceSampleCount(set)
+		const residualLimit = thinPlateSplineResidualLimit(active, k)
+		const residuals = new Float64Array(residualLimit)
+		const scratch = new Float64Array(residualLimit)
+		const n = collectThinPlateSplineResiduals(set, tps.coefficients, tps.controlPoints, k, active, residuals)
 		const dispersion = computeResidualDispersion(residuals, scratch, n)
 
 		// Acceptance means the sample fed the final fit, so the cap rejects whatever it dropped, whether or

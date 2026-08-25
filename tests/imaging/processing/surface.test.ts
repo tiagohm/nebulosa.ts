@@ -477,6 +477,20 @@ describe('thin-plate spline', () => {
 		const scattered = sampleGrid(256, 256, 12, 12, (x, y) => 0.2 + 0.0005 * (x - y) + (((Math.round(x) + Math.round(y)) % 7) - 3) * 0.01)
 		expect(fitOrThrow(scattered, 256, 256, { model: 'thinPlateSpline', smoothing: 0.5, maxControlPoints: 16 }).residual).toBeGreaterThan(1e-3)
 	})
+
+	test('a capped spline residual stays bounded on dense samples', () => {
+		const size = 512
+		const samples = sampleGrid(size, size, 192, 192, (x, y) => 0.2 + 0.0002 * (x - y) + (((Math.round(x) + 2 * Math.round(y)) % 11) - 5) * 0.002)
+		const started = performance.now()
+		const model = fitOrThrow(samples, size, size, { model: 'thinPlateSpline', smoothing: 0.5, maxControlPoints: SURFACE_MAX_CONTROL_POINTS })
+		const elapsed = performance.now() - started
+
+		expect(model.controlPoints!.length / 2).toBe(SURFACE_MAX_CONTROL_POINTS)
+		expect(model.acceptedSamples).toBe(SURFACE_MAX_CONTROL_POINTS)
+		expect(model.samples).toHaveLength(samples.length)
+		expect(model.residual).toBeGreaterThan(0)
+		expect(elapsed).toBeLessThan(15000)
+	}, 20000)
 })
 
 describe('evaluation', () => {
