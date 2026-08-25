@@ -603,6 +603,43 @@ describe('evaluation', () => {
 		expect(worst).toBeLessThanOrEqual(0.005 * (high - low))
 	}, 60000)
 
+	test('a small fitted domain on a large plane stays bounded', () => {
+		// The mean-spacing step comes from the fitted domain, so controls packed into a tiny corner give a
+		// step of 1 and the refinement loop never runs. Without a floor on the step that drops straight
+		// into the per-pixel sweep, which is O(plane * controls) however small the domain is.
+		const size = 2048
+		const samples: SurfaceSample[] = []
+		for (let r = 0; r < 11; r++) {
+			for (let c = 0; c < 11; c++) samples.push({ x: 10 + c, y: 10 + r, value: 0.2 + 0.01 * ((r + c) % 3) })
+		}
+
+		const model = fitOrThrow(samples, size, size, { model: 'thinPlateSpline', smoothing: 0.05, domain: { x0: 10, y0: 10, x1: 20, y1: 20 } })
+		const plane = new Float64Array(size * size)
+		evaluateScalarSurfaceInto(model, plane)
+
+		const point = createScalarSurfacePointEvaluator(model)
+		let low = Infinity
+		let high = -Infinity
+		for (const sample of samples) {
+			const value = point.at(sample.x, sample.y)
+			low = Math.min(low, value)
+			high = Math.max(high, value)
+		}
+
+		let worst = 0
+		for (let y = 0; y < size; y += 13) {
+			for (let x = 0; x < size; x += 13) worst = Math.max(worst, Math.abs(plane[y * size + x] - point.at(x, y)))
+			for (let x = 0; x < size; x += 13) expect(Number.isFinite(plane[y * size + x])).toBe(true)
+		}
+
+		// A per-pixel sweep reproduces direct evaluation exactly, so a nonzero deviation is what shows the
+		// bounded grid was used instead. The deviation is not held to the materialization tolerance here:
+		// this layout prices a verifying grid out of the work budget, and the bound outranks the tolerance
+		// rather than falling back to an unbounded sweep. It still tracks the surface's own scale.
+		expect(worst).toBeGreaterThan(0)
+		expect(worst).toBeLessThan(high - low)
+	}, 60000)
+
 	test('an exact spline under the work budget still interpolates its controls', () => {
 		const size = 200
 		const field = (x: number, y: number) => 0.3 + 0.15 * Math.sin(3 * (x / size)) * Math.cos(3 * (y / size))

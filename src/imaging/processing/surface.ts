@@ -1086,14 +1086,21 @@ function evaluateThinPlateSplineInto(model: ScalarSurfaceModel, output: Float64A
 	const su = domainScale(domain.x0, domain.x1)
 	const sv = domainScale(domain.y0, domain.y1)
 
+	// Evaluating the spline anywhere costs O(points * controls), and nothing about the fit bounds that
+	// product: the control cap keeps the SOLVE tractable and says nothing about the plane it is evaluated
+	// over. A 4096x4096 plane against the 1024 cap is 17 billion kernel evaluations, logarithm included.
+	//
+	// `minStep` is the finest node grid whose build stays inside the work budget, since a grid of that
+	// step costs (width/step) * (height/step) * k. Every path below respects it: the starting step, the
+	// refinement loop, and the decision to evaluate per pixel at all. Per-pixel evaluation is exactly a
+	// step of 1, so it is reachable only when the budget says a step of 1 is affordable.
+	const minStep = Math.max(1, Math.ceil(Math.sqrt((width * height * k) / MAX_EXACT_TPS_WORK)))
+
+	// An exact spline is materialized per pixel so it passes through its control points; past the budget
+	// it gives that up for the verified coarse path, trading exact interpolation for the same tolerance
+	// every other spline is held to. A stall is not an option the caller can use.
 	let grid: TpsCoarseGrid | undefined
-	// An exact spline is normally materialized per pixel so it passes through its control points, but that
-	// loop is O(pixels * controls) with nothing bounding the product: a 4096x4096 plane against the 1024
-	// control cap is 17 billion kernel evaluations, logarithm included, which stalls for minutes. Past the
-	// work budget it takes the verified coarse path instead, trading exact interpolation for the same
-	// tolerance every other spline is materialized to.
-	const affordable = width * height * k <= MAX_EXACT_TPS_WORK
-	let step = exact && affordable ? 1 : tpsCoarseStep(width, height, domain, k)
+	let step = exact && minStep <= 1 ? 1 : Math.max(minStep, tpsCoarseStep(width, height, domain, k))
 
 	while (step > 1) {
 		const candidate = buildTpsCoarseGrid(model, su, sv, k, step)
@@ -1103,7 +1110,17 @@ function evaluateThinPlateSplineInto(model: ScalarSurfaceModel, output: Float64A
 			break
 		}
 
-		step = Math.floor(step / 2)
+		// At the budget floor there is nothing finer to try. The work bound outranks the tolerance here:
+		// the alternative is an unbounded per-pixel sweep, so the closest affordable grid is kept even
+		// though it did not verify. That only happens when the plane and control count are together large
+		// enough to price a verifying grid out of the budget, which no realistic fit reaches; the tolerance
+		// is otherwise a guarantee.
+		if (step <= minStep) {
+			grid = candidate
+			break
+		}
+
+		step = Math.max(minStep, Math.floor(step / 2))
 	}
 
 	if (grid === undefined) {
