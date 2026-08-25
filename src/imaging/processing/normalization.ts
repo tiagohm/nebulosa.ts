@@ -1522,16 +1522,20 @@ function collectPivots(referenceRaw: ImageRawType, currentRaw: ImageRawType, val
 	const step = Math.max(1, Math.floor(Math.sqrt((width * height) / NORMALIZATION_SAMPLE_LIMIT)))
 	const values = scanPivotValues(referenceRaw, currentRaw, valid, channels, width, height, planes, luminance, step, 1)
 
-	// The pivot rides the same lattice the global solve does and is missed the same way, plane by plane,
-	// so it takes the same per-plane dense fallback.
-	let missing = false
-	for (const plane of values) if (plane.length === 0) missing = true
+	// The pivot rides the same lattice the global solve does and is missed the same way, plane by plane.
+	// A handful of values is as unsafe as none because the lower quantile can collapse onto one
+	// unrepresentative pixel and couple the offset field around the wrong level.
+	let underfilled = false
+	for (const plane of values) if (plane.length < MIN_GLOBAL_NORMALIZATION_LATTICE_SAMPLES) underfilled = true
 
-	if (missing) {
+	if (underfilled) {
 		const colorMode = luminance ? 'luminance' : 'per-channel'
 		const denseKeepEvery = normalizationKeepEveryByPlane(countNormalizationPairs(currentRaw, valid, referenceRaw, channels, width, height, colorMode))
 		const dense = scanPivotValues(referenceRaw, currentRaw, valid, channels, width, height, planes, luminance, 1, denseKeepEvery)
-		for (let plane = 0; plane < planes; plane++) if (values[plane].length === 0) values[plane] = dense[plane]
+		for (let plane = 0; plane < planes; plane++) {
+			if (values[plane].length >= MIN_GLOBAL_NORMALIZATION_LATTICE_SAMPLES) continue
+			if (dense[plane].length > values[plane].length) values[plane] = dense[plane]
+		}
 	}
 
 	const q = ESTIMATOR_QUANTILE[estimator]

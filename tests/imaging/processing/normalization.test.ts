@@ -779,6 +779,34 @@ describe('local normalization', () => {
 		expect(model.pivots[0]!).toBeLessThan(1)
 	})
 
+	test('an underfilled pivot lattice retries dense usable pairs', () => {
+		const size = 512
+		const pixels = size * size
+		const reference = new Float64Array(pixels)
+		const current = new Float64Array(pixels)
+
+		for (let i = 0; i < pixels; i++) {
+			const value = 0.1 + 0.5 * (i / pixels)
+			current[i] = value
+			reference[i] = 2 * value + 0.1
+		}
+		current[0] = 1
+		reference[0] = 2.1
+
+		const step = Math.max(1, Math.floor(Math.sqrt(pixels / 8192)))
+		const mask = new Uint8Array(pixels).fill(1)
+		for (let y = 0; y < size; y += step) {
+			for (let x = 0; x < size; x += step) mask[y * size + x] = 0
+		}
+		mask[0] = 1
+
+		const model = fitLocalNormalizationRaw(reference, current, size, size, 1, 'per-channel', mask, resolveLocalNormalizationOptions({ minSamplesPerCell: 4, minValidFraction: 0 }))
+
+		expect(model.diagnostics[0].fallback).toBe(false)
+		expect(model.global[0].scale).toBeCloseTo(2, 6)
+		expect(model.pivots[0]!).toBeLessThan(0.3)
+	})
+
 	test('a mask aligned to the sampling lattice does not flatten the global anchor', () => {
 		// The lattice is anchored at the origin, so a mask can miss it entirely while leaving nearly the
 		// whole frame valid. The anchor every local residual is measured against would then come back as
