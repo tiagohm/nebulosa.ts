@@ -656,6 +656,43 @@ describe('local normalization', () => {
 		expect(worst).toBeLessThan(0.05)
 	})
 
+	test('a mask aligned to the sampling lattice does not flatten the global anchor', () => {
+		// The lattice is anchored at the origin, so a mask can miss it entirely while leaving nearly the
+		// whole frame valid. The anchor every local residual is measured against would then come back as
+		// identity, with nothing marking it: the fit reports no fallback and every cell as usable.
+		const size = 512
+		const random = rng(7)
+		const reference = new Float64Array(size * size)
+		const current = new Float64Array(size * size)
+
+		for (let y = 0; y < size; y++) {
+			for (let x = 0; x < size; x++) {
+				const i = y * size + x
+				const v = 0.1 + 0.05 * (x / size) + 0.08 * Math.sin((x / size) * 6) * Math.cos((y / size) * 5) + 0.01 * (random() - 0.5)
+				current[i] = v
+				reference[i] = 2 * v + 0.1
+			}
+		}
+
+		// The stride the sampler picks for this frame; clearing exactly those positions costs 4% of it.
+		const step = Math.max(1, Math.floor(Math.sqrt((size * size) / 8192)))
+		const mask = new Uint8Array(size * size).fill(1)
+		let cleared = 0
+		for (let y = 0; y < size; y += step) {
+			for (let x = 0; x < size; x += step) {
+				mask[y * size + x] = 0
+				cleared++
+			}
+		}
+		expect(cleared / (size * size)).toBeLessThan(0.05)
+
+		const model = fitLocalNormalizationRaw(reference, current, size, size, 1, 'per-channel', mask, resolveLocalNormalizationOptions({}))
+
+		expect(model.global[0].scale).toBeCloseTo(2, 6)
+		expect(model.global[0].offset).toBeCloseTo(0.1, 6)
+		expect(model.pivots[0]).toBeGreaterThan(0)
+	}, 20000)
+
 	test('a diagonal partial overlap is corrected as accurately at its boundary as inside', () => {
 		// A diagonal overlap boundary leaves the boundary cells clipped, with centroids well off their
 		// nominal grid centers, and every axis-aligned mask test above misses that case.

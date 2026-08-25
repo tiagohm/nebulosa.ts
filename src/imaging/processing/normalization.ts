@@ -326,11 +326,48 @@ function channelArray(channels: number, value: number) {
 }
 
 // Collects paired overlap samples for the global fit, one distribution per plane. Walks a regular grid
-// whose stride keeps the total near `NORMALIZATION_SAMPLE_LIMIT`, and keeps only pixels that are valid
-// and finite in BOTH frames — a non-finite value would sort to the end of the distribution and poison
-// every upper quantile drawn from it.
+// whose stride keeps the total near `NORMALIZATION_SAMPLE_LIMIT`, falling back to a dense scan strided
+// over the valid pixels when that grid finds nothing.
 function collectNormalizationSamples(currentRaw: ImageRawType, valid: Readonly<Uint8Array> | undefined, referenceRaw: ImageRawType, channels: number, width: number, height: number, colorMode: NormalizationColorMode) {
 	const step = Math.max(1, Math.floor(Math.sqrt((width * height) / NORMALIZATION_SAMPLE_LIMIT)))
+	const lattice = scanNormalizationSamples(currentRaw, valid, referenceRaw, channels, width, height, colorMode, step, 1)
+
+	for (const plane of lattice.reference) if (plane.length > 0) return lattice
+
+	// The strided lattice is anchored at the origin, so a mask can miss it entirely while leaving almost
+	// the whole frame valid — clearing exactly the sampled positions of a 512x512 frame leaves 96% of the
+	// pixels and every grid cell usable, yet the anchor every local residual is measured against comes
+	// back as identity with nothing marking it. Retry striding over the valid pixels themselves, which no
+	// mask geometry can defeat. Only reachable when the lattice found nothing, so the common path is
+	// untouched.
+	return scanNormalizationSamples(currentRaw, valid, referenceRaw, channels, width, height, colorMode, 1, validPixelStride(valid, width * height))
+}
+
+// Whether the strided lattice lands on any valid pixel at all.
+function latticeHasValidPixel(valid: Readonly<Uint8Array>, width: number, height: number, step: number) {
+	for (let y = 0; y < height; y += step) {
+		for (let x = 0; x < width; x += step) if (valid[y * width + x] !== 0) return true
+	}
+
+	return false
+}
+
+// How many valid pixels to skip between kept samples so a dense scan still lands near the sample limit.
+function validPixelStride(valid: Readonly<Uint8Array> | undefined, pixels: number) {
+	let count = pixels
+
+	if (valid !== undefined) {
+		count = 0
+		for (let pixel = 0; pixel < valid.length; pixel++) if (valid[pixel] !== 0) count++
+	}
+
+	return Math.max(1, Math.floor(count / NORMALIZATION_SAMPLE_LIMIT))
+}
+
+// Walks the frame at `step` pixels and keeps every `keepEvery`-th usable pair, one distribution per
+// fitted plane. Keeps only pixels finite in BOTH frames — a non-finite value would sort to the end of
+// the distribution and poison every upper quantile drawn from it.
+function scanNormalizationSamples(currentRaw: ImageRawType, valid: Readonly<Uint8Array> | undefined, referenceRaw: ImageRawType, channels: number, width: number, height: number, colorMode: NormalizationColorMode, step: number, keepEvery: number) {
 	const luminance = colorMode === 'luminance' && channels === 3
 	const planes = luminance ? 1 : channels
 	const current: number[][] = new Array<number[]>(planes)
@@ -342,11 +379,13 @@ function collectNormalizationSamples(currentRaw: ImageRawType, valid: Readonly<U
 	}
 
 	const { red, green, blue } = DEFAULT_GRAYSCALE
+	let seen = 0
 
 	for (let y = 0; y < height; y += step) {
 		for (let x = 0; x < width; x += step) {
 			const pixel = y * width + x
 			if (valid !== undefined && valid[pixel] === 0) continue
+			if (seen++ % keepEvery !== 0) continue
 			const base = pixel * channels
 
 			if (luminance) {
@@ -1156,10 +1195,21 @@ export function fitLocalNormalizationRaw(referenceRaw: ImageRawType, currentRaw:
 // about this value, so the offset and gain residuals stay decorrelated. Every plane is collected in one
 // pass over the grid.
 function collectPivots(referenceRaw: ImageRawType, currentRaw: ImageRawType, valid: Readonly<Uint8Array> | undefined, channels: number, width: number, height: number, planes: number, luminance: boolean, estimator: GlobalNormalizationMode) {
-	const step = Math.max(1, Math.floor(Math.sqrt((width * height) / NORMALIZATION_SAMPLE_LIMIT)))
+	let step = Math.max(1, Math.floor(Math.sqrt((width * height) / NORMALIZATION_SAMPLE_LIMIT)))
+	let keepEvery = 1
 	const values: number[][] = new Array<number[]>(planes)
 	for (let plane = 0; plane < planes; plane++) values[plane] = []
 	const { red, green, blue } = DEFAULT_GRAYSCALE
+
+	// The pivot rides the same lattice the global solve uses and can be missed the same way, so it takes
+	// the same dense fallback: a mask aligned to the sampled positions would otherwise leave every pivot
+	// at 0 while the frame is almost entirely valid.
+	if (valid !== undefined && !latticeHasValidPixel(valid, width, height, step)) {
+		step = 1
+		keepEvery = validPixelStride(valid, width * height)
+	}
+
+	let seen = 0
 
 	// Only pixels that are finite in BOTH frames count, which is the rule the global solve and the cell
 	// estimates already use. A pixel finite here but not in the reference contributes to nothing else, so
@@ -1169,6 +1219,7 @@ function collectPivots(referenceRaw: ImageRawType, currentRaw: ImageRawType, val
 		for (let x = 0; x < width; x += step) {
 			const pixel = y * width + x
 			if (valid !== undefined && valid[pixel] === 0) continue
+			if (seen++ % keepEvery !== 0) continue
 			const base = pixel * channels
 
 			if (luminance) {
