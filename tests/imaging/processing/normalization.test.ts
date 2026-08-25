@@ -1606,8 +1606,23 @@ describe('color handling', () => {
 		)
 		const model = fitLocalNormalizationRaw(reference, current, WIDTH, HEIGHT, 1, 'luminance', undefined, options())
 
+		expect(model.colorMode).toBe('per-channel')
 		expect(model.global).toHaveLength(1)
 		expect(model.diagnostics).toHaveLength(1)
+
+		const planes = [referencePlane(1), referencePlane(2), referencePlane(3), referencePlane(4)]
+		const currents = planes.map((plane, index) =>
+			inverseTransform(
+				plane,
+				() => 1.1 + 0.1 * index,
+				() => 0,
+			),
+		)
+		const direct = fitLocalNormalizationRaw(interleave(planes), interleave(currents), WIDTH, HEIGHT, 4, 'luminance', undefined, options())
+
+		expect(direct.colorMode).toBe('per-channel')
+		expect(direct.global).toHaveLength(4)
+		expect(direct.diagnostics).toHaveLength(4)
 	})
 })
 

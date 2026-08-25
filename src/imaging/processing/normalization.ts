@@ -998,10 +998,11 @@ function sampleSupport(grid: LocalNormalizationSupportGrid, x: number, y: number
 export function fitLocalNormalizationRaw(referenceRaw: ImageRawType, currentRaw: ImageRawType, width: number, height: number, channels: number, colorMode: NormalizationColorMode, valid: Readonly<Uint8Array> | undefined, options: Required<LocalNormalizationOptions>): LocalNormalizationModel {
 	const { estimator, maxSamplesPerCell, minSamplesPerCell, minValidFraction, dynamicRangeSigma, surfaceModel, offsetDegree, scaleDegree, smoothing, scaleSignificance, rejectionSigma, rejectionIterations, relativeScaleRange, evaluationStepFraction, fallback } = options
 	const luminance = colorMode === 'luminance' && channels === 3
+	const effectiveColorMode: NormalizationColorMode = luminance ? 'luminance' : 'per-channel'
 	const planes = luminance ? 1 : channels
 	const hasOffset = estimator !== 'scale'
 
-	const global = solveGlobalNormalizationPlanes(currentRaw, valid, referenceRaw, channels, width, height, estimator, colorMode)
+	const global = solveGlobalNormalizationPlanes(currentRaw, valid, referenceRaw, channels, width, height, estimator, effectiveColorMode)
 	const grid = buildLocalGrid(width, height, options.gridSize, options.boxSize, Math.max(offsetDegree, scaleDegree) + 1)
 	const { columns, rows, cellW, cellH } = grid
 	const cellCount = columns * rows
@@ -1373,7 +1374,7 @@ export function fitLocalNormalizationRaw(referenceRaw: ImageRawType, currentRaw:
 		width,
 		height,
 		channelCount: channels,
-		colorMode,
+		colorMode: effectiveColorMode,
 		estimator,
 		surfaceModel,
 		fallback,
