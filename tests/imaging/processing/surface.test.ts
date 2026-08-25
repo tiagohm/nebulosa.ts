@@ -456,6 +456,37 @@ describe('evaluation', () => {
 		// Well below the fit's own amplitude, which spans about 0.04.
 		expect(maxDelta).toBeLessThan(1e-3)
 	})
+
+	test('clustered controls are materialized at their own scale', () => {
+		// Four corner controls plus a dense cluster at the center. The mean control spacing suggests nodes
+		// tens of pixels apart, but the surface varies on the cluster's 1-pixel scale, so a mean-derived
+		// coarse step walks straight over the structure it is supposed to reproduce.
+		const size = 1000
+		const samples: SurfaceSample[] = [
+			{ x: 0, y: 0, value: 0 },
+			{ x: size - 1, y: 0, value: 0 },
+			{ x: 0, y: size - 1, value: 0 },
+			{ x: size - 1, y: size - 1, value: 0 },
+		]
+		for (let r = 0; r < 10; r++) {
+			for (let c = 0; c < 10; c++) samples.push({ x: 495 + c, y: 495 + r, value: (r + c) % 2 === 0 ? 1 : -1 })
+		}
+
+		const model = fitOrThrow(samples, size, size, { model: 'thinPlateSpline', smoothing: 1e-5 })
+		const plane = new Float64Array(size * size)
+		evaluateScalarSurfaceInto(model, plane)
+		const point = createScalarSurfacePointEvaluator(model)
+
+		let worst = 0
+		for (const sample of samples) {
+			const x = Math.round(sample.x)
+			const y = Math.round(sample.y)
+			worst = Math.max(worst, Math.abs(plane[y * size + x] - point.at(x, y)))
+		}
+
+		// Far below the documented coarse-grid tolerance, which is a fraction of the local amplitude.
+		expect(worst).toBeLessThan(1e-3)
+	}, 20000)
 	test('strided writes match contiguous writes', () => {
 		const model = fitOrThrow(
 			sampleGrid(40, 30, 8, 6, (x, y) => 0.2 + 0.003 * x - 0.001 * y),

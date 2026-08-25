@@ -1,5 +1,6 @@
 import { medianOf, STANDARD_DEVIATION_SCALE, standardDeviationOf } from '../../core/util'
 import { LuDecomposition, Matrix, QrDecomposition } from '../../math/linear-algebra/matrix'
+import { clamp } from '../../math/numerical/math'
 
 // Generic scattered-data scalar surface fitting over a pixel plane. Fits a smooth function
 // f(x, y) to weighted point samples using either a 2D tensor Chebyshev polynomial (least squares by
@@ -925,28 +926,112 @@ export function createScalarSurfacePointEvaluator(model: ScalarSurfaceModel): Sc
 	return { at: (x, y) => evaluatePolynomialSurfaceAt(model.coefficients, (x - x0) * su - 1, (y - y0) * sv - 1, degree, terms, ti, tj, uCheb, vCheb) }
 }
 
-// Coarse evaluation step in pixels for a spline with `k` control points over a width*height plane.
-// Nodes are spaced a fraction of the mean control-point spacing sqrt(area/k). Returns 1 (evaluate
-// every pixel directly) for small planes or degenerate axes, where coarsening would not pay off.
+// Fraction of the surface's own amplitude the coarse-grid approximation is allowed to deviate by at the
+// control points. The grid is refined until it holds, so this is the materialization's actual accuracy
+// contract rather than an estimate.
+const TPS_COARSE_TOLERANCE = 0.005
+
+// Starting coarse evaluation step in pixels for a spline with `k` control points. Nodes are spaced a
+// fraction of the mean control-point spacing sqrt(area/k). Returns 1 (evaluate every pixel directly) for
+// small planes or degenerate axes, where coarsening would not pay off.
+//
+// The spacing comes from the area the control points actually occupy, which is the fitted domain, not
+// the output plane. A spline fitted over a small covered region of a large frame has its control points
+// packed into that region; scaling by the plane would space the nodes far wider than them. The domain
+// spans pixel centers, so its inclusive extent is what matches the plane's pixel count, and a full-frame
+// domain reproduces `width * height` exactly.
+//
+// A mean assumes the controls are spread evenly, which is why this is only a starting point: where they
+// cluster, the surface varies on the cluster's scale and this step walks over it. `evaluateThinPlateSplineInto`
+// verifies the resulting grid and refines it when that happens.
 function tpsCoarseStep(width: number, height: number, domain: SurfaceDomain, k: number) {
 	if (k <= 0 || width < 2 || height < 2) return 1
-	// The spacing must come from the area the control points actually occupy, which is the fitted domain,
-	// not the output plane. A spline fitted over a small covered region of a large frame has its control
-	// points packed into that region; scaling by the plane would space the nodes far wider than them and
-	// the bilinear upsample would no longer track the fitted surface even inside the supported area. The
-	// domain spans pixel centers, so its inclusive extent is what matches the plane's pixel count, and a
-	// full-frame domain reproduces `width * height` exactly.
 	const spacing = Math.sqrt(((domain.x1 - domain.x0 + 1) * (domain.y1 - domain.y0 + 1)) / k)
 	return Math.max(1, Math.floor(spacing * TPS_COARSE_FRACTION))
+}
+
+// A coarse node grid spanning the whole plane: the first node sits at 0 and the last exactly at the far
+// edge, so bilinear upsampling from it never extrapolates.
+interface TpsCoarseGrid {
+	readonly columns: number
+	readonly rows: number
+	readonly stepX: number
+	readonly stepY: number
+	readonly values: Float64Array
+}
+
+// Evaluates the exact spline on a node grid of the given pixel step.
+function buildTpsCoarseGrid(model: ScalarSurfaceModel, su: number, sv: number, k: number, step: number): TpsCoarseGrid {
+	const { width, height, domain, coefficients } = model
+	const controlPoints = model.controlPoints!
+	const columns = Math.max(2, Math.ceil((width - 1) / step) + 1)
+	const rows = Math.max(2, Math.ceil((height - 1) / step) + 1)
+	const stepX = (width - 1) / (columns - 1)
+	const stepY = (height - 1) / (rows - 1)
+	const values = new Float64Array(columns * rows)
+
+	for (let j = 0; j < rows; j++) {
+		const v = (j * stepY - domain.y0) * sv - 1
+		const row = j * columns
+		for (let i = 0; i < columns; i++) values[row + i] = evaluateThinPlateSplineAt(coefficients, controlPoints, k, (i * stepX - domain.x0) * su - 1, v)
+	}
+
+	return { columns, rows, stepX, stepY, values }
+}
+
+// Bilinearly reads the coarse grid at a pixel position.
+function sampleTpsCoarseGrid(grid: TpsCoarseGrid, x: number, y: number) {
+	const { columns, rows, stepX, stepY, values } = grid
+	const fx = x / stepX
+	const fy = y / stepY
+	const i0 = Math.min(columns - 2, Math.floor(fx))
+	const j0 = Math.min(rows - 2, Math.floor(fy))
+	const tx = fx - i0
+	const ty = fy - j0
+	const row0 = j0 * columns
+	const row1 = row0 + columns
+	const top = values[row0 + i0] + (values[row0 + i0 + 1] - values[row0 + i0]) * tx
+	const bottom = values[row1 + i0] + (values[row1 + i0 + 1] - values[row1 + i0]) * tx
+	return top + (bottom - top) * ty
+}
+
+// Whether the coarse grid reproduces the spline at its own control points, which is where the surface
+// has whatever local structure it has. Checking there is what catches a step derived from a mean spacing
+// that the controls do not actually follow.
+function tpsCoarseGridAgrees(model: ScalarSurfaceModel, grid: TpsCoarseGrid, su: number, sv: number, k: number) {
+	const { width, height, domain, coefficients } = model
+	const controlPoints = model.controlPoints!
+	let worst = 0
+	let low = Infinity
+	let high = -Infinity
+
+	for (let c = 0; c < k; c++) {
+		// Back to pixel coordinates, clamped to the plane the grid covers.
+		const x = clamp((controlPoints[2 * c] + 1) / su + domain.x0, 0, width - 1)
+		const y = clamp((controlPoints[2 * c + 1] + 1) / sv + domain.y0, 0, height - 1)
+		const direct = evaluateThinPlateSplineAt(coefficients, controlPoints, k, (x - domain.x0) * su - 1, (y - domain.y0) * sv - 1)
+		if (direct < low) low = direct
+		if (direct > high) high = direct
+		const deviation = Math.abs(sampleTpsCoarseGrid(grid, x, y) - direct)
+		if (deviation > worst) worst = deviation
+	}
+
+	const amplitude = high - low
+	return worst <= TPS_COARSE_TOLERANCE * (amplitude > 0 ? amplitude : 1)
 }
 
 // Materializes a fitted spline over the whole plane, writing into `output[offset + p * stride]` in
 // row-major pixel order. Direct evaluation is O(width * height * controlPoints); since a smoothing
 // surface is smooth, this instead evaluates the exact spline on a coarse grid and bilinearly upsamples
-// to full resolution, cutting the cost by the squared coarsening factor for a tiny, documented
-// interpolation error. Small planes fall back to exact per-pixel evaluation. When `exact` is set (a
-// zero-smoothing, interpolating spline), coarsening is disabled so the materialized surface passes
-// through the accepted samples as the interpolation contract requires.
+// to full resolution, cutting the cost by the squared coarsening factor.
+//
+// The starting step comes from the mean control spacing, which assumes the controls are evenly spread.
+// Where they are not, the grid is checked against the spline at the control points and halved until it
+// agrees within `TPS_COARSE_TOLERANCE`, falling back to per-pixel evaluation if it never does. That
+// keeps the cheap path cheap — an even layout passes the first check — while making the accuracy a
+// verified property rather than an assumption. When `exact` is set (a zero-smoothing, interpolating
+// spline), coarsening is disabled so the materialized surface passes through the accepted samples as the
+// interpolation contract requires.
 function evaluateThinPlateSplineInto(model: ScalarSurfaceModel, output: Float64Array | Float32Array, offset: number, stride: number, exact: boolean) {
 	const { width, height, domain } = model
 	const coefficients = model.coefficients
@@ -954,9 +1039,22 @@ function evaluateThinPlateSplineInto(model: ScalarSurfaceModel, output: Float64A
 	const k = controlPoints.length / 2
 	const su = domainScale(domain.x0, domain.x1)
 	const sv = domainScale(domain.y0, domain.y1)
-	const step = exact ? 1 : tpsCoarseStep(width, height, domain, k)
 
-	if (step <= 1) {
+	let grid: TpsCoarseGrid | undefined
+	let step = exact ? 1 : tpsCoarseStep(width, height, domain, k)
+
+	while (step > 1) {
+		const candidate = buildTpsCoarseGrid(model, su, sv, k, step)
+
+		if (tpsCoarseGridAgrees(model, candidate, su, sv, k)) {
+			grid = candidate
+			break
+		}
+
+		step = Math.floor(step / 2)
+	}
+
+	if (grid === undefined) {
 		for (let y = 0; y < height; y++) {
 			const v = (y - domain.y0) * sv - 1
 			let idx = y * width * stride + offset
@@ -965,40 +1063,9 @@ function evaluateThinPlateSplineInto(model: ScalarSurfaceModel, output: Float64A
 		return
 	}
 
-	// Coarse node grid spanning the full plane (first node at 0, last exactly at the far edge), so
-	// bilinear upsampling never extrapolates. Evaluate the exact spline at each node.
-	const ncx = Math.max(2, Math.ceil((width - 1) / step) + 1)
-	const ncy = Math.max(2, Math.ceil((height - 1) / step) + 1)
-	const sx = (width - 1) / (ncx - 1)
-	const sy = (height - 1) / (ncy - 1)
-	const coarse = new Float64Array(ncx * ncy)
-
-	for (let jy = 0; jy < ncy; jy++) {
-		const v = (jy * sy - domain.y0) * sv - 1
-		const row = jy * ncx
-		for (let jx = 0; jx < ncx; jx++) coarse[row + jx] = evaluateThinPlateSplineAt(coefficients, controlPoints, k, (jx * sx - domain.x0) * su - 1, v)
-	}
-
 	for (let y = 0; y < height; y++) {
-		const fy = y / sy
-		const j0 = Math.min(ncy - 2, Math.floor(fy))
-		const ty = fy - j0
-		const row0 = j0 * ncx
-		const row1 = row0 + ncx
 		let idx = y * width * stride + offset
-
-		for (let x = 0; x < width; x++, idx += stride) {
-			const fx = x / sx
-			const i0 = Math.min(ncx - 2, Math.floor(fx))
-			const tx = fx - i0
-			const c00 = coarse[row0 + i0]
-			const c01 = coarse[row0 + i0 + 1]
-			const c10 = coarse[row1 + i0]
-			const c11 = coarse[row1 + i0 + 1]
-			const top = c00 + (c01 - c00) * tx
-			const bot = c10 + (c11 - c10) * tx
-			output[idx] = top + (bot - top) * ty
-		}
+		for (let x = 0; x < width; x++, idx += stride) output[idx] = sampleTpsCoarseGrid(grid, x, y)
 	}
 }
 
