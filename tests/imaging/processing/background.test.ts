@@ -1350,3 +1350,21 @@ test('a zero or negligibly-smoothed thin-plate spline is evaluated exactly, with
 	expect(maxCoarseningError(1e-12)).toBeLessThan(1e-6)
 	expect(maxCoarseningError(0.05)).toBeGreaterThan(1e-6)
 }, 6000)
+
+test('an extreme gridSize on a fully excluded frame does not exhaust memory', () => {
+	// collectSamples reserves its sample arrays for every CANDIDATE cell, before masking decides how many
+	// survive, so the grid dimensions alone fix the allocation. The frame is wider than the grid ceiling
+	// so the clamp actually binds; unbounded, this gridSize would reserve sample state for every pixel
+	// and produce no sample at all under the mask.
+	const width = 2048
+	const height = 64
+	const image = makeImage(width, height, 1, () => 0.3)
+	const mask = new Uint8Array(width * height).fill(1)
+
+	expect(() => fitBackgroundSurface(image, { gridSize: 1_000_000, exclusionMask: mask })).toThrow()
+
+	// The same grid without a mask fits, and its cell count honors the ceiling rather than the pixel count.
+	const model = fitBackgroundSurface(image, { gridSize: 1_000_000 })
+	expect(model.surfaces[0].samples.length).toBeLessThanOrEqual(1024 * 1024)
+	expect(model.surfaces[0].samples.length).toBeLessThan(width * height)
+}, 20000)
