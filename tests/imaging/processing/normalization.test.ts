@@ -1187,6 +1187,56 @@ describe('color handling', () => {
 		}
 	})
 
+	test('a channel damaged on both sampling lattices still finds its pivot', () => {
+		const size = 512
+		const pixels = size * size
+		const planes = [referencePlane(1, size, size), referencePlane(2, size, size)]
+		const currents = planes.map((plane, index) =>
+			inverseTransform(
+				plane,
+				() => 1.5 + 0.5 * index,
+				() => 0.02,
+				size,
+				size,
+			),
+		)
+
+		for (let y = 0; y < size; y += 5) {
+			for (let x = 0; x < size; x += 5) currents[1][y * size + x] = Number.NaN
+		}
+		for (let i = 0; i < pixels; i += 32) currents[1][i] = Number.NaN
+
+		const reference = interleave(planes, size, size)
+		const current = interleave(currents, size, size)
+		const model = fitLocalNormalizationRaw(reference, current, size, size, 2, 'per-channel', undefined, options())
+
+		const clean = fitLocalNormalizationRaw(
+			reference,
+			interleave(
+				planes.map((plane, index) =>
+					inverseTransform(
+						plane,
+						() => 1.5 + 0.5 * index,
+						() => 0.02,
+						size,
+						size,
+					),
+				),
+				size,
+				size,
+			),
+			size,
+			size,
+			2,
+			'per-channel',
+			undefined,
+			options(),
+		)
+
+		expect(model.pivots[0]).toBeCloseTo(clean.pivots[0]!, 6)
+		expect(model.pivots[1]).toBeCloseTo(clean.pivots[1]!, 2)
+	})
+
 	test('a channel with no finite pair reports no overlap of its own', () => {
 		const planes = [referencePlane(1), referencePlane(2)]
 		const currents = planes.map((plane, index) =>

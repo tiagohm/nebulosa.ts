@@ -1305,6 +1305,13 @@ function collectPivots(referenceRaw: ImageRawType, currentRaw: ImageRawType, val
 
 // Walks the frame at `step` pixels and keeps every `keepEvery`-th usable value, one list per plane.
 //
+// The thinning counter is per plane and advances only on values that plane can use, for the same reason
+// the global sampler's does: a shared counter puts every plane on one lattice of kept positions, and a
+// channel non-finite exactly there comes back empty from the dense fallback too. Its pivot would then
+// stay at zero while its global anchor is fine, which leaves the offset field measured about a level the
+// gain never rotates through — the two residuals stop being decorrelated and the reconstruction can end
+// up worse than the anchor it started from.
+//
 // Only pixels that are finite in BOTH frames count, which is the rule the global solve and the cell
 // estimates already use. A pixel finite here but not in the reference contributes to nothing else, so
 // letting it move the pivot would anchor the reconstruction on a level the fit never saw — and the pivot
@@ -1313,23 +1320,23 @@ function scanPivotValues(referenceRaw: ImageRawType, currentRaw: ImageRawType, v
 	const values: number[][] = new Array<number[]>(planes)
 	for (let plane = 0; plane < planes; plane++) values[plane] = []
 	const { red, green, blue } = DEFAULT_GRAYSCALE
-	let seen = 0
+	// Usable values seen so far, per plane, which is what the thinning counts down.
+	const seen = new Int32Array(planes)
 
 	for (let y = 0; y < height; y += step) {
 		for (let x = 0; x < width; x += step) {
 			const pixel = y * width + x
 			if (valid !== undefined && valid[pixel] === 0) continue
-			if (seen++ % keepEvery !== 0) continue
 			const base = pixel * channels
 
 			if (luminance) {
 				const v = red * currentRaw[base] + green * currentRaw[base + 1] + blue * currentRaw[base + 2]
 				const r = red * referenceRaw[base] + green * referenceRaw[base + 1] + blue * referenceRaw[base + 2]
-				if (Number.isFinite(v) && Number.isFinite(r)) values[0].push(v)
+				if (Number.isFinite(v) && Number.isFinite(r) && seen[0]++ % keepEvery === 0) values[0].push(v)
 			} else {
 				for (let plane = 0; plane < planes; plane++) {
 					const v = currentRaw[base + plane]
-					if (Number.isFinite(v) && Number.isFinite(referenceRaw[base + plane])) values[plane].push(v)
+					if (Number.isFinite(v) && Number.isFinite(referenceRaw[base + plane]) && seen[plane]++ % keepEvery === 0) values[plane].push(v)
 				}
 			}
 		}
