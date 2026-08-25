@@ -1050,6 +1050,32 @@ describe('local normalization', () => {
 		expect(isLocalNormalizationFallback(tiled)).toBe(false)
 	})
 
+	test('a cell holding one stray pair still retries the alternate phase', () => {
+		const reference = referencePlane()
+		const current = inverseTransform(
+			reference,
+			() => 1.2,
+			(x, y) => 0.01 + 0.02 * (x / WIDTH) + 0.015 * (y / HEIGHT),
+		)
+
+		const mask = new Uint8Array(WIDTH * HEIGHT).fill(1)
+		for (let y = 0; y < HEIGHT; y += 2) {
+			for (let x = 0; x < WIDTH; x += 2) {
+				if (x % 24 === 0 && y % 24 === 0) continue
+				mask[y * WIDTH + x] = 0
+			}
+		}
+
+		const model = fitMono(reference, current, { maxSamplesPerCell: 144 }, mask)
+
+		expect(model.diagnostics[0].fallback).toBe(false)
+		expect(model.diagnostics[0].acceptedCells).toBe(model.diagnostics[0].candidateCells)
+
+		const global = applyAnchor(current, model.global[0].scale, model.global[0].offset)
+		applyLocalNormalizationInPlace(current, mask, model)
+		expect(meanAbsoluteError(current, reference, mask)).toBeLessThan(meanAbsoluteError(global, reference, mask) / 3)
+	})
+
 	test('a mask aligned to the sampling lattice is recovered by the alternate phase', () => {
 		const reference = referencePlane()
 		const current = inverseTransform(

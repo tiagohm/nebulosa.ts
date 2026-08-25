@@ -1008,15 +1008,16 @@ export function fitLocalNormalizationRaw(referenceRaw: ImageRawType, currentRaw:
 			// pixel everywhere would lose the spatial correction on the healthy ones too. Each plane
 			// therefore keeps its own pair count, its own buffer prefix, and its own sample centroid.
 			//
-			// The phases are also per plane: a plane that found nothing is retried on the alternate lattice
-			// while the planes that already have their pairs are dropped from the scan and keep them. One
-			// shared "something was collected" flag would let a healthy channel cancel the retry the damaged
-			// one needs, which is the very case the retry exists for.
-			counts.fill(0)
-			sumX.fill(0)
-			sumY.fill(0)
-			visited.fill(0)
-
+			// The phases are also per plane: a plane that has not reached the cell thresholds is retried on
+			// the alternate lattice while the planes that already cleared them are dropped from the scan and
+			// keep what they collected. One shared flag would let a healthy channel cancel the retry the
+			// damaged one needs, and retiring a plane merely because it found SOMETHING would strand a cell
+			// that caught one stray pair on the first lattice while the alternate one covers it entirely.
+			//
+			// A retried plane starts its count over rather than adding to the phase it is retrying. The
+			// phases sample disjoint positions, so accumulating them could exceed the per-cell capacity the
+			// buffers are sized by; and since a cell is taken exactly when SOME phase clears the thresholds
+			// on its own, keeping the union would not accept a single cell more.
 			let pendingCount = planes
 			for (let plane = 0; plane < planes; plane++) pending[plane] = plane
 
@@ -1024,6 +1025,13 @@ export function fitLocalNormalizationRaw(referenceRaw: ImageRawType, currentRaw:
 				const originX = phase === 0 ? bx0 : Math.min(bx0 + phaseX, bx1)
 				const originY = phase === 0 ? by0 : Math.min(by0 + phaseY, by1)
 				let phaseVisited = 0
+
+				for (let i = 0; i < pendingCount; i++) {
+					const plane = pending[i]
+					counts[plane] = 0
+					sumX[plane] = 0
+					sumY[plane] = 0
+				}
 
 				for (let y = originY; y <= by1; y += strideY) {
 					const rowBase = y * width
@@ -1059,20 +1067,23 @@ export function fitLocalNormalizationRaw(referenceRaw: ImageRawType, currentRaw:
 					}
 				}
 
+				// Recorded per phase, not from the final counts, so the fallback can tell "the frames do not
+				// overlap" from "they overlap but no cell was usable" even for a plane whose last phase came
+				// back empty after an earlier one had found pairs.
+				const floor = minValidFraction * phaseVisited
 				let remaining = 0
+
 				for (let i = 0; i < pendingCount; i++) {
 					const plane = pending[i]
+					const count = counts[plane]
 					visited[plane] = phaseVisited
-					if (counts[plane] === 0) pending[remaining++] = plane
+					if (count > 0) observedValidPairs[plane] = 1
+					if (count < minSamplesPerCell || count < floor) pending[remaining++] = plane
 				}
 
 				pendingCount = remaining
 				if (pendingCount === 0) break
 			}
-
-			// Recorded before the cell thresholds so the fallback can tell "the frames do not overlap" from
-			// "they overlap but no cell was usable", which are different problems with different fixes.
-			for (let plane = 0; plane < planes; plane++) if (counts[plane] > 0) observedValidPairs[plane] = 1
 
 			const cellIndex = r * columns + c
 
