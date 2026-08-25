@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import type { Image } from '../../../src/imaging/model/types'
 // oxfmt-ignore
-import { applyLocalNormalization, applyLocalNormalizationInPlace, fitLocalNormalization, fitLocalNormalizationRaw, isLocalNormalizationFallback, type LocalNormalizationOptions, localNormalization, resolveLocalNormalizationOptions, solveGlobalNormalization } from '../../../src/imaging/processing/normalization'
+import { applyLocalNormalization, applyLocalNormalizationInPlace, fitLocalNormalization, fitLocalNormalizationRaw, isLocalNormalizationFallback, type LocalNormalizationOptions, localNormalization, resolveLocalNormalizationOptions, solveGlobalNormalization, solveGlobalNormalizationPlanes } from '../../../src/imaging/processing/normalization'
 import { Bitpix } from '../../../src/io/formats/fits/fits'
 
 const WIDTH = 192
@@ -128,6 +128,35 @@ describe('global normalization', () => {
 
 		expect(solution.scale).toBeCloseTo(0.4, 9)
 		expect(solution.offset).toBeCloseTo(-0.05, 9)
+	})
+
+	test('a channel damaged on both sampling lattices still finds its transform', () => {
+		const size = 512
+		const pixels = size * size
+		const reference = new Float64Array(pixels * 2)
+		const current = new Float64Array(pixels * 2)
+
+		for (let i = 0; i < pixels; i++) {
+			const value = 0.1 + 0.8 * (i / pixels)
+			reference[i * 2] = value
+			reference[i * 2 + 1] = value
+			current[i * 2] = (value - 0.05) / 2
+			current[i * 2 + 1] = (value - 0.05) / 3
+		}
+
+		// The lattice scan walks every 5th pixel of a 512x512 frame and the dense fallback keeps every 32nd
+		// valid pixel. Damaging channel 1 on both leaves 93% of it finite yet hides it from both scans.
+		for (let y = 0; y < size; y += 5) {
+			for (let x = 0; x < size; x += 5) current[(y * size + x) * 2 + 1] = Number.NaN
+		}
+		for (let i = 0; i < pixels; i += 32) current[i * 2 + 1] = Number.NaN
+
+		const solved = solveGlobalNormalizationPlanes(current, undefined, reference, 2, size, size, 'background-scale', 'per-channel')
+
+		expect(solved[0].scale).toBeCloseTo(2, 6)
+		expect(solved[0].offset).toBeCloseTo(0.05, 6)
+		expect(solved[1].scale).toBeCloseTo(3, 6)
+		expect(solved[1].offset).toBeCloseTo(0.05, 6)
 	})
 
 	test('a degenerate current span falls back to unit scale', () => {

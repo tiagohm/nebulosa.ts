@@ -368,6 +368,12 @@ function validPixelStride(valid: Readonly<Uint8Array> | undefined, pixels: numbe
 // Walks the frame at `step` pixels and keeps every `keepEvery`-th usable pair, one distribution per
 // fitted plane. Keeps only pixels finite in BOTH frames — a non-finite value would sort to the end of
 // the distribution and poison every upper quantile drawn from it.
+//
+// The thinning counter is per plane and advances only on pairs that plane can actually use. Counting
+// visited pixels instead would put every plane on the same lattice of kept positions, which a channel
+// non-finite exactly there can miss entirely: the dense fallback would then come back empty for it and
+// the plane would take an identity transform with nothing marking it. Counting usable pairs makes the
+// kept set a fixed fraction of whatever each plane has, whatever the geometry of the damage.
 function scanNormalizationSamples(currentRaw: ImageRawType, valid: Readonly<Uint8Array> | undefined, referenceRaw: ImageRawType, channels: number, width: number, height: number, colorMode: NormalizationColorMode, step: number, keepEvery: number) {
 	const luminance = colorMode === 'luminance' && channels === 3
 	const planes = luminance ? 1 : channels
@@ -380,19 +386,20 @@ function scanNormalizationSamples(currentRaw: ImageRawType, valid: Readonly<Uint
 	}
 
 	const { red, green, blue } = DEFAULT_GRAYSCALE
-	let seen = 0
+	// Usable pairs seen so far, per plane, which is what the thinning counts down.
+	const seen = new Int32Array(planes)
 
 	for (let y = 0; y < height; y += step) {
 		for (let x = 0; x < width; x += step) {
 			const pixel = y * width + x
 			if (valid !== undefined && valid[pixel] === 0) continue
-			if (seen++ % keepEvery !== 0) continue
 			const base = pixel * channels
 
 			if (luminance) {
 				const currentLum = red * currentRaw[base] + green * currentRaw[base + 1] + blue * currentRaw[base + 2]
 				const referenceLum = red * referenceRaw[base] + green * referenceRaw[base + 1] + blue * referenceRaw[base + 2]
 				if (!Number.isFinite(currentLum) || !Number.isFinite(referenceLum)) continue
+				if (seen[0]++ % keepEvery !== 0) continue
 				current[0].push(currentLum)
 				reference[0].push(referenceLum)
 			} else {
@@ -400,6 +407,7 @@ function scanNormalizationSamples(currentRaw: ImageRawType, valid: Readonly<Uint
 					const c = currentRaw[base + channel]
 					const r = referenceRaw[base + channel]
 					if (!Number.isFinite(c) || !Number.isFinite(r)) continue
+					if (seen[channel]++ % keepEvery !== 0) continue
 					current[channel].push(c)
 					reference[channel].push(r)
 				}
