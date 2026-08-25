@@ -87,9 +87,12 @@ export interface LocalNormalizationSummary {
 export interface LocalNormalizationChannelDiagnostics {
 	// Grid cells that were examined.
 	readonly candidateCells: number
-	// Cells that produced a usable estimate and fed the surfaces.
+	// Cells that produced a usable estimate and were submitted to the surfaces. The surfaces then apply
+	// their own residual rejection, so this is not the count that fed the final fit; that one lives on
+	// each `ScalarSurfaceModel` as `acceptedSamples`.
 	readonly acceptedCells: number
-	// Cells discarded for insufficient valid pixels, too few pairs, or a degenerate estimate.
+	// Cells discarded for insufficient valid pixels, too few pairs, or a degenerate estimate. Cells the
+	// surface fit later rejected as residual outliers are not counted here.
 	readonly rejectedCells: number
 	// Accepted cells that also cleared the dynamic-range gate and fed the scale surface. Zero means the
 	// plane carries no local scale correction, only a local offset — the normal outcome for a frame
