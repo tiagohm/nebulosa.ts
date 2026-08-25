@@ -337,6 +337,30 @@ describe('thin-plate spline', () => {
 		expect(nearExact).toBeLessThan(9)
 	})
 
+	test('a capped smoothing spline aggregates coincident observations before selecting controls', () => {
+		function makeSamples(reverse: boolean) {
+			const samples: SurfaceSample[] = []
+			for (let y = 0; y < 5; y++) {
+				for (let x = 0; x < 5; x++) {
+					const sx = 8 + x * 12
+					const sy = 8 + y * 12
+					samples.push({ x: sx, y: sy, value: reverse ? 1 : 0 }, { x: sx, y: sy, value: reverse ? 0 : 1 })
+				}
+			}
+			return samples
+		}
+
+		const lowFirst = fitOrThrow(makeSamples(false), 64, 64, { model: 'thinPlateSpline', smoothing: 0.1, maxControlPoints: 16 })
+		const highFirst = fitOrThrow(makeSamples(true), 64, 64, { model: 'thinPlateSpline', smoothing: 0.1, maxControlPoints: 16 })
+		const lowPoint = createScalarSurfacePointEvaluator(lowFirst)
+		const highPoint = createScalarSurfacePointEvaluator(highFirst)
+
+		expect(lowFirst.acceptedSamples).toBeLessThanOrEqual(16)
+		expect(highFirst.acceptedSamples).toBe(lowFirst.acceptedSamples)
+		expect(lowPoint.at(32, 32)).toBeCloseTo(0.5, 12)
+		expect(highPoint.at(32, 32)).toBeCloseTo(0.5, 12)
+	})
+
 	test('control points are capped and the dropped samples are reported', () => {
 		const samples = sampleGrid(256, 256, 12, 12, (x, y) => 0.2 + 0.0005 * (x - y))
 		const model = fitOrThrow(samples, 256, 256, { model: 'thinPlateSpline', smoothing: 0, maxControlPoints: 16 })

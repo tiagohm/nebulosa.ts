@@ -440,6 +440,38 @@ export function deduplicateSurfaceSamples(set: SurfaceSampleSet) {
 	}
 }
 
+// Aggregates repeated active coordinates into one weighted observation. Positive-smoothing splines can
+// solve coincident rows, but a later control cap would otherwise keep only one arbitrary row and lose
+// the repeated measurement. The first row at each coordinate becomes the weighted average and carries
+// the summed weight; later rows stay in diagnostics as inactive capped-out observations.
+function aggregateCoincidentSurfaceSamples(set: SurfaceSampleSet) {
+	const representatives = new Map<string, number>()
+
+	for (let i = 0; i < set.count; i++) {
+		if (set.active[i] === 0) continue
+		const key = `${set.u[i]},${set.v[i]}`
+		const representative = representatives.get(key)
+
+		if (representative === undefined) {
+			representatives.set(key, i)
+			continue
+		}
+
+		const representativeWeight = set.weight[representative]
+		const weight = set.weight[i]
+		const totalWeight = representativeWeight + weight
+		const inv = 1 / totalWeight
+
+		set.x[representative] = (set.x[representative] * representativeWeight + set.x[i] * weight) * inv
+		set.y[representative] = (set.y[representative] * representativeWeight + set.y[i] * weight) * inv
+		set.u[representative] = (set.u[representative] * representativeWeight + set.u[i] * weight) * inv
+		set.v[representative] = (set.v[representative] * representativeWeight + set.v[i] * weight) * inv
+		set.value[representative] = (set.value[representative] * representativeWeight + set.value[i] * weight) * inv
+		set.weight[representative] = totalWeight
+		set.active[i] = 0
+	}
+}
+
 // Deterministically subsamples the active samples down to at most `maxPoints` control points,
 // preserving spatial coverage: the normalized [-1, 1] domain is split into a g x g grid
 // (g = floor(sqrt(maxPoints))) and the first active sample landing in each bucket is kept. Returns the
@@ -1407,6 +1439,10 @@ export function fitScalarSurface(samples: readonly SurfaceSample[], width: numbe
 		// centre samples of 0 and 10 fit a centre of 0 in one order and 9.55 in the other.
 		if (smoothing <= 0) {
 			deduplicateSurfaceSamples(set)
+			if (!hasSurfaceTwoDimensionalCoverage(set)) return { ok: false, reason: 'degenerate-layout' }
+		} else if (activeSurfaceSampleCount(set) > maxControlPoints) {
+			aggregateCoincidentSurfaceSamples(set)
+			if (activeSurfaceSampleCount(set) < MIN_CONTROL_POINTS) return { ok: false, reason: 'too-few-samples' }
 			if (!hasSurfaceTwoDimensionalCoverage(set)) return { ok: false, reason: 'degenerate-layout' }
 		}
 
