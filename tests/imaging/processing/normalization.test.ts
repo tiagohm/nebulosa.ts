@@ -1301,6 +1301,28 @@ describe('local normalization', () => {
 		applyLocalNormalizationInPlace(current, mask, model)
 		expect(meanAbsoluteError(current, reference, mask)).toBeLessThan(meanAbsoluteError(global, reference, mask) / 3)
 	})
+
+	test('mixed alternate phases recover masks that reject diagonal lattices', () => {
+		const size = 256
+		const reference = referencePlane(13, size, size)
+		const current = inverseTransform(
+			reference,
+			() => 1.2,
+			(x, y) => 0.01 + 0.02 * (x / size) + 0.015 * (y / size),
+			size,
+			size,
+		)
+		const mask = new Uint8Array(size * size)
+
+		for (let y = 0; y < size; y++) {
+			for (let x = 0; x < size; x++) mask[y * size + x] = x % 4 !== y % 4 ? 1 : 0
+		}
+
+		const model = fitLocalNormalizationRaw(reference, current, size, size, 1, 'per-channel', mask, resolveLocalNormalizationOptions({ gridSize: 4, maxSamplesPerCell: 256, minSamplesPerCell: 128, minValidFraction: 0.5 }))
+
+		expect(model.diagnostics[0].fallback).toBe(false)
+		expect(model.diagnostics[0].acceptedCells).toBe(model.diagnostics[0].candidateCells)
+	})
 })
 
 describe('color handling', () => {

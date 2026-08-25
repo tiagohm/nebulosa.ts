@@ -962,16 +962,27 @@ export function fitLocalNormalizationRaw(referenceRaw: ImageRawType, currentRaw:
 	// square box the split reproduces the single stride exactly.
 	const cellBudget = Math.max(1, Math.floor((width * height * LOCAL_NORMALIZATION_SAMPLING_OVERLAP) / cellCount))
 	const { strideX, strideY, capacity } = resolveCellStride(grid.maxBoxW, grid.maxBoxH, Math.min(maxSamplesPerCell, cellBudget))
-	// Offset of the second sampling phase inside a cell. The strided scan reads one pixel out of
+	// Offsets of the alternate sampling phases inside a cell. The strided scan reads one pixel out of
 	// `strideX * strideY`, so a validity mask aligned to that same lattice can hide every valid pixel from
 	// a scan anchored at the box origin: a frame three quarters valid then reports no overlap at all.
-	// A cell that collected nothing is rescanned from the half-stride phase, which costs one extra pass
-	// over exactly the cells that have no result to lose, unlike a dense rescan that would cost the full
-	// box area on every genuinely empty cell. Two phases do not defeat a mask built against both, but they
-	// cover the lattice alignment that makes this reachable in practice.
+	// A cell that collected too little is rescanned from half-stride phases, which costs bounded extra
+	// passes over exactly the cells that have no result to lose, unlike a dense rescan that would cost the
+	// full box area on every genuinely empty cell. Mixed-axis phases cover masks that reject both
+	// diagonal lattices while still bounding collection to at most four sparse passes.
 	const phaseX = strideX >> 1
 	const phaseY = strideY >> 1
-	const phases = phaseX > 0 || phaseY > 0 ? 2 : 1
+	const phaseOffsetsX = new Int32Array(4)
+	const phaseOffsetsY = new Int32Array(4)
+	let phases = 1
+	if (phaseX > 0 || phaseY > 0) {
+		phaseOffsetsX[phases] = phaseX
+		phaseOffsetsY[phases++] = phaseY
+		if (phaseX > 0 && phaseY > 0) {
+			phaseOffsetsX[phases] = phaseX
+			phases++
+			phaseOffsetsY[phases++] = phaseY
+		}
+	}
 
 	const refBuf = new Float64Array(planes * capacity)
 	const curBuf = new Float64Array(planes * capacity)
@@ -1049,15 +1060,15 @@ export function fitLocalNormalizationRaw(referenceRaw: ImageRawType, currentRaw:
 			// therefore keeps its own pair count, its own buffer prefix, and its own sample centroid.
 			//
 			// The phases are also per plane: a plane that has not reached the cell thresholds is retried on
-			// the alternate lattice while the planes that already cleared them are dropped from the scan and
+			// alternate lattices while the planes that already cleared them are dropped from the scan and
 			// keep what they collected. One shared flag would let a healthy channel cancel the retry the
 			// damaged one needs, and retiring a plane merely because it found SOMETHING would strand a cell
 			// that caught one stray pair on the first lattice while the alternate one covers it entirely.
 			//
 			// A retried plane adds to what it already has instead of starting over. The phases sample
 			// disjoint positions of the same box, so their union is simply a denser sample of it, and a cell
-			// whose valid pixels are split evenly between the two lattices clears the thresholds on neither
-			// phase alone while the union clears them comfortably. Writes stop at the per-cell capacity the
+			// whose valid pixels are split across sparse lattices clears the thresholds on none of them alone
+			// while the union clears them comfortably. Writes stop at the per-cell capacity the
 			// buffers are sized by, which two full phases would otherwise overrun. Valid-pair totals keep
 			// counting after that so a full estimator reservoir cannot make the cell look less valid.
 			counts.fill(0)
@@ -1070,8 +1081,8 @@ export function fitLocalNormalizationRaw(referenceRaw: ImageRawType, currentRaw:
 			for (let plane = 0; plane < planes; plane++) pending[plane] = plane
 
 			for (let phase = 0; phase < phases; phase++) {
-				const originX = phase === 0 ? bx0 : Math.min(bx0 + phaseX, bx1)
-				const originY = phase === 0 ? by0 : Math.min(by0 + phaseY, by1)
+				const originX = Math.min(bx0 + phaseOffsetsX[phase], bx1)
+				const originY = Math.min(by0 + phaseOffsetsY[phase], by1)
 				let phaseVisited = 0
 
 				for (let y = originY; y <= by1; y += strideY) {
