@@ -2,7 +2,7 @@ import { medianBySelectionOf, medianOf, quickSelect, STANDARD_DEVIATION_SCALE } 
 import { clamp } from '../../math/numerical/math'
 import { DEFAULT_GRAYSCALE, type Image, type ImageRawType } from '../model/types'
 // oxfmt-ignore
-import { createScalarSurfaceEvaluator, createScalarSurfacePointEvaluator, createSurfaceColumnTable, fitScalarSurface, type ScalarSurfaceModel, type SurfaceDomain, type SurfaceModelType, type SurfaceSample } from './surface'
+import { createScalarSurfaceEvaluator, createScalarSurfacePointEvaluator, createSurfaceColumnTable, fitScalarSurface, type ScalarSurfaceModel, type ScalarSurfacePointEvaluator, type SurfaceDomain, type SurfaceModelType, type SurfaceSample } from './surface'
 
 // Photometric normalization of a frame against a reference frame, applied after registration and
 // before combination:
@@ -320,6 +320,14 @@ const LOCAL_NORMALIZATION_SAMPLING_OVERLAP = 2
 // Kept well below the materialization budget in `surface.ts` because this runs per frame in a stack,
 // not once per image.
 const MAX_LOCAL_NORMALIZATION_FIELD_WORK = 1e8
+
+// Fraction of a final local-normalization field's fitted range that a coarse TPS probe may deviate by.
+// Probed cells beyond this are evaluated directly, so the known TPS error does not reach the output.
+const LOCAL_NORMALIZATION_TPS_FIELD_TOLERANCE = 0.005
+
+// Kernel evaluations spent probing TPS field accuracy before falling back to direct cells. Every control
+// is always checked; this caps only the supplemental coarse-cell centre probes.
+const MAX_LOCAL_NORMALIZATION_TPS_FIELD_VERIFICATION_WORK = 2e6
 
 // Small epsilon guarding divisions and degeneracy tests.
 const FLOAT_EPSILON = 1e-12
@@ -1375,6 +1383,42 @@ interface LocalNormalizationFields {
 	readonly scale: Float64Array
 	// Final offset per plane and node, plane-major.
 	readonly offset: Float64Array
+	// Cells where the materialized TPS field failed verification and must be evaluated directly.
+	readonly direct?: LocalNormalizationDirectFields
+}
+
+// Direct-evaluation metadata for every plane that has verified failing TPS cells.
+interface LocalNormalizationDirectFields {
+	// Number of coarse field cells across.
+	readonly cellColumns: number
+	// Number of coarse field cells down.
+	readonly cellRows: number
+	// Per-plane direct-evaluation data. Undefined planes use the interpolated field everywhere.
+	readonly planes: readonly (LocalNormalizationDirectPlane | undefined)[]
+}
+
+// Per-plane state needed to evaluate the final gain/offset transform directly at one pixel.
+interface LocalNormalizationDirectPlane {
+	// Coarse cells where direct evaluation is required, row-major over `cellColumns * cellRows`.
+	readonly cells: Uint8Array
+	// Whether this plane carries an offset field. `scale` normalization always applies zero offset.
+	readonly hasOffset: boolean
+	// Global scale/offset anchor for the plane.
+	readonly anchor: NormalizationParameters
+	// Direct point evaluator for the scale surface, if this plane fitted one.
+	readonly scaleEvaluator?: ScalarSurfacePointEvaluator
+	// Direct point evaluator for the offset surface, if this plane fitted one.
+	readonly offsetEvaluator?: ScalarSurfacePointEvaluator
+	// Support grid for the gain field.
+	readonly scaleSupport: LocalNormalizationSupportGrid
+	// Support grid for the offset field.
+	readonly offsetSupport: LocalNormalizationSupportGrid
+	// Clamp range for residual log gain, in log units.
+	readonly scaleRange?: readonly [number, number]
+	// Clamp range for residual offset, in image units.
+	readonly offsetRange?: readonly [number, number]
+	// Current-frame pivot that decorrelates gain and offset for this plane.
+	readonly pivot: number
 }
 
 // Node spacing the fields are actually materialized at, which is the model's own step widened whenever
@@ -1411,6 +1455,184 @@ function resolveEvaluationStep(model: LocalNormalizationModel, planes: number) {
 	}
 
 	return Math.max(1, step)
+}
+
+// Absolute gain-field tolerance implied by the fitted log-gain range around `anchorScale`.
+function localNormalizationScaleTolerance(anchorScale: number, range: readonly [number, number] | undefined) {
+	if (range === undefined) return 0
+	const low = anchorScale * Math.exp(range[0])
+	const high = anchorScale * Math.exp(range[1])
+	const span = Math.abs(high - low)
+	return LOCAL_NORMALIZATION_TPS_FIELD_TOLERANCE * (span > 0 && Number.isFinite(span) ? span : Math.max(1, Math.abs(anchorScale)))
+}
+
+// Absolute offset-field tolerance implied by the fitted residual-offset range.
+function localNormalizationOffsetTolerance(range: readonly [number, number] | undefined) {
+	if (range === undefined) return 0
+	const span = Math.abs(range[1] - range[0])
+	return LOCAL_NORMALIZATION_TPS_FIELD_TOLERANCE * (span > 0 && Number.isFinite(span) ? span : 1)
+}
+
+// Pixel coordinate of a spline control point on one axis, clamped to the field grid it verifies.
+function localNormalizationTpsControlPixel(surface: ScalarSurfaceModel, control: number, axisX: boolean) {
+	const point = surface.controlPoints![2 * control + (axisX ? 0 : 1)]
+	const domain = surface.domain
+	return axisX ? clamp(domain.x0 + 0.5 * (point + 1) * (domain.x1 - domain.x0), 0, surface.width - 1) : clamp(domain.y0 + 0.5 * (point + 1) * (domain.y1 - domain.y0), 0, surface.height - 1)
+}
+
+// Bilinearly samples one plane of a materialized local-normalization field at pixel coordinates.
+function sampleLocalNormalizationField(values: Float64Array, plane: number, columns: number, rows: number, stepX: number, stepY: number, x: number, y: number) {
+	const fx = columns > 1 ? x / stepX : 0
+	const fy = rows > 1 ? y / stepY : 0
+	const i0 = clamp(Math.floor(fx), 0, Math.max(0, columns - 2))
+	const j0 = clamp(Math.floor(fy), 0, Math.max(0, rows - 2))
+	const i1 = Math.min(i0 + 1, columns - 1)
+	const j1 = Math.min(j0 + 1, rows - 1)
+	const tx = columns > 1 ? clamp(fx - i0, 0, 1) : 0
+	const ty = rows > 1 ? clamp(fy - j0, 0, 1) : 0
+	const planeBase = plane * columns * rows
+	const row0 = planeBase + j0 * columns
+	const row1 = planeBase + j1 * columns
+	const top = values[row0 + i0] + (values[row0 + i1] - values[row0 + i0]) * tx
+	const bottom = values[row1 + i0] + (values[row1 + i1] - values[row1 + i0]) * tx
+	return top + (bottom - top) * ty
+}
+
+// Coarse field cell containing a pixel coordinate.
+function localNormalizationFieldCell(columns: number, rows: number, stepX: number, stepY: number, x: number, y: number, cellColumns: number) {
+	const i = columns > 1 ? clamp(Math.floor(x / stepX), 0, cellColumns - 1) : 0
+	const j = rows > 1 ? clamp(Math.floor(y / stepY), 0, Math.max(0, rows - 2)) : 0
+	return j * cellColumns + i
+}
+
+// Marks one coarse field cell for direct evaluation, returning 1 only when it was newly marked.
+function markLocalNormalizationDirectCell(cells: Uint8Array, cell: number) {
+	if (cells[cell] !== 0) return 0
+	cells[cell] = 1
+	return 1
+}
+
+// Marks a cell and its immediate neighbors because a failing control can sit on a coarse-cell boundary.
+function markLocalNormalizationDirectCellNeighborhood(cells: Uint8Array, cell: number, cellColumns: number, cellRows: number) {
+	const row = Math.floor(cell / cellColumns)
+	const column = cell - row * cellColumns
+	let count = 0
+
+	for (let y = Math.max(0, row - 1); y <= Math.min(cellRows - 1, row + 1); y++) {
+		const base = y * cellColumns
+		for (let x = Math.max(0, column - 1); x <= Math.min(cellColumns - 1, column + 1); x++) count += markLocalNormalizationDirectCell(cells, base + x)
+	}
+
+	return count
+}
+
+// Stride for supplemental centre probes that keeps verification bounded by kernel-evaluation work.
+function localNormalizationFieldProbeStride(cellColumns: number, cellRows: number, controls: number) {
+	const work = cellColumns * cellRows * controls
+	return work > MAX_LOCAL_NORMALIZATION_TPS_FIELD_VERIFICATION_WORK ? Math.ceil(Math.sqrt(work / MAX_LOCAL_NORMALIZATION_TPS_FIELD_VERIFICATION_WORK)) : 1
+}
+
+// Evaluates the final gain field directly at a pixel, including support, clamp, and anchor scaling.
+function evaluateDirectLocalNormalizationScale(plane: LocalNormalizationDirectPlane, x: number, y: number) {
+	const evaluator = plane.scaleEvaluator
+	const range = plane.scaleRange
+	if (evaluator === undefined || range === undefined) return plane.anchor.scale
+	return plane.anchor.scale * Math.exp(sampleSupport(plane.scaleSupport, x, y) * clamp(evaluator.at(x, y), range[0], range[1]))
+}
+
+// Evaluates the final offset field directly at a pixel, including support, clamp, and pivot coupling.
+function evaluateDirectLocalNormalizationOffset(plane: LocalNormalizationDirectPlane, x: number, y: number, scale: number) {
+	if (!plane.hasOffset) return 0
+	const evaluator = plane.offsetEvaluator
+	const range = plane.offsetRange
+	const residual = evaluator === undefined || range === undefined ? 0 : sampleSupport(plane.offsetSupport, x, y) * clamp(evaluator.at(x, y), range[0], range[1])
+	return plane.anchor.offset + residual - (scale - plane.anchor.scale) * plane.pivot
+}
+
+// Whether the materialized field agrees with the direct transform at a verification point.
+function localNormalizationFieldAgrees(fields: LocalNormalizationFields, plane: number, direct: LocalNormalizationDirectPlane, x: number, y: number, scaleTolerance: number, offsetTolerance: number) {
+	const directScale = evaluateDirectLocalNormalizationScale(direct, x, y)
+	const sampledScale = sampleLocalNormalizationField(fields.scale, plane, fields.columns, fields.rows, fields.stepX, fields.stepY, x, y)
+	if (Math.abs(sampledScale - directScale) > scaleTolerance) return false
+
+	if (!direct.hasOffset) return true
+
+	const directOffset = evaluateDirectLocalNormalizationOffset(direct, x, y, directScale)
+	const sampledOffset = sampleLocalNormalizationField(fields.offset, plane, fields.columns, fields.rows, fields.stepX, fields.stepY, x, y)
+	return Math.abs(sampledOffset - directOffset) <= offsetTolerance
+}
+
+// Marks verification failures at the controls of one TPS surface.
+function markLocalNormalizationTpsControlCells(fields: LocalNormalizationFields, plane: number, direct: LocalNormalizationDirectPlane, surface: ScalarSurfaceModel | undefined, scaleTolerance: number, offsetTolerance: number, cellColumns: number, cellRows: number) {
+	if (surface?.type !== 'thinPlateSpline') return 0
+
+	const controlCount = surface.controlPoints!.length / 2
+	let count = 0
+	for (let control = 0; control < controlCount; control++) {
+		const x = localNormalizationTpsControlPixel(surface, control, true)
+		const y = localNormalizationTpsControlPixel(surface, control, false)
+		if (localNormalizationFieldAgrees(fields, plane, direct, x, y, scaleTolerance, offsetTolerance)) continue
+		count += markLocalNormalizationDirectCellNeighborhood(direct.cells, localNormalizationFieldCell(fields.columns, fields.rows, fields.stepX, fields.stepY, x, y, cellColumns), cellColumns, cellRows)
+	}
+
+	return count
+}
+
+// Builds direct-evaluation masks for TPS cells whose coarse field does not reproduce direct evaluation.
+function buildLocalNormalizationDirectFields(model: LocalNormalizationModel, fields: LocalNormalizationFields): LocalNormalizationDirectFields | undefined {
+	const { columns, rows, stepX, stepY } = fields
+	if (columns <= 1 && rows <= 1) return undefined
+
+	const cellColumns = Math.max(1, columns - 1)
+	const cellRows = Math.max(1, rows - 1)
+	const planes = new Array<LocalNormalizationDirectPlane | undefined>(fields.planes)
+	let any = false
+
+	for (let plane = 0; plane < fields.planes; plane++) {
+		if (model.diagnostics[plane].fallback) continue
+
+		const scaleSurface = model.scaleSurfaces[plane]
+		const offsetSurface = model.offsetSurfaces[plane]
+		if (scaleSurface?.type !== 'thinPlateSpline' && offsetSurface?.type !== 'thinPlateSpline') continue
+
+		const anchor = model.global[plane]
+		const direct: LocalNormalizationDirectPlane = {
+			cells: new Uint8Array(cellColumns * cellRows),
+			hasOffset: model.estimator !== 'scale',
+			anchor,
+			scaleEvaluator: scaleSurface === undefined ? undefined : createScalarSurfacePointEvaluator(scaleSurface),
+			offsetEvaluator: offsetSurface === undefined ? undefined : createScalarSurfacePointEvaluator(offsetSurface),
+			scaleSupport: model.scaleSupportGrids[plane],
+			offsetSupport: model.offsetSupportGrids[plane],
+			scaleRange: model.scaleLogRanges[plane],
+			offsetRange: model.offsetRanges[plane],
+			pivot: model.pivots[plane] ?? 0,
+		}
+		const scaleTolerance = localNormalizationScaleTolerance(anchor.scale, model.scaleLogRanges[plane])
+		const offsetTolerance = localNormalizationOffsetTolerance(model.offsetRanges[plane])
+		const controls = Math.max(scaleSurface?.controlPoints?.length ?? 0, offsetSurface?.controlPoints?.length ?? 0) / 2
+		const probeStride = localNormalizationFieldProbeStride(cellColumns, cellRows, controls)
+		let count = 0
+
+		count += markLocalNormalizationTpsControlCells(fields, plane, direct, scaleSurface, scaleTolerance, offsetTolerance, cellColumns, cellRows)
+		count += markLocalNormalizationTpsControlCells(fields, plane, direct, offsetSurface, scaleTolerance, offsetTolerance, cellColumns, cellRows)
+
+		for (let j = Math.floor(probeStride / 2); j < cellRows; j += probeStride) {
+			const y = rows > 1 ? (j + 0.5) * stepY : 0
+			for (let i = Math.floor(probeStride / 2); i < cellColumns; i += probeStride) {
+				const x = columns > 1 ? (i + 0.5) * stepX : 0
+				if (localNormalizationFieldAgrees(fields, plane, direct, x, y, scaleTolerance, offsetTolerance)) continue
+				count += markLocalNormalizationDirectCell(direct.cells, j * cellColumns + i)
+			}
+		}
+
+		if (count > 0) {
+			planes[plane] = direct
+			any = true
+		}
+	}
+
+	return any ? { cellColumns, cellRows, planes } : undefined
 }
 
 // Evaluates the model onto its node grid.
@@ -1491,7 +1713,9 @@ function buildLocalNormalizationFields(model: LocalNormalizationModel): LocalNor
 		}
 	}
 
-	return { columns, rows, stepX, stepY, planes, scale, offset }
+	const fields = { columns, rows, stepX, stepY, planes, scale, offset } satisfies LocalNormalizationFields
+	const direct = buildLocalNormalizationDirectFields(model, fields)
+	return direct === undefined ? fields : { ...fields, direct }
 }
 
 // Applies a fitted local model in place over the valid pixels of `raw`.
@@ -1506,6 +1730,7 @@ export function applyLocalNormalizationInPlace(raw: ImageRawType, valid: Readonl
 	const { columns, rows, stepX, stepY, planes } = fields
 	const luminance = model.colorMode === 'luminance' && channelCount === 3 && planes === 1
 	const nodes = columns * rows
+	const direct = fields.direct
 
 	// Running value and per-pixel increment of both fields, one entry per plane.
 	const scaleCurrent = new Float64Array(planes)
@@ -1522,6 +1747,7 @@ export function applyLocalNormalizationInPlace(raw: ImageRawType, valid: Readonl
 		const j1 = Math.min(j0 + 1, rows - 1)
 		const ty = rows > 1 ? clamp(fy - j0, 0, 1) : 0
 		const rowBase = y * width
+		const directCellRow = direct === undefined ? 0 : Math.min(direct.cellRows - 1, rows > 1 ? Math.floor(y / stepY) : 0) * direct.cellColumns
 
 		for (let plane = 0; plane < planes; plane++) {
 			const planeBase = plane * nodes
@@ -1548,6 +1774,7 @@ export function applyLocalNormalizationInPlace(raw: ImageRawType, valid: Readonl
 			const i1 = Math.min(segment + 1, columns - 1)
 			const invStep = columns > 1 ? 1 / stepX : 0
 			const t0 = columns > 1 ? (xs - segment * stepX) * invStep : 0
+			const directCell = direct === undefined ? 0 : directCellRow + Math.min(direct.cellColumns - 1, segment)
 
 			for (let plane = 0; plane < planes; plane++) {
 				const nodes = plane * columns
@@ -1568,14 +1795,18 @@ export function applyLocalNormalizationInPlace(raw: ImageRawType, valid: Readonl
 				let o = offsetCurrent[0]
 				const ds = scaleStep[0]
 				const doff = offsetStep[0]
+				const directPlane = direct?.planes[0]
+				const directCellMarked = directPlane !== undefined && directPlane.cells[directCell] !== 0
 
 				for (let x = xs; x <= xe; x++, s += ds, o += doff) {
 					const pixel = rowBase + x
 					if (valid !== undefined && valid[pixel] === 0) continue
 					const base = pixel * channelCount
-					raw[base] = raw[base] * s + o
-					raw[base + 1] = raw[base + 1] * s + o
-					raw[base + 2] = raw[base + 2] * s + o
+					const scale = directCellMarked ? evaluateDirectLocalNormalizationScale(directPlane, x, y) : s
+					const offset = directCellMarked ? evaluateDirectLocalNormalizationOffset(directPlane, x, y, scale) : o
+					raw[base] = raw[base] * scale + offset
+					raw[base + 1] = raw[base + 1] * scale + offset
+					raw[base + 2] = raw[base + 2] * scale + offset
 				}
 
 				continue
@@ -1586,7 +1817,15 @@ export function applyLocalNormalizationInPlace(raw: ImageRawType, valid: Readonl
 
 				if (valid === undefined || valid[pixel] !== 0) {
 					const base = pixel * channelCount
-					for (let plane = 0; plane < planes; plane++) raw[base + plane] = raw[base + plane] * scaleCurrent[plane] + offsetCurrent[plane]
+					for (let plane = 0; plane < planes; plane++) {
+						const directPlane = direct?.planes[plane]
+						if (directPlane !== undefined && directPlane.cells[directCell] !== 0) {
+							const scale = evaluateDirectLocalNormalizationScale(directPlane, x, y)
+							raw[base + plane] = raw[base + plane] * scale + evaluateDirectLocalNormalizationOffset(directPlane, x, y, scale)
+						} else {
+							raw[base + plane] = raw[base + plane] * scaleCurrent[plane] + offsetCurrent[plane]
+						}
+					}
 				}
 
 				for (let plane = 0; plane < planes; plane++) {

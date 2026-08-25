@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'bun:test'
 import type { Image } from '../../../src/imaging/model/types'
 // oxfmt-ignore
-import { applyLocalNormalization, applyLocalNormalizationInPlace, fitLocalNormalization, fitLocalNormalizationRaw, isLocalNormalizationFallback, type LocalNormalizationOptions, localNormalization, resolveLocalNormalizationOptions, solveGlobalNormalization, solveGlobalNormalizationPlanes } from '../../../src/imaging/processing/normalization'
+import { applyLocalNormalization, applyLocalNormalizationInPlace, fitLocalNormalization, fitLocalNormalizationRaw, isLocalNormalizationFallback, type LocalNormalizationModel, type LocalNormalizationOptions, localNormalization, resolveLocalNormalizationOptions, solveGlobalNormalization, solveGlobalNormalizationPlanes } from '../../../src/imaging/processing/normalization'
+import type { ScalarSurfaceModel } from '../../../src/imaging/processing/surface'
 import { Bitpix } from '../../../src/io/formats/fits/fits'
 
 const WIDTH = 192
@@ -78,6 +79,15 @@ function maxAbsoluteError(a: Float64Array, b: Float64Array) {
 	let max = 0
 	for (let i = 0; i < a.length; i++) max = Math.max(max, Math.abs(a[i] - b[i]))
 	return max
+}
+
+function normalizedPixelCoordinate(x: number, size: number) {
+	return (2 * x) / (size - 1) - 1
+}
+
+function thinPlateKernel(du: number, dv: number) {
+	const sq = du * du + dv * dv
+	return sq > 0 ? 0.5 * sq * Math.log(sq) : 0
 }
 
 function options(overrides: LocalNormalizationOptions = {}) {
@@ -985,6 +995,87 @@ describe('local normalization', () => {
 		expect(elapsed).toBeLessThan(12000)
 		for (let i = 0; i < current.length; i += 7919) expect(Number.isFinite(current[i])).toBe(true)
 	}, 60000)
+
+	test('a widened spline field evaluates clustered-control cells directly', () => {
+		const size = 1024
+		const controls = 1024
+		const targetX = 513
+		const targetY = 512
+		const weight = 90
+		const weightedControls: readonly (readonly [number, number, number])[] = [
+			[targetX, targetY, -4 * weight],
+			[targetX - 4, targetY, weight],
+			[targetX + 4, targetY, weight],
+			[targetX, targetY - 4, weight],
+			[targetX, targetY + 4, weight],
+		]
+		const controlPoints = new Float64Array(2 * controls)
+		const coefficients = new Float64Array(3 + controls)
+
+		let control = 0
+		for (const [x, y, w] of weightedControls) {
+			controlPoints[2 * control] = normalizedPixelCoordinate(x, size)
+			controlPoints[2 * control + 1] = normalizedPixelCoordinate(y, size)
+			coefficients[3 + control] = w
+			control++
+		}
+
+		for (let y = 0; y < 32 && control < controls; y++) {
+			for (let x = 0; x < 32 && control < controls; x++, control++) {
+				controlPoints[2 * control] = normalizedPixelCoordinate(Math.round((x * (size - 1)) / 31), size)
+				controlPoints[2 * control + 1] = normalizedPixelCoordinate(Math.round((y * (size - 1)) / 31), size)
+			}
+		}
+
+		const surface: ScalarSurfaceModel = {
+			type: 'thinPlateSpline',
+			width: size,
+			height: size,
+			domain: { x0: 0, y0: 0, x1: size - 1, y1: size - 1 },
+			degree: 1,
+			smoothing: 0.1,
+			coefficients,
+			controlPoints,
+			acceptedSamples: controls,
+			rejectedSamples: 0,
+			residual: 0,
+			samples: [],
+		}
+		const support = { columns: 1, rows: 1, originX: 0, originY: 0, stepX: 1, stepY: 1, values: new Float32Array([1]) }
+		const model: LocalNormalizationModel = {
+			width: size,
+			height: size,
+			channelCount: 1,
+			colorMode: 'per-channel',
+			estimator: 'scale',
+			surfaceModel: 'thinPlateSpline',
+			fallback: 'global',
+			global: [{ scale: 1, offset: 0 }],
+			pivots: [undefined],
+			scaleSurfaces: [surface],
+			offsetSurfaces: [undefined],
+			scaleLogRanges: [[-0.25, 0.25]],
+			offsetRanges: [undefined],
+			offsetSupportGrids: [support],
+			scaleSupportGrids: [support],
+			evaluationStep: 1,
+			diagnostics: [{ candidateCells: controls, acceptedCells: controls, rejectedCells: 0, scaleCells: controls, scaleResidual: 0, fallback: false }],
+		}
+		let direct = 0
+		const targetU = normalizedPixelCoordinate(targetX, size)
+		const targetV = normalizedPixelCoordinate(targetY, size)
+		for (let i = 0; i < weightedControls.length; i++) {
+			const u = controlPoints[2 * i]
+			const v = controlPoints[2 * i + 1]
+			direct += coefficients[3 + i] * thinPlateKernel(targetU - u, targetV - v)
+		}
+
+		const raw = new Float64Array(size * size)
+		raw.fill(1)
+		applyLocalNormalizationInPlace(raw, undefined, model)
+
+		expect(raw[targetY * size + targetX]).toBeCloseTo(Math.exp(direct), 12)
+	}, 30000)
 
 	test('an extreme gridSize is scaled back to a tractable cell count', () => {
 		// One cell per pixel is not a usable ceiling on a real frame: at this gridSize the grid would ask
