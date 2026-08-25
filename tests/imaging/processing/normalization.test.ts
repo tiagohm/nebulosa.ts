@@ -1064,6 +1064,48 @@ describe('color handling', () => {
 		expect(maxAbsoluteError(current, reference)).toBeLessThan(1e-9)
 	})
 
+	test('a non-finite channel does not suppress the healthy channels', () => {
+		const planes = [referencePlane(1), referencePlane(2), referencePlane(3)]
+		const currents = planes.map((plane, index) =>
+			inverseTransform(
+				plane,
+				() => 1.1 + 0.1 * index,
+				(x, y) => 0.01 + 0.02 * (x / WIDTH) + 0.015 * (y / HEIGHT),
+			),
+		)
+		for (let p = 0; p < WIDTH * HEIGHT; p++) currents[2][p] = Number.NaN
+
+		const reference = interleave(planes)
+		const current = interleave(currents)
+
+		const model = fitLocalNormalizationRaw(reference, current, WIDTH, HEIGHT, 3, 'per-channel', undefined, options())
+
+		expect(model.diagnostics[0].fallback).toBe(false)
+		expect(model.diagnostics[1].fallback).toBe(false)
+		expect(model.diagnostics[2].fallback).toBe(true)
+		expect(model.diagnostics[0].acceptedCells).toBeGreaterThan(0)
+		expect(model.diagnostics[1].acceptedCells).toBeGreaterThan(0)
+		expect(model.diagnostics[2].acceptedCells).toBe(0)
+
+		const anchored = new Float64Array(current.length)
+		for (let c = 0; c < 3; c++) {
+			const { scale, offset } = model.global[c]
+			for (let p = 0; p < WIDTH * HEIGHT; p++) anchored[p * 3 + c] = current[p * 3 + c] * scale + offset
+		}
+
+		applyLocalNormalizationInPlace(current, undefined, model)
+
+		for (let c = 0; c < 2; c++) {
+			let local = 0
+			let global = 0
+			for (let p = 0; p < WIDTH * HEIGHT; p++) {
+				local += Math.abs(current[p * 3 + c] - reference[p * 3 + c])
+				global += Math.abs(anchored[p * 3 + c] - reference[p * 3 + c])
+			}
+			expect(local).toBeLessThan(global / 3)
+		}
+	})
+
 	test('luminance falls back to per-channel for non-RGB images', () => {
 		const reference = referencePlane()
 		const current = inverseTransform(

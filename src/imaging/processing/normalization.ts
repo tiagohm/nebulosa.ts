@@ -914,8 +914,13 @@ export function fitLocalNormalizationRaw(referenceRaw: ImageRawType, currentRaw:
 	const cellGain: Float64Array[] = []
 	const cellLevel: Float64Array[] = []
 	const cellWeight: Float64Array[] = []
-	const cellX = new Float64Array(cellCount)
-	const cellY = new Float64Array(cellCount)
+	const cellX: Float64Array[] = []
+	const cellY: Float64Array[] = []
+	// Per-cell scan state, reset for each cell and kept per plane so a damaged channel cannot drop the
+	// pixel for the healthy ones.
+	const counts = new Int32Array(planes)
+	const sumX = new Float64Array(planes)
+	const sumY = new Float64Array(planes)
 	const masks: Uint8Array[] = []
 	// Cells that also cleared the dynamic-range gate, which is what constrains the gain field.
 	const gainMasks: Uint8Array[] = []
@@ -931,6 +936,8 @@ export function fitLocalNormalizationRaw(referenceRaw: ImageRawType, currentRaw:
 		cellGain.push(new Float64Array(cellCount))
 		cellLevel.push(new Float64Array(cellCount))
 		cellWeight.push(new Float64Array(cellCount))
+		cellX.push(new Float64Array(cellCount))
+		cellY.push(new Float64Array(cellCount))
 		masks.push(new Uint8Array(cellCount))
 		gainMasks.push(new Uint8Array(cellCount))
 		refViews.push(refBuf.subarray(plane * capacity, (plane + 1) * capacity))
@@ -949,10 +956,14 @@ export function fitLocalNormalizationRaw(referenceRaw: ImageRawType, currentRaw:
 			const bx0 = grid.x0[c]
 			const bx1 = grid.x1[c]
 
-			let count = 0
+			// Counted per plane. A pixel non-finite in one channel says nothing about the others, and the
+			// global solve already treats planes independently, so letting one damaged channel drop the
+			// pixel everywhere would lose the spatial correction on the healthy ones too. Each plane
+			// therefore keeps its own pair count, its own buffer prefix, and its own sample centroid.
+			counts.fill(0)
+			sumX.fill(0)
+			sumY.fill(0)
 			let visited = 0
-			let sumX = 0
-			let sumY = 0
 
 			for (let y = by0; y <= by1; y += strideY) {
 				const rowBase = y * width
@@ -967,44 +978,43 @@ export function fitLocalNormalizationRaw(referenceRaw: ImageRawType, currentRaw:
 						const cv = red * currentRaw[base] + green * currentRaw[base + 1] + blue * currentRaw[base + 2]
 						const rv = red * referenceRaw[base] + green * referenceRaw[base + 1] + blue * referenceRaw[base + 2]
 						if (!Number.isFinite(cv) || !Number.isFinite(rv)) continue
-						curBuf[count] = cv
-						refBuf[count] = rv
+						const at = counts[0]++
+						curBuf[at] = cv
+						refBuf[at] = rv
+						sumX[0] += x
+						sumY[0] += y
 					} else {
-						// A pixel contributes to every plane or to none: a per-plane count would desynchronize the
-						// pairing, and a non-finite channel marks the whole pixel as unusable in practice.
-						let finite = true
-						for (let channel = 0; channel < channels; channel++) {
-							if (!Number.isFinite(currentRaw[base + channel]) || !Number.isFinite(referenceRaw[base + channel])) {
-								finite = false
-								break
-							}
-						}
-						if (!finite) continue
 						for (let plane = 0; plane < planes; plane++) {
-							curBuf[plane * capacity + count] = currentRaw[base + plane]
-							refBuf[plane * capacity + count] = referenceRaw[base + plane]
+							const cv = currentRaw[base + plane]
+							const rv = referenceRaw[base + plane]
+							if (!Number.isFinite(cv) || !Number.isFinite(rv)) continue
+							const at = plane * capacity + counts[plane]++
+							curBuf[at] = cv
+							refBuf[at] = rv
+							sumX[plane] += x
+							sumY[plane] += y
 						}
 					}
-
-					sumX += x
-					sumY += y
-					count++
 				}
 			}
 
 			// Recorded before the cell thresholds so the fallback can tell "the frames do not overlap" from
 			// "they overlap but no cell was usable", which are different problems with different fixes.
-			if (count > 0) observedValidPairs = true
+			for (let plane = 0; plane < planes; plane++) if (counts[plane] > 0) observedValidPairs = true
 
-			if (count < minSamplesPerCell || visited === 0) continue
-			const validFraction = count / visited
-			if (validFraction < minValidFraction) continue
+			if (visited === 0) continue
 
 			const cellIndex = r * columns + c
-			cellX[cellIndex] = sumX / count
-			cellY[cellIndex] = sumY / count
 
 			for (let plane = 0; plane < planes; plane++) {
+				const count = counts[plane]
+				if (count < minSamplesPerCell) continue
+				const validFraction = count / visited
+				if (validFraction < minValidFraction) continue
+
+				cellX[plane][cellIndex] = sumX[plane] / count
+				cellY[plane][cellIndex] = sumY[plane] / count
+
 				const anchor = global[plane]
 				if (!(anchor.scale > 0) || !Number.isFinite(anchor.offset)) continue
 
@@ -1060,6 +1070,8 @@ export function fitLocalNormalizationRaw(referenceRaw: ImageRawType, currentRaw:
 		const mask = masks[plane]
 		const gains = cellGain[plane]
 		const weights = cellWeight[plane]
+		const xs = cellX[plane]
+		const ys = cellY[plane]
 		// Built before the fits because stage 2 needs the gain confidence to rotate its residuals onto the
 		// gain the reconstruction will actually apply.
 		const offsetSupport = buildSupportGrid(mask, columns, rows, cellW / 2, cellH / 2, cellW, cellH)
@@ -1072,7 +1084,7 @@ export function fitLocalNormalizationRaw(referenceRaw: ImageRawType, currentRaw:
 			const samples: SurfaceSample[] = []
 			for (let cell = 0; cell < cellCount; cell++) {
 				if (mask[cell] === 0 || !Number.isFinite(gains[cell])) continue
-				samples.push({ x: cellX[cell], y: cellY[cell], value: Math.log(gains[cell] / anchor.scale), weight: weights[cell] })
+				samples.push({ x: xs[cell], y: ys[cell], value: Math.log(gains[cell] / anchor.scale), weight: weights[cell] })
 			}
 
 			const fit = fitScalarSurface(samples, width, height, { model: surfaceModel, degree: scaleDegree, smoothing, rejection, domain: sampleDomain(samples) })
@@ -1108,13 +1120,13 @@ export function fitLocalNormalizationRaw(referenceRaw: ImageRawType, currentRaw:
 			const pivot = pivots[plane]
 			const levels = cellLevel[plane]
 			const offsets = cellOffset[plane]
-			const gainAtCell = evaluateGainAtCells(scaleSurface, scaleRange, anchor.scale, scaleSupport, cellX, cellY, mask, cellCount)
+			const gainAtCell = evaluateGainAtCells(scaleSurface, scaleRange, anchor.scale, scaleSupport, xs, ys, mask, cellCount)
 			const samples: SurfaceSample[] = []
 
 			for (let cell = 0; cell < cellCount; cell++) {
 				if (mask[cell] === 0) continue
 				const value = (gainAtCell[cell] - anchor.scale) * (pivot - levels[cell]) + offsets[cell]
-				samples.push({ x: cellX[cell], y: cellY[cell], value, weight: weights[cell] })
+				samples.push({ x: xs[cell], y: ys[cell], value, weight: weights[cell] })
 			}
 
 			const fit = fitScalarSurface(samples, width, height, { model: surfaceModel, degree: offsetDegree, smoothing, rejection, domain: sampleDomain(samples) })
