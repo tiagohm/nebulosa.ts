@@ -1187,6 +1187,24 @@ describe('color handling', () => {
 		}
 	})
 
+	test('a channel with no finite pair reports no overlap of its own', () => {
+		const planes = [referencePlane(1), referencePlane(2)]
+		const currents = planes.map((plane, index) =>
+			inverseTransform(
+				plane,
+				() => 1.1 + 0.1 * index,
+				() => 0.01,
+			),
+		)
+		for (let q = 0; q < WIDTH * HEIGHT; q++) currents[1][q] = Number.NaN
+
+		const model = fitLocalNormalizationRaw(interleave(planes), interleave(currents), WIDTH, HEIGHT, 2, 'per-channel', undefined, options())
+
+		expect(model.diagnostics[0].fallback).toBe(false)
+		expect(model.diagnostics[1].fallback).toBe(true)
+		expect(model.diagnostics[1].reason).toBe('no-valid-overlap')
+	})
+
 	test('each channel retries the alternate sampling phase on its own', () => {
 		const planes = [referencePlane(1), referencePlane(2)]
 		const currents = planes.map((plane, index) =>

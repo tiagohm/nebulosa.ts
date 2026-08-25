@@ -989,8 +989,11 @@ export function fitLocalNormalizationRaw(referenceRaw: ImageRawType, currentRaw:
 	}
 
 	const { red, green, blue } = DEFAULT_GRAYSCALE
-	// Whether any cell saw a valid pixel pair at all, regardless of whether it went on to be usable.
-	let observedValidPairs = false
+	// Whether each plane saw a valid pixel pair at all, regardless of whether it went on to be usable. It
+	// is per plane because it selects a per-plane fallback reason: a channel with no overlapping finite
+	// pixel has a different problem from one whose cells were all too sparse, and a sibling plane finding
+	// pairs says nothing about either.
+	const observedValidPairs = new Uint8Array(planes)
 
 	for (let r = 0; r < rows; r++) {
 		const by0 = grid.y0[r]
@@ -1069,7 +1072,7 @@ export function fitLocalNormalizationRaw(referenceRaw: ImageRawType, currentRaw:
 
 			// Recorded before the cell thresholds so the fallback can tell "the frames do not overlap" from
 			// "they overlap but no cell was usable", which are different problems with different fixes.
-			if (pendingCount < planes) observedValidPairs = true
+			for (let plane = 0; plane < planes; plane++) if (counts[plane] > 0) observedValidPairs[plane] = 1
 
 			const cellIndex = r * columns + c
 
@@ -1132,7 +1135,7 @@ export function fitLocalNormalizationRaw(referenceRaw: ImageRawType, currentRaw:
 		let scaleFitted = false
 
 		if (!(anchor.scale > 0) || !Number.isFinite(anchor.offset)) reason = 'invalid-global-solution'
-		else if (accepted === 0) reason = observedValidPairs ? 'insufficient-valid-cells' : 'no-valid-overlap'
+		else if (accepted === 0) reason = observedValidPairs[plane] === 1 ? 'insufficient-valid-cells' : 'no-valid-overlap'
 
 		const mask = masks[plane]
 		const gains = cellGain[plane]
