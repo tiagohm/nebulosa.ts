@@ -281,6 +281,17 @@ export const NORMALIZATION_SAMPLE_LIMIT = 8192
 // can use, and its per-plane state stays in the low megabytes.
 const MAX_LOCAL_NORMALIZATION_CELLS = 65536
 
+// Ceiling on materialized field nodes, summed over planes. Each node carries a gain and an offset in
+// plane-major `Float64Array`s, so this bounds that pair at about 16 MB. The node grid exists to be a
+// cheap intermediate between the fitted surfaces and the pixels; past this it stops being one.
+const MAX_LOCAL_NORMALIZATION_NODES = 1_048_576
+
+// Ceiling on spline field work, as nodes times control points summed over planes. A spline evaluates
+// every node against every control with a logarithm each, so the node count alone does not bound it.
+// Kept well below the materialization budget in `surface.ts` because this runs per frame in a stack,
+// not once per image.
+const MAX_LOCAL_NORMALIZATION_FIELD_WORK = 1e8
+
 // Small epsilon guarding divisions and degeneracy tests.
 const FLOAT_EPSILON = 1e-12
 
@@ -1187,13 +1198,50 @@ interface LocalNormalizationFields {
 	readonly offset: Float64Array
 }
 
+// Node spacing the fields are actually materialized at, which is the model's own step widened whenever
+// that step would price the node grid out of its budgets.
+//
+// The step is derived from the cell side, so a very fine grid drives it toward 1 and the node grid stops
+// being the cheap intermediate it exists to be: a 4096x4096 RGB frame at `gridSize: 256` asks for 4.2
+// million nodes, whose two plane-major arrays alone are about 190 MB. Worse, a spline field evaluates
+// each node against every control point, so those nodes would run to billions of kernel evaluations with
+// a logarithm each — a stall inside what is meant to be the cheap path, and the bounded materialization
+// in `evaluateScalarSurfaceInto` is not on this route to catch it.
+//
+// Two ceilings therefore apply: a node count, which bounds the memory, and for a spline the product of
+// nodes and control points, which bounds the work. A polynomial field costs `degree + 1` per node and is
+// never the constraint. Both are far above any realistic configuration - the default grid on a large
+// frame asks for a few thousand nodes - so widening only ever happens at extreme settings, and it costs
+// resolution in the support ramp rather than correctness.
+function resolveEvaluationStep(model: LocalNormalizationModel, planes: number) {
+	const { width, height, evaluationStep } = model
+	const pixels = width * height
+	let step = evaluationStep
+
+	// Widening the step by `f` divides the node count by `f * f`, so each ceiling gives a factor directly.
+	const nodesAtStep = (pixels / (step * step)) * planes
+	if (nodesAtStep > MAX_LOCAL_NORMALIZATION_NODES) step = Math.ceil(step * Math.sqrt(nodesAtStep / MAX_LOCAL_NORMALIZATION_NODES))
+
+	let controls = 0
+	for (const surface of model.scaleSurfaces) if (surface?.controlPoints !== undefined) controls = Math.max(controls, surface.controlPoints.length / 2)
+	for (const surface of model.offsetSurfaces) if (surface?.controlPoints !== undefined) controls = Math.max(controls, surface.controlPoints.length / 2)
+
+	if (controls > 0) {
+		const workAtStep = (pixels / (step * step)) * planes * controls
+		if (workAtStep > MAX_LOCAL_NORMALIZATION_FIELD_WORK) step = Math.ceil(step * Math.sqrt(workAtStep / MAX_LOCAL_NORMALIZATION_FIELD_WORK))
+	}
+
+	return Math.max(1, step)
+}
+
 // Evaluates the model onto its node grid.
 function buildLocalNormalizationFields(model: LocalNormalizationModel): LocalNormalizationFields {
-	const { width, height, evaluationStep } = model
+	const { width, height } = model
 	const planes = model.global.length
 	const hasOffset = model.estimator !== 'scale'
 	const identity = model.fallback === 'identity'
 
+	const evaluationStep = resolveEvaluationStep(model, planes)
 	const columns = width <= 2 ? Math.max(1, width) : clamp(Math.ceil((width - 1) / evaluationStep) + 1, 2, width)
 	const rows = height <= 2 ? Math.max(1, height) : clamp(Math.ceil((height - 1) / evaluationStep) + 1, 2, height)
 	const stepX = columns > 1 ? (width - 1) / (columns - 1) : 1

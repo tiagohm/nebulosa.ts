@@ -830,6 +830,41 @@ describe('local normalization', () => {
 		expect(model.diagnostics[0].fallback).toBe(false)
 	}, 20000)
 
+	test('a spline field on a fine grid does not evaluate every node against every control', () => {
+		// The node step comes from the cell side, so a fine grid drives it toward 1 and the node grid stops
+		// being the cheap intermediate it exists to be. A spline field then evaluates every node against
+		// every control point with a logarithm each: at this size that is over a billion evaluations, and
+		// the bounded materialization in the surface module is not on this route to catch it.
+		const size = 1024
+		const random = rng(4)
+		const reference = new Float64Array(size * size)
+		const current = new Float64Array(size * size)
+
+		for (let y = 0; y < size; y++) {
+			for (let x = 0; x < size; x++) {
+				const i = y * size + x
+				const signal = 0.1 + 0.05 * (x / size) + 0.06 * Math.sin(x / 120) * Math.cos(y / 110) + 0.01 * (random() - 0.5)
+				reference[i] = signal
+				current[i] = (signal - 0.01) / 1.2
+			}
+		}
+
+		const resolved = resolveLocalNormalizationOptions({ gridSize: 96, surfaceModel: 'thinPlateSpline', smoothing: 0.1, minSamplesPerCell: 16 })
+		const model = fitLocalNormalizationRaw(reference, current, size, size, 1, 'per-channel', undefined, resolved)
+
+		// The cap engaged, so a node grid at the model's own step would be the expensive case.
+		expect(model.offsetSurfaces[0]!.controlPoints!.length / 2).toBe(1024)
+		expect(model.evaluationStep).toBe(1)
+
+		const started = performance.now()
+		applyLocalNormalizationInPlace(current, undefined, model)
+		const elapsed = performance.now() - started
+
+		// Unbounded this takes about 28 seconds; the widened step brings it under two.
+		expect(elapsed).toBeLessThan(12000)
+		for (let i = 0; i < current.length; i += 7919) expect(Number.isFinite(current[i])).toBe(true)
+	}, 60000)
+
 	test('an extreme gridSize is scaled back to a tractable cell count', () => {
 		// One cell per pixel is not a usable ceiling on a real frame: at this gridSize the grid would ask
 		// for width*height cells, whose per-plane state alone runs to gigabytes on a large image. This
