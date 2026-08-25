@@ -1413,6 +1413,33 @@ describe('local normalization', () => {
 		expect(model.diagnostics[0].fallback).toBe(false)
 		expect(model.diagnostics[0].acceptedCells).toBe(model.diagnostics[0].candidateCells)
 	})
+
+	test('dense retries recover stride sixteen cells beyond fixed residue pairs', () => {
+		const size = 512
+		const reference = referencePlane(21, size, size)
+		const current = inverseTransform(
+			reference,
+			() => 1.2,
+			(x, y) => 0.01 + 0.02 * (x / size) + 0.015 * (y / size),
+			size,
+			size,
+		)
+		const mask = new Uint8Array(size * size)
+		const coarseResidues = new Set([0, 4, 8, 12])
+
+		for (let y = 0; y < size; y++) {
+			for (let x = 0; x < size; x++) {
+				const rx = x & 15
+				const ry = y & 15
+				mask[y * size + x] = (coarseResidues.has(rx) && coarseResidues.has(ry)) || (rx !== 0 && ry === 0) || (rx === 0 && ry !== 0) || (rx !== 0 && rx === ry) ? 0 : 1
+			}
+		}
+
+		const model = fitLocalNormalizationRaw(reference, current, size, size, 1, 'per-channel', mask, resolveLocalNormalizationOptions({ gridSize: 4, maxSamplesPerCell: 64, minSamplesPerCell: 64, minValidFraction: 0.5 }))
+
+		expect(model.diagnostics[0].fallback).toBe(false)
+		expect(model.diagnostics[0].acceptedCells).toBe(model.diagnostics[0].candidateCells)
+	})
 })
 
 describe('color handling', () => {

@@ -324,6 +324,10 @@ const LOCAL_NORMALIZATION_SAMPLING_OVERLAP = 2
 // adversarial masks from turning every rejected cell into an unbounded dense scan.
 const MAX_LOCAL_NORMALIZATION_CELL_PHASES = 64
 
+// Maximum dense-retry visits relative to the per-cell estimator reservoir. This keeps the fallback that
+// escapes adversarial residue masks bounded even when a box is much larger than the useful sample count.
+const LOCAL_NORMALIZATION_DENSE_RETRY_FACTOR = 16
+
 // Ceiling on spline field work, as nodes times control points summed over planes. A spline evaluates
 // every node against every control with a logarithm each, so the node count alone does not bound it.
 // Kept well below the materialization budget in `surface.ts` because this runs per frame in a stack,
@@ -802,6 +806,29 @@ function resolveCellStride(boxW: number, boxH: number, maxSamples: number) {
 	return { strideX, strideY, capacity: columns * rows }
 }
 
+// Greatest common divisor for positive integer scan lengths.
+function integerGcd(a: number, b: number) {
+	while (b !== 0) {
+		const r = a % b
+		a = b
+		b = r
+	}
+	return a
+}
+
+// A row-major step coprime to `count`, so a bounded retry walks a deterministic permutation prefix
+// instead of falling onto one residue class of a wide box.
+function coprimeSamplingStep(count: number, target: number) {
+	if (count <= 1) return 1
+	let step = Math.max(1, Math.floor(count / target))
+	if (step >= count) step = count - 1
+	while (integerGcd(step, count) !== 1) {
+		step++
+		if (step >= count) step = 1
+	}
+	return step
+}
+
 // Adds one unique sparse-scan phase residue in [0, stride). Returns the updated count.
 function addCellPhaseOffset(offsets: Int32Array, count: number, stride: number, offset: number) {
 	const bounded = clamp(offset, 0, Math.max(0, stride - 1))
@@ -1212,6 +1239,80 @@ export function fitLocalNormalizationRaw(referenceRaw: ImageRawType, currentRaw:
 
 				pendingCount = remaining
 				if (pendingCount === 0) break
+			}
+
+			if (pendingCount > 0 && strideX * strideY > phases) {
+				const denseW = bx1 - bx0 + 1
+				const denseH = by1 - by0 + 1
+				const densePixels = denseW * denseH
+				const validFractionBudget = minValidFraction > 0 ? Math.ceil(minSamplesPerCell / minValidFraction) : minSamplesPerCell
+				const denseBudget = Math.min(densePixels, Math.max(capacity, Math.min(capacity * LOCAL_NORMALIZATION_DENSE_RETRY_FACTOR, validFractionBudget)))
+				const denseSide = Math.max(1, Math.floor(Math.sqrt(denseBudget)))
+				const denseStepX = coprimeSamplingStep(denseW, denseSide)
+				const denseStepY = coprimeSamplingStep(denseH, denseSide + 3)
+				const denseStart = (((r + 1) * 73856093 + (c + 1) * 19349663) >>> 0) % densePixels
+				const denseStartX = denseStart % denseW
+				const denseStartY = Math.floor(denseStart / denseW)
+				let denseVisited = 0
+
+				for (let i = 0; i < pendingCount; i++) {
+					const plane = pending[i]
+					counts[plane] = 0
+					validPairs[plane] = 0
+					sumX[plane] = 0
+					sumY[plane] = 0
+					visited[plane] = 0
+				}
+
+				for (let sample = 0; sample < denseBudget; sample++) {
+					const x = bx0 + ((denseStartX + sample * denseStepX) % denseW)
+					const y = by0 + ((denseStartY + sample * denseStepY + Math.floor((sample * sample) / denseW)) % denseH)
+					denseVisited++
+
+					const pixel = y * width + x
+					if (valid !== undefined && valid[pixel] === 0) continue
+					const base = pixel * channels
+
+					if (luminance) {
+						const cv = red * currentRaw[base] + green * currentRaw[base + 1] + blue * currentRaw[base + 2]
+						const rv = red * referenceRaw[base] + green * referenceRaw[base + 1] + blue * referenceRaw[base + 2]
+						if (!Number.isFinite(cv) || !Number.isFinite(rv)) continue
+						validPairs[0]++
+
+						const count = counts[0]
+						if (count < capacity) {
+							counts[0] = count + 1
+							curBuf[count] = cv
+							refBuf[count] = rv
+							sumX[0] += x
+							sumY[0] += y
+						}
+					} else {
+						for (let i = 0; i < pendingCount; i++) {
+							const plane = pending[i]
+							const cv = currentRaw[base + plane]
+							const rv = referenceRaw[base + plane]
+							if (!Number.isFinite(cv) || !Number.isFinite(rv)) continue
+							validPairs[plane]++
+
+							const count = counts[plane]
+							if (count < capacity) {
+								const at = plane * capacity + count
+								counts[plane] = count + 1
+								curBuf[at] = cv
+								refBuf[at] = rv
+								sumX[plane] += x
+								sumY[plane] += y
+							}
+						}
+					}
+				}
+
+				for (let i = 0; i < pendingCount; i++) {
+					const plane = pending[i]
+					visited[plane] = denseVisited
+					if (validPairs[plane] > 0) observedValidPairs[plane] = 1
+				}
 			}
 
 			const cellIndex = r * columns + c
