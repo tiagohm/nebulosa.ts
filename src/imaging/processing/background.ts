@@ -558,17 +558,9 @@ function fitChannelSurface(raw: ImageRawType, width: number, height: number, cha
 		coefficients = tps.coefficients
 		controlPoints = tps.controlPoints
 
-		// An exact (interpolating) spline only passes through its control points. When the cap dropped
-		// some active samples, mark those as rejected so the reported accepted set matches the interpolated
-		// set: otherwise evaluateBackgroundModel would treat the model as exact while accepted-but-dropped
-		// samples fail to reproduce their medians. A genuine smoothing spline interpolates nothing, so its
-		// dropped samples legitimately stay accepted and still inform the residual diagnostics below.
-		if (indices !== undefined && smoothing <= TPS_EXACT_SMOOTHING_MAX) {
-			const kept = new Uint8Array(set.count)
-			for (const i of indices) kept[i] = 1
-			for (let i = 0; i < set.count; i++) if (kept[i] === 0) set.active[i] = 0
-		}
-
+		// Residuals are measured over every sample that survived the dispersion and flat-top rejections,
+		// before the control cap is accounted for. A capped-out sample is still a real box median, and its
+		// deviation is what makes the residual a useful quality indicator for a smoothing spline.
 		const k = controlPoints.length / 2
 		let count = 0
 		for (let i = 0; i < set.count; i++) {
@@ -576,6 +568,16 @@ function fitChannelSurface(raw: ImageRawType, width: number, height: number, cha
 			residuals[count++] = set.value[i] - evaluateThinPlateSplineAt(coefficients, controlPoints, k, set.u[i], set.v[i])
 		}
 		residualDispersion = computeResidualDispersion(residuals, residualScratch, count)
+
+		// A sample the cap dropped did not feed the solve, so it is reported rejected whatever the
+		// smoothing. For an exact spline this also keeps the accepted set equal to the interpolated set,
+		// without which evaluateBackgroundModel would treat the model as exact while accepted-but-dropped
+		// samples failed to reproduce their medians.
+		if (indices !== undefined) {
+			const kept = new Uint8Array(set.count)
+			for (const i of indices) kept[i] = 1
+			for (let i = 0; i < set.count; i++) if (kept[i] === 0) set.active[i] = 0
+		}
 	} else {
 		// Rejection is asymmetric: the sky background is the lower envelope of the data, so samples above
 		// the surface (contaminating structure) are rejected with a tight sigma while samples below it

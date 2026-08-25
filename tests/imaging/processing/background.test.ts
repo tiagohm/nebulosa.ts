@@ -1079,9 +1079,9 @@ test('thin-plate spline extraction flattens a complex gradient', () => {
 })
 
 test('caps thin-plate spline control points on dense grids', () => {
-	// A dense grid produces far more accepted samples than the TPS control-point cap (1024). The fit
+	// A dense grid produces far more surviving samples than the TPS control-point cap (1024). The fit
 	// must subsample the control points to stay tractable (the dense solve is O(k^3)) while still
-	// reporting every accepted sample and following the background. The default grid stays under the cap.
+	// following the background. The default grid stays under the cap.
 	const width = 400
 	const height = 400
 	const bg = (x: number, y: number) => 0.3 + 0.15 * Math.sin(3 * (x / width)) * Math.cos(3 * (y / height)) + 0.1 * (x / width)
@@ -1089,9 +1089,16 @@ test('caps thin-plate spline control points on dense grids', () => {
 
 	const dense = fitBackgroundSurface(image, { model: 'thinPlateSpline', gridSize: 48, smoothing: 0.05 })
 	const controlPoints = dense.surfaces[0].controlPoints!.length / 2
-	// Far more samples survive than control points are kept, and the kept set honors the cap.
-	expect(dense.surfaces[0].acceptedSamples).toBeGreaterThan(1024)
+	// The cap engaged, and acceptance follows the solve: a sample the cap dropped did not feed it, so it
+	// is reported rejected whatever the smoothing.
 	expect(controlPoints).toBeLessThanOrEqual(1024)
+	expect(dense.surfaces[0].acceptedSamples).toBe(controlPoints)
+	expect(dense.surfaces[0].rejectedSamples).toBeGreaterThan(0)
+	expect(dense.surfaces[0].samples.filter((sample) => sample.accepted)).toHaveLength(controlPoints)
+
+	// The residual still measures the fit against the samples the cap dropped, so it stays a meaningful
+	// quality indicator rather than collapsing onto the control points alone.
+	expect(dense.surfaces[0].residual).toBeGreaterThan(0)
 
 	// The capped spline still tracks the background.
 	const background = evaluateBackgroundModel(dense, image).raw
