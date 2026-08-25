@@ -1368,3 +1368,31 @@ test('an extreme gridSize on a fully excluded frame does not exhaust memory', ()
 	expect(model.surfaces[0].samples.length).toBeLessThanOrEqual(1024 * 1024)
 	expect(model.surfaces[0].samples.length).toBeLessThan(width * height)
 }, 20000)
+
+test('a smoothed background spline keeps coincident sample boxes', () => {
+	// On a small dense grid the edge boxes clamp inward to the same window, so several boxes share one
+	// (u, v). A regularized spline solves those coincident observations and averages them; coalescing
+	// them instead keeps whichever box was reached first, which is collection order deciding the fit.
+	const width = 10
+	const height = 10
+	const bg = (x: number, y: number) => 0.1 + 0.4 * (x / (width - 1)) + 0.3 * (y / (height - 1))
+	const image = makeImage(width, height, 1, (x, y) => bg(x, y))
+
+	const smoothed = fitBackgroundSurface(image, { model: 'thinPlateSpline', gridSize: 10, smoothing: 0.05 })
+	const exact = fitBackgroundSurface(image, { model: 'thinPlateSpline', gridSize: 10, smoothing: 0 })
+
+	// The regularized fit keeps every clean sample as a control point; the interpolating one still has to
+	// coalesce them or its system is singular.
+	expect(smoothed.surfaces[0].controlPoints!.length / 2).toBe(smoothed.surfaces[0].acceptedSamples)
+	expect(smoothed.surfaces[0].rejectedSamples).toBe(0)
+	expect(exact.surfaces[0].rejectedSamples).toBeGreaterThan(0)
+	expect(smoothed.surfaces[0].acceptedSamples).toBeGreaterThan(exact.surfaces[0].acceptedSamples)
+
+	// And it still follows the gradient it was fitted to.
+	const background = evaluateBackgroundModel(smoothed, image).raw
+	let maxError = 0
+	for (let y = 0; y < height; y++) {
+		for (let x = 0; x < width; x++) maxError = Math.max(maxError, Math.abs(background[y * width + x] - bg(x, y)))
+	}
+	expect(maxError).toBeLessThan(0.05)
+})

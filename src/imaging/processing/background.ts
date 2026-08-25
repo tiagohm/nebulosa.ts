@@ -536,9 +536,14 @@ function fitChannelSurface(raw: ImageRawType, width: number, height: number, cha
 		// the correction.
 		assertTpsTwoDimensionalCoverage(set)
 
-		// Drop duplicate control-point coordinates before fitting: they make the (unregularized) spline
-		// system singular. Cheap no-op when boxes do not overlap (large images / coarse grids).
-		deduplicateSurfaceSamples(set)
+		// Drop duplicate control-point coordinates only for an interpolating spline, where two identical
+		// rows make the system singular because the zero diagonal cannot break the tie. Once the diagonal
+		// carries `smoothing / weight` the system solves coincident points and averages them, which is what
+		// repeated observations of one location should do. Coalescing them there instead keeps whichever
+		// overlapping box happened to be reached first, so a mask that gives two coincident boxes different
+		// medians would decide the background by collection order. Cheap no-op when boxes do not overlap
+		// (large images / coarse grids).
+		if (smoothing <= TPS_EXACT_SMOOTHING_MAX) deduplicateSurfaceSamples(set)
 
 		// The thin-plate spline exists to model smooth localized structure such as a light-pollution
 		// dome. The polynomial residual rejection below must NOT run for it: a low-degree polynomial (and
