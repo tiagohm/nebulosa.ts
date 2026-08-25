@@ -86,7 +86,8 @@ export interface SurfaceFitOptions {
 	// accepted samples.
 	readonly degree?: number
 	// Thin-plate spline regularization added to the system diagonal, scaled by each sample's inverse
-	// weight. 0 interpolates every sample exactly. Ignored by the polynomial model.
+	// weight. Positive values smooth the fit; 0 interpolates every sample exactly. Ignored by the
+	// polynomial model.
 	readonly smoothing?: number
 	// Residual rejection settings. Applies to the polynomial model only.
 	readonly rejection?: SurfaceRejectionOptions
@@ -1329,13 +1330,13 @@ export function fitScalarSurface(samples: readonly SurfaceSample[], width: numbe
 		if (activeSurfaceSampleCount(set) < MIN_CONTROL_POINTS) return { ok: false, reason: 'too-few-samples' }
 		if (!hasSurfaceTwoDimensionalCoverage(set)) return { ok: false, reason: 'degenerate-layout' }
 
-		// Coincident samples are dropped only for an interpolating spline, where two identical rows make
-		// the system singular because the zero diagonal cannot break the tie. A smoothing spline adds
-		// `smoothing / weight` to each diagonal entry, so coincident points are perfectly solvable and
-		// keeping them is what lets the fit average repeated measurements at one location. Dropping all
-		// but the first would instead make the result depend on input order: four zero-valued corners plus
+		// Coincident samples are dropped only when there is no positive smoothing, where two identical rows
+		// make the system singular because the zero diagonal cannot break the tie. Any positive smoothing
+		// adds `smoothing / weight` to each diagonal entry, so coincident points are perfectly solvable and
+		// keeping them is what lets the fit average repeated measurements at one location. Dropping all but
+		// the first would instead make the result depend on input order: four zero-valued corners plus
 		// centre samples of 0 and 10 fit a centre of 0 in one order and 9.55 in the other.
-		if (smoothing <= TPS_EXACT_SMOOTHING_MAX) {
+		if (smoothing <= 0) {
 			deduplicateSurfaceSamples(set)
 			if (!hasSurfaceTwoDimensionalCoverage(set)) return { ok: false, reason: 'degenerate-layout' }
 		}

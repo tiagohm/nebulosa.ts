@@ -265,9 +265,10 @@ describe('thin-plate spline', () => {
 		samples.push({ ...samples[7] })
 
 		expect(fitOrThrow(samples, 64, 64, { model: 'thinPlateSpline', smoothing: 0.1 }).rejectedSamples).toBe(0)
+		expect(fitOrThrow(samples, 64, 64, { model: 'thinPlateSpline', smoothing: 1e-6 }).rejectedSamples).toBe(0)
 
 		// Dropping all but the first would make the fit depend on which duplicate came first.
-		function centerOf(first: number, second: number) {
+		function centerOf(smoothing: number, first: number, second: number) {
 			const corners: SurfaceSample[] = [
 				{ x: 0, y: 0, value: 0 },
 				{ x: 63, y: 0, value: 0 },
@@ -276,14 +277,19 @@ describe('thin-plate spline', () => {
 				{ x: 32, y: 32, value: first },
 				{ x: 32, y: 32, value: second },
 			]
-			return createScalarSurfacePointEvaluator(fitOrThrow(corners, 64, 64, { model: 'thinPlateSpline', smoothing: 0.1 })).at(32, 32)
+			return createScalarSurfacePointEvaluator(fitOrThrow(corners, 64, 64, { model: 'thinPlateSpline', smoothing })).at(32, 32)
 		}
 
-		const forward = centerOf(0, 10)
-		expect(centerOf(10, 0)).toBeCloseTo(forward, 9)
+		const forward = centerOf(0.1, 0, 10)
+		expect(centerOf(0.1, 10, 0)).toBeCloseTo(forward, 9)
 		// The two observations are averaged, so the fit sits between them rather than on either.
 		expect(forward).toBeGreaterThan(1)
 		expect(forward).toBeLessThan(9)
+
+		const nearExact = centerOf(1e-6, 0, 10)
+		expect(centerOf(1e-6, 10, 0)).toBeCloseTo(nearExact, 9)
+		expect(nearExact).toBeGreaterThan(1)
+		expect(nearExact).toBeLessThan(9)
 	})
 
 	test('control points are capped and the dropped samples are reported', () => {
