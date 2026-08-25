@@ -232,7 +232,7 @@ export interface SurfaceSampleSet {
 	readonly v: Float64Array
 	// Sampled scalar value.
 	readonly value: Float64Array
-	// Least-squares weight in (0, 1].
+	// Least-squares weight. Input samples use (0, 1]; aggregate fit samples may carry summed weight.
 	readonly weight: Float64Array
 	// 1 while the sample still feeds the fit, 0 once a pass rejects it.
 	readonly active: Uint8Array
@@ -583,17 +583,51 @@ function containsIndex(chosen: Uint32Array, n: number, value: number) {
 	return false
 }
 
-// Keeps at most `maxSamples` active samples in a spatially distributed representative set. Dropped
-// samples stay in the diagnostic set but no longer feed the fit, matching the accepted-sample semantics
-// used by capped spline controls.
+// Keeps at most `maxSamples` active samples by aggregating each spatial bucket into one weighted
+// observation. Dropped samples stay in the diagnostic set but their multiplicity still feeds the fit
+// through the bucket's summed weight and weighted mean value.
 function capActiveSurfaceSamples(set: SurfaceSampleSet, maxSamples: number) {
 	if (activeSurfaceSampleCount(set) <= maxSamples) return
-	const indices = subsampleSurfaceControlPoints(set, maxSamples)
-	if (indices === undefined) return
+	const g = Math.max(1, Math.floor(Math.sqrt(maxSamples)))
+	const buckets = g * g
+	const representative = new Int32Array(buckets).fill(-1)
+	const sumX = new Float64Array(buckets)
+	const sumY = new Float64Array(buckets)
+	const sumU = new Float64Array(buckets)
+	const sumV = new Float64Array(buckets)
+	const sumValue = new Float64Array(buckets)
+	const sumWeight = new Float64Array(buckets)
 
-	const kept = new Uint8Array(set.count)
-	for (const i of indices) kept[i] = 1
-	for (let i = 0; i < set.count; i++) if (set.active[i] !== 0 && kept[i] === 0) set.active[i] = 0
+	for (let i = 0; i < set.count; i++) {
+		if (set.active[i] === 0) continue
+		const bu = Math.min(g - 1, Math.floor(((set.u[i] + 1) / 2) * g))
+		const bv = Math.min(g - 1, Math.floor(((set.v[i] + 1) / 2) * g))
+		const bucket = bv * g + bu
+		const weight = set.weight[i]
+
+		if (representative[bucket] < 0) representative[bucket] = i
+		sumWeight[bucket] += weight
+		sumX[bucket] += weight * set.x[i]
+		sumY[bucket] += weight * set.y[i]
+		sumU[bucket] += weight * set.u[i]
+		sumV[bucket] += weight * set.v[i]
+		sumValue[bucket] += weight * set.value[i]
+		set.active[i] = 0
+	}
+
+	for (let bucket = 0; bucket < buckets; bucket++) {
+		const index = representative[bucket]
+		if (index < 0) continue
+		const weight = sumWeight[bucket]
+		const inv = 1 / weight
+		set.x[index] = sumX[bucket] * inv
+		set.y[index] = sumY[bucket] * inv
+		set.u[index] = sumU[bucket] * inv
+		set.v[index] = sumV[bucket] * inv
+		set.value[index] = sumValue[bucket] * inv
+		set.weight[index] = weight
+		set.active[index] = 1
+	}
 }
 
 // Fits a 2D Chebyshev surface to the active samples by weighted least squares (QR). Returns the

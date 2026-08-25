@@ -129,6 +129,29 @@ describe('polynomial fit', () => {
 		}
 	})
 
+	test('a capped polynomial fit preserves coincident weighted observations', () => {
+		const size = 182
+		const makeSamples = (reverse: boolean) => {
+			const samples: SurfaceSample[] = []
+			for (let y = 0; y < size; y++) {
+				for (let x = 0; x < size; x++) {
+					samples.push({ x, y, value: reverse ? 1 : 0 }, { x, y, value: reverse ? 0 : 1 })
+				}
+			}
+			return samples
+		}
+
+		const lowFirst = fitOrThrow(makeSamples(false), size, size, { degree: 1 })
+		const highFirst = fitOrThrow(makeSamples(true), size, size, { degree: 1 })
+		const lowPoint = createScalarSurfacePointEvaluator(lowFirst)
+		const highPoint = createScalarSurfacePointEvaluator(highFirst)
+
+		expect(lowFirst.acceptedSamples).toBeLessThanOrEqual(SURFACE_MAX_POLYNOMIAL_SAMPLES)
+		expect(highFirst.acceptedSamples).toBe(lowFirst.acceptedSamples)
+		expect(lowPoint.at(91, 91)).toBeCloseTo(0.5, 12)
+		expect(highPoint.at(91, 91)).toBeCloseTo(0.5, 12)
+	})
+
 	test('an absurd degree is clamped instead of sizing the basis by it', () => {
 		// The basis tables are (d+1)(d+2)/2 entries, so an unclamped degree sizes two typed arrays by it
 		// before the fit could report anything - `degree: 100000` asks for about five billion terms.
