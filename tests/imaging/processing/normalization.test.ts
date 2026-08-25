@@ -994,6 +994,32 @@ describe('local normalization', () => {
 			expect(support.rows).toBe(gridSize)
 		}
 	})
+
+	test('a mask aligned to the sampling lattice is recovered by the alternate phase', () => {
+		const reference = referencePlane()
+		const current = inverseTransform(
+			reference,
+			() => 1.2,
+			(x, y) => 0.01 + 0.02 * (x / WIDTH) + 0.015 * (y / HEIGHT),
+		)
+
+		// 24x24 cells strided down to 12x12 pairs, so the scan reads only the even pixels of each box.
+		// Invalidating exactly those leaves three quarters of the frame usable and every sampled pixel
+		// masked.
+		const mask = new Uint8Array(WIDTH * HEIGHT).fill(1)
+		for (let y = 0; y < HEIGHT; y += 2) {
+			for (let x = 0; x < WIDTH; x += 2) mask[y * WIDTH + x] = 0
+		}
+
+		const model = fitMono(reference, current, { maxSamplesPerCell: 144 }, mask)
+
+		expect(model.diagnostics[0].fallback).toBe(false)
+		expect(model.diagnostics[0].acceptedCells).toBe(model.diagnostics[0].candidateCells)
+
+		const global = applyAnchor(current, model.global[0].scale, model.global[0].offset)
+		applyLocalNormalizationInPlace(current, mask, model)
+		expect(meanAbsoluteError(current, reference, mask)).toBeLessThan(meanAbsoluteError(global, reference, mask) / 3)
+	})
 })
 
 describe('color handling', () => {

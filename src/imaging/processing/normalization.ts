@@ -897,6 +897,16 @@ export function fitLocalNormalizationRaw(referenceRaw: ImageRawType, currentRaw:
 	// pairs against a budget of 1024, sizing every buffer and the whole pixel scan accordingly. For a
 	// square box the split reproduces the single stride exactly.
 	const { strideX, strideY, capacity } = resolveCellStride(grid.maxBoxW, grid.maxBoxH, maxSamplesPerCell)
+	// Offset of the second sampling phase inside a cell. The strided scan reads one pixel out of
+	// `strideX * strideY`, so a validity mask aligned to that same lattice can hide every valid pixel from
+	// a scan anchored at the box origin: a frame three quarters valid then reports no overlap at all.
+	// A cell that collected nothing is rescanned from the half-stride phase, which costs one extra pass
+	// over exactly the cells that have no result to lose, unlike a dense rescan that would cost the full
+	// box area on every genuinely empty cell. Two phases do not defeat a mask built against both, but they
+	// cover the lattice alignment that makes this reachable in practice.
+	const phaseX = strideX >> 1
+	const phaseY = strideY >> 1
+	const phases = phaseX > 0 || phaseY > 0 ? 2 : 1
 
 	const refBuf = new Float64Array(planes * capacity)
 	const curBuf = new Float64Array(planes * capacity)
@@ -956,51 +966,66 @@ export function fitLocalNormalizationRaw(referenceRaw: ImageRawType, currentRaw:
 			const bx0 = grid.x0[c]
 			const bx1 = grid.x1[c]
 
-			// Counted per plane. A pixel non-finite in one channel says nothing about the others, and the
-			// global solve already treats planes independently, so letting one damaged channel drop the
-			// pixel everywhere would lose the spatial correction on the healthy ones too. Each plane
-			// therefore keeps its own pair count, its own buffer prefix, and its own sample centroid.
-			counts.fill(0)
-			sumX.fill(0)
-			sumY.fill(0)
 			let visited = 0
+			let collected = false
 
-			for (let y = by0; y <= by1; y += strideY) {
-				const rowBase = y * width
+			for (let phase = 0; phase < phases && !collected; phase++) {
+				// Counted per plane. A pixel non-finite in one channel says nothing about the others, and the
+				// global solve already treats planes independently, so letting one damaged channel drop the
+				// pixel everywhere would lose the spatial correction on the healthy ones too. Each plane
+				// therefore keeps its own pair count, its own buffer prefix, and its own sample centroid.
+				counts.fill(0)
+				sumX.fill(0)
+				sumY.fill(0)
+				visited = 0
 
-				for (let x = bx0; x <= bx1; x += strideX) {
-					visited++
-					const pixel = rowBase + x
-					if (valid !== undefined && valid[pixel] === 0) continue
-					const base = pixel * channels
+				const originX = phase === 0 ? bx0 : Math.min(bx0 + phaseX, bx1)
+				const originY = phase === 0 ? by0 : Math.min(by0 + phaseY, by1)
 
-					if (luminance) {
-						const cv = red * currentRaw[base] + green * currentRaw[base + 1] + blue * currentRaw[base + 2]
-						const rv = red * referenceRaw[base] + green * referenceRaw[base + 1] + blue * referenceRaw[base + 2]
-						if (!Number.isFinite(cv) || !Number.isFinite(rv)) continue
-						const at = counts[0]++
-						curBuf[at] = cv
-						refBuf[at] = rv
-						sumX[0] += x
-						sumY[0] += y
-					} else {
-						for (let plane = 0; plane < planes; plane++) {
-							const cv = currentRaw[base + plane]
-							const rv = referenceRaw[base + plane]
+				for (let y = originY; y <= by1; y += strideY) {
+					const rowBase = y * width
+
+					for (let x = originX; x <= bx1; x += strideX) {
+						visited++
+						const pixel = rowBase + x
+						if (valid !== undefined && valid[pixel] === 0) continue
+						const base = pixel * channels
+
+						if (luminance) {
+							const cv = red * currentRaw[base] + green * currentRaw[base + 1] + blue * currentRaw[base + 2]
+							const rv = red * referenceRaw[base] + green * referenceRaw[base + 1] + blue * referenceRaw[base + 2]
 							if (!Number.isFinite(cv) || !Number.isFinite(rv)) continue
-							const at = plane * capacity + counts[plane]++
+							const at = counts[0]++
 							curBuf[at] = cv
 							refBuf[at] = rv
-							sumX[plane] += x
-							sumY[plane] += y
+							sumX[0] += x
+							sumY[0] += y
+						} else {
+							for (let plane = 0; plane < planes; plane++) {
+								const cv = currentRaw[base + plane]
+								const rv = referenceRaw[base + plane]
+								if (!Number.isFinite(cv) || !Number.isFinite(rv)) continue
+								const at = plane * capacity + counts[plane]++
+								curBuf[at] = cv
+								refBuf[at] = rv
+								sumX[plane] += x
+								sumY[plane] += y
+							}
 						}
+					}
+				}
+
+				for (let plane = 0; plane < planes; plane++) {
+					if (counts[plane] > 0) {
+						collected = true
+						break
 					}
 				}
 			}
 
 			// Recorded before the cell thresholds so the fallback can tell "the frames do not overlap" from
 			// "they overlap but no cell was usable", which are different problems with different fixes.
-			for (let plane = 0; plane < planes; plane++) if (counts[plane] > 0) observedValidPairs = true
+			if (collected) observedValidPairs = true
 
 			if (visited === 0) continue
 
