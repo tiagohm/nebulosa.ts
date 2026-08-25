@@ -16,6 +16,14 @@ function sampleGrid(width: number, height: number, columns: number, rows: number
 	return samples
 }
 
+function rng(seed: number) {
+	let state = seed >>> 0
+	return () => {
+		state = (state * 1664525 + 1013904223) >>> 0
+		return state / 4294967296
+	}
+}
+
 function fitOrThrow(samples: readonly SurfaceSample[], width: number, height: number, options?: SurfaceFitOptions) {
 	const result = fitScalarSurface(samples, width, height, options)
 	if (!result.ok) throw new Error(`unexpected failure: ${result.reason}`)
@@ -514,6 +522,47 @@ describe('evaluation', () => {
 
 		// Far below the documented coarse-grid tolerance, which is a fraction of the local amplitude.
 		expect(worst).toBeLessThan(1e-3)
+	}, 20000)
+
+	test('the coarse grid holds its tolerance between control points, not just at them', () => {
+		// Bilinear interpolation is furthest from the function it interpolates at the centre of a cell, so
+		// a grid verified only at the control points bounds nothing in between. Sweeping random irregular
+		// layouts found one deviating by 1.46% of its amplitude while every control agreed.
+		const size = 301
+		const random = rng(20260101)
+		let worst = 0
+
+		for (let trial = 0; trial < 40; trial++) {
+			const samples: SurfaceSample[] = []
+			for (let i = 0; i < 8; i++) samples.push({ x: Math.round(random() * (size - 1)), y: Math.round(random() * (size - 1)), value: random() })
+
+			const fit = fitScalarSurface(samples, size, size, { model: 'thinPlateSpline', smoothing: 0.01 })
+			if (!fit.ok) continue
+
+			const plane = new Float64Array(size * size)
+			evaluateScalarSurfaceInto(fit.model, plane)
+			const point = createScalarSurfacePointEvaluator(fit.model)
+			const controlPoints = fit.model.controlPoints!
+			const k = controlPoints.length / 2
+
+			// The tolerance is relative to the surface's range over its controls.
+			let low = Infinity
+			let high = -Infinity
+			for (const sample of samples) {
+				const value = point.at(sample.x, sample.y)
+				low = Math.min(low, value)
+				high = Math.max(high, value)
+			}
+			const amplitude = high - low
+			if (!(amplitude > 0) || k < 3) continue
+
+			for (let y = 0; y < size; y += 3) {
+				for (let x = 0; x < size; x += 3) worst = Math.max(worst, Math.abs(plane[y * size + x] - point.at(x, y)) / amplitude)
+			}
+		}
+
+		// The documented coarse-grid tolerance, now a verified property of the materialization.
+		expect(worst).toBeLessThanOrEqual(0.005)
 	}, 20000)
 	test('strided writes match contiguous writes', () => {
 		const model = fitOrThrow(
