@@ -1250,6 +1250,32 @@ describe('local normalization', () => {
 		expect(meanAbsoluteError(current, reference, mask)).toBeLessThan(meanAbsoluteError(global, reference, mask) / 3)
 	})
 
+	test('a full retry buffer still counts later valid pairs toward the valid fraction', () => {
+		const size = 64
+		const reference = referencePlane(12, size, size)
+		const current = inverseTransform(
+			reference,
+			() => 1.2,
+			(x, y) => 0.01 + 0.02 * (x / size) + 0.015 * (y / size),
+			size,
+			size,
+		)
+		const mask = new Uint8Array(size * size)
+
+		for (let y = 0; y < size; y++) {
+			for (let x = 0; x < size; x++) {
+				const lx = x % 16
+				const ly = y % 16
+				mask[y * size + x] = (lx % 2 === 1 && ly % 2 === 1) || (lx % 2 === 0 && ly % 2 === 0 && ly < 8) ? 1 : 0
+			}
+		}
+
+		const model = fitLocalNormalizationRaw(reference, current, size, size, 1, 'per-channel', mask, resolveLocalNormalizationOptions({ gridSize: 4, maxSamplesPerCell: 64, minSamplesPerCell: 64, minValidFraction: 0.7 }))
+
+		expect(model.diagnostics[0].fallback).toBe(false)
+		expect(model.diagnostics[0].acceptedCells).toBe(model.diagnostics[0].candidateCells)
+	})
+
 	test('a mask aligned to the sampling lattice is recovered by the alternate phase', () => {
 		const reference = referencePlane()
 		const current = inverseTransform(

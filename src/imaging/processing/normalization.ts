@@ -994,6 +994,7 @@ export function fitLocalNormalizationRaw(referenceRaw: ImageRawType, currentRaw:
 	// Per-cell scan state, reset for each cell and kept per plane so a damaged channel cannot drop the
 	// pixel for the healthy ones.
 	const counts = new Int32Array(planes)
+	const validPairs = new Int32Array(planes)
 	const sumX = new Float64Array(planes)
 	const sumY = new Float64Array(planes)
 	// Strided pixels the phase that filled each plane walked, which is what its valid fraction is measured
@@ -1057,8 +1058,10 @@ export function fitLocalNormalizationRaw(referenceRaw: ImageRawType, currentRaw:
 			// disjoint positions of the same box, so their union is simply a denser sample of it, and a cell
 			// whose valid pixels are split evenly between the two lattices clears the thresholds on neither
 			// phase alone while the union clears them comfortably. Writes stop at the per-cell capacity the
-			// buffers are sized by, which two full phases would otherwise overrun.
+			// buffers are sized by, which two full phases would otherwise overrun. Valid-pair totals keep
+			// counting after that so a full estimator reservoir cannot make the cell look less valid.
 			counts.fill(0)
+			validPairs.fill(0)
 			sumX.fill(0)
 			sumY.fill(0)
 			visited.fill(0)
@@ -1081,30 +1084,36 @@ export function fitLocalNormalizationRaw(referenceRaw: ImageRawType, currentRaw:
 						const base = pixel * channels
 
 						if (luminance) {
-							const count = counts[0]
-							if (count === capacity) continue
 							const cv = red * currentRaw[base] + green * currentRaw[base + 1] + blue * currentRaw[base + 2]
 							const rv = red * referenceRaw[base] + green * referenceRaw[base + 1] + blue * referenceRaw[base + 2]
 							if (!Number.isFinite(cv) || !Number.isFinite(rv)) continue
-							counts[0] = count + 1
-							curBuf[count] = cv
-							refBuf[count] = rv
-							sumX[0] += x
-							sumY[0] += y
+							validPairs[0]++
+
+							const count = counts[0]
+							if (count < capacity) {
+								counts[0] = count + 1
+								curBuf[count] = cv
+								refBuf[count] = rv
+								sumX[0] += x
+								sumY[0] += y
+							}
 						} else {
 							for (let i = 0; i < pendingCount; i++) {
 								const plane = pending[i]
-								const count = counts[plane]
-								if (count === capacity) continue
 								const cv = currentRaw[base + plane]
 								const rv = referenceRaw[base + plane]
 								if (!Number.isFinite(cv) || !Number.isFinite(rv)) continue
-								const at = plane * capacity + count
-								counts[plane] = count + 1
-								curBuf[at] = cv
-								refBuf[at] = rv
-								sumX[plane] += x
-								sumY[plane] += y
+								validPairs[plane]++
+
+								const count = counts[plane]
+								if (count < capacity) {
+									const at = plane * capacity + count
+									counts[plane] = count + 1
+									curBuf[at] = cv
+									refBuf[at] = rv
+									sumX[plane] += x
+									sumY[plane] += y
+								}
 							}
 						}
 					}
@@ -1117,10 +1126,11 @@ export function fitLocalNormalizationRaw(referenceRaw: ImageRawType, currentRaw:
 				for (let i = 0; i < pendingCount; i++) {
 					const plane = pending[i]
 					const count = counts[plane]
+					const finite = validPairs[plane]
 					const seen = visited[plane] + phaseVisited
 					visited[plane] = seen
-					if (count > 0) observedValidPairs[plane] = 1
-					if (count < minSamplesPerCell || count < minValidFraction * seen) pending[remaining++] = plane
+					if (finite > 0) observedValidPairs[plane] = 1
+					if (count < minSamplesPerCell || finite < minValidFraction * seen) pending[remaining++] = plane
 				}
 
 				pendingCount = remaining
@@ -1132,7 +1142,7 @@ export function fitLocalNormalizationRaw(referenceRaw: ImageRawType, currentRaw:
 			for (let plane = 0; plane < planes; plane++) {
 				const count = counts[plane]
 				if (count < minSamplesPerCell || visited[plane] === 0) continue
-				const validFraction = count / visited[plane]
+				const validFraction = validPairs[plane] / visited[plane]
 				if (validFraction < minValidFraction) continue
 
 				cellX[plane][cellIndex] = sumX[plane] / count
