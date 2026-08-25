@@ -81,8 +81,9 @@ export interface SurfaceRejectionOptions {
 export interface SurfaceFitOptions {
 	// Surface model. Default `polynomial`.
 	readonly model?: SurfaceModelType
-	// Total degree of the polynomial surface (also the affine reference for the spline). Expected 1..6;
-	// needs at least (degree+1)*(degree+2)/2 accepted samples.
+	// Total degree of the polynomial surface (also the affine reference for the spline). Clamped to 1..6,
+	// the range the Chebyshev basis stays well conditioned over; needs at least (degree+1)*(degree+2)/2
+	// accepted samples.
 	readonly degree?: number
 	// Thin-plate spline regularization added to the system diagonal, scaled by each sample's inverse
 	// weight. 0 interpolates every sample exactly. Ignored by the polynomial model.
@@ -174,6 +175,12 @@ export const SURFACE_MAX_CONTROL_POINTS = 1024
 // Control points a thin-plate spline needs before its affine part is determined. Also the floor the
 // control-point subsampling tops up to, so a small cap cannot turn a fittable layout into a failure.
 const MIN_CONTROL_POINTS = 3
+
+// Range the polynomial total degree is clamped to. The lower bound is the smallest surface that is not a
+// constant; the upper one is where the tensor Chebyshev basis stops being usefully conditioned, and it
+// also keeps the (d+1)(d+2)/2 basis tables small enough that sizing them can never be the failure.
+const MIN_SURFACE_DEGREE = 1
+const MAX_SURFACE_DEGREE = 6
 
 // Minimum 2D spread (RMS extent along the least-covered direction, in the normalized [-1, 1] domain)
 // the accepted samples must have for the system to be well-posed. Samples confined to a thin strip
@@ -1249,7 +1256,11 @@ function collectFitSamples(set: SurfaceSampleSet) {
 // validated. Returns a failure reason instead of throwing when the layout cannot support a fit.
 export function fitScalarSurface(samples: readonly SurfaceSample[], width: number, height: number, options: SurfaceFitOptions = {}): SurfaceFitResult {
 	const model = options.model ?? 'polynomial'
-	const degree = options.degree ?? 4
+	// Clamped to the documented range before anything is sized by it. The basis tables are (d+1)(d+2)/2
+	// entries, so a stray `degree: 100000` asks for about five billion terms and two multi-gigabyte typed
+	// arrays before the fit could even report a failure — and the spline path allocates them without ever
+	// reading them.
+	const degree = clamp(Math.trunc(options.degree ?? 4), MIN_SURFACE_DEGREE, MAX_SURFACE_DEGREE)
 	const smoothing = model === 'thinPlateSpline' ? (options.smoothing ?? 0.1) : 0
 	// Clamped to the module's tractability ceiling rather than replacing it: the spline builds a dense
 	// (k+3)x(k+3) matrix and solves it in O(k^3), so an unclamped 4096 would allocate about 134 MB and a

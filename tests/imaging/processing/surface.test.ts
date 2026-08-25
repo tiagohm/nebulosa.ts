@@ -107,6 +107,23 @@ describe('polynomial fit', () => {
 		}
 	})
 
+	test('an absurd degree is clamped instead of sizing the basis by it', () => {
+		// The basis tables are (d+1)(d+2)/2 entries, so an unclamped degree sizes two typed arrays by it
+		// before the fit could report anything - `degree: 100000` asks for about five billion terms.
+		const samples = sampleGrid(64, 64, 10, 10, (x, y) => 0.2 + 0.001 * (x + y))
+
+		const huge = fitOrThrow(samples, 64, 64, { degree: 100_000 })
+		expect(huge.degree).toBe(6)
+		expect(huge.coefficients).toHaveLength(basisTermCount(6))
+
+		const tiny = fitOrThrow(samples, 64, 64, { degree: -5 })
+		expect(tiny.degree).toBe(1)
+
+		// The spline path allocates the same tables without ever reading them, so it must clamp too.
+		const spline = fitOrThrow(samples, 64, 64, { model: 'thinPlateSpline', smoothing: 0.1, degree: 100_000 })
+		expect(spline.degree).toBe(6)
+	})
+
 	test('weights pull the surface toward the reliable samples', () => {
 		const samples: SurfaceSample[] = [
 			...sampleGrid(
