@@ -394,20 +394,31 @@ export function subsampleSurfaceControlPoints(set: SurfaceSampleSet, maxPoints: 
 	if (activeSurfaceSampleCount(set) <= maxPoints) return undefined
 
 	const g = Math.max(1, Math.floor(Math.sqrt(maxPoints)))
-	const seen = new Uint8Array(g * g)
+	// Position in `chosen` already held by each bucket, or -1 while the bucket is empty.
+	const slot = new Int32Array(g * g).fill(-1)
 	const limit = Math.max(maxPoints, MIN_CONTROL_POINTS)
 	const chosen = new Uint32Array(Math.max(g * g, MIN_CONTROL_POINTS))
 	let n = 0
 
+	// Each bucket contributes its most reliable sample, not whichever one happened to be listed first.
+	// The fit weights samples, so keeping an arbitrary representative lets input order override that: two
+	// observations at one location, one at weight 1e-6 and one at weight 1, moved the capped surface by a
+	// factor of 50 depending on their order, while the uncapped weighted fit is the same either way.
+	// Ties keep the earlier sample, so the selection stays deterministic, and the emission order is the
+	// order buckets were first reached, which keeps the spatial spread the sweep exists to produce.
 	for (let i = 0; i < set.count; i++) {
 		if (set.active[i] === 0) continue
 		// Map u, v in [-1, 1] to a bucket in [0, g); clamp guards the exact +1 edge.
 		const bu = Math.min(g - 1, Math.floor(((set.u[i] + 1) / 2) * g))
 		const bv = Math.min(g - 1, Math.floor(((set.v[i] + 1) / 2) * g))
 		const b = bv * g + bu
-		if (seen[b]) continue
-		seen[b] = 1
-		chosen[n++] = i
+
+		if (slot[b] < 0) {
+			slot[b] = n
+			chosen[n++] = i
+		} else if (set.weight[i] > set.weight[chosen[slot[b]]]) {
+			chosen[slot[b]] = i
+		}
 	}
 
 	// The bucket sweep spreads the selection over the sampled region, but nothing about it constrains the

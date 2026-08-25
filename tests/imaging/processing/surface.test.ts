@@ -349,6 +349,34 @@ describe('thin-plate spline', () => {
 		expect(maxArea).toBeGreaterThan(0)
 	})
 
+	test('capping keeps the most reliable sample in each bucket', () => {
+		// Two observations at one location, one nearly worthless and one fully reliable. The fit weights
+		// its samples, so which of the two survives the cap must not depend on the order they were listed.
+		function centerOf(reliableFirst: boolean) {
+			const samples: SurfaceSample[] = []
+			for (let r = 0; r < 4; r++) {
+				for (let c = 0; c < 4; c++) {
+					const x = 4 + c * 18
+					const y = 4 + r * 18
+					if (r === 1 && c === 1) {
+						const reliable = { x, y, value: 0, weight: 1 }
+						const noisy = { x, y, value: 1, weight: 1e-6 }
+						samples.push(reliableFirst ? reliable : noisy, reliableFirst ? noisy : reliable)
+					} else {
+						samples.push({ x, y, value: 0, weight: 1 })
+					}
+				}
+			}
+
+			return createScalarSurfacePointEvaluator(fitOrThrow(samples, 64, 64, { model: 'thinPlateSpline', smoothing: 0.01, maxControlPoints: 9 })).at(22, 22)
+		}
+
+		const forward = centerOf(true)
+		expect(centerOf(false)).toBeCloseTo(forward, 12)
+		// The reliable observation is the one that survives, so the surface follows its value.
+		expect(Math.abs(forward)).toBeLessThan(1e-5)
+	})
+
 	test('a capped selection always spans a triangle, over many layouts and caps', () => {
 		// The class of bugs this closes came from repairing the selection only when it looked degenerate.
 		// The spanning triple is now merged in unconditionally, so the property is checked broadly rather
