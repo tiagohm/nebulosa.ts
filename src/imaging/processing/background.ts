@@ -52,8 +52,9 @@ export type BackgroundColorMode = 'perChannel' | 'luminance'
 // `DEFAULT_BACKGROUND_EXTRACTION_OPTIONS`.
 export interface BackgroundExtractionOptions {
 	// Number of sample boxes along the longer image axis; the shorter axis scales to keep boxes
-	// roughly square. Higher values capture finer gradients but need more clean sky. Clamped to 2..1024,
-	// the upper bound being what keeps the reserved sample state tractable on a large frame.
+	// roughly square. Higher values capture finer gradients but need more clean sky. Clamped to 2..128,
+	// which bounds the largest square grid to 16,384 samples per channel so the fit matrices and sample
+	// diagnostics stay tractable on large frames.
 	readonly gridSize?: number
 	// Side length in pixels of each square sample box. When 0 (default) it is derived from the grid
 	// cell size (half a cell), which trades statistics for lower contamination from nearby structure.
@@ -225,12 +226,12 @@ const DIVIDE_EPSILON = 1e-6
 const MIN_BOX_SAMPLES = 4
 
 // Upper bound on cells per axis. `collectSamples` reserves its sample arrays for every CANDIDATE cell,
-// before masking and finite-pixel filtering decide how many survive, so the grid dimensions alone fix
-// the allocation. Bounding the grid at one cell per pixel is no bound at all on a large frame: an
-// 8192x8192 image at `gridSize: 8192` would reserve about 3.6 GiB of sample state even when an exclusion
-// mask leaves no sample at all. This ceiling caps that state in the low tens of megabytes and sits far
-// above any usable density — the default is 24, and even a very fine grid stays in the low hundreds.
-const MAX_GRID_SIZE = 1024
+// before masking and finite-pixel filtering decide how many survive, and the polynomial path allocates
+// a dense design matrix from every accepted sample. Bounding the grid at one cell per pixel is no bound
+// at all on a large frame: a 1024x1024 image at `gridSize: 1024` would feed one million samples per
+// channel into the fit and diagnostics. This ceiling keeps the square-frame worst case to 16,384
+// samples per channel, far above the default 24x24 grid while still tractable for degree-6 fits.
+const MAX_GRID_SIZE = 128
 
 // Robust center and dispersion of the first `count` values in `buf`. Sorts `buf` in place and uses
 // `dev` as scratch for absolute deviations. Returns the median and the normalized MAD (comparable to

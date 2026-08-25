@@ -1387,9 +1387,18 @@ test('an extreme gridSize on a fully excluded frame does not exhaust memory', ()
 
 	// The same grid without a mask fits, and its cell count honors the ceiling rather than the pixel count.
 	const model = fitBackgroundSurface(image, { gridSize: 1_000_000 })
-	expect(model.surfaces[0].samples.length).toBeLessThanOrEqual(1024 * 1024)
+	expect(model.surfaces[0].samples.length).toBeLessThanOrEqual(128 * 128)
 	expect(model.surfaces[0].samples.length).toBeLessThan(width * height)
 }, 20000)
+
+test('a square RGB degree-six background grid stays under the sample ceiling', () => {
+	const size = 256
+	const image = makeImage(size, size, 3, (x, y, channel) => 0.2 + 0.1 * (x / (size - 1)) + 0.05 * (y / (size - 1)) + 0.01 * channel)
+	const model = fitBackgroundSurface(image, { gridSize: 1024, degree: 6, rejectionIterations: 0 })
+
+	expect(model.surfaces).toHaveLength(3)
+	for (const surface of model.surfaces) expect(surface.samples.length).toBeLessThanOrEqual(128 * 128)
+})
 
 test('a smoothed background spline keeps coincident sample boxes', () => {
 	// On a small dense grid the edge boxes clamp inward to the same window, so several boxes share one
