@@ -942,6 +942,14 @@ export function createScalarSurfacePointEvaluator(model: ScalarSurfaceModel): Sc
 // contract rather than an estimate.
 const TPS_COARSE_TOLERANCE = 0.005
 
+// Kernel evaluations an exact (interpolating) spline may spend materializing a plane before it gives up
+// exactness and takes the verified coarse path. Direct evaluation is O(pixels * controls) with a
+// logarithm per control, and neither factor is bounded by the other: the control cap keeps the SOLVE
+// tractable but says nothing about the plane it is evaluated over. This budget is a few seconds of work,
+// leaves every realistic frame on the exact path, and turns a multi-minute stall on a large one into the
+// same bounded approximation every smoothing spline already gets.
+const MAX_EXACT_TPS_WORK = 5e8
+
 // Starting coarse evaluation step in pixels for a spline with `k` control points. Nodes are spaced a
 // fraction of the mean control-point spacing sqrt(area/k). Returns 1 (evaluate every pixel directly) for
 // small planes or degenerate axes, where coarsening would not pay off.
@@ -1079,7 +1087,13 @@ function evaluateThinPlateSplineInto(model: ScalarSurfaceModel, output: Float64A
 	const sv = domainScale(domain.y0, domain.y1)
 
 	let grid: TpsCoarseGrid | undefined
-	let step = exact ? 1 : tpsCoarseStep(width, height, domain, k)
+	// An exact spline is normally materialized per pixel so it passes through its control points, but that
+	// loop is O(pixels * controls) with nothing bounding the product: a 4096x4096 plane against the 1024
+	// control cap is 17 billion kernel evaluations, logarithm included, which stalls for minutes. Past the
+	// work budget it takes the verified coarse path instead, trading exact interpolation for the same
+	// tolerance every other spline is materialized to.
+	const affordable = width * height * k <= MAX_EXACT_TPS_WORK
+	let step = exact && affordable ? 1 : tpsCoarseStep(width, height, domain, k)
 
 	while (step > 1) {
 		const candidate = buildTpsCoarseGrid(model, su, sv, k, step)

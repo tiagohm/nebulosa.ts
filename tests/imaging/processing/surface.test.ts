@@ -564,6 +564,60 @@ describe('evaluation', () => {
 		// The documented coarse-grid tolerance, now a verified property of the materialization.
 		expect(worst).toBeLessThanOrEqual(0.005)
 	}, 20000)
+
+	test('an exact spline over a large plane stays bounded instead of stalling', () => {
+		// Direct evaluation of an interpolating spline is O(pixels * controls) and neither factor bounds
+		// the other: the control cap keeps the solve tractable but says nothing about the plane it is
+		// evaluated over. At 2048x2048 against 1024 controls that is 4.3 billion kernel evaluations, each
+		// with a logarithm, so the materialization must fall back to the verified coarse path.
+		const size = 2048
+		const cells = 48
+		const field = (x: number, y: number) => 0.3 + 0.15 * Math.sin(3 * (x / size)) * Math.cos(3 * (y / size))
+		const samples = sampleGrid(size, size, cells, cells, field)
+
+		const model = fitOrThrow(samples, size, size, { model: 'thinPlateSpline', smoothing: 0, maxControlPoints: 1024 })
+		expect(model.controlPoints!.length / 2).toBe(1024)
+
+		const plane = new Float64Array(size * size)
+		const started = performance.now()
+		evaluateScalarSurfaceInto(model, plane)
+		const elapsed = performance.now() - started
+
+		// The exact loop would run for minutes here; the coarse path is seconds at worst.
+		expect(elapsed).toBeLessThan(20000)
+
+		// And it still tracks the fitted surface within the materialization's tolerance.
+		const point = createScalarSurfacePointEvaluator(model)
+		let low = Infinity
+		let high = -Infinity
+		for (const sample of samples) {
+			const value = point.at(sample.x, sample.y)
+			low = Math.min(low, value)
+			high = Math.max(high, value)
+		}
+
+		let worst = 0
+		for (let y = 0; y < size; y += 37) {
+			for (let x = 0; x < size; x += 37) worst = Math.max(worst, Math.abs(plane[y * size + x] - point.at(x, y)))
+		}
+		expect(worst).toBeLessThanOrEqual(0.005 * (high - low))
+	}, 60000)
+
+	test('an exact spline under the work budget still interpolates its controls', () => {
+		const size = 200
+		const field = (x: number, y: number) => 0.3 + 0.15 * Math.sin(3 * (x / size)) * Math.cos(3 * (y / size))
+		const samples = sampleGrid(size, size, 10, 10, field)
+		const model = fitOrThrow(samples, size, size, { model: 'thinPlateSpline', smoothing: 0 })
+
+		const plane = new Float64Array(size * size)
+		evaluateScalarSurfaceInto(model, plane)
+
+		for (const sample of samples) {
+			const x = Math.round(sample.x)
+			const y = Math.round(sample.y)
+			expect(plane[y * size + x]).toBeCloseTo(field(x, y), 3)
+		}
+	})
 	test('strided writes match contiguous writes', () => {
 		const model = fitOrThrow(
 			sampleGrid(40, 30, 8, 6, (x, y) => 0.2 + 0.003 * x - 0.001 * y),
