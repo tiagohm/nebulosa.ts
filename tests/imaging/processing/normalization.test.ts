@@ -196,6 +196,31 @@ describe('global normalization', () => {
 		expect(solved[0].scale).toBeLessThan(2.1)
 	})
 
+	test('an underfilled global lattice retries dense usable pairs', () => {
+		const size = 512
+		const pixels = size * size
+		const reference = new Float64Array(pixels)
+		const current = new Float64Array(pixels)
+		const mask = new Uint8Array(pixels).fill(1)
+
+		for (let i = 0; i < pixels; i++) {
+			const value = i / pixels
+			current[i] = value
+			reference[i] = 2 * value + 0.1
+		}
+
+		for (let y = 0; y < size; y += 5) {
+			for (let x = 0; x < size; x += 5) {
+				if (x !== 0 || y !== 0) mask[y * size + x] = 0
+			}
+		}
+
+		const solved = solveGlobalNormalizationPlanes(current, mask, reference, 1, size, size, 'background-scale', 'per-channel')
+
+		expect(solved[0].scale).toBeCloseTo(2, 6)
+		expect(solved[0].offset).toBeCloseTo(0.1, 6)
+	})
+
 	test('a degenerate current span falls back to unit scale', () => {
 		const solution = solveGlobalNormalization([1, 2, 3, 4], [5, 5, 5, 5], 'scale')
 		expect(solution.scale).toBeCloseTo(0.5, 12)

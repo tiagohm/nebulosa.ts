@@ -280,6 +280,10 @@ export const DEFAULT_LOCAL_NORMALIZATION_OPTIONS: Required<LocalNormalizationOpt
 // Maximum pixels sampled when estimating the global normalization scale/offset.
 export const NORMALIZATION_SAMPLE_LIMIT = 8192
 
+// Minimum strided global samples trusted for percentile spans. A handful of lattice hits can identify
+// overlap but not a robust lower/upper quantile pair, so those planes retry with the bounded dense scan.
+const MIN_GLOBAL_NORMALIZATION_LATTICE_SAMPLES = 32
+
 // Upper bound on grid cells, over all axes combined. Every cell carries several `Float64Array` entries
 // per plane plus its coordinates, mask, and support value, and each accepted cell also becomes a surface
 // sample object, so the cell count sets the fit's whole memory footprint. `gridSize` is a caller-supplied
@@ -353,7 +357,7 @@ function channelArray(channels: number, value: number) {
 
 // Collects paired overlap samples for the global fit, one distribution per plane. Walks a regular grid
 // whose stride keeps the total near `NORMALIZATION_SAMPLE_LIMIT`, falling back to a dense bounded scan
-// over each missing plane's usable pairs when that grid finds nothing.
+// over each underfilled plane's usable pairs when that grid finds too little for robust quantiles.
 function collectNormalizationSamples(currentRaw: ImageRawType, valid: Readonly<Uint8Array> | undefined, referenceRaw: ImageRawType, channels: number, width: number, height: number, colorMode: NormalizationColorMode) {
 	const step = Math.max(1, Math.floor(Math.sqrt((width * height) / NORMALIZATION_SAMPLE_LIMIT)))
 	const lattice = scanNormalizationSamples(currentRaw, valid, referenceRaw, channels, width, height, colorMode, step, 1)
@@ -362,20 +366,22 @@ function collectNormalizationSamples(currentRaw: ImageRawType, valid: Readonly<U
 	// non-finite exactly there — can miss it while leaving almost the whole plane usable. Clearing exactly
 	// the sampled positions of a 512x512 frame leaves 96% of the pixels and every grid cell working, yet
 	// the anchor that plane's residuals are measured against comes back as identity with nothing marking
-	// it. Each plane is judged on its own: one channel finding samples says nothing about another.
-	let missing = false
-	for (const plane of lattice.reference) if (plane.length === 0) missing = true
-	if (!missing) return lattice
+	// it. A few lattice hits are not enough either: they prove overlap but cannot estimate the quantile
+	// span. Each plane is judged on its own; one channel finding samples says nothing about another.
+	let underfilled = false
+	for (const plane of lattice.reference) if (plane.length < MIN_GLOBAL_NORMALIZATION_LATTICE_SAMPLES) underfilled = true
+	if (!underfilled) return lattice
 
 	// Striding over the valid pixels themselves is what no mask geometry can defeat. Only the planes that
-	// came back empty take it, so a plane the lattice already covered keeps exactly the samples it had.
-	// The stride is derived from usable pairs per plane, not mask-valid pixels, so sparse finite overlap
-	// is not thinned below the sample limit before the solver ever sees it.
+	// came back underfilled take it, so a plane the lattice already covered keeps exactly the samples it
+	// had. The stride is derived from usable pairs per plane, not mask-valid pixels, so sparse finite
+	// overlap is not thinned below the sample limit before the solver ever sees it.
 	const denseKeepEvery = normalizationKeepEveryByPlane(countNormalizationPairs(currentRaw, valid, referenceRaw, channels, width, height, colorMode))
 	const dense = scanNormalizationSamples(currentRaw, valid, referenceRaw, channels, width, height, colorMode, 1, denseKeepEvery)
 
 	for (let plane = 0; plane < lattice.reference.length; plane++) {
-		if (lattice.reference[plane].length > 0) continue
+		if (lattice.reference[plane].length >= MIN_GLOBAL_NORMALIZATION_LATTICE_SAMPLES) continue
+		if (dense.reference[plane].length <= lattice.reference[plane].length) continue
 		lattice.reference[plane] = dense.reference[plane]
 		lattice.current[plane] = dense.current[plane]
 	}
