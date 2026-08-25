@@ -316,6 +316,39 @@ describe('local normalization', () => {
 		return Math.min(Math.max(value, 0), limit - 1)
 	}
 
+	test('a gain field with no residual degrees of freedom is suppressed', () => {
+		// A 2x2 grid (degree 1 sets the per-axis cell floor) gives the gain surface three coefficients. With
+		// exactly three gain-bearing
+		// cells the fit interpolates them, so its residual is zero by construction and says nothing about
+		// their scatter — reading that as "no noise" would let any three ratios become a spatial gain.
+		const random = rng(23)
+		const reference = new Float64Array(WIDTH * HEIGHT)
+		const current = new Float64Array(WIDTH * HEIGHT)
+
+		for (let y = 0; y < HEIGHT; y++) {
+			for (let x = 0; x < WIDTH; x++) {
+				const i = y * WIDTH + x
+				// Three quadrants carry texture; the fourth is flat sky and fails the dynamic-range gate.
+				const textured = x < WIDTH / 2 || y < HEIGHT / 2 ? 0.09 * Math.sin(x / 5) * Math.cos(y / 6) : 0
+				const signal = 0.1 + textured
+				reference[i] = signal + 0.004 * (random() - 0.5)
+				current[i] = signal / 1.2 + 0.004 * (random() - 0.5)
+			}
+		}
+
+		const model = fitMono(reference, current, { gridSize: 2, offsetDegree: 1, scaleDegree: 1, minSamplesPerCell: 64, dynamicRangeSigma: 2, scaleSignificance: 100 })
+
+		expect(model.diagnostics[0].scaleCells).toBe(3)
+		expect(model.scaleSurfaces[0]).toBeUndefined()
+
+		// With no gain field the applied gain is the anchor everywhere.
+		const low = new Float64Array(reference.length).fill(0)
+		const high = new Float64Array(reference.length).fill(1)
+		applyLocalNormalizationInPlace(low, undefined, model)
+		applyLocalNormalizationInPlace(high, undefined, model)
+		for (let i = 0; i < reference.length; i += 1013) expect(high[i] - low[i]).toBeCloseTo(model.global[0].scale, 9)
+	})
+
 	test('registration resampling alone never produces a gain field', () => {
 		// Registration resamples the current frame, attenuating its high-frequency content by an amount
 		// that depends on the subpixel phase and so varies across a rotated frame. Every second-moment

@@ -484,7 +484,15 @@ function selectQuantile(values: Float64Array, count: number, q: number) {
 // accepted.
 function isSignificantGainField(model: ScalarSurfaceModel, sigma: number) {
 	if (sigma <= 0 || model.type !== 'polynomial') return true
-	if (!(model.residual > 0) || model.acceptedSamples <= 0) return true
+
+	// With no residual degrees of freedom the fit passes exactly through its samples and reports a zero
+	// residual, which says nothing about their scatter. Reading that as "no noise" would let a field
+	// supported by as few samples as it has coefficients through at any threshold, and that is precisely
+	// the case where per-cell ratio noise becomes the whole field. The standard error is unavailable, so
+	// the field is suppressed and the plane keeps the global anchor.
+	if (model.acceptedSamples <= model.coefficients.length) return false
+
+	if (!(model.residual > 0)) return true
 
 	let amplitude = 0
 	let terms = 0
