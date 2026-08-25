@@ -319,6 +319,11 @@ const MAX_SAMPLES_PER_CELL = 65536
 // what the same grid already does when its boxes tile.
 const LOCAL_NORMALIZATION_SAMPLING_OVERLAP = 2
 
+// Sparse phase retries per cell. A product of 64 covers every residue pair for strides up to 8x8, which
+// is enough for the common budgeted boxes that otherwise miss whole parity classes, while keeping
+// adversarial masks from turning every rejected cell into an unbounded dense scan.
+const MAX_LOCAL_NORMALIZATION_CELL_PHASES = 64
+
 // Ceiling on spline field work, as nodes times control points summed over planes. A spline evaluates
 // every node against every control with a logarithm each, so the node count alone does not bound it.
 // Kept well below the materialization budget in `surface.ts` because this runs per frame in a stack,
@@ -819,6 +824,7 @@ function buildCellPhaseOffsets(stride: number, offsets: Int32Array) {
 // Adds one unique sparse-scan phase pair. Returns the updated count.
 function addCellPhasePair(offsetsX: Int32Array, offsetsY: Int32Array, count: number, offsetX: number, offsetY: number) {
 	for (let i = 0; i < count; i++) if (offsetsX[i] === offsetX && offsetsY[i] === offsetY) return count
+	if (count >= offsetsX.length) return count
 	offsetsX[count] = offsetX
 	offsetsY[count] = offsetY
 	return count + 1
@@ -826,7 +832,9 @@ function addCellPhasePair(offsetsX: Int32Array, offsetsY: Int32Array, count: num
 
 // Sparse-scan phase pairs for a cell, preserving the historical zero/half-stride order before adding
 // the quarter residues. That keeps cells whose first alternate lattice already clears the thresholds
-// from visiting later phases that would only dilute the measured valid fraction.
+// from visiting later phases that would only dilute the measured valid fraction. When the full residue
+// product fits the phase budget, every phase pair is then visited so wider strides cannot hide a whole
+// parity class behind the sparse lattice.
 function buildCellPhasePairs(strideX: number, strideY: number, offsetsX: Int32Array, offsetsY: Int32Array) {
 	const axisX = new Int32Array(4)
 	const axisY = new Int32Array(4)
@@ -840,6 +848,18 @@ function buildCellPhasePairs(strideX: number, strideY: number, offsetsX: Int32Ar
 
 	for (let y = 0; y < countY; y++) {
 		for (let x = 0; x < countX; x++) count = addCellPhasePair(offsetsX, offsetsY, count, axisX[x], axisY[y])
+	}
+
+	if (strideX * strideY <= offsetsX.length) {
+		for (let y = 0; y < strideY; y++) {
+			for (let x = 0; x < strideX; x++) count = addCellPhasePair(offsetsX, offsetsY, count, x, y)
+		}
+	} else {
+		for (let residue = 1; residue < Math.max(strideX, strideY) && count < offsetsX.length; residue++) {
+			if (residue < strideX) count = addCellPhasePair(offsetsX, offsetsY, count, residue, 0)
+			if (residue < strideY) count = addCellPhasePair(offsetsX, offsetsY, count, 0, residue)
+			if (residue < strideX && residue < strideY) count = addCellPhasePair(offsetsX, offsetsY, count, residue, residue)
+		}
 	}
 
 	return count
@@ -1024,10 +1044,10 @@ export function fitLocalNormalizationRaw(referenceRaw: ImageRawType, currentRaw:
 	// a scan anchored at the box origin: a frame three quarters valid then reports no overlap at all.
 	// A cell that collected too little is rescanned from alternate sparse phases, which costs bounded extra
 	// passes over exactly the cells that have no result to lose, unlike a dense rescan that would cost the
-	// full box area on every genuinely empty cell. Quarter residues cover masks that reject all even
-	// lattice classes while still bounding collection to at most sixteen sparse passes.
-	const phaseOffsetsX = new Int32Array(16)
-	const phaseOffsetsY = new Int32Array(16)
+	// full box area on every genuinely empty cell. A bounded residue sweep covers all phase pairs for
+	// strides up to 8 and falls back to representative residues past that budget.
+	const phaseOffsetsX = new Int32Array(MAX_LOCAL_NORMALIZATION_CELL_PHASES)
+	const phaseOffsetsY = new Int32Array(MAX_LOCAL_NORMALIZATION_CELL_PHASES)
 	const phases = buildCellPhasePairs(strideX, strideY, phaseOffsetsX, phaseOffsetsY)
 
 	const refBuf = new Float64Array(planes * capacity)
