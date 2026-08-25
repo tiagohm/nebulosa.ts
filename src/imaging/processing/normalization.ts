@@ -273,6 +273,14 @@ export const DEFAULT_LOCAL_NORMALIZATION_OPTIONS: Required<LocalNormalizationOpt
 // Maximum pixels sampled when estimating the global normalization scale/offset.
 export const NORMALIZATION_SAMPLE_LIMIT = 8192
 
+// Upper bound on grid cells, over all axes combined. Every cell carries several `Float64Array` entries
+// per plane plus its coordinates, mask, and support value, and each accepted cell also becomes a surface
+// sample object, so the cell count sets the fit's whole memory footprint. `gridSize` is a caller-supplied
+// number and a large frame makes even one cell per pixel ruinous, so the grid is scaled back to this
+// budget instead. It is 256 times the default 16x16 grid, well past any density a smooth residual field
+// can use, and its per-plane state stays in the low megabytes.
+const MAX_LOCAL_NORMALIZATION_CELLS = 65536
+
 // Small epsilon guarding divisions and degeneracy tests.
 const FLOAT_EPSILON = 1e-12
 
@@ -657,8 +665,21 @@ function resolveCellStride(boxW: number, boxH: number, maxSamples: number) {
 function buildLocalGrid(width: number, height: number, gridSize: number, boxSize: number, minCellsPerAxis: number): LocalGrid {
 	const longAxis = Math.max(width, height)
 	const cell = longAxis / gridSize
-	const columns = clamp(Math.round(width / cell), Math.min(minCellsPerAxis, width), width)
-	const rows = clamp(Math.round(height / cell), Math.min(minCellsPerAxis, height), height)
+	let columns = clamp(Math.round(width / cell), Math.min(minCellsPerAxis, width), width)
+	let rows = clamp(Math.round(height / cell), Math.min(minCellsPerAxis, height), height)
+
+	// One cell per pixel is not a usable ceiling on a large frame: a 4096x4096 RGB frame at
+	// `gridSize: 4096` asks for 16.7 million cells, whose per-plane state alone is about 1.6 GB before
+	// any sample object exists. The grid is scaled back to a tractable cell budget, keeping its aspect
+	// ratio, and then clamped outright in case a per-axis floor pushed the product back over.
+	if (columns * rows > MAX_LOCAL_NORMALIZATION_CELLS) {
+		const factor = Math.sqrt(MAX_LOCAL_NORMALIZATION_CELLS / (columns * rows))
+		columns = clamp(Math.round(columns * factor), Math.min(minCellsPerAxis, width), width)
+		rows = clamp(Math.round(rows * factor), Math.min(minCellsPerAxis, height), height)
+		columns = Math.min(columns, MAX_LOCAL_NORMALIZATION_CELLS)
+		rows = Math.max(1, Math.min(rows, Math.floor(MAX_LOCAL_NORMALIZATION_CELLS / columns)))
+	}
+
 	const cellW = width / columns
 	const cellH = height / rows
 	const boxPixels = boxSize > 0 ? clamp(Math.trunc(boxSize), 1, longAxis) : 0

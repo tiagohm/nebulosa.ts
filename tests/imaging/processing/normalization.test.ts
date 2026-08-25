@@ -729,6 +729,44 @@ describe('local normalization', () => {
 		fitLocalNormalizationRaw(reference, current, width, height, 1, 'per-channel', undefined, resolved)
 		expect(performance.now() - started).toBeLessThan(2000)
 	})
+
+	test('an extreme gridSize is scaled back to a tractable cell count', () => {
+		// One cell per pixel is not a usable ceiling on a real frame: at this gridSize the grid would ask
+		// for width*height cells, whose per-plane state alone runs to gigabytes on a large image. This
+		// frame is deliberately past the budget (90000 pixels against 65536 cells) so the scaling engages.
+		const size = 300
+		const reference = referencePlane(3, size, size)
+		const current = inverseTransform(
+			reference,
+			() => 1.2,
+			() => 0.01,
+			size,
+			size,
+		)
+		const model = fitLocalNormalizationRaw(reference, current, size, size, 1, 'per-channel', undefined, resolveLocalNormalizationOptions({ gridSize: 1_000_000 }))
+		const support = model.offsetSupportGrids[0]
+
+		expect(support.columns * support.rows).toBeLessThanOrEqual(65536)
+		expect(support.columns * support.rows).toBeLessThan(size * size)
+		expect(model.diagnostics[0].candidateCells).toBe(support.columns * support.rows)
+		// The grid keeps its aspect ratio while being scaled back.
+		expect(support.columns).toBe(support.rows)
+	})
+
+	test('a normal gridSize is unaffected by the cell budget', () => {
+		const reference = referencePlane()
+		const current = inverseTransform(
+			reference,
+			() => 1.2,
+			() => 0.01,
+		)
+
+		for (const gridSize of [4, 8, 16, 24]) {
+			const support = fitMono(reference, current, { gridSize }).offsetSupportGrids[0]
+			expect(support.columns).toBe(gridSize)
+			expect(support.rows).toBe(gridSize)
+		}
+	})
 })
 
 describe('color handling', () => {
