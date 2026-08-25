@@ -332,26 +332,27 @@ function collectNormalizationSamples(currentRaw: ImageRawType, valid: Readonly<U
 	const step = Math.max(1, Math.floor(Math.sqrt((width * height) / NORMALIZATION_SAMPLE_LIMIT)))
 	const lattice = scanNormalizationSamples(currentRaw, valid, referenceRaw, channels, width, height, colorMode, step, 1)
 
-	for (const plane of lattice.reference) if (plane.length > 0) return lattice
+	// The strided lattice is anchored at the origin, so a mask — or a channel that happens to be
+	// non-finite exactly there — can miss it while leaving almost the whole plane usable. Clearing exactly
+	// the sampled positions of a 512x512 frame leaves 96% of the pixels and every grid cell working, yet
+	// the anchor that plane's residuals are measured against comes back as identity with nothing marking
+	// it. Each plane is judged on its own: one channel finding samples says nothing about another.
+	let missing = false
+	for (const plane of lattice.reference) if (plane.length === 0) missing = true
+	if (!missing) return lattice
 
-	// The strided lattice is anchored at the origin, so a mask can miss it entirely while leaving almost
-	// the whole frame valid — clearing exactly the sampled positions of a 512x512 frame leaves 96% of the
-	// pixels and every grid cell usable, yet the anchor every local residual is measured against comes
-	// back as identity with nothing marking it. Retry striding over the valid pixels themselves, which no
-	// mask geometry can defeat. Only reachable when the lattice found nothing, so the common path is
-	// untouched.
-	return scanNormalizationSamples(currentRaw, valid, referenceRaw, channels, width, height, colorMode, 1, validPixelStride(valid, width * height))
-}
+	// Striding over the valid pixels themselves is what no mask geometry can defeat. Only the planes that
+	// came back empty take it, so a plane the lattice already covered keeps exactly the samples it had.
+	const dense = scanNormalizationSamples(currentRaw, valid, referenceRaw, channels, width, height, colorMode, 1, validPixelStride(valid, width * height))
 
-// Whether the strided lattice lands on any valid pixel at all.
-function latticeHasValidPixel(valid: Readonly<Uint8Array>, width: number, height: number, step: number) {
-	for (let y = 0; y < height; y += step) {
-		for (let x = 0; x < width; x += step) if (valid[y * width + x] !== 0) return true
+	for (let plane = 0; plane < lattice.reference.length; plane++) {
+		if (lattice.reference[plane].length > 0) continue
+		lattice.reference[plane] = dense.reference[plane]
+		lattice.current[plane] = dense.current[plane]
 	}
 
-	return false
+	return lattice
 }
-
 // How many valid pixels to skip between kept samples so a dense scan still lands near the sample limit.
 function validPixelStride(valid: Readonly<Uint8Array> | undefined, pixels: number) {
 	let count = pixels
@@ -1195,26 +1196,43 @@ export function fitLocalNormalizationRaw(referenceRaw: ImageRawType, currentRaw:
 // about this value, so the offset and gain residuals stay decorrelated. Every plane is collected in one
 // pass over the grid.
 function collectPivots(referenceRaw: ImageRawType, currentRaw: ImageRawType, valid: Readonly<Uint8Array> | undefined, channels: number, width: number, height: number, planes: number, luminance: boolean, estimator: GlobalNormalizationMode) {
-	let step = Math.max(1, Math.floor(Math.sqrt((width * height) / NORMALIZATION_SAMPLE_LIMIT)))
-	let keepEvery = 1
+	const step = Math.max(1, Math.floor(Math.sqrt((width * height) / NORMALIZATION_SAMPLE_LIMIT)))
+	const values = scanPivotValues(referenceRaw, currentRaw, valid, channels, width, height, planes, luminance, step, 1)
+
+	// The pivot rides the same lattice the global solve does and is missed the same way, plane by plane,
+	// so it takes the same per-plane dense fallback.
+	let missing = false
+	for (const plane of values) if (plane.length === 0) missing = true
+
+	if (missing) {
+		const dense = scanPivotValues(referenceRaw, currentRaw, valid, channels, width, height, planes, luminance, 1, validPixelStride(valid, width * height))
+		for (let plane = 0; plane < planes; plane++) if (values[plane].length === 0) values[plane] = dense[plane]
+	}
+
+	const q = ESTIMATOR_QUANTILE[estimator]
+	const pivots = new Float64Array(planes)
+
+	for (let plane = 0; plane < planes; plane++) {
+		if (values[plane].length === 0) continue
+		const buffer = Float64Array.from(values[plane])
+		pivots[plane] = selectQuantile(buffer, buffer.length, q)
+	}
+
+	return pivots
+}
+
+// Walks the frame at `step` pixels and keeps every `keepEvery`-th usable value, one list per plane.
+//
+// Only pixels that are finite in BOTH frames count, which is the rule the global solve and the cell
+// estimates already use. A pixel finite here but not in the reference contributes to nothing else, so
+// letting it move the pivot would anchor the reconstruction on a level the fit never saw — and the pivot
+// enters the offset as `(gain - anchor) * pivot`, a term nothing downstream can undo.
+function scanPivotValues(referenceRaw: ImageRawType, currentRaw: ImageRawType, valid: Readonly<Uint8Array> | undefined, channels: number, width: number, height: number, planes: number, luminance: boolean, step: number, keepEvery: number) {
 	const values: number[][] = new Array<number[]>(planes)
 	for (let plane = 0; plane < planes; plane++) values[plane] = []
 	const { red, green, blue } = DEFAULT_GRAYSCALE
-
-	// The pivot rides the same lattice the global solve uses and can be missed the same way, so it takes
-	// the same dense fallback: a mask aligned to the sampled positions would otherwise leave every pivot
-	// at 0 while the frame is almost entirely valid.
-	if (valid !== undefined && !latticeHasValidPixel(valid, width, height, step)) {
-		step = 1
-		keepEvery = validPixelStride(valid, width * height)
-	}
-
 	let seen = 0
 
-	// Only pixels that are finite in BOTH frames count, which is the rule the global solve and the cell
-	// estimates already use. A pixel finite here but not in the reference contributes to nothing else, so
-	// letting it move the pivot would anchor the reconstruction on a level the fit never saw — and the
-	// pivot enters the offset as `(gain - anchor) * pivot`, a term nothing downstream can undo.
 	for (let y = 0; y < height; y += step) {
 		for (let x = 0; x < width; x += step) {
 			const pixel = y * width + x
@@ -1235,14 +1253,7 @@ function collectPivots(referenceRaw: ImageRawType, currentRaw: ImageRawType, val
 		}
 	}
 
-	const q = ESTIMATOR_QUANTILE[estimator]
-	const pivots = new Float64Array(planes)
-	for (let plane = 0; plane < planes; plane++) {
-		if (values[plane].length === 0) continue
-		const buffer = Float64Array.from(values[plane])
-		pivots[plane] = selectQuantile(buffer, buffer.length, q)
-	}
-	return pivots
+	return values
 }
 
 // Materialized final fields, sampled on a coarse node grid. Everything the reconstruction needs — the

@@ -693,6 +693,41 @@ describe('local normalization', () => {
 		expect(model.pivots[0]).toBeGreaterThan(0)
 	}, 20000)
 
+	test('one channel finding lattice samples does not suppress recovery of another', () => {
+		// The lattice is missed plane by plane: a channel can be non-finite exactly at the sampled
+		// positions while another is finite everywhere. Judging the retry on the frame as a whole lets the
+		// healthy channel speak for the starved one, which then keeps an identity anchor.
+		const size = 512
+		const channels = 2
+		const random = rng(7)
+		const reference = new Float64Array(size * size * channels)
+		const current = new Float64Array(size * size * channels)
+		const step = Math.max(1, Math.floor(Math.sqrt((size * size) / 8192)))
+
+		for (let y = 0; y < size; y++) {
+			for (let x = 0; x < size; x++) {
+				const i = (y * size + x) * channels
+				const v = 0.1 + 0.05 * (x / size) + 0.08 * Math.sin((x / size) * 6) * Math.cos((y / size) * 5) + 0.01 * (random() - 0.5)
+
+				current[i] = v
+				reference[i] = 2 * v + 0.1
+
+				// Channel 1 satisfies the same relation everywhere except on the lattice itself.
+				const onLattice = y % step === 0 && x % step === 0
+				current[i + 1] = onLattice ? Number.NaN : v
+				reference[i + 1] = onLattice ? Number.NaN : 2 * v + 0.1
+			}
+		}
+
+		const model = fitLocalNormalizationRaw(reference, current, size, size, channels, 'per-channel', undefined, resolveLocalNormalizationOptions({}))
+
+		for (let plane = 0; plane < channels; plane++) {
+			expect(model.global[plane].scale).toBeCloseTo(2, 6)
+			expect(model.global[plane].offset).toBeCloseTo(0.1, 6)
+			expect(model.pivots[plane]).toBeGreaterThan(0)
+		}
+	}, 20000)
+
 	test('a diagonal partial overlap is corrected as accurately at its boundary as inside', () => {
 		// A diagonal overlap boundary leaves the boundary cells clipped, with centroids well off their
 		// nominal grid centers, and every axis-aligned mask test above misses that case.
