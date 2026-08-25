@@ -173,6 +173,11 @@ export interface ScalarSurfaceEvaluator {
 // grids. Chosen as a perfect square so the spatial buckets below tile evenly.
 export const SURFACE_MAX_CONTROL_POINTS = 1024
 
+// Upper bound on active samples fed to the polynomial QR solve. The polynomial fit materializes an
+// m x terms design matrix; at the maximum degree this cap keeps that matrix around 7 MB and the
+// O(m*terms^2) factorization tractable while still greatly oversampling any smooth degree-6 surface.
+export const SURFACE_MAX_POLYNOMIAL_SAMPLES = 32768
+
 // Kernel evaluations the TPS fit may spend on its residual diagnostic after the solve. The control cap
 // bounds the solve, not this post-fit pass: a million active samples against 1024 controls is still a
 // billion kernel/log evaluations for a number used only as a fit-quality estimate.
@@ -576,6 +581,19 @@ function farthestActiveSample(set: SurfaceSampleSet, from: number) {
 function containsIndex(chosen: Uint32Array, n: number, value: number) {
 	for (let k = 0; k < n; k++) if (chosen[k] === value) return true
 	return false
+}
+
+// Keeps at most `maxSamples` active samples in a spatially distributed representative set. Dropped
+// samples stay in the diagnostic set but no longer feed the fit, matching the accepted-sample semantics
+// used by capped spline controls.
+function capActiveSurfaceSamples(set: SurfaceSampleSet, maxSamples: number) {
+	if (activeSurfaceSampleCount(set) <= maxSamples) return
+	const indices = subsampleSurfaceControlPoints(set, maxSamples)
+	if (indices === undefined) return
+
+	const kept = new Uint8Array(set.count)
+	for (const i of indices) kept[i] = 1
+	for (let i = 0; i < set.count; i++) if (set.active[i] !== 0 && kept[i] === 0) set.active[i] = 0
 }
 
 // Fits a 2D Chebyshev surface to the active samples by weighted least squares (QR). Returns the
@@ -1406,8 +1424,10 @@ export function fitScalarSurface(samples: readonly SurfaceSample[], width: numbe
 		iterations: options.rejection?.iterations ?? 0,
 	}
 
-	const residuals = new Float64Array(set.count)
-	const scratch = new Float64Array(set.count)
+	capActiveSurfaceSamples(set, SURFACE_MAX_POLYNOMIAL_SAMPLES)
+	const active = activeSurfaceSampleCount(set)
+	const residuals = new Float64Array(active)
+	const scratch = new Float64Array(active)
 	const outcome = fitPolynomialSurfaceWithRejection(set, degree, terms, ti, tj, rejection, residuals, scratch)
 	if (typeof outcome === 'string') return { ok: false, reason: outcome }
 

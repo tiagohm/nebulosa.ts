@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 // oxfmt-ignore
-import { basisTermCount, createScalarSurfaceEvaluator, createScalarSurfacePointEvaluator, createSurfaceColumnTable, evaluateScalarSurfaceInto, fillBasisExponents, fillChebyshev, fitScalarSurface, fullSurfaceDomain, SURFACE_MAX_CONTROL_POINTS, type SurfaceFitOptions, type SurfaceSample } from '../../../src/imaging/processing/surface'
+import { basisTermCount, createScalarSurfaceEvaluator, createScalarSurfacePointEvaluator, createSurfaceColumnTable, evaluateScalarSurfaceInto, fillBasisExponents, fillChebyshev, fitScalarSurface, fullSurfaceDomain, SURFACE_MAX_CONTROL_POINTS, SURFACE_MAX_POLYNOMIAL_SAMPLES, type SurfaceFitOptions, type SurfaceSample } from '../../../src/imaging/processing/surface'
 
 function sampleGrid(width: number, height: number, columns: number, rows: number, value: (x: number, y: number) => number, weight?: (x: number, y: number) => number) {
 	const samples: SurfaceSample[] = []
@@ -104,6 +104,28 @@ describe('polynomial fit', () => {
 			)
 			expect(model.coefficients).toHaveLength(basisTermCount(degree))
 			expect(model.degree).toBe(degree)
+		}
+	})
+
+	test('a dense polynomial fit caps representative samples before the QR solve', () => {
+		const size = 256
+		const field = (x: number, y: number) => 0.2 + 0.001 * x - 0.0005 * y + 0.000001 * x * y
+		const samples = sampleGrid(size, size, size, size, field)
+		const model = fitOrThrow(samples, size, size, { degree: 2 })
+
+		expect(samples.length).toBeGreaterThan(SURFACE_MAX_POLYNOMIAL_SAMPLES)
+		expect(model.acceptedSamples).toBeLessThanOrEqual(SURFACE_MAX_POLYNOMIAL_SAMPLES)
+		expect(model.rejectedSamples).toBe(samples.length - model.acceptedSamples)
+
+		const point = createScalarSurfacePointEvaluator(model)
+		for (const [x, y] of [
+			[0, 0],
+			[255, 0],
+			[0, 255],
+			[255, 255],
+			[127, 91],
+		]) {
+			expect(point.at(x, y)).toBeCloseTo(field(x, y), 8)
 		}
 	})
 
