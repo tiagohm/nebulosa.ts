@@ -1257,11 +1257,7 @@ export function fitLocalNormalizationRaw(referenceRaw: ImageRawType, currentRaw:
 
 				for (let i = 0; i < pendingCount; i++) {
 					const plane = pending[i]
-					counts[plane] = 0
-					validPairs[plane] = 0
-					sumX[plane] = 0
-					sumY[plane] = 0
-					visited[plane] = 0
+					if (validPairs[plane] === 0) visited[plane] = 0
 				}
 
 				for (let sample = 0; sample < denseBudget; sample++) {
@@ -1310,7 +1306,7 @@ export function fitLocalNormalizationRaw(referenceRaw: ImageRawType, currentRaw:
 
 				for (let i = 0; i < pendingCount; i++) {
 					const plane = pending[i]
-					visited[plane] = denseVisited
+					visited[plane] += denseVisited
 					if (validPairs[plane] > 0) observedValidPairs[plane] = 1
 				}
 			}

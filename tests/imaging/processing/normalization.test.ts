@@ -1468,6 +1468,61 @@ describe('local normalization', () => {
 		expect(model.diagnostics[0].fallback).toBe(false)
 		expect(model.diagnostics[0].acceptedCells).toBe(model.diagnostics[0].candidateCells)
 	})
+
+	test('dense retries supplement sparse cell samples instead of replacing them', () => {
+		const size = 256
+		const cellSize = 64
+		const reference = new Float64Array(size * size)
+		const current = new Float64Array(size * size)
+		const coarseResidues = new Set([0, 4, 8, 12])
+		reference.fill(Number.NaN)
+		current.fill(Number.NaN)
+
+		const sparseResidue = (rx: number, ry: number) => (coarseResidues.has(rx) && coarseResidues.has(ry)) || (rx !== 0 && ry === 0) || (rx === 0 && ry !== 0) || (rx !== 0 && rx === ry)
+		const finiteAt = (x: number, y: number) => {
+			const i = y * size + x
+			const value = 0.1 + 0.02 * (x / size) + 0.03 * (y / size)
+			current[i] = value
+			reference[i] = 1.2 * value + 0.01
+		}
+
+		for (let r = 0; r < 4; r++) {
+			for (let c = 0; c < 4; c++) {
+				const denseStart = (((r + 1) * 73856093 + (c + 1) * 19349663) >>> 0) % (cellSize * cellSize)
+				const denseStartX = denseStart % cellSize
+				const denseStartY = Math.floor(denseStart / cellSize)
+				const denseLocal = new Set<number>()
+				for (let sample = 0; sample < 16; sample++) denseLocal.add(((denseStartY + sample * 9 + Math.floor((sample * sample) / cellSize)) % cellSize) * cellSize + ((denseStartX + sample * 17) % cellSize))
+
+				let sparse = 0
+				for (let y = 0; y < cellSize && sparse < 3; y++) {
+					for (let x = 0; x < cellSize && sparse < 3; x++) {
+						if (!sparseResidue(x & 15, y & 15) || denseLocal.has(y * cellSize + x)) continue
+						finiteAt(c * cellSize + x, r * cellSize + y)
+						sparse++
+					}
+				}
+
+				let dense = false
+				for (const local of denseLocal) {
+					const x = local % cellSize
+					const y = Math.floor(local / cellSize)
+					if (sparseResidue(x & 15, y & 15)) continue
+					finiteAt(c * cellSize + x, r * cellSize + y)
+					dense = true
+					break
+				}
+
+				expect(sparse).toBe(3)
+				expect(dense).toBe(true)
+			}
+		}
+
+		const model = fitLocalNormalizationRaw(reference, current, size, size, 1, 'per-channel', undefined, resolveLocalNormalizationOptions({ gridSize: 4, maxSamplesPerCell: 16, minSamplesPerCell: 4, minValidFraction: 0 }))
+
+		expect(model.diagnostics[0].fallback).toBe(false)
+		expect(model.diagnostics[0].acceptedCells).toBe(model.diagnostics[0].candidateCells)
+	})
 })
 
 describe('color handling', () => {
