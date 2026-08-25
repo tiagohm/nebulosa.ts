@@ -1184,6 +1184,27 @@ describe('local normalization', () => {
 		expect(support.columns).toBe(support.rows)
 	})
 
+	test('the local grid cell budget is shared by per-channel planes', () => {
+		const size = 128
+		const channels = 16
+		const planes = Array.from({ length: channels }, (_, index) => referencePlane(index + 1, size, size))
+		const currents = planes.map((plane, index) =>
+			inverseTransform(
+				plane,
+				() => 1.01 + 0.01 * index,
+				() => 0,
+				size,
+				size,
+			),
+		)
+		const model = fitLocalNormalizationRaw(interleave(planes, size, size), interleave(currents, size, size), size, size, channels, 'per-channel', undefined, resolveLocalNormalizationOptions({ gridSize: 1_000_000, maxSamplesPerCell: 4, minSamplesPerCell: 1 }))
+		const cellCount = model.diagnostics[0].candidateCells
+
+		expect(cellCount * channels).toBeLessThanOrEqual(65536)
+		expect(cellCount).toBeLessThan(size * size)
+		for (const diagnostic of model.diagnostics) expect(diagnostic.candidateCells).toBe(cellCount)
+	})
+
 	test('a normal gridSize is unaffected by the cell budget', () => {
 		const reference = referencePlane()
 		const current = inverseTransform(
