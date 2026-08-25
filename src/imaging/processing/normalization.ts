@@ -1017,10 +1017,16 @@ export function fitLocalNormalizationRaw(referenceRaw: ImageRawType, currentRaw:
 			// damaged one needs, and retiring a plane merely because it found SOMETHING would strand a cell
 			// that caught one stray pair on the first lattice while the alternate one covers it entirely.
 			//
-			// A retried plane starts its count over rather than adding to the phase it is retrying. The
-			// phases sample disjoint positions, so accumulating them could exceed the per-cell capacity the
-			// buffers are sized by; and since a cell is taken exactly when SOME phase clears the thresholds
-			// on its own, keeping the union would not accept a single cell more.
+			// A retried plane adds to what it already has instead of starting over. The phases sample
+			// disjoint positions of the same box, so their union is simply a denser sample of it, and a cell
+			// whose valid pixels are split evenly between the two lattices clears the thresholds on neither
+			// phase alone while the union clears them comfortably. Writes stop at the per-cell capacity the
+			// buffers are sized by, which two full phases would otherwise overrun.
+			counts.fill(0)
+			sumX.fill(0)
+			sumY.fill(0)
+			visited.fill(0)
+
 			let pendingCount = planes
 			for (let plane = 0; plane < planes; plane++) pending[plane] = plane
 
@@ -1028,13 +1034,6 @@ export function fitLocalNormalizationRaw(referenceRaw: ImageRawType, currentRaw:
 				const originX = phase === 0 ? bx0 : Math.min(bx0 + phaseX, bx1)
 				const originY = phase === 0 ? by0 : Math.min(by0 + phaseY, by1)
 				let phaseVisited = 0
-
-				for (let i = 0; i < pendingCount; i++) {
-					const plane = pending[i]
-					counts[plane] = 0
-					sumX[plane] = 0
-					sumY[plane] = 0
-				}
 
 				for (let y = originY; y <= by1; y += strideY) {
 					const rowBase = y * width
@@ -1046,21 +1045,26 @@ export function fitLocalNormalizationRaw(referenceRaw: ImageRawType, currentRaw:
 						const base = pixel * channels
 
 						if (luminance) {
+							const count = counts[0]
+							if (count === capacity) continue
 							const cv = red * currentRaw[base] + green * currentRaw[base + 1] + blue * currentRaw[base + 2]
 							const rv = red * referenceRaw[base] + green * referenceRaw[base + 1] + blue * referenceRaw[base + 2]
 							if (!Number.isFinite(cv) || !Number.isFinite(rv)) continue
-							const at = counts[0]++
-							curBuf[at] = cv
-							refBuf[at] = rv
+							counts[0] = count + 1
+							curBuf[count] = cv
+							refBuf[count] = rv
 							sumX[0] += x
 							sumY[0] += y
 						} else {
 							for (let i = 0; i < pendingCount; i++) {
 								const plane = pending[i]
+								const count = counts[plane]
+								if (count === capacity) continue
 								const cv = currentRaw[base + plane]
 								const rv = referenceRaw[base + plane]
 								if (!Number.isFinite(cv) || !Number.isFinite(rv)) continue
-								const at = plane * capacity + counts[plane]++
+								const at = plane * capacity + count
+								counts[plane] = count + 1
 								curBuf[at] = cv
 								refBuf[at] = rv
 								sumX[plane] += x
@@ -1070,18 +1074,17 @@ export function fitLocalNormalizationRaw(referenceRaw: ImageRawType, currentRaw:
 					}
 				}
 
-				// Recorded per phase, not from the final counts, so the fallback can tell "the frames do not
-				// overlap" from "they overlap but no cell was usable" even for a plane whose last phase came
-				// back empty after an earlier one had found pairs.
-				const floor = minValidFraction * phaseVisited
+				// A plane leaves the scan once its running totals clear both cell thresholds, measured against
+				// every pixel the phases it took have visited. The rest stay for the next lattice.
 				let remaining = 0
 
 				for (let i = 0; i < pendingCount; i++) {
 					const plane = pending[i]
 					const count = counts[plane]
-					visited[plane] = phaseVisited
+					const seen = visited[plane] + phaseVisited
+					visited[plane] = seen
 					if (count > 0) observedValidPairs[plane] = 1
-					if (count < minSamplesPerCell || count < floor) pending[remaining++] = plane
+					if (count < minSamplesPerCell || count < minValidFraction * seen) pending[remaining++] = plane
 				}
 
 				pendingCount = remaining
