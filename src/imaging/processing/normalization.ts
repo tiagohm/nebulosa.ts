@@ -673,19 +673,27 @@ function resolveCellStride(boxW: number, boxH: number, maxSamples: number) {
 function buildLocalGrid(width: number, height: number, gridSize: number, boxSize: number, minCellsPerAxis: number): LocalGrid {
 	const longAxis = Math.max(width, height)
 	const cell = longAxis / gridSize
-	let columns = clamp(Math.round(width / cell), Math.min(minCellsPerAxis, width), width)
-	let rows = clamp(Math.round(height / cell), Math.min(minCellsPerAxis, height), height)
+	const minColumns = Math.min(minCellsPerAxis, width)
+	const minRows = Math.min(minCellsPerAxis, height)
+	let columns = clamp(Math.round(width / cell), minColumns, width)
+	let rows = clamp(Math.round(height / cell), minRows, height)
 
 	// One cell per pixel is not a usable ceiling on a large frame: a 4096x4096 RGB frame at
 	// `gridSize: 4096` asks for 16.7 million cells, whose per-plane state alone is about 1.6 GB before
 	// any sample object exists. The grid is scaled back to a tractable cell budget, keeping its aspect
-	// ratio, and then clamped outright in case a per-axis floor pushed the product back over.
+	// ratio.
 	if (columns * rows > MAX_LOCAL_NORMALIZATION_CELLS) {
 		const factor = Math.sqrt(MAX_LOCAL_NORMALIZATION_CELLS / (columns * rows))
-		columns = clamp(Math.round(columns * factor), Math.min(minCellsPerAxis, width), width)
-		rows = clamp(Math.round(rows * factor), Math.min(minCellsPerAxis, height), height)
-		columns = Math.min(columns, MAX_LOCAL_NORMALIZATION_CELLS)
-		rows = Math.max(1, Math.min(rows, Math.floor(MAX_LOCAL_NORMALIZATION_CELLS / columns)))
+		columns = clamp(Math.round(columns * factor), minColumns, width)
+		rows = clamp(Math.round(rows * factor), minRows, height)
+
+		// A per-axis floor can push the product back over the budget on a high-aspect frame. Absorb the
+		// excess on the longer axis: the shorter one is at its floor because the surface degree needs that
+		// many coordinate bands, and taking them away trades a memory problem for an unfittable layout.
+		if (columns * rows > MAX_LOCAL_NORMALIZATION_CELLS) {
+			if (columns >= rows) columns = Math.max(minColumns, Math.floor(MAX_LOCAL_NORMALIZATION_CELLS / rows))
+			else rows = Math.max(minRows, Math.floor(MAX_LOCAL_NORMALIZATION_CELLS / columns))
+		}
 	}
 
 	const cellW = width / columns

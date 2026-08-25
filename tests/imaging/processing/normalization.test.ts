@@ -763,6 +763,34 @@ describe('local normalization', () => {
 		expect(performance.now() - started).toBeLessThan(2000)
 	})
 
+	test('a high-aspect frame keeps the cell rows its degree needs under the cell cap', () => {
+		// Scaling the grid back to the cell budget must not take the short axis below the floor the surface
+		// degree needs: a 40000x7 frame at this gridSize would otherwise land on 19352x3 cells, and three
+		// coordinate bands cannot determine a degree-6 surface however many cells the long axis has.
+		const width = 40000
+		const height = 7
+		const random = rng(31)
+		const reference = new Float64Array(width * height)
+		const current = new Float64Array(width * height)
+
+		for (let y = 0; y < height; y++) {
+			for (let x = 0; x < width; x++) {
+				const i = y * width + x
+				const signal = 0.1 + 0.05 * (x / width) + 0.03 * (y / height) + 0.02 * Math.sin(x / 700)
+				reference[i] = signal + 0.004 * (random() - 0.5)
+				current[i] = (signal - 0.01) / 1.2 + 0.004 * (random() - 0.5)
+			}
+		}
+
+		const resolved = resolveLocalNormalizationOptions({ gridSize: width, offsetDegree: 6, minSamplesPerCell: 4 })
+		const model = fitLocalNormalizationRaw(reference, current, width, height, 1, 'per-channel', undefined, resolved)
+		const support = model.offsetSupportGrids[0]
+
+		expect(support.rows).toBe(height)
+		expect(support.columns * support.rows).toBeLessThanOrEqual(65536)
+		expect(model.diagnostics[0].fallback).toBe(false)
+	}, 20000)
+
 	test('an extreme gridSize is scaled back to a tractable cell count', () => {
 		// One cell per pixel is not a usable ceiling on a real frame: at this gridSize the grid would ask
 		// for width*height cells, whose per-plane state alone runs to gigabytes on a large image. This
