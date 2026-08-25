@@ -1511,6 +1511,42 @@ describe('image API', () => {
 		expect(maxAbsoluteError(currentImage.raw as Float64Array, reference)).toBeLessThan(1e-12)
 	})
 
+	test('reject leaves the image untouched instead of applying the anchor', () => {
+		const size = 64
+		const reference = referencePlane(3, size, size)
+		const current = inverseTransform(
+			reference,
+			() => 1.5,
+			() => 0.03,
+			size,
+			size,
+		)
+		const currentCopy = new Float64Array(current)
+		const currentImage = toImage(current, 1, size, size)
+
+		const result = localNormalization(toImage(reference, 1, size, size), currentImage, { fallback: 'reject' })
+
+		expect(isLocalNormalizationFallback(result.model)).toBe(true)
+		expect(Array.from(currentImage.raw as Float64Array)).toEqual(Array.from(currentCopy))
+		expect(result.image).toBe(currentImage)
+		expect(result.applied).toBe(false)
+	})
+
+	test('a fitted plane is applied and reported as applied', () => {
+		const reference = referencePlane()
+		const current = inverseTransform(
+			reference,
+			() => 1.25,
+			() => 0.02,
+		)
+
+		const result = localNormalization(toImage(reference, 1), toImage(current, 1), { gridSize: 8, minSamplesPerCell: 64, fallback: 'reject' })
+
+		expect(isLocalNormalizationFallback(result.model)).toBe(false)
+		expect(result.applied).toBe(true)
+		expect(maxAbsoluteError(result.image.raw as Float64Array, reference)).toBeLessThan(1e-12)
+	})
+
 	test('applying a model to a mismatched geometry throws', () => {
 		const reference = referencePlane()
 		const current = inverseTransform(

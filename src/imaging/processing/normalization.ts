@@ -247,10 +247,13 @@ export interface LocalNormalizationFitOptions extends LocalNormalizationOptions 
 
 // Result of the `localNormalization` convenience entry point.
 export interface LocalNormalizationResult {
-	// The normalized image; the same instance passed in, mutated in place.
+	// The image that was passed in. Mutated in place when the model was applied, untouched otherwise.
 	readonly image: Image
-	// The model that was fitted and applied.
+	// The model that was fitted.
 	readonly model: LocalNormalizationModel
+	// Whether the model was applied to `image`. False only under `fallback: 'reject'` with a plane that
+	// could not be modeled, which is the caller's signal to drop the frame; `model.diagnostics` says why.
+	readonly applied: boolean
 }
 
 // Default local normalization tuning. These are calibration candidates, not physical constants.
@@ -1430,8 +1433,10 @@ function buildLocalNormalizationFields(model: LocalNormalizationModel): LocalNor
 		const base = plane * nodes
 		const diagnostics = model.diagnostics[plane]
 
-		// A plane that could not be modeled follows the fallback policy. `reject` is reported to the caller
-		// through the diagnostics; if the model is applied anyway, the global anchor is the safe choice.
+		// A plane that could not be modeled follows the fallback policy. `reject` is a decision for the
+		// caller, not something a field can encode, so a rejected plane materializes the global anchor here
+		// and the entry points decline to apply it; the anchor is the safe choice for a caller that applies
+		// the model anyway.
 		if (diagnostics.fallback) {
 			scale.fill(identity ? 1 : anchor.scale, base, base + nodes)
 			offset.fill(identity ? 0 : anchor.offset, base, base + nodes)
@@ -1641,7 +1646,12 @@ export function applyLocalNormalization(image: Image, model: LocalNormalizationM
 
 // Fits and applies a local normalization in one step. `current` is mutated in place and returned as
 // part of the result; `reference` is only read.
+//
+// Under `fallback: 'reject'` a plane that could not be modeled means the frame is meant to be dropped,
+// so nothing is applied and `current` comes back untouched with `applied: false`. Applying anyway would
+// destroy the input the caller still needs in order to drop it, or to retry under another policy.
 export function localNormalization(reference: Image, current: Image, options: LocalNormalizationFitOptions = {}): LocalNormalizationResult {
 	const model = fitLocalNormalization(reference, current, options)
-	return { image: applyLocalNormalization(current, model, options.validityMask), model }
+	if (model.fallback === 'reject' && isLocalNormalizationFallback(model)) return { image: current, model, applied: false }
+	return { image: applyLocalNormalization(current, model, options.validityMask), model, applied: true }
 }
