@@ -1128,6 +1128,28 @@ function tpsCoarseGridAgrees(model: ScalarSurfaceModel, grid: TpsCoarseGrid, su:
 	return true
 }
 
+// Marks one coarse TPS cell, returning 1 only when it was newly marked.
+function markTpsFailingCell(failing: Uint8Array, cell: number) {
+	if (failing[cell] !== 0) return 0
+	failing[cell] = 1
+	return 1
+}
+
+// Marks a coarse TPS cell and its immediate neighbors. A failing control can sit on a cell boundary,
+// where the same inaccurate bilinear nodes feed adjacent cells too.
+function markTpsFailingCellNeighborhood(failing: Uint8Array, cell: number, cellColumns: number, cellRows: number) {
+	const row = Math.floor(cell / cellColumns)
+	const column = cell - row * cellColumns
+	let count = 0
+
+	for (let y = Math.max(0, row - 1); y <= Math.min(cellRows - 1, row + 1); y++) {
+		const base = y * cellColumns
+		for (let x = Math.max(0, column - 1); x <= Math.min(cellColumns - 1, column + 1); x++) count += markTpsFailingCell(failing, base + x)
+	}
+
+	return count
+}
+
 // Marks the coarse cells the grid does not reproduce within `tolerance`, using the same two families of
 // points. Unlike the predicate above it never short-circuits, because the caller needs the whole map.
 function markFailingTpsCells(model: ScalarSurfaceModel, grid: TpsCoarseGrid, su: number, sv: number, k: number, tolerance: number) {
@@ -1135,10 +1157,11 @@ function markFailingTpsCells(model: ScalarSurfaceModel, grid: TpsCoarseGrid, su:
 	const controlPoints = model.controlPoints!
 	const { columns, rows, stepX, stepY } = grid
 	const cellColumns = columns - 1
-	const failing = new Uint8Array(cellColumns * (rows - 1))
+	const cellRows = rows - 1
+	const failing = new Uint8Array(cellColumns * cellRows)
 	let count = 0
 
-	for (let j = 0; j < rows - 1; j++) {
+	for (let j = 0; j < cellRows; j++) {
 		const y = (j + 0.5) * stepY
 		const v = (y - domain.y0) * sv - 1
 
@@ -1146,10 +1169,7 @@ function markFailingTpsCells(model: ScalarSurfaceModel, grid: TpsCoarseGrid, su:
 			const x = (i + 0.5) * stepX
 			const direct = evaluateThinPlateSplineAt(coefficients, controlPoints, k, (x - domain.x0) * su - 1, v)
 
-			if (Math.abs(sampleTpsCoarseGrid(grid, x, y) - direct) > tolerance) {
-				failing[j * cellColumns + i] = 1
-				count++
-			}
+			if (Math.abs(sampleTpsCoarseGrid(grid, x, y) - direct) > tolerance) count += markTpsFailingCell(failing, j * cellColumns + i)
 		}
 	}
 
@@ -1160,11 +1180,8 @@ function markFailingTpsCells(model: ScalarSurfaceModel, grid: TpsCoarseGrid, su:
 		if (Math.abs(sampleTpsCoarseGrid(grid, x, y) - direct) <= tolerance) continue
 
 		const i = Math.min(cellColumns - 1, Math.floor(x / stepX))
-		const j = Math.min(rows - 2, Math.floor(y / stepY))
-		if (failing[j * cellColumns + i] === 0) {
-			failing[j * cellColumns + i] = 1
-			count++
-		}
+		const j = Math.min(cellRows - 1, Math.floor(y / stepY))
+		count += markTpsFailingCellNeighborhood(failing, j * cellColumns + i, cellColumns, cellRows)
 	}
 
 	return count === 0 ? undefined : failing

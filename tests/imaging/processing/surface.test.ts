@@ -669,6 +669,11 @@ describe('evaluation', () => {
 			for (let x = 0; x < size; x += 13) expect(Number.isFinite(plane[y * size + x])).toBe(true)
 		}
 
+		let boundaryWorst = 0
+		for (let y = 7; y <= 23; y++) {
+			for (let x = 7; x <= 23; x++) boundaryWorst = Math.max(boundaryWorst, Math.abs(plane[y * size + x] - point.at(x, y)))
+		}
+
 		// A per-pixel sweep reproduces direct evaluation exactly, so a nonzero deviation is what shows the
 		// bounded grid was used instead. It still honors the materialization tolerance: this layout prices
 		// a verifying grid out of the work budget, so the cells that failed are evaluated directly and only
@@ -676,6 +681,7 @@ describe('evaluation', () => {
 		// bounds the peak bilinear error closely rather than exactly.
 		expect(worst).toBeGreaterThan(0)
 		expect(worst).toBeLessThanOrEqual(0.005 * 1.1 * (high - low))
+		expect(boundaryWorst).toBeLessThanOrEqual(0.005 * 1.1 * (high - low))
 	}, 60000)
 
 	test('an exact spline under the work budget still interpolates its controls', () => {
