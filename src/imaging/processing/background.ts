@@ -3,7 +3,7 @@ import { clamp, type NumberArray } from '../../math/numerical/math'
 import { DEFAULT_GRAYSCALE, type Image, type ImageRawType } from '../model/types'
 import type { DetectedStar } from '../stars/detector'
 // oxfmt-ignore
-import { activeSurfaceSampleCount, basisTermCount, computeResidualDispersion, createSurfaceColumnTable, createSurfaceSampleSet, deduplicateSurfaceSamples, evaluateScalarSurfaceInto, evaluateThinPlateSplineAt, fillBasisExponents, fitPolynomialSurfaceWithRejection, fitThinPlateSplineSurface, fullSurfaceDomain, hasSurfaceTwoDimensionalCoverage, normalizeSurfaceSampleSet, pushSurfaceSample, type ScalarSurfaceModel, subsampleSurfaceControlPoints, SURFACE_MAX_CONTROL_POINTS, type SurfaceSampleSet, TPS_EXACT_SMOOTHING_MAX } from './surface'
+import { activeSurfaceSampleCount, basisTermCount, computeResidualDispersion, createSurfaceColumnTable, createSurfaceSampleSet, deduplicateSurfaceSamples, evaluateScalarSurfaceInto, evaluateThinPlateSplineAt, fillBasisExponents, fitPolynomialSurfaceWithRejection, fitThinPlateSplineSurface, fullSurfaceDomain, hasSurfaceTwoDimensionalCoverage, normalizeSurfaceSampleSet, pushSurfaceSample, type ScalarSurfaceModel, subsampleSurfaceControlPoints, SURFACE_MAX_CONTROL_POINTS, type SurfaceSampleSet } from './surface'
 
 // Automatic Background Extraction (ABE/DBE): models a smooth sky background from a grid of robust
 // samples and removes it, correcting gradients, vignetting, and light pollution. The background is
@@ -536,14 +536,14 @@ function fitChannelSurface(raw: ImageRawType, width: number, height: number, cha
 		// the correction.
 		assertTpsTwoDimensionalCoverage(set)
 
-		// Drop duplicate control-point coordinates only for an interpolating spline, where two identical
-		// rows make the system singular because the zero diagonal cannot break the tie. Once the diagonal
-		// carries `smoothing / weight` the system solves coincident points and averages them, which is what
-		// repeated observations of one location should do. Coalescing them there instead keeps whichever
-		// overlapping box happened to be reached first, so a mask that gives two coincident boxes different
-		// medians would decide the background by collection order. Cheap no-op when boxes do not overlap
-		// (large images / coarse grids).
-		if (smoothing <= TPS_EXACT_SMOOTHING_MAX) deduplicateSurfaceSamples(set)
+		// Drop duplicate control-point coordinates only when there is no positive smoothing, where two
+		// identical rows make the system singular because the zero diagonal cannot break the tie. Once the
+		// diagonal carries `smoothing / weight` the system solves coincident points and averages them, which
+		// is what repeated observations of one location should do. Coalescing them there instead keeps
+		// whichever overlapping box happened to be reached first, so a mask that gives two coincident boxes
+		// different medians would decide the background by collection order. Cheap no-op when boxes do not
+		// overlap (large images / coarse grids).
+		if (smoothing <= 0) deduplicateSurfaceSamples(set)
 
 		// The thin-plate spline exists to model smooth localized structure such as a light-pollution
 		// dome. The polynomial residual rejection below must NOT run for it: a low-degree polynomial (and

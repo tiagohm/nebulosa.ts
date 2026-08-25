@@ -1179,6 +1179,28 @@ test('an exact thin-plate spline fits a tiny image with overlapping sample boxes
 	expect(maxError).toBeLessThan(1e-5)
 })
 
+test('a positive near-exact background spline keeps overlapping samples', () => {
+	const width = 10
+	const height = 10
+	const bg = (x: number, y: number) => 0.1 + 0.4 * (x / (width - 1)) + 0.3 * (y / (height - 1))
+	const image = makeImage(width, height, 1, (x, y) => bg(x, y))
+
+	const exact = fitBackgroundSurface(image, { model: 'thinPlateSpline', gridSize: 10, smoothing: 0 })
+	const smoothed = fitBackgroundSurface(image, { model: 'thinPlateSpline', gridSize: 10, smoothing: 1e-6 })
+	const surface = smoothed.surfaces[0]
+
+	expect(surface.rejectedSamples).toBe(0)
+	expect(surface.acceptedSamples).toBeGreaterThan(exact.surfaces[0].acceptedSamples)
+	expect(surface.controlPoints!.length).toBe(surface.acceptedSamples * 2)
+
+	const background = evaluateBackgroundModel(smoothed, image).raw
+	let maxError = 0
+	for (let y = 0; y < height; y++) {
+		for (let x = 0; x < width; x++) maxError = Math.max(maxError, Math.abs(background[y * width + x] - bg(x, y)))
+	}
+	expect(maxError).toBeLessThan(1e-5)
+})
+
 test('a thin-plate spline model reuses across frames and evaluate rejects mismatched geometry', () => {
 	const width = 80
 	const height = 80
