@@ -169,6 +169,33 @@ describe('global normalization', () => {
 		expect(solved[1].offset).toBeCloseTo(0.05, 6)
 	})
 
+	test('a sparse dense fallback keeps all usable global pairs under the sample limit', () => {
+		const size = 512
+		const pixels = size * size
+		const reference = new Float64Array(pixels)
+		const current = new Float64Array(pixels)
+		reference.fill(Number.NaN)
+		current.fill(Number.NaN)
+
+		let used = 0
+		outer: for (let y = 0; y < size; y++) {
+			for (let x = 0; x < size; x++) {
+				if (x % 5 === 0 && y % 5 === 0) continue
+				const value = 0.2 + used / 200
+				const i = y * size + x
+				current[i] = value
+				reference[i] = used % 32 === 0 ? value : 2 * value + 0.1
+				used++
+				if (used === 100) break outer
+			}
+		}
+
+		const solved = solveGlobalNormalizationPlanes(current, undefined, reference, 1, size, size, 'background-scale', 'per-channel')
+
+		expect(solved[0].scale).toBeGreaterThan(1.8)
+		expect(solved[0].scale).toBeLessThan(2.1)
+	})
+
 	test('a degenerate current span falls back to unit scale', () => {
 		const solution = solveGlobalNormalization([1, 2, 3, 4], [5, 5, 5, 5], 'scale')
 		expect(solution.scale).toBeCloseTo(0.5, 12)
@@ -693,6 +720,38 @@ describe('local normalization', () => {
 			for (let x = 0; x < WIDTH; x++) worst = Math.max(worst, Math.abs(spiked[y * WIDTH + x] - reference[y * WIDTH + x]))
 		}
 		expect(worst).toBeLessThan(0.05)
+	})
+
+	test('a sparse dense fallback keeps all usable pivot pairs under the sample limit', () => {
+		const size = 512
+		const pixels = size * size
+		const reference = new Float64Array(pixels)
+		const current = new Float64Array(pixels)
+		reference.fill(Number.NaN)
+		current.fill(Number.NaN)
+
+		const positions: number[] = []
+		for (let groupY = 0; groupY < 5; groupY++) {
+			for (let groupX = 0; groupX < 5; groupX++) {
+				const x0 = 16 + groupX * 96
+				const y0 = 16 + groupY * 96
+				for (let dy = 0; dy < 2; dy++) {
+					for (let dx = 0; dx < 2; dx++) positions.push((y0 + dy) * size + x0 + dx)
+				}
+			}
+		}
+		positions.sort((a, b) => a - b)
+
+		for (let used = 0; used < positions.length; used++) {
+			const value = used % 32 === 0 ? 10 : 0.2 + used / 200
+			const i = positions[used]
+			current[i] = value
+			reference[i] = 2 * value + 0.1
+		}
+
+		const model = fitLocalNormalizationRaw(reference, current, size, size, 1, 'per-channel', undefined, resolveLocalNormalizationOptions({ minSamplesPerCell: 4, minValidFraction: 0 }))
+
+		expect(model.pivots[0]!).toBeLessThan(1)
 	})
 
 	test('a mask aligned to the sampling lattice does not flatten the global anchor', () => {

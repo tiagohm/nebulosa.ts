@@ -352,8 +352,8 @@ function channelArray(channels: number, value: number) {
 }
 
 // Collects paired overlap samples for the global fit, one distribution per plane. Walks a regular grid
-// whose stride keeps the total near `NORMALIZATION_SAMPLE_LIMIT`, falling back to a dense scan strided
-// over the valid pixels when that grid finds nothing.
+// whose stride keeps the total near `NORMALIZATION_SAMPLE_LIMIT`, falling back to a dense bounded scan
+// over each missing plane's usable pairs when that grid finds nothing.
 function collectNormalizationSamples(currentRaw: ImageRawType, valid: Readonly<Uint8Array> | undefined, referenceRaw: ImageRawType, channels: number, width: number, height: number, colorMode: NormalizationColorMode) {
 	const step = Math.max(1, Math.floor(Math.sqrt((width * height) / NORMALIZATION_SAMPLE_LIMIT)))
 	const lattice = scanNormalizationSamples(currentRaw, valid, referenceRaw, channels, width, height, colorMode, step, 1)
@@ -369,7 +369,10 @@ function collectNormalizationSamples(currentRaw: ImageRawType, valid: Readonly<U
 
 	// Striding over the valid pixels themselves is what no mask geometry can defeat. Only the planes that
 	// came back empty take it, so a plane the lattice already covered keeps exactly the samples it had.
-	const dense = scanNormalizationSamples(currentRaw, valid, referenceRaw, channels, width, height, colorMode, 1, validPixelStride(valid, width * height))
+	// The stride is derived from usable pairs per plane, not mask-valid pixels, so sparse finite overlap
+	// is not thinned below the sample limit before the solver ever sees it.
+	const denseKeepEvery = normalizationKeepEveryByPlane(countNormalizationPairs(currentRaw, valid, referenceRaw, channels, width, height, colorMode))
+	const dense = scanNormalizationSamples(currentRaw, valid, referenceRaw, channels, width, height, colorMode, 1, denseKeepEvery)
 
 	for (let plane = 0; plane < lattice.reference.length; plane++) {
 		if (lattice.reference[plane].length > 0) continue
@@ -379,16 +382,39 @@ function collectNormalizationSamples(currentRaw: ImageRawType, valid: Readonly<U
 
 	return lattice
 }
-// How many valid pixels to skip between kept samples so a dense scan still lands near the sample limit.
-function validPixelStride(valid: Readonly<Uint8Array> | undefined, pixels: number) {
-	let count = pixels
 
-	if (valid !== undefined) {
-		count = 0
-		for (let pixel = 0; pixel < valid.length; pixel++) if (valid[pixel] !== 0) count++
+// Counts finite current/reference pairs in each fitted plane.
+function countNormalizationPairs(currentRaw: ImageRawType, valid: Readonly<Uint8Array> | undefined, referenceRaw: ImageRawType, channels: number, width: number, height: number, colorMode: NormalizationColorMode) {
+	const luminance = colorMode === 'luminance' && channels === 3
+	const planes = luminance ? 1 : channels
+	const counts = new Array<number>(planes)
+	for (let plane = 0; plane < planes; plane++) counts[plane] = 0
+	const { red, green, blue } = DEFAULT_GRAYSCALE
+
+	for (let y = 0; y < height; y++) {
+		for (let x = 0; x < width; x++) {
+			const pixel = y * width + x
+			if (valid !== undefined && valid[pixel] === 0) continue
+			const base = pixel * channels
+
+			if (luminance) {
+				const currentLum = red * currentRaw[base] + green * currentRaw[base + 1] + blue * currentRaw[base + 2]
+				const referenceLum = red * referenceRaw[base] + green * referenceRaw[base + 1] + blue * referenceRaw[base + 2]
+				if (Number.isFinite(currentLum) && Number.isFinite(referenceLum)) counts[0]++
+			} else {
+				for (let channel = 0; channel < channels; channel++) if (Number.isFinite(currentRaw[base + channel]) && Number.isFinite(referenceRaw[base + channel])) counts[channel]++
+			}
+		}
 	}
 
-	return Math.max(1, Math.floor(count / NORMALIZATION_SAMPLE_LIMIT))
+	return counts
+}
+
+// How many usable pairs to skip per plane so a dense fallback keeps up to the global sample limit.
+function normalizationKeepEveryByPlane(counts: readonly number[]) {
+	const keepEvery = new Array<number>(counts.length)
+	for (let plane = 0; plane < counts.length; plane++) keepEvery[plane] = Math.max(1, Math.floor(counts[plane] / NORMALIZATION_SAMPLE_LIMIT))
+	return keepEvery
 }
 
 // Walks the frame at `step` pixels and keeps every `keepEvery`-th usable pair, one distribution per
@@ -400,11 +426,13 @@ function validPixelStride(valid: Readonly<Uint8Array> | undefined, pixels: numbe
 // non-finite exactly there can miss entirely: the dense fallback would then come back empty for it and
 // the plane would take an identity transform with nothing marking it. Counting usable pairs makes the
 // kept set a fixed fraction of whatever each plane has, whatever the geometry of the damage.
-function scanNormalizationSamples(currentRaw: ImageRawType, valid: Readonly<Uint8Array> | undefined, referenceRaw: ImageRawType, channels: number, width: number, height: number, colorMode: NormalizationColorMode, step: number, keepEvery: number) {
+function scanNormalizationSamples(currentRaw: ImageRawType, valid: Readonly<Uint8Array> | undefined, referenceRaw: ImageRawType, channels: number, width: number, height: number, colorMode: NormalizationColorMode, step: number, keepEvery: number | readonly number[]) {
 	const luminance = colorMode === 'luminance' && channels === 3
 	const planes = luminance ? 1 : channels
 	const current: number[][] = new Array<number[]>(planes)
 	const reference: number[][] = new Array<number[]>(planes)
+	const planeKeepEvery = typeof keepEvery === 'number' ? undefined : keepEvery
+	const sharedKeepEvery = typeof keepEvery === 'number' ? keepEvery : 1
 
 	for (let plane = 0; plane < planes; plane++) {
 		current[plane] = []
@@ -425,7 +453,7 @@ function scanNormalizationSamples(currentRaw: ImageRawType, valid: Readonly<Uint
 				const currentLum = red * currentRaw[base] + green * currentRaw[base + 1] + blue * currentRaw[base + 2]
 				const referenceLum = red * referenceRaw[base] + green * referenceRaw[base + 1] + blue * referenceRaw[base + 2]
 				if (!Number.isFinite(currentLum) || !Number.isFinite(referenceLum)) continue
-				if (seen[0]++ % keepEvery !== 0) continue
+				if (seen[0]++ % (planeKeepEvery?.[0] ?? sharedKeepEvery) !== 0) continue
 				current[0].push(currentLum)
 				reference[0].push(referenceLum)
 			} else {
@@ -433,7 +461,7 @@ function scanNormalizationSamples(currentRaw: ImageRawType, valid: Readonly<Uint
 					const c = currentRaw[base + channel]
 					const r = referenceRaw[base + channel]
 					if (!Number.isFinite(c) || !Number.isFinite(r)) continue
-					if (seen[channel]++ % keepEvery !== 0) continue
+					if (seen[channel]++ % (planeKeepEvery?.[channel] ?? sharedKeepEvery) !== 0) continue
 					current[channel].push(c)
 					reference[channel].push(r)
 				}
@@ -1312,7 +1340,9 @@ function collectPivots(referenceRaw: ImageRawType, currentRaw: ImageRawType, val
 	for (const plane of values) if (plane.length === 0) missing = true
 
 	if (missing) {
-		const dense = scanPivotValues(referenceRaw, currentRaw, valid, channels, width, height, planes, luminance, 1, validPixelStride(valid, width * height))
+		const colorMode = luminance ? 'luminance' : 'per-channel'
+		const denseKeepEvery = normalizationKeepEveryByPlane(countNormalizationPairs(currentRaw, valid, referenceRaw, channels, width, height, colorMode))
+		const dense = scanPivotValues(referenceRaw, currentRaw, valid, channels, width, height, planes, luminance, 1, denseKeepEvery)
 		for (let plane = 0; plane < planes; plane++) if (values[plane].length === 0) values[plane] = dense[plane]
 	}
 
@@ -1341,10 +1371,12 @@ function collectPivots(referenceRaw: ImageRawType, currentRaw: ImageRawType, val
 // estimates already use. A pixel finite here but not in the reference contributes to nothing else, so
 // letting it move the pivot would anchor the reconstruction on a level the fit never saw — and the pivot
 // enters the offset as `(gain - anchor) * pivot`, a term nothing downstream can undo.
-function scanPivotValues(referenceRaw: ImageRawType, currentRaw: ImageRawType, valid: Readonly<Uint8Array> | undefined, channels: number, width: number, height: number, planes: number, luminance: boolean, step: number, keepEvery: number) {
+function scanPivotValues(referenceRaw: ImageRawType, currentRaw: ImageRawType, valid: Readonly<Uint8Array> | undefined, channels: number, width: number, height: number, planes: number, luminance: boolean, step: number, keepEvery: number | readonly number[]) {
 	const values: number[][] = new Array<number[]>(planes)
 	for (let plane = 0; plane < planes; plane++) values[plane] = []
 	const { red, green, blue } = DEFAULT_GRAYSCALE
+	const planeKeepEvery = typeof keepEvery === 'number' ? undefined : keepEvery
+	const sharedKeepEvery = typeof keepEvery === 'number' ? keepEvery : 1
 	// Usable values seen so far, per plane, which is what the thinning counts down.
 	const seen = new Int32Array(planes)
 
@@ -1357,11 +1389,11 @@ function scanPivotValues(referenceRaw: ImageRawType, currentRaw: ImageRawType, v
 			if (luminance) {
 				const v = red * currentRaw[base] + green * currentRaw[base + 1] + blue * currentRaw[base + 2]
 				const r = red * referenceRaw[base] + green * referenceRaw[base + 1] + blue * referenceRaw[base + 2]
-				if (Number.isFinite(v) && Number.isFinite(r) && seen[0]++ % keepEvery === 0) values[0].push(v)
+				if (Number.isFinite(v) && Number.isFinite(r) && seen[0]++ % (planeKeepEvery?.[0] ?? sharedKeepEvery) === 0) values[0].push(v)
 			} else {
 				for (let plane = 0; plane < planes; plane++) {
 					const v = currentRaw[base + plane]
-					if (Number.isFinite(v) && Number.isFinite(referenceRaw[base + plane]) && seen[plane]++ % keepEvery === 0) values[plane].push(v)
+					if (Number.isFinite(v) && Number.isFinite(referenceRaw[base + plane]) && seen[plane]++ % (planeKeepEvery?.[plane] ?? sharedKeepEvery) === 0) values[plane].push(v)
 				}
 			}
 		}
