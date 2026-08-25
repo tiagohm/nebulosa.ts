@@ -830,6 +830,26 @@ describe('local normalization', () => {
 		expect(model.diagnostics[0].fallback).toBe(false)
 	}, 20000)
 
+	test('an extreme box and per-cell budget do not size the buffers by the image', () => {
+		// The collection buffers are sized by the per-cell budget times the plane count. Unclamped, asking
+		// for a full-frame box and a matching budget sizes them by the image instead - about 1.2 GB on a
+		// 4096x4096 RGB frame - and rescans that whole box for every cell.
+		const reference = referencePlane()
+		const current = inverseTransform(
+			reference,
+			() => 1.2,
+			() => 0.01,
+		)
+
+		const resolved = resolveLocalNormalizationOptions({ boxSize: WIDTH, maxSamplesPerCell: 16_777_216 })
+		expect(resolved.maxSamplesPerCell).toBe(65536)
+
+		const started = performance.now()
+		const model = fitLocalNormalizationRaw(reference, current, WIDTH, HEIGHT, 1, 'per-channel', undefined, resolved)
+		expect(performance.now() - started).toBeLessThan(20000)
+		expect(model.diagnostics[0].candidateCells).toBeGreaterThan(0)
+	}, 30000)
+
 	test('a spline field on a fine grid does not evaluate every node against every control', () => {
 		// The node step comes from the cell side, so a fine grid drives it toward 1 and the node grid stops
 		// being the cheap intermediate it exists to be. A spline field then evaluates every node against

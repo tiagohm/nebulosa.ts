@@ -183,7 +183,8 @@ export interface LocalNormalizationOptions {
 	// grid tiles the frame without gaps and every valid pixel can contribute.
 	readonly boxSize?: number
 	// Upper bound on sampled pixel pairs per cell. The box is strided down to this before any pixel is
-	// read, so collection cost is independent of the box area.
+	// read, so collection cost is independent of the box area. Clamped to `MAX_SAMPLES_PER_CELL`, which is
+	// what keeps the collection buffers - sized by this, not by the image - bounded.
 	readonly maxSamplesPerCell?: number
 	// Minimum pairs a cell needs. The estimators are quantile based, so a low floor feeds the surfaces
 	// samples whose own error exceeds the effect being modeled.
@@ -285,6 +286,13 @@ const MAX_LOCAL_NORMALIZATION_CELLS = 65536
 // plane-major `Float64Array`s, so this bounds that pair at about 16 MB. The node grid exists to be a
 // cheap intermediate between the fitted surfaces and the pixels; past this it stops being one.
 const MAX_LOCAL_NORMALIZATION_NODES = 1_048_576
+
+// Ceiling on pixel pairs collected from one cell. The collection buffers are sized by this times the
+// plane count, so without it a caller raising `boxSize` and `maxSamplesPerCell` together sizes them by
+// the image instead: a 4096x4096 RGB frame asking for a full-frame box reserves about 1.2 GB and then
+// rescans that whole box for every cell. The estimators are quantile based and 1024 pairs already put
+// their precision near a few percent, so this ceiling sits far past anything a cell can use.
+const MAX_SAMPLES_PER_CELL = 65536
 
 // Ceiling on spline field work, as nodes times control points summed over planes. A spline evaluates
 // every node against every control with a logarithm each, so the node count alone does not bound it.
@@ -448,7 +456,7 @@ export function resolveLocalNormalizationOptions(options: LocalNormalizationOpti
 		estimator: options.estimator ?? defaults.estimator,
 		gridSize: Math.max(2, Math.trunc(gridSize)),
 		boxSize: Math.max(0, Math.trunc(finiteOr(options.boxSize ?? defaults.boxSize, defaults.boxSize))),
-		maxSamplesPerCell: Math.max(4, Math.trunc(finiteOr(options.maxSamplesPerCell ?? defaults.maxSamplesPerCell, defaults.maxSamplesPerCell))),
+		maxSamplesPerCell: clamp(Math.trunc(finiteOr(options.maxSamplesPerCell ?? defaults.maxSamplesPerCell, defaults.maxSamplesPerCell)), 4, MAX_SAMPLES_PER_CELL),
 		minSamplesPerCell: Math.max(4, Math.trunc(finiteOr(options.minSamplesPerCell ?? defaults.minSamplesPerCell, defaults.minSamplesPerCell))),
 		minValidFraction: clamp(finiteOr(options.minValidFraction ?? defaults.minValidFraction, defaults.minValidFraction), 0, 1),
 		dynamicRangeSigma: Math.max(0, finiteOr(options.dynamicRangeSigma ?? defaults.dynamicRangeSigma, defaults.dynamicRangeSigma)),
