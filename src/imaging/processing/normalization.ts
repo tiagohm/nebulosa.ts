@@ -297,6 +297,21 @@ const MAX_LOCAL_NORMALIZATION_NODES = 1_048_576
 // their precision near a few percent, so this ceiling sits far past anything a cell can use.
 const MAX_SAMPLES_PER_CELL = 65536
 
+// Sampled pixels the whole cell scan may read per plane, as a multiple of the frame's own pixel count.
+//
+// The cell ceiling and the per-cell ceiling bound their factors separately and their product not at all.
+// Boxes only tile the frame while `boxSize` stays within the cell; a larger one is centred on each cell
+// and overlaps its neighbours, so the same pixels are re-read once per cell. A 4096x4096 frame with
+// `gridSize: 4096` and `boxSize: 4096` sits inside both ceilings and still asks for 65536 cells of
+// 65536 pairs — 4.3 billion sampled pixels per plane, and as many quantile-selection steps after them.
+// A 128x128 frame scaled the same way already takes 17 seconds.
+//
+// Two frame areas leave the tiling case untouched (its total is the frame area at most, before striding)
+// and give a modestly oversized box room to overlap, while turning the pathological grid into a scan
+// proportional to the image. Cells thinned below `minSamplesPerCell` by this simply drop out, which is
+// what the same grid already does when its boxes tile.
+const LOCAL_NORMALIZATION_SAMPLING_OVERLAP = 2
+
 // Ceiling on spline field work, as nodes times control points summed over planes. A spline evaluates
 // every node against every control with a logarithm each, so the node count alone does not bound it.
 // Kept well below the materialization budget in `surface.ts` because this runs per frame in a stack,
@@ -899,12 +914,15 @@ export function fitLocalNormalizationRaw(referenceRaw: ImageRawType, currentRaw:
 	const cellCount = columns * rows
 
 	// Stride the box down to the sample budget BEFORE reading any pixel, so collection cost scales with
-	// `maxSamplesPerCell` rather than with the box area. The two axes are strided independently: one
+	// the budget rather than with the box area. The budget is `maxSamplesPerCell` narrowed by each cell's
+	// share of `LOCAL_NORMALIZATION_SAMPLING_OVERLAP`, which is what keeps overlapping boxes from
+	// multiplying the two ceilings into a scan the frame size no longer bounds. The two axes are strided independently: one
 	// stride derived from the box area only honors the budget for a roughly square box, and overshoots it
 	// by the aspect ratio otherwise — a 1-pixel-wide cell of a very tall frame would collect thousands of
 	// pairs against a budget of 1024, sizing every buffer and the whole pixel scan accordingly. For a
 	// square box the split reproduces the single stride exactly.
-	const { strideX, strideY, capacity } = resolveCellStride(grid.maxBoxW, grid.maxBoxH, maxSamplesPerCell)
+	const cellBudget = Math.max(1, Math.floor((width * height * LOCAL_NORMALIZATION_SAMPLING_OVERLAP) / cellCount))
+	const { strideX, strideY, capacity } = resolveCellStride(grid.maxBoxW, grid.maxBoxH, Math.min(maxSamplesPerCell, cellBudget))
 	// Offset of the second sampling phase inside a cell. The strided scan reads one pixel out of
 	// `strideX * strideY`, so a validity mask aligned to that same lattice can hide every valid pixel from
 	// a scan anchored at the box origin: a frame three quarters valid then reports no overlap at all.

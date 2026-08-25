@@ -1024,6 +1024,32 @@ describe('local normalization', () => {
 		}
 	})
 
+	test('overlapping boxes are thinned to the aggregate sampling budget', () => {
+		const size = 128
+		const pixels = size * size
+		const reference = new Float64Array(pixels)
+		const current = new Float64Array(pixels)
+
+		for (let i = 0; i < pixels; i++) {
+			const value = 0.1 + 0.8 * (i / pixels)
+			reference[i] = value
+			current[i] = (value - 0.05) / 2
+		}
+
+		const overlapping = resolveLocalNormalizationOptions({ gridSize: size, boxSize: size, maxSamplesPerCell: 16384, minSamplesPerCell: 4 })
+		const overlapped = fitLocalNormalizationRaw(reference, current, size, size, 1, 'per-channel', undefined, overlapping)
+
+		expect(overlapped.diagnostics[0].candidateCells).toBe(pixels)
+		expect(overlapped.diagnostics[0].acceptedCells).toBe(0)
+		expect(isLocalNormalizationFallback(overlapped)).toBe(true)
+
+		const tiling = resolveLocalNormalizationOptions({ gridSize: 8, maxSamplesPerCell: 16384, minSamplesPerCell: 4 })
+		const tiled = fitLocalNormalizationRaw(reference, current, size, size, 1, 'per-channel', undefined, tiling)
+
+		expect(tiled.diagnostics[0].acceptedCells).toBe(tiled.diagnostics[0].candidateCells)
+		expect(isLocalNormalizationFallback(tiled)).toBe(false)
+	})
+
 	test('a mask aligned to the sampling lattice is recovered by the alternate phase', () => {
 		const reference = referencePlane()
 		const current = inverseTransform(
