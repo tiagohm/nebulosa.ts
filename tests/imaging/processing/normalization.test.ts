@@ -617,6 +617,45 @@ describe('local normalization', () => {
 		}
 	})
 
+	test('the pivot ignores pixels the fit itself excluded', () => {
+		// A band of the reference is non-finite while the current frame there is finite and far brighter.
+		// Those pairs feed nothing else in the fit, so letting them move the pivot would anchor the
+		// reconstruction on a level the fit never saw.
+		const reference = referencePlane()
+		const current = inverseTransform(
+			reference,
+			(x) => 1.1 + 0.1 * (x / WIDTH),
+			(x) => 0.01 + 0.02 * (x / WIDTH),
+		)
+
+		const clean = fitMono(reference, new Float64Array(current))
+
+		const holed = new Float64Array(reference)
+		const spiked = new Float64Array(current)
+		for (let y = 0; y < 70; y++) {
+			for (let x = 0; x < WIDTH; x++) {
+				holed[y * WIDTH + x] = Number.NaN
+				// Far below the finite range, so including it would drag the lower quantile the pivot uses.
+				spiked[y * WIDTH + x] = -50
+			}
+		}
+
+		const model = fitMono(holed, spiked)
+
+		// The pivot is drawn from the same finite pairs the fit uses, so the unmatched band cannot move it.
+		expect(model.pivots[0]).toBeGreaterThan(0)
+		expect(model.pivots[0]).toBeLessThan(1)
+		expect(model.pivots[0]).toBeCloseTo(clean.pivots[0]!, 2)
+
+		// And the correction stays sane over the region the fit could actually see.
+		applyLocalNormalizationInPlace(spiked, undefined, model)
+		let worst = 0
+		for (let y = 80; y < HEIGHT; y++) {
+			for (let x = 0; x < WIDTH; x++) worst = Math.max(worst, Math.abs(spiked[y * WIDTH + x] - reference[y * WIDTH + x]))
+		}
+		expect(worst).toBeLessThan(0.05)
+	})
+
 	test('a diagonal partial overlap is corrected as accurately at its boundary as inside', () => {
 		// A diagonal overlap boundary leaves the boundary cells clipped, with centroids well off their
 		// nominal grid centers, and every axis-aligned mask test above misses that case.

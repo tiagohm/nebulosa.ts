@@ -844,7 +844,7 @@ export function fitLocalNormalizationRaw(referenceRaw: ImageRawType, currentRaw:
 	const scratchBuf = new Float64Array(capacity)
 
 	// The pivot is needed per cell, so it is drawn from the strided sample grid up front.
-	const pivots = collectPivots(currentRaw, valid, channels, width, height, planes, luminance, estimator)
+	const pivots = collectPivots(referenceRaw, currentRaw, valid, channels, width, height, planes, luminance, estimator)
 
 	// Per-cell state kept per plane so the offset residuals can be rotated onto the fitted gain without a
 	// second pass over the pixels.
@@ -1133,12 +1133,16 @@ export function fitLocalNormalizationRaw(referenceRaw: ImageRawType, currentRaw:
 // drawn from the same strided sample grid the global fit uses. The local gain rotates the transform
 // about this value, so the offset and gain residuals stay decorrelated. Every plane is collected in one
 // pass over the grid.
-function collectPivots(currentRaw: ImageRawType, valid: Readonly<Uint8Array> | undefined, channels: number, width: number, height: number, planes: number, luminance: boolean, estimator: GlobalNormalizationMode) {
+function collectPivots(referenceRaw: ImageRawType, currentRaw: ImageRawType, valid: Readonly<Uint8Array> | undefined, channels: number, width: number, height: number, planes: number, luminance: boolean, estimator: GlobalNormalizationMode) {
 	const step = Math.max(1, Math.floor(Math.sqrt((width * height) / NORMALIZATION_SAMPLE_LIMIT)))
 	const values: number[][] = new Array<number[]>(planes)
 	for (let plane = 0; plane < planes; plane++) values[plane] = []
 	const { red, green, blue } = DEFAULT_GRAYSCALE
 
+	// Only pixels that are finite in BOTH frames count, which is the rule the global solve and the cell
+	// estimates already use. A pixel finite here but not in the reference contributes to nothing else, so
+	// letting it move the pivot would anchor the reconstruction on a level the fit never saw — and the
+	// pivot enters the offset as `(gain - anchor) * pivot`, a term nothing downstream can undo.
 	for (let y = 0; y < height; y += step) {
 		for (let x = 0; x < width; x += step) {
 			const pixel = y * width + x
@@ -1147,11 +1151,12 @@ function collectPivots(currentRaw: ImageRawType, valid: Readonly<Uint8Array> | u
 
 			if (luminance) {
 				const v = red * currentRaw[base] + green * currentRaw[base + 1] + blue * currentRaw[base + 2]
-				if (Number.isFinite(v)) values[0].push(v)
+				const r = red * referenceRaw[base] + green * referenceRaw[base + 1] + blue * referenceRaw[base + 2]
+				if (Number.isFinite(v) && Number.isFinite(r)) values[0].push(v)
 			} else {
 				for (let plane = 0; plane < planes; plane++) {
 					const v = currentRaw[base + plane]
-					if (Number.isFinite(v)) values[plane].push(v)
+					if (Number.isFinite(v) && Number.isFinite(referenceRaw[base + plane])) values[plane].push(v)
 				}
 			}
 		}
