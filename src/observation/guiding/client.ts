@@ -227,8 +227,17 @@ export class GuiderClient {
 	readonly #cameraHandler: DeviceHandler<Camera> = {
 		// Ignores manager-level add callbacks because connect binds one camera explicitly.
 		added: () => {},
-		// Ignores manager-level removal callbacks because disconnect owns active-session teardown.
-		removed: () => {},
+		// Stops an in-flight capture when the bound camera drops its live connected flag without
+		// going through GuiderClient.disconnect(), so a leftover watchdog cannot retry against it.
+		updated: (device, property) => {
+			if (device !== this.#camera || property !== 'connected' || device.connected === true) return
+			this.stopCapture()
+		},
+		// The bound camera was removed from the manager; terminate capture the same way.
+		removed: (device) => {
+			if (device !== this.#camera) return
+			this.stopCapture()
+		},
 		// Decodes each camera frame asynchronously and feeds the guider state machine.
 		blobReceived: (device, data, encoding) => {
 			void this.#processBlob(device, data, encoding)
@@ -1442,10 +1451,11 @@ export class GuiderClient {
 		this.#armExposureWatchdog()
 	}
 
-	// True when the exposure loop is allowed to start or retry a capture. Full pause, stop, and
-	// disconnect all make this false so a leftover timer or a post-Alert retry cannot expose.
+	// True when the exposure loop is allowed to start or retry a capture. Full pause, stop, client
+	// disconnect, and a live camera that dropped its connected flag all make this false so a leftover
+	// timer cannot keep exposing a device that is no longer there.
 	get #captureActive() {
-		return this.#connected && this.#camera !== undefined && this.#appState !== 'Stopped' && !(this.#appState === 'Paused' && this.#fullPause)
+		return this.#connected && this.#camera !== undefined && this.#camera.connected === true && this.#appState !== 'Stopped' && !(this.#appState === 'Paused' && this.#fullPause)
 	}
 
 	// Waits out the commanded pulse, the INDI Busy acknowledgement, and the later Idle. GuideOutput

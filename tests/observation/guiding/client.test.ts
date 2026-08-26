@@ -1072,6 +1072,20 @@ describe('frame processing robustness', () => {
 		local.client.stopCapture()
 	})
 
+	test('a disconnected camera does not receive watchdog retries', async () => {
+		connect(harness)
+		harness.client.loop()
+		const exposuresBefore = harness.cameraManager.startExposureCalls.length
+		expect(exposuresBefore).toBeGreaterThan(0)
+
+		harness.camera.connected = false
+		await Bun.sleep(Math.max(3 * harness.client.getExposure(), 5000) + 200)
+
+		expect(harness.cameraManager.startExposureCalls.length).toBe(exposuresBefore)
+		expect(eventsOf(harness.events, 'Alert').some((alert) => alert.Type === 'warning' && alert.Msg.includes('timed out'))).toBeFalse()
+		harness.client.stopCapture()
+	}, 15000)
+
 	test('a missing guide frame retries the exposure after the watchdog', async () => {
 		connect(harness)
 		harness.client.loop()
