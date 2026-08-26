@@ -277,6 +277,7 @@ export class GuiderClient {
 		this.#guideOutput = undefined
 		this.#focalLength = 0
 		this.#pixelSize = 0
+		this.#abortSettling('device disconnected')
 		this.#resetRuntimeState(true, hadGuidingAssistant)
 		this.emitEvent('ConfigurationChange')
 
@@ -326,6 +327,7 @@ export class GuiderClient {
 			this.#finishGuidingAssistant(false, 'capture stopped', this.#guidingAssistant.measuringBacklash)
 		}
 
+		this.#abortSettling('capture stopped')
 		this.#emitCaptureStoppedEvent()
 
 		if (this.#camera !== undefined) {
@@ -334,11 +336,6 @@ export class GuiderClient {
 
 		this.#paused = false
 		this.#fullPause = true
-		this.#settling = false
-		this.#settleStartTime = 0
-		this.#settleStableSince = 0
-		this.#settleFrameCount = 0
-		this.#settleDroppedFrameCount = 0
 		this.#lockShiftTimestamp = 0
 		this.#lockShiftLimitReached = false
 		this.#guidingStartTime = 0
@@ -368,9 +365,7 @@ export class GuiderClient {
 		this.#lockShiftOffsetY = 0
 		this.#lockShiftTimestamp = 0
 		this.#lockShiftLimitReached = false
-		this.#settling = false
-		this.#settleStartTime = 0
-		this.#settleStableSince = 0
+		this.#abortSettling('calibration cleared')
 		this.emitEvent('ConfigurationChange')
 
 		if (this.#appState === 'Calibrating' || this.#appState === 'Guiding' || this.#appState === 'LostLock' || this.#appState === 'Paused') {
@@ -393,9 +388,7 @@ export class GuiderClient {
 		this.#lockShiftOffsetY = 0
 		this.#lockShiftTimestamp = 0
 		this.#lockShiftLimitReached = false
-		this.#settling = false
-		this.#settleStartTime = 0
-		this.#settleStableSince = 0
+		this.#abortSettling('guide star deselected')
 		this.#guider.reset()
 
 		if (this.#guider.currentState.ditherActive) {
@@ -678,11 +671,7 @@ export class GuiderClient {
 		this.#paused = false
 		this.#fullPause = true
 		this.#resumeState = 'Looping'
-		this.#settling = false
-		this.#settleStartTime = 0
-		this.#settleStableSince = 0
-		this.#settleFrameCount = 0
-		this.#settleDroppedFrameCount = 0
+		this.#abortSettling('looping started')
 		this.#lockShiftTimestamp = 0
 		this.#lockShiftLimitReached = false
 		// Drop any dither/lock-shift target offset from a prior session so it cannot carry over into
@@ -1110,6 +1099,17 @@ export class GuiderClient {
 	// Returns true when ordinary guide pulses are currently allowed to reach the mount.
 	get #guideOutputActive() {
 		return this.#guideOutputEnabled && !this.#guidingAssistantSuppressingGuideOutput
+	}
+
+	// Completes an in-flight settle with an error so PHD2-style waiters are not left hanging when the
+	// session leaves the settling path without a natural SettleDone (timeout or in-tolerance).
+	#abortSettling(reason: string) {
+		if (!this.#settling) return
+
+		this.#settling = false
+		this.#settleStartTime = 0
+		this.#settleStableSince = 0
+		this.#emitSettleDoneEvent(1, reason)
 	}
 
 	// Updates settle state from current guide error and elapsed settle timing.

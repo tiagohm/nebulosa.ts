@@ -427,6 +427,20 @@ describe('capture control', () => {
 		expect(eventsOf(harness.events, 'GuidingStopped')).toHaveLength(0)
 		expect(eventsOf(harness.events, 'LoopingExposuresStopped')).toHaveLength(0)
 	})
+
+	test('stopCapture during settle emits SettleDone with an error', () => {
+		connect(harness)
+		harness.client.guide()
+		expect(harness.client.getSettling()).toBeTrue()
+
+		harness.client.stopCapture()
+
+		const done = eventsOf(harness.events, 'SettleDone')
+		expect(done).toHaveLength(1)
+		expect(done[0].Status).not.toBe(0)
+		expect(done[0].Error).toBe('capture stopped')
+		expect(harness.client.getSettling()).toBeFalse()
+	})
 })
 
 describe('exposure', () => {
@@ -643,6 +657,62 @@ describe('mode transitions', () => {
 		expect(harness.client.loop()).toBeTrue()
 		expect(harness.client.getAppState()).toBe('Looping')
 		expect(harness.cameraManager.startExposureCalls.length).toBeGreaterThanOrEqual(1)
+	})
+
+	test('loop during settle emits SettleDone with an error', () => {
+		connect(harness)
+		harness.client.guide()
+		expect(harness.client.getSettling()).toBeTrue()
+
+		harness.client.loop()
+
+		const done = eventsOf(harness.events, 'SettleDone')
+		expect(done).toHaveLength(1)
+		expect(done[0].Status).not.toBe(0)
+		expect(done[0].Error).toBe('looping started')
+		expect(harness.client.getSettling()).toBeFalse()
+	})
+
+	test('clearCalibration during settle emits SettleDone with an error', () => {
+		connect(harness)
+		harness.client.guide()
+		expect(harness.client.getSettling()).toBeTrue()
+
+		harness.client.clearCalibration()
+
+		const done = eventsOf(harness.events, 'SettleDone')
+		expect(done).toHaveLength(1)
+		expect(done[0].Status).not.toBe(0)
+		expect(done[0].Error).toBe('calibration cleared')
+		expect(harness.client.getSettling()).toBeFalse()
+	})
+
+	test('deselectStar during settle emits SettleDone with an error', () => {
+		connect(harness)
+		harness.client.guide()
+		expect(harness.client.getSettling()).toBeTrue()
+
+		harness.client.deselectStar()
+
+		const done = eventsOf(harness.events, 'SettleDone')
+		expect(done).toHaveLength(1)
+		expect(done[0].Status).not.toBe(0)
+		expect(done[0].Error).toBe('guide star deselected')
+		expect(harness.client.getSettling()).toBeFalse()
+	})
+
+	test('disconnect during settle emits SettleDone with an error', () => {
+		connect(harness)
+		harness.client.guide()
+		expect(harness.client.getSettling()).toBeTrue()
+
+		harness.client.disconnect()
+
+		const done = eventsOf(harness.events, 'SettleDone')
+		expect(done).toHaveLength(1)
+		expect(done[0].Status).not.toBe(0)
+		expect(done[0].Error).toBe('device disconnected')
+		expect(harness.client.getSettling()).toBeFalse()
 	})
 
 	test('guide requires a full connection and starts calibration without a solution', () => {
