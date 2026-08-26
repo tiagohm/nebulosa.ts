@@ -829,6 +829,21 @@ function coprimeSamplingStep(count: number, target: number) {
 	return step
 }
 
+// Whether a pixel coordinate in the current cell was already visited by one of the sparse sampling
+// phases. Dense retries use this to supplement the sparse reservoir with new coordinates instead of
+// recounting the same finite pair twice.
+function sparseCellPhasesVisited(x: number, y: number, bx0: number, bx1: number, by0: number, by1: number, strideX: number, strideY: number, phaseOffsetsX: Int32Array, phaseOffsetsY: Int32Array, phases: number) {
+	for (let phase = 0; phase < phases; phase++) {
+		const originX = Math.min(bx0 + phaseOffsetsX[phase], bx1)
+		if (x < originX || (x - originX) % strideX !== 0) continue
+
+		const originY = Math.min(by0 + phaseOffsetsY[phase], by1)
+		if (y >= originY && (y - originY) % strideY === 0) return true
+	}
+
+	return false
+}
+
 // Adds one unique sparse-scan phase residue in [0, stride). Returns the updated count.
 function addCellPhaseOffset(offsets: Int32Array, count: number, stride: number, offset: number) {
 	const bounded = clamp(offset, 0, Math.max(0, stride - 1))
@@ -1247,12 +1262,8 @@ export function fitLocalNormalizationRaw(referenceRaw: ImageRawType, currentRaw:
 				const densePixels = denseW * denseH
 				const validFractionBudget = minValidFraction > 0 ? Math.ceil(minSamplesPerCell / minValidFraction) : minSamplesPerCell
 				const denseBudget = Math.min(densePixels, Math.max(capacity, Math.min(capacity * LOCAL_NORMALIZATION_DENSE_RETRY_FACTOR, validFractionBudget)))
-				const denseSide = Math.max(1, Math.floor(Math.sqrt(denseBudget)))
-				const denseStepX = coprimeSamplingStep(denseW, denseSide)
-				const denseStepY = coprimeSamplingStep(denseH, denseSide + 3)
+				const denseStep = coprimeSamplingStep(densePixels, denseBudget)
 				const denseStart = (((r + 1) * 73856093 + (c + 1) * 19349663) >>> 0) % densePixels
-				const denseStartX = denseStart % denseW
-				const denseStartY = Math.floor(denseStart / denseW)
 				let denseVisited = 0
 
 				for (let i = 0; i < pendingCount; i++) {
@@ -1260,9 +1271,11 @@ export function fitLocalNormalizationRaw(referenceRaw: ImageRawType, currentRaw:
 					if (validPairs[plane] === 0) visited[plane] = 0
 				}
 
-				for (let sample = 0; sample < denseBudget; sample++) {
-					const x = bx0 + ((denseStartX + sample * denseStepX) % denseW)
-					const y = by0 + ((denseStartY + sample * denseStepY + Math.floor((sample * sample) / denseW)) % denseH)
+				for (let sample = 0; sample < densePixels && denseVisited < denseBudget; sample++) {
+					const denseIndex = (denseStart + sample * denseStep) % densePixels
+					const x = bx0 + (denseIndex % denseW)
+					const y = by0 + Math.floor(denseIndex / denseW)
+					if (sparseCellPhasesVisited(x, y, bx0, bx1, by0, by1, strideX, strideY, phaseOffsetsX, phaseOffsetsY, phases)) continue
 					denseVisited++
 
 					const pixel = y * width + x
