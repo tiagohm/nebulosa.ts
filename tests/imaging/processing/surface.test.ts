@@ -158,6 +158,36 @@ describe('polynomial fit', () => {
 		expect(highPoint.at(91, 91)).toBeCloseTo(0.5, 12)
 	})
 
+	test('a capped polynomial fit rejects original sample outliers', () => {
+		const width = 100
+		const height = 40
+		const positions = width * height
+		const samples: SurfaceSample[] = []
+		for (let i = 0; i < positions; i++) {
+			const x = i % width
+			const y = Math.floor(i / width)
+			for (let k = 0; k < 9; k++) samples.push({ x, y, value: 0 })
+			samples.push({ x, y, value: 1 })
+		}
+
+		const model = fitOrThrow(samples, width, height, { degree: 1, rejection: { mode: 'asymmetric', high: 1, low: 100, iterations: 1 } })
+		const point = createScalarSurfacePointEvaluator(model)
+		let rejectedHigh = 0
+		let rejectedLow = 0
+
+		for (const sample of model.samples) {
+			if (!sample.accepted && sample.value === 1) rejectedHigh++
+			if (!sample.accepted && sample.value === 0) rejectedLow++
+		}
+
+		expect(samples.length).toBeGreaterThan(SURFACE_MAX_POLYNOMIAL_SAMPLES)
+		expect(point.at(50, 20)).toBeCloseTo(0, 12)
+		expect(model.acceptedSamples).toBe(positions * 9)
+		expect(model.rejectedSamples).toBe(positions)
+		expect(rejectedHigh).toBe(positions)
+		expect(rejectedLow).toBe(0)
+	})
+
 	test('an absurd degree is clamped instead of sizing the basis by it', () => {
 		// The basis tables are (d+1)(d+2)/2 entries, so an unclamped degree sizes two typed arrays by it
 		// before the fit could report anything - `degree: 100000` asks for about five billion terms.

@@ -256,15 +256,6 @@ export interface SurfaceControlPointSelection {
 	readonly weight: Float64Array
 }
 
-// Aggregated fitting set plus the source-sample mapping needed to project post-fit rejection back onto
-// the original diagnostics without overwriting input coordinates or values.
-interface SurfaceSampleAggregation {
-	// Weighted bucket samples used by the capped fit.
-	readonly set: SurfaceSampleSet
-	// Aggregate sample index for each original sample, or -1 when that sample was already inactive.
-	readonly sourceToAggregate: Int32Array
-}
-
 // Allocates an empty sample set able to hold `capacity` samples.
 export function createSurfaceSampleSet(capacity: number): SurfaceSampleSet {
 	return {
@@ -728,14 +719,11 @@ function aggregateSurfaceControlsByBucket(set: SurfaceSampleSet, maxPoints: numb
 }
 
 // Builds a capped fitting set by aggregating each spatial bucket into one weighted observation. The
-// original sample set is left unchanged; `sourceToAggregate` records which aggregate carried each input
-// sample into the fit so final acceptance can be reported on the original diagnostics.
-function aggregateActiveSurfaceSamples(set: SurfaceSampleSet, maxSamples: number): SurfaceSampleAggregation | undefined {
+// original sample set is left unchanged so diagnostics keep the caller's sample coordinates and values.
+function aggregateActiveSurfaceSamples(set: SurfaceSampleSet, maxSamples: number): SurfaceSampleSet | undefined {
 	if (activeSurfaceSampleCount(set) <= maxSamples) return undefined
 	const g = Math.max(1, Math.floor(Math.sqrt(maxSamples)))
 	const buckets = g * g
-	const bucketOfSource = new Int32Array(set.count).fill(-1)
-	const aggregateOfBucket = new Int32Array(buckets).fill(-1)
 	const sumX = new Float64Array(buckets)
 	const sumY = new Float64Array(buckets)
 	const sumU = new Float64Array(buckets)
@@ -750,7 +738,6 @@ function aggregateActiveSurfaceSamples(set: SurfaceSampleSet, maxSamples: number
 		const bucket = bv * g + bu
 		const weight = set.weight[i]
 
-		bucketOfSource[i] = bucket
 		sumWeight[bucket] += weight
 		sumX[bucket] += weight * set.x[i]
 		sumY[bucket] += weight * set.y[i]
@@ -773,27 +760,9 @@ function aggregateActiveSurfaceSamples(set: SurfaceSampleSet, maxSamples: number
 		aggregate.value[index] = sumValue[bucket] * inv
 		aggregate.weight[index] = weight
 		aggregate.active[index] = 1
-		aggregateOfBucket[bucket] = index
 	}
 
-	const sourceToAggregate = new Int32Array(set.count).fill(-1)
-	for (let i = 0; i < set.count; i++) {
-		const bucket = bucketOfSource[i]
-		if (bucket >= 0) sourceToAggregate[i] = aggregateOfBucket[bucket]
-	}
-
-	return { set: aggregate, sourceToAggregate }
-}
-
-// Applies the aggregate fit's accepted flags to the original sample diagnostics.
-function applySurfaceSampleAggregationAcceptance(set: SurfaceSampleSet, aggregation: SurfaceSampleAggregation) {
-	const active = aggregation.set.active
-	const sourceToAggregate = aggregation.sourceToAggregate
-
-	for (let i = 0; i < set.count; i++) {
-		const aggregate = sourceToAggregate[i]
-		set.active[i] = aggregate >= 0 && active[aggregate] !== 0 ? 1 : 0
-	}
+	return aggregate
 }
 
 // Fits a 2D Chebyshev surface to the active samples by weighted least squares (QR). Returns the
@@ -944,6 +913,72 @@ export function fitPolynomialSurfaceWithRejection(set: SurfaceSampleSet, degree:
 		if (typeof refit === 'string') {
 			// The reduced sample set is unsolvable. Reinstate the samples rejected in this pass and keep the
 			// previous fit, which matches those samples, so the accepted set stays consistent with it.
+			for (const i of rejectedThisPass) active[i] = 1
+			break
+		}
+		coefficients = refit
+	}
+
+	return { coefficients, residual: Number.isFinite(residualDispersion) ? residualDispersion : 0 }
+}
+
+// Fits a polynomial surface with a bounded QR input, aggregating only the active originals.
+function fitCappedPolynomialSurface(set: SurfaceSampleSet, maxSamples: number, degree: number, terms: number, ti: Uint8Array, tj: Uint8Array) {
+	const aggregate = aggregateActiveSurfaceSamples(set, maxSamples)
+	return fitPolynomialSurface(aggregate ?? set, degree, terms, ti, tj)
+}
+
+// Fits a capped polynomial surface while evaluating residual rejection against the original samples.
+// Each refit still runs through a bounded aggregate set, but rejection flips the caller's diagnostic
+// records so clean and contaminated observations in one bucket are not merged before outlier detection.
+function fitCappedPolynomialSurfaceWithRejection(set: SurfaceSampleSet, maxSamples: number, degree: number, terms: number, ti: Uint8Array, tj: Uint8Array, rejection: Required<SurfaceRejectionOptions>, residuals: Float64Array, scratch: Float64Array): PolynomialFitOutcome | SurfaceFitFailureReason {
+	const first = fitCappedPolynomialSurface(set, maxSamples, degree, terms, ti, tj)
+	if (typeof first === 'string') return first
+
+	let coefficients = first
+	let residualDispersion = 0
+
+	const uCheb = new Float64Array(degree + 1)
+	const vCheb = new Float64Array(degree + 1)
+	const { u, v, value, active, count } = set
+	const highLimitSigma = rejection.high
+	const lowLimitSigma = rejection.mode === 'symmetric' ? rejection.high : rejection.low
+	const iterations = rejection.mode === 'none' ? 0 : rejection.iterations
+	const rejectedThisPass: number[] = []
+
+	for (let iteration = 0; iteration <= iterations; iteration++) {
+		let n = 0
+		for (let i = 0; i < count; i++) {
+			if (active[i] === 0) continue
+			residuals[n++] = value[i] - evaluatePolynomialSurfaceAt(coefficients, u[i], v[i], degree, terms, ti, tj, uCheb, vCheb)
+		}
+
+		residualDispersion = computeResidualDispersion(residuals, scratch, n)
+
+		if (iteration === iterations || !Number.isFinite(residualDispersion)) break
+
+		const spread = standardDeviationOf(residuals, n)
+		if (spread === 0 || Number.isNaN(spread)) break
+		const scale = residualDispersion > 1e-6 * spread ? residualDispersion : spread
+		const highLimit = highLimitSigma * scale
+		const lowLimit = lowLimitSigma * scale
+		rejectedThisPass.length = 0
+		let index = 0
+
+		for (let i = 0; i < count; i++) {
+			if (active[i] === 0) continue
+			const residual = residuals[index]
+			if (residual > highLimit || residual < -lowLimit) {
+				active[i] = 0
+				rejectedThisPass.push(i)
+			}
+			index++
+		}
+
+		if (rejectedThisPass.length === 0) break
+
+		const refit = fitCappedPolynomialSurface(set, maxSamples, degree, terms, ti, tj)
+		if (typeof refit === 'string') {
 			for (const i of rejectedThisPass) active[i] = 1
 			break
 		}
@@ -1628,15 +1663,12 @@ export function fitScalarSurface(samples: readonly SurfaceSample[], width: numbe
 		iterations: options.rejection?.iterations ?? 0,
 	}
 
-	const aggregation = aggregateActiveSurfaceSamples(set, SURFACE_MAX_POLYNOMIAL_SAMPLES)
-	const fitSet = aggregation?.set ?? set
-	const active = activeSurfaceSampleCount(fitSet)
+	const active = activeSurfaceSampleCount(set)
 	const residuals = new Float64Array(active)
 	const scratch = new Float64Array(active)
-	const outcome = fitPolynomialSurfaceWithRejection(fitSet, degree, terms, ti, tj, rejection, residuals, scratch)
+	const outcome = active > SURFACE_MAX_POLYNOMIAL_SAMPLES ? fitCappedPolynomialSurfaceWithRejection(set, SURFACE_MAX_POLYNOMIAL_SAMPLES, degree, terms, ti, tj, rejection, residuals, scratch) : fitPolynomialSurfaceWithRejection(set, degree, terms, ti, tj, rejection, residuals, scratch)
 	if (typeof outcome === 'string') return { ok: false, reason: outcome }
 
-	if (aggregation !== undefined) applySurfaceSampleAggregationAcceptance(set, aggregation)
 	const accepted = activeSurfaceSampleCount(set)
 
 	return {
