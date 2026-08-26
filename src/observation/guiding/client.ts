@@ -35,6 +35,10 @@ const PHD2_SUBVER = ''
 const PHD2_MSG_VERSION = 1
 // Overlapping exposures are not implemented by the local guider.
 const PHD2_OVERLAP_SUPPORT = false
+// Extra time, in milliseconds, to wait for TELESCOPE_TIMED_GUIDE_* to leave Busy after the nominal
+// pulse duration. Covers INDI network/driver latency so the next exposure does not start while the
+// mount is still moving.
+const PULSE_IDLE_MARGIN_MS = 250
 
 // Exponential smoothing factor PHD2 applies to the guide distance reported as GuideStep.AvgDist.
 // Matches PHD2's Guider::UpdateCurrentDistance, which low-pass filters the per-frame distance so
@@ -1302,9 +1306,23 @@ export class GuiderClient {
 
 	// Starts another exposure after pulse delay if the current session is still active.
 	async #queueNextExposure(delay: number): Promise<void> {
-		if (delay > 0) await Bun.sleep(delay)
+		await this.#waitForPulseToComplete(delay)
 		if (!this.#connected || this.#camera === undefined || this.#appState === 'Stopped' || (this.#appState === 'Paused' && this.#fullPause)) return
 		this.cameraManager.startExposure(this.#camera, this.#exposure / 1000)
+	}
+
+	// Waits out the commanded pulse and, if the guide output still reports Busy, until it goes idle
+	// or a latency margin expires. Sleeping only the nominal duration starts the next exposure while
+	// the mount is still moving whenever the INDI round-trip outlasts the pulse itself.
+	async #waitForPulseToComplete(duration: number): Promise<void> {
+		if (duration <= 0) return
+
+		const started = performance.now()
+		await Bun.sleep(duration)
+
+		while (this.#guideOutput?.pulsing === true && performance.now() - started < duration + PULSE_IDLE_MARGIN_MS) {
+			await Bun.sleep(10)
+		}
 	}
 
 	// Resets transient guider state while optionally dropping calibration.

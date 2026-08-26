@@ -60,9 +60,19 @@ class FakeCameraManager {
 // Records every pulse the GuiderClient routes through the guide output.
 class FakeGuideOutputManager {
 	readonly pulses: PulseRecord[] = []
+	// Extra milliseconds the fake guide output stays Busy after the commanded pulse duration, to
+	// model INDI driver latency. Zero keeps existing tests on the nominal sleep path.
+	pulseBusyOverhangMs = 0
 
-	pulse(_device: GuideOutput, direction: GuideDirection, duration: number) {
+	pulse(device: GuideOutput, direction: GuideDirection, duration: number) {
 		this.pulses.push({ direction, duration })
+		if (this.pulseBusyOverhangMs <= 0) return
+
+		device.pulsing = true
+		const hold = duration + this.pulseBusyOverhangMs
+		setTimeout(() => {
+			device.pulsing = false
+		}, hold)
 	}
 }
 
@@ -1197,6 +1207,27 @@ describe('closed-loop calibration and guiding', () => {
 				const expected = steps[i - 1].AvgDist + AVG_DIST_ALPHA * (distance - steps[i - 1].AvgDist)
 				expect(steps[i].AvgDist).toBeCloseTo(expected, 6)
 			}
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
+		'the next exposure waits until the guide output reports idle after a pulse',
+		async () => {
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
+
+			harness.guideOutputManager.pulseBusyOverhangMs = 80
+			harness.mount.driftX = RA_AXIS[0] * 1.2
+			harness.mount.driftY = RA_AXIS[1] * 1.2
+
+			const pulsesBefore = harness.guideOutputManager.pulses.length
+			const started = performance.now()
+			await feedFrame(harness)
+
+			expect(harness.guideOutputManager.pulses.length).toBeGreaterThan(pulsesBefore)
+			expect(harness.guideOutput.pulsing).toBeFalse()
+			expect(performance.now() - started).toBeGreaterThanOrEqual(80)
 		},
 		CLOSED_LOOP_TIMEOUT,
 	)
