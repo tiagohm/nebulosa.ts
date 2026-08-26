@@ -1,5 +1,6 @@
 import { pixelScale } from '../../astronomy/formulas'
 import type { PartialOnly, Writable } from '../../core/types'
+import { errorMessage } from '../../core/util'
 import { DEFAULT_PHD2_SETTLE, type PHD2AppState, type PHD2CalibrationData, type PHD2DeclinationGuideMode, type PHD2EventMap, type PHD2Events, type PHD2GuideDirection, type PHD2GuideStepEvent, type PHD2LockShiftParams, type PHD2Settle, type PHD2StarImage } from '../../devices/guiding/phd2'
 import type { Camera, GuideDirection, GuideOutput } from '../../devices/indi/device'
 import type { CameraManager, DeviceHandler, GuideOutputManager } from '../../devices/indi/manager'
@@ -39,6 +40,9 @@ const PHD2_OVERLAP_SUPPORT = false
 // pulse duration. Covers INDI network/driver latency so the next exposure does not start while the
 // mount is still moving.
 const PULSE_IDLE_MARGIN_MS = 250
+// Floor for the missing-BLOB watchdog, in milliseconds. The timeout is max(3 × exposure, this) so a
+// short cadence still waits long enough for a slow INDI round-trip before retrying.
+const EXPOSURE_WATCHDOG_MIN_MS = 5000
 
 // Exponential smoothing factor PHD2 applies to the guide distance reported as GuideStep.AvgDist.
 // Matches PHD2's Guider::UpdateCurrentDistance, which low-pass filters the per-frame distance so
@@ -151,6 +155,9 @@ export class GuiderClient {
 	#image?: Image
 	#frameId = 0
 	#processingBlob = false
+	// Retriggers a dropped INDI exposure so a missing BLOB cannot stall the loop until the user
+	// notices. Armed when an exposure is started; cleared when capture stops.
+	#exposureWatchdog?: ReturnType<typeof setTimeout>
 	#lockPosition?: readonly [number, number]
 	#lockSearchPosition?: readonly [number, number]
 	#exactLockPosition = false
@@ -272,6 +279,7 @@ export class GuiderClient {
 		}
 
 		this.#connected = false
+		this.#clearExposureWatchdog()
 		this.detachHandler()
 
 		if (camera !== undefined) {
@@ -320,6 +328,7 @@ export class GuiderClient {
 		if (this.#camera !== undefined) {
 			// Camera requires exposure in seconds.
 			this.cameraManager.startExposure(this.#camera, this.#exposure / 1000)
+			this.#armExposureWatchdog()
 			return true
 		}
 
@@ -336,6 +345,7 @@ export class GuiderClient {
 
 		this.#abortSettling('capture stopped')
 		this.#emitCaptureStoppedEvent()
+		this.#clearExposureWatchdog()
 
 		if (this.#camera !== undefined) {
 			this.cameraManager.stopExposure(this.#camera)
@@ -602,7 +612,7 @@ export class GuiderClient {
 	// A guide request issued while already guiding does not restart the session: like PHD2, it only
 	// begins a new settle cycle, so the accumulated dither and lock-shift target offsets survive.
 	guide(recalibrate: boolean = false, settle?: Partial<PHD2Settle>) {
-		if (!this.#connected || this.#camera === undefined || this.#guideOutput === undefined) return false
+		if (!this.getConnected() || this.#camera === undefined || this.#guideOutput === undefined || !this.#guideOutput.canPulseGuide) return false
 
 		if (!recalibrate && !this.#paused && this.#calibration !== undefined && (this.#appState === 'Guiding' || this.#appState === 'LostLock')) {
 			this.#settle = { ...DEFAULT_PHD2_SETTLE, ...settle }
@@ -672,7 +682,7 @@ export class GuiderClient {
 
 	// Starts continuous exposure looping without issuing guide pulses.
 	loop() {
-		if (!this.#connected || this.#camera === undefined) return false
+		if (!this.#connected || this.#camera === undefined || this.#camera.connected !== true) return false
 
 		this.#abortGuidingAssistantForTransition('looping started')
 		this.#paused = false
@@ -840,7 +850,10 @@ export class GuiderClient {
 			if (!wasPaused) this.emitEvent('Paused')
 			if (this.#guidingAssistant?.measuringBacklash === true) this.#finishGuidingAssistant(false, 'backlash test paused', true)
 			this.#setAppState('Paused')
-			if (this.#fullPause && this.#camera !== undefined) this.cameraManager.stopExposure(this.#camera)
+			if (this.#fullPause) {
+				this.#clearExposureWatchdog()
+				if (this.#camera !== undefined) this.cameraManager.stopExposure(this.#camera)
+			}
 			return true
 		}
 
@@ -867,6 +880,8 @@ export class GuiderClient {
 		this.#processingBlob = true
 		this.#acceptedStars = undefined
 
+		let pulseDelay = 0
+
 		try {
 			let image: Image | undefined
 
@@ -887,15 +902,29 @@ export class GuiderClient {
 			const frame = this.#makeGuideFrame(image)
 			this.#frame = frame
 
-			const pulseDelay = this.#processFrame(frame)
+			try {
+				pulseDelay = this.#processFrame(frame)
 
-			// Published only for a decoded frame, and only after processing, so the UI sees the same
-			// state the events for this frame already reported. It runs before the pulse delay so the
-			// view is not held back by the settle wait.
-			if (image !== undefined) this.#emitFrameImage(frame, image)
-
-			await this.#queueNextExposure(pulseDelay)
+				// Published only for a decoded frame, and only after processing, so the UI sees the same
+				// state the events for this frame already reported. It runs before the pulse delay so the
+				// view is not held back by the settle wait.
+				if (image !== undefined) this.#emitFrameImage(frame, image)
+			} catch (e) {
+				// A pulse or controller throw must not kill the exposure loop: the next frame is still
+				// queued below so guiding recovers instead of hanging until the user restarts.
+				console.error('guide frame processing failed:', e)
+				this.emitEvent('Alert', { Msg: `guide frame processing failed: ${errorMessage(e)}`, Type: 'error' })
+			}
+		} catch (e) {
+			console.error('guide frame processing failed:', e)
+			this.emitEvent('Alert', { Msg: `guide frame processing failed: ${errorMessage(e)}`, Type: 'error' })
 		} finally {
+			try {
+				await this.#queueNextExposure(pulseDelay)
+			} catch (e) {
+				console.error('guide exposure queue failed:', e)
+			}
+
 			this.#processingBlob = false
 		}
 	}
@@ -1309,6 +1338,38 @@ export class GuiderClient {
 		await this.#waitForPulseToComplete(delay)
 		if (!this.#connected || this.#camera === undefined || this.#appState === 'Stopped' || (this.#appState === 'Paused' && this.#fullPause)) return
 		this.cameraManager.startExposure(this.#camera, this.#exposure / 1000)
+		this.#armExposureWatchdog()
+	}
+
+	// Arms a timer that retries the exposure if no BLOB arrives. The timeout is three cadences, with
+	// a floor so a sub-second loop still outlasts a slow INDI round-trip.
+	#armExposureWatchdog() {
+		this.#clearExposureWatchdog()
+		if (!this.#connected || this.#camera === undefined || this.#appState === 'Stopped' || (this.#appState === 'Paused' && this.#fullPause)) return
+
+		const timeout = Math.max(3 * this.#exposure, EXPOSURE_WATCHDOG_MIN_MS)
+		this.#exposureWatchdog = setTimeout(() => {
+			this.#onExposureWatchdog()
+		}, timeout)
+		this.#exposureWatchdog.unref()
+	}
+
+	// Cancels a pending missing-BLOB retry. Capture stop, disconnect, and a full pause all call this
+	// so a leftover timer cannot start an exposure after the session has already ended.
+	#clearExposureWatchdog() {
+		if (this.#exposureWatchdog === undefined) return
+		clearTimeout(this.#exposureWatchdog)
+		this.#exposureWatchdog = undefined
+	}
+
+	// Warns and starts another exposure when the camera never delivered the previous BLOB.
+	#onExposureWatchdog() {
+		this.#exposureWatchdog = undefined
+		if (!this.#connected || this.#camera === undefined || this.#appState === 'Stopped' || (this.#appState === 'Paused' && this.#fullPause)) return
+
+		this.emitEvent('Alert', { Msg: 'guide exposure timed out; retrying', Type: 'warning' })
+		this.cameraManager.startExposure(this.#camera, this.#exposure / 1000)
+		this.#armExposureWatchdog()
 	}
 
 	// Waits out the commanded pulse and, if the guide output still reports Busy, until it goes idle
@@ -1327,6 +1388,7 @@ export class GuiderClient {
 
 	// Resets transient guider state while optionally dropping calibration.
 	#resetRuntimeState(clearCalibration: boolean, preserveGuidingAssistantResult: boolean = false) {
+		this.#clearExposureWatchdog()
 		const guidingAssistantResult = preserveGuidingAssistantResult ? this.#guidingAssistantResult : undefined
 		this.#frame = undefined
 		this.#image = undefined
@@ -1420,7 +1482,13 @@ export class GuiderClient {
 			Inst: 1, // There is no PHD2 instance index in this local client, so Inst defaults to 1-based instance number.
 		} as PHD2Events
 
-		this.#eventHandler?.(this, event)
+		try {
+			this.#eventHandler?.(this, event)
+		} catch (e) {
+			// Event callbacks are user code; a throw must not unwind the exposure loop or skip the
+			// remaining notifications for this frame.
+			console.error('guide event handler failed:', e)
+		}
 	}
 
 	// Updates the current app state. No event is emitted here on purpose: PHD2 sends AppState only

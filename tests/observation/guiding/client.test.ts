@@ -664,6 +664,9 @@ describe('mode transitions', () => {
 	test('loop requires a connected camera and enters Looping', () => {
 		expect(harness.client.loop()).toBeFalse()
 		connect(harness)
+		harness.camera.connected = false
+		expect(harness.client.loop()).toBeFalse()
+		harness.camera.connected = true
 		expect(harness.client.loop()).toBeTrue()
 		expect(harness.client.getAppState()).toBe('Looping')
 		expect(harness.cameraManager.startExposureCalls.length).toBeGreaterThanOrEqual(1)
@@ -728,6 +731,12 @@ describe('mode transitions', () => {
 	test('guide requires a full connection and starts calibration without a solution', () => {
 		expect(harness.client.guide()).toBeFalse()
 		connect(harness)
+		harness.guideOutput.canPulseGuide = false
+		expect(harness.client.guide()).toBeFalse()
+		harness.guideOutput.canPulseGuide = true
+		harness.camera.connected = false
+		expect(harness.client.guide()).toBeFalse()
+		harness.camera.connected = true
 		expect(harness.client.guide()).toBeTrue()
 		expect(harness.client.getAppState()).toBe('Calibrating')
 		expect(eventsOf(harness.events, 'StartCalibration')).toHaveLength(1)
@@ -958,6 +967,49 @@ describe('frame processing robustness', () => {
 		await waitForLoopingExposures(before + 1)
 		expect(harness.client.getStarImage()).toBeUndefined()
 	})
+
+	test('an event handler throw does not stop the exposure loop', async () => {
+		const cameraManager = new FakeCameraManager()
+		const guideOutputManager = new FakeGuideOutputManager()
+		const events: PHD2Events[] = []
+		const client = new GuiderClient(cameraManager as unknown as CameraManager, guideOutputManager as unknown as GuideOutputManager, {
+			handler: {
+				event: (_client, event) => {
+					events.push(event)
+					throw new Error('handler boom')
+				},
+			},
+		})
+		const local: Harness = { client, cameraManager, guideOutputManager, events, camera: makeCamera(), guideOutput: makeGuideOutput(), mount: new MountSimulator(), frameCount: 0 }
+
+		connect(local)
+		expect(local.client.loop()).toBeTrue()
+		await feedFrame(local)
+		const eventsAfterFirst = events.length
+		expect(eventsAfterFirst).toBeGreaterThan(0)
+
+		await feedFrame(local)
+		expect(events.length).toBeGreaterThan(eventsAfterFirst)
+		expect(local.client.getAppState()).toBe('Looping')
+		expect(local.client.getStarImage()?.frame).toBe(2)
+		local.client.stopCapture()
+	})
+
+	test('a missing guide frame retries the exposure after the watchdog', async () => {
+		connect(harness)
+		harness.client.loop()
+		const exposuresBefore = harness.cameraManager.startExposureCalls.length
+		expect(exposuresBefore).toBeGreaterThan(0)
+
+		for (let i = 0; i < 200 && eventsOf(harness.events, 'Alert').length === 0; i++) {
+			await Bun.sleep(50)
+		}
+
+		const alerts = eventsOf(harness.events, 'Alert')
+		expect(alerts.some((alert) => alert.Type === 'warning' && alert.Msg.includes('timed out'))).toBeTrue()
+		expect(harness.cameraManager.startExposureCalls.length).toBeGreaterThan(exposuresBefore)
+		harness.client.stopCapture()
+	}, 15000)
 })
 
 describe('closed-loop calibration and guiding', () => {
@@ -1207,6 +1259,32 @@ describe('closed-loop calibration and guiding', () => {
 				const expected = steps[i - 1].AvgDist + AVG_DIST_ALPHA * (distance - steps[i - 1].AvgDist)
 				expect(steps[i].AvgDist).toBeCloseTo(expected, 6)
 			}
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
+		'a pulse throw still queues the next exposure',
+		async () => {
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
+
+			harness.mount.driftX = RA_AXIS[0] * 1.2
+			harness.mount.driftY = RA_AXIS[1] * 1.2
+			const originalPulse = harness.guideOutputManager.pulse.bind(harness.guideOutputManager)
+			harness.guideOutputManager.pulse = () => {
+				throw new Error('pulse failed')
+			}
+
+			const exposuresBefore = harness.cameraManager.startExposureCalls.length
+			await feedFrame(harness)
+
+			expect(eventsOf(harness.events, 'Alert').some((alert) => alert.Type === 'error' && alert.Msg.includes('pulse failed'))).toBeTrue()
+			expect(harness.cameraManager.startExposureCalls.length).toBeGreaterThan(exposuresBefore)
+
+			harness.guideOutputManager.pulse = originalPulse
+			await feedFrame(harness)
+			expect(harness.client.getAppState()).toBe('Guiding')
 		},
 		CLOSED_LOOP_TIMEOUT,
 	)
