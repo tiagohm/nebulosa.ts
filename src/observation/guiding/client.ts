@@ -1449,31 +1449,32 @@ export class GuiderClient {
 
 	// Waits out the commanded pulse, the INDI Busy acknowledgement, and the later Idle. GuideOutput
 	// pulse() only sends the timed-guide vector; `device.pulsing` is updated later by numberVector.
-	// Sleeping only the nominal duration, then checking Busy once, starts the next exposure when the
-	// Busy update still has not arrived even though the mount is about to move.
+	// The Idle wait is measured from when Busy is observed, not from a single absolute deadline, so a
+	// Busy that arrives near the acknowledgement margin still blocks capture until the mount stops.
 	async #waitForPulseToComplete(duration: number): Promise<void> {
 		if (duration <= 0) return
 
 		const started = performance.now()
-		const deadline = started + duration + PULSE_IDLE_MARGIN_MS
-		let sawBusy = this.#guideOutput?.pulsing === true
+		const ackDeadline = started + duration + PULSE_IDLE_MARGIN_MS
+		const isBusy = () => this.#guideOutput?.pulsing === true
 
 		while (performance.now() < started + duration) {
-			if (this.#guideOutput?.pulsing === true) sawBusy = true
+			if (isBusy()) break
 			const remaining = started + duration - performance.now()
 			if (remaining <= 0) break
 			await Bun.sleep(Math.min(10, remaining))
 		}
 
-		if (this.#guideOutput?.pulsing === true) sawBusy = true
-
-		if (!sawBusy) {
-			while (this.#guideOutput?.pulsing !== true && performance.now() < deadline) {
+		if (!isBusy()) {
+			while (!isBusy() && performance.now() < ackDeadline) {
 				await Bun.sleep(10)
 			}
 		}
 
-		while (this.#guideOutput?.pulsing === true && performance.now() < deadline) {
+		if (!isBusy()) return
+
+		const idleDeadline = performance.now() + duration + PULSE_IDLE_MARGIN_MS
+		while (isBusy() && performance.now() < idleDeadline) {
 			await Bun.sleep(10)
 		}
 	}

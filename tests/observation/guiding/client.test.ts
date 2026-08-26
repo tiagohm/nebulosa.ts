@@ -1562,6 +1562,36 @@ describe('closed-loop calibration and guiding', () => {
 	)
 
 	test.concurrent(
+		'the next exposure waits for Idle when Busy arrives near the latency margin',
+		async () => {
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
+
+			harness.guideOutputManager.pulseBusyAckLagMs = 240
+			harness.guideOutputManager.pulseBusyOverhangMs = 80
+			harness.mount.driftX = RA_AXIS[0] * 1.2
+			harness.mount.driftY = RA_AXIS[1] * 1.2
+
+			let exposureAt = 0
+			const originalStart = harness.cameraManager.startExposure.bind(harness.cameraManager)
+			harness.cameraManager.startExposure = (camera, exposure) => {
+				exposureAt = performance.now()
+				originalStart(camera, exposure)
+			}
+
+			const pulsesBefore = harness.guideOutputManager.pulses.length
+			await feedFrame(harness)
+
+			expect(harness.guideOutputManager.pulses.length).toBeGreaterThan(pulsesBefore)
+			expect(harness.guideOutputManager.lastBusyAt).toBeGreaterThan(0)
+			expect(harness.guideOutputManager.lastIdleAt).toBeGreaterThan(harness.guideOutputManager.lastBusyAt)
+			expect(harness.guideOutput.pulsing).toBeFalse()
+			expect(exposureAt).toBeGreaterThanOrEqual(harness.guideOutputManager.lastIdleAt)
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
 		'changing the exposure cadence does not double the guide pulse for the same error',
 		async () => {
 			const harness = await calibrateAndGuide()
