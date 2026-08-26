@@ -1585,6 +1585,30 @@ describe('closed-loop calibration and guiding', () => {
 	)
 
 	test.concurrent(
+		'an in-flight frame keeps the exposure duration that produced it',
+		async () => {
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
+
+			harness.mount.driftX = RA_AXIS[0] * 0.8
+			harness.mount.driftY = RA_AXIS[1] * 0.8
+			for (let i = 0; i < 4; i++) await feedFrame(harness)
+			const atIssuedCadence = eventsOf(harness.events, 'GuideStep').at(-1)!.RADuration
+			expect(atIssuedCadence).toBeGreaterThan(0)
+
+			const exposuresBefore = harness.cameraManager.startExposureCalls.length
+			expect(harness.client.setExposure(2000)).toBeTrue()
+			expect(harness.cameraManager.startExposureCalls.length).toBe(exposuresBefore)
+
+			await feedFrame(harness)
+			const inFlight = eventsOf(harness.events, 'GuideStep').at(-1)!.RADuration
+			expect(inFlight).toBeGreaterThan(0)
+			expect(inFlight).toBeLessThan(atIssuedCadence * 0.75)
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
 		'guide-step RA and DEC distances are pixel projections of the image offset',
 		async () => {
 			const harness = await calibrateAndGuide()

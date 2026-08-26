@@ -180,6 +180,10 @@ export class GuiderClient {
 	#avgDistanceNeedReset = true
 	#declinationGuideMode: PHD2DeclinationGuideMode = 'Auto'
 	#exposure = DEFAULT_GUIDER_EXPOSURE
+	// Duration of the currently outstanding camera capture, in milliseconds. `setExposure` may
+	// change `#exposure` while a BLOB is still in flight; the arriving frame must keep the cadence
+	// that actually produced its pixels so gain scaling and dropped-frame checks stay consistent.
+	#inFlightExposureMs = DEFAULT_GUIDER_EXPOSURE
 	// Constructed after #exposure: #makeGuider reads the cadence so the uncalibrated guider matches
 	// the default loop instead of Guider's own 1000 ms default (which happens to be the same today).
 	#guider = this.#makeGuider(undefined)
@@ -342,9 +346,7 @@ export class GuiderClient {
 
 		if (this.#camera !== undefined) {
 			this.#blobAdmission = 'accept'
-			// Camera requires exposure in seconds.
-			this.cameraManager.startExposure(this.#camera, this.#exposure / 1000)
-			this.#armExposureWatchdog()
+			this.#beginExposure()
 			return true
 		}
 
@@ -998,7 +1000,7 @@ export class GuiderClient {
 			height: image?.metadata.height ?? this.#camera?.frame.height.value ?? 0,
 			timestamp: Date.now(),
 			frameId: ++this.#frameId,
-			cadenceMs: this.#exposure,
+			cadenceMs: this.#inFlightExposureMs,
 		}
 	}
 
@@ -1391,9 +1393,8 @@ export class GuiderClient {
 	// Starts another exposure after pulse delay if the current session is still active.
 	async #queueNextExposure(delay: number): Promise<void> {
 		await this.#waitForPulseToComplete(delay)
-		if (!this.#connected || this.#camera === undefined || this.#appState === 'Stopped' || (this.#appState === 'Paused' && this.#fullPause)) return
-		this.cameraManager.startExposure(this.#camera, this.#exposure / 1000)
-		this.#armExposureWatchdog()
+		if (!this.#captureActive) return
+		this.#beginExposure()
 	}
 
 	// Arms a timer that retries the exposure if no BLOB arrives. The timeout is three cadences, with
@@ -1426,11 +1427,18 @@ export class GuiderClient {
 		if (!this.#captureActive) return
 
 		this.emitEvent('Alert', { Msg: 'guide exposure timed out; retrying', Type: 'warning' })
-		if (!this.#captureActive || this.#camera === undefined) return
+		if (!this.#captureActive) return
 
+		this.#beginExposure()
+		if (this.#blobAdmission !== 'already-dropped') this.#blobAdmission = 'drop-next'
+	}
+
+	// Records the cadence of this capture, starts it, and arms the missing-BLOB watchdog.
+	#beginExposure() {
+		if (this.#camera === undefined) return
+		this.#inFlightExposureMs = this.#exposure
 		this.cameraManager.startExposure(this.#camera, this.#exposure / 1000)
 		this.#armExposureWatchdog()
-		if (this.#blobAdmission !== 'already-dropped') this.#blobAdmission = 'drop-next'
 	}
 
 	// True when the exposure loop is allowed to start or retry a capture. Full pause, stop, and
