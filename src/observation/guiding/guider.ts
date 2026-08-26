@@ -441,6 +441,11 @@ export function applyCalibration(calibration: CalibrationMatrix, dx: number, dy:
 	return { ra: calibration[0] * dx + calibration[1] * dy, dec: calibration[2] * dx + calibration[3] * dy } as const
 }
 
+// Returns whether two calibration matrices have identical elements.
+function isCalibrationEquals(left: CalibrationMatrix, right: CalibrationMatrix) {
+	return left[0] === right[0] && left[1] === right[1] && left[2] === right[2] && left[3] === right[3]
+}
+
 // Filters stars and emits both accepted stars and rejection diagnostics.
 export function filterGuideStars(frame: GuideFrame, config: StarFilterConfig): FilteredStars {
 	const accepted: GuideStar[] = []
@@ -917,12 +922,16 @@ export class Guider {
 	}
 
 	// Replaces the image-to-axis transform and related pulse scaling without resetting lock,
-	// hysteresis, or dither. Used after a meridian flip so the running controller keeps its
-	// reference and filters.
+	// RA hysteresis, or dither. DEC filter and reversal memory are cleared when the matrix or
+	// DEC polarity changes: a reverse-output meridian flip inverts the DEC error sign and
+	// `decPositiveDirection`, so retaining the old convention blends opposite-signed errors and
+	// can command the pre-flip direction or suppress the required correction as backlash.
 	setCalibration(calibration: CalibrationMatrix, options: Partial<Pick<GuiderConfig, 'msPerRAUnit' | 'msPerDECUnit' | 'minMoveRA' | 'minMoveDEC' | 'decReversalThreshold' | 'decBacklashAccumThreshold' | 'raPositiveDirection' | 'decPositiveDirection'>> = {}) {
 		const validation = validateCalibration(calibration)
 		if (!validation.valid) throw new Error(`invalid calibration matrix: determinant=${validation.determinant}`)
 
+		const previousCalibration = this.config.calibration
+		const previousDecDirection = this.config.decPositiveDirection
 		const next: GuiderConfig = { ...this.config, calibration, ...options }
 		const issues = validateGuiderConfig(next)
 		if (issues.length > 0) {
@@ -931,6 +940,10 @@ export class Guider {
 		}
 
 		Object.assign(this.config as Writable<GuiderConfig>, next)
+
+		if (next.decPositiveDirection !== previousDecDirection || !isCalibrationEquals(next.calibration, previousCalibration)) {
+			this.#clearDecControlState()
+		}
 	}
 
 	// Processes one frame and returns RA/DEC pulse commands.
