@@ -245,6 +245,31 @@ test('fails after exceeding the bad-frame limit', () => {
 	expect(step.failure!.code).toBe('bad_frame')
 })
 
+test('search-box quality acquires the in-box star among field noise', () => {
+	const calibrator = new GuidingCalibrator(calibrationConfig())
+	const lock = star(0, { x: 140, y: 120, snr: 20, flux: 2000 })
+	const noise: GuideStar[] = []
+	for (let i = 0; i < 20; i++) {
+		noise.push(star(i + 1, { x: 500 + (i % 5) * 20, y: 400 + Math.floor(i / 5) * 20, snr: 0.5, flux: 0.1 }))
+	}
+
+	const frame: GuideFrame = {
+		stars: [lock, ...noise],
+		width: WIDTH,
+		height: HEIGHT,
+		timestamp: 0,
+		frameId: 0,
+		searchPosition: [140, 120],
+		searchRegion: 64,
+	}
+
+	const step = calibrator.processFrame(frame)
+	expect(step.failure).toBeUndefined()
+	expect(step.diagnostics.startX).toBeCloseTo(140, 8)
+	expect(step.diagnostics.startY).toBeCloseTo(120, 8)
+	expect(step.pulse?.ra.duration).toBe(100)
+})
+
 test('fails at startup when the selected guide star is too close to the edge', () => {
 	const calibrator = new GuidingCalibrator(calibrationConfig())
 	const edgeStars = starList(5, (value, index) => (index === 0 ? { ...value, x: 9, y: 9 } : value))

@@ -42,6 +42,32 @@ function guider(config: Partial<GuiderConfig> = {}) {
 
 const BASE_STARS = starList(5)
 
+test('search-box quality ignores out-of-box field stars', () => {
+	const lock = star(0, { x: 120, y: 140, snr: 20, flux: 2400 })
+	const noise: GuideStar[] = []
+	for (let i = 0; i < 20; i++) {
+		noise.push(star(i + 1, { x: 500 + i * 8, y: 400, snr: 0.4, flux: 0.2 }))
+	}
+
+	const frame = (timestamp: number, dx = 0): GuideFrame => ({
+		stars: [{ ...lock, x: lock.x + dx }, ...noise],
+		width: WIDTH,
+		height: HEIGHT,
+		timestamp,
+		searchPosition: [120, 140],
+		searchRegion: 64,
+	})
+
+	const instance = guider({ lockAveragingFrames: 1, minFrameQuality: 0.2 })
+	instance.processFrame(frame(0))
+	const cmd = instance.processFrame(frame(1000, 0.4))
+
+	expect(cmd.diagnostics.badFrame).toBeFalse()
+	expect(cmd.diagnostics.qualityScore).toBeGreaterThanOrEqual(0.2)
+	expect(cmd.ra.duration).toBeGreaterThan(0)
+	expect(cmd.state).toBe('guiding')
+})
+
 test('star filtering rejects low quality detections', () => {
 	const stars: GuideStar[] = [
 		{ x: 8, y: 20, snr: 20, flux: 1000, hfd: 2 },

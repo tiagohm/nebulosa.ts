@@ -13,7 +13,7 @@ import { clamp } from '../../math/numerical/math'
 import { GuidingAssistant, type GuidingAssistantConfig, type GuidingAssistantResult } from './assistant'
 import { type CalibrationPulseCommand, flipGuidingCalibration, type GuidingCalibrationConfig, type GuidingCalibrationDiagnostics, type GuidingCalibrationResult, GuidingCalibrator } from './calibrator'
 import { DitherGenerator, type DitherMode } from './dither'
-import { type AxisPulse, type DeclinationGuideMode, DEFAULT_GUIDER_CONFIG, type GuideCommand, type GuideFrame, Guider, type GuideStar } from './guider'
+import { type AxisPulse, type DeclinationGuideMode, DEFAULT_GUIDER_CONFIG, type GuideCommand, type GuideFrame, Guider, type GuideStar, starInsideSearchRegion } from './guider'
 
 // Local autoguiding orchestrator exposing a PHD2-compatible API over INDI camera and guide-output
 // devices. It decodes each camera BLOB, detects stars, drives the GuidingCalibrator and Guider state
@@ -1011,6 +1011,8 @@ export class GuiderClient {
 			timestamp: Date.now(),
 			frameId: ++this.#frameId,
 			cadenceMs: this.#inFlightExposureMs,
+			searchPosition: lockSearchPosition,
+			searchRegion: lockSearchPosition === undefined ? undefined : this.#searchRegion,
 		}
 	}
 
@@ -1814,13 +1816,6 @@ function calibrationResultToPHD2Data(calibration: GuidingCalibrationResult): PHD
 // Rotates a mount-axis RA/DEC dither offset (pixels) into image X/Y with the calibrated axis unit vectors.
 function ditherImageOffset(calibration: GuidingCalibrationResult, dRa: number, dDec: number) {
 	return [calibration.ra.unitX * dRa + calibration.dec.unitX * dDec, calibration.ra.unitY * dRa + calibration.dec.unitY * dDec] as const
-}
-
-// Returns whether `star` falls inside the square search box of side `searchRegion` centered on
-// `position`. The box is axis-aligned in image pixels, matching PHD2's search region.
-function starInsideSearchRegion(star: GuideStar, position: readonly [number, number], searchRegion: number) {
-	const half = searchRegion / 2
-	return Math.abs(star.x - position[0]) <= half && Math.abs(star.y - position[1]) <= half
 }
 
 // Moves `star` to the first slot so Guider/GuidingCalibrator lock onto the requested target.

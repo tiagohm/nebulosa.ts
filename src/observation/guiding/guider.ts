@@ -54,6 +54,12 @@ export interface GuideFrame {
 	// scaling uses this instead of the wall-clock gap between frames, so a pulse wait is not treated
 	// as extra uncorrected drift. Dropped-frame detection still uses `timestamp`.
 	readonly cadenceMs?: number
+	// Center of the star-search window, in pixels. When set together with `searchRegion`, lock
+	// quality and primary acquisition use only detections inside this box; `stars` still holds the
+	// full-frame list so multi-star matching can use neighbors outside the box.
+	readonly searchPosition?: readonly [number, number]
+	// Side of the square star-search window, in pixels. Ignored unless `searchPosition` is set.
+	readonly searchRegion?: number
 }
 
 // A commanded pulse on one mount axis.
@@ -174,7 +180,8 @@ export interface GuiderConfig {
 	readonly maxFrameJumpPx: number
 	// Sigma multiplier for translation outlier rejection.
 	readonly outlierSigma: number
-	// Minimum acceptable frame quality score in [0, 1].
+	// Minimum acceptable frame quality score in [0, 1]. When the frame carries a search window,
+	// the score is accepted/total among detections inside that box, not across the whole sensor.
 	readonly minFrameQuality: number
 	// Consecutive bad frames before declaring the star lost.
 	readonly lostStarFrameCount: number
@@ -467,6 +474,33 @@ export function filterGuideStars(frame: GuideFrame, config: StarFilterConfig): F
 	const ratio = frame.stars.length > 0 ? accepted.length / frame.stars.length : 0
 	const qualityScore = clamp(ratio, 0, 1)
 	return { accepted, rejectedReasons, qualityScore }
+}
+
+// Returns whether `star` falls inside the square search box of side `searchRegion` centered on
+// `position`. The box is axis-aligned in image pixels, matching PHD2's search region.
+export function starInsideSearchRegion(star: GuideStar, position: readonly [number, number], searchRegion: number) {
+	const half = searchRegion / 2
+	return Math.abs(star.x - position[0]) <= half && Math.abs(star.y - position[1]) <= half
+}
+
+// Stars that participate in lock quality and primary acquisition. When the frame carries a search
+// window, only detections inside that box are returned; otherwise every detection is used.
+export function qualityStarsOf(frame: GuideFrame): readonly GuideStar[] {
+	const { searchPosition, searchRegion, stars } = frame
+	if (searchPosition === undefined || searchRegion === undefined) return stars
+
+	const inside: GuideStar[] = []
+	for (const star of stars) {
+		if (starInsideSearchRegion(star, searchPosition, searchRegion)) inside.push(star)
+	}
+	return inside
+}
+
+// Filters stars for lock quality. When the frame carries a search window, only detections inside
+// that box contribute to the quality score and the accepted lock set.
+export function filterQualityGuideStars(frame: GuideFrame, config: StarFilterConfig): FilteredStars {
+	const stars = qualityStarsOf(frame)
+	return filterGuideStars(stars === frame.stars ? frame : { ...frame, stars }, config)
 }
 
 // Selects the strongest isolated guide star and spaced alternatives for multi-star guiding.
@@ -969,13 +1003,14 @@ export class Guider {
 			return { state: this.state.state, ra: NO_PULSE, dec: NO_PULSE, diagnostics: this.state.lastDiagnostics, stars }
 		}
 
+		const quality = filterQualityGuideStars(frame, this.config.filter)
 		const filtered = filterGuideStars(frame, this.config.filter)
 		const droppedFrame = this.#isDroppedFrame(frame)
 		const notes: string[] = []
 
 		if (droppedFrame) notes.push('dropped_frame')
 
-		let badFrame = filtered.accepted.length === 0 || filtered.qualityScore < this.config.minFrameQuality
+		let badFrame = quality.accepted.length === 0 || quality.qualityScore < this.config.minFrameQuality
 		let measurement: TranslationMeasurement | undefined
 
 		if (!badFrame) {
@@ -995,7 +1030,7 @@ export class Guider {
 		if (badFrame) {
 			this.state.consecutiveBadFrames++
 			if (this.state.consecutiveBadFrames >= this.config.lostStarFrameCount) this.state.state = 'lost'
-			this.#updateDiagnostics(frame, filtered, undefined, droppedFrame, true, notes)
+			this.#updateDiagnostics(frame, quality, undefined, droppedFrame, true, notes)
 			return { state: this.state.state, ra: NO_PULSE, dec: NO_PULSE, diagnostics: this.state.lastDiagnostics, stars: filtered.accepted }
 		}
 
@@ -1016,7 +1051,7 @@ export class Guider {
 		const dec = this.#computeDEC(axisError.dec, cadenceScale)
 		this.#updateDiagnostics(
 			frame,
-			filtered,
+			quality,
 			{
 				measurementX: measurement!.x,
 				measurementY: measurement!.y,
@@ -1067,18 +1102,19 @@ export class Guider {
 	// Consumes frame while the lock reference is being averaged. Returns the stars accepted by the
 	// quality filter on this frame so callers can surface them even before the lock is acquired.
 	#processInitializationFrame(frame: GuideFrame): readonly GuideStar[] {
+		const quality = filterQualityGuideStars(frame, this.config.filter)
 		const filtered = filterGuideStars(frame, this.config.filter)
 
-		if (filtered.accepted.length === 0) {
-			this.#updateDiagnostics(frame, filtered, undefined, false, true, ['init_waiting'])
+		if (quality.accepted.length === 0) {
+			this.#updateDiagnostics(frame, quality, undefined, false, true, ['init_waiting'])
 			return filtered.accepted
 		}
 
 		const previous = this.state.lockSamples.at(-1)
-		const preferred = previous === undefined ? pickInitialLockStar(filtered.accepted, this.config.initialPosition) : pickNearestGuideStar(filtered.accepted, previous.x, previous.y)
+		const preferred = previous === undefined ? pickInitialLockStar(quality.accepted, this.config.initialPosition) : pickNearestGuideStar(quality.accepted, previous.x, previous.y)
 
 		if (preferred === undefined) {
-			this.#updateDiagnostics(frame, filtered, undefined, false, true, ['init_no_star'])
+			this.#updateDiagnostics(frame, quality, undefined, false, true, ['init_no_star'])
 			return filtered.accepted
 		}
 
@@ -1091,7 +1127,7 @@ export class Guider {
 		if (this.state.lockSamples.length < this.config.lockAveragingFrames) {
 			this.#updateDiagnostics(
 				frame,
-				filtered,
+				quality,
 				{
 					measurementX: preferred.x,
 					measurementY: preferred.y,
@@ -1130,7 +1166,7 @@ export class Guider {
 		this.state.state = 'guiding'
 		this.#updateDiagnostics(
 			frame,
-			filtered,
+			quality,
 			{
 				measurementX: preferred.x,
 				measurementY: preferred.y,
@@ -1249,7 +1285,7 @@ export class Guider {
 	#updateDiagnostics(frame: GuideFrame, filtered: FilteredStars, measurement: DiagnosticMeasurement | undefined, droppedFrame: boolean, badFrame: boolean, notes: readonly string[]) {
 		this.state.lastDiagnostics = {
 			frameId: frame.frameId,
-			totalStars: frame.stars.length,
+			totalStars: qualityStarsOf(frame).length,
 			acceptedStars: filtered.accepted.length,
 			qualityScore: filtered.qualityScore,
 			modeUsed: measurement?.modeUsed,
