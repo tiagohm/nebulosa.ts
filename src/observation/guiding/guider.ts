@@ -898,6 +898,28 @@ export class Guider {
 		;(this.config as Writable<GuiderConfig>).nominalCadence = nominalCadence
 	}
 
+	// Updates the DEC guiding policy without resetting lock, hysteresis, or dither.
+	setDecMode(decMode: DeclinationGuideMode) {
+		;(this.config as Writable<GuiderConfig>).decMode = decMode
+	}
+
+	// Replaces the image-to-axis transform and related pulse scaling without resetting lock,
+	// hysteresis, or dither. Used after a meridian flip so the running controller keeps its
+	// reference and filters.
+	setCalibration(calibration: CalibrationMatrix, options: Partial<Pick<GuiderConfig, 'msPerRAUnit' | 'msPerDECUnit' | 'minMoveRA' | 'minMoveDEC' | 'decReversalThreshold' | 'decBacklashAccumThreshold' | 'raPositiveDirection' | 'decPositiveDirection'>> = {}) {
+		const validation = validateCalibration(calibration)
+		if (!validation.valid) throw new Error(`invalid calibration matrix: determinant=${validation.determinant}`)
+
+		const next: GuiderConfig = { ...this.config, calibration, ...options }
+		const issues = validateGuiderConfig(next)
+		if (issues.length > 0) {
+			const message = issues.map((issue) => `${issue.key}:${issue.reason}`).join(', ')
+			throw new Error(`invalid guider config: ${message}`)
+		}
+
+		Object.assign(this.config as Writable<GuiderConfig>, next)
+	}
+
 	// Processes one frame and returns RA/DEC pulse commands.
 	processFrame(frame: GuideFrame): GuideCommand {
 		if (this.state.state === 'idle') {

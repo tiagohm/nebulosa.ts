@@ -1213,6 +1213,54 @@ describe('closed-loop calibration and guiding', () => {
 	)
 
 	test.concurrent(
+		'flip and DEC mode keep the dithered lock',
+		async () => {
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
+
+			expect(harness.client.dither(3, false, IMMEDIATE_SETTLE)).toBeTrue()
+			const dithered = harness.client.getLockPosition()!
+
+			expect(harness.client.flipCalibration()).toBeTrue()
+			harness.client.setDeclinationGuideMode('North')
+
+			for (let i = 0; i < 3; i++) await feedFrame(harness)
+
+			const lock = harness.client.getLockPosition()!
+			expect(lock[0]).toBeCloseTo(dithered[0], 1)
+			expect(lock[1]).toBeCloseTo(dithered[1], 1)
+			expect(harness.client.getAppState()).toBe('Guiding')
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
+		'finishing the guiding assistant keeps the lock',
+		async () => {
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
+
+			const lock = harness.client.getLockPosition()!
+			harness.mount.driftX = RA_AXIS[0] * 0.8
+			harness.mount.driftY = RA_AXIS[1] * 0.8
+			for (let i = 0; i < 4; i++) await feedFrame(harness)
+
+			expect(harness.client.startGuidingAssistant({ measureBacklash: false })).toBeTrue()
+			expect(harness.client.stopGuidingAssistant()).toBeDefined()
+
+			const from = harness.guideOutputManager.pulses.length
+			for (let i = 0; i < 2; i++) await feedFrame(harness)
+
+			const after = harness.client.getLockPosition()!
+			expect(after[0]).toBeCloseTo(lock[0], 1)
+			expect(after[1]).toBeCloseTo(lock[1], 1)
+			expect(harness.guideOutputManager.pulses.length).toBeGreaterThan(from)
+			expect(harness.client.getAppState()).toBe('Guiding')
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
 		'guide steps timestamp their frames from the start of guiding',
 		async () => {
 			const harness = await calibrateAndGuide()

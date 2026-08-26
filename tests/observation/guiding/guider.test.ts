@@ -180,6 +180,24 @@ test('setNominalCadence updates gain scaling without resetting the lock', () => 
 	expect(cmd.ra.duration).toBeCloseTo(140, 8)
 })
 
+test('setDecMode and setCalibration keep the lock and hysteresis', () => {
+	const instance = guider({ hysteresisRA: 0.5, minMoveDEC: 1 })
+	instance.processFrame(guideFrame(BASE_STARS, 0))
+	expect(instance.currentState.state).toBe('guiding')
+
+	const first = instance.processFrame(guideFrame(shiftStars(BASE_STARS, 0.4, 0), 1000))
+	expect(first.ra.duration).toBeGreaterThan(0)
+
+	instance.setDecMode('north-only')
+	instance.setCalibration([1, 0, 0, 1], { msPerRAUnit: 100 })
+	expect(instance.currentState.state).toBe('guiding')
+	expect(instance.config.decMode).toBe('north-only')
+
+	const second = instance.processFrame(guideFrame(shiftStars(BASE_STARS, 0.4, 0), 2000))
+	expect(second.state).toBe('guiding')
+	expect(second.ra.duration).toBeGreaterThan(0)
+})
+
 test('steady drift with seeing noise and oscillation remain bounded', () => {
 	const guider = new Guider({ lockAveragingFrames: 1, hysteresisRA: 0.6, hysteresisDEC: 0.6 })
 	guider.processFrame(guideFrame(BASE_STARS, 0))

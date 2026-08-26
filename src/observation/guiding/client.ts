@@ -447,12 +447,14 @@ export class GuiderClient {
 		return true
 	}
 
-	// Flips the solved calibration for a meridian flip and rebuilds the guider with the transformed axis parity.
+	// Flips the solved calibration for a meridian flip and applies the transformed axis parity to the
+	// running guider so lock, hysteresis, and dither survive the flip.
 	flipCalibration() {
 		if (this.#calibration === undefined || this.#appState === 'Calibrating') return false
 
 		this.#calibration = flipGuidingCalibration(this.#calibration, this.options?.reverseDecOutputAfterMeridianFlip === true)
-		this.#guider = this.#makeGuider(this.#calibration)
+		this.#applyCalibrationToGuider(this.#calibration)
+		this.#syncGuideTargetOffset()
 		this.emitEvent('CalibrationDataFlipped', { Mount: this.#guideOutput?.name ?? '' })
 		this.emitEvent('ConfigurationChange')
 
@@ -704,10 +706,10 @@ export class GuiderClient {
 		return true
 	}
 
-	// Updates the DEC guide mode and rebuilds the guider with the current calibration matrix.
+	// Updates the DEC guide mode on the running guider without dropping lock or hysteresis.
 	setDeclinationGuideMode(mode: PHD2DeclinationGuideMode) {
 		this.#declinationGuideMode = mode
-		if (this.#appState !== 'Calibrating') this.#guider = this.#makeGuider(this.#calibration)
+		if (this.#appState !== 'Calibrating') this.#guider.setDecMode(toDeclinationGuideMode(mode))
 		this.emitEvent('GuideParamChange', { Name: 'DecGuideMode', Value: mode })
 		this.emitEvent('ConfigurationChange')
 	}
@@ -1123,7 +1125,6 @@ export class GuiderClient {
 		this.#guidingAssistantPendingPulse = undefined
 		this.#guidingAssistantResult = result
 		this.#guidingAssistantSuppressingGuideOutput = false
-		this.#guider = this.#makeGuider(this.#calibration)
 		this.emitEvent(completed ? 'GuidingAssistantCompleted' : 'GuidingAssistantFailed', { Result: result })
 
 		return result
@@ -1444,32 +1445,20 @@ export class GuiderClient {
 			})
 		}
 
-		// The solved image-to-axis matrix converts a pixel error into the milliseconds of pulse that
-		// would reproduce it, while the guider expects a matrix that yields the pulse cancelling it,
-		// so the matrix is negated here; feeding it unchanged closes the loop with positive feedback.
-		// Its output is already in milliseconds, so the per-unit scaling must be neutral: keeping the
-		// uncalibrated default would apply the mount rate twice and saturate every correction. Every
-		// pixel-unit controller threshold (dead bands, DEC reversal, DEC backlash accumulation) is
-		// converted with the solved rates so seeing-sized reversals still hold the DEC axis.
-		const [m00, m01, m10, m11] = calibration.imageToAxis
-		const raRate = calibration.ra.ratePxPerMs
-		const decRate = calibration.dec.ratePxPerMs
-
 		return new Guider({
-			calibration: [-m00, -m01, -m10, -m11],
-			msPerRAUnit: 1,
-			msPerDECUnit: 1,
-			minMoveRA: axisUnitThreshold(DEFAULT_GUIDER_CONFIG.minMoveRA, raRate),
-			minMoveDEC: axisUnitThreshold(DEFAULT_GUIDER_CONFIG.minMoveDEC, decRate),
-			decReversalThreshold: axisUnitThreshold(DEFAULT_GUIDER_CONFIG.decReversalThreshold, decRate),
-			decBacklashAccumThreshold: axisUnitThreshold(DEFAULT_GUIDER_CONFIG.decBacklashAccumThreshold, decRate),
-			raPositiveDirection: calibration.ra.direction,
-			decPositiveDirection: calibration.dec.direction,
+			...calibratedGuiderOptions(calibration),
 			decMode: toDeclinationGuideMode(this.#declinationGuideMode),
 			referencePosition: this.#guiderReferencePosition,
 			initialPosition: this.#guiderInitialPosition,
 			nominalCadence: this.#exposure,
 		})
+	}
+
+	// Pushes a solved calibration onto the running guider without reconstructing it, so lock,
+	// hysteresis, and dither stay intact.
+	#applyCalibrationToGuider(calibration: GuidingCalibrationResult) {
+		const options = calibratedGuiderOptions(calibration)
+		this.#guider.setCalibration(options.calibration, options)
 	}
 
 	// Emits one callback event if the caller provided an event handler.
@@ -1668,6 +1657,31 @@ function toDeclinationGuideMode(mode: PHD2DeclinationGuideMode) {
 // emits millisecond axis errors (the pulse that would cancel the pixel error), so pixel defaults are
 // divided by the solved rate. When the rate is unknown the original threshold is kept so the
 // uncalibrated identity controller is unchanged.
+function calibratedGuiderOptions(calibration: GuidingCalibrationResult) {
+	// The solved image-to-axis matrix converts a pixel error into the milliseconds of pulse that
+	// would reproduce it, while the guider expects a matrix that yields the pulse cancelling it,
+	// so the matrix is negated here; feeding it unchanged closes the loop with positive feedback.
+	// Its output is already in milliseconds, so the per-unit scaling must be neutral: keeping the
+	// uncalibrated default would apply the mount rate twice and saturate every correction. Every
+	// pixel-unit controller threshold (dead bands, DEC reversal, DEC backlash accumulation) is
+	// converted with the solved rates so seeing-sized reversals still hold the DEC axis.
+	const [m00, m01, m10, m11] = calibration.imageToAxis
+	const raRate = calibration.ra.ratePxPerMs
+	const decRate = calibration.dec.ratePxPerMs
+
+	return {
+		calibration: [-m00, -m01, -m10, -m11] as const,
+		msPerRAUnit: 1,
+		msPerDECUnit: 1,
+		minMoveRA: axisUnitThreshold(DEFAULT_GUIDER_CONFIG.minMoveRA, raRate),
+		minMoveDEC: axisUnitThreshold(DEFAULT_GUIDER_CONFIG.minMoveDEC, decRate),
+		decReversalThreshold: axisUnitThreshold(DEFAULT_GUIDER_CONFIG.decReversalThreshold, decRate),
+		decBacklashAccumThreshold: axisUnitThreshold(DEFAULT_GUIDER_CONFIG.decBacklashAccumThreshold, decRate),
+		raPositiveDirection: calibration.ra.direction,
+		decPositiveDirection: calibration.dec.direction,
+	}
+}
+
 function axisUnitThreshold(pixelThreshold: number, ratePxPerMs: number) {
 	return ratePxPerMs > 0 ? pixelThreshold / ratePxPerMs : pixelThreshold
 }
