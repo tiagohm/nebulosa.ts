@@ -215,8 +215,8 @@ export class GuiderClient {
 	// processed. Cleared at the start of every BLOB so a frame that never reaches either state
 	// machine — plain looping, decode failure — cannot publish the star list of an older frame.
 	#acceptedStars?: readonly GuideStar[]
-	// True when a lock/search position exists and the nearest detection is outside the PHD2 search
-	// box. The published frame still carries every detection so multi-star and the overlay can use
+	// True when a lock/search position exists and no detection falls inside the PHD2 search box.
+	// The published frame still carries every detection so multi-star and the overlay can use
 	// them; the calibrator/guider receive an empty star list so they report the primary lost.
 	#primaryOutsideSearchRegion = false
 	readonly #searchRegion: number
@@ -982,13 +982,14 @@ export class GuiderClient {
 		let stars = detections
 
 		if (lockSearchPosition !== undefined && detections.length > 0) {
-			const nearest = nearestGuideStar(detections, lockSearchPosition[0], lockSearchPosition[1])
-			if (nearest !== undefined && starInsideSearchRegion(nearest, lockSearchPosition, this.#searchRegion)) {
+			const primary = nearestGuideStarInSearchRegion(detections, lockSearchPosition, this.#searchRegion)
+			if (primary !== undefined) {
 				// PHD2 only acquires the primary inside the search box. Neighbors elsewhere must stay
 				// in the list: the default multi-star estimator matches them against the full-frame
-				// reference, and GuideFrameImage.stars is every detection.
+				// reference, and GuideFrameImage.stars is every detection. The globally nearest star
+				// can sit just outside an edge while a farther detection is still inside a corner.
 				stars = detections.slice()
-				moveNearestGuideStarToFront(stars, lockSearchPosition)
+				moveGuideStarToFront(stars, primary)
 			} else {
 				this.#primaryOutsideSearchRegion = true
 			}
@@ -1812,29 +1813,35 @@ function starInsideSearchRegion(star: GuideStar, position: readonly [number, num
 	return Math.abs(star.x - position[0]) <= half && Math.abs(star.y - position[1]) <= half
 }
 
-// Moves the nearest star to the first slot so Guider/GuidingCalibrator lock onto the requested target.
-function moveNearestGuideStarToFront(stars: GuideStar[], position: readonly [number, number]) {
-	const [x, y] = position
-	let index = 0
+// Moves `star` to the first slot so Guider/GuidingCalibrator lock onto the requested target.
+function moveGuideStarToFront(stars: GuideStar[], star: GuideStar) {
+	const index = stars.indexOf(star)
+	if (index > 0) {
+		stars[index] = stars[0]
+		stars[0] = star
+	}
+}
+
+// Finds the nearest detection inside the square search box centered on `position`. Stars outside
+// the box are ignored even if they are radially closer than an inside-corner candidate.
+function nearestGuideStarInSearchRegion(stars: readonly GuideStar[], position: readonly [number, number], searchRegion: number): GuideStar | undefined {
+	let selected: GuideStar | undefined
 	let distanceSq = Number.POSITIVE_INFINITY
 
-	for (let i = 0; i < stars.length; i++) {
-		const star = stars[i]
-		const dx = star.x - x
-		const dy = star.y - y
+	for (const star of stars) {
+		if (!starInsideSearchRegion(star, position, searchRegion)) continue
+
+		const dx = star.x - position[0]
+		const dy = star.y - position[1]
 		const candidateDistanceSq = dx * dx + dy * dy
 
 		if (candidateDistanceSq < distanceSq) {
 			distanceSq = candidateDistanceSq
-			index = i
+			selected = star
 		}
 	}
 
-	if (index > 0) {
-		const star = stars[0]
-		stars[0] = stars[index]
-		stars[index] = star
-	}
+	return selected
 }
 
 // Finds the nearest detected guide star to a requested image coordinate.

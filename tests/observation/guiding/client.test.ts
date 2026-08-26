@@ -144,6 +144,27 @@ async function buildFrameBuffer(offsetX = 0, offsetY = 0, stars = true): Promise
 	return buffer
 }
 
+// Builds a FITS buffer with stars at explicit image-pixel centers, used when a test needs a
+// geometry that the default two-star field cannot produce.
+async function buildFrameBufferAt(positions: readonly (readonly [number, number])[]) {
+	const raw = new Float32Array(FRAME_WIDTH * FRAME_HEIGHT).fill(FRAME_BACKGROUND)
+	const options = { background: FRAME_BACKGROUND, saturationLevel: 1 }
+
+	for (const [x, y] of positions) {
+		plotStar(raw, FRAME_WIDTH, FRAME_HEIGHT, 1, x, y, STAR_FLUX, STAR_HFD, STAR_PLOT_SNR, 0, undefined, options)
+	}
+
+	const image: Image = {
+		header: { SIMPLE: true, BITPIX: -32, NAXIS: 2, NAXIS1: FRAME_WIDTH, NAXIS2: FRAME_HEIGHT },
+		metadata: { width: FRAME_WIDTH, height: FRAME_HEIGHT, channels: 1, pixelCount: FRAME_WIDTH * FRAME_HEIGHT, pixelSizeInBytes: 4, strideInBytes: FRAME_WIDTH * 4, stride: FRAME_WIDTH, bitpix: -32, bayer: undefined },
+		raw,
+	}
+
+	const buffer = Buffer.alloc(FRAME_WIDTH * FRAME_HEIGHT * 4 + 100000)
+	await writeImageToFits(image, bufferSink(buffer))
+	return buffer
+}
+
 // Frame with both stars at their nominal positions, reused by tests that never move the mount.
 const FRAME_BUFFER = await buildFrameBuffer()
 
@@ -896,6 +917,31 @@ describe('lock position without frames', () => {
 })
 
 describe('frame-driven behavior', () => {
+	test('the primary star is the nearest detection inside the search box', async () => {
+		const frames: GuideFrameImage[] = []
+		const local = makeHarness({
+			searchRegion: 64,
+			handler: { frame: (_client, frame) => frames.push(frame) },
+		})
+		connect(local)
+		local.client.loop()
+		expect(local.client.setLockPosition(70, 70, true)).toBeTrue()
+
+		const half = local.client.getSearchRegion() / 2
+		const inside = [70 + half - 1, 70 + half - 1] as const
+		const outside = [70 + half + 1, 70] as const
+		expect(Math.hypot(outside[0] - 70, outside[1] - 70)).toBeLessThan(Math.hypot(inside[0] - 70, inside[1] - 70))
+
+		await feedBuffer(local, await buildFrameBufferAt([inside, outside]))
+
+		const frame = frames.at(-1)!
+		expect(frame.star).toBeDefined()
+		expect(frame.star!.x).toBeCloseTo(inside[0], 1)
+		expect(frame.star!.y).toBeCloseTo(inside[1], 1)
+		expect(frame.stars).toHaveLength(2)
+		local.client.stopCapture()
+	})
+
 	test('looping frames emit star metadata with the current frame number', async () => {
 		connect(harness)
 		harness.client.loop()
