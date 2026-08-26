@@ -1,3 +1,4 @@
+import type { Writable } from '../../core/types'
 import { medianAbsoluteDeviationOf, medianOf } from '../../core/util'
 import type { Image } from '../../imaging/model/types'
 import type { DetectedStar } from '../../imaging/stars/detector'
@@ -49,6 +50,10 @@ export interface GuideFrame {
 	readonly timestamp?: number
 	// Optional monotonic frame identifier.
 	readonly frameId?: number
+	// Exposure duration that produced this frame, in milliseconds. When set, pulse-gain cadence
+	// scaling uses this instead of the wall-clock gap between frames, so a pulse wait is not treated
+	// as extra uncorrected drift. Dropped-frame detection still uses `timestamp`.
+	readonly cadenceMs?: number
 }
 
 // A commanded pulse on one mount axis.
@@ -885,6 +890,14 @@ export class Guider {
 		this.state.ditherActive = false
 	}
 
+	// Updates the expected frame cadence without resetting lock or hysteresis. Callers that change
+	// camera exposure mid-session must keep this matched so gain scaling and dropped-frame detection
+	// use the real loop instead of the constructor default.
+	setNominalCadence(nominalCadence: number) {
+		if (nominalCadence <= 0 || !Number.isFinite(nominalCadence)) return
+		;(this.config as Writable<GuiderConfig>).nominalCadence = nominalCadence
+	}
+
 	// Processes one frame and returns RA/DEC pulse commands.
 	processFrame(frame: GuideFrame): GuideCommand {
 		if (this.state.state === 'idle') {
@@ -1128,8 +1141,9 @@ export class Guider {
 
 	// Computes frame cadence scale to keep pulse gain stable across variable cadence.
 	#cadenceScale(frame: GuideFrame) {
-		if (frame.timestamp === undefined) return 1
-		return clamp(this.state.lastCadence / this.config.nominalCadence, 0.5, 2)
+		const cadence = frame.cadenceMs ?? (frame.timestamp === undefined ? this.config.nominalCadence : this.state.lastCadence)
+		if (cadence <= 0 || this.config.nominalCadence <= 0) return 1
+		return clamp(cadence / this.config.nominalCadence, 0.5, 2)
 	}
 
 	// Computes RA pulse with hysteresis smoothing, deadband and proportional gain.

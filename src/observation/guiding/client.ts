@@ -157,8 +157,10 @@ export class GuiderClient {
 	#avgDistance = 0
 	#avgDistanceNeedReset = true
 	#declinationGuideMode: PHD2DeclinationGuideMode = 'Auto'
-	#guider = this.#makeGuider(undefined)
 	#exposure = DEFAULT_GUIDER_EXPOSURE
+	// Constructed after #exposure: #makeGuider reads the cadence so the uncalibrated guider matches
+	// the default loop instead of Guider's own 1000 ms default (which happens to be the same today).
+	#guider = this.#makeGuider(undefined)
 	#guideOutputEnabled = true
 	#guidingAssistant?: GuidingAssistant
 	#guidingAssistantPendingPulse?: CalibrationPulseCommand
@@ -308,6 +310,7 @@ export class GuiderClient {
 	startExposureLoop(exposure: number) {
 		if (exposure > 0 && Number.isFinite(exposure)) {
 			this.#exposure = exposure
+			this.#guider.setNominalCadence(exposure)
 		}
 
 		if (this.#camera !== undefined) {
@@ -699,6 +702,7 @@ export class GuiderClient {
 	setExposure(exposure: number) {
 		if (exposure <= 0 || !Number.isFinite(exposure)) return false
 		this.#exposure = exposure
+		this.#guider.setNominalCadence(exposure)
 		this.emitEvent('GuideParamChange', { Name: 'Exposure', Value: exposure })
 		this.emitEvent('ConfigurationChange')
 		return true
@@ -907,6 +911,7 @@ export class GuiderClient {
 			height: image?.metadata.height ?? this.#camera?.frame.height.value ?? 0,
 			timestamp: Date.now(),
 			frameId: ++this.#frameId,
+			cadenceMs: this.#exposure,
 		}
 	}
 
@@ -1350,7 +1355,14 @@ export class GuiderClient {
 
 	// Builds a guider instance from the current calibration, axis parity, and DEC mode.
 	#makeGuider(calibration: GuidingCalibrationResult | undefined) {
-		if (calibration === undefined) return new Guider({ decMode: toDeclinationGuideMode(this.#declinationGuideMode), referencePosition: this.#guiderReferencePosition, initialPosition: this.#guiderInitialPosition })
+		if (calibration === undefined) {
+			return new Guider({
+				decMode: toDeclinationGuideMode(this.#declinationGuideMode),
+				referencePosition: this.#guiderReferencePosition,
+				initialPosition: this.#guiderInitialPosition,
+				nominalCadence: this.#exposure,
+			})
+		}
 
 		// The solved image-to-axis matrix converts a pixel error into the milliseconds of pulse that
 		// would reproduce it, while the guider expects a matrix that yields the pulse cancelling it,
@@ -1376,6 +1388,7 @@ export class GuiderClient {
 			decMode: toDeclinationGuideMode(this.#declinationGuideMode),
 			referencePosition: this.#guiderReferencePosition,
 			initialPosition: this.#guiderInitialPosition,
+			nominalCadence: this.#exposure,
 		})
 	}
 

@@ -160,6 +160,26 @@ test('cadence scaling uses previous frame timestamp', () => {
 	expect(cmd.ra.duration).toBeGreaterThan(100)
 })
 
+test('cadenceMs scales gain from the exposure instead of the wall-clock gap', () => {
+	const guider = new Guider({ lockAveragingFrames: 1, calibration: [1, 0, 0, 1], hysteresisRA: 0, hysteresisDEC: 0, minMoveRA: 0.01, minMoveDEC: 1, msPerRAUnit: 1000, nominalCadence: 1000 })
+	guider.processFrame(guideFrame(BASE_STARS, 0))
+	// A 3 s wall-clock gap would otherwise double the pulse (cadence scale caps at 2). The frame's
+	// exposure is still 1 s, so gain must stay at the nominal 0.2 px * 1000 ms/px * 0.7 = 140 ms.
+	const frame = { ...guideFrame(shiftStars(BASE_STARS, 0.2, 0), 3000), cadenceMs: 1000 }
+	const cmd = guider.processFrame(frame)
+	expect(cmd.ra.duration).toBeCloseTo(140, 8)
+})
+
+test('setNominalCadence updates gain scaling without resetting the lock', () => {
+	const instance = new Guider({ lockAveragingFrames: 1, calibration: [1, 0, 0, 1], hysteresisRA: 0, hysteresisDEC: 0, minMoveRA: 0.01, minMoveDEC: 1, msPerRAUnit: 1000, nominalCadence: 1000 })
+	instance.processFrame(guideFrame(BASE_STARS, 0))
+	instance.setNominalCadence(2000)
+	const frame = { ...guideFrame(shiftStars(BASE_STARS, 0.2, 0), 2000), cadenceMs: 2000 }
+	const cmd = instance.processFrame(frame)
+	expect(instance.currentState.state).toBe('guiding')
+	expect(cmd.ra.duration).toBeCloseTo(140, 8)
+})
+
 test('steady drift with seeing noise and oscillation remain bounded', () => {
 	const guider = new Guider({ lockAveragingFrames: 1, hysteresisRA: 0.6, hysteresisDEC: 0.6 })
 	guider.processFrame(guideFrame(BASE_STARS, 0))

@@ -1202,6 +1202,29 @@ describe('closed-loop calibration and guiding', () => {
 	)
 
 	test.concurrent(
+		'changing the exposure cadence does not double the guide pulse for the same error',
+		async () => {
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
+
+			harness.mount.driftX = RA_AXIS[0] * 0.8
+			harness.mount.driftY = RA_AXIS[1] * 0.8
+			for (let i = 0; i < 4; i++) await feedFrame(harness)
+			const atOneSecond = eventsOf(harness.events, 'GuideStep').at(-1)!.RADuration
+
+			harness.client.setExposure(2000)
+			for (let i = 0; i < 4; i++) await feedFrame(harness)
+			const atTwoSeconds = eventsOf(harness.events, 'GuideStep').at(-1)!.RADuration
+
+			// cadenceMs tracks the requested exposure, so a 2 s cadence must not apply the old
+			// lastCadence/1000 scale cap of 2x. The two pulses chase the same per-frame drift.
+			expect(atTwoSeconds).toBeGreaterThan(0)
+			expect(atTwoSeconds).toBeLessThan(atOneSecond * 1.6 + 1)
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
 		'guide-step RA and DEC distances are pixel projections of the image offset',
 		async () => {
 			const harness = await calibrateAndGuide()
