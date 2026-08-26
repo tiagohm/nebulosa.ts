@@ -397,6 +397,25 @@ describe('thin-plate spline', () => {
 		expect(highPoint.at(32, 32)).toBeCloseTo(0.5, 12)
 	})
 
+	test('a capped smoothing spline preserves coincident observations in its diagnostics', () => {
+		const samples: SurfaceSample[] = []
+		for (const [x, y] of [
+			[0, 0],
+			[63, 0],
+			[0, 63],
+			[63, 63],
+		]) {
+			samples.push({ x, y, value: 0 }, { x, y, value: 1 })
+		}
+
+		const model = fitOrThrow(samples, 64, 64, { model: 'thinPlateSpline', smoothing: 0.1, maxControlPoints: 4 })
+
+		expect(model.samples.map((sample) => sample.value)).toEqual(samples.map((sample) => sample.value))
+		expect(model.acceptedSamples).toBe(4)
+		expect(model.rejectedSamples).toBe(4)
+		expect(model.residual).toBeCloseTo(0.7413, 3)
+	})
+
 	test('a capped smoothing spline aggregates bucket observations before selecting controls', () => {
 		function centerOf(reverse: boolean) {
 			const samples: SurfaceSample[] = []
