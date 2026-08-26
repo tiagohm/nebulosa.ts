@@ -567,8 +567,8 @@ function fitChannelSurface(raw: ImageRawType, width: number, height: number, cha
 
 		// The final surface is a smoothing TPS through the surviving samples, capped to a tractable number
 		// of control points on dense grids.
-		const indices = subsampleSurfaceControlPoints(set, SURFACE_MAX_CONTROL_POINTS)
-		const tps = fitThinPlateSplineSurface(set, indices, smoothing)
+		const selection = subsampleSurfaceControlPoints(set, SURFACE_MAX_CONTROL_POINTS, smoothing > 0)
+		const tps = fitThinPlateSplineSurface(set, selection, smoothing)
 		if (typeof tps === 'string') throw new Error('thin-plate spline fit failed (needs at least 3 clean samples and a non-singular system)')
 		coefficients = tps.coefficients
 		controlPoints = tps.controlPoints
@@ -588,9 +588,9 @@ function fitChannelSurface(raw: ImageRawType, width: number, height: number, cha
 		// smoothing. For an exact spline this also keeps the accepted set equal to the interpolated set,
 		// without which evaluateBackgroundModel would treat the model as exact while accepted-but-dropped
 		// samples failed to reproduce their medians.
-		if (indices !== undefined) {
+		if (selection !== undefined) {
 			const kept = new Uint8Array(set.count)
-			for (const i of indices) kept[i] = 1
+			for (const i of selection.indices) kept[i] = 1
 			for (let i = 0; i < set.count; i++) if (kept[i] === 0) set.active[i] = 0
 		}
 	} else {

@@ -240,6 +240,22 @@ export interface SurfaceSampleSet {
 	count: number
 }
 
+// Control points selected for a capped thin-plate spline solve. `indices` maps each control back to the
+// original sample used as its diagnostic representative; the numeric arrays may hold either that sample
+// or a weighted bucket aggregate when smoothing allows aggregation.
+export interface SurfaceControlPointSelection {
+	// Original sample index used as the diagnostic representative for each control point.
+	readonly indices: Uint32Array
+	// Normalized sample x coordinates in [-1, 1].
+	readonly u: Float64Array
+	// Normalized sample y coordinates in [-1, 1].
+	readonly v: Float64Array
+	// Scalar value fitted at each control point.
+	readonly value: Float64Array
+	// Least-squares weight for each control point.
+	readonly weight: Float64Array
+}
+
 // Allocates an empty sample set able to hold `capacity` samples.
 export function createSurfaceSampleSet(capacity: number): SurfaceSampleSet {
 	return {
@@ -472,78 +488,16 @@ function aggregateCoincidentSurfaceSamples(set: SurfaceSampleSet) {
 	}
 }
 
-// Deterministically subsamples the active samples down to at most `maxPoints` control points,
-// preserving spatial coverage: the normalized [-1, 1] domain is split into a g x g grid
-// (g = floor(sqrt(maxPoints))) and the first active sample landing in each bucket is kept. Returns the
-// chosen indices, or `undefined` when the active count is already within the cap so the common case
-// allocates nothing.
-export function subsampleSurfaceControlPoints(set: SurfaceSampleSet, maxPoints: number): Uint32Array | undefined {
+// Deterministically subsamples the active samples down to at most `maxPoints` control points while
+// preserving spatial coverage. Exact splines keep representative input samples; smoothing splines may
+// use weighted bucket aggregates so equal-weight neighbors do not make the cap order-dependent. Returns
+// undefined when the active count is already within the cap so the common case allocates nothing.
+export function subsampleSurfaceControlPoints(set: SurfaceSampleSet, maxPoints: number, aggregateBuckets = false): SurfaceControlPointSelection | undefined {
 	if (activeSurfaceSampleCount(set) <= maxPoints) return undefined
+	if (!aggregateBuckets) return buildControlSelectionFromIndices(set, selectRepresentativeSurfaceControls(set, maxPoints))
 
-	const g = Math.max(1, Math.floor(Math.sqrt(maxPoints)))
-	// Position in `chosen` already held by each bucket, or -1 while the bucket is empty.
-	const slot = new Int32Array(g * g).fill(-1)
-	const limit = Math.max(maxPoints, MIN_CONTROL_POINTS)
-	const chosen = new Uint32Array(Math.max(g * g, MIN_CONTROL_POINTS))
-	let n = 0
-
-	// Each bucket contributes its most reliable sample, not whichever one happened to be listed first.
-	// The fit weights samples, so keeping an arbitrary representative lets input order override that: two
-	// observations at one location, one at weight 1e-6 and one at weight 1, moved the capped surface by a
-	// factor of 50 depending on their order, while the uncapped weighted fit is the same either way.
-	// Ties keep the earlier sample, so the selection stays deterministic, and the emission order is the
-	// order buckets were first reached, which keeps the spatial spread the sweep exists to produce.
-	for (let i = 0; i < set.count; i++) {
-		if (set.active[i] === 0) continue
-		// Map u, v in [-1, 1] to a bucket in [0, g); clamp guards the exact +1 edge.
-		const bu = Math.min(g - 1, Math.floor(((set.u[i] + 1) / 2) * g))
-		const bv = Math.min(g - 1, Math.floor(((set.v[i] + 1) / 2) * g))
-		const b = bv * g + bu
-
-		if (slot[b] < 0) {
-			slot[b] = n
-			chosen[n++] = i
-		} else if (set.weight[i] > set.weight[chosen[slot[b]]]) {
-			chosen[slot[b]] = i
-		}
-	}
-
-	// The bucket sweep spreads the selection over the sampled region, but nothing about it constrains the
-	// SELECTION to span two dimensions, and the spline is solved from the selection alone. A cap below 4
-	// collapses the grid to one bucket; a set whose occupied buckets line up yields collinear
-	// first-in-bucket representatives even when later samples in those same buckets give the whole set
-	// genuine spread. Either way the saddle-point system comes out singular for a layout the uncapped fit
-	// handles.
-	//
-	// So the spanning triple is not a repair applied when the selection looks bad — it is computed from
-	// the active set and always merged in. That makes non-collinearity a property of how the selection is
-	// built rather than something to detect afterwards, which is what repeatedly left holes: every
-	// conditional repair had a path where an earlier fix was undone by a later one. The cost is at most
-	// three bucket representatives, and the triple consists of extreme points, which a spline wants as
-	// control points anyway. Stability beyond mere solvability stays where it belongs, in the coverage
-	// check the caller runs over the whole active set before subsampling.
-	const triple = spanningTriple(set)
-
-	if (triple !== undefined) {
-		for (const index of triple) {
-			if (containsIndex(chosen, n, index)) continue
-
-			if (n < limit && n < chosen.length) {
-				chosen[n++] = index
-				continue
-			}
-
-			// No room left: drop a representative that is not itself part of the triple.
-			for (let k = n - 1; k >= 0; k--) {
-				if (triple[0] !== chosen[k] && triple[1] !== chosen[k] && triple[2] !== chosen[k]) {
-					chosen[k] = index
-					break
-				}
-			}
-		}
-	}
-
-	return chosen.subarray(0, n)
+	const aggregated = aggregateSurfaceControlsByBucket(set, maxPoints)
+	return selectedControlHasTwoDimensionalCoverage(aggregated) ? aggregated : buildControlSelectionFromIndices(set, selectRepresentativeSurfaceControls(set, maxPoints))
 }
 
 // The three active samples spanning the largest triangle this construction can find: an extreme point,
@@ -613,6 +567,155 @@ function farthestActiveSample(set: SurfaceSampleSet, from: number) {
 function containsIndex(chosen: Uint32Array, n: number, value: number) {
 	for (let k = 0; k < n; k++) if (chosen[k] === value) return true
 	return false
+}
+
+// Whether selected normalized controls span two dimensions rather than a line.
+function selectedControlHasTwoDimensionalCoverage(selection: SurfaceControlPointSelection) {
+	const m = selection.indices.length
+	if (m < MIN_CONTROL_POINTS) return false
+
+	let su = 0
+	let sv = 0
+	for (let i = 0; i < m; i++) {
+		su += selection.u[i]
+		sv += selection.v[i]
+	}
+
+	const mu = su / m
+	const mv = sv / m
+	let cuu = 0
+	let cvv = 0
+	let cuv = 0
+
+	for (let i = 0; i < m; i++) {
+		const du = selection.u[i] - mu
+		const dv = selection.v[i] - mv
+		cuu += du * du
+		cvv += dv * dv
+		cuv += du * dv
+	}
+
+	cuu /= m
+	cvv /= m
+	cuv /= m
+
+	const tr = cuu + cvv
+	const disc = Math.sqrt(Math.max(0, (tr * tr) / 4 - (cuu * cvv - cuv * cuv)))
+	return Math.sqrt(Math.max(0, tr / 2 - disc)) >= MIN_SAMPLE_SPREAD
+}
+
+// Copies selected sample indices into a control selection.
+function buildControlSelectionFromIndices(set: SurfaceSampleSet, indices: Uint32Array) {
+	const n = indices.length
+	const u = new Float64Array(n)
+	const v = new Float64Array(n)
+	const value = new Float64Array(n)
+	const weight = new Float64Array(n)
+
+	for (let i = 0; i < n; i++) {
+		const index = indices[i]
+		u[i] = set.u[index]
+		v[i] = set.v[index]
+		value[i] = set.value[index]
+		weight[i] = set.weight[index]
+	}
+
+	return { indices, u, v, value, weight }
+}
+
+// Deterministically picks one active representative from each spatial bucket, preferring higher-weight
+// samples and merging an extreme spanning triple when bucket representatives alone would be degenerate.
+function selectRepresentativeSurfaceControls(set: SurfaceSampleSet, maxPoints: number) {
+	const g = Math.max(1, Math.floor(Math.sqrt(maxPoints)))
+	// Position in `chosen` already held by each bucket, or -1 while the bucket is empty.
+	const slot = new Int32Array(g * g).fill(-1)
+	const limit = Math.max(maxPoints, MIN_CONTROL_POINTS)
+	const chosen = new Uint32Array(Math.max(g * g, MIN_CONTROL_POINTS))
+	let n = 0
+
+	for (let i = 0; i < set.count; i++) {
+		if (set.active[i] === 0) continue
+		const bu = Math.min(g - 1, Math.floor(((set.u[i] + 1) / 2) * g))
+		const bv = Math.min(g - 1, Math.floor(((set.v[i] + 1) / 2) * g))
+		const b = bv * g + bu
+
+		if (slot[b] < 0) {
+			slot[b] = n
+			chosen[n++] = i
+		} else if (set.weight[i] > set.weight[chosen[slot[b]]]) {
+			chosen[slot[b]] = i
+		}
+	}
+
+	const triple = spanningTriple(set)
+
+	if (triple !== undefined) {
+		for (const index of triple) {
+			if (containsIndex(chosen, n, index)) continue
+
+			if (n < limit && n < chosen.length) {
+				chosen[n++] = index
+				continue
+			}
+
+			for (let k = n - 1; k >= 0; k--) {
+				if (triple[0] !== chosen[k] && triple[1] !== chosen[k] && triple[2] !== chosen[k]) {
+					chosen[k] = index
+					break
+				}
+			}
+		}
+	}
+
+	return chosen.subarray(0, n)
+}
+
+// Aggregates each spatial bucket into one weighted control point for smoothing spline caps.
+function aggregateSurfaceControlsByBucket(set: SurfaceSampleSet, maxPoints: number) {
+	const g = Math.max(1, Math.floor(Math.sqrt(maxPoints)))
+	const buckets = g * g
+	const representative = new Int32Array(buckets).fill(-1)
+	const sumU = new Float64Array(buckets)
+	const sumV = new Float64Array(buckets)
+	const sumValue = new Float64Array(buckets)
+	const sumWeight = new Float64Array(buckets)
+
+	for (let i = 0; i < set.count; i++) {
+		if (set.active[i] === 0) continue
+		const bu = Math.min(g - 1, Math.floor(((set.u[i] + 1) / 2) * g))
+		const bv = Math.min(g - 1, Math.floor(((set.v[i] + 1) / 2) * g))
+		const bucket = bv * g + bu
+		const weight = set.weight[i]
+
+		if (representative[bucket] < 0) representative[bucket] = i
+		else if (weight > set.weight[representative[bucket]]) representative[bucket] = i
+		sumWeight[bucket] += weight
+		sumU[bucket] += weight * set.u[i]
+		sumV[bucket] += weight * set.v[i]
+		sumValue[bucket] += weight * set.value[i]
+	}
+
+	const indices = new Uint32Array(Math.max(buckets, MIN_CONTROL_POINTS))
+	const u = new Float64Array(Math.max(buckets, MIN_CONTROL_POINTS))
+	const v = new Float64Array(Math.max(buckets, MIN_CONTROL_POINTS))
+	const value = new Float64Array(Math.max(buckets, MIN_CONTROL_POINTS))
+	const weight = new Float64Array(Math.max(buckets, MIN_CONTROL_POINTS))
+	let n = 0
+
+	for (let bucket = 0; bucket < buckets; bucket++) {
+		const index = representative[bucket]
+		if (index < 0) continue
+		const totalWeight = sumWeight[bucket]
+		const inv = 1 / totalWeight
+		indices[n] = index
+		u[n] = sumU[bucket] * inv
+		v[n] = sumV[bucket] * inv
+		value[n] = sumValue[bucket] * inv
+		weight[n] = totalWeight
+		n++
+	}
+
+	return { indices: indices.subarray(0, n), u: u.subarray(0, n), v: v.subarray(0, n), value: value.subarray(0, n), weight: weight.subarray(0, n) }
 }
 
 // Keeps at most `maxSamples` active samples by aggregating each spatial bucket into one weighted
@@ -828,16 +931,16 @@ function tpsKernel(sq: number) {
 // Fits a smoothing thin-plate spline. Solves the (k+3)x(k+3) saddle-point system
 // [K + s*W^-1, P; P^T, 0] [w; a] = [f; 0], where K_ij = U(|p_i - p_j|), P rows are [1, u_i, v_i], `s`
 // is the smoothing term scaled by each sample's inverse weight, and the P^T rows enforce the affine
-// side conditions. Control points are the active samples, or the subset named by `indices` when the
+// side conditions. Control points are the active samples, or the selected/aggregated controls when the
 // caller capped them. Returns the packed coefficients [a0, a1, a2, w...] and the interleaved control
 // points, or a failure reason when there are fewer than 3 points or the system is singular.
-export function fitThinPlateSplineSurface(set: SurfaceSampleSet, indices: Uint32Array | undefined, smoothing: number): { coefficients: Float64Array; controlPoints: Float64Array } | SurfaceFitFailureReason {
+export function fitThinPlateSplineSurface(set: SurfaceSampleSet, selection: SurfaceControlPointSelection | undefined, smoothing: number): { coefficients: Float64Array; controlPoints: Float64Array } | SurfaceFitFailureReason {
 	const us: number[] = []
 	const vs: number[] = []
 	const fs: number[] = []
 	const ws: number[] = []
 
-	if (indices === undefined) {
+	if (selection === undefined) {
 		for (let i = 0; i < set.count; i++) {
 			if (set.active[i] === 0) continue
 			us.push(set.u[i])
@@ -846,11 +949,11 @@ export function fitThinPlateSplineSurface(set: SurfaceSampleSet, indices: Uint32
 			ws.push(set.weight[i])
 		}
 	} else {
-		for (const i of indices) {
-			us.push(set.u[i])
-			vs.push(set.v[i])
-			fs.push(set.value[i])
-			ws.push(set.weight[i])
+		for (let i = 0; i < selection.indices.length; i++) {
+			us.push(selection.u[i])
+			vs.push(selection.v[i])
+			fs.push(selection.value[i])
+			ws.push(selection.weight[i])
 		}
 	}
 
@@ -1446,8 +1549,8 @@ export function fitScalarSurface(samples: readonly SurfaceSample[], width: numbe
 			if (!hasSurfaceTwoDimensionalCoverage(set)) return { ok: false, reason: 'degenerate-layout' }
 		}
 
-		const indices = subsampleSurfaceControlPoints(set, maxControlPoints)
-		const tps = fitThinPlateSplineSurface(set, indices, smoothing)
+		const selection = subsampleSurfaceControlPoints(set, maxControlPoints, smoothing > 0)
+		const tps = fitThinPlateSplineSurface(set, selection, smoothing)
 		if (typeof tps === 'string') return { ok: false, reason: tps }
 
 		// Residuals are measured before the control cap changes the accepted flags. A capped-out sample did
@@ -1464,9 +1567,9 @@ export function fitScalarSurface(samples: readonly SurfaceSample[], width: numbe
 
 		// Acceptance means the sample fed the final fit, so the cap rejects whatever it dropped, whether or
 		// not the spline interpolates. Applied after the residuals so the diagnostic keeps its full set.
-		if (indices !== undefined) {
+		if (selection !== undefined) {
 			const kept = new Uint8Array(set.count)
-			for (const i of indices) kept[i] = 1
+			for (const i of selection.indices) kept[i] = 1
 			for (let i = 0; i < set.count; i++) if (kept[i] === 0) set.active[i] = 0
 		}
 

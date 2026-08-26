@@ -361,6 +361,25 @@ describe('thin-plate spline', () => {
 		expect(highPoint.at(32, 32)).toBeCloseTo(0.5, 12)
 	})
 
+	test('a capped smoothing spline aggregates bucket observations before selecting controls', () => {
+		function centerOf(reverse: boolean) {
+			const samples: SurfaceSample[] = []
+			for (let by = 0; by < 2; by++) {
+				for (let bx = 0; bx < 2; bx++) {
+					const x = 8 + bx * 32
+					const y = 8 + by * 32
+					samples.push({ x, y, value: reverse ? 1 : 0, weight: 1 }, { x: x + 1, y: y + 1, value: reverse ? 0 : 1, weight: 1 })
+				}
+			}
+
+			return createScalarSurfacePointEvaluator(fitOrThrow(samples, 64, 64, { model: 'thinPlateSpline', smoothing: 0.1, maxControlPoints: 4 })).at(32, 32)
+		}
+
+		const forward = centerOf(false)
+		expect(centerOf(true)).toBeCloseTo(forward, 12)
+		expect(forward).toBeCloseTo(0.5, 12)
+	})
+
 	test('control points are capped and the dropped samples are reported', () => {
 		const samples = sampleGrid(256, 256, 12, 12, (x, y) => 0.2 + 0.0005 * (x - y))
 		const model = fitOrThrow(samples, 256, 256, { model: 'thinPlateSpline', smoothing: 0, maxControlPoints: 16 })
