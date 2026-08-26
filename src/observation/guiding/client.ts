@@ -157,7 +157,7 @@ export class GuiderClient {
 	#frameId = 0
 	#processingBlob = false
 	// Retriggers a dropped INDI exposure so a missing BLOB cannot stall the loop until the user
-	// notices. Armed when an exposure is started; cleared when capture stops.
+	// notices. Armed when an exposure is started; cleared when that BLOB is accepted or capture stops.
 	#exposureWatchdog?: ReturnType<typeof setTimeout>
 	#lockPosition?: readonly [number, number]
 	#lockSearchPosition?: readonly [number, number]
@@ -890,6 +890,10 @@ export class GuiderClient {
 		this.#processingBlob = true
 		this.#acceptedStars = undefined
 		this.#primaryOutsideSearchRegion = false
+		// Drop the missing-BLOB timer as soon as this exposure is in hand. Leaving it armed until
+		// the next startExposure lets a slow decode or pulse wait trip a false timeout and start an
+		// overlapping exposure.
+		this.#clearExposureWatchdog()
 
 		let pulseDelay = 0
 
@@ -1375,8 +1379,8 @@ export class GuiderClient {
 		this.#exposureWatchdog.unref()
 	}
 
-	// Cancels a pending missing-BLOB retry. Capture stop, disconnect, and a full pause all call this
-	// so a leftover timer cannot start an exposure after the session has already ended.
+	// Cancels a pending missing-BLOB retry. Accepting the matching BLOB, capture stop, disconnect,
+	// and a full pause all call this so a leftover timer cannot start an overlapping exposure.
 	#clearExposureWatchdog() {
 		if (this.#exposureWatchdog === undefined) return
 		clearTimeout(this.#exposureWatchdog)

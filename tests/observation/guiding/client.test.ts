@@ -1390,6 +1390,33 @@ describe('closed-loop calibration and guiding', () => {
 	)
 
 	test.concurrent(
+		'an arriving guide frame cancels the exposure watchdog',
+		async () => {
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
+
+			const exposuresBefore = harness.cameraManager.startExposureCalls.length
+			const timeoutAlertsBefore = eventsOf(harness.events, 'Alert').filter((alert) => alert.Type === 'warning' && alert.Msg.includes('timed out')).length
+
+			harness.guideOutputManager.pulseBusyOverhangMs = 400
+			harness.mount.driftX = RA_AXIS[0] * 1.2
+			harness.mount.driftY = RA_AXIS[1] * 1.2
+
+			const pulsesBefore = harness.guideOutputManager.pulses.length
+			harness.mount.advance(harness.guideOutputManager.pulses)
+			const buffer = await buildFrameBuffer(harness.mount.offsetX, harness.mount.offsetY)
+			await Bun.sleep(4700)
+			await feedBuffer(harness, buffer)
+
+			expect(harness.guideOutputManager.pulses.length).toBeGreaterThan(pulsesBefore)
+			const timeoutAlerts = eventsOf(harness.events, 'Alert').filter((alert) => alert.Type === 'warning' && alert.Msg.includes('timed out'))
+			expect(timeoutAlerts.length).toBe(timeoutAlertsBefore)
+			expect(harness.cameraManager.startExposureCalls.length).toBe(exposuresBefore + 1)
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
 		'the next exposure waits for a delayed Busy acknowledgement before starting',
 		async () => {
 			const harness = await calibrateAndGuide()
