@@ -898,9 +898,22 @@ export class Guider {
 		;(this.config as Writable<GuiderConfig>).nominalCadence = nominalCadence
 	}
 
-	// Updates the DEC guiding policy without resetting lock, hysteresis, or dither.
+	// Updates the DEC guiding policy without resetting lock, RA hysteresis, or dither. Entering or
+	// leaving `off` clears DEC filter and reversal memory: `#computeDEC` returns before updating
+	// those fields while disabled, so a stale pre-disable error would otherwise pulse as soon as
+	// DEC is re-enabled even if the star is already centered.
 	setDecMode(decMode: DeclinationGuideMode) {
+		const previous = this.config.decMode
+		if (previous === decMode) return
 		;(this.config as Writable<GuiderConfig>).decMode = decMode
+		if (previous === 'off' || decMode === 'off') this.#clearDecControlState()
+	}
+
+	// Drops DEC hysteresis, last direction, and backlash accumulation without touching lock or dither.
+	#clearDecControlState() {
+		this.state.filteredDEC = 0
+		this.state.lastDecDirection = undefined
+		this.state.oppositeDecErrorAccum = 0
 	}
 
 	// Replaces the image-to-axis transform and related pulse scaling without resetting lock,

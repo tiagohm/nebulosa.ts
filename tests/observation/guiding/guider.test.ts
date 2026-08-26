@@ -198,6 +198,30 @@ test('setDecMode and setCalibration keep the lock and hysteresis', () => {
 	expect(second.ra.duration).toBeGreaterThan(0)
 })
 
+test('setDecMode off clears DEC memory so re-enabling does not pulse a centered star', () => {
+	const instance = guider({ hysteresisDEC: 0.6, minMoveDEC: 0.01 })
+	instance.processFrame(guideFrame(BASE_STARS, 0))
+	const correction = instance.processFrame(guideFrame(shiftStars(BASE_STARS, 0, 0.5), 1000))
+	expect(correction.dec.duration).toBeGreaterThan(0)
+	expect(instance.currentState.filteredDEC).not.toBe(0)
+	expect(instance.currentState.lastDecDirection).toBe('NORTH')
+
+	instance.setDecMode('off')
+	expect(instance.currentState.filteredDEC).toBe(0)
+	expect(instance.currentState.lastDecDirection).toBeUndefined()
+	expect(instance.currentState.oppositeDecErrorAccum).toBe(0)
+	expect(instance.currentState.state).toBe('guiding')
+
+	const disabled = instance.processFrame(guideFrame(BASE_STARS, 2000))
+	expect(disabled.dec.duration).toBe(0)
+	expect(disabled.diagnostics.filteredDEC).toBe(0)
+
+	instance.setDecMode('auto')
+	const centered = instance.processFrame(guideFrame(BASE_STARS, 3000))
+	expect(centered.dec.duration).toBe(0)
+	expect(centered.diagnostics.filteredDEC).toBe(0)
+})
+
 test('steady drift with seeing noise and oscillation remain bounded', () => {
 	const guider = new Guider({ lockAveragingFrames: 1, hysteresisRA: 0.6, hysteresisDEC: 0.6 })
 	guider.processFrame(guideFrame(BASE_STARS, 0))
