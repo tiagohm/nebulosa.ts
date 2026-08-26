@@ -156,6 +156,10 @@ export class GuiderClient {
 	#image?: Image
 	#frameId = 0
 	#processingBlob = false
+	// True after `#beginExposure` until the matching BLOB is accepted or capture stops. The missing-
+	// BLOB watchdog is not armed from Stopped, so this is what prevents a second CCD_EXPOSURE while
+	// that one-shot start is still outstanding.
+	#awaitingBlob = false
 	// Retriggers a dropped INDI exposure so a missing BLOB cannot stall the loop until the user
 	// notices. Armed when an exposure is started; cleared when that BLOB is accepted or capture stops.
 	#exposureWatchdog?: ReturnType<typeof setTimeout>
@@ -347,19 +351,22 @@ export class GuiderClient {
 	}
 
 	// Starts one exposure (in milliseconds) and stores it as the default cadence for looping/guiding.
+	// A second start while an exposure is already outstanding is a no-op: overlapping CCD_EXPOSURE
+	// commands race the camera and reset BLOB admission, so loop() then guide() would fork the
+	// capture chain. The missing-BLOB watchdog is the only path allowed to start a replacement,
+	// and it calls `#beginExposure` directly.
 	startExposureLoop(exposure: number) {
 		if (exposure > 0 && Number.isFinite(exposure)) {
 			this.#exposure = exposure
 			this.#guider.setNominalCadence(exposure)
 		}
 
-		if (this.#camera !== undefined) {
-			this.#blobAdmission = 'accept'
-			this.#beginExposure()
-			return true
-		}
+		if (this.#camera === undefined) return false
+		if (this.#exposureInFlight) return true
 
-		return false
+		this.#blobAdmission = 'accept'
+		this.#beginExposure()
+		return true
 	}
 
 	// Stops camera exposure and clears active guiding/looping state.
@@ -373,6 +380,7 @@ export class GuiderClient {
 		this.#abortSettling('capture stopped')
 		this.#emitCaptureStoppedEvent()
 		this.#blobAdmission = 'accept'
+		this.#awaitingBlob = false
 		this.#clearExposureWatchdog()
 
 		if (this.#camera !== undefined) {
@@ -885,6 +893,7 @@ export class GuiderClient {
 			this.#setAppState('Paused')
 			if (this.#fullPause) {
 				this.#blobAdmission = 'accept'
+				this.#awaitingBlob = false
 				this.#clearExposureWatchdog()
 				if (this.#camera !== undefined) this.cameraManager.stopExposure(this.#camera)
 			}
@@ -927,6 +936,7 @@ export class GuiderClient {
 		// previous frame is still being decoded/processed is dropped to avoid interleaved mutation.
 		if (this.#processingBlob) return
 		this.#processingBlob = true
+		this.#awaitingBlob = false
 		this.#acceptedStars = undefined
 		this.#primaryOutsideSearchRegion = false
 		// Drop the missing-BLOB timer as soon as this exposure is in hand. Leaving it armed until
@@ -1449,8 +1459,17 @@ export class GuiderClient {
 	#beginExposure() {
 		if (this.#camera === undefined) return
 		this.#inFlightExposureMs = this.#exposure
+		this.#awaitingBlob = true
 		this.cameraManager.startExposure(this.#camera, this.#exposure / 1000)
 		this.#armExposureWatchdog()
+	}
+
+	// True while a guide exposure is outstanding: the matching BLOB is still being processed, or
+	// `#beginExposure` has started a capture that has not yet arrived. Public start/loop/guide use
+	// this to refuse a second CCD_EXPOSURE; the missing-BLOB watchdog still calls `#beginExposure`
+	// directly.
+	get #exposureInFlight() {
+		return this.#processingBlob || this.#awaitingBlob
 	}
 
 	// True when the exposure loop is allowed to start or retry a capture. Full pause, stop, client
@@ -1495,6 +1514,7 @@ export class GuiderClient {
 	// Resets transient guider state while optionally dropping calibration.
 	#resetRuntimeState(clearCalibration: boolean, preserveGuidingAssistantResult: boolean = false) {
 		this.#blobAdmission = 'accept'
+		this.#awaitingBlob = false
 		this.#clearExposureWatchdog()
 		const guidingAssistantResult = preserveGuidingAssistantResult ? this.#guidingAssistantResult : undefined
 		this.#frame = undefined

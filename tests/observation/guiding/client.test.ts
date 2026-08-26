@@ -455,8 +455,16 @@ describe('capture control', () => {
 		harness.client.startExposureLoop(3000)
 		harness.client.startExposureLoop(0)
 		harness.client.startExposureLoop(Number.NaN)
-		expect(harness.cameraManager.startExposureCalls).toEqual([3, 3, 3])
+		expect(harness.cameraManager.startExposureCalls).toEqual([3])
 		expect(harness.client.getExposure()).toBe(3000)
+	})
+
+	test('startExposureLoop does not start a second exposure while one is in flight', () => {
+		connect(harness)
+		expect(harness.client.startExposureLoop(1000)).toBeTrue()
+		expect(harness.client.startExposureLoop(2000)).toBeTrue()
+		expect(harness.cameraManager.startExposureCalls).toEqual([1])
+		expect(harness.client.getExposure()).toBe(2000)
 	})
 
 	test('stopCapture stops exposures, returns to Stopped and emits the looping stop', () => {
@@ -811,7 +819,9 @@ describe('mode transitions', () => {
 		await feedFrame(harness)
 		harness.client.setLockPosition(STAR_B[0], STAR_B[1], true)
 
+		const exposuresBefore = harness.cameraManager.startExposureCalls.length
 		expect(harness.client.guide()).toBeTrue()
+		expect(harness.cameraManager.startExposureCalls.length).toBe(exposuresBefore)
 		expect(eventsOf(harness.events, 'StarSelected')).toHaveLength(0)
 		expect(harness.client.getLockPosition()).toEqual([STAR_B[0], STAR_B[1]])
 	})
