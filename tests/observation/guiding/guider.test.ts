@@ -239,6 +239,43 @@ test('setCalibration with reversed DEC parity matches a fresh flipped guider', (
 	expect(runningCmd.dec.duration).toBeGreaterThan(0)
 })
 
+test('setCalibration with reversed RA polarity matches a fresh flipped guider', () => {
+	const running = guider({
+		calibration: [1, 0, 0, 1],
+		hysteresisRA: 0.6,
+		minMoveRA: 0.01,
+		raPositiveDirection: 'WEST',
+	})
+	running.processFrame(guideFrame(BASE_STARS, 0))
+	const first = running.processFrame(guideFrame(shiftStars(BASE_STARS, 0.4, 0), 1000))
+	expect(first.ra.direction).toBe('WEST')
+	expect(first.ra.duration).toBeGreaterThan(0)
+	expect(running.currentState.filteredRA).not.toBe(0)
+
+	running.startDither(0.5, -0.25)
+	running.setCalibration([-1, 0, 0, 1], { raPositiveDirection: 'EAST' })
+	expect(running.currentState.state).toBe('guiding')
+	expect(running.currentState.ditherActive).toBeTrue()
+	expect(running.currentState.filteredRA).toBe(0)
+	running.stopDither()
+
+	const equivalent = shiftStars(BASE_STARS, -0.4, 0)
+	const runningCmd = running.processFrame(guideFrame(equivalent, 2000))
+
+	const fresh = guider({
+		calibration: [-1, 0, 0, 1],
+		hysteresisRA: 0.6,
+		minMoveRA: 0.01,
+		raPositiveDirection: 'EAST',
+	})
+	fresh.processFrame(guideFrame(BASE_STARS, 0))
+	const freshCmd = fresh.processFrame(guideFrame(equivalent, 1000))
+
+	expect(runningCmd.ra.direction).toBe(freshCmd.ra.direction)
+	expect(runningCmd.ra.duration).toBeCloseTo(freshCmd.ra.duration, 8)
+	expect(runningCmd.ra.duration).toBeGreaterThan(0)
+})
+
 test('setDecMode off clears DEC memory so re-enabling does not pulse a centered star', () => {
 	const instance = guider({ hysteresisDEC: 0.6, minMoveDEC: 0.01 })
 	instance.processFrame(guideFrame(BASE_STARS, 0))

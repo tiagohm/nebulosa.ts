@@ -921,16 +921,22 @@ export class Guider {
 		this.state.oppositeDecErrorAccum = 0
 	}
 
-	// Replaces the image-to-axis transform and related pulse scaling without resetting lock,
-	// RA hysteresis, or dither. DEC filter and reversal memory are cleared when the matrix or
-	// DEC polarity changes: a reverse-output meridian flip inverts the DEC error sign and
-	// `decPositiveDirection`, so retaining the old convention blends opposite-signed errors and
-	// can command the pre-flip direction or suppress the required correction as backlash.
+	// Drops RA hysteresis without touching lock, dither, or DEC memory.
+	#clearRaControlState() {
+		this.state.filteredRA = 0
+	}
+
+	// Replaces the image-to-axis transform and related pulse scaling without resetting lock or
+	// dither. Axis-controller memory is cleared when that axis's transform or polarity changes:
+	// a meridian flip inverts the RA row and often `raPositiveDirection`, so retaining `filteredRA`
+	// in the old convention blends opposite-signed errors and can pulse the pre-flip direction.
+	// Pulse-scale-only updates keep hysteresis because `filteredRA` stays in axis-error units.
 	setCalibration(calibration: CalibrationMatrix, options: Partial<Pick<GuiderConfig, 'msPerRAUnit' | 'msPerDECUnit' | 'minMoveRA' | 'minMoveDEC' | 'decReversalThreshold' | 'decBacklashAccumThreshold' | 'raPositiveDirection' | 'decPositiveDirection'>> = {}) {
 		const validation = validateCalibration(calibration)
 		if (!validation.valid) throw new Error(`invalid calibration matrix: determinant=${validation.determinant}`)
 
 		const previousCalibration = this.config.calibration
+		const previousRaDirection = this.config.raPositiveDirection
 		const previousDecDirection = this.config.decPositiveDirection
 		const next: GuiderConfig = { ...this.config, calibration, ...options }
 		const issues = validateGuiderConfig(next)
@@ -941,7 +947,11 @@ export class Guider {
 
 		Object.assign(this.config as Writable<GuiderConfig>, next)
 
-		if (next.decPositiveDirection !== previousDecDirection || !isCalibrationEquals(next.calibration, previousCalibration)) {
+		const calibrationChanged = !isCalibrationEquals(next.calibration, previousCalibration)
+		if (next.raPositiveDirection !== previousRaDirection || calibrationChanged) {
+			this.#clearRaControlState()
+		}
+		if (next.decPositiveDirection !== previousDecDirection || calibrationChanged) {
 			this.#clearDecControlState()
 		}
 	}
