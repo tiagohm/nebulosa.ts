@@ -519,8 +519,11 @@ export function solveGlobalNormalization(reference: readonly number[], current: 
 	const q = ESTIMATOR_QUANTILE[mode]
 	const refBg = percentileSorted(ref, ref.length, q)
 	const curBg = percentileSorted(cur, cur.length, q)
-	const refSpan = Math.max(percentileSorted(ref, ref.length, 1 - q) - refBg, FLOAT_EPSILON)
-	const curSpan = Math.max(percentileSorted(cur, cur.length, 1 - q) - curBg, FLOAT_EPSILON)
+	const refSpan = percentileSorted(ref, ref.length, 1 - q) - refBg
+	const curSpan = percentileSorted(cur, cur.length, 1 - q) - curBg
+	// A collapsed distribution contains no scale information. Matching only its background level avoids
+	// turning the epsilon denominator into an enormous gain that amplifies insignificant variation.
+	if (refSpan <= FLOAT_EPSILON || curSpan <= FLOAT_EPSILON) return { scale: 1, offset: refBg - curBg }
 	const scale = finiteOr(refSpan / curSpan, 1)
 	return { scale, offset: refBg - scale * curBg }
 }

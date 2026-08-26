@@ -261,6 +261,17 @@ describe('global normalization', () => {
 		const solution = solveGlobalNormalization([1, 2, 3, 4], [5, 5, 5, 5], 'scale')
 		expect(solution.scale).toBeCloseTo(0.5, 12)
 	})
+
+	test('span estimators use a stable level-only transform for a degenerate distribution', () => {
+		for (const mode of ['background-scale', 'percentile'] as const) {
+			const solution = solveGlobalNormalization([1, 2, 3, 4], [5, 5, 5, 5], mode)
+			const quantile = mode === 'background-scale' ? 1.75 : 1.3
+
+			expect(solution.scale).toBe(1)
+			expect(solution.offset).toBeCloseTo(quantile - 5, 12)
+			expect(solution.scale * (5 + 1e-6) + solution.offset).toBeCloseTo(quantile + 1e-6, 12)
+		}
+	})
 })
 
 describe('option resolution', () => {
