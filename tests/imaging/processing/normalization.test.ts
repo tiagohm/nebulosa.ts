@@ -1591,6 +1591,31 @@ describe('local normalization', () => {
 		expect(model.diagnostics[0].acceptedCells).toBe(0)
 		expect(isLocalNormalizationFallback(model)).toBe(true)
 	})
+
+	test('short edge cells do not recount sparse phases collapsed by clamping', () => {
+		const width = 17
+		const height = 256
+		const reference = new Float64Array(width * height)
+		const current = new Float64Array(width * height)
+		reference.fill(Number.NaN)
+		current.fill(Number.NaN)
+
+		for (const [x, y] of [
+			[16, 0],
+			[16, 22],
+			[16, 44],
+		]) {
+			const i = y * width + x
+			const value = 0.2 + 0.001 * y
+			current[i] = value
+			reference[i] = 1.2 * value + 0.01
+		}
+
+		const model = fitLocalNormalizationRaw(reference, current, width, height, 1, 'per-channel', undefined, resolveLocalNormalizationOptions({ gridSize: 2, maxSamplesPerCell: 4, minSamplesPerCell: 4, minValidFraction: 0, scaleDegree: 1, offsetDegree: 2 }))
+
+		expect(model.diagnostics[0].acceptedCells).toBe(0)
+		expect(isLocalNormalizationFallback(model)).toBe(true)
+	})
 })
 
 describe('color handling', () => {

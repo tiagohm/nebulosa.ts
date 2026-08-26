@@ -1091,6 +1091,10 @@ export function fitLocalNormalizationRaw(referenceRaw: ImageRawType, currentRaw:
 	const phaseOffsetsX = new Int32Array(MAX_LOCAL_NORMALIZATION_CELL_PHASES)
 	const phaseOffsetsY = new Int32Array(MAX_LOCAL_NORMALIZATION_CELL_PHASES)
 	const phases = buildCellPhasePairs(strideX, strideY, phaseOffsetsX, phaseOffsetsY)
+	// Actual phase origins after edge clamping, reused per cell so short edge cells cannot rescan an
+	// origin pair reached by an earlier sparse phase.
+	const cellPhaseOriginsX = new Int32Array(MAX_LOCAL_NORMALIZATION_CELL_PHASES)
+	const cellPhaseOriginsY = new Int32Array(MAX_LOCAL_NORMALIZATION_CELL_PHASES)
 
 	const refBuf = new Float64Array(planes * capacity)
 	const curBuf = new Float64Array(planes * capacity)
@@ -1188,9 +1192,23 @@ export function fitLocalNormalizationRaw(referenceRaw: ImageRawType, currentRaw:
 			let pendingCount = planes
 			for (let plane = 0; plane < planes; plane++) pending[plane] = plane
 
+			let cellPhaseCount = 0
 			for (let phase = 0; phase < phases; phase++) {
 				const originX = Math.min(bx0 + phaseOffsetsX[phase], bx1)
 				const originY = Math.min(by0 + phaseOffsetsY[phase], by1)
+				let duplicateOrigin = false
+
+				for (let i = 0; i < cellPhaseCount; i++) {
+					if (cellPhaseOriginsX[i] === originX && cellPhaseOriginsY[i] === originY) {
+						duplicateOrigin = true
+						break
+					}
+				}
+
+				if (duplicateOrigin) continue
+				cellPhaseOriginsX[cellPhaseCount] = originX
+				cellPhaseOriginsY[cellPhaseCount] = originY
+				cellPhaseCount++
 				let phaseVisited = 0
 
 				for (let y = originY; y <= by1; y += strideY) {
