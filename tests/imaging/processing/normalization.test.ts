@@ -594,6 +594,33 @@ describe('local normalization', () => {
 		}
 	})
 
+	test('a capped smoothing spline clamps against its aggregated fitted controls', () => {
+		const size = 256
+		const pixels = size * size
+		const reference = new Float64Array(pixels).fill(1)
+		const current = new Float64Array(pixels).fill(1)
+		const mask = new Uint8Array(pixels)
+
+		for (let y = 0; y < size; y++) {
+			for (let x = 0; x < size; x++) {
+				const representativeCell = (Math.floor(x / 4) & 1) === 0 && (Math.floor(y / 4) & 1) === 0
+				if (!representativeCell && (x & 3) < 2) continue
+				if (!representativeCell && (y & 3) < 2) continue
+				const pixel = y * size + x
+				mask[pixel] = 1
+				if (!representativeCell) reference[pixel] = 1.2
+			}
+		}
+
+		const model = fitLocalNormalizationRaw(reference, current, size, size, 1, 'per-channel', mask, resolveLocalNormalizationOptions({ estimator: 'scale', gridSize: 64, maxSamplesPerCell: 16, minSamplesPerCell: 4, minValidFraction: 0, surfaceModel: 'thinPlateSpline', smoothing: 0.1 }))
+
+		const surface = model.scaleSurfaces[0]!
+		expect(model.global[0].scale).toBeCloseTo(1, 12)
+		expect(surface.acceptedSamples).toBeLessThanOrEqual(1024)
+		expect(Math.max(...surface.samples.filter((sample) => sample.accepted).map((sample) => sample.value))).toBeCloseTo(0, 12)
+		expect(model.scaleLogRanges[0]![1]).toBeGreaterThan(0.01)
+	}, 30000)
+
 	test('both clamp ranges contain zero so a null residual reproduces the anchor', () => {
 		const reference = referencePlane()
 		const current = inverseTransform(

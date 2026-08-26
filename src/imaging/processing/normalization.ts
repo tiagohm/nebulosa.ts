@@ -2,7 +2,7 @@ import { medianBySelectionOf, medianOf, quickSelect, STANDARD_DEVIATION_SCALE } 
 import { clamp } from '../../math/numerical/math'
 import { DEFAULT_GRAYSCALE, type Image, type ImageRawType } from '../model/types'
 // oxfmt-ignore
-import { createScalarSurfaceEvaluator, createScalarSurfacePointEvaluator, createSurfaceColumnTable, fitScalarSurface, type ScalarSurfaceModel, type ScalarSurfacePointEvaluator, type SurfaceDomain, type SurfaceModelType, type SurfaceSample } from './surface'
+import { createScalarSurfaceEvaluator, createScalarSurfacePointEvaluator, createSurfaceColumnTable, evaluateThinPlateSplineAt, fitScalarSurface, type ScalarSurfaceModel, type ScalarSurfacePointEvaluator, type SurfaceDomain, type SurfaceModelType, type SurfaceSample } from './surface'
 
 // Photometric normalization of a frame against a reference frame, applied after registration and
 // before combination:
@@ -648,6 +648,34 @@ function isSignificantGainField(model: ScalarSurfaceModel, sigma: number) {
 	if (terms === 0) return false
 
 	return amplitude / terms >= (sigma * model.residual) / Math.sqrt(model.acceptedSamples)
+}
+
+// Returns the data-supported clamp range for a fitted local residual surface, widened to include zero.
+// Polynomial samples retain the observations that constrained their least-squares fit. A capped
+// smoothing spline can instead fit weighted bucket controls that are absent from `model.samples`, so
+// its range is measured from the fitted value at each actual control point.
+function localNormalizationSurfaceRange(model: ScalarSurfaceModel): [number, number] {
+	let lo = 0
+	let hi = 0
+
+	if (model.type === 'thinPlateSpline') {
+		const controlPoints = model.controlPoints!
+		const k = controlPoints.length / 2
+
+		for (let control = 0; control < k; control++) {
+			const value = evaluateThinPlateSplineAt(model.coefficients, controlPoints, k, controlPoints[2 * control], controlPoints[2 * control + 1])
+			if (value < lo) lo = value
+			if (value > hi) hi = value
+		}
+	} else {
+		for (const sample of model.samples) {
+			if (!sample.accepted) continue
+			if (sample.value < lo) lo = sample.value
+			if (sample.value > hi) hi = sample.value
+		}
+	}
+
+	return [lo, hi]
 }
 
 // Evaluates the fitted gain at every cell center, so the offset residuals can be rotated onto the gain
@@ -1442,13 +1470,7 @@ export function fitLocalNormalizationRaw(referenceRaw: ImageRawType, currentRaw:
 		// 0 so a zero residual — an unsupported region, or a frame that needs no local correction —
 		// reproduces the global anchor exactly.
 		if (scaleSurface !== undefined) {
-			let lo = 0
-			let hi = 0
-			for (const sample of scaleSurface.samples) {
-				if (!sample.accepted) continue
-				if (sample.value < lo) lo = sample.value
-				if (sample.value > hi) hi = sample.value
-			}
+			const [lo, hi] = localNormalizationSurfaceRange(scaleSurface)
 			scaleRange = [Math.max(logMin, lo), Math.min(logMax, hi)]
 		}
 
@@ -1482,16 +1504,7 @@ export function fitLocalNormalizationRaw(referenceRaw: ImageRawType, currentRaw:
 		// correction under `identity`.
 		if (reason === undefined && !hasOffset && !scaleFitted) reason = 'insufficient-valid-cells'
 
-		if (offsetSurface !== undefined) {
-			let lo = 0
-			let hi = 0
-			for (const sample of offsetSurface.samples) {
-				if (!sample.accepted) continue
-				if (sample.value < lo) lo = sample.value
-				if (sample.value > hi) hi = sample.value
-			}
-			offsetRange = [lo, hi]
-		}
+		if (offsetSurface !== undefined) offsetRange = localNormalizationSurfaceRange(offsetSurface)
 
 		const failed = reason !== undefined
 		if (failed) {
