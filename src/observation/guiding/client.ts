@@ -880,13 +880,17 @@ export class GuiderClient {
 			return true
 		}
 
+		const resumeCapture = wasPaused && this.#fullPause
 		this.#paused = false
 		this.#fullPause = true
 		this.#lockShiftTimestamp = 0
 		if (wasPaused) this.emitEvent('Resumed')
 		this.#setAppState(this.#resumeState === 'Paused' ? 'Looping' : this.#resumeState)
 
-		if (this.#appState !== 'Stopped' && this.#camera !== undefined) {
+		// A partial pause left the current exposure running. Restarting capture here, including from
+		// guide() resuming a paused Guiding session, would send a second start before that BLOB
+		// arrives and can restart a busy camera or fork the loop.
+		if (resumeCapture && this.#appState !== 'Stopped' && this.#camera !== undefined) {
 			this.startExposureLoop(this.#exposure)
 		}
 

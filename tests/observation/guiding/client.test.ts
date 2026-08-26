@@ -1722,6 +1722,27 @@ describe('closed-loop calibration and guiding', () => {
 	)
 
 	test.concurrent(
+		'guide during a partial pause does not start a second exposure',
+		async () => {
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
+
+			const exposuresBefore = harness.cameraManager.startExposureCalls.length
+			expect(harness.client.setPaused(true, false)).toBeTrue()
+			expect(harness.cameraManager.startExposureCalls.length).toBe(exposuresBefore)
+
+			expect(harness.client.guide(false, IMMEDIATE_SETTLE)).toBeTrue()
+			expect(harness.client.getPaused()).toBeFalse()
+			expect(harness.client.getAppState()).toBe('Guiding')
+			expect(harness.cameraManager.startExposureCalls.length).toBe(exposuresBefore)
+
+			await feedFrame(harness)
+			expect(harness.cameraManager.startExposureCalls.length).toBe(exposuresBefore + 1)
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
 		'guide while paused resumes without dropping the dither',
 		async () => {
 			const harness = await calibrateAndGuide()
