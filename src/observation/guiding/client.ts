@@ -1419,15 +1419,24 @@ export class GuiderClient {
 
 	// Warns and starts another exposure when the camera never delivered the previous BLOB. The next
 	// BLOB is treated as the timed-out original unless this miss cluster already consumed that slot,
-	// so a delayed original cannot queue a second capture chain beside the retry.
+	// so a delayed original cannot queue a second capture chain beside the retry. The Alert handler
+	// may stop or disconnect synchronously, so the capture state is rechecked before retrying.
 	#onExposureWatchdog() {
 		this.#exposureWatchdog = undefined
-		if (!this.#connected || this.#camera === undefined || this.#appState === 'Stopped' || (this.#appState === 'Paused' && this.#fullPause)) return
+		if (!this.#captureActive) return
 
 		this.emitEvent('Alert', { Msg: 'guide exposure timed out; retrying', Type: 'warning' })
+		if (!this.#captureActive || this.#camera === undefined) return
+
 		this.cameraManager.startExposure(this.#camera, this.#exposure / 1000)
 		this.#armExposureWatchdog()
 		if (this.#blobAdmission !== 'already-dropped') this.#blobAdmission = 'drop-next'
+	}
+
+	// True when the exposure loop is allowed to start or retry a capture. Full pause, stop, and
+	// disconnect all make this false so a leftover timer or a post-Alert retry cannot expose.
+	get #captureActive() {
+		return this.#connected && this.#camera !== undefined && this.#appState !== 'Stopped' && !(this.#appState === 'Paused' && this.#fullPause)
 	}
 
 	// Waits out the commanded pulse, the INDI Busy acknowledgement, and the later Idle. GuideOutput

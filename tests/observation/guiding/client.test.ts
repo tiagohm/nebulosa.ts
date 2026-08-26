@@ -1077,6 +1077,48 @@ describe('frame processing robustness', () => {
 		expect(harness.client.getStarImage()?.frame).toBe(2)
 		harness.client.stopCapture()
 	}, 15000)
+
+	test('a timeout Alert that stops capture does not start a replacement exposure', async () => {
+		const local = makeHarness({
+			handler: {
+				event: (client, event) => {
+					if (event.Event === 'Alert' && event.Type === 'warning' && event.Msg.includes('timed out')) client.stopCapture()
+				},
+			},
+		})
+		connect(local)
+		local.client.loop()
+		const exposuresBefore = local.cameraManager.startExposureCalls.length
+
+		for (let i = 0; i < 200 && eventsOf(local.events, 'Alert').length === 0; i++) {
+			await Bun.sleep(50)
+		}
+
+		expect(eventsOf(local.events, 'Alert').some((alert) => alert.Type === 'warning' && alert.Msg.includes('timed out'))).toBeTrue()
+		expect(local.client.getAppState()).toBe('Stopped')
+		expect(local.cameraManager.startExposureCalls.length).toBe(exposuresBefore)
+	}, 15000)
+
+	test('a timeout Alert that disconnects does not start a replacement exposure', async () => {
+		const local = makeHarness({
+			handler: {
+				event: (client, event) => {
+					if (event.Event === 'Alert' && event.Type === 'warning' && event.Msg.includes('timed out')) client.disconnect()
+				},
+			},
+		})
+		connect(local)
+		local.client.loop()
+		const exposuresBefore = local.cameraManager.startExposureCalls.length
+
+		for (let i = 0; i < 200 && eventsOf(local.events, 'Alert').length === 0; i++) {
+			await Bun.sleep(50)
+		}
+
+		expect(eventsOf(local.events, 'Alert').some((alert) => alert.Type === 'warning' && alert.Msg.includes('timed out'))).toBeTrue()
+		expect(local.client.getConnected()).toBeFalse()
+		expect(local.cameraManager.startExposureCalls.length).toBe(exposuresBefore)
+	}, 15000)
 })
 
 describe('closed-loop calibration and guiding', () => {
