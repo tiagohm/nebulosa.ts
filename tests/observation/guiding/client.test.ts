@@ -468,11 +468,11 @@ describe('exposure', () => {
 		expect(changes.at(-1)).toMatchObject({ Name: 'Exposure', Value: 2.5 })
 	})
 
-	test('getExposure prefers a live camera exposure when reported', () => {
+	test('getExposure returns the requested cadence, not the INDI countdown', () => {
 		connect(harness)
 		harness.client.setExposure(4000)
 		harness.camera.exposure.value = 7
-		expect(harness.client.getExposure()).toBe(7000)
+		expect(harness.client.getExposure()).toBe(4000)
 		harness.camera.exposure.value = 0
 		expect(harness.client.getExposure()).toBe(4000)
 	})

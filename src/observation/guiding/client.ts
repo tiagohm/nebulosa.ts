@@ -498,11 +498,10 @@ export class GuiderClient {
 		return this.#declinationGuideMode
 	}
 
-	// Returns the current exposure cadence in milliseconds.
+	// Returns the requested exposure cadence in milliseconds. INDI CCD_EXPOSURE counts down remaining
+	// time, so the live camera value is not the commanded loop period.
 	getExposure() {
-		const exposure = this.#camera?.exposure.value ?? 0
-		// Camera exposure is in seconds. Convert to milliseconds.
-		return exposure > 0 ? exposure * 1000 : this.#exposure
+		return this.#exposure
 	}
 
 	// Returns whether pulse output is enabled.
