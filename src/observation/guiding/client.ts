@@ -933,11 +933,15 @@ export class GuiderClient {
 
 	// Converts a decoded image into a guide frame and prioritizes the selected lock star.
 	#makeGuideFrame(image?: Image): GuideFrame {
-		const stars = image === undefined ? [] : detectStars(image)
+		let stars = image === undefined ? [] : detectStars(image)
 		const lockSearchPosition = this.#lockSearchPosition ?? this.#lockPosition
 
-		if (lockSearchPosition !== undefined && stars.length > 1) {
-			moveNearestGuideStarToFront(stars, lockSearchPosition)
+		if (lockSearchPosition !== undefined) {
+			// PHD2 only looks for the guide star inside the search box. Without this, a neighbor
+			// anywhere in the frame can steal the lock, and a star that walked out of the box is
+			// still tracked instead of being reported lost.
+			stars = starsInsideSearchRegion(stars, lockSearchPosition, this.#searchRegion)
+			if (stars.length > 1) moveNearestGuideStarToFront(stars, lockSearchPosition)
 		}
 
 		return {
@@ -1709,6 +1713,20 @@ function calibrationResultToPHD2Data(calibration: GuidingCalibrationResult): PHD
 // Rotates a mount-axis RA/DEC dither offset (pixels) into image X/Y with the calibrated axis unit vectors.
 function ditherImageOffset(calibration: GuidingCalibrationResult, dRa: number, dDec: number) {
 	return [calibration.ra.unitX * dRa + calibration.dec.unitX * dDec, calibration.ra.unitY * dRa + calibration.dec.unitY * dDec] as const
+}
+
+// Returns detections that fall inside the square search box of side `searchRegion` centered on
+// `position`. The box is axis-aligned in image pixels, matching PHD2's search region.
+function starsInsideSearchRegion(stars: readonly GuideStar[], position: readonly [number, number], searchRegion: number): GuideStar[] {
+	const half = searchRegion / 2
+	const [cx, cy] = position
+	const inside: GuideStar[] = []
+
+	for (const star of stars) {
+		if (Math.abs(star.x - cx) <= half && Math.abs(star.y - cy) <= half) inside.push(star)
+	}
+
+	return inside
 }
 
 // Moves the nearest star to the first slot so Guider/GuidingCalibrator lock onto the requested target.

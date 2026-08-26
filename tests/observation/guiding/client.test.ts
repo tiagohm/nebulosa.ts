@@ -1458,6 +1458,41 @@ describe('closed-loop calibration and guiding', () => {
 	)
 
 	test.concurrent(
+		'a star outside the search region is reported lost',
+		async () => {
+			const harness = await calibrateAndGuide({ searchRegion: 32 })
+			await establishLockReference(harness)
+			expect(harness.client.getAppState()).toBe('Guiding')
+
+			// Half of the 32 px box is 16 px. A 24 px jump leaves the locked star outside the box
+			// while still on the frame, so tracking must stop instead of following it or switching
+			// to the neighbor.
+			harness.mount.offsetX += 24
+
+			for (let i = 0; i < 10; i++) await feedFrame(harness)
+
+			expect(harness.client.getAppState()).toBe('LostLock')
+			expect(eventsOf(harness.events, 'StarLost').length).toBeGreaterThan(0)
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
+		'a star that stays inside the search region keeps the lock',
+		async () => {
+			const harness = await calibrateAndGuide({ searchRegion: 64 })
+			await establishLockReference(harness)
+
+			harness.mount.offsetX += 10
+			for (let i = 0; i < 4; i++) await feedFrame(harness)
+
+			expect(harness.client.getAppState()).toBe('Guiding')
+			expect(eventsOf(harness.events, 'StarLost')).toBeEmpty()
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
 		'star-free frames report a lost star every frame but a lost lock position only once',
 		async () => {
 			const harness = await calibrateAndGuide()
