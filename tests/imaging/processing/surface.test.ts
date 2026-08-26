@@ -504,6 +504,15 @@ describe('thin-plate spline', () => {
 		expect(maxArea).toBeGreaterThan(0)
 	})
 
+	test('a capped selection that loses the input two-dimensional spread is rejected', () => {
+		const samples: SurfaceSample[] = []
+		for (let i = 0; i < 20; i++) samples.push({ x: (i / 19) * 1000, y: 503, value: -0.01 })
+		for (let i = 0; i < 20; i++) samples.push({ x: (i / 19) * 1000, y: 525, value: 0.01 })
+
+		expect(fitScalarSurface(samples, 1001, 1001, { model: 'thinPlateSpline', smoothing: 0.1 }).ok).toBe(true)
+		expect(fitScalarSurface(samples, 1001, 1001, { model: 'thinPlateSpline', smoothing: 0.1, maxControlPoints: 9 })).toEqual({ ok: false, reason: 'degenerate-layout' })
+	})
+
 	test('capping keeps the most reliable sample in each bucket', () => {
 		// Two observations at one location, one nearly worthless and one fully reliable. The fit weights
 		// its samples, so which of the two survives the cap must not depend on the order they were listed.

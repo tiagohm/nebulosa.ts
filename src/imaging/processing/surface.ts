@@ -999,8 +999,14 @@ function tpsKernel(sq: number) {
 // is the smoothing term scaled by each sample's inverse weight, and the P^T rows enforce the affine
 // side conditions. Control points are the active samples, or the selected/aggregated controls when the
 // caller capped them. Returns the packed coefficients [a0, a1, a2, w...] and the interleaved control
-// points, or a failure reason when there are fewer than 3 points or the system is singular.
+// points, or a failure reason when there are fewer than 3 points, capped controls no longer span two
+// dimensions, or the system is singular.
 export function fitThinPlateSplineSurface(set: SurfaceSampleSet, selection: SurfaceControlPointSelection | undefined, smoothing: number): { coefficients: Float64Array; controlPoints: Float64Array } | SurfaceFitFailureReason {
+	if (selection !== undefined) {
+		if (selection.indices.length < MIN_CONTROL_POINTS) return 'too-few-samples'
+		if (!selectedControlHasTwoDimensionalCoverage(selection)) return 'degenerate-layout'
+	}
+
 	const us: number[] = []
 	const vs: number[] = []
 	const fs: number[] = []
