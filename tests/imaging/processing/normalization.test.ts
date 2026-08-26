@@ -619,7 +619,7 @@ describe('local normalization', () => {
 		expect(surface.acceptedSamples).toBeLessThanOrEqual(1024)
 		expect(Math.max(...surface.samples.filter((sample) => sample.accepted).map((sample) => sample.value))).toBeCloseTo(0, 12)
 		expect(model.scaleLogRanges[0]![1]).toBeGreaterThan(0.01)
-	}, 30000)
+	}, 5000)
 
 	test('both clamp ranges contain zero so a null residual reproduces the anchor', () => {
 		const reference = referencePlane()
@@ -916,7 +916,7 @@ describe('local normalization', () => {
 		expect(model.global[0].scale).toBeCloseTo(2, 6)
 		expect(model.global[0].offset).toBeCloseTo(0.1, 6)
 		expect(model.pivots[0]).toBeGreaterThan(0)
-	}, 20000)
+	})
 
 	test('one channel finding lattice samples does not suppress recovery of another', () => {
 		// The lattice is missed plane by plane: a channel can be non-finite exactly at the sampled
@@ -951,7 +951,7 @@ describe('local normalization', () => {
 			expect(model.global[plane].offset).toBeCloseTo(0.1, 6)
 			expect(model.pivots[plane]).toBeGreaterThan(0)
 		}
-	}, 20000)
+	})
 
 	test('a diagonal partial overlap is corrected as accurately at its boundary as inside', () => {
 		// A diagonal overlap boundary leaves the boundary cells clipped, with centroids well off their
@@ -1125,7 +1125,7 @@ describe('local normalization', () => {
 		expect(support.rows).toBe(height)
 		expect(support.columns * support.rows).toBeLessThanOrEqual(65536)
 		expect(model.diagnostics[0].fallback).toBe(false)
-	}, 20000)
+	})
 
 	test('an extreme box and per-cell budget do not size the buffers by the image', () => {
 		// The collection buffers are sized by the per-cell budget times the plane count. Unclamped, asking
@@ -1145,7 +1145,7 @@ describe('local normalization', () => {
 		const model = fitLocalNormalizationRaw(reference, current, WIDTH, HEIGHT, 1, 'per-channel', undefined, resolved)
 		expect(performance.now() - started).toBeLessThan(20000)
 		expect(model.diagnostics[0].candidateCells).toBeGreaterThan(0)
-	}, 30000)
+	})
 
 	test('a spline field on a fine grid does not evaluate every node against every control', () => {
 		// The node step comes from the cell side, so a fine grid drives it toward 1 and the node grid stops
@@ -1178,9 +1178,9 @@ describe('local normalization', () => {
 		const elapsed = performance.now() - started
 
 		// Unbounded this takes about 28 seconds; the widened step brings it under two.
-		expect(elapsed).toBeLessThan(12000)
+		expect(elapsed).toBeLessThan(8000)
 		for (let i = 0; i < current.length; i += 7919) expect(Number.isFinite(current[i])).toBe(true)
-	}, 60000)
+	}, 10000)
 
 	test('a widened spline field evaluates clustered-control cells directly', () => {
 		const size = 1024
@@ -1261,7 +1261,7 @@ describe('local normalization', () => {
 		applyLocalNormalizationInPlace(raw, undefined, model)
 
 		expect(raw[targetY * size + targetX]).toBeCloseTo(Math.exp(direct), 12)
-	}, 30000)
+	}, 5000)
 
 	test('an extreme gridSize is scaled back to a tractable cell count', () => {
 		// One cell per pixel is not a usable ceiling on a real frame: at this gridSize the grid would ask
@@ -1346,7 +1346,7 @@ describe('local normalization', () => {
 
 		expect(tiled.diagnostics[0].acceptedCells).toBe(tiled.diagnostics[0].candidateCells)
 		expect(isLocalNormalizationFallback(tiled)).toBe(false)
-	})
+	}, 5000)
 
 	test('a cell holding one stray pair still retries the alternate phase', () => {
 		const reference = referencePlane()
@@ -1980,6 +1980,34 @@ describe('fallback', () => {
 
 		const { scale, offset } = model.global[0]
 		for (const value of raw) expect(value).toBeCloseTo(0.3 * scale + offset, 12)
+	})
+
+	test('a constant fallback bypasses local field materialization', () => {
+		const size = 64
+		const reference = referencePlane(3, size, size)
+		const current = inverseTransform(
+			reference,
+			() => 1.2,
+			() => 0.01,
+			size,
+			size,
+		)
+		const model = fitLocalNormalizationRaw(reference, current, size, size, 1, 'per-channel', undefined, resolveLocalNormalizationOptions({}))
+		const evaluationStep = model.evaluationStep
+		let materialized = false
+		Object.defineProperty(model, 'evaluationStep', {
+			get: () => {
+				materialized = true
+				return evaluationStep
+			},
+		})
+
+		const raw = new Float64Array(current)
+		applyLocalNormalizationInPlace(raw, undefined, model)
+
+		expect(model.diagnostics[0].fallback).toBe(true)
+		expect(materialized).toBe(false)
+		expect(meanAbsoluteError(raw, reference)).toBeLessThan(1e-9)
 	})
 
 	test('reject reports the failure without throwing', () => {

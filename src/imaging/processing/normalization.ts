@@ -1985,13 +1985,97 @@ function buildLocalNormalizationFields(model: LocalNormalizationModel): LocalNor
 	return direct === undefined ? fields : { ...fields, direct }
 }
 
+// Applies a model whose effective fields are constant, returning false when any plane still carries a
+// non-zero local residual field. Fallen-back planes resolve to identity or their global anchor according
+// to policy; successful planes without a usable surface also resolve to the anchor. This avoids sizing,
+// filling, and interpolating node grids for the common fallback and insignificant-field cases.
+function applyConstantLocalNormalizationInPlace(raw: ImageRawType, valid: Readonly<Uint8Array> | undefined, model: LocalNormalizationModel) {
+	const planes = model.global.length
+
+	for (let plane = 0; plane < planes; plane++) {
+		if (model.diagnostics[plane].fallback) continue
+
+		const scaleRange = model.scaleLogRanges[plane]
+		if (model.scaleSurfaces[plane] !== undefined && (scaleRange === undefined || scaleRange[0] !== 0 || scaleRange[1] !== 0)) return false
+
+		const offsetRange = model.offsetRanges[plane]
+		if (model.offsetSurfaces[plane] !== undefined && (offsetRange === undefined || offsetRange[0] !== 0 || offsetRange[1] !== 0)) return false
+	}
+
+	const { width, height, channelCount } = model
+	const pixels = width * height
+	const luminance = model.colorMode === 'luminance' && channelCount === 3 && planes === 1
+
+	if (luminance) {
+		const diagnostics = model.diagnostics[0]
+		const identity = diagnostics.fallback && model.fallback === 'identity'
+		const anchor = model.global[0]
+		const scale = identity ? 1 : anchor.scale
+		const offset = identity ? 0 : !diagnostics.fallback && model.estimator === 'scale' ? 0 : anchor.offset
+		if (scale === 1 && offset === 0) return true
+
+		for (let pixel = 0; pixel < pixels; pixel++) {
+			if (valid !== undefined && valid[pixel] === 0) continue
+			const base = pixel * channelCount
+			raw[base] = raw[base] * scale + offset
+			raw[base + 1] = raw[base + 1] * scale + offset
+			raw[base + 2] = raw[base + 2] * scale + offset
+		}
+
+		return true
+	}
+
+	if (channelCount === 1) {
+		const diagnostics = model.diagnostics[0]
+		const identity = diagnostics.fallback && model.fallback === 'identity'
+		const anchor = model.global[0]
+		const scale = identity ? 1 : anchor.scale
+		const offset = identity ? 0 : !diagnostics.fallback && model.estimator === 'scale' ? 0 : anchor.offset
+		if (scale === 1 && offset === 0) return true
+
+		for (let pixel = 0; pixel < pixels; pixel++) {
+			if (valid === undefined || valid[pixel] !== 0) raw[pixel] = raw[pixel] * scale + offset
+		}
+
+		return true
+	}
+
+	const scales = new Float64Array(channelCount)
+	const offsets = new Float64Array(channelCount)
+	let unchanged = true
+
+	for (let channel = 0; channel < channelCount; channel++) {
+		const diagnostics = model.diagnostics[channel]
+		const identity = diagnostics.fallback && model.fallback === 'identity'
+		const anchor = model.global[channel]
+		const scale = identity ? 1 : anchor.scale
+		const offset = identity ? 0 : !diagnostics.fallback && model.estimator === 'scale' ? 0 : anchor.offset
+		scales[channel] = scale
+		offsets[channel] = offset
+		if (scale !== 1 || offset !== 0) unchanged = false
+	}
+
+	if (unchanged) return true
+
+	for (let pixel = 0; pixel < pixels; pixel++) {
+		if (valid !== undefined && valid[pixel] === 0) continue
+		const base = pixel * channelCount
+		for (let channel = 0; channel < channelCount; channel++) raw[base + channel] = raw[base + channel] * scales[channel] + offsets[channel]
+	}
+
+	return true
+}
+
 // Applies a fitted local model in place over the valid pixels of `raw`.
 //
-// The final gain and offset fields are materialized on the model's node grid and then advanced
-// incrementally along each row: between two nodes both fields are linear in x, so the per-pixel cost is
-// two additions to advance plus one multiply-add to apply. Bilinearly blending two affine transforms
-// yields an affine transform, so the interpolation cannot introduce structure of its own.
+// Constant models bypass materialization entirely. Otherwise the final gain and offset fields are
+// materialized on the model's node grid and then advanced incrementally along each row: between two
+// nodes both fields are linear in x, so the per-pixel cost is two additions to advance plus one
+// multiply-add to apply. Bilinearly blending two affine transforms yields an affine transform, so the
+// interpolation cannot introduce structure of its own.
 export function applyLocalNormalizationInPlace(raw: ImageRawType, valid: Readonly<Uint8Array> | undefined, model: LocalNormalizationModel) {
+	if (applyConstantLocalNormalizationInPlace(raw, valid, model)) return
+
 	const { width, height, channelCount } = model
 	const fields = buildLocalNormalizationFields(model)
 	const { columns, rows, stepX, stepY, planes } = fields
