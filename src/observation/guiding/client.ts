@@ -159,6 +159,11 @@ export class GuiderClient {
 	// Retriggers a dropped INDI exposure so a missing BLOB cannot stall the loop until the user
 	// notices. Armed when an exposure is started; cleared when that BLOB is accepted or capture stops.
 	#exposureWatchdog?: ReturnType<typeof setTimeout>
+	// `performance.now()` deadline while a watchdog retry is in flight. INDI BLOBs have no generation
+	// id, so a frame that arrives before one exposure duration has elapsed cannot be the retry's own
+	// BLOB: it is the timed-out original and must not be processed or used to queue another capture.
+	// Zero means no quarantine.
+	#staleBlobUntil = 0
 	#lockPosition?: readonly [number, number]
 	#lockSearchPosition?: readonly [number, number]
 	#exactLockPosition = false
@@ -884,6 +889,11 @@ export class GuiderClient {
 	async #processBlob(device: Camera, data: Buffer, encoding: BlobEncoding): Promise<void> {
 		if (!this.#connected || device !== this.#camera) return
 
+		// A BLOB that arrives immediately after a missing-BLOB retry is the timed-out original. The
+		// replacement exposure is already outstanding, so accepting it would process a stale frame
+		// and `finally` would start a second capture chain beside the retry.
+		if (this.#staleBlobUntil > 0 && performance.now() < this.#staleBlobUntil) return
+
 		// The calibrator and guider are stateful and not reentrant, so a BLOB that arrives while a
 		// previous frame is still being decoded/processed is dropped to avoid interleaved mutation.
 		if (this.#processingBlob) return
@@ -1379,15 +1389,19 @@ export class GuiderClient {
 		this.#exposureWatchdog.unref()
 	}
 
-	// Cancels a pending missing-BLOB retry. Accepting the matching BLOB, capture stop, disconnect,
-	// and a full pause all call this so a leftover timer cannot start an overlapping exposure.
+	// Cancels a pending missing-BLOB retry and any late-BLOB quarantine. Accepting the matching BLOB,
+	// capture stop, disconnect, and a full pause all call this so a leftover timer cannot start an
+	// overlapping exposure and a leftover deadline cannot drop a later session's first frame.
 	#clearExposureWatchdog() {
+		this.#staleBlobUntil = 0
 		if (this.#exposureWatchdog === undefined) return
 		clearTimeout(this.#exposureWatchdog)
 		this.#exposureWatchdog = undefined
 	}
 
-	// Warns and starts another exposure when the camera never delivered the previous BLOB.
+	// Warns and starts another exposure when the camera never delivered the previous BLOB. The
+	// replacement is armed first, then BLOBs arriving before one exposure duration are treated as the
+	// late original so they cannot queue a second capture chain beside the retry.
 	#onExposureWatchdog() {
 		this.#exposureWatchdog = undefined
 		if (!this.#connected || this.#camera === undefined || this.#appState === 'Stopped' || (this.#appState === 'Paused' && this.#fullPause)) return
@@ -1395,6 +1409,7 @@ export class GuiderClient {
 		this.emitEvent('Alert', { Msg: 'guide exposure timed out; retrying', Type: 'warning' })
 		this.cameraManager.startExposure(this.#camera, this.#exposure / 1000)
 		this.#armExposureWatchdog()
+		this.#staleBlobUntil = performance.now() + this.#exposure
 	}
 
 	// Waits out the commanded pulse, the INDI Busy acknowledgement, and the later Idle. GuideOutput

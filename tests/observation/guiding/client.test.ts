@@ -1041,6 +1041,40 @@ describe('frame processing robustness', () => {
 		expect(harness.cameraManager.startExposureCalls.length).toBeGreaterThan(exposuresBefore)
 		harness.client.stopCapture()
 	}, 15000)
+
+	test('a late BLOB after the exposure watchdog does not start a second capture chain', async () => {
+		connect(harness)
+		harness.client.loop()
+		const exposuresBefore = harness.cameraManager.startExposureCalls.length
+		expect(exposuresBefore).toBeGreaterThan(0)
+
+		for (let i = 0; i < 200 && eventsOf(harness.events, 'Alert').length === 0; i++) {
+			await Bun.sleep(50)
+		}
+
+		expect(eventsOf(harness.events, 'Alert').some((alert) => alert.Type === 'warning' && alert.Msg.includes('timed out'))).toBeTrue()
+		const exposuresAfterRetry = harness.cameraManager.startExposureCalls.length
+		expect(exposuresAfterRetry).toBeGreaterThan(exposuresBefore)
+
+		const loopingBefore = eventsOf(harness.events, 'LoopingExposures').length
+		const handler = harness.cameraManager.handler!
+		handler.blobReceived!(harness.camera, FRAME_BUFFER, 'raw')
+		await Bun.sleep(50)
+
+		expect(eventsOf(harness.events, 'LoopingExposures')).toHaveLength(loopingBefore)
+		expect(harness.cameraManager.startExposureCalls.length).toBe(exposuresAfterRetry)
+		expect(harness.client.getStarImage()).toBeUndefined()
+
+		await Bun.sleep(harness.client.getExposure())
+		await feedBuffer(harness, FRAME_BUFFER)
+		expect(harness.cameraManager.startExposureCalls.length).toBe(exposuresAfterRetry + 1)
+		expect(harness.client.getStarImage()?.frame).toBe(1)
+
+		await feedBuffer(harness, FRAME_BUFFER)
+		expect(harness.cameraManager.startExposureCalls.length).toBe(exposuresAfterRetry + 2)
+		expect(harness.client.getStarImage()?.frame).toBe(2)
+		harness.client.stopCapture()
+	}, 15000)
 })
 
 describe('closed-loop calibration and guiding', () => {
