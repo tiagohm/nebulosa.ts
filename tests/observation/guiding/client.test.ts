@@ -1202,6 +1202,30 @@ describe('closed-loop calibration and guiding', () => {
 	)
 
 	test.concurrent(
+		'guide-step RA and DEC distances are pixel projections of the image offset',
+		async () => {
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
+
+			harness.mount.driftX = 2
+			harness.mount.driftY = 1
+			for (let i = 0; i < 4; i++) await feedFrame(harness)
+
+			const steps = eventsOf(harness.events, 'GuideStep').slice(-4)
+			expect(steps.length).toBe(4)
+
+			for (const step of steps) {
+				const imageDistance = Math.hypot(step.dx, step.dy)
+				const axisDistance = Math.hypot(step.RADistanceRaw, step.DECDistanceRaw)
+				// PHD2 reports axis distances in pixels, matching the image offset length on an
+				// orthogonal calibration. Millisecond axis errors would be ~1/rate (~87x) larger.
+				expect(axisDistance).toBeCloseTo(imageDistance, 3)
+			}
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
 		'axis limit flags are omitted while the pulses stay inside the maximum duration',
 		async () => {
 			const harness = await calibrateAndGuide()

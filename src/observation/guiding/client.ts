@@ -1462,6 +1462,8 @@ export class GuiderClient {
 		const raLimited = raDuration > 0 && ra.duration >= this.#guider.config.maxPulseMsRA
 		const decLimited = decDuration > 0 && dec.duration >= this.#guider.config.maxPulseMsDEC
 
+		const raRate = this.#calibration?.ra.ratePxPerMs ?? 0
+		const decRate = this.#calibration?.dec.ratePxPerMs ?? 0
 		const event: Omit<Writable<PHD2GuideStepEvent>, 'Event' | 'Timestamp' | 'Host' | 'Inst'> = {
 			Frame: frame.frameId ?? 0,
 			// Seconds since guiding started, matching PHD2's GuideStep.Time.
@@ -1470,10 +1472,12 @@ export class GuiderClient {
 			Mount: this.#guideOutput?.name ?? '',
 			dx,
 			dy,
-			RADistanceRaw: diagnostics.axisErrorRA ?? 0,
-			DECDistanceRaw: diagnostics.axisErrorDEC ?? 0,
-			RADistanceGuide: outputActive ? (diagnostics.filteredRA ?? 0) : 0,
-			DECDistanceGuide: outputActive ? (diagnostics.filteredDEC ?? 0) : 0,
+			// PHD2 reports these as pixel distances along the mount axes. After calibration the
+			// controller's axis error is in milliseconds of pulse, so convert back with the solved rate.
+			RADistanceRaw: axisErrorToPixels(diagnostics.axisErrorRA, raRate),
+			DECDistanceRaw: axisErrorToPixels(diagnostics.axisErrorDEC, decRate),
+			RADistanceGuide: outputActive ? axisErrorToPixels(diagnostics.filteredRA, raRate) : 0,
+			DECDistanceGuide: outputActive ? axisErrorToPixels(diagnostics.filteredDEC, decRate) : 0,
 			RADuration: raDuration,
 			// PHD2 directions are mandatory, so no-pulse frames fall back to west/north defaults.
 			RADirection: toPHD2GuideDirection(ra.direction, 'West'),
@@ -1567,6 +1571,13 @@ function toDeclinationGuideMode(mode: PHD2DeclinationGuideMode) {
 // uncalibrated identity controller is unchanged.
 function axisUnitThreshold(pixelThreshold: number, ratePxPerMs: number) {
 	return ratePxPerMs > 0 ? pixelThreshold / ratePxPerMs : pixelThreshold
+}
+
+// Converts a calibrated axis error back into pixels for PHD2 GuideStep fields. When the rate is
+// unknown the controller is using identity units and the value is already in pixels.
+function axisErrorToPixels(axisError: number | undefined, ratePxPerMs: number) {
+	const error = axisError ?? 0
+	return ratePxPerMs > 0 ? error * ratePxPerMs : error
 }
 
 // Converts the local calibration result into PHD2-compatible calibration data.
