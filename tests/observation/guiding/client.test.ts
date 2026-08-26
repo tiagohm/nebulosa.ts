@@ -1104,6 +1104,37 @@ describe('closed-loop calibration and guiding', () => {
 	)
 
 	test.concurrent(
+		'a modest DEC reversal is held back by the converted backlash threshold',
+		async () => {
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
+
+			// Drive DEC far enough that the guider commits to north and records lastDecDirection.
+			harness.mount.driftX = DEC_AXIS[0] * 0.5
+			harness.mount.driftY = DEC_AXIS[1] * 0.5
+			for (let i = 0; i < 8; i++) await feedFrame(harness)
+			expect(harness.guideOutputManager.pulses.some((pulse) => pulse.direction === 'NORTH')).toBeTrue()
+
+			// Let the hysteresis filter decay so the reverse is measured against a near-zero filtered DEC.
+			harness.mount.driftX = 0
+			harness.mount.driftY = 0
+			for (let i = 0; i < 8; i++) await feedFrame(harness)
+
+			// 0.25 px is above the 0.14 px DEC deadband but below the 0.32 px backlash accumulation
+			// threshold. After converting those pixel defaults into milliseconds, the first reverse
+			// frames must not pulse south; without the conversion a 0.32 ms accum threshold would let
+			// them through immediately and excite DEC backlash.
+			const from = harness.guideOutputManager.pulses.length
+			harness.mount.driftX = -DEC_AXIS[0] * 0.25
+			harness.mount.driftY = -DEC_AXIS[1] * 0.25
+			for (let i = 0; i < 2; i++) await feedFrame(harness)
+
+			expect(harness.guideOutputManager.pulses.slice(from).some((pulse) => pulse.direction === 'SOUTH')).toBeFalse()
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
 		'flipping the calibration rotates the solved axes by half a turn',
 		async () => {
 			const harness = await calibrateAndGuide()

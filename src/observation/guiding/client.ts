@@ -1356,8 +1356,9 @@ export class GuiderClient {
 		// would reproduce it, while the guider expects a matrix that yields the pulse cancelling it,
 		// so the matrix is negated here; feeding it unchanged closes the loop with positive feedback.
 		// Its output is already in milliseconds, so the per-unit scaling must be neutral: keeping the
-		// uncalibrated default would apply the mount rate twice and saturate every correction. The dead
-		// bands, expressed in pixels for the uncalibrated guider, are converted with the solved rates.
+		// uncalibrated default would apply the mount rate twice and saturate every correction. Every
+		// pixel-unit controller threshold (dead bands, DEC reversal, DEC backlash accumulation) is
+		// converted with the solved rates so seeing-sized reversals still hold the DEC axis.
 		const [m00, m01, m10, m11] = calibration.imageToAxis
 		const raRate = calibration.ra.ratePxPerMs
 		const decRate = calibration.dec.ratePxPerMs
@@ -1366,8 +1367,10 @@ export class GuiderClient {
 			calibration: [-m00, -m01, -m10, -m11],
 			msPerRAUnit: 1,
 			msPerDECUnit: 1,
-			minMoveRA: raRate > 0 ? DEFAULT_GUIDER_CONFIG.minMoveRA / raRate : DEFAULT_GUIDER_CONFIG.minMoveRA,
-			minMoveDEC: decRate > 0 ? DEFAULT_GUIDER_CONFIG.minMoveDEC / decRate : DEFAULT_GUIDER_CONFIG.minMoveDEC,
+			minMoveRA: axisUnitThreshold(DEFAULT_GUIDER_CONFIG.minMoveRA, raRate),
+			minMoveDEC: axisUnitThreshold(DEFAULT_GUIDER_CONFIG.minMoveDEC, decRate),
+			decReversalThreshold: axisUnitThreshold(DEFAULT_GUIDER_CONFIG.decReversalThreshold, decRate),
+			decBacklashAccumThreshold: axisUnitThreshold(DEFAULT_GUIDER_CONFIG.decBacklashAccumThreshold, decRate),
 			raPositiveDirection: calibration.ra.direction,
 			decPositiveDirection: calibration.dec.direction,
 			decMode: toDeclinationGuideMode(this.#declinationGuideMode),
@@ -1556,6 +1559,14 @@ export class GuiderClient {
 // Maps PHD2 DEC guide mode values to the local guider model.
 function toDeclinationGuideMode(mode: PHD2DeclinationGuideMode) {
 	return (mode === 'Off' ? 'off' : mode === 'North' ? 'north-only' : mode === 'South' ? 'south-only' : 'auto') satisfies DeclinationGuideMode
+}
+
+// Converts a pixel-unit guider threshold into calibrated axis units. After calibration the controller
+// emits millisecond axis errors (the pulse that would cancel the pixel error), so pixel defaults are
+// divided by the solved rate. When the rate is unknown the original threshold is kept so the
+// uncalibrated identity controller is unchanged.
+function axisUnitThreshold(pixelThreshold: number, ratePxPerMs: number) {
+	return ratePxPerMs > 0 ? pixelThreshold / ratePxPerMs : pixelThreshold
 }
 
 // Converts the local calibration result into PHD2-compatible calibration data.
