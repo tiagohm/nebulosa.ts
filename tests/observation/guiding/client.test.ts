@@ -9,7 +9,7 @@ import type { Image } from '../../../src/imaging/model/types'
 import { plotStar } from '../../../src/imaging/stars/generator'
 import { bufferSink } from '../../../src/io/io'
 import type { GuidingCalibrationResult } from '../../../src/observation/guiding/calibrator'
-import { GuiderClient, type GuiderClientConnectOptions, type GuiderClientOptions } from '../../../src/observation/guiding/client'
+import { GuiderClient, type GuideFrameImage, type GuiderClientConnectOptions, type GuiderClientOptions } from '../../../src/observation/guiding/client'
 import { ditherPulsePlanFromCalibration } from '../../../src/observation/guiding/dither.pulse'
 import type { GuideDirectionDEC, GuideDirectionRA } from '../../../src/observation/guiding/guider'
 
@@ -211,7 +211,13 @@ function makeHarness(options: GuiderClientOptions = {}): Harness {
 	const events: PHD2Events[] = []
 	const client = new GuiderClient(cameraManager as unknown as CameraManager, guideOutputManager as unknown as GuideOutputManager, {
 		...options,
-		handler: { event: (_client, event) => events.push(event) },
+		handler: {
+			event: (client, event) => {
+				options.handler?.event?.(client, event)
+				events.push(event)
+			},
+			frame: options.handler?.frame,
+		},
 	})
 
 	return { client, cameraManager, guideOutputManager, events, camera: makeCamera(), guideOutput: makeGuideOutput(), mount: new MountSimulator(), frameCount: 0 }
@@ -1486,6 +1492,30 @@ describe('closed-loop calibration and guiding', () => {
 			harness.mount.offsetX += 10
 			for (let i = 0; i < 4; i++) await feedFrame(harness)
 
+			expect(harness.client.getAppState()).toBe('Guiding')
+			expect(eventsOf(harness.events, 'StarLost')).toBeEmpty()
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
+		'stars outside the search box remain available for multi-star measurement',
+		async () => {
+			const frames: GuideFrameImage[] = []
+			const harness = await calibrateAndGuide({
+				handler: { frame: (_client, frame) => frames.push(frame) },
+			})
+			await establishLockReference(harness)
+			await feedFrame(harness)
+
+			const frame = frames.at(-1)!
+			expect(frame.stars.length).toBeGreaterThanOrEqual(2)
+			expect(frame.acceptedStars?.length).toBeGreaterThanOrEqual(2)
+			expect(frame.star).toBeDefined()
+
+			const primary = frame.star!
+			const secondary = frame.stars.find((star) => Math.hypot(star.x - primary.x, star.y - primary.y) > harness.client.getSearchRegion() / 2)
+			expect(secondary).toBeDefined()
 			expect(harness.client.getAppState()).toBe('Guiding')
 			expect(eventsOf(harness.events, 'StarLost')).toBeEmpty()
 		},

@@ -87,15 +87,16 @@ export interface GuideFrameImage {
 	// `image.metadata`.
 	readonly image: Image
 	// Every star detected in the frame, before the guider quality thresholds. The star nearest to the
-	// current search position, when there is one, is moved to index 0.
+	// current search position, when there is one inside the search region, is moved to index 0.
 	readonly stars: readonly GuideStar[]
 	// Subset of `stars` accepted by the quality filter of whichever state machine consumed this frame,
 	// the guider while guiding or the calibrator while calibrating, so the UI can dim the detections
 	// that were ignored. Undefined when the frame reached neither, that is while merely looping.
 	readonly acceptedStars?: readonly GuideStar[]
 	// Star this frame reported as the guide star, that is `stars[0]`, the same source of the StarMass,
-	// SNR, and HFD fields of the emitted event. Undefined when no star was detected. It is not
-	// necessarily present in `acceptedStars`: a rejected star still drives the reported photometry.
+	// SNR, and HFD fields of the emitted event. Undefined when no star was detected or the nearest
+	// star to the search position lies outside the search region. It is not necessarily present in
+	// `acceptedStars`: a rejected star still drives the reported photometry.
 	readonly star?: GuideStar
 	// Current guide target in pixels, that is where the guide star is being held. This is the lock
 	// position including the accumulated dither and lock-shift offsets. Undefined before a lock exists.
@@ -200,6 +201,10 @@ export class GuiderClient {
 	// processed. Cleared at the start of every BLOB so a frame that never reaches either state
 	// machine — plain looping, decode failure — cannot publish the star list of an older frame.
 	#acceptedStars?: readonly GuideStar[]
+	// True when a lock/search position exists and the nearest detection is outside the PHD2 search
+	// box. The published frame still carries every detection so multi-star and the overlay can use
+	// them; the calibrator/guider receive an empty star list so they report the primary lost.
+	#primaryOutsideSearchRegion = false
 	readonly #searchRegion: number
 	readonly #lockShiftParams = { ...DEFAULT_LOCK_SHIFT_PARAMS }
 	readonly #eventHandler?: GuiderClientHandler['event']
@@ -884,6 +889,7 @@ export class GuiderClient {
 		if (this.#processingBlob) return
 		this.#processingBlob = true
 		this.#acceptedStars = undefined
+		this.#primaryOutsideSearchRegion = false
 
 		let pulseDelay = 0
 
@@ -936,15 +942,21 @@ export class GuiderClient {
 
 	// Converts a decoded image into a guide frame and prioritizes the selected lock star.
 	#makeGuideFrame(image?: Image): GuideFrame {
-		let stars = image === undefined ? [] : detectStars(image)
+		const detections = image === undefined ? [] : detectStars(image)
 		const lockSearchPosition = this.#lockSearchPosition ?? this.#lockPosition
+		let stars = detections
 
-		if (lockSearchPosition !== undefined) {
-			// PHD2 only looks for the guide star inside the search box. Without this, a neighbor
-			// anywhere in the frame can steal the lock, and a star that walked out of the box is
-			// still tracked instead of being reported lost.
-			stars = starsInsideSearchRegion(stars, lockSearchPosition, this.#searchRegion)
-			if (stars.length > 1) moveNearestGuideStarToFront(stars, lockSearchPosition)
+		if (lockSearchPosition !== undefined && detections.length > 0) {
+			const nearest = nearestGuideStar(detections, lockSearchPosition[0], lockSearchPosition[1])
+			if (nearest !== undefined && starInsideSearchRegion(nearest, lockSearchPosition, this.#searchRegion)) {
+				// PHD2 only acquires the primary inside the search box. Neighbors elsewhere must stay
+				// in the list: the default multi-star estimator matches them against the full-frame
+				// reference, and GuideFrameImage.stars is every detection.
+				stars = detections.slice()
+				moveNearestGuideStarToFront(stars, lockSearchPosition)
+			} else {
+				this.#primaryOutsideSearchRegion = true
+			}
 		}
 
 		return {
@@ -972,7 +984,7 @@ export class GuiderClient {
 				image,
 				stars: frame.stars,
 				acceptedStars: this.#acceptedStars,
-				star: frame.stars[0],
+				star: this.#primaryOutsideSearchRegion ? undefined : frame.stars[0],
 				lockPosition: this.#lockPosition,
 				searchPosition: this.#lockSearchPosition ?? this.#lockPosition,
 				searchRegion: this.#searchRegion,
@@ -985,10 +997,11 @@ export class GuiderClient {
 	// Routes the current frame to calibration, guiding, or passive looping.
 	#processFrame(frame: GuideFrame) {
 		const appState = this.#appState === 'Paused' && !this.#fullPause ? this.#resumeState : this.#appState
+		const input = this.#primaryOutsideSearchRegion ? { ...frame, stars: [] } : frame
 
-		if (appState === 'Calibrating') return this.#processCalibrationFrame(frame)
-		if (appState === 'Guiding' || appState === 'LostLock') return this.#processGuidingFrame(frame)
-		if (appState === 'Looping' || appState === 'Selected') this.#emitLoopingExposuresEvent(frame)
+		if (appState === 'Calibrating') return this.#processCalibrationFrame(input)
+		if (appState === 'Guiding' || appState === 'LostLock') return this.#processGuidingFrame(input)
+		if (appState === 'Looping' || appState === 'Selected') this.#emitLoopingExposuresEvent(input)
 
 		return 0
 	}
@@ -1401,6 +1414,7 @@ export class GuiderClient {
 		this.#frame = undefined
 		this.#image = undefined
 		this.#acceptedStars = undefined
+		this.#primaryOutsideSearchRegion = false
 		this.#frameId = 0
 		this.#lockPosition = undefined
 		this.#lockSearchPosition = undefined
@@ -1718,18 +1732,11 @@ function ditherImageOffset(calibration: GuidingCalibrationResult, dRa: number, d
 	return [calibration.ra.unitX * dRa + calibration.dec.unitX * dDec, calibration.ra.unitY * dRa + calibration.dec.unitY * dDec] as const
 }
 
-// Returns detections that fall inside the square search box of side `searchRegion` centered on
+// Returns whether `star` falls inside the square search box of side `searchRegion` centered on
 // `position`. The box is axis-aligned in image pixels, matching PHD2's search region.
-function starsInsideSearchRegion(stars: readonly GuideStar[], position: readonly [number, number], searchRegion: number): GuideStar[] {
+function starInsideSearchRegion(star: GuideStar, position: readonly [number, number], searchRegion: number) {
 	const half = searchRegion / 2
-	const [cx, cy] = position
-	const inside: GuideStar[] = []
-
-	for (const star of stars) {
-		if (Math.abs(star.x - cx) <= half && Math.abs(star.y - cy) <= half) inside.push(star)
-	}
-
-	return inside
+	return Math.abs(star.x - position[0]) <= half && Math.abs(star.y - position[1]) <= half
 }
 
 // Moves the nearest star to the first slot so Guider/GuidingCalibrator lock onto the requested target.
