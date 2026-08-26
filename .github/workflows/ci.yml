@@ -6,31 +6,55 @@ on:
         paths:
             - 'src/**.ts'
             - 'tests/**.ts'
+            - 'main.ts'
+            - 'types.d.ts'
+            - 'postinstall.ts'
+            - 'data/.version'
             - 'package.json'
+            - 'bun.lock'
             - 'tsconfig.json'
             - 'bunfig.toml'
+            - '.oxlintrc.json'
+            - '.oxfmtrc.json'
             - '.github/workflows/**'
-            - 'postinstall.ts'
     pull_request:
         paths:
             - 'src/**.ts'
             - 'tests/**.ts'
+            - 'main.ts'
+            - 'types.d.ts'
+            - 'postinstall.ts'
+            - 'data/.version'
             - 'package.json'
+            - 'bun.lock'
+            - 'tsconfig.json'
+            - 'bunfig.toml'
+            - '.oxlintrc.json'
+            - '.oxfmtrc.json'
+            - '.github/workflows/**'
     workflow_dispatch:
 
 permissions:
     contents: read
 
+concurrency:
+    group: ${{ github.workflow }}-${{ github.ref }}
+    cancel-in-progress: true
+
 jobs:
     test:
         name: Test
+        timeout-minutes: 30
         strategy:
+            fail-fast: false
             matrix:
                 os: [ubuntu-24.04, ubuntu-24.04-arm, windows-2025]
         runs-on: ${{ matrix.os }}
         steps:
             - name: Checkout
               uses: actions/checkout@v7
+              with:
+                  persist-credentials: false
 
             - name: Setup Bun
               uses: oven-sh/setup-bun@v2
@@ -39,11 +63,11 @@ jobs:
 
             - name: Install Dependencies
               if: ${{ matrix.os == 'ubuntu-24.04' }}
-              run: bun i
+              run: bun install --frozen-lockfile
 
             - name: Install Dependencies
               if: ${{ matrix.os != 'ubuntu-24.04' }}
-              run: bun i --omit=dev
+              run: bun install --frozen-lockfile --omit=dev
 
             - name: Cache Data Files
               if: ${{ matrix.os == 'ubuntu-24.04' }}
@@ -51,16 +75,18 @@ jobs:
               with:
                   path: data/
                   key: data-cache-${{ hashFiles('data/.version') }}
-                  restore-keys: |
-                      data-cache-
+
+            - name: Check Formatting
+              if: ${{ matrix.os == 'ubuntu-24.04' }}
+              run: bun run fmt:check
 
             - name: Lint
               if: ${{ matrix.os == 'ubuntu-24.04' }}
-              run: bun lint
+              run: bun run lint
 
             - name: Run Tests
               if: ${{ matrix.os == 'ubuntu-24.04' }}
-              run: RUN_SKIPPED_TESTS=false bun test --timeout 1000 --parallel --timings=timings.json
+              run: bun test --timeout 1000 --parallel --timings=timings.json
 
             - name: Run Tests
               if: ${{ matrix.os != 'ubuntu-24.04' }}
