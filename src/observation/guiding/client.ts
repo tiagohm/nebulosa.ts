@@ -164,6 +164,10 @@ export class GuiderClient {
 	// BLOB: it is the timed-out original and must not be processed or used to queue another capture.
 	// Zero means no quarantine.
 	#staleBlobUntil = 0
+	// Longest pulse successfully sent while processing the current BLOB, in milliseconds. `#processFrame`
+	// returns the max of both axes only after the second `pulse()` returns, so a throw on DEC would
+	// otherwise leave `pulseDelay` at 0 and start the next exposure while RA is still moving.
+	#pulseMsIssued = 0
 	#lockPosition?: readonly [number, number]
 	#lockSearchPosition?: readonly [number, number]
 	#exactLockPosition = false
@@ -906,6 +910,7 @@ export class GuiderClient {
 		this.#clearExposureWatchdog()
 
 		let pulseDelay = 0
+		this.#pulseMsIssued = 0
 
 		try {
 			let image: Image | undefined
@@ -945,7 +950,7 @@ export class GuiderClient {
 			this.emitEvent('Alert', { Msg: `guide frame processing failed: ${errorMessage(e)}`, Type: 'error' })
 		} finally {
 			try {
-				await this.#queueNextExposure(pulseDelay)
+				await this.#queueNextExposure(Math.max(pulseDelay, this.#pulseMsIssued))
 			} catch (e) {
 				console.error('guide exposure queue failed:', e)
 			}
@@ -1108,6 +1113,7 @@ export class GuiderClient {
 
 		const pulseDuration = Math.max(1, Math.round(duration))
 		this.guideOutputManager.pulse(this.#guideOutput, direction.toUpperCase() as GuideDirection, pulseDuration)
+		this.#pulseMsIssued = Math.max(this.#pulseMsIssued, pulseDuration)
 
 		return pulseDuration
 	}

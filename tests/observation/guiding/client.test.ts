@@ -1403,6 +1403,44 @@ describe('closed-loop calibration and guiding', () => {
 	)
 
 	test.concurrent(
+		'a later-axis pulse throw still waits for the issued pulse to finish',
+		async () => {
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
+
+			harness.mount.driftX = RA_AXIS[0] * 4 + DEC_AXIS[0] * 4
+			harness.mount.driftY = RA_AXIS[1] * 4 + DEC_AXIS[1] * 4
+
+			const originalPulse = harness.guideOutputManager.pulse.bind(harness.guideOutputManager)
+			let firstDuration = 0
+			let pulseAt = 0
+			let pulseCalls = 0
+			harness.guideOutputManager.pulse = (device, direction, duration) => {
+				pulseCalls++
+				if (pulseCalls > 1) throw new Error('second axis failed')
+				firstDuration = duration
+				pulseAt = performance.now()
+				originalPulse(device, direction, duration)
+			}
+
+			let exposureAt = 0
+			const originalStart = harness.cameraManager.startExposure.bind(harness.cameraManager)
+			harness.cameraManager.startExposure = (camera, exposure) => {
+				exposureAt = performance.now()
+				originalStart(camera, exposure)
+			}
+
+			await feedFrame(harness)
+
+			expect(firstDuration).toBeGreaterThan(0)
+			expect(eventsOf(harness.events, 'Alert').some((alert) => alert.Type === 'error' && alert.Msg.includes('second axis failed'))).toBeTrue()
+			expect(exposureAt - pulseAt).toBeGreaterThanOrEqual(firstDuration)
+			expect(harness.guideOutput.pulsing).toBeFalse()
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
 		'the next exposure waits until the guide output reports idle after a pulse',
 		async () => {
 			const harness = await calibrateAndGuide()
