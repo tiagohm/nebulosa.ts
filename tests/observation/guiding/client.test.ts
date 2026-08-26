@@ -1537,6 +1537,36 @@ describe('closed-loop calibration and guiding', () => {
 	)
 
 	test.concurrent(
+		'guide while paused resumes without dropping the dither',
+		async () => {
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
+
+			expect(harness.client.dither(3, false, IMMEDIATE_SETTLE)).toBeTrue()
+			const dithered = harness.client.getLockPosition()!
+			const startGuiding = eventsOf(harness.events, 'StartGuiding').length
+			const settleBegin = eventsOf(harness.events, 'SettleBegin').length
+
+			expect(harness.client.setPaused(true)).toBeTrue()
+			expect(harness.client.getAppState()).toBe('Paused')
+			expect(harness.client.guide(false, IMMEDIATE_SETTLE)).toBeTrue()
+
+			expect(harness.client.getPaused()).toBeFalse()
+			expect(harness.client.getAppState()).toBe('Guiding')
+			expect(eventsOf(harness.events, 'Resumed')).toHaveLength(1)
+			expect(eventsOf(harness.events, 'StartGuiding')).toHaveLength(startGuiding)
+			expect(eventsOf(harness.events, 'SettleBegin').length).toBe(settleBegin + 1)
+
+			for (let i = 0; i < 3; i++) await feedFrame(harness)
+
+			const lock = harness.client.getLockPosition()!
+			expect(lock[0]).toBeCloseTo(dithered[0], 1)
+			expect(lock[1]).toBeCloseTo(dithered[1], 1)
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
 		'dithering offsets the lock position and starts a new settle cycle',
 		async () => {
 			const harness = await calibrateAndGuide()

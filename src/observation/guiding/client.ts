@@ -610,12 +610,15 @@ export class GuiderClient {
 	}
 
 	// Starts guiding and triggers calibration first when requested or when no solution exists yet.
-	// A guide request issued while already guiding does not restart the session: like PHD2, it only
-	// begins a new settle cycle, so the accumulated dither and lock-shift target offsets survive.
+	// A guide request issued while already guiding, including while paused in Guiding or LostLock,
+	// does not restart the session: like PHD2, it only begins a new settle cycle, so the accumulated
+	// dither and lock-shift target offsets survive.
 	guide(recalibrate: boolean = false, settle?: Partial<PHD2Settle>) {
 		if (!this.getConnected() || this.#camera === undefined || this.#guideOutput === undefined || !this.#guideOutput.canPulseGuide) return false
 
-		if (!recalibrate && !this.#paused && this.#calibration !== undefined && (this.#appState === 'Guiding' || this.#appState === 'LostLock')) {
+		const sessionState = this.#paused ? this.#resumeState : this.#appState
+
+		if (!recalibrate && this.#calibration !== undefined && (sessionState === 'Guiding' || sessionState === 'LostLock')) {
 			this.#settle = { ...DEFAULT_PHD2_SETTLE, ...settle }
 			this.#settling = true
 			this.#settleStartTime = 0
@@ -623,6 +626,7 @@ export class GuiderClient {
 			this.#settleFrameCount = 0
 			this.#settleDroppedFrameCount = 0
 			this.emitEvent('SettleBegin')
+			if (this.#paused) this.setPaused(false)
 
 			return true
 		}
