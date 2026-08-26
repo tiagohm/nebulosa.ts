@@ -36,9 +36,9 @@ const PHD2_SUBVER = ''
 const PHD2_MSG_VERSION = 1
 // Overlapping exposures are not implemented by the local guider.
 const PHD2_OVERLAP_SUPPORT = false
-// Extra time, in milliseconds, to wait for TELESCOPE_TIMED_GUIDE_* to leave Busy after the nominal
-// pulse duration. Covers INDI network/driver latency so the next exposure does not start while the
-// mount is still moving.
+// Extra time, in milliseconds, to wait for TELESCOPE_TIMED_GUIDE_* Busy acknowledgement and the
+// later Idle after the nominal pulse duration. Covers INDI network/driver latency so a delayed
+// Busy cannot start the mount after the next exposure has already begun.
 const PULSE_IDLE_MARGIN_MS = 250
 // Floor for the missing-BLOB watchdog, in milliseconds. The timeout is max(3 × exposure, this) so a
 // short cadence still waits long enough for a slow INDI round-trip before retrying.
@@ -1393,16 +1393,33 @@ export class GuiderClient {
 		this.#armExposureWatchdog()
 	}
 
-	// Waits out the commanded pulse and, if the guide output still reports Busy, until it goes idle
-	// or a latency margin expires. Sleeping only the nominal duration starts the next exposure while
-	// the mount is still moving whenever the INDI round-trip outlasts the pulse itself.
+	// Waits out the commanded pulse, the INDI Busy acknowledgement, and the later Idle. GuideOutput
+	// pulse() only sends the timed-guide vector; `device.pulsing` is updated later by numberVector.
+	// Sleeping only the nominal duration, then checking Busy once, starts the next exposure when the
+	// Busy update still has not arrived even though the mount is about to move.
 	async #waitForPulseToComplete(duration: number): Promise<void> {
 		if (duration <= 0) return
 
 		const started = performance.now()
-		await Bun.sleep(duration)
+		const deadline = started + duration + PULSE_IDLE_MARGIN_MS
+		let sawBusy = this.#guideOutput?.pulsing === true
 
-		while (this.#guideOutput?.pulsing === true && performance.now() - started < duration + PULSE_IDLE_MARGIN_MS) {
+		while (performance.now() < started + duration) {
+			if (this.#guideOutput?.pulsing === true) sawBusy = true
+			const remaining = started + duration - performance.now()
+			if (remaining <= 0) break
+			await Bun.sleep(Math.min(10, remaining))
+		}
+
+		if (this.#guideOutput?.pulsing === true) sawBusy = true
+
+		if (!sawBusy) {
+			while (this.#guideOutput?.pulsing !== true && performance.now() < deadline) {
+				await Bun.sleep(10)
+			}
+		}
+
+		while (this.#guideOutput?.pulsing === true && performance.now() < deadline) {
 			await Bun.sleep(10)
 		}
 	}

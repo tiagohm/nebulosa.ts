@@ -61,18 +61,43 @@ class FakeCameraManager {
 class FakeGuideOutputManager {
 	readonly pulses: PulseRecord[] = []
 	// Extra milliseconds the fake guide output stays Busy after the commanded pulse duration, to
-	// model INDI driver latency. Zero keeps existing tests on the nominal sleep path.
+	// model INDI driver latency after Busy has already been reported.
 	pulseBusyOverhangMs = 0
+	// Milliseconds after the nominal pulse duration before `pulsing` becomes true, to model a
+	// delayed INDI Busy acknowledgement. Zero reports Busy immediately.
+	pulseBusyAckLagMs = 0
+	lastBusyAt = 0
+	lastIdleAt = 0
 
 	pulse(device: GuideOutput, direction: GuideDirection, duration: number) {
 		this.pulses.push({ direction, duration })
-		if (this.pulseBusyOverhangMs <= 0) return
-
-		device.pulsing = true
+		const ackLag = this.pulseBusyAckLagMs
 		const hold = duration + this.pulseBusyOverhangMs
+
+		if (ackLag <= 0) {
+			device.pulsing = true
+			this.lastBusyAt = performance.now()
+			setTimeout(
+				() => {
+					device.pulsing = false
+					this.lastIdleAt = performance.now()
+				},
+				Math.max(hold, 1),
+			)
+			return
+		}
+
 		setTimeout(() => {
-			device.pulsing = false
-		}, hold)
+			device.pulsing = true
+			this.lastBusyAt = performance.now()
+		}, duration + ackLag)
+		setTimeout(
+			() => {
+				device.pulsing = false
+				this.lastIdleAt = performance.now()
+			},
+			duration + ackLag + Math.max(this.pulseBusyOverhangMs, 10),
+		)
 	}
 }
 
@@ -1360,6 +1385,35 @@ describe('closed-loop calibration and guiding', () => {
 			expect(harness.guideOutputManager.pulses.length).toBeGreaterThan(pulsesBefore)
 			expect(harness.guideOutput.pulsing).toBeFalse()
 			expect(performance.now() - started).toBeGreaterThanOrEqual(80)
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
+		'the next exposure waits for a delayed Busy acknowledgement before starting',
+		async () => {
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
+
+			harness.guideOutputManager.pulseBusyAckLagMs = 40
+			harness.mount.driftX = RA_AXIS[0] * 1.2
+			harness.mount.driftY = RA_AXIS[1] * 1.2
+
+			let exposureAt = 0
+			const originalStart = harness.cameraManager.startExposure.bind(harness.cameraManager)
+			harness.cameraManager.startExposure = (camera, exposure) => {
+				exposureAt = performance.now()
+				originalStart(camera, exposure)
+			}
+
+			const pulsesBefore = harness.guideOutputManager.pulses.length
+			await feedFrame(harness)
+
+			expect(harness.guideOutputManager.pulses.length).toBeGreaterThan(pulsesBefore)
+			expect(harness.guideOutputManager.lastBusyAt).toBeGreaterThan(0)
+			expect(harness.guideOutputManager.lastIdleAt).toBeGreaterThan(harness.guideOutputManager.lastBusyAt)
+			expect(harness.guideOutput.pulsing).toBeFalse()
+			expect(exposureAt).toBeGreaterThanOrEqual(harness.guideOutputManager.lastIdleAt)
 		},
 		CLOSED_LOOP_TIMEOUT,
 	)
