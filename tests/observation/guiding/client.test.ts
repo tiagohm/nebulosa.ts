@@ -450,6 +450,13 @@ describe('capture control', () => {
 		expect(harness.cameraManager.startExposureCalls.at(-1)).toBe(2)
 	})
 
+	test('startExposureLoop does not start on a disconnected camera', () => {
+		connect(harness)
+		harness.camera.connected = false
+		expect(harness.client.startExposureLoop(1000)).toBeFalse()
+		expect(harness.cameraManager.startExposureCalls).toHaveLength(0)
+	})
+
 	test('startExposureLoop keeps the previous cadence for non-positive or non-finite exposures', () => {
 		connect(harness)
 		harness.client.startExposureLoop(3000)

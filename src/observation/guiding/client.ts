@@ -361,7 +361,7 @@ export class GuiderClient {
 			this.#guider.setNominalCadence(exposure)
 		}
 
-		if (this.#camera === undefined) return false
+		if (this.#camera === undefined || this.#camera.connected !== true) return false
 		if (this.#exposureInFlight) return true
 
 		this.#blobAdmission = 'accept'
@@ -1415,7 +1415,7 @@ export class GuiderClient {
 	// a floor so a sub-second loop still outlasts a slow INDI round-trip.
 	#armExposureWatchdog() {
 		this.#clearExposureWatchdog()
-		if (!this.#connected || this.#camera === undefined || this.#appState === 'Stopped' || (this.#appState === 'Paused' && this.#fullPause)) return
+		if (!this.#captureActive) return
 
 		const timeout = Math.max(3 * this.#exposure, EXPOSURE_WATCHDOG_MIN_MS)
 		this.#exposureWatchdog = setTimeout(() => {
@@ -1448,8 +1448,11 @@ export class GuiderClient {
 	}
 
 	// Records the cadence of this capture, starts it, and arms the missing-BLOB watchdog.
+	// Public `startExposureLoop` from Stopped is allowed, so this checks the live camera
+	// connection rather than `#captureActive` (false while Stopped). The watchdog still
+	// arms only while capture is active.
 	#beginExposure() {
-		if (this.#camera === undefined) return
+		if (!this.#connected || this.#camera === undefined || this.#camera.connected !== true) return
 		this.#inFlightExposureMs = this.#exposure
 		this.#awaitingBlob = true
 		this.cameraManager.startExposure(this.#camera, this.#exposure / 1000)
