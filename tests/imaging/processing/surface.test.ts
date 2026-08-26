@@ -107,15 +107,17 @@ describe('polynomial fit', () => {
 		}
 	})
 
-	test('a dense polynomial fit caps representative samples before the QR solve', () => {
+	test('a dense polynomial fit preserves diagnostics while capping the QR solve', () => {
 		const size = 256
 		const field = (x: number, y: number) => 0.2 + 0.001 * x - 0.0005 * y + 0.000001 * x * y
 		const samples = sampleGrid(size, size, size, size, field)
 		const model = fitOrThrow(samples, size, size, { degree: 2 })
 
 		expect(samples.length).toBeGreaterThan(SURFACE_MAX_POLYNOMIAL_SAMPLES)
-		expect(model.acceptedSamples).toBeLessThanOrEqual(SURFACE_MAX_POLYNOMIAL_SAMPLES)
-		expect(model.rejectedSamples).toBe(samples.length - model.acceptedSamples)
+		expect(model.acceptedSamples).toBe(samples.length)
+		expect(model.rejectedSamples).toBe(0)
+		expect(model.samples[0]).toEqual({ ...samples[0], accepted: true })
+		expect(model.samples.at(-1)).toEqual({ ...samples.at(-1)!, accepted: true })
 
 		const point = createScalarSurfacePointEvaluator(model)
 		for (const [x, y] of [
@@ -146,8 +148,12 @@ describe('polynomial fit', () => {
 		const lowPoint = createScalarSurfacePointEvaluator(lowFirst)
 		const highPoint = createScalarSurfacePointEvaluator(highFirst)
 
-		expect(lowFirst.acceptedSamples).toBeLessThanOrEqual(SURFACE_MAX_POLYNOMIAL_SAMPLES)
+		expect(lowFirst.acceptedSamples).toBe(size * size * 2)
+		expect(lowFirst.rejectedSamples).toBe(0)
 		expect(highFirst.acceptedSamples).toBe(lowFirst.acceptedSamples)
+		expect(highFirst.rejectedSamples).toBe(0)
+		expect(lowFirst.samples[0]).toEqual({ x: 0, y: 0, value: 0, weight: 1, accepted: true })
+		expect(lowFirst.samples[1]).toEqual({ x: 0, y: 0, value: 1, weight: 1, accepted: true })
 		expect(lowPoint.at(91, 91)).toBeCloseTo(0.5, 12)
 		expect(highPoint.at(91, 91)).toBeCloseTo(0.5, 12)
 	})

@@ -256,6 +256,15 @@ export interface SurfaceControlPointSelection {
 	readonly weight: Float64Array
 }
 
+// Aggregated fitting set plus the source-sample mapping needed to project post-fit rejection back onto
+// the original diagnostics without overwriting input coordinates or values.
+interface SurfaceSampleAggregation {
+	// Weighted bucket samples used by the capped fit.
+	readonly set: SurfaceSampleSet
+	// Aggregate sample index for each original sample, or -1 when that sample was already inactive.
+	readonly sourceToAggregate: Int32Array
+}
+
 // Allocates an empty sample set able to hold `capacity` samples.
 export function createSurfaceSampleSet(capacity: number): SurfaceSampleSet {
 	return {
@@ -718,14 +727,15 @@ function aggregateSurfaceControlsByBucket(set: SurfaceSampleSet, maxPoints: numb
 	return { indices: indices.subarray(0, n), u: u.subarray(0, n), v: v.subarray(0, n), value: value.subarray(0, n), weight: weight.subarray(0, n) }
 }
 
-// Keeps at most `maxSamples` active samples by aggregating each spatial bucket into one weighted
-// observation. Dropped samples stay in the diagnostic set but their multiplicity still feeds the fit
-// through the bucket's summed weight and weighted mean value.
-function capActiveSurfaceSamples(set: SurfaceSampleSet, maxSamples: number) {
-	if (activeSurfaceSampleCount(set) <= maxSamples) return
+// Builds a capped fitting set by aggregating each spatial bucket into one weighted observation. The
+// original sample set is left unchanged; `sourceToAggregate` records which aggregate carried each input
+// sample into the fit so final acceptance can be reported on the original diagnostics.
+function aggregateActiveSurfaceSamples(set: SurfaceSampleSet, maxSamples: number): SurfaceSampleAggregation | undefined {
+	if (activeSurfaceSampleCount(set) <= maxSamples) return undefined
 	const g = Math.max(1, Math.floor(Math.sqrt(maxSamples)))
 	const buckets = g * g
-	const representative = new Int32Array(buckets).fill(-1)
+	const bucketOfSource = new Int32Array(set.count).fill(-1)
+	const aggregateOfBucket = new Int32Array(buckets).fill(-1)
 	const sumX = new Float64Array(buckets)
 	const sumY = new Float64Array(buckets)
 	const sumU = new Float64Array(buckets)
@@ -740,28 +750,49 @@ function capActiveSurfaceSamples(set: SurfaceSampleSet, maxSamples: number) {
 		const bucket = bv * g + bu
 		const weight = set.weight[i]
 
-		if (representative[bucket] < 0) representative[bucket] = i
+		bucketOfSource[i] = bucket
 		sumWeight[bucket] += weight
 		sumX[bucket] += weight * set.x[i]
 		sumY[bucket] += weight * set.y[i]
 		sumU[bucket] += weight * set.u[i]
 		sumV[bucket] += weight * set.v[i]
 		sumValue[bucket] += weight * set.value[i]
-		set.active[i] = 0
 	}
 
+	const aggregate = createSurfaceSampleSet(buckets)
+
 	for (let bucket = 0; bucket < buckets; bucket++) {
-		const index = representative[bucket]
-		if (index < 0) continue
 		const weight = sumWeight[bucket]
+		if (weight === 0) continue
 		const inv = 1 / weight
-		set.x[index] = sumX[bucket] * inv
-		set.y[index] = sumY[bucket] * inv
-		set.u[index] = sumU[bucket] * inv
-		set.v[index] = sumV[bucket] * inv
-		set.value[index] = sumValue[bucket] * inv
-		set.weight[index] = weight
-		set.active[index] = 1
+		const index = aggregate.count++
+		aggregate.x[index] = sumX[bucket] * inv
+		aggregate.y[index] = sumY[bucket] * inv
+		aggregate.u[index] = sumU[bucket] * inv
+		aggregate.v[index] = sumV[bucket] * inv
+		aggregate.value[index] = sumValue[bucket] * inv
+		aggregate.weight[index] = weight
+		aggregate.active[index] = 1
+		aggregateOfBucket[bucket] = index
+	}
+
+	const sourceToAggregate = new Int32Array(set.count).fill(-1)
+	for (let i = 0; i < set.count; i++) {
+		const bucket = bucketOfSource[i]
+		if (bucket >= 0) sourceToAggregate[i] = aggregateOfBucket[bucket]
+	}
+
+	return { set: aggregate, sourceToAggregate }
+}
+
+// Applies the aggregate fit's accepted flags to the original sample diagnostics.
+function applySurfaceSampleAggregationAcceptance(set: SurfaceSampleSet, aggregation: SurfaceSampleAggregation) {
+	const active = aggregation.set.active
+	const sourceToAggregate = aggregation.sourceToAggregate
+
+	for (let i = 0; i < set.count; i++) {
+		const aggregate = sourceToAggregate[i]
+		set.active[i] = aggregate >= 0 && active[aggregate] !== 0 ? 1 : 0
 	}
 }
 
@@ -1597,13 +1628,15 @@ export function fitScalarSurface(samples: readonly SurfaceSample[], width: numbe
 		iterations: options.rejection?.iterations ?? 0,
 	}
 
-	capActiveSurfaceSamples(set, SURFACE_MAX_POLYNOMIAL_SAMPLES)
-	const active = activeSurfaceSampleCount(set)
+	const aggregation = aggregateActiveSurfaceSamples(set, SURFACE_MAX_POLYNOMIAL_SAMPLES)
+	const fitSet = aggregation?.set ?? set
+	const active = activeSurfaceSampleCount(fitSet)
 	const residuals = new Float64Array(active)
 	const scratch = new Float64Array(active)
-	const outcome = fitPolynomialSurfaceWithRejection(set, degree, terms, ti, tj, rejection, residuals, scratch)
+	const outcome = fitPolynomialSurfaceWithRejection(fitSet, degree, terms, ti, tj, rejection, residuals, scratch)
 	if (typeof outcome === 'string') return { ok: false, reason: outcome }
 
+	if (aggregation !== undefined) applySurfaceSampleAggregationAcceptance(set, aggregation)
 	const accepted = activeSurfaceSampleCount(set)
 
 	return {
