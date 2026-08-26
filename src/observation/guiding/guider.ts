@@ -51,8 +51,9 @@ export interface GuideFrame {
 	// Optional monotonic frame identifier.
 	readonly frameId?: number
 	// Exposure duration that produced this frame, in milliseconds. When set, pulse-gain cadence
-	// scaling uses this instead of the wall-clock gap between frames, so a pulse wait is not treated
-	// as extra uncorrected drift. Dropped-frame detection still uses `timestamp`.
+	// scaling and dropped-frame detection use this instead of the wall-clock gap between frames,
+	// so a pulse wait is not treated as extra uncorrected drift or a dropped frame. Frames without
+	// `cadenceMs` still classify drops from `timestamp`.
 	readonly cadenceMs?: number
 	// Center of the star-search window, in pixels. When set together with `searchRegion`, lock
 	// quality and primary acquisition use only detections inside this box; `stars` still holds the
@@ -1229,8 +1230,18 @@ export class Guider {
 		return dx * dx + dy * dy > this.config.maxFrameJumpPx * this.config.maxFrameJumpPx
 	}
 
-	// Detects dropped frames from timestamp deltas.
-	#isDroppedFrame({ timestamp }: GuideFrame) {
+	// Detects dropped frames. When the frame reports the exposure that produced it, classify from
+	// that cadence rather than the wall-clock gap so an ST4 pulse wait is not a drop. Frames
+	// without `cadenceMs` still use timestamp deltas.
+	#isDroppedFrame(frame: GuideFrame) {
+		const { timestamp, cadenceMs } = frame
+
+		if (cadenceMs !== undefined) {
+			if (timestamp !== undefined) this.state.lastTimestamp = timestamp
+			if (cadenceMs > 0) this.state.lastCadence = cadenceMs
+			return cadenceMs > this.config.nominalCadence * this.config.droppedFrameFactor
+		}
+
 		if (timestamp === undefined) return false
 
 		const lastTimestamp = this.state.lastTimestamp

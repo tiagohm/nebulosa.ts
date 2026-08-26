@@ -199,6 +199,14 @@ test('cadence scaling uses previous frame timestamp', () => {
 	expect(cmd.ra.duration).toBeGreaterThan(100)
 })
 
+test('cadenceMs does not treat a pulse wait as a dropped frame', () => {
+	const instance = new Guider({ lockAveragingFrames: 1, maxFrameJumpPx: 20, nominalCadence: 1000, droppedFrameFactor: 2.5 })
+	instance.processFrame(guideFrame(BASE_STARS, 0))
+	const frame = { ...guideFrame(shiftStars(BASE_STARS, 0.3, 0.1), 4000), cadenceMs: 1000 }
+	const cmd = instance.processFrame(frame)
+	expect(cmd.diagnostics.droppedFrame).toBeFalse()
+})
+
 test('cadenceMs scales gain from the exposure instead of the wall-clock gap', () => {
 	const guider = new Guider({ lockAveragingFrames: 1, calibration: [1, 0, 0, 1], hysteresisRA: 0, hysteresisDEC: 0, minMoveRA: 0.01, minMoveDEC: 1, msPerRAUnit: 1000, nominalCadence: 1000 })
 	guider.processFrame(guideFrame(BASE_STARS, 0))
