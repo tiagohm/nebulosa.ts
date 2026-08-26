@@ -131,7 +131,8 @@ export interface GuideDiagnostics {
 	readonly lostFrames: number
 	// Whether the guider has entered the lost state.
 	readonly lost: boolean
-	// Whether dithering is active.
+	// Whether a dither settle is in progress. A non-zero target offset from lock-shift or a
+	// finished dither does not by itself set this flag.
 	readonly ditherActive: boolean
 	// Whether this frame was classified as dropped by cadence.
 	readonly droppedFrame: boolean
@@ -915,18 +916,31 @@ export class Guider {
 		this.state.lastCadence = this.config.nominalCadence
 	}
 
-	// Starts dithering by shifting lock target without touching calibration.
-	startDither(dx: number, dy: number) {
+	// Shifts the lock target in image pixels without marking a dither settle in progress. Lock-shift
+	// and a finished dither keep a constant offset this way so `ditherActive` stays reserved for an
+	// in-flight settle.
+	setTargetOffset(dx: number, dy: number) {
 		this.state.ditherOffsetX = dx
 		this.state.ditherOffsetY = dy
+	}
+
+	// Starts dithering by shifting lock target and marking the settle in progress.
+	startDither(dx: number, dy: number) {
+		this.setTargetOffset(dx, dy)
 		this.state.ditherActive = true
 	}
 
 	// Stops dithering and re-targets lock back to reference center.
 	stopDither() {
-		this.state.ditherOffsetX = 0
-		this.state.ditherOffsetY = 0
+		this.setTargetOffset(0, 0)
 		this.state.ditherActive = false
+	}
+
+	// Sets or clears the in-progress dither flag without changing the target offset. Settle
+	// completion uses this so a finished dither keeps its offset while no longer blocking the
+	// guiding assistant.
+	setDithering(active: boolean) {
+		this.state.ditherActive = active
 	}
 
 	// Updates the expected frame cadence without resetting lock or hysteresis. Callers that change

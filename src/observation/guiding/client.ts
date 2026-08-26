@@ -397,9 +397,7 @@ export class GuiderClient {
 		this.#resumeState = 'Stopped'
 		this.#setAppState('Stopped')
 
-		if (this.#guider.currentState.ditherActive) {
-			this.#guider.stopDither()
-		}
+		this.#guider.stopDither()
 
 		return true
 	}
@@ -443,10 +441,7 @@ export class GuiderClient {
 		this.#lockShiftLimitReached = false
 		this.#abortSettling('guide star deselected')
 		this.#guider.reset()
-
-		if (this.#guider.currentState.ditherActive) {
-			this.#guider.stopDither()
-		}
+		this.#guider.stopDither()
 
 		if (this.#appState !== 'Stopped') {
 			this.#resumeState = 'Looping'
@@ -465,6 +460,7 @@ export class GuiderClient {
 		this.#ditherOffsetX += dx
 		this.#ditherOffsetY += dy
 		this.#syncGuideTargetOffset()
+		this.#guider.setDithering(true)
 		this.#lockPosition = [referenceX + this.#ditherOffsetX + this.#lockShiftOffsetX, referenceY + this.#ditherOffsetY + this.#lockShiftOffsetY] as const
 		this.#settle = { ...DEFAULT_PHD2_SETTLE, ...settle }
 		this.#settling = true
@@ -550,7 +546,7 @@ export class GuiderClient {
 		const appState = this.#appState === 'Paused' && !this.#fullPause ? this.#resumeState : this.#appState
 		const guiderState = this.#guider.currentState
 
-		if (this.#guidingAssistant !== undefined || this.#settling || guiderState.ditherActive || guiderState.state !== 'guiding' || (appState !== 'Guiding' && appState !== 'LostLock')) return false
+		if (this.#guidingAssistant !== undefined || this.#settling || guiderState.state !== 'guiding' || (appState !== 'Guiding' && appState !== 'LostLock')) return false
 
 		const imageScale = this.getPixelScale()
 		const assistant = new GuidingAssistant({
@@ -739,6 +735,7 @@ export class GuiderClient {
 		this.#dither.reset()
 		this.#lockShiftOffsetX = 0
 		this.#lockShiftOffsetY = 0
+		this.#guider.stopDither()
 		this.#setAppState(this.#lockPosition === undefined ? 'Looping' : 'Selected')
 		this.startExposureLoop(this.#exposure)
 
@@ -1374,16 +1371,11 @@ export class GuiderClient {
 		return [this.#calibration.ra.unitX * rate0 + this.#calibration.dec.unitX * rate1, this.#calibration.ra.unitY * rate0 + this.#calibration.dec.unitY * rate1] as const
 	}
 
-	// Reapplies the combined manual dither and lock-shift target offset to the guider state.
+	// Reapplies the combined manual dither and lock-shift target offset to the guider state without
+	// touching the in-progress dither flag. A settled dither and lock-shift both keep a non-zero
+	// offset; only `dither()` and settle completion change `ditherActive`.
 	#syncGuideTargetOffset() {
-		const offsetX = this.#ditherOffsetX + this.#lockShiftOffsetX
-		const offsetY = this.#ditherOffsetY + this.#lockShiftOffsetY
-
-		if (offsetX === 0 && offsetY === 0) {
-			this.#guider.stopDither()
-		} else {
-			this.#guider.startDither(offsetX, offsetY)
-		}
+		this.#guider.setTargetOffset(this.#ditherOffsetX + this.#lockShiftOffsetX, this.#ditherOffsetY + this.#lockShiftOffsetY)
 	}
 
 	// Refreshes the public lock target from calibration diagnostics when available.
@@ -1769,6 +1761,7 @@ export class GuiderClient {
 
 	// Emits the final settle status and clears the local settle counters.
 	#emitSettleDoneEvent(status: number, error?: string) {
+		this.#guider.setDithering(false)
 		this.emitEvent('SettleDone', { Status: status, TotalFrames: this.#settleFrameCount, DroppedFrames: this.#settleDroppedFrameCount, Error: error })
 		this.#settleFrameCount = 0
 		this.#settleDroppedFrameCount = 0

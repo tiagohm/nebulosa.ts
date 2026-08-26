@@ -154,6 +154,19 @@ test('lost-star state and reacquisition flow', () => {
 	expect(cmd.diagnostics.badFrame).toBeFalse()
 })
 
+test('setTargetOffset shifts the lock without marking dither active', () => {
+	const instance = guider({ lockAveragingFrames: 1, minMoveRA: 0.01, minMoveDEC: 0.01, hysteresisRA: 0, hysteresisDEC: 0 })
+	instance.processFrame(guideFrame(BASE_STARS, 0))
+	instance.setTargetOffset(2, -1)
+	expect(instance.currentState.ditherActive).toBeFalse()
+	expect(instance.currentState.ditherOffsetX).toBe(2)
+	expect(instance.currentState.ditherOffsetY).toBe(-1)
+	const cmd = instance.processFrame(guideFrame(BASE_STARS, 1000))
+	expect(cmd.ra.duration).toBeGreaterThan(0)
+	expect(cmd.dec.duration).toBeGreaterThan(0)
+	expect(cmd.diagnostics.ditherActive).toBeFalse()
+})
+
 test('dither offset shifts target and settles after stop', () => {
 	const guider = new Guider({ lockAveragingFrames: 1, minMoveRA: 0.01, minMoveDEC: 0.01, hysteresisRA: 0, hysteresisDEC: 0 })
 	guider.processFrame(guideFrame(BASE_STARS, 0))

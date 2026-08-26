@@ -1414,6 +1414,41 @@ describe('closed-loop calibration and guiding', () => {
 	)
 
 	test.concurrent(
+		'startGuidingAssistant is allowed after a settled dither',
+		async () => {
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
+
+			expect(harness.client.dither(3, false, IMMEDIATE_SETTLE)).toBeTrue()
+			expect(harness.client.startGuidingAssistant({ measureBacklash: false })).toBeFalse()
+
+			for (let i = 0; i < 2; i++) await feedFrame(harness)
+
+			expect(eventsOf(harness.events, 'SettleDone').length).toBeGreaterThan(0)
+			expect(harness.client.startGuidingAssistant({ measureBacklash: false })).toBeTrue()
+			harness.client.stopGuidingAssistant()
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
+		'startGuidingAssistant is allowed while lock-shift holds a non-zero offset',
+		async () => {
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
+
+			expect(harness.client.setLockShiftParams({ rate: [3600000, 0], axes: 'X/Y' })).toBeTrue()
+			expect(harness.client.setLockShiftEnabled(true)).toBeTrue()
+			await feedFrame(harness)
+			await feedFrame(harness)
+
+			expect(harness.client.startGuidingAssistant({ measureBacklash: false })).toBeTrue()
+			harness.client.stopGuidingAssistant()
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
 		'finishing the guiding assistant keeps the lock',
 		async () => {
 			const harness = await calibrateAndGuide()
