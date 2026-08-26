@@ -1058,6 +1058,9 @@ describe('frame processing robustness', () => {
 
 		const loopingBefore = eventsOf(harness.events, 'LoopingExposures').length
 		const handler = harness.cameraManager.handler!
+		// Past the previous one-cadence quarantine: a delayed original transfer still must not
+		// become the retry's BLOB and start a second capture chain.
+		await Bun.sleep(harness.client.getExposure() + 50)
 		handler.blobReceived!(harness.camera, FRAME_BUFFER, 'raw')
 		await Bun.sleep(50)
 
@@ -1065,7 +1068,6 @@ describe('frame processing robustness', () => {
 		expect(harness.cameraManager.startExposureCalls.length).toBe(exposuresAfterRetry)
 		expect(harness.client.getStarImage()).toBeUndefined()
 
-		await Bun.sleep(harness.client.getExposure())
 		await feedBuffer(harness, FRAME_BUFFER)
 		expect(harness.cameraManager.startExposureCalls.length).toBe(exposuresAfterRetry + 1)
 		expect(harness.client.getStarImage()?.frame).toBe(1)
