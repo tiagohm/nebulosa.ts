@@ -1760,6 +1760,34 @@ describe('closed-loop calibration and guiding', () => {
 	)
 
 	test.concurrent(
+		'calibration with mild measurement jitter still recovers rate and angle',
+		async () => {
+			const harness = makeHarness({ calibrator: { ...FAST_CALIBRATION, maxFrameJumpPx: 12, maxMatchDistancePx: 16 } })
+			connect(harness)
+			harness.client.loop()
+			await feedFrame(harness)
+			expect(harness.client.guide(false, IMMEDIATE_SETTLE)).toBeTrue()
+
+			for (let i = 0; i < MAX_CALIBRATION_FRAMES; i++) {
+				harness.mount.advance(harness.guideOutputManager.pulses)
+				const jitterX = i % 2
+				const jitterY = (i + 1) % 2
+				await feedBuffer(harness, await buildFrameBuffer(harness.mount.offsetX + jitterX, harness.mount.offsetY + jitterY))
+				if (harness.client.getCalibrated()) break
+			}
+
+			expect(harness.client.getCalibrated()).toBeTrue()
+			const calibration = harness.client.getCalibrationData()
+			expect(calibration.xRate).toBeCloseTo(MOUNT_RATE_PX_PER_MS, 2)
+			expect(calibration.yRate).toBeCloseTo(MOUNT_RATE_PX_PER_MS, 2)
+			expect(Math.abs(calibration.xAngle - MOUNT_ANGLE)).toBeLessThan(0.2)
+			expect(eventsOf(harness.events, 'CalibrationFailed')).toBeEmpty()
+			expect(harness.client.getAppState()).toBe('Guiding')
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
 		'calibration learns an inverted RA axis and later corrections reduce the error',
 		async () => {
 			const harness = makeHarness({ calibrator: FAST_CALIBRATION })
