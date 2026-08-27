@@ -2727,6 +2727,45 @@ describe('closed-loop calibration and guiding', () => {
 	)
 
 	test.concurrent(
+		'calibration pulses wait until the guide output reports idle',
+		async () => {
+			const harness = makeHarness({ calibrator: FAST_CALIBRATION })
+			connect(harness)
+			harness.client.loop()
+			await feedFrame(harness)
+			expect(harness.client.guide(false, IMMEDIATE_SETTLE)).toBeTrue()
+			expect(harness.client.getAppState()).toBe('Calibrating')
+
+			harness.guideOutputManager.pulseBusyOverhangMs = 80
+
+			let exposureAt = 0
+			const originalStart = harness.cameraManager.startExposure.bind(harness.cameraManager)
+			harness.cameraManager.startExposure = (camera, exposure) => {
+				exposureAt = performance.now()
+				originalStart(camera, exposure)
+			}
+
+			let sawPulse = false
+			for (let i = 0; i < MAX_CALIBRATION_FRAMES; i++) {
+				const pulsesBefore = harness.guideOutputManager.pulses.length
+				await feedFrame(harness)
+				if (harness.guideOutputManager.pulses.length === pulsesBefore) continue
+
+				sawPulse = true
+				expect(harness.client.getAppState()).toBe('Calibrating')
+				expect(harness.guideOutput.pulsing).toBeFalse()
+				expect(harness.guideOutputManager.lastBusyAt).toBeGreaterThan(0)
+				expect(harness.guideOutputManager.lastIdleAt).toBeGreaterThan(harness.guideOutputManager.lastBusyAt)
+				expect(exposureAt).toBeGreaterThanOrEqual(harness.guideOutputManager.lastIdleAt)
+				break
+			}
+
+			expect(sawPulse).toBeTrue()
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
 		'an arriving guide frame cancels the exposure watchdog',
 		async () => {
 			const harness = await calibrateAndGuide()
