@@ -1835,6 +1835,36 @@ describe('closed-loop calibration and guiding', () => {
 	)
 
 	test.concurrent(
+		'diagonal drift is corrected on both axes without running away',
+		async () => {
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
+
+			const from = harness.guideOutputManager.pulses.length
+			harness.mount.driftX = RA_AXIS[0] * 1.2 + DEC_AXIS[0] * 1.2
+			harness.mount.driftY = RA_AXIS[1] * 1.2 + DEC_AXIS[1] * 1.2
+
+			const distances: number[] = []
+			const raDurations: number[] = []
+			for (let i = 0; i < 8; i++) {
+				await feedFrame(harness)
+				const step = eventsOf(harness.events, 'GuideStep').at(-1)!
+				distances.push(Math.hypot(step.dx, step.dy))
+				raDurations.push(step.RADuration)
+			}
+
+			const pulses = harness.guideOutputManager.pulses.slice(from)
+			expect(pulses.some((pulse) => pulse.direction === 'WEST' || pulse.direction === 'EAST')).toBeTrue()
+			expect(pulses.some((pulse) => pulse.direction === 'NORTH' || pulse.direction === 'SOUTH')).toBeTrue()
+			expect(distances.at(-1)!).toBeLessThan(8)
+			expect(Math.max(...distances)).toBeLessThan(12)
+			expect(raDurations.at(-1)!).toBeLessThanOrEqual(Math.max(...raDurations.slice(0, 3)) + 200)
+			expect(harness.client.getAppState()).toBe('Guiding')
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
 		'recalibrating clears the previous solution before the new run',
 		async () => {
 			const harness = await calibrateAndGuide()
