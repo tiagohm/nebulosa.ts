@@ -3420,6 +3420,25 @@ describe('closed-loop calibration and guiding', () => {
 	)
 
 	test.concurrent(
+		'an RA-only dither offsets the lock along right ascension',
+		async () => {
+			const harness = await calibrateAndGuide({ ditherMode: 'spiral' })
+			await establishLockReference(harness)
+
+			expect(harness.client.dither(3, true, IMMEDIATE_SETTLE)).toBeTrue()
+			const { dx, dy } = eventsOf(harness.events, 'GuidingDithered').at(-1)!
+			const calibration = harness.client.getCalibrationData()
+			const alongRA = dx * Math.cos(calibration.xAngle) + dy * Math.sin(calibration.xAngle)
+			const alongDEC = -dx * Math.sin(calibration.xAngle) + dy * Math.cos(calibration.xAngle)
+
+			expect(Math.abs(alongDEC)).toBeCloseTo(0, 5)
+			expect(Math.abs(alongRA)).toBeCloseTo(3, 5)
+			expect(harness.client.getSettling()).toBeTrue()
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
 		'a second dither before settle accumulates onto the same lock',
 		async () => {
 			const harness = await calibrateAndGuide()
