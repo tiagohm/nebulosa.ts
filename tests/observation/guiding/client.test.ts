@@ -1123,6 +1123,22 @@ describe('frame-driven behavior', () => {
 		expect(looping.SNR).toBeGreaterThanOrEqual(0)
 	})
 
+	test('accepted looping frames use a strictly increasing frame id', async () => {
+		connect(harness)
+		harness.client.loop()
+
+		const images: number[] = []
+		for (let i = 0; i < 5; i++) {
+			const image = (await feedFrame(harness))!
+			images.push(image.frame)
+			expect(image.frame).toBe(eventsOf(harness.events, 'LoopingExposures').at(-1)!.Frame)
+		}
+
+		expect(images).toEqual([1, 2, 3, 4, 5])
+		for (let i = 1; i < images.length; i++) expect(images[i]).toBeGreaterThan(images[i - 1])
+		harness.client.stopCapture()
+	})
+
 	test('a star-free looping frame issues no pulse and keeps exposing', async () => {
 		connect(harness)
 		harness.client.loop()
