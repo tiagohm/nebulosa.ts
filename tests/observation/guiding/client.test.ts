@@ -4131,4 +4131,27 @@ describe('closed-loop calibration and guiding', () => {
 		},
 		CLOSED_LOOP_TIMEOUT,
 	)
+
+	test.concurrent(
+		'end-to-end a short cloud run suppresses pulses and resumes without a jump',
+		async () => {
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
+
+			const pulsesBefore = harness.guideOutputManager.pulses.length
+			for (let i = 0; i < 3; i++) await feedEmptyFrame(harness)
+
+			expect(harness.client.getAppState()).toBe('Guiding')
+			expect(harness.guideOutputManager.pulses.length).toBe(pulsesBefore)
+			expect(eventsOf(harness.events, 'LockPositionLost')).toBeEmpty()
+
+			await feedFrame(harness)
+			expect(harness.client.getAppState()).toBe('Guiding')
+			const extra = harness.guideOutputManager.pulses.slice(pulsesBefore)
+			expect(extra.every((pulse) => pulse.duration < 80)).toBeTrue()
+			const step = eventsOf(harness.events, 'GuideStep').at(-1)!
+			expect(Math.hypot(step.dx, step.dy)).toBeLessThan(3)
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
 })
