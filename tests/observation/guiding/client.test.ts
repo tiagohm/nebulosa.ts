@@ -1435,6 +1435,28 @@ describe('closed-loop calibration and guiding', () => {
 	)
 
 	test.concurrent(
+		'lock averaging issues no correction pulses',
+		async () => {
+			const harness = await calibrateAndGuide()
+			const pulsesAtGuideStart = harness.guideOutputManager.pulses.length
+			const stepsBefore = eventsOf(harness.events, 'GuideStep').length
+
+			// Default lockAveragingFrames is 6; stay strictly inside that window so the first
+			// guiding frames cannot yet close the loop.
+			for (let i = 0; i < 5; i++) await feedFrame(harness)
+
+			const steps = eventsOf(harness.events, 'GuideStep').slice(stepsBefore)
+			expect(steps.length).toBe(5)
+			for (const step of steps) {
+				expect(step.RADuration).toBe(0)
+				expect(step.DECDuration).toBe(0)
+			}
+			expect(harness.guideOutputManager.pulses.length).toBe(pulsesAtGuideStart)
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
 		'a modest DEC reversal is held back by the converted backlash threshold',
 		async () => {
 			const harness = await calibrateAndGuide()
