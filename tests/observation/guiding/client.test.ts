@@ -3439,6 +3439,26 @@ describe('closed-loop calibration and guiding', () => {
 	)
 
 	test.concurrent(
+		'guiding after a dither walks the star onto the new lock',
+		async () => {
+			const harness = await calibrateAndGuide({ ditherMode: 'spiral' })
+			await establishLockReference(harness)
+
+			const before = harness.client.getLockPosition()!
+			await ditherAndSettle(harness, DITHER_AMOUNT_PX)
+
+			const after = harness.client.getLockPosition()!
+			expect(Math.hypot(after[0] - before[0], after[1] - before[1])).toBeCloseTo(DITHER_AMOUNT_PX, 5)
+
+			const step = eventsOf(harness.events, 'GuideStep').at(-1)!
+			expect(Math.hypot(step.dx, step.dy)).toBeLessThan(IMMEDIATE_SETTLE.pixels)
+			expect(harness.client.getSettling()).toBeFalse()
+			expect(harness.client.getAppState()).toBe('Guiding')
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
 		'a second dither before settle accumulates onto the same lock',
 		async () => {
 			const harness = await calibrateAndGuide()
