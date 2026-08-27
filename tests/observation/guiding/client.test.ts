@@ -3624,6 +3624,33 @@ describe('closed-loop calibration and guiding', () => {
 	)
 
 	test.concurrent(
+		'dither during a partial pause moves the lock without pulsing',
+		async () => {
+			const harness = await calibrateAndGuide({ ditherMode: 'spiral' })
+			await establishLockReference(harness)
+
+			expect(harness.client.setPaused(true, false)).toBeTrue()
+			expect(harness.client.getAppState()).toBe('Paused')
+
+			const before = harness.client.getLockPosition()!
+			const pulsesBefore = harness.guideOutputManager.pulses.length
+			expect(harness.client.dither(DITHER_AMOUNT_PX, false, IMMEDIATE_SETTLE)).toBeTrue()
+
+			const after = harness.client.getLockPosition()!
+			expect(Math.hypot(after[0] - before[0], after[1] - before[1])).toBeCloseTo(DITHER_AMOUNT_PX, 5)
+			expect(harness.client.getSettling()).toBeTrue()
+
+			await feedFrame(harness)
+			expect(harness.guideOutputManager.pulses.length).toBe(pulsesBefore)
+			expect(harness.client.getSettling()).toBeTrue()
+
+			expect(harness.client.setPaused(false)).toBeTrue()
+			expect(harness.client.getAppState()).toBe('Guiding')
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
 		'a second dither before settle accumulates onto the same lock',
 		async () => {
 			const harness = await calibrateAndGuide()
