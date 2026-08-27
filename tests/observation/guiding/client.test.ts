@@ -1041,6 +1041,23 @@ describe('frame-driven behavior', () => {
 		expect(looping.SNR).toBeGreaterThanOrEqual(0)
 	})
 
+	test('a star-free looping frame issues no pulse and keeps exposing', async () => {
+		connect(harness)
+		harness.client.loop()
+		const exposuresBefore = harness.cameraManager.startExposureCalls.length
+
+		await feedEmptyFrame(harness)
+
+		const looping = eventsOf(harness.events, 'LoopingExposures').at(-1)!
+		expect(looping.StarMass).toBe(0)
+		expect(looping.SNR).toBe(0)
+		expect(looping.HFD).toBe(0)
+		expect(harness.guideOutputManager.pulses).toHaveLength(0)
+		expect(harness.client.getAppState()).toBe('Looping')
+		expect(harness.cameraManager.startExposureCalls.length).toBeGreaterThan(exposuresBefore)
+		harness.client.stopCapture()
+	})
+
 	test('findStar selects the only valid star and locks onto it', async () => {
 		connect(harness)
 		harness.client.loop()
