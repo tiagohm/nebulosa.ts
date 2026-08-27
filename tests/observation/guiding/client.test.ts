@@ -1720,6 +1720,31 @@ describe('closed-loop calibration and guiding', () => {
 	)
 
 	test.concurrent(
+		'a failed recalibration leaves the client uncalibrated',
+		async () => {
+			const harness = await calibrateAndGuide()
+			expect(harness.client.getCalibrated()).toBeTrue()
+
+			expect(harness.client.guide(true, IMMEDIATE_SETTLE)).toBeTrue()
+			expect(harness.client.getCalibrated()).toBeFalse()
+			expect(harness.client.getAppState()).toBe('Calibrating')
+
+			harness.mount.advance = () => {}
+
+			for (let i = 0; i < MAX_CALIBRATION_FRAMES && eventsOf(harness.events, 'CalibrationFailed').length === 0; i++) {
+				await feedFrame(harness)
+			}
+
+			expect(eventsOf(harness.events, 'CalibrationFailed').length).toBeGreaterThan(0)
+			expect(harness.client.getCalibrated()).toBeFalse()
+			expect(harness.client.getAppState()).not.toBe('Guiding')
+			expect(harness.client.getAppState()).not.toBe('Calibrating')
+			harness.client.stopCapture()
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
 		'lock averaging issues no correction pulses',
 		async () => {
 			const harness = await calibrateAndGuide()
