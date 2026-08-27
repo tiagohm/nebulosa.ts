@@ -1574,6 +1574,29 @@ describe('closed-loop calibration and guiding', () => {
 	)
 
 	test.concurrent(
+		'a flux change at a fixed centroid is not treated as motion',
+		async () => {
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
+
+			const pulsesBefore = harness.guideOutputManager.pulses.length
+			const brighter = await buildFrameBufferAt([
+				[STAR_A[0] + harness.mount.offsetX, STAR_A[1] + harness.mount.offsetY, STAR_FLUX * 2],
+				[STAR_B[0] + harness.mount.offsetX, STAR_B[1] + harness.mount.offsetY, STAR_FLUX * 2 * SECONDARY_STAR_FLUX_RATIO],
+			])
+			await feedBuffer(harness, brighter)
+
+			const step = eventsOf(harness.events, 'GuideStep').at(-1)!
+			expect(Math.hypot(step.dx, step.dy)).toBeLessThan(1)
+			expect(step.RADuration).toBe(0)
+			expect(step.DECDuration).toBe(0)
+			expect(harness.guideOutputManager.pulses.length).toBe(pulsesBefore)
+			expect(harness.client.getAppState()).toBe('Guiding')
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
 		'a settled lock with a stationary mount issues no useful pulse',
 		async () => {
 			const harness = await calibrateAndGuide()
