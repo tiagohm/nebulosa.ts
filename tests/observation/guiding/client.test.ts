@@ -800,6 +800,18 @@ describe('calibration data', () => {
 		connect(harness)
 		expect(harness.client.flipCalibration()).toBeFalse()
 	})
+
+	test('flipCalibration is rejected while calibrating', () => {
+		connect(harness)
+		expect(harness.client.guide()).toBeTrue()
+		expect(harness.client.getAppState()).toBe('Calibrating')
+		expect(harness.client.getCalibrated()).toBeFalse()
+
+		expect(harness.client.flipCalibration()).toBeFalse()
+		expect(harness.client.getAppState()).toBe('Calibrating')
+		expect(harness.client.getCalibrated()).toBeFalse()
+		expect(eventsOf(harness.events, 'CalibrationDataFlipped')).toHaveLength(0)
+	})
 })
 
 describe('lock-shift parameters', () => {
