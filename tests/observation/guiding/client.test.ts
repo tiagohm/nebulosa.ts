@@ -3651,6 +3651,28 @@ describe('closed-loop calibration and guiding', () => {
 	)
 
 	test.concurrent(
+		'lock-shift walks the target at the configured pixel rate',
+		async () => {
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
+
+			expect(harness.client.setLockShiftParams({ rate: [36000, 0], axes: 'X/Y' })).toBeTrue()
+			expect(harness.client.setLockShiftEnabled(true)).toBeTrue()
+			const lock0 = harness.client.getLockPosition()!
+
+			await Bun.sleep(400)
+			await feedFrame(harness)
+
+			const lock1 = harness.client.getLockPosition()!
+			expect(lock1[0] - lock0[0]).toBeGreaterThan(3)
+			expect(lock1[0] - lock0[0]).toBeLessThan(15)
+			expect(lock1[1]).toBeCloseTo(lock0[1], 1)
+			expect(harness.client.getAppState()).toBe('Guiding')
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
 		'a second dither before settle accumulates onto the same lock',
 		async () => {
 			const harness = await calibrateAndGuide()
