@@ -1694,6 +1694,39 @@ describe('closed-loop calibration and guiding', () => {
 	)
 
 	test.concurrent(
+		'constant RA drift is corrected without a matching DEC pulse',
+		async () => {
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
+
+			const from = harness.guideOutputManager.pulses.length
+			harness.mount.driftX = RA_AXIS[0] * 1.5
+			harness.mount.driftY = RA_AXIS[1] * 1.5
+
+			const distances: number[] = []
+			for (let i = 0; i < 8; i++) {
+				await feedFrame(harness)
+				const step = eventsOf(harness.events, 'GuideStep').at(-1)!
+				distances.push(Math.hypot(step.dx, step.dy))
+			}
+
+			const pulses = harness.guideOutputManager.pulses.slice(from)
+			let ra = 0
+			let dec = 0
+			for (const { direction, duration } of pulses) {
+				if (direction === 'WEST' || direction === 'EAST') ra += duration
+				else dec += duration
+			}
+
+			expect(ra).toBeGreaterThan(0)
+			expect(dec).toBeLessThan(ra * 0.4)
+			expect(distances.at(-1)!).toBeLessThan(8)
+			expect(harness.client.getAppState()).toBe('Guiding')
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
 		'recalibrating clears the previous solution before the new run',
 		async () => {
 			const harness = await calibrateAndGuide()
