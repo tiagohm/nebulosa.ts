@@ -3202,6 +3202,38 @@ describe('closed-loop calibration and guiding', () => {
 	)
 
 	test.concurrent(
+		'an empty search box is not rescued by field stars outside it',
+		async () => {
+			const frames: GuideFrameImage[] = []
+			const harness = await calibrateAndGuide({
+				searchRegion: 32,
+				handler: { frame: (_client, frame) => frames.push(frame) },
+			})
+			await establishLockReference(harness)
+
+			const lock = harness.client.getLockPosition()!
+			const pulsesBefore = harness.guideOutputManager.pulses.length
+			const field = [STAR_C, [200, 200] as const] as const
+
+			for (let i = 0; i < 8; i++) await feedStars(harness, field)
+
+			expect(harness.client.getAppState()).toBe('LostLock')
+			expect(harness.guideOutputManager.pulses.length).toBe(pulsesBefore)
+			expect(eventsOf(harness.events, 'StarLost').length).toBeGreaterThan(0)
+			expect(eventsOf(harness.events, 'LockPositionLost')).toHaveLength(1)
+
+			const frame = frames.at(-1)!
+			expect(frame.star).toBeUndefined()
+			expect(frame.stars.length).toBeGreaterThanOrEqual(2)
+			expect(frame.acceptedStars ?? []).toHaveLength(0)
+			for (const star of frame.stars) {
+				expect(Math.hypot(star.x - lock[0], star.y - lock[1])).toBeGreaterThan(harness.client.getSearchRegion() / 2)
+			}
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
 		'a common field translation is followed instead of a single star',
 		async () => {
 			const frames: GuideFrameImage[] = []
