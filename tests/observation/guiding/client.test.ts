@@ -562,6 +562,24 @@ describe('capture control', () => {
 		expect(harness.client.getExposure()).toBe(2000)
 	})
 
+	test('startExposureLoop can retry after the camera manager throws', () => {
+		connect(harness)
+		let attempts = 0
+		const startExposure = harness.cameraManager.startExposure.bind(harness.cameraManager)
+		harness.cameraManager.startExposure = (camera, exposure) => {
+			attempts++
+			if (attempts === 1) throw new Error('camera start failed')
+			startExposure(camera, exposure)
+		}
+
+		expect(() => harness.client.startExposureLoop(1000)).toThrowError('camera start failed')
+		expect(harness.cameraManager.startExposureCalls).toBeEmpty()
+		expect(harness.client.startExposureLoop(1000)).toBeTrue()
+		expect(attempts).toBe(2)
+		expect(harness.cameraManager.startExposureCalls).toEqual([1])
+		harness.client.disconnect()
+	})
+
 	test('startExposureLoop from Stopped starts one capture without arming the watchdog', async () => {
 		connect(harness)
 		expect(harness.client.getAppState()).toBe('Stopped')

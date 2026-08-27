@@ -1480,16 +1480,27 @@ export class GuiderClient {
 		this.#beginExposure()
 	}
 
-	// Records the cadence of this capture, starts it, and arms the missing-BLOB watchdog.
+	// Records the cadence of this capture, starts it, and arms the missing-BLOB watchdog. A synchronous
+	// camera-manager failure restores the prior cadence and releases BLOB ownership before rethrowing.
 	// Public `startExposureLoop` from Stopped is allowed, so this checks the live camera
 	// connection rather than `#captureActive` (false while Stopped). The watchdog still
 	// arms only while capture is active.
 	#beginExposure() {
 		if (!this.#connected || this.#camera === undefined || this.#camera.connected !== true) return
+		const previousExposureMs = this.#inFlightExposureMs
 		this.#exposureAttempt++
 		this.#inFlightExposureMs = this.#exposure
 		this.#awaitingBlob = true
-		this.cameraManager.startExposure(this.#camera, this.#exposure / 1000)
+
+		try {
+			this.cameraManager.startExposure(this.#camera, this.#exposure / 1000)
+		} catch (error) {
+			this.#inFlightExposureMs = previousExposureMs
+			this.#awaitingBlob = false
+			this.#clearExposureWatchdog()
+			throw error
+		}
+
 		this.#armExposureWatchdog()
 	}
 
