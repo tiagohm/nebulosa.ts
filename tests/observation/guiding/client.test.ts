@@ -3039,6 +3039,34 @@ describe('closed-loop calibration and guiding', () => {
 	)
 
 	test.concurrent(
+		'a second dither before settle accumulates onto the same lock',
+		async () => {
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
+
+			const before = harness.client.getLockPosition()!
+			expect(harness.client.dither(3, false, IMMEDIATE_SETTLE)).toBeTrue()
+			const first = eventsOf(harness.events, 'GuidingDithered').at(-1)!
+			const afterFirst = harness.client.getLockPosition()!
+
+			expect(harness.client.getSettling()).toBeTrue()
+			expect(harness.client.dither(2, false, IMMEDIATE_SETTLE)).toBeTrue()
+
+			const second = eventsOf(harness.events, 'GuidingDithered').at(-1)!
+			const afterSecond = harness.client.getLockPosition()!
+			expect(eventsOf(harness.events, 'GuidingDithered')).toHaveLength(2)
+			expect(eventsOf(harness.events, 'SettleBegin').length).toBeGreaterThanOrEqual(2)
+
+			expect(afterFirst[0]).toBeCloseTo(before[0] + first.dx, 6)
+			expect(afterFirst[1]).toBeCloseTo(before[1] + first.dy, 6)
+			expect(afterSecond[0]).toBeCloseTo(before[0] + first.dx + second.dx, 6)
+			expect(afterSecond[1]).toBeCloseTo(before[1] + first.dy + second.dy, 6)
+			expect(harness.client.getSettling()).toBeTrue()
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
 		'a spiral dither walks the lattice and pulses the axes the standalone plan computes',
 		async () => {
 			const harness = await calibrateAndGuide({ ditherMode: 'spiral' })
