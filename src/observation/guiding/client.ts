@@ -729,13 +729,22 @@ export class GuiderClient {
 		this.#lockShiftTimestamp = 0
 		this.#lockShiftLimitReached = false
 		// Drop any dither/lock-shift target offset from a prior session so it cannot carry over into
-		// a subsequent guiding run.
+		// a subsequent guiding run. Restore the public lock to the guider reference; otherwise
+		// getLockPosition would keep advertising the dithered target after the offset is gone.
+		const hadTargetOffset = this.#ditherOffsetX !== 0 || this.#ditherOffsetY !== 0 || this.#lockShiftOffsetX !== 0 || this.#lockShiftOffsetY !== 0
 		this.#ditherOffsetX = 0
 		this.#ditherOffsetY = 0
 		this.#dither.reset()
 		this.#lockShiftOffsetX = 0
 		this.#lockShiftOffsetY = 0
 		this.#guider.stopDither()
+		if (hadTargetOffset && (this.#appState === 'Guiding' || this.#appState === 'LostLock' || this.#appState === 'Paused')) {
+			const { referenceX, referenceY } = this.#guider.currentState
+			if (Number.isFinite(referenceX) && Number.isFinite(referenceY)) {
+				this.#lockPosition = [referenceX, referenceY] as const
+				if (!this.#fixedLockReferenceEnabled) this.#lockSearchPosition = this.#lockPosition
+			}
+		}
 		this.#setAppState(this.#lockPosition === undefined ? 'Looping' : 'Selected')
 		this.startExposureLoop(this.#exposure)
 

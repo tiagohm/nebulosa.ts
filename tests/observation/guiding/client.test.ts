@@ -4291,6 +4291,7 @@ describe('closed-loop calibration and guiding', () => {
 		async () => {
 			const harness = await calibrateAndGuide({ ditherMode: 'spiral' })
 			await establishLockReference(harness)
+			const before = harness.client.getLockPosition()!
 
 			expect(harness.client.setLockShiftParams({ rate: [36000, 0], axes: 'X/Y' })).toBeTrue()
 			expect(harness.client.setLockShiftEnabled(true)).toBeTrue()
@@ -4305,6 +4306,9 @@ describe('closed-loop calibration and guiding', () => {
 
 			expect(harness.client.loop()).toBeTrue()
 			expect(harness.client.getAppState()).toBe('Selected')
+			const afterLoop = harness.client.getLockPosition()!
+			expect(Math.hypot(afterLoop[0] - dithered[0], afterLoop[1] - dithered[1])).toBeGreaterThan(1)
+			expect(Math.hypot(afterLoop[0] - before[0], afterLoop[1] - before[1])).toBeLessThan(1)
 			expect(harness.client.getSettling()).toBeFalse()
 			const done = eventsOf(harness.events, 'SettleDone').at(-1)!
 			expect(done.Status).not.toBe(0)
