@@ -1938,6 +1938,36 @@ describe('closed-loop calibration and guiding', () => {
 	)
 
 	test.concurrent(
+		'declination mode South issues only SOUTH pulses',
+		async () => {
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
+
+			harness.client.setDeclinationGuideMode('South')
+			expect(harness.client.getDeclinationGuideMode()).toBe('South')
+
+			const from = harness.guideOutputManager.pulses.length
+			// Star drifting along the north-pulse axis asks for a SOUTH correction.
+			harness.mount.driftX = DEC_AXIS[0] * 1.5
+			harness.mount.driftY = DEC_AXIS[1] * 1.5
+			for (let i = 0; i < 6; i++) await feedFrame(harness)
+
+			const southBound = harness.guideOutputManager.pulses.slice(from)
+			expect(southBound.some((pulse) => pulse.direction === 'SOUTH')).toBeTrue()
+			expect(southBound.some((pulse) => pulse.direction === 'NORTH')).toBeFalse()
+
+			const after = harness.guideOutputManager.pulses.length
+			harness.mount.driftX = -DEC_AXIS[0] * 1.5
+			harness.mount.driftY = -DEC_AXIS[1] * 1.5
+			for (let i = 0; i < 6; i++) await feedFrame(harness)
+
+			expect(harness.guideOutputManager.pulses.slice(after).some((pulse) => pulse.direction === 'NORTH')).toBeFalse()
+			expect(harness.client.getAppState()).toBe('Guiding')
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
 		'a modest DEC reversal is held back by the converted backlash threshold',
 		async () => {
 			const harness = await calibrateAndGuide()
