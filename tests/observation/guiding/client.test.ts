@@ -1543,6 +1543,30 @@ describe('closed-loop calibration and guiding', () => {
 	)
 
 	test.concurrent(
+		'a correction pulse reduces the error on the next frame',
+		async () => {
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
+
+			harness.mount.offsetX += RA_AXIS[0] * 3
+			harness.mount.offsetY += RA_AXIS[1] * 3
+
+			const distances: number[] = []
+			for (let i = 0; i < 8; i++) {
+				await feedFrame(harness)
+				const step = eventsOf(harness.events, 'GuideStep').at(-1)!
+				distances.push(Math.hypot(step.dx, step.dy))
+			}
+
+			expect(distances[0]).toBeGreaterThan(1.5)
+			expect(distances[1]).toBeLessThan(distances[0])
+			expect(distances.at(-1)!).toBeLessThan(distances[0])
+			expect(harness.client.getAppState()).toBe('Guiding')
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
 		'lock averaging issues no correction pulses',
 		async () => {
 			const harness = await calibrateAndGuide()
