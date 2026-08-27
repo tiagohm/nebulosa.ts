@@ -2136,4 +2136,34 @@ describe('closed-loop calibration and guiding', () => {
 		},
 		CLOSED_LOOP_TIMEOUT,
 	)
+
+	test.concurrent(
+		'loop during guiding stops pulses and keeps the exposure loop',
+		async () => {
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
+
+			harness.mount.driftX = RA_AXIS[0] * 0.8
+			harness.mount.driftY = RA_AXIS[1] * 0.8
+			for (let i = 0; i < 4; i++) await feedFrame(harness)
+			const pulsesWhileGuiding = harness.guideOutputManager.pulses.length
+			expect(pulsesWhileGuiding).toBeGreaterThan(0)
+
+			const exposuresBefore = harness.cameraManager.startExposureCalls.length
+			expect(harness.client.loop()).toBeTrue()
+			expect(harness.client.getAppState()).toBe('Selected')
+			expect(harness.client.getCalibrated()).toBeTrue()
+			expect(harness.cameraManager.startExposureCalls.length).toBe(exposuresBefore)
+
+			const pulsesAfterLoop = harness.guideOutputManager.pulses.length
+			const stepsAfterLoop = eventsOf(harness.events, 'GuideStep').length
+			for (let i = 0; i < 4; i++) await feedFrame(harness)
+
+			expect(harness.guideOutputManager.pulses.length).toBe(pulsesAfterLoop)
+			expect(eventsOf(harness.events, 'GuideStep')).toHaveLength(stepsAfterLoop)
+			expect(harness.cameraManager.startExposureCalls.length).toBeGreaterThan(exposuresBefore)
+			expect(eventsOf(harness.events, 'LoopingExposures').length).toBeGreaterThan(0)
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
 })
