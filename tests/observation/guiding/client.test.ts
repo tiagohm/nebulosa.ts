@@ -528,6 +528,17 @@ describe('capture control', () => {
 		expect(eventsOf(harness.events, 'LoopingExposuresStopped')).toHaveLength(0)
 	})
 
+	test('a repeated stopCapture during guiding emits each stop event only once', () => {
+		connect(harness)
+		harness.client.guide()
+		expect(harness.client.stopCapture()).toBeTrue()
+		expect(harness.client.stopCapture()).toBeTrue()
+
+		expect(harness.client.getAppState()).toBe('Stopped')
+		expect(eventsOf(harness.events, 'GuidingStopped')).toHaveLength(1)
+		expect(eventsOf(harness.events, 'LoopingExposuresStopped')).toHaveLength(1)
+	})
+
 	test('stopCapture during settle emits SettleDone with an error', () => {
 		connect(harness)
 		harness.client.guide()
