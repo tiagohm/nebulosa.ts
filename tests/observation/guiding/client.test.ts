@@ -1057,6 +1057,41 @@ describe('frame-driven behavior', () => {
 		harness.client.stopCapture()
 	})
 
+	test('findStar prefers an isolated interior star over a brighter edge star', async () => {
+		connect(harness)
+		harness.client.loop()
+		// The edge star is brighter, but still inside the 10 px border margin so the filter keeps it.
+		// Selection score weights centrality and isolation above a modest flux advantage.
+		await feedBuffer(
+			harness,
+			await buildFrameBufferAt([
+				[18, 18, STAR_FLUX * 1.4],
+				[120, 120, STAR_FLUX],
+			]),
+		)
+
+		const lock = harness.client.findStar()
+		expect(lock).toBeDefined()
+		expect(lock![0]).toBeCloseTo(120, 0)
+		expect(lock![1]).toBeCloseTo(120, 0)
+		expect(harness.client.getAppState()).toBe('Selected')
+		harness.client.stopCapture()
+	})
+
+	test('findStar rejects a double star instead of promoting either component', async () => {
+		connect(harness)
+		harness.client.loop()
+		// 8 px is below the 12 px neighbor-distance floor, so both detections are double_star.
+		await feedBuffer(harness, await buildFrameBufferAt([[120, 120], [128, 120]]))
+
+		expect(harness.client.findStar()).toBeUndefined()
+		expect(harness.client.getLockPosition()).toBeUndefined()
+		expect(harness.client.getAppState()).toBe('Looping')
+		expect(eventsOf(harness.events, 'StarSelected')).toBeEmpty()
+		expect(eventsOf(harness.events, 'LockPositionSet')).toBeEmpty()
+		harness.client.stopCapture()
+	})
+
 	test('getStarImage crops a square ROI sized by the search region', async () => {
 		connect(harness)
 		harness.client.loop()
