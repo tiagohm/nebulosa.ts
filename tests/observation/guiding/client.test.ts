@@ -2684,14 +2684,16 @@ describe('closed-loop calibration and guiding', () => {
 			const harness = await calibrateAndGuide()
 			await establishLockReference(harness)
 
-			harness.mount.offsetX += RA_AXIS[0] * 4 + DEC_AXIS[0] * 2
-			harness.mount.offsetY += RA_AXIS[1] * 4 + DEC_AXIS[1] * 2
+			harness.mount.offsetX += RA_AXIS[0] * 8 + DEC_AXIS[0] * 8
+			harness.mount.offsetY += RA_AXIS[1] * 8 + DEC_AXIS[1] * 8
 
 			let pulseAt = 0
-			const originalPulse = harness.guideOutputManager.pulse.bind(harness.guideOutputManager)
-			harness.guideOutputManager.pulse = (device, direction, duration) => {
+			// Record both axis commands without reporting Busy. The Idle wait would finish at
+			// max(RA, DEC) either way; without Busy the client waits the commanded delay plus the
+			// 250 ms acknowledgement margin, which is max versus sum.
+			harness.guideOutputManager.pulse = (_device, direction, duration) => {
 				if (pulseAt === 0) pulseAt = performance.now()
-				originalPulse(device, direction, duration)
+				harness.guideOutputManager.pulses.push({ direction, duration })
 			}
 
 			let exposureAt = 0
@@ -2719,8 +2721,9 @@ describe('closed-loop calibration and guiding', () => {
 
 			expect(pulseAt).toBeGreaterThan(0)
 			expect(exposureAt).toBeGreaterThan(pulseAt)
-			expect(exposureAt - pulseAt).toBeGreaterThanOrEqual(maxDuration)
-			expect(exposureAt - pulseAt).toBeLessThan(sumDuration)
+			const wait = exposureAt - pulseAt
+			const ackMargin = 250
+			expect(Math.abs(wait - (maxDuration + ackMargin))).toBeLessThan(Math.abs(wait - (sumDuration + ackMargin)))
 			expect(harness.guideOutput.pulsing).toBeFalse()
 		},
 		CLOSED_LOOP_TIMEOUT,
