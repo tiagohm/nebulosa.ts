@@ -4227,6 +4227,52 @@ describe('closed-loop calibration and guiding', () => {
 	)
 
 	test.concurrent(
+		'loop during guiding fails settle and drops dither and lock-shift offsets',
+		async () => {
+			const harness = await calibrateAndGuide({ ditherMode: 'spiral' })
+			await establishLockReference(harness)
+
+			expect(harness.client.setLockShiftParams({ rate: [36000, 0], axes: 'X/Y' })).toBeTrue()
+			expect(harness.client.setLockShiftEnabled(true)).toBeTrue()
+			await Bun.sleep(400)
+			await feedFrame(harness)
+			const shifted = harness.client.getLockPosition()!
+
+			expect(harness.client.dither(DITHER_AMOUNT_PX, false, IMMEDIATE_SETTLE)).toBeTrue()
+			expect(harness.client.getSettling()).toBeTrue()
+			const dithered = harness.client.getLockPosition()!
+			expect(Math.hypot(dithered[0] - shifted[0], dithered[1] - shifted[1])).toBeCloseTo(DITHER_AMOUNT_PX, 5)
+
+			expect(harness.client.loop()).toBeTrue()
+			expect(harness.client.getAppState()).toBe('Selected')
+			expect(harness.client.getSettling()).toBeFalse()
+			const done = eventsOf(harness.events, 'SettleDone').at(-1)!
+			expect(done.Status).not.toBe(0)
+			expect(done.Error).toBe('looping started')
+
+			const pulsesAfterLoop = harness.guideOutputManager.pulses.length
+			for (let i = 0; i < 3; i++) await feedFrame(harness)
+			expect(harness.guideOutputManager.pulses.length).toBe(pulsesAfterLoop)
+
+			expect(harness.client.guide(false, IMMEDIATE_SETTLE)).toBeTrue()
+			expect(harness.client.getAppState()).toBe('Guiding')
+			expect(harness.client.getCalibrated()).toBeTrue()
+			await establishLockReference(harness)
+
+			const after = harness.client.getLockPosition()!
+			expect(Math.hypot(after[0] - dithered[0], after[1] - dithered[1])).toBeGreaterThan(1)
+			const pulsesBefore = harness.guideOutputManager.pulses.length
+			const stepsBefore = eventsOf(harness.events, 'GuideStep').length
+			await feedFrame(harness)
+			const step = eventsOf(harness.events, 'GuideStep').at(-1)!
+			expect(eventsOf(harness.events, 'GuideStep').length).toBe(stepsBefore + 1)
+			expect(Math.hypot(step.dx, step.dy)).toBeLessThan(2)
+			expect(harness.guideOutputManager.pulses.slice(pulsesBefore).every((pulse) => pulse.duration < 80)).toBeTrue()
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
 		'stop and disconnect leave no pending capture or pulse work',
 		async () => {
 			const harness = await calibrateAndGuide()
