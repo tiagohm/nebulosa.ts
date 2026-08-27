@@ -1992,6 +1992,35 @@ describe('closed-loop calibration and guiding', () => {
 	)
 
 	test.concurrent(
+		'equal and opposite RA errors produce opposite pulses',
+		async () => {
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
+			const originX = harness.mount.offsetX
+			const originY = harness.mount.offsetY
+
+			harness.mount.offsetX = originX + RA_AXIS[0] * 3
+			harness.mount.offsetY = originY + RA_AXIS[1] * 3
+			const fromPos = harness.guideOutputManager.pulses.length
+			await feedFrame(harness)
+			const posRA = harness.guideOutputManager.pulses.slice(fromPos).filter((pulse) => pulse.direction === 'WEST' || pulse.direction === 'EAST')
+			expect(posRA.length).toBeGreaterThan(0)
+			expect(posRA[0].duration).toBeGreaterThan(0)
+
+			harness.mount.offsetX = originX - RA_AXIS[0] * 3
+			harness.mount.offsetY = originY - RA_AXIS[1] * 3
+			const fromNeg = harness.guideOutputManager.pulses.length
+			await feedFrame(harness)
+			const negRA = harness.guideOutputManager.pulses.slice(fromNeg).filter((pulse) => pulse.direction === 'WEST' || pulse.direction === 'EAST')
+			expect(negRA.length).toBeGreaterThan(0)
+			expect(negRA[0].duration).toBeGreaterThan(0)
+			expect(negRA[0].direction).not.toBe(posRA[0].direction)
+			expect(harness.client.getAppState()).toBe('Guiding')
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
 		'recalibrating clears the previous solution before the new run',
 		async () => {
 			const harness = await calibrateAndGuide()
