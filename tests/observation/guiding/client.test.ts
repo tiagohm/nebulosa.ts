@@ -2138,6 +2138,35 @@ describe('closed-loop calibration and guiding', () => {
 	)
 
 	test.concurrent(
+		'disconnect during guiding issues no further pulses',
+		async () => {
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
+
+			harness.mount.driftX = RA_AXIS[0] * 0.8
+			harness.mount.driftY = RA_AXIS[1] * 0.8
+			for (let i = 0; i < 3; i++) await feedFrame(harness)
+			expect(harness.guideOutputManager.pulses.length).toBeGreaterThan(0)
+
+			const handler = harness.cameraManager.handler
+			const camera = harness.camera
+			const pulsesBefore = harness.guideOutputManager.pulses.length
+			const exposuresBefore = harness.cameraManager.startExposureCalls.length
+
+			expect(harness.client.disconnect()).toBeTrue()
+			expect(harness.client.getAppState()).toBe('Stopped')
+			expect(harness.client.getCalibrated()).toBeFalse()
+
+			await handler!.blobReceived!(camera, FRAME_BUFFER, 'raw')
+			await Bun.sleep(30)
+
+			expect(harness.guideOutputManager.pulses.length).toBe(pulsesBefore)
+			expect(harness.cameraManager.startExposureCalls.length).toBe(exposuresBefore)
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
 		'loop during guiding stops pulses and keeps the exposure loop',
 		async () => {
 			const harness = await calibrateAndGuide()
