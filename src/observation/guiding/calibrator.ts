@@ -2,7 +2,7 @@ import { DEG2RAD, PIOVERTWO } from '../../core/constants'
 import type { Point } from '../../math/numerical/geometry'
 import { clamp } from '../../math/numerical/math'
 import type { Angle } from '../../math/units/angle'
-import { type AxisPulse, type CalibrationMatrix, DEFAULT_GUIDER_CONFIG, type FilteredStars, filterGuideStars, type GuideDirectionDEC, type GuideDirectionRA, type GuideFrame, type GuideStar, NO_PULSE, oppositeDEC, oppositeRA, type StarFilterConfig } from './guider'
+import { type AxisPulse, type CalibrationMatrix, DEFAULT_GUIDER_CONFIG, type FilteredStars, filterQualityGuideStars, type GuideDirectionDEC, type GuideDirectionRA, type GuideFrame, type GuideStar, NO_PULSE, oppositeDEC, oppositeRA, type StarFilterConfig } from './guider'
 
 // Frame-by-frame autoguider calibration. The GuidingCalibrator state machine issues RA and DEC pulses,
 // tracks the resulting star displacement across frames, and solves the image-motion and inverse
@@ -82,11 +82,14 @@ export interface GuidingCalibrationConfig {
 	readonly minAxisSeparation: Angle
 	// Minimum acceptable image-motion matrix determinant.
 	readonly minDeterminant: number
-	// Maximum nearest-star match distance during tracking, in pixels.
+	// Maximum nearest-star match distance during tracking, in pixels. Tracking actually uses
+	// max(maxMatchDistancePx, maxFrameJumpPx) so a jump that exceeds the jump threshold can still
+	// be classified as `impossible_jump` instead of a lost star.
 	readonly maxMatchDistancePx: number
 	// Edge exclusion margin, in pixels.
 	readonly edgeMarginPx: number
-	// Minimum acceptable frame quality in [0, 1].
+	// Minimum acceptable frame quality in [0, 1]. When the frame carries a search window, the
+	// score is accepted/total among detections inside that box, not across the whole sensor.
 	readonly minFrameQuality: number
 	// Minimum accepted axis rate, in pixels per millisecond.
 	readonly minRatePxPerMs: number
@@ -538,7 +541,7 @@ export class GuidingCalibrator {
 	#acquireInitialStar(frame: GuideFrame) {
 		this.#transitionTo('acquireLock')
 
-		const filtered = filterGuideStars(frame, this.config.filter)
+		const filtered = filterQualityGuideStars(frame, this.config.filter)
 
 		if (filtered.accepted.length === 0 || filtered.qualityScore < this.config.minFrameQuality) {
 			return this.#fail('no_usable_star', 'no usable guide star available for calibration start', frame, ['precheck_failed'], filtered)
@@ -565,7 +568,7 @@ export class GuidingCalibrator {
 
 	// Tracks the current guide star and rejects invalid measurement frames.
 	#trackStar(frame: GuideFrame) {
-		const filtered = filterGuideStars(frame, this.config.filter)
+		const filtered = filterQualityGuideStars(frame, this.config.filter)
 
 		if (filtered.accepted.length === 0 || filtered.qualityScore < this.config.minFrameQuality) {
 			this.state.badFrames++
@@ -577,9 +580,17 @@ export class GuidingCalibrator {
 			return { failure: this.#makeStepResult(undefined, frame, ['bad_frame'], filtered) } as const
 		}
 
-		const tracked = pickNearestCalibrationStar(filtered.accepted, this.state.lastX, this.state.lastY, this.config.maxMatchDistancePx)
+		// Match at least as far as the jump threshold so a displacement that should fail as
+		// `impossible_jump` is not reported as a lost star because the match radius was tighter.
+		const matchRadius = Math.max(this.config.maxMatchDistancePx, this.config.maxFrameJumpPx)
+		const tracked = pickNearestCalibrationStar(filtered.accepted, this.state.lastX, this.state.lastY, matchRadius)
 
 		if (tracked === undefined) {
+			const nearest = pickNearestCalibrationStar(filtered.accepted, this.state.lastX, this.state.lastY, Number.POSITIVE_INFINITY)
+			if (nearest !== undefined) {
+				return { failure: this.#fail('impossible_jump', 'measured star displacement exceeded the allowed frame jump threshold', frame, ['jump_rejected'], filtered) } as const
+			}
+
 			return { failure: this.#fail('star_lost', 'guide star could not be matched in the calibration frame', frame, ['star_lost'], filtered) } as const
 		}
 
@@ -840,7 +851,7 @@ export class GuidingCalibrator {
 	}
 
 	// Queues the next pulse and returns the step result the caller should execute.
-	#queuePulse(phase: GuidingCalibrationPhase, axis: 'ra' | 'dec', direction: GuideDirectionRA | GuideDirectionDEC, duration: number, frame: GuideFrame, notes: readonly string[], filtered = filterGuideStars(frame, this.config.filter)) {
+	#queuePulse(phase: GuidingCalibrationPhase, axis: 'ra' | 'dec', direction: GuideDirectionRA | GuideDirectionDEC, duration: number, frame: GuideFrame, notes: readonly string[], filtered = filterQualityGuideStars(frame, this.config.filter)) {
 		this.#transitionTo(phase)
 		this.state.pendingPulseAxis = axis
 		this.state.pendingPulseDirection = direction
@@ -852,7 +863,7 @@ export class GuidingCalibrator {
 	}
 
 	// Fails calibration with a structured reason and snapshot diagnostics.
-	#fail(code: GuidingCalibrationFailureCode, message: string, frame: GuideFrame, notes: readonly string[], filtered = filterGuideStars(frame, this.config.filter)) {
+	#fail(code: GuidingCalibrationFailureCode, message: string, frame: GuideFrame, notes: readonly string[], filtered = filterQualityGuideStars(frame, this.config.filter)) {
 		this.state.failure = { code, phase: this.state.phase, message, frameId: frame.frameId }
 		this.#transitionTo('failed')
 		this.#updateDiagnostics(frame, filtered, notes)
@@ -897,7 +908,7 @@ export class GuidingCalibrator {
 	}
 
 	// Converts internal state into the public step result payload.
-	#makeStepResult(pulse: CalibrationPulseCommand | undefined, frame: GuideFrame, notes: readonly string[], filtered = filterGuideStars(frame, this.config.filter)): CalibrationStepResult {
+	#makeStepResult(pulse: CalibrationPulseCommand | undefined, frame: GuideFrame, notes: readonly string[], filtered = filterQualityGuideStars(frame, this.config.filter)): CalibrationStepResult {
 		if (this.state.lastDiagnostics.phase !== this.state.phase || this.state.lastDiagnostics.frameId !== frame.frameId) {
 			this.#updateDiagnostics(frame, filtered, notes, pulse)
 		}
