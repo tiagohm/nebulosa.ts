@@ -372,9 +372,10 @@ export class GuiderClient {
 		return true
 	}
 
-	// Stops camera exposure and clears active guiding/looping state.
+	// Stops camera exposure and clears active guiding/looping state. A pending one-shot exposure
+	// started while already Stopped is still aborted and released, without emitting stop events.
 	stopCapture() {
-		if (this.#appState === 'Stopped') return true
+		if (this.#appState === 'Stopped' && !this.#awaitingBlob) return true
 
 		if (this.#guidingAssistant !== undefined) {
 			this.#finishGuidingAssistant(false, 'capture stopped', this.#guidingAssistant.measuringBacklash)

@@ -594,6 +594,21 @@ describe('capture control', () => {
 		expect(harness.client.getAppState()).toBe('Stopped')
 	}, 15000)
 
+	test('stopCapture releases an outstanding one-shot exposure from Stopped', () => {
+		connect(harness)
+		expect(harness.client.startExposureLoop(1000)).toBeTrue()
+		const stopsBefore = harness.cameraManager.stopExposureCount
+
+		expect(harness.client.stopCapture()).toBeTrue()
+		expect(harness.cameraManager.stopExposureCount).toBe(stopsBefore + 1)
+		expect(eventsOf(harness.events, 'GuidingStopped')).toBeEmpty()
+		expect(eventsOf(harness.events, 'LoopingExposuresStopped')).toBeEmpty()
+
+		expect(harness.client.startExposureLoop(2000)).toBeTrue()
+		expect(harness.cameraManager.startExposureCalls).toEqual([1, 2])
+		harness.client.disconnect()
+	})
+
 	test('stopCapture stops exposures, returns to Stopped and emits the looping stop', () => {
 		connect(harness)
 		harness.client.loop()
