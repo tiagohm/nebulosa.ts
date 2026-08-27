@@ -1494,6 +1494,28 @@ describe('closed-loop calibration and guiding', () => {
 	)
 
 	test.concurrent(
+		'a settled lock with a stationary mount issues no useful pulse',
+		async () => {
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
+
+			const pulsesBefore = harness.guideOutputManager.pulses.length
+			for (let i = 0; i < 4; i++) await feedFrame(harness)
+
+			const steps = eventsOf(harness.events, 'GuideStep').slice(-4)
+			expect(steps).toHaveLength(4)
+			for (const step of steps) {
+				expect(step.RADuration).toBe(0)
+				expect(step.DECDuration).toBe(0)
+				expect(Math.hypot(step.dx, step.dy)).toBeLessThan(1)
+			}
+			expect(harness.guideOutputManager.pulses.length).toBe(pulsesBefore)
+			expect(harness.client.getAppState()).toBe('Guiding')
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
 		'a small RA shift reports image error with matching magnitude and sign',
 		async () => {
 			const harness = await calibrateAndGuide()
