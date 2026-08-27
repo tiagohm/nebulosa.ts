@@ -1052,6 +1052,21 @@ describe('frame processing robustness', () => {
 		throw new Error('expected looping exposures were not emitted in time')
 	}
 
+	test('ignores a BLOB from a camera that is not the bound device', async () => {
+		connect(harness)
+		harness.client.loop()
+		const handler = harness.cameraManager.handler!
+		const other = makeCamera({ id: 'camera-other', name: 'Other Camera' })
+
+		handler.blobReceived!(other, FRAME_BUFFER, 'raw')
+		await Bun.sleep(30)
+
+		expect(eventsOf(harness.events, 'LoopingExposures')).toHaveLength(0)
+		expect(harness.client.getStarImage()).toBeUndefined()
+		expect(harness.guideOutputManager.pulses).toHaveLength(0)
+		harness.client.stopCapture()
+	})
+
 	test('drops a concurrent BLOB while a previous frame is still being processed', async () => {
 		connect(harness)
 		harness.client.loop()
