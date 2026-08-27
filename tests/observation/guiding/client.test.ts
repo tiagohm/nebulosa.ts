@@ -427,6 +427,7 @@ describe('construction', () => {
 describe('connect / disconnect', () => {
 	test('binds devices, enables blobs and registers a handler', () => {
 		expect(connect(harness)).toBeTrue()
+		expect(harness.client.id).toBeDefined()
 		expect(harness.cameraManager.blobEnabled).toBeTrue()
 		expect(harness.cameraManager.handler).toBeDefined()
 		expect(harness.client.getConnected()).toBeTrue()

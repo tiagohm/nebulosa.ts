@@ -439,11 +439,31 @@ export class PHD2Client implements Disposable {
 	readonly #commands = new Map<string, PendingPHD2Command<unknown>>()
 	#socket?: Bun.Socket
 	#buffer?: Buffer
+	#id?: string
 
 	constructor(readonly options?: PHD2ClientOptions) {}
 
-	// Connects to the PHD2 server, wiring socket events into the line parser. Returns false if already
-	// connected.
+	get remoteAddress() {
+		return this.#socket?.remoteAddress
+	}
+
+	get remotePort() {
+		return this.#socket?.remotePort
+	}
+
+	get localAddress() {
+		return this.#socket?.localAddress
+	}
+
+	get localPort() {
+		return this.#socket?.localPort
+	}
+
+	get id() {
+		return this.#id
+	}
+
+	// Connects to the PHD2 server, wiring socket events into the line parser. Returns false if already connected.
 	async connect(hostname: string, port: number = DEFAULT_PHD2_PORT) {
 		if (this.#socket) return false
 
@@ -467,6 +487,8 @@ export class PHD2Client implements Disposable {
 				},
 			},
 		})
+
+		this.#id = Bun.MD5.hash(`PHD2:${this.remoteAddress}:${this.remotePort}`, 'hex')
 
 		return true
 	}

@@ -150,6 +150,7 @@ export class GuiderClient {
 	#connected = false
 	#camera?: Camera
 	#guideOutput?: GuideOutput
+	#id?: string
 	readonly #calibrator: GuidingCalibrator
 	#calibration?: GuidingCalibrationResult
 	#frame?: GuideFrame
@@ -273,6 +274,10 @@ export class GuiderClient {
 		return this.#guideOutput
 	}
 
+	get id() {
+		return this.#id
+	}
+
 	attachHandler() {
 		this.cameraManager.addHandler(this.#cameraHandler)
 	}
@@ -293,6 +298,7 @@ export class GuiderClient {
 		this.attachHandler()
 		this.cameraManager.enableBlob(camera)
 		this.#resetRuntimeState(true)
+		this.#id = Bun.MD5.hash(`GUIDER_CLIENT:${camera.id}:${guideOutput.id}`, 'hex')
 		// PHD2 greets a newly connected client with Version followed by the current AppState. AppState
 		// is only sent here: afterwards clients track state through the individual lifecycle events.
 		this.emitEvent('Version', { PHDVersion: PHD2_VERSION, PHDSubver: PHD2_SUBVER, MsgVersion: PHD2_MSG_VERSION, OverlapSupport: PHD2_OVERLAP_SUPPORT })
