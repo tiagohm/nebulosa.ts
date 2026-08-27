@@ -3702,6 +3702,29 @@ describe('closed-loop calibration and guiding', () => {
 	)
 
 	test.concurrent(
+		'lock-shift does not accumulate elapsed time while paused',
+		async () => {
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
+
+			expect(harness.client.setLockShiftParams({ rate: [36000, 0], axes: 'X/Y' })).toBeTrue()
+			expect(harness.client.setLockShiftEnabled(true)).toBeTrue()
+			await feedFrame(harness)
+			const lock0 = harness.client.getLockPosition()!
+
+			expect(harness.client.setPaused(true, false)).toBeTrue()
+			await Bun.sleep(500)
+			expect(harness.client.setPaused(false)).toBeTrue()
+			await feedFrame(harness)
+
+			const lock1 = harness.client.getLockPosition()!
+			expect(Math.hypot(lock1[0] - lock0[0], lock1[1] - lock0[1])).toBeLessThan(1.5)
+			expect(harness.client.getAppState()).toBe('Guiding')
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
 		'a second dither before settle accumulates onto the same lock',
 		async () => {
 			const harness = await calibrateAndGuide()
