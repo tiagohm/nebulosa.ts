@@ -2043,6 +2043,31 @@ describe('closed-loop calibration and guiding', () => {
 	)
 
 	test.concurrent(
+		'changing the declination mode does not drop the lock',
+		async () => {
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
+			const lock = harness.client.getLockPosition()!
+
+			harness.client.setDeclinationGuideMode('Off')
+			expect(harness.client.getDeclinationGuideMode()).toBe('Off')
+			expect(harness.client.getLockPosition()![0]).toBeCloseTo(lock[0], 6)
+			expect(harness.client.getLockPosition()![1]).toBeCloseTo(lock[1], 6)
+
+			harness.client.setDeclinationGuideMode('North')
+			harness.client.setDeclinationGuideMode('Auto')
+			expect(harness.client.getLockPosition()![0]).toBeCloseTo(lock[0], 6)
+			expect(harness.client.getLockPosition()![1]).toBeCloseTo(lock[1], 6)
+			expect(harness.client.getAppState()).toBe('Guiding')
+
+			await feedFrame(harness)
+			expect(harness.client.getAppState()).toBe('Guiding')
+			expect(eventsOf(harness.events, 'StarLost')).toBeEmpty()
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
 		'a modest DEC reversal is held back by the converted backlash threshold',
 		async () => {
 			const harness = await calibrateAndGuide()
