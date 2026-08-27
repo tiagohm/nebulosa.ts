@@ -1082,7 +1082,13 @@ describe('frame-driven behavior', () => {
 		connect(harness)
 		harness.client.loop()
 		// 8 px is below the 12 px neighbor-distance floor, so both detections are double_star.
-		await feedBuffer(harness, await buildFrameBufferAt([[120, 120], [128, 120]]))
+		await feedBuffer(
+			harness,
+			await buildFrameBufferAt([
+				[120, 120],
+				[128, 120],
+			]),
+		)
 
 		expect(harness.client.findStar()).toBeUndefined()
 		expect(harness.client.getLockPosition()).toBeUndefined()
@@ -1483,6 +1489,33 @@ describe('closed-loop calibration and guiding', () => {
 			expect(eventsOf(harness.events, 'CalibrationComplete')).toHaveLength(1)
 			expect(eventsOf(harness.events, 'StartGuiding')).toHaveLength(1)
 			expect(harness.client.getAppState()).toBe('Guiding')
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
+		'subpixel lock and motion preserve magnitude and sign',
+		async () => {
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
+
+			const lock = harness.client.getLockPosition()!
+			expect(Number.isFinite(lock[0])).toBeTrue()
+			expect(Number.isFinite(lock[1])).toBeTrue()
+			expect(lock[0]).toBeCloseTo(STAR_A[0] + harness.mount.offsetX, 1)
+			expect(lock[1]).toBeCloseTo(STAR_A[1] + harness.mount.offsetY, 1)
+
+			const shift = 0.5
+			harness.mount.offsetX += RA_AXIS[0] * shift
+			harness.mount.offsetY += RA_AXIS[1] * shift
+			await feedFrame(harness)
+
+			const step = eventsOf(harness.events, 'GuideStep').at(-1)!
+			expect(step.dx).toBeCloseTo(RA_AXIS[0] * shift, 1)
+			expect(step.dy).toBeCloseTo(RA_AXIS[1] * shift, 1)
+			expect(Math.hypot(step.dx, step.dy)).toBeCloseTo(shift, 1)
+			expect(Math.sign(step.dx) || 1).toBe(Math.sign(RA_AXIS[0]) || 1)
+			expect(Math.sign(step.dy) || 1).toBe(Math.sign(RA_AXIS[1]) || 1)
 		},
 		CLOSED_LOOP_TIMEOUT,
 	)
