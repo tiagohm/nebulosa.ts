@@ -2306,6 +2306,32 @@ describe('closed-loop calibration and guiding', () => {
 	)
 
 	test.concurrent(
+		'setLockPosition during guiding re-averages the lock without a reference-change pulse',
+		async () => {
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
+
+			const lock = harness.client.getLockPosition()!
+			const pulsesBefore = harness.guideOutputManager.pulses.length
+			const stepsBefore = eventsOf(harness.events, 'GuideStep').length
+			expect(harness.client.setLockPosition(lock[0] + 3, lock[1], true)).toBeTrue()
+			expect(harness.client.getAppState()).toBe('Guiding')
+			expect(harness.guideOutputManager.pulses.length).toBe(pulsesBefore)
+
+			for (let i = 0; i < 5; i++) await feedFrame(harness)
+
+			const steps = eventsOf(harness.events, 'GuideStep').slice(stepsBefore)
+			expect(steps.length).toBe(5)
+			for (const step of steps) {
+				expect(step.RADuration).toBe(0)
+				expect(step.DECDuration).toBe(0)
+			}
+			expect(harness.guideOutputManager.pulses.length).toBe(pulsesBefore)
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
 		'stars outside the search box remain available for multi-star measurement',
 		async () => {
 			const frames: GuideFrameImage[] = []
