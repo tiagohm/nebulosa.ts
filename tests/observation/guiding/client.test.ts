@@ -539,6 +539,24 @@ describe('capture control', () => {
 		expect(eventsOf(harness.events, 'LoopingExposuresStopped')).toHaveLength(1)
 	})
 
+	test('a late BLOB after stopCapture issues no pulse and starts no exposure', async () => {
+		connect(harness)
+		harness.client.guide()
+		const handler = harness.cameraManager.handler!
+		const exposuresBefore = harness.cameraManager.startExposureCalls.length
+
+		expect(harness.client.stopCapture()).toBeTrue()
+		expect(harness.client.getAppState()).toBe('Stopped')
+
+		await handler.blobReceived!(harness.camera, FRAME_BUFFER, 'raw')
+		await Bun.sleep(30)
+
+		expect(harness.guideOutputManager.pulses).toHaveLength(0)
+		expect(harness.cameraManager.startExposureCalls.length).toBe(exposuresBefore)
+		expect(eventsOf(harness.events, 'GuideStep')).toHaveLength(0)
+		expect(eventsOf(harness.events, 'Calibrating')).toHaveLength(0)
+	})
+
 	test('stopCapture during settle emits SettleDone with an error', () => {
 		connect(harness)
 		harness.client.guide()
