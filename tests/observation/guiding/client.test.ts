@@ -104,6 +104,7 @@ class FakeGuideOutputManager {
 // Star centers (image pixels) plotted into the synthetic guide frame at zero mount offset.
 const STAR_A = [70, 70] as const
 const STAR_B = [165, 150] as const
+const STAR_C = [200, 70] as const
 const FRAME_WIDTH = 240
 const FRAME_HEIGHT = 240
 
@@ -348,6 +349,17 @@ async function feedFrame(harness: Harness) {
 async function feedEmptyFrame(harness: Harness) {
 	harness.mount.advance(harness.guideOutputManager.pulses)
 	return await feedBuffer(harness, await buildFrameBuffer(0, 0, false))
+}
+
+// Feeds a frame with explicit star centers, shifted by the current mount offset so closed-loop
+// tests can use a three-star field without changing the default two-star geometry.
+async function feedStars(harness: Harness, stars: readonly (readonly [number, number] | readonly [number, number, number])[]) {
+	harness.mount.advance(harness.guideOutputManager.pulses)
+	const shifted = stars.map((star) => {
+		const [x, y, flux = STAR_FLUX] = star
+		return [x + harness.mount.offsetX, y + harness.mount.offsetY, flux] as const
+	})
+	return await feedBuffer(harness, await buildFrameBufferAt(shifted))
 }
 
 // Returns all recorded events of one type.
@@ -2809,6 +2821,43 @@ describe('closed-loop calibration and guiding', () => {
 			expect(Math.hypot(step.dx, step.dy)).toBeGreaterThan(shift - 1.5)
 			expect(Math.hypot(step.dx, step.dy)).toBeLessThan(shift + 1.5)
 			expect(step.dx).toBeGreaterThan(shift - 1.5)
+			expect(harness.client.getAppState()).toBe('Guiding')
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
+		'a multi-star outlier does not dominate the translation',
+		async () => {
+			const threeStars = [STAR_A, STAR_B, STAR_C] as const
+			const harness = makeHarness({ calibrator: FAST_CALIBRATION })
+			connect(harness)
+			harness.client.loop()
+			await feedStars(harness, threeStars)
+			expect(harness.client.guide(false, IMMEDIATE_SETTLE)).toBeTrue()
+
+			for (let i = 0; i < MAX_CALIBRATION_FRAMES; i++) {
+				await feedStars(harness, threeStars)
+				if (harness.client.getCalibrated()) break
+			}
+
+			expect(harness.client.getCalibrated()).toBeTrue()
+			for (let i = 0; i < LOCK_AVERAGING_FRAMES; i++) await feedStars(harness, threeStars)
+
+			harness.client.setGuideOutputEnabled(false)
+			// 8 px exceeds maxMatchDistancePx, so the jumper is dropped from the match set
+			// instead of pulling the common translation.
+			const outlier = [
+				[STAR_A[0], STAR_A[1]],
+				[STAR_B[0] + 8, STAR_B[1]],
+				[STAR_C[0], STAR_C[1]],
+			] as const
+			await feedStars(harness, outlier)
+
+			const step = eventsOf(harness.events, 'GuideStep').at(-1)!
+			expect(Math.hypot(step.dx, step.dy)).toBeLessThan(2)
+			expect(step.RADuration).toBe(0)
+			expect(step.DECDuration).toBe(0)
 			expect(harness.client.getAppState()).toBe('Guiding')
 		},
 		CLOSED_LOOP_TIMEOUT,
