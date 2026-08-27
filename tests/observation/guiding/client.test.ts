@@ -3725,6 +3725,28 @@ describe('closed-loop calibration and guiding', () => {
 	)
 
 	test.concurrent(
+		'lock-shift does not accumulate while the guiding assistant is active',
+		async () => {
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
+
+			expect(harness.client.setLockShiftParams({ rate: [36000, 0], axes: 'X/Y' })).toBeTrue()
+			expect(harness.client.setLockShiftEnabled(true)).toBeTrue()
+			await feedFrame(harness)
+			expect(harness.client.startGuidingAssistant({ measureBacklash: false })).toBeTrue()
+			const lock0 = harness.client.getLockPosition()!
+
+			await Bun.sleep(400)
+			await feedFrame(harness)
+
+			const lock1 = harness.client.getLockPosition()!
+			expect(Math.hypot(lock1[0] - lock0[0], lock1[1] - lock0[1])).toBeLessThan(1.5)
+			harness.client.stopGuidingAssistant()
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
 		'a second dither before settle accumulates onto the same lock',
 		async () => {
 			const harness = await calibrateAndGuide()
