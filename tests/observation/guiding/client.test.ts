@@ -1565,6 +1565,30 @@ describe('closed-loop calibration and guiding', () => {
 	)
 
 	test.concurrent(
+		'declination mode Off issues no DEC pulse while RA still guides',
+		async () => {
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
+
+			harness.client.setDeclinationGuideMode('Off')
+			expect(harness.client.getDeclinationGuideMode()).toBe('Off')
+			expect(harness.client.getLockPosition()).toBeDefined()
+
+			const from = harness.guideOutputManager.pulses.length
+			harness.mount.driftX = RA_AXIS[0] * 0.8 + DEC_AXIS[0] * 0.8
+			harness.mount.driftY = RA_AXIS[1] * 0.8 + DEC_AXIS[1] * 0.8
+			for (let i = 0; i < 6; i++) await feedFrame(harness)
+
+			const pulses = harness.guideOutputManager.pulses.slice(from)
+			expect(pulses.some((pulse) => pulse.direction === 'WEST' || pulse.direction === 'EAST')).toBeTrue()
+			expect(pulses.some((pulse) => pulse.direction === 'NORTH' || pulse.direction === 'SOUTH')).toBeFalse()
+			expect(harness.client.getAppState()).toBe('Guiding')
+			expect(harness.client.getLockPosition()).toBeDefined()
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
 		'a modest DEC reversal is held back by the converted backlash threshold',
 		async () => {
 			const harness = await calibrateAndGuide()
