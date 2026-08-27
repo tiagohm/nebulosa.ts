@@ -68,36 +68,37 @@ class FakeGuideOutputManager {
 	pulseBusyAckLagMs = 0
 	lastBusyAt = 0
 	lastIdleAt = 0
+	// Wall-clock time until which overlapping pulses keep `device.pulsing` true, so a shorter
+	// second-axis pulse cannot drop Busy while the longer axis is still moving.
+	#busyUntil = 0
+	#idleToken = 0
 
 	pulse(device: GuideOutput, direction: GuideDirection, duration: number) {
 		this.pulses.push({ direction, duration })
 		const ackLag = this.pulseBusyAckLagMs
 		const hold = duration + this.pulseBusyOverhangMs
+		const now = performance.now()
+		const busyDelay = ackLag <= 0 ? 0 : duration + ackLag
+		const idleDelay = ackLag <= 0 ? Math.max(hold, 1) : duration + ackLag + Math.max(this.pulseBusyOverhangMs, 10)
+		this.#busyUntil = Math.max(this.#busyUntil, now + idleDelay)
+		const idleToken = ++this.#idleToken
+		const wait = Math.max(this.#busyUntil - now, 1)
 
-		if (ackLag <= 0) {
+		if (busyDelay <= 0) {
 			device.pulsing = true
-			this.lastBusyAt = performance.now()
-			setTimeout(
-				() => {
-					device.pulsing = false
-					this.lastIdleAt = performance.now()
-				},
-				Math.max(hold, 1),
-			)
-			return
+			this.lastBusyAt = now
+		} else {
+			setTimeout(() => {
+				device.pulsing = true
+				this.lastBusyAt = performance.now()
+			}, busyDelay)
 		}
 
 		setTimeout(() => {
-			device.pulsing = true
-			this.lastBusyAt = performance.now()
-		}, duration + ackLag)
-		setTimeout(
-			() => {
-				device.pulsing = false
-				this.lastIdleAt = performance.now()
-			},
-			duration + ackLag + Math.max(this.pulseBusyOverhangMs, 10),
-		)
+			if (idleToken !== this.#idleToken) return
+			device.pulsing = false
+			this.lastIdleAt = performance.now()
+		}, wait)
 	}
 }
 
@@ -2673,6 +2674,54 @@ describe('closed-loop calibration and guiding', () => {
 			expect(harness.guideOutputManager.pulses.length).toBeGreaterThan(pulsesBefore)
 			expect(harness.guideOutput.pulsing).toBeFalse()
 			expect(performance.now() - started).toBeGreaterThanOrEqual(80)
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
+		'a dual-axis correction waits for the longer pulse, not the sum',
+		async () => {
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
+
+			harness.mount.offsetX += RA_AXIS[0] * 4 + DEC_AXIS[0] * 2
+			harness.mount.offsetY += RA_AXIS[1] * 4 + DEC_AXIS[1] * 2
+
+			let pulseAt = 0
+			const originalPulse = harness.guideOutputManager.pulse.bind(harness.guideOutputManager)
+			harness.guideOutputManager.pulse = (device, direction, duration) => {
+				if (pulseAt === 0) pulseAt = performance.now()
+				originalPulse(device, direction, duration)
+			}
+
+			let exposureAt = 0
+			const originalStart = harness.cameraManager.startExposure.bind(harness.cameraManager)
+			harness.cameraManager.startExposure = (camera, exposure) => {
+				exposureAt = performance.now()
+				originalStart(camera, exposure)
+			}
+
+			const pulsesBefore = harness.guideOutputManager.pulses.length
+			await feedFrame(harness)
+
+			const issued = harness.guideOutputManager.pulses.slice(pulsesBefore)
+			const ra = issued.filter((pulse) => pulse.direction === 'WEST' || pulse.direction === 'EAST')
+			const dec = issued.filter((pulse) => pulse.direction === 'NORTH' || pulse.direction === 'SOUTH')
+			expect(ra.length).toBeGreaterThan(0)
+			expect(dec.length).toBeGreaterThan(0)
+
+			const raDuration = Math.max(...ra.map((pulse) => pulse.duration))
+			const decDuration = Math.max(...dec.map((pulse) => pulse.duration))
+			const maxDuration = Math.max(raDuration, decDuration)
+			const sumDuration = raDuration + decDuration
+			expect(maxDuration).toBeGreaterThan(0)
+			expect(sumDuration).toBeGreaterThan(maxDuration)
+
+			expect(pulseAt).toBeGreaterThan(0)
+			expect(exposureAt).toBeGreaterThan(pulseAt)
+			expect(exposureAt - pulseAt).toBeGreaterThanOrEqual(maxDuration)
+			expect(exposureAt - pulseAt).toBeLessThan(sumDuration)
+			expect(harness.guideOutput.pulsing).toBeFalse()
 		},
 		CLOSED_LOOP_TIMEOUT,
 	)
