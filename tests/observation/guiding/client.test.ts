@@ -1419,6 +1419,49 @@ describe('frame processing robustness', () => {
 		harness.client.stopCapture()
 	}, 15000)
 
+	test('repeated watchdog misses keep out-of-order BLOBs on one capture chain', async () => {
+		connect(harness)
+		harness.client.loop()
+		const startsBefore = harness.cameraManager.startExposureCalls.length
+		const stopsBefore = harness.cameraManager.stopExposureCount
+
+		for (let i = 0; i < 300 && eventsOf(harness.events, 'Alert').length < 2; i++) {
+			await Bun.sleep(50)
+		}
+
+		expect(eventsOf(harness.events, 'Alert').filter((alert) => alert.Type === 'warning' && alert.Msg.includes('timed out'))).toHaveLength(2)
+		expect(harness.cameraManager.startExposureCalls.length).toBe(startsBefore + 2)
+		expect(harness.cameraManager.stopExposureCount).toBe(stopsBefore + 2)
+
+		const handler = harness.cameraManager.handler!
+		const startsAfterRetries = harness.cameraManager.startExposureCalls.length
+		handler.blobReceived!(harness.camera, FRAME_BUFFER, 'raw')
+		await Bun.sleep(30)
+		expect(eventsOf(harness.events, 'LoopingExposures')).toBeEmpty()
+		expect(harness.cameraManager.startExposureCalls.length).toBe(startsAfterRetries)
+
+		handler.blobReceived!(harness.camera, FRAME_BUFFER, 'raw')
+		await waitForLoopingExposures(1)
+		for (let i = 0; i < 100 && harness.cameraManager.startExposureCalls.length === startsAfterRetries; i++) {
+			await Bun.sleep(1)
+		}
+
+		expect(harness.cameraManager.stopExposureCount).toBe(stopsBefore + 3)
+		expect(harness.cameraManager.startExposureCalls.length).toBe(startsAfterRetries + 1)
+
+		const loopingAfterRecovery = eventsOf(harness.events, 'LoopingExposures').length
+		const startsAfterRecovery = harness.cameraManager.startExposureCalls.length
+		handler.blobReceived!(harness.camera, FRAME_BUFFER, 'raw')
+		await Bun.sleep(30)
+		expect(eventsOf(harness.events, 'LoopingExposures')).toHaveLength(loopingAfterRecovery)
+		expect(harness.cameraManager.startExposureCalls.length).toBe(startsAfterRecovery)
+
+		await feedBuffer(harness, FRAME_BUFFER)
+		expect(eventsOf(harness.events, 'LoopingExposures')).toHaveLength(loopingAfterRecovery + 1)
+		expect(harness.cameraManager.startExposureCalls.length).toBe(startsAfterRecovery + 1)
+		harness.client.stopCapture()
+	}, 20000)
+
 	test('a timeout Alert that stops capture does not start a replacement exposure', async () => {
 		const local = makeHarness({
 			handler: {

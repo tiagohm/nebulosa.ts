@@ -930,13 +930,20 @@ export class GuiderClient {
 		// A BLOB that arrives after a missing-BLOB retry may be the timed-out original. The
 		// replacement is already outstanding, so accepting it would process a stale frame and
 		// `finally` would start a second capture chain beside the retry. INDI BLOBs have no
-		// generation id; drop the next BLOB once, then accept later retries in this miss cluster.
+		// generation id; drop the next BLOB once, then accept later retries in this miss cluster. A
+		// later accepted BLOB is still ambiguous, so abort the outstanding replacement before it can
+		// be joined by the next exposure and quarantine any BLOB that the abort may deliver late.
 		if (this.#blobAdmission === 'drop-next') {
 			this.#blobAdmission = 'already-dropped'
 			return
 		}
 
-		this.#blobAdmission = 'accept'
+		if (this.#blobAdmission === 'already-dropped') {
+			this.#blobAdmission = 'drop-next'
+			this.cameraManager.stopExposure(device)
+		} else {
+			this.#blobAdmission = 'accept'
+		}
 
 		// The calibrator and guider are stateful and not reentrant, so a BLOB that arrives while a
 		// previous frame is still being decoded/processed is dropped to avoid interleaved mutation.
@@ -1449,10 +1456,10 @@ export class GuiderClient {
 		this.#exposureWatchdog = undefined
 	}
 
-	// Warns and starts another exposure when the camera never delivered the previous BLOB. The next
-	// BLOB is treated as the timed-out original unless this miss cluster already consumed that slot,
-	// so a delayed original cannot queue a second capture chain beside the retry. The Alert handler
-	// may stop or disconnect synchronously, so the capture state is rechecked before retrying.
+	// Warns, aborts the timed-out camera command, and starts another exposure when no BLOB arrived. The
+	// next BLOB is treated as the timed-out original unless this miss cluster already consumed that
+	// slot, so a delayed original cannot queue a second capture chain beside the retry. The Alert
+	// handler may stop or disconnect synchronously, so the capture state is rechecked before retrying.
 	#onExposureWatchdog() {
 		this.#exposureWatchdog = undefined
 		if (!this.#captureActive) return
@@ -1460,8 +1467,12 @@ export class GuiderClient {
 		this.emitEvent('Alert', { Msg: 'guide exposure timed out; retrying', Type: 'warning' })
 		if (!this.#captureActive) return
 
-		this.#beginExposure()
 		if (this.#blobAdmission !== 'already-dropped') this.#blobAdmission = 'drop-next'
+		const camera = this.#camera
+		if (camera === undefined) return
+		this.cameraManager.stopExposure(camera)
+		this.#awaitingBlob = false
+		this.#beginExposure()
 	}
 
 	// Records the cadence of this capture, starts it, and arms the missing-BLOB watchdog.
