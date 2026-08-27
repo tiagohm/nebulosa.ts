@@ -1420,10 +1420,10 @@ describe('closed-loop calibration and guiding', () => {
 	// while the client is guiding. Every test owns its harness so the sessions, which spend nearly all
 	// of their wall time asleep waiting for commanded pulses, can run concurrently without sharing
 	// state through the module-level harness.
-	async function calibrateAndGuide(options: GuiderClientOptions = {}) {
+	async function calibrateAndGuide(options: GuiderClientOptions = {}, connectOptions?: GuiderClientConnectOptions) {
 		const harness = makeHarness({ ...options, calibrator: FAST_CALIBRATION })
 
-		connect(harness)
+		connect(harness, connectOptions)
 		harness.client.loop()
 		await feedFrame(harness)
 		expect(harness.client.guide(false, IMMEDIATE_SETTLE)).toBeTrue()
@@ -3667,6 +3667,35 @@ describe('closed-loop calibration and guiding', () => {
 			expect(lock1[0] - lock0[0]).toBeGreaterThan(3)
 			expect(lock1[0] - lock0[0]).toBeLessThan(15)
 			expect(lock1[1]).toBeCloseTo(lock0[1], 1)
+			expect(harness.client.getAppState()).toBe('Guiding')
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
+		'lock-shift on RA/Dec follows the calibrated axis unit vectors',
+		async () => {
+			const harness = await calibrateAndGuide({}, { focalLength: 1000, pixelSize: 5 })
+			await establishLockReference(harness)
+
+			const scale = harness.client.getPixelScale()
+			expect(scale).toBeGreaterThan(0)
+			expect(harness.client.setLockShiftParams({ rate: [scale * 36000, 0], axes: 'RA/Dec' })).toBeTrue()
+			expect(harness.client.setLockShiftEnabled(true)).toBeTrue()
+			const lock0 = harness.client.getLockPosition()!
+
+			await Bun.sleep(400)
+			await feedFrame(harness)
+
+			const lock1 = harness.client.getLockPosition()!
+			const dx = lock1[0] - lock0[0]
+			const dy = lock1[1] - lock0[1]
+			const { xAngle } = harness.client.getCalibrationData()
+			const alongRA = dx * Math.cos(xAngle) + dy * Math.sin(xAngle)
+			const alongDEC = -dx * Math.sin(xAngle) + dy * Math.cos(xAngle)
+
+			expect(alongRA).toBeGreaterThan(3)
+			expect(Math.abs(alongDEC)).toBeLessThan(1.5)
 			expect(harness.client.getAppState()).toBe('Guiding')
 		},
 		CLOSED_LOOP_TIMEOUT,
