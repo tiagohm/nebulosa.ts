@@ -2277,6 +2277,35 @@ describe('closed-loop calibration and guiding', () => {
 	)
 
 	test.concurrent(
+		'a sticky lock keeps the reference while the search center follows the star',
+		async () => {
+			const frames: GuideFrameImage[] = []
+			const harness = await calibrateAndGuide({
+				stickyLockPosition: true,
+				handler: { frame: (_client, frame) => frames.push(frame) },
+			})
+			await establishLockReference(harness)
+
+			const lock = harness.client.getLockPosition()!
+			harness.client.setGuideOutputEnabled(false)
+			harness.mount.offsetX += 10
+			for (let i = 0; i < 4; i++) await feedFrame(harness)
+
+			const after = harness.client.getLockPosition()!
+			expect(after[0]).toBeCloseTo(lock[0], 1)
+			expect(after[1]).toBeCloseTo(lock[1], 1)
+
+			const frame = frames.at(-1)!
+			expect(frame.lockPosition).toBeDefined()
+			expect(frame.searchPosition).toBeDefined()
+			expect(frame.searchPosition![0]).toBeGreaterThan(lock[0] + 5)
+			expect(harness.client.getAppState()).toBe('Guiding')
+			expect(eventsOf(harness.events, 'StarLost')).toBeEmpty()
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
 		'stars outside the search box remain available for multi-star measurement',
 		async () => {
 			const frames: GuideFrameImage[] = []
