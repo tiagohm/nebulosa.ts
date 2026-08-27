@@ -4340,6 +4340,55 @@ describe('closed-loop calibration and guiding', () => {
 	)
 
 	test.concurrent(
+		'a full session connects, loops, calibrates, dithers, stops and disconnects',
+		async () => {
+			const harness = makeHarness({ calibrator: FAST_CALIBRATION, ditherMode: 'spiral' })
+			expect(connect(harness)).toBeTrue()
+			expect(harness.client.getAppState()).toBe('Stopped')
+			expect(harness.client.getCalibrated()).toBeFalse()
+
+			expect(harness.client.loop()).toBeTrue()
+			expect(harness.client.getAppState()).toBe('Looping')
+			await feedFrame(harness)
+			expect(harness.client.findStar()).toBeDefined()
+			expect(harness.client.getAppState()).toBe('Selected')
+
+			expect(harness.client.guide(false, IMMEDIATE_SETTLE)).toBeTrue()
+			expect(harness.client.getAppState()).toBe('Calibrating')
+
+			for (let i = 0; i < MAX_CALIBRATION_FRAMES; i++) {
+				await feedFrame(harness)
+				if (harness.client.getCalibrated()) break
+			}
+
+			expect(harness.client.getCalibrated()).toBeTrue()
+			expect(harness.client.getAppState()).toBe('Guiding')
+			await establishLockReference(harness)
+
+			const before = harness.client.getLockPosition()!
+			await ditherAndSettle(harness, DITHER_AMOUNT_PX)
+			const done = eventsOf(harness.events, 'SettleDone').at(-1)!
+			expect(done.Status).toBe(0)
+			expect(harness.client.getSettling()).toBeFalse()
+			expect(harness.client.getAppState()).toBe('Guiding')
+			const after = harness.client.getLockPosition()!
+			expect(Math.hypot(after[0] - before[0], after[1] - before[1])).toBeCloseTo(DITHER_AMOUNT_PX, 5)
+
+			expect(harness.client.stopCapture()).toBeTrue()
+			expect(harness.client.getAppState()).toBe('Stopped')
+			expect(harness.client.getCalibrated()).toBeTrue()
+			expect(harness.client.getLockPosition()).toBeDefined()
+
+			expect(harness.client.disconnect()).toBeTrue()
+			expect(harness.client.getAppState()).toBe('Stopped')
+			expect(harness.client.getCalibrated()).toBeFalse()
+			expect(harness.client.getLockPosition()).toBeUndefined()
+			expect(harness.client.getConnected()).toBeFalse()
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
 		'end-to-end dither settles on the new lock then resumes guiding',
 		async () => {
 			const harness = await calibrateAndGuide({ ditherMode: 'spiral' })
