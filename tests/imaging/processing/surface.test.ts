@@ -452,7 +452,7 @@ describe('thin-plate spline', () => {
 
 		const model = fitOrThrow(samples, 2048, 2048, { model: 'thinPlateSpline', smoothing: 0.5, maxControlPoints: 1_000_000 })
 		expect(model.controlPoints!.length / 2).toBeLessThanOrEqual(SURFACE_MAX_CONTROL_POINTS)
-	})
+	}, 3000)
 
 	test('a cap below the spline minimum is raised to it', () => {
 		const samples = sampleGrid(64, 64, 6, 6, (x, y) => 0.2 + 0.001 * (x + y))
