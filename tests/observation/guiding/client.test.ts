@@ -3562,6 +3562,28 @@ describe('closed-loop calibration and guiding', () => {
 	)
 
 	test.concurrent(
+		'a lost star during settle does not report success',
+		async () => {
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
+
+			const successesBefore = eventsOf(harness.events, 'SettleDone').filter((event) => event.Status === 0).length
+			expect(harness.client.guide(false, { pixels: 5, time: 2, timeout: 10 })).toBeTrue()
+			expect(harness.client.getSettling()).toBeTrue()
+
+			const pulsesBefore = harness.guideOutputManager.pulses.length
+			for (let i = 0; i < 6; i++) await feedEmptyFrame(harness)
+
+			expect(harness.client.getAppState()).toBe('LostLock')
+			expect(harness.client.getSettling()).toBeTrue()
+			expect(harness.guideOutputManager.pulses.length).toBe(pulsesBefore)
+			expect(eventsOf(harness.events, 'SettleDone').filter((event) => event.Status === 0)).toHaveLength(successesBefore)
+			expect(eventsOf(harness.events, 'LockPositionLost')).toHaveLength(1)
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
 		'a second dither before settle accumulates onto the same lock',
 		async () => {
 			const harness = await calibrateAndGuide()
