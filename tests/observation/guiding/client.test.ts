@@ -1653,6 +1653,36 @@ describe('closed-loop calibration and guiding', () => {
 	)
 
 	test.concurrent(
+		'calibration fails when a frame jumps farther than the allowed step',
+		async () => {
+			const harness = makeHarness({
+				calibrator: { ...FAST_CALIBRATION, maxMatchDistancePx: 40 },
+			})
+			connect(harness)
+			harness.client.loop()
+			await feedFrame(harness)
+			expect(harness.client.guide(false, IMMEDIATE_SETTLE)).toBeTrue()
+			await feedFrame(harness)
+			await feedFrame(harness)
+
+			// 12 px plus the pending calibration pulse stays inside the match radius and outside
+			// maxFrameJumpPx (8), so the frame is a rejected jump rather than a lost star.
+			harness.mount.offsetX += 12
+			for (let i = 0; i < MAX_CALIBRATION_FRAMES && eventsOf(harness.events, 'CalibrationFailed').length === 0; i++) {
+				await feedFrame(harness)
+			}
+
+			expect(eventsOf(harness.events, 'CalibrationFailed').length).toBeGreaterThan(0)
+			expect(eventsOf(harness.events, 'CalibrationFailed').at(-1)!.Reason).toMatch(/jump/i)
+			expect(eventsOf(harness.events, 'CalibrationComplete')).toBeEmpty()
+			expect(harness.client.getCalibrated()).toBeFalse()
+			expect(harness.client.getAppState()).not.toBe('Guiding')
+			harness.client.stopCapture()
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
 		'calibration recovers the simulated mount rate and camera angle on both axes',
 		async () => {
 			const harness = await calibrateAndGuide()
