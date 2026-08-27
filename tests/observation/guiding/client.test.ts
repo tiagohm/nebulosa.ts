@@ -1694,6 +1694,32 @@ describe('closed-loop calibration and guiding', () => {
 	)
 
 	test.concurrent(
+		'recalibrating clears the previous solution before the new run',
+		async () => {
+			const harness = await calibrateAndGuide()
+			expect(harness.client.getCalibrated()).toBeTrue()
+			const previous = harness.client.getCalibrationData()
+
+			expect(harness.client.guide(true, IMMEDIATE_SETTLE)).toBeTrue()
+			expect(harness.client.getCalibrated()).toBeFalse()
+			expect(harness.client.getAppState()).toBe('Calibrating')
+			expect(eventsOf(harness.events, 'StartCalibration').length).toBeGreaterThan(1)
+
+			for (let i = 0; i < MAX_CALIBRATION_FRAMES; i++) {
+				await feedFrame(harness)
+				if (harness.client.getCalibrated()) break
+			}
+
+			expect(harness.client.getCalibrated()).toBeTrue()
+			const next = harness.client.getCalibrationData()
+			expect(next.calibrated).toBeTrue()
+			expect(next.xRate).toBeCloseTo(previous.xRate, 2)
+			expect(harness.client.getAppState()).toBe('Guiding')
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
 		'lock averaging issues no correction pulses',
 		async () => {
 			const harness = await calibrateAndGuide()
