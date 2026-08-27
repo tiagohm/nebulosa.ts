@@ -1593,6 +1593,29 @@ describe('closed-loop calibration and guiding', () => {
 	)
 
 	test.concurrent(
+		're-enabling guide output resumes pulses from the new measurement',
+		async () => {
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
+
+			harness.client.setGuideOutputEnabled(false)
+			harness.mount.driftX = RA_AXIS[0] * 0.8
+			harness.mount.driftY = RA_AXIS[1] * 0.8
+			for (let i = 0; i < 4; i++) await feedFrame(harness)
+
+			const pulsesBefore = harness.guideOutputManager.pulses.length
+			harness.client.setGuideOutputEnabled(true)
+			harness.mount.driftX = 0
+			harness.mount.driftY = 0
+			for (let i = 0; i < 4; i++) await feedFrame(harness)
+
+			expect(harness.guideOutputManager.pulses.length).toBeGreaterThan(pulsesBefore)
+			expect(harness.client.getAppState()).toBe('Guiding')
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
 		'declination mode Off issues no DEC pulse while RA still guides',
 		async () => {
 			const harness = await calibrateAndGuide()
