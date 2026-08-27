@@ -1483,6 +1483,33 @@ describe('frame processing robustness', () => {
 		expect(local.cameraManager.startExposureCalls.length).toBe(exposuresBefore)
 	}, 15000)
 
+	test('a timeout Alert that restarts capture owns the only replacement exposure', async () => {
+		let restarted = false
+		const local = makeHarness({
+			handler: {
+				event: (client, event) => {
+					if (!restarted && event.Event === 'Alert' && event.Type === 'warning' && event.Msg.includes('timed out')) {
+						restarted = true
+						client.stopCapture()
+						client.loop()
+					}
+				},
+			},
+		})
+		connect(local)
+		local.client.loop()
+		const exposuresBefore = local.cameraManager.startExposureCalls.length
+
+		for (let i = 0; i < 200 && eventsOf(local.events, 'Alert').length === 0; i++) {
+			await Bun.sleep(50)
+		}
+
+		expect(restarted).toBeTrue()
+		expect(local.client.getAppState()).toBe('Looping')
+		expect(local.cameraManager.startExposureCalls.length).toBe(exposuresBefore + 1)
+		local.client.stopCapture()
+	}, 15000)
+
 	test('a timeout Alert that disconnects does not start a replacement exposure', async () => {
 		const local = makeHarness({
 			handler: {

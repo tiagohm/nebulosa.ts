@@ -160,6 +160,9 @@ export class GuiderClient {
 	// BLOB watchdog is not armed from Stopped, so this is what prevents a second CCD_EXPOSURE while
 	// that one-shot start is still outstanding.
 	#awaitingBlob = false
+	// Monotonic ownership token for camera starts. A watchdog may replace only the attempt that armed
+	// it, because synchronous Alert handlers can stop and restart capture before the callback resumes.
+	#exposureAttempt = 0
 	// Retriggers a dropped INDI exposure so a missing BLOB cannot stall the loop until the user
 	// notices. Armed when an exposure is started; cleared when that BLOB is accepted or capture stops.
 	#exposureWatchdog?: ReturnType<typeof setTimeout>
@@ -1442,8 +1445,9 @@ export class GuiderClient {
 		if (!this.#captureActive) return
 
 		const timeout = Math.max(3 * this.#exposure, EXPOSURE_WATCHDOG_MIN_MS)
+		const attempt = this.#exposureAttempt
 		this.#exposureWatchdog = setTimeout(() => {
-			this.#onExposureWatchdog()
+			this.#onExposureWatchdog(attempt)
 		}, timeout)
 		this.#exposureWatchdog.unref()
 	}
@@ -1459,13 +1463,14 @@ export class GuiderClient {
 	// Warns, aborts the timed-out camera command, and starts another exposure when no BLOB arrived. The
 	// next BLOB is treated as the timed-out original unless this miss cluster already consumed that
 	// slot, so a delayed original cannot queue a second capture chain beside the retry. The Alert
-	// handler may stop or disconnect synchronously, so the capture state is rechecked before retrying.
-	#onExposureWatchdog() {
+	// handler may stop or disconnect synchronously, so the capture state and attempt ownership are
+	// rechecked before retrying. `attempt` is the camera start that armed this callback.
+	#onExposureWatchdog(attempt: number) {
 		this.#exposureWatchdog = undefined
-		if (!this.#captureActive) return
+		if (!this.#captureActive || !this.#awaitingBlob || attempt !== this.#exposureAttempt) return
 
 		this.emitEvent('Alert', { Msg: 'guide exposure timed out; retrying', Type: 'warning' })
-		if (!this.#captureActive) return
+		if (!this.#captureActive || !this.#awaitingBlob || attempt !== this.#exposureAttempt) return
 
 		if (this.#blobAdmission !== 'already-dropped') this.#blobAdmission = 'drop-next'
 		const camera = this.#camera
@@ -1481,6 +1486,7 @@ export class GuiderClient {
 	// arms only while capture is active.
 	#beginExposure() {
 		if (!this.#connected || this.#camera === undefined || this.#camera.connected !== true) return
+		this.#exposureAttempt++
 		this.#inFlightExposureMs = this.#exposure
 		this.#awaitingBlob = true
 		this.cameraManager.startExposure(this.#camera, this.#exposure / 1000)
