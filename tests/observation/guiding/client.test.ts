@@ -1622,6 +1622,37 @@ describe('closed-loop calibration and guiding', () => {
 	)
 
 	test.concurrent(
+		'calibration fails after too many consecutive bad frames',
+		async () => {
+			const harness = makeHarness({ calibrator: FAST_CALIBRATION })
+			connect(harness)
+			harness.client.loop()
+			await feedFrame(harness)
+			expect(harness.client.guide(false, IMMEDIATE_SETTLE)).toBeTrue()
+			await feedFrame(harness)
+
+			for (let i = 0; i < 2; i++) await feedEmptyFrame(harness)
+			expect(eventsOf(harness.events, 'CalibrationFailed')).toBeEmpty()
+			expect(harness.client.getAppState()).toBe('Calibrating')
+
+			await feedFrame(harness)
+			expect(eventsOf(harness.events, 'CalibrationFailed')).toBeEmpty()
+			expect(harness.client.getAppState()).toBe('Calibrating')
+
+			for (let i = 0; i < 8 && eventsOf(harness.events, 'CalibrationFailed').length === 0; i++) {
+				await feedEmptyFrame(harness)
+			}
+
+			expect(eventsOf(harness.events, 'CalibrationFailed').length).toBeGreaterThan(0)
+			expect(eventsOf(harness.events, 'CalibrationFailed').at(-1)!.Reason).toMatch(/unusable|bad/i)
+			expect(harness.client.getCalibrated()).toBeFalse()
+			expect(harness.client.getAppState()).not.toBe('Guiding')
+			harness.client.stopCapture()
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
 		'calibration recovers the simulated mount rate and camera angle on both axes',
 		async () => {
 			const harness = await calibrateAndGuide()
