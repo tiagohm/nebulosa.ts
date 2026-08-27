@@ -2175,6 +2175,35 @@ describe('closed-loop calibration and guiding', () => {
 	)
 
 	test.concurrent(
+		'stopCapture during a pulse wait starts no replacement exposure',
+		async () => {
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
+			harness.mount.driftX = RA_AXIS[0] * 2
+			harness.mount.driftY = RA_AXIS[1] * 2
+			for (let i = 0; i < 3; i++) await feedFrame(harness)
+
+			const handler = harness.cameraManager.handler!
+			harness.mount.advance(harness.guideOutputManager.pulses)
+			const buffer = await buildFrameBuffer(harness.mount.offsetX, harness.mount.offsetY)
+			const exposuresBefore = harness.cameraManager.startExposureCalls.length
+			const pulsesBefore = harness.guideOutputManager.pulses.length
+
+			handler.blobReceived!(harness.camera, buffer, 'raw')
+			for (let i = 0; i < 200 && harness.guideOutputManager.pulses.length === pulsesBefore; i++) {
+				await Bun.sleep(1)
+			}
+
+			expect(harness.client.stopCapture()).toBeTrue()
+			await Bun.sleep(400)
+
+			expect(harness.client.getAppState()).toBe('Stopped')
+			expect(harness.cameraManager.startExposureCalls.length).toBe(exposuresBefore)
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
 		'guide after stop reuses the calibration and resumes corrections',
 		async () => {
 			const harness = await calibrateAndGuide()
