@@ -2464,6 +2464,39 @@ describe('closed-loop calibration and guiding', () => {
 	)
 
 	test.concurrent(
+		'recovery after modest drift converges without a single extreme pulse',
+		async () => {
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
+
+			harness.mount.driftX = RA_AXIS[0] * 0.5
+			harness.mount.driftY = RA_AXIS[1] * 0.5
+			for (let i = 0; i < 8; i++) await feedEmptyFrame(harness)
+			expect(harness.client.getAppState()).toBe('LostLock')
+
+			harness.mount.driftX = 0
+			harness.mount.driftY = 0
+			const from = harness.guideOutputManager.pulses.length
+			const distances: number[] = []
+			for (let i = 0; i < 8; i++) {
+				await feedFrame(harness)
+				const step = eventsOf(harness.events, 'GuideStep').at(-1)!
+				distances.push(Math.hypot(step.dx, step.dy))
+			}
+
+			expect(harness.client.getAppState()).toBe('Guiding')
+			expect(distances[0]).toBeGreaterThan(1)
+			expect(distances.at(-1)!).toBeLessThan(distances[0])
+			for (const pulse of harness.guideOutputManager.pulses.slice(from)) {
+				expect(pulse.duration).toBeGreaterThan(0)
+				expect(pulse.duration).toBeLessThanOrEqual(2000)
+			}
+			expect(eventsOf(harness.events, 'LockPositionLost')).toHaveLength(1)
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
 		'a repeated guide request while already guiding starts settle without a second exposure',
 		async () => {
 			const harness = await calibrateAndGuide()
