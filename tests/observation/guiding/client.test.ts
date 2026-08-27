@@ -2175,6 +2175,34 @@ describe('closed-loop calibration and guiding', () => {
 	)
 
 	test.concurrent(
+		'guide after stop reuses the calibration and resumes corrections',
+		async () => {
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
+			harness.client.stopCapture()
+			expect(harness.client.getCalibrated()).toBeTrue()
+
+			const startCalibration = eventsOf(harness.events, 'StartCalibration').length
+			const startGuiding = eventsOf(harness.events, 'StartGuiding').length
+
+			expect(harness.client.guide(false, IMMEDIATE_SETTLE)).toBeTrue()
+			expect(harness.client.getAppState()).toBe('Guiding')
+			expect(eventsOf(harness.events, 'StartCalibration')).toHaveLength(startCalibration)
+			expect(eventsOf(harness.events, 'StartGuiding').length).toBe(startGuiding + 1)
+
+			await establishLockReference(harness)
+			const pulsesBefore = harness.guideOutputManager.pulses.length
+			harness.mount.driftX = RA_AXIS[0] * 0.8
+			harness.mount.driftY = RA_AXIS[1] * 0.8
+			for (let i = 0; i < 4; i++) await feedFrame(harness)
+
+			expect(harness.guideOutputManager.pulses.length).toBeGreaterThan(pulsesBefore)
+			expect(harness.client.getAppState()).toBe('Guiding')
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
 		'disconnect during guiding issues no further pulses',
 		async () => {
 			const harness = await calibrateAndGuide()
