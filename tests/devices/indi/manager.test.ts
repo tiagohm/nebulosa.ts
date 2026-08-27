@@ -2,7 +2,7 @@ import { expect, describe, test } from 'bun:test'
 // oxfmt-ignore
 import { CLIENT, type Client, DEFAULT_CAMERA, DEFAULT_COVER, DEFAULT_DOME, DEFAULT_FLAT_PANEL, DEFAULT_FOCUSER, DEFAULT_MOUNT, DEFAULT_POWER, DEFAULT_ROTATOR, DEFAULT_WEATHER, DEFAULT_WHEEL, type Cover, type Device, type FlatPanel, type Focuser, type Power, type Rotator, type Wheel, DeviceInterfaceType, type Camera, isDome, isWeather, type SafetyMonitor } from '../../../src/devices/indi/device'
 import { PI, PIOVERFOUR, PIOVERTWO, TAU } from '../../../src/core/constants'
-import { CameraManager, CoverManager, DomeManager, FlatPanelManager, FocuserManager, MountManager, PowerManager, RotatorManager, SafetyMonitorManager, WeatherManager, WheelManager, type DeviceHandler } from '../../../src/devices/indi/manager'
+import { CameraManager, CoverManager, DomeManager, FlatPanelManager, FocuserManager, GuideOutputManager, MountManager, PowerManager, RotatorManager, SafetyMonitorManager, WeatherManager, WheelManager, type DeviceHandler } from '../../../src/devices/indi/manager'
 import type { DefLightVector, DefNumber, DefNumberVector, DefSwitch, DefSwitchVector, DefText, DefTextVector, SetLightVector } from '../../../src/devices/indi/types'
 
 const client: Client = {
@@ -67,6 +67,39 @@ function driverInfo(device: string, interfaceType: DeviceInterfaceType): DefText
 function safetyStatus(device: string, state: DefLightVector['state']): DefLightVector {
 	return { device, name: 'SAFETY_STATUS', state, elements: { SAFETY: { name: 'SAFETY', value: state } } }
 }
+
+test('GuideOutputManager remains pulsing until both timed-guide axes finish', () => {
+	const mountManager = new MountManager()
+	const mount = structuredClone(DEFAULT_MOUNT)
+	mount.id = Bun.randomUUIDv7()
+	mount.name = 'Mount'
+	Object.defineProperty(mount, CLIENT, { value: client })
+	mountManager.add(mount)
+
+	const manager = new GuideOutputManager(mountManager)
+	const timedGuide = (name: 'TELESCOPE_TIMED_GUIDE_NS' | 'TELESCOPE_TIMED_GUIDE_WE', state: DefNumberVector['state']): DefNumberVector => ({
+		device: mount.name,
+		name,
+		permission: 'rw',
+		state,
+		elements: {},
+	})
+
+	manager.numberVector(client, timedGuide('TELESCOPE_TIMED_GUIDE_NS', 'Busy'), 'defNumberVector')
+	manager.numberVector(client, timedGuide('TELESCOPE_TIMED_GUIDE_WE', 'Busy'), 'defNumberVector')
+
+	const guideOutput = manager.get(client, mount.name)!
+	expect(guideOutput.pulsing).toBeTrue()
+	expect(mount.pulsing).toBeTrue()
+
+	manager.numberVector(client, timedGuide('TELESCOPE_TIMED_GUIDE_NS', 'Ok'), 'setNumberVector')
+	expect(guideOutput.pulsing).toBeTrue()
+	expect(mount.pulsing).toBeTrue()
+
+	manager.numberVector(client, timedGuide('TELESCOPE_TIMED_GUIDE_WE', 'Ok'), 'setNumberVector')
+	expect(guideOutput.pulsing).toBeFalse()
+	expect(mount.pulsing).toBeFalse()
+})
 
 test('SafetyMonitorManager creates only AUXILIARY native INDI standalones', () => {
 	const manager = new SafetyMonitorManager({ get: () => undefined })

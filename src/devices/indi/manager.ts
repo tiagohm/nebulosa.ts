@@ -462,6 +462,9 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 // Manager for stand-alone or embedded guide outputs. Command methods send pulse-guide (durations in
 // milliseconds) and guide-rate commands; property handling reflects pulse-guiding capability/state.
 export class GuideOutputManager extends DeviceManager<GuideOutput> {
+	// Busy state reported independently by the north/south and west/east timed-guide vectors.
+	readonly #pulseStates = new WeakMap<GuideOutput, { northSouth: boolean; westEast: boolean }>()
+
 	constructor(readonly provider: DeviceProvider<GuideOutput>) {
 		super()
 	}
@@ -546,7 +549,14 @@ export class GuideOutputManager extends DeviceManager<GuideOutput> {
 				}
 
 				if (device !== undefined) {
-					if (handleSwitchValue(device, 'pulsing', message.state === 'Busy')) {
+					const pulseState = this.#pulseStates.get(device) ?? { northSouth: false, westEast: false }
+
+					if (message.name === 'TELESCOPE_TIMED_GUIDE_NS') pulseState.northSouth = message.state === 'Busy'
+					else pulseState.westEast = message.state === 'Busy'
+
+					this.#pulseStates.set(device, pulseState)
+
+					if (handleSwitchValue(device, 'pulsing', pulseState.northSouth || pulseState.westEast)) {
 						this.updated(device, 'pulsing', message.state)
 
 						const parent = (device as SubDevice<GuideOutput, GuideOutput>).parent
@@ -597,6 +607,7 @@ export class GuideOutputManager extends DeviceManager<GuideOutput> {
 		const full = !name
 
 		if (full || name === 'TELESCOPE_TIMED_GUIDE_NS' || name === 'TELESCOPE_TIMED_GUIDE_WE') {
+			this.#pulseStates.delete(device)
 			resetDeviceValue(this, device, 'canPulseGuide', DEFAULT_GUIDE_OUTPUT.canPulseGuide)
 			resetDeviceValue(this, device, 'pulsing', DEFAULT_GUIDE_OUTPUT.pulsing)
 
