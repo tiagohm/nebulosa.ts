@@ -847,6 +847,22 @@ describe('mode transitions', () => {
 		expect(harness.client.getSettling()).toBeFalse()
 	})
 
+	test('disconnect during calibration discards the incomplete solution', () => {
+		connect(harness)
+		expect(harness.client.guide()).toBeTrue()
+		expect(harness.client.getAppState()).toBe('Calibrating')
+		expect(harness.client.getCalibrated()).toBeFalse()
+
+		expect(harness.client.disconnect()).toBeTrue()
+		expect(harness.client.getCalibrated()).toBeFalse()
+		expect(harness.client.getAppState()).toBe('Stopped')
+
+		expect(connect(harness)).toBeTrue()
+		expect(harness.client.guide()).toBeTrue()
+		expect(harness.client.getAppState()).toBe('Calibrating')
+		expect(eventsOf(harness.events, 'StartCalibration')).toHaveLength(2)
+	})
+
 	test('guide requires a full connection and starts calibration without a solution', () => {
 		expect(harness.client.guide()).toBeFalse()
 		connect(harness)
