@@ -2927,6 +2927,29 @@ describe('closed-loop calibration and guiding', () => {
 	)
 
 	test.concurrent(
+		'resuming after a pause does not replay a previous pulse',
+		async () => {
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
+
+			const pulsesBefore = harness.guideOutputManager.pulses.length
+			expect(harness.client.setPaused(true)).toBeTrue()
+			expect(harness.client.getAppState()).toBe('Paused')
+
+			await Bun.sleep(50)
+
+			expect(harness.client.setPaused(false)).toBeTrue()
+			expect(harness.client.getAppState()).toBe('Guiding')
+
+			for (let i = 0; i < 4; i++) await feedFrame(harness)
+
+			expect(harness.guideOutputManager.pulses.length).toBe(pulsesBefore)
+			expect(harness.client.getAppState()).toBe('Guiding')
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
 		'guide while paused resumes without dropping the dither',
 		async () => {
 			const harness = await calibrateAndGuide()
