@@ -3486,6 +3486,36 @@ describe('closed-loop calibration and guiding', () => {
 	)
 
 	test.concurrent(
+		'a brief in-tolerance crossing does not complete settle',
+		async () => {
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
+			const originX = harness.mount.offsetX
+			const originY = harness.mount.offsetY
+			const successesBefore = eventsOf(harness.events, 'SettleDone').filter((event) => event.Status === 0).length
+
+			expect(harness.client.guide(false, { pixels: 5, time: 1, timeout: 8 })).toBeTrue()
+			expect(harness.client.getSettling()).toBeTrue()
+
+			await feedFrame(harness)
+
+			harness.mount.offsetX = originX + RA_AXIS[0] * 8
+			harness.mount.offsetY = originY + RA_AXIS[1] * 8
+			await feedFrame(harness)
+			expect(harness.client.getSettling()).toBeTrue()
+
+			harness.mount.advance(harness.guideOutputManager.pulses)
+			harness.mount.offsetX = originX
+			harness.mount.offsetY = originY
+			await feedBuffer(harness, await buildFrameBuffer(originX, originY))
+
+			expect(harness.client.getSettling()).toBeTrue()
+			expect(eventsOf(harness.events, 'SettleDone').filter((event) => event.Status === 0)).toHaveLength(successesBefore)
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
 		'a second dither before settle accumulates onto the same lock',
 		async () => {
 			const harness = await calibrateAndGuide()
