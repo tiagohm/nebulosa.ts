@@ -4103,4 +4103,32 @@ describe('closed-loop calibration and guiding', () => {
 		},
 		CLOSED_LOOP_TIMEOUT,
 	)
+
+	test.concurrent(
+		'end-to-end dither settles on the new lock then resumes guiding',
+		async () => {
+			const harness = await calibrateAndGuide({ ditherMode: 'spiral' })
+			await establishLockReference(harness)
+
+			const before = harness.client.getLockPosition()!
+			await ditherAndSettle(harness, DITHER_AMOUNT_PX)
+
+			const done = eventsOf(harness.events, 'SettleDone').at(-1)!
+			expect(done.Status).toBe(0)
+			expect(harness.client.getSettling()).toBeFalse()
+
+			const after = harness.client.getLockPosition()!
+			expect(Math.hypot(after[0] - before[0], after[1] - before[1])).toBeCloseTo(DITHER_AMOUNT_PX, 5)
+			const step = eventsOf(harness.events, 'GuideStep').at(-1)!
+			expect(Math.hypot(step.dx, step.dy)).toBeLessThan(IMMEDIATE_SETTLE.pixels)
+
+			harness.mount.driftX = RA_AXIS[0] * 1.2
+			harness.mount.driftY = RA_AXIS[1] * 1.2
+			const pulsesBefore = harness.guideOutputManager.pulses.length
+			for (let i = 0; i < 4; i++) await feedFrame(harness)
+			expect(harness.guideOutputManager.pulses.length).toBeGreaterThan(pulsesBefore)
+			expect(harness.client.getAppState()).toBe('Guiding')
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
 })
