@@ -1575,6 +1575,34 @@ describe('closed-loop calibration and guiding', () => {
 	)
 
 	test.concurrent(
+		'calibration fails when the star does not travel far enough',
+		async () => {
+			const harness = makeHarness({
+				calibrator: { ...FAST_CALIBRATION, minNetRaTravelPx: 100, maxRaSteps: 3 },
+			})
+			connect(harness)
+			harness.client.loop()
+			await feedFrame(harness)
+
+			expect(harness.client.guide(false, IMMEDIATE_SETTLE)).toBeTrue()
+			expect(harness.client.getAppState()).toBe('Calibrating')
+
+			for (let i = 0; i < MAX_CALIBRATION_FRAMES && eventsOf(harness.events, 'CalibrationFailed').length === 0; i++) {
+				await feedFrame(harness)
+			}
+
+			const failed = eventsOf(harness.events, 'CalibrationFailed')
+			expect(failed.length).toBeGreaterThan(0)
+			expect(failed.at(-1)!.Reason).toMatch(/travel/i)
+			expect(eventsOf(harness.events, 'CalibrationComplete')).toBeEmpty()
+			expect(harness.client.getCalibrated()).toBeFalse()
+			expect(harness.client.getAppState()).not.toBe('Guiding')
+			harness.client.stopCapture()
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
 		'calibration recovers the simulated mount rate and camera angle on both axes',
 		async () => {
 			const harness = await calibrateAndGuide()
