@@ -555,6 +555,20 @@ describe('capture control', () => {
 		expect(harness.client.getExposure()).toBe(2000)
 	})
 
+	test('startExposureLoop from Stopped starts one capture without arming the watchdog', async () => {
+		connect(harness)
+		expect(harness.client.getAppState()).toBe('Stopped')
+		expect(harness.client.startExposureLoop(1000)).toBeTrue()
+		expect(harness.cameraManager.startExposureCalls).toEqual([1])
+		expect(harness.client.getAppState()).toBe('Stopped')
+
+		await Bun.sleep(Math.max(3 * harness.client.getExposure(), 5000) + 200)
+
+		expect(harness.cameraManager.startExposureCalls).toEqual([1])
+		expect(eventsOf(harness.events, 'Alert').some((alert) => alert.Type === 'warning' && alert.Msg.includes('timed out'))).toBeFalse()
+		expect(harness.client.getAppState()).toBe('Stopped')
+	}, 15000)
+
 	test('stopCapture stops exposures, returns to Stopped and emits the looping stop', () => {
 		connect(harness)
 		harness.client.loop()
