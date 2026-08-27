@@ -208,6 +208,11 @@ class MountSimulator {
 	// has to correct for.
 	driftX = 0
 	driftY = 0
+	// Multiplier applied to RA pulses. -1 models a mount whose west/east sense is inverted relative
+	// to the conventional image-axis pairing used by the simulator.
+	raPolarity = 1
+	// Multiplier applied to DEC pulses, matching raPolarity for the north/south sense.
+	decPolarity = 1
 
 	// Number of recorded pulses already converted into motion.
 	#consumed = 0
@@ -217,8 +222,10 @@ class MountSimulator {
 		for (let i = this.#consumed; i < pulses.length; i++) {
 			const { direction, duration } = pulses[i]
 			const travel = duration * MOUNT_RATE_PX_PER_MS
-			const axis = direction === 'WEST' || direction === 'EAST' ? RA_AXIS : DEC_AXIS
-			const sign = direction === 'WEST' || direction === 'NORTH' ? 1 : -1
+			const ra = direction === 'WEST' || direction === 'EAST'
+			const axis = ra ? RA_AXIS : DEC_AXIS
+			const polarity = ra ? this.raPolarity : this.decPolarity
+			const sign = (direction === 'WEST' || direction === 'NORTH' ? 1 : -1) * polarity
 
 			this.offsetX += sign * travel * axis[0]
 			this.offsetY += sign * travel * axis[1]
@@ -1620,6 +1627,46 @@ describe('closed-loop calibration and guiding', () => {
 			expect(eventsOf(harness.events, 'Calibrating').length).toBeGreaterThan(1)
 			expect(eventsOf(harness.events, 'CalibrationComplete')).toHaveLength(1)
 			expect(eventsOf(harness.events, 'StartGuiding')).toHaveLength(1)
+			expect(harness.client.getAppState()).toBe('Guiding')
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
+		'calibration learns an inverted RA axis and later corrections reduce the error',
+		async () => {
+			const harness = makeHarness({ calibrator: FAST_CALIBRATION })
+			harness.mount.raPolarity = -1
+			connect(harness)
+			harness.client.loop()
+			await feedFrame(harness)
+			expect(harness.client.guide(false, IMMEDIATE_SETTLE)).toBeTrue()
+
+			for (let i = 0; i < MAX_CALIBRATION_FRAMES; i++) {
+				await feedFrame(harness)
+				if (harness.client.getCalibrated()) break
+			}
+
+			expect(harness.client.getCalibrated()).toBeTrue()
+			const calibration = harness.client.getCalibrationData()
+			expect(calibration.xRate).toBeCloseTo(MOUNT_RATE_PX_PER_MS, 3)
+			expect(Math.cos(calibration.xAngle - MOUNT_ANGLE)).toBeCloseTo(-1, 1)
+			expect(harness.client.getAppState()).toBe('Guiding')
+
+			await establishLockReference(harness)
+			harness.mount.offsetX += RA_AXIS[0] * 3
+			harness.mount.offsetY += RA_AXIS[1] * 3
+
+			const distances: number[] = []
+			for (let i = 0; i < 8; i++) {
+				await feedFrame(harness)
+				const step = eventsOf(harness.events, 'GuideStep').at(-1)!
+				distances.push(Math.hypot(step.dx, step.dy))
+			}
+
+			expect(distances[0]).toBeGreaterThan(1.5)
+			expect(distances[1]).toBeLessThan(distances[0])
+			expect(distances.at(-1)!).toBeLessThan(distances[0])
 			expect(harness.client.getAppState()).toBe('Guiding')
 		},
 		CLOSED_LOOP_TIMEOUT,
