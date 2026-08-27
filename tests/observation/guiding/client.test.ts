@@ -214,6 +214,9 @@ class MountSimulator {
 	raPolarity = 1
 	// Multiplier applied to DEC pulses, matching raPolarity for the north/south sense.
 	decPolarity = 1
+	// Image-space unit vector for north/south pulses. Defaults to DEC_AXIS; a test can point it
+	// along RA_AXIS to model a mount whose axes are degenerate.
+	decAxis: readonly [number, number] = DEC_AXIS
 
 	// Number of recorded pulses already converted into motion.
 	#consumed = 0
@@ -224,7 +227,7 @@ class MountSimulator {
 			const { direction, duration } = pulses[i]
 			const travel = duration * MOUNT_RATE_PX_PER_MS
 			const ra = direction === 'WEST' || direction === 'EAST'
-			const axis = ra ? RA_AXIS : DEC_AXIS
+			const axis = ra ? RA_AXIS : this.decAxis
 			const polarity = ra ? this.raPolarity : this.decPolarity
 			const sign = (direction === 'WEST' || direction === 'NORTH' ? 1 : -1) * polarity
 
@@ -1674,6 +1677,30 @@ describe('closed-loop calibration and guiding', () => {
 
 			expect(eventsOf(harness.events, 'CalibrationFailed').length).toBeGreaterThan(0)
 			expect(eventsOf(harness.events, 'CalibrationFailed').at(-1)!.Reason).toMatch(/jump/i)
+			expect(eventsOf(harness.events, 'CalibrationComplete')).toBeEmpty()
+			expect(harness.client.getCalibrated()).toBeFalse()
+			expect(harness.client.getAppState()).not.toBe('Guiding')
+			harness.client.stopCapture()
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
+		'calibration fails when RA and DEC move the star along the same image axis',
+		async () => {
+			const harness = makeHarness({ calibrator: FAST_CALIBRATION })
+			harness.mount.decAxis = RA_AXIS
+			connect(harness)
+			harness.client.loop()
+			await feedFrame(harness)
+			expect(harness.client.guide(false, IMMEDIATE_SETTLE)).toBeTrue()
+
+			for (let i = 0; i < MAX_CALIBRATION_FRAMES && eventsOf(harness.events, 'CalibrationFailed').length === 0; i++) {
+				await feedFrame(harness)
+			}
+
+			expect(eventsOf(harness.events, 'CalibrationFailed').length).toBeGreaterThan(0)
+			expect(eventsOf(harness.events, 'CalibrationFailed').at(-1)!.Reason).toMatch(/parallel|singular/i)
 			expect(eventsOf(harness.events, 'CalibrationComplete')).toBeEmpty()
 			expect(harness.client.getCalibrated()).toBeFalse()
 			expect(harness.client.getAppState()).not.toBe('Guiding')
