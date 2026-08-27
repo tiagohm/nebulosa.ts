@@ -2811,6 +2811,44 @@ describe('closed-loop calibration and guiding', () => {
 	)
 
 	test.concurrent(
+		'changing the exposure cadence during guiding keeps the lock and calibration',
+		async () => {
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
+
+			const lock = harness.client.getLockPosition()!
+			const calibration = harness.client.getCalibrationData()
+			expect(harness.client.getAppState()).toBe('Guiding')
+
+			expect(harness.client.setExposure(2000)).toBeTrue()
+			expect(harness.client.getExposure()).toBe(2000)
+			expect(harness.client.getAppState()).toBe('Guiding')
+			expect(harness.client.getCalibrated()).toBeTrue()
+			expect(harness.client.getLockPosition()![0]).toBeCloseTo(lock[0], 6)
+			expect(harness.client.getLockPosition()![1]).toBeCloseTo(lock[1], 6)
+			expect(harness.client.getCalibrationData()).toMatchObject({
+				calibrated: true,
+				xAngle: calibration.xAngle,
+				xRate: calibration.xRate,
+				xParity: calibration.xParity,
+				yAngle: calibration.yAngle,
+				yRate: calibration.yRate,
+				yParity: calibration.yParity,
+			})
+
+			harness.mount.offsetX += RA_AXIS[0] * 3
+			harness.mount.offsetY += RA_AXIS[1] * 3
+			const pulsesBefore = harness.guideOutputManager.pulses.length
+			await feedFrame(harness)
+			expect(harness.guideOutputManager.pulses.length).toBeGreaterThan(pulsesBefore)
+			expect(harness.client.getAppState()).toBe('Guiding')
+			expect(harness.client.getLockPosition()![0]).toBeCloseTo(lock[0], 6)
+			expect(harness.client.getLockPosition()![1]).toBeCloseTo(lock[1], 6)
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
 		'guide-step RA and DEC distances are pixel projections of the image offset',
 		async () => {
 			const harness = await calibrateAndGuide()
