@@ -2333,6 +2333,27 @@ describe('closed-loop calibration and guiding', () => {
 	)
 
 	test.concurrent(
+		'a star that reappears far from the lock is not treated as the same guide star',
+		async () => {
+			const harness = await calibrateAndGuide({ searchRegion: 32 })
+			await establishLockReference(harness)
+
+			for (let i = 0; i < 8; i++) await feedEmptyFrame(harness)
+			expect(harness.client.getAppState()).toBe('LostLock')
+
+			const pulsesBefore = harness.guideOutputManager.pulses.length
+			// 24 px is outside the 16 px half-box, so the original star is no longer the primary.
+			harness.mount.offsetX += 24
+			for (let i = 0; i < 4; i++) await feedFrame(harness)
+
+			expect(harness.client.getAppState()).toBe('LostLock')
+			expect(harness.guideOutputManager.pulses.length).toBe(pulsesBefore)
+			expect(eventsOf(harness.events, 'LockPositionLost')).toHaveLength(1)
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
 		'guiding recovers the star after a run of star-free frames',
 		async () => {
 			const harness = await calibrateAndGuide()
