@@ -1037,7 +1037,9 @@ export class Guider {
 			}
 		}
 
-		if (!badFrame && measurement !== undefined && this.#isImpossibleJump(measurement)) {
+		// A commanded dither walk can exceed maxFrameJumpPx in one pulse; that motion is expected,
+		// not a meteor or wrong-star swap.
+		if (!badFrame && measurement !== undefined && !this.state.ditherActive && this.#isImpossibleJump(measurement)) {
 			badFrame = true
 			notes.push('jump_rejected')
 		}

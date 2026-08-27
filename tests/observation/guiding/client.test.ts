@@ -3856,21 +3856,26 @@ describe('closed-loop calibration and guiding', () => {
 	)
 
 	test.concurrent(
-		'a dither larger than the search box does not chase the star blindly',
+		'a dither larger than the search box walks the star onto the new lock',
 		async () => {
 			const harness = await calibrateAndGuide({ ditherMode: 'spiral', searchRegion: 32 })
 			await establishLockReference(harness)
 
-			const pulsesBefore = harness.guideOutputManager.pulses.length
-			expect(harness.client.dither(40, false, IMMEDIATE_SETTLE)).toBeTrue()
+			const before = harness.client.getLockPosition()!
+			expect(harness.client.dither(40, false, { pixels: 5, time: 0, timeout: 20 })).toBeTrue()
 
-			for (let i = 0; i < 8; i++) await feedFrame(harness)
+			for (let i = 0; i < DITHER_SETTLE_FRAMES && harness.client.getSettling(); i++) {
+				await feedFrame(harness)
+			}
 
-			expect(harness.client.getAppState()).toBe('LostLock')
-			const after = harness.guideOutputManager.pulses.slice(pulsesBefore)
-			expect(after.length).toBeLessThanOrEqual(2)
-			expect(after.every((pulse) => pulse.duration <= 2000)).toBeTrue()
-			expect(eventsOf(harness.events, 'StarLost').length).toBeGreaterThan(0)
+			expect(harness.client.getAppState()).toBe('Guiding')
+			expect(harness.client.getSettling()).toBeFalse()
+			expect(eventsOf(harness.events, 'LockPositionLost')).toHaveLength(0)
+			expect(eventsOf(harness.events, 'SettleDone').at(-1)!.Status).toBe(0)
+			const after = harness.client.getLockPosition()!
+			expect(Math.hypot(after[0] - before[0], after[1] - before[1])).toBeCloseTo(40, 5)
+			const step = eventsOf(harness.events, 'GuideStep').at(-1)!
+			expect(Math.hypot(step.dx, step.dy)).toBeLessThan(5)
 		},
 		CLOSED_LOOP_TIMEOUT,
 	)

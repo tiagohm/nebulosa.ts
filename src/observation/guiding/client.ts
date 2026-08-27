@@ -1279,13 +1279,14 @@ export class GuiderClient {
 	#updateLockPositionFromGuider(targetX: number | undefined, targetY: number | undefined) {
 		if (targetX !== undefined && targetY !== undefined) {
 			this.#lockPosition = [targetX, targetY] as const
-			if (!this.#fixedLockReferenceEnabled) this.#lockSearchPosition = this.#lockPosition
+			if (!this.#searchFollowsMeasurement) this.#lockSearchPosition = this.#lockPosition
 		}
 	}
 
-	// Refreshes the star-search center from the latest measured centroid while a fixed lock reference is active.
+	// Refreshes the star-search center from the latest measured centroid while the box should stay on
+	// the star (sticky/exact lock, or an in-progress dither walking toward a new lock).
 	#updateLockSearchPositionFromGuider(measurementX: number | undefined, measurementY: number | undefined) {
-		if (this.#fixedLockReferenceEnabled && measurementX !== undefined && measurementY !== undefined) {
+		if (this.#searchFollowsMeasurement && measurementX !== undefined && measurementY !== undefined) {
 			this.#lockSearchPosition = [measurementX, measurementY] as const
 		}
 	}
@@ -1341,7 +1342,7 @@ export class GuiderClient {
 
 		this.#syncGuideTargetOffset()
 		this.#lockPosition = [lockX, lockY] as const
-		if (!this.#stickyLockPosition) this.#lockSearchPosition = this.#lockPosition
+		if (!this.#searchFollowsMeasurement) this.#lockSearchPosition = this.#lockPosition
 
 		if (limitReached) {
 			if (!this.#lockShiftLimitReached) this.emitEvent('LockPositionShiftLimitReached')
@@ -1392,6 +1393,13 @@ export class GuiderClient {
 	// Returns true when either Sticky Lock Position or an exact lock request should preserve the reference point.
 	get #fixedLockReferenceEnabled() {
 		return this.#stickyLockPosition || this.#exactLockPosition
+	}
+
+	// Returns true when the search box should stay on the measured star rather than snapping to the
+	// lock target. Sticky/exact lock keep the reference fixed; an in-progress dither keeps the box
+	// on the star so a jump larger than half the search region can still be walked in with pulses.
+	get #searchFollowsMeasurement() {
+		return this.#fixedLockReferenceEnabled || this.#guider.currentState.ditherActive
 	}
 
 	// Returns the fixed lock reference seed used for the next guider initialization.
