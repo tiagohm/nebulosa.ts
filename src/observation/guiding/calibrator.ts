@@ -82,7 +82,9 @@ export interface GuidingCalibrationConfig {
 	readonly minAxisSeparation: Angle
 	// Minimum acceptable image-motion matrix determinant.
 	readonly minDeterminant: number
-	// Maximum nearest-star match distance during tracking, in pixels.
+	// Maximum nearest-star match distance during tracking, in pixels. Tracking actually uses
+	// max(maxMatchDistancePx, maxFrameJumpPx) so a jump that exceeds the jump threshold can still
+	// be classified as `impossible_jump` instead of a lost star.
 	readonly maxMatchDistancePx: number
 	// Edge exclusion margin, in pixels.
 	readonly edgeMarginPx: number
@@ -578,9 +580,17 @@ export class GuidingCalibrator {
 			return { failure: this.#makeStepResult(undefined, frame, ['bad_frame'], filtered) } as const
 		}
 
-		const tracked = pickNearestCalibrationStar(filtered.accepted, this.state.lastX, this.state.lastY, this.config.maxMatchDistancePx)
+		// Match at least as far as the jump threshold so a displacement that should fail as
+		// `impossible_jump` is not reported as a lost star because the match radius was tighter.
+		const matchRadius = Math.max(this.config.maxMatchDistancePx, this.config.maxFrameJumpPx)
+		const tracked = pickNearestCalibrationStar(filtered.accepted, this.state.lastX, this.state.lastY, matchRadius)
 
 		if (tracked === undefined) {
+			const nearest = pickNearestCalibrationStar(filtered.accepted, this.state.lastX, this.state.lastY, Number.POSITIVE_INFINITY)
+			if (nearest !== undefined) {
+				return { failure: this.#fail('impossible_jump', 'measured star displacement exceeded the allowed frame jump threshold', frame, ['jump_rejected'], filtered) } as const
+			}
+
 			return { failure: this.#fail('star_lost', 'guide star could not be matched in the calibration frame', frame, ['star_lost'], filtered) } as const
 		}
 

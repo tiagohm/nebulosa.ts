@@ -1722,9 +1722,7 @@ describe('closed-loop calibration and guiding', () => {
 	test.concurrent(
 		'calibration fails when a frame jumps farther than the allowed step',
 		async () => {
-			const harness = makeHarness({
-				calibrator: { ...FAST_CALIBRATION, maxMatchDistancePx: 40 },
-			})
+			const harness = makeHarness({ calibrator: FAST_CALIBRATION })
 			connect(harness)
 			harness.client.loop()
 			await feedFrame(harness)
@@ -1732,8 +1730,9 @@ describe('closed-loop calibration and guiding', () => {
 			await feedFrame(harness)
 			await feedFrame(harness)
 
-			// 12 px plus the pending calibration pulse stays inside the match radius and outside
-			// maxFrameJumpPx (8), so the frame is a rejected jump rather than a lost star.
+			// 12 px plus the pending calibration pulse is outside maxFrameJumpPx (8). The star is
+			// still in the frame, so the calibrator classifies this as a rejected jump rather than
+			// a lost star even when the match radius equals the jump threshold.
 			harness.mount.offsetX += 12
 			for (let i = 0; i < MAX_CALIBRATION_FRAMES && eventsOf(harness.events, 'CalibrationFailed').length === 0; i++) {
 				await feedFrame(harness)
