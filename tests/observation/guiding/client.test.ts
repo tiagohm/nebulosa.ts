@@ -2950,6 +2950,34 @@ describe('closed-loop calibration and guiding', () => {
 	)
 
 	test.concurrent(
+		'resuming after a pause corrects the drift that accumulated while paused',
+		async () => {
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
+
+			expect(harness.client.setPaused(true)).toBeTrue()
+			harness.mount.offsetX += RA_AXIS[0] * 3
+			harness.mount.offsetY += RA_AXIS[1] * 3
+
+			const from = harness.guideOutputManager.pulses.length
+			expect(harness.client.setPaused(false)).toBeTrue()
+
+			const distances: number[] = []
+			for (let i = 0; i < 8; i++) {
+				await feedFrame(harness)
+				const step = eventsOf(harness.events, 'GuideStep').at(-1)!
+				distances.push(Math.hypot(step.dx, step.dy))
+			}
+
+			expect(harness.guideOutputManager.pulses.length).toBeGreaterThan(from)
+			expect(distances[0]).toBeGreaterThan(1.5)
+			expect(distances.at(-1)!).toBeLessThan(distances[0])
+			expect(harness.client.getAppState()).toBe('Guiding')
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
 		'guide while paused resumes without dropping the dither',
 		async () => {
 			const harness = await calibrateAndGuide()
