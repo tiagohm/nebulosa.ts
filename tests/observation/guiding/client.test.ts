@@ -2143,6 +2143,24 @@ describe('closed-loop calibration and guiding', () => {
 	)
 
 	test.concurrent(
+		'dither is rejected while the guide lock is lost',
+		async () => {
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
+
+			for (let i = 0; i < 8; i++) await feedEmptyFrame(harness)
+			expect(harness.client.getAppState()).toBe('LostLock')
+
+			const lock = harness.client.getLockPosition()
+			expect(harness.client.dither(3, false, IMMEDIATE_SETTLE)).toBeFalse()
+			expect(eventsOf(harness.events, 'GuidingDithered')).toBeEmpty()
+			expect(harness.client.getLockPosition()).toEqual(lock)
+			expect(harness.client.getAppState()).toBe('LostLock')
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
 		'star-free frames report a lost star every frame but a lost lock position only once',
 		async () => {
 			const harness = await calibrateAndGuide()
