@@ -1565,6 +1565,34 @@ describe('closed-loop calibration and guiding', () => {
 	)
 
 	test.concurrent(
+		'disabling guide output keeps frames but sends no INDI pulse',
+		async () => {
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
+
+			harness.client.setGuideOutputEnabled(false)
+			expect(harness.client.getGuideOutputEnabled()).toBeFalse()
+
+			const pulsesBefore = harness.guideOutputManager.pulses.length
+			const stepsBefore = eventsOf(harness.events, 'GuideStep').length
+			harness.mount.driftX = RA_AXIS[0] * 0.8
+			harness.mount.driftY = RA_AXIS[1] * 0.8
+			for (let i = 0; i < 4; i++) await feedFrame(harness)
+
+			const steps = eventsOf(harness.events, 'GuideStep').slice(stepsBefore)
+			expect(steps.length).toBe(4)
+			expect(harness.guideOutputManager.pulses.length).toBe(pulsesBefore)
+			expect(harness.client.getAppState()).toBe('Guiding')
+			expect(steps.some((step) => Math.hypot(step.dx, step.dy) > 0.5)).toBeTrue()
+			for (const step of steps) {
+				expect(step.RADuration).toBe(0)
+				expect(step.DECDuration).toBe(0)
+			}
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
 		'declination mode Off issues no DEC pulse while RA still guides',
 		async () => {
 			const harness = await calibrateAndGuide()
