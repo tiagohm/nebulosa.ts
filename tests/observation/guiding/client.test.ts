@@ -4062,4 +4062,45 @@ describe('closed-loop calibration and guiding', () => {
 		},
 		CLOSED_LOOP_TIMEOUT,
 	)
+
+	test.concurrent(
+		'end-to-end first light calibrates, guides a drift, then releases the session',
+		async () => {
+			const harness = makeHarness({ calibrator: FAST_CALIBRATION })
+			expect(connect(harness)).toBeTrue()
+			expect(harness.client.loop()).toBeTrue()
+			await feedFrame(harness)
+			expect(harness.client.findStar()).toBeDefined()
+			expect(harness.client.guide(false, IMMEDIATE_SETTLE)).toBeTrue()
+			expect(harness.client.getAppState()).toBe('Calibrating')
+
+			for (let i = 0; i < MAX_CALIBRATION_FRAMES; i++) {
+				await feedFrame(harness)
+				if (harness.client.getCalibrated()) break
+			}
+
+			expect(harness.client.getCalibrated()).toBeTrue()
+			expect(harness.client.getAppState()).toBe('Guiding')
+			await establishLockReference(harness)
+
+			const distances: number[] = []
+			harness.mount.driftX = RA_AXIS[0] * 1.2
+			harness.mount.driftY = RA_AXIS[1] * 1.2
+			for (let i = 0; i < 8; i++) {
+				await feedFrame(harness)
+				const step = eventsOf(harness.events, 'GuideStep').at(-1)!
+				distances.push(Math.hypot(step.dx, step.dy))
+			}
+
+			expect(Math.max(...distances)).toBeLessThan(8)
+			expect(harness.guideOutputManager.pulses.some((pulse) => pulse.direction === 'WEST' || pulse.direction === 'EAST')).toBeTrue()
+			expect(harness.client.stopCapture()).toBeTrue()
+			expect(harness.client.getCalibrated()).toBeTrue()
+			expect(harness.client.disconnect()).toBeTrue()
+			expect(harness.client.getCalibrated()).toBeFalse()
+			expect(harness.client.getLockPosition()).toBeUndefined()
+			expect(harness.client.getAppState()).toBe('Stopped')
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
 })
