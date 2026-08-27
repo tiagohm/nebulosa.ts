@@ -3604,6 +3604,26 @@ describe('closed-loop calibration and guiding', () => {
 	)
 
 	test.concurrent(
+		'the first frames after a settled dither do not add a transient pulse',
+		async () => {
+			const harness = await calibrateAndGuide({ ditherMode: 'spiral' })
+			await establishLockReference(harness)
+			await ditherAndSettle(harness, DITHER_AMOUNT_PX)
+
+			expect(harness.client.getSettling()).toBeFalse()
+			const from = harness.guideOutputManager.pulses.length
+			for (let i = 0; i < 4; i++) await feedFrame(harness)
+
+			const extra = harness.guideOutputManager.pulses.slice(from)
+			expect(extra.every((pulse) => pulse.duration < 80)).toBeTrue()
+			const step = eventsOf(harness.events, 'GuideStep').at(-1)!
+			expect(Math.hypot(step.dx, step.dy)).toBeLessThan(IMMEDIATE_SETTLE.pixels)
+			expect(harness.client.getAppState()).toBe('Guiding')
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
 		'a second dither before settle accumulates onto the same lock',
 		async () => {
 			const harness = await calibrateAndGuide()
