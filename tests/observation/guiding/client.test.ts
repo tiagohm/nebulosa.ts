@@ -2169,6 +2169,45 @@ describe('closed-loop calibration and guiding', () => {
 	)
 
 	test.concurrent(
+		're-enabling Auto declination after Off does not dump a stale DEC pulse',
+		async () => {
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
+			const originX = harness.mount.offsetX
+			const originY = harness.mount.offsetY
+
+			// A measured DEC error fills the DEC filter while Auto is still active.
+			harness.mount.offsetX = originX + DEC_AXIS[0] * 6
+			harness.mount.offsetY = originY + DEC_AXIS[1] * 6
+			const fromError = harness.guideOutputManager.pulses.length
+			await feedFrame(harness)
+			const errorDEC = harness.guideOutputManager.pulses.slice(fromError).filter((pulse) => pulse.direction === 'NORTH' || pulse.direction === 'SOUTH')
+			expect(errorDEC.length).toBeGreaterThan(0)
+			expect(errorDEC[0].duration).toBeGreaterThan(100)
+
+			harness.client.setDeclinationGuideMode('Off')
+			for (let i = 0; i < 3; i++) {
+				harness.mount.advance(harness.guideOutputManager.pulses)
+				harness.mount.offsetX = originX
+				harness.mount.offsetY = originY
+				await feedBuffer(harness, await buildFrameBuffer(originX, originY))
+			}
+
+			harness.client.setDeclinationGuideMode('Auto')
+			const from = harness.guideOutputManager.pulses.length
+			harness.mount.advance(harness.guideOutputManager.pulses)
+			harness.mount.offsetX = originX
+			harness.mount.offsetY = originY
+			await feedBuffer(harness, await buildFrameBuffer(originX, originY))
+
+			const dumped = harness.guideOutputManager.pulses.slice(from).filter((pulse) => pulse.direction === 'NORTH' || pulse.direction === 'SOUTH')
+			expect(dumped.reduce((sum, pulse) => sum + pulse.duration, 0)).toBeLessThan(errorDEC[0].duration * 0.3)
+			expect(harness.client.getAppState()).toBe('Guiding')
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
 		'declination mode North issues only NORTH pulses',
 		async () => {
 			const harness = await calibrateAndGuide()
