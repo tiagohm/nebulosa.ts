@@ -3540,6 +3540,28 @@ describe('closed-loop calibration and guiding', () => {
 	)
 
 	test.concurrent(
+		'settle times out when the error stays outside the pixel limit',
+		async () => {
+			const harness = await calibrateAndGuide({ ditherMode: 'spiral' })
+			await establishLockReference(harness)
+
+			expect(harness.client.dither(DITHER_AMOUNT_PX, false, { pixels: 0.5, time: 5, timeout: 1 })).toBeTrue()
+			expect(harness.client.getSettling()).toBeTrue()
+
+			await feedFrame(harness)
+			await Bun.sleep(1100)
+			await feedFrame(harness)
+
+			const done = eventsOf(harness.events, 'SettleDone').at(-1)!
+			expect(done.Status).not.toBe(0)
+			expect(done.Error).toMatch(/timeout/i)
+			expect(harness.client.getSettling()).toBeFalse()
+			expect(harness.client.getAppState()).toBe('Guiding')
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
 		'a second dither before settle accumulates onto the same lock',
 		async () => {
 			const harness = await calibrateAndGuide()
