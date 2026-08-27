@@ -3212,6 +3212,46 @@ describe('closed-loop calibration and guiding', () => {
 	)
 
 	test.concurrent(
+		'a second session after disconnect starts without the previous lock or calibration',
+		async () => {
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
+			expect(harness.client.dither(3, false, IMMEDIATE_SETTLE)).toBeTrue()
+			expect(harness.client.getLockPosition()).toBeDefined()
+			expect(harness.client.getCalibrated()).toBeTrue()
+			expect(harness.client.getSettling()).toBeTrue()
+
+			expect(harness.client.disconnect()).toBeTrue()
+			expect(harness.client.getAppState()).toBe('Stopped')
+			expect(harness.client.getCalibrated()).toBeFalse()
+			expect(harness.client.getLockPosition()).toBeUndefined()
+			expect(harness.client.getSettling()).toBeFalse()
+
+			harness.frameCount = 0
+			harness.mount.offsetX += 8
+			harness.mount.offsetY -= 6
+			expect(connect(harness)).toBeTrue()
+			expect(harness.client.getCalibrated()).toBeFalse()
+			expect(harness.client.getLockPosition()).toBeUndefined()
+
+			harness.client.loop()
+			await feedFrame(harness)
+			expect(harness.client.guide(false, IMMEDIATE_SETTLE)).toBeTrue()
+			expect(harness.client.getAppState()).toBe('Calibrating')
+			expect(harness.client.getCalibrated()).toBeFalse()
+
+			for (let i = 0; i < MAX_CALIBRATION_FRAMES; i++) {
+				await feedFrame(harness)
+				if (harness.client.getCalibrated()) break
+			}
+
+			expect(harness.client.getCalibrated()).toBeTrue()
+			expect(harness.client.getAppState()).toBe('Guiding')
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
 		'loop during guiding stops pulses and keeps the exposure loop',
 		async () => {
 			const harness = await calibrateAndGuide()
