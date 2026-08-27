@@ -167,6 +167,19 @@ async function buildFrameBufferAt(positions: readonly (readonly [number, number]
 	return buffer
 }
 
+// Builds a FITS buffer clipped to full scale, so the detector finds no usable guide star.
+async function buildSaturatedFrameBuffer() {
+	const raw = new Float32Array(FRAME_WIDTH * FRAME_HEIGHT).fill(1)
+	const image: Image = {
+		header: { SIMPLE: true, BITPIX: -32, NAXIS: 2, NAXIS1: FRAME_WIDTH, NAXIS2: FRAME_HEIGHT },
+		metadata: { width: FRAME_WIDTH, height: FRAME_HEIGHT, channels: 1, pixelCount: FRAME_WIDTH * FRAME_HEIGHT, pixelSizeInBytes: 4, strideInBytes: FRAME_WIDTH * 4, stride: FRAME_WIDTH, bitpix: -32, bayer: undefined },
+		raw,
+	}
+	const buffer = Buffer.alloc(FRAME_WIDTH * FRAME_HEIGHT * 4 + 100000)
+	await writeImageToFits(image, bufferSink(buffer))
+	return buffer
+}
+
 // Frame with both stars at their nominal positions, reused by tests that never move the mount.
 const FRAME_BUFFER = await buildFrameBuffer()
 
@@ -2260,6 +2273,42 @@ describe('closed-loop calibration and guiding', () => {
 			expect(secondary).toBeDefined()
 			expect(harness.client.getAppState()).toBe('Guiding')
 			expect(eventsOf(harness.events, 'StarLost')).toBeEmpty()
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
+		'a saturated field is treated as a lost star with finite public state',
+		async () => {
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
+
+			const pulsesBefore = harness.guideOutputManager.pulses.length
+			const saturated = await buildSaturatedFrameBuffer()
+			for (let i = 0; i < 8; i++) {
+				harness.mount.advance(harness.guideOutputManager.pulses)
+				await feedBuffer(harness, saturated)
+			}
+
+			expect(harness.client.getAppState()).toBe('LostLock')
+			expect(harness.guideOutputManager.pulses.length).toBe(pulsesBefore)
+			expect(eventsOf(harness.events, 'LockPositionLost')).toHaveLength(1)
+
+			const lost = eventsOf(harness.events, 'StarLost')
+			expect(lost.length).toBeGreaterThan(0)
+			for (const event of lost) {
+				expect(Number.isFinite(event.Frame)).toBeTrue()
+				expect(Number.isFinite(event.Time)).toBeTrue()
+				expect(Number.isFinite(event.StarMass)).toBeTrue()
+				expect(Number.isFinite(event.SNR)).toBeTrue()
+				expect(Number.isFinite(event.AvgDist)).toBeTrue()
+			}
+
+			const lock = harness.client.getLockPosition()
+			if (lock !== undefined) {
+				expect(Number.isFinite(lock[0])).toBeTrue()
+				expect(Number.isFinite(lock[1])).toBeTrue()
+			}
 		},
 		CLOSED_LOOP_TIMEOUT,
 	)
