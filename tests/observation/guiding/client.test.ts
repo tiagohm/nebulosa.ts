@@ -440,6 +440,29 @@ describe('connect / disconnect', () => {
 		expect(harness.client.disconnect()).toBeFalse()
 		expect(harness.cameraManager.stopExposureCount).toBe(0)
 	})
+
+	test('disconnect during an in-flight exposure ignores a late BLOB', async () => {
+		connect(harness)
+		expect(harness.client.loop()).toBeTrue()
+
+		const handler = harness.cameraManager.handler
+		const camera = harness.camera
+		const exposuresBefore = harness.cameraManager.startExposureCalls.length
+
+		expect(harness.client.disconnect()).toBeTrue()
+		expect(harness.client.getAppState()).toBe('Stopped')
+		expect(harness.cameraManager.stopExposureCount).toBeGreaterThanOrEqual(1)
+
+		// The cancelled exposure may still deliver its BLOB. The handler reference is the client's,
+		// so this is the same callback disconnect unregistered — it must not process the frame or
+		// start another capture after the session is gone.
+		await handler!.blobReceived!(camera, FRAME_BUFFER, 'raw')
+		await Bun.sleep(30)
+
+		expect(eventsOf(harness.events, 'LoopingExposures')).toHaveLength(0)
+		expect(harness.guideOutputManager.pulses).toHaveLength(0)
+		expect(harness.cameraManager.startExposureCalls.length).toBe(exposuresBefore)
+	})
 })
 
 describe('capture control', () => {
