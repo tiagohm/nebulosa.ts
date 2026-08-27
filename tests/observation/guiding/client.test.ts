@@ -3747,6 +3747,26 @@ describe('closed-loop calibration and guiding', () => {
 	)
 
 	test.concurrent(
+		'lock-shift clamps the target at the frame edge',
+		async () => {
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
+
+			expect(harness.client.setLockShiftParams({ rate: [1e7, 0], axes: 'X/Y' })).toBeTrue()
+			expect(harness.client.setLockShiftEnabled(true)).toBeTrue()
+			await Bun.sleep(200)
+			await feedFrame(harness)
+
+			const lock = harness.client.getLockPosition()!
+			expect(lock[0]).toBe(FRAME_WIDTH - 1)
+			expect(lock[1]).toBeGreaterThanOrEqual(0)
+			expect(lock[1]).toBeLessThan(FRAME_HEIGHT)
+			expect(eventsOf(harness.events, 'LockPositionShiftLimitReached')).toHaveLength(1)
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
 		'a second dither before settle accumulates onto the same lock',
 		async () => {
 			const harness = await calibrateAndGuide()
