@@ -1991,6 +1991,30 @@ describe('closed-loop calibration and guiding', () => {
 	)
 
 	test.concurrent(
+		'a single star-free frame suppresses the pulse without losing the lock',
+		async () => {
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
+			harness.mount.driftX = RA_AXIS[0] * 0.8
+			harness.mount.driftY = RA_AXIS[1] * 0.8
+			for (let i = 0; i < 4; i++) await feedFrame(harness)
+			expect(harness.client.getAppState()).toBe('Guiding')
+
+			const pulsesBefore = harness.guideOutputManager.pulses.length
+			await feedEmptyFrame(harness)
+
+			expect(harness.client.getAppState()).toBe('Guiding')
+			expect(eventsOf(harness.events, 'StarLost')).toBeEmpty()
+			expect(eventsOf(harness.events, 'LockPositionLost')).toBeEmpty()
+			expect(harness.guideOutputManager.pulses.length).toBe(pulsesBefore)
+
+			await feedFrame(harness)
+			expect(harness.client.getAppState()).toBe('Guiding')
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
 		'star-free frames report a lost star every frame but a lost lock position only once',
 		async () => {
 			const harness = await calibrateAndGuide()
