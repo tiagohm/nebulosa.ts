@@ -1710,6 +1710,33 @@ describe('closed-loop calibration and guiding', () => {
 	)
 
 	test.concurrent(
+		'calibration clearing returns the star near the origin before the DEC leg',
+		async () => {
+			const harness = makeHarness()
+			connect(harness)
+			harness.client.loop()
+			await feedFrame(harness)
+			expect(harness.client.guide(false, IMMEDIATE_SETTLE)).toBeTrue()
+
+			let clearingDistance: number | undefined
+			for (let i = 0; i < 80; i++) {
+				await feedFrame(harness)
+				const startedDec = eventsOf(harness.events, 'Calibrating').find((event) => event.State === 'decForwardPulse' || event.State === 'decForwardMeasure')
+				if (startedDec !== undefined) {
+					clearingDistance = Math.hypot(startedDec.dx, startedDec.dy)
+					break
+				}
+				if (harness.client.getCalibrated() || eventsOf(harness.events, 'CalibrationFailed').length > 0) break
+			}
+
+			expect(clearingDistance).toBeDefined()
+			expect(clearingDistance!).toBeLessThan(6)
+			harness.client.stopCapture()
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
 		'calibration recovers the simulated mount rate and camera angle on both axes',
 		async () => {
 			const harness = await calibrateAndGuide()
