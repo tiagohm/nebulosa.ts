@@ -93,6 +93,7 @@ Use Bun for installs, scripts, tests, and local execution.
 - Lint with fixes: `bun run lint:fix`
 - Refresh the code graph: `bun run index`
 - Run the full suite: `bun test --parallel`
+- Run test files affected by uncommited changes: `bun test --parallel --changed`
 - Run one test file: `bun test tests/vec3.test.ts`
 
 Tests use `bunfig.toml`, with `tests/` as the root and `tests/setup.ts` as preload. Missing large fixtures may be downloaded through `tests/download.ts`.
@@ -362,7 +363,7 @@ Write precise English commit messages with:
 
 1. an imperative subject, normally lowercase, preferably no more than 72 characters and without a trailing period;
 2. exactly one blank line;
-3. a required body explaining why the change exists and any important side effects, limitations, or trade-offs;
+3. a required body, without break lines, explaining why the change exists and any important side effects, limitations, or trade-offs;
 4. exactly one blank line;
 5. a `Co-Authored-By: Name <email>` trailer for the authoring agent.
 
