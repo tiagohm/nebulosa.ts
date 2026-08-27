@@ -3584,6 +3584,26 @@ describe('closed-loop calibration and guiding', () => {
 	)
 
 	test.concurrent(
+		'a dither larger than the search box does not chase the star blindly',
+		async () => {
+			const harness = await calibrateAndGuide({ ditherMode: 'spiral', searchRegion: 32 })
+			await establishLockReference(harness)
+
+			const pulsesBefore = harness.guideOutputManager.pulses.length
+			expect(harness.client.dither(40, false, IMMEDIATE_SETTLE)).toBeTrue()
+
+			for (let i = 0; i < 8; i++) await feedFrame(harness)
+
+			expect(harness.client.getAppState()).toBe('LostLock')
+			const after = harness.guideOutputManager.pulses.slice(pulsesBefore)
+			expect(after.length).toBeLessThanOrEqual(2)
+			expect(after.every((pulse) => pulse.duration <= 2000)).toBeTrue()
+			expect(eventsOf(harness.events, 'StarLost').length).toBeGreaterThan(0)
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
 		'a second dither before settle accumulates onto the same lock',
 		async () => {
 			const harness = await calibrateAndGuide()
