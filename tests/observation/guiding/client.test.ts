@@ -4154,4 +4154,33 @@ describe('closed-loop calibration and guiding', () => {
 		},
 		CLOSED_LOOP_TIMEOUT,
 	)
+
+	test.concurrent(
+		'end-to-end a missing exposure retries and the session continues',
+		async () => {
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
+
+			const exposuresBefore = harness.cameraManager.startExposureCalls.length
+			const pulsesBefore = harness.guideOutputManager.pulses.length
+			const timedOut = (events: readonly PHD2Events[]) => eventsOf(events, 'Alert').filter((alert) => alert.Type === 'warning' && alert.Msg.includes('timed out'))
+			const timeoutBefore = timedOut(harness.events).length
+
+			for (let i = 0; i < 200 && timedOut(harness.events).length === timeoutBefore; i++) {
+				await Bun.sleep(50)
+			}
+
+			expect(timedOut(harness.events).length).toBeGreaterThan(timeoutBefore)
+			expect(harness.cameraManager.startExposureCalls.length).toBeGreaterThan(exposuresBefore)
+			expect(harness.guideOutputManager.pulses.length).toBe(pulsesBefore)
+
+			harness.mount.driftX = RA_AXIS[0] * 1.2
+			harness.mount.driftY = RA_AXIS[1] * 1.2
+			await feedFrame(harness)
+			expect(harness.client.getAppState()).toBe('Guiding')
+			for (let i = 0; i < 4; i++) await feedFrame(harness)
+			expect(harness.guideOutputManager.pulses.length).toBeGreaterThan(pulsesBefore)
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
 })
