@@ -2441,6 +2441,29 @@ describe('closed-loop calibration and guiding', () => {
 	)
 
 	test.concurrent(
+		'recovery with a stationary mount does not issue a compensation pulse',
+		async () => {
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
+
+			for (let i = 0; i < 8; i++) await feedEmptyFrame(harness)
+			expect(harness.client.getAppState()).toBe('LostLock')
+
+			const pulsesBefore = harness.guideOutputManager.pulses.length
+			await feedFrame(harness)
+			expect(harness.client.getAppState()).toBe('Guiding')
+
+			const step = eventsOf(harness.events, 'GuideStep').at(-1)!
+			expect(Math.hypot(step.dx, step.dy)).toBeLessThan(1.5)
+			expect(step.RADuration).toBe(0)
+			expect(step.DECDuration).toBe(0)
+			expect(harness.guideOutputManager.pulses.length).toBe(pulsesBefore)
+			expect(eventsOf(harness.events, 'LockPositionLost')).toHaveLength(1)
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
 		'a repeated guide request while already guiding starts settle without a second exposure',
 		async () => {
 			const harness = await calibrateAndGuide()
