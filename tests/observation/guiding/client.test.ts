@@ -2352,6 +2352,40 @@ describe('closed-loop calibration and guiding', () => {
 	)
 
 	test.concurrent(
+		'an impossible measurement jump is rejected without a pulse',
+		async () => {
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
+
+			const pulsesBefore = harness.guideOutputManager.pulses.length
+			const lock = harness.client.getLockPosition()!
+			const stepsBefore = eventsOf(harness.events, 'GuideStep').length
+
+			// 15 px exceeds maxFrameJumpPx (12) while remaining inside the default 64 px search box.
+			harness.mount.offsetX += 15
+			await feedFrame(harness)
+
+			expect(harness.guideOutputManager.pulses.length).toBe(pulsesBefore)
+			expect(harness.client.getAppState()).toBe('Guiding')
+			const jumped = eventsOf(harness.events, 'GuideStep').at(-1)!
+			expect(eventsOf(harness.events, 'GuideStep').length).toBe(stepsBefore + 1)
+			expect(jumped.RADuration).toBe(0)
+			expect(jumped.DECDuration).toBe(0)
+			expect(harness.client.getLockPosition()![0]).toBeCloseTo(lock[0], 6)
+			expect(harness.client.getLockPosition()![1]).toBeCloseTo(lock[1], 6)
+
+			harness.mount.offsetX -= 15
+			await feedFrame(harness)
+
+			expect(harness.client.getAppState()).toBe('Guiding')
+			expect(eventsOf(harness.events, 'StarLost')).toBeEmpty()
+			expect(harness.client.getLockPosition()![0]).toBeCloseTo(lock[0], 6)
+			expect(harness.client.getLockPosition()![1]).toBeCloseTo(lock[1], 6)
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
 		'a sticky lock keeps the reference while the search center follows the star',
 		async () => {
 			const frames: GuideFrameImage[] = []
