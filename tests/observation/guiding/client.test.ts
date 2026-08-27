@@ -2790,6 +2790,31 @@ describe('closed-loop calibration and guiding', () => {
 	)
 
 	test.concurrent(
+		'a common field translation is followed instead of a single star',
+		async () => {
+			const frames: GuideFrameImage[] = []
+			const harness = await calibrateAndGuide({
+				handler: { frame: (_client, frame) => frames.push(frame) },
+			})
+			await establishLockReference(harness)
+			harness.client.setGuideOutputEnabled(false)
+
+			const shift = 3
+			harness.mount.offsetX += shift
+			await feedFrame(harness)
+
+			const frame = frames.at(-1)!
+			expect(frame.acceptedStars?.length).toBeGreaterThanOrEqual(2)
+			const step = eventsOf(harness.events, 'GuideStep').at(-1)!
+			expect(Math.hypot(step.dx, step.dy)).toBeGreaterThan(shift - 1.5)
+			expect(Math.hypot(step.dx, step.dy)).toBeLessThan(shift + 1.5)
+			expect(step.dx).toBeGreaterThan(shift - 1.5)
+			expect(harness.client.getAppState()).toBe('Guiding')
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
 		'a saturated field is treated as a lost star with finite public state',
 		async () => {
 			const harness = await calibrateAndGuide()
