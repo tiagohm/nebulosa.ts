@@ -145,13 +145,15 @@ async function buildFrameBuffer(offsetX = 0, offsetY = 0, stars = true): Promise
 }
 
 // Builds a FITS buffer with stars at explicit image-pixel centers, used when a test needs a
-// geometry that the default two-star field cannot produce.
-async function buildFrameBufferAt(positions: readonly (readonly [number, number])[]) {
+// geometry that the default two-star field cannot produce. An optional third value is the
+// integrated flux; omitted positions use STAR_FLUX.
+async function buildFrameBufferAt(positions: readonly (readonly [number, number] | readonly [number, number, number])[]) {
 	const raw = new Float32Array(FRAME_WIDTH * FRAME_HEIGHT).fill(FRAME_BACKGROUND)
 	const options = { background: FRAME_BACKGROUND, saturationLevel: 1 }
 
-	for (const [x, y] of positions) {
-		plotStar(raw, FRAME_WIDTH, FRAME_HEIGHT, 1, x, y, STAR_FLUX, STAR_HFD, STAR_PLOT_SNR, 0, undefined, options)
+	for (const position of positions) {
+		const [x, y, flux = STAR_FLUX] = position
+		plotStar(raw, FRAME_WIDTH, FRAME_HEIGHT, 1, x, y, flux, STAR_HFD, STAR_PLOT_SNR, 0, undefined, options)
 	}
 
 	const image: Image = {
@@ -1037,6 +1039,22 @@ describe('frame-driven behavior', () => {
 		expect(looping.StarMass).toBeGreaterThan(0)
 		expect(Number.isFinite(looping.SNR)).toBeTrue()
 		expect(looping.SNR).toBeGreaterThanOrEqual(0)
+	})
+
+	test('findStar selects the only valid star and locks onto it', async () => {
+		connect(harness)
+		harness.client.loop()
+		await feedBuffer(harness, await buildFrameBufferAt([[120, 120]]))
+
+		const lock = harness.client.findStar()
+		expect(lock).toBeDefined()
+		expect(lock![0]).toBeCloseTo(120, 0)
+		expect(lock![1]).toBeCloseTo(120, 0)
+		expect(harness.client.getLockPosition()).toEqual(lock)
+		expect(harness.client.getAppState()).toBe('Selected')
+		expect(eventsOf(harness.events, 'StarSelected').at(-1)).toMatchObject({ X: lock![0], Y: lock![1] })
+		expect(eventsOf(harness.events, 'LockPositionSet').at(-1)).toMatchObject({ X: lock![0], Y: lock![1] })
+		harness.client.stopCapture()
 	})
 
 	test('getStarImage crops a square ROI sized by the search region', async () => {
