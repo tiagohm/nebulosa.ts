@@ -1,7 +1,7 @@
 import { pixelScale } from '../../astronomy/formulas'
 import type { PartialOnly, Writable } from '../../core/types'
 import { errorMessage } from '../../core/util'
-import { DEFAULT_PHD2_SETTLE, type PHD2AppState, type PHD2CalibrationData, type PHD2DeclinationGuideMode, type PHD2EventMap, type PHD2Events, type PHD2GuideDirection, type PHD2GuideStepEvent, type PHD2LockShiftParams, type PHD2Settle, type PHD2StarImage } from '../../devices/guiding/phd2'
+import { DEFAULT_PHD2_SETTLE, type PHD2AppState, type PHD2CalibrationData, type PHD2DeclinationGuideMode, type PHD2EventMap, type PHD2Events, type PHD2EventType, type PHD2GuideDirection, type PHD2GuideStepEvent, type PHD2LockShiftParams, type PHD2Settle, type PHD2StarImage } from '../../devices/guiding/phd2'
 import type { Camera, GuideDirection, GuideOutput } from '../../devices/indi/device'
 import type { CameraManager, DeviceHandler, GuideOutputManager } from '../../devices/indi/manager'
 import type { BlobEncoding } from '../../devices/indi/types'
@@ -66,6 +66,41 @@ const DEFAULT_LOCK_SHIFT_PARAMS: Readonly<PHD2LockShiftParams> = {
 	rate: [0, 0],
 	units: 'pixels/hr',
 	axes: 'X/Y',
+}
+
+export type GuiderEventType = PHD2EventType | 'GuidingAssistantCompleted' | 'GuidingAssistantFailed' | 'GuidingAssistantStarted' | 'GuidingAssistantUpdated'
+
+export type GuiderEvents = PHD2Events | GuidingAssistantCompletedEvent | GuidingAssistantFailedEvent | GuidingAssistantStartedEvent | GuidingAssistantUpdatedEvent
+
+export interface GuiderEvent<E extends GuiderEventType> {
+	readonly Event: E
+	readonly Timestamp: number
+	readonly Host: string
+	readonly Inst: number
+}
+
+// Guiding Assistant lifecycle events, each carrying the latest measurement result.
+export interface GuidingAssistantStartedEvent extends GuiderEvent<'GuidingAssistantStarted'> {
+	readonly Result: GuidingAssistantResult
+}
+
+export interface GuidingAssistantUpdatedEvent extends GuiderEvent<'GuidingAssistantUpdated'> {
+	readonly Result: GuidingAssistantResult
+}
+
+export interface GuidingAssistantCompletedEvent extends GuiderEvent<'GuidingAssistantCompleted'> {
+	readonly Result: GuidingAssistantResult
+}
+
+export interface GuidingAssistantFailedEvent extends GuiderEvent<'GuidingAssistantFailed'> {
+	readonly Result: GuidingAssistantResult
+}
+
+export interface GuiderEventMap extends PHD2EventMap {
+	readonly GuidingAssistantCompleted: GuidingAssistantCompletedEvent
+	readonly GuidingAssistantFailed: GuidingAssistantFailedEvent
+	readonly GuidingAssistantStarted: GuidingAssistantStartedEvent
+	readonly GuidingAssistantUpdated: GuidingAssistantUpdatedEvent
 }
 
 // Snapshot of one processed guide exposure, published for UI rendering. It carries the decoded
@@ -1636,7 +1671,7 @@ export class GuiderClient {
 	}
 
 	// Emits one callback event if the caller provided an event handler.
-	emitEvent<T extends keyof PHD2EventMap>(Event: T, data?: Omit<PHD2EventMap[T], 'Event' | 'Timestamp' | 'Host' | 'Inst'>) {
+	emitEvent<T extends keyof GuiderEventMap>(Event: T, data?: Omit<GuiderEventMap[T], 'Event' | 'Timestamp' | 'Host' | 'Inst'>) {
 		const event = {
 			...data,
 			Event,

@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, test } from 'bun:test'
 import { pixelScale } from '../../../src/astronomy/formulas'
 import { DEG2RAD, PIOVERTWO } from '../../../src/core/constants'
-import type { PHD2Events } from '../../../src/devices/guiding/phd2'
 import { type Camera, DEFAULT_CAMERA, DEFAULT_GUIDE_OUTPUT, type GuideDirection, type GuideOutput } from '../../../src/devices/indi/device'
 import type { CameraManager, DeviceHandler, GuideOutputManager } from '../../../src/devices/indi/manager'
 import { writeImageToFits } from '../../../src/imaging/model/image'
@@ -9,7 +8,7 @@ import type { Image } from '../../../src/imaging/model/types'
 import { plotStar } from '../../../src/imaging/stars/generator'
 import { bufferSink } from '../../../src/io/io'
 import type { GuidingCalibrationResult } from '../../../src/observation/guiding/calibrator'
-import { GuiderClient, type GuideFrameImage, type GuiderClientConnectOptions, type GuiderClientOptions } from '../../../src/observation/guiding/client'
+import { GuiderClient, type GuideFrameImage, type GuiderClientConnectOptions, type GuiderClientOptions, type GuiderEvents } from '../../../src/observation/guiding/client'
 import { ditherPulsePlanFromCalibration } from '../../../src/observation/guiding/dither.pulse'
 import type { GuideDirectionDEC, GuideDirectionRA } from '../../../src/observation/guiding/guider'
 import { isTimeConsumingTestSkipped } from '../../util'
@@ -276,7 +275,7 @@ interface Harness {
 	readonly client: GuiderClient
 	readonly cameraManager: FakeCameraManager
 	readonly guideOutputManager: FakeGuideOutputManager
-	readonly events: PHD2Events[]
+	readonly events: GuiderEvents[]
 	readonly camera: Camera
 	readonly guideOutput: GuideOutput
 	readonly mount: MountSimulator
@@ -287,7 +286,7 @@ interface Harness {
 function makeHarness(options: GuiderClientOptions = {}): Harness {
 	const cameraManager = new FakeCameraManager()
 	const guideOutputManager = new FakeGuideOutputManager()
-	const events: PHD2Events[] = []
+	const events: GuiderEvents[] = []
 	const client = new GuiderClient(cameraManager as unknown as CameraManager, guideOutputManager as unknown as GuideOutputManager, {
 		...options,
 		handler: {
@@ -373,8 +372,8 @@ async function feedStars(harness: Harness, stars: readonly (readonly [number, nu
 }
 
 // Returns all recorded events of one type.
-function eventsOf<T extends PHD2Events['Event']>(events: readonly PHD2Events[], type: T) {
-	return events.filter((event) => event.Event === type) as Extract<PHD2Events, { Event: T }>[]
+function eventsOf<T extends GuiderEvents['Event']>(events: readonly GuiderEvents[], type: T) {
+	return events.filter((event) => event.Event === type) as Extract<GuiderEvents, { Event: T }>[]
 }
 
 let harness: Harness
@@ -1363,7 +1362,7 @@ describe('frame processing robustness', () => {
 	test('an event handler throw does not stop the exposure loop', async () => {
 		const cameraManager = new FakeCameraManager()
 		const guideOutputManager = new FakeGuideOutputManager()
-		const events: PHD2Events[] = []
+		const events: GuiderEvents[] = []
 		const client = new GuiderClient(cameraManager as unknown as CameraManager, guideOutputManager as unknown as GuideOutputManager, {
 			handler: {
 				event: (_client, event) => {
@@ -4636,7 +4635,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 
 			const exposuresBefore = harness.cameraManager.startExposureCalls.length
 			const pulsesBefore = harness.guideOutputManager.pulses.length
-			const timedOut = (events: readonly PHD2Events[]) => eventsOf(events, 'Alert').filter((alert) => alert.Type === 'warning' && alert.Msg.includes('timed out'))
+			const timedOut = (events: readonly GuiderEvents[]) => eventsOf(events, 'Alert').filter((alert) => alert.Type === 'warning' && alert.Msg.includes('timed out'))
 			const timeoutBefore = timedOut(harness.events).length
 
 			for (let i = 0; i < 200 && timedOut(harness.events).length === timeoutBefore; i++) {
