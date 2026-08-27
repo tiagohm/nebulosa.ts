@@ -12,6 +12,7 @@ import type { GuidingCalibrationResult } from '../../../src/observation/guiding/
 import { GuiderClient, type GuideFrameImage, type GuiderClientConnectOptions, type GuiderClientOptions } from '../../../src/observation/guiding/client'
 import { ditherPulsePlanFromCalibration } from '../../../src/observation/guiding/dither.pulse'
 import type { GuideDirectionDEC, GuideDirectionRA } from '../../../src/observation/guiding/guider'
+import { isTimeConsumingTestSkipped } from '../../util'
 
 // One recorded pulse issued through the fake guide-output manager.
 interface PulseRecord {
@@ -1461,7 +1462,7 @@ describe('frame processing robustness', () => {
 	}, 15000)
 })
 
-describe('closed-loop calibration and guiding', () => {
+describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guiding', () => {
 	// Upper bound on the frames a calibration run may consume before the test gives up. The simulated
 	// mount converges in about 14, so this only guards against a run that never completes.
 	const MAX_CALIBRATION_FRAMES = 40
