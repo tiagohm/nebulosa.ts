@@ -2013,6 +2013,27 @@ describe('closed-loop calibration and guiding', () => {
 	)
 
 	test.concurrent(
+		'a repeated guide request while already guiding starts settle without a second exposure',
+		async () => {
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
+			expect(harness.client.getAppState()).toBe('Guiding')
+
+			const exposuresBefore = harness.cameraManager.startExposureCalls.length
+			const startGuiding = eventsOf(harness.events, 'StartGuiding').length
+			const settleBegin = eventsOf(harness.events, 'SettleBegin').length
+
+			expect(harness.client.guide(false, IMMEDIATE_SETTLE)).toBeTrue()
+			expect(harness.client.getAppState()).toBe('Guiding')
+			expect(harness.client.getSettling()).toBeTrue()
+			expect(harness.cameraManager.startExposureCalls.length).toBe(exposuresBefore)
+			expect(eventsOf(harness.events, 'StartGuiding')).toHaveLength(startGuiding)
+			expect(eventsOf(harness.events, 'SettleBegin').length).toBe(settleBegin + 1)
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
 		'guide during a partial pause does not start a second exposure',
 		async () => {
 			const harness = await calibrateAndGuide()
