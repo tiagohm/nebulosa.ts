@@ -478,6 +478,27 @@ describe('connect / disconnect', () => {
 		expect(harness.cameraManager.stopExposureCount).toBe(0)
 	})
 
+	test('a second disconnect after a session is a no-op', () => {
+		connect(harness)
+		expect(harness.client.loop()).toBeTrue()
+		expect(harness.client.disconnect()).toBeTrue()
+		expect(harness.client.getConnected()).toBeFalse()
+		expect(harness.client.getAppState()).toBe('Stopped')
+
+		const removeHandlerCount = harness.cameraManager.removeHandlerCount
+		const stopExposureCount = harness.cameraManager.stopExposureCount
+		const disableBlobCount = harness.cameraManager.disableBlobCount
+		const eventCount = harness.events.length
+
+		expect(harness.client.disconnect()).toBeFalse()
+		expect(harness.cameraManager.removeHandlerCount).toBe(removeHandlerCount)
+		expect(harness.cameraManager.stopExposureCount).toBe(stopExposureCount)
+		expect(harness.cameraManager.disableBlobCount).toBe(disableBlobCount)
+		expect(harness.events.length).toBe(eventCount)
+		expect(harness.client.getConnected()).toBeFalse()
+		expect(harness.client.getAppState()).toBe('Stopped')
+	})
+
 	test('disconnect during an in-flight exposure ignores a late BLOB', async () => {
 		connect(harness)
 		expect(harness.client.loop()).toBeTrue()
