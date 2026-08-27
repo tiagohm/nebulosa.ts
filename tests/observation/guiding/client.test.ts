@@ -2518,6 +2518,47 @@ describe('closed-loop calibration and guiding', () => {
 	)
 
 	test.concurrent(
+		'a saturated pulse recovers once the lock error shrinks',
+		async () => {
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
+
+			harness.client.setStickyLockPositionEnabled(true)
+			const [lockX, lockY] = harness.client.getLockPosition()!
+			const [awayX, awayY] = offsetAwayFromOtherStar(harness, lockX, lockY, LARGE_LOCK_OFFSET_PX)
+			expect(harness.client.setLockPosition(lockX + awayX, lockY + awayY, true)).toBeTrue()
+
+			let steps = eventsOf(harness.events, 'GuideStep')
+			let limited: (typeof steps)[number] | undefined
+			for (let i = 0; i < 14 && limited === undefined; i++) {
+				await feedFrame(harness)
+				steps = eventsOf(harness.events, 'GuideStep')
+				limited = steps.find((step) => step.RALimited === true)
+			}
+
+			expect(limited).toBeDefined()
+			expect(limited!.RADuration).toBe(2000)
+
+			// The saturated pulses have already walked the star toward the far lock. Relocking on the
+			// current measurement shrinks the error without asking the mount to reverse the whole trip.
+			const farLock = harness.client.getLockPosition()!
+			const lastLimited = eventsOf(harness.events, 'GuideStep').at(-1)!
+			expect(harness.client.setLockPosition(farLock[0] + lastLimited.dx, farLock[1] + lastLimited.dy, true)).toBeTrue()
+			for (let i = 0; i < 16; i++) await feedFrame(harness)
+
+			const recovered = eventsOf(harness.events, 'GuideStep').slice(-4)
+			expect(recovered.length).toBe(4)
+			for (const step of recovered) {
+				expect(step.RALimited).toBeUndefined()
+				expect(step.RADuration).toBeLessThan(500)
+			}
+			expect(Math.hypot(recovered.at(-1)!.dx, recovered.at(-1)!.dy)).toBeLessThan(6)
+			expect(harness.client.getAppState()).toBe('Guiding')
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test.concurrent(
 		'a star outside the search region is reported lost',
 		async () => {
 			const harness = await calibrateAndGuide({ searchRegion: 32 })
