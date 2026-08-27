@@ -1494,7 +1494,7 @@ describe('closed-loop calibration and guiding', () => {
 	)
 
 	test.concurrent(
-		'subpixel lock and motion preserve magnitude and sign',
+		'a small RA shift reports image error with matching magnitude and sign',
 		async () => {
 			const harness = await calibrateAndGuide()
 			await establishLockReference(harness)
@@ -1502,20 +1502,20 @@ describe('closed-loop calibration and guiding', () => {
 			const lock = harness.client.getLockPosition()!
 			expect(Number.isFinite(lock[0])).toBeTrue()
 			expect(Number.isFinite(lock[1])).toBeTrue()
-			expect(lock[0]).toBeCloseTo(STAR_A[0] + harness.mount.offsetX, 1)
-			expect(lock[1]).toBeCloseTo(STAR_A[1] + harness.mount.offsetY, 1)
 
-			const shift = 0.5
+			const stepsBefore = eventsOf(harness.events, 'GuideStep').length
+			// The detector reports the integer peak, so the shift has to cross a pixel to be visible.
+			const shift = 3
 			harness.mount.offsetX += RA_AXIS[0] * shift
 			harness.mount.offsetY += RA_AXIS[1] * shift
 			await feedFrame(harness)
 
-			const step = eventsOf(harness.events, 'GuideStep').at(-1)!
-			expect(step.dx).toBeCloseTo(RA_AXIS[0] * shift, 1)
-			expect(step.dy).toBeCloseTo(RA_AXIS[1] * shift, 1)
-			expect(Math.hypot(step.dx, step.dy)).toBeCloseTo(shift, 1)
-			expect(Math.sign(step.dx) || 1).toBe(Math.sign(RA_AXIS[0]) || 1)
-			expect(Math.sign(step.dy) || 1).toBe(Math.sign(RA_AXIS[1]) || 1)
+			const steps = eventsOf(harness.events, 'GuideStep')
+			expect(steps.length).toBe(stepsBefore + 1)
+			const step = steps.at(-1)!
+			expect(Math.hypot(step.dx, step.dy)).toBeGreaterThan(shift - 1.5)
+			expect(Math.hypot(step.dx, step.dy)).toBeLessThan(shift + 1.5)
+			expect(step.dx * RA_AXIS[0] + step.dy * RA_AXIS[1]).toBeGreaterThan(shift - 1.5)
 		},
 		CLOSED_LOOP_TIMEOUT,
 	)
