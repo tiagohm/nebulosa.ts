@@ -1,6 +1,7 @@
 import { pixelScale } from '../../astronomy/formulas'
 import type { PartialOnly, Writable } from '../../core/types'
-import { DEFAULT_PHD2_SETTLE, type PHD2AppState, type PHD2CalibrationData, type PHD2DeclinationGuideMode, type PHD2EventMap, type PHD2Events, type PHD2GuideDirection, type PHD2GuideStepEvent, type PHD2LockShiftParams, type PHD2Settle, type PHD2StarImage } from '../../devices/guiding/phd2'
+import { errorMessage } from '../../core/util'
+import { DEFAULT_PHD2_SETTLE, type PHD2AppState, type PHD2CalibrationData, type PHD2DeclinationGuideMode, type PHD2EventMap, type PHD2Events, type PHD2EventType, type PHD2GuideDirection, type PHD2GuideStepEvent, type PHD2LockShiftParams, type PHD2Settle, type PHD2StarImage } from '../../devices/guiding/phd2'
 import type { Camera, GuideDirection, GuideOutput } from '../../devices/indi/device'
 import type { CameraManager, DeviceHandler, GuideOutputManager } from '../../devices/indi/manager'
 import type { BlobEncoding } from '../../devices/indi/types'
@@ -12,7 +13,7 @@ import { clamp } from '../../math/numerical/math'
 import { GuidingAssistant, type GuidingAssistantConfig, type GuidingAssistantResult } from './assistant'
 import { type CalibrationPulseCommand, flipGuidingCalibration, type GuidingCalibrationConfig, type GuidingCalibrationDiagnostics, type GuidingCalibrationResult, GuidingCalibrator } from './calibrator'
 import { DitherGenerator, type DitherMode } from './dither'
-import { type AxisPulse, type DeclinationGuideMode, DEFAULT_GUIDER_CONFIG, type GuideCommand, type GuideFrame, Guider, type GuideStar } from './guider'
+import { type AxisPulse, type DeclinationGuideMode, DEFAULT_GUIDER_CONFIG, type GuideCommand, type GuideFrame, Guider, type GuideStar, starInsideSearchRegion } from './guider'
 
 // Local autoguiding orchestrator exposing a PHD2-compatible API over INDI camera and guide-output
 // devices. It decodes each camera BLOB, detects stars, drives the GuidingCalibrator and Guider state
@@ -35,6 +36,13 @@ const PHD2_SUBVER = ''
 const PHD2_MSG_VERSION = 1
 // Overlapping exposures are not implemented by the local guider.
 const PHD2_OVERLAP_SUPPORT = false
+// Extra time, in milliseconds, to wait for TELESCOPE_TIMED_GUIDE_* Busy acknowledgement and the
+// later Idle after the nominal pulse duration. Covers INDI network/driver latency so a delayed
+// Busy cannot start the mount after the next exposure has already begun.
+const PULSE_IDLE_MARGIN_MS = 250
+// Floor for the missing-BLOB watchdog, in milliseconds. The timeout is max(3 × exposure, this) so a
+// short cadence still waits long enough for a slow INDI round-trip before retrying.
+const EXPOSURE_WATCHDOG_MIN_MS = 5000
 
 // Exponential smoothing factor PHD2 applies to the guide distance reported as GuideStep.AvgDist.
 // Matches PHD2's Guider::UpdateCurrentDistance, which low-pass filters the per-frame distance so
@@ -60,6 +68,41 @@ const DEFAULT_LOCK_SHIFT_PARAMS: Readonly<PHD2LockShiftParams> = {
 	axes: 'X/Y',
 }
 
+export type GuiderEventType = PHD2EventType | 'GuidingAssistantCompleted' | 'GuidingAssistantFailed' | 'GuidingAssistantStarted' | 'GuidingAssistantUpdated'
+
+export type GuiderEvents = PHD2Events | GuidingAssistantCompletedEvent | GuidingAssistantFailedEvent | GuidingAssistantStartedEvent | GuidingAssistantUpdatedEvent
+
+export interface GuiderEvent<E extends GuiderEventType> {
+	readonly Event: E
+	readonly Timestamp: number
+	readonly Host: string
+	readonly Inst: number
+}
+
+// Guiding Assistant lifecycle events, each carrying the latest measurement result.
+export interface GuidingAssistantStartedEvent extends GuiderEvent<'GuidingAssistantStarted'> {
+	readonly Result: GuidingAssistantResult
+}
+
+export interface GuidingAssistantUpdatedEvent extends GuiderEvent<'GuidingAssistantUpdated'> {
+	readonly Result: GuidingAssistantResult
+}
+
+export interface GuidingAssistantCompletedEvent extends GuiderEvent<'GuidingAssistantCompleted'> {
+	readonly Result: GuidingAssistantResult
+}
+
+export interface GuidingAssistantFailedEvent extends GuiderEvent<'GuidingAssistantFailed'> {
+	readonly Result: GuidingAssistantResult
+}
+
+export interface GuiderEventMap extends PHD2EventMap {
+	readonly GuidingAssistantCompleted: GuidingAssistantCompletedEvent
+	readonly GuidingAssistantFailed: GuidingAssistantFailedEvent
+	readonly GuidingAssistantStarted: GuidingAssistantStartedEvent
+	readonly GuidingAssistantUpdated: GuidingAssistantUpdatedEvent
+}
+
 // Snapshot of one processed guide exposure, published for UI rendering. It carries the decoded
 // image plus everything needed to draw the usual guiding overlay: detected stars, the star being
 // tracked, the guide target, and the search window. Distances and positions are image pixels with
@@ -79,15 +122,16 @@ export interface GuideFrameImage {
 	// `image.metadata`.
 	readonly image: Image
 	// Every star detected in the frame, before the guider quality thresholds. The star nearest to the
-	// current search position, when there is one, is moved to index 0.
+	// current search position, when there is one inside the search region, is moved to index 0.
 	readonly stars: readonly GuideStar[]
 	// Subset of `stars` accepted by the quality filter of whichever state machine consumed this frame,
 	// the guider while guiding or the calibrator while calibrating, so the UI can dim the detections
 	// that were ignored. Undefined when the frame reached neither, that is while merely looping.
 	readonly acceptedStars?: readonly GuideStar[]
 	// Star this frame reported as the guide star, that is `stars[0]`, the same source of the StarMass,
-	// SNR, and HFD fields of the emitted event. Undefined when no star was detected. It is not
-	// necessarily present in `acceptedStars`: a rejected star still drives the reported photometry.
+	// SNR, and HFD fields of the emitted event. Undefined when no star was detected or the nearest
+	// star to the search position lies outside the search region. It is not necessarily present in
+	// `acceptedStars`: a rejected star still drives the reported photometry.
 	readonly star?: GuideStar
 	// Current guide target in pixels, that is where the guide star is being held. This is the lock
 	// position including the accumulated dither and lock-shift offsets. Undefined before a lock exists.
@@ -141,12 +185,33 @@ export class GuiderClient {
 	#connected = false
 	#camera?: Camera
 	#guideOutput?: GuideOutput
+	#id?: string
 	readonly #calibrator: GuidingCalibrator
 	#calibration?: GuidingCalibrationResult
 	#frame?: GuideFrame
 	#image?: Image
 	#frameId = 0
 	#processingBlob = false
+	// True after `#beginExposure` until the matching BLOB is accepted or capture stops. The missing-
+	// BLOB watchdog is not armed from Stopped, so this is what prevents a second CCD_EXPOSURE while
+	// that one-shot start is still outstanding.
+	#awaitingBlob = false
+	// Monotonic ownership token for camera starts. A watchdog may replace only the attempt that armed
+	// it, because synchronous Alert handlers can stop and restart capture before the callback resumes.
+	#exposureAttempt = 0
+	// Retriggers a dropped INDI exposure so a missing BLOB cannot stall the loop until the user
+	// notices. Armed when an exposure is started; cleared when that BLOB is accepted or capture stops.
+	#exposureWatchdog?: ReturnType<typeof setTimeout>
+	// After a missing-BLOB retry, the next BLOB may be the timed-out original rather than the
+	// replacement. `drop-next` discards that BLOB without queueing so it cannot start a second
+	// capture chain, regardless of how late the original transfer is. `already-dropped` means the
+	// stale original was consumed: later retries in the same miss cluster must accept their BLOB or
+	// a true miss can never recover. `accept` is the idle state.
+	#blobAdmission: 'accept' | 'drop-next' | 'already-dropped' = 'accept'
+	// Longest pulse successfully sent while processing the current BLOB, in milliseconds. `#processFrame`
+	// returns the max of both axes only after the second `pulse()` returns, so a throw on DEC would
+	// otherwise leave `pulseDelay` at 0 and start the next exposure while RA is still moving.
+	#pulseMsIssued = 0
 	#lockPosition?: readonly [number, number]
 	#lockSearchPosition?: readonly [number, number]
 	#exactLockPosition = false
@@ -157,8 +222,14 @@ export class GuiderClient {
 	#avgDistance = 0
 	#avgDistanceNeedReset = true
 	#declinationGuideMode: PHD2DeclinationGuideMode = 'Auto'
-	#guider = this.#makeGuider(undefined)
 	#exposure = DEFAULT_GUIDER_EXPOSURE
+	// Duration of the currently outstanding camera capture, in milliseconds. `setExposure` may
+	// change `#exposure` while a BLOB is still in flight; the arriving frame must keep the cadence
+	// that actually produced its pixels so gain scaling and dropped-frame checks stay consistent.
+	#inFlightExposureMs = DEFAULT_GUIDER_EXPOSURE
+	// Constructed after #exposure: #makeGuider reads the cadence so the uncalibrated guider matches
+	// the default loop instead of Guider's own 1000 ms default (which happens to be the same today).
+	#guider = this.#makeGuider(undefined)
 	#guideOutputEnabled = true
 	#guidingAssistant?: GuidingAssistant
 	#guidingAssistantPendingPulse?: CalibrationPulseCommand
@@ -187,6 +258,10 @@ export class GuiderClient {
 	// processed. Cleared at the start of every BLOB so a frame that never reaches either state
 	// machine — plain looping, decode failure — cannot publish the star list of an older frame.
 	#acceptedStars?: readonly GuideStar[]
+	// True when a lock/search position exists and no detection falls inside the PHD2 search box.
+	// The published frame still carries every detection so multi-star and the overlay can use
+	// them; the calibrator/guider receive an empty star list so they report the primary lost.
+	#primaryOutsideSearchRegion = false
 	readonly #searchRegion: number
 	readonly #lockShiftParams = { ...DEFAULT_LOCK_SHIFT_PARAMS }
 	readonly #eventHandler?: GuiderClientHandler['event']
@@ -195,8 +270,17 @@ export class GuiderClient {
 	readonly #cameraHandler: DeviceHandler<Camera> = {
 		// Ignores manager-level add callbacks because connect binds one camera explicitly.
 		added: () => {},
-		// Ignores manager-level removal callbacks because disconnect owns active-session teardown.
-		removed: () => {},
+		// Stops an in-flight capture when the bound camera drops its live connected flag without
+		// going through GuiderClient.disconnect(), so a leftover watchdog cannot retry against it.
+		updated: (device, property) => {
+			if (device !== this.#camera || property !== 'connected' || device.connected === true) return
+			this.stopCapture()
+		},
+		// The bound camera was removed from the manager; terminate capture the same way.
+		removed: (device) => {
+			if (device !== this.#camera) return
+			this.stopCapture()
+		},
 		// Decodes each camera frame asynchronously and feeds the guider state machine.
 		blobReceived: (device, data, encoding) => {
 			void this.#processBlob(device, data, encoding)
@@ -225,6 +309,10 @@ export class GuiderClient {
 		return this.#guideOutput
 	}
 
+	get id() {
+		return this.#id
+	}
+
 	attachHandler() {
 		this.cameraManager.addHandler(this.#cameraHandler)
 	}
@@ -245,6 +333,7 @@ export class GuiderClient {
 		this.attachHandler()
 		this.cameraManager.enableBlob(camera)
 		this.#resetRuntimeState(true)
+		this.#id = Bun.MD5.hash(`GUIDER_CLIENT:${camera.id}:${guideOutput.id}`, 'hex')
 		// PHD2 greets a newly connected client with Version followed by the current AppState. AppState
 		// is only sent here: afterwards clients track state through the individual lifecycle events.
 		this.emitEvent('Version', { PHDVersion: PHD2_VERSION, PHDSubver: PHD2_SUBVER, MsgVersion: PHD2_MSG_VERSION, OverlapSupport: PHD2_OVERLAP_SUPPORT })
@@ -266,6 +355,7 @@ export class GuiderClient {
 		}
 
 		this.#connected = false
+		this.#clearExposureWatchdog()
 		this.detachHandler()
 
 		if (camera !== undefined) {
@@ -277,6 +367,7 @@ export class GuiderClient {
 		this.#guideOutput = undefined
 		this.#focalLength = 0
 		this.#pixelSize = 0
+		this.#abortSettling('device disconnected')
 		this.#resetRuntimeState(true, hadGuidingAssistant)
 		this.emitEvent('ConfigurationChange')
 
@@ -304,29 +395,38 @@ export class GuiderClient {
 	}
 
 	// Starts one exposure (in milliseconds) and stores it as the default cadence for looping/guiding.
+	// A second start while an exposure is already outstanding is a no-op: overlapping CCD_EXPOSURE
+	// commands race the camera and reset BLOB admission, so loop() then guide() would fork the
+	// capture chain. The missing-BLOB watchdog is the only path allowed to start a replacement,
+	// and it calls `#beginExposure` directly.
 	startExposureLoop(exposure: number) {
 		if (exposure > 0 && Number.isFinite(exposure)) {
 			this.#exposure = exposure
+			this.#guider.setNominalCadence(exposure)
 		}
 
-		if (this.#camera !== undefined) {
-			// Camera requires exposure in seconds.
-			this.cameraManager.startExposure(this.#camera, this.#exposure / 1000)
-			return true
-		}
+		if (this.#camera === undefined || this.#camera.connected !== true) return false
+		if (this.#exposureInFlight) return true
 
-		return false
+		this.#blobAdmission = 'accept'
+		this.#beginExposure()
+		return true
 	}
 
-	// Stops camera exposure and clears active guiding/looping state.
+	// Stops camera exposure and clears active guiding/looping state. A pending one-shot exposure
+	// started while already Stopped is still aborted and released, without emitting stop events.
 	stopCapture() {
-		if (this.#appState === 'Stopped') return true
+		if (this.#appState === 'Stopped' && !this.#awaitingBlob) return true
 
 		if (this.#guidingAssistant !== undefined) {
 			this.#finishGuidingAssistant(false, 'capture stopped', this.#guidingAssistant.measuringBacklash)
 		}
 
+		this.#abortSettling('capture stopped')
 		this.#emitCaptureStoppedEvent()
+		this.#blobAdmission = 'accept'
+		this.#awaitingBlob = false
+		this.#clearExposureWatchdog()
 
 		if (this.#camera !== undefined) {
 			this.cameraManager.stopExposure(this.#camera)
@@ -334,11 +434,6 @@ export class GuiderClient {
 
 		this.#paused = false
 		this.#fullPause = true
-		this.#settling = false
-		this.#settleStartTime = 0
-		this.#settleStableSince = 0
-		this.#settleFrameCount = 0
-		this.#settleDroppedFrameCount = 0
 		this.#lockShiftTimestamp = 0
 		this.#lockShiftLimitReached = false
 		this.#guidingStartTime = 0
@@ -347,9 +442,7 @@ export class GuiderClient {
 		this.#resumeState = 'Stopped'
 		this.#setAppState('Stopped')
 
-		if (this.#guider.currentState.ditherActive) {
-			this.#guider.stopDither()
-		}
+		this.#guider.stopDither()
 
 		return true
 	}
@@ -368,9 +461,7 @@ export class GuiderClient {
 		this.#lockShiftOffsetY = 0
 		this.#lockShiftTimestamp = 0
 		this.#lockShiftLimitReached = false
-		this.#settling = false
-		this.#settleStartTime = 0
-		this.#settleStableSince = 0
+		this.#abortSettling('calibration cleared')
 		this.emitEvent('ConfigurationChange')
 
 		if (this.#appState === 'Calibrating' || this.#appState === 'Guiding' || this.#appState === 'LostLock' || this.#appState === 'Paused') {
@@ -393,14 +484,9 @@ export class GuiderClient {
 		this.#lockShiftOffsetY = 0
 		this.#lockShiftTimestamp = 0
 		this.#lockShiftLimitReached = false
-		this.#settling = false
-		this.#settleStartTime = 0
-		this.#settleStableSince = 0
+		this.#abortSettling('guide star deselected')
 		this.#guider.reset()
-
-		if (this.#guider.currentState.ditherActive) {
-			this.#guider.stopDither()
-		}
+		this.#guider.stopDither()
 
 		if (this.#appState !== 'Stopped') {
 			this.#resumeState = 'Looping'
@@ -419,6 +505,7 @@ export class GuiderClient {
 		this.#ditherOffsetX += dx
 		this.#ditherOffsetY += dy
 		this.#syncGuideTargetOffset()
+		this.#guider.setDithering(true)
 		this.#lockPosition = [referenceX + this.#ditherOffsetX + this.#lockShiftOffsetX, referenceY + this.#ditherOffsetY + this.#lockShiftOffsetY] as const
 		this.#settle = { ...DEFAULT_PHD2_SETTLE, ...settle }
 		this.#settling = true
@@ -437,12 +524,14 @@ export class GuiderClient {
 		return true
 	}
 
-	// Flips the solved calibration for a meridian flip and rebuilds the guider with the transformed axis parity.
+	// Flips the solved calibration for a meridian flip and applies the transformed axis parity to the
+	// running guider so lock, hysteresis, and dither survive the flip.
 	flipCalibration() {
 		if (this.#calibration === undefined || this.#appState === 'Calibrating') return false
 
 		this.#calibration = flipGuidingCalibration(this.#calibration, this.options?.reverseDecOutputAfterMeridianFlip === true)
-		this.#guider = this.#makeGuider(this.#calibration)
+		this.#applyCalibrationToGuider(this.#calibration)
+		this.#syncGuideTargetOffset()
 		this.emitEvent('CalibrationDataFlipped', { Mount: this.#guideOutput?.name ?? '' })
 		this.emitEvent('ConfigurationChange')
 
@@ -486,11 +575,10 @@ export class GuiderClient {
 		return this.#declinationGuideMode
 	}
 
-	// Returns the current exposure cadence in milliseconds.
+	// Returns the requested exposure cadence in milliseconds. INDI CCD_EXPOSURE counts down remaining
+	// time, so the live camera value is not the commanded loop period.
 	getExposure() {
-		const exposure = this.#camera?.exposure.value ?? 0
-		// Camera exposure is in seconds. Convert to milliseconds.
-		return exposure > 0 ? exposure * 1000 : this.#exposure
+		return this.#exposure
 	}
 
 	// Returns whether pulse output is enabled.
@@ -503,7 +591,7 @@ export class GuiderClient {
 		const appState = this.#appState === 'Paused' && !this.#fullPause ? this.#resumeState : this.#appState
 		const guiderState = this.#guider.currentState
 
-		if (this.#guidingAssistant !== undefined || this.#settling || guiderState.ditherActive || guiderState.state !== 'guiding' || (appState !== 'Guiding' && appState !== 'LostLock')) return false
+		if (this.#guidingAssistant !== undefined || this.#settling || guiderState.state !== 'guiding' || (appState !== 'Guiding' && appState !== 'LostLock')) return false
 
 		const imageScale = this.getPixelScale()
 		const assistant = new GuidingAssistant({
@@ -599,12 +687,15 @@ export class GuiderClient {
 	}
 
 	// Starts guiding and triggers calibration first when requested or when no solution exists yet.
-	// A guide request issued while already guiding does not restart the session: like PHD2, it only
-	// begins a new settle cycle, so the accumulated dither and lock-shift target offsets survive.
+	// A guide request issued while already guiding, including while paused in Guiding or LostLock,
+	// does not restart the session: like PHD2, it only begins a new settle cycle, so the accumulated
+	// dither and lock-shift target offsets survive.
 	guide(recalibrate: boolean = false, settle?: Partial<PHD2Settle>) {
-		if (!this.#connected || this.#camera === undefined || this.#guideOutput === undefined) return false
+		if (!this.getConnected() || this.#camera === undefined || this.#guideOutput === undefined || !this.#guideOutput.canPulseGuide) return false
 
-		if (!recalibrate && !this.#paused && this.#calibration !== undefined && (this.#appState === 'Guiding' || this.#appState === 'LostLock')) {
+		const sessionState = this.#paused ? this.#resumeState : this.#appState
+
+		if (!recalibrate && this.#calibration !== undefined && (sessionState === 'Guiding' || sessionState === 'LostLock')) {
 			this.#settle = { ...DEFAULT_PHD2_SETTLE, ...settle }
 			this.#settling = true
 			this.#settleStartTime = 0
@@ -612,6 +703,7 @@ export class GuiderClient {
 			this.#settleFrameCount = 0
 			this.#settleDroppedFrameCount = 0
 			this.emitEvent('SettleBegin')
+			if (this.#paused) this.setPaused(false)
 
 			return true
 		}
@@ -672,36 +764,42 @@ export class GuiderClient {
 
 	// Starts continuous exposure looping without issuing guide pulses.
 	loop() {
-		if (!this.#connected || this.#camera === undefined) return false
+		if (!this.#connected || this.#camera === undefined || this.#camera.connected !== true) return false
 
 		this.#abortGuidingAssistantForTransition('looping started')
 		this.#paused = false
 		this.#fullPause = true
 		this.#resumeState = 'Looping'
-		this.#settling = false
-		this.#settleStartTime = 0
-		this.#settleStableSince = 0
-		this.#settleFrameCount = 0
-		this.#settleDroppedFrameCount = 0
+		this.#abortSettling('looping started')
 		this.#lockShiftTimestamp = 0
 		this.#lockShiftLimitReached = false
 		// Drop any dither/lock-shift target offset from a prior session so it cannot carry over into
-		// a subsequent guiding run.
+		// a subsequent guiding run. Restore the public lock to the guider reference; otherwise
+		// getLockPosition would keep advertising the dithered target after the offset is gone.
+		const hadTargetOffset = this.#ditherOffsetX !== 0 || this.#ditherOffsetY !== 0 || this.#lockShiftOffsetX !== 0 || this.#lockShiftOffsetY !== 0
 		this.#ditherOffsetX = 0
 		this.#ditherOffsetY = 0
 		this.#dither.reset()
 		this.#lockShiftOffsetX = 0
 		this.#lockShiftOffsetY = 0
+		this.#guider.stopDither()
+		if (hadTargetOffset && (this.#appState === 'Guiding' || this.#appState === 'LostLock' || this.#appState === 'Paused')) {
+			const { referenceX, referenceY } = this.#guider.currentState
+			if (Number.isFinite(referenceX) && Number.isFinite(referenceY)) {
+				this.#lockPosition = [referenceX, referenceY] as const
+				if (!this.#fixedLockReferenceEnabled) this.#lockSearchPosition = this.#lockPosition
+			}
+		}
 		this.#setAppState(this.#lockPosition === undefined ? 'Looping' : 'Selected')
 		this.startExposureLoop(this.#exposure)
 
 		return true
 	}
 
-	// Updates the DEC guide mode and rebuilds the guider with the current calibration matrix.
+	// Updates the DEC guide mode on the running guider without dropping lock or hysteresis.
 	setDeclinationGuideMode(mode: PHD2DeclinationGuideMode) {
 		this.#declinationGuideMode = mode
-		if (this.#appState !== 'Calibrating') this.#guider = this.#makeGuider(this.#calibration)
+		if (this.#appState !== 'Calibrating') this.#guider.setDecMode(toDeclinationGuideMode(mode))
 		this.emitEvent('GuideParamChange', { Name: 'DecGuideMode', Value: mode })
 		this.emitEvent('ConfigurationChange')
 	}
@@ -710,6 +808,7 @@ export class GuiderClient {
 	setExposure(exposure: number) {
 		if (exposure <= 0 || !Number.isFinite(exposure)) return false
 		this.#exposure = exposure
+		this.#guider.setNominalCadence(exposure)
 		this.emitEvent('GuideParamChange', { Name: 'Exposure', Value: exposure })
 		this.emitEvent('ConfigurationChange')
 		return true
@@ -843,17 +942,26 @@ export class GuiderClient {
 			if (!wasPaused) this.emitEvent('Paused')
 			if (this.#guidingAssistant?.measuringBacklash === true) this.#finishGuidingAssistant(false, 'backlash test paused', true)
 			this.#setAppState('Paused')
-			if (this.#fullPause && this.#camera !== undefined) this.cameraManager.stopExposure(this.#camera)
+			if (this.#fullPause) {
+				this.#blobAdmission = 'accept'
+				this.#awaitingBlob = false
+				this.#clearExposureWatchdog()
+				if (this.#camera !== undefined) this.cameraManager.stopExposure(this.#camera)
+			}
 			return true
 		}
 
+		const resumeCapture = wasPaused && this.#fullPause
 		this.#paused = false
 		this.#fullPause = true
 		this.#lockShiftTimestamp = 0
 		if (wasPaused) this.emitEvent('Resumed')
 		this.#setAppState(this.#resumeState === 'Paused' ? 'Looping' : this.#resumeState)
 
-		if (this.#appState !== 'Stopped' && this.#camera !== undefined) {
+		// A partial pause left the current exposure running. Restarting capture here, including from
+		// guide() resuming a paused Guiding session, would send a second start before that BLOB
+		// arrives and can restart a busy camera or fork the loop.
+		if (resumeCapture && this.#appState !== 'Stopped' && this.#camera !== undefined) {
 			this.startExposureLoop(this.#exposure)
 		}
 
@@ -864,11 +972,38 @@ export class GuiderClient {
 	async #processBlob(device: Camera, data: Buffer, encoding: BlobEncoding): Promise<void> {
 		if (!this.#connected || device !== this.#camera) return
 
+		// A BLOB that arrives after a missing-BLOB retry may be the timed-out original. The
+		// replacement is already outstanding, so accepting it would process a stale frame and
+		// `finally` would start a second capture chain beside the retry. INDI BLOBs have no
+		// generation id; drop the next BLOB once, then accept later retries in this miss cluster. A
+		// later accepted BLOB is still ambiguous, so abort the outstanding replacement before it can
+		// be joined by the next exposure and quarantine any BLOB that the abort may deliver late.
+		if (this.#blobAdmission === 'drop-next') {
+			this.#blobAdmission = 'already-dropped'
+			return
+		}
+
+		if (this.#blobAdmission === 'already-dropped') {
+			this.#blobAdmission = 'drop-next'
+			this.cameraManager.stopExposure(device)
+		} else {
+			this.#blobAdmission = 'accept'
+		}
+
 		// The calibrator and guider are stateful and not reentrant, so a BLOB that arrives while a
 		// previous frame is still being decoded/processed is dropped to avoid interleaved mutation.
 		if (this.#processingBlob) return
 		this.#processingBlob = true
+		this.#awaitingBlob = false
 		this.#acceptedStars = undefined
+		this.#primaryOutsideSearchRegion = false
+		// Drop the missing-BLOB timer as soon as this exposure is in hand. Leaving it armed until
+		// the next startExposure lets a slow decode or pulse wait trip a false timeout and start an
+		// overlapping exposure.
+		this.#clearExposureWatchdog()
+
+		let pulseDelay = 0
+		this.#pulseMsIssued = 0
 
 		try {
 			let image: Image | undefined
@@ -890,26 +1025,51 @@ export class GuiderClient {
 			const frame = this.#makeGuideFrame(image)
 			this.#frame = frame
 
-			const pulseDelay = this.#processFrame(frame)
+			try {
+				pulseDelay = this.#processFrame(frame)
 
-			// Published only for a decoded frame, and only after processing, so the UI sees the same
-			// state the events for this frame already reported. It runs before the pulse delay so the
-			// view is not held back by the settle wait.
-			if (image !== undefined) this.#emitFrameImage(frame, image)
-
-			await this.#queueNextExposure(pulseDelay)
+				// Published only for a decoded frame, and only after processing, so the UI sees the same
+				// state the events for this frame already reported. It runs before the pulse delay so the
+				// view is not held back by the settle wait.
+				if (image !== undefined) this.#emitFrameImage(frame, image)
+			} catch (e) {
+				// A pulse or controller throw must not kill the exposure loop: the next frame is still
+				// queued below so guiding recovers instead of hanging until the user restarts.
+				console.error('guide frame processing failed:', e)
+				this.emitEvent('Alert', { Msg: `guide frame processing failed: ${errorMessage(e)}`, Type: 'error' })
+			}
+		} catch (e) {
+			console.error('guide frame processing failed:', e)
+			this.emitEvent('Alert', { Msg: `guide frame processing failed: ${errorMessage(e)}`, Type: 'error' })
 		} finally {
+			try {
+				await this.#queueNextExposure(Math.max(pulseDelay, this.#pulseMsIssued))
+			} catch (e) {
+				console.error('guide exposure queue failed:', e)
+			}
+
 			this.#processingBlob = false
 		}
 	}
 
 	// Converts a decoded image into a guide frame and prioritizes the selected lock star.
 	#makeGuideFrame(image?: Image): GuideFrame {
-		const stars = image === undefined ? [] : detectStars(image)
+		const detections = image === undefined ? [] : detectStars(image)
 		const lockSearchPosition = this.#lockSearchPosition ?? this.#lockPosition
+		let stars = detections
 
-		if (lockSearchPosition !== undefined && stars.length > 1) {
-			moveNearestGuideStarToFront(stars, lockSearchPosition)
+		if (lockSearchPosition !== undefined && detections.length > 0) {
+			const primary = nearestGuideStarInSearchRegion(detections, lockSearchPosition, this.#searchRegion)
+			if (primary !== undefined) {
+				// PHD2 only acquires the primary inside the search box. Neighbors elsewhere must stay
+				// in the list: the default multi-star estimator matches them against the full-frame
+				// reference, and GuideFrameImage.stars is every detection. The globally nearest star
+				// can sit just outside an edge while a farther detection is still inside a corner.
+				stars = detections.slice()
+				moveGuideStarToFront(stars, primary)
+			} else {
+				this.#primaryOutsideSearchRegion = true
+			}
 		}
 
 		return {
@@ -918,6 +1078,9 @@ export class GuiderClient {
 			height: image?.metadata.height ?? this.#camera?.frame.height.value ?? 0,
 			timestamp: Date.now(),
 			frameId: ++this.#frameId,
+			cadenceMs: this.#inFlightExposureMs,
+			searchPosition: lockSearchPosition,
+			searchRegion: lockSearchPosition === undefined ? undefined : this.#searchRegion,
 		}
 	}
 
@@ -936,7 +1099,7 @@ export class GuiderClient {
 				image,
 				stars: frame.stars,
 				acceptedStars: this.#acceptedStars,
-				star: frame.stars[0],
+				star: this.#primaryOutsideSearchRegion ? undefined : frame.stars[0],
 				lockPosition: this.#lockPosition,
 				searchPosition: this.#lockSearchPosition ?? this.#lockPosition,
 				searchRegion: this.#searchRegion,
@@ -949,10 +1112,11 @@ export class GuiderClient {
 	// Routes the current frame to calibration, guiding, or passive looping.
 	#processFrame(frame: GuideFrame) {
 		const appState = this.#appState === 'Paused' && !this.#fullPause ? this.#resumeState : this.#appState
+		const input = this.#primaryOutsideSearchRegion ? { ...frame, stars: [] } : frame
 
-		if (appState === 'Calibrating') return this.#processCalibrationFrame(frame)
-		if (appState === 'Guiding' || appState === 'LostLock') return this.#processGuidingFrame(frame)
-		if (appState === 'Looping' || appState === 'Selected') this.#emitLoopingExposuresEvent(frame)
+		if (appState === 'Calibrating') return this.#processCalibrationFrame(input)
+		if (appState === 'Guiding' || appState === 'LostLock') return this.#processGuidingFrame(input)
+		if (appState === 'Looping' || appState === 'Selected') this.#emitLoopingExposuresEvent(input)
 
 		return 0
 	}
@@ -1045,6 +1209,7 @@ export class GuiderClient {
 
 		const pulseDuration = Math.max(1, Math.round(duration))
 		this.guideOutputManager.pulse(this.#guideOutput, direction.toUpperCase() as GuideDirection, pulseDuration)
+		this.#pulseMsIssued = Math.max(this.#pulseMsIssued, pulseDuration)
 
 		return pulseDuration
 	}
@@ -1096,7 +1261,6 @@ export class GuiderClient {
 		this.#guidingAssistantPendingPulse = undefined
 		this.#guidingAssistantResult = result
 		this.#guidingAssistantSuppressingGuideOutput = false
-		this.#guider = this.#makeGuider(this.#calibration)
 		this.emitEvent(completed ? 'GuidingAssistantCompleted' : 'GuidingAssistantFailed', { Result: result })
 
 		return result
@@ -1110,6 +1274,17 @@ export class GuiderClient {
 	// Returns true when ordinary guide pulses are currently allowed to reach the mount.
 	get #guideOutputActive() {
 		return this.#guideOutputEnabled && !this.#guidingAssistantSuppressingGuideOutput
+	}
+
+	// Completes an in-flight settle with an error so PHD2-style waiters are not left hanging when the
+	// session leaves the settling path without a natural SettleDone (timeout or in-tolerance).
+	#abortSettling(reason: string) {
+		if (!this.#settling) return
+
+		this.#settling = false
+		this.#settleStartTime = 0
+		this.#settleStableSince = 0
+		this.#emitSettleDoneEvent(1, reason)
 	}
 
 	// Updates settle state from current guide error and elapsed settle timing.
@@ -1165,13 +1340,14 @@ export class GuiderClient {
 	#updateLockPositionFromGuider(targetX: number | undefined, targetY: number | undefined) {
 		if (targetX !== undefined && targetY !== undefined) {
 			this.#lockPosition = [targetX, targetY] as const
-			if (!this.#fixedLockReferenceEnabled) this.#lockSearchPosition = this.#lockPosition
+			if (!this.#searchFollowsMeasurement) this.#lockSearchPosition = this.#lockPosition
 		}
 	}
 
-	// Refreshes the star-search center from the latest measured centroid while a fixed lock reference is active.
+	// Refreshes the star-search center from the latest measured centroid while the box should stay on
+	// the star (sticky/exact lock, or an in-progress dither walking toward a new lock).
 	#updateLockSearchPositionFromGuider(measurementX: number | undefined, measurementY: number | undefined) {
-		if (this.#fixedLockReferenceEnabled && measurementX !== undefined && measurementY !== undefined) {
+		if (this.#searchFollowsMeasurement && measurementX !== undefined && measurementY !== undefined) {
 			this.#lockSearchPosition = [measurementX, measurementY] as const
 		}
 	}
@@ -1227,7 +1403,7 @@ export class GuiderClient {
 
 		this.#syncGuideTargetOffset()
 		this.#lockPosition = [lockX, lockY] as const
-		if (!this.#stickyLockPosition) this.#lockSearchPosition = this.#lockPosition
+		if (!this.#searchFollowsMeasurement) this.#lockSearchPosition = this.#lockPosition
 
 		if (limitReached) {
 			if (!this.#lockShiftLimitReached) this.emitEvent('LockPositionShiftLimitReached')
@@ -1257,16 +1433,11 @@ export class GuiderClient {
 		return [this.#calibration.ra.unitX * rate0 + this.#calibration.dec.unitX * rate1, this.#calibration.ra.unitY * rate0 + this.#calibration.dec.unitY * rate1] as const
 	}
 
-	// Reapplies the combined manual dither and lock-shift target offset to the guider state.
+	// Reapplies the combined manual dither and lock-shift target offset to the guider state without
+	// touching the in-progress dither flag. A settled dither and lock-shift both keep a non-zero
+	// offset; only `dither()` and settle completion change `ditherActive`.
 	#syncGuideTargetOffset() {
-		const offsetX = this.#ditherOffsetX + this.#lockShiftOffsetX
-		const offsetY = this.#ditherOffsetY + this.#lockShiftOffsetY
-
-		if (offsetX === 0 && offsetY === 0) {
-			this.#guider.stopDither()
-		} else {
-			this.#guider.startDither(offsetX, offsetY)
-		}
+		this.#guider.setTargetOffset(this.#ditherOffsetX + this.#lockShiftOffsetX, this.#ditherOffsetY + this.#lockShiftOffsetY)
 	}
 
 	// Refreshes the public lock target from calibration diagnostics when available.
@@ -1285,6 +1456,13 @@ export class GuiderClient {
 		return this.#stickyLockPosition || this.#exactLockPosition
 	}
 
+	// Returns true when the search box should stay on the measured star rather than snapping to the
+	// lock target. Sticky/exact lock keep the reference fixed; an in-progress dither keeps the box
+	// on the star so a jump larger than half the search region can still be walked in with pulses.
+	get #searchFollowsMeasurement() {
+		return this.#fixedLockReferenceEnabled || this.#guider.currentState.ditherActive
+	}
+
 	// Returns the fixed lock reference seed used for the next guider initialization.
 	get #guiderReferencePosition() {
 		return this.#fixedLockReferenceEnabled ? this.#lockPosition : undefined
@@ -1297,17 +1475,134 @@ export class GuiderClient {
 
 	// Starts another exposure after pulse delay if the current session is still active.
 	async #queueNextExposure(delay: number): Promise<void> {
-		if (delay > 0) await Bun.sleep(delay)
-		if (!this.#connected || this.#camera === undefined || this.#appState === 'Stopped' || (this.#appState === 'Paused' && this.#fullPause)) return
-		this.cameraManager.startExposure(this.#camera, this.#exposure / 1000)
+		await this.#waitForPulseToComplete(delay)
+		if (!this.#captureActive) return
+		this.#beginExposure()
+	}
+
+	// Arms a timer that retries the exposure if no BLOB arrives. The timeout is three cadences, with
+	// a floor so a sub-second loop still outlasts a slow INDI round-trip.
+	#armExposureWatchdog() {
+		this.#clearExposureWatchdog()
+		if (!this.#captureActive) return
+
+		const timeout = Math.max(3 * this.#exposure, EXPOSURE_WATCHDOG_MIN_MS)
+		const attempt = this.#exposureAttempt
+		this.#exposureWatchdog = setTimeout(() => {
+			this.#onExposureWatchdog(attempt)
+		}, timeout)
+		this.#exposureWatchdog.unref()
+	}
+
+	// Cancels a pending missing-BLOB retry. Accepting the matching BLOB, capture stop, disconnect,
+	// and a full pause all call this so a leftover timer cannot start an overlapping exposure.
+	#clearExposureWatchdog() {
+		if (this.#exposureWatchdog === undefined) return
+		clearTimeout(this.#exposureWatchdog)
+		this.#exposureWatchdog = undefined
+	}
+
+	// Warns, aborts the timed-out camera command, and starts another exposure when no BLOB arrived. The
+	// next BLOB is treated as the timed-out original unless this miss cluster already consumed that
+	// slot, so a delayed original cannot queue a second capture chain beside the retry. The Alert
+	// handler may stop or disconnect synchronously, so the capture state and attempt ownership are
+	// rechecked before retrying. `attempt` is the camera start that armed this callback.
+	#onExposureWatchdog(attempt: number) {
+		this.#exposureWatchdog = undefined
+		if (!this.#captureActive || !this.#awaitingBlob || attempt !== this.#exposureAttempt) return
+
+		this.emitEvent('Alert', { Msg: 'guide exposure timed out; retrying', Type: 'warning' })
+		if (!this.#captureActive || !this.#awaitingBlob || attempt !== this.#exposureAttempt) return
+
+		if (this.#blobAdmission !== 'already-dropped') this.#blobAdmission = 'drop-next'
+		const camera = this.#camera
+		if (camera === undefined) return
+		this.cameraManager.stopExposure(camera)
+		this.#awaitingBlob = false
+		this.#beginExposure()
+	}
+
+	// Records the cadence of this capture, starts it, and arms the missing-BLOB watchdog. A synchronous
+	// camera-manager failure restores the prior cadence and releases BLOB ownership before rethrowing.
+	// Public `startExposureLoop` from Stopped is allowed, so this checks the live camera
+	// connection rather than `#captureActive` (false while Stopped). The watchdog still
+	// arms only while capture is active.
+	#beginExposure() {
+		if (!this.#connected || this.#camera === undefined || this.#camera.connected !== true) return
+		const previousExposureMs = this.#inFlightExposureMs
+		this.#exposureAttempt++
+		this.#inFlightExposureMs = this.#exposure
+		this.#awaitingBlob = true
+
+		try {
+			this.cameraManager.startExposure(this.#camera, this.#exposure / 1000)
+		} catch (error) {
+			this.#inFlightExposureMs = previousExposureMs
+			this.#awaitingBlob = false
+			this.#clearExposureWatchdog()
+			throw error
+		}
+
+		this.#armExposureWatchdog()
+	}
+
+	// True while a guide exposure is outstanding: the matching BLOB is still being processed, or
+	// `#beginExposure` has started a capture that has not yet arrived. Public start/loop/guide use
+	// this to refuse a second CCD_EXPOSURE; the missing-BLOB watchdog still calls `#beginExposure`
+	// directly.
+	get #exposureInFlight() {
+		return this.#processingBlob || this.#awaitingBlob
+	}
+
+	// True when the exposure loop is allowed to start or retry a capture. Full pause, stop, client
+	// disconnect, and a live camera that dropped its connected flag all make this false so a leftover
+	// timer cannot keep exposing a device that is no longer there.
+	get #captureActive() {
+		return this.#connected && this.#camera !== undefined && this.#camera.connected === true && this.#appState !== 'Stopped' && !(this.#appState === 'Paused' && this.#fullPause)
+	}
+
+	// Waits out the commanded pulse, the INDI Busy acknowledgement, and the later Idle. GuideOutput
+	// pulse() only sends the timed-guide vector; `device.pulsing` is updated later by numberVector.
+	// The Idle wait is measured from when Busy is observed, not from a single absolute deadline, so a
+	// Busy that arrives near the acknowledgement margin still blocks capture until the mount stops.
+	async #waitForPulseToComplete(duration: number): Promise<void> {
+		if (duration <= 0) return
+
+		const started = performance.now()
+		const ackDeadline = started + duration + PULSE_IDLE_MARGIN_MS
+		const isBusy = () => this.#guideOutput?.pulsing === true
+
+		while (performance.now() < started + duration) {
+			if (isBusy()) break
+			const remaining = started + duration - performance.now()
+			if (remaining <= 0) break
+			await Bun.sleep(Math.min(10, remaining))
+		}
+
+		if (!isBusy()) {
+			while (!isBusy() && performance.now() < ackDeadline) {
+				await Bun.sleep(10)
+			}
+		}
+
+		if (!isBusy()) return
+
+		const idleDeadline = performance.now() + duration + PULSE_IDLE_MARGIN_MS
+		while (isBusy() && performance.now() < idleDeadline) {
+			await Bun.sleep(10)
+		}
 	}
 
 	// Resets transient guider state while optionally dropping calibration.
 	#resetRuntimeState(clearCalibration: boolean, preserveGuidingAssistantResult: boolean = false) {
+		this.#blobAdmission = 'accept'
+		this.#awaitingBlob = false
+		this.#clearExposureWatchdog()
 		const guidingAssistantResult = preserveGuidingAssistantResult ? this.#guidingAssistantResult : undefined
 		this.#frame = undefined
 		this.#image = undefined
 		this.#acceptedStars = undefined
+		this.#primaryOutsideSearchRegion = false
 		this.#frameId = 0
 		this.#lockPosition = undefined
 		this.#lockSearchPosition = undefined
@@ -1350,34 +1645,33 @@ export class GuiderClient {
 
 	// Builds a guider instance from the current calibration, axis parity, and DEC mode.
 	#makeGuider(calibration: GuidingCalibrationResult | undefined) {
-		if (calibration === undefined) return new Guider({ decMode: toDeclinationGuideMode(this.#declinationGuideMode), referencePosition: this.#guiderReferencePosition, initialPosition: this.#guiderInitialPosition })
-
-		// The solved image-to-axis matrix converts a pixel error into the milliseconds of pulse that
-		// would reproduce it, while the guider expects a matrix that yields the pulse cancelling it,
-		// so the matrix is negated here; feeding it unchanged closes the loop with positive feedback.
-		// Its output is already in milliseconds, so the per-unit scaling must be neutral: keeping the
-		// uncalibrated default would apply the mount rate twice and saturate every correction. The dead
-		// bands, expressed in pixels for the uncalibrated guider, are converted with the solved rates.
-		const [m00, m01, m10, m11] = calibration.imageToAxis
-		const raRate = calibration.ra.ratePxPerMs
-		const decRate = calibration.dec.ratePxPerMs
+		if (calibration === undefined) {
+			return new Guider({
+				decMode: toDeclinationGuideMode(this.#declinationGuideMode),
+				referencePosition: this.#guiderReferencePosition,
+				initialPosition: this.#guiderInitialPosition,
+				nominalCadence: this.#exposure,
+			})
+		}
 
 		return new Guider({
-			calibration: [-m00, -m01, -m10, -m11],
-			msPerRAUnit: 1,
-			msPerDECUnit: 1,
-			minMoveRA: raRate > 0 ? DEFAULT_GUIDER_CONFIG.minMoveRA / raRate : DEFAULT_GUIDER_CONFIG.minMoveRA,
-			minMoveDEC: decRate > 0 ? DEFAULT_GUIDER_CONFIG.minMoveDEC / decRate : DEFAULT_GUIDER_CONFIG.minMoveDEC,
-			raPositiveDirection: calibration.ra.direction,
-			decPositiveDirection: calibration.dec.direction,
+			...calibratedGuiderOptions(calibration),
 			decMode: toDeclinationGuideMode(this.#declinationGuideMode),
 			referencePosition: this.#guiderReferencePosition,
 			initialPosition: this.#guiderInitialPosition,
+			nominalCadence: this.#exposure,
 		})
 	}
 
+	// Pushes a solved calibration onto the running guider without reconstructing it, so lock,
+	// hysteresis, and dither stay intact.
+	#applyCalibrationToGuider(calibration: GuidingCalibrationResult) {
+		const options = calibratedGuiderOptions(calibration)
+		this.#guider.setCalibration(options.calibration, options)
+	}
+
 	// Emits one callback event if the caller provided an event handler.
-	emitEvent<T extends keyof PHD2EventMap>(Event: T, data?: Omit<PHD2EventMap[T], 'Event' | 'Timestamp' | 'Host' | 'Inst'>) {
+	emitEvent<T extends keyof GuiderEventMap>(Event: T, data?: Omit<GuiderEventMap[T], 'Event' | 'Timestamp' | 'Host' | 'Inst'>) {
 		const event = {
 			...data,
 			Event,
@@ -1386,7 +1680,13 @@ export class GuiderClient {
 			Inst: 1, // There is no PHD2 instance index in this local client, so Inst defaults to 1-based instance number.
 		} as PHD2Events
 
-		this.#eventHandler?.(this, event)
+		try {
+			this.#eventHandler?.(this, event)
+		} catch (e) {
+			// Event callbacks are user code; a throw must not unwind the exposure loop or skip the
+			// remaining notifications for this frame.
+			console.error('guide event handler failed:', e)
+		}
 	}
 
 	// Updates the current app state. No event is emitted here on purpose: PHD2 sends AppState only
@@ -1459,6 +1759,8 @@ export class GuiderClient {
 		const raLimited = raDuration > 0 && ra.duration >= this.#guider.config.maxPulseMsRA
 		const decLimited = decDuration > 0 && dec.duration >= this.#guider.config.maxPulseMsDEC
 
+		const raRate = this.#calibration?.ra.ratePxPerMs ?? 0
+		const decRate = this.#calibration?.dec.ratePxPerMs ?? 0
 		const event: Omit<Writable<PHD2GuideStepEvent>, 'Event' | 'Timestamp' | 'Host' | 'Inst'> = {
 			Frame: frame.frameId ?? 0,
 			// Seconds since guiding started, matching PHD2's GuideStep.Time.
@@ -1467,10 +1769,12 @@ export class GuiderClient {
 			Mount: this.#guideOutput?.name ?? '',
 			dx,
 			dy,
-			RADistanceRaw: diagnostics.axisErrorRA ?? 0,
-			DECDistanceRaw: diagnostics.axisErrorDEC ?? 0,
-			RADistanceGuide: outputActive ? (diagnostics.filteredRA ?? 0) : 0,
-			DECDistanceGuide: outputActive ? (diagnostics.filteredDEC ?? 0) : 0,
+			// PHD2 reports these as pixel distances along the mount axes. After calibration the
+			// controller's axis error is in milliseconds of pulse, so convert back with the solved rate.
+			RADistanceRaw: axisErrorToPixels(diagnostics.axisErrorRA, raRate),
+			DECDistanceRaw: axisErrorToPixels(diagnostics.axisErrorDEC, decRate),
+			RADistanceGuide: outputActive ? axisErrorToPixels(diagnostics.filteredRA, raRate) : 0,
+			DECDistanceGuide: outputActive ? axisErrorToPixels(diagnostics.filteredDEC, decRate) : 0,
 			RADuration: raDuration,
 			// PHD2 directions are mandatory, so no-pulse frames fall back to west/north defaults.
 			RADirection: toPHD2GuideDirection(ra.direction, 'West'),
@@ -1547,6 +1851,7 @@ export class GuiderClient {
 
 	// Emits the final settle status and clears the local settle counters.
 	#emitSettleDoneEvent(status: number, error?: string) {
+		this.#guider.setDithering(false)
 		this.emitEvent('SettleDone', { Status: status, TotalFrames: this.#settleFrameCount, DroppedFrames: this.#settleDroppedFrameCount, Error: error })
 		this.#settleFrameCount = 0
 		this.#settleDroppedFrameCount = 0
@@ -1556,6 +1861,46 @@ export class GuiderClient {
 // Maps PHD2 DEC guide mode values to the local guider model.
 function toDeclinationGuideMode(mode: PHD2DeclinationGuideMode) {
 	return (mode === 'Off' ? 'off' : mode === 'North' ? 'north-only' : mode === 'South' ? 'south-only' : 'auto') satisfies DeclinationGuideMode
+}
+
+// Converts a pixel-unit guider threshold into calibrated axis units. After calibration the controller
+// emits millisecond axis errors (the pulse that would cancel the pixel error), so pixel defaults are
+// divided by the solved rate. When the rate is unknown the original threshold is kept so the
+// uncalibrated identity controller is unchanged.
+function calibratedGuiderOptions(calibration: GuidingCalibrationResult) {
+	// The solved image-to-axis matrix converts a pixel error into the milliseconds of pulse that
+	// would reproduce it, while the guider expects a matrix that yields the pulse cancelling it,
+	// so the matrix is negated here; feeding it unchanged closes the loop with positive feedback.
+	// Its output is already in milliseconds, so the per-unit scaling must be neutral: keeping the
+	// uncalibrated default would apply the mount rate twice and saturate every correction. Every
+	// pixel-unit controller threshold (dead bands, DEC reversal, DEC backlash accumulation) is
+	// converted with the solved rates so seeing-sized reversals still hold the DEC axis.
+	const [m00, m01, m10, m11] = calibration.imageToAxis
+	const raRate = calibration.ra.ratePxPerMs
+	const decRate = calibration.dec.ratePxPerMs
+
+	return {
+		calibration: [-m00, -m01, -m10, -m11] as const,
+		msPerRAUnit: 1,
+		msPerDECUnit: 1,
+		minMoveRA: axisUnitThreshold(DEFAULT_GUIDER_CONFIG.minMoveRA, raRate),
+		minMoveDEC: axisUnitThreshold(DEFAULT_GUIDER_CONFIG.minMoveDEC, decRate),
+		decReversalThreshold: axisUnitThreshold(DEFAULT_GUIDER_CONFIG.decReversalThreshold, decRate),
+		decBacklashAccumThreshold: axisUnitThreshold(DEFAULT_GUIDER_CONFIG.decBacklashAccumThreshold, decRate),
+		raPositiveDirection: calibration.ra.direction,
+		decPositiveDirection: calibration.dec.direction,
+	}
+}
+
+function axisUnitThreshold(pixelThreshold: number, ratePxPerMs: number) {
+	return ratePxPerMs > 0 ? pixelThreshold / ratePxPerMs : pixelThreshold
+}
+
+// Converts a calibrated axis error back into pixels for PHD2 GuideStep fields. When the rate is
+// unknown the controller is using identity units and the value is already in pixels.
+function axisErrorToPixels(axisError: number | undefined, ratePxPerMs: number) {
+	const error = axisError ?? 0
+	return ratePxPerMs > 0 ? error * ratePxPerMs : error
 }
 
 // Converts the local calibration result into PHD2-compatible calibration data.
@@ -1576,29 +1921,35 @@ function ditherImageOffset(calibration: GuidingCalibrationResult, dRa: number, d
 	return [calibration.ra.unitX * dRa + calibration.dec.unitX * dDec, calibration.ra.unitY * dRa + calibration.dec.unitY * dDec] as const
 }
 
-// Moves the nearest star to the first slot so Guider/GuidingCalibrator lock onto the requested target.
-function moveNearestGuideStarToFront(stars: GuideStar[], position: readonly [number, number]) {
-	const [x, y] = position
-	let index = 0
+// Moves `star` to the first slot so Guider/GuidingCalibrator lock onto the requested target.
+function moveGuideStarToFront(stars: GuideStar[], star: GuideStar) {
+	const index = stars.indexOf(star)
+	if (index > 0) {
+		stars[index] = stars[0]
+		stars[0] = star
+	}
+}
+
+// Finds the nearest detection inside the square search box centered on `position`. Stars outside
+// the box are ignored even if they are radially closer than an inside-corner candidate.
+function nearestGuideStarInSearchRegion(stars: readonly GuideStar[], position: readonly [number, number], searchRegion: number): GuideStar | undefined {
+	let selected: GuideStar | undefined
 	let distanceSq = Number.POSITIVE_INFINITY
 
-	for (let i = 0; i < stars.length; i++) {
-		const star = stars[i]
-		const dx = star.x - x
-		const dy = star.y - y
+	for (const star of stars) {
+		if (!starInsideSearchRegion(star, position, searchRegion)) continue
+
+		const dx = star.x - position[0]
+		const dy = star.y - position[1]
 		const candidateDistanceSq = dx * dx + dy * dy
 
 		if (candidateDistanceSq < distanceSq) {
 			distanceSq = candidateDistanceSq
-			index = i
+			selected = star
 		}
 	}
 
-	if (index > 0) {
-		const star = stars[0]
-		stars[0] = stars[index]
-		stars[index] = star
-	}
+	return selected
 }
 
 // Finds the nearest detected guide star to a requested image coordinate.

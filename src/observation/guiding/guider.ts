@@ -1,3 +1,4 @@
+import type { Writable } from '../../core/types'
 import { medianAbsoluteDeviationOf, medianOf } from '../../core/util'
 import type { Image } from '../../imaging/model/types'
 import type { DetectedStar } from '../../imaging/stars/detector'
@@ -49,6 +50,17 @@ export interface GuideFrame {
 	readonly timestamp?: number
 	// Optional monotonic frame identifier.
 	readonly frameId?: number
+	// Exposure duration that produced this frame, in milliseconds. When set, pulse-gain cadence
+	// scaling and dropped-frame detection use this instead of the wall-clock gap between frames,
+	// so a pulse wait is not treated as extra uncorrected drift or a dropped frame. Frames without
+	// `cadenceMs` still classify drops from `timestamp`.
+	readonly cadenceMs?: number
+	// Center of the star-search window, in pixels. When set together with `searchRegion`, lock
+	// quality and primary acquisition use only detections inside this box; `stars` still holds the
+	// full-frame list so multi-star matching can use neighbors outside the box.
+	readonly searchPosition?: readonly [number, number]
+	// Side of the square star-search window, in pixels. Ignored unless `searchPosition` is set.
+	readonly searchRegion?: number
 }
 
 // A commanded pulse on one mount axis.
@@ -120,7 +132,8 @@ export interface GuideDiagnostics {
 	readonly lostFrames: number
 	// Whether the guider has entered the lost state.
 	readonly lost: boolean
-	// Whether dithering is active.
+	// Whether a dither settle is in progress. A non-zero target offset from lock-shift or a
+	// finished dither does not by itself set this flag.
 	readonly ditherActive: boolean
 	// Whether this frame was classified as dropped by cadence.
 	readonly droppedFrame: boolean
@@ -169,7 +182,8 @@ export interface GuiderConfig {
 	readonly maxFrameJumpPx: number
 	// Sigma multiplier for translation outlier rejection.
 	readonly outlierSigma: number
-	// Minimum acceptable frame quality score in [0, 1].
+	// Minimum acceptable frame quality score in [0, 1]. When the frame carries a search window,
+	// the score is accepted/total among detections inside that box, not across the whole sensor.
 	readonly minFrameQuality: number
 	// Consecutive bad frames before declaring the star lost.
 	readonly lostStarFrameCount: number
@@ -436,6 +450,11 @@ export function applyCalibration(calibration: CalibrationMatrix, dx: number, dy:
 	return { ra: calibration[0] * dx + calibration[1] * dy, dec: calibration[2] * dx + calibration[3] * dy } as const
 }
 
+// Returns whether two calibration matrices have identical elements.
+function isCalibrationEquals(left: CalibrationMatrix, right: CalibrationMatrix) {
+	return left[0] === right[0] && left[1] === right[1] && left[2] === right[2] && left[3] === right[3]
+}
+
 // Filters stars and emits both accepted stars and rejection diagnostics.
 export function filterGuideStars(frame: GuideFrame, config: StarFilterConfig): FilteredStars {
 	const accepted: GuideStar[] = []
@@ -457,6 +476,33 @@ export function filterGuideStars(frame: GuideFrame, config: StarFilterConfig): F
 	const ratio = frame.stars.length > 0 ? accepted.length / frame.stars.length : 0
 	const qualityScore = clamp(ratio, 0, 1)
 	return { accepted, rejectedReasons, qualityScore }
+}
+
+// Returns whether `star` falls inside the square search box of side `searchRegion` centered on
+// `position`. The box is axis-aligned in image pixels, matching PHD2's search region.
+export function starInsideSearchRegion(star: GuideStar, position: readonly [number, number], searchRegion: number) {
+	const half = searchRegion / 2
+	return Math.abs(star.x - position[0]) <= half && Math.abs(star.y - position[1]) <= half
+}
+
+// Stars that participate in lock quality and primary acquisition. When the frame carries a search
+// window, only detections inside that box are returned; otherwise every detection is used.
+export function qualityStarsOf(frame: GuideFrame): readonly GuideStar[] {
+	const { searchPosition, searchRegion, stars } = frame
+	if (searchPosition === undefined || searchRegion === undefined) return stars
+
+	const inside: GuideStar[] = []
+	for (const star of stars) {
+		if (starInsideSearchRegion(star, searchPosition, searchRegion)) inside.push(star)
+	}
+	return inside
+}
+
+// Filters stars for lock quality. When the frame carries a search window, only detections inside
+// that box contribute to the quality score and the accepted lock set.
+export function filterQualityGuideStars(frame: GuideFrame, config: StarFilterConfig): FilteredStars {
+	const stars = qualityStarsOf(frame)
+	return filterGuideStars(stars === frame.stars ? frame : { ...frame, stars }, config)
 }
 
 // Selects the strongest isolated guide star and spaced alternatives for multi-star guiding.
@@ -871,18 +917,92 @@ export class Guider {
 		this.state.lastCadence = this.config.nominalCadence
 	}
 
-	// Starts dithering by shifting lock target without touching calibration.
-	startDither(dx: number, dy: number) {
+	// Shifts the lock target in image pixels without marking a dither settle in progress. Lock-shift
+	// and a finished dither keep a constant offset this way so `ditherActive` stays reserved for an
+	// in-flight settle.
+	setTargetOffset(dx: number, dy: number) {
 		this.state.ditherOffsetX = dx
 		this.state.ditherOffsetY = dy
+	}
+
+	// Starts dithering by shifting lock target and marking the settle in progress.
+	startDither(dx: number, dy: number) {
+		this.setTargetOffset(dx, dy)
 		this.state.ditherActive = true
 	}
 
 	// Stops dithering and re-targets lock back to reference center.
 	stopDither() {
-		this.state.ditherOffsetX = 0
-		this.state.ditherOffsetY = 0
+		this.setTargetOffset(0, 0)
 		this.state.ditherActive = false
+	}
+
+	// Sets or clears the in-progress dither flag without changing the target offset. Settle
+	// completion uses this so a finished dither keeps its offset while no longer blocking the
+	// guiding assistant.
+	setDithering(active: boolean) {
+		this.state.ditherActive = active
+	}
+
+	// Updates the expected frame cadence without resetting lock or hysteresis. Callers that change
+	// camera exposure mid-session must keep this matched so gain scaling and dropped-frame detection
+	// use the real loop instead of the constructor default.
+	setNominalCadence(nominalCadence: number) {
+		if (nominalCadence <= 0 || !Number.isFinite(nominalCadence)) return
+		;(this.config as Writable<GuiderConfig>).nominalCadence = nominalCadence
+	}
+
+	// Updates the DEC guiding policy without resetting lock, RA hysteresis, or dither. Entering or
+	// leaving `off` clears DEC filter and reversal memory: `#computeDEC` returns before updating
+	// those fields while disabled, so a stale pre-disable error would otherwise pulse as soon as
+	// DEC is re-enabled even if the star is already centered.
+	setDecMode(decMode: DeclinationGuideMode) {
+		const previous = this.config.decMode
+		if (previous === decMode) return
+		;(this.config as Writable<GuiderConfig>).decMode = decMode
+		if (previous === 'off' || decMode === 'off') this.#clearDecControlState()
+	}
+
+	// Drops DEC hysteresis, last direction, and backlash accumulation without touching lock or dither.
+	#clearDecControlState() {
+		this.state.filteredDEC = 0
+		this.state.lastDecDirection = undefined
+		this.state.oppositeDecErrorAccum = 0
+	}
+
+	// Drops RA hysteresis without touching lock, dither, or DEC memory.
+	#clearRaControlState() {
+		this.state.filteredRA = 0
+	}
+
+	// Replaces the image-to-axis transform and related pulse scaling without resetting lock or
+	// dither. Axis-controller memory is cleared when that axis's transform or polarity changes:
+	// a meridian flip inverts the RA row and often `raPositiveDirection`, so retaining `filteredRA`
+	// in the old convention blends opposite-signed errors and can pulse the pre-flip direction.
+	// Pulse-scale-only updates keep hysteresis because `filteredRA` stays in axis-error units.
+	setCalibration(calibration: CalibrationMatrix, options: Partial<Pick<GuiderConfig, 'msPerRAUnit' | 'msPerDECUnit' | 'minMoveRA' | 'minMoveDEC' | 'decReversalThreshold' | 'decBacklashAccumThreshold' | 'raPositiveDirection' | 'decPositiveDirection'>> = {}) {
+		const validation = validateCalibration(calibration)
+		if (!validation.valid) throw new Error(`invalid calibration matrix: determinant=${validation.determinant}`)
+
+		const previousCalibration = this.config.calibration
+		const previousRaDirection = this.config.raPositiveDirection
+		const previousDecDirection = this.config.decPositiveDirection
+		const next: GuiderConfig = { ...this.config, calibration, ...options }
+		const issues = validateGuiderConfig(next)
+		if (issues.length > 0) {
+			const message = issues.map((issue) => `${issue.key}:${issue.reason}`).join(', ')
+			throw new Error(`invalid guider config: ${message}`)
+		}
+
+		Object.assign(this.config as Writable<GuiderConfig>, next)
+
+		const calibrationChanged = !isCalibrationEquals(next.calibration, previousCalibration)
+		if (next.raPositiveDirection !== previousRaDirection || calibrationChanged) {
+			this.#clearRaControlState()
+		}
+		if (next.decPositiveDirection !== previousDecDirection || calibrationChanged) {
+			this.#clearDecControlState()
+		}
 	}
 
 	// Processes one frame and returns RA/DEC pulse commands.
@@ -898,13 +1018,14 @@ export class Guider {
 			return { state: this.state.state, ra: NO_PULSE, dec: NO_PULSE, diagnostics: this.state.lastDiagnostics, stars }
 		}
 
+		const quality = filterQualityGuideStars(frame, this.config.filter)
 		const filtered = filterGuideStars(frame, this.config.filter)
 		const droppedFrame = this.#isDroppedFrame(frame)
 		const notes: string[] = []
 
 		if (droppedFrame) notes.push('dropped_frame')
 
-		let badFrame = filtered.accepted.length === 0 || filtered.qualityScore < this.config.minFrameQuality
+		let badFrame = quality.accepted.length === 0 || quality.qualityScore < this.config.minFrameQuality
 		let measurement: TranslationMeasurement | undefined
 
 		if (!badFrame) {
@@ -916,7 +1037,9 @@ export class Guider {
 			}
 		}
 
-		if (!badFrame && measurement !== undefined && this.#isImpossibleJump(measurement)) {
+		// A commanded dither walk can exceed maxFrameJumpPx in one pulse; that motion is expected,
+		// not a meteor or wrong-star swap.
+		if (!badFrame && measurement !== undefined && !this.state.ditherActive && this.#isImpossibleJump(measurement)) {
 			badFrame = true
 			notes.push('jump_rejected')
 		}
@@ -924,7 +1047,7 @@ export class Guider {
 		if (badFrame) {
 			this.state.consecutiveBadFrames++
 			if (this.state.consecutiveBadFrames >= this.config.lostStarFrameCount) this.state.state = 'lost'
-			this.#updateDiagnostics(frame, filtered, undefined, droppedFrame, true, notes)
+			this.#updateDiagnostics(frame, quality, undefined, droppedFrame, true, notes)
 			return { state: this.state.state, ra: NO_PULSE, dec: NO_PULSE, diagnostics: this.state.lastDiagnostics, stars: filtered.accepted }
 		}
 
@@ -945,7 +1068,7 @@ export class Guider {
 		const dec = this.#computeDEC(axisError.dec, cadenceScale)
 		this.#updateDiagnostics(
 			frame,
-			filtered,
+			quality,
 			{
 				measurementX: measurement!.x,
 				measurementY: measurement!.y,
@@ -996,18 +1119,19 @@ export class Guider {
 	// Consumes frame while the lock reference is being averaged. Returns the stars accepted by the
 	// quality filter on this frame so callers can surface them even before the lock is acquired.
 	#processInitializationFrame(frame: GuideFrame): readonly GuideStar[] {
+		const quality = filterQualityGuideStars(frame, this.config.filter)
 		const filtered = filterGuideStars(frame, this.config.filter)
 
-		if (filtered.accepted.length === 0) {
-			this.#updateDiagnostics(frame, filtered, undefined, false, true, ['init_waiting'])
+		if (quality.accepted.length === 0) {
+			this.#updateDiagnostics(frame, quality, undefined, false, true, ['init_waiting'])
 			return filtered.accepted
 		}
 
 		const previous = this.state.lockSamples.at(-1)
-		const preferred = previous === undefined ? pickInitialLockStar(filtered.accepted, this.config.initialPosition) : pickNearestGuideStar(filtered.accepted, previous.x, previous.y)
+		const preferred = previous === undefined ? pickInitialLockStar(quality.accepted, this.config.initialPosition) : pickNearestGuideStar(quality.accepted, previous.x, previous.y)
 
 		if (preferred === undefined) {
-			this.#updateDiagnostics(frame, filtered, undefined, false, true, ['init_no_star'])
+			this.#updateDiagnostics(frame, quality, undefined, false, true, ['init_no_star'])
 			return filtered.accepted
 		}
 
@@ -1020,7 +1144,7 @@ export class Guider {
 		if (this.state.lockSamples.length < this.config.lockAveragingFrames) {
 			this.#updateDiagnostics(
 				frame,
-				filtered,
+				quality,
 				{
 					measurementX: preferred.x,
 					measurementY: preferred.y,
@@ -1059,7 +1183,7 @@ export class Guider {
 		this.state.state = 'guiding'
 		this.#updateDiagnostics(
 			frame,
-			filtered,
+			quality,
 			{
 				measurementX: preferred.x,
 				measurementY: preferred.y,
@@ -1108,8 +1232,18 @@ export class Guider {
 		return dx * dx + dy * dy > this.config.maxFrameJumpPx * this.config.maxFrameJumpPx
 	}
 
-	// Detects dropped frames from timestamp deltas.
-	#isDroppedFrame({ timestamp }: GuideFrame) {
+	// Detects dropped frames. When the frame reports the exposure that produced it, classify from
+	// that cadence rather than the wall-clock gap so an ST4 pulse wait is not a drop. Frames
+	// without `cadenceMs` still use timestamp deltas.
+	#isDroppedFrame(frame: GuideFrame) {
+		const { timestamp, cadenceMs } = frame
+
+		if (cadenceMs !== undefined) {
+			if (timestamp !== undefined) this.state.lastTimestamp = timestamp
+			if (cadenceMs > 0) this.state.lastCadence = cadenceMs
+			return cadenceMs > this.config.nominalCadence * this.config.droppedFrameFactor
+		}
+
 		if (timestamp === undefined) return false
 
 		const lastTimestamp = this.state.lastTimestamp
@@ -1128,8 +1262,9 @@ export class Guider {
 
 	// Computes frame cadence scale to keep pulse gain stable across variable cadence.
 	#cadenceScale(frame: GuideFrame) {
-		if (frame.timestamp === undefined) return 1
-		return clamp(this.state.lastCadence / this.config.nominalCadence, 0.5, 2)
+		const cadence = frame.cadenceMs ?? (frame.timestamp === undefined ? this.config.nominalCadence : this.state.lastCadence)
+		if (cadence <= 0 || this.config.nominalCadence <= 0) return 1
+		return clamp(cadence / this.config.nominalCadence, 0.5, 2)
 	}
 
 	// Computes RA pulse with hysteresis smoothing, deadband and proportional gain.
@@ -1177,7 +1312,7 @@ export class Guider {
 	#updateDiagnostics(frame: GuideFrame, filtered: FilteredStars, measurement: DiagnosticMeasurement | undefined, droppedFrame: boolean, badFrame: boolean, notes: readonly string[]) {
 		this.state.lastDiagnostics = {
 			frameId: frame.frameId,
-			totalStars: frame.stars.length,
+			totalStars: qualityStarsOf(frame).length,
 			acceptedStars: filtered.accepted.length,
 			qualityScore: filtered.qualityScore,
 			modeUsed: measurement?.modeUsed,

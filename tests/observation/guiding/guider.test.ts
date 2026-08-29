@@ -42,6 +42,32 @@ function guider(config: Partial<GuiderConfig> = {}) {
 
 const BASE_STARS = starList(5)
 
+test('search-box quality ignores out-of-box field stars', () => {
+	const lock = star(0, { x: 120, y: 140, snr: 20, flux: 2400 })
+	const noise: GuideStar[] = []
+	for (let i = 0; i < 20; i++) {
+		noise.push(star(i + 1, { x: 500 + i * 8, y: 400, snr: 0.4, flux: 0.2 }))
+	}
+
+	const frame = (timestamp: number, dx = 0): GuideFrame => ({
+		stars: [{ ...lock, x: lock.x + dx }, ...noise],
+		width: WIDTH,
+		height: HEIGHT,
+		timestamp,
+		searchPosition: [120, 140],
+		searchRegion: 64,
+	})
+
+	const instance = guider({ lockAveragingFrames: 1, minFrameQuality: 0.2 })
+	instance.processFrame(frame(0))
+	const cmd = instance.processFrame(frame(1000, 0.4))
+
+	expect(cmd.diagnostics.badFrame).toBeFalse()
+	expect(cmd.diagnostics.qualityScore).toBeGreaterThanOrEqual(0.2)
+	expect(cmd.ra.duration).toBeGreaterThan(0)
+	expect(cmd.state).toBe('guiding')
+})
+
 test('star filtering rejects low quality detections', () => {
 	const stars: GuideStar[] = [
 		{ x: 8, y: 20, snr: 20, flux: 1000, hfd: 2 },
@@ -128,6 +154,19 @@ test('lost-star state and reacquisition flow', () => {
 	expect(cmd.diagnostics.badFrame).toBeFalse()
 })
 
+test('setTargetOffset shifts the lock without marking dither active', () => {
+	const instance = guider({ lockAveragingFrames: 1, minMoveRA: 0.01, minMoveDEC: 0.01, hysteresisRA: 0, hysteresisDEC: 0 })
+	instance.processFrame(guideFrame(BASE_STARS, 0))
+	instance.setTargetOffset(2, -1)
+	expect(instance.currentState.ditherActive).toBeFalse()
+	expect(instance.currentState.ditherOffsetX).toBe(2)
+	expect(instance.currentState.ditherOffsetY).toBe(-1)
+	const cmd = instance.processFrame(guideFrame(BASE_STARS, 1000))
+	expect(cmd.ra.duration).toBeGreaterThan(0)
+	expect(cmd.dec.duration).toBeGreaterThan(0)
+	expect(cmd.diagnostics.ditherActive).toBeFalse()
+})
+
 test('dither offset shifts target and settles after stop', () => {
 	const guider = new Guider({ lockAveragingFrames: 1, minMoveRA: 0.01, minMoveDEC: 0.01, hysteresisRA: 0, hysteresisDEC: 0 })
 	guider.processFrame(guideFrame(BASE_STARS, 0))
@@ -158,6 +197,154 @@ test('cadence scaling uses previous frame timestamp', () => {
 	const cmd = guider.processFrame(guideFrame(shiftStars(BASE_STARS, 0.2, 0), 1000))
 	expect(cmd.ra.duration).toBeCloseTo(140, 8)
 	expect(cmd.ra.duration).toBeGreaterThan(100)
+})
+
+test('cadenceMs does not treat a pulse wait as a dropped frame', () => {
+	const instance = new Guider({ lockAveragingFrames: 1, maxFrameJumpPx: 20, nominalCadence: 1000, droppedFrameFactor: 2.5 })
+	instance.processFrame(guideFrame(BASE_STARS, 0))
+	const frame = { ...guideFrame(shiftStars(BASE_STARS, 0.3, 0.1), 4000), cadenceMs: 1000 }
+	const cmd = instance.processFrame(frame)
+	expect(cmd.diagnostics.droppedFrame).toBeFalse()
+})
+
+test('cadenceMs scales gain from the exposure instead of the wall-clock gap', () => {
+	const guider = new Guider({ lockAveragingFrames: 1, calibration: [1, 0, 0, 1], hysteresisRA: 0, hysteresisDEC: 0, minMoveRA: 0.01, minMoveDEC: 1, msPerRAUnit: 1000, nominalCadence: 1000 })
+	guider.processFrame(guideFrame(BASE_STARS, 0))
+	// A 3 s wall-clock gap would otherwise double the pulse (cadence scale caps at 2). The frame's
+	// exposure is still 1 s, so gain must stay at the nominal 0.2 px * 1000 ms/px * 0.7 = 140 ms.
+	const frame = { ...guideFrame(shiftStars(BASE_STARS, 0.2, 0), 3000), cadenceMs: 1000 }
+	const cmd = guider.processFrame(frame)
+	expect(cmd.ra.duration).toBeCloseTo(140, 8)
+})
+
+test('setNominalCadence updates gain scaling without resetting the lock', () => {
+	const instance = new Guider({ lockAveragingFrames: 1, calibration: [1, 0, 0, 1], hysteresisRA: 0, hysteresisDEC: 0, minMoveRA: 0.01, minMoveDEC: 1, msPerRAUnit: 1000, nominalCadence: 1000 })
+	instance.processFrame(guideFrame(BASE_STARS, 0))
+	instance.setNominalCadence(2000)
+	const frame = { ...guideFrame(shiftStars(BASE_STARS, 0.2, 0), 2000), cadenceMs: 2000 }
+	const cmd = instance.processFrame(frame)
+	expect(instance.currentState.state).toBe('guiding')
+	expect(cmd.ra.duration).toBeCloseTo(140, 8)
+})
+
+test('setDecMode and setCalibration keep the lock and hysteresis', () => {
+	const instance = guider({ hysteresisRA: 0.5, minMoveDEC: 1 })
+	instance.processFrame(guideFrame(BASE_STARS, 0))
+	expect(instance.currentState.state).toBe('guiding')
+
+	const first = instance.processFrame(guideFrame(shiftStars(BASE_STARS, 0.4, 0), 1000))
+	expect(first.ra.duration).toBeGreaterThan(0)
+
+	instance.setDecMode('north-only')
+	instance.setCalibration([1, 0, 0, 1], { msPerRAUnit: 100 })
+	expect(instance.currentState.state).toBe('guiding')
+	expect(instance.config.decMode).toBe('north-only')
+
+	const second = instance.processFrame(guideFrame(shiftStars(BASE_STARS, 0.4, 0), 2000))
+	expect(second.state).toBe('guiding')
+	expect(second.ra.duration).toBeGreaterThan(0)
+})
+
+test('setCalibration with reversed DEC parity matches a fresh flipped guider', () => {
+	const running = guider({
+		calibration: [1, 0, 0, 1],
+		hysteresisDEC: 0,
+		minMoveDEC: 0.01,
+		decReversalThreshold: 0.08,
+		decBacklashAccumThreshold: 0.32,
+		decPositiveDirection: 'NORTH',
+	})
+	running.processFrame(guideFrame(BASE_STARS, 0))
+	const first = running.processFrame(guideFrame(shiftStars(BASE_STARS, 0, 0.2), 1000))
+	expect(first.dec.direction).toBe('NORTH')
+	expect(first.dec.duration).toBeGreaterThan(0)
+
+	running.startDither(0.5, -0.25)
+	running.setCalibration([1, 0, 0, -1], { decPositiveDirection: 'SOUTH' })
+	expect(running.currentState.state).toBe('guiding')
+	expect(running.currentState.ditherActive).toBeTrue()
+	expect(running.currentState.filteredDEC).toBe(0)
+	expect(running.currentState.lastDecDirection).toBeUndefined()
+	running.stopDither()
+
+	const equivalent = shiftStars(BASE_STARS, 0, -0.2)
+	const runningCmd = running.processFrame(guideFrame(equivalent, 2000))
+
+	const fresh = guider({
+		calibration: [1, 0, 0, -1],
+		hysteresisDEC: 0,
+		minMoveDEC: 0.01,
+		decReversalThreshold: 0.08,
+		decBacklashAccumThreshold: 0.32,
+		decPositiveDirection: 'SOUTH',
+	})
+	fresh.processFrame(guideFrame(BASE_STARS, 0))
+	const freshCmd = fresh.processFrame(guideFrame(equivalent, 1000))
+
+	expect(runningCmd.dec.direction).toBe(freshCmd.dec.direction)
+	expect(runningCmd.dec.duration).toBeCloseTo(freshCmd.dec.duration, 8)
+	expect(runningCmd.dec.duration).toBeGreaterThan(0)
+})
+
+test('setCalibration with reversed RA polarity matches a fresh flipped guider', () => {
+	const running = guider({
+		calibration: [1, 0, 0, 1],
+		hysteresisRA: 0.6,
+		minMoveRA: 0.01,
+		raPositiveDirection: 'WEST',
+	})
+	running.processFrame(guideFrame(BASE_STARS, 0))
+	const first = running.processFrame(guideFrame(shiftStars(BASE_STARS, 0.4, 0), 1000))
+	expect(first.ra.direction).toBe('WEST')
+	expect(first.ra.duration).toBeGreaterThan(0)
+	expect(running.currentState.filteredRA).not.toBe(0)
+
+	running.startDither(0.5, -0.25)
+	running.setCalibration([-1, 0, 0, 1], { raPositiveDirection: 'EAST' })
+	expect(running.currentState.state).toBe('guiding')
+	expect(running.currentState.ditherActive).toBeTrue()
+	expect(running.currentState.filteredRA).toBe(0)
+	running.stopDither()
+
+	const equivalent = shiftStars(BASE_STARS, -0.4, 0)
+	const runningCmd = running.processFrame(guideFrame(equivalent, 2000))
+
+	const fresh = guider({
+		calibration: [-1, 0, 0, 1],
+		hysteresisRA: 0.6,
+		minMoveRA: 0.01,
+		raPositiveDirection: 'EAST',
+	})
+	fresh.processFrame(guideFrame(BASE_STARS, 0))
+	const freshCmd = fresh.processFrame(guideFrame(equivalent, 1000))
+
+	expect(runningCmd.ra.direction).toBe(freshCmd.ra.direction)
+	expect(runningCmd.ra.duration).toBeCloseTo(freshCmd.ra.duration, 8)
+	expect(runningCmd.ra.duration).toBeGreaterThan(0)
+})
+
+test('setDecMode off clears DEC memory so re-enabling does not pulse a centered star', () => {
+	const instance = guider({ hysteresisDEC: 0.6, minMoveDEC: 0.01 })
+	instance.processFrame(guideFrame(BASE_STARS, 0))
+	const correction = instance.processFrame(guideFrame(shiftStars(BASE_STARS, 0, 0.5), 1000))
+	expect(correction.dec.duration).toBeGreaterThan(0)
+	expect(instance.currentState.filteredDEC).not.toBe(0)
+	expect(instance.currentState.lastDecDirection).toBe('NORTH')
+
+	instance.setDecMode('off')
+	expect(instance.currentState.filteredDEC).toBe(0)
+	expect(instance.currentState.lastDecDirection).toBeUndefined()
+	expect(instance.currentState.oppositeDecErrorAccum).toBe(0)
+	expect(instance.currentState.state).toBe('guiding')
+
+	const disabled = instance.processFrame(guideFrame(BASE_STARS, 2000))
+	expect(disabled.dec.duration).toBe(0)
+	expect(disabled.diagnostics.filteredDEC).toBe(0)
+
+	instance.setDecMode('auto')
+	const centered = instance.processFrame(guideFrame(BASE_STARS, 3000))
+	expect(centered.dec.duration).toBe(0)
+	expect(centered.diagnostics.filteredDEC).toBe(0)
 })
 
 test('steady drift with seeing noise and oscillation remain bounded', () => {

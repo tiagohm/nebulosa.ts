@@ -1079,9 +1079,9 @@ test('thin-plate spline extraction flattens a complex gradient', () => {
 })
 
 test('caps thin-plate spline control points on dense grids', () => {
-	// A dense grid produces far more accepted samples than the TPS control-point cap (1024). The fit
+	// A dense grid produces far more surviving samples than the TPS control-point cap (1024). The fit
 	// must subsample the control points to stay tractable (the dense solve is O(k^3)) while still
-	// reporting every accepted sample and following the background. The default grid stays under the cap.
+	// following the background. The default grid stays under the cap.
 	const width = 400
 	const height = 400
 	const bg = (x: number, y: number) => 0.3 + 0.15 * Math.sin(3 * (x / width)) * Math.cos(3 * (y / height)) + 0.1 * (x / width)
@@ -1089,9 +1089,16 @@ test('caps thin-plate spline control points on dense grids', () => {
 
 	const dense = fitBackgroundSurface(image, { model: 'thinPlateSpline', gridSize: 48, smoothing: 0.05 })
 	const controlPoints = dense.surfaces[0].controlPoints!.length / 2
-	// Far more samples survive than control points are kept, and the kept set honors the cap.
-	expect(dense.surfaces[0].acceptedSamples).toBeGreaterThan(1024)
+	// The cap engaged, and acceptance follows the solve: a sample the cap dropped did not feed it, so it
+	// is reported rejected whatever the smoothing.
 	expect(controlPoints).toBeLessThanOrEqual(1024)
+	expect(dense.surfaces[0].acceptedSamples).toBe(controlPoints)
+	expect(dense.surfaces[0].rejectedSamples).toBeGreaterThan(0)
+	expect(dense.surfaces[0].samples.filter((sample) => sample.accepted)).toHaveLength(controlPoints)
+
+	// The residual still measures the fit against the samples the cap dropped, so it stays a meaningful
+	// quality indicator rather than collapsing onto the control points alone.
+	expect(dense.surfaces[0].residual).toBeGreaterThan(0)
 
 	// The capped spline still tracks the background.
 	const background = evaluateBackgroundModel(dense, image).raw
@@ -1165,6 +1172,28 @@ test('an exact thin-plate spline fits a tiny image with overlapping sample boxes
 	expect(model.surfaces[0].controlPoints!.length).toBe(model.surfaces[0].acceptedSamples * 2)
 
 	const background = evaluateBackgroundModel(model, image).raw
+	let maxError = 0
+	for (let y = 0; y < height; y++) {
+		for (let x = 0; x < width; x++) maxError = Math.max(maxError, Math.abs(background[y * width + x] - bg(x, y)))
+	}
+	expect(maxError).toBeLessThan(1e-5)
+})
+
+test('a positive near-exact background spline keeps overlapping samples', () => {
+	const width = 10
+	const height = 10
+	const bg = (x: number, y: number) => 0.1 + 0.4 * (x / (width - 1)) + 0.3 * (y / (height - 1))
+	const image = makeImage(width, height, 1, (x, y) => bg(x, y))
+
+	const exact = fitBackgroundSurface(image, { model: 'thinPlateSpline', gridSize: 10, smoothing: 0 })
+	const smoothed = fitBackgroundSurface(image, { model: 'thinPlateSpline', gridSize: 10, smoothing: 1e-6 })
+	const surface = smoothed.surfaces[0]
+
+	expect(surface.rejectedSamples).toBe(0)
+	expect(surface.acceptedSamples).toBeGreaterThan(exact.surfaces[0].acceptedSamples)
+	expect(surface.controlPoints!.length).toBe(surface.acceptedSamples * 2)
+
+	const background = evaluateBackgroundModel(smoothed, image).raw
 	let maxError = 0
 	for (let y = 0; y < height; y++) {
 		for (let x = 0; x < width; x++) maxError = Math.max(maxError, Math.abs(background[y * width + x] - bg(x, y)))
@@ -1342,4 +1371,59 @@ test('a zero or negligibly-smoothed thin-plate spline is evaluated exactly, with
 	expect(maxCoarseningError(0)).toBeLessThan(1e-6)
 	expect(maxCoarseningError(1e-12)).toBeLessThan(1e-6)
 	expect(maxCoarseningError(0.05)).toBeGreaterThan(1e-6)
-}, 3000)
+}, 6000)
+
+test('an extreme gridSize on a fully excluded frame does not exhaust memory', () => {
+	// collectSamples reserves its sample arrays for every CANDIDATE cell, before masking decides how many
+	// survive, so the grid dimensions alone fix the allocation. The frame is wider than the grid ceiling
+	// so the clamp actually binds; unbounded, this gridSize would reserve sample state for every pixel
+	// and produce no sample at all under the mask.
+	const width = 2048
+	const height = 64
+	const image = makeImage(width, height, 1, () => 0.3)
+	const mask = new Uint8Array(width * height).fill(1)
+
+	expect(() => fitBackgroundSurface(image, { gridSize: 1_000_000, exclusionMask: mask })).toThrow()
+
+	// The same grid without a mask fits, and its cell count honors the ceiling rather than the pixel count.
+	const model = fitBackgroundSurface(image, { gridSize: 1_000_000 })
+	expect(model.surfaces[0].samples.length).toBeLessThanOrEqual(128 * 128)
+	expect(model.surfaces[0].samples.length).toBeLessThan(width * height)
+}, 20000)
+
+test('a square RGB degree-six background grid stays under the sample ceiling', () => {
+	const size = 256
+	const image = makeImage(size, size, 3, (x, y, channel) => 0.2 + 0.1 * (x / (size - 1)) + 0.05 * (y / (size - 1)) + 0.01 * channel)
+	const model = fitBackgroundSurface(image, { gridSize: 1024, degree: 6, rejectionIterations: 0 })
+
+	expect(model.surfaces).toHaveLength(3)
+	for (const surface of model.surfaces) expect(surface.samples.length).toBeLessThanOrEqual(128 * 128)
+})
+
+test('a smoothed background spline keeps coincident sample boxes', () => {
+	// On a small dense grid the edge boxes clamp inward to the same window, so several boxes share one
+	// (u, v). A regularized spline solves those coincident observations and averages them; coalescing
+	// them instead keeps whichever box was reached first, which is collection order deciding the fit.
+	const width = 10
+	const height = 10
+	const bg = (x: number, y: number) => 0.1 + 0.4 * (x / (width - 1)) + 0.3 * (y / (height - 1))
+	const image = makeImage(width, height, 1, (x, y) => bg(x, y))
+
+	const smoothed = fitBackgroundSurface(image, { model: 'thinPlateSpline', gridSize: 10, smoothing: 0.05 })
+	const exact = fitBackgroundSurface(image, { model: 'thinPlateSpline', gridSize: 10, smoothing: 0 })
+
+	// The regularized fit keeps every clean sample as a control point; the interpolating one still has to
+	// coalesce them or its system is singular.
+	expect(smoothed.surfaces[0].controlPoints!.length / 2).toBe(smoothed.surfaces[0].acceptedSamples)
+	expect(smoothed.surfaces[0].rejectedSamples).toBe(0)
+	expect(exact.surfaces[0].rejectedSamples).toBeGreaterThan(0)
+	expect(smoothed.surfaces[0].acceptedSamples).toBeGreaterThan(exact.surfaces[0].acceptedSamples)
+
+	// And it still follows the gradient it was fitted to.
+	const background = evaluateBackgroundModel(smoothed, image).raw
+	let maxError = 0
+	for (let y = 0; y < height; y++) {
+		for (let x = 0; x < width; x++) maxError = Math.max(maxError, Math.abs(background[y * width + x] - bg(x, y)))
+	}
+	expect(maxError).toBeLessThan(0.05)
+})

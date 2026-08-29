@@ -10,11 +10,12 @@ import { starMomentShape } from './shape'
 
 // Star detection and photometry for an image. Median-filters out hot pixels, runs a PSF-matched
 // response to find candidate peaks, then measures each star's flux, SNR, half-flux diameter (HFD),
-// and FWHM via integral-image aperture/annulus photometry. Coordinates are pixels; intensities use
-// the normalized [0, 1] pixel scale. Also provides utilities to merge close detections and to clip
-// stars to a central search region.
+// and FWHM via integral-image aperture/annulus photometry. The published (x, y) is the flux-weighted
+// centroid around that peak, not the integer local-max pixel, so sub-pixel motion is visible to
+// guiders. Coordinates are pixels; intensities use the normalized [0, 1] pixel scale. Also provides
+// utilities to merge close detections and to clip stars to a central search region.
 
-// A detected star: its pixel position plus measured photometry.
+// A detected star: flux-weighted centroid in pixels plus measured photometry.
 export interface DetectedStar extends Readonly<Point> {
 	// Half-flux diameter, pixels.
 	readonly hfd: number
@@ -44,8 +45,12 @@ export interface DetectStarOptions {
 type IntegralImages = readonly [Float64Array, Float64Array, number] // sum, sumSq, width
 // Measured photometry of one star as [flux, snr, hfd, fwhm].
 export type StarPhotometry = readonly [number, number, number, number] // flux, snr, hfd, fwhm
-// Internal photometry plus shape measurements as [flux, snr, hfd, fwhm, eccentricity, elongation].
-type MeasuredStarPhotometry = readonly [number, number, number, number, number | undefined, number | undefined]
+// Internal photometry plus shape and the flux-weighted centroid as
+// [flux, snr, hfd, fwhm, eccentricity, elongation, centroidX, centroidY].
+type MeasuredStarPhotometry = readonly [number, number, number, number, number | undefined, number | undefined, number, number]
+
+// Empty photometry returned when the aperture is invalid or has no positive flux.
+const EMPTY_STAR_PHOTOMETRY = [0, 0, 0, 0, undefined, undefined, 0, 0] as const satisfies MeasuredStarPhotometry
 
 // Aperture radius (pixels) over which a star's signal flux is integrated.
 const STAR_SIGNAL_RADIUS = 4
@@ -185,13 +190,13 @@ export function detectStars(image: Image, { maxStars = 500, searchRegion = 0, mi
 			if (h < 0.1) continue
 
 			// Validate each candidate against the original image so ranking uses measured photometry instead of only convolution response.
-			const [flux, snr, hfd, fwhm, eccentricity, elongation] = measureStarPhotometryRaw(original, width, height, stride, x, y, STAR_SIGNAL_RADIUS, STAR_BACKGROUND_INNER_RADIUS, STAR_BACKGROUND_OUTER_RADIUS, STAR_CONVOLVED_MARGIN)
+			const [flux, snr, hfd, fwhm, eccentricity, elongation, centroidX, centroidY] = measureStarPhotometryRaw(original, width, height, stride, x, y, STAR_SIGNAL_RADIUS, STAR_BACKGROUND_INNER_RADIUS, STAR_BACKGROUND_OUTER_RADIUS, STAR_CONVOLVED_MARGIN)
 			if (flux <= 0 || snr < minSNR || hfd < STAR_MIN_HFD) continue
 
 			// Ranks detections by measured signal so real stars survive capacity limits better than noise artifacts.
 			const rank = flux * snr
 
-			stars.add(x, y, rank, flux, snr, hfd, fwhm, eccentricity, elongation)
+			stars.add(centroidX, centroidY, rank, flux, snr, hfd, fwhm, eccentricity, elongation)
 		}
 	}
 
@@ -254,16 +259,16 @@ export function measureStarPhotometry(image: Image, x: number, y: number, radius
 	return [flux, snr, hfd, fwhm]
 }
 
-// Computes aperture flux, SNR, HFD and FWHM for a detected star.
+// Computes aperture flux, SNR, HFD, FWHM, shape, and the flux-weighted centroid for a detected star.
 function measureStarPhotometryRaw(raw: Image['raw'], width: number, height: number, stride: number, x: number, y: number, signalRadius: number, backgroundInnerRadius: number, backgroundOuterRadius: number, margin: number): MeasuredStarPhotometry {
-	if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(signalRadius) || signalRadius <= 0) return [0, 0, 0, 0, undefined, undefined]
-	if (!Number.isFinite(backgroundInnerRadius) || !Number.isFinite(backgroundOuterRadius) || backgroundInnerRadius <= signalRadius || backgroundOuterRadius < backgroundInnerRadius) return [0, 0, 0, 0, undefined, undefined]
+	if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(signalRadius) || signalRadius <= 0) return EMPTY_STAR_PHOTOMETRY
+	if (!Number.isFinite(backgroundInnerRadius) || !Number.isFinite(backgroundOuterRadius) || backgroundInnerRadius <= signalRadius || backgroundOuterRadius < backgroundInnerRadius) return EMPTY_STAR_PHOTOMETRY
 
 	const xMin = margin
 	const yMin = margin
 	const xMax = width - margin - 1
 	const yMax = height - margin - 1
-	if (x < xMin || x > xMax || y < yMin || y > yMax) return [0, 0, 0, 0, undefined, undefined]
+	if (x < xMin || x > xMax || y < yMin || y > yMax) return EMPTY_STAR_PHOTOMETRY
 	const x0 = Math.max(xMin, Math.ceil(x - backgroundOuterRadius))
 	const y0 = Math.max(yMin, Math.ceil(y - backgroundOuterRadius))
 	const x1 = Math.min(xMax, Math.floor(x + backgroundOuterRadius))
@@ -291,7 +296,7 @@ function measureStarPhotometryRaw(raw: Image['raw'], width: number, height: numb
 		}
 	}
 
-	if (backgroundCount <= 0) return [0, 0, 0, 0, undefined, undefined]
+	if (backgroundCount <= 0) return EMPTY_STAR_PHOTOMETRY
 
 	const backgroundMean = backgroundSum / backgroundCount
 	const backgroundVariance = Math.max(0, backgroundSumSq / backgroundCount - backgroundMean * backgroundMean)
@@ -322,7 +327,7 @@ function measureStarPhotometryRaw(raw: Image['raw'], width: number, height: numb
 		}
 	}
 
-	if (flux <= 0 || aperturePixels <= 0) return [0, 0, 0, 0, undefined, undefined]
+	if (flux <= 0 || aperturePixels <= 0) return EMPTY_STAR_PHOTOMETRY
 
 	const snr = flux / Math.sqrt(Math.max(flux + aperturePixels * backgroundVariance, Number.EPSILON))
 	const hfd = (2 * radialMoment) / flux
@@ -351,7 +356,7 @@ function measureStarPhotometryRaw(raw: Image['raw'], width: number, height: numb
 	}
 
 	const { eccentricity, elongation } = starMomentShape(momentXX / flux, momentXY / flux, momentYY / flux)
-	return [flux, snr, hfd, fwhm, eccentricity, elongation]
+	return [flux, snr, hfd, fwhm, eccentricity, elongation, centroidX, centroidY]
 }
 
 // Builds summed-area tables for fast local mean and variance queries.

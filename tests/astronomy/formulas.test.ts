@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 // oxfmt-ignore
-import { asteroidMagnitudeEstimate, airmass, airmassKastenYoung, airyDiskInPixels, airyDiskSize, altitudeAtTransit, atmosphericExtinction, atmosphericRefraction, cometMagnitudeEstimate, criticalFocusZone, dawesLimit, dewPoint, dynamicRange, dynamicRangeInStops, effectiveApertureWithObstruction, exitPupil, exitPupilFromApertureAndMagnification, exitPupilFromEyepieceAndFocalRatio, eyepieceTrueFovViaFieldStop, eyepieceView, focalLength, focalRatio, guidingErrorInPixels, hourAngleAtAltitude, lightGraspRatio, limitingMagnitude, magnification, maxExposureBeforeTrail, mosaicPanelCount, objectAngularDiameter, obstructionRatio, periodicErrorInPixels, pixelScale, plateScale, rayleighLimit, recommendedFocalLength, requiredSubframeCount, samplingRatio, saturationTime, sensorDiagonalFov, sensorFieldOfView, signalToNoiseRatio, skyLimitedExposure, stackingMagnitudeGain, stackingSnrGain, starTrailLength, subframeCount, surfaceBrightness, totalIntegrationTime } from '../../src/astronomy/formulas'
+import { asteroidMagnitudeEstimate, airmass, airmassKastenYoung, airyDiskInPixels, airyDiskSize, altitudeAtTransit, atmosphericExtinction, atmosphericRefraction, cometMagnitudeEstimate, criticalFocusZone, dawesLimit, dewPoint, dynamicRange, dynamicRangeInStops, effectiveApertureWithObstruction, exitPupil, exitPupilFromApertureAndMagnification, exitPupilFromEyepieceAndFocalRatio, eyepieceTrueFovViaFieldStop, eyepieceView, focalLength, focalRatio, guidingErrorInPixels, hourAngleAtAltitude, lightGraspRatio, isMagnusDomain, limitingMagnitude, MAGNUS_MAX_CELSIUS, MAGNUS_MIN_CELSIUS, magnification, maxExposureBeforeTrail, mosaicPanelCount, objectAngularDiameter, obstructionRatio, periodicErrorInPixels, pixelScale, plateScale, rayleighLimit, recommendedFocalLength, relativeHumidity, requiredSubframeCount, samplingRatio, saturationTime, sensorDiagonalFov, sensorFieldOfView, signalToNoiseRatio, skyLimitedExposure, stackingMagnitudeGain, stackingSnrGain, starTrailLength, subframeCount, surfaceBrightness, totalIntegrationTime } from '../../src/astronomy/formulas'
 import { DEG2RAD, PIOVERTWO, RAD2DEG } from '../../src/core/constants'
 
 test('visual astronomy and optical planning formulas return expected values', () => {
@@ -58,6 +58,9 @@ test('atmospheric, transit, brightness, comet, and asteroid formulas return expe
 	expect(atmosphericExtinction(0.2, 1.5)).toBeCloseTo(0.3, 12)
 	expect(atmosphericRefraction(45 * DEG2RAD)).toBeCloseTo(1.01270766, 8)
 	expect(dewPoint(20, 60)).toBeCloseTo(11.99989462, 8)
+	expect(relativeHumidity(20, 11.99989462)).toBeCloseTo(60, 7)
+	expect(relativeHumidity(-10, -15)).toBeCloseTo(66.82932857, 8)
+	expect(relativeHumidity(20, 20)).toBe(100)
 	expect(altitudeAtTransit(-23 * DEG2RAD, -5 * DEG2RAD)).toBeCloseTo(72 * DEG2RAD, 12)
 	expect(altitudeAtTransit(-23 * DEG2RAD, -5 * DEG2RAD)).toBeCloseTo(1.2566370614, 10)
 	expect(objectAngularDiameter(1391400, 149597870.7)).toBeCloseTo(0.00930086747, 11)
@@ -109,6 +112,12 @@ test('formulas reject invalid inputs and denominators consistently', () => {
 	expect(() => atmosphericRefraction(0)).toThrow('value must be within')
 	expect(() => dewPoint(20, 0)).toThrow('relative humidity must be within')
 	expect(() => dewPoint(20, 101)).toThrow('relative humidity must be within')
+	expect(() => relativeHumidity(Number.NaN, 10)).toThrow('value must be finite')
+	expect(() => relativeHumidity(20, Number.POSITIVE_INFINITY)).toThrow('value must be finite')
+	expect(() => relativeHumidity(MAGNUS_MIN_CELSIUS - 0.001, 0)).toThrow('value must be within')
+	expect(() => relativeHumidity(0, MAGNUS_MAX_CELSIUS + 0.001)).toThrow('value must be within')
+	expect(() => relativeHumidity(-243.04 + 0.1, 0)).toThrow('value must be within')
+	expect(() => dewPoint(MAGNUS_MIN_CELSIUS - 0.001, 50)).toThrow('value must be within')
 	expect(() => altitudeAtTransit(100 * DEG2RAD, 0)).toThrow('value must be within')
 	expect(() => objectAngularDiameter(1391400, 0)).toThrow('value must be positive')
 	expect(() => surfaceBrightness(10, 0)).toThrow('value must be positive')
@@ -134,4 +143,42 @@ test('hour angle at altitude returns undefined for circumpolar and never-rising 
 	expect(hourAngleAtAltitude(80 * DEG2RAD, 80 * DEG2RAD, 0)).toBeUndefined()
 	// Its southern counterpart never rises above h0 = 0.
 	expect(hourAngleAtAltitude(-80 * DEG2RAD, 80 * DEG2RAD, 0)).toBeUndefined()
+})
+
+test('dew point and relative humidity invert each other over the useful domain', () => {
+	for (const temperature of [-30, -5, 0, 12.5, 25, 40]) {
+		for (const humidity of [1, 17.5, 50, 82.3, 100]) {
+			expect(relativeHumidity(temperature, dewPoint(temperature, humidity))).toBeCloseTo(humidity, 10)
+		}
+	}
+})
+
+test('relative humidity stays finite and positive across its whole domain', () => {
+	// The Magnus terms are unbounded near the -243.04 C singularity, so the domain has to be narrow enough
+	// that the inverse relation's exponential cannot overflow. The extremes are the worst case.
+	expect(relativeHumidity(MAGNUS_MIN_CELSIUS, MAGNUS_MAX_CELSIUS)).toBeFinite()
+	expect(relativeHumidity(MAGNUS_MAX_CELSIUS, MAGNUS_MIN_CELSIUS)).toBeGreaterThan(0)
+	expect(isMagnusDomain(MAGNUS_MIN_CELSIUS)).toBeTrue()
+	expect(isMagnusDomain(MAGNUS_MAX_CELSIUS)).toBeTrue()
+	expect(isMagnusDomain(-243.04 + 0.1)).toBeFalse()
+	expect(isMagnusDomain(Number.NaN)).toBeFalse()
+
+	for (let temperature = MAGNUS_MIN_CELSIUS; temperature <= MAGNUS_MAX_CELSIUS; temperature += 5) {
+		for (let dew = MAGNUS_MIN_CELSIUS; dew <= MAGNUS_MAX_CELSIUS; dew += 5) {
+			const humidity = relativeHumidity(temperature, dew)
+			expect(humidity).toBeFinite()
+			expect(humidity).toBeGreaterThan(0)
+		}
+
+		expect(dewPoint(temperature, 1)).toBeFinite()
+		expect(dewPoint(temperature, 100)).toBeFinite()
+	}
+})
+
+test('relative humidity reports supersaturation instead of failing', () => {
+	// Saturated air round-trips a hair above the temperature, so a dew point above it must stay usable:
+	// it is what a fogged-in station reports, and the Alpaca boundary is where the 0..100 clamp belongs.
+	expect(dewPoint(12.5, 100)).toBeGreaterThan(12.5)
+	expect(relativeHumidity(12.5, dewPoint(12.5, 100))).toBeCloseTo(100, 10)
+	expect(relativeHumidity(20, 22)).toBeGreaterThan(100)
 })

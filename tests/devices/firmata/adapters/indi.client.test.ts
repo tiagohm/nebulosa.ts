@@ -6,6 +6,7 @@ import type { Accelerometer, Altimeter, Ammeter, Barometer, Gyroscope, Hygromete
 import { LM35 } from '../../../../src/devices/firmata/sensors/thermometer'
 import type { IndiClientHandler } from '../../../../src/devices/indi/client'
 import type { DefNumberVector, DelProperty, SetNumberVector, SetSwitchVector } from '../../../../src/devices/indi/types'
+import { meter } from '../../../../src/math/units/distance'
 import { waitUntil } from '../../../util'
 
 // Deterministic Firmata stand-in. Only the methods the adapter actually uses are implemented:
@@ -46,6 +47,7 @@ class FakeFirmata {
 abstract class FakeListenable<D extends ListenablePeripheral<D>> implements Peripheral {
 	started = 0
 	stopped = 0
+	samples = 0
 	readonly #listeners = new Set<PeripheralListener<D>>()
 
 	constructor(
@@ -74,7 +76,14 @@ abstract class FakeListenable<D extends ListenablePeripheral<D>> implements Peri
 	}
 
 	emit() {
+		this.samples++
 		for (const listener of this.#listeners) listener(this as never)
+	}
+
+	// A completed hardware reading that moved no value: counted as a sample without notifying anyone,
+	// which is what PeripheralBase.commit does for an unchanged read.
+	sample() {
+		this.samples++
 	}
 
 	[Symbol.dispose]() {
@@ -260,7 +269,7 @@ describe('firmata indi client', () => {
 
 		expect(tagsFor(events, 'LM35', 'DRIVER_INFO')).toContain('defText')
 		expect(tagsFor(events, 'LM35', 'CONNECTION')).toContain('defSwitch')
-		expect(tagsFor(events, 'LM35', 'TEMPERATURE')).toHaveLength(0)
+		expect(tagsFor(events, 'LM35', 'WEATHER_PARAMETERS')).toHaveLength(0)
 		expect(device.isConnected).toBeFalse()
 	})
 
@@ -286,7 +295,7 @@ describe('firmata indi client', () => {
 
 		await waitUntil(() => device.isConnected)
 		expect(peripheral.started).toBe(1)
-		expect(events.some((e) => e.tag === 'defNumber' && e.device === 'LM35' && e.name === 'TEMPERATURE')).toBeTrue()
+		expect(events.some((e) => e.tag === 'defNumber' && e.device === 'LM35' && e.name === 'WEATHER_PARAMETERS')).toBeTrue()
 	})
 
 	test('connecting starts the peripheral once, defines TEMPERATURE and publishes its value', async () => {
@@ -304,13 +313,44 @@ describe('firmata indi client', () => {
 		expect(peripheral.started).toBe(1)
 		expect(peripheral.listenerCount).toBe(1)
 
-		const def = events.find((e) => e.tag === 'defNumber' && e.name === 'TEMPERATURE')
+		const def = events.find((e) => e.tag === 'defNumber' && e.name === 'WEATHER_PARAMETERS')
 		expect(def).toBeDefined()
 		const connStates = events.filter((e) => e.tag === 'setSwitch' && e.name === 'CONNECTION').map((e) => e.state)
 		expect(connStates).toEqual(['Busy', 'Idle'])
 	})
 
 	test('a listener update publishes a changed setNumberVector but not a duplicate', async () => {
+		const firmata = new FakeFirmata()
+		const { events, handler } = createRecorder()
+		using client = new FirmataIndiClient(firmata as never, 'Board', { handler })
+
+		// A luxmeter is not an observing condition, so ILLUMINANCE keeps the change-only behavior its
+		// consumers expect.
+		const peripheral = new FakeLuxmeter('BH1750', firmata as never)
+		const device = client.createPeripheral(peripheral)
+		await device.connect()
+
+		peripheral.lux = 320
+		peripheral.emit()
+
+		let sets = events.filter((e) => e.tag === 'setNumber' && e.name === 'ILLUMINANCE')
+		expect(sets).toHaveLength(1)
+		expect(sets[0].value).toBe(320)
+
+		// Same value: no duplicate event.
+		peripheral.emit()
+		sets = events.filter((e) => e.tag === 'setNumber' && e.name === 'ILLUMINANCE')
+		expect(sets).toHaveLength(1)
+
+		// New value: another event.
+		peripheral.lux = 410
+		peripheral.emit()
+		sets = events.filter((e) => e.tag === 'setNumber' && e.name === 'ILLUMINANCE')
+		expect(sets).toHaveLength(2)
+		expect(sets[1].value).toBe(410)
+	})
+
+	test('weather parameters report every valid sample, unlike the other measurements', async () => {
 		const firmata = new FakeFirmata()
 		const { events, handler } = createRecorder()
 		using client = new FirmataIndiClient(firmata as never, 'Board', { handler })
@@ -322,21 +362,136 @@ describe('firmata indi client', () => {
 		peripheral.temperature = 25
 		peripheral.emit()
 
-		let sets = events.filter((e) => e.tag === 'setNumber' && e.name === 'TEMPERATURE')
+		let sets = events.filter((e) => e.tag === 'setNumber' && e.name === 'WEATHER_PARAMETERS')
 		expect(sets).toHaveLength(1)
 		expect(sets[0].value).toBe(25)
 
-		// Same value: no duplicate event.
+		// A weather consumer reads the arrival of a report as the sensor's freshness, so a station holding
+		// a steady reading must keep reporting rather than looking like it stopped.
 		peripheral.emit()
-		sets = events.filter((e) => e.tag === 'setNumber' && e.name === 'TEMPERATURE')
-		expect(sets).toHaveLength(1)
+		peripheral.emit()
 
-		// New value: another event.
-		peripheral.temperature = 26
+		sets = events.filter((e) => e.tag === 'setNumber' && e.name === 'WEATHER_PARAMETERS')
+		expect(sets).toHaveLength(3)
+		expect(sets[2].value).toBe(25)
+
+		// An out-of-range frame is still refused, and its last valid value is kept.
+		peripheral.temperature = 999
 		peripheral.emit()
-		sets = events.filter((e) => e.tag === 'setNumber' && e.name === 'TEMPERATURE')
-		expect(sets).toHaveLength(2)
-		expect(sets[1].value).toBe(26)
+
+		sets = events.filter((e) => e.tag === 'setNumber' && e.name === 'WEATHER_PARAMETERS')
+		expect(sets).toHaveLength(3)
+	})
+
+	test('a steady weather peripheral keeps reporting on the report interval', async () => {
+		const firmata = new FakeFirmata()
+		const { events, handler } = createRecorder()
+		using client = new FirmataIndiClient(firmata as never, 'Board', { handler, reportInterval: 20 })
+
+		const peripheral = new FakeThermometer('LM35', firmata as never)
+		peripheral.temperature = 21.5
+		const device = client.createPeripheral(peripheral)
+		await device.connect()
+
+		// One hardware reading settles the vector; from there the readings hold still.
+		peripheral.emit()
+
+		// Peripherals suppress an unchanged read, so nothing more arrives through the listener. The
+		// interval is what keeps WeatherManager's freshness, and Alpaca TimeSinceLastUpdate, advancing,
+		// for as long as the hardware really is answering: the sensor keeps sampling the same value here.
+		const sampling = setInterval(() => peripheral.sample(), 5)
+		const before = events.filter((e) => e.tag === 'setNumber' && e.name === 'WEATHER_PARAMETERS').length
+
+		try {
+			await waitUntil(() => events.filter((e) => e.tag === 'setNumber' && e.name === 'WEATHER_PARAMETERS').length >= before + 2, 2000)
+		} finally {
+			clearInterval(sampling)
+		}
+
+		const reports = events.filter((e) => e.tag === 'setNumber' && e.name === 'WEATHER_PARAMETERS')
+		expect(reports.at(-1)!.value).toBe(21.5)
+
+		// The interval belongs to the connection and must not outlive it.
+		device.disconnect()
+		const settled = events.filter((e) => e.tag === 'setNumber' && e.name === 'WEATHER_PARAMETERS').length
+		await Bun.sleep(80)
+		expect(events.filter((e) => e.tag === 'setNumber' && e.name === 'WEATHER_PARAMETERS')).toHaveLength(settled)
+	})
+
+	test('the report interval waits for the first hardware sample', async () => {
+		const firmata = new FakeFirmata()
+		const { events, handler } = createRecorder()
+		using client = new FirmataIndiClient(firmata as never, 'Board', { handler, reportInterval: 20 })
+
+		const peripheral = new FakeThermometer('LM35', firmata as never)
+		const device = client.createPeripheral(peripheral)
+		await device.connect()
+
+		// The vector is defined Busy with the declared default 0, which is a valid temperature. Until a
+		// listener event proves a reading came from hardware, the interval must publish nothing: settling
+		// it would announce 0 C as observed weather with a fresh timestamp.
+		const def = events.find((e) => e.tag === 'defNumber' && e.name === 'WEATHER_PARAMETERS')
+		expect(def!.state).toBe('Busy')
+
+		await Bun.sleep(80)
+		expect(events.filter((e) => e.tag === 'setNumber' && e.name === 'WEATHER_PARAMETERS')).toHaveLength(0)
+
+		// The first real reading settles it, and only then does the interval take over.
+		peripheral.temperature = 21.5
+		peripheral.emit()
+
+		const settled = events.filter((e) => e.tag === 'setNumber' && e.name === 'WEATHER_PARAMETERS')
+		expect(settled).toHaveLength(1)
+		expect(settled[0].state).toBe('Idle')
+
+		const sampling = setInterval(() => peripheral.sample(), 5)
+
+		try {
+			await waitUntil(() => events.filter((e) => e.tag === 'setNumber' && e.name === 'WEATHER_PARAMETERS').length >= 3, 2000)
+		} finally {
+			clearInterval(sampling)
+		}
+	})
+
+	test('a silent weather peripheral stops reporting', async () => {
+		const firmata = new FakeFirmata()
+		const { events, handler } = createRecorder()
+		using client = new FirmataIndiClient(firmata as never, 'Board', { handler, reportInterval: 20 })
+
+		const peripheral = new FakeThermometer('LM35', firmata as never)
+		peripheral.temperature = 21.5
+		const device = client.createPeripheral(peripheral)
+		await device.connect()
+
+		peripheral.emit()
+
+		// The sensor stops answering while the board stays connected. The interval exists to keep a steady
+		// reading's freshness advancing, not to invent it: a weather consumer dates its sensors from these
+		// reports, so republishing the cached fields would hold TimeSinceLastUpdate near zero for the whole
+		// outage and hide it.
+		await Bun.sleep(80)
+		const reports = events.filter((e) => e.tag === 'setNumber' && e.name === 'WEATHER_PARAMETERS').length
+		await Bun.sleep(80)
+
+		expect(events.filter((e) => e.tag === 'setNumber' && e.name === 'WEATHER_PARAMETERS')).toHaveLength(reports)
+
+		// It comes back on its own as soon as the hardware answers again.
+		peripheral.sample()
+		await waitUntil(() => events.filter((e) => e.tag === 'setNumber' && e.name === 'WEATHER_PARAMETERS').length > reports, 2000)
+	})
+
+	test('a non-weather device arms no report interval', async () => {
+		const firmata = new FakeFirmata()
+		const { events, handler } = createRecorder()
+		using client = new FirmataIndiClient(firmata as never, 'Board', { handler, reportInterval: 20 })
+
+		const peripheral = new FakeLuxmeter('BH1750', firmata as never)
+		peripheral.lux = 320
+		await client.createPeripheral(peripheral).connect()
+
+		const before = events.filter((e) => e.tag === 'setNumber' && e.name === 'ILLUMINANCE').length
+		await Bun.sleep(80)
+		expect(events.filter((e) => e.tag === 'setNumber' && e.name === 'ILLUMINANCE')).toHaveLength(before)
 	})
 
 	test('a synchronous first reading during start settles the vector to Idle, def before set', async () => {
@@ -350,7 +505,7 @@ describe('firmata indi client', () => {
 
 		// The definition must precede the value set, and the synchronous reading must settle the vector
 		// to Idle instead of leaving it stuck Busy.
-		const temp = events.filter((e) => (e.tag === 'defNumber' || e.tag === 'setNumber') && e.name === 'TEMPERATURE')
+		const temp = events.filter((e) => (e.tag === 'defNumber' || e.tag === 'setNumber') && e.name === 'WEATHER_PARAMETERS')
 		expect(temp.map((e) => e.tag)).toEqual(['defNumber', 'setNumber'])
 		expect(temp[0].state).toBe('Busy')
 		expect(temp.at(-1)?.state).toBe('Idle')
@@ -370,7 +525,7 @@ describe('firmata indi client', () => {
 
 		peripheral.emit()
 
-		const set = events.find((e) => e.tag === 'setNumber' && e.name === 'TEMPERATURE')
+		const set = events.find((e) => e.tag === 'setNumber' && e.name === 'WEATHER_PARAMETERS')
 		expect(set?.state).toBe('Idle')
 		expect(set?.value).toBe(0)
 	})
@@ -386,13 +541,13 @@ describe('firmata indi client', () => {
 		await device.connect()
 
 		// The initial definition is Busy, so the bogus 0 is not presented as a valid reading.
-		const def = events.find((e) => e.tag === 'defNumber' && e.name === 'TEMPERATURE')
+		const def = events.find((e) => e.tag === 'defNumber' && e.name === 'WEATHER_PARAMETERS')
 		expect(def?.state).toBe('Busy')
 
 		// The first reading (arriving after start()) settles the vector to Idle with the real value.
 		peripheral.temperature = 23.5
 		peripheral.emit()
-		const set = events.find((e) => e.tag === 'setNumber' && e.name === 'TEMPERATURE')
+		const set = events.find((e) => e.tag === 'setNumber' && e.name === 'WEATHER_PARAMETERS')
 		expect(set?.state).toBe('Idle')
 		expect(set?.value).toBe(23.5)
 	})
@@ -407,16 +562,16 @@ describe('firmata indi client', () => {
 		const device = client.createPeripheral(peripheral)
 		await device.connect()
 
-		const def = events.find((e) => e.tag === 'defNumber' && e.name === 'TEMPERATURE')
+		const def = events.find((e) => e.tag === 'defNumber' && e.name === 'WEATHER_PARAMETERS')
 		expect(def?.state).toBe('Busy')
 		expect(def?.value).toBe(0)
 
 		peripheral.emit()
-		expect(events.filter((e) => e.tag === 'setNumber' && e.name === 'TEMPERATURE')).toHaveLength(0)
+		expect(events.filter((e) => e.tag === 'setNumber' && e.name === 'WEATHER_PARAMETERS')).toHaveLength(0)
 
 		peripheral.temperature = 20
 		peripheral.emit()
-		let set = events.find((e) => e.tag === 'setNumber' && e.name === 'TEMPERATURE')
+		let set = events.find((e) => e.tag === 'setNumber' && e.name === 'WEATHER_PARAMETERS')
 		expect(set?.state).toBe('Idle')
 		expect(set?.value).toBe(20)
 
@@ -425,10 +580,10 @@ describe('firmata indi client', () => {
 		peripheral.emit()
 		peripheral.temperature = 200
 		peripheral.emit()
-		expect(events.filter((e) => e.tag === 'setNumber' && e.name === 'TEMPERATURE')).toHaveLength(0)
+		expect(events.filter((e) => e.tag === 'setNumber' && e.name === 'WEATHER_PARAMETERS')).toHaveLength(0)
 
-		client.getProperties({ device: 'LM35', name: 'TEMPERATURE' })
-		set = events.find((e) => e.tag === 'setNumber' && e.name === 'TEMPERATURE')
+		client.getProperties({ device: 'LM35', name: 'WEATHER_PARAMETERS' })
+		set = events.find((e) => e.tag === 'setNumber' && e.name === 'WEATHER_PARAMETERS')
 		expect(set?.value).toBe(20)
 	})
 
@@ -454,18 +609,20 @@ describe('firmata indi client', () => {
 		const hygroDevice = client.createPeripheral(hygro)
 		await hygroDevice.connect()
 
-		const baroDefs = events.filter((e) => e.tag === 'defNumber' && e.device === 'BMP280').map((e) => e.name)
-		expect(baroDefs).toContain('PRESSURE')
-		expect(baroDefs).toContain('ALTITUDE')
-		expect(baroDefs).toContain('TEMPERATURE')
+		// Observing conditions go into the standard WEATHER_PARAMETERS vector; altitude is not one, so it
+		// keeps a vector of its own.
+		const baroDefs = events.filter((e) => e.tag === 'defNumber' && e.device === 'BMP280')
+		expect(baroDefs.map((e) => e.name)).toEqual(['WEATHER_PARAMETERS', 'ALTITUDE'])
+		expect(baroDefs.find((e) => e.name === 'WEATHER_PARAMETERS')!.elements).toEqual({ WEATHER_TEMPERATURE: 18, WEATHER_PRESSURE: 1013.25 })
 
-		// Pure barometer exposes only PRESSURE.
-		const pureDefs = events.filter((e) => e.tag === 'defNumber' && e.device === 'PURE').map((e) => e.name)
-		expect(pureDefs).toEqual(['PRESSURE'])
+		// Pure barometer declares only the one element it can measure.
+		const pureDefs = events.filter((e) => e.tag === 'defNumber' && e.device === 'PURE')
+		expect(pureDefs.map((e) => e.name)).toEqual(['WEATHER_PARAMETERS'])
+		expect(Object.keys(pureDefs[0].elements!)).toEqual(['WEATHER_PRESSURE'])
 
-		const hygroDefs = events.filter((e) => e.tag === 'defNumber' && e.device === 'AM2320').map((e) => e.name)
-		expect(hygroDefs).toContain('RELATIVE_HUMIDITY')
-		expect(hygroDefs).toContain('TEMPERATURE')
+		const hygroDefs = events.filter((e) => e.tag === 'defNumber' && e.device === 'AM2320')
+		expect(hygroDefs.map((e) => e.name)).toEqual(['WEATHER_PARAMETERS'])
+		expect(hygroDefs[0].elements).toEqual({ WEATHER_TEMPERATURE: 19, WEATHER_HUMIDITY: 55 })
 	})
 
 	test('ammeter and luxmeter expose single-axis measurements', async () => {
@@ -793,9 +950,9 @@ describe('firmata indi client', () => {
 		client.createPeripheral(new FakeThermometer('LM35b', firmata as never))
 
 		events.length = 0
-		client.getProperties({ device: 'LM35', name: 'TEMPERATURE' })
+		client.getProperties({ device: 'LM35', name: 'WEATHER_PARAMETERS' })
 
-		expect(tagsFor(events, 'LM35', 'TEMPERATURE').sort()).toEqual(['defNumber', 'setNumber'])
+		expect(tagsFor(events, 'LM35', 'WEATHER_PARAMETERS').sort()).toEqual(['defNumber', 'setNumber'])
 		expect(events.every((e) => e.device === 'LM35')).toBeTrue()
 		expect(events.find((e) => e.tag === 'setNumber')?.value).toBe(10)
 	})
@@ -822,7 +979,7 @@ describe('firmata indi client', () => {
 		expect(deviceA.isConnected).toBeFalse()
 		expect(a.stopped).toBe(1)
 		expect(a.listenerCount).toBe(0)
-		expect(tagsFor(events, 'A', 'TEMPERATURE')).toContain('del')
+		expect(tagsFor(events, 'A', 'WEATHER_PARAMETERS')).toContain('del')
 	})
 
 	test('a readiness seed resolving after dispose does not mark a disposed adapter ready', async () => {
@@ -1111,7 +1268,7 @@ describe('firmata indi client', () => {
 			...handler,
 			defNumberVector: (c, m) => {
 				handler.defNumberVector?.(c, m)
-				if (m.name === 'TEMPERATURE') c.sendSwitch({ device: m.device, name: 'CONNECTION', elements: { DISCONNECT: true } })
+				if (m.name === 'WEATHER_PARAMETERS') c.sendSwitch({ device: m.device, name: 'CONNECTION', elements: { DISCONNECT: true } })
 			},
 		}
 
@@ -1126,7 +1283,7 @@ describe('firmata indi client', () => {
 		expect(peripheral.started).toBe(0) // never started: cancellation honored before start()
 		expect(peripheral.stopped).toBe(0) // and therefore never stopped
 		expect(peripheral.listenerCount).toBe(0)
-		expect(tagsFor(events, 'LM35', 'TEMPERATURE')).toContain('del')
+		expect(tagsFor(events, 'LM35', 'WEATHER_PARAMETERS')).toContain('del')
 
 		// Never reported connected: the only connection sets are the initial Busy and the rollback Idle.
 		const connStates = events.filter((e) => e.tag === 'setSwitch' && e.name === 'CONNECTION').map((e) => e.state)
@@ -1161,34 +1318,37 @@ describe('firmata indi client', () => {
 		expect(peripheral.started).toBe(1)
 		expect(peripheral.stopped).toBe(1)
 		expect(peripheral.listenerCount).toBe(0)
-		expect(tagsFor(events, 'LM35', 'TEMPERATURE')).toContain('del')
+		expect(tagsFor(events, 'LM35', 'WEATHER_PARAMETERS')).toContain('del')
 	})
 
 	test('a disconnect from one reading stops later measurement publications', async () => {
 		const firmata = new FakeFirmata()
 		const { events, handler } = createRecorder()
-		const disconnectOnTemperature: IndiClientHandler = {
+		const disconnectOnWeather: IndiClientHandler = {
 			...handler,
 			setNumberVector: (client, vector) => {
 				handler.setNumberVector?.(client, vector)
-				if (vector.name === 'TEMPERATURE') client.sendSwitch({ device: vector.device, name: 'CONNECTION', elements: { DISCONNECT: true } })
+				if (vector.name === 'WEATHER_PARAMETERS') client.sendSwitch({ device: vector.device, name: 'CONNECTION', elements: { DISCONNECT: true } })
 			},
 		}
-		using client = new FirmataIndiClient(firmata as never, 'Board', { handler: disconnectOnTemperature })
+		using client = new FirmataIndiClient(firmata as never, 'Board', { handler: disconnectOnWeather })
 
-		const peripheral = new FakeHygrometer('AM2320', firmata as never)
+		// A barometer keeps ALTITUDE outside WEATHER_PARAMETERS, so it still has a later measurement that
+		// the disconnect must suppress.
+		const peripheral = new FakeBarometer('BMP280', firmata as never)
 		const device = client.createPeripheral(peripheral)
 		await device.connect()
 
 		events.length = 0
 		peripheral.temperature = 22
-		peripheral.humidity = 55
+		peripheral.pressure = 1004
+		peripheral.altitude = meter(120)
 		peripheral.emit()
 
 		expect(device.isConnected).toBeFalse()
 		expect(peripheral.listenerCount).toBe(0)
-		expect(events.filter((e) => e.tag === 'setNumber').map((e) => e.name)).toEqual(['TEMPERATURE'])
-		expect(tagsFor(events, 'AM2320', 'RELATIVE_HUMIDITY')).toContain('del')
+		expect(events.filter((e) => e.tag === 'setNumber').map((e) => e.name)).toEqual(['WEATHER_PARAMETERS'])
+		expect(tagsFor(events, 'BMP280', 'ALTITUDE')).toContain('del')
 	})
 
 	test('disconnect during a pending connect cancels it before the peripheral starts', async () => {
@@ -1328,7 +1488,7 @@ describe('firmata indi client', () => {
 		expect(device.isConnected).toBeFalse()
 		expect(peripheral.stopped).toBe(1)
 		expect(peripheral.listenerCount).toBe(0)
-		expect(tagsFor(events, 'LM35', 'TEMPERATURE')).toContain('del')
+		expect(tagsFor(events, 'LM35', 'WEATHER_PARAMETERS')).toContain('del')
 
 		// Reconnect after a fresh ready, then verify close also disconnects.
 		firmata.fireReady()

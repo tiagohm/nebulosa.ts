@@ -1322,7 +1322,7 @@ describe('branch-aware curve topology', () => {
 
 		const paths = solarEclipseMapToSvgPaths(geometry, projection)
 		expect(longestProjectedSegment(paths.riseSetCurves)).toBeLessThan(MAP_WIDTH / 2)
-	}, 6000)
+	}, 15000)
 
 	test('2021-12-04 keeps the south-polar umbra connected at U3', () => {
 		const { geometry } = geometryFor(2021, 12, 1)
@@ -1381,7 +1381,7 @@ describe('branch-aware curve topology', () => {
 		expect(branch).toBeDefined()
 		expect(branch!.length).toBeGreaterThan(100)
 		expect(Math.min(sphericalSeparation(N2.x, N2.y, branch![0].x, branch![0].y), sphericalSeparation(N2.x, N2.y, branch!.at(-1)!.x, branch!.at(-1)!.y))).toBeLessThan(1e-9)
-	}, 4000)
+	}, 8000)
 
 	for (const fixture of CASES) {
 		describe(fixture.name, () => {

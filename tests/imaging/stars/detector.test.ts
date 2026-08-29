@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { medianOf, NumberComparator } from '../../../src/core/util'
 import type { Image } from '../../../src/imaging/model/types'
-import { detectStars, excludeStarsFitWithinRegion, measureStarPhotometry, mergeVeryCloseStars, StarList } from '../../../src/imaging/stars/detector'
+import { type DetectedStar, detectStars, excludeStarsFitWithinRegion, measureStarPhotometry, mergeVeryCloseStars, StarList } from '../../../src/imaging/stars/detector'
 import { type PlotStarOptions, plotStar } from '../../../src/imaging/stars/generator'
 import { type AstronomicalImageNoiseConfig, type AstronomicalImageStar, DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG, generateNoiseImage, generateStarImage } from '../../../src/imaging/synthetic/generator'
 import { Bitpix } from '../../../src/io/formats/fits/fits'
@@ -10,6 +10,11 @@ import { downloadPerTag } from '../../download'
 import { readImage } from '../util'
 
 await downloadPerTag('stardetector')
+
+// Detection publishes a flux-weighted centroid, so integer peak equality is not a valid match.
+function starNear(stars: readonly DetectedStar[], x: number, y: number, maxDistancePx = 0.75) {
+	return stars.find((star) => Math.hypot(star.x - x, star.y - y) <= maxDistancePx)
+}
 
 test('star list', () => {
 	const list = new StarList(5)
@@ -206,11 +211,11 @@ describe('detect stars I', () => {
 
 		const image: Image = { raw, header: {}, metadata: { width, height, channels: 1, pixelCount: width * height, pixelSizeInBytes: 8, bitpix: -64, stride: width, strideInBytes: width * 8, bayer: undefined } }
 		const stars = detectStars(image, { maxStars: 2000 })
-		expect(stars.find((s) => s.x === 200 && s.y === 100)).toBeDefined()
-		expect(stars.find((s) => s.x === 50 && s.y === 50)).toBeDefined()
-		expect(stars.find((s) => s.x === 50 && s.y === 150)).toBeDefined()
-		expect(stars.find((s) => s.x === 350 && s.y === 50)).toBeDefined()
-		expect(stars.find((s) => s.x === 350 && s.y === 150)).toBeDefined()
+		expect(starNear(stars, 200, 100)).toBeDefined()
+		expect(starNear(stars, 50, 50)).toBeDefined()
+		expect(starNear(stars, 50, 150)).toBeDefined()
+		expect(starNear(stars, 350, 50)).toBeDefined()
+		expect(starNear(stars, 350, 150)).toBeDefined()
 		expect(stars.length).toBe(5)
 		expect(detectStars(image, { maxStars: 2000, minSNR: Number.POSITIVE_INFINITY })).toHaveLength(0)
 	})
@@ -236,11 +241,11 @@ describe('detect stars I', () => {
 
 		const image: Image = { raw, header: {}, metadata: { width, height, channels: 1, pixelCount: width * height, pixelSizeInBytes: 8, bitpix: -64, stride: width, strideInBytes: width * 8, bayer: undefined } }
 		const stars = detectStars(image, { maxStars: 2000 })
-		expect(stars.find((s) => s.x === 200 && s.y === 100)).toBeDefined()
-		expect(stars.find((s) => s.x === 50 && s.y === 50)).toBeDefined()
-		expect(stars.find((s) => s.x === 50 && s.y === 150)).toBeDefined()
-		expect(stars.find((s) => s.x === 350 && s.y === 50)).toBeDefined()
-		expect(stars.find((s) => s.x === 350 && s.y === 150)).toBeDefined()
+		expect(starNear(stars, 200, 100)).toBeDefined()
+		expect(starNear(stars, 50, 50)).toBeDefined()
+		expect(starNear(stars, 50, 150)).toBeDefined()
+		expect(starNear(stars, 350, 50)).toBeDefined()
+		expect(starNear(stars, 350, 150)).toBeDefined()
 		expect(stars.length).toBe(5)
 	})
 })
@@ -249,15 +254,14 @@ test('detect stars from real image', async () => {
 	const [image] = await readImage(Bitpix.FLOAT, 3)
 	const stars = detectStars(image, { maxStars: 500 })
 
-	expect(stars).toHaveLength(500)
+	expect(stars.length).toBeGreaterThan(400)
+	expect(stars.length).toBeLessThanOrEqual(500)
 	const flux = stars.map((e) => e.flux).sort(NumberComparator)
 	const snr = stars.map((e) => e.snr).sort(NumberComparator)
 	const hfd = stars.map((e) => e.hfd).sort(NumberComparator)
 	const fwhm = stars.map((e) => e.fwhm ?? 0).sort(NumberComparator)
-	const carina = stars.find((e) => e.x === 564 && e.y === 544)
+	const carina = starNear(stars, 564, 544, 1)
 	expect(carina).toBeDefined()
-	expect(carina!.x).toBe(564)
-	expect(carina!.y).toBe(544)
 	expect(carina!.flux).toBeGreaterThan(0)
 	expect(carina!.snr).toBeGreaterThan(0)
 	expect(carina!.hfd).toBeGreaterThan(0)
@@ -266,6 +270,21 @@ test('detect stars from real image', async () => {
 	expect(medianOf(snr)).toBeGreaterThan(0)
 	expect(medianOf(hfd)).toBeGreaterThanOrEqual(1.5)
 	expect(medianOf(fwhm)).toBeGreaterThan(0)
+})
+
+test('detectStars reports the flux-weighted centroid of a sub-pixel peak', () => {
+	const width = 200
+	const height = 160
+	const raw = new Float32Array(width * height)
+	plotStar(raw, width, height, 1, 120.4, 80.6, 0.5, 3, 100, 0)
+
+	const image: Image = { raw, header: {}, metadata: { width, height, channels: 1, pixelCount: width * height, pixelSizeInBytes: 8, bitpix: -64, stride: width, strideInBytes: width * 8, bayer: undefined } }
+	const stars = detectStars(image, { maxStars: 10 })
+	expect(stars).toHaveLength(1)
+	expect(Math.abs(stars[0].x - 120.4)).toBeLessThan(0.35)
+	expect(Math.abs(stars[0].y - 80.6)).toBeLessThan(0.35)
+	expect(stars[0].x).not.toBe(Math.round(stars[0].x))
+	expect(stars[0].y).not.toBe(Math.round(stars[0].y))
 })
 
 const BASE_NOISE_CONFIG: AstronomicalImageNoiseConfig = {

@@ -317,7 +317,7 @@ export enum Quantity {
 }
 
 // Default observer-table quantities requested when the caller does not specify any.
-const DEFAULT_QUANTITIES: Quantity[] = [1, 9, 20, 23, 24, 47, 48]
+const DEFAULT_QUANTITIES: readonly Quantity[] = [1, 9, 20, 23, 24, 47, 48]
 
 // Default observer/vector/elements options.
 const DEFAULT_OVE_OPTIONS: Required<ObserverVectorElementsOptions> = {
@@ -344,7 +344,16 @@ const DEFAULT_OVE_OPTIONS: Required<ObserverVectorElementsOptions> = {
 
 // Requests an observer-table ephemeris (apparent/astrometric quantities) for `input` (a target name,
 // osculating elements, or TLE) over [startTime, endTime] and returns the parsed CSV rows.
-export async function observer(input: string | ObserverWithOsculatingElements | ObserverWithTLE, center: ObserverSiteCenter, coord: ObserverSiteCoord, startTime: Temporal | Time, endTime: Temporal | Time, quantities: Quantity[] = DEFAULT_QUANTITIES, options: ObserverVectorElementsOptions = DEFAULT_OVE_OPTIONS) {
+export async function observer(
+	input: string | ObserverWithOsculatingElements | ObserverWithTLE,
+	center: ObserverSiteCenter,
+	coord: ObserverSiteCoord,
+	startTime: Temporal | Time,
+	endTime: Temporal | Time,
+	quantities: readonly Quantity[] = DEFAULT_QUANTITIES,
+	options: ObserverVectorElementsOptions = DEFAULT_OVE_OPTIONS,
+	signal?: AbortSignal,
+) {
 	const parameters = structuredClone(DEFAULT_OBSERVER_PARAMETERS) as HorizonsQueryParameters
 	makeParametersFromInput(parameters, input)
 	makeParametersFromCenterAndCoordinates(parameters, center, coord, options)
@@ -352,45 +361,45 @@ export async function observer(input: string | ObserverWithOsculatingElements | 
 	makeParametersFromQuantities(parameters, quantities)
 	makeParametersFromOptions(parameters, options)
 	parameters.CSV_FORMAT = 'YES'
-	return await makeRequestAndGetResponseWithRetry(input, startTime, parameters, options)
+	return await makeRequestAndGetResponseWithRetry(input, startTime, parameters, options, signal)
 }
 
 // Requests a state-vector ephemeris for `input` over [startTime, endTime] and returns the parsed CSV rows.
-export async function vector(input: string | ObserverWithOsculatingElements | ObserverWithTLE, center: ObserverSiteCenter, coord: ObserverSiteCoord, startTime: Temporal | Time, endTime: Temporal | Time, options: ObserverVectorElementsOptions = DEFAULT_OVE_OPTIONS) {
+export async function vector(input: string | ObserverWithOsculatingElements | ObserverWithTLE, center: ObserverSiteCenter, coord: ObserverSiteCoord, startTime: Temporal | Time, endTime: Temporal | Time, options: ObserverVectorElementsOptions = DEFAULT_OVE_OPTIONS, signal?: AbortSignal) {
 	const parameters = structuredClone(DEFAULT_VECTOR_PARAMETERS) as HorizonsQueryParameters
 	makeParametersFromInput(parameters, input)
 	makeParametersFromCenterAndCoordinates(parameters, center, coord, options)
 	makeParametersFromStartAndStopTime(parameters, startTime, endTime)
 	makeParametersFromOptions(parameters, options)
 	parameters.CSV_FORMAT = 'YES'
-	const response = await makeRequestAndGetResponse(parameters, 'text')
+	const response = await makeRequestAndGetResponse(parameters, 'text', signal)
 	const identification = identifyTable(await response.text())
 	if (identification?.kind === 'ephemeris') return parseEphemerisTable(identification, options)
-	return await makeRequestAndGetResponseWithRetry(input, startTime, parameters, options)
+	return await makeRequestAndGetResponseWithRetry(input, startTime, parameters, options, signal)
 }
 
 // Requests an osculating-elements ephemeris for `input` over [startTime, endTime] and returns the parsed CSV rows.
-export async function elements(input: string | ObserverWithOsculatingElements | ObserverWithTLE, center: BodyCenter, startTime: Temporal | Time, endTime: Temporal | Time, options: ObserverVectorElementsOptions = DEFAULT_OVE_OPTIONS) {
+export async function elements(input: string | ObserverWithOsculatingElements | ObserverWithTLE, center: BodyCenter, startTime: Temporal | Time, endTime: Temporal | Time, options: ObserverVectorElementsOptions = DEFAULT_OVE_OPTIONS, signal?: AbortSignal) {
 	const parameters = structuredClone(DEFAULT_ELEMENTS_PARAMETERS) as HorizonsQueryParameters
 	makeParametersFromInput(parameters, input)
 	makeParametersFromCenterAndCoordinates(parameters, center, undefined, options)
 	makeParametersFromStartAndStopTime(parameters, startTime, endTime)
 	makeParametersFromOptions(parameters, options)
 	parameters.CSV_FORMAT = 'YES'
-	return await makeRequestAndGetResponseWithRetry(input, startTime, parameters, options)
+	return await makeRequestAndGetResponseWithRetry(input, startTime, parameters, options, signal)
 }
 
 // Requests an SPK binary kernel for the small body designation `id` over [startTime, endTime].
-export async function spkFile(id: number, startTime: Temporal | Time, endTime: Temporal | Time) {
+export async function spkFile(id: number, startTime: Temporal | Time, endTime: Temporal | Time, signal?: AbortSignal) {
 	const parameters = structuredClone(DEFAULT_SPK_PARAMETERS) as HorizonsQueryParameters
 	parameters.COMMAND = `DES=${id};`
 	makeParametersFromStartAndStopTime(parameters, startTime, endTime)
-	const response = await makeRequestAndGetResponse(parameters, 'json')
+	const response = await makeRequestAndGetResponse(parameters, 'json', signal)
 	return (await response.json()) as SpkFile
 }
 
-async function makeRequestAndGetResponseWithRetry(input: string | ObserverWithOsculatingElements | ObserverWithTLE, time: Temporal | Time, parameters: HorizonsQueryParameters, options: ObserverVectorElementsOptions) {
-	const response = await makeRequestAndGetResponse(parameters, 'text')
+async function makeRequestAndGetResponseWithRetry(input: string | ObserverWithOsculatingElements | ObserverWithTLE, time: Temporal | Time, parameters: HorizonsQueryParameters, options: ObserverVectorElementsOptions, signal?: AbortSignal) {
+	const response = await makeRequestAndGetResponse(parameters, 'text', signal)
 	const identification = identifyTable(await response.text())
 
 	if (identification?.kind === 'ephemeris') return parseEphemerisTable(identification, options)
@@ -404,7 +413,7 @@ async function makeRequestAndGetResponseWithRetry(input: string | ObserverWithOs
 				else input += `CAP<${toJulianDay(time).toFixed(1)};`
 			}
 			makeParametersFromInput(parameters, input)
-			const response = await makeRequestAndGetResponse(parameters, 'text')
+			const response = await makeRequestAndGetResponse(parameters, 'text', signal)
 			const identification = identifyTable(await response.text())
 			if (identification?.kind === 'ephemeris') return parseEphemerisTable(identification, options)
 		}
@@ -520,7 +529,7 @@ function makeParametersFromOptions(parameters: HorizonsQueryParameters, options?
 }
 
 // Sets the QUANTITIES parameter for observer ephemerides from the requested quantity codes.
-function makeParametersFromQuantities(parameters: HorizonsQueryParameters, quantities?: Quantity[]) {
+function makeParametersFromQuantities(parameters: HorizonsQueryParameters, quantities?: readonly Quantity[]) {
 	if (quantities?.length && parameters.EPHEM_TYPE === 'OBSERVER') {
 		parameters.QUANTITIES = quantities.join(',')
 	}
@@ -553,9 +562,9 @@ function formatTimeZone(minutes: number) {
 }
 
 // Builds the request URL from the parameters and fetches the response in the given format.
-function makeRequestAndGetResponse(parameters: HorizonsQueryParameters, format: OutputFormat) {
+function makeRequestAndGetResponse(parameters: HorizonsQueryParameters, format: OutputFormat, signal?: AbortSignal) {
 	const query = makeQueryFromParameters(parameters)
-	return fetch(`${HORIZONS_BASE_URL}?format=${format}&${query}`)
+	return fetch(`${HORIZONS_BASE_URL}?format=${format}&${query}`, signal !== undefined ? { signal } : undefined)
 }
 
 // Marker line beginning the ephemeris data block in the text response.
@@ -568,7 +577,7 @@ interface EphemerisTable {
 	// start and end index of ephemeris data block prefixes.
 	readonly startIndex: number
 	readonly endIndex: number
-	readonly lines: string[]
+	readonly lines: readonly string[]
 }
 
 interface SmallBodyMatch {

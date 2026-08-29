@@ -1,584 +1,383 @@
 # AGENTS.md
 
-## Overview
+## Scope and Project Overview
 
-Nebulosa is a Bun-first, ESM-only TypeScript astronomy library.
+These instructions apply to the whole repository unless a nested `AGENTS.md` provides narrower rules.
+
+Nebulosa is a Bun-first, ESM-only TypeScript toolkit for numerical astronomy, astrophotography, and observatory control.
 
 - Runtime, package manager, builder, and test runner: **Bun**
 - Modules: **ESM only**
-- Domain: astronomy, imaging, astrometry, catalogs, observation algorithms, and device protocols
+- Domains: astronomy, imaging, astrometry, catalogs, observation algorithms, and device protocols
 - Native access: TypeScript FFI bindings in `src/bindings` with runtime support in `native/`
 
-The codebase is module-oriented and organized under `src/` into domain-and-responsibility folders that follow the direction of dependencies. Low-level layers (`core`, `math`, `io`) never import from higher ones (`astronomy`, `imaging`, `astrometry`, `catalogs`, `observation`); runtime edges (`devices`, `adapters`, `bindings`) sit on top. Within a folder, related modules keep dot-separated domain names, such as `alpaca.*`, `firmata.*`, `image.*`, `indi.*`, and `star.*`. `tests/` mirrors the `src/` folder layout.
+Use the user's task to determine the authorized outcome:
+
+- A review, audit, diagnosis, or explanation is read-only unless the user also asks for a change.
+- An implementation request includes the smallest necessary source, test, documentation, and example updates.
+- Do not broaden a task into a refactor, compatibility layer, remote operation, or unrelated cleanup.
 
 ## Working Principles
 
-- Inspect the live code and nearby patterns before editing. Preserve existing behavior and architecture unless the task explicitly requires a change.
-- Make the smallest cohesive change that fully solves the task. Do not introduce parallel architectures, compatibility wrappers, or speculative abstractions.
-- Deliver finished production code: no TODOs, placeholders, debug artifacts, or unfinished branches.
-- Treat numerical correctness, unit consistency, and performance as first-class requirements.
+- Inspect live code, tests, configuration, and nearby patterns before editing. Treat plans and prior descriptions as hypotheses until verified.
+- Make the smallest cohesive change that fully solves the task. Avoid parallel architectures, speculative abstractions, and compatibility wrappers unless the task requires them.
+- Deliver finished production code: no TODOs, placeholders, debug artifacts, temporary branches, or partially wired behavior.
+- Preserve unrelated worktree changes. If task files are already modified, understand and retain those edits rather than overwriting them.
+- Treat numerical correctness, physical meaning, unit consistency, lifecycle behavior, performance, and memory use as first-class requirements.
 - Avoid broad refactors while fixing local issues.
-- Do not introduce unrelated formatting changes, generated files, debug logs, temporary code, or local-only configuration.
-- Preserve unrelated worktree changes. Review and stage only files belonging to the current task.
-- Keep comments for non-obvious behavior, normalization, units, lifecycle cleanup, or interaction details.
-- When behavior changes, update tests and any affected examples in the same task.
-- Minimize new dependencies. Add one only when the existing stack and local primitives cannot solve the problem and the startup, bundle, binary, and operational costs are justified.
+- Update affected tests and examples whenever behavior or public contracts change.
+- Reuse the existing stack and local primitives. Add a dependency only when they cannot solve the problem and its startup, bundle, binary, and operational costs are justified.
+- Do not introduce unrelated formatting, generated files, logs, fixtures, or local-only configuration.
 
 ## Code Discovery
 
-This repository uses `codebase-memory-mcp`.
+This repository uses `codebase-memory-mcp`. Prefer graph discovery when it is available and current:
 
-Prefer the MCP graph tools for code discovery:
+1. `list_projects` and `index_status` to identify the project and index health on first use.
+2. `search_graph` to locate functions, classes, constants, interfaces, and types.
+3. `trace_path` for callers, callees, dependencies, and impact.
+4. `get_code_snippet` to read an exact symbol after discovery.
+5. `search_code` for scoped text or usage searches.
+6. `query_graph` and `get_architecture` for broader structural questions.
+7. `check_index_coverage` before relying on negative or exhaustive graph claims.
 
-1. `search_graph` for locating functions, classes, constants, interfaces, and types.
-2. `trace_path` for callers, callees, dependencies, and impact analysis.
-3. `get_code_snippet` for reading exact symbols after discovery.
-4. `search_code` for scoped code text or JSX usage.
-5. `query_graph` and `get_architecture` for broader structural queries.
+The graph is an index, not source authority. Read the exact implementation and nearby tests before editing. If the MCP service is unavailable, stale, partial, or cannot answer the query, continue with `rg` and direct source inspection rather than blocking the task.
 
-Fall back to `rg` for string literals, error messages, configuration, documentation, generated data, and cases the graph cannot answer. Re-run `bun run index` after major file, route, or symbol changes.
+Use `rg` first for string literals, errors, configuration, documentation, generated data, and filesystem-oriented searches. Re-run `bun run index` after major module additions, moves, or broad symbol changes; routine local edits are watched automatically.
 
-## Repository Map
+## Repository Map and Dependency Boundaries
 
-- `src/`: library source, grouped into domain folders. Top layers: `core`, `math/*`, `io/*`. Domain layers: `astronomy/*`, `imaging/*`, `astrometry/*`, `catalogs/*`. Runtime edges: `devices/*`, `adapters/*`, `bindings/*`, and the high-level `observation/*` algorithms. Place new implementation code in the folder that matches its domain and respects the dependency direction.
-- `src/**/*.data.ts`: large static numeric tables, co-located with the model that consumes them. Do not rewrite, reformat, or regenerate them unless the task explicitly requires it.
-- `tests/**/*.test.ts`: Bun tests mirroring the `src/` folder layout and module names.
-- `tests/setup.ts`: Bun preload for shared test state and fixture-backed resources. Kept at the `tests/` root.
-- `tests/download.ts`, `tests/*.util.ts`: shared test helpers kept at the `tests/` root; downloads missing fixtures into `data/` from GitHub when tests need them.
-- `data/`: test fixtures such as FITS, XISF, SPK, catalogs, and Earth orientation files.
-- `examples/`, `scripts/`: runnable usage examples and maintenance scripts that import from `src/`. Update their imports when modules move.
-- `native/`: native/runtime support used by `postinstall` (distinct from `src/bindings/`, which holds the TypeScript FFI bindings). Treat changes here as high-risk.
-- `main.ts`: not the main implementation surface of the library. Prefer editing `src/` and `tests/`.
+- `src/core/`: shared constants, types, validation, and general utilities.
+- `src/math/`: units, numerical algorithms, geometry, vectors, and matrices.
+- `src/io/`: byte-stream abstractions and formats such as FITS and XISF.
+- `src/astronomy/`: time, coordinates, ephemerides, bodies, orbits, projections, and events.
+- `src/imaging/`: image models, processing, star measurement, optical/sensor analysis, and synthetic data.
+- `src/astrometry/`: WCS, plate solvers, star matching, and crossmatching.
+- `src/catalogs/`: local catalog formats and spatial query engines.
+- `src/devices/`: INDI, Alpaca, Firmata, PHD2, telescope protocols, and simulators.
+- `src/adapters/`: external service integrations.
+- `src/bindings/`: TypeScript FFI surfaces; `native/` contains their runtime support and is high-risk.
+- `src/observation/`: high-level focus, guiding, alignment, framing, dome, and mount algorithms.
+- `tests/`: mirrors `src/`; shared helpers remain at the tests root.
+- `data/`: large fixture-backed FITS, XISF, SPK, catalog, and Earth-orientation data.
+- `examples/` and `scripts/`: runnable integrations and maintenance utilities that import directly from `src/`.
+- `main.ts`: package placeholder, not the implementation surface. Reusable code belongs in `src/`.
 
-## Project Structure Rules
+Preserve these boundaries:
 
-- Place new modules in the existing `src/` domain folder that matches their responsibility; do not add new top-level `src/` categories without a clear domain need.
-- Respect the layer dependency direction: `core`, `math`, and `io` must not import from `astronomy`, `imaging`, `astrometry`, `catalogs`, `observation`, `devices`, `adapters`, or `bindings`. `observation` may import `devices`/`adapters`, never the reverse.
-- Keep filesystem, process, device, and other runtime-specific side effects out of core numerical modules.
-- Keep `tests/` mirroring the `src/` folder layout, with shared test helpers (`setup.ts`, `download.ts`, `*.util.ts`) at the `tests/` root.
-- Within a folder, prefer dot-separated filenames for related modules of the same domain, for example `firmata.barometer.ts`, rather than deeper nesting.
-- Preserve the existing relative import style without `.ts` extensions, and prefer direct module imports over new barrel files unless the task explicitly requires an aggregated entrypoint.
-- Reuse existing modules before creating new ones, especially in math, time, image, catalog, and coordinate code.
+- `core`, `math`, and `io` never import from astronomy, imaging, astrometry, catalogs, observation, devices, adapters, or bindings.
+- `observation` may compose device and adapter layers; devices and adapters never import from `observation`.
+- Bindings are integration dependencies and may be consumed by the matching domain module; keep native/runtime concerns out of unrelated numerical code.
+- Follow existing cross-domain dependencies and do not introduce new cycles.
+- Keep filesystem, process, device, network, and other runtime side effects out of portable numerical modules.
+- Keep large FITS, XISF, SPK, image, and catalog paths streaming-friendly; avoid unnecessary materialization and deep cloning.
+
+Project layout conventions:
+
+- Add modules to the existing domain folder that owns the responsibility. Do not create a new top-level `src/` category without a clear architectural need.
+- Keep `tests/` aligned with `src/`; shared `setup.ts`, `download.ts`, and `*.util.ts` files stay at the tests root.
+- Prefer dot-separated related filenames within a domain, such as `firmata.barometer.ts`, rather than adding shallow one-file subdirectories.
+- Use direct relative imports without `.ts` extensions. Do not add a barrel or broad `export *` surface unless an aggregated entry point is the task.
+- Reuse existing math, time, image, catalog, coordinate, and I/O modules before creating helpers.
+- Do not rewrite, format, or regenerate `src/**/*.data.ts` unless explicitly requested.
 
 ## Tooling
 
 Use Bun for installs, scripts, tests, and local execution.
 
 - Install: `bun install`
-- Format: `bun run fmt`
-- Format check: `bun run fmt:check`
+- Format touched paths: `bunx oxfmt <path...>`
+- Format the repository: `bun run fmt`
+- Check formatting: `bun run fmt:check`
 - Lint and type-check: `bun run lint`
 - Lint with fixes: `bun run lint:fix`
-- Refresh codebase graph: `bun run index`
-- Test full suite: `bun test --parallel`
-- Test one file: `bun test tests/vec3.test.ts`
+- Refresh the code graph: `bun run index`
+- Run the full suite: `bun test --parallel`
+- Run test files affected by uncommited changes: `bun test --parallel --changed`
+- Run one test file: `bun test tests/vec3.test.ts`
 
-Additional rules:
+Tests use `bunfig.toml`, with `tests/` as the root and `tests/setup.ts` as preload. Missing large fixtures may be downloaded through `tests/download.ts`.
 
-- Prefer targeted Bun tests before broader test runs.
-- Tests run through Bun with `bunfig.toml` configured to use `tests/` as the test root and `tests/setup.ts` as preload.
-- Some tests depend on large fixtures in `data/`; missing fixtures may trigger downloads through `tests/download.ts`.
-- Do not introduce npm, Yarn, pnpm, Vite, PostCSS, Prettier, ESLint, another test runner, or another bundling layer.
+Do not introduce npm, Yarn, pnpm, Vite, PostCSS, Prettier, ESLint, another test runner, or another bundling layer.
 
-### Python fixtures and reference values
+### Python Reference Values
 
-- Use `uv` to run Python scripts that generate fixtures or reference values, for example with Astropy, ERFA, NumPy, or Skyfield. Do not invoke `python`, `pip`, or a manually managed virtualenv directly.
-- Run one-off scripts with `uv run script.py` and declare their dependencies inline with PEP 723 metadata so `uv` resolves them automatically, for example `uv run --with astropy --with numpy script.py`.
-- Use these scripts to cross-check TypeScript results against a trusted reference (Astropy/ERFA) and to produce expected values for tests; paste the resulting numbers into the test as literals rather than depending on Python at test time.
-- Keep generated values reproducible: pin the timescale, epoch, location, and ellipsoid in the script, and note the reference library and version in a comment near the generated fixture or expected value.
-- Do not add Python to the project's runtime or test path. `uv` is a local fixture-generation tool only; Bun remains the sole runtime for the library and its tests.
+Use `uv` only as a development-time reference tool for Astropy, ERFA, NumPy, Skyfield, or similar trusted libraries.
 
-## Architecture
+- Do not invoke `python`, `pip`, or a manually managed virtual environment.
+- Use `uv run --with <dependency> <script>` or a PEP 723 script so dependencies resolve reproducibly.
+- Pin the epoch, timescale, observer, location, ellipsoid, units, and other inputs.
+- Record the reference library and version near committed expected values or fixtures.
+- Paste stable reference values into Bun tests; Python must not enter the runtime or test dependency path.
+- Keep one-off scripts outside the repository unless reproducible fixture generation is itself part of the task.
 
-### Layers and Dependency Direction
+## TypeScript, Formatting, and Runtime Style
 
-- Keep low-level math, coordinate, ephemeris, interpolation, and transformation modules free of higher-layer imports.
-- Keep protocol clients, device managers, and adapters at the runtime edge; they may depend on domain layers, never the reverse.
-- Keep `main.ts` out of the implementation path; reusable logic belongs in `src/`.
-- Model expected failures with discriminated result unions instead of exceptions used as routine control flow.
-- Keep large payload paths such as FITS, XISF, SPK, and catalog readers streaming-friendly and avoid unnecessary materialization or deep cloning.
-
-### Code Patterns To Preserve
-
-- Use classes mainly for protocol clients, simulators, device managers, and stateful integrations such as Alpaca, INDI, and Firmata.
-- Prefer top-level pure functions for math-heavy modules.
-- Reuse existing low-level utilities from `vec2.ts`, `vec3.ts`, `mat3.ts`, `math.ts`, `time.ts`, and related core files before adding new helpers.
-- Preserve the `MutX` plus `Readonly<MutX>` pattern for numeric tuples.
-- Preserve the mutable-output convention in hot paths: many vector and matrix helpers accept an optional output parameter such as `out?: MutVec3` or `out?: MutMat3`.
-- Prefer top-level helper functions over local closures when performance matters.
-- Do not replace tight numeric loops with functional abstractions if that adds overhead.
-- Prefer flat numeric structures over nested objects for high-volume calculations.
-
-## Formatting And TypeScript Style
+Follow OXC configuration: tabs, single quotes, no semicolons, trailing commas, sorted imports, LF endings, and the configured line width.
 
 - Use TypeScript and ESM. Never add CommonJS.
-- Follow OXC formatting: tabs, single quotes, no semicolons, trailing commas, sorted imports, and the configured long line width.
-- For intentionally long imports, add `// oxfmt-ignore` immediately above the import declaration and restore it to a single line when OXC formats it across multiple lines. Preserve existing `// oxfmt-ignore` comments when they protect intentional formatting.
-- Keep strict types. Do not suppress errors with `any`, unchecked assertions, or broad index signatures when `unknown`, generics, narrowing, or explicit shapes work.
+- Preserve `// oxfmt-ignore` immediately above intentionally long imports and keep those imports on one line.
+- Keep strict types. Avoid `any`, broad index signatures, unchecked assertions, and suppressions when `unknown`, generics, narrowing, or explicit shapes work.
 - Always type function and method parameters.
-- Avoid `any`. Use `unknown` when a value cannot be expressed more precisely.
-- Prefer inference for primitive and tuple return types unless an explicit return type improves the public contract or protects a branded primitive.
-- Declare explicit return types for structured objects, exported public interfaces, and functions whose inferred type would be unclear or unstable.
-- Prefer `interface` for structured public shapes and `type` for unions, tuples, mapped types, and aliases.
-- Use tuple aliases and readonly aliases for low-level numeric structures such as vectors and matrices.
-- Use `readonly` where it communicates API intent without fighting existing mutable-output patterns.
-- Prefer `undefined` over `null` for absent, unavailable, or not-yet-computed values. Use `null` only when it has a distinct documented semantic meaning or an external contract requires it.
-- Prefer string-literal union types with `camelCase` values, such as `'notStarted' | 'inProgress'`, over enums for finite internal value sets unless a runtime enum or external API contract requires one. Use discriminated unions and exhaustive switches for state machines and command/result flows.
-- Use `import type`, `export type`, `satisfies`, and `as const` where they preserve intent and inference.
-- Prefer direct module imports over barrel files and broad `export *` surfaces.
-- Preserve the existing relative import style without `.ts` extensions.
-- Validate network, filesystem, environment, process, and third-party input at their boundaries, and nothing else. See "Validation Rules": argument validity is the caller's responsibility, documented rather than enforced.
-- Await promises or mark intentional fire-and-forget work with `void` and error handling. Throw only `Error` instances and normalize unknown failures at logging and API boundaries.
+- Prefer inference for primitive and tuple returns. Add explicit return types for public structured results or where inference would make a contract unclear or unstable.
+- Prefer `interface` for structured public objects and `type` for unions, tuples, mapped types, and aliases.
+- Use tuple aliases and the existing `MutX` plus `Readonly<MutX>` convention for low-level numeric structures.
+- Use `readonly` where it communicates API intent without fighting mutable-output hot paths.
+- Prefer `undefined` for absence. Use `null` only when it has a distinct documented meaning or an external protocol requires it.
+- Prefer exhaustive discriminated unions and camel-case string-literal states over enums unless runtime identity or an external contract requires an enum.
+- Use `import type`, `export type`, `satisfies`, and `as const` when they preserve intent and inference.
+- Await promises. Mark intentional fire-and-forget work with `void` and explicit error handling.
+- Throw only `Error` instances. Normalize unknown failures at logging, protocol, and API boundaries.
 - Use `performance.now()` for durations and `Date` for wall-clock timestamps.
 
-## Documentation Comment Style
+Preserve established implementation patterns:
 
-Use concise, Claude-style documentation comments: explain intent, units, constraints, side effects, and edge cases. Do not restate obvious code.
+- Prefer top-level pure functions for numerical work.
+- Use classes primarily for protocol clients, simulators, managers, and other stateful integrations.
+- Reuse `vec2.ts`, `vec3.ts`, `mat2.ts`, `mat3.ts`, `matrix.ts`, `math.ts`, `time.ts`, and nearby primitives before adding equivalents.
+- In hot paths, preserve optional mutable outputs such as `out?: MutVec3`; document whether the return aliases the output.
+- Prefer flat numeric layouts, stable object shapes, typed arrays, and reusable buffers for high-volume work.
+- Keep portable numerical modules free of Bun- or Node-only APIs. Runtime integrations may use Bun, `Buffer`, timers, `fetch`, and `fs/promises` where nearby code does.
 
-- Start every new `/src` file with a module description comment placed immediately after the imports (or at the top when there are none), following the existing `//` block style. Summarize what the module provides, the domain it belongs to, relevant units or conventions, and whether operations mutate in place or return fresh values. Keep existing module descriptions up to date when a file's responsibility changes.
-- Always add a documentation comment above every function, method, class, interface, type alias, enum, and module-level constant.
-- Always comment constants. For local throwaway constants inside a function, comment the surrounding calculation when individual comments would create noise.
-- Prefer the repository's existing `//` comment style. Use multi-line `//` comment blocks instead of `/* ... */` unless the file already uses TSDoc/JSDoc or tooling requires it.
-- A function or method comment should describe what it computes or performs, document each parameter, state relevant units and valid ranges, and mention return semantics.
-- If a function mutates an output parameter such as `o?: MutVec3`, document that mutation and whether the returned value aliases `o`.
-- If a function accepts angles, distances, times, pixel coordinates, magnitudes, rates, or temperatures, document the unit explicitly.
-- If a function assumes normalized vectors, sorted arrays, non-empty inputs, monotonic values, or a specific coordinate frame, document that precondition. The comment is the only thing enforcing it: nothing is validated at runtime, so an undocumented precondition is a real defect while a missing check is not.
-- If a function uses an approximation, tolerance, iteration limit, or precision trade-off, document it near the implementation.
-- A constant comment should explain the physical or algorithmic meaning, unit, source if known, and valid range when applicable.
-- An interface comment should describe the object as a whole, and every property must have an adjacent comment explaining meaning, units, and constraints when relevant.
-- Do not add comments for obvious assignments, loop mechanics, or control flow unless they explain a non-obvious domain decision.
-- Do not add comments in test files.
+## Documentation Comments
 
-## Validation Rules
+These rules apply to production code under `src/`. Use concise repository-style `//` comments that explain contracts, not syntax.
 
-This project deliberately carries very little runtime validation. Passing a valid argument is the **caller's** responsibility, not the implementer's and not the reviewer's. The contract is expressed in the documentation comment, not in defensive branches. Do not add validation to satisfy a general sense of robustness, and do not restore validation that was intentionally removed.
+- Start every new `src/` file with a module description immediately after imports, or at the top when there are none. Describe its responsibility, domain, units/conventions, and mutation or allocation behavior.
+- Keep a file's module description current when its responsibility changes.
+- Add a documentation comment above every function, method, class, interface, type alias, enum, and module-level constant.
+- Describe intent, every parameter, return semantics, side effects, valid domain, and important edge cases without restating the signature.
+- State units for angles, distances, times, rates, temperatures, pressure, magnitudes, and pixel coordinates.
+- State coordinate frames, handedness, origins, axis directions, normalization, ordering, non-empty, monotonic, and other preconditions.
+- For mutable outputs, document mutation, aliasing, and whether a fresh value is allocated when the output is omitted.
+- Document approximations, tolerances, iteration limits, fallback behavior, precision trade-offs, and authoritative sources near the implementation.
+- Explain a constant's physical or algorithmic meaning, unit, source when known, and valid range.
+- Describe every interface property adjacent to the property, including units and constraints where relevant.
+- Do not comment obvious assignments, loop mechanics, or control flow.
 
-### The only two reasons to validate
+Tests do not need production-style documentation comments. Add test comments only when they preserve non-obvious fixture provenance, trusted reference versions, numerical intent, lifecycle timing, or a regression's physical reason.
 
-Add a runtime check only when invalid input would:
+## Validation Policy
 
-1. **Hang or crash the process**: a loop that never terminates, an iteration that never converges, an unbounded or accidentally huge allocation, or a stack overflow. The check exists to fail fast instead of freezing the caller.
-2. **Be nonsensical for the operation in a way the types cannot express**, where continuing would silently produce a plausible-looking but wrong result.
+The project deliberately performs little runtime validation for trusted, typed inputs. Callers are responsible for satisfying documented preconditions; validation is not a substitute for a precise contract.
 
-Everything else is documentation, not code.
+Runtime validation is warranted only when:
 
-### Never validate these
+1. It prevents a hang, non-convergence, stack overflow, process crash, or unbounded/accidentally huge allocation.
+2. The types cannot express a structurally nonsensical state and continuing would silently produce a plausible-looking wrong result.
 
-- Numeric ranges, bounds, or sign, such as angles outside `-PI..PI`, negative distances, or an out-of-range index.
-- Whether a string-literal union, enum, or discriminant value is one of the allowed members.
-- `null`, `undefined`, or missing optional properties on trusted internal arguments.
-- Array or typed-array lengths, matching dimensions, non-empty inputs, or sortedness.
-- `NaN` and `Infinity` on inputs. Compute normally; the numerical rules still forbid _producing_ them from valid inputs.
-- Object shape, property presence, or type re-checking of a value TypeScript already types.
+Untrusted boundaries are separate: validate network payloads, files, protocol messages, environment/process values, and third-party responses once when they enter the system.
 
-State the expectation in the documentation comment instead: units, valid range, required frame, expected ordering, and what happens outside the documented domain. A caller violating a documented precondition gets whatever the math gives it, and that is acceptable.
+For trusted internal and public function arguments, do not add checks merely for:
 
-### How to validate when it is warranted
+- numeric range, sign, index bounds, or angle normalization;
+- union, enum, or discriminant membership already expressed by the type;
+- `null`, `undefined`, or optional property presence already expressed by the type;
+- object shape already expressed by TypeScript;
+- `NaN` or `Infinity` inputs;
+- array lengths, dimensions, non-emptiness, or sorting unless one of the two allowed failure modes actually applies.
 
-- Use the shared validators from `src/core/validation.ts`. If a reusable helper is missing, add it there and cover it with tests.
-- Check untrusted external input once at the parsing boundary: network payloads, filesystem and protocol decoding, environment and process values, and third-party responses. That boundary is exempt from the rules above because the data is not typed by anything the compiler can see.
-- Validate once, at the entry point of the operation. Never re-check the same value deeper in the call chain or inside a hot path.
-- Comment every check with the failure it prevents, for example the loop that would not terminate. A validation without that justification is noise and should be deleted.
+A caller outside the documented domain gets whatever mathematical result the computation produces, but it still must not trigger the first failure mode above. Valid inputs must not produce non-finite public geometry, time, coordinate, or image/SVG results.
 
-## Numerical Rules
+When validation is justified:
 
-- Angles are radians unless explicitly documented otherwise.
-- Distances are AU unless explicitly documented otherwise.
-- Velocities are AU/day unless explicitly documented otherwise.
-- Time intervals are days or seconds according to the local convention; document which one is used.
-- Temperature is degrees Celsius unless explicitly documented otherwise.
-- Pressure is millibar (`hPa`) unless explicitly documented otherwise.
-- Pixel coordinates follow the local image convention; document origin and axis direction when relevant.
-- Avoid unnecessary trig recomputation. Cache `sin` and `cos` values locally when used more than once.
-- Avoid subtracting nearly equal floating-point values when a more stable formulation exists.
-- Prefer stable `atan2`-based formulations over `acos` when precision near `0` or `PI` matters.
-- Clamp inputs before inverse trig when rounding error may push values slightly outside the valid domain.
-- Normalize vectors explicitly when required, using `vecNormalize` or `vecNormalizeMut`.
-- Preserve angle wrap behavior deliberately. Document whether a returned angle is normalized to `0..TAU`, `-PI..PI`, or left unwrapped.
-- Represent undefined directions explicitly, usually with `undefined`, when the geometry is singular or separation is too small.
-- Guard divisions by small values when valid inputs can approach zero.
-- Do not allow `NaN` or `Infinity` to leak into public geometry, time, coordinate, or SVG/image outputs.
+- Validate once at the operation entry point or external parsing boundary, never repeatedly in deeper trusted layers or hot loops.
+- Reuse `src/core/validation.ts`; add and test a shared validator only when the check is genuinely reusable.
+- Comment the concrete failure the check prevents.
+- Do not use exceptions as routine state-machine or result control flow; prefer discriminated result unions for expected failures.
+- In reviews, report the concrete hang, crash, unbounded work, or plausible wrong result—not “missing validation.”
 
-## Performance Rules
+## Numerical and Physical Rules
 
-- Avoid unnecessary allocations inside hot paths.
-- Prefer mutable vector and matrix utilities when performance is important.
-- Avoid object churn and dynamic object reshaping in tight loops.
-- Prefer scalar variables, reusable buffers, flat arrays, or `TypedArray` when the data size or access pattern justifies it.
-- Avoid closures in tight loops.
-- Avoid JSON operations in performance-sensitive code.
-- Avoid repeated ephemeris, trig, projection, or coordinate-frame computations for the same sample.
-- Do not optimize cold code at the expense of correctness, readability, or API stability.
+- Angles are radians unless documented otherwise.
+- Distances are AU unless documented otherwise.
+- Velocities are AU/day unless documented otherwise.
+- Time intervals use the local days-or-seconds convention; always document which.
+- Temperature is degrees Celsius and pressure is millibar (`hPa`) unless documented otherwise.
+- Pixel coordinates must document origin, extent convention, channel layout, CFA phase, and axis direction when relevant.
+- Cache repeated trigonometric and frame computations.
+- Avoid subtracting nearly equal values when a stable formulation exists.
+- Prefer `atan2`-based formulations over `acos` near `0` or `PI`.
+- Clamp rounding-sensitive inverse-trigonometric inputs.
+- Guard divisions when valid geometry can approach a singular denominator.
+- Normalize vectors explicitly with existing vector helpers when required.
+- Preserve angle wrapping deliberately and document whether output is `0..TAU`, `-PI..PI`, or unwrapped.
+- Represent singular or undefined directions explicitly, usually with `undefined`.
+- Use tolerances that match scale and conditioning; distinguish absolute, relative, angular, pixel, and time tolerances.
+- Never “fix” a numerical regression by changing expected values before independently proving the new result.
 
-## Runtime Boundaries
+## Performance and Memory
 
-- Keep low-level math, coordinate, ephemeris, interpolation, and transformation modules portable and lightweight.
-- Avoid Bun-only or Node-only APIs in core numerical modules unless the file is already runtime-specific.
-- Runtime-specific integrations such as I/O, device protocols, downloads, and simulators may use Bun, `Buffer`, timers, `fetch`, and `fs/promises` where consistent with nearby code.
-- Before adding a dependency, verify Bun compatibility and prefer internal utilities first.
-- Minimize new dependencies. Avoid heavy math libraries unless absolutely necessary.
+Optimize code paths that are hot, scale with realistic data, process large payloads, or run every simulation/render tick. Do not add complexity to cold code without evidence, and never trade away correctness or numerical stability for a micro-optimization.
+
+### Algorithms and Data Layout
+
+- Check asymptotic complexity before micro-optimizing.
+- Replace repeated linear lookup with `Map`, `Set`, indexing, bucketing, or spatial structures when the scale justifies it.
+- Preallocate when final size is known. Avoid sparse and heterogeneous arrays in critical paths.
+- Prefer flat objects or typed arrays for large numeric datasets; do not convert typed arrays to regular arrays without need.
+- Prefer `subarray()` when a view is enough and `slice()` only when a copy is required.
+- Do not use argument spread for potentially large collections.
+- Keep caches bounded or provide an eviction/size policy; use stable keys and do not memoize cheap work.
+
+### Hot Loops and Numerical Work
+
+- Hoist loop invariants, unit conversions, decoders, regular expressions, and repeated trigonometric/projection/frame calculations.
+- Avoid intermediate arrays from chained `map`/`filter`/`reduce`, object/array spreads, closures, and temporary objects in measured hot loops.
+- Reuse mutable outputs, workspaces, typed-array views, and buffers when ownership is clear.
+- Compare squared distances when the distance itself is not needed; use direct multiplication for small integer powers.
+- Avoid formatting, logging, JSON conversion, exceptions, and dynamic object reshaping in high-volume loops.
+- Keep performance-motivated code readable and document non-obvious allocation or numerical trade-offs.
+
+### Async, I/O, and Lifecycle
+
+- Do not accidentally serialize independent I/O. Use bounded concurrency for large or untrusted batches.
+- Stream large FITS, XISF, SPK, catalog, image, and network payloads when materialization is unnecessary.
+- Reuse long-lived clients and expensive helpers where lifecycle ownership is explicit.
+- Clean up timers, listeners, observers, sockets, pending requests, and buffers on success, failure, cancellation, disconnect, and disposal.
+- Quarantine or ignore late replies/events from obsolete sessions.
+- Avoid blocking the event loop with substantial CPU work; use an existing worker/offload pattern when one exists.
+
+Before accepting a performance-sensitive change, verify complexity, allocation behavior, buffer reuse, concurrency bounds, cache growth, lifecycle cleanup, and readability. A performance review finding must identify realistic scale or frequency and a material effect.
 
 ## Tests
 
-- Use `bun:test`; place tests under `tests` mirroring the `src/` folder layout and module names.
-- Add or update tests in the closest existing `tests/*.test.ts` file whenever possible.
-- Mirror existing test style with Bun's `test` and `expect`.
-- Write the smallest deterministic test that proves behavior at the appropriate unit or integration seam.
-- Prefer focused tests for pure logic and integration-style tests for parsers, serializers, adapters, protocol clients, and IO boundaries.
-- Mock only true external or nondeterministic boundaries. Reuse existing fixtures from `data/` instead of embedding large blobs in tests.
-- Cover success and typed failure paths, including malformed input, missing configuration, timeouts, and upstream failures, for parsers, protocol clients, and other boundary code that really does validate. Do not write tests asserting that a pure function rejects out-of-range or wrong-typed arguments; it does not, by design.
-- Assert behavior and contracts precisely; avoid snapshot-heavy tests.
-- Use `toBeCloseTo` or explicit tolerances for floating-point assertions. Use strict equality for floating-point values only when the result is guaranteed exact.
-- Cover astronomy and geometry edge cases: zero vectors, near-zero separations, poles, zenith/nadir, horizon crossings, antimeridian crossings, wrap-around at `0` and `TAU`, grazing cases, degenerate transforms, identity transforms, and endpoints of validity windows.
-- For fixture-backed behavior, prefer the closest real fixture test over only unit-level smoke checks.
+- Use `bun:test`; place tests under `tests/` mirroring source folders and module names.
+- Add tests to the closest existing `*.test.ts` file when practical.
+- Match nearby `test` and `expect` style.
+- Write the smallest deterministic test that proves the behavior at the correct unit or integration seam.
+- Prefer pure focused tests for numerical logic and integration-style tests for parsers, serializers, adapters, protocol clients, I/O, and simulators.
+- Mock only true external or nondeterministic boundaries. Reuse `data/` fixtures rather than embedding large payloads.
+- Cover success and typed failures at boundaries, including malformed external input, missing configuration, timeout, cancellation, and upstream failure.
+- For devices and orchestration, cover capability absence, disconnect/reconnect, busy/conflict/Alert states, late events, cancellation ownership, cleanup, and boundary timing—not only the happy path.
+- For simulators, assert meaningful state transitions, timing, trajectory, and physical behavior rather than only command acknowledgement.
+- Do not test that pure functions reject out-of-range or wrong-typed trusted inputs; that is outside the validation contract.
+- Assert behavior precisely and avoid snapshot-heavy tests.
+- Use `toBeCloseTo` or explicit tolerances for floating-point results. Use strict equality only for mathematically exact results.
+- Cover relevant astronomical/geometric boundaries: zero vectors, near-zero separations, poles, zenith/nadir, horizon and antimeridian crossings, `0`/`TAU` wrap, grazing contact, degenerate/identity transforms, and validity-window endpoints.
+- Treat image hashes as regression alarms, not algorithmic truth. Before updating one, inspect the numerical/pixel difference and verify the new result independently.
+- Prefer the closest real fixture test over a fixture-free smoke test when behavior depends on an actual format or dataset.
 
 ## Verification Before Finishing
 
-Before finishing a change:
+Verification is proportional to the change, but the touched area must have zero introduced TypeScript errors, passing relevant tests, and no obvious correctness or performance regression.
 
-- Leave the touched area with zero TypeScript errors, passing related tests, and no obvious performance regression.
-- Run the closest targeted tests for the files you changed.
-- Run `bun run lint` after TypeScript changes.
-- Run `bun run fmt` when formatting may have changed, then review the resulting diff.
-- Run `git diff --check`.
-- Fix regressions introduced by the change before committing.
-- Review the diff and make sure it contains only intentional changes.
-- Commit only touched changes after relevant checks are green.
-- If network access, missing fixtures, or environment limitations prevent full verification, state that explicitly with the exact command that could not be completed.
+- Documentation-only changes: format-check the touched files, validate referenced paths/commands, and run `git diff --check`.
+- TypeScript changes: run the closest targeted tests, `bun run lint`, `bun run fmt:check`, and `git diff --check`.
+- Cross-cutting shared primitives, test infrastructure, broad refactors, or high-risk numerical/runtime changes: also run `bun test --parallel`.
+- Native-binding changes: run the relevant native-backed tests and state any platform/library limitation.
+- Prefer `bunx oxfmt <explicit paths>` when the worktree contains unrelated edits. Use repository-wide `bun run fmt` only when its entire output is in scope, then inspect every formatted change.
+- Re-run tests after any fix made in response to a failed check.
+- Distinguish failures introduced by the task from pre-existing, fixture, network, or platform failures. Establish overlap with touched code before treating a full-suite failure as a task regression.
+- Do not commit with introduced failures or unresolved errors in the touched area.
+- Report every skipped or failed verification command and its exact reason.
+- Review the final diff and status before staging.
 
 ## Code Review
 
-When asked to review changes, use a strictly limited correctness scope. Report only findings that are actionable, supported by code evidence, and tied to a concrete correctness, numerical, algorithmic, performance, or memory issue in changed code or directly affected code.
+A review request is read-only. Do not edit, stage, commit, push, or resolve remote threads unless the user separately requests those actions.
 
-Do not report style, naming, formatting, documentation wording, test organization, dependency choices, API design preferences, or speculative alternatives unless the current implementation is demonstrably incorrect, fragile over the valid input domain, or materially less robust than a standard approach for the same astronomical/geometric problem.
+Review changed code and directly affected contracts. Report only actionable findings supported by code evidence and tied to concrete correctness, numerical, algorithmic, physical, lifecycle, performance, or memory harm.
 
-**Missing input validation is not a finding.** This project treats argument validity as the caller's responsibility; read "Validation Rules" before reviewing. Never ask for a range check, a bounds check, a union/enum membership check, a `null`/`undefined` guard, a length or dimension check, or a `NaN`/`Infinity` input guard, and never ask for validation to be restored where a commit deliberately removed it. The two exceptions are the two reasons that section allows: input that makes the code hang, never converge, or allocate without bound, and input that is nonsensical for the operation and would yield a plausible-looking wrong result. Report those as the concrete failure they cause — the loop that does not terminate, the frame mismatch that displaces the result — not as "missing validation". Everything else belongs in the documentation comment, so if a precondition is undocumented, that is at most a documentation remark, never a correctness finding.
+For pull-request work, refresh the current diff, review bodies, general comments, and live review threads rather than relying on a previous snapshot. A push and remote thread resolution remain separate authorization decisions.
 
 ### Review Scope
 
-#### Mathematical and physical correctness
+Check:
 
-Check formulas, units, signs, frames, and physical interpretation.
+- **Mathematical and physical correctness** — units, conversion factors, signs, handedness, coordinate frames, reference systems, apparent/geometric or topocentric/geocentric distinctions, contact geometry, physical quantities, and documented approximation limits.
+- **Algorithmic suitability** — objective functions, search windows, adaptive expansion, continuous-versus-discrete classification, bracketing, endpoint/sample/tangential/double roots, convergence, degenerate cases, and supported-domain completeness.
+- **Numerical robustness** — cancellation, unstable inverse trig, missing clamps, small denominators, tolerance scaling, angle normalization, pole/horizon/limb behavior, and non-finite output from valid inputs.
+- **Implementation correctness** — condition direction, indices, endpoints, stale state, swapped arguments, fallback paths, optional outputs, mutation, initialization, metadata consistency, and cleanup.
+- **Performance and memory** — only realistic, material issues under the “Performance and Memory” rules.
+- **Async and device lifecycle** — capability state, command ownership, disconnect/reconnect, cancellation, timeout, late events, session invalidation, and cleanup.
 
-Report issues involving:
+Examples of reportable domain failures include:
 
-- unit inconsistencies for radians, AU, AU/day, Celsius, hPa, pixels, days, or seconds;
-- spurious or missing conversion factors such as `DEG2RAD`, `RAD2DEG`, squared factors, or off-by-constant errors;
-- wrong sign conventions for longitude, hour angle, handedness, screen/SVG y-axis direction, or east-left/east-right visual conventions;
-- mixed coordinate frames such as geocentric vs topocentric, apparent vs geometric, equatorial vs horizontal, celestial-north vs zenith-oriented, or tangent-plane vs global-frame values;
-- contact-geometry mistakes such as center-to-center angle vs limb contact angle, external vs internal tangency, or total vs annular C2/C3 direction;
-- misleading physical quantities such as magnitude, apparent diameter ratio, umbra/antumbra/penumbra limits, local chord width, canonical path width, or horizon visibility.
+- mixing radians with degrees, AU/day with km/s, or days with seconds;
+- applying a geocentric shortcut where topocentric geometry is required;
+- confusing center separation with limb contact, or total with annular C2/C3 geometry;
+- missing roots because two events lie between coarse samples or because a tangent never changes sign;
+- accepting a discrete sampled classification for a property that must hold over a continuous interval;
+- using an approximation that materially violates its documented precision/domain;
+- propagating `NaN` or `Infinity` from valid inputs into public geometry, time, coordinate, SVG, or image output;
+- leaking timers, listeners, observers, sockets, or in-flight work.
 
-If a value is intentionally approximate, report it only when the approximation is undocumented, violates the stated precision target, or produces materially wrong results for valid inputs.
+Do not recommend a more sophisticated method merely because it exists. Report it only when the current method fails valid cases, is unstable, or violates a stated precision or performance requirement.
 
-#### Algorithmic correctness
-
-Verify that the algorithm solves the intended problem across the supported input domain.
-
-Report issues involving:
-
-- wrong objective functions or search intervals;
-- missing adaptive search-window expansion;
-- assuming an event is absent only because the initial window has no roots;
-- root-finding failures, including missed sign changes, endpoint roots, sample-point roots, double roots, tangential roots, or two roots between coarse samples;
-- false roots produced by endpoint grazing outside the search window;
-- convergence failures such as infinite loops, non-finite bounds, inverted intervals, stale best candidates, or insufficient iteration limits;
-- degenerate and boundary cases such as zero vectors, near-zero separations, poles, zenith/nadir, antimeridian crossings, `0`/`TAU` wrap, grazing limits, near-limb geometry, horizon crossings, very short durations, and identity or degenerate transforms;
-- classification based only on discrete event samples when the physical property is continuous over an interval.
-
-#### Method suitability
-
-Report the chosen method when it is fundamentally unsuitable for the stated astronomical or geometric problem.
-
-Examples:
-
-- using a wrong frame or reference system;
-- using a geocentric shortcut where topocentric geometry is required;
-- using event-sample-only logic where continuous interval analysis is required;
-- using fragile root finding where a standard bracketing/minimization hybrid is needed;
-- treating numerically unresolved grazing as a finite-duration phase;
-- using planar, spherical, or linear approximations where the surrounding algorithm assumes ellipsoidal, topocentric, or curved geometry and the mismatch creates material error;
-- computing a metric whose name or downstream use implies a different physical quantity than what is actually computed.
-
-Do not report a different algorithm merely because it is more sophisticated. Report it only when the current algorithm fails valid cases, is numerically unstable, or contradicts stated precision requirements.
-
-#### Performance and memory
-
-Report performance or allocation problems that matter for realistic usage.
-
-Report:
-
-- unnecessary allocations in hot paths or tight loops;
-- repeated object/array construction where scalar variables or reusable buffers would suffice;
-- closures allocated inside high-frequency loops;
-- repeated trig, ephemeris, projection, or coordinate-frame evaluations for the same sample;
-- repeated recomputation of local state during scans when one sampled table could feed multiple phases;
-- avoidable conversions between object and numeric representations;
-- inefficient structures where flat arrays or `TypedArray` are clearly justified;
-- failure to use mutable output parameters where the codebase convention favors them, such as `out?: MutVec3`.
-
-Do not report harmless micro-optimizations or cold-path costs unless they scale poorly or are substantial.
-
-#### Numerical precision and robustness
-
-Report:
-
-- unstable subtraction of nearly equal values;
-- use of `acos` where `atan2` is more stable near `0` or `PI`;
-- missing clamps before inverse trig functions;
-- unguarded division by small values;
-- inconsistent tolerances across related decisions;
-- absolute tolerances where relative tolerances are required;
-- `NaN` or `Infinity` propagation into public results or geometry outputs;
-- exact zero checks as the only root-detection strategy;
-- precision loss near poles, horizon, limb contact, or near-perfect alignment;
-- inconsistent angle normalization or wrong `atan2` argument order.
-
-Undefined directions should be represented explicitly, usually as `undefined`, when the geometry is singular or separation is too small.
-
-#### Concrete bugs
-
-Report concrete logic and implementation bugs, including:
-
-- wrong conditionals, comparison direction, or inclusive/exclusive boundary;
-- wrong index, off-by-one error, skipped endpoint, or duplicated/missing sample;
-- stale state after loop expansion;
-- swapped arguments;
-- incorrect fallback path;
-- incorrect optional output parameter handling;
-- uninitialized state;
-- mutation of values expected to be immutable;
-- exported helpers that can hang or crash for possible inputs;
-- plausible-looking geometry produced from missing internal state;
-- inconsistent output metadata, such as reporting one selected event while drawing another;
-- missing cleanup of timers, subscriptions, listeners, observers, or in-flight async work.
-
-If a helper is exported, review it as public correctness surface even if the main call path passes safe arguments. That means its documented domain must produce correct results, and that input outside it must not hang or crash; it does not mean the helper should reject bad arguments.
-
-### Performance Checklist
-
-When reviewing or before committing TypeScript changes, check for avoidable performance issues, especially in hot paths, numerical code, rendering loops, data-processing pipelines, and frequently called functions.
-
-Prefer readable code by default, but avoid unnecessary allocations, copies, callbacks, and repeated work when the code is performance-sensitive.
-
-#### Arrays and collections
-
-- Avoid `.slice()` when no real copy is needed.
-- Avoid `[...array]` when the array is only being iterated, passed through, or defensively copied without a clear reason.
-- Avoid `target.push(...source)` for large arrays. Prefer an indexed loop to avoid argument-spread overhead and stack limits.
-- Avoid repeated `concat()` inside loops.
-- Avoid chaining `.filter().map().reduce()` in hot paths when a single loop can do the same work without intermediate arrays.
-- Avoid `.find()` inside loops. Build a `Map` when repeated lookup by key is needed.
-- Avoid `.includes()` on large arrays when repeated membership checks are needed. Use a `Set`.
-- Preallocate arrays when the final size is known.
-- Avoid `Array.from()` in hot paths when a simple loop is cheaper.
-
-#### Object copies and allocations
-
-- Avoid object spread inside loops unless a copy is required.
-- Avoid array spread inside loops.
-- Avoid creating temporary objects in functions called very frequently.
-- Avoid creating closures, lambdas, or bound functions inside hot loops.
-- Avoid `JSON.parse(JSON.stringify(...))` for cloning.
-- Avoid `structuredClone()` unless a deep copy is explicitly required and acceptable for the path.
-- Reuse temporary objects or output buffers when the function is called repeatedly.
-- Avoid repeatedly creating `Date`, `RegExp`, `Intl.*`, `URL`, `TextEncoder`, or `TextDecoder` instances in hot paths. Hoist or cache them when possible.
-
-#### Strings
-
-- Avoid incremental string concatenation for large outputs inside loops. Collect parts and use `.join("")`.
-- Avoid `.split()` when only a prefix, suffix, or single separator lookup is needed. Prefer `indexOf()`, `startsWith()`, `endsWith()`, or direct slicing.
-- Avoid repeated `.toLowerCase()` / `.toUpperCase()` on the same value. Normalize once and reuse.
-- Avoid building expensive log messages when the log level may be disabled.
-
-#### Loops and algorithms
-
-- Check for accidental `O(n²)` behavior from nested loops, repeated `.find()`, repeated `.filter()`, or repeated scans.
-- Use `Map`, `Set`, indexing, bucketing, spatial grids, or caches when repeated lookup is required.
-- Move loop-invariant calculations outside the loop.
-- Avoid repeated unit conversions inside loops.
-- Avoid `try/catch` inside hot loops. Put error handling outside the loop when possible.
-- Avoid unnecessary function calls inside tight numerical loops when inlining or direct operations would be clearer and faster.
-- Avoid logging inside high-volume loops.
-
-#### Math and numerical code
-
-- Avoid `Math.pow(x, 2)` for squaring. Use `x * x`.
-- Avoid `Math.sqrt()` when only comparing distances. Compare squared distances instead.
-- Reuse expensive trigonometric results such as `sin`, `cos`, `tan`, `atan2`, and `sqrt` when possible.
-- Precompute constants such as degree/radian conversion factors.
-- Avoid formatting numbers or converting them to strings inside computational paths.
-
-#### Typed arrays and buffers
-
-- Use `Float32Array`, `Float64Array`, `Uint8Array`, or other typed arrays for large numeric datasets.
-- Avoid converting typed arrays to regular arrays unless required.
-- Prefer `typedArray.subarray(start, end)` when a view is enough.
-- Use `typedArray.slice(start, end)` only when a real copy is required.
-- Reuse buffers for repeated computations.
-- Avoid creating typed-array views repeatedly inside tight loops.
-- For large numeric structures, consider separate typed arrays instead of arrays of objects when memory layout and throughput matter.
-
-#### Async and promises
-
-- Avoid marking functions as `async` when they do not await or need to return a promise.
-- Avoid unnecessary manual `new Promise(...)` wrappers.
-- Avoid sequential `await` inside loops when operations are independent.
-- Use `Promise.all` only when unbounded parallelism is safe.
-- Use concurrency limits for large batches of async work.
-- Batch I/O operations when possible.
-
-#### Maps, sets, and caches
-
-- Use `Map` for repeated key-based lookup.
-- Use `Set` for repeated membership checks.
-- Avoid recreating `Map` or `Set` inside functions called frequently when the source data is stable.
-- Do not add unbounded caches without an eviction or size policy.
-- Avoid memoizing cheap computations.
-- Avoid using newly created objects as cache keys when their identity changes on every call.
-
-#### Object shapes and JIT friendliness
-
-- Keep object shapes stable.
-- Initialize all expected properties when creating objects or class instances.
-- Avoid adding properties dynamically after object creation in hot paths.
-- Avoid mixing different value types in the same property.
-- Avoid heterogeneous arrays in performance-critical code.
-- Avoid sparse arrays and large index gaps.
-
-#### Immutability
-
-- Avoid blind immutability in hot paths.
-- Avoid repeated `{ ...state }` or `[...items]` patterns when local mutation would be safe and contained.
-- Prefer controlled local mutation for temporary data that does not escape the function.
-- Keep immutable patterns where they improve correctness, but do not use them automatically in high-volume code without considering allocation cost.
-
-#### Backend code
-
-- Avoid blocking the event loop with heavy CPU work.
-- Move heavy CPU-bound work to worker threads, queues, or separate processes when needed.
-- Avoid reading large files fully into memory when streaming is suitable.
-- Avoid parsing the same large JSON payload repeatedly.
-- Reuse clients, pools, and long-lived resources instead of recreating them per operation.
-- Avoid excessive synchronous logging in high-throughput paths.
-
-#### Validation and errors
-
-- Avoid using exceptions as normal control flow.
-- Validate at system boundaries instead of repeatedly validating the same trusted data deep inside hot paths.
-- Avoid repeated deep validation of objects that were already validated.
-- Avoid constructing expensive error messages unless they are actually needed.
-- Use the most performant formula instead of the most readable or usual one.
-
-#### Approval Rule
-
-Before accepting a performance-sensitive change, verify:
-
-- The algorithmic complexity is appropriate.
-- There are no avoidable array or object copies.
-- There are no avoidable allocations inside critical loops.
-- Repeated lookups use the right data structure.
-- Buffers are reused where appropriate.
-- Async work is not accidentally serialized.
-- Parallel async work has a safe concurrency limit when needed.
-- Numerical code avoids unnecessary expensive operations.
-- The implementation remains readable enough to maintain.
-- Any performance-motivated complexity is justified by the code path.
-
-### Reporting Rules
-
-For each finding, include:
-
-1. severity:
-    - `P0`: correctness blocker;
-    - `P1`: likely correctness bug;
-    - `P2`: edge-case correctness issue or numerical robustness issue;
-    - `P3`: minor robustness or meaningful performance issue;
-2. exact file, function, line, or smallest identifiable location;
-3. explanation of the bug;
-4. why it matters physically, mathematically, numerically, algorithmically, or operationally;
-5. concrete fix;
-6. minimal test or scenario that would fail before the fix.
+Missing routine input validation is not a finding. Read “Validation Policy” first. An exported helper must work over its documented domain and must not hang, crash, or allocate without bound outside it; that does not require it to reject every invalid argument.
 
 Do not report:
 
-- style-only issues;
-- naming-only issues;
-- missing or removed input validation, in any form, outside the two cases the "Validation Rules" section allows;
-- formatting;
-- comments or documentation wording unless it directly causes incorrect interpretation of a public result;
-- test organization;
-- dependency choices;
-- API design preferences;
-- harmless micro-optimizations;
-- known deliberate trade-offs already documented by the project;
-- issues that require changing the documented contract without a correctness bug.
+- style, naming, formatting, or test-organization preferences;
+- documentation wording unless it causes a public result to be interpreted incorrectly;
+- missing or deliberately removed validation outside the two allowed validation cases;
+- dependency or API-design preferences without a demonstrated bug;
+- speculative alternatives, harmless micro-optimizations, or documented trade-offs;
+- pre-existing issues unrelated to the change.
 
-## Commit Message Guidelines
+### Reporting Findings
 
-Commit messages must be precise, English, and easy to scan.
+Order findings by severity:
 
-### Message Structure
+- `P0`: catastrophic correctness failure, data loss, or process-wide failure on a supported path.
+- `P1`: likely correctness or lifecycle bug in normal supported use.
+- `P2`: edge-case correctness or meaningful numerical robustness issue.
+- `P3`: minor robustness issue or material performance/memory issue.
 
-Assemble every commit message the same way, in this order:
+For each finding, provide:
 
-1. A single subject line.
-2. One blank line, only when a body is present.
-3. A required body of one or more paragraphs without break lines.
-4. One blank line before the trailers.
-5. A `Co-Authored-By` trailer identifying the agent that authored the change (name + email).
+1. severity and a concise title;
+2. the exact file, symbol, and smallest useful line location;
+3. the failing scenario and code evidence;
+4. why it matters physically, mathematically, numerically, or operationally;
+5. a concrete fix;
+6. the minimal regression test that fails before the fix.
 
-Concretely, the message follows this shape:
+If there are no actionable findings, say so explicitly and mention any verification gap or residual risk. Do not inflate review output with non-findings.
 
-```
-<imperative subject in lowercase>
+## Git and Commit Workflow
 
-<required body explaining why, side effects, and trade-offs>
+For every completed task that changes tracked files, create a local commit unless the user explicitly says not to commit. Do not create empty commits for review-only or analysis-only tasks.
 
-Co-Authored-By: Agent's name <GitHub agent's email>
-```
+Before committing:
 
-- Separate the subject, body, and trailer block with exactly one blank line each. Do not add a blank line before the subject.
-- Wrap body paragraphs at a readable width and use `-` bullets when listing several independent effects.
+- Inspect `git status --short`.
+- Review the unstaged diff and confirm every changed line is intentional.
+- Stage task files explicitly by path; never rely on `git add .` or `git add -A`.
+- Inspect `git diff --staged`.
+- Commit only after relevant checks pass.
+- Follow any user-requested commit granularity, such as one commit per independent review comment.
 
-### Writing The Message Without Corrupting It on Windows
+Authorization boundaries:
 
-A multi-line message passed inline to `git commit` is routinely mangled by shell quoting. The recurring failure is a PowerShell here-string (`-m @'...'@`) used from a POSIX shell, which turns the subject into a literal `@` and appends a stray `@` at the end.
+- A request to commit does not authorize a push.
+- A request to fix review comments does not authorize resolving remote threads.
+- Pushes, PR creation/updates, comments, and remote thread resolution each require explicit authorization.
+- Never amend, squash, rebase, or rewrite existing commits unless explicitly requested.
+- Preserve and leave unstaged all unrelated user changes.
 
-- Write the message to a temporary file and commit with `git commit -F <file>`. This is the default and works identically in every shell.
-- Write that file with the `Write` tool, or with a quoted heredoc (`<<'EOF'`) in Bash. Never mix a PowerShell here-string with the Bash tool, or a Bash heredoc with the PowerShell tool.
-- Keep the temporary file out of the repository: put it in the scratchpad or temp directory, never in the working tree.
-- Reserve `-m` for a single-line, body-less message, and only when it contains no quotes, backticks, `$`, or `@`.
-- After committing, run `git log -1 --format=%B` and read the message back. A subject that is not the intended sentence means the quoting failed.
-- If the message came out wrong, do not amend: it violates the no-rewrite rule below. Report the mangled message to the user and let them decide.
+### Commit Messages
 
-### Subject And Body Rules
+Write precise English commit messages with:
 
-- Use lowercase text, except for acronyms, proper nouns, package names, and file names.
-- Start the subject directly with a present-tense imperative verb such as `implement`, `fix`, `improve`, `update`, `use`, `remove`, `rename`, or `refactor`.
-- Do not prefix the subject with Conventional Commit-style labels such as `feat:`, `fix:`, `perf:`, `docs:`, `refactor:`, `test:`, or scoped variants such as `feat(image):`.
-- Keep the subject concise and specific; prefer 72 characters or fewer when practical.
-- Do not end the subject with a period.
-- Describe the user-visible or technical effect, not the amount of work.
-- Prefer one logical change per commit.
-- Avoid vague subjects such as `fix bug`, `update code`, `changes`, `misc`, `cleanup`, `final`, or `wip`.
-- Do not mention implementation noise unless it is relevant to the change.
-- Add a commit body when the reason, trade-off, migration step, or behavior change is not obvious from the subject.
-- In the body, explain why the change was made and mention important side effects, limitations, or follow-up work.
-- Reference issues, tickets, or follow-up tasks when applicable.
-- Mention breaking changes explicitly.
+1. an imperative subject, normally lowercase, preferably no more than 72 characters and without a trailing period;
+2. exactly one blank line;
+3. a required body, without break lines, explaining why the change exists and any important side effects, limitations, or trade-offs;
+4. exactly one blank line;
+5. a `Co-Authored-By: Name <email>` trailer for the authoring agent.
 
-## After Finishing
+Do not use Conventional Commit prefixes. Avoid vague subjects such as `fix bug`, `update code`, `changes`, `misc`, `cleanup`, `final`, or `wip`. Mention breaking changes explicitly.
 
-After the change is complete:
+Wrap body paragraphs at a readable width and use `-` bullets for several independent effects.
 
-- Always create a commit for the completed task unless the user explicitly asks not to commit.
-- Commit only the changes made for the current task.
-- Do not include unrelated edits, incidental formatting, generated files, debug logs, temporary files, or local-only configuration.
-- Inspect the final state with `git status --short` before staging.
-- Review the final diff with `git diff` and confirm every changed line belongs to the task.
-- Stage files explicitly by path. Avoid broad staging commands such as `git add .` unless every changed file has been reviewed and belongs to the task.
-- Before committing, inspect staged changes with `git diff --staged`.
-- Do not amend, squash, rebase, or rewrite existing commits unless the task explicitly requests it.
-- If verification could not be fully completed because of environment limits, the commit message may still be created for the finished change, but the final response must list the skipped or failed verification command and the reason.
-- If unresolved errors remain, do not commit. Explain what is blocking the commit and which files are affected.
+On Windows and across mixed shells:
+
+- Write the complete message to a temporary file outside the repository and commit with `git commit -F <file>`.
+- Use the active environment's file-writing mechanism or quoting syntax; never mix PowerShell here-strings with Bash or Bash heredocs with PowerShell.
+- Do not pass a multiline message inline with `-m`.
+- Remove the temporary file after the commit.
+- Read the result back with `git log -1 --format=%B`.
+- If quoting corrupts the message, do not amend automatically; report it and let the user decide.
+
+After committing, inspect `git status --short --branch` and report the commit hash, verification performed, skipped checks, and whether remote state was unchanged.

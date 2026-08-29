@@ -1,8 +1,8 @@
 import { expect, describe, test } from 'bun:test'
 // oxfmt-ignore
-import { CLIENT, type Client, DEFAULT_CAMERA, DEFAULT_COVER, DEFAULT_DOME, DEFAULT_FLAT_PANEL, DEFAULT_FOCUSER, DEFAULT_MOUNT, DEFAULT_POWER, DEFAULT_ROTATOR, DEFAULT_WHEEL, type Cover, type Device, type FlatPanel, type Focuser, type Power, type Rotator, type Wheel, DeviceInterfaceType, type Camera, isDome, type SafetyMonitor } from '../../../src/devices/indi/device'
+import { CLIENT, type Client, DEFAULT_CAMERA, DEFAULT_COVER, DEFAULT_DOME, DEFAULT_FLAT_PANEL, DEFAULT_FOCUSER, DEFAULT_MOUNT, DEFAULT_POWER, DEFAULT_ROTATOR, DEFAULT_WEATHER, DEFAULT_WHEEL, type Cover, type Device, type FlatPanel, type Focuser, type Power, type Rotator, type Wheel, DeviceInterfaceType, type Camera, isDome, isWeather, type SafetyMonitor } from '../../../src/devices/indi/device'
 import { PI, PIOVERFOUR, PIOVERTWO, TAU } from '../../../src/core/constants'
-import { CameraManager, CoverManager, DomeManager, FlatPanelManager, FocuserManager, MountManager, PowerManager, RotatorManager, SafetyMonitorManager, WheelManager, type DeviceHandler } from '../../../src/devices/indi/manager'
+import { CameraManager, CoverManager, DomeManager, FlatPanelManager, FocuserManager, GuideOutputManager, MountManager, PowerManager, RotatorManager, SafetyMonitorManager, WeatherManager, WheelManager, type DeviceHandler } from '../../../src/devices/indi/manager'
 import type { DefLightVector, DefNumber, DefNumberVector, DefSwitch, DefSwitchVector, DefText, DefTextVector, SetLightVector } from '../../../src/devices/indi/types'
 
 const client: Client = {
@@ -19,14 +19,17 @@ const client: Client = {
 
 const numberCommands: Parameters<Client['sendNumber']>[0][] = []
 const switchCommands: Parameters<Client['sendSwitch']>[0][] = []
+const commands: [type: 'number' | 'switch', name: string, elements: Record<string, number | boolean>][] = []
 const recordingClient: Client = {
 	...client,
 	id: 'recording',
 	sendNumber(vector) {
 		numberCommands.push(vector)
+		commands.push(['number', vector.name, vector.elements])
 	},
 	sendSwitch(vector) {
 		switchCommands.push(vector)
+		commands.push(['switch', vector.name, vector.elements])
 	},
 }
 
@@ -39,8 +42,8 @@ function setupDome(manager: DomeManager) {
 	return dome
 }
 
-function defSwitch(name: string, value: boolean): DefSwitch {
-	return { name, value }
+function defSwitch(name: string, value: boolean, label?: string): DefSwitch {
+	return label === undefined ? { name, value } : { name, value, label }
 }
 
 function defNumber(name: string, value: number, min = 0, max = 360, step = 1): DefNumber {
@@ -64,6 +67,39 @@ function driverInfo(device: string, interfaceType: DeviceInterfaceType): DefText
 function safetyStatus(device: string, state: DefLightVector['state']): DefLightVector {
 	return { device, name: 'SAFETY_STATUS', state, elements: { SAFETY: { name: 'SAFETY', value: state } } }
 }
+
+test('GuideOutputManager remains pulsing until both timed-guide axes finish', () => {
+	const mountManager = new MountManager()
+	const mount = structuredClone(DEFAULT_MOUNT)
+	mount.id = Bun.randomUUIDv7()
+	mount.name = 'Mount'
+	Object.defineProperty(mount, CLIENT, { value: client })
+	mountManager.add(mount)
+
+	const manager = new GuideOutputManager(mountManager)
+	const timedGuide = (name: 'TELESCOPE_TIMED_GUIDE_NS' | 'TELESCOPE_TIMED_GUIDE_WE', state: DefNumberVector['state']): DefNumberVector => ({
+		device: mount.name,
+		name,
+		permission: 'rw',
+		state,
+		elements: {},
+	})
+
+	manager.numberVector(client, timedGuide('TELESCOPE_TIMED_GUIDE_NS', 'Busy'), 'defNumberVector')
+	manager.numberVector(client, timedGuide('TELESCOPE_TIMED_GUIDE_WE', 'Busy'), 'defNumberVector')
+
+	const guideOutput = manager.get(client, mount.name)!
+	expect(guideOutput.pulsing).toBeTrue()
+	expect(mount.pulsing).toBeTrue()
+
+	manager.numberVector(client, timedGuide('TELESCOPE_TIMED_GUIDE_NS', 'Ok'), 'setNumberVector')
+	expect(guideOutput.pulsing).toBeTrue()
+	expect(mount.pulsing).toBeTrue()
+
+	manager.numberVector(client, timedGuide('TELESCOPE_TIMED_GUIDE_WE', 'Ok'), 'setNumberVector')
+	expect(guideOutput.pulsing).toBeFalse()
+	expect(mount.pulsing).toBeFalse()
+})
 
 test('SafetyMonitorManager creates only AUXILIARY native INDI standalones', () => {
 	const manager = new SafetyMonitorManager({ get: () => undefined })
@@ -627,5 +663,869 @@ describe('del property', () => {
 		expect(power.dc).toEqual(DEFAULT_POWER.dc)
 		expect(power.hasPowerCycle).toBe(DEFAULT_POWER.hasPowerCycle)
 		expect(power.voltage).toEqual(DEFAULT_POWER.voltage)
+	})
+})
+
+function weatherDevice(manager: WeatherManager, name: string = 'Weather', interfaceType: DeviceInterfaceType = DeviceInterfaceType.WEATHER) {
+	manager.textVector(recordingClient, driverInfo(name, interfaceType), 'defTextVector')
+	return manager.get(recordingClient, name)!
+}
+
+function weatherParameters(device: string, elements: Record<string, DefNumber>): DefNumberVector {
+	return { device, name: 'WEATHER_PARAMETERS', permission: 'ro', state: 'Ok', elements }
+}
+
+describe('WeatherManager', () => {
+	test('creates the device from the interface bit alone, before any parameter', () => {
+		const manager = new WeatherManager()
+		const weather = weatherDevice(manager)
+
+		expect(weather).toBeDefined()
+		expect(weather.type).toBe('weather')
+		expect(isWeather(weather)).toBeTrue()
+		expect(weather.interfaces).toEqual(['weather'])
+		expect(manager.properties.get(weather)?.WEATHER_PARAMETERS).toBeUndefined()
+		expect(weather).not.toContainKey('cloudCover')
+		expect(manager.lastUpdatedAt(weather)).toBeUndefined()
+	})
+
+	test('reports weather alongside the other interfaces of a multi-interface driver', () => {
+		const manager = new WeatherManager()
+		const weather = weatherDevice(manager, 'Station', DeviceInterfaceType.WEATHER | DeviceInterfaceType.DOME)
+
+		expect(weather.interfaces).toEqual(['dome', 'weather'])
+		expect(weather.hardwareId).toBe(Bun.MD5.hash(`${recordingClient.id}:Station`, 'hex'))
+	})
+
+	test('maps every sensor and leaves unreported ones absent', () => {
+		const manager = new WeatherManager()
+		const weather = weatherDevice(manager)
+
+		manager.numberVector(
+			recordingClient,
+			weatherParameters(weather.name, {
+				WEATHER_CLOUD_COVER: defNumber('WEATHER_CLOUD_COVER', 42, 0, 100),
+				WEATHER_DEW_POINT: defNumber('WEATHER_DEW_POINT', 4.5, -60, 60),
+				WEATHER_HUMIDITY: defNumber('WEATHER_HUMIDITY', 61, 0, 100),
+				WEATHER_PRESSURE: defNumber('WEATHER_PRESSURE', 1008.4, 0, 2000),
+				WEATHER_RAIN_HOUR: defNumber('WEATHER_RAIN_HOUR', 1.5, 0, 500),
+				WEATHER_SKY_BRIGHTNESS: defNumber('WEATHER_SKY_BRIGHTNESS', 0.01, 0, 1000),
+				WEATHER_SKY_QUALITY: defNumber('WEATHER_SKY_QUALITY', 20.8, 0, 25),
+				WEATHER_SKY_TEMPERATURE: defNumber('WEATHER_SKY_TEMPERATURE', -18.2, -100, 60),
+				WEATHER_STAR_FWHM: defNumber('WEATHER_STAR_FWHM', 3.1, 0, 60),
+				WEATHER_TEMPERATURE: defNumber('WEATHER_TEMPERATURE', 12.25, -60, 60),
+				WEATHER_WIND_GUST: defNumber('WEATHER_WIND_GUST', 9.4, 0, 100),
+				WEATHER_WIND_SPEED: defNumber('WEATHER_WIND_SPEED', 5.2, 0, 100),
+			}),
+			'defNumberVector',
+		)
+
+		expect(weather.cloudCover).toBe(42)
+		expect(weather.dewPoint).toBe(4.5)
+		expect(weather.humidity).toBe(61)
+		expect(weather.pressure).toBe(1008.4)
+		expect(weather.rainRate).toBe(1.5)
+		expect(weather.skyBrightness).toBe(0.01)
+		expect(weather.skyQuality).toBe(20.8)
+		expect(weather.skyTemperature).toBe(-18.2)
+		expect(weather.starFWHM).toBe(3.1)
+		expect(weather.temperature).toBe(12.25)
+		expect(weather.hasThermometer).toBeTrue()
+		expect(weather.windGust).toBe(9.4)
+		expect(weather.windSpeed).toBe(5.2)
+
+		// Not reported by this driver.
+		expect(weather).not.toContainKey('windDirection')
+	})
+
+	test('accepts the alias element names used by common drivers', () => {
+		const manager = new WeatherManager()
+		const weather = weatherDevice(manager)
+
+		const parameters = weatherParameters(weather.name, {
+			WEATHER_CLOUD: defNumber('WEATHER_CLOUD', 33, 0, 100),
+			WEATHER_DEWPOINT: defNumber('WEATHER_DEWPOINT', 2.5, -60, 60),
+			WEATHER_RELATIVE_HUMIDITY: defNumber('WEATHER_RELATIVE_HUMIDITY', 70, 0, 100),
+			WEATHER_RAIN_RATE: defNumber('WEATHER_RAIN_RATE', 12, 0, 500),
+			WEATHER_SQM: defNumber('WEATHER_SQM', 19.5, 0, 25),
+			WEATHER_SEEING: defNumber('WEATHER_SEEING', 4.2, 0, 60),
+			WEATHER_UNMAPPED: defNumber('WEATHER_UNMAPPED', 7, 0, 100),
+		})
+
+		manager.vector(recordingClient, parameters, 'defNumberVector')
+		manager.numberVector(recordingClient, parameters, 'defNumberVector')
+
+		expect(weather.cloudCover).toBe(33)
+		expect(weather.dewPoint).toBe(2.5)
+		expect(weather.humidity).toBe(70)
+		expect(weather.rainRate).toBe(12)
+		expect(weather.skyQuality).toBe(19.5)
+		expect(weather.starFWHM).toBe(4.2)
+
+		// An unmapped element stays reachable as a raw property but never reaches the typed interface.
+		expect(manager.properties.get(weather)!.WEATHER_PARAMETERS.elements.WEATHER_UNMAPPED.value).toBe(7)
+	})
+
+	test('converts wind direction from degrees to normalized radians', () => {
+		const manager = new WeatherManager()
+		const weather = weatherDevice(manager)
+
+		manager.numberVector(recordingClient, weatherParameters(weather.name, { WEATHER_WIND_DIRECTION: defNumber('WEATHER_WIND_DIRECTION', 90) }), 'defNumberVector')
+		expect(weather.windDirection).toBeCloseTo(PIOVERTWO, 12)
+
+		manager.numberVector(recordingClient, weatherParameters(weather.name, { WEATHER_WIND_DIRECTION: defNumber('WEATHER_WIND_DIRECTION', 360) }), 'setNumberVector')
+		expect(weather.windDirection).toBe(0)
+
+		manager.numberVector(recordingClient, weatherParameters(weather.name, { WEATHER_WIND_DIRECTION: defNumber('WEATHER_WIND_DIRECTION', -90) }), 'setNumberVector')
+		expect(weather.windDirection).toBeCloseTo(TAU - PIOVERTWO, 12)
+	})
+
+	test('never clamps a reading to the alarm thresholds carried by min/max', () => {
+		const manager = new WeatherManager()
+		const weather = weatherDevice(manager)
+
+		// INDI addParameter(name, label, min, max, percentWarning): min/max are the alarm limits, so a
+		// reading outside them is exactly the one that must survive intact.
+		manager.numberVector(
+			recordingClient,
+			weatherParameters(weather.name, {
+				WEATHER_WIND_SPEED: defNumber('WEATHER_WIND_SPEED', 34.5, 0, 20),
+				WEATHER_TEMPERATURE: defNumber('WEATHER_TEMPERATURE', -12, 0, 40),
+			}),
+			'defNumberVector',
+		)
+
+		expect(weather.windSpeed).toBe(34.5)
+		expect(weather.temperature).toBe(-12)
+	})
+
+	test('notifies only the field that changed', () => {
+		const manager = new WeatherManager()
+		const weather = weatherDevice(manager)
+		const updates: string[] = []
+
+		manager.addHandler({ added: () => {}, removed: () => {}, updated: (_, property) => updates.push(property) })
+
+		manager.numberVector(recordingClient, weatherParameters(weather.name, { WEATHER_HUMIDITY: defNumber('WEATHER_HUMIDITY', 50, 0, 100), WEATHER_PRESSURE: defNumber('WEATHER_PRESSURE', 1000, 0, 2000) }), 'defNumberVector')
+		expect(updates).toEqual(['humidity', 'pressure'])
+
+		updates.length = 0
+		manager.numberVector(recordingClient, weatherParameters(weather.name, { WEATHER_HUMIDITY: defNumber('WEATHER_HUMIDITY', 50, 0, 100), WEATHER_PRESSURE: defNumber('WEATHER_PRESSURE', 1001, 0, 2000) }), 'setNumberVector')
+		expect(updates).toEqual(['pressure'])
+	})
+
+	test('clears the sensors a replacement definition no longer declares', () => {
+		const manager = new WeatherManager()
+		const weather = weatherDevice(manager)
+		const updates: string[] = []
+
+		manager.numberVector(
+			recordingClient,
+			weatherParameters(weather.name, {
+				WEATHER_TEMPERATURE: defNumber('WEATHER_TEMPERATURE', 12.25, -60, 60),
+				WEATHER_HUMIDITY: defNumber('WEATHER_HUMIDITY', 61, 0, 100),
+				WEATHER_PRESSURE: defNumber('WEATHER_PRESSURE', 1008.4, 0, 2000),
+			}),
+			'defNumberVector',
+		)
+
+		expect(weather.humidity).toBe(61)
+		expect(manager.updatedAt(weather, 'humidity')).toBeGreaterThan(0)
+
+		manager.addHandler({ added: () => {}, removed: () => {}, updated: (_, property) => updates.push(property) })
+
+		// The driver redefines the vector without its hygrometer, so the reading and its freshness must go
+		// with it instead of outliving the definition that produced them.
+		manager.numberVector(
+			recordingClient,
+			weatherParameters(weather.name, {
+				WEATHER_TEMPERATURE: defNumber('WEATHER_TEMPERATURE', 12.25, -60, 60),
+				WEATHER_PRESSURE: defNumber('WEATHER_PRESSURE', 1009.1, 0, 2000),
+			}),
+			'defNumberVector',
+		)
+
+		expect(weather.humidity).toBeUndefined()
+		expect(manager.updatedAt(weather, 'humidity')).toBeUndefined()
+		expect(updates).toEqual(['humidity', 'pressure'])
+
+		// The surviving sensors keep their readings and freshness.
+		expect(weather.temperature).toBe(12.25)
+		expect(weather.hasThermometer).toBeTrue()
+		expect(weather.pressure).toBe(1009.1)
+		expect(manager.updatedAt(weather, 'temperature')).toBeGreaterThan(0)
+
+		// A set vector is a partial update: reporting one parameter must not withdraw the others.
+		updates.length = 0
+		manager.numberVector(recordingClient, weatherParameters(weather.name, { WEATHER_PRESSURE: defNumber('WEATHER_PRESSURE', 1010, 0, 2000) }), 'setNumberVector')
+
+		expect(weather.temperature).toBe(12.25)
+		expect(weather.pressure).toBe(1010)
+		expect(updates).toEqual(['pressure'])
+
+		// Dropping the thermometer restores the capability default rather than leaving a stale reading.
+		manager.numberVector(recordingClient, weatherParameters(weather.name, { WEATHER_PRESSURE: defNumber('WEATHER_PRESSURE', 1010, 0, 2000) }), 'defNumberVector')
+
+		expect(weather.hasThermometer).toBeFalse()
+		expect(weather.temperature).toBe(0)
+		expect(manager.updatedAt(weather, 'temperature')).toBeUndefined()
+	})
+
+	test('ignores the placeholder values of a Busy definition', () => {
+		const manager = new WeatherManager()
+		const weather = weatherDevice(manager)
+
+		// The Firmata adapter defines its weather vector Busy with zero placeholders before the first
+		// hardware reply, then settles it to Idle on the first real sample.
+		const placeholders = weatherParameters(weather.name, {
+			WEATHER_TEMPERATURE: defNumber('WEATHER_TEMPERATURE', 0, -55, 125),
+			WEATHER_HUMIDITY: defNumber('WEATHER_HUMIDITY', 0, 0, 100),
+			WEATHER_PRESSURE: defNumber('WEATHER_PRESSURE', 0, 0, 2000),
+		})
+
+		placeholders.state = 'Busy'
+		manager.numberVector(recordingClient, placeholders, 'defNumberVector')
+
+		expect(weather).not.toContainKey('humidity')
+		expect(weather).not.toContainKey('pressure')
+		expect(weather.hasThermometer).toBeFalse()
+		expect(manager.updatedAt(weather, 'temperature')).toBeUndefined()
+		expect(manager.lastUpdatedAt(weather)).toBeUndefined()
+
+		const readings = weatherParameters(weather.name, {
+			WEATHER_TEMPERATURE: defNumber('WEATHER_TEMPERATURE', 21.5, -55, 125),
+			WEATHER_HUMIDITY: defNumber('WEATHER_HUMIDITY', 47, 0, 100),
+			WEATHER_PRESSURE: defNumber('WEATHER_PRESSURE', 1011.8, 0, 2000),
+		})
+
+		readings.state = 'Idle'
+		manager.numberVector(recordingClient, readings, 'setNumberVector')
+
+		expect(weather.temperature).toBe(21.5)
+		expect(weather.humidity).toBe(47)
+		expect(weather.pressure).toBe(1011.8)
+		expect(weather.hasThermometer).toBeTrue()
+		expect(manager.updatedAt(weather, 'temperature')).toBeGreaterThan(0)
+	})
+
+	test('advances freshness even when the driver repeats a value', async () => {
+		const manager = new WeatherManager()
+		const weather = weatherDevice(manager)
+		const parameters = weatherParameters(weather.name, { WEATHER_TEMPERATURE: defNumber('WEATHER_TEMPERATURE', 10, -60, 60) })
+
+		manager.numberVector(recordingClient, parameters, 'defNumberVector')
+		const first = manager.updatedAt(weather, 'temperature')!
+		expect(first).toBeGreaterThan(0)
+		expect(manager.updatedAt(weather, 'humidity')).toBeUndefined()
+		expect(manager.lastUpdatedAt(weather)).toBe(first)
+
+		await Bun.sleep(5)
+		manager.numberVector(recordingClient, parameters, 'setNumberVector')
+
+		expect(weather.temperature).toBe(10)
+		expect(manager.updatedAt(weather, 'temperature')!).toBeGreaterThan(first)
+	})
+
+	test('does not date a failed report as an observation', async () => {
+		const manager = new WeatherManager()
+		const weather = weatherDevice(manager)
+
+		// The driver's very first hardware read fails, so it applies the vector in Alert with the declared
+		// defaults. The declaration counts, the placeholder reading does not.
+		const failed = weatherParameters(weather.name, { WEATHER_TEMPERATURE: defNumber('WEATHER_TEMPERATURE', 0, -60, 60) })
+		failed.state = 'Alert'
+		manager.numberVector(recordingClient, failed, 'defNumberVector')
+
+		expect(weather.hasThermometer).toBeTrue()
+		expect(manager.updatedAt(weather, 'temperature')).toBeUndefined()
+		expect(manager.lastUpdatedAt(weather)).toBeUndefined()
+		expect(manager.elapsedSince(weather, 'temperature')).toBeUndefined()
+
+		const parameters = weatherParameters(weather.name, { WEATHER_TEMPERATURE: defNumber('WEATHER_TEMPERATURE', 10, -60, 60) })
+		manager.numberVector(recordingClient, parameters, 'setNumberVector')
+
+		const first = manager.updatedAt(weather, 'temperature')!
+		expect(weather.temperature).toBe(10)
+		expect(first).toBeGreaterThan(0)
+
+		await Bun.sleep(5)
+
+		// A later failure restates the previous readings, and the driver retries every five seconds: the
+		// value survives, but the sensor did not report and its age has to keep growing.
+		failed.elements.WEATHER_TEMPERATURE.value = 11
+		manager.numberVector(recordingClient, failed, 'setNumberVector')
+
+		expect(weather.temperature).toBe(11)
+		expect(manager.updatedAt(weather, 'temperature')).toBe(first)
+		expect(manager.lastUpdatedAt(weather)).toBe(first)
+		expect(manager.elapsedSince(weather, 'temperature')!).toBeGreaterThanOrEqual(5)
+
+		// The next successful read dates it again.
+		manager.numberVector(recordingClient, parameters, 'setNumberVector')
+
+		expect(manager.updatedAt(weather, 'temperature')!).toBeGreaterThan(first)
+	})
+
+	test('measures sensor age on the monotonic clock', async () => {
+		const manager = new WeatherManager()
+		const weather = weatherDevice(manager)
+		const parameters = weatherParameters(weather.name, { WEATHER_TEMPERATURE: defNumber('WEATHER_TEMPERATURE', 10, -60, 60) })
+
+		expect(manager.elapsedSince(weather, 'temperature')).toBeUndefined()
+		expect(manager.lastElapsedSince(weather)).toBeUndefined()
+
+		const now = Date.now
+
+		try {
+			Date.now = () => now() - 3_600_000
+			manager.numberVector(recordingClient, parameters, 'defNumberVector')
+		} finally {
+			Date.now = now
+		}
+
+		expect(manager.updatedAt(weather, 'humidity')).toBeUndefined()
+		expect(manager.elapsedSince(weather, 'humidity')).toBeUndefined()
+
+		expect(manager.updatedAt(weather, 'temperature')!).toBeLessThan(Date.now() - 3_000_000)
+		expect(manager.elapsedSince(weather, 'temperature')!).toBeLessThan(1000)
+		expect(manager.lastElapsedSince(weather)!).toBeLessThan(1000)
+
+		await Bun.sleep(5)
+
+		expect(manager.elapsedSince(weather, 'temperature')!).toBeGreaterThanOrEqual(5)
+		expect(manager.lastElapsedSince(weather)!).toBeGreaterThanOrEqual(5)
+	})
+
+	test('dates the newest report by the monotonic clock', async () => {
+		const manager = new WeatherManager()
+		const weather = weatherDevice(manager)
+
+		manager.numberVector(recordingClient, weatherParameters(weather.name, { WEATHER_TEMPERATURE: defNumber('WEATHER_TEMPERATURE', 10, -60, 60), WEATHER_HUMIDITY: defNumber('WEATHER_HUMIDITY', 50, 0, 100) }), 'defNumberVector')
+
+		const first = manager.updatedAt(weather, 'temperature')!
+		expect(manager.lastUpdatedAt(weather)).toBe(first)
+
+		await Bun.sleep(5)
+
+		// The system clock is corrected an hour backward and only the hygrometer reports afterwards: the
+		// temperature keeps the numerically larger pre-correction epoch even though it is the older
+		// reading.
+		const now = Date.now
+
+		try {
+			Date.now = () => now() - 3_600_000
+			manager.numberVector(recordingClient, weatherParameters(weather.name, { WEATHER_HUMIDITY: defNumber('WEATHER_HUMIDITY', 51, 0, 100) }), 'setNumberVector')
+		} finally {
+			Date.now = now
+		}
+
+		const humidity = manager.updatedAt(weather, 'humidity')!
+		expect(humidity).toBeLessThan(first)
+		expect(manager.lastUpdatedAt(weather)).toBe(humidity)
+	})
+
+	test('accepts a partial parameter vector from an auxiliary sensor board', () => {
+		const manager = new WeatherManager()
+		const weather = weatherDevice(manager, 'Sensor', DeviceInterfaceType.WEATHER | DeviceInterfaceType.AUXILIARY)
+
+		manager.numberVector(
+			recordingClient,
+			weatherParameters(weather.name, {
+				WEATHER_TEMPERATURE: defNumber('WEATHER_TEMPERATURE', 21.5, -55, 125),
+				WEATHER_HUMIDITY: defNumber('WEATHER_HUMIDITY', 44.5, 0, 100),
+				WEATHER_PRESSURE: defNumber('WEATHER_PRESSURE', 1002.25, 0, 2000),
+			}),
+			'defNumberVector',
+		)
+
+		expect(weather.interfaces).toEqual(['weather'])
+		expect(weather.temperature).toBe(21.5)
+		expect(weather.hasThermometer).toBeTrue()
+		expect(weather.humidity).toBe(44.5)
+		expect(weather.pressure).toBe(1002.25)
+		expect(weather).not.toContainKey('windSpeed')
+	})
+
+	test('reflects and commands the update and average periods', () => {
+		const manager = new WeatherManager()
+		const weather = weatherDevice(manager)
+
+		expect(weather.updatePeriod).toBeUndefined()
+		expect(manager.setUpdatePeriod(weather, 30)).toBeFalse()
+		expect(manager.setAveragePeriod(weather, 1)).toBeFalse()
+
+		manager.numberVector(recordingClient, { device: weather.name, name: 'WEATHER_UPDATE', permission: 'rw', state: 'Ok', elements: { PERIOD: defNumber('PERIOD', 60, 1, 3600) } }, 'defNumberVector')
+		expect(weather.updatePeriod).toEqual({ value: 60, min: 1, max: 3600, step: 1 })
+
+		manager.numberVector(recordingClient, { device: weather.name, name: 'WEATHER_AVERAGE_PERIOD', permission: 'rw', state: 'Ok', elements: { AVERAGE_PERIOD: defNumber('AVERAGE_PERIOD', 0.5, 0, 24) } }, 'defNumberVector')
+		expect(weather.averagePeriod).toBe(0.5)
+
+		numberCommands.length = 0
+		expect(manager.setUpdatePeriod(weather, 30)).toBeTrue()
+		expect(manager.setAveragePeriod(weather, 2)).toBeTrue()
+		expect(numberCommands).toEqual([
+			{ device: weather.name, name: 'WEATHER_UPDATE', elements: { PERIOD: 30 } },
+			{ device: weather.name, name: 'WEATHER_AVERAGE_PERIOD', elements: { AVERAGE_PERIOD: 2 } },
+		])
+
+		// A read-only redefinition withdraws the command.
+		manager.numberVector(recordingClient, { device: weather.name, name: 'WEATHER_UPDATE', permission: 'ro', state: 'Ok', elements: { PERIOD: defNumber('PERIOD', 60, 1, 3600) } }, 'defNumberVector')
+		expect(manager.setUpdatePeriod(weather, 30)).toBeFalse()
+	})
+
+	test('commands refresh only when the driver offers a writable switch', () => {
+		const manager = new WeatherManager()
+		const weather = weatherDevice(manager)
+
+		expect(manager.refresh(weather)).toBeFalse()
+
+		manager.switchVector(recordingClient, { device: weather.name, name: 'WEATHER_REFRESH', permission: 'rw', rule: 'AtMostOne', state: 'Idle', elements: { REFRESH: defSwitch('REFRESH', false) } }, 'defSwitchVector')
+
+		switchCommands.length = 0
+		expect(manager.refresh(weather)).toBeTrue()
+		expect(switchCommands).toEqual([{ device: weather.name, name: 'WEATHER_REFRESH', elements: { REFRESH: true } }])
+	})
+
+	test('clears the sensors on a named deletion but keeps the device', () => {
+		const manager = new WeatherManager()
+		const weather = weatherDevice(manager)
+
+		manager.numberVector(recordingClient, weatherParameters(weather.name, { WEATHER_TEMPERATURE: defNumber('WEATHER_TEMPERATURE', 9, -60, 60), WEATHER_HUMIDITY: defNumber('WEATHER_HUMIDITY', 80, 0, 100) }), 'defNumberVector')
+		manager.numberVector(recordingClient, { device: weather.name, name: 'WEATHER_UPDATE', permission: 'rw', state: 'Ok', elements: { PERIOD: defNumber('PERIOD', 60, 1, 3600) } }, 'defNumberVector')
+
+		manager.delProperty(recordingClient, { device: weather.name, name: 'WEATHER_PARAMETERS' })
+
+		expect(manager.has(recordingClient, weather.name)).toBeTrue()
+		expect(weather.humidity).toBeUndefined()
+		expect(weather.temperature).toBe(DEFAULT_WEATHER.temperature)
+		expect(weather.hasThermometer).toBeFalse()
+		expect(manager.lastUpdatedAt(weather)).toBeUndefined()
+		expect(weather.updatePeriod).toBeDefined()
+
+		manager.delProperty(recordingClient, { device: weather.name, name: 'WEATHER_UPDATE' })
+		expect(weather.updatePeriod).toBeUndefined()
+		expect(manager.setUpdatePeriod(weather, 30)).toBeFalse()
+
+		manager.delProperty(recordingClient, { device: weather.name })
+		expect(manager.has(recordingClient, weather.name)).toBeFalse()
+	})
+
+	test('does not turn a weather status light into a safety monitor', () => {
+		const manager = new WeatherManager()
+		const safetyManager = new SafetyMonitorManager(manager)
+		const weather = weatherDevice(manager)
+
+		const status: DefLightVector = { device: weather.name, name: 'WEATHER_STATUS', state: 'Alert', elements: { WEATHER_TEMPERATURE: { name: 'WEATHER_TEMPERATURE', value: 'Alert' } } }
+		safetyManager.lightVector(recordingClient, status, 'defLightVector')
+
+		expect(safetyManager.get(recordingClient, weather.name)).toBeUndefined()
+		expect(weather).not.toContainKey('safe')
+	})
+})
+
+describe('MountManager INDI alignment', () => {
+	function setupMount(manager: MountManager) {
+		const mount = structuredClone(DEFAULT_MOUNT)
+		mount.id = Bun.randomUUIDv7()
+		mount.name = 'Mount'
+		Object.defineProperty(mount, CLIENT, { value: recordingClient })
+		manager.add(mount)
+		numberCommands.length = 0
+		switchCommands.length = 0
+		commands.length = 0
+		return mount
+	}
+
+	function activeVector(device: string, value: boolean, permission: DefSwitchVector['permission'] = 'rw'): DefSwitchVector {
+		return { device, name: 'ALIGNMENT_SUBSYSTEM_ACTIVE', permission, rule: 'AtMostOne', state: 'Ok', elements: { 'ALIGNMENT SUBSYSTEM ACTIVE': defSwitch('ALIGNMENT SUBSYSTEM ACTIVE', value, 'Alignment Subsystem Active') } }
+	}
+
+	function pluginsVector(device: string, selected: string, permission: DefSwitchVector['permission'] = 'rw'): DefSwitchVector {
+		return {
+			device,
+			name: 'ALIGNMENT_SUBSYSTEM_MATH_PLUGINS',
+			permission,
+			rule: 'OneOfMany',
+			state: 'Ok',
+			elements: {
+				INBUILT_MATH_PLUGIN: defSwitch('INBUILT_MATH_PLUGIN', selected === 'INBUILT_MATH_PLUGIN', 'Inbuilt Math Plugin'),
+				'Nearest Math Plugin': defSwitch('Nearest Math Plugin', selected === 'Nearest Math Plugin', 'Nearest'),
+				'SVD Math Plugin': defSwitch('SVD Math Plugin', selected === 'SVD Math Plugin', 'SVD'),
+				'Custom Plugin': defSwitch('Custom Plugin', selected === 'Custom Plugin'),
+			},
+		}
+	}
+
+	function sizeVector(device: string, value: number): DefNumberVector {
+		return { device, name: 'ALIGNMENT_POINTSET_SIZE', permission: 'ro', state: 'Ok', elements: { ALIGNMENT_POINTSET_SIZE: defNumber('ALIGNMENT_POINTSET_SIZE', value, 0, 100000) } }
+	}
+
+	function setSizeVector(device: string, value: number) {
+		return { device, name: 'ALIGNMENT_POINTSET_SIZE', state: 'Ok', elements: { ALIGNMENT_POINTSET_SIZE: { name: 'ALIGNMENT_POINTSET_SIZE', value } } } as const
+	}
+
+	function pointerVector(device: string, permission: DefNumberVector['permission'] = 'rw'): DefNumberVector {
+		return { device, name: 'ALIGNMENT_POINTSET_CURRENT_ENTRY', permission, state: 'Ok', elements: { ALIGNMENT_POINTSET_CURRENT_ENTRY: defNumber('ALIGNMENT_POINTSET_CURRENT_ENTRY', 0, 0, 100000) } }
+	}
+
+	function actionVector(device: string, permission: DefSwitchVector['permission'] = 'rw'): DefSwitchVector {
+		return {
+			device,
+			name: 'ALIGNMENT_POINTSET_ACTION',
+			permission,
+			rule: 'OneOfMany',
+			state: 'Ok',
+			elements: {
+				APPEND: defSwitch('APPEND', true),
+				DELETE: defSwitch('DELETE', false),
+				CLEAR: defSwitch('CLEAR', false),
+				'LOAD DATABASE': defSwitch('LOAD DATABASE', false),
+				'SAVE DATABASE': defSwitch('SAVE DATABASE', false),
+			},
+		}
+	}
+
+	function commitVector(device: string, permission: DefSwitchVector['permission'] = 'rw'): DefSwitchVector {
+		return { device, name: 'ALIGNMENT_POINTSET_COMMIT', permission, rule: 'AtMostOne', state: 'Ok', elements: { ALIGNMENT_POINTSET_COMMIT: defSwitch('ALIGNMENT_POINTSET_COMMIT', false) } }
+	}
+
+	function initialiseVector(device: string, permission: DefSwitchVector['permission'] = 'rw'): DefSwitchVector {
+		return { device, name: 'ALIGNMENT_SUBSYSTEM_MATH_PLUGIN_INITIALISE', permission, rule: 'AtMostOne', state: 'Ok', elements: { ALIGNMENT_SUBSYSTEM_MATH_PLUGIN_INITIALISE: defSwitch('ALIGNMENT_SUBSYSTEM_MATH_PLUGIN_INITIALISE', false) } }
+	}
+
+	function setupAlignment(manager: MountManager, size = 0) {
+		const mount = setupMount(manager)
+
+		manager.numberVector(recordingClient, sizeVector(mount.name, size), 'defNumberVector')
+		manager.numberVector(recordingClient, pointerVector(mount.name), 'defNumberVector')
+		manager.switchVector(recordingClient, actionVector(mount.name), 'defSwitchVector')
+		manager.switchVector(recordingClient, commitVector(mount.name), 'defSwitchVector')
+		manager.switchVector(recordingClient, activeVector(mount.name, true), 'defSwitchVector')
+		manager.switchVector(recordingClient, pluginsVector(mount.name, 'INBUILT_MATH_PLUGIN'), 'defSwitchVector')
+		manager.switchVector(recordingClient, initialiseVector(mount.name), 'defSwitchVector')
+
+		numberCommands.length = 0
+		switchCommands.length = 0
+		commands.length = 0
+
+		return mount
+	}
+
+	test('defaults to an unavailable subsystem', () => {
+		const manager = new MountManager()
+		const mount = setupMount(manager)
+
+		expect(mount.alignment).toEqual(DEFAULT_MOUNT.alignment)
+		expect(mount.alignment).not.toBe(DEFAULT_MOUNT.alignment)
+
+		manager.alignmentActive(mount, true)
+		manager.alignmentPlugin(mount, 'INBUILT_MATH_PLUGIN')
+		manager.alignmentInitialize(mount)
+		manager.alignmentClear(mount)
+		manager.alignmentSave(mount)
+		manager.alignmentLoad(mount)
+		manager.alignmentDeleteLastPoint(mount)
+
+		expect(commands).toBeEmpty()
+	})
+
+	test('tracks availability and the active switch', () => {
+		const manager = new MountManager()
+		const mount = setupMount(manager)
+		const updates: string[] = []
+		manager.addHandler({ added: () => {}, removed: () => {}, updated: (_, property) => updates.push(property) })
+
+		manager.switchVector(recordingClient, activeVector(mount.name, false), 'defSwitchVector')
+
+		expect(mount.alignment.available).toBeTrue()
+		expect(mount.alignment.active).toBeFalse()
+		expect(updates).toEqual(['alignment'])
+
+		manager.switchVector(recordingClient, { device: mount.name, name: 'ALIGNMENT_SUBSYSTEM_ACTIVE', state: 'Ok', elements: { 'ALIGNMENT SUBSYSTEM ACTIVE': { name: 'ALIGNMENT SUBSYSTEM ACTIVE', value: true } } }, 'setSwitchVector')
+		expect(mount.alignment.active).toBeTrue()
+
+		manager.switchVector(recordingClient, { device: mount.name, name: 'ALIGNMENT_SUBSYSTEM_ACTIVE', state: 'Ok', elements: { 'ALIGNMENT SUBSYSTEM ACTIVE': { name: 'ALIGNMENT SUBSYSTEM ACTIVE', value: false } } }, 'setSwitchVector')
+		expect(mount.alignment.active).toBeFalse()
+	})
+
+	test('never lets the any-switch-on fallback override an explicit off', () => {
+		const manager = new MountManager()
+		const mount = setupMount(manager)
+
+		manager.switchVector(recordingClient, { device: mount.name, name: 'ALIGNMENT_SUBSYSTEM_ACTIVE', permission: 'rw', rule: 'AtMostOne', state: 'Ok', elements: { 'ALIGNMENT SUBSYSTEM ACTIVE': defSwitch('ALIGNMENT SUBSYSTEM ACTIVE', false), SOMETHING_ELSE: defSwitch('SOMETHING_ELSE', true) } }, 'defSwitchVector')
+
+		expect(mount.alignment.available).toBeTrue()
+		expect(mount.alignment.active).toBeFalse()
+
+		manager.switchVector(recordingClient, { device: mount.name, name: 'ALIGNMENT_SUBSYSTEM_ACTIVE', permission: 'rw', rule: 'AtMostOne', state: 'Ok', elements: { RENAMED: defSwitch('RENAMED', true) } }, 'defSwitchVector')
+		expect(mount.alignment.active).toBeTrue()
+	})
+
+	test('commands the active switch through the element the driver defined', () => {
+		const manager = new MountManager()
+		const mount = setupMount(manager)
+
+		manager.switchVector(recordingClient, { device: mount.name, name: 'ALIGNMENT_SUBSYSTEM_ACTIVE', permission: 'rw', rule: 'AtMostOne', state: 'Ok', elements: { RENAMED: defSwitch('RENAMED', false) } }, 'defSwitchVector')
+		manager.alignmentActive(mount, true)
+
+		expect(switchCommands).toEqual([{ device: mount.name, name: 'ALIGNMENT_SUBSYSTEM_ACTIVE', elements: { RENAMED: true } }])
+
+		// The INDI member wins over any other advertised element.
+		manager.switchVector(recordingClient, activeVector(mount.name, false), 'defSwitchVector')
+		switchCommands.length = 0
+		manager.alignmentActive(mount, true)
+
+		expect(switchCommands).toEqual([{ device: mount.name, name: 'ALIGNMENT_SUBSYSTEM_ACTIVE', elements: { 'ALIGNMENT SUBSYSTEM ACTIVE': true } }])
+
+		// A deletion drops the remembered name along with the capability.
+		manager.delProperty(recordingClient, { device: mount.name, name: 'ALIGNMENT_SUBSYSTEM_ACTIVE' })
+		switchCommands.length = 0
+		manager.alignmentActive(mount, true)
+
+		expect(switchCommands).toBeEmpty()
+	})
+
+	test('reflects the advertised math plugins and the selected one', () => {
+		const manager = new MountManager()
+		const mount = setupMount(manager)
+
+		manager.switchVector(recordingClient, pluginsVector(mount.name, 'SVD Math Plugin'), 'defSwitchVector')
+
+		expect(mount.alignment.plugins).toEqual([
+			{ name: 'INBUILT_MATH_PLUGIN', label: 'Inbuilt Math Plugin' },
+			{ name: 'Nearest Math Plugin', label: 'Nearest' },
+			{ name: 'SVD Math Plugin', label: 'SVD' },
+			{ name: 'Custom Plugin', label: 'Custom Plugin' },
+		])
+		expect(mount.alignment.plugin).toBe('SVD Math Plugin')
+
+		manager.switchVector(
+			recordingClient,
+			{
+				device: mount.name,
+				name: 'ALIGNMENT_SUBSYSTEM_MATH_PLUGINS',
+				state: 'Ok',
+				elements: {
+					INBUILT_MATH_PLUGIN: { name: 'INBUILT_MATH_PLUGIN', value: false },
+					'Nearest Math Plugin': { name: 'Nearest Math Plugin', value: true },
+					'SVD Math Plugin': { name: 'SVD Math Plugin', value: false },
+					'Custom Plugin': { name: 'Custom Plugin', value: false },
+				},
+			},
+			'setSwitchVector',
+		)
+
+		expect(mount.alignment.plugin).toBe('Nearest Math Plugin')
+		expect(mount.alignment.plugins).toHaveLength(4)
+
+		manager.switchVector(
+			recordingClient,
+			{
+				device: mount.name,
+				name: 'ALIGNMENT_SUBSYSTEM_MATH_PLUGINS',
+				state: 'Ok',
+				elements: {
+					INBUILT_MATH_PLUGIN: { name: 'INBUILT_MATH_PLUGIN', value: false },
+					'Nearest Math Plugin': { name: 'Nearest Math Plugin', value: false },
+					'SVD Math Plugin': { name: 'SVD Math Plugin', value: false },
+					'Custom Plugin': { name: 'Custom Plugin', value: false },
+				},
+			},
+			'setSwitchVector',
+		)
+
+		expect(mount.alignment.plugin).toBeUndefined()
+	})
+
+	test('normalizes the point count and accepts it before the subsystem is announced', () => {
+		const manager = new MountManager()
+		const mount = setupMount(manager)
+
+		manager.numberVector(recordingClient, sizeVector(mount.name, 3), 'defNumberVector')
+
+		expect(mount.alignment.available).toBeFalse()
+		expect(mount.alignment.pointCount).toBe(3)
+
+		manager.numberVector(recordingClient, setSizeVector(mount.name, 2.9), 'setNumberVector')
+		expect(mount.alignment.pointCount).toBe(2)
+
+		manager.numberVector(recordingClient, setSizeVector(mount.name, -1), 'setNumberVector')
+		expect(mount.alignment.pointCount).toBe(0)
+
+		manager.numberVector(recordingClient, setSizeVector(mount.name, 4), 'setNumberVector')
+		manager.numberVector(recordingClient, setSizeVector(mount.name, Number.NaN), 'setNumberVector')
+		expect(mount.alignment.pointCount).toBe(4)
+	})
+
+	test('commands active, plugin and initialize without touching local state', () => {
+		const manager = new MountManager()
+		const mount = setupAlignment(manager)
+
+		manager.alignmentActive(mount, false)
+		manager.alignmentPlugin(mount, { name: 'SVD Math Plugin', label: 'SVD' })
+		manager.alignmentPlugin(mount, 'Custom Plugin')
+		manager.alignmentPlugin(mount, 'Unknown Plugin')
+		manager.alignmentInitialize(mount)
+
+		expect(switchCommands).toEqual([
+			{ device: mount.name, name: 'ALIGNMENT_SUBSYSTEM_ACTIVE', elements: { 'ALIGNMENT SUBSYSTEM ACTIVE': false } },
+			{ device: mount.name, name: 'ALIGNMENT_SUBSYSTEM_MATH_PLUGINS', elements: { 'SVD Math Plugin': true } },
+			{ device: mount.name, name: 'ALIGNMENT_SUBSYSTEM_MATH_PLUGINS', elements: { 'Custom Plugin': true } },
+			{ device: mount.name, name: 'ALIGNMENT_SUBSYSTEM_MATH_PLUGIN_INITIALISE', elements: { ALIGNMENT_SUBSYSTEM_MATH_PLUGIN_INITIALISE: true } },
+		])
+
+		expect(mount.alignment.active).toBeTrue()
+		expect(mount.alignment.plugin).toBe('INBUILT_MATH_PLUGIN')
+	})
+
+	test('deletes a point in pointer/action/commit/initialize order', () => {
+		const manager = new MountManager()
+		const mount = setupAlignment(manager, 3)
+
+		manager.alignmentDeletePoint(mount, 1)
+
+		expect(commands).toEqual([
+			['number', 'ALIGNMENT_POINTSET_CURRENT_ENTRY', { ALIGNMENT_POINTSET_CURRENT_ENTRY: 1 }],
+			['switch', 'ALIGNMENT_POINTSET_ACTION', { DELETE: true }],
+			['switch', 'ALIGNMENT_POINTSET_COMMIT', { ALIGNMENT_POINTSET_COMMIT: true }],
+			['switch', 'ALIGNMENT_SUBSYSTEM_MATH_PLUGIN_INITIALISE', { ALIGNMENT_SUBSYSTEM_MATH_PLUGIN_INITIALISE: true }],
+		])
+
+		expect(mount.alignment.pointCount).toBe(3)
+	})
+
+	test('rejects out-of-range and non-integer delete indices', () => {
+		const manager = new MountManager()
+		const mount = setupAlignment(manager, 3)
+
+		manager.alignmentDeletePoint(mount, -1)
+		manager.alignmentDeletePoint(mount, 3)
+		manager.alignmentDeletePoint(mount, 1.5)
+		manager.alignmentDeletePoint(mount, Number.NaN)
+
+		expect(commands).toBeEmpty()
+
+		manager.numberVector(recordingClient, setSizeVector(mount.name, 0), 'setNumberVector')
+		manager.alignmentDeletePoint(mount, 0)
+
+		expect(commands).toBeEmpty()
+	})
+
+	test('deletes the last point by index', () => {
+		const manager = new MountManager()
+		const mount = setupAlignment(manager, 0)
+
+		manager.alignmentDeleteLastPoint(mount)
+		expect(commands).toBeEmpty()
+
+		manager.numberVector(recordingClient, setSizeVector(mount.name, 1), 'setNumberVector')
+		manager.alignmentDeleteLastPoint(mount)
+		expect(numberCommands).toEqual([{ device: mount.name, name: 'ALIGNMENT_POINTSET_CURRENT_ENTRY', elements: { ALIGNMENT_POINTSET_CURRENT_ENTRY: 0 } }])
+
+		numberCommands.length = 0
+		manager.numberVector(recordingClient, setSizeVector(mount.name, 4), 'setNumberVector')
+		manager.alignmentDeleteLastPoint(mount)
+		expect(numberCommands).toEqual([{ device: mount.name, name: 'ALIGNMENT_POINTSET_CURRENT_ENTRY', elements: { ALIGNMENT_POINTSET_CURRENT_ENTRY: 3 } }])
+	})
+
+	test('clears, saves and loads the database', () => {
+		const manager = new MountManager()
+		const mount = setupAlignment(manager, 2)
+
+		manager.alignmentClear(mount)
+
+		expect(commands).toEqual([
+			['switch', 'ALIGNMENT_POINTSET_ACTION', { CLEAR: true }],
+			['switch', 'ALIGNMENT_POINTSET_COMMIT', { ALIGNMENT_POINTSET_COMMIT: true }],
+			['switch', 'ALIGNMENT_SUBSYSTEM_MATH_PLUGIN_INITIALISE', { ALIGNMENT_SUBSYSTEM_MATH_PLUGIN_INITIALISE: true }],
+		])
+		expect(mount.alignment.pointCount).toBe(2)
+
+		commands.length = 0
+		manager.alignmentSave(mount)
+
+		expect(commands).toEqual([
+			['switch', 'ALIGNMENT_POINTSET_ACTION', { 'SAVE DATABASE': true }],
+			['switch', 'ALIGNMENT_POINTSET_COMMIT', { ALIGNMENT_POINTSET_COMMIT: true }],
+		])
+
+		commands.length = 0
+		manager.alignmentLoad(mount)
+
+		expect(commands).toEqual([
+			['switch', 'ALIGNMENT_POINTSET_ACTION', { 'LOAD DATABASE': true }],
+			['switch', 'ALIGNMENT_POINTSET_COMMIT', { ALIGNMENT_POINTSET_COMMIT: true }],
+			['switch', 'ALIGNMENT_SUBSYSTEM_MATH_PLUGIN_INITIALISE', { ALIGNMENT_SUBSYSTEM_MATH_PLUGIN_INITIALISE: true }],
+		])
+	})
+
+	test('resets the alignment state on property deletion', () => {
+		const manager = new MountManager()
+		const mount = setupAlignment(manager, 3)
+
+		expect(mount.alignment.available).toBeTrue()
+		expect(mount.alignment.active).toBeTrue()
+		expect(mount.alignment.plugin).toBe('INBUILT_MATH_PLUGIN')
+		expect(mount.alignment.pointCount).toBe(3)
+
+		manager.delProperty(recordingClient, { device: mount.name, name: 'ALIGNMENT_POINTSET_SIZE' })
+		expect(mount.alignment.pointCount).toBe(0)
+
+		manager.delProperty(recordingClient, { device: mount.name, name: 'ALIGNMENT_SUBSYSTEM_MATH_PLUGINS' })
+		expect(mount.alignment.plugins).toBeEmpty()
+		expect(mount.alignment.plugin).toBeUndefined()
+
+		manager.delProperty(recordingClient, { device: mount.name, name: 'ALIGNMENT_SUBSYSTEM_ACTIVE' })
+		expect(mount.alignment.available).toBeFalse()
+		expect(mount.alignment.active).toBeFalse()
+
+		manager.delProperty(recordingClient, { device: mount.name, name: 'ALIGNMENT_POINTSET_ACTION' })
+		commands.length = 0
+
+		manager.alignmentClear(mount)
+		expect(commands).toBeEmpty()
+	})
+
+	test('restores the alignment defaults on a full deletion', () => {
+		const manager = new MountManager()
+		const mount = setupAlignment(manager, 3)
+
+		manager.delProperty(recordingClient, { device: mount.name })
+
+		expect(mount.alignment).toEqual(DEFAULT_MOUNT.alignment)
+		expect(manager.has(recordingClient, mount.name)).toBeFalse()
+	})
+
+	test('keeps the raw alignment properties in the property cache', () => {
+		const manager = new MountManager()
+		const mount = setupMount(manager)
+		const plugins = pluginsVector(mount.name, 'SVD Math Plugin')
+
+		manager.vector(recordingClient, plugins, 'defSwitchVector')
+		manager.switchVector(recordingClient, plugins, 'defSwitchVector')
+
+		const properties = manager.properties.get(mount)
+
+		expect(properties?.ALIGNMENT_SUBSYSTEM_MATH_PLUGINS).toBe(plugins as never)
+		expect(properties?.ALIGNMENT_SUBSYSTEM_MATH_PLUGINS.elements['SVD Math Plugin'].value).toBeTrue()
+		expect(mount.alignment.plugin).toBe('SVD Math Plugin')
+	})
+
+	test('leaves the existing mount commands unaffected', () => {
+		const manager = new MountManager()
+		const mount = setupMount(manager)
+
+		manager.switchVector(recordingClient, { device: mount.name, name: 'TELESCOPE_PARK', permission: 'rw', rule: 'OneOfMany', state: 'Ok', elements: { PARK: defSwitch('PARK', false), UNPARK: defSwitch('UNPARK', true) } }, 'defSwitchVector')
+		manager.switchVector(recordingClient, { device: mount.name, name: 'TELESCOPE_SLEW_RATE', permission: 'rw', rule: 'OneOfMany', state: 'Ok', elements: { SLEW_MAX: defSwitch('SLEW_MAX', true, 'Max') } }, 'defSwitchVector')
+		switchCommands.length = 0
+
+		manager.park(mount)
+		manager.slewRate(mount, 'SLEW_MAX')
+
+		expect(switchCommands).toEqual([
+			{ device: mount.name, name: 'TELESCOPE_PARK', elements: { PARK: true } },
+			{ device: mount.name, name: 'TELESCOPE_SLEW_RATE', elements: { SLEW_MAX: true } },
+		])
+		expect(mount.alignment.available).toBeFalse()
 	})
 })

@@ -233,6 +233,17 @@ test('tolerates one bad frame and resumes with the same pending pulse', () => {
 	expect(step.diagnostics.raSteps).toBe(1)
 })
 
+test('classifies a jump beyond maxFrameJumpPx as impossible_jump rather than star_lost', () => {
+	const calibrator = new GuidingCalibrator(calibrationConfig({ maxFrameJumpPx: 4, maxMatchDistancePx: 5 }))
+	expect(calibrator.processFrame(guideFrame(BASE_STARS, 0, 0)).pulse?.ra.duration).toBe(100)
+
+	// 6 px is beyond both the jump (4) and match (5) radii; the star is still in the frame, so this
+	// is an impossible jump, not a lost lock.
+	const step = calibrator.processFrame(guideFrame(shiftStars(BASE_STARS, 6, 0), 1000, 1))
+	expect(step.failure).toBeDefined()
+	expect(step.failure!.code).toBe('impossible_jump')
+})
+
 test('fails after exceeding the bad-frame limit', () => {
 	const calibrator = new GuidingCalibrator(calibrationConfig({ maxBadFrames: 1 }))
 	expect(calibrator.processFrame(guideFrame(BASE_STARS, 0, 0)).pulse?.ra.duration).toBe(100)
@@ -243,6 +254,31 @@ test('fails after exceeding the bad-frame limit', () => {
 
 	expect(step.failure).toBeDefined()
 	expect(step.failure!.code).toBe('bad_frame')
+})
+
+test('search-box quality acquires the in-box star among field noise', () => {
+	const calibrator = new GuidingCalibrator(calibrationConfig())
+	const lock = star(0, { x: 140, y: 120, snr: 20, flux: 2000 })
+	const noise: GuideStar[] = []
+	for (let i = 0; i < 20; i++) {
+		noise.push(star(i + 1, { x: 500 + (i % 5) * 20, y: 400 + Math.floor(i / 5) * 20, snr: 0.5, flux: 0.1 }))
+	}
+
+	const frame: GuideFrame = {
+		stars: [lock, ...noise],
+		width: WIDTH,
+		height: HEIGHT,
+		timestamp: 0,
+		frameId: 0,
+		searchPosition: [140, 120],
+		searchRegion: 64,
+	}
+
+	const step = calibrator.processFrame(frame)
+	expect(step.failure).toBeUndefined()
+	expect(step.diagnostics.startX).toBeCloseTo(140, 8)
+	expect(step.diagnostics.startY).toBeCloseTo(120, 8)
+	expect(step.pulse?.ra.duration).toBe(100)
 })
 
 test('fails at startup when the selected guide star is too close to the edge', () => {
