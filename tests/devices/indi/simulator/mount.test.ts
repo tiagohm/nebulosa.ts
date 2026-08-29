@@ -416,6 +416,36 @@ describe('mount simulator meridian flip', () => {
 		}
 	})
 
+	test('normalizes congruent celestial and frame travel on the right ascension shaft', () => {
+		const { client, simulator } = makeMeridianFlipMount('mount.flip.goto.congruent')
+
+		try {
+			const desiredSiderealTime = normalizeAngle(-hour(1))
+			const longitude = normalizeAngle(simulator.longitude + desiredSiderealTime - simulator.siderealTimeAt(simulator.utcTime))
+			client.sendNumber({ device: simulator.name, name: 'GEOGRAPHIC_COORD', elements: { LONG: toDeg(longitude) } })
+			const initialRightAscension = 0
+			simulator.syncTo(initialRightAscension, deg(-45))
+			simulator.setTrackingEnabled(true)
+			expect(simulator.pierSide).toBe('WEST')
+
+			const targetRightAscension = PI
+			simulator.flipTo(targetRightAscension, deg(45))
+			simulator.advance(FAST_FLIP_DURATION / 2)
+
+			expect(simulator.isSlewing).toBeTrue()
+			expect(normalizePI(simulator.mechanical.rightAscension - initialRightAscension)).toBeCloseTo(0, 12)
+			expect(simulator.mechanical.declination).toBeCloseTo(deg(45), 12)
+
+			simulator.advance(FAST_FLIP_DURATION / 2 + 1e-6)
+			expect(simulator.isSlewing).toBeFalse()
+			expect(simulator.pierSide).toBe('EAST')
+			expect(normalizePI(simulator.rightAscension - targetRightAscension)).toBeCloseTo(0, 12)
+			expect(simulator.declination).toBeCloseTo(deg(45), 12)
+		} finally {
+			simulator.dispose()
+		}
+	})
+
 	test('selects the goto pier side from the estimated arrival time', () => {
 		const { client, simulator } = makeMeridianFlipMount('mount.flip.goto.arrival')
 

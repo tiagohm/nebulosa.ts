@@ -1124,8 +1124,8 @@ export class MountSimulator extends DeviceSimulator {
 	// Returns the physical GOTO duration for one destination side, in seconds.
 	//
 	// `target` is mechanical RA/Dec in radians. The RA travel is measured between the physical shaft
-	// frames represented by the current and target declination branches, so pole crossings and side
-	// changes include the virtual PI-radian half-turn that the live slew state will perform.
+	// frames represented by the current and target declination branches. The celestial displacement and
+	// any virtual PI-radian frame change are composed before choosing the nearest congruent shaft angle.
 	#coordinateSlewDuration(target: EquatorialCoordinate, targetPierSide: PierSide) {
 		const hasActiveCoordinateSlew = this.#slewTarget !== undefined
 		const currentRightAscensionShaftAngle = hasActiveCoordinateSlew ? this.#slewRightAscensionShaft : rightAscensionShaftAngle(this.pierSide, this.#mechanical.rightAscension)
@@ -1134,7 +1134,7 @@ export class MountSimulator extends DeviceSimulator {
 		const deltaRightAscension = normalizePI(target.rightAscension - rightAscensionFromShaftPose(currentRightAscensionShaftAngle, currentDeclinationShaftAngle))
 		const shaftFrameTravel = retainsPoleRightAscensionFrame(targetPierSide, target.declination, declinationFromShaftAngle(currentDeclinationShaftAngle)) ? 0 : rightAscensionShaftFrameTravel(currentDeclinationShaftAngle, targetDeclinationShaftAngle)
 		const changesDeclinationShaftFrame = targetPierSide !== 'NEITHER' && targetPierSide !== this.pierSide
-		const rightAscensionTravel = Math.abs(deltaRightAscension + shaftFrameTravel)
+		const rightAscensionTravel = Math.abs(normalizePI(deltaRightAscension + shaftFrameTravel))
 		const declinationTravel = changesDeclinationShaftFrame ? Math.abs(normalizePI(targetDeclinationShaftAngle - currentDeclinationShaftAngle)) : Math.abs(target.declination - this.#mechanical.declination)
 		return Math.max(rightAscensionTravel, declinationTravel) / (this.#manualSlewSpeed() * SLEW_SPEED_FACTOR)
 	}
@@ -1159,13 +1159,13 @@ export class MountSimulator extends DeviceSimulator {
 	}
 
 	// Gives a coordinate slew exclusive control of both axes and initializes its pier-side travel.
-	// `target` is a mechanical equatorial coordinate in radians. When `changesPierSide` is true, the
-	// virtual PI-radian half-turn is added to the physical RA-axis travel while the declination shaft
-	// follows the equivalent orientation on the destination side. The in-flight shaft pose survives
-	// replacement slews, so a new operation resumes from the physical axis position reached so far rather
-	// than reconstructing it from the still-uncommitted pier side. The in-flight mechanical coordinate is
-	// derived from the interpolated physical shaft pose, so camera trajectories see the tube sweep away
-	// from and back to a same-coordinate flip target.
+	// `target` is a mechanical equatorial coordinate in radians. Any virtual PI-radian frame change is
+	// composed with celestial RA travel before selecting the nearest congruent shaft destination, while
+	// the declination shaft follows the equivalent orientation on the destination side. The in-flight
+	// shaft pose survives replacement slews, so a new operation resumes from the physical axis position
+	// reached so far rather than reconstructing it from the still-uncommitted pier side. The in-flight
+	// mechanical coordinate is derived from the interpolated physical shaft pose, so camera trajectories
+	// see the tube sweep away from and back to a same-coordinate flip target.
 	#startCoordinateSlew(mode: SlewMode, target: EquatorialCoordinate, targetPierSide: PierSide, changesPierSide: boolean, automatic: boolean) {
 		const hasActiveCoordinateSlew = this.#slewTarget !== undefined
 		const initialRightAscensionShaft = hasActiveCoordinateSlew ? this.#slewRightAscensionShaft : rightAscensionShaftAngle(this.pierSide, this.#mechanical.rightAscension)
@@ -1185,7 +1185,7 @@ export class MountSimulator extends DeviceSimulator {
 		this.#slewDeclinationShaft = initialDeclinationShaft
 		const deltaRightAscension = normalizePI(target.rightAscension - currentRightAscension)
 		const shaftFrameTravel = retainsPoleRightAscensionFrame(targetPierSide, target.declination, declinationFromShaftAngle(this.#slewDeclinationShaft)) ? 0 : rightAscensionShaftFrameTravel(this.#slewDeclinationShaft, targetDeclinationShaft)
-		this.#slewTargetRightAscensionShaft = this.#slewRightAscensionShaft + deltaRightAscension + shaftFrameTravel
+		this.#slewTargetRightAscensionShaft = this.#slewRightAscensionShaft + normalizePI(deltaRightAscension + shaftFrameTravel)
 		const declinationMotorDelta = normalizeDeclinationShaftDelta(targetDeclinationShaft - this.#slewDeclinationShaft)
 		if (targetPierSide !== 'NEITHER' && targetPierSide !== this.pierSide) {
 			this.#slewTargetDeclinationShaft = this.#slewDeclinationShaft + declinationMotorDelta
