@@ -1240,11 +1240,11 @@ export class MountSimulator extends DeviceSimulator {
 		this.#setHoming(true)
 	}
 
-	// Stores the current mechanical orientation as the new home position.
+	// Stores the current mechanical orientation and physical shaft branch as the new home position.
 	setHome() {
 		this.#homeCoordinate.rightAscension = this.#mechanical.rightAscension
 		this.#homeCoordinate.declination = this.#mechanical.declination
-		this.#homePierSide = this.pierSide
+		this.#homePierSide = this.#storedPosePierSide()
 	}
 
 	// Parks the mount at the configured park position.
@@ -1263,11 +1263,21 @@ export class MountSimulator extends DeviceSimulator {
 		this.#setParking(false)
 	}
 
-	// Stores the current mechanical orientation as the park position.
+	// Stores the current mechanical orientation and physical shaft branch as the park position.
 	setPark() {
 		this.#parkCoordinate.rightAscension = this.#mechanical.rightAscension
 		this.#parkCoordinate.declination = this.#mechanical.declination
-		this.#parkPierSide = this.pierSide
+		this.#parkPierSide = this.#storedPosePierSide()
+	}
+
+	// Returns the physical pier side belonging to a pose saved at the current instant.
+	// During a coordinate slew the published side remains committed to the origin until arrival, so the
+	// continuous declination shaft selects the actual branch. A shaft at either singular pole has no side.
+	#storedPosePierSide() {
+		if (!this.#slewTarget) return this.pierSide
+		const cosine = Math.cos(this.#slewDeclinationShaft)
+		if (Math.abs(cosine) <= DECLINATION_SHAFT_POLE_TOLERANCE) return 'NEITHER'
+		return cosine < 0 ? 'EAST' : 'WEST'
 	}
 
 	// Enables or disables sidereal-style tracking.

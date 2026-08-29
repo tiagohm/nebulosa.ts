@@ -1874,6 +1874,43 @@ describe('mount simulator meridian flip', () => {
 		}
 	})
 
+	test('saves home and park from the active flip shaft branch', () => {
+		for (const operation of ['home', 'park'] as const) {
+			const { simulator } = makeMeridianFlipMount(`mount.flip.saved.${operation}.active.side`)
+
+			try {
+				const lst = simulator.siderealTimeAt(simulator.utcTime)
+				const targetRightAscension = normalizeAngle(lst + hour(1))
+				simulator.syncTo(targetRightAscension, deg(20))
+				simulator.setTrackingEnabled(true)
+				simulator.flipTo(targetRightAscension, deg(20))
+				simulator.advance(FAST_FLIP_DURATION * 0.75)
+
+				const saved = simulator.mechanical
+				expect(simulator.pierSide).toBe('WEST')
+				expect(saved.declination).toBeCloseTo(deg(55), 12)
+				if (operation === 'home') simulator.setHome()
+				else simulator.setPark()
+
+				simulator.advance(FAST_FLIP_DURATION * 0.25 + 1e-6)
+				expect(simulator.pierSide).toBe('EAST')
+
+				if (operation === 'home') simulator.home()
+				else simulator.park()
+				simulator.advance(FAST_FLIP_DURATION * 0.25 + 1e-6)
+
+				expect(simulator.isSlewing).toBeFalse()
+				expect(simulator.pierSide).toBe('EAST')
+				expect(normalizePI(simulator.mechanical.rightAscension - saved.rightAscension)).toBeCloseTo(0, 8)
+				expect(simulator.mechanical.declination).toBeCloseTo(saved.declination, 12)
+				if (operation === 'home') expect(simulator.isHoming).toBeFalse()
+				else expect(simulator.isParked).toBeTrue()
+			} finally {
+				simulator.dispose()
+			}
+		}
+	})
+
 	test('returns home and park to the pier side on which each pose was saved', () => {
 		for (const operation of ['home', 'park'] as const) {
 			const { simulator } = makeMeridianFlipMount(`mount.flip.saved.${operation}.side`)
