@@ -317,7 +317,7 @@ export enum Quantity {
 }
 
 // Default observer-table quantities requested when the caller does not specify any.
-const DEFAULT_QUANTITIES: Quantity[] = [1, 9, 20, 23, 24, 47, 48]
+const DEFAULT_QUANTITIES: readonly Quantity[] = [1, 9, 20, 23, 24, 47, 48]
 
 // Default observer/vector/elements options.
 const DEFAULT_OVE_OPTIONS: Required<ObserverVectorElementsOptions> = {
@@ -344,7 +344,15 @@ const DEFAULT_OVE_OPTIONS: Required<ObserverVectorElementsOptions> = {
 
 // Requests an observer-table ephemeris (apparent/astrometric quantities) for `input` (a target name,
 // osculating elements, or TLE) over [startTime, endTime] and returns the parsed CSV rows.
-export async function observer(input: string | ObserverWithOsculatingElements | ObserverWithTLE, center: ObserverSiteCenter, coord: ObserverSiteCoord, startTime: Temporal | Time, endTime: Temporal | Time, quantities: Quantity[] = DEFAULT_QUANTITIES, options: ObserverVectorElementsOptions = DEFAULT_OVE_OPTIONS) {
+export async function observer(
+	input: string | ObserverWithOsculatingElements | ObserverWithTLE,
+	center: ObserverSiteCenter,
+	coord: ObserverSiteCoord,
+	startTime: Temporal | Time,
+	endTime: Temporal | Time,
+	quantities: readonly Quantity[] = DEFAULT_QUANTITIES,
+	options: ObserverVectorElementsOptions = DEFAULT_OVE_OPTIONS,
+) {
 	const parameters = structuredClone(DEFAULT_OBSERVER_PARAMETERS) as HorizonsQueryParameters
 	makeParametersFromInput(parameters, input)
 	makeParametersFromCenterAndCoordinates(parameters, center, coord, options)
@@ -520,7 +528,7 @@ function makeParametersFromOptions(parameters: HorizonsQueryParameters, options?
 }
 
 // Sets the QUANTITIES parameter for observer ephemerides from the requested quantity codes.
-function makeParametersFromQuantities(parameters: HorizonsQueryParameters, quantities?: Quantity[]) {
+function makeParametersFromQuantities(parameters: HorizonsQueryParameters, quantities?: readonly Quantity[]) {
 	if (quantities?.length && parameters.EPHEM_TYPE === 'OBSERVER') {
 		parameters.QUANTITIES = quantities.join(',')
 	}
@@ -568,7 +576,7 @@ interface EphemerisTable {
 	// start and end index of ephemeris data block prefixes.
 	readonly startIndex: number
 	readonly endIndex: number
-	readonly lines: string[]
+	readonly lines: readonly string[]
 }
 
 interface SmallBodyMatch {
