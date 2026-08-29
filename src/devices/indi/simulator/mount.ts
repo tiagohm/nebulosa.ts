@@ -1758,7 +1758,7 @@ export class MountSimulator extends DeviceSimulator {
 				const shaftSampleTime = endTime - (remaining + slewSeconds / 2) * 1000
 				const shaftSampleRightAscension = initialRightAscensionShaft + rightAscensionMotorDelta * travelled * 0.5
 				const shaftSampleDeclination = initialDeclinationShaft + declinationMotorDelta * travelled * 0.5
-				this.#slewMidpointSample = { time: shaftSampleTime, rightAscension: rightAscensionFromShaftPose(shaftSampleRightAscension, shaftSampleDeclination), declination: declinationFromShaftAngle(shaftSampleDeclination), pierSide: priorPierSide }
+				this.#slewMidpointSample = { time: shaftSampleTime, rightAscension: rightAscensionFromShaftPose(shaftSampleRightAscension, shaftSampleDeclination, initialDeclinationShaft), declination: declinationFromShaftAngle(shaftSampleDeclination), pierSide: priorPierSide }
 			}
 			this.#setMechanical(target.rightAscension, target.declination)
 			// A coordinate slew selected its destination side before it began, so the old side remains valid
@@ -1815,7 +1815,7 @@ export class MountSimulator extends DeviceSimulator {
 			return remaining
 		}
 
-		this.#setMechanical(rightAscensionFromShaftPose(this.#slewRightAscensionShaft, this.#slewDeclinationShaft), declinationFromShaftAngle(this.#slewDeclinationShaft))
+		this.#setMechanical(rightAscensionFromShaftPose(this.#slewRightAscensionShaft, this.#slewDeclinationShaft, initialDeclinationShaft), declinationFromShaftAngle(this.#slewDeclinationShaft))
 		return 0
 	}
 
@@ -2340,10 +2340,23 @@ function declinationFromShaftAngle(declinationShaft: Angle) {
 	return Math.asin(Math.sin(declinationShaft))
 }
 
+// Sets the numerical deadband around a declination-shaft pole crossing, in radians.
+// Its sub-nanoarcsecond width also bounds the equivalent cosine magnitude under the small-angle
+// approximation, and only resolves floating-point noise at the singular boundary.
+const DECLINATION_SHAFT_POLE_TOLERANCE = 64 * Number.EPSILON
+
 // Maps a physical RA shaft angle back to sky right ascension for the declination-shaft branch.
-// `rightAscensionShaft` and `declinationShaft` are radians in the continuous physical shaft frame.
-function rightAscensionFromShaftPose(rightAscensionShaft: Angle, declinationShaft: Angle) {
-	return normalizeAngle(Math.abs(declinationShaft) > PIOVERTWO ? rightAscensionShaft - PI : rightAscensionShaft)
+// All shaft angles are radians in the continuous physical frame. `pathOriginDeclinationShaft` is the
+// earlier declination shaft pose of the same motion; within numerical noise of a pole, its approach
+// direction keeps the pre-crossing RA branch. Without motion, the singular pole uses the unmirrored
+// branch, while values away from it follow the periodically folded physical shaft frame.
+function rightAscensionFromShaftPose(rightAscensionShaft: Angle, declinationShaft: Angle, pathOriginDeclinationShaft: Angle = declinationShaft) {
+	const cosine = Math.cos(declinationShaft)
+	const isAtPole = Math.abs(cosine) <= DECLINATION_SHAFT_POLE_TOLERANCE
+	const direction = Math.sign(declinationShaft - pathOriginDeclinationShaft)
+	const branchDeclinationShaft = isAtPole && direction !== 0 ? declinationShaft - direction * DECLINATION_SHAFT_POLE_TOLERANCE * 2 : declinationShaft
+	const mirrored = isAtPole ? direction !== 0 && Math.cos(branchDeclinationShaft) < 0 : cosine < 0
+	return normalizeAngle(mirrored ? rightAscensionShaft - PI : rightAscensionShaft)
 }
 
 // Normalizes declination shaft travel to the nearest half-turn while preserving exact tie direction.
