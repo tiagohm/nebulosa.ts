@@ -3,7 +3,7 @@ import fs from 'fs/promises'
 import { readImageFromBuffer, readImageFromFits, readImageFromPath } from '../../../../src/imaging/model/image'
 import { FITS_BLOCK_SIZE, FITS_HEADER_CARD_SIZE, type FitsHdu, type FitsHeader, type FitsHeaderCard, FitsImageReader, FitsImageWriter, FitsKeywordReader, FitsKeywordWriter, isFits, readFits, writeFits } from '../../../../src/io/formats/fits/fits'
 import { KEYWORDS } from '../../../../src/io/formats/fits/headers'
-import { declinationKeyword, heightKeyword, observationDateKeyword, rightAscensionKeyword, widthKeyword } from '../../../../src/io/formats/fits/util'
+import { computeHduDataSize, declinationKeyword, heightKeyword, observationDateKeyword, rightAscensionKeyword, widthKeyword } from '../../../../src/io/formats/fits/util'
 import { base64Sink, bufferSink, bufferSource, fileHandleSource } from '../../../../src/io/io'
 import { dms, hms } from '../../../../src/math/units/angle'
 import { downloadPerTag } from '../../../download'
@@ -625,6 +625,58 @@ test('clamps overflowing samples when Rice-compressing', async () => {
 
 	expect(image!.raw[0]).toBeCloseTo(1, 6)
 	expect(image!.raw[1]).toBeCloseTo(0, 6)
+})
+
+test('computeHduDataSize uses NAXIS1..NAXIS{n} and GCOUNT', () => {
+	expect(computeHduDataSize({ SIMPLE: true, BITPIX: 8, NAXIS: 0 })).toBe(0)
+	expect(computeHduDataSize({ SIMPLE: true, BITPIX: 8, NAXIS: 1, NAXIS1: 100 })).toBe(100)
+	expect(computeHduDataSize({ SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: 10, NAXIS2: 10, NAXIS3: 3 })).toBe(200)
+	expect(computeHduDataSize({ SIMPLE: true, BITPIX: 8, NAXIS: 4, NAXIS1: 10, NAXIS2: 10, NAXIS3: 2, NAXIS4: 5 })).toBe(1000)
+	expect(computeHduDataSize({ SIMPLE: true, BITPIX: 8, NAXIS: 2, NAXIS1: 10, NAXIS2: 10, GCOUNT: 3, PCOUNT: 0 })).toBe(300)
+	expect(computeHduDataSize({ XTENSION: 'BINTABLE', BITPIX: 8, NAXIS: 2, NAXIS1: 8, NAXIS2: 4, PCOUNT: 16, GCOUNT: 1 })).toBe(48)
+})
+
+test('readFits skips a 1-D primary data segment to the next HDU', async () => {
+	const writer = new FitsKeywordWriter()
+	const primary = Buffer.alloc(FITS_BLOCK_SIZE, 32)
+	let offset = writer.writeAll(
+		[
+			['SIMPLE', true],
+			['BITPIX', 8],
+			['NAXIS', 1],
+			['NAXIS1', 100],
+			['EXTEND', true],
+		],
+		primary,
+	)
+	offset += writer.writeEnd(primary, offset)
+	primary.fill(32, offset)
+
+	const data = Buffer.alloc(FITS_BLOCK_SIZE, 7)
+	const extension = Buffer.alloc(FITS_BLOCK_SIZE, 32)
+	offset = writer.writeAll(
+		[
+			['XTENSION', 'IMAGE'],
+			['BITPIX', 8],
+			['NAXIS', 2],
+			['NAXIS1', 2],
+			['NAXIS2', 2],
+			['PCOUNT', 0],
+			['GCOUNT', 1],
+		],
+		extension,
+	)
+	offset += writer.writeEnd(extension, offset)
+	extension.fill(32, offset)
+
+	const file = Buffer.concat([primary, data, extension, Buffer.alloc(FITS_BLOCK_SIZE, 9)])
+	const fits = await readFits(bufferSource(file))
+
+	expect(fits?.hdus).toHaveLength(2)
+	expect(fits!.hdus[0].data.size).toBe(100)
+	expect(fits!.hdus[1].offset).toBe(FITS_BLOCK_SIZE * 2)
+	expect(fits!.hdus[1].header.XTENSION).toBe('IMAGE')
+	expect(fits!.hdus[1].data.offset).toBe(FITS_BLOCK_SIZE * 3)
 })
 
 test('width keywords', () => {
