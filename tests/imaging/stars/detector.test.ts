@@ -182,6 +182,10 @@ test('detect stars keeps a faint field when a few stars are much brighter', () =
 	for (const [x, y] of positions) {
 		expect(starNear(stars, x, y, 1.5)).toBeDefined()
 	}
+	expect(stars[0].flux).toBeGreaterThan(stars.at(-1)!.flux)
+	for (let i = 1; i < stars.length; i++) {
+		expect(stars[i - 1].flux).toBeGreaterThanOrEqual(stars[i].flux)
+	}
 })
 
 test('detect stars rejects hot-pixel clumps that a 3x3 mean would turn into stars', () => {

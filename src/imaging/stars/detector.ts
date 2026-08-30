@@ -269,6 +269,7 @@ export function detectStars(image: Image, { maxStars = 500, searchRegion = 0, mi
 		res[i++] = { x, y, flux, hfd, fwhm, snr, eccentricity, elongation }
 	}
 
+	res.sort((left, right) => right.flux - left.flux)
 	return res
 }
 
