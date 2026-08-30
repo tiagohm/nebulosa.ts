@@ -184,6 +184,26 @@ test('detect stars keeps a faint field when a few stars are much brighter', () =
 	}
 })
 
+test('detect stars rejects hot-pixel clumps that a 3x3 mean would turn into stars', () => {
+	const width = 128
+	const height = 128
+	const raw = new Float32Array(width * height).fill(0.1)
+	const x = 64
+	const y = 64
+	raw[y * width + x] = 1
+	raw[y * width + x + 1] = 1
+	raw[(y + 1) * width + x] = 1
+	raw[(y + 1) * width + x + 1] = 1
+	plotStar(raw, width, height, 1, 32, 32, 0.8, 3, 80, 0)
+
+	const image: Image = { raw, header: {}, metadata: { width, height, channels: 1, pixelCount: width * height, pixelSizeInBytes: 4, bitpix: -32, stride: width, strideInBytes: width * 4, bayer: undefined } }
+	const stars = detectStars(image, { maxStars: 50 })
+
+	expect(starNear(stars, 32, 32, 1.5)).toBeDefined()
+	expect(starNear(stars, x, y, 3)).toBeUndefined()
+	expect(stars).toHaveLength(1)
+})
+
 test('detect stars finds nothing in a flat image', () => {
 	const width = 128
 	const height = 128

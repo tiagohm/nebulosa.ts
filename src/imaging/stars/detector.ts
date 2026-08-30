@@ -1,8 +1,8 @@
+import { medianBySelectionOf } from '../../core/util'
 import type { Point, Rect } from '../../math/numerical/geometry'
 import { clamp } from '../../math/numerical/math'
 import type { Image } from '../model/types'
 import { clone } from '../processing/arithmetic'
-import { mean3x3 } from '../processing/convolution'
 import { debayer } from '../processing/debayer'
 import { grayscale } from '../processing/geometry'
 import { psf } from '../processing/psf'
@@ -85,6 +85,45 @@ function starAnalysisImage(image: Image): Image | undefined {
 	return color && grayscale(color)
 }
 
+// Replaces each interior pixel with the median of its 3x3 neighborhood in place. Isolated hot
+// pixels and 2x2 defect clumps disappear; the 1-pixel border is left unchanged because later
+// detection already excludes a wider PSF margin. Returns the same image object.
+function median3x3(image: Image) {
+	const { raw, metadata } = image
+	const { width, height, stride } = metadata
+	if (width < 3 || height < 3) return image
+
+	const RowArray = raw instanceof Float64Array ? Float64Array : Float32Array
+	const previous = new RowArray(stride)
+	const current = new RowArray(stride)
+	previous.set(raw.subarray(0, stride))
+	current.set(raw.subarray(stride, stride * 2))
+	const window = new Float64Array(9)
+
+	for (let y = 1; y < height - 1; y++) {
+		const next = raw.subarray((y + 1) * stride, (y + 2) * stride)
+		const row = y * stride
+
+		for (let x = 1; x < width - 1; x++) {
+			window[0] = previous[x - 1]
+			window[1] = previous[x]
+			window[2] = previous[x + 1]
+			window[3] = current[x - 1]
+			window[4] = current[x]
+			window[5] = current[x + 1]
+			window[6] = next[x - 1]
+			window[7] = next[x]
+			window[8] = next[x + 1]
+			raw[row + x] = medianBySelectionOf(window, 9)
+		}
+
+		previous.set(current)
+		current.set(next)
+	}
+
+	return image
+}
+
 // Detects stars in an image and returns them sorted by descending flux (up to maxStars), filtered by
 // minSNR and optionally restricted to a central search region.
 export function detectStars(image: Image, { maxStars = 500, searchRegion = 0, minSNR = 0 }: Partial<DetectStarOptions> = DEFAULT_DETECT_STARS_OPTIONS): DetectedStar[] {
@@ -95,7 +134,7 @@ export function detectStars(image: Image, { maxStars = 500, searchRegion = 0, mi
 	const original = image.raw
 
 	// Run a 3x3 median first to eliminate hot pixels
-	image = mean3x3(clone(image))
+	image = median3x3(clone(image))
 
 	// Run the PSF convolution
 	image = psf(image)
@@ -141,7 +180,9 @@ export function detectStars(image: Image, { maxStars = 500, searchRegion = 0, mi
 			const center = sy + x
 			const value = raw[center]
 
-			if (value <= 0) continue
+			// PSF of a flattened background is ~1e-17, not 0; those plateaus are local maxima
+			// under a strict-`>` test and would photometer residual hot pixels on the original.
+			if (value <= Number.EPSILON) continue
 			if (raw[center - 1] > value || raw[center + 1] > value || raw[rowM1 + x] > value || raw[rowP1 + x] > value || raw[rowM1 + x - 1] > value || raw[rowM1 + x + 1] > value || raw[rowP1 + x - 1] > value || raw[rowP1 + x + 1] > value) continue
 
 			const baseM4 = rowM4 + x
