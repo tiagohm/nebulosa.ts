@@ -13,7 +13,7 @@ import { starMomentShape } from './shape'
 // and FWHM via integral-image aperture/annulus photometry. The published (x, y) is the flux-weighted
 // centroid around that peak, not the integer local-max pixel, so sub-pixel motion is visible to
 // guiders. Coordinates are pixels; intensities use the normalized [0, 1] pixel scale. Also provides
-// utilities to merge close detections and to clip stars to a central search region.
+// utilities to merge close detections and to drop pairs that would share a guiding search box.
 
 // A detected star: flux-weighted centroid in pixels plus measured photometry.
 export interface DetectedStar extends Readonly<Point> {
@@ -35,7 +35,9 @@ export interface DetectedStar extends Readonly<Point> {
 export interface DetectStarOptions {
 	// Maximum number of stars to return (brightest kept).
 	readonly maxStars: number
-	// Optional central square region (half-size, pixels) to restrict detection to.
+	// Tracking-box size, in pixels. When positive, pairs of comparable-brightness stars that would
+	// both fit inside one search box (plus a 5-pixel margin) are removed, matching the PHD2
+	// uniqueness filter. This is not a central crop of the frame.
 	readonly searchRegion?: number
 	// Minimum SNR a star must reach to be kept.
 	readonly minSNR?: number
@@ -129,7 +131,7 @@ function median3x3(image: Image) {
 }
 
 // Detects stars in an image and returns them sorted by descending flux (up to maxStars), filtered by
-// minSNR and optionally restricted to a central search region.
+// minSNR and optionally pruned with the PHD2 search-box uniqueness filter.
 export function detectStars(image: Image, { maxStars = 500, searchRegion = 0, minSNR = 0 }: Partial<DetectStarOptions> = DEFAULT_DETECT_STARS_OPTIONS): DetectedStar[] {
 	const intensity = starAnalysisImage(image)
 	if (intensity === undefined) return []
