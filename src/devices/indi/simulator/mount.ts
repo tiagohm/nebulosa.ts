@@ -1133,8 +1133,8 @@ export class MountSimulator extends DeviceSimulator {
 		const targetDeclinationShaftAngle = targetPierSide === 'NEITHER' ? target.declination : declinationShaftAngle(targetPierSide, target.declination)
 		const deltaRightAscension = normalizePI(target.rightAscension - rightAscensionFromShaftPose(currentRightAscensionShaftAngle, currentDeclinationShaftAngle))
 		const shaftFrameTravel = retainsPoleRightAscensionFrame(targetPierSide, target.declination, declinationFromShaftAngle(currentDeclinationShaftAngle)) ? 0 : rightAscensionShaftFrameTravel(currentDeclinationShaftAngle, targetDeclinationShaftAngle)
-		const rightAscensionTravel = Math.abs(normalizePI(deltaRightAscension + shaftFrameTravel))
-		const declinationTravel = Math.abs(normalizeDeclinationShaftDelta(targetDeclinationShaftAngle - currentDeclinationShaftAngle))
+		const rightAscensionTravel = Math.abs(normalizeShaftDelta(deltaRightAscension + shaftFrameTravel))
+		const declinationTravel = Math.abs(normalizeShaftDelta(targetDeclinationShaftAngle - currentDeclinationShaftAngle))
 		return Math.max(rightAscensionTravel, declinationTravel) / (this.#manualSlewSpeed() * SLEW_SPEED_FACTOR)
 	}
 
@@ -1184,8 +1184,8 @@ export class MountSimulator extends DeviceSimulator {
 		this.#slewDeclinationShaft = initialDeclinationShaft
 		const deltaRightAscension = normalizePI(target.rightAscension - currentRightAscension)
 		const shaftFrameTravel = retainsPoleRightAscensionFrame(targetPierSide, target.declination, declinationFromShaftAngle(this.#slewDeclinationShaft)) ? 0 : rightAscensionShaftFrameTravel(this.#slewDeclinationShaft, targetDeclinationShaft)
-		this.#slewTargetRightAscensionShaft = this.#slewRightAscensionShaft + normalizePI(deltaRightAscension + shaftFrameTravel)
-		const declinationMotorDelta = normalizeDeclinationShaftDelta(targetDeclinationShaft - this.#slewDeclinationShaft)
+		this.#slewTargetRightAscensionShaft = this.#slewRightAscensionShaft + normalizeShaftDelta(deltaRightAscension + shaftFrameTravel)
+		const declinationMotorDelta = normalizeShaftDelta(targetDeclinationShaft - this.#slewDeclinationShaft)
 		if (targetPierSide !== 'NEITHER' && targetPierSide !== this.pierSide) {
 			this.#slewTargetDeclinationShaft = this.#slewDeclinationShaft + declinationMotorDelta
 			this.#flipDeclinationTravelRemaining = Math.abs(declinationMotorDelta)
@@ -2377,11 +2377,10 @@ function isMirroredDeclinationShaftFrame(declinationShaft: Angle) {
 	return Math.abs(cosine) > DECLINATION_SHAFT_POLE_TOLERANCE && cosine < 0
 }
 
-// Normalizes declination shaft travel to the nearest half-turn while preserving exact tie direction.
-// `delta` is a physical shaft-angle difference in radians. `normalizePI` maps both +PI and -PI to +PI,
-// but an EAST equator-to-WEST equator move needs the negative half-turn to stay inside the folded shaft
-// branch that `declinationFromShaftAngle` models continuously.
-function normalizeDeclinationShaftDelta(delta: Angle) {
+// Normalizes physical shaft travel to the nearest half-turn while preserving exact tie direction.
+// `delta` is a shaft-angle difference in radians. `normalizePI` maps both +PI and -PI to +PI, but
+// retaining a negative half-turn lets a reverse flip undo the path taken in the opposite direction.
+function normalizeShaftDelta(delta: Angle) {
 	const normalized = normalizePI(delta)
 	return normalized === PI && delta < 0 ? -PI : normalized
 }

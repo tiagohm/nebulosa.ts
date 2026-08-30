@@ -346,6 +346,32 @@ describe('mount simulator meridian flip', () => {
 		}
 	})
 
+	test('reverses the right ascension shaft when undoing an explicit flip', () => {
+		const { simulator } = makeMeridianFlipMount('mount.flip.explicit.reverse')
+
+		try {
+			const lst = simulator.siderealTimeAt(simulator.utcTime)
+			const coordinate = { rightAscension: normalizeAngle(lst + hour(1)), declination: deg(20) }
+			simulator.syncTo(coordinate.rightAscension, coordinate.declination)
+			expect(simulator.pierSide).toBe('WEST')
+
+			simulator.flipTo(coordinate.rightAscension, coordinate.declination)
+			simulator.advance(FAST_FLIP_DURATION)
+			expect(simulator.isSlewing).toBeFalse()
+			expect(simulator.pierSide).toBe('EAST')
+
+			const returnStartRightAscension = simulator.mechanical.rightAscension
+			simulator.flipTo(coordinate.rightAscension, coordinate.declination)
+			simulator.advance(FAST_FLIP_DURATION / 4)
+
+			expect(simulator.isSlewing).toBeTrue()
+			expect(simulator.pierSide).toBe('EAST')
+			expect(normalizePI(simulator.mechanical.rightAscension - returnStartRightAscension)).toBeCloseTo(-PI / 4, 12)
+		} finally {
+			simulator.dispose()
+		}
+	})
+
 	test('uses virtual half-turn travel only when a goto changes pier side', () => {
 		const { simulator } = makeMeridianFlipMount('mount.flip.goto')
 
