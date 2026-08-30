@@ -239,6 +239,7 @@ const COMPRESSION_EXTENSION_EXCLUDED_KEYS = new Set([
 	'NAXIS3',
 	'PCOUNT',
 	'GCOUNT',
+	'EXTEND',
 	'TFIELDS',
 	'TTYPE1',
 	'TFORM1',
@@ -274,7 +275,8 @@ function appendUnsignedIntegerScaling(cards: FitsHeaderCard[], header: Readonly<
 }
 
 // Builds canonical image HDU cards and strips stale compressed-table keywords.
-function buildImageHeaderCards(header: Readonly<FitsHeader>, primary: boolean): FitsHeaderCard[] {
+// `extend` forces EXTEND=T on a primary that will be followed by other HDUs.
+function buildImageHeaderCards(header: Readonly<FitsHeader>, primary: boolean, extend = false): FitsHeaderCard[] {
 	const cards: FitsHeaderCard[] = [[primary ? 'SIMPLE' : 'XTENSION', primary ? true : 'IMAGE']]
 	const bitpix = uncompressedBitpixKeyword(header, 0)
 	const width = uncompressedWidthKeyword(header, 0)
@@ -290,6 +292,7 @@ function buildImageHeaderCards(header: Readonly<FitsHeader>, primary: boolean): 
 	}
 
 	if (!primary) cards.push(['PCOUNT', 0], ['GCOUNT', 1])
+	else if (extend || header.EXTEND === true) cards.push(['EXTEND', true])
 
 	appendUnsignedIntegerScaling(cards, header, bitpix)
 
@@ -515,7 +518,7 @@ export async function writeFits(sink: Sink & Partial<Seekable>, hdus: readonly R
 			continue
 		}
 
-		await writeHeader(buildImageHeaderCards(header, !hasPrimaryHdu))
+		await writeHeader(buildImageHeaderCards(header, !hasPrimaryHdu, hdus.length > 1))
 		const imageWriter = new FitsImageWriter(header)
 		const offset = fillWithRemainingBytes(await imageWriter.write(raw, sink), 0, FITS_DATA_PADDING)
 		if (offset > 0) await writeFully(sink, buffer, offset)

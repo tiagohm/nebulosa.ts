@@ -314,6 +314,22 @@ test('write uncompressed FITS from a compressed image header', async () => {
 	expect(Object.keys(fits!.hdus[0].header).some((key) => key.includes('\u0014'))).toBeFalse()
 })
 
+test('declares EXTEND on an uncompressed primary that has image extensions', async () => {
+	const buffer = Buffer.alloc(FITS_BLOCK_SIZE * 4, 0)
+	const header: FitsHeader = { SIMPLE: true, BITPIX: 8, NAXIS: 2, NAXIS1: 1, NAXIS2: 1 }
+
+	await writeFits(bufferSink(buffer), [
+		{ header, raw: new Float32Array([0]) },
+		{ header, raw: new Float32Array([1]) },
+	])
+
+	const fits = await readFits(bufferSource(buffer))
+	expect(fits!.hdus).toHaveLength(2)
+	expect(fits!.hdus[0].header.SIMPLE).toBeTrue()
+	expect(fits!.hdus[0].header.EXTEND).toBeTrue()
+	expect(fits!.hdus[1].header.XTENSION).toBe('IMAGE')
+})
+
 test('declares unsigned-integer BZERO/BSCALE when the source header omits them', async () => {
 	const buffer = Buffer.alloc(FITS_BLOCK_SIZE * 2, 0)
 	// 16-bit header without BZERO/BSCALE, as produced from an XISF UInt16 source.
