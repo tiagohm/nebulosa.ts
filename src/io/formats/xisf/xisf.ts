@@ -380,9 +380,9 @@ function isSupportedSampleFormat(sampleFormat: string): sampleFormat is XisfSamp
 	return sampleFormat === 'UInt8' || sampleFormat === 'UInt16' || sampleFormat === 'UInt32' || sampleFormat === 'UInt64' || sampleFormat === 'Float32' || sampleFormat === 'Float64'
 }
 
-// Type guard for recognized compression codec names.
-function isSupportedCompressionFormat(format: string): format is XisfCompressionFormat {
-	return format === 'zlib' || format === 'lz4' || format === 'lz4hc' || format === 'zstd'
+// Type guard for compression codecs the reader and writer can decode and encode.
+function isReadableCompressionFormat(format: string): format is 'zlib' | 'zstd' {
+	return format === 'zlib' || format === 'zstd'
 }
 
 // Compresses a buffer with the requested codec (zstd or zlib), or undefined for unsupported codecs.
@@ -636,7 +636,7 @@ function parseCompression(compression: NonNullable<XisfParsedImage['compression'
 	const token = compression.slice(0, first)
 	const shuffled = token.endsWith('+sh')
 	const format = shuffled ? token.slice(0, token.length - 3) : token
-	if (!isSupportedCompressionFormat(format)) return undefined
+	if (!isReadableCompressionFormat(format)) return undefined
 
 	const second = compression.indexOf(':', first + 1)
 	const uncompressedSize = +(second < 0 ? compression.slice(first + 1) : compression.slice(first + 1, second))
@@ -711,7 +711,7 @@ export class XisfImageReader {
 		let buffer = this.#buffer
 
 		if (compression) {
-			if (compression.format !== 'zstd' && compression.format !== 'zlib') throw new Error(`unsupported XISF compression format: ${compression.format}`)
+			if (compression.format !== 'zstd' && compression.format !== 'zlib') return false
 
 			const decompressed = await decompress(input.subarray(0, location.size), compression.format)
 			if (decompressed === undefined || decompressed.byteLength !== compression.uncompressedSize) return false

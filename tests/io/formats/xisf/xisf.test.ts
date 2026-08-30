@@ -79,6 +79,16 @@ describe('parse header', () => {
 		expect(hdus[0].location).toEqual({ offset: 24, size: 4 })
 	})
 
+	test('skips images with unimplemented compression codecs without aborting the header', () => {
+		const XML = `<xisf version="1.0"><Image geometry="1:1:1" sampleFormat="UInt16" colorSpace="Gray" location="attachment:16:4" compression="lz4:2"></Image><Image geometry="1:1:1" sampleFormat="UInt16" colorSpace="Gray" location="attachment:20:4" compression="lz4hc:2"></Image><Image geometry="2:1:1" sampleFormat="UInt16" colorSpace="Gray" location="attachment:24:4"></Image></xisf>`
+		const hdus = parseXisfHeader(Buffer.from(XML))
+
+		expect(hdus).toHaveLength(1)
+		expect(hdus[0].geometry).toEqual({ width: 2, height: 1, channels: 1 })
+		expect(hdus[0].compression).toBeUndefined()
+		expect(hdus[0].location).toEqual({ offset: 24, size: 4 })
+	})
+
 	test('skips images missing location or geometry without aborting the header', () => {
 		const XML = `<xisf version="1.0"><Image sampleFormat="UInt16" colorSpace="Gray" location="attachment:16:2"></Image><Image geometry="1:1:1" sampleFormat="UInt8" colorSpace="Gray"></Image><Image geometry="2:1:1" sampleFormat="UInt16" colorSpace="Gray" location="attachment:24:4"></Image></xisf>`
 		const hdus = parseXisfHeader(Buffer.from(XML))
@@ -158,6 +168,19 @@ test('preserves floating-point XISF samples in digital scale', async () => {
 	expect(Array.from(image!.raw)).toEqual([-2.5, 0.25, 12.75])
 	expect(image!.digitalRange).toBeUndefined()
 	expect(image!.quantizationStep).toBeUndefined()
+})
+
+test('returns false for an unimplemented compression codec', async () => {
+	const reader = new XisfImageReader({
+		bitpix: 16,
+		location: { offset: 0, size: 2 },
+		compression: { format: 'lz4', shuffled: false, uncompressedSize: 2, itemSize: 0 },
+		byteOrder: 'little',
+		pixelStorage: 'Normal',
+		geometry: { width: 1, height: 1, channels: 1 },
+	})
+
+	expect(await reader.read(bufferSource(Buffer.alloc(2)), new Float64Array(1))).toBeFalse()
 })
 
 test('rejects a caller-provided XISF output buffer smaller than the image', async () => {
