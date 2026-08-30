@@ -312,27 +312,58 @@ function readShuffledXisfSamples(input: Buffer, output: ImageRawType, bitpix: Bi
 	const { width, height, channels } = geometry
 	const numberOfPixels = width * height
 	const total = numberOfPixels * channels
-	if (input.byteLength !== total * pixelInBytes) return false
+	if (pixelInBytes < 1 || pixelInBytes > 8 || input.byteLength !== total * pixelInBytes) return false
 
-	const scalarBuffer = Buffer.allocUnsafeSlow(pixelInBytes)
-	const scalarBytes = new Uint8Array(scalarBuffer.buffer, scalarBuffer.byteOffset, pixelInBytes)
-	const scalar = xisfDataView(scalarBuffer, bitpix)
 	const factor = bitpix > 0 && sampleScale === 'normalized' ? 1 / (2 ** (8 * pixelInBytes) - 1) : 1
-	const bigEndian = byteOrder === 'big'
-	let channel = 0
+	const little = byteOrder !== 'big'
+	const planar = pixelStorage === 'Planar'
+	const bits = new DataView(new ArrayBuffer(8))
+	let index = 0
 	let pixel = 0
+	let channel = 0
 
 	for (let stored = 0; stored < total; stored++) {
-		for (let byte = 0; byte < pixelInBytes; byte++) {
-			scalarBytes[bigEndian ? pixelInBytes - byte - 1 : byte] = input[byte * total + stored]
+		const target = planar ? index : stored
+		let sample = 0
+
+		if (pixelInBytes === 1) {
+			sample = input[stored]
+		} else if (pixelInBytes === 2) {
+			const lo = little ? input[stored] : input[total + stored]
+			const hi = little ? input[total + stored] : input[stored]
+			sample = (hi << 8) | lo
+		} else if (pixelInBytes === 4) {
+			const b0 = little ? input[stored] : input[total * 3 + stored]
+			const b1 = little ? input[total + stored] : input[total * 2 + stored]
+			const b2 = little ? input[total * 2 + stored] : input[total + stored]
+			const b3 = little ? input[total * 3 + stored] : input[stored]
+			const word = (b0 | (b1 << 8) | (b2 << 16) | (b3 << 24)) >>> 0
+			if (bitpix > 0) sample = word
+			else {
+				bits.setUint32(0, word, true)
+				sample = bits.getFloat32(0, true)
+			}
+		} else {
+			bits.setUint8(0, input[stored])
+			bits.setUint8(1, input[total + stored])
+			bits.setUint8(2, input[total * 2 + stored])
+			bits.setUint8(3, input[total * 3 + stored])
+			bits.setUint8(4, input[total * 4 + stored])
+			bits.setUint8(5, input[total * 5 + stored])
+			bits.setUint8(6, input[total * 6 + stored])
+			bits.setUint8(7, input[total * 7 + stored])
+			sample = bits.getFloat64(0, little)
 		}
 
-		const target = pixelStorage === 'Normal' ? stored : pixel * channels + channel
-		output[target] = scalar[0] * factor
+		output[target] = sample * factor
 
-		if (pixelStorage === 'Planar' && ++pixel === numberOfPixels) {
-			pixel = 0
-			channel++
+		if (planar) {
+			if (++pixel === numberOfPixels) {
+				pixel = 0
+				index = ++channel
+			} else {
+				index += channels
+			}
 		}
 	}
 
@@ -348,26 +379,67 @@ function writeShuffledXisfSamples(input: ImageRawType, output: Buffer, bitpix: B
 	const total = numberOfPixels * channels
 	if (output.byteLength !== total * pixelInBytes) throw new Error('invalid XISF image buffer size')
 
-	const scalarBuffer = Buffer.allocUnsafeSlow(pixelInBytes)
-	const scalarBytes = new Uint8Array(scalarBuffer.buffer, scalarBuffer.byteOffset, pixelInBytes)
-	const scalar = xisfDataView(scalarBuffer, bitpix)
 	const max = INTEGER_XISF_MAX[bitpix]
 	const factor = max ?? 1
-	const bigEndian = byteOrder === 'big'
-	let channel = 0
+	const little = byteOrder !== 'big'
+	const planar = pixelStorage === 'Planar'
+	const bits = new DataView(new ArrayBuffer(8))
+	let index = 0
 	let pixel = 0
+	let channel = 0
 
 	for (let stored = 0; stored < total; stored++) {
-		const source = pixelStorage === 'Normal' ? stored : pixel * channels + channel
-		scalar[0] = max === undefined ? input[source] : quantizeXisfIntegerSample(input[source] * factor, max)
+		const source = planar ? index : stored
 
-		for (let byte = 0; byte < pixelInBytes; byte++) {
-			output[byte * total + stored] = scalarBytes[bigEndian ? pixelInBytes - byte - 1 : byte]
+		if (pixelInBytes === 1) {
+			output[stored] = quantizeXisfIntegerSample(input[source] * factor, max ?? 255)
+		} else if (pixelInBytes === 2) {
+			const code = quantizeXisfIntegerSample(input[source] * factor, max ?? 65535)
+			const lo = code & 0xff
+			const hi = code >>> 8
+			output[stored] = little ? lo : hi
+			output[total + stored] = little ? hi : lo
+		} else if (pixelInBytes === 4 && max !== undefined) {
+			const code = quantizeXisfIntegerSample(input[source] * factor, max) >>> 0
+			const b0 = code & 0xff
+			const b1 = (code >>> 8) & 0xff
+			const b2 = (code >>> 16) & 0xff
+			const b3 = code >>> 24
+			output[stored] = little ? b0 : b3
+			output[total + stored] = little ? b1 : b2
+			output[total * 2 + stored] = little ? b2 : b1
+			output[total * 3 + stored] = little ? b3 : b0
+		} else if (pixelInBytes === 4) {
+			bits.setFloat32(0, input[source], true)
+			const b0 = bits.getUint8(0)
+			const b1 = bits.getUint8(1)
+			const b2 = bits.getUint8(2)
+			const b3 = bits.getUint8(3)
+			output[stored] = little ? b0 : b3
+			output[total + stored] = little ? b1 : b2
+			output[total * 2 + stored] = little ? b2 : b1
+			output[total * 3 + stored] = little ? b3 : b0
+		} else if (pixelInBytes === 8) {
+			bits.setFloat64(0, input[source], little)
+			output[stored] = bits.getUint8(0)
+			output[total + stored] = bits.getUint8(1)
+			output[total * 2 + stored] = bits.getUint8(2)
+			output[total * 3 + stored] = bits.getUint8(3)
+			output[total * 4 + stored] = bits.getUint8(4)
+			output[total * 5 + stored] = bits.getUint8(5)
+			output[total * 6 + stored] = bits.getUint8(6)
+			output[total * 7 + stored] = bits.getUint8(7)
+		} else {
+			throw new Error('invalid XISF image buffer size')
 		}
 
-		if (pixelStorage === 'Planar' && ++pixel === numberOfPixels) {
-			pixel = 0
-			channel++
+		if (planar) {
+			if (++pixel === numberOfPixels) {
+				pixel = 0
+				index = ++channel
+			} else {
+				index += channels
+			}
 		}
 	}
 }
