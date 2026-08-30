@@ -1276,7 +1276,7 @@ export class MountSimulator extends DeviceSimulator {
 		if (!this.#slewTarget) return this.pierSide
 		const cosine = Math.cos(this.#slewDeclinationShaft)
 		if (Math.abs(cosine) <= DECLINATION_SHAFT_POLE_TOLERANCE) return 'NEITHER'
-		return cosine < 0 ? 'EAST' : 'WEST'
+		return isMirroredDeclinationShaftFrame(this.#slewDeclinationShaft) ? 'EAST' : 'WEST'
 	}
 
 	// Enables or disables sidereal-style tracking.
@@ -2364,8 +2364,17 @@ function rightAscensionFromShaftPose(rightAscensionShaft: Angle, declinationShaf
 	const isAtPole = Math.abs(cosine) <= DECLINATION_SHAFT_POLE_TOLERANCE
 	const direction = Math.sign(declinationShaft - pathOriginDeclinationShaft)
 	const branchDeclinationShaft = isAtPole && direction !== 0 ? declinationShaft - direction * DECLINATION_SHAFT_POLE_TOLERANCE * 2 : declinationShaft
-	const mirrored = isAtPole ? direction !== 0 && Math.cos(branchDeclinationShaft) < 0 : cosine < 0
+	const mirrored = isMirroredDeclinationShaftFrame(branchDeclinationShaft)
 	return normalizeAngle(mirrored ? rightAscensionShaft - PI : rightAscensionShaft)
+}
+
+// Reports whether a continuous declination shaft angle occupies the periodically mirrored RA frame.
+// The angle is in radians and may contain any number of revolutions. A singular pole inside the
+// numerical deadband is treated as unmirrored; callers that know its direction displace it to the
+// approached branch before asking.
+function isMirroredDeclinationShaftFrame(declinationShaft: Angle) {
+	const cosine = Math.cos(declinationShaft)
+	return Math.abs(cosine) > DECLINATION_SHAFT_POLE_TOLERANCE && cosine < 0
 }
 
 // Normalizes declination shaft travel to the nearest half-turn while preserving exact tie direction.
@@ -2400,8 +2409,8 @@ function retainsPoleRightAscensionFrame(targetPierSide: PierSide, targetDeclinat
 // either pole use the mirrored RA frame, so crossing into that branch adds PI and crossing out subtracts
 // PI. Moves that stay on the same branch have no RA-frame offset.
 function rightAscensionShaftFrameTravel(fromDeclinationShaft: Angle, toDeclinationShaft: Angle) {
-	const fromMirrored = Math.abs(fromDeclinationShaft) > PIOVERTWO
-	const toMirrored = Math.abs(toDeclinationShaft) > PIOVERTWO
+	const fromMirrored = isMirroredDeclinationShaftFrame(fromDeclinationShaft)
+	const toMirrored = isMirroredDeclinationShaftFrame(toDeclinationShaft)
 	if (fromMirrored === toMirrored) return 0
 	return toMirrored ? PI : -PI
 }

@@ -1880,6 +1880,42 @@ describe('mount simulator meridian flip', () => {
 		}
 	})
 
+	test('keeps a replacement goto continuous across repeated declination shaft branches', () => {
+		const { simulator } = makeMeridianFlipMount('mount.flip.repeated.dec.branch.replacement')
+
+		try {
+			const lst = simulator.siderealTimeAt(simulator.utcTime)
+			const targetRightAscension = normalizeAngle(lst - hour(1))
+			simulator.syncTo(targetRightAscension, deg(-80))
+			expect(simulator.pierSide).toBe('EAST')
+
+			simulator.flipTo(targetRightAscension, deg(80.1))
+			simulator.advance(FAST_FLIP_DURATION * 0.99)
+			expect(simulator.isSlewing).toBeTrue()
+			expect(simulator.pierSide).toBe('EAST')
+
+			const replacement = { ...simulator.mechanical }
+			simulator.goTo(replacement.rightAscension, replacement.declination)
+			let previous = { ...simulator.mechanical }
+			let maximumStep = 0
+			let stepCount = 0
+
+			while (simulator.isSlewing && stepCount < 25_000) {
+				simulator.advance(0.0001)
+				maximumStep = Math.max(maximumStep, angularDistance(previous.rightAscension, previous.declination, simulator.mechanical.rightAscension, simulator.mechanical.declination))
+				previous = { ...simulator.mechanical }
+				stepCount++
+			}
+
+			expect(stepCount).toBeLessThan(25_000)
+			expect(maximumStep).toBeLessThan(deg(0.02))
+			expect(normalizePI(simulator.mechanical.rightAscension - replacement.rightAscension)).toBeCloseTo(0, 7)
+			expect(simulator.mechanical.declination).toBeCloseTo(replacement.declination, 12)
+		} finally {
+			simulator.dispose()
+		}
+	})
+
 	test('keeps the right ascension half-turn for a near-pole side-changing flip', () => {
 		const { simulator } = makeMeridianFlipMount('mount.flip.near.pole.half.turn')
 
