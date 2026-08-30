@@ -38,6 +38,7 @@ interface CalibrationSimulation {
 	readonly decVector: readonly [number, number]
 	readonly decBacklashSteps?: number
 	readonly reverseRaScale?: number
+	readonly reverseRaBacklashSteps?: number
 	readonly maxFrames?: number
 }
 
@@ -89,6 +90,7 @@ function runCalibration(config: Partial<GuidingCalibrationConfig>, simulation: C
 	let timestamp = 0
 	let frameId = 0
 	let decBacklashRemaining = simulation.decBacklashSteps ?? 0
+	let reverseRaBacklashRemaining = simulation.reverseRaBacklashSteps ?? 0
 	let step = calibrator.processFrame(guideFrame(BASE_STARS, timestamp, frameId++))
 	const phases: GuidingCalibrationPhase[] = [step.phase]
 
@@ -98,8 +100,13 @@ function runCalibration(config: Partial<GuidingCalibrationConfig>, simulation: C
 		if (pulse?.ra.duration !== undefined && pulse.ra.duration > 0) {
 			const sign = pulse.ra.direction === calibrator.config.raDirection ? 1 : -1
 			const scale = sign < 0 ? (simulation.reverseRaScale ?? 1) : 1
-			offsetX += simulation.raVector[0] * sign * scale * (pulse.ra.duration / calibrator.config.raPulse)
-			offsetY += simulation.raVector[1] * sign * scale * (pulse.ra.duration / calibrator.config.raPulse)
+
+			if (sign < 0 && reverseRaBacklashRemaining > 0) {
+				reverseRaBacklashRemaining--
+			} else {
+				offsetX += simulation.raVector[0] * sign * scale * (pulse.ra.duration / calibrator.config.raPulse)
+				offsetY += simulation.raVector[1] * sign * scale * (pulse.ra.duration / calibrator.config.raPulse)
+			}
 		}
 
 		if (pulse?.dec.duration !== undefined && pulse.dec.duration > 0) {
@@ -200,6 +207,21 @@ test('fails when the RA clearing move cannot return close enough to the origin',
 	expect(simulation.step.completed).toBeUndefined()
 	expect(simulation.step.failure).toBeDefined()
 	expect(simulation.step.failure!.code).toBe('ra_clearing_failed')
+})
+
+test('continues RA clearing through reverse backlash until the origin is recovered', () => {
+	const simulation = runCalibration({ maxClearingOffsetPx: 0.8, maxClearingSteps: 10 }, { raVector: [0.8, 0.2], decVector: [-0.15, 0.75], reverseRaBacklashSteps: 2 })
+	expect(simulation.step.failure).toBeUndefined()
+	expect(simulation.step.completed).toBeDefined()
+	expect(simulation.step.diagnostics.clearingSteps).toBeGreaterThan(2)
+	expect(Math.hypot(simulation.step.completed!.decStartX - simulation.step.completed!.startX, simulation.step.completed!.decStartY - simulation.step.completed!.startY)).toBeLessThanOrEqual(0.8)
+})
+
+test('accepts an RA clearing step that overshoots the origin', () => {
+	const simulation = runCalibration({ maxClearingOffsetPx: 0.3, maxClearingSteps: 10 }, { raVector: [0.8, 0.2], decVector: [-0.15, 0.75], reverseRaScale: 4 })
+	expect(simulation.step.failure).toBeUndefined()
+	expect(simulation.step.completed).toBeDefined()
+	expect(simulation.phases).toContain('decForwardPulse')
 })
 
 test('fails when DEC backlash consumes too many no-motion steps', () => {

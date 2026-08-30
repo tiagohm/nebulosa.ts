@@ -7,7 +7,8 @@ import { type AxisPulse, type CalibrationMatrix, DEFAULT_GUIDER_CONFIG, type Fil
 // Frame-by-frame autoguider calibration. The GuidingCalibrator state machine issues RA and DEC pulses,
 // tracks the resulting star displacement across frames, and solves the image-motion and inverse
 // (image-to-axis) 2×2 calibration matrices used by the Guider. It handles RA forward travel, an optional
-// clearing move back toward the origin, DEC backlash absorption, and rejects frames that are noisy,
+// clearing move back toward the origin that keeps pulsing until the star is close enough, crosses the
+// origin, or hits `maxClearingSteps`, DEC backlash absorption, and rejects frames that are noisy,
 // edge-clipped, or show impossible jumps. Positions/distances are pixels; pulse durations are
 // milliseconds; angles are radians.
 
@@ -72,9 +73,12 @@ export interface GuidingCalibrationConfig {
 	readonly settleFramesAfterMove: number
 	// Whether to perform the RA clearing move back toward the origin.
 	readonly clearingMoveEnabled: boolean
-	// Clearing steps as a fraction of the RA forward steps.
+	// Planned reverse steps as a fraction of the RA forward steps, used for diagnostics. Aborting
+	// a clearing leg uses `maxClearingSteps`, not this estimate, so RA-reversal backlash still has
+	// budget to finish returning to the origin.
 	readonly clearingMoveFraction: number
-	// Maximum clearing steps.
+	// Maximum RA reverse pulses while returning toward the origin. This is the abort limit; clearing
+	// continues until the star is close enough, the reverse step crosses the origin, or this cap is hit.
 	readonly maxClearingSteps: number
 	// Maximum residual offset from origin to consider clearing complete, in pixels.
 	readonly maxClearingOffsetPx: number
@@ -662,6 +666,8 @@ export class GuidingCalibrator {
 	#handleRaClearMeasurement(frame: GuideFrame, point: Point, filtered: FilteredStars) {
 		this.#transitionTo('raClearMeasure')
 
+		const previousNetX = this.state.lastX - this.state.startX
+		const previousNetY = this.state.lastY - this.state.startY
 		const sample = this.#recordSample(this.state.clearingSteps + 1, this.config.raPulse, oppositeRA(this.config.raDirection), point, this.state.startX, this.state.startY)
 
 		this.state.clearingSteps++
@@ -669,12 +675,15 @@ export class GuidingCalibrator {
 		this.#finishMeasurement(point)
 		this.#updateDiagnostics(frame, filtered, ['ra_clearing_measured'])
 
-		if (sample.netDistance <= this.config.maxClearingOffsetPx) {
+		// A reverse step that passed through the origin would recede if we kept pulsing the same way,
+		// so treat that closest approach as a successful return even when the overshoot exceeds the
+		// residual offset. Backlash zeros are excluded: they do not move the star.
+		if (sample.netDistance <= this.config.maxClearingOffsetPx || crossedCalibrationOrigin(previousNetX, previousNetY, sample.netX, sample.netY, sample.stepDistance, this.config.minMovePerStepPx)) {
 			this.#startDecPhase(point)
 			return this.#queuePulse('decForwardPulse', 'dec', this.config.decDirection, this.config.decPulse, frame, ['dec_started'], filtered)
 		}
 
-		if (this.state.clearingSteps >= this.state.plannedClearingSteps || this.state.clearingSteps >= this.config.maxClearingSteps) {
+		if (this.state.clearingSteps >= this.config.maxClearingSteps) {
 			return this.#fail('ra_clearing_failed', 'RA clearing pulses did not return the guide star close enough to the calibration origin', frame, ['ra_clearing_failed'], filtered)
 		}
 
@@ -1039,6 +1048,13 @@ function isNearEdge(star: GuideStar | Point, width: number, height: number, marg
 // Indicates whether the current state should expose the DEC origin in diagnostics.
 function hasDecOrigin(phase: GuidingCalibrationPhase, decSteps: number) {
 	return decSteps > 0 || phase === 'decForwardPulse' || phase === 'decBacklashClearing' || phase === 'decForwardMeasure' || phase === 'decForwardComplete' || phase === 'solving' || phase === 'validating' || phase === 'completed'
+}
+
+// Returns whether a reverse clearing step passed through the calibration origin. `previousNet` is the
+// origin offset before the step and `(netX, netY)` is the offset after, both in pixels. A step below
+// `minMovePx` is ignored so RA-reversal backlash cannot look like a crossing.
+function crossedCalibrationOrigin(previousNetX: number, previousNetY: number, netX: number, netY: number, stepDistance: number, minMovePx: number) {
+	return stepDistance >= minMovePx && previousNetX * netX + previousNetY * netY <= 0
 }
 
 // Computes a 2D dot product.
