@@ -155,6 +155,35 @@ test('detect stars measures round and elongated shapes from central moments', ()
 	expect(elongated.elongation).toBeGreaterThan(1.5)
 })
 
+test('detect stars keeps a faint field when a few stars are much brighter', () => {
+	const width = 520
+	const height = 400
+	const raw = new Float32Array(width * height)
+	const positions: Array<readonly [number, number]> = []
+
+	for (let row = 0; row < 5; row++) {
+		for (let col = 0; col < 5; col++) {
+			if (row === 4 && col > 2) continue
+			positions.push([40 + col * 90, 40 + row * 70])
+		}
+	}
+
+	expect(positions).toHaveLength(23)
+
+	for (let i = 0; i < positions.length; i++) {
+		const [x, y] = positions[i]
+		plotStar(raw, width, height, 1, x, y, i < 3 ? 2 : 0.4, 3, i < 3 ? 100 : 40, 0)
+	}
+
+	const image: Image = { raw, header: {}, metadata: { width, height, channels: 1, pixelCount: width * height, pixelSizeInBytes: 4, bitpix: -32, stride: width, strideInBytes: width * 4, bayer: undefined } }
+	const stars = detectStars(image, { maxStars: 500 })
+
+	expect(stars).toHaveLength(23)
+	for (const [x, y] of positions) {
+		expect(starNear(stars, x, y, 1.5)).toBeDefined()
+	}
+})
+
 test('detect stars finds nothing in a flat image', () => {
 	const width = 128
 	const height = 128

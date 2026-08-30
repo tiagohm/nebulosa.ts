@@ -62,8 +62,13 @@ const STAR_BACKGROUND_OUTER_RADIUS = 7
 const STAR_CONVOLVED_MARGIN = 4
 // Minimum acceptable HFD (pixels); smaller measurements are treated as noise/hot pixels.
 const STAR_MIN_HFD = 1
-// Ratio between a peak's score and its neighborhood used to accept it as a distinct star.
+// Adjacent-rank ratio that marks a candidate star-to-noise break.
 const STAR_SCORE_GAP_RATIO = 4
+// How many candidates immediately below a gap are inspected for a tight field-star clump.
+const STAR_SCORE_GAP_CLUMP_WINDOW = 8
+// Rank ratio that still splits a tight clump. 4³ ≈ 3 mag of flux when SNR scales as √flux, which
+// is larger than a handful of bright-star outliers and smaller than the noise floor on a star field.
+const STAR_SCORE_GAP_OUTLIER_RATIO = STAR_SCORE_GAP_RATIO * STAR_SCORE_GAP_RATIO * STAR_SCORE_GAP_RATIO
 
 // Default star-detection options.
 const DEFAULT_DETECT_STARS_OPTIONS: Readonly<DetectStarOptions> = {
@@ -221,25 +226,30 @@ export function detectStars(image: Image, { maxStars = 500, searchRegion = 0, mi
 	return res
 }
 
-// Trims weak detections after a large score discontinuity between adjacent ranked candidates.
+// Drops a dim noise tail after a large score gap, walking from the bright end. A modest jump
+// above a tight clump is a magnitude gap among real stars and is left intact; a jump above a
+// spread-out tail, or an enormous jump even above a clump, is treated as the noise floor.
 function trimStarsByScoreGap(stars: StarList) {
 	if (stars.size <= 3) return
 
 	const ranked = stars.array()
 	const n = ranked.length
-	const topWindowStart = Math.max(1, n - Math.min(n, 128))
 	let keepFrom = 0
-	let bestRatio = STAR_SCORE_GAP_RATIO
 
-	for (let i = topWindowStart - 1; i < n - 1; i++) {
+	for (let i = n - 2; i >= 0; i--) {
 		const weaker = ranked[i].h
 		const stronger = ranked[i + 1].h
 		if (weaker <= 0 || stronger <= 0) continue
 		const ratio = stronger / weaker
-		if (ratio <= bestRatio) continue
+		if (ratio <= STAR_SCORE_GAP_RATIO) continue
 		if (n - i - 1 < 3) continue
-		bestRatio = ratio
+
+		const clumpStart = Math.max(0, i - STAR_SCORE_GAP_CLUMP_WINDOW + 1)
+		const clumpMin = ranked[clumpStart].h
+		if (clumpMin > 0 && weaker / clumpMin < STAR_SCORE_GAP_RATIO && ratio < STAR_SCORE_GAP_OUTLIER_RATIO) continue
+
 		keepFrom = i + 1
+		break
 	}
 
 	for (let removeCount = keepFrom; removeCount > 0; removeCount--) {
