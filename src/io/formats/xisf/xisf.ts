@@ -503,6 +503,8 @@ export async function writeXisf(sink: Sink, images: readonly Readonly<Pick<Image
 	const signatureData = Buffer.allocUnsafe(16)
 	signatureData.write(XISF_SIGNATURE, 0, 8, 'ascii')
 	signatureData.writeUInt32LE(headerData.byteLength, 8)
+	// XISF 1.0 reserved field (bytes 12-15) must be zero; allocUnsafe does not clear it.
+	signatureData.writeUInt32LE(0, 12)
 
 	let size = await writeFully(sink, signatureData)
 	size += await writeFully(sink, headerData)

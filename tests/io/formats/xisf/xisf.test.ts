@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import fs from 'fs/promises'
 import { readImageFromBuffer, readImageFromPath, readImageFromXisf } from '../../../../src/imaging/model/image'
-import { byteShuffle, byteUnshuffle, isXisf, parseXisfHeader, readXisf, writeXisf, XisfImageReader, XisfImageWriter } from '../../../../src/io/formats/xisf/xisf'
+import { byteShuffle, byteUnshuffle, isXisf, parseXisfHeader, readXisf, writeXisf, XISF_SIGNATURE, XisfImageReader, XisfImageWriter } from '../../../../src/io/formats/xisf/xisf'
 import { base64Sink, bufferSink, bufferSource, fileHandleSource } from '../../../../src/io/io'
 import { downloadPerTag } from '../../../download'
 import { BITPIXES, CHANNELS, saveImageAndCompareHash } from '../../../imaging/util'
@@ -186,6 +186,15 @@ describe('read compressed', () => {
 
 describe('write', () => {
 	const buffer = Buffer.allocUnsafe(1024 * 1024 * 18)
+
+	test('writes a zero reserved preamble field', async () => {
+		const buffer = Buffer.alloc(4096, 0xff)
+		const size = await writeXisf(bufferSink(buffer), [{ header: { SIMPLE: true, BITPIX: 8, NAXIS: 2, NAXIS1: 1, NAXIS2: 1 }, raw: new Float64Array([1]) }])
+
+		expect(size).toBeGreaterThan(16)
+		expect(buffer.subarray(0, 8).toString('ascii')).toBe(XISF_SIGNATURE)
+		expect(buffer.readUInt32LE(12)).toBe(0)
+	})
 
 	test('completes partial sink writes', async () => {
 		const raw = new Float64Array([0, 0.5, 1])
