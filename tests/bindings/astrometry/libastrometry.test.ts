@@ -47,14 +47,16 @@ test.skipIf(SKIP)(
 		})
 
 		// https://nova.astrometry.net/status/14909666
+		// Orientation/FOV compare to 0.005 deg: flux-weighted centroids move stars by a fraction
+		// of a pixel, about 9 arcsec at this plate scale, versus integer-peak positions.
 		expect(solution).toBeDefined()
-		expect(toDeg(solution!.orientation)).toBeCloseTo(58.4507, 3)
+		expect(toDeg(solution!.orientation)).toBeCloseTo(58.4507, 2)
 		expect(toArcsec(solution!.scale)).toBeCloseTo(170.85, 1)
 		expect(toHour(solution!.rightAscension)).toBeCloseTo(12.474879, 3)
 		expect(toDeg(solution!.declination)).toBeCloseTo(56.7205, 3)
-		expect(toDeg(solution!.width)).toBeCloseTo(34.092, 3)
+		expect(toDeg(solution!.width)).toBeCloseTo(34.092, 2)
 		expect(toDeg(solution!.height)).toBeCloseTo(24.0842, 3)
-		expect(toDeg(solution!.radius)).toBeCloseTo(20.8705, 3)
+		expect(toDeg(solution!.radius)).toBeCloseTo(20.8705, 2)
 		expect(solution!.parity).toBe('NORMAL')
 		expect(solution!.widthInPixels).toBe(719)
 		expect(solution!.heightInPixels).toBe(507)
