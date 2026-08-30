@@ -323,23 +323,72 @@ function fitsWriteScaling(header: Readonly<FitsHeader>, bitpix: BitpixOrZero) {
 // Numeric typed views constructed over FITS image buffers; ordinary number arrays are never used here.
 type FitsImageDataArray = Exclude<NumberArray, number[]>
 
-// Inclusive stored-sample range for an integer FITS typed view, or undefined for floating-point views.
-function integerSampleLimits(output: FitsImageDataArray): readonly [number, number] | undefined {
-	if (output instanceof Uint8Array) return [0, 255]
-	if (output instanceof Int16Array) return [-32768, 32767]
-	if (output instanceof Int32Array) return [-2147483648, 2147483647]
+// Inclusive stored-sample range for an integer BITPIX, or undefined for floating-point data.
+function integerBitpixLimits(bitpix: BitpixOrZero): readonly [number, number] | undefined {
+	if (bitpix === 8) return [0, 255]
+	if (bitpix === 16) return [-32768, 32767]
+	if (bitpix === 32) return [-2147483648, 2147483647]
 	return undefined
 }
 
-// Rounds and saturates a stored integer sample so typed-array assignment cannot wrap.
+// Rounds and saturates a stored integer sample so BITPIX assignment cannot wrap.
 function quantizeIntegerSample(value: number, min: number, max: number) {
 	return clamp(Math.round(value), min, max)
 }
 
+// Quantizes a scaled stored value for `bitpix`; floats are returned unchanged.
+function quantizeStoredSample(value: number, bitpix: BitpixOrZero) {
+	const limits = integerBitpixLimits(bitpix)
+	return limits === undefined ? value : quantizeIntegerSample(value, limits[0], limits[1])
+}
+
+// Reads one big-endian FITS sample from `buffer` at `offset`.
+function readFitsStoredSample(buffer: Buffer, offset: number, bitpix: BitpixOrZero) {
+	switch (bitpix) {
+		case 8:
+			return buffer[offset]
+		case 16:
+			return buffer.readInt16BE(offset)
+		case 32:
+			return buffer.readInt32BE(offset)
+		case -32:
+			return buffer.readFloatBE(offset)
+		case -64:
+			return buffer.readDoubleBE(offset)
+		default:
+			throw new Error(`unsupported FITS BITPIX: ${bitpix}`)
+	}
+}
+
+// Writes one big-endian FITS sample, rounding and clamping integer codes.
+function writeFitsStoredSample(buffer: Buffer, offset: number, bitpix: BitpixOrZero, value: number) {
+	const stored = quantizeStoredSample(value, bitpix)
+
+	switch (bitpix) {
+		case 8:
+			buffer[offset] = stored
+			return
+		case 16:
+			buffer.writeInt16BE(stored, offset)
+			return
+		case 32:
+			buffer.writeInt32BE(stored, offset)
+			return
+		case -32:
+			buffer.writeFloatBE(stored, offset)
+			return
+		case -64:
+			buffer.writeDoubleBE(stored, offset)
+			return
+		default:
+			throw new Error(`unsupported FITS BITPIX: ${bitpix}`)
+	}
+}
+
 // Converts one channel chunk directly from interleaved samples into a reusable planar buffer.
 // Integer views round to the nearest stored code and clamp to the BITPIX range; float views are stored as-is.
-function writeInterleavedChannelChunk(input: ImageRawType, output: FitsImageDataArray, count: number, startPixel: number, channel: number, channels: number, multiplier: number, bias: number) {
-	const limits = integerSampleLimits(output)
+function writeInterleavedChannelChunk(input: ImageRawType, output: FitsImageDataArray, count: number, startPixel: number, channel: number, channels: number, multiplier: number, bias: number, bitpix: BitpixOrZero) {
+	const limits = integerBitpixLimits(bitpix)
 
 	if (limits === undefined && channels === 1 && multiplier === 1 && bias === 0) {
 		output.set(input.subarray(startPixel, startPixel + count))
@@ -398,7 +447,7 @@ async function buildRiceCompressedImage(header: Readonly<FitsHeader>, raw: Image
 			const thisTileHeight = Math.min(tileHeight, height - y)
 			const tilePixels = thisTileHeight * width
 			const tile = tilePixels === tileBuffer.length ? tileBuffer : tileBuffer.subarray(0, tilePixels)
-			writeInterleavedChannelChunk(raw, tile, tilePixels, y * width, c, channels, multiplier, bias)
+			writeInterleavedChannelChunk(raw, tile, tilePixels, y * width, c, channels, multiplier, bias, bitpix)
 			const compressed = compressRice(tile, blockSize)
 
 			rows.writeUInt32BE(compressed.length, row * rowSize)
@@ -754,48 +803,11 @@ function cardEnd(line: Buffer, position: Position) {
 	return Math.min(line.byteLength, position.start + FITS_HEADER_CARD_SIZE)
 }
 
-// Builds a correctly aligned typed view over the backing FITS image buffer.
-function imageDataView(buffer: Buffer, bitpix: BitpixOrZero): FitsImageDataArray {
-	const byteLength = buffer.byteLength
-
-	if (byteLength === 0) return new Uint8Array(0)
-
-	const pixelInBytes = bitpixInBytes(bitpix)
-
-	if (pixelInBytes < 1 || byteLength % pixelInBytes !== 0) {
-		throw new Error('invalid FITS image buffer size')
-	}
-
-	const { byteOffset } = buffer
-	const length = byteLength / pixelInBytes
-
-	switch (bitpix) {
-		case 8:
-			return new Uint8Array(buffer.buffer, byteOffset, length)
-		case 16:
-			return new Int16Array(buffer.buffer, byteOffset, length)
-		case 32:
-			return new Int32Array(buffer.buffer, byteOffset, length)
-		case -32:
-			return new Float32Array(buffer.buffer, byteOffset, length)
-		case -64:
-			return new Float64Array(buffer.buffer, byteOffset, length)
-		default:
-			throw new Error(`unsupported FITS BITPIX: ${bitpix}`)
-	}
-}
-
-// Uses the caller-provided buffer when aligned, otherwise allocates an aligned scratch buffer.
-function imageBufferView(buffer: Buffer | undefined, size: number, bitpix: BitpixOrZero): Buffer {
+// Uses the caller-provided buffer when it is large enough, otherwise allocates scratch storage.
+function imageBufferView(buffer: Buffer | undefined, size: number): Buffer {
 	if (buffer === undefined) return Buffer.allocUnsafe(size)
 	if (buffer.byteLength < size) throw new Error('FITS image buffer is too small')
-
-	const view = buffer.subarray(0, size)
-	const pixelInBytes = bitpixInBytes(bitpix)
-
-	if (size === 0 || pixelInBytes <= 1 || view.byteOffset % pixelInBytes === 0) return view
-
-	return Buffer.allocUnsafe(size)
+	return buffer.subarray(0, size)
 }
 
 // Returns an image I/O chunk size aligned to complete FITS samples, validating the total byte size.
@@ -1151,18 +1163,25 @@ function fitsReadScaling(header: Readonly<FitsHeader>, bitpix: BitpixOrZero, sam
 	return [effectiveScale * normalization, safeZero * normalization] as const
 }
 
-// Scales one sequential planar channel chunk into its interleaved image positions.
-function writePlanarChannelChunkToInterleaved(data: FitsImageDataArray, count: number, output: ImageRawType, startPixel: number, channel: number, channels: number, multiplier: number, bias: number) {
+// Reads one planar big-endian chunk and writes scaled samples into interleaved output in a single pass.
+function writePlanarFitsBytesToInterleaved(chunk: Buffer, count: number, bitpix: BitpixOrZero, pixelInBytes: number, output: ImageRawType, startPixel: number, channel: number, channels: number, multiplier: number, bias: number) {
 	let target = startPixel * channels + channel
+	let offset = 0
 	const identity = multiplier === 1 && bias === 0
 
-	if (identity && channels === 1) {
-		output.set(data.subarray(0, count), startPixel)
-	} else if (identity) {
-		for (let i = 0; i < count; i++, target += channels) output[target] = data[i]
+	if (identity) {
+		for (let i = 0; i < count; i++, target += channels, offset += pixelInBytes) output[target] = readFitsStoredSample(chunk, offset, bitpix)
 	} else {
-		for (let i = 0; i < count; i++, target += channels) output[target] = data[i] * multiplier + bias
+		for (let i = 0; i < count; i++, target += channels, offset += pixelInBytes) output[target] = readFitsStoredSample(chunk, offset, bitpix) * multiplier + bias
 	}
+}
+
+// Writes one interleaved channel chunk as planar big-endian FITS bytes, quantizing integer codes in the same pass.
+function writeInterleavedChannelChunkToFitsBytes(input: ImageRawType, chunk: Buffer, count: number, bitpix: BitpixOrZero, pixelInBytes: number, startPixel: number, channel: number, channels: number, multiplier: number, bias: number) {
+	let source = startPixel * channels + channel
+	let offset = 0
+
+	for (let i = 0; i < count; i++, source += channels, offset += pixelInBytes) writeFitsStoredSample(chunk, offset, bitpix, input[source] * multiplier - bias)
 }
 
 // Scales one decompressed planar Rice tile directly into its interleaved image coordinates.
@@ -1200,7 +1219,6 @@ function writePlanarTileToInterleaved(tile: NumberArray, output: ImageRawType, w
 export class FitsImageReader {
 	readonly #compressed: boolean
 	readonly #buffer: Buffer
-	readonly #data: FitsImageDataArray
 
 	// Prepares to read `hdu`; a caller buffer must cover the full data segment, while the default scratch
 	// storage is bounded and reused for sequential planar chunks.
@@ -1212,12 +1230,10 @@ export class FitsImageReader {
 
 		if (this.#compressed) {
 			this.#buffer = Buffer.alloc(0)
-			this.#data = new Uint8Array(0)
 		} else {
 			const bitpix = bitpixKeyword(hdu.header, 0)
 			const size = buffer === undefined ? fitsImageChunkSize(hdu.data.size, bitpix) : hdu.data.size
-			this.#buffer = imageBufferView(buffer, size, bitpix)
-			this.#data = imageDataView(this.#buffer, bitpix)
+			this.#buffer = imageBufferView(buffer, size)
 		}
 	}
 
@@ -1233,23 +1249,19 @@ export class FitsImageReader {
 		const channels = numberOfChannelsKeyword(header, 1)
 		const numberOfPixels = width * height
 		const [multiplier, bias] = fitsReadScaling(header, bitpix, sampleScale)
-		if (numberOfPixels > 0 && this.#data.length === 0) return false
+		const chunkSamples = pixelInBytes > 0 ? Math.trunc(this.#buffer.length / pixelInBytes) : 0
+		if (numberOfPixels > 0 && chunkSamples === 0) return false
 		source.seek(this.hdu.data.offset)
 
 		for (let channel = 0; channel < channels; channel++) {
 			for (let startPixel = 0; startPixel < numberOfPixels;) {
-				const count = Math.min(this.#data.length, numberOfPixels - startPixel)
+				const count = Math.min(chunkSamples, numberOfPixels - startPixel)
 				const byteCount = count * pixelInBytes
 				const chunk = byteCount === this.#buffer.length ? this.#buffer : this.#buffer.subarray(0, byteCount)
 
 				if ((await readUntil(source, chunk, byteCount, 0)) !== byteCount) return false
 
-				// FITS stores multi-byte samples in big-endian order.
-				if (pixelInBytes === 2) chunk.swap16()
-				else if (pixelInBytes === 4) chunk.swap32()
-				else if (pixelInBytes === 8) chunk.swap64()
-
-				writePlanarChannelChunkToInterleaved(this.#data, count, output, startPixel, channel, channels, multiplier, bias)
+				writePlanarFitsBytesToInterleaved(chunk, count, bitpix, pixelInBytes, output, startPixel, channel, channels, multiplier, bias)
 				startPixel += count
 			}
 		}
@@ -1364,7 +1376,6 @@ export class FitsImageReader {
 // Writes a channel-interleaved image to a sink as a plain (uncompressed) big-endian FITS data segment.
 export class FitsImageWriter {
 	readonly #buffer: Buffer
-	readonly #data: FitsImageDataArray
 
 	// Prepares to write the dimensions/BITPIX declared in `header`; a caller buffer must cover the full
 	// image, while the default scratch storage is bounded and reused for sequential planar chunks.
@@ -1377,8 +1388,7 @@ export class FitsImageWriter {
 		const height = uncompressedHeightKeyword(header, 0)
 		const channels = uncompressedNumberOfChannelsKeyword(header, 1)
 		const size = width * height * channels * bitpixInBytes(bitpix)
-		this.#buffer = imageBufferView(buffer, buffer === undefined ? fitsImageChunkSize(size, bitpix) : size, bitpix)
-		this.#data = imageDataView(this.#buffer, bitpix)
+		this.#buffer = imageBufferView(buffer, buffer === undefined ? fitsImageChunkSize(size, bitpix) : size)
 	}
 
 	// Writes FITS-format image from RGB-interleaved array into sink
@@ -1390,20 +1400,15 @@ export class FitsImageWriter {
 		const channels = uncompressedNumberOfChannelsKeyword(this.header, 1)
 		const numberOfPixels = width * height
 		const [multiplier, bias] = fitsWriteScaling(this.header, bitpix)
+		const chunkSamples = pixelInBytes > 0 ? Math.trunc(this.#buffer.length / pixelInBytes) : 0
 		let written = 0
 
 		for (let channel = 0; channel < channels; channel++) {
 			for (let startPixel = 0; startPixel < numberOfPixels;) {
-				const count = Math.min(this.#data.length, numberOfPixels - startPixel)
+				const count = Math.min(chunkSamples, numberOfPixels - startPixel)
 				const byteCount = count * pixelInBytes
 				const chunk = byteCount === this.#buffer.length ? this.#buffer : this.#buffer.subarray(0, byteCount)
-				writeInterleavedChannelChunk(input, this.#data, count, startPixel, channel, channels, multiplier, bias)
-
-				// FITS stores multi-byte samples in big-endian order.
-				if (pixelInBytes === 2) chunk.swap16()
-				else if (pixelInBytes === 4) chunk.swap32()
-				else if (pixelInBytes === 8) chunk.swap64()
-
+				writeInterleavedChannelChunkToFitsBytes(input, chunk, count, bitpix, pixelInBytes, startPixel, channel, channels, multiplier, bias)
 				await writeFully(sink, chunk)
 				written += byteCount
 				startPixel += count
