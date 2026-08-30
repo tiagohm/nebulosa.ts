@@ -307,7 +307,7 @@ test('tolerates one bad frame and resumes with the same pending pulse', () => {
 })
 
 test('classifies a jump beyond maxFrameJumpPx as impossible_jump rather than star_lost', () => {
-	const calibrator = new GuidingCalibrator(calibrationConfig({ maxFrameJumpPx: 4, maxMatchDistancePx: 5 }))
+	const calibrator = new GuidingCalibrator(calibrationConfig({ maxFrameJumpPx: 4, maxMatchDistancePx: 5, maxBadFrames: 0 }))
 	expect(calibrator.processFrame(guideFrame(BASE_STARS, 0, 0)).pulse?.ra.duration).toBe(100)
 
 	// 6 px is beyond both the jump (4) and match (5) radii; the star is still in the frame, so this
@@ -315,6 +315,30 @@ test('classifies a jump beyond maxFrameJumpPx as impossible_jump rather than sta
 	const step = calibrator.processFrame(guideFrame(shiftStars(BASE_STARS, 6, 0), 1000, 1))
 	expect(step.failure).toBeDefined()
 	expect(step.failure!.code).toBe('impossible_jump')
+})
+
+test('tolerates a transient jump within the bad-frame budget', () => {
+	const calibrator = new GuidingCalibrator(calibrationConfig({ maxFrameJumpPx: 4, maxMatchDistancePx: 5, maxBadFrames: 1 }))
+	expect(calibrator.processFrame(guideFrame(BASE_STARS, 0, 0)).pulse?.ra.duration).toBe(100)
+
+	const jumped = calibrator.processFrame(guideFrame(shiftStars(BASE_STARS, 6, 0), 1000, 1))
+	expect(jumped.failure).toBeUndefined()
+	expect(jumped.diagnostics.badFrames).toBe(1)
+	expect(jumped.diagnostics.raSteps).toBe(0)
+
+	const recovered = calibrator.processFrame(guideFrame(shiftStars(BASE_STARS, 0.8, 0.2), 2000, 2))
+	expect(recovered.failure).toBeUndefined()
+	expect(recovered.diagnostics.raSteps).toBe(1)
+})
+
+test('accepts a sidereal-scale RA step under the default jump limit', () => {
+	const calibrator = new GuidingCalibrator()
+	const stars = [{ x: 200, y: 200, snr: 20, flux: 2000, hfd: 2.8, ellipticity: 0.15, fwhm: 4 }]
+	expect(calibrator.processFrame(guideFrame(stars, 0, 0)).failure).toBeUndefined()
+
+	const step = calibrator.processFrame(guideFrame(shiftStars(stars, 9.75, 0), 1000, 1))
+	expect(step.failure).toBeUndefined()
+	expect(step.diagnostics.raSteps).toBe(1)
 })
 
 test('fails after exceeding the bad-frame limit', () => {

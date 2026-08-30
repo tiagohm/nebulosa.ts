@@ -65,7 +65,10 @@ export interface GuidingCalibrationConfig {
 	readonly minNetRaTravelPx: number
 	// Required net DEC travel before solving, in pixels.
 	readonly minNetDecTravelPx: number
-	// Maximum allowed per-frame star jump, in pixels.
+	// Maximum allowed per-frame star jump, in pixels. A larger displacement counts toward
+	// `maxBadFrames` so a single seeing spike does not abort the run; exceeding that budget fails
+	// as `impossible_jump`. Defaults to the guider jump limit so a sidereal-scale calibration pulse
+	// is not rejected as a meteor.
 	readonly maxFrameJumpPx: number
 	// Allowed consecutive bad frames before aborting.
 	readonly maxBadFrames: number
@@ -350,8 +353,8 @@ interface GuidingCalibrationConfigIssue {
 	readonly reason: string
 }
 
-// Default calibration tuning: ~650 ms pulses, west/north legs, RA clearing enabled, 12° minimum
-// axis separation.
+// Default calibration tuning: ~650 ms pulses, west/north legs, RA clearing enabled, 12 px jump
+// limit matching the guider, 12° minimum axis separation.
 export const DEFAULT_GUIDING_CALIBRATOR_CONFIG: Readonly<GuidingCalibrationConfig> = {
 	raPulse: 650,
 	decPulse: 650,
@@ -364,7 +367,7 @@ export const DEFAULT_GUIDING_CALIBRATOR_CONFIG: Readonly<GuidingCalibrationConfi
 	minMovePerStepPx: 0.15,
 	minNetRaTravelPx: 12,
 	minNetDecTravelPx: 10,
-	maxFrameJumpPx: 8,
+	maxFrameJumpPx: 12,
 	maxBadFrames: 3,
 	settleFramesAfterMove: 0,
 	clearingMoveEnabled: true,
@@ -592,7 +595,7 @@ export class GuidingCalibrator {
 		if (tracked === undefined) {
 			const nearest = pickNearestCalibrationStar(filtered.accepted, this.state.lastX, this.state.lastY, Number.POSITIVE_INFINITY)
 			if (nearest !== undefined) {
-				return { failure: this.#fail('impossible_jump', 'measured star displacement exceeded the allowed frame jump threshold', frame, ['jump_rejected'], filtered) } as const
+				return { failure: this.#rejectJump(frame, filtered) } as const
 			}
 
 			return { failure: this.#fail('star_lost', 'guide star could not be matched in the calibration frame', frame, ['star_lost'], filtered) } as const
@@ -607,7 +610,7 @@ export class GuidingCalibrator {
 		const jumpDistance = Math.hypot(jumpX, jumpY)
 
 		if (jumpDistance > this.config.maxFrameJumpPx) {
-			return { failure: this.#fail('impossible_jump', 'measured star displacement exceeded the allowed frame jump threshold', frame, ['jump_rejected'], filtered) } as const
+			return { failure: this.#rejectJump(frame, filtered) } as const
 		}
 
 		this.state.badFrames = 0
@@ -878,6 +881,19 @@ export class GuidingCalibrator {
 		const pulse: CalibrationPulseCommand = axis === 'ra' ? { ra: { direction, duration }, dec: NO_PULSE } : { ra: NO_PULSE, dec: { direction, duration } }
 		this.#updateDiagnostics(frame, filtered, notes, pulse)
 		return this.#makeStepResult(pulse, frame, notes, filtered)
+	}
+
+	// Counts an oversized star jump as a recoverable bad frame. The pending pulse is left in place
+	// so the next good frame can still measure it; a persistent jump exhausts `maxBadFrames` and
+	// fails as `impossible_jump` rather than a lost star.
+	#rejectJump(frame: GuideFrame, filtered: FilteredStars) {
+		this.state.badFrames++
+
+		if (this.state.badFrames > this.config.maxBadFrames) {
+			return this.#fail('impossible_jump', 'measured star displacement exceeded the allowed frame jump threshold', frame, ['jump_rejected'], filtered)
+		}
+
+		return this.#makeStepResult(undefined, frame, ['jump_rejected'], filtered)
 	}
 
 	// Fails calibration with a structured reason and snapshot diagnostics.

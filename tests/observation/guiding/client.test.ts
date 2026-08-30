@@ -1846,7 +1846,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 			await feedFrame(harness)
 			await feedFrame(harness)
 
-			// 12 px plus the pending calibration pulse is outside maxFrameJumpPx (8). The star is
+			// 12 px plus the pending calibration pulse is outside maxFrameJumpPx (12). The star is
 			// still in the frame, so the calibrator classifies this as a rejected jump rather than
 			// a lost star even when the match radius equals the jump threshold.
 			harness.mount.offsetX += 12
