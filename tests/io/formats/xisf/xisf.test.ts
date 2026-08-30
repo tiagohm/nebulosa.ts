@@ -170,6 +170,57 @@ test('preserves floating-point XISF samples in digital scale', async () => {
 	expect(image!.quantizationStep).toBeUndefined()
 })
 
+test('returns false when the attached block is smaller than the image geometry', async () => {
+	const data = Buffer.alloc(8)
+	data.writeUInt16LE(65535, 0)
+	data.writeUInt16LE(1, 2)
+	data.writeUInt16LE(2, 4)
+	data.writeUInt16LE(3, 6)
+	const source = bufferSource(data)
+	const reader = new XisfImageReader({
+		bitpix: 16,
+		location: { offset: 0, size: 2 },
+		byteOrder: 'little',
+		pixelStorage: 'Normal',
+		geometry: { width: 4, height: 1, channels: 1 },
+	})
+	const output = new Float64Array(4).fill(7)
+
+	expect(await reader.read(source, output)).toBeFalse()
+	expect(source.position).toBe(0)
+	expect(Array.from(output)).toEqual([7, 7, 7, 7])
+})
+
+test('returns false when uncompressed size disagrees with geometry', async () => {
+	const geometry = { width: 2, height: 1, channels: 1 }
+	const encoded = await new XisfImageWriter({ bitpix: 16, byteOrder: 'little', pixelStorage: 'Normal', geometry }, { format: 'zstd' }).encode(new Float64Array([0, 1]))
+	const reader = new XisfImageReader({
+		bitpix: 16,
+		location: { offset: 0, size: encoded.data.byteLength },
+		compression: { format: 'zstd', shuffled: false, uncompressedSize: 2, itemSize: 0 },
+		byteOrder: 'little',
+		pixelStorage: 'Normal',
+		geometry,
+	})
+	const output = new Float64Array(2).fill(7)
+
+	expect(await reader.read(bufferSource(encoded.data), output)).toBeFalse()
+	expect(Array.from(output)).toEqual([7, 7])
+})
+
+test('does not throw when constructing a reader for a truncated block', () => {
+	expect(
+		() =>
+			new XisfImageReader({
+				bitpix: 16,
+				location: { offset: 0, size: 3 },
+				byteOrder: 'little',
+				pixelStorage: 'Normal',
+				geometry: { width: 2, height: 1, channels: 1 },
+			}),
+	).not.toThrow()
+})
+
 test('returns false for an unimplemented compression codec', async () => {
 	const reader = new XisfImageReader({
 		bitpix: 16,
