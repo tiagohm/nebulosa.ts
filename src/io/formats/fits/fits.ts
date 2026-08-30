@@ -324,11 +324,10 @@ function fitsWriteScaling(header: Readonly<FitsHeader>, bitpix: BitpixOrZero) {
 type FitsImageDataArray = Exclude<NumberArray, number[]>
 
 // Inclusive stored-sample range for an integer BITPIX, or undefined for floating-point data.
-function integerBitpixLimits(bitpix: BitpixOrZero): readonly [number, number] | undefined {
-	if (bitpix === 8) return [0, 255]
-	if (bitpix === 16) return [-32768, 32767]
-	if (bitpix === 32) return [-2147483648, 2147483647]
-	return undefined
+const INTEGER_BITPIX_LIMITS: Readonly<Record<number, readonly [number, number]>> = {
+	8: [0, 255],
+	16: [-32768, 32767],
+	32: [-2147483648, 2147483647],
 }
 
 // Rounds and saturates a stored integer sample so BITPIX assignment cannot wrap.
@@ -338,7 +337,7 @@ function quantizeIntegerSample(value: number, min: number, max: number) {
 
 // Quantizes a scaled stored value for `bitpix`; floats are returned unchanged.
 function quantizeStoredSample(value: number, bitpix: BitpixOrZero) {
-	const limits = integerBitpixLimits(bitpix)
+	const limits = INTEGER_BITPIX_LIMITS[bitpix]
 	return limits === undefined ? value : quantizeIntegerSample(value, limits[0], limits[1])
 }
 
@@ -388,7 +387,7 @@ function writeFitsStoredSample(buffer: Buffer, offset: number, bitpix: BitpixOrZ
 // Converts one channel chunk directly from interleaved samples into a reusable planar buffer.
 // Integer views round to the nearest stored code and clamp to the BITPIX range; float views are stored as-is.
 function writeInterleavedChannelChunk(input: ImageRawType, output: FitsImageDataArray, count: number, startPixel: number, channel: number, channels: number, multiplier: number, bias: number, bitpix: BitpixOrZero) {
-	const limits = integerBitpixLimits(bitpix)
+	const limits = INTEGER_BITPIX_LIMITS[bitpix]
 
 	if (limits === undefined && channels === 1 && multiplier === 1 && bias === 0) {
 		output.set(input.subarray(startPixel, startPixel + count))
