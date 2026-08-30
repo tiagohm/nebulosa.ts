@@ -368,4 +368,17 @@ describe('errors and recovery', () => {
 		parser.reset()
 		expect(parser.parse('<c/>')).toEqual([{ name: 'c', attributes: {}, children: [], text: EMPTY_TEXT }])
 	})
+
+	test('reuses the parse result array but keeps prior node objects', () => {
+		const parser = new SimpleXmlParser()
+		const first = parser.parse('<a/>')
+		const firstNode = first[0]
+		const second = parser.parse('<b/>')
+
+		expect(second).toBe(first)
+		expect(second).toEqual([{ name: 'b', attributes: {}, children: [], text: EMPTY_TEXT }])
+		expect(firstNode.name).toBe('a')
+		expect(firstNode.text).toBe(second[0].text)
+		expect(firstNode.text.byteLength).toBe(0)
+	})
 })

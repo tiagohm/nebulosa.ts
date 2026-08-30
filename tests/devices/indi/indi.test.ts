@@ -267,8 +267,8 @@ describe('parse', () => {
 
 	test('oneBLOB from a transferred large payload does not include spare capacity', () => {
 		const payload = 'A'.repeat(80_000)
-		const xmlParser = new SimpleXmlParser()
-		const [node] = xmlParser.parse(`<setBLOBVector device="Camera" name="CCD1"><oneBLOB name="CCD1" size="80000" format=".fits">${payload}</oneBLOB></setBLOBVector>`)
+		const parser = new SimpleXmlParser()
+		const [node] = parser.parse(`<setBLOBVector device="Camera" name="CCD1"><oneBLOB name="CCD1" size="80000" format=".fits">${payload}</oneBLOB></setBLOBVector>`)
 		const vector = client.parseSetVector(node) as SetBlobVector
 
 		expect(vector.elements.CCD1.value!.byteLength).toBe(payload.length)

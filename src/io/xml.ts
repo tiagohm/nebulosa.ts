@@ -59,6 +59,9 @@ const UNDERSCORE = 95
 // Text payloads at or above this size transfer the parser buffer instead of copying into the node.
 const LARGE_TEXT_THRESHOLD = 64 * 1024
 
+// Shared empty text payload for elements with no character data.
+const EMPTY_TEXT = new Uint8Array(0)
+
 // Reusable geometric-growth byte buffer that accumulates token bytes and decodes them to text on demand,
 // avoiding per-token allocations. An optional max byte length caps growth for the text buffer.
 class InternalBuffer {
@@ -117,7 +120,7 @@ class InternalBuffer {
 		const length = this.#position
 		if (length === 0) {
 			this.#position = 0
-			return this.#data.subarray(0, 0)
+			return EMPTY_TEXT
 		}
 
 		if (length >= LARGE_TEXT_THRESHOLD) {
@@ -161,6 +164,7 @@ function mergeArray(a: Uint8Array, b: Uint8Array) {
 
 // Incremental XML parser. Feed bytes/strings via parse(); it returns any top-level nodes that completed
 // during that call and retains partial state between calls. Throws on malformed input (and resets).
+// The array returned by parse() is reused on the next call; retain the XmlNode objects, not the array.
 export class SimpleXmlParser {
 	#state = XmlState.START
 	readonly #tag = new InternalBuffer(256)
@@ -172,16 +176,18 @@ export class SimpleXmlParser {
 	#prevCode?: number
 	#closeTagSealed = false
 	readonly #encoder = new TextEncoder()
+	readonly #nodes: XmlNode[] = []
 
 	// Feeds a chunk of XML (string or bytes) and returns the top-level nodes that completed in this chunk.
+	// The returned array is cleared and reused on the next parse(); node objects remain valid.
 	parse(input: string | Buffer | Uint8Array): XmlNode[] {
 		if (typeof input === 'string') {
 			return this.parse(this.#encoder.encode(input))
 		}
 
-		const nodes: XmlNode[] = []
-		this.#processChunk(input, nodes)
-		return nodes
+		this.#nodes.length = 0
+		this.#processChunk(input, this.#nodes)
+		return this.#nodes
 	}
 
 	// Clears all parser state, discarding any partially parsed node and the open-element stack.
@@ -199,7 +205,7 @@ export class SimpleXmlParser {
 
 	// Append a new node to the current tree and optionally keep it open.
 	#appendNode(attributes: XmlNodeAttributes, push: boolean = true): XmlNode {
-		const node: XmlNode = { name: this.#tag.text(), attributes, children: [], text: new Uint8Array(0) }
+		const node: XmlNode = { name: this.#tag.text(), attributes, children: [], text: EMPTY_TEXT }
 
 		if (this.#tree.length > 0) {
 			this.#tree.at(-1)!.children.push(node)
