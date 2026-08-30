@@ -202,6 +202,57 @@ test('fails when RA travel never reaches the configured threshold', () => {
 	expect(simulation.step.failure!.code).toBe('insufficient_ra_movement')
 })
 
+test('counts only consecutive RA steps without motion', () => {
+	const calibrator = new GuidingCalibrator(calibrationConfig({ maxRaNoMotionSteps: 2, minMovePerStepPx: 0.3, minNetRaTravelPx: 12, clearingMoveEnabled: false }))
+	let x = 140
+	let y = 120
+	let frameId = 0
+	let step = calibrator.processFrame(guideFrame(BASE_STARS, 0, frameId++))
+
+	for (const delta of [1, 0, 1, 0, 1]) {
+		x += delta
+		y += delta * 0.1
+		step = calibrator.processFrame(guideFrame(shiftStars(BASE_STARS, x - 140, y - 120), frameId * 1000, frameId++))
+		expect(step.failure).toBeUndefined()
+	}
+
+	expect(calibrator.currentState.raNoMotionSteps).toBe(0)
+	expect(calibrator.currentState.raSteps).toBe(5)
+	expect(step.diagnostics.raSamples).toHaveLength(3)
+})
+
+test('fails after too many consecutive RA steps without motion', () => {
+	const calibrator = new GuidingCalibrator(calibrationConfig({ maxRaNoMotionSteps: 2, minMovePerStepPx: 0.3, clearingMoveEnabled: false }))
+	expect(calibrator.processFrame(guideFrame(BASE_STARS, 0, 0)).pulse?.ra.duration).toBe(100)
+
+	let step = calibrator.processFrame(guideFrame(BASE_STARS, 1000, 1))
+	expect(step.failure).toBeUndefined()
+	step = calibrator.processFrame(guideFrame(BASE_STARS, 2000, 2))
+	expect(step.failure).toBeUndefined()
+	step = calibrator.processFrame(guideFrame(BASE_STARS, 3000, 3))
+	expect(step.failure).toBeDefined()
+	expect(step.failure!.code).toBe('too_many_ra_no_motion_steps')
+})
+
+test('excludes RA no-motion pulses from the solved axis rate', () => {
+	const calibrator = new GuidingCalibrator(calibrationConfig({ minNetRaTravelPx: 4, minMovePerStepPx: 0.15, clearingMoveEnabled: false }))
+	let x = 140
+	let frameId = 0
+	let step = calibrator.processFrame(guideFrame(BASE_STARS, 0, frameId++))
+
+	for (const delta of [0, 0, 0, 1.2, 1.2, 1.2, 1.2]) {
+		x += delta
+		step = calibrator.processFrame(guideFrame(shiftStars(BASE_STARS, x - 140, 0), frameId * 1000, frameId++))
+		expect(step.failure).toBeUndefined()
+		if (calibrator.state.raSolution !== undefined) break
+	}
+
+	expect(calibrator.state.raSolution).toBeDefined()
+	expect(calibrator.state.raSolution!.totalPulse).toBe(400)
+	expect(calibrator.state.raSolution!.ratePxPerMs).toBeCloseTo(4.8 / 400, 8)
+	expect(step.diagnostics.raSamples).toHaveLength(4)
+})
+
 test('fails when the RA clearing move cannot return close enough to the origin', () => {
 	const simulation = runCalibration({ maxClearingOffsetPx: 0.5, maxClearingSteps: 4 }, { raVector: [0.9, 0.25], decVector: [-0.2, 0.8], reverseRaScale: 0.2 })
 	expect(simulation.step.completed).toBeUndefined()

@@ -620,7 +620,6 @@ export class GuidingCalibrator {
 		this.#transitionTo('raForwardMeasure')
 		const sample = this.#recordSample(this.state.raSteps + 1, this.config.raPulse, this.config.raDirection, point, this.state.startX, this.state.startY)
 		this.state.raSteps++
-		this.state.raSamples.push(sample)
 		this.#finishMeasurement(point)
 
 		if (sample.stepDistance < this.config.minMovePerStepPx) {
@@ -629,8 +628,18 @@ export class GuidingCalibrator {
 			if (this.state.raNoMotionSteps > this.config.maxRaNoMotionSteps) {
 				return this.#fail('too_many_ra_no_motion_steps', 'RA calibration pulses did not produce measurable motion', frame, ['ra_no_motion'], filtered)
 			}
+
+			this.#updateDiagnostics(frame, filtered, ['ra_no_motion'])
+
+			if (this.state.raSteps >= this.config.maxRaSteps) {
+				return this.#fail('insufficient_ra_movement', 'RA calibration did not reach the required net travel before the step limit', frame, ['ra_travel_short'], filtered)
+			}
+
+			return this.#queuePulse('raForwardPulse', 'ra', this.config.raDirection, this.config.raPulse, frame, ['ra_continue'], filtered)
 		}
 
+		this.state.raNoMotionSteps = 0
+		this.state.raSamples.push(sample)
 		this.#updateDiagnostics(frame, filtered, ['ra_measured'])
 
 		if (sample.netDistance >= this.config.minNetRaTravelPx) {
@@ -651,7 +660,7 @@ export class GuidingCalibrator {
 				return this.#queuePulse('decForwardPulse', 'dec', this.config.decDirection, this.config.decPulse, frame, ['dec_started'], filtered)
 			}
 
-			this.state.plannedClearingSteps = Math.trunc(clamp(Math.round(this.state.raSteps * this.config.clearingMoveFraction), 1, this.config.maxClearingSteps))
+			this.state.plannedClearingSteps = Math.trunc(clamp(Math.round(this.state.raSamples.length * this.config.clearingMoveFraction), 1, this.config.maxClearingSteps))
 			return this.#queuePulse('raClearPulse', 'ra', oppositeRA(this.config.raDirection), this.config.raPulse, frame, ['ra_clearing_started'], filtered)
 		}
 
