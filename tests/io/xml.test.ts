@@ -222,6 +222,36 @@ describe('parse', () => {
 		expect(node[0].name).toBe('person')
 		expect(node[0].attributes.status).toBe('😎')
 	})
+
+	test('copies long text and attribute runs in bulk', () => {
+		const parser = new SimpleXmlParser()
+		const text = 'x'.repeat(10_000)
+		const value = 'y'.repeat(2_000)
+		const [node] = parser.parse(`<person id="${value}">${text}</person>`)
+
+		expect(node.attributes.id).toBe(value)
+		expect(node.text).toEqual(encodeText(text))
+	})
+
+	test('resumes long text across chunks', () => {
+		const parser = new SimpleXmlParser()
+		const text = 'z'.repeat(5_000)
+
+		expect(parser.parse(`<a>${text.slice(0, 1_000)}`)).toBeEmpty()
+		expect(parser.parse(text.slice(1_000, 4_000))).toBeEmpty()
+		const [node] = parser.parse(`${text.slice(4_000)}</a>`)
+
+		expect(node.text).toEqual(encodeText(text))
+	})
+
+	test('resumes tag and attribute names across chunks', () => {
+		const parser = new SimpleXmlParser()
+
+		expect(parser.parse('<pers')).toBeEmpty()
+		expect(parser.parse('on fo')).toBeEmpty()
+		expect(parser.parse('o="ba')).toBeEmpty()
+		expect(parser.parse('r"/>')).toEqual([{ name: 'person', attributes: { foo: 'bar' }, children: [], text: EMPTY_TEXT }])
+	})
 })
 
 describe('behavior', () => {

@@ -1,9 +1,10 @@
 // https://x.com/i/grok/share/3i6xCCEtUvQWeNnbiVMaermCl
 
 // Minimal streaming XML parser, sufficient for the simple element/attribute/text documents the library
-// consumes (e.g. XISF headers, INDI/Alpaca payloads). `SimpleXmlParser` is a byte-fed state machine that
-// emits each top-level node once it closes; it does not handle DTDs, namespaces beyond `:` in names,
-// entity references, CDATA, or processing instructions.
+// consumes (e.g. INDI/Alpaca payloads). `SimpleXmlParser` is a chunk-fed state machine that copies token
+// runs (text, quoted attribute values, and names) in bulk and emits each top-level node once it closes.
+// It does not handle DTDs, namespaces beyond `:` in names, entity references, CDATA, or processing
+// instructions.
 
 // XML element attributes as a name -> value map.
 export type XmlNodeAttributes = Record<string, string>
@@ -79,9 +80,18 @@ class InternalBuffer {
 
 	// Append one byte and grow the storage geometrically only when capacity is exhausted.
 	write(byte: number) {
-		if (this.#position >= this.#data.length) this.#grow()
-
+		this.#ensure(1)
 		this.#data[this.#position++] = byte
+	}
+
+	// Append `src[start, end)` in one copy, growing to at least the needed size when the run is larger
+	// than the remaining capacity.
+	writeBytes(src: Uint8Array, start: number, end: number) {
+		const n = end - start
+		if (n <= 0) return
+		this.#ensure(n)
+		this.#data.set(src.subarray(start, end), this.#position)
+		this.#position += n
 	}
 
 	// Decode the bytes written since the last reset.
@@ -93,14 +103,19 @@ class InternalBuffer {
 		return this.#data.subarray(0, this.#position)
 	}
 
-	// Grow without eagerly reserving the full max byte length.
-	#grow() {
-		const currentLength = this.#data.length
-		const nextLength = this.#maxByteLength > 0 ? Math.min(currentLength * 2, this.#maxByteLength) : currentLength * 2
+	// Grow geometrically until `this.#position + n` fits, without exceeding the optional max byte length.
+	#ensure(n: number) {
+		const needed = this.#position + n
+		if (needed <= this.#data.length) return
 
-		if (nextLength <= currentLength) {
-			throw new RangeError(`internal buffer exceeded max byte length: ${this.#maxByteLength}`)
+		const max = this.#maxByteLength
+		if (max > 0 && needed > max) {
+			throw new RangeError(`internal buffer exceeded max byte length: ${max}`)
 		}
+
+		let nextLength = this.#data.length
+		while (nextLength < needed) nextLength *= 2
+		if (max > 0 && nextLength > max) nextLength = max
 
 		const data = new Uint8Array(nextLength)
 		data.set(this.#data)
@@ -133,17 +148,11 @@ export class SimpleXmlParser {
 	parse(input: string | Buffer | Uint8Array): XmlNode[] {
 		if (typeof input === 'string') {
 			return this.parse(this.#encoder.encode(input))
-		} else {
-			const nodes: XmlNode[] = []
-
-			for (let i = 0; i < input.byteLength; i++) {
-				const code = input[i] & 0xff
-				const node = this.#processByte(code)
-				if (node) nodes.push(node)
-			}
-
-			return nodes
 		}
+
+		const nodes: XmlNode[] = []
+		this.#processChunk(input, nodes)
+		return nodes
 	}
 
 	// Clears all parser state, discarding any partially parsed node and the open-element stack.
@@ -214,6 +223,66 @@ export class SimpleXmlParser {
 		return node
 	}
 
+	// Copy token runs from `input` and push each top-level node that closes in this chunk.
+	#processChunk(input: Uint8Array, nodes: XmlNode[]) {
+		const length = input.byteLength
+		let i = 0
+
+		while (i < length) {
+			if (this.#state === XmlState.TEXT) {
+				const lt = input.indexOf(OPEN_ANGLE, i)
+				const end = lt < 0 ? length : lt
+				if (end > i) {
+					this.#text.writeBytes(input, i, end)
+					this.#prevCode = input[end - 1]
+				}
+				if (lt < 0) return
+				this.#appendText()
+				this.#state = XmlState.TAG_OPEN
+				this.#prevCode = OPEN_ANGLE
+				i = lt + 1
+				continue
+			}
+
+			if (this.#state === XmlState.ATTR_VALUE && input[i] !== QUOTE) {
+				const q = input.indexOf(QUOTE, i)
+				const end = q < 0 ? length : q
+				if (end > i) {
+					this.#value.writeBytes(input, i, end)
+					this.#prevCode = input[end - 1]
+				}
+				if (q < 0) return
+				i = q
+				continue
+			}
+
+			if (this.#state === XmlState.TAG_NAME || this.#state === XmlState.ATTR_NAME || (this.#state === XmlState.TAG_CLOSE && !this.#closeTagSealed)) {
+				const dest = this.#state === XmlState.ATTR_NAME ? this.#name : this.#tag
+				const start = i
+				while (i < length && isNameChar(input[i])) i++
+				if (i > start) {
+					dest.writeBytes(input, start, i)
+					this.#prevCode = input[i - 1]
+					continue
+				}
+			}
+
+			if (this.#state === XmlState.START) {
+				const lt = input.indexOf(OPEN_ANGLE, i)
+				if (lt < 0) {
+					this.#prevCode = input[length - 1]
+					return
+				}
+				i = lt
+			}
+
+			const node = this.#processByte(input[i])
+			if (node) nodes.push(node)
+			i++
+		}
+	}
+
+	// Advance the tokenizer by one structural byte (delimiters and single-byte state transitions).
 	#processByte(code: number): XmlNode | undefined {
 		if (this.#state === XmlState.START) {
 			if (code === OPEN_ANGLE) {
