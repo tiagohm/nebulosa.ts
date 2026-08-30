@@ -1,4 +1,4 @@
-import { medianBySelectionOf } from '../../core/util'
+import { medianBySelectionOf, STANDARD_DEVIATION_SCALE } from '../../core/util'
 import type { Point, Rect } from '../../math/numerical/geometry'
 import { clamp } from '../../math/numerical/math'
 import type { Image } from '../model/types'
@@ -341,6 +341,7 @@ export function measureStarPhotometry(image: Image, x: number, y: number, radius
 }
 
 // Computes aperture flux, SNR, HFD, FWHM, shape, and the flux-weighted centroid for a detected star.
+// Background is the median of the annulus; noise is the MAD of that annulus scaled to a standard deviation.
 function measureStarPhotometryRaw(raw: Image['raw'], width: number, height: number, stride: number, x: number, y: number, signalRadius: number, backgroundInnerRadius: number, backgroundOuterRadius: number, margin: number): MeasuredStarPhotometry {
 	if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(signalRadius) || signalRadius <= 0) return EMPTY_STAR_PHOTOMETRY
 	if (!Number.isFinite(backgroundInnerRadius) || !Number.isFinite(backgroundOuterRadius) || backgroundInnerRadius <= signalRadius || backgroundOuterRadius < backgroundInnerRadius) return EMPTY_STAR_PHOTOMETRY
@@ -357,8 +358,7 @@ function measureStarPhotometryRaw(raw: Image['raw'], width: number, height: numb
 	const signalRadiusSq = signalRadius * signalRadius
 	const backgroundInnerRadiusSq = backgroundInnerRadius * backgroundInnerRadius
 	const backgroundOuterRadiusSq = backgroundOuterRadius * backgroundOuterRadius
-	let backgroundSum = 0
-	let backgroundSumSq = 0
+	const backgroundSamples = new Float64Array((x1 - x0 + 1) * (y1 - y0 + 1))
 	let backgroundCount = 0
 
 	for (let py = y0; py <= y1; py++) {
@@ -370,17 +370,16 @@ function measureStarPhotometryRaw(raw: Image['raw'], width: number, height: numb
 			const dx = px - x
 			const d2 = dx * dx + dy2
 			if (d2 < backgroundInnerRadiusSq || d2 > backgroundOuterRadiusSq) continue
-			const v = raw[row + px]
-			backgroundSum += v
-			backgroundSumSq += v * v
-			backgroundCount++
+			backgroundSamples[backgroundCount++] = raw[row + px]
 		}
 	}
 
 	if (backgroundCount <= 0) return EMPTY_STAR_PHOTOMETRY
 
-	const backgroundMean = backgroundSum / backgroundCount
-	const backgroundVariance = Math.max(0, backgroundSumSq / backgroundCount - backgroundMean * backgroundMean)
+	const background = medianBySelectionOf(backgroundSamples, backgroundCount)
+	for (let i = 0; i < backgroundCount; i++) backgroundSamples[i] = Math.abs(backgroundSamples[i] - background)
+	const backgroundScale = STANDARD_DEVIATION_SCALE * medianBySelectionOf(backgroundSamples, backgroundCount)
+	const backgroundVariance = backgroundScale * backgroundScale
 	let flux = 0
 	let radialMoment = 0
 	let radialMomentSq = 0
@@ -398,7 +397,7 @@ function measureStarPhotometryRaw(raw: Image['raw'], width: number, height: numb
 			const d2 = dx * dx + dy2
 			if (d2 > signalRadiusSq) continue
 			aperturePixels++
-			const signal = raw[row + px] - backgroundMean
+			const signal = raw[row + px] - background
 			if (signal <= 0) continue
 			flux += signal
 			radialMoment += signal * Math.sqrt(d2)
@@ -426,7 +425,7 @@ function measureStarPhotometryRaw(raw: Image['raw'], width: number, height: numb
 			const dx = px - x
 			const dy = py - y
 			if (dx * dx + dy * dy > signalRadiusSq) continue
-			const signal = raw[row + px] - backgroundMean
+			const signal = raw[row + px] - background
 			if (signal <= 0) continue
 			const centerX = px - centroidX
 			const centerY = py - centroidY

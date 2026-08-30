@@ -126,6 +126,28 @@ test('measure star photometry from image aperture', () => {
 	expect(measureStarPhotometry(image, x, y, 0)).toEqual([0, 0, 0, 0])
 })
 
+test('measure star photometry ignores a bright neighbor in the background annulus', () => {
+	const width = 32
+	const height = 32
+	const raw = new Float32Array(width * height)
+	raw.fill(0.1)
+
+	const x = 16
+	const y = 16
+	raw[y * width + x] = 0.6
+	raw[y * width + x - 1] = 0.3
+	raw[y * width + x + 1] = 0.3
+	raw[(y - 1) * width + x] = 0.3
+	raw[(y + 1) * width + x] = 0.3
+	raw[(y + 6) * width + x] = 1
+
+	const image: Image = { raw, header: {}, metadata: { width, height, channels: 1, pixelCount: width * height, pixelSizeInBytes: 4, bitpix: -32, stride: width, strideInBytes: width * 4, bayer: undefined } }
+	const [flux, snr] = measureStarPhotometry(image, x, y, 4)
+
+	expect(flux).toBeCloseTo(1.3, 6)
+	expect(snr).toBeCloseTo(Math.sqrt(1.3), 6)
+})
+
 test('detect stars measures round and elongated shapes from central moments', () => {
 	const width = 64
 	const height = 64
