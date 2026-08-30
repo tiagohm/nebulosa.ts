@@ -787,7 +787,7 @@ export class GuidingCalibrator {
 		this.#transitionTo('validating')
 
 		const warnings = this.state.warnings.slice()
-		if (this.state.clearingSteps > 0 && Math.hypot(this.state.currentX - this.state.startX, this.state.currentY - this.state.startY) > this.config.maxClearingOffsetPx * 0.6) {
+		if (this.state.clearingSteps > 0 && Math.hypot(this.state.decStartX - this.state.startX, this.state.decStartY - this.state.startY) > this.config.maxClearingOffsetPx * 0.6) {
 			warnings.push('ra_clearing_finished_near_threshold')
 		}
 

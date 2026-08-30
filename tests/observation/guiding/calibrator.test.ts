@@ -153,6 +153,7 @@ test('completes RA clear and DEC backlash calibration with invertible matrix', (
 	expect(completed.ra.ratePxPerMs).toBeCloseTo(raLength / 100, 6)
 	expect(completed.dec.ratePxPerMs).toBeCloseTo(decLength / 100, 6)
 	expect(completed.backlash).toBe(200)
+	expect(completed.warnings).toEqual([])
 
 	const product = multiply2x2(completed.imageMotion, completed.imageToAxis)
 	expect(product[0]).toBeCloseTo(1, 6)
@@ -273,6 +274,12 @@ test('accepts an RA clearing step that overshoots the origin', () => {
 	expect(simulation.step.failure).toBeUndefined()
 	expect(simulation.step.completed).toBeDefined()
 	expect(simulation.phases).toContain('decForwardPulse')
+})
+
+test('warns when RA clearing stops near the residual offset', () => {
+	const simulation = runCalibration({ maxClearingOffsetPx: 0.8 }, { raVector: [0.8, 0.2], decVector: [-0.15, 0.75], reverseRaScale: 2.2 })
+	expect(simulation.step.completed).toBeDefined()
+	expect(simulation.step.completed!.warnings).toContain('ra_clearing_finished_near_threshold')
 })
 
 test('fails when DEC backlash consumes too many no-motion steps', () => {
