@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import fs from 'fs/promises'
 import { readImageFromBuffer, readImageFromPath, readImageFromXisf } from '../../../../src/imaging/model/image'
-import { byteShuffle, byteUnshuffle, isXisf, parseXisfHeader, readXisf, writeXisf, XISF_SIGNATURE, XisfImageReader, XisfImageWriter } from '../../../../src/io/formats/xisf/xisf'
+import { byteShuffle, byteUnshuffle, isXisf, parseXisfHeader, readXisf, writeXisf, XISF_MAX_HEADER_LENGTH, XISF_SIGNATURE, XisfImageReader, XisfImageWriter } from '../../../../src/io/formats/xisf/xisf'
 import { base64Sink, bufferSink, bufferSource, fileHandleSource } from '../../../../src/io/io'
 import { downloadPerTag } from '../../../download'
 import { BITPIXES, CHANNELS, saveImageAndCompareHash } from '../../../imaging/util'
@@ -21,6 +21,14 @@ test('is xisf rejects non-XISF and too-short buffers', () => {
 	expect(isXisf(Buffer.from('not xisf'))).toBeFalse()
 	expect(isXisf(Buffer.from('XISF'))).toBeFalse()
 	expect(isXisf(Buffer.alloc(0))).toBeFalse()
+})
+
+test('rejects an XISF header longer than the documented cap', async () => {
+	const preamble = Buffer.alloc(16)
+	preamble.write(XISF_SIGNATURE, 0, 8, 'ascii')
+	preamble.writeUInt32LE(XISF_MAX_HEADER_LENGTH + 1, 8)
+
+	expect(await readXisf(bufferSource(preamble))).toBeUndefined()
 })
 
 describe('parse header', () => {

@@ -45,6 +45,9 @@ export type XisfPropertyType = 'UInt8' | 'UInt16' | 'UInt32' | 'UInt64' | 'Float
 // Magic signature at the start of a monolithic XISF file.
 export const XISF_SIGNATURE = 'XISF0100'
 
+// Maximum XML header length in bytes accepted by readXisf. Larger declared lengths are treated as invalid input.
+export const XISF_MAX_HEADER_LENGTH = 8 * 1024 * 1024
+
 // Returns true when the input begins with the XISF0100 signature.
 export function isXisf(input: ArrayBufferLike | Buffer) {
 	if (input.byteLength < XISF_SIGNATURE.length) return false
@@ -175,12 +178,15 @@ const XML_PARSE_OPTIONS: X2jOptions = {
 }
 
 // Reads an XISF file from a seekable source: validates the signature, reads the XML header of the
-// declared length, and parses it into images (data blocks are not read here). Returns undefined for non-XISF input.
+// declared length, and parses it into images (data blocks are not read here). Returns undefined for
+// non-XISF input or a declared header longer than XISF_MAX_HEADER_LENGTH.
 export async function readXisf(source: Source & Seekable): Promise<Xisf | undefined> {
 	const signatureData = Buffer.allocUnsafe(16)
 	if ((await readUntil(source, signatureData, 16)) !== 16 || !isXisf(signatureData)) return undefined
 
 	const headerLength = signatureData.readUint32LE(8)
+	if (headerLength > XISF_MAX_HEADER_LENGTH) return undefined
+
 	const headerData = Buffer.allocUnsafe(headerLength)
 	if ((await readUntil(source, headerData, headerLength)) !== headerLength) return undefined
 
