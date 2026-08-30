@@ -330,8 +330,8 @@ test('detectStars reports the flux-weighted centroid of a sub-pixel peak', () =>
 	const image: Image = { raw, header: {}, metadata: { width, height, channels: 1, pixelCount: width * height, pixelSizeInBytes: 8, bitpix: -64, stride: width, strideInBytes: width * 8, bayer: undefined } }
 	const stars = detectStars(image, { maxStars: 10 })
 	expect(stars).toHaveLength(1)
-	expect(Math.abs(stars[0].x - 120.4)).toBeLessThan(0.35)
-	expect(Math.abs(stars[0].y - 80.6)).toBeLessThan(0.35)
+	expect(Math.abs(stars[0].x - 120.4)).toBeLessThan(0.08)
+	expect(Math.abs(stars[0].y - 80.6)).toBeLessThan(0.08)
 	expect(stars[0].x).not.toBe(Math.round(stars[0].x))
 	expect(stars[0].y).not.toBe(Math.round(stars[0].y))
 })

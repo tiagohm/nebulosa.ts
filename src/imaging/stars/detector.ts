@@ -62,6 +62,10 @@ const STAR_BACKGROUND_OUTER_RADIUS = 7
 const STAR_CONVOLVED_MARGIN = 4
 // Minimum acceptable HFD (pixels); smaller measurements are treated as noise/hot pixels.
 const STAR_MIN_HFD = 1
+// Extra photometry passes after the integer peak, recentering on the flux-weighted centroid.
+const STAR_CENTROID_REFINEMENTS = 2
+// Stop recentering when the centroid moves by this many pixels or less.
+const STAR_CENTROID_TOLERANCE = 0.05
 // Adjacent-rank ratio that marks a candidate star-to-noise break.
 const STAR_SCORE_GAP_RATIO = 4
 // How many candidates immediately below a gap are inspected for a tight field-star clump.
@@ -236,8 +240,9 @@ export function detectStars(image: Image, { maxStars = 500, searchRegion = 0, mi
 			if (h < 0.1) continue
 
 			// Validate each candidate against the original image so ranking uses measured photometry instead of only convolution response.
-			const [flux, snr, hfd, fwhm, eccentricity, elongation, centroidX, centroidY] = measureStarPhotometryRaw(original, width, height, stride, x, y, STAR_SIGNAL_RADIUS, STAR_BACKGROUND_INNER_RADIUS, STAR_BACKGROUND_OUTER_RADIUS, STAR_CONVOLVED_MARGIN)
-			if (flux <= 0 || snr < minSNR || hfd < STAR_MIN_HFD) continue
+			const photometry = measureStarPhotometryAroundPeak(original, width, height, stride, x, y, minSNR)
+			if (photometry === undefined) continue
+			const [flux, snr, hfd, fwhm, eccentricity, elongation, centroidX, centroidY] = photometry
 
 			// Ranks detections by measured signal so real stars survive capacity limits better than noise artifacts.
 			const rank = flux * snr
@@ -296,6 +301,28 @@ function trimStarsByScoreGap(stars: StarList) {
 	for (let removeCount = keepFrom; removeCount > 0; removeCount--) {
 		stars.deleteFirst()
 	}
+}
+
+// Measures photometry at the integer PSF peak, then recenters on the flux-weighted centroid so the
+// published (x, y) is the center of the aperture that produced flux, HFD, and FWHM.
+function measureStarPhotometryAroundPeak(raw: Image['raw'], width: number, height: number, stride: number, peakX: number, peakY: number, minSNR: number): MeasuredStarPhotometry | undefined {
+	let x = peakX
+	let y = peakY
+	let photometry = measureStarPhotometryRaw(raw, width, height, stride, x, y, STAR_SIGNAL_RADIUS, STAR_BACKGROUND_INNER_RADIUS, STAR_BACKGROUND_OUTER_RADIUS, STAR_CONVOLVED_MARGIN)
+	if (photometry[0] <= 0 || photometry[1] < minSNR || photometry[2] < STAR_MIN_HFD) return undefined
+
+	for (let iteration = 0; iteration < STAR_CENTROID_REFINEMENTS; iteration++) {
+		const centroidX = photometry[6]
+		const centroidY = photometry[7]
+		if (Math.hypot(centroidX - x, centroidY - y) <= STAR_CENTROID_TOLERANCE) break
+		const refined = measureStarPhotometryRaw(raw, width, height, stride, centroidX, centroidY, STAR_SIGNAL_RADIUS, STAR_BACKGROUND_INNER_RADIUS, STAR_BACKGROUND_OUTER_RADIUS, STAR_CONVOLVED_MARGIN)
+		if (refined[0] <= 0 || refined[1] < minSNR || refined[2] < STAR_MIN_HFD) break
+		x = centroidX
+		y = centroidY
+		photometry = refined
+	}
+
+	return photometry
 }
 
 // Computes aperture flux, SNR, HFD and FWHM for a star centered on an image coordinate.
