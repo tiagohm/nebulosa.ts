@@ -590,6 +590,28 @@ test('inverts FITS affine scaling when writing normalized samples', async () => 
 	expect(stored.readInt16BE()).toBe(0)
 })
 
+test('clamps overflowing normalized samples to the integer FITS range', async () => {
+	const header: FitsHeader = { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: 3, NAXIS2: 1, BSCALE: 1, BZERO: 32768 }
+	const stored = Buffer.alloc(6)
+
+	await new FitsImageWriter(header).write(new Float64Array([1.0001, -0.0001, 1]), bufferSink(stored))
+
+	expect(stored.readInt16BE(0)).toBe(32767)
+	expect(stored.readInt16BE(2)).toBe(-32768)
+	expect(stored.readInt16BE(4)).toBe(32767)
+})
+
+test('clamps overflowing samples when Rice-compressing', async () => {
+	const header: FitsHeader = { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: 2, NAXIS2: 1, BSCALE: 1, BZERO: 32768 }
+	const buffer = Buffer.alloc(FITS_BLOCK_SIZE * 3)
+
+	await writeFits(bufferSink(buffer), [{ header, raw: new Float64Array([1.0001, -0.0001]) }], { type: 'RICE_1' })
+	const image = await readImageFromBuffer(buffer)
+
+	expect(image!.raw[0]).toBeCloseTo(1, 6)
+	expect(image!.raw[1]).toBeCloseTo(0, 6)
+})
+
 test('width keywords', () => {
 	expect(widthKeyword({ NAXIS1: 1200 }, undefined)).toBe(1200)
 	expect(widthKeyword({ IMAGEW: 1400 }, undefined)).toBe(1400)

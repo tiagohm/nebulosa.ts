@@ -4,7 +4,7 @@ import { bitpixInBytes, bitpixKeyword, computeHduDataSize, escapeQuotedText, hei
 import type { Writable } from '../../../core/types'
 import { validatePositiveInteger } from '../../../core/validation'
 import type { Image, ImageRawType, ImageSampleScale } from '../../../imaging/model/types'
-import type { NumberArray } from '../../../math/numerical/math'
+import { clamp, type NumberArray } from '../../../math/numerical/math'
 import { readUntil, type Seekable, type Sink, type Source, writeFully } from '../../io'
 
 // FITS container reading and writing: parses an HDU list (header keyword cards plus data segment
@@ -320,16 +320,39 @@ function fitsWriteScaling(header: Readonly<FitsHeader>, bitpix: BitpixOrZero) {
 // Numeric typed views constructed over FITS image buffers; ordinary number arrays are never used here.
 type FitsImageDataArray = Exclude<NumberArray, number[]>
 
+// Inclusive stored-sample range for an integer FITS typed view, or undefined for floating-point views.
+function integerSampleLimits(output: FitsImageDataArray): readonly [number, number] | undefined {
+	if (output instanceof Uint8Array) return [0, 255]
+	if (output instanceof Int16Array) return [-32768, 32767]
+	if (output instanceof Int32Array) return [-2147483648, 2147483647]
+	return undefined
+}
+
+// Rounds and saturates a stored integer sample so typed-array assignment cannot wrap.
+function quantizeIntegerSample(value: number, min: number, max: number) {
+	return clamp(Math.round(value), min, max)
+}
+
 // Converts one channel chunk directly from interleaved samples into a reusable planar buffer.
+// Integer views round to the nearest stored code and clamp to the BITPIX range; float views are stored as-is.
 function writeInterleavedChannelChunk(input: ImageRawType, output: FitsImageDataArray, count: number, startPixel: number, channel: number, channels: number, multiplier: number, bias: number) {
-	if (channels === 1 && multiplier === 1 && bias === 0) {
+	const limits = integerSampleLimits(output)
+
+	if (limits === undefined && channels === 1 && multiplier === 1 && bias === 0) {
 		output.set(input.subarray(startPixel, startPixel + count))
 		return
 	}
 
 	let source = startPixel * channels + channel
 
-	for (let i = 0; i < count; i++, source += channels) output[i] = input[source] * multiplier - bias
+	if (limits === undefined) {
+		for (let i = 0; i < count; i++, source += channels) output[i] = input[source] * multiplier - bias
+		return
+	}
+
+	const [min, max] = limits
+
+	for (let i = 0; i < count; i++, source += channels) output[i] = quantizeIntegerSample(input[source] * multiplier - bias, min, max)
 }
 
 // Rice-compresses an image into a BINTABLE extension: builds the per-tile compressed heap plus the
