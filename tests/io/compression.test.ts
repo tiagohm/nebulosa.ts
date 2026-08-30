@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { compressRice, decompressRice, type RiceCompressionTypedArray } from '../../src/io/compression'
+import { BitWriter, compressRice, decompressRice, type RiceCompressionTypedArray } from '../../src/io/compression'
 
 function makeSequence(length: number, seed = 1) {
 	const sequence = new Int32Array(length)
@@ -151,4 +151,18 @@ test('decodes into caller-provided output buffer', () => {
 	const decompressed = decompressRice(compressed, output, 4)
 	expect(decompressed).toBe(output)
 	expect(Array.from(output)).toEqual(Array.from(input))
+})
+
+test('reuses a BitWriter across independent compressions', () => {
+	const first = new Int16Array([1, 2, 3, 4])
+	const second = new Int16Array([9, 8, 7, 6, 5])
+	const writer = new BitWriter(64)
+	const once = compressRice(first)
+	const again = compressRice(second)
+	const reusedFirst = Uint8Array.from(compressRice(first, 32, writer))
+	const reusedSecond = compressRice(second, 32, writer)
+
+	expect(Array.from(reusedFirst)).toEqual(Array.from(once))
+	expect(Array.from(reusedSecond)).toEqual(Array.from(again))
+	expect(reusedSecond.buffer).toBe(writer.written().buffer)
 })

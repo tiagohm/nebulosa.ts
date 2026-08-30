@@ -5,7 +5,7 @@ import type { Writable } from '../../../core/types'
 import { validatePositiveInteger } from '../../../core/validation'
 import type { Image, ImageRawType, ImageSampleScale } from '../../../imaging/model/types'
 import { clamp, type NumberArray } from '../../../math/numerical/math'
-import { readUntil, type Seekable, type Sink, type Source, writeFully } from '../../io'
+import { isSeekable, readUntil, type Seekable, type Sink, type Source, writeFully } from '../../io'
 
 // FITS container reading and writing: parses an HDU list (header keyword cards plus data segment
 // offsets/sizes) from a seekable source and writes image HDUs back, including optional Rice tile
@@ -407,10 +407,40 @@ function writeInterleavedChannelChunk(input: ImageRawType, output: FitsImageData
 	for (let i = 0; i < count; i++, source += channels) output[i] = quantizeIntegerSample(input[source] * multiplier - bias, min, max)
 }
 
-// Rice-compresses an image into a BINTABLE extension: builds the per-tile compressed heap plus the
-// descriptor rows and the ZIMAGE/ZCMPTYPE/ZTILE compression keyword cards. Returns the cards and payload
-// (descriptor table followed by the compressed heap). Supports BITPIX 8/16/32 only.
-async function buildRiceCompressedImage(header: Readonly<FitsHeader>, raw: ImageRawType, options: Readonly<FitsCompressionOptions>) {
+// Layout and scratch storage for Rice-compressing one image into a BINTABLE extension.
+interface RiceImageLayout {
+	// Source header copied into the extension after structural ZIMAGE cards.
+	readonly header: Readonly<FitsHeader>
+	// Channel-interleaved normalized samples to compress.
+	readonly raw: ImageRawType
+	// Uncompressed integer BITPIX (8, 16, or 32).
+	readonly bitpix: 8 | 16 | 32
+	// Image width in pixels (ZNAXIS1).
+	readonly width: number
+	// Image height in pixels (ZNAXIS2).
+	readonly height: number
+	// Channel count (ZNAXIS3, 1 if absent).
+	readonly channels: number
+	// Tile height in rows (ZTILE2).
+	readonly tileHeight: number
+	// Rice block size in pixels (ZVAL BLOCKSIZE).
+	readonly blockSize: number
+	// Reusable planar tile of width*tileHeight stored samples.
+	readonly tileBuffer: Uint8Array | Int16Array | Int32Array
+	// Write-scale multiplier applied before compression.
+	readonly multiplier: number
+	// Write-scale bias subtracted before compression.
+	readonly bias: number
+	// Descriptor row width in bytes (two 32-bit fields).
+	readonly rowSize: number
+	// Number of tile descriptor rows.
+	readonly rowCount: number
+	// Packed (length, heap-offset) table filled during compression.
+	readonly rows: Buffer
+}
+
+// Prepares Rice tile geometry and the descriptor table. Does not compress pixels.
+function createRiceImageLayout(header: Readonly<FitsHeader>, raw: ImageRawType, options: Readonly<FitsCompressionOptions>): RiceImageLayout {
 	const bitpix = uncompressedBitpixKeyword(header, 0)
 	const width = uncompressedWidthKeyword(header, 0)
 	const height = uncompressedHeightKeyword(header, 0)
@@ -424,59 +454,32 @@ async function buildRiceCompressedImage(header: Readonly<FitsHeader>, raw: Image
 	validatePositiveInteger(blockSize)
 
 	const tileHeight = Math.min(height, tileHeightOption)
-
 	const ImageTypedArray = bitpix === 8 ? Uint8Array : bitpix === 16 ? Int16Array : Int32Array
-	const tileBuffer = new ImageTypedArray(width * tileHeight)
 	const [multiplier, bias] = fitsWriteScaling(header, bitpix)
-
 	const rowSize = 8
-	const tilesPerChannel = Math.ceil(height / tileHeight)
-	const rowCount = tilesPerChannel * channels
-	const rows = Buffer.allocUnsafe(rowCount * rowSize)
-	const heapPages: Buffer[] = []
-	const heapPageSize = Math.min(RICE_HEAP_PAGE_SIZE, Math.max(16, raw.byteLength))
-	let heapPage = Buffer.allocUnsafe(heapPageSize)
-	let heapPageLength = 0
-	let heapSize = 0
-	let row = 0
+	const rowCount = Math.ceil(height / tileHeight) * channels
 
-	const { compressRice } = await import('../../compression')
-
-	for (let c = 0; c < channels; c++) {
-		for (let y = 0; y < height; y += tileHeight) {
-			const thisTileHeight = Math.min(tileHeight, height - y)
-			const tilePixels = thisTileHeight * width
-			const tile = tilePixels === tileBuffer.length ? tileBuffer : tileBuffer.subarray(0, tilePixels)
-			writeInterleavedChannelChunk(raw, tile, tilePixels, y * width, c, channels, multiplier, bias, bitpix)
-			const compressed = compressRice(tile, blockSize)
-
-			rows.writeUInt32BE(compressed.length, row * rowSize)
-			rows.writeUInt32BE(heapSize, row * rowSize + 4)
-
-			if (compressed.length > heapPage.length - heapPageLength) {
-				if (heapPageLength > 0) heapPages.push(heapPage.subarray(0, heapPageLength))
-
-				if (compressed.length >= heapPageSize) {
-					heapPages.push(Buffer.from(compressed.buffer, compressed.byteOffset, compressed.byteLength))
-					heapPage = Buffer.allocUnsafe(heapPageSize)
-					heapPageLength = 0
-				} else {
-					heapPage = Buffer.allocUnsafe(heapPageSize)
-					heapPage.set(compressed)
-					heapPageLength = compressed.length
-				}
-			} else {
-				heapPage.set(compressed, heapPageLength)
-				heapPageLength += compressed.length
-			}
-
-			heapSize += compressed.length
-			row++
-		}
+	return {
+		header,
+		raw,
+		bitpix,
+		width,
+		height,
+		channels,
+		tileHeight,
+		blockSize,
+		tileBuffer: new ImageTypedArray(width * tileHeight),
+		multiplier,
+		bias,
+		rowSize,
+		rowCount,
+		rows: Buffer.allocUnsafe(rowCount * rowSize),
 	}
+}
 
-	if (heapPageLength > 0) heapPages.push(heapPage.subarray(0, heapPageLength))
-
+// Builds ZIMAGE BINTABLE cards for a Rice-compressed image. `heapSize` is PCOUNT in bytes.
+function riceExtensionCards(layout: RiceImageLayout, heapSize: number): FitsHeaderCard[] {
+	const { header, bitpix, width, height, channels, tileHeight, blockSize, rowSize, rowCount, rows } = layout
 	const cards: FitsHeaderCard[] = [
 		['XTENSION', 'BINTABLE'],
 		['BITPIX', 8],
@@ -515,7 +518,71 @@ async function buildRiceCompressedImage(header: Readonly<FitsHeader>, raw: Image
 		if (value !== undefined) cards.push([key, value])
 	}
 
-	return { cards, rows, heapPages, heapSize }
+	return cards
+}
+
+// Views `bytes` as a Buffer without copying. The view is only valid until the backing encoder is reused.
+function riceTileBuffer(bytes: Uint8Array) {
+	return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+}
+
+// Copies one compressed tile into paged heap storage. Large tiles are copied into their own buffer so a
+// reused encoder cannot overwrite a retained page.
+function appendRiceHeapTile(compressed: Uint8Array, heapPages: Buffer[], heapPage: Buffer, heapPageLength: number, heapPageSize: number): { heapPage: Buffer; heapPageLength: number } {
+	if (compressed.length > heapPage.length - heapPageLength) {
+		if (heapPageLength > 0) heapPages.push(heapPage.subarray(0, heapPageLength))
+
+		if (compressed.length >= heapPageSize) {
+			heapPages.push(Buffer.from(compressed))
+			return { heapPage: Buffer.allocUnsafe(heapPageSize), heapPageLength: 0 }
+		}
+
+		heapPage = Buffer.allocUnsafe(heapPageSize)
+		heapPage.set(compressed)
+		return { heapPage, heapPageLength: compressed.length }
+	}
+
+	heapPage.set(compressed, heapPageLength)
+	return { heapPage, heapPageLength: heapPageLength + compressed.length }
+}
+
+// Rice-compresses every tile, filling `layout.rows` with (length, heap-offset) descriptors. When `onTile`
+// is provided the compressed bytes are emitted immediately and not retained; otherwise they accumulate in
+// heap pages. Reuses one BitWriter across tiles.
+async function compressRiceImageTiles(layout: RiceImageLayout, onTile?: (tile: Uint8Array) => Promise<void>) {
+	const { raw, bitpix, width, height, channels, tileHeight, blockSize, tileBuffer, multiplier, bias, rowSize, rows } = layout
+	const heapPages: Buffer[] = []
+	const heapPageSize = Math.min(RICE_HEAP_PAGE_SIZE, Math.max(16, raw.byteLength))
+	let heapPage: Buffer = onTile === undefined ? Buffer.allocUnsafe(heapPageSize) : Buffer.allocUnsafe(0)
+	let heapPageLength = 0
+	let heapSize = 0
+	let row = 0
+
+	const { BitWriter, compressRice } = await import('../../compression')
+	const writer = new BitWriter(Math.max(16, tileBuffer.byteLength + (tileBuffer.byteLength >>> 6) + 64))
+
+	for (let c = 0; c < channels; c++) {
+		for (let y = 0; y < height; y += tileHeight) {
+			const thisTileHeight = Math.min(tileHeight, height - y)
+			const tilePixels = thisTileHeight * width
+			const tile = tilePixels === tileBuffer.length ? tileBuffer : tileBuffer.subarray(0, tilePixels)
+			writeInterleavedChannelChunk(raw, tile, tilePixels, y * width, c, channels, multiplier, bias, bitpix)
+			const compressed = compressRice(tile, blockSize, writer)
+
+			rows.writeUInt32BE(compressed.length, row * rowSize)
+			rows.writeUInt32BE(heapSize, row * rowSize + 4)
+
+			if (onTile !== undefined) await onTile(compressed)
+			else ({ heapPage, heapPageLength } = appendRiceHeapTile(compressed, heapPages, heapPage, heapPageLength, heapPageSize))
+
+			heapSize += compressed.length
+			row++
+		}
+	}
+
+	if (onTile === undefined && heapPageLength > 0) heapPages.push(heapPage.subarray(0, heapPageLength))
+
+	return { heapPages, heapSize }
 }
 
 // Writes a sequence of image HDUs to `sink`, padding each header and data segment to FITS block
@@ -557,13 +624,38 @@ export async function writeFits(sink: Sink & Partial<Seekable>, hdus: readonly R
 				hasPrimaryHdu = true
 			}
 
-			const { cards, rows, heapPages, heapSize } = await buildRiceCompressedImage(header, raw, options)
-			await writeHeader(cards)
-			await writeFully(sink, rows)
-			for (const page of heapPages) await writeFully(sink, page)
+			const layout = createRiceImageLayout(header, raw, options)
+			const streamHeap = isSeekable(sink)
 
-			const pad = fillWithRemainingBytes(rows.length + heapSize, 0, FITS_DATA_PADDING)
-			if (pad > 0) await writeFully(sink, buffer, pad)
+			if (streamHeap) {
+				const headerStart = sink.position
+				await writeHeader(riceExtensionCards(layout, 0))
+				const tableStart = sink.position
+				await writeFully(sink, layout.rows)
+
+				const { heapSize } = await compressRiceImageTiles(layout, async (tile) => {
+					await writeFully(sink, riceTileBuffer(tile))
+				})
+				const dataEnd = sink.position
+				const pad = fillWithRemainingBytes(layout.rows.length + heapSize, 0, FITS_DATA_PADDING)
+				if (pad > 0) await writeFully(sink, buffer, pad)
+				const end = sink.position
+
+				sink.seek(headerStart)
+				await writeHeader(riceExtensionCards(layout, heapSize))
+				sink.seek(tableStart)
+				await writeFully(sink, layout.rows)
+				sink.seek(end)
+			} else {
+				const { heapPages, heapSize } = await compressRiceImageTiles(layout)
+				await writeHeader(riceExtensionCards(layout, heapSize))
+				await writeFully(sink, layout.rows)
+				for (const page of heapPages) await writeFully(sink, page)
+
+				const pad = fillWithRemainingBytes(layout.rows.length + heapSize, 0, FITS_DATA_PADDING)
+				if (pad > 0) await writeFully(sink, buffer, pad)
+			}
+
 			continue
 		}
 

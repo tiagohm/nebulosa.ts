@@ -202,6 +202,24 @@ describe('write', () => {
 	}
 })
 
+test('writes Rice-compressed FITS to a non-seekable sink', async () => {
+	const header: FitsHeader = { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: 4, NAXIS2: 1, BSCALE: 1, BZERO: 32768 }
+	const raw = new Float64Array([0, 0.25, 0.5, 1])
+	const storage = Buffer.alloc(FITS_BLOCK_SIZE * 3)
+	const delegate = bufferSink(storage)
+	const sink = {
+		write(chunk: string | Buffer, offset?: number, size?: number, encoding?: BufferEncoding) {
+			return delegate.write(chunk, offset, size, encoding)
+		},
+	}
+
+	await writeFits(sink, [{ header, raw }], { type: 'RICE_1' })
+	const image = await readImageFromBuffer(storage.subarray(0, delegate.position), { raw: 64 })
+
+	expect(image).toBeDefined()
+	for (let i = 0; i < raw.length; i++) expect(image!.raw[i]).toBeCloseTo(raw[i], 4)
+})
+
 test('write/read RICE compressed', async () => {
 	const buffer = Buffer.alloc(1024 * 1024 * 18, 20)
 	const image = (await readImageFromPath('data/NGC3372-16.1.fit'))!
