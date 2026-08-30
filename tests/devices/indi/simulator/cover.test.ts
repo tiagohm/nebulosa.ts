@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { IndiClientHandlerSet } from '../../../../src/devices/indi/client'
-import { CoverManager } from '../../../../src/devices/indi/manager'
+import { CoverManager } from '../../../../src/devices/indi/manager/cover'
 import { ClientSimulator } from '../../../../src/devices/indi/simulator/client'
 import { CoverSimulator } from '../../../../src/devices/indi/simulator/cover'
 import { isTimeConsumingTestSkipped, waitUntil } from '../../../util'

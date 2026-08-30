@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { IndiClientHandlerSet } from '../../../../src/devices/indi/client'
-import { RotatorManager } from '../../../../src/devices/indi/manager'
+import { RotatorManager } from '../../../../src/devices/indi/manager/rotator'
 import { ClientSimulator } from '../../../../src/devices/indi/simulator/client'
 import { RotatorSimulator } from '../../../../src/devices/indi/simulator/rotator'
 import { isTimeConsumingTestSkipped, waitUntil } from '../../../util'

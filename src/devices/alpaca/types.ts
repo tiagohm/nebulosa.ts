@@ -1,6 +1,6 @@
 import type { BitpixOrZero } from '../../io/formats/fits/fits'
 import type { Cover, Device, FlatPanel, WeatherSensor } from '../indi/device'
-import { WEATHER_SENSORS, type WeatherSensorMapping } from '../indi/manager'
+import { WEATHER_SENSORS, type WeatherSensorMapping } from '../indi/manager/weather'
 
 // Shared type definitions for the ASCOM Alpaca protocol: device-type tags, error codes, the enumerated
 // constants for cameras/telescopes, the JSON envelope shapes, and the ImageBytes binary-transfer layout.

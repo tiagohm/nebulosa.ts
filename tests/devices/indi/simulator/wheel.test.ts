@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { IndiClientHandlerSet } from '../../../../src/devices/indi/client'
-import { WheelManager } from '../../../../src/devices/indi/manager'
+import { WheelManager } from '../../../../src/devices/indi/manager/wheel'
 import { ClientSimulator } from '../../../../src/devices/indi/simulator/client'
 import { WheelSimulator } from '../../../../src/devices/indi/simulator/wheel'
 import { isTimeConsumingTestSkipped, waitUntil } from '../../../util'

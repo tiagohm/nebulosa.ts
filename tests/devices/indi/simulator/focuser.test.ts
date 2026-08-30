@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { IndiClientHandlerSet } from '../../../../src/devices/indi/client'
-import { FocuserManager, ThermometerManager } from '../../../../src/devices/indi/manager'
+import { FocuserManager } from '../../../../src/devices/indi/manager/focuser'
+import { ThermometerManager } from '../../../../src/devices/indi/manager/thermometer'
 import { ClientSimulator } from '../../../../src/devices/indi/simulator/client'
 import { FocuserSimulator } from '../../../../src/devices/indi/simulator/focuser'
 import { isTimeConsumingTestSkipped, waitUntil } from '../../../util'

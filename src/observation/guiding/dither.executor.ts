@@ -1,5 +1,5 @@
 import { CLIENT, type GuideOutput } from '../../devices/indi/device'
-import type { GuideOutputManager } from '../../devices/indi/manager'
+import type { GuideOutputManager } from '../../devices/indi/manager/guideoutput'
 import type { DitherPulsePlan } from './dither.pulse'
 
 // Dispatches a dither pulse plan to a guide output. This is the only layer of the direct-dither flow

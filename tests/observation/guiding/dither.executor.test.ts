@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { CLIENT, DEFAULT_GUIDE_OUTPUT, type GuideDirection, type GuideOutput } from '../../../src/devices/indi/device'
-import type { GuideOutputManager } from '../../../src/devices/indi/manager'
+import type { GuideOutputManager } from '../../../src/devices/indi/manager/guideoutput'
 import { dispatchDitherPulses } from '../../../src/observation/guiding/dither.executor'
 import type { DitherPulsePlan } from '../../../src/observation/guiding/dither.pulse'
 

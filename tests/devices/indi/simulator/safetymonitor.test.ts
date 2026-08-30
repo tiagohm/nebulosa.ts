@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { IndiClientHandlerSet } from '../../../../src/devices/indi/client'
-import { SafetyMonitorManager } from '../../../../src/devices/indi/manager'
+import { SafetyMonitorManager } from '../../../../src/devices/indi/manager/safetymonitor'
 import { ClientSimulator } from '../../../../src/devices/indi/simulator/client'
 import { SafetyMonitorSimulator } from '../../../../src/devices/indi/simulator/safetymonitor'
 import { waitUntil } from '../../../util'

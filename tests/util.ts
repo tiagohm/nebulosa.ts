@@ -1,6 +1,6 @@
 import { expect } from 'bun:test'
 import type { Camera } from '../src/devices/indi/device'
-import type { DeviceHandler } from '../src/devices/indi/manager'
+import type { DeviceHandler } from '../src/devices/indi/manager/device'
 import type { PropertyState, BlobEncoding } from '../src/devices/indi/types'
 import type { NumberArray } from '../src/math/numerical/math'
 

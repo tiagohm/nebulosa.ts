@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { IndiClientHandlerSet } from '../../../../src/devices/indi/client'
-import { DomeManager, MountManager } from '../../../../src/devices/indi/manager'
+import { DomeManager } from '../../../../src/devices/indi/manager/dome'
+import { MountManager } from '../../../../src/devices/indi/manager/mount'
 import { ClientSimulator } from '../../../../src/devices/indi/simulator/client'
 import { DomeSimulator } from '../../../../src/devices/indi/simulator/dome'
 import { MountSimulator } from '../../../../src/devices/indi/simulator/mount'

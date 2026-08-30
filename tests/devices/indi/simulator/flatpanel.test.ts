@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { IndiClientHandlerSet } from '../../../../src/devices/indi/client'
-import { FlatPanelManager } from '../../../../src/devices/indi/manager'
+import { FlatPanelManager } from '../../../../src/devices/indi/manager/flatpanel'
 import { ClientSimulator } from '../../../../src/devices/indi/simulator/client'
 import { FlatPanelSimulator } from '../../../../src/devices/indi/simulator/flatpanel'
 import { isTimeConsumingTestSkipped, waitUntil } from '../../../util'

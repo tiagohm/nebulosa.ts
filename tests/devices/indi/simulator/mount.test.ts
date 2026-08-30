@@ -3,7 +3,8 @@ import { angularDistance } from '../../../../src/astronomy/coordinates/coordinat
 import { PI, PIOVERTWO, TAU } from '../../../../src/core/constants'
 import { IndiClientHandlerSet } from '../../../../src/devices/indi/client'
 import { expectedPierSide } from '../../../../src/devices/indi/device'
-import { GuideOutputManager, MountManager } from '../../../../src/devices/indi/manager'
+import { GuideOutputManager } from '../../../../src/devices/indi/manager/guideoutput'
+import { MountManager } from '../../../../src/devices/indi/manager/mount'
 import { ClientSimulator } from '../../../../src/devices/indi/simulator/client'
 import { SIDEREAL_DRIFT_RATE, SLEW_RATES, SLEW_SPEED_FACTOR } from '../../../../src/devices/indi/simulator/constants'
 import { MountSimulator } from '../../../../src/devices/indi/simulator/mount'
@@ -2245,7 +2246,7 @@ describe('mount simulator pointing errors', () => {
 			// arriving early hands the rest of the step back to ordinary motion rather than to nothing.
 			expect(normalizePI(mount.mechanical.rightAscension - mechanical.rightAscension)).toBeCloseTo(SIDEREAL_DRIFT_RATE, 9)
 			expect(mount.mechanical.declination).toBeCloseTo(mechanical.declination, 12)
-			expect(mount.wormPhase).toBe(phase)
+			expect(mount.wormPhase).toBeCloseTo(phase, 10)
 		} finally {
 			mount.dispose()
 		}

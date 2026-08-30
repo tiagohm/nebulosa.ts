@@ -1,7 +1,15 @@
 import { AlpacaClient, type AlpacaClientHandler } from '../src/devices/alpaca/client'
 import { AlpacaDiscoveryClient } from '../src/devices/alpaca/discovery'
 import type { Client, Device, DeviceType } from '../src/devices/indi/device'
-import { CameraManager, CoverManager, type DeviceProvider, FlatPanelManager, FocuserManager, GuideOutputManager, MountManager, ThermometerManager, WheelManager } from '../src/devices/indi/manager'
+import { CameraManager } from '../src/devices/indi/manager/camera'
+import { CoverManager } from '../src/devices/indi/manager/cover'
+import type { DeviceProvider } from '../src/devices/indi/manager/device'
+import { FlatPanelManager } from '../src/devices/indi/manager/flatpanel'
+import { FocuserManager } from '../src/devices/indi/manager/focuser'
+import { GuideOutputManager } from '../src/devices/indi/manager/guideoutput'
+import { MountManager } from '../src/devices/indi/manager/mount'
+import { ThermometerManager } from '../src/devices/indi/manager/thermometer'
+import { WheelManager } from '../src/devices/indi/manager/wheel'
 import type { PropertyState } from '../src/devices/indi/types'
 
 const alpacaDiscoveryClient = new AlpacaDiscoveryClient()
