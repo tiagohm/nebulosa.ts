@@ -422,6 +422,21 @@ test('write all keywords', () => {
 		'COMMENT  AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA COMMENT  BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB ',
 	)
 	expect(write({ COMMENT: '/' })).toBe('COMMENT  /                                                                      ')
+	expect(write({ HISTORY: 'first line\nsecond line' }, 160)).toBe(`HISTORY  first line${' '.repeat(61)}HISTORY  second line${' '.repeat(60)}`)
+	expect(write({ HISTORY: `${'A'.repeat(71)}BBBBB` }, 160)).toBe(`HISTORY  ${'A'.repeat(71)}HISTORY  BBBBB${' '.repeat(66)}`)
+})
+
+test('writeFits emits HISTORY as 80-byte cards without embedded newlines', async () => {
+	const header: FitsHeader = { SIMPLE: true, BITPIX: 8, NAXIS: 2, NAXIS1: 1, NAXIS2: 1, HISTORY: 'first processing step\nsecond processing step' }
+	const buffer = Buffer.alloc(FITS_BLOCK_SIZE * 2)
+
+	await writeFits(bufferSink(buffer), [{ header, raw: new Float32Array([0]) }])
+	const headerBlock = buffer.subarray(0, FITS_BLOCK_SIZE)
+
+	expect(headerBlock.includes(0x0a)).toBeFalse()
+
+	const fits = await readFits(bufferSource(buffer))
+	expect(fits!.hdus[0].header.HISTORY).toBe('first processing step\nsecond processing step')
 })
 
 test('continue keyword', () => {

@@ -808,6 +808,28 @@ function fitsImageChunkSize(size: number, bitpix: BitpixOrZero) {
 
 // The terminating END card.
 const END_CARD: FitsHeaderCard = ['END']
+// Bytes available for COMMENT/HISTORY text after the 8-character keyword and the separating space.
+const FITS_COMMENTARY_TEXT_LENGTH = FITS_HEADER_CARD_SIZE - FITS_MAX_KEYWORD_LENGTH - 1
+
+// Splits commentary text on newlines and wraps each line to one 71-character card payload so
+// HISTORY/COMMENT never embed CR/LF or silently truncate.
+function commentaryCardTexts(text: string) {
+	const cards: string[] = []
+	const lines = text.split('\n')
+
+	for (const line of lines) {
+		if (line.length <= FITS_COMMENTARY_TEXT_LENGTH) {
+			cards.push(line)
+			continue
+		}
+
+		for (let offset = 0; offset < line.length; offset += FITS_COMMENTARY_TEXT_LENGTH) {
+			cards.push(line.slice(offset, offset + FITS_COMMENTARY_TEXT_LENGTH))
+		}
+	}
+
+	return cards
+}
 
 // Formats header cards into their fixed 80-byte FITS representation: value alignment, default comments
 // from the keyword dictionary, commentary cards, and CONTINUE-based long-string splitting. Throws
@@ -816,17 +838,17 @@ export class FitsKeywordWriter {
 	// Keyword metadata dictionary used to supply default comments.
 	static keywords: Readonly<Record<string, FitsKeyword>> = KEYWORDS
 
-	// Writes one card (or several, for multi-line COMMENT or continued long strings) at `offset`; returns bytes written, or 0 if no room.
+	// Writes one card (or several, for multi-line COMMENT/HISTORY, wrapped commentary, or continued long strings) at `offset`; returns bytes written, or 0 if no room.
 	write(card: Readonly<FitsHeaderCard>, output: Buffer, offset: number = 0) {
 		if (output.byteLength - offset < FITS_HEADER_CARD_SIZE) return 0
 
 		const position = new Position(offset)
 
-		if (card[0] === 'COMMENT' && card[1] !== undefined) {
-			const values = card[1].toString().split('\n')
+		if (card[0] === 'COMMENT' || card[0] === 'HISTORY') {
+			const raw = typeof card[1] === 'string' ? card[1] : card[1] !== undefined ? `${card[1]}` : (card[2] ?? '')
 			const commentCard: FitsHeaderCard = [card[0], undefined, '']
 
-			for (const value of values) {
+			for (const value of commentaryCardTexts(raw)) {
 				if (output.byteLength - position.offset < FITS_HEADER_CARD_SIZE) {
 					throw new RangeError(FITS_HEADER_BUFFER_TOO_SMALL)
 				}
