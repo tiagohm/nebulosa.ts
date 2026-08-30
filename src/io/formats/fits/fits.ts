@@ -1430,7 +1430,12 @@ export class FitsImageReader {
 			maxCompressedTileSize = Math.max(maxCompressedTileSize, byteCount)
 		}
 
-		const compressedTileBuffer = Buffer.allocUnsafe(maxCompressedTileSize)
+		const heapSize = this.hdu.data.size - heapOffset
+		let windowSize = Math.min(Math.max(heapSize, 0), FITS_IMAGE_IO_CHUNK_SIZE)
+		if (windowSize < maxCompressedTileSize) windowSize = Math.min(Math.max(heapSize, 0), maxCompressedTileSize)
+		const heapWindow = Buffer.allocUnsafe(windowSize)
+		let windowFileStart = -1
+		let windowLength = 0
 
 		const { decompressRice } = await import('../../compression')
 
@@ -1439,9 +1444,25 @@ export class FitsImageReader {
 			const byteCount = rows.readUInt32BE(descriptorOffset)
 			const heapRelativeOffset = rows.readUInt32BE(descriptorOffset + 4)
 			const start = heapOffset + heapRelativeOffset
-			const compressedTile = byteCount === compressedTileBuffer.length ? compressedTileBuffer : compressedTileBuffer.subarray(0, byteCount)
-			source.seek(this.hdu.data.offset + start)
-			if ((await readUntil(source, compressedTile)) !== byteCount) return false
+			const fileOffset = this.hdu.data.offset + start
+			const fileEnd = fileOffset + byteCount
+			let compressedTile: Buffer
+
+			if (byteCount === 0) {
+				compressedTile = heapWindow.subarray(0, 0)
+			} else if (fileOffset >= windowFileStart && fileEnd <= windowFileStart + windowLength) {
+				const begin = fileOffset - windowFileStart
+				compressedTile = heapWindow.subarray(begin, begin + byteCount)
+			} else {
+				source.seek(fileOffset)
+				const toRead = Math.min(heapWindow.length, this.hdu.data.offset + this.hdu.data.size - fileOffset)
+				if (toRead < byteCount) return false
+				const n = await readUntil(source, heapWindow, toRead, 0)
+				if (n < byteCount) return false
+				windowFileStart = fileOffset
+				windowLength = n
+				compressedTile = heapWindow.subarray(0, byteCount)
+			}
 
 			const tz = Math.trunc(tileIndex / tilePlaneSize)
 			const rem = tileIndex - tz * tilePlaneSize

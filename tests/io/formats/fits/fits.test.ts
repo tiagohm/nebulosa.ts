@@ -272,6 +272,7 @@ test('reads Rice tiles without staging the complete compressed HDU', async () =>
 	const hdu = fits!.hdus.at(-1)!
 	const delegate = bufferSource(file)
 	let largestRead = 0
+	let readCount = 0
 	const source = {
 		get position() {
 			return delegate.position
@@ -280,6 +281,7 @@ test('reads Rice tiles without staging the complete compressed HDU', async () =>
 			return delegate.seek(position)
 		},
 		read(buffer: Buffer, offset?: number, size?: number) {
+			readCount++
 			largestRead = Math.max(largestRead, size ?? buffer.byteLength)
 			return delegate.read(buffer, offset, size)
 		},
@@ -288,6 +290,7 @@ test('reads Rice tiles without staging the complete compressed HDU', async () =>
 
 	expect(await new FitsImageReader(hdu).read(source, output)).toBeTrue()
 	expect(largestRead).toBeLessThan(hdu.data.size)
+	expect(readCount).toBeLessThan(height)
 	expect(output[0]).toBeCloseTo(0.25, 4)
 	expect(output.at(-1)).toBeCloseTo(0.25, 4)
 })
