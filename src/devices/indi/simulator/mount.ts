@@ -3,7 +3,7 @@ import { applyEquatorialPointingError, type EquatorialPointingModel, IDENTITY_EQ
 import { localSiderealTime } from '../../../astronomy/observer/location'
 import { formatTemporal, TIMEZONE } from '../../../astronomy/time/temporal'
 import { timeUnix } from '../../../astronomy/time/time'
-import { ASEC2RAD, DAYSEC, PIOVERTWO, TAU } from '../../../core/constants'
+import { ASEC2RAD, DAYSEC, PI, PIOVERTWO, TAU } from '../../../core/constants'
 import { clamp } from '../../../math/numerical/math'
 import { mulberry32, normal } from '../../../math/numerical/random'
 import { type Angle, deg, hour, normalizeAngle, normalizePI, toDeg, toHour } from '../../../math/units/angle'
@@ -27,13 +27,13 @@ import { applyMultiSwitchValues, applyNumberVectorValues, clampDeclination } fro
 // Simulated equatorial mount, tracking, slewing, site, and pulse-guiding behavior.
 
 // Simulated equatorial mount. Models tracking drift per track mode, manual axis motion, slew/sync/goto,
-// park/home, pier side, site location and time, and pulse guiding, advancing the equatorial coordinate
-// on each tick and emitting the corresponding INDI vectors.
+// explicit and autonomous Meridian Flips, park/home, pier side, site location and time, and pulse
+// guiding, advancing the equatorial coordinate on each tick and emitting the corresponding INDI vectors.
 export class MountSimulator extends DeviceSimulator {
 	readonly type = 'mount'
 	readonly #trackModes = ['SIDEREAL', 'SOLAR', 'LUNAR', 'KING'] as const
 
-	readonly #onCoordSet = makeSwitchVector('', 'ON_COORD_SET', 'On Set', MAIN_CONTROL, 'OneOfMany', 'rw', ['SLEW', 'Slew', false], ['SYNC', 'Sync', false])
+	readonly #onCoordSet = makeSwitchVector('', 'ON_COORD_SET', 'On Set', MAIN_CONTROL, 'OneOfMany', 'rw', ['SLEW', 'Slew', false], ['FLIP', 'Flip', false], ['SYNC', 'Sync', false])
 	readonly #equatorialCoordinate = makeNumberVector('', 'EQUATORIAL_EOD_COORD', 'Eq. Coordinates', MAIN_CONTROL, 'rw', ['RA', 'RA (hours)', 0, 0, 24, 0.1, '%10.6f'], ['DEC', 'DEC (deg)', 0, -90, 90, 0.1, '%10.6f'])
 	readonly #abort = makeSwitchVector('', 'TELESCOPE_ABORT_MOTION', 'Abort', MAIN_CONTROL, 'AtMostOne', 'rw', ['ABORT', 'Abort', false])
 	readonly #trackMode = makeSwitchVector('', 'TELESCOPE_TRACK_MODE', 'Track Mode', MAIN_CONTROL, 'OneOfMany', 'rw', ['TRACK_SIDEREAL', 'Sidereal', true], ['TRACK_SOLAR', 'Solar', false], ['TRACK_LUNAR', 'Lunar', false], ['TRACK_KING', 'King', false])
@@ -50,6 +50,11 @@ export class MountSimulator extends DeviceSimulator {
 	readonly #guideRate = makeNumberVector('', 'GUIDE_RATE', 'Guiding Rate', MAIN_CONTROL, 'rw', ['GUIDE_RATE_WE', 'W/E Rate', 0.5, 0, 1, 0.1, '%.8f'], ['GUIDE_RATE_NS', 'N/E Rate', 0.5, 0, 1, 0.1, '%.0f'])
 	readonly #guideNS = makeNumberVector('', 'TELESCOPE_TIMED_GUIDE_NS', 'Guide N/S', MAIN_CONTROL, 'rw', ['TIMED_GUIDE_N', 'North (ms)', 0, 0, 60000, 1, '%.0f'], ['TIMED_GUIDE_S', 'South (ms)', 0, 0, 60000, 1, '%.0f'])
 	readonly #guideWE = makeNumberVector('', 'TELESCOPE_TIMED_GUIDE_WE', 'Guide W/E', MAIN_CONTROL, 'rw', ['TIMED_GUIDE_W', 'West (ms)', 0, 0, 60000, 1, '%.0f'], ['TIMED_GUIDE_E', 'East (ms)', 0, 0, 60000, 1, '%.0f'])
+	// Enables the controller's own Meridian Flip policy. Disabled by default so an external sequencer
+	// remains the sole owner unless a test deliberately exercises autonomous behaviour.
+	readonly #autoMeridianFlip = makeSwitchVector('', 'MOUNT_AUTO_MERIDIAN_FLIP', 'Automatic Meridian Flip', SIMULATION, 'OneOfMany', 'rw', ['INDI_ENABLED', 'Enabled', false], ['INDI_DISABLED', 'Disabled', true])
+	// Signed upper-meridian hour angle, in degrees, at which the autonomous flip may start.
+	readonly #meridianFlipSettings = makeNumberVector('', 'MOUNT_MERIDIAN_FLIP_SETTINGS', 'Meridian Flip Settings', SIMULATION, 'rw', ['HOUR_ANGLE', 'Hour Angle (deg)', 0, -90, 90, 0.1, '%.2f'])
 	// oxfmt-ignore
 	readonly #errorFeatures = makeSwitchVector('', 'SIMULATOR_ERROR_FEATURES', 'Error Features', SIMULATION, 'AnyOfMany', 'rw', ['ALIGNMENT', 'Alignment', false], ['PERIODIC_ERROR', 'Periodic Error', false], ['MECHANICS', 'Mechanics', false], ['GUIDING', 'Guiding', false], ['SETTLING', 'Settling', false], ['FLEXURE', 'Flexure', false], ['WIND', 'Wind', false], ['TRACKING_RATE', 'Tracking Rate', false])
 	// Geometric imperfections of the mount, all signed arcseconds. The polar-axis range spans ten
@@ -134,6 +139,8 @@ export class MountSimulator extends DeviceSimulator {
 		this.#pierSide,
 		this.#guideNS,
 		this.#guideWE,
+		this.#autoMeridianFlip,
+		this.#meridianFlipSettings,
 		this.#guideRate,
 		this.#errorFeatures,
 		this.#alignment,
@@ -147,9 +154,9 @@ export class MountSimulator extends DeviceSimulator {
 		this.#wind,
 		this.#trackingRate,
 	]
-	// The error-model configuration is persisted along with track mode and guide rate, so a simulated
-	// mount keeps its mechanical character across reconnections. The worm phase is not: it is live
-	// mechanical state, and a power cycle is exactly when a real mount loses track of it.
+	// The error-model and automatic-flip configuration is persisted along with track mode and guide rate,
+	// so a simulated mount keeps its mechanical character across reconnections. The worm phase and active
+	// operations are not: they are live mechanical state that a power cycle discards.
 	protected propertiesToNotSave = this.properties.filter(
 		(e) =>
 			e !== this.#trackMode &&
@@ -158,6 +165,8 @@ export class MountSimulator extends DeviceSimulator {
 			e !== this.#alignment &&
 			e !== this.#periodicError &&
 			e !== this.#periodicErrorCorrection &&
+			e !== this.#autoMeridianFlip &&
+			e !== this.#meridianFlipSettings &&
 			e !== this.#mechanics &&
 			e !== this.#guiding &&
 			e !== this.#settling &&
@@ -171,6 +180,37 @@ export class MountSimulator extends DeviceSimulator {
 	#coordSetMode: CoordSetMode = 'SLEW'
 	#slewMode?: SlewMode
 	#slewTarget?: EquatorialCoordinate
+	// Pier side committed only after the active slew reaches its destination.
+	#slewTargetPierSide?: PierSide
+	// Physical speed of the active coordinate slew, in radians per second.
+	#slewSpeed = 0
+	// Remaining virtual half-turn of a pier-side change, in radians of physical travel.
+	#flipTravelRemaining: Angle = 0
+	// Remaining physical declination-shaft travel of a pier-side change, in radians.
+	#flipDeclinationTravelRemaining: Angle = 0
+	// Current physical RA shaft angle followed by the active coordinate slew, in radians.
+	#slewRightAscensionShaft: Angle = 0
+	// Current physical declination shaft angle followed by the active coordinate slew, in radians.
+	#slewDeclinationShaft: Angle = 0
+	// Target physical RA shaft angle for the active coordinate slew, in radians.
+	#slewTargetRightAscensionShaft: Angle = 0
+	// Target physical declination shaft angle for the active coordinate slew, in radians.
+	#slewTargetDeclinationShaft: Angle = 0
+	// Prior side to record at the exact arrival timestamp after dynamic errors have reached it.
+	#arrivalBoresightPierSide?: PierSide
+	// Mid-slew shaft sample waiting for worm and wind state to reach the same timestamp.
+	#slewMidpointSample?: { time: number; rightAscension: Angle; declination: Angle; pierSide: PierSide }
+	// HOME arrival waiting until any deferred midpoint sample has been recorded.
+	#pendingHomeScatter = false
+	// One-shot latch preventing an aborted or completed automatic flip from immediately restarting.
+	#automaticFlipArmed = true
+
+	// Whether the in-flight property load itself changed automatic flip from disabled to enabled.
+	#automaticFlipEnabledByLoad = false
+	// Unwrapped reported hour angle retained across simulation steps and configuration changes, in radians.
+	#automaticFlipHourAngle: Angle = 0
+	// Furthest positive reported hour angle reached since the last coordinate placement, in radians.
+	#automaticFlipMaximumHourAngle: Angle = 0
 	#manualNorthSouth: AxisDirection = 0
 	#manualWestEast: AxisDirection = 0
 	// Accepted guide pulses per axis, ordered by acceptance and retired once the simulated clock has
@@ -227,9 +267,12 @@ export class MountSimulator extends DeviceSimulator {
 	// manual motion and guiding all move it, and both the reported coordinate and the boresight are
 	// derived from it.
 	readonly #mechanical: EquatorialCoordinate = { rightAscension: 0, declination: PIOVERTWO }
-	// Home and park are stored as mechanical positions, since that is what the axes return to.
+	// Home and park are stored as mechanical poses, since both coordinates and pier side determine the
+	// physical axis configuration the mount returns to.
 	readonly #homeCoordinate: EquatorialCoordinate = { rightAscension: 0, declination: PIOVERTWO }
 	readonly #parkCoordinate: EquatorialCoordinate = { rightAscension: 0, declination: PIOVERTWO }
+	#homePierSide: PierSide = 'NEITHER'
+	#parkPierSide: PierSide = 'NEITHER'
 	#utcTime = Date.now()
 	// Fraction of a millisecond not yet handed to the clock, in [0, 1). Carried between steps so a run
 	// of intervals shorter than the clock resolution still adds up to the time that really passed.
@@ -416,7 +459,7 @@ export class MountSimulator extends DeviceSimulator {
 	// Evaluates the current mechanical and dynamic state at `time`, in milliseconds on the simulated
 	// clock. The state itself must already have been advanced to that instant; the timestamp supplies the
 	// sidereal angle used by alignment and flexure terms when an interval is recorded in pieces.
-	#boresightAt(time: number): EquatorialCoordinate {
+	#boresightAt(time: number, pierSide: PierSide = this.pierSide): EquatorialCoordinate {
 		const model = this.pointingModel
 		const flexureEnabled = this.#simulatesFlexure
 		const { TUBE_FLEXURE, PIER_WEST_RA, PIER_WEST_DEC } = this.#flexure.elements
@@ -446,7 +489,7 @@ export class MountSimulator extends DeviceSimulator {
 			// Read from the side the mount is actually on, not predicted from the hour angle: a tracked
 			// target crosses the meridian by itself, and predicting the side there took the offset away
 			// from a mount that had not flipped, in one step and in the middle of an exposure.
-			if (flexureEnabled && (PIER_WEST_RA.value !== 0 || PIER_WEST_DEC.value !== 0) && this.pierSide === 'WEST') {
+			if (flexureEnabled && (PIER_WEST_RA.value !== 0 || PIER_WEST_DEC.value !== 0) && pierSide === 'WEST') {
 				rightAscension += PIER_WEST_RA.value * ASEC2RAD
 				declination += PIER_WEST_DEC.value * ASEC2RAD
 			}
@@ -622,18 +665,24 @@ export class MountSimulator extends DeviceSimulator {
 				const declination = vector.elements.DEC !== undefined ? deg(vector.elements.DEC) : this.declination
 
 				if (this.#coordSetMode === 'SYNC') this.syncTo(rightAscension, declination)
+				else if (this.#coordSetMode === 'FLIP') this.flipTo(rightAscension, declination)
 				else this.goTo(rightAscension, declination)
 
 				return
 			}
-			case 'GEOGRAPHIC_COORD':
+			case 'GEOGRAPHIC_COORD': {
+				const hourAngle = normalizePI(this.#siderealTime() - this.rightAscension)
 				if (applyNumberVectorValues(this.#geographicCoordinate, vector.elements)) {
-					this.#refreshPierSide()
+					this.#shiftAutomaticFlipHourAngle(normalizePI(this.#siderealTime() - this.rightAscension - hourAngle))
 					// Alignment and flexure depend on the site and can move the optical axis immediately even
 					// though the mechanics have not advanced. Preserve that change as a trajectory step.
 					this.#recordBoresight()
 					this.notify(this.#geographicCoordinate)
 				}
+				return
+			}
+			case 'MOUNT_MERIDIAN_FLIP_SETTINGS':
+				if (applyNumberVectorValues(this.#meridianFlipSettings, vector.elements)) this.notify(this.#meridianFlipSettings)
 				return
 			case 'GUIDE_RATE':
 				this.setGuideRate(vector.elements.GUIDE_RATE_WE ?? this.guideRateRightAscension, vector.elements.GUIDE_RATE_NS ?? this.guideRateDeclination)
@@ -646,16 +695,19 @@ export class MountSimulator extends DeviceSimulator {
 				if (vector.elements.TIMED_GUIDE_W !== undefined && vector.elements.TIMED_GUIDE_W >= 0) this.pulse('WEST', vector.elements.TIMED_GUIDE_W)
 				else if (vector.elements.TIMED_GUIDE_E !== undefined && vector.elements.TIMED_GUIDE_E >= 0) this.pulse('EAST', vector.elements.TIMED_GUIDE_E)
 				return
-			case 'MOUNT_ALIGNMENT':
+			case 'MOUNT_ALIGNMENT': {
+				const hourAngle = normalizePI(this.#siderealTime() - this.rightAscension)
 				if (applyNumberVectorValues(this.#alignment, vector.elements)) {
 					// The index errors sit between the axes and what the controller reports, and the reported
 					// coordinate is derived once and cached. Changing them has to re-derive it: the telescope
 					// has not moved, but what the mount believes about it just changed.
 					this.#refreshReportedCoordinate()
+					this.#shiftAutomaticFlipHourAngle(normalizePI(this.#siderealTime() - this.rightAscension - hourAngle))
 					this.#recordBoresight()
 					this.notify(this.#alignment)
 				}
 				return
+			}
 			case 'MOUNT_PERIODIC_ERROR':
 				if (applyNumberVectorValues(this.#periodicError, vector.elements)) {
 					this.#refreshPeriodicError()
@@ -722,13 +774,36 @@ export class MountSimulator extends DeviceSimulator {
 	// loading writes the vectors directly instead of going through `sendNumber`.
 	protected onPropertiesLoaded() {
 		this.#refreshErrorConfigurations()
+		this.#resetAutomaticFlipHourAngle(this.#utcTime, false)
 	}
 
-	// Rebuilds every configuration cached from a property vector. Called whenever a persisted set of
+	// Captures automatic-flip enables caused by persisted data, not by commands that race with the
+	// asynchronous load. The live vector is still pre-load here, so a disabled-to-enabled transition
+	// means the loaded property itself is responsible for rearming the automatic flip latch.
+	protected onPropertyLoading(actual: SimulatorProperty, persisted: SimulatorProperty) {
+		if (actual === this.#autoMeridianFlip && !this.#autoMeridianFlip.elements.INDI_ENABLED.value && persisted.elements.INDI_ENABLED?.value === true) this.#automaticFlipEnabledByLoad = true
+	}
+
+	// Loads persisted mount properties while preserving the automatic-flip abort latch.
+	//
+	// A load that turns the feature on is equivalent to an explicit enable and arms it. A load that
+	// merely rewrites other configuration while automatic flip is already enabled only rebases the
+	// hour-angle cache; it must not restart an aborted automatic flip on the next tick.
+	override async loadProperties() {
+		this.#automaticFlipEnabledByLoad = false
+
+		await super.loadProperties()
+
+		if (this.#automaticFlipEnabledByLoad) this.#automaticFlipArmed = true
+		this.#automaticFlipEnabledByLoad = false
+	}
+
+	// Rebuilds every configuration cached from a property vector. Returns whether the rebuild rebased
+	// the automatic-flip hour-angle history as a side effect. Called whenever a persisted set of
 	// properties is restored, since loading writes the vectors directly instead of going through
 	// `sendNumber`, and whenever an error feature is switched, since each of these is gated by one.
 	#refreshErrorConfigurations() {
-		this.#discardDisabledErrorState()
+		const automaticFlipHourAngleRebased = this.#discardDisabledErrorState()
 		this.#refreshTransmission()
 		this.#refreshSettling()
 		this.#refreshTrackingRate()
@@ -740,10 +815,12 @@ export class MountSimulator extends DeviceSimulator {
 		// same tick as the change was integrated over the boresight the mount had before it: switching a
 		// pointing error on and exposing immediately produced a frame with no sign of the error in it.
 		this.#recordBoresight()
+		return automaticFlipHourAngleRebased
 	}
 
-	// Throws away the state a disabled family had accumulated, so switching one off leaves an ideal
-	// mount rather than one frozen wherever the error had already carried it.
+	// Throws away the state a disabled family had accumulated, returning whether the automatic-flip
+	// hour-angle history was rebased. Switching an error off leaves an ideal mount rather than one
+	// frozen wherever the error had already carried it.
 	//
 	// Most families are derived from their vector on every evaluation and stop contributing the moment
 	// the switch does. These two are not: they integrate over time into state of their own, and without
@@ -751,6 +828,8 @@ export class MountSimulator extends DeviceSimulator {
 	// added to the boresight by a family that is no longer being simulated. The rate error is worse
 	// still, since the wander of the rate survives in its own state and would keep the drift growing.
 	#discardDisabledErrorState() {
+		let automaticFlipHourAngleRebased = false
+
 		if (!this.#simulatesTrackingRate) {
 			resetTrackingRateError(this.#trackingRateErrorState)
 			this.#trackingRateError = 0
@@ -778,11 +857,16 @@ export class MountSimulator extends DeviceSimulator {
 			// the switch was thrown, permanently off the position it had been commanded to, which is the
 			// opposite of what switching the family off is supposed to leave behind.
 			if (this.#appliedRightAscensionRing !== 0 || this.#appliedDeclinationRing !== 0) {
+				const priorPierSide = this.pierSide
+				const declinationStep = -this.#appliedDeclinationRing
 				this.#setMechanical(this.#mechanical.rightAscension - this.#appliedRightAscensionRing, this.#mechanical.declination - this.#appliedDeclinationRing)
+				automaticFlipHourAngleRebased = this.#reconcilePierSideAfterPoleMotion(priorPierSide, declinationStep, this.#utcTime + this.#utcTimeRemainder) || automaticFlipHourAngleRebased
 			}
 
 			this.#resetSettlingState()
 		}
+
+		return automaticFlipHourAngleRebased
 	}
 
 	// Re-derives the reported coordinate from the axes without moving them, which is what has to happen
@@ -933,23 +1017,31 @@ export class MountSimulator extends DeviceSimulator {
 				if (vector.elements.TRACK_ON === true) this.setTrackingEnabled(true)
 				else if (vector.elements.TRACK_OFF === true) this.setTrackingEnabled(false)
 				return
-			case 'SIMULATOR_ERROR_FEATURES':
+			case 'MOUNT_AUTO_MERIDIAN_FLIP':
+				if (vector.elements.INDI_ENABLED === true) this.#setAutomaticFlipEnabled(true)
+				else if (vector.elements.INDI_DISABLED === true) this.#setAutomaticFlipEnabled(false)
+				return
+			case 'SIMULATOR_ERROR_FEATURES': {
+				const hourAngle = normalizePI(this.#siderealTime() - this.rightAscension)
 				if (applyMultiSwitchValues(this.#errorFeatures, vector.elements)) {
 					// Every cached configuration is gated by one of these, so they all have to be rebuilt
 					// rather than only the one whose switch moved.
-					this.#refreshErrorConfigurations()
+					const automaticFlipHourAngleRebased = this.#refreshErrorConfigurations()
+					if (!automaticFlipHourAngleRebased) this.#shiftAutomaticFlipHourAngle(normalizePI(this.#siderealTime() - this.rightAscension - hourAngle))
 					this.notify(this.#errorFeatures)
 				}
 				return
+			}
 			case 'ON_COORD_SET':
 				if (vector.elements.SYNC === true) this.#coordSetMode = 'SYNC'
+				else if (vector.elements.FLIP === true) this.#coordSetMode = 'FLIP'
 				else if (vector.elements.SLEW === true) this.#coordSetMode = 'SLEW'
 		}
 	}
 
 	// Connects the simulated mount and publishes its supported properties.
 	connect() {
-		if (this.#timer) return
+		if (this.isConnected) return
 
 		super.connect()
 
@@ -962,19 +1054,31 @@ export class MountSimulator extends DeviceSimulator {
 		this.#refreshDynamicCoordinates(false)
 		// Seeds the side from wherever the axes were left, since nothing has placed them this session.
 		this.#refreshPierSide()
+		this.#resetAutomaticFlipHourAngle()
+		this.#automaticFlipArmed = true
 		this.#timer = setInterval(this.#tick.bind(this), TICK_INTERVAL_MS)
 	}
 
 	// Disconnects the simulated mount and removes its dynamic properties.
 	disconnect() {
-		if (!this.#timer) return
+		this.pauseAutomaticTicking()
+		if (!this.isConnected) return
 
-		clearInterval(this.#timer)
-		this.#timer = undefined
 		this.stop()
 		this.setTrackingEnabled(false)
 
 		super.disconnect()
+	}
+
+	// Stops the wall-clock interval while keeping the simulated mount connected.
+	//
+	// Tests that advance the mount manually use this to keep exact slew boundaries deterministic. Normal
+	// clients should leave the interval running so real time continues to drive the simulation.
+	pauseAutomaticTicking() {
+		if (!this.#timer) return
+
+		clearInterval(this.#timer)
+		this.#timer = undefined
 	}
 
 	// Starts a time-based slew to the requested equatorial coordinate.
@@ -985,11 +1089,110 @@ export class MountSimulator extends DeviceSimulator {
 	goTo(rightAscension: Angle, declination: Angle) {
 		if (!this.isConnected || this.isParked) return
 
+		const target = { rightAscension: normalizeAngle(rightAscension - this.#indexErrorRightAscension), declination: clampDeclination(declination - this.#indexErrorDeclination) }
+		const targetPierSide = this.#gotoPierSide(target)
+		const changesPierSide = this.pierSide !== 'NEITHER' && targetPierSide !== 'NEITHER' && targetPierSide !== this.pierSide
+		this.#startCoordinateSlew('GOTO', target, targetPierSide, changesPierSide, false)
+	}
+
+	// Selects the side on which a GOTO target will be valid when the axes actually arrive.
+	//
+	// `target` is a mechanical equatorial coordinate in radians. Each candidate is evaluated with the
+	// physical duration of its own route, including the virtual half-turn and mirrored declination-shaft
+	// travel when it changes side. If a target transits during a would-be flip and neither route is
+	// self-consistent, retaining the present side avoids completing a flip that is already obsolete.
+	#gotoPierSide(target: EquatorialCoordinate): PierSide {
+		const expectedNow = expectedPierSide(target.rightAscension, target.declination, this.#siderealTime())
+		if (expectedNow === 'NEITHER') return 'NEITHER'
+
+		const current = this.pierSide
+		if (current === 'NEITHER') return this.#expectedPierSideAtSlewArrival(target, expectedNow)
+		if (this.#expectedPierSideAtSlewArrival(target, current) === current) return current
+
+		const opposite = current === 'EAST' ? 'WEST' : 'EAST'
+		if (this.#expectedPierSideAtSlewArrival(target, opposite) === opposite) return opposite
+		return current
+	}
+
+	// Predicts the target's pier side after following one candidate physical GOTO route.
+	// `target` is mechanical RA/Dec in radians and `targetPierSide` is the side committed at arrival.
+	#expectedPierSideAtSlewArrival(target: EquatorialCoordinate, targetPierSide: PierSide): PierSide {
+		const duration = this.#coordinateSlewDuration(target, targetPierSide)
+		return expectedPierSide(target.rightAscension, target.declination, this.#siderealTime() + SIDEREAL_DRIFT_RATE * duration)
+	}
+
+	// Returns the physical GOTO duration for one destination side, in seconds.
+	//
+	// `target` is mechanical RA/Dec in radians. The RA travel is measured between the physical shaft
+	// frames represented by the current and target declination branches. The celestial displacement and
+	// any virtual PI-radian frame change are composed before choosing the nearest congruent shaft angle.
+	#coordinateSlewDuration(target: EquatorialCoordinate, targetPierSide: PierSide) {
+		const hasActiveCoordinateSlew = this.#slewTarget !== undefined
+		const currentRightAscensionShaftAngle = hasActiveCoordinateSlew ? this.#slewRightAscensionShaft : rightAscensionShaftAngle(this.pierSide, this.#mechanical.rightAscension)
+		const currentDeclinationShaftAngle = hasActiveCoordinateSlew ? this.#slewDeclinationShaft : this.pierSide === 'NEITHER' ? this.#mechanical.declination : declinationShaftAngle(this.pierSide, this.#mechanical.declination)
+		const targetDeclinationShaftAngle = targetPierSide === 'NEITHER' ? target.declination : declinationShaftAngle(targetPierSide, target.declination)
+		const deltaRightAscension = normalizePI(target.rightAscension - rightAscensionFromShaftPose(currentRightAscensionShaftAngle, currentDeclinationShaftAngle))
+		const shaftFrameTravel = retainsPoleRightAscensionFrame(targetPierSide, target.declination, declinationFromShaftAngle(currentDeclinationShaftAngle)) ? 0 : rightAscensionShaftFrameTravel(currentDeclinationShaftAngle, targetDeclinationShaftAngle)
+		const rightAscensionTravel = Math.abs(normalizeShaftDelta(deltaRightAscension + shaftFrameTravel))
+		const declinationTravel = Math.abs(normalizeShaftDelta(targetDeclinationShaftAngle - currentDeclinationShaftAngle))
+		return Math.max(rightAscensionTravel, declinationTravel) / (this.#manualSlewSpeed() * SLEW_SPEED_FACTOR)
+	}
+
+	// Starts a forced pier-side change while slewing to the requested reported coordinate.
+	//
+	// The target is expressed in radians in the reported equatorial frame. The celestial displacement
+	// and a virtual PI-radian physical half-turn advance together, so a flip to the coordinate already
+	// reported still has a realistic non-zero duration. A pole has no pier side and is rejected with an
+	// Alert coordinate state rather than pretending that a flip occurred.
+	flipTo(rightAscension: Angle, declination: Angle) {
+		if (!this.isConnected || this.isParked) return
+
+		const pierSide = this.pierSide
+		const target = { rightAscension: normalizeAngle(rightAscension - this.#indexErrorRightAscension), declination: clampDeclination(declination - this.#indexErrorDeclination) }
+		if (pierSide === 'NEITHER' || expectedPierSide(target.rightAscension, target.declination, this.#siderealTime()) === 'NEITHER') {
+			if (!this.isSlewing) this.#setCoordinateState('Alert')
+			return
+		}
+
+		this.#startCoordinateSlew('FLIP', target, pierSide === 'EAST' ? 'WEST' : 'EAST', true, false)
+	}
+
+	// Gives a coordinate slew exclusive control of both axes and initializes its pier-side travel.
+	// `target` is a mechanical equatorial coordinate in radians. Any virtual PI-radian frame change is
+	// composed with celestial RA travel before selecting the nearest congruent shaft destination, while
+	// the declination shaft follows the equivalent orientation on the destination side. The in-flight
+	// shaft pose survives replacement slews, so a new operation resumes from the physical axis position
+	// reached so far rather than reconstructing it from the still-uncommitted pier side. The in-flight
+	// mechanical coordinate is derived from the interpolated physical shaft pose, so camera trajectories
+	// see the tube sweep away from and back to a same-coordinate flip target.
+	#startCoordinateSlew(mode: SlewMode, target: EquatorialCoordinate, targetPierSide: PierSide, changesPierSide: boolean, automatic: boolean) {
+		const hasActiveCoordinateSlew = this.#slewTarget !== undefined
+		const initialRightAscensionShaft = hasActiveCoordinateSlew ? this.#slewRightAscensionShaft : rightAscensionShaftAngle(this.pierSide, this.#mechanical.rightAscension)
+		const initialDeclinationShaft = hasActiveCoordinateSlew ? this.#slewDeclinationShaft : this.pierSide === 'NEITHER' ? this.#mechanical.declination : declinationShaftAngle(this.pierSide, this.#mechanical.declination)
+		const currentRightAscension = rightAscensionFromShaftPose(initialRightAscensionShaft, initialDeclinationShaft)
+		const targetDeclinationShaft = targetPierSide === 'NEITHER' ? target.declination : declinationShaftAngle(targetPierSide, target.declination)
 		this.#clearManualMotion()
 		this.#clearPulseGuide()
 		this.#takeSlewControl()
-		this.#slewMode = 'GOTO'
-		this.#slewTarget = { rightAscension: normalizeAngle(rightAscension - this.#indexErrorRightAscension), declination: clampDeclination(declination - this.#indexErrorDeclination) }
+		this.#clearFlipMotion()
+		this.#slewMode = mode
+		this.#slewTarget = target
+		this.#slewTargetPierSide = targetPierSide
+		this.#slewSpeed = this.#manualSlewSpeed() * SLEW_SPEED_FACTOR
+		this.#flipTravelRemaining = changesPierSide ? PI : 0
+		this.#slewRightAscensionShaft = initialRightAscensionShaft
+		this.#slewDeclinationShaft = initialDeclinationShaft
+		const deltaRightAscension = normalizePI(target.rightAscension - currentRightAscension)
+		const shaftFrameTravel = retainsPoleRightAscensionFrame(targetPierSide, target.declination, declinationFromShaftAngle(this.#slewDeclinationShaft)) ? 0 : rightAscensionShaftFrameTravel(this.#slewDeclinationShaft, targetDeclinationShaft)
+		this.#slewTargetRightAscensionShaft = this.#slewRightAscensionShaft + normalizeShaftDelta(deltaRightAscension + shaftFrameTravel)
+		const declinationMotorDelta = normalizeShaftDelta(targetDeclinationShaft - this.#slewDeclinationShaft)
+		if (targetPierSide !== 'NEITHER' && targetPierSide !== this.pierSide) {
+			this.#slewTargetDeclinationShaft = this.#slewDeclinationShaft + declinationMotorDelta
+			this.#flipDeclinationTravelRemaining = Math.abs(declinationMotorDelta)
+		} else {
+			this.#slewTargetDeclinationShaft = this.#slewDeclinationShaft + declinationMotorDelta
+		}
+		if (automatic) this.#automaticFlipArmed = false
 		this.#setSlewing(true)
 		this.#setHoming(false)
 		this.#setParking(false)
@@ -1005,10 +1208,20 @@ export class MountSimulator extends DeviceSimulator {
 	// instead, as a configured quantity rather than a side effect of syncing.
 	syncTo(rightAscension: Angle, declination: Angle) {
 		if (!this.isConnected) return
+		const pierSide = this.pierSide
+		this.#abortSlew()
+		this.#refreshSlewingState()
+		this.#setHoming(false)
+		this.#setParking(false)
 		this.#setMechanical(rightAscension - this.#indexErrorRightAscension, declination - this.#indexErrorDeclination)
 		// A sync is also how this simulator places the axes, so it is one of the moments the side of the
 		// pier is decided rather than inherited.
 		this.#refreshPierSide()
+		// Declination motor directions are expressed in the shaft frame, whose sign reverses with the
+		// pier side. A sync is a discontinuous placement rather than motion through that reversal, so no
+		// previously loaded flank, open backlash, or pending stiction command is meaningful afterwards.
+		if (this.pierSide !== pierSide) clearMechanicalAxis(this.#declinationAxis)
+		this.#resetAutomaticFlipHourAngle()
 		// A sync is a discontinuity rather than motion, so the recorded past no longer describes where
 		// this telescope has been. Keeping it would let an exposure straddling the sync integrate a jump
 		// across the sky as if the tube had swept through it, and it is also where the errors that live
@@ -1019,30 +1232,27 @@ export class MountSimulator extends DeviceSimulator {
 	// Slews to the configured home position.
 	home() {
 		if (!this.isConnected || this.isParked) return
-		this.#takeSlewControl()
-		this.#slewMode = 'HOME'
-		this.#slewTarget = { rightAscension: this.#homeCoordinate.rightAscension, declination: this.#homeCoordinate.declination }
-		this.#setSlewing(true)
+		const target = { rightAscension: this.#homeCoordinate.rightAscension, declination: this.#homeCoordinate.declination }
+		const targetPierSide = this.#homePierSide
+		const changesPierSide = this.pierSide !== 'NEITHER' && targetPierSide !== 'NEITHER' && targetPierSide !== this.pierSide
+		this.#startCoordinateSlew('HOME', target, targetPierSide, changesPierSide, false)
 		this.#setHoming(true)
-		this.#setParking(false)
 	}
 
-	// Stores the current mechanical orientation as the new home position.
+	// Stores the current mechanical orientation and physical shaft branch as the new home position.
 	setHome() {
 		this.#homeCoordinate.rightAscension = this.#mechanical.rightAscension
 		this.#homeCoordinate.declination = this.#mechanical.declination
+		this.#homePierSide = this.#storedPosePierSide()
 	}
 
 	// Parks the mount at the configured park position.
 	park() {
 		if (!this.isConnected || this.isParked) return
-		this.#clearManualMotion()
-		this.#clearPulseGuide()
-		this.#takeSlewControl()
-		this.#slewMode = 'PARK'
-		this.#slewTarget = { rightAscension: this.#parkCoordinate.rightAscension, declination: this.#parkCoordinate.declination }
-		this.#setSlewing(true)
-		this.#setHoming(false)
+		const target = { rightAscension: this.#parkCoordinate.rightAscension, declination: this.#parkCoordinate.declination }
+		const targetPierSide = this.#parkPierSide
+		const changesPierSide = this.pierSide !== 'NEITHER' && targetPierSide !== 'NEITHER' && targetPierSide !== this.pierSide
+		this.#startCoordinateSlew('PARK', target, targetPierSide, changesPierSide, false)
 		this.#setParking(true, false)
 	}
 
@@ -1052,10 +1262,21 @@ export class MountSimulator extends DeviceSimulator {
 		this.#setParking(false)
 	}
 
-	// Stores the current mechanical orientation as the park position.
+	// Stores the current mechanical orientation and physical shaft branch as the park position.
 	setPark() {
 		this.#parkCoordinate.rightAscension = this.#mechanical.rightAscension
 		this.#parkCoordinate.declination = this.#mechanical.declination
+		this.#parkPierSide = this.#storedPosePierSide()
+	}
+
+	// Returns the physical pier side belonging to a pose saved at the current instant.
+	// During a coordinate slew the published side remains committed to the origin until arrival, so the
+	// continuous declination shaft selects the actual branch. A shaft at either singular pole has no side.
+	#storedPosePierSide() {
+		if (!this.#slewTarget) return this.pierSide
+		const cosine = Math.cos(this.#slewDeclinationShaft)
+		if (Math.abs(cosine) <= DECLINATION_SHAFT_POLE_TOLERANCE) return 'NEITHER'
+		return isMirroredDeclinationShaftFrame(this.#slewDeclinationShaft) ? 'EAST' : 'WEST'
 	}
 
 	// Enables or disables sidereal-style tracking.
@@ -1119,13 +1340,15 @@ export class MountSimulator extends DeviceSimulator {
 
 		// Carried onto the new timeline before the clock moves under them. A pulse is a command to run
 		// for its own duration, not until a particular reading of a clock a client is free to change.
-		shiftGuidePulses(this.#westEastPulses, value.utc - this.#utcTime)
-		shiftGuidePulses(this.#northSouthPulses, value.utc - this.#utcTime)
+		const clockDelta = value.utc - this.#utcTime
+		shiftGuidePulses(this.#westEastPulses, clockDelta)
+		shiftGuidePulses(this.#northSouthPulses, clockDelta)
+		this.#automaticFlipHourAngle += (clockDelta / 1000) * SIDEREAL_DRIFT_RATE
+		this.#automaticFlipMaximumHourAngle = clockDelta < 0 ? this.#automaticFlipHourAngle : Math.max(this.#automaticFlipMaximumHourAngle, this.#automaticFlipHourAngle)
 		this.#utcTime = value.utc
 		// The carried fraction belongs to the clock that was just replaced.
 		this.#utcTimeRemainder = 0
 		this.#lastTick = Date.now()
-		this.#refreshPierSide()
 		// The recorded trajectory is indexed by the simulated clock and searched assuming its timestamps
 		// only ever increase. Setting the clock backwards would append a sample older than the ones
 		// already held and break that, leaving an exposure to clamp onto a stale sample or interpolate
@@ -1235,8 +1458,7 @@ export class MountSimulator extends DeviceSimulator {
 
 	// Aborts any active slew or manual motion.
 	stop() {
-		this.#slewMode = undefined
-		this.#slewTarget = undefined
+		this.#abortSlew()
 		this.#clearManualMotion()
 		this.#clearPulseGuide()
 		this.#setSlewing(false)
@@ -1311,18 +1533,43 @@ export class MountSimulator extends DeviceSimulator {
 			// interval — tens of degrees of phase for an axis that moved a few arcseconds — and step the
 			// periodic error to somewhere unrelated to where the mount actually stopped.
 			const slewRate = this.#rightAscensionMotorRate()
-			settlingSeconds = this.#advanceSlew(dtSeconds)
-			this.#advanceWormPhase(slewRate, dtSeconds - settlingSeconds)
-			// The wind blows regardless of what the mount is doing, so it is charged for the travelling
-			// part of the step here and for the rest of it below.
-			advanceWind(this.#windState, dtSeconds - settlingSeconds, this.#windConfig, this.#normal)
+			settlingSeconds = this.#advanceSlew(dtSeconds, endTime)
+			const slewSeconds = dtSeconds - settlingSeconds
+			const midpointSample = this.#slewMidpointSample
+			if (midpointSample && slewSeconds > 0) {
+				const midpointSeconds = clamp((midpointSample.time - startTime) / 1000, 0, slewSeconds)
+				this.#advanceWormPhase(slewRate, midpointSeconds)
+				advanceWind(this.#windState, midpointSeconds, this.#windConfig, this.#normal)
+				const finalRightAscension = this.#mechanical.rightAscension
+				const finalDeclination = this.#mechanical.declination
+				this.#setMechanical(midpointSample.rightAscension, midpointSample.declination, false)
+				this.#recordBoresightAt(midpointSample.time, midpointSample.pierSide)
+				this.#setMechanical(finalRightAscension, finalDeclination, false)
+				const remainingSlewSeconds = slewSeconds - midpointSeconds
+				this.#advanceWormPhase(slewRate, remainingSlewSeconds)
+				advanceWind(this.#windState, remainingSlewSeconds, this.#windConfig, this.#normal)
+			} else {
+				this.#advanceWormPhase(slewRate, slewSeconds)
+				// The wind blows regardless of what the mount is doing, so it is charged for the travelling
+				// part of the step here and for the rest of it below.
+				advanceWind(this.#windState, slewSeconds, this.#windConfig, this.#normal)
+			}
+			this.#slewMidpointSample = undefined
+			if (this.#pendingHomeScatter) {
+				this.#pendingHomeScatter = false
+				this.#scatterHome()
+			}
 
 			// Arriving is a moment inside the step, and the trajectory has to say so. Recorded only at the
 			// end of the step, the arrival was left between two samples a whole tick apart and the history
 			// interpolated the goto evenly across all of it: a ten millisecond slew inside a hundred
 			// millisecond step read as still halfway to the target at fifty, so an exposure spanning it put
 			// the field in places the mount had already left and lingered there.
-			if (settlingSeconds > 0) this.#recordBoresightAt(endTime - settlingSeconds * 1000)
+			if (settlingSeconds > 0) {
+				const arrivalTime = endTime - settlingSeconds * 1000
+				this.#recordArrivalBoresightAt(arrivalTime)
+				this.#recordBoresightAt(arrivalTime)
+			}
 
 			// The rest of the step belongs to whatever the mount does when it is not slewing, which is
 			// normally tracking. Dropping it stopped the clock for the mount alone: a goto to the
@@ -1349,7 +1596,11 @@ export class MountSimulator extends DeviceSimulator {
 		this.#notifyWormPhase()
 
 		// Recorded last, so the sample reflects the state at the end of the interval just simulated.
+		this.#recordArrivalBoresightAt(this.#utcTime + this.#utcTimeRemainder)
 		this.#recordBoresight()
+		// Autonomous flips begin after the interval has been fully accounted for, so crossing the threshold
+		// starts a Busy operation for the following tick instead of retroactively consuming elapsed time.
+		this.#updateAutomaticMeridianFlip()
 	}
 
 	// Sub-steps a ring-down of `dtSeconds` is advanced and recorded in, so that a resonance faster than
@@ -1381,11 +1632,24 @@ export class MountSimulator extends DeviceSimulator {
 		this.#recordBoresightAt(this.#utcTime + this.#utcTimeRemainder)
 	}
 
+	// Records the old side of an instantaneous pier-side jump after dynamic errors reach `time`.
+	//
+	// `time` is milliseconds on the simulated clock. The live mount has already committed the new side
+	// when this runs; `#arrivalBoresightPierSide` temporarily supplies the prior side only to the
+	// boresight evaluation, so flexure changes are kept as a timestamped discontinuity without moving
+	// the published pier-side property backwards.
+	#recordArrivalBoresightAt(time: number) {
+		if (this.#arrivalBoresightPierSide === undefined) return
+
+		this.#recordBoresightAt(time, this.#arrivalBoresightPierSide)
+		this.#arrivalBoresightPierSide = undefined
+	}
+
 	// Appends where the optical axis points now under the timestamp `time`, in milliseconds on the
 	// simulated clock. Used to record the end of a piece of a step that was cut short of the clock the
 	// step as a whole will end on, which is where the guiding changed inside it.
-	#recordBoresightAt(time: number) {
-		const boresight = this.#boresightAt(time)
+	#recordBoresightAt(time: number, pierSide: PierSide = this.pierSide) {
+		const boresight = this.#boresightAt(time, pierSide)
 		recordBoresightSample(this.#boresightHistory, time, boresight.rightAscension, boresight.declination)
 	}
 
@@ -1429,41 +1693,45 @@ export class MountSimulator extends DeviceSimulator {
 	}
 
 	// Signed rates of both axes during a slew, in radians per second. The step is normalized by the
-	// larger of the two deltas, so the axes arrive together and the faster one runs at the full slew
-	// speed.
+	// physical travel of either axis, whichever is larger, so neither motor exceeds the selected slew
+	// speed and both axes arrive together.
 	#slewAxisRates(): readonly [number, number] {
 		const target = this.#slewTarget
 		if (!target) return [0, 0]
 
-		const speed = this.#manualSlewSpeed() * SLEW_SPEED_FACTOR
-		// Measured from the axes, not from the reported coordinate. The target was converted into a
-		// mechanical orientation when the slew was commanded, so comparing it against what the
-		// controller reports mixes the two sides of the encoder index error: a goto to the coordinate
-		// already being reported would come back with a non-zero rate and spin the worm while
-		// `#advanceSlew`, which does use the axes, correctly finds nothing to travel.
-		const deltaRightAscension = normalizePI(target.rightAscension - this.#mechanical.rightAscension)
-		const deltaDeclination = target.declination - this.#mechanical.declination
-		const span = Math.max(Math.abs(deltaRightAscension), Math.abs(deltaDeclination))
+		const speed = this.#slewSpeed
+		// Measured from the physical shaft pose, not from the reported coordinate. A pier-side change
+		// folds the same sky coordinate through a different shaft frame, so the celestial coordinate alone
+		// no longer contains the remaining motor travel.
+		const rightAscensionMotorDelta = this.#slewTargetRightAscensionShaft - this.#slewRightAscensionShaft
+		const declinationMotorDelta = this.#slewTargetDeclinationShaft - this.#slewDeclinationShaft
+		const span = Math.max(Math.abs(rightAscensionMotorDelta), Math.abs(declinationMotorDelta))
 		if (span === 0) return [0, 0]
 
 		const scale = speed / span
-		return [deltaRightAscension * scale, deltaDeclination * scale]
+		return [rightAscensionMotorDelta * scale, declinationMotorDelta * scale]
 	}
 
 	// Moves the mount along the commanded slew vector, returning how many seconds of the step were left
-	// unspent once it arrived, which is zero while the slew is still running.
-	#advanceSlew(dtSeconds: number) {
+	// unspent once it arrived, which is zero while the slew is still running. `endTime` is the simulated
+	// UTC instant at the end of the step, in milliseconds, used to register a GOTO at its exact arrival.
+	#advanceSlew(dtSeconds: number, endTime: number) {
 		const target = this.#slewTarget
 
 		if (!target) return dtSeconds
+		this.#slewMidpointSample = undefined
 
 		// Time left in the step after the slew ends, which is none while it is still running.
 		let remaining = 0
-		const speed = this.#manualSlewSpeed() * SLEW_SPEED_FACTOR
+		const speed = this.#slewSpeed
 		const maxStep = speed * dtSeconds
-		const deltaRightAscension = normalizePI(target.rightAscension - this.#mechanical.rightAscension)
-		const deltaDeclination = target.declination - this.#mechanical.declination
-		const span = Math.max(Math.abs(deltaRightAscension), Math.abs(deltaDeclination))
+		const initialRightAscensionShaft = this.#slewRightAscensionShaft
+		const initialDeclinationShaft = this.#slewDeclinationShaft
+		const rightAscensionMotorDelta = this.#slewTargetRightAscensionShaft - this.#slewRightAscensionShaft
+		const declinationMotorDelta = this.#slewTargetDeclinationShaft - this.#slewDeclinationShaft
+		const flipTravelRemaining = this.#flipTravelRemaining
+		const flipDeclinationTravelRemaining = this.#flipDeclinationTravelRemaining
+		const span = Math.max(Math.abs(rightAscensionMotorDelta), Math.abs(declinationMotorDelta))
 
 		// A slew drives the axes directly rather than through the transmission model, since backlash is
 		// negligible against a slew and its own dynamics belong with the slew profile. The travel is still
@@ -1476,8 +1744,17 @@ export class MountSimulator extends DeviceSimulator {
 		// by whatever moved the axes before the goto, so a reversing pulse afterwards moved at once
 		// instead of spending itself on the slack the slew had just opened.
 		const travelled = span > 0 ? Math.min(1, maxStep / span) : 0
-		driveMechanicalAxis(this.#rightAscensionAxis, Math.sign(deltaRightAscension) as AxisDirection, Math.abs(deltaRightAscension) * travelled, this.#rightAscensionTransmission)
-		driveMechanicalAxis(this.#declinationAxis, Math.sign(deltaDeclination) as AxisDirection, Math.abs(deltaDeclination) * travelled, this.#declinationTransmission)
+		const slewSeconds = span > 0 && speed > 0 ? Math.min(dtSeconds, span / speed) : 0
+		const flipTravel = flipTravelRemaining * travelled
+		const flipDeclinationTravel = flipDeclinationTravelRemaining * travelled
+		const rightAscensionMotorTravel = rightAscensionMotorDelta * travelled - SIDEREAL_DRIFT_RATE * slewSeconds
+		const declinationMotorTravel = declinationMotorDelta * travelled
+		driveMechanicalAxis(this.#rightAscensionAxis, Math.sign(rightAscensionMotorTravel) as AxisDirection, Math.abs(rightAscensionMotorTravel), this.#rightAscensionTransmission)
+		driveMechanicalAxis(this.#declinationAxis, Math.sign(declinationMotorTravel) as AxisDirection, Math.abs(declinationMotorTravel), this.#declinationTransmission)
+		this.#slewRightAscensionShaft += rightAscensionMotorDelta * travelled
+		this.#slewDeclinationShaft += declinationMotorDelta * travelled
+		this.#flipTravelRemaining = Math.max(0, flipTravelRemaining - flipTravel)
+		this.#flipDeclinationTravelRemaining = Math.max(0, flipDeclinationTravelRemaining - flipDeclinationTravel)
 
 		if (span <= maxStep || span === 0) {
 			// Fraction of the step still unspent when the axes reach the target. The ring-down excited
@@ -1485,11 +1762,21 @@ export class MountSimulator extends DeviceSimulator {
 			// few-hertz resonance covers a good part of a cycle in one step, so integrating it over the
 			// whole interval would shift its phase or swallow the first overshoot outright.
 			remaining = maxStep > 0 ? dtSeconds * (1 - span / maxStep) : 0
+			const priorPierSide = this.pierSide
+			if (span > 0 && slewSeconds > 0) {
+				const shaftSampleTime = endTime - (remaining + slewSeconds / 2) * 1000
+				const shaftSampleRightAscension = initialRightAscensionShaft + rightAscensionMotorDelta * travelled * 0.5
+				const shaftSampleDeclination = initialDeclinationShaft + declinationMotorDelta * travelled * 0.5
+				this.#slewMidpointSample = { time: shaftSampleTime, rightAscension: rightAscensionFromShaftPose(shaftSampleRightAscension, shaftSampleDeclination, initialDeclinationShaft), declination: declinationFromShaftAngle(shaftSampleDeclination), pierSide: priorPierSide }
+			}
 			this.#setMechanical(target.rightAscension, target.declination)
-			// Arriving is where a mount ends up on a side of the pier: the controller chooses one for the
-			// destination, and a goto across the meridian is the flip. Between two gotos the side is
-			// whatever this one left behind, however far the sky turns underneath.
-			this.#refreshPierSide()
+			// A coordinate slew selected its destination side before it began, so the old side remains valid
+			// throughout the virtual half-turn and is committed only at arrival. Home and park have no stored
+			// side and derive one from where their axes finished instead.
+			const arrivalBoresightPierSide = this.#slewTargetPierSide !== undefined && this.#slewTargetPierSide !== priorPierSide ? priorPierSide : undefined
+			if (this.#slewTargetPierSide === undefined) this.#refreshPierSide()
+			else this.#setPierSide(this.#slewTargetPierSide)
+			if (priorPierSide !== 'NEITHER' && this.pierSide === 'NEITHER') clearMechanicalAxis(this.#declinationAxis)
 			// The axes come to a stop, so static friction has to be overcome again before the tracking
 			// or guiding that follows produces any motion.
 			resetMechanicalAxisMotion(this.#rightAscensionAxis)
@@ -1504,14 +1791,20 @@ export class MountSimulator extends DeviceSimulator {
 			// southward slew began by moving north of its target, which is a rebound rather than an
 			// overshoot.
 			if (span > 0) {
-				const severity = this.#manualSlewSpeed() / SLEW_RATES.at(-1)!.speed
-				exciteSettling(this.#rightAscensionSettling, (severity * deltaRightAscension) / span, this.#settlingConfig)
-				exciteSettling(this.#declinationSettling, (severity * deltaDeclination) / span, this.#settlingConfig)
+				const severity = speed / (SLEW_SPEED_FACTOR * SLEW_RATES.at(-1)!.speed)
+				const rightAscensionShare = clamp(rightAscensionMotorDelta / span, -1, 1)
+				const declinationSettlingPierSide = this.pierSide === 'NEITHER' ? priorPierSide : this.pierSide
+				const declinationShare = clamp((declinationMotorDelta * declinationShaftFrameSign(declinationSettlingPierSide)) / span, -1, 1)
+				exciteSettling(this.#rightAscensionSettling, severity * rightAscensionShare, this.#settlingConfig)
+				exciteSettling(this.#declinationSettling, severity * declinationShare, this.#settlingConfig)
 			}
 
 			const mode = this.#slewMode
+			this.#resetAutomaticFlipHourAngle(endTime - remaining * 1000)
 			this.#slewMode = undefined
 			this.#slewTarget = undefined
+			this.#clearFlipMotion()
+			this.#arrivalBoresightPierSide = arrivalBoresightPierSide
 			this.#setSlewing(false)
 			this.#setHoming(false)
 
@@ -1519,7 +1812,7 @@ export class MountSimulator extends DeviceSimulator {
 			// so the mount ends up believing it is at the home position while the axes sit a little off
 			// it. Every coordinate derived afterwards inherits that difference, which is where an index
 			// error comes from in the first place. Redrawn on each home, so two homings in a row disagree.
-			if (mode === 'HOME') this.#scatterHome()
+			this.#pendingHomeScatter = mode === 'HOME'
 
 			if (mode === 'PARK') {
 				this.#setParking(false, true)
@@ -1531,8 +1824,7 @@ export class MountSimulator extends DeviceSimulator {
 			return remaining
 		}
 
-		const scale = maxStep / span
-		this.#setMechanical(this.#mechanical.rightAscension + deltaRightAscension * scale, this.#mechanical.declination + deltaDeclination * scale)
+		this.#setMechanical(rightAscensionFromShaftPose(this.#slewRightAscensionShaft, this.#slewDeclinationShaft, initialDeclinationShaft), declinationFromShaftAngle(this.#slewDeclinationShaft))
 		return 0
 	}
 
@@ -1579,8 +1871,9 @@ export class MountSimulator extends DeviceSimulator {
 				// end of it, which dropped a tick's worth of buffeting onto the first piece and left the
 				// rest of the step perfectly still.
 				advanceWind(this.#windState, stepSeconds, this.#windConfig, this.#normal)
-				this.#advanceFreeMotion(stepSeconds)
-				this.#advanceRingDown(stepSeconds)
+				const stepTime = from + stepMilliseconds * step
+				this.#advanceFreeMotion(stepSeconds, stepTime)
+				this.#advanceRingDown(stepSeconds, stepTime)
 
 				// Each sub-step ends at a position of its own, and the trajectory is what a camera
 				// integrates an exposure over. Recording only the state at the end of the step described a
@@ -1588,7 +1881,7 @@ export class MountSimulator extends DeviceSimulator {
 				// back to where it started, so the path measured zero and the frame was drawn from a
 				// single point instead of from the out-and-back trail it really traced. The last sample
 				// lands on the end of the step and is replaced there by the one taken after it.
-				this.#recordBoresightAt(from + stepMilliseconds * step)
+				this.#recordBoresightAt(stepTime)
 			}
 
 			from = to
@@ -1608,7 +1901,7 @@ export class MountSimulator extends DeviceSimulator {
 	// anyway, so a mount homing to the pole with settling enabled came to rest permanently short of it.
 	// Crediting only the motion that survived the clamp means nothing is owed for motion that never
 	// happened.
-	#advanceRingDown(dtSeconds: number) {
+	#advanceRingDown(dtSeconds: number, time: number) {
 		advanceSettling(this.#rightAscensionSettling, dtSeconds, this.#settlingConfig)
 		advanceSettling(this.#declinationSettling, dtSeconds, this.#settlingConfig)
 
@@ -1618,9 +1911,15 @@ export class MountSimulator extends DeviceSimulator {
 		if (rightAscensionRing !== 0 || declinationRing !== 0) {
 			const rightAscension = this.#mechanical.rightAscension
 			const declination = this.#mechanical.declination
+			const priorPierSide = this.pierSide
 			this.#setMechanical(rightAscension + rightAscensionRing, declination + declinationRing)
-			this.#appliedRightAscensionRing += normalizePI(this.#mechanical.rightAscension - rightAscension)
-			this.#appliedDeclinationRing += this.#mechanical.declination - declination
+			const appliedRightAscensionRing = normalizePI(this.#mechanical.rightAscension - rightAscension)
+			this.#automaticFlipHourAngle -= appliedRightAscensionRing
+			this.#automaticFlipMaximumHourAngle = Math.max(this.#automaticFlipMaximumHourAngle, this.#automaticFlipHourAngle)
+			this.#appliedRightAscensionRing += appliedRightAscensionRing
+			const appliedDeclinationRing = this.#mechanical.declination - declination
+			this.#appliedDeclinationRing += appliedDeclinationRing
+			this.#reconcilePierSideAfterPoleMotion(priorPierSide, appliedDeclinationRing, time)
 		}
 	}
 
@@ -1631,16 +1930,21 @@ export class MountSimulator extends DeviceSimulator {
 	// rates go through the transmission model, and the sidereal drift is added to the result: with the
 	// motors stopped the coordinate still drifts eastward, and a perfectly tracking mount is one whose
 	// motor exactly cancels that drift.
-	#advanceFreeMotion(dtSeconds: number) {
+	#advanceFreeMotion(dtSeconds: number, time: number) {
 		const rightAscensionMotorRate = this.#rightAscensionMotorRate()
-		let declinationMotorRate = 0
+		let declinationCelestialRate = 0
+		const priorPierSide = this.pierSide
 
-		if (this.#manualNorthSouth !== 0) declinationMotorRate += this.#manualNorthSouth * this.#manualSlewSpeed()
-		declinationMotorRate += this.#guideRateNorthSouth
+		if (this.#manualNorthSouth !== 0) declinationCelestialRate += this.#manualNorthSouth * this.#manualSlewSpeed()
+		declinationCelestialRate += this.#guideRateNorthSouth
 
+		const declinationFrameSign = declinationShaftFrameSign(this.pierSide)
 		const rightAscensionStep = advanceMechanicalAxis(this.#rightAscensionAxis, rightAscensionMotorRate, dtSeconds, this.#rightAscensionTransmission)
-		const declinationStep = advanceMechanicalAxis(this.#declinationAxis, declinationMotorRate, dtSeconds, this.#declinationTransmission)
+		const declinationShaftStep = advanceMechanicalAxis(this.#declinationAxis, declinationCelestialRate * declinationFrameSign, dtSeconds, this.#declinationTransmission)
+		const declinationStep = declinationShaftStep * declinationFrameSign
 		const rightAscensionDelta = SIDEREAL_DRIFT_RATE * dtSeconds + rightAscensionStep
+		this.#automaticFlipHourAngle -= rightAscensionStep
+		this.#automaticFlipMaximumHourAngle = Math.max(this.#automaticFlipMaximumHourAngle, this.#automaticFlipHourAngle)
 
 		// The drive delivers the travel the transmission let through, times one plus its rate error; the
 		// encoders count only the nominal part. The excess therefore never reaches the reported
@@ -1653,7 +1957,37 @@ export class MountSimulator extends DeviceSimulator {
 
 		if (rightAscensionDelta !== 0 || declinationStep !== 0) {
 			this.#setMechanical(this.#mechanical.rightAscension + rightAscensionDelta, this.#mechanical.declination + declinationStep)
+			this.#reconcilePierSideAfterPoleMotion(priorPierSide, declinationStep, time)
 		}
+	}
+
+	// Reconciles pier-side state for physical motion into or out of a celestial pole.
+	//
+	// `priorPierSide` is the side before the step, `declinationStep` is the applied mechanical
+	// declination travel in radians, and `time` is the simulated UTC instant in milliseconds at which
+	// the motion reached the current coordinate. A pole has no pier side, so entering it clears
+	// side-specific declination transmission state; leaving it can establish a side for the first time.
+	// EAST mirrors the neutral shaft frame used while the pole had no side. Returns whether leaving a
+	// pole rebased automatic-flip hour-angle history.
+	#reconcilePierSideAfterPoleMotion(priorPierSide: PierSide, declinationStep: Angle, time: number) {
+		const pierSide = expectedPierSide(this.#mechanical.rightAscension, this.#mechanical.declination, this.siderealTimeAt(time))
+		if (priorPierSide !== 'NEITHER' && pierSide !== 'NEITHER') return false
+
+		this.#setPierSide(pierSide)
+		let automaticFlipHourAngleRebased = false
+		if (priorPierSide === 'NEITHER' && pierSide !== 'NEITHER') {
+			this.#resetAutomaticFlipHourAngle(time)
+			automaticFlipHourAngleRebased = true
+		}
+		if (priorPierSide === 'NEITHER' && pierSide === 'EAST' && declinationStep !== 0) {
+			// The pole-neutral step was integrated in the WEST shaft frame; EAST mirrors it.
+			clearMechanicalAxis(this.#declinationAxis)
+			driveMechanicalAxis(this.#declinationAxis, Math.sign(-declinationStep) as AxisDirection, Math.abs(declinationStep), this.#declinationTransmission)
+		} else if (priorPierSide !== 'NEITHER' && pierSide === 'NEITHER') {
+			// At the pole the pier side, and therefore the declination shaft frame, is undefined.
+			clearMechanicalAxis(this.#declinationAxis)
+		}
+		return automaticFlipHourAngleRebased
 	}
 
 	// Moves the mechanical axes and republishes everything derived from them.
@@ -1713,24 +2047,80 @@ export class MountSimulator extends DeviceSimulator {
 	// Decides which side of the pier the tube is on from where the axes now sit, and publishes it when
 	// it changed.
 	//
-	// Called only where the mount is actually placed on a side: the arrival of a goto, a sync, and a
-	// change of site or clock, which redefine what an orientation means at all. Never while the axes are
-	// merely running, because a German mount tracking a target through the meridian does not flip. The
-	// hour angle of that target crosses zero on its own, so re-deriving the side from it turned a mount
-	// that had not moved into one on the other side of the pier at transit: the pier term of the flexure
-	// model appeared or disappeared in a single step, jumping the boresight by the whole configured
-	// offset and trailing every exposure that spanned it, while the published property announced a flip
-	// that never happened.
+	// Called only where the mount is actually placed on a side: connection seeding, a sync, and the
+	// first physical free-motion step that leaves a pole-neutral coordinate. Slew arrivals commit their
+	// already-selected destination explicitly. Never while a mount that already has a side is merely
+	// running, because a German mount tracking a target through the meridian does not flip. The hour
+	// angle of that target crosses zero on its own, so re-deriving the side from it turned a mount that
+	// had not moved into one on the other side of the pier at transit: the pier term of the flexure model
+	// appeared or disappeared in a single step, jumping the boresight by the whole configured offset and
+	// trailing every exposure that spanned it, while the published property announced a flip that never
+	// happened.
 	//
 	// Derived from the mechanical orientation: which side of the pier the tube is on is a fact about the
 	// axes, not about what the controller believes it is reporting.
 	#refreshPierSide() {
-		const pierSide = expectedPierSide(this.#mechanical.rightAscension, this.#mechanical.declination, this.#siderealTime())
+		this.#setPierSide(expectedPierSide(this.#mechanical.rightAscension, this.#mechanical.declination, this.#siderealTime()))
+	}
+
+	// Publishes an explicit physical pier side without deriving it again from the current hour angle.
+	#setPierSide(pierSide: PierSide) {
 		if (pierSide === this.pierSide) return
 
 		this.#pierSide.elements.PIER_EAST.value = pierSide === 'EAST'
 		this.#pierSide.elements.PIER_WEST.value = pierSide === 'WEST'
 		this.notify(this.#pierSide)
+	}
+
+	// Enables or disables autonomous Meridian Flip triggering and rearms it on every explicit enable.
+	#setAutomaticFlipEnabled(enabled: boolean) {
+		const selected = enabled ? 'INDI_ENABLED' : 'INDI_DISABLED'
+		const changed = selectOnSwitch(this.#autoMeridianFlip, selected)
+
+		if (enabled) this.#automaticFlipArmed = true
+		if (changed) this.notify(this.#autoMeridianFlip)
+	}
+
+	// Re-registers the unwrapped automatic-flip hour angle after a coordinate discontinuity.
+	//
+	// `time` is the simulated UTC instant in milliseconds whose sidereal angle corresponds to the
+	// current reported coordinate. Later physical drive travel and clock changes advance it without
+	// normalizing, preserving threshold crossings through the signed-angle wrap.
+	#resetAutomaticFlipHourAngle(time: number = this.#utcTime, rearm: boolean = true) {
+		this.#automaticFlipHourAngle = normalizePI(this.siderealTimeAt(time) - this.rightAscension)
+		this.#automaticFlipMaximumHourAngle = this.#automaticFlipHourAngle
+		if (rearm) this.#automaticFlipArmed = true
+	}
+
+	// Shifts the retained automatic-flip policy into a changed reported-coordinate frame.
+	// `delta` is the signed change in reported hour angle, in radians normalized to -PI..PI. Applying it
+	// to both the live value and its maximum preserves crossings accumulated before the frame changed.
+	#shiftAutomaticFlipHourAngle(delta: Angle) {
+		this.#automaticFlipHourAngle += delta
+		this.#automaticFlipMaximumHourAngle += delta
+	}
+
+	// Starts one autonomous WEST-to-EAST flip after the configured signed hour-angle threshold.
+	//
+	// The latch rearms only while the target is back before the threshold on WEST, or when the feature
+	// is explicitly enabled again. An aborted attempt therefore cannot restart on the following tick.
+	#updateAutomaticMeridianFlip() {
+		if (!this.#autoMeridianFlip.elements.INDI_ENABLED.value) return
+
+		const threshold = deg(this.#meridianFlipSettings.elements.HOUR_ANGLE.value)
+
+		if (!this.#automaticFlipArmed) {
+			if (this.pierSide === 'WEST' && this.#automaticFlipHourAngle < threshold) {
+				this.#automaticFlipArmed = true
+				this.#automaticFlipMaximumHourAngle = this.#automaticFlipHourAngle
+			}
+			return
+		}
+
+		if (this.#automaticFlipMaximumHourAngle < threshold || !this.isTracking || this.isParked || this.isSlewing || this.isHoming || this.isParking || this.pierSide !== 'WEST') return
+
+		const target = { rightAscension: this.#mechanical.rightAscension, declination: this.#mechanical.declination }
+		this.#startCoordinateSlew('FLIP', target, 'EAST', true, true)
 	}
 
 	// Computes the current local sidereal time from the simulated clock.
@@ -1807,6 +2197,19 @@ export class MountSimulator extends DeviceSimulator {
 		this.#resetSettlingState()
 	}
 
+	// Clears transient travel and speed belonging to a superseded or completed slew without changing the side.
+	#clearFlipMotion() {
+		this.#slewTargetPierSide = undefined
+		this.#slewSpeed = 0
+		this.#flipTravelRemaining = 0
+		this.#flipDeclinationTravelRemaining = 0
+		this.#slewRightAscensionShaft = 0
+		this.#slewDeclinationShaft = 0
+		this.#slewTargetRightAscensionShaft = 0
+		this.#slewTargetDeclinationShaft = 0
+		this.#arrivalBoresightPierSide = undefined
+	}
+
 	// Puts both oscillators back on target and forgets what they had put into the coordinate.
 	//
 	// The two go together: the excursion currently present in the mechanical coordinate is only owed
@@ -1819,10 +2222,13 @@ export class MountSimulator extends DeviceSimulator {
 		this.#appliedDeclinationRing = 0
 	}
 
-	// Cancels any goto, home or park slew.
+	// Cancels any goto, flip, home, or park slew without committing a pending pier-side change.
 	#abortSlew() {
+		const hadCoordinateSlew = this.#slewTarget !== undefined
 		this.#slewMode = undefined
 		this.#slewTarget = undefined
+		this.#clearFlipMotion()
+		if (hadCoordinateSlew) this.#resetAutomaticFlipHourAngle(this.#utcTime + this.#utcTimeRemainder, false)
 		this.#setHoming(false)
 		this.#setParking(false)
 	}
@@ -1834,8 +2240,13 @@ export class MountSimulator extends DeviceSimulator {
 
 	// Updates the slewing flag and notifies listeners.
 	#setSlewing(value: boolean) {
-		if (this.isSlewing === value) return
-		this.#equatorialCoordinate.state = value ? 'Busy' : 'Idle'
+		this.#setCoordinateState(value ? 'Busy' : 'Idle')
+	}
+
+	// Publishes the coordinate-vector lifecycle state, including explicit command rejection as Alert.
+	#setCoordinateState(state: 'Idle' | 'Busy' | 'Alert') {
+		if (this.#equatorialCoordinate.state === state) return
+		this.#equatorialCoordinate.state = state
 		this.notify(this.#equatorialCoordinate)
 	}
 
@@ -1877,6 +2288,8 @@ export class MountSimulator extends DeviceSimulator {
 	#refreshDynamicCoordinates(notify: boolean) {
 		this.#homeCoordinate.rightAscension = this.#siderealTime()
 		this.#parkCoordinate.rightAscension = this.#homeCoordinate.rightAscension
+		this.#homePierSide = 'NEITHER'
+		this.#parkPierSide = 'NEITHER'
 		this.#setMechanical(this.#homeCoordinate.rightAscension, this.#homeCoordinate.declination, notify)
 		this.#absorbAccumulatedError()
 	}
@@ -1913,4 +2326,96 @@ export class MountSimulator extends DeviceSimulator {
 		this.#homeScatterDeclination = 0
 		this.#resetBoresightHistory()
 	}
+}
+
+// Maps a reported declination to the equivalent physical shaft angle for one pier side.
+// `pierSide` must be EAST or WEST and `declination` is in radians within the celestial range. The
+// returned angle is in radians, with the EAST representation mirrored across the nearest pole.
+function declinationShaftAngle(pierSide: PierSide, declination: Angle) {
+	if (pierSide === 'WEST') return declination
+	return declination >= 0 ? PI - declination : -PI - declination
+}
+
+// Maps a sky right ascension to the corresponding physical RA shaft angle for one pier side.
+// `pierSide` may be NEITHER for pole-neutral moves; `rightAscension` is in radians. EAST is offset by
+// PI because the same sky direction is reached from the opposite shaft orientation after a flip.
+function rightAscensionShaftAngle(pierSide: PierSide, rightAscension: Angle) {
+	return rightAscension + (pierSide === 'EAST' ? PI : 0)
+}
+
+// Maps a physical declination shaft angle back to the celestial declination it points at.
+// `declinationShaft` is in radians in the continuous shaft frame used during a coordinate slew.
+function declinationFromShaftAngle(declinationShaft: Angle) {
+	return Math.asin(Math.sin(declinationShaft))
+}
+
+// Sets the numerical deadband around a declination-shaft pole crossing, in radians.
+// Its sub-nanoarcsecond width also bounds the equivalent cosine magnitude under the small-angle
+// approximation, and only resolves floating-point noise at the singular boundary.
+const DECLINATION_SHAFT_POLE_TOLERANCE = 64 * Number.EPSILON
+
+// Maps a physical RA shaft angle back to sky right ascension for the declination-shaft branch.
+// All shaft angles are radians in the continuous physical frame. `pathOriginDeclinationShaft` is the
+// earlier declination shaft pose of the same motion; within numerical noise of a pole, its approach
+// direction keeps the pre-crossing RA branch. Without motion, the singular pole uses the unmirrored
+// branch, while values away from it follow the periodically folded physical shaft frame.
+function rightAscensionFromShaftPose(rightAscensionShaft: Angle, declinationShaft: Angle, pathOriginDeclinationShaft: Angle = declinationShaft) {
+	const cosine = Math.cos(declinationShaft)
+	const isAtPole = Math.abs(cosine) <= DECLINATION_SHAFT_POLE_TOLERANCE
+	const direction = Math.sign(declinationShaft - pathOriginDeclinationShaft)
+	const branchDeclinationShaft = isAtPole && direction !== 0 ? declinationShaft - direction * DECLINATION_SHAFT_POLE_TOLERANCE * 2 : declinationShaft
+	const mirrored = isMirroredDeclinationShaftFrame(branchDeclinationShaft)
+	return normalizeAngle(mirrored ? rightAscensionShaft - PI : rightAscensionShaft)
+}
+
+// Reports whether a continuous declination shaft angle occupies the periodically mirrored RA frame.
+// The angle is in radians and may contain any number of revolutions. A singular pole inside the
+// numerical deadband is treated as unmirrored; callers that know its direction displace it to the
+// approached branch before asking.
+function isMirroredDeclinationShaftFrame(declinationShaft: Angle) {
+	const cosine = Math.cos(declinationShaft)
+	return Math.abs(cosine) > DECLINATION_SHAFT_POLE_TOLERANCE && cosine < 0
+}
+
+// Normalizes physical shaft travel to the nearest half-turn while preserving exact tie direction.
+// `delta` is a shaft-angle difference in radians. `normalizePI` maps both +PI and -PI to +PI, but
+// retaining a negative half-turn lets a reverse flip undo the path taken in the opposite direction.
+function normalizeShaftDelta(delta: Angle) {
+	const normalized = normalizePI(delta)
+	return normalized === PI && delta < 0 ? -PI : normalized
+}
+
+// Sets the declination band where a slew into the exact pole may keep its current RA shaft frame.
+// The value is in radians. Inside these final two degrees the sky RA is already nearly singular, so a
+// command to the pole can arrive by finishing the declination motion instead of forcing a cosmetic RA
+// half-turn.
+const POLE_RIGHT_ASCENSION_FRAME_RETENTION_DISTANCE = 7200 * ASEC2RAD
+
+// Sets the tolerance for recognizing a pole target after internal pointing offsets.
+// The value is in radians and only distinguishes a requested pole from an ordinary near-pole target.
+const POLE_TARGET_TOLERANCE = ASEC2RAD
+
+// Reports whether a pole-neutral target can keep the current RA shaft frame.
+// Both declinations are mechanical sky declinations in radians. Only NEITHER targets already within
+// two degrees of the pole retain the current frame; near-pole side-changing targets still travel
+// through their physical RA half-turn.
+function retainsPoleRightAscensionFrame(targetPierSide: PierSide, targetDeclination: Angle, currentDeclination: Angle) {
+	return targetPierSide === 'NEITHER' && Math.abs(Math.abs(targetDeclination) - PIOVERTWO) <= POLE_TARGET_TOLERANCE && Math.abs(Math.abs(currentDeclination) - PIOVERTWO) <= POLE_RIGHT_ASCENSION_FRAME_RETENTION_DISTANCE
+}
+
+// Returns the physical RA half-turn needed when moving between declination-shaft branches.
+// `fromDeclinationShaft` and `toDeclinationShaft` are continuous shaft angles in radians. Values beyond
+// either pole use the mirrored RA frame, so crossing into that branch adds PI and crossing out subtracts
+// PI. Moves that stay on the same branch have no RA-frame offset.
+function rightAscensionShaftFrameTravel(fromDeclinationShaft: Angle, toDeclinationShaft: Angle) {
+	const fromMirrored = isMirroredDeclinationShaftFrame(fromDeclinationShaft)
+	const toMirrored = isMirroredDeclinationShaftFrame(toDeclinationShaft)
+	if (fromMirrored === toMirrored) return 0
+	return toMirrored ? PI : -PI
+}
+
+// Gives the sign converting celestial declination motion to physical shaft motion on one pier side.
+// EAST reverses the shaft direction; WEST and the pole-neutral state preserve it.
+function declinationShaftFrameSign(pierSide: PierSide): AxisDirection {
+	return pierSide === 'EAST' ? -1 : 1
 }
