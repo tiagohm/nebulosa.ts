@@ -357,11 +357,14 @@ describe('mount simulator meridian flip', () => {
 	})
 
 	test('reverses the right ascension shaft when undoing an explicit flip', () => {
-		const { simulator } = makeMeridianFlipMount('mount.flip.explicit.reverse')
+		const { client, simulator } = makeMeridianFlipMount('mount.flip.explicit.reverse')
 
 		try {
-			const lst = simulator.siderealTimeAt(simulator.utcTime)
-			const coordinate = { rightAscension: normalizeAngle(lst + hour(1)), declination: deg(20) }
+			// Adding PI to this right ascension rounds one ulp high, which used to leave the outbound flip
+			// Busy after a half-turn and fold the reverse onto +PI whenever LST landed here.
+			const coordinate = { rightAscension: 4.858410206923543, declination: deg(20) }
+			const longitude = normalizeAngle(simulator.longitude + coordinate.rightAscension - hour(1) - simulator.siderealTimeAt(simulator.utcTime))
+			client.sendNumber({ device: simulator.name, name: 'GEOGRAPHIC_COORD', elements: { LONG: toDeg(longitude) } })
 			simulator.syncTo(coordinate.rightAscension, coordinate.declination)
 			expect(simulator.pierSide).toBe('WEST')
 

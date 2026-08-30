@@ -1131,7 +1131,8 @@ export class MountSimulator extends DeviceSimulator {
 		const currentRightAscensionShaftAngle = hasActiveCoordinateSlew ? this.#slewRightAscensionShaft : rightAscensionShaftAngle(this.pierSide, this.#mechanical.rightAscension)
 		const currentDeclinationShaftAngle = hasActiveCoordinateSlew ? this.#slewDeclinationShaft : this.pierSide === 'NEITHER' ? this.#mechanical.declination : declinationShaftAngle(this.pierSide, this.#mechanical.declination)
 		const targetDeclinationShaftAngle = targetPierSide === 'NEITHER' ? target.declination : declinationShaftAngle(targetPierSide, target.declination)
-		const deltaRightAscension = normalizePI(target.rightAscension - rightAscensionFromShaftPose(currentRightAscensionShaftAngle, currentDeclinationShaftAngle))
+		const currentRightAscension = hasActiveCoordinateSlew ? rightAscensionFromShaftPose(currentRightAscensionShaftAngle, currentDeclinationShaftAngle) : this.#mechanical.rightAscension
+		const deltaRightAscension = normalizePI(target.rightAscension - currentRightAscension)
 		const shaftFrameTravel = retainsPoleRightAscensionFrame(targetPierSide, target.declination, declinationFromShaftAngle(currentDeclinationShaftAngle)) ? 0 : rightAscensionShaftFrameTravel(currentDeclinationShaftAngle, targetDeclinationShaftAngle)
 		const rightAscensionTravel = Math.abs(normalizeShaftDelta(deltaRightAscension + shaftFrameTravel))
 		const declinationTravel = Math.abs(normalizeShaftDelta(targetDeclinationShaftAngle - currentDeclinationShaftAngle))
@@ -1169,7 +1170,7 @@ export class MountSimulator extends DeviceSimulator {
 		const hasActiveCoordinateSlew = this.#slewTarget !== undefined
 		const initialRightAscensionShaft = hasActiveCoordinateSlew ? this.#slewRightAscensionShaft : rightAscensionShaftAngle(this.pierSide, this.#mechanical.rightAscension)
 		const initialDeclinationShaft = hasActiveCoordinateSlew ? this.#slewDeclinationShaft : this.pierSide === 'NEITHER' ? this.#mechanical.declination : declinationShaftAngle(this.pierSide, this.#mechanical.declination)
-		const currentRightAscension = rightAscensionFromShaftPose(initialRightAscensionShaft, initialDeclinationShaft)
+		const currentRightAscension = hasActiveCoordinateSlew ? rightAscensionFromShaftPose(initialRightAscensionShaft, initialDeclinationShaft) : this.#mechanical.rightAscension
 		const targetDeclinationShaft = targetPierSide === 'NEITHER' ? target.declination : declinationShaftAngle(targetPierSide, target.declination)
 		this.#clearManualMotion()
 		this.#clearPulseGuide()
@@ -1756,12 +1757,17 @@ export class MountSimulator extends DeviceSimulator {
 		this.#flipTravelRemaining = Math.max(0, flipTravelRemaining - flipTravel)
 		this.#flipDeclinationTravelRemaining = Math.max(0, flipDeclinationTravelRemaining - flipDeclinationTravel)
 
-		if (span <= maxStep || span === 0) {
+		if (span <= maxStep + SHAFT_HALF_TURN_TIE_TOLERANCE || span === 0) {
 			// Fraction of the step still unspent when the axes reach the target. The ring-down excited
 			// below starts at that instant, not at the beginning of the step, and at the default tick a
 			// few-hertz resonance covers a good part of a cycle in one step, so integrating it over the
 			// whole interval would shift its phase or swallow the first overshoot outright.
-			remaining = maxStep > 0 ? dtSeconds * (1 - span / maxStep) : 0
+			//
+			// A half-turn reconstructed as current+PI can measure one ulp longer than PI, so a step that
+			// covers exactly PI would otherwise leave the slew Busy. That leftover is not real travel; it
+			// is snapped here and must not become a negative remainder either, or the rest of the step
+			// would run backwards on the clock.
+			remaining = maxStep > 0 && span <= maxStep ? dtSeconds * (1 - span / maxStep) : 0
 			const priorPierSide = this.pierSide
 			if (span > 0 && slewSeconds > 0) {
 				const shaftSampleTime = endTime - (remaining + slewSeconds / 2) * 1000
@@ -2383,12 +2389,23 @@ function isMirroredDeclinationShaftFrame(declinationShaft: Angle) {
 	return Math.abs(cosine) > DECLINATION_SHAFT_POLE_TOLERANCE && cosine < 0
 }
 
+// Width of a half-turn direction tie, in radians.
+//
+// Reconstructing an EAST RA shaft as sky RA plus PI, then folding it back, leaves a one-ulp celestial
+// offset for some right ascensions. Composed with a PI-radian frame change that offset overshoots the
+// half-turn fold, and only this deadband is large enough to keep the original sign. It is a handful of
+// double ulps at magnitude PI and far below any physical slew.
+const SHAFT_HALF_TURN_TIE_TOLERANCE = 64 * Number.EPSILON
+
 // Normalizes physical shaft travel to the nearest half-turn while preserving exact tie direction.
-// `delta` is a shaft-angle difference in radians. `normalizePI` maps both +PI and -PI to +PI, but
-// retaining a negative half-turn lets a reverse flip undo the path taken in the opposite direction.
+// `delta` is a shaft-angle difference in radians. `normalizePI` maps both +PI and -PI to +PI, and a
+// half-turn that overshoots that fold by a rounding ulp lands a fraction away from it. Retaining the
+// original sign lets a reverse flip undo the path taken instead of accumulating another revolution.
 function normalizeShaftDelta(delta: Angle) {
 	const normalized = normalizePI(delta)
-	return normalized === PI && delta < 0 ? -PI : normalized
+	if (delta < 0 && normalized > 0 && PI - normalized <= SHAFT_HALF_TURN_TIE_TOLERANCE) return normalized - TAU
+	if (delta > 0 && normalized < 0 && PI + normalized <= SHAFT_HALF_TURN_TIE_TOLERANCE) return normalized + TAU
+	return normalized
 }
 
 // Sets the declination band where a slew into the exact pole may keep its current RA shaft frame.
