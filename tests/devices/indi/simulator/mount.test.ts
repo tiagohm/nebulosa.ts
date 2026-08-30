@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { angularDistance } from '../../../../src/astronomy/coordinates/coordinate'
 import { PI, PIOVERTWO, TAU } from '../../../../src/core/constants'
 import { IndiClientHandlerSet } from '../../../../src/devices/indi/client'
+import { expectedPierSide } from '../../../../src/devices/indi/device'
 import { GuideOutputManager, MountManager } from '../../../../src/devices/indi/manager'
 import { ClientSimulator } from '../../../../src/devices/indi/simulator/client'
 import { SIDEREAL_DRIFT_RATE, SLEW_RATES, SLEW_SPEED_FACTOR } from '../../../../src/devices/indi/simulator/constants'
@@ -1665,6 +1666,35 @@ describe('mount simulator meridian flip', () => {
 			expect(simulator.pierSide).toBe('WEST')
 			expect(normalizePI(simulator.rightAscension - targetRightAscension)).toBeCloseTo(0, 4)
 			expect(simulator.declination).toBeCloseTo(targetDeclination, 12)
+		} finally {
+			simulator.dispose()
+		}
+	})
+
+	test('uses the active shaft route when predicting a replacement goto pier side', () => {
+		const { simulator } = makeMeridianFlipMount('mount.flip.replacement.arrival.side')
+
+		try {
+			simulator.setTime({ utc: Date.UTC(2026, 0, 1), offset: 0 })
+			const lst = simulator.siderealTimeAt(simulator.utcTime)
+			const initialRightAscension = normalizeAngle(lst + deg(170))
+			simulator.syncTo(initialRightAscension, deg(-80))
+			expect(simulator.pierSide).toBe('WEST')
+
+			simulator.flipTo(initialRightAscension, deg(-80))
+			simulator.advance(FAST_FLIP_DURATION * 0.99)
+			expect(simulator.isSlewing).toBeTrue()
+			expect(simulator.pierSide).toBe('WEST')
+
+			const targetRightAscension = normalizeAngle(simulator.siderealTimeAt(simulator.utcTime) + arcsec(17))
+			const targetDeclination = deg(20)
+			simulator.goTo(targetRightAscension, targetDeclination)
+			simulator.advance(FAST_FLIP_DURATION)
+
+			expect(simulator.isSlewing).toBeFalse()
+			const expectedAtArrival = expectedPierSide(targetRightAscension, targetDeclination, simulator.siderealTimeAt(simulator.utcTime))
+			expect(expectedAtArrival).toBe('EAST')
+			expect(simulator.pierSide).toBe(expectedAtArrival)
 		} finally {
 			simulator.dispose()
 		}

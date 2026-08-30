@@ -1133,9 +1133,8 @@ export class MountSimulator extends DeviceSimulator {
 		const targetDeclinationShaftAngle = targetPierSide === 'NEITHER' ? target.declination : declinationShaftAngle(targetPierSide, target.declination)
 		const deltaRightAscension = normalizePI(target.rightAscension - rightAscensionFromShaftPose(currentRightAscensionShaftAngle, currentDeclinationShaftAngle))
 		const shaftFrameTravel = retainsPoleRightAscensionFrame(targetPierSide, target.declination, declinationFromShaftAngle(currentDeclinationShaftAngle)) ? 0 : rightAscensionShaftFrameTravel(currentDeclinationShaftAngle, targetDeclinationShaftAngle)
-		const changesDeclinationShaftFrame = targetPierSide !== 'NEITHER' && targetPierSide !== this.pierSide
 		const rightAscensionTravel = Math.abs(normalizePI(deltaRightAscension + shaftFrameTravel))
-		const declinationTravel = changesDeclinationShaftFrame ? Math.abs(normalizePI(targetDeclinationShaftAngle - currentDeclinationShaftAngle)) : Math.abs(target.declination - this.#mechanical.declination)
+		const declinationTravel = Math.abs(normalizeDeclinationShaftDelta(targetDeclinationShaftAngle - currentDeclinationShaftAngle))
 		return Math.max(rightAscensionTravel, declinationTravel) / (this.#manualSlewSpeed() * SLEW_SPEED_FACTOR)
 	}
 
