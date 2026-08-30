@@ -224,7 +224,9 @@ describe.skipIf(SKIP)('mount simulator', () => {
 
 		let pulseDeclination = mount.equatorialCoordinate.declination
 		guideOutputManager.pulseNorth(mount, 350)
-		await waitUntil(() => mount.pulsing)
+		await waitUntil(() => mount.pulsingNS)
+		expect(mount.pulsing).toBeTrue()
+		expect(mount.pulsingWE).toBeFalse()
 		await waitUntil(() => !mount.pulsing, 1000)
 		let pulseDrift = mount.equatorialCoordinate.declination - pulseDeclination
 		expect(pulseDrift).toBeGreaterThan(0)
@@ -240,7 +242,9 @@ describe.skipIf(SKIP)('mount simulator', () => {
 
 		let pulseRightAscension = mount.equatorialCoordinate.rightAscension
 		guideOutputManager.pulseEast(mount, 350)
-		await waitUntil(() => mount.pulsing)
+		await waitUntil(() => mount.pulsingWE)
+		expect(mount.pulsing).toBeTrue()
+		expect(mount.pulsingNS).toBeFalse()
 		await waitUntil(() => !mount.pulsing, 1000)
 		pulseDrift = mount.equatorialCoordinate.rightAscension - pulseRightAscension
 		expect(pulseDrift).toBeGreaterThan(0)
@@ -256,10 +260,15 @@ describe.skipIf(SKIP)('mount simulator', () => {
 
 		guideOutputManager.pulseEast(mount, 10000)
 		guideOutputManager.pulseSouth(mount, 10000)
-		await waitUntil(() => mount.pulsing)
+		await waitUntil(() => mount.pulsingNS && mount.pulsingWE)
 		guideOutputManager.pulseEast(mount, 0)
+		await waitUntil(() => !mount.pulsingWE)
+		expect(mount.pulsing).toBeTrue()
+		expect(mount.pulsingNS).toBeTrue()
 		guideOutputManager.pulseSouth(mount, 0)
 		await waitUntil(() => !mount.pulsing, 10)
+		expect(mount.pulsingNS).toBeFalse()
+		expect(mount.pulsingWE).toBeFalse()
 
 		const guideOutput = guideOutputManager.get(client, mount.name)
 		expect(guideOutput).toBeDefined()

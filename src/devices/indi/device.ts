@@ -146,7 +146,12 @@ export interface NameAndLabel {
 export interface GuideOutput extends Device {
 	readonly type: 'guideOutput' | 'mount' | 'camera'
 	canPulseGuide: boolean
+	// Whether either timed-guide axis currently reports Busy.
 	pulsing: boolean
+	// Whether the north/south timed-guide vector currently reports Busy.
+	pulsingNS: boolean
+	// Whether the west/east timed-guide vector currently reports Busy.
+	pulsingWE: boolean
 	hasGuideRate: boolean
 	canSetGuideRate: boolean
 	readonly guideRate: EquatorialCoordinate
@@ -524,6 +529,8 @@ export const DEFAULT_CAMERA: Camera = {
 	},
 	canPulseGuide: false,
 	pulsing: false,
+	pulsingNS: false,
+	pulsingWE: false,
 	hasGuideRate: false,
 	canSetGuideRate: false,
 	guideRate: {
@@ -584,6 +591,8 @@ export const DEFAULT_MOUNT: Mount = {
 	},
 	canPulseGuide: false,
 	pulsing: false,
+	pulsingNS: false,
+	pulsingWE: false,
 	type: 'mount',
 	interfaces: ['mount'],
 	id: '',
@@ -811,6 +820,8 @@ export const DEFAULT_SAFETY_MONITOR: SafetyMonitor = {
 export const DEFAULT_GUIDE_OUTPUT: GuideOutput = {
 	canPulseGuide: false,
 	pulsing: false,
+	pulsingNS: false,
+	pulsingWE: false,
 	type: 'guideOutput',
 	interfaces: ['guideOutput'],
 	id: '',

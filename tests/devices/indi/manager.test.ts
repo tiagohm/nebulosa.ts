@@ -86,19 +86,36 @@ test('GuideOutputManager remains pulsing until both timed-guide axes finish', ()
 	})
 
 	manager.numberVector(client, timedGuide('TELESCOPE_TIMED_GUIDE_NS', 'Busy'), 'defNumberVector')
-	manager.numberVector(client, timedGuide('TELESCOPE_TIMED_GUIDE_WE', 'Busy'), 'defNumberVector')
 
 	const guideOutput = manager.get(client, mount.name)!
 	expect(guideOutput.pulsing).toBeTrue()
+	expect(guideOutput.pulsingNS).toBeTrue()
+	expect(guideOutput.pulsingWE).toBeFalse()
 	expect(mount.pulsing).toBeTrue()
+	expect(mount.pulsingNS).toBeTrue()
+	expect(mount.pulsingWE).toBeFalse()
+
+	manager.numberVector(client, timedGuide('TELESCOPE_TIMED_GUIDE_WE', 'Busy'), 'defNumberVector')
+	expect(guideOutput.pulsingNS).toBeTrue()
+	expect(guideOutput.pulsingWE).toBeTrue()
+	expect(mount.pulsingNS).toBeTrue()
+	expect(mount.pulsingWE).toBeTrue()
 
 	manager.numberVector(client, timedGuide('TELESCOPE_TIMED_GUIDE_NS', 'Ok'), 'setNumberVector')
 	expect(guideOutput.pulsing).toBeTrue()
+	expect(guideOutput.pulsingNS).toBeFalse()
+	expect(guideOutput.pulsingWE).toBeTrue()
 	expect(mount.pulsing).toBeTrue()
+	expect(mount.pulsingNS).toBeFalse()
+	expect(mount.pulsingWE).toBeTrue()
 
 	manager.numberVector(client, timedGuide('TELESCOPE_TIMED_GUIDE_WE', 'Ok'), 'setNumberVector')
 	expect(guideOutput.pulsing).toBeFalse()
+	expect(guideOutput.pulsingNS).toBeFalse()
+	expect(guideOutput.pulsingWE).toBeFalse()
 	expect(mount.pulsing).toBeFalse()
+	expect(mount.pulsingNS).toBeFalse()
+	expect(mount.pulsingWE).toBeFalse()
 })
 
 test('SafetyMonitorManager creates only AUXILIARY native INDI standalones', () => {

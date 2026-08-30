@@ -398,7 +398,7 @@ export class CameraSimulator extends DeviceSimulator {
 	}
 
 	get isPulsing() {
-		return this.#guideNS.state === 'Busy'
+		return this.#guideNS.state === 'Busy' || this.#guideWE.state === 'Busy'
 	}
 
 	get telescopeFocalLength() {
@@ -704,7 +704,7 @@ export class CameraSimulator extends DeviceSimulator {
 			if (direction === 'NORTH' || direction === 'SOUTH') this.#pulseNorthSouthUntil = 0
 			else this.#pulseWestEastUntil = 0
 
-			if (this.#pulseNorthSouthUntil === 0 && this.#pulseWestEastUntil === 0) this.#setPulsing(false)
+			this.#setPulsing(this.#pulseNorthSouthUntil > 0, this.#pulseWestEastUntil > 0)
 
 			return
 		}
@@ -714,7 +714,7 @@ export class CameraSimulator extends DeviceSimulator {
 		if (direction === 'NORTH' || direction === 'SOUTH') this.#pulseNorthSouthUntil = until
 		else this.#pulseWestEastUntil = until
 
-		this.#setPulsing(true)
+		this.#setPulsing(this.#pulseNorthSouthUntil > 0, this.#pulseWestEastUntil > 0)
 	}
 
 	// Advances temperature regulation, exposure progress, and guide-pulse state.
@@ -1529,29 +1529,33 @@ export class CameraSimulator extends DeviceSimulator {
 
 	// Clears pulse-guiding state once all timed pulses have expired.
 	#expirePulseGuide(now: number) {
-		let pulsing = false
-		if (this.#pulseNorthSouthUntil > now) pulsing = true
-		else this.#pulseNorthSouthUntil = 0
-		if (this.#pulseWestEastUntil > now) pulsing = true
-		else this.#pulseWestEastUntil = 0
-		this.#setPulsing(pulsing)
+		const pulsingNS = this.#pulseNorthSouthUntil > now
+		const pulsingWE = this.#pulseWestEastUntil > now
+		if (!pulsingNS) this.#pulseNorthSouthUntil = 0
+		if (!pulsingWE) this.#pulseWestEastUntil = 0
+		this.#setPulsing(pulsingNS, pulsingWE)
 	}
 
-	// Updates the guide-pulse busy state.
-	// Sets the pulse-guiding Busy/Idle state on the timed-guide vectors and notifies on change.
-	#setPulsing(pulsing: boolean) {
-		if (this.isPulsing === pulsing) return
-		this.#guideNS.state = pulsing ? 'Busy' : 'Idle'
-		this.#guideWE.state = this.#guideNS.state
-		this.notify(this.#guideNS)
-		this.notify(this.#guideWE)
+	// Sets each timed-guide vector's Busy/Idle state independently and notifies changed axes.
+	#setPulsing(pulsingNS: boolean, pulsingWE: boolean) {
+		const stateNS = pulsingNS ? 'Busy' : 'Idle'
+		const stateWE = pulsingWE ? 'Busy' : 'Idle'
+
+		if (this.#guideNS.state !== stateNS) {
+			this.#guideNS.state = stateNS
+			this.notify(this.#guideNS)
+		}
+		if (this.#guideWE.state !== stateWE) {
+			this.#guideWE.state = stateWE
+			this.notify(this.#guideWE)
+		}
 	}
 
 	// Clears all outstanding pulse-guide intervals.
 	#clearPulseGuide() {
 		this.#pulseNorthSouthUntil = 0
 		this.#pulseWestEastUntil = 0
-		this.#setPulsing(false)
+		this.#setPulsing(false, false)
 	}
 
 	// Margin, in unbinned pixels, by which the synthetic star field extends beyond every sensor edge.

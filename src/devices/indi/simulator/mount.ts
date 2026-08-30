@@ -394,7 +394,7 @@ export class MountSimulator extends DeviceSimulator {
 	}
 
 	get isPulsing() {
-		return this.#guideNS.state === 'Busy'
+		return this.#guideNS.state === 'Busy' || this.#guideWE.state === 'Busy'
 	}
 
 	get isParking() {
@@ -1591,7 +1591,7 @@ export class MountSimulator extends DeviceSimulator {
 		// Both axes are always visited: short-circuiting the second call would leave its queue growing.
 		const westEastPending = retireGuidePulses(this.#westEastPulses, endTime)
 		const northSouthPending = retireGuidePulses(this.#northSouthPulses, endTime)
-		this.#setPulsing(westEastPending || northSouthPending)
+		this.#setPulsing(northSouthPending, westEastPending)
 
 		this.#notifyWormPhase()
 
@@ -2147,9 +2147,9 @@ export class MountSimulator extends DeviceSimulator {
 		return 0
 	}
 
-	// Updates the combined pulse-guiding state from the queues.
+	// Updates each pulse-guiding axis state from its queue.
 	#updatePulsing() {
-		this.#setPulsing(this.#northSouthPulses.length > 0 || this.#westEastPulses.length > 0)
+		this.#setPulsing(this.#northSouthPulses.length > 0, this.#westEastPulses.length > 0)
 	}
 
 	// Sets the active north/south manual motion state.
@@ -2182,7 +2182,7 @@ export class MountSimulator extends DeviceSimulator {
 		this.#westEastPulses.length = 0
 		this.#guideRateNorthSouth = 0
 		this.#guideRateWestEast = 0
-		this.#setPulsing(false)
+		this.#setPulsing(false, false)
 	}
 
 	// Hands the structure over to a slew that is taking control of the axes.
@@ -2275,13 +2275,19 @@ export class MountSimulator extends DeviceSimulator {
 		}
 	}
 
-	// Sets the pulse-guiding Busy/Idle state on the timed-guide vectors and notifies on change.
-	#setPulsing(pulsing: boolean) {
-		if (this.isPulsing === pulsing) return
-		this.#guideNS.state = pulsing ? 'Busy' : 'Idle'
-		this.#guideWE.state = this.#guideNS.state
-		this.notify(this.#guideNS)
-		this.notify(this.#guideWE)
+	// Sets each timed-guide vector's Busy/Idle state independently and notifies changed axes.
+	#setPulsing(pulsingNS: boolean, pulsingWE: boolean) {
+		const stateNS = pulsingNS ? 'Busy' : 'Idle'
+		const stateWE = pulsingWE ? 'Busy' : 'Idle'
+
+		if (this.#guideNS.state !== stateNS) {
+			this.#guideNS.state = stateNS
+			this.notify(this.#guideNS)
+		}
+		if (this.#guideWE.state !== stateWE) {
+			this.#guideWE.state = stateWE
+			this.notify(this.#guideWE)
+		}
 	}
 
 	// Initializes the mount with a realistic pole-pointing home position.

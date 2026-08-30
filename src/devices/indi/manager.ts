@@ -462,9 +462,6 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 // Manager for stand-alone or embedded guide outputs. Command methods send pulse-guide (durations in
 // milliseconds) and guide-rate commands; property handling reflects pulse-guiding capability/state.
 export class GuideOutputManager extends DeviceManager<GuideOutput> {
-	// Busy state reported independently by the north/south and west/east timed-guide vectors.
-	readonly #pulseStates = new WeakMap<GuideOutput, { northSouth: boolean; westEast: boolean }>()
-
 	constructor(readonly provider: DeviceProvider<GuideOutput>) {
 		super()
 	}
@@ -549,17 +546,16 @@ export class GuideOutputManager extends DeviceManager<GuideOutput> {
 				}
 
 				if (device !== undefined) {
-					const pulseState = this.#pulseStates.get(device) ?? { northSouth: false, westEast: false }
+					const property = message.name === 'TELESCOPE_TIMED_GUIDE_NS' ? 'pulsingNS' : 'pulsingWE'
+					const parent = (device as SubDevice<GuideOutput, GuideOutput>).parent
 
-					if (message.name === 'TELESCOPE_TIMED_GUIDE_NS') pulseState.northSouth = message.state === 'Busy'
-					else pulseState.westEast = message.state === 'Busy'
+					if (handleSwitchValue(device, property, message.state === 'Busy')) {
+						this.updated(device, property, message.state)
+						this.updated(parent, property, message.state)
+					}
 
-					this.#pulseStates.set(device, pulseState)
-
-					if (handleSwitchValue(device, 'pulsing', pulseState.northSouth || pulseState.westEast)) {
+					if (handleSwitchValue(device, 'pulsing', device.pulsingNS || device.pulsingWE)) {
 						this.updated(device, 'pulsing', message.state)
-
-						const parent = (device as SubDevice<GuideOutput, GuideOutput>).parent
 						this.updated(parent, 'pulsing', message.state)
 					}
 				}
@@ -607,13 +603,16 @@ export class GuideOutputManager extends DeviceManager<GuideOutput> {
 		const full = !name
 
 		if (full || name === 'TELESCOPE_TIMED_GUIDE_NS' || name === 'TELESCOPE_TIMED_GUIDE_WE') {
-			this.#pulseStates.delete(device)
 			resetDeviceValue(this, device, 'canPulseGuide', DEFAULT_GUIDE_OUTPUT.canPulseGuide)
 			resetDeviceValue(this, device, 'pulsing', DEFAULT_GUIDE_OUTPUT.pulsing)
+			resetDeviceValue(this, device, 'pulsingNS', DEFAULT_GUIDE_OUTPUT.pulsingNS)
+			resetDeviceValue(this, device, 'pulsingWE', DEFAULT_GUIDE_OUTPUT.pulsingWE)
 
 			const parent = (device as SubDevice<GuideOutput, GuideOutput>).parent
 			this.updated(parent, 'canPulseGuide')
 			this.updated(parent, 'pulsing')
+			this.updated(parent, 'pulsingNS')
+			this.updated(parent, 'pulsingWE')
 		}
 		if (full || name === 'GUIDE_RATE') {
 			resetDeviceValue(this, device, 'hasGuideRate', DEFAULT_GUIDE_OUTPUT.hasGuideRate)

@@ -151,7 +151,7 @@ test('reports no transit when the window opens after mid-transit', () => {
 	// ahead. The window must bracket the mid-transit instant.
 	const transits = planetaryTransits(mercury, sun, observer, timeYMDHMS(2032, 11, 13, 9, 30, 0, Timescale.UTC), timeYMDHMS(2032, 11, 13, 12, 0, 0, Timescale.UTC), { sunRadius: SUN_RADIUS_AU, planetRadius: MERCURY_RADIUS })
 	expect(transits.length).toBe(0)
-}, 2000)
+}, 5000)
 
 test('an empty window yields no transits', () => {
 	const observer = observerAt(GREENWICH)

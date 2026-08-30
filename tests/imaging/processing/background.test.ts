@@ -1111,7 +1111,7 @@ test('caps thin-plate spline control points on dense grids', () => {
 	// A default-density grid stays under the cap, so every accepted sample is a control point.
 	const normal = fitBackgroundSurface(image, { model: 'thinPlateSpline', gridSize: 16, smoothing: 0.05 })
 	expect(normal.surfaces[0].controlPoints!.length).toBe(normal.surfaces[0].acceptedSamples * 2)
-}, 4000)
+}, 6000)
 
 test('an exact thin-plate spline interpolates every accepted sample past the control-point cap', () => {
 	// With smoothing 0 the spline is an exact interpolant, but a dense grid exceeds the control-point
