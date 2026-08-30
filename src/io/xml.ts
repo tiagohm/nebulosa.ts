@@ -18,6 +18,8 @@ export interface XmlNode {
 	// Child element nodes in document order.
 	children: XmlNode[]
 	// Concatenated raw (bytes) text content directly inside this element.
+	// May be a view into a larger ArrayBuffer; consumers must honor `byteOffset` and `byteLength`
+	// instead of wrapping `.buffer` alone.
 	text: Uint8Array
 }
 
@@ -54,17 +56,22 @@ const DASH = 45
 const DOT = 46
 const UNDERSCORE = 95
 
+// Text payloads at or above this size transfer the parser buffer instead of copying into the node.
+const LARGE_TEXT_THRESHOLD = 64 * 1024
+
 // Reusable geometric-growth byte buffer that accumulates token bytes and decodes them to text on demand,
 // avoiding per-token allocations. An optional max byte length caps growth for the text buffer.
 class InternalBuffer {
 	readonly #decoder = new TextDecoder()
 	readonly #maxByteLength: number
+	readonly #initialSize: number
 	#data: Uint8Array
 
 	#position = 0
 
 	// Allocate only the initial capacity and defer growth until writes exceed it.
 	constructor(size: number, maxByteLength: number = 0) {
+		this.#initialSize = size
 		this.#maxByteLength = maxByteLength > 0 ? Math.max(size, maxByteLength) : 0
 		this.#data = new Uint8Array(size)
 	}
@@ -101,6 +108,28 @@ class InternalBuffer {
 
 	array() {
 		return this.#data.subarray(0, this.#position)
+	}
+
+	// Detach the written bytes. Payloads at or above `LARGE_TEXT_THRESHOLD` transfer the backing
+	// store without copying (the result may be a view over spare capacity); smaller payloads are
+	// copied so this buffer stays reusable. Resets the logical cursor in both cases.
+	take(): Uint8Array {
+		const length = this.#position
+		if (length === 0) {
+			this.#position = 0
+			return this.#data.subarray(0, 0)
+		}
+
+		if (length >= LARGE_TEXT_THRESHOLD) {
+			const view = this.#data.subarray(0, length)
+			this.#data = new Uint8Array(this.#initialSize)
+			this.#position = 0
+			return view
+		}
+
+		const copy = this.#data.slice(0, length)
+		this.#position = 0
+		return copy
 	}
 
 	// Grow geometrically until `this.#position + n` fits, without exceeding the optional max byte length.
@@ -193,9 +222,8 @@ export class SimpleXmlParser {
 		if (this.#text.length === 0) return
 
 		const node = this.#tree.at(-1)!
-		node.text = mergeArray(node.text, this.#text.array())
-
-		this.#text.reset()
+		const chunk = this.#text.take()
+		node.text = node.text.length === 0 ? chunk : mergeArray(node.text, chunk)
 	}
 
 	// Flush a valueless attribute that ended at whitespace, `/`, or `>`.

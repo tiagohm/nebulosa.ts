@@ -13,7 +13,7 @@ import { PowerManager } from '../../../src/devices/indi/manager/power'
 import { RotatorManager } from '../../../src/devices/indi/manager/rotator'
 import { ThermometerManager } from '../../../src/devices/indi/manager/thermometer'
 import { WheelManager } from '../../../src/devices/indi/manager/wheel'
-import type { DefNumberVector, DefSwitchVector, DefTextVector, PropertyState, SetTextVector } from '../../../src/devices/indi/types'
+import type { DefNumberVector, DefSwitchVector, DefTextVector, PropertyState, SetBlobVector, SetTextVector } from '../../../src/devices/indi/types'
 import { SimpleXmlParser, type XmlNode } from '../../../src/io/xml'
 import { downloadPerTag } from '../../download'
 import { isTimeConsumingTestSkipped, waitUntil } from '../../util'
@@ -249,6 +249,30 @@ describe('parse', () => {
 		expect(Object.getPrototypeOf(vector.elements)).toBeNull()
 		expect(Object.hasOwn(vector.elements, 'constructor')).toBeTrue()
 		expect(vector.elements['constructor'].value).toBe('safe')
+	})
+
+	test('oneBLOB uses the text view bounds, not spare ArrayBuffer capacity', () => {
+		const backing = new Uint8Array([0, 1, 2, 3, 4, 5])
+		const view = backing.subarray(2, 5)
+		const vector = client.parseSetVector({
+			name: 'setBLOBVector',
+			attributes: { device: 'Camera', name: 'CCD1' },
+			children: [{ name: 'oneBLOB', attributes: { name: 'CCD1', size: '3', format: '.fits' }, children: [], text: view }],
+			text: EMPTY_TEXT,
+		}) as SetBlobVector
+
+		expect(vector.elements.CCD1.value).toEqual(Buffer.from([2, 3, 4]))
+		expect(vector.elements.CCD1.value!.byteLength).toBe(3)
+	})
+
+	test('oneBLOB from a transferred large payload does not include spare capacity', () => {
+		const payload = 'A'.repeat(80_000)
+		const xmlParser = new SimpleXmlParser()
+		const [node] = xmlParser.parse(`<setBLOBVector device="Camera" name="CCD1"><oneBLOB name="CCD1" size="80000" format=".fits">${payload}</oneBLOB></setBLOBVector>`)
+		const vector = client.parseSetVector(node) as SetBlobVector
+
+		expect(vector.elements.CCD1.value!.byteLength).toBe(payload.length)
+		expect(vector.elements.CCD1.value!.equals(Buffer.from(payload))).toBeTrue()
 	})
 })
 

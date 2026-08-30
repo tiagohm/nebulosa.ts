@@ -249,7 +249,9 @@ export class IndiClient implements Client {
 					break
 				}
 				case 'oneBLOB': {
-					const element = { name: child.attributes.name, size: child.attributes.size, format: child.attributes.format, value: Buffer.from(child.text.buffer) } as OneBlob
+					const text = child.text
+					// Large XML text may be a view over spare parser capacity; honor offset and length.
+					const element = { name: child.attributes.name, size: child.attributes.size, format: child.attributes.format, value: Buffer.from(text.buffer, text.byteOffset, text.byteLength) } as OneBlob
 					;(message as SetBlobVector).elements[element.name] = element
 					break
 				}

@@ -252,6 +252,16 @@ describe('parse', () => {
 		expect(parser.parse('o="ba')).toBeEmpty()
 		expect(parser.parse('r"/>')).toEqual([{ name: 'person', attributes: { foo: 'bar' }, children: [], text: EMPTY_TEXT }])
 	})
+
+	test('large text stays intact after the parser is reused', () => {
+		const parser = new SimpleXmlParser()
+		const text = 'x'.repeat(100_000)
+		const [node] = parser.parse(`<a>${text}</a>`)
+
+		expect(node.text).toEqual(encodeText(text))
+		expect(parser.parse('<b>small</b>')).toEqual([{ name: 'b', attributes: {}, children: [], text: encodeText('small') }])
+		expect(node.text).toEqual(encodeText(text))
+	})
 })
 
 describe('behavior', () => {
