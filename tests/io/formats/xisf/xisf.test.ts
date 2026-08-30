@@ -197,6 +197,19 @@ describe('read compressed', () => {
 describe('write', () => {
 	const buffer = Buffer.allocUnsafe(1024 * 1024 * 18)
 
+	test('clamps overflowing normalized samples to the unsigned XISF range', async () => {
+		const cases = [false, { format: 'zstd' as const }, { format: 'zstd' as const, shuffled: true }] as const
+
+		for (const compression of cases) {
+			const buffer = Buffer.alloc(4096)
+			const size = await writeXisf(bufferSink(buffer), [{ header: { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: 3, NAXIS2: 1 }, raw: new Float64Array([1.0001, -0.0001, 1]) }], { compression })
+			const image = await readImageFromBuffer(buffer.subarray(0, size), { sampleScale: 'digital' })
+
+			expect(image).toBeDefined()
+			expect(Array.from(image!.raw)).toEqual([65535, 0, 65535])
+		}
+	})
+
 	test('writes a zero reserved preamble field', async () => {
 		const buffer = Buffer.alloc(4096, 0xff)
 		const size = await writeXisf(bufferSink(buffer), [{ header: { SIMPLE: true, BITPIX: 8, NAXIS: 2, NAXIS1: 1, NAXIS2: 1 }, raw: new Float64Array([1]) }])

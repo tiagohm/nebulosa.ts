@@ -1,7 +1,7 @@
 import { type X2jOptions, XMLParser } from 'fast-xml-parser'
 import type { Image, ImageRawType, ImageSampleScale } from '../../../imaging/model/types'
 import type { Size } from '../../../math/numerical/geometry'
-import type { NumberArray } from '../../../math/numerical/math'
+import { clamp, type NumberArray } from '../../../math/numerical/math'
 import { deflate, inflate } from '../../compression'
 import { readUntil, type Seekable, type Sink, type Source, writeFully } from '../../io'
 import type { Bitpix, FitsHeader, FitsHeaderValue } from '../fits/fits'
@@ -197,6 +197,18 @@ const DEFAULT_WRITE_XISF_FORMAT: Required<XisfWriteFormat> = { byteOrder: 'littl
 // Maximum scratch-buffer size used for uncompressed XISF image I/O.
 const XISF_IMAGE_IO_CHUNK_SIZE = 1024 * 1024
 
+// Inclusive upper bound of the unsigned integer code range for each integer BITPIX.
+const INTEGER_XISF_MAX: Readonly<Record<number, number>> = {
+	8: 255,
+	16: 65535,
+	32: 4294967295,
+}
+
+// Rounds and saturates a stored unsigned integer sample so BITPIX assignment cannot wrap.
+function quantizeXisfIntegerSample(value: number, max: number) {
+	return clamp(Math.round(value), 0, max)
+}
+
 // Per-image working state accumulated while writing: dimensions, declared format, FITSKeyword XML,
 // source samples, and an encoded block only when compression requires its size before the header.
 interface XisfWriteEntry {
@@ -322,16 +334,15 @@ function writeShuffledXisfSamples(input: ImageRawType, output: Buffer, bitpix: B
 	const scalarBuffer = Buffer.allocUnsafeSlow(pixelInBytes)
 	const scalarBytes = new Uint8Array(scalarBuffer.buffer, scalarBuffer.byteOffset, pixelInBytes)
 	const scalar = xisfDataView(scalarBuffer, bitpix)
-	const factor = bitpix > 0 ? 2 ** bitpix - 1 : 1
-	// Integer views truncate on assignment; a half-DN bias quantizes normalized samples to the nearest code.
-	const rounding = bitpix > 0 ? 0.5 : 0
+	const max = INTEGER_XISF_MAX[bitpix]
+	const factor = max ?? 1
 	const bigEndian = byteOrder === 'big'
 	let channel = 0
 	let pixel = 0
 
 	for (let stored = 0; stored < total; stored++) {
 		const source = pixelStorage === 'Normal' ? stored : pixel * channels + channel
-		scalar[0] = input[source] * factor + rounding
+		scalar[0] = max === undefined ? input[source] : quantizeXisfIntegerSample(input[source] * factor, max)
 
 		for (let byte = 0; byte < pixelInBytes; byte++) {
 			output[byte * total + stored] = scalarBytes[bigEndian ? pixelInBytes - byte - 1 : byte]
@@ -395,10 +406,9 @@ async function writeUncompressedXisfImage(sink: Sink, input: ImageRawType, bitpi
 	const size = total * pixelInBytes
 	const buffer = xisfBufferView(undefined, xisfImageChunkSize(size, bitpix), bitpix)
 	const data = xisfDataView(buffer, bitpix)
-	const factor = bitpix > 0 ? 2 ** bitpix - 1 : 1
-	// Integer views truncate on assignment; a half-DN bias quantizes normalized samples to the nearest code.
-	const rounding = bitpix > 0 ? 0.5 : 0
-	const identity = factor === 1 && rounding === 0
+	const max = INTEGER_XISF_MAX[bitpix]
+	const factor = max ?? 1
+	const identity = max === undefined
 	if (total > 0 && data.length === 0) return 0
 
 	let written = 0
@@ -412,7 +422,8 @@ async function writeUncompressedXisfImage(sink: Sink, input: ImageRawType, bitpi
 				let source = startPixel * channels + channel
 
 				if (identity && channels === 1) data.set(input.subarray(startPixel, startPixel + count))
-				else for (let i = 0; i < count; i++, source += channels) data[i] = input[source] * factor + rounding
+				else if (identity) for (let i = 0; i < count; i++, source += channels) data[i] = input[source]
+				else for (let i = 0; i < count; i++, source += channels) data[i] = quantizeXisfIntegerSample(input[source] * factor, max)
 				if (byteOrder === 'big') {
 					if (pixelInBytes === 2) chunk.swap16()
 					else if (pixelInBytes === 4) chunk.swap32()
@@ -430,7 +441,7 @@ async function writeUncompressedXisfImage(sink: Sink, input: ImageRawType, bitpi
 			const chunk = byteCount === buffer.length ? buffer : buffer.subarray(0, byteCount)
 
 			if (identity) data.set(input.subarray(start, start + count))
-			else for (let i = 0; i < count; i++) data[i] = input[start + i] * factor + rounding
+			else for (let i = 0; i < count; i++) data[i] = quantizeXisfIntegerSample(input[start + i] * factor, max)
 			if (byteOrder === 'big') {
 				if (pixelInBytes === 2) chunk.swap16()
 				else if (pixelInBytes === 4) chunk.swap32()
@@ -860,23 +871,21 @@ export class XisfImageWriter {
 			}
 		}
 
-		const factor = bitpix > 0 ? 2 ** bitpix - 1 : 1 // Transform float [0..1] to n-bit integer
-		// Integer views truncate on assignment; a half-DN bias quantizes normalized samples to the
-		// nearest code and prevents equivalent floating-point scaling from landing one code low.
-		const rounding = bitpix > 0 ? 0.5 : 0
+		const max = INTEGER_XISF_MAX[bitpix]
+		const factor = max ?? 1
 		const data = this.#data!
 
-		if (factor === 1 && rounding === 0 && (pixelStorage === 'Normal' || channels === 1)) {
+		if (max === undefined && (pixelStorage === 'Normal' || channels === 1)) {
 			data.set(input.subarray(0, total))
 		} else if (pixelStorage === 'Planar') {
 			for (let c = 0, p = 0; c < channels; c++) {
 				for (let i = 0, m = c; i < numberOfPixels; i++, m += channels) {
-					data[p++] = input[m] * factor + rounding
+					data[p++] = max === undefined ? input[m] : quantizeXisfIntegerSample(input[m] * factor, max)
 				}
 			}
 		} else {
 			for (let i = 0; i < total; i++) {
-				data[i] = input[i] * factor + rounding
+				data[i] = quantizeXisfIntegerSample(input[i] * factor, max)
 			}
 		}
 
