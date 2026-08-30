@@ -531,7 +531,8 @@ export function parseXisfHeader(data: Buffer) {
 	const images: XisfImage[] = []
 
 	for (const image of parsedImages) {
-		if (!image.location.startsWith('attachment:')) continue
+		if (typeof image.location !== 'string' || !image.location.startsWith('attachment:')) continue
+		if (typeof image.geometry !== 'string') continue
 		if (image.colorSpace !== 'Gray' && image.colorSpace !== 'RGB') continue
 		if (!isSupportedSampleFormat(image.sampleFormat) || image.sampleFormat === 'UInt64') continue
 
