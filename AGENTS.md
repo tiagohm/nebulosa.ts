@@ -15,7 +15,7 @@ Use the user's task to determine the authorized outcome:
 
 - A review, audit, diagnosis, or explanation is read-only unless the user also asks for a change.
 - An implementation request includes the smallest necessary source, test, documentation, and example updates.
-- Do not broaden a task into a refactor, compatibility layer, remote operation, or unrelated cleanup.
+- Do not broaden a task into an unrelated refactor, compatibility layer, remote operation, or cleanup.
 
 ## Working Principles
 
@@ -86,7 +86,7 @@ Project layout conventions:
 Use Bun for installs, scripts, tests, and local execution.
 
 - Install: `bun install`
-- Format touched paths: `bunx oxfmt <path...>`
+- Format touched paths: `bun run fmt -- <explicit paths>`
 - Format the repository: `bun run fmt`
 - Check formatting: `bun run fmt:check`
 - Lint and type-check: `bun run lint`
@@ -98,7 +98,8 @@ Use Bun for installs, scripts, tests, and local execution.
 
 Tests use `bunfig.toml`, with `tests/` as the root and `tests/setup.ts` as preload. Missing large fixtures may be downloaded through `tests/download.ts`.
 
-Do not introduce npm, Yarn, pnpm, Vite, PostCSS, Prettier, ESLint, another test runner, or another bundling layer.
+- Prefer targeted tests before broader runs.
+- Do not introduce npm, Yarn, pnpm, Vite, PostCSS, Prettier, ESLint, another test runner, or another bundling layer.
 
 ### Python Reference Values
 
@@ -143,7 +144,7 @@ Preserve established implementation patterns:
 
 These rules apply to production code under `src/`. Use concise repository-style `//` comments that explain contracts, not syntax.
 
-- Start every new `src/` file with a module description immediately after imports, or at the top when there are none. Describe its responsibility, domain, units/conventions, and mutation or allocation behavior.
+- Start every new `src/` file with a module description immediately after imports, or at the top when there are none. Describe its responsibility, domain, units or conventions, and mutation or allocation behavior.
 - Keep a file's module description current when its responsibility changes.
 - Add a documentation comment above every function, method, class, interface, type alias, enum, and module-level constant.
 - Describe intent, every parameter, return semantics, side effects, valid domain, and important edge cases without restating the signature.
@@ -163,10 +164,10 @@ The project deliberately performs little runtime validation for trusted, typed i
 
 Runtime validation is warranted only when:
 
-1. It prevents a hang, non-convergence, stack overflow, process crash, or unbounded/accidentally huge allocation.
+1. It prevents a hang, non-convergence, stack overflow, process crash, or unbounded or accidentally huge allocation.
 2. The types cannot express a structurally nonsensical state and continuing would silently produce a plausible-looking wrong result.
 
-Untrusted boundaries are separate: validate network payloads, files, protocol messages, environment/process values, and third-party responses once when they enter the system.
+Untrusted boundaries are separate: validate network payloads, files, protocol messages, environment or process values, and third-party responses once when they enter the system.
 
 For trusted internal and public function arguments, do not add checks merely for:
 
@@ -177,7 +178,7 @@ For trusted internal and public function arguments, do not add checks merely for
 - `NaN` or `Infinity` inputs;
 - array lengths, dimensions, non-emptiness, or sorting unless one of the two allowed failure modes actually applies.
 
-A caller outside the documented domain gets whatever mathematical result the computation produces, but it still must not trigger the first failure mode above. Valid inputs must not produce non-finite public geometry, time, coordinate, or image/SVG results.
+A caller outside the documented domain gets whatever mathematical result the computation produces, but it still must not trigger the first failure mode above. Valid inputs must not produce non-finite public geometry, time, coordinate, image, or SVG results.
 
 When validation is justified:
 
@@ -185,7 +186,7 @@ When validation is justified:
 - Reuse `src/core/validation.ts`; add and test a shared validator only when the check is genuinely reusable.
 - Comment the concrete failure the check prevents.
 - Do not use exceptions as routine state-machine or result control flow; prefer discriminated result unions for expected failures.
-- In reviews, report the concrete hang, crash, unbounded work, or plausible wrong result—not “missing validation.”
+- In reviews, report the concrete hang, crash, unbounded work, or plausible wrong result, not "missing validation."
 
 ## Numerical and Physical Rules
 
@@ -195,7 +196,7 @@ When validation is justified:
 - Time intervals use the local days-or-seconds convention; always document which.
 - Temperature is degrees Celsius and pressure is millibar (`hPa`) unless documented otherwise.
 - Pixel coordinates must document origin, extent convention, channel layout, CFA phase, and axis direction when relevant.
-- Cache repeated trigonometric and frame computations.
+- Cache repeated trigonometric, ephemeris, projection, and coordinate-frame computations.
 - Avoid subtracting nearly equal values when a stable formulation exists.
 - Prefer `atan2`-based formulations over `acos` near `0` or `PI`.
 - Clamp rounding-sensitive inverse-trigonometric inputs.
@@ -204,11 +205,11 @@ When validation is justified:
 - Preserve angle wrapping deliberately and document whether output is `0..TAU`, `-PI..PI`, or unwrapped.
 - Represent singular or undefined directions explicitly, usually with `undefined`.
 - Use tolerances that match scale and conditioning; distinguish absolute, relative, angular, pixel, and time tolerances.
-- Never “fix” a numerical regression by changing expected values before independently proving the new result.
+- Never fix a numerical regression by changing expected values before independently proving the new result.
 
 ## Performance and Memory
 
-Optimize code paths that are hot, scale with realistic data, process large payloads, or run every simulation/render tick. Do not add complexity to cold code without evidence, and never trade away correctness or numerical stability for a micro-optimization.
+Optimize code paths that are hot, scale with realistic data, process large payloads, or run every simulation or render tick. Do not add complexity to cold code without evidence, and never trade away correctness or numerical stability for a micro-optimization.
 
 ### Algorithms and Data Layout
 
@@ -218,12 +219,12 @@ Optimize code paths that are hot, scale with realistic data, process large paylo
 - Prefer flat objects or typed arrays for large numeric datasets; do not convert typed arrays to regular arrays without need.
 - Prefer `subarray()` when a view is enough and `slice()` only when a copy is required.
 - Do not use argument spread for potentially large collections.
-- Keep caches bounded or provide an eviction/size policy; use stable keys and do not memoize cheap work.
+- Keep caches bounded or provide an eviction or size policy; use stable keys and do not memoize cheap work.
 
 ### Hot Loops and Numerical Work
 
-- Hoist loop invariants, unit conversions, decoders, regular expressions, and repeated trigonometric/projection/frame calculations.
-- Avoid intermediate arrays from chained `map`/`filter`/`reduce`, object/array spreads, closures, and temporary objects in measured hot loops.
+- Hoist loop invariants, unit conversions, decoders, regular expressions, and repeated trigonometric, ephemeris, projection, or frame calculations.
+- Avoid intermediate arrays from chained `map`, `filter`, or `reduce`, object or array spreads, closures, and temporary objects in measured hot loops.
 - Reuse mutable outputs, workspaces, typed-array views, and buffers when ownership is clear.
 - Compare squared distances when the distance itself is not needed; use direct multiplication for small integer powers.
 - Avoid formatting, logging, JSON conversion, exceptions, and dynamic object reshaping in high-volume loops.
@@ -234,9 +235,9 @@ Optimize code paths that are hot, scale with realistic data, process large paylo
 - Do not accidentally serialize independent I/O. Use bounded concurrency for large or untrusted batches.
 - Stream large FITS, XISF, SPK, catalog, image, and network payloads when materialization is unnecessary.
 - Reuse long-lived clients and expensive helpers where lifecycle ownership is explicit.
-- Clean up timers, listeners, observers, sockets, pending requests, and buffers on success, failure, cancellation, disconnect, and disposal.
-- Quarantine or ignore late replies/events from obsolete sessions.
-- Avoid blocking the event loop with substantial CPU work; use an existing worker/offload pattern when one exists.
+- Clean up timers, listeners, observers, sockets, pending requests, operations, and buffers on success, failure, cancellation, disconnect, and disposal.
+- Quarantine or ignore late replies and events from obsolete operations or sessions.
+- Avoid blocking the event loop with substantial CPU work; use an existing worker or offload pattern when one exists.
 
 Before accepting a performance-sensitive change, verify complexity, allocation behavior, buffer reuse, concurrency bounds, cache growth, lifecycle cleanup, and readability. A performance review finding must identify realistic scale or frequency and a material effect.
 
@@ -249,12 +250,12 @@ Before accepting a performance-sensitive change, verify complexity, allocation b
 - Prefer pure focused tests for numerical logic and integration-style tests for parsers, serializers, adapters, protocol clients, I/O, and simulators.
 - Mock only true external or nondeterministic boundaries. Reuse `data/` fixtures rather than embedding large payloads.
 - Cover success and typed failures at boundaries, including malformed external input, missing configuration, timeout, cancellation, and upstream failure.
-- For devices and orchestration, cover capability absence, disconnect/reconnect, busy/conflict/Alert states, late events, cancellation ownership, cleanup, and boundary timing—not only the happy path.
+- For devices and orchestration, cover capability absence, disconnect and reconnect, busy or conflict, Alert states, late events, cancellation ownership, cleanup, and boundary timing, not only the happy path.
 - For simulators, assert meaningful state transitions, timing, trajectory, and physical behavior rather than only command acknowledgement.
 - Do not test that pure functions reject out-of-range or wrong-typed trusted inputs; that is outside the validation contract.
 - Assert behavior precisely and avoid snapshot-heavy tests.
 - Use `toBeCloseTo` or explicit tolerances for floating-point results. Use strict equality only for mathematically exact results.
-- Cover relevant astronomical/geometric boundaries: zero vectors, near-zero separations, poles, zenith/nadir, horizon and antimeridian crossings, `0`/`TAU` wrap, grazing contact, degenerate/identity transforms, and validity-window endpoints.
+- Cover relevant astronomical and geometric boundaries: zero vectors, near-zero separations, poles, zenith and nadir, horizon and antimeridian crossings, `0` or `TAU` wrap, grazing contact, degenerate or identity transforms, and validity-window endpoints.
 - Treat image hashes as regression alarms, not algorithmic truth. Before updating one, inspect the numerical/pixel difference and verify the new result independently.
 - Prefer the closest real fixture test over a fixture-free smoke test when behavior depends on an actual format or dataset.
 
@@ -262,13 +263,13 @@ Before accepting a performance-sensitive change, verify complexity, allocation b
 
 Verification is proportional to the change, but the touched area must have zero introduced TypeScript errors, passing relevant tests, and no obvious correctness or performance regression.
 
-- Documentation-only changes: format-check the touched files, validate referenced paths/commands, and run `git diff --check`.
+- Documentation-only changes: format-check the touched files, validate referenced paths and commands, and run `git diff --check`.
 - TypeScript changes: run the closest targeted tests, `bun run lint`, `bun run fmt:check`, and `git diff --check`.
-- Cross-cutting shared primitives, test infrastructure, broad refactors, or high-risk numerical/runtime changes: also run `bun test --parallel`.
+- Cross-cutting shared primitives, test infrastructure, broad refactors, or high-risk numerical, or runtime changes: also run `bun test --parallel`.
 - Native-binding changes: run the relevant native-backed tests and state any platform/library limitation.
-- Prefer `bunx oxfmt <explicit paths>` when the worktree contains unrelated edits. Use repository-wide `bun run fmt` only when its entire output is in scope, then inspect every formatted change.
+- Prefer `bun run fmt -- <explicit paths>` when the worktree contains unrelated edits. Use repository-wide `bun run fmt` only when its entire output is in scope, then inspect every formatted change.
 - Re-run tests after any fix made in response to a failed check.
-- Distinguish failures introduced by the task from pre-existing, fixture, network, or platform failures. Establish overlap with touched code before treating a full-suite failure as a task regression.
+- Distinguish failures introduced by the task from pre-existing, fixture, network, timing, or platform failures. Establish overlap with touched code before treating a full-suite failure as a task regression.
 - Do not commit with introduced failures or unresolved errors in the touched area.
 - Report every skipped or failed verification command and its exact reason.
 - Review the final diff and status before staging.
@@ -285,12 +286,12 @@ For pull-request work, refresh the current diff, review bodies, general comments
 
 Check:
 
-- **Mathematical and physical correctness** — units, conversion factors, signs, handedness, coordinate frames, reference systems, apparent/geometric or topocentric/geocentric distinctions, contact geometry, physical quantities, and documented approximation limits.
-- **Algorithmic suitability** — objective functions, search windows, adaptive expansion, continuous-versus-discrete classification, bracketing, endpoint/sample/tangential/double roots, convergence, degenerate cases, and supported-domain completeness.
-- **Numerical robustness** — cancellation, unstable inverse trig, missing clamps, small denominators, tolerance scaling, angle normalization, pole/horizon/limb behavior, and non-finite output from valid inputs.
-- **Implementation correctness** — condition direction, indices, endpoints, stale state, swapped arguments, fallback paths, optional outputs, mutation, initialization, metadata consistency, and cleanup.
-- **Performance and memory** — only realistic, material issues under the “Performance and Memory” rules.
-- **Async and device lifecycle** — capability state, command ownership, disconnect/reconnect, cancellation, timeout, late events, session invalidation, and cleanup.
+- **Mathematical and physical correctness** - units, conversion factors, signs, handedness, coordinate frames, reference systems, apparent or geometric and topocentric or geocentric distinctions, contact geometry, physical quantities, and documented approximation limits.
+- **Algorithmic suitability** - objective functions, search windows, adaptive expansion, continuous versus discrete classification, bracketing, endpoint, sample, tangential, and double roots, convergence, degenerate cases, and supported-domain completeness.
+- **Numerical robustness** - cancellation, unstable inverse trig, missing clamps, small denominators, tolerance scaling, angle normalization, pole, horizon, or limb behavior, and non-finite output from valid inputs.
+- **Implementation correctness** - condition direction, indices, endpoints, stale state, swapped arguments, fallback paths, optional outputs, mutation, initialization, metadata consistency, and cleanup.
+- **Performance and memory** - only realistic, material issues under the "Performance and Memory" rules.
+- **Async and device lifecycle** - capability state, command ownership, disconnect and reconnect, cancellation, timeout, late events, session invalidation, and cleanup.
 
 Examples of reportable domain failures include:
 
@@ -299,13 +300,13 @@ Examples of reportable domain failures include:
 - confusing center separation with limb contact, or total with annular C2/C3 geometry;
 - missing roots because two events lie between coarse samples or because a tangent never changes sign;
 - accepting a discrete sampled classification for a property that must hold over a continuous interval;
-- using an approximation that materially violates its documented precision/domain;
+- using an approximation that materially violates its documented precision or domain;
 - propagating `NaN` or `Infinity` from valid inputs into public geometry, time, coordinate, SVG, or image output;
 - leaking timers, listeners, observers, sockets, or in-flight work.
 
 Do not recommend a more sophisticated method merely because it exists. Report it only when the current method fails valid cases, is unstable, or violates a stated precision or performance requirement.
 
-Missing routine input validation is not a finding. Read “Validation Policy” first. An exported helper must work over its documented domain and must not hang, crash, or allocate without bound outside it; that does not require it to reject every invalid argument.
+Missing routine input validation is not a finding. Read "Validation Policy" first. An exported helper must work over its documented domain and must not hang, crash, or allocate without bound outside it; that does not require it to reject every invalid argument.
 
 Do not report:
 
@@ -323,7 +324,7 @@ Order findings by severity:
 - `P0`: catastrophic correctness failure, data loss, or process-wide failure on a supported path.
 - `P1`: likely correctness or lifecycle bug in normal supported use.
 - `P2`: edge-case correctness or meaningful numerical robustness issue.
-- `P3`: minor robustness issue or material performance/memory issue.
+- `P3`: minor robustness issue or material performance or memory issue.
 
 For each finding, provide:
 
@@ -353,7 +354,7 @@ Authorization boundaries:
 
 - A request to commit does not authorize a push.
 - A request to fix review comments does not authorize resolving remote threads.
-- Pushes, PR creation/updates, comments, and remote thread resolution each require explicit authorization.
+- Pushes, PR creation or updates, comments, and remote thread resolution each require explicit authorization.
 - Never amend, squash, rebase, or rewrite existing commits unless explicitly requested.
 - Preserve and leave unstaged all unrelated user changes.
 
