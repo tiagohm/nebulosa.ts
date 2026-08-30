@@ -289,8 +289,48 @@ test('fails when DEC backlash consumes too many no-motion steps', () => {
 	expect(simulation.step.failure!.code).toBe('too_many_dec_no_motion_steps')
 })
 
+test('does not treat accumulated DEC creep as backlash clearance', () => {
+	const simulation = runCalibration({ clearingMoveEnabled: false, maxDecNoMotionSteps: 4, maxDecSteps: 10, minMovePerStepPx: 0.05 }, { raVector: [0.8, 0.2], decVector: [0, 0.02] })
+	expect(simulation.step.completed).toBeUndefined()
+	expect(simulation.step.failure).toBeDefined()
+	expect(simulation.step.failure!.code).toBe('too_many_dec_no_motion_steps')
+})
+
+test('excludes post-backlash DEC stalls from the solved axis rate', () => {
+	const calibrator = new GuidingCalibrator(calibrationConfig({ clearingMoveEnabled: false, minMovePerStepPx: 0.05, maxDecNoMotionSteps: 4 }))
+	let offsetX = 0
+	let offsetY = 0
+	let frameId = 0
+	let step = calibrator.processFrame(guideFrame(BASE_STARS, 0, frameId++))
+	const ra = [0.8, 0.2] as const
+	const dec = [0, 0.9] as const
+
+	while (step.pulse?.ra.duration !== undefined && step.pulse.ra.duration > 0 && step.failure === undefined && step.completed === undefined) {
+		offsetX += ra[0]
+		offsetY += ra[1]
+		step = calibrator.processFrame(guideFrame(shiftStars(BASE_STARS, offsetX, offsetY), frameId * 1000, frameId++))
+	}
+
+	expect(step.pulse?.dec.duration).toBe(100)
+
+	for (const scale of [0, 0, 1, 0, 0, 1, 1]) {
+		offsetX += dec[0] * scale
+		offsetY += dec[1] * scale
+		step = calibrator.processFrame(guideFrame(shiftStars(BASE_STARS, offsetX, offsetY), frameId * 1000, frameId++))
+		if (step.completed !== undefined || step.failure !== undefined) break
+	}
+
+	expect(step.failure).toBeUndefined()
+	expect(step.completed).toBeDefined()
+	expect(step.completed!.backlash).toBe(200)
+	expect(step.completed!.dec.totalPulse).toBe(300)
+	expect(step.completed!.dec.ratePxPerMs).toBeCloseTo(2.7 / 300, 8)
+	expect(step.diagnostics.decSamples).toHaveLength(3)
+})
+
 test('fails validation when RA and DEC are nearly parallel', () => {
-	const simulation = runCalibration({ minAxisSeparation: 20 * DEG2RAD }, { raVector: [0.8, 0.2], decVector: [0.75, 0.22] })
+	// 15° apart is enough per-step DEC projection to leave backlash, but still under the 20° floor.
+	const simulation = runCalibration({ minAxisSeparation: 20 * DEG2RAD }, { raVector: [0.8, 0.2], decVector: [0.717, 0.398] })
 	expect(simulation.step.completed).toBeUndefined()
 	expect(simulation.step.failure).toBeDefined()
 	expect(simulation.step.failure!.code).toBe('axes_too_parallel')

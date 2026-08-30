@@ -57,7 +57,8 @@ export interface GuidingCalibrationConfig {
 	readonly maxDecSteps: number
 	// Allowed consecutive RA steps without measurable motion.
 	readonly maxRaNoMotionSteps: number
-	// Allowed consecutive DEC steps without measurable motion (backlash window).
+	// Allowed consecutive DEC steps without measurable motion, both while absorbing backlash
+	// and after DEC motion has started.
 	readonly maxDecNoMotionSteps: number
 	// Minimum per-step displacement to count as motion, in pixels.
 	readonly minMovePerStepPx: number
@@ -708,21 +709,30 @@ export class GuidingCalibrator {
 		this.state.decSteps++
 		this.#finishMeasurement(point)
 
-		if (!this.state.decMotionDetected && sample.projectedDistance < this.config.minMovePerStepPx && Math.abs(sample.orthogonalDistance) < this.config.minMovePerStepPx) {
+		if (sample.projectedDistance < this.config.minMovePerStepPx) {
 			this.state.decNoMotionSteps++
-			this.state.decBacklashMs = this.state.decSteps * this.config.decPulse
-			this.#transitionTo('decBacklashClearing')
-			this.#updateDiagnostics(frame, filtered, ['dec_backlash'])
+
+			if (!this.state.decMotionDetected) {
+				this.state.decBacklashMs = this.state.decSteps * this.config.decPulse
+				this.#transitionTo('decBacklashClearing')
+				this.#updateDiagnostics(frame, filtered, ['dec_backlash'])
+			} else {
+				this.#updateDiagnostics(frame, filtered, ['dec_no_motion'])
+			}
 
 			if (this.state.decNoMotionSteps > this.config.maxDecNoMotionSteps) {
-				return this.#fail('too_many_dec_no_motion_steps', 'DEC calibration never showed measurable motion before backlash tolerance was exhausted', frame, ['dec_no_motion'], filtered)
+				const message = this.state.decMotionDetected ? 'DEC calibration stalled after measurable motion was detected' : 'DEC calibration never showed measurable motion before backlash tolerance was exhausted'
+				return this.#fail('too_many_dec_no_motion_steps', message, frame, ['dec_no_motion'], filtered)
 			}
 
 			if (this.state.decSteps >= this.config.maxDecSteps) {
-				return this.#fail('insufficient_dec_movement', 'DEC calibration did not begin moving before the step limit', frame, ['dec_travel_short'], filtered)
+				const message = this.state.decMotionDetected ? 'DEC calibration did not reach the required net travel before the step limit' : 'DEC calibration did not begin moving before the step limit'
+				return this.#fail('insufficient_dec_movement', message, frame, ['dec_travel_short'], filtered)
 			}
 
-			return this.#queuePulse('decBacklashClearing', 'dec', this.config.decDirection, this.config.decPulse, frame, ['dec_backlash_continue'], filtered)
+			const phase = this.state.decMotionDetected ? 'decForwardPulse' : 'decBacklashClearing'
+			const notes = this.state.decMotionDetected ? (['dec_continue'] as const) : (['dec_backlash_continue'] as const)
+			return this.#queuePulse(phase, 'dec', this.config.decDirection, this.config.decPulse, frame, notes, filtered)
 		}
 
 		if (!this.state.decMotionDetected) {
@@ -730,6 +740,7 @@ export class GuidingCalibrator {
 			this.state.decBacklashMs = (this.state.decSteps - 1) * this.config.decPulse
 		}
 
+		this.state.decNoMotionSteps = 0
 		this.#transitionTo('decForwardMeasure')
 		this.state.decSamples.push(sample)
 		this.#updateDiagnostics(frame, filtered, ['dec_measured'])
