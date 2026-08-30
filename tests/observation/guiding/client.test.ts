@@ -1702,7 +1702,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		return [(distance * dx) / length, (distance * dy) / length] as const
 	}
 
-	test.concurrent(
+	test(
 		'calibration fails when guide pulses do not move the star',
 		async () => {
 			const harness = makeHarness({ calibrator: FAST_CALIBRATION })
@@ -1728,7 +1728,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'calibration fails when the guide star is too close to the frame edge',
 		async () => {
 			const harness = makeHarness({ calibrator: FAST_CALIBRATION })
@@ -1752,7 +1752,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'calibration fails if the guide star is lost mid-run',
 		async () => {
 			const harness = makeHarness({ calibrator: FAST_CALIBRATION })
@@ -1776,7 +1776,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'calibration fails when the star does not travel far enough',
 		async () => {
 			const harness = makeHarness({
@@ -1804,7 +1804,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'calibration fails after too many consecutive bad frames',
 		async () => {
 			const harness = makeHarness({ calibrator: FAST_CALIBRATION })
@@ -1835,7 +1835,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'calibration fails when a frame jumps farther than the allowed step',
 		async () => {
 			const harness = makeHarness({ calibrator: FAST_CALIBRATION })
@@ -1864,7 +1864,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'calibration fails when RA and DEC move the star along the same image axis',
 		async () => {
 			const harness = makeHarness({ calibrator: FAST_CALIBRATION })
@@ -1888,7 +1888,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'calibration clearing returns the star near the origin before the DEC leg',
 		async () => {
 			const harness = makeHarness()
@@ -1915,7 +1915,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'calibration recovers the simulated mount rate and camera angle on both axes',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -1938,7 +1938,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'calibration with mild measurement jitter still recovers rate and angle',
 		async () => {
 			const harness = makeHarness({ calibrator: { ...FAST_CALIBRATION, maxFrameJumpPx: 12, maxMatchDistancePx: 16 } })
@@ -1966,7 +1966,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'calibration learns an inverted RA axis and later corrections reduce the error',
 		async () => {
 			const harness = makeHarness({ calibrator: FAST_CALIBRATION })
@@ -2006,7 +2006,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'a flux change at a fixed centroid is not treated as motion',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -2029,7 +2029,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'a settled lock with a stationary mount issues no useful pulse',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -2051,7 +2051,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'a small RA shift reports image error with matching magnitude and sign',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -2077,7 +2077,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'a half-pixel RA shift is visible in the reported image error',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -2099,7 +2099,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'a correction pulse reduces the error on the next frame',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -2123,7 +2123,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'constant RA drift is corrected without a matching DEC pulse',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -2156,7 +2156,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'constant DEC drift is corrected without a matching RA pulse',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -2189,7 +2189,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'diagonal drift is corrected on both axes without running away',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -2219,7 +2219,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'equal and opposite RA errors produce opposite pulses',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -2248,7 +2248,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'recalibrating clears the previous solution before the new run',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -2274,7 +2274,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'a failed recalibration leaves the client uncalibrated',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -2299,7 +2299,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'lock averaging issues no correction pulses',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -2321,7 +2321,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'disabling guide output keeps frames but sends no INDI pulse',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -2349,7 +2349,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		're-enabling guide output resumes pulses from the new measurement',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -2372,7 +2372,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'declination mode Off issues no DEC pulse while RA still guides',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -2396,7 +2396,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		're-enabling Auto declination after Off does not dump a stale DEC pulse',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -2435,7 +2435,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'declination mode North issues only NORTH pulses',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -2465,7 +2465,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'declination mode South issues only SOUTH pulses',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -2495,7 +2495,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'changing the declination mode does not drop the lock',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -2520,7 +2520,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'a modest DEC reversal is held back by the converted backlash threshold',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -2551,7 +2551,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'flipping the calibration rotates the solved axes by half a turn',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -2567,7 +2567,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'guiding after a calibration flip still reduces error on a matching mount',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -2595,7 +2595,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'flip and DEC mode keep the dithered lock',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -2617,7 +2617,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'startGuidingAssistant is allowed after a settled dither',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -2635,7 +2635,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'startGuidingAssistant is allowed while lock-shift holds a non-zero offset',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -2652,7 +2652,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'finishing the guiding assistant keeps the lock',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -2678,7 +2678,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'guide steps timestamp their frames from the start of guiding',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -2702,7 +2702,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'the reported average distance is a low-pass filter over the per-frame distance',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -2729,7 +2729,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'a pulse throw still queues the next exposure',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -2755,7 +2755,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'a later-axis pulse throw still waits for the issued pulse to finish',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -2794,7 +2794,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'the next exposure waits until the guide output reports idle after a pulse',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -2816,7 +2816,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'a dual-axis correction waits for the longer pulse, not the sum',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -2869,7 +2869,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'calibration pulses wait until the guide output reports idle',
 		async () => {
 			const harness = makeHarness({ calibrator: FAST_CALIBRATION })
@@ -2909,7 +2909,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'an arriving guide frame cancels the exposure watchdog',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -2936,7 +2936,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'the next exposure waits for a delayed Busy acknowledgement before starting',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -2966,7 +2966,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'the next exposure waits for Idle when Busy arrives near the latency margin',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -2997,7 +2997,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'changing the exposure cadence does not double the guide pulse for the same error',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -3020,7 +3020,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'an in-flight frame keeps the exposure duration that produced it',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -3044,7 +3044,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'changing the exposure cadence during guiding keeps the lock and calibration',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -3082,7 +3082,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'guide-step RA and DEC distances are pixel projections of the image offset',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -3106,7 +3106,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'axis limit flags are omitted while the pulses stay inside the maximum duration',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -3124,7 +3124,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'an error large enough to saturate the right ascension pulse reports RALimited',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -3158,7 +3158,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'a saturated pulse recovers once the lock error shrinks',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -3199,7 +3199,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'a star outside the search region is reported lost',
 		async () => {
 			const harness = await calibrateAndGuide({ searchRegion: 32 })
@@ -3219,7 +3219,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'a star that stays inside the search region keeps the lock',
 		async () => {
 			const harness = await calibrateAndGuide({ searchRegion: 64 })
@@ -3234,7 +3234,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'an impossible measurement jump is rejected without a pulse',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -3268,7 +3268,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'a sticky lock keeps the reference while the search center follows the star',
 		async () => {
 			const frames: GuideFrameImage[] = []
@@ -3297,7 +3297,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'setLockPosition during guiding re-averages the lock without a reference-change pulse',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -3323,7 +3323,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'stars outside the search box remain available for multi-star measurement',
 		async () => {
 			const frames: GuideFrameImage[] = []
@@ -3347,7 +3347,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'an empty search box is not rescued by field stars outside it',
 		async () => {
 			const frames: GuideFrameImage[] = []
@@ -3379,7 +3379,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'a common field translation is followed instead of a single star',
 		async () => {
 			const frames: GuideFrameImage[] = []
@@ -3404,7 +3404,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'a multi-star outlier does not dominate the translation',
 		async () => {
 			const threeStars = [STAR_A, STAR_B, STAR_C] as const
@@ -3441,7 +3441,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'a saturated field is treated as a lost star with finite public state',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -3477,7 +3477,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'a single star-free frame suppresses the pulse without losing the lock',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -3501,7 +3501,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'lost-lock frames issue no correction pulse',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -3521,7 +3521,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'dither is rejected while the guide lock is lost',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -3539,7 +3539,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'star-free frames report a lost star every frame but a lost lock position only once',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -3562,7 +3562,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'a star that reappears far from the lock is not treated as the same guide star',
 		async () => {
 			const harness = await calibrateAndGuide({ searchRegion: 32 })
@@ -3583,7 +3583,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'guiding recovers the star after a run of star-free frames',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -3604,7 +3604,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'recovery with a stationary mount does not issue a compensation pulse',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -3627,7 +3627,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'recovery after modest drift converges without a single extreme pulse',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -3660,7 +3660,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'a repeated guide request while already guiding starts settle without a second exposure',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -3681,7 +3681,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'guide during a partial pause does not start a second exposure',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -3702,7 +3702,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'resuming after a pause does not replay a previous pulse',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -3725,7 +3725,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'resuming after a pause corrects the drift that accumulated while paused',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -3753,7 +3753,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'guide while paused resumes without dropping the dither',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -3783,7 +3783,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'dithering offsets the lock position and starts a new settle cycle',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -3814,7 +3814,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'an RA-only dither offsets the lock along right ascension',
 		async () => {
 			const harness = await calibrateAndGuide({ ditherMode: 'spiral' })
@@ -3833,7 +3833,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'guiding after a dither walks the star onto the new lock',
 		async () => {
 			const harness = await calibrateAndGuide({ ditherMode: 'spiral' })
@@ -3853,7 +3853,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'a successful settle keeps the dithered lock offset',
 		async () => {
 			const harness = await calibrateAndGuide({ ditherMode: 'spiral' })
@@ -3880,7 +3880,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'a brief in-tolerance crossing does not complete settle',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -3910,7 +3910,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'a bad frame during settle resets the stability clock',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -3934,7 +3934,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'settle times out when the error stays outside the pixel limit',
 		async () => {
 			const harness = await calibrateAndGuide({ ditherMode: 'spiral' })
@@ -3956,7 +3956,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'a lost star during settle does not report success',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -3978,7 +3978,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'a dither larger than the search box walks the star onto the new lock',
 		async () => {
 			const harness = await calibrateAndGuide({ ditherMode: 'spiral', searchRegion: 32 })
@@ -4003,7 +4003,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'the first frames after a settled dither do not add a transient pulse',
 		async () => {
 			const harness = await calibrateAndGuide({ ditherMode: 'spiral' })
@@ -4023,7 +4023,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'dither during a partial pause moves the lock without pulsing',
 		async () => {
 			const harness = await calibrateAndGuide({ ditherMode: 'spiral' })
@@ -4050,7 +4050,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'lock-shift walks the target at the configured pixel rate',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -4072,7 +4072,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'lock-shift on RA/Dec follows the calibrated axis unit vectors',
 		async () => {
 			const harness = await calibrateAndGuide({}, { focalLength: 1000, pixelSize: 5 })
@@ -4101,7 +4101,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'lock-shift does not accumulate elapsed time while paused',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -4124,7 +4124,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'lock-shift does not accumulate while the guiding assistant is active',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -4146,7 +4146,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'lock-shift clamps the target at the frame edge',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -4166,7 +4166,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'a second dither before settle accumulates onto the same lock',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -4194,7 +4194,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'a spiral dither walks the lattice and pulses the axes the standalone plan computes',
 		async () => {
 			const harness = await calibrateAndGuide({ ditherMode: 'spiral' })
@@ -4236,7 +4236,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'stopping a guiding session reports both stop events and keeps the calibration',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -4253,7 +4253,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'stopCapture during a pulse wait starts no replacement exposure',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -4285,7 +4285,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'guide after stop reuses the calibration and resumes corrections',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -4313,7 +4313,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'disconnect during guiding issues no further pulses',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -4342,7 +4342,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'a second session after disconnect starts without the previous lock or calibration',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -4382,7 +4382,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'loop during guiding stops pulses and keeps the exposure loop',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -4412,7 +4412,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'loop during guiding fails settle and drops dither and lock-shift offsets',
 		async () => {
 			const harness = await calibrateAndGuide({ ditherMode: 'spiral' })
@@ -4462,7 +4462,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'stop and disconnect leave no pending capture or pulse work',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -4488,7 +4488,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'end-to-end first light calibrates, guides a drift, then releases the session',
 		async () => {
 			const harness = makeHarness({ calibrator: FAST_CALIBRATION })
@@ -4529,7 +4529,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'a full session connects, loops, calibrates, dithers, stops and disconnects',
 		async () => {
 			const harness = makeHarness({ calibrator: FAST_CALIBRATION, ditherMode: 'spiral' })
@@ -4578,7 +4578,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'end-to-end dither settles on the new lock then resumes guiding',
 		async () => {
 			const harness = await calibrateAndGuide({ ditherMode: 'spiral' })
@@ -4606,7 +4606,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'end-to-end a short cloud run suppresses pulses and resumes without a jump',
 		async () => {
 			const harness = await calibrateAndGuide()
@@ -4629,7 +4629,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 		CLOSED_LOOP_TIMEOUT,
 	)
 
-	test.concurrent(
+	test(
 		'end-to-end a missing exposure retries and the session continues',
 		async () => {
 			const harness = await calibrateAndGuide()
