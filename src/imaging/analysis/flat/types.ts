@@ -304,3 +304,39 @@ export interface FlatDiagnostic {
 	// Finite threshold or limit associated with the diagnostic.
 	readonly limit?: number
 }
+
+// One approved scalar signal measurement used to estimate a subsequent flat exposure.
+export interface FlatExposureObservation {
+	// Exposure duration, seconds.
+	readonly exposure: number
+	// Observed or pedestal-corrected level for one explicitly selected plane, in digital numbers.
+	readonly level: number
+}
+
+// Scalar exposure-estimation input for one explicitly selected physical plane.
+export interface FlatExposureInput {
+	// One or more approved, non-clipped observations in acquisition order; the final item is current.
+	readonly observations: readonly [FlatExposureObservation, ...FlatExposureObservation[]]
+	// Whether levels include an unknown pedestal or were reference-corrected.
+	readonly levelMode: 'observed' | 'corrected'
+	// Ordered inclusive target interval in digital numbers.
+	readonly targetRange: readonly [minimum: number, maximum: number]
+	// Ordered inclusive allowed exposure interval, seconds.
+	readonly exposureRange: readonly [minimum: number, maximum: number]
+	// Maximum absolute change from the current exposure, seconds.
+	readonly maximumStep?: number
+}
+
+// Recommended next exposure and the model used to derive it.
+export interface FlatExposureEstimate {
+	// Whether to retain, increase, decrease, or accept a range-bound result.
+	readonly status: 'accepted' | 'increase' | 'decrease' | 'belowMinimum' | 'aboveMaximum' | 'invalid'
+	// Scalar model used for the recommendation.
+	readonly method: 'ratio' | 'interpolation' | 'affine' | 'none'
+	// Recommended exposure after step and allowed-range limits, seconds.
+	readonly recommendedExposure?: number
+	// Finite model prediction at recommendedExposure, in digital numbers.
+	readonly predictedLevel?: number
+	// Structured reasons for invalid or limited estimates.
+	readonly diagnostics: readonly FlatDiagnostic[]
+}

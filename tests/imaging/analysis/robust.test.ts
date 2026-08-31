@@ -37,3 +37,10 @@ test('reports empty reductions and rejects allocation-unsafe capacities', () => 
 	expect(() => new RobustReservoir(-1)).toThrow(RangeError)
 	expect(() => new RobustReservoir(Number.POSITIVE_INFINITY)).toThrow(RangeError)
 })
+
+test('keeps even finite medians finite at floating-point extremes', () => {
+	const reservoir = new RobustReservoir(2)
+	reservoir.push(Number.MAX_VALUE)
+	reservoir.push(Number.MAX_VALUE)
+	expect(reservoir.median()).toBe(Number.MAX_VALUE)
+})
