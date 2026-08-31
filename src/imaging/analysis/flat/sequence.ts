@@ -1,4 +1,4 @@
-import { STANDARD_DEVIATION_SCALE } from '../../../core/util'
+import { medianAbsoluteDeviationOf, medianBySelectionOf } from '../../../core/util'
 import type { Rect } from '../../../math/numerical/geometry'
 import { resolveImagePlaneGeometry, resolveLocalCfaPattern } from '../plane'
 import { ROBUST_SAMPLE_CAPACITY, RobustReservoir } from '../robust'
@@ -268,8 +268,8 @@ function analyzeSequencePlane(input: FlatSequenceInput, analyses: readonly FlatA
 		signatures[frameIndex] = { signal, tiles, rowProfile: profiles.row, columnProfile: profiles.column }
 	}
 
-	const medianSignal = robustMedian(availableSignals)
-	const signalVariation = finiteMetric(completeSignals && medianSignal !== undefined && medianSignal !== 0 ? robustScaledMad(availableSignals) / Math.abs(medianSignal) : undefined)
+	const medianSignal = medianBySelectionOf(availableSignals)
+	const signalVariation = finiteMetric(completeSignals && medianSignal !== undefined && medianSignal !== 0 ? medianAbsoluteDeviationOf(availableSignals, medianSignal, true) / Math.abs(medianSignal) : undefined)
 	const indexCoordinates = Float64Array.from({ length: analyses.length }, (_, index) => index)
 	const signalValues = completeSignals ? Float64Array.from(signatures.map((signature) => signature!.signal)) : undefined
 	const indexTrend = signalValues ? robustTrend(indexCoordinates, signalValues) : undefined
@@ -357,9 +357,12 @@ function measureNormalizedProfiles(frame: FlatFrame, reference: FlatSequenceInpu
 // Computes the worst scaled-MAD temporal dispersion among every complete vector coordinate.
 function temporalVectorVariation(signatures: readonly (FlatSignature | undefined)[], select: (signature: FlatSignature) => Float32Array): number | undefined {
 	if (signatures.some((signature) => signature === undefined)) return undefined
+
 	const first = select(signatures[0]!)
 	if (first.length === 0) return undefined
+
 	const values = new Array<number>(signatures.length)
+
 	let worst = 0
 	for (let coordinate = 0; coordinate < first.length; coordinate++) {
 		for (let frame = 0; frame < signatures.length; frame++) {
@@ -367,8 +370,10 @@ function temporalVectorVariation(signatures: readonly (FlatSignature | undefined
 			if (vector.length !== first.length || !Number.isFinite(vector[coordinate])) return undefined
 			values[frame] = vector[coordinate]
 		}
-		worst = Math.max(worst, robustScaledMad(values))
+
+		worst = Math.max(worst, medianAbsoluteDeviationOf(values, medianBySelectionOf(values), true))
 	}
+
 	return worst
 }
 
@@ -379,7 +384,7 @@ function multivariateOutliers(signatures: readonly (FlatSignature | undefined)[]
 	const signals = Float64Array.from(resolved, (signature) => signature.signal)
 	const coordinates = Float64Array.from({ length: resolved.length }, (_, index) => index)
 	const trend = robustTrend(coordinates, signals)
-	const signalCenter = robustMedian(Array.from(signals))
+	const signalCenter = medianBySelectionOf(signals)
 	const tileCenter = temporalVectorCenter(resolved, (signature) => signature.tiles)
 	const rowCenter = temporalVectorCenter(resolved, (signature) => signature.rowProfile)
 	const columnCenter = temporalVectorCenter(resolved, (signature) => signature.columnProfile)
@@ -389,6 +394,7 @@ function multivariateOutliers(signatures: readonly (FlatSignature | undefined)[]
 	for (let frame = 0; frame < resolved.length; frame++) {
 		let squared = ((resolved[frame].signal - (trend.intercept + trend.slope * frame)) / signalCenter) ** 2
 		let count = 1
+
 		for (const [vector, center] of [
 			[resolved[frame].tiles, tileCenter],
 			[resolved[frame].rowProfile, rowCenter],
@@ -399,12 +405,13 @@ function multivariateOutliers(signatures: readonly (FlatSignature | undefined)[]
 			squared += distance * distance
 			count++
 		}
+
 		scores[frame] = Math.sqrt(squared / count)
 	}
 
-	const center = robustMedian(scores)
+	const center = medianBySelectionOf(Float64Array.from(scores))
 	if (center === undefined) return { frames: [], complete: false }
-	const scale = robustScaledMad(scores)
+	const scale = medianAbsoluteDeviationOf(scores, center, true)
 	const threshold = center + sigma * Math.max(scale, OUTLIER_SCORE_FLOOR)
 	const outliers: number[] = []
 	for (let frame = 0; frame < scores.length; frame++) if (scores[frame] > threshold) outliers.push(frame)
@@ -414,29 +421,37 @@ function multivariateOutliers(signatures: readonly (FlatSignature | undefined)[]
 // Computes a coordinate-wise robust center only for complete equal-length finite vectors.
 function temporalVectorCenter(signatures: readonly FlatSignature[], select: (signature: FlatSignature) => Float32Array): Float64Array | undefined {
 	const first = select(signatures[0])
+
 	if (first.length === 0) return undefined
+
 	const center = new Float64Array(first.length)
 	const values = new Array<number>(signatures.length)
+
 	for (let coordinate = 0; coordinate < first.length; coordinate++) {
 		for (let frame = 0; frame < signatures.length; frame++) {
 			const vector = select(signatures[frame])
 			if (vector.length !== first.length || !Number.isFinite(vector[coordinate])) return undefined
 			values[frame] = vector[coordinate]
 		}
-		center[coordinate] = robustMedian(values)!
+
+		center[coordinate] = medianBySelectionOf(values)
 	}
+
 	return center
 }
 
 // Returns the root-mean-square distance between one finite vector and its coordinate-wise center.
 function vectorRmsDistance(vector: Float32Array, center: Float64Array): number | undefined {
 	if (vector.length !== center.length || vector.length === 0) return undefined
+
 	let sum = 0
+
 	for (let index = 0; index < vector.length; index++) {
 		if (!Number.isFinite(vector[index]) || !Number.isFinite(center[index])) return undefined
 		const difference = vector[index] - center[index]
 		sum += difference * difference
 	}
+
 	return Math.sqrt(sum / vector.length)
 }
 
@@ -447,41 +462,25 @@ function robustTrend(x: Float64Array, y: Float64Array): RobustTrend | undefined 
 	const maximumPairs = Math.min(ROBUST_SAMPLE_CAPACITY, lagCount * x.length)
 	const slopes = new RobustReservoir(maximumPairs)
 	let previousLag = 0
+
 	for (let lagIndex = 0; lagIndex < lagCount; lagIndex++) {
 		const lag = lagCount === x.length - 1 ? lagIndex + 1 : 1 + Math.floor((lagIndex * (x.length - 2)) / Math.max(1, lagCount - 1))
 		if (lag === previousLag) continue
 		previousLag = lag
+
 		for (let first = 0; first + lag < x.length; first++) {
 			const second = first + lag
 			const span = x[second] - x[first]
 			if (span !== 0 && Number.isFinite(span)) slopes.push((y[second] - y[first]) / span)
 		}
 	}
+
 	const slope = slopes.median()
 	if (!Number.isFinite(slope)) return undefined
 	const intercepts = new RobustReservoir(x.length)
 	for (let index = 0; index < x.length; index++) intercepts.push(y[index] - slope * x[index])
 	const intercept = intercepts.median()
 	return Number.isFinite(intercept) ? { slope, intercept } : undefined
-}
-
-// Returns an overflow-safe median of finite values, or undefined when any evidence is unavailable.
-function robustMedian(values: readonly number[]): number | undefined {
-	if (values.length === 0 || values.some((value) => !Number.isFinite(value))) return undefined
-	const sorted = Float64Array.from(values).sort()
-	const middle = sorted.length >>> 1
-	if ((sorted.length & 1) !== 0) return sorted[middle]
-	const lower = sorted[middle - 1]
-	const upper = sorted[middle]
-	return Math.sign(lower) === Math.sign(upper) ? lower + (upper - lower) * 0.5 : lower * 0.5 + upper * 0.5
-}
-
-// Returns scaled median absolute deviation for a complete finite population.
-function robustScaledMad(values: readonly number[]): number {
-	const center = robustMedian(values)
-	if (center === undefined) return Number.NaN
-	const deviations = values.map((value) => Math.abs(value - center))
-	return robustMedian(deviations)! * STANDARD_DEVIATION_SCALE
 }
 
 // Adds threshold exceedance and missing-evidence diagnostics for one sequence plane.

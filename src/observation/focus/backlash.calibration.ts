@@ -1,4 +1,4 @@
-import { medianAbsoluteDeviationOf, medianOf, percentileOf } from '../../core/util'
+import { medianAbsoluteDeviationOf, medianBySelectionOf, medianOf, percentileOf } from '../../core/util'
 import { validateFinite, validatePositiveFinite, validatePositiveInteger } from '../../core/validation'
 import { robustLinearLeastSquares, type RobustLinearLeastSquaresResult } from '../../math/numerical/least.squares'
 import { goldenSectionSearch } from '../../math/numerical/optimization'
@@ -296,9 +296,9 @@ function consolidateProbePoints(points: readonly BacklashProbePoint[]) {
 				sampleCount += point.sampleCount
 			}
 
-			const value = medianOf(values.sort())
-			const betweenPointMad = medianAbsoluteDeviationOf(values, value, false)
-			consolidated.push({ position: medianOf(positions.sort()), traveled: valid[start].traveled, value, dispersion: Math.max(betweenPointMad, medianOf(dispersions.sort())), sampleCount })
+			const value = medianBySelectionOf(values)
+			const betweenPointMad = medianAbsoluteDeviationOf(values, value, false, undefined, values)
+			consolidated.push({ position: medianOf(positions.sort()), traveled: valid[start].traveled, value, dispersion: Math.max(betweenPointMad, medianBySelectionOf(dispersions)), sampleCount })
 		}
 
 		start = end
@@ -505,22 +505,25 @@ export function aggregateBacklashRuns(runs: readonly BacklashRunResult[]): Backl
 			Number.isFinite(run.nrmse) &&
 			run.nrmse >= 0,
 	)
+
 	if (valid.length < Math.floor(runs.length / 2) + 1) return undefined
 
 	const steps = new Float64Array(valid.length)
 	const uncertainties = new Float64Array(valid.length)
+
 	for (let i = 0; i < valid.length; i++) {
 		steps[i] = valid[i].steps!
 		uncertainties[i] = valid[i].uncertainty!
 	}
 
-	const medianSteps = medianOf(steps.sort())
-	const dispersion = medianAbsoluteDeviationOf(steps, medianSteps, false)
+	const medianSteps = medianBySelectionOf(steps)
+	const dispersion = medianAbsoluteDeviationOf(steps, medianSteps, false, undefined, steps)
+
 	return {
 		direction,
 		steps: Math.round(medianSteps),
 		dispersion,
-		uncertainty: Math.max(medianOf(uncertainties.sort()), NORMALIZED_MAD_SCALE * dispersion),
+		uncertainty: Math.max(medianBySelectionOf(uncertainties), NORMALIZED_MAD_SCALE * dispersion),
 		validRunCount: valid.length,
 		totalRunCount: runs.length,
 		runs: runs.slice(),
@@ -772,7 +775,7 @@ export class BacklashCalibration {
 			position: this.#currentPosition,
 			traveled: this.#state === 'preloading' ? this.#preloadTraveled : Math.abs(this.#currentPosition - this.#reversalPosition),
 			value: median,
-			dispersion: medianAbsoluteDeviationOf(sorted, median, false),
+			dispersion: medianAbsoluteDeviationOf(sorted, median, false, undefined, sorted),
 			sampleCount: this.#config.samplesPerPosition,
 		}
 

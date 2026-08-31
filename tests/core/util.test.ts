@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { binarySearch, binarySearchWithComparator, isNumberArray, maxOf, meanOf, medianBySelectionOf, medianOf, minOf, NumberComparator, NumberComparatorDescending, percentileOf, quickSelect, rmsOf, standardDeviationOf } from '../../src/core/util'
+import { binarySearch, binarySearchWithComparator, isNumberArray, maxOf, meanOf, medianAbsoluteDeviationOf, medianBySelectionOf, medianOf, minOf, NumberComparator, NumberComparatorDescending, percentileOf, quickSelect, rmsOf, standardDeviationOf } from '../../src/core/util'
 
 test('is number array', () => {
 	expect(isNumberArray([1, 2, 3])).toBeTrue()
@@ -85,9 +85,17 @@ test('median of', () => {
 	expect(medianOf([1])).toBe(1)
 	expect(medianOf([1, 2])).toBe(1.5)
 	expect(medianOf([1, 2, 3])).toBe(2)
+	expect(medianOf([-3, -2, -1])).toBe(-2)
+	expect(medianOf([-1, 0, 1])).toBe(0)
+	expect(medianOf([-2, -1, 1, 2])).toBe(0)
 	expect(medianOf([1, 2, 3, 4])).toBe(2.5)
 	expect(medianOf([1, 2, 100, 200], 2)).toBe(1.5)
 	expect(medianOf([])).toBeNaN()
+})
+
+test('median absolute deviation of', () => {
+	expect(medianAbsoluteDeviationOf([1, 1, 2, 2, 4, 6, 9], 2, false)).toBe(1)
+	expect(medianAbsoluteDeviationOf([9, 6, 4, 2, 2, 1, 1], 2, false)).toBe(1)
 })
 
 test('quick select', () => {
@@ -109,6 +117,7 @@ test('median by selection of', () => {
 	expect(medianBySelectionOf([])).toBeNaN()
 	expect(medianBySelectionOf([Number.MAX_VALUE, Number.MAX_VALUE])).toBe(Number.MAX_VALUE)
 	expect(medianBySelectionOf([-Number.MAX_VALUE, Number.MAX_VALUE])).toBe(0)
+	expect(medianBySelectionOf([0, 0, 0, 0.2000000763614068, 0, 0, 0])).toBe(0)
 })
 
 test('standard deviation of', () => {

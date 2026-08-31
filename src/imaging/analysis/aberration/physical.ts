@@ -1,3 +1,4 @@
+import { medianBySelectionOf } from '../../../core/util'
 import type { FocusPlaneAnalysis, FocusSurfaceCoefficients } from '../../../math/numerical/surface.fit'
 
 // Physical conversions and calibrated focus-field corrections for completed aberration scans.
@@ -125,8 +126,8 @@ export function measureFocusFieldOffset(samples: readonly { readonly u: number; 
 		if (Number.isFinite(sample.confidence)) confidence += Math.max(0, Math.min(1, sample.confidence))
 	}
 	if (center.length === 0 || edge.length === 0) return undefined
-	const centerValue = median(center)
-	const edgeValue = median(edge)
+	const centerValue = medianBySelectionOf(center)
+	const edgeValue = medianBySelectionOf(edge)
 	return { centerToEdge: edgeValue - centerValue, center: centerValue, edge: edgeValue, confidence: Math.min(1, confidence / samples.length) }
 }
 
@@ -153,12 +154,4 @@ export function criticalFocusZone(options: CriticalFocusOptions): CriticalFocusR
 	const wavelength = options.wavelength
 	if (!(focalRatio !== undefined && focalRatio > 0) || !(wavelength !== undefined && wavelength > 0) || !Number.isFinite(focalRatio) || !Number.isFinite(wavelength)) throw new RangeError('finite positive focal ratio and wavelength are required')
 	return { tolerance: wavelength * focalRatio * focalRatio, criterion }
-}
-
-// Returns a finite sample median without mutating caller-owned data.
-function median(values: readonly number[]): number {
-	const sorted = Float64Array.from(values)
-	sorted.sort()
-	const middle = sorted.length >>> 1
-	return sorted.length % 2 === 0 ? 0.5 * (sorted[middle - 1] + sorted[middle]) : sorted[middle]
 }

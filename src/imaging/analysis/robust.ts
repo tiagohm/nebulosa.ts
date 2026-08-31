@@ -1,3 +1,5 @@
+import { medianAbsoluteDeviationOf, medianBySelectionOf } from '../../core/util'
+
 // Deterministic fixed-memory robust sampling shared by image-analysis modules. Small populations are
 // retained exactly; larger populations use reproducible reservoir replacement capped at 65,536 values.
 
@@ -56,18 +58,16 @@ export class RobustReservoir {
 	median(): number {
 		const count = this.retainedCount
 		if (count === 0) return Number.NaN
-		return sortedFiniteMedian(this.#values.subarray(0, count).sort())
+		return medianBySelectionOf(this.#values.subarray(0, count))
 	}
 
 	// Returns the median absolute deviation of retained samples, or NaN when no finite value was seen.
-	mad(): number {
+	mad(normalized: boolean = false): number {
 		const count = this.retainedCount
 		if (count === 0) return Number.NaN
 		const selected = this.#values.subarray(0, count)
-		const center = sortedFiniteMedian(selected.sort())
-		const deviations = new Float64Array(count)
-		for (let i = 0; i < count; i++) deviations[i] = Math.abs(selected[i] - center)
-		return sortedFiniteMedian(deviations.sort())
+		const center = medianBySelectionOf(selected)
+		return medianAbsoluteDeviationOf(selected, center, normalized)
 	}
 
 	// Returns population standard deviation after rejecting retained samples beyond five scaled MADs.
@@ -75,14 +75,13 @@ export class RobustReservoir {
 		const count = this.retainedCount
 		if (count === 0) return Number.NaN
 		const selected = this.#values.subarray(0, count)
-		const center = sortedFiniteMedian(selected.sort())
-		const deviations = new Float64Array(count)
-		for (let i = 0; i < count; i++) deviations[i] = Math.abs(selected[i] - center)
-		const mad = sortedFiniteMedian(deviations.sort())
-		const limit = mad > 0 ? mad * 1.482602218505602 * 5 : 0
+		const center = medianBySelectionOf(selected)
+		const mad = medianAbsoluteDeviationOf(selected, center, true)
+		const limit = mad > 0 ? mad * 5 : 0
 		let accepted = 0
 		let mean = 0
 		let m2 = 0
+
 		for (let i = 0; i < count; i++) {
 			const value = selected[i]
 			if (Math.abs(value - center) > limit) continue
@@ -91,15 +90,7 @@ export class RobustReservoir {
 			mean += delta / accepted
 			m2 += delta * (value - mean)
 		}
+
 		return accepted > 0 ? Math.sqrt(m2 / accepted) : Number.NaN
 	}
-}
-
-// Returns the median of a non-empty sorted finite buffer without overflowing an even midpoint.
-function sortedFiniteMedian(values: Float64Array): number {
-	const middle = values.length >>> 1
-	if ((values.length & 1) !== 0) return values[middle]
-	const lower = values[middle - 1]
-	const upper = values[middle]
-	return Math.sign(lower) === Math.sign(upper) ? lower + (upper - lower) * 0.5 : lower * 0.5 + upper * 0.5
 }

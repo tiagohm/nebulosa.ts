@@ -19,6 +19,10 @@ export interface BinarySearchOptions {
 // the standard deviation for normally distributed data.
 export const STANDARD_DEVIATION_SCALE = 1.482602218505602
 
+// Largest sample count in the common 3x3 local-median window; insertion sort avoids a TypedArray
+// subarray/sort call for the per-pixel.
+const SMALL_MEDIAN_SORT_LIMIT = 9
+
 // Checks if the input is a number array.
 export function isNumberArray(a: unknown): a is NumberArray {
 	if (Array.isArray(a)) return a.length === 0 || typeof a[0] === 'number'
@@ -68,22 +72,50 @@ export function quickSelect(values: NumberArray, count: number, k: number): numb
 	return values[left]
 }
 
-// Computes the median of the mutable prefix [0, count) by selection instead of a full sort. The
-// prefix is rearranged in place, the suffix is preserved, and an empty prefix returns NaN.
+// Computes the median with an overflow-safe midpoint of the mutable prefix [0, count) by selection instead of a full sort.
+// The prefix is rearranged in place, the suffix is preserved, and an empty prefix returns NaN.
 export function medianBySelectionOf(values: NumberArray, count = values.length): number {
 	if (!Number.isInteger(count) || count < 0 || count > values.length) throw new RangeError('count must identify a valid prefix')
 	if (count === 0) return Number.NaN
+	if (count === 1) return values[0]
+
+	if (count <= SMALL_MEDIAN_SORT_LIMIT) {
+		return medianOf(sortSmallPrefix(values, count), count)
+	}
 
 	const middle = count >>> 1
 	const upper = quickSelect(values, count, middle)
 	if ((count & 1) === 1) return upper
 
 	let lower = values[0]
+
 	for (let index = 1; index < middle; index++) {
 		const value = values[index]
 		if (value > lower) lower = value
 	}
-	return lower * 0.5 + upper * 0.5
+
+	return Math.sign(lower) === Math.sign(upper) ? lower + (upper - lower) * 0.5 : lower * 0.5 + upper * 0.5
+}
+
+// Sorts a tiny prefix of `values` in ascending numeric order, matching TypedArray sort's practical NaN
+// placement by pushing NaNs to the high end. Used for 3x3 neighborhoods and very small robust samples.
+function sortSmallPrefix(values: NumberArray, count: number) {
+	for (let i = 1; i < count; i++) {
+		const value = values[i]
+		const valueIsNaN = Number.isNaN(value)
+		let j = i - 1
+
+		while (j >= 0) {
+			const previous = values[j]
+			if (!Number.isNaN(previous) ? valueIsNaN || previous <= value : valueIsNaN) break
+			values[j + 1] = previous
+			j--
+		}
+
+		values[j + 1] = value
+	}
+
+	return values
 }
 
 // Finds the minimum value and its index in a numeric array, returned as [value, index].
@@ -154,20 +186,22 @@ export function meanOf(a: Readonly<NumberArray>) {
 export function medianOf(a: Readonly<NumberArray>, count: number = a.length) {
 	if (count === 0) return Number.NaN
 	else if (count === 1) return a[0]
-	else if (count === 2) return (a[0] + a[1]) * 0.5
-	else if (count === 3) return a[1]
 
 	const mid = count >>> 1
-	return count % 2 === 1 ? a[mid] : (a[mid - 1] + a[mid]) * 0.5
+	const upper = a[mid]
+	if ((count & 1) === 1) return upper
+
+	const lower = a[mid - 1]
+	return Math.sign(lower) === Math.sign(upper) ? lower + (upper - lower) * 0.5 : lower * 0.5 + upper * 0.5
 }
 
 // Computes the median absolute deviation of a numeric array about a given `median`.
 // `normalized` scales the result by STANDARD_DEVIATION_SCALE to estimate the standard deviation.
 // `count` restricts the computation to the first `count` elements. Allocates a temporary buffer that is sorted in place.
-export function medianAbsoluteDeviationOf(a: Readonly<NumberArray>, median: number, normalized: boolean, count: number = a.length) {
-	const abs = new Float64Array(count)
+export function medianAbsoluteDeviationOf(a: Readonly<NumberArray>, median: number, normalized: boolean, count: number = a.length, scratch?: Float64Array) {
+	const abs = scratch ?? new Float64Array(count)
 	for (let i = 0; i < count; i++) abs[i] = Math.abs(a[i] - median)
-	const mad = medianOf(abs.sort())
+	const mad = medianBySelectionOf(abs, count)
 	return normalized ? STANDARD_DEVIATION_SCALE * mad : mad
 }
 

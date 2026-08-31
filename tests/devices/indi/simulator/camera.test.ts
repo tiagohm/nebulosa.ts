@@ -1751,10 +1751,7 @@ function closeTo(a: number, b: number, tolerance: number) {
 
 function sumPixels(raw: ImageRawType) {
 	let total = 0
-	for (let i = 0; i < raw.length; i++) {
-		total += raw[i]
-		if (raw[i] < 0) console.info(raw[i])
-	}
+	for (let i = 0; i < raw.length; i++) total += raw[i]
 	return total
 }
 

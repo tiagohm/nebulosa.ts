@@ -1,4 +1,4 @@
-import { percentileOf, STANDARD_DEVIATION_SCALE } from '../../../core/util'
+import { medianBySelectionOf, percentileOf, STANDARD_DEVIATION_SCALE } from '../../../core/util'
 import type { Point, Rect } from '../../../math/numerical/geometry'
 import type { DigitalImage } from '../../model/types'
 import { createScalarSurfaceEvaluator, createScalarSurfacePointEvaluator, createSurfaceColumnTable, fitScalarSurface, type ScalarSurfaceModel, type SurfaceSample } from '../../processing/surface'
@@ -163,7 +163,7 @@ export function analyzeFlatSpatial(input: FlatSpatialInput): FlatSpatialResult {
 
 	const gradient = illuminationGradient(fit.model, input.area)
 	const firstStatistics = basis === 'corrected' ? samples[0].tile.corrected! : samples[0].tile.observed
-	const center = illuminationCenter(fit.model, input.area, tiles, medianFinite(levels), tileDispersionFloor(input, firstStatistics))
+	const center = illuminationCenter(fit.model, input.area, tiles, medianBySelectionOf(levels), tileDispersionFloor(input, firstStatistics))
 	if (!center) diagnostics.push({ severity: 'info', code: 'illuminationCenterUnknown', message: 'The fitted illumination surface has no well-conditioned concave interior maximum.', plane: input.plane })
 	const configuredDust = input.options.artifacts?.dust
 	const dustRequested = configuredDust === true || (typeof configuredDust === 'object' && configuredDust !== null)
@@ -236,6 +236,7 @@ function regionalLevels(samples: readonly SpatialTileSample[], area: Readonly<Re
 	const corner: number[] = []
 	const spanX = Math.max(1, area.right - area.left - 1)
 	const spanY = Math.max(1, area.bottom - area.top - 1)
+
 	for (const sample of samples) {
 		const x = (sample.x - area.left) / spanX
 		const y = (sample.y - area.top) / spanY
@@ -245,18 +246,8 @@ function regionalLevels(samples: readonly SpatialTileSample[], area: Readonly<Re
 		else if (horizontalEdge || verticalEdge) edge.push(sample.level)
 		else if (x >= 0.35 && x <= 0.65 && y >= 0.35 && y <= 0.65) center.push(sample.level)
 	}
-	return { center: medianFinite(center), edge: medianFinite(edge), corner: medianFinite(corner) }
-}
 
-// Returns an exact finite median with an overflow-safe midpoint, or undefined for an empty list.
-function medianFinite(values: readonly number[]): number | undefined {
-	if (values.length === 0) return undefined
-	const sorted = Float64Array.from(values).sort()
-	const middle = sorted.length >>> 1
-	if ((sorted.length & 1) !== 0) return sorted[middle]
-	const lower = sorted[middle - 1]
-	const upper = sorted[middle]
-	return Math.sign(lower) === Math.sign(upper) ? lower + (upper - lower) * 0.5 : lower * 0.5 + upper * 0.5
+	return { center: medianBySelectionOf(center), edge: medianBySelectionOf(edge), corner: medianBySelectionOf(corner) }
 }
 
 // Derives fitted edge-to-edge fractional gradients at the geometric image center.
@@ -344,8 +335,8 @@ function illuminationCenter(model: ScalarSurfaceModel, area: Readonly<Rect>, til
 	const y = model.domain.y0 + ((v + 1) * spanY) / 2
 	const tileWidths = tiles.map((tile) => tile.area.right - tile.area.left)
 	const tileHeights = tiles.map((tile) => tile.area.bottom - tile.area.top)
-	const marginX = Math.max(0.5, ((medianFinite(tileWidths) ?? 1) - 1) * 0.5)
-	const marginY = Math.max(0.5, ((medianFinite(tileHeights) ?? 1) - 1) * 0.5)
+	const marginX = Math.max(0.5, ((medianBySelectionOf(tileWidths) ?? 1) - 1) * 0.5)
+	const marginY = Math.max(0.5, ((medianBySelectionOf(tileHeights) ?? 1) - 1) * 0.5)
 	if (x < model.domain.x0 + marginX || x > model.domain.x1 - marginX || y < model.domain.y0 + marginY || y > model.domain.y1 - marginY) return undefined
 
 	const coverage = model.samples.length > 0 ? model.acceptedSamples / model.samples.length : 0

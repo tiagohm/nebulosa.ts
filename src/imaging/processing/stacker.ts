@@ -843,8 +843,7 @@ function combineSigmaClip(values: Float64Array, count: number, options: Required
 	let active = count
 
 	for (let iteration = 0; iteration < options.maxIterations; iteration++) {
-		const sorted = values.subarray(0, active)
-		sorted.sort()
+		const sorted = values.subarray(0, active).sort()
 		const center = options.centerMethod === 'mean' ? meanOf(sorted) : medianOf(sorted, active)
 		let sigma = 0
 
