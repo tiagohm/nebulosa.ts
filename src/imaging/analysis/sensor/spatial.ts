@@ -1,7 +1,7 @@
 import { gaussianElimination, Matrix } from '../../../math/linear-algebra/matrix'
 import type { Rect } from '../../../math/numerical/geometry'
+import { RobustReservoir } from '../robust'
 import { resolveSensorArea, resolveSensorPlaneGeometry, validateSensorSpatialStack, type SensorPlaneGeometry } from './grid'
-import { SensorRobustReservoir } from './reservoir'
 import type { SensorFrameSet, SensorPlane, SensorSpatialBuffers, SensorTileOptions } from './types'
 
 // Tiled spatial sensor analysis for fixed-exposure dark and flat stacks. Each tile rereads frames and
@@ -679,7 +679,7 @@ export function measureSensorSpatial(dark: SensorFrameSet, flat: SensorFrameSet,
 		let correctedMean = 0
 		let correctedM2 = 0
 		let correctedTemporalSum = 0
-		const correctedResiduals = new SensorRobustReservoir(sampleCapacity)
+		const correctedResiduals = new RobustReservoir(sampleCapacity)
 		for (let tileTop = 0; tileTop < geometry.height; tileTop += tileHeight) {
 			const targetHeight = Math.min(tileHeight, geometry.height - tileTop)
 			for (let tileLeft = 0; tileLeft < geometry.width; tileLeft += tileWidth) {

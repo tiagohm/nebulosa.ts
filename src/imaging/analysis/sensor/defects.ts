@@ -1,7 +1,7 @@
 import { medianOf } from '../../../core/util'
 import type { Rect } from '../../../math/numerical/geometry'
+import { RobustReservoir } from '../robust'
 import { resolveSensorArea, resolveSensorPlaneGeometry, validateSensorSpatialStack } from './grid'
-import { SensorRobustReservoir } from './reservoir'
 import type { SensorFrameSet, SensorPlane, SensorSpatialBuffers } from './types'
 
 // Bounded-memory fixed-pattern defect classification for matched dark and flat stacks. Statistics
@@ -149,9 +149,9 @@ export function measureSensorDefects(dark: SensorFrameSet, flat: SensorFrameSet,
 	const sigma = options.rejectionSigma ?? 5
 	if (!Number.isFinite(sigma) || sigma <= 0) throw new RangeError('defect rejection sigma must be finite and positive')
 
-	const darkMeans = new SensorRobustReservoir(capacity)
-	const darkVariances = new SensorRobustReservoir(capacity)
-	const responses = new SensorRobustReservoir(capacity)
+	const darkMeans = new RobustReservoir(capacity)
+	const darkVariances = new RobustReservoir(capacity)
+	const responses = new RobustReservoir(capacity)
 	const sourceWidth = reference.metadata.width
 	const darkStatistics = new Float64Array(3)
 	const flatStatistics = new Float64Array(3)
@@ -171,9 +171,9 @@ export function measureSensorDefects(dark: SensorFrameSet, flat: SensorFrameSet,
 	const responseCenter = responses.median()
 	if (!Number.isFinite(darkCenter) || !Number.isFinite(varianceCenter) || !Number.isFinite(responseCenter)) throw new RangeError('defect analysis has no finite stack statistics')
 
-	const darkDeviations = new SensorRobustReservoir(capacity)
-	const varianceDeviations = new SensorRobustReservoir(capacity)
-	const responseDeviations = new SensorRobustReservoir(capacity)
+	const darkDeviations = new RobustReservoir(capacity)
+	const varianceDeviations = new RobustReservoir(capacity)
+	const responseDeviations = new RobustReservoir(capacity)
 	for (let y = 0; y < geometry.height; y++) {
 		const sourceY = geometry.sourceTop + y * geometry.step
 		for (let x = 0; x < geometry.width; x++) {
