@@ -204,10 +204,12 @@ export interface FlatSpatialAnalysis {
 	readonly illuminationCenterConfidence?: number
 	// Degree-two scalar illumination model fitted to valid tile centers.
 	readonly model?: ScalarSurfaceModel
-	// Requested fitted illumination values in row-major plane-independent image coordinates.
+	// Requested fitted illumination values on the full row-major image-pixel grid over area.
 	readonly illuminationMap?: Float32Array
-	// Requested sample/illumination minus one values in row-major image coordinates.
+	// Requested sample/illumination minus one values on the full row-major image-pixel grid over area.
 	readonly residualMap?: Float32Array
+	// Residual-map validity, one for finite unmasked plane samples and zero for unavailable entries.
+	readonly residualMapValidity?: Uint8Array
 }
 
 // Transparent policy check whose unknown state preserves missing evidence.

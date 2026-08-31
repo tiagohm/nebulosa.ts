@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { resolveAnalysisArea, resolveImageAnalysisPlanes, resolveImagePlaneGeometry, validateDigitalImageLayout } from '../../../src/imaging/analysis/plane'
+import { resolveAnalysisArea, resolveImageAnalysisPlanes, resolveImagePlaneGeometry, resolveOptionalImagePlaneGeometry, validateDigitalImageLayout } from '../../../src/imaging/analysis/plane'
 import type { CfaPattern, DigitalImage } from '../../../src/imaging/model/types'
 import { generateSyntheticFlatImage } from '../../../src/imaging/synthetic/flat'
 
@@ -66,4 +66,11 @@ test('distinguishes an already local CFA pattern from one explicitly shifted onc
 	const basePattern = { ...local, metadata: { ...local.metadata, bayer: 'RGGB' as const } }
 	expect(resolveImagePlaneGeometry(basePattern, area, 'red', [1, 1])).toMatchObject({ sourceLeft: 1, sourceTop: 1, rawStart: 3, cfaPattern: 'BGGR' })
 	expect(resolveImagePlaneGeometry(basePattern, area, 'red')).toMatchObject({ sourceLeft: 0, sourceTop: 0, rawStart: 0, cfaPattern: 'RGGB' })
+})
+
+test('reports an unsupported CFA tile without weakening the strict geometry resolver', () => {
+	const image = generateSyntheticFlatImage({ width: 2, height: 2, bayer: 'RGGB', bias: 0, signal: 1, vignetting: 0 })
+	const oneRedPixel = { left: 0, top: 0, right: 1, bottom: 1 }
+	expect(resolveOptionalImagePlaneGeometry(image, oneRedPixel, 'blue')).toBeUndefined()
+	expect(() => resolveImagePlaneGeometry(image, oneRedPixel, 'blue')).toThrow('no samples')
 })

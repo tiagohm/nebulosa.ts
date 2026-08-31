@@ -2,12 +2,13 @@ import { exposureTimeKeyword } from '../../../io/formats/fits/util'
 import type { Rect } from '../../../math/numerical/geometry'
 import type { DigitalImage } from '../../model/types'
 import { resolveAnalysisArea, resolveImageAnalysisPlanes, resolveLocalCfaPattern, validateDigitalImageLayout } from '../plane'
+import { analyzeFlatSpatial } from './spatial'
 import { measureFlatRegion, resolveFlatClippingLimits, type FlatRegionMeasurement } from './statistics'
 import type { FlatAnalysis, FlatAnalysisInput, FlatAnalysisOptions, FlatAssessment, FlatCheck, FlatClipping, FlatDiagnostic, FlatDiagnosticCode, FlatFrame, FlatImageContext, FlatPlane, FlatPlaneAnalysis, FlatReference, FlatSampleStatistics, FlatTarget } from './types'
 
-// Single-frame digital flat analysis façade. The MVP measures robust target-area levels, full-area
-// observed clipping, optional in-line pedestal correction, and transparent configured checks without
-// allocating full-resolution planes or maps. Spatial fields are populated by the later spatial phase.
+// Single-frame digital flat analysis facade. It measures target levels, clipping, optional in-line
+// pedestal correction, robust spatial structure, and transparent configured checks. Full-resolution
+// selected-plane maps are allocated only when explicitly requested.
 
 // Absolute exposure tolerance used in addition to the relative dark-flat match tolerance, seconds.
 const FLAT_REFERENCE_EXPOSURE_ABSOLUTE_TOLERANCE = 1e-9
@@ -94,16 +95,26 @@ export function analyzeFlat(input: FlatAnalysisInput, options: Partial<FlatAnaly
 
 		const target = evaluateTarget(options.criteria?.targets?.[plane], targetMeasurement.observed, targetMeasurement.corrected)
 		appendPlaneDiagnostics(diagnostics, plane, targetMeasurement, fullMeasurement, target, options.criteria?.targets?.[plane])
+		const spatial = analyzeFlatSpatial({
+			image,
+			cfaOffset: resolved.cfaOffset,
+			reference,
+			referenceCfaOffset: resolved.referenceCfaOffset,
+			mask: input.mask,
+			area: resolved.area,
+			plane,
+			options,
+			clippingLimits,
+			fullMeasurement,
+		})
+		diagnostics.push(...spatial.diagnostics)
 		planeAnalyses.push({
 			plane,
 			observed: targetMeasurement.observed,
 			corrected: targetMeasurement.corrected,
 			clipping: fullMeasurement.clipping,
 			target,
-			spatial: {
-				basis: reference ? 'corrected' : 'observed',
-				tiles: [],
-			},
+			spatial: spatial.analysis,
 		})
 	}
 
@@ -363,11 +374,11 @@ function assessFlat(planes: readonly FlatPlaneAnalysis[], fullMeasurements: read
 	const configuredTargets = planes.filter((plane) => options.criteria?.targets?.[plane.plane] !== undefined).map((plane) => plane.target)
 	const target = aggregateChecks(configuredTargets)
 	const clipping = assessClipping(
-		fullMeasurements.map((measurement) => measurement.clipping),
+		planes.flatMap((plane, index) => [fullMeasurements[index].clipping, ...plane.spatial.tiles.map((tile) => tile.clipping)]),
 		options.criteria?.maximumClippedFraction,
 	)
 	const finiteSamples = assessFiniteSamples(
-		fullMeasurements.map((measurement) => measurement.observed),
+		planes.flatMap((plane, index) => [fullMeasurements[index].observed, ...plane.spatial.tiles.map((tile) => tile.observed)]),
 		options.criteria?.maximumNonFiniteFraction,
 	)
 	const required: FlatCheck[] = []

@@ -85,6 +85,14 @@ export function resolveImageAnalysisPlanes(image: DigitalImage): readonly ImageA
 
 // Maps one selected mono, RGB, or CFA plane inside an area to dense grid and raw-buffer increments.
 export function resolveImagePlaneGeometry(image: DigitalImage, area: Readonly<Rect>, plane: ImageAnalysisPlane, cfaOffset?: readonly [number, number]): ImagePlaneGeometry {
+	const geometry = resolveOptionalImagePlaneGeometry(image, area, plane, cfaOffset)
+	if (!geometry) throw new RangeError('selected CFA plane has no samples inside the analysis area')
+	return geometry
+}
+
+// Maps one selected image plane to grid increments, returning undefined only when a valid CFA plane has
+// no sample in the area. Invalid layouts, rectangles, offsets, and plane selections still throw.
+export function resolveOptionalImagePlaneGeometry(image: DigitalImage, area: Readonly<Rect>, plane: ImageAnalysisPlane, cfaOffset?: readonly [number, number]): ImagePlaneGeometry | undefined {
 	validateDigitalImageLayout(image)
 	const resolvedArea = resolveAnalysisArea(area, image.metadata.width, image.metadata.height)
 	const pattern = resolveLocalCfaPattern(image, cfaOffset)
@@ -118,7 +126,7 @@ export function resolveImagePlaneGeometry(image: DigitalImage, area: Readonly<Re
 	if ((sourceTop & 1) !== slot >>> 1) sourceTop++
 	const width = sourceLeft < resolvedArea.right ? Math.floor((resolvedArea.right - 1 - sourceLeft) / 2) + 1 : 0
 	const height = sourceTop < resolvedArea.bottom ? Math.floor((resolvedArea.bottom - 1 - sourceTop) / 2) + 1 : 0
-	if (width <= 0 || height <= 0) throw new RangeError('selected CFA plane has no samples inside the analysis area')
+	if (width <= 0 || height <= 0) return undefined
 
 	return {
 		sourceLeft,

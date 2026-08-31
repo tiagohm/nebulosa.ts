@@ -9,7 +9,8 @@ test('computes exact mean, median, and MAD for a small constant flat', () => {
 	const statistics = result.planes[0].observed
 
 	expect(statistics).toEqual({ count: 12, masked: 0, nonFinite: 0, minimum: 1000, maximum: 1000, mean: 1000, median: 1000, mad: 0, retainedSamples: 12, approximate: false })
-	expect(result.planes[0].spatial).toEqual({ basis: 'observed', tiles: [] })
+	expect(result.planes[0].spatial).toMatchObject({ basis: 'observed', uniformity: 1, centerLevel: 1000 })
+	expect(result.planes[0].spatial.tiles).toHaveLength(1)
 	expect(result.assessment.verdict).toBe('inconclusive')
 })
 
