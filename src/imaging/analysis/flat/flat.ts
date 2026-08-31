@@ -1,10 +1,9 @@
-import { exposureTimeKeyword } from '../../../io/formats/fits/util'
 import type { Rect } from '../../../math/numerical/geometry'
-import type { DigitalImage } from '../../model/types'
 import { resolveAnalysisArea, resolveImageAnalysisPlanes, resolveLocalCfaPattern, validateDigitalImageLayout } from '../plane'
+import { hasIncompleteFlatHeaderCfaOffset, resolveFlatAcquisitionMetadata, resolveFlatContextCfaOffset, resolveFlatFrameExposure, sameFlatMetadataValue } from './context'
 import { analyzeFlatSpatial } from './spatial'
 import { measureFlatRegion, resolveFlatClippingLimits, type FlatRegionMeasurement } from './statistics'
-import type { FlatAnalysis, FlatAnalysisInput, FlatAnalysisOptions, FlatAssessment, FlatCheck, FlatClipping, FlatDiagnostic, FlatDiagnosticCode, FlatFrame, FlatImageContext, FlatPlane, FlatPlaneAnalysis, FlatReference, FlatSampleStatistics, FlatTarget } from './types'
+import type { FlatAnalysis, FlatAnalysisInput, FlatAnalysisOptions, FlatAssessment, FlatCheck, FlatClipping, FlatDiagnostic, FlatDiagnosticCode, FlatFrame, FlatPlane, FlatPlaneAnalysis, FlatReference, FlatSampleStatistics, FlatTarget } from './types'
 
 // Single-frame digital flat analysis facade. It measures target levels, clipping, optional in-line
 // pedestal correction, robust spatial structure, and transparent configured checks. Full-resolution
@@ -18,24 +17,6 @@ const FLAT_REFERENCE_EXPOSURE_RELATIVE_TOLERANCE = 1e-6
 
 // Every physical plane accepted by the flat-analysis contracts.
 const FLAT_PLANES: ReadonlySet<FlatPlane> = new Set(['mono', 'red', 'green', 'green1', 'green2', 'blue'])
-
-// Operating-point fields resolved from explicit metadata first and FITS headers second.
-interface ResolvedAcquisitionMetadata {
-	// Camera gain setting in device-native units.
-	readonly gain?: number
-	// Camera offset setting in device-native units.
-	readonly offset?: number
-	// Camera-specific readout-mode identifier.
-	readonly readoutMode?: string
-	// Horizontal and vertical hardware binning factors.
-	readonly binning?: readonly [number, number]
-	// Sensor-space ROI origin in unbinned pixels.
-	readonly sensorOrigin?: readonly [number, number]
-	// Camera identifier.
-	readonly camera?: string
-	// Effective ADC or output bit depth.
-	readonly bitDepth?: number
-}
 
 // Fully resolved and validated single-frame analysis context.
 interface ResolvedFlatAnalysisInput {
@@ -152,12 +133,12 @@ function resolveFlatAnalysisInput(input: FlatAnalysisInput, options: Partial<Fla
 	}
 	validateTargets(options, unique)
 
-	const cfaOffset = resolveContextCfaOffset(input.frame)
+	const cfaOffset = resolveFlatContextCfaOffset(input.frame)
 	resolveLocalCfaPattern(image, cfaOffset)
 	let referenceCfaOffset: readonly [number, number] | undefined
 	let referenceMetadataUnknown = false
 	if (input.reference) {
-		referenceCfaOffset = resolveContextCfaOffset(input.reference)
+		referenceCfaOffset = resolveFlatContextCfaOffset(input.reference)
 		referenceMetadataUnknown = validateFlatReference(input.frame, cfaOffset, input.reference, referenceCfaOffset)
 	}
 
@@ -208,7 +189,7 @@ function validateFlatFrameMetadata(frame: FlatFrame): void {
 	if (frame.exposure !== undefined && (!Number.isFinite(frame.exposure) || frame.exposure <= 0)) throw new RangeError('flat exposure must be finite and positive')
 	if (frame.timestamp !== undefined && !Number.isFinite(frame.timestamp)) throw new RangeError('flat timestamp must be finite Unix milliseconds')
 	if (frame.illumination?.brightness !== undefined && !Number.isFinite(frame.illumination.brightness)) throw new RangeError('flat illumination brightness must be finite')
-	resolveAcquisitionMetadata(frame)
+	resolveFlatAcquisitionMetadata(frame)
 }
 
 // Validates a reference against geometry, local CFA phase, affine DN scale, acquisition, and exposure.
@@ -222,7 +203,7 @@ function validateFlatReference(frame: FlatFrame, frameCfaOffset: readonly [numbe
 	const referencePattern = resolveLocalCfaPattern(master, referenceCfaOffset)
 	if (framePattern !== referencePattern) throw new RangeError('flat reference local CFA pattern must match the flat')
 
-	let metadataUnknown = hasIncompleteHeaderCfaOffset(frame) || hasIncompleteHeaderCfaOffset(reference)
+	let metadataUnknown = hasIncompleteFlatHeaderCfaOffset(frame) || hasIncompleteFlatHeaderCfaOffset(reference)
 	if (image.digitalRange && master.digitalRange) {
 		if (image.digitalRange[0] !== master.digitalRange[0] || image.digitalRange[1] !== master.digitalRange[1]) throw new RangeError('flat reference digital range must match the flat when both are known')
 	} else metadataUnknown = true
@@ -230,95 +211,29 @@ function validateFlatReference(frame: FlatFrame, frameCfaOffset: readonly [numbe
 		if (image.quantizationStep !== master.quantizationStep) throw new RangeError('flat reference quantization step must match the flat when both are known')
 	} else metadataUnknown = true
 
-	const frameMetadata = resolveAcquisitionMetadata(frame)
-	const referenceMetadata = resolveAcquisitionMetadata(reference)
+	const frameMetadata = resolveFlatAcquisitionMetadata(frame)
+	const referenceMetadata = resolveFlatAcquisitionMetadata(reference)
 	for (const key of ['gain', 'offset', 'readoutMode', 'binning'] as const) {
 		const flatValue = frameMetadata[key]
 		const referenceValue = referenceMetadata[key]
 		if (flatValue === undefined || referenceValue === undefined) metadataUnknown = true
-		else if (!sameMetadataValue(flatValue, referenceValue)) throw new RangeError(`flat reference ${key} must match the flat`)
+		else if (!sameFlatMetadataValue(flatValue, referenceValue)) throw new RangeError(`flat reference ${key} must match the flat`)
 	}
 	for (const key of ['sensorOrigin', 'camera', 'bitDepth'] as const) {
 		const flatValue = frameMetadata[key]
 		const referenceValue = referenceMetadata[key]
-		if (flatValue !== undefined && referenceValue !== undefined && !sameMetadataValue(flatValue, referenceValue)) throw new RangeError(`flat reference ${key} must match the flat when both are known`)
+		if (flatValue !== undefined && referenceValue !== undefined && !sameFlatMetadataValue(flatValue, referenceValue)) throw new RangeError(`flat reference ${key} must match the flat when both are known`)
 	}
 
 	if (reference.kind === 'darkFlat') {
 		if (!Number.isFinite(reference.exposure) || reference.exposure <= 0) throw new RangeError('dark-flat reference exposure must be finite and positive')
-		const flatExposure = resolveFrameExposure(frame)
+		const flatExposure = resolveFlatFrameExposure(frame)
 		if (flatExposure === undefined) throw new RangeError('dark-flat subtraction requires a resolved flat exposure')
 		const tolerance = Math.max(FLAT_REFERENCE_EXPOSURE_ABSOLUTE_TOLERANCE, Math.max(flatExposure, reference.exposure) * FLAT_REFERENCE_EXPOSURE_RELATIVE_TOLERANCE)
 		if (Math.abs(flatExposure - reference.exposure) > tolerance) throw new RangeError('dark-flat reference exposure must match the flat without scaling')
 	}
 
 	return metadataUnknown
-}
-
-// Resolves explicit acquisition metadata first and then known FITS keywords, validating explicit fields.
-function resolveAcquisitionMetadata(context: FlatImageContext): ResolvedAcquisitionMetadata {
-	const point = context.operatingPoint
-	const header = context.image.header
-	if (point?.gain !== undefined && !Number.isFinite(point.gain)) throw new RangeError('flat operating-point gain must be finite')
-	if (point?.offset !== undefined && !Number.isFinite(point.offset)) throw new RangeError('flat operating-point offset must be finite')
-	if (point?.bitDepth !== undefined && (!Number.isInteger(point.bitDepth) || point.bitDepth <= 0)) throw new RangeError('flat operating-point bit depth must be a positive integer')
-	if (point?.temperature !== undefined && !Number.isFinite(point.temperature)) throw new RangeError('flat operating-point temperature must be finite')
-	if (point?.binning && (!Number.isInteger(point.binning[0]) || point.binning[0] <= 0 || !Number.isInteger(point.binning[1]) || point.binning[1] <= 0)) throw new RangeError('flat operating-point binning must contain positive integers')
-	if (point?.sensorOrigin && (!Number.isInteger(point.sensorOrigin[0]) || point.sensorOrigin[0] < 0 || !Number.isInteger(point.sensorOrigin[1]) || point.sensorOrigin[1] < 0)) throw new RangeError('flat operating-point sensor origin must contain non-negative integers')
-	if (point?.size && (!Number.isInteger(point.size.width) || point.size.width <= 0 || !Number.isInteger(point.size.height) || point.size.height <= 0 || point.size.width !== context.image.metadata.width || point.size.height !== context.image.metadata.height))
-		throw new RangeError('flat operating-point size must match the image dimensions')
-
-	return {
-		gain: point?.gain ?? finiteHeaderNumber(header.GAIN),
-		offset: point?.offset ?? finiteHeaderNumber(header.OFFSET),
-		readoutMode: point?.readoutMode ?? headerString(header.READOUTM),
-		binning: point?.binning ?? headerIntegerPair(header.XBINNING, header.YBINNING, true),
-		sensorOrigin: point?.sensorOrigin ?? headerIntegerPair(header.XORGSUBF, header.YORGSUBF, false),
-		camera: point?.camera,
-		bitDepth: point?.bitDepth,
-	}
-}
-
-// Resolves a caller-provided CFA offset or a complete integer XBAYROFF/YBAYROFF header pair.
-function resolveContextCfaOffset(context: FlatImageContext): readonly [number, number] | undefined {
-	if (context.cfaOffset !== undefined) return context.cfaOffset
-	return headerIntegerPair(context.image.header.XBAYROFF, context.image.header.YBAYROFF, false)
-}
-
-// Reports incomplete or malformed FITS Bayer-offset metadata that cannot prove local phase.
-function hasIncompleteHeaderCfaOffset(context: FlatImageContext): boolean {
-	if (context.cfaOffset !== undefined || context.image.metadata.bayer === undefined) return false
-	const x = context.image.header.XBAYROFF
-	const y = context.image.header.YBAYROFF
-	return (x !== undefined || y !== undefined) && headerIntegerPair(x, y, false) === undefined
-}
-
-// Resolves explicit or FITS exposure metadata, returning undefined when neither is finite and positive.
-function resolveFrameExposure(frame: FlatFrame): number | undefined {
-	const exposure = frame.exposure ?? exposureTimeKeyword(frame.image.header, undefined)
-	return exposure !== undefined && Number.isFinite(exposure) && exposure > 0 ? exposure : undefined
-}
-
-// Narrows one FITS value to a finite scalar number.
-function finiteHeaderNumber(value: unknown): number | undefined {
-	return typeof value === 'number' && Number.isFinite(value) ? value : undefined
-}
-
-// Narrows one FITS value to a non-empty string.
-function headerString(value: unknown): string | undefined {
-	return typeof value === 'string' && value.length > 0 ? value : undefined
-}
-
-// Resolves a complete integer FITS pair, optionally requiring both values to be positive.
-function headerIntegerPair(first: unknown, second: unknown, positive: boolean): readonly [number, number] | undefined {
-	if (typeof first !== 'number' || typeof second !== 'number' || !Number.isInteger(first) || !Number.isInteger(second)) return undefined
-	if (positive ? first <= 0 || second <= 0 : first < 0 || second < 0) return undefined
-	return [first, second]
-}
-
-// Compares scalar or two-element acquisition metadata without coercion.
-function sameMetadataValue(first: number | string | readonly [number, number], second: number | string | readonly [number, number]): boolean {
-	return Array.isArray(first) && Array.isArray(second) ? first[0] === second[0] && first[1] === second[1] : first === second
 }
 
 // Evaluates one configured target against the robust median on its requested basis.

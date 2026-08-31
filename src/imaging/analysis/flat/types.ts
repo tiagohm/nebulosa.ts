@@ -342,3 +342,111 @@ export interface FlatExposureEstimate {
 	// Structured reasons for invalid or limited estimates.
 	readonly diagnostics: readonly FlatDiagnostic[]
 }
+
+// Input stack for temporal analysis of three or more nominally homogeneous final flats.
+export interface FlatSequenceInput {
+	// Frames in acquisition order; exposure-search ramps do not belong in this stack.
+	readonly frames: readonly [FlatFrame, FlatFrame, FlatFrame, ...FlatFrame[]]
+	// Optional bias or exposure-matched dark-flat master shared by every frame.
+	readonly reference?: FlatReference
+	// Optional row-major per-pixel exclusion mask shared by every frame.
+	readonly mask?: Readonly<Uint8Array>
+}
+
+// Explicit compatibility and temporal-stability policy for a flat sequence.
+export interface FlatSequenceOptions {
+	// Per-frame analysis options; full-resolution maps are forbidden in the sequence path.
+	readonly analysis?: Partial<Omit<FlatAnalysisOptions, 'maps'>>
+	// Maximum absolute exposure mismatch, seconds; defaults to numerical equality tolerance.
+	readonly exposureTolerance?: number
+	// Maximum sensor-temperature spread, degrees Celsius; omission does not require temperature.
+	readonly temperatureTolerance?: number
+	// Maximum robust fractional signal dispersion across frames.
+	readonly maximumSignalVariation?: number
+	// Maximum temporal dispersion at any normalized tile coordinate.
+	readonly maximumSpatialVariation?: number
+	// Maximum temporal dispersion at any normalized row or column coordinate.
+	readonly maximumProfileVariation?: number
+	// Maximum absolute fractional signal drift per frame index.
+	readonly maximumDriftPerFrame?: number
+	// Maximum absolute fractional signal drift per elapsed second.
+	readonly maximumDriftPerSecond?: number
+	// Positive robust score threshold that makes a multivariate frame an outlier.
+	readonly outlierSigma?: number
+}
+
+// Reduced per-plane frame representation retained by temporal analysis.
+export interface FlatSignature {
+	// Positive observed or pedestal-corrected robust signal, in digital numbers.
+	readonly signal: number
+	// Row-major tile levels normalized by signal; NaN marks unavailable support.
+	readonly tiles: Float32Array
+	// Selected-plane row means normalized by signal and centered on zero.
+	readonly rowProfile: Float32Array
+	// Selected-plane column means normalized by signal and centered on zero.
+	readonly columnProfile: Float32Array
+}
+
+// Per-frame temporal result preserving acquisition order and caller identity.
+export interface FlatSequenceFrameAnalysis {
+	// Zero-based acquisition-order index.
+	readonly index: number
+	// Caller-defined frame identifier.
+	readonly id?: string
+	// Result after configured frame, temporal, and outlier checks.
+	readonly status: 'accepted' | 'rejected' | 'inconclusive'
+	// Stable diagnostic codes explaining rejection or missing evidence.
+	readonly reasons: readonly FlatDiagnosticCode[]
+}
+
+// Temporal stability measurements for one physical image plane.
+export interface FlatSequencePlaneAnalysis {
+	// Physical mono, RGB, or CFA plane.
+	readonly plane: FlatPlane
+	// Signal and signature basis shared by every frame.
+	readonly basis: 'observed' | 'corrected'
+	// Robust median signal across frames, in digital numbers.
+	readonly medianSignal?: number
+	// Scaled-MAD signal dispersion divided by absolute median signal.
+	readonly signalVariation?: number
+	// Worst scaled-MAD dispersion among normalized tile coordinates.
+	readonly spatialVariation?: number
+	// Worst scaled-MAD dispersion among normalized selected-plane rows.
+	readonly rowVariation?: number
+	// Worst scaled-MAD dispersion among normalized selected-plane columns.
+	readonly columnVariation?: number
+	// Signed robust signal slope divided by median signal, per frame index.
+	readonly driftPerFrame?: number
+	// Signed robust signal slope divided by median signal, per elapsed second.
+	readonly driftPerSecond?: number
+	// Zero-based frame indices exceeding the configured multivariate score threshold.
+	readonly outliers: readonly number[]
+}
+
+// Aggregate transparent checks for a final flat sequence.
+export interface FlatSequenceAssessment {
+	// Accepted, rejected, or inconclusive aggregate result.
+	readonly verdict: 'accepted' | 'rejected' | 'inconclusive'
+	// Aggregate configured per-frame quality and outlier check.
+	readonly frameQuality: FlatCheck
+	// Aggregate configured signal-variation and drift check.
+	readonly signalStability: FlatCheck
+	// Aggregate configured normalized-tile stability check.
+	readonly spatialStability: FlatCheck
+	// Aggregate configured row and column stability check.
+	readonly profileStability: FlatCheck
+	// Stable diagnostic codes contributing to the verdict.
+	readonly reasons: readonly FlatDiagnosticCode[]
+}
+
+// Complete temporal analysis of a nominally homogeneous final flat stack.
+export interface FlatSequenceAnalysis {
+	// Per-frame results in original acquisition order.
+	readonly frames: readonly FlatSequenceFrameAnalysis[]
+	// Per-plane temporal metrics in single-frame analysis order.
+	readonly planes: readonly FlatSequencePlaneAnalysis[]
+	// Transparent aggregate policy result.
+	readonly assessment: FlatSequenceAssessment
+	// Structured compatibility, stability, and outlier diagnostics.
+	readonly diagnostics: readonly FlatDiagnostic[]
+}
