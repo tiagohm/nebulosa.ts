@@ -10,7 +10,7 @@ import type { FlatAnalysis, FlatAnalysisInput, FlatAnalysisOptions, FlatAssessme
 // selected-plane maps are allocated only when explicitly requested.
 
 // Absolute exposure tolerance used in addition to the relative dark-flat match tolerance, seconds.
-const FLAT_REFERENCE_EXPOSURE_ABSOLUTE_TOLERANCE = 1e-9
+const FLAT_REFERENCE_EXPOSURE_ABSOLUTE_TOLERANCE = 1e-6
 
 // Relative exposure tolerance for matching a dark-flat master to its flat.
 const FLAT_REFERENCE_EXPOSURE_RELATIVE_TOLERANCE = 1e-6
@@ -166,6 +166,21 @@ function validateFlatOptions(options: Partial<FlatAnalysisOptions>, storageRange
 		['maximum non-finite fraction', options.criteria?.maximumNonFiniteFraction],
 	] as const) {
 		if (value !== undefined && (!Number.isFinite(value) || value < 0 || value > 1)) throw new RangeError(`${name} must be finite and in [0, 1]`)
+	}
+
+	const artifacts = options.artifacts
+	if (artifacts !== undefined) {
+		if (typeof artifacts !== 'object' || artifacts === null) throw new TypeError('flat artifact options must be an object')
+		if (artifacts.profiles !== undefined && typeof artifacts.profiles !== 'boolean') throw new TypeError('flat artifact profiles option must be boolean')
+		const dust = artifacts.dust
+		if (dust !== undefined && typeof dust !== 'boolean' && (typeof dust !== 'object' || dust === null)) throw new TypeError('flat dust options must be boolean or an object')
+		if (typeof dust === 'object' && dust !== null) {
+			if (dust.scales !== undefined && (dust.scales.length !== 3 || !dust.scales.every((value) => Number.isFinite(value) && value > 0) || dust.scales[0] >= dust.scales[1] || dust.scales[1] >= dust.scales[2]))
+				throw new RangeError('flat dust scales must contain three strictly increasing positive finite image-pixel scales')
+			if (dust.minimumContrast !== undefined && (!Number.isFinite(dust.minimumContrast) || dust.minimumContrast <= 0 || dust.minimumContrast > 1)) throw new RangeError('flat dust minimum contrast must be finite and in (0, 1]')
+			if (dust.minimumArea !== undefined && (!Number.isFinite(dust.minimumArea) || dust.minimumArea <= 0)) throw new RangeError('flat dust minimum area must be finite and positive')
+			if (dust.maximumCandidates !== undefined && (!Number.isInteger(dust.maximumCandidates) || dust.maximumCandidates <= 0 || dust.maximumCandidates > 65536)) throw new RangeError('flat dust maximum candidates must be a positive integer no greater than 65536')
+		}
 	}
 }
 

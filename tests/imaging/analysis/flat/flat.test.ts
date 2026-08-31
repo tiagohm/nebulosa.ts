@@ -112,6 +112,8 @@ test('rejects incompatible references and never scales a dark-flat', () => {
 	expect(() => analyzeFlat({ frame: { image, exposure: 1 }, reference: { kind: 'darkFlat', image: darkFlat, exposure: 2 } })).toThrow('without scaling')
 	const matched = analyzeFlat({ frame: { image, exposure: 1 }, reference: { kind: 'darkFlat', image: darkFlat, exposure: 1 } })
 	expect(matched.planes[0].corrected?.median).toBe(900)
+	const rounded = analyzeFlat({ frame: { image, exposure: 0.008808594 }, reference: { kind: 'darkFlat', image: darkFlat, exposure: 0.008808 } })
+	expect(rounded.planes[0].corrected?.median).toBe(900)
 
 	const ranged = generateSyntheticFlatImage({ width: 2, height: 2, bias: 100, signal: 900, vignetting: 0, lowerClip: 0, upperClip: 65535 })
 	const otherRange = generateSyntheticFlatImage({ width: 2, height: 2, bias: 100, signal: 0, vignetting: 0, lowerClip: 0, upperClip: 4095 })

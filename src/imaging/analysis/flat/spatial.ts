@@ -3,6 +3,7 @@ import type { Point, Rect } from '../../../math/numerical/geometry'
 import type { DigitalImage } from '../../model/types'
 import { createScalarSurfaceEvaluator, createScalarSurfacePointEvaluator, createSurfaceColumnTable, fitScalarSurface, type ScalarSurfaceModel, type SurfaceSample } from '../../processing/surface'
 import { resolveImagePlaneGeometry, resolveOptionalImagePlaneGeometry } from '../plane'
+import { detectFlatDustCandidates, measureFlatProfiles } from './artifacts'
 import { measureFlatRegion, type FlatRegionMeasurement, type ResolvedFlatClippingLimits } from './statistics'
 import type { FlatAnalysisOptions, FlatDiagnostic, FlatPlane, FlatSampleStatistics, FlatSpatialAnalysis, FlatTile } from './types'
 
@@ -164,8 +165,13 @@ export function analyzeFlatSpatial(input: FlatSpatialInput): FlatSpatialResult {
 	const firstStatistics = basis === 'corrected' ? samples[0].tile.corrected! : samples[0].tile.observed
 	const center = illuminationCenter(fit.model, input.area, tiles, medianFinite(levels), tileDispersionFloor(input, firstStatistics))
 	if (!center) diagnostics.push({ severity: 'info', code: 'illuminationCenterUnknown', message: 'The fitted illumination surface has no well-conditioned concave interior maximum.', plane: input.plane })
-	const maps = materializeSpatialMaps(input, fit.model)
+	const configuredDust = input.options.artifacts?.dust
+	const dustRequested = configuredDust === true || (typeof configuredDust === 'object' && configuredDust !== null)
+	const maps = materializeSpatialMaps(input, fit.model, dustRequested)
 	if (maps.failed) diagnostics.push({ severity: 'warning', code: 'illuminationFitFailed', message: 'A requested spatial map exceeded finite Float32 output range and was omitted.', plane: input.plane })
+	const profiles = input.options.artifacts?.profiles ? measureFlatProfiles(input, fit.model) : undefined
+	const dustCandidates = dustRequested && maps.residual && maps.validity ? detectFlatDustCandidates(input, maps.residual, maps.validity, configuredDust === true ? true : configuredDust) : undefined
+	const exposeResidual = input.options.maps === 'residual' || input.options.maps === 'all'
 
 	return {
 		analysis: {
@@ -177,8 +183,10 @@ export function analyzeFlatSpatial(input: FlatSpatialInput): FlatSpatialResult {
 			illuminationCenterConfidence: center?.confidence,
 			model: fit.model,
 			illuminationMap: maps.illumination,
-			residualMap: maps.residual,
-			residualMapValidity: maps.validity,
+			residualMap: exposeResidual ? maps.residual : undefined,
+			residualMapValidity: exposeResidual ? maps.validity : undefined,
+			profiles,
+			dustCandidates,
 		},
 		diagnostics,
 	}
@@ -351,10 +359,10 @@ function illuminationCenter(model: ScalarSurfaceModel, area: Readonly<Rect>, til
 
 // Materializes requested maps on the full image-pixel grid over area, carrying validity for residual
 // gaps such as masks, non-finite values, and pixels belonging to other CFA planes.
-function materializeSpatialMaps(input: FlatSpatialInput, model: ScalarSurfaceModel): { readonly illumination?: Float32Array; readonly residual?: Float32Array; readonly validity?: Uint8Array; readonly failed: boolean } {
+function materializeSpatialMaps(input: FlatSpatialInput, model: ScalarSurfaceModel, retainArtifactResidual: boolean): { readonly illumination?: Float32Array; readonly residual?: Float32Array; readonly validity?: Uint8Array; readonly failed: boolean } {
 	const selection = input.options.maps ?? 'none'
 	const retainIllumination = selection === 'illumination' || selection === 'all'
-	const retainResidual = selection === 'residual' || selection === 'all'
+	const retainResidual = selection === 'residual' || selection === 'all' || retainArtifactResidual
 	if (!retainIllumination && !retainResidual) return { failed: false }
 
 	const geometry = resolveImagePlaneGeometry(input.image, input.area, input.plane, input.cfaOffset)

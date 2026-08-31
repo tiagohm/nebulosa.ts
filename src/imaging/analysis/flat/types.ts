@@ -112,6 +112,8 @@ export interface FlatAnalysisOptions {
 	readonly rejectionSigma?: number
 	// Full-resolution spatial maps to retain; none avoids image-sized output allocations.
 	readonly maps?: 'none' | 'illumination' | 'residual' | 'all'
+	// Optional descriptive profiles and smooth-depression candidates; neither affects the verdict.
+	readonly artifacts?: FlatArtifactOptions
 }
 
 // Default rejection and allocation policy for flat analysis.
@@ -119,6 +121,34 @@ export const DEFAULT_FLAT_ANALYSIS_OPTIONS = {
 	rejectionSigma: 4,
 	maps: 'none',
 } as const satisfies Partial<FlatAnalysisOptions>
+
+// Configuration for optional multiscale smooth-depression candidate detection.
+export interface FlatDustDetectionOptions {
+	// Three strictly increasing Gaussian dilation scales in output image pixels.
+	readonly scales?: readonly [small: number, medium: number, large: number]
+	// Minimum fractional attenuation represented by a candidate.
+	readonly minimumContrast?: number
+	// Minimum connected support area in square output pixels.
+	readonly minimumArea?: number
+	// Maximum strongest candidates retained per plane.
+	readonly maximumCandidates?: number
+}
+
+// Default bounded multiscale candidate-detection policy.
+export const DEFAULT_FLAT_DUST_DETECTION_OPTIONS = {
+	scales: [2, 4, 8],
+	minimumContrast: 0.02,
+	minimumArea: 16,
+	maximumCandidates: 64,
+} as const satisfies Required<FlatDustDetectionOptions>
+
+// Optional non-causal spatial inspection products.
+export interface FlatArtifactOptions {
+	// Retain detrended selected-plane row and column profiles.
+	readonly profiles?: boolean
+	// Detect smooth dark candidates with defaults or caller-supplied bounded settings.
+	readonly dust?: boolean | Partial<FlatDustDetectionOptions>
+}
 
 // Robust summary of finite, non-masked samples in one region and plane.
 export interface FlatSampleStatistics {
@@ -210,6 +240,48 @@ export interface FlatSpatialAnalysis {
 	readonly residualMap?: Float32Array
 	// Residual-map validity, one for finite unmasked plane samples and zero for unavailable entries.
 	readonly residualMapValidity?: Uint8Array
+	// Optional static detrended row and column profiles.
+	readonly profiles?: FlatProfiles
+	// Optional smooth dark-depression candidates without an assigned optical cause.
+	readonly dustCandidates?: readonly FlatDustCandidate[]
+}
+
+// One detrended axis profile and the robust strength of its supported values.
+export interface FlatAxisProfile {
+	// Dimensionless residual means in selected-plane row or column order; unsupported entries are zero.
+	readonly values: Float32Array
+	// One for supported profile entries and zero for entries without finite unmasked samples.
+	readonly validity: Uint8Array
+	// Scaled median absolute deviation of supported profile values.
+	readonly strength?: number
+	// Number of supported values retained for the robust strength estimate.
+	readonly retainedSamples: number
+	// True when strength used bounded sampling rather than every supported entry.
+	readonly approximate: boolean
+}
+
+// Static surface-detrended profiles for one physical image plane.
+export interface FlatProfiles {
+	// Profile over selected-plane rows in increasing image Y.
+	readonly row: FlatAxisProfile
+	// Profile over selected-plane columns in increasing image X.
+	readonly column: FlatAxisProfile
+}
+
+// One connected multiscale smooth-depression candidate in output image coordinates.
+export interface FlatDustCandidate {
+	// Response-weighted center in image pixels, with X rightward and Y downward.
+	readonly center: Readonly<Point>
+	// RMS semi-major support axis in output image pixels.
+	readonly semiMajor: number
+	// RMS semi-minor support axis in output image pixels.
+	readonly semiMinor: number
+	// Major-axis angle in image coordinates, radians clockwise in [0, PI).
+	readonly angle: number
+	// Largest measured fractional attenuation inside the component.
+	readonly contrast: number
+	// Approximate connected support area in square output pixels.
+	readonly supportArea: number
 }
 
 // Transparent policy check whose unknown state preserves missing evidence.
