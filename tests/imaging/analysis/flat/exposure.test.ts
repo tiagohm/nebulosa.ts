@@ -6,6 +6,14 @@ test('keeps an exposure whose current level is already inside the target', () =>
 	expect(result).toMatchObject({ status: 'accepted', method: 'none', recommendedExposure: 1, predictedLevel: 100 })
 })
 
+test('constrains a target-compatible exposure to the allowed range', () => {
+	const above = estimateFlatExposure({ observations: [{ exposure: 10, level: 500 }], levelMode: 'observed', targetRange: [400, 600], exposureRange: [1, 5] })
+	expect(above).toEqual({ status: 'aboveMaximum', method: 'none', recommendedExposure: 5, diagnostics: [] })
+
+	const below = estimateFlatExposure({ observations: [{ exposure: 0.5, level: 500 }], levelMode: 'observed', targetRange: [400, 600], exposureRange: [1, 5] })
+	expect(below).toEqual({ status: 'belowMinimum', method: 'none', recommendedExposure: 1, diagnostics: [] })
+})
+
 test('uses a through-origin ratio only for positive corrected signal', () => {
 	const result = estimateFlatExposure({ observations: [{ exposure: 1, level: 100 }], levelMode: 'corrected', targetRange: [190, 210], exposureRange: [0.1, 10] })
 	expect(result).toMatchObject({ status: 'increase', method: 'ratio', recommendedExposure: 2, predictedLevel: 200 })

@@ -26,6 +26,8 @@ export function estimateFlatExposure(input: FlatExposureInput): FlatExposureEsti
 	const current = input.observations.at(-1)!
 	const [targetMinimum, targetMaximum] = input.targetRange
 	if (current.level >= targetMinimum && current.level <= targetMaximum) {
+		if (current.exposure < input.exposureRange[0]) return { status: 'belowMinimum', method: 'none', recommendedExposure: input.exposureRange[0], diagnostics: [] }
+		if (current.exposure > input.exposureRange[1]) return { status: 'aboveMaximum', method: 'none', recommendedExposure: input.exposureRange[1], diagnostics: [] }
 		return { status: 'accepted', method: 'none', recommendedExposure: current.exposure, predictedLevel: current.level, diagnostics: [] }
 	}
 
