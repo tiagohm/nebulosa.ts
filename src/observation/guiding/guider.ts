@@ -785,8 +785,9 @@ function robustWeightedTranslation(dx: Float64Array, dy: Float64Array, weights: 
 		residual[i] = Math.sqrt(ddx * ddx + ddy * ddy)
 	}
 
-	const median = medianOf(residual.toSorted())
-	const mad = medianAbsoluteDeviationOf(residual, median, true)
+	const sortedResidual = residual.toSorted()
+	const median = medianOf(sortedResidual)
+	const mad = medianAbsoluteDeviationOf(sortedResidual, median, true, undefined, sortedResidual)
 	const scale = Math.max(mad, 1e-9)
 	const threshold = outlierSigma * scale
 	let kept = 0

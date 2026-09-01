@@ -1,4 +1,4 @@
-import { medianOf } from '../../../core/util'
+import { medianAbsoluteDeviationOf, medianBySelectionOf } from '../../../core/util'
 import { clamp } from '../../../math/numerical/math'
 import type { Image } from '../../model/types'
 import type { DetectStarOptions } from '../../stars/detector'
@@ -260,11 +260,10 @@ function collectMetricIndices(stars: readonly AberrationStar[], indices: readonl
 
 // Computes median and scaled MAD from indexed values with two compact typed-array sorts.
 function robustCenterScale(values: readonly IndexedMetricValue[]): { readonly center: number; readonly deviation: number } {
-	const sorted = new Float64Array(values.length)
-	for (let i = 0; i < values.length; i++) sorted[i] = values[i].value
-	const center = medianOf(sorted.sort())
-	for (let i = 0; i < sorted.length; i++) sorted[i] = Math.abs(sorted[i] - center)
-	return { center, deviation: 1.4826 * medianOf(sorted.sort()) }
+	const scratch = new Float64Array(values.length)
+	for (let i = 0; i < values.length; i++) scratch[i] = values[i].value
+	const center = medianBySelectionOf(scratch)
+	return { center, deviation: medianAbsoluteDeviationOf(scratch, center, true, undefined, scratch) }
 }
 
 // Computes support, per-metric counts, warnings, and bounded overall inspection confidence.

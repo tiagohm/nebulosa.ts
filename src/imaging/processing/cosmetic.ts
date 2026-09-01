@@ -1,4 +1,4 @@
-import { medianOf, quickSelect, STANDARD_DEVIATION_SCALE, standardDeviationOf } from '../../core/util'
+import { medianAbsoluteDeviationOf, medianBySelectionOf, STANDARD_DEVIATION_SCALE, standardDeviationOf } from '../../core/util'
 import { clamp, type NumberArray } from '../../math/numerical/math'
 import type { Image } from '../model/types'
 
@@ -134,11 +134,8 @@ interface BuiltDefectMask {
 // collapses to 0 (a near-constant plane), and to 0 only when the plane is genuinely constant. `values` and
 // `scratch` are reusable buffers of at least `count` elements, partitioned in place.
 function robustPlaneScale(values: Float64Array, count: number, scratch: Float64Array) {
-	const median = medianBySelection(values, count)
-
-	for (let i = 0; i < count; i++) scratch[i] = Math.abs(values[i] - median)
-	const mad = STANDARD_DEVIATION_SCALE * medianBySelection(scratch, count)
-
+	const median = medianBySelectionOf(values, count)
+	const mad = medianAbsoluteDeviationOf(values, median, true, count, scratch)
 	const scale = mad > 0 ? mad : standardDeviationOf(values, count)
 	return { median, scale: Number.isFinite(scale) ? scale : 0 } as const
 }
@@ -156,7 +153,7 @@ function lowerTailScale(values: Float64Array, count: number, median: number, scr
 	}
 
 	if (lowerCount < 2) return undefined
-	const scale = STANDARD_DEVIATION_SCALE * medianBySelection(scratch, lowerCount)
+	const scale = STANDARD_DEVIATION_SCALE * medianBySelectionOf(scratch, lowerCount)
 	return Number.isFinite(scale) ? scale : 0
 }
 
@@ -349,47 +346,6 @@ function buildProtectInfluenceMask(protectIndices: readonly number[], width: num
 	return influence
 }
 
-// Sorts a tiny prefix of `values` in ascending numeric order, matching TypedArray sort's practical NaN
-// placement by pushing NaNs to the high end. Used for 3x3 neighborhoods and very small robust samples.
-function sortSmallPrefix(values: Float64Array, count: number) {
-	for (let i = 1; i < count; i++) {
-		const value = values[i]
-		const valueIsNaN = Number.isNaN(value)
-		let j = i - 1
-
-		while (j >= 0) {
-			const previous = values[j]
-			if (!Number.isNaN(previous) ? valueIsNaN || previous <= value : valueIsNaN) break
-			values[j + 1] = previous
-			j--
-		}
-
-		values[j + 1] = value
-	}
-}
-
-// Median of the first `count` scratch values without a full sort. Even counts select both middle order
-// statistics to preserve the existing average-of-two contract.
-function medianBySelection(values: Float64Array, count: number) {
-	if (count <= SMALL_MEDIAN_SORT_LIMIT) {
-		sortSmallPrefix(values, count)
-		return medianOf(values, count)
-	}
-
-	const mid = count >>> 1
-	if ((count & 1) === 1) return quickSelect(values, count, mid)
-
-	const upper = quickSelect(values, count, mid)
-	// Selecting the upper median partitions the lower half into the prefix, so a linear max replaces
-	// a second full quickselect pass for even-sized buffers.
-	let lower = values[0]
-	for (let i = 1; i < mid; i++) {
-		const value = values[i]
-		if (value > lower) lower = value
-	}
-	return (lower + upper) * 0.5
-}
-
 // Median of eight non-NaN values using a fixed sorting network. The caller falls back to the small-sort
 // path when NaNs are present so the existing NaN-high ordering remains unchanged.
 function median8NoNaN(v0: number, v1: number, v2: number, v3: number, v4: number, v5: number, v6: number, v7: number) {
@@ -541,7 +497,7 @@ function neighborhoodMedianRadius1(plane: Float64Array, x: number, y: number, wi
 	}
 
 	if (count === 0) return emptyValue ?? plane[center]
-	return medianBySelection(values, count)
+	return medianBySelectionOf(values, count)
 }
 
 // Fast radius-1 median for the common residual-field path where the center is always excluded and no mask
@@ -574,7 +530,7 @@ function neighborhoodMedianRadius1SkipCenter(plane: Float64Array, x: number, y: 
 		values[5] = v5
 		values[6] = v6
 		values[7] = v7
-		return medianBySelection(values, 8)
+		return medianBySelectionOf(values, 8)
 	}
 
 	const values = scratch.values
@@ -596,7 +552,7 @@ function neighborhoodMedianRadius1SkipCenter(plane: Float64Array, x: number, y: 
 		}
 	}
 
-	return count === 0 ? plane[center] : medianBySelection(values, count)
+	return count === 0 ? plane[center] : medianBySelectionOf(values, count)
 }
 
 // Fast masked radius-1 median. Returns undefined when every 3x3 sample is masked, letting the generic
@@ -644,7 +600,7 @@ function neighborhoodMedianRadius1Masked(plane: Float64Array, x: number, y: numb
 		}
 	}
 
-	return count === 0 ? undefined : medianBySelection(values, count)
+	return count === 0 ? undefined : medianBySelectionOf(values, count)
 }
 
 // Median of the neighborhood of (x, y), read from the deinterleaved `plane`. Samples the (2r+1)^2 lattice
@@ -732,7 +688,7 @@ function neighborhoodMedian(plane: Float64Array, x: number, y: number, width: nu
 		}
 	}
 
-	return medianBySelection(values, count)
+	return medianBySelectionOf(values, count)
 }
 
 // Fast masked radius-1 median for direct interleaved repairs. Returns undefined when every 3x3 sample is
@@ -782,7 +738,7 @@ function interleavedNeighborhoodMedianRadius1(raw: Readonly<NumberArray>, channe
 		}
 	}
 
-	return count === 0 ? undefined : medianBySelection(values, count)
+	return count === 0 ? undefined : medianBySelectionOf(values, count)
 }
 
 // Median of the neighborhood of (x, y), read directly from an interleaved raw buffer for sparse
@@ -877,7 +833,7 @@ function interleavedNeighborhoodMedian(
 		}
 	}
 
-	return medianBySelection(values, count)
+	return medianBySelectionOf(values, count)
 }
 
 // Repairs one interleaved sample from the current raw buffer using precomputed pixel coordinates and raw

@@ -44,6 +44,8 @@ test('measures and calibrates a field focus offset', () => {
 	expect(offset).toBeDefined()
 	if (!offset) return
 	expect(offset.centerToEdge).toBe(11)
+	expect(offset.center).toBe(100)
+	expect(offset.edge).toBe(111)
 	expect(estimateBackfocusCorrection(offset, { response: 2 }).correction).toBe(-5.5)
 })
 

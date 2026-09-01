@@ -1,10 +1,10 @@
 import { expect, test } from 'bun:test'
-import { STANDARD_DEVIATION_SCALE } from '../../../src/core/util'
+import { medianBySelectionOf, STANDARD_DEVIATION_SCALE } from '../../../src/core/util'
 import type { Image, ImageRawType } from '../../../src/imaging/model/types'
 import { type MultiscaleLinearTransformOptions, multiscaleLinearTransform } from '../../../src/imaging/processing/mlt'
 import { Bitpix } from '../../../src/io/formats/fits/fits'
 import type { NumberArray } from '../../../src/math/numerical/math'
-import { makeImage, pixelOffset } from './util'
+import { makeImage } from './util'
 
 // B3-spline weights used only by the independent direct 2D test reference.
 const REFERENCE_B3_SPLINE = new Int8Array([1, 4, 6, 4, 1])
@@ -56,20 +56,13 @@ function directB3Spline(source: ImageRawType, image: Image, step: number): Image
 	return output
 }
 
-// Returns the median of an ascending-sorted non-empty test array.
-function sortedMedian(values: number[]) {
-	values.sort((a, b) => a - b)
-	const middle = values.length >>> 1
-	return values.length % 2 === 1 ? values[middle] : (values[middle - 1] + values[middle]) * 0.5
-}
-
 // Estimates per-channel absolute-coefficient scales with the production contract's RMS fallback.
 function referenceDetailScales(current: ImageRawType, filtered: ImageRawType, channels: number) {
 	const pixelCount = current.length / channels
 	const scales = new Float64Array(channels)
 
 	for (let channel = 0; channel < channels; channel++) {
-		const samples = new Array<number>(pixelCount)
+		const samples = new Float64Array(pixelCount)
 		let sumSquares = 0
 
 		for (let i = channel, sample = 0; i < current.length; i += channels, sample++) {
@@ -78,7 +71,7 @@ function referenceDetailScales(current: ImageRawType, filtered: ImageRawType, ch
 			sumSquares += value * value
 		}
 
-		let scale = STANDARD_DEVIATION_SCALE * sortedMedian(samples)
+		let scale = STANDARD_DEVIATION_SCALE * medianBySelectionOf(samples)
 		if (!(scale > 0)) scale = Math.sqrt(sumSquares / pixelCount)
 		scales[channel] = scale
 	}

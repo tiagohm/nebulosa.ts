@@ -1,4 +1,4 @@
-import { medianAbsoluteDeviationOf, medianOf } from '../../core/util'
+import { medianAbsoluteDeviationOf, medianBySelectionOf, medianOf } from '../../core/util'
 import type { DetectedStar } from '../../imaging/stars/detector'
 import { type Vec3, vecDistance } from '../../math/linear-algebra/vec3'
 import { euclideanSquaredDistance, type Point } from '../../math/numerical/geometry'
@@ -822,8 +822,8 @@ function clipPairsByResidual(pairs: readonly MatchPair[], radius: number, maxRes
 	if (pairs.length <= 3) return [...pairs]
 	const residuals = new Float64Array(pairs.length)
 	for (let i = 0; i < pairs.length; i++) residuals[i] = pairs[i].residual
-	const median = medianOf(residuals.sort())
-	const mad = medianAbsoluteDeviationOf(residuals, median, true)
+	const median = medianBySelectionOf(residuals)
+	const mad = medianAbsoluteDeviationOf(residuals, median, true, undefined, residuals)
 	const sigma = mad > 0 ? mad : radius * 0.25
 	const threshold = Math.min(radius, maxResidual, Math.max(median + 3 * sigma, maxResidual * 0.4))
 	const clipped: MatchPair[] = []

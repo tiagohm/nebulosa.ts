@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test'
+import { STANDARD_DEVIATION_SCALE } from '../../../src/core/util'
 import { adf, estimateBackground, histogram, median, medianAbsoluteDeviation, sigmaClip } from '../../../src/imaging/processing/computation'
 import { makeImage } from './util'
 
@@ -53,7 +54,7 @@ test('median absolute deviation honors transforms and normalization', () => {
 	const normalized = medianAbsoluteDeviation(image, 0.4, true, { transform: (value) => value * 2 })
 
 	expect(raw).toBeGreaterThan(0)
-	expect(normalized).toBeCloseTo(raw * 1.482602218505602, 12)
+	expect(normalized).toBeCloseTo(raw * STANDARD_DEVIATION_SCALE, 12)
 })
 
 test('adaptive display function validates and reuses histogram storage', () => {

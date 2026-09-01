@@ -72,7 +72,7 @@ export function exposureTimeKeyword<T extends number = number, D extends T | und
 
 // Bayer/CFA mosaic pattern (BAYERPAT), or undefined for monochrome data.
 export function cfaPatternKeyword(header: FitsHeader) {
-	return textKeyword(header, 'BAYERPAT') as CfaPattern | undefined
+	return (textKeyword(header, 'BAYERPAT').trim() || undefined) as CfaPattern | undefined
 }
 
 // Right ascension in radians, trying RA, OBJCTRA (sexagesimal hours), RA_OBJ, then CRVAL1 in order.
