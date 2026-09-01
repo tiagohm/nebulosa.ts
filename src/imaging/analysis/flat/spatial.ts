@@ -252,7 +252,11 @@ function regionalLevels(samples: readonly SpatialTileSample[], area: Readonly<Re
 		else if (x >= 0.35 && x <= 0.65 && y >= 0.35 && y <= 0.65) center.push(sample.level)
 	}
 
-	return { center: medianBySelectionOf(center), edge: medianBySelectionOf(edge), corner: medianBySelectionOf(corner) }
+	return {
+		center: center.length > 0 ? medianBySelectionOf(center) : undefined,
+		edge: edge.length > 0 ? medianBySelectionOf(edge) : undefined,
+		corner: corner.length > 0 ? medianBySelectionOf(corner) : undefined,
+	}
 }
 
 // Derives fitted edge-to-edge fractional gradients at the geometric image center.

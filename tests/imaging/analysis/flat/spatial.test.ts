@@ -20,6 +20,18 @@ test('measures a uniform flat without inventing an illumination center', () => {
 	expect(spatial.residualMap).toBeUndefined()
 })
 
+test('omits unsupported regional levels instead of exposing NaN', () => {
+	const image = generateSyntheticFlatImage({ width: 16, height: 16, bias: 0, signal: 1000, vignetting: 0 })
+	const spatial = analyzeFlat({ frame: { image } }).planes[0].spatial
+
+	expect(spatial.uniformity).toBe(1)
+	expect(spatial.centerLevel).toBeUndefined()
+	expect(spatial.edgeLevel).toBeUndefined()
+	expect(spatial.cornerLevel).toBeUndefined()
+	expect(spatial.edgeFalloff).toBeUndefined()
+	expect(spatial.cornerFalloff).toBeUndefined()
+})
+
 test('recovers signed gradients and leaves monotonic surfaces centerless', () => {
 	const image = generateSyntheticFlatImage({ width: 97, height: 65, bias: 0, signal: 1000, vignetting: 0, gradient: { x: 0.2, y: -0.1 } })
 	const spatial = analyzeFlat({ frame: { image } }).planes[0].spatial
