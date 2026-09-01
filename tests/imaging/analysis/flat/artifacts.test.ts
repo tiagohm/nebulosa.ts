@@ -111,7 +111,7 @@ test('matches retained residual detection after bounded-grid reduction', () => {
 
 	expect(direct).toEqual(retained)
 	expect(direct).toHaveLength(1)
-})
+}, 5000)
 
 test('rejects isolated pixels, lines, and border-truncated depressions', () => {
 	const hotPixel = generateSyntheticFlatImage({ width: 256, height: 192, bias: 0, signal: 1000, vignetting: 0.1 })
