@@ -276,9 +276,11 @@ function analyzeSequencePlane(input: FlatSequenceInput, analyses: readonly FlatA
 	const timeTrend = signalValues && timestamps ? robustTrend(timestamps, signalValues) : undefined
 	const driftPerFrame = finiteMetric(indexTrend && medianSignal !== undefined && medianSignal !== 0 ? indexTrend.slope / medianSignal : undefined)
 	const driftPerSecond = finiteMetric(timeTrend && medianSignal !== undefined && medianSignal !== 0 ? timeTrend.slope / medianSignal : undefined)
-	const spatialVariation = temporalVectorVariation(signatures, (signature) => signature.tiles)
-	const rowVariation = temporalVectorVariation(signatures, (signature) => signature.rowProfile)
-	const columnVariation = temporalVectorVariation(signatures, (signature) => signature.columnProfile)
+	const temporalValues = new Float64Array(signatures.length)
+	const temporalScratch = new Float64Array(signatures.length)
+	const spatialVariation = temporalVectorVariation(signatures, (signature) => signature.tiles, temporalValues, temporalScratch)
+	const rowVariation = temporalVectorVariation(signatures, (signature) => signature.rowProfile, temporalValues, temporalScratch)
+	const columnVariation = temporalVectorVariation(signatures, (signature) => signature.columnProfile, temporalValues, temporalScratch)
 	const outlierResult = options.outlierSigma === undefined ? { frames: [], complete: true } : multivariateOutliers(signatures, options.outlierSigma)
 
 	return {
@@ -354,14 +356,12 @@ function measureNormalizedProfiles(frame: FlatFrame, reference: FlatSequenceInpu
 	return { row, column }
 }
 
-// Computes the worst scaled-MAD temporal dispersion among every complete vector coordinate.
-function temporalVectorVariation(signatures: readonly (FlatSignature | undefined)[], select: (signature: FlatSignature) => Float32Array): number | undefined {
+// Computes worst coordinate dispersion while reusing plane-owned value and deviation workspaces.
+function temporalVectorVariation(signatures: readonly (FlatSignature | undefined)[], select: (signature: FlatSignature) => Float32Array, values: Float64Array, scratch: Float64Array): number | undefined {
 	for (let index = 0; index < signatures.length; index++) if (signatures[index] === undefined) return undefined
 
 	const first = select(signatures[0]!)
 	if (first.length === 0) return undefined
-
-	const values = new Array<number>(signatures.length)
 
 	let worst = 0
 	for (let coordinate = 0; coordinate < first.length; coordinate++) {
@@ -371,7 +371,7 @@ function temporalVectorVariation(signatures: readonly (FlatSignature | undefined
 			values[frame] = vector[coordinate]
 		}
 
-		worst = Math.max(worst, medianAbsoluteDeviationOf(values, medianBySelectionOf(values), true))
+		worst = Math.max(worst, medianAbsoluteDeviationOf(values, medianBySelectionOf(values), true, values.length, scratch))
 	}
 
 	return worst
