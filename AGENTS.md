@@ -92,9 +92,9 @@ Use Bun for installs, scripts, tests, and local execution.
 - Lint and type-check: `bun run lint`
 - Lint with fixes: `bun run lint:fix`
 - Refresh the code graph: `bun run index`
-- Run the full suite: `bun test --parallel`
-- Run test files affected by uncommited changes: `bun test --parallel --changed`
-- Run one test file: `bun test tests/vec3.test.ts`
+- Run the full suite: `bun test --timeout 1000 --parallel`
+- Run test files affected by uncommited changes: `bun test --timeout 1000 --parallel --changed`
+- Run one test file: `bun test --timeout 1000 tests/vec3.test.ts`
 
 Tests use `bunfig.toml`, with `tests/` as the root and `tests/setup.ts` as preload. Missing large fixtures may be downloaded through `tests/download.ts`.
 
@@ -265,7 +265,7 @@ Verification is proportional to the change, but the touched area must have zero 
 
 - Documentation-only changes: format-check the touched files, validate referenced paths and commands, and run `git diff --check`.
 - TypeScript changes: run the closest targeted tests, `bun run lint`, `bun run fmt:check`, and `git diff --check`.
-- Cross-cutting shared primitives, test infrastructure, broad refactors, or high-risk numerical, or runtime changes: also run `bun test --parallel`.
+- Cross-cutting shared primitives, test infrastructure, broad refactors, or high-risk numerical, or runtime changes: also run `bun test --timeout 1000 --parallel`.
 - Native-binding changes: run the relevant native-backed tests and state any platform/library limitation.
 - Prefer `bun run fmt -- <explicit paths>` when the worktree contains unrelated edits. Use repository-wide `bun run fmt` only when its entire output is in scope, then inspect every formatted change.
 - Re-run tests after any fix made in response to a failed check.
