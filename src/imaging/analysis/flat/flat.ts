@@ -3,7 +3,7 @@ import { resolveAnalysisArea, resolveImageAnalysisPlanes, resolveLocalCfaPattern
 import { hasIncompleteFlatHeaderCfaOffset, resolveFlatAcquisitionMetadata, resolveFlatContextCfaOffset, resolveFlatFrameExposure, sameFlatMetadataValue } from './context'
 import { analyzeFlatSpatial } from './spatial'
 import { measureFlatRegion, resolveFlatClippingLimits, type FlatRegionMeasurement } from './statistics'
-import type { FlatAnalysis, FlatAnalysisInput, FlatAnalysisOptions, FlatAssessment, FlatCheck, FlatClipping, FlatDiagnostic, FlatDiagnosticCode, FlatFrame, FlatPlane, FlatPlaneAnalysis, FlatReference, FlatSampleStatistics, FlatTarget } from './types'
+import type { FlatAnalysis, FlatAnalysisInput, FlatAnalysisOptions, FlatAssessment, FlatCheck, FlatClipping, FlatDiagnostic, FlatDiagnosticCode, FlatEffectiveClipLimits, FlatFrame, FlatPlane, FlatPlaneAnalysis, FlatReference, FlatSampleStatistics, FlatTarget } from './types'
 
 // Single-frame digital flat analysis facade. It measures target levels, clipping, optional in-line
 // pedestal correction, robust spatial structure, and transparent configured checks. Full-resolution
@@ -307,8 +307,9 @@ function assessFlat(planes: readonly FlatPlaneAnalysis[], fullMeasurements: read
 	const configuredTargets = planes.filter((plane) => options.criteria?.targets?.[plane.plane] !== undefined).map((plane) => plane.target)
 	const target = aggregateChecks(configuredTargets)
 	const clipping = assessClipping(
-		planes.flatMap((plane, index) => [fullMeasurements[index].clipping, ...plane.spatial.tiles.map((tile) => tile.clipping)]),
+		planes.flatMap((_, index) => [fullMeasurements[index].clipping, ...spatialQualityMeasurements[index].filter((measurement) => measurement.observed.count + measurement.observed.nonFinite > 0).map((measurement) => measurement.clipping)]),
 		options.criteria?.maximumClippedFraction,
+		options.effectiveClip,
 	)
 	const finiteSamples = assessFiniteSamples(
 		planes.flatMap((plane, index) => {
@@ -335,19 +336,20 @@ function aggregateChecks(checks: readonly FlatCheck[]): FlatCheck {
 	return checks.every((check) => check.basis === firstBasis) ? { status, basis: firstBasis } : { status }
 }
 
-// Evaluates the worst observed clipping fraction while requiring effective evidence for a passing check.
-function assessClipping(clipping: readonly FlatClipping[], maximum: number | undefined): FlatCheck {
+// Evaluates the worst observed clipping fraction and requires every configured effective side to be conclusive.
+function assessClipping(clipping: readonly FlatClipping[], maximum: number | undefined, effective: FlatEffectiveClipLimits | undefined): FlatCheck {
 	if (maximum === undefined) return { status: 'unknown' }
 	let worst = 0
-	let effectiveEvidence = false
+	let completeEvidence = effective !== undefined && (effective.lower !== undefined || effective.upper !== undefined)
 	for (const measurement of clipping) {
 		for (const side of [measurement.lower, measurement.upper]) {
 			if (!side) continue
 			if (side.fraction > worst) worst = side.fraction
-			if (side.source === 'effective' && side.status !== 'unknown') effectiveEvidence = true
 		}
+		if (effective?.lower !== undefined && (measurement.lower?.source !== 'effective' || measurement.lower.status === 'unknown')) completeEvidence = false
+		if (effective?.upper !== undefined && (measurement.upper?.source !== 'effective' || measurement.upper.status === 'unknown')) completeEvidence = false
 	}
-	return { status: worst > maximum ? 'fail' : effectiveEvidence ? 'pass' : 'unknown', value: worst, limits: [0, maximum] }
+	return { status: worst > maximum ? 'fail' : completeEvidence ? 'pass' : 'unknown', value: worst, limits: [0, maximum] }
 }
 
 // Evaluates the worst non-finite fraction and preserves unknown support for wholly masked planes.

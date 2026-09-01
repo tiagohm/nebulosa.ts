@@ -33,6 +33,21 @@ test('distinguishes effective clipping from inconclusive storage endpoints', () 
 	expect(storageClipped.assessment.verdict).toBe('rejected')
 })
 
+test('does not let conclusive RGB planes hide missing clipping evidence', () => {
+	const image = generateSyntheticFlatImage({ width: 8, height: 8, channels: 3, bias: 0, signal: 1000, vignetting: 0 })
+	for (let index = 0; index < image.raw.length; index += 3) image.raw[index] = Number.NaN
+
+	const result = analyzeFlat({ frame: { image } }, { effectiveClip: { upper: 4095 }, criteria: { maximumClippedFraction: 0 } })
+
+	expect(result.planes.map((plane) => [plane.plane, plane.clipping.upper?.status])).toEqual([
+		['red', 'unknown'],
+		['green', 'absent'],
+		['blue', 'absent'],
+	])
+	expect(result.assessment.clipping).toMatchObject({ status: 'unknown', value: 0 })
+	expect(result.assessment.verdict).toBe('inconclusive')
+})
+
 test('evaluates RGB targets independently without hiding weak channels', () => {
 	const image = generateSyntheticFlatImage({ width: 2, height: 2, channels: 3, bias: 0, signal: 100, vignetting: 0, channelResponse: [1, 0.5, 0.25] })
 	const result = analyzeFlat(
