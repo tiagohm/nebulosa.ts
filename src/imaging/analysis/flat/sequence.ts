@@ -7,8 +7,8 @@ import { analyzeFlat } from './flat'
 import type { FlatAnalysis, FlatCheck, FlatDiagnostic, FlatDiagnosticCode, FlatFrame, FlatPlane, FlatSequenceAnalysis, FlatSequenceAssessment, FlatSequenceFrameAnalysis, FlatSequenceInput, FlatSequenceOptions, FlatSequencePlaneAnalysis, FlatSignature, FlatSpatialAnalysis, FlatTile } from './types'
 
 // Temporal analysis for final flat stacks. Every frame is first reduced by the single-frame path with
-// maps disabled; only normalized tile and axis signatures survive, so memory grows with frames times
-// reduced signature size rather than frames times image size.
+// maps and artifact products disabled; only normalized tile and axis signatures survive, so memory
+// grows with frames times reduced signature size rather than frames times image size.
 
 // Numerical equality tolerance used when no exposure compatibility tolerance is configured, seconds.
 const DEFAULT_SEQUENCE_EXPOSURE_TOLERANCE = 1e-9
@@ -99,7 +99,7 @@ export function analyzeFlatSequence(input: FlatSequenceInput, options: Partial<F
 // Validates sequence size and finite non-negative policy limits before any image traversal.
 function validateSequenceOptions(input: FlatSequenceInput, options: Partial<FlatSequenceOptions>): void {
 	if (input.frames.length < 3) throw new RangeError('flat sequence analysis requires at least three frames')
-	if (options.analysis && 'maps' in options.analysis) throw new RangeError('flat sequence analysis does not accept full-resolution map options')
+	if (options.analysis && ('maps' in options.analysis || 'artifacts' in options.analysis)) throw new RangeError('flat sequence analysis does not accept map or artifact options')
 	for (const [name, value] of [
 		['exposure tolerance', options.exposureTolerance],
 		['temperature tolerance', options.temperatureTolerance],

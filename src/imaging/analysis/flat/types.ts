@@ -427,8 +427,8 @@ export interface FlatSequenceInput {
 
 // Explicit compatibility and temporal-stability policy for a flat sequence.
 export interface FlatSequenceOptions {
-	// Per-frame analysis options; full-resolution maps are forbidden in the sequence path.
-	readonly analysis?: Partial<Omit<FlatAnalysisOptions, 'maps'>>
+	// Per-frame analysis options; discarded full-resolution maps and artifact products are forbidden.
+	readonly analysis?: Partial<Omit<FlatAnalysisOptions, 'maps' | 'artifacts'>>
 	// Maximum absolute exposure mismatch, seconds; defaults to numerical equality tolerance.
 	readonly exposureTolerance?: number
 	// Maximum sensor-temperature spread, degrees Celsius; omission does not require temperature.

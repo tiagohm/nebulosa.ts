@@ -203,8 +203,9 @@ test('keeps unavailable frame signals inconclusive instead of dereferencing spar
 	expect(unavailable.planes[0].medianSignal).toBeUndefined()
 })
 
-test('rejects map options and undersized runtime tuples before allocating sequence work', () => {
+test('rejects discarded products and undersized runtime tuples before allocating sequence work', () => {
 	const frames = [completeFrame(0), completeFrame(1), completeFrame(2)] as const
-	expect(() => analyzeFlatSequence({ frames }, { analysis: { maps: 'all' } } as Partial<FlatSequenceOptions>)).toThrow('map options')
+	expect(() => analyzeFlatSequence({ frames }, { analysis: { maps: 'all' } } as Partial<FlatSequenceOptions>)).toThrow('map or artifact options')
+	expect(() => analyzeFlatSequence({ frames }, { analysis: { artifacts: { dust: true } } } as Partial<FlatSequenceOptions>)).toThrow('map or artifact options')
 	expect(() => analyzeFlatSequence({ frames: frames.slice(0, 2) as unknown as FlatSequenceInput['frames'] })).toThrow('at least three')
 })
