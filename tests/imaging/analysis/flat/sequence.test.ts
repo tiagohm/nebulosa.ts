@@ -190,6 +190,19 @@ test('keeps a configured outlier check unknown when a frame signature loses supp
 	expect(result.assessment.reasons).toContain('insufficientSamples')
 })
 
+test('keeps unavailable frame signals inconclusive instead of dereferencing sparse signatures', () => {
+	const frames = [completeFrame(0, { vignetting: 0 }), completeFrame(1, { signal: 0, vignetting: 0 }), completeFrame(2, { vignetting: 0 })] as const
+	const result = analyzeFlatSequence({ frames }, { maximumSignalVariation: 0 })
+
+	expect(result.planes[0].medianSignal).toBe(1000)
+	expect(result.planes[0].signalVariation).toBeUndefined()
+	expect(result.assessment.signalStability.status).toBe('unknown')
+	expect(result.assessment.verdict).toBe('inconclusive')
+
+	const unavailable = analyzeFlatSequence({ frames: [completeFrame(0, { signal: 0 }), completeFrame(1, { signal: 0 }), completeFrame(2, { signal: 0 })] })
+	expect(unavailable.planes[0].medianSignal).toBeUndefined()
+})
+
 test('rejects map options and undersized runtime tuples before allocating sequence work', () => {
 	const frames = [completeFrame(0), completeFrame(1), completeFrame(2)] as const
 	expect(() => analyzeFlatSequence({ frames }, { analysis: { maps: 'all' } } as Partial<FlatSequenceOptions>)).toThrow('map options')

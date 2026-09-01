@@ -268,7 +268,7 @@ function analyzeSequencePlane(input: FlatSequenceInput, analyses: readonly FlatA
 		signatures[frameIndex] = { signal, tiles, rowProfile: profiles.row, columnProfile: profiles.column }
 	}
 
-	const medianSignal = medianBySelectionOf(availableSignals)
+	const medianSignal = availableSignals.length > 0 ? medianBySelectionOf(availableSignals) : undefined
 	const signalVariation = finiteMetric(completeSignals && medianSignal !== undefined && medianSignal !== 0 ? medianAbsoluteDeviationOf(availableSignals, medianSignal, true) / Math.abs(medianSignal) : undefined)
 	const indexCoordinates = Float64Array.from({ length: analyses.length }, (_, index) => index)
 	const signalValues = completeSignals ? Float64Array.from(signatures.map((signature) => signature!.signal)) : undefined
@@ -356,7 +356,7 @@ function measureNormalizedProfiles(frame: FlatFrame, reference: FlatSequenceInpu
 
 // Computes the worst scaled-MAD temporal dispersion among every complete vector coordinate.
 function temporalVectorVariation(signatures: readonly (FlatSignature | undefined)[], select: (signature: FlatSignature) => Float32Array): number | undefined {
-	if (signatures.some((signature) => signature === undefined)) return undefined
+	for (let index = 0; index < signatures.length; index++) if (signatures[index] === undefined) return undefined
 
 	const first = select(signatures[0]!)
 	if (first.length === 0) return undefined
@@ -379,7 +379,7 @@ function temporalVectorVariation(signatures: readonly (FlatSignature | undefined
 
 // Finds frames whose combined detrended signal, tile, row, and column distance is a robust outlier.
 function multivariateOutliers(signatures: readonly (FlatSignature | undefined)[], sigma: number): OutlierResult {
-	if (signatures.some((signature) => signature === undefined)) return { frames: [], complete: false }
+	for (let index = 0; index < signatures.length; index++) if (signatures[index] === undefined) return { frames: [], complete: false }
 	const resolved = signatures as readonly FlatSignature[]
 	const signals = Float64Array.from(resolved, (signature) => signature.signal)
 	const coordinates = Float64Array.from({ length: resolved.length }, (_, index) => index)
