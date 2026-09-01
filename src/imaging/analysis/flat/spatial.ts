@@ -172,10 +172,10 @@ export function analyzeFlatSpatial(input: FlatSpatialInput): FlatSpatialResult {
 	if (!center) diagnostics.push({ severity: 'info', code: 'illuminationCenterUnknown', message: 'The fitted illumination surface has no well-conditioned concave interior maximum.', plane: input.plane })
 	const configuredDust = input.options.artifacts?.dust
 	const dustRequested = configuredDust === true || (typeof configuredDust === 'object' && configuredDust !== null)
-	const maps = materializeSpatialMaps(input, fit.model, dustRequested)
+	const maps = materializeSpatialMaps(input, fit.model)
 	if (maps.failed) diagnostics.push({ severity: 'warning', code: 'illuminationFitFailed', message: 'A requested spatial map exceeded finite Float32 output range and was omitted.', plane: input.plane })
 	const profiles = input.options.artifacts?.profiles ? measureFlatProfiles(input, fit.model) : undefined
-	const dustCandidates = dustRequested && maps.residual && maps.validity ? detectFlatDustCandidates(input, maps.residual, maps.validity, configuredDust === true ? true : configuredDust) : undefined
+	const dustCandidates = dustRequested ? detectFlatDustCandidates(input, fit.model, configuredDust === true ? true : configuredDust, maps.residual && maps.validity ? { values: maps.residual, validity: maps.validity } : undefined) : undefined
 	const exposeResidual = input.options.maps === 'residual' || input.options.maps === 'all'
 
 	return {
@@ -360,10 +360,10 @@ function illuminationCenter(model: ScalarSurfaceModel, area: Readonly<Rect>, til
 
 // Materializes requested maps on the full image-pixel grid over area, carrying validity for residual
 // gaps such as masks, non-finite values, and pixels belonging to other CFA planes.
-function materializeSpatialMaps(input: FlatSpatialInput, model: ScalarSurfaceModel, retainArtifactResidual: boolean): { readonly illumination?: Float32Array; readonly residual?: Float32Array; readonly validity?: Uint8Array; readonly failed: boolean } {
+function materializeSpatialMaps(input: FlatSpatialInput, model: ScalarSurfaceModel): { readonly illumination?: Float32Array; readonly residual?: Float32Array; readonly validity?: Uint8Array; readonly failed: boolean } {
 	const selection = input.options.maps ?? 'none'
 	const retainIllumination = selection === 'illumination' || selection === 'all'
-	const retainResidual = selection === 'residual' || selection === 'all' || retainArtifactResidual
+	const retainResidual = selection === 'residual' || selection === 'all'
 	if (!retainIllumination && !retainResidual) return { failed: false }
 
 	const geometry = resolveImagePlaneGeometry(input.image, input.area, input.plane, input.cfaOffset)

@@ -66,6 +66,10 @@ test('finds circular and elliptical smooth-depression candidates without assigni
 	expect(spatial.residualMap).toBeUndefined()
 	expect(spatial.residualMapValidity).toBeUndefined()
 	expect(detected.assessment).toEqual(baseline.assessment)
+	const mapped = analyzeFlat({ frame: { image } }, { maps: 'residual', artifacts: { dust: true } }).planes[0].spatial
+	expect(mapped.dustCandidates).toEqual(candidates)
+	expect(mapped.residualMap).toBeDefined()
+	expect(mapped.residualMapValidity).toBeDefined()
 	const strongest = analyzeFlat({ frame: { image } }, { artifacts: { dust: { maximumCandidates: 1 } } }).planes[0].spatial.dustCandidates!
 	expect(strongest).toHaveLength(1)
 	expect(Math.hypot(strongest[0].center.x - 80, strongest[0].center.y - 80)).toBeLessThan(2)
@@ -91,6 +95,22 @@ test('retains multiscale support for small, large, and overlapping depressions',
 	expect(candidates.some((candidate) => Math.hypot(candidate.center.x - 80, candidate.center.y - 80) < 2)).toBeTrue()
 	expect(candidates.some((candidate) => Math.hypot(candidate.center.x - 220, candidate.center.y - 140) < 3)).toBeTrue()
 	expect(candidates.some((candidate) => Math.hypot(candidate.center.x - 155, candidate.center.y - 170) < 3)).toBeTrue()
+})
+
+test('matches retained residual detection after bounded-grid reduction', () => {
+	const image = generateSyntheticFlatImage({
+		width: 2048,
+		height: 1025,
+		bias: 0,
+		signal: 1000,
+		vignetting: 0.1,
+		dustMotes: [{ center: { x: 1024, y: 512 }, sigmaX: 12, sigmaY: 9, contrast: 0.25 }],
+	})
+	const direct = analyzeFlat({ frame: { image } }, { artifacts: { dust: true } }).planes[0].spatial.dustCandidates
+	const retained = analyzeFlat({ frame: { image } }, { maps: 'residual', artifacts: { dust: true } }).planes[0].spatial.dustCandidates
+
+	expect(direct).toEqual(retained)
+	expect(direct).toHaveLength(1)
 })
 
 test('rejects isolated pixels, lines, and border-truncated depressions', () => {

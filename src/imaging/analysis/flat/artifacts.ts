@@ -2,7 +2,7 @@ import { STANDARD_DEVIATION_SCALE } from '../../../core/util'
 import type { ImageMetadata } from '../../model/types'
 import { gaussianBlurKernel, separableSmoothing, type SeparableSmoothingKernel } from '../../processing/convolution'
 import { createScalarSurfaceEvaluator, createSurfaceColumnTable, type ScalarSurfaceModel } from '../../processing/surface'
-import { resolveImagePlaneGeometry } from '../plane'
+import { resolveImagePlaneGeometry, type ImagePlaneGeometry } from '../plane'
 import { RobustReservoir } from '../robust'
 import type { FlatSpatialInput } from './spatial'
 import { DEFAULT_FLAT_DUST_DETECTION_OPTIONS, type FlatAxisProfile, type FlatDustCandidate, type FlatDustDetectionOptions, type FlatProfiles } from './types'
@@ -51,6 +51,20 @@ interface ArtifactGrid {
 	readonly y: Float64Array
 	// Approximate image-pixel spacing between adjacent grid cells.
 	readonly spacing: number
+}
+
+// Artifact grid plus the selected-plane reduction used to populate each cell.
+interface ArtifactGridLayout extends ArtifactGrid {
+	// Number of selected-plane samples represented along each grid-cell axis.
+	readonly reduction: number
+}
+
+// Optional full-area residual storage already requested for the public result.
+interface MaterializedArtifactResidual {
+	// Full-area row-major residual values.
+	readonly values: Float32Array
+	// One for valid selected-plane residual positions and zero otherwise.
+	readonly validity: Uint8Array
 }
 
 // Mutable moment summary for one connected candidate component.
@@ -115,10 +129,10 @@ export function measureFlatProfiles(input: FlatSpatialInput, model: ScalarSurfac
 	return { row: finishAxisProfile(rowSums, rowCounts), column: finishAxisProfile(columnSums, columnCounts) }
 }
 
-// Detects compact smooth dark candidates from one already materialized full-area residual and mask.
-export function detectFlatDustCandidates(input: FlatSpatialInput, residual: Float32Array, validity: Uint8Array, configured: true | Partial<FlatDustDetectionOptions>): readonly FlatDustCandidate[] {
+// Detects compact smooth dark candidates, reusing a requested residual map or streaming into the bounded grid.
+export function detectFlatDustCandidates(input: FlatSpatialInput, model: ScalarSurfaceModel, configured: true | Partial<FlatDustDetectionOptions>, materialized?: MaterializedArtifactResidual): readonly FlatDustCandidate[] {
 	const options = resolveDustOptions(configured === true ? {} : configured)
-	const grid = buildArtifactGrid(input, residual, validity)
+	const grid = buildArtifactGrid(input, model, materialized)
 	if (grid.width < 3 || grid.height < 3) return []
 	const length = grid.width * grid.height
 	const metadata = artifactMetadata(grid.width, grid.height)
@@ -206,9 +220,17 @@ function resolveDustOptions(options: Partial<FlatDustDetectionOptions>): Resolve
 	}
 }
 
-// Builds a bounded dense grid from valid selected-plane residual positions, averaging only on demand.
-function buildArtifactGrid(input: FlatSpatialInput, residual: Float32Array, validity: Uint8Array): ArtifactGrid {
+// Builds a bounded dense grid from a retained residual map or directly from selected-plane samples.
+function buildArtifactGrid(input: FlatSpatialInput, model: ScalarSurfaceModel, materialized: MaterializedArtifactResidual | undefined): ArtifactGrid {
 	const geometry = resolveImagePlaneGeometry(input.image, input.area, input.plane, input.cfaOffset)
+	const grid = createArtifactGrid(geometry)
+	if (materialized) populateArtifactGridFromResidual(input, geometry, grid, materialized)
+	else populateArtifactGridFromSamples(input, geometry, grid, model)
+	return grid
+}
+
+// Allocates the capped artifact grid and its exact image-coordinate lookup tables.
+function createArtifactGrid(geometry: ImagePlaneGeometry): ArtifactGridLayout {
 	let reduction = Math.max(1, Math.ceil(Math.sqrt((geometry.width * geometry.height) / MAXIMUM_ARTIFACT_GRID_PIXELS)))
 	while (Math.ceil(geometry.width / reduction) * Math.ceil(geometry.height / reduction) > MAXIMUM_ARTIFACT_GRID_PIXELS) reduction++
 	const width = Math.ceil(geometry.width / reduction)
@@ -217,7 +239,6 @@ function buildArtifactGrid(input: FlatSpatialInput, residual: Float32Array, vali
 	const support = new Float32Array(width * height)
 	const xCoordinates = new Float64Array(width)
 	const yCoordinates = new Float64Array(height)
-	const mapWidth = input.area.right - input.area.left
 
 	for (let gridX = 0; gridX < width; gridX++) {
 		const first = gridX * reduction
@@ -228,6 +249,16 @@ function buildArtifactGrid(input: FlatSpatialInput, residual: Float32Array, vali
 		const first = gridY * reduction
 		const last = Math.min(geometry.height, first + reduction) - 1
 		yCoordinates[gridY] = geometry.sourceTop + ((first + last) * geometry.step) / 2
+	}
+
+	return { source, support, width, height, x: xCoordinates, y: yCoordinates, spacing: geometry.step * reduction, reduction }
+}
+
+// Averages an already requested full-area residual map into the bounded selected-plane grid.
+function populateArtifactGridFromResidual(input: FlatSpatialInput, geometry: ImagePlaneGeometry, grid: ArtifactGridLayout, materialized: MaterializedArtifactResidual): void {
+	const mapWidth = input.area.right - input.area.left
+	const { reduction, width, height, source, support } = grid
+	for (let gridY = 0; gridY < height; gridY++) {
 		for (let gridX = 0; gridX < width; gridX++) {
 			const firstX = gridX * reduction
 			const lastX = Math.min(geometry.width, firstX + reduction)
@@ -239,8 +270,8 @@ function buildArtifactGrid(input: FlatSpatialInput, residual: Float32Array, vali
 				const sourceY = geometry.sourceTop + planeY * geometry.step
 				let mapIndex = (sourceY - input.area.top) * mapWidth + geometry.sourceLeft + firstX * geometry.step - input.area.left
 				for (let planeX = firstX; planeX < lastX; planeX++, mapIndex += geometry.step) {
-					if (validity[mapIndex] === 0) continue
-					const value = residual[mapIndex]
+					if (materialized.validity[mapIndex] === 0) continue
+					const value = materialized.values[mapIndex]
 					if (!Number.isFinite(value)) continue
 					sum += value
 					count++
@@ -256,8 +287,59 @@ function buildArtifactGrid(input: FlatSpatialInput, residual: Float32Array, vali
 			}
 		}
 	}
+}
 
-	return { source, support, width, height, x: xCoordinates, y: yCoordinates, spacing: geometry.step * reduction }
+// Streams selected-plane residuals into the reduced grid without allocating full-area maps.
+function populateArtifactGridFromSamples(input: FlatSpatialInput, geometry: ImagePlaneGeometry, grid: ArtifactGridLayout, model: ScalarSurfaceModel): void {
+	const referenceGeometry = input.reference ? resolveImagePlaneGeometry(input.reference, input.area, input.plane, input.referenceCfaOffset) : undefined
+	const surfaceRow = new Float64Array(geometry.width)
+	const columns = createSurfaceColumnTable(model.degree, model.domain, geometry.width, geometry.sourceLeft, geometry.step)
+	const evaluator = createScalarSurfaceEvaluator(model, columns)
+	const sums = new Float64Array(grid.width)
+	const counts = new Uint32Array(grid.width)
+	const referenceStep = referenceGeometry?.rawColumnStep ?? 0
+	const raw = input.image.raw
+	const referenceRaw = input.reference?.raw
+	const imageWidth = input.image.metadata.width
+
+	for (let gridY = 0; gridY < grid.height; gridY++) {
+		sums.fill(0)
+		counts.fill(0)
+		const firstY = gridY * grid.reduction
+		const lastY = Math.min(geometry.height, firstY + grid.reduction)
+		for (let planeY = firstY; planeY < lastY; planeY++) {
+			const sourceY = geometry.sourceTop + planeY * geometry.step
+			evaluator.fillRow(sourceY, surfaceRow, 0, 1)
+			let rawIndex = geometry.rawStart + planeY * geometry.rawRowStep
+			let referenceIndex = referenceGeometry ? referenceGeometry.rawStart + planeY * referenceGeometry.rawRowStep : 0
+			let maskIndex = sourceY * imageWidth + geometry.sourceLeft
+			let gridX = 0
+			let nextGridColumn = grid.reduction
+			for (let planeX = 0; planeX < geometry.width; planeX++, rawIndex += geometry.rawColumnStep, referenceIndex += referenceStep, maskIndex += geometry.step) {
+				if (planeX === nextGridColumn) {
+					gridX++
+					nextGridColumn += grid.reduction
+				}
+				const surface = surfaceRow[planeX]
+				if (input.mask?.[maskIndex] || !Number.isFinite(surface) || surface <= 0) continue
+				const observed = raw[rawIndex]
+				const sample = referenceGeometry ? observed - referenceRaw![referenceIndex] : observed
+				const residual = Math.fround(sample / surface - 1)
+				if (!Number.isFinite(residual)) continue
+				sums[gridX] += residual
+				counts[gridX]++
+			}
+		}
+
+		const gridRow = gridY * grid.width
+		for (let gridX = 0; gridX < grid.width; gridX++) {
+			if (counts[gridX] === 0) continue
+			const value = Math.fround(sums[gridX] / counts[gridX])
+			if (!Number.isFinite(value)) continue
+			grid.source[gridRow + gridX] = value
+			grid.support[gridRow + gridX] = 1
+		}
+	}
 }
 
 // Constructs single-channel Float32 metadata accepted by the shared separable smoothing primitive.
