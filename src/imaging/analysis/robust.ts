@@ -6,6 +6,9 @@ import { medianAbsoluteDeviationOf, medianBySelectionOf } from '../../core/util'
 // Maximum number of finite samples retained by one robust estimator.
 export const ROBUST_SAMPLE_CAPACITY = 65536
 
+// Initial deterministic xorshift state restored whenever a reservoir is reused.
+const ROBUST_RESERVOIR_INITIAL_STATE = 0x9e3779b9
+
 // Fixed-capacity deterministic reservoir for approximate robust image statistics.
 export class RobustReservoir {
 	// Retained finite samples; values may be reordered by selection operations.
@@ -13,7 +16,7 @@ export class RobustReservoir {
 	// Number of finite values observed, including values replaced after the reservoir filled.
 	#seen = 0
 	// Deterministic xorshift state used for uniform reservoir replacement.
-	#state = 0x9e3779b9
+	#state = ROBUST_RESERVOIR_INITIAL_STATE
 
 	// Creates a reservoir sized for the expected population and capped at the shared robust limit.
 	constructor(populationCapacity: number) {
@@ -34,6 +37,12 @@ export class RobustReservoir {
 	// Whether the retained values are a sampled approximation of the observed population.
 	get approximate(): boolean {
 		return this.#seen > this.#values.length
+	}
+
+	// Clears the logical population and restores deterministic sampling without reallocating storage.
+	reset(): void {
+		this.#seen = 0
+		this.#state = ROBUST_RESERVOIR_INITIAL_STATE
 	}
 
 	// Considers one value, ignoring non-finite samples and replacing a retained sample when full.
@@ -61,13 +70,21 @@ export class RobustReservoir {
 		return medianBySelectionOf(this.#values.subarray(0, count))
 	}
 
-	// Returns the median absolute deviation of retained samples, or NaN when no finite value was seen.
-	mad(normalized: boolean = false): number {
+	// Returns the median absolute deviation of retained samples, optionally reusing caller-owned scratch.
+	mad(normalized: boolean = false, scratch?: Float64Array): number {
 		const count = this.retainedCount
 		if (count === 0) return Number.NaN
 		const selected = this.#values.subarray(0, count)
 		const center = medianBySelectionOf(selected)
-		return medianAbsoluteDeviationOf(selected, center, normalized)
+		return this.madAround(center, normalized, scratch)
+	}
+
+	// Returns retained-sample MAD around a known median, optionally reusing caller-owned scratch.
+	madAround(center: number, normalized: boolean = false, scratch?: Float64Array): number {
+		const count = this.retainedCount
+		if (count === 0) return Number.NaN
+		if (scratch !== undefined && scratch.length < count) throw new RangeError('robust MAD scratch must hold every retained sample')
+		return medianAbsoluteDeviationOf(this.#values, center, normalized, count, scratch)
 	}
 
 	// Returns population standard deviation after rejecting retained samples beyond five scaled MADs.

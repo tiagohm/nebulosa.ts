@@ -1,7 +1,7 @@
 import type { Rect } from '../../../math/numerical/geometry'
 import type { DigitalImage } from '../../model/types'
 import { resolveImagePlaneGeometry } from '../plane'
-import { RobustReservoir } from '../robust'
+import { ROBUST_SAMPLE_CAPACITY, RobustReservoir } from '../robust'
 import type { FlatClipping, FlatClippingSide, FlatEffectiveClipLimits, FlatPlane, FlatSampleStatistics } from './types'
 
 // Bounded-memory scalar reductions for digital flat planes. Clipping always uses observed samples,
@@ -98,7 +98,7 @@ class SampleAccumulator {
 	}
 
 	// Returns a fresh public summary, omitting numerical fields that cannot remain finite.
-	finish(): FlatSampleStatistics {
+	finish(scratch?: Float64Array): FlatSampleStatistics {
 		if (this.#count === 0) {
 			return {
 				count: 0,
@@ -110,7 +110,7 @@ class SampleAccumulator {
 		}
 
 		const median = this.#reservoir.median()
-		const mad = this.#reservoir.mad()
+		const mad = this.#reservoir.madAround(median, false, scratch)
 		return {
 			count: this.#count,
 			masked: this.#masked,
@@ -122,6 +122,94 @@ class SampleAccumulator {
 			mad: Number.isFinite(mad) ? mad : undefined,
 			retainedSamples: this.#reservoir.retainedCount,
 			approximate: this.#reservoir.approximate,
+		}
+	}
+
+	// Clears all scalar and robust state while retaining allocated reservoir storage.
+	reset(): void {
+		this.#reservoir.reset()
+		this.#count = 0
+		this.#masked = 0
+		this.#nonFinite = 0
+		this.#minimum = Number.POSITIVE_INFINITY
+		this.#maximum = Number.NEGATIVE_INFINITY
+		this.#mean = 0
+	}
+}
+
+// Reusable bounded workspace for repeated region measurements up to one plane-population capacity.
+export class FlatRegionMeasurementWorkspace {
+	// Maximum selected-plane population accepted by this workspace.
+	readonly #populationCapacity: number
+	// Reusable observed accumulator.
+	readonly #observed: SampleAccumulator
+	// Reusable corrected accumulator when reference subtraction was requested at construction.
+	readonly #corrected?: SampleAccumulator
+	// Shared robust-deviation scratch used after observed and corrected medians are finalized.
+	readonly #scratch: Float64Array
+
+	// Allocates reusable accumulators for regions up to populationCapacity and optional references.
+	constructor(populationCapacity: number, includeReference: boolean) {
+		if (!Number.isSafeInteger(populationCapacity) || populationCapacity < 0) throw new RangeError('flat measurement workspace capacity must be a non-negative safe integer')
+		this.#populationCapacity = populationCapacity
+		this.#observed = new SampleAccumulator(populationCapacity)
+		this.#corrected = includeReference ? new SampleAccumulator(populationCapacity) : undefined
+		this.#scratch = new Float64Array(Math.max(1, Math.min(populationCapacity, ROBUST_SAMPLE_CAPACITY)))
+	}
+
+	// Measures one region, returning fresh summaries while retaining all mutable reduction storage.
+	measure(input: FlatRegionMeasurementInput): FlatRegionMeasurement {
+		const geometry = resolveImagePlaneGeometry(input.image, input.area, input.plane, input.cfaOffset)
+		const referenceGeometry = input.reference ? resolveImagePlaneGeometry(input.reference, input.area, input.plane, input.referenceCfaOffset) : undefined
+		if (geometry.width * geometry.height > this.#populationCapacity) throw new RangeError('flat measurement region exceeds workspace capacity')
+		if (referenceGeometry && !this.#corrected) throw new RangeError('flat measurement workspace does not include reference storage')
+		if (referenceGeometry && (referenceGeometry.sourceLeft !== geometry.sourceLeft || referenceGeometry.sourceTop !== geometry.sourceTop || referenceGeometry.width !== geometry.width || referenceGeometry.height !== geometry.height || referenceGeometry.step !== geometry.step))
+			throw new RangeError('flat reference plane geometry does not match the observed image')
+
+		this.#observed.reset()
+		this.#corrected?.reset()
+		const raw = input.image.raw
+		const referenceRaw = input.reference?.raw
+		const mask = input.mask
+		const imageWidth = input.image.metadata.width
+		let valid = 0
+		let lowerCount = 0
+		let upperCount = 0
+
+		for (let planeY = 0; planeY < geometry.height; planeY++) {
+			const sourceY = geometry.sourceTop + planeY * geometry.step
+			let rawIndex = geometry.rawStart + planeY * geometry.rawRowStep
+			let referenceIndex = referenceGeometry ? referenceGeometry.rawStart + planeY * referenceGeometry.rawRowStep : 0
+			let maskIndex = sourceY * imageWidth + geometry.sourceLeft
+			for (let planeX = 0; planeX < geometry.width; planeX++, rawIndex += geometry.rawColumnStep, maskIndex += geometry.step) {
+				if (mask?.[maskIndex]) {
+					this.#observed.mask()
+					if (referenceGeometry) this.#corrected!.mask()
+					if (referenceGeometry) referenceIndex += referenceGeometry.rawColumnStep
+					continue
+				}
+
+				const value = raw[rawIndex]
+				this.#observed.push(value)
+				if (Number.isFinite(value)) {
+					valid++
+					if (input.clippingLimits.lower && value <= input.clippingLimits.lower.limit) lowerCount++
+					if (input.clippingLimits.upper && value >= input.clippingLimits.upper.limit) upperCount++
+				}
+				if (referenceGeometry) {
+					this.#corrected!.push(value - referenceRaw![referenceIndex])
+					referenceIndex += referenceGeometry.rawColumnStep
+				}
+			}
+		}
+
+		return {
+			observed: this.#observed.finish(this.#scratch),
+			corrected: referenceGeometry ? this.#corrected!.finish(this.#scratch) : undefined,
+			clipping: {
+				lower: clippingSide(input.clippingLimits.lower, lowerCount, valid),
+				upper: clippingSide(input.clippingLimits.upper, upperCount, valid),
+			},
 		}
 	}
 }
@@ -136,57 +224,8 @@ export function resolveFlatClippingLimits(image: DigitalImage, effective: FlatEf
 
 // Measures one image plane over one region without materializing a corrected image or plane buffer.
 export function measureFlatRegion(input: FlatRegionMeasurementInput): FlatRegionMeasurement {
-	const geometry = resolveImagePlaneGeometry(input.image, input.area, input.plane, input.cfaOffset)
-	const referenceGeometry = input.reference ? resolveImagePlaneGeometry(input.reference, input.area, input.plane, input.referenceCfaOffset) : undefined
-	if (referenceGeometry && (referenceGeometry.sourceLeft !== geometry.sourceLeft || referenceGeometry.sourceTop !== geometry.sourceTop || referenceGeometry.width !== geometry.width || referenceGeometry.height !== geometry.height || referenceGeometry.step !== geometry.step))
-		throw new RangeError('flat reference plane geometry does not match the observed image')
-
-	const capacity = geometry.width * geometry.height
-	const observed = new SampleAccumulator(capacity)
-	const corrected = referenceGeometry ? new SampleAccumulator(capacity) : undefined
-	const raw = input.image.raw
-	const referenceRaw = input.reference?.raw
-	const mask = input.mask
-	const imageWidth = input.image.metadata.width
-	let valid = 0
-	let lowerCount = 0
-	let upperCount = 0
-
-	for (let planeY = 0; planeY < geometry.height; planeY++) {
-		const sourceY = geometry.sourceTop + planeY * geometry.step
-		let rawIndex = geometry.rawStart + planeY * geometry.rawRowStep
-		let referenceIndex = referenceGeometry ? referenceGeometry.rawStart + planeY * referenceGeometry.rawRowStep : 0
-		let maskIndex = sourceY * imageWidth + geometry.sourceLeft
-		for (let planeX = 0; planeX < geometry.width; planeX++, rawIndex += geometry.rawColumnStep, maskIndex += geometry.step) {
-			if (mask?.[maskIndex]) {
-				observed.mask()
-				corrected?.mask()
-				if (referenceGeometry) referenceIndex += referenceGeometry.rawColumnStep
-				continue
-			}
-
-			const value = raw[rawIndex]
-			observed.push(value)
-			if (Number.isFinite(value)) {
-				valid++
-				if (input.clippingLimits.lower && value <= input.clippingLimits.lower.limit) lowerCount++
-				if (input.clippingLimits.upper && value >= input.clippingLimits.upper.limit) upperCount++
-			}
-			if (referenceGeometry) {
-				corrected!.push(value - referenceRaw![referenceIndex])
-				referenceIndex += referenceGeometry.rawColumnStep
-			}
-		}
-	}
-
-	return {
-		observed: observed.finish(),
-		corrected: corrected?.finish(),
-		clipping: {
-			lower: clippingSide(input.clippingLimits.lower, lowerCount, valid),
-			upper: clippingSide(input.clippingLimits.upper, upperCount, valid),
-		},
-	}
+	const capacity = (input.area.right - input.area.left) * (input.area.bottom - input.area.top)
+	return new FlatRegionMeasurementWorkspace(capacity, input.reference !== undefined).measure(input)
 }
 
 // Builds one public clipping side without emitting a non-finite fraction for an empty region.

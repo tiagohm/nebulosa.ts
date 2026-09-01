@@ -4,7 +4,7 @@ import type { DigitalImage } from '../../model/types'
 import { createScalarSurfaceEvaluator, createScalarSurfacePointEvaluator, createSurfaceColumnTable, fitScalarSurface, type ScalarSurfaceModel, type SurfaceSample } from '../../processing/surface'
 import { resolveImagePlaneGeometry, resolveOptionalImagePlaneGeometry } from '../plane'
 import { detectFlatDustCandidates, measureFlatProfiles } from './artifacts'
-import { measureFlatRegion, type FlatRegionMeasurement, type ResolvedFlatClippingLimits } from './statistics'
+import { FlatRegionMeasurementWorkspace, type FlatRegionMeasurement, type ResolvedFlatClippingLimits } from './statistics'
 import type { FlatAnalysisOptions, FlatDiagnostic, FlatPlane, FlatSampleStatistics, FlatSpatialAnalysis, FlatTile } from './types'
 
 // Tiled spatial flat analysis over digital mono, interleaved RGB, and non-debayered CFA planes. Tile
@@ -88,6 +88,7 @@ export function analyzeFlatSpatial(input: FlatSpatialInput): FlatSpatialResult {
 
 	const fullGeometry = resolveImagePlaneGeometry(input.image, input.area, input.plane, input.cfaOffset)
 	const minimumSamples = Math.min(MINIMUM_FLAT_TILE_SAMPLES, fullGeometry.width * fullGeometry.height)
+	const workspace = new FlatRegionMeasurementWorkspace(tileSize.width * tileSize.height, input.reference !== undefined)
 	const tiles: FlatTile[] = []
 	const qualityMeasurements: FlatRegionMeasurement[] = []
 	const samples: SpatialTileSample[] = []
@@ -100,7 +101,7 @@ export function analyzeFlatSpatial(input: FlatSpatialInput): FlatSpatialResult {
 			const area = { left, top, right, bottom }
 			const geometry = resolveOptionalImagePlaneGeometry(input.image, area, input.plane, input.cfaOffset)
 			if (!geometry || geometry.width * geometry.height < minimumSamples) continue
-			const measurement = measureFlatRegion({
+			const measurement = workspace.measure({
 				image: input.image,
 				cfaOffset: input.cfaOffset,
 				reference: input.reference,

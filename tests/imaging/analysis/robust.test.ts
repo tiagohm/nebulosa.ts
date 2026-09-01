@@ -28,6 +28,21 @@ test('uses deterministic bounded sampling for large populations', () => {
 	expect(first.mad()).toBe(second.mad())
 })
 
+test('resets deterministic sampling and reuses MAD scratch', () => {
+	const reservoir = new RobustReservoir(4)
+	const scratch = new Float64Array(4)
+	for (let value = 0; value < 100; value++) reservoir.push(value)
+	const firstMedian = reservoir.median()
+	const firstMad = reservoir.madAround(firstMedian, false, scratch)
+
+	reservoir.reset()
+	for (let value = 0; value < 100; value++) reservoir.push(value)
+	const secondMedian = reservoir.median()
+	expect(secondMedian).toBe(firstMedian)
+	expect(reservoir.madAround(secondMedian, false, scratch)).toBe(firstMad)
+	expect(() => reservoir.madAround(secondMedian, false, new Float64Array(3))).toThrow(RangeError)
+})
+
 test('reports empty reductions and rejects allocation-unsafe capacities', () => {
 	const empty = new RobustReservoir(0)
 	expect(empty.retainedCount).toBe(0)

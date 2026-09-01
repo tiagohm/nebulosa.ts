@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test'
 import { analyzeFlat } from '../../../../src/imaging/analysis/flat/flat'
+import { FlatRegionMeasurementWorkspace } from '../../../../src/imaging/analysis/flat/statistics'
 import { ROBUST_SAMPLE_CAPACITY } from '../../../../src/imaging/analysis/robust'
 import { generateSyntheticFlatImage } from '../../../../src/imaging/synthetic/flat'
 
@@ -25,6 +26,19 @@ test('keeps masked and non-finite counts disjoint', () => {
 	expect(statistics).toMatchObject({ count: 4, masked: 1, nonFinite: 1 })
 	expect(result.assessment.finiteSamples).toMatchObject({ status: 'fail', value: 0.2 })
 	expect(result.assessment.verdict).toBe('rejected')
+})
+
+test('reuses region measurement storage without retaining prior tile state', () => {
+	const image = generateSyntheticFlatImage({ width: 4, height: 2, bias: 0, signal: 100, vignetting: 0 })
+	image.raw.fill(200, 4)
+	const workspace = new FlatRegionMeasurementWorkspace(4, false)
+	const input = { image, plane: 'mono' as const, clippingLimits: {} }
+
+	const first = workspace.measure({ ...input, area: { left: 0, top: 0, right: 4, bottom: 1 } })
+	const second = workspace.measure({ ...input, area: { left: 0, top: 1, right: 4, bottom: 2 } })
+
+	expect(first.observed).toMatchObject({ count: 4, mean: 100, median: 100, mad: 0 })
+	expect(second.observed).toMatchObject({ count: 4, mean: 200, median: 200, mad: 0 })
 })
 
 test('subtracts a compatible reference in line without changing observed statistics', () => {
