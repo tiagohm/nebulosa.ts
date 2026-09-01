@@ -38,6 +38,24 @@ test('subtracts a compatible reference in line without changing observed statist
 	expect(result.assessment.verdict).toBe('accepted')
 })
 
+test('evaluates finite-sample criteria on the active corrected basis', () => {
+	const image = generateSyntheticFlatImage({ width: 96, height: 96, bias: 100, signal: 900, vignetting: 0 })
+	const bias = generateSyntheticFlatImage({ width: 96, height: 96, bias: 100, signal: 0, vignetting: 0 })
+	for (let y = 0; y < 32; y++) for (let x = 0; x < 32; x++) bias.raw[y * 96 + x] = Number.NaN
+
+	const result = analyzeFlat(
+		{ frame: { image }, reference: { kind: 'bias', image: bias } },
+		{
+			tile: { width: 32, height: 32 },
+			criteria: { targets: { mono: { levelMode: 'corrected', range: [850, 950] } }, maximumNonFiniteFraction: 0.01 },
+		},
+	)
+
+	expect(result.planes[0].target.status).toBe('pass')
+	expect(result.assessment.finiteSamples).toMatchObject({ status: 'fail', value: 1 })
+	expect(result.assessment.verdict).toBe('rejected')
+})
+
 test('bounds robust samples and marks large-image quantiles approximate', () => {
 	const image = generateSyntheticFlatImage({ width: ROBUST_SAMPLE_CAPACITY + 1, height: 1, bias: 0, signal: 10, vignetting: 0 })
 	const statistics = analyzeFlat({ frame: { image } }).planes[0].observed

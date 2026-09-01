@@ -71,6 +71,8 @@ export interface FlatSpatialInput {
 export interface FlatSpatialResult {
 	// Spatial measurements for one plane.
 	readonly analysis: FlatSpatialAnalysis
+	// Measurements for every geometrically supported tile, including tiles without enough finite samples for fitting.
+	readonly qualityMeasurements: readonly FlatRegionMeasurement[]
 	// Fit, support, center, and localized data-quality diagnostics.
 	readonly diagnostics: readonly FlatDiagnostic[]
 }
@@ -87,6 +89,7 @@ export function analyzeFlatSpatial(input: FlatSpatialInput): FlatSpatialResult {
 	const fullGeometry = resolveImagePlaneGeometry(input.image, input.area, input.plane, input.cfaOffset)
 	const minimumSamples = Math.min(MINIMUM_FLAT_TILE_SAMPLES, fullGeometry.width * fullGeometry.height)
 	const tiles: FlatTile[] = []
+	const qualityMeasurements: FlatRegionMeasurement[] = []
 	const samples: SpatialTileSample[] = []
 	let nonPositiveLevel = false
 
@@ -96,7 +99,7 @@ export function analyzeFlatSpatial(input: FlatSpatialInput): FlatSpatialResult {
 			const right = Math.min(input.area.right, left + tileSize.width)
 			const area = { left, top, right, bottom }
 			const geometry = resolveOptionalImagePlaneGeometry(input.image, area, input.plane, input.cfaOffset)
-			if (!geometry) continue
+			if (!geometry || geometry.width * geometry.height < minimumSamples) continue
 			const measurement = measureFlatRegion({
 				image: input.image,
 				cfaOffset: input.cfaOffset,
@@ -107,6 +110,7 @@ export function analyzeFlatSpatial(input: FlatSpatialInput): FlatSpatialResult {
 				plane: input.plane,
 				clippingLimits: input.clippingLimits,
 			})
+			qualityMeasurements.push(measurement)
 			if (measurement.observed.count < minimumSamples) continue
 			const tile = { area, observed: measurement.observed, corrected: measurement.corrected, clipping: measurement.clipping }
 			tiles.push(tile)
@@ -125,14 +129,14 @@ export function analyzeFlatSpatial(input: FlatSpatialInput): FlatSpatialResult {
 		}
 	}
 
-	appendLocalizedDiagnostics(diagnostics, input.plane, tiles, input.fullMeasurement)
+	appendLocalizedDiagnostics(diagnostics, input.plane, qualityMeasurements, input.fullMeasurement, basis)
 	if (tiles.length === 0) {
 		diagnostics.push({ severity: 'warning', code: 'illuminationFitFailed', message: 'No tile retained enough finite, non-masked samples for spatial flat analysis.', plane: input.plane })
-		return { analysis: { basis, tiles }, diagnostics }
+		return { analysis: { basis, tiles }, qualityMeasurements, diagnostics }
 	}
 	if (nonPositiveLevel) {
 		diagnostics.push({ severity: 'warning', code: 'illuminationFitFailed', message: 'At least one supported tile has a non-positive level, so multiplicative illumination metrics are unavailable.', plane: input.plane })
-		return { analysis: { basis, tiles }, diagnostics }
+		return { analysis: { basis, tiles }, qualityMeasurements, diagnostics }
 	}
 
 	const levels = samples.map((sample) => sample.level)
@@ -140,7 +144,7 @@ export function analyzeFlatSpatial(input: FlatSpatialInput): FlatSpatialResult {
 	const scalar = scalarSpatialMetrics(levels, regional)
 	if (samples.length < 6) {
 		diagnostics.push({ severity: 'warning', code: 'illuminationFitFailed', message: 'Fewer than six positive supported tiles are available for a degree-two illumination fit.', plane: input.plane })
-		return { analysis: { basis, tiles, ...scalar }, diagnostics }
+		return { analysis: { basis, tiles, ...scalar }, qualityMeasurements, diagnostics }
 	}
 
 	let maximumWeight = 0
@@ -154,11 +158,11 @@ export function analyzeFlatSpatial(input: FlatSpatialInput): FlatSpatialResult {
 	})
 	if (!fit.ok) {
 		diagnostics.push({ severity: 'warning', code: 'illuminationFitFailed', message: `The degree-two illumination fit failed because of ${fit.reason}.`, plane: input.plane })
-		return { analysis: { basis, tiles, ...scalar }, diagnostics }
+		return { analysis: { basis, tiles, ...scalar }, qualityMeasurements, diagnostics }
 	}
 	if (!quadraticSurfaceIsPositive(fit.model)) {
 		diagnostics.push({ severity: 'warning', code: 'illuminationFitFailed', message: 'The fitted illumination surface is not strictly positive across the analysis area.', plane: input.plane })
-		return { analysis: { basis, tiles, ...scalar }, diagnostics }
+		return { analysis: { basis, tiles, ...scalar }, qualityMeasurements, diagnostics }
 	}
 
 	const gradient = illuminationGradient(fit.model, input.area)
@@ -188,6 +192,7 @@ export function analyzeFlatSpatial(input: FlatSpatialInput): FlatSpatialResult {
 			profiles,
 			dustCandidates,
 		},
+		qualityMeasurements,
 		diagnostics,
 	}
 }
@@ -411,16 +416,18 @@ function materializeSpatialMaps(input: FlatSpatialInput, model: ScalarSurfaceMod
 }
 
 // Reports only localized clipping or non-finite fractions that exceed their full-area counterparts.
-function appendLocalizedDiagnostics(diagnostics: FlatDiagnostic[], plane: FlatPlane, tiles: readonly FlatTile[], full: FlatRegionMeasurement): void {
+function appendLocalizedDiagnostics(diagnostics: FlatDiagnostic[], plane: FlatPlane, measurements: readonly FlatRegionMeasurement[], full: FlatRegionMeasurement, basis: 'observed' | 'corrected'): void {
 	let nonFinite = 0
 	let effectiveClipping = 0
 	let storageClipping = 0
-	const fullDenominator = full.observed.count + full.observed.nonFinite
-	const fullNonFinite = fullDenominator > 0 ? full.observed.nonFinite / fullDenominator : 0
-	for (const tile of tiles) {
-		const denominator = tile.observed.count + tile.observed.nonFinite
-		if (denominator > 0) nonFinite = Math.max(nonFinite, tile.observed.nonFinite / denominator)
-		for (const side of [tile.clipping.lower, tile.clipping.upper]) {
+	const fullStatistics = basis === 'corrected' ? full.corrected! : full.observed
+	const fullDenominator = fullStatistics.count + fullStatistics.nonFinite
+	const fullNonFinite = fullDenominator > 0 ? fullStatistics.nonFinite / fullDenominator : 0
+	for (const measurement of measurements) {
+		const statistics = basis === 'corrected' ? measurement.corrected! : measurement.observed
+		const denominator = statistics.count + statistics.nonFinite
+		if (denominator > 0) nonFinite = Math.max(nonFinite, statistics.nonFinite / denominator)
+		for (const side of [measurement.clipping.lower, measurement.clipping.upper]) {
 			if (side?.status !== 'present') continue
 			if (side.source === 'effective') effectiveClipping = Math.max(effectiveClipping, side.fraction)
 			else storageClipping = Math.max(storageClipping, side.fraction)

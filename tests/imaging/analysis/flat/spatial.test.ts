@@ -119,6 +119,23 @@ test('covers supported non-divisible edges and discards only the undersupported 
 	expect(spatial.tiles.at(-1)?.area).toEqual({ left: 24, top: 24, right: 32, bottom: 27 })
 })
 
+test('retains local non-finite evidence when a tile has too few finite samples for fitting', () => {
+	const image = generateSyntheticFlatImage({ width: 96, height: 96, bias: 0, signal: 100, vignetting: 0 })
+	for (let y = 0; y < 32; y++) for (let x = 0; x < 32; x++) image.raw[y * 96 + x] = Number.NaN
+
+	const result = analyzeFlat({ frame: { image } }, { tile: { width: 32, height: 32 }, criteria: { maximumNonFiniteFraction: 0.2 } })
+
+	expect(result.planes[0].spatial.tiles).toHaveLength(8)
+	expect(result.assessment.finiteSamples).toMatchObject({ status: 'fail', value: 1 })
+	expect(result.assessment.verdict).toBe('rejected')
+
+	const mask = new Uint8Array(image.metadata.pixelCount)
+	for (let y = 0; y < 32; y++) for (let x = 0; x < 32; x++) mask[y * 96 + x] = 1
+	const masked = analyzeFlat({ frame: { image }, mask }, { tile: { width: 32, height: 32 }, criteria: { maximumNonFiniteFraction: 0.2 } })
+	expect(masked.assessment.finiteSamples).toMatchObject({ status: 'pass', value: 0 })
+	expect(masked.assessment.verdict).toBe('accepted')
+})
+
 test('bounds explicit tile allocation before constructing tile objects', () => {
 	const image = generateSyntheticFlatImage({ width: 257, height: 257, bias: 0, signal: 100, vignetting: 0 })
 	expect(() => analyzeFlat({ frame: { image } }, { tile: { width: 1, height: 1 } })).toThrow('tile allocation limit')

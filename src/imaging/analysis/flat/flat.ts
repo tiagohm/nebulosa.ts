@@ -43,6 +43,7 @@ export function analyzeFlat(input: FlatAnalysisInput, options: Partial<FlatAnaly
 	const diagnostics: FlatDiagnostic[] = []
 	const planeAnalyses: FlatPlaneAnalysis[] = []
 	const fullMeasurements: FlatRegionMeasurement[] = []
+	const spatialQualityMeasurements: Array<readonly FlatRegionMeasurement[]> = []
 
 	if (!reference) diagnostics.push({ severity: 'info', code: 'pedestalNotRemoved', message: 'No bias or dark-flat reference was supplied; signal and spatial measurements retain the observed pedestal.' })
 	if (resolved.referenceMetadataUnknown) diagnostics.push({ severity: 'warning', code: 'referenceMetadataUnknown', message: 'Known reference metadata is compatible, but missing acquisition fields prevent a complete compatibility proof.' })
@@ -75,7 +76,7 @@ export function analyzeFlat(input: FlatAnalysisInput, options: Partial<FlatAnaly
 		fullMeasurements.push(fullMeasurement)
 
 		const target = evaluateTarget(options.criteria?.targets?.[plane], targetMeasurement.observed, targetMeasurement.corrected)
-		appendPlaneDiagnostics(diagnostics, plane, targetMeasurement, fullMeasurement, target, options.criteria?.targets?.[plane])
+		appendPlaneDiagnostics(diagnostics, plane, targetMeasurement, fullMeasurement, reference ? 'corrected' : 'observed', target, options.criteria?.targets?.[plane])
 		const spatial = analyzeFlatSpatial({
 			image,
 			cfaOffset: resolved.cfaOffset,
@@ -88,6 +89,7 @@ export function analyzeFlat(input: FlatAnalysisInput, options: Partial<FlatAnaly
 			clippingLimits,
 			fullMeasurement,
 		})
+		spatialQualityMeasurements.push(spatial.qualityMeasurements)
 		diagnostics.push(...spatial.diagnostics)
 		planeAnalyses.push({
 			plane,
@@ -99,7 +101,7 @@ export function analyzeFlat(input: FlatAnalysisInput, options: Partial<FlatAnaly
 		})
 	}
 
-	const assessment = assessFlat(planeAnalyses, fullMeasurements, options)
+	const assessment = assessFlat(planeAnalyses, fullMeasurements, spatialQualityMeasurements, options)
 	return {
 		frameId: input.frame.id,
 		area: resolved.area,
@@ -266,11 +268,12 @@ function evaluateTarget(target: FlatTarget | undefined, observed: FlatSampleStat
 }
 
 // Adds per-plane data-quality, clipping, and target diagnostics without changing policy implicitly.
-function appendPlaneDiagnostics(diagnostics: FlatDiagnostic[], plane: FlatPlane, targetMeasurement: FlatRegionMeasurement, fullMeasurement: FlatRegionMeasurement, targetCheck: FlatCheck, target: FlatTarget | undefined): void {
-	const full = fullMeasurement.observed
+function appendPlaneDiagnostics(diagnostics: FlatDiagnostic[], plane: FlatPlane, targetMeasurement: FlatRegionMeasurement, fullMeasurement: FlatRegionMeasurement, basis: 'observed' | 'corrected', targetCheck: FlatCheck, target: FlatTarget | undefined): void {
+	const full = basis === 'corrected' ? fullMeasurement.corrected! : fullMeasurement.observed
 	const denominator = full.count + full.nonFinite
-	if (full.nonFinite > 0 && denominator > 0) diagnostics.push({ severity: 'warning', code: 'nonFiniteSamples', message: 'Non-finite observed samples were excluded from flat reductions.', plane, value: full.nonFinite / denominator })
-	if (targetMeasurement.observed.count === 0) diagnostics.push({ severity: 'error', code: 'insufficientSamples', message: 'No finite, non-masked target-area samples were available for this plane.', plane })
+	if (full.nonFinite > 0 && denominator > 0) diagnostics.push({ severity: 'warning', code: 'nonFiniteSamples', message: `Non-finite ${basis} samples were excluded from flat reductions.`, plane, value: full.nonFinite / denominator })
+	const targetStatistics = basis === 'corrected' ? targetMeasurement.corrected! : targetMeasurement.observed
+	if (targetStatistics.count === 0) diagnostics.push({ severity: 'error', code: 'insufficientSamples', message: 'No finite, non-masked target-area samples were available on the active analysis basis for this plane.', plane })
 
 	for (const side of [fullMeasurement.clipping.lower, fullMeasurement.clipping.upper]) {
 		if (side?.status !== 'present') continue
@@ -300,7 +303,7 @@ function appendPlaneDiagnostics(diagnostics: FlatDiagnostic[], plane: FlatPlane,
 }
 
 // Derives aggregate target, clipping, finite-sample checks, and the transparent verdict.
-function assessFlat(planes: readonly FlatPlaneAnalysis[], fullMeasurements: readonly FlatRegionMeasurement[], options: Partial<FlatAnalysisOptions>): FlatAssessment {
+function assessFlat(planes: readonly FlatPlaneAnalysis[], fullMeasurements: readonly FlatRegionMeasurement[], spatialQualityMeasurements: readonly (readonly FlatRegionMeasurement[])[], options: Partial<FlatAnalysisOptions>): FlatAssessment {
 	const configuredTargets = planes.filter((plane) => options.criteria?.targets?.[plane.plane] !== undefined).map((plane) => plane.target)
 	const target = aggregateChecks(configuredTargets)
 	const clipping = assessClipping(
@@ -308,7 +311,12 @@ function assessFlat(planes: readonly FlatPlaneAnalysis[], fullMeasurements: read
 		options.criteria?.maximumClippedFraction,
 	)
 	const finiteSamples = assessFiniteSamples(
-		planes.flatMap((plane, index) => [fullMeasurements[index].observed, ...plane.spatial.tiles.map((tile) => tile.observed)]),
+		planes.flatMap((plane, index) => {
+			const basis = plane.spatial.basis
+			const select = (measurement: FlatRegionMeasurement) => (basis === 'corrected' ? measurement.corrected! : measurement.observed)
+			const local = spatialQualityMeasurements[index].map(select).filter((statistics) => statistics.count + statistics.nonFinite > 0)
+			return [select(fullMeasurements[index]), ...local]
+		}),
 		options.criteria?.maximumNonFiniteFraction,
 	)
 	const required: FlatCheck[] = []
