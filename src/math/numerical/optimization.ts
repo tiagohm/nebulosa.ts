@@ -130,6 +130,7 @@ export function bisection(f: (x: number) => number, min: number, max: number, { 
 	for (let iterations = 1; iterations <= maxIterations; iterations++) {
 		mid = 0.5 * (a + b)
 		fmid = f(mid)
+		validateFiniteValue(mid, fmid)
 
 		if (Math.abs(fmid) <= functionTolerance || Math.abs(b - a) <= tolerance) {
 			return { root: mid, value: fmid, iterations, converged: true }

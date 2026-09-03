@@ -64,6 +64,10 @@ describe('root finding', () => {
 	test('rejects root brackets without a sign change', () => {
 		expect(() => brentRoot((x) => x * x + 1, -1, 1)).toThrow('root bracket endpoints must have opposite signs')
 	})
+
+	test('bisection rejects a non-finite interior evaluation', () => {
+		expect(() => bisection((x) => (x === 0.5 ? Number.NaN : x - 0.3), 0, 1)).toThrow('function must return finite values')
+	})
 })
 
 describe('scalar minimization', () => {
