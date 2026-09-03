@@ -183,6 +183,19 @@ describe('Levenberg-Marquardt optimization', () => {
 		expect(result[1]).toBeCloseTo(-3, 6)
 	})
 
+	test('still fits identifiable parameters when one Jacobian column is identically zero', () => {
+		function line(x: number, [a, b]: NumberArray) {
+			return a * x + b
+		}
+
+		const x = [0, 1, 2, 3, 4, 5]
+		const y = x.map((value) => 2 * value - 3)
+		const result = levenbergMarquardt(x, y, line, [1, 0, 0])
+
+		expect(result[0]).toBeCloseTo(2, 6)
+		expect(result[1]).toBeCloseTo(-3, 6)
+	})
+
 	test('weighted line suppresses a zero-weight outlier', () => {
 		function line(x: number, [a, b]: NumberArray) {
 			return a * x + b

@@ -695,16 +695,22 @@ export function levenbergMarquardt(x: Readonly<NumberArray>, y: Readonly<NumberA
 		}
 
 		// Damp a fresh copy of JᵀJ so the base matrix survives a possible rejected retry.
+		// Marquardt scaling (1+λ)·diag when the curvature is positive; Levenberg λI on a
+		// degenerate column so a zero Jacobian column still produces a solvable system.
 		for (let i = 0; i < dampedData.length; i++) dampedData[i] = JTJData[i]
 		for (let i = 0, p = 0; i < m; i++, p += m) {
-			dampedData[p + i] *= 1 + lambda
+			const diag = JTJData[p + i]
+			dampedData[p + i] = diag + lambda * (diag > 0 ? diag : 1)
 		}
 
 		// Solve (JᵀJ + λ·diag) * dp = Jᵀr on working copies (the solver mutates them).
 		JTRWork.set(JTR)
 		gaussianElimination(damped, JTRWork, DP)
 
-		if (Number.isNaN(DP[0])) break
+		if (Number.isNaN(DP[0])) {
+			lambda *= 10
+			continue
+		}
 
 		// Update parameters.
 		for (let i = 0; i < m; i++) UP[i] = params[i] + DP[i]
