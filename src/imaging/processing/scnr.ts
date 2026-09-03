@@ -1,4 +1,3 @@
-import { validateInRange } from '../../core/validation'
 import type { Image, ImageChannel, ImageRawType } from '../model/types'
 
 // Subtractive Chromatic Noise Reduction (SCNR): attenuates a selected color cast in dense RGB
@@ -78,7 +77,6 @@ function applyMinimumNeutral(raw: ImageRawType, p0: number, p1: number, p2: numb
 // Applies SCNR in place to one selected RGB channel with an intensity in [0,1]. Monochrome and CFA
 // images are validated no-ops. The returned image is the same object supplied by the caller.
 export function scnr(image: Image, channel: ImageChannel = 'GREEN', amount: number = 0.5, method: SCNRProtectionMethod = 'MAXIMUM_MASK') {
-	validateInRange(amount, 0, 1)
 	validateSCNRImage(image)
 
 	let p0: number

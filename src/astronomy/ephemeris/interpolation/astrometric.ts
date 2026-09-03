@@ -1,4 +1,3 @@
-import { validatePositiveFinite, validatePositiveInteger } from '../../../core/validation'
 import type { MutVec3 } from '../../../math/linear-algebra/vec3'
 import { type NumberArray, clamp } from '../../../math/numerical/math'
 import { normalizeAngle, type Angle } from '../../../math/units/angle'
@@ -128,6 +127,8 @@ export class AstrometricInterpolator {
 	// Reusable output buffer for the interpolated Cartesian vector, avoiding per-query allocation.
 	private readonly scratch: MutVec3 = [0, 0, 0]
 
+	// width and height are positive integers whose product equals raGrid.length; stepX and stepY are
+	// the positive pixel spacing of the sample grid.
 	constructor(
 		raGrid: NumberArray,
 		decGrid: NumberArray,
@@ -137,11 +138,6 @@ export class AstrometricInterpolator {
 		readonly stepY: number,
 		options: AstrometricInterpolatorOptions = {},
 	) {
-		validatePositiveInteger(width)
-		validatePositiveInteger(height)
-		validatePositiveFinite(stepX)
-		validatePositiveFinite(stepY)
-
 		const length = width * height
 		if (raGrid.length !== decGrid.length) throw new Error('astrometric RA and Dec grids must have the same length')
 		if (raGrid.length !== length) throw new Error('astrometric grid length must equal width * height')

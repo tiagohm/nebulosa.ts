@@ -340,13 +340,6 @@ describe('SIP validation', () => {
 		expect(() => countSipTerms(6)).toThrow('not supported')
 	})
 
-	test('rejects invalid coordinates', () => {
-		const stars = syntheticStars()
-		stars[0] = { ...stars[0], x: Number.NaN }
-
-		expect(() => fitSipDistortion(stars, WCS, { order: 3, spatialDistribution: 'off' })).toThrow('value must be finite')
-	})
-
 	test('rejects invalid weights', () => {
 		const stars = syntheticStars()
 		stars[0] = { ...stars[0], weight: 0 }

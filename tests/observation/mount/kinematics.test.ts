@@ -129,5 +129,5 @@ test('invalid geometry, directions, ranges, and solver controls are rejected', (
 	expect(() => solveMountEncoders(geometry, [0, 0, 0])).toThrow()
 	expect(() => solveMountEncoders(geometry, [0, 1, 0], { primaryRange: [1, -1] })).toThrow()
 	expect(() => solveMountEncoders(geometry, [0, 1, 0], { maxIterations: 0 })).toThrow()
-	expect(() => solveMountEncoders(geometry, [0, 1, 0], { maxStep: Number.NaN })).toThrow()
+	expect(() => solveMountEncoders(geometry, [0, 1, 0], { maxIterations: Number.POSITIVE_INFINITY })).toThrow()
 })

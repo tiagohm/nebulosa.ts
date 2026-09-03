@@ -1,4 +1,3 @@
-import { validateFinite, validatePositiveFinite, validateVector } from '../../core/validation'
 import { type Vec3, vecDot, vecLength, vecMinus, vecNormalize, vecPlus, vecMulScalar } from '../../math/linear-algebra/vec3'
 import { normalizeAngle, normalizePI, type Angle } from '../../math/units/angle'
 import { mountPoseFromEncoders, type MountEncoderPosition, type MountPose, type TwoAxisMountGeometry } from '../mount/kinematics'
@@ -50,10 +49,6 @@ const DISCRIMINANT_RELATIVE_EPSILON = 64 * Number.EPSILON
 // Returns the nearest strictly forward intersection of a ray with a sphere, or undefined when the
 // line misses or both roots are non-forward. Direction is normalized so distance remains metres.
 export function intersectRaySphere(ray: Readonly<OpticalRay>, center: Vec3, radius: number): RaySphereIntersection | undefined {
-	validateVector(ray.origin)
-	validateVector(ray.direction)
-	validateVector(center)
-	validatePositiveFinite(radius)
 	if (vecLength(ray.direction) === 0) throw new RangeError('ray.direction must be non-zero')
 	const direction = vecNormalize(ray.direction)
 	const relative = vecMinus(ray.origin, center)
@@ -97,22 +92,16 @@ export function solveDomeSlitFromMount(geometry: Readonly<TwoAxisMountGeometry>,
 
 // Returns the shortest signed command correction target-current in [-PI,PI] radians.
 export function domeAzimuthError(current: Angle, target: Angle): Angle {
-	validateFinite(current)
-	validateFinite(target)
 	return normalizePI(target - current)
 }
 
 // Returns whether the shortest command correction strictly exceeds a non-negative tolerance.
 export function isDomeMoveRequired(current: Angle, target: Angle, tolerance: Angle): boolean {
-	validateFinite(tolerance)
 	if (tolerance < 0) throw new RangeError('tolerance must be non-negative')
 	return Math.abs(domeAzimuthError(current, target)) > tolerance
 }
 
-// Validates finite sphere and command-convention fields.
+// Rejects azimuth-direction values other than the documented ±1 convention.
 function validateDome(dome: Readonly<SphericalDomeGeometry>): void {
-	validateVector(dome.center)
-	validatePositiveFinite(dome.radius)
-	validateFinite(dome.azimuthOffset ?? 0)
 	if (dome.azimuthDirection !== undefined && dome.azimuthDirection !== 1 && dome.azimuthDirection !== -1) throw new RangeError('azimuthDirection must be 1 or -1')
 }

@@ -449,8 +449,8 @@ function createRiceImageLayout(header: Readonly<FitsHeader>, raw: ImageRawType, 
 
 	const tileHeightOption = options.tileHeight ?? 1
 	const blockSize = options.blockSize ?? RICE_DEFAULT_BLOCK_SIZE
+	// A non-positive tile height makes Math.ceil(height / tileHeight) infinite and the descriptor table unbounded.
 	validatePositiveInteger(tileHeightOption)
-	validatePositiveInteger(blockSize)
 
 	const tileHeight = Math.min(height, tileHeightOption)
 	const ImageTypedArray = bitpix === 8 ? Uint8Array : bitpix === 16 ? Int16Array : Int32Array
@@ -1385,8 +1385,7 @@ export class FitsImageReader {
 		const tileDepth = Math.trunc(numericKeyword(header, 'ZTILE3', 1))
 		const blockSize = riceBlockSizeFromHeader(header)
 
-		validatePositiveInteger(rowSize)
-		validatePositiveInteger(rowCount)
+		// Zero tile sizes from the FITS header make Math.ceil(dim / tile) infinite and the tile loop never terminate.
 		validatePositiveInteger(tileWidth)
 		validatePositiveInteger(tileHeight)
 		validatePositiveInteger(tileDepth)

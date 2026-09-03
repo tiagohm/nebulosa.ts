@@ -1,7 +1,6 @@
 import { refractedAltitude, type RefractionParameters } from '../../astronomy/coordinates/astrometry'
 import { enuToTakiMatrix, enuVectorToHorizontal, horizontalToEnuVector, takiToEnuMatrix } from '../../astronomy/coordinates/frame.local'
 import { PI, PIOVERTWO, TAU } from '../../core/constants'
-import { validateFinite, validateInRange } from '../../core/validation'
 import { matMulVec } from '../../math/linear-algebra/mat3'
 import { vecAngleUnit, vecMulScalar, vecNormalize, type Vec3 } from '../../math/linear-algebra/vec3'
 import { linearLeastSquares, robustLinearLeastSquares, type LinearLeastSquaresResult } from '../../math/numerical/least.squares'
@@ -90,7 +89,6 @@ const SMALL_ANGLE_WARNING_LIMIT = (5 * PI) / 180
 
 // Fits shared Taki u/v components and one independent declination intercept per star.
 export function fitChallisPolarAlignment(observations: readonly Readonly<ChallisObservation>[], latitude: Angle, options: Readonly<ChallisFitOptions> = {}): ChallisPolarAlignmentResult {
-	validateInRange(latitude, -PIOVERTWO, PIOVERTWO)
 	validateFitOptions(options)
 	if (observations.length === 0) throw new RangeError('at least three Challis observations are required')
 
@@ -104,11 +102,7 @@ export function fitChallisPolarAlignment(observations: readonly Readonly<Challis
 
 	for (let i = 0; i < observations.length; i++) {
 		const observation = observations[i]
-		validateFinite(observation.hourAngle)
-		validateFinite(observation.mountDeclination)
-		validateFinite(observation.correction ?? 0)
 		const weight = observation.weight ?? 1
-		validateFinite(weight)
 		if (weight < 0) throw new RangeError(`observations[${i}].weight must be non-negative`)
 		if (weight > 0) positiveWeightCount++
 		const row = new Float64Array(columnCount)
@@ -175,9 +169,6 @@ export function fitChallisPolarAlignment(observations: readonly Readonly<Challis
 // Computes the apparent declination increment caused by the existing atmospheric refraction model.
 // Directions below -1 degree geometric altitude are rejected because the model is unreliable there.
 export function challisRefractionCorrection(hourAngle: Angle, declination: Angle, latitude: Angle, refraction?: Readonly<RefractionParameters>): Angle {
-	validateFinite(hourAngle)
-	validateInRange(declination, -PIOVERTWO, PIOVERTWO)
-	validateInRange(latitude, -PIOVERTWO, PIOVERTWO)
 	const cosDeclination = Math.cos(declination)
 	const taki = [cosDeclination * Math.cos(hourAngle), -cosDeclination * Math.sin(hourAngle), Math.sin(declination)] as const
 	const horizontal = enuVectorToHorizontal(matMulVec(takiToEnuMatrix(latitude), taki))
@@ -191,17 +182,10 @@ export function challisRefractionCorrection(hourAngle: Angle, declination: Angle
 
 // Validates finite robust controls before delegating to the shared least-squares implementation.
 function validateFitOptions(options: Readonly<ChallisFitOptions>): void {
-	const robust = options.robust ?? 'none'
-	if (robust !== 'none' && robust !== 'huber' && robust !== 'tukey') throw new RangeError('robust method is invalid')
+	// A non-finite or non-positive cap would make robust iteration never terminate.
 	if (options.maxIterations !== undefined && (!Number.isInteger(options.maxIterations) || options.maxIterations <= 0)) throw new RangeError('maxIterations must be a positive integer')
-	if (options.tolerance !== undefined) {
-		validateFinite(options.tolerance)
-		if (options.tolerance < 0) throw new RangeError('tolerance must be non-negative')
-	}
-	if (options.tuning !== undefined) {
-		validateFinite(options.tuning)
-		if (options.tuning <= 0) throw new RangeError('tuning must be positive')
-	}
+	if (options.tolerance !== undefined && options.tolerance < 0) throw new RangeError('tolerance must be non-negative')
+	if (options.tuning !== undefined && options.tuning <= 0) throw new RangeError('tuning must be positive')
 }
 
 function effectiveAngleComparator(a: number, b: number) {

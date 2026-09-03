@@ -1,5 +1,4 @@
 import { DEG2RAD } from '../../../core/constants'
-import { validateFinite, validateLatitude, validateNonNegativeFinite, validatePositiveFinite, validateTime, validateVector } from '../../../core/validation'
 import { type MutVec3, type Vec3, vecAngleUnit, vecCross, vecCrossLength, vecDot, vecLength, vecNormalizeMut, vecTripleProduct } from '../../../math/linear-algebra/vec3'
 import type { Angle } from '../../../math/units/angle'
 import type { CartesianCoordinate } from '../../coordinates/coordinate'
@@ -154,9 +153,6 @@ interface Candidate {
 // observations with the classical Gauss initial orbit determination method.
 export function gauss(obs1: GaussObservation, obs2: GaussObservation, obs3: GaussObservation, options: GaussOptions): GaussResult {
 	const config = resolveOptions(options)
-	validateObservation(obs1, 'obs1')
-	validateObservation(obs2, 'obs2')
-	validateObservation(obs3, 'obs3')
 
 	const tau1 = timeSubtract(obs1.time, obs2.time, obs2.time.scale)
 	const tau3 = timeSubtract(obs3.time, obs2.time, obs2.time.scale)
@@ -234,18 +230,12 @@ export function gauss(obs1: GaussObservation, obs2: GaussObservation, obs3: Gaus
 }
 
 function resolveOptions(options: GaussOptions): ResolvedGaussOptions {
-	validatePositiveFinite(options.mu)
-	const minPositiveRho = validateNonNegativeFinite(options.minPositiveRho ?? DEFAULT_MIN_POSITIVE_RHO)
-	const maxIterations = validatePositiveFinite(options.maxIterations ?? DEFAULT_MAX_ITERATIONS)
-	const tolerance = validatePositiveFinite(options.tolerance ?? DEFAULT_TOLERANCE)
+	const minPositiveRho = options.minPositiveRho ?? DEFAULT_MIN_POSITIVE_RHO
+	const maxIterations = options.maxIterations ?? DEFAULT_MAX_ITERATIONS
+	const tolerance = options.tolerance ?? DEFAULT_TOLERANCE
+	// A non-finite iteration cap would make root-finding loops never terminate.
+	if (!Number.isFinite(maxIterations)) throw new RangeError('maxIterations must be finite')
 	return { mu: options.mu, method: options.method, minPositiveRho, maxIterations, tolerance }
-}
-
-function validateObservation(observation: GaussObservation, name: string) {
-	validateTime(observation.time)
-	validateFinite(observation.rightAscension)
-	validateLatitude(observation.declination)
-	validateVector(observation.observer)
 }
 
 // Unit line-of-sight direction from RA/Dec (radians).

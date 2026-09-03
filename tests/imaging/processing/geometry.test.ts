@@ -147,7 +147,7 @@ test('grayscale rebuilds mono metadata and removes third-axis and CFA keywords',
 })
 
 test('grayscale rejects invalid runtime channels and weights before allocating output', () => {
-	const invalid = ['CYAN', null, { red: Number.NaN, green: 0, blue: 1 }, { red: -0.1, green: 0.5, blue: 0.6 }, { red: 0.2, green: 0.3, blue: 0.4 }] as const
+	const invalid = ['CYAN', null, { red: 0.2, green: 0.3, blue: 0.4 }] as const
 	for (const channel of invalid) {
 		const image = makeImage(1, 1, 3, [0.2, 0.4, 0.8])
 		const before = new Float32Array(image.raw)

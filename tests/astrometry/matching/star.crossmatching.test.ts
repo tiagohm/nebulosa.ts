@@ -271,10 +271,6 @@ describe('image-based star crossmatching', () => {
 
 		expect(crossMatchStars(detectedStars, catalog, { centerRA: Number.NaN, centerDEC: deg(10), radius: deg(1), camera })).rejects.toThrow()
 		expect(crossMatchStars(detectedStars, catalog, { centerRA: deg(10), centerDEC: deg(120), radius: deg(1), camera })).rejects.toThrow()
-		expect(crossMatchStars(detectedStars, catalog, { centerRA: deg(10), centerDEC: deg(10), radius: 0, camera })).rejects.toThrow()
-		expect(crossMatchStars(detectedStars, catalog, { centerRA: deg(10), centerDEC: deg(10), radius: deg(120), camera })).rejects.toThrow()
-		expect(crossMatchStars(detectedStars, catalog, { centerRA: deg(10), centerDEC: deg(10), radius: deg(1), camera: { width: 0, height: 900 } })).rejects.toThrow()
-		expect(crossMatchStars(detectedStars, catalog, { centerRA: deg(10), centerDEC: deg(10), radius: deg(1), camera: { width: 1200, height: 900, pixelSize: -1, focalLength: 400 } })).rejects.toThrow()
 	})
 
 	test('keeps extra detected stars unmatched while preserving solved associations', async () => {

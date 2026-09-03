@@ -4,10 +4,12 @@ import type { Vec3 } from '../math/linear-algebra/vec3'
 import type { Angle } from '../math/units/angle'
 import { PI, PIOVERTWO } from './constants'
 
-// Shared runtime validators for public entry points. Each validator throws TypeError/RangeError on
+// Shared runtime validators for the two cases in the Validation Policy: preventing hang, non-convergence,
+// stack overflow, crash, or unbounded allocation; and rejecting a structurally nonsensical state that
+// would otherwise yield a plausible-looking wrong result. Each helper throws TypeError/RangeError on
 // invalid input and otherwise returns its argument unchanged so it can be used inline. Angular limits
-// are in radians. Keep these for boundaries where bad input would otherwise produce non-finite
-// geometry or hard-to-debug results, not for revalidating already-trusted internal values.
+// are in radians. Document numeric domains in comments instead of calling these for trusted typed
+// arguments; do not revalidate already-trusted internal values.
 
 // Small angular tolerance (radians) added to latitude/longitude bounds so values landing exactly on a
 // pole or the antimeridian survive floating-point rounding instead of being rejected.

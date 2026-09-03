@@ -1,4 +1,3 @@
-import { validateNonNegativeFinite } from '../../core/validation'
 import { clamp, type NumberArray } from '../../math/numerical/math'
 import { akimaSplineLUT, catmullRomSplineLUT, cubicHermiteSplineLUT, naturalCubicSplineLUT } from '../../math/numerical/spline'
 import { GRAYSCALES, type Image, type ImageChannelOrGray } from '../model/types'
@@ -83,9 +82,6 @@ function validateCurvesChannel(channel: ImageChannelOrGray) {
 
 	if (channel === null || typeof channel !== 'object') throw new RangeError('curves transformation channel must be a named channel or grayscale weights')
 	const { red, green, blue } = channel
-	validateNonNegativeFinite(red)
-	validateNonNegativeFinite(green)
-	validateNonNegativeFinite(blue)
 	const sum = red + green + blue
 	if (Math.abs(sum - 1) > CURVES_WEIGHT_SUM_TOLERANCE) throw new RangeError(`curves transformation weights must sum to one: ${sum}`)
 }

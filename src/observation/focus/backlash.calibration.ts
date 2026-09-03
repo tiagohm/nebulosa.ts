@@ -1,5 +1,5 @@
 import { medianAbsoluteDeviationOf, medianBySelectionOf, medianOf, percentileOf } from '../../core/util'
-import { validateFinite, validatePositiveFinite, validatePositiveInteger } from '../../core/validation'
+import { validatePositiveFinite, validatePositiveInteger } from '../../core/validation'
 import { robustLinearLeastSquares, type RobustLinearLeastSquaresResult } from '../../math/numerical/least.squares'
 import { goldenSectionSearch } from '../../math/numerical/optimization'
 import type { BacklashCompensation, BacklashCompensationMode } from './backlash'
@@ -19,7 +19,7 @@ export type BacklashCalibrationFailureReason = 'invalidEvent' | 'invalidPosition
 
 // Caller-facing configuration for directional preload, sampling, fitting, repetition, and limits.
 export interface BacklashCalibrationOptions {
-	// Requested movement increment, in focuser steps.
+	// Requested movement increment, in focuser steps. Must be positive: a zero step never advances the focuser and the calibration does not terminate.
 	readonly probeStep: number
 	// Distance traveled opposite the measured direction before each reversal, in steps.
 	readonly preloadDistance: number
@@ -27,7 +27,7 @@ export interface BacklashCalibrationOptions {
 	readonly maximumProbeDistance: number
 	// Minimum accepted absolute metric slope per focuser step.
 	readonly minimumSlope: number
-	// Number of runs per direction; defaults to 3 and must be at least 3.
+	// Number of runs per direction; defaults to 3 and must be a finite integer at least 3. A non-finite cap would never finish.
 	readonly repeats?: number
 	// Measurements aggregated at each position; defaults to 3.
 	readonly samplesPerPosition?: number
@@ -307,15 +307,6 @@ function consolidateProbePoints(points: readonly BacklashProbePoint[]) {
 	return consolidated
 }
 
-// Validates the standalone fitting contract before allocating candidate matrices.
-function validateFitOptions(options: Readonly<BacklashFitOptions>) {
-	validatePositiveFinite(options.probeStep)
-	validatePositiveInteger(options.minimumPlateauPoints)
-	validatePositiveInteger(options.minimumPostBreakPoints)
-	validatePositiveFinite(options.minimumSlope)
-	validatePositiveFinite(options.huberTuning)
-}
-
 // Computes mean Huber loss against one response scale shared by every breakpoint candidate.
 function normalizedHuberLoss(result: RobustLinearLeastSquaresResult, tuning: number, responseScale: number) {
 	let loss = 0
@@ -416,7 +407,6 @@ function breakpointUncertainty(points: readonly BacklashProbePoint[], fit: Candi
 
 // Fits a robust continuous plateau-plus-line breakpoint without mutating input points.
 export function fitBacklashBreakpoint(points: readonly BacklashProbePoint[], options: Readonly<BacklashFitOptions>): BacklashFit {
-	validateFitOptions(options)
 	const consolidated = consolidateProbePoints(points)
 	if (consolidated.length < options.minimumPostBreakPoints + 1) return invalidFit('insufficientData')
 
@@ -537,10 +527,8 @@ export function backlashCompensationFromCalibration(result: BacklashCalibrationR
 
 // Expands public defaults and rejects combinations that cannot produce a stable fit.
 function normalizeCalibrationOptions(options: BacklashCalibrationOptions): NormalizedBacklashCalibrationOptions {
+	// A non-positive probe step never advances the focuser, so the command loop would not terminate.
 	validatePositiveFinite(options.probeStep)
-	validatePositiveFinite(options.preloadDistance)
-	validatePositiveFinite(options.maximumProbeDistance)
-	validatePositiveFinite(options.minimumSlope)
 
 	const repeats = options.repeats ?? DEFAULT_REPEATS
 	const samplesPerPosition = options.samplesPerPosition ?? DEFAULT_SAMPLES_PER_POSITION
@@ -552,15 +540,8 @@ function normalizeCalibrationOptions(options: BacklashCalibrationOptions): Norma
 	const huberTuning = options.huberTuning ?? DEFAULT_HUBER_TUNING
 	const safetyFactor = options.safetyFactor ?? DEFAULT_SAFETY_FACTOR
 
+	// A non-finite repeat count would make directional runs never finish.
 	validatePositiveInteger(repeats)
-	validatePositiveInteger(samplesPerPosition)
-	validatePositiveInteger(minimumPreloadPoints)
-	validatePositiveInteger(minimumPlateauPoints)
-	validatePositiveInteger(minimumPostBreakPoints)
-	validatePositiveInteger(stabilityCount)
-	validatePositiveFinite(breakpointTolerance)
-	validatePositiveFinite(huberTuning)
-	validatePositiveFinite(safetyFactor)
 
 	if (repeats < 3) throw new RangeError('repeats must be at least 3')
 	if (minimumPreloadPoints < 2) throw new RangeError('minimumPreloadPoints must be at least 2')
@@ -570,8 +551,6 @@ function normalizeCalibrationOptions(options: BacklashCalibrationOptions): Norma
 	if (Math.floor(options.maximumProbeDistance / options.probeStep) + 1 < minimumPlateauPoints + minimumPostBreakPoints + stabilityCount - 1) throw new RangeError('maximumProbeDistance cannot provide a stable breakpoint fit')
 
 	const { minimumPosition, maximumPosition } = options
-	if (minimumPosition !== undefined) validateFinite(minimumPosition)
-	if (maximumPosition !== undefined) validateFinite(maximumPosition)
 	if (minimumPosition !== undefined && maximumPosition !== undefined && minimumPosition >= maximumPosition) throw new RangeError('minimumPosition must be less than maximumPosition')
 
 	return {

@@ -248,8 +248,7 @@ describe('backlash breakpoint fitting', () => {
 	})
 
 	test('validates fitting options', () => {
-		expect(() => fitBacklashBreakpoint([], { ...FIT_OPTIONS, probeStep: 0 })).toThrow(RangeError)
-		expect(() => fitBacklashBreakpoint([], { ...FIT_OPTIONS, minimumPostBreakPoints: 1.5 })).toThrow(TypeError)
+		expect(fitBacklashBreakpoint([], { ...FIT_OPTIONS, probeStep: 0 }).valid).toBe(false)
 	})
 })
 
@@ -533,7 +532,7 @@ describe('backlash calibration state machine', () => {
 
 	test('validates option types, ranges, and stable-fit capacity', () => {
 		expect(() => new BacklashCalibration({ ...CALIBRATION_OPTIONS, repeats: 2 })).toThrow(RangeError)
-		expect(() => new BacklashCalibration({ ...CALIBRATION_OPTIONS, samplesPerPosition: 1.5 })).toThrow(TypeError)
+		expect(() => new BacklashCalibration({ ...CALIBRATION_OPTIONS, repeats: Number.POSITIVE_INFINITY })).toThrow(TypeError)
 		expect(() => new BacklashCalibration({ ...CALIBRATION_OPTIONS, preloadDistance: 40 })).toThrow(RangeError)
 		expect(() => new BacklashCalibration({ ...CALIBRATION_OPTIONS, maximumProbeDistance: 100 })).toThrow(RangeError)
 		expect(() => new BacklashCalibration({ ...CALIBRATION_OPTIONS, minimumPosition: 10, maximumPosition: 10 })).toThrow(RangeError)

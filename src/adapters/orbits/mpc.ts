@@ -2649,6 +2649,7 @@ export async function list(type: MPCList, options?: MPCListOptions): Promise<MPC
 
 // Pages the List API until `maxItems` (required, ≥ 1) or a short page. Default page size 1000, capped at 50000.
 export async function listAll(type: MPCList, options: Omit<MPCListOptions, 'offset'> & { readonly maxItems: number }): Promise<readonly MPCListItem[]> {
+	// A non-finite maxItems would page the List API without bound.
 	const maxItems = validatePositiveInteger(options.maxItems)
 	const pageSize = Math.min(options.limit ?? DEFAULT_LIST_PAGE_SIZE, MAX_LIST_PAGE_SIZE)
 	if (pageSize < 1) throw new RangeError('listAll page size must be >= 1')

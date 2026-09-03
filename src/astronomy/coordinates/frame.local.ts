@@ -1,5 +1,3 @@
-import { PIOVERTWO } from '../../core/constants'
-import { validateFinite, validateInRange, validateVector } from '../../core/validation'
 import { matFill, matTranspose, type MutMat3 } from '../../math/linear-algebra/mat3'
 import { type MutVec3, vecFill, vecLength, type Vec3 } from '../../math/linear-algebra/vec3'
 import { normalizeAngle, type Angle } from '../../math/units/angle'
@@ -12,9 +10,8 @@ import type { HorizontalCoordinate } from './coordinate'
 const SINGULAR_HORIZONTAL_EPSILON = 1e-15
 
 // Converts north-through-east azimuth and altitude into a unit ENU direction.
+// Altitude is the elevation above the horizon in [-π/2, π/2] radians.
 export function horizontalToEnuVector(azimuth: Angle, altitude: Angle, out?: MutVec3): MutVec3 {
-	validateFinite(azimuth)
-	validateInRange(altitude, -PIOVERTWO, PIOVERTWO)
 	const cosAltitude = Math.cos(altitude)
 	return vecFill(out ?? [0, 0, 0], cosAltitude * Math.sin(azimuth), cosAltitude * Math.cos(azimuth), Math.sin(altitude))
 }
@@ -22,7 +19,6 @@ export function horizontalToEnuVector(azimuth: Angle, altitude: Angle, out?: Mut
 // Converts a finite non-zero ENU direction into north-through-east azimuth and altitude.
 // Azimuth is zero at the geometrically singular zenith and nadir.
 export function enuVectorToHorizontal(vector: Vec3): HorizontalCoordinate {
-	validateVector(vector)
 	const length = vecLength(vector)
 	if (length === 0) throw new RangeError('vector must be non-zero')
 
@@ -33,10 +29,8 @@ export function enuVectorToHorizontal(vector: Vec3): HorizontalCoordinate {
 }
 
 // Builds the active apparent-equatorial-to-ENU rotation for geodetic latitude and local apparent
-// sidereal time. Equatorial vectors follow eraS2c(rightAscension, declination).
+// sidereal time. Latitude is in [-π/2, π/2] radians. Equatorial vectors follow eraS2c(rightAscension, declination).
 export function equatorialToEnuMatrix(latitude: Angle, lst: Angle, out?: MutMat3): MutMat3 {
-	validateInRange(latitude, -PIOVERTWO, PIOVERTWO)
-	validateFinite(lst)
 	const sinLatitude = Math.sin(latitude)
 	const cosLatitude = Math.cos(latitude)
 	const sinLst = Math.sin(lst)
@@ -53,8 +47,8 @@ export function enuToEquatorialMatrix(latitude: Angle, lst: Angle, out?: MutMat3
 
 // Builds the active Taki-local-equatorial-to-ENU rotation. Taki axes are meridian-south, east, and
 // north celestial pole; a west-positive hour angle H has polar longitude -H in this frame.
+// Latitude is in [-π/2, π/2] radians.
 export function takiToEnuMatrix(latitude: Angle, out?: MutMat3): MutMat3 {
-	validateInRange(latitude, -PIOVERTWO, PIOVERTWO)
 	const sinLatitude = Math.sin(latitude)
 	const cosLatitude = Math.cos(latitude)
 	return matFill(out ?? [0, 0, 0, 0, 0, 0, 0, 0, 0], 0, 1, 0, -sinLatitude, 0, cosLatitude, cosLatitude, 0, sinLatitude)

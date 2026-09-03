@@ -3,7 +3,6 @@ import { eraS2c } from '../../astronomy/coordinates/erfa/erfa'
 import type { GeographicPosition } from '../../astronomy/observer/location'
 import { cirsRotationMatrix, type Time } from '../../astronomy/time/time'
 import { PI } from '../../core/constants'
-import { validateFinite, validateVector } from '../../core/validation'
 import { matTransposeMulVec } from '../../math/linear-algebra/mat3'
 import { type Vec3, vecAngleUnit, vecCross, vecDot, vecLength, vecNormalize, vecNormalizeMut, vecRotateByRodrigues } from '../../math/linear-algebra/vec3'
 import type { Angle } from '../../math/units/angle'
@@ -46,7 +45,7 @@ export function celestialPoleVector(time: Time, location: GeographicPosition = t
 // Applies azimuth about local up, then altitude about the east axis carried by the rotated mount
 // base. Inputs are inertial vectors and angles are radians. The returned unit vector is fresh.
 export function applyMountAdjustment(vector: Vec3, upAxis: Vec3, eastAxis: Vec3, azimuth: Angle, altitude: Angle): Vec3 {
-	validateAdjustmentGeometry(vector, upAxis, eastAxis, azimuth, altitude)
+	validateAdjustmentGeometry(vector, upAxis, eastAxis)
 	const afterAzimuth = vecRotateByRodrigues(vector, upAxis, azimuth)
 	const altitudeAxis = vecRotateByRodrigues(eastAxis, upAxis, azimuth)
 	return vecNormalizeMut(vecRotateByRodrigues(afterAzimuth, altitudeAxis, altitude))
@@ -55,7 +54,7 @@ export function applyMountAdjustment(vector: Vec3, upAxis: Vec3, eastAxis: Vec3,
 // Applies the inverse of `applyMountAdjustment`. Inputs are inertial vectors and angles are radians;
 // rotations are undone in reverse order and the returned unit vector is fresh.
 export function applyInverseMountAdjustment(vector: Vec3, upAxis: Vec3, eastAxis: Vec3, azimuth: Angle, altitude: Angle): Vec3 {
-	validateAdjustmentGeometry(vector, upAxis, eastAxis, azimuth, altitude)
+	validateAdjustmentGeometry(vector, upAxis, eastAxis)
 	const altitudeAxis = vecRotateByRodrigues(eastAxis, upAxis, azimuth)
 	const beforeAltitude = vecRotateByRodrigues(vector, altitudeAxis, -altitude)
 	return vecNormalizeMut(vecRotateByRodrigues(beforeAltitude, upAxis, -azimuth))
@@ -102,15 +101,10 @@ export function decomposePolarErrorGeodesic(currentPole: Vec3, targetPole: Vec3,
 	return { total, azimuth, altitude }
 }
 
-// Validates vectors and angles used by the public rigid mount transformations. The axes may be
-// unnormalized but must be finite, non-zero, and mutually orthogonal within the documented tolerance.
-function validateAdjustmentGeometry(vector: Vec3, upAxis: Vec3, eastAxis: Vec3, azimuth: Angle, altitude: Angle): void {
-	validateVector(vector)
-	validateVector(upAxis)
-	validateVector(eastAxis)
-	validateFinite(azimuth)
-	validateFinite(altitude)
-
+// Rejects degenerate mount-adjustment geometry. A zero axis would make the Rodrigues rotations
+// undefined, and non-orthogonal axes would silently mix azimuth and altitude into a plausible-looking
+// but mechanically wrong polar correction.
+function validateAdjustmentGeometry(vector: Vec3, upAxis: Vec3, eastAxis: Vec3): void {
 	const vectorLength = vecLength(vector)
 	const upLength = vecLength(upAxis)
 	const eastLength = vecLength(eastAxis)

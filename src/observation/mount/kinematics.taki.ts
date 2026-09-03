@@ -1,4 +1,3 @@
-import { validateFinite } from '../../core/validation'
 import { matMulVec, matRodriguesRotation } from '../../math/linear-algebra/mat3'
 import type { Angle } from '../../math/units/angle'
 import type { TwoAxisMountGeometry } from './kinematics'
@@ -23,9 +22,6 @@ export function applyTakiFabricationErrors(nominal: Readonly<TwoAxisMountGeometr
 	const axisNonPerpendicularity = errors.axisNonPerpendicularity ?? 0
 	const collimation = errors.collimation ?? 0
 	const secondaryIndex = errors.secondaryIndex ?? 0
-	validateFinite(axisNonPerpendicularity)
-	validateFinite(collimation)
-	validateFinite(secondaryIndex)
 	if (axisNonPerpendicularity === 0 && collimation === 0 && secondaryIndex === 0) return nominal
 
 	const nonPerpendicularityRotation = matRodriguesRotation(nominal.opticalDirection, axisNonPerpendicularity)

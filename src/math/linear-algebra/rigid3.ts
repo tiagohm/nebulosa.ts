@@ -1,4 +1,3 @@
-import { validateFinite, validateVector } from '../../core/validation'
 import type { Angle } from '../units/angle'
 import { matIdentity, matMul, matMulVec, matRodriguesRotation, matTranspose, type Mat3 } from './mat3'
 import { type MutVec3, vecLength, vecMinus, vecNegate, vecPlus, vecZero, type Vec3 } from './vec3'
@@ -54,10 +53,6 @@ export function rigidTransformDirection(transform: Readonly<RigidTransform3>, di
 // Builds an active right-handed rotation around the line through pivot along axis.
 // The pivot uses the caller's distance unit, axis magnitude is ignored, and angle is in radians.
 export function rigidRotationAroundAxis(pivot: Vec3, axis: Vec3, angle: Angle): RigidTransform3 {
-	validateVector(pivot)
-	validateVector(axis)
-	validateFinite(angle)
-
 	if (vecLength(axis) === 0) throw new RangeError('axis must be non-zero')
 
 	const rotation = matRodriguesRotation(axis, angle)

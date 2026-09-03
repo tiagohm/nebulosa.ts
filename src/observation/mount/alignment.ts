@@ -1,6 +1,5 @@
 import { horizontalToEnuVector } from '../../astronomy/coordinates/frame.local'
 import { medianOf } from '../../core/util'
-import { validateFinite, validateVector } from '../../core/validation'
 import { matFill, matMul, matMulVec, matRodriguesRotation, matTranspose, type Mat3 } from '../../math/linear-algebra/mat3'
 import { rigidIdentity } from '../../math/linear-algebra/rigid3'
 import { type MutVec3, vecCross, vecCrossLength, vecDot, vecLength, vecNormalize, type Vec3 } from '../../math/linear-algebra/vec3'
@@ -250,12 +249,10 @@ function alignmentControls(options: Readonly<DirectionAlignmentOptions>): Alignm
 	const tolerance = options.tolerance ?? DEFAULT_TOLERANCE
 	const robust = options.robust ?? 'none'
 	const tuning = options.tuning ?? (robust === 'tukey' ? DEFAULT_TUKEY_TUNING : DEFAULT_HUBER_TUNING)
+	// A non-finite or non-positive cap would make the alignment iteration never terminate.
 	if (!Number.isInteger(maxIterations) || maxIterations <= 0) throw new RangeError('maxIterations must be a positive integer')
-	validateFinite(tolerance)
-	validateFinite(tuning)
 	if (tolerance < 0) throw new RangeError('tolerance must be non-negative')
 	if (tuning <= 0) throw new RangeError('tuning must be positive')
-	if (robust !== 'none' && robust !== 'huber' && robust !== 'tukey') throw new RangeError('robust method is invalid')
 	return { maxIterations, tolerance, robust, tuning }
 }
 
@@ -272,7 +269,6 @@ function normalizeSamples(samples: readonly Readonly<DirectionAlignmentSample>[]
 		validateDirection(sample.mount, `samples[${i}].mount`)
 		validateDirection(sample.world, `samples[${i}].world`)
 		const weight = sample.weight ?? 1
-		validateFinite(weight)
 		if (weight < 0) throw new RangeError(`samples[${i}].weight must be non-negative`)
 		mount[i] = vecNormalize(sample.mount)
 		world[i] = vecNormalize(sample.world)
@@ -287,7 +283,6 @@ function normalizeSamples(samples: readonly Readonly<DirectionAlignmentSample>[]
 
 // Validates one finite non-zero direction.
 function validateDirection(direction: Vec3, name: string): void {
-	validateVector(direction)
 	if (vecLength(direction) === 0) throw new RangeError(`${name} must be non-zero`)
 }
 

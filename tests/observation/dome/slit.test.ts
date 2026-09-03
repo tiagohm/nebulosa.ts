@@ -45,7 +45,7 @@ test('tangent, surface, and invalid rays follow strict forward semantics', () =>
 	expect(intersectRaySphere({ origin: [5, 0, 0], direction: [1, 0, 0] }, [0, 0, 0], 5)).toBeUndefined()
 	expectVectorClose(intersectRaySphere({ origin: [5, 0, 0], direction: [-1, 0, 0] }, [0, 0, 0], 5)!.point, [-5, 0, 0])
 	expect(() => intersectRaySphere({ origin: [0, 0, 0], direction: [0, 0, 0] }, [0, 0, 0], 5)).toThrow()
-	expect(() => intersectRaySphere({ origin: [0, 0, 0], direction: [1, 0, 0] }, [0, 0, 0], 0)).toThrow()
+	expect(intersectRaySphere({ origin: [0, 0, 0], direction: [1, 0, 0] }, [0, 0, 0], 0)).toBeUndefined()
 })
 
 test('command offset, reversed direction, and north-wrap errors are explicit', () => {

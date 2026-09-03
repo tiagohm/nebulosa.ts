@@ -1,5 +1,4 @@
 import { TAU } from '../../core/constants'
-import { validateNonNegativeFinite, validatePositiveFinite, validatePositiveInteger } from '../../core/validation'
 import type { Size } from '../../math/numerical/geometry'
 import type { NumberArray } from '../../math/numerical/math'
 import type { Image, ImageMetadata, ImageRawType } from '../model/types'
@@ -78,20 +77,14 @@ export function convolutionKernel(kernel: Readonly<NumberArray>, width: number, 
 	return { kernel, width, height, divisor }
 }
 
-// Validates a smoothing kernel descriptor used by the two separable passes.
+// Rejects even or too-short smoothing kernels used by the two separable passes.
 function validateSeparableSmoothingKernel(kernel: SeparableSmoothingKernel) {
 	if (kernel.kernel.length < 3 || kernel.kernel.length % 2 === 0) {
 		throw new RangeError('separable kernel length must be odd and at least 3')
 	}
-
-	for (let i = 0; i < kernel.kernel.length; i++) {
-		validateNonNegativeFinite(kernel.kernel[i])
-	}
-
-	validatePositiveFinite(kernel.divisor)
 }
 
-// Builds a validated one-dimensional smoothing kernel, inferring its positive divisor when omitted.
+// Builds a one-dimensional smoothing kernel of odd length at least 3, inferring its divisor when omitted.
 export function separableSmoothingKernel(kernel: Readonly<NumberArray>, divisor?: number): SeparableSmoothingKernel {
 	if (kernel.length < 3 || kernel.length % 2 === 0) {
 		throw new RangeError('separable kernel length must be odd and at least 3')
@@ -100,9 +93,7 @@ export function separableSmoothingKernel(kernel: Readonly<NumberArray>, divisor?
 	let sum = 0
 
 	for (let i = 0; i < kernel.length; i++) {
-		const weight = kernel[i]
-		validateNonNegativeFinite(weight)
-		sum += weight
+		sum += kernel[i]
 	}
 
 	const resolvedDivisor = divisor ?? sum
@@ -127,8 +118,7 @@ export function separableSmoothing(source: ImageRawType, output: ImageRawType, i
 	const dynamicDivisorForEdges = options.dynamicDivisorForEdges ?? DEFAULT_SEPARABLE_SMOOTHING_OPTIONS.dynamicDivisorForEdges
 	const radius = kernel.kernel.length >>> 1
 	const effectiveRadius = radius * step
-	validatePositiveInteger(step)
-
+	// A non-finite step would make the dilated radius infinite and the tap-bound arithmetic hang.
 	if (!Number.isFinite(effectiveRadius)) {
 		throw new RangeError('separable smoothing effective radius must be finite')
 	}

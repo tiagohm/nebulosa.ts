@@ -1,5 +1,4 @@
 import { TAU } from '../../../core/constants'
-import { validateInRange } from '../../../core/validation'
 import { clamp } from '../../../math/numerical/math'
 import { normalizeAngle } from '../../../math/units/angle'
 import type { IndiClientHandler } from '../client'
@@ -58,8 +57,8 @@ export class FocuserSimulator extends DeviceSimulator {
 		handler: IndiClientHandler = client.handler,
 	) {
 		super(name, client, handler, DeviceInterfaceType.FOCUSER)
-		this.#backlash.elements.BACKLASH_IN.value = validateInRange(options?.backlashIn ?? 0, 0, FOCUSER_MAX_POSITION)
-		this.#backlash.elements.BACKLASH_OUT.value = validateInRange(options?.backlashOut ?? 0, 0, FOCUSER_MAX_POSITION)
+		this.#backlash.elements.BACKLASH_IN.value = options?.backlashIn ?? 0
+		this.#backlash.elements.BACKLASH_OUT.value = options?.backlashOut ?? 0
 
 		for (const property of this.properties) {
 			property.device = name

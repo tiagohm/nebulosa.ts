@@ -1,5 +1,4 @@
 import { NumberComparator, percentileOf } from '../../core/util'
-import { validateFinite } from '../../core/validation'
 import type { FitsHeader } from '../../io/formats/fits/fits'
 import { heightKeyword, numericKeyword, widthKeyword } from '../../io/formats/fits/util'
 import { Matrix, QrDecomposition } from '../../math/linear-algebra/matrix'
@@ -494,8 +493,6 @@ function setSipAxisType(header: FitsHeader, key: 'CTYPE1' | 'CTYPE2', tan: strin
 
 // Evaluates the SIP pixel correction at a measured pixel coordinate.
 export function evaluateSipCorrection(x: number, y: number, sipModel: SipModel, wcs: SipFitsHeader | FitsHeader) {
-	validateFinite(x)
-	validateFinite(y)
 	wcs = extractSipInputWcsFromFitsHeader(wcs)
 	validateSipFitsHeader(wcs)
 	const order = validateSipOrder(sipModel.order)
@@ -584,12 +581,10 @@ function validateSipOrder(order: number) {
 	return order
 }
 
-// Validates that the WCS has finite reference pixels and valid optional image dimensions.
+// Checks that a WCS header is present and that optional image dimensions, when given, are positive.
 function validateSipFitsHeader(wcs: SipFitsHeader) {
 	if (!wcs) throw new SipFitError('invalidCoordinate', 'basic WCS is required')
 
-	validateFinite(wcs.crpix1)
-	validateFinite(wcs.crpix2)
 	optionalImageSize('width', wcs.width)
 	optionalImageSize('height', wcs.height)
 }
@@ -615,8 +610,8 @@ function optionalPositiveNumber(name: string, value: number | undefined, default
 	return value
 }
 
-// Validates each star and centers it to (u, v) with target deltas and a resolved weight (1 when
-// unweighted), producing the PreparedStar list consumed by the solver.
+// Centers each star to (u, v) with target deltas and a resolved weight (1 when unweighted), producing
+// the PreparedStar list consumed by the solver.
 function prepareStars(stars: readonly MatchedStar[], wcs: SipFitsHeader, weighted: boolean) {
 	if (!Array.isArray(stars)) throw new SipFitError('insufficientStars', 'matchedStars must be an array')
 
@@ -624,11 +619,6 @@ function prepareStars(stars: readonly MatchedStar[], wcs: SipFitsHeader, weighte
 
 	for (let i = 0; i < stars.length; i++) {
 		const star = stars[i]
-
-		validateFinite(star.x)
-		validateFinite(star.y)
-		validateFinite(star.xRef)
-		validateFinite(star.yRef)
 
 		if (star.weight !== undefined && (!Number.isFinite(star.weight) || !(star.weight > 0))) {
 			throw new SipFitError('invalidWeight', `stars[${i}].weight must be a positive finite number`)

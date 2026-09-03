@@ -20,16 +20,6 @@ test('brightness handles identity and zero factors without changing object ident
 	expectImageValues(black, [0, 0], 8)
 })
 
-test('brightness rejects negative and non-finite factors before mutation', () => {
-	for (const value of [-1, Number.NaN, Number.POSITIVE_INFINITY]) {
-		const image = makeImage(2, 1, 1, [0.2, 0.8])
-		const before = new Float32Array(image.raw)
-
-		expect(() => brightness(image, value)).toThrow()
-		expect(image.raw).toEqual(before)
-	}
-})
-
 test('saturation processes multiple interleaved RGB pixels independently', () => {
 	const image = makeImage(2, 1, 3, [0.9, 0.2, 0.1, 0.1, 0.5, 0.8])
 
@@ -68,24 +58,11 @@ test('saturation clips extrapolated channels to the normalized range', () => {
 	}
 })
 
-test('saturation rejects invalid gains and luminance weights atomically', () => {
-	const invalidWeights = [
-		{ red: Number.NaN, green: 0, blue: 1 },
-		{ red: -0.1, green: 0.5, blue: 0.6 },
-		{ red: 0.2, green: 0.3, blue: 0.4 },
-	]
-	for (const value of [-1, Number.NaN, Number.POSITIVE_INFINITY]) {
-		const image = makeImage(1, 1, 3, [0.2, 0.3, 0.4])
-		const before = new Float32Array(image.raw)
-		expect(() => saturation(image, value)).toThrow()
-		expect(image.raw).toEqual(before)
-	}
-	for (const weights of invalidWeights) {
-		const image = makeImage(1, 1, 3, [0.2, 0.3, 0.4])
-		const before = new Float32Array(image.raw)
-		expect(() => saturation(image, 2, weights)).toThrow()
-		expect(image.raw).toEqual(before)
-	}
+test('saturation rejects luminance weights that do not sum to one', () => {
+	const image = makeImage(1, 1, 3, [0.2, 0.3, 0.4])
+	const before = new Float32Array(image.raw)
+	expect(() => saturation(image, 2, { red: 0.2, green: 0.3, blue: 0.4 })).toThrow()
+	expect(image.raw).toEqual(before)
 })
 
 test('saturation rejects malformed interleaved RGB layouts before mutation', () => {
@@ -118,18 +95,6 @@ test('linear handles identity and constant transforms', () => {
 	expectImageValues(constant, [0.25, 0.25], 8)
 })
 
-test('linear rejects non-finite parameters before mutation', () => {
-	for (const [slope, intercept] of [
-		[Number.NaN, 0],
-		[1, Number.POSITIVE_INFINITY],
-	] as const) {
-		const image = makeImage(2, 1, 1, [0.2, 0.8])
-		const before = new Float32Array(image.raw)
-		expect(() => linear(image, slope, intercept)).toThrow('value must be finite')
-		expect(image.raw).toEqual(before)
-	}
-})
-
 test('contrast remaps values around mid-gray and optimizes zero contrast', () => {
 	const scaled = makeImage(3, 1, 1, [0, 0.5, 1])
 	const flat = makeImage(3, 1, 1, [0.1, 0.5, 0.9])
@@ -139,15 +104,6 @@ test('contrast remaps values around mid-gray and optimizes zero contrast', () =>
 
 	expectImageValues(scaled, [0.25, 0.5, 0.75], 8)
 	expectImageValues(flat, [0.5, 0.5, 0.5], 8)
-})
-
-test('contrast rejects negative and non-finite factors before mutation', () => {
-	for (const value of [-1, Number.NaN, Number.POSITIVE_INFINITY]) {
-		const image = makeImage(2, 1, 1, [0.2, 0.8])
-		const before = new Float32Array(image.raw)
-		expect(() => contrast(image, value)).toThrow()
-		expect(image.raw).toEqual(before)
-	}
 })
 
 test('gamma clips signed and out-of-range samples before inverse encoding', () => {
@@ -177,13 +133,4 @@ test('gamma handles identity and non-finite source samples without leaking them'
 
 	expectImageValues(identity, [0.25, 1], 8)
 	expectImageValues(nonFinite, [0, 1, 0], 8)
-})
-
-test('gamma rejects non-positive and non-finite values before mutation', () => {
-	for (const value of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
-		const image = makeImage(2, 1, 1, [0.25, 1])
-		const before = new Float32Array(image.raw)
-		expect(() => gamma(image, value)).toThrow()
-		expect(image.raw).toEqual(before)
-	}
 })

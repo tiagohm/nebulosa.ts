@@ -134,11 +134,3 @@ describe.skipIf(SKIP)('focuser simulator', () => {
 		expect(simulator.effectivePosition).toBeCloseTo(29950, 6)
 	})
 })
-
-test('rejects invalid focuser backlash configuration', () => {
-	using client = new ClientSimulator('focuser', new IndiClientHandlerSet())
-
-	expect(() => new FocuserSimulator('Negative Backlash', client, { backlashIn: -1 })).toThrow(RangeError)
-	expect(() => new FocuserSimulator('Non-finite Backlash', client, { backlashOut: Number.POSITIVE_INFINITY })).toThrow(TypeError)
-	expect(() => new FocuserSimulator('Excessive Backlash', client, { backlashOut: 100001 })).toThrow(RangeError)
-})

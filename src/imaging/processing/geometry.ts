@@ -1,5 +1,4 @@
 import { reflectFitsWcs } from '../../astrometry/wcs/fits.wcs'
-import { validateNonNegativeFinite } from '../../core/validation'
 import { channelIndex, grayscaleFromChannel, type Image, type ImageChannelOrGray, type ImageMetadata, makeImageRawTypedArray, shiftCfaPattern } from '../model/types'
 
 // Geometric and channel operations on dense normalized images. Flips and inversion mutate the input;
@@ -26,9 +25,6 @@ function validateGeometryImage(image: Image) {
 
 // Verifies finite non-negative grayscale weights normalized to unit sum.
 function validateGrayscaleWeights(red: number, green: number, blue: number) {
-	validateNonNegativeFinite(red)
-	validateNonNegativeFinite(green)
-	validateNonNegativeFinite(blue)
 	const sum = red + green + blue
 	if (Math.abs(sum - 1) > GRAYSCALE_WEIGHT_SUM_TOLERANCE) throw new RangeError(`grayscale weights must sum to one: ${sum}`)
 }

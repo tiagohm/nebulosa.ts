@@ -1,5 +1,4 @@
 import { PI } from '../../core/constants'
-import { validateFinite, validateVector } from '../../core/validation'
 import { matMulVec, matRodriguesRotation } from '../../math/linear-algebra/mat3'
 import { rigidIdentity, rigidRotationAroundAxis, rigidTransformDirection, rigidTransformPoint, type RigidTransform3 } from '../../math/linear-algebra/rigid3'
 import { type MutVec3, vecClone, vecCross, vecCrossLength, vecDot, vecLength, vecMinus, vecNormalize, type Vec3, vecNegateMut } from '../../math/linear-algebra/vec3'
@@ -120,14 +119,13 @@ const MAX_BACKTRACKING_STEPS = 16
 // Angular band around PI where the tangent residual cannot select a descent direction reliably.
 const ANTIPODAL_ESCAPE_EPSILON = 1e-8
 
-// Computes the complete world-frame pose for finite encoder angles.
+// Computes the complete world-frame pose for encoder angles in radians.
 export function mountPoseFromEncoders(geometry: Readonly<TwoAxisMountGeometry>, encoders: Readonly<MountEncoderPosition>): MountPose {
 	validateGeometry(geometry)
-	validateEncoders(encoders)
 	return mountPoseFromEncodersUnchecked(geometry, encoders)
 }
 
-// Computes a pose after the public boundary has validated stable geometry and encoder values.
+// Computes a pose after the public boundary has rejected zero-length mount axes.
 function mountPoseFromEncodersUnchecked(geometry: Readonly<TwoAxisMountGeometry>, encoders: Readonly<MountEncoderPosition>): MountPose {
 	const primaryAngle = physicalPrimaryAngle(geometry, encoders.primary)
 	const secondaryAngle = physicalSecondaryAngle(geometry, encoders.secondary)
@@ -148,7 +146,6 @@ function mountPoseFromEncodersUnchecked(geometry: Readonly<TwoAxisMountGeometry>
 // Computes only the unit world-frame optical direction and writes into out when supplied.
 export function mountDirectionFromEncoders(geometry: Readonly<TwoAxisMountGeometry>, encoders: Readonly<MountEncoderPosition>, out?: MutVec3): MutVec3 {
 	validateGeometry(geometry)
-	validateEncoders(encoders)
 	const primaryRotation = matRodriguesRotation(geometry.primaryAxis, physicalPrimaryAngle(geometry, encoders.primary))
 	const secondaryAxis = matMulVec(primaryRotation, geometry.secondaryAxis)
 	const direction = matMulVec(primaryRotation, geometry.opticalDirection, out)
@@ -161,7 +158,6 @@ export function mountDirectionFromEncoders(geometry: Readonly<TwoAxisMountGeomet
 // Multiple mechanical branches may exist; callers should provide and compare admissible seeds.
 export function solveMountEncoders(geometry: Readonly<TwoAxisMountGeometry>, worldDirection: Vec3, options: Readonly<MountEncoderSolveOptions> = {}): MountEncoderSolution {
 	validateGeometry(geometry)
-	validateVector(worldDirection)
 	if (vecLength(worldDirection) === 0) throw new RangeError('worldDirection must be non-zero')
 	const target = vecNormalize(worldDirection)
 	const controls = solveControls(options)
@@ -321,46 +317,27 @@ function solveControls(options: Readonly<MountEncoderSolveOptions>): MountEncode
 	const maxIterations = options.maxIterations ?? DEFAULT_MAX_ITERATIONS
 	const tolerance = options.tolerance ?? DEFAULT_TOLERANCE
 	const maxStep = options.maxStep ?? DEFAULT_MAX_STEP
+	// A non-finite or non-positive cap would make the inverse-kinematics loop never terminate.
 	if (!Number.isInteger(maxIterations) || maxIterations <= 0) throw new RangeError('maxIterations must be a positive integer')
-	validateFinite(tolerance)
-	validateFinite(maxStep)
 	if (tolerance < 0) throw new RangeError('tolerance must be non-negative')
 	if (maxStep <= 0) throw new RangeError('maxStep must be positive')
 	validateRange(options.primaryRange, 'primaryRange')
 	validateRange(options.secondaryRange, 'secondaryRange')
-	if (options.initial) validateEncoders(options.initial)
 	return { maxIterations, tolerance, maxStep, primaryRange: options.primaryRange, secondaryRange: options.secondaryRange }
 }
 
-// Validates one optional finite inclusive encoder range.
+// Rejects an inverted encoder interval, which would silently clamp every solve to the wrong bound.
 function validateRange(range: readonly [Angle, Angle] | undefined, name: string): void {
 	if (!range) return
-	validateFinite(range[0])
-	validateFinite(range[1])
 	if (range[0] > range[1]) throw new RangeError(`${name} must be ordered`)
 }
 
-// Validates all finite geometry fields and non-zero physical directions.
+// Rejects zero-length mount axes, which make Rodrigues rotations undefined, and encoder-direction
+// values other than the documented ±1 convention.
 function validateGeometry(geometry: Readonly<TwoAxisMountGeometry>): void {
-	validateVector(geometry.baseToWorld.translation)
-	for (let i = 0; i < 9; i++) validateFinite(geometry.baseToWorld.rotation[i])
-	validateVector(geometry.primaryPivot)
-	validateVector(geometry.primaryAxis)
-	validateVector(geometry.secondaryPivot)
-	validateVector(geometry.secondaryAxis)
-	validateVector(geometry.opticalOrigin)
-	validateVector(geometry.opticalDirection)
 	if (vecLength(geometry.primaryAxis) === 0 || vecLength(geometry.secondaryAxis) === 0 || vecLength(geometry.opticalDirection) === 0) throw new RangeError('mount axes and optical direction must be non-zero')
-	validateFinite(geometry.primaryIndex ?? 0)
-	validateFinite(geometry.secondaryIndex ?? 0)
 	if (geometry.primaryDirection !== undefined && geometry.primaryDirection !== 1 && geometry.primaryDirection !== -1) throw new RangeError('primaryDirection must be 1 or -1')
 	if (geometry.secondaryDirection !== undefined && geometry.secondaryDirection !== 1 && geometry.secondaryDirection !== -1) throw new RangeError('secondaryDirection must be 1 or -1')
-}
-
-// Validates one finite pair of encoder angles.
-function validateEncoders(encoders: Readonly<MountEncoderPosition>): void {
-	validateFinite(encoders.primary)
-	validateFinite(encoders.secondary)
 }
 
 // Converts a primary encoder angle into its physical active rotation in radians.

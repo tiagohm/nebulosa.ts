@@ -1,4 +1,3 @@
-import { validateInRange } from '../../core/validation'
 import { channelIndex, type Image, type ImageChannelOrGray } from '../model/types'
 
 // Screen transfer function (display stretch) applied in place to the normalized [0, 1] raw buffer.
@@ -19,11 +18,9 @@ export const DEFAULT_APPLY_SCREEN_TRANSFER_FUNCTION_OPTIONS: Readonly<ApplyScree
 // Apply Screen Transfer Function to image.
 // https://pixinsight.com/doc/docs/XISF-1.0-spec/XISF-1.0-spec.html#__XISF_Data_Objects_:_XISF_Image_:_Display_Function__
 // https://pixinsight.com/tutorials/24-bit-stf/
+// midtone, shadow, and highlight are finite values in [0, 1] with shadow <= highlight.
 export function stf(image: Image, midtone: number = 0.5, shadow: number = 0, highlight: number = 1, options: Partial<ApplyScreenTransferFunctionOptions> = DEFAULT_APPLY_SCREEN_TRANSFER_FUNCTION_OPTIONS): Image {
 	if (midtone === 0.5 && shadow === 0 && highlight === 1) return image
-	validateInRange(midtone, 0, 1)
-	validateInRange(shadow, 0, 1)
-	validateInRange(highlight, 0, 1)
 	if (shadow > highlight) throw new RangeError('shadow must be less than or equal to highlight')
 
 	const factor = shadow === highlight ? 1 : 1 / (highlight - shadow)

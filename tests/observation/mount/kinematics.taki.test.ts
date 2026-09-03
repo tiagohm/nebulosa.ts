@@ -39,10 +39,3 @@ test('small fabrication errors follow their first-order directions', () => {
 	expectVectorClose(mountDirectionFromEncoders(indexed, { primary: 0, secondary: 0 }), [1, 0, epsilon], 12)
 	expectVectorClose(mountDirectionFromEncoders(nonPerpendicular, { primary: 0, secondary: PIOVERTWO }), [0, -epsilon, 1], 12)
 })
-
-test('non-finite Taki errors are rejected', () => {
-	const nominal = createCanonicalEquatorialGeometry()
-	expect(() => applyTakiFabricationErrors(nominal, { axisNonPerpendicularity: Number.NaN })).toThrow()
-	expect(() => applyTakiFabricationErrors(nominal, { collimation: Number.POSITIVE_INFINITY })).toThrow()
-	expect(() => applyTakiFabricationErrors(nominal, { secondaryIndex: Number.NEGATIVE_INFINITY })).toThrow()
-})

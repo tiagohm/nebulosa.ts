@@ -156,6 +156,12 @@ test('rejects fewer than three observations', () => {
 	expect(() => fitOrbit(observations, EPOCH, TRUE_ORBIT.position, TRUE_ORBIT.velocity)).toThrow('at least 3 observations')
 })
 
+test('rejects a non-finite iteration cap that would never terminate', () => {
+	const observations = makeSyntheticObservations({ count: 3 })
+
+	expect(() => fitOrbit(observations, EPOCH, TRUE_ORBIT.position, TRUE_ORBIT.velocity, { maxIterations: Number.POSITIVE_INFINITY })).toThrow('maxIterations must be finite')
+})
+
 test('rejects an invalid topocentric model gracefully', () => {
 	const observations = Array.from({ length: 3 }, () => ({ time: EPOCH, rightAscension: 0, declination: 0, observerPosition: TRUE_ORBIT.position }))
 

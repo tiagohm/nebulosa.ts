@@ -1,5 +1,4 @@
 import { STANDARD_DEVIATION_SCALE } from '../../core/util'
-import { validateNonNegativeFinite, validateNonNegativeInteger, validatePositiveInteger } from '../../core/validation'
 import type { Rect } from '../../math/numerical/geometry'
 import type { NumberArray } from '../../math/numerical/math'
 import { Histogram } from '../../math/numerical/statistics'
@@ -93,13 +92,13 @@ export const DEFAULT_SIGMA_CLIP_OPTIONS: Readonly<SigmaClipOptions> = {
 // Maximum supported histogram bit depth, limiting a default Int32 buffer to 64 MiB.
 const MAX_HISTOGRAM_BITS = 24
 
-// Allocates or clears a histogram bin buffer after validating its size.
+// Allocates or clears a histogram bin buffer. Numeric bit depths above MAX_HISTOGRAM_BITS would allocate tens of MiB.
 function resolveHistogramBins(bits: NumberArray | number | undefined): NumberArray {
 	bits ??= DEFAULT_HISTOGRAM_OPTIONS.bits
 
 	if (typeof bits === 'number') {
-		validatePositiveInteger(bits)
-		if (bits > MAX_HISTOGRAM_BITS) throw new RangeError(`histogram bits must be <= ${MAX_HISTOGRAM_BITS}`)
+		// 2**bits allocates the bin buffer; depths above MAX_HISTOGRAM_BITS would be tens of MiB or worse.
+		if (bits <= 0 || bits > MAX_HISTOGRAM_BITS) throw new RangeError(`histogram bits must be between 1 and ${MAX_HISTOGRAM_BITS}`)
 		return new Int32Array(2 ** bits)
 	}
 
@@ -355,10 +354,8 @@ function resolveSigmaClipMask(image: Image, provided?: Int8Array | Uint8Array) {
 // Performs sigma clipping and retains internal state useful to background estimation.
 function sigmaClipResult(image: Image, options: Partial<SigmaClipOptions> = DEFAULT_SIGMA_CLIP_OPTIONS): SigmaClipResult {
 	const { channel, centerMethod, dispersionMethod, sigmaLower, sigmaUpper, tolerance, maxIterations } = Object.assign({}, DEFAULT_SIGMA_CLIP_OPTIONS, options)
-	validateNonNegativeFinite(sigmaLower)
-	validateNonNegativeFinite(sigmaUpper)
-	validateNonNegativeFinite(tolerance)
-	validateNonNegativeInteger(maxIterations)
+	// A non-finite iteration cap would make the clipping loop never terminate.
+	if (!Number.isFinite(maxIterations)) throw new RangeError('maxIterations must be finite')
 
 	const transform = options.transform ?? DEFAULT_SIGMA_CLIP_OPTIONS.transform
 	const mask = resolveSigmaClipMask(image, options.mask)

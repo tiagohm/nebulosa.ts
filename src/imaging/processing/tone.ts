@@ -1,9 +1,9 @@
-import { validateFinite, validateNonNegativeFinite, validatePositiveFinite } from '../../core/validation'
 import { clamp } from '../../math/numerical/math'
 import { grayscaleFromChannel, type Image, type ImageChannelOrGray } from '../model/types'
 
-// In-place tonal adjustments on normalized images. Every transform validates its parameters and dense
-// image layout, clamps output samples to [0,1], and returns the same image object.
+// In-place tonal adjustments on normalized images. Every transform checks dense image layout, clamps
+// output samples to [0,1], and returns the same image object. Brightness, saturation, and contrast
+// factors are non-negative; gamma is positive; linear slope and intercept are finite.
 
 // Absolute tolerance accepted when custom luminance weights are normalized from floating-point values.
 const GRAYSCALE_WEIGHT_SUM_TOLERANCE = 1e-6
@@ -23,16 +23,12 @@ function validateToneImage(image: Image) {
 
 // Verifies finite non-negative luminance weights normalized to unit sum.
 function validateGrayscaleWeights(red: number, green: number, blue: number) {
-	validateNonNegativeFinite(red)
-	validateNonNegativeFinite(green)
-	validateNonNegativeFinite(blue)
 	const sum = red + green + blue
 	if (Math.abs(sum - 1) > GRAYSCALE_WEIGHT_SUM_TOLERANCE) throw new RangeError(`grayscale weights must sum to one: ${sum}`)
 }
 
 // Multiplies brightness by a finite non-negative factor and clips the result to [0,1].
 export function brightness(image: Image, value: number) {
-	validateNonNegativeFinite(value)
 	validateToneImage(image)
 	if (value === 1) return image
 	const { raw } = image
@@ -47,7 +43,6 @@ export function brightness(image: Image, value: number) {
 
 // Scales RGB chroma around a validated luminance reference and clips each channel to [0,1].
 export function saturation(image: Image, value: number, channel: ImageChannelOrGray = 'GRAY') {
-	validateNonNegativeFinite(value)
 	validateToneImage(image)
 	if (image.metadata.channels !== 3) return image
 	const { red, green, blue } = grayscaleFromChannel(channel)
@@ -69,8 +64,6 @@ export function saturation(image: Image, value: number, channel: ImageChannelOrG
 
 // Applies a finite slope and intercept to every sample and clips the result to [0,1].
 export function linear(image: Image, slope: number, intercept: number) {
-	validateFinite(slope)
-	validateFinite(intercept)
 	validateToneImage(image)
 	if (slope === 1 && intercept === 0) return image
 	const { raw } = image
@@ -85,13 +78,11 @@ export function linear(image: Image, slope: number, intercept: number) {
 
 // Scales contrast around normalized mid-gray using a finite non-negative factor.
 export function contrast(image: Image, value: number) {
-	validateNonNegativeFinite(value)
 	return linear(image, value, 0.5 - 0.5 * value)
 }
 
 // Applies inverse-gamma encoding for any finite positive gamma and clips input samples to [0,1].
 export function gamma(image: Image, value: number) {
-	validatePositiveFinite(value)
 	validateToneImage(image)
 	if (value === 1) return image
 	const { raw } = image

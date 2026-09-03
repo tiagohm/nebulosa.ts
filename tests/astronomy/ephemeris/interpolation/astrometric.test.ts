@@ -154,10 +154,6 @@ test('writes pixelToSky results into the provided output tuple', () => {
 })
 
 test('rejects invalid constructor inputs', () => {
-	expect(() => new AstrometricInterpolator([0], [0], 0, 1, 1, 1)).toThrow('value must be a positive integer')
-	expect(() => new AstrometricInterpolator([0], [0], 1.5, 1, 1, 1)).toThrow('value must be a positive integer')
-	expect(() => new AstrometricInterpolator([0], [0], 1, 1, 0, 1)).toThrow('value must be positive')
-	expect(() => new AstrometricInterpolator([0], [0], 1, 1, 1, Number.NaN)).toThrow('value must be finite')
 	expect(() => new AstrometricInterpolator([0, 1], [0], 1, 1, 1, 1)).toThrow('astrometric RA and Dec grids must have the same length')
 	expect(() => new AstrometricInterpolator([0, 1], [0, 1], 3, 1, 1, 1)).toThrow('astrometric grid length must equal width * height')
 	expect(() => new AstrometricInterpolator([Number.NaN], [0], 1, 1, 1, 1)).toThrow('astrometric RA grid value at index 0 must be finite')

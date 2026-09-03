@@ -124,18 +124,6 @@ test('scnr validates and leaves monochrome and CFA images unchanged', () => {
 	expect(cfa.raw).toEqual(beforeCfa)
 })
 
-test('scnr rejects amounts outside the unit interval before mutation', () => {
-	for (const amount of [-0.01, 1.01, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
-		const image = makeImage(1, 1, 3, [0.2, 0.9, 0.4])
-		const before = new Float32Array(image.raw)
-		expect(() => scnr(image, 'GREEN', amount)).toThrow()
-		expect(image.raw).toEqual(before)
-	}
-
-	const mono = makeImage(1, 1, 1, [0.2])
-	expect(() => scnr(mono, 'GREEN', Number.NaN)).toThrow('value must be finite')
-})
-
 test('scnr rejects malformed dense image layouts before mutation', () => {
 	const valid = makeImage(1, 1, 3, [0.2, 0.9, 0.4])
 	const badWidth: Image = { ...valid, metadata: { ...valid.metadata, width: 0 } }
