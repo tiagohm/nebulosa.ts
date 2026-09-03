@@ -12,3 +12,6 @@ __pycache__/
 .claude/settings.local.json
 CLAUDE.local.md
 /memory
+
+# Per-file Grok review state
+.grok-reviews/
