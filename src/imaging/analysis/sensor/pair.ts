@@ -52,7 +52,7 @@ export interface SensorPairAggregate extends SensorPairStatistics {
 function resolveArea(area: Readonly<Rect> | undefined, width: number, height: number): Readonly<Rect> {
 	const resolved = area ?? { left: 0, top: 0, right: width, bottom: height }
 	if (!Number.isInteger(resolved.left) || !Number.isInteger(resolved.top) || !Number.isInteger(resolved.right) || !Number.isInteger(resolved.bottom)) throw new RangeError('sensor pair area must use integer bounds')
-	if (resolved.left < 0 || resolved.top < 0 || resolved.right > width || resolved.bottom > height || resolved.left >= resolved.right || resolved.top >= resolved.bottom) throw new RangeError('sensor pair area must be a non-empty inclusive-exclusive image rectangle')
+	if (!(resolved.left >= 0) || !(resolved.top >= 0) || !(resolved.right <= width) || !(resolved.bottom <= height) || !(resolved.left < resolved.right) || !(resolved.top < resolved.bottom)) throw new RangeError('sensor pair area must be a non-empty inclusive-exclusive image rectangle')
 	return resolved
 }
 
@@ -81,7 +81,7 @@ function validatePair(first: DigitalImage, second: DigitalImage, plane: SensorPl
 
 	if (plane === undefined || plane === 'mono') throw new RangeError('a CFA image requires an explicit color sensor plane')
 	const slot = cfaSlot(a.bayer, plane)
-	if (slot < 0) throw new RangeError(`sensor plane ${plane} is absent from CFA pattern ${a.bayer}`)
+	if (!(slot >= 0)) throw new RangeError(`sensor plane ${plane} is absent from CFA pattern ${a.bayer}`)
 	return slot
 }
 
@@ -154,7 +154,7 @@ export function aggregateSensorPairs(pairs: readonly SensorPairStatistics[]): Se
 	let varianceM2 = 0
 
 	for (const pair of pairs) {
-		if (!Number.isFinite(pair.mean) || !Number.isFinite(pair.variance) || !Number.isFinite(pair.drift) || pair.sampleCount <= 0) throw new RangeError('sensor pair statistic must be finite with positive sample count')
+		if (!Number.isFinite(pair.mean) || !Number.isFinite(pair.variance) || !Number.isFinite(pair.drift) || !(pair.sampleCount > 0)) throw new RangeError('sensor pair statistic must be finite with positive sample count')
 		const previousCount = sampleCount
 		sampleCount += pair.sampleCount
 		const weight = pair.sampleCount / sampleCount

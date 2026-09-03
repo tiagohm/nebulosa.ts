@@ -178,8 +178,8 @@ export function focusDefocusAmount(focusStep?: number, bestFocus?: number, maxFo
 
 // Plots one synthetic star into an existing ImageRawType image buffer.
 export function plotStar(raw: ImageRawType, width: number, height: number, channels: 1 | 3, x: number, y: number, flux: number, hfd: number, snr: number, seeing: number, colorIndex?: number, options: PlotStarOptions = {}, modifiers?: StarPsfModifiers) {
-	if (!Number.isInteger(width) || width <= 0) throw new RangeError('width must be a positive integer')
-	if (!Number.isInteger(height) || height <= 0) throw new RangeError('height must be a positive integer')
+	if (!Number.isInteger(width) || !(width > 0)) throw new RangeError('width must be a positive integer')
+	if (!Number.isInteger(height) || !(height > 0)) throw new RangeError('height must be a positive integer')
 	const expectedLength = width * height * channels
 	if (raw.length < expectedLength) throw new RangeError(`buffer length mismatch: expected ${expectedLength}, received ${raw.length}`)
 

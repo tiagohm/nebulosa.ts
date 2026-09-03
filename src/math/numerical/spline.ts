@@ -172,7 +172,7 @@ function interpolatingSplinePointCount(x: Readonly<NumberArray>, y: Readonly<Num
 	const n = x.length
 
 	if (n !== y.length) throw new Error('spline x and y arrays must have the same length')
-	if (n < 2) throw new Error('spline requires at least two points')
+	if (!(n >= 2)) throw new Error('spline requires at least two points')
 
 	for (let i = 0; i < n; i++) {
 		if (!Number.isFinite(x[i]) || !Number.isFinite(y[i])) throw new Error('spline control points must be finite')
@@ -298,7 +298,7 @@ function interpolatingSpline(x: Readonly<NumberArray>, y: Readonly<NumberArray>,
 
 // Samples a piecewise spline into a dense LUT over its full x-range.
 function piecewiseSplineLUT(spline: PiecewiseSpline, size: number) {
-	if (!Number.isFinite(size) || size < 2) throw new Error('spline LUT size must be at least two')
+	if (!Number.isFinite(size) || !(size >= 2)) throw new Error('spline LUT size must be at least two')
 
 	const output = new Float32Array(size)
 	const lower = spline.x[0]
@@ -316,7 +316,7 @@ function piecewiseSplineLUT(spline: PiecewiseSpline, size: number) {
 
 // Samples a piecewise cubic spline into a dense LUT over its full x-range.
 function interpolatingSplineLUT(x: Readonly<NumberArray>, y: Readonly<NumberArray>, slopes: Readonly<NumberArray>, size: number) {
-	if (!Number.isFinite(size) || size < 2) throw new Error('spline LUT size must be at least two')
+	if (!Number.isFinite(size) || !(size >= 2)) throw new Error('spline LUT size must be at least two')
 
 	const output = new Float32Array(size)
 	const last = x.length - 1

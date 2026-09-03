@@ -71,7 +71,7 @@ export function multiscaleNeedsDenoise(detailLayers: readonly Partial<Multiscale
 // Estimates robust scales for interleaved detail coefficients current-filtered. Samples and scales
 // are exact-size caller workspaces reused across layers; the returned value aliases scales.
 export function multiscaleDetailScales(current: ImageRawType, filtered: ImageRawType, channels: number, samples: Float64Array, scales: Float64Array): Float64Array {
-	if (!Number.isInteger(channels) || channels <= 0 || current.length === 0 || current.length !== filtered.length || current.length % channels !== 0) {
+	if (!Number.isInteger(channels) || !(channels > 0) || current.length === 0 || current.length !== filtered.length || current.length % channels !== 0) {
 		throw new RangeError('invalid multiscale detail buffer layout')
 	}
 

@@ -257,7 +257,7 @@ function validateLeastSquaresInput(design: readonly Readonly<NumberArray>[], wei
 		for (let i = 0; i < weights.length; i++) {
 			const weight = weights[i]
 
-			if (!Number.isFinite(weight) || weight < 0) {
+			if (!Number.isFinite(weight) || !(weight >= 0)) {
 				throw new Error(`weight at index ${i} must be finite and non-negative`)
 			}
 		}

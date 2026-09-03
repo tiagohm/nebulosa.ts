@@ -32,8 +32,8 @@ export function isNumberArray(a: unknown): a is NumberArray {
 // Selects the kth value from the mutable prefix [0, count) in ascending numeric order. The function
 // rearranges that prefix in place, leaves its suffix untouched, and orders NaN after numeric values.
 export function quickSelect(values: NumberArray, count: number, k: number): number {
-	if (!Number.isInteger(count) || count <= 0 || count > values.length) throw new RangeError('count must identify a non-empty prefix')
-	if (!Number.isInteger(k) || k < 0 || k >= count) throw new RangeError('k must identify an entry inside the selected prefix')
+	if (!Number.isInteger(count) || !(count > 0) || count > values.length) throw new RangeError('count must identify a non-empty prefix')
+	if (!Number.isInteger(k) || !(k >= 0) || !(k < count)) throw new RangeError('k must identify an entry inside the selected prefix')
 
 	let left = 0
 	let right = count - 1
@@ -75,7 +75,7 @@ export function quickSelect(values: NumberArray, count: number, k: number): numb
 // Computes the median with an overflow-safe midpoint of the mutable prefix [0, count) by selection instead of a full sort.
 // The prefix is rearranged in place, the suffix is preserved, and an empty prefix returns NaN.
 export function medianBySelectionOf(values: NumberArray, count = values.length): number {
-	if (!Number.isInteger(count) || count < 0 || count > values.length) throw new RangeError('count must identify a valid prefix')
+	if (!Number.isInteger(count) || !(count >= 0) || count > values.length) throw new RangeError('count must identify a valid prefix')
 	if (count === 0) return Number.NaN
 	if (count === 1) return values[0]
 

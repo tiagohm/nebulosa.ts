@@ -97,7 +97,7 @@ export function domeAzimuthError(current: Angle, target: Angle): Angle {
 
 // Returns whether the shortest command correction strictly exceeds a non-negative tolerance.
 export function isDomeMoveRequired(current: Angle, target: Angle, tolerance: Angle): boolean {
-	if (tolerance < 0) throw new RangeError('tolerance must be non-negative')
+	if (!(tolerance >= 0)) throw new RangeError('tolerance must be non-negative')
 	return Math.abs(domeAzimuthError(current, target)) > tolerance
 }
 

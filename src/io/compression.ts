@@ -222,7 +222,7 @@ function estimateCapacity(inputLengthBytes: number, bytesPerPixel: number, block
 // reset first; the returned bytes then alias its buffer until the next compress or reset. Element byte
 // size must be 1, 2, or 4. Returns the encoded bytes.
 export function compressRice(input: Readonly<RiceCompressionTypedArray>, blockSize: number = 32, initialCapacity?: number | BitWriter) {
-	if (blockSize < 1) throw new Error('block size must be a positive integer')
+	if (!(blockSize >= 1)) throw new Error('block size must be a positive integer')
 
 	const nx = input.length
 
@@ -311,14 +311,14 @@ export function compressRice(input: Readonly<RiceCompressionTypedArray>, blockSi
 
 // Guards against reading past the end of the compressed stream.
 function checkBufferBounds(offset: number, limit: number) {
-	if (offset >= limit) throw new Error('hit end of compressed byte stream')
+	if (!(offset < limit)) throw new Error('hit end of compressed byte stream')
 }
 
 // Rice-decompresses `compressed` into the preallocated `output` array (its length sets the pixel count
 // and its element byte size selects the format). `blockSize` must match the value used when encoding.
 // Returns `output`.
 export function decompressRice<T extends RiceCompressionTypedArray>(compressed: Uint8Array, output: T, blockSize: number = 32) {
-	if (blockSize < 1) throw new Error('block size must be a positive integer')
+	if (!(blockSize >= 1)) throw new Error('block size must be a positive integer')
 
 	const nx = output.length
 

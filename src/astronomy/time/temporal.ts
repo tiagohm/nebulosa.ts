@@ -288,29 +288,29 @@ export function parseTemporal(input: string, pattern: string): Temporal {
 		}
 	}
 
-	if (date[1] < 1 || date[1] > 12) {
+	if (!(date[1] >= 1) || !(date[1] <= 12)) {
 		throw new Error(`invalid month. expected [1-12], but got ${date[1]}`)
 	}
 
 	const monthDays = daysInMonth(date[0], date[1])
 
-	if (date[2] < 1 || date[2] > monthDays) {
+	if (!(date[2] >= 1) || !(date[2] <= monthDays)) {
 		throw new Error(`invalid day of month. expected [1-${monthDays}], but got ${date[2]}`)
 	}
 
-	if (date[3] < 0 || date[3] > 23) {
+	if (!(date[3] >= 0) || !(date[3] <= 23)) {
 		throw new Error(`invalid hour. expected [0-23], but got ${date[3]}`)
 	}
 
-	if (date[4] < 0 || date[4] > 59) {
+	if (!(date[4] >= 0) || !(date[4] <= 59)) {
 		throw new Error(`invalid minute. expected [0-59], but got ${date[4]}`)
 	}
 
-	if (date[5] < 0 || date[5] > 59) {
+	if (!(date[5] >= 0) || !(date[5] <= 59)) {
 		throw new Error(`invalid second. expected [0-59], but got ${date[5]}`)
 	}
 
-	if (date[6] < 0 || date[6] > 999) {
+	if (!(date[6] >= 0) || !(date[6] <= 999)) {
 		throw new Error(`invalid millisecond. expected [0-999], but got ${date[6]}`)
 	}
 

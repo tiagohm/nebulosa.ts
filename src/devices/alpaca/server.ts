@@ -904,7 +904,7 @@ export class AlpacaServer {
 
 		const hours = Number(data.AveragePeriod)
 
-		if (!Number.isFinite(hours) || hours < 0) return makeAlpacaErrorResponse(AlpacaException.InvalidValue, `Invalid average period: ${data.AveragePeriod}`)
+		if (!Number.isFinite(hours) || !(hours >= 0)) return makeAlpacaErrorResponse(AlpacaException.InvalidValue, `Invalid average period: ${data.AveragePeriod}`)
 
 		if (this.options.weather?.setAveragePeriod(registered.device, hours) !== true && hours !== (registered.device.averagePeriod ?? 0)) {
 			return makeAlpacaErrorResponse(AlpacaException.InvalidValue, 'ObservingConditions cannot configure an averaging window')
@@ -1963,7 +1963,7 @@ export class AlpacaServer {
 		if (movable instanceof Response) return movable
 
 		const altitude = +data.Altitude
-		if (!Number.isFinite(altitude) || altitude < 0 || altitude > 90) return makeAlpacaErrorResponse(AlpacaException.InvalidValue, 'Altitude must be between 0 and 90 degrees')
+		if (!Number.isFinite(altitude) || !(altitude >= 0 && altitude <= 90)) return makeAlpacaErrorResponse(AlpacaException.InvalidValue, 'Altitude must be between 0 and 90 degrees')
 
 		this.options.dome?.moveToAltitude(movable.device, deg(altitude))
 		return makeAlpacaResponse(undefined)
@@ -1977,7 +1977,7 @@ export class AlpacaServer {
 		if (movable instanceof Response) return movable
 
 		const azimuth = +data.Azimuth
-		if (!Number.isFinite(azimuth) || azimuth < 0 || azimuth > 360) return makeAlpacaErrorResponse(AlpacaException.InvalidValue, 'Azimuth must be between 0 and 360 degrees')
+		if (!Number.isFinite(azimuth) || !(azimuth >= 0 && azimuth <= 360)) return makeAlpacaErrorResponse(AlpacaException.InvalidValue, 'Azimuth must be between 0 and 360 degrees')
 
 		this.options.dome?.moveTo(movable.device, deg(azimuth))
 		return makeAlpacaResponse(undefined)
@@ -1991,7 +1991,7 @@ export class AlpacaServer {
 		if (movable instanceof Response) return movable
 
 		const azimuth = +data.Azimuth
-		if (!Number.isFinite(azimuth) || azimuth < 0 || azimuth > 360) return makeAlpacaErrorResponse(AlpacaException.InvalidValue, 'Azimuth must be between 0 and 360 degrees')
+		if (!Number.isFinite(azimuth) || !(azimuth >= 0 && azimuth <= 360)) return makeAlpacaErrorResponse(AlpacaException.InvalidValue, 'Azimuth must be between 0 and 360 degrees')
 
 		this.options.dome?.syncTo(movable.device, deg(azimuth))
 		return makeAlpacaResponse(undefined)

@@ -1808,14 +1808,14 @@ function parseNumberedDesignation(value: string) {
 }
 
 function packNumberedMinorPlanet(n: number) {
-	if (!Number.isInteger(n) || n < 0) throw new RangeError(`invalid numbered designation ${n}`)
+	if (!Number.isInteger(n) || !(n >= 0)) throw new RangeError(`invalid numbered designation ${n}`)
 	if (n < PACKED_LETTER_NUMBER_BASE) return String(n).padStart(PACKED_PERMANENT_LENGTH, '0')
 	if (n < PACKED_TILDE_NUMBER_BASE) {
 		const hi = Math.trunc(n / 10000)
 		const lo = n % 10000
 		return `${BASE62[hi]}${String(lo).padStart(4, '0')}`
 	}
-	if (n > PACKED_TILDE_NUMBER_MAX) throw new RangeError(`numbered designation ${n} exceeds the packed form`)
+	if (!(n <= PACKED_TILDE_NUMBER_MAX)) throw new RangeError(`numbered designation ${n} exceeds the packed form`)
 	return `~${toBase62(n - PACKED_TILDE_NUMBER_BASE, 4)}`
 }
 
@@ -1897,8 +1897,8 @@ function packExtendedIfNeeded(value: string) {
 }
 
 function packExtendedProvisional(year: number, halfMonth: string, order: number) {
-	if (year < 2010 || year > 2035) throw new RangeError(`extended packed designation year ${year} is out of range`)
-	if (order < EXTENDED_PACKED_ORDER_BASE) throw new RangeError(`order ${order} does not use the extended packed form`)
+	if (!(year >= 2010) || !(year <= 2035)) throw new RangeError(`extended packed designation year ${year} is out of range`)
+	if (!(order >= EXTENDED_PACKED_ORDER_BASE)) throw new RangeError(`order ${order} does not use the extended packed form`)
 	const yearChar = PACKED_YEAR_CHARS[year % 100]
 	if (!yearChar || yearChar < 'A') throw new RangeError(`extended packed designation year ${year} is out of range`)
 	return `_${yearChar}${halfMonth}${toBase62(order - EXTENDED_PACKED_ORDER_BASE, 4)}`
@@ -1951,7 +1951,7 @@ function unpackYear(century: string, yy: string) {
 }
 
 function packCycle(cycle: number) {
-	if (!Number.isInteger(cycle) || cycle < 0 || cycle > MAX_ORIGINAL_PACKED_CYCLE) throw new RangeError(`cycle ${cycle} cannot be packed in the original 7-character form`)
+	if (!Number.isInteger(cycle) || !(cycle >= 0) || !(cycle <= MAX_ORIGINAL_PACKED_CYCLE)) throw new RangeError(`cycle ${cycle} cannot be packed in the original 7-character form`)
 	if (cycle < 100) return String(cycle).padStart(2, '0')
 	return `${BASE62[Math.trunc(cycle / 10)]}${cycle % 10}`
 }
@@ -1963,7 +1963,7 @@ function unpackCycle(a: string, b: string) {
 
 function orderFromLetters(letter: string, cycle: number) {
 	const index = ORDER_LETTERS.indexOf(letter)
-	if (index < 0) throw new RangeError(`invalid order letter "${letter}"`)
+	if (!(index >= 0)) throw new RangeError(`invalid order letter "${letter}"`)
 	return cycle * 25 + index + 1
 }
 
@@ -1974,7 +1974,7 @@ function lettersFromOrder(order: number) {
 }
 
 function toBase62(value: number, width: number) {
-	if (value < 0) throw new RangeError('base-62 value must be non-negative')
+	if (!(value >= 0)) throw new RangeError('base-62 value must be non-negative')
 	let remaining = value
 	let text = ''
 	for (let i = 0; i < width; i++) {
@@ -1993,7 +1993,7 @@ function fromBase62(text: string) {
 
 function base62Value(char: string) {
 	const index = BASE62.indexOf(char)
-	if (index < 0) throw new RangeError(`invalid base-62 character "${char}"`)
+	if (!(index >= 0)) throw new RangeError(`invalid base-62 character "${char}"`)
 	return index
 }
 
@@ -2255,7 +2255,7 @@ function writeMpc80OpticalLine(observation: MPCObservation, note2: string) {
 	const ra = observation.type === 'offset' ? observation.deltaRightAscension : observation.rightAscension
 	const dec = observation.type === 'offset' ? observation.deltaDeclination : observation.declination
 	if (ra === undefined || dec === undefined) throw new RangeError('MPC80 optical/offset write requires RA and Dec')
-	if (Math.abs(dec) > PIOVERTWO) throw new RangeError('declination exceeds 90 degrees')
+	if (!(Math.abs(dec) <= PIOVERTWO)) throw new RangeError('declination exceeds 90 degrees')
 	const ids = formatMpc80Ids(observation)
 	const discovery = observation.discovery ? '*' : ' '
 	const note1 = (observation.programCode ?? ' ').padEnd(1).slice(0, 1)
@@ -2652,7 +2652,7 @@ export async function listAll(type: MPCList, options: Omit<MPCListOptions, 'offs
 	// A non-finite maxItems would page the List API without bound.
 	const maxItems = validatePositiveInteger(options.maxItems)
 	const pageSize = Math.min(options.limit ?? DEFAULT_LIST_PAGE_SIZE, MAX_LIST_PAGE_SIZE)
-	if (pageSize < 1) throw new RangeError('listAll page size must be >= 1')
+	if (!(pageSize >= 1)) throw new RangeError('listAll page size must be >= 1')
 	const items: MPCListItem[] = []
 	let offset = 0
 

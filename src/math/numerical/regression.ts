@@ -116,12 +116,12 @@ export interface ChebyshevRegression extends Regression {
 // Fits Chebyshev-basis coefficients T_0..T_degree with a QR least-squares solve.
 export function chebyshevLeastSquares(x: Readonly<NumberArray>, y: Readonly<NumberArray>, degree: number): ChebyshevRegression {
 	if (x.length !== y.length) throw new Error('chebyshev x and y arrays must have the same length')
-	if (!Number.isInteger(degree) || degree < 0) throw new RangeError('chebyshev degree must be a non-negative integer')
+	if (!Number.isInteger(degree) || !(degree >= 0)) throw new RangeError('chebyshev degree must be a non-negative integer')
 
 	const rows = x.length
 	const columns = degree + 1
 
-	if (rows < columns) throw new RangeError(`chebyshev fit requires at least ${columns} samples`)
+	if (!(rows >= columns)) throw new RangeError(`chebyshev fit requires at least ${columns} samples`)
 
 	const q = new Float64Array(rows * columns)
 	const r = new Float64Array(columns * columns)
@@ -256,7 +256,7 @@ export function simpleLinearRegression(x: Readonly<NumberArray>, y: Readonly<Num
 export function weightedLinearRegression(x: Readonly<NumberArray>, y: Readonly<NumberArray>, weights: Readonly<NumberArray>): LinearRegression {
 	const n = x.length
 	if (y.length !== n || weights.length !== n) throw new RangeError('weighted linear regression arrays must have the same length')
-	if (n < 2) throw new RangeError('weighted linear regression requires at least two samples')
+	if (!(n >= 2)) throw new RangeError('weighted linear regression requires at least two samples')
 
 	const xOrigin = x[0]
 	const yOrigin = y[0]
@@ -268,7 +268,7 @@ export function weightedLinearRegression(x: Readonly<NumberArray>, y: Readonly<N
 		const yi = y[i]
 		const weight = weights[i]
 		if (!Number.isFinite(xi) || !Number.isFinite(yi)) throw new RangeError(`weighted linear regression sample at index ${i} must be finite`)
-		if (!Number.isFinite(weight) || weight <= 0) throw new RangeError(`weighted linear regression weight at index ${i} must be finite and positive`)
+		if (!Number.isFinite(weight) || !(weight > 0)) throw new RangeError(`weighted linear regression weight at index ${i} must be finite and positive`)
 		weightSum += weight
 		const fraction = weight / weightSum
 		xMeanOffset += (xi - xOrigin - xMeanOffset) * fraction
@@ -304,7 +304,7 @@ export function weightedLinearRegression(x: Readonly<NumberArray>, y: Readonly<N
 export function weightedLinearRegressionScore(regression: LinearRegression, x: Readonly<NumberArray>, y: Readonly<NumberArray>, weights: Readonly<NumberArray>): WeightedLinearRegressionScore {
 	const n = x.length
 	if (y.length !== n || weights.length !== n) throw new RangeError('weighted linear regression score arrays must have the same length')
-	if (n < 2) throw new RangeError('weighted linear regression score requires at least two samples')
+	if (!(n >= 2)) throw new RangeError('weighted linear regression score requires at least two samples')
 
 	const xOrigin = x[0]
 	const yOrigin = y[0]
@@ -313,7 +313,7 @@ export function weightedLinearRegressionScore(regression: LinearRegression, x: R
 	let yMeanOffset = 0
 	for (let i = 0; i < n; i++) {
 		const weight = weights[i]
-		if (!Number.isFinite(x[i]) || !Number.isFinite(y[i]) || !Number.isFinite(weight) || weight <= 0) throw new RangeError(`weighted regression score sample at index ${i} must be finite with positive weight`)
+		if (!Number.isFinite(x[i]) || !Number.isFinite(y[i]) || !Number.isFinite(weight) || !(weight > 0)) throw new RangeError(`weighted regression score sample at index ${i} must be finite with positive weight`)
 		weightSum += weight
 		const fraction = weight / weightSum
 		xMeanOffset += (x[i] - xOrigin - xMeanOffset) * fraction

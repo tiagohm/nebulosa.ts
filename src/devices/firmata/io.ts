@@ -162,7 +162,7 @@ export class PCF8574 extends PeripheralBase<PCF8574> implements IOExpander {
 	#normalizePin(pin: number) {
 		const normalizedPin = Math.trunc(pin)
 
-		if (normalizedPin < 0 || normalizedPin >= PCF8574.PIN_COUNT) {
+		if (!(normalizedPin >= 0) || !(normalizedPin < PCF8574.PIN_COUNT)) {
 			throw new RangeError(`PCF8574 pin must be between 0 and ${PCF8574.PIN_COUNT - 1}. Received ${pin}.`)
 		}
 

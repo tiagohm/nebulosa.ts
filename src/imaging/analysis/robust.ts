@@ -20,7 +20,7 @@ export class RobustReservoir {
 
 	// Creates a reservoir sized for the expected population and capped at the shared robust limit.
 	constructor(populationCapacity: number) {
-		if (!Number.isSafeInteger(populationCapacity) || populationCapacity < 0) throw new RangeError('robust reservoir population capacity must be a non-negative safe integer')
+		if (!Number.isSafeInteger(populationCapacity) || !(populationCapacity >= 0)) throw new RangeError('robust reservoir population capacity must be a non-negative safe integer')
 		this.#values = new Float64Array(Math.max(1, Math.min(populationCapacity, ROBUST_SAMPLE_CAPACITY)))
 	}
 

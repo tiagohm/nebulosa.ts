@@ -59,17 +59,17 @@ export function fitBahtinovLine(candidate: BahtinovHoughCandidate, ridgePoints: 
 	const minimumSupport = options.minimumSupport ?? 8
 	const maximumResidual = options.maximumResidual ?? Number.POSITIVE_INFINITY
 	const profileBlurSigma = options.profileBlurSigma ?? 0
-	if (!Number.isFinite(supportRadius) || supportRadius <= 0) throw new RangeError('supportRadius must be finite and positive')
-	if (!Number.isInteger(robustIterations) || robustIterations < 1 || robustIterations > 20) throw new RangeError('robustIterations must be an integer from 1 to 20')
-	if (!Number.isInteger(minimumSupport) || minimumSupport < 3) throw new RangeError('minimumSupport must be an integer at least 3')
-	if (!(maximumResidual > 0) || Number.isNaN(maximumResidual)) throw new RangeError('maximumResidual must be positive')
-	if (!Number.isFinite(profileBlurSigma) || profileBlurSigma < 0) throw new RangeError('profileBlurSigma must be finite and non-negative')
+	if (!Number.isFinite(supportRadius) || !(supportRadius > 0)) throw new RangeError('supportRadius must be finite and positive')
+	if (!Number.isInteger(robustIterations) || !(robustIterations >= 1) || !(robustIterations <= 20)) throw new RangeError('robustIterations must be an integer from 1 to 20')
+	if (!Number.isInteger(minimumSupport) || !(minimumSupport >= 3)) throw new RangeError('minimumSupport must be an integer at least 3')
+	if (!(maximumResidual > 0)) throw new RangeError('maximumResidual must be positive')
+	if (!Number.isFinite(profileBlurSigma) || !(profileBlurSigma >= 0)) throw new RangeError('profileBlurSigma must be finite and non-negative')
 
 	const localWidth = area.right - area.left
 	const localHeight = area.bottom - area.top
 	const centerX = options.center?.x ?? (localWidth - 1) * 0.5
 	const centerY = options.center?.y ?? (localHeight - 1) * 0.5
-	if (!Number.isFinite(centerX) || !Number.isFinite(centerY) || centerX < 0 || centerX > localWidth - 1 || centerY < 0 || centerY > localHeight - 1) throw new RangeError('Bahtinov line-fit center must be finite and inside the local ROI')
+	if (!Number.isFinite(centerX) || !Number.isFinite(centerY) || !(centerX >= 0) || !(centerX <= localWidth - 1) || !(centerY >= 0) || !(centerY <= localHeight - 1)) throw new RangeError('Bahtinov line-fit center must be finite and inside the local ROI')
 	let normalAngle = candidate.normalAngle
 	let distance = candidate.distance
 	let supportCount = 0
@@ -432,7 +432,7 @@ function lineMetrics(
 // Validates finite candidate, ridge, ROI, noise, and scratch capacity before fitting.
 function validateFitInput(candidate: BahtinovHoughCandidate, ridgePoints: BahtinovRidgePoints, area: Readonly<Rect>, responseDeviation: number, workspace: BahtinovWorkspace): void {
 	if (!Number.isFinite(candidate.normalAngle) || !Number.isFinite(candidate.distance) || !Number.isFinite(candidate.score)) throw new RangeError('Bahtinov Hough candidate must be finite')
-	if (!Number.isInteger(ridgePoints.count) || ridgePoints.count < 3 || ridgePoints.count > workspace.statistics.length) throw new RangeError('invalid ridge-point count for line fitting')
-	if (!Number.isInteger(area.left) || !Number.isInteger(area.top) || !Number.isInteger(area.right) || !Number.isInteger(area.bottom) || area.left >= area.right || area.top >= area.bottom) throw new RangeError('invalid Bahtinov fit area')
-	if (!Number.isFinite(responseDeviation) || responseDeviation < 0) throw new RangeError('responseDeviation must be finite and non-negative')
+	if (!Number.isInteger(ridgePoints.count) || !(ridgePoints.count >= 3) || ridgePoints.count > workspace.statistics.length) throw new RangeError('invalid ridge-point count for line fitting')
+	if (!Number.isInteger(area.left) || !Number.isInteger(area.top) || !Number.isInteger(area.right) || !Number.isInteger(area.bottom) || !(area.left < area.right) || !(area.top < area.bottom)) throw new RangeError('invalid Bahtinov fit area')
+	if (!Number.isFinite(responseDeviation) || !(responseDeviation >= 0)) throw new RangeError('responseDeviation must be finite and non-negative')
 }

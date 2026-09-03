@@ -197,7 +197,7 @@ export function createTiledSkyGeometry(ringCounts: readonly number[], decBoundar
 
 // Returns the descriptor for a 1-based area number, throwing if out of range.
 export function lookupTiledStarArea(geometry: TiledSkyGeometry, area: number) {
-	if (!Number.isInteger(area) || area < 1 || area > geometry.areaCount) {
+	if (!Number.isInteger(area) || !(area >= 1) || !(area <= geometry.areaCount)) {
 		throw new RangeError(`invalid ${geometry.extension} area: ${area}`)
 	}
 
@@ -672,7 +672,7 @@ function compareStarsByMagnitude(a: TiledStarSortable, b: TiledStarSortable) {
 
 // Validates a synthetic per-tile record number.
 export function validateTiledStarRecordNumber(recordNumber: number) {
-	if (!Number.isInteger(recordNumber) || recordNumber < 1) {
+	if (!Number.isInteger(recordNumber) || !(recordNumber >= 1)) {
 		throw new RangeError(`invalid record number: ${recordNumber}`)
 	}
 

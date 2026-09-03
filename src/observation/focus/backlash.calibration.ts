@@ -543,15 +543,15 @@ function normalizeCalibrationOptions(options: BacklashCalibrationOptions): Norma
 	// A non-finite repeat count would make directional runs never finish.
 	validatePositiveInteger(repeats)
 
-	if (repeats < 3) throw new RangeError('repeats must be at least 3')
-	if (minimumPreloadPoints < 2) throw new RangeError('minimumPreloadPoints must be at least 2')
-	if (minimumPostBreakPoints < 2) throw new RangeError('minimumPostBreakPoints must be at least 2')
-	if (safetyFactor < 1) throw new RangeError('safetyFactor must be at least 1')
-	if (Math.ceil(options.preloadDistance / options.probeStep) < minimumPreloadPoints) throw new RangeError('preloadDistance cannot provide minimumPreloadPoints')
-	if (Math.floor(options.maximumProbeDistance / options.probeStep) + 1 < minimumPlateauPoints + minimumPostBreakPoints + stabilityCount - 1) throw new RangeError('maximumProbeDistance cannot provide a stable breakpoint fit')
+	if (!(repeats >= 3)) throw new RangeError('repeats must be at least 3')
+	if (!(minimumPreloadPoints >= 2)) throw new RangeError('minimumPreloadPoints must be at least 2')
+	if (!(minimumPostBreakPoints >= 2)) throw new RangeError('minimumPostBreakPoints must be at least 2')
+	if (!(safetyFactor >= 1)) throw new RangeError('safetyFactor must be at least 1')
+	if (!(Math.ceil(options.preloadDistance / options.probeStep) >= minimumPreloadPoints)) throw new RangeError('preloadDistance cannot provide minimumPreloadPoints')
+	if (!(Math.floor(options.maximumProbeDistance / options.probeStep) + 1 >= minimumPlateauPoints + minimumPostBreakPoints + stabilityCount - 1)) throw new RangeError('maximumProbeDistance cannot provide a stable breakpoint fit')
 
 	const { minimumPosition, maximumPosition } = options
-	if (minimumPosition !== undefined && maximumPosition !== undefined && minimumPosition >= maximumPosition) throw new RangeError('minimumPosition must be less than maximumPosition')
+	if (minimumPosition !== undefined && maximumPosition !== undefined && !(minimumPosition < maximumPosition)) throw new RangeError('minimumPosition must be less than maximumPosition')
 
 	return {
 		probeStep: options.probeStep,

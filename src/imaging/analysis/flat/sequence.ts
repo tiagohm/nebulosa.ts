@@ -109,9 +109,9 @@ function validateSequenceOptions(input: FlatSequenceInput, options: Partial<Flat
 		['maximum drift per frame', options.maximumDriftPerFrame],
 		['maximum drift per second', options.maximumDriftPerSecond],
 	] as const) {
-		if (value !== undefined && (!Number.isFinite(value) || value < 0)) throw new RangeError(`flat sequence ${name} must be finite and non-negative`)
+		if (value !== undefined && (!Number.isFinite(value) || !(value >= 0))) throw new RangeError(`flat sequence ${name} must be finite and non-negative`)
 	}
-	if (options.outlierSigma !== undefined && (!Number.isFinite(options.outlierSigma) || options.outlierSigma <= 0)) throw new RangeError('flat sequence outlier sigma must be finite and positive')
+	if (options.outlierSigma !== undefined && (!Number.isFinite(options.outlierSigma) || !(options.outlierSigma > 0))) throw new RangeError('flat sequence outlier sigma must be finite and positive')
 }
 
 // Enforces every known homogeneity field and records unavailable evidence without inventing equality.
@@ -195,7 +195,7 @@ function validateSequenceCompatibility(frames: readonly FlatFrame[], options: Pa
 			minimum = Math.min(minimum, temperature)
 			maximum = Math.max(maximum, temperature)
 		}
-		if (maximum - minimum > options.temperatureTolerance) throw new RangeError('flat sequence temperature spread exceeds the configured tolerance')
+		if (!(maximum - minimum <= options.temperatureTolerance)) throw new RangeError('flat sequence temperature spread exceeds the configured tolerance')
 	}
 
 	return { metadataUnknown }
@@ -204,7 +204,7 @@ function validateSequenceCompatibility(frames: readonly FlatFrame[], options: Pa
 // Compares every known numeric value and returns true when at least one frame lacks the field.
 function validateOptionalNumericCompatibility(values: readonly (number | undefined)[], tolerance: number, mismatchMessage: string): boolean {
 	const known = values.find((value) => value !== undefined)
-	if (known !== undefined) for (const value of values) if (value !== undefined && Math.abs(value - known) > tolerance) throw new RangeError(mismatchMessage)
+	if (known !== undefined) for (const value of values) if (value !== undefined && !(Math.abs(value - known) <= tolerance)) throw new RangeError(mismatchMessage)
 	return values.some((value) => value === undefined)
 }
 

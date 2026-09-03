@@ -606,7 +606,7 @@ function latitudeInRange(latitude: number | undefined, a?: ProjectionOptions, b?
 // Returns cos of a validated standard parallel; throws if it is non-finite or within epsilon of +/-PI/2.
 function cosStandardParallelFrom(standardParallel: Angle, options?: ProjectionOptions) {
 	const epsilon = epsilonFrom(options)
-	if (!Number.isFinite(standardParallel) || standardParallel <= -PIOVERTWO + epsilon || standardParallel >= PIOVERTWO - epsilon) throw new TypeError('invalid standardParallel')
+	if (!Number.isFinite(standardParallel) || !(standardParallel > -PIOVERTWO + epsilon) || !(standardParallel < PIOVERTWO - epsilon)) throw new TypeError('invalid standardParallel')
 	return Math.cos(standardParallel)
 }
 
@@ -624,7 +624,7 @@ function eccentricityFrom(a?: ProjectionOptions, b?: ProjectionOptions) {
 
 	const flattening = a?.flattening ?? b?.flattening
 	if (flattening === 0) return 0
-	if (flattening === undefined || !Number.isFinite(flattening) || flattening < 0 || flattening >= 1) throw new TypeError('invalid eccentricity')
+	if (flattening === undefined || !Number.isFinite(flattening) || !(flattening >= 0) || !(flattening < 1)) throw new TypeError('invalid eccentricity')
 
 	return Math.sqrt(flattening * (2 - flattening))
 }

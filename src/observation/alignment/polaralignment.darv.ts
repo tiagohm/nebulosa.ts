@@ -129,7 +129,7 @@ function computeDarvGeometryFactor(mode: DarvExposureMode, latitude: Angle, hour
 function computeDarvRaVelocity(declination: Angle, guideRateSidereal: number) {
 	const cosDeclination = Math.abs(Math.cos(declination))
 
-	if (cosDeclination <= MIN_RA_COS_DECLINATION) throw new RangeError('stars too close to the celestial pole are not recommended for DARV because RA motion becomes too small')
+	if (!(cosDeclination > MIN_RA_COS_DECLINATION)) throw new RangeError('stars too close to the celestial pole are not recommended for DARV because RA motion becomes too small')
 
 	// DARV reverses RA between legs, so expose the speed magnitude instead of a signed direction.
 	return SIDEREAL_RATE * guideRateSidereal * cosDeclination
@@ -139,7 +139,7 @@ function computeDarvRaVelocity(declination: Angle, guideRateSidereal: number) {
 // drift would be too small to produce a visible separation.
 function computeDarvDriftDec(targetPolarErrorArcmin: number, geometryFactor: number) {
 	const driftDec = DRIFT_ARCSEC_PER_SECOND_PER_ARCMIN * targetPolarErrorArcmin * geometryFactor
-	if (driftDec <= MIN_DRIFT_RATE_ARCSEC_PER_SECOND) throw new RangeError('DARV DEC drift is too small to estimate a visible separation for this alignment geometry')
+	if (!(driftDec > MIN_DRIFT_RATE_ARCSEC_PER_SECOND)) throw new RangeError('DARV DEC drift is too small to estimate a visible separation for this alignment geometry')
 	return driftDec
 }
 

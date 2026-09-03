@@ -21,7 +21,7 @@ export const DEFAULT_APPLY_SCREEN_TRANSFER_FUNCTION_OPTIONS: Readonly<ApplyScree
 // midtone, shadow, and highlight are finite values in [0, 1] with shadow <= highlight.
 export function stf(image: Image, midtone: number = 0.5, shadow: number = 0, highlight: number = 1, options: Partial<ApplyScreenTransferFunctionOptions> = DEFAULT_APPLY_SCREEN_TRANSFER_FUNCTION_OPTIONS): Image {
 	if (midtone === 0.5 && shadow === 0 && highlight === 1) return image
-	if (shadow > highlight) throw new RangeError('shadow must be less than or equal to highlight')
+	if (!(shadow <= highlight)) throw new RangeError('shadow must be less than or equal to highlight')
 
 	const factor = shadow === highlight ? 1 : 1 / (highlight - shadow)
 	const k1 = (midtone - 1) * factor

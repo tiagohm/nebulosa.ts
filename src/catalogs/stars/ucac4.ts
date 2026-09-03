@@ -598,7 +598,7 @@ function pickPrimaryMagnitude(apertureMagnitudeMillimag: number, modelMagnitudeM
 
 // Validates the packed RA and south-pole distance of a record, throwing on out-of-range coordinates.
 function validateUcac4Coordinates(raMas: number, southPoleDistanceMas: number, zone: number, recordNumber: number) {
-	if (raMas < 0 || raMas >= FULL_CIRCLE_MAS || southPoleDistanceMas < 0 || southPoleDistanceMas > 2 * UCAC4_SPD_OFFSET_MAS) {
+	if (!(raMas >= 0) || !(raMas < FULL_CIRCLE_MAS) || !(southPoleDistanceMas >= 0) || !(southPoleDistanceMas <= 2 * UCAC4_SPD_OFFSET_MAS)) {
 		throw new Error(`invalid UCAC4 coordinates in zone ${zone}, record ${recordNumber}`)
 	}
 }
@@ -676,14 +676,14 @@ function readUcac4Index(data: Buffer): Ucac4Index {
 
 // Validates a native zone number.
 function validateZoneNumber(zone: number) {
-	if (!Number.isInteger(zone) || zone < 1 || zone > UCAC4_ZONE_COUNT) {
+	if (!Number.isInteger(zone) || !(zone >= 1) || !(zone <= UCAC4_ZONE_COUNT)) {
 		throw new Error(`invalid UCAC4 zone number: ${zone}`)
 	}
 }
 
 // Validates a native record number.
 function validateRecordNumber(recordNumber: number) {
-	if (!Number.isInteger(recordNumber) || recordNumber < 1) {
+	if (!Number.isInteger(recordNumber) || !(recordNumber >= 1)) {
 		throw new Error(`invalid UCAC4 record number: ${recordNumber}`)
 	}
 }

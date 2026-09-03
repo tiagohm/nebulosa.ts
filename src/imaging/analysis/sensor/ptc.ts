@@ -155,7 +155,7 @@ export function measureSensorReadNoise(pairs: readonly SensorPairStatistics[], c
 	let rmsM2 = 0
 	for (let i = 0; i < pairs.length; i++) {
 		const pair = pairs[i]
-		if (!Number.isFinite(pair.variance) || pair.variance < 0 || pair.sampleCount <= 0) throw new RangeError('read-noise pair variance must be finite and non-negative')
+		if (!Number.isFinite(pair.variance) || !(pair.variance >= 0) || !(pair.sampleCount > 0)) throw new RangeError('read-noise pair variance must be finite and non-negative')
 		weightedVariance += pair.variance * pair.sampleCount
 		sampleCount += pair.sampleCount
 		const rms = Math.sqrt(pair.variance)
@@ -177,7 +177,7 @@ export function measureSensorReadNoise(pairs: readonly SensorPairStatistics[], c
 
 // Fits positive PTC points over a fractional observed-signal range and annotates every rejection.
 export function fitPhotonTransferGain(points: readonly PhotonTransferPoint[], range: readonly [number, number] = DEFAULT_SENSOR_CHARACTERIZATION_OPTIONS.gainRange): readonly [readonly PhotonTransferPoint[], SensorGain | undefined] {
-	if (range.length !== 2 || !Number.isFinite(range[0]) || !Number.isFinite(range[1]) || range[0] < 0 || range[0] >= range[1] || range[1] > 1) throw new RangeError('gain range must be an increasing fraction within 0..1')
+	if (range.length !== 2 || !Number.isFinite(range[0]) || !Number.isFinite(range[1]) || !(range[0] >= 0) || !(range[0] < range[1]) || !(range[1] <= 1)) throw new RangeError('gain range must be an increasing fraction within 0..1')
 	let maximumSignal = 0
 	for (const point of points) if (point.valid && point.clippedFraction === 0 && (point.darkClippedFraction ?? 0) === 0 && point.signal > maximumSignal) maximumSignal = point.signal
 	const minimum = maximumSignal * range[0]
@@ -233,11 +233,11 @@ export function fitPhotonTransferGain(points: readonly PhotonTransferPoint[], ra
 
 // Characterizes one plane's PTC, gain, bias, and read noise from paired bias and flat datasets.
 export function characterizeSensorTemporal(bias: SensorFrameSet, flats: readonly SensorFlatFrameSet[], options: Partial<SensorTemporalOptions> = {}): SensorTemporalCharacterization {
-	if (!Number.isFinite(bias.exposure) || bias.exposure < 0) throw new RangeError('bias exposure must be finite and non-negative')
+	if (!Number.isFinite(bias.exposure) || !(bias.exposure >= 0)) throw new RangeError('bias exposure must be finite and non-negative')
 	const pairOptions: Partial<SensorPairOptions> = { area: options.area, plane: options.plane, cfaOffset: options.cfaOffset, digitalClip: options.digitalClip, mask: options.mask }
 	const reference = validateTemporalFrames(bias.frames)
 	for (const level of flats) {
-		if (!Number.isFinite(level.exposure) || level.exposure < 0) throw new RangeError('flat exposure must be finite and non-negative')
+		if (!Number.isFinite(level.exposure) || !(level.exposure >= 0)) throw new RangeError('flat exposure must be finite and non-negative')
 		validateTemporalFrames(level.frames, reference)
 		if (level.darkFrames) validateTemporalFrames(level.darkFrames, reference)
 	}

@@ -250,9 +250,9 @@ function alignmentControls(options: Readonly<DirectionAlignmentOptions>): Alignm
 	const robust = options.robust ?? 'none'
 	const tuning = options.tuning ?? (robust === 'tukey' ? DEFAULT_TUKEY_TUNING : DEFAULT_HUBER_TUNING)
 	// A non-finite or non-positive cap would make the alignment iteration never terminate.
-	if (!Number.isInteger(maxIterations) || maxIterations <= 0) throw new RangeError('maxIterations must be a positive integer')
-	if (tolerance < 0) throw new RangeError('tolerance must be non-negative')
-	if (tuning <= 0) throw new RangeError('tuning must be positive')
+	if (!Number.isInteger(maxIterations) || !(maxIterations > 0)) throw new RangeError('maxIterations must be a positive integer')
+	if (!(tolerance >= 0)) throw new RangeError('tolerance must be non-negative')
+	if (!(tuning > 0)) throw new RangeError('tuning must be positive')
 	return { maxIterations, tolerance, robust, tuning }
 }
 
@@ -269,14 +269,14 @@ function normalizeSamples(samples: readonly Readonly<DirectionAlignmentSample>[]
 		validateDirection(sample.mount, `samples[${i}].mount`)
 		validateDirection(sample.world, `samples[${i}].world`)
 		const weight = sample.weight ?? 1
-		if (weight < 0) throw new RangeError(`samples[${i}].weight must be non-negative`)
+		if (!(weight >= 0)) throw new RangeError(`samples[${i}].weight must be non-negative`)
 		mount[i] = vecNormalize(sample.mount)
 		world[i] = vecNormalize(sample.world)
 		baseWeights[i] = weight
 		if (weight > 0) effectiveCount++
 	}
 
-	if (effectiveCount < 2) throw new RangeError('at least two positive-weight samples are required')
+	if (!(effectiveCount >= 2)) throw new RangeError('at least two positive-weight samples are required')
 
 	return { mount, world, baseWeights }
 }
@@ -309,7 +309,7 @@ function triadInitialRotation(mount: readonly Vec3[], world: readonly Vec3[], we
 		}
 	}
 
-	if (first < 0 || second < 0 || bestScore < TRIAD_MINIMUM_CROSS) throw new RangeError('alignment directions are collinear or antipodal')
+	if (!(first >= 0) || !(second >= 0) || !(bestScore >= TRIAD_MINIMUM_CROSS)) throw new RangeError('alignment directions are collinear or antipodal')
 
 	const mountBasis = triadBasis(mount[first], mount[second])
 	const worldBasis = triadBasis(world[first], world[second])
@@ -386,7 +386,7 @@ function alignmentRobustScale(residuals: Readonly<Float64Array>, baseWeights: Re
 function ensureEffectiveWeights(weights: Readonly<Float64Array>): void {
 	let count = 0
 	for (let i = 0; i < weights.length; i++) if (weights[i] > 0) count++
-	if (count < 2) throw new RangeError('robust weighting left fewer than two effective samples')
+	if (!(count >= 2)) throw new RangeError('robust weighting left fewer than two effective samples')
 }
 
 // Builds the three-parameter tangent normal system. Each sample contributes the two-dimensional

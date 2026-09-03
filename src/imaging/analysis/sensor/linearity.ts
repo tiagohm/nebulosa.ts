@@ -53,7 +53,7 @@ export interface SensorLinearityAnalysis {
 
 // Measures response linearity over a fractional saturation interval.
 export function measureSensorLinearity(points: readonly PhotonTransferPoint[], flats: readonly SensorFlatFrameSet[], saturation: SensorSaturation | undefined, gain: SensorGain | undefined, range: readonly [number, number] = DEFAULT_SENSOR_CHARACTERIZATION_OPTIONS.linearityRange): SensorLinearityAnalysis {
-	if (range.length !== 2 || !Number.isFinite(range[0]) || !Number.isFinite(range[1]) || range[0] < 0 || range[0] >= range[1] || range[1] > 1) throw new RangeError('linearity range must be an increasing fraction within 0..1')
+	if (range.length !== 2 || !Number.isFinite(range[0]) || !Number.isFinite(range[1]) || !(range[0] >= 0) || !(range[0] < range[1]) || !(range[1] <= 1)) throw new RangeError('linearity range must be an increasing fraction within 0..1')
 	let observedMaximum = 0
 	for (const point of points) if (point.valid && point.clippedFraction <= 0 && (point.darkClippedFraction ?? 0) <= 0 && point.signal > observedMaximum) observedMaximum = point.signal
 	const saturationSignal = saturation?.signal ?? observedMaximum

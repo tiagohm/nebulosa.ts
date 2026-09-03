@@ -237,7 +237,7 @@ export function splitRaBox(minRA: Angle, maxRA: Angle, minDEC: Angle, maxDEC: An
 	const normalizedMinDEC = minDEC
 	const normalizedMaxDEC = maxDEC
 
-	if (normalizedMinDEC > normalizedMaxDEC + GEOMETRY_EPSILON) {
+	if (!(normalizedMinDEC <= normalizedMaxDEC + GEOMETRY_EPSILON)) {
 		throw new Error(`invalid declination range: [${minDEC}, ${maxDEC}]`)
 	}
 
@@ -266,7 +266,7 @@ function normalizeConeQuery(query: StarCatalogConeQuery): NormalizedConeQuery {
 	const centerRA = normalizeAngle(query.centerRA)
 	const centerDEC = query.centerDEC
 
-	if (!Number.isFinite(query.radius) || query.radius < 0 || query.radius > PI) {
+	if (!Number.isFinite(query.radius) || !(query.radius >= 0) || !(query.radius <= PI)) {
 		throw new Error(`invalid cone radius: ${query.radius}. Expected a finite value in [0, pi]`)
 	}
 

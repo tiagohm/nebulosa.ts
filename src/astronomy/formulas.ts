@@ -81,7 +81,7 @@ export function limitingMagnitude(apertureMm: number) {
 // Parameters: largerApertureMm and smallerApertureMm are positive apertures in millimeters; largerApertureMm must be at least smallerApertureMm.
 // Returns: dimensionless light grasp ratio.
 export function lightGraspRatio(largerApertureMm: number, smallerApertureMm: number) {
-	if (largerApertureMm < smallerApertureMm) throw new RangeError('larger aperture must be at least smaller aperture')
+	if (!(largerApertureMm >= smallerApertureMm)) throw new RangeError('larger aperture must be at least smaller aperture')
 	const ratio = largerApertureMm / smallerApertureMm
 	return ratio * ratio
 }
@@ -169,7 +169,7 @@ export function criticalFocusZone(wavelengthMicrons: number, focalRatioN: number
 // Parameters: apertureDiameter and obstructionDiameter use the same length unit; aperture must be positive and obstruction must be non-negative and smaller than aperture.
 // Returns: effective aperture in the same length unit.
 export function effectiveApertureWithObstruction(apertureDiameter: number, obstructionDiameter: number) {
-	if (obstructionDiameter >= apertureDiameter) throw new RangeError('obstruction diameter must be smaller than aperture diameter')
+	if (!(obstructionDiameter < apertureDiameter)) throw new RangeError('obstruction diameter must be smaller than aperture diameter')
 	return Math.sqrt(apertureDiameter * apertureDiameter - obstructionDiameter * obstructionDiameter)
 }
 
@@ -177,7 +177,7 @@ export function effectiveApertureWithObstruction(apertureDiameter: number, obstr
 // Parameters: apertureDiameter and obstructionDiameter use the same length unit; aperture must be positive and obstruction must be non-negative and no larger than aperture.
 // Returns: obstruction ratio in percent.
 export function obstructionRatio(apertureDiameter: number, obstructionDiameter: number) {
-	if (obstructionDiameter > apertureDiameter) throw new RangeError('obstruction diameter must be no larger than aperture diameter')
+	if (!(obstructionDiameter <= apertureDiameter)) throw new RangeError('obstruction diameter must be no larger than aperture diameter')
 	return (100 * obstructionDiameter) / apertureDiameter
 }
 
@@ -236,7 +236,7 @@ export function starTrailLength(declination: Angle, exposureSeconds: number, ima
 // Returns: maximum exposure time in seconds; near-pole declinations are rejected because cos(dec) makes the denominator unstable.
 export function maxExposureBeforeTrail(trailLimitPixels: number, imageScaleArcsecPerPixel: number, declination: Angle) {
 	const cosine = Math.cos(declination)
-	if (cosine <= MAX_EXPOSURE_COSINE_EPSILON) throw new RangeError('declination is too close to the celestial pole')
+	if (!(cosine > MAX_EXPOSURE_COSINE_EPSILON)) throw new RangeError('declination is too close to the celestial pole')
 	return (trailLimitPixels * imageScaleArcsecPerPixel) / (SIDEREAL_RATE * cosine)
 }
 
@@ -245,7 +245,7 @@ export function maxExposureBeforeTrail(trailLimitPixels: number, imageScaleArcse
 // Returns: dimensionless signal-to-noise ratio.
 export function signalToNoiseRatio(signalElectrons: number, pixelCount: number, backgroundElectronsPerPixel: number, darkCurrentElectronsPerPixel: number, readNoiseElectrons: number) {
 	const noiseVariance = signalElectrons + pixelCount * (backgroundElectronsPerPixel + darkCurrentElectronsPerPixel + readNoiseElectrons * readNoiseElectrons)
-	if (noiseVariance <= 0) throw new RangeError('noise variance must be positive')
+	if (!(noiseVariance > 0)) throw new RangeError('noise variance must be positive')
 	return signalElectrons / Math.sqrt(noiseVariance)
 }
 
@@ -330,7 +330,7 @@ export function airmassKastenYoung(altitude: Angle) {
 // Parameters: extinctionCoefficientMagPerAirmass is non-negative, and airmass is at least 1 for normal above-horizon observations.
 // Returns: magnitude loss.
 export function atmosphericExtinction(extinctionCoefficientMagPerAirmass: number, airmass: number) {
-	if (airmass < 1) throw new RangeError('airmass must be at least 1')
+	if (!(airmass >= 1)) throw new RangeError('airmass must be at least 1')
 	return extinctionCoefficientMagPerAirmass * airmass
 }
 
@@ -356,7 +356,7 @@ export function isMagnusDomain(celsius: number) {
 // first. It also falls below the input domain for a humidity near zero (about -70 °C at 1 %), so a
 // caller feeding the result back into relativeHumidity must check isMagnusDomain.
 export function dewPoint(temperatureCelsius: number, relativeHumidityPercent: number) {
-	if (relativeHumidityPercent <= 0 || relativeHumidityPercent > 100) throw new RangeError('relative humidity must be within (0, 100]')
+	if (!(relativeHumidityPercent > 0) || !(relativeHumidityPercent <= 100)) throw new RangeError('relative humidity must be within (0, 100]')
 	const alpha = (MAGNUS_A_WATER * temperatureCelsius) / (MAGNUS_B_CELSIUS + temperatureCelsius) + Math.log(relativeHumidityPercent / 100)
 	return (MAGNUS_B_CELSIUS * alpha) / (MAGNUS_A_WATER - alpha)
 }

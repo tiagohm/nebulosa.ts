@@ -247,7 +247,7 @@ function xisfDataView(buffer: Buffer, bitpix: Bitpix): XisfDataArray {
 
 	const pixelInBytes = bitpixInBytes(bitpix)
 
-	if (pixelInBytes < 1 || byteLength % pixelInBytes !== 0) {
+	if (!(pixelInBytes >= 1) || byteLength % pixelInBytes !== 0) {
 		throw new Error('invalid XISF image buffer size')
 	}
 
@@ -287,7 +287,7 @@ function xisfBufferView(buffer: Buffer | undefined, size: number, bitpix: Bitpix
 function xisfImageChunkSize(size: number, bitpix: Bitpix) {
 	const pixelInBytes = bitpixInBytes(bitpix)
 
-	if (pixelInBytes < 1 || size % pixelInBytes !== 0) throw new Error('invalid XISF image buffer size')
+	if (!(pixelInBytes >= 1) || size % pixelInBytes !== 0) throw new Error('invalid XISF image buffer size')
 	if (size === 0) return 0
 
 	const target = Math.min(size, XISF_IMAGE_IO_CHUNK_SIZE)
@@ -1025,7 +1025,7 @@ export class XisfImageWriter {
 // item are copied verbatim. Writes into `output` (must be at least input length).
 export function byteShuffle(input: Int8Array | Uint8Array | Buffer, output: Int8Array | Uint8Array | Buffer, itemSize: number) {
 	const inputSize = input.byteLength
-	if (!Number.isInteger(itemSize) || itemSize <= 0) throw new Error('invalid byte shuffle item size')
+	if (!Number.isInteger(itemSize) || !(itemSize > 0)) throw new Error('invalid byte shuffle item size')
 	if (output.byteLength < inputSize) throw new Error('byte shuffle output is too small')
 	const numberOfItems = Math.trunc(inputSize / itemSize)
 	const copyLength = inputSize % itemSize
@@ -1088,7 +1088,7 @@ export function byteShuffle(input: Int8Array | Uint8Array | Buffer, output: Int8
 // Inverse of byteShuffle: restores the original interleaved byte layout of fixed-size items.
 export function byteUnshuffle(input: Int8Array | Uint8Array | Buffer, output: Int8Array | Uint8Array | Buffer, itemSize: number) {
 	const inputSize = input.byteLength
-	if (!Number.isInteger(itemSize) || itemSize <= 0) throw new Error('invalid byte shuffle item size')
+	if (!Number.isInteger(itemSize) || !(itemSize > 0)) throw new Error('invalid byte shuffle item size')
 	if (output.byteLength < inputSize) throw new Error('byte shuffle output is too small')
 	const numberOfItems = Math.trunc(inputSize / itemSize)
 	const copyLength = inputSize % itemSize

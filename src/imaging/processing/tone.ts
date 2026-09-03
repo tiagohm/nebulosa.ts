@@ -11,8 +11,8 @@ const GRAYSCALE_WEIGHT_SUM_TOLERANCE = 1e-6
 // Verifies the dense mono or interleaved RGB layout required by tonal transforms.
 function validateToneImage(image: Image) {
 	const { width, height, channels, pixelCount } = image.metadata
-	if (!Number.isInteger(width) || width <= 0) throw new Error(`image width must be a positive integer: ${width}`)
-	if (!Number.isInteger(height) || height <= 0) throw new Error(`image height must be a positive integer: ${height}`)
+	if (!Number.isInteger(width) || !(width > 0)) throw new Error(`image width must be a positive integer: ${width}`)
+	if (!Number.isInteger(height) || !(height > 0)) throw new Error(`image height must be a positive integer: ${height}`)
 	if (channels !== 1 && channels !== 3) throw new Error(`image channels must be 1 or 3: ${channels}`)
 	const expectedPixelCount = width * height
 	if (pixelCount !== expectedPixelCount) throw new Error(`image pixelCount does not match geometry: ${pixelCount} != ${expectedPixelCount}`)
@@ -24,7 +24,7 @@ function validateToneImage(image: Image) {
 // Verifies finite non-negative luminance weights normalized to unit sum.
 function validateGrayscaleWeights(red: number, green: number, blue: number) {
 	const sum = red + green + blue
-	if (Math.abs(sum - 1) > GRAYSCALE_WEIGHT_SUM_TOLERANCE) throw new RangeError(`grayscale weights must sum to one: ${sum}`)
+	if (!(Math.abs(sum - 1) <= GRAYSCALE_WEIGHT_SUM_TOLERANCE)) throw new RangeError(`grayscale weights must sum to one: ${sum}`)
 }
 
 // Multiplies brightness by a finite non-negative factor and clips the result to [0,1].

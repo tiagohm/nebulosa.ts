@@ -185,6 +185,7 @@ When validation is justified:
 - Validate once at the operation entry point or external parsing boundary, never repeatedly in deeper trusted layers or hot loops.
 - Reuse `src/core/validation.ts`; add and test a shared validator only when the check is genuinely reusable.
 - Comment the concrete failure the check prevents.
+- Write ordered numeric comparison validations in inverted-negated form so `NaN` is rejected. IEEE 754 ordered comparisons with `NaN` are false, so `if (value < 0)` lets `NaN` through while `if (!(value >= 0))` rejects it at no extra cost. Prefer `!(value >= min && value <= max)` over `value < min || value > max`, and `!(value > 0)` over `value <= 0`. Do not add a separate `Number.isNaN` check when the inverted comparison already covers it. This does not authorize new NaN-only validations; apply it whenever a comparison validation already exists. Keep `Number.isFinite` when `Infinity` must also be rejected, because inverted sign or lower-bound checks still accept `+Infinity`. Do not invert loop-index guards, collection `.length` checks, or short-circuit conditions such as `i > 0 && ...`.
 - Do not use exceptions as routine state-machine or result control flow; prefer discriminated result unions for expected failures.
 - In reviews, report the concrete hang, crash, unbounded work, or plausible wrong result, not "missing validation."
 

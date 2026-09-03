@@ -108,9 +108,9 @@ function validateAdjustmentGeometry(vector: Vec3, upAxis: Vec3, eastAxis: Vec3):
 	const vectorLength = vecLength(vector)
 	const upLength = vecLength(upAxis)
 	const eastLength = vecLength(eastAxis)
-	if (!Number.isFinite(vectorLength) || !Number.isFinite(upLength) || !Number.isFinite(eastLength) || vectorLength <= VECTOR_EPSILON || upLength <= VECTOR_EPSILON || eastLength <= VECTOR_EPSILON) throw new RangeError('polar-alignment vectors and axes must be finite and non-zero')
+	if (!Number.isFinite(vectorLength) || !Number.isFinite(upLength) || !Number.isFinite(eastLength) || !(vectorLength > VECTOR_EPSILON) || !(upLength > VECTOR_EPSILON) || !(eastLength > VECTOR_EPSILON)) throw new RangeError('polar-alignment vectors and axes must be finite and non-zero')
 	const normalizedDot = vecDot(upAxis, eastAxis) / (upLength * eastLength)
-	if (!Number.isFinite(normalizedDot) || Math.abs(normalizedDot) > AXIS_ORTHOGONALITY_TOLERANCE) throw new RangeError('mount adjustment axes must be orthogonal')
+	if (!Number.isFinite(normalizedDot) || !(Math.abs(normalizedDot) <= AXIS_ORTHOGONALITY_TOLERANCE)) throw new RangeError('mount adjustment axes must be orthogonal')
 }
 
 // Reports whether a vector is finite and has a numerically meaningful direction.

@@ -121,7 +121,7 @@ function resolveFlatAnalysisInput(input: FlatAnalysisInput, options: Partial<Fla
 
 	const area = resolveAnalysisArea(options.area, image.metadata.width, image.metadata.height)
 	const targetArea = resolveAnalysisArea(options.targetArea ?? area, image.metadata.width, image.metadata.height)
-	if (targetArea.left < area.left || targetArea.top < area.top || targetArea.right > area.right || targetArea.bottom > area.bottom) throw new RangeError('flat target area must be contained inside the analysis area')
+	if (!(targetArea.left >= area.left) || !(targetArea.top >= area.top) || !(targetArea.right <= area.right) || !(targetArea.bottom <= area.bottom)) throw new RangeError('flat target area must be contained inside the analysis area')
 
 	validateFlatOptions(options, image.digitalRange)
 	const supported = resolveImageAnalysisPlanes(image) as readonly FlatPlane[]
@@ -149,25 +149,25 @@ function resolveFlatAnalysisInput(input: FlatAnalysisInput, options: Partial<Fla
 
 // Validates option values whose nonsensical combinations would otherwise yield plausible results.
 function validateFlatOptions(options: Partial<FlatAnalysisOptions>, storageRange: readonly [number, number] | undefined): void {
-	if (options.rejectionSigma !== undefined && (!Number.isFinite(options.rejectionSigma) || options.rejectionSigma <= 0)) throw new RangeError('flat rejection sigma must be finite and positive')
+	if (options.rejectionSigma !== undefined && (!Number.isFinite(options.rejectionSigma) || !(options.rejectionSigma > 0))) throw new RangeError('flat rejection sigma must be finite and positive')
 	if (options.maps !== undefined && options.maps !== 'none' && options.maps !== 'illumination' && options.maps !== 'residual' && options.maps !== 'all') throw new RangeError('unsupported flat map selection')
-	if (options.tile && (!Number.isInteger(options.tile.width) || options.tile.width <= 0 || !Number.isInteger(options.tile.height) || options.tile.height <= 0)) throw new RangeError('flat tile dimensions must be positive integers')
+	if (options.tile && (!Number.isInteger(options.tile.width) || !(options.tile.width > 0) || !Number.isInteger(options.tile.height) || !(options.tile.height > 0))) throw new RangeError('flat tile dimensions must be positive integers')
 
 	const effective = options.effectiveClip
 	if (effective) {
 		if (effective.lower === undefined && effective.upper === undefined) throw new RangeError('effective clipping limits must contain at least one side')
 		if (effective.lower !== undefined && !Number.isFinite(effective.lower)) throw new RangeError('effective lower clipping limit must be finite')
 		if (effective.upper !== undefined && !Number.isFinite(effective.upper)) throw new RangeError('effective upper clipping limit must be finite')
-		if (effective.lower !== undefined && effective.upper !== undefined && effective.lower >= effective.upper) throw new RangeError('effective clipping limits must be ordered')
-		if (storageRange && effective.lower !== undefined && (effective.lower < storageRange[0] || effective.lower >= storageRange[1])) throw new RangeError('effective lower clipping limit must lie inside the storage range')
-		if (storageRange && effective.upper !== undefined && (effective.upper <= storageRange[0] || effective.upper > storageRange[1])) throw new RangeError('effective upper clipping limit must lie inside the storage range')
+		if (effective.lower !== undefined && effective.upper !== undefined && !(effective.lower < effective.upper)) throw new RangeError('effective clipping limits must be ordered')
+		if (storageRange && effective.lower !== undefined && (!(effective.lower >= storageRange[0]) || !(effective.lower < storageRange[1]))) throw new RangeError('effective lower clipping limit must lie inside the storage range')
+		if (storageRange && effective.upper !== undefined && (!(effective.upper > storageRange[0]) || !(effective.upper <= storageRange[1]))) throw new RangeError('effective upper clipping limit must lie inside the storage range')
 	}
 
 	for (const [name, value] of [
 		['maximum clipped fraction', options.criteria?.maximumClippedFraction],
 		['maximum non-finite fraction', options.criteria?.maximumNonFiniteFraction],
 	] as const) {
-		if (value !== undefined && (!Number.isFinite(value) || value < 0 || value > 1)) throw new RangeError(`${name} must be finite and in [0, 1]`)
+		if (value !== undefined && (!Number.isFinite(value) || !(value >= 0 && value <= 1))) throw new RangeError(`${name} must be finite and in [0, 1]`)
 	}
 
 	const artifacts = options.artifacts
@@ -177,11 +177,11 @@ function validateFlatOptions(options: Partial<FlatAnalysisOptions>, storageRange
 		const dust = artifacts.dust
 		if (dust !== undefined && typeof dust !== 'boolean' && (typeof dust !== 'object' || dust === null)) throw new TypeError('flat dust options must be boolean or an object')
 		if (typeof dust === 'object' && dust !== null) {
-			if (dust.scales !== undefined && (dust.scales.length !== 3 || !dust.scales.every((value) => Number.isFinite(value) && value > 0) || dust.scales[0] >= dust.scales[1] || dust.scales[1] >= dust.scales[2]))
+			if (dust.scales !== undefined && (dust.scales.length !== 3 || !dust.scales.every((value) => Number.isFinite(value) && value > 0) || !(dust.scales[0] < dust.scales[1]) || !(dust.scales[1] < dust.scales[2])))
 				throw new RangeError('flat dust scales must contain three strictly increasing positive finite image-pixel scales')
-			if (dust.minimumContrast !== undefined && (!Number.isFinite(dust.minimumContrast) || dust.minimumContrast <= 0 || dust.minimumContrast > 1)) throw new RangeError('flat dust minimum contrast must be finite and in (0, 1]')
-			if (dust.minimumArea !== undefined && (!Number.isFinite(dust.minimumArea) || dust.minimumArea <= 0)) throw new RangeError('flat dust minimum area must be finite and positive')
-			if (dust.maximumCandidates !== undefined && (!Number.isInteger(dust.maximumCandidates) || dust.maximumCandidates <= 0 || dust.maximumCandidates > 65536)) throw new RangeError('flat dust maximum candidates must be a positive integer no greater than 65536')
+			if (dust.minimumContrast !== undefined && (!Number.isFinite(dust.minimumContrast) || !(dust.minimumContrast > 0 && dust.minimumContrast <= 1))) throw new RangeError('flat dust minimum contrast must be finite and in (0, 1]')
+			if (dust.minimumArea !== undefined && (!Number.isFinite(dust.minimumArea) || !(dust.minimumArea > 0))) throw new RangeError('flat dust minimum area must be finite and positive')
+			if (dust.maximumCandidates !== undefined && (!Number.isInteger(dust.maximumCandidates) || !(dust.maximumCandidates > 0 && dust.maximumCandidates <= 65536))) throw new RangeError('flat dust maximum candidates must be a positive integer no greater than 65536')
 		}
 	}
 }
@@ -193,17 +193,17 @@ function validateTargets(options: Partial<FlatAnalysisOptions>, selected: Readon
 		if (!FLAT_PLANES.has(key as FlatPlane) || !selected.has(key as FlatPlane)) throw new RangeError(`flat target plane ${key} is not selected by this analysis`)
 		if (!target || (target.levelMode !== 'observed' && target.levelMode !== 'corrected')) throw new RangeError(`flat target for ${key} must select observed or corrected levels`)
 		const [minimum, maximum] = target.range
-		if (!Number.isFinite(minimum) || !Number.isFinite(maximum) || minimum > maximum) throw new RangeError(`flat target range for ${key} must contain ordered finite levels`)
+		if (!Number.isFinite(minimum) || !Number.isFinite(maximum) || !(minimum <= maximum)) throw new RangeError(`flat target range for ${key} must contain ordered finite levels`)
 		if (target.levelMode === 'observed') {
-			if (options.effectiveClip?.lower !== undefined && minimum <= options.effectiveClip.lower) throw new RangeError(`flat observed target for ${key} must remain above the effective lower clip`)
-			if (options.effectiveClip?.upper !== undefined && maximum >= options.effectiveClip.upper) throw new RangeError(`flat observed target for ${key} must remain below the effective upper clip`)
+			if (options.effectiveClip?.lower !== undefined && !(minimum > options.effectiveClip.lower)) throw new RangeError(`flat observed target for ${key} must remain above the effective lower clip`)
+			if (options.effectiveClip?.upper !== undefined && !(maximum < options.effectiveClip.upper)) throw new RangeError(`flat observed target for ${key} must remain below the effective upper clip`)
 		}
 	}
 }
 
 // Validates explicit frame metadata used by reference and later sequence comparisons.
 function validateFlatFrameMetadata(frame: FlatFrame): void {
-	if (frame.exposure !== undefined && (!Number.isFinite(frame.exposure) || frame.exposure <= 0)) throw new RangeError('flat exposure must be finite and positive')
+	if (frame.exposure !== undefined && (!Number.isFinite(frame.exposure) || !(frame.exposure > 0))) throw new RangeError('flat exposure must be finite and positive')
 	if (frame.timestamp !== undefined && !Number.isFinite(frame.timestamp)) throw new RangeError('flat timestamp must be finite Unix milliseconds')
 	if (frame.illumination?.brightness !== undefined && !Number.isFinite(frame.illumination.brightness)) throw new RangeError('flat illumination brightness must be finite')
 	resolveFlatAcquisitionMetadata(frame)
@@ -243,11 +243,11 @@ function validateFlatReference(frame: FlatFrame, frameCfaOffset: readonly [numbe
 	}
 
 	if (reference.kind === 'darkFlat') {
-		if (!Number.isFinite(reference.exposure) || reference.exposure <= 0) throw new RangeError('dark-flat reference exposure must be finite and positive')
+		if (!Number.isFinite(reference.exposure) || !(reference.exposure > 0)) throw new RangeError('dark-flat reference exposure must be finite and positive')
 		const flatExposure = resolveFlatFrameExposure(frame)
 		if (flatExposure === undefined) throw new RangeError('dark-flat subtraction requires a resolved flat exposure')
 		const tolerance = Math.max(FLAT_REFERENCE_EXPOSURE_ABSOLUTE_TOLERANCE, Math.max(flatExposure, reference.exposure) * FLAT_REFERENCE_EXPOSURE_RELATIVE_TOLERANCE)
-		if (Math.abs(flatExposure - reference.exposure) > tolerance) throw new RangeError('dark-flat reference exposure must match the flat without scaling')
+		if (!(Math.abs(flatExposure - reference.exposure) <= tolerance)) throw new RangeError('dark-flat reference exposure must match the flat without scaling')
 	}
 
 	return metadataUnknown

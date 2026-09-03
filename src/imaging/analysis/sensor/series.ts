@@ -115,8 +115,8 @@ export function characterizeSensorSeries(profiles: readonly SensorCharacterizati
 	if (profiles.length === 0) return { profiles: [], diagnostics: [{ severity: 'error', code: 'insufficientProfiles', message: 'At least one characterized operating point is required.' }] }
 	const temperatureTolerance = options.temperatureTolerance ?? 0.5
 	const regimeSlopeRatio = options.regimeSlopeRatio ?? 5
-	if (!Number.isFinite(temperatureTolerance) || temperatureTolerance < 0) throw new RangeError('series temperature tolerance must be finite and non-negative')
-	if (!Number.isFinite(regimeSlopeRatio) || regimeSlopeRatio <= 1) throw new RangeError('series regime slope ratio must be finite and greater than one')
+	if (!Number.isFinite(temperatureTolerance) || !(temperatureTolerance >= 0)) throw new RangeError('series temperature tolerance must be finite and non-negative')
+	if (!Number.isFinite(regimeSlopeRatio) || !(regimeSlopeRatio > 1)) throw new RangeError('series regime slope ratio must be finite and greater than one')
 	const gains = profiles.map((profile) => profile.operatingPoint.gain)
 	if (gains.some((gain) => gain === undefined || !Number.isFinite(gain))) {
 		diagnostics.push({ severity: 'error', code: 'invalidConfiguredGain', message: 'Every series profile requires a finite configured gain.' })

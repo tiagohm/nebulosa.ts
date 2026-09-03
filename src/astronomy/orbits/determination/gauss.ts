@@ -169,7 +169,7 @@ export function gauss(obs1: GaussObservation, obs2: GaussObservation, obs3: Gaus
 	const diagnosticsWarnings = geometryWarnings(angles)
 	const determinants = computeDeterminants(obs1.observer, obs2.observer, obs3.observer, rhoHat1, rhoHat2, rhoHat3)
 
-	if (Math.abs(determinants.D0) <= config.tolerance) {
+	if (!(Math.abs(determinants.D0) > config.tolerance)) {
 		throw new RangeError(`gauss line-of-sight geometry is degenerate: |D0|=${formatMetric(Math.abs(determinants.D0))}`)
 	}
 

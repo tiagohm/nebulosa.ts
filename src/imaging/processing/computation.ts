@@ -98,7 +98,7 @@ function resolveHistogramBins(bits: NumberArray | number | undefined): NumberArr
 
 	if (typeof bits === 'number') {
 		// 2**bits allocates the bin buffer; depths above MAX_HISTOGRAM_BITS would be tens of MiB or worse.
-		if (bits <= 0 || bits > MAX_HISTOGRAM_BITS) throw new RangeError(`histogram bits must be between 1 and ${MAX_HISTOGRAM_BITS}`)
+		if (!(bits > 0) || !(bits <= MAX_HISTOGRAM_BITS)) throw new RangeError(`histogram bits must be between 1 and ${MAX_HISTOGRAM_BITS}`)
 		return new Int32Array(2 ** bits)
 	}
 

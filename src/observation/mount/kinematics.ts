@@ -318,9 +318,9 @@ function solveControls(options: Readonly<MountEncoderSolveOptions>): MountEncode
 	const tolerance = options.tolerance ?? DEFAULT_TOLERANCE
 	const maxStep = options.maxStep ?? DEFAULT_MAX_STEP
 	// A non-finite or non-positive cap would make the inverse-kinematics loop never terminate.
-	if (!Number.isInteger(maxIterations) || maxIterations <= 0) throw new RangeError('maxIterations must be a positive integer')
-	if (tolerance < 0) throw new RangeError('tolerance must be non-negative')
-	if (maxStep <= 0) throw new RangeError('maxStep must be positive')
+	if (!Number.isInteger(maxIterations) || !(maxIterations > 0)) throw new RangeError('maxIterations must be a positive integer')
+	if (!(tolerance >= 0)) throw new RangeError('tolerance must be non-negative')
+	if (!(maxStep > 0)) throw new RangeError('maxStep must be positive')
 	validateRange(options.primaryRange, 'primaryRange')
 	validateRange(options.secondaryRange, 'secondaryRange')
 	return { maxIterations, tolerance, maxStep, primaryRange: options.primaryRange, secondaryRange: options.secondaryRange }
@@ -329,7 +329,7 @@ function solveControls(options: Readonly<MountEncoderSolveOptions>): MountEncode
 // Rejects an inverted encoder interval, which would silently clamp every solve to the wrong bound.
 function validateRange(range: readonly [Angle, Angle] | undefined, name: string): void {
 	if (!range) return
-	if (range[0] > range[1]) throw new RangeError(`${name} must be ordered`)
+	if (!(range[0] <= range[1])) throw new RangeError(`${name} must be ordered`)
 }
 
 // Rejects zero-length mount axes, which make Rodrigues rotations undefined, and encoder-direction

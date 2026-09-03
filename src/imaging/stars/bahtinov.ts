@@ -57,8 +57,8 @@ const MAX_BAHTINOV_NORMALIZATION_SAMPLES = 16777216
 // and `error` is the signed central-line offset in pixels recovered by the analyzer convention. The
 // buffer is mutated additively without background generation, noise, clipping, or saturation.
 export function plotBahtinovSpikes(raw: ImageRawType, width: number, height: number, channels: 1 | 3, x: number, y: number, flux: number, error: number, colorIndex?: number, options: PlotBahtinovSpikesOptions = {}): boolean {
-	if (!Number.isInteger(width) || width <= 0) throw new RangeError('width must be a positive integer')
-	if (!Number.isInteger(height) || height <= 0) throw new RangeError('height must be a positive integer')
+	if (!Number.isInteger(width) || !(width > 0)) throw new RangeError('width must be a positive integer')
+	if (!Number.isInteger(height) || !(height > 0)) throw new RangeError('height must be a positive integer')
 	if (channels !== 1 && channels !== 3) throw new RangeError('channels must be 1 or 3')
 	const expectedLength = width * height * channels
 	if (raw.length < expectedLength) throw new RangeError(`buffer length mismatch: expected ${expectedLength}, received ${raw.length}`)
@@ -207,7 +207,7 @@ function validateBahtinovNormalizationBounds(minimumX: number, maximumX: number,
 	if (!Number.isSafeInteger(minimumX) || !Number.isSafeInteger(maximumX) || !Number.isSafeInteger(minimumY) || !Number.isSafeInteger(maximumY)) throw new RangeError('Bahtinov normalization bounds must be safe integers')
 	const width = maximumX - minimumX + 1
 	const height = maximumY - minimumY + 1
-	if (width <= 0 || height <= 0 || width > MAX_BAHTINOV_NORMALIZATION_SAMPLES / height) throw new RangeError('Bahtinov normalization support is too large')
+	if (!(width > 0) || !(height > 0) || !(width <= MAX_BAHTINOV_NORMALIZATION_SAMPLES / height)) throw new RangeError('Bahtinov normalization support is too large')
 }
 
 // Evaluates a unit plateau with a smoothstep fade over the final longitudinal taper.
@@ -237,12 +237,12 @@ function validateBahtinovSpikeOptions(normalAngles: readonly [Angle, Angle, Angl
 	if (central !== 0 && central !== 1 && central !== 2) throw new RangeError('central must be 0, 1, or 2')
 	for (let index = 0; index < 3; index++) {
 		if (!Number.isFinite(normalAngles[index])) throw new RangeError('Bahtinov normal angles must be finite')
-		if (!Number.isFinite(strengths[index]) || strengths[index] < 0) throw new RangeError('Bahtinov strengths must be finite and non-negative')
+		if (!Number.isFinite(strengths[index]) || !(strengths[index] >= 0)) throw new RangeError('Bahtinov strengths must be finite and non-negative')
 	}
-	if (!Number.isFinite(fwhm) || fwhm <= 0) throw new RangeError('fwhm must be finite and positive')
-	if (!Number.isFinite(halfLength) || halfLength <= 0) throw new RangeError('halfLength must be finite and positive')
-	if (!Number.isFinite(taperLength) || taperLength < 0 || taperLength > halfLength) throw new RangeError('taperLength must be finite and between 0 and halfLength')
-	if (!Number.isFinite(gain) || gain <= 0) throw new RangeError('gain must be finite and positive')
-	if (!Number.isFinite(cutoffSigma) || cutoffSigma <= 0) throw new RangeError('cutoffSigma must be finite and positive')
-	if (gammaCompensation !== undefined && gammaCompensation !== false && (!Number.isFinite(gammaCompensation) || gammaCompensation <= 0)) throw new RangeError('gammaCompensation must be false or finite and positive')
+	if (!Number.isFinite(fwhm) || !(fwhm > 0)) throw new RangeError('fwhm must be finite and positive')
+	if (!Number.isFinite(halfLength) || !(halfLength > 0)) throw new RangeError('halfLength must be finite and positive')
+	if (!Number.isFinite(taperLength) || !(taperLength >= 0) || !(taperLength <= halfLength)) throw new RangeError('taperLength must be finite and between 0 and halfLength')
+	if (!Number.isFinite(gain) || !(gain > 0)) throw new RangeError('gain must be finite and positive')
+	if (!Number.isFinite(cutoffSigma) || !(cutoffSigma > 0)) throw new RangeError('cutoffSigma must be finite and positive')
+	if (gammaCompensation !== undefined && gammaCompensation !== false && (!Number.isFinite(gammaCompensation) || !(gammaCompensation > 0))) throw new RangeError('gammaCompensation must be false or finite and positive')
 }

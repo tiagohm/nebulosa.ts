@@ -390,7 +390,7 @@ export function trueAnomalyParabolic(p: Distance, mu: number, M: Angle): Angle {
 // https://web.archive.org/web/*/http://ccar.colorado.edu/asen5070/handouts/kep2cart_2002.doc
 function computePositionAndVelocityFromOrbitalElements(p: Distance, e: number, i: Angle, om: Angle, w: Angle, v: Angle, mu: number): PositionAndVelocity {
 	// Checks that true anomaly is less than arccos(-1/e) for hyperbolic orbits.
-	if (e > 1 && Math.abs(normalizePI(v)) > Math.acos(-1 / e) + ORBIT_EPSILON) {
+	if (!(e <= 1) && !(Math.abs(normalizePI(v)) <= Math.acos(-1 / e) + ORBIT_EPSILON)) {
 		throw new Error('if eccentricity is > 1, abs(true anomaly) cannot be more than acos(-1/e)')
 	}
 

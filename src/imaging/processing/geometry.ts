@@ -12,8 +12,8 @@ const THIRD_AXIS_HEADER_KEY_PATTERN = /^(?:NAXIS3|ZNAXIS3|ZTILE3|CUNIT3|CTYPE3|C
 // Verifies the dense mono or interleaved RGB layout required by geometry operations.
 function validateGeometryImage(image: Image) {
 	const { width, height, channels, stride, pixelCount } = image.metadata
-	if (!Number.isInteger(width) || width <= 0) throw new Error(`image width must be a positive integer: ${width}`)
-	if (!Number.isInteger(height) || height <= 0) throw new Error(`image height must be a positive integer: ${height}`)
+	if (!Number.isInteger(width) || !(width > 0)) throw new Error(`image width must be a positive integer: ${width}`)
+	if (!Number.isInteger(height) || !(height > 0)) throw new Error(`image height must be a positive integer: ${height}`)
 	if (channels !== 1 && channels !== 3) throw new Error(`image channels must be 1 or 3: ${channels}`)
 	const expectedPixelCount = width * height
 	if (pixelCount !== expectedPixelCount) throw new Error(`image pixelCount does not match geometry: ${pixelCount} != ${expectedPixelCount}`)
@@ -26,7 +26,7 @@ function validateGeometryImage(image: Image) {
 // Verifies finite non-negative grayscale weights normalized to unit sum.
 function validateGrayscaleWeights(red: number, green: number, blue: number) {
 	const sum = red + green + blue
-	if (Math.abs(sum - 1) > GRAYSCALE_WEIGHT_SUM_TOLERANCE) throw new RangeError(`grayscale weights must sum to one: ${sum}`)
+	if (!(Math.abs(sum - 1) <= GRAYSCALE_WEIGHT_SUM_TOLERANCE)) throw new RangeError(`grayscale weights must sum to one: ${sum}`)
 }
 
 // Shifts raw CFA phase metadata after a reflection whose new origin maps to the supplied old offset.

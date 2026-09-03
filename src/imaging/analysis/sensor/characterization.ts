@@ -143,7 +143,7 @@ function minimumDigitalMaximum(sets: readonly SensorFrameSet[]): number | undefi
 // Resolves and validates the inclusive-exclusive analysis ROI.
 function resolveArea(area: Readonly<Rect> | undefined, width: number, height: number): Readonly<Rect> {
 	const roi = area ?? { left: 0, top: 0, right: width, bottom: height }
-	if (!Number.isInteger(roi.left) || !Number.isInteger(roi.top) || !Number.isInteger(roi.right) || !Number.isInteger(roi.bottom) || roi.left < 0 || roi.top < 0 || roi.right > width || roi.bottom > height || roi.left >= roi.right || roi.top >= roi.bottom) {
+	if (!Number.isInteger(roi.left) || !Number.isInteger(roi.top) || !Number.isInteger(roi.right) || !Number.isInteger(roi.bottom) || !(roi.left >= 0) || !(roi.top >= 0) || !(roi.right <= width) || !(roi.bottom <= height) || !(roi.left < roi.right) || !(roi.top < roi.bottom)) {
 		throw new RangeError('sensor characterization area must be a non-empty inclusive-exclusive integer rectangle')
 	}
 	return roi
@@ -251,8 +251,8 @@ function diagnosePlane(result: SensorPlaneCharacterization, diagnostics: SensorD
 // Characterizes all requested planes for a single validated sensor operating point.
 export function characterizeSensor(input: SensorCharacterizationInput, options: Partial<SensorCharacterizationOptions> = {}): SensorCharacterization {
 	if (options.digitalClip !== undefined && !Number.isFinite(options.digitalClip)) throw new RangeError('sensor digital clip must be finite')
-	if (options.temperatureTolerance !== undefined && (!Number.isFinite(options.temperatureTolerance) || options.temperatureTolerance < 0)) throw new RangeError('sensor temperature tolerance must be finite and non-negative')
-	if (options.rejectionSigma !== undefined && (!Number.isFinite(options.rejectionSigma) || options.rejectionSigma <= 0)) throw new RangeError('sensor rejection sigma must be finite and positive')
+	if (options.temperatureTolerance !== undefined && (!Number.isFinite(options.temperatureTolerance) || !(options.temperatureTolerance >= 0))) throw new RangeError('sensor temperature tolerance must be finite and non-negative')
+	if (options.rejectionSigma !== undefined && (!Number.isFinite(options.rejectionSigma) || !(options.rejectionSigma > 0))) throw new RangeError('sensor rejection sigma must be finite and positive')
 	const diagnostics: SensorDiagnostic[] = []
 	const temperatureTolerance = options.temperatureTolerance ?? DEFAULT_SENSOR_CHARACTERIZATION_OPTIONS.temperatureTolerance
 	const sets = frameSets(input)

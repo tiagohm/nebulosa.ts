@@ -397,7 +397,7 @@ export function fitSipDistortion(matchedStars: readonly MatchedStar[], wcs: SipF
 
 		const remaining = usedIndices.length - rejected.length
 
-		if (remaining < runtime.hardMinStars) {
+		if (!(remaining >= runtime.hardMinStars)) {
 			throw new SipFitError('excessiveOutlierRejection', 'sigma clipping would leave too few stars for the SIP fit', { remaining, rejected: rejected.length, minimum: runtime.hardMinStars })
 		}
 
@@ -549,7 +549,7 @@ function normalizeOptions(matchedStars: readonly MatchedStar[], wcs: SipFitsHead
 	if (weighting !== 'auto' && weighting !== 'none' && weighting !== 'star') throw new SipFitError('invalidOption', `unsupported weighting mode: ${weighting}`)
 	if (scatter !== 'mad' && scatter !== 'standardDeviation') throw new SipFitError('invalidOption', `unsupported scatter mode: ${scatter}`)
 	if (spatialDistribution !== 'off' && spatialDistribution !== 'warn' && spatialDistribution !== 'fail') throw new SipFitError('invalidOption', `unsupported spatial distribution mode: ${spatialDistribution}`)
-	if (minStarRatio < 1) throw new SipFitError('invalidOption', 'minStarRatio must be at least 1')
+	if (!(minStarRatio >= 1)) throw new SipFitError('invalidOption', 'minStarRatio must be at least 1')
 
 	const weighted = weighting === 'star' || (weighting === 'auto' && matchedStars.some((star) => star.weight !== undefined))
 	const recommendedMinStars = Math.ceil(coefficientCount * minStarRatio)
@@ -576,8 +576,8 @@ function normalizeOptions(matchedStars: readonly MatchedStar[], wcs: SipFitsHead
 // Validates that the SIP order is an integer within [MIN_SIP_ORDER, MAX_SIP_ORDER]; returns it.
 function validateSipOrder(order: number) {
 	if (!Number.isInteger(order)) throw new SipFitError('invalidOrder', 'SIP order must be an integer')
-	if (order < MIN_SIP_ORDER) throw new SipFitError('invalidOrder', `SIP order must be at least ${MIN_SIP_ORDER}`)
-	if (order > MAX_SIP_ORDER) throw new SipFitError('invalidOrder', `SIP order greater than ${MAX_SIP_ORDER} is not supported by this fitter`)
+	if (!(order >= MIN_SIP_ORDER)) throw new SipFitError('invalidOrder', `SIP order must be at least ${MIN_SIP_ORDER}`)
+	if (!(order <= MAX_SIP_ORDER)) throw new SipFitError('invalidOrder', `SIP order greater than ${MAX_SIP_ORDER} is not supported by this fitter`)
 	return order
 }
 
@@ -599,7 +599,7 @@ function optionalImageSize(name: string, value: number | undefined) {
 // Returns an optional integer option (>= min) or the default when undefined.
 function optionalInteger(name: string, value: number | undefined, defaultValue: number, min: number) {
 	if (value === undefined) return defaultValue
-	if (!Number.isInteger(value) || value < min) throw new SipFitError('invalidOption', `${name} must be an integer greater than or equal to ${min}`)
+	if (!Number.isInteger(value) || !(value >= min)) throw new SipFitError('invalidOption', `${name} must be an integer greater than or equal to ${min}`)
 	return value
 }
 
@@ -643,11 +643,11 @@ function prepareStars(stars: readonly MatchedStar[], wcs: SipFitsHeader, weighte
 
 // Throws unless there are strictly more stars than coefficients and at least the hard minimum.
 function validateStarCount(stars: number, coefficientCount: number, hardMinStars: number) {
-	if (stars <= coefficientCount) {
+	if (!(stars > coefficientCount)) {
 		throw new SipFitError('insufficientStars', 'SIP fitting requires more stars than coefficients', { stars, coefficients: coefficientCount })
 	}
 
-	if (stars < hardMinStars) {
+	if (!(stars >= hardMinStars)) {
 		throw new SipFitError('insufficientStars', 'not enough stars for the configured SIP fit', { stars, minimum: hardMinStars })
 	}
 }
@@ -722,7 +722,7 @@ function solveSipCoefficients(stars: readonly PreparedStar[], usedIndices: reado
 	const scales = scaleColumns(matrix)
 	const conditionNumber = estimateConditionNumber(matrix)
 
-	if (!Number.isFinite(conditionNumber) || conditionNumber > options.maxConditionNumber) {
+	if (!Number.isFinite(conditionNumber) || !(conditionNumber <= options.maxConditionNumber)) {
 		throw new SipFitError('illConditionedFit', 'SIP design matrix is ill-conditioned', { conditionNumber, maxConditionNumber: options.maxConditionNumber })
 	}
 

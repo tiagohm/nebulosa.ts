@@ -49,7 +49,7 @@ export function detectBahtinovHoughCandidates(ridgePoints: BahtinovRidgePoints, 
 	const { maximumCandidates, minimumAxialSeparation, refinementRange, refinementStep } = resolveHoughOptions(workspace, options)
 	const centerX = options.center?.x ?? (width - 1) * 0.5
 	const centerY = options.center?.y ?? (height - 1) * 0.5
-	if (!Number.isFinite(centerX) || !Number.isFinite(centerY) || centerX < 0 || centerX > width - 1 || centerY < 0 || centerY > height - 1) throw new RangeError('Bahtinov Hough center must be finite and inside the local ROI')
+	if (!Number.isFinite(centerX) || !Number.isFinite(centerY) || !(centerX >= 0) || !(centerX <= width - 1) || !(centerY >= 0) || !(centerY <= height - 1)) throw new RangeError('Bahtinov Hough center must be finite and inside the local ROI')
 
 	const angleCount = workspace.angleCount
 	const binCount = workspace.distanceBinCount
@@ -101,14 +101,14 @@ export function validateBahtinovHoughOptions(workspace: BahtinovWorkspace, optio
 function resolveHoughOptions(workspace: BahtinovWorkspace, options: BahtinovHoughOptions): { maximumCandidates: number; minimumAxialSeparation: Angle; refinementRange: Angle; refinementStep: Angle } {
 	const maximumCandidates = options.maximumCandidates ?? Math.min(DEFAULT_BAHTINOV_ANALYSIS_OPTIONS.maximumAngleCandidates, workspace.angleCount)
 	const minimumAxialSeparation = options.minimumAxialSeparation ?? DEFAULT_BAHTINOV_ANALYSIS_OPTIONS.minimumAxialSeparation
-	if (!Number.isInteger(maximumCandidates) || maximumCandidates < 3 || maximumCandidates > workspace.angleCount) throw new RangeError('maximumCandidates must be an integer from 3 to angleCount')
-	if (!Number.isFinite(minimumAxialSeparation) || minimumAxialSeparation <= 0 || minimumAxialSeparation > PIOVERTWO) throw new RangeError('minimumAxialSeparation must be in (0, PI / 2]')
+	if (!Number.isInteger(maximumCandidates) || !(maximumCandidates >= 3) || !(maximumCandidates <= workspace.angleCount)) throw new RangeError('maximumCandidates must be an integer from 3 to angleCount')
+	if (!Number.isFinite(minimumAxialSeparation) || !(minimumAxialSeparation > 0) || !(minimumAxialSeparation <= PIOVERTWO)) throw new RangeError('minimumAxialSeparation must be in (0, PI / 2]')
 	const refinementRange = options.refinementRange ?? Math.min(DEFAULT_BAHTINOV_ANALYSIS_OPTIONS.refinementRange, minimumAxialSeparation * 0.5)
 	const refinementStep = options.refinementStep ?? (refinementRange > 0 ? Math.min(DEFAULT_BAHTINOV_ANALYSIS_OPTIONS.refinementStep, refinementRange) : DEFAULT_BAHTINOV_ANALYSIS_OPTIONS.refinementStep)
-	if (!Number.isFinite(refinementRange) || refinementRange < 0 || refinementRange > minimumAxialSeparation * 0.5) throw new RangeError('refinementRange must be finite and no greater than half the candidate separation')
-	if (!Number.isFinite(refinementStep) || refinementStep <= 0 || (refinementRange > 0 && refinementStep > refinementRange)) throw new RangeError('refinementStep must be finite, positive, and no greater than refinementRange')
+	if (!Number.isFinite(refinementRange) || !(refinementRange >= 0) || !(refinementRange <= minimumAxialSeparation * 0.5)) throw new RangeError('refinementRange must be finite and no greater than half the candidate separation')
+	if (!Number.isFinite(refinementStep) || !(refinementStep > 0) || (refinementRange > 0 && !(refinementStep <= refinementRange))) throw new RangeError('refinementStep must be finite, positive, and no greater than refinementRange')
 	const refinementSamples = refinementRange === 0 ? 0 : Math.ceil((refinementRange * 2) / refinementStep) + 1
-	if (!Number.isSafeInteger(refinementSamples) || refinementSamples > MAXIMUM_REFINEMENT_SAMPLES) throw new RangeError(`local Hough refinement must not exceed ${MAXIMUM_REFINEMENT_SAMPLES} angle samples`)
+	if (!Number.isSafeInteger(refinementSamples) || !(refinementSamples <= MAXIMUM_REFINEMENT_SAMPLES)) throw new RangeError(`local Hough refinement must not exceed ${MAXIMUM_REFINEMENT_SAMPLES} angle samples`)
 	return { maximumCandidates, minimumAxialSeparation, refinementRange, refinementStep }
 }
 
@@ -222,8 +222,8 @@ function insertCandidate(candidates: BahtinovHoughCandidate[], candidate: Bahtin
 
 // Validates ridge-array counts, ROI geometry, and workspace Hough capacity.
 function validateHoughInput(ridgePoints: BahtinovRidgePoints, width: number, height: number, workspace: BahtinovWorkspace): void {
-	if (!Number.isInteger(width) || width <= 1 || !Number.isInteger(height) || height <= 1 || width > workspace.width || height > workspace.height) throw new RangeError('invalid ROI dimensions for Bahtinov Hough search')
-	if (!Number.isInteger(ridgePoints.count) || ridgePoints.count < 3 || ridgePoints.count > workspace.maximumRidgePoints || ridgePoints.x.length < ridgePoints.count || ridgePoints.y.length < ridgePoints.count || ridgePoints.weight.length < ridgePoints.count) {
+	if (!Number.isInteger(width) || !(width > 1) || !Number.isInteger(height) || !(height > 1) || !(width <= workspace.width) || !(height <= workspace.height)) throw new RangeError('invalid ROI dimensions for Bahtinov Hough search')
+	if (!Number.isInteger(ridgePoints.count) || !(ridgePoints.count >= 3) || !(ridgePoints.count <= workspace.maximumRidgePoints) || ridgePoints.x.length < ridgePoints.count || ridgePoints.y.length < ridgePoints.count || ridgePoints.weight.length < ridgePoints.count) {
 		throw new RangeError('invalid Bahtinov ridge-point arrays')
 	}
 	if (workspace.accumulator.length < workspace.distanceBinCount || workspace.angleScore.length < workspace.angleCount || workspace.angleDistance.length < workspace.angleCount) throw new RangeError('Bahtinov Hough workspace capacity is inconsistent')

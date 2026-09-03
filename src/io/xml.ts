@@ -141,7 +141,7 @@ class InternalBuffer {
 		if (needed <= this.#data.length) return
 
 		const max = this.#maxByteLength
-		if (max > 0 && needed > max) {
+		if (max > 0 && !(needed <= max)) {
 			throw new RangeError(`internal buffer exceeded max byte length: ${max}`)
 		}
 

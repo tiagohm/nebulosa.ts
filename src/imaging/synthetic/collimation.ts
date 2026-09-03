@@ -196,11 +196,11 @@ export function applySyntheticCollimationBlur(raw: ImageRawType, width: number, 
 	validateRaster(raw, width, height, channels)
 	const sigmaX = typeof seeing === 'number' ? seeing : seeing.sigmaX
 	const sigmaY = typeof seeing === 'number' ? seeing : seeing.sigmaY
-	if (!Number.isFinite(sigmaX) || sigmaX < 0 || !Number.isFinite(sigmaY) || sigmaY < 0) throw new RangeError('seeing must be finite and non-negative')
+	if (!Number.isFinite(sigmaX) || !(sigmaX >= 0) || !Number.isFinite(sigmaY) || !(sigmaY >= 0)) throw new RangeError('seeing must be finite and non-negative')
 	const effectiveSigmaX = sigmaX > MIN_EFFECTIVE_GAUSSIAN_SIGMA ? sigmaX : 0
 	const effectiveSigmaY = sigmaY > MIN_EFFECTIVE_GAUSSIAN_SIGMA ? sigmaY : 0
 	if (tracking !== undefined) {
-		if (!Number.isFinite(tracking.length) || tracking.length < 0) throw new RangeError('tracking length must be finite and non-negative')
+		if (!Number.isFinite(tracking.length) || !(tracking.length >= 0)) throw new RangeError('tracking length must be finite and non-negative')
 		if (!Number.isFinite(tracking.angle)) throw new RangeError('tracking angle must be finite')
 	}
 
@@ -212,7 +212,7 @@ export function applySyntheticCollimationBlur(raw: ImageRawType, width: number, 
 // Clamps an image buffer to an optional non-negative saturation level in place after optical effects.
 export function applySyntheticCollimationSaturation(raw: ImageRawType, saturationLevel?: number): ImageRawType {
 	if (saturationLevel === undefined) return raw
-	if (!Number.isFinite(saturationLevel) || saturationLevel < 0) throw new RangeError('saturation level must be finite and non-negative')
+	if (!Number.isFinite(saturationLevel) || !(saturationLevel >= 0)) throw new RangeError('saturation level must be finite and non-negative')
 	for (let i = 0; i < raw.length; i++) {
 		if (raw[i] > saturationLevel) raw[i] = saturationLevel
 	}
@@ -252,31 +252,31 @@ export function generateSyntheticCollimationImage(pattern: SyntheticCollimationP
 // Validates fixture geometry and optional output effects. The low-level renderer skips crop/effect checks
 // so the camera can reuse the same geometry while applying its own sensor model.
 function validateSyntheticCollimationPattern(pattern: SyntheticCollimationPattern, validateEffects: boolean): void {
-	if (!Number.isInteger(pattern.width) || pattern.width <= 0) throw new RangeError('width must be a positive integer')
-	if (!Number.isInteger(pattern.height) || pattern.height <= 0) throw new RangeError('height must be a positive integer')
+	if (!Number.isInteger(pattern.width) || !(pattern.width > 0)) throw new RangeError('width must be a positive integer')
+	if (!Number.isInteger(pattern.height) || !(pattern.height > 0)) throw new RangeError('height must be a positive integer')
 	if (pattern.channels !== undefined && pattern.channels !== 1 && pattern.channels !== 3) throw new RangeError('channels must be 1 or 3')
 	if (pattern.bayer !== undefined && (pattern.channels ?? 1) !== 1) throw new RangeError('bayer metadata requires one channel')
 	if (pattern.channelWeights !== undefined) {
 		if ((pattern.channels ?? 1) !== 3) throw new RangeError('channel weights require three channels')
 		const sum = pattern.channelWeights[0] + pattern.channelWeights[1] + pattern.channelWeights[2]
-		if (!pattern.channelWeights.every((weight) => Number.isFinite(weight) && weight >= 0) || Math.abs(sum - 1) > 1e-9) throw new RangeError('channel weights must be finite, non-negative, and sum to one')
+		if (!pattern.channelWeights.every((weight) => Number.isFinite(weight) && weight >= 0) || !(Math.abs(sum - 1) <= 1e-9)) throw new RangeError('channel weights must be finite, non-negative, and sum to one')
 	}
-	if (!Number.isFinite(pattern.signal) || pattern.signal < 0) throw new RangeError('signal must be finite and non-negative')
+	if (!Number.isFinite(pattern.signal) || !(pattern.signal >= 0)) throw new RangeError('signal must be finite and non-negative')
 	if (!Number.isFinite(pattern.background)) throw new RangeError('background must be finite')
-	if (!Number.isFinite(pattern.noise) || pattern.noise < 0) throw new RangeError('noise must be finite and non-negative')
+	if (!Number.isFinite(pattern.noise) || !(pattern.noise >= 0)) throw new RangeError('noise must be finite and non-negative')
 	validateEllipse(pattern.outer, 'outer')
 	validateEllipse(pattern.obstruction, 'obstruction')
 	validateObstructionContainment(pattern.outer, pattern.obstruction)
 
 	for (const harmonic of pattern.harmonics ?? []) {
-		if (!Number.isInteger(harmonic.order) || harmonic.order <= 0) throw new RangeError('harmonic order must be a positive integer')
+		if (!Number.isInteger(harmonic.order) || !(harmonic.order > 0)) throw new RangeError('harmonic order must be a positive integer')
 		if (!Number.isFinite(harmonic.amplitude) || !Number.isFinite(harmonic.phase)) throw new RangeError('harmonic amplitude and phase must be finite')
 	}
 	if (pattern.spider !== undefined) validateSpider(pattern.spider)
 	if (pattern.thermalPlume !== undefined) validateThermalPlume(pattern.thermalPlume)
 	if (!validateEffects) return
 
-	if (pattern.saturation !== undefined && (!Number.isFinite(pattern.saturation) || pattern.saturation < 0)) throw new RangeError('saturation must be finite and non-negative')
+	if (pattern.saturation !== undefined && (!Number.isFinite(pattern.saturation) || !(pattern.saturation >= 0))) throw new RangeError('saturation must be finite and non-negative')
 	for (const point of pattern.hotPixels ?? []) validatePixelPoint(point, pattern.width, pattern.height, 'hot pixel')
 	if (pattern.crop !== undefined) validateCrop(pattern.crop, pattern.width, pattern.height)
 }
@@ -284,16 +284,16 @@ function validateSyntheticCollimationPattern(pattern: SyntheticCollimationPatter
 // Validates a finite ellipse with positive axes and edge softness.
 function validateEllipse(ellipse: SyntheticEllipse, name: string): void {
 	if (!Number.isFinite(ellipse.center.x) || !Number.isFinite(ellipse.center.y)) throw new RangeError(`${name} center must be finite`)
-	if (!Number.isFinite(ellipse.semiMajor) || ellipse.semiMajor <= 0 || !Number.isFinite(ellipse.semiMinor) || ellipse.semiMinor <= 0) throw new RangeError(`${name} axes must be finite and positive`)
+	if (!Number.isFinite(ellipse.semiMajor) || !(ellipse.semiMajor > 0) || !Number.isFinite(ellipse.semiMinor) || !(ellipse.semiMinor > 0)) throw new RangeError(`${name} axes must be finite and positive`)
 	if (!Number.isFinite(ellipse.theta)) throw new RangeError(`${name} angle must be finite`)
-	if (!Number.isFinite(ellipse.softness) || ellipse.softness <= 0) throw new RangeError(`${name} softness must be finite and positive`)
+	if (!Number.isFinite(ellipse.softness) || !(ellipse.softness > 0)) throw new RangeError(`${name} softness must be finite and positive`)
 }
 
 // Checks the full inner boundary by maximizing its quadratic radius in outer-ellipse coordinates.
 function validateObstructionContainment(outer: SyntheticEllipse, obstruction: SyntheticEllipse): void {
 	const maximumRadiusSquared = maximumNormalizedBoundaryRadiusSquared(outer, obstruction)
 	const limit = 1 + CONTAINMENT_TOLERANCE
-	if (maximumRadiusSquared > limit * limit) throw new RangeError('obstruction must be contained inside outer ellipse')
+	if (!(maximumRadiusSquared <= limit * limit)) throw new RangeError('obstruction must be contained inside outer ellipse')
 }
 
 // Maximizes the inner boundary's squared radius after transforming it into the outer unit circle.
@@ -368,28 +368,28 @@ function maximumNormalizedBoundaryRadiusSquared(outer: SyntheticEllipse, inner: 
 
 // Validates spider count, geometry, and attenuation.
 function validateSpider(spider: SyntheticSpider): void {
-	if (!Number.isInteger(spider.vanes) || spider.vanes < 0) throw new RangeError('spider vanes must be a non-negative integer')
+	if (!Number.isInteger(spider.vanes) || !(spider.vanes >= 0)) throw new RangeError('spider vanes must be a non-negative integer')
 	if (!Number.isFinite(spider.angle)) throw new RangeError('spider angle must be finite')
-	if (!Number.isFinite(spider.width) || spider.width < 0) throw new RangeError('spider width must be finite and non-negative')
-	if (!Number.isFinite(spider.attenuation) || spider.attenuation < 0 || spider.attenuation > 1) throw new RangeError('spider attenuation must be between 0 and 1')
+	if (!Number.isFinite(spider.width) || !(spider.width >= 0)) throw new RangeError('spider width must be finite and non-negative')
+	if (!Number.isFinite(spider.attenuation) || !(spider.attenuation >= 0) || !(spider.attenuation <= 1)) throw new RangeError('spider attenuation must be between 0 and 1')
 }
 
 // Validates thermal-plume angular width and attenuation.
 function validateThermalPlume(plume: SyntheticThermalPlume): void {
 	if (!Number.isFinite(plume.angle)) throw new RangeError('thermal plume angle must be finite')
-	if (!Number.isFinite(plume.width) || plume.width <= 0) throw new RangeError('thermal plume width must be finite and positive')
-	if (!Number.isFinite(plume.strength) || plume.strength < 0 || plume.strength > 1) throw new RangeError('thermal plume strength must be between 0 and 1')
+	if (!Number.isFinite(plume.width) || !(plume.width > 0)) throw new RangeError('thermal plume width must be finite and positive')
+	if (!Number.isFinite(plume.strength) || !(plume.strength >= 0) || !(plume.strength <= 1)) throw new RangeError('thermal plume strength must be between 0 and 1')
 }
 
 // Validates an integer point inside a full frame.
 function validatePixelPoint(point: Readonly<Point>, width: number, height: number, name: string): void {
-	if (!Number.isInteger(point.x) || !Number.isInteger(point.y) || point.x < 0 || point.x >= width || point.y < 0 || point.y >= height) throw new RangeError(`${name} must be an integer pixel inside the image`)
+	if (!Number.isInteger(point.x) || !Number.isInteger(point.y) || !(point.x >= 0) || !(point.x < width) || !(point.y >= 0) || !(point.y < height)) throw new RangeError(`${name} must be an integer pixel inside the image`)
 }
 
 // Validates a non-empty integer half-open crop inside the full frame.
 function validateCrop(crop: Readonly<Rect>, width: number, height: number): void {
 	if (!Number.isInteger(crop.left) || !Number.isInteger(crop.top) || !Number.isInteger(crop.right) || !Number.isInteger(crop.bottom)) throw new RangeError('crop coordinates must be integers')
-	if (crop.left < 0 || crop.top < 0 || crop.right > width || crop.bottom > height || crop.left >= crop.right || crop.top >= crop.bottom) throw new RangeError('crop must be a non-empty rectangle inside the image')
+	if (!(crop.left >= 0) || !(crop.top >= 0) || !(crop.right <= width) || !(crop.bottom <= height) || !(crop.left < crop.right) || !(crop.top < crop.bottom)) throw new RangeError('crop must be a non-empty rectangle inside the image')
 }
 
 // Resolves trigonometry and scale terms shared by raster samples.
@@ -488,7 +488,7 @@ function annulusWeight(x: number, y: number, outer: ResolvedEllipse, obstruction
 
 // Validates an interleaved raster shape without accepting padded strides.
 function validateRaster(raw: ImageRawType, width: number, height: number, channels: 1 | 3): void {
-	if (!Number.isInteger(width) || width <= 0 || !Number.isInteger(height) || height <= 0) throw new RangeError('raster dimensions must be positive integers')
+	if (!Number.isInteger(width) || !(width > 0) || !Number.isInteger(height) || !(height > 0)) throw new RangeError('raster dimensions must be positive integers')
 	if (raw.length !== width * height * channels) throw new RangeError('raster buffer length mismatch')
 }
 

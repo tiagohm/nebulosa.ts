@@ -544,7 +544,7 @@ function normalizeCoordinateRightAscension(value: Angle) {
 
 // Validates a declination value in radians.
 function validateDeclination(declination: Angle) {
-	if (!Number.isFinite(declination) || declination < -PIOVERTWO - GEOMETRY_EPSILON || declination > PIOVERTWO + GEOMETRY_EPSILON) {
+	if (!Number.isFinite(declination) || !(declination >= -PIOVERTWO - GEOMETRY_EPSILON) || !(declination <= PIOVERTWO + GEOMETRY_EPSILON)) {
 		throw new TypeError(`invalid declination: ${declination}`)
 	}
 

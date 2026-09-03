@@ -632,7 +632,7 @@ export async function writeFully(sink: Sink, buffer: Buffer, size: number = buff
 
 	while (remaining > 0) {
 		const n = await sink.write(buffer, offset, remaining)
-		if (!Number.isInteger(n) || n <= 0 || n > remaining) throw new Error('sink failed to complete write')
+		if (!Number.isInteger(n) || !(n > 0) || !(n <= remaining)) throw new Error('sink failed to complete write')
 		remaining -= n
 		offset += n
 	}

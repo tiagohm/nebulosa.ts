@@ -235,8 +235,8 @@ export function generateSyntheticFlatImage(model: SyntheticFlatModel): DigitalIm
 
 // Validates a public model and resolves geometry and loop-invariant calculations.
 function resolveSyntheticFlatModel(raw: ImageRawType, model: SyntheticFlatModel): ResolvedSyntheticFlatModel {
-	if (!Number.isInteger(model.width) || model.width <= 0) throw new RangeError('width must be a positive integer')
-	if (!Number.isInteger(model.height) || model.height <= 0) throw new RangeError('height must be a positive integer')
+	if (!Number.isInteger(model.width) || !(model.width > 0)) throw new RangeError('width must be a positive integer')
+	if (!Number.isInteger(model.height) || !(model.height > 0)) throw new RangeError('height must be a positive integer')
 	const channels = model.channels ?? 1
 	if (channels !== 1 && channels !== 3) throw new RangeError('channels must be 1 or 3')
 	if (raw.length !== model.width * model.height * channels) throw new RangeError('buffer length does not match synthetic flat geometry')
@@ -260,10 +260,10 @@ function resolveSyntheticFlatModel(raw: ImageRawType, model: SyntheticFlatModel)
 		['frame width', frameWidth],
 		['frame height', frameHeight],
 	] as const) {
-		if (!Number.isInteger(value) || value < (name.includes('origin') ? 0 : 1)) throw new RangeError(`${name} must be ${name.includes('origin') ? 'a non-negative' : 'a positive'} integer`)
+		if (!Number.isInteger(value) || !(value >= (name.includes('origin') ? 0 : 1))) throw new RangeError(`${name} must be ${name.includes('origin') ? 'a non-negative' : 'a positive'} integer`)
 	}
 	if (model.bayer !== undefined && (binX !== 1 || binY !== 1)) throw new RangeError('CFA output requires unit binning')
-	if (originX + frameWidth > sensorWidth || originY + frameHeight > sensorHeight) throw new RangeError('selected frame extent exceeds the full sensor geometry')
+	if (!(originX + frameWidth <= sensorWidth) || !(originY + frameHeight <= sensorHeight)) throw new RangeError('selected frame extent exceeds the full sensor geometry')
 	if (Math.ceil(frameWidth / binX) !== model.width || Math.ceil(frameHeight / binY) !== model.height) throw new RangeError('output dimensions do not match the selected frame extent and binning')
 
 	for (const [name, value] of [
@@ -279,20 +279,20 @@ function resolveSyntheticFlatModel(raw: ImageRawType, model: SyntheticFlatModel)
 	] as const) {
 		if (!Number.isFinite(value)) throw new RangeError(`${name} must be finite`)
 	}
-	if (model.signal < 0) throw new RangeError('signal must be non-negative')
-	if (model.vignetting < 0 || model.vignetting > 1) throw new RangeError('vignetting must be in [0, 1]')
-	if ((model.prnu ?? 0) < 0) throw new RangeError('PRNU must be non-negative')
-	if ((model.noise ?? 0) < 0) throw new RangeError('noise must be non-negative')
+	if (!(model.signal >= 0)) throw new RangeError('signal must be non-negative')
+	if (!(model.vignetting >= 0) || !(model.vignetting <= 1)) throw new RangeError('vignetting must be in [0, 1]')
+	if (!((model.prnu ?? 0) >= 0)) throw new RangeError('PRNU must be non-negative')
+	if (!((model.noise ?? 0) >= 0)) throw new RangeError('noise must be non-negative')
 	const gradientX = model.gradient?.x ?? 0
 	const gradientY = model.gradient?.y ?? 0
-	if (Math.abs(gradientX) + Math.abs(gradientY) > 2) throw new RangeError('gradient must remain non-negative across the sensor')
+	if (!(Math.abs(gradientX) + Math.abs(gradientY) <= 2)) throw new RangeError('gradient must remain non-negative across the sensor')
 
 	const response = model.channelResponse ?? [1, 1, 1]
 	if (response.length !== 3 || !response.every((value) => Number.isFinite(value) && value >= 0)) throw new RangeError('channel response must contain exactly three finite non-negative values')
 	if (model.lowerClip !== undefined && !Number.isFinite(model.lowerClip)) throw new RangeError('lower clip must be finite')
 	if (model.upperClip !== undefined && !Number.isFinite(model.upperClip)) throw new RangeError('upper clip must be finite')
-	if (model.lowerClip !== undefined && model.upperClip !== undefined && model.lowerClip >= model.upperClip) throw new RangeError('lower clip must be smaller than upper clip')
-	if (model.quantizationStep !== undefined && (!Number.isFinite(model.quantizationStep) || model.quantizationStep <= 0)) throw new RangeError('quantization step must be finite and positive')
+	if (model.lowerClip !== undefined && model.upperClip !== undefined && !(model.lowerClip < model.upperClip)) throw new RangeError('lower clip must be smaller than upper clip')
+	if (model.quantizationStep !== undefined && (!Number.isFinite(model.quantizationStep) || !(model.quantizationStep > 0))) throw new RangeError('quantization step must be finite and positive')
 	if (!Number.isInteger(model.frameIndex ?? 0)) throw new RangeError('frame index must be an integer')
 	if (!Number.isInteger(model.seed ?? 1)) throw new RangeError('seed must be an integer')
 
@@ -313,7 +313,7 @@ function resolveSyntheticFlatModel(raw: ImageRawType, model: SyntheticFlatModel)
 	}
 	validateBanding(model.rowBanding, 'row')
 	validateBanding(model.columnBanding, 'column')
-	if ((model.rowBanding?.amplitude ?? 0) + (model.columnBanding?.amplitude ?? 0) > 1) throw new RangeError('combined banding amplitudes must not exceed one')
+	if (!((model.rowBanding?.amplitude ?? 0) + (model.columnBanding?.amplitude ?? 0) <= 1)) throw new RangeError('combined banding amplitudes must not exceed one')
 
 	const geometricCenterX = (sensorWidth - 1) * 0.5
 	const geometricCenterY = (sensorHeight - 1) * 0.5
@@ -361,16 +361,16 @@ function resolveSyntheticFlatModel(raw: ImageRawType, model: SyntheticFlatModel)
 // Validates one elliptical dust shadow.
 function validateDustMote(mote: SyntheticDustMote): void {
 	if (!Number.isFinite(mote.center.x) || !Number.isFinite(mote.center.y)) throw new RangeError('dust center must be finite')
-	if (!Number.isFinite(mote.sigmaX) || mote.sigmaX <= 0 || !Number.isFinite(mote.sigmaY) || mote.sigmaY <= 0) throw new RangeError('dust sigmas must be finite and positive')
+	if (!Number.isFinite(mote.sigmaX) || !(mote.sigmaX > 0) || !Number.isFinite(mote.sigmaY) || !(mote.sigmaY > 0)) throw new RangeError('dust sigmas must be finite and positive')
 	if (mote.angle !== undefined && !Number.isFinite(mote.angle)) throw new RangeError('dust angle must be finite')
-	if (!Number.isFinite(mote.contrast) || mote.contrast < 0 || mote.contrast > 1) throw new RangeError('dust contrast must be in [0, 1]')
+	if (!Number.isFinite(mote.contrast) || !(mote.contrast >= 0) || !(mote.contrast <= 1)) throw new RangeError('dust contrast must be in [0, 1]')
 }
 
 // Validates an optional sinusoidal banding component.
 function validateBanding(banding: SyntheticBanding | undefined, axis: string): void {
 	if (banding === undefined) return
-	if (!Number.isFinite(banding.amplitude) || banding.amplitude < 0 || banding.amplitude > 1) throw new RangeError(`${axis} banding amplitude must be in [0, 1]`)
-	if (!Number.isFinite(banding.period) || banding.period <= 0) throw new RangeError(`${axis} banding period must be finite and positive`)
+	if (!Number.isFinite(banding.amplitude) || !(banding.amplitude >= 0) || !(banding.amplitude <= 1)) throw new RangeError(`${axis} banding amplitude must be in [0, 1]`)
+	if (!Number.isFinite(banding.period) || !(banding.period > 0)) throw new RangeError(`${axis} banding period must be finite and positive`)
 	if (banding.phase !== undefined && !Number.isFinite(banding.phase)) throw new RangeError(`${axis} banding phase must be finite`)
 }
 

@@ -519,8 +519,8 @@ export function generateStarImage(raw: ImageRawType, width: number, height: numb
 
 // Validates user parameters and derives a fast execution context.
 function resolveAstronomicalImageNoiseConfig(raw: ImageRawType, width: number, height: number, channels: 1 | 3, config: AstronomicalImageNoiseConfig): ResolvedAstronomicalImageNoiseConfig {
-	if (!Number.isInteger(width) || width < 0) throw new RangeError('width must be a non-negative integer')
-	if (!Number.isInteger(height) || height < 0) throw new RangeError('height must be a non-negative integer')
+	if (!Number.isInteger(width) || !(width >= 0)) throw new RangeError('width must be a non-negative integer')
+	if (!Number.isInteger(height) || !(height >= 0)) throw new RangeError('height must be a non-negative integer')
 
 	const expectedLength = width * height * channels
 	if (raw.length < expectedLength) throw new RangeError(`buffer length mismatch: expected ${expectedLength}, received ${raw.length}`)
@@ -894,24 +894,24 @@ function requireFinite(name: string, value: number) {
 
 // Requires a positive finite numeric parameter.
 function requirePositiveFinite(name: string, value: number) {
-	if (!Number.isFinite(value) || value <= 0) throw new RangeError(`${name} must be greater than zero`)
+	if (!Number.isFinite(value) || !(value > 0)) throw new RangeError(`${name} must be greater than zero`)
 	return value
 }
 
 // Requires a non-negative finite numeric parameter.
 function requireNonNegativeFinite(name: string, value: number) {
-	if (!Number.isFinite(value) || value < 0) throw new RangeError(`${name} must be non-negative`)
+	if (!Number.isFinite(value) || !(value >= 0)) throw new RangeError(`${name} must be non-negative`)
 	return value
 }
 
 // Requires a unit interval parameter.
 function requireFraction(name: string, value: number) {
-	if (!Number.isFinite(value) || value < 0 || value > 1) throw new RangeError(`${name} must be in the [0, 1] range`)
+	if (!Number.isFinite(value) || !(value >= 0) || !(value <= 1)) throw new RangeError(`${name} must be in the [0, 1] range`)
 	return value
 }
 
 // Requires an integer in a bounded range.
 function requireIntegerInRange(name: string, value: number, min: number, max: number) {
-	if (!Number.isInteger(value) || value < min || value > max) throw new RangeError(`${name} must be an integer in the [${min}, ${max}] range`)
+	if (!Number.isInteger(value) || !(value >= min) || !(value <= max)) throw new RangeError(`${name} must be an integer in the [${min}, ${max}] range`)
 	return value
 }

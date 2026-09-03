@@ -150,7 +150,7 @@ export class FlatRegionMeasurementWorkspace {
 
 	// Allocates reusable accumulators for regions up to populationCapacity and optional references.
 	constructor(populationCapacity: number, includeReference: boolean) {
-		if (!Number.isSafeInteger(populationCapacity) || populationCapacity < 0) throw new RangeError('flat measurement workspace capacity must be a non-negative safe integer')
+		if (!Number.isSafeInteger(populationCapacity) || !(populationCapacity >= 0)) throw new RangeError('flat measurement workspace capacity must be a non-negative safe integer')
 		this.#populationCapacity = populationCapacity
 		this.#observed = new SampleAccumulator(populationCapacity)
 		this.#corrected = includeReference ? new SampleAccumulator(populationCapacity) : undefined
@@ -161,7 +161,7 @@ export class FlatRegionMeasurementWorkspace {
 	measure(input: FlatRegionMeasurementInput): FlatRegionMeasurement {
 		const geometry = resolveImagePlaneGeometry(input.image, input.area, input.plane, input.cfaOffset)
 		const referenceGeometry = input.reference ? resolveImagePlaneGeometry(input.reference, input.area, input.plane, input.referenceCfaOffset) : undefined
-		if (geometry.width * geometry.height > this.#populationCapacity) throw new RangeError('flat measurement region exceeds workspace capacity')
+		if (!(geometry.width * geometry.height <= this.#populationCapacity)) throw new RangeError('flat measurement region exceeds workspace capacity')
 		if (referenceGeometry && !this.#corrected) throw new RangeError('flat measurement workspace does not include reference storage')
 		if (referenceGeometry && (referenceGeometry.sourceLeft !== geometry.sourceLeft || referenceGeometry.sourceTop !== geometry.sourceTop || referenceGeometry.width !== geometry.width || referenceGeometry.height !== geometry.height || referenceGeometry.step !== geometry.step))
 			throw new RangeError('flat reference plane geometry does not match the observed image')

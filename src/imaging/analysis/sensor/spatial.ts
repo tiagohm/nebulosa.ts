@@ -506,8 +506,8 @@ function weightedNormalizedTemporalVariance(first: Float64Array, second: Float64
 
 // Measures DSNU and PRNU for matched fixed-exposure dark and bright stacks.
 export function measureSensorSpatial(dark: SensorFrameSet, flat: SensorFrameSet, conversionGain: number, options: Partial<SensorSpatialOptions> = {}): SensorSpatialCharacterization {
-	if (!Number.isFinite(conversionGain) || conversionGain <= 0) throw new RangeError('spatial conversion gain must be finite and positive')
-	if (!Number.isFinite(dark.exposure) || dark.exposure < 0 || !Number.isFinite(flat.exposure) || flat.exposure < 0 || dark.exposure !== flat.exposure) throw new RangeError('spatial dark and flat stacks must have matching finite non-negative exposure')
+	if (!Number.isFinite(conversionGain) || !(conversionGain > 0)) throw new RangeError('spatial conversion gain must be finite and positive')
+	if (!Number.isFinite(dark.exposure) || !(dark.exposure >= 0) || !Number.isFinite(flat.exposure) || !(flat.exposure >= 0) || dark.exposure !== flat.exposure) throw new RangeError('spatial dark and flat stacks must have matching finite non-negative exposure')
 	if (options.spatialDetrend !== undefined && options.spatialDetrend !== 'none' && options.spatialDetrend !== 'emvaHighpass' && options.spatialDetrend !== 'plane' && options.spatialDetrend !== 'polynomial') throw new RangeError('unsupported spatial detrending mode')
 	const reference = dark.frames[0]
 	validateSensorSpatialStack(dark, reference)
@@ -517,7 +517,7 @@ export function measureSensorSpatial(dark: SensorFrameSet, flat: SensorFrameSet,
 	const sampleCapacity = geometry.width * geometry.height
 	const tileWidth = options.tile?.width ?? 256
 	const tileHeight = options.tile?.height ?? 256
-	if (!Number.isInteger(tileWidth) || !Number.isInteger(tileHeight) || tileWidth <= 0 || tileHeight <= 0) throw new RangeError('spatial tile dimensions must be positive integers')
+	if (!Number.isInteger(tileWidth) || !Number.isInteger(tileHeight) || !(tileWidth > 0) || !(tileHeight > 0)) throw new RangeError('spatial tile dimensions must be positive integers')
 	for (const buffer of [options.spatialBuffers?.mean, options.spatialBuffers?.variance, options.spatialBuffers?.mask]) if (buffer && buffer.length < sampleCapacity) throw new RangeError('spatial buffer is smaller than the selected plane/ROI')
 
 	const workspace = createWorkspace(Math.min(tileWidth, geometry.width), Math.min(tileHeight, geometry.height))

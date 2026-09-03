@@ -218,7 +218,7 @@ export function flipGuidingCalibration(calibration: GuidingCalibrationResult, re
 	const flippedM11 = m11 * decImageScale
 	const determinant = flippedM00 * flippedM11 - flippedM01 * flippedM10
 
-	if (!Number.isFinite(determinant) || Math.abs(determinant) <= minDeterminant) {
+	if (!Number.isFinite(determinant) || !(Math.abs(determinant) > minDeterminant)) {
 		throw new Error(`invalid flipped calibration matrix: determinant=${determinant}`)
 	}
 

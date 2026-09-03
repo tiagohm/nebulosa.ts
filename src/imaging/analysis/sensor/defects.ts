@@ -127,7 +127,7 @@ function classifyStructures(rowProfiles: Float64Array, columnProfiles: Float64Ar
 
 // Classifies defects in matched fixed-exposure dark and flat stacks using three bounded passes.
 export function measureSensorDefects(dark: SensorFrameSet, flat: SensorFrameSet, options: Partial<SensorDefectOptions> = {}): SensorDefects | undefined {
-	if (!Number.isFinite(dark.exposure) || dark.exposure < 0 || !Number.isFinite(flat.exposure) || flat.exposure < 0 || dark.exposure !== flat.exposure) throw new RangeError('defect dark and flat stacks must have matching finite non-negative exposure')
+	if (!Number.isFinite(dark.exposure) || !(dark.exposure >= 0) || !Number.isFinite(flat.exposure) || !(flat.exposure >= 0) || dark.exposure !== flat.exposure) throw new RangeError('defect dark and flat stacks must have matching finite non-negative exposure')
 	if (options.digitalClip !== undefined && !Number.isFinite(options.digitalClip)) throw new RangeError('defect digital clip must be finite')
 	const reference = dark.frames[0]
 	validateSensorSpatialStack(dark, reference)
@@ -147,7 +147,7 @@ export function measureSensorDefects(dark: SensorFrameSet, flat: SensorFrameSet,
 	if (meanBuffer) meanBuffer.fill(Number.NaN, 0, capacity)
 	if (varianceBuffer) varianceBuffer.fill(Number.NaN, 0, capacity)
 	const sigma = options.rejectionSigma ?? 5
-	if (!Number.isFinite(sigma) || sigma <= 0) throw new RangeError('defect rejection sigma must be finite and positive')
+	if (!Number.isFinite(sigma) || !(sigma > 0)) throw new RangeError('defect rejection sigma must be finite and positive')
 
 	const darkMeans = new RobustReservoir(capacity)
 	const darkVariances = new RobustReservoir(capacity)

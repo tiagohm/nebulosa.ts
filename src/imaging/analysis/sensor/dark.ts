@@ -68,7 +68,7 @@ function planeSlot(pattern: string | undefined, plane: SensorPlane | undefined):
 	if (plane === undefined || plane === 'mono') throw new RangeError('CFA dark analysis requires an explicit color plane')
 	const channel = plane === 'red' ? 'R' : plane === 'blue' ? 'B' : 'G'
 	const slot = plane === 'green2' ? pattern.indexOf(channel, pattern.indexOf(channel) + 1) : pattern.indexOf(channel)
-	if (slot < 0) throw new RangeError(`sensor plane ${plane} is absent from CFA pattern ${pattern}`)
+	if (!(slot >= 0)) throw new RangeError(`sensor plane ${plane} is absent from CFA pattern ${pattern}`)
 	return slot
 }
 
@@ -79,7 +79,7 @@ function darkLevels(darks: readonly SensorFrameSet[], options: Partial<SensorPai
 	for (const set of darks) validateSensorSpatialStack(set, reference)
 	const grouped = new Map<number, SensorPairStatistics[]>()
 	for (const set of darks) {
-		if (!Number.isFinite(set.exposure) || set.exposure < 0) throw new RangeError('dark exposure must be finite and non-negative')
+		if (!Number.isFinite(set.exposure) || !(set.exposure >= 0)) throw new RangeError('dark exposure must be finite and non-negative')
 		let group = grouped.get(set.exposure)
 		if (!group) grouped.set(set.exposure, (group = []))
 		for (let i = 0; i + 1 < set.frames.length; i += 2) group.push(measureSensorPair(set.frames[i], set.frames[i + 1], options))
@@ -132,7 +132,7 @@ function measureAmpGlow(darks: readonly SensorFrameSet[], conversionGain: number
 	if (!first) return undefined
 	const tileWidth = options.tile?.width ?? 64
 	const tileHeight = options.tile?.height ?? 64
-	if (!Number.isInteger(tileWidth) || !Number.isInteger(tileHeight) || tileWidth <= 0 || tileHeight <= 0) throw new RangeError('amp-glow tile dimensions must be positive integers')
+	if (!Number.isInteger(tileWidth) || !Number.isInteger(tileHeight) || !(tileWidth > 0) || !(tileHeight > 0)) throw new RangeError('amp-glow tile dimensions must be positive integers')
 	const area = resolveSensorArea(options.area, first.metadata.width, first.metadata.height)
 	const columns = Math.ceil((area.right - area.left) / tileWidth)
 	const rows = Math.ceil((area.bottom - area.top) / tileHeight)
@@ -179,7 +179,7 @@ function measureAmpGlow(darks: readonly SensorFrameSet[], conversionGain: number
 
 // Estimates dark current from mean and temporal-variance growth across exposure times.
 export function measureSensorDarkCurrent(darks: readonly SensorFrameSet[], conversionGain: number, options: Partial<SensorDarkCurrentOptions> = {}): SensorDarkCurrent {
-	if (!Number.isFinite(conversionGain) || conversionGain <= 0) throw new RangeError('dark-current conversion gain must be finite and positive')
+	if (!Number.isFinite(conversionGain) || !(conversionGain > 0)) throw new RangeError('dark-current conversion gain must be finite and positive')
 	const levels = darkLevels(darks, options)
 	const x = new Float64Array(levels.length)
 	const means = new Float64Array(levels.length)

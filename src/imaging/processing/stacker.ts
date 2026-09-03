@@ -622,7 +622,7 @@ export function stackFrames(frames: readonly StackingFrame[], options: StackingO
 // Selects the reference frame according to the configured batch strategy.
 function selectReferenceFrameIndex(frames: readonly StackingFrame[], qualities: readonly StackingFrameQualityMetrics[], options: ResolvedStackingOptions) {
 	if (options.batchReference.mode === 'index') {
-		if (options.batchReference.index < 0 || options.batchReference.index >= frames.length) throw new RangeError(`reference frame index ${options.batchReference.index} is out of range for ${frames.length} frames`)
+		if (!(options.batchReference.index >= 0) || options.batchReference.index >= frames.length) throw new RangeError(`reference frame index ${options.batchReference.index} is out of range for ${frames.length} frames`)
 		return options.batchReference.index
 	}
 

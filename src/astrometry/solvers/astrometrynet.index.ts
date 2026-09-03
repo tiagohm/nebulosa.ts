@@ -479,7 +479,7 @@ function tileDistanceFromUnitVector(tileId: number, nside: number, vx: number, v
 // the tile count and tile-id arithmetic stay finite and exact; Number.isInteger alone accepts huge
 // floats like 1e308 that overflow those computations.
 function validateResolution(resolution: number) {
-	if (!Number.isInteger(resolution) || resolution < 1 || resolution > MAX_RESOLUTION) {
+	if (!Number.isInteger(resolution) || !(resolution >= 1) || !(resolution <= MAX_RESOLUTION)) {
 		throw new RangeError(`invalid HEALPix resolution: ${resolution}. Expected an integer in [1, ${MAX_RESOLUTION}]`)
 	}
 }
@@ -487,7 +487,7 @@ function validateResolution(resolution: number) {
 // Validates a tile id against the resolution. Must be an integer in [0, 12 * Nside^2).
 function validateTileId(tileId: number, resolution: number) {
 	const tileCount = 12 * resolution * resolution
-	if (!Number.isInteger(tileId) || tileId < 0 || tileId >= tileCount) {
+	if (!Number.isInteger(tileId) || !(tileId >= 0) || !(tileId < tileCount)) {
 		throw new RangeError(`invalid HEALPix tile id: ${tileId}. Expected an integer in [0, ${tileCount - 1}]`)
 	}
 }
@@ -500,7 +500,7 @@ function validateCoordinate(rightAscension: Angle, declination: Angle) {
 	if (!Number.isFinite(rightAscension) || !Number.isFinite(declination)) {
 		throw new RangeError('rightAscension and declination must be finite')
 	}
-	if (declination < -PIOVERTWO || declination > PIOVERTWO) {
+	if (!(declination >= -PIOVERTWO) || !(declination <= PIOVERTWO)) {
 		throw new RangeError('declination must be within [-PI/2, PI/2]')
 	}
 }
@@ -535,21 +535,21 @@ export function tileIntersectsDisc(tileId: number, resolution: number, rightAsce
 
 // Validates that a value is a finite number greater than zero.
 function requirePositiveFinite(value: number, name: string) {
-	if (!Number.isFinite(value) || value <= 0) {
+	if (!Number.isFinite(value) || !(value > 0)) {
 		throw new RangeError(`${name} must be a positive finite number`)
 	}
 }
 
 // Validates that a value is a positive safe integer.
 function requirePositiveSafeInteger(value: number, name: string) {
-	if (!Number.isSafeInteger(value) || value <= 0) {
+	if (!Number.isSafeInteger(value) || !(value > 0)) {
 		throw new RangeError(`${name} must be a positive safe integer`)
 	}
 }
 
 // Validates that a value is a finite, non-negative number.
 function requireNonNegativeFinite(value: number, name: string) {
-	if (!Number.isFinite(value) || value < 0) {
+	if (!Number.isFinite(value) || !(value >= 0)) {
 		throw new RangeError(`${name} must be a finite, non-negative number`)
 	}
 }
@@ -593,7 +593,7 @@ export function selectAstrometryIndexes(request: AstrometryNetIndexRequest): Ast
 	const maxQuadFraction = request.maxQuadFraction ?? DEFAULT_MAX_QUAD_FRACTION
 	requirePositiveFinite(minQuadFraction, 'minQuadFraction')
 	requirePositiveFinite(maxQuadFraction, 'maxQuadFraction')
-	if (minQuadFraction > maxQuadFraction) {
+	if (!(minQuadFraction <= maxQuadFraction)) {
 		throw new RangeError('minQuadFraction must not exceed maxQuadFraction')
 	}
 

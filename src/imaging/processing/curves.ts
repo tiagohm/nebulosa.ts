@@ -57,8 +57,8 @@ const MAX_CURVES_LUT_BITS = 16
 // Verifies the dense mono or interleaved RGB layout required by curves transformation.
 function validateCurvesImage(image: Image) {
 	const { width, height, channels, stride, pixelCount } = image.metadata
-	if (!Number.isInteger(width) || width <= 0) throw new Error(`image width must be a positive integer: ${width}`)
-	if (!Number.isInteger(height) || height <= 0) throw new Error(`image height must be a positive integer: ${height}`)
+	if (!Number.isInteger(width) || !(width > 0)) throw new Error(`image width must be a positive integer: ${width}`)
+	if (!Number.isInteger(height) || !(height > 0)) throw new Error(`image height must be a positive integer: ${height}`)
 	if (channels !== 1 && channels !== 3) throw new Error(`image channels must be 1 or 3: ${channels}`)
 	const expectedPixelCount = width * height
 	if (pixelCount !== expectedPixelCount) throw new Error(`image pixelCount does not match geometry: ${pixelCount} != ${expectedPixelCount}`)
@@ -83,7 +83,7 @@ function validateCurvesChannel(channel: ImageChannelOrGray) {
 	if (channel === null || typeof channel !== 'object') throw new RangeError('curves transformation channel must be a named channel or grayscale weights')
 	const { red, green, blue } = channel
 	const sum = red + green + blue
-	if (Math.abs(sum - 1) > CURVES_WEIGHT_SUM_TOLERANCE) throw new RangeError(`curves transformation weights must sum to one: ${sum}`)
+	if (!(Math.abs(sum - 1) <= CURVES_WEIGHT_SUM_TOLERANCE)) throw new RangeError(`curves transformation weights must sum to one: ${sum}`)
 }
 
 // Resolves one user curve, injects missing end points, and detects identity mappings.

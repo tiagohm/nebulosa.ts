@@ -95,24 +95,24 @@ type ResolvedBahtinovPlane = Exclude<BahtinovPlane, 'auto'> | 'greenBoth'
 // Allocates reusable buffers and Hough capacity for a maximum ROI.
 // Dimensions are pixels, `angleStep` is radians, and `distanceStep` is pixels.
 export function createBahtinovWorkspace(width: number, height: number, options: BahtinovWorkspaceOptions = {}): BahtinovWorkspace {
-	if (!Number.isInteger(width) || width < MINIMUM_ROI_SIDE) throw new RangeError(`width must be an integer at least ${MINIMUM_ROI_SIDE}`)
-	if (!Number.isInteger(height) || height < MINIMUM_ROI_SIDE) throw new RangeError(`height must be an integer at least ${MINIMUM_ROI_SIDE}`)
+	if (!Number.isInteger(width) || !(width >= MINIMUM_ROI_SIDE)) throw new RangeError(`width must be an integer at least ${MINIMUM_ROI_SIDE}`)
+	if (!Number.isInteger(height) || !(height >= MINIMUM_ROI_SIDE)) throw new RangeError(`height must be an integer at least ${MINIMUM_ROI_SIDE}`)
 	const precision = options.precision ?? 32
 	if (precision !== 32 && precision !== 64) throw new RangeError('precision must be 32 or 64')
 	const pixelCount = width * height
 	const maximumRidgePoints = options.maximumRidgePoints ?? Math.min(DEFAULT_BAHTINOV_ANALYSIS_OPTIONS.maximumRidgePoints, pixelCount)
-	if (!Number.isInteger(maximumRidgePoints) || maximumRidgePoints < 3 || maximumRidgePoints > pixelCount) throw new RangeError('maximumRidgePoints must be an integer from 3 to width * height')
+	if (!Number.isInteger(maximumRidgePoints) || !(maximumRidgePoints >= 3) || !(maximumRidgePoints <= pixelCount)) throw new RangeError('maximumRidgePoints must be an integer from 3 to width * height')
 	const angleStep = options.angleStep ?? DEFAULT_BAHTINOV_ANALYSIS_OPTIONS.angleStep
 	const distanceStep = options.distanceStep ?? DEFAULT_BAHTINOV_ANALYSIS_OPTIONS.distanceStep
-	if (!Number.isFinite(angleStep) || angleStep <= 0 || angleStep > PIOVERTWO) throw new RangeError('angleStep must be finite and in (0, PI / 2]')
-	if (!Number.isFinite(distanceStep) || distanceStep <= 0) throw new RangeError('distanceStep must be finite and positive')
+	if (!Number.isFinite(angleStep) || !(angleStep > 0) || !(angleStep <= PIOVERTWO)) throw new RangeError('angleStep must be finite and in (0, PI / 2]')
+	if (!Number.isFinite(distanceStep) || !(distanceStep > 0)) throw new RangeError('distanceStep must be finite and positive')
 
 	const angleCount = Math.ceil(PI / angleStep)
-	if (angleCount < 3) throw new RangeError('angleStep must produce at least three Hough angle bins')
-	if (!Number.isSafeInteger(angleCount) || angleCount > MAXIMUM_HOUGH_ANGLE_COUNT) throw new RangeError(`Bahtinov angle grid must not exceed ${MAXIMUM_HOUGH_ANGLE_COUNT} samples`)
+	if (!(angleCount >= 3)) throw new RangeError('angleStep must produce at least three Hough angle bins')
+	if (!Number.isSafeInteger(angleCount) || !(angleCount <= MAXIMUM_HOUGH_ANGLE_COUNT)) throw new RangeError(`Bahtinov angle grid must not exceed ${MAXIMUM_HOUGH_ANGLE_COUNT} samples`)
 	const rhoMax = Math.hypot(width - 1, height - 1)
 	const distanceBinCount = Math.ceil((2 * rhoMax) / distanceStep) + 1
-	if (!Number.isSafeInteger(distanceBinCount) || distanceBinCount > MAXIMUM_HOUGH_DISTANCE_BIN_COUNT) throw new RangeError(`Bahtinov distance grid must not exceed ${MAXIMUM_HOUGH_DISTANCE_BIN_COUNT} bins`)
+	if (!Number.isSafeInteger(distanceBinCount) || !(distanceBinCount <= MAXIMUM_HOUGH_DISTANCE_BIN_COUNT)) throw new RangeError(`Bahtinov distance grid must not exceed ${MAXIMUM_HOUGH_DISTANCE_BIN_COUNT} bins`)
 
 	const source = makeImageRawTypedArray(precision, pixelCount)
 	const blurredLarge = makeImageRawTypedArray(source, pixelCount)
@@ -151,24 +151,24 @@ export function createBahtinovWorkspace(width: number, height: number, options: 
 // `defaultSize` is a positive integer side in pixels used when the input omits `size`.
 export function resolveBahtinovArea(input: BahtinovAnalysisInput, defaultSize: number = DEFAULT_ROI_SIZE): Readonly<Rect> {
 	const { width, height } = input.image.metadata
-	if (!Number.isInteger(width) || width <= 0 || !Number.isInteger(height) || height <= 0) throw new RangeError('image dimensions must be positive integers')
-	if (!Number.isInteger(defaultSize) || defaultSize < MINIMUM_ROI_SIDE) throw new RangeError(`defaultSize must be an integer at least ${MINIMUM_ROI_SIDE}`)
+	if (!Number.isInteger(width) || !(width > 0) || !Number.isInteger(height) || !(height > 0)) throw new RangeError('image dimensions must be positive integers')
+	if (!Number.isInteger(defaultSize) || !(defaultSize >= MINIMUM_ROI_SIDE)) throw new RangeError(`defaultSize must be an integer at least ${MINIMUM_ROI_SIDE}`)
 	const center = input.center
-	if (!center || !Number.isFinite(center.x) || !Number.isFinite(center.y) || center.x < 0 || center.x > width - 1 || center.y < 0 || center.y > height - 1) throw new RangeError('Bahtinov center must be finite and inside the image pixel-center domain')
+	if (!center || !Number.isFinite(center.x) || !Number.isFinite(center.y) || !(center.x >= 0) || !(center.x <= width - 1) || !(center.y >= 0) || !(center.y <= height - 1)) throw new RangeError('Bahtinov center must be finite and inside the image pixel-center domain')
 
 	if (input.area) {
 		const { left, top, right, bottom } = input.area
 		if (!Number.isInteger(left) || !Number.isInteger(top) || !Number.isInteger(right) || !Number.isInteger(bottom)) throw new RangeError('Bahtinov area edges must be integers')
-		if (left < 0 || top < 0 || right > width || bottom > height || right - left < MINIMUM_ROI_SIDE || bottom - top < MINIMUM_ROI_SIDE) throw new RangeError(`Bahtinov area must be in bounds and at least ${MINIMUM_ROI_SIDE} x ${MINIMUM_ROI_SIDE}`)
+		if (!(left >= 0) || !(top >= 0) || !(right <= width) || !(bottom <= height) || !(right - left >= MINIMUM_ROI_SIDE) || !(bottom - top >= MINIMUM_ROI_SIDE)) throw new RangeError(`Bahtinov area must be in bounds and at least ${MINIMUM_ROI_SIDE} x ${MINIMUM_ROI_SIDE}`)
 		validateCenterInArea(center.x, center.y, input.area)
 		return { left, top, right, bottom }
 	}
 
 	const { x, y } = center
 	const requestedSize = input.size ?? defaultSize
-	if (!Number.isInteger(requestedSize) || requestedSize < MINIMUM_ROI_SIDE) throw new RangeError(`Bahtinov size must be an integer at least ${MINIMUM_ROI_SIDE}`)
+	if (!Number.isInteger(requestedSize) || !(requestedSize >= MINIMUM_ROI_SIDE)) throw new RangeError(`Bahtinov size must be an integer at least ${MINIMUM_ROI_SIDE}`)
 	const side = Math.min(requestedSize, width, height)
-	if (side < MINIMUM_ROI_SIDE) throw new RangeError('image is too small for a Bahtinov ROI')
+	if (!(side >= MINIMUM_ROI_SIDE)) throw new RangeError('image is too small for a Bahtinov ROI')
 	const left = Math.min(width - side, Math.max(0, Math.round(x - (side - 1) * 0.5)))
 	const top = Math.min(height - side, Math.max(0, Math.round(y - (side - 1) * 0.5)))
 	return { left, top, right: left + side, bottom: top + side }
@@ -365,14 +365,14 @@ function createAngleLookup(angleCount: number, angleStep: Angle, sine: boolean):
 function validateImageLayout(image: Image): void {
 	if ((image as { sampleScale?: string }).sampleScale === 'digital') throw new TypeError('Bahtinov analysis requires a normalized Image')
 	const { width, height, channels, stride, pixelCount } = image.metadata
-	if (!Number.isInteger(width) || width <= 0 || !Number.isInteger(height) || height <= 0 || (channels !== 1 && channels !== 3) || stride !== width * channels || pixelCount !== width * height || image.raw.length < stride * height) {
+	if (!Number.isInteger(width) || !(width > 0) || !Number.isInteger(height) || !(height > 0) || (channels !== 1 && channels !== 3) || stride !== width * channels || pixelCount !== width * height || image.raw.length < stride * height) {
 		throw new RangeError('invalid image layout for Bahtinov analysis')
 	}
 }
 
 // Validates a finite center against one half-open ROI.
 function validateCenterInArea(x: number, y: number, area: Readonly<Rect>): void {
-	if (!Number.isFinite(x) || !Number.isFinite(y) || x < area.left || x > area.right - 1 || y < area.top || y > area.bottom - 1) throw new RangeError('Bahtinov center must be finite and inside the area pixel-center domain')
+	if (!Number.isFinite(x) || !Number.isFinite(y) || !(x >= area.left) || !(x <= area.right - 1) || !(y >= area.top) || !(y <= area.bottom - 1)) throw new RangeError('Bahtinov center must be finite and inside the area pixel-center domain')
 }
 
 // Resolves a supported mono, RGB, or green-lattice CFA plane.
@@ -577,27 +577,27 @@ function interpolateCfaLattice(raw: ImageRawType, stride: number, lowerX: number
 
 // Validates preprocessing thresholds whose relationships affect finite filtering.
 function validatePreprocessOptions(saturationLevel: number, saturationDilation: number, coreRadius: number, backgroundUpperQuantile: number, smallBlurSigma: number, largeBlurSigma: number, ridgeSigma: number): void {
-	if (!Number.isFinite(saturationLevel) || saturationLevel <= 0 || saturationLevel > 1) throw new RangeError('saturationLevel must be in (0, 1]')
-	if (!Number.isInteger(saturationDilation) || saturationDilation < 0) throw new RangeError('saturationDilation must be a non-negative integer')
-	if (!Number.isFinite(coreRadius) || coreRadius < 0) throw new RangeError('coreRadius must be finite and non-negative')
-	if (!Number.isFinite(backgroundUpperQuantile) || backgroundUpperQuantile <= 0 || backgroundUpperQuantile > 1) throw new RangeError('backgroundUpperQuantile must be in (0, 1]')
-	if (!Number.isFinite(smallBlurSigma) || !Number.isFinite(largeBlurSigma) || smallBlurSigma <= 0 || largeBlurSigma <= smallBlurSigma) throw new RangeError('blur sigmas must satisfy largeBlurSigma > smallBlurSigma > 0')
-	if (!Number.isFinite(ridgeSigma) || ridgeSigma <= 0) throw new RangeError('ridgeSigma must be finite and positive')
+	if (!Number.isFinite(saturationLevel) || !(saturationLevel > 0) || !(saturationLevel <= 1)) throw new RangeError('saturationLevel must be in (0, 1]')
+	if (!Number.isInteger(saturationDilation) || !(saturationDilation >= 0)) throw new RangeError('saturationDilation must be a non-negative integer')
+	if (!Number.isFinite(coreRadius) || !(coreRadius >= 0)) throw new RangeError('coreRadius must be finite and non-negative')
+	if (!Number.isFinite(backgroundUpperQuantile) || !(backgroundUpperQuantile > 0) || !(backgroundUpperQuantile <= 1)) throw new RangeError('backgroundUpperQuantile must be in (0, 1]')
+	if (!Number.isFinite(smallBlurSigma) || !Number.isFinite(largeBlurSigma) || !(smallBlurSigma > 0) || !(largeBlurSigma > smallBlurSigma)) throw new RangeError('blur sigmas must satisfy largeBlurSigma > smallBlurSigma > 0')
+	if (!Number.isFinite(ridgeSigma) || !(ridgeSigma > 0)) throw new RangeError('ridgeSigma must be finite and positive')
 }
 
 // Bounds a three-sigma Gaussian radius to safe integer support no larger than the active ROI.
 function validateGaussianKernelSupport(sigma: number, width: number, height: number, name: string): void {
 	const radius = Math.ceil(sigma * 3)
 	const maximumRadius = Math.max(width, height) - 1
-	if (!Number.isSafeInteger(radius) || radius < 1 || radius > maximumRadius || !Number.isSafeInteger(radius * 2 + 1)) throw new RangeError(`${name} produces Gaussian support larger than the active ROI`)
+	if (!Number.isSafeInteger(radius) || !(radius >= 1) || !(radius <= maximumRadius) || !Number.isSafeInteger(radius * 2 + 1)) throw new RangeError(`${name} produces Gaussian support larger than the active ROI`)
 }
 
 // Ensures one reusable workspace can represent the requested ROI and search settings.
 function validateWorkspaceCapacity(workspace: BahtinovWorkspace, width: number, height: number, options: BahtinovAnalysisOptions): void {
-	if (width > workspace.width || height > workspace.height) throw new RangeError('Bahtinov workspace is smaller than the resolved ROI')
+	if (!(width <= workspace.width) || !(height <= workspace.height)) throw new RangeError('Bahtinov workspace is smaller than the resolved ROI')
 	if (workspace.coreQueue.length < width * height) throw new RangeError('Bahtinov workspace core queue is smaller than the resolved ROI')
 	const maximumRidgePoints = options.maximumRidgePoints ?? workspace.maximumRidgePoints
-	if (!Number.isInteger(maximumRidgePoints) || maximumRidgePoints < 3 || maximumRidgePoints > workspace.maximumRidgePoints) throw new RangeError('maximumRidgePoints must be an integer from 3 to the workspace ridge capacity')
+	if (!Number.isInteger(maximumRidgePoints) || !(maximumRidgePoints >= 3) || !(maximumRidgePoints <= workspace.maximumRidgePoints)) throw new RangeError('maximumRidgePoints must be an integer from 3 to the workspace ridge capacity')
 	if (options.angleStep !== undefined && options.angleStep !== workspace.angleStep) throw new RangeError('Bahtinov analysis angleStep must match the workspace grid')
 	if (options.distanceStep !== undefined && options.distanceStep !== workspace.distanceStep) throw new RangeError('Bahtinov analysis distanceStep must match the workspace grid')
 }

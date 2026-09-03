@@ -6,9 +6,9 @@ import type { Image, ImageRawType } from '../model/types'
 // Verifies that one image has a dense buffer consistent with its declared geometry.
 function validateImageLayout(image: Image, name: string) {
 	const { width, height, channels, pixelCount } = image.metadata
-	if (!Number.isInteger(width) || width <= 0) throw new Error(`${name} width must be a positive integer: ${width}`)
-	if (!Number.isInteger(height) || height <= 0) throw new Error(`${name} height must be a positive integer: ${height}`)
-	if (!Number.isInteger(channels) || channels <= 0) throw new Error(`${name} channels must be a positive integer: ${channels}`)
+	if (!Number.isInteger(width) || !(width > 0)) throw new Error(`${name} width must be a positive integer: ${width}`)
+	if (!Number.isInteger(height) || !(height > 0)) throw new Error(`${name} height must be a positive integer: ${height}`)
+	if (!Number.isInteger(channels) || !(channels > 0)) throw new Error(`${name} channels must be a positive integer: ${channels}`)
 	const expectedPixelCount = width * height
 	if (pixelCount !== expectedPixelCount) throw new Error(`${name} pixelCount does not match geometry: ${pixelCount} != ${expectedPixelCount}`)
 	const expectedLength = pixelCount * channels

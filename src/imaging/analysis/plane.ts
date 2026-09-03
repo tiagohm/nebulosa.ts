@@ -46,7 +46,7 @@ export function validateDigitalImageLayout(image: DigitalImage): void {
 	if (!(image.raw instanceof Float32Array) && !(image.raw instanceof Float64Array)) throw new TypeError('digital image raw buffer must be Float32Array or Float64Array')
 
 	const { width, height, channels, pixelCount, stride, bayer } = image.metadata
-	if (!Number.isSafeInteger(width) || width <= 0 || !Number.isSafeInteger(height) || height <= 0) throw new RangeError('digital image dimensions must be positive safe integers')
+	if (!Number.isSafeInteger(width) || !(width > 0) || !Number.isSafeInteger(height) || !(height > 0)) throw new RangeError('digital image dimensions must be positive safe integers')
 	if (channels !== 1 && channels !== 3) throw new RangeError('digital image channels must be 1 or 3')
 	if (pixelCount !== width * height) throw new RangeError('digital image pixel count is inconsistent with its dimensions')
 	if (stride !== width * channels) throw new RangeError('digital image stride is inconsistent with its dense interleaved layout')
@@ -55,15 +55,26 @@ export function validateDigitalImageLayout(image: DigitalImage): void {
 
 	if (image.digitalRange !== undefined) {
 		const [lower, upper] = image.digitalRange
-		if (!Number.isFinite(lower) || !Number.isFinite(upper) || lower >= upper) throw new RangeError('digital image storage range must contain two ordered finite limits')
+		if (!Number.isFinite(lower) || !Number.isFinite(upper) || !(lower < upper)) throw new RangeError('digital image storage range must contain two ordered finite limits')
 	}
-	if (image.quantizationStep !== undefined && (!Number.isFinite(image.quantizationStep) || image.quantizationStep <= 0)) throw new RangeError('digital image quantization step must be finite and positive')
+	if (image.quantizationStep !== undefined && (!Number.isFinite(image.quantizationStep) || !(image.quantizationStep > 0))) throw new RangeError('digital image quantization step must be finite and positive')
 }
 
 // Resolves and validates a non-empty inclusive-exclusive area inside an image extent.
 export function resolveAnalysisArea(area: Readonly<Rect> | undefined, width: number, height: number): Readonly<Rect> {
 	const resolved = area ?? { left: 0, top: 0, right: width, bottom: height }
-	if (!Number.isInteger(resolved.left) || !Number.isInteger(resolved.top) || !Number.isInteger(resolved.right) || !Number.isInteger(resolved.bottom) || resolved.left < 0 || resolved.top < 0 || resolved.right > width || resolved.bottom > height || resolved.left >= resolved.right || resolved.top >= resolved.bottom)
+	if (
+		!Number.isInteger(resolved.left) ||
+		!Number.isInteger(resolved.top) ||
+		!Number.isInteger(resolved.right) ||
+		!Number.isInteger(resolved.bottom) ||
+		!(resolved.left >= 0) ||
+		!(resolved.top >= 0) ||
+		!(resolved.right <= width) ||
+		!(resolved.bottom <= height) ||
+		!(resolved.left < resolved.right) ||
+		!(resolved.top < resolved.bottom)
+	)
 		throw new RangeError('analysis area must be a non-empty inclusive-exclusive integer rectangle')
 	return resolved
 }
@@ -104,7 +115,7 @@ export function resolveOptionalImagePlaneGeometry(image: DigitalImage, area: Rea
 			if (plane !== 'mono') throw new RangeError('monochrome analysis supports only the mono plane')
 		} else {
 			channel = plane === 'red' ? 0 : plane === 'green' ? 1 : plane === 'blue' ? 2 : -1
-			if (channel < 0) throw new RangeError('RGB analysis supports only red, green, and blue planes')
+			if (!(channel >= 0)) throw new RangeError('RGB analysis supports only red, green, and blue planes')
 		}
 
 		return {
@@ -147,6 +158,6 @@ function cfaPlaneSlot(pattern: CfaPattern, plane: ImageAnalysisPlane): number {
 	const channel = plane === 'red' ? 'R' : plane === 'blue' ? 'B' : 'G'
 	const first = pattern.indexOf(channel)
 	const slot = plane === 'green2' ? pattern.indexOf(channel, first + 1) : first
-	if (slot < 0) throw new RangeError(`analysis plane ${plane} is absent from CFA pattern ${pattern}`)
+	if (!(slot >= 0)) throw new RangeError(`analysis plane ${plane} is absent from CFA pattern ${pattern}`)
 	return slot
 }

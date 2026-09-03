@@ -38,9 +38,9 @@ function imageCfaPattern(image: Image, name: string): CfaPattern | undefined {
 // Verifies an image has a dense mono or interleaved RGB buffer consistent with its declared geometry.
 function validateImageLayout(image: Image, name: string) {
 	const { width, height, channels, pixelCount } = image.metadata
-	if (!Number.isInteger(width) || width <= 0) throw new Error(`${name} width must be a positive integer: ${width}`)
-	if (!Number.isInteger(height) || height <= 0) throw new Error(`${name} height must be a positive integer: ${height}`)
-	if (!Number.isInteger(channels) || channels <= 0) throw new Error(`${name} channels must be a positive integer: ${channels}`)
+	if (!Number.isInteger(width) || !(width > 0)) throw new Error(`${name} width must be a positive integer: ${width}`)
+	if (!Number.isInteger(height) || !(height > 0)) throw new Error(`${name} height must be a positive integer: ${height}`)
+	if (!Number.isInteger(channels) || !(channels > 0)) throw new Error(`${name} channels must be a positive integer: ${channels}`)
 	const expectedPixelCount = width * height
 	if (pixelCount !== expectedPixelCount) throw new Error(`${name} pixelCount does not match geometry: ${pixelCount} != ${expectedPixelCount}`)
 	const expectedLength = pixelCount * channels
@@ -71,7 +71,7 @@ function validateMaster(light: Image, master: Image, name: string, lightPattern:
 // Reads a finite positive exposure in seconds from EXPTIME or EXPOSURE.
 function exposureSeconds(image: Image, name: string) {
 	const exposure = exposureTimeKeyword(image.header, undefined)
-	if (exposure === undefined || !Number.isFinite(exposure) || exposure <= 0) throw new Error(`${name} requires a finite positive EXPTIME or EXPOSURE`)
+	if (exposure === undefined || !Number.isFinite(exposure) || !(exposure > 0)) throw new Error(`${name} requires a finite positive EXPTIME or EXPOSURE`)
 	return exposure
 }
 
@@ -106,7 +106,7 @@ function correctedFlatMeans(flat: Image, bias: Image | undefined, darkFlat: Imag
 				} else if (biasRaw) {
 					value -= biasRaw[i]
 				}
-				if (!Number.isFinite(value) || value <= minimum) throw new Error(`corrected flat sample ${i} must be finite and greater than ${minimum}: ${value}`)
+				if (!Number.isFinite(value) || !(value > minimum)) throw new Error(`corrected flat sample ${i} must be finite and greater than ${minimum}: ${value}`)
 				const group = rowPhase | (x & 1)
 				sums[group] += value
 				counts[group]++
@@ -122,7 +122,7 @@ function correctedFlatMeans(flat: Image, bias: Image | undefined, darkFlat: Imag
 				} else if (biasRaw) {
 					value -= biasRaw[offset]
 				}
-				if (!Number.isFinite(value) || value <= minimum) throw new Error(`corrected flat sample ${offset} must be finite and greater than ${minimum}: ${value}`)
+				if (!Number.isFinite(value) || !(value > minimum)) throw new Error(`corrected flat sample ${offset} must be finite and greater than ${minimum}: ${value}`)
 				sums[channel] += value
 				counts[channel]++
 			}
@@ -135,7 +135,7 @@ function correctedFlatMeans(flat: Image, bias: Image | undefined, darkFlat: Imag
 			continue
 		}
 		const mean = sums[group] / counts[group]
-		if (!Number.isFinite(mean) || mean <= minimum) throw new Error(`corrected flat mean ${group} must be finite and greater than ${minimum}: ${mean}`)
+		if (!Number.isFinite(mean) || !(mean > minimum)) throw new Error(`corrected flat mean ${group} must be finite and greater than ${minimum}: ${mean}`)
 		sums[group] = mean
 	}
 	return sums
@@ -148,7 +148,7 @@ function correctedFlatMeans(flat: Image, bias: Image | undefined, darkFlat: Imag
 export function calibrate(light: Image, options: CalibrationOptions = {}) {
 	const { dark, flat, bias, darkFlat, darkScaling = 'exposure', minimumFlat = 0 } = options
 	if (darkScaling !== 'exposure' && darkScaling !== 'none') throw new Error(`unsupported dark scaling: ${darkScaling}`)
-	if (!Number.isFinite(minimumFlat) || minimumFlat < 0) throw new Error(`minimumFlat must be finite and non-negative: ${minimumFlat}`)
+	if (!Number.isFinite(minimumFlat) || !(minimumFlat >= 0)) throw new Error(`minimumFlat must be finite and non-negative: ${minimumFlat}`)
 	if (darkFlat && !flat) throw new Error('darkFlat requires a flat master')
 	if (!dark && !flat && !bias) return light
 

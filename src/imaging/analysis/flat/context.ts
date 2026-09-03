@@ -30,11 +30,11 @@ export function resolveFlatAcquisitionMetadata(context: FlatImageContext): Resol
 	const header = context.image.header
 	if (point?.gain !== undefined && !Number.isFinite(point.gain)) throw new RangeError('flat operating-point gain must be finite')
 	if (point?.offset !== undefined && !Number.isFinite(point.offset)) throw new RangeError('flat operating-point offset must be finite')
-	if (point?.bitDepth !== undefined && (!Number.isInteger(point.bitDepth) || point.bitDepth <= 0)) throw new RangeError('flat operating-point bit depth must be a positive integer')
+	if (point?.bitDepth !== undefined && (!Number.isInteger(point.bitDepth) || !(point.bitDepth > 0))) throw new RangeError('flat operating-point bit depth must be a positive integer')
 	if (point?.temperature !== undefined && !Number.isFinite(point.temperature)) throw new RangeError('flat operating-point temperature must be finite')
-	if (point?.binning && (!Number.isInteger(point.binning[0]) || point.binning[0] <= 0 || !Number.isInteger(point.binning[1]) || point.binning[1] <= 0)) throw new RangeError('flat operating-point binning must contain positive integers')
-	if (point?.sensorOrigin && (!Number.isInteger(point.sensorOrigin[0]) || point.sensorOrigin[0] < 0 || !Number.isInteger(point.sensorOrigin[1]) || point.sensorOrigin[1] < 0)) throw new RangeError('flat operating-point sensor origin must contain non-negative integers')
-	if (point?.size && (!Number.isInteger(point.size.width) || point.size.width <= 0 || !Number.isInteger(point.size.height) || point.size.height <= 0 || point.size.width !== context.image.metadata.width || point.size.height !== context.image.metadata.height))
+	if (point?.binning && (!Number.isInteger(point.binning[0]) || !(point.binning[0] > 0) || !Number.isInteger(point.binning[1]) || !(point.binning[1] > 0))) throw new RangeError('flat operating-point binning must contain positive integers')
+	if (point?.sensorOrigin && (!Number.isInteger(point.sensorOrigin[0]) || !(point.sensorOrigin[0] >= 0) || !Number.isInteger(point.sensorOrigin[1]) || !(point.sensorOrigin[1] >= 0))) throw new RangeError('flat operating-point sensor origin must contain non-negative integers')
+	if (point?.size && (!Number.isInteger(point.size.width) || !(point.size.width > 0) || !Number.isInteger(point.size.height) || !(point.size.height > 0) || point.size.width !== context.image.metadata.width || point.size.height !== context.image.metadata.height))
 		throw new RangeError('flat operating-point size must match the image dimensions')
 
 	return {

@@ -125,7 +125,7 @@ export function separableSmoothing(source: ImageRawType, output: ImageRawType, i
 
 	const { width, height, channels, stride, pixelCount } = metadata
 
-	if (!Number.isInteger(width) || width <= 0 || !Number.isInteger(height) || height <= 0 || !Number.isInteger(channels) || channels <= 0 || stride !== width * channels || pixelCount !== width * height) {
+	if (!Number.isInteger(width) || !(width > 0) || !Number.isInteger(height) || !(height > 0) || !Number.isInteger(channels) || !(channels > 0) || stride !== width * channels || pixelCount !== width * height) {
 		throw new RangeError('invalid image metadata for separable smoothing')
 	}
 
@@ -229,7 +229,7 @@ export function convolution(image: Image, kernel: ConvolutionKernel, { dynamicDi
 	if (kernel.width % 2 === 0 || kernel.height % 2 === 0) {
 		throw new Error('kernel size must be odd')
 	}
-	if (kernel.width < 3 || kernel.width > 99 || kernel.height < 3 || kernel.height > 99) {
+	if (!(kernel.width >= 3) || !(kernel.width <= 99) || !(kernel.height >= 3) || !(kernel.height <= 99)) {
 		throw new Error('kernel size bust be in range [3..99]')
 	}
 
@@ -328,10 +328,10 @@ const BLUR_7x7 = convolutionKernel(new Int8Array([1, 2, 3, 4, 3, 2, 1, 2, 4, 6, 
 
 // Builds a normalized Gaussian convolution kernel from sigma and kernel size.
 export function gaussianBlurKernel(sigma: number = 1.4, size: number = 5) {
-	if (size < 2 || size % 2 === 0) {
+	if (!(size >= 2) || size % 2 === 0) {
 		throw new Error('size must be odd and greater or equal to 3')
 	}
-	if (sigma < 0.5 || sigma > 5) {
+	if (!(sigma >= 0.5) || !(sigma <= 5)) {
 		throw new Error('kernel size bust be in range [0.5..5]')
 	}
 
@@ -372,8 +372,8 @@ export function emboss(image: Image, options: Partial<ConvolutionOptions> = DEFA
 
 // Builds a box-blur kernel of arbitrary odd size.
 export function meanConvolutionKernel(size: number) {
-	if (size < 3) throw new Error('size must be greater or equal to 3')
-	if (size > 99) throw new Error('size must be less or equal to 99')
+	if (!(size >= 3)) throw new Error('size must be greater or equal to 3')
+	if (!(size <= 99)) throw new Error('size must be less or equal to 99')
 	if (size % 2 === 0) throw new Error('size must be odd')
 
 	const kernel = new Int8Array(size * size).fill(1)
@@ -411,8 +411,8 @@ export function sharpen(image: Image, options: Partial<ConvolutionOptions> = DEF
 
 // Builds a pyramid-weight blur kernel of arbitrary odd size.
 export function blurConvolutionKernel(size: number) {
-	if (size < 3) throw new Error('size must be greater or equal to 3')
-	if (size > 99) throw new Error('size must be less or equal to 99')
+	if (!(size >= 3)) throw new Error('size must be greater or equal to 3')
+	if (!(size <= 99)) throw new Error('size must be less or equal to 99')
 	if (size % 2 === 0) throw new Error('size must be odd')
 
 	const kernel = new Int16Array(size * size)

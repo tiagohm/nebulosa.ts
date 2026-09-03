@@ -87,7 +87,7 @@ export function bahtinovGlobalLineDistance(localDistance: number, normalAngle: A
 export function intersectBahtinovLines(first: BahtinovNormalLine, second: BahtinovNormalLine, minimumDeterminant: number = DEFAULT_MINIMUM_INTERSECTION_DETERMINANT): BahtinovLineIntersection | undefined {
 	validateNormalLine(first)
 	validateNormalLine(second)
-	if (!Number.isFinite(minimumDeterminant) || minimumDeterminant <= 0 || minimumDeterminant > 1) throw new RangeError('minimumDeterminant must be in (0, 1]')
+	if (!Number.isFinite(minimumDeterminant) || !(minimumDeterminant > 0) || !(minimumDeterminant <= 1)) throw new RangeError('minimumDeterminant must be in (0, 1]')
 
 	const firstCos = Math.cos(first.normalAngle)
 	const firstSin = Math.sin(first.normalAngle)
@@ -170,8 +170,8 @@ export function clipBahtinovLineToArea(line: BahtinovNormalLine, area: Readonly<
 // Computes a stable continuous focus-proximity measure from absolute pixel error and tolerance.
 // Returns 1 at zero error, 0.5 at the tolerance, and approaches 0 monotonically.
 export function bahtinovFocusProximity(absoluteError: number, focusTolerance: number): number {
-	if (!Number.isFinite(absoluteError) || absoluteError < 0) throw new RangeError('absoluteError must be finite and non-negative')
-	if (!Number.isFinite(focusTolerance) || focusTolerance <= 0) throw new RangeError('focusTolerance must be finite and positive')
+	if (!Number.isFinite(absoluteError) || !(absoluteError >= 0)) throw new RangeError('absoluteError must be finite and non-negative')
+	if (!Number.isFinite(focusTolerance) || !(focusTolerance > 0)) throw new RangeError('focusTolerance must be finite and positive')
 
 	if (absoluteError <= focusTolerance) {
 		const ratio = absoluteError / focusTolerance
@@ -185,7 +185,7 @@ export function bahtinovFocusProximity(absoluteError: number, focusTolerance: nu
 // Derives finite reference, signed error, proximity, and intersection conditioning from three lines.
 // Distances and `focusTolerance` are pixels. Returns undefined for ill-conditioned external lines.
 export function computeBahtinovFocusGeometry(central: BahtinovNormalLine, externalFirst: BahtinovNormalLine, externalSecond: BahtinovNormalLine, focusTolerance: number, minimumDeterminant: number = DEFAULT_MINIMUM_INTERSECTION_DETERMINANT): BahtinovFocusGeometry | undefined {
-	if (!Number.isFinite(focusTolerance) || focusTolerance <= 0) throw new RangeError('focusTolerance must be finite and positive')
+	if (!Number.isFinite(focusTolerance) || !(focusTolerance > 0)) throw new RangeError('focusTolerance must be finite and positive')
 	validateNormalLine(central)
 	const intersection = intersectBahtinovLines(externalFirst, externalSecond, minimumDeterminant)
 	if (!intersection) return undefined
@@ -209,7 +209,7 @@ export function computeBahtinovFocusGeometry(central: BahtinovNormalLine, extern
 // Validates one half-open integer ROI without applying image-bound constraints.
 function validateBahtinovArea(area: Readonly<Rect>): void {
 	if (!Number.isSafeInteger(area.left) || !Number.isSafeInteger(area.top) || !Number.isSafeInteger(area.right) || !Number.isSafeInteger(area.bottom)) throw new RangeError('Bahtinov area edges must be safe integers')
-	if (area.left >= area.right || area.top >= area.bottom) throw new RangeError('Bahtinov area must have positive width and height')
+	if (!(area.left < area.right) || !(area.top < area.bottom)) throw new RangeError('Bahtinov area must have positive width and height')
 }
 
 // Validates one finite normal-form line.

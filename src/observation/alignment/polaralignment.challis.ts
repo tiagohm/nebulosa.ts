@@ -103,7 +103,7 @@ export function fitChallisPolarAlignment(observations: readonly Readonly<Challis
 	for (let i = 0; i < observations.length; i++) {
 		const observation = observations[i]
 		const weight = observation.weight ?? 1
-		if (weight < 0) throw new RangeError(`observations[${i}].weight must be non-negative`)
+		if (!(weight >= 0)) throw new RangeError(`observations[${i}].weight must be non-negative`)
 		if (weight > 0) positiveWeightCount++
 		const row = new Float64Array(columnCount)
 		row[starColumns.get(observation.star)!] = 1
@@ -114,7 +114,7 @@ export function fitChallisPolarAlignment(observations: readonly Readonly<Challis
 		baseWeights[i] = weight
 	}
 
-	if (positiveWeightCount < columnCount) throw new RangeError(`at least ${columnCount} positive-weight observations are required`)
+	if (!(positiveWeightCount >= columnCount)) throw new RangeError(`at least ${columnCount} positive-weight observations are required`)
 
 	const method = options.robust ?? 'none'
 	let fit: LinearLeastSquaresResult
@@ -172,7 +172,7 @@ export function challisRefractionCorrection(hourAngle: Angle, declination: Angle
 	const cosDeclination = Math.cos(declination)
 	const taki = [cosDeclination * Math.cos(hourAngle), -cosDeclination * Math.sin(hourAngle), Math.sin(declination)] as const
 	const horizontal = enuVectorToHorizontal(matMulVec(takiToEnuMatrix(latitude), taki))
-	if (horizontal.altitude < MINIMUM_REFRACTION_ALTITUDE) throw new RangeError('refraction correction is unreliable below -1 degree altitude')
+	if (!(horizontal.altitude >= MINIMUM_REFRACTION_ALTITUDE)) throw new RangeError('refraction correction is unreliable below -1 degree altitude')
 	const apparentAltitude = refractedAltitude(horizontal.altitude, refraction)
 	const apparentEnu = horizontalToEnuVector(horizontal.azimuth, apparentAltitude)
 	const apparentTaki = matMulVec(enuToTakiMatrix(latitude), apparentEnu)
@@ -183,9 +183,9 @@ export function challisRefractionCorrection(hourAngle: Angle, declination: Angle
 // Validates finite robust controls before delegating to the shared least-squares implementation.
 function validateFitOptions(options: Readonly<ChallisFitOptions>): void {
 	// A non-finite or non-positive cap would make robust iteration never terminate.
-	if (options.maxIterations !== undefined && (!Number.isInteger(options.maxIterations) || options.maxIterations <= 0)) throw new RangeError('maxIterations must be a positive integer')
-	if (options.tolerance !== undefined && options.tolerance < 0) throw new RangeError('tolerance must be non-negative')
-	if (options.tuning !== undefined && options.tuning <= 0) throw new RangeError('tuning must be positive')
+	if (options.maxIterations !== undefined && (!Number.isInteger(options.maxIterations) || !(options.maxIterations > 0))) throw new RangeError('maxIterations must be a positive integer')
+	if (options.tolerance !== undefined && !(options.tolerance >= 0)) throw new RangeError('tolerance must be non-negative')
+	if (options.tuning !== undefined && !(options.tuning > 0)) throw new RangeError('tuning must be positive')
 }
 
 function effectiveAngleComparator(a: number, b: number) {

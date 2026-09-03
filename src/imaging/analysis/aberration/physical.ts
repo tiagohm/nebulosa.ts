@@ -86,7 +86,7 @@ export interface CriticalFocusResult {
 
 // Computes physical small-angle tilt from a normalized-sensor focus plane and explicit scale.
 export function analyzePhysicalTilt(plane: FocusPlaneAnalysis, width: number, height: number, scale: Required<Pick<AberrationPhysicalScale, 'pixelSize' | 'focusDisplacement'>>): PhysicalTiltAnalysis {
-	if (!Number.isInteger(width) || !Number.isInteger(height) || width <= 1 || height <= 1 || !(scale.pixelSize > 0) || !Number.isFinite(scale.pixelSize) || !Number.isFinite(scale.focusDisplacement) || scale.focusDisplacement === 0)
+	if (!Number.isInteger(width) || !Number.isInteger(height) || !(width > 1) || !(height > 1) || !(scale.pixelSize > 0) || !Number.isFinite(scale.pixelSize) || !Number.isFinite(scale.focusDisplacement) || scale.focusDisplacement === 0)
 		throw new RangeError('finite sensor dimensions, pixel size, and non-zero focus displacement are required')
 	const slopeX = (plane.gradientX * scale.focusDisplacement) / ((width - 1) * scale.pixelSize)
 	const slopeY = (plane.gradientY * scale.focusDisplacement) / ((height - 1) * scale.pixelSize)
@@ -95,7 +95,7 @@ export function analyzePhysicalTilt(plane: FocusPlaneAnalysis, width: number, he
 
 // Converts normalized quadratic coefficients into physical principal curvatures and approximate radii.
 export function analyzePhysicalCurvature(surface: FocusSurfaceCoefficients, width: number, height: number, scale: Required<Pick<AberrationPhysicalScale, 'pixelSize' | 'focusDisplacement'>>): PhysicalCurvatureAnalysis {
-	if (!Number.isInteger(width) || !Number.isInteger(height) || width <= 1 || height <= 1 || !(scale.pixelSize > 0) || !Number.isFinite(scale.pixelSize) || !Number.isFinite(scale.focusDisplacement) || scale.focusDisplacement === 0)
+	if (!Number.isInteger(width) || !Number.isInteger(height) || !(width > 1) || !(height > 1) || !(scale.pixelSize > 0) || !Number.isFinite(scale.pixelSize) || !Number.isFinite(scale.focusDisplacement) || scale.focusDisplacement === 0)
 		throw new RangeError('finite sensor dimensions, pixel size, and non-zero focus displacement are required')
 	if (!finiteSurface(surface)) throw new RangeError('focus surface coefficients must be finite')
 	const sensorWidth = (width - 1) * scale.pixelSize

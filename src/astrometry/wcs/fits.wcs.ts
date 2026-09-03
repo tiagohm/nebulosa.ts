@@ -251,8 +251,8 @@ export function pc2cd(pc11: number, pc12: number, pc21: number, pc22: number, cd
 // coordinates. CD, PC+CDELT, CDELT+CROTA, and forward/inverse SIP terms remain equivalent at the
 // mirrored pixel coordinates. Returns the same header object.
 export function reflectFitsWcs(header: FitsHeader, width: number, height: number, horizontal: boolean, vertical: boolean) {
-	if (!Number.isInteger(width) || width <= 0) throw new RangeError(`WCS reflection width must be a positive integer: ${width}`)
-	if (!Number.isInteger(height) || height <= 0) throw new RangeError(`WCS reflection height must be a positive integer: ${height}`)
+	if (!Number.isInteger(width) || !(width > 0)) throw new RangeError(`WCS reflection width must be a positive integer: ${width}`)
+	if (!Number.isInteger(height) || !(height > 0)) throw new RangeError(`WCS reflection height must be a positive integer: ${height}`)
 	if (!horizontal && !vertical) return header
 
 	const sx = horizontal ? -1 : 1

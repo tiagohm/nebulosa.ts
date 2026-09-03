@@ -72,7 +72,7 @@ export function createBahtinovOverlayGeometry(analysis: BahtinovAnalysisSuccess,
 	if (!Number.isFinite(centralProjection.x) || !Number.isFinite(centralProjection.y)) throw new RangeError('Bahtinov central projection must be finite')
 	const expectedAbsoluteError = Math.abs(analysis.error)
 	const errorConsistencyTolerance = Math.max(1e-9, expectedAbsoluteError * 1e-12)
-	if (Math.abs(expectedAbsoluteError - analysis.absoluteError) > errorConsistencyTolerance) throw new RangeError('Bahtinov absoluteError is inconsistent with error')
+	if (!(Math.abs(expectedAbsoluteError - analysis.absoluteError) <= errorConsistencyTolerance)) throw new RangeError('Bahtinov absoluteError is inconsistent with error')
 
 	const errorCircleRadius = options.errorCircleRadius ?? defaultErrorCircleRadius(analysis.centralLine, analysis.externalLines[0], analysis.externalLines[1])
 	validatePositiveRadius(errorCircleRadius, 'errorCircleRadius')
@@ -82,7 +82,7 @@ export function createBahtinovOverlayGeometry(analysis: BahtinovAnalysisSuccess,
 	const defaultFocusRegionRadius = Math.min(width - 1, height - 1) * 0.5
 	const focusRegionRadius = options.focusRegionRadius ?? defaultFocusRegionRadius
 	validatePositiveRadius(focusRegionRadius, 'focusRegionRadius')
-	if (focusRegionRadius > Math.hypot(width - 1, height - 1)) throw new RangeError('focusRegionRadius must not exceed the ROI diagonal')
+	if (!(focusRegionRadius <= Math.hypot(width - 1, height - 1))) throw new RangeError('focusRegionRadius must not exceed the ROI diagonal')
 
 	const referenceCircleCenter = copyPoint(reference)
 	const projectionCircleCenter = copyPoint(centralProjection)
@@ -129,14 +129,14 @@ function finitePositiveOrZero(value: number): number {
 // Validates all analysis geometry consumed by the overlay.
 function validateAnalysisGeometry(analysis: BahtinovAnalysisSuccess): void {
 	const { area } = analysis
-	if (!Number.isInteger(area.left) || !Number.isInteger(area.top) || !Number.isInteger(area.right) || !Number.isInteger(area.bottom) || area.right - area.left < 2 || area.bottom - area.top < 2) {
+	if (!Number.isInteger(area.left) || !Number.isInteger(area.top) || !Number.isInteger(area.right) || !Number.isInteger(area.bottom) || !(area.right - area.left >= 2) || !(area.bottom - area.top >= 2)) {
 		throw new RangeError('Bahtinov overlay area must contain at least a 2 x 2 pixel-center domain')
 	}
 	validatePoint(analysis.reference, 'reference')
 	validateLine(analysis.centralLine, 'centralLine')
 	validateLine(analysis.externalLines[0], 'externalLines[0]')
 	validateLine(analysis.externalLines[1], 'externalLines[1]')
-	if (!Number.isFinite(analysis.error) || !Number.isFinite(analysis.absoluteError) || analysis.absoluteError < 0) throw new RangeError('Bahtinov focus error must be finite')
+	if (!Number.isFinite(analysis.error) || !Number.isFinite(analysis.absoluteError) || !(analysis.absoluteError >= 0)) throw new RangeError('Bahtinov focus error must be finite')
 	validatePointLineResidual(analysis.reference, analysis.centralLine, analysis.error, 'centralLine')
 	validatePointLineResidual(analysis.reference, analysis.externalLines[0], 0, 'externalLines[0]')
 	validatePointLineResidual(analysis.reference, analysis.externalLines[1], 0, 'externalLines[1]')
@@ -147,7 +147,7 @@ function validatePointLineResidual(point: Readonly<Point>, line: BahtinovLine, e
 	const residual = Math.cos(line.normalAngle) * point.x + Math.sin(line.normalAngle) * point.y - line.distance
 	const scale = Math.abs(point.x) + Math.abs(point.y) + Math.abs(line.distance) + Math.abs(expected) + 1
 	const tolerance = Math.max(1e-9, scale * Number.EPSILON * 64)
-	if (!Number.isFinite(residual) || Math.abs(residual - expected) > tolerance) throw new RangeError(`${name} equation is inconsistent with the Bahtinov reference geometry`)
+	if (!Number.isFinite(residual) || !(Math.abs(residual - expected) <= tolerance)) throw new RangeError(`${name} equation is inconsistent with the Bahtinov reference geometry`)
 }
 
 // Validates one finite line and its finite visible segment.
@@ -164,7 +164,7 @@ function validatePoint(point: Readonly<Point>, name: string): void {
 
 // Validates one strictly positive finite visual radius.
 function validatePositiveRadius(radius: number, name: string): void {
-	if (!Number.isFinite(radius) || radius <= 0) throw new RangeError(`${name} must be finite and positive`)
+	if (!Number.isFinite(radius) || !(radius > 0)) throw new RangeError(`${name} must be finite and positive`)
 }
 
 // Copies one image-coordinate point.

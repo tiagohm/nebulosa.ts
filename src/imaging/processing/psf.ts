@@ -32,8 +32,8 @@ const PSF_D2_DELTA = 0.02
 // Verifies the dense intensity-image layout required by the PSF stencil before any mutation.
 function validatePsfImage(image: Image) {
 	const { width, height, channels, stride, pixelCount, bayer } = image.metadata
-	if (!Number.isInteger(width) || width <= 0) throw new Error(`image width must be a positive integer: ${width}`)
-	if (!Number.isInteger(height) || height <= 0) throw new Error(`image height must be a positive integer: ${height}`)
+	if (!Number.isInteger(width) || !(width > 0)) throw new Error(`image width must be a positive integer: ${width}`)
+	if (!Number.isInteger(height) || !(height > 0)) throw new Error(`image height must be a positive integer: ${height}`)
 	if (channels !== 1 && channels !== 3) throw new Error(`image channels must be 1 or 3: ${channels}`)
 	const expectedPixelCount = width * height
 	if (pixelCount !== expectedPixelCount) throw new Error(`image pixelCount does not match geometry: ${pixelCount} != ${expectedPixelCount}`)

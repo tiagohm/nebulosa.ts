@@ -444,7 +444,7 @@ function createRiceImageLayout(header: Readonly<FitsHeader>, raw: ImageRawType, 
 	const width = uncompressedWidthKeyword(header, 0)
 	const height = uncompressedHeightKeyword(header, 0)
 	const channels = uncompressedNumberOfChannelsKeyword(header, 1)
-	if (width < 1 || height < 1 || channels < 1) throw new Error('invalid image dimensions')
+	if (!(width >= 1) || !(height >= 1) || !(channels >= 1)) throw new Error('invalid image dimensions')
 	if (bitpix !== 8 && bitpix !== 16 && bitpix !== 32) throw new Error('RICE 1 supports only BITPIX = 8, 16 or 32')
 
 	const tileHeightOption = options.tileHeight ?? 1
@@ -905,7 +905,7 @@ function imageBufferView(buffer: Buffer | undefined, size: number): Buffer {
 function fitsImageChunkSize(size: number, bitpix: BitpixOrZero) {
 	const pixelInBytes = bitpixInBytes(bitpix)
 
-	if (pixelInBytes < 1 || size % pixelInBytes !== 0) throw new Error('invalid FITS image buffer size')
+	if (!(pixelInBytes >= 1) || size % pixelInBytes !== 0) throw new Error('invalid FITS image buffer size')
 	if (size === 0) return 0
 
 	const target = Math.min(size, FITS_IMAGE_IO_CHUNK_SIZE)
@@ -1369,7 +1369,7 @@ export class FitsImageReader {
 		const height = uncompressedHeightKeyword(header, 0)
 		const channels = uncompressedNumberOfChannelsKeyword(header, 1)
 
-		if (width < 1 || height < 1 || channels < 1) {
+		if (!(width >= 1) || !(height >= 1) || !(channels >= 1)) {
 			throw new Error('invalid image dimensions')
 		}
 
@@ -1392,7 +1392,7 @@ export class FitsImageReader {
 
 		const tableSize = rowSize * rowCount
 
-		if (!Number.isSafeInteger(tableSize) || rowSize < 8 || heapOffset < tableSize || heapOffset > this.hdu.data.size) {
+		if (!Number.isSafeInteger(tableSize) || !(rowSize >= 8) || !(heapOffset >= tableSize) || heapOffset > this.hdu.data.size) {
 			throw new Error('compressed FITS image has invalid heap offsets')
 		}
 
@@ -1408,7 +1408,7 @@ export class FitsImageReader {
 		const tilePlaneSize = tilesX * tilesY
 		const maxTilePixels = Math.min(tileWidth, width) * Math.min(tileHeight, height) * Math.min(tileDepth, channels)
 
-		if (rowCount < totalTiles) throw new Error('compressed FITS image has incomplete tile table')
+		if (!(rowCount >= totalTiles)) throw new Error('compressed FITS image has incomplete tile table')
 
 		const ImageTypedArray = bitpix === 8 ? Uint8Array : bitpix === 16 ? Int16Array : Int32Array
 		const tileBuffer = new ImageTypedArray(maxTilePixels)
@@ -1424,7 +1424,7 @@ export class FitsImageReader {
 			const start = heapOffset + heapRelativeOffset
 			const end = start + byteCount
 
-			if (start < heapOffset || end > this.hdu.data.size) throw new Error('compressed FITS image has invalid heap offsets')
+			if (!(start >= heapOffset) || end > this.hdu.data.size) throw new Error('compressed FITS image has invalid heap offsets')
 			maxCompressedTileSize = Math.max(maxCompressedTileSize, byteCount)
 		}
 

@@ -142,7 +142,7 @@ function createGridRegions(columns: number, rows: number, margin: number): Aberr
 
 // Selects a center and four corner regions from a grid with an odd number of rows and columns.
 function selectCenterAndCorners(grid: readonly AberrationRegionDefinition[], columns: number, rows: number): AberrationRegionDefinition[] {
-	if (columns < 3 || rows < 3 || columns % 2 === 0 || rows % 2 === 0) throw new RangeError('centerAndCorners requires odd dimensions of at least 3 by 3')
+	if (!(columns >= 3) || !(rows >= 3) || columns % 2 === 0 || rows % 2 === 0) throw new RangeError('centerAndCorners requires odd dimensions of at least 3 by 3')
 
 	const centerColumn = (columns - 1) >>> 1
 	const centerRow = (rows - 1) >>> 1
@@ -151,7 +151,7 @@ function selectCenterAndCorners(grid: readonly AberrationRegionDefinition[], col
 
 // Selects a center and four edge-middle regions from a grid with an odd number of rows and columns.
 function selectCenterAndEdges(grid: readonly AberrationRegionDefinition[], columns: number, rows: number): AberrationRegionDefinition[] {
-	if (columns < 3 || rows < 3 || columns % 2 === 0 || rows % 2 === 0) throw new RangeError('centerAndEdges requires odd dimensions of at least 3 by 3')
+	if (!(columns >= 3) || !(rows >= 3) || columns % 2 === 0 || rows % 2 === 0) throw new RangeError('centerAndEdges requires odd dimensions of at least 3 by 3')
 
 	const centerColumn = (columns - 1) >>> 1
 	const centerRow = (rows - 1) >>> 1
@@ -181,7 +181,7 @@ function validateCustomRegions(regions: readonly AberrationRegionDefinition[]): 
 		const region = regions[i]
 		if (!region.id || ids.has(region.id)) throw new RangeError('custom aberration region IDs must be unique and non-empty')
 		if (!Number.isFinite(region.left) || !Number.isFinite(region.top) || !Number.isFinite(region.right) || !Number.isFinite(region.bottom)) throw new RangeError('custom aberration bounds must be finite')
-		if (region.left < -0.5 || region.top < -0.5 || region.right > 0.5 || region.bottom > 0.5 || region.left >= region.right || region.top >= region.bottom) throw new RangeError('custom aberration bounds must form positive rectangles within the sensor')
+		if (!(region.left >= -0.5) || !(region.top >= -0.5) || !(region.right <= 0.5) || !(region.bottom <= 0.5) || !(region.left < region.right) || !(region.top < region.bottom)) throw new RangeError('custom aberration bounds must form positive rectangles within the sensor')
 
 		ids.add(region.id)
 		validated[i] = { ...region }
@@ -357,7 +357,7 @@ function positiveInteger(value: number | undefined, fallback: number): number {
 // Validates a normalized generated-layout margin.
 function finiteMargin(value: number | undefined): number {
 	const margin = finiteNumber(value, 0)
-	if (margin < 0 || margin >= 0.5) throw new RangeError('aberration region margin must be in [0, 0.5)')
+	if (!(margin >= 0) || !(margin < 0.5)) throw new RangeError('aberration region margin must be in [0, 0.5)')
 	return margin
 }
 

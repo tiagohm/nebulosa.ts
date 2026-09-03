@@ -607,11 +607,11 @@ export function levenbergMarquardt(x: Readonly<NumberArray>, y: Readonly<NumberA
 		if (weights.length < n) throw new RangeError('weights must contain one value per sample')
 		effectiveSamples = 0
 		for (let i = 0; i < n; i++) {
-			if (!Number.isFinite(weights[i]) || weights[i] < 0) throw new RangeError('weights must be finite and non-negative')
+			if (!Number.isFinite(weights[i]) || !(weights[i] >= 0)) throw new RangeError('weights must be finite and non-negative')
 			if (weights[i] > 0) effectiveSamples++
 		}
 	}
-	if (effectiveSamples < m) throw new RangeError('effective samples must be at least the number of model parameters')
+	if (!(effectiveSamples >= m)) throw new RangeError('effective samples must be at least the number of model parameters')
 
 	const J = new Array<Float64Array>(m)
 	const PJ = new Float64Array(m)

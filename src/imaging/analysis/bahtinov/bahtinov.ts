@@ -152,17 +152,17 @@ function resolveDecisionOptions(options: BahtinovAnalysisOptions): ResolvedBahti
 		focusSigma: options.focusSigma ?? DEFAULT_BAHTINOV_ANALYSIS_OPTIONS.focusSigma,
 		minimumConfidence: options.minimumConfidence ?? DEFAULT_BAHTINOV_ANALYSIS_OPTIONS.minimumConfidence,
 	}
-	if (!Number.isFinite(resolved.minimumSignalToNoise) || resolved.minimumSignalToNoise <= 0) throw new RangeError('minimumSignalToNoise must be finite and positive')
-	if (!Number.isFinite(resolved.minimumAxialSeparation) || resolved.minimumAxialSeparation <= 0 || resolved.minimumAxialSeparation > PIOVERTWO) throw new RangeError('minimumAxialSeparation must be in (0, PI / 2]')
-	if (!Number.isFinite(resolved.maximumBisectorError) || resolved.maximumBisectorError <= 0 || resolved.maximumBisectorError > PIOVERTWO) throw new RangeError('maximumBisectorError must be in (0, PI / 2]')
-	if (!Number.isFinite(resolved.intersectionMargin) || resolved.intersectionMargin < 0) throw new RangeError('intersectionMargin must be finite and non-negative')
+	if (!Number.isFinite(resolved.minimumSignalToNoise) || !(resolved.minimumSignalToNoise > 0)) throw new RangeError('minimumSignalToNoise must be finite and positive')
+	if (!Number.isFinite(resolved.minimumAxialSeparation) || !(resolved.minimumAxialSeparation > 0) || !(resolved.minimumAxialSeparation <= PIOVERTWO)) throw new RangeError('minimumAxialSeparation must be in (0, PI / 2]')
+	if (!Number.isFinite(resolved.maximumBisectorError) || !(resolved.maximumBisectorError > 0) || !(resolved.maximumBisectorError <= PIOVERTWO)) throw new RangeError('maximumBisectorError must be in (0, PI / 2]')
+	if (!Number.isFinite(resolved.intersectionMargin) || !(resolved.intersectionMargin >= 0)) throw new RangeError('intersectionMargin must be finite and non-negative')
 	validateUnitInterval(resolved.minimumCandidateSeparation, 'minimumCandidateSeparation')
 	validateUnitInterval(resolved.minimumCoverage, 'minimumCoverage')
 	validateUnitInterval(resolved.minimumBalance, 'minimumBalance')
-	if (!Number.isFinite(resolved.maximumResidual) || resolved.maximumResidual <= 0) throw new RangeError('maximumResidual must be finite and positive')
-	if (!Number.isFinite(resolved.focusTolerance) || resolved.focusTolerance <= 0) throw new RangeError('focusTolerance must be finite and positive')
-	if (!Number.isFinite(resolved.maximumUncertainty) || resolved.maximumUncertainty <= 0) throw new RangeError('maximumUncertainty must be finite and positive')
-	if (!Number.isFinite(resolved.focusSigma) || resolved.focusSigma <= 0) throw new RangeError('focusSigma must be finite and positive')
+	if (!Number.isFinite(resolved.maximumResidual) || !(resolved.maximumResidual > 0)) throw new RangeError('maximumResidual must be finite and positive')
+	if (!Number.isFinite(resolved.focusTolerance) || !(resolved.focusTolerance > 0)) throw new RangeError('focusTolerance must be finite and positive')
+	if (!Number.isFinite(resolved.maximumUncertainty) || !(resolved.maximumUncertainty > 0)) throw new RangeError('maximumUncertainty must be finite and positive')
+	if (!Number.isFinite(resolved.focusSigma) || !(resolved.focusSigma > 0)) throw new RangeError('focusSigma must be finite and positive')
 	validateUnitInterval(resolved.minimumConfidence, 'minimumConfidence')
 	return resolved
 }
@@ -266,7 +266,7 @@ function validateExpectedPattern(expected: BahtinovExpectedPattern | undefined):
 	if (!expected) return
 	const external = expected.externalNormalAngles
 	if (!external || external.length !== 2 || !Number.isFinite(expected.centralNormalAngle) || !Number.isFinite(external[0]) || !Number.isFinite(external[1])) throw new RangeError('expected Bahtinov angles must be finite')
-	if (expected.maximumAngleDelta !== undefined && (!Number.isFinite(expected.maximumAngleDelta) || expected.maximumAngleDelta <= 0 || expected.maximumAngleDelta > PIOVERTWO)) throw new RangeError('expected maximumAngleDelta must be in (0, PI / 2]')
+	if (expected.maximumAngleDelta !== undefined && (!Number.isFinite(expected.maximumAngleDelta) || !(expected.maximumAngleDelta > 0 && expected.maximumAngleDelta <= PIOVERTWO))) throw new RangeError('expected maximumAngleDelta must be in (0, PI / 2]')
 }
 
 // Propagates independent line covariances to focus error through central differences.
@@ -374,5 +374,5 @@ function saturatingRatio(value: number, scale: number): number {
 
 // Validates one finite inclusive unit-interval option.
 function validateUnitInterval(value: number, name: string): void {
-	if (!Number.isFinite(value) || value < 0 || value > 1) throw new RangeError(`${name} must be in [0, 1]`)
+	if (!Number.isFinite(value) || !(value >= 0) || !(value <= 1)) throw new RangeError(`${name} must be in [0, 1]`)
 }

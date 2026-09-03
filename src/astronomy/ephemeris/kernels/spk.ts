@@ -441,7 +441,7 @@ export class Type9Segment implements SpkSegment {
 		const seconds = spkSeconds(time)
 		const index = this.#searchEpochIndex(seconds)
 
-		if (index < 0) {
+		if (!(index >= 0)) {
 			throw new Error(`cannot find a segment that covers the date: ${seconds}`)
 		}
 

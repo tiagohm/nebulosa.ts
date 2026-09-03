@@ -84,7 +84,7 @@ export function analyzeFlatSpatial(input: FlatSpatialInput): FlatSpatialResult {
 	const tileSize = resolveTileSize(input.area, input.options)
 	const columns = Math.ceil((input.area.right - input.area.left) / tileSize.width)
 	const rows = Math.ceil((input.area.bottom - input.area.top) / tileSize.height)
-	if (columns * rows > MAXIMUM_FLAT_TILE_COUNT) throw new RangeError(`flat tile configuration exceeds the ${MAXIMUM_FLAT_TILE_COUNT} tile allocation limit`)
+	if (!(columns * rows <= MAXIMUM_FLAT_TILE_COUNT)) throw new RangeError(`flat tile configuration exceeds the ${MAXIMUM_FLAT_TILE_COUNT} tile allocation limit`)
 
 	const fullGeometry = resolveImagePlaneGeometry(input.image, input.area, input.plane, input.cfaOffset)
 	const minimumSamples = Math.min(MINIMUM_FLAT_TILE_SAMPLES, fullGeometry.width * fullGeometry.height)
