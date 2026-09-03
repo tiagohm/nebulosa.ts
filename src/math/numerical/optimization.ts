@@ -93,8 +93,9 @@ export interface LevenbergMarquardtOptions {
 	weights?: Readonly<NumberArray>
 }
 
-// Finite-difference step used to numerically approximate the Levenberg-Marquardt Jacobian.
-const LEVENBERG_MARQUARDT_DELTA = 1e-8
+// √ε forward-difference scale: a relative step stays above one ulp for any finite nonzero
+// parameter, and a unit floor covers a zero coordinate.
+const LEVENBERG_MARQUARDT_RELATIVE_DELTA = Math.sqrt(Number.EPSILON)
 // Default iteration cap and convergence tolerances for the scalar root finders.
 const DEFAULT_ROOT_ITERATIONS = 100
 const DEFAULT_ROOT_TOLERANCE = 1e-12
@@ -660,11 +661,12 @@ export function levenbergMarquardt(x: Readonly<NumberArray>, y: Readonly<NumberA
 			// Jacobian
 			for (let j = 0; j < m; j++) {
 				for (let k = 0; k < m; k++) PJ[k] = params[k]
-				PJ[j] += LEVENBERG_MARQUARDT_DELTA
+				const delta = levenbergMarquardtDelta(params[j])
+				PJ[j] += delta
 				predict(PJ, YPJ)
 
 				for (let k = 0; k < n; k++) {
-					J[j][k] = (YPJ[k] - YP[k]) / LEVENBERG_MARQUARDT_DELTA
+					J[j][k] = (YPJ[k] - YP[k]) / delta
 				}
 			}
 
@@ -727,6 +729,12 @@ export function levenbergMarquardt(x: Readonly<NumberArray>, y: Readonly<NumberA
 	}
 
 	return params
+}
+
+// Finite-difference step for one Levenberg-Marquardt parameter.
+function levenbergMarquardtDelta(parameter: number) {
+	const magnitude = Math.abs(parameter)
+	return LEVENBERG_MARQUARDT_RELATIVE_DELTA * (magnitude > 0 ? magnitude : 1)
 }
 
 // Validates that a scalar root bracket has finite values with opposite signs.
