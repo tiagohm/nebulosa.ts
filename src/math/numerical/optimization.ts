@@ -30,7 +30,7 @@ export interface RootFindingResult {
 export interface ScalarMinimizationOptions {
 	// Maximum minimizer iterations.
 	readonly maxIterations?: number
-	// Minimum bracket or position-change threshold.
+	// Absolute x-interval or position-change threshold, in the same units as the search variable.
 	readonly tolerance?: number
 }
 
@@ -351,6 +351,8 @@ export function goldenSectionSearch(f: (x: number) => number, min: number, max: 
 }
 
 // Minimizes a scalar function over a bracket using Brent's method.
+// `tolerance` is an absolute x-threshold in the same units as min/max, matching golden-section search
+// and the scalar root finders. A relative machine-epsilon floor keeps the step above one ulp of |x|.
 export function brentMinimize(f: (x: number) => number, min: number, max: number, { maxIterations = DEFAULT_SCALAR_ITERATIONS, tolerance = DEFAULT_SCALAR_TOLERANCE }: ScalarMinimizationOptions = {}): ScalarMinimizationResult {
 	let a = min
 	let b = max
@@ -367,7 +369,7 @@ export function brentMinimize(f: (x: number) => number, min: number, max: number
 
 	for (let iterations = 1; iterations <= maxIterations; iterations++) {
 		const midpoint = 0.5 * (a + b)
-		const tol1 = tolerance * Math.abs(x) + Number.EPSILON
+		const tol1 = 2 * Number.EPSILON * Math.abs(x) + 0.5 * tolerance
 		const tol2 = 2 * tol1
 
 		if (Math.abs(x - midpoint) <= tol2 - 0.5 * (b - a)) {

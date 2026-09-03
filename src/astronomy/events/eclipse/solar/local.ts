@@ -810,8 +810,10 @@ function refineMissedContactInterval(evaluate: (jd: number) => number, lo: numbe
 	// the window (common on the boundary intervals), and a small positive endpoint value within tolerance
 	// would otherwise plant a phantom root on the window edge. Exact endpoint zeros are still caught by the
 	// sub-scan above (value === 0).
+	// Brent's remaining interval can be up to ~2·tolerance, so an endpoint-pinned min may sit that far inside.
+	const endpointMargin = 2 * CONTACT_TOLERANCE_DAYS
 	if (Math.abs(midValue) <= CONTACT_FUNCTION_TOLERANCE) {
-		if (mid > lo + CONTACT_TOLERANCE_DAYS && mid < hi - CONTACT_TOLERANCE_DAYS) pushUniqueRoot(roots, mid)
+		if (mid > lo + endpointMargin && mid < hi - endpointMargin) pushUniqueRoot(roots, mid)
 		return
 	}
 

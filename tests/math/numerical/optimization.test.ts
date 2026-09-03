@@ -82,6 +82,30 @@ describe('scalar minimization', () => {
 		expect(result.minimum).toBeCloseTo(-1.5, 7)
 		expect(result.value).toBeCloseTo(-4, 8)
 	})
+
+	test('treats Brent tolerance as an absolute x-threshold at large |x|', () => {
+		// Julian-day local-eclipse brackets are O(1e6) with an absolute 1e-8 day (~1 ms) tolerance.
+		// A relative tol·|x| test returns the midpoint on the first iteration and misses the minimum.
+		const day = 86400
+		const a = 2460000
+		const b = a + 60 / day
+		const trueMinimum = a + 20 / day
+		const result = brentMinimize((x) => (x - trueMinimum) ** 2, a, b, { tolerance: 1e-8 })
+
+		expect(result.converged).toBe(true)
+		expect(result.iterations).toBeGreaterThan(1)
+		expect(Math.abs(result.minimum - trueMinimum) * day).toBeLessThan(0.01)
+	})
+
+	test('keeps a long-offset Brent bracket at the requested absolute tolerance', () => {
+		const xa = 300
+		const xc = 300 + 2 / 24
+		const trueMinimum = 300 + 1 / 24 + 10 / 86400
+		const result = brentMinimize((x) => (x - trueMinimum) ** 2, xa, xc, { tolerance: 1e-6 })
+
+		expect(result.converged).toBe(true)
+		expect(Math.abs(result.minimum - trueMinimum)).toBeLessThan(1e-6)
+	})
 })
 
 describe('multivariate minimization', () => {
