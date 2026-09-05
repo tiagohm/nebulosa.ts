@@ -93,7 +93,7 @@ export interface DigitalImage extends Pick<Image, 'header' | 'metadata'> {
 export interface ImageMetadata extends Readonly<Size> {
 	// Number of color channels (1 grayscale, 3 RGB).
 	readonly channels: number
-	// Pixels per row.
+	// Raw samples per row (width * channels for a dense interleaved image).
 	readonly stride: number
 	// Total pixels per channel (width * height).
 	readonly pixelCount: number

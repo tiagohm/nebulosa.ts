@@ -1,8 +1,8 @@
 import type { Rect } from '../../math/numerical/geometry'
-import { type CfaPattern, type DigitalImage, shiftCfaPattern } from '../model/types'
+import { type CfaPattern, type DigitalImage, type ImageMetadata, shiftCfaPattern } from '../model/types'
 import type { SensorPlane } from './sensor/types'
 
-// Shared image-plane geometry for digital mono, interleaved RGB, and non-debayered CFA analysis.
+// Shared image-plane geometry for mono, interleaved RGB, and non-debayered CFA analysis.
 // Rectangles are left/top inclusive and right/bottom exclusive; CFA metadata is image-local unless
 // the caller explicitly supplies the offset needed to shift a full-sensor pattern once.
 
@@ -107,7 +107,14 @@ export function resolveOptionalImagePlaneGeometry(image: DigitalImage, area: Rea
 	validateDigitalImageLayout(image)
 	const resolvedArea = resolveAnalysisArea(area, image.metadata.width, image.metadata.height)
 	const pattern = resolveLocalCfaPattern(image, cfaOffset)
-	const channels = image.metadata.channels
+	return imagePlaneGeometry(image.metadata, resolvedArea, plane, pattern)
+}
+
+// Computes native sampling increments from an already validated dense layout and half-open area.
+// The caller owns layout/area validation; unsupported planes still throw. An empty CFA grid returns
+// undefined. Pattern defaults to image-local metadata; explicit sensor shifts belong to the caller.
+export function imagePlaneGeometry(metadata: ImageMetadata, resolvedArea: Readonly<Rect>, plane: ImageAnalysisPlane, pattern: CfaPattern | undefined = metadata.bayer): ImagePlaneGeometry | undefined {
+	const channels = metadata.channels
 
 	if (pattern === undefined) {
 		let channel = 0
@@ -124,9 +131,9 @@ export function resolveOptionalImagePlaneGeometry(image: DigitalImage, area: Rea
 			step: 1,
 			width: resolvedArea.right - resolvedArea.left,
 			height: resolvedArea.bottom - resolvedArea.top,
-			rawStart: resolvedArea.top * image.metadata.stride + resolvedArea.left * channels + channel,
+			rawStart: resolvedArea.top * metadata.stride + resolvedArea.left * channels + channel,
 			rawColumnStep: channels,
-			rawRowStep: image.metadata.stride,
+			rawRowStep: metadata.stride,
 		}
 	}
 
@@ -145,9 +152,9 @@ export function resolveOptionalImagePlaneGeometry(image: DigitalImage, area: Rea
 		step: 2,
 		width,
 		height,
-		rawStart: sourceTop * image.metadata.stride + sourceLeft,
+		rawStart: sourceTop * metadata.stride + sourceLeft,
 		rawColumnStep: 2,
-		rawRowStep: image.metadata.stride * 2,
+		rawRowStep: metadata.stride * 2,
 		cfaPattern: pattern,
 	}
 }
