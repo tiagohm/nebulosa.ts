@@ -97,9 +97,8 @@ export function createCollimationWorkspace(width: number, height: number, option
 		horizontalMask: new Uint8Array(length),
 		expandedMask: new Uint8Array(length),
 		statistics: new RobustReservoir(length),
-		scratch: new Float64Array(Math.min(length, ROBUST_SAMPLE_CAPACITY)),
+		scratch: new Float64Array(Math.min(Math.max(length, angularCapacity), ROBUST_SAMPLE_CAPACITY)),
 		profile: new Float64Array(radialCapacity),
-		profileMask: new Uint8Array(radialCapacity),
 		innerX: new Float64Array(angularCapacity),
 		innerY: new Float64Array(angularCapacity),
 		outerX: new Float64Array(angularCapacity),
@@ -165,7 +164,7 @@ export function prepareCollimation(input: CollimationAnalysisInput, options: Col
 			workspace.validity[index] = mask ? 0 : 1
 		}
 	}
-	const metadata: ImageMetadata = { ...image.metadata, width: grid.width, height: grid.height, pixelCount: length, stride: grid.width, channels: 1, bayer: undefined }
+	const metadata: ImageMetadata = { width: grid.width, height: grid.height, pixelCount: length, stride: grid.width, channels: 1, bayer: undefined, strideInBytes: grid.width * image.raw.BYTES_PER_ELEMENT, pixelSizeInBytes: image.raw.BYTES_PER_ELEMENT, bitpix: precision === 64 ? -64 : -32 }
 	const center = {
 		x: ((input.center?.x ?? (area.left + area.right - 1) / 2) - grid.sourceLeft) / grid.step,
 		y: ((input.center?.y ?? (area.top + area.bottom - 1) / 2) - grid.sourceTop) / grid.step,
@@ -246,6 +245,7 @@ function fitBackground(workspace: CollimationWorkspace, width: number, height: n
 	const coefficients: readonly [number, number, number] = [fit.coefficients[0], fit.coefficients[1], fit.coefficients[2]]
 	if (!coefficients.every(Number.isFinite)) return undefined
 	const level = pedestal + coefficients[0]
+	if (!Number.isFinite(level)) return undefined
 	const mad = workspace.statistics.mad(true, workspace.scratch)
 	const rounding = (workspace.precision === 64 ? Number.EPSILON : 2 ** -23) * Math.abs(level) * 4
 	return { pedestal, coefficients, level, noise: mad > rounding ? mad : undefined }

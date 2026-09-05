@@ -30,6 +30,9 @@ export type EllipseConic = readonly [number, number, number, number, number, num
 const MAXIMUM_CONDITION = 1e4
 // Three fixed robust passes, each with at most 50 LM iterations and no per-evaluation allocation.
 const IRLS_PASSES = 3
+// Shift normalized parameters away from zero: LM uses a relative finite-difference step, which loses
+// derivative precision for almost-zero centers, log-scales and shear on an almost circular boundary.
+const PARAMETER_ORIGIN = 2
 
 // Converts a local conic to a real canonical ellipse, or undefined for imaginary, degenerate or
 // ill-conditioned forms. Coefficients are not mutated; lengths retain the conic coordinate unit.
@@ -110,6 +113,7 @@ export function fitEllipse(x: Readonly<NumberArray>, y: Readonly<NumberArray>, p
 	const l00 = Math.sqrt(q00)
 	const l01 = q01 / l00
 	const params = [initial.center.x, initial.center.y, Math.log(l00), l01, Math.log(Math.sqrt(q11 - l01 * l01))]
+	for (let i = 0; i < params.length; i++) params[i] += PARAMETER_ORIGIN
 	const weights = base.slice()
 	const residuals = new Float64Array(n)
 	const indices = new Float64Array(n)
@@ -164,15 +168,15 @@ export function fitEllipse(x: Readonly<NumberArray>, y: Readonly<NumberArray>, p
 	if (conditioning.rankDeficient || !(conditioning.conditionNumber < MAXIMUM_CONDITION)) return undefined
 	// Test stationarity using the undamped geometric Jacobian, even when LM rejected every trial step.
 	for (let j = 0; j < 5; j++) if (!(Math.abs(gradient[j]) <= 2e-6 * Math.sqrt(diagonal[j]) * Math.max(Math.sqrt(sse), 1e-8 * Math.sqrt(sum)))) return undefined
-	const l0 = Math.exp(params[2])
-	const l1 = params[3]
-	const l2 = Math.exp(params[4])
+	const l0 = Math.exp(params[2] - PARAMETER_ORIGIN)
+	const l1 = params[3] - PARAMETER_ORIGIN
+	const l2 = Math.exp(params[4] - PARAMETER_ORIGIN)
 	const a = l0 * l0
 	const b = 2 * l0 * l1
 	const c = l1 * l1 + l2 * l2
 	const local = ellipseFromConic([a, b, c, 0, 0, -1])
 	if (!local) return undefined
-	const ellipse = { center: { x: mx + params[0] * scale, y: my + params[1] * scale }, semiMajor: local.semiMajor * scale, semiMinor: local.semiMinor * scale, theta: local.theta }
+	const ellipse = { center: { x: mx + (params[0] - PARAMETER_ORIGIN) * scale, y: my + (params[1] - PARAMETER_ORIGIN) * scale }, semiMajor: local.semiMajor * scale, semiMinor: local.semiMinor * scale, theta: local.theta }
 	for (let i = 0; i < n; i++) residuals[i] *= scale
 	return { ellipse, rms: Math.sqrt(sse / sum) * scale, residuals, weights, conditionNumber: conditioning.conditionNumber }
 }
@@ -180,11 +184,11 @@ export function fitEllipse(x: Readonly<NumberArray>, y: Readonly<NumberArray>, p
 // Computes the first-order signed normal distance at x/y using center and log-Cholesky parameters.
 // Invalid trial shapes return Infinity so LM cannot accept them. Accurate only near the boundary.
 function normalResidual(x: number, y: number, p: NumberArray) {
-	const dx = x - p[0]
-	const dy = y - p[1]
-	const a = Math.exp(p[2])
-	const b = p[3]
-	const c = Math.exp(p[4])
+	const dx = x - (p[0] - PARAMETER_ORIGIN)
+	const dy = y - (p[1] - PARAMETER_ORIGIN)
+	const a = Math.exp(p[2] - PARAMETER_ORIGIN)
+	const b = p[3] - PARAMETER_ORIGIN
+	const c = Math.exp(p[4] - PARAMETER_ORIGIN)
 	const u = a * dx + b * dy
 	const v = c * dy
 	const qx = a * u

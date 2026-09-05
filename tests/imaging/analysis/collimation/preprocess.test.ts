@@ -98,6 +98,7 @@ test('reuses larger scratch with exact active dimensions and refreshes angular/k
 	expect(workspace.cache.kernel).toBe(kernel)
 	expect(workspace.sin[45]).toBeCloseTo(1, 14)
 	expect(second.metadata.stride).toBe(64)
+	expect(second.metadata.strideInBytes).toBe(64 * 8)
 	expect(second.metadata.height).toBe(52)
 	expect(Math.abs(workspace.smoothed[26 * 64 + 32])).toBeLessThan(1e-14)
 	const saved = workspace.plane.slice()

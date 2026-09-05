@@ -1,4 +1,6 @@
+import type { EllipseGeometry } from '../../../math/numerical/ellipse.geometry'
 import type { Point, Rect } from '../../../math/numerical/geometry'
+import type { Angle } from '../../../math/units/angle'
 import type { Image, ImageRawType } from '../../model/types'
 import type { SeparableSmoothingKernel } from '../../processing/convolution'
 import type { ImageAnalysisPlane } from '../plane'
@@ -58,6 +60,118 @@ export type CollimationFailureReason = 'unsupportedPlane' | 'patternNotFound' | 
 // Extra interpretation limits, without duplicate failure text or unvalidated confidence scores.
 export type CollimationDiagnostic = 'saturationUnknown' | 'noiseUnresolved' | 'fieldReferenceMissing' | 'outsideFieldReference' | 'unstableMeasurement' | 'photometryUnavailable' | 'directionUnresolved'
 
+// Geometric tolerance assessment; these names do not mean optically collimated or miscollimated.
+export type CollimationAssessment = 'withinTolerance' | 'outsideTolerance' | 'inconclusive'
+
+// Independent boundary measurement in received-image pixels; no sensor-origin offsets are added.
+export interface CollimationBoundaryFit {
+	// Canonical ellipse, axes in image pixels and theta in [0, PI), +X toward +Y.
+	readonly ellipse: EllipseGeometry
+	// sqrt(semiMajor * semiMinor), in received-image pixels.
+	readonly equivalentRadius: number
+	// Robust normal-distance RMS in received-image pixels.
+	readonly rms: number
+	// Accepted fraction of the full requested angular grid.
+	readonly coverage: number
+	// Largest circular gap in accepted angular support, radians.
+	readonly maximumGap: number
+	// Number of accepted sectors after robust outlier rejection.
+	readonly sectors: number
+}
+
+// Apparent offset in the received sampling grid; no correction for rectangular pixels or binning.
+export interface CollimationGeometry {
+	// Obstruction center minus outer center, in image pixels.
+	readonly offset: Readonly<Point>
+	// Euclidean offset magnitude, in image pixels.
+	readonly distance: number
+	// Distance divided by the outer equivalent radius, dimensionless.
+	readonly normalizedDistance: number
+	// Apparent inner/outer equivalent-radius ratio, not a hardware obstruction ratio.
+	readonly obstructionRatio: number
+	// Resolved direction in [0, TAU), +X toward +Y; omitted when sensitivity cannot resolve it.
+	readonly direction?: Angle
+}
+
+// Descriptive support and signal measurements; no compound confidence score is computed.
+export interface CollimationQuality {
+	// Fitted background at the ROI native-plane midpoint, in original normalized raw units.
+	readonly background: number
+	// External residual normalized MAD in raw units, absent when unresolved.
+	readonly backgroundNoise?: number
+	// Robust annulus signal above background, in original normalized raw units.
+	readonly signal: number
+	// Signal / measurable background noise, absent when noise is unresolved.
+	readonly signalToNoise?: number
+	// Fraction of evaluated annular support that is nonfinite, independent of ROI padding.
+	readonly invalidFraction: number
+	// Fraction of evaluated annular support saturated at the supplied level; absent when unknown.
+	readonly saturatedFraction?: number
+	// Outer center relative to an explicit optical-field reference in the received-image frame.
+	readonly field: 'withinReference' | 'outsideReference' | 'unknown'
+}
+
+// Area-normalized azimuthal brightness variation; it neither measures offset nor identifies a cause.
+export interface CollimationPhotometry {
+	// 1.4826 * MAD(sector mean brightness) / median brightness, dimensionless.
+	readonly relativeVariation: number
+	// Fraction of sectors with sufficient usable interior photometric area.
+	readonly coverage: number
+	// Largest circular photometric support gap in radians.
+	readonly maximumGap: number
+}
+
+// Paired angular-block deletion sensitivity, not a covariance or confidence interval.
+export interface CollimationStability {
+	// Maximum change of the complete offset vector on paired block deletion, image pixels.
+	readonly offsetSpread: number
+	// Maximum change of each replicate vector normalized by that replicate's outer radius.
+	readonly normalizedOffsetSpread: number
+	// Empirically bounded sampling-resolution floor in image pixels, within the documented domain.
+	readonly resolutionFloor: number
+}
+
+// Successful apparent annulus geometry; all result objects survive input/workspace reuse intact.
+export interface CollimationAnalysisSuccess {
+	// Both boundaries and their continuous containment passed content checks.
+	readonly success: true
+	// Independent copy of the integer half-open ROI in received-image pixels.
+	readonly area: Readonly<Rect>
+	// Selected mono/RGB/CFA plane; CFA geometry is mapped back by its factor of two.
+	readonly plane: ImageAnalysisPlane
+	// Outer boundary measurement.
+	readonly outer: CollimationBoundaryFit
+	// Central shadow boundary measurement, fitted independently.
+	readonly obstruction: CollimationBoundaryFit
+	// Offset from outer to obstruction center, in the received grid.
+	readonly geometry: CollimationGeometry
+	// Independent physical-unit signal and support diagnostics.
+	readonly quality: CollimationQuality
+	// Descriptive annulus photometry, omitted when its interior support is insufficient.
+	readonly photometry?: CollimationPhotometry
+	// Paired deletion sensitivity, omitted outside its supported domain or if any replicate fails.
+	readonly stability?: CollimationStability
+	// Present only when the caller supplied a geometric tolerance.
+	readonly assessment?: CollimationAssessment
+	// Additional interpretation limitations without an optical diagnosis.
+	readonly diagnostics: readonly CollimationDiagnostic[]
+}
+
+// Expected content failure without partial or fabricated geometry.
+export interface CollimationAnalysisFailure {
+	// Failure discriminator.
+	readonly success: false
+	// Observed reason that the two-boundary measurement could not be accepted.
+	readonly reason: CollimationFailureReason
+	// Independent copy of the half-open ROI in received-image pixels.
+	readonly area: Readonly<Rect>
+	// Additional interpretation limitations known at failure.
+	readonly diagnostics: readonly CollimationDiagnostic[]
+}
+
+// Image-content failures are values; structural/capacity violations are entry-point exceptions.
+export type CollimationAnalysis = CollimationAnalysisSuccess | CollimationAnalysisFailure
+
 // Capacity options for scratch allocation, independent of the active native-plane dimensions.
 export interface CollimationWorkspaceOptions {
 	// Raw-buffer precision in bits, default 32; must match the received image.
@@ -101,8 +215,6 @@ export interface CollimationWorkspace {
 	readonly scratch: Float64Array
 	// One radial profile at half-plane-pixel spacing, bounded by the ROI diagonal.
 	readonly profile: Float64Array
-	// Radial profile support/rejection codes; only its active prefix is used.
-	readonly profileMask: Uint8Array
 	// Inner edge x coordinates, in active plane pixels.
 	readonly innerX: Float64Array
 	// Inner edge y coordinates, in active plane pixels.
