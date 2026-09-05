@@ -136,6 +136,9 @@ export async function astapPlateSolve(input: string, { fov = 0, downsample = 0, 
 					}
 				}
 
+				if (!header.NAXIS1 && header.CRPIX1) header.NAXIS1 = (header.CRPIX1 as number) * 2
+				if (!header.NAXIS2 && header.CRPIX2) header.NAXIS2 = (header.CRPIX2 as number) * 2
+
 				return plateSolutionFrom(header)
 			}
 		} finally {
