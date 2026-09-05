@@ -974,9 +974,6 @@ export function computeLocalLunarEclipseViewGeometry(circumstances: Pick<LocalLu
 	// horizon line on top.
 	if (horizonShapes) shapes.push(horizonShapes[0])
 
-	shapes.push({ kind: 'circle', role: 'penumbra', cx, cy, r: penumbraRadiusPx })
-	shapes.push({ kind: 'circle', role: 'umbra', cx, cy, r: resolved.umbraRadiusPx })
-
 	// Trajectory through the available contacts, in chronological order.
 	const trajectory: Point[] = []
 	for (const kind of CONTACT_ORDER) {
@@ -1006,6 +1003,10 @@ export function computeLocalLunarEclipseViewGeometry(circumstances: Pick<LocalLu
 	if (primary) {
 		shapes.push({ kind: 'circle', role: 'moonDisk', event: primary.kind, cx: primaryDiskX, cy: primaryDiskY, r: moonRadiusPx })
 	}
+
+	// Shadow drawn on top the Moon disks.
+	shapes.push({ kind: 'circle', role: 'penumbra', cx, cy, r: penumbraRadiusPx })
+	shapes.push({ kind: 'circle', role: 'umbra', cx, cy, r: resolved.umbraRadiusPx })
 
 	// Horizon line on top of the disks, so the ground occludes the part of the diagram below it.
 	if (horizonShapes) shapes.push(horizonShapes[1])
