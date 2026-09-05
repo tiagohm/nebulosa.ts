@@ -24,6 +24,10 @@ export interface Peripheral extends Disposable {
 
 // A peripheral that emits change notifications to attached listeners.
 export interface ListenablePeripheral<D extends Peripheral = never> extends Peripheral {
+	// Completed readings delivered so far, advanced on every sample whether or not the value changed.
+	// Listeners fire on change alone, so this is the only way a consumer can tell a sensor holding a
+	// steady reading from one that stopped answering.
+	readonly samples: number
 	readonly addListener: (listener: PeripheralListener<D>) => void
 	readonly removeListener: (listener: PeripheralListener<D>) => void
 }
@@ -175,6 +179,8 @@ export abstract class PeripheralBase<D extends Peripheral = never> implements Fi
 	// unchanged. A shared flag would suppress that for the newcomer (and is wrong when listeners differ).
 	readonly #pendingFirstRead = new Set<PeripheralListener<D>>()
 	readonly #pendingTwoWireReads = new Map<string, PendingTwoWireRead[]>()
+	// Completed readings, advanced by fire/commit; see ListenablePeripheral.samples.
+	#samples = 0
 
 	abstract readonly client: FirmataClient
 
@@ -183,6 +189,13 @@ export abstract class PeripheralBase<D extends Peripheral = never> implements Fi
 
 	[Symbol.dispose]() {
 		this.stop()
+	}
+
+	// Completed readings delivered so far, including the ones that moved no value. A consumer that
+	// republishes on an interval uses it as the evidence that the hardware really answered, which a
+	// change-only listener cannot provide.
+	get samples() {
+		return this.#samples
 	}
 
 	// Whether every attached listener has received at least one completed reading.
@@ -205,8 +218,10 @@ export abstract class PeripheralBase<D extends Peripheral = never> implements Fi
 		this.#pendingFirstRead.delete(listener)
 	}
 
-	// Notifies all listeners unconditionally and marks every first-read satisfied.
+	// Notifies all listeners unconditionally and marks every first-read satisfied. Counts as a completed
+	// reading.
 	protected fire() {
+		this.#samples++
 		this.#pendingFirstRead.clear()
 		for (const listener of this.#listeners) listener(this as never)
 	}
@@ -216,10 +231,16 @@ export abstract class PeripheralBase<D extends Peripheral = never> implements Fi
 	// lets a consumer settle an initial pending state for sensors whose first hardware sample happens to
 	// match their constructor default (for example a DS18B20 reading exactly 0 C, which would otherwise
 	// never fire on change alone), including a listener attached after an earlier one already initialized.
+	// Either way the sample itself is counted, which is what tells a steady reading from a silent sensor.
 	protected commit(changed: boolean) {
 		if (changed) {
 			this.fire()
-		} else if (this.#pendingFirstRead.size > 0) {
+			return
+		}
+
+		this.#samples++
+
+		if (this.#pendingFirstRead.size > 0) {
 			const pending = Array.from(this.#pendingFirstRead)
 			this.#pendingFirstRead.clear()
 			for (const listener of pending) listener(this as never)

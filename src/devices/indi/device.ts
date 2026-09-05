@@ -1,6 +1,6 @@
 import type { EquatorialCoordinate } from '../../astronomy/coordinates/coordinate'
 import type { GeographicCoordinate } from '../../astronomy/observer/location'
-import { SIDEREAL_DAYSEC, TAU } from '../../core/constants'
+import { PIOVERTWO, SIDEREAL_DAYSEC, TAU } from '../../core/constants'
 import type { CfaPattern } from '../../imaging/model/types'
 import type { Point } from '../../math/numerical/geometry'
 import { type Angle, normalizeAngle, toHour } from '../../math/units/angle'
@@ -8,11 +8,11 @@ import type { DefBlobVector, DefLightVector, DefNumber, DefNumberVector, DefSwit
 
 // Device model shared across all client backends (INDI, Alpaca, simulator, Firmata): the device-type
 // union, per-device-type interfaces (camera, mount, focuser, etc.) describing their capabilities and
-// state, default-value templates, and type-guard/geometry helpers. Angles are radians; temperature is
-// degrees Celsius.
+// state, default-value templates, and type-guard/geometry helpers. Angles are radians; dome speed is
+// RPM; dome measurements are metres; dome backlash is controller steps; temperature is degrees Celsius.
 
 // Logical device category.
-export type DeviceType = 'camera' | 'mount' | 'wheel' | 'focuser' | 'rotator' | 'gps' | 'dome' | 'guideOutput' | 'flatPanel' | 'cover' | 'power' | 'thermometer' | 'dewHeater'
+export type DeviceType = 'camera' | 'mount' | 'wheel' | 'focuser' | 'rotator' | 'gps' | 'dome' | 'guideOutput' | 'flatPanel' | 'cover' | 'power' | 'thermometer' | 'dewHeater' | 'safetyMonitor' | 'weather'
 
 // A defined property vector tagged with its concrete type.
 export type DeviceProperty = (DefTextVector & { type: 'TEXT' }) | (DefNumberVector & { type: 'NUMBER' }) | (DefSwitchVector & { type: 'SWITCH' }) | (DefLightVector & { type: 'LIGHT' }) | (DefBlobVector & { type: 'BLOB' })
@@ -46,6 +46,15 @@ export type MountTargetCoordinate<T = string> = Partial<Record<MountTargetCoordi
 
 // Pulse-guide direction.
 export type GuideDirection = 'NORTH' | 'SOUTH' | 'WEST' | 'EAST'
+
+// Direction used by a dome's continuous rotation control.
+export type DomeDirection = 'CLOCKWISE' | 'COUNTER_CLOCKWISE'
+
+// Shutter state shared by INDI and Alpaca dome adapters.
+export type DomeShutterState = 'UNKNOWN' | 'OPEN' | 'CLOSED' | 'OPENING' | 'CLOSING' | 'ERROR'
+
+// OTA side used by optional dome geometry measurements.
+export type DomeOTASide = 'EAST' | 'WEST' | 'UNKNOWN'
 
 // A numeric property reduced to its value and min/max/step range.
 export type MinMaxValueProperty = Pick<DefNumber, 'min' | 'max' | 'value' | 'step'>
@@ -104,9 +113,11 @@ export const CLIENT = Symbol('CLIENT')
 
 // Common base shared by every device: identity, type, connection state, and driver/client metadata.
 export interface Device {
-	id: string // MD5(client ip address + client port + type + name)
+	id: string // MD5(client id + type + name): unique per interface view
+	hardwareId: string // MD5(client id + name): the physical device behind every view
 	readonly parentId?: string
-	type: DeviceType
+	readonly type: DeviceType // Main device type
+	interfaces: readonly DeviceType[] //  Combination of device types the driver advertises in the interface bitmask
 	name: string
 	connected: boolean
 	readonly driver: Readonly<DriverInfo>
@@ -135,7 +146,12 @@ export interface NameAndLabel {
 export interface GuideOutput extends Device {
 	readonly type: 'guideOutput' | 'mount' | 'camera'
 	canPulseGuide: boolean
+	// Whether either timed-guide axis currently reports Busy.
 	pulsing: boolean
+	// Whether the north/south timed-guide vector currently reports Busy.
+	pulsingNS: boolean
+	// Whether the west/east timed-guide vector currently reports Busy.
+	pulsingWE: boolean
 	hasGuideRate: boolean
 	canSetGuideRate: boolean
 	readonly guideRate: EquatorialCoordinate
@@ -143,9 +159,16 @@ export interface GuideOutput extends Device {
 
 // Temperature-sensing capability; temperature in degrees Celsius.
 export interface Thermometer extends Device {
-	readonly type: 'thermometer' | 'camera' | 'focuser'
+	readonly type: 'thermometer' | 'camera' | 'focuser' | 'weather'
 	hasThermometer: boolean
 	temperature: number
+}
+
+// Safety-monitoring capability. Unknown, disconnected, warning and alert states are represented as
+// false; only an explicit safe status is true.
+export interface SafetyMonitor extends Device {
+	readonly type: DeviceType
+	safe: boolean
 }
 
 // Camera device: cooling, frame format/type, subframe, binning, gain/offset, exposure, plus the guide
@@ -206,11 +229,70 @@ export interface Parkable {
 	parked: boolean
 }
 
+// Optional geometric measurements reported by an INDI dome. Distances are metres and OTA offset is an
+// unsigned distance along the dome convention used by the driver.
+export interface DomeMeasurements {
+	radius: number
+	shutterWidth: number
+	northDisplacement: number
+	eastDisplacement: number
+	upDisplacement: number
+	otaOffset: number
+	otaSide: DomeOTASide
+}
+
+// Dome device: rotational and optional altitude motion, shutter control, parking, slaving, and geometry.
+// Angles are radians, speed is RPM, measurements are metres, and backlash is controller steps.
+export interface Dome extends Device, Parkable {
+	readonly type: 'dome'
+	slewing: boolean
+	moving: boolean
+	homing: boolean
+	atHome: boolean
+	direction?: DomeDirection
+	canAbort: boolean
+	canMove: boolean
+	canRelativeMove: boolean
+	canSetAzimuth: boolean
+	canSetAltitude: boolean
+	canFindHome: boolean
+	canSetSpeed: boolean
+	canSync: boolean
+	canUnpark: boolean
+	hasBacklash: boolean
+	hasShutter: boolean
+	canSetShutter: boolean
+	shutterState: DomeShutterState
+	canSlave: boolean
+	slaved: boolean
+	readonly azimuth: MinMaxValueProperty
+	readonly altitude: MinMaxValueProperty
+	readonly speed: MinMaxValueProperty
+	readonly homePosition: MinMaxValueProperty
+	readonly parkPosition: MinMaxValueProperty
+	readonly autoSyncThreshold: MinMaxValueProperty
+	backlashEnabled: boolean
+	readonly backlash: MinMaxValueProperty
+	hasMeasurements: boolean
+	readonly measurements: DomeMeasurements
+}
+
+// Observable state of a mount's INDI Alignment Subsystem. Mirrors only what the driver advertises
+// through the ALIGNMENT_* properties; it carries neither the alignment points nor the math model.
+export interface MountAlignmentState {
+	available: boolean // Driver defined ALIGNMENT_SUBSYSTEM_ACTIVE, i.e. it exposes the subsystem
+	active: boolean // Logical state of the ALIGNMENT SUBSYSTEM ACTIVE switch, never the vector state
+	plugins: readonly NameAndLabel[] // Math plugins advertised by ALIGNMENT_SUBSYSTEM_MATH_PLUGINS, in driver order
+	plugin?: NameAndLabel['name'] // Name of the currently selected math plugin, or undefined when none is on
+	pointCount: number // ALIGNMENT_POINTSET_SIZE, normalized to a non-negative integer
+}
+
 // Mount/telescope device: slew/sync/goto/track/park/home capabilities, slew rates, track modes, pier
 // side, and the current equatorial coordinate (radians). Also a guide output and GPS/site source.
 export interface Mount extends GuideOutput, GPS, Parkable {
 	readonly type: 'mount'
 	slewing: boolean
+	moving: boolean
 	tracking: boolean
 	homing: boolean
 	canAbort: boolean
@@ -231,6 +313,7 @@ export interface Mount extends GuideOutput, GPS, Parkable {
 	canSetPierSide: boolean
 	pierSide: PierSide
 	readonly equatorialCoordinate: EquatorialCoordinate
+	readonly alignment: MountAlignmentState
 }
 
 // Filter-wheel device: slot count, filter names, and current 0-based slot position.
@@ -311,9 +394,76 @@ export interface Power extends Device, Record<PowerChannelType, PowerChannel[]> 
 	hasPowerCycle: boolean
 }
 
+// One of the thirteen ASCOM ObservingConditions sensors, named by its field in Weather. Used as the key
+// for per-sensor capability, freshness and name mapping across the INDI and Alpaca backends.
+export type WeatherSensor = 'cloudCover' | 'dewPoint' | 'humidity' | 'pressure' | 'rainRate' | 'skyBrightness' | 'skyQuality' | 'skyTemperature' | 'starFWHM' | 'temperature' | 'windDirection' | 'windGust' | 'windSpeed'
+
+// Weather station / ASCOM ObservingConditions device. Every sensor is optional: an absent field means
+// the backend does not provide that sensor, never that its value is zero or NaN. Ambient temperature is
+// carried by the Thermometer capability instead, gated by `hasThermometer`. Each field documents its own
+// unit; readings are whatever the station measured, never clamped to the driver's alarm thresholds.
+export interface Weather extends Device, Thermometer {
+	readonly type: 'weather'
+
+	// Backend averaging window in hours; 0 means an instantaneous reading. Absent when the backend has
+	// no such concept (plain INDI).
+	averagePeriod?: number
+
+	// INDI driver re-read period (WEATHER_UPDATE/PERIOD) in seconds. Absent on Alpaca.
+	readonly updatePeriod?: MinMaxValueProperty
+
+	// Fraction of the sky covered by cloud, percent in [0, 100].
+	cloudCover?: number
+	// Temperature at which the ambient air would saturate, degrees Celsius. Never above `temperature`,
+	// except by rounding on saturated air. Forms a pair with `humidity`: a backend providing only one of
+	// the two lets the other be derived from it and the ambient temperature.
+	dewPoint?: number
+	// Relative humidity of the ambient air, percent in [0, 100]. Paired with `dewPoint`.
+	humidity?: number
+	// Atmospheric pressure at the observatory altitude, hPa. Never reduced to sea level.
+	pressure?: number
+	// Rain falling at the site, mm/h. INDI drivers usually report accumulation over the last hour, which
+	// is numerically the same quantity.
+	rainRate?: number
+	// Sky brightness measured by a photometer, lux.
+	skyBrightness?: number
+	// Sky darkness measured by a sky-quality meter, magnitudes per square arcsecond. Larger is darker,
+	// with a pristine site around 22.
+	skyQuality?: number
+	// Sky temperature from an infrared sensor, degrees Celsius. Far below ambient under a clear sky and
+	// close to ambient under cloud, which is what makes it a cloud indicator.
+	skyTemperature?: number
+	// Seeing, as the full width at half maximum of a star image, arcsec.
+	starFWHM?: number
+	// Direction the wind blows *from*, radians normalized to [0, TAU), clockwise from north. The ASCOM
+	// boundary convention (north reported as 360°, 0° reserved for calm) is applied only by the Alpaca
+	// client and server; it never leaks into this field.
+	windDirection?: Angle
+	// Peak wind speed over the backend's sampling window, m/s. At least `windSpeed`.
+	windGust?: number
+	// Mean wind speed, m/s. Zero means calm, in which case `windDirection` carries no information.
+	windSpeed?: number
+}
+
 // Tests whether an interface bitmask includes a given DeviceInterfaceType bit.
 export function isInterfaceType(value: number, type: DeviceInterfaceType): value is DeviceInterfaceType {
 	return (value & type) !== 0
+}
+
+// Returns all device types from an interface bitmask.
+export function findDeviceTypes(value: number) {
+	const types: DeviceType[] = []
+	if (isInterfaceType(value, DeviceInterfaceType.CCD)) types.push('camera')
+	if (isInterfaceType(value, DeviceInterfaceType.TELESCOPE)) types.push('mount')
+	if (isInterfaceType(value, DeviceInterfaceType.FILTER)) types.push('wheel')
+	if (isInterfaceType(value, DeviceInterfaceType.FOCUSER)) types.push('focuser')
+	if (isInterfaceType(value, DeviceInterfaceType.ROTATOR)) types.push('rotator')
+	if (isInterfaceType(value, DeviceInterfaceType.LIGHTBOX)) types.push('flatPanel')
+	if (isInterfaceType(value, DeviceInterfaceType.DUSTCAP)) types.push('cover')
+	if (isInterfaceType(value, DeviceInterfaceType.DOME)) types.push('dome')
+	if (isInterfaceType(value, DeviceInterfaceType.POWER)) types.push('power')
+	if (isInterfaceType(value, DeviceInterfaceType.WEATHER)) types.push('weather')
+	return types
 }
 
 // Empty driver-info template.
@@ -379,6 +529,8 @@ export const DEFAULT_CAMERA: Camera = {
 	},
 	canPulseGuide: false,
 	pulsing: false,
+	pulsingNS: false,
+	pulsingWE: false,
 	hasGuideRate: false,
 	canSetGuideRate: false,
 	guideRate: {
@@ -386,7 +538,9 @@ export const DEFAULT_CAMERA: Camera = {
 		declination: 0,
 	},
 	type: 'camera',
+	interfaces: ['camera'],
 	id: '',
+	hardwareId: '',
 	name: '',
 	connected: false,
 	driver: structuredClone(DEFAULT_DRIVER_INFO),
@@ -397,6 +551,7 @@ export const DEFAULT_CAMERA: Camera = {
 
 export const DEFAULT_MOUNT: Mount = {
 	slewing: false,
+	moving: false,
 	tracking: false,
 	homing: false,
 	canAbort: false,
@@ -427,10 +582,21 @@ export const DEFAULT_MOUNT: Mount = {
 		rightAscension: 0,
 		declination: 0,
 	},
+	alignment: {
+		available: false,
+		active: false,
+		plugins: [],
+		plugin: undefined,
+		pointCount: 0,
+	},
 	canPulseGuide: false,
 	pulsing: false,
+	pulsingNS: false,
+	pulsingWE: false,
 	type: 'mount',
+	interfaces: ['mount'],
 	id: '',
+	hardwareId: '',
 	name: '',
 	connected: false,
 	driver: structuredClone(DEFAULT_DRIVER_INFO),
@@ -449,9 +615,64 @@ export const DEFAULT_MOUNT: Mount = {
 	parked: false,
 }
 
+// Default, fully-disconnected dome template with zeroed numeric properties and no advertised capability.
+export const DEFAULT_DOME: Dome = {
+	type: 'dome',
+	interfaces: ['dome'],
+	id: '',
+	hardwareId: '',
+	name: '',
+	connected: false,
+	driver: structuredClone(DEFAULT_DRIVER_INFO),
+	client: structuredClone(DEFAULT_CLIENT_INFO),
+	slewing: false,
+	moving: false,
+	homing: false,
+	atHome: false,
+	canAbort: false,
+	canMove: false,
+	canRelativeMove: false,
+	canSetAzimuth: false,
+	canSetAltitude: false,
+	canFindHome: false,
+	canSetSpeed: false,
+	canSync: false,
+	canUnpark: false,
+	canPark: false,
+	canSetPark: false,
+	parking: false,
+	parked: false,
+	hasBacklash: false,
+	hasShutter: false,
+	canSetShutter: false,
+	shutterState: 'UNKNOWN',
+	canSlave: false,
+	slaved: false,
+	azimuth: structuredClone(DEFAULT_MIN_MAX_VALUE_PROPERTY),
+	altitude: structuredClone(DEFAULT_MIN_MAX_VALUE_PROPERTY),
+	speed: structuredClone(DEFAULT_MIN_MAX_VALUE_PROPERTY),
+	homePosition: structuredClone(DEFAULT_MIN_MAX_VALUE_PROPERTY),
+	parkPosition: structuredClone(DEFAULT_MIN_MAX_VALUE_PROPERTY),
+	autoSyncThreshold: structuredClone(DEFAULT_MIN_MAX_VALUE_PROPERTY),
+	backlashEnabled: false,
+	backlash: structuredClone(DEFAULT_MIN_MAX_VALUE_PROPERTY),
+	hasMeasurements: false,
+	measurements: {
+		radius: 0,
+		shutterWidth: 0,
+		northDisplacement: 0,
+		eastDisplacement: 0,
+		upDisplacement: 0,
+		otaOffset: 0,
+		otaSide: 'UNKNOWN',
+	},
+}
+
 export const DEFAULT_WHEEL: Wheel = {
 	type: 'wheel',
+	interfaces: ['wheel'],
 	id: '',
+	hardwareId: '',
 	name: '',
 	connected: false,
 	driver: structuredClone(DEFAULT_DRIVER_INFO),
@@ -465,7 +686,9 @@ export const DEFAULT_WHEEL: Wheel = {
 
 export const DEFAULT_FOCUSER: Focuser = {
 	type: 'focuser',
+	interfaces: ['focuser'],
 	id: '',
+	hardwareId: '',
 	name: '',
 	connected: false,
 	driver: structuredClone(DEFAULT_DRIVER_INFO),
@@ -492,7 +715,9 @@ export const DEFAULT_COVER: Cover = {
 	hasDewHeater: false,
 	dutyCycle: structuredClone(DEFAULT_MIN_MAX_VALUE_PROPERTY),
 	type: 'cover',
+	interfaces: ['cover'],
 	id: '',
+	hardwareId: '',
 	name: '',
 	connected: false,
 	driver: structuredClone(DEFAULT_DRIVER_INFO),
@@ -503,7 +728,9 @@ export const DEFAULT_FLAT_PANEL: FlatPanel = {
 	enabled: false,
 	intensity: structuredClone(DEFAULT_MIN_MAX_VALUE_PROPERTY),
 	type: 'flatPanel',
+	interfaces: ['flatPanel'],
 	id: '',
+	hardwareId: '',
 	name: '',
 	connected: false,
 	driver: structuredClone(DEFAULT_DRIVER_INFO),
@@ -520,7 +747,9 @@ export const DEFAULT_ROTATOR: Rotator = {
 	canHome: false,
 	hasBacklashCompensation: false,
 	type: 'rotator',
+	interfaces: ['rotator'],
 	id: '',
+	hardwareId: '',
 	name: '',
 	connected: false,
 	driver: structuredClone(DEFAULT_DRIVER_INFO),
@@ -538,29 +767,65 @@ export const DEFAULT_POWER: Power = {
 	usb: [],
 	hasPowerCycle: false,
 	type: 'power',
+	interfaces: ['power'],
 	id: '',
+	hardwareId: '',
 	name: '',
 	connected: false,
 	driver: structuredClone(DEFAULT_DRIVER_INFO),
 	client: structuredClone(DEFAULT_CLIENT_INFO),
+}
+
+// Default weather station template. Only the mandatory Device and Thermometer fields are seeded: the
+// optional sensors stay absent so that "not reported yet" is never confused with a real zero reading.
+export const DEFAULT_WEATHER: Weather = {
+	type: 'weather',
+	interfaces: ['weather'],
+	id: '',
+	hardwareId: '',
+	name: '',
+	connected: false,
+	driver: structuredClone(DEFAULT_DRIVER_INFO),
+	client: structuredClone(DEFAULT_CLIENT_INFO),
+	hasThermometer: false,
+	temperature: 0,
 }
 
 export const DEFAULT_THERMOMETER: Thermometer = {
 	hasThermometer: false,
 	temperature: 0,
 	type: 'thermometer',
+	interfaces: ['thermometer'],
 	id: '',
+	hardwareId: '',
 	name: '',
 	connected: false,
 	driver: structuredClone(DEFAULT_DRIVER_INFO),
 	client: structuredClone(DEFAULT_CLIENT_INFO),
 }
 
+// Default fail-closed safety monitor.
+export const DEFAULT_SAFETY_MONITOR: SafetyMonitor = {
+	type: 'safetyMonitor',
+	interfaces: ['safetyMonitor'],
+	id: '',
+	hardwareId: '',
+	name: '',
+	connected: false,
+	driver: structuredClone(DEFAULT_DRIVER_INFO),
+	client: structuredClone(DEFAULT_CLIENT_INFO),
+	safe: false,
+}
+
 export const DEFAULT_GUIDE_OUTPUT: GuideOutput = {
 	canPulseGuide: false,
 	pulsing: false,
+	pulsingNS: false,
+	pulsingWE: false,
 	type: 'guideOutput',
+	interfaces: ['guideOutput'],
 	id: '',
+	hardwareId: '',
 	name: '',
 	connected: false,
 	hasGuideRate: false,
@@ -577,14 +842,15 @@ export const DEFAULT_DEW_HEATER: DewHeater = {
 	hasDewHeater: false,
 	dutyCycle: structuredClone(DEFAULT_MIN_MAX_VALUE_PROPERTY),
 	type: 'dewHeater',
+	interfaces: ['dewHeater'],
 	id: '',
+	hardwareId: '',
 	name: '',
 	connected: false,
 	driver: structuredClone(DEFAULT_DRIVER_INFO),
 	client: structuredClone(DEFAULT_CLIENT_INFO),
 }
 
-// Type guards narrowing a Device by its discrete `type`.
 export function isCamera(device: Device): device is Camera {
 	return device.type === 'camera'
 }
@@ -613,14 +879,25 @@ export function isRotator(device: Device): device is Rotator {
 	return device.type === 'rotator'
 }
 
+export function isDome(device: Device): device is Dome {
+	return device.type === 'dome'
+}
+
 export function isPower(device: Device): device is Power {
 	return device.type === 'power'
 }
 
-// Capability guards narrowing by the presence of a sub-interface marker rather than the device type, so
-// composite devices (e.g. a camera that is also a thermometer/guide output) are recognized.
+export function isWeather(device: Device): device is Weather {
+	return device.type === 'weather'
+}
+
 export function isThermometer(device: Device): device is Thermometer {
 	return 'hasThermometer' in device && device.hasThermometer !== undefined
+}
+
+// Whether a device exposes the safety-monitoring capability.
+export function isSafetyMonitor(device: Device): device is SafetyMonitor {
+	return device.type === 'safetyMonitor' || ('safe' in device && device.safe !== undefined)
 }
 
 export function isGuideOutput(device: Device): device is GuideOutput {
@@ -635,12 +912,16 @@ export function isGPS(device: Device): device is GPS {
 	return device.type === 'gps' || ('hasGPS' in device && device.hasGPS !== undefined)
 }
 
+export function isSubDevice<D extends Device>(device: Device): device is SubDevice<D, Device> {
+	return 'parent' in device && device.parent !== undefined
+}
+
 // Predicts the pier side a German equatorial mount would use for the given coordinates and local
 // sidereal time. RA, Dec, and LST are radians. Returns NEITHER at the celestial poles where it is
 // undefined; otherwise WEST when the target is east of the meridian (hour angle in [0,12)h), else EAST.
 export function expectedPierSide(rightAscension: Angle, declination: Angle, lst: Angle): PierSide {
-	if (Math.abs(declination) === Math.PI / 2) return 'NEITHER'
-	return (toHour(rightAscension - lst) + 24) % 24 < 12 ? 'WEST' : 'EAST'
+	if (Math.abs(declination) === PIOVERTWO) return 'NEITHER'
+	return toHour(normalizeAngle(rightAscension - lst)) < 12 ? 'WEST' : 'EAST'
 }
 
 // Remaining clock time, in seconds, until the object next transits the upper meridian.

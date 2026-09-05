@@ -1,3 +1,4 @@
+import { PI, PIOVERTWO } from '../../core/constants'
 import { matIdentity } from '../../math/linear-algebra/mat3'
 import { Matrix } from '../../math/linear-algebra/matrix'
 import type { Vec3 } from '../../math/linear-algebra/vec3'
@@ -164,9 +165,9 @@ export function ephemerisUncertaintyEllipse(covariance: Matrix, geocentric: Vec3
 	// Major-axis eigenvector (East, North) = (covEastNorth, major - varEast); its position angle from
 	// North through East. Fall back to an axis-aligned angle when the off-diagonal term vanishes.
 	let positionAngle: number
-	if (covEastNorth === 0 && major - varEast === 0) positionAngle = varEast >= varNorth ? Math.PI / 2 : 0
+	if (covEastNorth === 0 && major - varEast === 0) positionAngle = varEast >= varNorth ? PIOVERTWO : 0
 	else positionAngle = Math.atan2(covEastNorth, major - varEast)
-	if (positionAngle < 0) positionAngle += Math.PI
+	if (positionAngle < 0) positionAngle += PI
 
 	return { semiMajor: sigma * Math.sqrt(Math.max(0, major)), semiMinor: sigma * Math.sqrt(Math.max(0, minor)), positionAngle }
 }

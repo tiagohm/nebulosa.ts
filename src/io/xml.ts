@@ -1,9 +1,10 @@
 // https://x.com/i/grok/share/3i6xCCEtUvQWeNnbiVMaermCl
 
 // Minimal streaming XML parser, sufficient for the simple element/attribute/text documents the library
-// consumes (e.g. XISF headers, INDI/Alpaca payloads). `SimpleXmlParser` is a byte-fed state machine that
-// emits each top-level node once it closes; it does not handle DTDs, namespaces beyond `:` in names,
-// entity references, CDATA, or processing instructions.
+// consumes (e.g. INDI/Alpaca payloads). `SimpleXmlParser` is a chunk-fed state machine that copies token
+// runs (text, quoted attribute values, and names) in bulk and emits each top-level node once it closes.
+// It does not handle DTDs, namespaces beyond `:` in names, entity references, CDATA, or processing
+// instructions.
 
 // XML element attributes as a name -> value map.
 export type XmlNodeAttributes = Record<string, string>
@@ -16,8 +17,10 @@ export interface XmlNode {
 	attributes: XmlNodeAttributes
 	// Child element nodes in document order.
 	children: XmlNode[]
-	// Concatenated trimmed text content directly inside this element.
-	text: string
+	// Concatenated raw (bytes) text content directly inside this element.
+	// May be a view into a larger ArrayBuffer; consumers must honor `byteOffset` and `byteLength`
+	// instead of wrapping `.buffer` alone.
+	text: Uint8Array
 }
 
 // Internal tokenizer states of the byte-level XML state machine.
@@ -53,46 +56,98 @@ const DASH = 45
 const DOT = 46
 const UNDERSCORE = 95
 
+// Text payloads at or above this size transfer the parser buffer instead of copying into the node.
+const LARGE_TEXT_THRESHOLD = 64 * 1024
+
+// Shared empty text payload for elements with no character data.
+const EMPTY_TEXT = new Uint8Array(0)
+
 // Reusable geometric-growth byte buffer that accumulates token bytes and decodes them to text on demand,
 // avoiding per-token allocations. An optional max byte length caps growth for the text buffer.
 class InternalBuffer {
 	readonly #decoder = new TextDecoder()
 	readonly #maxByteLength: number
+	readonly #initialSize: number
 	#data: Uint8Array
 
-	position = 0
+	#position = 0
 
 	// Allocate only the initial capacity and defer growth until writes exceed it.
 	constructor(size: number, maxByteLength: number = 0) {
+		this.#initialSize = size
 		this.#maxByteLength = maxByteLength > 0 ? Math.max(size, maxByteLength) : 0
 		this.#data = new Uint8Array(size)
 	}
 
+	get length() {
+		return this.#position
+	}
+
 	// Reset the logical cursor while retaining the current allocation.
 	reset() {
-		this.position = 0
+		this.#position = 0
 	}
 
 	// Append one byte and grow the storage geometrically only when capacity is exhausted.
 	write(byte: number) {
-		if (this.position >= this.#data.length) this.#grow()
+		this.#ensure(1)
+		this.#data[this.#position++] = byte
+	}
 
-		this.#data[this.position++] = byte
+	// Append `src[start, end)` in one copy, growing to at least the needed size when the run is larger
+	// than the remaining capacity.
+	writeBytes(src: Uint8Array, start: number, end: number) {
+		const n = end - start
+		if (n <= 0) return
+		this.#ensure(n)
+		this.#data.set(src.subarray(start, end), this.#position)
+		this.#position += n
 	}
 
 	// Decode the bytes written since the last reset.
 	text() {
-		return this.#decoder.decode(this.#data.subarray(0, this.position))
+		return this.#decoder.decode(this.array())
 	}
 
-	// Grow without eagerly reserving the full max byte length.
-	#grow() {
-		const currentLength = this.#data.length
-		const nextLength = this.#maxByteLength > 0 ? Math.min(currentLength * 2, this.#maxByteLength) : currentLength * 2
+	array() {
+		return this.#data.subarray(0, this.#position)
+	}
 
-		if (nextLength <= currentLength) {
-			throw new RangeError(`internal buffer exceeded max byte length: ${this.#maxByteLength}`)
+	// Detach the written bytes. Payloads at or above `LARGE_TEXT_THRESHOLD` transfer the backing
+	// store without copying (the result may be a view over spare capacity); smaller payloads are
+	// copied so this buffer stays reusable. Resets the logical cursor in both cases.
+	take(): Uint8Array {
+		const length = this.#position
+		if (length === 0) {
+			this.#position = 0
+			return EMPTY_TEXT
 		}
+
+		if (length >= LARGE_TEXT_THRESHOLD) {
+			const view = this.#data.subarray(0, length)
+			this.#data = new Uint8Array(this.#initialSize)
+			this.#position = 0
+			return view
+		}
+
+		const copy = this.#data.slice(0, length)
+		this.#position = 0
+		return copy
+	}
+
+	// Grow geometrically until `this.#position + n` fits, without exceeding the optional max byte length.
+	#ensure(n: number) {
+		const needed = this.#position + n
+		if (needed <= this.#data.length) return
+
+		const max = this.#maxByteLength
+		if (max > 0 && !(needed <= max)) {
+			throw new RangeError(`internal buffer exceeded max byte length: ${max}`)
+		}
+
+		let nextLength = this.#data.length
+		while (nextLength < needed) nextLength *= 2
+		if (max > 0 && nextLength > max) nextLength = max
 
 		const data = new Uint8Array(nextLength)
 		data.set(this.#data)
@@ -100,8 +155,16 @@ class InternalBuffer {
 	}
 }
 
+function mergeArray(a: Uint8Array, b: Uint8Array) {
+	const merged = new Uint8Array(a.length + b.length)
+	merged.set(a, 0)
+	merged.set(b, a.length)
+	return merged
+}
+
 // Incremental XML parser. Feed bytes/strings via parse(); it returns any top-level nodes that completed
 // during that call and retains partial state between calls. Throws on malformed input (and resets).
+// The array returned by parse() is reused on the next call; retain the XmlNode objects, not the array.
 export class SimpleXmlParser {
 	#state = XmlState.START
 	readonly #tag = new InternalBuffer(256)
@@ -113,22 +176,18 @@ export class SimpleXmlParser {
 	#prevCode?: number
 	#closeTagSealed = false
 	readonly #encoder = new TextEncoder()
+	readonly #nodes: XmlNode[] = []
 
 	// Feeds a chunk of XML (string or bytes) and returns the top-level nodes that completed in this chunk.
+	// The returned array is cleared and reused on the next parse(); node objects remain valid.
 	parse(input: string | Buffer | Uint8Array): XmlNode[] {
 		if (typeof input === 'string') {
 			return this.parse(this.#encoder.encode(input))
-		} else {
-			const nodes: XmlNode[] = []
-
-			for (let i = 0; i < input.byteLength; i++) {
-				const code = input[i] & 0xff
-				const node = this.#processByte(code)
-				if (node) nodes.push(node)
-			}
-
-			return nodes
 		}
+
+		this.#nodes.length = 0
+		this.#processChunk(input, this.#nodes)
+		return this.#nodes
 	}
 
 	// Clears all parser state, discarding any partially parsed node and the open-element stack.
@@ -146,7 +205,7 @@ export class SimpleXmlParser {
 
 	// Append a new node to the current tree and optionally keep it open.
 	#appendNode(attributes: XmlNodeAttributes, push: boolean = true): XmlNode {
-		const node: XmlNode = { name: this.#tag.text(), attributes, children: [], text: '' }
+		const node: XmlNode = { name: this.#tag.text(), attributes, children: [], text: EMPTY_TEXT }
 
 		if (this.#tree.length > 0) {
 			this.#tree.at(-1)!.children.push(node)
@@ -166,13 +225,11 @@ export class SimpleXmlParser {
 			return
 		}
 
-		const value = this.#text.text().trim()
-		this.#text.reset()
-
-		if (!value) return
+		if (this.#text.length === 0) return
 
 		const node = this.#tree.at(-1)!
-		node.text += value
+		const chunk = this.#text.take()
+		node.text = node.text.length === 0 ? chunk : mergeArray(node.text, chunk)
 	}
 
 	// Flush a valueless attribute that ended at whitespace, `/`, or `>`.
@@ -200,6 +257,66 @@ export class SimpleXmlParser {
 		return node
 	}
 
+	// Copy token runs from `input` and push each top-level node that closes in this chunk.
+	#processChunk(input: Uint8Array, nodes: XmlNode[]) {
+		const length = input.byteLength
+		let i = 0
+
+		while (i < length) {
+			if (this.#state === XmlState.TEXT) {
+				const lt = input.indexOf(OPEN_ANGLE, i)
+				const end = lt < 0 ? length : lt
+				if (end > i) {
+					this.#text.writeBytes(input, i, end)
+					this.#prevCode = input[end - 1]
+				}
+				if (lt < 0) return
+				this.#appendText()
+				this.#state = XmlState.TAG_OPEN
+				this.#prevCode = OPEN_ANGLE
+				i = lt + 1
+				continue
+			}
+
+			if (this.#state === XmlState.ATTR_VALUE && input[i] !== QUOTE) {
+				const q = input.indexOf(QUOTE, i)
+				const end = q < 0 ? length : q
+				if (end > i) {
+					this.#value.writeBytes(input, i, end)
+					this.#prevCode = input[end - 1]
+				}
+				if (q < 0) return
+				i = q
+				continue
+			}
+
+			if (this.#state === XmlState.TAG_NAME || this.#state === XmlState.ATTR_NAME || (this.#state === XmlState.TAG_CLOSE && !this.#closeTagSealed)) {
+				const dest = this.#state === XmlState.ATTR_NAME ? this.#name : this.#tag
+				const start = i
+				while (i < length && isNameChar(input[i])) i++
+				if (i > start) {
+					dest.writeBytes(input, start, i)
+					this.#prevCode = input[i - 1]
+					continue
+				}
+			}
+
+			if (this.#state === XmlState.START) {
+				const lt = input.indexOf(OPEN_ANGLE, i)
+				if (lt < 0) {
+					this.#prevCode = input[length - 1]
+					return
+				}
+				i = lt
+			}
+
+			const node = this.#processByte(input[i])
+			if (node) nodes.push(node)
+			i++
+		}
+	}
+
+	// Advance the tokenizer by one structural byte (delimiters and single-byte state transitions).
 	#processByte(code: number): XmlNode | undefined {
 		if (this.#state === XmlState.START) {
 			if (code === OPEN_ANGLE) {
@@ -256,7 +373,7 @@ export class SimpleXmlParser {
 			}
 		} else if (this.#state === XmlState.ATTR_VALUE) {
 			if (code === QUOTE) {
-				if (this.#value.position > 0 || this.#prevCode === QUOTE) {
+				if (this.#value.length > 0 || this.#prevCode === QUOTE) {
 					const name = this.#name.text()
 					this.#attributes[name] = this.#value.text()
 					this.#name.reset()
@@ -293,7 +410,7 @@ export class SimpleXmlParser {
 				if (this.#closeTagSealed) this.#fail('invalid closing tag syntax')
 				this.#tag.write(code)
 			} else if (isWhitespace(code)) {
-				if (this.#tag.position > 0) this.#closeTagSealed = true
+				if (this.#tag.length > 0) this.#closeTagSealed = true
 			} else if (code === CLOSE_ANGLE) {
 				const node = this.#closeNode()
 				this.#state = this.#tree.length === 0 ? XmlState.START : XmlState.TEXT

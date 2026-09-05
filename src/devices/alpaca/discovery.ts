@@ -218,7 +218,7 @@ function parseDiscoveryPort(data: Buffer) {
 		const port = (json as { readonly AlpacaPort?: unknown }).AlpacaPort
 		if (typeof port === 'number') return isValidAlpacaPort(port) ? port : undefined
 		if (typeof port === 'string') {
-			const parsed = Number.parseInt(port, 10)
+			const parsed = Math.trunc(Number(port))
 			return `${parsed}` === port && isValidAlpacaPort(parsed) ? parsed : undefined
 		}
 	} catch {
@@ -424,7 +424,7 @@ export class AlpacaDiscoveryClient implements Disposable {
 
 			try {
 				const devices = await api.configuredDevices()
-				if (devices) onDiscovery({ address, port, devices })
+				if (devices.ok) onDiscovery({ address, port, devices: devices.value })
 			} catch (e) {
 				console.error('failed to fetch configured devices at', url, e)
 			}

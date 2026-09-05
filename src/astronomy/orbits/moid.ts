@@ -47,7 +47,7 @@ const DERIVATIVE_STEP = 1e-5
 // anomaly and epoch are irrelevant. The result is the global minimum distance and the true anomaly on
 // each orbit where it occurs.
 export function moid(first: KeplerOrbit, second: KeplerOrbit, options?: MoidOptions): Moid {
-	if (first.eccentricity >= 1 || second.eccentricity >= 1) throw new Error('MOID is defined only for bound (elliptical) orbits')
+	if (!(first.eccentricity < 1) || !(second.eccentricity < 1)) throw new Error('MOID is defined only for bound (elliptical) orbits')
 
 	const samples = options?.samples ?? 180
 	const tolerance = options?.tolerance ?? 1e-10

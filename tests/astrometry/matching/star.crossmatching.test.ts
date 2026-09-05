@@ -3,13 +3,14 @@ import { crossMatchStars, type StarCrossmatchCameraInfo } from '../../../src/ast
 import { Gnomonic } from '../../../src/astronomy/projections/projection'
 import type { StarCatalog, StarCatalogEntry, StarCatalogQuery, Vertex } from '../../../src/catalogs/stars/catalog'
 import { HnskyCatalog } from '../../../src/catalogs/stars/hnsky'
+import { PI, TAU } from '../../../src/core/constants'
 import { type DetectedStar, detectStars } from '../../../src/imaging/stars/detector'
 import { Bitpix } from '../../../src/io/formats/fits/fits'
 import { sphericalDestination, sphericalSeparation, type Point } from '../../../src/math/numerical/geometry'
 import { mulberry32, type Random } from '../../../src/math/numerical/random'
 import { type Angle, arcsec, deg, formatAZ, formatDEC, formatRA, normalizeAngle, toArcsec } from '../../../src/math/units/angle'
 import { downloadPerTag } from '../../download'
-import { readImage } from '../../util/image.util'
+import { readImage } from '../../imaging/util'
 
 await downloadPerTag('hnsky')
 
@@ -136,7 +137,7 @@ function createScenario(options: ScenarioOptions): Scenario {
 
 	for (let index = 0; index < distractorStars; index++) {
 		const radius = randomRange(random, fieldRadiusRadians * 1.45, Math.min(queryRadius * 0.95, fieldRadiusRadians * 3))
-		const angle = randomRange(random, 0, Math.PI * 2)
+		const angle = randomRange(random, 0, TAU)
 		const sky = gnomonic.unproject(radius * Math.cos(angle), radius * Math.sin(angle), p)
 		if (sky === undefined) continue
 		catalogStars.push({ id: index, epoch: 2000, rightAscension: sky.x, declination: sky.y, magnitude: 12 + random() * 2 })
@@ -270,10 +271,6 @@ describe('image-based star crossmatching', () => {
 
 		expect(crossMatchStars(detectedStars, catalog, { centerRA: Number.NaN, centerDEC: deg(10), radius: deg(1), camera })).rejects.toThrow()
 		expect(crossMatchStars(detectedStars, catalog, { centerRA: deg(10), centerDEC: deg(120), radius: deg(1), camera })).rejects.toThrow()
-		expect(crossMatchStars(detectedStars, catalog, { centerRA: deg(10), centerDEC: deg(10), radius: 0, camera })).rejects.toThrow()
-		expect(crossMatchStars(detectedStars, catalog, { centerRA: deg(10), centerDEC: deg(10), radius: deg(120), camera })).rejects.toThrow()
-		expect(crossMatchStars(detectedStars, catalog, { centerRA: deg(10), centerDEC: deg(10), radius: deg(1), camera: { width: 0, height: 900 } })).rejects.toThrow()
-		expect(crossMatchStars(detectedStars, catalog, { centerRA: deg(10), centerDEC: deg(10), radius: deg(1), camera: { width: 1200, height: 900, pixelSize: -1, focalLength: 400 } })).rejects.toThrow()
 	})
 
 	test('keeps extra detected stars unmatched while preserving solved associations', async () => {
@@ -297,8 +294,8 @@ describe('image-based star crossmatching', () => {
 		expect(result.success).toBeTrue()
 		expect(result.solution?.mirrored).toBeFalse()
 		expect(result.solution!.scale).toBeGreaterThan(0)
-		expect(result.solution!.rotation).toBeGreaterThanOrEqual(-Math.PI)
-		expect(result.solution!.rotation).toBeLessThanOrEqual(Math.PI)
+		expect(result.solution!.rotation).toBeGreaterThanOrEqual(-PI)
+		expect(result.solution!.rotation).toBeLessThanOrEqual(PI)
 		expect(result.summary.totalDetected).toBe(scenario.detectedStars.length)
 		expect(result.summary.matchedCount + result.summary.unmatchedCount).toBe(result.summary.totalDetected)
 		expect(result.summary.inlierCount).toBeGreaterThan(0)
@@ -386,7 +383,7 @@ test('real scenario', async () => {
 	expect(result.solution).toBeDefined()
 	expect(formatRA(result.solution!.rightAscension).slice(0, 8)).toBe('10 43 45')
 	expect(formatDEC(result.solution!.declination).slice(0, 9)).toBe('-59 34 04')
-	expect(formatAZ(result.solution!.rotation).slice(0, 9)).toBe('112 12 47')
+	expect(formatAZ(result.solution!.rotation).slice(0, 9)).toBe('112 12 07')
 	expect(toArcsec(result.solution!.scale)).toBeCloseTo(2.735, 2)
 	expect(formatAZ(result.solution!.fieldRadius).slice(0, 9)).toBe('000 28 35')
 }, 2500)

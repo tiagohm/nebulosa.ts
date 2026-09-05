@@ -349,13 +349,13 @@ export class Lx200ProtocolServer {
 
 	// Writes the local date as MM/DD/YY#.
 	#date(socket: Socket<unknown>) {
-		const command = `${formatTemporal(this.options.handler.dateTime(this)[0], DATE_FORMAT, 0)}#`
+		const command = `${formatTemporal(this.options.handler.dateTime(this)[0], DATE_FORMAT)}#`
 		this.#text(socket, command)
 	}
 
 	// Writes the local time as HH:MM:SS#.
 	#time(socket: Socket<unknown>) {
-		const command = `${formatTemporal(this.options.handler.dateTime(this)[0], TIME_FORMAT, 0)}#`
+		const command = `${formatTemporal(this.options.handler.dateTime(this)[0], TIME_FORMAT)}#`
 		this.#text(socket, command)
 	}
 

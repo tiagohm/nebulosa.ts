@@ -269,7 +269,7 @@ export class ChebyshevEphemerisInterpolator extends BaseEphemerisInterpolator {
 		super(options)
 		this.degree = degree ?? Math.min(12, Math.max(0, points.length - 1))
 
-		if (!Number.isInteger(this.degree) || this.degree < 1) {
+		if (!Number.isInteger(this.degree) || !(this.degree >= 1)) {
 			throw new RangeError('chebyshev degree must be a positive integer')
 		}
 
@@ -385,7 +385,7 @@ function prepareSamples(points: readonly EphemerisPoint[], minimumSampleCount: n
 		}
 	}
 
-	if (count < minimumSampleCount) {
+	if (!(count >= minimumSampleCount)) {
 		throw new RangeError(`ephemeris interpolation requires at least ${minimumSampleCount} unique samples`)
 	}
 

@@ -1,6 +1,6 @@
 import type { EquatorialCoordinate } from '../../astronomy/coordinates/coordinate'
 import { DEG2RAD, PI, PIOVERTWO, TAU } from '../../core/constants'
-import { GEOMETRY_EPSILON, validateLatitude } from '../../core/validation'
+import { GEOMETRY_EPSILON } from '../../core/validation'
 import { clamp } from '../../math/numerical/math'
 import { type Angle, normalizeAngle } from '../../math/units/angle'
 import type { Velocity } from '../../math/units/velocity'
@@ -44,7 +44,7 @@ export interface StarCatalogConeQuery {
 	readonly kind: 'cone'
 	// Cone center right ascension, radians.
 	readonly centerRA: Angle
-	// Cone center declination, radians.
+	// Cone center declination, radians, in [-π/2, π/2].
 	readonly centerDEC: Angle
 	// Angular radius, radians (0..PI).
 	readonly radius: Angle
@@ -63,6 +63,7 @@ export interface StarCatalogBoxQuery {
 	readonly kind: 'box'
 	readonly minRA: Angle
 	readonly maxRA: Angle
+	// Inclusive declination bounds, radians, in [-π/2, π/2] with minDEC <= maxDEC.
 	readonly minDEC: Angle
 	readonly maxDEC: Angle
 }
@@ -233,10 +234,10 @@ export function normalizeStarCatalogQuery(query: StarCatalogQuery): NormalizedSt
 export function splitRaBox(minRA: Angle, maxRA: Angle, minDEC: Angle, maxDEC: Angle): readonly StarCatalogRaDecBox[] {
 	const normalizedMinRA = normalizeAngle(minRA)
 	const normalizedMaxRA = normalizeAngle(maxRA)
-	const normalizedMinDEC = validateLatitude(minDEC)
-	const normalizedMaxDEC = validateLatitude(maxDEC)
+	const normalizedMinDEC = minDEC
+	const normalizedMaxDEC = maxDEC
 
-	if (normalizedMinDEC > normalizedMaxDEC + GEOMETRY_EPSILON) {
+	if (!(normalizedMinDEC <= normalizedMaxDEC + GEOMETRY_EPSILON)) {
 		throw new Error(`invalid declination range: [${minDEC}, ${maxDEC}]`)
 	}
 
@@ -263,9 +264,9 @@ export function projectPolygonVertex(ra: Angle, dec: Angle, centerRA: Angle, cen
 // Normalizes a cone query and computes its coarse preselection box.
 function normalizeConeQuery(query: StarCatalogConeQuery): NormalizedConeQuery {
 	const centerRA = normalizeAngle(query.centerRA)
-	const centerDEC = validateLatitude(query.centerDEC)
+	const centerDEC = query.centerDEC
 
-	if (!Number.isFinite(query.radius) || query.radius < 0 || query.radius > PI) {
+	if (!Number.isFinite(query.radius) || !(query.radius >= 0) || !(query.radius <= PI)) {
 		throw new Error(`invalid cone radius: ${query.radius}. Expected a finite value in [0, pi]`)
 	}
 
@@ -304,9 +305,9 @@ function normalizeConeQuery(query: StarCatalogConeQuery): NormalizedConeQuery {
 // Normalizes a triangle query and builds its tangent-plane projection.
 function normalizeTriangleQuery(query: StarCatalogTriangleQuery): NormalizedTriangleQuery {
 	const normalizedVertices = [
-		[normalizeAngle(query.a[0]), validateLatitude(query.a[1])],
-		[normalizeAngle(query.b[0]), validateLatitude(query.b[1])],
-		[normalizeAngle(query.c[0]), validateLatitude(query.c[1])],
+		[normalizeAngle(query.a[0]), query.a[1]],
+		[normalizeAngle(query.b[0]), query.b[1]],
+		[normalizeAngle(query.c[0]), query.c[1]],
 	] as const satisfies readonly Vertex[]
 	const tangentCenterRA = meanRightAscension(normalizedVertices)
 	const tangentCenterDEC = (normalizedVertices[0][1] + normalizedVertices[1][1] + normalizedVertices[2][1]) / 3
@@ -354,7 +355,7 @@ function normalizePolygonQuery(query: StarCatalogPolygonQuery): NormalizedPolygo
 	const normalizedVertices: Vertex[] = []
 
 	for (const vertex of query.vertices) {
-		normalizedVertices.push([normalizeAngle(vertex[0]), validateLatitude(vertex[1])] as const)
+		normalizedVertices.push([normalizeAngle(vertex[0]), vertex[1]] as const)
 	}
 
 	const tangentCenterRA = meanRightAscension(normalizedVertices)

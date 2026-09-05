@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { circleToPixels, coordToPixel, type HealpixId, HealpixIndex, nestedToRing, pixelToBoundary, pixelToCenter, ringToNested } from '../../../../src/astronomy/sky/spatial/healpix'
-import { PI, PIOVERTWO } from '../../../../src/core/constants'
+import { PI, PIOVERTWO, TAU } from '../../../../src/core/constants'
 import { sphericalDestination, sphericalSeparation } from '../../../../src/math/numerical/geometry'
 import { deg } from '../../../../src/math/units/angle'
 
@@ -40,7 +40,7 @@ test('pixel boundary vertices stay within valid spherical ranges', () => {
 
 	for (const vertex of boundary) {
 		expect(vertex[0]).toBeGreaterThanOrEqual(0)
-		expect(vertex[0]).toBeLessThanOrEqual(2 * PI)
+		expect(vertex[0]).toBeLessThanOrEqual(TAU)
 		expect(vertex[1]).toBeGreaterThanOrEqual(-PIOVERTWO)
 		expect(vertex[1]).toBeLessThanOrEqual(PIOVERTWO)
 	}
@@ -120,7 +120,7 @@ test('ring pixel centers cover north, equatorial, and south zones', () => {
 	for (const pixel of pixels) {
 		const center = pixelToCenter(nside, pixel, 'ring')
 		expect(center[0]).toBeGreaterThanOrEqual(0)
-		expect(center[0]).toBeLessThanOrEqual(2 * PI)
+		expect(center[0]).toBeLessThanOrEqual(TAU)
 		expect(center[1]).toBeGreaterThanOrEqual(-PIOVERTWO)
 		expect(center[1]).toBeLessThanOrEqual(PIOVERTWO)
 	}

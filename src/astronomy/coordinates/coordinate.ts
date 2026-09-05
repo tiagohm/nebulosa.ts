@@ -81,6 +81,14 @@ export function angularDistanceHaversine(ra0: Angle, dec0: Angle, ra1: Angle, de
 	return 2 * Math.asin(Math.sqrt(clamp(h, 0, 1)))
 }
 
+// Computes the position angle of point 2 as seen from point 1, measured from celestial north toward east.
+export function positionAngleBetween(ra0: Angle, dec0: Angle, ra1: Angle, dec1: Angle) {
+	const dRA = ra1 - ra0
+	const y = Math.cos(dec1) * Math.sin(dRA)
+	const x = Math.cos(dec0) * Math.sin(dec1) - Math.sin(dec0) * Math.cos(dec1) * Math.cos(dRA)
+	return x !== 0 || y !== 0 ? normalizeAngle(Math.atan2(y, x)) : 0
+}
+
 // Converts J2000 equatorial coordinates to current equatorial coordinates.
 export function equatorialFromJ2000(rightAscension: Angle, declination: Angle, time: Time = timeNow(true)) {
 	const p = eraS2c(rightAscension, declination)

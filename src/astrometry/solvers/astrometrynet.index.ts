@@ -1,6 +1,6 @@
 import type { EquatorialCoordinate } from '../../astronomy/coordinates/coordinate'
 import { eraS2c } from '../../astronomy/coordinates/erfa/erfa'
-import { AMIN2RAD, DEG2RAD, PI, PIOVERTWO, TAU } from '../../core/constants'
+import { AMIN2RAD, DEG2RAD, PI, PIOVERFOUR, PIOVERTWO, TAU } from '../../core/constants'
 import type { MutVec3 } from '../../math/linear-algebra/vec3'
 import { clamp } from '../../math/numerical/math'
 import { type Angle, normalizeAngle } from '../../math/units/angle'
@@ -136,13 +136,13 @@ export interface AstrometryNetIndexPlan {
 }
 
 // Boundary z where a HEALPix coordinate transitions between the equatorial and polar regimes.
-const TWO_THIRDS = 2 / 3
+const BOUNDARY_Z = 2 / 3
 
 // Height of the equatorial z band (from -2/3 to +2/3), used to project z into unit-square units.
-const FOUR_THIRDS = 4 / 3
+const EQUATORIAL_Z_BAND_HEIGHT = 4 / 3
 
 // Quarter turn in radians, the angular width of a HEALPix base-pixel column in longitude.
-const PIOVERFOUR = PI / 4
+const PIXEL_ANGULAR_WIDTH = PIOVERFOUR
 
 // Number of coarse samples per tile edge used to bracket the closest boundary point. Each edge
 // spans at most ~0.9 rad at resolution 2, so 24 segments bound the bracket to ~0.04 rad before
@@ -238,9 +238,9 @@ function unitVectorToTile(vx: number, vy: number, vz: number, nside: number): nu
 	let x: number
 	let y: number
 
-	if (vz >= TWO_THIRDS || vz <= -TWO_THIRDS) {
+	if (vz >= BOUNDARY_Z || vz <= -BOUNDARY_Z) {
 		// North or south polar cap.
-		const north = vz >= TWO_THIRDS
+		const north = vz >= BOUNDARY_Z
 		const zfactor = north ? 1 : -1
 
 		let root = (1 - vz * zfactor) * 3 * square((nside * (2 * phiT - PI)) / PI)
@@ -266,7 +266,7 @@ function unitVectorToTile(vx: number, vy: number, vz: number, nside: number): nu
 	} else {
 		// Equatorial belt: project into the unit square (z in [-2/3, 2/3], phi_t in [0, PI/2])
 		// and rotate into the diagonal (X = northeast, Y = northwest) coordinates.
-		const zunits = (vz + TWO_THIRDS) / FOUR_THIRDS
+		const zunits = (vz + BOUNDARY_Z) / EQUATORIAL_Z_BAND_HEIGHT
 		const phiunits = phiT / PIOVERTWO
 		let xx = (zunits + phiunits) * nside
 		let yy = (zunits - phiunits + 1) * nside
@@ -346,8 +346,8 @@ function tileToUnitVector(tileId: number, nside: number, dx: number, dy: number,
 			column -= 8
 		}
 
-		z = TWO_THIRDS * (x + y + zoff)
-		phi = PIOVERFOUR * (x - y + phioff + 2 * column)
+		z = BOUNDARY_Z * (x + y + zoff)
+		phi = PIXEL_ANGULAR_WIDTH * (x - y + phioff + 2 * column)
 	} else {
 		// Polar regime: recover phi_t and z from the (x, y) position (eqns 19/20 of Calabretta &
 		// Roukema). South pixels are mirrored into the northern solution via zfactor.
@@ -361,7 +361,7 @@ function tileToUnitVector(tileId: number, nside: number, dx: number, dy: number,
 		if (y === nside && x === nside) phiT = 0
 		else phiT = (PI * (nside - y)) / (2 * (nside - x + (nside - y)))
 
-		if (phiT < PIOVERFOUR) z = 1 - square((PI * (nside - x)) / ((2 * phiT - PI) * nside)) / 3
+		if (phiT < PIXEL_ANGULAR_WIDTH) z = 1 - square((PI * (nside - x)) / ((2 * phiT - PI) * nside)) / 3
 		else z = 1 - square((PI * (nside - y)) / (2 * phiT * nside)) / 3
 
 		z *= zfactor
@@ -479,7 +479,7 @@ function tileDistanceFromUnitVector(tileId: number, nside: number, vx: number, v
 // the tile count and tile-id arithmetic stay finite and exact; Number.isInteger alone accepts huge
 // floats like 1e308 that overflow those computations.
 function validateResolution(resolution: number) {
-	if (!Number.isInteger(resolution) || resolution < 1 || resolution > MAX_RESOLUTION) {
+	if (!Number.isInteger(resolution) || !(resolution >= 1) || !(resolution <= MAX_RESOLUTION)) {
 		throw new RangeError(`invalid HEALPix resolution: ${resolution}. Expected an integer in [1, ${MAX_RESOLUTION}]`)
 	}
 }
@@ -487,7 +487,7 @@ function validateResolution(resolution: number) {
 // Validates a tile id against the resolution. Must be an integer in [0, 12 * Nside^2).
 function validateTileId(tileId: number, resolution: number) {
 	const tileCount = 12 * resolution * resolution
-	if (!Number.isInteger(tileId) || tileId < 0 || tileId >= tileCount) {
+	if (!Number.isInteger(tileId) || !(tileId >= 0) || !(tileId < tileCount)) {
 		throw new RangeError(`invalid HEALPix tile id: ${tileId}. Expected an integer in [0, ${tileCount - 1}]`)
 	}
 }
@@ -500,7 +500,7 @@ function validateCoordinate(rightAscension: Angle, declination: Angle) {
 	if (!Number.isFinite(rightAscension) || !Number.isFinite(declination)) {
 		throw new RangeError('rightAscension and declination must be finite')
 	}
-	if (declination < -PIOVERTWO || declination > PIOVERTWO) {
+	if (!(declination >= -PIOVERTWO) || !(declination <= PIOVERTWO)) {
 		throw new RangeError('declination must be within [-PI/2, PI/2]')
 	}
 }
@@ -535,21 +535,21 @@ export function tileIntersectsDisc(tileId: number, resolution: number, rightAsce
 
 // Validates that a value is a finite number greater than zero.
 function requirePositiveFinite(value: number, name: string) {
-	if (!Number.isFinite(value) || value <= 0) {
+	if (!Number.isFinite(value) || !(value > 0)) {
 		throw new RangeError(`${name} must be a positive finite number`)
 	}
 }
 
 // Validates that a value is a positive safe integer.
 function requirePositiveSafeInteger(value: number, name: string) {
-	if (!Number.isSafeInteger(value) || value <= 0) {
+	if (!Number.isSafeInteger(value) || !(value > 0)) {
 		throw new RangeError(`${name} must be a positive safe integer`)
 	}
 }
 
 // Validates that a value is a finite, non-negative number.
 function requireNonNegativeFinite(value: number, name: string) {
-	if (!Number.isFinite(value) || value < 0) {
+	if (!Number.isFinite(value) || !(value >= 0)) {
 		throw new RangeError(`${name} must be a finite, non-negative number`)
 	}
 }
@@ -593,7 +593,7 @@ export function selectAstrometryIndexes(request: AstrometryNetIndexRequest): Ast
 	const maxQuadFraction = request.maxQuadFraction ?? DEFAULT_MAX_QUAD_FRACTION
 	requirePositiveFinite(minQuadFraction, 'minQuadFraction')
 	requirePositiveFinite(maxQuadFraction, 'maxQuadFraction')
-	if (minQuadFraction > maxQuadFraction) {
+	if (!(minQuadFraction <= maxQuadFraction)) {
 		throw new RangeError('minQuadFraction must not exceed maxQuadFraction')
 	}
 

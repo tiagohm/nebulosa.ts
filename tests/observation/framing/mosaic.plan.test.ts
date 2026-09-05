@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { TAU } from '../../../src/core/constants'
+import { PI, PIOVERTWO, TAU } from '../../../src/core/constants'
 import { sphericalSeparation } from '../../../src/math/numerical/geometry'
 import { deg, type Angle } from '../../../src/math/units/angle'
 import { mosaicBasis, planMosaic, type MosaicBasis, type MosaicCoordinate, type MosaicPlan, type MosaicPlanInput } from '../../../src/observation/framing/mosaic.plan'
@@ -39,8 +39,8 @@ function expectCoordinateValid(coordinate: MosaicCoordinate) {
 	expect(Number.isFinite(coordinate.dec)).toBeTrue()
 	expect(coordinate.ra).toBeGreaterThanOrEqual(0)
 	expect(coordinate.ra).toBeLessThan(TAU)
-	expect(coordinate.dec).toBeGreaterThanOrEqual(-Math.PI / 2)
-	expect(coordinate.dec).toBeLessThanOrEqual(Math.PI / 2)
+	expect(coordinate.dec).toBeGreaterThanOrEqual(-PIOVERTWO)
+	expect(coordinate.dec).toBeLessThanOrEqual(PIOVERTWO)
 }
 
 function expectPlanFinite(plan: MosaicPlan) {
@@ -161,7 +161,7 @@ test('zero position angle increases columns east and rows south', () => {
 })
 
 test('ninety-degree rotation makes increasing columns move approximately south', () => {
-	const plan = planMosaic(defaultInput({ center: { ra: deg(10), dec: 0 }, panel: { width: deg(2), height: deg(2) }, region: { width: deg(3.8), height: deg(2) }, positionAngle: Math.PI / 2 }))
+	const plan = planMosaic(defaultInput({ center: { ra: deg(10), dec: 0 }, panel: { width: deg(2), height: deg(2) }, region: { width: deg(3.8), height: deg(2) }, positionAngle: PIOVERTWO }))
 
 	expect(plan.panels[1].center.dec).toBeLessThan(plan.panels[0].center.dec)
 })
@@ -249,7 +249,7 @@ test('traversal orders panels in row-major and serpentine order', () => {
 })
 
 test('input right ascension is normalized without mutating input objects', () => {
-	const input = defaultInput({ center: { ra: TAU + deg(15), dec: deg(12) }, positionAngle: Math.PI, overlap: { x: 0.2 } })
+	const input = defaultInput({ center: { ra: TAU + deg(15), dec: deg(12) }, positionAngle: PI, overlap: { x: 0.2 } })
 	const snapshot = structuredClone(input)
 	Object.freeze(input.center)
 	Object.freeze(input.panel)
@@ -260,7 +260,7 @@ test('input right ascension is normalized without mutating input objects', () =>
 	const plan = planMosaic(input)
 
 	expect(plan.center.ra).toBeCloseTo(deg(15), 14)
-	expect(plan.positionAngle).toBe(Math.PI)
+	expect(plan.positionAngle).toBe(PI)
 	expect(input).toEqual(snapshot)
 	expect(plan.center).not.toBe(input.center)
 	expect(plan.panel).not.toBe(input.panel)
@@ -290,7 +290,7 @@ test('corner names are detector-local, not fixed sky directions, when rotated', 
 	// the +x axis points celestial south, so the panel top-left corner (-x, +y)
 	// actually lands north-east of the center, not north-west. This locks the
 	// detector-frame semantics and guards against re-attaching sky-fixed names.
-	const plan = planMosaic(defaultInput({ center: { ra: deg(10), dec: 0 }, panel: { width: deg(2), height: deg(2) }, positionAngle: Math.PI / 2 }))
+	const plan = planMosaic(defaultInput({ center: { ra: deg(10), dec: 0 }, panel: { width: deg(2), height: deg(2) }, positionAngle: PIOVERTWO }))
 	const { footprint, center } = plan.panels[0]
 
 	// topLeft (-x, +y) -> north and east.
@@ -327,9 +327,9 @@ test('coverage matches the shared-plane panel spacing', () => {
 
 test('position angle is normalized into (-PI, PI]', () => {
 	// The lower bound wraps to the upper bound, matching normalizePI and atan2.
-	expect(planMosaic(defaultInput({ positionAngle: -Math.PI })).positionAngle).toBe(Math.PI)
-	expect(planMosaic(defaultInput({ positionAngle: Math.PI })).positionAngle).toBe(Math.PI)
-	expect(planMosaic(defaultInput({ positionAngle: Math.PI / 2 })).positionAngle).toBeCloseTo(Math.PI / 2, 14)
+	expect(planMosaic(defaultInput({ positionAngle: -PI })).positionAngle).toBe(PI)
+	expect(planMosaic(defaultInput({ positionAngle: PI })).positionAngle).toBe(PI)
+	expect(planMosaic(defaultInput({ positionAngle: PIOVERTWO })).positionAngle).toBeCloseTo(PIOVERTWO, 14)
 	expect(planMosaic(defaultInput({ positionAngle: TAU + deg(30) })).positionAngle).toBeCloseTo(deg(30), 14)
 	expect(planMosaic(defaultInput({ positionAngle: -TAU - deg(30) })).positionAngle).toBeCloseTo(-deg(30), 14)
 })
@@ -338,22 +338,22 @@ test('invalid inputs are rejected with field-specific range errors', () => {
 	const invalidInputs: MosaicPlanInput[] = [
 		defaultInput({ center: { ra: Number.NaN, dec: 0 } }),
 		defaultInput({ center: { ra: 0, dec: Number.POSITIVE_INFINITY } }),
-		defaultInput({ center: { ra: 0, dec: -Math.PI / 2 - Number.EPSILON } }),
-		defaultInput({ center: { ra: 0, dec: Math.PI / 2 + Number.EPSILON } }),
+		defaultInput({ center: { ra: 0, dec: -PIOVERTWO - Number.EPSILON } }),
+		defaultInput({ center: { ra: 0, dec: PIOVERTWO + Number.EPSILON } }),
 		defaultInput({ panel: { width: 0, height: deg(1) } }),
 		defaultInput({ panel: { width: -deg(1), height: deg(1) } }),
-		defaultInput({ panel: { width: Math.PI, height: deg(1) } }),
+		defaultInput({ panel: { width: PI, height: deg(1) } }),
 		defaultInput({ panel: { width: Number.POSITIVE_INFINITY, height: deg(1) } }),
 		defaultInput({ panel: { width: deg(1), height: 0 } }),
 		defaultInput({ panel: { width: deg(1), height: -deg(1) } }),
-		defaultInput({ panel: { width: deg(1), height: Math.PI } }),
+		defaultInput({ panel: { width: deg(1), height: PI } }),
 		defaultInput({ region: { width: 0, height: deg(1) } }),
 		defaultInput({ region: { width: -deg(1), height: deg(1) } }),
-		defaultInput({ region: { width: Math.PI, height: deg(1) } }),
+		defaultInput({ region: { width: PI, height: deg(1) } }),
 		defaultInput({ region: { width: Number.NaN, height: deg(1) } }),
 		defaultInput({ region: { width: deg(1), height: 0 } }),
 		defaultInput({ region: { width: deg(1), height: -deg(1) } }),
-		defaultInput({ region: { width: deg(1), height: Math.PI } }),
+		defaultInput({ region: { width: deg(1), height: PI } }),
 		defaultInput({ overlap: { x: Number.NaN } }),
 		defaultInput({ overlap: { x: -Number.EPSILON } }),
 		defaultInput({ overlap: { x: 1 } }),

@@ -1,20 +1,30 @@
+import { medianBySelectionOf, STANDARD_DEVIATION_SCALE } from '../../core/util'
 import type { Point, Rect } from '../../math/numerical/geometry'
 import { clamp } from '../../math/numerical/math'
 import type { Image } from '../model/types'
-import { clone, grayscale, mean3x3, psf } from '../processing/transformation'
+import { clone } from '../processing/arithmetic'
+import { debayer } from '../processing/debayer'
+import { grayscale } from '../processing/geometry'
+import { psf } from '../processing/psf'
+import { starMomentShape } from './shape'
 
 // Star detection and photometry for an image. Median-filters out hot pixels, runs a PSF-matched
 // response to find candidate peaks, then measures each star's flux, SNR, half-flux diameter (HFD),
-// and FWHM via integral-image aperture/annulus photometry. Coordinates are pixels; intensities use
-// the normalized [0, 1] pixel scale. Also provides utilities to merge close detections and to clip
-// stars to a central search region.
+// and FWHM via integral-image aperture/annulus photometry. The published (x, y) is the flux-weighted
+// centroid around that peak, not the integer local-max pixel, so sub-pixel motion is visible to
+// guiders. Coordinates are pixels; intensities use the normalized [0, 1] pixel scale. Also provides
+// utilities to merge close detections and to drop pairs that would share a guiding search box.
 
-// A detected star: its pixel position plus measured photometry.
+// A detected star: flux-weighted centroid in pixels plus measured photometry.
 export interface DetectedStar extends Readonly<Point> {
 	// Half-flux diameter, pixels.
 	readonly hfd: number
 	// Full width at half maximum, pixels (when estimable).
 	readonly fwhm?: number
+	// Shape eccentricity from 0 (round) toward 1 (elongated), when estimable.
+	readonly eccentricity?: number
+	// Major/minor axis ratio, at least 1, when estimable.
+	readonly elongation?: number
 	// Signal-to-noise ratio.
 	readonly snr: number
 	// Integrated flux above background.
@@ -25,7 +35,9 @@ export interface DetectedStar extends Readonly<Point> {
 export interface DetectStarOptions {
 	// Maximum number of stars to return (brightest kept).
 	readonly maxStars: number
-	// Optional central square region (half-size, pixels) to restrict detection to.
+	// Tracking-box size, in pixels. When positive, pairs of comparable-brightness stars that would
+	// both fit inside one search box (plus a 5-pixel margin) are removed, matching the PHD2
+	// uniqueness filter. This is not a central crop of the frame.
 	readonly searchRegion?: number
 	// Minimum SNR a star must reach to be kept.
 	readonly minSNR?: number
@@ -35,6 +47,12 @@ export interface DetectStarOptions {
 type IntegralImages = readonly [Float64Array, Float64Array, number] // sum, sumSq, width
 // Measured photometry of one star as [flux, snr, hfd, fwhm].
 export type StarPhotometry = readonly [number, number, number, number] // flux, snr, hfd, fwhm
+// Internal photometry plus shape and the flux-weighted centroid as
+// [flux, snr, hfd, fwhm, eccentricity, elongation, centroidX, centroidY].
+type MeasuredStarPhotometry = readonly [number, number, number, number, number | undefined, number | undefined, number, number]
+
+// Empty photometry returned when the aperture is invalid or has no positive flux.
+const EMPTY_STAR_PHOTOMETRY = [0, 0, 0, 0, undefined, undefined, 0, 0] as const satisfies MeasuredStarPhotometry
 
 // Aperture radius (pixels) over which a star's signal flux is integrated.
 const STAR_SIGNAL_RADIUS = 4
@@ -46,8 +64,17 @@ const STAR_BACKGROUND_OUTER_RADIUS = 7
 const STAR_CONVOLVED_MARGIN = 4
 // Minimum acceptable HFD (pixels); smaller measurements are treated as noise/hot pixels.
 const STAR_MIN_HFD = 1
-// Ratio between a peak's score and its neighborhood used to accept it as a distinct star.
+// Extra photometry passes after the integer peak, recentering on the flux-weighted centroid.
+const STAR_CENTROID_REFINEMENTS = 2
+// Stop recentering when the centroid moves by this many pixels or less.
+const STAR_CENTROID_TOLERANCE = 0.05
+// Adjacent-rank ratio that marks a candidate star-to-noise break.
 const STAR_SCORE_GAP_RATIO = 4
+// How many candidates immediately below a gap are inspected for a tight field-star clump.
+const STAR_SCORE_GAP_CLUMP_WINDOW = 8
+// Rank ratio that still splits a tight clump. 4³ ≈ 3 mag of flux when SNR scales as √flux, which
+// is larger than a handful of bright-star outliers and smaller than the noise floor on a star field.
+const STAR_SCORE_GAP_OUTLIER_RATIO = STAR_SCORE_GAP_RATIO * STAR_SCORE_GAP_RATIO * STAR_SCORE_GAP_RATIO
 
 // Default star-detection options.
 const DEFAULT_DETECT_STARS_OPTIONS: Readonly<DetectStarOptions> = {
@@ -56,15 +83,64 @@ const DEFAULT_DETECT_STARS_OPTIONS: Readonly<DetectStarOptions> = {
 	minSNR: 0,
 }
 
-// Detects stars in an image and returns them sorted by descending flux (up to maxStars), filtered by
-// minSNR and optionally restricted to a central search region.
-export function detectStars(image: Image, { maxStars = 500, searchRegion = 0, minSNR = 0 }: Partial<DetectStarOptions> = DEFAULT_DETECT_STARS_OPTIONS): DetectedStar[] {
+// Converts RGB or raw CFA input into a coherent mono intensity image for filtering and photometry.
+function starAnalysisImage(image: Image): Image | undefined {
 	image = grayscale(image)
+	if (!image.metadata.bayer) return image
+	const color = debayer(image)
+	return color && grayscale(color)
+}
+
+// Replaces each interior pixel with the median of its 3x3 neighborhood in place. Isolated hot
+// pixels and 2x2 defect clumps disappear; the 1-pixel border is left unchanged because later
+// detection already excludes a wider PSF margin. Returns the same image object.
+function median3x3(image: Image) {
+	const { raw, metadata } = image
+	const { width, height, stride } = metadata
+	if (width < 3 || height < 3) return image
+
+	const RowArray = raw instanceof Float64Array ? Float64Array : Float32Array
+	const previous = new RowArray(stride)
+	const current = new RowArray(stride)
+	previous.set(raw.subarray(0, stride))
+	current.set(raw.subarray(stride, stride * 2))
+	const window = new Float64Array(9)
+
+	for (let y = 1; y < height - 1; y++) {
+		const next = raw.subarray((y + 1) * stride, (y + 2) * stride)
+		const row = y * stride
+
+		for (let x = 1; x < width - 1; x++) {
+			window[0] = previous[x - 1]
+			window[1] = previous[x]
+			window[2] = previous[x + 1]
+			window[3] = current[x - 1]
+			window[4] = current[x]
+			window[5] = current[x + 1]
+			window[6] = next[x - 1]
+			window[7] = next[x]
+			window[8] = next[x + 1]
+			raw[row + x] = medianBySelectionOf(window, 9)
+		}
+
+		previous.set(current)
+		current.set(next)
+	}
+
+	return image
+}
+
+// Detects stars in an image and returns them sorted by descending flux (up to maxStars), filtered by
+// minSNR and optionally pruned with the PHD2 search-box uniqueness filter.
+export function detectStars(image: Image, { maxStars = 500, searchRegion = 0, minSNR = 0 }: Partial<DetectStarOptions> = DEFAULT_DETECT_STARS_OPTIONS): DetectedStar[] {
+	const intensity = starAnalysisImage(image)
+	if (intensity === undefined) return []
+	image = intensity
 
 	const original = image.raw
 
 	// Run a 3x3 median first to eliminate hot pixels
-	image = mean3x3(clone(image))
+	image = median3x3(clone(image))
 
 	// Run the PSF convolution
 	image = psf(image)
@@ -110,7 +186,9 @@ export function detectStars(image: Image, { maxStars = 500, searchRegion = 0, mi
 			const center = sy + x
 			const value = raw[center]
 
-			if (value <= 0) continue
+			// PSF of a flattened background is ~1e-17, not 0; those plateaus are local maxima
+			// under a strict-`>` test and would photometer residual hot pixels on the original.
+			if (value <= Number.EPSILON) continue
 			if (raw[center - 1] > value || raw[center + 1] > value || raw[rowM1 + x] > value || raw[rowP1 + x] > value || raw[rowM1 + x - 1] > value || raw[rowM1 + x + 1] > value || raw[rowP1 + x - 1] > value || raw[rowP1 + x + 1] > value) continue
 
 			const baseM4 = rowM4 + x
@@ -164,13 +242,14 @@ export function detectStars(image: Image, { maxStars = 500, searchRegion = 0, mi
 			if (h < 0.1) continue
 
 			// Validate each candidate against the original image so ranking uses measured photometry instead of only convolution response.
-			const [flux, snr, hfd, fwhm] = measureStarPhotometryRaw(original, width, height, stride, x, y, STAR_SIGNAL_RADIUS, STAR_BACKGROUND_INNER_RADIUS, STAR_BACKGROUND_OUTER_RADIUS, STAR_CONVOLVED_MARGIN)
-			if (flux <= 0 || snr < minSNR || hfd < STAR_MIN_HFD) continue
+			const photometry = measureStarPhotometryAroundPeak(original, width, height, stride, x, y, minSNR)
+			if (photometry === undefined) continue
+			const [flux, snr, hfd, fwhm, eccentricity, elongation, centroidX, centroidY] = photometry
 
 			// Ranks detections by measured signal so real stars survive capacity limits better than noise artifacts.
 			const rank = flux * snr
 
-			stars.add(x, y, rank, flux, snr, hfd, fwhm)
+			stars.add(centroidX, centroidY, rank, flux, snr, hfd, fwhm, eccentricity, elongation)
 		}
 	}
 
@@ -188,32 +267,38 @@ export function detectStars(image: Image, { maxStars = 500, searchRegion = 0, mi
 	let i = 0
 	const res = new Array<DetectedStar>(stars.size)
 
-	for (const { x, y, flux = 0, snr = 0, hfd = 0, fwhm = 0 } of stars) {
-		res[i++] = { x, y, flux, hfd, fwhm, snr }
+	for (const { x, y, flux = 0, snr = 0, hfd = 0, fwhm = 0, eccentricity, elongation } of stars) {
+		res[i++] = { x, y, flux, hfd, fwhm, snr, eccentricity, elongation }
 	}
 
+	res.sort((left, right) => right.flux - left.flux)
 	return res
 }
 
-// Trims weak detections after a large score discontinuity between adjacent ranked candidates.
+// Drops a dim noise tail after a large score gap, walking from the bright end. A modest jump
+// above a tight clump is a magnitude gap among real stars and is left intact; a jump above a
+// spread-out tail, or an enormous jump even above a clump, is treated as the noise floor.
 function trimStarsByScoreGap(stars: StarList) {
 	if (stars.size <= 3) return
 
 	const ranked = stars.array()
 	const n = ranked.length
-	const topWindowStart = Math.max(1, n - Math.min(n, 128))
 	let keepFrom = 0
-	let bestRatio = STAR_SCORE_GAP_RATIO
 
-	for (let i = topWindowStart - 1; i < n - 1; i++) {
+	for (let i = n - 2; i >= 0; i--) {
 		const weaker = ranked[i].h
 		const stronger = ranked[i + 1].h
 		if (weaker <= 0 || stronger <= 0) continue
 		const ratio = stronger / weaker
-		if (ratio <= bestRatio) continue
+		if (ratio <= STAR_SCORE_GAP_RATIO) continue
 		if (n - i - 1 < 3) continue
-		bestRatio = ratio
+
+		const clumpStart = Math.max(0, i - STAR_SCORE_GAP_CLUMP_WINDOW + 1)
+		const clumpMin = ranked[clumpStart].h
+		if (clumpMin > 0 && weaker / clumpMin < STAR_SCORE_GAP_RATIO && ratio < STAR_SCORE_GAP_OUTLIER_RATIO) continue
+
 		keepFrom = i + 1
+		break
 	}
 
 	for (let removeCount = keepFrom; removeCount > 0; removeCount--) {
@@ -221,25 +306,51 @@ function trimStarsByScoreGap(stars: StarList) {
 	}
 }
 
+// Measures photometry at the integer PSF peak, then recenters on the flux-weighted centroid so the
+// published (x, y) is the center of the aperture that produced flux, HFD, and FWHM.
+function measureStarPhotometryAroundPeak(raw: Image['raw'], width: number, height: number, stride: number, peakX: number, peakY: number, minSNR: number): MeasuredStarPhotometry | undefined {
+	let x = peakX
+	let y = peakY
+	let photometry = measureStarPhotometryRaw(raw, width, height, stride, x, y, STAR_SIGNAL_RADIUS, STAR_BACKGROUND_INNER_RADIUS, STAR_BACKGROUND_OUTER_RADIUS, STAR_CONVOLVED_MARGIN)
+	if (photometry[0] <= 0 || photometry[1] < minSNR || photometry[2] < STAR_MIN_HFD) return undefined
+
+	for (let iteration = 0; iteration < STAR_CENTROID_REFINEMENTS; iteration++) {
+		const centroidX = photometry[6]
+		const centroidY = photometry[7]
+		if (Math.hypot(centroidX - x, centroidY - y) <= STAR_CENTROID_TOLERANCE) break
+		const refined = measureStarPhotometryRaw(raw, width, height, stride, centroidX, centroidY, STAR_SIGNAL_RADIUS, STAR_BACKGROUND_INNER_RADIUS, STAR_BACKGROUND_OUTER_RADIUS, STAR_CONVOLVED_MARGIN)
+		if (refined[0] <= 0 || refined[1] < minSNR || refined[2] < STAR_MIN_HFD) break
+		x = centroidX
+		y = centroidY
+		photometry = refined
+	}
+
+	return photometry
+}
+
 // Computes aperture flux, SNR, HFD and FWHM for a star centered on an image coordinate.
 export function measureStarPhotometry(image: Image, x: number, y: number, radius: number): StarPhotometry {
-	image = grayscale(image)
+	const intensity = starAnalysisImage(image)
+	if (intensity === undefined) return [0, 0, 0, 0]
+	image = intensity
 
 	const { raw, metadata } = image
 	const { width, height, stride } = metadata
-	return measureStarPhotometryRaw(raw, width, height, stride, x, y, radius, radius + 1, radius + 3, 0)
+	const [flux, snr, hfd, fwhm] = measureStarPhotometryRaw(raw, width, height, stride, x, y, radius, radius + 1, radius + 3, 0)
+	return [flux, snr, hfd, fwhm]
 }
 
-// Computes aperture flux, SNR, HFD and FWHM for a detected star.
-function measureStarPhotometryRaw(raw: Image['raw'], width: number, height: number, stride: number, x: number, y: number, signalRadius: number, backgroundInnerRadius: number, backgroundOuterRadius: number, margin: number): StarPhotometry {
-	if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(signalRadius) || signalRadius <= 0) return [0, 0, 0, 0]
-	if (!Number.isFinite(backgroundInnerRadius) || !Number.isFinite(backgroundOuterRadius) || backgroundInnerRadius <= signalRadius || backgroundOuterRadius < backgroundInnerRadius) return [0, 0, 0, 0]
+// Computes aperture flux, SNR, HFD, FWHM, shape, and the flux-weighted centroid for a detected star.
+// Background is the median of the annulus; noise is the MAD of that annulus scaled to a standard deviation.
+function measureStarPhotometryRaw(raw: Image['raw'], width: number, height: number, stride: number, x: number, y: number, signalRadius: number, backgroundInnerRadius: number, backgroundOuterRadius: number, margin: number): MeasuredStarPhotometry {
+	if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(signalRadius) || signalRadius <= 0) return EMPTY_STAR_PHOTOMETRY
+	if (!Number.isFinite(backgroundInnerRadius) || !Number.isFinite(backgroundOuterRadius) || backgroundInnerRadius <= signalRadius || backgroundOuterRadius < backgroundInnerRadius) return EMPTY_STAR_PHOTOMETRY
 
 	const xMin = margin
 	const yMin = margin
 	const xMax = width - margin - 1
 	const yMax = height - margin - 1
-	if (x < xMin || x > xMax || y < yMin || y > yMax) return [0, 0, 0, 0]
+	if (x < xMin || x > xMax || y < yMin || y > yMax) return EMPTY_STAR_PHOTOMETRY
 	const x0 = Math.max(xMin, Math.ceil(x - backgroundOuterRadius))
 	const y0 = Math.max(yMin, Math.ceil(y - backgroundOuterRadius))
 	const x1 = Math.min(xMax, Math.floor(x + backgroundOuterRadius))
@@ -247,8 +358,7 @@ function measureStarPhotometryRaw(raw: Image['raw'], width: number, height: numb
 	const signalRadiusSq = signalRadius * signalRadius
 	const backgroundInnerRadiusSq = backgroundInnerRadius * backgroundInnerRadius
 	const backgroundOuterRadiusSq = backgroundOuterRadius * backgroundOuterRadius
-	let backgroundSum = 0
-	let backgroundSumSq = 0
+	const backgroundSamples = new Float64Array((x1 - x0 + 1) * (y1 - y0 + 1))
 	let backgroundCount = 0
 
 	for (let py = y0; py <= y1; py++) {
@@ -260,21 +370,22 @@ function measureStarPhotometryRaw(raw: Image['raw'], width: number, height: numb
 			const dx = px - x
 			const d2 = dx * dx + dy2
 			if (d2 < backgroundInnerRadiusSq || d2 > backgroundOuterRadiusSq) continue
-			const v = raw[row + px]
-			backgroundSum += v
-			backgroundSumSq += v * v
-			backgroundCount++
+			backgroundSamples[backgroundCount++] = raw[row + px]
 		}
 	}
 
-	if (backgroundCount <= 0) return [0, 0, 0, 0]
+	if (backgroundCount <= 0) return EMPTY_STAR_PHOTOMETRY
 
-	const backgroundMean = backgroundSum / backgroundCount
-	const backgroundVariance = Math.max(0, backgroundSumSq / backgroundCount - backgroundMean * backgroundMean)
+	const background = medianBySelectionOf(backgroundSamples, backgroundCount)
+	for (let i = 0; i < backgroundCount; i++) backgroundSamples[i] = Math.abs(backgroundSamples[i] - background)
+	const backgroundScale = STANDARD_DEVIATION_SCALE * medianBySelectionOf(backgroundSamples, backgroundCount)
+	const backgroundVariance = backgroundScale * backgroundScale
 	let flux = 0
 	let radialMoment = 0
 	let radialMomentSq = 0
 	let aperturePixels = 0
+	let weightedX = 0
+	let weightedY = 0
 
 	for (let py = y0; py <= y1; py++) {
 		const row = py * stride
@@ -286,21 +397,46 @@ function measureStarPhotometryRaw(raw: Image['raw'], width: number, height: numb
 			const d2 = dx * dx + dy2
 			if (d2 > signalRadiusSq) continue
 			aperturePixels++
-			const signal = raw[row + px] - backgroundMean
+			const signal = raw[row + px] - background
 			if (signal <= 0) continue
 			flux += signal
 			radialMoment += signal * Math.sqrt(d2)
 			radialMomentSq += signal * d2
+			weightedX += signal * px
+			weightedY += signal * py
 		}
 	}
 
-	if (flux <= 0 || aperturePixels <= 0) return [0, 0, 0, 0]
+	if (flux <= 0 || aperturePixels <= 0) return EMPTY_STAR_PHOTOMETRY
 
 	const snr = flux / Math.sqrt(Math.max(flux + aperturePixels * backgroundVariance, Number.EPSILON))
 	const hfd = (2 * radialMoment) / flux
 	// Gaussian-equivalent FWHM from the second radial moment; this avoids fitting a noisy radial profile.
 	const fwhm = radialMomentSq > 0 ? 2 * Math.sqrt((Math.LN2 * radialMomentSq) / flux) : 0
-	return [flux, snr, hfd, fwhm]
+	const centroidX = weightedX / flux
+	const centroidY = weightedY / flux
+	let momentXX = 0
+	let momentXY = 0
+	let momentYY = 0
+
+	for (let py = y0; py <= y1; py++) {
+		const row = py * stride
+		for (let px = x0; px <= x1; px++) {
+			const dx = px - x
+			const dy = py - y
+			if (dx * dx + dy * dy > signalRadiusSq) continue
+			const signal = raw[row + px] - background
+			if (signal <= 0) continue
+			const centerX = px - centroidX
+			const centerY = py - centroidY
+			momentXX += signal * centerX * centerX
+			momentXY += signal * centerX * centerY
+			momentYY += signal * centerY * centerY
+		}
+	}
+
+	const { eccentricity, elongation } = starMomentShape(momentXX / flux, momentXY / flux, momentYY / flux)
+	return [flux, snr, hfd, fwhm, eccentricity, elongation, centroidX, centroidY]
 }
 
 // Builds summed-area tables for fast local mean and variance queries.
@@ -445,6 +581,10 @@ interface Star {
 	readonly hfd?: number
 	// FWHM, when computed.
 	readonly fwhm?: number
+	// Eccentricity, when computed.
+	readonly eccentricity?: number
+	// Major/minor axis ratio, when computed.
+	readonly elongation?: number
 	// Next node in the list.
 	next?: this
 	// Previous node in the list.
@@ -465,8 +605,8 @@ export class StarList implements Iterable<Star, Star | undefined, Star> {
 	}
 
 	// Appends a star at the tail (brightest end).
-	addLast(x: number, y: number, h: number, flux?: number, snr?: number, hfd?: number, fwhm?: number) {
-		const star: Star = { x, y, h, flux, snr, hfd, fwhm }
+	addLast(x: number, y: number, h: number, flux?: number, snr?: number, hfd?: number, fwhm?: number, eccentricity?: number, elongation?: number) {
+		const star: Star = { x, y, h, flux, snr, hfd, fwhm, eccentricity, elongation }
 
 		if (!this.#head) {
 			this.#head = star
@@ -481,8 +621,8 @@ export class StarList implements Iterable<Star, Star | undefined, Star> {
 	}
 
 	// Prepends a star at the head (dimmest end).
-	addFirst(x: number, y: number, h: number, flux?: number, snr?: number, hfd?: number, fwhm?: number) {
-		const star: Star = { x, y, h, flux, snr, hfd, fwhm }
+	addFirst(x: number, y: number, h: number, flux?: number, snr?: number, hfd?: number, fwhm?: number, eccentricity?: number, elongation?: number) {
+		const star: Star = { x, y, h, flux, snr, hfd, fwhm, eccentricity, elongation }
 
 		if (!this.#head) {
 			this.#head = star
@@ -498,13 +638,13 @@ export class StarList implements Iterable<Star, Star | undefined, Star> {
 
 	// Inserts a star keeping the list sorted by ascending height, searching from the nearer end, and
 	// evicts the dimmest star (head) when the capacity is exceeded.
-	add(x: number, y: number, h: number, flux?: number, snr?: number, hfd?: number, fwhm?: number) {
+	add(x: number, y: number, h: number, flux?: number, snr?: number, hfd?: number, fwhm?: number, eccentricity?: number, elongation?: number) {
 		if (!this.#head || h <= this.#head.h) {
-			if (this.size < this.capacity) this.addFirst(x, y, h, flux, snr, hfd, fwhm)
+			if (this.size < this.capacity) this.addFirst(x, y, h, flux, snr, hfd, fwhm, eccentricity, elongation)
 		} else if (!this.#tail || h >= this.#tail.h) {
-			this.addLast(x, y, h, flux, snr, hfd, fwhm)
+			this.addLast(x, y, h, flux, snr, hfd, fwhm, eccentricity, elongation)
 		} else {
-			const star: Star = { x, y, h, flux, snr, hfd, fwhm }
+			const star: Star = { x, y, h, flux, snr, hfd, fwhm, eccentricity, elongation }
 			const headDistance = h - this.#head.h
 			const tailDistance = this.#tail.h - h
 

@@ -306,7 +306,8 @@ export interface OneBlob {
 	name: string
 	size: string
 	format: string
-	value: string | Buffer<ArrayBuffer> // Buffer is used by Alpaca to avoid base64 encoding
+	value: Buffer<ArrayBuffer> | undefined // Buffer is used by Alpaca to avoid base64 encoding
+	encoding?: BlobEncoding
 }
 
 export type OneElement = OneText | OneNumber | OneSwitch | OneLight | OneBlob
@@ -322,6 +323,8 @@ export type NumberElement = OneNumber | DefNumber
 export type SwitchElement = OneSwitch | DefSwitch
 export type LightElement = OneLight | DefLight
 export type BlobElement = OneBlob | DefBlob
+
+export type BlobEncoding = 'base64' | 'raw'
 
 // Builds a switch vector from [name, label, value] tuples. Defaults to Idle state and a 60 s timeout.
 export function makeSwitchVector(device: string, name: string, label: string, group: string, rule: SwitchRule, permission: PropertyPermission, ...properties: readonly [string, string, boolean][]): DefSwitchVector & SetSwitchVector & { type: 'SWITCH' } {
@@ -345,11 +348,18 @@ export function makeTextVector(device: string, name: string, label: string, grou
 	return { type: 'TEXT', device, name, label, group, permission, state: 'Idle', timeout: 60, elements }
 }
 
+// Builds a passive light vector from [name, label, state] tuples. Defaults the aggregate state to Idle.
+export function makeLightVector(device: string, name: string, label: string, group: string, ...properties: readonly [string, string, PropertyState][]): DefLightVector & SetLightVector & { type: 'LIGHT' } {
+	const elements: Record<string, DefLight> = {}
+	for (const [name, label, value] of properties) elements[name] = { name, label, value }
+	return { type: 'LIGHT', device, name, label, group, state: 'Idle', elements }
+}
+
 // Builds a BLOB vector from [name, label] tuples (elements start empty, format 'fits'). Defaults to Idle
 // and a 60 s timeout.
 export function makeBlobVector(device: string, name: string, label: string, group: string, permission: PropertyPermission, ...properties: readonly [string, string][]): Omit<DefBlobVector, 'elements'> & SetBlobVector & { type: 'BLOB' } {
 	const elements: Record<string, Omit<DefBlob, 'value'> & OneBlob> = {}
-	for (const [name, label] of properties) elements[name] = { name, label, size: '0', format: 'fits', value: '' }
+	for (const [name, label] of properties) elements[name] = { name, label, size: '0', format: 'fits', value: undefined }
 	return { type: 'BLOB', device, name, label, group, permission, state: 'Idle', timeout: 60, elements }
 }
 

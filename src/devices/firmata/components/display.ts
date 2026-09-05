@@ -415,21 +415,21 @@ export class HD44780 extends PeripheralBase<HD44780> implements Display {
 	// Validates a positive LCD dimension.
 	#normalizeDimension(value: number, name: string) {
 		const normalizedValue = Math.trunc(value)
-		if (normalizedValue <= 0) throw new RangeError(`HD44780 ${name} must be greater than zero. Received ${value}.`)
+		if (!(normalizedValue > 0)) throw new RangeError(`HD44780 ${name} must be greater than zero. Received ${value}.`)
 		return normalizedValue
 	}
 
 	// Validates the supported line count for standard HD44780 DDRAM layouts.
 	#normalizeRows(value: number) {
 		const normalizedValue = this.#normalizeDimension(value, 'rows')
-		if (normalizedValue > 4) throw new RangeError(`HD44780 rows must be between 1 and 4. Received ${value}.`)
+		if (!(normalizedValue <= 4)) throw new RangeError(`HD44780 rows must be between 1 and 4. Received ${value}.`)
 		return normalizedValue
 	}
 
 	// Validates one non-negative cursor coordinate.
 	#normalizeCursor(value: number, name: string) {
 		const normalizedValue = Math.trunc(value)
-		if (normalizedValue < 0) throw new RangeError(`HD44780 ${name} must be zero or greater. Received ${value}.`)
+		if (!(normalizedValue >= 0)) throw new RangeError(`HD44780 ${name} must be zero or greater. Received ${value}.`)
 		return normalizedValue
 	}
 

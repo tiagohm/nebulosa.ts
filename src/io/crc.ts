@@ -124,7 +124,7 @@ export class CRC {
 	// in normal (non-reflected) form and are internally reflected when `reflect` is true; `reorder`
 	// reverses the output byte order. Throws RangeError when the width is out of range.
 	constructor(bit: number, polynomial: number, initial: number, reflect: boolean, finalXor: number, reorder: boolean = false) {
-		if (bit < 1 || bit > 32) {
+		if (!(bit >= 1 && bit <= 32)) {
 			throw new RangeError('crc bit width must be in range [1..32]')
 		}
 

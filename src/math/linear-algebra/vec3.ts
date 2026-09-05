@@ -299,3 +299,41 @@ export function vecCrossLength(a: Vec3, b: Vec3) {
 	const z = a[0] * b[1] - a[1] * b[0]
 	return Math.hypot(x, y, z)
 }
+
+// Computes the position-angle from two vectors.
+export function vecPositionAngle(a: Vec3, b: Vec3) {
+	// Modulus and direction of the a vector.
+	const am = vecLength(a)
+	const au = vecDivScalar(a, am)
+
+	// Modulus of the b vector.
+	const bm = vecLength(b)
+
+	let st = 0
+	let ct = 0
+
+	// Deal with the case of a null vector.
+	if (am === 0 || bm === 0) {
+		st = 0
+		ct = 1
+	} else {
+		// The "north" axis tangential from a (arbitrary length).
+		const [xa, ya, za] = a
+		const eta: MutVec3 = [-xa * za, -ya * za, xa * xa + ya * ya]
+
+		// The "east" axis tangential from a (same length).
+		const xi = vecCross(eta, au, au)
+
+		// The vector from a to b.
+		const a2b = vecMinus(b, a)
+
+		// Resolve into components along the north and east axes.
+		st = vecDot(a2b, xi)
+		ct = vecDot(a2b, eta)
+
+		// Deal with degenerate cases.
+		if (st === 0 && ct === 0) ct = 1
+	}
+
+	return Math.atan2(st, ct)
+}

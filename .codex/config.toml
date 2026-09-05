@@ -1,2 +1,4 @@
 approval_policy = "never"
 sandbox_mode = "workspace-write"
+review_model = "gpt-5.6-terra"
+project_doc_max_bytes = 65536

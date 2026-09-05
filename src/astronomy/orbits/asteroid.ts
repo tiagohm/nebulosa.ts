@@ -1,4 +1,4 @@
-import { ECLIPTIC_J2000_MATRIX, GM_SUN_PITJEVA_2005, TAU } from '../../core/constants'
+import { ECLIPTIC_J2000_MATRIX, GM_SUN_PITJEVA_2005, PI, TAU } from '../../core/constants'
 import type { Writable } from '../../core/types'
 import { type Mat3, matMulVec, matTranspose } from '../../math/linear-algebra/mat3'
 import { type MutVec3, type Vec3, vecAngle, vecCross, vecCrossLength, vecDivScalar, vecDot, vecLength, vecMinus, vecMulScalar, vecNormalize, vecPlus } from '../../math/linear-algebra/vec3'
@@ -390,7 +390,7 @@ export function trueAnomalyParabolic(p: Distance, mu: number, M: Angle): Angle {
 // https://web.archive.org/web/*/http://ccar.colorado.edu/asen5070/handouts/kep2cart_2002.doc
 function computePositionAndVelocityFromOrbitalElements(p: Distance, e: number, i: Angle, om: Angle, w: Angle, v: Angle, mu: number): PositionAndVelocity {
 	// Checks that true anomaly is less than arccos(-1/e) for hyperbolic orbits.
-	if (e > 1 && Math.abs(normalizePI(v)) > Math.acos(-1 / e) + ORBIT_EPSILON) {
+	if (!(e <= 1) && !(Math.abs(normalizePI(v)) <= Math.acos(-1 / e) + ORBIT_EPSILON)) {
 		throw new Error('if eccentricity is > 1, abs(true anomaly) cannot be more than acos(-1/e)')
 	}
 
@@ -645,7 +645,7 @@ export function eccentricAnomalyFromMean(M: Angle, e: number): Angle {
 		// Solve on the wrapped anomaly for robust convergence, then restore the revolution of M.
 		const m = normalizePI(M)
 		// Near-parabolic ellipses converge faster starting from the apsis side of the wrapped anomaly.
-		let E = e < 0.8 ? m : m < 0 ? -Math.PI : Math.PI
+		let E = e < 0.8 ? m : m < 0 ? -PI : PI
 		for (let i = 0; i < 30; i++) {
 			const delta = (E - e * Math.sin(E) - m) / (1 - e * Math.cos(E))
 			E -= delta

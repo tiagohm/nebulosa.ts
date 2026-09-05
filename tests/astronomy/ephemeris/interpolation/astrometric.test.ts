@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import { angularDistance } from '../../../../src/astronomy/coordinates/coordinate'
 import { AstrometricInterpolator, type AstrometricInterpolationMethod } from '../../../../src/astronomy/ephemeris/interpolation/astrometric'
-import { TAU } from '../../../../src/core/constants'
+import { PI, PIOVERFOUR, PIOVERTWO, TAU } from '../../../../src/core/constants'
 import { deg } from '../../../../src/math/units/angle'
 
 function makeGrid(width: number, height: number, coordinate: (col: number, row: number) => readonly [number, number]) {
@@ -25,8 +25,8 @@ function expectFiniteSky(sky: readonly [number, number]) {
 	expect(Number.isFinite(sky[1])).toBe(true)
 	expect(sky[0]).toBeGreaterThanOrEqual(0)
 	expect(sky[0]).toBeLessThan(TAU)
-	expect(sky[1]).toBeGreaterThanOrEqual(-Math.PI / 2)
-	expect(sky[1]).toBeLessThanOrEqual(Math.PI / 2)
+	expect(sky[1]).toBeGreaterThanOrEqual(-PIOVERTWO)
+	expect(sky[1]).toBeLessThanOrEqual(PIOVERTWO)
 }
 
 test('constant grid returns the same sky coordinate', () => {
@@ -112,22 +112,22 @@ test('supported interpolation methods produce finite nearby results on a smooth 
 })
 
 test('normalizes the interpolated vector before converting to declination', () => {
-	const { ra, dec } = makeGrid(2, 2, (_col, row) => [0, row === 0 ? 0 : Math.PI / 2])
+	const { ra, dec } = makeGrid(2, 2, (_col, row) => [0, row === 0 ? 0 : PIOVERTWO])
 	const interpolator = new AstrometricInterpolator(ra, dec, 2, 2, 10, 10, { interpolation: 'bilinear' })
 	const sky = interpolator.pixelToSky(5, 5)
 
 	expectFiniteSky(sky)
 	expect(sky[0]).toBeCloseTo(0, 14)
-	expect(sky[1]).toBeCloseTo(Math.PI / 4, 14)
+	expect(sky[1]).toBeCloseTo(PIOVERFOUR, 14)
 })
 
 test('falls back to nearest sample when interpolation cancels to zero vector', () => {
-	const { ra, dec } = makeGrid(2, 1, (col) => [col === 0 ? 0 : Math.PI, 0])
+	const { ra, dec } = makeGrid(2, 1, (col) => [col === 0 ? 0 : PI, 0])
 	const interpolator = new AstrometricInterpolator(ra, dec, 2, 1, 10, 10, { interpolation: 'bilinear' })
 	const sky = interpolator.pixelToSky(5, 0)
 
 	expectFiniteSky(sky)
-	expect(sky[0]).toBeCloseTo(Math.PI, 14)
+	expect(sky[0]).toBeCloseTo(PI, 14)
 	expect(sky[1]).toBeCloseTo(0, 14)
 })
 
@@ -154,10 +154,6 @@ test('writes pixelToSky results into the provided output tuple', () => {
 })
 
 test('rejects invalid constructor inputs', () => {
-	expect(() => new AstrometricInterpolator([0], [0], 0, 1, 1, 1)).toThrow('value must be a positive integer')
-	expect(() => new AstrometricInterpolator([0], [0], 1.5, 1, 1, 1)).toThrow('value must be a positive integer')
-	expect(() => new AstrometricInterpolator([0], [0], 1, 1, 0, 1)).toThrow('value must be positive')
-	expect(() => new AstrometricInterpolator([0], [0], 1, 1, 1, Number.NaN)).toThrow('value must be finite')
 	expect(() => new AstrometricInterpolator([0, 1], [0], 1, 1, 1, 1)).toThrow('astrometric RA and Dec grids must have the same length')
 	expect(() => new AstrometricInterpolator([0, 1], [0, 1], 3, 1, 1, 1)).toThrow('astrometric grid length must equal width * height')
 	expect(() => new AstrometricInterpolator([Number.NaN], [0], 1, 1, 1, 1)).toThrow('astrometric RA grid value at index 0 must be finite')

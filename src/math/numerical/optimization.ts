@@ -30,7 +30,7 @@ export interface RootFindingResult {
 export interface ScalarMinimizationOptions {
 	// Maximum minimizer iterations.
 	readonly maxIterations?: number
-	// Minimum bracket or position-change threshold.
+	// Absolute x-interval or position-change threshold, in the same units as the search variable.
 	readonly tolerance?: number
 }
 
@@ -89,10 +89,13 @@ export interface LevenbergMarquardtOptions {
 	lambda?: number
 	// Minimum residual-improvement threshold.
 	tolerance?: number
+	// Optional non-negative sample weights; omitted entries are not permitted.
+	weights?: Readonly<NumberArray>
 }
 
-// Finite-difference step used to numerically approximate the Levenberg-Marquardt Jacobian.
-const LEVENBERG_MARQUARDT_DELTA = 1e-8
+// √ε forward-difference scale: a relative step stays above one ulp for any finite nonzero
+// parameter, and a unit floor covers a zero coordinate.
+const LEVENBERG_MARQUARDT_RELATIVE_DELTA = Math.sqrt(Number.EPSILON)
 // Default iteration cap and convergence tolerances for the scalar root finders.
 const DEFAULT_ROOT_ITERATIONS = 100
 const DEFAULT_ROOT_TOLERANCE = 1e-12
@@ -128,6 +131,7 @@ export function bisection(f: (x: number) => number, min: number, max: number, { 
 	for (let iterations = 1; iterations <= maxIterations; iterations++) {
 		mid = 0.5 * (a + b)
 		fmid = f(mid)
+		validateFiniteValue(mid, fmid)
 
 		if (Math.abs(fmid) <= functionTolerance || Math.abs(b - a) <= tolerance) {
 			return { root: mid, value: fmid, iterations, converged: true }
@@ -349,6 +353,8 @@ export function goldenSectionSearch(f: (x: number) => number, min: number, max: 
 }
 
 // Minimizes a scalar function over a bracket using Brent's method.
+// `tolerance` is an absolute x-threshold in the same units as min/max, matching golden-section search
+// and the scalar root finders. A relative machine-epsilon floor keeps the step above one ulp of |x|.
 export function brentMinimize(f: (x: number) => number, min: number, max: number, { maxIterations = DEFAULT_SCALAR_ITERATIONS, tolerance = DEFAULT_SCALAR_TOLERANCE }: ScalarMinimizationOptions = {}): ScalarMinimizationResult {
 	let a = min
 	let b = max
@@ -365,7 +371,7 @@ export function brentMinimize(f: (x: number) => number, min: number, max: number
 
 	for (let iterations = 1; iterations <= maxIterations; iterations++) {
 		const midpoint = 0.5 * (a + b)
-		const tol1 = tolerance * Math.abs(x) + Number.EPSILON
+		const tol1 = 2 * Number.EPSILON * Math.abs(x) + 0.5 * tolerance
 		const tol2 = 2 * tol1
 
 		if (Math.abs(x - midpoint) <= tol2 - 0.5 * (b - a)) {
@@ -597,9 +603,19 @@ export function powell(f: (params: Readonly<NumberArray>) => number, initial: Re
 // Computes the parameters of a Levenberg-Marquardt model.
 // This is a non-linear least squares optimization algorithm.
 // It minimizes the sum of squared residuals between the model and the data.
-export function levenbergMarquardt(x: Readonly<NumberArray>, y: Readonly<NumberArray>, model: (x: number, params: NumberArray) => number, params: number[], { maxIterations = 100, lambda = 0.01, tolerance = 1e-6 }: LevenbergMarquardtOptions = {}) {
+export function levenbergMarquardt(x: Readonly<NumberArray>, y: Readonly<NumberArray>, model: (x: number, params: NumberArray) => number, params: number[], { maxIterations = 100, lambda = 0.01, tolerance = 1e-6, weights }: LevenbergMarquardtOptions = {}) {
 	const n = Math.min(x.length, y.length)
 	const m = params.length
+	let effectiveSamples = n
+	if (weights !== undefined) {
+		if (weights.length < n) throw new RangeError('weights must contain one value per sample')
+		effectiveSamples = 0
+		for (let i = 0; i < n; i++) {
+			if (!Number.isFinite(weights[i]) || !(weights[i] >= 0)) throw new RangeError('weights must be finite and non-negative')
+			if (weights[i] > 0) effectiveSamples++
+		}
+	}
+	if (!(effectiveSamples >= m)) throw new RangeError('effective samples must be at least the number of model parameters')
 
 	const J = new Array<Float64Array>(m)
 	const PJ = new Float64Array(m)
@@ -639,17 +655,18 @@ export function levenbergMarquardt(x: Readonly<NumberArray>, y: Readonly<NumberA
 			for (let i = 0; i < n; i++) {
 				const ri = y[i] - YP[i]
 				R[i] = ri
-				error += ri * ri
+				error += (weights?.[i] ?? 1) * ri * ri
 			}
 
 			// Jacobian
 			for (let j = 0; j < m; j++) {
 				for (let k = 0; k < m; k++) PJ[k] = params[k]
-				PJ[j] += LEVENBERG_MARQUARDT_DELTA
+				const delta = levenbergMarquardtDelta(params[j])
+				PJ[j] += delta
 				predict(PJ, YPJ)
 
 				for (let k = 0; k < n; k++) {
-					J[j][k] = (YPJ[k] - YP[k]) / LEVENBERG_MARQUARDT_DELTA
+					J[j][k] = (YPJ[k] - YP[k]) / delta
 				}
 			}
 
@@ -658,7 +675,7 @@ export function levenbergMarquardt(x: Readonly<NumberArray>, y: Readonly<NumberA
 				const Ji = J[i]
 
 				let sum = 0
-				for (let k = 0; k < n; k++) sum += Ji[k] * R[k]
+				for (let k = 0; k < n; k++) sum += (weights?.[k] ?? 1) * Ji[k] * R[k]
 				JTR[i] = sum
 
 				const iOffset = i * m
@@ -667,7 +684,7 @@ export function levenbergMarquardt(x: Readonly<NumberArray>, y: Readonly<NumberA
 					const Jj = J[j]
 
 					let dot = 0
-					for (let k = 0; k < n; k++) dot += Ji[k] * Jj[k]
+					for (let k = 0; k < n; k++) dot += (weights?.[k] ?? 1) * Ji[k] * Jj[k]
 
 					JTJData[iOffset + j] = dot
 					JTJData[j * m + i] = dot
@@ -678,16 +695,22 @@ export function levenbergMarquardt(x: Readonly<NumberArray>, y: Readonly<NumberA
 		}
 
 		// Damp a fresh copy of JᵀJ so the base matrix survives a possible rejected retry.
+		// Marquardt scaling (1+λ)·diag when the curvature is positive; Levenberg λI on a
+		// degenerate column so a zero Jacobian column still produces a solvable system.
 		for (let i = 0; i < dampedData.length; i++) dampedData[i] = JTJData[i]
 		for (let i = 0, p = 0; i < m; i++, p += m) {
-			dampedData[p + i] *= 1 + lambda
+			const diag = JTJData[p + i]
+			dampedData[p + i] = diag + lambda * (diag > 0 ? diag : 1)
 		}
 
 		// Solve (JᵀJ + λ·diag) * dp = Jᵀr on working copies (the solver mutates them).
 		JTRWork.set(JTR)
 		gaussianElimination(damped, JTRWork, DP)
 
-		if (Number.isNaN(DP[0])) break
+		if (Number.isNaN(DP[0])) {
+			lambda *= 10
+			continue
+		}
 
 		// Update parameters.
 		for (let i = 0; i < m; i++) UP[i] = params[i] + DP[i]
@@ -696,7 +719,7 @@ export function levenbergMarquardt(x: Readonly<NumberArray>, y: Readonly<NumberA
 		let newError = 0
 		for (let i = 0; i < n; i++) {
 			const di = y[i] - YPJ[i]
-			newError += di * di
+			newError += (weights?.[i] ?? 1) * di * di
 		}
 
 		if (newError < error) {
@@ -712,6 +735,12 @@ export function levenbergMarquardt(x: Readonly<NumberArray>, y: Readonly<NumberA
 	}
 
 	return params
+}
+
+// Finite-difference step for one Levenberg-Marquardt parameter.
+function levenbergMarquardtDelta(parameter: number) {
+	const magnitude = Math.abs(parameter)
+	return LEVENBERG_MARQUARDT_RELATIVE_DELTA * (magnitude > 0 ? magnitude : 1)
 }
 
 // Validates that a scalar root bracket has finite values with opposite signs.

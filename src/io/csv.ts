@@ -19,11 +19,11 @@ export const TSV_DELIMITER = '\t'
 // Options controlling how a line is split into columns.
 export interface CsvLineParserOptions {
 	// Field delimiter(s); a single character or a set of accepted characters.
-	delimiter?: string | string[]
+	delimiter?: string | readonly string[]
 	// Line-comment marker(s); a line starting with one is skipped.
-	comment?: string | string[]
+	comment?: string | readonly string[]
 	// Quote character(s), or false to disable quoting entirely.
-	quote?: string | string[] | false
+	quote?: string | readonly string[] | false
 	// When true, trims whitespace even inside quoted fields.
 	forceTrim?: boolean
 }
@@ -67,15 +67,15 @@ const WHITESPACE = ' \t\r\n'
 
 // Stateless (per-call) parser that splits one logical CSV line into fields per the configured options.
 export class CsvLineParser {
-	readonly #comment: string | string[]
+	readonly #comment: string | readonly string[]
 	readonly #isDelimiter: (c: string) => boolean
 	readonly #isQuoteChar: (c: string) => boolean
 	readonly #isWhitespace: (c: string) => boolean
 	readonly #forceTrim: boolean
 
-	constructor(options: string | string[] | CsvLineParserOptions = DEFAULT_READ_CSV_STREAM_OPTIONS) {
-		const delimiter = typeof options === 'string' || Array.isArray(options) ? options : (options.delimiter ?? DEFAULT_READ_CSV_STREAM_OPTIONS.delimiter)
-		options = typeof options === 'string' || Array.isArray(options) ? DEFAULT_READ_CSV_STREAM_OPTIONS : options
+	constructor(options: string | readonly string[] | CsvLineParserOptions = DEFAULT_READ_CSV_STREAM_OPTIONS) {
+		const delimiter = typeof options === 'string' || Array.isArray(options) || options instanceof Array ? options : (options.delimiter ?? DEFAULT_READ_CSV_STREAM_OPTIONS.delimiter)
+		options = typeof options === 'string' || Array.isArray(options) || options instanceof Array ? DEFAULT_READ_CSV_STREAM_OPTIONS : options
 		const quote = options.quote ?? DEFAULT_READ_CSV_STREAM_OPTIONS.quote
 		this.#comment = options.comment ?? DEFAULT_READ_CSV_STREAM_OPTIONS.comment
 		this.#forceTrim = options.forceTrim ?? false
@@ -228,8 +228,8 @@ export class CsvLineParser {
 
 // Parses an entire CSV document (a string, or an array of lines joined with '\n') into rows.
 // Empty and comment lines are skipped; quoted fields may span multiple physical lines.
-export function readCsv(input: string | string[], options: string | string[] | ReadCsvOptions = DEFAULT_READ_CSV_STREAM_OPTIONS): CsvRow[] {
-	input = Array.isArray(input) ? input.join('\n') : input
+export function readCsv(input: string | readonly string[], options: string | readonly string[] | ReadCsvOptions = DEFAULT_READ_CSV_STREAM_OPTIONS): CsvRow[] {
+	input = Array.isArray(input) || input instanceof Array ? input.join('\n') : input
 
 	let skipFirstLine = typeof options === 'object' && 'skipFirstLine' in options ? options.skipFirstLine : DEFAULT_READ_CSV_STREAM_OPTIONS.skipFirstLine
 	const parser = new CsvLineParser(options)

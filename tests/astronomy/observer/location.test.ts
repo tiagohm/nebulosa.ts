@@ -3,7 +3,7 @@ import { eraS2c } from '../../../src/astronomy/coordinates/erfa/erfa'
 import { itrs } from '../../../src/astronomy/coordinates/itrs'
 import { Ellipsoid, gcrs, gcrsRotationAt, geocentricLocation, geodeticLocation, localSiderealTime, polarRadius, rhoCosPhi, rhoSinPhi, subpoint } from '../../../src/astronomy/observer/location'
 import { gcrsToItrsRotationMatrix, Timescale, timeYMDHMS } from '../../../src/astronomy/time/time'
-import { ONE_SECOND } from '../../../src/core/constants'
+import { ONE_SECOND, TAU } from '../../../src/core/constants'
 import { matMinus, matMulScalar, matMulTranspose, matTransposeMul, matTransposeMulVec } from '../../../src/math/linear-algebra/mat3'
 import { deg, formatDEC, hour, toHour } from '../../../src/math/units/angle'
 import { meter } from '../../../src/math/units/distance'
@@ -28,7 +28,7 @@ test('lst with tio correction is normalized', () => {
 	const lst = localSiderealTime(t, p, false, true)
 
 	expect(lst).toBeGreaterThanOrEqual(0)
-	expect(lst).toBeLessThan(2 * Math.PI)
+	expect(lst).toBeLessThan(TAU)
 	expect(lst).toBeCloseTo(localSiderealTime(t, p, false, 'sp'), 10)
 })
 

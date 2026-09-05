@@ -1,8 +1,7 @@
 import { AzimuthalProjection, Gnomonic, type Projection } from '../../astronomy/projections/projection'
 import type { StarCatalog, StarCatalogEntry } from '../../catalogs/stars/catalog'
-import { ASEC2RAD, PI, PIOVERTWO } from '../../core/constants'
+import { ASEC2RAD, PIOVERTWO } from '../../core/constants'
 import { medianOf } from '../../core/util'
-import { validateInRangeExclusive, validatePositiveFinite } from '../../core/validation'
 import type { DetectedStar } from '../../imaging/stars/detector'
 import { type Point, type Size, sphericalSeparation } from '../../math/numerical/geometry'
 import { clamp } from '../../math/numerical/math'
@@ -58,9 +57,9 @@ export type StarCrossmatchStatus = 'matched' | 'unmatched'
 
 // Camera geometry used to size the tangent-plane projection and derive the nominal plate scale.
 export interface StarCrossmatchCameraInfo extends Readonly<Size> {
-	// Pixel pitch in micrometers; combined with focalLength to derive the nominal scale.
+	// Pixel pitch in micrometers; combined with focalLength to derive the nominal scale. Must be positive when set.
 	readonly pixelSize?: number
-	// Focal length in millimeters; combined with pixelSize to derive the nominal scale.
+	// Focal length in millimeters; combined with pixelSize to derive the nominal scale. Must be positive when set.
 	readonly focalLength?: number
 }
 
@@ -68,11 +67,11 @@ export interface StarCrossmatchCameraInfo extends Readonly<Size> {
 export interface StarCrossmatchOptions {
 	// Approximate field-center right ascension (radians).
 	readonly centerRA: Angle
-	// Approximate field-center declination (radians).
+	// Approximate field-center declination (radians), in [-π/2, π/2].
 	readonly centerDEC: Angle
-	// Catalog cone-query radius around the center (radians).
+	// Catalog cone-query radius around the center (radians), in (0, π/2).
 	readonly radius: Angle
-	// Camera geometry.
+	// Camera geometry; width and height are positive pixel counts.
 	readonly camera: StarCrossmatchCameraInfo
 	// Maximum projection-center refinement iterations (default 2).
 	readonly refinementIterations?: number
@@ -270,8 +269,8 @@ export async function crossMatchStars<S extends StarCatalogEntry>(detectedStars:
 function resolveStarCrossmatchOptions(options: StarCrossmatchOptions): ResolvedStarCrossmatchOptions {
 	const centerRA = normalizeCoordinateRightAscension(options.centerRA)
 	const centerDEC = validateDeclination(options.centerDEC)
-	const radius = validateInRangeExclusive(options.radius, 0, PIOVERTWO)
-	const camera = validateCameraInfo(options.camera)
+	const radius = options.radius
+	const camera = options.camera
 	const maxCatalogStars = Math.max(6, Math.trunc(options.maxCatalogStars ?? DEFAULT_MAX_CATALOG_STARS))
 	const matchingConfig = resolveStarMatchingConfig(options.matchingConfig, maxCatalogStars)
 
@@ -281,7 +280,7 @@ function resolveStarCrossmatchOptions(options: StarCrossmatchOptions): ResolvedS
 		radius,
 		camera,
 		refinementIterations: Math.max(0, Math.trunc(options.refinementIterations ?? 2)),
-		centerTolerance: options.centerTolerance === undefined ? DEFAULT_CENTER_TOLERANCE : validateInRangeExclusive(options.centerTolerance, 0, PI + GEOMETRY_EPSILON),
+		centerTolerance: options.centerTolerance ?? DEFAULT_CENTER_TOLERANCE,
 		maxCatalogStars,
 		projectionPadding: Math.max(camera.width, camera.height) * Math.max(0, options.projectionPaddingFactor ?? DEFAULT_PROJECTION_PADDING_FACTOR),
 		nominalPixelsPerRadian: nominalPixelsPerRadian(camera, radius),
@@ -528,21 +527,10 @@ function transformMirrored(transform: SimilarityTransform | AffineTransform) {
 // Computes a nominal tangent-plane scale from optics when available or from the query footprint otherwise.
 function nominalPixelsPerRadian(camera: Readonly<StarCrossmatchCameraInfo>, queryRadius: Angle) {
 	if (camera.pixelSize !== undefined && camera.focalLength !== undefined) {
-		const pixelSize = validatePositiveFinite(camera.pixelSize)
-		const focalLength = validatePositiveFinite(camera.focalLength)
-		return (focalLength * 1000) / pixelSize
+		return (camera.focalLength * 1000) / camera.pixelSize
 	}
 
 	return Math.max(1, Math.min(camera.width, camera.height) / (2 * Math.max(queryRadius, GEOMETRY_EPSILON)))
-}
-
-// Validates the camera geometry needed to convert the solved transform into a center coordinate.
-function validateCameraInfo(camera: Readonly<StarCrossmatchCameraInfo>): Readonly<StarCrossmatchCameraInfo> {
-	const width = validatePositiveFinite(camera.width)
-	const height = validatePositiveFinite(camera.height)
-	if (camera.pixelSize !== undefined) validatePositiveFinite(camera.pixelSize)
-	if (camera.focalLength !== undefined) validatePositiveFinite(camera.focalLength)
-	return { ...camera, width, height }
 }
 
 // Normalizes required right ascension input or throws on invalid values.
@@ -556,7 +544,7 @@ function normalizeCoordinateRightAscension(value: Angle) {
 
 // Validates a declination value in radians.
 function validateDeclination(declination: Angle) {
-	if (!Number.isFinite(declination) || declination < -PIOVERTWO - GEOMETRY_EPSILON || declination > PIOVERTWO + GEOMETRY_EPSILON) {
+	if (!Number.isFinite(declination) || !(declination >= -PIOVERTWO - GEOMETRY_EPSILON) || !(declination <= PIOVERTWO + GEOMETRY_EPSILON)) {
 		throw new TypeError(`invalid declination: ${declination}`)
 	}
 

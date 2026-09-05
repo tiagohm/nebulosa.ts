@@ -37,7 +37,7 @@ export interface MosaicOverlap {
 
 // Describes an equatorial coordinate in one caller-selected celestial frame.
 export interface MosaicCoordinate {
-	// Right ascension in radians, normalized to [0, 2 * PI).
+	// Right ascension in radians, normalized to [0, TAU).
 	readonly ra: Angle
 
 	// Declination in radians, constrained to [-PI / 2, PI / 2].
@@ -176,21 +176,21 @@ function validateFiniteField(value: number, field: string) {
 // Validates an angular dimension accepted by the shared tangent-plane model.
 function validateDimension(value: Angle, field: string) {
 	validateFiniteField(value, field)
-	if (value <= 0 || value >= PI) throw new RangeError(`${field} must be within (0, ${PI})`)
+	if (!(value > 0) || !(value < PI)) throw new RangeError(`${field} must be within (0, ${PI})`)
 	return value
 }
 
 // Validates a fractional overlap axis.
 function validateOverlap(value: number, field: string) {
 	validateFiniteField(value, field)
-	if (value < 0 || value >= 1) throw new RangeError(`${field} must be within [0, 1)`)
+	if (!(value >= 0) || !(value < 1)) throw new RangeError(`${field} must be within [0, 1)`)
 	return value
 }
 
 // Validates a declination in radians.
 function validateDeclination(value: Angle, field: string) {
 	validateFiniteField(value, field)
-	if (value < -PIOVERTWO || value > PIOVERTWO) throw new RangeError(`${field} must be within [-${PIOVERTWO}, ${PIOVERTWO}]`)
+	if (!(value >= -PIOVERTWO) || !(value <= PIOVERTWO)) throw new RangeError(`${field} must be within [-${PIOVERTWO}, ${PIOVERTWO}]`)
 	return value
 }
 
@@ -222,13 +222,13 @@ function coverageTolerance(panelPlaneSize: number, regionPlaneSize: number, cove
 
 // Checks that a panel count can be represented safely and later used as an array length.
 function validatePanelCount(count: number, field: string) {
-	if (!Number.isSafeInteger(count) || count < 1 || count > MAX_ARRAY_LENGTH) throw new RangeError(`${field} must be a safe positive array length`)
+	if (!Number.isSafeInteger(count) || !(count >= 1) || !(count <= MAX_ARRAY_LENGTH)) throw new RangeError(`${field} must be a safe positive array length`)
 	return count
 }
 
 // Computes the number of panels required along one reference-plane axis.
 function panelCount(panelPlaneSize: number, regionPlaneSize: number, step: number, field: string) {
-	if (!Number.isFinite(step) || step <= 0) throw new RangeError(`${field} step must be finite and positive`)
+	if (!Number.isFinite(step) || !(step > 0)) throw new RangeError(`${field} step must be finite and positive`)
 
 	let count = 1
 	if (regionPlaneSize > panelPlaneSize) {
@@ -252,7 +252,7 @@ function panelCount(panelPlaneSize: number, regionPlaneSize: number, step: numbe
 // Ensures a total panel count is valid for preallocating the result array.
 function validateTotalPanelCount(rows: number, columns: number) {
 	const total = rows * columns
-	if (!Number.isSafeInteger(total) || total < 1 || total > MAX_ARRAY_LENGTH) throw new RangeError('total panel count must be a safe positive array length')
+	if (!Number.isSafeInteger(total) || !(total >= 1) || !(total <= MAX_ARRAY_LENGTH)) throw new RangeError('total panel count must be a safe positive array length')
 	return total
 }
 

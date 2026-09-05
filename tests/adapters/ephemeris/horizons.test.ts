@@ -9,8 +9,9 @@ import type { CsvRow } from '../../../src/io/csv'
 import { bufferSource } from '../../../src/io/io'
 import { deg } from '../../../src/math/units/angle'
 import { meter } from '../../../src/math/units/distance'
+import { isNetworkTestSkipped } from '../../util'
 
-const SKIP = Bun.env.RUN_SKIPPED_TESTS !== 'true'
+const SKIP = isNetworkTestSkipped()
 
 const START_TIME = temporalFromDate(2025, 1, 29, 13, 5, 0, 0)
 const END_TIME = temporalFromDate(2025, 1, 29, 14, 5, 0, 0)
@@ -99,16 +100,33 @@ describe.skipIf(SKIP)('observer', () => {
 		expectCsvRow(data[12], ['2025-Jan-29 11:05', null, null, 312.01347, -17.85339, null])
 	})
 
-	test('multiple matches', async () => {
-		const data = await observer('DES=1000041;', 'coord', COORD, START_TIME, END_TIME, [Quantity.ASTROMETRIC_RA_DEC], { stepSize: 5 })
+	// multipleApparitions, useCap=true
+	test('10P/Tempel', async () => {
+		const data = await observer('DES=1000094;', 'coord', COORD, START_TIME, END_TIME, [Quantity.ASTROMETRIC_RA_DEC], { stepSize: 5 })
 
-		expect(data).toBeEmpty()
+		expect(data).toHaveLength(13)
+		expectCsvRow(data[0], ['2025-Jan-29 13:05', null, null, 178.72449, 12.29527, null])
+		expectCsvRow(data[12], ['2025-Jan-29 14:05', null, null, 178.72149, 12.29905, null])
+	})
+
+	// fragmentsAndMultipleApparitions, useCap=true, useNoFrag=true
+	test('141P/Machholz 2', async () => {
+		const data = await observer('DES=141P;', 'coord', COORD, START_TIME, END_TIME, [Quantity.ASTROMETRIC_RA_DEC], { stepSize: 5 })
+
+		expect(data).toHaveLength(13)
+		expectCsvRow(data[0], ['2025-Jan-29 13:05', null, null, 251.09106, -22.44842, null])
+		expectCsvRow(data[12], ['2025-Jan-29 14:05', null, null, 251.09967, -22.44887, null])
 	})
 
 	test('no matches found', async () => {
 		const data = await observer('DES=1;CAP;NOFRAG', 'coord', COORD, START_TIME, END_TIME, [Quantity.ASTROMETRIC_RA_DEC], { stepSize: 5 })
 
 		expect(data).toBeEmpty()
+	})
+
+	test('abortable', () => {
+		const timeout = AbortSignal.timeout(1)
+		expect(() => observer('10', 'coord', COORD, START_TIME, END_TIME, [Quantity.ASTROMETRIC_RA_DEC], { stepSize: 5 }, timeout)).toThrow('The operation timed out.')
 	})
 })
 
@@ -144,6 +162,11 @@ describe.skipIf(SKIP)('vector', () => {
 		expectCsvRow(data[0], ['2460705.045138889', 'A.D. 2025-Jan-29 13:05:00.0000', -1.522571179446716, 3.218151992904175e-1, 5.931926904376639e-2, 8.393662092679492e-3, 1.527803485374843e-3, 1.14842675210166e-3, null])
 		expectCsvRow(data[12], ['2460705.086805556', 'A.D. 2025-Jan-29 14:05:00.0000', -1.522221951859907, 3.218801637522551e-1, 5.936719611723293e-2, 8.36691072474185e-3, 1.589591091720874e-3, 1.152078125220753e-3, null])
 	})
+
+	test('abortable', () => {
+		const timeout = AbortSignal.timeout(1)
+		expect(() => vector('3517;', '500@10', false, START_TIME, END_TIME, { stepSize: 5 }, timeout)).toThrow('The operation timed out.')
+	})
 })
 
 describe.skipIf(SKIP)('elements', () => {
@@ -175,6 +198,11 @@ describe.skipIf(SKIP)('elements', () => {
 		expectCsvRow(data[0], ['2460705.045138889', 'A.D. 2025-Jan-29 13:05:00.0000', 9.790299987687517e-02, 2.022744140036757e+00, 3.153227454124507e+00, 1.871371001231866e+02, 1.834551901325484e+02, 2.460243064997569e+06, 2.937404025330726e-01, 1.357022326736086e+02, 1.428859289833058e+02, 2.242269001848668e+00, 2.461793863660579e+00, 1.22557195705983e+03, null])
 		// oxfmt-ignore
 		expectCsvRow(data[12], ['2460705.086805556', 'A.D. 2025-Jan-29 14:05:00.0000', 9.790212975450596e-02, 2.022747896009554e+00, 3.153227315497593e+00, 1.871371018010009e+02, 1.834554671611777e+02, 2.46024306524907e+06, 2.937400093705607e-01, 1.357142163316099e+02, 1.428962042586936e+02, 2.242271002656385e+00, 2.461794109303217e+00, 1.225573597452469e+03, null])
+	})
+
+	test('abortable', () => {
+		const timeout = AbortSignal.timeout(1)
+		expect(() => elements('3517;', 'geo', START_TIME, END_TIME, { stepSize: 5 }, timeout)).toThrow('The operation timed out.')
 	})
 })
 

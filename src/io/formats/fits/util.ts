@@ -20,7 +20,7 @@ export function numericKeyword<T extends number = number, D extends T | undefine
 	if (value === undefined) return defaultValue
 	else if (typeof value === 'number') return value as D | T
 	else if (typeof value === 'boolean') return (value ? 1 : 0) as D | T
-	else return Number.parseFloat(value) as D | T
+	else return Number(value) as D | T
 }
 
 // Reads `key` as a boolean (numbers: non-zero is true; strings: 'T'/'true'), or `defaultValue` when absent.
@@ -72,7 +72,7 @@ export function exposureTimeKeyword<T extends number = number, D extends T | und
 
 // Bayer/CFA mosaic pattern (BAYERPAT), or undefined for monochrome data.
 export function cfaPatternKeyword(header: FitsHeader) {
-	return textKeyword(header, 'BAYERPAT') as CfaPattern | undefined
+	return (textKeyword(header, 'BAYERPAT').trim() || undefined) as CfaPattern | undefined
 }
 
 // Right ascension in radians, trying RA, OBJCTRA (sexagesimal hours), RA_OBJ, then CRVAL1 in order.
@@ -164,6 +164,20 @@ export function uncompressedBitpixKeyword<T extends BitpixOrZero = BitpixOrZero,
 	return numericKeyword(header, 'ZBITPIX', undefined) ?? bitpixKeyword(header, defaultValue)
 }
 
+// Physical sample multiplier, falling back to ZSCALE only for a compressed image.
+export function uncompressedScaleKeyword<T extends number = number, D extends T | undefined = T>(header: FitsHeader, defaultValue: D): T | D {
+	const scale = numericKeyword<T, undefined>(header, 'BSCALE', undefined)
+	if (scale !== undefined) return scale
+	return isCompressedImageHeader(header) ? numericKeyword<T, D>(header, 'ZSCALE', defaultValue) : defaultValue
+}
+
+// Physical sample zero point, falling back to ZZERO only for a compressed image.
+export function uncompressedZeroKeyword<T extends number = number, D extends T | undefined = T>(header: FitsHeader, defaultValue: D): T | D {
+	const zero = numericKeyword<T, undefined>(header, 'BZERO', undefined)
+	if (zero !== undefined) return zero
+	return isCompressedImageHeader(header) ? numericKeyword<T, D>(header, 'ZZERO', defaultValue) : defaultValue
+}
+
 // True when the HDU holds a tile-compressed image (ZIMAGE = T).
 export function isCompressedImageHeader(header: FitsHeader) {
 	return booleanKeyword(header, 'ZIMAGE', false)
@@ -177,19 +191,25 @@ export function isRiceCompressedImageHeader(header: FitsHeader) {
 	return isCompressedImageHeader(header) && compressionTypeKeyword(header) === RICE_1_COMPRESSION_TYPE
 }
 
-// Computes the HDU data segment size in bytes (before padding): row*rows+PCOUNT for tables, otherwise
-// width*height*channels*bytesPerPixel for images.
+// Computes the HDU data segment size in bytes (before padding) from the FITS standard
+// |BITPIX|/8 × GCOUNT × (PCOUNT + NAXIS1 × … × NAXISn) with n = NAXIS. Tables use BITPIX = 8.
+// NAXIS = 0 yields only the GCOUNT × PCOUNT contribution. Extra NAXISn keywords beyond NAXIS are ignored.
 export function computeHduDataSize(header: FitsHeader) {
 	const extension = textKeyword(header, 'XTENSION', '').trim().toUpperCase()
+	const naxis = Math.trunc(numberOfAxesKeyword(header, 0))
+	const gcount = numericKeyword(header, 'GCOUNT', 1)
+	const pcount = numericKeyword(header, 'PCOUNT', 0)
+	const safeGcount = Number.isFinite(gcount) ? gcount : 1
+	const safePcount = Number.isFinite(pcount) ? pcount : 0
+	let axisProduct = naxis > 0 ? 1 : 0
 
-	if (extension === 'BINTABLE' || extension === 'TABLE') {
-		const rowSize = widthKeyword(header, 0)
-		const rows = heightKeyword(header, 0)
-		const pcount = numericKeyword(header, 'PCOUNT', 0)
-		return rowSize * rows + pcount
+	for (let axis = 1; axis <= naxis; axis++) {
+		axisProduct *= numericKeyword(header, `NAXIS${axis}`, 0)
 	}
 
-	return widthKeyword(header, 0) * heightKeyword(header, 0) * numberOfChannelsKeyword(header, 1) * bitpixInBytes(bitpixKeyword(header, 0))
+	const payload = axisProduct + safePcount
+	if (extension === 'BINTABLE' || extension === 'TABLE') return safeGcount * payload
+	return bitpixInBytes(bitpixKeyword(header, 0)) * safeGcount * payload
 }
 
 // Formats a header value for a card: booleans as T/F, numbers verbatim, strings single-quoted and escaped.

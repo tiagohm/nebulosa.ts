@@ -121,7 +121,7 @@ export abstract class IersBase implements Iers {
 		return [0, 0]
 	}
 
-	abstract load(source: Source): Promise<void>
+	abstract load(source: Source | readonly string[]): Promise<void>
 
 	// Checks whether the requested time lies inside this table coverage range.
 	covers(time: Time) {
@@ -162,13 +162,13 @@ export abstract class IersBase implements Iers {
 // https://datacenter.iers.org/data/9/finals2000A.all
 // https://maia.usno.navy.mil/ser7/readme.finals2000A
 export class IersA extends IersBase {
-	async load(source: Source) {
+	async load(source: Source | readonly string[]) {
 		const mjd: number[] = []
 		const pmX: number[] = []
 		const pmY: number[] = []
 		const ut1MinusUtc: number[] = []
 
-		for await (const line of readLines(source, 188)) {
+		function parseLine(line: string) {
 			const epoch = parseNumber(line, 7, 15)
 			const x = selectFinite(parseNumber(line, 134, 144), parseNumber(line, 18, 27))
 			const y = selectFinite(parseNumber(line, 144, 154), parseNumber(line, 37, 46))
@@ -182,6 +182,16 @@ export class IersA extends IersBase {
 			}
 		}
 
+		if ('read' in source) {
+			for await (const line of readLines(source, 188)) {
+				parseLine(line)
+			}
+		} else {
+			for (const line of source) {
+				parseLine(line)
+			}
+		}
+
 		this.setTable(mjd, pmX, pmY, ut1MinusUtc)
 	}
 }
@@ -190,14 +200,14 @@ export class IersA extends IersBase {
 // https://hpiers.obspm.fr/iers/eop/eopc04/eopc04.1962-now
 // https://hpiers.obspm.fr/eoppc/eop/eopc04/eopc04.txt
 export class IersB extends IersBase {
-	async load(source: Source) {
+	async load(source: Source | readonly string[]) {
 		const mjd: number[] = []
 		const pmX: number[] = []
 		const pmY: number[] = []
 		const ut1MinusUtc: number[] = []
 
-		for await (const line of readLines(source, 219)) {
-			if (line.startsWith('#')) continue
+		function parseLine(line: string) {
+			if (line.startsWith('#')) return
 
 			const epoch = parseNumber(line, 16, 26)
 			const x = parseNumber(line, 26, 38)
@@ -209,6 +219,16 @@ export class IersB extends IersBase {
 				pmX.push(x)
 				pmY.push(y)
 				ut1MinusUtc.push(dut1)
+			}
+		}
+
+		if ('read' in source) {
+			for await (const line of readLines(source, 219)) {
+				parseLine(line)
+			}
+		} else {
+			for (const line of source) {
+				parseLine(line)
 			}
 		}
 
@@ -239,7 +259,7 @@ export class IersAB implements Iers {
 		return this.#table(time).xy(time)
 	}
 
-	load(source: Source): Promise<void> {
+	load(source: Source | readonly string[]): Promise<void> {
 		throw new Error('not supported')
 	}
 
@@ -257,7 +277,11 @@ export const iersb = new IersB()
 export const iersab = new IersAB(iersa, iersb)
 
 // Computes UT1 - UTC in seconds at the given time, using the shared combined IERS provider.
-export const dut1: TimeDelta = (time) => iersab.dut1(time)
+export function dut1(time: Time) {
+	return iersab.dut1(time)
+}
 
 // Computes polar motion (x, y) in radians at the given time, using the shared combined IERS provider.
-export const xy: PolarMotion = (time) => iersab.xy(time)
+export function xy(time: Time) {
+	return iersab.xy(time)
+}

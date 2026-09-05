@@ -8,7 +8,7 @@ import { BRANCH_MAX_DRAWABLE_GAP, type SolarEclipseGeoPoint, type PolynomialBess
 import { parseArgs } from 'node:util'
 import { sunMoonPosition } from '../src/astronomy/events/eclipse/eclipse'
 import { timeYMD, toJulianDay, timeToDate } from '../src/astronomy/time/time'
-import { catalogBranchRetraces, endpointRetraces, hasContinuousCurveBetween, limitTangencyResidual, longestProjectedSegment } from '../tests/util/eclipse.util'
+import { catalogBranchRetraces, endpointRetraces, hasContinuousCurveBetween, limitTangencyResidual, longestProjectedSegment } from '../tests/astronomy/events/eclipse/util'
 
 const CATALOG_STEP = deg(0.5)
 const CATALOG_MAX_DRAWABLE_GAP = Math.max(BRANCH_MAX_DRAWABLE_GAP, CATALOG_STEP * 4)
@@ -286,7 +286,7 @@ async function draw(file: Bun.BunFile, paths: SolarEclipseMapSvgPaths) {
 
 console.info('☀️  validating solar eclipses from %s-01-01 to %s-12-31', FROM_YEAR, TO_YEAR)
 
-for (let prevJd = -Infinity, prevLunation = -Infinity; ; ) {
+for (let prevJd = -Infinity, prevLunation = -Infinity; ;) {
 	const eclipse = nearestSolarEclipse(cursor, true)
 	const jd = toJulianDay(eclipse.maximalTime)
 

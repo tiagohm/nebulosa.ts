@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { PI, PIOVERFOUR, PIOVERTWO, TAU } from '../../../src/core/constants'
 import type { NumberArray } from '../../../src/math/numerical/math'
 import { bisection, brentMinimize, brentRoot, coordinateDescent, falsePositionRoot, goldenSectionSearch, levenbergMarquardt, nelderMead, powell, secantRoot } from '../../../src/math/numerical/optimization'
 
@@ -63,6 +64,10 @@ describe('root finding', () => {
 	test('rejects root brackets without a sign change', () => {
 		expect(() => brentRoot((x) => x * x + 1, -1, 1)).toThrow('root bracket endpoints must have opposite signs')
 	})
+
+	test('bisection rejects a non-finite interior evaluation', () => {
+		expect(() => bisection((x) => (x === 0.5 ? Number.NaN : x - 0.3), 0, 1)).toThrow('function must return finite values')
+	})
 })
 
 describe('scalar minimization', () => {
@@ -80,6 +85,30 @@ describe('scalar minimization', () => {
 		expect(result.converged).toBe(true)
 		expect(result.minimum).toBeCloseTo(-1.5, 7)
 		expect(result.value).toBeCloseTo(-4, 8)
+	})
+
+	test('treats Brent tolerance as an absolute x-threshold at large |x|', () => {
+		// Julian-day local-eclipse brackets are O(1e6) with an absolute 1e-8 day (~1 ms) tolerance.
+		// A relative tol·|x| test returns the midpoint on the first iteration and misses the minimum.
+		const day = 86400
+		const a = 2460000
+		const b = a + 60 / day
+		const trueMinimum = a + 20 / day
+		const result = brentMinimize((x) => (x - trueMinimum) ** 2, a, b, { tolerance: 1e-8 })
+
+		expect(result.converged).toBe(true)
+		expect(result.iterations).toBeGreaterThan(1)
+		expect(Math.abs(result.minimum - trueMinimum) * day).toBeLessThan(0.01)
+	})
+
+	test('keeps a long-offset Brent bracket at the requested absolute tolerance', () => {
+		const xa = 300
+		const xc = 300 + 2 / 24
+		const trueMinimum = 300 + 1 / 24 + 10 / 86400
+		const result = brentMinimize((x) => (x - trueMinimum) ** 2, xa, xc, { tolerance: 1e-6 })
+
+		expect(result.converged).toBe(true)
+		expect(Math.abs(result.minimum - trueMinimum)).toBeLessThan(1e-6)
 	})
 })
 
@@ -141,6 +170,51 @@ describe('Levenberg-Marquardt optimization', () => {
 		}
 	})
 
+	test('recovers a line from a parameter larger than the old absolute finite-difference step', () => {
+		function line(x: number, [a, b]: NumberArray) {
+			return a * x + b
+		}
+
+		const x = [0, 1, 2, 3, 4, 5]
+		const y = x.map((value) => 2 * value - 3)
+		const result = levenbergMarquardt(x, y, line, [1e10, 0])
+
+		expect(result[0]).toBeCloseTo(2, 6)
+		expect(result[1]).toBeCloseTo(-3, 6)
+	})
+
+	test('still fits identifiable parameters when one Jacobian column is identically zero', () => {
+		function line(x: number, [a, b]: NumberArray) {
+			return a * x + b
+		}
+
+		const x = [0, 1, 2, 3, 4, 5]
+		const y = x.map((value) => 2 * value - 3)
+		const result = levenbergMarquardt(x, y, line, [1, 0, 0])
+
+		expect(result[0]).toBeCloseTo(2, 6)
+		expect(result[1]).toBeCloseTo(-3, 6)
+	})
+
+	test('weighted line suppresses a zero-weight outlier', () => {
+		function line(x: number, [a, b]: NumberArray) {
+			return a * x + b
+		}
+
+		const result = levenbergMarquardt([0, 1, 2, 3], [1, 3, 5, 100], line, [1, 0], { weights: [1, 1, 1, 0] })
+
+		expect(result[0]).toBeCloseTo(2, 7)
+		expect(result[1]).toBeCloseTo(1, 7)
+	})
+
+	test('rejects invalid sample weights', () => {
+		const line = (x: number, [a, b]: NumberArray) => a * x + b
+
+		expect(() => levenbergMarquardt([0, 1], [0, 1], line, [1, 0], { weights: [1] })).toThrow(RangeError)
+		expect(() => levenbergMarquardt([0, 1], [0, 1], line, [1, 0], { weights: [1, -1] })).toThrow(RangeError)
+		expect(() => levenbergMarquardt([0, 1, 2], [1, 3, 5], line, [1, 0], { weights: [1, 0, 0] })).toThrow('effective samples must be at least the number of model parameters')
+	})
+
 	test('quadratic', () => {
 		function quadratic(x: number, [a, b, c]: NumberArray) {
 			return a * x * x + b * x + c
@@ -200,7 +274,7 @@ describe('Levenberg-Marquardt optimization', () => {
 			return a * Math.sin(b * x + c)
 		}
 
-		const x = [0, Math.PI / 2, Math.PI, (3 * Math.PI) / 2, 2 * Math.PI]
+		const x = [0, PIOVERTWO, PI, (3 * PI) / 2, TAU]
 		const y = [0, 1, 0, -1, 0]
 		const result = levenbergMarquardt(x, y, sine, [1, 1, 0])
 
@@ -208,7 +282,7 @@ describe('Levenberg-Marquardt optimization', () => {
 		expect(result[1]).toBeCloseTo(1, 8)
 		expect(result[2]).toBeCloseTo(0, 8)
 
-		expect(sine(Math.PI / 4, result)).toBeCloseTo(0.7071067811865475, 8)
+		expect(sine(PIOVERFOUR, result)).toBeCloseTo(0.7071067811865475, 8)
 
 		for (let i = 0; i < x.length; i++) {
 			expect(sine(x[i], result)).toBeCloseTo(y[i], 8)

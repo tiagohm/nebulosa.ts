@@ -4,10 +4,12 @@ import type { Vec3 } from '../math/linear-algebra/vec3'
 import type { Angle } from '../math/units/angle'
 import { PI, PIOVERTWO } from './constants'
 
-// Shared runtime validators for public entry points. Each validator throws TypeError/RangeError on
+// Shared runtime validators for the two cases in the Validation Policy: preventing hang, non-convergence,
+// stack overflow, crash, or unbounded allocation; and rejecting a structurally nonsensical state that
+// would otherwise yield a plausible-looking wrong result. Each helper throws TypeError/RangeError on
 // invalid input and otherwise returns its argument unchanged so it can be used inline. Angular limits
-// are in radians. Keep these for boundaries where bad input would otherwise produce non-finite
-// geometry or hard-to-debug results, not for revalidating already-trusted internal values.
+// are in radians. Document numeric domains in comments instead of calling these for trusted typed
+// arguments; do not revalidate already-trusted internal values.
 
 // Small angular tolerance (radians) added to latitude/longitude bounds so values landing exactly on a
 // pole or the antimeridian survive floating-point rounding instead of being rejected.
@@ -23,7 +25,7 @@ export function validateFinite(value: number) {
 export function validateTime(time: Time) {
 	validateFinite(time.day)
 	validateFinite(time.fraction)
-	if (!Number.isInteger(time.scale) || time.scale < 0 || time.scale > 6) throw new TypeError('time must have a valid scale')
+	if (!Number.isInteger(time.scale) || !(time.scale >= 0) || !(time.scale <= 6)) throw new TypeError('time must have a valid scale')
 	return time
 }
 
@@ -39,40 +41,40 @@ export function validateVector(vector: Vec3) {
 // Throws unless `value` is finite and strictly greater than 0. Returns `value`.
 export function validatePositiveFinite(value: number) {
 	validateFinite(value)
-	if (value <= 0) throw new RangeError('value must be positive')
+	if (!(value > 0)) throw new RangeError('value must be positive')
 	return value
 }
 
 // Throws unless `value` is finite and greater than or equal to 0. Returns `value`.
 export function validateNonNegativeFinite(value: number) {
 	validateFinite(value)
-	if (value < 0) throw new RangeError('value must be non-negative')
+	if (!(value >= 0)) throw new RangeError('value must be non-negative')
 	return value
 }
 
 // Throws unless `value` is an integer >= 1. Returns `value`.
 export function validatePositiveInteger(value: number) {
-	if (!Number.isInteger(value) || value < 1) throw new TypeError('value must be a positive integer')
+	if (!Number.isInteger(value) || !(value >= 1)) throw new TypeError('value must be a positive integer')
 	return value
 }
 
 // Throws unless `value` is an integer >= 0. Returns `value`.
 export function validateNonNegativeInteger(value: number) {
-	if (!Number.isInteger(value) || value < 0) throw new TypeError('value must be a non-negative integer')
+	if (!Number.isInteger(value) || !(value >= 0)) throw new TypeError('value must be a non-negative integer')
 	return value
 }
 
 // Throws unless `value` is finite and within the inclusive range [min, max]. Returns `value`.
 export function validateInRange(value: number, min: number, max: number) {
 	validateFinite(value)
-	if (value < min || value > max) throw new RangeError(`value must be within [${min}, ${max}]`)
+	if (!(value >= min && value <= max)) throw new RangeError(`value must be within [${min}, ${max}]`)
 	return value
 }
 
 // Throws unless `value` is finite and within the exclusive range (min, max). Returns `value`.
 export function validateInRangeExclusive(value: number, min: number, max: number) {
 	validateFinite(value)
-	if (value <= min || value >= max) throw new RangeError(`value must be within (${min}, ${max})`)
+	if (!(value > min && value < max)) throw new RangeError(`value must be within (${min}, ${max})`)
 	return value
 }
 
@@ -94,7 +96,7 @@ export function validateDeclination(value: number) {
 // Validates an altitude (radians) strictly above the horizon and up to the zenith, i.e. within (0, π/2]. Returns `value`.
 export function validatePositiveAltitude(value: number) {
 	validateFinite(value)
-	if (value <= 0 || value > PIOVERTWO) throw new RangeError(`value must be within (0, ${PIOVERTWO}]`)
+	if (!(value > 0 && value <= PIOVERTWO)) throw new RangeError(`value must be within (0, ${PIOVERTWO}]`)
 	return value
 }
 

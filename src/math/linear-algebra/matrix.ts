@@ -560,12 +560,15 @@ export class LuDecomposition {
 	// Row permutation: #P[i] is the source row mapped to row i; #P[n] counts the pivot swaps for the determinant sign.
 	readonly #P: Int32Array
 
-	// Factorizes `matrix` in place on a clone; throws if it is not square.
-	constructor(matrix: Matrix) {
+	// Factorizes `matrix`; throws if it is not square. By default works on a clone so the input is
+	// preserved. Pass `destructive = true` to factorize in place on `matrix` itself, skipping the O(n²)
+	// clone: only safe when the caller no longer needs the original contents (e.g. a throwaway system
+	// matrix built solely to be solved once). The factored L\U then aliases `matrix.data`.
+	constructor(matrix: Matrix, destructive = false) {
 		if (!matrix.isSquare) throw new Error('matrix is not square')
 
 		const n = matrix.rows
-		const A = matrix.clone()
+		const A = destructive ? matrix : matrix.clone()
 		const data = A.data
 
 		// Unit permutation matrix
@@ -728,9 +731,13 @@ export class QrDecomposition {
 	// Diagonal of R kept separately (the QR storage holds the Householder reflectors on its diagonal).
 	readonly #rdiag: Float64Array
 
-	// Factorizes a clone of `matrix` (rows >= cols expected) into packed Householder form.
-	constructor(matrix: Matrix) {
-		const QR = matrix.clone()
+	// Factorizes `matrix` (rows >= cols expected) into packed Householder form. By default works on a clone
+	// so the input is preserved. Pass `destructive = true` to factorize in place on `matrix` itself,
+	// skipping the O(rows·cols) clone: only safe when the caller no longer needs the original contents (e.g.
+	// a throwaway design matrix built solely for one least-squares solve). The packed QR then aliases
+	// `matrix.data`.
+	constructor(matrix: Matrix, destructive = false) {
+		const QR = destructive ? matrix : matrix.clone()
 		const rdiag = new Float64Array(matrix.cols)
 
 		for (let k = 0; k < matrix.cols; k++) {

@@ -299,3 +299,64 @@ export function matRodriguesRotation(axis: Vec3, angle: Angle, o?: MutMat3): Mut
 	if (o) return matFill(o, a, b, c, d, e, f, g, h, i)
 	return [a, b, c, d, e, f, g, h, i]
 }
+
+// Expresses an matrix as a vector.
+// A rotation matrix describes a rotation through some angle about
+// some arbitrary axis called the Euler axis. The "rotation vector"
+// returned by this function has the same direction as the Euler axis,
+// and its magnitude is the angle in radians. (The magnitude and
+// direction can be separated by means of modulus and unit vector functions.)
+export function matToVec3(m: Mat3, out?: MutVec3): MutVec3 {
+	const x = m[5] - m[7]
+	const y = m[6] - m[2]
+	const z = m[1] - m[3]
+
+	const s2 = Math.hypot(x, y, z)
+
+	if (s2 > 0) {
+		const c2 = m[0] + m[4] + m[8] - 1
+		const phi = Math.atan2(s2, c2)
+		const f = phi / s2
+		if (out) return vecFill(out, x * f, y * f, z * f)
+		return [x * f, y * f, z * f]
+	} else if (out) {
+		return vecFill(out, 0, 0, 0)
+	} else {
+		return [0, 0, 0]
+	}
+}
+
+// Forms the r-matrix corresponding to a given r-vector.
+// A rotation matrix describes a rotation through some angle about
+// some arbitrary axis called the Euler axis.  The "rotation vector"
+// supplied to This function has the same direction as the Euler
+// axis, and its magnitude is the angle in radians.
+export function matFromVec3(v: Vec3, out?: MutMat3): MutMat3 {
+	// Euler angle (magnitude of rotation vector) and functions.
+	let [x, y, z] = v
+	const phi = Math.hypot(x, y, z)
+	const sp = Math.sin(phi)
+	const cp = Math.cos(phi)
+	const omcp = 1 - cp
+
+	// Euler axis (direction of rotation vector), perhaps null.
+	if (phi > 0) {
+		x /= phi
+		y /= phi
+		z /= phi
+	}
+
+	// Form the rotation matrix.
+	const a = x * x * omcp + cp
+	const b = x * y * omcp + z * sp
+	const c = x * z * omcp - y * sp
+	const d = y * x * omcp - z * sp
+	const e = y * y * omcp + cp
+	const f = y * z * omcp + x * sp
+	const g = z * x * omcp + y * sp
+	const h = z * y * omcp - x * sp
+	const i = z * z * omcp + cp
+
+	if (out) return matFill(out, a, b, c, d, e, f, g, h, i)
+	return [a, b, c, d, e, f, g, h, i]
+}

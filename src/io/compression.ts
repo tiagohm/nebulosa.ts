@@ -32,7 +32,7 @@ const SAMPLE_FORMAT = {
 } as const
 
 // Growable MSB-first bit stream writer used to emit the Rice-encoded output.
-class BitWriter {
+export class BitWriter {
 	#buffer: Uint8Array
 	#length = 0
 	#bitBuffer = 0
@@ -175,12 +175,32 @@ class BitWriter {
 		this.#bitsToGo = lbitsToGo
 	}
 
-	// Flushes any partial byte (zero-padded) and returns a copy of the written bytes.
-	finalize() {
+	// Clears written bytes so this instance can encode another independent stream.
+	reset() {
+		this.#length = 0
+		this.#bitBuffer = 0
+		this.#bitsToGo = 8
+	}
+
+	// Zero-pads the current partial byte. Safe to call when already byte-aligned.
+	#flush() {
 		if (this.#bitsToGo < 8) {
 			this.writeByte(this.#bitBuffer << this.#bitsToGo)
+			this.#bitBuffer = 0
+			this.#bitsToGo = 8
 		}
+	}
 
+	// Flushes any partial byte and returns a view of the written bytes. The view is invalidated by
+	// the next write or reset.
+	written() {
+		this.#flush()
+		return this.#buffer.subarray(0, this.#length)
+	}
+
+	// Flushes any partial byte (zero-padded) and returns a copy of the written bytes.
+	finalize() {
+		this.#flush()
 		return this.#buffer.slice(0, this.#length)
 	}
 }
@@ -198,10 +218,11 @@ function estimateCapacity(inputLengthBytes: number, bytesPerPixel: number, block
 }
 
 // Rice-compresses an integer pixel array into a byte stream. `blockSize` is the pixels-per-block (16 or
-// 32 typical); `initialCapacity` optionally pre-sizes or supplies the BitWriter. Element byte size must
-// be 1, 2, or 4. Returns the encoded bytes.
+// 32 typical); `initialCapacity` optionally pre-sizes or supplies the BitWriter. A supplied BitWriter is
+// reset first; the returned bytes then alias its buffer until the next compress or reset. Element byte
+// size must be 1, 2, or 4. Returns the encoded bytes.
 export function compressRice(input: Readonly<RiceCompressionTypedArray>, blockSize: number = 32, initialCapacity?: number | BitWriter) {
-	if (blockSize < 1) throw new Error('block size must be a positive integer')
+	if (!(blockSize >= 1)) throw new Error('block size must be a positive integer')
 
 	const nx = input.length
 
@@ -212,7 +233,9 @@ export function compressRice(input: Readonly<RiceCompressionTypedArray>, blockSi
 	if (format === undefined) throw new Error('only 8-bit, 16-bit and 32-bit integer arrays are supported')
 
 	const { bytesPerPixel, fsbits, fsmax, bbits } = format
-	const writer = initialCapacity instanceof BitWriter ? initialCapacity : initialCapacity === undefined || initialCapacity <= 0 ? new BitWriter(estimateCapacity(input.byteLength, bytesPerPixel, blockSize)) : new BitWriter(initialCapacity)
+	const borrowed = initialCapacity instanceof BitWriter
+	if (borrowed) initialCapacity.reset()
+	const writer = borrowed ? initialCapacity : initialCapacity === undefined || initialCapacity <= 0 ? new BitWriter(estimateCapacity(input.byteLength, bytesPerPixel, blockSize)) : new BitWriter(initialCapacity)
 	const diff = new Uint32Array(blockSize)
 
 	let firstRaw = 0
@@ -283,19 +306,19 @@ export function compressRice(input: Readonly<RiceCompressionTypedArray>, blockSi
 		writer.writeRiceBlock(diff, thisBlock, fs, fsbits, fsmax, bbits)
 	}
 
-	return writer.finalize()
+	return borrowed ? writer.written() : writer.finalize()
 }
 
 // Guards against reading past the end of the compressed stream.
 function checkBufferBounds(offset: number, limit: number) {
-	if (offset >= limit) throw new Error('hit end of compressed byte stream')
+	if (!(offset < limit)) throw new Error('hit end of compressed byte stream')
 }
 
 // Rice-decompresses `compressed` into the preallocated `output` array (its length sets the pixel count
 // and its element byte size selects the format). `blockSize` must match the value used when encoding.
 // Returns `output`.
 export function decompressRice<T extends RiceCompressionTypedArray>(compressed: Uint8Array, output: T, blockSize: number = 32) {
-	if (blockSize < 1) throw new Error('block size must be a positive integer')
+	if (!(blockSize >= 1)) throw new Error('block size must be a positive integer')
 
 	const nx = output.length
 
@@ -322,7 +345,7 @@ export function decompressRice<T extends RiceCompressionTypedArray>(compressed: 
 	let b = compressed[offset++]
 	let nbits = 8
 
-	for (let i = 0; i < nx; ) {
+	for (let i = 0; i < nx;) {
 		nbits -= fsbits
 
 		while (nbits < 0) {

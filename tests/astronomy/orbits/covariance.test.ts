@@ -3,7 +3,7 @@ import { earth } from '../../../src/astronomy/ephemeris/models/analytical/vsop87
 import { KeplerOrbit } from '../../../src/astronomy/orbits/asteroid'
 import { ephemerisUncertaintyEllipse, propagateStateCovariance, stateTransitionMatrix } from '../../../src/astronomy/orbits/covariance'
 import { Timescale, type Time, timeShift, timeYMDHMS } from '../../../src/astronomy/time/time'
-import { GM_SUN_PITJEVA_2005 } from '../../../src/core/constants'
+import { GM_SUN_PITJEVA_2005, PIOVERTWO } from '../../../src/core/constants'
 import { matIdentity } from '../../../src/math/linear-algebra/mat3'
 import { Matrix } from '../../../src/math/linear-algebra/matrix'
 import type { Vec3 } from '../../../src/math/linear-algebra/vec3'
@@ -111,7 +111,7 @@ test('the uncertainty ellipse of a diagonal covariance is analytic', () => {
 	const ellipse = ephemerisUncertaintyEllipse(covariance, geocentric, { sigma: 3 })
 	expect(ellipse.semiMajor).toBeCloseTo((3 * 3e-6) / distance, 12)
 	expect(ellipse.semiMinor).toBeCloseTo((3 * 1e-6) / distance, 12)
-	expect(ellipse.positionAngle).toBeCloseTo(Math.PI / 2, 10)
+	expect(ellipse.positionAngle).toBeCloseTo(PIOVERTWO, 10)
 })
 
 test('the uncertainty ellipse is finite for a pole direction', () => {

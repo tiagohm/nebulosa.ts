@@ -18,7 +18,7 @@ const HEALPIX_FACE_COUNT = 12
 // |sin(dec)| boundary between the equatorial belt and the polar caps (z = 2/3).
 const EQUATORIAL_Z_LIMIT = 2 / 3
 // Multiplier converting a face cell's edge span into an angular radius bound for cover tests.
-const COVER_BOUND_FACTOR = PI / 2
+const COVER_BOUND_FACTOR = PIOVERTWO
 // General angular/geometry tolerance, radians.
 const EPSILON = 1e-14
 // Tolerance for RA/Dec box edge comparisons, radians.
@@ -458,14 +458,14 @@ function withIndexCoverOptions(options: HealpixCoverOptions | undefined, nside: 
 
 // Validates an NSIDE value against HEALPix constraints.
 function validateNside(nside: number) {
-	if (!Number.isInteger(nside) || nside < 1 || nside > HEALPIX_MAX_NSIDE || !Number.isInteger(Math.log2(nside))) {
+	if (!Number.isInteger(nside) || !(nside >= 1) || !(nside <= HEALPIX_MAX_NSIDE) || !Number.isInteger(Math.log2(nside))) {
 		throw new Error(`invalid HEALPix NSIDE: ${nside}. Expected a power of two in [1, ${HEALPIX_MAX_NSIDE}]`)
 	}
 }
 
 // Validates a public radius argument.
 function validateRadius(radius: number) {
-	if (!Number.isFinite(radius) || radius < 0 || radius > PI) {
+	if (!Number.isFinite(radius) || !(radius >= 0) || !(radius <= PI)) {
 		throw new Error(`invalid spherical radius: ${radius}. Expected a finite value in [0, PI]`)
 	}
 }
@@ -474,7 +474,7 @@ function validateRadius(radius: number) {
 function validatePixelIndex(pixel: number, nside: number) {
 	const pixelCount = HEALPIX_FACE_COUNT * nside * nside
 
-	if (!Number.isInteger(pixel) || pixel < 0 || pixel >= pixelCount) {
+	if (!Number.isInteger(pixel) || !(pixel >= 0) || !(pixel < pixelCount)) {
 		throw new Error(`invalid HEALPix pixel index: ${pixel}. Expected an integer in [0, ${pixelCount - 1}]`)
 	}
 }
@@ -494,7 +494,7 @@ function normalizeLatitude(declination: number) {
 		throw new TypeError(`invalid latitude/declination: ${declination}`)
 	}
 
-	if (declination < -PIOVERTWO - EPSILON || declination > PIOVERTWO + EPSILON) {
+	if (!(declination >= -PIOVERTWO - EPSILON) || !(declination <= PIOVERTWO + EPSILON)) {
 		throw new Error(`invalid latitude/declination: ${declination}. Expected a finite value in [-pi/2, pi/2]`)
 	}
 
@@ -813,7 +813,7 @@ function buildRegion(vertices: readonly Vertex[], label: 'triangle' | 'polygon')
 		centroid[2] += vertex[2]
 	}
 
-	if (vecLength(centroid) <= EPSILON) {
+	if (!(vecLength(centroid) > EPSILON)) {
 		throw new Error(`${label} vertices do not define a stable convex region`)
 	}
 
@@ -828,7 +828,7 @@ function buildRegion(vertices: readonly Vertex[], label: 'triangle' | 'polygon')
 		const normal = vecCross(a, b)
 		const normalLength = Math.hypot(normal[0], normal[1], normal[2])
 
-		if (normalLength <= EPSILON) {
+		if (!(normalLength > EPSILON)) {
 			throw new Error(`${label} contains repeated or antipodal vertices`)
 		}
 
@@ -854,7 +854,7 @@ function buildRegion(vertices: readonly Vertex[], label: 'triangle' | 'polygon')
 		}
 	}
 
-	if (label === 'triangle' && Math.abs(vecTripleProduct(cleaned[0], cleaned[1], cleaned[2])) <= EPSILON) {
+	if (label === 'triangle' && !(Math.abs(vecTripleProduct(cleaned[0], cleaned[1], cleaned[2])) > EPSILON)) {
 		throw new Error('triangle vertices are degenerate')
 	}
 
@@ -1025,7 +1025,7 @@ function matchesAnyBox(rightAscension: number, declination: number, boxes: reado
 }
 
 // Recursively covers a region with nested pixels.
-function coverPixels(nside: number, options: HealpixCoverOptions | undefined, tester: { intersects(center: Vec3, bound: number): boolean }) {
+function coverPixels(nside: number, options: HealpixCoverOptions | undefined, tester: { intersects: (center: Vec3, bound: number) => boolean }) {
 	const targetNside = options?.targetNside ?? nside
 	validateNside(targetNside)
 
@@ -1050,7 +1050,7 @@ function coverPixels(nside: number, options: HealpixCoverOptions | undefined, te
 
 // Validates an optional maximum recursion depth.
 function validateMaxDepth(maxDepth: number, order: number) {
-	if (!Number.isInteger(maxDepth) || maxDepth < 0 || maxDepth > order) {
+	if (!Number.isInteger(maxDepth) || !(maxDepth >= 0) || !(maxDepth <= order)) {
 		throw new Error(`invalid HEALPix cover maxDepth: ${maxDepth}. Expected an integer in [0, ${order}]`)
 	}
 

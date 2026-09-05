@@ -1,5 +1,4 @@
 import { ASEC2RAD, GM_SUN_PITJEVA_2005 } from '../../core/constants'
-import { validateFinite, validateNonNegativeFinite, validatePositiveFinite, validateTime, validateVector } from '../../core/validation'
 import { matIdentity } from '../../math/linear-algebra/mat3'
 import { Matrix } from '../../math/linear-algebra/matrix'
 import { type MutVec3, type Vec3, vecLength } from '../../math/linear-algebra/vec3'
@@ -172,7 +171,7 @@ interface ResidualEvaluation {
 // and optional covariance. Throws if the initial or final state cannot be evaluated.
 export function fitOrbit(observations: readonly OrbitFitObservation[], epoch: Time, position: Vec3, velocity: Vec3, options?: OrbitFitOptions): OrbitFitResult {
 	const config = resolveFitOptions(options)
-	validateInput(observations, epoch, position, velocity, config)
+	validateInput(observations, config)
 
 	let params = stateToParams(position, velocity)
 	let current = evaluateResiduals(params, observations, epoch, config)
@@ -310,36 +309,10 @@ function resolveFitOptions(options: OrbitFitOptions | undefined): ResolvedOrbitF
 	}
 }
 
-function validateInput(observations: readonly OrbitFitObservation[], epoch: Time, p: Vec3, v: Vec3, options: ResolvedOrbitFitOptions) {
+function validateInput(observations: readonly OrbitFitObservation[], options: ResolvedOrbitFitOptions) {
 	if (observations.length < 3) throw new Error('at least 3 observations are required to fit 6 Cartesian parameters')
-
-	validateTime(epoch)
-	validateVector(p)
-	validateVector(v)
-	validatePositiveFinite(options.mu)
-	validatePositiveFinite(options.defaultRaErr)
-	validatePositiveFinite(options.defaultDecErr)
-	validateNonNegativeFinite(options.maxIterations)
-	validatePositiveFinite(options.tolerance)
-	validatePositiveFinite(options.parameterTolerance)
-	validatePositiveFinite(options.gradientTolerance)
-	validatePositiveFinite(options.initialDamping)
-	validatePositiveFinite(options.minTopocentricDistance)
-	validatePositiveFinite(options.finiteDifferencePositionStep)
-	validatePositiveFinite(options.finiteDifferenceVelocityStep)
-	validatePositiveFinite(options.relativeFiniteDifferenceStep)
-	validatePositiveFinite(options.maxFiniteDifferenceStep)
-
-	for (let i = 0; i < observations.length; i++) {
-		const observation = observations[i]
-		validateTime(observation.time)
-		validateFinite(observation.rightAscension)
-		validateFinite(observation.declination)
-		validateVector(observation.observerPosition)
-
-		if (observation.raErr !== undefined) validatePositiveFinite(observation.raErr)
-		if (observation.decErr !== undefined) validatePositiveFinite(observation.decErr)
-	}
+	// A non-finite iteration cap would make the Levenberg-Marquardt loop never terminate.
+	if (!Number.isFinite(options.maxIterations)) throw new RangeError('maxIterations must be finite')
 }
 
 // Packs a position/velocity pair into the 6-element parameter vector.

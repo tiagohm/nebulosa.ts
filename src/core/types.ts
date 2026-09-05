@@ -2,6 +2,11 @@
 // readonly/writable/required transforms, value-based key filtering, and union manipulation helpers.
 // These are compile-time-only constructs with no runtime footprint.
 
+export type JsonPrimitive = string | number | boolean | null
+export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue }
+export type JsonObject = Record<string, JsonValue>
+export type JsonArray = JsonValue[]
+
 // Nominally tags type `T` with marker `U` so structurally identical primitives stay distinguishable.
 export type Brand<T, U> = T & { __brand: U }
 // Recursively marks every property of `T` (and nested objects) as readonly.
@@ -10,6 +15,8 @@ export type DeepReadonly<T> = T extends Primitive ? T : { readonly [K in keyof T
 export type DeepRequired<T> = T extends Primitive ? T : Required<{ [K in keyof T]: T[K] extends Required<T[K]> ? T[K] : DeepRequired<T[K]> }>
 // Recursively strips readonly from every property of `T` (and nested objects).
 export type DeepWritable<T> = T extends Primitive ? T : { -readonly [K in keyof T]: T[K] extends object ? DeepWritable<T[K]> : T[K] }
+// Recursively marks every property of `T` (and nested objects) as optional.
+export type DeepPartial<T> = T extends readonly (infer U)[] ? readonly DeepPartial<U>[] : T extends object ? { [K in keyof T]?: DeepPartial<T[K]> } : T
 // Brands `T` by its own keys so excess-property structural matches are rejected.
 export type Exact<T extends object> = Brand<T, keyof T>
 // `T` or `null`.

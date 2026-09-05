@@ -2,8 +2,10 @@ import { describe, expect, test } from 'bun:test'
 import { SimbadCatalog, simbadQuery } from '../../../src/adapters/catalogs/simbad'
 import { arcmin, deg, formatDEC, formatRA, toDeg, toMas } from '../../../src/math/units/angle'
 import { toKilometerPerSecond } from '../../../src/math/units/velocity'
+import { isNetworkTestSkipped } from '../../util'
 
-const SKIP = Bun.env.RUN_SKIPPED_TESTS !== 'true'
+const SKIP = isNetworkTestSkipped()
+
 const SIMBAD_HEADER = 'oid\totype\tra\tdec\tV\tpmra\tpmdec\tplx_value\trvz_radvel'
 
 async function withMockSimbadCatalog<T>(rows: readonly string[], callback: (catalog: SimbadCatalog, queries: string[]) => Promise<T> | T) {

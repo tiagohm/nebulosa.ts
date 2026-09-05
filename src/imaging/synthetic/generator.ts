@@ -4,7 +4,7 @@ import { clamp } from '../../math/numerical/math'
 import { mulberry32, type Random } from '../../math/numerical/random'
 import type { ImageRawType } from '../model/types'
 import type { DetectedStar } from '../stars/detector'
-import { type PlotStarOptions, plotStar } from '../stars/generator'
+import { type PlotStarOptions, plotStar, type StarPsfModifiers } from '../stars/generator'
 
 // Physically motivated synthetic astronomical-image generator: renders stars and then injects a full
 // noise/signal chain — sky background and gradients, moonlight, light pollution, atmospheric effects,
@@ -175,8 +175,8 @@ export interface AstronomicalImageNoiseResult {
 	readonly stats: AstronomicalImageNoiseStats
 }
 
-// A star to render, with an optional B-V color index.
-export interface AstronomicalImageStar extends DetectedStar {
+// A star to render, with optional color and per-star PSF changes.
+export interface AstronomicalImageStar extends DetectedStar, StarPsfModifiers {
 	readonly colorIndex?: number
 }
 
@@ -511,7 +511,7 @@ export function generateNoiseImage(raw: ImageRawType, width: number, height: num
 export function generateStarImage(raw: ImageRawType, width: number, height: number, channels: 1 | 3, stars: readonly AstronomicalImageStar[], seeing: number, noiseConfig?: AstronomicalImageNoiseConfig, plotOptions: PlotStarOptions = {}) {
 	for (let i = 0; i < stars.length; i++) {
 		const star = stars[i]
-		plotStar(raw, width, height, channels, star.x, star.y, star.flux, star.hfd, star.snr, seeing, star.colorIndex, plotOptions)
+		plotStar(raw, width, height, channels, star.x, star.y, star.flux, star.hfd, star.snr, seeing, star.colorIndex, plotOptions, star)
 	}
 
 	return generateNoiseImage(raw, width, height, channels, noiseConfig)
@@ -519,8 +519,8 @@ export function generateStarImage(raw: ImageRawType, width: number, height: numb
 
 // Validates user parameters and derives a fast execution context.
 function resolveAstronomicalImageNoiseConfig(raw: ImageRawType, width: number, height: number, channels: 1 | 3, config: AstronomicalImageNoiseConfig): ResolvedAstronomicalImageNoiseConfig {
-	if (!Number.isInteger(width) || width < 0) throw new RangeError('width must be a non-negative integer')
-	if (!Number.isInteger(height) || height < 0) throw new RangeError('height must be a non-negative integer')
+	if (!Number.isInteger(width) || !(width >= 0)) throw new RangeError('width must be a non-negative integer')
+	if (!Number.isInteger(height) || !(height >= 0)) throw new RangeError('height must be a non-negative integer')
 
 	const expectedLength = width * height * channels
 	if (raw.length < expectedLength) throw new RangeError(`buffer length mismatch: expected ${expectedLength}, received ${raw.length}`)
@@ -894,24 +894,24 @@ function requireFinite(name: string, value: number) {
 
 // Requires a positive finite numeric parameter.
 function requirePositiveFinite(name: string, value: number) {
-	if (!Number.isFinite(value) || value <= 0) throw new RangeError(`${name} must be greater than zero`)
+	if (!Number.isFinite(value) || !(value > 0)) throw new RangeError(`${name} must be greater than zero`)
 	return value
 }
 
 // Requires a non-negative finite numeric parameter.
 function requireNonNegativeFinite(name: string, value: number) {
-	if (!Number.isFinite(value) || value < 0) throw new RangeError(`${name} must be non-negative`)
+	if (!Number.isFinite(value) || !(value >= 0)) throw new RangeError(`${name} must be non-negative`)
 	return value
 }
 
 // Requires a unit interval parameter.
 function requireFraction(name: string, value: number) {
-	if (!Number.isFinite(value) || value < 0 || value > 1) throw new RangeError(`${name} must be in the [0, 1] range`)
+	if (!Number.isFinite(value) || !(value >= 0) || !(value <= 1)) throw new RangeError(`${name} must be in the [0, 1] range`)
 	return value
 }
 
 // Requires an integer in a bounded range.
 function requireIntegerInRange(name: string, value: number, min: number, max: number) {
-	if (!Number.isInteger(value) || value < min || value > max) throw new RangeError(`${name} must be an integer in the [${min}, ${max}] range`)
+	if (!Number.isInteger(value) || !(value >= min) || !(value <= max)) throw new RangeError(`${name} must be an integer in the [${min}, ${max}] range`)
 	return value
 }

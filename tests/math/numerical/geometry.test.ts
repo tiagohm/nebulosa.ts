@@ -3,6 +3,7 @@ import { eraC2s, eraS2c, eraS2p } from '../../../src/astronomy/coordinates/erfa/
 import { arcmin, deg, hour } from '../../../src/math/units/angle'
 // oxfmt-ignore
 import { intersectLineAndSphere, midPoint, rectIntersection, type SphericalMountBasis, type SphericalTangentBasis, sphericalCoordinateBasis, sphericalDestination, sphericalDirectionVector, sphericalGreatCirclePole, sphericalInterpolate, sphericalMountBasis, sphericalMountDeclinationAxisVector, sphericalMountPolarAxisVector, sphericalOffsetVector, sphericalPoleVector, sphericalPolygonArea, sphericalPositionAngle, sphericalProjectTangentPlane, sphericalSeparation, sphericalTangentBasis, sphericalTriangleAngles, sphericalTriangleArea, sphericalUnprojectTangentPlane } from '../../../src/math/numerical/geometry'
+import { PI, PIOVERTWO } from '../../../src/core/constants'
 import { type Vec3, vecCross, vecDot, vecLength, vecNormalize } from '../../../src/math/linear-algebra/vec3'
 
 // Checks a vector with one tolerance per component.
@@ -76,7 +77,7 @@ test('intersect line and sphere', () => {
 })
 
 test('spherical separation stays stable near the pole', () => {
-	expect(sphericalSeparation(0, deg(89), Math.PI, deg(89))).toBeCloseTo(deg(2), 14)
+	expect(sphericalSeparation(0, deg(89), PI, deg(89))).toBeCloseTo(deg(2), 14)
 	expect(sphericalSeparation(0, 0, deg(90), 0)).toBeCloseTo(deg(90), 14)
 })
 
@@ -101,9 +102,9 @@ test('spherical interpolation follows the great-circle arc', () => {
 	expect(longitude).toBeCloseTo(deg(45), 14)
 	expect(latitude).toBeCloseTo(0, 14)
 
-	;[longitude, latitude] = sphericalInterpolate(0, 0, Math.PI, 0, 0.5)
+	;[longitude, latitude] = sphericalInterpolate(0, 0, PI, 0, 0.5)
 	expect(sphericalSeparation(0, 0, longitude, latitude)).toBeCloseTo(deg(90), 11)
-	expect(sphericalSeparation(Math.PI, 0, longitude, latitude)).toBeCloseTo(deg(90), 11)
+	expect(sphericalSeparation(PI, 0, longitude, latitude)).toBeCloseTo(deg(90), 11)
 })
 
 test('spherical vectors round-trip through spherical coordinates', () => {
@@ -234,12 +235,12 @@ test('spherical tangent-plane projection round-trips and follows the expected gn
 
 	const unprojected = sphericalUnprojectTangentPlane(projected.x, projected.y, origin)
 	expectVectorClose(unprojected, direction, 14)
-	expect(sphericalProjectTangentPlane(eraS2c(longitude + Math.PI, -latitude), origin)).toBeFalse()
+	expect(sphericalProjectTangentPlane(eraS2c(longitude + PI, -latitude), origin)).toBeFalse()
 })
 
 test('spherical mount polar axis vector uses hemisphere-aware polar error signs', () => {
 	expectVectorClose(sphericalMountPolarAxisVector(deg(52), deg(10), deg(-2)), eraS2c(deg(10), deg(50)), 14)
-	expectVectorClose(sphericalMountPolarAxisVector(deg(-35), deg(7), deg(-3)), eraS2c(Math.PI + deg(7), deg(38)), 14)
+	expectVectorClose(sphericalMountPolarAxisVector(deg(-35), deg(7), deg(-3)), eraS2c(PI + deg(7), deg(38)), 14)
 })
 
 test('spherical mount basis aligns with equatorial east and north for a standard polar axis', () => {
@@ -279,9 +280,9 @@ test('spherical mount basis falls back deterministically at the pole and zero ve
 
 test('spherical triangle area returns the exact octant excess', () => {
 	// Vertices at the equator (lon 0), the equator (lon 90 deg) and the north pole
-	// span one octant of the unit sphere: area = 4*PI / 8 = PI / 2 steradians.
+	// span one octant of the unit sphere: area = 4*PI / 8 = PIOVERTWO steradians.
 	const area = sphericalTriangleArea(deg(0), deg(0), deg(90), deg(0), deg(0), deg(90))
-	expect(area).toBeCloseTo(Math.PI / 2, 12)
+	expect(area).toBeCloseTo(PIOVERTWO, 12)
 })
 
 test('spherical triangle area is independent of vertex order', () => {
@@ -308,7 +309,7 @@ test('spherical polygon area sums fan triangles', () => {
 		[deg(0), deg(90)],
 		[deg(-90), deg(0)],
 	]
-	expect(sphericalPolygonArea(vertices)).toBeCloseTo(Math.PI, 12)
+	expect(sphericalPolygonArea(vertices)).toBeCloseTo(PI, 12)
 })
 
 test('spherical polygon area is zero for fewer than three vertices', () => {
@@ -325,9 +326,9 @@ test('spherical polygon area is zero for fewer than three vertices', () => {
 test('spherical triangle angles are all right angles for an octant', () => {
 	// The octant (equator, equator+90deg, north pole) is tri-rectangular.
 	const [a, b, c] = sphericalTriangleAngles(deg(0), deg(0), deg(90), deg(0), deg(0), deg(90))
-	expect(a).toBeCloseTo(Math.PI / 2, 12)
-	expect(b).toBeCloseTo(Math.PI / 2, 12)
-	expect(c).toBeCloseTo(Math.PI / 2, 12)
+	expect(a).toBeCloseTo(PIOVERTWO, 12)
+	expect(b).toBeCloseTo(PIOVERTWO, 12)
+	expect(c).toBeCloseTo(PIOVERTWO, 12)
 })
 
 test('spherical triangle angles sum to PI plus the spherical excess', () => {
@@ -339,7 +340,7 @@ test('spherical triangle angles sum to PI plus the spherical excess', () => {
 	const latC = deg(38)
 	const [a, b, c] = sphericalTriangleAngles(lonA, latA, lonB, latB, lonC, latC)
 	const excess = sphericalTriangleArea(lonA, latA, lonB, latB, lonC, latC)
-	expect(a + b + c - Math.PI).toBeCloseTo(excess, 12)
+	expect(a + b + c - PI).toBeCloseTo(excess, 12)
 })
 
 test('spherical triangle angles are zero for a degenerate triangle', () => {

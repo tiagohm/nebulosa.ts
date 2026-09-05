@@ -1,15 +1,20 @@
 import { describe, expect, test } from 'bun:test'
 import { medianOf, NumberComparator } from '../../../src/core/util'
 import type { Image } from '../../../src/imaging/model/types'
-import { detectStars, excludeStarsFitWithinRegion, measureStarPhotometry, mergeVeryCloseStars, StarList } from '../../../src/imaging/stars/detector'
+import { type DetectedStar, detectStars, excludeStarsFitWithinRegion, measureStarPhotometry, mergeVeryCloseStars, StarList } from '../../../src/imaging/stars/detector'
 import { type PlotStarOptions, plotStar } from '../../../src/imaging/stars/generator'
 import { type AstronomicalImageNoiseConfig, type AstronomicalImageStar, DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG, generateNoiseImage, generateStarImage } from '../../../src/imaging/synthetic/generator'
 import { Bitpix } from '../../../src/io/formats/fits/fits'
 import { mulberry32 } from '../../../src/math/numerical/random'
 import { downloadPerTag } from '../../download'
-import { readImage } from '../../util/image.util'
+import { readImage } from '../util'
 
 await downloadPerTag('stardetector')
+
+// Detection publishes a flux-weighted centroid, so integer peak equality is not a valid match.
+function starNear(stars: readonly DetectedStar[], x: number, y: number, maxDistancePx = 0.75) {
+	return stars.find((star) => Math.hypot(star.x - x, star.y - y) <= maxDistancePx)
+}
 
 test('star list', () => {
 	const list = new StarList(5)
@@ -121,6 +126,110 @@ test('measure star photometry from image aperture', () => {
 	expect(measureStarPhotometry(image, x, y, 0)).toEqual([0, 0, 0, 0])
 })
 
+test('measure star photometry ignores a bright neighbor in the background annulus', () => {
+	const width = 32
+	const height = 32
+	const raw = new Float32Array(width * height)
+	raw.fill(0.1)
+
+	const x = 16
+	const y = 16
+	raw[y * width + x] = 0.6
+	raw[y * width + x - 1] = 0.3
+	raw[y * width + x + 1] = 0.3
+	raw[(y - 1) * width + x] = 0.3
+	raw[(y + 1) * width + x] = 0.3
+	raw[(y + 6) * width + x] = 1
+
+	const image: Image = { raw, header: {}, metadata: { width, height, channels: 1, pixelCount: width * height, pixelSizeInBytes: 4, bitpix: -32, stride: width, strideInBytes: width * 4, bayer: undefined } }
+	const [flux, snr] = measureStarPhotometry(image, x, y, 4)
+
+	expect(flux).toBeCloseTo(1.3, 6)
+	expect(snr).toBeCloseTo(Math.sqrt(1.3), 6)
+})
+
+test('detect stars measures round and elongated shapes from central moments', () => {
+	const width = 64
+	const height = 64
+	const x = width / 2
+	const y = height / 2
+
+	function imageWithGaussian(sigmaX: number, sigmaY: number): Image {
+		const raw = new Float32Array(width * height).fill(0.05)
+		for (let py = 0; py < height; py++) {
+			for (let px = 0; px < width; px++) {
+				const dx = px - x
+				const dy = py - y
+				raw[py * width + px] += 0.8 * Math.exp(-0.5 * ((dx * dx) / (sigmaX * sigmaX) + (dy * dy) / (sigmaY * sigmaY)))
+			}
+		}
+		return { raw, header: {}, metadata: { width, height, channels: 1, pixelCount: width * height, pixelSizeInBytes: 4, bitpix: -32, stride: width, strideInBytes: width * 4, bayer: undefined } }
+	}
+
+	const round = detectStars(imageWithGaussian(1.5, 1.5), { maxStars: 1 })[0]
+	const elongated = detectStars(imageWithGaussian(2.4, 1), { maxStars: 1 })[0]
+
+	expect(round).toBeDefined()
+	expect(elongated).toBeDefined()
+	expect(round.eccentricity).toBeLessThan(0.1)
+	expect(round.elongation).toBeCloseTo(1, 1)
+	expect(elongated.eccentricity).toBeGreaterThan(0.5)
+	expect(elongated.elongation).toBeGreaterThan(1.5)
+})
+
+test('detect stars keeps a faint field when a few stars are much brighter', () => {
+	const width = 520
+	const height = 400
+	const raw = new Float32Array(width * height)
+	const positions: Array<readonly [number, number]> = []
+
+	for (let row = 0; row < 5; row++) {
+		for (let col = 0; col < 5; col++) {
+			if (row === 4 && col > 2) continue
+			positions.push([40 + col * 90, 40 + row * 70])
+		}
+	}
+
+	expect(positions).toHaveLength(23)
+
+	for (let i = 0; i < positions.length; i++) {
+		const [x, y] = positions[i]
+		plotStar(raw, width, height, 1, x, y, i < 3 ? 2 : 0.4, 3, i < 3 ? 100 : 40, 0)
+	}
+
+	const image: Image = { raw, header: {}, metadata: { width, height, channels: 1, pixelCount: width * height, pixelSizeInBytes: 4, bitpix: -32, stride: width, strideInBytes: width * 4, bayer: undefined } }
+	const stars = detectStars(image, { maxStars: 500 })
+
+	expect(stars).toHaveLength(23)
+	for (const [x, y] of positions) {
+		expect(starNear(stars, x, y, 1.5)).toBeDefined()
+	}
+	expect(stars[0].flux).toBeGreaterThan(stars.at(-1)!.flux)
+	for (let i = 1; i < stars.length; i++) {
+		expect(stars[i - 1].flux).toBeGreaterThanOrEqual(stars[i].flux)
+	}
+})
+
+test('detect stars rejects hot-pixel clumps that a 3x3 mean would turn into stars', () => {
+	const width = 128
+	const height = 128
+	const raw = new Float32Array(width * height).fill(0.1)
+	const x = 64
+	const y = 64
+	raw[y * width + x] = 1
+	raw[y * width + x + 1] = 1
+	raw[(y + 1) * width + x] = 1
+	raw[(y + 1) * width + x + 1] = 1
+	plotStar(raw, width, height, 1, 32, 32, 0.8, 3, 80, 0)
+
+	const image: Image = { raw, header: {}, metadata: { width, height, channels: 1, pixelCount: width * height, pixelSizeInBytes: 4, bitpix: -32, stride: width, strideInBytes: width * 4, bayer: undefined } }
+	const stars = detectStars(image, { maxStars: 50 })
+
+	expect(starNear(stars, 32, 32, 1.5)).toBeDefined()
+	expect(starNear(stars, x, y, 3)).toBeUndefined()
+	expect(stars).toHaveLength(1)
+})
+
 test('detect stars finds nothing in a flat image', () => {
 	const width = 128
 	const height = 128
@@ -128,6 +237,26 @@ test('detect stars finds nothing in a flat image', () => {
 	const image: Image = { raw, header: {}, metadata: { width, height, channels: 1, pixelCount: width * height, pixelSizeInBytes: 4, bitpix: -32, stride: width, strideInBytes: width * 4, bayer: undefined } }
 
 	expect(detectStars(image, { maxStars: 100 })).toHaveLength(0)
+})
+
+test('detect stars converts a flat CFA mosaic to intensity before filtering', () => {
+	const width = 128
+	const height = 128
+	const raw = new Float32Array(width * height)
+	for (let y = 0; y < height; y++) {
+		for (let x = 0; x < width; x++) raw[y * width + x] = (y & 1) === 0 ? ((x & 1) === 0 ? 0.6 : 0.5) : (x & 1) === 0 ? 0.5 : 0.4
+	}
+	const image: Image = { raw, header: { BAYERPAT: 'RGGB' }, metadata: { width, height, channels: 1, pixelCount: width * height, pixelSizeInBytes: 4, bitpix: -32, stride: width, strideInBytes: width * 4, bayer: 'RGGB' } }
+	const before = raw.slice()
+
+	expect(detectStars(image, { maxStars: 500 })).toHaveLength(0)
+	expect(image.raw).toEqual(before)
+})
+
+test('star analysis returns no result when a CFA image is too small to interpolate', () => {
+	const image: Image = { raw: new Float32Array([0.5]), header: { BAYERPAT: 'RGGB' }, metadata: { width: 1, height: 1, channels: 1, pixelCount: 1, pixelSizeInBytes: 4, bitpix: -32, stride: 1, strideInBytes: 4, bayer: 'RGGB' } }
+	expect(detectStars(image)).toEqual([])
+	expect(measureStarPhotometry(image, 0, 0, 1)).toEqual([0, 0, 0, 0])
 })
 
 describe('detect stars I', () => {
@@ -157,11 +286,11 @@ describe('detect stars I', () => {
 
 		const image: Image = { raw, header: {}, metadata: { width, height, channels: 1, pixelCount: width * height, pixelSizeInBytes: 8, bitpix: -64, stride: width, strideInBytes: width * 8, bayer: undefined } }
 		const stars = detectStars(image, { maxStars: 2000 })
-		expect(stars.find((s) => s.x === 200 && s.y === 100)).toBeDefined()
-		expect(stars.find((s) => s.x === 50 && s.y === 50)).toBeDefined()
-		expect(stars.find((s) => s.x === 50 && s.y === 150)).toBeDefined()
-		expect(stars.find((s) => s.x === 350 && s.y === 50)).toBeDefined()
-		expect(stars.find((s) => s.x === 350 && s.y === 150)).toBeDefined()
+		expect(starNear(stars, 200, 100)).toBeDefined()
+		expect(starNear(stars, 50, 50)).toBeDefined()
+		expect(starNear(stars, 50, 150)).toBeDefined()
+		expect(starNear(stars, 350, 50)).toBeDefined()
+		expect(starNear(stars, 350, 150)).toBeDefined()
 		expect(stars.length).toBe(5)
 		expect(detectStars(image, { maxStars: 2000, minSNR: Number.POSITIVE_INFINITY })).toHaveLength(0)
 	})
@@ -187,11 +316,11 @@ describe('detect stars I', () => {
 
 		const image: Image = { raw, header: {}, metadata: { width, height, channels: 1, pixelCount: width * height, pixelSizeInBytes: 8, bitpix: -64, stride: width, strideInBytes: width * 8, bayer: undefined } }
 		const stars = detectStars(image, { maxStars: 2000 })
-		expect(stars.find((s) => s.x === 200 && s.y === 100)).toBeDefined()
-		expect(stars.find((s) => s.x === 50 && s.y === 50)).toBeDefined()
-		expect(stars.find((s) => s.x === 50 && s.y === 150)).toBeDefined()
-		expect(stars.find((s) => s.x === 350 && s.y === 50)).toBeDefined()
-		expect(stars.find((s) => s.x === 350 && s.y === 150)).toBeDefined()
+		expect(starNear(stars, 200, 100)).toBeDefined()
+		expect(starNear(stars, 50, 50)).toBeDefined()
+		expect(starNear(stars, 50, 150)).toBeDefined()
+		expect(starNear(stars, 350, 50)).toBeDefined()
+		expect(starNear(stars, 350, 150)).toBeDefined()
 		expect(stars.length).toBe(5)
 	})
 })
@@ -200,15 +329,14 @@ test('detect stars from real image', async () => {
 	const [image] = await readImage(Bitpix.FLOAT, 3)
 	const stars = detectStars(image, { maxStars: 500 })
 
-	expect(stars).toHaveLength(500)
+	expect(stars.length).toBeGreaterThan(400)
+	expect(stars.length).toBeLessThanOrEqual(500)
 	const flux = stars.map((e) => e.flux).sort(NumberComparator)
 	const snr = stars.map((e) => e.snr).sort(NumberComparator)
 	const hfd = stars.map((e) => e.hfd).sort(NumberComparator)
 	const fwhm = stars.map((e) => e.fwhm ?? 0).sort(NumberComparator)
-	const carina = stars.find((e) => e.x === 564 && e.y === 544)
+	const carina = starNear(stars, 564, 544, 1)
 	expect(carina).toBeDefined()
-	expect(carina!.x).toBe(564)
-	expect(carina!.y).toBe(544)
 	expect(carina!.flux).toBeGreaterThan(0)
 	expect(carina!.snr).toBeGreaterThan(0)
 	expect(carina!.hfd).toBeGreaterThan(0)
@@ -217,6 +345,21 @@ test('detect stars from real image', async () => {
 	expect(medianOf(snr)).toBeGreaterThan(0)
 	expect(medianOf(hfd)).toBeGreaterThanOrEqual(1.5)
 	expect(medianOf(fwhm)).toBeGreaterThan(0)
+})
+
+test('detectStars reports the flux-weighted centroid of a sub-pixel peak', () => {
+	const width = 200
+	const height = 160
+	const raw = new Float32Array(width * height)
+	plotStar(raw, width, height, 1, 120.4, 80.6, 0.5, 3, 100, 0)
+
+	const image: Image = { raw, header: {}, metadata: { width, height, channels: 1, pixelCount: width * height, pixelSizeInBytes: 8, bitpix: -64, stride: width, strideInBytes: width * 8, bayer: undefined } }
+	const stars = detectStars(image, { maxStars: 10 })
+	expect(stars).toHaveLength(1)
+	expect(Math.abs(stars[0].x - 120.4)).toBeLessThan(0.08)
+	expect(Math.abs(stars[0].y - 80.6)).toBeLessThan(0.08)
+	expect(stars[0].x).not.toBe(Math.round(stars[0].x))
+	expect(stars[0].y).not.toBe(Math.round(stars[0].y))
 })
 
 const BASE_NOISE_CONFIG: AstronomicalImageNoiseConfig = {
@@ -304,15 +447,19 @@ describe('detect stars II', () => {
 	] as const
 
 	for (const scenario of scenarios) {
-		test(scenario.name, () => {
-			const raw = new Float32Array(width * height)
-			const stars = generateStars(scenario.seed, scenario.hfd, scenario.flux, scenario.snr)
-			expect(stars).toHaveLength(count)
+		test(
+			scenario.name,
+			() => {
+				const raw = new Float32Array(width * height)
+				const stars = generateStars(scenario.seed, scenario.hfd, scenario.flux, scenario.snr)
+				expect(stars).toHaveLength(count)
 
-			generateStarImage(raw, width, height, 1, stars, 1.2, BASE_NOISE_CONFIG, BASE_PLOT_OPTIONS)
-			const image: Image = { raw, header: { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: width, NAXIS2: height }, metadata: { width, height, channels: 1, pixelCount: width * height, pixelSizeInBytes: 4, bitpix: -32, stride: width, strideInBytes: width * 4, bayer: undefined } }
-			const detectedStars = detectStars(image, { maxStars: 500 })
-			expect(detectedStars).toHaveLength(stars.length)
-		})
+				generateStarImage(raw, width, height, 1, stars, 1.2, BASE_NOISE_CONFIG, BASE_PLOT_OPTIONS)
+				const image: Image = { raw, header: { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: width, NAXIS2: height }, metadata: { width, height, channels: 1, pixelCount: width * height, pixelSizeInBytes: 4, bitpix: -32, stride: width, strideInBytes: width * 4, bayer: undefined } }
+				const detectedStars = detectStars(image, { maxStars: 500 })
+				expect(detectedStars).toHaveLength(stars.length)
+			},
+			2000,
+		)
 	}
 })

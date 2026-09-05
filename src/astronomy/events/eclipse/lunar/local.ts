@@ -5,7 +5,7 @@ import { clamp } from '../../../../math/numerical/math'
 import { type Angle, normalizeAngle, normalizePI } from '../../../../math/units/angle'
 import { nearestLunarEclipse, type LunarEclipse } from '../../../bodies/moon'
 import { parallacticAngle } from '../../../coordinates/astrometry'
-import { equatorialToHorizontal } from '../../../coordinates/coordinate'
+import { equatorialToHorizontal, positionAngleBetween } from '../../../coordinates/coordinate'
 import { eraGst06a } from '../../../coordinates/erfa/erfa'
 import { timeAtJulianDay, toJulianDay, tt, type Time } from '../../../time/time'
 import type { SunMoonProvider } from '../eclipse'
@@ -136,17 +136,6 @@ function contactGast(time: Time, deltaT: number) {
 	return eraGst06a(ttTime.day, ut1Fraction, ttTime.day, ttTime.fraction)
 }
 
-// Position angle (radians, [0, TAU)) of point 2 as seen from point 1, measured from celestial north toward
-// east. Uses the stable atan2 formulation; the Earth shadow center is the antisolar point.
-function positionAngleBetween(ra1: Angle, dec1: Angle, ra2: Angle, dec2: Angle) {
-	const dRA = ra2 - ra1
-	const sinDRA = Math.sin(dRA)
-	const cosDRA = Math.cos(dRA)
-	const y = Math.cos(dec2) * sinDRA
-	const x = Math.cos(dec1) * Math.sin(dec2) - Math.sin(dec1) * Math.cos(dec2) * cosDRA
-	return normalizeAngle(Math.atan2(y, x))
-}
-
 // Whether the contact is the internal (totality) tangency U2/U3 of a total eclipse. There the lunar limb is
 // tangent to the umbra from the inside, so the limb contact point lies on the far side of the disk from the
 // Earth-shadow center; the external contacts (P1/U1/U4/P4) touch on the shadow-center side instead.
@@ -240,7 +229,7 @@ function computeLocalEvent(contact: LunarEclipseContact, eclipse: LunarEclipse, 
 	// external contacts, flipped by PI at the U2/U3 internal tangency of a total eclipse (far side of the disk).
 	const shadowRA = position.sun.rightAscension + PI
 	const shadowDEC = -position.sun.declination
-	const shadowCenterAngle = positionAngleBetween(moonRA, moonDEC, shadowRA, shadowDEC)
+	const shadowCenterAngle = positionAngleBetween(moonRA, moonDEC, shadowRA, shadowDEC) // The Earth shadow center is the antisolar point.
 	const positionAngle = isInternalTangencyContact(contact.kind, eclipse.type) ? normalizeAngle(shadowCenterAngle + PI) : shadowCenterAngle
 
 	// Lunar parallactic angle converts the celestial-north P angle into the zenith-oriented Z angle.

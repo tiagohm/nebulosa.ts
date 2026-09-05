@@ -12,6 +12,9 @@ export const PI = Math.PI
 // The number π divided by 2.
 export const PIOVERTWO = PI / 2
 
+// The number π divided by 4.
+export const PIOVERFOUR = PI / 4
+
 // The number τ. This is the ratio of the circumference of a circle to its radius.
 export const TAU = PI * 2
 

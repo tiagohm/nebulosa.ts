@@ -313,10 +313,10 @@ function resolvePolicy(policy: MeridianFlipPolicy): ResolvedMeridianFlipPolicy {
 	validateConfiguredPierSide(policy.beforeFlipPierSide, 'beforeFlipPierSide')
 	validateConfiguredPierSide(policy.afterFlipPierSide, 'afterFlipPierSide')
 
-	if (policy.prepareAt > policy.flipAt) throw new RangeError('prepareAt must be less than or equal to flipAt')
-	if (policy.flipAt > policy.latestAt) throw new RangeError('flipAt must be less than or equal to latestAt')
+	if (!(policy.prepareAt <= policy.flipAt)) throw new RangeError('prepareAt must be less than or equal to flipAt')
+	if (!(policy.flipAt <= policy.latestAt)) throw new RangeError('flipAt must be less than or equal to latestAt')
 	if (policy.beforeFlipPierSide !== undefined && policy.afterFlipPierSide !== undefined && policy.beforeFlipPierSide === policy.afterFlipPierSide) throw new RangeError('beforeFlipPierSide and afterFlipPierSide must differ')
-	if (policy.maxRetries !== undefined && (!Number.isFinite(policy.maxRetries) || !Number.isInteger(policy.maxRetries) || !Number.isSafeInteger(policy.maxRetries) || policy.maxRetries < 0)) throw new RangeError('maxRetries must be a non-negative safe integer')
+	if (policy.maxRetries !== undefined && (!Number.isFinite(policy.maxRetries) || !Number.isInteger(policy.maxRetries) || !Number.isSafeInteger(policy.maxRetries) || !(policy.maxRetries >= 0))) throw new RangeError('maxRetries must be a non-negative safe integer')
 
 	return {
 		...policy,
@@ -330,7 +330,7 @@ function resolvePolicy(policy: MeridianFlipPolicy): ResolvedMeridianFlipPolicy {
 // Validates one operational-window threshold angle in radians.
 function validateThreshold(value: Angle, name: string) {
 	validateFiniteAngle(value, name)
-	if (value < -PIOVERTWO || value > PIOVERTWO) throw new RangeError(`${name} must be within [-PI / 2, PI / 2]`)
+	if (!(value >= -PIOVERTWO) || !(value <= PIOVERTWO)) throw new RangeError(`${name} must be within [-PI / 2, PI / 2]`)
 }
 
 // Validates one finite angular runtime value in radians.
@@ -355,7 +355,7 @@ function validateSnapshot(snapshot: MeridianFlipSnapshot) {
 // Validates a persisted lifecycle state supplied by the application.
 function validateState(state: MeridianFlipState) {
 	if (!STATE_PHASES.has(state.phase)) throw new RangeError('state.phase is invalid')
-	if (!Number.isInteger(state.attempts) || !Number.isSafeInteger(state.attempts) || state.attempts < 0) throw new RangeError('state.attempts must be a non-negative safe integer')
+	if (!Number.isInteger(state.attempts) || !Number.isSafeInteger(state.attempts) || !(state.attempts >= 0)) throw new RangeError('state.attempts must be a non-negative safe integer')
 	if (typeof state.preparationCompleted !== 'boolean') throw new RangeError('state.preparationCompleted must be boolean')
 	if (state.failure !== undefined && !REASONS.has(state.failure)) throw new RangeError('state.failure is invalid')
 	if (state.phase !== 'FAILED' && state.failure !== undefined) throw new RangeError('state.failure is only valid when phase is FAILED')

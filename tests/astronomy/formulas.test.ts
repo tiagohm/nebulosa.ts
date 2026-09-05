@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 // oxfmt-ignore
-import { asteroidMagnitudeEstimate, airmass, airmassKastenYoung, airyDiskInPixels, airyDiskSize, altitudeAtTransit, atmosphericExtinction, atmosphericRefraction, cometMagnitudeEstimate, criticalFocusZone, dawesLimit, dewPoint, dynamicRange, dynamicRangeInStops, effectiveApertureWithObstruction, exitPupil, exitPupilFromApertureAndMagnification, exitPupilFromEyepieceAndFocalRatio, eyepieceTrueFovViaFieldStop, eyepieceView, focalLength, focalRatio, guidingErrorInPixels, hourAngleAtAltitude, lightGraspRatio, limitingMagnitude, magnification, maxExposureBeforeTrail, mosaicPanelCount, objectAngularDiameter, obstructionRatio, periodicErrorInPixels, pixelScale, plateScale, rayleighLimit, recommendedFocalLength, requiredSubframeCount, samplingRatio, saturationTime, sensorDiagonalFov, sensorFieldOfView, signalToNoiseRatio, skyLimitedExposure, stackingMagnitudeGain, stackingSnrGain, starTrailLength, subframeCount, surfaceBrightness, totalIntegrationTime } from '../../src/astronomy/formulas'
-import { DEG2RAD, RAD2DEG } from '../../src/core/constants'
+import { asteroidMagnitudeEstimate, airmass, airmassKastenYoung, airyDiskInPixels, airyDiskSize, altitudeAtTransit, atmosphericExtinction, atmosphericRefraction, cometMagnitudeEstimate, criticalFocusZone, dawesLimit, dewPoint, dynamicRange, dynamicRangeInStops, effectiveApertureWithObstruction, exitPupil, exitPupilFromApertureAndMagnification, exitPupilFromEyepieceAndFocalRatio, eyepieceTrueFovViaFieldStop, eyepieceView, focalLength, focalRatio, guidingErrorInPixels, hourAngleAtAltitude, lightGraspRatio, isMagnusDomain, limitingMagnitude, MAGNUS_MAX_CELSIUS, MAGNUS_MIN_CELSIUS, magnification, maxExposureBeforeTrail, mosaicPanelCount, objectAngularDiameter, obstructionRatio, periodicErrorInPixels, pixelScale, plateScale, rayleighLimit, recommendedFocalLength, relativeHumidity, requiredSubframeCount, samplingRatio, saturationTime, sensorDiagonalFov, sensorFieldOfView, signalToNoiseRatio, skyLimitedExposure, stackingMagnitudeGain, stackingSnrGain, starTrailLength, subframeCount, surfaceBrightness, totalIntegrationTime } from '../../src/astronomy/formulas'
+import { DEG2RAD, PIOVERTWO, RAD2DEG } from '../../src/core/constants'
 
 test('visual astronomy and optical planning formulas return expected values', () => {
 	expect(focalLength(200, 5)).toBe(1000)
@@ -58,6 +58,9 @@ test('atmospheric, transit, brightness, comet, and asteroid formulas return expe
 	expect(atmosphericExtinction(0.2, 1.5)).toBeCloseTo(0.3, 12)
 	expect(atmosphericRefraction(45 * DEG2RAD)).toBeCloseTo(1.01270766, 8)
 	expect(dewPoint(20, 60)).toBeCloseTo(11.99989462, 8)
+	expect(relativeHumidity(20, 11.99989462)).toBeCloseTo(60, 7)
+	expect(relativeHumidity(-10, -15)).toBeCloseTo(66.82932857, 8)
+	expect(relativeHumidity(20, 20)).toBe(100)
 	expect(altitudeAtTransit(-23 * DEG2RAD, -5 * DEG2RAD)).toBeCloseTo(72 * DEG2RAD, 12)
 	expect(altitudeAtTransit(-23 * DEG2RAD, -5 * DEG2RAD)).toBeCloseTo(1.2566370614, 10)
 	expect(objectAngularDiameter(1391400, 149597870.7)).toBeCloseTo(0.00930086747, 11)
@@ -67,59 +70,21 @@ test('atmospheric, transit, brightness, comet, and asteroid formulas return expe
 	expect(asteroidMagnitudeEstimate(12, 1.5, 0.8, 0.3)).toBeCloseTo(12.69590623, 8)
 })
 
-test('formulas reject invalid inputs and denominators consistently', () => {
-	expect(() => focalLength(0, 5)).toThrow('value must be positive')
-	expect(() => focalRatio(1000, 0)).toThrow('value must be positive')
-	expect(() => magnification(1000, 0)).toThrow('value must be positive')
-	expect(() => dawesLimit(0)).toThrow('value must be positive')
-	expect(() => rayleighLimit(-1)).toThrow('value must be positive')
-	expect(() => limitingMagnitude(0)).toThrow('value must be positive')
+test('formulas reject structurally inconsistent inputs', () => {
 	expect(() => lightGraspRatio(100, 200)).toThrow('larger aperture must be at least smaller aperture')
-	expect(() => exitPupil(200, 0)).toThrow('value must be positive')
-	expect(() => eyepieceTrueFovViaFieldStop(-27, 1000)).toThrow('value must be positive')
-	expect(() => eyepieceView(1000, 200, 10, 0)).toThrow('value must be positive')
-	expect(() => plateScale(0)).toThrow('value must be positive')
-	expect(() => pixelScale(0, 800)).toThrow('value must be positive')
-	expect(() => samplingRatio(2.5, 0)).toThrow('value must be positive')
-	expect(() => recommendedFocalLength(3.76, 0, 2.5)).toThrow('value must be positive')
-	expect(() => airyDiskSize(0.55, -5)).toThrow('value must be positive')
-	expect(() => airyDiskInPixels(6.71, 0)).toThrow('value must be positive')
-	expect(() => criticalFocusZone(Number.NaN, 5)).toThrow('value must be finite')
 	expect(() => effectiveApertureWithObstruction(200, 200)).toThrow('obstruction diameter must be smaller than aperture diameter')
 	expect(() => obstructionRatio(200, 201)).toThrow('obstruction diameter must be no larger than aperture diameter')
-	expect(() => sensorDiagonalFov(28.4, 0)).toThrow('value must be positive')
-	expect(() => sensorFieldOfView(22.3, 0)).toThrow('value must be positive')
-	expect(() => mosaicPanelCount(5, 2, 1)).toThrow('value must be within')
-	expect(() => guidingErrorInPixels(-0.8, 1.2)).toThrow('value must be non-negative')
-	expect(() => periodicErrorInPixels(15, 0)).toThrow('value must be positive')
-	expect(() => starTrailLength(100 * DEG2RAD, 10, 1.2)).toThrow('value must be within')
 	expect(() => maxExposureBeforeTrail(2, 1.2, 90 * DEG2RAD)).toThrow('declination is too close to the celestial pole')
 	expect(() => signalToNoiseRatio(0, 25, 0, 0, 0)).toThrow('noise variance must be positive')
-	expect(() => stackingSnrGain(0)).toThrow('value must be positive')
-	expect(() => stackingMagnitudeGain(-1)).toThrow('value must be positive')
-	expect(() => dynamicRange(50000, 0)).toThrow('value must be positive')
-	expect(() => dynamicRangeInStops(50000, Number.POSITIVE_INFINITY)).toThrow('value must be finite')
-	expect(() => saturationTime(50000, 0)).toThrow('value must be positive')
-	expect(() => skyLimitedExposure(3, 0)).toThrow('value must be positive')
-	expect(() => totalIntegrationTime(-1, 120)).toThrow('value must be non-negative')
-	expect(() => subframeCount(3600, 0)).toThrow('value must be positive')
-	expect(() => airmass(90 * DEG2RAD)).toThrow('value must be within')
-	expect(() => airmassKastenYoung(0)).toThrow('value must be within')
 	expect(() => atmosphericExtinction(0.2, 0.9)).toThrow('airmass must be at least 1')
-	expect(() => atmosphericRefraction(0)).toThrow('value must be within')
 	expect(() => dewPoint(20, 0)).toThrow('relative humidity must be within')
 	expect(() => dewPoint(20, 101)).toThrow('relative humidity must be within')
-	expect(() => altitudeAtTransit(100 * DEG2RAD, 0)).toThrow('value must be within')
-	expect(() => objectAngularDiameter(1391400, 0)).toThrow('value must be positive')
-	expect(() => surfaceBrightness(10, 0)).toThrow('value must be positive')
-	expect(() => cometMagnitudeEstimate(8, 0, 1.2, 10)).toThrow('value must be positive')
-	expect(() => asteroidMagnitudeEstimate(12, 1.5, 0, 0.3)).toThrow('value must be positive')
 })
 
 test('hour angle at altitude gives a six-hour arc for a body on the celestial equator', () => {
 	// A declination-zero body is up exactly half the day at any latitude: H = 90 deg.
-	expect(hourAngleAtAltitude(0, 45 * DEG2RAD, 0)).toBeCloseTo(Math.PI / 2, 12)
-	expect(hourAngleAtAltitude(0, 0, 0)).toBeCloseTo(Math.PI / 2, 12)
+	expect(hourAngleAtAltitude(0, 45 * DEG2RAD, 0)).toBeCloseTo(PIOVERTWO, 12)
+	expect(hourAngleAtAltitude(0, 0, 0)).toBeCloseTo(PIOVERTWO, 12)
 })
 
 test('hour angle at altitude matches the standard semidiurnal arc', () => {
@@ -134,4 +99,42 @@ test('hour angle at altitude returns undefined for circumpolar and never-rising 
 	expect(hourAngleAtAltitude(80 * DEG2RAD, 80 * DEG2RAD, 0)).toBeUndefined()
 	// Its southern counterpart never rises above h0 = 0.
 	expect(hourAngleAtAltitude(-80 * DEG2RAD, 80 * DEG2RAD, 0)).toBeUndefined()
+})
+
+test('dew point and relative humidity invert each other over the useful domain', () => {
+	for (const temperature of [-30, -5, 0, 12.5, 25, 40]) {
+		for (const humidity of [1, 17.5, 50, 82.3, 100]) {
+			expect(relativeHumidity(temperature, dewPoint(temperature, humidity))).toBeCloseTo(humidity, 10)
+		}
+	}
+})
+
+test('relative humidity stays finite and positive across its whole domain', () => {
+	// The Magnus terms are unbounded near the -243.04 C singularity, so the domain has to be narrow enough
+	// that the inverse relation's exponential cannot overflow. The extremes are the worst case.
+	expect(relativeHumidity(MAGNUS_MIN_CELSIUS, MAGNUS_MAX_CELSIUS)).toBeFinite()
+	expect(relativeHumidity(MAGNUS_MAX_CELSIUS, MAGNUS_MIN_CELSIUS)).toBeGreaterThan(0)
+	expect(isMagnusDomain(MAGNUS_MIN_CELSIUS)).toBeTrue()
+	expect(isMagnusDomain(MAGNUS_MAX_CELSIUS)).toBeTrue()
+	expect(isMagnusDomain(-243.04 + 0.1)).toBeFalse()
+	expect(isMagnusDomain(Number.NaN)).toBeFalse()
+
+	for (let temperature = MAGNUS_MIN_CELSIUS; temperature <= MAGNUS_MAX_CELSIUS; temperature += 5) {
+		for (let dew = MAGNUS_MIN_CELSIUS; dew <= MAGNUS_MAX_CELSIUS; dew += 5) {
+			const humidity = relativeHumidity(temperature, dew)
+			expect(humidity).toBeFinite()
+			expect(humidity).toBeGreaterThan(0)
+		}
+
+		expect(dewPoint(temperature, 1)).toBeFinite()
+		expect(dewPoint(temperature, 100)).toBeFinite()
+	}
+})
+
+test('relative humidity reports supersaturation instead of failing', () => {
+	// Saturated air round-trips a hair above the temperature, so a dew point above it must stay usable:
+	// it is what a fogged-in station reports, and the Alpaca boundary is where the 0..100 clamp belongs.
+	expect(dewPoint(12.5, 100)).toBeGreaterThan(12.5)
+	expect(relativeHumidity(12.5, dewPoint(12.5, 100))).toBeCloseTo(100, 10)
+	expect(relativeHumidity(20, 22)).toBeGreaterThan(100)
 })

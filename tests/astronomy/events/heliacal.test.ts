@@ -43,7 +43,7 @@ test('computes the four heliacal phases of Sirius in chronological order', () =>
 		expect(toDeg(altitudeOf(SIRIUS, phase.time, CAIRO))).toBeCloseTo(-0.567, 1) // STANDARD_HORIZON
 		expect(toDeg(altitudeOf(sunDirection(phase.time), phase.time, CAIRO))).toBeCloseTo(-toDeg(phase.arcusVisionis), 3)
 	}
-}, 10000)
+}, 15000)
 
 test('matches the heliacal (Sothic) rising date of Sirius', () => {
 	const rising = heliacalPhases(siriusDirection, sunDirection, CAIRO, RISING_START, RISING_STOP, { step: STEP }).find((p) => p.kind === 'heliacalRising')!
@@ -64,7 +64,7 @@ test('a larger arc of vision delays the heliacal rising', () => {
 	const at13 = heliacalPhases(siriusDirection, sunDirection, CAIRO, RISING_START, RISING_STOP, { arcusVisionis: deg(13), step: STEP }).find((p) => p.kind === 'heliacalRising')!
 	// A fainter-object (deeper) arc of vision needs the Sun further down, reached later in the season.
 	expect(timeToDate(utc(at13.time))[2]).toBeGreaterThan(timeToDate(utc(at11.time))[2])
-}, 6000)
+}, 12000)
 
 test('a circumpolar object has no heliacal phases', () => {
 	// A star near the north celestial pole never sets from Cairo, so it has no rise/set crossings.

@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test'
 import { AlpacaApi } from '../../../src/devices/alpaca/api'
+import type { AlpacaRequestResult } from '../../../src/devices/alpaca/types'
 
 const alpaca = new AlpacaApi('http://localhost:32323')
 
@@ -7,9 +8,15 @@ const alpaca = new AlpacaApi('http://localhost:32323')
 // would throw a ConnectionRefused at import and pollute the test run.
 const isAlpacaTestEnabled = process.env.ALPACA === 'true'
 const configuredDevices = isAlpacaTestEnabled ? await alpaca.management.configuredDevices() : undefined
-const filterWheel = isAlpacaTestEnabled && configuredDevices?.find((e) => e.DeviceType === 'filterwheel')
-const focuser = isAlpacaTestEnabled && configuredDevices?.find((e) => e.DeviceType === 'focuser')
-const coverCalibrator = isAlpacaTestEnabled && configuredDevices?.find((e) => e.DeviceType === 'covercalibrator')
+const devices = configuredDevices?.ok ? configuredDevices.value : []
+const filterWheel = devices.find((e) => e.DeviceType === 'filterwheel')
+const focuser = devices.find((e) => e.DeviceType === 'focuser')
+const coverCalibrator = devices.find((e) => e.DeviceType === 'covercalibrator')
+
+async function valueOf<T>(call: Promise<AlpacaRequestResult<T>>) {
+	const result = await call
+	return result.ok ? result.value : undefined
+}
 
 test('builds device API endpoint roots without contacting a server', () => {
 	const api = new AlpacaApi('http://example.test:11111/root')
@@ -20,34 +27,40 @@ test('builds device API endpoint roots without contacting a server', () => {
 	expect(api.focuser.url.toString()).toBe('http://example.test:11111/api/v1/focuser/')
 	expect(api.coverCalibrator.url.toString()).toBe('http://example.test:11111/api/v1/covercalibrator/')
 	expect(api.rotator.url.toString()).toBe('http://example.test:11111/api/v1/rotator/')
+	expect(api.dome.url.toString()).toBe('http://example.test:11111/api/v1/dome/')
+	expect(api.safetyMonitor.url.toString()).toBe('http://example.test:11111/api/v1/safetymonitor/')
 })
 
 if (filterWheel) {
-	test('filter wheel', async () => {
-		await alpaca.filterWheel.connect(filterWheel.DeviceNumber)
+	const id = filterWheel.DeviceNumber
 
-		const names = await alpaca.filterWheel.getNames(filterWheel.DeviceNumber)
-		const position = await alpaca.filterWheel.getPosition(filterWheel.DeviceNumber)
+	test('filter wheel', async () => {
+		await alpaca.filterWheel.connect(id)
+
+		const names = await valueOf(alpaca.filterWheel.getNames(id))
+		const position = await valueOf(alpaca.filterWheel.getPosition(id))
 
 		expect(names).not.toBeEmpty()
 		expect(position).toBeDefined()
 
 		const newPosition = (position! + 1) % names!.length
-		await alpaca.filterWheel.setPosition(filterWheel.DeviceNumber, newPosition)
-		while ((await alpaca.filterWheel.getPosition(filterWheel.DeviceNumber)) === -1) await Bun.sleep(250)
-		expect(await alpaca.filterWheel.getPosition(filterWheel.DeviceNumber)).toBe(newPosition)
+		await alpaca.filterWheel.setPosition(id, newPosition)
+		while ((await valueOf(alpaca.filterWheel.getPosition(id))) === -1) await Bun.sleep(250)
+		expect(await valueOf(alpaca.filterWheel.getPosition(id))).toBe(newPosition)
 	})
 }
 
 if (focuser) {
-	test('focuser', async () => {
-		await alpaca.focuser.connect(focuser.DeviceNumber)
+	const id = focuser.DeviceNumber
 
-		const absolute = await alpaca.focuser.isAbsolute(focuser.DeviceNumber)
-		const maxStep = await alpaca.focuser.getMaxStep(focuser.DeviceNumber)
-		const position = await alpaca.focuser.getPosition(focuser.DeviceNumber)
-		const temperature = await alpaca.focuser.getTemperature(focuser.DeviceNumber)
-		const temperatureCompensationAvailable = await alpaca.focuser.isTemperatureCompensationAvailable(focuser.DeviceNumber)
+	test('focuser', async () => {
+		await alpaca.focuser.connect(id)
+
+		const absolute = await valueOf(alpaca.focuser.isAbsolute(id))
+		const maxStep = await valueOf(alpaca.focuser.getMaxStep(id))
+		const position = await valueOf(alpaca.focuser.getPosition(id))
+		const temperature = await valueOf(alpaca.focuser.getTemperature(id))
+		const temperatureCompensationAvailable = await valueOf(alpaca.focuser.isTemperatureCompensationAvailable(id))
 
 		expect(absolute).toBeTrue()
 		expect(maxStep).toBe(50000)
@@ -55,23 +68,25 @@ if (focuser) {
 		expect(temperature).toBeDefined()
 		expect(temperatureCompensationAvailable).toBeTrue()
 
-		await alpaca.focuser.setTemperatureCompensation(focuser.DeviceNumber, false)
+		await alpaca.focuser.setTemperatureCompensation(id, false)
 		const newPosition = (position! + 100) % 50000
-		await alpaca.focuser.move(focuser.DeviceNumber, newPosition)
-		while (await alpaca.focuser.isMoving(focuser.DeviceNumber)) await Bun.sleep(250)
-		expect(await alpaca.focuser.getPosition(focuser.DeviceNumber)).toBe(newPosition)
-		expect(await alpaca.focuser.isTemperatureCompensation(focuser.DeviceNumber)).toBeFalse()
+		await alpaca.focuser.move(id, newPosition)
+		while (await valueOf(alpaca.focuser.isMoving(id))) await Bun.sleep(250)
+		expect(await valueOf(alpaca.focuser.getPosition(id))).toBe(newPosition)
+		expect(await valueOf(alpaca.focuser.isTemperatureCompensation(id))).toBeFalse()
 	})
 }
 
 if (coverCalibrator) {
-	test('cover calibrator', async () => {
-		await alpaca.coverCalibrator.connect(coverCalibrator.DeviceNumber)
+	const id = coverCalibrator.DeviceNumber
 
-		const maxBrightness = await alpaca.coverCalibrator.getMaxBrightness(coverCalibrator.DeviceNumber)
-		const brightness = await alpaca.coverCalibrator.getBrightness(coverCalibrator.DeviceNumber)
-		const coverState = await alpaca.coverCalibrator.getCoverState(coverCalibrator.DeviceNumber)
-		const calibratorState = await alpaca.coverCalibrator.getCalibratorState(coverCalibrator.DeviceNumber)
+	test('cover calibrator', async () => {
+		await alpaca.coverCalibrator.connect(id)
+
+		const maxBrightness = await valueOf(alpaca.coverCalibrator.getMaxBrightness(id))
+		const brightness = await valueOf(alpaca.coverCalibrator.getBrightness(id))
+		const coverState = await valueOf(alpaca.coverCalibrator.getCoverState(id))
+		const calibratorState = await valueOf(alpaca.coverCalibrator.getCalibratorState(id))
 
 		expect(maxBrightness).toBe(100)
 		expect(brightness).toBeDefined()
@@ -81,23 +96,23 @@ if (coverCalibrator) {
 		const shouldBeOpen = coverState === 4 && Math.random() <= 0.5
 
 		if (coverState === 1 || shouldBeOpen) {
-			await alpaca.coverCalibrator.open(coverCalibrator.DeviceNumber)
-			while (await alpaca.coverCalibrator.isMoving(coverCalibrator.DeviceNumber)) await Bun.sleep(250)
-			expect(await alpaca.coverCalibrator.getCoverState(coverCalibrator.DeviceNumber)).toBe(3)
+			await alpaca.coverCalibrator.open(id)
+			while (await valueOf(alpaca.coverCalibrator.isMoving(id))) await Bun.sleep(250)
+			expect(await valueOf(alpaca.coverCalibrator.getCoverState(id))).toBe(3)
 		} else {
-			await alpaca.coverCalibrator.close(coverCalibrator.DeviceNumber)
-			while (await alpaca.coverCalibrator.isMoving(coverCalibrator.DeviceNumber)) await Bun.sleep(250)
-			expect(await alpaca.coverCalibrator.getCoverState(coverCalibrator.DeviceNumber)).toBe(1)
+			await alpaca.coverCalibrator.close(id)
+			while (await valueOf(alpaca.coverCalibrator.isMoving(id))) await Bun.sleep(250)
+			expect(await valueOf(alpaca.coverCalibrator.getCoverState(id))).toBe(1)
 		}
 
 		const newBrightness = (brightness! + 20) % maxBrightness!
-		await alpaca.coverCalibrator.on(coverCalibrator.DeviceNumber, newBrightness)
-		while (await alpaca.coverCalibrator.isChanging(coverCalibrator.DeviceNumber)) await Bun.sleep(250)
-		expect(await alpaca.coverCalibrator.getBrightness(coverCalibrator.DeviceNumber)).toBe(newBrightness)
+		await alpaca.coverCalibrator.on(id, newBrightness)
+		while (await valueOf(alpaca.coverCalibrator.isChanging(id))) await Bun.sleep(250)
+		expect(await valueOf(alpaca.coverCalibrator.getBrightness(id))).toBe(newBrightness)
 
-		if (coverState === 1) await alpaca.coverCalibrator.open(coverCalibrator.DeviceNumber)
-		else await alpaca.coverCalibrator.close(coverCalibrator.DeviceNumber)
-		await alpaca.coverCalibrator.halt(coverCalibrator.DeviceNumber)
-		expect(await alpaca.coverCalibrator.getCoverState(coverCalibrator.DeviceNumber)).toBe(4)
+		if (coverState === 1) await alpaca.coverCalibrator.open(id)
+		else await alpaca.coverCalibrator.close(id)
+		await alpaca.coverCalibrator.halt(id)
+		expect(await valueOf(alpaca.coverCalibrator.getCoverState(id))).toBe(4)
 	}, 10000)
 }

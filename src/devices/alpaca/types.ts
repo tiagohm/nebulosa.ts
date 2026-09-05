@@ -1,5 +1,6 @@
 import type { BitpixOrZero } from '../../io/formats/fits/fits'
-import type { Cover, Device, FlatPanel } from '../indi/device'
+import type { Cover, Device, FlatPanel, WeatherSensor } from '../indi/device'
+import { WEATHER_SENSORS, type WeatherSensorMapping } from '../indi/manager/weather'
 
 // Shared type definitions for the ASCOM Alpaca protocol: device-type tags, error codes, the enumerated
 // constants for cameras/telescopes, the JSON envelope shapes, and the ImageBytes binary-transfer layout.
@@ -117,6 +118,15 @@ export enum AlpacaTelescopePierSide {
 	WEST,
 }
 
+// Dome shutter state reported by the Alpaca Dome interface.
+export enum AlpacaDomeShutterState {
+	OPEN,
+	CLOSED,
+	OPENING,
+	CLOSING,
+	ERROR,
+}
+
 // Mechanical axis selector for MoveAxis and axis-rate queries.
 export enum AlpacaTelescopeAxis {
 	PRIMARY,
@@ -153,6 +163,13 @@ export interface AlpacaResponse<T> {
 	// Human-readable error text; empty on success.
 	readonly ErrorMessage: string
 }
+
+// Outcome of one Alpaca REST call with the failure reason preserved, so a caller can tell an
+// unimplemented property (ErrorNumber 1024, a permanent capability fact) from a transient failure such
+// as a timeout, a 5xx, or ValueNotSet. A transport failure carries no `errorNumber`.
+export type AlpacaRequestFailedResult = { readonly ok: false; readonly errorNumber?: number; readonly errorMessage: string }
+export type AlpacaRequestSuccessfulResult<T> = { readonly ok: true; readonly value: T }
+export type AlpacaRequestResult<T> = AlpacaRequestSuccessfulResult<T> | AlpacaRequestFailedResult
 
 // Server identity returned by the management API.
 export interface AlpacaServerDescription {
@@ -221,4 +238,27 @@ export class AlpacaError extends Error {
 // or 0 when the type has no FITS equivalent.
 export function alpacaImageElementTypeToBitpix(type: AlpacaImageElementType): BitpixOrZero {
 	return type === 6 ? 8 : type === 1 || type === 8 ? 16 : type === 2 || type === 9 ? 32 : type === 5 ? 64 : type === 4 ? -32 : type === 3 ? -64 : 0
+}
+
+export { WEATHER_SENSORS }
+
+// Lookup by lowercased ASCOM name, backing the case-insensitive SensorName parameter of the Alpaca
+// SensorDescription and TimeSinceLastUpdate endpoints.
+export const WEATHER_SENSORS_BY_ASCOM_NAME = new Map<string, WeatherSensorMapping>()
+
+for (const sensor of WEATHER_SENSORS) {
+	WEATHER_SENSORS_BY_ASCOM_NAME.set(sensor.ascom.toLowerCase(), sensor)
+}
+
+// Lookup by typed field, so a route that names its sensor directly resolves the mapping (its INDI element
+// name and aliases) without scanning the table.
+export const WEATHER_SENSORS_BY_FIELD = new Map<WeatherSensor, WeatherSensorMapping>()
+
+for (const sensor of WEATHER_SENSORS) {
+	WEATHER_SENSORS_BY_FIELD.set(sensor.field, sensor)
+}
+
+// Resolves a sensor from an ASCOM SensorName, case-insensitively. Returns undefined for an unknown name.
+export function findWeatherSensor(name: string) {
+	return WEATHER_SENSORS_BY_ASCOM_NAME.get(name.toLowerCase())
 }

@@ -697,7 +697,7 @@ export function findLocalMaximumTime(pbe: PolynomialBesselianElements, longitude
 	let bestJd: number | undefined
 	let bestMagnitude = -Infinity
 
-	for (let jd = fromJd; ; ) {
+	for (let jd = fromJd; ;) {
 		const magnitude = magnitudeAt(jd)
 		if (Number.isFinite(magnitude) && magnitude > bestMagnitude) {
 			bestMagnitude = magnitude
@@ -810,8 +810,10 @@ function refineMissedContactInterval(evaluate: (jd: number) => number, lo: numbe
 	// the window (common on the boundary intervals), and a small positive endpoint value within tolerance
 	// would otherwise plant a phantom root on the window edge. Exact endpoint zeros are still caught by the
 	// sub-scan above (value === 0).
+	// Brent's remaining interval can be up to ~2·tolerance, so an endpoint-pinned min may sit that far inside.
+	const endpointMargin = 2 * CONTACT_TOLERANCE_DAYS
 	if (Math.abs(midValue) <= CONTACT_FUNCTION_TOLERANCE) {
-		if (mid > lo + CONTACT_TOLERANCE_DAYS && mid < hi - CONTACT_TOLERANCE_DAYS) pushUniqueRoot(roots, mid)
+		if (mid > lo + endpointMargin && mid < hi - endpointMargin) pushUniqueRoot(roots, mid)
 		return
 	}
 
@@ -850,7 +852,7 @@ function findLocalContactValueRoots(fromJd: number, toJd: number, stepDays: numb
 	// Transversal roots are caught between adjacent samples. Grazing/sub-sample roots are recovered by
 	// refining each interior local minimum as soon as the triplet is available, without storing the whole
 	// sampled window.
-	for (let jd = Math.min(fromJd + effectiveStepDays, toJd); ; ) {
+	for (let jd = Math.min(fromJd + effectiveStepDays, toJd); ;) {
 		if (jd <= previousJd) jd = toJd
 		const value = evaluate(jd)
 
@@ -1088,7 +1090,7 @@ function extremeSunAltitudeOverInterval(pbe: PolynomialBesselianElements, longit
 	let best = -Infinity
 	let bestJd = fromJd
 
-	for (let jd = fromJd; ; ) {
+	for (let jd = fromJd; ;) {
 		const value = oriented(jd)
 		if (value > best) {
 			best = value

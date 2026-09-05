@@ -286,6 +286,7 @@ describe('format', () => {
 		expect(formatTemporal(1756510498123, 'YYYY-MM-DD HH:mm:ss', 180)).toEqual('2025-08-30 02:34:58')
 		expect(formatTemporal(1756510498123, 'YYYY-MM-DD HH:mm:ss', -180)).toEqual('2025-08-29 20:34:58')
 		expect(formatTemporal(1756510498123, 'YYYY-MM-DD HH:mm:ss')).toEqual('2025-08-29 23:34:58')
+		expect(formatTemporal(1756510498123, 'YYYY-MM-DD HH:mm:ss', true)).toEqual('2025-08-29 23:34:58')
 	})
 
 	test('date array', () => {

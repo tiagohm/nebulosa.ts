@@ -1,12 +1,22 @@
 import { describe, expect, onTestFinished, test } from 'bun:test'
+import { PI, PIOVERTWO, SIDEREAL_DAYSEC, TAU } from '../../../src/core/constants'
 import { IndiClient, type IndiClientHandler } from '../../../src/devices/indi/client'
 import { type Camera, type Cover, expectedPierSide, type FlatPanel, type Focuser, type GuideOutput, meridianTimeIn, type Mount, type Power, type Rotator, type Thermometer, type Wheel } from '../../../src/devices/indi/device'
-import { CameraManager, CoverManager, type DeviceHandler, FlatPanelManager, FocuserManager, GuideOutputManager, MountManager, PowerManager, RotatorManager, ThermometerManager, WheelManager } from '../../../src/devices/indi/manager'
-import type { DefNumberVector, DefSwitchVector, DefTextVector, PropertyState, SetTextVector } from '../../../src/devices/indi/types'
-// oxfmt-ignore
-import { SimpleXmlParser } from '../../../src/io/xml'
-import { PI, SIDEREAL_DAYSEC, TAU } from '../../../src/core/constants'
+import { CameraManager } from '../../../src/devices/indi/manager/camera'
+import { CoverManager } from '../../../src/devices/indi/manager/cover'
+import type { DeviceHandler } from '../../../src/devices/indi/manager/device'
+import { FlatPanelManager } from '../../../src/devices/indi/manager/flatpanel'
+import { FocuserManager } from '../../../src/devices/indi/manager/focuser'
+import { GuideOutputManager } from '../../../src/devices/indi/manager/guideoutput'
+import { MountManager } from '../../../src/devices/indi/manager/mount'
+import { PowerManager } from '../../../src/devices/indi/manager/power'
+import { RotatorManager } from '../../../src/devices/indi/manager/rotator'
+import { ThermometerManager } from '../../../src/devices/indi/manager/thermometer'
+import { WheelManager } from '../../../src/devices/indi/manager/wheel'
+import type { DefNumberVector, DefSwitchVector, DefTextVector, PropertyState, SetBlobVector, SetTextVector } from '../../../src/devices/indi/types'
+import { SimpleXmlParser, type XmlNode } from '../../../src/io/xml'
 import { downloadPerTag } from '../../download'
+import { isTimeConsumingTestSkipped, waitUntil } from '../../util'
 
 await downloadPerTag('indi')
 
@@ -15,6 +25,18 @@ const parser = new SimpleXmlParser()
 const tags = parser.parse(text)
 
 expect(tags).toHaveLength(85)
+
+const TEXT_DECODER = new TextDecoder()
+const TEXT_ENCODER = new TextEncoder()
+const EMPTY_TEXT = new Uint8Array(0)
+
+function nodeText(node: XmlNode) {
+	return TEXT_DECODER.decode(node.text).trim()
+}
+
+function encodeText(text: string) {
+	return TEXT_ENCODER.encode(text)
+}
 
 describe('parseXml', () => {
 	test('defSwitchVector', () => {
@@ -30,16 +52,16 @@ describe('parseXml', () => {
 		expect(node.attributes.rule).toBe('OneOfMany')
 		expect(node.attributes.timeout).toBe('60')
 		expect(node.attributes.timestamp).toBe('2025-03-11T12:43:02')
-		expect(node.text).toBeEmpty()
+		expect(nodeText(node)).toBeEmpty()
 		expect(node.children).toHaveLength(2)
 		expect(node.children[0].name).toBe('defSwitch')
 		expect(node.children[0].attributes.name).toBe('CONNECT')
 		expect(node.children[0].attributes.label).toBe('Connect')
-		expect(node.children[0].text).toBe('Off')
+		expect(nodeText(node.children[0])).toBe('Off')
 		expect(node.children[1].name).toBe('defSwitch')
 		expect(node.children[1].attributes.name).toBe('DISCONNECT')
 		expect(node.children[1].attributes.label).toBe('Disconnect')
-		expect(node.children[1].text).toBe('On')
+		expect(nodeText(node.children[1])).toBe('On')
 	})
 
 	test('defTextVector', () => {
@@ -55,24 +77,24 @@ describe('parseXml', () => {
 		expect(node.attributes.rule).toBeUndefined()
 		expect(node.attributes.timeout).toBe('60')
 		expect(node.attributes.timestamp).toBe('2025-03-11T12:43:02')
-		expect(node.text).toBeEmpty()
+		expect(nodeText(node)).toBeEmpty()
 		expect(node.children).toHaveLength(4)
 		expect(node.children[0].name).toBe('defText')
 		expect(node.children[0].attributes.name).toBe('DRIVER_NAME')
 		expect(node.children[0].attributes.label).toBe('Name')
-		expect(node.children[0].text).toBe('CCD Simulator')
+		expect(nodeText(node.children[0])).toBe('CCD Simulator')
 		expect(node.children[1].name).toBe('defText')
 		expect(node.children[1].attributes.name).toBe('DRIVER_EXEC')
 		expect(node.children[1].attributes.label).toBe('Exec')
-		expect(node.children[1].text).toBe('indi_simulator_ccd')
+		expect(nodeText(node.children[1])).toBe('indi_simulator_ccd')
 		expect(node.children[2].name).toBe('defText')
 		expect(node.children[2].attributes.name).toBe('DRIVER_VERSION')
 		expect(node.children[2].attributes.label).toBe('Version')
-		expect(node.children[2].text).toBe('1.0')
+		expect(nodeText(node.children[2])).toBe('1.0')
 		expect(node.children[3].name).toBe('defText')
 		expect(node.children[3].attributes.name).toBe('DRIVER_INTERFACE')
 		expect(node.children[3].attributes.label).toBe('Interface')
-		expect(node.children[3].text).toBe('22')
+		expect(nodeText(node.children[3])).toBe('22')
 	})
 
 	test('defNumberVector', () => {
@@ -88,7 +110,7 @@ describe('parseXml', () => {
 		expect(node.attributes.rule).toBeUndefined()
 		expect(node.attributes.timeout).toBe('60')
 		expect(node.attributes.timestamp).toBe('2025-03-11T12:43:02')
-		expect(node.text).toBeEmpty()
+		expect(nodeText(node)).toBeEmpty()
 		expect(node.children).toHaveLength(16)
 		expect(node.children[0].name).toBe('defNumber')
 		expect(node.children[0].attributes.name).toBe('SIM_XRES')
@@ -97,7 +119,7 @@ describe('parseXml', () => {
 		expect(node.children[0].attributes.min).toBe('512')
 		expect(node.children[0].attributes.max).toBe('8192')
 		expect(node.children[0].attributes.step).toBe('512')
-		expect(node.children[0].text).toBe('1280')
+		expect(nodeText(node.children[0])).toBe('1280')
 		expect(node.children[15].name).toBe('defNumber')
 		expect(node.children[15].attributes.name).toBe('SIM_ROTATION')
 		expect(node.children[15].attributes.label).toBe('CCD Rotation')
@@ -105,7 +127,7 @@ describe('parseXml', () => {
 		expect(node.children[15].attributes.min).toBe('0')
 		expect(node.children[15].attributes.max).toBe('360')
 		expect(node.children[15].attributes.step).toBe('10')
-		expect(node.children[15].text).toBe('0')
+		expect(nodeText(node.children[15])).toBe('0')
 	})
 
 	test('defBLOBVector', () => {
@@ -121,12 +143,12 @@ describe('parseXml', () => {
 		expect(node.attributes.rule).toBeUndefined()
 		expect(node.attributes.timeout).toBe('60')
 		expect(node.attributes.timestamp).toBe('2025-03-11T12:43:07')
-		expect(node.text).toBeEmpty()
+		expect(nodeText(node)).toBeEmpty()
 		expect(node.children).toHaveLength(1)
 		expect(node.children[0].name).toBe('defBLOB')
 		expect(node.children[0].attributes.name).toBe('CCD1')
 		expect(node.children[0].attributes.label).toBe('Image')
-		expect(node.children[0].text).toBeEmpty()
+		expect(nodeText(node.children[0])).toBeEmpty()
 	})
 })
 
@@ -207,8 +229,8 @@ describe('parse', () => {
 		const vector = client.parseDefVector({
 			name: 'defTextVector',
 			attributes: { device: 'Device', name: 'PROTOTYPE_TEST', state: 'Ok', perm: 'rw' },
-			children: [{ name: 'defText', attributes: { name: '__proto__' }, children: [], text: 'safe' }],
-			text: '',
+			children: [{ name: 'defText', attributes: { name: '__proto__' }, children: [], text: encodeText('safe') }],
+			text: EMPTY_TEXT,
 		}) as DefTextVector
 
 		expect(Object.getPrototypeOf(vector.elements)).toBeNull()
@@ -220,13 +242,37 @@ describe('parse', () => {
 		const vector = client.parseSetVector({
 			name: 'setTextVector',
 			attributes: { device: 'Device', name: 'PROTOTYPE_TEST', state: 'Ok' },
-			children: [{ name: 'oneText', attributes: { name: 'constructor' }, children: [], text: 'safe' }],
-			text: '',
+			children: [{ name: 'oneText', attributes: { name: 'constructor' }, children: [], text: encodeText('safe') }],
+			text: EMPTY_TEXT,
 		}) as SetTextVector
 
 		expect(Object.getPrototypeOf(vector.elements)).toBeNull()
 		expect(Object.hasOwn(vector.elements, 'constructor')).toBeTrue()
 		expect(vector.elements['constructor'].value).toBe('safe')
+	})
+
+	test('oneBLOB uses the text view bounds, not spare ArrayBuffer capacity', () => {
+		const backing = new Uint8Array([0, 1, 2, 3, 4, 5])
+		const view = backing.subarray(2, 5)
+		const vector = client.parseSetVector({
+			name: 'setBLOBVector',
+			attributes: { device: 'Camera', name: 'CCD1' },
+			children: [{ name: 'oneBLOB', attributes: { name: 'CCD1', size: '3', format: '.fits' }, children: [], text: view }],
+			text: EMPTY_TEXT,
+		}) as SetBlobVector
+
+		expect(vector.elements.CCD1.value).toEqual(Buffer.from([2, 3, 4]))
+		expect(vector.elements.CCD1.value!.byteLength).toBe(3)
+	})
+
+	test('oneBLOB from a transferred large payload does not include spare capacity', () => {
+		const payload = 'A'.repeat(80_000)
+		const parser = new SimpleXmlParser()
+		const [node] = parser.parse(`<setBLOBVector device="Camera" name="CCD1"><oneBLOB name="CCD1" size="80000" format=".fits">${payload}</oneBLOB></setBLOBVector>`)
+		const vector = client.parseSetVector(node) as SetBlobVector
+
+		expect(vector.elements.CCD1.value!.byteLength).toBe(payload.length)
+		expect(vector.elements.CCD1.value!.equals(Buffer.from(payload))).toBeTrue()
 	})
 })
 
@@ -261,7 +307,7 @@ describe('meridianTimeIn', () => {
 		// On the meridian now -> no remaining time.
 		expect(meridianTimeIn(0, 0)).toBe(0)
 		// A quarter turn east (6 sidereal hours) -> a quarter sidereal day.
-		expect(meridianTimeIn(PI / 2, 0)).toBeCloseTo(SIDEREAL_DAYSEC / 4, 3)
+		expect(meridianTimeIn(PIOVERTWO, 0)).toBeCloseTo(SIDEREAL_DAYSEC / 4, 3)
 		// Half a turn (12 sidereal hours) -> half a sidereal day (~11.97 solar hours).
 		expect(meridianTimeIn(PI, 0)).toBeCloseTo(SIDEREAL_DAYSEC / 2, 3)
 	})
@@ -282,11 +328,13 @@ describe('expectedPierSide', () => {
 		expect(expectedPierSide(lst + PI / 12, 0, lst)).toBe('WEST')
 		// Object one hour west of the meridian: already transited, HA > 0, so RA < LST.
 		expect(expectedPierSide(lst - PI / 12, 0, lst)).toBe('EAST')
+		// Non-normalized angle
+		expect(expectedPierSide(-2.5514969015400077, -1.1425696098724025, 4.698006446414635)).toBe('EAST')
 	})
 
 	test('the pole is undefined', () => {
-		expect(expectedPierSide(0, PI / 2, lst)).toBe('NEITHER')
-		expect(expectedPierSide(0, -PI / 2, lst)).toBe('NEITHER')
+		expect(expectedPierSide(0, PIOVERTWO, lst)).toBe('NEITHER')
+		expect(expectedPierSide(0, -PIOVERTWO, lst)).toBe('NEITHER')
 	})
 })
 
@@ -316,14 +364,6 @@ async function captureClientWrites(endMarker: string, write: (client: IndiClient
 	}
 }
 
-async function waitUntil(predicate: () => boolean, timeout: number, step: number) {
-	while (!predicate()) {
-		if (timeout <= 0) throw new Error('timeout waiting for condition')
-		await Bun.sleep(step)
-		timeout -= step
-	}
-}
-
 async function isIndiRunning(port: number = 7624) {
 	if (process.platform === 'win32') {
 		return (await Bun.$`netstat -ano | findstr :${port}`.quiet().nothrow().text()).includes('LISTENING')
@@ -335,7 +375,7 @@ async function isIndiRunning(port: number = 7624) {
 }
 
 const INDI_HOST: string = 'localhost'
-const SKIP = Bun.env.RUN_SKIPPED_TESTS !== 'true' || !(await isIndiRunning())
+const SKIP = isTimeConsumingTestSkipped() || !(await isIndiRunning())
 
 // indiserver indi_simulator_ccd indi_simulator_telescope indi_simulator_focus indi_simulator_wheel indi_simulator_dustcover indi_simulator_lightpanel indi_simulator_rotator
 describe.skipIf(SKIP)('manager', () => {

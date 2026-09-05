@@ -10,7 +10,8 @@
 		"lint:fix": "oxlint --fix",
 		"fmt": "oxfmt",
 		"fmt:check": "oxfmt --check",
-		"index": "bun run scripts/codebase.index.ts"
+		"index": "bun run scripts/codebase.index.ts",
+		"review": "./scripts/review/review.sh"
 	},
 	"devDependencies": {
 		"oxfmt": "latest",
@@ -20,6 +21,6 @@
 	"peerDependencies": {
 		"@types/bun": "latest",
 		"fast-xml-parser": "latest",
-		"typescript": "6.0.3"
+		"typescript": "latest"
 	}
 }

@@ -1,12 +1,14 @@
+import { DEG2RAD, PIOVERTWO } from '../../core/constants'
 import type { Point } from '../../math/numerical/geometry'
 import { clamp } from '../../math/numerical/math'
 import type { Angle } from '../../math/units/angle'
-import { type AxisPulse, type CalibrationMatrix, DEFAULT_GUIDER_CONFIG, type FilteredStars, filterGuideStars, type GuideDirectionDEC, type GuideDirectionRA, type GuideFrame, type GuideStar, NO_PULSE, oppositeDEC, oppositeRA, type StarFilterConfig } from './guider'
+import { type AxisPulse, type CalibrationMatrix, DEFAULT_GUIDER_CONFIG, type FilteredStars, filterQualityGuideStars, type GuideDirectionDEC, type GuideDirectionRA, type GuideFrame, type GuideStar, NO_PULSE, oppositeDEC, oppositeRA, type StarFilterConfig } from './guider'
 
 // Frame-by-frame autoguider calibration. The GuidingCalibrator state machine issues RA and DEC pulses,
 // tracks the resulting star displacement across frames, and solves the image-motion and inverse
 // (image-to-axis) 2×2 calibration matrices used by the Guider. It handles RA forward travel, an optional
-// clearing move back toward the origin, DEC backlash absorption, and rejects frames that are noisy,
+// clearing move back toward the origin that keeps pulsing until the star is close enough, crosses the
+// origin, or hits `maxClearingSteps`, DEC backlash absorption, and rejects frames that are noisy,
 // edge-clipped, or show impossible jumps. Positions/distances are pixels; pulse durations are
 // milliseconds; angles are radians.
 
@@ -55,7 +57,8 @@ export interface GuidingCalibrationConfig {
 	readonly maxDecSteps: number
 	// Allowed consecutive RA steps without measurable motion.
 	readonly maxRaNoMotionSteps: number
-	// Allowed consecutive DEC steps without measurable motion (backlash window).
+	// Allowed consecutive DEC steps without measurable motion, both while absorbing backlash
+	// and after DEC motion has started.
 	readonly maxDecNoMotionSteps: number
 	// Minimum per-step displacement to count as motion, in pixels.
 	readonly minMovePerStepPx: number
@@ -63,7 +66,10 @@ export interface GuidingCalibrationConfig {
 	readonly minNetRaTravelPx: number
 	// Required net DEC travel before solving, in pixels.
 	readonly minNetDecTravelPx: number
-	// Maximum allowed per-frame star jump, in pixels.
+	// Maximum allowed per-frame star jump, in pixels. A larger displacement counts toward
+	// `maxBadFrames` so a single seeing spike does not abort the run; exceeding that budget fails
+	// as `impossible_jump`. Defaults to the guider jump limit so a sidereal-scale calibration pulse
+	// is not rejected as a meteor.
 	readonly maxFrameJumpPx: number
 	// Allowed consecutive bad frames before aborting.
 	readonly maxBadFrames: number
@@ -71,9 +77,12 @@ export interface GuidingCalibrationConfig {
 	readonly settleFramesAfterMove: number
 	// Whether to perform the RA clearing move back toward the origin.
 	readonly clearingMoveEnabled: boolean
-	// Clearing steps as a fraction of the RA forward steps.
+	// Planned reverse steps as a fraction of the RA forward steps, used for diagnostics. Aborting
+	// a clearing leg uses `maxClearingSteps`, not this estimate, so RA-reversal backlash still has
+	// budget to finish returning to the origin.
 	readonly clearingMoveFraction: number
-	// Maximum clearing steps.
+	// Maximum RA reverse pulses while returning toward the origin. This is the abort limit; clearing
+	// continues until the star is close enough, the reverse step crosses the origin, or this cap is hit.
 	readonly maxClearingSteps: number
 	// Maximum residual offset from origin to consider clearing complete, in pixels.
 	readonly maxClearingOffsetPx: number
@@ -81,11 +90,14 @@ export interface GuidingCalibrationConfig {
 	readonly minAxisSeparation: Angle
 	// Minimum acceptable image-motion matrix determinant.
 	readonly minDeterminant: number
-	// Maximum nearest-star match distance during tracking, in pixels.
+	// Maximum nearest-star match distance during tracking, in pixels. Tracking actually uses
+	// max(maxMatchDistancePx, maxFrameJumpPx) so a jump that exceeds the jump threshold can still
+	// be classified as `impossible_jump` instead of a lost star.
 	readonly maxMatchDistancePx: number
 	// Edge exclusion margin, in pixels.
 	readonly edgeMarginPx: number
-	// Minimum acceptable frame quality in [0, 1].
+	// Minimum acceptable frame quality in [0, 1]. When the frame carries a search window, the
+	// score is accepted/total among detections inside that box, not across the whole sensor.
 	readonly minFrameQuality: number
 	// Minimum accepted axis rate, in pixels per millisecond.
 	readonly minRatePxPerMs: number
@@ -206,7 +218,7 @@ export function flipGuidingCalibration(calibration: GuidingCalibrationResult, re
 	const flippedM11 = m11 * decImageScale
 	const determinant = flippedM00 * flippedM11 - flippedM01 * flippedM10
 
-	if (!Number.isFinite(determinant) || Math.abs(determinant) <= minDeterminant) {
+	if (!Number.isFinite(determinant) || !(Math.abs(determinant) > minDeterminant)) {
 		throw new Error(`invalid flipped calibration matrix: determinant=${determinant}`)
 	}
 
@@ -293,6 +305,11 @@ export interface CalibrationStepResult {
 	readonly failure?: GuidingCalibrationFailure
 	// Diagnostics for this step.
 	readonly diagnostics: GuidingCalibrationDiagnostics
+	// Stars that passed the quality filter on this frame, in detection order. This is the subset the
+	// calibrator tracked from, so it excludes the low-SNR, saturated, elongated, and border stars
+	// present in `frame.stars`. Present on every step, including settling, bad, and terminal frames.
+	// The array is owned by the calibrator and must not be mutated.
+	readonly stars: readonly GuideStar[]
 }
 
 // Internal mutable state of the calibration state machine.
@@ -337,13 +354,13 @@ interface GuidingCalibrationConfigIssue {
 	readonly reason: string
 }
 
-// Default calibration tuning: ~650 ms pulses, west/north legs, RA clearing enabled, 12° minimum
-// axis separation.
+// Default calibration tuning: ~650 ms pulses, west/north legs, RA clearing enabled, 12 px jump
+// limit matching the guider, 12° minimum axis separation.
 export const DEFAULT_GUIDING_CALIBRATOR_CONFIG: Readonly<GuidingCalibrationConfig> = {
 	raPulse: 650,
 	decPulse: 650,
-	raDirection: 'west',
-	decDirection: 'north',
+	raDirection: 'WEST',
+	decDirection: 'NORTH',
 	maxRaSteps: 20,
 	maxDecSteps: 20,
 	maxRaNoMotionSteps: 4,
@@ -351,14 +368,14 @@ export const DEFAULT_GUIDING_CALIBRATOR_CONFIG: Readonly<GuidingCalibrationConfi
 	minMovePerStepPx: 0.15,
 	minNetRaTravelPx: 12,
 	minNetDecTravelPx: 10,
-	maxFrameJumpPx: 8,
+	maxFrameJumpPx: 12,
 	maxBadFrames: 3,
 	settleFramesAfterMove: 0,
 	clearingMoveEnabled: true,
 	clearingMoveFraction: 1,
 	maxClearingSteps: 20,
 	maxClearingOffsetPx: 4,
-	minAxisSeparation: (12 * Math.PI) / 180,
+	minAxisSeparation: 12 * DEG2RAD,
 	minDeterminant: 1e-6,
 	maxMatchDistancePx: 8,
 	edgeMarginPx: 12,
@@ -532,7 +549,7 @@ export class GuidingCalibrator {
 	#acquireInitialStar(frame: GuideFrame) {
 		this.#transitionTo('acquireLock')
 
-		const filtered = filterGuideStars(frame, this.config.filter)
+		const filtered = filterQualityGuideStars(frame, this.config.filter)
 
 		if (filtered.accepted.length === 0 || filtered.qualityScore < this.config.minFrameQuality) {
 			return this.#fail('no_usable_star', 'no usable guide star available for calibration start', frame, ['precheck_failed'], filtered)
@@ -559,7 +576,7 @@ export class GuidingCalibrator {
 
 	// Tracks the current guide star and rejects invalid measurement frames.
 	#trackStar(frame: GuideFrame) {
-		const filtered = filterGuideStars(frame, this.config.filter)
+		const filtered = filterQualityGuideStars(frame, this.config.filter)
 
 		if (filtered.accepted.length === 0 || filtered.qualityScore < this.config.minFrameQuality) {
 			this.state.badFrames++
@@ -571,9 +588,17 @@ export class GuidingCalibrator {
 			return { failure: this.#makeStepResult(undefined, frame, ['bad_frame'], filtered) } as const
 		}
 
-		const tracked = pickNearestCalibrationStar(filtered.accepted, this.state.lastX, this.state.lastY, this.config.maxMatchDistancePx)
+		// Match at least as far as the jump threshold so a displacement that should fail as
+		// `impossible_jump` is not reported as a lost star because the match radius was tighter.
+		const matchRadius = Math.max(this.config.maxMatchDistancePx, this.config.maxFrameJumpPx)
+		const tracked = pickNearestCalibrationStar(filtered.accepted, this.state.lastX, this.state.lastY, matchRadius)
 
 		if (tracked === undefined) {
+			const nearest = pickNearestCalibrationStar(filtered.accepted, this.state.lastX, this.state.lastY, Number.POSITIVE_INFINITY)
+			if (nearest !== undefined) {
+				return { failure: this.#rejectJump(frame, filtered) } as const
+			}
+
 			return { failure: this.#fail('star_lost', 'guide star could not be matched in the calibration frame', frame, ['star_lost'], filtered) } as const
 		}
 
@@ -586,7 +611,7 @@ export class GuidingCalibrator {
 		const jumpDistance = Math.hypot(jumpX, jumpY)
 
 		if (jumpDistance > this.config.maxFrameJumpPx) {
-			return { failure: this.#fail('impossible_jump', 'measured star displacement exceeded the allowed frame jump threshold', frame, ['jump_rejected'], filtered) } as const
+			return { failure: this.#rejectJump(frame, filtered) } as const
 		}
 
 		this.state.badFrames = 0
@@ -599,7 +624,6 @@ export class GuidingCalibrator {
 		this.#transitionTo('raForwardMeasure')
 		const sample = this.#recordSample(this.state.raSteps + 1, this.config.raPulse, this.config.raDirection, point, this.state.startX, this.state.startY)
 		this.state.raSteps++
-		this.state.raSamples.push(sample)
 		this.#finishMeasurement(point)
 
 		if (sample.stepDistance < this.config.minMovePerStepPx) {
@@ -608,8 +632,18 @@ export class GuidingCalibrator {
 			if (this.state.raNoMotionSteps > this.config.maxRaNoMotionSteps) {
 				return this.#fail('too_many_ra_no_motion_steps', 'RA calibration pulses did not produce measurable motion', frame, ['ra_no_motion'], filtered)
 			}
+
+			this.#updateDiagnostics(frame, filtered, ['ra_no_motion'])
+
+			if (this.state.raSteps >= this.config.maxRaSteps) {
+				return this.#fail('insufficient_ra_movement', 'RA calibration did not reach the required net travel before the step limit', frame, ['ra_travel_short'], filtered)
+			}
+
+			return this.#queuePulse('raForwardPulse', 'ra', this.config.raDirection, this.config.raPulse, frame, ['ra_continue'], filtered)
 		}
 
+		this.state.raNoMotionSteps = 0
+		this.state.raSamples.push(sample)
 		this.#updateDiagnostics(frame, filtered, ['ra_measured'])
 
 		if (sample.netDistance >= this.config.minNetRaTravelPx) {
@@ -630,7 +664,7 @@ export class GuidingCalibrator {
 				return this.#queuePulse('decForwardPulse', 'dec', this.config.decDirection, this.config.decPulse, frame, ['dec_started'], filtered)
 			}
 
-			this.state.plannedClearingSteps = Math.trunc(clamp(Math.round(this.state.raSteps * this.config.clearingMoveFraction), 1, this.config.maxClearingSteps))
+			this.state.plannedClearingSteps = Math.trunc(clamp(Math.round(this.state.raSamples.length * this.config.clearingMoveFraction), 1, this.config.maxClearingSteps))
 			return this.#queuePulse('raClearPulse', 'ra', oppositeRA(this.config.raDirection), this.config.raPulse, frame, ['ra_clearing_started'], filtered)
 		}
 
@@ -645,6 +679,8 @@ export class GuidingCalibrator {
 	#handleRaClearMeasurement(frame: GuideFrame, point: Point, filtered: FilteredStars) {
 		this.#transitionTo('raClearMeasure')
 
+		const previousNetX = this.state.lastX - this.state.startX
+		const previousNetY = this.state.lastY - this.state.startY
 		const sample = this.#recordSample(this.state.clearingSteps + 1, this.config.raPulse, oppositeRA(this.config.raDirection), point, this.state.startX, this.state.startY)
 
 		this.state.clearingSteps++
@@ -652,12 +688,15 @@ export class GuidingCalibrator {
 		this.#finishMeasurement(point)
 		this.#updateDiagnostics(frame, filtered, ['ra_clearing_measured'])
 
-		if (sample.netDistance <= this.config.maxClearingOffsetPx) {
+		// A reverse step that passed through the origin would recede if we kept pulsing the same way,
+		// so treat that closest approach as a successful return even when the overshoot exceeds the
+		// residual offset. Backlash zeros are excluded: they do not move the star.
+		if (sample.netDistance <= this.config.maxClearingOffsetPx || crossedCalibrationOrigin(previousNetX, previousNetY, sample.netX, sample.netY, sample.stepDistance, this.config.minMovePerStepPx)) {
 			this.#startDecPhase(point)
 			return this.#queuePulse('decForwardPulse', 'dec', this.config.decDirection, this.config.decPulse, frame, ['dec_started'], filtered)
 		}
 
-		if (this.state.clearingSteps >= this.state.plannedClearingSteps || this.state.clearingSteps >= this.config.maxClearingSteps) {
+		if (this.state.clearingSteps >= this.config.maxClearingSteps) {
 			return this.#fail('ra_clearing_failed', 'RA clearing pulses did not return the guide star close enough to the calibration origin', frame, ['ra_clearing_failed'], filtered)
 		}
 
@@ -670,21 +709,30 @@ export class GuidingCalibrator {
 		this.state.decSteps++
 		this.#finishMeasurement(point)
 
-		if (!this.state.decMotionDetected && sample.projectedDistance < this.config.minMovePerStepPx && Math.abs(sample.orthogonalDistance) < this.config.minMovePerStepPx) {
+		if (sample.projectedDistance < this.config.minMovePerStepPx) {
 			this.state.decNoMotionSteps++
-			this.state.decBacklashMs = this.state.decSteps * this.config.decPulse
-			this.#transitionTo('decBacklashClearing')
-			this.#updateDiagnostics(frame, filtered, ['dec_backlash'])
+
+			if (!this.state.decMotionDetected) {
+				this.state.decBacklashMs = this.state.decSteps * this.config.decPulse
+				this.#transitionTo('decBacklashClearing')
+				this.#updateDiagnostics(frame, filtered, ['dec_backlash'])
+			} else {
+				this.#updateDiagnostics(frame, filtered, ['dec_no_motion'])
+			}
 
 			if (this.state.decNoMotionSteps > this.config.maxDecNoMotionSteps) {
-				return this.#fail('too_many_dec_no_motion_steps', 'DEC calibration never showed measurable motion before backlash tolerance was exhausted', frame, ['dec_no_motion'], filtered)
+				const message = this.state.decMotionDetected ? 'DEC calibration stalled after measurable motion was detected' : 'DEC calibration never showed measurable motion before backlash tolerance was exhausted'
+				return this.#fail('too_many_dec_no_motion_steps', message, frame, ['dec_no_motion'], filtered)
 			}
 
 			if (this.state.decSteps >= this.config.maxDecSteps) {
-				return this.#fail('insufficient_dec_movement', 'DEC calibration did not begin moving before the step limit', frame, ['dec_travel_short'], filtered)
+				const message = this.state.decMotionDetected ? 'DEC calibration did not reach the required net travel before the step limit' : 'DEC calibration did not begin moving before the step limit'
+				return this.#fail('insufficient_dec_movement', message, frame, ['dec_travel_short'], filtered)
 			}
 
-			return this.#queuePulse('decBacklashClearing', 'dec', this.config.decDirection, this.config.decPulse, frame, ['dec_backlash_continue'], filtered)
+			const phase = this.state.decMotionDetected ? 'decForwardPulse' : 'decBacklashClearing'
+			const notes = this.state.decMotionDetected ? (['dec_continue'] as const) : (['dec_backlash_continue'] as const)
+			return this.#queuePulse(phase, 'dec', this.config.decDirection, this.config.decPulse, frame, notes, filtered)
 		}
 
 		if (!this.state.decMotionDetected) {
@@ -692,6 +740,7 @@ export class GuidingCalibrator {
 			this.state.decBacklashMs = (this.state.decSteps - 1) * this.config.decPulse
 		}
 
+		this.state.decNoMotionSteps = 0
 		this.#transitionTo('decForwardMeasure')
 		this.state.decSamples.push(sample)
 		this.#updateDiagnostics(frame, filtered, ['dec_measured'])
@@ -749,7 +798,7 @@ export class GuidingCalibrator {
 		this.#transitionTo('validating')
 
 		const warnings = this.state.warnings.slice()
-		if (this.state.clearingSteps > 0 && Math.hypot(this.state.currentX - this.state.startX, this.state.currentY - this.state.startY) > this.config.maxClearingOffsetPx * 0.6) {
+		if (this.state.clearingSteps > 0 && Math.hypot(this.state.decStartX - this.state.startX, this.state.decStartY - this.state.startY) > this.config.maxClearingOffsetPx * 0.6) {
 			warnings.push('ra_clearing_finished_near_threshold')
 		}
 
@@ -834,7 +883,7 @@ export class GuidingCalibrator {
 	}
 
 	// Queues the next pulse and returns the step result the caller should execute.
-	#queuePulse(phase: GuidingCalibrationPhase, axis: 'ra' | 'dec', direction: GuideDirectionRA | GuideDirectionDEC, duration: number, frame: GuideFrame, notes: readonly string[], filtered = filterGuideStars(frame, this.config.filter)) {
+	#queuePulse(phase: GuidingCalibrationPhase, axis: 'ra' | 'dec', direction: GuideDirectionRA | GuideDirectionDEC, duration: number, frame: GuideFrame, notes: readonly string[], filtered = filterQualityGuideStars(frame, this.config.filter)) {
 		this.#transitionTo(phase)
 		this.state.pendingPulseAxis = axis
 		this.state.pendingPulseDirection = direction
@@ -845,8 +894,21 @@ export class GuidingCalibrator {
 		return this.#makeStepResult(pulse, frame, notes, filtered)
 	}
 
+	// Counts an oversized star jump as a recoverable bad frame. The pending pulse is left in place
+	// so the next good frame can still measure it; a persistent jump exhausts `maxBadFrames` and
+	// fails as `impossible_jump` rather than a lost star.
+	#rejectJump(frame: GuideFrame, filtered: FilteredStars) {
+		this.state.badFrames++
+
+		if (this.state.badFrames > this.config.maxBadFrames) {
+			return this.#fail('impossible_jump', 'measured star displacement exceeded the allowed frame jump threshold', frame, ['jump_rejected'], filtered)
+		}
+
+		return this.#makeStepResult(undefined, frame, ['jump_rejected'], filtered)
+	}
+
 	// Fails calibration with a structured reason and snapshot diagnostics.
-	#fail(code: GuidingCalibrationFailureCode, message: string, frame: GuideFrame, notes: readonly string[], filtered = filterGuideStars(frame, this.config.filter)) {
+	#fail(code: GuidingCalibrationFailureCode, message: string, frame: GuideFrame, notes: readonly string[], filtered = filterQualityGuideStars(frame, this.config.filter)) {
 		this.state.failure = { code, phase: this.state.phase, message, frameId: frame.frameId }
 		this.#transitionTo('failed')
 		this.#updateDiagnostics(frame, filtered, notes)
@@ -891,12 +953,12 @@ export class GuidingCalibrator {
 	}
 
 	// Converts internal state into the public step result payload.
-	#makeStepResult(pulse: CalibrationPulseCommand | undefined, frame: GuideFrame, notes: readonly string[], filtered = filterGuideStars(frame, this.config.filter)): CalibrationStepResult {
+	#makeStepResult(pulse: CalibrationPulseCommand | undefined, frame: GuideFrame, notes: readonly string[], filtered = filterQualityGuideStars(frame, this.config.filter)): CalibrationStepResult {
 		if (this.state.lastDiagnostics.phase !== this.state.phase || this.state.lastDiagnostics.frameId !== frame.frameId) {
 			this.#updateDiagnostics(frame, filtered, notes, pulse)
 		}
 
-		return { phase: this.state.phase, pulse, completed: this.state.result, failure: this.state.failure, diagnostics: this.state.lastDiagnostics }
+		return { phase: this.state.phase, pulse, completed: this.state.result, failure: this.state.failure, diagnostics: this.state.lastDiagnostics, stars: filtered.accepted }
 	}
 
 	// Appends a phase transition while avoiding duplicate adjacent entries.
@@ -927,7 +989,7 @@ function validateGuidingCalibratorConfig(config: GuidingCalibrationConfig) {
 	if (config.clearingMoveFraction <= 0) issues.push({ key: 'clearingMoveFraction', reason: 'must be > 0' })
 	if (config.maxClearingSteps <= 0) issues.push({ key: 'maxClearingSteps', reason: 'must be > 0' })
 	if (config.maxClearingOffsetPx < 0) issues.push({ key: 'maxClearingOffsetPx', reason: 'must be >= 0' })
-	if (config.minAxisSeparation <= 0 || config.minAxisSeparation >= Math.PI / 2) issues.push({ key: 'minAxisSeparation', reason: 'must be within (0, pi/2)' })
+	if (config.minAxisSeparation <= 0 || config.minAxisSeparation >= PIOVERTWO) issues.push({ key: 'minAxisSeparation', reason: 'must be within (0, pi/2)' })
 	if (config.minDeterminant <= 0) issues.push({ key: 'minDeterminant', reason: 'must be > 0' })
 	if (config.maxMatchDistancePx <= 0) issues.push({ key: 'maxMatchDistancePx', reason: 'must be > 0' })
 	if (config.edgeMarginPx < 0) issues.push({ key: 'edgeMarginPx', reason: 'must be >= 0' })
@@ -1022,6 +1084,13 @@ function isNearEdge(star: GuideStar | Point, width: number, height: number, marg
 // Indicates whether the current state should expose the DEC origin in diagnostics.
 function hasDecOrigin(phase: GuidingCalibrationPhase, decSteps: number) {
 	return decSteps > 0 || phase === 'decForwardPulse' || phase === 'decBacklashClearing' || phase === 'decForwardMeasure' || phase === 'decForwardComplete' || phase === 'solving' || phase === 'validating' || phase === 'completed'
+}
+
+// Returns whether a reverse clearing step passed through the calibration origin. `previousNet` is the
+// origin offset before the step and `(netX, netY)` is the offset after, both in pixels. A step below
+// `minMovePx` is ignored so RA-reversal backlash cannot look like a crossing.
+function crossedCalibrationOrigin(previousNetX: number, previousNetY: number, netX: number, netY: number, stepDistance: number, minMovePx: number) {
+	return stepDistance >= minMovePx && previousNetX * netX + previousNetY * netY <= 0
 }
 
 // Computes a 2D dot product.

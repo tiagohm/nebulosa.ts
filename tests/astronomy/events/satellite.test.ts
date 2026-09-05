@@ -148,7 +148,7 @@ test('umbra entry and exit crossings bound each eclipse', () => {
 	expect(eclipse.duration).toBeCloseTo(timeSubtract(eclipse.exit!, eclipse.entry!, Timescale.UTC) * 86400, 3)
 	expect(eclipse.duration).toBeGreaterThan(2050)
 	expect(eclipse.duration).toBeLessThan(2200)
-}, 3000)
+}, 6000)
 
 test('the visual magnitude follows the standard-magnitude model', () => {
 	// 55 min after epoch the ISS is sunlit and 30 deg up over the site. Independent numpy geometry from

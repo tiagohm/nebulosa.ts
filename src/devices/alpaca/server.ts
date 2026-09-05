@@ -1,19 +1,32 @@
 // oxfmt-ignore
-import { type AlpacaAxisRate, AlpacaCameraState, type AlpacaConfiguredDevice, type AlpacaDeviceNumberProvider, type AlpacaDeviceType, AlpacaError, AlpacaException, type AlpacaFocuserAction, AlpacaImageElementType, type AlpacaServerStartOptions, type AlpacaStateItem, type AlpacaWheelAction, defaultDeviceNumberProvider, SUPPORTED_FOCUSER_ACTIONS, SUPPORTED_WHEEL_ACTIONS } from './types'
+import { type AlpacaAxisRate, AlpacaCameraState, type AlpacaConfiguredDevice, type AlpacaDeviceNumberProvider, type AlpacaDeviceType, AlpacaDomeShutterState, AlpacaError, AlpacaException, type AlpacaFocuserAction, AlpacaImageElementType, type AlpacaServerStartOptions, type AlpacaStateItem, type AlpacaWheelAction, defaultDeviceNumberProvider, findWeatherSensor, SUPPORTED_FOCUSER_ACTIONS, SUPPORTED_WHEEL_ACTIONS, WEATHER_SENSORS, WEATHER_SENSORS_BY_FIELD } from './types'
 import { observedToCirs } from '../../astronomy/coordinates/astrometry'
 import { type EquatorialCoordinate, equatorialToHorizontal } from '../../astronomy/coordinates/coordinate'
 import { Bitpix, computeRemainingBytes, FitsKeywordReader } from '../../io/formats/fits/fits'
 import { bitpixInBytes } from '../../io/formats/fits/util'
-import { type Angle, deg, hour, toDeg, toHour } from '../../math/units/angle'
+import { type Angle, deg, hour, normalizeAngle, toDeg, toHour } from '../../math/units/angle'
 import { meter, toMeter } from '../../math/units/distance'
 // oxfmt-ignore
-import { type Camera, type Cover, type Device, type DeviceType, expectedPierSide, type FlatPanel, type Focuser, type GuideDirection, type GuideOutput, isCamera, isFocuser, isMount, isWheel, type Mount, type NameAndLabel, type PierSide, type Rotator, type TrackMode, type Wheel } from '../indi/device'
+import { type Camera, type Cover, type Device, type DeviceType, expectedPierSide, type Dome, type FlatPanel, type Focuser, type GuideDirection, type GuideOutput, isCamera, isFocuser, isMount, isWheel, type Mount, type NameAndLabel, type PierSide, type Rotator, type SafetyMonitor, type TrackMode, type Weather, type WeatherSensor, type Wheel } from '../indi/device'
+import { dewPoint, isMagnusDomain, relativeHumidity } from '../../astronomy/formulas'
 import { type GeographicCoordinate, localSiderealTime } from '../../astronomy/observer/location'
 import { type Time, timeNow } from '../../astronomy/time/time'
-import type { CameraManager, CoverManager, DeviceHandler, DeviceManager, FlatPanelManager, FocuserManager, GuideOutputManager, MountManager, RotatorManager, WheelManager } from '../indi/manager'
+import type { CameraManager } from '../indi/manager/camera'
+import type { CoverManager } from '../indi/manager/cover'
+import type { DeviceHandler, DeviceManager } from '../indi/manager/device'
+import type { DomeManager } from '../indi/manager/dome'
+import type { FlatPanelManager } from '../indi/manager/flatpanel'
+import type { FocuserManager } from '../indi/manager/focuser'
+import type { GuideOutputManager } from '../indi/manager/guideoutput'
+import type { MountManager } from '../indi/manager/mount'
+import type { RotatorManager } from '../indi/manager/rotator'
+import type { SafetyMonitorManager } from '../indi/manager/safetymonitor'
+import type { WeatherManager } from '../indi/manager/weather'
+import type { WheelManager } from '../indi/manager/wheel'
+import type { BlobEncoding } from '../indi/types'
 
 // Embedded ASCOM Alpaca server: exposes the app's INDI devices (camera, mount, focuser, wheel, rotator,
-// cover/calibrator) over the Alpaca REST API so external Alpaca clients can control them. Subscribes to
+// dome, cover/calibrator) over the Alpaca REST API so external Alpaca clients can control them. Subscribes to
 // the device managers to track devices, maintains per-device Alpaca state, and serves the management and
 // per-device endpoints via Bun.serve. Internal radians/AU/etc. are converted to the Alpaca spec units.
 
@@ -33,9 +46,14 @@ export interface AlpacaServerOptions {
 	focuser?: FocuserManager
 	wheel?: WheelManager
 	rotator?: RotatorManager
+	dome?: DomeManager
 	flatPanel?: FlatPanelManager
 	cover?: CoverManager
 	guideOutput?: GuideOutputManager
+	// Read-only safety monitors exposed through the Alpaca SafetyMonitor interface.
+	safetyMonitor?: SafetyMonitorManager
+	// Weather stations exposed through the Alpaca ObservingConditions interface.
+	weather?: WeatherManager
 	// Strategy for assigning Alpaca device numbers; defaults to a stable hash of type+name.
 	deviceNumberProvider?: AlpacaDeviceNumberProvider
 	handler?: AlpacaServerHandler
@@ -47,7 +65,7 @@ interface AlpacaDeviceState extends GeographicCoordinate, EquatorialCoordinate {
 	// Device
 	tasks: Partial<Record<'connect' | 'position', ReturnType<typeof promiseWithTimeout>>>
 	// Camera
-	data?: string | Buffer<ArrayBuffer>
+	data?: readonly [Buffer, BlobEncoding]
 	lastExposureDuration: number
 	ccdTemperature: number
 	frame: [number, number, number, number]
@@ -101,11 +119,11 @@ export class AlpacaServer {
 		focuser: new Map<Device, AlpacaRegisteredDevice<Focuser>>(),
 		filterwheel: new Map<Device, AlpacaRegisteredDevice<Wheel>>(),
 		rotator: new Map<Device, AlpacaRegisteredDevice<Rotator>>(),
-		dome: new Map<Device, AlpacaRegisteredDevice>(),
+		dome: new Map<Device, AlpacaRegisteredDevice<Dome>>(),
 		switch: new Map<Device, AlpacaRegisteredDevice>(),
 		covercalibrator: new Map<Device, AlpacaRegisteredDevice<Cover | FlatPanel>>(),
-		observingconditions: new Map<Device, AlpacaRegisteredDevice>(),
-		safetymonitor: new Map<Device, AlpacaRegisteredDevice>(),
+		observingconditions: new Map<Device, AlpacaRegisteredDevice<Weather>>(),
+		safetymonitor: new Map<Device, AlpacaRegisteredDevice<SafetyMonitor>>(),
 		video: new Map<Device, AlpacaRegisteredDevice>(),
 	} as const
 
@@ -133,13 +151,13 @@ export class AlpacaServer {
 		removed: (device: Camera) => {
 			this.#removeConfiguredDevice(device, 'camera')
 		},
-		blobReceived: (device, data) => {
+		blobReceived: (device, data, encoding) => {
 			const { state } = this.#camera(device)
 
 			// Has the capture started?
 			if (state.lastExposureDuration) {
 				// console.info('camera image received', device.name, data.length)
-				state.data = data
+				state.data = [data, encoding]
 			}
 		},
 	}
@@ -222,8 +240,49 @@ export class AlpacaServer {
 		},
 	}
 
+	readonly #domeHandler: DeviceHandler<Dome> = {
+		added: (device: Dome) => {
+			this.#makeConfiguredDeviceFromDevice(device, 'dome')
+		},
+		updated: (device, property) => {
+			if (property === 'connected') {
+				this.#handleConnectedEvent(device, 'dome')
+			}
+		},
+		removed: (device: Dome) => {
+			this.#removeConfiguredDevice(device, 'dome')
+		},
+	}
+
+	// Registers safety monitors and resolves common connection tasks; IsSafe reads live device state.
+	readonly #safetyMonitorHandler: DeviceHandler<SafetyMonitor> = {
+		added: (device) => {
+			this.#makeConfiguredDeviceFromDevice(device, 'safetymonitor')
+		},
+		updated: (device, property) => {
+			if (property === 'connected') this.#handleConnectedEvent(device, 'safetymonitor')
+		},
+		removed: (device) => {
+			this.#removeConfiguredDevice(device, 'safetymonitor')
+		},
+	}
+
+	// Registers weather stations and resolves common connection tasks. Sensor values and freshness are
+	// read live from the device and its manager, so nothing is mirrored into the per-device state.
+	readonly #weatherHandler: DeviceHandler<Weather> = {
+		added: (device) => {
+			this.#makeConfiguredDeviceFromDevice(device, 'observingconditions')
+		},
+		updated: (device, property) => {
+			if (property === 'connected') this.#handleConnectedEvent(device, 'observingconditions')
+		},
+		removed: (device) => {
+			this.#removeConfiguredDevice(device, 'observingconditions')
+		},
+	}
+
 	constructor(readonly options: AlpacaServerOptions) {
-		this.#deviceManager = (options.camera ?? options.mount ?? options.focuser ?? options.wheel ?? options.flatPanel ?? options.cover ?? options.rotator) as unknown as DeviceManager<Device>
+		this.#deviceManager = (options.camera ?? options.mount ?? options.focuser ?? options.wheel ?? options.flatPanel ?? options.cover ?? options.rotator ?? options.dome ?? options.safetyMonitor ?? options.weather) as unknown as DeviceManager<Device>
 
 		if (!this.#deviceManager) throw new Error('at least one device manager must be provided.')
 
@@ -394,6 +453,32 @@ export class AlpacaServer {
 		'/api/v1/telescope/:id/synctocoordinates': { PUT: async (req) => this.#mountSyncToCoordinates(+req.params.id, await params(req)) },
 		'/api/v1/telescope/:id/synctotarget': { PUT: (req) => this.#mountSyncToTarget(+req.params.id) },
 		'/api/v1/telescope/:id/unpark': { PUT: (req) => this.#mountUnpark(+req.params.id) },
+		// Dome
+		'/api/v1/dome/:id/altitude': { GET: (req) => this.#domeGetAltitude(+req.params.id) },
+		'/api/v1/dome/:id/athome': { GET: (req) => this.#domeIsAtHome(+req.params.id) },
+		'/api/v1/dome/:id/atpark': { GET: (req) => this.#domeIsAtPark(+req.params.id) },
+		'/api/v1/dome/:id/azimuth': { GET: (req) => this.#domeGetAzimuth(+req.params.id) },
+		'/api/v1/dome/:id/canfindhome': { GET: (req) => this.#domeCanFindHome(+req.params.id) },
+		'/api/v1/dome/:id/canpark': { GET: (req) => this.#domeCanPark(+req.params.id) },
+		'/api/v1/dome/:id/cansetaltitude': { GET: (req) => this.#domeCanSetAltitude(+req.params.id) },
+		'/api/v1/dome/:id/cansetazimuth': { GET: (req) => this.#domeCanSetAzimuth(+req.params.id) },
+		'/api/v1/dome/:id/cansetpark': { GET: (req) => this.#domeCanSetPark(+req.params.id) },
+		'/api/v1/dome/:id/cansetshutter': { GET: (req) => this.#domeCanSetShutter(+req.params.id) },
+		'/api/v1/dome/:id/canslave': { GET: (req) => this.#domeCanSlave(+req.params.id) },
+		'/api/v1/dome/:id/cansyncazimuth': { GET: (req) => this.#domeCanSyncAzimuth(+req.params.id) },
+		'/api/v1/dome/:id/devicestate': { GET: (req) => this.#domeGetDeviceState(+req.params.id) },
+		'/api/v1/dome/:id/shutterstatus': { GET: (req) => this.#domeGetShutterStatus(+req.params.id) },
+		'/api/v1/dome/:id/slaved': { GET: (req) => this.#domeIsSlaved(+req.params.id), PUT: async (req) => this.#domeSetSlaved(+req.params.id, await params(req)) },
+		'/api/v1/dome/:id/slewing': { GET: (req) => this.#domeIsSlewing(+req.params.id) },
+		'/api/v1/dome/:id/abortslew': { PUT: (req) => this.#domeAbort(+req.params.id) },
+		'/api/v1/dome/:id/closeshutter': { PUT: (req) => this.#domeCloseShutter(+req.params.id) },
+		'/api/v1/dome/:id/findhome': { PUT: (req) => this.#domeFindHome(+req.params.id) },
+		'/api/v1/dome/:id/openshutter': { PUT: (req) => this.#domeOpenShutter(+req.params.id) },
+		'/api/v1/dome/:id/park': { PUT: (req) => this.#domePark(+req.params.id) },
+		'/api/v1/dome/:id/setpark': { PUT: (req) => this.#domeSetPark(+req.params.id) },
+		'/api/v1/dome/:id/slewtoaltitude': { PUT: async (req) => this.#domeSlewToAltitude(+req.params.id, await params(req)) },
+		'/api/v1/dome/:id/slewtoazimuth': { PUT: async (req) => this.#domeSlewToAzimuth(+req.params.id, await params(req)) },
+		'/api/v1/dome/:id/synctoazimuth': { PUT: async (req) => this.#domeSyncToAzimuth(+req.params.id, await params(req)) },
 		// Focuser
 		'/api/v1/focuser/:id/absolute': { GET: (req) => this.#focuserCanAbsolute(+req.params.id) },
 		'/api/v1/focuser/:id/devicestate': { GET: (req) => this.#focuserGetDeviceState(+req.params.id) },
@@ -420,6 +505,28 @@ export class AlpacaServer {
 		'/api/v1/covercalibrator/:id/closecover': { PUT: (req) => this.#coverCalibratorClose(+req.params.id) },
 		'/api/v1/covercalibrator/:id/haltcover': { PUT: (req) => this.#coverCalibratorHalt(+req.params.id) },
 		'/api/v1/covercalibrator/:id/opencover': { PUT: (req) => this.#coverCalibratorOpen(+req.params.id) },
+		// Safety Monitor
+		'/api/v1/safetymonitor/:id/issafe': { GET: (req) => this.#safetyMonitorIsSafe(+req.params.id) },
+		'/api/v1/safetymonitor/:id/devicestate': { GET: (req) => this.#safetyMonitorGetDeviceState(+req.params.id) },
+		// Observing Conditions
+		'/api/v1/observingconditions/:id/averageperiod': { GET: (req) => this.#weatherGetAveragePeriod(+req.params.id), PUT: async (req) => this.#weatherSetAveragePeriod(+req.params.id, await params(req)) },
+		'/api/v1/observingconditions/:id/cloudcover': { GET: (req) => this.#weatherGetSensor(+req.params.id, 'cloudCover') },
+		'/api/v1/observingconditions/:id/dewpoint': { GET: (req) => this.#weatherGetSensor(+req.params.id, 'dewPoint') },
+		'/api/v1/observingconditions/:id/humidity': { GET: (req) => this.#weatherGetSensor(+req.params.id, 'humidity') },
+		'/api/v1/observingconditions/:id/pressure': { GET: (req) => this.#weatherGetSensor(+req.params.id, 'pressure') },
+		'/api/v1/observingconditions/:id/rainrate': { GET: (req) => this.#weatherGetSensor(+req.params.id, 'rainRate') },
+		'/api/v1/observingconditions/:id/skybrightness': { GET: (req) => this.#weatherGetSensor(+req.params.id, 'skyBrightness') },
+		'/api/v1/observingconditions/:id/skyquality': { GET: (req) => this.#weatherGetSensor(+req.params.id, 'skyQuality') },
+		'/api/v1/observingconditions/:id/skytemperature': { GET: (req) => this.#weatherGetSensor(+req.params.id, 'skyTemperature') },
+		'/api/v1/observingconditions/:id/starfwhm': { GET: (req) => this.#weatherGetSensor(+req.params.id, 'starFWHM') },
+		'/api/v1/observingconditions/:id/temperature': { GET: (req) => this.#weatherGetSensor(+req.params.id, 'temperature') },
+		'/api/v1/observingconditions/:id/winddirection': { GET: (req) => this.#weatherGetSensor(+req.params.id, 'windDirection') },
+		'/api/v1/observingconditions/:id/windgust': { GET: (req) => this.#weatherGetSensor(+req.params.id, 'windGust') },
+		'/api/v1/observingconditions/:id/windspeed': { GET: (req) => this.#weatherGetSensor(+req.params.id, 'windSpeed') },
+		'/api/v1/observingconditions/:id/devicestate': { GET: (req) => this.#weatherGetDeviceState(+req.params.id) },
+		'/api/v1/observingconditions/:id/refresh': { PUT: (req) => this.#weatherRefresh(+req.params.id) },
+		'/api/v1/observingconditions/:id/sensordescription': { GET: async (req) => this.#weatherGetSensorDescription(+req.params.id, await params(req)) },
+		'/api/v1/observingconditions/:id/timesincelastupdate': { GET: async (req) => this.#weatherGetTimeSinceLastUpdate(+req.params.id, await params(req)) },
 	}
 
 	// Starts the HTTP server on the given host/port (0 = ephemeral) and begins listening for devices.
@@ -458,6 +565,9 @@ export class AlpacaServer {
 		this.options.focuser?.addHandler(this.#focuserHandler)
 		this.options.cover?.addHandler(this.#coverHandler)
 		this.options.flatPanel?.addHandler(this.#flatPanelHandler)
+		this.options.dome?.addHandler(this.#domeHandler)
+		this.options.safetyMonitor?.addHandler(this.#safetyMonitorHandler)
+		this.options.weather?.addHandler(this.#weatherHandler)
 
 		this.configuredDevices()
 
@@ -474,17 +584,20 @@ export class AlpacaServer {
 		this.options.focuser?.removeHandler(this.#focuserHandler)
 		this.options.cover?.removeHandler(this.#coverHandler)
 		this.options.flatPanel?.removeHandler(this.#flatPanelHandler)
+		this.options.dome?.removeHandler(this.#domeHandler)
+		this.options.safetyMonitor?.removeHandler(this.#safetyMonitorHandler)
+		this.options.weather?.removeHandler(this.#weatherHandler)
 
 		this.#equipment.camera.clear()
 		this.#equipment.telescope.clear()
 		this.#equipment.filterwheel.clear()
 		this.#equipment.focuser.clear()
 		this.#equipment.rotator.clear()
+		this.#equipment.dome.clear()
 		this.#equipment.covercalibrator.clear()
-		// this.equipment.dome.clear()
+		this.#equipment.safetymonitor.clear()
+		this.#equipment.observingconditions.clear()
 		// this.equipment.switch.clear()
-		// this.equipment.observingconditions.clear()
-		// this.equipment.safetymonitor.clear()
 		// this.equipment.video.clear()
 
 		clearInterval(this.#timer)
@@ -545,6 +658,20 @@ export class AlpacaServer {
 		return this.#device<FlatPanel>(key, 'covercalibrator', 'flatPanel')
 	}
 
+	#dome(key: Device | number) {
+		return this.#device<Dome>(key, 'dome')
+	}
+
+	// Resolves a registered safety monitor by device instance or Alpaca device number.
+	#safetyMonitor(key: Device | number) {
+		return this.#device<SafetyMonitor>(key, 'safetymonitor')
+	}
+
+	// Resolves a registered weather station by device instance or Alpaca device number.
+	#weather(key: Device | number) {
+		return this.#device<Weather>(key, 'observingconditions')
+	}
+
 	#guideOutput(key: Device | number, type: 'camera' | 'telescope') {
 		return this.#device<GuideOutput>(key, type)
 	}
@@ -601,8 +728,11 @@ export class AlpacaServer {
 		if (this.options.focuser) for (const e of this.options.focuser.list()) add(e, 'focuser')
 		if (this.options.wheel) for (const e of this.options.wheel.list()) add(e, 'filterwheel')
 		if (this.options.rotator) for (const e of this.options.rotator.list()) add(e, 'rotator')
+		if (this.options.dome) for (const e of this.options.dome.list()) add(e, 'dome')
 		if (this.options.flatPanel) for (const e of this.options.flatPanel.list()) add(e, 'covercalibrator')
 		if (this.options.cover) for (const e of this.options.cover.list()) add(e, 'covercalibrator')
+		if (this.options.safetyMonitor) for (const e of this.options.safetyMonitor.list()) add(e, 'safetymonitor')
+		if (this.options.weather) for (const e of this.options.weather.list()) add(e, 'observingconditions')
 
 		return configuredDevices
 	}
@@ -700,6 +830,174 @@ export class AlpacaServer {
 
 	#guideOutputIsPulseGuiding(id: number, type: 'camera' | 'telescope') {
 		return makeAlpacaResponse(this.#guideOutput(id, type).device.pulsing)
+	}
+
+	// Safety Monitor API
+
+	// Returns IsSafe only for a connected, registered safety monitor.
+	#safetyMonitorIsSafe(id: number) {
+		const registered = this.#safetyMonitor(id)
+		if (!registered?.device) return makeAlpacaErrorResponse(AlpacaException.InvalidValue, `Invalid device number: ${id}`)
+		if (!registered.device.connected) return makeAlpacaErrorResponse(AlpacaException.NotConnected, 'SafetyMonitor is not connected')
+		return makeAlpacaResponse(registered.device.safe)
+	}
+
+	// Returns the bulk SafetyMonitor state required by Alpaca DeviceState clients.
+	#safetyMonitorGetDeviceState(id: number) {
+		const registered = this.#safetyMonitor(id)
+		if (!registered?.device) return makeAlpacaErrorResponse(AlpacaException.InvalidValue, `Invalid device number: ${id}`)
+		if (!registered.device.connected) return makeAlpacaErrorResponse(AlpacaException.NotConnected, 'SafetyMonitor is not connected')
+		return makeAlpacaResponse([
+			{ Name: 'IsSafe', Value: registered.device.safe },
+			{ Name: 'TimeStamp', Value: '' },
+		])
+	}
+
+	// Observing Conditions API
+
+	// Resolves a registered, connected weather station, or the matching Alpaca error response.
+	#requireWeatherConnected(id: number): AlpacaRegisteredDevice<Weather> | Response {
+		const registered = this.#weather(id)
+
+		if (!registered) return makeAlpacaErrorResponse(AlpacaException.InvalidValue, `Invalid device number: ${id}`)
+		if (!registered.device.connected) return makeAlpacaErrorResponse(AlpacaException.NotConnected, 'ObservingConditions is not connected')
+
+		return registered
+	}
+
+	// Returns one sensor value in ASCOM units, or MethodOrPropertyNotImplemented when the backend does
+	// not provide the sensor at all. An implemented sensor whose current reading cannot be turned into a
+	// value reports ValueNotSet instead, because 1024 is a capability answer that clients latch.
+	#weatherGetSensor(id: number, sensor: WeatherSensor) {
+		const registered = this.#requireWeatherConnected(id)
+		if (registered instanceof Response) return registered
+
+		const value = weatherSensorValue(registered.device, sensor)
+
+		if (value === undefined) {
+			if (weatherSensorImplemented(this.options.weather, registered.device, sensor)) return makeAlpacaErrorResponse(AlpacaException.ValueNotSet, `${sensor} has no current value`)
+			return makeAlpacaErrorResponse(AlpacaException.MethodOrPropertyNotImplemented, `${sensor} is not available`)
+		}
+
+		return makeAlpacaResponse(value)
+	}
+
+	// AveragePeriod is mandatory in ASCOM, so a backend without an averaging window reports the
+	// instantaneous 0 rather than failing.
+	#weatherGetAveragePeriod(id: number) {
+		const registered = this.#requireWeatherConnected(id)
+		if (registered instanceof Response) return registered
+
+		return makeAlpacaResponse(registered.device.averagePeriod ?? 0)
+	}
+
+	// Writes the averaging window through the backend, which is what setAveragePeriod reports on.
+	//
+	// A backend that cannot configure averaging can still honor a request for the window it already
+	// reports, which is a no-op rather than a refusal. That is usually 0, because a driver without a
+	// WEATHER_AVERAGE_PERIOD reads as instantaneous, but a driver exposing a read-only non-zero window
+	// must reject 0: nothing would change on the INDI side and the next GET would still return the
+	// original window, making a successful response a lie.
+	#weatherSetAveragePeriod(id: number, data: { AveragePeriod: string }) {
+		const registered = this.#requireWeatherConnected(id)
+		if (registered instanceof Response) return registered
+
+		const hours = Number(data.AveragePeriod)
+
+		if (!Number.isFinite(hours) || !(hours >= 0)) return makeAlpacaErrorResponse(AlpacaException.InvalidValue, `Invalid average period: ${data.AveragePeriod}`)
+
+		if (this.options.weather?.setAveragePeriod(registered.device, hours) !== true && hours !== (registered.device.averagePeriod ?? 0)) {
+			return makeAlpacaErrorResponse(AlpacaException.InvalidValue, 'ObservingConditions cannot configure an averaging window')
+		}
+
+		return makeAlpacaResponse(undefined)
+	}
+
+	// Triggers a driver re-read. Returns immediately; new readings arrive through the normal property
+	// stream rather than being awaited here.
+	#weatherRefresh(id: number) {
+		const registered = this.#requireWeatherConnected(id)
+		if (registered instanceof Response) return registered
+
+		if (this.options.weather?.refresh(registered.device) !== true) {
+			return makeAlpacaErrorResponse(AlpacaException.MethodOrPropertyNotImplemented, 'ObservingConditions does not support Refresh')
+		}
+
+		return makeAlpacaResponse(undefined)
+	}
+
+	// Describes one implemented sensor, preferring the INDI element label the driver published.
+	#weatherGetSensorDescription(id: number, data: { SensorName?: string }) {
+		const registered = this.#requireWeatherConnected(id)
+		if (registered instanceof Response) return registered
+
+		const sensor = data.SensorName === undefined ? undefined : findWeatherSensor(data.SensorName)
+
+		if (sensor === undefined) return makeAlpacaErrorResponse(AlpacaException.InvalidValue, `Invalid sensor name: ${data.SensorName ?? ''}`)
+
+		const { device } = registered
+
+		if (!weatherSensorImplemented(this.options.weather, device, sensor.field)) {
+			return makeAlpacaErrorResponse(AlpacaException.MethodOrPropertyNotImplemented, `${sensor.ascom} is not available`)
+		}
+
+		// The element is looked up under the aliases too, exactly as capability detection does: a driver
+		// that declares WEATHER_DEWPOINT rather than the canonical WEATHER_DEW_POINT still published a
+		// label, and answering the generic ASCOM name for it would hide the description it provided.
+		const label = weatherSensorElement(this.options.weather, device, sensor.field)?.label
+
+		return makeAlpacaResponse(label || sensor.ascom)
+	}
+
+	// Seconds since the sensor was last reported, or since any sensor was for the empty name. A negative
+	// value means the sensor is implemented but has never produced a reading.
+	//
+	// The age comes from the backend's monotonic stamps rather than from the wall-clock ones: a system
+	// clock corrected backward between the reading and this request would otherwise answer a negative
+	// duration for a fresh sensor, and a forward correction would report it as arbitrarily stale.
+	#weatherGetTimeSinceLastUpdate(id: number, data: { SensorName?: string }) {
+		const registered = this.#requireWeatherConnected(id)
+		if (registered instanceof Response) return registered
+
+		const { device } = registered
+		const name = data.SensorName ?? ''
+		let elapsed: number | undefined
+
+		if (name === '') {
+			elapsed = this.options.weather?.lastElapsedSince(device)
+		} else {
+			const sensor = findWeatherSensor(name)
+
+			if (sensor === undefined) return makeAlpacaErrorResponse(AlpacaException.InvalidValue, `Invalid sensor name: ${name}`)
+
+			if (!weatherSensorImplemented(this.options.weather, device, sensor.field)) {
+				return makeAlpacaErrorResponse(AlpacaException.MethodOrPropertyNotImplemented, `${sensor.ascom} is not available`)
+			}
+
+			elapsed = weatherSensorElapsedSince(this.options.weather, device, sensor.field)
+		}
+
+		return makeAlpacaResponse(elapsed === undefined ? -1 : elapsed / 1000)
+	}
+
+	// Bulk state with only the implemented sensors, under their canonical ASCOM names. AveragePeriod is
+	// excluded: it configures the device rather than describing the weather.
+	#weatherGetDeviceState(id: number) {
+		const registered = this.#requireWeatherConnected(id)
+		if (registered instanceof Response) return registered
+
+		const { device } = registered
+		const res: AlpacaStateItem[] = []
+
+		for (const sensor of WEATHER_SENSORS) {
+			const value = weatherSensorValue(device, sensor.field)
+			if (value !== undefined) res.push({ Name: sensor.ascom, Value: value })
+		}
+
+		const updatedAt = this.options.weather?.lastUpdatedAt(device)
+		res.push({ Name: 'TimeStamp', Value: updatedAt === undefined ? '' : new Date(updatedAt).toISOString() })
+
+		return makeAlpacaResponse(res)
 	}
 
 	// Camera API
@@ -1032,9 +1330,8 @@ export class AlpacaServer {
 
 		try {
 			if (accept?.includes('imagebytes')) {
-				// const data = Buffer.from(await Bun.file('c:\\Users\\tiago\\Documents\\Nebulosa\\Captures\\SVBONY CCD SV305.fit').arrayBuffer())
-				const { data } = state
-				const image = makeImageBytesFromFits(Buffer.isBuffer(data) ? data : Buffer.from(data!, 'base64'))
+				const [buffer, encoding] = state.data!
+				const image = makeImageBytesFromFits(encoding === 'raw' ? buffer : Buffer.from(buffer.toString('ascii'), 'base64'))
 				return new Response(image.buffer, { headers: { 'Content-Type': 'application/imagebytes' } })
 			}
 		} finally {
@@ -1489,6 +1786,217 @@ export class AlpacaServer {
 		return makeAlpacaResponse(undefined)
 	}
 
+	// Dome API
+
+	#requireDomeConnected(id: number): AlpacaRegisteredDevice<Dome> | Response {
+		const registered = this.#dome(id)
+
+		if (!registered) return makeAlpacaErrorResponse(AlpacaException.InvalidOperation, 'Dome is not present')
+		if (!registered.device.connected) return makeAlpacaErrorResponse(AlpacaException.NotConnected, 'Dome is not connected')
+
+		return registered
+	}
+
+	#requireDomeCapability(id: number, capability: 'canFindHome' | 'canPark' | 'canSetAltitude' | 'canSetAzimuth' | 'canSetPark' | 'canSetShutter' | 'canSlave' | 'canSync' | 'hasShutter', message: string): AlpacaRegisteredDevice<Dome> | Response {
+		const registered = this.#requireDomeConnected(id)
+
+		if (registered instanceof Response) return registered
+		if (!registered.device[capability]) return makeAlpacaErrorResponse(AlpacaException.MethodOrPropertyNotImplemented, message)
+
+		return registered
+	}
+
+	#requireDomeNotSlaved(registered: AlpacaRegisteredDevice<Dome>) {
+		return registered.device.slaved ? makeAlpacaErrorResponse(AlpacaException.Slaved, 'Dome is slaved') : registered
+	}
+
+	#domeGetAltitude(id: number) {
+		const registered = this.#requireDomeConnected(id)
+		return registered instanceof Response ? registered : makeAlpacaResponse(toDeg(registered.device.altitude.value))
+	}
+
+	#domeIsAtHome(id: number) {
+		const registered = this.#requireDomeConnected(id)
+		return registered instanceof Response ? registered : makeAlpacaResponse(registered.device.atHome)
+	}
+
+	#domeIsAtPark(id: number) {
+		const registered = this.#requireDomeConnected(id)
+		return registered instanceof Response ? registered : makeAlpacaResponse(registered.device.parked)
+	}
+
+	#domeGetAzimuth(id: number) {
+		const registered = this.#requireDomeConnected(id)
+		return registered instanceof Response ? registered : makeAlpacaResponse(toDeg(normalizeAngle(registered.device.azimuth.value)))
+	}
+
+	#domeCanFindHome(id: number) {
+		const registered = this.#requireDomeConnected(id)
+		return registered instanceof Response ? registered : makeAlpacaResponse(registered.device.canFindHome)
+	}
+
+	#domeCanPark(id: number) {
+		const registered = this.#requireDomeConnected(id)
+		return registered instanceof Response ? registered : makeAlpacaResponse(registered.device.canPark)
+	}
+
+	#domeCanSetAltitude(id: number) {
+		const registered = this.#requireDomeConnected(id)
+		return registered instanceof Response ? registered : makeAlpacaResponse(registered.device.canSetAltitude)
+	}
+
+	#domeCanSetAzimuth(id: number) {
+		const registered = this.#requireDomeConnected(id)
+		return registered instanceof Response ? registered : makeAlpacaResponse(registered.device.canSetAzimuth)
+	}
+
+	#domeCanSetPark(id: number) {
+		const registered = this.#requireDomeConnected(id)
+		return registered instanceof Response ? registered : makeAlpacaResponse(registered.device.canSetPark)
+	}
+
+	#domeCanSetShutter(id: number) {
+		const registered = this.#requireDomeConnected(id)
+		return registered instanceof Response ? registered : makeAlpacaResponse(registered.device.canSetShutter)
+	}
+
+	#domeCanSlave(id: number) {
+		const registered = this.#requireDomeConnected(id)
+		return registered instanceof Response ? registered : makeAlpacaResponse(registered.device.canSlave)
+	}
+
+	#domeCanSyncAzimuth(id: number) {
+		const registered = this.#requireDomeConnected(id)
+		return registered instanceof Response ? registered : makeAlpacaResponse(registered.device.canSync)
+	}
+
+	#domeGetShutterStatus(id: number) {
+		const registered = this.#requireDomeCapability(id, 'hasShutter', 'Dome does not have a shutter')
+		return registered instanceof Response ? registered : makeAlpacaResponse(mapDomeShutterState(registered.device.shutterState))
+	}
+
+	#domeIsSlaved(id: number) {
+		const registered = this.#requireDomeCapability(id, 'canSlave', 'Dome does not support slaving')
+		return registered instanceof Response ? registered : makeAlpacaResponse(registered.device.slaved)
+	}
+
+	#domeIsSlewing(id: number) {
+		const registered = this.#requireDomeConnected(id)
+		return registered instanceof Response ? registered : makeAlpacaResponse(registered.device.slewing)
+	}
+
+	// Returns only values represented by the connected dome and omits unsupported optional properties.
+	#domeGetDeviceState(id: number) {
+		const registered = this.#requireDomeConnected(id)
+		if (registered instanceof Response) return registered
+
+		const { device } = registered
+		const res: AlpacaStateItem[] = []
+
+		if (device.canSetAltitude || device.altitude.max > device.altitude.min) res.push({ Name: 'Altitude', Value: toDeg(device.altitude.value) })
+		if (device.canFindHome) res.push({ Name: 'AtHome', Value: device.atHome })
+		if (device.canPark) res.push({ Name: 'AtPark', Value: device.parked })
+		if (device.canSetAzimuth) res.push({ Name: 'Azimuth', Value: toDeg(normalizeAngle(device.azimuth.value)) })
+		if (device.hasShutter) res.push({ Name: 'ShutterStatus', Value: mapDomeShutterState(device.shutterState) })
+		res.push({ Name: 'Slewing', Value: device.slewing }, { Name: 'TimeStamp', Value: '' })
+		return makeAlpacaResponse(res)
+	}
+
+	#domeSetSlaved(id: number, data: { Slaved: string }) {
+		const registered = this.#requireDomeCapability(id, 'canSlave', 'Dome does not support slaving')
+		if (registered instanceof Response) return registered
+
+		this.options.dome?.slave(registered.device, isTrue(data.Slaved))
+		return makeAlpacaResponse(undefined)
+	}
+
+	#domeAbort(id: number) {
+		const registered = this.#requireDomeConnected(id)
+		if (registered instanceof Response) return registered
+		if (!registered.device.canAbort) return makeAlpacaErrorResponse(AlpacaException.InvalidOperation, 'Dome cannot interrupt movement')
+
+		const wasSlaved = registered.device.slaved
+		this.options.dome?.stop(registered.device)
+		if (wasSlaved && registered.device.canSlave) this.options.dome?.slave(registered.device, false)
+		return makeAlpacaResponse(undefined)
+	}
+
+	#domeCloseShutter(id: number) {
+		const registered = this.#requireDomeCapability(id, 'canSetShutter', 'Dome does not support shutter control')
+		return registered instanceof Response ? registered : (this.options.dome?.closeShutter(registered.device), makeAlpacaResponse(undefined))
+	}
+
+	#domeFindHome(id: number) {
+		const registered = this.#requireDomeCapability(id, 'canFindHome', 'Dome does not support finding home')
+		if (registered instanceof Response) return registered
+
+		const movable = this.#requireDomeNotSlaved(registered)
+		return movable instanceof Response ? movable : (this.options.dome?.home(movable.device), makeAlpacaResponse(undefined))
+	}
+
+	#domeOpenShutter(id: number) {
+		const registered = this.#requireDomeCapability(id, 'canSetShutter', 'Dome does not support shutter control')
+		return registered instanceof Response ? registered : (this.options.dome?.openShutter(registered.device), makeAlpacaResponse(undefined))
+	}
+
+	#domePark(id: number) {
+		const registered = this.#requireDomeCapability(id, 'canPark', 'Dome does not support parking')
+		if (registered instanceof Response) return registered
+
+		const movable = this.#requireDomeNotSlaved(registered)
+		if (movable instanceof Response) return movable
+
+		this.options.dome?.park(movable.device)
+		return makeAlpacaResponse(undefined)
+	}
+
+	#domeSetPark(id: number) {
+		const registered = this.#requireDomeCapability(id, 'canSetPark', 'Dome does not support setting park')
+		return registered instanceof Response ? registered : (this.options.dome?.setPark(registered.device), makeAlpacaResponse(undefined))
+	}
+
+	#domeSlewToAltitude(id: number, data: { Altitude: string }) {
+		const registered = this.#requireDomeCapability(id, 'canSetAltitude', 'Dome does not support altitude movement')
+		if (registered instanceof Response) return registered
+
+		const movable = this.#requireDomeNotSlaved(registered)
+		if (movable instanceof Response) return movable
+
+		const altitude = +data.Altitude
+		if (!Number.isFinite(altitude) || !(altitude >= 0 && altitude <= 90)) return makeAlpacaErrorResponse(AlpacaException.InvalidValue, 'Altitude must be between 0 and 90 degrees')
+
+		this.options.dome?.moveToAltitude(movable.device, deg(altitude))
+		return makeAlpacaResponse(undefined)
+	}
+
+	#domeSlewToAzimuth(id: number, data: { Azimuth: string }) {
+		const registered = this.#requireDomeCapability(id, 'canSetAzimuth', 'Dome does not support azimuth movement')
+		if (registered instanceof Response) return registered
+
+		const movable = this.#requireDomeNotSlaved(registered)
+		if (movable instanceof Response) return movable
+
+		const azimuth = +data.Azimuth
+		if (!Number.isFinite(azimuth) || !(azimuth >= 0 && azimuth <= 360)) return makeAlpacaErrorResponse(AlpacaException.InvalidValue, 'Azimuth must be between 0 and 360 degrees')
+
+		this.options.dome?.moveTo(movable.device, deg(azimuth))
+		return makeAlpacaResponse(undefined)
+	}
+
+	#domeSyncToAzimuth(id: number, data: { Azimuth: string }) {
+		const registered = this.#requireDomeCapability(id, 'canSync', 'Dome does not support azimuth synchronization')
+		if (registered instanceof Response) return registered
+
+		const movable = this.#requireDomeNotSlaved(registered)
+		if (movable instanceof Response) return movable
+
+		const azimuth = +data.Azimuth
+		if (!Number.isFinite(azimuth) || !(azimuth >= 0 && azimuth <= 360)) return makeAlpacaErrorResponse(AlpacaException.InvalidValue, 'Azimuth must be between 0 and 360 degrees')
+
+		this.options.dome?.syncTo(movable.device, deg(azimuth))
+		return makeAlpacaResponse(undefined)
+	}
+
 	// Focuser
 
 	#focuserCanAbsolute(id: number) {
@@ -1679,10 +2187,13 @@ export class AlpacaServer {
 	}
 }
 
-// Merges path params with any form-urlencoded body fields into a single record for a PUT handler.
+// Merges path params, query-string params, and any form-urlencoded body fields into a single record for
+// a route handler, with later sources winning. The query string matters because Alpaca passes arguments
+// to GET members there (SensorName, Axis), and the result is a fresh object so req.params is not mutated.
 async function params<T extends Record<string, string | number | boolean | undefined>>(req: Bun.BunRequest) {
 	const data = req.headers.get('Content-Type')?.startsWith('application/x-www-form-urlencoded') ? await req.formData() : undefined
-	const res: Record<string, string> = req.params
+	const res: Record<string, string> = { ...req.params }
+	for (const [key, value] of new URL(req.url).searchParams) res[key] = value
 	if (data !== undefined) for (const [key, value] of data) if (typeof value === 'string') res[key] = value
 	return res as T
 }
@@ -1731,7 +2242,7 @@ function promiseWithTimeout(code: AlpacaException, message: string, delay: numbe
 // rebiased to unsigned (BZERO) values. Big-endian FITS samples are byte-swapped around the copy. The
 // transmitted element type is forced to a 32-bit width to satisfy clients like MaxIm DL.
 // https://github.com/ASCOMInitiative/ASCOMRemote/blob/main/Documentation/AlpacaImageBytes.pdf
-export function makeImageBytesFromFits(source: Buffer<ArrayBuffer>) {
+export function makeImageBytesFromFits(source: Buffer) {
 	const reader = new FitsKeywordReader()
 	let position = 0
 
@@ -1781,7 +2292,7 @@ export function makeImageBytesFromFits(source: Buffer<ArrayBuffer>) {
 
 	const sourceLength = (source.byteLength - position) / bytesPerPixel
 	const SourceTypedArray = bitpix === 8 ? Uint8Array : bitpix === 16 ? Int16Array : bitpix === 32 ? Int32Array : bitpix === -32 ? Float32Array : Float64Array
-	const sourceArray = new SourceTypedArray(source.buffer, position, sourceLength)
+	const sourceArray = new SourceTypedArray(source.buffer as never, position, sourceLength)
 	const outputLength = (output.byteLength - dataStart) / bytesPerPixel
 	const OutputTypedArray = bitpix === 8 ? Uint8Array : bitpix === 16 ? Uint16Array : bitpix === 32 ? Uint32Array : bitpix === -32 ? Float32Array : Float64Array
 	const outputArray = new OutputTypedArray(output.buffer, dataStart, outputLength)
@@ -1801,9 +2312,167 @@ export function makeImageBytesFromFits(source: Buffer<ArrayBuffer>) {
 	return output
 }
 
+// Reads one weather sensor in ASCOM units, or undefined when the backend does not provide it.
+//
+// Three sensors are not a plain field read:
+//
+// - `temperature` lives in the Thermometer capability, so `hasThermometer` is its capability flag rather
+//   than the field being absent;
+// - `windDirection` is converted from internal radians to the ASCOM convention, which measures degrees
+//   clockwise from north but reports north as 360 and reserves 0 for calm air. Publishing a northerly
+//   wind as 0 would be read by every ASCOM client as "no wind", a different physical statement;
+// - `humidity` and `dewPoint` must be implemented as a pair, so whichever is missing is derived from the
+//   other and the ambient temperature. Only when that derivation is impossible are both reported absent.
+//
+// Both derivations clamp their input rather than refusing it. The Magnus relation is only unusable at zero
+// relative humidity and outside its ±100 °C domain; a reading slightly above 100% is saturated air, which a
+// fogged-in station really does report, and dropping the derived member there would make DewPoint flap to
+// "not implemented" for a sensor that is working. An Alpaca client that latches 1024 as a capability would
+// then never ask again.
+function weatherSensorValue(device: Weather, sensor: WeatherSensor): number | undefined {
+	switch (sensor) {
+		case 'temperature':
+			return device.hasThermometer ? device.temperature : undefined
+		case 'windDirection': {
+			if (device.windDirection === undefined) return undefined
+			// Calm air has no direction, and 0 is how ASCOM says so. An unknown wind speed is not calm, so
+			// the measured direction is reported as-is.
+			if (device.windSpeed === 0) return 0
+			const degrees = toDeg(normalizeAngle(device.windDirection))
+			return degrees === 0 ? 360 : degrees
+		}
+		case 'humidity': {
+			if (device.humidity !== undefined) return device.humidity
+			if (device.dewPoint === undefined || !device.hasThermometer) return undefined
+			// A driver reading outside the Magnus domain cannot be transformed, so the derived member is
+			// reported absent instead of letting the formula reject it mid-request.
+			if (!isMagnusDomain(device.temperature) || !isMagnusDomain(device.dewPoint)) return undefined
+			return Math.min(100, relativeHumidity(device.temperature, device.dewPoint))
+		}
+		case 'dewPoint': {
+			if (device.dewPoint !== undefined) return device.dewPoint
+			if (device.humidity === undefined || !device.hasThermometer || device.humidity <= 0) return undefined
+			if (!isMagnusDomain(device.temperature)) return undefined
+			return dewPoint(device.temperature, Math.min(100, device.humidity))
+		}
+		default:
+			return device[sensor]
+	}
+}
+
+// The WEATHER_PARAMETERS element the driver declares for `sensor`, under its INDI name or any accepted
+// alias, or undefined when the driver declares none.
+//
+// The INDI Weather interface does not standardize parameter names - every driver names its own through
+// addParameter() - so every lookup that reads the declaration has to accept the same alias set, otherwise
+// a sensor detected through an alias would be described through the canonical name it never published.
+function weatherSensorElement(manager: WeatherManager | undefined, device: Weather, sensor: WeatherSensor) {
+	const parameters = manager?.properties.get(device)?.WEATHER_PARAMETERS
+
+	if (parameters?.type !== 'NUMBER') return undefined
+
+	const mapping = WEATHER_SENSORS_BY_FIELD.get(sensor)!
+	const element = parameters.elements[mapping.indi]
+
+	if (element !== undefined) return element
+
+	for (const alias of mapping.aliases) {
+		const aliased = parameters.elements[alias]
+		if (aliased !== undefined) return aliased
+	}
+
+	return undefined
+}
+
+// Whether the driver's WEATHER_PARAMETERS definition declares `sensor`, under its INDI name or any alias.
+//
+// The element set is the driver stating which sensors exist, and it says so before any of them has a
+// value: a definition published Busy carries the driver's declared defaults rather than readings - the
+// Firmata adapter does exactly that until its first hardware reply - so WeatherManager deliberately leaves
+// the typed fields undefined meanwhile. The declaration is what survives that gap.
+function weatherSensorDeclared(manager: WeatherManager | undefined, device: Weather, sensor: WeatherSensor) {
+	return weatherSensorElement(manager, device, sensor) !== undefined
+}
+
+// Whether the backend implements `sensor` at all, independently of whether it has a usable value right
+// now.
+//
+// A sensor the driver declares is implemented even before its first reading. Beyond that, the distinction
+// matters for the humidity/dew-point pair: the member being derived stays implemented as soon as the other
+// member and an ambient temperature exist, even for a reading the Magnus relation cannot transform (0 %
+// relative humidity, or a temperature outside its ±100 °C domain). None of those are capability changes,
+// and an Alpaca client latches MethodOrPropertyNotImplemented for the life of the connection, so answering
+// 1024 there would disable a working sensor for good. Any other sensor is implemented when it has a value.
+function weatherSensorImplemented(manager: WeatherManager | undefined, device: Weather, sensor: WeatherSensor) {
+	if (weatherSensorDeclared(manager, device, sensor)) return true
+	if (sensor === 'humidity') return device.humidity !== undefined || weatherPairDerivable(manager, device, 'dewPoint')
+	if (sensor === 'dewPoint') return device.dewPoint !== undefined || weatherPairDerivable(manager, device, 'humidity')
+	return weatherSensorValue(device, sensor) !== undefined
+}
+
+// Whether the missing member of the humidity/dew-point pair can be derived, now or as soon as the driver
+// reports. `source` is the other member of the pair; the derivation also needs an ambient temperature.
+//
+// A declaration counts as much as a value here. A driver that declares only its hygrometer and thermometer,
+// Busy and without readings - the Firmata weather path does exactly that until its first hardware reply -
+// derives its dew point from that first sample, so answering 1024 meanwhile would let a capability-caching
+// client disable the member for the whole connection. Until the sample arrives the member is implemented
+// and simply has no value, which is ValueNotSet.
+function weatherPairDerivable(manager: WeatherManager | undefined, device: Weather, source: 'humidity' | 'dewPoint') {
+	const reported = source === 'humidity' ? device.humidity !== undefined : device.dewPoint !== undefined
+
+	if (!reported && !weatherSensorDeclared(manager, device, source)) return false
+
+	return device.hasThermometer || weatherSensorDeclared(manager, device, 'temperature')
+}
+
+// Milliseconds since the newest reading backing `sensor`, or undefined when it was never reported. The
+// age is monotonic, as WeatherManager measures it, so the newest of several readings is the smallest one.
+//
+// Every sensor is its own source except a derived member of the humidity/dew-point pair, which has no
+// stamp of its own: reporting the source's age keeps TimeSinceLastUpdate meaningful instead of a
+// permanent -1. The derivation is a function of both the direct source and the ambient temperature, so a
+// new temperature moves the derived value even when the source did not; the newer of the two readings is
+// therefore the moment the derived value last changed. It also consumes both, so a member missing either
+// one was never derived and has no age at all.
+//
+// The published wind direction is the other reading that is not a lone field: ASCOM reserves 0 for calm
+// air, so while the anemometer reads zero the endpoint publishes that sentinel and the wind-speed reading
+// is what produced it. Any other speed leaves the measured bearing as the published value, and only the
+// direction reading dates it: a speed that merely moves between two non-zero values changes nothing there,
+// so letting it count would make a direction sensor that stopped reporting look fresh for as long as the
+// anemometer keeps answering.
+function weatherSensorElapsedSince(manager: WeatherManager | undefined, device: Weather, sensor: WeatherSensor) {
+	if (manager === undefined) return undefined
+
+	if (sensor === 'windDirection') {
+		const at = manager.elapsedSince(device, 'windDirection')
+
+		if (at === undefined) return undefined
+		if (device.windSpeed !== 0) return at
+
+		// Calm air: the published 0 came from the anemometer, so its reading is what dates the endpoint.
+		return manager.elapsedSince(device, 'windSpeed') ?? at
+	}
+
+	const source = sensor === 'humidity' && device.humidity === undefined ? 'dewPoint' : sensor === 'dewPoint' && device.dewPoint === undefined ? 'humidity' : undefined
+
+	if (source === undefined) return manager.elapsedSince(device, sensor)
+
+	const at = manager.elapsedSince(device, source)
+	const temperature = manager.elapsedSince(device, 'temperature')
+
+	// A declared member whose pair partner or ambient temperature never reported has no derived value -
+	// the getter answers ValueNotSet for it - so dating it from the half that did report would announce a
+	// fresh reading the sensor has never produced.
+	if (at === undefined || temperature === undefined) return undefined
+
+	return Math.min(at, temperature)
+}
+
 // Case-insensitive boolean parse of an Alpaca 'True'/'False' form value.
-function isTrue(value: string) {
-	return value.toLowerCase() === 'true'
+function isTrue(value: string | undefined | null) {
+	return value?.toLowerCase() === 'true'
 }
 
 // Wraps a value in the Alpaca JSON response envelope.
@@ -1839,6 +2508,23 @@ function mapAlpacaEnumToGuideDirection(value: number): GuideDirection {
 // Track mode → Alpaca enum: SIDEREAL=0, LUNAR=1, SOLAR=2, KING=3.
 function mapTrackModeToAlpacaEnum(value: TrackMode) {
 	return value === 'SIDEREAL' ? 0 : value === 'LUNAR' ? 1 : value === 'SOLAR' ? 2 : 3
+}
+
+// Converts the shared dome shutter state to the Alpaca numeric enum; unknown and driver-error
+// states use Alpaca's ERROR value because the protocol has no UNKNOWN member.
+function mapDomeShutterState(value: Dome['shutterState']) {
+	switch (value) {
+		case 'OPEN':
+			return AlpacaDomeShutterState.OPEN
+		case 'CLOSED':
+			return AlpacaDomeShutterState.CLOSED
+		case 'OPENING':
+			return AlpacaDomeShutterState.OPENING
+		case 'CLOSING':
+			return AlpacaDomeShutterState.CLOSING
+		default:
+			return AlpacaDomeShutterState.ERROR
+	}
 }
 
 // Alpaca enum → track mode (inverse of mapTrackModeToAlpacaEnum).

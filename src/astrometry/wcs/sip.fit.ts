@@ -1,5 +1,4 @@
 import { NumberComparator, percentileOf } from '../../core/util'
-import { validateFinite } from '../../core/validation'
 import type { FitsHeader } from '../../io/formats/fits/fits'
 import { heightKeyword, numericKeyword, widthKeyword } from '../../io/formats/fits/util'
 import { Matrix, QrDecomposition } from '../../math/linear-algebra/matrix'
@@ -398,7 +397,7 @@ export function fitSipDistortion(matchedStars: readonly MatchedStar[], wcs: SipF
 
 		const remaining = usedIndices.length - rejected.length
 
-		if (remaining < runtime.hardMinStars) {
+		if (!(remaining >= runtime.hardMinStars)) {
 			throw new SipFitError('excessiveOutlierRejection', 'sigma clipping would leave too few stars for the SIP fit', { remaining, rejected: rejected.length, minimum: runtime.hardMinStars })
 		}
 
@@ -494,8 +493,6 @@ function setSipAxisType(header: FitsHeader, key: 'CTYPE1' | 'CTYPE2', tan: strin
 
 // Evaluates the SIP pixel correction at a measured pixel coordinate.
 export function evaluateSipCorrection(x: number, y: number, sipModel: SipModel, wcs: SipFitsHeader | FitsHeader) {
-	validateFinite(x)
-	validateFinite(y)
 	wcs = extractSipInputWcsFromFitsHeader(wcs)
 	validateSipFitsHeader(wcs)
 	const order = validateSipOrder(sipModel.order)
@@ -552,7 +549,7 @@ function normalizeOptions(matchedStars: readonly MatchedStar[], wcs: SipFitsHead
 	if (weighting !== 'auto' && weighting !== 'none' && weighting !== 'star') throw new SipFitError('invalidOption', `unsupported weighting mode: ${weighting}`)
 	if (scatter !== 'mad' && scatter !== 'standardDeviation') throw new SipFitError('invalidOption', `unsupported scatter mode: ${scatter}`)
 	if (spatialDistribution !== 'off' && spatialDistribution !== 'warn' && spatialDistribution !== 'fail') throw new SipFitError('invalidOption', `unsupported spatial distribution mode: ${spatialDistribution}`)
-	if (minStarRatio < 1) throw new SipFitError('invalidOption', 'minStarRatio must be at least 1')
+	if (!(minStarRatio >= 1)) throw new SipFitError('invalidOption', 'minStarRatio must be at least 1')
 
 	const weighted = weighting === 'star' || (weighting === 'auto' && matchedStars.some((star) => star.weight !== undefined))
 	const recommendedMinStars = Math.ceil(coefficientCount * minStarRatio)
@@ -579,17 +576,15 @@ function normalizeOptions(matchedStars: readonly MatchedStar[], wcs: SipFitsHead
 // Validates that the SIP order is an integer within [MIN_SIP_ORDER, MAX_SIP_ORDER]; returns it.
 function validateSipOrder(order: number) {
 	if (!Number.isInteger(order)) throw new SipFitError('invalidOrder', 'SIP order must be an integer')
-	if (order < MIN_SIP_ORDER) throw new SipFitError('invalidOrder', `SIP order must be at least ${MIN_SIP_ORDER}`)
-	if (order > MAX_SIP_ORDER) throw new SipFitError('invalidOrder', `SIP order greater than ${MAX_SIP_ORDER} is not supported by this fitter`)
+	if (!(order >= MIN_SIP_ORDER)) throw new SipFitError('invalidOrder', `SIP order must be at least ${MIN_SIP_ORDER}`)
+	if (!(order <= MAX_SIP_ORDER)) throw new SipFitError('invalidOrder', `SIP order greater than ${MAX_SIP_ORDER} is not supported by this fitter`)
 	return order
 }
 
-// Validates that the WCS has finite reference pixels and valid optional image dimensions.
+// Checks that a WCS header is present and that optional image dimensions, when given, are positive.
 function validateSipFitsHeader(wcs: SipFitsHeader) {
 	if (!wcs) throw new SipFitError('invalidCoordinate', 'basic WCS is required')
 
-	validateFinite(wcs.crpix1)
-	validateFinite(wcs.crpix2)
 	optionalImageSize('width', wcs.width)
 	optionalImageSize('height', wcs.height)
 }
@@ -604,7 +599,7 @@ function optionalImageSize(name: string, value: number | undefined) {
 // Returns an optional integer option (>= min) or the default when undefined.
 function optionalInteger(name: string, value: number | undefined, defaultValue: number, min: number) {
 	if (value === undefined) return defaultValue
-	if (!Number.isInteger(value) || value < min) throw new SipFitError('invalidOption', `${name} must be an integer greater than or equal to ${min}`)
+	if (!Number.isInteger(value) || !(value >= min)) throw new SipFitError('invalidOption', `${name} must be an integer greater than or equal to ${min}`)
 	return value
 }
 
@@ -615,8 +610,8 @@ function optionalPositiveNumber(name: string, value: number | undefined, default
 	return value
 }
 
-// Validates each star and centers it to (u, v) with target deltas and a resolved weight (1 when
-// unweighted), producing the PreparedStar list consumed by the solver.
+// Centers each star to (u, v) with target deltas and a resolved weight (1 when unweighted), producing
+// the PreparedStar list consumed by the solver.
 function prepareStars(stars: readonly MatchedStar[], wcs: SipFitsHeader, weighted: boolean) {
 	if (!Array.isArray(stars)) throw new SipFitError('insufficientStars', 'matchedStars must be an array')
 
@@ -624,11 +619,6 @@ function prepareStars(stars: readonly MatchedStar[], wcs: SipFitsHeader, weighte
 
 	for (let i = 0; i < stars.length; i++) {
 		const star = stars[i]
-
-		validateFinite(star.x)
-		validateFinite(star.y)
-		validateFinite(star.xRef)
-		validateFinite(star.yRef)
 
 		if (star.weight !== undefined && (!Number.isFinite(star.weight) || !(star.weight > 0))) {
 			throw new SipFitError('invalidWeight', `stars[${i}].weight must be a positive finite number`)
@@ -653,11 +643,11 @@ function prepareStars(stars: readonly MatchedStar[], wcs: SipFitsHeader, weighte
 
 // Throws unless there are strictly more stars than coefficients and at least the hard minimum.
 function validateStarCount(stars: number, coefficientCount: number, hardMinStars: number) {
-	if (stars <= coefficientCount) {
+	if (!(stars > coefficientCount)) {
 		throw new SipFitError('insufficientStars', 'SIP fitting requires more stars than coefficients', { stars, coefficients: coefficientCount })
 	}
 
-	if (stars < hardMinStars) {
+	if (!(stars >= hardMinStars)) {
 		throw new SipFitError('insufficientStars', 'not enough stars for the configured SIP fit', { stars, minimum: hardMinStars })
 	}
 }
@@ -732,11 +722,11 @@ function solveSipCoefficients(stars: readonly PreparedStar[], usedIndices: reado
 	const scales = scaleColumns(matrix)
 	const conditionNumber = estimateConditionNumber(matrix)
 
-	if (!Number.isFinite(conditionNumber) || conditionNumber > options.maxConditionNumber) {
+	if (!Number.isFinite(conditionNumber) || !(conditionNumber <= options.maxConditionNumber)) {
 		throw new SipFitError('illConditionedFit', 'SIP design matrix is ill-conditioned', { conditionNumber, maxConditionNumber: options.maxConditionNumber })
 	}
 
-	const decomposition = new QrDecomposition(matrix)
+	const decomposition = new QrDecomposition(matrix, true)
 
 	if (!decomposition.isFullRank) {
 		throw new SipFitError('singularMatrix', 'SIP design matrix is rank deficient')

@@ -1,65 +1,37 @@
 import { describe, expect, test } from 'bun:test'
-import { DEFAULT_REFRACTION_PARAMETERS } from '../../../src/astronomy/coordinates/astrometry'
+import { cirsToObserved, DEFAULT_REFRACTION_PARAMETERS } from '../../../src/astronomy/coordinates/astrometry'
+import { eraC2s, eraS2c } from '../../../src/astronomy/coordinates/erfa/erfa'
 import { geodeticLocation, localSiderealTime } from '../../../src/astronomy/observer/location'
-import { type Time, timeYMDHMS } from '../../../src/astronomy/time/time'
-import { SIDEREAL_RATE } from '../../../src/core/constants'
-import { arcmin, deg, hour, parseAngle, toArcmin, toArcsec, toDeg } from '../../../src/math/units/angle'
+import { cirsRotationMatrix, type Time, timeShift, timeYMDHMS } from '../../../src/astronomy/time/time'
+import { matMulVec } from '../../../src/math/linear-algebra/mat3'
+import { vecAngle, vecRotateByRodrigues } from '../../../src/math/linear-algebra/vec3'
+import { arcmin, deg, hour, normalizePI, parseAngle, toArcmin, toArcsec, toDeg } from '../../../src/math/units/angle'
 import { meter } from '../../../src/math/units/distance'
-import { estimateDarvExposure, type DarvExposureInput, polarAlignmentError, ThreePointPolarAlignment, threePointPolarAlignmentError, COARSE_DARV_EXPOSURE_PRESET } from '../../../src/observation/alignment/polaralignment'
+import { mountAdjustmentAxes, polarAlignmentError, ThreePointPolarAlignment, threePointPolarAlignmentAfterAdjustment, threePointPolarAlignmentError } from '../../../src/observation/alignment/polaralignment'
+import { applyMountAdjustment } from '../../../src/observation/alignment/polaralignment.util'
 
-function darvInput(input: Partial<DarvExposureInput> = {}): DarvExposureInput {
-	return { focalLength: 1000, pixelSize: 3.75, declination: 0, latitude: deg(45), mode: 'altitude', preset: COARSE_DARV_EXPOSURE_PRESET, ...input }
-}
+test('matches Ralph Pass two-star polar alignment reference example', () => {
+	const latitude = deg(42 + 40 / 60)
+	const lst = 0
 
-describe('darv exposure estimator', () => {
-	test('computes RA velocity at the celestial equator', () => {
-		const estimate = estimateDarvExposure(darvInput({ declination: 0, preset: { targetTrail: 1, detectableSeparation: 1, targetPolarError: 10, guideRateSidereal: 1 } }))
+	const azimuthError = arcmin(32.26)
+	const altitudeError = arcmin(7.39)
 
-		expect(estimate.raVelocity).toBeCloseTo(SIDEREAL_RATE, 12)
-	})
+	const star1 = [hour(3), deg(48)] as const
+	const star2 = [hour(23), deg(45)] as const
 
-	test('exposure increases for smaller detectable polar error', () => {
-		const common = { targetTrail: 1, detectableSeparation: 3, guideRateSidereal: 1 }
-		const coarse = estimateDarvExposure(darvInput({ preset: { ...common, targetPolarError: 10 } }))
-		const fine = estimateDarvExposure(darvInput({ preset: { ...common, targetPolarError: 2 } }))
+	const actual1 = polarAlignmentError(star1[0], star1[1], latitude, lst, azimuthError, altitudeError)
+	const actual2 = polarAlignmentError(star2[0], star2[1], latitude, lst, azimuthError, altitudeError)
 
-		expect(fine.driftDetectionTime).toBeGreaterThan(fine.raTrailTime)
-		expect(fine.recommendedExposure).toBeGreaterThan(coarse.recommendedExposure)
-	})
+	const readoutError1 = [normalizePI(star1[0] - actual1[0]), star1[1] - actual1[1]]
+	const readoutError2 = [normalizePI(star2[0] - actual2[0]), star2[1] - actual2[1]]
 
-	test('exposure increases for shorter focal length', () => {
-		const shortFocal = estimateDarvExposure(darvInput({ focalLength: 500 }))
-		const longFocal = estimateDarvExposure(darvInput({ focalLength: 2000 }))
+	// Ralph Pass syncs on star 1, so only the differential readout error remains at star 2.
+	const syncedRaError = normalizePI(readoutError2[0] - readoutError1[0])
+	const syncedDecError = readoutError2[1] - readoutError1[1]
 
-		expect(shortFocal.imageScale).toBeGreaterThan(longFocal.imageScale)
-		expect(shortFocal.recommendedExposure).toBeGreaterThan(longFocal.recommendedExposure)
-	})
-
-	test('computes azimuth mode geometry factor', () => {
-		const estimate = estimateDarvExposure(darvInput({ latitude: deg(60), mode: 'azimuth' }))
-
-		expect(estimate.geometryFactor).toBeCloseTo(Math.abs(Math.cos(deg(60))), 12)
-	})
-
-	test('computes altitude mode geometry factor', () => {
-		const estimate = estimateDarvExposure(darvInput({ latitude: deg(60), mode: 'altitude' }))
-
-		expect(estimate.geometryFactor).toBe(1)
-	})
-
-	test('rejects invalid DARV geometries', () => {
-		expect(() => estimateDarvExposure(darvInput({ declination: deg(90) }))).toThrow('stars too close to the celestial pole')
-		expect(() => estimateDarvExposure(darvInput({ latitude: deg(90), mode: 'azimuth' }))).toThrow('DARV DEC drift is too small')
-	})
-
-	test('resolves built-in and custom presets', () => {
-		const preset = { targetTrail: 10, detectableSeparation: 4, targetPolarError: 8, guideRateSidereal: 0.25 }
-		const estimate = estimateDarvExposure(darvInput({ preset }))
-
-		expect(estimate.raVelocity).toBeCloseTo(SIDEREAL_RATE * preset.guideRateSidereal, 12)
-		expect(estimate.raTrailTime).toBeCloseTo((preset.targetTrail * estimate.imageScale) / estimate.raVelocity, 12)
-		expect(estimate.driftDec).toBeCloseTo(0.004375 * preset.targetPolarError, 12)
-	})
+	expect(toArcmin(syncedRaError)).toBeCloseTo(-12, 2)
+	expect(toArcmin(syncedDecError)).toBeCloseTo(-21, 2)
 })
 
 describe('computed polar alignment error', () => {
@@ -84,6 +56,8 @@ describe('computed polar alignment error', () => {
 					for (let dec = -40; dec <= 40; dec += 10) {
 						const [p1, p2, p3] = [orie === 0 ? P3_RA : P1_RA, P2_RA, orie === 0 ? P1_RA : P3_RA].map((ra) => polarAlignmentError(ra, deg(dec), time.location!.latitude, LST, arcmin(az), arcmin(al)))
 						const result = threePointPolarAlignmentError(p1, p2, p3, time, false)
+						expect(result).not.toBeFalse()
+						if (!result) continue
 
 						expect(toArcmin(result.azimuthError)).toBeCloseTo(az, precision)
 						expect(toArcmin(result.altitudeError)).toBeCloseTo(al, precision)
@@ -102,6 +76,8 @@ describe('computed polar alignment error', () => {
 					for (let dec = -40; dec <= 40; dec += 10) {
 						const [p1, p2, p3] = [orie === 0 ? P3_RA : P1_RA, P2_RA, orie === 0 ? P1_RA : P3_RA].map((ra) => polarAlignmentError(ra, deg(dec), time.location!.latitude, LST, arcmin(az), arcmin(al)))
 						const result = threePointPolarAlignmentError(p1, p2, p3, time, DEFAULT_REFRACTION_PARAMETERS)
+						expect(result).not.toBeFalse()
+						if (!result) continue
 
 						expect(toArcmin(result.azimuthError)).toBeCloseTo(az, precision)
 						expect(toArcmin(result.altitudeError)).toBeCloseTo(al, precision)
@@ -120,6 +96,8 @@ describe('computed polar alignment error', () => {
 					for (let dec = -40; dec <= 40; dec += 10) {
 						const [p1, p2, p3] = [orie === 0 ? P3_RA : P1_RA, P2_RA, orie === 0 ? P1_RA : P3_RA].map((ra) => polarAlignmentError(ra, deg(dec), time.location!.latitude, LST, arcmin(az), arcmin(al)))
 						const result = threePointPolarAlignmentError(p1, p2, p3, time, false)
+						expect(result).not.toBeFalse()
+						if (!result) continue
 
 						expect(toArcmin(result.azimuthError)).toBeCloseTo(az, precision)
 						expect(toArcmin(result.altitudeError)).toBeCloseTo(al, precision)
@@ -138,6 +116,8 @@ describe('computed polar alignment error', () => {
 					for (let dec = -40; dec <= 40; dec += 10) {
 						const [p1, p2, p3] = [orie === 0 ? P3_RA : P1_RA, P2_RA, orie === 0 ? P1_RA : P3_RA].map((ra) => polarAlignmentError(ra, deg(dec), time.location!.latitude, LST, arcmin(az), arcmin(al)))
 						const result = threePointPolarAlignmentError(p1, p2, p3, time, DEFAULT_REFRACTION_PARAMETERS)
+						expect(result).not.toBeFalse()
+						if (!result) continue
 
 						expect(toArcmin(result.azimuthError)).toBeCloseTo(az, precision)
 						expect(toArcmin(result.altitudeError)).toBeCloseTo(al, precision)
@@ -268,6 +248,10 @@ test('change orientation', () => {
 
 	const pa1 = threePointPolarAlignmentError(a, b, c, time, DEFAULT_REFRACTION_PARAMETERS, location)
 	const pa2 = threePointPolarAlignmentError(c, b, a, time, DEFAULT_REFRACTION_PARAMETERS, location)
+
+	expect(pa1).not.toBeFalse()
+	expect(pa2).not.toBeFalse()
+	if (!pa1 || !pa2) return
 
 	expect(toArcmin(pa1.azimuthError)).toBe(toArcmin(pa2.azimuthError))
 	expect(toArcmin(pa1.altitudeError)).toBe(toArcmin(pa2.altitudeError))
@@ -904,4 +888,65 @@ test('almost aligned, no adjustment, (iOptron CEM26P)', () => {
 		expect(Math.abs(toArcsec(result.azimuthError))).toBeLessThan(60)
 		expect(Math.abs(toArcsec(result.altitudeError))).toBeLessThan(60)
 	}
+})
+
+test('coincident plate-solves do not invent a mount pole', () => {
+	const time = timeYMDHMS(2000, 1, 1, 0, 0, 0)
+	time.location = geodeticLocation(deg(7), deg(49), meter(250))
+
+	const a = [deg(20), deg(40)] as const
+	const b = [deg(60), deg(41)] as const
+
+	expect(threePointPolarAlignmentError(a, a, a, time, false)).toBeFalse()
+	expect(threePointPolarAlignmentError(a, a, b, time, false)).toBeFalse()
+	expect(threePointPolarAlignmentError(a, b, b, time, false)).toBeFalse()
+
+	const pa = new ThreePointPolarAlignment(false)
+	expect(pa.add(a[0], a[1], time)).toBeFalse()
+	expect(pa.add(a[0], a[1], time)).toBeFalse()
+	expect(pa.add(a[0], a[1], time)).toBeFalse()
+})
+
+test('after adjustment applies altitude about the carried east axis', () => {
+	const time = timeYMDHMS(2000, 1, 1, 0, 0, 0)
+	const location = geodeticLocation(deg(0), deg(40), meter(250))
+	time.location = location
+
+	const from = [deg(127.00972423), deg(27.34989335)] as const
+	const seed = threePointPolarAlignmentError([deg(186.4193401), deg(27.75369312)], [deg(156.6798968), deg(27.40124463)], from, time, false)
+	expect(seed).not.toBeFalse()
+	if (!seed) return
+
+	const { upAxis, eastAxis } = mountAdjustmentAxes(time, location)
+	const azimuth = deg(1)
+	const altitude = deg(1)
+	const to = eraC2s(...applyMountAdjustment(eraS2c(from[0], from[1]), upAxis, eastAxis, azimuth, altitude))
+	const updated = threePointPolarAlignmentAfterAdjustment(seed, from, to, time, false, location)
+	const expected = applyMountAdjustment(seed.pole, upAxis, eastAxis, updated.azimuthAdjustment, updated.altitudeAdjustment)
+	const commuting = vecRotateByRodrigues(vecRotateByRodrigues(seed.pole, upAxis, updated.azimuthAdjustment), eastAxis, updated.altitudeAdjustment)
+
+	expect(toArcsec(vecAngle(updated.pole, expected))).toBeLessThan(1)
+	expect(toArcsec(vecAngle(updated.pole, commuting))).toBeGreaterThan(10)
+})
+
+test('unchanged plate-solve refreshes the observed place at the new time', () => {
+	const time = timeYMDHMS(2000, 1, 1, 0, 0, 0)
+	const location = geodeticLocation(deg(0), deg(40), meter(250))
+	time.location = location
+
+	const from = [deg(127.00972423), deg(27.34989335)] as const
+	const seed = threePointPolarAlignmentError([deg(186.4193401), deg(27.75369312)], [deg(156.6798968), deg(27.40124463)], from, time, false)
+	expect(seed).not.toBeFalse()
+	if (!seed) return
+
+	const later = timeShift(time, 1 / 24)
+	const updated = threePointPolarAlignmentAfterAdjustment(seed, from, from, later, false, location)
+	const observed = cirsToObserved(matMulVec(cirsRotationMatrix(later), seed.pole), later, false, location)
+
+	expect(updated.pole).toBe(seed.pole)
+	expect(updated.azimuthAdjustment).toBe(0)
+	expect(updated.altitudeAdjustment).toBe(0)
+	expect(updated.azimuth).toBe(observed.azimuth)
+	expect(updated.altitude).toBe(observed.altitude)
+	expect(Math.abs(updated.azimuth - seed.azimuth)).toBeGreaterThan(deg(0.1))
 })

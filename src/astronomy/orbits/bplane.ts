@@ -80,7 +80,7 @@ export function closeApproachBPlane(relativePosition: Vec3, relativeVelocity: Ve
 	const r = vecLength(relativePosition)
 	const vSquared = vecDot(relativeVelocity, relativeVelocity)
 	const energy = 0.5 * vSquared - mu / r
-	if (energy <= 0) throw new Error('the relative orbit is not hyperbolic; a close approach has no incoming asymptote')
+	if (!(energy > 0)) throw new Error('the relative orbit is not hyperbolic; a close approach has no incoming asymptote')
 
 	const vInfinity = Math.sqrt(2 * energy)
 	const semiMajorAxis = -mu / (2 * energy) // negative for a hyperbola

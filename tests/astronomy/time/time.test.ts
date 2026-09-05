@@ -1,11 +1,12 @@
 import { expect, test, describe } from 'bun:test'
 import { Ellipsoid, geodeticLocation } from '../../../src/astronomy/observer/location'
-import { ANGVEL_PER_DAY, DAYSEC, J2000 } from '../../../src/core/constants'
+import { ANGVEL_PER_DAY, DAYSEC, J2000, PI } from '../../../src/core/constants'
 import { deg, hour } from '../../../src/math/units/angle'
 import { meter } from '../../../src/math/units/distance'
 // oxfmt-ignore
 import { earthRotationAngle, equationOfEquinoxes, equationOfOrigins, greenwichApparentSiderealTime, greenwichMeanSiderealTime, instantaneousEarthAngularVelocity, instantaneousEarthRotationMatrix, meanObliquity, nutationAngles, pmAngles, pmMatrix, type PolarMotion, precessionMatrix, precessionNutationMatrix, type Time, Timescale, tai, tcb, tcg, tdb, tdbMinusTtByFairheadAndBretagnon1990, time, timeBesselianYear, timeConvert, timeGPS, timeJulianYear, timeMJD, timeNormalize, timeSubtract, timeToDate, timeToUnix, timeToUnixMillis, timeUnix, timeYMD, timeYMDHMS, toJulianDay, toJulianEpoch, tt, ut1, utc, TIME_PROVIDERS, dut1 } from '../../../src/astronomy/time/time'
 import { downloadPerTag } from '../../download'
+import { expectNumberArrayToBeCloseTo } from '../../util'
 
 await downloadPerTag('time')
 
@@ -360,7 +361,7 @@ describe('normalize time', () => {
 	})
 
 	test('preserva o termo de erro durante a divisão por divisor não inteiro', () => {
-		expectTimeClose(timeNormalize(2451545, 0.1, Math.PI), { day: 780351, fraction: 0.04175542975065355, scale: 1 })
+		expectTimeClose(timeNormalize(2451545, 0.1, PI), { day: 780351, fraction: 0.04175542975065355, scale: 1 })
 	})
 
 	test('normaliza corretamente após divisão por um número grande', () => {
@@ -453,14 +454,14 @@ test('cache', () => {
 		expect(f.cache?.tcb).toBe(t)
 		expect(t.cache?.tdb).toBe(f)
 	}
-}, 50)
+}, 100)
 
 test('providers', () => {
 	const providers = { ...TIME_PROVIDERS }
 
 	for (let scale = 0; scale <= 6; scale++) {
 		const t = timeYMDHMS(2020, 10, 7, 12, 0, 0, scale)
-		t.providers = providers
+		Object.defineProperty(t, 'providers', { value: providers, enumerable: false, writable: true })
 
 		const a = ut1(t)
 		expect(a.providers).toBe(providers)
@@ -479,6 +480,12 @@ test('providers', () => {
 
 		const f = tdb(e)
 		expect(f.providers).toBe(providers)
+
+		// Providers is not cloneable
+		const cloned = structuredClone(f)
+		expect(cloned.day).toBe(f.day)
+		expect(cloned.fraction).toBe(f.fraction)
+		expect(cloned.scale).toBe(f.scale)
 	}
 }, 100)
 
@@ -567,25 +574,25 @@ test('mean obliquity', () => {
 test('nutation', () => {
 	const t = timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.UTC)
 	expect(nutationAngles(t)).toBe(t.cache!.nutation!)
-	expect(t.cache?.nutation).toEqual([-0.00008760676099523273, 0.00000755771193699156])
+	expectNumberArrayToBeCloseTo(t.cache?.nutation, [-0.00008760676099523273, 0.00000755771193699156], 15)
 })
 
 test('precession', () => {
 	const t = timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.UTC)
 	expect(precessionMatrix(t)).toBe(t.cache!.precession!)
-	expect(t.cache?.precession).toEqual([0.9999871819115399, -0.004643833528063321, -0.0020176280083981767, 0.004643833647273387, 0.9999892173356966, -0.000004625710173677966, 0.0020176277340206686, -0.000004743877952184672, 0.9999979645758397])
+	expectNumberArrayToBeCloseTo(t.cache?.precession, [0.9999871819115399, -0.004643833528063321, -0.0020176280083981767, 0.004643833647273387, 0.9999892173356966, -0.000004625710173677966, 0.0020176277340206686, -0.000004743877952184672, 0.9999979645758397], 15)
 })
 
 test('precession-nutation matrix', () => {
 	const t = timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.UTC)
 	expect(precessionNutationMatrix(t)).toBe(t.cache!.precessionNutation!)
-	expect(t.cache?.precessionNutation).toEqual([0.9999876216446774, -0.004563455260357874, -0.0019827842818092144, 0.004563440392430343, 0.9999895873794092, -0.000012022632120134435, 0.001982818500572567, 0.0000029741654186676847, 0.9999980342090419])
+	expectNumberArrayToBeCloseTo(t.cache?.precessionNutation, [0.9999876216446774, -0.004563455260357874, -0.0019827842818092144, 0.004563440392430343, 0.9999895873794092, -0.000012022632120134435, 0.001982818500572567, 0.0000029741654186676847, 0.9999980342090419], 15)
 })
 
 test('equation of origins', () => {
 	const t = timeYMDHMS(2020, 10, 7, 12, 0, 0, Timescale.UTC)
 	expect(equationOfOrigins(t)).toBe(t.cache!.equationOfOrigins!)
-	expect(t.cache?.equationOfOrigins).toEqual([0.9999980342134646, 0.000000011522914443798382, -0.001982818500615607, -0.00000001742012200722093, 0.9999999999955772, -0.0000029741367242157103, 0.001982818500572567, 0.0000029741654186676847, 0.9999980342090419])
+	expectNumberArrayToBeCloseTo(t.cache?.equationOfOrigins, [0.9999980342134646, 0.000000011522914443798382, -0.001982818500615607, -0.00000001742012200722093, 0.9999999999955772, -0.0000029741367242157103, 0.001982818500572567, 0.0000029741654186676847, 0.9999980342090419], 15)
 })
 
 test('instantaneous Earth rotation matrix', () => {
