@@ -31,6 +31,7 @@ Nebulosa is a Bun-first, ESM-only TypeScript toolkit for numerical astronomy, as
 - **Calibration and integration** — bias/dark/flat calibration, debayering, cosmetic correction, star registration, global or local normalization, and live or batch stacking with multiple rejection strategies.
 - **Processing** — arithmetic, convolution, FFT, multiscale transforms, background extraction and surface fitting, STF and arcsinh stretches, curves, SCNR, color neutralization, and tone mapping.
 - **Measurement and diagnostics** — star detection, profile and PSF measurement, subframe selection, Bahtinov focus/chromatic analysis, field-aberration and focus-surface diagnostics, and sensor characterization from PTC through dark current, linearity, saturation, and defect maps.
+- **Annular geometry** — [defocused-star boundary fitting](./src/imaging/analysis/collimation/README.md), apparent center offsets, area-normalized brightness variation, and paired sampling stability on native mono/RGB/CFA planes; validated with synthetic images.
 - **Synthetic data** — generated star fields, flat frames, Bahtinov spikes, and controllable aberration/collimation models for deterministic testing and simulated acquisition.
 
 ### Observatory hardware and workflows
