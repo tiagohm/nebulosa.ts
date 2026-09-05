@@ -46,6 +46,22 @@ Stability removes each of 12 angular blocks from both boundaries, refits every r
 
 Direction is resolved only when offset magnitude exceeds three times `max(offsetSpread, resolutionFloor)`. Zero offset is valid with absent direction. Optional `tolerance` compares normalized distance with a sensitivity band using `max(normalizedOffsetSpread, resolutionFloor / outerRadius)`. The assessment is `withinTolerance`, `outsideTolerance` or `inconclusive`, never “collimated” or “miscollimated”. A known position outside `field.maximumDistance` forces an inconclusive assessment while retaining geometry. Missing field reference is recorded as unknown.
 
+## Short sequences
+
+Import `summarizeCollimationSequence` from `./sequence` and pass already computed analyses. The caller groups the same target, configuration, native plane, orientation, sampling, focus side and defocus regime without mechanical adjustments between frames. These facts cannot be inferred from the measurements. ROI changes within the same image frame are allowed; a crop with another coordinate frame requires external registration or another sequence.
+
+```ts
+const sequence = summarizeCollimationSequence(frames, { tolerance: 0.01 })
+if (sequence.success) console.info(sequence.offset, sequence.dispersion, sequence.dispersionExceedsTolerance)
+else console.info(sequence.reason, sequence.entries)
+```
+
+Every input retains its index and eligibility. Failed analyses preserve their original reason; missing stability and known positions outside the field reference are separately excluded. An unknown field reference remains eligible. At least five usable frames are required, all with the same selected plane and every outer equivalent radius within 5% of their median. Failures are `insufficientFrames` or `incompatibleMeasurements`, without a fabricated vector.
+
+The aggregate is a Cartesian geometric median in common image pixels, normalized only after aggregation by the explicit median `referenceRadius`. `dispersion` is the largest distance of any usable vector from the aggregate; `normalizedDispersion` divides it by that radius. Opposite offsets and outliers remain represented in the dispersion. Neither dispersion nor input resolution floors are divided by the square root of frame count. Aggregate direction is available only above three times `max(dispersion, resolutionFloor)`, using the largest input floor. The optional sequence `tolerance` compares normalized **temporal dispersion**, independently of the single-frame offset tolerance.
+
+The pure function retains no history and preserves inputs and earlier results. Work is capped at 1024 frames and 512 modified Weiszfeld iterations, with subgradient checks at coincident points and bounded Newton acceleration (at most 24 backtracking steps). Every accepted median passes a convex stationarity criterion of `1e-9` per frame in centered, isotropically scaled coordinates. An unsupported numerical median returns `incompatibleMeasurements`. Synthetic sequence tests include coincident and opposed vectors, nearly collinear offsets, analytic medians, rotation/scale transformations, exclusions, radius changes and independently rendered noisy frames. This is a descriptive temporal summary, without optical classification or an accuracy guarantee for real observations.
+
 ## Synthetic domain
 
 Analytic ellipse tests cover exact/nearly exact circles, rotated ellipses, scale and large translation, imaginary conics, rank loss, short arcs and outliers. The initializer follows [Halir and Flusser](https://autotrace.sourceforge.net/WSCG98.pdf), selecting verified eigenvectors by the ellipse constraint rather than eigenvalue sign. Refinement uses an approximate normal-distance residual near the edge with independent stationarity and conditioning checks. Continuous containment preserves the synthetic renderer's original tangent tolerance; the analyzer requires a strict `1e-10` dimensionless margin.

@@ -6,9 +6,10 @@ import type { SeparableSmoothingKernel } from '../../processing/convolution'
 import type { ImageAnalysisPlane } from '../plane'
 import type { RobustReservoir } from '../robust'
 
-// Contracts for one complete, isolated defocused annulus in a linear normalized image. Pixel centers
-// are integer coordinates, X right and Y down. Results use the received image frame, ignoring sensor
-// header origins. This measures apparent geometry and never diagnoses optical collimation itself.
+// Contracts for one complete, isolated defocused annulus in a linear normalized image and for
+// caller-grouped measurement sequences. Pixel centers are integer coordinates, X right and Y down.
+// Results own their storage in the received image frame, ignoring sensor header origins. These
+// measure apparent geometry and never diagnose optical collimation itself.
 
 // Explicit selection of one annulus with external background; the image is never mutated.
 export interface CollimationAnalysisInput {
@@ -171,6 +172,87 @@ export interface CollimationAnalysisFailure {
 
 // Image-content failures are values; structural/capacity violations are entry-point exceptions.
 export type CollimationAnalysis = CollimationAnalysisSuccess | CollimationAnalysisFailure
+
+// Optional operational threshold for a caller-grouped comparable sequence.
+export interface CollimationSequenceOptions {
+	// Maximum temporal vector dispersion divided by median outer radius; absent means no comparison.
+	readonly tolerance?: number
+}
+
+// Per-input eligibility in original order. Usable frames can still fail the sequence-wide plane,
+// radius or numerical compatibility checks; no quantitative summary is fabricated in that case.
+export type CollimationSequenceEntry =
+	| {
+			// Zero-based input position, preserved even when other inputs are excluded.
+			readonly index: number
+			// This individual frame meets the success, stability and field-position requirements.
+			readonly usable: true
+	  }
+	| {
+			// Zero-based input position.
+			readonly index: number
+			// This input cannot enter quantitative aggregation.
+			readonly usable: false
+			// The image analyzer could not measure this frame.
+			readonly reason: 'analysisFailed'
+			// Original image-content failure retained without replacement.
+			readonly analysisReason: CollimationFailureReason
+	  }
+	| {
+			// Zero-based input position.
+			readonly index: number
+			// This input cannot enter quantitative aggregation.
+			readonly usable: false
+			// Stable individual reason for exclusion; unknown field reference is permitted.
+			readonly reason: 'stabilityUnavailable' | 'outsideFieldReference'
+	  }
+
+// Cartesian temporal summary; dispersion is descriptive and is never divided by sqrt(frame count).
+export interface CollimationSequenceSuccess {
+	// At least five usable frames share a supported quantitative summary.
+	readonly success: true
+	// Individually usable frame count, including offsets pointing in different directions.
+	readonly usableCount: number
+	// Independent eligibility records in input order, including every excluded frame.
+	readonly entries: readonly CollimationSequenceEntry[]
+	// Common native plane; orientation, target, focus side and sampling are caller preconditions.
+	readonly plane: ImageAnalysisPlane
+	// Approximate geometric median of offsets, in common received-image pixels.
+	readonly offset: Readonly<Point>
+	// Median of usable outer equivalent radii, in image pixels.
+	readonly referenceRadius: number
+	// Median offset divided by referenceRadius, dimensionless Cartesian components.
+	readonly normalizedOffset: Readonly<Point>
+	// Norm of the median offset, in image pixels.
+	readonly distance: number
+	// Norm of normalizedOffset, dimensionless.
+	readonly normalizedDistance: number
+	// Largest distance of a usable offset from the geometric median, in image pixels.
+	readonly dispersion: number
+	// Dispersion divided by referenceRadius, dimensionless.
+	readonly normalizedDispersion: number
+	// Largest input sampling-resolution floor in image pixels; no frame-count scaling.
+	readonly resolutionFloor: number
+	// Direction in [0, TAU) only when distance > 3*max(dispersion, resolutionFloor).
+	readonly direction?: Angle
+	// Present only with a caller tolerance; compares normalized dispersion, not optical collimation.
+	readonly dispersionExceedsTolerance?: boolean
+}
+
+// Sequence failure without a median or zero vector standing in for unavailable measurements.
+export interface CollimationSequenceFailure {
+	// No quantitative aggregate was supported.
+	readonly success: false
+	// Insufficient usable frames, or incompatible planes/radii/unsupported numerical median.
+	readonly reason: 'insufficientFrames' | 'incompatibleMeasurements'
+	// Count that passed individual eligibility, even if collective compatibility failed.
+	readonly usableCount: number
+	// Independent eligibility records for every input, in original order.
+	readonly entries: readonly CollimationSequenceEntry[]
+}
+
+// Discriminated temporal result without hidden capture, tracking, registration or acquisition state.
+export type CollimationSequence = CollimationSequenceSuccess | CollimationSequenceFailure
 
 // Capacity options for scratch allocation, independent of the active native-plane dimensions.
 export interface CollimationWorkspaceOptions {
