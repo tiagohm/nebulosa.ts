@@ -1,11 +1,12 @@
 import { expect, test } from 'bun:test'
+import { TAU } from '../../../../src/core/constants'
 import { analyzeCollimation } from '../../../../src/imaging/analysis/collimation/collimation'
 import { createCollimationWorkspace } from '../../../../src/imaging/analysis/collimation/preprocess'
 import { summarizeCollimationSequence } from '../../../../src/imaging/analysis/collimation/sequence'
 import type { CollimationAnalysis, CollimationAnalysisSuccess, CollimationSequence, CollimationSequenceSuccess } from '../../../../src/imaging/analysis/collimation/types'
 import type { ImageAnalysisPlane } from '../../../../src/imaging/analysis/plane'
 import { generateSyntheticCollimationImage } from '../../../../src/imaging/synthetic/collimation'
-import { collimationFixture } from '../../../collimation.util'
+import { collimationFixture } from './util'
 
 function measurement(x: number, y: number, radius = 50, floor = 0.2, plane: ImageAnalysisPlane = 'mono'): CollimationAnalysisSuccess {
 	return {
@@ -92,7 +93,7 @@ test('coincident offsets retain a resolution floor and optional direction', () =
 	expect(result.offset).toEqual({ x: 2, y: -1 })
 	expect(result.dispersion).toBe(0)
 	expect(result.resolutionFloor).toBe(0.4)
-	expect(result.direction).toBeCloseTo(2 * Math.PI - Math.atan(0.5), 14)
+	expect(result.direction).toBeCloseTo(TAU - Math.atan(0.5), 14)
 	expect(result.dispersionExceedsTolerance).toBeUndefined()
 	expect(success(summarizeCollimationSequence(input, { tolerance: 0 })).dispersionExceedsTolerance).toBeFalse()
 	const unresolved = success(summarizeCollimationSequence(Array.from({ length: 5 }, () => measurement(0.5, 0))))

@@ -1,4 +1,4 @@
-import { TAU } from '../../../core/constants'
+import { PI, TAU } from '../../../core/constants'
 import { validateInRange, validatePositiveInteger } from '../../../core/validation'
 import type { EllipseGeometry } from '../../../math/numerical/ellipse.geometry'
 import type { Point, Rect } from '../../../math/numerical/geometry'
@@ -79,9 +79,11 @@ export function createCollimationWorkspace(width: number, height: number, option
 	const angularCapacity = options.angularSamples ?? 360
 	validatePositiveInteger(angularCapacity)
 	validateInRange(angularCapacity, 12, 2048)
+
 	const precision = options.precision ?? 32
 	const length = width * height
 	const radialCapacity = Math.ceil(2 * Math.hypot(width, height)) + 4
+
 	return {
 		width,
 		height,
@@ -119,29 +121,34 @@ export function createCollimationWorkspace(width: number, height: number, option
 export function prepareCollimation(input: CollimationAnalysisInput, options: CollimationAnalysisOptions = {}): PreparedCollimation | CollimationPreprocessFailure {
 	const { image } = input
 	const { width, height, channels, stride, pixelCount, bayer } = image.metadata
+
 	// These relations prevent a plausible measurement of the wrong raw samples, not range policing.
 	if ((channels !== 1 && channels !== 3) || (bayer !== undefined && channels !== 1)) throw new RangeError('collimation requires mono, RGB or one-channel CFA layout')
 	if (pixelCount !== width * height || stride !== width * channels || image.raw.length < stride * height) throw new RangeError('collimation image has inconsistent raw layout')
+
 	const area = { ...resolveAnalysisArea(input.area, width, height) }
 	const roiWidth = area.right - area.left
 	const roiHeight = area.bottom - area.top
+
 	const resolved: ResolvedCollimationOptions = {
 		plane: options.plane ?? 'auto',
 		saturationLevel: options.saturationLevel,
 		smoothingSigma: options.smoothingSigma ?? 1,
 		angularSamples: options.angularSamples ?? 360,
 		minimumCoverage: options.minimumCoverage ?? 0.8,
-		maximumGap: options.maximumGap ?? Math.PI / 3,
+		maximumGap: options.maximumGap ?? PI / 3,
 		maximumEdgeResidual: options.maximumEdgeResidual ?? 0.5,
 		minimumSignalToNoise: options.minimumSignalToNoise ?? 8,
 		tolerance: options.tolerance,
 	}
+
 	// Bounds prevent accidentally huge allocations and kernel/ray traversals, including nonfinite sizes.
 	validateInRange(roiWidth, 1, MAXIMUM_SIDE)
 	validateInRange(roiHeight, 1, MAXIMUM_SIDE)
 	validatePositiveInteger(resolved.angularSamples)
 	validateInRange(resolved.angularSamples, 12, 2048)
 	validateInRange(resolved.smoothingSigma, 0, 32)
+
 	const precision = image.raw.BYTES_PER_ELEMENT === 8 ? 64 : 32
 	const workspace = options.workspace ?? createCollimationWorkspace(roiWidth, roiHeight, { precision, angularSamples: resolved.angularSamples })
 	if (workspace.width < roiWidth || workspace.height < roiHeight || workspace.precision !== precision || workspace.angularCapacity < resolved.angularSamples) throw new RangeError('incompatible collimation workspace capacity or precision')
@@ -154,8 +161,10 @@ export function prepareCollimation(input: CollimationAnalysisInput, options: Col
 	const length = grid.width * grid.height
 	const radius = Math.ceil(3 * resolved.smoothingSigma)
 	if (grid.width <= 2 * (radius + 2) || grid.height <= 2 * (radius + 2)) return { success: false, reason: 'insufficientBackground', area, diagnostics }
+
 	for (let y = 0, index = 0; y < grid.height; y++) {
 		let raw = grid.rawStart + y * grid.rawRowStep
+
 		for (let x = 0; x < grid.width; x++, index++, raw += grid.rawColumnStep) {
 			const value = image.raw[raw]
 			const mask = !Number.isFinite(value) ? 1 : resolved.saturationLevel !== undefined && value >= resolved.saturationLevel ? 2 : 0
@@ -164,28 +173,35 @@ export function prepareCollimation(input: CollimationAnalysisInput, options: Col
 			workspace.validity[index] = mask ? 0 : 1
 		}
 	}
-	const metadata: ImageMetadata = { width: grid.width, height: grid.height, pixelCount: length, stride: grid.width, channels: 1, bayer: undefined, strideInBytes: grid.width * image.raw.BYTES_PER_ELEMENT, pixelSizeInBytes: image.raw.BYTES_PER_ELEMENT, bitpix: precision === 64 ? -64 : -32 }
-	const center = {
-		x: ((input.center?.x ?? (area.left + area.right - 1) / 2) - grid.sourceLeft) / grid.step,
-		y: ((input.center?.y ?? (area.top + area.bottom - 1) / 2) - grid.sourceTop) / grid.step,
-	}
+
 	const background = fitBackground(workspace, grid.width, grid.height, radius + 2)
 	if (!background) return { success: false, reason: 'insufficientBackground', area, diagnostics }
-	const prepared: PreparedCollimation = { success: true, area, plane, grid, metadata, center, options: resolved, margin: radius + 2, workspace, background }
+
+	const metadata: ImageMetadata = { width: grid.width, height: grid.height, pixelCount: length, stride: grid.width, channels: 1, bayer: undefined, strideInBytes: grid.width * image.raw.BYTES_PER_ELEMENT, pixelSizeInBytes: image.raw.BYTES_PER_ELEMENT, bitpix: precision === 64 ? -64 : -32 }
+
 	if (workspace.cache.angularSamples !== resolved.angularSamples) {
 		for (let i = 0; i < resolved.angularSamples; i++) {
 			workspace.sin[i] = Math.sin((i * TAU) / resolved.angularSamples)
 			workspace.cos[i] = Math.cos((i * TAU) / resolved.angularSamples)
 		}
+
 		workspace.cache.angularSamples = resolved.angularSamples
 	}
+
 	if (workspace.cache.sigma !== resolved.smoothingSigma) {
 		const kernel = new Float64Array(2 * radius + 1)
 		for (let i = -radius; i <= radius; i++) kernel[i + radius] = Math.exp(-0.5 * (i / resolved.smoothingSigma) ** 2)
 		workspace.cache.kernel = radius > 0 ? separableSmoothingKernel(kernel) : undefined
 		workspace.cache.sigma = resolved.smoothingSigma
 	}
+
+	const center: Point = {
+		x: ((input.center?.x ?? (area.left + area.right - 1) / 2) - grid.sourceLeft) / grid.step,
+		y: ((input.center?.y ?? (area.top + area.bottom - 1) / 2) - grid.sourceTop) / grid.step,
+	}
+
 	dilateMask(workspace, grid.width, grid.height, radius)
+	const prepared: PreparedCollimation = { success: true, area, plane, grid, metadata, center, options: resolved, margin: radius + 2, workspace, background }
 	applyBackground(prepared)
 	return prepared
 }
@@ -207,6 +223,7 @@ function fitBackground(workspace: CollimationWorkspace, width: number, height: n
 	const design: Float64Array[] = []
 	const target: number[] = []
 	const quadrants: number[] = []
+
 	let stride = Math.max(1, Math.ceil(Math.sqrt((width * height) / BACKGROUND_CAPACITY)))
 	// Ceilings on narrow rectangles can exceed the population cap despite the area-based estimate.
 	for (; stride < MAXIMUM_SIDE && Math.ceil(width / stride) * Math.ceil(height / stride) > BACKGROUND_CAPACITY; stride++) {}
@@ -214,38 +231,50 @@ function fitBackground(workspace: CollimationWorkspace, width: number, height: n
 	const cos = Math.cos(outer?.theta ?? 0)
 	const sin = Math.sin(outer?.theta ?? 0)
 	const limit = outer ? (1 + margin / outer.semiMinor) ** 2 : 0
+
 	workspace.statistics.reset()
+
 	for (let y = 0; y < height; y += stride)
 		for (let x = 0; x < width; x += stride) {
 			if (workspace.mask[y * width + x]) continue
+
 			if (outer) {
 				const dx = x - outer.center.x
 				const dy = y - outer.center.y
 				if (((dx * cos + dy * sin) / outer.semiMajor) ** 2 + ((dy * cos - dx * sin) / outer.semiMinor) ** 2 <= limit) continue
 			} else if (x >= border && y >= border && x < width - border && y < height - border) continue
+
 			const value = workspace.plane[y * width + x]
 			design.push(new Float64Array([1, x / (width - 1) - 0.5, y / (height - 1) - 0.5]))
 			target.push(value)
 			quadrants.push((x < width / 2 ? 0 : 1) + (y < height / 2 ? 0 : 2))
 			workspace.statistics.push(value)
 		}
+
 	if (target.length < 48) return undefined
+
 	const pedestal = workspace.statistics.median()
 	for (let i = 0; i < target.length; i++) target[i] -= pedestal
+
 	const fit = robustLinearLeastSquares(design, target, { method: 'tukey', tuning: 4.685, maxIterations: 8, tolerance: 1e-12 })
 	if (fit.rankDeficient || !(fit.conditionNumber < 100)) return undefined
+
 	const counts = [0, 0, 0, 0]
 	workspace.statistics.reset()
+
 	for (let i = 0; i < target.length; i++) {
 		if (fit.weights[i] > 0.1) counts[quadrants[i]]++
 		// MAD is already robust: clipping its population by fit weight would underestimate the noise.
 		workspace.statistics.push(fit.residuals[i])
 	}
+
 	if (counts.some((count: number) => count < 8)) return undefined
 	const coefficients: readonly [number, number, number] = [fit.coefficients[0], fit.coefficients[1], fit.coefficients[2]]
 	if (!coefficients.every(Number.isFinite)) return undefined
+
 	const level = pedestal + coefficients[0]
 	if (!Number.isFinite(level)) return undefined
+
 	const mad = workspace.statistics.mad(true, workspace.scratch)
 	const rounding = (workspace.precision === 64 ? Number.EPSILON : 2 ** -23) * Math.abs(level) * 4
 	return { pedestal, coefficients, level, noise: mad > rounding ? mad : undefined }
@@ -257,16 +286,21 @@ function applyBackground(prepared: PreparedCollimation): void {
 	const { workspace: w, grid, background, metadata } = prepared
 	const length = grid.width * grid.height
 	const [b0, bx, by] = background.coefficients
-	for (let y = 0, i = 0; y < grid.height; y++)
+
+	for (let y = 0, i = 0; y < grid.height; y++) {
 		for (let x = 0; x < grid.width; x++, i++) {
 			w.signal[i] = w.mask[i] ? 0 : w.plane[i] - background.pedestal - (b0 + bx * (x / (grid.width - 1) - 0.5) + by * (y / (grid.height - 1) - 0.5))
 		}
+	}
+
 	const kernel = w.cache.kernel
+
 	if (!kernel) {
 		w.smoothed.set(w.signal.subarray(0, length))
 		w.support.set(w.validity.subarray(0, length))
 		return
 	}
+
 	separableSmoothing(w.signal.subarray(0, length), w.smoothed.subarray(0, length), w.temporary.subarray(0, length), metadata, kernel)
 	separableSmoothing(w.validity.subarray(0, length), w.support.subarray(0, length), w.temporary.subarray(0, length), metadata, kernel)
 	for (let i = 0; i < length; i++) w.smoothed[i] = w.support[i] > 0 ? w.smoothed[i] / w.support[i] : 0
@@ -275,16 +309,19 @@ function applyBackground(prepared: PreparedCollimation): void {
 // Propagates both original mask bits through the Gaussian's finite square support. Separable passes
 // cost O(P*K); exact bits avoid accepting a tiny missing kernel weight rounded away by Float32.
 function dilateMask(w: CollimationWorkspace, width: number, height: number, radius: number): void {
-	for (let y = 0; y < height; y++)
+	for (let y = 0; y < height; y++) {
 		for (let x = 0; x < width; x++) {
 			let bits = 0
 			for (let dx = Math.max(0, x - radius); dx <= Math.min(width - 1, x + radius); dx++) bits |= w.mask[y * width + dx]
 			w.horizontalMask[y * width + x] = bits
 		}
-	for (let y = 0; y < height; y++)
+	}
+
+	for (let y = 0; y < height; y++) {
 		for (let x = 0; x < width; x++) {
 			let bits = 0
 			for (let dy = Math.max(0, y - radius); dy <= Math.min(height - 1, y + radius); dy++) bits |= w.horizontalMask[dy * width + x]
 			w.expandedMask[y * width + x] = bits
 		}
+	}
 }

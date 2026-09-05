@@ -2,14 +2,14 @@ import { afterAll, expect, test } from 'bun:test'
 import { analyzeCollimation } from '../../../../src/imaging/analysis/collimation/collimation'
 import { createCollimationWorkspace } from '../../../../src/imaging/analysis/collimation/preprocess'
 import { fitEllipse } from '../../../../src/math/numerical/ellipse.fit'
-import { integratedAnnulus } from '../../../collimation.util'
+import { integratedAnnulus } from './util'
 
 let maximumCenterError = 0
 let maximumVectorError = 0
 
-for (const radius of [24, 60, 100])
-	for (const phase of [0, 0.25, 0.5, 0.75])
-		for (const ratio of [1, 1.5])
+for (const radius of [24, 60, 100]) {
+	for (const phase of [0, 0.25, 0.5, 0.75]) {
+		for (const ratio of [1, 1.5]) {
 			test(`independent pixel integration: R=${radius}, phase=${phase}, aspect=${ratio}`, () => {
 				const size = radius < 100 ? 192 : 288
 				const outer = { center: { x: size / 2 + phase, y: size / 2 + 0.7 * phase }, semiMajor: radius, semiMinor: radius / ratio, theta: 0.63 }
@@ -24,9 +24,12 @@ for (const radius of [24, 60, 100])
 				expect(centerError).toBeLessThan(0.1)
 				expect(vectorError).toBeLessThan(0.2)
 			})
+		}
+	}
+}
 
-for (const precision of [32, 64] as const)
-	for (const phase of [0, 0.25, 0.5, 0.75])
+for (const precision of [32, 64] as const) {
+	for (const phase of [0, 0.25, 0.5, 0.75]) {
 		test(`independent CFA integration preserves step and precision ${precision} at phase ${phase}`, () => {
 			const outer = { center: { x: 128 + phase, y: 128 + 0.6 * phase }, semiMajor: 80, semiMinor: 70, theta: 0.4 }
 			const inner = { center: { x: outer.center.x + 4.1, y: outer.center.y - 2.9 }, semiMajor: 30, semiMinor: 25, theta: 1.8 }
@@ -37,6 +40,8 @@ for (const precision of [32, 64] as const)
 			expect(Math.hypot(result.geometry.offset.x - 4.1, result.geometry.offset.y + 2.9)).toBeLessThan(0.4)
 			expect(result.stability?.resolutionFloor).toBe(0.4)
 		})
+	}
+}
 
 test('paired deletion preserves cancellation of correlated center perturbations', () => {
 	const outer = { center: { x: 96, y: 96 }, semiMajor: 60, semiMinor: 60, theta: 0 }

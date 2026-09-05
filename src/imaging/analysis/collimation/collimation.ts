@@ -1,4 +1,4 @@
-import { TAU } from '../../../core/constants'
+import { PI, TAU } from '../../../core/constants'
 import { medianAbsoluteDeviationOf, medianBySelectionOf } from '../../../core/util'
 import { type EllipseFit, fitEllipse } from '../../../math/numerical/ellipse.fit'
 import { type EllipseGeometry, maximumNormalizedBoundaryRadiusSquared } from '../../../math/numerical/ellipse.geometry'
@@ -26,26 +26,34 @@ const SAMPLING_RESOLUTION_FLOOR = 0.2
 export function analyzeCollimation(input: CollimationAnalysisInput, options?: CollimationAnalysisOptions): CollimationAnalysis {
 	const prepared = prepareCollimation(input, options)
 	if (!prepared.success) return prepared
+
 	const { workspace: w, options: o } = prepared
 	const diagnostics: CollimationDiagnostic[] = []
 	if (o.saturationLevel === undefined) diagnostics.push('saturationUnknown')
+
 	const failure = (reason: CollimationFailureReason): CollimationAnalysis => ({ success: false, reason, area: prepared.area, diagnostics })
 	const initialization = initializeCollimationRadii(prepared)
 	if (initialization.reason) return failure(initialization.reason)
+
 	let outer: EllipseFit | undefined
 	let inner: EllipseFit | undefined
 	let edges: CollimationEdges | undefined
 	let converged = false
 	let center = prepared.center
+
 	for (let pass = 0; pass < MAXIMUM_EXTRACTIONS; pass++) {
 		edges = extractCollimationEdges(prepared, center, initialization.signal, inner?.ellipse, outer?.ellipse)
+
 		const rejected = coverageFailure(prepared)
 		if (rejected) return failure(rejected)
+
 		const nextInner = fitBoundary(prepared, true)
 		const nextOuter = fitBoundary(prepared, false)
 		if (!nextInner || !nextOuter) return failure('fitFailed')
+
 		const rejectedFit = coverageFailure(prepared)
 		if (rejectedFit) return failure(rejectedFit)
+
 		if (nextInner.rms > o.maximumEdgeResidual || nextOuter.rms > o.maximumEdgeResidual) return failure('fitFailed')
 		if (!(maximumNormalizedBoundaryRadiusSquared(nextOuter.ellipse, nextInner.ellipse) < 1 - CONTAINMENT_MARGIN)) return failure('inconsistentGeometry')
 		if (!hasExternalMargin(prepared, nextOuter.ellipse)) return failure('cropped')
@@ -55,39 +63,51 @@ export function analyzeCollimation(input: CollimationAnalysisInput, options?: Co
 			const shapeChange = Math.max(Math.abs(nextOuter.ellipse.semiMajor - outer.ellipse.semiMajor), Math.abs(nextOuter.ellipse.semiMinor - outer.ellipse.semiMinor), Math.abs(nextInner.ellipse.semiMajor - inner.ellipse.semiMajor), Math.abs(nextInner.ellipse.semiMinor - inner.ellipse.semiMinor))
 			converged = innerChange + outerChange <= 0.1 && shapeChange <= 0.15
 		}
+
 		outer = nextOuter
 		inner = nextInner
+
 		if (converged) break
 		if (pass === 0 && !refineCollimationBackground(prepared, outer.ellipse)) return failure('insufficientBackground')
 		center = inner.ellipse.center
 	}
+
 	if (!outer || !inner || !edges) return failure('fitFailed')
 	if (!converged) return failure('ambiguousPattern')
+
 	const boundaryOuter = imageBoundary(prepared, outer, w.outerWeight)
 	const boundaryInner = imageBoundary(prepared, inner, w.innerWeight)
 	const vx = boundaryInner.ellipse.center.x - boundaryOuter.ellipse.center.x
 	const vy = boundaryInner.ellipse.center.y - boundaryOuter.ellipse.center.y
 	const distance = Math.hypot(vx, vy)
 	const radius = boundaryOuter.equivalentRadius
+
 	const field = input.field ? (Math.hypot(boundaryOuter.ellipse.center.x - input.field.center.x, boundaryOuter.ellipse.center.y - input.field.center.y) <= input.field.maximumDistance ? 'withinReference' : 'outsideReference') : 'unknown'
 	if (field === 'unknown') diagnostics.push('fieldReferenceMissing')
 	if (field === 'outsideReference') diagnostics.push('outsideFieldReference')
+
 	const noise = prepared.background.noise
 	if (noise === undefined) diagnostics.push('noiseUnresolved')
+
 	const ratio = noise === undefined ? undefined : initialization.signal / noise
 	const signalToNoise = ratio !== undefined && Number.isFinite(ratio) ? ratio : undefined
 	if (signalToNoise !== undefined && signalToNoise < o.minimumSignalToNoise) return failure('lowSignal')
+
 	const masks = patternSupport(prepared, outer.ellipse, inner.ellipse, initialization.signal)
-	if (masks[2] > Math.max(24, 0.01 * Math.PI * outer.ellipse.semiMajor * outer.ellipse.semiMinor)) return failure('ambiguousPattern')
+	if (masks[2] > Math.max(24, 0.01 * PI * outer.ellipse.semiMajor * outer.ellipse.semiMinor)) return failure('ambiguousPattern')
+
 	const floor = resolutionFloor(prepared, outer.ellipse, inner.ellipse, edges, signalToNoise)
 	const stability = floor === undefined ? undefined : pairedStability(prepared, outer.ellipse, inner.ellipse, floor)
 	if (!stability) diagnostics.push('unstableMeasurement')
+
 	const direction = stability && distance > 3 * Math.max(stability.offsetSpread, stability.resolutionFloor) ? normalizeAngle(Math.atan2(vy, vx)) : undefined
 	if (direction === undefined) diagnostics.push('directionUnresolved')
+
 	const geometry: CollimationGeometry = { offset: { x: vx, y: vy }, distance, normalizedDistance: distance / radius, obstructionRatio: boundaryInner.equivalentRadius / radius, direction }
 	const quality: CollimationQuality = { background: prepared.background.level, backgroundNoise: noise, signal: initialization.signal, signalToNoise, invalidFraction: masks[0], saturatedFraction: o.saturationLevel === undefined ? undefined : masks[1], field }
 	const photometry = annulusPhotometry(prepared, inner.ellipse, outer.ellipse, edges.edgeWidth)
 	if (!photometry) diagnostics.push('photometryUnavailable')
+
 	const assessment = o.tolerance === undefined ? undefined : assessTolerance(geometry.normalizedDistance, radius, stability, field, o.tolerance)
 	return { success: true, area: prepared.area, plane: prepared.plane, outer: boundaryOuter, obstruction: boundaryInner, geometry, quality, photometry, stability, assessment, diagnostics }
 }
@@ -100,23 +120,32 @@ function fitBoundary(prepared: PreparedCollimation, inner: boolean): EllipseFit 
 	const y = (inner ? w.innerY : w.outerY).subarray(0, o.angularSamples)
 	const weights = (inner ? w.innerWeight : w.outerWeight).subarray(0, o.angularSamples)
 	const reasons = inner ? w.innerReason : w.outerReason
+
 	const fit = fitEllipse(x, y, weights)
 	if (!fit) return undefined
+
 	const limit = Math.max(4 * fit.rms, 2 * o.maximumEdgeResidual)
 	let rejected = false
-	for (let i = 0; i < o.angularSamples; i++)
+
+	for (let i = 0; i < o.angularSamples; i++) {
 		if (weights[i] > 0 && (fit.weights[i] === 0 || Math.abs(fit.residuals[i]) > limit)) {
 			weights[i] = 0
 			reasons[i] = COLLIMATION_EDGE_REASON.outlier
 			rejected = true
 		}
+	}
+
 	const finalFit = rejected ? fitEllipse(x, y, weights) : fit
-	if (finalFit)
-		for (let i = 0; i < o.angularSamples; i++)
+
+	if (finalFit) {
+		for (let i = 0; i < o.angularSamples; i++) {
 			if (weights[i] > 0 && finalFit.weights[i] === 0) {
 				weights[i] = 0
 				reasons[i] = COLLIMATION_EDGE_REASON.outlier
 			}
+		}
+	}
+
 	return finalFit
 }
 
@@ -127,11 +156,13 @@ function coverageFailure(prepared: PreparedCollimation): CollimationFailureReaso
 	const inner = collimationCoverage(w.innerWeight, o.angularSamples)
 	const outer = collimationCoverage(w.outerWeight, o.angularSamples)
 	if (inner.sectors >= 12 && outer.sectors >= 12 && inner.coverage >= o.minimumCoverage && outer.coverage >= o.minimumCoverage && inner.maximumGap <= o.maximumGap && outer.maximumGap <= o.maximumGap) return undefined
+
 	const counts = new Uint32Array(9)
 	for (let i = 0; i < o.angularSamples; i++) {
 		counts[w.innerReason[i]]++
 		counts[w.outerReason[i]]++
 	}
+
 	if (counts[COLLIMATION_EDGE_REASON.ambiguous] > o.angularSamples * 0.2) return 'ambiguousPattern'
 	if (counts[COLLIMATION_EDGE_REASON.saturated] > o.angularSamples * 0.2) return 'saturated'
 	if (counts[COLLIMATION_EDGE_REASON.cropped] > o.angularSamples * 0.2) return 'cropped'
@@ -163,6 +194,7 @@ function imageBoundary(prepared: PreparedCollimation, fit: EllipseFit, weights: 
 // sigma 0.5..1.5, at least 180 rays and measurable SNR >=30. Outside it, geometry can still succeed.
 function resolutionFloor(prepared: PreparedCollimation, outer: EllipseGeometry, inner: EllipseGeometry, edges: CollimationEdges, snr?: number): number | undefined {
 	const radius = Math.sqrt(outer.semiMajor * outer.semiMinor)
+
 	if (
 		radius < 24 ||
 		radius > 100 ||
@@ -176,8 +208,10 @@ function resolutionFloor(prepared: PreparedCollimation, outer: EllipseGeometry, 
 		prepared.options.smoothingSigma > 1.5 ||
 		prepared.options.angularSamples < 180 ||
 		(snr !== undefined && snr < 30)
-	)
+	) {
 		return undefined
+	}
+
 	return SAMPLING_RESOLUTION_FLOOR * prepared.grid.step
 }
 
@@ -198,29 +232,35 @@ function pairedStability(prepared: PreparedCollimation, outer: EllipseGeometry, 
 	const radius = Math.sqrt(outer.semiMajor * outer.semiMinor)
 	let offsetSpread = 0
 	let normalizedOffsetSpread = 0
+
 	for (let block = 0; block < 12; block++) {
 		for (const weights of [w.innerWeight, w.outerWeight]) {
 			const coverage = collimationCoverage(weights, count, block)
 			if (coverage.coverage < Math.max(0.6, o.minimumCoverage - 1 / 12 - 1 / count) || coverage.maximumGap > o.maximumGap + TAU / 12 || coverage.sectors < 12) return undefined
 		}
+
 		for (let i = 0; i < count; i++) {
 			const retained = Math.floor((i * 12) / count) !== block
 			innerWeights[i] = retained ? w.innerWeight[i] : 0
 			outerWeights[i] = retained ? w.outerWeight[i] : 0
 		}
+
 		const fi = fitEllipse(ix, iy, innerWeights)
 		const fo = fitEllipse(ox, oy, outerWeights)
 		if (!fi || !fo || fi.rms > o.maximumEdgeResidual || fo.rms > o.maximumEdgeResidual || !(maximumNormalizedBoundaryRadiusSquared(fo.ellipse, fi.ellipse) < 1 - CONTAINMENT_MARGIN)) return undefined
+
 		for (const fit of [fi, fo]) {
 			const coverage = collimationCoverage(fit.weights, count)
 			if (coverage.coverage < Math.max(0.6, o.minimumCoverage - 1 / 12 - 1 / count) || coverage.maximumGap > o.maximumGap + TAU / 12 || coverage.sectors < 12) return undefined
 		}
+
 		const x = fi.ellipse.center.x - fo.ellipse.center.x
 		const y = fi.ellipse.center.y - fo.ellipse.center.y
 		const r = Math.sqrt(fo.ellipse.semiMajor * fo.ellipse.semiMinor)
 		offsetSpread = Math.max(offsetSpread, Math.hypot(x - vx, y - vy) * grid.step)
 		normalizedOffsetSpread = Math.max(normalizedOffsetSpread, Math.hypot(x / r - vx / radius, y / r - vy / radius))
 	}
+
 	return { offsetSpread, normalizedOffsetSpread, resolutionFloor: floor }
 }
 
@@ -233,38 +273,48 @@ function annulusPhotometry(prepared: PreparedCollimation, inner: EllipseGeometry
 	const intensities = new Float64Array(o.angularSamples)
 	const inset = Math.max(2, 2 * edgeWidth)
 	let count = 0
+
 	for (let sector = 0; sector < o.angularSamples; sector++) {
 		if (!(w.innerWeight[sector] > 0 && w.outerWeight[sector] > 0)) continue
+
 		const cos = w.cos[sector]
 		const sin = w.sin[sector]
 		const ri = collimationRayRadius(inner, inner.center, cos, sin)
 		const ro = collimationRayRadius(outer, inner.center, cos, sin)
 		if (ri === undefined || ro === undefined) continue
+
 		const start = ri + inset
 		const end = ro - inset
 		if (end - start < 2) continue
+
 		const samples = Math.ceil(2 * (end - start))
 		let sum = 0
 		let area = 0
 		let retained = 0
+
 		for (let i = 0; i < samples; i++) {
 			const r = start + ((i + 0.5) * (end - start)) / samples
 			const value = sampleCollimationPlane(prepared, inner.center.x + r * cos, inner.center.y + r * sin, true)
 			if (!Number.isFinite(value)) continue
+
 			sum += value * r
 			area += r
 			retained++
 		}
+
 		if (retained < samples * 0.8 || !(area > 0)) continue
 		intensities[count++] = sum / area
 		weights[sector] = 1
 	}
+
 	const coverage = collimationCoverage(weights, o.angularSamples)
 	if (count < 12 || coverage.coverage < o.minimumCoverage || coverage.maximumGap > o.maximumGap) return undefined
+
 	const median = medianBySelectionOf(intensities, count)
 	if (!(median > 0) || (prepared.background.noise !== undefined && median < prepared.background.noise * o.minimumSignalToNoise)) return undefined
-	const mad = medianAbsoluteDeviationOf(intensities, median, false, count, w.scratch)
-	return { relativeVariation: (1.4826 * mad) / median, coverage: coverage.coverage, maximumGap: coverage.maximumGap }
+
+	const mad = medianAbsoluteDeviationOf(intensities, median, true, count, w.scratch)
+	return { relativeVariation: mad / median, coverage: coverage.coverage, maximumGap: coverage.maximumGap }
 }
 
 // Counts original masks only over annulus plus transition support, so unrelated ROI padding neither
@@ -284,22 +334,29 @@ function patternSupport(prepared: PreparedCollimation, outer: EllipseGeometry, i
 	let saturated = 0
 	let exterior = 0
 	const exteriorThreshold = Math.max(signal * 0.2, 6 * (prepared.background.noise ?? 0))
-	for (let y = 0; y < grid.height; y++)
+
+	for (let y = 0; y < grid.height; y++) {
 		for (let x = 0; x < grid.width; x++) {
 			const ox = x - outer.center.x
 			const oy = y - outer.center.y
 			const ix = x - inner.center.x
 			const iy = y - inner.center.y
+
 			if (((ox * oc + oy * os) / outer.semiMajor) ** 2 + ((oy * oc - ox * os) / outer.semiMinor) ** 2 > outerLimit) {
 				if (!w.mask[y * grid.width + x] && w.signal[y * grid.width + x] > exteriorThreshold) exterior++
 				continue
 			}
+
 			if (((ix * ic + iy * is) / inner.semiMajor) ** 2 + ((iy * ic - ix * is) / inner.semiMinor) ** 2 < innerLimit) continue
+
 			count++
+
 			const bits = w.mask[y * grid.width + x]
 			if (bits & 1) invalid++
 			if (bits & 2) saturated++
 		}
+	}
+
 	return count > 0 ? [invalid / count, saturated / count, exterior] : [0, 0, exterior]
 }
 

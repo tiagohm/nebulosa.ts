@@ -1,6 +1,7 @@
-import type { CfaPattern, Image } from '../src/imaging/model/types'
-import type { SyntheticCollimationPattern } from '../src/imaging/synthetic/collimation'
-import type { EllipseGeometry } from '../src/math/numerical/ellipse.geometry'
+import { PI } from '../../../../src/core/constants'
+import type { CfaPattern, Image } from '../../../../src/imaging/model/types'
+import type { SyntheticCollimationPattern } from '../../../../src/imaging/synthetic/collimation'
+import type { EllipseGeometry } from '../../../../src/math/numerical/ellipse.geometry'
 
 export interface IntegratedAnnulus {
 	readonly width: number
@@ -29,14 +30,18 @@ export function integratedAnnulus(options: IntegratedAnnulus): Image {
 	const right = Math.min(width, Math.ceil(outer.center.x + outer.semiMajor + 2))
 	const top = Math.max(0, Math.floor(outer.center.y - outer.semiMajor - 2))
 	const bottom = Math.min(height, Math.ceil(outer.center.y + outer.semiMajor + 2))
+
 	raw.fill(0.1)
+
 	for (let y = top; y < bottom; y++)
 		for (let x = left; x < right; x++) {
 			let illuminated = 0
-			for (let sy = 0; sy < n; sy++)
+
+			for (let sy = 0; sy < n; sy++) {
 				for (let sx = 0; sx < n; sx++) {
 					let px = x - 0.5 + (sx + 0.5) / n
 					let py = y - 0.5 + (sy + 0.5) / n
+
 					if (options.deformation) {
 						const dx = px - outer.center.x
 						const dy = py - outer.center.y
@@ -45,6 +50,7 @@ export function integratedAnnulus(options: IntegratedAnnulus): Image {
 						px -= displacement * Math.cos(angle)
 						py -= displacement * Math.sin(angle)
 					}
+
 					const ox = px - outer.center.x
 					const oy = py - outer.center.y
 					const ix = px - inner.center.x
@@ -53,8 +59,11 @@ export function integratedAnnulus(options: IntegratedAnnulus): Image {
 					const inInner = ((ix * ic + iy * is) / inner.semiMajor) ** 2 + ((iy * ic - ix * is) / inner.semiMinor) ** 2 <= 1
 					if (inOuter && !inInner) illuminated++
 				}
+			}
+
 			raw[y * width + x] += (0.6 * illuminated) / (n * n)
 		}
+
 	return { header: {}, metadata: { width, height, stride: width, pixelCount: width * height, channels: 1, strideInBytes: (width * precision) / 8, pixelSizeInBytes: precision / 8, bitpix: precision === 64 ? -64 : -32, bayer: options.bayer }, raw }
 }
 
@@ -64,7 +73,7 @@ export function collimationFixture(overrides: Partial<SyntheticCollimationPatter
 		height: 160,
 		outer: { center: { x: 79.4, y: 80.2 }, semiMajor: 48, semiMinor: 48, theta: 0, softness: 0.75 },
 		obstruction: { center: { x: 81.4, y: 81.2 }, semiMajor: 20, semiMinor: 20, theta: 0, softness: 0.75 },
-		signal: 0.6 * Math.PI * (48 ** 2 - 20 ** 2),
+		signal: 0.6 * PI * (48 ** 2 - 20 ** 2),
 		background: 0.05,
 		noise: 0,
 		seed: 7121,

@@ -1,11 +1,11 @@
 import { expect, test } from 'bun:test'
 import { analyzeCollimation } from '../../../../src/imaging/analysis/collimation/collimation'
 import { generateSyntheticCollimationImage } from '../../../../src/imaging/synthetic/collimation'
-import { collimationFixture } from '../../../collimation.util'
+import { collimationFixture } from './util'
 
-for (const bayer of ['RGGB', 'BGGR', 'GBRG', 'GRBG', 'GRGB', 'GBGR', 'RGBG', 'BGRG'] as const)
-	for (let parity = 0; parity < 4; parity++)
-		for (const plane of ['green1', 'green2'] as const)
+for (const bayer of ['RGGB', 'BGGR', 'GBRG', 'GRBG', 'GRGB', 'GBGR', 'RGBG', 'BGRG'] as const) {
+	for (let parity = 0; parity < 4; parity++) {
+		for (const plane of ['green1', 'green2'] as const) {
 			test(`${bayer} ${plane} crop parity ${parity} returns received-image coordinates`, () => {
 				const base = collimationFixture()
 				const left = parity & 1
@@ -20,17 +20,21 @@ for (const bayer of ['RGGB', 'BGGR', 'GBRG', 'GRBG', 'GRGB', 'GBGR', 'RGBG', 'BG
 					signal: base.signal * 4,
 					crop: { left, top, right: 319, bottom: 319 },
 				}
+
 				const image = generateSyntheticCollimationImage(fixture)
 				const localPattern = image.metadata.bayer!
 				const first = localPattern.indexOf('G')
 				const slot = plane === 'green1' ? first : localPattern.indexOf('G', first + 1)
 				const { width, height } = image.metadata
-				for (let y = 0; y < height; y++)
+
+				for (let y = 0; y < height; y++) {
 					for (let x = 0; x < width; x++) {
 						const index = y * width + x
 						if ((x & 1) + 2 * (y & 1) !== slot) image.raw[index] = Number.NaN
 						else image.raw[index] *= plane === 'green1' ? 0.8 : 0.4
 					}
+				}
+
 				const result = analyzeCollimation({ image, area: { left: 7, top: 9, right: width - 6, bottom: height - 8 } }, { plane })
 				if (!result.success) throw new Error(result.reason)
 				expect(result.plane).toBe(plane)
@@ -39,8 +43,11 @@ for (const bayer of ['RGGB', 'BGGR', 'GBRG', 'GRBG', 'GRGB', 'GBGR', 'RGBG', 'BG
 				expect(result.stability?.resolutionFloor).toBe(0.4)
 				expect(result.quality.invalidFraction).toBe(0)
 			})
+		}
+	}
+}
 
-for (const plane of ['red', 'green', 'blue'] as const)
+for (const plane of ['red', 'green', 'blue'] as const) {
 	test(`RGB ${plane} ignores other channels and defaults to green`, () => {
 		const image = generateSyntheticCollimationImage(collimationFixture({ channels: 3, channelWeights: [0.2, 0.5, 0.3] }))
 		const channel = plane === 'red' ? 0 : plane === 'green' ? 1 : 2
@@ -52,6 +59,7 @@ for (const plane of ['red', 'green', 'blue'] as const)
 		expect(result.quality.invalidFraction).toBe(0)
 		expect(result.quality.saturatedFraction).toBe(0)
 	})
+}
 
 test('anisotropic 2x1 binning transforms the vector and changes the normalized grid metric', () => {
 	const base = collimationFixture()

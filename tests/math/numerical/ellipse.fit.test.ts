@@ -1,8 +1,9 @@
 import { expect, test } from 'bun:test'
+import { TAU } from '../../../src/core/constants'
 import { ellipseFromConic, fitEllipse } from '../../../src/math/numerical/ellipse.fit'
 import type { EllipseGeometry } from '../../../src/math/numerical/ellipse.geometry'
 
-function points(ellipse: EllipseGeometry, count = 120, span = 2 * Math.PI) {
+function points(ellipse: EllipseGeometry, count = 120, span = TAU) {
 	const x = new Float64Array(count)
 	const y = new Float64Array(count)
 	const c = Math.cos(ellipse.theta)

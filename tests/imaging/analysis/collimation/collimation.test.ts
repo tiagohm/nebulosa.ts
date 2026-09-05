@@ -1,9 +1,10 @@
 import { expect, test } from 'bun:test'
+import { PI } from '../../../../src/core/constants'
 import { analyzeCollimation } from '../../../../src/imaging/analysis/collimation/collimation'
 import { createCollimationWorkspace } from '../../../../src/imaging/analysis/collimation/preprocess'
 import type { CollimationAnalysis, CollimationAnalysisOptions, CollimationAnalysisSuccess } from '../../../../src/imaging/analysis/collimation/types'
 import { generateSyntheticCollimationImage, renderSyntheticCollimationPattern, type SyntheticCollimationPattern } from '../../../../src/imaging/synthetic/collimation'
-import { collimationFixture } from '../../../collimation.util'
+import { collimationFixture } from './util'
 
 function analyze(fixture: SyntheticCollimationPattern, options?: CollimationAnalysisOptions) {
 	const image = generateSyntheticCollimationImage(fixture)
@@ -16,10 +17,10 @@ function success(result: CollimationAnalysis): CollimationAnalysisSuccess {
 	return result
 }
 
-for (let direction = 0; direction < 8; direction++)
+for (let direction = 0; direction < 8; direction++) {
 	test(`measures the outer-to-shadow vector in direction ${direction}`, () => {
 		const base = collimationFixture()
-		const theta = (direction * Math.PI) / 4
+		const theta = (direction * PI) / 4
 		const offset = { x: 3 * Math.cos(theta), y: 3 * Math.sin(theta) }
 		const fixture = { ...base, obstruction: { ...base.obstruction, center: { x: base.outer.center.x + offset.x, y: base.outer.center.y + offset.y } } }
 		const result = success(analyze(fixture, { tolerance: 0.03 }))
@@ -28,10 +29,11 @@ for (let direction = 0; direction < 8; direction++)
 		expect(result.assessment).toBe('outsideTolerance')
 		expect(Math.abs(Math.atan2(Math.sin(result.geometry.direction! - theta), Math.cos(result.geometry.direction! - theta)))).toBeLessThan(Math.asin(0.2 / 3))
 	})
+}
 
-for (const radius of [24, 48, 96])
-	for (const phase of [0, 0.2, 0.5, 0.8])
-		for (const sigma of [0.5, 1, 1.5])
+for (const radius of [24, 48, 96]) {
+	for (const phase of [0, 0.2, 0.5, 0.8]) {
+		for (const sigma of [0.5, 1, 1.5]) {
 			test(`center precision at radius ${radius}, phase ${phase}, smoothing ${sigma}`, () => {
 				const size = radius <= 48 ? 160 : 288
 				const center = { x: size / 2 + phase, y: size / 2 + phase * 0.7 }
@@ -41,7 +43,7 @@ for (const radius of [24, 48, 96])
 					...base,
 					width: size,
 					height: size,
-					signal: 0.6 * Math.PI * (radius ** 2 - innerRadius ** 2),
+					signal: 0.6 * PI * (radius ** 2 - innerRadius ** 2),
 					outer: { ...base.outer, center, semiMajor: radius, semiMinor: radius },
 					obstruction: { ...base.obstruction, center: { x: center.x + 1.7, y: center.y - 1.1 }, semiMajor: innerRadius, semiMinor: innerRadius },
 				}
@@ -50,6 +52,9 @@ for (const radius of [24, 48, 96])
 				expect(Math.hypot(result.obstruction.ellipse.center.x - fixture.obstruction.center.x, result.obstruction.ellipse.center.y - fixture.obstruction.center.y)).toBeLessThan(0.1)
 				expect(Math.hypot(result.geometry.offset.x - 1.7, result.geometry.offset.y + 1.1)).toBeLessThan(0.2)
 			})
+		}
+	}
+}
 
 test('keeps exact zero offset measurable with unresolved direction and optional assessments', () => {
 	const base = collimationFixture()
@@ -117,7 +122,7 @@ test('preserves input and previous results across ROI changes, failures and work
 })
 
 test('retains faint Float64 contrast above a large sloped pedestal', () => {
-	const base = collimationFixture({ background: 0, signal: 1e-10 * Math.PI * (48 ** 2 - 20 ** 2) })
+	const base = collimationFixture({ background: 0, signal: 1e-10 * PI * (48 ** 2 - 20 ** 2) })
 	const template = generateSyntheticCollimationImage(base)
 	const raw = new Float64Array(template.raw.length)
 	renderSyntheticCollimationPattern(raw, base)
@@ -144,32 +149,35 @@ test('reports missing signal, low SNR, crop and ambiguous multiple rings as fail
 	expect(analyze({ ...base, signal: 5, noise: 0.1 })).toMatchObject({ success: false, reason: 'lowSignal' })
 	const image = generateSyntheticCollimationImage(base)
 	expect(analyzeCollimation({ image, area: { left: 40, top: 0, right: 160, bottom: 160 } }).success).toBeFalse()
-	renderSyntheticCollimationPattern(image.raw, { ...base, outer: { ...base.outer, semiMajor: 12, semiMinor: 12 }, obstruction: { ...base.obstruction, center: base.outer.center, semiMajor: 5, semiMinor: 5 }, signal: 0.6 * Math.PI * (12 ** 2 - 5 ** 2) })
+	renderSyntheticCollimationPattern(image.raw, { ...base, outer: { ...base.outer, semiMajor: 12, semiMinor: 12 }, obstruction: { ...base.obstruction, center: base.outer.center, semiMajor: 5, semiMinor: 5 }, signal: 0.6 * PI * (12 ** 2 - 5 ** 2) })
 	expect(analyzeCollimation({ image, area: { left: 0, top: 0, right: 160, bottom: 160 } })).toMatchObject({ success: false, reason: 'ambiguousPattern' })
 })
 
 test('rejects another bright pattern inside the ROI without switching the supplied target', () => {
 	const fixture = collimationFixture({ width: 260 })
 	const image = generateSyntheticCollimationImage(fixture)
-	renderSyntheticCollimationPattern(image.raw, { ...fixture, outer: { ...fixture.outer, center: { x: 208, y: 80 }, semiMajor: 20, semiMinor: 20 }, obstruction: { ...fixture.obstruction, center: { x: 208, y: 80 }, semiMajor: 8, semiMinor: 8 }, signal: 0.6 * Math.PI * (20 ** 2 - 8 ** 2) })
+	renderSyntheticCollimationPattern(image.raw, { ...fixture, outer: { ...fixture.outer, center: { x: 208, y: 80 }, semiMajor: 20, semiMinor: 20 }, obstruction: { ...fixture.obstruction, center: { x: 208, y: 80 }, semiMajor: 8, semiMinor: 8 }, signal: 0.6 * PI * (20 ** 2 - 8 ** 2) })
 	expect(analyzeCollimation({ image, area: { left: 0, top: 0, right: 260, bottom: 160 }, center: fixture.obstruction.center })).toMatchObject({ success: false, reason: 'ambiguousPattern' })
 })
 
 test('respects a missing angular block even when point count is high', () => {
 	const fixture = collimationFixture()
 	const image = generateSyntheticCollimationImage(fixture)
-	for (let y = 0; y < 160; y++)
+
+	for (let y = 0; y < 160; y++) {
 		for (let x = 0; x < 160; x++) {
 			const dx = x - fixture.obstruction.center.x
 			const dy = y - fixture.obstruction.center.y
-			if (Math.abs(Math.atan2(dy, dx)) < 0.17 * Math.PI && Math.hypot(dx, dy) < 58) image.raw[y * 160 + x] = Number.NaN
+			if (Math.abs(Math.atan2(dy, dx)) < 0.17 * PI && Math.hypot(dx, dy) < 58) image.raw[y * 160 + x] = Number.NaN
 		}
+	}
+
 	const input = { image, area: { left: 0, top: 0, right: 160, bottom: 160 }, center: fixture.obstruction.center }
 	expect(analyzeCollimation(input, { minimumCoverage: 0.7 })).toMatchObject({ success: false, reason: 'insufficientCoverage' })
 	// The finite smoothing/contrast support widens this missing wedge to about 97 degrees.
 	const accepted = success(analyzeCollimation(input, { minimumCoverage: 0.7, maximumGap: 2 }))
 	expect(accepted.outer.coverage).toBeLessThan(0.85)
-	expect(accepted.outer.maximumGap).toBeGreaterThan(Math.PI / 3)
+	expect(accepted.outer.maximumGap).toBeGreaterThan(PI / 3)
 })
 
 test('keeps blur, spider and measurable noise separate from an apparent center offset', () => {

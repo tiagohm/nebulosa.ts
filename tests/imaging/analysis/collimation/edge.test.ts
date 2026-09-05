@@ -1,9 +1,10 @@
 import { expect, test } from 'bun:test'
+import { PI } from '../../../../src/core/constants'
 import { collimationCoverage, collimationRayRadius, extractCollimationEdges, initializeCollimationRadii, sampleCollimationPlane } from '../../../../src/imaging/analysis/collimation/edge'
 import { prepareCollimation } from '../../../../src/imaging/analysis/collimation/preprocess'
 import { generateSyntheticCollimationImage } from '../../../../src/imaging/synthetic/collimation'
 import { fitEllipse } from '../../../../src/math/numerical/ellipse.fit'
-import { collimationFixture } from '../../../collimation.util'
+import { collimationFixture } from './util'
 
 test('extracts subpixel gradient pairs and fits independent boundaries', () => {
 	const fixture = collimationFixture()
@@ -27,14 +28,16 @@ test('extracts subpixel gradient pairs and fits independent boundaries', () => {
 test('coverage respects circular gaps and density', () => {
 	for (const n of [120, 360, 720]) {
 		const weights = new Float64Array(n).fill(1)
+
 		for (let i = 0; i < n / 10; i++) {
 			weights[i] = 0
 			weights[n - 1 - i] = 0
 		}
+
 		expect(collimationCoverage(weights, n).coverage).toBeCloseTo(0.8, 14)
-		expect(collimationCoverage(weights, n).maximumGap).toBeCloseTo(0.4 * Math.PI, 14)
+		expect(collimationCoverage(weights, n).maximumGap).toBeCloseTo(0.4 * PI, 14)
 		weights.fill(0)
-		expect(collimationCoverage(weights, n).maximumGap).toBeCloseTo(2 * Math.PI, 14)
+		expect(collimationCoverage(weights, n).maximumGap).toBeCloseTo(2 * PI, 14)
 	}
 })
 

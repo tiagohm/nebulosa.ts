@@ -66,12 +66,14 @@ export function maximumNormalizedBoundaryRadiusSquared(outer: EllipseGeometry, i
 	} else {
 		let lower = highEigenvalue
 		let upper = highEigenvalue + Math.max(1, Math.hypot(betaLow, betaHigh))
+
 		for (let i = 0; i < CONTAINMENT_SOLVER_ITERATIONS; i++) {
 			const lowTerm = betaLow / (upper - lowEigenvalue)
 			const highTerm = betaHigh / (upper - highEigenvalue)
 			if (lowTerm * lowTerm + highTerm * highTerm <= 1) break
 			upper = highEigenvalue + (upper - highEigenvalue) * 2
 		}
+
 		for (let i = 0; i < CONTAINMENT_SOLVER_ITERATIONS; i++) {
 			const lambda = (lower + upper) * 0.5
 			const lowTerm = betaLow / (lambda - lowEigenvalue)
@@ -79,6 +81,7 @@ export function maximumNormalizedBoundaryRadiusSquared(outer: EllipseGeometry, i
 			if (lowTerm * lowTerm + highTerm * highTerm > 1) lower = lambda
 			else upper = lambda
 		}
+
 		unitLow = betaLow / (upper - lowEigenvalue)
 		unitHigh = betaHigh / (upper - highEigenvalue)
 		const norm = Math.hypot(unitLow, unitHigh)
