@@ -66,9 +66,10 @@ export function ellipseFromConic(conic: EllipseConic): EllipseGeometry | undefin
 }
 
 // Fits paired finite x/y samples of one well-distributed ellipse. Optional nonnegative precision
-// weights are capped relative to their median so isolated bright sectors cannot dominate. At least
-// six informative points are needed. Degeneracy, inadequate conditioning or nonstationarity returns
-// undefined; the caller separately checks angular coverage and an appropriate RMS tolerance.
+// weights are capped relative to their median so isolated bright sectors cannot dominate; zero
+// precision fully excludes a coordinate pair. At least six informative points are needed.
+// Degeneracy, inadequate conditioning or nonstationarity returns undefined; the caller separately
+// checks angular coverage and an appropriate RMS tolerance.
 export function fitEllipse(x: Readonly<NumberArray>, y: Readonly<NumberArray>, precision?: Readonly<NumberArray>): EllipseFit | undefined {
 	const n = x.length
 
@@ -84,6 +85,8 @@ export function fitEllipse(x: Readonly<NumberArray>, y: Readonly<NumberArray>, p
 	if (count < 6) return undefined
 
 	const cap = 4 * medianBySelectionOf(scratch, count)
+	let anchorX = 0
+	let anchorY = 0
 	let sum = 0
 	let mx = 0
 	let my = 0
@@ -91,16 +94,22 @@ export function fitEllipse(x: Readonly<NumberArray>, y: Readonly<NumberArray>, p
 	for (let i = 0; i < n; i++) {
 		const w = Math.min(precision?.[i] ?? 1, cap) / cap
 		base[i] = w
+		if (w === 0) continue
+		// Excluded coordinates must not set the origin or participate in distance arithmetic.
+		if (sum === 0) {
+			anchorX = x[i]
+			anchorY = y[i]
+		}
 		sum += w
-		mx += w * (x[i] - x[0])
-		my += w * (y[i] - y[0])
+		mx += w * (x[i] - anchorX)
+		my += w * (y[i] - anchorY)
 	}
 
-	mx = x[0] + mx / sum
-	my = y[0] + my / sum
+	mx = anchorX + mx / sum
+	my = anchorY + my / sum
 
 	let variance = 0
-	for (let i = 0; i < n; i++) variance += base[i] * ((x[i] - mx) ** 2 + (y[i] - my) ** 2)
+	for (let i = 0; i < n; i++) if (base[i] > 0) variance += base[i] * ((x[i] - mx) ** 2 + (y[i] - my) ** 2)
 
 	const scale = Math.sqrt(variance / sum)
 	if (!(scale > 0) || !Number.isFinite(scale)) return undefined
@@ -109,8 +118,10 @@ export function fitEllipse(x: Readonly<NumberArray>, y: Readonly<NumberArray>, p
 	const ny = new Float64Array(n)
 
 	for (let i = 0; i < n; i++) {
-		nx[i] = (x[i] - mx) / scale
-		ny[i] = (y[i] - my) / scale
+		if (base[i] > 0) {
+			nx[i] = (x[i] - mx) / scale
+			ny[i] = (y[i] - my) / scale
+		}
 	}
 
 	const initial = directEllipse(nx, ny, base)

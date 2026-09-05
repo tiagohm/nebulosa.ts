@@ -96,3 +96,28 @@ test('zero-precision samples neither affect robust scale nor singular trial resi
 	expect(fit.ellipse.semiMajor).toBeCloseTo(40, 8)
 	expect(fit.rms).toBeLessThan(1e-8)
 })
+
+test.each([0, 37])('ignores distant zero-precision coordinates at index %d during normalization', (index: number) => {
+	const expected = { center: { x: 2.3, y: -9.7 }, semiMajor: 40, semiMinor: 30, theta: 0.73 }
+	for (const distance of [1e20, 1e200, Number.MAX_VALUE]) {
+		const { x, y } = points(expected)
+		const weights = new Float64Array(x.length).fill(1)
+		x[index] = distance
+		y[index] = -distance
+		weights[index] = 0
+		const saved = [x.slice(), y.slice(), weights.slice()]
+		const fit = fitEllipse(x, y, weights)!
+		expect(fit).toBeDefined()
+		expect(fit.ellipse.center.x).toBeCloseTo(expected.center.x, 8)
+		expect(fit.ellipse.center.y).toBeCloseTo(expected.center.y, 8)
+		expect(fit.ellipse.semiMajor).toBeCloseTo(expected.semiMajor, 8)
+		expect(fit.ellipse.semiMinor).toBeCloseTo(expected.semiMinor, 8)
+		expect(fit.ellipse.theta).toBeCloseTo(expected.theta, 8)
+		expect(fit.rms).toBeLessThan(1e-8)
+		expect(fit.weights).toHaveLength(x.length)
+		expect(fit.residuals).toHaveLength(x.length)
+		expect(fit.weights[index]).toBe(0)
+		expect(fit.residuals[index]).toBe(0)
+		expect([x, y, weights]).toEqual(saved)
+	}
+})
