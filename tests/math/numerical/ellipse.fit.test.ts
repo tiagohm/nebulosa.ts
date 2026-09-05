@@ -121,3 +121,18 @@ test.each([0, 37])('ignores distant zero-precision coordinates at index %d durin
 		expect([x, y, weights]).toEqual(saved)
 	}
 })
+
+test.each([Number.MIN_VALUE, 1e-320, 1, 1e308, Number.MAX_VALUE])('preserves an ellipse under uniform precision scaling by %d', (precision: number) => {
+	const expected = { center: { x: 2.3, y: -9.7 }, semiMajor: 40, semiMinor: 30, theta: 0.73 }
+	const { x, y } = points(expected)
+	const weights = new Float64Array(x.length).fill(precision)
+	const fit = fitEllipse(x, y, weights)!
+	expect(fit).toBeDefined()
+	expect(fit.ellipse.center.x).toBeCloseTo(expected.center.x, 8)
+	expect(fit.ellipse.center.y).toBeCloseTo(expected.center.y, 8)
+	expect(fit.ellipse.semiMajor).toBeCloseTo(expected.semiMajor, 8)
+	expect(fit.ellipse.semiMinor).toBeCloseTo(expected.semiMinor, 8)
+	expect(fit.ellipse.theta).toBeCloseTo(expected.theta, 8)
+	expect(fit.rms).toBeLessThan(1e-8)
+	expect(weights.every((weight: number) => weight === precision)).toBe(true)
+})

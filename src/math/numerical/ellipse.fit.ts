@@ -84,7 +84,7 @@ export function fitEllipse(x: Readonly<NumberArray>, y: Readonly<NumberArray>, p
 	for (let i = 0; i < n; i++) if ((precision?.[i] ?? 1) > 0) scratch[count++] = precision?.[i] ?? 1
 	if (count < 6) return undefined
 
-	const cap = 4 * medianBySelectionOf(scratch, count)
+	const medianPrecision = medianBySelectionOf(scratch, count)
 	let anchorX = 0
 	let anchorY = 0
 	let sum = 0
@@ -92,7 +92,8 @@ export function fitEllipse(x: Readonly<NumberArray>, y: Readonly<NumberArray>, p
 	let my = 0
 
 	for (let i = 0; i < n; i++) {
-		const w = Math.min(precision?.[i] ?? 1, cap) / cap
+		// Cap the relative precision before scaling; four times a finite median can overflow.
+		const w = Math.min((precision?.[i] ?? 1) / medianPrecision, 4) * 0.25
 		base[i] = w
 		if (w === 0) continue
 		// Excluded coordinates must not set the origin or participate in distance arithmetic.
