@@ -1,8 +1,9 @@
+import type { Point } from '../math/numerical/geometry'
 import type { NumberArray } from '../math/numerical/math'
 
-// Generic numeric-array utilities: array-type detection, single-pass reducers (min/max/mean/median/
-// standard deviation/percentile/RMS), binary search variants, and numeric comparators. Reducers
-// operate on plain arrays or typed arrays; functions documented as requiring a sorted input must be
+// Generic numeric-array utilities: array-type detection, scalar reducers (min/max/mean/median/
+// standard deviation/percentile/RMS), a 2D geometric median, binary search, and numeric comparators.
+// Reducers operate on plain arrays or typed arrays; functions requiring a sorted input must be
 // given one. Most reducers return NaN for empty input to stay composable.
 
 // Options controlling the search window and miss behavior of the binary-search helpers.
@@ -18,6 +19,13 @@ export interface BinarySearchOptions {
 // Scale factor 1/Φ⁻¹(3/4) that converts a median absolute deviation into a consistent estimator of
 // the standard deviation for normally distributed data.
 export const STANDARD_DEVIATION_SCALE = 1.482602218505602
+
+// Modified Weiszfeld iterations; every accepted result also passes a convex subgradient criterion.
+const GEOMETRIC_MEDIAN_ITERATIONS = 512
+// Sum-of-unit-vectors stationarity tolerance per sample, independent of coordinate units.
+const GEOMETRIC_MEDIAN_GRADIENT_TOLERANCE = 1e-9
+// Bounded backtracking for smooth Newton acceleration; rejected steps fall back to Weiszfeld.
+const GEOMETRIC_MEDIAN_LINE_SEARCH_STEPS = 24
 
 // Largest sample count in the common 3x3 local-median window; insertion sort avoids a TypedArray
 // subarray/sort call for the per-pixel.
@@ -116,6 +124,199 @@ function sortSmallPrefix(values: NumberArray, count: number) {
 	}
 
 	return values
+}
+
+// Approximates the unweighted 2D geometric median minimizing the sum of Euclidean distances to
+// paired finite coordinates in x/y. Both axes must use the same units. Integer count selects a prefix
+// within both buffers, defaulting to x.length; suffixes are ignored. Inputs are preserved and a successful
+// result is freshly allocated. Empty input, unresolved normalized separations, or failure to reach
+// convex subgradient stationarity (1e-9 per point) within 512 iterations returns undefined.
+// Uses O(count) scratch and bounded modified Weiszfeld iteration with up to 24 Newton backtracks.
+// Coincidences use their full multiplicity; no relative-distance threshold merges distinct points.
+// A collinear even population can have nonunique medians; any minimizing point is valid. Component
+// medians initialize the solve, and coordinate centering/scaling preserve the Euclidean metric.
+// Result precision is limited by floating-point resolution at its original coordinate magnitude.
+// Vardi & Zhang (2000), https://doi.org/10.1073/pnas.97.4.1423.
+export function geometricMedian(x: Readonly<NumberArray>, y: Readonly<NumberArray>, count = x.length): Point | undefined {
+	// A prefix outside either coordinate buffer would allocate unchecked scratch and mispair points.
+	if (!Number.isInteger(count) || !(count >= 0 && count <= x.length && count <= y.length)) throw new RangeError('count must identify a valid prefix of both coordinate arrays')
+	if (count === 0) return undefined
+	if (count === 1) return { x: x[0], y: y[0] }
+
+	const nx = new Float64Array(count)
+	const ny = new Float64Array(count)
+
+	for (let i = 0; i < count; i++) {
+		nx[i] = x[i]
+		ny[i] = y[i]
+	}
+
+	const anchorX = medianBySelectionOf(nx)
+	const anchorY = medianBySelectionOf(ny)
+
+	let coordinateScale = 1
+	let scale = 0
+
+	for (let i = 0; i < count; i++) scale = Math.max(scale, Math.abs(x[i] - anchorX), Math.abs(y[i] - anchorY))
+
+	if (scale === Infinity) {
+		// Exact power-of-two scaling makes differences of opposite finite extremes representable.
+		coordinateScale = 0.5
+		scale = 0
+		for (let i = 0; i < count; i++) scale = Math.max(scale, Math.abs(x[i] * 0.5 - anchorX * 0.5), Math.abs(y[i] * 0.5 - anchorY * 0.5))
+	}
+
+	if (scale === 0) return { x: anchorX, y: anchorY }
+
+	for (let i = 0; i < count; i++) {
+		nx[i] = (x[i] * coordinateScale - anchorX * coordinateScale) / scale
+		ny[i] = (y[i] * coordinateScale - anchorY * coordinateScale) / scale
+		// An underflowed separation must not turn a resolved input cluster into coincident points.
+		if ((x[i] !== anchorX && nx[i] === 0) || (y[i] !== anchorY && ny[i] === 0)) return undefined
+	}
+
+	let cx = 0
+	let cy = 0
+	let checkedPoint = -1
+
+	for (let iteration = 0; iteration < GEOMETRIC_MEDIAN_ITERATIONS; iteration++) {
+		let weightSum = 0
+		let distanceScale = Infinity
+		let rx = 0
+		let ry = 0
+		let coincident = 0
+		let hxx = 0
+		let hxy = 0
+		let hyy = 0
+		let closestPoint = 0
+		let closestDistance = Infinity
+
+		for (let i = 0; i < count; i++) {
+			const dx = nx[i] - cx
+			const dy = ny[i] - cy
+			const distance = Math.hypot(dx, dy)
+
+			if (distance < closestDistance) {
+				closestPoint = i
+				closestDistance = distance
+			}
+
+			if (distance === 0) {
+				coincident++
+				continue
+			}
+
+			const ux = dx / distance
+			const uy = dy / distance
+			if (distance < distanceScale) {
+				// Relative reciprocal weights stay at most one even beside a very distant outlier.
+				const rescale = distance / distanceScale
+				weightSum *= rescale
+				hxx *= rescale
+				hxy *= rescale
+				hyy *= rescale
+				distanceScale = distance
+			}
+			const weight = distanceScale / distance
+			weightSum += weight
+			rx += ux
+			ry += uy
+			hxx += uy * uy * weight
+			hxy -= ux * uy * weight
+			hyy += ux * ux * weight
+		}
+
+		const norm = Math.hypot(rx, ry)
+		if (norm <= coincident + GEOMETRIC_MEDIAN_GRADIENT_TOLERANCE * count) {
+			const px = (anchorX * coordinateScale + cx * scale) / coordinateScale
+			const py = (anchorY * coordinateScale + cy * scale) / coordinateScale
+			return Number.isFinite(px) && Number.isFinite(py) ? { x: px, y: py } : undefined
+		}
+
+		if (closestPoint !== checkedPoint) {
+			checkedPoint = closestPoint
+			if (geometricMedianAtPoint(nx, ny, count, closestPoint)) return { x: x[closestPoint], y: y[closestPoint] }
+		}
+
+		const hscale = hxx + hyy
+		const a = hxx / hscale
+		const b = hxy / hscale
+		const c = hyy / hscale
+		const determinant = a * c - b * b
+		let accelerated = false
+
+		// Near-singular Hessians retain Weiszfeld steps; smooth trials use bounded length and Armijo decrease.
+		if (coincident === 0 && determinant > 1e-15) {
+			let sx = ((c * rx - b * ry) / (determinant * hscale)) * distanceScale
+			let sy = ((a * ry - b * rx) / (determinant * hscale)) * distanceScale
+			const length = Math.hypot(sx, sy)
+
+			if (length > 2) {
+				sx *= 2 / length
+				sy *= 2 / length
+			}
+
+			for (let step = 0; step < GEOMETRIC_MEDIAN_LINE_SEARCH_STEPS; step++) {
+				if (geometricMedianObjectiveChange(nx, ny, count, cx, cy, sx, sy) <= -1e-4 * (rx * sx + ry * sy)) {
+					cx += sx
+					cy += sy
+					accelerated = true
+					break
+				}
+
+				sx *= 0.5
+				sy *= 0.5
+			}
+		}
+
+		if (accelerated) continue
+
+		const fraction = 1 - coincident / norm
+		cx += ((fraction * rx) / weightSum) * distanceScale
+		cy += ((fraction * ry) / weightSum) * distanceScale
+	}
+
+	return undefined
+}
+
+// Tests the convex subgradient ball at index in the first count paired, centered/scaled x/y values.
+// Multiplicity includes coincident points; no distances or inputs are mutated.
+function geometricMedianAtPoint(x: Float64Array, y: Float64Array, count: number, index: number) {
+	let rx = 0
+	let ry = 0
+	let coincident = 0
+
+	for (let i = 0; i < count; i++) {
+		const dx = x[i] - x[index]
+		const dy = y[i] - y[index]
+		const distance = Math.hypot(dx, dy)
+
+		if (distance === 0) {
+			coincident++
+		} else {
+			rx += dx / distance
+			ry += dy / distance
+		}
+	}
+
+	return Math.hypot(rx, ry) <= coincident + GEOMETRIC_MEDIAN_GRADIENT_TOLERANCE * count
+}
+
+// Sum-of-distances change for the first count paired x/y values from candidate (cx,cy) by step
+// (sx,sy), all in normalized coordinate units; inputs are preserved.
+// Rationalized distance differences preserve small decreases near stationarity. Dividing each
+// step component before multiplying avoids squared-step underflow beside distant outliers.
+function geometricMedianObjectiveChange(x: Float64Array, y: Float64Array, count: number, cx: number, cy: number, sx: number, sy: number) {
+	let change = 0
+
+	for (let i = 0; i < count; i++) {
+		const dx = x[i] - cx
+		const dy = y[i] - cy
+		const denominator = Math.hypot(dx - sx, dy - sy) + Math.hypot(dx, dy)
+		if (denominator > 0) change += (sx / denominator) * (sx - 2 * dx) + (sy / denominator) * (sy - 2 * dy)
+	}
+
+	return change
 }
 
 // Finds the minimum value and its index in a numeric array, returned as [value, index].

@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { binarySearch, binarySearchWithComparator, isNumberArray, maxOf, meanOf, medianAbsoluteDeviationOf, medianBySelectionOf, medianOf, minOf, NumberComparator, NumberComparatorDescending, percentileOf, quickSelect, rmsOf, standardDeviationOf } from '../../src/core/util'
+import { binarySearch, binarySearchWithComparator, geometricMedian, isNumberArray, maxOf, meanOf, medianAbsoluteDeviationOf, medianBySelectionOf, medianOf, minOf, NumberComparator, NumberComparatorDescending, percentileOf, quickSelect, rmsOf, standardDeviationOf } from '../../src/core/util'
 
 test('is number array', () => {
 	expect(isNumberArray([1, 2, 3])).toBeTrue()
@@ -119,6 +119,177 @@ test('median by selection of', () => {
 	expect(medianBySelectionOf([-Number.MAX_VALUE, Number.MAX_VALUE])).toBe(0)
 	expect(medianBySelectionOf([0, 0, 0, 0.2000000763614068, 0, 0, 0])).toBe(0)
 })
+
+test('geometric median handles empty, singleton and two-point populations', () => {
+	expect(geometricMedian([], [])).toBeUndefined()
+	expect(geometricMedian([2], [-3])).toEqual({ x: 2, y: -3 })
+	expect(geometricMedian([2, 4], [8, 10])).toEqual({ x: 3, y: 9 })
+	expect(geometricMedian([2, 2, 2], [-3, -3, -3])).toEqual({ x: 2, y: -3 })
+	expect(geometricMedian([3, 1, 2], [9, 3, 6])).toEqual({ x: 2, y: 6 })
+	expect(geometricMedian([-3, 3, -3, 3], [0, 0, 0, 0])).toEqual({ x: 0, y: 0 })
+})
+
+test('geometric median preserves readonly arrays, typed buffers, prefixes and earlier results', () => {
+	const x = Object.freeze([2, 0, 2, 0, 0, Number.NaN])
+	const y = new Float64Array([0, 2, 0, 2, 0, Number.NaN])
+	const before = y.slice()
+	const result = geometricMedian(x, y, 5)
+	expect(result).toBeDefined()
+	const saved = { ...result! }
+	expect(geometricMedian(new Uint16Array([1, 2, 3]), new Float32Array([4, 5, 6]))).toEqual({ x: 2, y: 5 })
+	expect(new Uint8Array(y.buffer)).toEqual(new Uint8Array(before.buffer))
+	expect(result).toEqual(saved)
+	expect(geometricMedian(x, y, 5)).not.toBe(result)
+	expect(geometricMedian(x, y, 0)).toBeUndefined()
+	expect(() => geometricMedian([1, 2], [3])).toThrow(RangeError)
+	expect(() => geometricMedian([1], [2], 2 ** 32)).toThrow(RangeError)
+})
+
+for (const scale of [1e-300, 1, 1e300]) {
+	for (const angle of [0, 0.3, 1.8, 4.2]) {
+		test(`geometric median preserves an analytic solution at scale ${scale} and rotation ${angle}`, () => {
+			// For [(0,0), (2,0) twice, (0,2) twice], symmetry and the distance derivative give
+			// median (t,t), t=1-1/sqrt(15). The origin is a coincident but nonoptimal initializer.
+			const c = Math.cos(angle)
+			const s = Math.sin(angle)
+			const points = [
+				[0, 0],
+				[2, 0],
+				[2, 0],
+				[0, 2],
+				[0, 2],
+			]
+			const x = points.map(([x, y]) => scale * (x * c - y * s))
+			const y = points.map(([x, y]) => scale * (x * s + y * c))
+			const result = geometricMedian(x, y)
+			const reversed = geometricMedian(x.toReversed(), y.toReversed())
+			expect(result).toBeDefined()
+			expect(reversed).toBeDefined()
+			const t = 1 - 1 / Math.sqrt(15)
+			expect(result!.x / scale).toBeCloseTo(t * (c - s), 7)
+			expect(result!.y / scale).toBeCloseTo(t * (s + c), 7)
+			expect(reversed!.x / scale).toBeCloseTo(result!.x / scale, 7)
+			expect(reversed!.y / scale).toBeCloseTo(result!.y / scale, 7)
+		})
+	}
+}
+
+test('geometric median preserves small separations at a large coordinate origin', () => {
+	const origin = 1e12
+	const scale = 0.125
+	const result = geometricMedian([origin, origin + 2 * scale, origin + 2 * scale, origin, origin], [-origin, -origin, -origin, -origin + 2 * scale, -origin + 2 * scale])
+	expect(result).toBeDefined()
+	const delta = scale * (1 - 1 / Math.sqrt(15))
+	// Output coordinates round at the translated origin, regardless of the internal local precision.
+	expect(Math.abs(result!.x - (origin + delta))).toBeLessThanOrEqual(origin * Number.EPSILON)
+	expect(Math.abs(result!.y - (-origin + delta))).toBeLessThanOrEqual(origin * Number.EPSILON)
+})
+
+test('geometric median handles subnormal coordinate units without reciprocal overflow', () => {
+	const unit = Number.MIN_VALUE
+	expect(geometricMedian([0, unit, 2 * unit], [0, unit, 2 * unit])).toEqual({ x: unit, y: unit })
+})
+
+test('geometric median declines normalized separations below representable resolution', () => {
+	expect(geometricMedian([-1e-300, -1e-300, 1e-300, 1e-300, 1e300], [-1e-300, 1e-300, -1e-300, 1e-300, 0])).toBeUndefined()
+})
+
+test('geometric median has no collimation frame-count limit', () => {
+	const x = new Float64Array(4096)
+	const y = new Float64Array(4096)
+	for (let i = 0; i < x.length; i++) {
+		const theta = (2 * Math.PI * i) / x.length
+		x[i] = 3 + 100 * Math.cos(theta)
+		y[i] = -2 + 100 * Math.sin(theta)
+	}
+	const result = geometricMedian(x, y)
+	expect(result).toBeDefined()
+	expect(result!.x).toBeCloseTo(3, 8)
+	expect(result!.y).toBeCloseTo(-2, 8)
+})
+
+for (const outlier of [1e13, 1e20, 1e308]) {
+	test(`geometric median preserves a resolved cluster beside an outlier at ${outlier}`, () => {
+		const result = geometricMedian([-1, -1, 1, 1, outlier], [-1, 1, -1, 1, 0])
+		expect(result).toBeDefined()
+		// Symmetry fixes y=0. The distant point contributes derivative -1, so the unique x
+		// minimizes 2*hypot(x-1,1) + 2*hypot(x+1,1) - x, independently of outlier distance.
+		let left = 0
+		let right = 1
+		for (let i = 0; i < 60; i++) {
+			const mid = (left + right) / 2
+			const derivative = (2 * (mid - 1)) / Math.hypot(mid - 1, 1) + (2 * (mid + 1)) / Math.hypot(mid + 1, 1) - 1
+			if (derivative > 0) right = mid
+			else left = mid
+		}
+		expect(result!.x).toBeCloseTo((left + right) / 2, 7)
+		expect(result!.y).toBeCloseTo(0, 12)
+	})
+}
+
+test('geometric median handles finite coordinates whose centered differences overflow', () => {
+	const m = Number.MAX_VALUE
+	const result = geometricMedian([-m, m, m, m, m], [-m, -m, m, m, m])
+	expect(result).toEqual({ x: m, y: m })
+})
+
+test('geometric median restores a smooth solution between opposite finite extremes', () => {
+	const m = Number.MAX_VALUE
+	const result = geometricMedian([-m, -m, m, m, m], [-m, m, -m, m, 0])
+	expect(result).toBeDefined()
+	const t = result!.x / m
+	expect(t).toBeGreaterThan(0)
+	expect(t).toBeLessThan(1)
+	expect(result!.y / m).toBeCloseTo(0, 12)
+	// The same symmetric square objective has a unique root in (0,1); check its derivative
+	// directly in scaled coordinates so the assertion itself does not overflow.
+	expect((2 * (t - 1)) / Math.hypot(t - 1, 1) + (2 * (t + 1)) / Math.hypot(t + 1, 1) - 1).toBeCloseTo(0, 8)
+})
+
+for (const points of [
+	[
+		[1.1082694437354803, -0.8598943082615733],
+		[1.3708127960562706, 1.1136274551972747],
+		[1.6841341350227594, 0.31537065003067255],
+		[-0.7244858033955097, 0.21237498056143522],
+		[0.40879091434180737, -0.3590333117172122],
+		[1.021085798740387, -0.21657976601272821],
+	],
+	[
+		[-0.9082497209310532, 0.0014438478252850474],
+		[1.264824928715825, 0.00414685650030151],
+		[-0.5292623601853848, -0.003714539215434343],
+		[-0.41075644828379154, -0.003582019216846675],
+		[0.7295032069087029, 0.0031743789999745787],
+		[-1.7737550344318151, 0.0033639606856741013],
+		[-0.3915994353592396, 0.004735326382797211],
+		[0.6032021027058363, 0.004810695808846504],
+	],
+]) {
+	test(`geometric median converges for ${points.length} nearly singular or nearly coincident offsets`, () => {
+		const result = geometricMedian(
+			points.map(([x]) => x),
+			points.map(([, y]) => y),
+		)
+		if (!result) throw new Error('geometric median did not converge')
+		let gx = 0
+		let gy = 0
+		let coincident = 0
+		for (const [x, y] of points) {
+			const dx = x - result.x
+			const dy = y - result.y
+			const distance = Math.hypot(dx, dy)
+			if (distance < 1e-10) coincident++
+			else {
+				gx += dx / distance
+				gy += dy / distance
+			}
+		}
+		// The convex sum of distances is minimized exactly when the noncoincident gradient lies
+		// inside the ball contributed by coincident points; this checks the objective independently.
+		expect(Math.hypot(gx, gy)).toBeLessThanOrEqual(coincident + 1e-7)
+	})
+}
 
 test('standard deviation of', () => {
 	expect(standardDeviationOf(new Float64Array([2, 2, 2, 2]))).toBe(0)

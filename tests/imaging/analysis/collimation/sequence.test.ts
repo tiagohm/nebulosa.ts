@@ -113,41 +113,6 @@ test('opposed vectors cancel without hiding dispersion or manufacturing angular 
 	expect(success(summarizeCollimationSequence([...input, ...input])).dispersion).toBe(3)
 })
 
-test('moves off a coincident initializer that is not the geometric median', () => {
-	// For [(0,0), (2,0) twice, (0,2) twice], symmetry and the distance derivative give t = 1 - 1/sqrt(15).
-	const input = [
-		[0, 0],
-		[2, 0],
-		[2, 0],
-		[0, 2],
-		[0, 2],
-	].map(([x, y]) => measurement(x, y))
-	const result = success(summarizeCollimationSequence(input))
-	const t = 1 - 1 / Math.sqrt(15)
-	expect(result.offset.x).toBeCloseTo(t, 7)
-	expect(result.offset.y).toBeCloseTo(t, 7)
-	expect(result.dispersion).toBeCloseTo(Math.hypot(t, 2 - t), 7)
-})
-
-for (const angle of [0.3, 1.8, 4.2])
-	test(`keeps the Cartesian median equivariant under rotation ${angle}`, () => {
-		const c = Math.cos(angle)
-		const s = Math.sin(angle)
-		const points = [
-			[0, 0],
-			[2, 0],
-			[2, 0],
-			[0, 2],
-			[0, 2],
-		]
-		const input = points.map(([x, y]) => measurement(3 + 2 * (x * c - y * s), -2 + 2 * (x * s + y * c), 100, 0.4))
-		const result = success(summarizeCollimationSequence(input))
-		const t = 1 - 1 / Math.sqrt(15)
-		expect(result.offset.x).toBeCloseTo(3 + 2 * t * (c - s), 7)
-		expect(result.offset.y).toBeCloseTo(-2 + 2 * t * (s + c), 7)
-		expect(result.dispersion).toBeCloseTo(2 * Math.hypot(t, 2 - t), 7)
-	})
-
 test('accepts a coincident point optimum without dropping distant measurements', () => {
 	const result = success(
 		summarizeCollimationSequence(
@@ -165,46 +130,6 @@ test('accepts a coincident point optimum without dropping distant measurements',
 	expect(result.direction).toBeUndefined()
 	expect(result.entries.every((entry) => entry.usable)).toBeTrue()
 })
-
-for (const points of [
-	[
-		[1.1082694437354803, -0.8598943082615733],
-		[1.3708127960562706, 1.1136274551972747],
-		[1.6841341350227594, 0.31537065003067255],
-		[-0.7244858033955097, 0.21237498056143522],
-		[0.40879091434180737, -0.3590333117172122],
-		[1.021085798740387, -0.21657976601272821],
-	],
-	[
-		[-0.9082497209310532, 0.0014438478252850474],
-		[1.264824928715825, 0.00414685650030151],
-		[-0.5292623601853848, -0.003714539215434343],
-		[-0.41075644828379154, -0.003582019216846675],
-		[0.7295032069087029, 0.0031743789999745787],
-		[-1.7737550344318151, 0.0033639606856741013],
-		[-0.3915994353592396, 0.004735326382797211],
-		[0.6032021027058363, 0.004810695808846504],
-	],
-])
-	test(`converges for ${points.length} nearly singular or nearly coincident offsets`, () => {
-		const result = success(summarizeCollimationSequence(points.map(([x, y]) => measurement(x, y))))
-		let gx = 0
-		let gy = 0
-		let coincident = 0
-		for (const [x, y] of points) {
-			const dx = x - result.offset.x
-			const dy = y - result.offset.y
-			const distance = Math.hypot(dx, dy)
-			if (distance < 1e-10) coincident++
-			else {
-				gx += dx / distance
-				gy += dy / distance
-			}
-		}
-		// The convex sum of distances is minimized exactly when the noncoincident gradient lies
-		// inside the ball contributed by coincident points; this checks the objective independently.
-		expect(Math.hypot(gx, gy)).toBeLessThanOrEqual(coincident + 1e-7)
-	})
 
 test('bounds sequence work and preserves inputs and previous results', () => {
 	const input = Array.from({ length: 5 }, (_, i) => measurement(2 + 0.01 * i, 1, 48 + i))
