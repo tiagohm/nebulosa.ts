@@ -91,11 +91,11 @@ function help(provider: ReviewProvider) {
 Run one independent provider session per file, sequentially, on Linux or Windows.
 
   --provider ID         Provider (available: ${[...providers.keys()].join(', ')}; default: grok)
-  --fix                 Apply confirmed defects; requires a clean worktree
+  --fix                 Commit each fixed finding per AGENTS.md; requires a clean worktree
   --force               Retry completed files; clear completion before attempting
   --dry-run             Print pending files without writing or starting a provider
   --status              Show selected files' progress for this provider and mode
-  --refresh-list        Regenerate scripts/review/FILES.txt and exit
+  --refresh-list        Regenerate scripts/review/FILES.txt, preserving commented exclusions
   --files PATH          List path relative to the invocation directory
   --limit N             At most N pending sessions (0 means unlimited)
   --max-turns N         Provider turn fuse (positive integer)
@@ -115,7 +115,10 @@ State: .reviews/<provider>/<review|fix>/ (independent from .grok-reviews/).
 Results print optional turns, cost in US dollars and findings, including zero.
 Missing/invalid REVIEW_TRAILER metadata only omits findings; it does not affect completion.
 Failed/incomplete sessions remain pending. Exit: 0 success, 1 failures, 130 interrupt,
-143 termination. Timeout kills the session tree; the batch continues.
+143 termination. The first error, incomplete result or timeout stops the batch;
+the current file remains pending for retry without --force. Partial work is preserved.
+Fix sessions commit each corrected finding before the next; uncommitted changes
+prevent completion. Review mode never stages or commits.
 Linux: TERM then KILL after 15 seconds. Windows: hidden taskkill /T /F.
 Global lock: .reviews/lock. After an abrupt exit, inspect its PID/owner, stop all
 review processes and descendants, then manually remove the stale lock. See scripts/review/README.md.`)

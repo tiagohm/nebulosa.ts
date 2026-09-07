@@ -1,5 +1,5 @@
 # Primary source files for per-file review.
-# Comment a line with # or delete it to skip. Blank lines are ignored.
+# Comment a line with # to skip and keep it excluded during refresh. Blank lines are ignored.
 # Regenerate with: bun run review --refresh-list
 
 # --- src/core ---

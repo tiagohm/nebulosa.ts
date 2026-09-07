@@ -25,6 +25,8 @@ are supported. Paths are stored relative to the root with `/` separators and
 deduplicated in selection order. `--files` resolves from the invocation directory.
 Lists accept comments starting with `#` (optionally indented), blank lines and
 CRLF. Reading a list leaves its contents, including commented selections, intact.
+Use a commented path to persist an exclusion across `--refresh-list`; deleting
+a line alone does not retain that exclusion when the list is regenerated.
 
 Grok defaults are 60 turns, `high` effort, no timeout and no subagents. Use
 `--max-turns`, `--effort`, `--model`, `--timeout` and `--allow-subagents` to
@@ -43,12 +45,28 @@ Real `--fix` batches require a clean worktree. After acquiring the repository lo
 the orchestrator runs `git status --porcelain=v1 -z --untracked-files=all` before
 starting sessions. Staged changes, unstaged changes, conflicts and untracked files
 block the batch; ignored files do not. Blocking paths are printed. Git failures
-also abort startup. There is no automatic stash, reset, cleanup or commit.
+also abort startup. There is no automatic stash, reset or cleanup.
 
-This check happens only at batch start. Fixes from one session remain available
-to subsequent sessions. Review mode, dry runs, status and help do not require a
-clean worktree. Sessions are instructed never to stage, commit, amend, rebase or
-push. Inspect the resulting changes and reports yourself.
+Each fix session must validate and create **one local commit per corrected
+finding**, finishing that commit before editing the next finding. This applies
+even when multiple findings affect the same source file. The session follows the
+applicable `AGENTS.md`: imperative English subject, required explanatory body,
+blank-line separators and the authoring agent's `Co-Authored-By` trailer. It stages
+explicit paths, reviews the staged diff, uses a temporary message file with
+`git commit -F`, reads the message back and reports each finding's commit hash.
+Clean files and findings that cannot safely be fixed do not get empty commits.
+
+The orchestrator also checks the worktree after a successful fix session. Leftover
+staged, unstaged or untracked changes make the session incomplete and stop the
+batch before the next file. This catches fixes whose commits were not completed.
+Previously created commits remain intact. Partial edits after a failure are
+preserved; handle them before restarting `--fix`, since the clean-start check
+still applies. Sessions must stop on validation or commit failures. They must
+never amend, squash, rebase, rewrite existing commits or push.
+
+Review mode never stages or commits. Review mode, dry runs, status and help do
+not require a clean worktree. The orchestrator does not combine all fixes into
+a file-level commit; the session owns the per-finding validation and commits.
 
 ## Results and state
 
@@ -98,7 +116,12 @@ characters in TSV fields are escaped as `\\`, `\t`, `\r` and `\n`.
 The prompt, stdout, stderr, report and usage history are saved before completion.
 Progress lists are replaced using a temporary file and rename.
 
-Errors, incomplete sessions and timeouts remain pending; the batch continues.
+The first error, incomplete session (including an exhausted turn/token limit) or
+timeout stops the batch with exit code `1`. The current file is not completed and
+is automatically eligible on the next run without `--force`; later files are not
+started. Reports, logs, optional metrics and failure history remain available
+for diagnosis. `--limit` simply ends the batch after the requested number of
+sessions and is not a session failure.
 SIGINT/Ctrl+C and SIGTERM cancel the batch, preserving partial output and leaving
 the interrupted file pending. Exit codes are `0` for no failures, `1` for failures,
 `130` for interruption and `143` for termination.
@@ -128,17 +151,23 @@ automatic stale-lock takeover or legacy-state cleanup.
 bun run review --refresh-list
 ```
 
-Regeneration replaces the default list with all eligible files, including those
-previously commented out. It acquires the repository lock and does not start a
-provider. Normal selection never rewrites the list. `--help`, `--status` and
-`--dry-run` take precedence over regeneration, in that order.
+Regeneration updates eligible files in domain order while keeping previously
+commented paths disabled. Disabled paths remain in the list even when their files
+are temporarily missing, so a later refresh cannot silently reactivate them.
+New eligible files are added as active entries. Regeneration acquires the
+repository lock and does not start a provider. Normal selection never rewrites
+the list. `--help`, `--status` and `--dry-run` take precedence over regeneration,
+in that order.
 
-The shared prompt combines `SESSION.md` (scope, review/fix rules, no commits),
+The shared prompt combines `SESSION.md` (scope, review/fix and per-finding commit rules),
 `PROMPT.md` (domain review criteria), and the current-file footer. Grok receives
 it through `--prompt-file` and `--verbatim`. Memory and auto-updates are disabled.
 Subagents use both `--no-subagents` and `GROK_SUBAGENTS=0` by default; allowing them
-removes the flag and sets `GROK_SUBAGENTS=1`. The existing workspace sandbox,
-approval policy, `Bash(git *)` denial and review-only tool restrictions are kept.
+removes the flag and sets `GROK_SUBAGENTS=1`. The workspace sandbox and approval
+policy are kept. `Bash(git *)` denial and editing-tool restrictions apply only to
+review mode; fix mode permits the Git commands required to inspect, stage and
+commit each finding. Remote operations and history rewriting remain prohibited
+by the shared session instructions.
 
 ## Components and future providers
 

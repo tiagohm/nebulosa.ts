@@ -38,7 +38,7 @@ export class ReviewOrchestrator {
 		try {
 			if (!options.dryRun) {
 				await this.state.acquire()
-				if (options.mode === 'fix') await this.requireCleanWorktree()
+				if (options.mode === 'fix') await this.requireCleanWorktree('Fix requires a clean worktree at batch start')
 				if (controller.signal.aborted) return controller.signal.reason === 'SIGTERM' ? 143 : 130
 				await this.state.initialize()
 			}
@@ -86,6 +86,16 @@ export class ReviewOrchestrator {
 				else if (processResult.error) result.stopReason = processResult.error
 				else if (processResult.exitCode !== 0) result.stopReason = `exit ${processResult.exitCode}${result.stopReason ? `; ${result.stopReason}` : ''}`
 
+				// A successful fix session must finish committing its corrections before it can complete.
+				if (options.mode === 'fix' && outcome === 'ok') {
+					try {
+						await this.requireCleanWorktree('Fix session left changes without a per-finding commit')
+					} catch (error) {
+						outcome = 'incomplete'
+						result.stopReason = errorMessage(error)
+					}
+				}
+
 				await this.state.saveResult(artifacts, result, outcome)
 
 				// An interrupt during artifact writes must not leave a forced retry completed.
@@ -97,9 +107,12 @@ export class ReviewOrchestrator {
 				this.printResult(prefix, file, result, outcome)
 
 				if (outcome === 'interrupted') return controller.signal.reason === 'SIGTERM' || processResult.signal === 'SIGTERM' || processResult.exitCode === 143 ? 143 : 130
-				if (processResult.cleanupFailed) return 1
 				if (outcome === 'ok') ok++
-				else failed++
+				else {
+					failed++
+					console.error(`Stopping batch: ${file} remains pending and will be retried on the next run.`)
+					break
+				}
 			}
 
 			console.info(`done. provider=${this.provider.id} mode=${options.mode} ran=${ran} ok=${ok} failed=${failed} skipped=${skipped}`)
@@ -154,9 +167,9 @@ export class ReviewOrchestrator {
 		console.info(values.join(' | '))
 	}
 
-	private async requireCleanWorktree() {
+	private async requireCleanWorktree(reason: string) {
 		const status = await $`git -C ${this.root} status --porcelain=v1 -z --untracked-files=all`.quiet().nothrow()
-		if (status.exitCode !== 0) throw new Error(`Cannot check worktree before fix: ${status.stderr.toString().trim()}`)
+		if (status.exitCode !== 0) throw new Error(`Cannot check fix worktree: ${status.stderr.toString().trim()}`)
 
 		const records = status.stdout.toString().split('\0')
 		const paths: string[] = []
@@ -168,6 +181,6 @@ export class ReviewOrchestrator {
 			if (/[RC]/.test(record.slice(0, 2))) paths.push(`   from ${JSON.stringify(records[++i])}`)
 		}
 
-		if (paths.length > 0) throw new Error(`Fix requires a clean worktree at batch start. Blocking paths:\n${paths.join('\n')}`)
+		if (paths.length > 0) throw new Error(`${reason}. Blocking paths:\n${paths.join('\n')}`)
 	}
 }

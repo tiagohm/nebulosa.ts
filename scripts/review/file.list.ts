@@ -44,19 +44,54 @@ export class ReviewFileList {
 
 	async regenerate() {
 		const domains = ['core', 'math', 'io', 'astronomy', 'imaging', 'astrometry', 'catalogs', 'bindings', 'devices', 'adapters', 'observation']
-		const lines = ['# Primary source files for per-file review.', '# Comment a line with # or delete it to skip. Blank lines are ignored.', '# Regenerate with: bun run review --refresh-list', '']
+		const lines = ['# Primary source files for per-file review.', '# Comment a line with # to skip and keep it excluded during refresh. Blank lines are ignored.', '# Regenerate with: bun run review --refresh-list', '']
+		const current = Bun.file(this.defaultPath)
+		const disabled = new Map<string, string>()
+		const fileMatchRegex = /^\s*#+\s*(.+\.ts)\s*$/
+
+		if (await current.exists()) {
+			for (const line of (await current.text()).split(/\r?\n/)) {
+				const match = fileMatchRegex.exec(line)
+
+				if (!match) continue
+
+				const file = relative(this.root, resolve(this.root, match[1].replaceAll('\\', '/')))
+					.split(sep)
+					.join('/')
+
+				const key = process.platform === 'win32' ? file.toLowerCase() : file
+				if (key.startsWith('src/') && !/[\r\n\t\0]/.test(file)) disabled.set(key, file)
+			}
+		}
 
 		for (const domain of domains) {
-			const files: string[] = []
+			const files = new Map<string, string>()
 
 			for await (const file of new Bun.Glob(`src/${domain}/**/*.ts`).scan({ cwd: this.root, onlyFiles: true })) {
-				if (!file.endsWith('.data.ts')) files.push(this.normalize(file))
+				if (file.endsWith('.data.ts')) continue
+				const normalized = this.normalize(file)
+				files.set(process.platform === 'win32' ? normalized.toLowerCase() : normalized, normalized)
+			}
+
+			// Keep disabled entries even if their files are temporarily absent, so refresh cannot reactivate them later.
+			for (const [key, file] of disabled) {
+				if (key.startsWith(`src/${domain}/`) && !files.has(key)) files.set(key, file)
 			}
 
 			lines.push(`# --- src/${domain} ---`)
-			for (const file of files.sort()) lines.push(file)
+
+			for (const file of [...files.values()].sort()) {
+				const key = process.platform === 'win32' ? file.toLowerCase() : file
+				lines.push(disabled.has(key) ? `# ${file}` : file)
+				disabled.delete(key)
+			}
+
 			lines.push('')
 		}
+
+		// Preserve exclusions outside the standard domain list without activating them.
+		for (const file of [...disabled.values()].sort()) lines.push(`# ${file}`)
+		if (disabled.size > 0) lines.push('')
 
 		await Bun.write(this.defaultPath, lines.join('\n'))
 	}

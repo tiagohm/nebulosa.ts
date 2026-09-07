@@ -38,9 +38,9 @@ than one class) and apply matching depth from the domain instructions:
 
 ## Hard constraints
 
-- Do not commit, stage, amend, rebase, or push.
-- Ignore any project rule that tells you to create a git commit. This
-  automated session never commits.
+- Do not amend, squash, rebase, rewrite existing commits, or push.
+- Stage and commit only in MODE `fix`, following the per-finding workflow below.
+- Read the applicable AGENTS.md instructions before changing or committing files.
 - Do not change public APIs unless MODE is `fix` and the bug is in the
   contract itself.
 - Do not modify `src/**/*.data.ts` unless that file is the primary file and
@@ -62,6 +62,10 @@ Read-only with respect to the project.
 ## MODE: `fix`
 
 Review first, then fix confirmed defects in the primary file and its tests.
+Create exactly one local commit for each confirmed finding you fix. Complete
+the validation and commit for that finding before editing the next one, even
+when several findings affect the same file. Never combine independent findings
+into one commit or make a single commit for the entire reviewed file.
 
 For every confirmed defect that is safe to fix:
 
@@ -73,11 +77,33 @@ For every confirmed defect that is safe to fix:
 5. Run the closest existing tests and, if you edited TypeScript, the
    targeted lint/format checks from AGENTS.md.
 6. Re-read the resulting diff for new mistakes.
+7. Inspect `git status --short`, stage only the explicit paths belonging to this
+   finding (never `git add .` or `git add -A`), and inspect `git diff --staged`.
+8. Create the finding's commit only after the required checks pass. Follow the
+   commit style in the applicable AGENTS.md: an imperative English subject,
+   normally lowercase, without a Conventional Commit prefix or trailing period;
+   exactly one blank line; a required body explaining the defect, reason for the
+   fix and material side effects or trade-offs; exactly one blank line; and a
+   `Co-Authored-By: Name <email>` trailer identifying the authoring agent. Mention
+   breaking changes explicitly. Prefer a subject of at most 72 characters.
+9. Write the complete message to a temporary file outside the repository using
+   the active shell's syntax, commit with `git commit -F <file>`, remove that
+   temporary file, and read back `git log -1 --format=%B`. Never pass a multiline
+   message with `-m`. If the message is corrupted, stop and report it; do not amend.
+10. Inspect `git status --short --branch`, then proceed to the next finding.
 
 Fix confirmed CRITICAL, HIGH, and clearly real MEDIUM findings. Do not
 "improve" working code. If the file is already correct, leave it unchanged.
 
-Do not commit.
+Do not create empty commits for clean files, unconfirmed suspicions or findings
+that cannot safely be fixed. Report those findings and why they remain unresolved.
+In the final report, map every fixed finding to its commit hash and record the
+verification performed. Never claim a fix is complete if its commit failed.
+
+If validation or a commit fails, stop immediately and report the failure. Do not
+start another finding, stash, reset or discard partial work. Previously created
+commits remain intact. A successful fix session must leave no uncommitted fixes;
+the orchestrator checks the worktree before marking the file completed.
 
 ## Report
 

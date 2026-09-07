@@ -10,10 +10,10 @@ export class GrokReviewProvider implements ReviewProvider {
 		const executable = Bun.which('grok')
 		if (!executable) throw new Error('grok is not on PATH')
 		const options = { ...this.defaults, ...request.options }
-		const args = ['--cwd', request.root, '--no-auto-update', '--always-approve', '--sandbox', 'workspace', '--max-turns', String(options.maxTurns), '--reasoning-effort', options.effort, '--output-format', 'json', '--verbatim', '--prompt-file', request.artifacts.prompt, '--deny', 'Bash(git *)']
+		const args = ['--cwd', request.root, '--no-auto-update', '--always-approve', '--sandbox', 'workspace', '--max-turns', String(options.maxTurns), '--reasoning-effort', options.effort, '--output-format', 'json', '--verbatim', '--prompt-file', request.artifacts.prompt]
 		if (!options.allowSubagents) args.push('--no-subagents')
 		if (options.model) args.push('--model', options.model)
-		if (request.mode === 'review') args.push('--disallowed-tools', 'search_replace,write')
+		if (request.mode === 'review') args.push('--deny', 'Bash(git *)', '--disallowed-tools', 'search_replace,write')
 
 		return {
 			executable,
