@@ -1,6 +1,7 @@
 import { join, resolve } from 'path'
 import type { DeepWritable } from '../../src/core/types'
 import { errorMessage } from '../../src/core/util'
+import { CodexReviewProvider } from './codex.provider'
 import { ReviewFileList } from './file.list'
 import { GrokReviewProvider } from './grok.provider'
 import { ReviewOrchestrator } from './orchestrator'
@@ -10,7 +11,10 @@ import type { ProviderOption, ReviewOptions, ReviewProvider } from './provider'
 import { ReviewStateStore } from './state.store'
 
 // Composition root: adding a provider requires its implementation and this registry entry only.
-const providers: ReadonlyMap<string, ReviewProvider> = new Map([['grok', new GrokReviewProvider()]])
+const providers: ReadonlyMap<string, ReviewProvider> = new Map<string, ReviewProvider>([
+	['grok', new GrokReviewProvider()],
+	['codex', new CodexReviewProvider()],
+])
 
 function parseOptions(args: readonly string[]): ReviewOptions {
 	const options: DeepWritable<ReviewOptions> = { provider: 'grok', mode: 'review', force: false, dryRun: false, status: false, help: false, refreshList: false, files: [], limit: 0, timeout: 0, providerOptions: {} }
@@ -98,7 +102,7 @@ Run one independent provider session per file, sequentially, on Linux or Windows
   --refresh-list        Regenerate scripts/review/FILES.txt, preserving commented exclusions
   --files PATH          List path relative to the invocation directory
   --limit N             At most N pending sessions (0 means unlimited)
-  --max-turns N         Provider turn fuse (positive integer)
+  --max-turns N         Grok turn fuse (positive integer; unsupported by Codex)
   --timeout N           Session timeout in seconds (0 disables it)
   --model ID            Provider model
   --effort LEVEL        Provider reasoning effort
@@ -106,6 +110,8 @@ Run one independent provider session per file, sequentially, on Linux or Windows
   -h, --help            Show help without writing or starting a provider
 
 ${provider.id} defaults: ${JSON.stringify(provider.defaults)}
+Codex inherits its configured model and effort unless explicitly overridden.
+Codex review uses read-only sandboxing; fix uses danger-full-access to allow commits.
 Explicit unsupported provider options are errors. Positional files override --files.
 Review paths resolve from the repository root; absolute paths inside it are accepted.
 Lists accept comments, blank lines and CRLF; paths are deduplicated in order.

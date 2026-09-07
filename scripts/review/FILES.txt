@@ -3,7 +3,7 @@
 # Regenerate with: bun run review --refresh-list
 
 # --- src/core ---
-src/core/constants.ts
+# src/core/constants.ts
 # src/core/types.ts
 # src/core/util.ts
 # src/core/validation.ts

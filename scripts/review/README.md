@@ -1,8 +1,9 @@
 # Per-file review with TypeScript and Bun
 
 Run `bun run review` on Linux or Windows. The orchestrator starts one fresh,
-independent process per file, sequentially. Only Grok is currently registered;
-install it on PATH for real sessions. Planning, status and help do not need Grok
+independent process per file, sequentially. Providers are `grok` (the default)
+and `codex`; install the chosen CLI on PATH and authenticate before real sessions.
+For Codex, use `codex login`. Planning, status and help do not need either CLI
 and never create state, locks or artifacts, even when combined with `--fix`,
 `--force` or `--refresh-list`.
 
@@ -12,6 +13,9 @@ and never create state, locks or artifacts, even when combined with `--fix`,
 bun run review --help
 bun run review --dry-run
 bun run review --provider grok --limit 1
+bun run review --provider codex --limit 1 src/math/units/angle.ts
+bun run review --provider codex --fix --timeout 1800 src/math/units/angle.ts
+bun run review --provider codex --status src/math/units/angle.ts
 bun run review
 bun run review src/math/units/angle.ts
 bun run review --fix --limit 1 src/math/units/angle.ts
@@ -33,6 +37,12 @@ Grok defaults are 60 turns, `high` effort, no timeout and no subagents. Use
 override them. `--limit 0` means unlimited pending sessions. Unknown options,
 missing arguments, invalid numbers and explicitly unsupported provider options
 are rejected.
+
+Codex inherits the model and reasoning effort from its existing CLI configuration
+unless `--model` or `--effort` is supplied. Subagents and timeout are disabled by
+default; `--allow-subagents` and `--timeout` enable them. Codex does not support
+`--max-turns`, so explicitly passing it is an error. Use `--timeout` to bound a
+Codex session. CLI argument compatibility was checked against Codex 0.153.4.
 
 `--status` reports completed, failed, missing and remaining counts for the selected
 files in the chosen provider and mode. `--force` retries completed files and removes
@@ -68,6 +78,14 @@ Review mode never stages or commits. Review mode, dry runs, status and help do
 not require a clean worktree. The orchestrator does not combine all fixes into
 a file-level commit; the session owns the per-finding validation and commits.
 
+Codex uses `read-only` sandboxing in review mode. In fix mode it uses
+`danger-full-access`, because workspace sandboxing protects `.git` and prevents
+unattended commits. **Codex fix commands therefore run without a filesystem or
+network sandbox.** Both modes set `approval_policy="never"`; the shared prompt
+limits fixes to the reviewed findings and forbids pushes and history rewriting.
+Existing Codex authentication, model configuration and MCP integrations are kept.
+Managed CLI restrictions still apply; a denied invocation fails and remains pending.
+
 ## Results and state
 
 ```text
@@ -81,14 +99,26 @@ metrics are omitted. Grok supplies `turns` from `num_turns`, `costUsd` from
 and `mode` match the session and whose `findings` is a nonnegative safe integer.
 Invalid or missing trailer data only omits the findings metric.
 
+Codex supplies the same optional findings metric from its last completed
+`agent_message`. Its JSONL protocol exposes token usage and top-level turn events,
+but no model-call count or dollar cost; `turns` and `costUsd` are therefore omitted
+instead of estimated. The thread ID from `thread.started` is saved as the session ID.
+
 Completion retains the previous parser's rules: Grok errors and malformed JSON
 fail; `max_turn_requests`, `max_tokens` and `cancelled` are incomplete. Other JSON
 object results complete when the process exits successfully. A trailer is not
 required for completion; its `incomplete` and `verdict` fields do not override the
 provider's stop reason. Nonzero process exits and timeouts cannot complete a file.
 
+Codex parses stdout incrementally as JSONL. Completion requires `turn.completed`
+and a nonempty agent message in that turn. `turn.failed` and top-level `error`
+events fail the session even if a partial report exists. Empty or malformed JSONL
+fails; a stream missing its completion event or final message is incomplete.
+Individual tool failures do not decide the review outcome; Codex can recover
+from them within the session. Partial reports and raw logs remain available.
+
 New state is independent of legacy `.grok-reviews/`, which is neither imported
-nor deleted. Both directories are gitignored.
+nor deleted. `.reviews/` is gitignored. Each provider and mode has its own progress.
 
 ```text
 .reviews/
@@ -105,11 +135,17 @@ nor deleted. Both directories are gitignored.
       stderr/
     fix/
       ...
+  codex/
+    review/
+      ...
+    fix/
+      ...
 ```
 
 Lists contain normalized paths, one per line; tabs, newlines and NUL in filenames
 are rejected. Artifact names combine a Windows-safe basename, a SHA-256 path hash
 and a unique attempt ID. Previous attempt artifacts remain available.
+Codex logs contain JSONL, even though log artifact filenames use `.json`.
 `USAGE.tsv` stores file, mode, outcome, stop reason, optional metrics, session ID
 and the log basename. Empty cells mean absent values; backslashes and control
 characters in TSV fields are escaped as `\\`, `\t`, `\r` and `\n`.
@@ -169,14 +205,27 @@ review mode; fix mode permits the Git commands required to inspect, stage and
 commit each finding. Remote operations and history rewriting remain prohibited
 by the shared session instructions.
 
+Codex receives the same prompt through stdin (`codex exec ... -`) to preserve
+spaces, Unicode and long prompts without shell interpolation. Each invocation
+uses `--json`, `--ephemeral` and `--color never`; it never resumes another thread.
+Memory and unbounded connection retries are disabled. Subagents are disabled
+unless `--allow-subagents` is supplied. The last completed agent message becomes
+the report; no provider-specific prompt or trailer requirement is introduced.
+
+Codex protocol and configuration references:
+[non-interactive mode](https://learn.chatgpt.com/docs/non-interactive-mode),
+[CLI commands](https://learn.chatgpt.com/docs/developer-commands?surface=cli),
+[permissions](https://learn.chatgpt.com/docs/permissions).
+
 ## Components and future providers
 
 `ReviewOrchestrator` composes `ReviewProvider`, `BunProcessRunner`,
 `ReviewStateStore`, `ReviewFileList` and `ReviewPromptBuilder` through constructors.
-`GrokReviewProvider` owns its arguments, environment and JSON/trailer parsing.
+`GrokReviewProvider` and `CodexReviewProvider` own their arguments, environment
+and result parsing. Both use the shared trailer metric parser.
 There is no Bash entry point or parser subprocess.
 
-To add Codex CLI later, implement `ReviewProvider` and add it to the registry in
+To add another provider, implement `ReviewProvider` and add it to the registry in
 `review.ts`. Declare supported options and defaults, prepare an executable,
 argument array, environment and optional stdin in `prepareSession(request)`, and
 return the report, classification, stop reason, session ID and optional metrics
