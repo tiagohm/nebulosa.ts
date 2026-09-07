@@ -11,7 +11,7 @@
 		"fmt": "oxfmt",
 		"fmt:check": "oxfmt --check",
 		"index": "bun run scripts/codebase.index.ts",
-		"review": "./scripts/review/review.sh"
+		"review": "bun run scripts/review/review.ts"
 	},
 	"devDependencies": {
 		"oxfmt": "latest",

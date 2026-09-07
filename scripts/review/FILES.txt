@@ -1,6 +1,6 @@
-# Primary source files for per-file Grok review.
+# Primary source files for per-file review.
 # Comment a line with # or delete it to skip. Blank lines are ignored.
-# Regenerate with: ./scripts/review/review.sh --refresh-list
+# Regenerate with: bun run review --refresh-list
 
 # --- src/core ---
 src/core/constants.ts
@@ -15,6 +15,8 @@ src/math/linear-algebra/matrix.ts
 src/math/linear-algebra/rigid3.ts
 src/math/linear-algebra/vec2.ts
 src/math/linear-algebra/vec3.ts
+src/math/numerical/ellipse.fit.ts
+src/math/numerical/ellipse.geometry.ts
 src/math/numerical/geometry.ts
 src/math/numerical/least.squares.ts
 src/math/numerical/math.ts
@@ -123,6 +125,11 @@ src/imaging/analysis/bahtinov/line.ts
 src/imaging/analysis/bahtinov/overlay.ts
 src/imaging/analysis/bahtinov/preprocess.ts
 # src/imaging/analysis/bahtinov/types.ts
+src/imaging/analysis/collimation/collimation.ts
+src/imaging/analysis/collimation/edge.ts
+src/imaging/analysis/collimation/preprocess.ts
+src/imaging/analysis/collimation/sequence.ts
+# src/imaging/analysis/collimation/types.ts
 src/imaging/analysis/flat/artifacts.ts
 src/imaging/analysis/flat/context.ts
 src/imaging/analysis/flat/exposure.ts

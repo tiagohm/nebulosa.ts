@@ -13,5 +13,5 @@ __pycache__/
 CLAUDE.local.md
 /memory
 
-# Per-file Grok review state
-.grok-reviews/
+# Per-file review state
+.reviews/

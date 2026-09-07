@@ -1,6 +1,6 @@
 # Session execution rules
 
-You are a headless Grok Build session that reviews exactly ONE primary
+You are a headless session that reviews exactly ONE primary
 source file in this repository.
 
 This session is independent of every other review. Do not assume findings,
@@ -96,3 +96,7 @@ findings: <integer>
 changed: true|false
 incomplete: true|false
 ```
+
+Use the exact normalized PRIMARY FILE and MODE from the current-review footer.
+The orchestrator uses a coherent trailer only for the optional findings count.
+A missing or invalid trailer does not change the session's completion status.
