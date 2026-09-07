@@ -1,8 +1,8 @@
 import { horizontalToEnuVector } from '../../astronomy/coordinates/frame.local'
-import { medianOf } from '../../core/util'
 import { matFill, matMul, matMulVec, matRodriguesRotation, matTranspose, type Mat3 } from '../../math/linear-algebra/mat3'
 import { rigidIdentity } from '../../math/linear-algebra/rigid3'
 import { type MutVec3, vecCross, vecCrossLength, vecDot, vecLength, vecNormalize, type Vec3 } from '../../math/linear-algebra/vec3'
+import { medianOf } from '../../math/numerical/statistics'
 import type { Angle } from '../../math/units/angle'
 import { mountDirectionFromEncoders, type MountEncoderPosition, type TwoAxisMountGeometry } from './kinematics'
 

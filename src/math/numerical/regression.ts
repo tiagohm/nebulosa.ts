@@ -1,9 +1,10 @@
 import type { Writable } from '../../core/types'
-import { isNumberArray, meanOf, medianOf, minOf } from '../../core/util'
 import { gaussianElimination, Matrix } from '../linear-algebra/matrix'
+import { isNumberArray } from './array'
 import type { Point } from './geometry'
 import type { NumberArray } from './math'
 import { levenbergMarquardt } from './optimization'
+import { meanOf, medianOf, minOf } from './statistics'
 
 // Curve-fitting regressions over paired (x, y) samples: linear (ordinary least squares and robust
 // Theil-Sen), polynomial/quadratic, exponential, power, hyperbolic (V-curve via Levenberg-Marquardt),

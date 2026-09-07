@@ -1,11 +1,12 @@
 import { describe, expect, test } from 'bun:test'
-import { medianOf, NumberComparator } from '../../../src/core/util'
+import { NumberComparator } from '../../../src/core/util'
 import type { Image } from '../../../src/imaging/model/types'
 import { type DetectedStar, detectStars, excludeStarsFitWithinRegion, measureStarPhotometry, mergeVeryCloseStars, StarList } from '../../../src/imaging/stars/detector'
 import { type PlotStarOptions, plotStar } from '../../../src/imaging/stars/generator'
 import { type AstronomicalImageNoiseConfig, type AstronomicalImageStar, DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG, generateNoiseImage, generateStarImage } from '../../../src/imaging/synthetic/generator'
 import { Bitpix } from '../../../src/io/formats/fits/fits'
 import { mulberry32 } from '../../../src/math/numerical/random'
+import { medianOf } from '../../../src/math/numerical/statistics'
 import { downloadPerTag } from '../../download'
 import { readImage } from '../util'
 

@@ -1,8 +1,9 @@
-import { NumberComparator, percentileOf } from '../../core/util'
+import { NumberComparator } from '../../core/util'
 import type { FitsHeader } from '../../io/formats/fits/fits'
 import { heightKeyword, numericKeyword, widthKeyword } from '../../io/formats/fits/util'
 import { Matrix, QrDecomposition } from '../../math/linear-algebra/matrix'
 import type { NumberArray } from '../../math/numerical/math'
+import { percentileOf } from '../../math/numerical/statistics'
 import { DEC_TAN, DEC_TAN_SIP, RA_TAN, RA_TAN_SIP } from './fits.wcs'
 
 // Fits forward SIP (Simple Imaging Polynomial) distortion coefficients from matched measured/reference

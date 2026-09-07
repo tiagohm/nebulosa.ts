@@ -1,6 +1,6 @@
-import { medianBySelectionOf, STANDARD_DEVIATION_SCALE } from '../../core/util'
 import type { Point, Rect } from '../../math/numerical/geometry'
 import { clamp } from '../../math/numerical/math'
+import { medianBySelectionOf, STANDARD_DEVIATION_SCALE } from '../../math/numerical/statistics'
 import type { Image } from '../model/types'
 import { clone } from '../processing/arithmetic'
 import { debayer } from '../processing/debayer'

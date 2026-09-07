@@ -1,7 +1,7 @@
 import { PI, TAU } from '../../../core/constants'
-import { medianAbsoluteDeviationOf, medianBySelectionOf } from '../../../core/util'
 import { type EllipseFit, fitEllipse } from '../../../math/numerical/ellipse.fit'
 import { type EllipseGeometry, maximumNormalizedBoundaryRadiusSquared } from '../../../math/numerical/ellipse.geometry'
+import { medianAbsoluteDeviationOf, medianBySelectionOf } from '../../../math/numerical/statistics'
 import { normalizeAngle } from '../../../math/units/angle'
 import { COLLIMATION_EDGE_REASON, collimationCoverage, type CollimationEdges, collimationRayRadius, extractCollimationEdges, initializeCollimationRadii, sampleCollimationPlane } from './edge'
 import { type PreparedCollimation, prepareCollimation, refineCollimationBackground } from './preprocess'

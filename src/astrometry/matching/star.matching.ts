@@ -1,8 +1,8 @@
-import { medianAbsoluteDeviationOf, medianBySelectionOf, medianOf } from '../../core/util'
 import type { DetectedStar } from '../../imaging/stars/detector'
 import { type Vec3, vecDistance } from '../../math/linear-algebra/vec3'
 import { euclideanSquaredDistance, type Point } from '../../math/numerical/geometry'
 import { clamp } from '../../math/numerical/math'
+import { medianAbsoluteDeviationOf, medianBySelectionOf, medianOf } from '../../math/numerical/statistics'
 import { type Angle, normalizePI } from '../../math/units/angle'
 
 // https://www.hnsky.org/astap_astrometric_solving.htm

@@ -1,12 +1,12 @@
 import { expect, test } from 'bun:test'
 import { PI } from '../../../../src/core/constants'
-import { STANDARD_DEVIATION_SCALE } from '../../../../src/core/util'
 import { bahtinovAxialAngleDistance } from '../../../../src/imaging/analysis/bahtinov/geometry'
 import { detectBahtinovHoughCandidates } from '../../../../src/imaging/analysis/bahtinov/hough'
 import { fitBahtinovLines } from '../../../../src/imaging/analysis/bahtinov/line'
 import { createBahtinovWorkspace, preprocessBahtinov } from '../../../../src/imaging/analysis/bahtinov/preprocess'
 import type { Image } from '../../../../src/imaging/model/types'
 import { plotBahtinovSpikes } from '../../../../src/imaging/stars/bahtinov'
+import { STANDARD_DEVIATION_SCALE } from '../../../../src/math/numerical/statistics'
 
 function image(raw: Float64Array, width: number, height: number): Image {
 	return {

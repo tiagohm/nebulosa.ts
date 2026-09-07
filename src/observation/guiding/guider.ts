@@ -1,9 +1,9 @@
 import type { Writable } from '../../core/types'
-import { medianAbsoluteDeviationOf, medianOf } from '../../core/util'
 import type { Image } from '../../imaging/model/types'
 import type { DetectedStar } from '../../imaging/stars/detector'
 import { Matrix } from '../../math/linear-algebra/matrix'
 import { clamp } from '../../math/numerical/math'
+import { medianAbsoluteDeviationOf, medianOf } from '../../math/numerical/statistics'
 
 // Self-contained autoguiding controller. Given a stream of star-detection frames and a calibration
 // matrix mapping image pixels to mount RA/DEC axes, the Guider averages a lock reference, measures

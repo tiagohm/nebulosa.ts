@@ -1,5 +1,5 @@
-import { medianOf, STANDARD_DEVIATION_SCALE } from '../../core/util'
 import { clamp } from '../../math/numerical/math'
+import { medianOf, STANDARD_DEVIATION_SCALE } from '../../math/numerical/statistics'
 import type { ImageRawType } from '../model/types'
 
 // Shared contracts and allocation-free option/statistics helpers for redundant multiscale image

@@ -1,5 +1,5 @@
-import { medianOf } from '../../../core/util'
 import { weightedLinearRegression, weightedLinearRegressionScore, type LinearRegression } from '../../../math/numerical/regression'
+import { medianOf } from '../../../math/numerical/statistics'
 import { resolveSensorArea, validateSensorSpatialStack } from './grid'
 import { aggregateSensorPairs, measureSensorPair, type SensorPairAggregate, type SensorPairOptions, type SensorPairStatistics } from './pair'
 import type { SensorRegressionFit } from './ptc'

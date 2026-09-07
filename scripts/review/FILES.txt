@@ -15,6 +15,7 @@ src/math/linear-algebra/matrix.ts
 src/math/linear-algebra/rigid3.ts
 src/math/linear-algebra/vec2.ts
 src/math/linear-algebra/vec3.ts
+src/math/numerical/array.ts
 src/math/numerical/ellipse.fit.ts
 src/math/numerical/ellipse.geometry.ts
 src/math/numerical/geometry.ts

@@ -1,9 +1,9 @@
 import { expect, test } from 'bun:test'
-import { medianBySelectionOf, STANDARD_DEVIATION_SCALE } from '../../../src/core/util'
 import type { Image, ImageRawType } from '../../../src/imaging/model/types'
 import { type MultiscaleLinearTransformOptions, multiscaleLinearTransform } from '../../../src/imaging/processing/mlt'
 import { Bitpix } from '../../../src/io/formats/fits/fits'
 import type { NumberArray } from '../../../src/math/numerical/math'
+import { medianBySelectionOf, STANDARD_DEVIATION_SCALE } from '../../../src/math/numerical/statistics'
 import { makeImage } from './util'
 
 // B3-spline weights used only by the independent direct 2D test reference.

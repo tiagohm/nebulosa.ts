@@ -1,7 +1,6 @@
-import { STANDARD_DEVIATION_SCALE } from '../../core/util'
 import type { Rect } from '../../math/numerical/geometry'
 import type { NumberArray } from '../../math/numerical/math'
-import { Histogram } from '../../math/numerical/statistics'
+import { STANDARD_DEVIATION_SCALE, Histogram } from '../../math/numerical/statistics'
 import { truncatePixel } from '../model/image'
 import { channelIndex, grayscaleFromChannel, type Image, type ImageChannelOrGray } from '../model/types'
 

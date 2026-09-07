@@ -1,10 +1,10 @@
 import { PI, TAU } from '../../core/constants'
-import { medianAbsoluteDeviationOf, medianBySelectionOf } from '../../core/util'
 import { LuDecomposition, Matrix } from '../linear-algebra/matrix'
 import type { EllipseGeometry } from './ellipse.geometry'
 import { estimateLeastSquaresConditioning } from './least.squares'
 import type { NumberArray } from './math'
 import { levenbergMarquardt } from './optimization'
+import { medianAbsoluteDeviationOf, medianBySelectionOf } from './statistics'
 
 // Independent ellipse fitting in Cartesian coordinates with common length units. A normalized
 // Halir-Flusser initializer is refined with normal-distance IRLS. Inputs are preserved; returned

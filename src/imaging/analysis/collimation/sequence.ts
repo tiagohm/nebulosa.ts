@@ -1,4 +1,4 @@
-import { geometricMedian, medianBySelectionOf } from '../../../core/util'
+import { geometricMedian, medianBySelectionOf } from '../../../math/numerical/statistics'
 import { normalizeAngle } from '../../../math/units/angle'
 import type { ImageAnalysisPlane } from '../plane'
 import type { CollimationAnalysis, CollimationSequence, CollimationSequenceEntry, CollimationSequenceOptions } from './types'

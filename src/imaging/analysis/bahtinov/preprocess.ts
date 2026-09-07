@@ -1,6 +1,7 @@
 import { PI, PIOVERTWO } from '../../../core/constants'
-import { medianBySelectionOf, quickSelect, STANDARD_DEVIATION_SCALE } from '../../../core/util'
+import { quickSelect } from '../../../math/numerical/array'
 import type { Point, Rect } from '../../../math/numerical/geometry'
+import { medianBySelectionOf, STANDARD_DEVIATION_SCALE } from '../../../math/numerical/statistics'
 import type { Angle } from '../../../math/units/angle'
 import { channelIndex, grayscaleFromChannel, makeImageRawTypedArray, type Image, type ImageMetadata, type ImageRawType } from '../../model/types'
 import { separableSmoothing, separableSmoothingKernel, type SeparableSmoothingKernel } from '../../processing/convolution'

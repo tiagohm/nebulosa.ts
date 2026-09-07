@@ -1,6 +1,6 @@
-import { medianOf, STANDARD_DEVIATION_SCALE, standardDeviationOf } from '../../core/util'
 import { LuDecomposition, Matrix, QrDecomposition } from '../../math/linear-algebra/matrix'
 import { clamp } from '../../math/numerical/math'
+import { medianOf, STANDARD_DEVIATION_SCALE, standardDeviationOf } from '../../math/numerical/statistics'
 
 // Generic scattered-data scalar surface fitting over a pixel plane. Fits a smooth function
 // f(x, y) to weighted point samples using either a 2D tensor Chebyshev polynomial (least squares by

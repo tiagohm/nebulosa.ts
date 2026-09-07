@@ -1,5 +1,5 @@
-import { medianAbsoluteDeviationOf, medianBySelectionOf } from '../../../core/util'
 import type { Rect } from '../../../math/numerical/geometry'
+import { medianAbsoluteDeviationOf, medianBySelectionOf } from '../../../math/numerical/statistics'
 import { resolveImagePlaneGeometry, resolveLocalCfaPattern } from '../plane'
 import { ROBUST_SAMPLE_CAPACITY, RobustReservoir } from '../robust'
 import { hasIncompleteFlatHeaderCfaOffset, resolveFlatAcquisitionMetadata, resolveFlatContextCfaOffset, resolveFlatFrameExposure } from './context'

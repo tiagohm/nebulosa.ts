@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
-import { STANDARD_DEVIATION_SCALE } from '../../../src/core/util'
 import { adf, estimateBackground, histogram, median, medianAbsoluteDeviation, sigmaClip } from '../../../src/imaging/processing/computation'
+import { STANDARD_DEVIATION_SCALE } from '../../../src/math/numerical/statistics'
 import { makeImage } from './util'
 
 // Focused regression coverage for image histogram, display statistics, and sigma clipping.

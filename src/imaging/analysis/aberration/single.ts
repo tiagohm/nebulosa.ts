@@ -1,5 +1,5 @@
-import { medianAbsoluteDeviationOf, medianBySelectionOf } from '../../../core/util'
 import { clamp } from '../../../math/numerical/math'
+import { medianAbsoluteDeviationOf, medianBySelectionOf } from '../../../math/numerical/statistics'
 import type { Image } from '../../model/types'
 import type { DetectStarOptions } from '../../stars/detector'
 import { type MeasureStarProfileOptions, type StarProfile, detectStarProfiles } from '../../stars/profile'

@@ -2,12 +2,12 @@ import type { EquatorialCoordinate } from '../../astronomy/coordinates/coordinat
 import { eraC2s, eraS2c } from '../../astronomy/coordinates/erfa/erfa'
 import type { Time } from '../../astronomy/time/time'
 import { AMIN2RAD, DEG2RAD, PI, PIOVERTWO, TAU } from '../../core/constants'
-import { medianOf, percentileOf, rmsOf, STANDARD_DEVIATION_SCALE } from '../../core/util'
 import type { PierSide } from '../../devices/indi/device'
 import { type Vec3, vecAngle } from '../../math/linear-algebra/vec3'
 import { sphericalProjectTangentPlane, sphericalUnprojectTangentPlane } from '../../math/numerical/geometry'
 import { estimateLeastSquaresConditioning, leastSquaresCoefficients, linearLeastSquares, predictLinearLeastSquares, type RobustRegressionMethod } from '../../math/numerical/least.squares'
 import type { NumberArray } from '../../math/numerical/math'
+import { medianOf, percentileOf, rmsOf, STANDARD_DEVIATION_SCALE } from '../../math/numerical/statistics'
 import { type Angle, normalizeAngle, normalizePI } from '../../math/units/angle'
 // oxfmt-ignore
 import { availableContextRequirement, buildEmpiricalPointingFeatureNames, empiricalFeatureRequirement, extractPointingContext, featuresFromContext, normalizePierSide, type PointingContext, type PointingContextRequirement, type PointingFeatureConfiguration, type PointingFrame, type PointingModelInput, type PointingOffset, predictSemiPhysicalOffset, type ResolvedPointingFeatureConfiguration, resolveFeatureConfiguration, SEMI_PHYSICAL_TERM_NAMES, SEMI_PHYSICAL_TERM_REQUIREMENTS, semiPhysicalBasis, type SemiPhysicalTermName, satisfiesContextRequirement } from './pointing.basis'

@@ -1,6 +1,6 @@
 import { PI, PIOVERTWO } from '../../../core/constants'
-import { medianBySelectionOf, STANDARD_DEVIATION_SCALE } from '../../../core/util'
 import type { Point, Rect } from '../../../math/numerical/geometry'
+import { medianBySelectionOf, STANDARD_DEVIATION_SCALE } from '../../../math/numerical/statistics'
 import { bahtinovAxialAngleDistance, bahtinovGlobalLineDistance, canonicalizeBahtinovLine, clipBahtinovLineToArea } from './geometry'
 import type { BahtinovHoughCandidate } from './hough'
 import type { BahtinovLine, BahtinovRidgePoints, BahtinovWorkspace } from './types'

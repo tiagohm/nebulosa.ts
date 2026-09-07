@@ -1,5 +1,5 @@
-import { medianOf } from '../../core/util'
 import { clamp } from '../../math/numerical/math'
+import { medianOf } from '../../math/numerical/statistics'
 import type { Image, ImageRawType } from '../model/types'
 
 // Background neutralization for RGB images: removes a color cast by matching per-channel medians on a

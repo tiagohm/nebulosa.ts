@@ -1,6 +1,6 @@
 import { eraS2c } from '../../astronomy/coordinates/erfa/erfa'
-import { medianOf } from '../../core/util'
 import type { PierSide } from '../../devices/indi/device'
+import { medianOf } from '../../math/numerical/statistics'
 import type { Angle } from '../../math/units/angle'
 import { normalizePierSide, type PointingOffset } from './pointing.basis'
 

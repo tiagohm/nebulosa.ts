@@ -1,5 +1,5 @@
-import { medianBySelectionOf, percentileOf, STANDARD_DEVIATION_SCALE } from '../../../core/util'
 import type { Point, Rect } from '../../../math/numerical/geometry'
+import { medianBySelectionOf, percentileOf, STANDARD_DEVIATION_SCALE } from '../../../math/numerical/statistics'
 import type { DigitalImage } from '../../model/types'
 import { createScalarSurfaceEvaluator, createScalarSurfacePointEvaluator, createSurfaceColumnTable, fitScalarSurface, type ScalarSurfaceModel, type SurfaceSample } from '../../processing/surface'
 import { resolveImagePlaneGeometry, resolveOptionalImagePlaneGeometry } from '../plane'

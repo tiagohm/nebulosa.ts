@@ -1,6 +1,6 @@
-import { medianOf } from '../../core/util'
 import { gaussianElimination, LuDecomposition, Matrix, QrDecomposition } from '../linear-algebra/matrix'
 import type { NumberArray } from './math'
+import { medianOf } from './statistics'
 
 // Linear least-squares solvers operating on a row-major design matrix (array of feature rows): a
 // weighted/ridge-regularized fit (QR with a normal-equation fallback) and a robust IRLS variant

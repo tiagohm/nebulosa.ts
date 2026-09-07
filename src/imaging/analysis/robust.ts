@@ -1,4 +1,4 @@
-import { medianAbsoluteDeviationOf, medianBySelectionOf } from '../../core/util'
+import { medianAbsoluteDeviationOf, medianBySelectionOf } from '../../math/numerical/statistics'
 
 // Deterministic fixed-memory robust sampling shared by image-analysis modules. Small populations are
 // retained exactly; larger populations use reproducible reservoir replacement capped at 65,536 values.

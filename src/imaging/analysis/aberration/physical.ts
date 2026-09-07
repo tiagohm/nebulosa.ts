@@ -1,4 +1,4 @@
-import { medianBySelectionOf } from '../../../core/util'
+import { medianBySelectionOf } from '../../../math/numerical/statistics'
 import type { FocusPlaneAnalysis, FocusSurfaceCoefficients } from '../../../math/numerical/surface.fit'
 
 // Physical conversions and calibrated focus-field corrections for completed aberration scans.

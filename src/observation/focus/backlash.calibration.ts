@@ -1,7 +1,7 @@
-import { medianAbsoluteDeviationOf, medianBySelectionOf, medianOf, percentileOf } from '../../core/util'
 import { validatePositiveFinite, validatePositiveInteger } from '../../core/validation'
 import { robustLinearLeastSquares, type RobustLinearLeastSquaresResult } from '../../math/numerical/least.squares'
 import { goldenSectionSearch } from '../../math/numerical/optimization'
+import { medianAbsoluteDeviationOf, medianBySelectionOf, medianOf, percentileOf } from '../../math/numerical/statistics'
 import type { BacklashCompensation, BacklashCompensationMode } from './backlash'
 
 // Deterministic focuser-backlash calibration from caller-supplied positions and scalar measurements.

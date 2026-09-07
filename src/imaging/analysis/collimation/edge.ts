@@ -1,7 +1,7 @@
 import { TAU } from '../../../core/constants'
-import { medianBySelectionOf } from '../../../core/util'
 import type { EllipseGeometry } from '../../../math/numerical/ellipse.geometry'
 import type { Point } from '../../../math/numerical/geometry'
+import { medianBySelectionOf } from '../../../math/numerical/statistics'
 import type { PreparedCollimation } from './preprocess'
 import type { CollimationFailureReason } from './types'
 

@@ -1,5 +1,5 @@
-import { medianAbsoluteDeviationOf, medianBySelectionOf, STANDARD_DEVIATION_SCALE, standardDeviationOf } from '../../core/util'
 import { clamp, type NumberArray } from '../../math/numerical/math'
+import { medianAbsoluteDeviationOf, medianBySelectionOf, STANDARD_DEVIATION_SCALE, standardDeviationOf } from '../../math/numerical/statistics'
 import type { Image } from '../model/types'
 
 // Cosmetic correction: detects and repairs isolated sensor defects (hot, warm, and dead/cold pixels,

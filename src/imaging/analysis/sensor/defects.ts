@@ -1,5 +1,5 @@
-import { medianOf } from '../../../core/util'
 import type { Rect } from '../../../math/numerical/geometry'
+import { medianOf } from '../../../math/numerical/statistics'
 import { RobustReservoir } from '../robust'
 import { resolveSensorArea, resolveSensorPlaneGeometry, validateSensorSpatialStack } from './grid'
 import type { SensorFrameSet, SensorPlane, SensorSpatialBuffers } from './types'

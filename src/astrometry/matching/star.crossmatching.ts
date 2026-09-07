@@ -1,10 +1,10 @@
 import { AzimuthalProjection, Gnomonic, type Projection } from '../../astronomy/projections/projection'
 import type { StarCatalog, StarCatalogEntry } from '../../catalogs/stars/catalog'
 import { ASEC2RAD, PIOVERTWO } from '../../core/constants'
-import { medianOf } from '../../core/util'
 import type { DetectedStar } from '../../imaging/stars/detector'
 import { type Point, type Size, sphericalSeparation } from '../../math/numerical/geometry'
 import { clamp } from '../../math/numerical/math'
+import { medianOf } from '../../math/numerical/statistics'
 import { type Angle, normalizeAngle } from '../../math/units/angle'
 import { type AffineTransform, applyTransformToPoint, matchStars, type SimilarityTransform, type StarMatchingConfig, type StarMatchingResult } from './star.matching'
 

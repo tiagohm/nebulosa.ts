@@ -1,5 +1,5 @@
-import { medianOf, STANDARD_DEVIATION_SCALE, standardDeviationOf } from '../../core/util'
 import { clamp, type NumberArray } from '../../math/numerical/math'
+import { medianOf, STANDARD_DEVIATION_SCALE, standardDeviationOf } from '../../math/numerical/statistics'
 import { DEFAULT_GRAYSCALE, type Image, type ImageRawType } from '../model/types'
 import type { DetectedStar } from '../stars/detector'
 // oxfmt-ignore

@@ -1,5 +1,5 @@
 import { PI } from '../../../core/constants'
-import { STANDARD_DEVIATION_SCALE } from '../../../core/util'
+import { STANDARD_DEVIATION_SCALE } from '../../../math/numerical/statistics'
 import type { ImageMetadata } from '../../model/types'
 import { gaussianBlurKernel, separableSmoothing, type SeparableSmoothingKernel } from '../../processing/convolution'
 import { createScalarSurfaceEvaluator, createSurfaceColumnTable, type ScalarSurfaceModel } from '../../processing/surface'

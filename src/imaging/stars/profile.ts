@@ -1,6 +1,6 @@
-import { medianOf } from '../../core/util'
 import type { Point } from '../../math/numerical/geometry'
 import { clamp } from '../../math/numerical/math'
+import { medianOf } from '../../math/numerical/statistics'
 import type { Angle } from '../../math/units/angle'
 import type { Image, ImageChannelOrGray } from '../model/types'
 import { grayscale } from '../processing/geometry'

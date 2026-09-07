@@ -1,5 +1,5 @@
-import { medianOf } from '../../core/util'
 import { clamp } from '../../math/numerical/math'
+import { medianOf } from '../../math/numerical/statistics'
 import type { Image } from '../model/types'
 import type { DetectedStar } from '../stars/detector'
 

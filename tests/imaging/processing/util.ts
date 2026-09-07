@@ -1,9 +1,9 @@
 import { expect } from 'bun:test'
-import { medianOf } from '../../../src/core/util'
 import type { Image } from '../../../src/imaging/model/types'
 import { Bitpix, type FitsHeader } from '../../../src/io/formats/fits/fits'
 import { cfaPatternKeyword } from '../../../src/io/formats/fits/util'
 import type { NumberArray } from '../../../src/math/numerical/math'
+import { medianOf } from '../../../src/math/numerical/statistics'
 
 // Creates a normalized Float32 image with the provided interleaved pixel data.
 export function makeImage(width: number, height: number, channels: number, values: Readonly<NumberArray>, header?: FitsHeader): Image {
