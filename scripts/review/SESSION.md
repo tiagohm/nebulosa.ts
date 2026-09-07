@@ -36,6 +36,24 @@ than one class) and apply matching depth from the domain instructions:
 - external API, socket, protocol, or I/O integration
 - native / shared-library binding
 
+### Graph verification
+
+Run graph queries sequentially. Await the final result of `list_projects` or
+`index_status` before starting discovery, and await each discovery or coverage
+query before starting another graph query. If a tool returns a pending operation,
+use the client's wait/resume mechanism until it completes or fails. A pending
+operation is not evidence that the graph is unavailable or has missing coverage.
+Overlapping requests can cause a client permission dialog to replace an earlier
+one, leaving generation and coverage checks unfinished.
+
+Record the project and generation from successful tool results. Before relying
+on graph evidence, call `check_index_coverage` with the relevant paths and inspect
+any reported gaps directly. If approval is denied, a call times out, or the MCP
+connection fails, preserve the exact error and follow AGENTS.md's direct-source
+fallback. Do not repeatedly submit queries while approval is pending, bypass
+client permissions, or claim that unreturned checks passed. Report which checks
+could not finish and which source files were inspected instead.
+
 ## Hard constraints
 
 - Do not amend, squash, rebase, rewrite existing commits, or push.
