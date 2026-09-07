@@ -1,116 +1,74 @@
 import { expect, test } from 'bun:test'
 import { vector } from '../../../../../src/adapters/ephemeris/horizons'
 import { earth, jupiter, mars, mercury, neptune, saturn, sun, uranus, venus } from '../../../../../src/astronomy/ephemeris/models/analytical/vsop87e'
-import { Timescale, timeYMDHMS } from '../../../../../src/astronomy/time/time'
+import { time, Timescale, timeShift } from '../../../../../src/astronomy/time/time'
 
-const TIME = timeYMDHMS(2025, 9, 28, 12, 0, 0, Timescale.TT)
+// Bretagnon/Francou VSOP87E, vsop87.chk: barycentric dynamical ecliptic/equinox J2000,
+// positions in AU and velocities in AU/day at dynamical JD 2415020.0 (nonzero series time).
+// https://github.com/ctdk/vsop87/blob/master/vsop87.chk
+// Use the published numerical time argument directly in TT, without a TT/TDB offset.
+const TIME = time(2415020, 0, Timescale.TT)
 
-test('sun', () => {
-	const [p, v] = sun(TIME)
+const ECLIPTIC_CASES = [
+	['sun', sun, [0.0031876597, 0.0063575996, -0.0001036885], [-0.0000073486, 0.0000037875, 0.0000001748]],
+	['mercury', mercury, [-0.3865370327, -0.1438666201, 0.0235162485], [0.0042941824, -0.0250124495, -0.0024360336]],
+	['venus', venus, [0.7003304925, -0.1970055158, -0.0431238022], [0.0055497756, 0.0193312684, -0.0000622747]],
+	['earth', earth, [-0.1851203046, 0.9714264843, 0.0001113443], [-0.0171823836, -0.0033539678, -0.0000016179]],
+	['mars', mars, [0.4316209101, -1.3488778274, -0.0390687101], [0.0138728496, 0.0054168276, -0.0002307836]],
+	['jupiter', jupiter, [-3.015934774, -4.4518987729, 0.0857605014], [0.0061580622, -0.003875629, -0.0001223731]],
+	['saturn', saturn, [-0.3664097224, -10.0518822109, 0.1915817572], [0.005266511, -0.0002253719, -0.000204856]],
+	['uranus', uranus, [-6.4778956413, -17.8463318322, 0.0176898373], [0.0036668409, -0.0015250649, -0.0000533417]],
+	['neptune', neptune, [1.5196434117, 29.8318114919, -0.6492437025], [-0.0031531984, 0.0001800719, 0.0000689285]],
+] as const
 
-	expect(p[0]).toBeCloseTo(-3.756566982732465e-3, 4)
-	expect(p[1]).toBeCloseTo(-5.108692898297777e-3, 4)
-	expect(p[2]).toBeCloseTo(-2.057236065692544e-3, 4)
-	expect(v[0]).toBeCloseTo(7.385958465734038e-6, 8)
-	expect(v[1]).toBeCloseTo(-6.800888691183158e-7, 8)
-	expect(v[2]).toBeCloseTo(-4.460508606528898e-7, 8)
+// NASA JPL Horizons.
+const ICRF_CASES = [
+	['sun', sun, [0.003186851564713337, 0.005880337317042721, 0.00243684546543871], [-0.000007349501671140852, 0.000003405360348480811, 0.000001666935679987435]],
+	['mercury', mercury, [-0.3865379111973964, -0.1413430217534487, -0.03564799956005415], [0.004294172731506083, -0.02197947854131485, -0.012184393904347]],
+	['venus', venus, [0.7003295847855556, -0.1635896475189734, -0.1179265506833069], [0.005549784494988452, 0.01776086165221989, 0.007632397712700966]],
+	['mars', mars, [0.4316195602154773, -1.222024711681322, -0.5723943682656563], [0.0138728508355957, 0.00506163719714786, 0.001942948790628144]],
+	['jupiter', jupiter, [-3.015935895278338, -4.118643863954253, -1.692174776268683], [0.006158396172112774, -0.003506194780650265, -0.001653451062003078]],
+	['saturn', saturn, [-0.3664165490743639, -9.298620495398872, -3.822631378717441], [0.005265758461380229, -0.0001253291301835685, -0.000277535501519078]],
+	['uranus', uranus, [-6.477935048546072, -16.38069886331891, -7.082623693609421], [0.003666762465025589, -0.001377986875767123, -0.000655612566582102]],
+	['neptune', neptune, [1.519630472023036, 27.62844554754698, 11.27075166603728], [-0.003153387850857982, 0.0001375504655162702, 0.0001344556706646119]],
+] as const
+
+test.each(ECLIPTIC_CASES)('%s ecliptic J2000 reference', (_, body, expectedPosition, expectedVelocity) => {
+	const [p, v] = body(TIME, 'eclipticJ2000')
+
+	for (let i = 0; i < 3; i++) {
+		// Reference values are printed to ten decimal places.
+		expect(p[i]).toBeCloseTo(expectedPosition[i], 9)
+		expect(v[i]).toBeCloseTo(expectedVelocity[i], 9)
+	}
 })
 
-test('mercury', () => {
-	const [p, v] = mercury(TIME)
+test.each(ICRF_CASES)('%s ICRF reference', (_, body, expectedPosition, expectedVelocity) => {
+	const [p, v] = body(TIME)
 
-	expect(p[0]).toBeCloseTo(-3.278305714721105e-1, 4)
-	expect(p[1]).toBeCloseTo(-2.892357712631268e-1, 4)
-	expect(p[2]).toBeCloseTo(-1.202512659899455e-1, 4)
-	expect(v[0]).toBeCloseTo(1.364674900403527e-2, 8)
-	expect(v[1]).toBeCloseTo(-1.643106352874054e-2, 8)
-	expect(v[2]).toBeCloseTo(-1.019119993575442e-2, 8)
-})
-
-test('venus', () => {
-	const [p, v] = venus(TIME)
-
-	expect(p[0]).toBeCloseTo(-4.162121797768538e-1, 4)
-	expect(p[1]).toBeCloseTo(5.211432915972526e-1, 4)
-	expect(p[2]).toBeCloseTo(2.608356782172044e-1, 4)
-	expect(v[0]).toBeCloseTo(-1.66157925569794e-2, 8)
-	expect(v[1]).toBeCloseTo(-1.108384626869926e-2, 8)
-	expect(v[2]).toBeCloseTo(-3.935869134901029e-3, 8)
-})
-
-test('earth', () => {
-	const [p, v] = earth(TIME)
-
-	expect(p[0]).toBeCloseTo(9.940002383113462e-1, 4)
-	expect(p[1]).toBeCloseTo(7.929677384409828e-2, 4)
-	expect(p[2]).toBeCloseTo(3.452846899475152e-2, 4)
-	expect(v[0]).toBeCloseTo(-1.857505097678384e-3, 8)
-	expect(v[1]).toBeCloseTo(1.565957306376799e-2, 8)
-	expect(v[2]).toBeCloseTo(6.787978596823867e-3, 8)
-})
-
-test('mars', () => {
-	const [p, v] = mars(TIME)
-
-	expect(p[0]).toBeCloseTo(-9.585963488687476e-1, 4)
-	expect(p[1]).toBeCloseTo(-1.119795809347391, 4)
-	expect(p[2]).toBeCloseTo(-4.875831546371381e-1, 4)
-	expect(v[0]).toBeCloseTo(1.154019262489593e-2, 8)
-	expect(v[1]).toBeCloseTo(-6.655626402941306e-3, 8)
-	expect(v[2]).toBeCloseTo(-3.36398312521594e-3, 8)
-})
-
-test('jupiter', () => {
-	const [p, v] = jupiter(TIME)
-
-	expect(p[0]).toBeCloseTo(-1.000706953875676, 4)
-	expect(p[1]).toBeCloseTo(4.655751711849623, 4)
-	expect(p[2]).toBeCloseTo(2.019981914244129, 4)
-	expect(v[0]).toBeCloseTo(-7.492564873687791e-3, 6)
-	expect(v[1]).toBeCloseTo(-1.078368423989461e-3, 5)
-	expect(v[2]).toBeCloseTo(-2.797998966238406e-4, 6)
-})
-
-test('saturn', () => {
-	const [p, v] = saturn(TIME)
-
-	expect(p[0]).toBeCloseTo(9.532809448678631, 4)
-	expect(p[1]).toBeCloseTo(-1.021190567170288e-1, 4)
-	expect(p[2]).toBeCloseTo(-4.527748909894636e-1, 4)
-	expect(v[0]).toBeCloseTo(-1.482244057336e-4, 6)
-	expect(v[1]).toBeCloseTo(5.140790102213202e-3, 5)
-	expect(v[2]).toBeCloseTo(2.130149706896415e-3, 6)
-})
-
-test('uranus', () => {
-	const [p, v] = uranus(TIME)
-
-	expect(p[0]).toBeCloseTo(1.019857641706737e1, 3)
-	expect(p[1]).toBeCloseTo(1.527691313686389e1, 3)
-	expect(p[2]).toBeCloseTo(6.546623854315722, 3)
-	expect(v[0]).toBeCloseTo(-3.381263670554054e-3, 7)
-	expect(v[1]).toBeCloseTo(1.698886697706912e-3, 7)
-	expect(v[2]).toBeCloseTo(7.919155475642336e-4, 7)
-})
-
-test('neptune', () => {
-	const [p, v] = neptune(TIME)
-
-	expect(p[0]).toBeCloseTo(2.98746238071638e1, 3)
-	expect(p[1]).toBeCloseTo(4.729066404382924e-1, 3)
-	expect(p[2]).toBeCloseTo(-5.502100412439903e-1, 3)
-	expect(v[0]).toBeCloseTo(-4.320205954895582e-5, 6)
-	expect(v[1]).toBeCloseTo(2.922397372840454e-3, 6)
-	expect(v[2]).toBeCloseTo(1.196806657634609e-3, 5)
+	for (let i = 0; i < 3; i++) {
+		// Reference values are printed to ten decimal places.
+		expect(p[i]).toBeCloseTo(expectedPosition[i], 4)
+		expect(v[i]).toBeCloseTo(expectedVelocity[i], 5)
+	}
 })
 
 test.skip('horizons', async () => {
-	const v = await vector('899', '500@0', false, 1759060800000, 1759060860000, { stepSize: 1, referencePlane: 'FRAME' })
+	const planets = {
+		sun: '10',
+		mercury: '199',
+		venus: '299',
+		mars: '499',
+		jupiter: '599',
+		saturn: '699',
+		uranus: '799',
+		neptune: '899',
+	} as const
 
-	for (let i = 0; i < 3; i++) {
-		console.info(`expect(p[${i}]).toBeCloseTo(${v[0][2 + i]}, 4)`)
-	}
-	for (let i = 0; i < 3; i++) {
-		console.info(`expect(v[${i}]).toBeCloseTo(${v[0][5 + i]}, 8)`)
+	for (const [name, code] of Object.entries(planets)) {
+		const v = await vector(code, '500@0', false, TIME, timeShift(TIME, 1 / 24), { stepSize: 1, stepSizeUnit: 'h', referencePlane: 'FRAME' })
+		const pv = v[0].slice(2, 8).map(Number)
+		const line = `['${name}', ${name}, [${pv.slice(0, 3)}], [${pv.slice(3)}]],`
+		console.info(line)
 	}
 })

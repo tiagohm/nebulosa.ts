@@ -1,12 +1,14 @@
-import { ASEC2RAD, AU_KM, DAYSPERJY, DEG2RAD, EARTH_RADIUS_KM, J2000, MOON_SYNODIC_DAYS, PI } from '../../core/constants'
-import { type Angle, arcsec, deg } from '../../math/units/angle'
+import { ASEC2RAD, AU_KM, DAYSPERJY, DEG2RAD, EARTH_RADIUS_KM, J2000, MOON_SYNODIC_DAYS } from '../../core/constants'
+import { type Angle, arcsec, deg, normalizeAngle, toDeg } from '../../math/units/angle'
 import { type Distance, kilometer } from '../../math/units/distance'
 import { type Time, Timescale, time, timeNormalize, timeShift, toJulianDay, tt } from '../time/time'
 
 // Lunar almanac helpers from Meeus' "Astronomical Algorithms": Moon parallax and semi-diameter,
 // lunation numbering across calendar systems, Saros number, nearest lunar phase, nearest lunar
 // eclipse with full contact circumstances, and nearest perigee/apogee with parallax-derived
-// distance. Distances are AU (or km internally), angles radians, and all derived times are TT.
+// distance, node passages, declination extrema, and standstills. Includes mean-node longitude and
+// geocentric/topocentric angular radii. Distances are AU (or km internally), angles radians, and all
+// derived times are fresh TT values. Time conversions may populate the input time cache.
 
 // Classification of a lunar eclipse by how deeply the Moon enters Earth's shadow.
 export type LunarEclipseType = 'TOTAL' | 'PARTIAL' | 'PENUMBRAL'
@@ -20,7 +22,11 @@ export type LunarPhase = 'NEW' | 'FIRST_QUARTER' | 'FULL' | 'LAST_QUARTER'
 // The two lunar apsides (closest/farthest points of the Moon's orbit).
 export type LunarApsis = 'PERIGEE' | 'APOGEE'
 
+// Hemisphere of the Moon's monthly geocentric declination extremum.
 export type LunarDeclination = 'NORTH' | 'SOUTH'
+
+// Direction of a lunar crossing through the mean ecliptic of date.
+export type LunarNode = 'ASCENDING' | 'DESCENDING'
 
 // Classification of a lunar standstill by the amplitude of the Moon's monthly declination extremes over the
 // 18.6-year nodal cycle: a major standstill is the phase of largest monthly maxima (~28.6 deg), a minor
@@ -59,6 +65,10 @@ export interface LunarEclipse {
 	// Radius of the Earth umbral cone in the eclipse plane,
 	// in units of equatorial radius of the Earth.
 	u: number
+	p: number
+	sdPartial: number // Fraction of day
+	sdTotal: number // Fraction of day
+	sdPenumbra: number // Fraction of day
 }
 
 // Sentinel TT instant used to initialize the LunarEclipse contact times.
@@ -70,12 +80,14 @@ const LUNAR_ECLIPSE_PENUMBRA_LIMIT = 1.5573
 // Half-width of the shadow magnitude scale (Earth radii); divides the gamma margin into magnitude.
 const LUNAR_ECLIPSE_MAGNITUDE_DENOMINATOR = 0.545
 
-// Computes the parallax of the Moon at a given distance
+// Returns lunar equatorial horizontal parallax in radians from geocentric distance in AU.
+// Uses the repository Earth equatorial radius (6378.135 km); distance must exceed that radius.
 export function moonParallax(distance: Distance) {
 	return Math.asin(EARTH_RADIUS_KM / AU_KM / distance)
 }
 
-// Computes the semi-diameter of the Moon at a given distance
+// Returns geocentric lunar angular radius in radians from distance in AU (Meeus chapter 55).
+// Uses the small-angle coefficient 358473400 arcseconds km, appropriate at lunar distances.
 export function moonSemidiameter(distance: Distance) {
 	return ((358473400 / AU_KM) * ASEC2RAD) / distance
 }
@@ -131,8 +143,9 @@ export function nearestLunarPhase(time: Time, phase: LunarPhase, next: boolean):
 		const T3 = T2 * T
 		const T4 = T3 * T
 
+		// Meeus 49.1: the secular correction starts at T squared.
 		const timeOfEclipseDay = 2451550 + 29 * k
-		const timeOfEclipseFraction = 0.530588861 * k + 0.09766 + 0.00015437 * T - 0.00000015 * T2 + 0.00000000073 * T3
+		const timeOfEclipseFraction = 0.530588861 * k + 0.09766 + 0.00015437 * T2 - 0.00000015 * T3 + 0.00000000073 * T4
 
 		// Sun's mean anomaly
 		const SM = deg(2.5534 + 29.1053567 * k - 0.0000014 * T2 - 0.00000011 * T3)
@@ -148,11 +161,11 @@ export function nearestLunarPhase(time: Time, phase: LunarPhase, next: boolean):
 
 		const A1 = 299.77 * DEG2RAD + 0.107408 * DEG2RAD * k - 0.009173 * DEG2RAD * T2
 		const A2 = 251.88 * DEG2RAD + 0.016321 * DEG2RAD * k
-		const A3 = 251.83 * DEG2RAD + 26.651866 * DEG2RAD * k
+		const A3 = 251.83 * DEG2RAD + 26.651886 * DEG2RAD * k
 		const A4 = 349.42 * DEG2RAD + 36.412478 * DEG2RAD * k
 		const A5 = 84.66 * DEG2RAD + 18.206239 * DEG2RAD * k
 		const A6 = 141.74 * DEG2RAD + 53.303771 * DEG2RAD * k
-		const A7 = 207.14 * DEG2RAD + 2.453732 * DEG2RAD * k
+		const A7 = 207.17 * DEG2RAD + 2.453732 * DEG2RAD * k
 		const A8 = 154.84 * DEG2RAD + 7.30686 * DEG2RAD * k
 		const A9 = 34.52 * DEG2RAD + 27.261239 * DEG2RAD * k
 		const A10 = 207.19 * DEG2RAD + 0.121824 * DEG2RAD * k
@@ -343,6 +356,10 @@ export function nearestLunarEclipse(time: Time, next: boolean): Readonly<LunarEc
 		gamma: 0,
 		rho: 0,
 		u: 0,
+		p: 0,
+		sdTotal: 0,
+		sdPartial: 0,
+		sdPenumbra: 0,
 	}
 
 	while (!found) {
@@ -407,8 +424,9 @@ export function nearestLunarEclipse(time: Time, next: boolean): Readonly<LunarEc
 			const absGamma = Math.abs(gamma)
 			let mag = (LUNAR_ECLIPSE_UMBRA_LIMIT - u - absGamma) / LUNAR_ECLIPSE_MAGNITUDE_DENOMINATOR
 
+			// Same mean-phase epoch polynomial as Meeus 49.1.
 			const timeOfGreatestEclipseDay = 2451550 + 29 * k
-			const timeOfGreatestEclipseFraction = 0.530588861 * k + 0.09766 + 0.00015437 * T - 0.00000015 * T2 + 0.00000000073 * T3
+			const timeOfGreatestEclipseFraction = 0.530588861 * k + 0.09766 + 0.00015437 * T2 - 0.00000015 * T3 + 0.00000000073 * T4
 			const timeOfGreatestEclipseCorrection =
 				-0.4065 * sinMM +
 				0.1727 * E * sinSM +
@@ -468,6 +486,8 @@ export function nearestLunarEclipse(time: Time, next: boolean): Readonly<LunarEc
 				const h = LUNAR_ECLIPSE_PENUMBRA_LIMIT + u
 				const g2 = gamma * gamma
 
+				eclipse.p = p
+
 				const sdPartial = n * Math.sqrt(p * p - g2)
 				const sdTotal = n * Math.sqrt(t * t - g2)
 				const sdPenumbra = n * Math.sqrt(h * h - g2)
@@ -479,6 +499,9 @@ export function nearestLunarEclipse(time: Time, next: boolean): Readonly<LunarEc
 				if (!Number.isNaN(sdPartial)) eclipse.lastContactUmbraTime = timeNormalize(eclipse.maximalTime.day + sdPartial, eclipse.maximalTime.fraction, 0, Timescale.TT)
 				eclipse.lastContactPenumbraTime = timeNormalize(eclipse.maximalTime.day + sdPenumbra, eclipse.maximalTime.fraction, 0, Timescale.TT)
 				eclipse.lunation = Math.round(k - 0.5)
+				eclipse.sdPartial = sdPartial
+				eclipse.sdTotal = sdTotal
+				eclipse.sdPenumbra = sdPenumbra
 
 				break
 			}
@@ -495,209 +518,199 @@ export function nearestLunarEclipse(time: Time, next: boolean): Readonly<LunarEc
 
 // Computes the nearest (previous or next) lunar perigee or apogee for a given time.
 // Returns the instant (TT), the geocentric Earth-Moon distance (AU), and the Moon's
-// apparent diameter (radians) at that apsis.
+// apparent diameter (radians) at that apsis. next selects strictly after time, false at/before it.
 export function nearestLunarApsis(time: Time, apsis: LunarApsis, next: boolean): readonly [Time, Distance, Angle] {
 	time = tt(time)
-	const jd = toJulianDay(time)
-	const year = timeToMeeusApproxYear(time)
-	let k = Math.floor((year - 1999.97) * 13.2555)
-	if (apsis === 'APOGEE') k += 0.5
+	const k = Math.floor((timeToMeeusApproxYear(time) - 1999.97) * 13.2555) + (apsis === 'APOGEE' ? 0.5 : 0)
+	return nearestLunarEvent(time, k, next, (k) => lunarApsis(k, apsis))
+}
 
-	let jdDay = 0
-	let jdFraction = 0
+// Evaluates Meeus chapter 50 at integer perigee or half-integer apogee index k.
+// Returns a fresh TT instant, geocentric distance (AU), and angular diameter (radians).
+function lunarApsis(k: number, apsis: LunarApsis): readonly [Time, Distance, Angle] {
 	let parallax = 0
+	const T = k / 1325.55
+	const T2 = T * T
+	const T3 = T2 * T
+	const T4 = T3 * T
 
-	while (true) {
-		const T = k / 1325.55
-		const T2 = T * T
-		const T3 = T2 * T
-		const T4 = T3 * T
+	const jdDay = 2451534 + 27 * k
+	let jdFraction = 0.6698 + 0.55454989 * k - 0.0006691 * T2 - 0.000001098 * T3 + 0.0000000052 * T4
+	const D = deg(171.9179 + 335.9106046 * k - 0.0100383 * T2 - 0.00001156 * T3 + 0.000000055 * T4)
+	const M = deg(347.3477 + 27.1577721 * k - 0.000813 * T2 - 0.000001 * T3)
+	const F = deg(316.6109 + 364.5287911 * k - 0.0125053 * T2 - 0.0000148 * T3)
 
-		jdDay = 2451534 + 27 * k
-		jdFraction = 0.6698 + 0.55454989 * k - 0.0006691 * T2 - 0.000001098 * T3 + 0.0000000052 * T4
-		const D = deg(171.9179 + 335.9106046 * k - 0.0100383 * T2 - 0.00001156 * T3 + 0.000000055 * T4)
-		const M = deg(347.3477 + 27.1577721 * k - 0.000813 * T2 - 0.000001 * T3)
-		const F = deg(316.6109 + 364.5287911 * k - 0.0125053 * T2 - 0.0000148 * T3)
+	if (apsis === 'PERIGEE') {
+		jdFraction +=
+			Math.sin(2 * D) * -1.6769 +
+			Math.sin(4 * D) * 0.4589 +
+			Math.sin(6 * D) * -0.1856 +
+			Math.sin(8 * D) * 0.0883 +
+			Math.sin(2 * D - M) * (-0.0773 + 0.00019 * T) +
+			Math.sin(M) * (0.0502 - 0.00013 * T) +
+			Math.sin(10 * D) * -0.046 +
+			Math.sin(4 * D - M) * (0.0422 - 0.00011 * T) +
+			Math.sin(6 * D - M) * -0.0256 +
+			Math.sin(12 * D) * 0.0253 +
+			Math.sin(D) * 0.0237 +
+			Math.sin(8 * D - M) * 0.0162 +
+			Math.sin(14 * D) * -0.0145 +
+			Math.sin(2 * F) * 0.0129 +
+			Math.sin(3 * D) * -0.0112 +
+			Math.sin(10 * D - M) * -0.0104 +
+			Math.sin(16 * D) * 0.0086 +
+			Math.sin(12 * D - M) * 0.0069 +
+			Math.sin(5 * D) * 0.0066 +
+			Math.sin(2 * D + 2 * F) * -0.0053 +
+			Math.sin(18 * D) * -0.0052 +
+			Math.sin(14 * D - M) * -0.0046 +
+			Math.sin(7 * D) * -0.0041 +
+			Math.sin(2 * D + M) * 0.004 +
+			Math.sin(20 * D) * 0.0032 +
+			Math.sin(D + M) * -0.0032 +
+			Math.sin(16 * D - M) * 0.0031 +
+			Math.sin(4 * D + M) * -0.0029 +
+			Math.sin(9 * D) * 0.0027 +
+			Math.sin(4 * D + 2 * F) * 0.0027 +
+			Math.sin(2 * D - 2 * M) * -0.0027 +
+			Math.sin(4 * D - 2 * M) * 0.0024 +
+			Math.sin(6 * D - 2 * M) * -0.0021 +
+			Math.sin(22 * D) * -0.0021 +
+			Math.sin(18 * D - M) * -0.0021 +
+			Math.sin(6 * D + M) * 0.0019 +
+			Math.sin(11 * D) * -0.0018 +
+			Math.sin(8 * D + M) * -0.0014 +
+			Math.sin(4 * D - 2 * F) * -0.0014 +
+			Math.sin(6 * D + 2 * F) * -0.0014 +
+			Math.sin(3 * D + M) * 0.0014 +
+			Math.sin(5 * D + M) * -0.0014 +
+			Math.sin(13 * D) * 0.0013 +
+			Math.sin(20 * D - M) * 0.0013 +
+			Math.sin(3 * D + 2 * M) * 0.0011 +
+			Math.sin(4 * D + 2 * F - 2 * M) * -0.0011 +
+			Math.sin(D + 2 * M) * -0.001 +
+			Math.sin(22 * D - M) * -0.0009 +
+			Math.sin(4 * F) * -0.0008 +
+			Math.sin(6 * D - 2 * F) * 0.0008 +
+			Math.sin(2 * D - 2 * F + M) * 0.0008 +
+			Math.sin(2 * M) * 0.0007 +
+			Math.sin(2 * F - M) * 0.0007 +
+			Math.sin(2 * D + 4 * F) * 0.0007 +
+			Math.sin(2 * F - 2 * M) * -0.0006 +
+			Math.sin(2 * D - 2 * F + 2 * M) * -0.0006 +
+			Math.sin(24 * D) * 0.0006 +
+			Math.sin(4 * D - 4 * F) * 0.0005 +
+			Math.sin(2 * D + 2 * M) * 0.0005 +
+			Math.sin(D - M) * -0.0004
+	} else {
+		jdFraction +=
+			Math.sin(2 * D) * 0.4392 +
+			Math.sin(4 * D) * 0.0684 +
+			Math.sin(M) * (0.0456 - 0.00011 * T) +
+			Math.sin(2 * D - M) * (0.0426 - 0.00011 * T) +
+			Math.sin(2 * F) * 0.0212 +
+			Math.sin(D) * -0.0189 +
+			Math.sin(6 * D) * 0.0144 +
+			Math.sin(4 * D - M) * 0.0113 +
+			Math.sin(2 * D + 2 * F) * 0.0047 +
+			Math.sin(D + M) * 0.0036 +
+			Math.sin(8 * D) * 0.0035 +
+			Math.sin(6 * D - M) * 0.0034 +
+			Math.sin(2 * D - 2 * F) * -0.0034 +
+			Math.sin(2 * D - 2 * M) * 0.0022 +
+			Math.sin(3 * D) * -0.0017 +
+			Math.sin(4 * D + 2 * F) * 0.0013 +
+			Math.sin(8 * D - M) * 0.0011 +
+			Math.sin(4 * D - 2 * M) * 0.001 +
+			Math.sin(10 * D) * 0.0009 +
+			Math.sin(3 * D + M) * 0.0007 +
+			Math.sin(2 * M) * 0.0006 +
+			Math.sin(2 * D + M) * 0.0005 +
+			Math.sin(2 * D + 2 * M) * 0.0005 +
+			Math.sin(6 * D + 2 * F) * 0.0004 +
+			Math.sin(6 * D - 2 * M) * 0.0004 +
+			Math.sin(10 * D - M) * 0.0004 +
+			Math.sin(5 * D) * -0.0004 +
+			Math.sin(4 * D - 2 * F) * -0.0004 +
+			Math.sin(2 * F + M) * 0.0003 +
+			Math.sin(12 * D) * 0.0003 +
+			Math.sin(2 * D + 2 * F - M) * 0.0003 +
+			Math.sin(D - M) * -0.0003
+	}
 
-		if (apsis === 'PERIGEE') {
-			jdFraction +=
-				Math.sin(2 * D) * -1.6769 +
-				Math.sin(4 * D) * 0.4589 +
-				Math.sin(6 * D) * -0.1856 +
-				Math.sin(8 * D) * 0.0883 +
-				Math.sin(2 * D - M) * (-0.0773 + 0.00019 * T) +
-				Math.sin(M) * (0.0502 - 0.00013 * T) +
-				Math.sin(10 * D) * -0.046 +
-				Math.sin(4 * D - M) * (0.0422 - 0.00011 * T) +
-				Math.sin(6 * D - M) * -0.0256 +
-				Math.sin(12 * D) * 0.0253 +
-				Math.sin(D) * 0.0237 +
-				Math.sin(8 * D - M) * 0.0162 +
-				Math.sin(14 * D) * -0.0145 +
-				Math.sin(2 * F) * 0.0129 +
-				Math.sin(3 * D) * -0.0112 +
-				Math.sin(10 * D - M) * -0.0104 +
-				Math.sin(16 * D) * 0.0086 +
-				Math.sin(12 * D - M) * 0.0069 +
-				Math.sin(5 * D) * 0.0066 +
-				Math.sin(2 * D + 2 * F) * -0.0053 +
-				Math.sin(18 * D) * -0.0052 +
-				Math.sin(14 * D - M) * -0.0046 +
-				Math.sin(7 * D) * -0.0041 +
-				Math.sin(2 * D + M) * 0.004 +
-				Math.sin(20 * D) * 0.0032 +
-				Math.sin(D + M) * -0.0032 +
-				Math.sin(16 * D - M) * 0.0031 +
-				Math.sin(4 * D + M) * -0.0029 +
-				Math.sin(9 * D) * 0.0027 +
-				Math.sin(4 * D + 2 * F) * 0.0027 +
-				Math.sin(2 * D - 2 * M) * -0.0027 +
-				Math.sin(4 * D - 2 * M) * 0.0024 +
-				Math.sin(6 * D - 2 * M) * -0.0021 +
-				Math.sin(22 * D) * -0.0021 +
-				Math.sin(18 * D - M) * -0.0021 +
-				Math.sin(6 * D + M) * 0.0019 +
-				Math.sin(11 * D) * -0.0018 +
-				Math.sin(8 * D + M) * -0.0014 +
-				Math.sin(4 * D - 2 * F) * -0.0014 +
-				Math.sin(6 * D + 2 * F) * -0.0014 +
-				Math.sin(3 * D + M) * 0.0014 +
-				Math.sin(5 * D + M) * -0.0014 +
-				Math.sin(13 * D) * 0.0013 +
-				Math.sin(20 * D - M) * 0.0013 +
-				Math.sin(3 * D + 2 * M) * 0.0011 +
-				Math.sin(4 * D + 2 * F - 2 * M) * -0.0011 +
-				Math.sin(D + 2 * M) * -0.001 +
-				Math.sin(22 * D - M) * -0.0009 +
-				Math.sin(4 * F) * -0.0008 +
-				Math.sin(6 * D - 2 * F) * 0.0008 +
-				Math.sin(2 * D - 2 * F + M) * 0.0008 +
-				Math.sin(2 * M) * 0.0007 +
-				Math.sin(2 * F - M) * 0.0007 +
-				Math.sin(2 * D + 4 * F) * 0.0007 +
-				Math.sin(2 * F - 2 * M) * -0.0006 +
-				Math.sin(2 * D - 2 * F + 2 * M) * -0.0006 +
-				Math.sin(24 * D) * 0.0006 +
-				Math.sin(4 * D - 4 * F) * 0.0005 +
-				Math.sin(2 * D + 2 * M) * 0.0005 +
-				Math.sin(D - M) * -0.0004
-		} else {
-			jdFraction +=
-				Math.sin(2 * D) * 0.4392 +
-				Math.sin(4 * D) * 0.0684 +
-				Math.sin(M) * (0.0456 - 0.00011 * T) +
-				Math.sin(2 * D - M) * (0.0426 - 0.00011 * T) +
-				Math.sin(2 * F) * 0.0212 +
-				Math.sin(D) * -0.0189 +
-				Math.sin(6 * D) * 0.0144 +
-				Math.sin(4 * D - M) * 0.0113 +
-				Math.sin(2 * D + 2 * F) * 0.0047 +
-				Math.sin(D + M) * 0.0036 +
-				Math.sin(8 * D) * 0.0035 +
-				Math.sin(6 * D - M) * 0.0034 +
-				Math.sin(2 * D - 2 * F) * -0.0034 +
-				Math.sin(2 * D - 2 * M) * 0.0022 +
-				Math.sin(3 * D) * -0.0017 +
-				Math.sin(4 * D + 2 * F) * 0.0013 +
-				Math.sin(8 * D - M) * 0.0011 +
-				Math.sin(4 * D - 2 * M) * 0.001 +
-				Math.sin(10 * D) * 0.0009 +
-				Math.sin(3 * D + M) * 0.0007 +
-				Math.sin(2 * M) * 0.0006 +
-				Math.sin(2 * D + M) * 0.0005 +
-				Math.sin(2 * D + 2 * M) * 0.0005 +
-				Math.sin(6 * D + 2 * F) * 0.0004 +
-				Math.sin(6 * D - 2 * M) * 0.0004 +
-				Math.sin(10 * D - M) * 0.0004 +
-				Math.sin(5 * D) * -0.0004 +
-				Math.sin(4 * D - 2 * F) * -0.0004 +
-				Math.sin(2 * F + M) * 0.0003 +
-				Math.sin(12 * D) * 0.0003 +
-				Math.sin(2 * D + 2 * F - M) * 0.0003 +
-				Math.sin(D - M) * -0.0003
-		}
-
-		if (jdDay + jdFraction > jd !== next) {
-			if (next) k++
-			else k--
-		} else {
-			if (apsis === 'PERIGEE') {
-				parallax =
-					3629.215 +
-					63.224 * Math.cos(2 * D) -
-					6.99 * Math.cos(4 * D) +
-					2.834 * Math.cos(2 * D - M) -
-					0.0071 * T * Math.cos(2 * D - M) +
-					1.927 * Math.cos(6 * D) -
-					1.263 * Math.cos(D) -
-					0.702 * Math.cos(8 * D) +
-					0.696 * Math.cos(M) -
-					0.0017 * T * Math.cos(M) -
-					0.69 * Math.cos(2 * F) -
-					0.629 * Math.cos(4 * D - M) +
-					0.0016 * T * Math.cos(4 * D - M) -
-					0.392 * Math.cos(2 * D - 2 * F) +
-					0.297 * Math.cos(10 * D) +
-					0.26 * Math.cos(6 * D - M) +
-					0.201 * Math.cos(3 * D) -
-					0.161 * Math.cos(2 * D + M) +
-					0.157 * Math.cos(D + M) -
-					0.138 * Math.cos(12 * D) -
-					0.127 * Math.cos(8 * D - M) +
-					0.104 * Math.cos(2 * D + 2 * F) +
-					0.104 * Math.cos(2 * D - 2 * M) -
-					0.079 * Math.cos(5 * D) +
-					0.068 * Math.cos(14 * D) +
-					0.067 * Math.cos(10 * D - M) +
-					0.054 * Math.cos(4 * D + M) -
-					0.038 * Math.cos(12 * D - M) -
-					0.038 * Math.cos(4 * D - 2 * M) +
-					0.037 * Math.cos(7 * D) -
-					0.037 * Math.cos(4 * D + 2 * F) -
-					0.035 * Math.cos(16 * D) -
-					0.03 * Math.cos(3 * D + M) +
-					0.029 * Math.cos(D - M) -
-					0.025 * Math.cos(6 * D + M) +
-					0.023 * Math.cos(2 * M) +
-					0.023 * Math.cos(14 * D - M) -
-					0.023 * Math.cos(2 * D + 2 * M) +
-					0.022 * Math.cos(6 * D - 2 * M) -
-					0.021 * Math.cos(2 * D - 2 * F - M) -
-					0.02 * Math.cos(9 * D) +
-					0.019 * Math.cos(18 * D) +
-					0.017 * Math.cos(6 * D + 2 * F) +
-					0.014 * Math.cos(2 * F - M) -
-					0.014 * Math.cos(16 * D - M) +
-					0.013 * Math.cos(4 * D - 2 * F) +
-					0.012 * Math.cos(8 * D + M) +
-					0.011 * Math.cos(11 * D) +
-					0.01 * Math.cos(5 * D + M) -
-					0.01 * Math.cos(20 * D)
-			} else {
-				parallax =
-					3245.251 -
-					9.147 * Math.cos(2 * D) -
-					0.841 * Math.cos(D) +
-					0.697 * Math.cos(2 * F) -
-					0.656 * Math.cos(M) +
-					0.0016 * T * Math.cos(M) +
-					0.355 * Math.cos(4 * D) +
-					0.159 * Math.cos(2 * D - M) +
-					0.127 * Math.cos(D + M) +
-					0.065 * Math.cos(4 * D - M) +
-					0.052 * Math.cos(6 * D) +
-					0.043 * Math.cos(2 * D + M) +
-					0.031 * Math.cos(2 * D + 2 * F) -
-					0.023 * Math.cos(2 * D - 2 * F) +
-					0.022 * Math.cos(2 * D - 2 * M) +
-					0.019 * Math.cos(2 * D + 2 * M) -
-					0.016 * Math.cos(2 * M) +
-					0.014 * Math.cos(6 * D - M) +
-					0.01 * Math.cos(8 * D)
-			}
-
-			break
-		}
+	if (apsis === 'PERIGEE') {
+		parallax =
+			3629.215 +
+			63.224 * Math.cos(2 * D) -
+			6.99 * Math.cos(4 * D) +
+			2.834 * Math.cos(2 * D - M) -
+			0.0071 * T * Math.cos(2 * D - M) +
+			1.927 * Math.cos(6 * D) -
+			1.263 * Math.cos(D) -
+			0.702 * Math.cos(8 * D) +
+			0.696 * Math.cos(M) -
+			0.0017 * T * Math.cos(M) -
+			0.69 * Math.cos(2 * F) -
+			0.629 * Math.cos(4 * D - M) +
+			0.0016 * T * Math.cos(4 * D - M) -
+			0.392 * Math.cos(2 * D - 2 * F) +
+			0.297 * Math.cos(10 * D) +
+			0.26 * Math.cos(6 * D - M) +
+			0.201 * Math.cos(3 * D) -
+			0.161 * Math.cos(2 * D + M) +
+			0.157 * Math.cos(D + M) -
+			0.138 * Math.cos(12 * D) -
+			0.127 * Math.cos(8 * D - M) +
+			0.104 * Math.cos(2 * D + 2 * F) +
+			0.104 * Math.cos(2 * D - 2 * M) -
+			0.079 * Math.cos(5 * D) +
+			0.068 * Math.cos(14 * D) +
+			0.067 * Math.cos(10 * D - M) +
+			0.054 * Math.cos(4 * D + M) -
+			0.038 * Math.cos(12 * D - M) -
+			0.038 * Math.cos(4 * D - 2 * M) +
+			0.037 * Math.cos(7 * D) -
+			0.037 * Math.cos(4 * D + 2 * F) -
+			0.035 * Math.cos(16 * D) -
+			0.03 * Math.cos(3 * D + M) +
+			0.029 * Math.cos(D - M) -
+			0.025 * Math.cos(6 * D + M) +
+			0.023 * Math.cos(2 * M) +
+			0.023 * Math.cos(14 * D - M) -
+			0.023 * Math.cos(2 * D + 2 * M) +
+			0.022 * Math.cos(6 * D - 2 * M) -
+			0.021 * Math.cos(2 * D - 2 * F - M) -
+			0.02 * Math.cos(9 * D) +
+			0.019 * Math.cos(18 * D) +
+			0.017 * Math.cos(6 * D + 2 * F) +
+			0.014 * Math.cos(2 * F - M) -
+			0.014 * Math.cos(16 * D - M) +
+			0.013 * Math.cos(4 * D - 2 * F) +
+			0.012 * Math.cos(8 * D + M) +
+			0.011 * Math.cos(11 * D) +
+			0.01 * Math.cos(5 * D + M) -
+			0.01 * Math.cos(20 * D)
+	} else {
+		parallax =
+			3245.251 -
+			9.147 * Math.cos(2 * D) -
+			0.841 * Math.cos(D) +
+			0.697 * Math.cos(2 * F) -
+			0.656 * Math.cos(M) +
+			0.0016 * T * Math.cos(M) +
+			0.355 * Math.cos(4 * D) +
+			0.159 * Math.cos(2 * D - M) +
+			0.127 * Math.cos(D + M) +
+			0.065 * Math.cos(4 * D - M) +
+			0.052 * Math.cos(6 * D) +
+			0.043 * Math.cos(2 * D + M) +
+			0.031 * Math.cos(2 * D + 2 * F) -
+			0.023 * Math.cos(2 * D - 2 * F) +
+			0.022 * Math.cos(2 * D - 2 * M) +
+			0.019 * Math.cos(2 * D + 2 * M) -
+			0.016 * Math.cos(2 * M) +
+			0.014 * Math.cos(6 * D - M) +
+			0.01 * Math.cos(8 * D)
 	}
 
 	const distance = kilometer(EARTH_RADIUS_KM / Math.sin(arcsec(parallax)))
@@ -716,131 +729,119 @@ export function nearestLunarApsis(time: Time, apsis: LunarApsis, next: boolean):
 // topocentric parallax are not applied. Northern and southern maxima alternate about every 13.66 days, and
 // their amplitude swings between ~18.3 deg and ~28.6 deg over the 18.6-year nodal cycle.
 //
-// The southern series reuses the northern periodic coefficients with the argument of latitude F shifted by
-// 180 deg: this is Meeus' southern table, which is the northern one with the signs of the odd-F terms
-// reversed. `k` is iterated from the seed year until the passage lands on the requested side of `time`.
+// Uses the separate northern and southern coefficients in Meeus tables 52.A/B. Searches adjacent
+// monthly events to return the first strictly after `time` when `next`, or the last at/before it otherwise.
 export function nearestMaxDeclination(time: Time, declination: LunarDeclination, next: boolean): readonly [Time, Angle] {
 	time = tt(time)
-	const jd = toJulianDay(time)
-	const year = timeToMeeusApproxYear(time)
+	const k = Math.floor((timeToMeeusApproxYear(time) - 2000.03) * 13.3686)
+	return nearestLunarEvent(time, k, next, (k) => lunarMaxDeclination(k, declination))
+}
+
+// Evaluates a monthly northern/southern extremum at integer index k (Meeus tables 52.A/B).
+// Returns a fresh TT instant and signed mean geocentric declination in radians.
+function lunarMaxDeclination(k: number, declination: LunarDeclination): readonly [Time, Angle] {
 	const isNorthern = declination === 'NORTH'
-	let k = Math.floor((year - 2000.03) * 13.3686)
+	const sign = isNorthern ? 1 : -1
+	const T = k / 1336.86
+	const T2 = T * T
+	const T3 = T2 * T
 
-	let jdDay = 0
-	let jdFraction = 0
-	let delta = 0
+	const D = deg((isNorthern ? 152.2029 : 345.6676) + 333.0705546 * k - 0.0004214 * T2 + 0.00000011 * T3)
+	const M = deg((isNorthern ? 14.8591 : 1.3951) + 26.9281592 * k - 0.0000355 * T2 - 0.0000001 * T3)
+	const M_ = deg((isNorthern ? 4.6881 : 186.21) + 356.9562794 * k + 0.0103066 * T2 + 0.00001251 * T3)
+	const F = deg((isNorthern ? 325.8867 : 145.1633) + 1.4467807 * k - 0.002069 * T2 - 0.00000215 * T3)
+	// Multiplier related to the eccentricity of the Earth orbit.
+	const E = 1 - 0.002516 * T - 0.0000074 * T2
 
-	while (true) {
-		const T = k / 1336.86
-		const T2 = T * T
-		const T3 = T2 * T
+	const jdDay = (isNorthern ? 2451562 : 2451548) + 27 * k
+	let jdFraction = (isNorthern ? 0.5897 : 0.9289) + 0.321582247 * k + 0.000119804 * T2 - 0.000000141 * T3
+	jdFraction +=
+		0.8975 * sign * Math.cos(F) +
+		-0.4726 * Math.sin(M_) +
+		-0.103 * Math.sin(2 * F) +
+		-0.0976 * Math.sin(2 * D - M_) +
+		(isNorthern ? -0.0462 : 0.0541) * Math.cos(M_ - F) +
+		(isNorthern ? -0.0461 : 0.0516) * Math.cos(M_ + F) +
+		-0.0438 * Math.sin(2 * D) +
+		(isNorthern ? 0.0162 : 0.0112) * E * Math.sin(M) +
+		-0.0157 * sign * Math.cos(3 * F) +
+		(isNorthern ? 0.0145 : 0.0023) * Math.sin(M_ + 2 * F) +
+		0.0136 * sign * Math.cos(2 * D - F) +
+		(isNorthern ? -0.0095 : 0.011) * Math.cos(2 * D - M_ - F) +
+		-0.0091 * sign * Math.cos(2 * D - M_ + F) +
+		-0.0089 * sign * Math.cos(2 * D + F) +
+		0.0075 * Math.sin(2 * M_) +
+		(isNorthern ? -0.0068 : -0.003) * Math.sin(M_ - 2 * F) +
+		0.0061 * sign * Math.cos(2 * M_ - F) +
+		-0.0047 * Math.sin(M_ + 3 * F) +
+		-0.0043 * E * Math.sin(2 * D - M - M_) +
+		-0.004 * sign * Math.cos(M_ - 2 * F) +
+		-0.0037 * Math.sin(2 * D - 2 * M_) +
+		0.0031 * sign * Math.sin(F) +
+		0.003 * Math.sin(2 * D + M_) +
+		-0.0029 * sign * Math.cos(M_ + 2 * F) +
+		-0.0029 * E * Math.sin(2 * D - M) +
+		-0.0027 * Math.sin(M_ + F) +
+		0.0024 * E * Math.sin(M - M_) +
+		-0.0021 * Math.sin(M_ - 3 * F) +
+		0.0019 * sign * Math.sin(2 * M_ + F) +
+		(isNorthern ? 0.0018 : -0.0006) * Math.cos(2 * D - 2 * M_ - F) +
+		0.0018 * sign * Math.sin(3 * F) +
+		0.0017 * sign * Math.cos(M_ + 3 * F) +
+		0.0017 * Math.cos(2 * M_) +
+		-0.0014 * sign * Math.cos(2 * D - M_) +
+		0.0013 * sign * Math.cos(2 * D + M_ + F) +
+		0.0013 * sign * Math.cos(M_) +
+		0.0012 * Math.sin(3 * M_ + F) +
+		0.0011 * Math.sin(2 * D - M_ + F) +
+		-0.0011 * sign * Math.cos(2 * D - 2 * M_) +
+		0.001 * Math.cos(D + F) +
+		0.001 * E * Math.sin(M + M_) +
+		-0.0009 * Math.sin(2 * D - 2 * F) +
+		0.0007 * sign * Math.cos(2 * M_ + F) +
+		-0.0007 * Math.cos(3 * M_ + F)
 
-		const D = deg((isNorthern ? 152.2029 : 345.6676) + 333.0705546 * k - 0.0004214 * T2 + 0.00000011 * T3)
-		const M = deg((isNorthern ? 14.8591 : 1.3951) + 26.9281592 * k - 0.00003555 * T2 - 0.0000001 * T3)
-		const M_ = deg((isNorthern ? 4.6881 : 186.21) + 356.9562794 * k + 0.0103066 * T2 + 0.00001251 * T3)
-		// Argument of latitude; the southern series shifts it by 180 deg to flip the odd-F terms' signs.
-		const F = deg((isNorthern ? 325.8867 : 145.1633) + 1.4467807 * k - 0.002069 * T2 - 0.00000215 * T3) + (isNorthern ? 0 : PI)
-		// Multiplier related to the eccentricity of the Earth orbit.
-		const E = 1 - 0.002516 * T - 0.0000047 * T2
+	let delta = 23.6961 - 0.013004 * T
+	delta +=
+		5.1093 * sign * Math.sin(F) +
+		0.2658 * Math.cos(2 * F) +
+		0.1448 * sign * Math.sin(2 * D - F) +
+		-0.0322 * sign * Math.sin(3 * F) +
+		0.0133 * Math.cos(2 * D - 2 * F) +
+		0.0125 * Math.cos(2 * D) +
+		(isNorthern ? -0.0124 : -0.0015) * Math.sin(M_ - F) +
+		-0.0101 * sign * Math.sin(M_ + 2 * F) +
+		0.0097 * sign * Math.cos(F) +
+		-0.0087 * sign * E * Math.sin(2 * D + M - F) +
+		0.0074 * Math.sin(M_ + 3 * F) +
+		0.0067 * Math.sin(D + F) +
+		0.0063 * sign * Math.sin(M_ - 2 * F) +
+		0.006 * sign * E * Math.sin(2 * D - M - F) +
+		-0.0057 * sign * Math.sin(2 * D - M_ - F) +
+		-0.0056 * Math.cos(M_ + F) +
+		0.0052 * sign * Math.cos(M_ + 2 * F) +
+		0.0041 * sign * Math.cos(2 * M_ + F) +
+		-0.004 * Math.cos(M_ - 3 * F) +
+		0.0038 * sign * Math.cos(2 * M_ - F) +
+		-0.0034 * sign * Math.cos(M_ - 2 * F) +
+		-0.0029 * Math.sin(2 * M_) +
+		0.0029 * Math.sin(3 * M_ + F) +
+		-0.0028 * sign * E * Math.cos(2 * D + M - F) +
+		-0.0028 * Math.cos(M_ - F) +
+		-0.0023 * sign * Math.cos(3 * F) +
+		-0.0021 * sign * Math.sin(2 * D + F) +
+		0.0019 * Math.cos(M_ + 3 * F) +
+		0.0018 * Math.cos(D + F) +
+		0.0017 * sign * Math.sin(2 * M_ - F) +
+		0.0015 * Math.cos(3 * M_ + F) +
+		0.0014 * Math.cos(2 * D + 2 * M_ + F) +
+		-0.0012 * sign * Math.sin(2 * D - 2 * M_ - F) +
+		-0.0012 * Math.cos(2 * M_) +
+		-0.001 * sign * Math.cos(M_) +
+		-0.001 * Math.sin(2 * F) +
+		(isNorthern ? 0.0006 : 0.0037) * Math.sin(M_ + F)
 
-		jdDay = (isNorthern ? 2451562 : 2451548) + 27 * k
-		jdFraction = (isNorthern ? 0.5897 : 0.9289) + 0.321582247 * k + 0.000119804 * T2 - 0.000000141 * T3
-		jdFraction +=
-			0.8975 * Math.cos(F) +
-			-0.4726 * Math.sin(M_) +
-			-0.103 * Math.sin(2 * F) +
-			-0.0976 * Math.sin(2 * D - M_) +
-			-0.0462 * Math.cos(M_ - F) +
-			-0.0461 * Math.cos(M_ + F) +
-			-0.0438 * Math.sin(2 * D) +
-			0.0162 * E * Math.sin(M) +
-			-0.0157 * Math.cos(3 * F) +
-			0.0145 * Math.sin(M_ + 2 * F) +
-			0.0136 * Math.cos(2 * D - F) +
-			-0.0095 * Math.cos(2 * D - M_ - F) +
-			-0.0091 * Math.cos(2 * D - M_ + F) +
-			-0.0089 * Math.cos(2 * D + F) +
-			0.0075 * Math.sin(2 * M_) +
-			-0.0068 * Math.sin(M_ - 2 * F) +
-			0.0061 * Math.cos(2 * M_ - F) +
-			-0.0047 * Math.sin(M_ + 3 * F) +
-			-0.0043 * E * Math.sin(2 * D - M - M_) +
-			-0.004 * Math.cos(M_ - 2 * F) +
-			-0.0037 * Math.sin(2 * D - 2 * M_) +
-			0.0031 * Math.sin(F) +
-			0.003 * Math.sin(2 * D + M_) +
-			-0.0029 * Math.cos(M_ + 2 * F) +
-			-0.0029 * E * Math.sin(2 * D - M) +
-			-0.0027 * Math.sin(M_ + F) +
-			0.0024 * E * Math.sin(M - M_) +
-			-0.0021 * Math.sin(M_ - 3 * F) +
-			0.0019 * Math.sin(2 * M_ + F) +
-			0.0018 * Math.cos(2 * D - 2 * M_ - F) +
-			0.0018 * Math.sin(3 * F) +
-			0.0017 * Math.cos(M_ + 3 * F) +
-			0.0017 * Math.cos(2 * M_) +
-			-0.0014 * Math.cos(2 * D - M_) +
-			0.0013 * Math.cos(2 * D + M_ + F) +
-			0.0013 * Math.cos(M_) +
-			0.0012 * Math.sin(3 * M_ + F) +
-			0.0011 * Math.sin(2 * D - M_ + F) +
-			-0.0011 * Math.cos(2 * D - 2 * M_) +
-			0.001 * Math.cos(D + F) +
-			0.001 * E * Math.sin(M + M_) +
-			-0.0009 * Math.sin(2 * D - 2 * F) +
-			0.0007 * Math.cos(2 * M_ + F) +
-			-0.0007 * Math.cos(3 * M_ + F)
-
-		if (jdDay + jdFraction > jd !== next) {
-			if (next) k++
-			else k--
-		} else {
-			delta = 23.6961 - 0.013004 * T
-			delta +=
-				5.1093 * Math.sin(F) +
-				0.2658 * Math.cos(2 * F) +
-				0.1448 * Math.sin(2 * D - F) +
-				-0.0322 * Math.sin(3 * F) +
-				0.0133 * Math.cos(2 * D - 2 * F) +
-				0.0125 * Math.cos(2 * D) +
-				-0.0124 * Math.sin(M_ - F) +
-				-0.0101 * Math.sin(M_ + 2 * F) +
-				0.0097 * Math.cos(F) +
-				-0.0087 * E * Math.sin(2 * D + M - F) +
-				0.0074 * Math.sin(M_ + 3 * F) +
-				0.0067 * Math.sin(D + F) +
-				0.0063 * Math.sin(M_ - 2 * F) +
-				0.006 * E * Math.sin(2 * D - M - F) +
-				-0.0057 * Math.sin(2 * D - M_ - F) +
-				-0.0056 * Math.cos(M_ + F) +
-				0.0052 * Math.cos(M_ + 2 * F) +
-				0.0041 * Math.cos(2 * M_ + F) +
-				-0.004 * Math.cos(M_ - 3 * F) +
-				0.0038 * Math.cos(2 * M_ - F) +
-				-0.0034 * Math.cos(M_ - 2 * F) +
-				-0.0029 * Math.sin(2 * M_) +
-				0.0029 * Math.sin(3 * M_ + F) +
-				-0.0028 * E * Math.cos(2 * D + M - F) +
-				-0.0028 * Math.cos(M_ - F) +
-				-0.0023 * Math.cos(3 * F) +
-				-0.0021 * Math.sin(2 * D + F) +
-				0.0019 * Math.cos(M_ + 3 * F) +
-				0.0018 * Math.cos(D + F) +
-				0.0017 * Math.sin(2 * M_ - F) +
-				0.0015 * Math.cos(3 * M_ + F) +
-				0.0014 * Math.cos(2 * D + 2 * M_ + F) +
-				-0.0012 * Math.sin(2 * D - 2 * M_ - F) +
-				-0.0012 * Math.cos(2 * M_) +
-				-0.001 * Math.cos(M_) +
-				-0.001 * Math.sin(2 * F) +
-				0.0006 * Math.sin(M_ + F)
-
-			break
-		}
-	}
-
-	// Southern maxima are the Moon's most southerly declination, reported as a negative angle.
-	return [timeNormalize(jdDay, jdFraction, 0, Timescale.TT), deg(isNorthern ? delta : -delta)] as const
+	return [timeNormalize(jdDay, jdFraction, 0, Timescale.TT), deg(sign * delta)]
 }
 
 // Nodal regression period of the Moon's orbit, days (~18.61 years): the interval between successive major
@@ -862,15 +863,13 @@ const MAX_DECLINATION_STEP_DAYS = 5
 // standstill.
 const STANDSTILL_WINDOW_DAYS = 150
 
-// Mean longitude of the Moon's ascending node (Meeus 47.7), degrees reduced to [0, 360), from Julian centuries
-// T (TT) since J2000. Used only to locate the standstill season (its node crossing), so the leading terms
-// suffice; not accurate enough for a precise node position.
-function meanAscendingNode(T: number): number {
-	const T2 = T * T
-	const T3 = T2 * T
-	const T4 = T3 * T
-	const omega = 125.0445479 - 1934.1362891 * T + 0.0020754 * T2 + T3 / 467441 - T4 / 60616000
-	return ((omega % 360) + 360) % 360
+// Returns the mean ascending-node longitude in the mean ecliptic/equinox of date, radians in [0, TAU).
+// Converts time to TT and evaluates Meeus 47.7; excludes periodic corrections to the true node.
+export function moonMeanAscendingNode(time: Time): Angle {
+	time = tt(time)
+	const T = (time.day - J2000 + time.fraction) / 36525
+	const omega = 125.0445479 + T * (-1934.1362891 + T * (0.0020754 + T * (1 / 467441 - T / 60616000)))
+	return normalizeAngle(deg(omega))
 }
 
 // Finds the extreme monthly maximum declination of one hemisphere within +/- STANDSTILL_WINDOW_DAYS of
@@ -915,7 +914,7 @@ export function nearestLunarStandstill(time: Time, standstill: LunarStandstill, 
 
 	// Signed node offset reduced to (-180, 180]; positive means the node still has to regress (the crossing lies
 	// ahead in time) to reach the target.
-	const node = meanAscendingNode((jd - 2451545) / 36525)
+	const node = toDeg(moonMeanAscendingNode(time))
 	const offset = ((((node - target + 180) % 360) + 360) % 360) - 180
 
 	// Node crossing nearest `time`, then the cycle's extreme monthly maximum around it.
@@ -930,4 +929,111 @@ export function nearestLunarStandstill(time: Time, standstill: LunarStandstill, 
 	}
 
 	return best
+}
+
+// Selects an event from an increasing periodic series evaluated by compute(k), with unit index steps.
+// time is TT; k is an approximate index. next selects strictly after time, false at/before time.
+// Results carry their TT instant first. Checks the adjacent event to avoid skipping one when the
+// seed falls on the wrong side. Caps at 32 evaluations to prevent unbounded searches outside the series' domain.
+function nearestLunarEvent<T extends readonly [Time, ...unknown[]]>(time: Time, k: number, next: boolean, compute: (k: number) => T): T {
+	let candidate: T | undefined
+
+	for (let i = 0; i < 32; i++) {
+		const event = compute(k)
+		const delta = event[0].day - time.day + (event[0].fraction - time.fraction)
+
+		if (next ? delta > 0 : delta <= 0) {
+			candidate = event
+			k += next ? -1 : 1
+		} else if (candidate) {
+			return candidate
+		} else {
+			k += next ? 1 : -1
+		}
+	}
+
+	throw new Error('Lunar event search did not converge')
+}
+
+// Finds the mean perigee/apogee from Meeus 50.1 (periodic time corrections omitted).
+// Converts time to TT; next selects strictly after it, false at/before it. Returns a fresh TT instant.
+export function nearestMeanLunarApsis(time: Time, apsis: LunarApsis, next: boolean): Time {
+	time = tt(time)
+	const k = Math.floor((timeToMeeusApproxYear(time) - 1999.97) * 13.2555) + (apsis === 'APOGEE' ? 0.5 : 0)
+	return nearestLunarEvent(time, k, next, (k) => [meanLunarApsis(k)] as const)[0]
+}
+
+// Returns a fresh mean apsis TT instant at integer perigee or half-integer apogee index k (Meeus 50.1).
+function meanLunarApsis(k: number): Time {
+	const T = k / 1325.55
+	const fraction = 0.6698 + 0.55454989 * k + T * T * (-0.0006691 + T * (-0.000001098 + 0.0000000052 * T))
+	return timeNormalize(2451534 + 27 * k, fraction, 0, Timescale.TT)
+}
+
+// Finds a passage through the mean ecliptic of date (Meeus chapter 51): ASCENDING goes south to north,
+// DESCENDING north to south. Converts time to TT; next selects strictly after it, false at/before it.
+// Returns a fresh TT instant from the truncated series (minute-level accuracy near the modern epoch).
+export function nearestLunarNode(time: Time, direction: LunarNode, next: boolean): Time {
+	time = tt(time)
+	const k = Math.floor((timeToMeeusApproxYear(time) - 2000.05) * 13.4223) + (direction === 'DESCENDING' ? 0.5 : 0)
+	return nearestLunarEvent(time, k, next, lunarNode)[0]
+}
+
+// Evaluates Meeus 51.1 at integer ascending or half-integer descending passage index k.
+// Returns a tuple containing a fresh TT instant for the common event selector.
+function lunarNode(k: number): readonly [Time] {
+	// Meeus 51.3 uses the draconic index (1342.23 per century), not the declination index 1336.86.
+	const T = k / 1342.23
+	const T2 = T * T
+	const D = deg(183.638 + 331.73735682 * k + T2 * (0.0014852 + T * (0.00000209 - 0.00000001 * T)))
+	const M = deg(17.4006 + 26.8203725 * k + T2 * (0.0001186 + 0.00000006 * T))
+	const m = deg(38.3776 + 355.52747313 * k + T2 * (0.0123499 + T * (0.000014627 - 0.000000069 * T)))
+	const omega = deg(123.9767 - 1.44098956 * k + T2 * (0.0020608 + T * (0.00000214 - 0.000000016 * T)))
+	const V = deg(299.75 + T * (132.85 - 0.009173 * T))
+	const P = omega + deg(272.75 - 2.3 * T)
+	const E = 1 - 0.002516 * T - 0.0000074 * T2
+
+	const correction =
+		-0.4721 * Math.sin(m) +
+		-0.1649 * Math.sin(2 * D) +
+		-0.0868 * Math.sin(2 * D - m) +
+		0.0084 * Math.sin(2 * D + m) +
+		-0.0083 * Math.sin(2 * D - M) * E +
+		-0.0039 * Math.sin(2 * D - M - m) * E +
+		0.0034 * Math.sin(2 * m) +
+		-0.0031 * Math.sin(2 * (D - m)) +
+		0.003 * Math.sin(2 * D + M) * E +
+		0.0028 * Math.sin(M - m) * E +
+		0.0026 * Math.sin(M) * E +
+		0.0025 * Math.sin(4 * D) +
+		0.0024 * Math.sin(D) +
+		0.0022 * Math.sin(M + m) * E +
+		0.0017 * Math.sin(omega) +
+		0.0014 * Math.sin(4 * D - m) +
+		0.0005 * Math.sin(2 * D + M - m) * E +
+		0.0004 * Math.sin(2 * D - M + m) * E +
+		-0.0003 * Math.sin(2 * (D - M)) * E +
+		0.0003 * Math.sin(4 * D - M) * E +
+		0.0003 * Math.sin(V) +
+		0.0003 * Math.sin(P)
+	const fraction = 0.1619 + 0.212220817 * k + T * T * (0.0002762 + T * (0.000000021 - 0.000000000088 * T)) + correction
+	return [timeNormalize(2451565 + 27 * k, fraction, 0, Timescale.TT)]
+}
+
+// Returns the topocentric lunar angular radius in radians (Meeus 55). distance is geocentric AU;
+// declination and westward hourAngle are radians. rhoSinPhi/rhoCosPhi are the observer's dimensionless
+// geocentric parallax constants, in Earth equatorial radii. Assumes the observer is outside the Moon.
+export function moonTopocentricSemidiameter(distance: Distance, declination: Angle, hourAngle: Angle, rhoSinPhi: number, rhoCosPhi: number): Angle {
+	const sinParallax = EARTH_RADIUS_KM / AU_KM / distance
+	const cosDeclination = Math.cos(declination)
+	const x = cosDeclination * Math.sin(hourAngle)
+	const y = cosDeclination * Math.cos(hourAngle) - rhoCosPhi * sinParallax
+	const z = Math.sin(declination) - rhoSinPhi * sinParallax
+	return Math.asin(Math.min(1, (0.272481 * sinParallax) / Math.hypot(x, y, z)))
+}
+
+// Returns an approximate topocentric lunar angular radius in radians from geocentric distance (AU)
+// and true altitude (radians). Meeus 55 first-order parallax correction; omits higher-order terms.
+export function moonTopocentricSemidiameterApprox(distance: Distance, altitude: Angle): Angle {
+	return moonSemidiameter(distance) * (1 + (Math.sin(altitude) * EARTH_RADIUS_KM) / AU_KM / distance)
 }

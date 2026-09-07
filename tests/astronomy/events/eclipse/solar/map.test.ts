@@ -179,7 +179,7 @@ function nasaPbe(fixture: (typeof NASA_ECLIPSES)[number]): PolynomialBesselianEl
 }
 
 function nasaEclipse(fixture: (typeof NASA_ECLIPSES)[number]): SolarEclipse {
-	return { lunation: 0, maximalTime: time(fixture.greatestEclipse[2], 0, Timescale.TT), magnitude: fixture.magnitude, gamma: fixture.gamma, u: fixture.l2[0], type: fixture.type }
+	return { lunation: 0, maximalTime: time(fixture.greatestEclipse[2], 0, Timescale.TT), magnitude: fixture.magnitude, gamma: fixture.gamma, u: fixture.l2[0], p: fixture.l1[0], type: fixture.type, central: fixture.central }
 }
 
 function evaluateNasaPolynomial(coefficients: readonly number[], t: number) {
@@ -189,7 +189,7 @@ function evaluateNasaPolynomial(coefficients: readonly number[], t: number) {
 }
 
 function eclipse(type: SolarEclipseType, gamma: number = 0): SolarEclipse {
-	return { lunation: 300, maximalTime: TIME0, magnitude: type === 'partial' ? 0.8 : 1.05, gamma, u: type === 'total' ? -0.01 : 0.01, type }
+	return { lunation: 300, maximalTime: TIME0, magnitude: type === 'partial' ? 0.8 : 1.05, gamma, u: type === 'total' ? -0.01 : 0.01, type, p: 0.02, central: Math.abs(gamma) < 1 }
 }
 
 function expectGeoPoint(point: SolarEclipseGeoPoint) {
@@ -1050,7 +1050,7 @@ const NASA_2024: PolynomialBesselianElements = {
 	tanF2: 0.004645,
 }
 
-const NASA_2024_ECLIPSE: SolarEclipse = { lunation: 0, maximalTime: NASA_2024.maximumTime, magnitude: 1.0566, gamma: 0.3431, u: -0.010274, type: 'total' }
+const NASA_2024_ECLIPSE: SolarEclipse = { lunation: 0, maximalTime: NASA_2024.maximumTime, magnitude: 1.0566, gamma: 0.3431, u: -0.010274, p: 0.535813, type: 'total', central: true }
 
 test('solarEclipseMapToSvgPaths places the 2024-04-08 totality over North America', () => {
 	const map = computeSolarEclipseMapGeometry(NASA_2024_ECLIPSE, NASA_2024, { longitudeStep: deg(2), maxAngularStep: deg(4), includeRiseSetCurves: true, riseSetStep: 600 })

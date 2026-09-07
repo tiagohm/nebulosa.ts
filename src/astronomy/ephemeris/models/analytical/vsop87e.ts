@@ -6,55 +6,68 @@ import { type Time, tt } from '../../../time/time'
 import { VSOP87E_EARTH_DATA, VSOP87E_JUPITER_DATA, VSOP87E_MARS_DATA, VSOP87E_MERCURY_DATA, VSOP87E_NEPTUNE_DATA, VSOP87E_SATURN_DATA, VSOP87E_SUN_DATA, VSOP87E_URANUS_DATA, VSOP87E_VENUS_DATA } from './vsop87e.data'
 
 // VSOP87 version E analytical theory: barycentric rectangular position (AU) and velocity (AU/day)
-// of the Sun and the eight planets. Per body, a per-coordinate, per-power table of (amplitude,
-// phase, frequency) terms is summed and its time derivative formed, then rotated from the J2000
-// dynamical ecliptic frame to the ICRF equatorial frame. Time argument is millennia from J2000 (TT).
+// of the Sun and the eight planets. Per body, a per-power, per-coordinate table of (amplitude,
+// phase, frequency) terms is summed and its time derivative formed. Fresh vectors are returned in
+// the ICRF equatorial frame by default, or in the native dynamical ecliptic/equinox J2000 frame.
+// Time argument is millennia from J2000 (TT); selecting a frame does not change the barycentric origin.
 
 // https://vizier.cfa.harvard.edu/ftp/cats/6/81/vsop87.txt
 
-// Computes the barycentric position and velocity of the Sun.
-export function sun(time: Time) {
-	return compute(time, VSOP87E_SUN_DATA)
+// Output axes: ICRF equatorial, or dynamical ecliptic and equinox J2000; both have a barycentric origin.
+export type ReferenceFrame = 'icrf' | 'eclipticJ2000'
+
+// Computes fresh barycentric position (AU) and velocity (AU/day) vectors of the Sun at `time`,
+// evaluated in TT and expressed in `frame` (ICRF equatorial by default).
+export function sun(time: Time, frame: ReferenceFrame = 'icrf'): PositionAndVelocity {
+	return compute(time, VSOP87E_SUN_DATA, frame)
 }
 
-// Computes the barycentric position and velocity of Mercury.
-export function mercury(time: Time) {
-	return compute(time, VSOP87E_MERCURY_DATA)
+// Computes fresh barycentric position (AU) and velocity (AU/day) vectors of Mercury at `time`,
+// evaluated in TT and expressed in `frame` (ICRF equatorial by default).
+export function mercury(time: Time, frame: ReferenceFrame = 'icrf'): PositionAndVelocity {
+	return compute(time, VSOP87E_MERCURY_DATA, frame)
 }
 
-// Computes the barycentric position and velocity of Venus.
-export function venus(time: Time) {
-	return compute(time, VSOP87E_VENUS_DATA)
+// Computes fresh barycentric position (AU) and velocity (AU/day) vectors of Venus at `time`,
+// evaluated in TT and expressed in `frame` (ICRF equatorial by default).
+export function venus(time: Time, frame: ReferenceFrame = 'icrf'): PositionAndVelocity {
+	return compute(time, VSOP87E_VENUS_DATA, frame)
 }
 
-// Computes the barycentric position and velocity of Earth.
-export function earth(time: Time) {
-	return compute(time, VSOP87E_EARTH_DATA)
+// Computes fresh barycentric position (AU) and velocity (AU/day) vectors of Earth at `time`,
+// evaluated in TT and expressed in `frame` (ICRF equatorial by default).
+export function earth(time: Time, frame: ReferenceFrame = 'icrf'): PositionAndVelocity {
+	return compute(time, VSOP87E_EARTH_DATA, frame)
 }
 
-// Computes the barycentric position and velocity of Mars.
-export function mars(time: Time) {
-	return compute(time, VSOP87E_MARS_DATA)
+// Computes fresh barycentric position (AU) and velocity (AU/day) vectors of Mars at `time`,
+// evaluated in TT and expressed in `frame` (ICRF equatorial by default).
+export function mars(time: Time, frame: ReferenceFrame = 'icrf'): PositionAndVelocity {
+	return compute(time, VSOP87E_MARS_DATA, frame)
 }
 
-// Computes the barycentric position and velocity of Jupiter.
-export function jupiter(time: Time) {
-	return compute(time, VSOP87E_JUPITER_DATA)
+// Computes fresh barycentric position (AU) and velocity (AU/day) vectors of Jupiter at `time`,
+// evaluated in TT and expressed in `frame` (ICRF equatorial by default).
+export function jupiter(time: Time, frame: ReferenceFrame = 'icrf'): PositionAndVelocity {
+	return compute(time, VSOP87E_JUPITER_DATA, frame)
 }
 
-// Computes the barycentric position and velocity of Saturn.
-export function saturn(time: Time) {
-	return compute(time, VSOP87E_SATURN_DATA)
+// Computes fresh barycentric position (AU) and velocity (AU/day) vectors of Saturn at `time`,
+// evaluated in TT and expressed in `frame` (ICRF equatorial by default).
+export function saturn(time: Time, frame: ReferenceFrame = 'icrf'): PositionAndVelocity {
+	return compute(time, VSOP87E_SATURN_DATA, frame)
 }
 
-// Computes the barycentric position and velocity of Uranus.
-export function uranus(time: Time) {
-	return compute(time, VSOP87E_URANUS_DATA)
+// Computes fresh barycentric position (AU) and velocity (AU/day) vectors of Uranus at `time`,
+// evaluated in TT and expressed in `frame` (ICRF equatorial by default).
+export function uranus(time: Time, frame: ReferenceFrame = 'icrf'): PositionAndVelocity {
+	return compute(time, VSOP87E_URANUS_DATA, frame)
 }
 
-// Computes the barycentric position and velocity of Neptune.
-export function neptune(time: Time) {
-	return compute(time, VSOP87E_NEPTUNE_DATA)
+// Computes fresh barycentric position (AU) and velocity (AU/day) vectors of Neptune at `time`,
+// evaluated in TT and expressed in `frame` (ICRF equatorial by default).
+export function neptune(time: Time, frame: ReferenceFrame = 'icrf'): PositionAndVelocity {
+	return compute(time, VSOP87E_NEPTUNE_DATA, frame)
 }
 
 // The coordinates of the main version VSOP87 and of the version A, B, and E are
@@ -82,10 +95,10 @@ const SINQ = -0.000000251521337759624621
 // combining the obliquity rotation with the phi frame-tie.
 const REFERENCE_FRAME_MATRIX = [COSQ, -SINQ * COS_OBL_J2000, SINQ * SIN_OBL_J2000, SINQ, COSQ * COS_OBL_J2000, -COSQ * SIN_OBL_J2000, 0, SIN_OBL_J2000, COS_OBL_J2000] as const
 
-// Sums the VSOP87E series in `data` (indexed [coordinate][power] -> flat amplitude/phase/frequency
-// triples) at `time`, forms the analytic velocity, and rotates both into the ICRF equatorial frame.
-// Returns position (AU) and velocity (AU/day); both vectors alias the internal buffers.
-function compute(time: Time, data: readonly number[][][]): PositionAndVelocity {
+// Sums the VSOP87E series in `data` (indexed [power][coordinate] -> flat amplitude/phase/frequency
+// triples) at `time` in TT and forms the analytic velocity. Returns fresh barycentric position (AU)
+// and velocity (AU/day) vectors in `frame`, rotating the native ecliptic vectors only for ICRF output.
+function compute(time: Time, data: readonly number[][][], frame: ReferenceFrame): PositionAndVelocity {
 	const t = tt(time)
 
 	const m = new Float64Array(6)
@@ -119,6 +132,8 @@ function compute(time: Time, data: readonly number[][][]): PositionAndVelocity {
 
 		v[k] /= DAYSPERJM
 	}
+
+	if (frame === 'eclipticJ2000') return [p, v]
 
 	return [matMulVec(REFERENCE_FRAME_MATRIX, p, p), matMulVec(REFERENCE_FRAME_MATRIX, v, v)]
 }

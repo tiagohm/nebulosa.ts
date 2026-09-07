@@ -1,6 +1,6 @@
 {
 	"$schema": "./node_modules/oxfmt/configuration_schema.json",
-	"ignorePatterns": ["*.data.ts"],
+	"ignorePatterns": ["*.data.ts", "*.js"],
 	"semi": false,
 	"singleQuote": true,
 	"useTabs": true,
