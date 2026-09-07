@@ -15,8 +15,10 @@ Nebulosa is a Bun-first, ESM-only TypeScript toolkit for numerical astronomy, as
 - **Timekeeping and Earth orientation** — two-part Julian dates; UTC, UT1, TAI, TT, TCG, TDB, and TCB conversions; leap seconds, Delta T, sidereal time, IERS data, precession, nutation, and polar motion.
 - **Coordinates and observing geometry** — transformations among ICRS, FK5, ITRS, equatorial, ecliptic, galactic, and observed/horizontal coordinates, with refraction, light-time, and radial-velocity corrections.
 - **Ephemerides** — NASA DAF/SPK kernels and analytical models for the Sun, planets, Moon, Pluto, and major planetary satellites, including VSOP87E, ELPMPP02, TASS17, GUST86, L12, and MARSSAT.
+- **Meeus algorithms** — chapter-organized astronomical routines for equinoxes and solstices, equation of time, planetary conjunctions/oppositions and elongations, illumination and magnitudes, solar and planetary disk orientation, Saturn's rings, lunar libration and surface sunrise/sunset, binary-star apparent orbits, and sundial geometry.
 - **Orbits and artificial satellites** — asteroid and comet elements, MPCORB parsing, Kepler propagation, SGP4 from TLE/OMM, Gauss/Gibbs/Herrick-Gibbs initial orbit determination, differential correction, covariance, MOID, and B-plane analysis.
 - **Almanac and event search** — rise/transit/set, twilight, heliacal phases, planetary transits, occultation candidates, satellite passes and eclipses, conjunctions, mutual moon events, and Jupiter central-meridian phenomena.
+- **Lunar events and apparent size** — phase, perigee/apogee, node-passage, declination-extremum, and standstill searches, mean apsis times and ascending-node longitude, plus geocentric and topocentric angular radii.
 - **Eclipse geometry** — local circumstances and global map geometry for solar and lunar eclipses, including contacts, visibility, central paths, greatest eclipse/duration, and SVG-ready output.
 
 ### Astrometry, catalogs, and sky data
@@ -24,6 +26,7 @@ Nebulosa is a Bun-first, ESM-only TypeScript toolkit for numerical astronomy, as
 - **Plate solving and WCS** — FITS WCS parsing, SIP distortion fitting, pixel/sky transforms, Astrometry.net index selection, and solver backends for ASTAP, local or nova Astrometry.net, and native libastrometry.
 - **Star matching and catalogs** — similarity/affine matching, catalog crossmatching, HEALPix and tiled-sky queries, plus readers for HYG, HNSKY, SAO, UCAC4, and ASTAP `.1476` databases.
 - **Online services** — adapters for JPL Horizons and Small-Body Database, SIMBAD, VizieR, HiPS2FITS, and AstroBin.
+- **Minor Planet Center** — public API adapter for designations, observatory codes, observations, NEOCP tracklets, orbit solutions, and object lists; packed-designation and ADES PSV/MPC1992 codecs, with conversion to orbital propagation and fitting inputs.
 
 ### Imaging and optical analysis
 
@@ -31,7 +34,8 @@ Nebulosa is a Bun-first, ESM-only TypeScript toolkit for numerical astronomy, as
 - **Calibration and integration** — bias/dark/flat calibration, debayering, cosmetic correction, star registration, global or local normalization, and live or batch stacking with multiple rejection strategies.
 - **Processing** — arithmetic, convolution, FFT, multiscale transforms, background extraction and surface fitting, STF and arcsinh stretches, curves, SCNR, color neutralization, and tone mapping.
 - **Measurement and diagnostics** — star detection, profile and PSF measurement, subframe selection, Bahtinov focus/chromatic analysis, field-aberration and focus-surface diagnostics, and sensor characterization from PTC through dark current, linearity, saturation, and defect maps.
-- **Annular geometry** — [defocused-star boundary fitting](./src/imaging/analysis/collimation/collimation.ts), apparent center offsets, area-normalized brightness variation, paired sampling stability, and short-sequence vector dispersion on native mono/RGB/CFA planes; validated with synthetic images.
+- **Flat-frame quality** — single-frame analysis of signal targets, clipping, optional bias/dark-flat correction, uniformity, gradients, and illumination falloff on mono/RGB/CFA planes; optional artifact inspection and sequence analysis for temporal stability, drift, and outliers.
+- **Annular geometry** — defocused-star boundary fitting, apparent center offsets, area-normalized brightness variation, paired sampling stability, and short-sequence vector dispersion on native mono/RGB/CFA planes; validated with synthetic images.
 - **Synthetic data** — generated star fields, flat frames, Bahtinov spikes, and controllable aberration/collimation models for deterministic testing and simulated acquisition.
 
 ### Observatory hardware and workflows
@@ -43,7 +47,7 @@ Nebulosa is a Bun-first, ESM-only TypeScript toolkit for numerical astronomy, as
 
 ### Numerical foundation
 
-- **Math primitives** — allocation-conscious vectors and matrices, rigid transforms, geometry, interpolation, regression, least squares, root finding, optimization, surface fitting, statistics, and deterministic random generators.
+- **Math primitives** — allocation-conscious vectors and matrices, rigid transforms, geometry, interpolation, regression, least squares, root finding, optimization, surface fitting, robust ellipse fitting, statistics including paired-coordinate geometric medians, and deterministic random generators.
 - **Units and data utilities** — angle, distance, velocity, pressure, and temperature conversions together with CSV/XML parsing, compression, checksums, and reusable streaming I/O abstractions.
 
 ## Project layout
