@@ -4,6 +4,7 @@ import type { Image } from '../../../src/imaging/model/types'
 import { applyLocalNormalization, applyLocalNormalizationInPlace, fitLocalNormalization, fitLocalNormalizationRaw, isLocalNormalizationFallback, type LocalNormalizationModel, type LocalNormalizationOptions, localNormalization, resolveLocalNormalizationOptions, solveGlobalNormalization, solveGlobalNormalizationPlanes } from '../../../src/imaging/processing/normalization'
 import type { ScalarSurfaceModel } from '../../../src/imaging/processing/surface'
 import { Bitpix } from '../../../src/io/formats/fits/fits'
+import { deg } from '../../../src/math/units/angle'
 import { isTimeConsumingTestSkipped } from '../../util'
 
 const WIDTH = 192
@@ -424,7 +425,7 @@ describe('local normalization', () => {
 	// Bilinear resampling through a rotation, exactly what registration applies to a frame.
 	function rotate(src: Float64Array, degrees: number) {
 		const out = new Float64Array(src.length)
-		const theta = (degrees * Math.PI) / 180
+		const theta = deg(degrees)
 		const ct = Math.cos(theta)
 		const st = Math.sin(theta)
 		const cx = (WIDTH - 1) / 2

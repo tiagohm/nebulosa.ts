@@ -4,7 +4,7 @@ import { eraC2s, eraPnm06a, eraS2c } from '../../../src/astronomy/coordinates/er
 import { horizontalToEnuVector } from '../../../src/astronomy/coordinates/frame.local'
 import { localSiderealTime } from '../../../src/astronomy/observer/location'
 import { timeYMDHMS, tt } from '../../../src/astronomy/time/time'
-import { ASEC2RAD, PI } from '../../../src/core/constants'
+import { ASEC2RAD, PIOVERTWO } from '../../../src/core/constants'
 import { matMulVec, matRodriguesRotation } from '../../../src/math/linear-algebra/mat3'
 import { sphericalUnprojectTangentPlane } from '../../../src/math/numerical/geometry'
 import { type Angle, arcmin, deg, hour, normalizePI } from '../../../src/math/units/angle'
@@ -43,7 +43,7 @@ function buildChain(withModel: boolean, errorRepresentation: PointingErrorRepres
 		{ mount: [0, 0.4, 1], world: matMulVecLocal(rotation, [0, 0.4, 1]) },
 	])
 	const samples = generateMechanicalPointingSamples(TERMS, { count: 120, seed: 131, time: TIME, latitude: LATITUDE, longitude: LONGITUDE })
-	const model = fitPointingModel(samples, { strategy: 'semiPhysical', robust: { method: 'none' }, ridge: 1e-12, errorRepresentation, validation: { minimumAltitude: -PI / 2 } })
+	const model = fitPointingModel(samples, { strategy: 'semiPhysical', robust: { method: 'none' }, ridge: 1e-12, errorRepresentation, validation: { minimumAltitude: -PIOVERTWO } })
 
 	return { geometry: createIdealAltAzGeometry(), alignment, model: withModel ? model : undefined }
 }
@@ -172,7 +172,7 @@ test('the kinematic chain reproduces the horizontal direction the alignment was 
 
 	// With an identity alignment the encoders must land on the plain ENU direction of the target.
 	expect(target.residual).toBeLessThan(1e-9)
-	expect(Math.abs(altitude - (PI / 2 - Math.acos(Math.min(1, Math.max(-1, expected[2])))))).toBeLessThan(1e-12)
+	expect(Math.abs(altitude - (PIOVERTWO - Math.acos(Math.min(1, Math.max(-1, expected[2])))))).toBeLessThan(1e-12)
 	expect(encodersToCelestial(chain, target, CONTEXT).rightAscension).toBeCloseTo(desired.rightAscension, 9)
 	expect(encodersToCelestial(chain, target, CONTEXT).declination).toBeCloseTo(desired.declination, 9)
 })

@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { PI, PIOVERTWO } from '../../../../src/core/constants'
+import { PI, PIOVERTWO, TAU } from '../../../../src/core/constants'
 import { analyzeBahtinov as analyzeBahtinovWithWorkspace } from '../../../../src/imaging/analysis/bahtinov/bahtinov'
 import { bahtinovAxialAngleDistance, bahtinovAxialBisectors } from '../../../../src/imaging/analysis/bahtinov/geometry'
 import { createBahtinovOverlayGeometry } from '../../../../src/imaging/analysis/bahtinov/overlay'
@@ -306,7 +306,7 @@ test('rejects a detected pattern beyond the expected angular limit', () => {
 			center: { x: 63.5, y: 63.5 },
 			expected: {
 				centralNormalAngle: (PIOVERTWO * 3) / 2,
-				externalNormalAngles: [(PI * 2) / 3, (PI * 5) / 6],
+				externalNormalAngles: [TAU / 3, (PI * 5) / 6],
 				maximumAngleDelta: PI / 180,
 			},
 		},
@@ -387,8 +387,8 @@ test('validates the expected pattern before content failures', () => {
 	const source = image(raw, width, height)
 	const workspace = createBahtinovWorkspace(width, height)
 	const base = { image: source, area: { left: 0, top: 0, right: width, bottom: height }, center: { x: 31.5, y: 31.5 } } as const
-	expect(() => analyzeBahtinovWithWorkspace({ ...base, expected: { centralNormalAngle: Number.NaN, externalNormalAngles: [PI / 3, (PI * 2) / 3] } }, workspace)).toThrow(RangeError)
-	expect(() => analyzeBahtinovWithWorkspace({ ...base, expected: { centralNormalAngle: PIOVERTWO, externalNormalAngles: [PI / 3, (PI * 2) / 3], maximumAngleDelta: PI } }, workspace)).toThrow(RangeError)
+	expect(() => analyzeBahtinovWithWorkspace({ ...base, expected: { centralNormalAngle: Number.NaN, externalNormalAngles: [PI / 3, TAU / 3] } }, workspace)).toThrow(RangeError)
+	expect(() => analyzeBahtinovWithWorkspace({ ...base, expected: { centralNormalAngle: PIOVERTWO, externalNormalAngles: [PI / 3, TAU / 3], maximumAngleDelta: PI } }, workspace)).toThrow(RangeError)
 })
 
 test('uses an approximate center only to anchor the analysis region', () => {

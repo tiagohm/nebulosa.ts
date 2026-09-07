@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test'
+import { TAU } from '../../src/core/constants'
 import { binarySearch, binarySearchWithComparator, geometricMedian, isNumberArray, maxOf, meanOf, medianAbsoluteDeviationOf, medianBySelectionOf, medianOf, minOf, NumberComparator, NumberComparatorDescending, percentileOf, quickSelect, rmsOf, standardDeviationOf } from '../../src/core/util'
 
 test('is number array', () => {
@@ -194,11 +195,11 @@ test('geometric median declines normalized separations below representable resol
 	expect(geometricMedian([-1e-300, -1e-300, 1e-300, 1e-300, 1e300], [-1e-300, 1e-300, -1e-300, 1e-300, 0])).toBeUndefined()
 })
 
-test('geometric median has no collimation frame-count limit', () => {
+test('geometric median has no frame-count limit', () => {
 	const x = new Float64Array(4096)
 	const y = new Float64Array(4096)
 	for (let i = 0; i < x.length; i++) {
-		const theta = (2 * Math.PI * i) / x.length
+		const theta = (TAU * i) / x.length
 		x[i] = 3 + 100 * Math.cos(theta)
 		y[i] = -2 + 100 * Math.sin(theta)
 	}

@@ -3,7 +3,7 @@ import { equatorialToHorizontal } from '../../../src/astronomy/coordinates/coord
 import { eraC2s, eraS2c } from '../../../src/astronomy/coordinates/erfa/erfa'
 import { localSiderealTime } from '../../../src/astronomy/observer/location'
 import { timeYMDHMS } from '../../../src/astronomy/time/time'
-import { ASEC2RAD, PI, TAU } from '../../../src/core/constants'
+import { ASEC2RAD, PI, PIOVERTWO, TAU } from '../../../src/core/constants'
 import { medianOf } from '../../../src/core/util'
 import { sphericalUnprojectTangentPlane } from '../../../src/math/numerical/geometry'
 import type { NumberArray } from '../../../src/math/numerical/math'
@@ -168,7 +168,7 @@ describe('leave-one-out error matches explicit refits for every weighting scheme
 		['tukey', contaminated],
 	] as const) {
 		test(method, () => {
-			const options = { strategy: 'semiPhysical', robust: { method }, validation: { minimumAltitude: -PI / 2, maximumSampleSeparation: deg(5) } } as const
+			const options = { strategy: 'semiPhysical', robust: { method }, validation: { minimumAltitude: -PIOVERTWO, maximumSampleSeparation: deg(5) } } as const
 			const model = fitPointingModel(samples, options)
 
 			expect(model.diagnostics.validSamples).toBe(samples.length)
@@ -216,7 +216,7 @@ test('semi-physical fit recovers mechanical misalignments from an independent ge
 		TF: 33 * ASEC2RAD,
 	}
 	const samples = generateMechanicalPointingSamples(terms, { count: 240, seed: 77, time: TIME, latitude: LATITUDE, longitude: LONGITUDE })
-	const model = fitPointingModel(samples, { strategy: 'semiPhysical', robust: { method: 'none' }, ridge: 1e-12, validation: { minimumAltitude: -PI / 2 } })
+	const model = fitPointingModel(samples, { strategy: 'semiPhysical', robust: { method: 'none' }, ridge: 1e-12, validation: { minimumAltitude: -PIOVERTWO } })
 
 	for (let i = 0; i < SEMI_PHYSICAL_TERM_NAMES.length; i++) {
 		const term = SEMI_PHYSICAL_TERM_NAMES[i]
@@ -289,7 +289,7 @@ test('hybrid orthogonalization keeps the fitted physical parameters meaningful',
 		TF: 27 * ASEC2RAD,
 	}
 	const samples = generateMechanicalPointingSamples(terms, { count: 240, seed: 91, time: TIME, latitude: LATITUDE, longitude: LONGITUDE })
-	const model = fitPointingModel(samples, { strategy: 'hybrid', featureConfiguration: FEATURE_CONFIGURATION, robust: { method: 'none' }, ridge: 1e-12, validation: { minimumAltitude: -PI / 2 } })
+	const model = fitPointingModel(samples, { strategy: 'hybrid', featureConfiguration: FEATURE_CONFIGURATION, robust: { method: 'none' }, ridge: 1e-12, validation: { minimumAltitude: -PIOVERTWO } })
 
 	// Without orthogonalization the empirical block would soak up `bias` against `CH` and `sinHA`
 	// against `MA`, leaving good predictions on top of physically meaningless parameters.
@@ -315,7 +315,7 @@ test('missing observing context drops the terms that need it instead of zeroing 
 	const terms: Readonly<Record<SemiPhysicalTermName, Angle>> = { CH: 30 * ASEC2RAD, IH: -40 * ASEC2RAD, ID: 20 * ASEC2RAD, NP: -15 * ASEC2RAD, MA: 0, ME: 0, TF: 0 }
 	const full = generateMechanicalPointingSamples(terms, { count: 120, seed: 13, time: TIME, latitude: LATITUDE, longitude: LONGITUDE })
 	const contextless = full.map((sample) => ({ targetRightAscension: sample.targetRightAscension, targetDeclination: sample.targetDeclination, solvedRightAscension: sample.solvedRightAscension, solvedDeclination: sample.solvedDeclination }))
-	const model = fitPointingModel(contextless, { strategy: 'semiPhysical', robust: { method: 'none' }, ridge: 1e-12, validation: { minimumAltitude: -PI / 2 } })
+	const model = fitPointingModel(contextless, { strategy: 'semiPhysical', robust: { method: 'none' }, ridge: 1e-12, validation: { minimumAltitude: -PIOVERTWO } })
 
 	expect(model.diagnostics.supportedContext).toBe('none')
 	expect(model.physical!.terms).toEqual(['CH', 'IH', 'ID', 'NP'])
@@ -339,7 +339,7 @@ test('ridge shrinkage is invariant to the number of samples', () => {
 	// repetition count, so a scale-invariant ridge must return the identical fit. A negative duplicate
 	// tolerance keeps the validator from rejecting the repeats.
 	const large = [...small, ...small, ...small, ...small, ...small]
-	const fitOptions = { strategy: 'empirical', featureConfiguration: FEATURE_CONFIGURATION, robust: { method: 'none' }, ridge: 0.05, validation: { duplicateTolerance: -1, minimumAltitude: -PI / 2 } } as const
+	const fitOptions = { strategy: 'empirical', featureConfiguration: FEATURE_CONFIGURATION, robust: { method: 'none' }, ridge: 0.05, validation: { duplicateTolerance: -1, minimumAltitude: -PIOVERTWO } } as const
 	const smallFit = fitPointingModel(small, fitOptions)
 	const largeFit = fitPointingModel(large, fitOptions)
 
@@ -394,7 +394,7 @@ test('a declared uncertainty downweights a corrupted sample', () => {
 	// One sample is off by a quarter of a degree, far beyond the plate-solve accuracy of the others.
 	const corrupted = clean.map((sample, index) => (index === 7 ? displacePointingSample(sample, deg(0.25), deg(-0.2)) : sample))
 	const annotated = corrupted.map((sample, index) => ({ ...sample, uncertainty: index === 7 ? deg(0.3) : arcsecUncertainty }))
-	const fitOptions = { strategy: 'empirical', featureConfiguration: FEATURE_CONFIGURATION, robust: { method: 'none' }, validation: { minimumAltitude: -PI / 2 } } as const
+	const fitOptions = { strategy: 'empirical', featureConfiguration: FEATURE_CONFIGURATION, robust: { method: 'none' }, validation: { minimumAltitude: -PIOVERTWO } } as const
 	const blind = fitPointingModel(corrupted, fitOptions)
 	const weighted = fitPointingModel(annotated, fitOptions)
 
@@ -417,7 +417,7 @@ test('prediction support decays away from the training set and follows the spher
 
 	// Support is measured between unit vectors, so a right ascension expressed one turn away describes
 	// the same direction. A distance taken on the raw angles would instead report a full circle.
-	const wrapped = predictPointingModelError(model, { ...sampleInput(samples[9]), rightAscension: samples[9].targetRightAscension + 2 * PI }).quality
+	const wrapped = predictPointingModelError(model, { ...sampleInput(samples[9]), rightAscension: samples[9].targetRightAscension + TAU }).quality
 	expect(wrapped.kthNeighborDistance).toBeCloseTo(inside.kthNeighborDistance, 12)
 	expect(wrapped.support).toBeCloseTo(inside.support, 12)
 })
@@ -459,7 +459,7 @@ test('leave-one-out residuals expose the overfitting that the in-sample rms hide
 	const dy = coefficientsByName(featureNames, { bias: arcmin(-0.7), cosHA: arcmin(1.1) })
 	const options = { count: 44, seed: 79, strategy: 'empirical', time: TIME, latitude: LATITUDE, longitude: LONGITUDE, featureConfiguration: FEATURE_CONFIGURATION, empiricalCoefficientsDx: dx, empiricalCoefficientsDy: dy, noiseStd: arcmin(0.5), includeBothPierSides: true } as const
 	const samples = generateSyntheticPointingSamples(options)
-	const fitOptions = { strategy: 'empirical', robust: { method: 'none' }, validation: { minimumAltitude: -PI / 2 } } as const
+	const fitOptions = { strategy: 'empirical', robust: { method: 'none' }, validation: { minimumAltitude: -PIOVERTWO } } as const
 	const modest = fitPointingModel(samples, { ...fitOptions, featureConfiguration: FEATURE_CONFIGURATION })
 	const rich = fitPointingModel(samples, { ...fitOptions, featureConfiguration: { ...FEATURE_CONFIGURATION, includeAltitudeTerms: true, includeCrossTerms: true, includePolynomialTerms: true } })
 
@@ -476,7 +476,7 @@ test('leave-one-out residuals expose the overfitting that the in-sample rms hide
 test('strategy selection returns the candidate with the best leave-one-out error', () => {
 	const terms: Readonly<Record<SemiPhysicalTermName, Angle>> = { CH: 25 * ASEC2RAD, IH: -40 * ASEC2RAD, ID: 33 * ASEC2RAD, NP: -14 * ASEC2RAD, MA: 47 * ASEC2RAD, ME: -22 * ASEC2RAD, TF: 30 * ASEC2RAD }
 	const samples = generateMechanicalPointingSamples(terms, { count: 90, seed: 83, time: TIME, latitude: LATITUDE, longitude: LONGITUDE })
-	const options = { featureConfiguration: FEATURE_CONFIGURATION, robust: { method: 'none' }, validation: { minimumAltitude: -PI / 2 } } as const
+	const options = { featureConfiguration: FEATURE_CONFIGURATION, robust: { method: 'none' }, validation: { minimumAltitude: -PIOVERTWO } } as const
 	const selected = selectPointingStrategy(samples, options)
 	const candidates: readonly PointingModelStrategy[] = ['semiPhysical', 'hybrid', 'empirical']
 
@@ -502,7 +502,7 @@ test('strategy selection returns the candidate with the best leave-one-out error
 test('command inversion lands on the target instead of only cancelling the error at it', () => {
 	const terms: Readonly<Record<SemiPhysicalTermName, Angle>> = { CH: 120 * ASEC2RAD, IH: -200 * ASEC2RAD, ID: 150 * ASEC2RAD, NP: -90 * ASEC2RAD, MA: 240 * ASEC2RAD, ME: -180 * ASEC2RAD, TF: 160 * ASEC2RAD }
 	const samples = generateMechanicalPointingSamples(terms, { count: 120, seed: 97, time: TIME, latitude: LATITUDE, longitude: LONGITUDE })
-	const model = fitPointingModel(samples, { strategy: 'semiPhysical', robust: { method: 'none' }, ridge: 1e-12, validation: { minimumAltitude: -PI / 2 } })
+	const model = fitPointingModel(samples, { strategy: 'semiPhysical', robust: { method: 'none' }, ridge: 1e-12, validation: { minimumAltitude: -PIOVERTWO } })
 	const input = sampleInput(samples[11])
 	const corrected = correctPointingCoordinate(model, input)
 
@@ -524,7 +524,7 @@ test('command inversion lands on the target instead of only cancelling the error
 test('an extrapolating correction is truncated instead of sent to the mount', () => {
 	const terms: Readonly<Record<SemiPhysicalTermName, Angle>> = { CH: 120 * ASEC2RAD, IH: -200 * ASEC2RAD, ID: 150 * ASEC2RAD, NP: -90 * ASEC2RAD, MA: 240 * ASEC2RAD, ME: -180 * ASEC2RAD, TF: 160 * ASEC2RAD }
 	const samples = generateMechanicalPointingSamples(terms, { count: 60, seed: 101, time: TIME, latitude: LATITUDE, longitude: LONGITUDE })
-	const model = fitPointingModel(samples, { strategy: 'semiPhysical', robust: { method: 'none' }, validation: { minimumAltitude: -PI / 2 } })
+	const model = fitPointingModel(samples, { strategy: 'semiPhysical', robust: { method: 'none' }, validation: { minimumAltitude: -PIOVERTWO } })
 	const input = sampleInput(samples[5])
 	const limit = 10 * ASEC2RAD
 	const clamped = correctPointingCoordinate(model, input, { maximumCorrection: limit })
@@ -560,12 +560,12 @@ test('a correction that cannot be measured is refused instead of reported as unc
 		samples.push({ targetRightAscension, targetDeclination, solvedRightAscension: normalizeAngle(targetRightAscension + displacement), solvedDeclination: targetDeclination, time: TIME, latitude: LATITUDE, longitude: LONGITUDE, pierSide: 'NEITHER' })
 	}
 
-	const model = fitPointingModel(samples, { strategy: 'empirical', featureConfiguration, errorRepresentation: 'smallAngle', robust: { method: 'none' }, validation: { minimumAltitude: -PI / 2, maximumSampleSeparation: PI } })
+	const model = fitPointingModel(samples, { strategy: 'empirical', featureConfiguration, errorRepresentation: 'smallAngle', robust: { method: 'none' }, validation: { minimumAltitude: -PIOVERTWO, maximumSampleSeparation: PI } })
 	const input = sampleInput(samples[3])
 	const correction = correctPointingCoordinate(model, input)
 
 	expect(model.usable).toBeTrue()
-	expect(predictPointingModelError(model, input).offsetMagnitude).toBeGreaterThan(PI / 2)
+	expect(predictPointingModelError(model, input).offsetMagnitude).toBeGreaterThan(PIOVERTWO)
 
 	expect(correction.clamped).toBeTrue()
 	expect(correction.converged).toBeFalse()
@@ -578,7 +578,7 @@ test('samples reduced in another frame are rejected instead of mixed into the fi
 	const terms: Readonly<Record<SemiPhysicalTermName, Angle>> = { CH: 40 * ASEC2RAD, IH: -60 * ASEC2RAD, ID: 30 * ASEC2RAD, NP: -20 * ASEC2RAD, MA: 50 * ASEC2RAD, ME: -35 * ASEC2RAD, TF: 25 * ASEC2RAD }
 	const samples = generateMechanicalPointingSamples(terms, { count: 60, seed: 71, time: TIME, latitude: LATITUDE, longitude: LONGITUDE })
 	const mixed = samples.map((sample, i) => (i % 3 === 0 ? { ...sample, frame: 'icrs' as const } : sample))
-	const model = fitPointingModel(mixed, { strategy: 'semiPhysical', robust: { method: 'none' }, validation: { minimumAltitude: -PI / 2 } })
+	const model = fitPointingModel(mixed, { strategy: 'semiPhysical', robust: { method: 'none' }, validation: { minimumAltitude: -PIOVERTWO } })
 
 	// The declared-frame samples differ by the whole apparent-place reduction, which is not mechanical.
 	expect(model.frame).toBe('apparentTopocentric')
@@ -588,7 +588,7 @@ test('samples reduced in another frame are rejected instead of mixed into the fi
 	// Declaring the same frame the fit uses changes nothing.
 	const declared = fitPointingModel(
 		samples.map((sample) => ({ ...sample, frame: 'icrs' as const })),
-		{ strategy: 'semiPhysical', frame: 'icrs', robust: { method: 'none' }, validation: { minimumAltitude: -PI / 2 } },
+		{ strategy: 'semiPhysical', frame: 'icrs', robust: { method: 'none' }, validation: { minimumAltitude: -PIOVERTWO } },
 	)
 	expect(declared.frame).toBe('icrs')
 	expect(declared.trainingSampleCount).toBe(60)
@@ -628,7 +628,7 @@ test('a fit with nothing left to summarize reports zeros instead of NaN', () => 
 test('importing a model can restore the training samples', () => {
 	const terms: Readonly<Record<SemiPhysicalTermName, Angle>> = { CH: 40 * ASEC2RAD, IH: -60 * ASEC2RAD, ID: 30 * ASEC2RAD, NP: -20 * ASEC2RAD, MA: 50 * ASEC2RAD, ME: -35 * ASEC2RAD, TF: 25 * ASEC2RAD }
 	const samples = generateMechanicalPointingSamples(terms, { count: 60, seed: 73, time: TIME, latitude: LATITUDE, longitude: LONGITUDE })
-	const source = new MountPointing({ strategy: 'hybrid', robust: { method: 'none' }, validation: { minimumAltitude: -PI / 2 } })
+	const source = new MountPointing({ strategy: 'hybrid', robust: { method: 'none' }, validation: { minimumAltitude: -PIOVERTWO } })
 
 	for (const sample of samples) source.add(sample)
 
@@ -641,7 +641,7 @@ test('importing a model can restore the training samples', () => {
 
 	// A model imported with its dataset can be refitted without recollecting, and the model itself is
 	// restored without the dataset hanging off it.
-	const target = new MountPointing({ strategy: 'hybrid', robust: { method: 'none' }, validation: { minimumAltitude: -PI / 2 } })
+	const target = new MountPointing({ strategy: 'hybrid', robust: { method: 'none' }, validation: { minimumAltitude: -PIOVERTWO } })
 	const imported = target.import(withSamples)
 
 	expect((imported as SerializedPointingModel).samples).toBeUndefined()

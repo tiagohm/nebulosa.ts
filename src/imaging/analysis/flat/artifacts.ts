@@ -1,3 +1,4 @@
+import { PI } from '../../../core/constants'
 import { STANDARD_DEVIATION_SCALE } from '../../../core/util'
 import type { ImageMetadata } from '../../model/types'
 import { gaussianBlurKernel, separableSmoothing, type SeparableSmoothingKernel } from '../../processing/convolution'
@@ -433,7 +434,7 @@ function resolveCandidate(moments: ComponentMoments, grid: ArtifactGrid, margin:
 	const semiMinor = Math.sqrt(minorVariance)
 	if (!(semiMinor >= grid.spacing * 0.35) || !Number.isFinite(semiMajor) || semiMajor / semiMinor > MAXIMUM_DUST_ASPECT_RATIO) return undefined
 	let angle = 0.5 * Math.atan2(2 * covarianceXY, covarianceX - covarianceY)
-	if (angle < 0) angle += Math.PI
+	if (angle < 0) angle += PI
 	const contrast = -moments.minimumResidual
 	if (!Number.isFinite(centerX) || !Number.isFinite(centerY) || !Number.isFinite(angle) || !Number.isFinite(contrast) || contrast < options.minimumContrast) return undefined
 	return { center: { x: centerX, y: centerY }, semiMajor, semiMinor, angle, contrast, supportArea }

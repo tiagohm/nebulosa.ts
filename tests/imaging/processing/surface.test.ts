@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 // oxfmt-ignore
 import { basisTermCount, createScalarSurfaceEvaluator, createScalarSurfacePointEvaluator, createSurfaceColumnTable, evaluateScalarSurfaceInto, fillBasisExponents, fillChebyshev, fitScalarSurface, fullSurfaceDomain, SURFACE_MAX_CONTROL_POINTS, SURFACE_MAX_POLYNOMIAL_SAMPLES, type SurfaceFitOptions, type SurfaceSample } from '../../../src/imaging/processing/surface'
+import { PI } from '../../../src/core/constants'
 
 function sampleGrid(width: number, height: number, columns: number, rows: number, value: (x: number, y: number) => number, weight?: (x: number, y: number) => number) {
 	const samples: SurfaceSample[] = []
@@ -576,7 +577,7 @@ describe('thin-plate spline', () => {
 			const samples: SurfaceSample[] = []
 			// A dominant collinear run plus a few off-line samples: the layout family that kept slipping
 			// through, with the run's direction, length and the off-line cluster all varying.
-			const angle = random() * Math.PI
+			const angle = random() * PI
 			const dx = Math.cos(angle)
 			const dy = Math.sin(angle)
 			const runLength = 6 + Math.floor(random() * 20)

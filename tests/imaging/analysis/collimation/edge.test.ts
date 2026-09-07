@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { PI } from '../../../../src/core/constants'
+import { PI, TAU } from '../../../../src/core/constants'
 import { collimationCoverage, collimationRayRadius, extractCollimationEdges, initializeCollimationRadii, sampleCollimationPlane } from '../../../../src/imaging/analysis/collimation/edge'
 import { prepareCollimation } from '../../../../src/imaging/analysis/collimation/preprocess'
 import { generateSyntheticCollimationImage } from '../../../../src/imaging/synthetic/collimation'
@@ -37,7 +37,7 @@ test('coverage respects circular gaps and density', () => {
 		expect(collimationCoverage(weights, n).coverage).toBeCloseTo(0.8, 14)
 		expect(collimationCoverage(weights, n).maximumGap).toBeCloseTo(0.4 * PI, 14)
 		weights.fill(0)
-		expect(collimationCoverage(weights, n).maximumGap).toBeCloseTo(2 * PI, 14)
+		expect(collimationCoverage(weights, n).maximumGap).toBeCloseTo(TAU, 14)
 	}
 })
 

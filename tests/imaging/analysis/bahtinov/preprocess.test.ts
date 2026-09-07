@@ -344,7 +344,7 @@ test('bounds a wide ridge grid by the point-buffer capacity', () => {
 	const raw = new Float64Array(width * height)
 	raw.fill(0.01)
 	plotBahtinovSpikes(raw, width, height, 1, 3500, 7.5, 200, 0, undefined, {
-		normalAngles: [PI / 12, PI / 2, (PI * 11) / 12],
+		normalAngles: [PI / 12, PIOVERTWO, (PI * 11) / 12],
 		central: 1,
 		strengths: [0, 1, 0],
 		fwhm: 1,

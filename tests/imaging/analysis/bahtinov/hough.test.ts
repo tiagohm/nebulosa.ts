@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { PI, PIOVERTWO } from '../../../../src/core/constants'
+import { PI, PIOVERTWO, TAU } from '../../../../src/core/constants'
 import { bahtinovAxialAngleDistance } from '../../../../src/imaging/analysis/bahtinov/geometry'
 import { detectBahtinovHoughCandidates, validateBahtinovHoughOptions } from '../../../../src/imaging/analysis/bahtinov/hough'
 import { createBahtinovWorkspace, preprocessBahtinov } from '../../../../src/imaging/analysis/bahtinov/preprocess'
@@ -108,7 +108,7 @@ test('caps default candidates to coarse workspaces and rejects fewer than three 
 	const raw = new Float64Array(width * height)
 	raw.fill(0.01)
 	plotBahtinovSpikes(raw, width, height, 1, 39.5, 39.5, 100, 0, undefined, {
-		normalAngles: [0, PI / 3, (PI * 2) / 3],
+		normalAngles: [0, PI / 3, TAU / 3],
 		central: 1,
 		halfLength: 28,
 		taperLength: 4,

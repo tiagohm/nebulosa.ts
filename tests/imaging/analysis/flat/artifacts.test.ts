@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test'
+import { PIOVERTWO } from '../../../../src/core/constants'
 import { analyzeFlat } from '../../../../src/imaging/analysis/flat/flat'
 import { generateSyntheticFlatImage } from '../../../../src/imaging/synthetic/flat'
 
@@ -142,7 +143,7 @@ test('reports anisotropically binned candidate axes in output image pixels', () 
 	expect(candidate!.center.x).toBeCloseTo(63.6, 0)
 	expect(candidate!.center.y).toBeCloseTo(95.7, 0)
 	expect(candidate!.semiMajor / candidate!.semiMinor).toBeGreaterThan(2)
-	expect(candidate!.angle).toBeCloseTo(Math.PI / 2, 1)
+	expect(candidate!.angle).toBeCloseTo(PIOVERTWO, 1)
 })
 
 test('uses the selected CFA grid while preserving candidate image coordinates', () => {
