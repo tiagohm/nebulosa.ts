@@ -7,7 +7,7 @@ import { findingsCount } from './result.metrics'
 export class CodexReviewProvider implements ReviewProvider {
 	readonly id = 'codex'
 	readonly capabilities: ReadonlySet<ProviderOption> = new Set(['model', 'effort', 'allowSubagents'])
-	readonly defaults = { allowSubagents: false }
+	readonly defaults = { allowSubagents: false, effort: 'high' }
 
 	async prepareSession(request: SessionRequest): Promise<PreparedSession> {
 		const executable = Bun.which('codex')
