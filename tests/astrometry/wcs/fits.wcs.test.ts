@@ -72,6 +72,30 @@ const TAN_SIP_HEADER = {
 
 describe('scale and crop FITS WCS', () => {
 	test.each([
+		['PC with implicit scales', { ...TAN_PC_HEADER, CDELT1: undefined, CDELT2: undefined }, { ...TAN_PC_HEADER, CDELT1: 1, CDELT2: 1 }],
+		['PC with one implicit scale', { ...TAN_PC_HEADER, CDELT2: undefined }, { ...TAN_PC_HEADER, CDELT2: 1 }],
+		['CD with implicit reference point', { ...TAN_HEADER, CRPIX1: undefined, CRPIX2: undefined, CRVAL1: undefined, CRVAL2: undefined }, { ...TAN_HEADER, CRPIX1: 0, CRPIX2: 0, CRVAL1: 0, CRVAL2: 0 }],
+		['TAN with implicit identity', { CTYPE1: 'RA---TAN', CTYPE2: 'DEC--TAN' }, { CTYPE1: 'RA---TAN', CTYPE2: 'DEC--TAN', CRPIX1: 0, CRPIX2: 0, CRVAL1: 0, CRVAL2: 0, CDELT1: 1, CDELT2: 1 }],
+	] as const)('%s preserves the FITS default coordinate mapping', (_name, source, explicit) => {
+		// FITS 4.0 section 8.2: missing CRPIX/CRVAL default to zero, CDELT to one, and PC to identity.
+		const result: FitsHeader = { ...source }
+		scaleAndCropFitsWcs(result, 2.3, 1.7, 13, 7)
+		expect(result.CTYPE1).toBe('RA---TAN')
+		expect(result.CDELT1).toBeUndefined()
+		expect(result.PC1_1).toBeUndefined()
+		for (const [x, y] of [
+			[1, 1],
+			[17, 25],
+			[103, 87],
+		]) {
+			const expected = tanUnproject(explicit, x, y)!
+			const actual = tanUnproject(result, (x - 0.5) * 2.3 + 0.5 - 13, (y - 0.5) * 1.7 + 0.5 - 7)!
+			expect(actual).toBeDefined()
+			expectMatrixCloseTo(actual, expected)
+		}
+	})
+
+	test.each([
 		['CD', TAN_HEADER],
 		['PC', TAN_PC_HEADER],
 		['CROTA', TAN_CROTA_HEADER],

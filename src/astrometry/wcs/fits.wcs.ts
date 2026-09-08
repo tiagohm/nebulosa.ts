@@ -306,21 +306,36 @@ export function reflectFitsWcs(header: FitsHeader, width: number, height: number
 const RESIZED_WCS_KEY_PATTERN =
 	/^(?:(?:WCSAXES|WCSNAME|CUNIT\d+|CTYPE\d+|CRPIX\d+|CRVAL\d+|PS\d+_\d+|PV\d+_\d+|CD\d+_\d+|PC\d+_\d+|CDELT\d+|CROTA\d+|RADESYS|LONPOLE|LATPOLE|EQUINOX|A_\d+_\d+|AP_\d+_\d+|B_\d+_\d+|BP_\d+_\d+|A_ORDER|AP_ORDER|B_ORDER|BP_ORDER|A_DMAX|B_DMAX)[A-Z]?|(?:CPDIS|CQDIS|D2IMDIS|DET2IM)\d+[A-Z]?|(?:DP|DQ|D2IM)\d+(?:\..*)?)$/
 
+// Explicit primary axis declarations distinguish a WCS using implicit defaults from observation-only metadata.
+const RESIZED_WCS_AXIS_PATTERN = /^(?:WCSAXES|CUNIT\d+|CTYPE\d+|CRPIX\d+|CRVAL\d+|CD\d+_\d+|PC\d+_\d+|CDELT\d+|CROTA\d+)$/
+
 // Resizes/crops a cloned FITS header in place and returns it. scaleX/Y are positive output samples per
 // input pixel; left/top are crop offsets in the enlarged grid. CRPIX uses FITS base-1 centers.
 // Supports a primary two-axis linear WCS and TAN-SIP, including optional AP/BP. Alternate solutions
 // and unsupported/malformed pixel distortions are removed completely, never presented as linear TAN.
+// FITS 4.0 section 8.2 defaults apply to declared axes: CRPIX/CRVAL=0, CDELT=1 and PC=identity.
+// Headers without axis declarations do not acquire a synthetic solution.
 export function scaleAndCropFitsWcs(header: FitsHeader, scaleX: number, scaleY: number, left: number, top: number) {
 	for (const key in header) {
 		if (/[A-Z]$/.test(key) && RESIZED_WCS_KEY_PATTERN.test(key) && RESIZED_WCS_KEY_PATTERN.test(key.slice(0, -1))) delete header[key]
 	}
 
+	const hasAxes = hasMatchingKeyword(header, RESIZED_WCS_AXIS_PATTERN)
+	// Materialize scale defaults for the shared CD/PC/CROTA reader. The canonical CD output below
+	// removes these cards again; no additional header clone is needed.
+	if (hasAxes) {
+		header.CDELT1 ??= 1
+		header.CDELT2 ??= 1
+	}
+
 	const [a, b, c, d] = cdMatrix(header)
-	const crpix1 = numericKeyword(header, 'CRPIX1', Number.NaN)
-	const crpix2 = numericKeyword(header, 'CRPIX2', Number.NaN)
+	const crpix1 = numericKeyword(header, 'CRPIX1', 0)
+	const crpix2 = numericKeyword(header, 'CRPIX2', 0)
+	const crval1 = numericKeyword(header, 'CRVAL1', 0)
+	const crval2 = numericKeyword(header, 'CRVAL2', 0)
 	const sip = hasSipAxes(header)
 
-	let supported = Number.isFinite(crpix1) && Number.isFinite(crpix2) && Number.isFinite(numericKeyword(header, 'CRVAL1', Number.NaN)) && Number.isFinite(numericKeyword(header, 'CRVAL2', Number.NaN)) && Number.isFinite(a * d - b * c) && a * d - b * c !== 0 && numericKeyword(header, 'WCSAXES', 2) === 2
+	let supported = hasAxes && Number.isFinite(crpix1) && Number.isFinite(crpix2) && Number.isFinite(crval1) && Number.isFinite(crval2) && Number.isFinite(a * d - b * c) && a * d - b * c !== 0 && numericKeyword(header, 'WCSAXES', 2) === 2
 	if (tanAxisType(header, 'CTYPE1').includes('-SIP') || tanAxisType(header, 'CTYPE2').includes('-SIP')) supported &&= sip
 
 	for (const key in header) {
@@ -358,6 +373,8 @@ export function scaleAndCropFitsWcs(header: FitsHeader, scaleX: number, scaleY: 
 
 	header.CRPIX1 = (crpix1 - 0.5) * scaleX + 0.5 - left
 	header.CRPIX2 = (crpix2 - 0.5) * scaleY + 0.5 - top
+	header.CRVAL1 = crval1
+	header.CRVAL2 = crval2
 	header.CD1_1 = a / scaleX
 	header.CD1_2 = b / scaleY
 	header.CD2_1 = c / scaleX
