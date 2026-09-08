@@ -1,4 +1,4 @@
-import { makeImageRawTypedArray, type CfaPattern, type Image, type ImageRawType } from '../model/types'
+import { cfaChannelAt, makeImageRawTypedArray, type CfaPattern, type Image, type ImageRawType } from '../model/types'
 
 // Bayer/debayer conversions between an RGB image and a mono CFA mosaic. `bayer` samples one color per
 // pixel from a CFA pattern; `debayer` reconstructs RGB by neighborhood averaging. Both build fresh
@@ -28,8 +28,8 @@ function makeInteriorScales(rows: readonly [Uint8Array, Uint8Array], yParity: nu
 }
 
 // Builds lookup data for one repeating 2x2 CFA pattern.
-function makeCfaPatternData(evenRow: readonly [number, number], oddRow: readonly [number, number]): CfaPatternData {
-	const rows = [new Uint8Array(evenRow), new Uint8Array(oddRow)] as const
+function makeCfaPatternData(pattern: CfaPattern): CfaPatternData {
+	const rows = [new Uint8Array([cfaChannelAt(pattern, 0, 0), cfaChannelAt(pattern, 1, 0)]), new Uint8Array([cfaChannelAt(pattern, 0, 1), cfaChannelAt(pattern, 1, 1)])] as const
 
 	return {
 		rows,
@@ -42,14 +42,14 @@ function makeCfaPatternData(evenRow: readonly [number, number], oddRow: readonly
 
 // Per-Bayer-pattern channel routing and normalization data; channel indices are red 0, green 1, blue 2.
 const CFA_PATTERNS: Record<CfaPattern, CfaPatternData> = {
-	RGGB: makeCfaPatternData([0, 1], [1, 2]),
-	BGGR: makeCfaPatternData([2, 1], [1, 0]),
-	GBRG: makeCfaPatternData([1, 2], [0, 1]),
-	GRBG: makeCfaPatternData([1, 0], [2, 1]),
-	GRGB: makeCfaPatternData([1, 0], [1, 2]),
-	GBGR: makeCfaPatternData([1, 2], [1, 0]),
-	RGBG: makeCfaPatternData([0, 1], [2, 1]),
-	BGRG: makeCfaPatternData([2, 1], [0, 1]),
+	RGGB: makeCfaPatternData('RGGB'),
+	BGGR: makeCfaPatternData('BGGR'),
+	GBRG: makeCfaPatternData('GBRG'),
+	GRBG: makeCfaPatternData('GRBG'),
+	GRGB: makeCfaPatternData('GRGB'),
+	GBGR: makeCfaPatternData('GBGR'),
+	RGBG: makeCfaPatternData('RGBG'),
+	BGRG: makeCfaPatternData('BGRG'),
 }
 
 // Bayer an RGB image into a mono CFA frame.

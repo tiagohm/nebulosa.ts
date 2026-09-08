@@ -1,8 +1,11 @@
 import { describe, expect, test } from 'bun:test'
-import type { Image } from '../../../src/imaging/model/types'
+import { readImageFromBuffer } from '../../../src/imaging/model/image'
+import type { CfaPattern, Image } from '../../../src/imaging/model/types'
+import { bayer } from '../../../src/imaging/processing/debayer'
 import { LiveStacker, type StackingFrame, type StackingOptions, stackFrames } from '../../../src/imaging/processing/stacker'
 import type { DetectedStar } from '../../../src/imaging/stars/detector'
-import { Bitpix } from '../../../src/io/formats/fits/fits'
+import { Bitpix, writeFits } from '../../../src/io/formats/fits/fits'
+import { bufferSink } from '../../../src/io/io'
 
 const DEFAULT_STACK_OPTIONS = {
 	minAcceptedStars: 3,
@@ -20,6 +23,298 @@ const DEFAULT_STACK_OPTIONS = {
 		maxResidual: 0.5,
 	},
 } as const satisfies StackingOptions
+
+const DRIZZLE_OPTIONS = { ...DEFAULT_STACK_OPTIONS, reconstructionMode: 'drizzle', samplePrecision: 64 } as const satisfies StackingOptions
+
+describe('Drizzle stacker integration', () => {
+	test('default photometry does not amplify a noisy background after a half-pixel dither', () => {
+		let seed = 123456789
+		const source = makeImage(256, 256, 1, () => {
+			seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0
+			return 0.2 + 0.04 * (seed / 4294967296 - 0.5)
+		})
+		const frames = [makeFrame(source, makeStars()), makeFrame(source, makeStars(-0.5, -0.5))]
+		const options = { reconstructionMode: 'drizzle', samplePrecision: 64, matchStarsConfig: DEFAULT_STACK_OPTIONS.matchStarsConfig } as const satisfies StackingOptions
+		const batch = stackFrames(frames, options)
+		const live = new LiveStacker(options)
+		for (const frame of frames) live.add(frame)
+		expect(batch.acceptedFrames).toBe(2)
+		expect(batch.statistics.normalizationMode).toBe('background-scale')
+		expect(Math.abs(batch.diagnostics[1].normalization!.scales[0] - 1)).toBeLessThan(0.08)
+		expect(live.snapshot()!.diagnostics).toEqual(batch.diagnostics)
+	})
+
+	test('registration preserves rotated, mirrored and affine fields from differently sized targets', () => {
+		for (const [a, b, c, d, tx, ty] of [
+			[Math.cos(0.2), -Math.sin(0.2), Math.sin(0.2), Math.cos(0.2), 1, -1],
+			[-1, 0, 0, 1, 17, 0],
+			[1.02, 0.08, 0.03, 0.98, 0.2, 0.4],
+		]) {
+			const stars = makeStars()
+			const det = a * d - b * c
+			const targetStars = stars.map((s) => ({ ...s, x: (d * (s.x - tx) - b * (s.y - ty)) / det, y: (-c * (s.x - tx) + a * (s.y - ty)) / det }))
+			const result = stackFrames([makeFrame(makeImage(18, 18, 1, 0.4), stars), makeFrame(makeImage(21, 20, 1, 0.4), targetStars)], {
+				...DRIZZLE_OPTIONS,
+				minimumCoverage: 1,
+				matchStarsConfig: { ...DEFAULT_STACK_OPTIONS.matchStarsConfig, allowAffineFallback: true, modelPreference: 'affine', maxResidual: 2, finalMatchRadius: 2 },
+			})
+			expect(result.acceptedFrames).toBe(2)
+			expect(result.diagnostics[1].transform!.translationX).toBeCloseTo(tx, 7)
+			expect(result.diagnostics[1].transform!.translationY).toBeCloseTo(ty, 7)
+			expect(result.diagnostics[1].transform!.mirrored).toBe(det < 0)
+			for (let p = 0; p < result.validityMask!.length; p++) {
+				if (result.validityMask![p]) expect(result.finalImage!.raw[p]).toBeCloseTo(0.4, 6)
+			}
+		}
+	})
+
+	test('weighted mean uses resolved frame weights, and minimum coverage counts frames rather than weights', () => {
+		// Keep the tested boundary away from an exact integer contact: the fitted affine may carry
+		// roundoff-sized positive overlaps, which deliberately count as support without an epsilon.
+		const frames = [makeFrame(makeImage(18, 18, 1, 0.2), makeStars(), 1), makeFrame(makeImage(18, 18, 1, 0.8), makeStars(-2.25, 0), 3)]
+		const result = stackFrames(frames, { ...DRIZZLE_OPTIONS, combinationMethod: 'weighted-average', minimumCoverage: 1, drizzle: { scale: 1 } })
+		expect(result.statistics.acceptedWeightSum).toBe(4)
+		for (let y = 0; y < 18; y++) {
+			for (let x = 0; x < 18; x++) {
+				const p = y * 18 + x
+				expect(result.validityMask![p]).toBe(x >= 2 ? 1 : 0)
+				expect(result.finalImage!.raw[p]).toBeCloseTo(x === 2 ? (0.2 + 0.8 * 3 * 0.75) / (1 + 3 * 0.75) : x > 2 ? 0.65 : 0, 6)
+			}
+		}
+	})
+
+	test('global normalization is shared by batch/live and effective CFA scales have three channels', () => {
+		for (const reconstructionMode of ['drizzle', 'cfaDrizzle'] as const) {
+			const rgb = makeImage(18, 18, 3, (x, y, c) => 0.1 + x * 0.01 + y * 0.003 + c * 0.1)
+			const targetRgb = makeImage(18, 18, 3, (x, y, c) => (0.1 + x * 0.01 + y * 0.003 + c * 0.1 - 0.03) / 2)
+			const reference = reconstructionMode === 'drizzle' ? rgb : bayer(rgb, 'RGGB')!
+			const target = reconstructionMode === 'drizzle' ? targetRgb : bayer(targetRgb, 'RGGB')!
+			const frames = [makeFrame(reference, makeStars()), makeFrame(target, makeStars())]
+			const options = { ...DRIZZLE_OPTIONS, reconstructionMode, normalizationMode: 'background-scale' } as const
+			const batch = stackFrames(frames, options)
+			const live = new LiveStacker(options)
+			for (const frame of frames) live.add(frame)
+			expect(live.snapshot()!.weightMap).toEqual(batch.weightMap)
+			expect(live.snapshot()!.diagnostics).toEqual(batch.diagnostics)
+			expect(batch.diagnostics[0].normalization!.scales).toEqual([1, 1, 1])
+			for (const scale of batch.diagnostics[1].normalization!.scales) expect(scale).toBeCloseTo(2, 5)
+			for (const offset of batch.diagnostics[1].normalization!.offsets) expect(offset).toBeCloseTo(0.03, 5)
+		}
+	})
+
+	test('Float32 override and automatic reference precision describe the final raw', () => {
+		const single = makeFrame(makeImage(3, 2, 3, 0.4), [])
+		const double: StackingFrame = { ...single, image: { ...single.image, raw: Float64Array.from(single.image.raw) } }
+		for (const samplePrecision of [32, 64, 'auto'] as const) {
+			for (const frame of [single, double]) {
+				const result = stackFrames([frame], { ...DRIZZLE_OPTIONS, samplePrecision }).finalImage!
+				const bytes = samplePrecision === 'auto' ? frame.image.raw.BYTES_PER_ELEMENT : samplePrecision / 8
+				expect(result.raw.BYTES_PER_ELEMENT).toBe(bytes)
+				expect(result.metadata.pixelSizeInBytes).toBe(bytes)
+				expect(result.metadata.strideInBytes).toBe(result.metadata.stride * bytes)
+			}
+		}
+	})
+
+	test('identity scale one preserves pixels; scale two separates intensity and total sum', () => {
+		const source = makeImage(3, 2, 1, (x, y) => (x + y + 1) / 8)
+		for (const combinationMethod of ['average', 'sum'] as const) {
+			const single = stackFrames([makeFrame(source, [])], { ...DRIZZLE_OPTIONS, combinationMethod, drizzle: { scale: 1 } })
+			expectRawClose(single.finalImage!.raw, source.raw, 1e-12)
+			const doubled = stackFrames([makeFrame(source, [])], { ...DRIZZLE_OPTIONS, combinationMethod })
+			expect(doubled.finalImage!.metadata.width).toBe(6)
+			expect(doubled.finalImage!.metadata.height).toBe(4)
+			for (let y = 0; y < 4; y++) for (let x = 0; x < 6; x++) expect(doubled.finalImage!.raw[y * 6 + x]).toBeCloseTo(source.raw[Math.floor(y / 2) * 3 + Math.floor(x / 2)] / (combinationMethod === 'sum' ? 4 : 1), 12)
+			expect(doubled.weightMap!.channels).toBe(1)
+			expect(doubled.statistics.drizzle).toEqual({ scale: 2, pixfrac: 1, outputWidth: 6, outputHeight: 4 })
+		}
+	})
+
+	test.each(['sum', 'average', 'weighted-average'] as const)('%s batch/live agree after subpixel and integer translations, crop and rejected frames', (combinationMethod) => {
+		const source = makeImage(18, 18, 3, (_x, _y, c) => [0.2, 0.5, 0.8][c])
+		const frames = [makeFrame(source, makeStars(), 0.5), makeFrame(source, makeStars(-2, 1), 2), makeFrame(source, makeStars(-0.37, 0.21), 3), makeFrame(source, [], 5)]
+		const options = { ...DRIZZLE_OPTIONS, combinationMethod, cropMode: 'intersection', drizzle: { scale: 1.7, pixfrac: 0.7 } } as const
+		const live = new LiveStacker(options)
+		for (const frame of frames) live.add(frame)
+		const batch = stackFrames(frames, options)
+		const snapshot = live.snapshot()!
+		expect(batch.acceptedFrames).toBe(3)
+		expect(batch.rejectedFrames).toBe(1)
+		expectRawClose(snapshot.finalImage!.raw, batch.finalImage!.raw, 1e-12)
+		expect(snapshot.coverageMap).toEqual(batch.coverageMap)
+		expect(snapshot.validityMask).toEqual(batch.validityMask)
+		expect(snapshot.weightMap!.raw).toEqual(batch.weightMap!.raw)
+		expect(snapshot.effectiveCropBounds).toEqual(batch.effectiveCropBounds)
+		expect(snapshot.statistics.acceptedWeightSum).toBe(5.5)
+		expect(snapshot.coverageMap!.every((v) => v <= 3)).toBeTrue()
+		expect(snapshot.finalImage!.metadata.width).toBeLessThan(snapshot.weightMap!.width)
+		expect(snapshot.finalImage!.metadata.strideInBytes).toBe(snapshot.finalImage!.metadata.width * 3 * 8)
+	})
+
+	test('rejected overlap leaves maps intact; accepted geometric overlap need not imply full drop support', () => {
+		const source = makeImage(18, 18, 1, 0.4)
+		const live = new LiveStacker({ ...DRIZZLE_OPTIONS, minOverlapFraction: 0.99 })
+		live.add(makeFrame(source, makeStars()))
+		const before = live.snapshot()!
+		const result = live.add(makeFrame(source, makeStars(-2, 1)))
+		expect(result.reason).toBe('insufficient-overlap')
+		expect(result.overlapFraction).toBeCloseTo((16 * 17) / 324, 10)
+		expect(live.snapshot()!.weightMap).toEqual(before.weightMap)
+		expect(live.snapshot()!.coverageMap).toEqual(before.coverageMap)
+		expect(live.snapshot()!.finalImage!.raw).toEqual(before.finalImage!.raw)
+	})
+
+	test('map-free output retains mask, holes are real, intersection writes directly to inclusive bounds', () => {
+		const source = makeImage(2, 2, 1, 0.4)
+		const options = { ...DRIZZLE_OPTIONS, drizzle: { scale: 3, pixfrac: 0.2 }, keepPerPixelStatistics: false } as const
+		const union = stackFrames([makeFrame(source, [])], options)
+		expect(union.coverageMap).toBeUndefined()
+		expect(union.weightMap).toBeUndefined()
+		expect(union.validityMask!.reduce((a, b) => a + b, 0)).toBe(4)
+		expect(union.finalImage!.raw.filter((v) => v > 0).length).toBe(4)
+		const intersection = stackFrames([makeFrame(source, [])], { ...options, cropMode: 'intersection' })
+		expect(intersection.effectiveCropBounds).toEqual({ left: 1, top: 1, right: 4, bottom: 4, width: 4, height: 4 })
+		expect(intersection.finalImage!.raw.length).toBe(16)
+		expect(intersection.validityMask!.length).toBe(36)
+	})
+
+	test.each(['RGGB', 'BGGR', 'GBRG', 'GRBG', 'GRGB', 'GBGR', 'RGBG', 'BGRG'] as CfaPattern[])('CFA %s reconstructs RGB intensity from dithers, with both greens sharing one denominator', (pattern) => {
+		const color = makeImage(18, 18, 3, (_x, _y, c) => [0.2, 0.5, 0.8][c])
+		const mosaic = bayer(color, pattern)!
+		const frames = [makeFrame(mosaic, makeStars()), makeFrame(mosaic, makeStars(-1, 0)), makeFrame(mosaic, makeStars(0, -1)), makeFrame(mosaic, makeStars(-1, -1))]
+		const options = { ...DRIZZLE_OPTIONS, reconstructionMode: 'cfaDrizzle', colorHandlingMode: 'luminance', drizzle: { scale: 1 }, cropMode: 'intersection' } as const
+		const live = new LiveStacker(options)
+		live.add(frames[0])
+		const early = live.snapshot()!
+		expect(early.acceptedFrames).toBe(1)
+		expect(early.finalImage).toBeUndefined()
+		expect(early.effectiveCropBounds).toBeUndefined()
+		expect(early.weightMap).toBeDefined()
+		for (let i = 1; i < frames.length; i++) live.add(frames[i])
+		const result = live.snapshot()!
+		expect(result.acceptedFrames).toBe(4)
+		expect(result.finalImage!.metadata.bayer).toBeUndefined()
+		expect(result.statistics.colorHandlingMode).toBe('per-channel')
+		expectRawClose(result.finalImage!.raw, stackFrames(frames, options).finalImage!.raw, 1e-12)
+		for (let i = 0; i < result.finalImage!.raw.length; i++) expect(result.finalImage!.raw[i]).toBeCloseTo([0.2, 0.5, 0.8][i % 3], 6)
+		const sum = stackFrames(frames, { ...options, combinationMethod: 'sum' })
+		for (let i = 0; i < sum.finalImage!.raw.length; i++) expect(sum.finalImage!.raw[i]).toBeCloseTo([0.2, 1, 0.8][i % 3], 6)
+		expect(early.weightMap!.raw).not.toEqual(result.weightMap!.raw)
+		expect(early.validityMask!.every((v) => v === 0)).toBeTrue()
+	})
+
+	test('reference eligibility supports first/best/index and live recovery after incompatible reference', () => {
+		const mono = makeImage(18, 18, 1, 0.4)
+		const mosaic = bayer(makeImage(18, 18, 3, 0.4), 'RGGB')!
+		for (const reconstructionMode of ['drizzle', 'cfaDrizzle'] as const) {
+			const bad = makeFrame(reconstructionMode === 'drizzle' ? mosaic : mono, makeStars(0, 0, 10))
+			const good = makeFrame(reconstructionMode === 'drizzle' ? mono : mosaic, makeStars())
+			const options = { ...DRIZZLE_OPTIONS, reconstructionMode }
+			for (const mode of ['first-accepted', 'best-quality'] as const) {
+				const result = stackFrames([bad, good], { ...options, batchReference: { mode } })
+				expect(result.referenceFrameIndex).toBe(1)
+				expect(result.acceptedFrames).toBe(1)
+				expect(result.rejectedFrames).toBe(1)
+			}
+			const explicit = stackFrames([bad, good], { ...options, batchReference: { mode: 'index', index: 0 } })
+			expect(explicit.acceptedFrames).toBe(0)
+			expect(explicit.referenceFrameIndex).toBe(0)
+			const none = stackFrames([bad, bad], options)
+			expect(none.referenceFrameIndex).toBe(-1)
+			expect(none.diagnostics.length).toBe(2)
+			expect(none.statistics.drizzle).toBeUndefined()
+			const live = new LiveStacker(options)
+			expect(live.add(bad).accepted).toBeFalse()
+			expect(live.snapshot()).toBeUndefined()
+			expect(live.add(good).accepted).toBeTrue()
+			expect(live.snapshot()!.referenceFrameIndex).toBe(1)
+		}
+	})
+
+	test('incompatible configuration fails before frames; resample ignores obsolete drizzle block', () => {
+		for (const options of [{ combinationMethod: 'median' }, { normalizationMode: 'local' }] as const) {
+			expect(() => stackFrames([], { ...DRIZZLE_OPTIONS, ...options })).toThrow(RangeError)
+			expect(() => new LiveStacker({ ...DRIZZLE_OPTIONS, ...options })).toThrow(RangeError)
+		}
+		expect(() => stackFrames([], { ...DRIZZLE_OPTIONS, drizzle: { scale: Infinity } })).toThrow(RangeError)
+		expect(() => stackFrames([], { ...DRIZZLE_OPTIONS, reconstructionMode: 'resample', drizzle: { scale: Infinity, maxMemoryBytes: -1 } })).not.toThrow()
+	})
+
+	test('memory overrun never installs a reference; snapshots survive add/reset/initialize independently', () => {
+		const frame = makeFrame(makeImage(18, 18, 1, 0.4), makeStars())
+		const live = new LiveStacker({ ...DRIZZLE_OPTIONS, drizzle: { maxMemoryBytes: 1 } })
+		expect(() => live.add(frame)).toThrow(RangeError)
+		expect(live.snapshot()).toBeUndefined()
+		live.initialize(DRIZZLE_OPTIONS)
+		live.add(frame)
+		const saved = live.snapshot()!
+		const raw = saved.finalImage!.raw.slice()
+		const weights = saved.weightMap!.raw.slice()
+		const coverage = saved.coverageMap!.slice()
+		live.add(frame)
+		live.reset()
+		expect(live.snapshot()).toBeUndefined()
+		live.initialize({ ...DRIZZLE_OPTIONS, drizzle: { scale: 1 } })
+		live.add(frame)
+		expect(saved.finalImage!.raw).toEqual(raw)
+		expect(saved.weightMap!.raw).toEqual(weights)
+		expect(saved.coverageMap).toEqual(coverage)
+		expect(saved.diagnostics.length).toBe(1)
+	})
+
+	test.each([1, 3])('FITS %i-channel round trip clears Rice/table/scaling metadata and preserves reference', async (channels) => {
+		const source = makeImage(5, 3, channels, (x, y, c) => (x + y + c + 1) / 16)
+		Object.assign(source.header, {
+			XTENSION: 'BINTABLE',
+			BITPIX: 8,
+			NAXIS: 2,
+			NAXIS1: 8,
+			NAXIS2: 3,
+			PCOUNT: 200,
+			GCOUNT: 1,
+			TFIELDS: 1,
+			TTYPE1: 'COMPRESSED_DATA',
+			TFORM1: '1PB',
+			ZIMAGE: true,
+			ZCMPTYPE: 'RICE_1',
+			ZBITPIX: 16,
+			ZNAXIS: 2,
+			ZNAXIS1: 5,
+			ZNAXIS2: 3,
+			ZTILE1: 5,
+			BSCALE: 2,
+			BZERO: 100,
+			BLANK: 0,
+			CHECKSUM: 'stale',
+			DATASUM: 'stale',
+			IMAGEW: 5,
+			IMAGEH: 3,
+			OBJECT: 'M31',
+			ZFOCUS: 5,
+			TELESCOP: 'scope',
+		})
+		const original = { ...source.header }
+		const result = stackFrames([makeFrame(source, [])], { ...DRIZZLE_OPTIONS, drizzle: { scale: 1.3 } }).finalImage!
+		expect(source.header).toEqual(original)
+		expect(result.header.ZIMAGE).toBeUndefined()
+		expect(result.header.BSCALE).toBeUndefined()
+		expect(result.header.TFORM1).toBeUndefined()
+		expect(result.header.CHECKSUM).toBeUndefined()
+		expect(result.header.ZFOCUS).toBe(5)
+		expect(result.header.TELESCOP).toBe('scope')
+		expect(result.header.BITPIX).toBe(Bitpix.DOUBLE)
+		expect(result.header.NAXIS3).toBe(channels === 3 ? 3 : undefined)
+		expect(result.metadata.strideInBytes).toBe(result.metadata.width * channels * 8)
+		const storage = Buffer.alloc(32768)
+		const sink = bufferSink(storage)
+		await writeFits(sink, [result])
+		const restored = (await readImageFromBuffer(storage.subarray(0, sink.position), { raw: 64 }))!
+		expect(restored.metadata.width).toBe(result.metadata.width)
+		expect(restored.metadata.height).toBe(result.metadata.height)
+		expect(restored.metadata.channels).toBe(channels)
+		expectRawClose(restored.raw, result.raw, 1e-12)
+	})
+})
 
 // Builds a synthetic floating-point image.
 function makeImage(width: number, height: number, channels: number, pixel: number | ((x: number, y: number, channel: number) => number)): Image {

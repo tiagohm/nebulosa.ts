@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
-import { cd, cdFromCdelt, cdMatrix, DEC_TAN_SIP, hasCd, isWcsFitsKeyword, pc2cd, RA_TAN_SIP, reflectFitsWcs, tanProject, tanUnproject } from '../../../src/astrometry/wcs/fits.wcs'
+import { cd, cdFromCdelt, cdMatrix, DEC_TAN_SIP, hasCd, isWcsFitsKeyword, pc2cd, RA_TAN_SIP, reflectFitsWcs, scaleAndCropFitsWcs, tanProject, tanUnproject } from '../../../src/astrometry/wcs/fits.wcs'
 import { Wcs } from '../../../src/bindings/astrometry/libwcs'
-import { PI, PIOVERTWO } from '../../../src/core/constants'
+import { PIOVERTWO } from '../../../src/core/constants'
 import type { FitsHeader } from '../../../src/io/formats/fits/fits'
 import { type Angle, deg } from '../../../src/math/units/angle'
 
@@ -69,6 +69,105 @@ const TAN_SIP_HEADER = {
 	BP_2_1: 1.7e-7,
 	BP_3_0: 2.0482e-8,
 }
+
+describe('scale and crop FITS WCS', () => {
+	test.each([
+		['PC with implicit scales', { ...TAN_PC_HEADER, CDELT1: undefined, CDELT2: undefined }, { ...TAN_PC_HEADER, CDELT1: 1, CDELT2: 1 }],
+		['PC with one implicit scale', { ...TAN_PC_HEADER, CDELT2: undefined }, { ...TAN_PC_HEADER, CDELT2: 1 }],
+		['CD with implicit reference point', { ...TAN_HEADER, CRPIX1: undefined, CRPIX2: undefined, CRVAL1: undefined, CRVAL2: undefined }, { ...TAN_HEADER, CRPIX1: 0, CRPIX2: 0, CRVAL1: 0, CRVAL2: 0 }],
+		['TAN with implicit identity', { CTYPE1: 'RA---TAN', CTYPE2: 'DEC--TAN' }, { CTYPE1: 'RA---TAN', CTYPE2: 'DEC--TAN', CRPIX1: 0, CRPIX2: 0, CRVAL1: 0, CRVAL2: 0, CDELT1: 1, CDELT2: 1 }],
+	] as const)('%s preserves the FITS default coordinate mapping', (_name, source, explicit) => {
+		// FITS 4.0 section 8.2: missing CRPIX/CRVAL default to zero, CDELT to one, and PC to identity.
+		const result: FitsHeader = { ...source }
+		scaleAndCropFitsWcs(result, 2.3, 1.7, 13, 7)
+		expect(result.CTYPE1).toBe('RA---TAN')
+		expect(result.CDELT1).toBeUndefined()
+		expect(result.PC1_1).toBeUndefined()
+		for (const [x, y] of [
+			[1, 1],
+			[17, 25],
+			[103, 87],
+		]) {
+			const expected = tanUnproject(explicit, x, y)!
+			const actual = tanUnproject(result, (x - 0.5) * 2.3 + 0.5 - 13, (y - 0.5) * 1.7 + 0.5 - 7)!
+			expect(actual).toBeDefined()
+			expectMatrixCloseTo(actual, expected)
+		}
+	})
+
+	test.each([
+		['CD', TAN_HEADER],
+		['PC', TAN_PC_HEADER],
+		['CROTA', TAN_CROTA_HEADER],
+		['diagonal CDELT', { ...TAN_CROTA_HEADER, CROTA2: undefined }],
+		['SIP', TAN_SIP_HEADER],
+		['forward SIP', Object.fromEntries(Object.entries(TAN_SIP_HEADER).filter(([key]) => !key.startsWith('AP_') && !key.startsWith('BP_')))],
+	] as const)('%s preserves sky and both pixel directions under anisotropic scale/crop', (_name, source) => {
+		const original = { ...source }
+		const result: FitsHeader = { ...source }
+		const sx = 2.31
+		const sy = 2.27
+		const left = 13
+		const top = 7
+
+		expect(scaleAndCropFitsWcs(result, sx, sy, left, top)).toBe(result)
+		expect(source).toEqual(original)
+		expect(result.CDELT1).toBeUndefined()
+		expect(result.PC1_1).toBeUndefined()
+		expect(result.CROTA2).toBeUndefined()
+
+		for (const [x, y] of [
+			[90, 121],
+			[128, 128],
+			[170, 149],
+		]) {
+			const sky = tanUnproject(source, x, y)!
+			const scaledSky = tanUnproject(result, (x - 0.5) * sx + 0.5 - left, (y - 0.5) * sy + 0.5 - top)!
+			expectMatrixCloseTo(scaledSky, sky, 12)
+			// Compare the same approximate SIP inverse, preserving its original residual.
+			const back = tanProject(source, sky[0], sky[1])!
+			const scaledBack = tanProject(result, sky[0], sky[1])!
+			expect(scaledBack[0]).toBeCloseTo((back[0] - 0.5) * sx + 0.5 - left, 7)
+			expect(scaledBack[1]).toBeCloseTo((back[1] - 0.5) * sy + 0.5 - top, 7)
+		}
+	})
+
+	test('SIP inverse constants, linear terms and DMAX follow change of variables', () => {
+		const h: FitsHeader = { ...TAN_SIP_HEADER, AP_0_0: 0.03, BP_0_0: -0.01 }
+		scaleAndCropFitsWcs(h, 2, 3, 5, 7)
+		expect(h.AP_0_0).toBeCloseTo(0.06, 14)
+		expect(h.BP_0_0).toBeCloseTo(-0.03, 14)
+		expect(h.AP_0_1).toBeCloseTo((TAN_SIP_HEADER.AP_0_1 * 2) / 3, 14)
+		expect(h.A_DMAX).toBe(TAN_SIP_HEADER.A_DMAX * 2)
+		expect(h.B_DMAX).toBe(TAN_SIP_HEADER.B_DMAX * 3)
+	})
+
+	test('undefined inverse cards are absent and higher-dimensional solutions are discarded completely', () => {
+		const forward: FitsHeader = Object.fromEntries(Object.entries(TAN_SIP_HEADER).map(([key, value]) => [key, key.startsWith('AP_') || key.startsWith('BP_') ? undefined : value]))
+		scaleAndCropFitsWcs(forward, 2, 2, 0, 0)
+		expect(forward.A_ORDER).toBe(3)
+		expect(forward.CTYPE1).toBe(RA_TAN_SIP)
+		expect(forward.AP_0_1).toBeUndefined()
+		const invalid: FitsHeader = { ...TAN_HEADER, CRPIX10: 5, OBJECT: 'M31' }
+		scaleAndCropFitsWcs(invalid, 2, 2, 0, 0)
+		expect(invalid).toEqual({ OBJECT: 'M31' })
+	})
+
+	test('removes alternate and unsupported complete solutions while preserving observation metadata', () => {
+		const h: FitsHeader = { ...TAN_HEADER, CRPIX1A: 10, CTYPE1A: 'RA---TAN', WCSNAMEA: 'alternate', OBJECT: 'M31' }
+		scaleAndCropFitsWcs(h, 2, 2, 0, 0)
+		expect(h.CRPIX1A).toBeUndefined()
+		expect(h.WCSNAMEA).toBeUndefined()
+		expect(h.CRPIX1).toBeDefined()
+		for (const invalid of [{ CPDIS1: 'LOOKUP', 'DP1.EXTVER': 1 }, { CTYPE1: 'RA---TPV', PV1_0: 0 }, { CTYPE1: RA_TAN_SIP }, { CD1_1: 0, CD1_2: 0 }]) {
+			const unsupported: FitsHeader = { ...TAN_HEADER, ...invalid, OBJECT: 'M31' }
+			scaleAndCropFitsWcs(unsupported, 2, 2, 0, 0)
+			expect(unsupported).toEqual({ OBJECT: 'M31' })
+		}
+		const none = { OBJECT: 'M31' }
+		expect(scaleAndCropFitsWcs(none, 2, 2, 0, 0)).toEqual(none)
+	})
+})
 
 function expectTanMatchesNativeProject(header: FitsHeader, rightAscension: Angle, declination: Angle, precision: number = 9) {
 	using wcs = new Wcs(header)
