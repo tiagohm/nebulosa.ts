@@ -58,6 +58,29 @@ describe('Drizzle areas', () => {
 		expect(prepareDrizzleFootprint({ ...IDENTITY, m01: 1e-14 }, 1, 1, 1, 100000, 1)!.axisAligned).toBeFalse()
 	})
 
+	test.each([
+		{ ...IDENTITY, m01: 4e-17, m10: -4e-17, tx: 0.37, ty: -0.21 },
+		{ ...IDENTITY, m00: -1, m01: 4e-17, m10: -4e-17, tx: 30.37, ty: -0.21 },
+		{ ...IDENTITY, m00: 4e-17, m01: 1, m10: 1, m11: -4e-17, tx: 0.37, ty: -0.21 },
+	])('rounded rectangular corners use exact areas while retaining the full center matrix: %j', (matrix) => {
+		// Translation fits can leave coefficients of this magnitude while Float64 corner sums
+		// are exactly rectangular. Retain those coefficients for center positions, without epsilon snapping.
+		const footprint = prepareDrizzleFootprint(matrix, 2, 2, 1, 32, 24)!
+		expect(footprint.axisAligned).toBeTrue()
+		expect(footprint.matrix.m00).toBe(2 * matrix.m00)
+		expect(footprint.matrix.m01).toBe(2 * matrix.m01)
+		expect(footprint.matrix.m10).toBe(2 * matrix.m10)
+		expect(footprint.matrix.m11).toBe(2 * matrix.m11)
+		const fast = state(32, 24, 3, false, 2)
+		const general = state(32, 24, 3, false, 2)
+		const source = image(32, 24, 3, (x, y, c) => 0.1 + x * 0.01 + y * 0.003 + c * 0.1)
+		depositDrizzle(fast, source, footprint, [1, 1, 1], [0, 0, 0], 1, 1)
+		depositDrizzle(general, source, { ...footprint, axisAligned: false }, [1, 1, 1], [0, 0, 0], 1, 1)
+		for (let i = 0; i < fast.sum.length; i++) expect(fast.sum[i]).toBeCloseTo(general.sum[i], 14)
+		for (let i = 0; i < fast.weights.length; i++) expect(fast.weights[i]).toBeCloseTo(general.weights[i], 14)
+		expect(fast.coverage).toEqual(general.coverage)
+	})
+
 	test('large coordinates retain small footprints and wide scans conserve samples', () => {
 		const s = state(100003, 1)
 		const input = image(100003, 1)

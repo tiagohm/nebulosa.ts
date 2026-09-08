@@ -21,7 +21,7 @@ export interface DrizzleFootprint {
 	readonly halfWidth: number
 	// Absolute vertical extent about the drop center, output pixels.
 	readonly halfHeight: number
-	// True only for exactly diagonal or antidiagonal matrices.
+	// True when the stored corner edges are exactly parallel to the output axes.
 	readonly axisAligned: boolean
 }
 
@@ -117,13 +117,17 @@ export function prepareDrizzleFootprint(transform: AffineTransform, scaleX: numb
 
 	if (!Number.isFinite(maxX) || !Number.isFinite(maxY) || !Number.isFinite(area) || !Number.isFinite(inverseArea) || !(area > 0 && halfWidth > 0 && halfHeight > 0) || maxX + halfWidth === maxX || maxY + halfHeight === maxY) return undefined
 
+	// A fitted translation can have tiny cross terms while its rounded corner offsets still form
+	// an exact rectangle. Inspect those offsets without changing the full matrix used for centers.
+	let axisAligned = true
 	for (let i = 0; i < 8; i += 2) {
 		const next = (i + 2) & 7
 		if (!Number.isFinite(corners[i]) || !Number.isFinite(corners[i + 1])) return undefined
 		if (maxX + corners[i] === maxX + corners[next] && maxY + corners[i + 1] === maxY + corners[next + 1]) return undefined
+		axisAligned &&= corners[i] === corners[next] || corners[i + 1] === corners[next + 1]
 	}
 
-	return { matrix, corners, area, inverseArea, halfWidth, halfHeight, axisAligned: (m01 === 0 && m10 === 0) || (m00 === 0 && m11 === 0) }
+	return { matrix, corners, area, inverseArea, halfWidth, halfHeight, axisAligned }
 }
 
 // Clips a convex quadrilateral already in polygon against a centered rectangle of half extents hx/hy.
