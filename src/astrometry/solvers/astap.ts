@@ -2,9 +2,9 @@ import { tmpdir } from 'os'
 import { basename, dirname, extname, join } from 'path'
 import type { DetectedStar } from '../../imaging/stars/detector'
 import { readCsv } from '../../io/csv'
-import type { FitsHeader } from '../../io/formats/fits/fits'
+import { readFits } from '../../io/formats/fits/fits'
+import { bufferSource } from '../../io/io'
 import { type Angle, normalizeAngle, toDeg, toHour } from '../../math/units/angle'
-import { isWcsFitsKeyword } from '../wcs/fits.wcs'
 import { type PlateSolveOptions, plateSolutionFrom } from './platesolver'
 
 // ASTAP command-line solver integration: spawns the local `astap` binary to detect stars (via its
@@ -99,14 +99,16 @@ export async function astapDetectStars(input: string, { minSNR = 0, maxStars = 0
 // RA hint is converted to hours and declination to south-polar-distance per ASTAP's CLI.
 export async function astapPlateSolve(input: string, { fov = 0, downsample = 0, timeout = 300000, rightAscension = 0, declination = 0, radius = 0, executable, sip = true }: AstapPlateSolveOptions = {}, signal?: AbortSignal) {
 	fov = Math.max(0, Math.min(toDeg(fov), 360)) // Specify 0 for auto
-	const ini = Bun.file(join(tmpdir(), `${Bun.randomUUIDv7()}.ini`))
+	const name = Bun.randomUUIDv7()
+	const ini = Bun.file(join(tmpdir(), `${name}.ini`))
+	const wcs = Bun.file(join(tmpdir(), `${name}.wcs`))
 	radius = Math.max(0, Math.min(Math.ceil(toDeg(radius)), 180))
 	rightAscension = toHour(normalizeAngle(rightAscension))
-	const spd = declination ? toDeg(declination) + 90 : 90
+	const spd = toDeg(declination) + 90
 	executable ||= executableForCurrentPlatform()
 	timeout ||= DEFAULT_TIMEOUT
 
-	const commands = [executable, '-o', ini.name!, '-z', downsample.toFixed(0), '-f', input, '-fov', `${fov}`]
+	const commands = [executable, '-o', ini.name!, '-z', downsample.toFixed(0), '-f', input, '-fov', `${fov}`, '-wcs']
 
 	if (sip) commands.push('-sip')
 	if (radius) commands.push('-ra', `${rightAscension}`, '-spd', `${spd}`, '-r', `${radius}`)
@@ -115,37 +117,26 @@ export async function astapPlateSolve(input: string, { fov = 0, downsample = 0, 
 	const process = Bun.spawn(commands, { signal, timeout })
 	const exitCode = await process.exited
 
-	if (exitCode === 0 && (await ini.exists())) {
-		try {
-			const text = await ini.text()
+	try {
+		if (exitCode === 0 && (await wcs.exists())) {
+			const buffer = Buffer.from(await wcs.arrayBuffer())
+			const fits = await readFits(bufferSource(buffer))
 
-			if (text) {
-				const lines = text.split('\n')
-				const header: FitsHeader = { CRPIX1: 0, CRPIX2: 0, CRVAL1: 0, CRVAL2: 0, CDELT1: 0, CDELT2: 0, CROTA1: 0, CROTA2: 0, CD1_1: 0, CD1_2: 0, CD2_1: 0, CD2_2: 0 }
+			if (fits?.hdus.length) {
+				const { header } = fits.hdus[0]
 
-				for (const line of lines) {
-					const [key, value] = line.trim().split('=')
-
-					if (key in header || isWcsFitsKeyword(key)) {
-						const numericValue = Number(value)
-						header[key] = Number.isFinite(numericValue) ? numericValue : value
-					} else if (key === 'DIMENSIONS') {
-						const [width, height] = value.split('x')
-						header.NAXIS1 = +width
-						header.NAXIS2 = +height
-					}
-				}
-
-				if (!header.NAXIS1 && header.CRPIX1) header.NAXIS1 = (header.CRPIX1 as number) * 2
-				if (!header.NAXIS2 && header.CRPIX2) header.NAXIS2 = (header.CRPIX2 as number) * 2
+				if (!header.NAXIS) header.NAXIS = 2
+				if (!header.NAXIS1 && header.CRPIX1) header.NAXIS1 = Math.trunc(header.CRPIX1 as number) * 2
+				if (!header.NAXIS2 && header.CRPIX2) header.NAXIS2 = Math.trunc(header.CRPIX2 as number) * 2
 
 				return plateSolutionFrom(header)
 			}
-		} finally {
-			await ini.delete()
+		} else {
+			console.error('astap plate solve failed with exit code', exitCode)
 		}
-	} else {
-		console.error('astap plate solve failed with exit code', exitCode)
+	} finally {
+		if (await ini.exists()) await ini.delete()
+		if (await wcs.exists()) await wcs.delete()
 	}
 
 	return undefined
