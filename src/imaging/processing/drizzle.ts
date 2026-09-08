@@ -284,52 +284,42 @@ export function depositDrizzle(state: DrizzleAccumulator, image: Image, footprin
 	}
 }
 
-// Samples one channel on an image or a single CFA phase grid with bilinear center-domain support.
-// Phase offsets and step are raw pixels; no extrapolation is performed. Returns NaN without support.
-function bilinearSample(image: Image, x: number, y: number, channel: number, px = 0, py = 0, step = 1) {
-	const { width, height, channels } = image.metadata
-	const w = Math.ceil((width - px) / step)
-	const h = Math.ceil((height - py) / step)
-	const u = (x - px) / step
-	const v = (y - py) / step
-	if (!(u >= 0 && v >= 0 && u <= w - 1 && v <= h - 1)) return Number.NaN
-	const x0 = Math.floor(u)
-	const y0 = Math.floor(v)
-	const x1 = Math.min(x0 + 1, w - 1)
-	const y1 = Math.min(y0 + 1, h - 1)
-	const fx = u - x0
-	const fy = v - y0
-	const a = image.raw[((py + y0 * step) * width + px + x0 * step) * channels + channel]
-	const b = image.raw[((py + y0 * step) * width + px + x1 * step) * channels + channel]
-	const c = image.raw[((py + y1 * step) * width + px + x0 * step) * channels + channel]
-	const d = image.raw[((py + y1 * step) * width + px + x1 * step) * channels + channel]
-	const upper = a + fx * (b - a)
-	return upper + fy * (c + fx * (d - c) - upper)
-}
-
-// Samples a photometric plane; CFA phases of the same color are averaged only where supported.
-// A luminance plane uses BT.709. This auxiliary interpolation never changes deposited raw samples.
+// Reads the nearest original sample within center-domain support (zero-based x/y pixels). CFA chooses
+// one photosite of the requested color, never averaging the two greens; ties prefer the first phase.
+// Quantile fitting requires the original noise distribution: interpolating only the target would
+// interpret its reduced variance as a photometric gain. Correspondences are approximate within half
+// a pixel per axis, or one pixel on a CFA phase grid. Luminance mixes co-located RGB using BT.709.
+// Returns NaN outside support; no extrapolation, allocation, or pixel-buffer mutation occurs.
 function normalizationSample(image: Image, x: number, y: number, plane: number, luminance: boolean, phases: readonly number[] | undefined) {
+	const { width, height, channels } = image.metadata
+	if (!(x >= 0 && y >= 0 && x <= width - 1 && y <= height - 1)) return Number.NaN
+
 	if (phases !== undefined) {
-		let sum = 0
-		let count = 0
+		let nearest = Infinity
+		let sample = Number.NaN
 
 		for (let phase = 0; phase < 4; phase++) {
 			if (phases[phase] !== plane) continue
-
-			const sample = bilinearSample(image, x, y, 0, phase & 1, phase >> 1, 2)
-
-			if (Number.isFinite(sample)) {
-				sum += sample
-				count++
+			const px = phase & 1
+			const py = phase >> 1
+			const lastX = width - 1 - ((width - 1 - px) & 1)
+			const lastY = height - 1 - ((height - 1 - py) & 1)
+			if (!(x >= px && y >= py && x <= lastX && y <= lastY)) continue
+			const sx = px + 2 * Math.round((x - px) / 2)
+			const sy = py + 2 * Math.round((y - py) / 2)
+			const distance = (sx - x) ** 2 + (sy - y) ** 2
+			if (distance < nearest) {
+				nearest = distance
+				sample = image.raw[sy * width + sx]
 			}
 		}
 
-		return count === 0 ? Number.NaN : sum / count
+		return sample
 	}
 
-	if (!luminance) return bilinearSample(image, x, y, plane)
-	return bilinearSample(image, x, y, 0) * DEFAULT_GRAYSCALE.red + bilinearSample(image, x, y, 1) * DEFAULT_GRAYSCALE.green + bilinearSample(image, x, y, 2) * DEFAULT_GRAYSCALE.blue
+	const base = (Math.round(y) * width + Math.round(x)) * channels
+	if (!luminance) return image.raw[base + plane]
+	return image.raw[base] * DEFAULT_GRAYSCALE.red + image.raw[base + 1] * DEFAULT_GRAYSCALE.green + image.raw[base + 2] * DEFAULT_GRAYSCALE.blue
 }
 
 // Fits global photometry from bounded, spatially distributed reference/target sky pairs. inverse maps

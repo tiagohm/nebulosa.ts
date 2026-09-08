@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { AffineTransform } from '../../../src/astrometry/matching/star.matching'
+import { TAU } from '../../../src/core/constants'
 import { cfaChannelAt, type CfaPattern, type Image } from '../../../src/imaging/model/types'
 import { createDrizzleAccumulator, depositDrizzle, drizzleDropArea, drizzleMemoryBytes, drizzleNormalization, drizzleOverlap, prepareDrizzleFootprint } from '../../../src/imaging/processing/drizzle'
 import { Bitpix } from '../../../src/io/formats/fits/fits'
@@ -187,7 +188,7 @@ describe('Drizzle sparse normalization', () => {
 		expect(s.currentSamples.length).toBe(0)
 	})
 
-	test.each(PATTERNS)('CFA %s samples phase grids even with a different target pattern', (pattern) => {
+	test.each(PATTERNS)('CFA %s preserves photometry within photosite spacing with a different target pattern', (pattern) => {
 		const s = state(45, 33, 3, true)
 		const other = PATTERNS[(PATTERNS.indexOf(pattern) + 1) % PATTERNS.length]
 		const sky = (x: number, y: number, c: number) => 0.1 + c * 0.1 + x * 0.01 + y * 0.003
@@ -195,8 +196,46 @@ describe('Drizzle sparse normalization', () => {
 		const target = image(45, 33, 1, (x, y) => (sky(x, y, cfaChannelAt(other, x, y)) - 0.04) / 2, other)
 		const result = drizzleNormalization(s, reference, target, IDENTITY, 'background-scale', 'per-channel')
 		for (let c = 0; c < 3; c++) {
-			expect(result.scales[c]).toBeCloseTo(2, 10)
-			expect(result.offsets[c]).toBeCloseTo(0.04, 10)
+			// Different CFA origins cannot supply the same original color sample at the same sky
+			// position. Bound the fitted intensity error by this ramp's variation across one CFA cell,
+			// rather than requiring the exact linear interpolation that attenuated the noise.
+			for (const [x, y] of [
+				[0, 0],
+				[22, 16],
+				[44, 32],
+			]) {
+				const expected = sky(x, y, c)
+				expect(Math.abs(((expected - 0.04) / 2) * result.scales[c] + result.offsets[c] - expected)).toBeLessThanOrEqual(2 * (0.01 + 0.003))
+			}
+		}
+	})
+
+	test.each((['background-scale', 'percentile'] as const).flatMap((mode) => ([1, 3, ...PATTERNS] as const).map((variant) => [mode, variant] as const)))('%s preserves raw noise gain for %s across subpixel shifts', (mode, variant) => {
+		let seed = 123456789
+
+		function uniform() {
+			seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0
+			return (seed + 0.5) / 4294967296
+		}
+
+		function noise() {
+			return 0.01 * Math.sqrt(-2 * Math.log(uniform())) * Math.cos(TAU * uniform())
+		}
+
+		const pattern = typeof variant === 'string' ? variant : undefined
+		const channels = typeof variant === 'number' ? variant : 1
+		const other = pattern === undefined ? undefined : PATTERNS[(PATTERNS.indexOf(pattern) + 1) % PATTERNS.length]
+		const reference = image(256, 256, channels, (x, y, c) => 0.2 + (pattern === undefined ? c : cfaChannelAt(pattern, x, y)) * 0.2 + noise(), pattern)
+		const target = image(256, 256, channels, (x, y, c) => (0.2 + (other === undefined ? c : cfaChannelAt(other, x, y)) * 0.2 + noise() - 0.03) / 1.7, other)
+		const s = state(256, 256, pattern === undefined ? channels : 3, pattern !== undefined)
+
+		for (const shift of [0, 0.5, 1]) {
+			for (const colorMode of ['per-channel', 'luminance'] as const) {
+				const result = drizzleNormalization(s, reference, target, { ...IDENTITY, tx: shift, ty: shift }, mode, colorMode)
+				// Finite Gaussian quantiles have sampling error; interpolation previously inflated
+				// the half-pixel gain toward 3.4 instead of the known raw-sample gain of 1.7.
+				for (const scale of result.scales) expect(Math.abs(scale / 1.7 - 1)).toBeLessThan(0.08)
+			}
 		}
 	})
 

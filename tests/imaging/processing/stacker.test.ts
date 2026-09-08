@@ -27,6 +27,23 @@ const DEFAULT_STACK_OPTIONS = {
 const DRIZZLE_OPTIONS = { ...DEFAULT_STACK_OPTIONS, reconstructionMode: 'drizzle', samplePrecision: 64 } as const satisfies StackingOptions
 
 describe('Drizzle stacker integration', () => {
+	test('default photometry does not amplify a noisy background after a half-pixel dither', () => {
+		let seed = 123456789
+		const source = makeImage(256, 256, 1, () => {
+			seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0
+			return 0.2 + 0.04 * (seed / 4294967296 - 0.5)
+		})
+		const frames = [makeFrame(source, makeStars()), makeFrame(source, makeStars(-0.5, -0.5))]
+		const options = { reconstructionMode: 'drizzle', samplePrecision: 64, matchStarsConfig: DEFAULT_STACK_OPTIONS.matchStarsConfig } as const satisfies StackingOptions
+		const batch = stackFrames(frames, options)
+		const live = new LiveStacker(options)
+		for (const frame of frames) live.add(frame)
+		expect(batch.acceptedFrames).toBe(2)
+		expect(batch.statistics.normalizationMode).toBe('background-scale')
+		expect(Math.abs(batch.diagnostics[1].normalization!.scales[0] - 1)).toBeLessThan(0.08)
+		expect(live.snapshot()!.diagnostics).toEqual(batch.diagnostics)
+	})
+
 	test('registration preserves rotated, mirrored and affine fields from differently sized targets', () => {
 		for (const [a, b, c, d, tx, ty] of [
 			[Math.cos(0.2), -Math.sin(0.2), Math.sin(0.2), Math.cos(0.2), 1, -1],
@@ -71,7 +88,7 @@ describe('Drizzle stacker integration', () => {
 			const rgb = makeImage(18, 18, 3, (x, y, c) => 0.1 + x * 0.01 + y * 0.003 + c * 0.1)
 			const targetRgb = makeImage(18, 18, 3, (x, y, c) => (0.1 + x * 0.01 + y * 0.003 + c * 0.1 - 0.03) / 2)
 			const reference = reconstructionMode === 'drizzle' ? rgb : bayer(rgb, 'RGGB')!
-			const target = reconstructionMode === 'drizzle' ? targetRgb : bayer(targetRgb, 'BGGR')!
+			const target = reconstructionMode === 'drizzle' ? targetRgb : bayer(targetRgb, 'RGGB')!
 			const frames = [makeFrame(reference, makeStars()), makeFrame(target, makeStars())]
 			const options = { ...DRIZZLE_OPTIONS, reconstructionMode, normalizationMode: 'background-scale' } as const
 			const batch = stackFrames(frames, options)
