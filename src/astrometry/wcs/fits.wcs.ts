@@ -302,6 +302,84 @@ export function reflectFitsWcs(header: FitsHeader, width: number, height: number
 	return header
 }
 
+// Primary/alternate solution terms, including pixel distortion conventions that cannot be resized.
+const RESIZED_WCS_KEY_PATTERN =
+	/^(?:(?:WCSAXES|WCSNAME|CUNIT\d+|CTYPE\d+|CRPIX\d+|CRVAL\d+|PS\d+_\d+|PV\d+_\d+|CD\d+_\d+|PC\d+_\d+|CDELT\d+|CROTA\d+|RADESYS|LONPOLE|LATPOLE|EQUINOX|A_\d+_\d+|AP_\d+_\d+|B_\d+_\d+|BP_\d+_\d+|A_ORDER|AP_ORDER|B_ORDER|BP_ORDER|A_DMAX|B_DMAX)[A-Z]?|(?:CPDIS|CQDIS|D2IMDIS|DET2IM)\d+[A-Z]?|(?:DP|DQ|D2IM)\d+(?:\..*)?)$/
+
+// Resizes/crops a cloned FITS header in place and returns it. scaleX/Y are positive output samples per
+// input pixel; left/top are crop offsets in the enlarged grid. CRPIX uses FITS base-1 centers.
+// Supports a primary two-axis linear WCS and TAN-SIP, including optional AP/BP. Alternate solutions
+// and unsupported/malformed pixel distortions are removed completely, never presented as linear TAN.
+export function scaleAndCropFitsWcs(header: FitsHeader, scaleX: number, scaleY: number, left: number, top: number) {
+	for (const key in header) {
+		if (/[A-Z]$/.test(key) && RESIZED_WCS_KEY_PATTERN.test(key) && RESIZED_WCS_KEY_PATTERN.test(key.slice(0, -1))) delete header[key]
+	}
+
+	const [a, b, c, d] = cdMatrix(header)
+	const crpix1 = numericKeyword(header, 'CRPIX1', Number.NaN)
+	const crpix2 = numericKeyword(header, 'CRPIX2', Number.NaN)
+	const sip = hasSipAxes(header)
+
+	let supported = Number.isFinite(crpix1) && Number.isFinite(crpix2) && Number.isFinite(numericKeyword(header, 'CRVAL1', Number.NaN)) && Number.isFinite(numericKeyword(header, 'CRVAL2', Number.NaN)) && Number.isFinite(a * d - b * c) && a * d - b * c !== 0 && numericKeyword(header, 'WCSAXES', 2) === 2
+	if (tanAxisType(header, 'CTYPE1').includes('-SIP') || tanAxisType(header, 'CTYPE2').includes('-SIP')) supported &&= sip
+
+	for (const key in header) {
+		if (header[key] === undefined) continue
+		if (/^(?:(?:CPDIS|CQDIS|D2IMDIS|DET2IM)\d|(?:DP|DQ|D2IM)\d|(?:PV|PS)\d+_)/.test(key)) supported = false
+		const matrixAxis = /^(?:CD|PC)(\d+)_(\d+)$/.exec(key)
+		const scalarAxis = /^(?:CTYPE|CRPIX|CRVAL|CDELT|CUNIT|CROTA)(\d+)$/.exec(key)
+		if ((matrixAxis && !(+matrixAxis[1] >= 1 && +matrixAxis[1] <= 2 && +matrixAxis[2] >= 1 && +matrixAxis[2] <= 2)) || (scalarAxis && !(+scalarAxis[1] >= 1 && +scalarAxis[1] <= 2))) supported = false
+		if (/^CTYPE[12]$/.test(key) && /(?:-TAB|-TPV|-TNX|-ZPX|-DSS)/.test(String(header[key]))) supported = false
+		if (SIP_COEFFICIENT_KEY_PATTERN.test(key) || /^(?:A|B|AP|BP)_(?:ORDER|DMAX)$/.test(key)) {
+			if (!sip || typeof header[key] !== 'number' || !Number.isFinite(header[key])) supported = false
+		}
+	}
+
+	if (sip) {
+		for (const prefix of ['A', 'B', 'AP', 'BP']) {
+			const order = header[`${prefix}_ORDER`]
+			const required = prefix === 'A' || prefix === 'B'
+			if (required || order !== undefined) supported &&= typeof order === 'number' && Number.isInteger(order) && order >= 0
+		}
+
+		if ((header.AP_ORDER === undefined) !== (header.BP_ORDER === undefined)) supported = false
+
+		for (const key in header) {
+			if (header[key] === undefined) continue
+			const match = SIP_COEFFICIENT_KEY_PATTERN.exec(key)
+			if (match && !(+match[2] + +match[3] <= numericKeyword(header, `${match[1]}_ORDER`, -1))) supported = false
+		}
+	}
+
+	if (!supported) {
+		for (const key in header) if (RESIZED_WCS_KEY_PATTERN.test(key)) delete header[key]
+		return header
+	}
+
+	header.CRPIX1 = (crpix1 - 0.5) * scaleX + 0.5 - left
+	header.CRPIX2 = (crpix2 - 0.5) * scaleY + 0.5 - top
+	header.CD1_1 = a / scaleX
+	header.CD1_2 = b / scaleY
+	header.CD2_1 = c / scaleX
+	header.CD2_2 = d / scaleY
+
+	for (const key in header) {
+		if (/^(?:PC[12]_[12]|CDELT[12]|CROTA[12])$/.test(key)) delete header[key]
+
+		const match = SIP_COEFFICIENT_KEY_PATTERN.exec(key)
+
+		if (match && header[key] !== undefined) {
+			const xAxis = match[1] === 'A' || match[1] === 'AP'
+			header[key] = numericKeyword(header, key, 0) * scaleX ** ((xAxis ? 1 : 0) - +match[2]) * scaleY ** ((xAxis ? 0 : 1) - +match[3])
+		}
+	}
+
+	if (typeof header.A_DMAX === 'number') header.A_DMAX *= scaleX
+	if (typeof header.B_DMAX === 'number') header.B_DMAX *= scaleY
+
+	return header
+}
+
 // Projects equatorial coordinates onto FITS TAN pixel coordinates using the header WCS.
 export function tanProject(header: FitsHeader, rightAscension: Angle, declination: Angle) {
 	const tan = tanHeader(header)

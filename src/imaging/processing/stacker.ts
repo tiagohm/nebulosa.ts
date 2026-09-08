@@ -1,21 +1,38 @@
 import type { StarMatchingConfig } from '../../astrometry/matching/star.matching'
+import { scaleAndCropFitsWcs } from '../../astrometry/wcs/fits.wcs'
 import { Bitpix, type FitsHeader } from '../../io/formats/fits/fits'
 import { bitpixInBytes } from '../../io/formats/fits/util'
 import type { Rect, Size } from '../../math/numerical/geometry'
 import { clamp } from '../../math/numerical/math'
 import { meanOf, medianAbsoluteDeviationOf, medianOf } from '../../math/numerical/statistics'
-import type { Image, ImageRawPrecision, ImageRawType } from '../model/types'
+import { type Image, type ImageRawPrecision, type ImageRawType, makeImageRawTypedArray } from '../model/types'
 import type { DetectedStar } from '../stars/detector'
 import type { SigmaClipCenterMethod, SigmaClipDispersionMethod } from './computation'
+import { createDrizzleAccumulator, depositDrizzle, type DrizzleAccumulator, drizzleNormalization, drizzleOverlap, prepareDrizzleFootprint } from './drizzle'
 // oxfmt-ignore
 import { applyGlobalNormalizationInPlace, applyLocalNormalizationInPlace, broadcastNormalizationPlanes, DEFAULT_LOCAL_NORMALIZATION_OPTIONS, type FrameNormalizationSummary, fitLocalNormalizationRaw, type GlobalNormalizationMode, isLocalNormalizationFallback, type LocalNormalizationFallbackReason, type LocalNormalizationModel, type LocalNormalizationOptions, localNormalizationFailureReason, localNormalizationSummary, type NormalizationColorMode, resolveLocalNormalizationOptions, solveGlobalNormalizationPlanes } from './normalization'
-import { type ImageInterpolationMode, type ImageRegistrationFailureReason, type ImageRegistrationSuccess, registerImage } from './registration'
+import { type ImageInterpolationMode, type ImageRegistrationFailureReason, type ImageRegistrationSuccess, registerImage, registerStars, toAffineMatrix } from './registration'
 import { measureSubframeQuality, type SubframeQualityMetrics } from './subframe.selector'
 
 // Image stacking pipeline: registers a set of frames to a reference using star matching, normalizes
 // and weights them, then combines the aligned pixels with a selectable rejection method (average,
 // median, sigma-clip, min/max, winsorized mean, percentile clip). Produces the stacked image plus
-// per-frame acceptance diagnostics, coverage, and combination statistics. Pixel values are in [0, 1].
+// per-frame acceptance diagnostics, coverage, and combination statistics. Drizzle deposits square
+// drops without resampling, optionally reconstructing CFA as RGB. Means preserve normalized intensity
+// (which may exceed [0,1]); Drizzle sum preserves distributed samples before masking/cropping.
+
+// Reconstruction following registration; resample preserves the existing interpolation pipeline.
+export type StackingReconstructionMode = 'resample' | 'drizzle' | 'cfaDrizzle'
+
+// Square-drop reconstruction on the fixed reference field; checked before large allocations.
+export interface DrizzleStackingOptions {
+	// Finite output samples per reference pixel, >=1. Default 2; rounding defines effective axis scales.
+	readonly scale?: number
+	// Drop side in input pixels, in (0,1]. Default 1; sub-resolution footprints are rejected.
+	readonly pixfrac?: number
+	// Positive safe integer byte budget for numeric buffers and one result. Default 1 GiB.
+	readonly maxMemoryBytes?: number
+}
 
 // Pixel-combination algorithm applied across the aligned frame stack.
 export type StackingCombinationMethod = 'sum' | 'average' | 'weighted-average' | 'median' | 'sigma-clip' | 'min-max-average' | 'winsorized-mean' | 'percentile-clip-average'
@@ -42,6 +59,8 @@ export type BatchReferenceSelectionMode = 'first-accepted' | 'best-quality' | 'i
 
 // Reason a frame was rejected from the stack.
 export type FrameRejectionReason =
+	| 'bayer-image-requires-cfa-drizzle'
+	| 'cfa-image-required'
 	| 'combination-method-not-supported-in-live-mode'
 	| 'invalid-image-shape'
 	| 'channel-mismatch'
@@ -133,6 +152,21 @@ export interface StackBounds extends Readonly<Rect>, Readonly<Size> {}
 
 // Summary statistics of the combination step.
 export interface StackCombinationStatisticsSummary {
+	// Effective reconstruction mode.
+	readonly reconstructionMode: StackingReconstructionMode
+	// Effective photometric color mode; CFA always uses per-channel.
+	readonly colorHandlingMode: StackingColorHandlingMode
+	// Requested drop parameters and pre-crop dimensions; absent without an accepted reference.
+	readonly drizzle?: {
+		// Requested output samples per reference pixel.
+		readonly scale: number
+		// Input-pixel drop side.
+		readonly pixfrac: number
+		// Pre-crop reconstruction width, pixels.
+		readonly outputWidth: number
+		// Pre-crop reconstruction height, pixels.
+		readonly outputHeight: number
+	}
 	readonly method: StackingCombinationMethod
 	readonly normalizationMode: StackingNormalizationMode
 	readonly weightingMode: StackingWeightingMode
@@ -144,23 +178,43 @@ export interface StackCombinationStatisticsSummary {
 	readonly minimumCoverage: number
 }
 
+// Dimensionless Drizzle denominator on the reconstruction grid before cropping; not an exposure or
+// variance map. Live results own copies; a completed batch may transfer its accumulator directly.
+export interface StackWeightMap {
+	// Pre-crop width, pixels.
+	readonly width: number
+	// Pre-crop height, pixels.
+	readonly height: number
+	// Shared standard denominator or interleaved CFA RGB denominators.
+	readonly channels: 1 | 3
+	// Row-major frame weights times fractional drop overlaps.
+	readonly raw: Float64Array
+}
+
 // Full result of a stack: the image, counts, crop, per-frame diagnostics, and optional coverage maps.
 export interface StackResult {
 	readonly finalImage?: Image
 	readonly acceptedFrames: number
 	readonly rejectedFrames: number
 	readonly referenceFrameIndex: number
+	// Inclusive bounds of valid pixels on the pre-crop grid; the rectangle may contain invalid holes.
 	readonly effectiveCropBounds?: StackBounds
 	readonly diagnostics: readonly FrameAcceptanceResult[]
 	readonly statistics: StackCombinationStatisticsSummary
-	// Per-pixel count of contributing frames, when requested.
+	// Pre-crop per-pixel count of contributing frames, when requested.
 	readonly coverageMap?: Uint32Array
-	// Per-pixel validity mask of the output, when requested.
+	// Drizzle denominator when per-pixel statistics are requested.
+	readonly weightMap?: StackWeightMap
+	// Pre-crop validity mask; returned whenever there is an accepted reference.
 	readonly validityMask?: Uint8Array
 }
 
 // Public stacking configuration; omitted fields use the module defaults.
 export interface StackingOptions {
+	// Defaults to resample. Drizzle supports sum/average/weighted-average and global normalization.
+	readonly reconstructionMode?: StackingReconstructionMode
+	// Ignored in resample, as is interpolationMode in Drizzle.
+	readonly drizzle?: DrizzleStackingOptions
 	readonly combinationMethod?: StackingCombinationMethod
 	readonly batchReference?: BatchReferenceSelection
 	readonly interpolationMode?: StackingInterpolationMode
@@ -184,7 +238,7 @@ export interface StackingOptions {
 	readonly localNormalization?: LocalNormalizationOptions
 	readonly weightingMode?: StackingWeightingMode
 	readonly colorHandlingMode?: StackingColorHandlingMode
-	// Retain per-pixel coverage/validity statistics in the result.
+	// Expose per-pixel coverage and Drizzle weights. Validity masks are returned independently.
 	readonly keepPerPixelStatistics?: boolean
 	// Allow a reference frame with no detected stars.
 	readonly allowStarlessReference?: boolean
@@ -194,13 +248,15 @@ export interface StackingOptions {
 	readonly minScale?: number
 	readonly maxScale?: number
 	readonly maxShear?: number
-	// Accumulator precision for the combination.
+	// Sample precision; Drizzle always accumulates in Float64 and applies this to the final raw.
 	readonly samplePrecision?: ImageRawPrecision
 	readonly matchStarsConfig?: StarMatchingConfig
 }
 
 // StackingOptions with every field resolved to a concrete value.
-interface ResolvedStackingOptions extends Required<Omit<StackingOptions, 'sigmaClip' | 'minMaxRejection' | 'winsorization' | 'percentileClip' | 'batchReference' | 'matchStarsConfig' | 'localNormalization'>> {
+interface ResolvedStackingOptions extends Required<Omit<StackingOptions, 'sigmaClip' | 'minMaxRejection' | 'winsorization' | 'percentileClip' | 'batchReference' | 'matchStarsConfig' | 'localNormalization' | 'drizzle'>> {
+	// Drop parameters and numeric-buffer budget, resolved only for Drizzle reconstruction.
+	readonly drizzle: Required<DrizzleStackingOptions>
 	readonly sigmaClip: Required<SigmaClipStackingOptions>
 	readonly minMaxRejection: Required<MinMaxRejectionOptions>
 	readonly winsorization: Required<PercentileRangeOptions>
@@ -225,6 +281,8 @@ interface AlignedFrame {
 
 // Default resolved stacking options.
 const DEFAULT_STACKING_OPTIONS: ResolvedStackingOptions = {
+	reconstructionMode: 'resample',
+	drizzle: { scale: 2, pixfrac: 1, maxMemoryBytes: 2 ** 30 },
 	combinationMethod: 'average',
 	batchReference: { mode: 'first-accepted', index: 0 },
 	interpolationMode: 'bilinear',
@@ -264,9 +322,22 @@ const FLOAT_EPSILON = 1e-12
 
 // Resolves caller overrides into deterministic internal defaults.
 function resolveStackingOptions(options: StackingOptions = {}): ResolvedStackingOptions {
+	const reconstructionMode = options.reconstructionMode ?? DEFAULT_STACKING_OPTIONS.reconstructionMode
+	const drizzle = reconstructionMode === 'resample' ? DEFAULT_STACKING_OPTIONS.drizzle : { scale: options.drizzle?.scale ?? 2, pixfrac: options.drizzle?.pixfrac ?? 1, maxMemoryBytes: options.drizzle?.maxMemoryBytes ?? 2 ** 30 }
+
+	if (reconstructionMode !== 'resample') {
+		// These combinations would otherwise silently change the requested algorithm.
+		if (!isLiveCombinationMethodSupported(options.combinationMethod ?? DEFAULT_STACKING_OPTIONS.combinationMethod) || options.normalizationMode === 'local') throw new RangeError('Drizzle requires sum, average or weighted-average and global normalization')
+		// Scale and budget govern potentially enormous scale-squared allocations.
+		if (!Number.isFinite(drizzle.scale) || !(drizzle.scale >= 1) || !Number.isSafeInteger(drizzle.maxMemoryBytes) || !(drizzle.maxMemoryBytes > 0)) throw new RangeError('Drizzle requires finite scale >= 1 and a positive safe integer memory budget')
+	}
+
 	return {
 		...DEFAULT_STACKING_OPTIONS,
 		...options,
+		reconstructionMode,
+		drizzle,
+		colorHandlingMode: reconstructionMode === 'cfaDrizzle' ? 'per-channel' : (options.colorHandlingMode ?? DEFAULT_STACKING_OPTIONS.colorHandlingMode),
 		batchReference: {
 			...DEFAULT_STACKING_OPTIONS.batchReference,
 			...options.batchReference,
@@ -362,6 +433,8 @@ export class LiveStacker {
 	#coverageMap?: Uint32Array
 	#workRaw?: ImageRawType
 	#workMask?: Uint8Array
+	// Owns Drizzle buffers exclusively; resampling work buffers stay unallocated in this mode.
+	#drizzle?: DrizzleAccumulator
 
 	constructor(options: StackingOptions = {}) {
 		this.initialize(options)
@@ -385,6 +458,7 @@ export class LiveStacker {
 		this.#coverageMap = undefined
 		this.#workRaw = undefined
 		this.#workMask = undefined
+		this.#drizzle = undefined
 	}
 
 	// Adds a single frame to the live stack when the method supports exact incremental updates.
@@ -394,6 +468,27 @@ export class LiveStacker {
 
 		if (!isImageShapeValid(frame.image)) return this.#reject(frameIndex, frame, quality, 'invalid-image-shape')
 		if (!isLiveCombinationMethodSupported(this.#options.combinationMethod)) return this.#reject(frameIndex, frame, quality, 'combination-method-not-supported-in-live-mode')
+		if (this.#options.reconstructionMode !== 'resample') {
+			const incompatibility = drizzleFrameFailure(frame, this.#options)
+			if (incompatibility !== undefined) return this.#reject(frameIndex, frame, quality, incompatibility)
+			if (this.#referenceFrame === undefined) {
+				if (!this.#options.allowStarlessReference && frame.stars.length < this.#options.minAcceptedStars) return this.#reject(frameIndex, frame, quality, 'too-few-stars')
+				const initial = initializeDrizzleReference(frame, frameIndex, quality, this.#options)
+				if (initial === undefined) return this.#reject(frameIndex, frame, quality, 'invalid-transform')
+				this.#drizzle = initial.state
+				this.#referenceFrame = frame
+				this.#referenceIndex = frameIndex
+				this.#acceptedFrames = 1
+				this.#diagnostics.push(initial.diagnostic)
+				return initial.diagnostic
+			}
+
+			const result = addDrizzleFrame(this.#drizzle!, this.#referenceFrame, frame, frameIndex, quality, this.#acceptedFrames, this.#options)
+			if (result.accepted) this.#acceptedFrames++
+			else this.#rejectedFrames++
+			this.#diagnostics.push(result)
+			return result
+		}
 
 		if (this.#referenceFrame === undefined) {
 			if (!this.#options.allowStarlessReference && frame.stars.length < this.#options.minAcceptedStars) return this.#reject(frameIndex, frame, quality, 'too-few-stars')
@@ -452,6 +547,7 @@ export class LiveStacker {
 
 	// Returns the current live stacking result without mutating the stack.
 	snapshot(): StackResult | undefined {
+		if (this.#referenceFrame !== undefined && this.#drizzle !== undefined) return buildDrizzleResult(this.#drizzle, this.#referenceFrame, this.#referenceIndex, this.#acceptedFrames, this.#diagnostics, this.#options, true)
 		if (this.#referenceFrame === undefined || this.#sum === undefined || this.#weightSum === undefined || this.#coverageMap === undefined) return undefined
 		return buildOnlineResult(this.#referenceFrame, this.#referenceIndex, this.#acceptedFrames, this.#rejectedFrames, this.#diagnostics, this.#options, this.#sum, this.#weightSum, this.#coverageMap)
 	}
@@ -496,6 +592,7 @@ export function stackFrames(frames: readonly StackingFrame[], options: StackingO
 	if (frames.length === 0) return emptyStackResult(resolved, -1, [])
 	const qualities = frames.map(measureSubframeQuality)
 	const referenceIndex = selectReferenceFrameIndex(frames, qualities, resolved)
+	if (resolved.reconstructionMode !== 'resample') return stackDrizzleFrames(frames, qualities, referenceIndex, resolved)
 	const referenceFrame = frames[referenceIndex]
 
 	if (!isImageShapeValid(referenceFrame.image)) {
@@ -608,6 +705,8 @@ export function stackFrames(frames: readonly StackingFrame[], options: StackingO
 		diagnostics,
 		statistics: {
 			method: resolved.combinationMethod,
+			reconstructionMode: resolved.reconstructionMode,
+			colorHandlingMode: resolved.colorHandlingMode,
 			normalizationMode: resolved.normalizationMode,
 			weightingMode: resolved.weightingMode,
 			liveExact: isLiveCombinationMethodSupported(resolved.combinationMethod),
@@ -632,6 +731,7 @@ function selectReferenceFrameIndex(frames: readonly StackingFrame[], qualities: 
 
 		for (let i = 0; i < frames.length; i++) {
 			if (!isImageShapeValid(frames[i].image)) continue
+			if (options.reconstructionMode !== 'resample' && drizzleFrameFailure(frames[i], options) !== undefined) continue
 			if (!options.allowStarlessReference && qualities[i].starCount < options.minAcceptedStars) continue
 
 			const quality = qualities[i]
@@ -649,11 +749,12 @@ function selectReferenceFrameIndex(frames: readonly StackingFrame[], qualities: 
 
 	for (let i = 0; i < frames.length; i++) {
 		if (!isImageShapeValid(frames[i].image)) continue
+		if (options.reconstructionMode !== 'resample' && drizzleFrameFailure(frames[i], options) !== undefined) continue
 		if (!options.allowStarlessReference && qualities[i].starCount < options.minAcceptedStars) continue
 		return i
 	}
 
-	return 0
+	return options.reconstructionMode === 'resample' ? 0 : -1
 }
 
 // Creates a stored aligned batch sample for the reference frame.
@@ -697,6 +798,8 @@ function buildOnlineResult(referenceFrame: StackingFrame, referenceIndex: number
 		diagnostics: diagnostics.slice(),
 		statistics: {
 			method: options.combinationMethod,
+			reconstructionMode: options.reconstructionMode,
+			colorHandlingMode: options.colorHandlingMode,
 			normalizationMode: options.normalizationMode,
 			weightingMode: options.weightingMode,
 			liveExact: true,
@@ -1052,7 +1155,7 @@ function buildImage(raw: ImageRawType, header: FitsHeader, width: number, height
 			channels,
 			pixelCount: width * height,
 			stride: width * channels,
-			strideInBytes: width * bitpixInBytes(bitpix),
+			strideInBytes: width * channels * bitpixInBytes(bitpix),
 			pixelSizeInBytes: bitpixInBytes(bitpix),
 			bitpix,
 			bayer,
@@ -1071,6 +1174,8 @@ function emptyStackResult(options: ResolvedStackingOptions, referenceFrameIndex:
 		diagnostics,
 		statistics: {
 			method: options.combinationMethod,
+			reconstructionMode: options.reconstructionMode,
+			colorHandlingMode: options.colorHandlingMode,
 			normalizationMode: options.normalizationMode,
 			weightingMode: options.weightingMode,
 			liveExact: isLiveCombinationMethodSupported(options.combinationMethod),
@@ -1097,22 +1202,6 @@ function incrementCoverage(coverageMap: Uint32Array, valid: Uint8Array) {
 // Creates a typed raw buffer matching the reference storage class.
 function createLike(reference: ImageRawType, length: number) {
 	return reference instanceof Float64Array ? new Float64Array(length) : new Float32Array(length)
-}
-
-// Samples sparse luminance or grayscale values from an image.
-function sampleImageValues(raw: ImageRawType, channels: number, width: number, height: number, limit: number, luminance: boolean) {
-	const step = Math.max(1, Math.floor(Math.sqrt((width * height) / Math.max(limit, 1))))
-	const values: number[] = []
-
-	for (let y = 0; y < height; y += step) {
-		for (let x = 0; x < width; x += step) {
-			const base = (y * width + x) * channels
-			if (channels === 1 || !luminance) values.push(raw[base])
-			else values.push(0.2125 * raw[base] + 0.7154 * raw[base + 1] + 0.0721 * raw[base + 2])
-		}
-	}
-
-	return Float64Array.from(values)
 }
 
 // Computes a percentile from a sorted numeric array.
@@ -1149,4 +1238,198 @@ function channelArray(channels: number, value: number) {
 // Returns the deterministic identity transform summary.
 function identityTransformSummary(): StackingTransformSummary {
 	return { model: 'identity', translationX: 0, translationY: 0, scaleX: 1, scaleY: 1, rotation: 0, shear: 0, mirrored: false, inlierCount: 0, rmsError: 0 }
+}
+
+// Rejects inconsistent image shapes or CFA routing before registration or reference selection.
+function drizzleFrameFailure(frame: StackingFrame, options: ResolvedStackingOptions): FrameRejectionReason | undefined {
+	if (!isImageShapeValid(frame.image)) return 'invalid-image-shape'
+	if (options.reconstructionMode === 'drizzle' && frame.image.metadata.bayer !== undefined) return 'bayer-image-requires-cfa-drizzle'
+	if (options.reconstructionMode === 'cfaDrizzle' && (frame.image.metadata.channels !== 1 || frame.image.metadata.bayer === undefined)) return 'cfa-image-required'
+	return undefined
+}
+
+// Prepares identity geometry before allocation, then deposits the reference into a private state.
+// Returns undefined for an unrepresentable footprint; allocation errors leave the live owner empty.
+function initializeDrizzleReference(frame: StackingFrame, frameIndex: number, quality: StackingFrameQualityMetrics, options: ResolvedStackingOptions) {
+	const { width, height } = frame.image.metadata
+	const { scale, pixfrac, maxMemoryBytes } = options.drizzle
+	const outputWidth = Math.round(width * scale)
+	const outputHeight = Math.round(height * scale)
+	// An overflowing requested grid is an allocation error, not a failed geometric registration.
+	if (!Number.isSafeInteger(outputWidth * outputHeight) || !(outputWidth > 0 && outputHeight > 0)) throw new RangeError('Drizzle grid exceeds safe allocation dimensions')
+	const footprint = prepareDrizzleFootprint({ m00: 1, m01: 0, m10: 0, m11: 1, tx: 0, ty: 0 }, outputWidth / width, outputHeight / height, pixfrac, width, height)
+	if (footprint === undefined) return undefined
+	const cfa = options.reconstructionMode === 'cfaDrizzle'
+	const channels = cfa ? 3 : frame.image.metadata.channels
+	const sampleBytes = options.samplePrecision === 'auto' ? frame.image.raw.BYTES_PER_ELEMENT : options.samplePrecision / 8
+	const state = createDrizzleAccumulator(width, height, channels, cfa, scale, options.keepPerPixelStatistics || options.cropMode === 'intersection' || options.minimumCoverage > 0, options.keepPerPixelStatistics, sampleBytes, maxMemoryBytes)
+	const normalization = { scales: channelArray(channels, 1), offsets: channelArray(channels, 0), weight: resolveFrameWeight(frame, quality, options) }
+	depositDrizzle(state, frame.image, footprint, normalization.scales, normalization.offsets, options.combinationMethod === 'weighted-average' ? normalization.weight : 1, 1)
+	const diagnostic: FrameAcceptanceResult = { accepted: true, frameIndex, frameId: frame.id, quality, overlapFraction: 1, transform: identityTransformSummary(), normalization }
+	return { state, diagnostic }
+}
+
+// Registers, checks overlap, normalizes and deposits one target without retaining its pixels.
+// Rejections occur before accumulator mutation. Geometry is forward; photometric pairs use its inverse.
+function addDrizzleFrame(state: DrizzleAccumulator, reference: StackingFrame, frame: StackingFrame, frameIndex: number, quality: StackingFrameQualityMetrics, acceptedFrames: number, options: ResolvedStackingOptions): FrameAcceptanceResult {
+	let reason = drizzleFrameFailure(frame, options)
+	let overlapFraction = 0
+	let transform: StackingTransformSummary | undefined
+
+	if (reason === undefined && frame.image.metadata.channels !== reference.image.metadata.channels) reason = 'channel-mismatch'
+	if (reason === undefined && frame.stars.length < options.minAcceptedStars) reason = 'too-few-stars'
+	if (reason === undefined && reference.stars.length < options.minAcceptedStars) reason = 'reference-has-no-stars'
+	if (reason === undefined) {
+		const registration = registerStars(reference.stars, frame.stars, registrationOptions(options))
+		if (!registration.success) reason = stackingRegistrationFailureReason(registration.reason)
+		else {
+			transform = registration.transform.summary
+			const matrix = toAffineMatrix(registration.transform.transform)
+			const { width, height } = frame.image.metadata
+			const footprint = prepareDrizzleFootprint(matrix, state.scaleX, state.scaleY, options.drizzle.pixfrac, width, height)
+
+			if (footprint === undefined) reason = 'invalid-transform'
+			else {
+				overlapFraction = drizzleOverlap(matrix, width, height, reference.image.metadata.width, reference.image.metadata.height, state.polygon, state.clipped)
+				if (!(overlapFraction > 0)) reason = 'no-overlap'
+				else if (overlapFraction < options.minOverlapFraction) reason = 'insufficient-overlap'
+				else {
+					// Local mode was rejected once in resolveStackingOptions, before any frame was accepted.
+					const mode = options.normalizationMode as 'none' | GlobalNormalizationMode
+					const normalization = { ...drizzleNormalization(state, reference.image, frame.image, toAffineMatrix(registration.transform.inverseTransform), mode, options.colorHandlingMode), weight: resolveFrameWeight(frame, quality, options) }
+					depositDrizzle(state, frame.image, footprint, normalization.scales, normalization.offsets, options.combinationMethod === 'weighted-average' ? normalization.weight : 1, acceptedFrames + 1)
+					return { accepted: true, frameIndex, frameId: frame.id, overlapFraction, quality, transform, normalization }
+				}
+			}
+		}
+	}
+
+	return { accepted: false, frameIndex, frameId: frame.id, overlapFraction, quality, transform, reason }
+}
+
+// Executes Drizzle batch reference selection/diagnostics with the same primitive operations as live.
+// Targets are processed in input order after the reference; only one pixel accumulator is retained.
+function stackDrizzleFrames(frames: readonly StackingFrame[], qualities: readonly StackingFrameQualityMetrics[], referenceIndex: number, options: ResolvedStackingOptions): StackResult {
+	if (referenceIndex < 0) {
+		const diagnostics = frames.map((frame, frameIndex): FrameAcceptanceResult => ({ accepted: false, frameIndex, frameId: frame.id, overlapFraction: 0, quality: qualities[frameIndex], reason: drizzleFrameFailure(frame, options) ?? 'too-few-stars' }))
+		return emptyStackResult(options, -1, diagnostics)
+	}
+
+	const reference = frames[referenceIndex]
+	const quality = qualities[referenceIndex]
+
+	const reason = drizzleFrameFailure(reference, options) ?? (!options.allowStarlessReference && reference.stars.length < options.minAcceptedStars ? 'too-few-stars' : undefined)
+	if (reason !== undefined) return emptyStackResult(options, referenceIndex, [{ accepted: false, frameIndex: referenceIndex, frameId: reference.id, overlapFraction: 0, quality, reason }])
+
+	const initial = initializeDrizzleReference(reference, referenceIndex, quality, options)
+	if (initial === undefined) return emptyStackResult(options, referenceIndex, [{ accepted: false, frameIndex: referenceIndex, frameId: reference.id, overlapFraction: 0, quality, reason: 'invalid-transform' }])
+
+	const diagnostics = [initial.diagnostic]
+	let accepted = 1
+
+	for (let index = 0; index < frames.length; index++) {
+		if (index === referenceIndex) continue
+		const result = addDrizzleFrame(initial.state, reference, frames[index], index, qualities[index], accepted, options)
+		diagnostics.push(result)
+		if (result.accepted) accepted++
+	}
+
+	return buildDrizzleResult(initial.state, reference, referenceIndex, accepted, diagnostics, options, false)
+}
+
+// FITS table and tile-compression structural cards invalidated by a new floating-point image.
+const DRIZZLE_STRUCTURE_PATTERN = /^(?:XTENSION|PCOUNT|GCOUNT|TFIELDS|THEAP|T(?:TYPE|FORM|UNIT|NULL|SCAL|ZERO|DISP|DIM|BCOL)\d+|Z(?:IMAGE|CMPTYPE|BITPIX|NAXIS\d*|TILE\d+|NAME\d+|VAL\d+|QUANTIZ|DITHER0|BLANK|SCALE|ZERO|SIMPLE|EXTEND|BLOCKED|PCOUNT|GCOUNT|HECKSUM|DATASUM)|BAYERPAT|BSCALE|BZERO|BLANK|CHECKSUM|DATASUM)$/
+
+// Builds a floating-point image with one cloned header and coherent post-crop metadata. Removes stale
+// compression/table cards so writeFits cannot inherit Rice compression for the new float raw.
+function buildDrizzleImage(reference: Image, raw: ImageRawType, width: number, height: number, channels: number, scaleX: number, scaleY: number, left: number, top: number): Image {
+	const bitpix = raw instanceof Float64Array ? Bitpix.DOUBLE : Bitpix.FLOAT
+	const image = buildImage(raw, reference.header, width, height, channels, bitpix, undefined)
+	const { header } = image
+	for (const key in header) if (DRIZZLE_STRUCTURE_PATTERN.test(key) || (/^NAXIS\d+$/.test(key) && +key.slice(5) > 2)) delete header[key]
+	header.BITPIX = bitpix
+	header.NAXIS = channels === 3 ? 3 : 2
+	header.NAXIS1 = width
+	header.NAXIS2 = height
+	if (channels === 3) header.NAXIS3 = 3
+	if (header.IMAGEW !== undefined) header.IMAGEW = width
+	if (header.IMAGEH !== undefined) header.IMAGEH = height
+	scaleAndCropFitsWcs(header, scaleX, scaleY, left, top)
+	return image
+}
+
+// Builds one pre-crop mask/bounds pass and writes directly into the final raw, avoiding a full-image
+// intermediate for intersection. CFA requires positive support in all RGB channels. No valid pixel
+// yields no image/bounds, while maps and accepted diagnostics remain available.
+function buildDrizzleResult(state: DrizzleAccumulator, reference: StackingFrame, referenceIndex: number, acceptedFrames: number, diagnostics: readonly FrameAcceptanceResult[], options: ResolvedStackingOptions, live: boolean): StackResult {
+	const { width, height, channels, weights, weightChannels, coverage, sum } = state
+	const mask = new Uint8Array(width * height)
+	const threshold = coverageThreshold(acceptedFrames, options)
+	let left = width
+	let top = height
+	let right = -1
+	let bottom = -1
+
+	for (let y = 0; y < height; y++) {
+		for (let x = 0; x < width; x++) {
+			const p = y * width + x
+
+			if (coverage !== undefined && coverage[p] < threshold) continue
+			const w = p * weightChannels
+
+			if (!(weights[w] > 0) || (weightChannels === 3 && !(weights[w + 1] > 0 && weights[w + 2] > 0))) continue
+			mask[p] = 1
+
+			left = Math.min(left, x)
+			right = Math.max(right, x)
+			top = Math.min(top, y)
+			bottom = Math.max(bottom, y)
+		}
+	}
+
+	const bounds: StackBounds | undefined = right < left ? undefined : { left, top, right, bottom, width: right - left + 1, height: bottom - top + 1 }
+	let finalImage: Image | undefined
+
+	if (bounds !== undefined) {
+		const crop = options.cropMode === 'intersection'
+		const outWidth = crop ? bounds.width : width
+		const outHeight = crop ? bounds.height : height
+		const outLeft = crop ? left : 0
+		const outTop = crop ? top : 0
+		const raw = makeImageRawTypedArray(options.samplePrecision === 'auto' ? reference.image.raw : options.samplePrecision, outWidth * outHeight * channels)
+
+		for (let y = 0; y < outHeight; y++) {
+			for (let x = 0; x < outWidth; x++) {
+				const p = (y + outTop) * width + x + outLeft
+				if (mask[p] === 0) continue
+				const output = (y * outWidth + x) * channels
+				for (let channel = 0; channel < channels; channel++) raw[output + channel] = options.combinationMethod === 'sum' ? sum[p * channels + channel] : sum[p * channels + channel] / weights[weightChannels === 3 ? p * 3 + channel : p]
+			}
+		}
+
+		finalImage = buildDrizzleImage(reference.image, raw, outWidth, outHeight, channels, state.scaleX, state.scaleY, outLeft, outTop)
+	}
+
+	return {
+		finalImage,
+		acceptedFrames,
+		rejectedFrames: diagnostics.length - acceptedFrames,
+		referenceFrameIndex: referenceIndex,
+		effectiveCropBounds: bounds,
+		diagnostics: live ? diagnostics.slice() : diagnostics,
+		statistics: {
+			method: options.combinationMethod,
+			reconstructionMode: options.reconstructionMode,
+			colorHandlingMode: options.colorHandlingMode,
+			normalizationMode: options.normalizationMode,
+			weightingMode: options.weightingMode,
+			liveExact: true,
+			acceptedWeightSum: sumAcceptedWeights(diagnostics),
+			minimumCoverage: options.cropMode === 'intersection' ? 1 : options.minimumCoverage,
+			drizzle: { scale: options.drizzle.scale, pixfrac: options.drizzle.pixfrac, outputWidth: width, outputHeight: height },
+		},
+		validityMask: mask,
+		coverageMap: options.keepPerPixelStatistics ? (live ? coverage!.slice() : coverage) : undefined,
+		weightMap: options.keepPerPixelStatistics ? { width, height, channels: weightChannels, raw: live ? weights.slice() : weights } : undefined,
+	}
 }

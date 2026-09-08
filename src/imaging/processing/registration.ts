@@ -322,8 +322,9 @@ function warpIntoReference(image: Image, inverseTransform: SimilarityTransform |
 	return coveredPixels
 }
 
-// Converts similarity or affine parameters into a common matrix representation.
-function toAffineMatrix(transform: SimilarityTransform | AffineTransform) {
+// Converts a pixel similarity (including reflection) to an affine matrix; an affine input is returned
+// by reference. The matrix maps the same source centers to destination centers as the input transform.
+export function toAffineMatrix(transform: SimilarityTransform | AffineTransform): AffineTransform {
 	if ('mirrored' in transform) return { m00: transform.a, m01: transform.mirrored ? transform.b : -transform.b, tx: transform.tx, m10: transform.b, m11: transform.mirrored ? -transform.a : transform.a, ty: transform.ty }
 	return transform
 }

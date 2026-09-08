@@ -1,8 +1,29 @@
 import { expect, describe, test } from 'bun:test'
-import type { CfaPattern, Image } from '../../../src/imaging/model/types'
+import { cfaChannelAt, type CfaPattern, type Image, shiftCfaPattern } from '../../../src/imaging/model/types'
 import { bayer, debayer } from '../../../src/imaging/processing/debayer'
 import { Bitpix } from '../../../src/io/formats/fits/fits'
 import { expectImageValues, makeImage } from './util'
+
+test.each(['RGGB', 'BGGR', 'GBRG', 'GRBG', 'GRGB', 'GBGR', 'RGBG', 'BGRG'] as const)('shared CFA routing uses the local ROI phase for %s pattern', (pattern) => {
+	for (const [dx, dy] of [
+		[0, 0],
+		[1, 0],
+		[0, 1],
+		[1, 1],
+	]) {
+		const shifted = shiftCfaPattern(pattern, dx, dy)!
+		const pixel = (_v: number, i: number) => (i % 3) + 1
+		const source = makeImage(3, 3, 3, new Float32Array(27).map(pixel))
+		const mosaic = bayer(source, shifted)!
+		for (let y = 0; y < 3; y++) {
+			for (let x = 0; x < 3; x++) {
+				const channel = cfaChannelAt(pattern, x + dx, y + dy)
+				expect(cfaChannelAt(shifted, x, y)).toBe(channel)
+				expect(mosaic.raw[y * 3 + x]).toBe(channel + 1)
+			}
+		}
+	}
+})
 
 test('bayer converts RGB pixels into a mono CFA frame', () => {
 	const image = makeImage(2, 2, 3, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12])

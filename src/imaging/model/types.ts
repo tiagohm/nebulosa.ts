@@ -16,6 +16,13 @@ export type ImageFormat = 'jpeg' | 'fits' | 'xisf'
 // Color filter array (Bayer) pixel pattern.
 export type CfaPattern = 'RGGB' | 'BGGR' | 'GBRG' | 'GRBG' | 'GRGB' | 'GBGR' | 'RGBG' | 'BGRG'
 
+// Returns RGB channel 0/1/2 at integer local raw coordinates (x right, y down). The pattern already
+// describes the raw origin, including any ROI phase shift; no sensor or FITS offsets are applied.
+export function cfaChannelAt(pattern: CfaPattern, x: number, y: number): 0 | 1 | 2 {
+	const color = pattern[((y & 1) << 1) | (x & 1)]
+	return color === 'R' ? 0 : color === 'G' ? 1 : 2
+}
+
 // Per-channel weights summing a color pixel to a single luminance value.
 export type Grayscale = Readonly<Record<Lowercase<ImageChannel>, number>>
 
