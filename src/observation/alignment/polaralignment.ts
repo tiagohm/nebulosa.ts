@@ -3,27 +3,31 @@ import type { HorizontalCoordinate } from '../../astronomy/coordinates/coordinat
 import { eraS2c } from '../../astronomy/coordinates/erfa/erfa'
 import { applyEquatorialPointingError, polarAlignmentPointingModel } from '../../astronomy/coordinates/pointing'
 import type { GeographicPosition } from '../../astronomy/observer/location'
-import { cirsRotationMatrix, gcrsToItrsRotationMatrix, type Time } from '../../astronomy/time/time'
-import { PI } from '../../core/constants'
+import { cirsRotationMatrix, gcrsToItrsRotationMatrix, type Time, Timescale, timeSubtract } from '../../astronomy/time/time'
+import { DAYSEC, PI, SIDEREAL_DRIFT_RATE } from '../../core/constants'
 import { matMulVec, matTransposeMulVec } from '../../math/linear-algebra/mat3'
-import { type Vec3, vecCross, vecDivScalarMut, vecDot, vecLength, vecMinus, vecNegateMut, vecNormalizeMut, vecPlane } from '../../math/linear-algebra/vec3'
+import { type Vec3, vecCross, vecDivScalarMut, vecDot, vecLength, vecMinus, vecNegateMut, vecNormalizeMut, vecPlane, vecRotateByRodrigues } from '../../math/linear-algebra/vec3'
 import { type Angle, normalizePI } from '../../math/units/angle'
 import { applyMountAdjustment } from './polaralignment.util'
 
-// Three-Point Polar Alignment Algorithm (ICRF-based)
+// Three-point polar alignment from timestamped ICRF/J2000 plate solves. The mechanical axis is
+// fixed to the Earth between base adjustments; samples are transported to a common epoch before
+// fitting it. Refreshes remove tracking about that axis before inferring azimuth/altitude adjustments.
+// Angles are radians. Geometry allocates vectors and results retain their exposure Time; an unchanged
+// same-epoch refresh may reuse its pole. Refraction affects the displayed pole and target altitudes.
 
-// This implementation performs polar alignment using a three-point plate solving method entirely in the inertial ICRF (J2000) reference frame.
-// All geometric computations are done in ICRF to avoid time-dependent distortions caused by precession, nutation, or Earth rotation.
-// Conversion to observed (horizontal) coordinates is performed only at the final stage for user feedback.
+export type ThreePointPolarAlignmentInput = readonly [Angle, Angle, Time]
 
 // Result of a three-point polar alignment, with the mount pole in horizontal coordinates and the
 // signed azimuth/altitude errors and applied adjustments. All angles are radians.
 export interface ThreePointPolarAlignmentResult extends Readonly<HorizontalCoordinate> {
+	// Exposure epoch of the ICRF pole and the reference plate solve used by the next refresh.
+	readonly time: Time
 	// Mount-pole azimuth error relative to the true pole (radians); positive sense per hemisphere.
 	readonly azimuthError: Angle
 	// Mount-pole altitude error relative to the refracted celestial-pole altitude (radians).
 	readonly altitudeError: Angle
-	// Unit normal of the plane through the three ICRF reference points, i.e. the mount pole direction.
+	// Unit direction of the above-horizon mechanical pole in ICRF at `time`.
 	readonly pole: Vec3
 	// Azimuth knob delta inferred from the last correction step (radians); 0 on initial estimate.
 	readonly azimuthAdjustment: Angle
@@ -36,6 +40,13 @@ export interface ThreePointPolarAlignmentResult extends Readonly<HorizontalCoord
 // vecNormalize and become a fake equatorial direction in cirsToObserved.
 const DEGENERATE_POLE_NORMAL = 1e-14
 
+// Re-expresses an ICRF direction attached to the Earth from `from` to `to`, preserving its ITRS
+// orientation. Returns `vector` itself when the Time object is unchanged, otherwise a fresh vector.
+function transportEarthFixed(vector: Vec3, from: Time, to: Time): Vec3 {
+	if (from === to) return vector
+	return matTransposeMulVec(gcrsToItrsRotationMatrix(to), matMulVec(gcrsToItrsRotationMatrix(from), vector))
+}
+
 // Altitude (radians) of the true celestial pole as the alignment target: the absolute latitude,
 // optionally raised by atmospheric refraction so it matches the observed pole position.
 function referencePoleAltitude(location: GeographicPosition, refraction: RefractionParameters | false) {
@@ -45,14 +56,14 @@ function referencePoleAltitude(location: GeographicPosition, refraction: Refract
 // Converts an ICRF mount-pole direction to observed azimuth/altitude and signed polar-alignment
 // errors at `time`. `pole` is a unit vector; the returned `pole` aliases it. `azimuthAdjustment`
 // and `altitudeAdjustment` are the last inferred knob deltas in radians, and stay 0 on the
-// initial estimate and when the plate-solve center did not move.
+// initial estimate and when no base adjustment is detected.
 function observedPolarAlignment(pole: Vec3, time: Time, refraction: RefractionParameters | false, location: GeographicPosition, azimuthAdjustment: Angle = 0, altitudeAdjustment: Angle = 0): ThreePointPolarAlignmentResult {
 	const isNorthern = location.latitude > 0
 	const { azimuth, altitude } = cirsToObserved(matMulVec(cirsRotationMatrix(time), pole), time, refraction, location)
 	const latitude = referencePoleAltitude(location, refraction)
 	const azimuthError = isNorthern ? normalizePI(azimuth) : normalizePI(azimuth + PI)
 	const altitudeError = isNorthern ? altitude - latitude : latitude - altitude
-	return { azimuth, altitude, pole, azimuthError, altitudeError, azimuthAdjustment, altitudeAdjustment }
+	return { time, azimuth, altitude, pole, azimuthError, altitudeError, azimuthAdjustment, altitudeAdjustment }
 }
 
 // https://sourceforge.net/p/sky-simulator/code/ci/default/tree/sky_annotation.pas#l1189
@@ -71,11 +82,18 @@ export function polarAlignmentError(rightAscension: Angle, declination: Angle, l
 // Computes the initial polar-alignment error from three plate-solved ICRF points (each [RA, Dec] in
 // radians) captured while slewing only in RA. The three points define a small circle whose plane
 // normal is the mount's rotation axis; comparing that axis to the true pole yields the azimuth and
-// altitude errors. The geometry is done in ICRF and converted to observed coordinates only at the end.
+// altitude errors. `time` is the third exposure; `firstTimes` supplies the first two exposure epochs,
+// defaulting to `time` for simultaneous samples. Base adjustments and the declination setting must
+// remain unchanged; RA slewing and tracking are allowed. Each sample is transported with
+// Earth rotation to the third epoch before fitting the plane. The returned ICRF pole is at `time`.
 // Returns false when two or more points coincide or the plane normal vanishes, because the mount
 // pole is then undefined and a zero normal would become a plausible equatorial direction.
-export function threePointPolarAlignmentError(p1: readonly [Angle, Angle], p2: readonly [Angle, Angle], p3: readonly [Angle, Angle], time: Time, refraction: RefractionParameters | false = DEFAULT_REFRACTION_PARAMETERS, location: GeographicPosition = time.location!): ThreePointPolarAlignmentResult | false {
-	const pole = vecPlane(eraS2c(...p1), eraS2c(...p2), eraS2c(...p3))
+export function threePointPolarAlignmentError(p1: ThreePointPolarAlignmentInput, p2: ThreePointPolarAlignmentInput, p3: ThreePointPolarAlignmentInput, refraction: RefractionParameters | false = DEFAULT_REFRACTION_PARAMETERS, location: GeographicPosition = p3[2].location!): ThreePointPolarAlignmentResult | false {
+	const time = p3[2]
+	const first = transportEarthFixed(eraS2c(p1[0], p1[1]), p1[2], time)
+	const second = transportEarthFixed(eraS2c(p2[0], p2[1]), p2[2], time)
+	const pole = vecPlane(first, second, eraS2c(p3[0], p3[1]))
+
 	// Coincident or collinear plate-solves leave no unique plane; see DEGENERATE_POLE_NORMAL.
 	const length = vecLength(pole)
 	if (length <= DEGENERATE_POLE_NORMAL) return false
@@ -96,27 +114,39 @@ export function threePointPolarAlignmentError(p1: readonly [Angle, Angle], p2: r
 // local up, then altitude about the east axis carried by the rotated base. A generic 3D rotation
 // from one star vector is underconstrained and caused systematic drift; applying altitude about
 // the original east axis disagrees with the overlay by O(az·alt).
-// When the plate-solve center does not move, the previous pole is kept and the observed
-// azimuth/altitude are recomputed at `time` so the displayed place follows Earth rotation.
+// `from` belongs to `result.time`, `to` to `time`; both are ICRF RA/Dec in radians. Transport the
+// Earth-fixed pole and predict the tracked boresight before interpreting any residual as an adjustment.
+// `trackingRate` is the constant RA motor speed in radians per SI second: sidereal by default, 0
+// with tracking off. Positive follows sidereal tracking in either hemisphere. No DEC motion,
+// guiding, dithering, pier-side changes or rate changes are allowed between these exposures.
+// Uses small-adjustment least squares; degenerate adjustment geometry retains the transported pole.
+// Returns a result at `time`; an unchanged same-epoch refresh may alias `result.pole`. Input results
+// and coordinates are not mutated. Measurement error can be amplified near singular adjustment geometry.
 export function threePointPolarAlignmentAfterAdjustment(
 	result: ThreePointPolarAlignmentResult, // 3rd measurement image alignment result
-	from: readonly [Angle, Angle], // 3rd measurement image solution ICRF coordinates
-	to: readonly [Angle, Angle], // actual measurement image solution ICRF coordinates
-	time: Time,
+	from: ThreePointPolarAlignmentInput, // 3rd measurement image solution ICRF coordinates
+	to: ThreePointPolarAlignmentInput, // actual measurement image solution ICRF coordinates
 	refraction: RefractionParameters | false = DEFAULT_REFRACTION_PARAMETERS,
-	location: GeographicPosition = time.location!,
+	location: GeographicPosition = to[2].location!,
+	trackingRate: Angle = SIDEREAL_DRIFT_RATE,
 ): ThreePointPolarAlignmentResult {
-	// Convert both solved positions to ICRF vectors so we can compare the actual sky displacement.
-	const fromVec = eraS2c(from[0], from[1])
+	const time = to[2]
+	const elapsedSeconds = timeSubtract(time, result.time, Timescale.TAI) * DAYSEC
+	const transportedPole = transportEarthFixed(result.pole, result.time, time)
+	const transportedFrom = transportEarthFixed(eraS2c(from[0], from[1]), result.time, time)
+	// Tracking turns the boresight westwards in ITRS about a north-pointing RA axis. The reported pole points
+	// south in the southern hemisphere, which reverses the Rodrigues angle, not the motor rate.
+	const trackingAngle = (location.latitude > 0 ? -1 : 1) * trackingRate * elapsedSeconds
+	const fromVec = trackingAngle === 0 ? transportedFrom : vecRotateByRodrigues(transportedFrom, transportedPole, trackingAngle)
 	const toVec = eraS2c(to[0], to[1])
 
-	// No meaningful movement in plate-solve center: keep the pole, refresh the observed place.
-	if (vecLength(vecMinus(toVec, fromVec)) <= 1e-12) return observedPolarAlignment(result.pole, time, refraction, location)
+	// No residual beyond tracking: retain the transported mechanical pole.
+	if (vecLength(vecMinus(toVec, fromVec)) <= 1e-12) return observedPolarAlignment(transportedPole, time, refraction, location)
 
 	// Build local mechanical axes and solve the knob deltas that best explain from -> to.
 	const { upAxis, eastAxis } = mountAdjustmentAxes(time, location)
 	const { azimuthAdjustment, altitudeAdjustment } = solveAzAltAdjustment(fromVec, toVec, upAxis, eastAxis)
-	const pole = applyMountAdjustment(result.pole, upAxis, eastAxis, azimuthAdjustment, altitudeAdjustment)
+	const pole = applyMountAdjustment(transportedPole, upAxis, eastAxis, azimuthAdjustment, altitudeAdjustment)
 	return observedPolarAlignment(pole, time, refraction, location, azimuthAdjustment, altitudeAdjustment)
 }
 
@@ -171,23 +201,29 @@ export function solveAzAltAdjustment(from: Vec3, to: Vec3, upAxis: Vec3, eastAxi
 // the mount knobs.
 export class ThreePointPolarAlignment {
 	// The three seed reference points ([RA, Dec] in radians).
-	readonly #points = new Array<readonly [Angle, Angle]>(3)
+	readonly #points = new Array<ThreePointPolarAlignmentInput>(3)
 
 	// Count of points added so far; the first three seed the estimate, later ones refine it.
 	#position = 0
 	// Last solved point used as the "from" reference for the next adjustment step, or false before seeding.
-	#referencePoint: readonly [Angle, Angle] | false = false
+	#referencePoint: ThreePointPolarAlignmentInput | false = false
 	// Most recent alignment result, or false until three points are collected.
 	#currentError: ThreePointPolarAlignmentResult | false = false
 
-	constructor(readonly refraction: RefractionParameters | false = DEFAULT_REFRACTION_PARAMETERS) {}
+	// Starts a session using the given atmospheric model and constant tracking speed (radians per
+	// SI second, sidereal by default, 0 when tracking is off). The motor may slew in RA for seeding;
+	// only tracking and small base adjustments are allowed after the third exposure.
+	constructor(
+		readonly refraction: RefractionParameters | false = DEFAULT_REFRACTION_PARAMETERS,
+		readonly trackingRate: Angle = SIDEREAL_DRIFT_RATE,
+	) {}
 
 	// Adds a plate-solved point ([RA, Dec] radians) at the given time and returns the current alignment
-	// result, or false while fewer than three points have been collected or the three seed points are
-	// coincident or collinear. A degenerate third point leaves the session without an estimate;
+	// result at that exposure epoch, or false while fewer than three points have been collected or the
+	// three transported seed points are coincident or collinear. A degenerate third point leaves no estimate;
 	// call `reset` before starting again.
 	add(rightAscension: Angle, declination: Angle, time: Time) {
-		const point = [rightAscension, declination] as const
+		const point = [rightAscension, declination, time] as const
 
 		if (this.#position < 3) {
 			this.#points[this.#position] = point
@@ -198,10 +234,10 @@ export class ThreePointPolarAlignment {
 		// When we have three points, compute the initial polar alignment error.
 		// After that, each new point is used to compute the adjusted error
 		if (this.#position === 3) {
-			this.#currentError = threePointPolarAlignmentError(this.#points[0], this.#points[1], this.#points[2], time, this.refraction)
+			this.#currentError = threePointPolarAlignmentError(this.#points[0], this.#points[1], this.#points[2], this.refraction, time.location)
 			if (this.#currentError !== false) this.#referencePoint = this.#points[2]
 		} else if (this.#position > 3 && this.#currentError !== false && this.#referencePoint !== false) {
-			this.#currentError = threePointPolarAlignmentAfterAdjustment(this.#currentError, this.#referencePoint, point, time, this.refraction)
+			this.#currentError = threePointPolarAlignmentAfterAdjustment(this.#currentError, this.#referencePoint, point, this.refraction, time.location, this.trackingRate)
 			this.#referencePoint = point
 		}
 
