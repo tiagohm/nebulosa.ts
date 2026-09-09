@@ -49,7 +49,7 @@ function makeAlignment(latitude: number, azimuth: number = arcmin(6), altitude: 
 	const targetPole = celestialPoleVector(time, location, false)
 	const axes = mountAdjustmentAxes(time, location)
 	const currentPole = applyInverseMountAdjustment(targetPole, axes.upAxis, axes.eastAxis, azimuth, altitude)
-	const result: ThreePointPolarAlignmentResult = { azimuth: 0, altitude: 0, azimuthError: 0, altitudeError: 0, pole: currentPole, azimuthAdjustment: 0, altitudeAdjustment: 0 }
+	const result: ThreePointPolarAlignmentResult = { time, azimuth: 0, altitude: 0, azimuthError: 0, altitudeError: 0, pole: currentPole, azimuthAdjustment: 0, altitudeAdjustment: 0 }
 	return { location, time, targetPole, axes, currentPole, result, azimuth, altitude }
 }
 
@@ -294,7 +294,7 @@ describe('complete overlay', () => {
 		const targetPole = celestialPoleVector(time, location)
 		const axes = mountAdjustmentAxes(time, location)
 		const pole = applyInverseMountAdjustment(targetPole, axes.upAxis, axes.eastAxis, arcmin(4), arcmin(-3))
-		const result: ThreePointPolarAlignmentResult = { azimuth: 0, altitude: 0, azimuthError: 0, altitudeError: 0, pole, azimuthAdjustment: 0, altitudeAdjustment: 0 }
+		const result: ThreePointPolarAlignmentResult = { time, azimuth: 0, altitude: 0, azimuthError: 0, altitudeError: 0, pole, azimuthAdjustment: 0, altitudeAdjustment: 0 }
 		const computed = computeThreePointPolarAlignmentOverlay(result, makeSolution(), time, { tolerances: [] })
 		expect(computed.success).toBeTrue()
 		if (!computed.success) return

@@ -1,11 +1,10 @@
-import { ASEC2RAD, DAYSEC, DEG2RAD, MOON_SIDEREAL_DAYS, SIDEREAL_DAYSEC, SIDEREAL_RATE, TAU } from '../../../core/constants'
+import { ASEC2RAD, DAYSEC, DEG2RAD, MOON_SIDEREAL_DAYS, SIDEREAL_RATE, TAU } from '../../../core/constants'
 
 // Shared physical limits, timings, property groups, and presets for the INDI device simulators.
 
 // Simulation tick period, milliseconds.
 export const TICK_INTERVAL_MS = 100
-// Tracking drift rates (radians/second) for each track mode: sidereal, solar, lunar, and King.
-export const SIDEREAL_DRIFT_RATE = TAU / SIDEREAL_DAYSEC
+// Tracking drift rates (radians/second) for each track mode: solar, lunar, and King.
 export const SOLAR_DRIFT_RATE = TAU / (365.2422 * DAYSEC)
 export const LUNAR_DRIFT_RATE = TAU / (MOON_SIDEREAL_DAYS * DAYSEC)
 export const KING_DRIFT_RATE = (SIDEREAL_RATE - 15.0369) * ASEC2RAD

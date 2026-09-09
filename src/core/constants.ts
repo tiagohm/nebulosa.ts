@@ -36,6 +36,9 @@ export const DAYSEC = 86400
 // Sidereal seconds per day.
 export const SIDEREAL_DAYSEC = 86164.0905
 
+// Sidereal tracking drift rate (radians/second).
+export const SIDEREAL_DRIFT_RATE = TAU / SIDEREAL_DAYSEC
+
 // One SI second expressed in days.
 export const ONE_SECOND = 1 / DAYSEC
 

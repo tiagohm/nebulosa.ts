@@ -1,9 +1,9 @@
 import { describe, expect, test } from 'bun:test'
-import { cirsToObserved, DEFAULT_REFRACTION_PARAMETERS } from '../../../src/astronomy/coordinates/astrometry'
+import { cirsToObserved, DEFAULT_REFRACTION_PARAMETERS, refractedAltitude } from '../../../src/astronomy/coordinates/astrometry'
 import { eraC2s, eraS2c } from '../../../src/astronomy/coordinates/erfa/erfa'
 import { geodeticLocation, localSiderealTime } from '../../../src/astronomy/observer/location'
-import { cirsRotationMatrix, type Time, timeShift, timeYMDHMS } from '../../../src/astronomy/time/time'
-import { matMulVec } from '../../../src/math/linear-algebra/mat3'
+import { cirsRotationMatrix, gcrsToItrsRotationMatrix, type Time, timeShift, timeYMDHMS } from '../../../src/astronomy/time/time'
+import { matMulVec, matTransposeMulVec } from '../../../src/math/linear-algebra/mat3'
 import { vecAngle, vecRotateByRodrigues } from '../../../src/math/linear-algebra/vec3'
 import { arcmin, deg, hour, normalizePI, parseAngle, toArcmin, toArcsec, toDeg } from '../../../src/math/units/angle'
 import { meter } from '../../../src/math/units/distance'
@@ -55,7 +55,7 @@ describe('computed polar alignment error', () => {
 				for (let al = -60; al <= 60; al += 10) {
 					for (let dec = -40; dec <= 40; dec += 10) {
 						const [p1, p2, p3] = [orie === 0 ? P3_RA : P1_RA, P2_RA, orie === 0 ? P1_RA : P3_RA].map((ra) => polarAlignmentError(ra, deg(dec), time.location!.latitude, LST, arcmin(az), arcmin(al)))
-						const result = threePointPolarAlignmentError(p1, p2, p3, time, false)
+						const result = threePointPolarAlignmentError([...p1, time], [...p2, time], [...p3, time], false)
 						expect(result).not.toBeFalse()
 						if (!result) continue
 
@@ -75,7 +75,7 @@ describe('computed polar alignment error', () => {
 				for (let al = -60; al <= 60; al += 10) {
 					for (let dec = -40; dec <= 40; dec += 10) {
 						const [p1, p2, p3] = [orie === 0 ? P3_RA : P1_RA, P2_RA, orie === 0 ? P1_RA : P3_RA].map((ra) => polarAlignmentError(ra, deg(dec), time.location!.latitude, LST, arcmin(az), arcmin(al)))
-						const result = threePointPolarAlignmentError(p1, p2, p3, time, DEFAULT_REFRACTION_PARAMETERS)
+						const result = threePointPolarAlignmentError([...p1, time], [...p2, time], [...p3, time], DEFAULT_REFRACTION_PARAMETERS)
 						expect(result).not.toBeFalse()
 						if (!result) continue
 
@@ -95,7 +95,7 @@ describe('computed polar alignment error', () => {
 				for (let al = -60; al <= 60; al += 10) {
 					for (let dec = -40; dec <= 40; dec += 10) {
 						const [p1, p2, p3] = [orie === 0 ? P3_RA : P1_RA, P2_RA, orie === 0 ? P1_RA : P3_RA].map((ra) => polarAlignmentError(ra, deg(dec), time.location!.latitude, LST, arcmin(az), arcmin(al)))
-						const result = threePointPolarAlignmentError(p1, p2, p3, time, false)
+						const result = threePointPolarAlignmentError([...p1, time], [...p2, time], [...p3, time], false)
 						expect(result).not.toBeFalse()
 						if (!result) continue
 
@@ -115,7 +115,7 @@ describe('computed polar alignment error', () => {
 				for (let al = -60; al <= 60; al += 10) {
 					for (let dec = -40; dec <= 40; dec += 10) {
 						const [p1, p2, p3] = [orie === 0 ? P3_RA : P1_RA, P2_RA, orie === 0 ? P1_RA : P3_RA].map((ra) => polarAlignmentError(ra, deg(dec), time.location!.latitude, LST, arcmin(az), arcmin(al)))
-						const result = threePointPolarAlignmentError(p1, p2, p3, time, DEFAULT_REFRACTION_PARAMETERS)
+						const result = threePointPolarAlignmentError([...p1, time], [...p2, time], [...p3, time], DEFAULT_REFRACTION_PARAMETERS)
 						expect(result).not.toBeFalse()
 						if (!result) continue
 
@@ -242,12 +242,12 @@ test('change orientation', () => {
 	const location = geodeticLocation(deg(-45.5), deg(-22.5), meter(900))
 	const time = { day: 2461092, fraction: 0.578802280092129, scale: 1, location }
 
-	const a = [1.418966489892447, -0.5613841311820498] as const
-	const b = [1.4971924601152036, -0.5611006782686236] as const
-	const c = [1.5767801876529501, -0.5608213650948436] as const
+	const a = [1.418966489892447, -0.5613841311820498, time] as const
+	const b = [1.4971924601152036, -0.5611006782686236, time] as const
+	const c = [1.5767801876529501, -0.5608213650948436, time] as const
 
-	const pa1 = threePointPolarAlignmentError(a, b, c, time, DEFAULT_REFRACTION_PARAMETERS, location)
-	const pa2 = threePointPolarAlignmentError(c, b, a, time, DEFAULT_REFRACTION_PARAMETERS, location)
+	const pa1 = threePointPolarAlignmentError(a, b, c, DEFAULT_REFRACTION_PARAMETERS, location)
+	const pa2 = threePointPolarAlignmentError(c, b, a, DEFAULT_REFRACTION_PARAMETERS, location)
 
 	expect(pa1).not.toBeFalse()
 	expect(pa2).not.toBeFalse()
@@ -457,17 +457,6 @@ test('after adjustment II', () => {
 		[253.656, 60.429, 2022, 5, 30, 5, 15, 28],
 	] as const
 
-	const outputRefracted = [
-		// az error (deg), alt error (deg), az adj, alt adj
-		[0.630769, -0.455568, 0, -0.001389],
-		[0.640625, 0.001814, -0.006021, -0.458798],
-		[0.643341, -0.001003, -0.00876, -0.455982],
-		[0.38739, 0.002737, 0.247222, -0.459722],
-		[0.391545, 0.001349, 0.243056, -0.458333],
-		[0.236025, 0.005515, 0.398611, -0.4625],
-		[0.015507, 0.007205, 0.619144, -0.46419],
-	] as const
-
 	const outputNoRefraction = [
 		// az error (deg), alt error (deg), az adj, alt adj
 		[0.629487, -0.46887, 0, -0.001389],
@@ -479,10 +468,8 @@ test('after adjustment II', () => {
 		[0.0136, -0.00533, 0.619766, -0.464956],
 	] as const
 
-	const outputs = [outputNoRefraction, outputRefracted]
-
-	for (const output of outputs) {
-		const pa = new ThreePointPolarAlignment(output === outputNoRefraction ? false : DEFAULT_REFRACTION_PARAMETERS)
+	for (const refraction of [false, DEFAULT_REFRACTION_PARAMETERS] as const) {
+		const pa = new ThreePointPolarAlignment(refraction)
 
 		for (const step of solution) {
 			const time = timeYMDHMS(step[2], step[3], step[4], step[5], step[6], step[7])
@@ -502,12 +489,15 @@ test('after adjustment II', () => {
 
 			if (!result) continue
 
-			const expectedAz = deg(output[i][0])
-			const expectedAlt = deg(output[i][1])
+			const expectedAz = deg(outputNoRefraction[i][0])
+			const geometricAlt = deg(outputNoRefraction[i][1])
+			// KStars refracts each input star before fitting the axis and targets the geometric pole
+			// (polaralign.cpp findAxis/calculateAzAltErrorFromAzAlt at the pinned revision above).
+			// Our contract refracts the fitted pole and the reference pole for display. Apply that
+			// convention to the unchanged geometric reference values instead of mixing the two models.
+			const expectedAlt = refraction === false ? geometricAlt : refractedAltitude(location.latitude + geometricAlt, refraction) - refractedAltitude(location.latitude, refraction)
 
-			// Tolerance reflects the residual modeling difference against the KStars reference values once
-			// the ICRF -> observed conversion uses the CIO-based CIRS matrix (consistent with cirsToObserved)
-			// instead of the equinox-based precession-nutation matrix. It matches the sibling test below.
+			// Retain the 40-arcsecond allowance for rounded input coordinates and reference-model differences.
 			expect(Math.abs(toArcsec(result.azimuthError - expectedAz))).toBeLessThan(40)
 			expect(Math.abs(toArcsec(result.altitudeError - expectedAlt))).toBeLessThan(40)
 		}
@@ -894,12 +884,12 @@ test('coincident plate-solves do not invent a mount pole', () => {
 	const time = timeYMDHMS(2000, 1, 1, 0, 0, 0)
 	time.location = geodeticLocation(deg(7), deg(49), meter(250))
 
-	const a = [deg(20), deg(40)] as const
-	const b = [deg(60), deg(41)] as const
+	const a = [deg(20), deg(40), time] as const
+	const b = [deg(60), deg(41), time] as const
 
-	expect(threePointPolarAlignmentError(a, a, a, time, false)).toBeFalse()
-	expect(threePointPolarAlignmentError(a, a, b, time, false)).toBeFalse()
-	expect(threePointPolarAlignmentError(a, b, b, time, false)).toBeFalse()
+	expect(threePointPolarAlignmentError(a, a, a, false)).toBeFalse()
+	expect(threePointPolarAlignmentError(a, a, b, false)).toBeFalse()
+	expect(threePointPolarAlignmentError(a, b, b, false)).toBeFalse()
 
 	const pa = new ThreePointPolarAlignment(false)
 	expect(pa.add(a[0], a[1], time)).toBeFalse()
@@ -912,8 +902,8 @@ test('after adjustment applies altitude about the carried east axis', () => {
 	const location = geodeticLocation(deg(0), deg(40), meter(250))
 	time.location = location
 
-	const from = [deg(127.00972423), deg(27.34989335)] as const
-	const seed = threePointPolarAlignmentError([deg(186.4193401), deg(27.75369312)], [deg(156.6798968), deg(27.40124463)], from, time, false)
+	const from = [deg(127.00972423), deg(27.34989335), time] as const
+	const seed = threePointPolarAlignmentError([deg(186.4193401), deg(27.75369312), time], [deg(156.6798968), deg(27.40124463), time], from, false)
 	expect(seed).not.toBeFalse()
 	if (!seed) return
 
@@ -921,7 +911,7 @@ test('after adjustment applies altitude about the carried east axis', () => {
 	const azimuth = deg(1)
 	const altitude = deg(1)
 	const to = eraC2s(...applyMountAdjustment(eraS2c(from[0], from[1]), upAxis, eastAxis, azimuth, altitude))
-	const updated = threePointPolarAlignmentAfterAdjustment(seed, from, to, time, false, location)
+	const updated = threePointPolarAlignmentAfterAdjustment(seed, from, [...to, time], false, location)
 	const expected = applyMountAdjustment(seed.pole, upAxis, eastAxis, updated.azimuthAdjustment, updated.altitudeAdjustment)
 	const commuting = vecRotateByRodrigues(vecRotateByRodrigues(seed.pole, upAxis, updated.azimuthAdjustment), eastAxis, updated.altitudeAdjustment)
 
@@ -929,24 +919,28 @@ test('after adjustment applies altitude about the carried east axis', () => {
 	expect(toArcsec(vecAngle(updated.pole, commuting))).toBeGreaterThan(10)
 })
 
-test('unchanged plate-solve refreshes the observed place at the new time', () => {
+test('untracked mount retains its terrestrial pole at the new time', () => {
 	const time = timeYMDHMS(2000, 1, 1, 0, 0, 0)
 	const location = geodeticLocation(deg(0), deg(40), meter(250))
 	time.location = location
 
-	const from = [deg(127.00972423), deg(27.34989335)] as const
-	const seed = threePointPolarAlignmentError([deg(186.4193401), deg(27.75369312)], [deg(156.6798968), deg(27.40124463)], from, time, false)
+	const from = [deg(127.00972423), deg(27.34989335), time] as const
+	const seed = threePointPolarAlignmentError([deg(186.4193401), deg(27.75369312), time], [deg(156.6798968), deg(27.40124463), time], from, false)
 	expect(seed).not.toBeFalse()
 	if (!seed) return
 
 	const later = timeShift(time, 1 / 24)
-	const updated = threePointPolarAlignmentAfterAdjustment(seed, from, from, later, false, location)
-	const observed = cirsToObserved(matMulVec(cirsRotationMatrix(later), seed.pole), later, false, location)
+	const pole = matTransposeMulVec(gcrsToItrsRotationMatrix(later), matMulVec(gcrsToItrsRotationMatrix(time), seed.pole))
+	const to = eraC2s(...matTransposeMulVec(gcrsToItrsRotationMatrix(later), matMulVec(gcrsToItrsRotationMatrix(time), eraS2c(from[0], from[1]))))
+	const updated = threePointPolarAlignmentAfterAdjustment(seed, from, [...to, later], false, location, 0)
+	const observed = cirsToObserved(matMulVec(cirsRotationMatrix(later), pole), later, false, location)
 
-	expect(updated.pole).toBe(seed.pole)
+	expect(updated.time).toBe(later)
+	expect(updated.pole).toEqual(pole)
 	expect(updated.azimuthAdjustment).toBe(0)
 	expect(updated.altitudeAdjustment).toBe(0)
 	expect(updated.azimuth).toBe(observed.azimuth)
 	expect(updated.altitude).toBe(observed.altitude)
-	expect(Math.abs(updated.azimuth - seed.azimuth)).toBeGreaterThan(deg(0.1))
+	expect(Math.abs(toArcsec(updated.azimuth - seed.azimuth))).toBeLessThan(0.05)
+	expect(Math.abs(toArcsec(updated.altitude - seed.altitude))).toBeLessThan(0.05)
 })
