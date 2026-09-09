@@ -163,6 +163,7 @@ src/imaging/processing/convolution.ts
 src/imaging/processing/cosmetic.ts
 src/imaging/processing/curves.ts
 src/imaging/processing/debayer.ts
+src/imaging/processing/drizzle.ts
 src/imaging/processing/fft.ts
 src/imaging/processing/geometry.ts
 src/imaging/processing/mlt.ts

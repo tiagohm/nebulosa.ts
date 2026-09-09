@@ -6,7 +6,7 @@ import type { GeographicPosition } from '../../astronomy/observer/location'
 import { cirsRotationMatrix, gcrsToItrsRotationMatrix, type Time, Timescale, timeSubtract } from '../../astronomy/time/time'
 import { DAYSEC, PI, SIDEREAL_DRIFT_RATE } from '../../core/constants'
 import { matMulVec, matTransposeMulVec } from '../../math/linear-algebra/mat3'
-import { type Vec3, vecCross, vecDivScalarMut, vecDot, vecLength, vecMinus, vecNegateMut, vecNormalizeMut, vecPlane, vecRotateByRodrigues } from '../../math/linear-algebra/vec3'
+import { type MutVec3, type Vec3, vecCross, vecDivScalarMut, vecDot, vecLength, vecMinus, vecNegateMut, vecNormalizeMut, vecPlane, vecRotateByRodrigues } from '../../math/linear-algebra/vec3'
 import { type Angle, normalizePI } from '../../math/units/angle'
 import { applyMountAdjustment } from './polaralignment.util'
 
@@ -44,7 +44,8 @@ const DEGENERATE_POLE_NORMAL = 1e-14
 // orientation. Returns `vector` itself when the Time object is unchanged, otherwise a fresh vector.
 function transportEarthFixed(vector: Vec3, from: Time, to: Time): Vec3 {
 	if (from === to) return vector
-	return matTransposeMulVec(gcrsToItrsRotationMatrix(to), matMulVec(gcrsToItrsRotationMatrix(from), vector))
+	const transported = matMulVec(gcrsToItrsRotationMatrix(from), vector)
+	return matTransposeMulVec(gcrsToItrsRotationMatrix(to), transported, transported)
 }
 
 // Altitude (radians) of the true celestial pole as the alignment target: the absolute latitude,
@@ -90,9 +91,9 @@ export function polarAlignmentError(rightAscension: Angle, declination: Angle, l
 // pole is then undefined and a zero normal would become a plausible equatorial direction.
 export function threePointPolarAlignmentError(p1: ThreePointPolarAlignmentInput, p2: ThreePointPolarAlignmentInput, p3: ThreePointPolarAlignmentInput, refraction: RefractionParameters | false = DEFAULT_REFRACTION_PARAMETERS, location: GeographicPosition = p3[2].location!): ThreePointPolarAlignmentResult | false {
 	const time = p3[2]
-	const first = transportEarthFixed(eraS2c(p1[0], p1[1]), p1[2], time)
+	const first = transportEarthFixed(eraS2c(p1[0], p1[1]), p1[2], time) as MutVec3
 	const second = transportEarthFixed(eraS2c(p2[0], p2[1]), p2[2], time)
-	const pole = vecPlane(first, second, eraS2c(p3[0], p3[1]))
+	const pole = vecPlane(first, second, eraS2c(p3[0], p3[1]), first)
 
 	// Coincident or collinear plate-solves leave no unique plane; see DEGENERATE_POLE_NORMAL.
 	const length = vecLength(pole)
@@ -133,11 +134,11 @@ export function threePointPolarAlignmentAfterAdjustment(
 	const time = to[2]
 	const elapsedSeconds = timeSubtract(time, result.time, Timescale.TAI) * DAYSEC
 	const transportedPole = transportEarthFixed(result.pole, result.time, time)
-	const transportedFrom = transportEarthFixed(eraS2c(from[0], from[1]), result.time, time)
+	const transportedFrom = transportEarthFixed(eraS2c(from[0], from[1]), result.time, time) as MutVec3
 	// Tracking turns the boresight westwards in ITRS about a north-pointing RA axis. The reported pole points
 	// south in the southern hemisphere, which reverses the Rodrigues angle, not the motor rate.
 	const trackingAngle = (location.latitude > 0 ? -1 : 1) * trackingRate * elapsedSeconds
-	const fromVec = trackingAngle === 0 ? transportedFrom : vecRotateByRodrigues(transportedFrom, transportedPole, trackingAngle)
+	const fromVec = trackingAngle === 0 ? transportedFrom : vecRotateByRodrigues(transportedFrom, transportedPole, trackingAngle, transportedFrom)
 	const toVec = eraS2c(to[0], to[1])
 
 	// No residual beyond tracking: retain the transported mechanical pole.
