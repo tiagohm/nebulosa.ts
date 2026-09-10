@@ -158,8 +158,6 @@ export interface ThreePointPolarAlignmentOverlay {
 	readonly azimuthTargetPoint: Readonly<PolarAlignmentOverlayPoint>
 	// Reference star after the complete correction.
 	readonly targetPoint: Readonly<PolarAlignmentOverlayPoint>
-	// Original current, intermediate, and final positions for a polyline.
-	readonly path: readonly [Readonly<Point>, Readonly<Point>, Readonly<Point>]
 	// Visible azimuth component segment.
 	readonly azimuthSegment: Readonly<PolarAlignmentOverlaySegment>
 	// Visible altitude component segment.
@@ -347,6 +345,7 @@ export function computeThreePointPolarAlignmentOverlay(result: Readonly<ThreePoi
 
 	const currentPole = normalizeFiniteVector(result.pole)
 	if (!currentPole) return failure('invalidPole', warnings)
+
 	let targetPole: Vec3 | undefined
 	let axes: ReturnType<typeof mountAdjustmentAxes>
 	try {
@@ -355,6 +354,7 @@ export function computeThreePointPolarAlignmentOverlay(result: Readonly<ThreePoi
 	} catch {
 		return failure('invalidOptions', warnings)
 	}
+
 	if (!targetPole) return failure('invalidPole', warnings)
 
 	const reference = resolveReference(solution, resolved.reference)
@@ -395,7 +395,6 @@ export function computeThreePointPolarAlignmentOverlay(result: Readonly<ThreePoi
 	const omittedTolerances: Angle[] = []
 	buildContours(contours, omittedTolerances, warnings, solution, referenceVector, currentPole, targetPole, axes.upAxis, axes.eastAxis, correction, resolved)
 
-	const path = [{ ...currentPosition }, { ...azimuthPosition }, { ...targetPosition }] as const
 	return {
 		success: true,
 		overlay: {
@@ -404,7 +403,6 @@ export function computeThreePointPolarAlignmentOverlay(result: Readonly<ThreePoi
 			currentPoint,
 			azimuthTargetPoint,
 			targetPoint,
-			path,
 			azimuthSegment,
 			altitudeSegment,
 			totalSegment,
