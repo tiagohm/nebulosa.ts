@@ -159,6 +159,8 @@ export class MountSimulator extends DeviceSimulator {
 	// operations are not: they are live mechanical state that a power cycle discards.
 	protected propertiesToNotSave = this.properties.filter(
 		(e) =>
+			e !== this.#slewRate &&
+			e !== this.#geographicCoordinate &&
 			e !== this.#trackMode &&
 			e !== this.#guideRate &&
 			e !== this.#errorFeatures &&
