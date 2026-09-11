@@ -1,3 +1,4 @@
+import { open } from 'fs/promises'
 import { join } from 'path'
 import { $ } from 'bun'
 import { errorMessage } from '../../src/core/util'
@@ -21,12 +22,13 @@ export class ReviewOrchestrator {
 	) {}
 
 	async status(files: readonly string[]) {
-		const [completed, failed, skipped] = await Promise.all([this.state.readList('COMPLETED'), this.state.readList('FAILED'), this.state.readList('SKIPPED')])
+		const [completed, failed, skipped, existing] = await Promise.all([this.state.readList('COMPLETED'), this.state.readList('FAILED'), this.state.readList('SKIPPED'), this.state.existingArtifacts(files)])
 		console.info(`state: ${this.state.directory}\nselected: ${files.length}`)
 		console.info(`completed: ${files.filter((file) => completed.has(file)).length}`)
+		console.info(`existing artifacts: ${existing.size}`)
 		console.info(`failed: ${files.filter((file) => failed.has(file)).length}`)
 		console.info(`skipped: ${files.filter((file) => skipped.has(file)).length}`)
-		console.info(`remaining: ${files.filter((file) => !completed.has(file) && (!this.reports || this.eligibleReport(file))).length}`)
+		console.info(`remaining: ${files.filter((file) => !completed.has(file) && !existing.has(file) && (!this.reports || this.eligibleReport(file))).length}`)
 
 		if (this.reports) {
 			console.info(`without eligible report: ${files.filter((file) => !this.eligibleReport(file)).length}`)
@@ -62,6 +64,7 @@ export class ReviewOrchestrator {
 			let skipped = 0
 
 			const completed = await this.state.readList('COMPLETED')
+			const existing = await this.state.existingArtifacts(files)
 
 			for (let i = 0; i < files.length; i++) {
 				if (controller.signal.aborted) break
@@ -69,6 +72,13 @@ export class ReviewOrchestrator {
 				const file = files[i]
 				const prefix = `[${i + 1}/${files.length}]`
 				const report = options.mode === 'fix' ? this.reports?.get(file) : undefined
+				const existingArtifact = existing.get(file)
+
+				if (!options.force && existingArtifact) {
+					console.info(`${prefix} SKIP existing ${existingArtifact === this.state.reportPath(file) ? 'report' : 'artifact'}: ${file} | ${existingArtifact}`)
+					skipped++
+					continue
+				}
 
 				if (!options.force && completed.has(file)) {
 					console.info(`${prefix} SKIP completed: ${file}`)
@@ -125,7 +135,7 @@ export class ReviewOrchestrator {
 					}
 				}
 
-				await this.state.saveResult(artifacts, result, outcome)
+				await this.state.saveResult(artifacts, result, outcome, options.force)
 
 				// An interrupt during artifact writes must not leave a forced retry completed.
 				if (controller.signal.aborted && outcome !== 'interrupted') {
@@ -139,7 +149,7 @@ export class ReviewOrchestrator {
 				if (outcome === 'ok') ok++
 				else {
 					failed++
-					console.error(`Stopping batch: ${file} remains pending and will be retried on the next run.`)
+					console.error(`Stopping batch: ${file} did not complete. Its saved report is preserved; use --force to retry.`)
 					break
 				}
 			}
@@ -176,7 +186,13 @@ export class ReviewOrchestrator {
 	}
 
 	private async session(artifacts: SessionArtifacts, options: ReviewOptions, signal: AbortSignal, report?: FixReport): Promise<{ result: ReviewResult; processResult: ProcessResult }> {
-		await Promise.all([Bun.write(artifacts.prompt, await this.prompts.build(artifacts.file, options.mode, report)), Bun.write(artifacts.log, ''), Bun.write(artifacts.stderr, '')])
+		const prompt = await this.prompts.build(artifacts.file, options.mode, report)
+		const writes = await Promise.allSettled([this.writeArtifact(artifacts.prompt, prompt, options.force), this.writeArtifact(artifacts.log, '', options.force), this.writeArtifact(artifacts.stderr, '', options.force)])
+
+		// Finish and close every artifact write before releasing the lock on a creation failure.
+		for (const write of writes) {
+			if (write.status === 'rejected') throw new Error(errorMessage(write.reason))
+		}
 
 		let prepared: PreparedSession
 
@@ -196,6 +212,17 @@ export class ReviewOrchestrator {
 		} catch (error) {
 			const message = errorMessage(error)
 			return { result: { classification: 'error', report: `Unable to parse session output: ${message}\n`, stopReason: message }, processResult }
+		}
+	}
+
+	// Exclusive creation preserves artifacts that appeared after the batch's initial scan.
+	private async writeArtifact(path: string, text: string, force: boolean) {
+		const file = await open(path, force ? 'w' : 'wx')
+
+		try {
+			await file.writeFile(text)
+		} finally {
+			await file.close()
 		}
 	}
 

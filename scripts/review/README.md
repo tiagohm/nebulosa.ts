@@ -45,10 +45,17 @@ default; `--allow-subagents` and `--timeout` enable them. Codex does not support
 `--max-turns`, so explicitly passing it is an error. Use `--timeout` to bound a
 Codex session. CLI argument compatibility was checked against Codex 0.153.4.
 
-`--status` reports completed, failed, missing and remaining counts for the selected
-files in the chosen provider and mode. `--force` retries completed files and removes
-the previous completion **before** attempting each file, so an interrupted retry
-stays pending. Missing files are recorded in `SKIPPED.txt` during real batches.
+`--status` reports completed, failed, skipped, existing-artifact and remaining counts
+for the selected files in the chosen provider and mode. A completed entry or an
+existing report, prompt, raw log or stderr file skips the file unless `--force`
+is supplied. This includes reports
+without a valid trailer or a corresponding `COMPLETED.txt` entry. Existing reports
+are left untouched, including hand-written notes. Dry runs use the same selection.
+
+`--force` permits a new session and replacement of its artifacts. It removes the
+previous completion **before** attempting each file. Missing source files are
+recorded in `SKIPPED.txt` during real batches. A failed or interrupted session with
+saved artifacts also requires `--force` to retry; those files are otherwise preserved.
 
 ## Fix mode
 
@@ -196,8 +203,16 @@ nor deleted. `.reviews/` is gitignored. Each provider and mode has its own progr
 ```
 
 Lists contain normalized paths, one per line; tabs, newlines and NUL in filenames
-are rejected. Artifact names combine a Windows-safe basename, a SHA-256 path hash
-and a unique attempt ID. Previous attempt artifacts remain available.
+are rejected. Report names use the entire sanitized source path:
+`src/io/xml.ts` becomes `reports/src_io_xml.ts.md`. Slashes, spaces and characters
+forbidden in Windows filenames become `_`; periods, hyphens and Unicode remain.
+Selected source paths that would collide after sanitization abort the batch.
+
+Prompts, raw logs and stderr use the same sanitized name with their respective
+extensions: `prompts/src_io_xml.ts.md`, `logs/src_io_xml.ts.json` and
+`stderr/src_io_xml.ts.log`. There are no hashes or attempt IDs in artifact names.
+Only `--force` permits replacing these files. Exclusive file creation prevents
+an unforced session from overwriting artifacts that appeared while it was running.
 Codex logs contain JSONL, even though log artifact filenames use `.json`.
 `USAGE.tsv` stores file, mode, outcome, stop reason, optional metrics, session ID
 and the log basename. Empty cells mean absent values; backslashes and control
@@ -206,9 +221,9 @@ The prompt, stdout, stderr, report and usage history are saved before completion
 Progress lists are replaced using a temporary file and rename.
 
 The first error, incomplete session (including an exhausted turn/token limit) or
-timeout stops the batch with exit code `1`. The current file is not completed and
-is automatically eligible on the next run without `--force`; later files are not
-started. Reports, logs, optional metrics and failure history remain available
+timeout stops the batch with exit code `1`. The current file is not completed;
+retry it with `--force` if any artifacts were saved. Later files are not started.
+Reports, logs, optional metrics and failure history remain available
 for diagnosis. `--limit` simply ends the batch after the requested number of
 sessions and is not a session failure.
 SIGINT/Ctrl+C and SIGTERM cancel the batch, preserving partial output and leaving

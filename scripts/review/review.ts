@@ -101,7 +101,7 @@ Run one independent provider session per file, sequentially, on Linux or Windows
   --provider ID         Provider (available: ${[...providers.keys()].join(', ')}; default: grok)
   --fix                 Correct findings from existing reports; requires a clean worktree
   --reports PATH        Fix input directory (default: .reviews/<provider>/review/reports)
-  --force               Retry completed files; clear completion before attempting
+  --force               Re-run completed files or existing artifacts; allow replacement
   --dry-run             Print pending files without writing or starting a provider
   --status              Show selected files' progress for this provider and mode
   --refresh-list        Regenerate scripts/review/FILES.txt, preserving commented exclusions
@@ -130,9 +130,13 @@ identity, findings and incomplete metadata. Fix never starts a new review.
 State: .reviews/<provider>/<review|fix>/ (independent from .grok-reviews/).
 Results print optional turns, cost in US dollars and findings, including zero.
 Missing/invalid REVIEW_TRAILER metadata only omits findings; it does not affect completion.
-Failed/incomplete sessions remain pending. Exit: 0 success, 1 failures, 130 interrupt,
+Existing reports, prompts or logs are skipped even without COMPLETED.txt or a valid trailer.
+Artifact names use the sanitized source path (src/io/xml.ts -> src_io_xml.ts.md).
+Only --force permits a rerun and replacement.
+Exit: 0 success, 1 failures, 130 interrupt,
 143 termination. The first error, incomplete result or timeout stops the batch;
-the current file remains pending for retry without --force. Partial work is preserved.
+the current file is not completed. Saved artifacts require --force to retry.
+Partial work is preserved.
 Fix sessions commit each corrected finding before the next; uncommitted changes
 prevent completion. Review mode never stages or commits.
 Linux: TERM then KILL after 15 seconds. Windows: hidden taskkill /T /F.

@@ -85,16 +85,53 @@ export class ReviewStateStore {
 		await this.atomicWrite(this.listPath(name), list.size > 0 ? [...list].join('\n') + '\n' : '')
 	}
 
-	artifacts(file: string): SessionArtifacts {
-		const hash = Bun.SHA256.hash(file, 'hex')
-		const name = `file-${basename(file)
-			.replaceAll(/[^a-zA-Z0-9._-]/g, '_')
-			.slice(0, 32)}-${hash}-${Bun.randomUUIDv7()}`
-		return { file, mode: this.mode, prompt: join(this.directory, 'prompts', name + '.md'), log: join(this.directory, 'logs', name + '.json'), report: join(this.directory, 'reports', name + '.md'), stderr: join(this.directory, 'stderr', name + '.log') }
+	// Restore shell-era path names while also replacing characters forbidden in Windows filenames.
+	reportPath(file: string) {
+		return join(this.directory, 'reports', file.replaceAll(/[\\/:*?"<>| ]/g, '_') + '.md')
 	}
 
-	async saveResult(artifacts: SessionArtifacts, result: ReviewResult, outcome: ReviewOutcome) {
-		await Bun.write(artifacts.report, result.report)
+	// Existing artifacts prevent unforced reruns, including reports without completion metadata.
+	async existingArtifacts(files: readonly string[]): Promise<Map<string, string>> {
+		const targets = new Map<string, string>()
+		const existing = new Map<string, string>()
+
+		for (const file of files) {
+			const path = this.reportPath(file)
+			const key = process.platform === 'win32' ? path.toLowerCase() : path
+			const previous = targets.get(key)
+
+			// Distinct source paths must never overwrite each other after lossy filename sanitization.
+			if (previous !== undefined && previous !== file) throw new Error(`Report filename collision: ${previous} and ${file} both map to ${path}`)
+			targets.set(key, file)
+
+			const artifacts = this.artifacts(file)
+
+			for (const artifact of [artifacts.report, artifacts.prompt, artifacts.log, artifacts.stderr]) {
+				if (await Bun.file(artifact).exists()) {
+					existing.set(file, artifact)
+					break
+				}
+			}
+		}
+
+		return existing
+	}
+
+	artifacts(file: string): SessionArtifacts {
+		const name = basename(this.reportPath(file), '.md')
+		return { file, mode: this.mode, prompt: join(this.directory, 'prompts', name + '.md'), log: join(this.directory, 'logs', name + '.json'), report: this.reportPath(file), stderr: join(this.directory, 'stderr', name + '.log') }
+	}
+
+	async saveResult(artifacts: SessionArtifacts, result: ReviewResult, outcome: ReviewOutcome, force = false) {
+		// Exclusive creation also preserves a report created externally while the provider was running.
+		const report = await open(artifacts.report, force ? 'w' : 'wx')
+
+		try {
+			await report.writeFile(result.report)
+		} finally {
+			await report.close()
+		}
+
 		const metrics = result.metrics
 		const fields = [artifacts.file, this.mode, outcome, result.stopReason, metrics?.turns, metrics?.costUsd, metrics?.findingsCount, result.sessionId, basename(artifacts.log)]
 		const line =
