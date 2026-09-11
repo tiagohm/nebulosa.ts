@@ -29,7 +29,7 @@ export interface AstapStarDetectionOptions {
 export interface AstapPlateSolveOptions extends PlateSolveOptions {
 	// Path to the ASTAP executable; resolved per-platform when omitted.
 	executable?: string
-	// Field-of-view hint (radians); 0 lets ASTAP auto-detect.
+	// Field-of-view hint (radians); 0 lets ASTAP auto-detect. Omit to use FITS's FOV.
 	fov?: Angle
 	// Whether to enable SIP distortion terms (`-sip`).
 	sip?: boolean
@@ -108,8 +108,9 @@ export async function astapPlateSolve(input: string, { fov = 0, downsample = 0, 
 	executable ||= executableForCurrentPlatform()
 	timeout ||= DEFAULT_TIMEOUT
 
-	const commands = [executable, '-o', ini.name!, '-z', downsample.toFixed(0), '-f', input, '-fov', `${fov}`, '-wcs']
+	const commands = [executable, '-o', ini.name!, '-z', downsample.toFixed(0), '-f', input, '-wcs']
 
+	if (fov) commands.push('-fov', `${fov}`)
 	if (sip) commands.push('-sip')
 	if (radius) commands.push('-ra', `${rightAscension}`, '-spd', `${spd}`, '-r', `${radius}`)
 	else commands.push('-r', '180')
@@ -126,8 +127,8 @@ export async function astapPlateSolve(input: string, { fov = 0, downsample = 0, 
 				const { header } = fits.hdus[0]
 
 				if (!header.NAXIS) header.NAXIS = 2
-				if (!header.NAXIS1 && header.CRPIX1) header.NAXIS1 = Math.trunc(header.CRPIX1 as number) * 2
-				if (!header.NAXIS2 && header.CRPIX2) header.NAXIS2 = Math.trunc(header.CRPIX2 as number) * 2
+				if (!header.NAXIS1 && header.CRPIX1) header.NAXIS1 = Math.trunc(((header.CRPIX1 as number) - 0.5) * 2)
+				if (!header.NAXIS2 && header.CRPIX2) header.NAXIS2 = Math.trunc(((header.CRPIX2 as number) - 0.5) * 2)
 
 				return plateSolutionFrom(header)
 			}
