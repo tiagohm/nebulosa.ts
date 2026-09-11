@@ -1,7 +1,8 @@
 import { expect, test } from 'bun:test'
 import { vector } from '../../../../../src/adapters/ephemeris/horizons'
 import { pluto } from '../../../../../src/astronomy/ephemeris/models/analytical/pluto'
-import { Timescale, timeYMDHMS } from '../../../../../src/astronomy/time/time'
+import { time, Timescale, timeYMDHMS } from '../../../../../src/astronomy/time/time'
+import { toDeg } from '../../../../../src/math/units/angle'
 
 const TIME = timeYMDHMS(2025, 9, 28, 12, 0, 0, Timescale.TT)
 
@@ -11,6 +12,14 @@ test('pluto', () => {
 	expect(p[0]).toBeCloseTo(1.897082455989403e1, 4)
 	expect(p[1]).toBeCloseTo(-2.637625218763833e1, 3)
 	expect(p[2]).toBeCloseTo(-1.394557188546127e1, 3)
+})
+
+test('Meeus example 37.a', () => {
+	const p = pluto(time(2448908, 0.5, Timescale.TT), 'eclipticJ2000')
+
+	expect(toDeg(p[0])).toBeCloseTo(232.74071, 5)
+	expect(toDeg(p[1])).toBeCloseTo(14.58782, 5)
+	expect(p[2]).toBeCloseTo(29.711111, 6)
 })
 
 test.skip('horizons', async () => {

@@ -7,6 +7,8 @@ import { type Time, tt } from '../../../time/time'
 // from 43 periodic terms in the mean longitudes of Jupiter, Saturn, and Pluto. Accurate to ~0.07"
 // in longitude over 1885-2099; the spherical ecliptic result is rotated to the ICRF equatorial frame.
 
+export type ReferenceFrame = 'icrf' | 'eclipticJ2000'
+
 // Number of periodic terms in the Pluto series (table 37.A).
 const COEFFS = 43
 
@@ -83,7 +85,7 @@ const LONGITUDE = [
 	[120 * 0.000001, -274 * 0.000001],
 	[-60 * 0.000001, -159 * 0.000001],
 	[-82 * 0.000001, -29 * 0.000001],
-	[-36 * 0.000001, -20 * 0.000001],
+	[-36 * 0.000001, -29 * 0.000001],
 	[-40 * 0.000001, 7 * 0.000001],
 	[-14 * 0.000001, 22 * 0.000001],
 	[4 * 0.000001, 13 * 0.000001],
@@ -95,7 +97,7 @@ const LONGITUDE = [
 	[14 * 0.000001, 24 * 0.000001],
 	[-49 * 0.000001, -34 * 0.000001],
 	[163 * 0.000001, -48 * 0.000001],
-	[9 * 0.000001, 24 * 0.000001],
+	[9 * 0.000001, -24 * 0.000001],
 	[-4 * 0.000001, 1 * 0.000001],
 	[-3 * 0.000001, 1 * 0.000001],
 	[1 * 0.000001, 3 * 0.000001],
@@ -195,7 +197,7 @@ const RADIUS = [
 	[-8 * 0.0000001, 7 * 0.0000001],
 	[2 * 0.0000001, -10 * 0.0000001],
 	[19 * 0.0000001, 35 * 0.0000001],
-	[10 * 0.0000001, 2 * 0.0000001],
+	[10 * 0.0000001, 3 * 0.0000001],
 ] as const
 
 // Meeus, Astron. Algorithms 2nd ed (1998). Chap 37. Equ 37.1
@@ -203,7 +205,7 @@ const RADIUS = [
 // This function is accurate to within 0.07" in longitude, 0.02" in latitude
 // and 0.000006 AU in radius.
 // Note: This function is not valid outside the period of 1885-2099.
-export function pluto(time: Time) {
+export function pluto(time: Time, frame?: ReferenceFrame) {
 	time = tt(time)
 	// Julian centuries since J2000
 	const t = (time.day - 2451545 + time.fraction) / DAYSPERJC
@@ -232,6 +234,8 @@ export function pluto(time: Time) {
 	const L = DEG2RAD * (238.958116 + 144.96 * t + sLon)
 	const B = DEG2RAD * (-3.908239 + sLat)
 	const R = 40.7241346 + sRad
+
+	if (frame === 'eclipticJ2000') return [L, B, R]
 
 	const sl = Math.sin(L)
 	const cl = Math.cos(L)
