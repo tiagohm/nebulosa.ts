@@ -443,8 +443,6 @@ export class TEA5767 extends PeripheralBase<TEA5767> implements RadioTuner {
 			return
 		}
 
-		console.info('%j', status)
-
 		if (!status.ready) return
 
 		const nextStereo = this.#stereoAllowed && status.stereo
