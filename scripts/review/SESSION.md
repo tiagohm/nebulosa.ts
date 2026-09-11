@@ -1,10 +1,12 @@
 # Session execution rules
 
-You are a headless session that reviews exactly ONE primary
-source file in this repository.
+You are a headless session handling exactly ONE primary source file in this
+repository, in the MODE specified by the current-review footer.
 
-This session is independent of every other review. Do not assume findings,
-fixes, or context from previous files.
+This session is independent of reviews of other files. Do not assume findings,
+fixes, or context from previous files. MODE `review` uses REVIEW.md; MODE `fix`
+uses FIX.md and the supplied review report, including the author's notes.
+These are separate stages. Never combine a new review with corrections.
 
 ## Primary objective
 
@@ -13,7 +15,9 @@ behavior. Do not refactor, restyle, or clean up unrelated code.
 
 ## Scope
 
-1. Start by reading the primary file in full.
+1. In MODE `review`, start by reading the primary file in full. In MODE `fix`,
+   first read the supplied report and all author notes, then read the primary file
+   to establish the current context of those findings.
 2. Do not proactively inspect the entire repository.
 3. Read other files only when needed to establish correctness of the primary
    file:
@@ -25,16 +29,6 @@ behavior. Do not refactor, restyle, or clean up unrelated code.
 4. Prefer targeted graph/code discovery for this file's imports and callers
    over repository-wide search.
 5. Do not start a general repository review.
-
-Before reviewing, internally classify the primary file (it may belong to more
-than one class) and apply matching depth from the domain instructions:
-
-- ordinary library code
-- mathematical / numerical algorithm
-- astronomy / astrometry / orbital mechanics
-- performance-sensitive array, image, or matrix processing
-- external API, socket, protocol, or I/O integration
-- native / shared-library binding
 
 ### Graph verification
 
@@ -70,6 +64,8 @@ could not finish and which source files were inspected instead.
 
 Read-only with respect to the project.
 
+- Apply REVIEW.md's domain criteria. Produce findings for the author to read and
+  annotate before a separate fix run.
 - Do not edit source, tests, examples, or native code.
 - Do not run `git add`, `git commit`, or writers that change tracked files.
 - You may run read-only inspection, targeted tests, and `uv` reference
@@ -79,7 +75,8 @@ Read-only with respect to the project.
 
 ## MODE: `fix`
 
-Review first, then fix confirmed defects in the primary file and its tests.
+Follow FIX.md to address only findings in the supplied report. Confirm each
+finding against the current code and author notes without starting a new review.
 Create exactly one local commit for each confirmed finding you fix. Complete
 the validation and commit for that finding before editing the next one, even
 when several findings affect the same file. Never combine independent findings
@@ -87,7 +84,8 @@ into one commit or make a single commit for the entire reviewed file.
 
 For every confirmed defect that is safe to fix:
 
-1. Verify it is actually an error.
+1. Verify it is actually an error after applying the relevant "Notas pós-revisão"
+   and resolving any discrepancy as described in FIX.md.
 2. Determine the mathematically or algorithmically correct behavior.
 3. Apply the smallest fix that preserves public API, units, frames, and
    conventions.
@@ -110,8 +108,9 @@ For every confirmed defect that is safe to fix:
    message with `-m`. If the message is corrupted, stop and report it; do not amend.
 10. Inspect `git status --short --branch`, then proceed to the next finding.
 
-Fix confirmed CRITICAL, HIGH, and clearly real MEDIUM findings. Do not
-"improve" working code. If the file is already correct, leave it unchanged.
+Fix only confirmed findings from the supplied report that remain applicable after
+considering the author notes. Do not "improve" working code. If the reported
+defects are already corrected or are false positives, leave the code unchanged.
 
 Do not create empty commits for clean files, unconfirmed suspicions or findings
 that cannot safely be fixed. Report those findings and why they remain unresolved.
@@ -125,9 +124,13 @@ the orchestrator checks the worktree before marking the file completed.
 
 ## Report
 
-Your final message is the review report. Follow the domain prompt's result
-structure (Veredito, Achados, Validações realizadas, Pontos que não puderam
-ser confirmados).
+Your final message is the output report. Follow REVIEW.md's result structure in
+MODE `review` and FIX.md's per-finding execution summary in MODE `fix`.
+
+When author notes were considered, identify the reports read and briefly explain
+which findings were dismissed, retained, or left unconfirmed and how the notes
+affected each decision. Do not count dismissed false positives as confirmed
+findings in the report or trailer.
 
 Also include a short machine-readable trailer:
 
@@ -142,5 +145,8 @@ incomplete: true|false
 ```
 
 Use the exact normalized PRIMARY FILE and MODE from the current-review footer.
-The orchestrator uses a coherent trailer only for the optional findings count.
-A missing or invalid trailer does not change the session's completion status.
+Output trailer metadata does not control the provider's session completion.
+However, review reports must contain a unique valid trailer to be selected as
+input for a later fix run. Keep the exact normalized file, mode, findings count
+and incomplete flag accurate. Do not copy the input report's trailer into the
+output report.

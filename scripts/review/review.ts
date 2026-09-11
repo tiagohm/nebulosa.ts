@@ -8,6 +8,7 @@ import { ReviewOrchestrator } from './orchestrator'
 import { BunProcessRunner } from './process.runner'
 import { ReviewPromptBuilder } from './prompt.builder'
 import type { ProviderOption, ReviewOptions, ReviewProvider } from './provider'
+import { ReviewReportStore } from './report.store'
 import { ReviewStateStore } from './state.store'
 
 // Composition root: adding a provider requires its implementation and this registry entry only.
@@ -57,6 +58,9 @@ function parseOptions(args: readonly string[]): ReviewOptions {
 			case '--files':
 				options.filesPath = value()
 				break
+			case '--reports':
+				options.reportsPath = value()
+				break
 			case '--model':
 				options.providerOptions.model = value()
 				break
@@ -95,7 +99,8 @@ function help(provider: ReviewProvider) {
 Run one independent provider session per file, sequentially, on Linux or Windows.
 
   --provider ID         Provider (available: ${[...providers.keys()].join(', ')}; default: grok)
-  --fix                 Commit each fixed finding per AGENTS.md; requires a clean worktree
+  --fix                 Correct findings from existing reports; requires a clean worktree
+  --reports PATH        Fix input directory (default: .reviews/<provider>/review/reports)
   --force               Retry completed files; clear completion before attempting
   --dry-run             Print pending files without writing or starting a provider
   --status              Show selected files' progress for this provider and mode
@@ -115,6 +120,11 @@ Codex review uses read-only sandboxing; fix uses danger-full-access to allow com
 Explicit unsupported provider options are errors. Positional files override --files.
 Review paths resolve from the repository root; absolute paths inside it are accepted.
 Lists accept comments, blank lines and CRLF; paths are deduplicated in order.
+--reports resolves from the invocation directory and requires --fix.
+Fix selects the most recently modified report per exact source path; lexical path
+order breaks ties. Dry runs show the report and content hash. Missing, zero-finding
+and incomplete reports never start a session. Reports need valid REVIEW_TRAILER
+identity, findings and incomplete metadata. Fix never starts a new review.
 --help, --status and --dry-run take precedence over --refresh-list and never write.
 
 State: .reviews/<provider>/<review|fix>/ (independent from .grok-reviews/).
@@ -144,6 +154,7 @@ async function main() {
 		help(provider)
 		return 0
 	}
+	if (options.reportsPath && options.mode !== 'fix') throw new Error('--reports requires --fix')
 
 	const root = resolve(import.meta.dir, '../..')
 	const fileList = new ReviewFileList(root, join(import.meta.dir, 'FILES.txt'))
@@ -161,8 +172,12 @@ async function main() {
 	}
 
 	// Bun package scripts run in the package directory; preserve the caller's directory for --files.
-	const files = await fileList.select(options.files, options.filesPath, process.env.INIT_CWD || process.cwd())
-	const orchestrator = new ReviewOrchestrator(root, provider, new BunProcessRunner(root), state, fileList, new ReviewPromptBuilder(join(import.meta.dir, 'SESSION.md'), join(import.meta.dir, 'PROMPT.md')))
+	const invocationDirectory = process.env.INIT_CWD || process.cwd()
+	const files = await fileList.select(options.files, options.filesPath, invocationDirectory)
+	const reportsDirectory = options.reportsPath ? resolve(invocationDirectory, options.reportsPath) : join(root, '.reviews', provider.id, 'review', 'reports')
+	const reports = options.mode === 'fix' ? await new ReviewReportStore(reportsDirectory, fileList).load(files) : undefined
+	if (reports) console.info(`input reports: ${reportsDirectory}`)
+	const orchestrator = new ReviewOrchestrator(root, provider, new BunProcessRunner(root), state, fileList, new ReviewPromptBuilder(join(import.meta.dir, 'SESSION.md'), join(import.meta.dir, 'REVIEW.md'), join(import.meta.dir, 'FIX.md')), reports)
 	if (options.status) return orchestrator.status(files)
 	if (files.length === 0) throw new Error('No files to review')
 	return orchestrator.run(files, options)

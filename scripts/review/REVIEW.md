@@ -2,6 +2,12 @@
 
 Você deve realizar uma **revisão técnica profunda de um único arquivo por vez**.
 
+Antes de revisar, classifique internamente o arquivo em uma ou mais categorias
+e aplique a profundidade correspondente das instruções abaixo: biblioteca comum;
+algoritmo matemático ou numérico; astronomia, astrometria ou mecânica orbital;
+processamento de arrays, imagens ou matrizes sensível a desempenho; integração
+com API externa, socket, protocolo ou I/O; binding nativo ou de biblioteca compartilhada.
+
 O objetivo principal é encontrar **bugs reais ou riscos concretos de correção**, especialmente em código envolvendo matemática, astronomia, astrometria, mecânica celeste, métodos numéricos, álgebra linear, processamento de imagens e algoritmos científicos.
 
 Não faça uma revisão superficial de estilo. Priorize **correção, robustez numérica, precisão científica e comportamento observável**.

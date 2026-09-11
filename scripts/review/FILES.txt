@@ -4,6 +4,7 @@
 
 # --- src/core ---
 # src/core/constants.ts
+# src/core/patterns.ts
 # src/core/types.ts
 # src/core/util.ts
 # src/core/validation.ts

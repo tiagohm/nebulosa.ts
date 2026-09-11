@@ -5,6 +5,7 @@ import type { ReviewFileList } from './file.list'
 import type { BunProcessRunner, ProcessResult } from './process.runner'
 import type { ReviewPromptBuilder } from './prompt.builder'
 import type { PreparedSession, ReviewOptions, ReviewProvider, ReviewResult, SessionArtifacts } from './provider'
+import type { FixReport } from './report.store'
 import type { ReviewOutcome, ReviewStateStore } from './state.store'
 
 // Runs independent sessions sequentially. Provider results are persisted before recording completion.
@@ -16,6 +17,7 @@ export class ReviewOrchestrator {
 		private readonly state: ReviewStateStore,
 		private readonly fileList: ReviewFileList,
 		private readonly prompts: ReviewPromptBuilder,
+		private readonly reports?: ReadonlyMap<string, FixReport>,
 	) {}
 
 	async status(files: readonly string[]) {
@@ -24,7 +26,17 @@ export class ReviewOrchestrator {
 		console.info(`completed: ${files.filter((file) => completed.has(file)).length}`)
 		console.info(`failed: ${files.filter((file) => failed.has(file)).length}`)
 		console.info(`skipped: ${files.filter((file) => skipped.has(file)).length}`)
-		console.info(`remaining: ${files.filter((file) => !completed.has(file)).length}`)
+		console.info(`remaining: ${files.filter((file) => !completed.has(file) && (!this.reports || this.eligibleReport(file))).length}`)
+
+		if (this.reports) {
+			console.info(`without eligible report: ${files.filter((file) => !this.eligibleReport(file)).length}`)
+
+			for (const file of files) {
+				const report = this.reports.get(file)
+				console.info(`${file}: ${this.reportSkipReason(file) ?? 'eligible'}${report ? ` | report: ${report.path} | sha256: ${report.hash}` : ''}`)
+			}
+		}
+
 		return 0
 	}
 
@@ -32,6 +44,7 @@ export class ReviewOrchestrator {
 		const controller = new AbortController()
 		const onInterrupt = () => controller.abort('SIGINT')
 		const onTerminate = () => controller.abort('SIGTERM')
+
 		process.on('SIGINT', onInterrupt)
 		process.on('SIGTERM', onTerminate)
 
@@ -43,25 +56,41 @@ export class ReviewOrchestrator {
 				await this.state.initialize()
 			}
 
-			const completed = await this.state.readList('COMPLETED')
 			let ran = 0
 			let ok = 0
 			let failed = 0
 			let skipped = 0
+
+			const completed = await this.state.readList('COMPLETED')
 
 			for (let i = 0; i < files.length; i++) {
 				if (controller.signal.aborted) break
 
 				const file = files[i]
 				const prefix = `[${i + 1}/${files.length}]`
+				const report = options.mode === 'fix' ? this.reports?.get(file) : undefined
 
 				if (!options.force && completed.has(file)) {
 					console.info(`${prefix} SKIP completed: ${file}`)
 					skipped++
 					continue
 				}
+
 				if (options.limit > 0 && ran >= options.limit) break
+
+				if (options.mode === 'fix') {
+					const reason = this.reportSkipReason(file)
+
+					if (reason) {
+						console.info(`${prefix} SKIP ${reason}: ${file}${report ? ` | report: ${report.path}` : ''}`)
+						if (!options.dryRun) await this.state.updateList('SKIPPED', file, true)
+						skipped++
+						continue
+					}
+				}
+
 				if (options.force && !options.dryRun) await this.state.updateList('COMPLETED', file, false)
+
 				if (!(await this.fileList.exists(file))) {
 					console.info(`${prefix} SKIP missing: ${file}`)
 					if (!options.dryRun) await this.state.updateList('SKIPPED', file, true)
@@ -70,11 +99,11 @@ export class ReviewOrchestrator {
 				}
 
 				ran++
-				console.info(`${prefix} ${options.mode} ${file}`)
+				console.info(`${prefix} ${options.mode} ${file}${report ? ` | report: ${report.path} | sha256: ${report.hash}` : ''}`)
 				if (options.dryRun) continue
 
 				const artifacts = this.state.artifacts(file)
-				const execution = await this.session(artifacts, options, controller.signal)
+				const execution = await this.session(artifacts, options, controller.signal, report)
 				const result = execution.result
 				const processResult = execution.processResult
 				const interrupted = controller.signal.aborted || processResult.signal !== undefined || (!processResult.timedOut && (processResult.exitCode === 130 || processResult.exitCode === 143))
@@ -134,8 +163,20 @@ export class ReviewOrchestrator {
 		}
 	}
 
-	private async session(artifacts: SessionArtifacts, options: ReviewOptions, signal: AbortSignal): Promise<{ result: ReviewResult; processResult: ProcessResult }> {
-		await Promise.all([Bun.write(artifacts.prompt, await this.prompts.build(artifacts.file, options.mode)), Bun.write(artifacts.log, ''), Bun.write(artifacts.stderr, '')])
+	private eligibleReport(file: string) {
+		return this.reportSkipReason(file) === undefined
+	}
+
+	private reportSkipReason(file: string) {
+		const report = this.reports?.get(file)
+		if (!report) return 'no review report'
+		if (report.incomplete) return 'incomplete review report'
+		if (report.findings === 0) return 'no findings'
+		return undefined
+	}
+
+	private async session(artifacts: SessionArtifacts, options: ReviewOptions, signal: AbortSignal, report?: FixReport): Promise<{ result: ReviewResult; processResult: ProcessResult }> {
+		await Promise.all([Bun.write(artifacts.prompt, await this.prompts.build(artifacts.file, options.mode, report)), Bun.write(artifacts.log, ''), Bun.write(artifacts.stderr, '')])
 
 		let prepared: PreparedSession
 

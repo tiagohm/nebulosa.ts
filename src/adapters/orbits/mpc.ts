@@ -6,6 +6,7 @@ import { KeplerOrbit } from '../../astronomy/orbits/asteroid'
 import type { OrbitFitObservation } from '../../astronomy/orbits/fit'
 import { type Time, Timescale, time, timeMJD, timeYMD, timeYMDHMS } from '../../astronomy/time/time'
 import { ASEC2RAD, ELLIPSOID_PARAMETERS, GM_SUN_PITJEVA_2005, PIOVERTWO } from '../../core/constants'
+import { BREAK_LINE_PATTERN } from '../../core/patterns'
 import { validatePositiveInteger } from '../../core/validation'
 import { matIdentity } from '../../math/linear-algebra/mat3'
 import { Matrix } from '../../math/linear-algebra/matrix'
@@ -1138,7 +1139,7 @@ export function parseObservatoryCode(line: string): MPCObservatory {
 export function parseObservatoryCodes(text: string): readonly MPCObservatory[] {
 	const items: MPCObservatory[] = []
 
-	for (const raw of text.split(/\r?\n/)) {
+	for (const raw of text.split(BREAK_LINE_PATTERN)) {
 		if (raw.trim() === '') continue
 		items.push(parseObservatoryCode(raw))
 	}
@@ -1433,11 +1434,9 @@ function megahertzToHertz(value: number | undefined) {
 	return value === undefined ? undefined : value * 1e6
 }
 
-const ADES_PSV_SPLIT_REGEX = /\r?\n/
-
 // Parses ADES PSV text (LF or CRLF). Context blocks are kept separate from the observation rows.
 export function parseADESPSV(text: string): MPCADESDocument {
-	const lines = text.split(ADES_PSV_SPLIT_REGEX)
+	const lines = text.split(BREAK_LINE_PATTERN)
 	let version: MPCADESVersion = '2022'
 	let section: string | undefined
 	let context: Record<string, unknown> = {}
@@ -2012,7 +2011,7 @@ function flatMPC80Lines(line: string) {
 
 // Parses MPC1992 text, consuming two-line satellite/roving/radar pairs when note 2 requires it.
 export function parseMPC80Lines(text: string): readonly MPCObservation[] {
-	const lines = text.split(/\r?\n/).flatMap(flatMPC80Lines)
+	const lines = text.split(BREAK_LINE_PATTERN).flatMap(flatMPC80Lines)
 	const observations: MPCObservation[] = []
 
 	for (let i = 0; i < lines.length; i++) {

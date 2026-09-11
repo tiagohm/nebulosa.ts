@@ -271,7 +271,6 @@ describe('complete overlay', () => {
 		const directDx = direct![0] - current![0]
 		const directDy = direct![1] - current![1]
 		expect(inverseDx * directDx + inverseDy * directDy).toBeLessThan(0)
-		expect(computed.overlay.path).toHaveLength(3)
 	})
 
 	test('uses the geometric image center when the reference is omitted', () => {

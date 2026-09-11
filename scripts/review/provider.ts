@@ -20,6 +20,7 @@ export interface ReviewOptions {
 	readonly help: boolean
 	readonly refreshList: boolean
 	readonly filesPath?: string
+	readonly reportsPath?: string
 	readonly files: readonly string[]
 	readonly limit: number
 	readonly timeout: number

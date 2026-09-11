@@ -1,5 +1,6 @@
 import { stat } from 'fs/promises'
 import { isAbsolute, relative, resolve, sep } from 'path'
+import { BREAK_LINE_PATTERN } from '../../src/core/patterns'
 
 // File selection uses repository-relative paths; list filenames use the invocation directory.
 export class ReviewFileList {
@@ -16,7 +17,7 @@ export class ReviewFileList {
 	}
 
 	async select(positional: readonly string[], filesPath: string | undefined, invocationDirectory: string) {
-		const entries = positional.length > 0 ? positional : (await Bun.file(filesPath ? resolve(invocationDirectory, filesPath) : this.defaultPath).text()).split(/\r?\n/).filter((line) => !/^\s*(?:#|$)/.test(line))
+		const entries = positional.length > 0 ? positional : (await Bun.file(filesPath ? resolve(invocationDirectory, filesPath) : this.defaultPath).text()).split(BREAK_LINE_PATTERN).filter((line) => !/^\s*(?:#|$)/.test(line))
 		const files: string[] = []
 		const seen = new Set<string>()
 
@@ -50,7 +51,7 @@ export class ReviewFileList {
 		const fileMatchRegex = /^\s*#+\s*(.+\.ts)\s*$/
 
 		if (await current.exists()) {
-			for (const line of (await current.text()).split(/\r?\n/)) {
+			for (const line of (await current.text()).split(BREAK_LINE_PATTERN)) {
 				const match = fileMatchRegex.exec(line)
 
 				if (!match) continue

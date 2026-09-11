@@ -1,5 +1,6 @@
 import { mkdir, open, rename, unlink, type FileHandle } from 'fs/promises'
 import { basename, dirname, join } from 'path'
+import { BREAK_LINE_PATTERN } from '../../src/core/patterns'
 import type { ReviewMode, ReviewResult, SessionArtifacts } from './provider'
 
 export type ReviewOutcome = 'ok' | 'error' | 'incomplete' | 'interrupted'
@@ -69,7 +70,7 @@ export class ReviewStateStore {
 
 		if (!list) {
 			const file = Bun.file(this.listPath(name))
-			list = new Set(((await file.exists()) ? await file.text() : '').split(/\r?\n/).filter(Boolean))
+			list = new Set(((await file.exists()) ? await file.text() : '').split(BREAK_LINE_PATTERN).filter(Boolean))
 			this.lists.set(name, list)
 		}
 

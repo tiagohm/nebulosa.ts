@@ -15,6 +15,7 @@ bun run review --dry-run
 bun run review --provider grok --limit 1
 bun run review --provider codex --limit 1 src/math/units/angle.ts
 bun run review --provider codex --fix --timeout 1800 src/math/units/angle.ts
+bun run review --provider codex --fix --reports .reviews/grok/review/reports --dry-run
 bun run review --provider codex --status src/math/units/angle.ts
 bun run review
 bun run review src/math/units/angle.ts
@@ -50,6 +51,56 @@ the previous completion **before** attempting each file, so an interrupted retry
 stays pending. Missing files are recorded in `SKIPPED.txt` during real batches.
 
 ## Fix mode
+
+Review and fix are separate stages. First run review, read its reports, and add
+"Notas pós-revisão" (or "Nota pós-revisão") wherever findings need context,
+correction guidance or dismissal as false positives. Then run `--fix`:
+
+```sh
+bun run review --provider grok
+# Read and annotate .reviews/grok/review/reports/*.md.
+bun run review --provider codex --fix --reports .reviews/grok/review/reports --dry-run
+bun run review --provider codex --fix --reports .reviews/grok/review/reports
+```
+
+The input directory defaults to `.reviews/<provider>/review/reports/`.
+`--reports PATH` overrides it, resolves from the invocation directory and requires
+`--fix`. Only that directory's Markdown files are considered, without recursively
+searching other providers or modes. The normal file list and positional arguments
+still restrict which source files are eligible.
+
+Reports are matched by the exact normalized `file` in their unique REVIEW_TRAILER,
+not by filename. Input reports need `mode: review`, a nonnegative integer `findings`
+and a boolean `incomplete`. Reports without a unique identity trailer are skipped
+with a warning naming the report; add valid metadata to make them usable as fix
+inputs. Invalid metadata in an identified, selected file's report aborts selection
+with the report path rather than silently falling back to another report.
+The latest modification time wins when several reports identify the same source
+file; the lexically greatest path breaks ties. Editing notes intentionally updates
+that report's selection priority. To choose a different set explicitly, copy only
+the reports you intend to process into a directory and pass it with `--reports`.
+
+Selection occurs before sessions start. `--dry-run`, `--status` and real sessions
+show the selected report paths; pending fix sessions also show their SHA-256 hashes.
+The batch keeps the selected content as a snapshot and embeds it verbatim in each
+fix prompt, including all author notes. Finish editing notes before starting the
+batch. A missing directory or report, zero findings, or `incomplete: true` skips
+the source file without starting a provider. A newer clean or incomplete report
+does not fall back to an older report with findings.
+
+Fix uses `SESSION.md` + `FIX.md` + the supplied report. It does not load `REVIEW.md`,
+perform a new review or search for additional findings. It checks each original
+finding against the current code and author notes, then fixes, dismisses, recognizes
+an existing correction, or records an unresolved point. The output maps every
+original finding to its decision, validation and any commit. Original reports and
+notes are preserved; outputs remain in `.reviews/<execution-provider>/fix/reports/`.
+The fix output's `findings` count includes only confirmed original defects that
+remain unresolved, excluding dismissed and resolved findings.
+The saved prompt records the input path, hash and full snapshot for traceability.
+
+Fix completion remains per source file and execution provider. If you change the
+input report or notes after a completed fix, use `--force` to process that file
+again. `--force` does not bypass report eligibility or start a new review.
 
 Real `--fix` batches require a clean worktree. After acquiring the repository lock,
 the orchestrator runs `git status --porcelain=v1 -z --untracked-files=all` before
@@ -97,7 +148,9 @@ errors, incomplete results and interruptions. Zero values are shown; absent
 metrics are omitted. Grok supplies `turns` from `num_turns`, `costUsd` from
 `total_cost_usd`, and `findingsCount` from a unique `REVIEW_TRAILER` whose `file`
 and `mode` match the session and whose `findings` is a nonnegative safe integer.
-Invalid or missing trailer data only omits the findings metric.
+Invalid or missing output trailer data only omits the findings metric. Reusing a
+review report as fix input requires the identity, findings and incomplete metadata
+described above; successful review completion alone does not make it eligible.
 
 Codex supplies the same optional findings metric from its last completed
 `agent_message`. Its JSONL protocol exposes token usage and top-level turn events,
@@ -195,8 +248,10 @@ repository lock and does not start a provider. Normal selection never rewrites
 the list. `--help`, `--status` and `--dry-run` take precedence over regeneration,
 in that order.
 
-The shared prompt combines `SESSION.md` (scope, review/fix and per-finding commit rules),
-`PROMPT.md` (domain review criteria), and the current-file footer. Grok receives
+Both modes use `SESSION.md` (scope, execution and per-finding commit rules).
+Review adds `REVIEW.md` (domain review criteria); fix adds `FIX.md` (report-driven
+correction instructions) and the selected report with author notes. Each prompt
+ends with a mode-specific current-file footer. Grok receives
 it through `--prompt-file` and `--verbatim`. Memory and auto-updates are disabled.
 Subagents use both `--no-subagents` and `GROK_SUBAGENTS=0` by default; allowing them
 removes the flag and sets `GROK_SUBAGENTS=1`. The workspace sandbox and approval
@@ -221,6 +276,7 @@ Codex protocol and configuration references:
 
 `ReviewOrchestrator` composes `ReviewProvider`, `BunProcessRunner`,
 `ReviewStateStore`, `ReviewFileList` and `ReviewPromptBuilder` through constructors.
+`ReviewReportStore` selects and snapshots fix inputs before session execution.
 `GrokReviewProvider` and `CodexReviewProvider` own their arguments, environment
 and result parsing. Both use the shared trailer metric parser.
 There is no Bash entry point or parser subprocess.
