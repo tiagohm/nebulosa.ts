@@ -415,6 +415,38 @@ test('cover preserves its last position while moving and explicitly publishes op
 	expect(remote.switches.get('CAP_PARK')!.elements.PARK.value).toBeFalse()
 }, 16000)
 
+test('telescope normalizes longitude at both INDI and Alpaca boundaries', async () => {
+	const manager = new MountManager()
+	const values = { sitelatitude: 40, sitelongitude: -74, siteelevation: 0 }
+	await using remote = await scriptedClient('telescope', values, {
+		textVector: manager.textVector.bind(manager),
+		numberVector: manager.numberVector.bind(manager),
+		switchVector: manager.switchVector.bind(manager),
+	})
+	await waitUntil(() => remote.numbers.has('GEOGRAPHIC_COORD'), 8000)
+	const location = remote.numbers.get('GEOGRAPHIC_COORD')!
+	expect(location.elements.LONG.value).toBe(286)
+	const mount = manager.get(remote.client, location.device)!
+	expect(mount.geographicCoordinate.longitude).toBeCloseTo(deg(-74), 12)
+	values.sitelongitude = -122
+	for (const [input, expected] of [
+		[238, -122],
+		[286, -74],
+		[-190, 170],
+		[-180, 180],
+		[180, 180],
+		[360, 0],
+	]) {
+		const count = remote.commands.length
+		remote.client.sendNumber({ device: location.device, name: location.name, elements: { LAT: 40, LONG: input } })
+		await waitUntil(() => remote.commands.length === count + 2, 1000)
+		const command = remote.commands.slice(count).find((e) => e.endpoint === 'sitelongitude')!
+		expect(Number(command.body.get('SiteLongitude'))).toBe(expected)
+	}
+	await waitUntil(() => remote.numbers.get(location.name)?.elements.LONG.value === 238, 3000)
+	expect(mount.geographicCoordinate.longitude).toBeCloseTo(deg(-122), 12)
+}, 12000)
+
 describe('make fits from image bytes', () => {
 	test('converts a 10 by 10 byte ROI smaller than 176 bytes', async () => {
 		const data = new ArrayBuffer(144)

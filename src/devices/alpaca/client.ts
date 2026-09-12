@@ -1283,6 +1283,8 @@ class AlpacaTelescope extends AlpacaDevice {
 		const { Step, CanTrack, CanHome, CanPark, CanSlew, CanSync, CanMoveAxis, CanPulseGuide, CanSetGuideRate, CanSetSideOfPier, Tracking, AtPark, IsPulseGuiding, Slewing } = this.state
 		const { RightAscension, Declination, SlewRates, TrackingRates, TrackingRate, SideOfPier, UTCDate, Latitude, Longitude, Elevation, GuideRateRA, GuideRateDEC, EquatorialSystem } = this.state
 		const { LastRightAscension, LastDeclination } = this.state
+		// Alpaca and INDI are both east-positive, but INDI publishes longitude in [0, 360).
+		const longitude = Longitude !== undefined && Longitude < 0 ? Longitude + 360 : Longitude
 
 		// Initial
 		if (Step === 1) {
@@ -1352,7 +1354,7 @@ class AlpacaTelescope extends AlpacaDevice {
 			}
 
 			this.#geographicCoordinate.elements.LAT.value = Latitude ?? 0
-			this.#geographicCoordinate.elements.LONG.value = Longitude ?? 0
+			this.#geographicCoordinate.elements.LONG.value = longitude ?? 0
 			this.#geographicCoordinate.elements.ELEV.value = Elevation ?? 0
 			this.sendDefProperty(this.#geographicCoordinate)
 
@@ -1398,7 +1400,7 @@ class AlpacaTelescope extends AlpacaDevice {
 
 			if (Latitude !== undefined && Longitude !== undefined) {
 				let updated = this.updatePropertyValue(this.#geographicCoordinate, 'LAT', Latitude)
-				updated = this.updatePropertyValue(this.#geographicCoordinate, 'LONG', Longitude) || updated
+				updated = this.updatePropertyValue(this.#geographicCoordinate, 'LONG', longitude) || updated
 				if (Elevation !== undefined) updated = this.updatePropertyValue(this.#geographicCoordinate, 'ELEV', Elevation) || updated
 				updated && this.sendSetProperty(this.#geographicCoordinate)
 				this.state.Latitude = undefined
@@ -2874,6 +2876,7 @@ class AlpacaObservingConditions extends AlpacaDevice {
 function normalizeLongitude(angle: number) {
 	angle = angle % 360
 	if (angle > 180) angle -= 360
+	else if (angle <= -180) angle += 360
 	return angle
 }
 
