@@ -113,6 +113,7 @@ export class ReviewOrchestrator {
 				console.info(`${prefix} ${options.mode} ${file}${report ? ` | report: ${report.path} | sha256: ${report.hash}` : ''}`)
 				if (options.dryRun) continue
 
+				await this.state.beginAttempt(file)
 				const artifacts = this.state.artifacts(file)
 				const execution = await this.session(artifacts, options, controller.signal, report)
 				const result = execution.result
@@ -140,7 +141,9 @@ export class ReviewOrchestrator {
 
 				// An interrupt during artifact writes must not leave a forced retry completed.
 				if (controller.signal.aborted && outcome !== 'interrupted') {
+					await this.state.removeReport(file)
 					await this.state.updateList('COMPLETED', file, false)
+					await this.state.updateList('FAILED', file, true)
 					outcome = 'interrupted'
 				}
 
@@ -150,7 +153,7 @@ export class ReviewOrchestrator {
 				if (outcome === 'ok') ok++
 				else {
 					failed++
-					console.error(`Stopping batch: ${file} did not complete. Its saved report is preserved; use --force to retry.`)
+					console.error(`Stopping batch: ${file} did not complete. Logs are preserved; run again to retry.`)
 					break
 				}
 			}
@@ -188,7 +191,7 @@ export class ReviewOrchestrator {
 
 	private async session(artifacts: SessionArtifacts, options: ReviewOptions, signal: AbortSignal, report?: FixReport): Promise<{ result: ReviewResult; processResult: ProcessResult }> {
 		const prompt = await this.prompts.build(artifacts.file, options.mode, report)
-		const writes = await Promise.allSettled([this.writeArtifact(artifacts.prompt, prompt, options.force), this.writeArtifact(artifacts.log, '', options.force), this.writeArtifact(artifacts.stderr, '', options.force)])
+		const writes = await Promise.allSettled([this.writeArtifact(artifacts.prompt, prompt), this.writeArtifact(artifacts.log, ''), this.writeArtifact(artifacts.stderr, '')])
 
 		// Finish and close every artifact write before releasing the lock on a creation failure.
 		for (const write of writes) {
@@ -216,9 +219,9 @@ export class ReviewOrchestrator {
 		}
 	}
 
-	// Exclusive creation preserves artifacts that appeared after the batch's initial scan.
-	private async writeArtifact(path: string, text: string, force: boolean) {
-		const file = await open(path, force ? 'w' : 'wx')
+	// Diagnostic artifacts belong to the latest attempt; they never mark completion.
+	private async writeArtifact(path: string, text: string) {
+		const file = await open(path, 'w')
 
 		try {
 			await file.writeFile(text)

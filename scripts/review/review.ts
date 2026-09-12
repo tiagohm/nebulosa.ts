@@ -101,9 +101,9 @@ Run one independent provider session per file, sequentially, on Linux or Windows
   --provider ID         Provider (available: ${[...providers.keys()].join(', ')}; default: grok)
   --fix                 Correct findings from existing reports; requires a clean worktree
   --reports PATH        Fix input directory (default: .reviews/<provider>/review/reports)
-  --force               Re-run completed files or existing artifacts; allow replacement
+  --force               Re-run completed files or successful reports; allow replacement
   --dry-run             Print pending files without writing or starting a provider
-  --status              Show selected files' progress for this provider and mode
+  --status              Show progress (fix is shared across providers)
   --refresh-list        Regenerate scripts/review/FILES.txt, preserving commented exclusions
   --files PATH          List path relative to the invocation directory
   --limit N             At most N pending sessions (0 means unlimited)
@@ -128,15 +128,17 @@ and incomplete reports never start a session. Reports need valid REVIEW_TRAILER
 identity, findings and incomplete metadata. Fix never starts a new review.
 --help, --status and --dry-run take precedence over --refresh-list and never write.
 
-State: .reviews/<provider>/<review|fix>/ (independent from .grok-reviews/).
+State: .reviews/<provider>/review/ and shared .reviews/fix/ (independent from .grok-reviews/).
+Existing .reviews/<provider>/fix/ completion lists are imported on first use.
 Results print optional turns, cost in US dollars and findings, including zero.
 Missing/invalid REVIEW_TRAILER metadata only omits findings; it does not affect completion.
-Existing reports, prompts or logs are skipped even without COMPLETED.txt or a valid trailer.
+Successful reports are skipped even without COMPLETED.txt or a valid trailer.
+Failures create no report; logs and prompts do not block retries.
 Artifact names use the sanitized source path (src/io/xml.ts -> src_io_xml.ts.md).
-Only --force permits a rerun and replacement.
+Use --force to repeat completed work. Retries replace diagnostic artifacts.
 Exit: 0 success, 1 failures, 130 interrupt,
 143 termination. The first error, incomplete result or timeout stops the batch;
-the current file is not completed. Saved artifacts require --force to retry.
+the current file is not completed. Run again without --force to retry.
 Partial work is preserved.
 Fix sessions commit each corrected finding before the next; uncommitted changes
 prevent completion. Review mode never stages or commits.
