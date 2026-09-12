@@ -5,7 +5,7 @@ import { equatorialFromJ2000, equatorialToJ2000 } from '../../astronomy/coordina
 import { SIDEREAL_RATE } from '../../core/constants'
 import { computeRemainingBytes, FITS_BLOCK_SIZE, FITS_HEADER_CARD_SIZE, type FitsHeader, FitsKeywordWriter } from '../../io/formats/fits/fits'
 import { bitpixInBytes } from '../../io/formats/fits/util'
-import { type Angle, formatDEC, formatRA, normalizeAngle, toDeg } from '../../math/units/angle'
+import { type Angle, deg, formatDEC, formatRA, hour, normalizeAngle, toDeg, toHour } from '../../math/units/angle'
 import { handleDefLightVector, handleDefNumberVector, handleDefSwitchVector, handleDefTextVector, handleDelProperty, handleSetBlobVector, handleSetLightVector, handleSetNumberVector, handleSetSwitchVector, handleSetTextVector, type IndiClientHandler } from '../indi/client'
 import type { Camera, Client, Device, Focuser, Mount, Rotator, WeatherSensor, Wheel } from '../indi/device'
 import type { DeviceProvider } from '../indi/manager/device'
@@ -1389,7 +1389,9 @@ class AlpacaTelescope extends AlpacaDevice {
 				let declination = Declination
 
 				if (EquatorialSystem === 2) {
-					;[rightAscension, declination] = equatorialFromJ2000(RightAscension, Declination, this.#now)
+					const [ra, dec] = equatorialFromJ2000(hour(RightAscension), deg(Declination), this.#now)
+					rightAscension = toHour(normalizeAngle(ra))
+					declination = toDeg(dec)
 				}
 
 				let updated = this.updatePropertyState(this.#equatorialCoordinate, Slewing ? 'Busy' : 'Idle')
@@ -1556,10 +1558,14 @@ class AlpacaTelescope extends AlpacaDevice {
 	}
 
 	// Slews or syncs to the requested equatorial target (RA hours, Dec degrees). Converts JNOW input to
-	// J2000 when the mount reports a JNOW equatorial system; the slew/sync choice follows ON_COORD_SET.
+	// J2000 when the mount reports a J2000 equatorial system; the slew/sync choice follows ON_COORD_SET.
 	async #moveToTarget(rightAscension?: number, declination?: number) {
 		if (rightAscension !== undefined && declination !== undefined) {
-			if (this.state.EquatorialSystem === 2) [rightAscension, declination] = equatorialToJ2000(rightAscension, declination, this.#now)
+			if (this.state.EquatorialSystem === 2) {
+				const [ra, dec] = equatorialToJ2000(hour(rightAscension), deg(declination), this.#now)
+				rightAscension = toHour(normalizeAngle(ra))
+				declination = toDeg(dec)
+			}
 			if (this.#onCoordSet.elements.SLEW?.value === true) await this.api.slewToCoordinatesAsync(this.id, rightAscension, declination)
 			else if (this.#onCoordSet.elements.SYNC?.value === true) await this.api.syncToCoordinates(this.id, rightAscension, declination)
 		}

@@ -1,5 +1,6 @@
 import { type TestOptions, describe, expect, test } from 'bun:test'
-import { timeYMDHMS } from '../../../src/astronomy/time/time'
+import { equatorialFromJ2000, equatorialToJ2000 } from '../../../src/astronomy/coordinates/coordinate'
+import { timeNow, timeYMDHMS } from '../../../src/astronomy/time/time'
 import { DEG2RAD, PIOVERTWO } from '../../../src/core/constants'
 import { AlpacaClient, type AlpacaClientHandler, makeFitsFromImageBytes } from '../../../src/devices/alpaca/client'
 import { makeImageBytesFromFits } from '../../../src/devices/alpaca/server'
@@ -16,12 +17,12 @@ import { MountManager } from '../../../src/devices/indi/manager/mount'
 import { RotatorManager } from '../../../src/devices/indi/manager/rotator'
 import { ThermometerManager } from '../../../src/devices/indi/manager/thermometer'
 import { WheelManager } from '../../../src/devices/indi/manager/wheel'
-import type { PropertyState } from '../../../src/devices/indi/types'
+import type { DefNumberVector, DefSwitchVector, PropertyState } from '../../../src/devices/indi/types'
 import { readImageFromBuffer } from '../../../src/imaging/model/image'
 import { debayer } from '../../../src/imaging/processing/debayer'
 import type { FitsHeader } from '../../../src/io/formats/fits/fits'
 import { roundToNthDecimal } from '../../../src/math/numerical/math'
-import { deg, hour } from '../../../src/math/units/angle'
+import { deg, hour, normalizeAngle, toDeg, toHour } from '../../../src/math/units/angle'
 import { downloadPerTag } from '../../download'
 import { saveImageAndCompareHash } from '../../imaging/util'
 import { isNonWindowsSkipped, isTimeConsumingTestSkipped, waitUntil } from '../../util'
@@ -30,6 +31,91 @@ import { ALPACA_MOUNT, ALPACA_WEATHER, type AlpacaWeatherClient, startAlpacaClie
 await downloadPerTag('alpaca.client')
 
 const NOW = timeYMDHMS(2026, 2, 18, 12, 0, 0)
+
+// A scripted HTTP driver for protocol cases the simulator does not expose. Values stay mutable so a
+// test can change a polled answer, while PUT bodies and emitted vectors preserve the wire contract.
+async function scriptedClient(type: AlpacaConfiguredDevice['DeviceType'], values: Record<string, unknown>, spy?: AlpacaClientHandler, respond?: (req: Request) => Response | undefined | Promise<Response | undefined>) {
+	const numbers = new Map<string, DefNumberVector>()
+	const switches = new Map<string, DefSwitchVector>()
+	const commands: { endpoint: string; body: URLSearchParams }[] = []
+	const server = Bun.serve({
+		hostname: '127.0.0.1',
+		port: 0,
+		async fetch(req) {
+			const scripted = await respond?.(req)
+			if (scripted) return scripted
+			const endpoint = new URL(req.url).pathname.split('/').at(-1)!
+			let value: unknown
+			let errorNumber = 0
+			if (endpoint === 'configureddevices') value = [{ DeviceName: 'Scripted', DeviceType: type, DeviceNumber: 0, UniqueID: 'scripted' }]
+			else if (req.method === 'PUT') {
+				commands.push({ endpoint, body: new URLSearchParams(await req.text()) })
+				value = true
+			} else if (endpoint in values) value = values[endpoint]
+			else if (endpoint === 'connected') value = true
+			else if (endpoint === 'devicestate') value = []
+			else errorNumber = AlpacaException.MethodOrPropertyNotImplemented
+			return Response.json({ Value: value, ErrorNumber: errorNumber, ErrorMessage: '', ClientTransactionID: 0, ServerTransactionID: 0 })
+		},
+	})
+	const client = new AlpacaClient(
+		`http://127.0.0.1:${server.port}`,
+		{
+			handler: {
+				...spy,
+				numberVector: (client, vector, tag) => {
+					numbers.set(vector.name, structuredClone(vector) as DefNumberVector)
+					spy?.numberVector?.(client, vector, tag)
+				},
+				switchVector: (client, vector, tag) => {
+					switches.set(vector.name, structuredClone(vector) as DefSwitchVector)
+					spy?.switchVector?.(client, vector, tag)
+				},
+			},
+		},
+		{ get: () => undefined },
+	)
+	await client.start()
+	return {
+		client,
+		numbers,
+		switches,
+		commands,
+		async [Symbol.asyncDispose]() {
+			client.stop()
+			await server.stop(true)
+		},
+	}
+}
+
+test('J2000 telescope converts both published and commanded coordinates in protocol units', async () => {
+	const now = timeNow()
+	const [ra, dec] = equatorialFromJ2000(hour(12), deg(45), now)
+	await using remote = await scriptedClient('telescope', {
+		equatorialsystem: 2,
+		canslew: true,
+		canslewasync: true,
+		cansync: true,
+		devicestate: [
+			{ Name: 'RightAscension', Value: 12 },
+			{ Name: 'Declination', Value: 45 },
+		],
+	})
+	await waitUntil(() => remote.numbers.get('EQUATORIAL_EOD_COORD')?.elements.RA.value !== 0 && remote.switches.has('ON_COORD_SET'), 8000)
+	const coordinate = remote.numbers.get('EQUATORIAL_EOD_COORD')!
+	expect(coordinate.elements.RA.value).toBeCloseTo(toHour(normalizeAngle(ra)), 6)
+	expect(coordinate.elements.DEC.value).toBeCloseTo(toDeg(dec), 6)
+	const [targetRA, targetDEC] = equatorialToJ2000(hour(18), deg(-30), now)
+	for (const mode of ['SLEW', 'SYNC']) {
+		remote.client.sendSwitch({ device: coordinate.device, name: 'ON_COORD_SET', elements: { [mode]: true } })
+		remote.client.sendNumber({ device: coordinate.device, name: coordinate.name, elements: { RA: 18, DEC: -30 } })
+		const endpoint = mode === 'SLEW' ? 'slewtocoordinatesasync' : 'synctocoordinates'
+		await waitUntil(() => remote.commands.some((e) => e.endpoint === endpoint), 1000)
+		const command = remote.commands.find((e) => e.endpoint === endpoint)!
+		expect(Number(command.body.get('RightAscension'))).toBeCloseTo(toHour(normalizeAngle(targetRA)), 6)
+		expect(Number(command.body.get('Declination'))).toBeCloseTo(toDeg(targetDEC), 6)
+	}
+}, 10000)
 
 describe('make fits from image bytes', () => {
 	const camera = structuredClone(DEFAULT_CAMERA)
