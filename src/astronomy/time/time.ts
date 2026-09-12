@@ -362,9 +362,10 @@ export function timeSubtract(a: Time, b: Time, scale: Timescale = a.scale) {
 	return c.day - d.day + (c.fraction - d.fraction)
 }
 
-// Converts the time to year, month, day, hour, minute, second and nanosecond.
-// For Timescale.UTC, inverts the ERFA quasi-JD stretch (eraD2dtf) so the clock
-// is the civil HMS, including 23:59:60 on a positive leap-second day.
+// Converts the time to year, month, day, hour, minute, second and truncated
+// millisecond (0-999), not nanosecond. For Timescale.UTC, inverts the ERFA
+// quasi-JD stretch (eraD2dtf) so the clock is the civil HMS, including 23:59:60
+// on a positive leap-second day.
 export function timeToDate(time: Time): [number, number, number, number, number, number, number] {
 	const [year, month, day, rawFraction] = eraJdToCal(time.day, time.fraction)
 	let fraction = rawFraction

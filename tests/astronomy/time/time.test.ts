@@ -155,7 +155,9 @@ test('time convert returns the same object for an unchanged scale', () => {
 test('to date', () => {
 	expect(timeToDate(timeYMDHMS(2020, 1, 1, 12, 0, 0))).toEqual([2020, 1, 1, 12, 0, 0, 0])
 	expect(timeToDate(timeYMDHMS(2020, 1, 1, 23, 59, 59))).toEqual([2020, 1, 1, 23, 59, 59, 0])
+	// 7th field is truncated milliseconds, not nanoseconds (0.5 s → 500, not 5e8).
 	expect(timeToDate(timeYMDHMS(2020, 1, 1, 23, 59, 59.5))).toEqual([2020, 1, 1, 23, 59, 59, 500])
+	expect(timeToDate(timeYMDHMS(2020, 1, 1, 23, 59, 59.5))[6]).not.toBe(500_000_000)
 	expect(timeToDate(time(2460677, 0.503116, 0))).toEqual([2025, 1, 2, 0, 4, 29, 222])
 	expect(timeToDate(time(2460678, -0.496884, 0))).toEqual([2025, 1, 2, 0, 4, 29, 222])
 	expect(timeToDate(timeJulianYear(2000))).toEqual([2000, 1, 1, 12, 0, 0, 0])
