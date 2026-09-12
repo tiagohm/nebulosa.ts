@@ -103,6 +103,36 @@ test('merge stars & exclusion', () => {
 	expect(array.map((e) => e.y)).toEqual([803])
 })
 
+test('merge very close stars after a surviving dim star', () => {
+	const cluster = new StarList()
+	cluster.add(0, 0, 1)
+	cluster.add(50, 50, 2)
+	cluster.add(52, 50, 3)
+	cluster.add(54, 51, 10)
+
+	mergeVeryCloseStars(cluster)
+
+	expect(cluster.size).toBe(2)
+	expect(cluster.array().map((e) => e.h)).toEqual([1, 10])
+	expect(cluster.array().map((e) => e.x)).toEqual([0, 54])
+	expect(cluster.array().map((e) => e.y)).toEqual([0, 51])
+
+	const pairs = new StarList()
+	pairs.add(0, 0, 1)
+	pairs.add(50, 50, 2)
+	pairs.add(52, 51, 8)
+	pairs.add(150, 150, 4)
+	pairs.add(300, 300, 5)
+	pairs.add(303, 301, 90)
+
+	mergeVeryCloseStars(pairs)
+
+	expect(pairs.size).toBe(4)
+	expect(pairs.array().map((e) => e.h)).toEqual([1, 4, 8, 90])
+	expect(pairs.array().map((e) => e.x)).toEqual([0, 150, 52, 303])
+	expect(pairs.array().map((e) => e.y)).toEqual([0, 150, 51, 301])
+})
+
 test('measure star photometry from image aperture', () => {
 	const width = 32
 	const height = 32
