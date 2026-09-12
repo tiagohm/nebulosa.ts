@@ -36,8 +36,6 @@ export interface MoidOptions {
 	readonly tolerance?: number
 }
 
-// Maximum Gauss-Newton steps per candidate; convergence is quadratic near the minimum.
-const MAX_REFINE_ITERATIONS = 40
 // Finite-difference step (radians) for the orbit tangents used in the Gauss-Newton refinement.
 const DERIVATIVE_STEP = 1e-5
 
@@ -111,14 +109,21 @@ function isLocalMinimum(grid: Float64Array, samples: number, i: number, j: numbe
 // Refines a grid-cell minimum with Gauss-Newton on the separation vector D = r1(nu1) - r2(nu2). The
 // Jacobian columns are the orbit tangents (t1, -t2), so the normal equations (JtJ) delta = -(Jt D) give a
 // full two-dimensional step that follows a diagonal distance valley, where alternating one-dimensional
-// minimizations stall. Steps are capped to one grid cell so the search stays in the flagged basin.
+// minimizations stall. Each anomaly increment is capped to one grid cell (L∞) so a diagonal step still
+// advances a full cell along both axes while staying in the flagged basin. The iteration budget is one
+// step per grid sample, enough to traverse a valley of length π√2 on the torus. The closest point seen,
+// including the grid start, is returned if the last iterate is not the minimum.
 function refine(first: KeplerOrbit, second: KeplerOrbit, initialNu1: number, initialNu2: number, step: number, tolerance: number): Moid {
 	let nu1 = initialNu1
 	let nu2 = initialNu2
+	let p1 = first.positionAtTrueAnomaly(nu1)
+	let p2 = second.positionAtTrueAnomaly(nu2)
+	let bestDistance = Math.hypot(p1[0] - p2[0], p1[1] - p2[1], p1[2] - p2[2])
+	let bestNu1 = nu1
+	let bestNu2 = nu2
+	const maxIterations = Math.ceil(TAU / step)
 
-	for (let iteration = 0; iteration < MAX_REFINE_ITERATIONS; iteration++) {
-		const p1 = first.positionAtTrueAnomaly(nu1)
-		const p2 = second.positionAtTrueAnomaly(nu2)
+	for (let iteration = 0; iteration < maxIterations; iteration++) {
 		const separation: Vec3 = [p1[0] - p2[0], p1[1] - p2[1], p1[2] - p2[2]]
 
 		const t1 = tangent(first, nu1)
@@ -128,28 +133,35 @@ function refine(first: KeplerOrbit, second: KeplerOrbit, initialNu1: number, ini
 		const c = vecDot(t2, t2)
 		const b = -vecDot(t1, t2)
 		const determinant = a * c - b * b
-		if (determinant <= 0) break // parallel tangents: degenerate step, keep the current point
+		if (determinant <= 0) break // parallel tangents: degenerate step, keep the best point seen
 
 		const g1 = vecDot(t1, separation)
 		const g2 = -vecDot(t2, separation)
 		let delta1 = -(c * g1 - b * g2) / determinant
 		let delta2 = -(-b * g1 + a * g2) / determinant
 
-		// Keep the step within the flagged grid cell so it cannot jump to another basin.
-		const magnitude = Math.hypot(delta1, delta2)
-		if (magnitude > step) {
-			delta1 *= step / magnitude
-			delta2 *= step / magnitude
+		// L∞ cap: a diagonal Gauss-Newton step then advances one grid cell along each anomaly.
+		const maxAbs = Math.max(Math.abs(delta1), Math.abs(delta2))
+		if (maxAbs > step) {
+			delta1 *= step / maxAbs
+			delta2 *= step / maxAbs
 		}
 
 		nu1 += delta1
 		nu2 += delta2
+		p1 = first.positionAtTrueAnomaly(nu1)
+		p2 = second.positionAtTrueAnomaly(nu2)
+		const distance = Math.hypot(p1[0] - p2[0], p1[1] - p2[1], p1[2] - p2[2])
+		if (distance < bestDistance) {
+			bestDistance = distance
+			bestNu1 = nu1
+			bestNu2 = nu2
+		}
+
 		if (Math.abs(delta1) < tolerance && Math.abs(delta2) < tolerance) break
 	}
 
-	const p1 = first.positionAtTrueAnomaly(nu1)
-	const p2 = second.positionAtTrueAnomaly(nu2)
-	return { distance: Math.hypot(p1[0] - p2[0], p1[1] - p2[1], p1[2] - p2[2]), trueAnomaly1: normalizeAngle(nu1), trueAnomaly2: normalizeAngle(nu2) }
+	return { distance: bestDistance, trueAnomaly1: normalizeAngle(bestNu1), trueAnomaly2: normalizeAngle(bestNu2) }
 }
 
 // Orbit position tangent dr/dnu (AU per radian) at a true anomaly, by central difference.

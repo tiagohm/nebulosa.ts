@@ -47,6 +47,19 @@ test('the MOID of concentric coplanar circular orbits is the radius difference',
 	expect(moid(inner, outer).distance).toBeCloseTo(0.5, 6)
 })
 
+test('the MOID of nearly similar orbits follows the diagonal valley to the continuous minimum', () => {
+	// Two nearly coplanar, nearly similar ellipses have a long diagonal distance valley. The default
+	// 2 deg grid minimum is at periapsis (~0.0105 AU); the continuous MOID is ~0.000171 AU near ν ≈ 5.03.
+	// With an Euclidean (hypot) step cap of one cell and only 40 Gauss-Newton iterations, refinement
+	// stalled ~56 deg short and reported ~0.00209 AU. samples = 90 and 360 already reached the bottom.
+	const first = KeplerOrbit.meanAnomaly(1.2 * (1 - 0.4 * 0.4), 0.4, 0.001, 0, 0, 0, EPOCH, GM_SUN_PITJEVA_2005, IDENTITY)
+	const second = KeplerOrbit.meanAnomaly(1.21 * (1 - 0.41 * 0.41), 0.41, 0.0012, 0.002, 0.01, 0, EPOCH, GM_SUN_PITJEVA_2005, IDENTITY)
+	const result = moid(first, second)
+	expect(result.distance).toBeCloseTo(0.000170938, 8)
+	expect(moid(first, second, { samples: 90 }).distance).toBeCloseTo(result.distance, 8)
+	expect(moid(first, second, { samples: 360 }).distance).toBeCloseTo(result.distance, 8)
+})
+
 test('the MOID of an orbit with itself is zero', () => {
 	// Identical orbits share every point, so their MOID vanishes.
 	expect(moid(CERES, CERES).distance).toBeCloseTo(0, 8)
