@@ -354,7 +354,7 @@ class ParsingCapabilityResponseState implements FirmataFsmState {
 			fsm.pinCapabilitiesFinished()
 			fsm.transitTo(WAITING_FOR_MESSAGE_STATE)
 		} else if (b === 127) {
-			const pin = fsm.read(0)
+			const pin = fsm.offset === 0 ? 0 : fsm.read(0)
 
 			const modes = new Set<PinMode>()
 

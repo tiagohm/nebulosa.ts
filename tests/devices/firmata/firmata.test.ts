@@ -183,6 +183,17 @@ describe('command decoding', () => {
 		expect(result[4]).toBeTrue()
 	})
 
+	test('pin capability starts at pin zero when it has no modes', () => {
+		client.process(Buffer.from([0xf0, 0x79, 2, 3, 0xf7]))
+		result.length = 0
+		client.process(Buffer.from([0xf0, 0x6c, 0x7f, 1, 0, 0x7f, 0xf7]))
+		expect(result[0]).toBe(0)
+		expect(result[1]).toEqual([])
+		expect(result[2]).toBe(1)
+		expect(result[3]).toEqual([PinMode.OUTPUT])
+		expect(result[4]).toBeTrue()
+	})
+
 	test('analog mapping', () => {
 		client.process(Buffer.from([0xf0, 0x6a, 0x7f, 0x7f, 1, 2, 3, 0xf7]))
 		const mapping = result[0] as AnalogMapping
