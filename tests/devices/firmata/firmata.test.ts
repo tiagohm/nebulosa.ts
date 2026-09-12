@@ -562,6 +562,30 @@ test('BMP180 calculate true temperature & pressure', () => {
 	expect(bmp180.calculateTruePressure(23843)).toBe(69964)
 })
 
+test('BMP180 reads high unsigned raw temperatures', () => {
+	const client = new MockFirmataClient()
+	const bmp180 = new BMP180(client as never, 0)
+	const calibration = Buffer.alloc(22)
+	calibration.writeInt16BE(408, 0)
+	calibration.writeInt16BE(-72, 2)
+	calibration.writeInt16BE(-14383, 4)
+	calibration.writeUInt16BE(32741, 6)
+	calibration.writeUInt16BE(32757, 8)
+	calibration.writeUInt16BE(23153, 10)
+	calibration.writeInt16BE(6190, 12)
+	calibration.writeInt16BE(4, 14)
+	calibration.writeInt16BE(-32768, 16)
+	calibration.writeInt16BE(-8711, 18)
+	calibration.writeInt16BE(2868, 20)
+
+	bmp180.start()
+	bmp180.twoWireMessage(client as never, BMP180.ADDRESS, 0xaa, calibration)
+	bmp180.twoWireMessage(client as never, BMP180.ADDRESS, 0xf6, Buffer.from([0x93, 0x99]))
+
+	expect(bmp180.temperature).toBe(85)
+	bmp180.stop()
+})
+
 test('BMP280 compensate temperature & pressure', () => {
 	const bmp280 = new BMP280(undefined as never, 0)
 	expect(bmp280.compensateTemperature(519888)).toBeCloseTo(25.08, 2)

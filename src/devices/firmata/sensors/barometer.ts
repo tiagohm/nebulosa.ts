@@ -129,7 +129,7 @@ export class BMP180 extends PeripheralBase<BMP180> implements Barometer, Altimet
 		if (this.#command === BMP180.READ_TEMP_CMD) {
 			if (register !== BMP180.TEMP_DATA_REG || data.byteLength !== 2) return
 
-			const UT = data.readInt16BE(0)
+			const UT = data.readUInt16BE(0)
 			this.temperature = this.calculateTrueTemperature(UT)
 			this.#command = BMP180.READ_PRES_CMD
 			void this.#readUncompensatedPressure()
