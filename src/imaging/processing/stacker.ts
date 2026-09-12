@@ -841,6 +841,8 @@ function finalizeBatchImage(referenceFrame: StackingFrame, options: ResolvedStac
 	const raw = createLike(referenceFrame.image.raw, referenceFrame.image.metadata.pixelCount * referenceFrame.image.metadata.channels)
 	const values = new Float64Array(accepted.length)
 	const weights = new Float64Array(accepted.length)
+	// Reused by MAD sigma-clip so each pixel does not allocate a fresh scratch array.
+	const madScratch = new Float64Array(accepted.length)
 
 	for (let pixel = 0; pixel < referenceFrame.image.metadata.pixelCount; pixel++) {
 		if (coverageMap[pixel] < threshold) continue
@@ -854,7 +856,7 @@ function finalizeBatchImage(referenceFrame: StackingFrame, options: ResolvedStac
 				used++
 			}
 			if (used === 0) continue
-			raw[base + channel] = combineValues(options.combinationMethod, values, weights, used, options)
+			raw[base + channel] = combineValues(options.combinationMethod, values, weights, used, options, madScratch)
 		}
 	}
 
@@ -862,7 +864,8 @@ function finalizeBatchImage(referenceFrame: StackingFrame, options: ResolvedStac
 }
 
 // Combines one per-pixel sample vector according to the selected method.
-function combineValues(method: StackingCombinationMethod, values: Float64Array, weights: Float64Array, count: number, options: ResolvedStackingOptions) {
+// `madScratch` is a reusable workspace for MAD sigma-clip; ignored by other methods.
+function combineValues(method: StackingCombinationMethod, values: Float64Array, weights: Float64Array, count: number, options: ResolvedStackingOptions, madScratch?: Float64Array) {
 	const sorted = values.subarray(0, count)
 	const sortedWeights = weights.subarray(0, count)
 
@@ -903,7 +906,7 @@ function combineValues(method: StackingCombinationMethod, values: Float64Array, 
 			return combinePercentileClipAverage(sorted, count, options.percentileClip.lower, options.percentileClip.upper)
 		case 'sigma-clip':
 			sorted.sort()
-			return combineSigmaClip(sorted, count, options.sigmaClip)
+			return combineSigmaClip(sorted, count, options.sigmaClip, madScratch)
 	}
 }
 
@@ -946,7 +949,8 @@ function combinePercentileClipAverage(values: Float64Array, count: number, lower
 }
 
 // Computes a conservative sigma-clipped average for one sample vector.
-function combineSigmaClip(values: Float64Array, count: number, options: Required<SigmaClipStackingOptions>) {
+// `madScratch` is reused across pixels and iterations when dispersion is MAD; omitted, a temporary array is allocated.
+function combineSigmaClip(values: Float64Array, count: number, options: Required<SigmaClipStackingOptions>, madScratch?: Float64Array) {
 	if (count <= 2) return meanOf(values.subarray(0, count))
 	let active = count
 
@@ -965,7 +969,7 @@ function combineSigmaClip(values: Float64Array, count: number, options: Required
 
 			sigma = Math.sqrt(sumSq / active)
 		} else {
-			sigma = medianAbsoluteDeviationOf(sorted, center, true, active)
+			sigma = medianAbsoluteDeviationOf(sorted, center, true, active, madScratch)
 		}
 
 		if (!(sigma > 0)) return center
