@@ -887,20 +887,28 @@ export const tdbMinusTtByFairheadAndBretagnon1990: TimeDelta = (time) => {
 }
 
 // Computes TAI - UTC in seconds at time.
+// eraDat is tabulated by UTC civil date, so non-UTC instants are converted
+// first. Using the TAI or UT1 calendar is wrong by 1 s in the first ~DAT
+// seconds of the TAI day after a leap second, when that calendar has already
+// rolled over but UTC has not.
 export const taiMinusUtc: TimeDelta = (time) => {
 	const cached = time.cache?.taiMinusUtc
 	if (cached !== undefined) return cached
-	const cal = eraJdToCal(time.day, time.fraction)
+	const u = time.scale === Timescale.UTC ? time : utc(time)
+	const cal = eraJdToCal(u.day, u.fraction)
 	const dt = eraDat(cal[0], cal[1], cal[2], cal[3])
 	cacheKey(cache(time), 'taiMinusUtc', dt)
 	return dt
 }
 
 // Computes UT1 - TAI in seconds at time.
+// DAT is taken from the corresponding UTC date (as in taiMinusUtc) so the
+// TAI↔UT1 shortcut agrees with TAI↔UTC↔UT1 across a leap second.
 export const ut1MinusTai: TimeDelta = (time) => {
 	const cached = time.cache?.ut1MinusTai
 	if (cached !== undefined) return cached
-	const cal = eraJdToCal(time.day, time.fraction)
+	const u = time.scale === Timescale.UTC ? time : utc(time)
+	const cal = eraJdToCal(u.day, u.fraction)
 	const dat = eraDat(cal[0], cal[1], cal[2], cal[3])
 	const ut1MinusUtc = dut1(time)
 	const dt = ut1MinusUtc - dat
