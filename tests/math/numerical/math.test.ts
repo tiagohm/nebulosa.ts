@@ -100,6 +100,11 @@ test('roundToNthDecimal', () => {
 	expect(roundToNthDecimal(10000000000000000, 0)).toBe(10000000000000000)
 	expect(roundToNthDecimal(-10000000000000000, 0)).toBe(-10000000000000000)
 	expect(roundToNthDecimal(9007199254740991, 0)).toBe(9007199254740991)
+	expect(roundToNthDecimal(2 ** 51, 0)).toBe(2 ** 51)
+	expect(roundToNthDecimal(2 ** 52 - 1, 0)).toBe(2 ** 52 - 1)
+	expect(roundToNthDecimal(2 ** 50 + 0.25, 0)).toBe(2 ** 50)
+	expect(roundToNthDecimal(1e15 + 0.375, 0)).toBe(1e15)
+	expect(roundToNthDecimal(-(2 ** 51), 0)).toBe(-(2 ** 51))
 
 	expect(roundToNthDecimal(1234.56, -1)).toBe(1230)
 	expect(roundToNthDecimal(1234.56, -2)).toBe(1200)

@@ -91,6 +91,7 @@ export function floorDiv(x: number, y: number) {
 	return Math.floor(x / y)
 }
 
+const TWO_POW_45 = 35184372088832 // 2 ** 45
 const TWO_POW_52 = 4503599627370496 // 2 ** 52
 
 // Rounds to the nearest integer with ties going away from zero, leaving non-finite values and values
@@ -135,9 +136,14 @@ export function roundToNthDecimal(a: number, n: number) {
 	const floor = Math.floor(abs)
 	const fraction = abs - floor
 
+	if (fraction === 0) return (sign * floor) / factor
+
+	// Treat a near-half as a decimal tie only while abs * EPSILON is a ~1 ulp
+	// representation error. Past ~2^45 that product reaches 0.008 and then
+	// 0.25 / 0.375 / 0, which must not count as halves.
 	const tolerance = Math.max(Number.EPSILON, abs * Number.EPSILON)
 
-	if (Math.abs(fraction - 0.5) <= tolerance) {
+	if (abs < TWO_POW_45 && Math.abs(fraction - 0.5) <= tolerance) {
 		return (sign * (floor + 1)) / factor
 	}
 
