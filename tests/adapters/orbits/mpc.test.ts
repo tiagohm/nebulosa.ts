@@ -459,6 +459,21 @@ describe('MPC80', () => {
 		expect(line.slice(15, 32)).toBe('2000 01 02.000000')
 	})
 
+	test('MPC80 meridian T lines are not paired unless followed by converted satellite t', () => {
+		const meridian = mpc80('00001         T2000 01 01.00000000 00 00.000+00 00 00.00                     500')
+		const optical = mpc80('00001         C2000 01 01.00000000 00 00.000+00 00 00.00                     500')
+		const observations = parseMPC80Lines(`${meridian}\n${optical}`)
+		expect(observations).toHaveLength(2)
+		expect(observations[0]?.mode).toBe('T')
+
+		const first = mpc80('     T1S1222  T1995 10 19.53839 23 45 35.737+09 09 38.13                     250')
+		const second = mpc80('     T1S1222  t1995 10 19.53839 1 + 5530.3041 - 4255.1515 -  550.2319        250')
+		const [satellite] = parseMPC80Lines(`${first}\n${second}`)
+		expect(satellite?.type).toBe('optical')
+		if (satellite?.type !== 'optical') return
+		expect(satellite.observer?.kind).toBe('spacecraft')
+	})
+
 	test('Hubble two-line satellite example', () => {
 		const text = `${mpc80('     T1S1222  S1995 10 19.53839 23 45 35.737+09 09 38.13                     250')}
 ${mpc80('     T1S1222  s1995 10 19.53839 1 + 5530.3041 - 4255.1515 -  550.2319        250')}`

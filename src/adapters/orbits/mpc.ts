@@ -135,7 +135,7 @@ const ADES_FIELD_ALIASES: Readonly<Record<string, string>> = {
 }
 
 const CAR_STATE_NAMES = ['x', 'y', 'z', 'vx', 'vy', 'vz'] as const
-const TWO_LINE_NOTE2 = new Set(['S', 's', 'V', 'v', 'W', 'w', 'R', 'r', 'Q', 'q', 'T', 't'])
+const TWO_LINE_NOTE2 = new Set(['S', 's', 'V', 'v', 'W', 'w', 'R', 'r', 'Q', 'q'])
 const SPACECRAFT_SYS = new Set(['ICRF_KM', 'ICRF_AU'])
 const GEODETIC_SYS = new Set(['WGS84', 'ITRF', 'IAU'])
 const OBSERVATORY_TYPES = new Set(['optical', 'occultation', 'satellite', 'radar', 'roving'])
@@ -2020,8 +2020,10 @@ export function parseMPC80Lines(text: string): readonly MPCObservation[] {
 
 		if (note2 === 's' || note2 === 'v' || note2 === 'w' || note2 === 'r' || note2 === 'q' || note2 === 't') throw new Error('orphan MPC80 second line')
 
-		if (TWO_LINE_NOTE2.has(note2)) {
-			const second = lines[i + 1]
+		const second = lines[i + 1]
+		const isConvertedSatellitePair = note2 === 'T' && second?.[14] === 't' && line.slice(0, 12) === second.slice(0, 12) && line.slice(15, 32) === second.slice(15, 32)
+
+		if (TWO_LINE_NOTE2.has(note2) || isConvertedSatellitePair) {
 			if (!second) throw new Error('MPC80 two-line observation is missing its second record')
 			observations.push(parseMpc80Pair(line, second))
 			i++
