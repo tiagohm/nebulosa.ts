@@ -444,7 +444,9 @@ abstract class AlpacaDevice {
 		const { Connected, Step } = this.state
 
 		if (Connected === undefined) {
-			return this.client.stop(true)
+			// A failed device poll says nothing about the other devices or the server. Keep the last
+			// connection state and retry next tick; only an explicit false disconnects this wrapper.
+			return false
 		}
 
 		if (Connected !== this.isConnected) {

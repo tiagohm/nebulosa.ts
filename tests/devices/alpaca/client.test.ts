@@ -174,6 +174,65 @@ test.each([43, 44])(
 	12000,
 )
 
+test('a failed Connected poll preserves other devices and recovers on the next tick', async () => {
+	let fail = false
+	let disconnected = false
+	let failures = 0
+	let closes = 0
+	let position = 0
+	const connections = new Map<string, boolean>()
+	const positions = new Map<string, number>()
+	await using remote = await scriptedClient(
+		'focuser',
+		{ absolute: true, maxstep: 100000 },
+		{
+			close: () => {
+				closes++
+			},
+			switchVector: (_, vector) => {
+				if (vector.name === 'CONNECTION') connections.set(vector.device, vector.elements.CONNECT.value === true)
+			},
+			numberVector: (_, vector) => {
+				if (vector.name === 'ABS_FOCUS_POSITION') positions.set(vector.device, vector.elements.FOCUS_ABSOLUTE_POSITION.value)
+			},
+		},
+		(req) => {
+			const path = new URL(req.url).pathname
+			let value: unknown
+			if (path.endsWith('/configureddevices')) value = [0, 1].map((id) => ({ DeviceName: 'Scripted', DeviceType: 'focuser', DeviceNumber: id, UniqueID: `focuser-${id}` }))
+			else if (path.endsWith('/0/connected')) {
+				if (fail) {
+					fail = false
+					failures++
+					return new Response('transient failure', { status: 500 })
+				}
+				value = !disconnected
+			} else if (path.endsWith('/devicestate'))
+				value = [
+					{ Name: 'Position', Value: ++position },
+					{ Name: 'IsMoving', Value: false },
+				]
+			else return undefined
+			return Response.json({ Value: value, ErrorNumber: 0, ErrorMessage: '' })
+		},
+	)
+	const first = 'Scripted (Focuser 0)'
+	const second = 'Scripted (Focuser 1)'
+	await waitUntil(() => (positions.get(first) ?? 0) > 0 && (positions.get(second) ?? 0) > 0, 8000)
+	const previous = positions.get(second)!
+	fail = true
+	await waitUntil(() => failures === 1 && positions.get(second)! > previous, 3000)
+	expect(connections.get(first)).toBeTrue()
+	expect(connections.get(second)).toBeTrue()
+	expect(closes).toBe(0)
+	const beforeRecovery = positions.get(first)!
+	await waitUntil(() => positions.get(first)! > beforeRecovery, 3000)
+	disconnected = true
+	await waitUntil(() => connections.get(first) === false, 3000)
+	expect(connections.get(second)).toBeTrue()
+	expect(closes).toBe(0)
+}, 18000)
+
 describe('make fits from image bytes', () => {
 	test('converts a 10 by 10 byte ROI smaller than 176 bytes', async () => {
 		const data = new ArrayBuffer(144)
