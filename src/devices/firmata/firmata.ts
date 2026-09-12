@@ -953,7 +953,7 @@ export class FirmataClient implements Disposable {
 	}
 
 	requestDigitalPinReport(pin: number, enable: boolean) {
-		this.send(new Uint8Array([REPORT_DIGITAL | this.#board.pinToDigital(pin), enable ? 1 : 0]))
+		this.send(new Uint8Array([REPORT_DIGITAL | ((this.#board.pinToDigital(pin) >> 3) & 0x0f), enable ? 1 : 0]))
 	}
 
 	requestAnalogReport(enable: boolean) {

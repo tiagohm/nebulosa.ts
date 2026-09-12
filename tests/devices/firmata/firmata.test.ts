@@ -334,6 +334,7 @@ describe('command encoding', () => {
 	test('digital and analog report commands', () => {
 		client.requestDigitalReport(true)
 		client.requestDigitalPinReport(6, false)
+		client.requestDigitalPinReport(16, true)
 		client.requestAnalogReport(false)
 		client.requestAnalogPinReport(ESP8266.A0, true)
 
@@ -350,9 +351,10 @@ describe('command encoding', () => {
 		}
 
 		expect(messages[0]).toEqual(digitalReport)
-		expect(messages[1]).toEqual(Buffer.from([0xd6, 0]))
-		expect(messages[2]).toEqual(analogReport)
-		expect(messages[3]).toEqual(Buffer.from([0xc0, 1]))
+		expect(messages[1]).toEqual(Buffer.from([0xd0, 0]))
+		expect(messages[2]).toEqual(Buffer.from([0xd2, 1]))
+		expect(messages[3]).toEqual(analogReport)
+		expect(messages[4]).toEqual(Buffer.from([0xc0, 1]))
 	})
 
 	test('pin mode and digital write', () => {
