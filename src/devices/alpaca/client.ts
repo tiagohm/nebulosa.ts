@@ -740,9 +740,9 @@ class AlpacaCamera extends AlpacaDevice {
 		this.api = api
 	}
 
-	// True when the selected frame type is a light frame.
+	// True when the selected frame requires an open shutter (light or flat).
 	get isLight() {
-		return this.#frameType.elements.FRAME_LIGHT?.value === true
+		return this.#frameType.elements.FRAME_LIGHT?.value === true || this.#frameType.elements.FRAME_FLAT?.value === true
 	}
 
 	// Reconciles polled camera state into the INDI CCD properties: dimensions/pixel size, cooler and

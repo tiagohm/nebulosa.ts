@@ -137,6 +137,25 @@ test('manual east and west motion follows the AlpacaServer rate convention', asy
 	}
 }, 10000)
 
+test('camera opens the shutter for light and flat frames only', async () => {
+	await using remote = await scriptedClient('camera', { exposuremin: 0.001, exposuremax: 60 })
+	await waitUntil(() => remote.numbers.has('CCD_EXPOSURE'), 8000)
+	const exposure = remote.numbers.get('CCD_EXPOSURE')!
+	for (const [frame, light] of [
+		['FLAT', 'True'],
+		['DARK', 'False'],
+		['BIAS', 'False'],
+		['LIGHT', 'True'],
+	]) {
+		const count = remote.commands.length
+		remote.client.sendSwitch({ device: exposure.device, name: 'CCD_FRAME_TYPE', elements: { [`FRAME_${frame}`]: true } })
+		remote.client.sendNumber({ device: exposure.device, name: exposure.name, elements: { CCD_EXPOSURE_VALUE: 1 } })
+		await waitUntil(() => remote.commands.length > count, 1000)
+		expect(remote.commands.at(-1)!.endpoint).toBe('startexposure')
+		expect(remote.commands.at(-1)!.body.get('Light')).toBe(light)
+	}
+}, 10000)
+
 describe('make fits from image bytes', () => {
 	const camera = structuredClone(DEFAULT_CAMERA)
 	const mount = structuredClone(DEFAULT_MOUNT)
