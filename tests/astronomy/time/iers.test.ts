@@ -58,6 +58,14 @@ test('iersA', async () => {
 	t = timeYMDHMS(1900, 10, 7, 12, 34, 56, Timescale.UTC)
 	expectDut1(iersa.dut1(t), 0.8075)
 	expectXY(iersa.xy(t), arcsec(0.143), arcsec(0.137))
+
+	// 2016-12-31 leap second: Bulletin B DUT1 jumps by ~1 s between 0h samples.
+	t = timeYMDHMS(2016, 12, 31, 0, 0, 0, Timescale.UTC)
+	expectDut1(iersa.dut1(t), -0.40776)
+	t = timeYMDHMS(2016, 12, 31, 12, 0, 0, Timescale.UTC)
+	expectDut1(iersa.dut1(t), -0.40823125)
+	t = timeYMDHMS(2017, 1, 1, 0, 0, 0, Timescale.UTC)
+	expectDut1(iersa.dut1(t), 0.5912975)
 })
 
 test('iersB', async () => {
@@ -74,24 +82,32 @@ test('iersB', async () => {
 	t = timeYMDHMS(1900, 10, 7, 12, 34, 56, Timescale.UTC)
 	expectDut1(iersb.dut1(t), 0.0326338)
 	expectXY(iersb.xy(t), arcsec(-0.0127), arcsec(0.213))
+
+	// 2016-12-31 leap second: tabulated DUT1 jumps by ~1 s between 0h samples.
+	t = timeYMDHMS(2016, 12, 31, 0, 0, 0, Timescale.UTC)
+	expectDut1(iersb.dut1(t), -0.4077697)
+	t = timeYMDHMS(2016, 12, 31, 12, 0, 0, Timescale.UTC)
+	expectDut1(iersb.dut1(t), -0.40824135)
+	t = timeYMDHMS(2017, 1, 1, 0, 0, 0, Timescale.UTC)
+	expectDut1(iersb.dut1(t), 0.591287)
 })
 
 test('iers interpolation boundaries', () => {
 	const iers = new IersATest()
-	iers.set([60000, 60002], [0, 2], [0, 4], [0, 6])
+	iers.set([60000, 60002], [0, 2], [0, 4], [0, 0.006])
 
 	let t = timeMJD(60000.5, Timescale.UTC)
-	expectDut1(iers.dut1(t), 1.5)
+	expectDut1(iers.dut1(t), 0.0015)
 	expectXY(iers.xy(t), arcsec(0.5), arcsec(1))
 
 	t = timeMJD(60002.5, Timescale.UTC)
-	expectDut1(iers.dut1(t), 6)
+	expectDut1(iers.dut1(t), 0.006)
 	expectXY(iers.xy(t), arcsec(2), arcsec(4))
 })
 
 test('iers clamps queries outside the tabulated range to the endpoints', () => {
 	const iers = new IersATest()
-	iers.set([60000, 60002], [0, 2], [0, 4], [0, 6])
+	iers.set([60000, 60002], [0, 2], [0, 4], [0, 0.006])
 
 	// Before the first row clamps to the first sample.
 	let t = timeMJD(59000, Timescale.UTC)
@@ -100,7 +116,25 @@ test('iers clamps queries outside the tabulated range to the endpoints', () => {
 
 	// After the last row clamps to the last sample.
 	t = timeMJD(61000, Timescale.UTC)
-	expectDut1(iers.dut1(t), 6)
+	expectDut1(iers.dut1(t), 0.006)
+	expectXY(iers.xy(t), arcsec(2), arcsec(4))
+})
+
+test('iers dut1 interpolation unwraps the leap-second jump', () => {
+	const iers = new IersATest()
+	iers.set([60000, 60001], [0, 2], [0, 4], [-0.4, 0.6])
+
+	let t = timeMJD(60000, Timescale.UTC)
+	expectDut1(iers.dut1(t), -0.4)
+	expectXY(iers.xy(t), 0, 0)
+
+	// Midday must follow the continuous UT1-TAI trend, not ramp through the +1 s UTC jump.
+	t = timeMJD(60000.5, Timescale.UTC)
+	expectDut1(iers.dut1(t), -0.4)
+	expectXY(iers.xy(t), arcsec(1), arcsec(2))
+
+	t = timeMJD(60001, Timescale.UTC)
+	expectDut1(iers.dut1(t), 0.6)
 	expectXY(iers.xy(t), arcsec(2), arcsec(4))
 })
 
@@ -158,7 +192,7 @@ test('iersA load keeps zero-valued finals columns', async () => {
 			[58, 68, '4.0'],
 			[134, 144, '1.0'],
 			[144, 154, '2.0'],
-			[154, 165, '3.0'],
+			[154, 165, '0.3'],
 		]),
 	]
 
@@ -166,7 +200,7 @@ test('iersA load keeps zero-valued finals columns', async () => {
 	await iers.load(lines)
 
 	const t = timeMJD(60000.5, Timescale.UTC)
-	expectDut1(iers.dut1(t), 1.5)
+	expectDut1(iers.dut1(t), 0.15)
 	expectXY(iers.xy(t), arcsec(0.5), arcsec(1))
 })
 
@@ -182,7 +216,7 @@ test('iersB load keeps zero-valued rows', async () => {
 			[16, 26, '60001'],
 			[26, 38, '1.0'],
 			[38, 50, '2.0'],
-			[50, 62, '3.0'],
+			[50, 62, '0.3'],
 		]),
 	]
 
@@ -190,6 +224,6 @@ test('iersB load keeps zero-valued rows', async () => {
 	await iers.load(lines)
 
 	const t = timeMJD(60000.5, Timescale.UTC)
-	expectDut1(iers.dut1(t), 1.5)
+	expectDut1(iers.dut1(t), 0.15)
 	expectXY(iers.xy(t), arcsec(0.5), arcsec(1))
 })
