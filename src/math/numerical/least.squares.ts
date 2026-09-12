@@ -193,14 +193,14 @@ function leastSquaresLeverage(design: readonly Readonly<NumberArray>[], weights:
 export function robustLinearLeastSquares(
 	design: readonly Readonly<NumberArray>[],
 	target: Readonly<NumberArray>,
-	{ weights, ridge = 0, method = 'huber', maxIterations = DEFAULT_ROBUST_ITERATIONS, tolerance = DEFAULT_ROBUST_TOLERANCE, tuning = DEFAULT_ROBUST_TUNING }: RobustLinearLeastSquaresOptions = {},
+	{ weights, ridge = 0, leverage = false, method = 'huber', maxIterations = DEFAULT_ROBUST_ITERATIONS, tolerance = DEFAULT_ROBUST_TOLERANCE, tuning = DEFAULT_ROBUST_TUNING }: RobustLinearLeastSquaresOptions = {},
 ): RobustLinearLeastSquaresResult {
 	if (design.length !== target.length) throw new Error('design matrix row count must match target length')
 	const { rows } = validateLeastSquaresInput(design, weights)
 	const baseWeights = initialLeastSquaresWeights(rows, weights)
 
 	if (method === 'none' || rows === 0) {
-		const result = linearLeastSquares(design, target, { weights: baseWeights, ridge })
+		const result = linearLeastSquares(design, target, { weights: baseWeights, ridge, leverage })
 		return { ...result, weights: baseWeights, iterations: 1, scale: robustResidualScale(result.residuals, baseWeights) }
 	}
 
@@ -217,7 +217,7 @@ export function robustLinearLeastSquares(
 		scale = robustResidualScale(residuals, baseWeights)
 
 		if (!Number.isFinite(scale) || scale === 0) {
-			const result = linearLeastSquares(design, target, { weights: currentWeights, ridge })
+			const result = linearLeastSquares(design, target, { weights: currentWeights, ridge, leverage })
 			return { ...result, weights: currentWeights, iterations: iterations + 1, scale }
 		}
 
@@ -234,7 +234,7 @@ export function robustLinearLeastSquares(
 		}
 	}
 
-	const result = linearLeastSquares(design, target, { weights: currentWeights, ridge })
+	const result = linearLeastSquares(design, target, { weights: currentWeights, ridge, leverage })
 	return { ...result, weights: currentWeights, iterations: Math.max(1, iterations), scale }
 }
 

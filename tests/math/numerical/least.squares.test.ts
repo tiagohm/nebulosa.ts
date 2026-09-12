@@ -159,6 +159,27 @@ test('zero-weighted residuals do not inflate the robust scale', () => {
 	expect(fit.weights[weightedOutlier]).toBe(0)
 })
 
+test('robust least squares forwards leverage onto the final weighted fit', () => {
+	const design = [new Float64Array([1, 0]), new Float64Array([1, 1]), new Float64Array([1, 2]), new Float64Array([1, 3]), new Float64Array([1, 4])]
+	const target = new Float64Array([1, 3, 5, 7, 9])
+
+	for (const method of ['none', 'huber', 'tukey'] as const) {
+		const robust = robustLinearLeastSquares(design, target, { method, leverage: true })
+		expect(robust.leverage).toBeDefined()
+
+		let trace = 0
+		for (let i = 0; i < design.length; i++) {
+			expect(robust.leverage![i]).toBeGreaterThanOrEqual(0)
+			expect(robust.leverage![i]).toBeLessThanOrEqual(1)
+			trace += robust.leverage![i]
+		}
+
+		const equivalent = linearLeastSquares(design, target, { weights: robust.weights, leverage: true })
+		expect(trace).toBeCloseTo(2, 8)
+		for (let i = 0; i < design.length; i++) expect(robust.leverage![i]).toBeCloseTo(equivalent.leverage![i], 12)
+	}
+})
+
 test('robust huber fit also resists outliers', () => {
 	const design = [new Float64Array([1, 0]), new Float64Array([1, 1]), new Float64Array([1, 2]), new Float64Array([1, 3]), new Float64Array([1, 4])]
 	const target = new Float64Array([1, 3, 5, 7, 100])
