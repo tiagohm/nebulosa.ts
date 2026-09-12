@@ -72,8 +72,9 @@ export interface SmallBodySearchObject {
 }
 
 // SBDB orbital-element identifiers (e eccentricity, a semi-major axis, q perihelion, i inclination,
-// om node, w argument of perihelion, ma mean anomaly, tp time of perihelion, per period, n mean motion, ...).
-export type SmallBodySearchOrbitElementName = 'e' | 'a' | 'q' | 'i' | 'om' | 'w' | 'ma' | 'tp' | 'cd_tp' | 'per' | 'n' | 'a_D' | 'dn_dt'
+// om node, w argument of perihelion, ma mean anomaly, tp time of perihelion, tp_cd calendar date of
+// perihelion, per period, n mean motion, and ad aphelion distance).
+export type SmallBodySearchOrbitElementName = 'e' | 'a' | 'q' | 'i' | 'om' | 'w' | 'ma' | 'tp' | 'tp_cd' | 'per' | 'n' | 'ad'
 
 // One published orbital element with its value, 1-sigma uncertainty, and units (all as strings).
 export interface SmallBodySearchOrbitElement {
