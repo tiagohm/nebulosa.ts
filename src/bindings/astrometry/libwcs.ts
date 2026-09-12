@@ -5,8 +5,9 @@ import { type FitsHeader, FitsKeywordWriter } from '../../io/formats/fits/fits'
 import { type Angle, deg, toDeg } from '../../math/units/angle'
 
 // FFI binding to WCSLIB (libwcs) via bun:ffi. Parses the WCS keywords of a FITS header into a native
-// two-axis wcsprm struct and exposes pixel↔sky transforms. Sky angles are radians on the public API and
-// converted to/from the degrees WCSLIB uses. Native memory is owned by the Wcs class (Disposable).
+// two-axis equatorial wcsprm struct and exposes pixel↔sky transforms. Sky angles are radians in the
+// header's equatorial frame, converted to/from the degrees WCSLIB uses, always ordered [RA, Dec].
+// Native memory is owned by the Wcs class (Disposable).
 
 // Resolved type of the dlopen handle returned by open(); used to type the cached library instance.
 export type LibWcs = ReturnType<typeof open>
@@ -43,6 +44,8 @@ export function unload() {
 export class Wcs implements Disposable {
 	// Native wcsprm pointer; undefined until a header is loaded or after disposal.
 	#pointer?: Pointer
+	// Zero-based FITS world-axis index of RA; the other axis is Dec. Set only on successful load.
+	#raAxis = 0
 	readonly #lib = load()
 
 	// Optionally parses a header immediately. Throws if the header has no usable single WCS solution.
@@ -53,8 +56,15 @@ export class Wcs implements Disposable {
 	}
 
 	// Parses the WCS keywords of `header` into a native wcsprm. Returns true and replaces the previous
-	// solution only for a single two-axis WCS; otherwise frees the candidate and returns false.
+	// solution only for a single two-axis equatorial WCS, with RA/Dec in either FITS axis order.
+	// Unsupported headers return false; any native candidate is freed, preserving the previous solution.
 	load(header: FitsHeader) {
+		const ctype1 = String(header.CTYPE1 ?? '').trim()
+		const ctype2 = String(header.CTYPE2 ?? '').trim()
+		const raAxis = ctype1.startsWith('RA---') && ctype2.startsWith('DEC--') ? 0 : ctype1.startsWith('DEC--') && ctype2.startsWith('RA---') ? 1 : -1
+		// This API exposes RA/Dec, so other celestial frames or linear axes cannot be relabeled as sky.
+		if (raAxis < 0) return false
+
 		const [buffer, n] = bufferFromHeader(header)
 
 		if (n > 0) {
@@ -73,6 +83,7 @@ export class Wcs implements Disposable {
 					if (read.i32(pointer, 4) === 2) {
 						this[Symbol.dispose]()
 						this.#pointer = pointer
+						this.#raAxis = raAxis
 						return true
 					}
 				}
@@ -103,7 +114,7 @@ export class Wcs implements Disposable {
 			const ret = this.#lib.wcsp2s(this.#pointer, 1, 2, pixcrd, imgcrd, phi, theta, world, stat)
 
 			if (ret === 0) {
-				return [deg(read.f64(world)), deg(read.f64(world, 8))]
+				return [deg(read.f64(world, this.#raAxis * 8)), deg(read.f64(world, (1 - this.#raAxis) * 8))]
 			} else {
 				console.error('failed to transform pixel coordinates to sky coordinates:', ret)
 			}
@@ -117,8 +128,8 @@ export class Wcs implements Disposable {
 	skyToPix(ra: Angle, dec: Angle): [number, number] | undefined {
 		if (this.#pointer) {
 			const mem = Buffer.allocUnsafe(8 * 8 + 4)
-			mem.writeDoubleLE(toDeg(ra), 48)
-			mem.writeDoubleLE(toDeg(dec), 56)
+			mem.writeDoubleLE(toDeg(ra), 48 + this.#raAxis * 8)
+			mem.writeDoubleLE(toDeg(dec), 48 + (1 - this.#raAxis) * 8)
 
 			const pixcrd = ptr(mem, 0)
 			const imgcrd = ptr(mem, 16)
