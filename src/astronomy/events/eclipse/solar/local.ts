@@ -1371,7 +1371,9 @@ function requireLocalViewState(event: LocalSolarEclipseEvent) {
 function localViewAngleForEvent(eventState: LocalViewEventState, options: LocalSolarEclipseViewOptions, frameState: LocalViewEventState) {
 	if (options.orientationMode === 'north') return eventState.centerPositionAngle
 	const centerP = eventState.centerPositionAngle
-	return centerP && normalizeAngle(centerP - (frameState.parallacticAngle ?? 0))
+	// 0 is a valid celestial-north position angle (Moon due north of the Sun); only absence is undefined.
+	if (centerP === undefined) return undefined
+	return normalizeAngle(centerP - (frameState.parallacticAngle ?? 0))
 }
 
 // Computes the solar and lunar disk circles for one event in the Local View frame. The Sun is centered in
