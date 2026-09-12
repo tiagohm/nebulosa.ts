@@ -437,7 +437,7 @@ export class AlpacaServer {
 		'/api/v1/telescope/:id/abortslew': { PUT: (req) => this.#mountStop(+req.params.id) },
 		'/api/v1/telescope/:id/axisrates': { GET: async (req) => this.#mountGetAxisRates(+req.params.id, await params(req)) },
 		'/api/v1/telescope/:id/canmoveaxis': { GET: async (req) => this.#mountCanMoveAxis(+req.params.id, await params(req)) },
-		'/api/v1/telescope/:id/destinationsideofpier': { GET: (req) => this.#mountGetDestinationSideOfPier(+req.params.id) },
+		'/api/v1/telescope/:id/destinationsideofpier': { GET: async (req) => this.#mountGetDestinationSideOfPier(+req.params.id, await params(req)) },
 		'/api/v1/telescope/:id/findhome': { PUT: (req) => this.#mountFindHome(+req.params.id) },
 		'/api/v1/telescope/:id/moveaxis': { PUT: async (req) => this.#mountMoveAxis(+req.params.id, await params(req)) },
 		'/api/v1/telescope/:id/park': { PUT: (req) => this.#mountPark(+req.params.id) },
@@ -1684,10 +1684,10 @@ export class AlpacaServer {
 		return makeAlpacaResponse(this.#telescope(id).device.canMove)
 	}
 
-	// Predicts the pier side the mount would adopt for its current coordinates given the local sidereal time.
-	#mountGetDestinationSideOfPier(id: number) {
-		const { state, device } = this.#telescope(id)
-		const pierSide = expectedPierSide(device.equatorialCoordinate.rightAscension, device.equatorialCoordinate.declination, state.lst)
+	// Predicts the destination pier side from Alpaca RA (hours), Dec (degrees), and local sidereal time.
+	#mountGetDestinationSideOfPier(id: number, data: { RightAscension: string; Declination: string }) {
+		const { state } = this.#telescope(id)
+		const pierSide = expectedPierSide(hour(+data.RightAscension), deg(+data.Declination), state.lst)
 		return makeAlpacaResponse(mapPierSideToAlpacaEnum(pierSide))
 	}
 

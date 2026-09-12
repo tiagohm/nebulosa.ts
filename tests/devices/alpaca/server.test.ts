@@ -594,3 +594,19 @@ test('mount target slews and sync preserve radians and coordinate slews update t
 		expect(goTo).toHaveBeenLastCalledWith(fixture.device, hour(9), deg(-20))
 	}
 })
+
+test('destination pier side follows query coordinates independently of the current pointing', async () => {
+	await using fixture = await startAlpacaServer(ALPACA_MOUNT)
+	const lst = (await fixture.get(fixture.path + '/siderealtime')).Value as number
+	fixture.device.equatorialCoordinate.rightAscension = hour((lst + 6) % 24)
+	fixture.device.equatorialCoordinate.declination = deg(10)
+	for (const [offset, expected] of [
+		[6, 1],
+		[18, 0],
+	]) {
+		const response = await fixture.get(fixture.path + '/destinationsideofpier?RightAscension=' + ((lst + offset) % 24) + '&Declination=10')
+		expect(response.ErrorNumber).toBe(0)
+		expect(response.Value).toBe(expected)
+	}
+	expect((await fixture.get(fixture.path + '/destinationsideofpier?RightAscension=5&Declination=90')).Value).toBe(-1)
+})
