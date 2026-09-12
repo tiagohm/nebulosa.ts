@@ -32,7 +32,8 @@ export interface BahtinovHoughCandidate {
 export interface BahtinovHoughOptions {
 	// Maximum number of candidates returned.
 	readonly maximumCandidates?: number
-	// Minimum axial normal-angle separation between returned candidates, in radians.
+	// Minimum axial normal-angle separation between coarse Hough hypotheses, in radians.
+	// Local refinement may bring returned angles closer by up to twice the refinement range.
 	readonly minimumAxialSeparation?: Angle
 	// Half-range of local normal-angle refinement in radians.
 	readonly refinementRange?: Angle
@@ -84,10 +85,12 @@ export function detectBahtinovHoughCandidates(ridgePoints: BahtinovRidgePoints, 
 		)
 	}
 
+	// Coarse NMS already marked distinct hypotheses. Refinement may close the gap by up to 2 * range.
+	const refinedSeparation = Math.max(0, minimumAxialSeparation - 2 * refinementRange)
 	const refined: BahtinovHoughCandidate[] = []
 	for (let index = 0; index < coarse.length; index++) {
 		const next = refineCandidate(coarse[index], ridgePoints, width, height, workspace, refinementRange, refinementStep, centerX, centerY)
-		if (!refined.some((candidate) => bahtinovAxialAngleDistance(candidate.normalAngle, next.normalAngle) < minimumAxialSeparation)) insertCandidate(refined, next, maximumCandidates)
+		if (!refined.some((candidate) => bahtinovAxialAngleDistance(candidate.normalAngle, next.normalAngle) < refinedSeparation)) insertCandidate(refined, next, maximumCandidates)
 	}
 	return refined
 }

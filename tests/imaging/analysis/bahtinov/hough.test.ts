@@ -94,10 +94,10 @@ test('preserves coarse peaks at the exact minimum axial separation', () => {
 	const workspace = createBahtinovWorkspace(width, height, { precision: 64, maximumRidgePoints: pointCount })
 	const candidates = detectBahtinovHoughCandidates({ x, y, weight, count: pointCount }, width, height, workspace, {
 		minimumAxialSeparation: PI / 36,
-		refinementRange: 0,
+		refinementRange: PI / 180,
 		center,
 	})
-	for (const angle of expected) expect(candidates.some((candidate) => bahtinovAxialAngleDistance(candidate.normalAngle, angle) < PI / 360)).toBeTrue()
+	for (const angle of expected) expect(candidates.some((candidate) => bahtinovAxialAngleDistance(candidate.normalAngle, angle) < PI / 180)).toBeTrue()
 })
 
 test('caps default candidates to coarse workspaces and rejects fewer than three bins', () => {
