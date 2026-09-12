@@ -668,6 +668,32 @@ test('mount UTCDate follows the mount clock', async () => {
 	expect((await fixture.get(fixture.path + '/utcdate')).Value).toBe(new Date(utc).toISOString())
 })
 
+test('mount sidereal time and bulk horizontal coordinates refresh on demand', async () => {
+	await using fixture = await startAlpacaServer(ALPACA_MOUNT)
+	const base = fixture.path
+	const before = (await fixture.get(`${base}/siderealtime`)).Value as number
+	const now = Date.now
+	const start = now()
+
+	try {
+		Date.now = () => start + 3_600_000
+		const after = (await fixture.get(`${base}/siderealtime`)).Value as number
+		const delta = (after - before + 24) % 24
+		expect(delta).toBeCloseTo(1.0027, 2)
+
+		const altitude = (await fixture.get(`${base}/altitude`)).Value as number
+		const azimuth = (await fixture.get(`${base}/azimuth`)).Value as number
+		const state = (await fixture.get(`${base}/devicestate`)).Value as AlpacaStateItem[]
+		expect(state.find((item) => item.Name === 'Altitude')?.Value).toBeCloseTo(altitude, 10)
+		expect(state.find((item) => item.Name === 'Azimuth')?.Value).toBeCloseTo(azimuth, 10)
+		expect(state.find((item) => item.Name === 'SiderealTime')?.Value).toBeCloseTo(after, 10)
+	} finally {
+		Date.now = now
+	}
+
+	expect((await fixture.put(`${base}/slewtoaltazasync`, { Azimuth: '120', Altitude: '45' })).ErrorNumber).toBe(0)
+})
+
 test('camera exposes readout modes as indexed strings', async () => {
 	await using fixture = await startAlpacaServer(ALPACA_CAMERA)
 

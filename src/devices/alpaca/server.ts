@@ -623,9 +623,15 @@ export class AlpacaServer {
 		const time = timeNow(true)
 
 		for (const { state } of this.#equipment.telescope.values()) {
-			state.time = time
-			state.lst = localSiderealTime(time, state, false) // Apparent LST
+			this.#updateMountTime(state, time)
 		}
+	}
+
+	// Refreshes a mount's current time and apparent local sidereal time for an on-demand read or command, and returns the time used.
+	#updateMountTime(state: AlpacaDeviceState, time: Time = timeNow(true)) {
+		state.time = time
+		state.lst = localSiderealTime(time, state, false)
+		return time
 	}
 
 	// Resolves a registered device by INDI device instance or by Alpaca device number, optionally
@@ -1404,6 +1410,7 @@ export class AlpacaServer {
 
 	#mountGetAltitude(id: number) {
 		const { state, device } = this.#telescope(id)
+		this.#updateMountTime(state)
 		const [, altitude] = equatorialToHorizontal(device.equatorialCoordinate.rightAscension, device.equatorialCoordinate.declination, state.latitude, state.lst)
 		return makeAlpacaResponse(toDeg(altitude))
 	}
@@ -1426,6 +1433,7 @@ export class AlpacaServer {
 
 	#mountGetAzimuth(id: number) {
 		const { state, device } = this.#telescope(id)
+		this.#updateMountTime(state)
 		const [azimuth] = equatorialToHorizontal(device.equatorialCoordinate.rightAscension, device.equatorialCoordinate.declination, state.latitude, state.lst)
 		return makeAlpacaResponse(toDeg(azimuth))
 	}
@@ -1507,19 +1515,21 @@ export class AlpacaServer {
 	}
 
 	// Bulk DeviceState array for a mount: park/home, equatorial coordinates (RA hours, Dec degrees), pier
-	// side, slewing/tracking/guiding flags, and UTC time. Altitude/azimuth/sidereal time are placeholders.
+	// side, horizontal coordinates (degrees), sidereal time (hours), slewing/tracking/guiding flags, and UTC time.
 	#mountGetDeviceState(id: number) {
-		const { device } = this.#telescope(id)
+		const { state, device } = this.#telescope(id)
+		this.#updateMountTime(state)
+		const [azimuth, altitude] = equatorialToHorizontal(device.equatorialCoordinate.rightAscension, device.equatorialCoordinate.declination, state.latitude, state.lst)
 		const res = new Array<AlpacaStateItem>(13)
-		res[0] = { Name: 'Altitude', Value: 0 }
+		res[0] = { Name: 'Altitude', Value: toDeg(altitude) }
 		res[1] = { Name: 'AtHome', Value: false }
 		res[2] = { Name: 'AtPark', Value: device.parked }
-		res[3] = { Name: 'Azimuth', Value: 0 }
+		res[3] = { Name: 'Azimuth', Value: toDeg(azimuth) }
 		res[4] = { Name: 'Declination', Value: toDeg(device.equatorialCoordinate.declination) }
 		res[5] = { Name: 'IsPulseGuiding', Value: device.pulsing }
 		res[6] = { Name: 'RightAscension', Value: toHour(device.equatorialCoordinate.rightAscension) }
 		res[7] = { Name: 'SideOfPier', Value: mapPierSideToAlpacaEnum(device.pierSide) }
-		res[8] = { Name: 'SiderealTime', Value: 0 }
+		res[8] = { Name: 'SiderealTime', Value: toHour(state.lst) }
 		res[9] = { Name: 'Slewing', Value: device.slewing }
 		res[10] = { Name: 'Tracking', Value: device.tracking }
 		res[11] = { Name: 'UTCDate', Value: new Date(device.time.utc).toISOString() }
@@ -1583,7 +1593,9 @@ export class AlpacaServer {
 	}
 
 	#mountGetSiderealTime(id: number) {
-		return makeAlpacaResponse(toHour(this.#telescope(id).state.lst))
+		const { state } = this.#telescope(id)
+		this.#updateMountTime(state)
+		return makeAlpacaResponse(toHour(state.lst))
 	}
 
 	#mountGetSiteElevation(id: number) {
@@ -1701,6 +1713,7 @@ export class AlpacaServer {
 	// Predicts the destination pier side from Alpaca RA (hours), Dec (degrees), and local sidereal time.
 	#mountGetDestinationSideOfPier(id: number, data: { RightAscension: string; Declination: string }) {
 		const { state } = this.#telescope(id)
+		this.#updateMountTime(state)
 		const pierSide = expectedPierSide(hour(+data.RightAscension), deg(+data.Declination), state.lst)
 		return makeAlpacaResponse(mapPierSideToAlpacaEnum(pierSide))
 	}
@@ -1758,7 +1771,8 @@ export class AlpacaServer {
 	// applying refraction only when the device has it enabled.
 	#mountSlewToAltAzAsync(id: number, data: { Azimuth: string; Altitude: string }) {
 		const { state, device } = this.#telescope(id)
-		const [rightAscension, declination] = observedToCirs(deg(+data.Azimuth), deg(+data.Altitude), state.time!, state.doesRefraction ? undefined : false, state)
+		const time = this.#updateMountTime(state)
+		const [rightAscension, declination] = observedToCirs(deg(+data.Azimuth), deg(+data.Altitude), time, state.doesRefraction ? undefined : false, state)
 		this.options.mount?.goTo(device, rightAscension, declination)
 		return makeAlpacaResponse(undefined)
 	}
@@ -2200,6 +2214,7 @@ export class AlpacaServer {
 		} else if (isMount(device)) {
 			Object.assign(state, device.geographicCoordinate)
 			Object.assign(state, device.equatorialCoordinate)
+			this.#updateMountTime(state)
 		}
 
 		registeredDevice = { device, configuredDevice, state }
