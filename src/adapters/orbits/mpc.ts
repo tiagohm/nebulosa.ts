@@ -2172,7 +2172,7 @@ function parseRadarPair(first: string, second: string): MPCRadarObservation {
 
 	return {
 		...firstParsed,
-		delayError: microsecondsToSeconds(parseImplicitDecimal(second.slice(32, 47), 11)),
+		delayError: microsecondsToSeconds(parseImplicitDecimal(second.slice(33, 47), 10)),
 		dopplerError: parseImplicitDecimal(second.slice(47, 62), 11),
 		bounce,
 	}

@@ -490,6 +490,8 @@ ${mpc80('z9987K06UJ8Y  s2019 07 26.2427421 + 551363.13 -1190783.85 - 650915.72  
 		expect(observation.permanentId).toBe('433')
 		expect(observation.bounce).toBe('surface')
 		expect(observation.delay).toBeCloseTo(150.88536, 5)
+		expect(observation.delayError).toBeCloseTo(15e-6, 12)
+		expect(observation.dopplerError).toBeCloseTo(2, 12)
 		expect(() => parseMPC80(second)).toThrow()
 		expect(() => parseMPC80Lines(second)).toThrow()
 	})
