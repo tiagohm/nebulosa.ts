@@ -101,6 +101,15 @@ test('hour angle at altitude returns undefined for circumpolar and never-rising 
 	expect(hourAngleAtAltitude(-80 * DEG2RAD, 80 * DEG2RAD, 0)).toBeUndefined()
 })
 
+test('hour angle at altitude is undefined when the diurnal circle is a parallel of altitude', () => {
+	// Geographic north pole: a body's altitude equals its declination at every hour angle.
+	expect(hourAngleAtAltitude(45 * DEG2RAD, PIOVERTWO, 45 * DEG2RAD)).toBeUndefined()
+	// Celestial north pole: altitude equals the observer's latitude at every hour angle.
+	expect(hourAngleAtAltitude(PIOVERTWO, 40 * DEG2RAD, 40 * DEG2RAD)).toBeUndefined()
+	// Equator on the south-pole horizon: the body stays on the horizon and never crosses it.
+	expect(hourAngleAtAltitude(0, -PIOVERTWO, 0)).toBeUndefined()
+})
+
 test('dew point and relative humidity invert each other over the useful domain', () => {
 	for (const temperature of [-30, -5, 0, 12.5, 25, 40]) {
 		for (const humidity of [1, 17.5, 50, 82.3, 100]) {

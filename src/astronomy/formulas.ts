@@ -11,7 +11,8 @@ import type { Distance } from '../math/units/distance'
 
 // Arcseconds per radian divided by 1000: converts (pixel size in microns / focal length in mm) to arcsec/pixel.
 const ARCSECONDS_PER_PIXEL_FACTOR = ARCSEC_PER_RADIAN / 1000
-// cos(declination) below this is treated as the pole, where the max-exposure denominator becomes unstable.
+// Cosine magnitude below this is treated as a pole: max-exposure's 1/cos(δ) and the hour-angle
+// denominator cos(φ)cos(δ) are both degenerate in IEEE-754 at ±π/2 (Math.cos(π/2) is ~6e-17, not 0).
 const MAX_EXPOSURE_COSINE_EPSILON = 1e-12
 // Magnus formula coefficients for the dew-point approximation over water (dimensionless a, b in °C).
 const MAGNUS_A_WATER = 17.625
@@ -393,7 +394,7 @@ export function altitudeAtTransit(latitude: Angle, declination: Angle) {
 // poles, where the diurnal circle is a parallel of altitude and the formula is degenerate.
 export function hourAngleAtAltitude(declination: Angle, latitude: Angle, targetAltitude: Angle) {
 	const denominator = Math.cos(latitude) * Math.cos(declination)
-	if (denominator === 0) return undefined
+	if (!(Math.abs(denominator) > MAX_EXPOSURE_COSINE_EPSILON)) return undefined
 	const cosHourAngle = (Math.sin(targetAltitude) - Math.sin(latitude) * Math.sin(declination)) / denominator
 	if (cosHourAngle < -1 || cosHourAngle > 1) return undefined
 	return Math.acos(cosHourAngle)
