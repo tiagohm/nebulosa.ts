@@ -322,9 +322,11 @@ export function airmass(zenithDistance: Angle) {
 
 // Airmass Kasten-Young. Improved planning approximation near the horizon.
 // Parameters: altitude is finite and above the horizon in (0, pi/2]; constants 6.07995 and -1.6364 use altitude in degrees.
-// Returns: dimensionless airmass.
+// Returns: dimensionless airmass, at least 1. The published fit undershoots 1 near zenith
+// (~0.99971 at 90°); that artefact is clamped to the physical zenith value.
 export function airmassKastenYoung(altitude: Angle) {
-	return 1 / (Math.sin(altitude) + 0.50572 * (altitude * RAD2DEG + 6.07995) ** -1.6364)
+	const x = 1 / (Math.sin(altitude) + 0.50572 * (altitude * RAD2DEG + 6.07995) ** -1.6364)
+	return Math.max(1, x)
 }
 
 // Atmospheric Extinction. Planning formula delta_m = k * X.

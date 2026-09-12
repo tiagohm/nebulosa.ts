@@ -55,7 +55,9 @@ test('guiding, trailing, exposure, and stacking formulas return expected values'
 test('atmospheric, transit, brightness, comet, and asteroid formulas return expected values', () => {
 	expect(airmass(45 * DEG2RAD)).toBeCloseTo(1.41421356, 8)
 	expect(airmassKastenYoung(30 * DEG2RAD)).toBeCloseTo(1.99429285, 8)
+	expect(airmassKastenYoung(PIOVERTWO)).toBe(1)
 	expect(atmosphericExtinction(0.2, 1.5)).toBeCloseTo(0.3, 12)
+	expect(atmosphericExtinction(0.2, airmassKastenYoung(PIOVERTWO))).toBeCloseTo(0.2, 12)
 	expect(atmosphericRefraction(45 * DEG2RAD)).toBeCloseTo(1.01270766, 8)
 	expect(dewPoint(20, 60)).toBeCloseTo(11.99989462, 8)
 	expect(relativeHumidity(20, 11.99989462)).toBeCloseTo(60, 7)
