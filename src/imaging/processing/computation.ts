@@ -91,6 +91,16 @@ export const DEFAULT_SIGMA_CLIP_OPTIONS: Readonly<SigmaClipOptions> = {
 // Maximum supported histogram bit depth, limiting a default Int32 buffer to 64 MiB.
 const MAX_HISTOGRAM_BITS = 24
 
+// Inclusive pixel rectangle for histogram and sigma-clip sampling. Edges are clamped onto the image;
+// omitted edges cover the full width or height.
+function resolveHistogramArea(width: number, height: number, area?: Partial<Rect>) {
+	const left = Math.max(0, Math.min(area?.left ?? 0, width - 1))
+	const top = Math.max(0, Math.min(area?.top ?? 0, height - 1))
+	const right = Math.max(0, Math.min(area?.right ?? width - 1, width - 1))
+	const bottom = Math.max(0, Math.min(area?.bottom ?? height - 1, height - 1))
+	return { left, top, right, bottom }
+}
+
 // Allocates or clears a histogram bin buffer. Numeric bit depths above MAX_HISTOGRAM_BITS would allocate tens of MiB.
 function resolveHistogramBins(bits: NumberArray | number | undefined): NumberArray {
 	bits ??= DEFAULT_HISTOGRAM_OPTIONS.bits
@@ -118,10 +128,7 @@ function computeHistogram(image: Image, options: Partial<HistogramOptions>, devi
 
 	if (sigmaClip !== undefined && sigmaClip.length !== pixelCount) throw new RangeError(`sigmaClip must have length ${pixelCount}`)
 
-	const left = Math.max(0, Math.min(area?.left ?? 0, width - 1))
-	const top = Math.max(0, Math.min(area?.top ?? 0, height - 1))
-	const right = Math.max(0, Math.min(area?.right ?? width - 1, width - 1))
-	const bottom = Math.max(0, Math.min(area?.bottom ?? height - 1, height - 1))
+	const { left, top, right, bottom } = resolveHistogramArea(width, height, area)
 
 	const offset = channelIndex(channel)
 	const { red, green, blue } = grayscaleFromChannel(channel)
@@ -256,9 +263,11 @@ interface SigmaClipResult {
 }
 
 // Computes stable one-pass moments around the first accepted sample to avoid cancellation near one.
-function sigmaClipMoments(image: Image, channel: ImageChannelOrGray | undefined, transform: HistogramPixelTransform, mask: Int8Array | Uint8Array): SigmaClipMoments {
+// Samples only the requested region; pixels outside `area` are ignored.
+function sigmaClipMoments(image: Image, channel: ImageChannelOrGray | undefined, transform: HistogramPixelTransform, mask: Int8Array | Uint8Array, area?: Partial<Rect>): SigmaClipMoments {
 	const { raw, metadata } = image
-	const { channels, pixelCount } = metadata
+	const { channels, width, height, stride } = metadata
+	const { left, top, right, bottom } = resolveHistogramArea(width, height, area)
 	const { red, green, blue } = grayscaleFromChannel(channel)
 	let origin = 0
 	let sum = 0
@@ -266,34 +275,50 @@ function sigmaClipMoments(image: Image, channel: ImageChannelOrGray | undefined,
 	let count = 0
 
 	if (channels === 1) {
-		for (let i = 0; i < pixelCount; i++) {
-			if (mask[i] !== 0) continue
-			const value = transform(raw[i], i)
-			if (count === 0) origin = value
-			const d = value - origin
-			sum += d
-			sumSq += d * d
-			count++
+		for (let y = top; y <= bottom; y++) {
+			let i = y * stride + left
+			const end = y * stride + right + 1
+			let pixel = y * width + left
+			for (; i < end; i++, pixel++) {
+				if (mask[pixel] !== 0) continue
+				const value = transform(raw[i], i)
+				if (count === 0) origin = value
+				const d = value - origin
+				sum += d
+				sumSq += d * d
+				count++
+			}
 		}
 	} else if (channel === 'RED' || channel === 'GREEN' || channel === 'BLUE') {
-		for (let pixel = 0, i = channelIndex(channel); pixel < pixelCount; pixel++, i += 3) {
-			if (mask[pixel] !== 0) continue
-			const value = transform(raw[i], i)
-			if (count === 0) origin = value
-			const d = value - origin
-			sum += d
-			sumSq += d * d
-			count++
+		const offset = channelIndex(channel)
+		for (let y = top; y <= bottom; y++) {
+			let i = y * stride + left * channels + offset
+			const end = y * stride + (right + 1) * channels + offset
+			let pixel = y * width + left
+			for (; i < end; i += channels, pixel++) {
+				if (mask[pixel] !== 0) continue
+				const value = transform(raw[i], i)
+				if (count === 0) origin = value
+				const d = value - origin
+				sum += d
+				sumSq += d * d
+				count++
+			}
 		}
 	} else {
-		for (let pixel = 0, i = 0; pixel < pixelCount; pixel++, i += 3) {
-			if (mask[pixel] !== 0) continue
-			const value = transform(raw[i], i) * red + transform(raw[i + 1], i + 1) * green + transform(raw[i + 2], i + 2) * blue
-			if (count === 0) origin = value
-			const d = value - origin
-			sum += d
-			sumSq += d * d
-			count++
+		for (let y = top; y <= bottom; y++) {
+			let i = y * stride + left * channels
+			const end = y * stride + (right + 1) * channels
+			let pixel = y * width + left
+			for (; i < end; i += channels, pixel++) {
+				if (mask[pixel] !== 0) continue
+				const value = transform(raw[i], i) * red + transform(raw[i + 1], i + 1) * green + transform(raw[i + 2], i + 2) * blue
+				if (count === 0) origin = value
+				const d = value - origin
+				sum += d
+				sumSq += d * d
+				count++
+			}
 		}
 	}
 
@@ -304,37 +329,55 @@ function sigmaClipMoments(image: Image, channel: ImageChannelOrGray | undefined,
 }
 
 // Rejects samples outside the transformed clipping interval and returns the number newly rejected.
-function rejectSigmaClipSamples(image: Image, channel: ImageChannelOrGray | undefined, transform: HistogramPixelTransform, mask: Int8Array | Uint8Array, lower: number, upper: number): number {
+// Only pixels inside `area` are examined; the mask is left unchanged outside that rectangle.
+function rejectSigmaClipSamples(image: Image, channel: ImageChannelOrGray | undefined, transform: HistogramPixelTransform, mask: Int8Array | Uint8Array, lower: number, upper: number, area?: Partial<Rect>): number {
 	const { raw, metadata } = image
-	const { channels, pixelCount } = metadata
+	const { channels, width, height, stride } = metadata
+	const { left, top, right, bottom } = resolveHistogramArea(width, height, area)
 	const { red, green, blue } = grayscaleFromChannel(channel)
 	let count = 0
 
 	if (channels === 1) {
-		for (let i = 0; i < pixelCount; i++) {
-			if (mask[i] !== 0) continue
-			const value = transform(raw[i], i)
-			if (value < lower || value > upper) {
-				mask[i] = 1
-				count++
+		for (let y = top; y <= bottom; y++) {
+			let i = y * stride + left
+			const end = y * stride + right + 1
+			let pixel = y * width + left
+			for (; i < end; i++, pixel++) {
+				if (mask[pixel] !== 0) continue
+				const value = transform(raw[i], i)
+				if (value < lower || value > upper) {
+					mask[pixel] = 1
+					count++
+				}
 			}
 		}
 	} else if (channel === 'RED' || channel === 'GREEN' || channel === 'BLUE') {
-		for (let pixel = 0, i = channelIndex(channel); pixel < pixelCount; pixel++, i += 3) {
-			if (mask[pixel] !== 0) continue
-			const value = transform(raw[i], i)
-			if (value < lower || value > upper) {
-				mask[pixel] = 1
-				count++
+		const offset = channelIndex(channel)
+		for (let y = top; y <= bottom; y++) {
+			let i = y * stride + left * channels + offset
+			const end = y * stride + (right + 1) * channels + offset
+			let pixel = y * width + left
+			for (; i < end; i += channels, pixel++) {
+				if (mask[pixel] !== 0) continue
+				const value = transform(raw[i], i)
+				if (value < lower || value > upper) {
+					mask[pixel] = 1
+					count++
+				}
 			}
 		}
 	} else {
-		for (let pixel = 0, i = 0; pixel < pixelCount; pixel++, i += 3) {
-			if (mask[pixel] !== 0) continue
-			const value = transform(raw[i], i) * red + transform(raw[i + 1], i + 1) * green + transform(raw[i + 2], i + 2) * blue
-			if (value < lower || value > upper) {
-				mask[pixel] = 1
-				count++
+		for (let y = top; y <= bottom; y++) {
+			let i = y * stride + left * channels
+			const end = y * stride + (right + 1) * channels
+			let pixel = y * width + left
+			for (; i < end; i += channels, pixel++) {
+				if (mask[pixel] !== 0) continue
+				const value = transform(raw[i], i) * red + transform(raw[i + 1], i + 1) * green + transform(raw[i + 2], i + 2) * blue
+				if (value < lower || value > upper) {
+					mask[pixel] = 1
+					count++
+				}
 			}
 		}
 	}
@@ -372,7 +415,7 @@ function sigmaClipResult(image: Image, options: Partial<SigmaClipOptions> = DEFA
 		let currentHistogram: Histogram | undefined
 
 		if (useDirectMoments) {
-			const moments = sigmaClipMoments(image, channel, transform, mask)
+			const moments = sigmaClipMoments(image, channel, transform, mask, options.area)
 			center = moments.mean
 			dispersion = moments.standardDeviation
 		} else {
@@ -388,7 +431,7 @@ function sigmaClipResult(image: Image, options: Partial<SigmaClipOptions> = DEFA
 
 		const lower = center - sigmaLower * dispersion
 		const upper = center + sigmaUpper * dispersion
-		const rejected = rejectSigmaClipSamples(image, channel, transform, mask, lower, upper)
+		const rejected = rejectSigmaClipSamples(image, channel, transform, mask, lower, upper, options.area)
 		const converged = lastCenter !== undefined && lastDispersion !== undefined && Math.abs(center - lastCenter) <= tolerance * Math.max(Math.abs(center), Number.EPSILON) && Math.abs(dispersion - lastDispersion) <= tolerance * Math.max(Math.abs(dispersion), Number.EPSILON)
 
 		if (rejected === 0) {
@@ -405,6 +448,7 @@ function sigmaClipResult(image: Image, options: Partial<SigmaClipOptions> = DEFA
 
 // Iteratively rejects outlier pixels beyond [center - sigmaLower*disp, center + sigmaUpper*disp],
 // recomputing center and dispersion each pass until convergence, no new rejections, or maxIterations.
+// When `area` is set, only that rectangle is sampled and marked; pixels outside it stay unrejected.
 // Returns the rejection mask (1 = rejected); for color the whole pixel is rejected on a grayscale clip.
 export function sigmaClip(image: Image, options: Partial<SigmaClipOptions> = DEFAULT_SIGMA_CLIP_OPTIONS) {
 	return sigmaClipResult(image, options).mask

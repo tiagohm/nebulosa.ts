@@ -105,6 +105,32 @@ test('sigma clip rejects a non-finite iteration cap that would never terminate',
 	expect(() => sigmaClip(image, { maxIterations: Number.POSITIVE_INFINITY })).toThrow()
 })
 
+test('sigma clip restricts moments and rejection to the requested area', () => {
+	const values = new Float32Array(100).fill(0.1)
+	for (let i = 90; i < 100; i++) values[i] = 0.8
+	const image = makeImage(100, 1, 1, values)
+	const area = { left: 90, right: 99 }
+
+	const meanStd = sigmaClip(image, { area })
+	expect(Array.from(meanStd)).toEqual(new Array(100).fill(0))
+
+	const medianMad = sigmaClip(image, { area, centerMethod: 'median', dispersionMethod: 'mad' })
+	expect(Array.from(medianMad)).toEqual(new Array(100).fill(0))
+
+	const mixed = new Float32Array(100).fill(0.1)
+	for (let i = 90; i < 99; i++) mixed[i] = 0.2
+	mixed[99] = 0.9
+	const mixedMask = sigmaClip(makeImage(100, 1, 1, mixed), { area, sigmaLower: 1, sigmaUpper: 1, maxIterations: 1, tolerance: 0 })
+	expect(Array.from(mixedMask.slice(0, 90))).toEqual(new Array(90).fill(0))
+	expect(mixedMask[99]).toBe(1)
+
+	const rows = new Float32Array(20).fill(0.1)
+	for (let i = 10; i < 20; i++) rows[i] = 0.8
+	const bottomMask = sigmaClip(makeImage(10, 2, 1, rows), { area: { top: 1, bottom: 1, left: 0, right: 9 }, centerMethod: 'median', dispersionMethod: 'mad' })
+	expect(Array.from(bottomMask.slice(0, 10))).toEqual(new Array(10).fill(0))
+	expect(Array.from(bottomMask.slice(10))).toEqual(new Array(10).fill(0))
+})
+
 test('background estimation matches the median of the final clipped population', () => {
 	const image = makeImage(7, 1, 1, [0.1, 0.11, 0.12, 0.13, 0.14, 0.15, 1])
 	const options = { sigmaLower: 2, sigmaUpper: 2, maxIterations: 5 }
