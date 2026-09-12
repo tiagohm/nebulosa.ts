@@ -1625,6 +1625,31 @@ describe.skipIf(SKIP)('camera simulator', () => {
 		expect(Math.max(...saturated.raw)).toBeLessThanOrEqual(0.1 + 1 / 65535)
 	}, 10000)
 
+	test('converges CCD temperature to cooling and ambient targets', async () => {
+		const handler = new IndiClientHandlerSet()
+		const cameraManager = new CameraManager()
+		const thermometerManager = new ThermometerManager(cameraManager)
+		handler.add(cameraManager)
+		handler.add(thermometerManager)
+
+		using client = new ClientSimulator('camera', handler)
+		using cameraSimulator = new CameraSimulator('Camera Simulator', client)
+		const camera = cameraManager.get(client, cameraSimulator.name)!
+
+		cameraManager.connect(camera)
+		await waitUntil(() => camera.connected)
+		expect(camera.temperature).toBeCloseTo(18, 6)
+
+		cameraManager.temperature(camera, 0)
+		cameraManager.cooler(camera, true)
+		await waitUntil(() => camera.cooler)
+		await waitUntil(() => camera.temperature === 0, 10000)
+
+		cameraManager.cooler(camera, false)
+		await waitUntil(() => !camera.cooler)
+		await waitUntil(() => camera.temperature === 18, 20000)
+	}, 30000)
+
 	test('camera sends guiding pulse to mount', async () => {
 		const handler = new IndiClientHandlerSet()
 		const cameraManager = new CameraManager()
