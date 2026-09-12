@@ -521,6 +521,22 @@ ${mpc80('z9987K06UJ8Y  s2019 07 26.2427421 + 551363.13 -1190783.85 - 650915.72  
 		expect(observation.dopplerError).toBeCloseTo(2, 12)
 		expect(() => parseMPC80(second)).toThrow()
 		expect(() => parseMPC80Lines(second)).toThrow()
+
+		const omitted = { ...observation, doppler: undefined, delayError: undefined, dopplerError: undefined, bounce: undefined, transmitFrequency: undefined }
+		const written = writeMPC80(omitted).split('\n')
+		expect(written[0]?.slice(47, 62)).toBe('-              ')
+		expect(written[0]?.slice(62, 68)).toBe('      ')
+		expect(written[1]?.[32]).toBe(' ')
+		expect(written[1]?.slice(33, 47)).toBe('              ')
+		expect(written[1]?.slice(47, 62)).toBe('               ')
+		const [roundTrip] = parseMPC80Lines(written.join('\n'))
+		if (roundTrip?.type !== 'radar') throw new Error('expected radar')
+		expect(roundTrip.delay).toBeCloseTo(observation.delay ?? Number.NaN, 10)
+		expect(roundTrip.doppler).toBeUndefined()
+		expect(roundTrip.transmitFrequency).toBeUndefined()
+		expect(roundTrip.delayError).toBeUndefined()
+		expect(roundTrip.dopplerError).toBeUndefined()
+		expect(roundTrip.bounce).toBeUndefined()
 	})
 
 	test('parse then write then parse keeps RA/Dec', () => {

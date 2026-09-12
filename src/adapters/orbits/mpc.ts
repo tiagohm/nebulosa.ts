@@ -2293,15 +2293,15 @@ function writeRovingSecondLine(first: string, observer: MPCGeodeticObserver, sta
 function writeRadarPair(observation: MPCRadarObservation): readonly [string, string] {
 	const ids = formatMpc80Ids(observation)
 	const date = formatMpc80Date(observation.time)
-	const delay = formatImplicitDecimal((observation.delay ?? 0) * 1e6, 15, 4, 11)
-	const doppler = formatSignedImplicitDecimal(observation.doppler ?? 0, 15, 4, 11)
-	const freq = formatImplicitDecimal((observation.transmitFrequency ?? 0) / 1e6, 6, 1, 5)
+	const delay = observation.delay === undefined ? ' '.repeat(15) : formatImplicitDecimal(observation.delay * 1e6, 15, 4, 11)
+	const doppler = observation.doppler === undefined ? '-'.padEnd(15) : formatSignedImplicitDecimal(observation.doppler, 15, 4, 11)
+	const freq = observation.transmitFrequency === undefined ? ' '.repeat(6) : formatImplicitDecimal(observation.transmitFrequency / 1e6, 6, 1, 5)
 	const trx = (observation.transmitterStation ?? observation.station).padEnd(3).slice(0, 3)
 	const rcv = (observation.receiverStation ?? observation.station).padEnd(3).slice(0, 3)
 	const first = `${ids}  R${date}${delay}${doppler}${freq}${trx}${' '.repeat(6)}${rcv}`
-	const bounce = observation.bounce === 'com' ? 'C' : 'S'
-	const delayErr = formatImplicitDecimal((observation.delayError ?? 0) * 1e6, 14, 4, 11)
-	const dopplerErr = formatImplicitDecimal(observation.dopplerError ?? 0, 15, 4, 11)
+	const bounce = observation.bounce === undefined ? ' ' : observation.bounce === 'com' ? 'C' : 'S'
+	const delayErr = observation.delayError === undefined ? ' '.repeat(14) : formatImplicitDecimal(observation.delayError * 1e6, 14, 4, 10)
+	const dopplerErr = observation.dopplerError === undefined ? ' '.repeat(15) : formatImplicitDecimal(observation.dopplerError, 15, 4, 11)
 	const second = `${ids}  r${date}${bounce}${delayErr}${dopplerErr}${' '.repeat(6)}${trx}${' '.repeat(6)}${rcv}`
 	return [first.padEnd(80).slice(0, 80), second.padEnd(80).slice(0, 80)]
 }
