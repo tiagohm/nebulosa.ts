@@ -513,7 +513,7 @@ export class PHD2Client implements Disposable {
 	findStar(roi: Partial<Point & Size> = DEFAULT_ROI) {
 		const { x, y, width, height } = Object.assign({}, DEFAULT_ROI, roi)
 		const subframe = width && height ? [x, y, width, height] : undefined
-		return this.send<readonly [number, number]>('find_star', subframe)
+		return this.send<readonly [number, number]>('find_star', subframe ? { roi: subframe } : undefined)
 	}
 
 	startCapture(exposure: number, roi: Partial<Point & Size> = DEFAULT_ROI) {

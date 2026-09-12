@@ -1,5 +1,37 @@
-import { test } from 'bun:test'
+import { expect, test } from 'bun:test'
+import type { Socket } from 'bun'
 import { PHD2Client } from '../../../src/devices/guiding/phd2'
+
+async function withPHD2Server(onCommand: (socket: Socket<unknown>, command: Record<string, unknown>) => void, action: (client: PHD2Client) => Promise<void>) {
+	let input = ''
+	const server = Bun.listen({
+		hostname: '127.0.0.1',
+		port: 0,
+		socket: {
+			data: (socket, data) => {
+				input += data.toString()
+				let end = input.indexOf('\n')
+
+				while (end >= 0) {
+					const line = input.slice(0, end).trim()
+					input = input.slice(end + 1)
+					if (line) onCommand(socket, JSON.parse(line) as Record<string, unknown>)
+					end = input.indexOf('\n')
+				}
+			},
+		},
+	})
+
+	using client = new PHD2Client()
+
+	try {
+		expect(await client.connect('127.0.0.1', server.port)).toBeTrue()
+		await action(client)
+	} finally {
+		client.close()
+		server.stop(true)
+	}
+}
 
 test.skip('client', async () => {
 	const client = new PHD2Client({
@@ -42,3 +74,19 @@ test.skip('client', async () => {
 	console.info('GET_STAR_IMAGE:', await client.getStarImage())
 	console.info('GET_USE_SUBFRAMES:', await client.getUseSubframes())
 }, 5000)
+
+test('findStar sends a named ROI parameter', async () => {
+	let command: Record<string, unknown> | undefined
+
+	await withPHD2Server(
+		(socket, received) => {
+			command = received
+			socket.write(`${JSON.stringify({ jsonrpc: '2.0', id: received.id, result: [150, 180] })}\r\n`)
+		},
+		async (client) => {
+			expect(await client.findStar({ x: 100, y: 80, width: 200, height: 200 })).toEqual({ success: true, result: [150, 180] })
+		},
+	)
+
+	expect(command).toEqual({ method: 'find_star', params: { roi: [100, 80, 200, 200] }, id: expect.any(String) })
+})
