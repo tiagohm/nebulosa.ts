@@ -35,7 +35,7 @@ export class RotatorSimulator extends DeviceSimulator {
 		readonly options?: DeviceSimulatorOptions,
 		handler: IndiClientHandler = client.handler,
 	) {
-		super(name, client, handler, DeviceInterfaceType.ROTATOR)
+		super(name, client, handler, DeviceInterfaceType.ROTATOR, 'rotator.simulator')
 
 		for (const property of this.properties) {
 			property.device = name

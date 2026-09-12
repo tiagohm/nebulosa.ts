@@ -68,7 +68,7 @@ export class DomeSimulator extends DeviceSimulator {
 		readonly options?: DomeSimulatorOptions,
 		handler: IndiClientHandler = client.handler,
 	) {
-		super(name, client, handler, DeviceInterfaceType.DOME)
+		super(name, client, handler, DeviceInterfaceType.DOME, 'dome.simulator')
 
 		this.#mountManager = options?.mountManager
 		this.properties = [

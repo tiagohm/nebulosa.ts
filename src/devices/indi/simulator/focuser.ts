@@ -56,7 +56,7 @@ export class FocuserSimulator extends DeviceSimulator {
 		readonly options?: FocuserSimulatorOptions,
 		handler: IndiClientHandler = client.handler,
 	) {
-		super(name, client, handler, DeviceInterfaceType.FOCUSER)
+		super(name, client, handler, DeviceInterfaceType.FOCUSER, 'focuser.simulator')
 		this.#backlash.elements.BACKLASH_IN.value = options?.backlashIn ?? 0
 		this.#backlash.elements.BACKLASH_OUT.value = options?.backlashOut ?? 0
 

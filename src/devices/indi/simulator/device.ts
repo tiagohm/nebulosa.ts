@@ -35,9 +35,11 @@ export abstract class DeviceSimulator implements Disposable {
 		readonly client: ClientSimulator,
 		readonly handler: IndiClientHandler,
 		interfaceType: DeviceInterfaceType,
+		driverExecutable: string,
 	) {
 		this.driverInfo.device = name
 		this.driverInfo.elements.DRIVER_INTERFACE.value = interfaceType.toFixed(0)
+		this.driverInfo.elements.DRIVER_EXEC.value = driverExecutable
 		this.driverInfo.elements.DRIVER_NAME.value = name
 		this.connection.device = name
 		this.snoopDevices.device = name

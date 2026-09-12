@@ -28,7 +28,7 @@ export class WheelSimulator extends DeviceSimulator {
 		readonly options?: DeviceSimulatorOptions,
 		handler: IndiClientHandler = client.handler,
 	) {
-		super(name, client, handler, DeviceInterfaceType.FILTER)
+		super(name, client, handler, DeviceInterfaceType.FILTER, 'filterwheel.simulator')
 
 		for (const property of this.properties) {
 			property.device = name

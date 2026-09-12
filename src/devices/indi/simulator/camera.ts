@@ -279,7 +279,7 @@ export class CameraSimulator extends DeviceSimulator {
 		readonly options?: CameraSimulatorOptions,
 		handler: IndiClientHandler = client.handler,
 	) {
-		super(name, client, handler, DeviceInterfaceType.CCD | DeviceInterfaceType.GUIDER)
+		super(name, client, handler, DeviceInterfaceType.CCD | DeviceInterfaceType.GUIDER, 'camera.simulator')
 
 		for (const property of this.properties) {
 			property.device = name

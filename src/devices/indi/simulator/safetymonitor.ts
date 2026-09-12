@@ -30,7 +30,7 @@ export class SafetyMonitorSimulator extends DeviceSimulator {
 		readonly options?: DeviceSimulatorOptions,
 		handler: IndiClientHandler = client.handler,
 	) {
-		super(name, client, handler, DeviceInterfaceType.AUXILIARY)
+		super(name, client, handler, DeviceInterfaceType.AUXILIARY, 'safetymonitor.simulator')
 
 		for (const property of this.properties) property.device = name
 		this.driverInfo.elements.DRIVER_EXEC.value = 'safetymonitor.simulator'

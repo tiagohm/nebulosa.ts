@@ -31,6 +31,7 @@ describe('weather simulator', () => {
 		const weather = manager.get(client, simulator.name)!
 		expect(weather.type).toBe('weather')
 		expect(weather.interfaces).toEqual(['weather'])
+		expect(weather.driver.executable).toBe('weather.simulator')
 		expect(weather.connected).toBeFalse()
 
 		// Sensors only exist once WEATHER_PARAMETERS arrives, which needs a connection.

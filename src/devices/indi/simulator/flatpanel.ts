@@ -25,7 +25,7 @@ export class FlatPanelSimulator extends DeviceSimulator {
 		readonly options?: DeviceSimulatorOptions,
 		handler: IndiClientHandler = client.handler,
 	) {
-		super(name, client, handler, DeviceInterfaceType.LIGHTBOX)
+		super(name, client, handler, DeviceInterfaceType.LIGHTBOX, 'lightbox.simulator')
 
 		for (const property of this.properties) {
 			property.device = name

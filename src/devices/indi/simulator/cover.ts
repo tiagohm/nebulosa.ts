@@ -26,7 +26,7 @@ export class CoverSimulator extends DeviceSimulator {
 		readonly options?: DeviceSimulatorOptions,
 		handler: IndiClientHandler = client.handler,
 	) {
-		super(name, client, handler, DeviceInterfaceType.DUSTCAP)
+		super(name, client, handler, DeviceInterfaceType.DUSTCAP, 'dustcap.simulator')
 
 		for (const property of this.properties) {
 			property.device = name
