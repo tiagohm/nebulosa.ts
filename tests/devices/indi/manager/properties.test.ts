@@ -6,7 +6,7 @@ import { FocuserManager } from '../../../../src/devices/indi/manager/focuser'
 import { PowerManager } from '../../../../src/devices/indi/manager/power'
 import { RotatorManager } from '../../../../src/devices/indi/manager/rotator'
 import { WheelManager } from '../../../../src/devices/indi/manager/wheel'
-import { client, defSwitch, setupDevice } from './util'
+import { client, defNumber, defSwitch, setupDevice } from './util'
 
 test('device managers reset deleted device-specific properties to defaults', () => {
 	const wheelManager = new WheelManager()
@@ -97,4 +97,60 @@ test('power cycle capability follows the POWER_CYCLE vector', () => {
 	manager.delProperty(client, { device: power.name, name: 'POWER_CYCLE' })
 
 	expect(power.hasPowerCycle).toBeFalse()
+})
+
+test('dew currents do not alter auto-dew controls', () => {
+	const manager = new PowerManager()
+	const power = setupDevice<Power>(structuredClone(DEFAULT_POWER))
+	manager.add(power)
+
+	manager.switchVector(
+		client,
+		{
+			device: power.name,
+			name: 'AUTO_DEW_CONTROL',
+			permission: 'rw',
+			rule: 'AtMostOne',
+			state: 'Idle',
+			elements: { DEW_CHANNEL_1: defSwitch('DEW_CHANNEL_1', true) },
+		},
+		'defSwitchVector',
+	)
+
+	manager.numberVector(
+		client,
+		{
+			device: power.name,
+			name: 'DEW_CURRENTS',
+			permission: 'ro',
+			state: 'Ok',
+			elements: {
+				DEW_CHANNEL_1: defNumber('DEW_CHANNEL_1', 0.4),
+				DEW_CHANNEL_2: defNumber('DEW_CHANNEL_2', 0.7),
+				DEW_CHANNEL_3: defNumber('DEW_CHANNEL_3', 0.1),
+			},
+		},
+		'defNumberVector',
+	)
+
+	expect(power.autoDew).toHaveLength(1)
+	expect(power.autoDew[0]).toMatchObject({ name: 'DEW_CHANNEL_1', enabled: true, value: 0 })
+
+	manager.switchVector(
+		client,
+		{
+			device: power.name,
+			name: 'AUTO_DEW_CONTROL',
+			permission: 'rw',
+			rule: 'AtMostOne',
+			state: 'Ok',
+			elements: { DEW_CHANNEL_1: defSwitch('DEW_CHANNEL_1', false) },
+		},
+		'setSwitchVector',
+	)
+
+	manager.delProperty(client, { device: power.name, name: 'DEW_CURRENTS' })
+
+	expect(power.autoDew).toHaveLength(1)
+	expect(power.autoDew[0]).toMatchObject({ name: 'DEW_CHANNEL_1', enabled: false, value: 0 })
 })

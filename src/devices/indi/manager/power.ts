@@ -56,8 +56,8 @@ export class PowerManager extends DeviceManager<Power> {
 		}
 	}
 
-	// Applies power number vectors: aggregate voltage/current/power sensors and per-channel current/duty
-	// values for DC/dew/auto-dew/variable channels.
+	// Applies power number vectors: aggregate voltage/current/power sensors and per-channel DC current,
+	// dew duty-cycle, and variable-voltage values.
 	numberVector(client: Client, message: DefNumberVector | SetNumberVector, tag: string) {
 		const device = this.get(client, message.device)
 
@@ -85,9 +85,7 @@ export class PowerManager extends DeviceManager<Power> {
 			case 'DEW_DUTY_CYCLES':
 				handlePowerChannel(this, device, message, tag, 'dew', 'value')
 				return
-			case 'DEW_CURRENTS':
-				handlePowerChannel(this, device, message, tag, 'autoDew', 'value')
-				return
+			// DEW_CURRENTS has no corresponding model field because dew values represent duty cycle.
 			case 'VARIABLE_VOLTAGES':
 				handlePowerChannel(this, device, message, tag, 'variableVoltage', 'value')
 		}
@@ -132,7 +130,7 @@ export class PowerManager extends DeviceManager<Power> {
 		if (full || name === 'DEW_CHANNELS' || name === 'DEW_DUTY_CYCLES' || name === 'DEW_LABELS') {
 			resetDeviceValue(this, device, 'dew', DEFAULT_POWER.dew)
 		}
-		if (full || name === 'AUTO_DEW_CONTROL' || name === 'DEW_CURRENTS') {
+		if (full || name === 'AUTO_DEW_CONTROL') {
 			resetDeviceValue(this, device, 'autoDew', DEFAULT_POWER.autoDew)
 		}
 		if (full || name === 'VARIABLE_CHANNELS' || name === 'VARIABLE_VOLTAGES' || name === 'VARIABLE_LABELS') {
