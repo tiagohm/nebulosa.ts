@@ -51,19 +51,22 @@ export function vec2Clone(v: Vec2): MutVec2 {
 	return [v[0], v[1]]
 }
 
-// Computes the angle between the vectors.
+// Computes the unsigned angle between the vectors in [0, π] radians.
+// Lengths use hypot so finite non-zero inputs do not overflow or underflow the products.
 export function vec2Angle(a: Vec2, b: Vec2): Angle {
-	const ax = a[0]
-	const ay = a[1]
-	const bx = b[0]
-	const by = b[1]
+	const alen = vec2Length(a)
+	const blen = vec2Length(b)
 
-	if ((ax === 0 && ay === 0) || (bx === 0 && by === 0)) return 0
+	if (alen === 0 || blen === 0) return 0
+	if (!Number.isFinite(alen) || !Number.isFinite(blen)) return Number.NaN
 
-	const cross = ax * by - ay * bx
-	const dot = ax * bx + ay * by
+	// Kahan's formula is more accurate than acos(dot / |a||b|) near 0 and PI.
+	const ax = a[0] / alen
+	const ay = a[1] / alen
+	const bx = b[0] / blen
+	const by = b[1] / blen
 
-	return Math.atan2(Math.abs(cross), dot)
+	return 2 * Math.atan2(Math.hypot(ax - bx, ay - by), Math.hypot(ax + bx, ay + by))
 }
 
 // Creates a new zeroed vector.
