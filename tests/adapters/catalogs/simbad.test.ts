@@ -4,8 +4,6 @@ import { arcmin, deg, formatDEC, formatRA, toDeg, toMas } from '../../../src/mat
 import { toKilometerPerSecond } from '../../../src/math/units/velocity'
 import { isNetworkTestSkipped } from '../../util'
 
-const SKIP = isNetworkTestSkipped()
-
 const SIMBAD_HEADER = 'oid\totype\tra\tdec\tV\tpmra\tpmdec\tplx_value\trvz_radvel'
 
 async function withMockSimbadCatalog<T>(rows: readonly string[], callback: (catalog: SimbadCatalog, queries: string[]) => Promise<T> | T) {
@@ -97,7 +95,7 @@ test('SimbadCatalog paginates regional candidate queries', async () => {
 	})
 })
 
-test.skipIf(SKIP)('query', async () => {
+test.skipIf(isNetworkTestSkipped())('query', async () => {
 	const query = `
     SELECT b.oid, b.otype, b.ra, b.dec, b.pmra, b.pmdec, b.plx_value, b.rvz_radvel, b.rvz_redshift, b.main_id
     FROM basic AS b INNER JOIN ident AS i ON b.oid = i.oidref
@@ -117,7 +115,7 @@ test.skipIf(SKIP)('query', async () => {
 	expect(data[0]).toEqual(['3392496', 'BLL', '201.36506337683332', '-43.019112508083325', '', '', '', '562.1673793553026', '0.00187695', 'NAME Centaurus A'])
 })
 
-describe.serial.skipIf(SKIP)('simbad catalog', () => {
+describe.skipIf(isNetworkTestSkipped())('simbad catalog', () => {
 	const catalog = new SimbadCatalog()
 	const sourceId = 8399845 // Sirius
 	const centerRA = deg(101.28715533333335)

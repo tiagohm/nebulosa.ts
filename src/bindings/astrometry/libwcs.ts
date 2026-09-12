@@ -59,9 +59,10 @@ export class Wcs implements Disposable {
 	// solution only for a single two-axis equatorial WCS, with RA/Dec in either FITS axis order.
 	// Unsupported headers return false; any native candidate is freed, preserving the previous solution.
 	load(header: FitsHeader) {
-		const ctype1 = String(header.CTYPE1 ?? '').trim()
-		const ctype2 = String(header.CTYPE2 ?? '').trim()
-		const raAxis = ctype1.startsWith('RA---') && ctype2.startsWith('DEC--') ? 0 : ctype1.startsWith('DEC--') && ctype2.startsWith('RA---') ? 1 : -1
+		const CTYPE1 = String(header.CTYPE1 ?? '').trim()
+		const CTYPE2 = String(header.CTYPE2 ?? '').trim()
+
+		const raAxis = CTYPE1.startsWith('RA---') && CTYPE2.startsWith('DEC--') ? 0 : CTYPE1.startsWith('DEC--') && CTYPE2.startsWith('RA---') ? 1 : -1
 		// This API exposes RA/Dec, so other celestial frames or linear axes cannot be relabeled as sky.
 		if (raAxis < 0) return false
 

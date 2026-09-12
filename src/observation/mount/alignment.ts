@@ -2,7 +2,7 @@ import { horizontalToEnuVector } from '../../astronomy/coordinates/frame.local'
 import { matFill, matMul, matMulVec, matRodriguesRotation, matTranspose, type Mat3 } from '../../math/linear-algebra/mat3'
 import { rigidIdentity } from '../../math/linear-algebra/rigid3'
 import { type MutVec3, vecCross, vecCrossLength, vecDot, vecLength, vecNormalize, type Vec3 } from '../../math/linear-algebra/vec3'
-import { medianOf } from '../../math/numerical/statistics'
+import { medianBySelectionOf, STANDARD_DEVIATION_SCALE } from '../../math/numerical/statistics'
 import type { Angle } from '../../math/units/angle'
 import { mountDirectionFromEncoders, type MountEncoderPosition, type TwoAxisMountGeometry } from './kinematics'
 
@@ -91,9 +91,6 @@ const NORMAL_RELATIVE_EPSILON = 128 * Number.EPSILON
 
 // Maximum number of objective backtracking halvings.
 const MAX_BACKTRACKING_STEPS = 16
-
-// Normal consistency factor converting median absolute residual to Gaussian sigma.
-const ROBUST_MAD_SCALE = 0.6744897501960817
 
 // Fits one proper rotation from at least two effective direction correspondences.
 export function fitDirectionAlignment(samples: readonly Readonly<DirectionAlignmentSample>[], options: Readonly<DirectionAlignmentOptions> = {}): DirectionAlignmentResult {
@@ -376,7 +373,7 @@ function alignmentRobustScale(residuals: Readonly<Float64Array>, baseWeights: Re
 		absolute[index++] = Math.abs(residuals[i])
 	}
 
-	return medianOf(absolute.sort()) / ROBUST_MAD_SCALE
+	return medianBySelectionOf(absolute) * STANDARD_DEVIATION_SCALE
 }
 
 // Ensures robust weighting retains enough correspondences to determine a rotation.

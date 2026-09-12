@@ -97,6 +97,7 @@ export class IndiClient implements Client {
 
 		this.#connecting = true
 		this.#parser.reset()
+
 		try {
 			this.#socket = await Bun.connect({
 				...options,

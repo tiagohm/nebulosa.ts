@@ -89,6 +89,7 @@ export class WheelSimulator extends DeviceSimulator {
 
 		slot = clamp(Math.round(slot), this.#position.elements.FILTER_SLOT_VALUE.min, this.#position.elements.FILTER_SLOT_VALUE.max)
 		const current = this.#position.elements.FILTER_SLOT_VALUE.value
+
 		if (slot === current) {
 			if (this.#moveTimer) {
 				clearTimeout(this.#moveTimer)
@@ -96,6 +97,7 @@ export class WheelSimulator extends DeviceSimulator {
 				this.#position.state = 'Idle'
 				this.notify(this.#position)
 			}
+
 			return
 		}
 

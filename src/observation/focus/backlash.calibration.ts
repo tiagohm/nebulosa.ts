@@ -1,7 +1,7 @@
 import { validatePositiveFinite, validatePositiveInteger } from '../../core/validation'
 import { robustLinearLeastSquares, type RobustLinearLeastSquaresResult } from '../../math/numerical/least.squares'
 import { goldenSectionSearch } from '../../math/numerical/optimization'
-import { medianAbsoluteDeviationOf, medianBySelectionOf, medianOf, percentileOf } from '../../math/numerical/statistics'
+import { medianAbsoluteDeviationOf, medianBySelectionOf, medianOf, percentileOf, STANDARD_DEVIATION_SCALE } from '../../math/numerical/statistics'
 import type { BacklashCompensation, BacklashCompensationMode } from './backlash'
 
 // Deterministic focuser-backlash calibration from caller-supplied positions and scalar measurements.
@@ -249,9 +249,6 @@ const DEFAULT_HUBER_TUNING = 1.345
 
 // Default conservative multiplier for a shared overshoot recommendation.
 const DEFAULT_SAFETY_FACTOR = 1.5
-
-// Gaussian-consistent multiplier for a raw median absolute deviation.
-const NORMALIZED_MAD_SCALE = 1.4826
 
 // Number of equal profile-loss intervals sampled for breakpoint uncertainty.
 const UNCERTAINTY_PROFILE_INTERVALS = 32
@@ -513,7 +510,7 @@ export function aggregateBacklashRuns(runs: readonly BacklashRunResult[]): Backl
 		direction,
 		steps: Math.round(medianSteps),
 		dispersion,
-		uncertainty: Math.max(medianBySelectionOf(uncertainties), NORMALIZED_MAD_SCALE * dispersion),
+		uncertainty: Math.max(medianBySelectionOf(uncertainties), STANDARD_DEVIATION_SCALE * dispersion),
 		validRunCount: valid.length,
 		totalRunCount: runs.length,
 		runs: runs.slice(),

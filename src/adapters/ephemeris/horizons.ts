@@ -479,10 +479,11 @@ function makeParametersFromInput(parameters: HorizonsQueryParameters, input: str
 // https://ssd.jpl.nasa.gov/horizons/manual.html#time
 function makeParametersFromStartAndStopTime(parameters: HorizonsQueryParameters, startTime: Temporal | Time, endTime: Temporal | Time) {
 	const isObserver = parameters.EPHEM_TYPE === 'OBSERVER'
+	const isSPK = parameters.EPHEM_TYPE === 'SPK'
 	const timeType = isObserver ? 'UT' : 'TDB'
-	if (parameters.EPHEM_TYPE !== 'SPK') parameters.TIME_TYPE = timeType
-	parameters.START_TIME = formatHorizonsTime(startTime, timeType, parameters.EPHEM_TYPE === 'SPK')
-	parameters.STOP_TIME = formatHorizonsTime(endTime, timeType, parameters.EPHEM_TYPE === 'SPK')
+	if (!isSPK) parameters.TIME_TYPE = timeType
+	parameters.START_TIME = formatHorizonsTime(startTime, timeType, isSPK)
+	parameters.STOP_TIME = formatHorizonsTime(endTime, timeType, isSPK)
 }
 
 // Converts a project time to the scale accepted by the requested Horizons ephemeris type.
@@ -514,10 +515,7 @@ function makeParametersFromOptions(parameters: HorizonsQueryParameters, options?
 		const isElements = parameters.EPHEM_TYPE === 'ELEMENTS'
 
 		parameters.REF_SYSTEM = options.referenceSystem || DEFAULT_OVE_OPTIONS.referenceSystem
-		if (!isObserver) {
-			const defaultReferencePlane = parameters.REF_PLANE === 'ECLIPTIC' ? 'ECLIPTIC' : DEFAULT_OVE_OPTIONS.referencePlane
-			parameters.REF_PLANE = formatReferencePlane(options.referencePlane ?? defaultReferencePlane)
-		}
+		if (!isObserver) parameters.REF_PLANE = formatReferencePlane(options.referencePlane ?? (parameters.REF_PLANE === 'ECLIPTIC' ? 'ECLIPTIC' : DEFAULT_OVE_OPTIONS.referencePlane))
 		if (isObserver) parameters.CAL_FORMAT = options.calendarFormat || DEFAULT_OVE_OPTIONS.calendarFormat
 		parameters.CAL_TYPE = options.calendarType || DEFAULT_OVE_OPTIONS.calendarType
 		if (isObserver) parameters.APPARENT = (options.refractionCorrection ?? DEFAULT_OVE_OPTIONS.refractionCorrection) ? 'REFRACTED' : 'AIRLESS'

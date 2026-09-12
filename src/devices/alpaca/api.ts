@@ -345,8 +345,10 @@ export class AlpacaCameraApi extends AlpacaDeviceApi {
 			}
 
 			const text = await response.text()
+
 			if (contentType.includes('application/json') || text.trimStart().startsWith('{')) {
 				const json: unknown = JSON.parse(text)
+
 				if (typeof json !== 'object' || json === null || !('ErrorNumber' in json) || typeof json.ErrorNumber !== 'number' || !('ErrorMessage' in json) || typeof json.ErrorMessage !== 'string') {
 					return failed('GET', url, 'invalid Alpaca image response')
 				}

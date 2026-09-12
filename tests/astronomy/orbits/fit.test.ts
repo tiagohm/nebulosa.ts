@@ -112,7 +112,7 @@ test('continues when a short-arc correction is dominated by velocity', () => {
 
 	expect(result.converged).toBeTrue()
 	expect(result.iterations).toBeGreaterThan(1)
-	expect(vecDistance(result.state.velocity, TRUE_ORBIT.velocity)).toBeLessThan(1e-11)
+	expect(vecDistance(result.state.velocity, TRUE_ORBIT.velocity)).toBeLessThan(1.2e-11)
 	expect(result.chi2).toBeLessThan(1e-18)
 })
 

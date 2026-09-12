@@ -15,9 +15,6 @@ type DomeSlavingProperties = readonly [enabled: string, disabled: string]
 // Independent Busy sources contributing to a dome's aggregate rotational movement.
 type DomeMotionSource = 'motion' | 'azimuth' | 'altitude'
 
-// Tracks each dome's independent motion-source states without extending the shared model.
-const domeMotionSources = new WeakMap<Dome, Record<DomeMotionSource, boolean>>()
-
 // INDI dome manager: maps heterogeneous dome properties into the shared dome model and sends commands
 // in INDI units. Angles are converted between model radians and property degrees at this boundary.
 export class DomeManager extends DeviceManager<Dome> {
@@ -25,6 +22,8 @@ export class DomeManager extends DeviceManager<Dome> {
 	readonly #parkProperties = new WeakMap<Dome, DomeParkProperties>()
 	// Tracks the driver's actual element names for enabling and disabling slaving.
 	readonly #slavingProperties = new WeakMap<Dome, DomeSlavingProperties>()
+	// Tracks each dome's independent motion-source states without extending the shared model.
+	readonly #motionSources = new WeakMap<Dome, Record<DomeMotionSource, boolean>>()
 
 	// Slews to an absolute azimuth in radians, normalized to [0, TAU).
 	moveTo(dome: Dome, azimuth: Angle, client = dome[CLIENT]!) {
@@ -175,7 +174,7 @@ export class DomeManager extends DeviceManager<Dome> {
 					this.updated(dome, 'direction', message.state)
 				}
 
-				updateDomeMoving(this, dome, 'motion', message.state === 'Busy', message.state)
+				this.#updateDomeMoving(dome, 'motion', message.state === 'Busy', message.state)
 				updateDomeSlewing(this, dome, message.state)
 				return
 			}
@@ -292,7 +291,7 @@ export class DomeManager extends DeviceManager<Dome> {
 			case 'ABS_DOME_POSITION':
 				if (definition && handleSwitchValue(dome, 'canSetAzimuth', definition.permission !== 'ro')) this.updated(dome, 'canSetAzimuth', message.state)
 				if (handleMinMaxValue(dome.azimuth, domeAngleNumber(message.elements.DOME_ABSOLUTE_POSITION), tag)) this.updated(dome, 'azimuth', message.state)
-				updateDomeMoving(this, dome, 'azimuth', message.state === 'Busy', message.state)
+				this.#updateDomeMoving(dome, 'azimuth', message.state === 'Busy', message.state)
 				updateDomeSlewing(this, dome, message.state)
 				return
 			case 'REL_DOME_POSITION':
@@ -308,7 +307,7 @@ export class DomeManager extends DeviceManager<Dome> {
 			case 'DOME_ALTITUDE':
 				if (definition && handleSwitchValue(dome, 'canSetAltitude', definition.permission !== 'ro')) this.updated(dome, 'canSetAltitude', message.state)
 				if (handleMinMaxValue(dome.altitude, domeAngleNumber(message.elements.DOME_ALTITUDE_VALUE), tag)) this.updated(dome, 'altitude', message.state)
-				updateDomeMoving(this, dome, 'altitude', message.state === 'Busy', message.state)
+				this.#updateDomeMoving(dome, 'altitude', message.state === 'Busy', message.state)
 				updateDomeSlewing(this, dome, message.state)
 				return
 			case 'DOME_PARK_POSITION':
@@ -371,7 +370,7 @@ export class DomeManager extends DeviceManager<Dome> {
 		if (full) {
 			this.#parkProperties.delete(dome)
 			this.#slavingProperties.delete(dome)
-			domeMotionSources.delete(dome)
+			this.#motionSources.delete(dome)
 			this.clearWritableProperty(dome)
 		} else {
 			this.removeWritableProperty(dome, name)
@@ -386,13 +385,13 @@ export class DomeManager extends DeviceManager<Dome> {
 		if (full || name === 'DOME_MOTION') {
 			resetDeviceValue(this, dome, 'canMove', DEFAULT_DOME.canMove)
 			resetDeviceValue(this, dome, 'direction', DEFAULT_DOME.direction)
-			updateDomeMoving(this, dome, 'motion', false)
+			this.#updateDomeMoving(dome, 'motion', false)
 		}
 		if (full || name === 'REL_DOME_POSITION') resetDeviceValue(this, dome, 'canRelativeMove', DEFAULT_DOME.canRelativeMove)
 		if (full || name === 'ABS_DOME_POSITION') {
 			resetDeviceValue(this, dome, 'canSetAzimuth', DEFAULT_DOME.canSetAzimuth)
 			resetDeviceValue(this, dome, 'azimuth', DEFAULT_DOME.azimuth)
-			updateDomeMoving(this, dome, 'azimuth', false)
+			this.#updateDomeMoving(dome, 'azimuth', false)
 		}
 		if (full || name === 'DOME_SPEED') {
 			resetDeviceValue(this, dome, 'canSetSpeed', DEFAULT_DOME.canSetSpeed)
@@ -432,7 +431,7 @@ export class DomeManager extends DeviceManager<Dome> {
 		if (full || name === 'DOME_ALTITUDE') {
 			resetDeviceValue(this, dome, 'canSetAltitude', DEFAULT_DOME.canSetAltitude)
 			resetDeviceValue(this, dome, 'altitude', DEFAULT_DOME.altitude)
-			updateDomeMoving(this, dome, 'altitude', false)
+			this.#updateDomeMoving(dome, 'altitude', false)
 		}
 		if (full || name === 'DOME_AUTOSYNC') {
 			resetDeviceValue(this, dome, 'canSlave', DEFAULT_DOME.canSlave)
@@ -453,6 +452,21 @@ export class DomeManager extends DeviceManager<Dome> {
 
 		updateDomeSlewing(this, dome)
 		super.delProperty(client, message)
+	}
+
+	// Updates one motion source and recomputes the shared moving flag from all rotational sources.
+	#updateDomeMoving(dome: Dome, source: DomeMotionSource, moving: boolean, state?: PropertyState) {
+		let sources = this.#motionSources.get(dome)
+
+		if (sources === undefined) {
+			sources = { motion: false, azimuth: false, altitude: false }
+			this.#motionSources.set(dome, sources)
+		}
+
+		sources[source] = moving
+
+		const aggregate = sources.motion || sources.azimuth || sources.altitude
+		if (handleSwitchValue(dome, 'moving', aggregate, state)) this.updated(dome, 'moving', state)
 	}
 }
 
@@ -493,21 +507,6 @@ function domeOTASide(message: DefSwitchVector | SetSwitchVector): DomeOTASide {
 	if (selected.some((name) => name.endsWith('EAST'))) return 'EAST'
 	if (selected.some((name) => name.endsWith('WEST'))) return 'WEST'
 	return 'UNKNOWN'
-}
-
-// Updates one motion source and recomputes the shared moving flag from all rotational sources.
-function updateDomeMoving(manager: DeviceManager<Dome>, dome: Dome, source: DomeMotionSource, moving: boolean, state?: PropertyState) {
-	let sources = domeMotionSources.get(dome)
-
-	if (sources === undefined) {
-		sources = { motion: false, azimuth: false, altitude: false }
-		domeMotionSources.set(dome, sources)
-	}
-
-	sources[source] = moving
-
-	const aggregate = sources.motion || sources.azimuth || sources.altitude
-	if (handleSwitchValue(dome, 'moving', aggregate, state)) manager.updated(dome, 'moving', state)
 }
 
 // Recomputes the aggregate rotational/home/park motion flag after a related property update.

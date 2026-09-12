@@ -85,6 +85,7 @@ export class CoverSimulator extends DeviceSimulator {
 	// Stops any active cap transition.
 	stop(alert: boolean = true) {
 		const wasMoving = this.#moveTimer !== undefined
+
 		if (this.#moveTimer) {
 			clearTimeout(this.#moveTimer)
 			this.#moveTimer = undefined

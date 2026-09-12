@@ -74,6 +74,8 @@ const MATCHOBJ_WCSTAN_OFFSET = 432
 // Byte offset of the `sip_t*` pointer within the C MatchObj; read to get the SIP solution if present.
 const MATCHOBJ_SIP_OFFSET = 640
 
+const DEFAULT_LOG_ODDS_TO_KEEP = 20.723265836946411156161923092159 // Math.log(1e9)
+
 // Opens the astrometry.net shared library and declares the solver/index/starxy/WCS symbols used here.
 // Returns a fresh dlopen handle each call; prefer load() for the cached one.
 // https://github.com/tiagohm/astrometry.net. Windows is supported!
@@ -270,7 +272,7 @@ export class AstrometryNet implements Disposable {
 
 		if (options.verifyPixelSigma !== undefined) this.#lib.solver_set_verify_pix(this.#pointer!, Math.max(options.verifyPixelSigma, Number.EPSILON))
 		if (options.codeTolerance !== undefined) this.#lib.solver_set_codetol(this.#pointer!, Math.max(options.codeTolerance, Number.EPSILON))
-		this.#lib.solver_set_keep_logodds(this.#pointer!, options.logOddsToKeep ?? Math.log(1e9))
+		this.#lib.solver_set_keep_logodds(this.#pointer!, options.logOddsToKeep ?? DEFAULT_LOG_ODDS_TO_KEEP)
 		if (options.maxQuads !== undefined) this.#lib.solver_set_maxquads(this.#pointer!, Math.max(0, Math.trunc(options.maxQuads)))
 		if (options.maxMatches !== undefined) this.#lib.solver_set_maxmatches(this.#pointer!, Math.max(0, Math.trunc(options.maxMatches)))
 	}

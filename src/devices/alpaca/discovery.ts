@@ -419,6 +419,7 @@ export class AlpacaDiscoveryClient implements Disposable {
 	// Reports the discovered address (including its IPv6 zone ID), port, and fetched devices or an empty list on failure.
 	async #processDiscoveryResponse(address: string, port: number, fetch: boolean, onDiscovery: (server: AlpacaDeviceServer) => void): Promise<void> {
 		let devices: readonly AlpacaConfiguredDevice[] = []
+
 		// Removing a zone ID would lose the interface needed to route a link-local request.
 		if (fetch && !address.includes('%')) {
 			const host = address.includes(':') ? `[${address}]` : address

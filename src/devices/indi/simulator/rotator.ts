@@ -122,6 +122,7 @@ export class RotatorSimulator extends DeviceSimulator {
 		if (!this.isConnected) return
 
 		angle = wrapRotatorAngle(clamp(angle, this.#angle.elements.ANGLE.min, this.#angle.elements.ANGLE.max))
+
 		if (angle === this.angle) {
 			this.stop(false)
 			return

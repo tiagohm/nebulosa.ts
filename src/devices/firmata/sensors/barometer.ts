@@ -330,7 +330,7 @@ export class BMP280 extends PeripheralBase<BMP280> implements Barometer, Altimet
 			if (!this.#initialized) return
 
 			void this.#readMeasurement()
-			this.#timer = setInterval(() => void this.#readMeasurement(), Math.max(100, this.pollingInterval))
+			this.#timer = setInterval(this.#readMeasurement.bind(this), Math.max(100, this.pollingInterval))
 
 			return
 		}

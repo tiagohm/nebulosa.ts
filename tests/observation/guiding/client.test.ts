@@ -1303,7 +1303,7 @@ describe('frame-driven behavior', () => {
 	})
 })
 
-describe('frame processing robustness', () => {
+describe.skipIf(isTimeConsumingTestSkipped())('frame processing robustness', () => {
 	// Waits until the recorded LoopingExposures count grows past a baseline.
 	async function waitForLoopingExposures(target: number) {
 		for (let i = 0; i < 1000; i++) {

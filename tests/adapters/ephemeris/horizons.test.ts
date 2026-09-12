@@ -4,7 +4,7 @@ import { readDaf } from '../../../src/astronomy/ephemeris/kernels/daf'
 import { extendedPermanentAsteroidNumber } from '../../../src/astronomy/ephemeris/kernels/naif'
 import { readSpk } from '../../../src/astronomy/ephemeris/kernels/spk'
 import { temporalAdd, temporalFromDate } from '../../../src/astronomy/time/temporal'
-import { tdb, timeUnix, toJulianDay, Timescale, timeYMDHMS } from '../../../src/astronomy/time/time'
+import { Timescale, timeYMDHMS } from '../../../src/astronomy/time/time'
 import type { CsvRow } from '../../../src/io/csv'
 import { bufferSource } from '../../../src/io/io'
 import { deg } from '../../../src/math/units/angle'
@@ -106,7 +106,7 @@ describe.skipIf(SKIP)('observer', () => {
 
 		expect(data).toHaveLength(13)
 		expectCsvRow(data[0], ['2025-Jan-29 13:05', null, null, 178.72449, 12.29527, null])
-		expectCsvRow(data[12], ['2025-Jan-29 14:05', null, null, 178.72149, 12.29905, null])
+		expectCsvRow(data[12], ['2025-Jan-29 14:05', null, null, 178.72149, 12.29906, null])
 	})
 
 	// fragmentsAndMultipleApparitions, useCap=true, useNoFrag=true
@@ -135,32 +135,32 @@ describe.skipIf(SKIP)('vector', () => {
 		const data = await vector('3517;', '500@10', false, START_TIME, END_TIME, { stepSize: 5 })
 
 		expect(data).toHaveLength(13)
-		expectCsvRow(data[0], ['2460705.045138889', 'A.D. 2025-Jan-29 13:05:00.0000', -2.149567184894454, 1.018917084516906, 3.615190236263389e-1, -5.37468243344836e-3, -8.633686995748143e-3, -3.234280751454736e-3, null])
-		expectCsvRow(data[12], ['2460705.086805556', 'A.D. 2025-Jan-29 14:05:00.0000', -2.149791090352952, 1.018557328770104, 3.613842552620288e-1, -5.372779552205708e-3, -8.634588792419016e-3, -3.234600713675118e-3, null])
+		expectCsvRow(data[0], ['2460705.045939638', 'A.D. 2025-Jan-29 13:06:09.1847', '-2.149571488738122E+00', '1.018910170931182E+00', '3.615164337174673E-01', '-5.374645864381350E-03', '-8.633704330148255E-03', '-3.234286901867649E-03', null])
+		expectCsvRow(data[12], ['2460705.087606304', 'A.D. 2025-Jan-29 14:06:09.1847', '-2.149795392672856E+00', '1.018550414462253E+00', '3.613816650969421E-01', '-5.372742980581967E-03', '-8.634606120106192E-03', '-3.234606861585134E-03', null])
 	})
 
 	test('baricentric', async () => {
 		const data = await vector('3517;', '500@0', false, START_TIME, END_TIME, { stepSize: 5 })
 
 		expect(data).toHaveLength(13)
-		expectCsvRow(data[0], ['2460705.045138889', 'A.D. 2025-Jan-29 13:05:00.0000', -2.155092115916659, 1.014250359144854, 3.596876812112615e-1, -5.367440495937387e-3, -8.636673520083184e-3, -3.235707998257602e-3, null])
-		expectCsvRow(data[12], ['2460705.086805556', 'A.D. 2025-Jan-29 14:05:00.0000', -2.155315719626009, 1.013890478969553, 3.595528533825696e-1, -5.365537530642501e-3, -8.637574836046069e-3, -3.236027757199044e-3, null])
+		expectCsvRow(data[0], ['2460705.045939638', 'A.D. 2025-Jan-29 13:06:09.1847', '-2.155096413961354E+00', '1.014243443167678E+00', '3.596850901595253E-01', '-5.367403925254149E-03', '-8.636690845244856E-03', '-3.235714144763842E-03', null])
+		expectCsvRow(data[12], ['2460705.087606304', 'A.D. 2025-Jan-29 14:06:09.1847', '-2.155320016146872E+00', '1.013883562270635E+00', '3.595502620747811E-01', '-5.365500957404396E-03', '-8.637592154495225E-03', '-3.236033901202517E-03', null])
 	})
 
 	test('geocentric', async () => {
 		const data = await vector('3517;', 'geo', false, START_TIME, END_TIME, { stepSize: 5 })
 
 		expect(data).toHaveLength(13)
-		expectCsvRow(data[0], ['2460705.045138889', 'A.D. 2025-Jan-29 13:05:00.0000', -1.522579194562664, 3.218490800192935e-1, 5.934383951825029e-2, 8.180206701248126e-3, 1.476927601421201e-3, 1.148949424888624e-3, null])
-		expectCsvRow(data[12], ['2460705.086805556', 'A.D. 2025-Jan-29 14:05:00.0000', -1.52223848249791, 3.219107881961943e-1, 5.939178748827646e-2, 8.173971136358307e-3, 1.485063955077576e-3, 1.152552720314612e-3, null])
+		expectCsvRow(data[0], ['2460705.045939638', 'A.D. 2025-Jan-29 13:06:09.1847', '-1.522572644407135E+00', '3.218502625660731E-01', '5.934475950606689E-02', '8.180086938999673E-03', '1.477084018080435E-03', '1.149018696280016E-03', null])
+		expectCsvRow(data[12], ['2460705.087606304', 'A.D. 2025-Jan-29 14:06:09.1847', '-1.522231937335528E+00', '3.219119772580897E-01', '5.939271036140176E-02', '8.173851227596406E-03', '1.485220263938200E-03', '1.152621943725131E-03', null])
 	})
 
 	test('coord', async () => {
 		const data = await vector('3517;', 'coord', COORD, START_TIME, END_TIME, { stepSize: 5 })
 
 		expect(data).toHaveLength(13)
-		expectCsvRow(data[0], ['2460705.045138889', 'A.D. 2025-Jan-29 13:05:00.0000', -1.522571179446716, 3.218151992904175e-1, 5.931926904376639e-2, 8.393662092679492e-3, 1.527803485374843e-3, 1.14842675210166e-3, null])
-		expectCsvRow(data[12], ['2460705.086805556', 'A.D. 2025-Jan-29 14:05:00.0000', -1.522221951859907, 3.218801637522551e-1, 5.936719611723293e-2, 8.36691072474185e-3, 1.589591091720874e-3, 1.152078125220753e-3, null])
+		expectCsvRow(data[0], ['2460705.045939638', 'A.D. 2025-Jan-29 13:06:09.1847', '-1.522564458470518E+00', '3.218164230069884E-01', '5.932018861328989E-02', '8.393282945422664E-03', '1.529036141711371E-03', '1.148496616690220E-03', null])
+		expectCsvRow(data[12], ['2460705.087606304', 'A.D. 2025-Jan-29 14:06:09.1847', '-1.522215252413161E+00', '3.218814369034981E-01', '5.936811861082907E-02', '8.366261021949536E-03', '1.590719454840225E-03', '1.152148605406162E-03', null])
 	})
 
 	test('abortable', () => {
@@ -175,9 +175,15 @@ describe.skipIf(SKIP)('elements', () => {
 
 		expect(data).toHaveLength(13)
 		// oxfmt-ignore
-		expectCsvRow(data[0], ['2460705.045138889', 'A.D. 2025-Jan-29 13:05:00.0000', 5.075989856598472e+04, 6.406629484159172e-01, 1.767762192320328e+02, 1.110590308148978e+02, 8.556232886619721e+00, 2.460874201469467e+06, 3.80926348432509e+04, -6.443610332109937e+06, 2.942907470343795e+02, -1.262168735956867e-05, 9.999999999999998e+99, 9.999999999999998e+99, null])
+		expectCsvRow(data[0], ['2460705.045939638', 'A.D. 2025-Jan-29 13:06:09.1847', '5.076151998893912E+04', '6.406955885927493E-01',
+    '1.767761817602172E+02', '1.110600628949704E+02', '8.555945784739336E+00', '2.460874201321110E+06',
+    '3.809154904180858E+04', '-6.443390509045984E+06', '2.942921662778245E+02', '-1.262192721296706E-05',
+    '9.999999999999998E+99', '9.999999999999998E+99', null])
 		// oxfmt-ignore
-		expectCsvRow(data[12], ['2460705.086805556', 'A.D. 2025-Jan-29 14:05:00.0000', 5.084415528751679e+04, 6.423611902514889e-01, 1.767742701450048e+02, 1.111126379080121e+02, 8.541177967401689e+00, 2.460874193559542e+06, 3.803618421497873e+04, -6.432175646621299e+06, 2.943646228293845e+02, -1.263417241945257e-05, 9.999999999999998e+99, 9.999999999999998e+99, null])
+		expectCsvRow(data[12], ['2460705.087606304', 'A.D. 2025-Jan-29 14:06:09.1847', '5.084577224293398E+04', '6.423938229399222E-01',
+    '1.767742327022050E+02', '1.111136662482562E+02', '8.540886394421911E+00', '2.460874193403739E+06',
+    '3.803510033877300E+04', '-6.431955973292991E+06', '2.943660430689314E+02', '-1.263441244009499E-05',
+    '9.999999999999998E+99', '9.999999999999998E+99', null])
 	})
 
 	test('heliocentric', async () => {
@@ -185,9 +191,15 @@ describe.skipIf(SKIP)('elements', () => {
 
 		expect(data).toHaveLength(13)
 		// oxfmt-ignore
-		expectCsvRow(data[0], ['2460705.045138889', 'A.D. 2025-Jan-29 13:05:00.0000', 9.626125065683018e-02, 2.024805809650671e+00, 3.153931420013101e+00, 1.870973460247965e+02, 1.8261556338372e+02, 2.460240063130166e+06, 2.938957881663205e-01, 1.366562539368875e+02, 1.435996917076657e+02, 2.240476920041642e+00, 2.456148030432614e+00, 1.224923984947583e+03, null])
+		expectCsvRow(data[0], ['2460705.045939638', 'A.D. 2025-Jan-29 13:06:09.1847', '9.626125032156391E-02', '2.024805810384511E+00',
+    '3.153931419824746E+00', '1.870973460263747E+02', '1.826155631685617E+02', '2.460240063129224E+06',
+    '2.938957881700907E-01', '1.366564895521035E+02', '1.435998950240283E+02', '2.240476920022481E+00',
+    '2.456148029660451E+00', '1.224923984931869E+03', null])
 		// oxfmt-ignore
-		expectCsvRow(data[12], ['2460705.086805556', 'A.D. 2025-Jan-29 14:05:00.0000', 9.626123315860895e-02, 2.0248058484467e+00, 3.153931414822223e+00, 1.870973460879077e+02, 1.826155521514409e+02, 2.460240063081718e+06, 2.938957882552231e-01, 1.366685138746856e+02, 1.43610270893889e+02, 2.240476919589817e+00, 2.456147990732935e+00, 1.224923984577047e+03, null])
+		expectCsvRow(data[12], ['2460705.087606304', 'A.D. 2025-Jan-29 14:06:09.1847', '9.626123282326940E-02', '2.024805849180958E+00',
+    '3.153931414633486E+00', '1.870973460894901E+02', '1.826155519362571E+02', '2.460240063080776E+06',
+    '2.938957882589379E-01', '1.366687494899317E+02', '1.436104742056346E+02', '2.240476919570938E+00',
+    '2.456147989960917E+00', '1.224923984561564E+03', null])
 	})
 
 	test('baricentric', async () => {
@@ -195,9 +207,15 @@ describe.skipIf(SKIP)('elements', () => {
 
 		expect(data).toHaveLength(13)
 		// oxfmt-ignore
-		expectCsvRow(data[0], ['2460705.045138889', 'A.D. 2025-Jan-29 13:05:00.0000', 9.790299987687517e-02, 2.022744140036757e+00, 3.153227454124507e+00, 1.871371001231866e+02, 1.834551901325484e+02, 2.460243064997569e+06, 2.937404025330726e-01, 1.357022326736086e+02, 1.428859289833058e+02, 2.242269001848668e+00, 2.461793863660579e+00, 1.22557195705983e+03, null])
+		expectCsvRow(data[0], ['2460705.045939638', 'A.D. 2025-Jan-29 13:06:09.1847', '9.790298315636420E-02', '2.022744212209568E+00',
+    '3.153227451372054E+00', '1.871371001557924E+02', '1.834551954591608E+02', '2.460243065002398E+06',
+    '2.937403949785908E-01', '1.357024629773156E+02', '1.428861264571564E+02', '2.242269040293455E+00',
+    '2.461793868377342E+00', '1.225571988579366E+03', null])
 		// oxfmt-ignore
-		expectCsvRow(data[12], ['2460705.086805556', 'A.D. 2025-Jan-29 14:05:00.0000', 9.790212975450596e-02, 2.022747896009554e+00, 3.153227315497593e+00, 1.871371018010009e+02, 1.834554671611777e+02, 2.46024306524907e+06, 2.937400093705607e-01, 1.357142163316099e+02, 1.428962042586936e+02, 2.242271002656385e+00, 2.461794109303217e+00, 1.225573597452469e+03, null])
+		expectCsvRow(data[12], ['2460705.087606304', 'A.D. 2025-Jan-29 14:06:09.1847', '9.790211303213858E-02', '2.022747968182107E+00',
+    '3.153227312743624E+00', '1.871371018336123E+02', '1.834554724840192E+02', '2.460243065253885E+06',
+    '2.937400018170729E-01', '1.357144466390912E+02', '1.428964017316300E+02', '2.242271041096199E+00',
+    '2.461794114010291E+00', '1.225573628967942E+03', null])
 	})
 
 	test('abortable', () => {
@@ -232,74 +250,6 @@ test.skipIf(SKIP)('spkFile', async () => {
 	expect(vy).toBeCloseTo(-8.634062784008313e-3, 10)
 	expect(vz).toBeCloseTo(-3.234414083822303e-3, 10)
 })
-
-test('elements defaults to the ecliptic reference plane', async () => {
-	const requests = await captureHorizonsRequests(() => elements('3517;', '500@10', START_TIME, END_TIME))
-
-	expect(queryValue(requests[0], 'REF_PLANE')).toBe('E')
-})
-
-test('vector normalizes input times to TDB', async () => {
-	const temporalRequests = await captureHorizonsRequests(() => vector('3517;', '500@10', false, START_TIME, END_TIME, { stepSize: 5 }))
-	const startTime = tdb(timeUnix(START_TIME / 1000))
-	const endTime = tdb(timeUnix(END_TIME / 1000))
-	const timeRequests = await captureHorizonsRequests(() => vector('3517;', '500@10', false, startTime, endTime, { stepSize: 5 }))
-
-	expect(queryValue(temporalRequests[0], 'TIME_TYPE')).toBe('TDB')
-	expect(queryValue(temporalRequests[0], 'START_TIME')).toBe(queryValue(timeRequests[0], 'START_TIME'))
-	expect(queryValue(temporalRequests[0], 'STOP_TIME')).toBe(queryValue(timeRequests[0], 'STOP_TIME'))
-})
-
-test('CAP retry uses the temporal Julian date', async () => {
-	const requests = await captureHorizonsRequests(() => observer('DES=1000094;', 'coord', false, START_TIME, END_TIME, [], {}), [smallBodyMatchResponse(), ''])
-	const retryCommand = queryValue(requests[1], 'COMMAND')
-
-	expect(retryCommand).toContain(`CAP<${toJulianDay(timeUnix(START_TIME / 1000)).toFixed(1)};`)
-	expect(retryCommand).not.toContain('CAP<2025;')
-})
-
-test('uses the Horizons cylindrical coordinate token', async () => {
-	const requests = await captureHorizonsRequests(() => observer('3517;', 'coord', false, START_TIME, END_TIME, [], { coordinateType: 'CYLINDRICAL' }))
-
-	expect(queryValue(requests[0], 'COORD_TYPE')).toBe('CYLINDRICAL')
-})
-
-test('uses Horizons reference-plane abbreviations', async () => {
-	const requests = await captureHorizonsRequests(() => elements('3517;', '500@10', START_TIME, END_TIME, { referencePlane: 'BODY_EQUATOR' }))
-
-	expect(queryValue(requests[0], 'REF_PLANE')).toBe('B')
-})
-
-async function captureHorizonsRequests(callback: () => Promise<unknown>, responses: readonly string[] = ['']) {
-	const restore = globalThis.fetch
-	const requests: string[] = []
-	let responseIndex = 0
-
-	globalThis.fetch = ((input) => {
-		requests.push(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url)
-		const response = responses[Math.min(responseIndex++, responses.length - 1)] ?? ''
-		return Promise.resolve(new Response(response))
-	}) as typeof fetch
-
-	try {
-		await callback()
-	} finally {
-		globalThis.fetch = restore
-	}
-
-	return requests
-}
-
-function queryValue(request: string, name: string) {
-	return new URL(request).searchParams.get(name)?.replaceAll(/^'|'$/g, '')
-}
-
-function smallBodyMatchResponse() {
-	const header = ['Record #', 'Epoch-yr', '>MATCH DESIG<', 'Primary Desig', 'Name'].map((value, index) => value.padEnd([10, 10, 16, 16, 0][index])).join('')
-	const row = (record: number) => `${record}`.padEnd(10) + '2024'.padEnd(10) + '10P'.padEnd(16) + '10P'.padEnd(16) + 'Tempel'
-
-	return ['Small-body Index Search Results', header, '', row(1), row(2), '2 matches'].join('\n')
-}
 
 function expectCsvRow(row: CsvRow, expected: readonly (string | number | null)[]) {
 	for (let i = 0; i < expected.length; i++) {

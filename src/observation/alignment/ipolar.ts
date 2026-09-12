@@ -630,6 +630,7 @@ function solveByGaussNewton(reference: PlateSolution, current: PlateSolution, se
 		const deltaX = (j11 * r0x - j01 * r0y) / det
 		const deltaY = (-j10 * r0x + j00 * r0y) / det
 		lastStep = Math.hypot(deltaX, deltaY)
+
 		if (lastStep <= FIXED_POINT_STEP_TOLERANCE) {
 			if (center.residual > tolerance) return false
 			return { x, y, residual: center.residual, iterations: iteration + 1, solver: 'gauss-newton' }

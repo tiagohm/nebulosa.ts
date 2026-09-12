@@ -185,6 +185,7 @@ export class FocuserSimulator extends DeviceSimulator {
 		if (!this.isConnected) return
 
 		position = clamp(position, this.#position.elements.FOCUS_ABSOLUTE_POSITION.min, this.#position.elements.FOCUS_ABSOLUTE_POSITION.max)
+
 		if (position === this.position) {
 			this.stop(false)
 			return

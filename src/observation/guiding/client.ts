@@ -612,7 +612,7 @@ export class GuiderClient {
 		const exposure = this.getExposure()
 		const assistant = new GuidingAssistant({
 			imageScale: imageScale > 0 ? imageScale : undefined,
-			...(exposure > 0 && Number.isFinite(exposure) ? { exposure: exposure / 1000 } : {}),
+			exposure: exposure > 0 && Number.isFinite(exposure) ? exposure / 1000 : undefined,
 			multiStar: this.#guider.config.mode === 'multi-star',
 			suspectCalibration: this.#calibration === undefined,
 			decPositiveDirection: this.#calibration?.dec.direction ?? 'NORTH',
@@ -1342,10 +1342,12 @@ export class GuiderClient {
 		if (this.#settleStableSince === 0) {
 			this.#settleStableSince = timestamp
 			this.#emitSettlingEvent(distance, timestamp, true)
+
 			if (this.#settle.time <= 0) {
 				this.#settling = false
 				this.#emitSettleDoneEvent(0)
 			}
+
 			return
 		}
 

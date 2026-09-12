@@ -274,7 +274,9 @@ export class DomeSimulator extends DeviceSimulator {
 		if (!this.isConnected) return
 
 		if (this.#operation === 'park' || this.#park.state === 'Busy') this.stopMotion(false)
+
 		this.clearParkState('Ok')
+
 		if (this.#goto.elements.DOME_PARK.value) {
 			this.#goto.elements.DOME_PARK.value = false
 			this.#goto.state = 'Ok'

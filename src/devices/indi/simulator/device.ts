@@ -77,13 +77,16 @@ export abstract class DeviceSimulator implements Disposable {
 			case 'CONFIG': {
 				if (vector.elements.LOAD === true) {
 					const operation = ++this.#configOperation
+
 					this.notifyConfig('Busy')
+
 					void this.loadProperties().then(
 						() => operation === this.#configOperation && this.notifyConfig('Ok'),
 						() => operation === this.#configOperation && this.notifyConfig('Alert'),
 					)
 				} else if (vector.elements.SAVE === true) {
-					++this.#configOperation
+					this.#configOperation++
+
 					try {
 						this.saveProperties()
 						this.notifyConfig('Ok')
@@ -91,6 +94,7 @@ export abstract class DeviceSimulator implements Disposable {
 						this.notifyConfig('Alert')
 					}
 				}
+
 				break
 			}
 		}

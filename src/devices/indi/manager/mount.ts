@@ -7,7 +7,7 @@ import { TAU } from '../../../core/constants'
 import { type Angle, deg, hour, normalizeAngle, normalizePI, parseAngle, toDeg, toHour } from '../../../math/units/angle'
 import { meter, toMeter } from '../../../math/units/distance'
 import { CLIENT, type Client, DEFAULT_MOUNT, DeviceInterfaceType, type GPS, type Mount, type MountTargetCoordinate, type NameAndLabel, type TrackMode } from '../device'
-import { findOnSwitch, type DefNumberVector, type DefSwitch, type DefSwitchVector, type DefTextVector, type DelProperty, type PropertyState, type SetNumberVector, type SetSwitchVector, type SetTextVector } from '../types'
+import { findOnSwitch, type DefNumberVector, type DefSwitch, type DefSwitchVector, type DefTextVector, type DelProperty, type SetNumberVector, type SetSwitchVector, type SetTextVector } from '../types'
 import { DeviceManager, handleNumberValue, handleParkable, handleSwitchValue, handleTextValue, resetDeviceValue } from './device'
 
 // https://github.com/indilib/indi/blob/master/libs/indibase/inditelescope.cpp
@@ -34,9 +34,6 @@ type MountMotionState = {
 // other alignment element, so it must be spelled exactly like this.
 const ALIGNMENT_SUBSYSTEM_ACTIVE = 'ALIGNMENT SUBSYSTEM ACTIVE'
 
-// Tracks the latest motion and definition state of each mount's independent motion vectors.
-const mountMotionStates = new WeakMap<Mount, MountMotionState>()
-
 // Manager for mounts/telescopes. Command methods slew/sync/goto (converting target frames to the mount's
 // equatorial frame), track, park/home, move axes, and pulse-guide; property handling maps coordinate,
 // tracking, pier-side, site/time, and capability vectors onto the Mount state. Angles are radians.
@@ -48,6 +45,8 @@ export class MountManager extends DeviceManager<Mount> {
 	readonly #alignmentActiveElements = new WeakMap<Mount, string>()
 	// Tracks whether each mount advertises TRACK as a coordinate-set mode.
 	readonly #coordinateSetOptions = new WeakMap<Mount, CoordinateSetOptions>()
+	// Tracks the latest motion and definition state of each mount's independent motion vectors.
+	readonly #motionStates = new WeakMap<Mount, MountMotionState>()
 
 	tracking(mount: Mount, enable: boolean, client = mount[CLIENT]!) {
 		client.sendSwitch({ device: mount.name, name: 'TELESCOPE_TRACK_STATE', elements: { [enable ? 'TRACK_ON' : 'TRACK_OFF']: true } })
@@ -138,13 +137,13 @@ export class MountManager extends DeviceManager<Mount> {
 		const equatorial: [number, number] = [typeof x === 'string' ? parseAngle(x, type === 'JNOW' || type === 'J2000' ? true : undefined)! : x, typeof y === 'string' ? parseAngle(y)! : y]
 
 		if (type === 'J2000') {
-			Object.assign(equatorial, equatorialFromJ2000(...equatorial, time ?? timeNow(true)))
+			Object.assign(equatorial, equatorialFromJ2000(...equatorial, time))
 		} else if (type === 'ALTAZ') {
 			Object.assign(equatorial, observedToCirs(...equatorial, time ?? timeNow(true), undefined, mount.geographicCoordinate))
 		} else if (type === 'ECLIPTIC') {
-			Object.assign(equatorial, eclipticToEquatorial(...equatorial, time ?? timeNow(true)))
+			Object.assign(equatorial, eclipticToEquatorial(...equatorial, time))
 		} else if (type === 'GALACTIC') {
-			Object.assign(equatorial, equatorialFromJ2000(...galacticToEquatorial(...equatorial), time ?? timeNow(true)))
+			Object.assign(equatorial, equatorialFromJ2000(...galacticToEquatorial(...equatorial), time))
 		}
 
 		if (mode === 'goto') this.goTo(mount, ...equatorial, client)
@@ -501,7 +500,7 @@ export class MountManager extends DeviceManager<Mount> {
 				const source: MountMotionSource = message.name === 'TELESCOPE_MOTION_NS' ? 'NS' : 'WE'
 
 				if (tag[0] === 'd') {
-					const motion = getMountMotionState(device)
+					const motion = this.#getMountMotionState(device)
 					motion.defined[source] = true
 
 					if (handleSwitchValue(device, 'canMove', motion.defined.NS || motion.defined.WE)) {
@@ -509,7 +508,7 @@ export class MountManager extends DeviceManager<Mount> {
 					}
 				}
 
-				const motion = getMountMotionState(device)
+				const motion = this.#getMountMotionState(device)
 				motion.moving[source] = message.state === 'Busy' || findOnSwitch(message)[0] !== undefined
 				const moving = motion.moving.NS || motion.moving.WE
 
@@ -681,12 +680,12 @@ export class MountManager extends DeviceManager<Mount> {
 		}
 		if (full || name === 'TELESCOPE_MOTION_NS' || name === 'TELESCOPE_MOTION_WE') {
 			if (full) {
-				mountMotionStates.delete(device)
+				this.#motionStates.delete(device)
 				resetDeviceValue(this, device, 'moving', DEFAULT_MOUNT.moving)
 				resetDeviceValue(this, device, 'canMove', DEFAULT_MOUNT.canMove)
 			} else {
 				const source: MountMotionSource = name === 'TELESCOPE_MOTION_NS' ? 'NS' : 'WE'
-				const motion = getMountMotionState(device)
+				const motion = this.#getMountMotionState(device)
 				motion.defined[source] = false
 				motion.moving[source] = false
 
@@ -707,27 +706,24 @@ export class MountManager extends DeviceManager<Mount> {
 
 		super.delProperty(client, message)
 	}
+
+	// Returns the per-axis motion state for a mount, creating a zeroed state on first use.
+	#getMountMotionState(mount: Mount) {
+		let motion = this.#motionStates.get(mount)
+
+		if (motion === undefined) {
+			motion = { moving: { NS: false, WE: false }, defined: { NS: false, WE: false } }
+			this.#motionStates.set(mount, motion)
+		}
+
+		return motion
+	}
 }
 
 // Normalizes ALIGNMENT_POINTSET_SIZE into a non-negative integer count. The property is declared as a
 // float by INDI, so a driver may report a fractional or (after a failed commit) negative value.
 function alignmentPointCount(value: number) {
 	return value > 0 ? Math.trunc(value) : 0
-}
-
-// Returns the per-axis motion state for a mount, creating a zeroed state on first use.
-function getMountMotionState(mount: Mount) {
-	let motion = mountMotionStates.get(mount)
-
-	if (motion === undefined) {
-		motion = {
-			moving: { NS: false, WE: false },
-			defined: { NS: false, WE: false },
-		}
-		mountMotionStates.set(mount, motion)
-	}
-
-	return motion
 }
 
 // Parses an INDI UTC offset string ("HH" or "HH:MM") into minutes.

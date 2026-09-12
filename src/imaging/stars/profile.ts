@@ -1,6 +1,6 @@
 import type { Point } from '../../math/numerical/geometry'
 import { clamp } from '../../math/numerical/math'
-import { medianOf } from '../../math/numerical/statistics'
+import { medianBySelectionOf, medianOf, STANDARD_DEVIATION_SCALE } from '../../math/numerical/statistics'
 import type { Angle } from '../../math/units/angle'
 import type { Image, ImageChannelOrGray } from '../model/types'
 import { grayscale } from '../processing/geometry'
@@ -255,8 +255,7 @@ function estimateBackground(image: Image, x: number, y: number, radius: number, 
 
 	scratch.deviations = ensureCapacity(scratch.deviations, count)
 	for (let i = 0; i < count; i++) scratch.deviations[i] = Math.abs(ring[i] - background)
-	const deviations = scratch.deviations.subarray(0, count)
-	const deviation = 1.4826 * medianOf(deviations.sort(), count)
+	const deviation = STANDARD_DEVIATION_SCALE * medianBySelectionOf(scratch.deviations, count)
 
 	return Number.isFinite(deviation) ? { background, deviation, nonFinite } : undefined
 }
