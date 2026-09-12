@@ -66,6 +66,8 @@ interface AlpacaDeviceState extends GeographicCoordinate, EquatorialCoordinate {
 	tasks: Partial<Record<'connect' | 'position', ReturnType<typeof promiseWithTimeout>>>
 	// Camera
 	data?: readonly [Buffer, BlobEncoding]
+	// Whether an exposure request is waiting for its BLOB, including zero-duration bias frames.
+	exposureStarted: boolean
 	lastExposureDuration: number
 	ccdTemperature: number
 	frame: [number, number, number, number]
@@ -90,6 +92,7 @@ interface AlpacaRegisteredDevice<D extends Device = Device> {
 const DEFAULT_ALPACA_DEVICE_STATE: AlpacaDeviceState = {
 	tasks: {},
 	lastExposureDuration: 0,
+	exposureStarted: false,
 	ccdTemperature: 0,
 	frame: [0, 0, 0, 0],
 	position: 0,
@@ -155,7 +158,7 @@ export class AlpacaServer {
 			const { state } = this.#camera(device)
 
 			// Has the capture started?
-			if (state.lastExposureDuration) {
+			if (state.exposureStarted) {
 				// console.info('camera image received', device.name, data.length)
 				state.data = [data, encoding]
 			}
@@ -1307,13 +1310,14 @@ export class AlpacaServer {
 	}
 
 	// Starts an exposure: enables the BLOB channel, sets the frame type, records the duration, and triggers
-	// capture. Duration is seconds; non-positive durations are ignored.
+	// capture. Duration is seconds and zero is valid for bias frames.
 	#cameraStart(id: number, data: { Duration: string; Light: string }) {
 		const { device, state } = this.#camera(id)
 		const { camera } = this.options
 		const duration = +data.Duration
 
-		if (camera && duration > 0) {
+		if (camera && duration >= 0) {
+			state.exposureStarted = true
 			camera.enableBlob(device)
 			camera.frameType(device, isTrue(data.Light) ? 'LIGHT' : 'DARK')
 			state.lastExposureDuration = duration
@@ -1324,7 +1328,7 @@ export class AlpacaServer {
 	}
 
 	// Returns the last captured frame as Alpaca ImageBytes (only the binary encoding is supported; the JSON
-	// array form is rejected). Always clears the buffered image and disables the BLOB channel afterward.
+	// array form is rejected). A successful binary download consumes the buffered image and disables BLOBs.
 	#cameraGetImageArray(id: number, accept?: string | null) {
 		const { state, device } = this.#camera(id)
 

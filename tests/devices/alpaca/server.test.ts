@@ -646,3 +646,15 @@ test('camera subframe setters convert binned pixels and preserve untouched axes'
 	await fixture.put(fixture.path + '/startx', { StartX: '0' })
 	expect(frame).toHaveBeenLastCalledWith(fixture.device, 0, 24, 200, 160)
 })
+
+test('camera forwards zero-duration bias exposures', async () => {
+	await using fixture = await startAlpacaServer(ALPACA_CAMERA)
+	using enableBlob = spyOn(fixture.manager, 'enableBlob')
+	using startExposure = spyOn(fixture.manager, 'startExposure')
+
+	const response = await fixture.put(fixture.path + '/startexposure', { Duration: '0', Light: 'False' })
+
+	expect(response.ErrorNumber).toBe(0)
+	expect(enableBlob).toHaveBeenCalledWith(fixture.device)
+	expect(startExposure).toHaveBeenCalledWith(fixture.device, 0)
+})
