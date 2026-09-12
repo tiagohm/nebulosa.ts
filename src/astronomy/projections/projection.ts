@@ -690,6 +690,12 @@ function unprojectPoint(out: Point | undefined, x: number, y: number, a?: Projec
 	return fillPoint(out, (x - falseEasting) / scale, ((y - falseNorthing) / scale) * ySign)
 }
 
+// Constructor options stored on azimuthal and cylindrical projections; used as split/project
+// defaults when call-site polyline options omit central meridian, wrap, or axis.
+function optionsFromProjection(projection: Projection): ProjectionOptions | undefined {
+	return (projection as { readonly options?: ProjectionOptions }).options
+}
+
 // Decides whether the longitude jump between two consecutive points exceeds the split threshold
 // (an antimeridian crossing). Returns undefined when the inputs are invalid.
 function shouldSplitLongitude(a: Point, b: Point, options?: ProjectionPolylineOptions, defaults?: ProjectionOptions) {
@@ -748,7 +754,7 @@ export function projectPolyline(projection: Projection, points: readonly Readonl
 			const point = previousPoint === undefined || step === segmentSteps ? fillPoint(p, target.x, target.y) : densifiedPoint(previousPoint, target, step, segmentSteps, p)
 			// Compare consecutive densified spherical points so a wrap on the short path is
 			// still detected after maxSegmentRadians inserts intermediates with Δλ ≪ π.
-			const splitLongitude = previousSpherical !== undefined && shouldSplitLongitude(previousSpherical, point, options, undefined)
+			const splitLongitude = previousSpherical !== undefined && shouldSplitLongitude(previousSpherical, point, options, optionsFromProjection(projection))
 			const projected = projection.project(point.x, point.y, undefined, options)
 			const splitDiscontinuity = previousProjected !== undefined && projected !== undefined && discontinuityThreshold !== undefined && Number.isFinite(discontinuityThreshold) && discontinuityThreshold > 0 && euclideanDistance(previousProjected, projected) > discontinuityThreshold
 

@@ -518,6 +518,17 @@ test('batch projection rejects points outside the projection domain', () => {
 	expect(projected).toBeUndefined()
 })
 
+test('polyline split uses the projection instance central meridian', () => {
+	const points = [
+		{ x: deg(-10), y: 0 },
+		{ x: deg(10), y: 0 },
+	] as const
+	const projection = new PlateCarree(0, { centralMeridian: PI })
+
+	expect(projectPolyline(projection, points)).toHaveLength(2)
+	expect(projectPolyline(projection, points, { centralMeridian: PI })).toHaveLength(2)
+})
+
 test('anti-meridian polylines are split before projection', () => {
 	const projection = new PlateCarree()
 
