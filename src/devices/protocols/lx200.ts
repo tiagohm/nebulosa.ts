@@ -91,18 +91,21 @@ export class Lx200ProtocolServer {
 				},
 				open: (socket) => {
 					console.info('connection open')
+					const firstSocket = this.#sockets.length === 0
 					this.#sockets.push(socket)
 					this.options.handler.connect?.(this)
 
-					this.#coordinates[0] = this.options.handler.rightAscension(this)
-					this.#coordinates[1] = this.options.handler.declination(this)
+					if (firstSocket) {
+						this.#coordinates[0] = this.options.handler.rightAscension(this)
+						this.#coordinates[1] = this.options.handler.declination(this)
+					}
 				},
 				close: (socket) => {
 					console.warn('connection closed')
 					const index = this.#sockets.indexOf(socket)
 					if (index >= 0) this.#sockets.splice(index, 1)
 					this.#commands.delete(socket)
-					this.options.handler.disconnect?.(this)
+					if (this.#sockets.length === 0) this.options.handler.disconnect?.(this)
 				},
 				error: (_, error) => {
 					console.error('socket error:', error)

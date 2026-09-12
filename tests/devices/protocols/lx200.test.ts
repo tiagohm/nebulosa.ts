@@ -115,6 +115,64 @@ test('accepts standard colon-prefixed commands', async () => {
 	expect(slewed[0][1]).toBeCloseTo(dms(45), 12)
 })
 
+test('preserves staged target and connection state across clients', async () => {
+	const slewed: number[][] = []
+	let disconnects = 0
+	const server = new Lx200ProtocolServer({
+		handler: makeHandler({
+			goto: (server, rightAscension, declination) => {
+				slewed.push([rightAscension, declination])
+			},
+			disconnect: () => {
+				disconnects++
+			},
+		}),
+	})
+	server.start('127.0.0.1', 0)
+
+	const first = await connectClient(server.port)
+	let second: Socket | undefined
+
+	try {
+		const targetResponse = readUntil(first, (value) => value === '11')
+
+		first.write('#:Sr12:00:00##:Sd+45*00:00#', 'ascii')
+
+		expect(await targetResponse).toBe('11')
+
+		const secondSocket = await connectClient(server.port)
+		second = secondSocket
+		const secondResponse = readUntil(secondSocket, (value) => value === '00:00:00#')
+
+		secondSocket.write('#:GR#', 'ascii')
+
+		expect(await secondResponse).toBe('00:00:00#')
+
+		const slewResponse = readUntil(first, (value) => value === '0')
+
+		first.write('#:MS#', 'ascii')
+
+		expect(await slewResponse).toBe('0')
+
+		const secondClosed = new Promise<void>((resolve) => {
+			secondSocket.once('close', () => resolve())
+		})
+		secondSocket.destroy()
+		await secondClosed
+		await Bun.sleep(1)
+
+		expect(disconnects).toBe(0)
+	} finally {
+		first.destroy()
+		second?.destroy()
+		server.stop()
+	}
+
+	expect(slewed).toHaveLength(1)
+	expect(slewed[0][0]).toBeCloseTo(hms(12), 12)
+	expect(slewed[0][1]).toBeCloseTo(dms(45), 12)
+})
+
 test('keeps the previous target coordinates after invalid coordinate writes', async () => {
 	const synced: number[][] = []
 	const slewed: number[][] = []
