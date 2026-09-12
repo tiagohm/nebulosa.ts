@@ -40,6 +40,8 @@ const DEFAULT_TIMEOUT = 300000
 
 // Detects stars by running ASTAP's `-extract` and parsing its CSV (x, y, hfd, snr, flux). Returns the
 // detections sorted/truncated to `maxStars` by SNR, or an empty array on failure or missing input.
+// ASTAP writes FITS 1-based pixel coordinates (`xc+1`, `yc+1`); results use DetectedStar's 0-based
+// array indices, matching detectStars.
 export async function astapDetectStars(input: string, { minSNR = 0, maxStars = 0, outputDirectory, executable, timeout }: Readonly<AstapStarDetectionOptions> = {}, signal?: AbortSignal): Promise<DetectedStar[]> {
 	if (!input || !(await Bun.file(input).exists())) {
 		console.error('invalid input or input file does not exists')
@@ -64,8 +66,8 @@ export async function astapDetectStars(input: string, { minSNR = 0, maxStars = 0
 
 				for (let i = 0; i < csv.length; i++) {
 					const row = csv[i]
-					const x = +row[0]
-					const y = +row[1]
+					const x = +row[0] - 1
+					const y = +row[1] - 1
 					const hfd = +row[2]
 					const snr = +row[3]
 					const flux = +row[4]

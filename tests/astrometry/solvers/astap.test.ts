@@ -83,6 +83,16 @@ test('radius-only plate-solve hint does not force RA 0h Dec 0', async () => {
 	}
 })
 
+test('converts ASTAP extract pixels from FITS 1-based to DetectedStar 0-based', async () => {
+	const csv = 'x,y,hfd,snr,flux\n1.0,1.0,2.5,50,8000\n'
+	await withFakeAstapExtract(csv, async (input, executable) => {
+		const stars = await astapDetectStars(input, { executable })
+		expect(stars).toHaveLength(1)
+		expect(stars[0].x).toBe(0)
+		expect(stars[0].y).toBe(0)
+	})
+})
+
 test('keeps every ASTAP extract star after the CSV header is skipped', async () => {
 	const oneStar = 'x,y,hfd,snr,flux\n100.0,200.0,2.5,50,8000\n'
 	await withFakeAstapExtract(oneStar, async (input, executable) => {
