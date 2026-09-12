@@ -1,9 +1,9 @@
-import { expect, test } from 'bun:test'
+import { expect, spyOn, test } from 'bun:test'
 import fs from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { DEC_TAN_SIP, RA_TAN_SIP } from '../../../src/astrometry/wcs/fits.wcs'
-import { astrometryNetIndexFiles, libAstrometryNetPlateSolve } from '../../../src/bindings/astrometry/libastrometry'
+import { AstrometryNet, astrometryNetIndexFiles, libAstrometryNetPlateSolve, load } from '../../../src/bindings/astrometry/libastrometry'
 import { readImageFromJpeg } from '../../../src/imaging/model/image'
 import { detectStars } from '../../../src/imaging/stars/detector'
 import { deg, toArcsec, toDeg, toHour } from '../../../src/math/units/angle'
@@ -29,6 +29,31 @@ test('expand index directory and files', async () => {
 		expect(indexes).toEqual([explicit, index0, index1].sort())
 	} finally {
 		await fs.rm(root, { recursive: true, force: true })
+	}
+})
+
+test.skipIf(SKIP)('configure default and explicit acceptance log-odds on each solve', async () => {
+	const lib = load()
+	const keepLogOdds = spyOn(lib, 'solver_set_keep_logodds')
+	const run = spyOn(lib, 'solver_run').mockReturnValue(undefined)
+
+	try {
+		using solver = new AstrometryNet()
+		const stars = [
+			{ x: 10, y: 10, flux: 3 },
+			{ x: 20, y: 10, flux: 2 },
+			{ x: 10, y: 20, flux: 1 },
+		]
+
+		for (const logOddsToKeep of [undefined, 0, Math.log(1e12), undefined]) {
+			keepLogOdds.mockClear()
+			await solver.solve(stars, 100, 100, { indexes: 'data/index-4116.fits', logOddsToKeep })
+			expect(keepLogOdds).toHaveBeenCalledTimes(1)
+			expect(keepLogOdds.mock.calls[0][1]).toBeCloseTo(logOddsToKeep ?? 20.72326583694641, 12)
+		}
+	} finally {
+		run.mockRestore()
+		keepLogOdds.mockRestore()
 	}
 })
 
