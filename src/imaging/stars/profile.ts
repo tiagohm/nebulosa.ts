@@ -24,7 +24,7 @@ const DEFAULT_MAXIMUM_RADIUS = 32
 const DEFAULT_MAX_ITERATIONS = 2 + Math.ceil((DEFAULT_MAXIMUM_RADIUS - DEFAULT_INITIAL_RADIUS) / 2)
 // Default saturation threshold for normalized image samples.
 const DEFAULT_SATURATION_LEVEL = 1
-// Default minimum SNR required for a profile to be valid.
+// Default minimum background-limited SNR required for a profile to be valid.
 const DEFAULT_MIN_SNR = 3
 // Default distance from an image edge at which a profile is marked near-border, in pixels.
 const DEFAULT_BORDER_MARGIN = 4
@@ -51,7 +51,7 @@ export interface StarProfile extends Readonly<Point> {
 	readonly valid: boolean
 	// Integrated positive flux above the local background, in image sample units.
 	readonly flux?: number
-	// Signal-to-noise ratio estimated from flux and robust local background deviation.
+	// Background-limited SNR from flux and robust local background deviation in normalized samples.
 	readonly snr?: number
 	// Curve-of-growth half-flux diameter, in pixels, with at most one radial-bin diameter of quantization error.
 	readonly hfd?: number
@@ -135,7 +135,7 @@ interface SignalMeasurement {
 	readonly y: number
 	// Integrated positive signal flux in image sample units.
 	readonly flux: number
-	// Signal-to-noise ratio.
+	// Background-limited SNR in normalized samples: flux / (deviation * sqrt(aperture pixels)).
 	readonly snr: number
 	// Curve-of-growth HFD in pixels.
 	readonly hfd: number
@@ -359,7 +359,8 @@ function measureSignal(image: Image, x: number, y: number, radius: number, backg
 	if (!Number.isFinite(hfd)) return undefined
 
 	const shape = starMomentShape(momentXX / refinedFlux, momentXY / refinedFlux, momentYY / refinedFlux)
-	const snr = refinedFlux / Math.sqrt(Math.max(refinedFlux + refinedAperturePixels * deviation * deviation, Number.EPSILON))
+	// Samples are normalized, not electrons, so source Poisson variance is not added to the noise.
+	const snr = refinedFlux / (Math.max(deviation, Number.EPSILON) * Math.sqrt(refinedAperturePixels))
 
 	return {
 		x: centroidX,
