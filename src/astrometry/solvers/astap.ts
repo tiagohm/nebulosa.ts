@@ -96,15 +96,14 @@ export async function astapDetectStars(input: string, { minSNR = 0, maxStars = 0
 
 // Plate-solves an image with ASTAP, optionally constrained by an RA/Dec/radius hint and FOV, then
 // parses the emitted WCS .ini into a PlateSolution. Returns undefined when ASTAP fails to solve.
-// RA hint is converted to hours and declination to south-polar-distance per ASTAP's CLI.
-export async function astapPlateSolve(input: string, { fov = 0, downsample = 0, timeout = 300000, rightAscension = 0, declination = 0, radius = 0, executable, sip = true }: AstapPlateSolveOptions = {}, signal?: AbortSignal) {
+// RA/Dec are sent only when both are provided (hours and south-polar-distance). A radius without a
+// center is `-r` only, so ASTAP can use the FITS header instead of RA=0h, Dec=0°.
+export async function astapPlateSolve(input: string, { fov = 0, downsample = 0, timeout = 300000, rightAscension, declination, radius, executable, sip = true }: AstapPlateSolveOptions = {}, signal?: AbortSignal) {
 	fov = Math.max(0, Math.min(toDeg(fov), 360)) // Specify 0 for auto
 	const name = Bun.randomUUIDv7()
 	const ini = Bun.file(join(tmpdir(), `${name}.ini`))
 	const wcs = Bun.file(join(tmpdir(), `${name}.wcs`))
-	radius = Math.max(0, Math.min(Math.ceil(toDeg(radius)), 180))
-	rightAscension = toHour(normalizeAngle(rightAscension))
-	const spd = toDeg(declination) + 90
+	const searchRadius = radius ? Math.max(0, Math.min(Math.ceil(toDeg(radius)), 180)) : 180
 	executable ||= executableForCurrentPlatform()
 	timeout ||= DEFAULT_TIMEOUT
 
@@ -112,8 +111,11 @@ export async function astapPlateSolve(input: string, { fov = 0, downsample = 0, 
 
 	if (fov) commands.push('-fov', `${fov}`)
 	if (sip) commands.push('-sip')
-	if (radius) commands.push('-ra', `${rightAscension}`, '-spd', `${spd}`, '-r', `${radius}`)
-	else commands.push('-r', '180')
+	// CLI RA/Dec override the FITS header; send them only when the caller supplied a center.
+	if (rightAscension !== undefined && declination !== undefined) {
+		commands.push('-ra', `${toHour(normalizeAngle(rightAscension))}`, '-spd', `${toDeg(declination) + 90}`)
+	}
+	commands.push('-r', `${searchRadius}`)
 
 	const process = Bun.spawn(commands, { signal, timeout })
 	const exitCode = await process.exited

@@ -57,6 +57,32 @@ test.skipIf(SKIP)('plate solve', async () => {
 	// expect(solution!.CTYPE1).toBe('RA---TAN-SIP')
 })
 
+test('radius-only plate-solve hint does not force RA 0h Dec 0', async () => {
+	const calls: string[][] = []
+	const original = Bun.spawn
+	Bun.spawn = ((cmd: string[]) => {
+		calls.push([...cmd])
+		return { exited: Promise.resolve(1) }
+	}) as typeof Bun.spawn
+
+	try {
+		await astapPlateSolve('img.fit', { radius: deg(4), executable: 'astap' })
+		expect(calls).toHaveLength(1)
+		expect(calls[0]).not.toContain('-ra')
+		expect(calls[0]).not.toContain('-spd')
+		expect(calls[0][calls[0].indexOf('-r') + 1]).toBe('4')
+
+		await astapPlateSolve('img.fit', { rightAscension: hour(10.7345), declination: deg(-59.6022), radius: deg(4), executable: 'astap' })
+		expect(calls).toHaveLength(2)
+		const args = calls[1]
+		expect(+args[args.indexOf('-ra') + 1]).toBeCloseTo(10.7345, 4)
+		expect(+args[args.indexOf('-spd') + 1]).toBeCloseTo(30.3978, 4)
+		expect(args[args.indexOf('-r') + 1]).toBe('4')
+	} finally {
+		Bun.spawn = original
+	}
+})
+
 test('keeps every ASTAP extract star after the CSV header is skipped', async () => {
 	const oneStar = 'x,y,hfd,snr,flux\n100.0,200.0,2.5,50,8000\n'
 	await withFakeAstapExtract(oneStar, async (input, executable) => {
