@@ -640,6 +640,25 @@ test('an ADC peripheral delivers an initial reading from a cached value of 0 on 
 	expect(lm35.temperature).toBe(0)
 })
 
+test('pin mode updates the cached mode before analog reports', () => {
+	const transport: Transport = { write: () => {}, flush: () => {}, close: () => {} }
+	using client = new FirmataClient(transport, new ESP8266())
+	const changes: Pin[] = []
+	client.addHandler({ pinChange: (_, pin) => changes.push(pin) })
+
+	client.process(Buffer.from([0xf0, 0x79, 2, 3, 0xf7])) // firmware
+	client.process(Buffer.from([0xf0, 0x6c, 0x00, 0x00, 0x7f, 0xf7])) // pin 0 = input
+	client.process(Buffer.from([0xf0, 0x6e, 0x00, 0x00, 0x00, 0xf7])) // pin 0 input, value 0
+	client.process(Buffer.from([0xf0, 0x6a, 0x00, 0xf7])) // analog channel 0 = pin 0
+
+	client.pinMode(0, PinMode.ANALOG)
+	client.process(Buffer.from([0xe0, 0x10, 0x02]))
+
+	expect(client.pinAt(0)?.mode).toBe(PinMode.ANALOG)
+	expect(client.pinAt(0)?.value).toBe(0x10 | (0x02 << 7))
+	expect(changes).toHaveLength(1)
+})
+
 test('re-adding an already-registered listener does not re-arm its first read', () => {
 	const client = new MockFirmataClient()
 	const lm35 = new LM35(client as never, 2)

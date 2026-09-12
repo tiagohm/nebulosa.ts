@@ -972,6 +972,9 @@ export class FirmataClient implements Disposable {
 	}
 
 	pinMode(pin: number, mode: PinMode) {
+		const state = this.#pinMap.get(pin)
+		if (state) state.mode = mode
+
 		this.send(new Uint8Array([SET_PIN_MODE, pin, mode]))
 	}
 
