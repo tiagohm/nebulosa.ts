@@ -311,6 +311,7 @@ export interface AlpacaDiscoveryOptions {
 	// How long to listen for responses before auto-closing, milliseconds (0 disables the timeout).
 	timeout?: number // ms
 	// Whether to fetch each responder's configured-device list via the management API.
+	// Reports an empty list on failure; scoped IPv6 addresses skip HTTP because URL/fetch cannot represent their zone IDs.
 	fetch?: boolean
 	// If true, resolve the discovery() promise only after the listen window closes.
 	wait?: boolean
@@ -415,21 +416,23 @@ export class AlpacaDiscoveryClient implements Disposable {
 		this.close()
 	}
 
-	// Fetches the management API details for a discovered server when requested.
+	// Reports the discovered address (including its IPv6 zone ID), port, and fetched devices or an empty list on failure.
 	async #processDiscoveryResponse(address: string, port: number, fetch: boolean, onDiscovery: (server: AlpacaDeviceServer) => void): Promise<void> {
-		if (fetch) {
+		let devices: readonly AlpacaConfiguredDevice[] = []
+		// Removing a zone ID would lose the interface needed to route a link-local request.
+		if (fetch && !address.includes('%')) {
 			const host = address.includes(':') ? `[${address}]` : address
 			const url = `http://${host}:${port}`
 			const api = new AlpacaManagementApi(url)
 
 			try {
-				const devices = await api.configuredDevices()
-				if (devices.ok) onDiscovery({ address, port, devices: devices.value })
+				const result = await api.configuredDevices()
+				if (result.ok) devices = result.value
 			} catch (e) {
 				console.error('failed to fetch configured devices at', url, e)
 			}
-		} else {
-			onDiscovery({ address, port, devices: [] })
 		}
+
+		onDiscovery({ address, port, devices })
 	}
 }

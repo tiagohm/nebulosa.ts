@@ -1,6 +1,59 @@
-import { expect, test } from 'bun:test'
+import { expect, spyOn, test } from 'bun:test'
 import { createSocket, type Socket } from 'node:dgram'
-import { ALPACA_DISCOVERY_DATA, AlpacaDiscoveryServer } from '../../../src/devices/alpaca/discovery'
+import * as os from 'node:os'
+import { ALPACA_DISCOVERY_DATA, type AlpacaDeviceServer, AlpacaDiscoveryClient, AlpacaDiscoveryServer } from '../../../src/devices/alpaca/discovery'
+
+// Injects the remote address at the UDP boundary so scoped IPv6 cases need no physical interface.
+async function discoverResponse(address: string, port: number): Promise<AlpacaDeviceServer[]> {
+	using client = new AlpacaDiscoveryClient()
+	const bunUdp: { udpSocket: (options: Bun.udp.SocketOptions<'buffer'>) => Promise<Bun.udp.Socket<'buffer'>> } = Bun
+	const udpSocket = spyOn(bunUdp, 'udpSocket')
+	const interfaces = spyOn(os, 'networkInterfaces').mockReturnValue({})
+	const discovered: AlpacaDeviceServer[] = []
+	const received = Promise.withResolvers<void>()
+	const timer = setTimeout(received.resolve, 500)
+
+	try {
+		await client.discovery(
+			(server) => {
+				discovered.push(server)
+				received.resolve()
+			},
+			{ family: address.includes(':') ? 'IPv6' : 'IPv4', timeout: 0 },
+		)
+		const options = udpSocket.mock.calls[0][0]
+		const result = udpSocket.mock.results[0]
+		if (result.type !== 'return') throw new Error('UDP socket creation failed')
+		const socket = await result.value
+		udpSocket.mockRestore()
+		await options.socket?.data?.(socket, Buffer.from(JSON.stringify({ AlpacaPort: port })), 32227, address, { truncated: false, ipv6: address.includes(':') })
+		await received.promise
+		return discovered
+	} finally {
+		clearTimeout(timer)
+		interfaces.mockRestore()
+		udpSocket.mockRestore()
+	}
+}
+
+test.serial.each(['fe80::1%wlp6s0', 'fe80::1%3'])('AlpacaDiscoveryClient reports scoped IPv6 responder %s with the default fetch option', async (address: string) => {
+	expect(await discoverResponse(address, 11111)).toEqual([{ address, port: 11111, devices: [] }])
+})
+
+test.serial.each([200, 503])('AlpacaDiscoveryClient preserves UDP discovery when management responds with HTTP %i', async (status: number) => {
+	const devices = [{ DeviceName: 'Camera', DeviceType: 'Camera', DeviceNumber: 0, UniqueID: 'discovery-test' }]
+	const server = Bun.serve({
+		hostname: '127.0.0.1',
+		port: 0,
+		fetch: () => Response.json({ ErrorNumber: 0, Value: devices }, { status }),
+	})
+
+	try {
+		expect(await discoverResponse('127.0.0.1', server.port!)).toEqual([{ address: '127.0.0.1', port: server.port!, devices: status === 200 ? [{ ...devices[0], DeviceType: 'camera' as const }] : [] }])
+	} finally {
+		await server.stop(true)
+	}
+})
 
 // Binds a localhost UDP client socket for deterministic unicast tests.
 function bindUdpClient(hostname: string): Promise<Socket> {
