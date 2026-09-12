@@ -815,7 +815,7 @@ export class FirmataClient implements Disposable {
 		analogMessage: (client: FirmataClient, port: number, value: number) => {
 			const pin = this.#pinMap.get(this.#analogPins[port])
 
-			if (pin?.mode === PinMode.ANALOG && pin.value !== value) {
+			if (pin?.mode === PinMode.ANALOG) {
 				pin.value = value
 				this.#fsm.pinChange(pin)
 			}
