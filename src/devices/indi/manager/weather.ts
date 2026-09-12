@@ -10,6 +10,7 @@ import { DeviceManager, handleMinMaxValue, handleSwitchValue, resetDeviceValue }
 // Alpaca client emits inside WEATHER_PARAMETERS; `aliases` are extra element names accepted when reading,
 // because the INDI Weather interface does not standardize parameter names - every driver declares its own
 // through addParameter(). `degrees` marks a value that arrives in degrees and is stored as radians.
+// WEATHER_CLOUD is additionally disambiguated from a sky-temperature label when a driver defines it.
 export interface WeatherSensorMapping {
 	readonly field: WeatherSensor
 	readonly ascom: string
@@ -27,14 +28,15 @@ export interface WeatherSensorMapping {
 
 // The thirteen ObservingConditions sensors, shared by WeatherManager, the Alpaca client and the Alpaca
 // server so the three name mappings cannot drift apart. Aliases cover the widespread drivers
-// (OpenWeatherMap, weatherradio, AAG CloudWatcher, Weather Meta). WEATHER_RAIN_HOUR is precipitation over
-// the last hour, which is numerically mm/h and is therefore published as RainRate.
+// (OpenWeatherMap, weatherradio and Weather Meta). WEATHER_RAIN_HOUR is precipitation over the last hour,
+// which is numerically mm/h and is therefore published as RainRate. WEATHER_CLOUD remains an alias for
+// percentage-based drivers; a definition label identifying sky temperature is mapped to SkyTemperature.
 export const WEATHER_SENSORS: readonly WeatherSensorMapping[] = [
 	{ field: 'cloudCover', ascom: 'CloudCover', indi: 'WEATHER_CLOUD_COVER', aliases: ['WEATHER_CLOUD'], degrees: false, min: 0, max: 100, step: 0.1, format: '%.1f' },
 	{ field: 'dewPoint', ascom: 'DewPoint', indi: 'WEATHER_DEW_POINT', aliases: ['WEATHER_DEWPOINT'], degrees: false, min: -100, max: 100, step: 0.1, format: '%.1f' },
 	{ field: 'humidity', ascom: 'Humidity', indi: 'WEATHER_HUMIDITY', aliases: ['WEATHER_RELATIVE_HUMIDITY'], degrees: false, min: 0, max: 100, step: 0.1, format: '%.1f' },
 	{ field: 'pressure', ascom: 'Pressure', indi: 'WEATHER_PRESSURE', aliases: ['WEATHER_BAROMETER'], degrees: false, min: 0, max: 2000, step: 0.1, format: '%.1f' },
-	{ field: 'rainRate', ascom: 'RainRate', indi: 'WEATHER_RAIN_HOUR', aliases: ['WEATHER_RAIN_RATE', 'WEATHER_RAIN'], degrees: false, min: 0, max: 1000, step: 0.1, format: '%.1f' },
+	{ field: 'rainRate', ascom: 'RainRate', indi: 'WEATHER_RAIN_HOUR', aliases: ['WEATHER_RAIN_RATE'], degrees: false, min: 0, max: 1000, step: 0.1, format: '%.1f' },
 	{ field: 'skyBrightness', ascom: 'SkyBrightness', indi: 'WEATHER_SKY_BRIGHTNESS', aliases: ['WEATHER_BRIGHTNESS'], degrees: false, min: 0, max: 200000, step: 0.001, format: '%.3f' },
 	{ field: 'skyQuality', ascom: 'SkyQuality', indi: 'WEATHER_SKY_QUALITY', aliases: ['WEATHER_SQM'], degrees: false, min: 0, max: 30, step: 0.01, format: '%.2f' },
 	{ field: 'skyTemperature', ascom: 'SkyTemperature', indi: 'WEATHER_SKY_TEMPERATURE', aliases: ['WEATHER_IR_SKY_TEMPERATURE'], degrees: false, min: -300, max: 100, step: 0.1, format: '%.1f' },
@@ -79,6 +81,9 @@ interface WeatherUpdatedAt {
 export class WeatherManager extends DeviceManager<Weather> {
 	// Per-device freshness stamps. A WeakMap keeps them out of the device object, which is serialized.
 	readonly #updatedAt = new WeakMap<Weather, WeatherUpdatedAt>()
+	// Per-device mappings learned from definitions, so an ambiguous element name keeps its unit-specific
+	// interpretation when later set vectors omit labels.
+	readonly #elementMappings = new WeakMap<Weather, Map<string, WeatherSensorMapping>>()
 
 	// Epoch milliseconds of the last report of `sensor`, or undefined when it was never reported. A
 	// repeated identical reading still advances this, unlike the `updated` event. Use elapsedSince for a
@@ -208,6 +213,23 @@ export class WeatherManager extends DeviceManager<Weather> {
 		}
 	}
 
+	// Resolves an element name to its typed sensor, using a definition label to disambiguate WEATHER_CLOUD
+	// when a driver publishes corrected infrared sky temperature in degrees Celsius. `mappings` preserves
+	// that decision for subsequent set vectors, whose elements carry no label.
+	#mappingForElement(key: string, element: DefNumber | OneNumber | undefined, mappings: Map<string, WeatherSensorMapping> | undefined) {
+		const known = mappings?.get(key)
+		if (known !== undefined) return known
+
+		const mapping = WEATHER_SENSORS_BY_INDI_NAME.get(key)
+		if (mapping === undefined) return undefined
+
+		if (key === 'WEATHER_CLOUD' && element !== undefined && 'label' in element && element.label !== undefined && /temperature|°c/i.test(element.label)) {
+			return WEATHER_SENSORS_BY_INDI_NAME.get('WEATHER_SKY_TEMPERATURE')
+		}
+
+		return mapping
+	}
+
 	// Applies every mapped element of a WEATHER_PARAMETERS vector. Unmapped elements stay reachable
 	// through the raw property view but never reach the typed interface.
 	//
@@ -218,6 +240,7 @@ export class WeatherManager extends DeviceManager<Weather> {
 	// produced, so a Busy definition declares the property and nothing else.
 	#handleParameters(device: Weather, message: DefNumberVector | SetNumberVector, definition: boolean) {
 		const { elements } = message
+		let mappings = this.#elementMappings.get(device)
 
 		// A definition replaces the whole element set, as the raw property manager does with the vector
 		// itself, so a sensor the driver no longer declares has to leave the typed view as well. Without
@@ -225,11 +248,16 @@ export class WeatherManager extends DeviceManager<Weather> {
 		// current definition does not provide. A set vector is a partial update and never removes
 		// anything: drivers legitimately report a subset of their parameters.
 		if (definition) {
+			mappings = new Map()
+			this.#elementMappings.set(device, mappings)
 			const declared = new Set<WeatherSensor>()
 
 			for (const key in elements) {
-				const mapping = WEATHER_SENSORS_BY_INDI_NAME.get(key)
-				if (mapping !== undefined) declared.add(mapping.field)
+				const mapping = this.#mappingForElement(key, elements[key], mappings)
+				if (mapping !== undefined) {
+					mappings.set(key, mapping)
+					declared.add(mapping.field)
+				}
 			}
 
 			for (const sensor of WEATHER_SENSORS) {
@@ -253,7 +281,7 @@ export class WeatherManager extends DeviceManager<Weather> {
 		const elapsed = performance.now()
 
 		for (const key in elements) {
-			const mapping = WEATHER_SENSORS_BY_INDI_NAME.get(key)
+			const mapping = this.#mappingForElement(key, elements[key], mappings)
 			if (mapping !== undefined) this.#handleSensor(device, mapping, elements[key], message.state, stamps, now, elapsed)
 		}
 	}
@@ -350,6 +378,7 @@ export class WeatherManager extends DeviceManager<Weather> {
 		else this.removeWritableProperty(device, name)
 
 		if (full || name === 'WEATHER_PARAMETERS') {
+			this.#elementMappings.delete(device)
 			for (const sensor of WEATHER_SENSORS) this.#resetSensor(device, sensor.field)
 		}
 
