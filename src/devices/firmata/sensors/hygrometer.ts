@@ -148,7 +148,7 @@ export class SHT21 extends PeripheralBase<SHT21> implements Hygrometer, Thermome
 	// Decodes temperature (-46.85 + 175.72·S/2^16 °C) and humidity (-6 + 125·S/2^16 %) register replies,
 	// masking the status bits, and commits once both have been applied.
 	twoWireMessage(client: FirmataClient, address: number, register: number, data: Buffer) {
-		if (address !== SHT21.ADDRESS || data.byteLength < 1) return
+		if (client !== this.client || address !== SHT21.ADDRESS || data.byteLength < 2) return
 
 		if (register === SHT21.#READ_TEMP_HOLD_CMD) {
 			const raw = data.readUInt16BE(0) & 0xfffc

@@ -739,6 +739,22 @@ test('SHT21 clamps relative humidity to the Hygrometer domain', () => {
 	expect(sht21.humidity).toBe(0)
 })
 
+test('SHT21 ignores incomplete and unrelated I2C replies', () => {
+	const client = new MockFirmataClient()
+	const otherClient = new MockFirmataClient()
+	const sht21 = new SHT21(client as never, 1000)
+
+	for (const data of [Buffer.alloc(0), Buffer.from([0x68])]) {
+		sht21.twoWireMessage(client as never, SHT21.ADDRESS, 0xe3, data)
+		sht21.twoWireMessage(client as never, SHT21.ADDRESS, 0xe5, data)
+	}
+	sht21.twoWireMessage(otherClient as never, SHT21.ADDRESS, 0xe3, Buffer.from([0x68, 0xac]))
+
+	expect(sht21.temperature).toBe(0)
+	expect(sht21.humidity).toBe(0)
+	expect(sht21.samples).toBe(0)
+})
+
 test('LM35 converts ADC counts to temperature', () => {
 	const lm35 = new LM35(undefined as never, 0)
 	expect(lm35.calculate(51.15)).toBeTrue()
