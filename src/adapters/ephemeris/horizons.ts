@@ -1,4 +1,4 @@
-import { formatTemporal, temporalGet, type Temporal } from '../../astronomy/time/temporal'
+import { formatTemporal, type Temporal } from '../../astronomy/time/temporal'
 import { tdb, timeUnix, toJulianDay, utc, type Time } from '../../astronomy/time/time'
 import { type ReadCsvOptions, readCsv } from '../../io/csv'
 import { type Angle, toDeg } from '../../math/units/angle'
@@ -409,7 +409,7 @@ async function makeRequestAndGetResponseWithRetry(input: string | ObserverWithOs
 		if (retryPlan !== undefined) {
 			if (retryPlan.useNoFrag && !input.includes(';NOFRAG')) input += 'NOFRAG;'
 			if (retryPlan.useCap && !input.includes(';CAP')) {
-				if (typeof time === 'number') input += `CAP<${temporalGet(time, 'y')};`
+				if (typeof time === 'number') input += `CAP<${toJulianDay(timeUnix(time / 1000)).toFixed(1)};`
 				else input += `CAP<${toJulianDay(time).toFixed(1)};`
 			}
 			makeParametersFromInput(parameters, input)

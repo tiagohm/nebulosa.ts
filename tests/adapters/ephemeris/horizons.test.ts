@@ -4,7 +4,7 @@ import { readDaf } from '../../../src/astronomy/ephemeris/kernels/daf'
 import { extendedPermanentAsteroidNumber } from '../../../src/astronomy/ephemeris/kernels/naif'
 import { readSpk } from '../../../src/astronomy/ephemeris/kernels/spk'
 import { temporalAdd, temporalFromDate } from '../../../src/astronomy/time/temporal'
-import { tdb, timeUnix, Timescale, timeYMDHMS } from '../../../src/astronomy/time/time'
+import { tdb, timeUnix, toJulianDay, Timescale, timeYMDHMS } from '../../../src/astronomy/time/time'
 import type { CsvRow } from '../../../src/io/csv'
 import { bufferSource } from '../../../src/io/io'
 import { deg } from '../../../src/math/units/angle'
@@ -250,6 +250,14 @@ test('vector normalizes input times to TDB', async () => {
 	expect(queryValue(temporalRequests[0], 'STOP_TIME')).toBe(queryValue(timeRequests[0], 'STOP_TIME'))
 })
 
+test('CAP retry uses the temporal Julian date', async () => {
+	const requests = await captureHorizonsRequests(() => observer('DES=1000094;', 'coord', false, START_TIME, END_TIME, [], {}), [smallBodyMatchResponse(), ''])
+	const retryCommand = queryValue(requests[1], 'COMMAND')
+
+	expect(retryCommand).toContain(`CAP<${toJulianDay(timeUnix(START_TIME / 1000)).toFixed(1)};`)
+	expect(retryCommand).not.toContain('CAP<2025;')
+})
+
 async function captureHorizonsRequests(callback: () => Promise<unknown>, responses: readonly string[] = ['']) {
 	const restore = globalThis.fetch
 	const requests: string[] = []
@@ -272,6 +280,13 @@ async function captureHorizonsRequests(callback: () => Promise<unknown>, respons
 
 function queryValue(request: string, name: string) {
 	return new URL(request).searchParams.get(name)?.replaceAll(/^'|'$/g, '')
+}
+
+function smallBodyMatchResponse() {
+	const header = ['Record #', 'Epoch-yr', '>MATCH DESIG<', 'Primary Desig', 'Name'].map((value, index) => value.padEnd([10, 10, 16, 16, 0][index])).join('')
+	const row = (record: number) => `${record}`.padEnd(10) + '2024'.padEnd(10) + '10P'.padEnd(16) + '10P'.padEnd(16) + 'Tempel'
+
+	return ['Small-body Index Search Results', header, '', row(1), row(2), '2 matches'].join('\n')
 }
 
 function expectCsvRow(row: CsvRow, expected: readonly (string | number | null)[]) {
