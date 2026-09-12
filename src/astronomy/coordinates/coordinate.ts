@@ -169,29 +169,33 @@ export function equatorialToGalatic(rightAscension: Angle, declination: Angle): 
 	return eraC2s(...matMulVec(GALACTIC_MATRIX, eraS2c(rightAscension, declination)))
 }
 
-// Computes the current equatorial coordinates of the local zenith.
+// Computes the current (true-of-date) equatorial coordinates of the local zenith.
+// Right ascension is local apparent sidereal time; declination is the observer's latitude.
 export function zenith(longitude: Angle, latitude: Angle, time: Time = timeNow(true)): [Angle, Angle] {
-	const lst = localSiderealTime(time, longitude, true)
+	const lst = localSiderealTime(time, longitude)
 	return [lst, latitude]
 }
 
-// Computes the current equatorial coordinates of the local meridian intersection with the celestial equator.
+// Computes the current (true-of-date) equatorial coordinates of the local meridian intersection with the celestial equator.
+// Right ascension is local apparent sidereal time; declination is 0.
 export function meridianEquator(longitude: Angle, time: Time = timeNow(true)): [Angle, Angle] {
-	const lst = localSiderealTime(time, longitude, true)
+	const lst = localSiderealTime(time, longitude)
 	return [lst, 0]
 }
 
-// Computes the current equatorial coordinates of the local meridian intersection with the ecliptic.
+// Computes the current (true-of-date) equatorial coordinates of the local meridian intersection with the ecliptic.
+// Right ascension is local apparent sidereal time; declination uses the true obliquity of date.
 export function meridianEcliptic(longitude: Angle, time: Time = timeNow(true)): [Angle, Angle] {
-	const lst = localSiderealTime(time, longitude, true)
+	const lst = localSiderealTime(time, longitude)
 	const obliquity = trueObliquity(time)
 	// Solve tan(dec) = sin(ra) * tan(epsilon) directly for the ecliptic point on the meridian.
 	return [lst, Math.atan2(Math.sin(lst) * Math.sin(obliquity), Math.cos(obliquity))]
 }
 
 // Returns the nearer equinox node where the celestial equator crosses the ecliptic.
+// The nearer node is chosen against local apparent sidereal time so the result sits in the true-of-date frame.
 export function equatorEcliptic(longitude: Angle, time: Time = timeNow(true)): [Angle, Angle] {
-	const lst = localSiderealTime(time, longitude, true)
+	const lst = localSiderealTime(time, longitude)
 
 	if (PI >= lst - PIOVERTWO && PI <= lst + PIOVERTWO) return [PI, 0]
 	return [0, 0]
