@@ -225,22 +225,26 @@ export function isRiceCompressedImageHeader(header: FitsHeader) {
 
 // Computes the HDU data segment size in bytes (before padding) from the FITS standard
 // |BITPIX|/8 × GCOUNT × (PCOUNT + NAXIS1 × … × NAXISn) with n = NAXIS. Tables use BITPIX = 8.
+// Random Groups (FITS 4.0 §8, GROUPS = T) omit NAXIS1 from the product, using NAXIS2…NAXISn.
 // NAXIS = 0 yields only the GCOUNT × PCOUNT contribution. Extra NAXISn keywords beyond NAXIS are ignored.
 export function computeHduDataSize(header: FitsHeader) {
 	const extension = textKeyword(header, 'XTENSION', '').trim().toUpperCase()
+	const isTable = extension === 'BINTABLE' || extension === 'TABLE'
 	const naxis = Math.trunc(numberOfAxesKeyword(header, 0))
 	const gcount = numericKeyword(header, 'GCOUNT', 1)
 	const pcount = numericKeyword(header, 'PCOUNT', 0)
 	const safeGcount = Number.isFinite(gcount) ? gcount : 1
 	const safePcount = Number.isFinite(pcount) ? pcount : 0
 	let axisProduct = naxis > 0 ? 1 : 0
+	// Random Groups require NAXIS1 = 0; that axis is a placeholder and is not part of the group size.
+	const firstAxis = !isTable && booleanKeyword(header, 'GROUPS', false) ? 2 : 1
 
-	for (let axis = 1; axis <= naxis; axis++) {
+	for (let axis = firstAxis; axis <= naxis; axis++) {
 		axisProduct *= numericKeyword(header, `NAXIS${axis}`, 0)
 	}
 
 	const payload = axisProduct + safePcount
-	if (extension === 'BINTABLE' || extension === 'TABLE') return safeGcount * payload
+	if (isTable) return safeGcount * payload
 	return bitpixInBytes(bitpixKeyword(header, 0)) * safeGcount * payload
 }
 

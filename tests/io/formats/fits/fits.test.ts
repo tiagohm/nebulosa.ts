@@ -757,6 +757,19 @@ test('computeHduDataSize uses NAXIS1..NAXIS{n} and GCOUNT', () => {
 	expect(computeHduDataSize({ SIMPLE: true, BITPIX: 8, NAXIS: 4, NAXIS1: 10, NAXIS2: 10, NAXIS3: 2, NAXIS4: 5 })).toBe(1000)
 	expect(computeHduDataSize({ SIMPLE: true, BITPIX: 8, NAXIS: 2, NAXIS1: 10, NAXIS2: 10, GCOUNT: 3, PCOUNT: 0 })).toBe(300)
 	expect(computeHduDataSize({ XTENSION: 'BINTABLE', BITPIX: 8, NAXIS: 2, NAXIS1: 8, NAXIS2: 4, PCOUNT: 16, GCOUNT: 1 })).toBe(48)
+	expect(
+		computeHduDataSize({
+			SIMPLE: true,
+			BITPIX: -32,
+			NAXIS: 3,
+			NAXIS1: 0,
+			NAXIS2: 128,
+			NAXIS3: 128,
+			PCOUNT: 5,
+			GCOUNT: 100,
+			GROUPS: true,
+		}),
+	).toBe(6555600)
 })
 
 test('readFits skips a 1-D primary data segment to the next HDU', async () => {
