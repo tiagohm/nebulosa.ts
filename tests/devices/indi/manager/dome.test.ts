@@ -71,6 +71,11 @@ test('DomeManager maps motion, angular ranges, shutter, and measurements', () =>
 	expect(dome.azimuth.value).toBeCloseTo(PIOVERTWO)
 	expect(dome.azimuth.min).toBe(0)
 	expect(dome.azimuth.max).toBeCloseTo(TAU)
+	expect(dome.moving).toBeTrue()
+	expect(dome.slewing).toBeTrue()
+
+	manager.switchVector(recordingClient, { ...motion, state: 'Ok', elements: { DOME_CW: defSwitch('DOME_CW', false), DOME_CCW: defSwitch('DOME_CCW', false) } }, 'setSwitchVector')
+
 	expect(dome.moving).toBeFalse()
 	expect(dome.slewing).toBeFalse()
 
@@ -134,6 +139,38 @@ test('DomeManager maps standard dome measurement element names', () => {
 
 	expect(dome.hasMeasurements).toBeTrue()
 	expect(dome.measurements).toMatchObject({ radius: 4, shutterWidth: 1, northDisplacement: 2, eastDisplacement: 3, upDisplacement: 5, otaOffset: 0.5 })
+})
+
+test('DomeManager keeps other motion sources active when one property is deleted', () => {
+	const manager = new DomeManager()
+	const dome = setupDome(manager)
+	const motion: DefSwitchVector = {
+		device: dome.name,
+		name: 'DOME_MOTION',
+		permission: 'rw',
+		rule: 'OneOfMany',
+		state: 'Busy',
+		elements: { DOME_CW: defSwitch('DOME_CW', true), DOME_CCW: defSwitch('DOME_CCW', false) },
+	}
+	const position: DefNumberVector = {
+		device: dome.name,
+		name: 'ABS_DOME_POSITION',
+		permission: 'rw',
+		state: 'Busy',
+		elements: { DOME_ABSOLUTE_POSITION: defNumber('DOME_ABSOLUTE_POSITION', 90) },
+	}
+	manager.switchVector(recordingClient, motion, 'defSwitchVector')
+	manager.numberVector(recordingClient, position, 'defNumberVector')
+
+	manager.delProperty(recordingClient, { device: dome.name, name: 'ABS_DOME_POSITION' })
+
+	expect(dome.moving).toBeTrue()
+	expect(dome.slewing).toBeTrue()
+
+	manager.delProperty(recordingClient, { device: dome.name, name: 'DOME_MOTION' })
+
+	expect(dome.moving).toBeFalse()
+	expect(dome.slewing).toBeFalse()
 })
 
 test('DomeManager sends capability-gated commands in INDI units', () => {
