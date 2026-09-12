@@ -215,6 +215,9 @@ const DEFAULT_POLAR_ALIGNMENT_CONFIG: Readonly<Required<IPolarPolarAlignmentConf
 	starMatchingConfig: {},
 }
 
+// Maximum movement of a fixed-point solver iteration before the candidate is considered positionally converged (pixels).
+const FIXED_POINT_STEP_TOLERANCE = 0.1
+
 // Solves the fixed point of a similarity transform when the geometry is non-singular.
 export function solveSimilarityFixedPoint(transform: SimilarityTransform): SimilarityFixedPoint | false {
 	if (transform.mirrored) {
@@ -605,11 +608,11 @@ function fixedPointResidual(reference: PlateSolution, current: PlateSolution, po
 function solveByGaussNewton(reference: PlateSolution, current: PlateSolution, seed: Readonly<Point>, tolerance: number): FixedPointSolution | false {
 	let { x, y } = seed
 	const step = 0.5
+	let lastStep = Number.POSITIVE_INFINITY
 
 	for (let iteration = 0; iteration < 24; iteration++) {
 		const center = fixedPointResidual(reference, current, { x, y })
 		if (center === false) return false
-		if (center.residual <= tolerance) return { x, y, residual: center.residual, iterations: iteration + 1, solver: 'gauss-newton' }
 
 		const dxCandidate = fixedPointResidual(reference, current, { x: x + step, y })
 		const dyCandidate = fixedPointResidual(reference, current, { x, y: y + step })
@@ -624,14 +627,22 @@ function solveByGaussNewton(reference: PlateSolution, current: PlateSolution, se
 		const det = j00 * j11 - j01 * j10
 		if (Math.abs(det) <= 1e-12) return false
 
-		x -= (j11 * r0x - j01 * r0y) / det
-		y -= (-j10 * r0x + j00 * r0y) / det
+		const deltaX = (j11 * r0x - j01 * r0y) / det
+		const deltaY = (-j10 * r0x + j00 * r0y) / det
+		lastStep = Math.hypot(deltaX, deltaY)
+		if (lastStep <= FIXED_POINT_STEP_TOLERANCE) {
+			if (center.residual > tolerance) return false
+			return { x, y, residual: center.residual, iterations: iteration + 1, solver: 'gauss-newton' }
+		}
+
+		x -= deltaX
+		y -= deltaY
 
 		if (!Number.isFinite(x) || !Number.isFinite(y)) return false
 	}
 
 	const final = fixedPointResidual(reference, current, { x, y })
-	if (final === false || final.residual > tolerance) return false
+	if (final === false || lastStep > FIXED_POINT_STEP_TOLERANCE || final.residual > tolerance) return false
 	return { x, y, residual: final.residual, iterations: 24, solver: 'gauss-newton' }
 }
 
@@ -657,12 +668,11 @@ function solveByCoordinateSearch(reference: PlateSolution, current: PlateSolutio
 			}
 		}
 
-		if (best.residual <= tolerance) return { x, y, residual: best.residual, iterations: iteration + 1, solver: 'coordinate-search' } as const
 		if (!improved) stride *= 0.5
-		if (stride <= 0.125) break
+		if (stride <= FIXED_POINT_STEP_TOLERANCE) break
 	}
 
-	if (best.residual > tolerance) return false
+	if (stride > FIXED_POINT_STEP_TOLERANCE || best.residual > tolerance) return false
 	else return { x, y, residual: best.residual, iterations: 60, solver: 'coordinate-search' } as const
 }
 

@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test'
 import { type PlateSolution, plateSolutionFrom } from '../../../src/astrometry/solvers/platesolver'
+import { tanProject } from '../../../src/astrometry/wcs/fits.wcs'
 import { cirsToObserved, observedToCirs, refractedAltitude } from '../../../src/astronomy/coordinates/astrometry'
 import { eraC2s, eraS2c } from '../../../src/astronomy/coordinates/erfa/erfa'
 import { type GeographicPosition, geodeticLocation } from '../../../src/astronomy/observer/location'
@@ -8,7 +9,7 @@ import type { FitsHeader } from '../../../src/io/formats/fits/fits'
 import { matMulVec, matTransposeMulVec } from '../../../src/math/linear-algebra/mat3'
 import { type Vec3, vecCross, vecDot, vecNormalizeMut, vecRotateByRodrigues } from '../../../src/math/linear-algebra/vec3'
 import { type Angle, arcmin, arcsec, deg, toDeg } from '../../../src/math/units/angle'
-import { decomposePolarError, IPolarPolarAlignment, projectGuidePoint, solveSimilarityFixedPoint } from '../../../src/observation/alignment/ipolar'
+import { decomposePolarError, IPolarPolarAlignment, projectGuidePoint, solveImageFixedPoint, solveSimilarityFixedPoint } from '../../../src/observation/alignment/ipolar'
 import { mountAdjustmentAxes } from '../../../src/observation/alignment/polaralignment'
 import { celestialPoleVector } from '../../../src/observation/alignment/polaralignment.util'
 
@@ -37,6 +38,28 @@ test('solve similarity fixed point supports mirrored transforms', () => {
 	const y = transform.b * fixed.x - transform.a * fixed.y + transform.ty
 	expect(x).toBeCloseTo(fixed.x, 8)
 	expect(y).toBeCloseTo(fixed.y, 8)
+})
+
+test('fixed-point solver refines a near-center seed for a small RA rotation', () => {
+	const axis = eraS2c(0, arcmin(30))
+	const forward: Vec3 = [1, 0, 0]
+	const right: Vec3 = [0, 1, 0]
+	const up: Vec3 = [0, 0, 1]
+	const reference = fixedPointRegressionFrame(forward, right, up, arcsec(10))
+	const current = fixedPointRegressionFrame(vecRotateByRodrigues(forward, axis, arcmin(10)), vecRotateByRodrigues(right, axis, arcmin(10)), vecRotateByRodrigues(up, axis, arcmin(10)), arcsec(10))
+	const expected = tanProject(reference, 0, arcmin(30))
+	expect(expected).not.toBeUndefined()
+	if (!expected) return
+
+	const center = { x: reference.widthInPixels * 0.5, y: reference.heightInPixels * 0.5 }
+	const solved = solveImageFixedPoint(reference, current, center, 1.5)
+	expect(solved).not.toBeFalse()
+	if (!solved) return
+
+	expect(solved.iterations).toBeGreaterThan(1)
+	expect(solved.residual).toBeLessThanOrEqual(1.5)
+	expect(Math.hypot(solved.x - expected[0], solved.y - expected[1])).toBeLessThan(1)
+	expect(Math.hypot(solved.x - center.x, solved.y - center.y)).toBeGreaterThan(100)
 })
 
 test('project guide point clamps off-screen points to the border', () => {
@@ -502,4 +525,32 @@ function tangentBasis(origin: Vec3) {
 	const east = vecNormalizeMut(vecCross(reference, origin))
 	const north = vecNormalizeMut(vecCross(origin, east))
 	return { east, north } as const
+}
+
+function fixedPointRegressionFrame(forward: Vec3, right: Vec3, up: Vec3, pixelScale: Angle, width: number = 1280, height: number = 1024) {
+	const [rightAscension, declination] = eraC2s(...forward)
+	const skyBasis = tangentBasis(forward)
+	const scale = toDeg(pixelScale)
+	const header: FitsHeader = {
+		NAXIS: 2,
+		NAXIS1: width,
+		NAXIS2: height,
+		CTYPE1: 'RA---TAN',
+		CTYPE2: 'DEC--TAN',
+		CUNIT1: 'deg',
+		CUNIT2: 'deg',
+		CRPIX1: width * 0.5 + 0.5,
+		CRPIX2: height * 0.5 + 0.5,
+		CRVAL1: toDeg(rightAscension),
+		CRVAL2: toDeg(declination),
+		LONPOLE: 180,
+		CD1_1: scale * vecDot(right, skyBasis.east),
+		CD1_2: scale * vecDot(up, skyBasis.east),
+		CD2_1: scale * vecDot(right, skyBasis.north),
+		CD2_2: scale * vecDot(up, skyBasis.north),
+		EQUINOX: 2000,
+	}
+	const solution = plateSolutionFrom(header)
+	if (!solution) throw new Error('failed to build fixed-point regression plate solution')
+	return solution
 }
