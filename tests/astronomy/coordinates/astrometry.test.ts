@@ -92,8 +92,11 @@ test('refracted altitude stays finite and lifts the object at low altitude', () 
 	expect(toArcsec(refractedAltitude(deg(2)) - deg(2))).toBeGreaterThan(500)
 })
 
-test('no refraction model below the horizon', () => {
-	expect(refractedAltitude(deg(-1))).toBe(deg(-1))
+test('refracted altitude lifts a geometrically below-horizon object', () => {
+	const trueAltitude = deg(-1)
+	const apparent = refractedAltitude(trueAltitude)
+	expect(apparent).toBeGreaterThan(trueAltitude)
+	expect(Number.isFinite(apparent)).toBe(true)
 })
 
 test('zero pressure disables atmospheric refraction', () => {
@@ -211,6 +214,11 @@ test('unrefractedAltitude inverts refractedAltitude', () => {
 	}
 })
 
-test('unrefractedAltitude leaves below-horizon altitudes unchanged', () => {
-	expect(unrefractedAltitude(deg(-1))).toBe(deg(-1))
+test('unrefractedAltitude inverts near-horizon apparent altitudes', () => {
+	for (const apparentDeg of [0.01, 0.05, 0.1]) {
+		const apparent = deg(apparentDeg)
+		const trueAltitude = unrefractedAltitude(apparent)
+		expect(trueAltitude).toBeLessThan(0)
+		expect(Math.abs(toArcsec(refractedAltitude(trueAltitude) - apparent))).toBeLessThan(1)
+	}
 })

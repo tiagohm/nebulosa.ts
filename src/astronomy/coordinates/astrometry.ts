@@ -232,16 +232,13 @@ export function icrsToObserved(icrs: Vec3 | readonly [Angle, Angle], time: Time,
 //   dZ = (A + w)*tanZ / (1 + (A + 3w)/cosZ^2),  w = B*tan^2(Z),  Z = true zenith distance
 // with cosZ floored at 0.05 (Z <= ~87 deg). The raw A*tanZ + B*tan^3(Z) polynomial
 // has a negative cubic term that makes it non-monotonic and unbounded past
-// Z ~= 80 deg; this bounded form instead stays finite and well-behaved down to the
-// horizon (refraction is capped near the horizon, as in ERFA). Because it shares
-// ERFA's model, it is the consistent inverse of observedToCirs/cirsToObserved, so
-// pole and altitude round trips do not drift.
-//
-// Below the horizon (altitude < 0) the model is not applied and the input is
-// returned unchanged.
+// Z ~= 80 deg; this bounded form instead stays finite and well-behaved down to and
+// below the horizon (refraction is capped near the horizon, as in ERFA, including
+// when the true altitude is negative). Because it shares ERFA's model, it is the
+// consistent inverse of observedToCirs/cirsToObserved, so pole and altitude round
+// trips do not drift. An object still slightly below the geometric horizon can
+// therefore have a positive apparent altitude, as at sunrise and sunset.
 export function refractedAltitude(altitude: Angle, refraction?: RefractionParameters): Angle {
-	if (altitude < 0) return altitude
-
 	const pressure = refraction?.pressure ?? DEFAULT_REFRACTION_PARAMETERS.pressure
 	const temperature = refraction?.temperature ?? DEFAULT_REFRACTION_PARAMETERS.temperature
 	const relativeHumidity = refraction?.relativeHumidity ?? DEFAULT_REFRACTION_PARAMETERS.relativeHumidity
@@ -265,11 +262,9 @@ export function refractedAltitude(altitude: Angle, refraction?: RefractionParame
 // altitude is the smaller value. The model is monotonic and slowly varying, so a
 // few fixed-point iterations (true <- apparent - refraction(true)) converge to
 // the level where refractedAltitude(unrefractedAltitude(a)) round-trips back to
-// `apparentAltitude`. Below the horizon (apparentAltitude < 0) refraction is not
-// applied and the input is returned unchanged.
+// `apparentAltitude`. Apparent altitudes just above the horizon invert to a
+// negative true altitude, matching eraAtioq's capped refraction below Z = 90 deg.
 export function unrefractedAltitude(apparentAltitude: Angle, refraction?: RefractionParameters): Angle {
-	if (apparentAltitude < 0) return apparentAltitude
-
 	let trueAltitude = apparentAltitude
 	for (let i = 0; i < 4; i++) {
 		// refractedAltitude(trueAltitude) - trueAltitude is the refraction at that level.
