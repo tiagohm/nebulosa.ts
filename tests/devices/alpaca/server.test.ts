@@ -741,3 +741,20 @@ test('filter wheel exposes and updates its real slot names', async () => {
 	expect(response.Value).toBe('OK')
 	expect((await fixture.get(fixture.path + '/names')).Value).toEqual(names)
 })
+
+test('cover calibrator reports missing halves without throwing', async () => {
+	{
+		await using fixture = await startAlpacaServer(ALPACA_COVER)
+
+		expect((await fixture.get(fixture.path + '/maxbrightness')).ErrorNumber).toBe(AlpacaException.MethodOrPropertyNotImplemented)
+		expect((await fixture.put(fixture.path + '/calibratoron', { Brightness: '10' })).ErrorNumber).toBe(AlpacaException.MethodOrPropertyNotImplemented)
+		expect((await fixture.put(fixture.path + '/closecover')).ErrorNumber).toBe(0)
+	}
+
+	{
+		await using fixture = await startAlpacaServer(ALPACA_FLAT_PANEL)
+
+		expect((await fixture.put(fixture.path + '/opencover')).ErrorNumber).toBe(AlpacaException.MethodOrPropertyNotImplemented)
+		expect((await fixture.put(fixture.path + '/calibratoron', { Brightness: '10' })).ErrorNumber).toBe(0)
+	}
+})

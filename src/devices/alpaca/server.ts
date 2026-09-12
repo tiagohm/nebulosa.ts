@@ -2133,11 +2133,17 @@ export class AlpacaServer {
 	}
 
 	#coverCalibratorGetMaxBrightness(id: number) {
-		return makeAlpacaResponse(this.#flatPanel(id).device.intensity.max)
+		const flatPanel = this.#flatPanel(id)
+		if (flatPanel === undefined) return makeAlpacaErrorResponse(AlpacaException.MethodOrPropertyNotImplemented, 'Cover calibrator does not have a flat panel')
+
+		return makeAlpacaResponse(flatPanel.device.intensity.max)
 	}
 
 	#coverCalibratorOn(id: number, data: { Brightness: string }) {
-		const { device } = this.#flatPanel(id)
+		const flatPanelDevice = this.#flatPanel(id)
+		if (flatPanelDevice === undefined) return makeAlpacaErrorResponse(AlpacaException.MethodOrPropertyNotImplemented, 'Cover calibrator does not have a flat panel')
+
+		const { device } = flatPanelDevice
 		const { flatPanel } = this.options
 		flatPanel?.enable(device)
 		flatPanel?.intensity(device, +data.Brightness)
@@ -2145,22 +2151,34 @@ export class AlpacaServer {
 	}
 
 	#coverCalibratorOff(id: number) {
-		this.options.flatPanel?.disable(this.#flatPanel(id).device)
+		const flatPanel = this.#flatPanel(id)
+		if (flatPanel === undefined) return makeAlpacaErrorResponse(AlpacaException.MethodOrPropertyNotImplemented, 'Cover calibrator does not have a flat panel')
+
+		this.options.flatPanel?.disable(flatPanel.device)
 		return makeAlpacaResponse(undefined)
 	}
 
 	#coverCalibratorClose(id: number) {
-		this.options.cover?.park(this.#cover(id).device)
+		const cover = this.#cover(id)
+		if (cover === undefined) return makeAlpacaErrorResponse(AlpacaException.MethodOrPropertyNotImplemented, 'Cover calibrator does not have a cover')
+
+		this.options.cover?.park(cover.device)
 		return makeAlpacaResponse(undefined)
 	}
 
 	#coverCalibratorHalt(id: number) {
-		this.options.cover?.stop(this.#cover(id).device)
+		const cover = this.#cover(id)
+		if (cover === undefined) return makeAlpacaErrorResponse(AlpacaException.MethodOrPropertyNotImplemented, 'Cover calibrator does not have a cover')
+
+		this.options.cover?.stop(cover.device)
 		return makeAlpacaResponse(undefined)
 	}
 
 	#coverCalibratorOpen(id: number) {
-		this.options.cover?.unpark(this.#cover(id).device)
+		const cover = this.#cover(id)
+		if (cover === undefined) return makeAlpacaErrorResponse(AlpacaException.MethodOrPropertyNotImplemented, 'Cover calibrator does not have a cover')
+
+		this.options.cover?.unpark(cover.device)
 		return makeAlpacaResponse(undefined)
 	}
 
