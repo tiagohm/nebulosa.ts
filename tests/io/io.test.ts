@@ -232,6 +232,23 @@ describe('readableStreamSource', async () => {
 		expect(buffer.toString()).toBe('  abcdefgh       ')
 		expect(await source.read(buffer)).toBe(9)
 	})
+
+	test('skips empty chunks instead of treating them as EOF', async () => {
+		const stream = new ReadableStream<Uint8Array>({
+			start(controller) {
+				controller.enqueue(Buffer.from('ABC'))
+				controller.enqueue(new Uint8Array(0))
+				controller.enqueue(Buffer.from('DEF'))
+				controller.close()
+			},
+		})
+		await using source = readableStreamSource(stream)
+		const buffer = Buffer.allocUnsafe(8)
+
+		expect(await readUntil(source, buffer, 6)).toBe(6)
+		expect(buffer.toString('ascii', 0, 6)).toBe('ABCDEF')
+		expect(await source.read(buffer)).toBe(0)
+	})
 })
 
 describe('readLines', () => {

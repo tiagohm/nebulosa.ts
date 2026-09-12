@@ -205,12 +205,15 @@ export class ReadableStreamSource implements Source, AsyncDisposable {
 		offset ??= 0
 
 		if (!this.#buffer || this.#position >= this.#buffer.byteLength) {
-			const { done, value } = await this.#reader.read()
-
-			if (done || value.byteLength === 0) return 0
-
-			this.#buffer = Buffer.from(value)
-			this.#position = 0
+			while (true) {
+				const { done, value } = await this.#reader.read()
+				// WHATWG allows zero-length chunks; EOF is only `done === true`.
+				if (done) return 0
+				if (value.byteLength === 0) continue
+				this.#buffer = Buffer.from(value)
+				this.#position = 0
+				break
+			}
 		}
 
 		size = Math.min(size ?? buffer.byteLength - offset, this.#buffer.byteLength - this.#position)
