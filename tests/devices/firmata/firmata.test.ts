@@ -619,6 +619,29 @@ test('BMP280 reinitializes after stopping', () => {
 	bmp280.stop()
 })
 
+test('BMP280 retriggers forced measurements before polling', async () => {
+	const client = new MockFirmataClient()
+	const bmp280 = new BMP280(client as never, BMP280.ADDRESS, 100, { mode: 'forced' })
+	const calibration = Buffer.alloc(24)
+	calibration.writeUInt16LE(36477, 6)
+
+	bmp280.start()
+	bmp280.twoWireMessage(client as never, BMP280.ADDRESS, 0x88, calibration)
+
+	const controlWrites = () => client.messages.filter((message) => message[0] === 'write' && message[2][0] === BMP280.CTRL_MEAS_REG)
+	const dataReads = () => client.messages.filter((message) => message[0] === 'read' && message[2] === BMP280.DATA_REG)
+
+	expect(controlWrites()).toHaveLength(2)
+	expect(dataReads()).toHaveLength(0)
+	await Bun.sleep(20)
+	expect(dataReads()).toHaveLength(1)
+
+	await Bun.sleep(110)
+	expect(controlWrites()).toHaveLength(3)
+	expect(dataReads()).toHaveLength(2)
+	bmp280.stop()
+})
+
 test('BMP280 compensate temperature & pressure', () => {
 	const bmp280 = new BMP280(undefined as never, 0)
 	expect(bmp280.compensateTemperature(519888)).toBeCloseTo(25.08, 2)

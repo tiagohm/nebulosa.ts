@@ -249,6 +249,8 @@ export class BMP280 extends PeripheralBase<BMP280> implements Barometer, Altimet
 	// Precomputed control-measurement and config register bytes for the chosen options.
 	readonly #ctrlMeasValue: number
 	readonly #configValue: number
+	// Maximum forced-mode conversion time for the selected oversampling, in milliseconds.
+	readonly #forcedMeasurementTime: number
 
 	readonly name = 'BMP280'
 
@@ -271,9 +273,12 @@ export class BMP280 extends PeripheralBase<BMP280> implements Barometer, Altimet
 		const pressureSamplingBits = pressureSampling === 'skip' ? 0 : pressureSampling === 'x1' ? 1 : pressureSampling === 'x2' ? 2 : pressureSampling === 'x4' ? 3 : pressureSampling === 'x8' ? 4 : 5
 		const filterBits = filter === 'off' ? 0 : filter === 'x2' ? 1 : filter === 'x4' ? 2 : filter === 'x8' ? 3 : 4
 		const standbyBits = standbyDuration === 0.5 ? 0 : standbyDuration === 62.5 ? 1 : standbyDuration === 125 ? 2 : standbyDuration === 250 ? 3 : standbyDuration === 500 ? 4 : standbyDuration === 1000 ? 5 : standbyDuration === 2000 ? 6 : 7
+		const temperatureOversampling = temperatureSamplingBits === 0 ? 0 : 2 ** (temperatureSamplingBits - 1)
+		const pressureOversampling = pressureSamplingBits === 0 ? 0 : 2 ** (pressureSamplingBits - 1)
 
 		this.#ctrlMeasValue = (temperatureSamplingBits << 5) | (pressureSamplingBits << 2) | modeBits
 		this.#configValue = (standbyBits << 5) | (filterBits << 2)
+		this.#forcedMeasurementTime = mode === 'forced' ? Math.ceil(1.25 + 2.3 * temperatureOversampling + 2.3 * pressureOversampling + 0.575) : 0
 	}
 
 	// Enables I2C, writes the config/control-measurement registers, and requests the calibration block.
@@ -319,8 +324,8 @@ export class BMP280 extends PeripheralBase<BMP280> implements Barometer, Altimet
 
 			if (!this.#initialized) return
 
-			this.#readMeasurement()
-			this.#timer = setInterval(this.#readMeasurement.bind(this), Math.max(100, this.pollingInterval))
+			void this.#readMeasurement()
+			this.#timer = setInterval(() => void this.#readMeasurement(), Math.max(100, this.pollingInterval))
 
 			return
 		}
@@ -350,8 +355,14 @@ export class BMP280 extends PeripheralBase<BMP280> implements Barometer, Altimet
 		this.client.twoWireRead(this.address, BMP280.CALIBRATION_REG, 24)
 	}
 
-	// Requests one 6-byte pressure+temperature data frame.
-	#readMeasurement() {
+	// Triggers a forced conversion when configured, waits for its completion, and requests one 6-byte
+	// pressure+temperature data frame.
+	async #readMeasurement() {
+		if (this.#forcedMeasurementTime > 0) {
+			this.client.twoWireWrite(this.address, [BMP280.CTRL_MEAS_REG, this.#ctrlMeasValue])
+			await Bun.sleep(this.#forcedMeasurementTime)
+		}
+
 		this.client.twoWireRead(this.address, BMP280.DATA_REG, 6)
 	}
 
