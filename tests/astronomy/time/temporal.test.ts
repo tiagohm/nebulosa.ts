@@ -413,6 +413,12 @@ describe('format using pattern', () => {
 	test('negative timestamp', () => {
 		expect(formatTemporalFromPattern(-1, 'YYYY-MM-DD HH:mm:ss.SSS', 0)).toEqual('1969-12-31 23:59:59.999')
 	})
+
+	test('negative year', () => {
+		expect(formatTemporalFromPattern(temporalFromDate(-1, 12, 31), 'YYYY-MM-DD', 0)).toEqual('-0001-12-31')
+		expect(formatTemporalFromPattern(temporalFromDate(-99, 6, 15), 'YYYY-MM-DD', 0)).toEqual('-0099-06-15')
+		expect(formatTemporalFromPattern(temporalFromDate(0, 1, 1), 'YYYY-MM-DD', 0)).toEqual('0000-01-01')
+	})
 })
 
 describe('parse', () => {

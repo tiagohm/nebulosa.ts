@@ -336,9 +336,11 @@ export function formatTemporalFromPattern(temporal: Temporal | ReturnType<typeof
 	for (const { found, text } of tokens) {
 		if (found) {
 			switch (text) {
-				case 'YYYY':
-					output.push(year.toFixed(0).padStart(4, '0'))
+				case 'YYYY': {
+					const abs = Math.abs(year).toFixed(0).padStart(4, '0')
+					output.push(year < 0 ? `-${abs}` : abs)
 					break
+				}
 				case 'YYY':
 					output.push(year.toFixed(0))
 					break
