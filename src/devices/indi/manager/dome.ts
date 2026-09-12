@@ -324,18 +324,18 @@ export class DomeManager extends DeviceManager<Dome> {
 				if (handleMinMaxValue(dome.backlash, message.elements.DOME_BACKLASH_VALUE, tag)) this.updated(dome, 'backlash', message.state)
 				return
 			case 'DOME_MEASUREMENTS': {
-				const fields: readonly [keyof Omit<Dome['measurements'], 'otaSide'>, string][] = [
-					['radius', 'DOME_RADIUS'],
-					['shutterWidth', 'DOME_SHUTTER_WIDTH'],
-					['northDisplacement', 'DOME_NORTH_DISPLACEMENT'],
-					['eastDisplacement', 'DOME_EAST_DISPLACEMENT'],
-					['upDisplacement', 'DOME_UP_DISPLACEMENT'],
-					['otaOffset', 'DOME_OTA_OFFSET'],
+				const fields: readonly [keyof Omit<Dome['measurements'], 'otaSide'>, string, string][] = [
+					['radius', 'DM_DOME_RADIUS', 'DOME_RADIUS'],
+					['shutterWidth', 'DM_SHUTTER_WIDTH', 'DOME_SHUTTER_WIDTH'],
+					['northDisplacement', 'DM_NORTH_DISPLACEMENT', 'DOME_NORTH_DISPLACEMENT'],
+					['eastDisplacement', 'DM_EAST_DISPLACEMENT', 'DOME_EAST_DISPLACEMENT'],
+					['upDisplacement', 'DM_UP_DISPLACEMENT', 'DOME_UP_DISPLACEMENT'],
+					['otaOffset', 'DM_OTA_OFFSET', 'DOME_OTA_OFFSET'],
 				]
 				let updated = false
 
-				for (const [field, elementName] of fields) {
-					const element = message.elements[elementName]
+				for (const [field, standardName, alias] of fields) {
+					const element = message.elements[standardName] ?? message.elements[alias]
 					if (element !== undefined && dome.measurements[field] !== element.value) {
 						dome.measurements[field] = element.value
 						updated = true

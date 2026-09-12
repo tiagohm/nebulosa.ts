@@ -113,6 +113,29 @@ test('DomeManager maps motion, angular ranges, shutter, and measurements', () =>
 	expect(dome.measurements).toMatchObject({ radius: 4, shutterWidth: 1, northDisplacement: 2, eastDisplacement: 3, upDisplacement: 5, otaOffset: 0.5 })
 })
 
+test('DomeManager maps standard dome measurement element names', () => {
+	const manager = new DomeManager()
+	const dome = setupDome(manager)
+	const measurements: DefNumberVector = {
+		device: dome.name,
+		name: 'DOME_MEASUREMENTS',
+		permission: 'ro',
+		state: 'Ok',
+		elements: {
+			DM_DOME_RADIUS: defNumber('DM_DOME_RADIUS', 4, 0, 10),
+			DM_SHUTTER_WIDTH: defNumber('DM_SHUTTER_WIDTH', 1, 0, 10),
+			DM_NORTH_DISPLACEMENT: defNumber('DM_NORTH_DISPLACEMENT', 2, -10, 10),
+			DM_EAST_DISPLACEMENT: defNumber('DM_EAST_DISPLACEMENT', 3, -10, 10),
+			DM_UP_DISPLACEMENT: defNumber('DM_UP_DISPLACEMENT', 5, -10, 10),
+			DM_OTA_OFFSET: defNumber('DM_OTA_OFFSET', 0.5, -10, 10),
+		},
+	}
+	manager.numberVector(recordingClient, measurements, 'defNumberVector')
+
+	expect(dome.hasMeasurements).toBeTrue()
+	expect(dome.measurements).toMatchObject({ radius: 4, shutterWidth: 1, northDisplacement: 2, eastDisplacement: 3, upDisplacement: 5, otaOffset: 0.5 })
+})
+
 test('DomeManager sends capability-gated commands in INDI units', () => {
 	numberCommands.length = 0
 	switchCommands.length = 0
