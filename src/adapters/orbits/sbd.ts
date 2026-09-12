@@ -192,6 +192,9 @@ export interface SmallBodyCloseApproach {
 	readonly data: readonly string[][]
 }
 
+// Wire-level CAD response, whose table fields are omitted when count is zero.
+type SmallBodyCloseApproachResponse = Omit<SmallBodyCloseApproach, 'fields' | 'data'> & Partial<Pick<SmallBodyCloseApproach, 'fields' | 'data'>>
+
 // Searches the SBDB for small bodies matching `text` (name or designation). Returns a single match,
 // a list of candidates, or a message. Performs a network request.
 export async function search(text: string) {
@@ -218,5 +221,6 @@ export async function closeApproaches(dateMin?: Temporal | 'now', dateMax: Tempo
 	const maxDate = typeof dateMax === 'string' ? temporalAdd(dateMin, Number(dateMax.slice(0, dateMax.length - 1)), 'd') : dateMax
 	const uri = `${SBD_BASE_URL}${CLOSE_APPROACHES_PATH}&date-min=${formatTemporal(dateMin, DATE_FORMAT)}&date-max=${formatTemporal(maxDate, DATE_FORMAT)}&dist-max=${distance}LD`
 	const response = await fetch(uri)
-	return (await response.json()) as SmallBodyCloseApproach
+	const data = (await response.json()) as SmallBodyCloseApproachResponse
+	return { ...data, fields: data.fields ?? [], data: data.data ?? [] }
 }

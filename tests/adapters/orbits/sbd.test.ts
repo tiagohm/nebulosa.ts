@@ -155,6 +155,20 @@ test('preserves the Unix epoch as the close-approach minimum', async () => {
 	expect(request.searchParams.get('date-min')).toBe('1970-01-01')
 })
 
+test('normalizes an empty close-approach response', async () => {
+	const restore = globalThis.fetch
+	globalThis.fetch = ((_input) => Promise.resolve(new Response('{"signature":{"version":"test","source":"test"},"count":0}'))) as typeof fetch
+
+	try {
+		const response = await closeApproaches(temporalFromDate(2024, 3, 13), temporalFromDate(2024, 3, 13))
+		expect(response.count).toBe(0)
+		expect(response.fields).toEqual([])
+		expect(response.data).toEqual([])
+	} finally {
+		globalThis.fetch = restore
+	}
+})
+
 async function captureCloseApproachRequest(callback: () => Promise<unknown>) {
 	const restore = globalThis.fetch
 	let request = ''
