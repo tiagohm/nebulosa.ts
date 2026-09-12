@@ -233,8 +233,9 @@ export async function novaAstrometryNetPlateSolve(input: string | Blob, options?
 
 // Plate-solves an image with the local `solve-field` CLI into a temporary directory, optionally
 // constrained by an RA/Dec/radius and FOV hint, then parses the produced .wcs into a PlateSolution.
-// Cleans up the temp directory afterward; returns undefined when solving fails. --ra/--dec/--radius
-// are emitted only when the caller supplies all three; a radius alone is not a north-polar window.
+// The temp directory is removed on success, failure, timeout, or abort. Returns undefined when
+// solving fails. --ra/--dec/--radius are emitted only when the caller supplies all three; a radius
+// alone is not a north-polar window.
 export async function localAstrometryNetPlateSolve(input: string, options: RequiredOnly<LocalAstrometryNetPlateSolveOptions, 'executable'>, signal?: AbortSignal) {
 	const timeout = options.timeout ?? 0
 	const downsample = Math.max(1, options.downsample ?? 2)
@@ -263,10 +264,10 @@ export async function localAstrometryNetPlateSolve(input: string, options: Requi
 
 	commands.push(input)
 
-	const process = Bun.spawn(commands, { signal, timeout: options?.timeout || 300000 })
-	const exitCode = await process.exited
-
 	try {
+		const process = Bun.spawn(commands, { signal, timeout: options?.timeout || 300000 })
+		const exitCode = await process.exited
+
 		if (exitCode === 0 && (await Bun.file(wcs).exists())) {
 			const handle = await fs.open(wcs)
 			await using source = fileHandleSource(handle)

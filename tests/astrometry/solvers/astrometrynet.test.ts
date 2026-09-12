@@ -1,4 +1,7 @@
 import { describe, expect, test } from 'bun:test'
+import { existsSync } from 'fs'
+import { mkdir, rm, writeFile } from 'fs/promises'
+import { tmpdir } from 'os'
 import { dirname, join } from 'path'
 import { localAstrometryNetPlateSolve, login, novaAstrometryNetPlateSolve, submissionStatus, type Upload, upload, wcsFile } from '../../../src/astrometry/solvers/astrometrynet'
 import { RA_TAN_SIP, tanUnproject } from '../../../src/astrometry/wcs/fits.wcs'
@@ -162,6 +165,45 @@ test('respects downsample 1 instead of clamping to 2', async () => {
 		expect(calls[1][calls[1].indexOf('--downsample') + 1]).toBe('2')
 	} finally {
 		Bun.spawn = original
+	}
+})
+
+test('removes solve-field temp dir when spawn is aborted', async () => {
+	const originalSpawn = Bun.spawn
+	const originalUuid = Bun.randomUUIDv7
+	const id = 'nebulosa-solve-field-abort-test'
+	const outDir = join(tmpdir(), id)
+	Bun.randomUUIDv7 = (() => id) as typeof Bun.randomUUIDv7
+	await mkdir(outDir, { recursive: true })
+	await writeFile(join(outDir, 'marker'), 'x')
+
+	Bun.spawn = ((_cmd, opts?: { signal?: AbortSignal }) => ({
+		exited: new Promise<number>((_resolve, reject) => {
+			const onAbort = () => {
+				reject(opts?.signal?.reason instanceof Error ? opts.signal.reason : new DOMException('The operation was aborted.', 'AbortError'))
+			}
+
+			if (opts?.signal?.aborted) onAbort()
+			else opts?.signal?.addEventListener('abort', onAbort, { once: true })
+		}),
+	})) as typeof Bun.spawn
+
+	try {
+		const ac = new AbortController()
+		const pending = localAstrometryNetPlateSolve('img.fit', { executable: 'solve-field' }, ac.signal)
+		ac.abort()
+		let aborted = false
+		try {
+			await pending
+		} catch {
+			aborted = true
+		}
+		expect(aborted).toBe(true)
+		expect(existsSync(outDir)).toBe(false)
+	} finally {
+		Bun.spawn = originalSpawn
+		Bun.randomUUIDv7 = originalUuid
+		await rm(outDir, { recursive: true, force: true })
 	}
 })
 
