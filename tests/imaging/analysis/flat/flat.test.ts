@@ -167,6 +167,14 @@ test('preserves local CFA phase and separate green planes through analysis', () 
 	])
 })
 
+test('does not treat an empty targets object as a configured check', () => {
+	const image = generateSyntheticFlatImage({ width: 4, height: 4, bias: 0, signal: 100, vignetting: 0 })
+	const result = analyzeFlat({ frame: { image } }, { effectiveClip: { upper: 4095 }, criteria: { targets: {}, maximumClippedFraction: 0 } })
+
+	expect(result.assessment.verdict).toBe('accepted')
+	expect(result.assessment.reasons).toEqual([])
+})
+
 test('requires corrected targets to have a reference', () => {
 	const image = generateSyntheticFlatImage({ width: 2, height: 2, bias: 100, signal: 900, vignetting: 0 })
 	const result = analyzeFlat({ frame: { image } }, { criteria: { targets: { mono: { levelMode: 'corrected', range: [850, 950] } } } })
