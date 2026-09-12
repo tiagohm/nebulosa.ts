@@ -489,7 +489,12 @@ export class PHD2Client implements Disposable {
 		const command: PHD2Command = { method, params, id }
 
 		const promise = Promise.withResolvers<PHD2CommandResult<T>>()
-		const timer = setTimeout(() => promise.resolve({ success: false, error: 'timeout' }), timeout <= 0 || !Number.isFinite(timeout) ? DEFAULT_TIMEOUT : timeout)
+		const timer = setTimeout(
+			() => {
+				if (this.#commands.delete(id)) promise.resolve({ success: false, error: 'timeout' })
+			},
+			timeout <= 0 || !Number.isFinite(timeout) ? DEFAULT_TIMEOUT : timeout,
+		)
 		this.#commands.set(id, { promise, timer, command } as PendingPHD2Command<unknown>)
 
 		try {
@@ -497,6 +502,8 @@ export class PHD2Client implements Disposable {
 			this.#socket.write('\r\n')
 		} catch (e) {
 			console.error('socket error:', e)
+			clearTimeout(timer)
+			this.#commands.delete(id)
 			return { success: false, error: 'socketError' }
 		}
 

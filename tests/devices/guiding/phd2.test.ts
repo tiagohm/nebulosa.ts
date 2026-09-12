@@ -1,8 +1,8 @@
 import { expect, test } from 'bun:test'
 import type { Socket } from 'bun'
-import { PHD2Client } from '../../../src/devices/guiding/phd2'
+import { PHD2Client, type PHD2ClientOptions } from '../../../src/devices/guiding/phd2'
 
-async function withPHD2Server(onCommand: (socket: Socket<unknown>, command: Record<string, unknown>) => void, action: (client: PHD2Client) => Promise<void>) {
+async function withPHD2Server(onCommand: (socket: Socket<unknown>, command: Record<string, unknown>) => void, action: (client: PHD2Client) => Promise<void>, options?: PHD2ClientOptions) {
 	let input = ''
 	const server = Bun.listen({
 		hostname: '127.0.0.1',
@@ -22,7 +22,7 @@ async function withPHD2Server(onCommand: (socket: Socket<unknown>, command: Reco
 		},
 	})
 
-	using client = new PHD2Client()
+	using client = new PHD2Client(options)
 
 	try {
 		expect(await client.connect('127.0.0.1', server.port)).toBeTrue()
@@ -123,6 +123,27 @@ test('setConnected sends a boolean parameter', async () => {
 	)
 
 	expect(params).toEqual([[true], [false]])
+})
+
+test('timeout ignores late replies', async () => {
+	const requestReceived = Promise.withResolvers<{ socket: Socket<unknown>; command: Record<string, unknown> }>()
+	let commandCallbacks = 0
+
+	await withPHD2Server(
+		(socket, command) => {
+			requestReceived.resolve({ socket, command })
+		},
+		async (client) => {
+			const pending = client.send('get_app_state', undefined, 1)
+			const request = await requestReceived.promise
+
+			expect(await pending).toEqual({ success: false, error: 'timeout' })
+			request.socket.write(`${JSON.stringify({ jsonrpc: '2.0', id: request.command.id, result: 'Guiding' })}\r\n`)
+			await Bun.sleep(10)
+			expect(commandCallbacks).toBe(0)
+		},
+		{ handler: { command: () => commandCallbacks++ } },
+	)
 })
 
 test('close resolves pending commands', async () => {
