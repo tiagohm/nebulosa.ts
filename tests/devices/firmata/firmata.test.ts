@@ -215,6 +215,19 @@ describe('command decoding', () => {
 		expect(result[0]).toBe('😊')
 	})
 
+	test('text message grows beyond the parser scratch buffer', () => {
+		const text = 'A'.repeat(200)
+		const encoded = Buffer.alloc(text.length * 2)
+
+		for (let i = 0; i < text.length; i++) {
+			encoded[i * 2] = text.charCodeAt(i) & 0x7f
+			encoded[i * 2 + 1] = (text.charCodeAt(i) >>> 7) & 0x01
+		}
+
+		client.process(Buffer.from([0xf0, 0x71, ...encoded, 0xf7]))
+		expect(result[0]).toBe(text)
+	})
+
 	test('custom message', () => {
 		client.process(Buffer.from([0xf0, 1, 65, 0, 66, 0, 67, 0, 0xf7]))
 		const buffer = result[0] as Buffer
@@ -241,6 +254,17 @@ describe('command decoding', () => {
 		expect(result[0]).toBe(4)
 		expect(result[1]).toBeFalse()
 		expect(result[2]).toEqual([addresses.subarray(0, 8), addresses.subarray(8, 16)])
+	})
+
+	test('one-wire search reply grows beyond the parser scratch buffer', () => {
+		const addresses = Buffer.alloc(8 * 30)
+		for (let i = 0; i < addresses.length; i++) addresses[i] = (i * 37 + 11) & 0xff
+
+		client.process(Buffer.from([0xf0, 0x73, 0x42, 4, ...encodePacked7Bit(addresses), 0xf7]))
+		expect(result[0]).toBe(4)
+		expect(result[1]).toBeFalse()
+		expect(result[2]).toHaveLength(30)
+		expect(result[2]).toEqual(Array.from({ length: 30 }, (_, i) => addresses.subarray(i * 8, i * 8 + 8)))
 	})
 
 	test('one-wire read reply', () => {

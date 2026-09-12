@@ -239,6 +239,11 @@ const ONE_WIRE_WRITE_REQUEST_BIT = 0x20
 
 const MIN_SAMPLING_INTERVAL = 1
 const MAX_SAMPLING_INTERVAL = 16383
+// Initial and maximum wire-payload sizes retained by the parser for one message, in bytes. Larger
+// sysex messages are discarded until END_SYSEX so malformed or unexpectedly large input cannot grow
+// memory without bound.
+const INITIAL_FIRMATA_BUFFER_SIZE = 256
+const MAX_FIRMATA_BUFFER_SIZE = 1 << 20
 
 // Decodes one byte from the two-7-bit-bytes layout (LSB nibble then MSB bit) at `offset`.
 export function decodeByteAs7Bit(input: Readonly<NumberArray> | Buffer, offset: number) {
@@ -587,6 +592,15 @@ class WaitingForMessageState implements FirmataFsmState {
 
 const WAITING_FOR_MESSAGE_STATE = new WaitingForMessageState()
 
+// Discards an oversized sysex message until its terminator, then returns the parser to the idle state.
+class DiscardingSysexMessageState implements FirmataFsmState {
+	process(b: number, fsm: FirmataFsm) {
+		if (b === END_SYSEX) fsm.transitTo(WAITING_FOR_MESSAGE_STATE)
+	}
+}
+
+const DISCARDING_SYSEX_MESSAGE_STATE = new DiscardingSysexMessageState()
+
 // The parser state machine: holds the active state, a scratch byte buffer, and the set of handlers.
 // Parser states call its write/read helpers to accumulate bytes and its event methods to broadcast a
 // decoded message to every registered handler.
@@ -594,7 +608,7 @@ export class FirmataFsm {
 	readonly #handlers = new Set<FirmataClientHandler>()
 
 	// Scratch accumulation buffer for the message currently being parsed, and the write cursor into it.
-	readonly #buffer = Buffer.alloc(256)
+	#buffer = Buffer.alloc(INITIAL_FIRMATA_BUFFER_SIZE)
 	#offset = 0
 	#state: FirmataFsmState
 
@@ -637,6 +651,18 @@ export class FirmataFsm {
 
 	// Appends one byte to the accumulation buffer.
 	write(b: number) {
+		if (this.#offset >= this.#buffer.length) {
+			if (this.#buffer.length >= MAX_FIRMATA_BUFFER_SIZE) {
+				this.transitTo(DISCARDING_SYSEX_MESSAGE_STATE)
+				return
+			}
+
+			const size = Math.min(this.#buffer.length * 2, MAX_FIRMATA_BUFFER_SIZE)
+			const buffer = Buffer.alloc(size)
+			this.#buffer.copy(buffer)
+			this.#buffer = buffer
+		}
+
 		this.#buffer.writeUInt8(b, this.#offset++)
 	}
 
