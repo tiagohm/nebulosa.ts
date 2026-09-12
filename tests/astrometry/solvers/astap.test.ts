@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import { mkdtemp, rm, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
-import { dirname, join } from 'path'
+import { dirname, join, resolve } from 'path'
 import { astapDetectStars, astapPlateSolve } from '../../../src/astrometry/solvers/astap'
 import { deg, hour, toArcmin, toArcsec, toDeg, toHour } from '../../../src/math/units/angle'
 import { downloadPerTag } from '../../download'
@@ -81,6 +81,31 @@ test('radius-only plate-solve hint does not force RA 0h Dec 0', async () => {
 	} finally {
 		Bun.spawn = original
 	}
+})
+
+test('reads extract CSV beside the input even when outputDirectory differs', async () => {
+	const csv = 'x,y,hfd,snr,flux\n1.0,1.0,2.5,50,8000\n'
+	await withFakeAstapExtract(csv, async (input, executable) => {
+		const outputDirectory = await mkdtemp(join(tmpdir(), 'astap-out-'))
+		const calls: { cmd: string[]; cwd?: string }[] = []
+		const original = Bun.spawn
+		Bun.spawn = ((cmd: string[], opts?: { cwd?: string }) => {
+			calls.push({ cmd: [...cmd], cwd: opts?.cwd })
+			return original(cmd, opts)
+		}) as typeof Bun.spawn
+
+		try {
+			const stars = await astapDetectStars(input, { executable, outputDirectory })
+			expect(stars).toHaveLength(1)
+			expect(calls).toHaveLength(1)
+			expect(calls[0].cwd).toBeUndefined()
+			expect(calls[0].cmd[calls[0].cmd.indexOf('-f') + 1]).toBe(resolve(input))
+			expect(await Bun.file(join(outputDirectory, 'img.csv')).exists()).toBe(false)
+		} finally {
+			Bun.spawn = original
+			await rm(outputDirectory, { recursive: true, force: true })
+		}
+	})
 })
 
 test('converts ASTAP extract pixels from FITS 1-based to DetectedStar 0-based', async () => {

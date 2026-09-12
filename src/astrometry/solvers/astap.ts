@@ -1,5 +1,5 @@
 import { tmpdir } from 'os'
-import { basename, dirname, extname, join } from 'path'
+import { basename, dirname, extname, join, resolve } from 'path'
 import type { DetectedStar } from '../../imaging/stars/detector'
 import { readCsv } from '../../io/csv'
 import { readFits } from '../../io/formats/fits/fits'
@@ -19,7 +19,7 @@ export interface AstapStarDetectionOptions {
 	minSNR?: number
 	// Keep only the brightest `maxStars` detections (0 = unlimited).
 	maxStars?: number
-	// Directory for ASTAP's CSV output; defaults to the input file's directory.
+	// Unused by `-extract`: ASTAP writes the CSV beside the input file, not in this directory.
 	outputDirectory?: string
 	// Process timeout, in milliseconds.
 	timeout?: number
@@ -42,20 +42,20 @@ const DEFAULT_TIMEOUT = 300000
 // detections sorted/truncated to `maxStars` by SNR, or an empty array on failure or missing input.
 // ASTAP writes FITS 1-based pixel coordinates (`xc+1`, `yc+1`); results use DetectedStar's 0-based
 // array indices, matching detectStars.
-export async function astapDetectStars(input: string, { minSNR = 0, maxStars = 0, outputDirectory, executable, timeout }: Readonly<AstapStarDetectionOptions> = {}, signal?: AbortSignal): Promise<DetectedStar[]> {
+export async function astapDetectStars(input: string, { minSNR = 0, maxStars = 0, executable, timeout }: Readonly<AstapStarDetectionOptions> = {}, signal?: AbortSignal): Promise<DetectedStar[]> {
 	if (!input || !(await Bun.file(input).exists())) {
 		console.error('invalid input or input file does not exists')
 		return []
 	}
 
-	const cwd = outputDirectory || dirname(input)
+	const inputPath = resolve(input)
 	executable ||= executableForCurrentPlatform()
 	timeout ||= DEFAULT_TIMEOUT
 
-	const process = Bun.spawn([executable, '-f', input, '-z', '0', '-extract', minSNR.toFixed(0)], { cwd, signal, timeout })
+	const process = Bun.spawn([executable, '-f', inputPath, '-z', '0', '-extract', minSNR.toFixed(0)], { signal, timeout })
 	const exitCode = await process.exited
 
-	const file = Bun.file(`${join(cwd, basename(input, extname(input)))}.csv`)
+	const file = Bun.file(`${join(dirname(inputPath), basename(inputPath, extname(inputPath)))}.csv`)
 
 	if (await file.exists()) {
 		try {
