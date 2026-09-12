@@ -652,10 +652,15 @@ describe('stacker normalization modes', () => {
 
 		const batch = stackFrames(frames, options)
 		expect(batch.diagnostics[1].reason).toBe('insufficient-overlap')
+		expect(batch.diagnostics[1].overlapFraction).toBeGreaterThan(0)
+		expect(batch.diagnostics[1].transform).toBeDefined()
 
 		const live = new LiveStacker(options)
 		live.add(frames[0])
-		expect(live.add(frames[1]).reason).toBe('insufficient-overlap')
+		const liveRejected = live.add(frames[1])
+		expect(liveRejected.reason).toBe('insufficient-overlap')
+		expect(liveRejected.overlapFraction).toBe(batch.diagnostics[1].overlapFraction)
+		expect(liveRejected.transform).toEqual(batch.diagnostics[1].transform)
 	})
 	test('a reject fallback drops the frame as normalization-failed', () => {
 		const { reference, current } = localFrames(
@@ -669,10 +674,14 @@ describe('stacker normalization modes', () => {
 		const batch = stackFrames(frames, options)
 		expect(batch.acceptedFrames).toBe(1)
 		expect(batch.diagnostics[1].reason).toBe('normalization-failed')
+		expect(batch.diagnostics[1].transform).toBeDefined()
 
 		const live = new LiveStacker(options)
 		live.add(frames[0])
-		expect(live.add(frames[1]).reason).toBe('normalization-failed')
+		const liveRejected = live.add(frames[1])
+		expect(liveRejected.reason).toBe('normalization-failed')
+		expect(liveRejected.overlapFraction).toBe(batch.diagnostics[1].overlapFraction)
+		expect(liveRejected.transform).toEqual(batch.diagnostics[1].transform)
 	})
 
 	test('a global fallback keeps the frame and flags the diagnostics', () => {

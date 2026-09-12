@@ -521,10 +521,10 @@ export class LiveStacker {
 		const valid = registration.validityMask
 		const overlapFraction = registration.coveredPixels / Math.max(valid.length, 1)
 		if (overlapFraction <= 0) return this.#reject(frameIndex, frame, quality, 'no-overlap')
-		if (overlapFraction < this.#options.minOverlapFraction) return this.#reject(frameIndex, frame, quality, 'insufficient-overlap')
+		if (overlapFraction < this.#options.minOverlapFraction) return this.#reject(frameIndex, frame, quality, 'insufficient-overlap', overlapFraction, registration.transform.summary)
 
 		const normalization = computeNormalization(raw, valid, frame, this.#referenceFrame, quality, this.#options)
-		if (normalization.transform.kind === 'rejected') return this.#reject(frameIndex, frame, quality, 'normalization-failed', overlapFraction)
+		if (normalization.transform.kind === 'rejected') return this.#reject(frameIndex, frame, quality, 'normalization-failed', overlapFraction, registration.transform.summary)
 		applyNormalizationInPlace(raw, valid, frame.image.metadata.channels, normalization.transform)
 		accumulateAlignedFrame(this.#referenceFrame.image.metadata.channels, raw, valid, this.#sum!, this.#weightSum!, this.#coverageMap, this.#options.combinationMethod, normalization.summary.weight)
 
@@ -570,9 +570,10 @@ export class LiveStacker {
 	// Records a structured rejection result. `overlapFraction` defaults to 0 for the failures that happen
 	// before registration measures any coverage; a frame dropped after a successful registration passes
 	// the coverage it actually had, so the diagnostics stay distinguishable from a no-overlap frame.
-	#reject(frameIndex: number, frame: StackingFrame, quality: StackingFrameQualityMetrics, reason: FrameRejectionReason, overlapFraction = 0): FrameAcceptanceResult {
+	// `transform` is the fitted summary when registration succeeded before the rejection.
+	#reject(frameIndex: number, frame: StackingFrame, quality: StackingFrameQualityMetrics, reason: FrameRejectionReason, overlapFraction = 0, transform?: StackingTransformSummary): FrameAcceptanceResult {
 		this.#rejectedFrames++
-		const result: FrameAcceptanceResult = { accepted: false, frameIndex, frameId: frame.id, overlapFraction, quality, reason }
+		const result: FrameAcceptanceResult = transform === undefined ? { accepted: false, frameIndex, frameId: frame.id, overlapFraction, quality, reason } : { accepted: false, frameIndex, frameId: frame.id, overlapFraction, quality, reason, transform }
 		this.#diagnostics.push(result)
 		return result
 	}
