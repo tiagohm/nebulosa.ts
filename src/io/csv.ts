@@ -180,11 +180,14 @@ export class CsvLineParser {
 	// Scans for the next record-terminating newline starting at `offset`, honoring quoted regions so
 	// newlines inside quotes are not treated as breaks. Comment lines (optional leading whitespace,
 	// then a comment marker) are physical lines: quotes inside them do not span records.
+	// A quote opens a field only at field start (start of record or after a delimiter, ignoring
+	// whitespace), matching parse(); an interior quote in an unquoted field is literal.
 	// `atLineStart` is true at the beginning of a physical line; `inComment` is true while skipping a
-	// comment that has not yet reached its newline (both are carried across stream chunks).
-	// Returns [breakIndex, nextOffset, stillQuoted, atLineStart, inComment]; breakIndex is -1 when
-	// none is found.
-	scanLineBreak(line: string, offset: number = 0, quoted: boolean = false, atLineStart: boolean = !quoted, inComment: boolean = false) {
+	// comment that has not yet reached its newline; `atFieldStart` is true while still in the leading
+	// whitespace of a field (all three are carried across stream chunks).
+	// Returns [breakIndex, nextOffset, stillQuoted, atLineStart, inComment, atFieldStart];
+	// breakIndex is -1 when none is found.
+	scanLineBreak(line: string, offset: number = 0, quoted: boolean = false, atLineStart: boolean = !quoted, inComment: boolean = false, atFieldStart: boolean = !quoted && !inComment) {
 		let i = offset
 
 		for (; i < line.length; i++) {
@@ -193,10 +196,10 @@ export class CsvLineParser {
 			if (inComment) {
 				if (c === '\n' || c === '\r') {
 					if (c === '\r' && i + 1 < line.length && line[i + 1] === '\n') {
-						return [i, i + 2, false, true, false] as const
+						return [i, i + 2, false, true, false, true] as const
 					}
 
-					return [i, i + 1, false, true, false] as const
+					return [i, i + 1, false, true, false, true] as const
 				}
 
 				continue
@@ -204,13 +207,13 @@ export class CsvLineParser {
 
 			if (!quoted && (c === '\n' || c === '\r')) {
 				if (c === '\r' && i + 1 < line.length && line[i + 1] === '\n') {
-					return [i, i + 2, false, true, false] as const
+					return [i, i + 2, false, true, false, true] as const
 				}
 
-				return [i, i + 1, false, true, false] as const
+				return [i, i + 1, false, true, false, true] as const
 			}
 
-			if (!quoted && atLineStart && this.#isWhitespace(c)) continue
+			if (!quoted && atFieldStart && this.#isWhitespace(c)) continue
 
 			if (!quoted && atLineStart && this.#comment.includes(c)) {
 				inComment = true
@@ -221,15 +224,24 @@ export class CsvLineParser {
 			atLineStart = false
 
 			if (this.#isQuoteChar(c)) {
-				if (quoted && i + 1 < line.length && this.#isQuoteChar(line[i + 1])) {
-					i++
-				} else {
-					quoted = !quoted
+				if (quoted) {
+					if (i + 1 < line.length && this.#isQuoteChar(line[i + 1])) {
+						i++
+					} else {
+						quoted = false
+					}
+				} else if (atFieldStart) {
+					quoted = true
+					atFieldStart = false
 				}
+			} else if (!quoted && this.#isDelimiter(c)) {
+				atFieldStart = true
+			} else if (!quoted) {
+				atFieldStart = false
 			}
 		}
 
-		return [-1, i, quoted, atLineStart, inComment] as const
+		return [-1, i, quoted, atLineStart, inComment, atFieldStart] as const
 	}
 
 	#parseRawColumn(line: string, info: ParseColumnInfo) {
@@ -267,9 +279,10 @@ export function readCsv(input: string | readonly string[], options: string | rea
 	let quoted = false
 	let atLineStart = true
 	let inComment = false
+	let atFieldStart = true
 
 	while (offset < input.length) {
-		const [index, next, nextQuoted, nextAtLineStart, nextInComment] = parser.scanLineBreak(input, offset, quoted, atLineStart, inComment)
+		const [index, next, nextQuoted, nextAtLineStart, nextInComment, nextAtFieldStart] = parser.scanLineBreak(input, offset, quoted, atLineStart, inComment, atFieldStart)
 		const row = parser.parse(index >= 0 ? input.slice(offset, index) : input.slice(offset))
 
 		if (index >= 0) {
@@ -277,6 +290,7 @@ export function readCsv(input: string | readonly string[], options: string | rea
 			quoted = nextQuoted
 			atLineStart = nextAtLineStart
 			inComment = nextInComment
+			atFieldStart = nextAtFieldStart
 		}
 
 		if (row === false || row.length === 0) {
@@ -312,6 +326,7 @@ export async function* readCsvStream(source: Source, options: string | string[] 
 	let quoted = false
 	let atLineStart = true
 	let inComment = false
+	let atFieldStart = true
 
 	while (true) {
 		// Read a chunk of data from the source
@@ -324,13 +339,14 @@ export async function* readCsvStream(source: Source, options: string | string[] 
 			let offset = 0
 
 			while (offset < decoded.length) {
-				const [index, next, nextQuoted, nextAtLineStart, nextInComment] = parser.scanLineBreak(decoded, offset, quoted, atLineStart, inComment)
+				const [index, next, nextQuoted, nextAtLineStart, nextInComment, nextAtFieldStart] = parser.scanLineBreak(decoded, offset, quoted, atLineStart, inComment, atFieldStart)
 
 				if (index < 0) {
 					line += offset > 0 ? decoded.slice(offset) : decoded
 					quoted = nextQuoted
 					atLineStart = nextAtLineStart
 					inComment = nextInComment
+					atFieldStart = nextAtFieldStart
 					break
 				}
 
@@ -345,6 +361,7 @@ export async function* readCsvStream(source: Source, options: string | string[] 
 				quoted = nextQuoted
 				atLineStart = nextAtLineStart
 				inComment = nextInComment
+				atFieldStart = nextAtFieldStart
 
 				// If the row is valid and not skipped, yield it
 				if (row === false || row.length === 0) continue
