@@ -482,6 +482,33 @@ test('write all keywords', () => {
 	expect(write({ HISTORY: `${'A'.repeat(71)}BBBBB` }, 160)).toBe(`HISTORY  ${'A'.repeat(71)}HISTORY  BBBBB${' '.repeat(66)}`)
 })
 
+test('XPIXSZ and YPIXSZ default comments describe binned pixel size', () => {
+	FitsKeywordWriter.keywords = KEYWORDS
+
+	const writer = new FitsKeywordWriter()
+	const buffer = Buffer.allocUnsafe(FITS_HEADER_CARD_SIZE)
+
+	function commentOf(card: FitsHeaderCard) {
+		const n = writer.write(card, buffer)
+		expect(n).toBe(FITS_HEADER_CARD_SIZE)
+		const text = buffer.toString('ascii', 0, n)
+		const separator = text.indexOf(' / ')
+		expect(separator).toBeGreaterThan(0)
+		return text
+			.slice(separator + 3)
+			.trimEnd()
+			.toLowerCase()
+	}
+
+	const xComment = commentOf(['XPIXSZ', 3.76])
+	expect(xComment).toContain('pixel')
+	expect(xComment).toContain('binning')
+
+	const yComment = commentOf(['YPIXSZ', 3.76])
+	expect(yComment).toContain('pixel')
+	expect(yComment).toContain('binning')
+})
+
 test('writeFits emits HISTORY as 80-byte cards without embedded newlines', async () => {
 	const header: FitsHeader = { SIMPLE: true, BITPIX: 8, NAXIS: 2, NAXIS1: 1, NAXIS2: 1, HISTORY: 'first processing step\nsecond processing step' }
 	const buffer = Buffer.alloc(FITS_BLOCK_SIZE * 2)
