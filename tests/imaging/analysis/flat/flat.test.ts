@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test'
+import { resolveFlatContextCfaOffset } from '../../../../src/imaging/analysis/flat/context'
 import { analyzeFlat } from '../../../../src/imaging/analysis/flat/flat'
 import { generateSyntheticFlatImage } from '../../../../src/imaging/synthetic/flat'
 
@@ -88,6 +89,33 @@ test('uses targetArea for signal but the full area for clipping', () => {
 	expect(result.planes[0].target.status).toBe('pass')
 	expect(result.planes[0].clipping.upper).toMatchObject({ count: 1, fraction: 1 / 9 })
 	expect(result.assessment.verdict).toBe('rejected')
+})
+
+test('ignores FITS Bayer offsets on images without a mosaic', () => {
+	const mono = generateSyntheticFlatImage({ width: 2, height: 2, bias: 0, signal: 1000, vignetting: 0 })
+	const monoWithOffset = { ...mono, header: { ...mono.header, XBAYROFF: 0, YBAYROFF: 0 } }
+	expect(monoWithOffset.metadata.bayer).toBeUndefined()
+	expect(resolveFlatContextCfaOffset({ image: monoWithOffset })).toBeUndefined()
+	expect(analyzeFlat({ frame: { image: monoWithOffset } }).planes.map((plane) => plane.plane)).toEqual(['mono'])
+
+	const rgb = generateSyntheticFlatImage({ width: 2, height: 2, channels: 3, bias: 0, signal: 1000, vignetting: 0 })
+	const rgbWithOffset = { ...rgb, header: { ...rgb.header, XBAYROFF: 0, YBAYROFF: 0 } }
+	expect(rgbWithOffset.metadata.bayer).toBeUndefined()
+	expect(resolveFlatContextCfaOffset({ image: rgbWithOffset })).toBeUndefined()
+	expect(analyzeFlat({ frame: { image: rgbWithOffset } }).planes.map((plane) => plane.plane)).toEqual(['red', 'green', 'blue'])
+})
+
+test('shifts CFA phase from a complete integer XBAYROFF/YBAYROFF pair', () => {
+	const image = generateSyntheticFlatImage({ width: 2, height: 2, bayer: 'RGGB', bias: 0, signal: 100, vignetting: 0, channelResponse: [1, 0.5, 0.25] })
+	const shifted = { ...image, header: { ...image.header, XBAYROFF: 1, YBAYROFF: 0 } }
+	expect(image.metadata.bayer).toBe('RGGB')
+	expect(resolveFlatContextCfaOffset({ image: shifted })).toEqual([1, 0])
+	expect(analyzeFlat({ frame: { image: shifted } }).planes.map((plane) => [plane.plane, plane.observed.median])).toEqual([
+		['red', 50],
+		['green1', 100],
+		['green2', 25],
+		['blue', 50],
+	])
 })
 
 test('preserves local CFA phase and separate green planes through analysis', () => {
