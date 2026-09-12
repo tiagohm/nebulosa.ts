@@ -238,8 +238,8 @@ export class DomeManager extends DeviceManager<Dome> {
 			}
 			case 'DOME_AUTOSYNC': {
 				if (definition) {
-					const enabled = message.elements.INDI_ENABLED !== undefined ? 'INDI_ENABLED' : message.elements.ENABLE !== undefined ? 'ENABLE' : undefined
-					const disabled = message.elements.INDI_DISABLED !== undefined ? 'INDI_DISABLED' : message.elements.DISABLE !== undefined ? 'DISABLE' : undefined
+					const enabled = message.elements.DOME_AUTOSYNC_ENABLE !== undefined ? 'DOME_AUTOSYNC_ENABLE' : message.elements.INDI_ENABLED !== undefined ? 'INDI_ENABLED' : message.elements.ENABLE !== undefined ? 'ENABLE' : undefined
+					const disabled = message.elements.DOME_AUTOSYNC_DISABLE !== undefined ? 'DOME_AUTOSYNC_DISABLE' : message.elements.INDI_DISABLED !== undefined ? 'INDI_DISABLED' : message.elements.DISABLE !== undefined ? 'DISABLE' : undefined
 
 					if (enabled !== undefined && disabled !== undefined) this.#slavingProperties.set(dome, [enabled, disabled])
 					else this.#slavingProperties.delete(dome)
@@ -248,7 +248,7 @@ export class DomeManager extends DeviceManager<Dome> {
 				}
 
 				const enabled = this.#slavingProperties.get(dome)?.[0]
-				const slaved = enabled === undefined ? (message.elements.INDI_ENABLED?.value ?? message.elements.ENABLE?.value) : message.elements[enabled]?.value
+				const slaved = enabled === undefined ? (message.elements.DOME_AUTOSYNC_ENABLE?.value ?? message.elements.INDI_ENABLED?.value ?? message.elements.ENABLE?.value) : message.elements[enabled]?.value
 				if (slaved !== undefined && handleSwitchValue(dome, 'slaved', slaved)) this.updated(dome, 'slaved', message.state)
 				return
 			}

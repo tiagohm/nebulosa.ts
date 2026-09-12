@@ -231,6 +231,34 @@ test('DomeManager preserves driver-specific slaving element names', () => {
 	expect(switchCommands.map(({ elements }) => elements)).toEqual([{ ENABLE: true }, { DISABLE: true }])
 })
 
+test('DomeManager supports standard slaving element names', () => {
+	numberCommands.length = 0
+	switchCommands.length = 0
+
+	const manager = new DomeManager()
+	const dome = setupDome(manager)
+	manager.switchVector(
+		recordingClient,
+		{
+			device: dome.name,
+			name: 'DOME_AUTOSYNC',
+			permission: 'rw',
+			rule: 'OneOfMany',
+			state: 'Ok',
+			elements: { DOME_AUTOSYNC_ENABLE: defSwitch('DOME_AUTOSYNC_ENABLE', false), DOME_AUTOSYNC_DISABLE: defSwitch('DOME_AUTOSYNC_DISABLE', true) },
+		},
+		'defSwitchVector',
+	)
+
+	expect(dome.canSlave).toBeTrue()
+	expect(dome.slaved).toBeFalse()
+
+	manager.slave(dome, true)
+	manager.slave(dome, false)
+
+	expect(switchCommands.map(({ elements }) => elements)).toEqual([{ DOME_AUTOSYNC_ENABLE: true }, { DOME_AUTOSYNC_DISABLE: true }])
+})
+
 test('DomeManager does not complete failed home or park operations', () => {
 	const manager = new DomeManager()
 	const dome = setupDome(manager)
