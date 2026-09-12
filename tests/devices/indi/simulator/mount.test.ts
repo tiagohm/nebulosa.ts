@@ -1784,6 +1784,36 @@ describe('mount simulator meridian flip', () => {
 		}
 	})
 
+	test('cancels an in-flight park when unparked', () => {
+		const { simulator } = makeMeridianFlipMount('mount.park.unpark')
+
+		try {
+			const lst = simulator.siderealTimeAt(simulator.utcTime)
+			simulator.syncTo(normalizeAngle(lst + hour(1)), deg(20))
+			simulator.setPark()
+			simulator.syncTo(normalizeAngle(lst + hour(2)), deg(20))
+			simulator.setTrackingEnabled(true)
+			simulator.park()
+			simulator.advance(0.1)
+			expect(simulator.isParking).toBeTrue()
+
+			simulator.unpark()
+			expect(simulator.isParked).toBeFalse()
+			expect(simulator.isParking).toBeFalse()
+			expect(simulator.isSlewing).toBeFalse()
+			expect(simulator.isTracking).toBeTrue()
+
+			simulator.advance(FAST_FLIP_DURATION + 1)
+			expect(simulator.isParked).toBeFalse()
+			expect(simulator.isTracking).toBeTrue()
+
+			simulator.goTo(normalizeAngle(simulator.rightAscension + deg(1)), simulator.declination)
+			expect(simulator.isSlewing).toBeTrue()
+		} finally {
+			simulator.dispose()
+		}
+	})
+
 	test('includes pier-side travel when homing and parking', () => {
 		const { simulator } = makeMeridianFlipMount('mount.flip.home.park')
 

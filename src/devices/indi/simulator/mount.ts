@@ -1269,6 +1269,11 @@ export class MountSimulator extends DeviceSimulator {
 
 	// Unparks the mount without changing the current coordinate.
 	unpark() {
+		if (this.#slewMode === 'PARK') {
+			this.#abortSlew()
+			this.#refreshSlewingState()
+		}
+
 		this.isParked && selectOnSwitch(this.#park, 'UNPARK') && this.notify(this.#park)
 		this.#setParking(false)
 	}
