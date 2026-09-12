@@ -250,7 +250,10 @@ export class RangeHttpSource implements Source, Seekable {
 		if (size === 0) return 0
 
 		const response = await fetch(this.uri, { headers: { 'Accept-Encoding': 'identity', Range: `bytes=${this.position}-${this.position + size - 1}` } })
-		if (!response.ok) throw new Error(`HTTP range request failed with status ${response.status}`)
+		// A successful range is 206 Partial Content. 200 OK is the full representation
+		// (Range ignored or lost on redirect/proxy/cache); copying from the start of
+		// that body would return the wrong bytes when position > 0.
+		if (response.status !== 206) throw new Error(`HTTP range request failed with status ${response.status}`)
 
 		let read = 0
 		if (size > 0x10000) {

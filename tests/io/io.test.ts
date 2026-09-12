@@ -506,6 +506,34 @@ describe('rangeHttpSource', () => {
 		}
 	})
 
+	test('rejects HTTP 200 when Range is ignored', async () => {
+		const data = Buffer.from('abcdefghijklmnopqrstuvwxyz')
+		const restore = globalThis.fetch
+
+		// oxlint-disable-next-line require-await
+		globalThis.fetch = (async (_input, _init) => new Response(data, { status: 200 })) as typeof fetch
+
+		try {
+			const source = rangeHttpSource('https://example.test/data')
+			expect(source.seek(10)).toBeTrue()
+			const output = Buffer.alloc(5, 0)
+
+			let thrown: unknown
+			try {
+				await source.read(output)
+			} catch (error) {
+				thrown = error
+			}
+
+			expect(thrown).toBeInstanceOf(Error)
+			expect((thrown as Error).message).toBe('HTTP range request failed with status 200')
+			expect(output.toString('ascii')).not.toBe('abcde')
+			expect(source.position).toBe(10)
+		} finally {
+			globalThis.fetch = restore
+		}
+	})
+
 	test('reads large ranges across multiple stream chunks', async () => {
 		const data = Buffer.allocUnsafe(0x10000 + 257)
 		for (let i = 0; i < data.byteLength; i++) data[i] = i & 0xff
