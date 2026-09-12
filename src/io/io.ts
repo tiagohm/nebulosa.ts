@@ -733,16 +733,27 @@ export async function* readLines(source: Source, chunkSize: number, options?: Re
 }
 
 // Pumps all bytes from `source` into `sink` using a reusable transfer buffer (a byte count, or a
-// caller-provided Buffer), stopping when the source is exhausted or the sink stops accepting. Returns total bytes read.
+// caller-provided Buffer), retrying short writes. Stops when the source is exhausted or the sink
+// accepts no bytes. Returns total bytes transferred.
 export async function sourceTransferToSink(source: Source, sink: Sink, size: number | Buffer = 1024) {
 	const buffer = Buffer.isBuffer(size) ? size : Buffer.allocUnsafe(size)
 	let read = 0
 
 	while (true) {
 		const n = await source.read(buffer)
-		const m = n && (await sink.write(buffer, 0, n))
+		if (!n) break
+
+		let offset = 0
+		let remaining = n
+		while (remaining > 0) {
+			const m = await sink.write(buffer, offset, remaining)
+			if (!m && offset === 0) return read
+			if (!Number.isInteger(m) || !(m > 0) || !(m <= remaining)) throw new Error('sink failed to complete write')
+			offset += m
+			remaining -= m
+		}
+
 		read += n
-		if (!m) break
 	}
 
 	return read

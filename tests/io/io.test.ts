@@ -3,7 +3,7 @@ import fs from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { FitsKeywordReader, FitsKeywordWriter } from '../../src/io/formats/fits/fits'
-import { type Base64Alphabet, base64Sink, base64Source, bufferSink, bufferSource, fileHandleSink, fileHandleSource, GrowableBuffer, rangeHttpSource, readableStreamSource, readLines, readRemaining, readUntil, type Source } from '../../src/io/io'
+import { type Base64Alphabet, base64Sink, base64Source, bufferSink, bufferSource, fileHandleSink, fileHandleSource, GrowableBuffer, rangeHttpSource, readableStreamSource, readLines, readRemaining, readUntil, type Sink, type Source, sourceTransferToSink } from '../../src/io/io'
 
 test('bufferSink', () => {
 	const buffer = Buffer.allocUnsafe(16)
@@ -159,6 +159,23 @@ test('fileHandleSource', async () => {
 	expect(await source.read(buffer, undefined, 1)).toBe(1)
 
 	expect(buffer.toString()).toBe('gabcdef          ')
+})
+
+describe('sourceTransferToSink', () => {
+	test('retries partial sink writes until the source is copied', async () => {
+		const data = Buffer.from('0123456789ABCDEFGHIJ')
+		const sink = new LimitedSink(3)
+		const n = await sourceTransferToSink(bufferSource(data), sink, 8)
+
+		expect(n).toBe(data.byteLength)
+		expect(sink.toBuffer()).toEqual(data)
+	})
+
+	test('stops when the sink accepts no bytes', async () => {
+		const sink: Sink = { write: () => 0 }
+		const n = await sourceTransferToSink(bufferSource(Buffer.from('abc')), sink)
+		expect(n).toBe(0)
+	})
 })
 
 test('readUntil returns the available bytes when the source ends early', async () => {
@@ -595,6 +612,24 @@ describe('rangeHttpSource', () => {
 		}
 	})
 })
+
+class LimitedSink implements Sink {
+	readonly #chunks: Buffer[] = []
+
+	constructor(readonly maxBytes: number) {}
+
+	write(chunk: string | Buffer, offset = 0, size?: number) {
+		const data = typeof chunk === 'string' ? Buffer.from(chunk) : chunk
+		const n = Math.min(this.maxBytes, size ?? data.byteLength - offset)
+		if (!(n > 0)) return 0
+		this.#chunks.push(Buffer.from(data.subarray(offset, offset + n)))
+		return n
+	}
+
+	toBuffer() {
+		return Buffer.concat(this.#chunks)
+	}
+}
 
 function randomBase64(n: number, alphabet: Base64Alphabet) {
 	const bytes = Buffer.allocUnsafe(n)
