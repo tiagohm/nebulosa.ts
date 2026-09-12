@@ -1,5 +1,5 @@
 import type { EquatorialCoordinate } from '../../../astronomy/coordinates/coordinate'
-import { applyEquatorialPointingError, type EquatorialPointingModel, IDENTITY_EQUATORIAL_POINTING_MODEL, polarAlignmentPointingModel, tubeFlexureError } from '../../../astronomy/coordinates/pointing'
+import { applyEquatorialPointingError, applyTubeFlexureError, type EquatorialPointingModel, IDENTITY_EQUATORIAL_POINTING_MODEL, polarAlignmentPointingModel } from '../../../astronomy/coordinates/pointing'
 import { localSiderealTime } from '../../../astronomy/observer/location'
 import { formatTemporal, TIMEZONE } from '../../../astronomy/time/temporal'
 import { timeUnix } from '../../../astronomy/time/time'
@@ -476,12 +476,10 @@ export class MountSimulator extends DeviceSimulator {
 			}
 
 			if (flexureEnabled && TUBE_FLEXURE.value !== 0) {
-				// Evaluated at the mechanical orientation rather than at the partly corrected one: the tube
-				// sags according to where it is actually aimed, and the geometric terms are arcseconds, far
-				// too small to change how much it sags.
-				const flexure = tubeFlexureError(lst - this.#mechanical.rightAscension, this.#mechanical.declination, this.latitude, TUBE_FLEXURE.value * ASEC2RAD, this.#flexureError)
-				rightAscension -= flexure[0]
-				declination += flexure[1]
+				// Applied after the geometric terms. Those are arcseconds, far too small to change the zenith
+				// distance the tube sags under. Near the pole a hour-angle turn cannot express the east
+				// component of the droop, so this uses the same great-circle path as the geometric model.
+				;[rightAscension, declination] = applyTubeFlexureError(rightAscension, declination, lst, this.latitude, TUBE_FLEXURE.value * ASEC2RAD, this.#flexureError)
 			}
 
 			// The pier offset applies on one side only, so what it really configures is the difference

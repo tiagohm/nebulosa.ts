@@ -104,11 +104,26 @@ export function equatorialPointingError(hourAngle: Angle, declination: Angle, mo
 	return [deltaHourAngle, deltaDeclination]
 }
 
+// On-sky east and north components of tube flexure, in radians. East is the direction of increasing
+// right ascension. Both stay finite at the poles: the east component is the tangent-plane displacement
+// `−droop·sin q`, not that quantity divided by cos δ. A zero flexure returns `[0, 0]`.
+function tubeFlexureSkyOffset(hourAngle: Angle, declination: Angle, latitude: Angle, flexure: Angle): readonly [Angle, Angle] {
+	if (flexure === 0) return [0, 0]
+
+	const cosZenithDistance = Math.sin(latitude) * Math.sin(declination) + Math.cos(latitude) * Math.cos(declination) * Math.cos(hourAngle)
+	// From the cosine rather than an inverse trig call, and clamped because rounding can push the
+	// dot product a hair outside [-1, 1] when the target passes through the zenith or the nadir.
+	const sinZenithDistance = Math.sqrt(Math.max(0, 1 - cosZenithDistance * cosZenithDistance))
+	const droop = flexure * sinZenithDistance
+	const q = parallacticAngle(hourAngle, declination, latitude)
+	return [-droop * Math.sin(q), -droop * Math.cos(q)]
+}
+
 // Computes the pointing error produced by gravitational flexure of the tube.
 //
 // `hourAngle` and `declination` describe where the axes mechanically are, `latitude` is the site
 // latitude and `flexure` the droop at the horizon; all radians. Returns `[ΔH, Δδ]` in radians, on the
-// same convention as `equatorialPointingError`, so the two can simply be summed.
+// same convention as `equatorialPointingError`, so the two can simply be summed away from the poles.
 //
 // Unlike the six geometric terms, flexure is not a property of the mount's axes but of gravity, so it
 // acts in the vertical: the tube sags away from the zenith by `flexure·sin z`, which vanishes when
@@ -121,24 +136,22 @@ export function equatorialPointingError(hourAngle: Angle, declination: Angle, mo
 //   ΔH = +flexure·sin z·sin q / cos δ
 //
 // The sign of ΔH is opposite because H = LST − RA. The declination fed to the `cos δ` division is
-// clamped to ±MAX_POINTING_DECLINATION so the hour-angle error stays finite at the poles, where it is
-// unobservable anyway. A zero flexure returns exactly `[0, 0]`. When `o` is provided it receives the
-// result and is returned.
+// clamped to ±MAX_POINTING_DECLINATION so the hour-angle pair stays finite. Applying that pair as a
+// turn about the polar axis still drops the east-west droop at the pole itself, where rotating in H
+// does not move the optical axis; `applyTubeFlexureError` keeps that component as a great-circle
+// offset. A zero flexure returns exactly `[0, 0]`. When `o` is provided it receives the result and is
+// returned.
 export function tubeFlexureError(hourAngle: Angle, declination: Angle, latitude: Angle, flexure: Angle, o?: [Angle, Angle]): [Angle, Angle] {
 	let deltaHourAngle = 0
 	let deltaDeclination = 0
 
 	if (flexure !== 0) {
-		const cosZenithDistance = Math.sin(latitude) * Math.sin(declination) + Math.cos(latitude) * Math.cos(declination) * Math.cos(hourAngle)
-		// From the cosine rather than an inverse trig call, and clamped because rounding can push the
-		// dot product a hair outside [-1, 1] when the target passes through the zenith or the nadir.
-		const sinZenithDistance = Math.sqrt(Math.max(0, 1 - cosZenithDistance * cosZenithDistance))
-		const droop = flexure * sinZenithDistance
-		const q = parallacticAngle(hourAngle, declination, latitude)
+		const [east, north] = tubeFlexureSkyOffset(hourAngle, declination, latitude, flexure)
 		const clampedDeclination = clamp(declination, -MAX_POINTING_DECLINATION, MAX_POINTING_DECLINATION)
 
-		deltaHourAngle = (droop * Math.sin(q)) / Math.cos(clampedDeclination)
-		deltaDeclination = -droop * Math.cos(q)
+		// east = −ΔH·cos δ, so recovering ΔH divides by cos δ; the clamp is only for this representation.
+		deltaHourAngle = -east / Math.cos(clampedDeclination)
+		deltaDeclination = north
 	}
 
 	if (o) {
@@ -166,6 +179,29 @@ export function applyEquatorialPointingError(rightAscension: Angle, declination:
 		return applyPolarPointingError(rightAscension, declination, hourAngle, model, error)
 	}
 
+	error[0] = normalizeAngle(rightAscension - error[0])
+	error[1] += declination
+	return error
+}
+
+// Applies tube flexure to an equatorial coordinate, returning `[rightAscension, declination]` in
+// radians of the direction the optical axis really points after the tube has sagged.
+//
+// `rightAscension`/`declination` are the orientation before flexure, `lst` the local sidereal time,
+// `latitude` the site latitude and `flexure` the droop at the horizon; all radians. Same `RA − ΔH`
+// convention as `applyEquatorialPointingError` away from the poles. Within MAX_POINTING_DECLINATION
+// of a pole, a hour-angle turn no longer moves the optical axis, so the east-west droop is applied
+// as a great-circle offset instead. A zero flexure returns the input with right ascension normalized
+// to [0, TAU). When `o` is provided it receives the result and is returned.
+export function applyTubeFlexureError(rightAscension: Angle, declination: Angle, lst: Angle, latitude: Angle, flexure: Angle, o?: [Angle, Angle]): readonly [Angle, Angle] {
+	const hourAngle = lst - rightAscension
+
+	if (Math.abs(declination) > MAX_POINTING_DECLINATION) {
+		const [east, north] = tubeFlexureSkyOffset(hourAngle, declination, latitude, flexure)
+		return applySkyOffset(rightAscension, declination, east, north, o ?? [0, 0])
+	}
+
+	const error = tubeFlexureError(hourAngle, declination, latitude, flexure, o)
 	error[0] = normalizeAngle(rightAscension - error[0])
 	error[1] += declination
 	return error
@@ -201,6 +237,14 @@ function applyPolarPointingError(rightAscension: Angle, declination: Angle, hour
 	// displaces the tube towards the east, which is the direction of increasing right ascension.
 	const east = -(model.indexHourAngle * cosDeclination + model.coneError + (model.axisNonPerpendicularity - model.polarAzimuthError * cosHourAngle + model.polarAltitudeError * sinHourAngle) * sinDeclination)
 	const north = model.indexDeclination + model.polarAzimuthError * sinHourAngle + model.polarAltitudeError * cosHourAngle
+	return applySkyOffset(rightAscension, declination, east, north, error)
+}
+
+// Rotates the mechanical direction by the tangent-plane displacement `(east, north)`, both radians,
+// along the great circle they point along. East is increasing right ascension; north is increasing
+// declination. `error` receives the result and is returned. A zero offset normalizes the right
+// ascension and leaves the declination unchanged.
+function applySkyOffset(rightAscension: Angle, declination: Angle, east: Angle, north: Angle, error: [Angle, Angle]): readonly [Angle, Angle] {
 	const offset = Math.hypot(east, north)
 
 	if (offset === 0) {
@@ -214,6 +258,8 @@ function applyPolarPointingError(rightAscension: Angle, declination: Angle, hour
 	// by the cosine and the sine, and no normalization is needed.
 	const cosRightAscension = Math.cos(rightAscension)
 	const sinRightAscension = Math.sin(rightAscension)
+	const cosDeclination = Math.cos(declination)
+	const sinDeclination = Math.sin(declination)
 	const scale = Math.sin(offset) / offset
 	const cosOffset = Math.cos(offset)
 
