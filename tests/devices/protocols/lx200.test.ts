@@ -92,6 +92,29 @@ test('sets target coordinates and uses them for sync and goto', async () => {
 	expect(slewed[0][1]).toBeCloseTo(dms(-4, 5, 6), 12)
 })
 
+test('accepts standard colon-prefixed commands', async () => {
+	const slewed: number[][] = []
+
+	await withLx200Server(
+		async (client) => {
+			const response = readUntil(client, (value) => value === '110')
+
+			client.write(':Sr12:00:00#:Sd+45*00:00#:MS#', 'ascii')
+
+			expect(await response).toBe('110')
+		},
+		makeHandler({
+			goto: (server, rightAscension, declination) => {
+				slewed.push([rightAscension, declination])
+			},
+		}),
+	)
+
+	expect(slewed).toHaveLength(1)
+	expect(slewed[0][0]).toBeCloseTo(hms(12), 12)
+	expect(slewed[0][1]).toBeCloseTo(dms(45), 12)
+})
+
 test('keeps the previous target coordinates after invalid coordinate writes', async () => {
 	const synced: number[][] = []
 	const slewed: number[][] = []
