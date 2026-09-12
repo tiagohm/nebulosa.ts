@@ -10,6 +10,31 @@ import { deg, parseAngle } from '../../../src/math/units/angle'
 const CENTER_RA = parseAngle('18h 59m 51s')!
 const CENTER_DEC = parseAngle('-66d 15m 57s')!
 
+test('rejects WCS dimensions that do not fit the two-axis transform buffers', () => {
+	const spatial = { CTYPE1: 'RA---TAN', CTYPE2: 'DEC--TAN', CRPIX1: 100, CRPIX2: 100, CRVAL1: 180, CRVAL2: -20, CD1_1: -0.01, CD1_2: 0, CD2_1: 0, CD2_2: 0.01 }
+	const headers = [
+		{ ...spatial, CTYPE3: 'FREQ', CRPIX3: 1, CRVAL3: 1.4e9, CD1_3: 0.002, CD3_3: 1e6 },
+		{ ...spatial, WCSAXES: 5 },
+		{ ...spatial, PC1_5: 0.002 },
+		{ CTYPE1: 'FREQ', CRPIX1: 1, CRVAL1: 1.4e9, CDELT1: 1e6 },
+	]
+	using empty = new Wcs()
+	using loaded = new Wcs(spatial)
+	const expected = loaded.pixToSky(110, 90)!
+
+	for (const header of headers) {
+		expect(empty.load(header)).toBe(false)
+		expect(empty.pixToSky(110, 90)).toBeUndefined()
+		expect(empty.skyToPix(deg(180), deg(-20))).toBeUndefined()
+		expect(() => new Wcs(header)).toThrow('failed to initialize WCS from header')
+		expect(loaded.load(header)).toBe(false)
+		expect(loaded.pixToSky(110, 90)).toEqual(expected)
+		const [x, y] = loaded.skyToPix(...expected)!
+		expect(x).toBeCloseTo(110, 9)
+		expect(y).toBeCloseTo(90, 9)
+	}
+})
+
 function project(header: FitsHeader, precision = 12, px = 97, py = 97, pra = CENTER_RA, pdec = CENTER_DEC) {
 	using wcs = new Wcs(header)
 	const [ra, dec] = wcs.pixToSky(px, py)!

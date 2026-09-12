@@ -5,7 +5,7 @@ import { type FitsHeader, FitsKeywordWriter } from '../../io/formats/fits/fits'
 import { type Angle, deg, toDeg } from '../../math/units/angle'
 
 // FFI binding to WCSLIB (libwcs) via bun:ffi. Parses the WCS keywords of a FITS header into a native
-// wcsprm struct and exposes pixel↔sky transforms. Sky angles are radians on the public API and
+// two-axis wcsprm struct and exposes pixel↔sky transforms. Sky angles are radians on the public API and
 // converted to/from the degrees WCSLIB uses. Native memory is owned by the Wcs class (Disposable).
 
 // Resolved type of the dlopen handle returned by open(); used to type the cached library instance.
@@ -52,8 +52,8 @@ export class Wcs implements Disposable {
 		}
 	}
 
-	// Parses the WCS keywords of `header` into a native wcsprm, replacing any previous solution. Returns
-	// true only when exactly one WCS is found; other counts are freed and false is returned.
+	// Parses the WCS keywords of `header` into a native wcsprm. Returns true and replaces the previous
+	// solution only for a single two-axis WCS; otherwise frees the candidate and returns false.
 	load(header: FitsHeader) {
 		const [buffer, n] = bufferFromHeader(header)
 
@@ -66,12 +66,18 @@ export class Wcs implements Disposable {
 
 			if (ret === 0) {
 				if (read.i32(nwcs) === 1) {
-					this[Symbol.dispose]()
-					this.#pointer = read.ptr(wcsprm) as Pointer
-					return true
+					const pointer = read.ptr(wcsprm) as Pointer
+					// WCSLIB wcs.h starts wcsprm with int flag, int naxis (offset 4).
+					// For ncoord=1, transforms ignore nelem and access naxis doubles: reject other
+					// dimensions before they can overrun or leave uninitialized our two-axis buffers.
+					if (read.i32(pointer, 4) === 2) {
+						this[Symbol.dispose]()
+						this.#pointer = pointer
+						return true
+					}
 				}
 
-				// wcspih allocated WCS structs we won't keep (0 or >1); release them to avoid a leak.
+				// Release every rejected WCS array, including unsupported dimensions.
 				this.#lib.wcsvfree(nwcs, wcsprm)
 			}
 		}
