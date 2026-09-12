@@ -86,6 +86,70 @@ test('falls back to slew for goto when tracking is unavailable', () => {
 	expect(switchCommands).toEqual([{ device: mount.name, name: 'ON_COORD_SET', elements: { SLEW: true } }])
 })
 
+test('aggregates independent north-south and west-east motion', () => {
+	const manager = new MountManager()
+	const mount = setupTestMount(manager)
+	const motionNS = {
+		device: mount.name,
+		name: 'TELESCOPE_MOTION_NS',
+		permission: 'rw',
+		rule: 'AtMostOne',
+		state: 'Idle',
+		elements: {
+			MOTION_NORTH: defSwitch('MOTION_NORTH', false),
+			MOTION_SOUTH: defSwitch('MOTION_SOUTH', false),
+		},
+	} as const
+	const motionWE = {
+		...motionNS,
+		name: 'TELESCOPE_MOTION_WE',
+		elements: {
+			MOTION_WEST: defSwitch('MOTION_WEST', false),
+			MOTION_EAST: defSwitch('MOTION_EAST', false),
+		},
+	} as const
+
+	manager.switchVector(recordingClient, motionNS, 'defSwitchVector')
+	manager.switchVector(recordingClient, motionWE, 'defSwitchVector')
+	manager.switchVector(
+		recordingClient,
+		{
+			device: mount.name,
+			name: 'TELESCOPE_MOTION_NS',
+			state: 'Busy',
+			elements: {
+				MOTION_NORTH: { name: 'MOTION_NORTH', value: true },
+				MOTION_SOUTH: { name: 'MOTION_SOUTH', value: false },
+			},
+		},
+		'setSwitchVector',
+	)
+	manager.switchVector(
+		recordingClient,
+		{
+			device: mount.name,
+			name: 'TELESCOPE_MOTION_WE',
+			state: 'Idle',
+			elements: {
+				MOTION_WEST: { name: 'MOTION_WEST', value: false },
+				MOTION_EAST: { name: 'MOTION_EAST', value: false },
+			},
+		},
+		'setSwitchVector',
+	)
+
+	expect(mount.moving).toBeTrue()
+	expect(mount.canMove).toBeTrue()
+
+	manager.delProperty(recordingClient, { device: mount.name, name: 'TELESCOPE_MOTION_WE' })
+	expect(mount.moving).toBeTrue()
+	expect(mount.canMove).toBeTrue()
+
+	manager.delProperty(recordingClient, { device: mount.name, name: 'TELESCOPE_MOTION_NS' })
+	expect(mount.moving).toBeFalse()
+	expect(mount.canMove).toBeFalse()
+})
+
 test('resets deleted INDI properties to defaults', () => {
 	const manager = new MountManager()
 	const device = setupDevice(structuredClone(DEFAULT_MOUNT))
