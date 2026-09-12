@@ -64,7 +64,6 @@ test('mulberry32 wraps the Weyl counter modulo 2^32', () => {
 	const random = mulberry32(1)
 
 	for (let i = 1; i < 5_000_000; i++) random()
-
 	expect(random()).toBeCloseTo(0.8585379563737661, 14)
 })
 

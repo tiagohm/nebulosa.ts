@@ -255,6 +255,7 @@ export async function localAstrometryNetPlateSolve(input: string, options: Requi
 
 	if (options.rightAscension !== undefined && options.declination !== undefined && options.radius !== undefined) {
 		const radiusDeg = Math.max(0, Math.min(Math.ceil(toDeg(options.radius)), 180))
+
 		if (radiusDeg > 0) {
 			commands.push('--ra', `${toDeg(normalizeAngle(options.rightAscension))}`)
 			commands.push('--dec', `${toDeg(options.declination)}`)

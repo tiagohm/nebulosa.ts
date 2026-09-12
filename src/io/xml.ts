@@ -192,6 +192,7 @@ export class SimpleXmlParser {
 		}
 
 		this.#nodes.length = 0
+
 		try {
 			this.#processChunk(input, this.#nodes)
 		} catch (error) {
@@ -200,6 +201,7 @@ export class SimpleXmlParser {
 			this.reset()
 			throw error
 		}
+
 		return this.#nodes
 	}
 

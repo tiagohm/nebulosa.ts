@@ -494,7 +494,8 @@ describe('generate image', () => {
 		{
 			name: 'rgb neutral sky background',
 			channels: 3,
-			hash: 'ad1140f77ad178c579e98c4a5a57117c',
+			// This Poisson draw count reaches the old Mulberry32 counter's integer-precision limit.
+			hash: '817ce59dcbcfd7f6bb856aefb15d221c',
 			config: baseConfig({
 				sky: { enabled: true, baseRate: 0.16, gradientStrength: 0.05, radialGradientStrength: 0.03, lowFrequencyVariationStrength: 0.02, perChannelMultipliers: [1, 1, 1], colorBias: [1, 1, 1], filterTransmission: [1, 1, 1] },
 			}),
@@ -502,7 +503,8 @@ describe('generate image', () => {
 		{
 			name: 'rgb moonlight cool tint',
 			channels: 3,
-			hash: '4bffda72bf41aa8efe7ab0b6daf71180',
+			// Reference uses the uint32-wrapped Mulberry32 sequence, including late-frame draws.
+			hash: '6f2061933b9fae84231929dae7c9276f',
 			config: baseConfig({
 				sky: { enabled: true, baseRate: 0.14, gradientStrength: 0.06, radialGradientStrength: 0.03, perChannelMultipliers: [1, 1, 1], colorBias: [0.98, 1, 1.04] },
 				moon: { enabled: true, illuminationFraction: 0.92, altitude: 0.95, angularDistance: 0.28, positionAngle: 0.8, tint: [0.92, 0.98, 1.1], strength: 1.25 },

@@ -63,7 +63,8 @@ test('iersA', async () => {
 	t = timeYMDHMS(2016, 12, 31, 0, 0, 0, Timescale.UTC)
 	expectDut1(iersa.dut1(t), -0.40776)
 	t = timeYMDHMS(2016, 12, 31, 12, 0, 0, Timescale.UTC)
-	expectDut1(iersa.dut1(t), -0.40823125)
+	// Astropy 8.0.0 IERS_A with this fixture: UTC noon is 43200/86401 of this leap-second day.
+	expectDut1(iersa.dut1(t), -0.4082312445457807)
 	t = timeYMDHMS(2017, 1, 1, 0, 0, 0, Timescale.UTC)
 	expectDut1(iersa.dut1(t), 0.5912975)
 })
@@ -87,7 +88,8 @@ test('iersB', async () => {
 	t = timeYMDHMS(2016, 12, 31, 0, 0, 0, Timescale.UTC)
 	expectDut1(iersb.dut1(t), -0.4077697)
 	t = timeYMDHMS(2016, 12, 31, 12, 0, 0, Timescale.UTC)
-	expectDut1(iersb.dut1(t), -0.40824135)
+	// Astropy 8.0.0 IERS_B with this fixture: UTC noon is 43200/86401 of this leap-second day.
+	expectDut1(iersb.dut1(t), -0.40824134454115113)
 	t = timeYMDHMS(2017, 1, 1, 0, 0, 0, Timescale.UTC)
 	expectDut1(iersb.dut1(t), 0.591287)
 })

@@ -2,22 +2,8 @@ import type { PathLike } from 'fs'
 import fs, { type FileHandle } from 'fs/promises'
 import { isJpeg, Jpeg, type PixelFormat } from '../../bindings/imaging/libturbojpeg'
 import { type Bitpix, type Fits, type FitsHdu, FitsImageReader, readFits, writeFits } from '../../io/formats/fits/fits'
-import {
-	bitpixInBytes,
-	cfaPatternKeyword,
-	heightKeyword,
-	isCompressedImageHeader,
-	isRiceCompressedImageHeader,
-	numberOfAxesKeyword,
-	textKeyword,
-	uncompressedBitpixKeyword,
-	uncompressedHeightKeyword,
-	uncompressedNumberOfChannelsKeyword,
-	uncompressedScaleKeyword,
-	uncompressedWidthKeyword,
-	uncompressedZeroKeyword,
-	widthKeyword,
-} from '../../io/formats/fits/util'
+// oxfmt-ignore
+import { bitpixInBytes, cfaPatternKeyword, heightKeyword, isCompressedImageHeader, isRiceCompressedImageHeader, numberOfAxesKeyword, textKeyword, uncompressedBitpixKeyword, uncompressedHeightKeyword, uncompressedNumberOfChannelsKeyword, uncompressedScaleKeyword, uncompressedWidthKeyword, uncompressedZeroKeyword, widthKeyword } from '../../io/formats/fits/util'
 import { readXisf, writeXisf, type Xisf, type XisfImage, XisfImageReader, type XisfWriteFormat } from '../../io/formats/xisf/xisf'
 import { bufferSink, bufferSource, fileHandleSource, readRemaining, readUntil, type Seekable, type Sink, type Source } from '../../io/io'
 import { clamp } from '../../math/numerical/math'

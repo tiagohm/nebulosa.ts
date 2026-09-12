@@ -19,8 +19,6 @@ export interface AstapStarDetectionOptions {
 	minSNR?: number
 	// Keep only the brightest `maxStars` detections (0 = unlimited).
 	maxStars?: number
-	// Unused by `-extract`: ASTAP writes the CSV beside the input file, not in this directory.
-	outputDirectory?: string
 	// Process timeout, in milliseconds.
 	timeout?: number
 }
@@ -105,7 +103,8 @@ export async function astapPlateSolve(input: string, { fov = 0, downsample = 0, 
 	const name = Bun.randomUUIDv7()
 	const ini = Bun.file(join(tmpdir(), `${name}.ini`))
 	const wcs = Bun.file(join(tmpdir(), `${name}.wcs`))
-	const searchRadius = radius ? Math.max(0, Math.min(Math.ceil(toDeg(radius)), 180)) : 180
+	const r = radius ? Math.max(0, Math.min(Math.ceil(toDeg(radius)), 180)) : 180
+
 	executable ||= executableForCurrentPlatform()
 	timeout ||= DEFAULT_TIMEOUT
 
@@ -114,10 +113,8 @@ export async function astapPlateSolve(input: string, { fov = 0, downsample = 0, 
 	if (fov) commands.push('-fov', `${fov}`)
 	if (sip) commands.push('-sip')
 	// CLI RA/Dec override the FITS header; send them only when the caller supplied a center.
-	if (rightAscension !== undefined && declination !== undefined) {
-		commands.push('-ra', `${toHour(normalizeAngle(rightAscension))}`, '-spd', `${toDeg(declination) + 90}`)
-	}
-	commands.push('-r', `${searchRadius}`)
+	if (rightAscension !== undefined && declination !== undefined) commands.push('-ra', `${toHour(normalizeAngle(rightAscension))}`, '-spd', `${toDeg(declination) + 90}`)
+	commands.push('-r', `${r}`)
 
 	const process = Bun.spawn(commands, { signal, timeout })
 	const exitCode = await process.exited

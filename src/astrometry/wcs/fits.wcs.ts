@@ -175,10 +175,9 @@ export function tanHeader(header: FitsHeader): TanHeader | undefined {
 	const crpix1 = numericKeyword(header, 'CRPIX1', Number.NaN)
 	const crpix2 = numericKeyword(header, 'CRPIX2', Number.NaN)
 	const crval1 = deg(numericKeyword(header, 'CRVAL1', Number.NaN))
-	const crval2Deg = numericKeyword(header, 'CRVAL2', Number.NaN)
-	const crval2 = deg(crval2Deg)
+	let crval2 = numericKeyword(header, 'CRVAL2', Number.NaN)
 	// Zenithal TAN has φ0 = 0° and θ0 = 90°. Paper II sets omitted LONPOLE to φ0 when δ0 ≥ θ0.
-	const lonpole = deg(numericKeyword(header, 'LONPOLE', crval2Deg >= 90 ? 0 : 180))
+	const lonpole = deg(numericKeyword(header, 'LONPOLE', crval2 >= 90 ? 0 : 180))
 	const [cd11, cd12, cd21, cd22] = cdMatrix(header)
 	const scale = Math.max(Math.abs(cd11), Math.abs(cd12), Math.abs(cd21), Math.abs(cd22))
 	const determinant = cd11 * cd22 - cd12 * cd21
@@ -194,6 +193,8 @@ export function tanHeader(header: FitsHeader): TanHeader | undefined {
 	if (!Number.isFinite(crpix1) || !Number.isFinite(crpix2) || !Number.isFinite(crval1) || !Number.isFinite(crval2) || !Number.isFinite(determinant) || !(scale > 0) || Math.abs(determinant) <= Number.EPSILON * scale * scale) {
 		return undefined
 	}
+
+	crval2 = deg(crval2)
 
 	return [crpix1, crpix2, crval1, crval2, cd11, cd12, cd21, cd22, determinant, cosPoleRotation, sinPoleRotation, aOrder, bOrder, apOrder, bpOrder]
 }

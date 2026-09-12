@@ -777,9 +777,7 @@ export function fitPolynomialSurface(set: SurfaceSampleSet, degree: number, term
 		// `A` is a throwaway design matrix used only for this solve, so factorize in place and skip the clone.
 		const qr = new QrDecomposition(A, true)
 		if (!qr.isFullRank) return 'rank-deficient'
-		// solve() returns a vector sized to the sample count (rows); only the first `terms` entries are
-		// the least-squares coefficients, the rest are residual internals. Copy just the coefficients.
-		const coefficients = qr.solve(b).slice(0, terms)
+		const coefficients = qr.solve(b)
 
 		// Guard against ill-conditioned layouts that pass isFullRank through floating-point noise (e.g.
 		// too few distinct coordinate bands for the degree): the surface value on [-1, 1]^2 is bounded by

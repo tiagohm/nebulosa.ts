@@ -321,8 +321,7 @@ function solveLinearLeastSquares(design: readonly Readonly<NumberArray>[], targe
 	const qr = new QrDecomposition(matrix, true)
 
 	if (qr.isFullRank) {
-		const solution = qr.solve(rhs)
-		return solution.length === cols ? solution : solution.subarray(0, cols)
+		return qr.solve(rhs)
 	}
 
 	return solveRegularizedNormalEquations(design, target, weights, effectiveRidge > 0 ? effectiveRidge : DEFAULT_RIDGE)

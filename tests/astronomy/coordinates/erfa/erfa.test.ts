@@ -83,6 +83,7 @@ test('eraUt1Utc ramps a negative leap second with ERFA grouping', () => {
 	// the grouping is observable.
 	const n = erfa.LEAP_SECOND_CHANGES.length
 	erfa.LEAP_SECOND_CHANGES.push([4099, 1, 36])
+
 	try {
 		expect(erfa.eraDat(4098, 12, 31, 0)).toBe(37)
 		expect(erfa.eraDat(4099, 1, 1, 0)).toBe(36)
