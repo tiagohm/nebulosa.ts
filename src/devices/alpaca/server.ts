@@ -1333,19 +1333,19 @@ export class AlpacaServer {
 	#cameraGetImageArray(id: number, accept?: string | null) {
 		const { state, device } = this.#camera(id)
 
-		try {
-			if (accept?.includes('imagebytes')) {
-				const [buffer, encoding] = state.data!
-				const image = makeImageBytesFromFits(encoding === 'raw' ? buffer : Buffer.from(buffer.toString('ascii'), 'base64'))
-				return new Response(image.buffer, { headers: { 'Content-Type': 'application/imagebytes' } })
-			}
-		} finally {
-			state.data = undefined
-			state.lastExposureDuration = 0
-			this.options.camera?.disableBlob(device)
-		}
+		if (!accept?.includes('imagebytes')) return makeAlpacaErrorResponse(AlpacaException.Driver, 'Image bytes as JSON array is not supported')
 
-		return makeAlpacaErrorResponse(AlpacaException.Driver, 'Image bytes as JSON array is not supported')
+		if (state.data === undefined) return makeAlpacaErrorResponse(AlpacaException.InvalidOperation, 'No image is ready')
+
+		const [buffer, encoding] = state.data
+		const image = makeImageBytesFromFits(encoding === 'raw' ? buffer : Buffer.from(buffer.toString('ascii'), 'base64'))
+		const body = image.buffer.slice(image.byteOffset, image.byteOffset + image.byteLength)
+		state.data = undefined
+		state.exposureStarted = false
+		state.lastExposureDuration = 0
+		this.options.camera?.disableBlob(device)
+
+		return new Response(body, { headers: { 'Content-Type': 'application/imagebytes' } })
 	}
 
 	// Filter Wheel API
@@ -2301,7 +2301,7 @@ export function makeImageBytesFromFits(source: Buffer) {
 
 	const sourceLength = (source.byteLength - position) / bytesPerPixel
 	const SourceTypedArray = bitpix === 8 ? Uint8Array : bitpix === 16 ? Int16Array : bitpix === 32 ? Int32Array : bitpix === -32 ? Float32Array : Float64Array
-	const sourceArray = new SourceTypedArray(source.buffer as never, position, sourceLength)
+	const sourceArray = new SourceTypedArray(source.buffer as never, source.byteOffset + position, sourceLength)
 	const outputLength = (output.byteLength - dataStart) / bytesPerPixel
 	const OutputTypedArray = bitpix === 8 ? Uint8Array : bitpix === 16 ? Uint16Array : bitpix === 32 ? Uint32Array : bitpix === -32 ? Float32Array : Float64Array
 	const outputArray = new OutputTypedArray(output.buffer, dataStart, outputLength)

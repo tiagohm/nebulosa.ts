@@ -678,3 +678,51 @@ test('camera exposes readout modes as indexed strings', async () => {
 	await waitUntil(() => fixture.device.frameFormat === 'RGB')
 	expect((await fixture.get(fixture.path + '/readoutmode')).Value).toBe(1)
 })
+
+function makeTinyFits(value: number) {
+	const fits = Buffer.alloc(2881, 32)
+	const cards = ['SIMPLE  =                    T', 'BITPIX  =                    8', 'NAXIS   =                    2', 'NAXIS1  =                    1', 'NAXIS2  =                    1', 'END']
+
+	for (let i = 0; i < cards.length; i++) fits.write(cards[i].padEnd(80), i * 80)
+	fits[2880] = value
+	return fits
+}
+
+test('camera image array preserves a pending image for JSON requests', async () => {
+	await using fixture = await startAlpacaServer(ALPACA_CAMERA)
+	const fits = makeTinyFits(7)
+	await fixture.put(fixture.path + '/startexposure', { Duration: '60', Light: 'True' })
+	fixture.manager.blobReceived(fixture.device, fits, 'raw')
+
+	const response = await fetch(new URL(fixture.path + '/imagearray', fixture.url), { headers: { Accept: 'application/json' } })
+	const body = (await response.json()) as { ErrorNumber: number }
+
+	expect(body.ErrorNumber).toBe(AlpacaException.Driver)
+	expect((await fixture.get(fixture.path + '/imageready')).Value).toBeTrue()
+})
+
+test('camera image array reports InvalidOperation before an image is ready', async () => {
+	await using fixture = await startAlpacaServer(ALPACA_CAMERA)
+	const response = await fetch(new URL(fixture.path + '/imagearray', fixture.url), { headers: { Accept: 'application/imagebytes' } })
+	const body = (await response.json()) as { ErrorNumber: number }
+
+	expect(response.status).toBe(200)
+	expect(body.ErrorNumber).toBe(AlpacaException.InvalidOperation)
+})
+
+test('image bytes respect FITS buffer views and their response bounds', async () => {
+	const compact = makeTinyFits(7)
+	const prefixed = Buffer.alloc(compact.length + 8)
+	compact.copy(prefixed, 8)
+	const view = prefixed.subarray(8)
+
+	expect(makeImageBytesFromFits(view)).toEqual(makeImageBytesFromFits(compact))
+
+	await using fixture = await startAlpacaServer(ALPACA_CAMERA)
+	await fixture.put(fixture.path + '/startexposure', { Duration: '60', Light: 'True' })
+	fixture.manager.blobReceived(fixture.device, compact, 'raw')
+	const response = await fetch(new URL(fixture.path + '/imagearray', fixture.url), { headers: { Accept: 'application/imagebytes' } })
+	const body = await response.arrayBuffer()
+
+	expect(body.byteLength).toBe(makeImageBytesFromFits(compact).byteLength)
+})
