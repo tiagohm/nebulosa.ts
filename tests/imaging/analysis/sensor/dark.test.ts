@@ -80,6 +80,31 @@ test('resolves localized amp glow from per-tile exposure slopes', () => {
 	expect(result.ampGlow?.ratio).toBe(4)
 })
 
+test('excludes masked pixels from amp-glow tile slopes', () => {
+	const mask = new Uint8Array(16)
+	mask[0] = 1
+	const darks: SensorFrameSet[] = [0, 10, 20, 40].map((exposure) => {
+		const first = new Float64Array(16)
+		const second = new Float64Array(16)
+		for (let y = 0; y < 4; y++) {
+			for (let x = 0; x < 4; x++) {
+				const index = y * 4 + x
+				const slope = index === 0 ? 20 : 5
+				const signed = (index & 1) === 0 ? 2 : -2
+				first[index] = 100 + slope * exposure + signed
+				second[index] = 100 + slope * exposure - signed
+			}
+		}
+		return { frames: [image(first), image(second)], exposure }
+	})
+	const result = measureSensorDarkCurrent(darks, 2, { mask, tile: { width: 2, height: 2 } })
+
+	expect(result.mean).toBeCloseTo(10, 10)
+	expect(result.ampGlow?.current).toEqual(Float32Array.from([10, 10, 10, 10]))
+	expect(result.ampGlow?.median).toBe(10)
+	expect(result.ampGlow?.ratio).toBeCloseTo(1, 12)
+})
+
 test('excludes empty CFA tiles from amp-glow statistics', () => {
 	const darks: SensorFrameSet[] = [0, 10, 20, 40].map((exposure) => ({ frames: uniformPair(100 + 5 * exposure, 4, 'RGGB'), exposure }))
 	const result = measureSensorDarkCurrent(darks, 2, { plane: 'red', cfaOffset: [0, 0], tile: { width: 1, height: 1 } })

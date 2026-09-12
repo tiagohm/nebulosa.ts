@@ -93,8 +93,8 @@ function darkLevels(darks: readonly SensorFrameSet[], options: Partial<SensorPai
 	return levels
 }
 
-// Computes the mean of one frame stack for each output tile and selected sensor plane.
-function tileMeans(set: SensorFrameSet, tileWidth: number, tileHeight: number, area: Readonly<{ left: number; top: number; right: number; bottom: number }>, plane: SensorPlane | undefined, cfaOffset: readonly [number, number] | undefined): Float64Array {
+// Computes the mean of one frame stack for each output tile and selected sensor plane, skipping nonzero mask samples.
+function tileMeans(set: SensorFrameSet, tileWidth: number, tileHeight: number, area: Readonly<{ left: number; top: number; right: number; bottom: number }>, plane: SensorPlane | undefined, cfaOffset: readonly [number, number] | undefined, mask: Readonly<Uint8Array> | undefined): Float64Array {
 	const first = set.frames[0]
 	const { width, bayer } = first.metadata
 	const columns = Math.ceil((area.right - area.left) / tileWidth)
@@ -114,7 +114,7 @@ function tileMeans(set: SensorFrameSet, tileWidth: number, tileHeight: number, a
 			for (let x = area.left; x < area.right; x++, index++) {
 				if (slot >= 0 && ((((y + offsetY) & 1) << 1) | ((x + offsetX) & 1)) !== slot) continue
 				const value = frame.raw[index]
-				if (!Number.isFinite(value)) continue
+				if (mask?.[index] || !Number.isFinite(value)) continue
 				const tile = tileRow + Math.trunc((x - area.left) / tileWidth)
 				sums[tile] += value
 				counts[tile]++
@@ -140,7 +140,7 @@ function measureAmpGlow(darks: readonly SensorFrameSet[], conversionGain: number
 	const levels = darks.toSorted((a, b) => a.exposure - b.exposure)
 	const unique = new Set(levels.map((level) => level.exposure))
 	if (unique.size < 3) return undefined
-	const means = levels.map((level) => tileMeans(level, tileWidth, tileHeight, area, options.plane, options.cfaOffset))
+	const means = levels.map((level) => tileMeans(level, tileWidth, tileHeight, area, options.plane, options.cfaOffset, options.mask))
 	const x = new Float64Array(levels.length)
 	const y = new Float64Array(levels.length)
 	const weights = new Float64Array(levels.length)
