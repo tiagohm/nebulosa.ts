@@ -45,6 +45,10 @@ test('saros', () => {
 	expect(solarSaros(timeYMD(2013, 11, 3))).toBe(143)
 	expect(solarSaros(timeYMD(2009, 7, 22))).toBe(136)
 	expect(solarSaros(time(2270969.5))).toBe(108)
+	// LN = -49421: JS remainder of NS+NC*223-1 is negative; Kluepfel modulo wraps to series 220, not -3.
+	const eclipse = nearestSolarEclipse(timeYMD(-1996, 1, 1), true)
+	expect(eclipse.lunation).toBe(-49421)
+	expect(solarSaros(eclipse.maximalTime)).toBe(220)
 })
 
 describe('nearest solar eclipse', () => {

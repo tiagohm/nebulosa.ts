@@ -143,17 +143,16 @@ export function season(year: number, name: Season) {
 	return time(jd0, (0.00001 * S) / deltaLambda, Timescale.TT)
 }
 
-// Computes the saros series number for the solar eclipse.
+// Computes the solar Saros series number in 1..223 for the lunation containing `time`.
 export function solarSaros(time: Time) {
 	const nd = lunation(time, 'MEEUS') + 105
 	const ns = 136 + 38 * nd
 	const nx = -61 * nd
 	const nc = Math.floor(nx / 358 + 0.5 - nd / (12 * 358 * 358))
 	const s = ns + nc * 223 - 1
-	let saros = (s % 223) + 1
-	if (s < 0) saros -= 223
-	if (saros < -223) saros += 223
-	return saros
+	// JavaScript remainder keeps the dividend sign; map into [0, 223) before adding 1 so
+	// Kluepfel's SNS = MODULO(NS+NC*223-1, 223)+1 stays in van den Bergh 1..223 when s < 0.
+	return (((s % 223) + 223) % 223) + 1
 }
 
 // Computes the nearest (previous or next) solar eclipse for a given time
