@@ -297,6 +297,34 @@ test('marks a near-border profile', () => {
 	expect(Number.isFinite(profile.hfd)).toBeTrue()
 })
 
+// Grows the default aperture far enough that a defocused Gaussian recovers HFD and FWHM.
+test('measures a defocused Gaussian HFD with default aperture growth', () => {
+	const sigma = 10
+	const expectedFwhm = 2 * Math.sqrt(2 * Math.LN2) * sigma
+	const source = image(129, 129)
+	addGaussian(source, 64, 64, sigma, sigma, 0, 0.6)
+
+	const profile = measureStarProfile(source, { x: 64, y: 64 }, { minSNR: 0 })
+
+	expect(profile.valid).toBeTrue()
+	expect(profile.flags).not.toContain('clipped')
+	expect(profile.hfd).toBeCloseTo(expectedFwhm, 0)
+	expect(profile.fwhm).toBeGreaterThan(expectedFwhm - 1)
+	expect(profile.fwhm).toBeLessThan(expectedFwhm + 0.5)
+})
+
+// Does not publish a truncated curve of growth as a valid HFD when growth passes run out.
+test('flags a defocused profile when aperture growth is cut short', () => {
+	const source = image(129, 129)
+	addGaussian(source, 64, 64, 10, 10, 0, 0.6)
+
+	const profile = measureStarProfile(source, { x: 64, y: 64 }, { minSNR: 0, maxIterations: 3 })
+
+	expect(profile.valid).toBeFalse()
+	expect(profile.flags).toContain('clipped')
+	expect(profile.fwhm).toBeLessThan(20)
+})
+
 // Distinguishes an ROI truncated by the sensor boundary from a merely nearby warning.
 test('flags a star profile clipped by the sensor boundary', () => {
 	const source = image(33, 33)

@@ -20,7 +20,8 @@ const DEFAULT_INITIAL_RADIUS = 4
 // Default maximum circular aperture radius, in pixels.
 const DEFAULT_MAXIMUM_RADIUS = 32
 // Default maximum number of centroid/ROI refinement passes.
-const DEFAULT_MAX_ITERATIONS = 3
+// Grows from the default initial radius to the default maximum at +2 px per pass, then remeasures that aperture.
+const DEFAULT_MAX_ITERATIONS = 2 + Math.ceil((DEFAULT_MAXIMUM_RADIUS - DEFAULT_INITIAL_RADIUS) / 2)
 // Default saturation threshold for normalized image samples.
 const DEFAULT_SATURATION_LEVEL = 1
 // Default minimum SNR required for a profile to be valid.
@@ -552,6 +553,11 @@ function measureStarProfileFromGrayscale(image: Image, star: Readonly<Point>, op
 		const nextRadius = !settled ? Math.min(options.maximumRadius, Math.max(desiredRadius, radius + 2)) : desiredRadius
 
 		if (shifted <= 0.05 && nextRadius === radius) break
+		// Do not publish an unmeasured aperture: blend checks and Moffat fits must use the last measured radius.
+		if (iteration + 1 >= options.maxIterations) {
+			if (nextRadius !== radius) addFlag(flags, 'clipped')
+			break
+		}
 		radius = nextRadius
 	}
 
