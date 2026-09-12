@@ -38,4 +38,35 @@ describe('safety-monitor simulator', () => {
 		simulator.dispose()
 		expect(manager.has(client, safety.name)).toBeFalse()
 	})
+
+	test('does not emit safety status while the device is disconnected', async () => {
+		const handler = new IndiClientHandlerSet()
+		const manager = new SafetyMonitorManager({ get: () => undefined })
+		handler.add(manager)
+
+		using client = new ClientSimulator('safety-monitor', handler)
+		using simulator = new SafetyMonitorSimulator('Safety Monitor Simulator', client)
+
+		const safety = manager.get(client, simulator.name)!
+		simulator.setSafe(true)
+		expect(safety.safe).toBeFalse()
+		expect(manager.properties.get(safety)?.SAFETY_STATUS).toBeUndefined()
+
+		simulator.connect()
+		await waitUntil(() => safety.connected)
+		expect(safety.safe).toBeTrue()
+
+		simulator.setSafe(false)
+		await waitUntil(() => !safety.safe)
+		simulator.disconnect()
+		await waitUntil(() => !safety.connected)
+
+		simulator.setSafe(true)
+		expect(safety.safe).toBeFalse()
+		expect(manager.properties.get(safety)?.SAFETY_STATUS).toBeUndefined()
+
+		simulator.connect()
+		await waitUntil(() => safety.connected)
+		expect(safety.safe).toBeTrue()
+	})
 })
