@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { readImageFromBuffer } from '../../../src/imaging/model/image'
-import type { CfaPattern, Image } from '../../../src/imaging/model/types'
+import { type CfaPattern, type Image, shiftCfaPattern } from '../../../src/imaging/model/types'
 import { bayer } from '../../../src/imaging/processing/debayer'
 import { LiveStacker, type StackingFrame, type StackingOptions, stackFrames } from '../../../src/imaging/processing/stacker'
 import type { DetectedStar } from '../../../src/imaging/stars/detector'
@@ -493,6 +493,56 @@ describe('stacker batch mode', () => {
 		expect(result.acceptedFrames).toBe(2)
 		expect(result.finalImage).toBeDefined()
 		expectRawClose(result.finalImage!.raw, reference.raw)
+	})
+
+	test('intersection crop rewrites FITS geometry and CFA phase to the output raster', async () => {
+		const reference = makeImage(18, 18, 1, (x, y) => ((x * 3 + y * 5) % 11) / 32)
+		Object.assign(reference.metadata, { bayer: 'RGGB' })
+		Object.assign(reference.header, {
+			BITPIX: Bitpix.FLOAT,
+			NAXIS: 2,
+			NAXIS1: 18,
+			NAXIS2: 18,
+			CRPIX1: 9.5,
+			CRPIX2: 9.5,
+			CRVAL1: 10,
+			CRVAL2: 20,
+			CTYPE1: 'RA---TAN',
+			CTYPE2: 'DEC--TAN',
+			CD1_1: -0.001,
+			CD1_2: 0,
+			CD2_1: 0,
+			CD2_2: 0.001,
+			BAYERPAT: 'RGGB',
+		})
+		const current = translateImage(reference, 4, -3)
+		Object.assign(current.metadata, { bayer: 'RGGB' })
+		const frames = [makeFrame(reference, makeStars()), makeFrame(current, makeStars(-4, 3))]
+		const result = stackFrames(frames, { ...DEFAULT_STACK_OPTIONS, cropMode: 'intersection', interpolationMode: 'nearest' })
+		const image = result.finalImage!
+		const bounds = result.effectiveCropBounds!
+
+		expect(result.acceptedFrames).toBe(2)
+		expect(image.metadata.width).toBe(bounds.width)
+		expect(image.metadata.height).toBe(bounds.height)
+		expect(image.metadata.width).toBeLessThan(18)
+		expect(image.header.NAXIS1).toBe(image.metadata.width)
+		expect(image.header.NAXIS2).toBe(image.metadata.height)
+		expect(image.header.CRPIX1).toBeCloseTo(9.5 - bounds.left, 10)
+		expect(image.header.CRPIX2).toBeCloseTo(9.5 - bounds.top, 10)
+		expect(image.metadata.bayer).toBe(shiftCfaPattern('RGGB', bounds.left, bounds.top))
+		expect(image.header.BAYERPAT).toBe(image.metadata.bayer)
+		// Coverage and validity stay on the documented pre-crop reference grid.
+		expect(result.validityMask!.length).toBe(18 * 18)
+		expect(result.coverageMap!.length).toBe(18 * 18)
+
+		const storage = Buffer.alloc(32768)
+		const sink = bufferSink(storage)
+		await writeFits(sink, [image])
+		const restored = (await readImageFromBuffer(storage.subarray(0, sink.position), { raw: 32 }))!
+		expect(restored.metadata.width).toBe(image.metadata.width)
+		expect(restored.metadata.height).toBe(image.metadata.height)
+		expectRawClose(restored.raw, image.raw, 1e-5)
 	})
 })
 

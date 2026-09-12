@@ -5,7 +5,7 @@ import { bitpixInBytes } from '../../io/formats/fits/util'
 import type { Rect, Size } from '../../math/numerical/geometry'
 import { clamp } from '../../math/numerical/math'
 import { meanOf, medianAbsoluteDeviationOf, medianOf } from '../../math/numerical/statistics'
-import { type Image, type ImageRawPrecision, type ImageRawType, makeImageRawTypedArray } from '../model/types'
+import { type Image, type ImageRawPrecision, type ImageRawType, makeImageRawTypedArray, shiftCfaPattern } from '../model/types'
 import type { DetectedStar } from '../stars/detector'
 import type { SigmaClipCenterMethod, SigmaClipDispersionMethod } from './computation'
 import { createDrizzleAccumulator, depositDrizzle, type DrizzleAccumulator, drizzleNormalization, drizzleOverlap, prepareDrizzleFootprint } from './drizzle'
@@ -1127,6 +1127,8 @@ function coverageThreshold(acceptedFrames: number, options: ResolvedStackingOpti
 }
 
 // Crops the final image for intersection mode while preserving reference metadata shape otherwise.
+// The cloned FITS header is rewritten to the cropped raster so NAXIS/CRPIX/CFA match `raw`; coverage
+// and validity maps stay on the pre-crop reference grid documented by `StackResult`.
 function maybeCropImage(referenceImage: Image, raw: ImageRawType, cropBounds: StackBounds | undefined, options: ResolvedStackingOptions): Image {
 	if (options.cropMode !== 'intersection' || cropBounds === undefined) return buildImage(raw, referenceImage.header, referenceImage.metadata.width, referenceImage.metadata.height, referenceImage.metadata.channels, raw instanceof Float64Array ? Bitpix.DOUBLE : Bitpix.FLOAT, referenceImage.metadata.bayer)
 
@@ -1141,7 +1143,19 @@ function maybeCropImage(referenceImage: Image, raw: ImageRawType, cropBounds: St
 		}
 	}
 
-	return buildImage(cropped, referenceImage.header, cropBounds.width, cropBounds.height, referenceImage.metadata.channels, cropped instanceof Float64Array ? Bitpix.DOUBLE : Bitpix.FLOAT, referenceImage.metadata.bayer)
+	const bayer = shiftCfaPattern(referenceImage.metadata.bayer, cropBounds.left, cropBounds.top)
+	const image = buildImage(cropped, referenceImage.header, cropBounds.width, cropBounds.height, referenceImage.metadata.channels, cropped instanceof Float64Array ? Bitpix.DOUBLE : Bitpix.FLOAT, bayer)
+	const { header } = image
+	header.NAXIS = referenceImage.metadata.channels === 3 ? 3 : 2
+	header.NAXIS1 = cropBounds.width
+	header.NAXIS2 = cropBounds.height
+	if (referenceImage.metadata.channels === 3) header.NAXIS3 = 3
+	else delete header.NAXIS3
+	if (header.IMAGEW !== undefined) header.IMAGEW = cropBounds.width
+	if (header.IMAGEH !== undefined) header.IMAGEH = cropBounds.height
+	if (bayer !== undefined) header.BAYERPAT = bayer
+	scaleAndCropFitsWcs(header, 1, 1, cropBounds.left, cropBounds.top)
+	return image
 }
 
 // Builds a valid Image structure from raw data and metadata pieces.
