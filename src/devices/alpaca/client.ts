@@ -677,6 +677,8 @@ class AlpacaCamera extends AlpacaDevice {
 	readonly #image = makeBlobVector('', 'CCD1', 'CCD Image', MAIN_CONTROL, 'ro', ['CCD1', 'Image'])
 
 	readonly #now = timeNow() // Used in the conversion from JNOW to J2000. Changes in precession/nutation angles are negligible.
+	// Identifies the latest start/stop command so delayed replies cannot overwrite a newer exposure.
+	#exposureSequence = 0
 
 	constructor(client: AlpacaClient, device: AlpacaConfiguredDevice, name: string) {
 		super(client, device, client.options.handler, name)
@@ -989,7 +991,7 @@ class AlpacaCamera extends AlpacaDevice {
 
 				break
 			case 'CCD_ABORT_EXPOSURE':
-				if (vector.elements.ABORT === true) void this.api.stopExposure(this.id)
+				if (vector.elements.ABORT === true) void this.#stopExposure()
 				break
 			case 'CCD_FRAME_TYPE':
 				for (const key in vector.elements) {
@@ -1011,10 +1013,13 @@ class AlpacaCamera extends AlpacaDevice {
 		switch (vector.name) {
 			case 'CCD_EXPOSURE':
 				if (vector.elements.CCD_EXPOSURE_VALUE !== undefined) {
+					const session = this.session
+					const sequence = ++this.#exposureSequence
 					this.state.ExposureStarted = true
 					this.state.ExposureDuration = Math.max(this.#exposure.elements.CCD_EXPOSURE_VALUE.min, Math.min(vector.elements.CCD_EXPOSURE_VALUE, this.#exposure.elements.CCD_EXPOSURE_VALUE.max))
 
 					void this.api.startExposure(this.id, this.state.ExposureDuration, this.isLight).then(({ ok }) => {
+						if (session !== this.session || sequence !== this.#exposureSequence) return
 						if (ok) {
 							this.updatePropertyState(this.#exposure, 'Busy')
 							this.updatePropertyValue(this.#exposure, 'CCD_EXPOSURE_VALUE', this.state.ExposureDuration)
@@ -1076,6 +1081,22 @@ class AlpacaCamera extends AlpacaDevice {
 				break
 			}
 		}
+	}
+
+	// Stops the active exposure. A successful stop releases the pending-image flag even if the driver
+	// produces no image. A failed stop reports Alert and keeps the active exposure eligible for download.
+	// Replies superseded by another command or an ended session publish nothing.
+	async #stopExposure() {
+		const session = this.session
+		const sequence = ++this.#exposureSequence
+		const result = await this.api.stopExposure(this.id)
+		if (session !== this.session || sequence !== this.#exposureSequence) return
+		if (result.ok) {
+			this.state.ExposureStarted = false
+			this.updatePropertyValue(this.#exposure, 'CCD_EXPOSURE_VALUE', 0)
+		}
+		this.updatePropertyState(this.#exposure, result.ok ? 'Idle' : 'Alert')
+		this.sendSetProperty(this.#exposure)
 	}
 
 	// Downloads and emits a completed exposure, returning Ok or Alert if ImageBytes conversion fails.

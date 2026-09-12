@@ -339,6 +339,60 @@ test.each([false, true])(
 	10000,
 )
 
+test.each([true, false])(
+	'camera abort settles without ImageReady and reports failure (success=%s)',
+	async (success) => {
+		await using remote = await scriptedClient(
+			'camera',
+			{
+				exposuremax: 60,
+				canstopexposure: true,
+				devicestate: [
+					{ Name: 'CameraState', Value: 0 },
+					{ Name: 'ImageReady', Value: false },
+					{ Name: 'PercentCompleted', Value: 0 },
+				],
+			},
+			undefined,
+			(req) => (!success && new URL(req.url).pathname.endsWith('/stopexposure') ? new Response('cannot stop', { status: 500 }) : undefined),
+		)
+		await waitUntil(() => remote.numbers.has('CCD_EXPOSURE'), 8000)
+		const exposure = remote.numbers.get('CCD_EXPOSURE')!
+		remote.client.sendNumber({ device: exposure.device, name: exposure.name, elements: { CCD_EXPOSURE_VALUE: 60 } })
+		await waitUntil(() => remote.numbers.get(exposure.name)?.state === 'Busy', 1000)
+		remote.client.sendSwitch({ device: exposure.device, name: 'CCD_ABORT_EXPOSURE', elements: { ABORT: true } })
+		await waitUntil(() => remote.numbers.get(exposure.name)?.state === (success ? 'Idle' : 'Alert'), 1000)
+		if (success) {
+			await Bun.sleep(1100)
+			expect(remote.numbers.get(exposure.name)!.state).toBe('Idle')
+			expect(remote.numbers.get(exposure.name)!.elements.CCD_EXPOSURE_VALUE.value).toBe(0)
+		} else expect(remote.numbers.get(exposure.name)!.elements.CCD_EXPOSURE_VALUE.value).toBe(60)
+	},
+	12000,
+)
+
+test('a delayed camera abort reply cannot clear a newer exposure', async () => {
+	const stopped = Promise.withResolvers<Response>()
+	let stopping = false
+	await using remote = await scriptedClient('camera', { exposuremax: 60, canstopexposure: true }, undefined, (req) => {
+		if (!new URL(req.url).pathname.endsWith('/stopexposure')) return undefined
+		stopping = true
+		return stopped.promise
+	})
+	await waitUntil(() => remote.numbers.has('CCD_EXPOSURE'), 8000)
+	const exposure = remote.numbers.get('CCD_EXPOSURE')!
+	remote.client.sendNumber({ device: exposure.device, name: exposure.name, elements: { CCD_EXPOSURE_VALUE: 60 } })
+	await waitUntil(() => remote.commands.length === 1, 1000)
+	remote.client.sendSwitch({ device: exposure.device, name: 'CCD_ABORT_EXPOSURE', elements: { ABORT: true } })
+	await waitUntil(() => stopping, 1000)
+	remote.client.sendNumber({ device: exposure.device, name: exposure.name, elements: { CCD_EXPOSURE_VALUE: 10 } })
+	await waitUntil(() => remote.numbers.get(exposure.name)?.elements.CCD_EXPOSURE_VALUE.value === 10, 1000)
+	stopped.resolve(Response.json({ ErrorNumber: 0, ErrorMessage: '' }))
+	await Bun.sleep(100)
+	expect(remote.numbers.get(exposure.name)!.state).toBe('Busy')
+	expect(remote.numbers.get(exposure.name)!.elements.CCD_EXPOSURE_VALUE.value).toBe(10)
+}, 10000)
+
 describe('make fits from image bytes', () => {
 	test('converts a 10 by 10 byte ROI smaller than 176 bytes', async () => {
 		const data = new ArrayBuffer(144)
