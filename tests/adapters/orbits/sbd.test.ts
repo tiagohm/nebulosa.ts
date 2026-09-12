@@ -71,6 +71,7 @@ describe.skipIf(SKIP)('search', () => {
 			expect(data.list.length).toBeGreaterThanOrEqual(319)
 			expect(data.list[0].pdes).toBe('253P')
 			expect(data.list[0].name).toBe('253P/PANSTARRS')
+			expect(data.message).toBe('specified query matched more than one object')
 		}
 	})
 

@@ -128,6 +128,12 @@ export interface SmallBodySearchListItem {
 // SBDB response when several bodies match the query string.
 export interface SmallBodySearchList {
 	readonly list: SmallBodySearchListItem[]
+	// Optional message returned when the query matches multiple bodies.
+	readonly message?: string
+	// Optional status code associated with the response.
+	readonly code?: string
+	// Optional number of matching bodies reported by the service.
+	readonly count?: number
 }
 
 // SBDB response carrying an informational/error message instead of a result.
