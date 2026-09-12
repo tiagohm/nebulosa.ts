@@ -14,11 +14,13 @@ describe('safety-monitor simulator', () => {
 		using client = new ClientSimulator('safety-monitor', handler)
 		using simulator = new SafetyMonitorSimulator('Safety Monitor Simulator', client)
 
-		expect(manager.get(client, simulator.name)).toBeUndefined()
-		simulator.connect()
+		const safety = manager.get(client, simulator.name)!
+		expect(safety).toBeDefined()
+		expect(safety.connected).toBeFalse()
+		expect(safety.safe).toBeFalse()
+		manager.connect(safety)
 		await waitUntil(() => manager.has(client, simulator.name))
 
-		const safety = manager.get(client, simulator.name)!
 		expect(safety.connected).toBeTrue()
 		expect(safety.safe).toBeFalse()
 
