@@ -58,6 +58,54 @@ test('handles guide-rate definitions before timed-guide definitions', () => {
 	expect(guideOutput.guideRate).toEqual({ rightAscension: 0.5, declination: 0.3 })
 })
 
+test('keeps the remaining timed-guide axis active when one is deleted', () => {
+	const mountManager = new MountManager()
+	const mount = structuredClone(DEFAULT_MOUNT)
+	mount.id = Bun.randomUUIDv7()
+	mount.name = 'Mount'
+	Object.defineProperty(mount, CLIENT, { value: client })
+	mountManager.add(mount)
+
+	const manager = new GuideOutputManager(mountManager)
+	const timedGuide = (name: 'TELESCOPE_TIMED_GUIDE_NS' | 'TELESCOPE_TIMED_GUIDE_WE', state: DefNumberVector['state']): DefNumberVector => ({
+		device: mount.name,
+		name,
+		permission: 'rw',
+		state,
+		elements: {},
+	})
+	const processTimedGuide = (name: 'TELESCOPE_TIMED_GUIDE_NS' | 'TELESCOPE_TIMED_GUIDE_WE', state: DefNumberVector['state'], tag: 'defNumberVector' | 'setNumberVector') => {
+		const message = timedGuide(name, state)
+		manager.numberVector(client, message, tag)
+		manager.vector(client, message, tag)
+	}
+
+	processTimedGuide('TELESCOPE_TIMED_GUIDE_NS', 'Ok', 'defNumberVector')
+	processTimedGuide('TELESCOPE_TIMED_GUIDE_WE', 'Busy', 'defNumberVector')
+	const guideRate: DefNumberVector = {
+		device: mount.name,
+		name: 'GUIDE_RATE',
+		permission: 'rw',
+		state: 'Ok',
+		elements: {},
+	}
+	manager.numberVector(client, guideRate, 'defNumberVector')
+	manager.vector(client, guideRate, 'defNumberVector')
+
+	const guideOutput = manager.get(client, mount.name)!
+	manager.delProperty(client, { device: mount.name, name: 'TELESCOPE_TIMED_GUIDE_NS' })
+
+	expect(manager.length).toBe(1)
+	expect(guideOutput.canPulseGuide).toBeTrue()
+	expect(guideOutput.pulsingNS).toBeFalse()
+	expect(guideOutput.pulsingWE).toBeTrue()
+	expect(guideOutput.pulsing).toBeTrue()
+
+	guideOutput.canPulseGuide = false
+	processTimedGuide('TELESCOPE_TIMED_GUIDE_NS', 'Ok', 'defNumberVector')
+	expect(guideOutput.canPulseGuide).toBeTrue()
+})
+
 test('remains pulsing until both timed-guide axes finish', () => {
 	const mountManager = new MountManager()
 	const mount = structuredClone(DEFAULT_MOUNT)
