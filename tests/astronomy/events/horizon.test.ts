@@ -3,7 +3,7 @@ import { icrs } from '../../../src/astronomy/coordinates/icrs'
 import { earth, sun } from '../../../src/astronomy/ephemeris/models/analytical/vsop87e'
 import { ASTRONOMICAL_TWILIGHT, riseTransitSet, STANDARD_HORIZON, SUN_HORIZON } from '../../../src/astronomy/events/horizon'
 import { Ellipsoid, geodeticLocation } from '../../../src/astronomy/observer/location'
-import { type Time, Timescale, timeShift, timeToDate, timeYMDHMS, utc } from '../../../src/astronomy/time/time'
+import { type Time, Timescale, timeShift, timeSubtract, timeToDate, timeYMDHMS, utc } from '../../../src/astronomy/time/time'
 import { vecMinus } from '../../../src/math/linear-algebra/vec3'
 import { deg, hms, toDeg } from '../../../src/math/units/angle'
 import { kilometer } from '../../../src/math/units/distance'
@@ -96,4 +96,19 @@ test('riseTransitSet keeps a finite transit altitude in a short window around ri
 	expect(Number.isFinite(rts.transitAltitude)).toBeTrue()
 	expect(utcMinute(rts.rise)).toEqual([2026, 6, 29, 9, 49])
 	expect(rts.transit).toBeUndefined()
+})
+
+test('riseTransitSet recovers a grazing set and rise missed by hourly samples', () => {
+	// Declination -66 deg at latitude -23.55 deg dips ~0.03 deg below the standard horizon
+	// for ~25 min around lower culmination, entirely between the 20 h and 21 h samples.
+	const star = icrs(0, deg(-66))
+	const rts = riseTransitSet(() => star, SITE, DAY, { horizon: STANDARD_HORIZON })
+	expect(rts.alwaysUp).toBeFalse()
+	expect(rts.alwaysDown).toBeFalse()
+	expect(utcMinute(rts.set)).toEqual([2026, 6, 29, 20, 23])
+	expect(utcMinute(rts.rise)).toEqual([2026, 6, 29, 20, 48])
+
+	const fine = riseTransitSet(() => star, SITE, DAY, { horizon: STANDARD_HORIZON, step: 5 / 1440 })
+	expect(timeSubtract(rts.set!, fine.set!)).toBeCloseTo(0, 5)
+	expect(timeSubtract(rts.rise!, fine.rise!)).toBeCloseTo(0, 5)
 })
