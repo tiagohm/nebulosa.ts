@@ -1,11 +1,11 @@
 import { describe, expect, test } from 'bun:test'
 import { Jpeg } from '../../../src/bindings/imaging/libturbojpeg'
-import { readImageFromJpeg, readImageFromPath, readImageFromSource, writeImageToFits, writeImageToXisf } from '../../../src/imaging/model/image'
+import { readImageFromFits, readImageFromJpeg, readImageFromPath, readImageFromSource, writeImageToFits, writeImageToXisf } from '../../../src/imaging/model/image'
 import { approximateArcsinhStretchParameters, arcsinhStretch } from '../../../src/imaging/processing/arcsinh'
 import { clone } from '../../../src/imaging/processing/arithmetic'
 import { calibrate } from '../../../src/imaging/processing/calibration'
 import { adf, estimateBackground, estimateBackgroundUsingMode, histogram, sigmaClip } from '../../../src/imaging/processing/computation'
-import { Bitpix } from '../../../src/io/formats/fits/fits'
+import { Bitpix, FITS_BLOCK_SIZE, readFits, writeFits } from '../../../src/io/formats/fits/fits'
 // oxfmt-ignore
 import { blur3x3, blur5x5, blur7x7, blurConvolutionKernel, convolution, convolutionKernel, edges, emboss, gaussianBlur, mean3x3, mean5x5, mean7x7, meanConvolutionKernel, sharpen } from '../../../src/imaging/processing/convolution'
 import type { Image } from '../../../src/imaging/model/types'
@@ -65,6 +65,38 @@ test('reads a JPEG into an explicit 64-bit raw buffer', () => {
 	expect(image.raw).toBeInstanceOf(Float64Array)
 	expect(image.raw.length).toBe(width * height)
 	expect(image.metadata).toMatchObject({ width, height, channels: 1, pixelCount: width * height, bitpix: 8 })
+	for (const value of image.raw) {
+		expect(value).toBeGreaterThanOrEqual(0)
+		expect(value).toBeLessThanOrEqual(1)
+	}
+})
+
+test('does not min-max stretch leftover samples past a FITS image', async () => {
+	const buffer = Buffer.alloc(FITS_BLOCK_SIZE * 2, 0)
+	const header = { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: 4, NAXIS2: 1, BZERO: 32768, BSCALE: 1 }
+	const midScale = 32768 / 65535
+	await writeFits(bufferSink(buffer), [{ header, raw: new Float32Array([midScale, midScale, midScale, midScale]) }], { type: false })
+
+	const fits = (await readFits(bufferSource(buffer)))!
+	const raw = new Float64Array(8).fill(2)
+	const image = await readImageFromFits(fits, bufferSource(buffer), raw)
+
+	expect(image).toBeDefined()
+	expect(image!.raw.length).toBe(4)
+	for (const value of image!.raw) {
+		expect(value).toBeCloseTo(midScale, 6)
+	}
+})
+
+test('drops leftover samples past a JPEG image', () => {
+	const width = 2
+	const height = 2
+	const gray = new Uint8Array([0, 64, 128, 192])
+	const jpeg = new Jpeg().compress(gray, width, height, 'GRAY', 100, 'GRAY')!
+	const raw = new Float32Array(8).fill(2)
+	const image = readImageFromJpeg(jpeg, raw)!
+
+	expect(image.raw.length).toBe(width * height)
 	for (const value of image.raw) {
 		expect(value).toBeGreaterThanOrEqual(0)
 		expect(value).toBeLessThanOrEqual(1)

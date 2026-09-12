@@ -89,10 +89,13 @@ export async function readImageFromFits(fits: Fits | FitsHdu, source: Source & S
 	let raw = resolved[0]
 	const sampleScale = resolved[1]
 
+	const sampleCount = pixelCount * channels
 	if (raw === 'auto') raw = bitpix === 8 ? 32 : 64
-	if (typeof raw === 'number') raw = makeImageRawTypedArray(raw, pixelCount * channels)
-	if (raw.length < pixelCount * channels) return undefined
+	if (typeof raw === 'number') raw = makeImageRawTypedArray(raw, sampleCount)
+	if (raw.length < sampleCount) return undefined
 	if (!(await reader.read(source, raw, sampleScale))) return undefined
+	// A reused caller buffer may be longer than this image; leftover samples must not enter min-max or consumers.
+	raw = raw.subarray(0, sampleCount)
 
 	const metadata = { width, height, channels, pixelCount, pixelSizeInBytes, strideInBytes, stride, bitpix, bayer }
 	if (sampleScale === 'digital') return { header, raw, metadata, sampleScale, ...fitsDigitalProperties(header, bitpix) }
@@ -127,10 +130,13 @@ export async function readImageFromXisf(xisf: Xisf | XisfImage, source: Source &
 	let raw = resolved[0]
 	const sampleScale = resolved[1]
 
+	const sampleCount = pixelCount * channels
 	if (raw === 'auto') raw = bitpix === 8 ? 32 : 64
-	if (typeof raw === 'number') raw = makeImageRawTypedArray(raw, pixelCount * channels)
-	if (raw.length < pixelCount * channels) return undefined
+	if (typeof raw === 'number') raw = makeImageRawTypedArray(raw, sampleCount)
+	if (raw.length < sampleCount) return undefined
 	if (!(await reader.read(source, raw, sampleScale))) return undefined
+	// A reused caller buffer may be longer than this image; leftover samples must not enter min-max or consumers.
+	raw = raw.subarray(0, sampleCount)
 
 	const metadata = { width, height, channels, pixelCount, pixelSizeInBytes, strideInBytes, stride, bitpix, bayer }
 	if (sampleScale === 'digital') return { header, raw, metadata, sampleScale, ...xisfDigitalProperties(bitpix) }
@@ -158,6 +164,7 @@ export function readImageFromJpeg(buffer: Buffer, raw: ImageRawType | ImageRawPr
 	if (raw.length < pixelCount) return undefined
 
 	for (let i = 0; i < pixelCount; i++) raw[i] = data[i] / 255
+	raw = raw.subarray(0, pixelCount)
 
 	const header = { BITPIX: 8, NAXIS: 2, NAXIS1: width, NAXIS2: height }
 	return { header, raw, metadata: { width, height, channels: 1, pixelCount, pixelSizeInBytes: 1, strideInBytes: width, stride: width, bitpix: 8, bayer: undefined } }
