@@ -59,10 +59,10 @@ export async function astapDetectStars(input: string, { minSNR = 0, maxStars = 0
 		try {
 			const csv = readCsv(await file.text())
 
-			if (csv.length > 1) {
-				const stars = new Array<DetectedStar>(csv.length - 1)
+			if (csv.length > 0) {
+				const stars = new Array<DetectedStar>(csv.length)
 
-				for (let i = 1; i < csv.length; i++) {
+				for (let i = 0; i < csv.length; i++) {
 					const row = csv[i]
 					const x = +row[0]
 					const y = +row[1]
@@ -70,7 +70,7 @@ export async function astapDetectStars(input: string, { minSNR = 0, maxStars = 0
 					const snr = +row[3]
 					const flux = +row[4]
 
-					stars[i - 1] = { x, y, hfd, snr, flux }
+					stars[i] = { x, y, hfd, snr, flux }
 				}
 
 				if (maxStars > 0 && stars.length > maxStars) {

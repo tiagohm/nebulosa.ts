@@ -1,9 +1,25 @@
 import { expect, test } from 'bun:test'
+import { mkdtemp, rm, writeFile } from 'fs/promises'
+import { tmpdir } from 'os'
 import { dirname, join } from 'path'
 import { astapDetectStars, astapPlateSolve } from '../../../src/astrometry/solvers/astap'
 import { deg, hour, toArcmin, toArcsec, toDeg, toHour } from '../../../src/math/units/angle'
 import { downloadPerTag } from '../../download'
 import { isBinaryTestSkipped } from '../../util'
+
+// Writes a dummy image and a fake `astap` that emits the given `-extract` CSV next to `-f`.
+async function withFakeAstapExtract(csv: string, run: (input: string, executable: string) => Promise<void>) {
+	const dir = await mkdtemp(join(tmpdir(), 'astap-'))
+	try {
+		const input = join(dir, 'img.fit')
+		await writeFile(input, 'not-a-fits')
+		const executable = join(dir, 'astap')
+		await writeFile(executable, `#!/usr/bin/env bun\nconst args = process.argv.slice(2)\nconst input = args[args.indexOf('-f') + 1]\nconst csvPath = input.replace(/\\.[^.]+$/, '') + '.csv'\nawait Bun.write(csvPath, ${JSON.stringify(csv)})\n`, { mode: 0o755 })
+		await run(input, executable)
+	} finally {
+		await rm(dir, { recursive: true, force: true })
+	}
+}
 
 await downloadPerTag('astap')
 
@@ -39,4 +55,22 @@ test.skipIf(SKIP)('plate solve', async () => {
 
 	// Don't test SIP for now, since the latest ASTAP version doesn't returning it
 	// expect(solution!.CTYPE1).toBe('RA---TAN-SIP')
+})
+
+test('keeps every ASTAP extract star after the CSV header is skipped', async () => {
+	const oneStar = 'x,y,hfd,snr,flux\n100.0,200.0,2.5,50,8000\n'
+	await withFakeAstapExtract(oneStar, async (input, executable) => {
+		const stars = await astapDetectStars(input, { executable })
+		expect(stars).toHaveLength(1)
+		expect(stars[0].snr).toBe(50)
+		expect(stars[0].flux).toBe(8000)
+	})
+
+	const twoStars = 'x,y,hfd,snr,flux\n100.0,200.0,2.5,50,8000\n150.0,250.0,3.0,40,6000\n'
+	await withFakeAstapExtract(twoStars, async (input, executable) => {
+		const stars = await astapDetectStars(input, { executable })
+		expect(stars).toHaveLength(2)
+		expect(stars[0].snr).toBe(50)
+		expect(stars[1].snr).toBe(40)
+	})
 })
