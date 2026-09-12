@@ -435,9 +435,14 @@ const PARSING_STRING_MESSAGE_STATE = new ParsingStringMessageState()
 class ParsingTwoWireMessageState implements FirmataFsmState {
 	process(b: number, fsm: FirmataFsm) {
 		if (b === END_SYSEX) {
+			if (fsm.offset < 4) {
+				fsm.transitTo(WAITING_FOR_MESSAGE_STATE)
+				return
+			}
+
 			const address = fsm.read7Bit(0)
 			const register = fsm.read7Bit(2)
-			const size = (fsm.offset - 4) >>> 1
+			const size = (fsm.offset - 4) >> 1
 			const data = Buffer.allocUnsafe(size)
 			for (let i = 0; i < size; i++) data[i] = fsm.read7Bit(i * 2 + 4)
 			fsm.twoWireMessage(address, register, data)
