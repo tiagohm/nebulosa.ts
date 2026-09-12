@@ -137,8 +137,15 @@ staged, unstaged or untracked changes make the session incomplete and stop the
 batch before the next file. This catches fixes whose commits were not completed.
 Previously created commits remain intact. Partial edits after a failure are
 preserved; handle them before restarting `--fix`, since the clean-start check
-still applies. Sessions must stop on validation or commit failures. They must
-never amend, squash, rebase, rewrite existing commits or push.
+still applies. Sessions must repair lint, type, formatting and test failures
+introduced by their own changes, then rerun the affected checks before committing
+or moving to the next finding. This includes validation failures from commit
+hooks. A failed check alone does not end the session. Unrelated pre-existing or
+environment failures follow AGENTS.md's verification policy. An unresolved blocker
+after diagnosis and reasonable repair attempts, or a non-validation commit
+failure, stops the session with an explanation of the remaining work. Sessions
+must never commit introduced failures, weaken checks to pass, amend, squash,
+rebase, rewrite existing commits or push.
 
 Review mode never stages or commits. Review mode, dry runs, status and help do
 not require a clean worktree. The orchestrator does not combine all fixes into
