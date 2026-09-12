@@ -116,6 +116,7 @@ Run one independent provider session per file, sequentially, on Linux or Windows
 
 ${provider.id} defaults: ${JSON.stringify(provider.defaults)}
 Codex inherits its configured model and effort unless explicitly overridden.
+Grok uses --sandbox off so codebase-memory-mcp can write its cache; review still denies git and writers.
 Codex review uses read-only sandboxing; fix uses danger-full-access to allow commits.
 Explicit unsupported provider options are errors. Positional files override --files.
 Review paths resolve from the repository root; absolute paths inside it are accepted.

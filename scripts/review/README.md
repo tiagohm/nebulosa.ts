@@ -136,6 +136,11 @@ Review mode never stages or commits. Review mode, dry runs, status and help do
 not require a clean worktree. The orchestrator does not combine all fixes into
 a file-level commit; the session owns the per-finding validation and commits.
 
+Grok uses `--sandbox off` in both modes. The workspace Landlock profile cannot
+write `~/.cache/codebase-memory-mcp`, so headless graph MCP handshakes fail with
+`connection closed: initialize response`. Review mode still denies `Bash(git *)`
+and the `search_replace`/`write` tools.
+
 Codex uses `read-only` sandboxing in review mode. In fix mode it uses
 `danger-full-access`, because workspace sandboxing protects `.git` and prevents
 unattended commits. **Codex fix commands therefore run without a filesystem or
@@ -269,8 +274,9 @@ correction instructions) and the selected report with author notes. Each prompt
 ends with a mode-specific current-file footer. Grok receives
 it through `--prompt-file` and `--verbatim`. Memory and auto-updates are disabled.
 Subagents use both `--no-subagents` and `GROK_SUBAGENTS=0` by default; allowing them
-removes the flag and sets `GROK_SUBAGENTS=1`. The workspace sandbox and approval
-policy are kept. `Bash(git *)` denial and editing-tool restrictions apply only to
+removes the flag and sets `GROK_SUBAGENTS=1`. Grok uses `--sandbox off` so the graph
+MCP can handshake; approval policy is kept.
+`Bash(git *)` denial and editing-tool restrictions apply only to
 review mode; fix mode permits the Git commands required to inspect, stage and
 commit each finding. Remote operations and history rewriting remain prohibited
 by the shared session instructions.
