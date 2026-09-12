@@ -329,6 +329,20 @@ test('pole-finite cylindrical projections accept the poles by default', () => {
 	expect(sphericalEllipsoidal.y).toBeCloseTo(mercator.y, 12)
 })
 
+test('cylindrical equal-area inverse rejects points outside the sphere image', () => {
+	expect(new CylindricalEqualArea().unproject(0, 10)).toBeUndefined()
+	expect(new GallPeters().unproject(0, 50)).toBeUndefined()
+
+	const pole = new CylindricalEqualArea().project(0, PIOVERTWO)
+	expect(pole).toBeDefined()
+	if (pole === undefined) return
+
+	const unprojected = new CylindricalEqualArea().unproject(pole.x, pole.y)
+	expect(unprojected).toBeDefined()
+	if (unprojected === undefined) return
+	expect(unprojected.y).toBeCloseTo(PIOVERTWO, 12)
+})
+
 test('projection options validate domains and parameters', () => {
 	expect(new PlateCarree().project(0, PIOVERTWO + 1e-6)).toBeUndefined()
 	expect(new PlateCarree(0, { radius: 0 }).project(0, 0)).toBeUndefined()

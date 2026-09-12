@@ -363,7 +363,12 @@ export class CylindricalEqualArea extends CylindricalProjection {
 		out = unprojectPoint(out, x, y, options, this.options)
 		if (out === undefined) return undefined
 		const longitude = longitudeFromDelta(out.x / this.cosStandardParallel, options, this.options)
-		return longitude === undefined ? undefined : fillPoint(out, longitude, Math.asin(out.y * this.cosStandardParallel + Math.sin(this.latitudeOfOrigin)))
+		if (longitude === undefined) return undefined
+		const sine = out.y * this.cosStandardParallel + Math.sin(this.latitudeOfOrigin)
+		const epsilon = epsilonFrom(options, this.options)
+		if (!(sine >= -1 - epsilon && sine <= 1 + epsilon)) return undefined
+		const latitude = latitudeInRange(Math.asin(clamp(sine, -1, 1)), options, this.options)
+		return latitude === undefined ? undefined : fillPoint(out, longitude, latitude)
 	}
 }
 
