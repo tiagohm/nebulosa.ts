@@ -47,7 +47,7 @@ export class PowerManager extends DeviceManager<Power> {
 			case 'USB_PORTS':
 				handlePowerChannel(this, device, message, tag, 'usb', 'enabled')
 				return
-			case 'POWER_CYCLE_Toggle':
+			case 'POWER_CYCLE':
 				if (tag[0] === 'd') {
 					if (handleSwitchValue(device, 'hasPowerCycle', true)) {
 						this.updated(device, 'hasPowerCycle', message.state)
@@ -141,7 +141,7 @@ export class PowerManager extends DeviceManager<Power> {
 		if (full || name === 'USB_PORTS' || name === 'USB_LABELS') {
 			resetDeviceValue(this, device, 'usb', DEFAULT_POWER.usb)
 		}
-		if (full || name === 'POWER_CYCLE_Toggle') {
+		if (full || name === 'POWER_CYCLE') {
 			resetDeviceValue(this, device, 'hasPowerCycle', DEFAULT_POWER.hasPowerCycle)
 		}
 		if (full || name === 'POWER_SENSORS') {

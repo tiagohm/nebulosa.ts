@@ -6,7 +6,7 @@ import { FocuserManager } from '../../../../src/devices/indi/manager/focuser'
 import { PowerManager } from '../../../../src/devices/indi/manager/power'
 import { RotatorManager } from '../../../../src/devices/indi/manager/rotator'
 import { WheelManager } from '../../../../src/devices/indi/manager/wheel'
-import { client, setupDevice } from './util'
+import { client, defSwitch, setupDevice } from './util'
 
 test('device managers reset deleted device-specific properties to defaults', () => {
 	const wheelManager = new WheelManager()
@@ -58,7 +58,7 @@ test('device managers reset deleted device-specific properties to defaults', () 
 	power.hasPowerCycle = true
 	power.voltage.max = 20
 	powerManager.delProperty(client, { device: power.name, name: 'POWER_CHANNELS' })
-	powerManager.delProperty(client, { device: power.name, name: 'POWER_CYCLE_Toggle' })
+	powerManager.delProperty(client, { device: power.name, name: 'POWER_CYCLE' })
 	powerManager.delProperty(client, { device: power.name, name: 'POWER_SENSORS' })
 
 	expect(wheel).toMatchObject({ count: DEFAULT_WHEEL.count, names: DEFAULT_WHEEL.names, position: DEFAULT_WHEEL.position, moving: DEFAULT_WHEEL.moving, canSetNames: DEFAULT_WHEEL.canSetNames })
@@ -72,4 +72,29 @@ test('device managers reset deleted device-specific properties to defaults', () 
 	expect(power.dc).toEqual(DEFAULT_POWER.dc)
 	expect(power.hasPowerCycle).toBe(DEFAULT_POWER.hasPowerCycle)
 	expect(power.voltage).toEqual(DEFAULT_POWER.voltage)
+})
+
+test('power cycle capability follows the POWER_CYCLE vector', () => {
+	const manager = new PowerManager()
+	const power = setupDevice<Power>(structuredClone(DEFAULT_POWER))
+	manager.add(power)
+
+	manager.switchVector(
+		client,
+		{
+			device: power.name,
+			name: 'POWER_CYCLE',
+			permission: 'rw',
+			rule: 'AtMostOne',
+			state: 'Idle',
+			elements: { POWER_CYCLE_Toggle: defSwitch('POWER_CYCLE_Toggle', false) },
+		},
+		'defSwitchVector',
+	)
+
+	expect(power.hasPowerCycle).toBeTrue()
+
+	manager.delProperty(client, { device: power.name, name: 'POWER_CYCLE' })
+
+	expect(power.hasPowerCycle).toBeFalse()
 })
