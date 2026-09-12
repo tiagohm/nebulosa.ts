@@ -457,7 +457,8 @@ function projectedPolygonToBoxes(minProjectedX: number, maxProjectedX: number, m
 	return splitRaBox(minRA, maxRA, minDEC, maxDEC)
 }
 
-// Checks whether a tangent-plane point (px, py) falls inside a polygon using ray casting.
+// Checks whether a tangent-plane point (px, py), in radians, lies inside or within GEOMETRY_EPSILON
+// of a polygon edge. Tests closed segments before ray casting, including repeated vertices.
 function pointInProjectedPolygon(px: number, py: number, polygon: readonly Vertex[]) {
 	let inside = false
 	let j = polygon.length - 1
@@ -467,10 +468,16 @@ function pointInProjectedPolygon(px: number, py: number, polygon: readonly Verte
 		const yi = polygon[i][1]
 		const xj = polygon[j][0]
 		const yj = polygon[j][1]
-		const crosses = yi > py !== yj > py
-		const xIntersection = ((xj - xi) * (py - yi)) / (yj - yi || Number.MIN_VALUE) + xi
+		const dx = xj - xi
+		const dy = yj - yi
+		const lengthSquared = dx * dx + dy * dy
+		const fraction = lengthSquared > 0 ? clamp(((px - xi) * dx + (py - yi) * dy) / lengthSquared, 0, 1) : 0
 
-		if (crosses && px <= xIntersection + GEOMETRY_EPSILON) {
+		if (Math.hypot(px - xi - fraction * dx, py - yi - fraction * dy) <= GEOMETRY_EPSILON) return true
+
+		const crosses = yi > py !== yj > py
+
+		if (crosses && px < (dx * (py - yi)) / dy + xi) {
 			inside = !inside
 		}
 

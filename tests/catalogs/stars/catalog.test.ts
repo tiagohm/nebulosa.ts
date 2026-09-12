@@ -57,7 +57,54 @@ test('stream region yields the same matches as the query helpers', async () => {
 	expect(streamed.sort()).toEqual(['cone-center', 'cone-edge'])
 })
 
-export type MockCatalogEntry = (typeof FIXTURE_STARS)[number]
+test('polygon includes every vertex and edge midpoint in either winding', async () => {
+	const vertices = [
+		[deg(10), deg(-5)],
+		[deg(20), deg(-5)],
+		[deg(20), deg(5)],
+		[deg(10), deg(5)],
+	] as const
+	const entries: MockCatalogEntry[] = []
+	for (const ra of [10, 15, 20]) {
+		for (const dec of [-5, 0, 5]) {
+			entries.push({ id: `${ra},${dec}`, rightAscension: deg(ra), declination: deg(dec) })
+		}
+	}
+	entries.push({ id: 'outside', rightAscension: deg(9.99), declination: 0 })
+	const catalog = new MockCatalog(entries)
+	const expected = idsOf(await catalog.queryBox(deg(10), deg(20), deg(-5), deg(5)))
+	expect(expected).toHaveLength(9)
+	expect(idsOf(await catalog.queryPolygon(vertices))).toEqual(expected)
+	expect(idsOf(await catalog.queryPolygon(vertices.toReversed()))).toEqual(expected)
+	expect(idsOf(await catalog.queryPolygon([...vertices, vertices[0]]))).toEqual(expected)
+})
+
+test('triangle includes its vertices and all edge midpoints', async () => {
+	const vertices = [
+		[deg(100), deg(10)],
+		[deg(110), deg(10)],
+		[deg(100), deg(20)],
+	] as const
+	const entries = [
+		[100, 10],
+		[110, 10],
+		[100, 20],
+		[105, 10],
+		[100, 15],
+		[105, 15],
+		[102, 12],
+	].map(([ra, dec]) => ({ id: `${ra},${dec}`, rightAscension: deg(ra), declination: deg(dec) }))
+	const outside = { id: 'outside', rightAscension: deg(106), declination: deg(15) }
+	const catalog = new MockCatalog([...entries, outside])
+	expect(idsOf(await catalog.queryTriangle(...vertices))).toEqual(idsOf(entries))
+	expect(idsOf(await catalog.queryTriangle(vertices[2], vertices[1], vertices[0]))).toEqual(idsOf(entries))
+})
+
+export interface MockCatalogEntry {
+	readonly id: string
+	readonly rightAscension: number
+	readonly declination: number
+}
 
 // Keeps the generic catalog tests focused on normalized preselection boxes.
 class MockCatalog extends BaseStarCatalog<MockCatalogEntry> {
