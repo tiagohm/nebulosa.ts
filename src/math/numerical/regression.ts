@@ -352,7 +352,11 @@ export function weightedLinearRegressionScore(regression: LinearRegression, x: R
 	return { r, r2, rss, rmsd, pointCount: n, weightSum, slopeStandardError, interceptStandardError }
 }
 
-// Computes the coefficients of a polynomial regression
+// Fits a polynomial y = Σ coefficients[k] · x^{powers[k]} by linear least squares.
+// When `degree` is a number, powers are 0..degree, or 1..degree if `interceptAtZero`.
+// Consecutive powers 0..n are fitted in the translated basis (x − x̄)^k so a large mean
+// does not collapse the Vandermonde Gramian; returned coefficients are expanded back to
+// the original monomials. Custom power lists and intercept-at-zero fits stay unshifted.
 export function polynomialRegression(x: Readonly<NumberArray>, y: Readonly<NumberArray>, degree: number | NumberArray, interceptAtZero: boolean = false): PolynomialRegression {
 	let powers: NumberArray
 
@@ -392,6 +396,23 @@ export function polynomialRegression(x: Readonly<NumberArray>, y: Readonly<Numbe
 	const n = Math.min(x.length, y.length)
 	const p = powers.length
 
+	// Consecutive 0..n monomials span the same space after a shift, so center x to keep
+	// the Gramian well-conditioned when |x̄| is large compared with the sample span.
+	let xMean = 0
+	let useCenteredBasis = p > 0
+
+	for (let i = 0; i < p; i++) {
+		if (powers[i] !== i) {
+			useCenteredBasis = false
+			break
+		}
+	}
+
+	if (useCenteredBasis) {
+		for (let i = 0; i < n; i++) xMean += x[i]
+		xMean /= n
+	}
+
 	// https://github.com/mljs/regression-polynomial/blob/ce1c94bcb03f0f244ef26bae6ba7529bcdd8894e/src/index.ts#L183C18-L183C37
 
 	// DxN * NxD = DxD
@@ -405,7 +426,7 @@ export function polynomialRegression(x: Readonly<NumberArray>, y: Readonly<Numbe
 	const basis = new Float64Array(p)
 
 	for (let k = 0; k < n; k++) {
-		const xk = x[k]
+		const xk = useCenteredBasis ? x[k] - xMean : x[k]
 		const yk = y[k]
 
 		for (let i = 0; i < p; i++) {
@@ -435,13 +456,33 @@ export function polynomialRegression(x: Readonly<NumberArray>, y: Readonly<Numbe
 	// Solve A*x=B
 	// const LU = new LuDecomposition(A)
 	// const coefficients = LU.solve(B)
-	const coefficients = gaussianElimination(A, B, B)
+	const solved = gaussianElimination(A, B, B)
+	const centeredCoefficients = Array.from(solved)
+	const coefficients = Array.from(solved)
+
+	if (useCenteredBasis) {
+		// Expand Σ c'_k (x − x̄)^k into monomials of x. Nested Horner with h = −x̄.
+		const h = -xMean
+
+		for (let i = 1; i < p; i++) {
+			for (let j = p - 1; j >= i; j--) {
+				coefficients[j - 1] += h * coefficients[j]
+			}
+		}
+	}
 
 	return {
 		xPoints: x,
 		yPoints: y,
-		coefficients: Array.isArray(coefficients) ? coefficients : Array.from(coefficients),
+		coefficients,
 		predict: (x) => {
+			if (useCenteredBasis) {
+				const t = x - xMean
+				let y = 0
+				for (let k = p - 1; k >= 0; k--) y = y * t + centeredCoefficients[k]
+				return y
+			}
+
 			let y = 0
 			for (let k = 0; k < p; k++) y += coefficients[k] * x ** powers[k]
 			return y
@@ -455,13 +496,16 @@ export function quadraticRegression(x: Readonly<NumberArray>, y: Readonly<Number
 	const coefficients = regression.coefficients
 	const a = coefficients.length === 2 ? coefficients[1] : coefficients[2]
 	const b = coefficients.length === 2 ? coefficients[0] : coefficients[1]
-	const c = coefficients.length === 2 ? 0 : coefficients[0]
 	const d = 2 * a
-	const e = 2 * d // 4a
-	const b2 = b * b
 	// Only a convex parabola (a > 0) has a true minimum at its vertex. When a <= 0 the parabola opens
 	// downward or degenerates to a line, so no minimum exists and the point is reported as non-finite.
-	regression.minimum = a > 0 ? { x: -b / d, y: c - b2 / e } : { x: Number.NaN, y: Number.NaN }
+	// Evaluate y at the vertex through predict so a large original-basis intercept does not cancel.
+	if (a > 0) {
+		const xMin = -b / d
+		regression.minimum = { x: xMin, y: regression.predict(xMin) }
+	} else {
+		regression.minimum = { x: Number.NaN, y: Number.NaN }
+	}
 	return regression
 }
 

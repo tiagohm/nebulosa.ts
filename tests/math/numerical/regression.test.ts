@@ -136,6 +136,15 @@ describe('polynomial', () => {
 		expect(regression.coefficients[0]).toBeCloseTo(0.018041553971009705, 5)
 		expect(regression.coefficients[1]).toBeCloseTo(1.0095279075485593, 5)
 	})
+
+	test('degree 1 stays accurate for large-x offsets', () => {
+		const x = [1e12, 1e12 + 1, 1e12 + 2, 1e12 + 3]
+		const y = x.map((xi) => 2 * xi + 5)
+		const regression = polynomialRegression(x, y, 1)
+
+		expect(regression.coefficients[1]).toBeCloseTo(2, 9)
+		expect(regression.predict(1e12 + 10)).toBeCloseTo(2 * (1e12 + 10) + 5, 3)
+	})
 })
 
 // https://github.com/mljs/regression-theil-sen/blob/main/src/__tests__/index.test.js
@@ -267,6 +276,18 @@ test('quadratic regression reports no minimum for a downward parabola', () => {
 	expect(regression.coefficients[2]).toBeLessThan(0)
 	expect(Number.isNaN(regression.minimum.x)).toBe(true)
 	expect(Number.isNaN(regression.minimum.y)).toBe(true)
+})
+
+test('quadratic regression recovers a convex vertex at large-x offsets', () => {
+	const offset = 1e7
+	const vertex = offset + 200
+	const x = [offset, offset + 100, offset + 200, offset + 300, offset + 400]
+	const y = x.map((xi) => 1e-4 * (xi - vertex) ** 2 + 3)
+	const regression = quadraticRegression(x, y)
+
+	expect(regression.coefficients[2]).toBeGreaterThan(0)
+	expect(regression.minimum.x).toBeCloseTo(vertex, 0)
+	expect(regression.minimum.y).toBeCloseTo(3, 6)
 })
 
 test('exponential regression', () => {
