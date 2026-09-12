@@ -734,6 +734,6 @@ function getMountMotionState(mount: Mount) {
 function parseUTCOffset(text: string) {
 	const parts = text.split(':')
 	const hour = +parts[0] * 60
-	const minute = parts.length >= 2 ? +parts[1] : 0
-	return hour + minute
+	const minute = parts.length >= 2 ? Math.abs(+parts[1]) : 0
+	return hour + (hour < 0 || Object.is(hour, -0) ? -minute : minute)
 }

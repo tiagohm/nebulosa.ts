@@ -150,6 +150,39 @@ test('aggregates independent north-south and west-east motion', () => {
 	expect(mount.canMove).toBeFalse()
 })
 
+test('preserves the sign of colon-separated UTC offsets', () => {
+	const manager = new MountManager()
+	const mount = setupTestMount(manager)
+
+	function updateOffset(offset: string) {
+		manager.textVector(
+			recordingClient,
+			{
+				device: mount.name,
+				name: 'TIME_UTC',
+				state: 'Ok',
+				elements: {
+					UTC: { name: 'UTC', value: '2000-01-01T12:00:00' },
+					OFFSET: { name: 'OFFSET', value: offset },
+				},
+			},
+			'setTextVector',
+		)
+	}
+
+	updateOffset('-5:30')
+	expect(mount.time.offset).toBe(-330)
+
+	updateOffset('-0:30')
+	expect(mount.time.offset).toBe(-30)
+
+	updateOffset('-5.5')
+	expect(mount.time.offset).toBe(-330)
+
+	updateOffset('3.00')
+	expect(mount.time.offset).toBe(180)
+})
+
 test('resets deleted INDI properties to defaults', () => {
 	const manager = new MountManager()
 	const device = setupDevice(structuredClone(DEFAULT_MOUNT))
