@@ -407,7 +407,7 @@ export class Ucac4Catalog extends BaseStarCatalog<Ucac4CatalogEntry> {
 		const zoneMaxDec = zone === UCAC4_ZONE_COUNT ? PIOVERTWO : zoneMinDec + UCAC4_ZONE_HEIGHT
 		const index = this.#index
 		const ranges: Vertex[] = []
-		const zoneIndexOffset = (zone - 1) * UCAC4_INDEX_BIN_COUNT
+		const zoneIndexOffset = zone - 1
 		const baseAdjustment = index?.base === 0 ? 1 : 0
 		let intersects = false
 
@@ -423,7 +423,8 @@ export class Ucac4Catalog extends BaseStarCatalog<Ucac4CatalogEntry> {
 			let rangeEnd = 0
 
 			for (let bin = binStart; bin <= binEnd; bin++) {
-				const indexOffset = zoneIndexOffset + bin
+				// Native Fortran n0(900,1440) and nn(900,1440) store zones contiguously within each RA bin.
+				const indexOffset = bin * UCAC4_ZONE_COUNT + zoneIndexOffset
 				const count = index.counts[indexOffset]
 				if (count <= 0) continue
 

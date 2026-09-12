@@ -52,6 +52,11 @@ test('queries a box that crosses RA 0', async () => {
 	expect(idsOf(result)).toEqual(['451-1', '451-3'])
 })
 
+test('reads zone 451 from the first RA bin in the native Fortran index', async () => {
+	const result = await catalog.queryBox(0, deg(0.25), 0, deg(0.2))
+	expect(idsOf(result)).toEqual(['451-1'])
+})
+
 test('includes stars when maxRA falls exactly on a UCAC4 index bin boundary', async () => {
 	const result = await catalog.queryBox(0, deg(0.25), deg(0.2), deg(0.3))
 	expect(idsOf(result)).toEqual(['452-1'])
@@ -142,8 +147,9 @@ async function createCatalog() {
 		for (let i = 0; i < records.length; i++) {
 			writeRecord(output, i * RECORD_SIZE, records[i], i + 1)
 			const bin = Math.min(BIN_COUNT - 1, Math.floor(records[i].ra / deg(0.25)))
-			const index = (zone - 1) * BIN_COUNT + bin
-			if (counts[index] === 0) starts[index] = i + 1
+			// USNO readme_u4 section 5c: n0(900,1440), with n0 the predecessor record number.
+			const index = bin * ZONE_COUNT + zone - 1
+			if (counts[index] === 0) starts[index] = i
 			counts[index]++
 		}
 
