@@ -236,7 +236,7 @@ test.skipIf(SKIP)('spkFile', async () => {
 test('elements defaults to the ecliptic reference plane', async () => {
 	const requests = await captureHorizonsRequests(() => elements('3517;', '500@10', START_TIME, END_TIME))
 
-	expect(queryValue(requests[0], 'REF_PLANE')).toBe('ECLIPTIC')
+	expect(queryValue(requests[0], 'REF_PLANE')).toBe('E')
 })
 
 test('vector normalizes input times to TDB', async () => {
@@ -262,6 +262,12 @@ test('uses the Horizons cylindrical coordinate token', async () => {
 	const requests = await captureHorizonsRequests(() => observer('3517;', 'coord', false, START_TIME, END_TIME, [], { coordinateType: 'CYLINDRICAL' }))
 
 	expect(queryValue(requests[0], 'COORD_TYPE')).toBe('CYLINDRICAL')
+})
+
+test('uses Horizons reference-plane abbreviations', async () => {
+	const requests = await captureHorizonsRequests(() => elements('3517;', '500@10', START_TIME, END_TIME, { referencePlane: 'BODY_EQUATOR' }))
+
+	expect(queryValue(requests[0], 'REF_PLANE')).toBe('B')
 })
 
 async function captureHorizonsRequests(callback: () => Promise<unknown>, responses: readonly string[] = ['']) {

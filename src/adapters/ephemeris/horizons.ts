@@ -514,7 +514,10 @@ function makeParametersFromOptions(parameters: HorizonsQueryParameters, options?
 		const isElements = parameters.EPHEM_TYPE === 'ELEMENTS'
 
 		parameters.REF_SYSTEM = options.referenceSystem || DEFAULT_OVE_OPTIONS.referenceSystem
-		if (!isObserver) parameters.REF_PLANE = options.referencePlane || parameters.REF_PLANE || DEFAULT_OVE_OPTIONS.referencePlane
+		if (!isObserver) {
+			const defaultReferencePlane = parameters.REF_PLANE === 'ECLIPTIC' ? 'ECLIPTIC' : DEFAULT_OVE_OPTIONS.referencePlane
+			parameters.REF_PLANE = formatReferencePlane(options.referencePlane ?? defaultReferencePlane)
+		}
 		if (isObserver) parameters.CAL_FORMAT = options.calendarFormat || DEFAULT_OVE_OPTIONS.calendarFormat
 		parameters.CAL_TYPE = options.calendarType || DEFAULT_OVE_OPTIONS.calendarType
 		if (isObserver) parameters.APPARENT = (options.refractionCorrection ?? DEFAULT_OVE_OPTIONS.refractionCorrection) ? 'REFRACTED' : 'AIRLESS'
@@ -531,6 +534,11 @@ function makeParametersFromOptions(parameters: HorizonsQueryParameters, options?
 		if (isElements) parameters.TP_TYPE = options.timeOfPeriapsisType || DEFAULT_OVE_OPTIONS.timeOfPeriapsisType
 		if (options.stepSize) parameters.STEP_SIZE = formatStepSize(options.stepSize, options.stepSizeUnit)
 	}
+}
+
+// Maps the public reference-plane names to the single-letter codes accepted by Horizons.
+function formatReferencePlane(referencePlane: ReferencePlane) {
+	return referencePlane === 'ECLIPTIC' ? 'E' : referencePlane === 'FRAME' ? 'F' : 'B'
 }
 
 // Sets the QUANTITIES parameter for observer ephemerides from the requested quantity codes.
