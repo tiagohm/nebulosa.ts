@@ -167,6 +167,37 @@ describe.skipIf(SKIP)('dome simulator', () => {
 		expect(dome.parking).toBeFalse()
 	}, 10000)
 
+	test('executes full-turn relative moves', async () => {
+		const handler = new IndiClientHandlerSet()
+		const manager = new DomeManager()
+		handler.add(manager)
+
+		using client = new ClientSimulator('dome.relative', handler)
+		using simulator = new DomeSimulator('Dome Simulator', client)
+		const dome = manager.get(client, simulator.name)!
+
+		manager.connect(dome)
+		await waitUntil(() => dome.connected)
+		manager.speed(dome, 12)
+		await waitUntil(() => dome.speed.value === 12)
+		manager.syncTo(dome, 0)
+
+		manager.moveBy(dome, deg(360))
+		await waitUntil(() => dome.moving)
+		await Bun.sleep(250)
+		expect(dome.azimuth.value).toBeGreaterThan(0)
+		manager.stop(dome)
+		await waitUntil(() => !dome.moving)
+
+		manager.syncTo(dome, 0)
+		manager.moveBy(dome, deg(-360))
+		await waitUntil(() => dome.moving)
+		await Bun.sleep(250)
+		expect(dome.azimuth.value).toBeGreaterThan(deg(330))
+		manager.stop(dome)
+		await waitUntil(() => !dome.moving)
+	}, 5000)
+
 	test('persists dome configuration but excludes transient operations', () => {
 		const saved: string[] = []
 		const handler = new IndiClientHandlerSet()

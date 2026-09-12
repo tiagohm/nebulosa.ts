@@ -424,7 +424,7 @@ export class DomeSimulator extends DeviceSimulator {
 			this.notify(this.#park)
 		}
 
-		if (this.#targetAzimuth === this.azimuth) this.finishTarget()
+		if (this.#targetAzimuth === this.azimuth && (operation !== 'relative' || relativeDelta === 0)) this.finishTarget()
 	}
 
 	// Starts continuous clockwise or counter-clockwise motion.
