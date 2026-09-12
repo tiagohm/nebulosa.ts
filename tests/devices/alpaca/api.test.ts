@@ -31,6 +31,21 @@ test('builds device API endpoint roots without contacting a server', () => {
 	expect(api.safetyMonitor.url.toString()).toBe('http://example.test:11111/api/v1/safetymonitor/')
 })
 
+test('returns gain names as strings in index order', async () => {
+	const gains = ['LCG', 'HCG']
+	using server = Bun.serve({
+		hostname: '127.0.0.1',
+		port: 0,
+		fetch(request: Request) {
+			expect(new URL(request.url).pathname).toBe('/api/v1/camera/2/gains')
+			expect(request.method).toBe('GET')
+			return Response.json({ Value: gains, ErrorNumber: 0, ErrorMessage: '', ClientTransactionID: 0, ServerTransactionID: 1 })
+		},
+	})
+	const result: AlpacaRequestResult<readonly string[]> = await new AlpacaApi(server.url).camera.getGains(2)
+	expect(result).toEqual({ ok: true, value: gains })
+})
+
 test('returns the last exposure start time as the original FITS UTC string', async () => {
 	const startTime = '2024-06-15T01:23:45.000'
 	using server = Bun.serve({

@@ -305,8 +305,9 @@ export class AlpacaCameraApi extends AlpacaDeviceApi {
 		return request<number>(this.url, `${id}/gainmin`, 'GET')
 	}
 
+	// Returns device id's gain names in index order; Gain selects a label by its zero-based index.
 	getGains(id: number) {
-		return request<readonly number[]>(this.url, `${id}/gains`, 'GET')
+		return request<readonly string[]>(this.url, `${id}/gains`, 'GET')
 	}
 
 	hasShutter(id: number) {
