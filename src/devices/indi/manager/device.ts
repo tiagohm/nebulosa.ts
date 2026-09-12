@@ -273,7 +273,10 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 	list(client?: Client | string) {
 		const devices = new Set<D>()
 
-		client = typeof client === 'string' ? this.#clients.get(client) : client
+		if (typeof client === 'string') {
+			client = this.#clients.get(client)
+			if (client === undefined) return devices
+		}
 
 		for (const device of this.#devices.values()) {
 			if (client === undefined || device[CLIENT] === client) devices.add(device)

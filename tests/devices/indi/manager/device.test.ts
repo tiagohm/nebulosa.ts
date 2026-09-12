@@ -102,4 +102,22 @@ describe('del property', () => {
 		expect(manager.get(client, closing.name)).toBeUndefined()
 		expect(manager.get(otherClient, remaining.name)).toBe(remaining)
 	})
+
+	test('list returns no devices for unknown or closed client IDs', () => {
+		const otherClient: Client = { ...client, id: 'other' }
+		const manager = new CameraManager()
+		const first = setupDevice(structuredClone(DEFAULT_CAMERA))
+		const second = setupDevice(structuredClone(DEFAULT_CAMERA), otherClient)
+
+		manager.add(first)
+		manager.add(second)
+
+		expect(manager.list('missing').size).toBe(0)
+		expect(manager.list(otherClient.id)).toEqual(new Set([second]))
+
+		manager.close(otherClient, true)
+
+		expect(manager.list(otherClient.id).size).toBe(0)
+		expect(manager.list(client)).toEqual(new Set([first]))
+	})
 })
