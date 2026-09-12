@@ -123,6 +123,9 @@ describe.skipIf(SKIP)('dome simulator', () => {
 		await waitUntil(() => dome.shutterState === 'OPENING')
 		manager.stop(dome)
 		await waitUntil(() => dome.shutterState === 'ERROR')
+		manager.openShutter(dome)
+		await waitUntil(() => dome.shutterState === 'OPENING')
+		await waitUntil(() => dome.shutterState === 'OPEN', 2500)
 
 		simulator.dispose()
 		expect(manager.has(client, simulator.name)).toBeFalse()

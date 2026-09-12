@@ -524,7 +524,7 @@ export class DomeSimulator extends DeviceSimulator {
 
 		const alreadyOpen = this.#shutter.elements.SHUTTER_OPEN.value
 		const alreadyClosed = this.#shutter.elements.SHUTTER_CLOSE.value
-		if ((target === 'OPEN' && alreadyOpen && this.#shutterTarget === undefined) || (target === 'CLOSED' && alreadyClosed && this.#shutterTarget === undefined)) {
+		if (this.#shutter.state === 'Ok' && ((target === 'OPEN' && alreadyOpen && this.#shutterTarget === undefined) || (target === 'CLOSED' && alreadyClosed && this.#shutterTarget === undefined))) {
 			this.#shutter.state = 'Ok'
 			this.notify(this.#shutter)
 			return
