@@ -13,7 +13,7 @@ export const HIPS2FITS_BASE_URL = 'https://alasky.cds.unistra.fr/'
 // Mirror host used as a fallback.
 export const HIPS2FITS_ALTERNATIVE_URL = 'http://alaskybis.cds.unistra.fr/'
 
-// Coordinate system of the requested cutout.
+// Coordinate frame of the output WCS projection.
 export type CoordinateFrameType = 'icrs' | 'galactic'
 
 // Output image encoding.
@@ -42,7 +42,7 @@ export interface Hips2FitsOptions {
 	fov?: Angle
 	// WCS projection.
 	projection?: ProjectionType
-	// Coordinate system of `ra`/`dec`.
+	// Output WCS coordinate frame; the `ra`/`dec` center remains ICRS.
 	coordSystem?: CoordinateFrameType
 	// Output format.
 	format?: ImageFormatType
