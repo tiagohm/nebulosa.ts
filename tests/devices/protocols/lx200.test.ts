@@ -31,11 +31,11 @@ test('responds to product and firmware commands', async () => {
 test('responds to coordinate, site, date, time, offset, status, and slewing getters', async () => {
 	await withLx200Server(
 		async (client) => {
-			const response = readUntil(client, (value) => value === '01:02:03#-04*05:06#+070*30#+12*15#04/24/26#05:06:07#+03.0#GTP#|#')
+			const response = readUntil(client, (value) => value === '01:02:03#-04*05:06#+070*30#+12*15#04/24/26#02:06:07#+03.0#GTP#|#')
 
 			client.write('#:GR##:GD##:Gg##:Gt##:GC##:GL##:GG##:GW##:D#', 'ascii')
 
-			expect(await response).toBe('01:02:03#-04*05:06#+070*30#+12*15#04/24/26#05:06:07#+03.0#GTP#|#')
+			expect(await response).toBe('01:02:03#-04*05:06#+070*30#+12*15#04/24/26#02:06:07#+03.0#GTP#|#')
 		},
 		makeHandler({
 			rightAscension: () => hms(1, 2, 3),
@@ -178,11 +178,17 @@ test('applies UTC offset, local time, and calendar date together', async () => {
 
 	await withLx200Server(
 		async (client) => {
-			const response = readUntil(client, (value) => value === '111Updating planetary data       #                              #')
+			const updateResponse = readUntil(client, (value) => value === '111Updating planetary data       #                              #')
 
 			client.write('#:SG+03##:SL12:34:56##:SC04/24/26#', 'ascii')
 
-			expect(await response).toBe('111Updating planetary data       #                              #')
+			expect(await updateResponse).toBe('111Updating planetary data       #                              #')
+
+			const getResponse = readUntil(client, (value) => value === '04/24/26#12:34:56#+03.0#')
+
+			client.write('#:GC##:GL##:GG#', 'ascii')
+
+			expect(await getResponse).toBe('04/24/26#12:34:56#+03.0#')
 		},
 		makeHandler({
 			dateTime: (server, date) => {
