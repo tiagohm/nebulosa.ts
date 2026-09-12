@@ -79,22 +79,22 @@ export function cfaPatternKeyword(header: FitsHeader) {
 export function rightAscensionKeyword<T extends Angle = Angle, D extends T | undefined = T>(header: FitsHeader, defaultValue: D) {
 	if (hasKeyword(header, 'RA')) {
 		const value = deg(numericKeyword(header, 'RA', 0))
-		if (value !== undefined && Number.isFinite(value) && value !== defaultValue) return value
+		if (Number.isFinite(value)) return value
 	}
 
 	if (hasKeyword(header, 'OBJCTRA')) {
 		const value = parseAngle(textKeyword(header, 'OBJCTRA', ''), true)
-		if (value !== undefined && Number.isFinite(value) && value !== defaultValue) return value
+		if (value !== undefined && Number.isFinite(value)) return value
 	}
 
 	if (hasKeyword(header, 'RA_OBJ')) {
 		const value = deg(numericKeyword(header, 'RA_OBJ', 0))
-		if (value !== undefined && Number.isFinite(value) && value !== defaultValue) return value
+		if (Number.isFinite(value)) return value
 	}
 
 	if (hasKeyword(header, 'CRVAL1')) {
 		const value = deg(numericKeyword(header, 'CRVAL1', 0))
-		if (value !== undefined && Number.isFinite(value) && value !== defaultValue) return value
+		if (Number.isFinite(value)) return value
 	}
 
 	return defaultValue
@@ -104,22 +104,22 @@ export function rightAscensionKeyword<T extends Angle = Angle, D extends T | und
 export function declinationKeyword<T extends Angle = Angle, D extends T | undefined = T>(header: FitsHeader, defaultValue: D) {
 	if (hasKeyword(header, 'DEC')) {
 		const value = deg(numericKeyword(header, 'DEC', 0))
-		if (value !== undefined && Number.isFinite(value) && value !== defaultValue) return value
+		if (Number.isFinite(value)) return value
 	}
 
 	if (hasKeyword(header, 'OBJCTDEC')) {
 		const value = parseAngle(textKeyword(header, 'OBJCTDEC', ''))
-		if (value !== undefined && Number.isFinite(value) && value !== defaultValue) return value
+		if (value !== undefined && Number.isFinite(value)) return value
 	}
 
 	if (hasKeyword(header, 'DEC_OBJ')) {
 		const value = deg(numericKeyword(header, 'DEC_OBJ', 0))
-		if (value !== undefined && Number.isFinite(value) && value !== defaultValue) return value
+		if (Number.isFinite(value)) return value
 	}
 
 	if (hasKeyword(header, 'CRVAL2')) {
 		const value = deg(numericKeyword(header, 'CRVAL2', 0))
-		if (value !== undefined && Number.isFinite(value) && value !== defaultValue) return value
+		if (Number.isFinite(value)) return value
 	}
 
 	return defaultValue
