@@ -117,6 +117,26 @@ test('J2000 telescope converts both published and commanded coordinates in proto
 	}
 }, 10000)
 
+test('manual east and west motion follows the AlpacaServer rate convention', async () => {
+	await using remote = await scriptedClient('telescope', { canmoveaxis: true, axisrates: [{ Minimum: 0, Maximum: 3 }] })
+	await waitUntil(() => remote.switches.has('TELESCOPE_SLEW_RATE'), 8000)
+	const motion = remote.switches.get('TELESCOPE_MOTION_WE')!
+	for (const [direction, rate] of [
+		['MOTION_EAST', 3],
+		['MOTION_WEST', -3],
+	] as const) {
+		const count = remote.commands.length
+		remote.client.sendSwitch({ device: motion.device, name: motion.name, elements: { [direction]: true } })
+		await waitUntil(() => remote.commands.length > count, 1000)
+		expect(remote.commands.at(-1)!.endpoint).toBe('moveaxis')
+		expect(Number(remote.commands.at(-1)!.body.get('Axis'))).toBe(0)
+		expect(Number(remote.commands.at(-1)!.body.get('Rate'))).toBe(rate)
+		remote.client.sendSwitch({ device: motion.device, name: motion.name, elements: { [direction]: false } })
+		await waitUntil(() => remote.commands.length > count + 1, 1000)
+		expect(Number(remote.commands.at(-1)!.body.get('Rate'))).toBe(0)
+	}
+}, 10000)
+
 describe('make fits from image bytes', () => {
 	const camera = structuredClone(DEFAULT_CAMERA)
 	const mount = structuredClone(DEFAULT_MOUNT)

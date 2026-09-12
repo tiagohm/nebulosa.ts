@@ -1431,7 +1431,9 @@ class AlpacaTelescope extends AlpacaDevice {
 							void this.api.moveAxis(this.id, 1, 0)
 						}
 					} else if (MOTION_WEST === true || MOTION_EAST === true) {
-						void this.api.moveAxis(this.id, 0, MOTION_WEST === true ? Maximum : -Maximum)
+						// Match this repository's AlpacaServer convention: positive primary-axis rate is east.
+						// ASCOM itself leaves the mechanical rotation sign to the driver.
+						void this.api.moveAxis(this.id, 0, MOTION_EAST === true ? Maximum : -Maximum)
 					} else if (MOTION_WEST === false || MOTION_EAST === false) {
 						void this.api.moveAxis(this.id, 0, 0)
 					}
