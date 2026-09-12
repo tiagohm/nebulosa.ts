@@ -243,7 +243,8 @@ export function nearestSolarEclipse(time: Time, next: boolean): Readonly<SolarEc
 			}
 
 			const timeOfGreatestEclipseDay = 2451550 + 29 * k
-			const timeOfGreatestEclipseFraction = 0.530588861 * k + 0.09766 + 0.00015437 * T - 0.00000015 * T2 + 0.00000000073 * T3
+			// Meeus 49.1: the secular correction starts at T squared.
+			const timeOfGreatestEclipseFraction = 0.530588861 * k + 0.09766 + 0.00015437 * T2 - 0.00000015 * T3 + 0.00000000073 * T4
 			const timeOfGreatestEclipseCorrection =
 				-0.4075 * sinMM +
 				0.1721 * E * sinSM +
