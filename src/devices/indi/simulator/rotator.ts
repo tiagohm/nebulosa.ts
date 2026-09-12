@@ -122,7 +122,10 @@ export class RotatorSimulator extends DeviceSimulator {
 		if (!this.isConnected) return
 
 		angle = clamp(angle, this.#angle.elements.ANGLE.min, this.#angle.elements.ANGLE.max)
-		if (angle === this.angle) return
+		if (angle === this.angle) {
+			this.stop(false)
+			return
+		}
 
 		this.#targetAngle = angle
 		this.#homing = false

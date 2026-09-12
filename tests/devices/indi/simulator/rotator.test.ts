@@ -50,4 +50,27 @@ describe.skipIf(SKIP)('rotator simulator', () => {
 		expect(manager.has(client, rotator.name)).toBeFalse()
 		expect(manager.properties.length).toBe(0)
 	}, 4000)
+
+	test('retargets an active slew to the current angle', async () => {
+		const handler = new IndiClientHandlerSet()
+		const manager = new RotatorManager()
+		handler.add(manager)
+
+		using client = new ClientSimulator('rotator', handler)
+		using simulator = new RotatorSimulator('Rotator Simulator', client)
+		const rotator = manager.get(client, simulator.name)!
+
+		manager.connect(rotator)
+		await waitUntil(() => rotator.connected)
+
+		manager.moveTo(rotator, 180)
+		await waitUntil(() => rotator.angle.value >= 20 && rotator.angle.value <= 90, 1000, 20)
+		const current = rotator.angle.value
+
+		manager.moveTo(rotator, current)
+		await waitUntil(() => !rotator.moving)
+		await Bun.sleep(200)
+
+		expect(rotator.angle.value).toBeCloseTo(current, 12)
+	}, 3000)
 })
