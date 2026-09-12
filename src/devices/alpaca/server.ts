@@ -1175,15 +1175,15 @@ export class AlpacaServer {
 		return makeAlpacaResponse(this.#camera(id).device.bin.y.max)
 	}
 
-	// Updates the cached subframe [startX, startY, width, height] with whichever fields are provided and
-	// applies the combined frame to the device. Shared by the StartX/StartY/NumX/NumY setters.
+	// Converts provided binned pixel coordinates to the cached unbinned subframe and applies it to INDI.
+	// Shared by StartX/StartY/NumX/NumY; omitted fields keep their unbinned values.
 	#cameraSetFrame(id: number, data: { NumX?: string; NumY?: string; StartX?: string; StartY?: string }) {
 		const { state, device } = this.#camera(id)
 		const { frame } = state
-		if (data.StartX) frame[0] = +data.StartX
-		if (data.StartY) frame[1] = +data.StartY
-		if (data.NumX) frame[2] = +data.NumX
-		if (data.NumY) frame[3] = +data.NumY
+		if (data.StartX) frame[0] = +data.StartX * device.bin.x.value
+		if (data.StartY) frame[1] = +data.StartY * device.bin.y.value
+		if (data.NumX) frame[2] = +data.NumX * device.bin.x.value
+		if (data.NumY) frame[3] = +data.NumY * device.bin.y.value
 		this.options.camera?.frame(device, ...frame)
 		return makeAlpacaResponse(undefined)
 	}

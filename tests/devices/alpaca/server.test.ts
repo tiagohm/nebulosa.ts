@@ -623,3 +623,26 @@ test('camera sensor dimensions remain unbinned and full size after cropping', as
 	expect((await fixture.get(fixture.path + '/cameraxsize')).Value).toBe(width)
 	expect((await fixture.get(fixture.path + '/cameraysize')).Value).toBe(height)
 })
+
+test('camera subframe setters convert binned pixels and preserve untouched axes', async () => {
+	await using fixture = await startAlpacaServer(ALPACA_CAMERA)
+	await fixture.put(fixture.path + '/binx', { BinX: '2' })
+	using frame = spyOn(fixture.manager, 'frame')
+	const height = fixture.device.frame.height.value
+	await fixture.put(fixture.path + '/numx', { NumX: '100' })
+	expect(frame).toHaveBeenLastCalledWith(fixture.device, 0, 0, 200, height)
+	await fixture.put(fixture.path + '/numy', { NumY: '80' })
+	await fixture.put(fixture.path + '/startx', { StartX: '10' })
+	await fixture.put(fixture.path + '/starty', { StartY: '12' })
+	expect(frame).toHaveBeenLastCalledWith(fixture.device, 20, 24, 200, 160)
+	for (const [name, value] of [
+		['numx', 100],
+		['numy', 80],
+		['startx', 10],
+		['starty', 12],
+	] as const) {
+		expect((await fixture.get(fixture.path + '/' + name)).Value).toBe(value)
+	}
+	await fixture.put(fixture.path + '/startx', { StartX: '0' })
+	expect(frame).toHaveBeenLastCalledWith(fixture.device, 0, 24, 200, 160)
+})
