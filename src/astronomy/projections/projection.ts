@@ -734,9 +734,11 @@ export function projectPolyline(projection: Projection, points: readonly Readonl
 	let current: Point[] = []
 	let previousProjected: Point | undefined
 	let previousPoint: Point | undefined
+	let previousSpherical: Point | undefined
 	const maxSegmentRadians = options?.maxSegmentRadians
 	const discontinuityThreshold = options?.discontinuityThreshold
 	const p: Point = { x: 0, y: 0 }
+	const previousSphericalBuffer: Point = { x: 0, y: 0 }
 
 	for (let i = 0; i < points.length; i++) {
 		const target = points[i]
@@ -744,7 +746,9 @@ export function projectPolyline(projection: Projection, points: readonly Readonl
 
 		for (let step = 1; step <= segmentSteps; step++) {
 			const point = previousPoint === undefined || step === segmentSteps ? fillPoint(p, target.x, target.y) : densifiedPoint(previousPoint, target, step, segmentSteps, p)
-			const splitLongitude = previousPoint !== undefined && step === 1 && shouldSplitLongitude(previousPoint, point, options, undefined)
+			// Compare consecutive densified spherical points so a wrap on the short path is
+			// still detected after maxSegmentRadians inserts intermediates with Δλ ≪ π.
+			const splitLongitude = previousSpherical !== undefined && shouldSplitLongitude(previousSpherical, point, options, undefined)
 			const projected = projection.project(point.x, point.y, undefined, options)
 			const splitDiscontinuity = previousProjected !== undefined && projected !== undefined && discontinuityThreshold !== undefined && Number.isFinite(discontinuityThreshold) && discontinuityThreshold > 0 && euclideanDistance(previousProjected, projected) > discontinuityThreshold
 
@@ -758,6 +762,8 @@ export function projectPolyline(projection: Projection, points: readonly Readonl
 				current.push(projected)
 				previousProjected = projected
 			}
+
+			previousSpherical = fillPoint(previousSphericalBuffer, point.x, point.y)
 		}
 
 		previousPoint = target

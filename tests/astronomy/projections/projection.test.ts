@@ -531,6 +531,24 @@ test('anti-meridian polylines are split before projection', () => {
 	expect(lines[1]).toHaveLength(1)
 })
 
+test('polyline densification still splits antimeridian crossings', () => {
+	const lines = projectPolyline(
+		new PlateCarree(),
+		[
+			{ x: deg(170), y: 0 },
+			{ x: deg(-170), y: 0 },
+		],
+		{ maxSegmentRadians: deg(10) },
+	)
+
+	expect(lines.length).toBeGreaterThanOrEqual(2)
+	for (const line of lines) {
+		for (let i = 1; i < line.length; i++) {
+			expect(Math.abs(line[i].x - line[i - 1].x)).toBeLessThan(PI)
+		}
+	}
+})
+
 test('polyline densification inserts intermediate projected points', () => {
 	const lines = projectPolyline(
 		new PlateCarree(),
