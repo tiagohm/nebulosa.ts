@@ -76,6 +76,8 @@ export class DS18B20 extends PeripheralBase<DS18B20> implements Thermometer {
 	// Guards a conversion in progress and the id of the outstanding scratchpad read.
 	#reading = false
 	#pendingReadCorrelationId?: number
+	// Invalidates asynchronous conversions from previous start/stop lifecycles.
+	#generation = 0
 	// Resolved ROM address (from options or bus search).
 	#address?: Buffer
 	readonly #skip: boolean = false
@@ -120,6 +122,7 @@ export class DS18B20 extends PeripheralBase<DS18B20> implements Thermometer {
 	// skipping) or starts periodic measurement immediately.
 	start() {
 		if (this.#timer === undefined) {
+			this.#generation++
 			this.client.addHandler(this)
 			this.client.oneWireConfig(this.pin, this.#powerMode)
 
@@ -137,6 +140,7 @@ export class DS18B20 extends PeripheralBase<DS18B20> implements Thermometer {
 
 	// Detaches the handler and clears the timer and pending-read state.
 	stop() {
+		this.#generation++
 		this.client.removeHandler(this)
 		clearInterval(this.#timer)
 		this.#timer = undefined
@@ -194,9 +198,11 @@ export class DS18B20 extends PeripheralBase<DS18B20> implements Thermometer {
 		if (this.#address === undefined && !this.#skip) return
 
 		try {
+			const generation = this.#generation
 			this.#reading = true
 			this.client.oneWireWrite(this.pin, DS18B20.CONVERT_T_CMD, this.#address)
 			await Bun.sleep(this.#conversionDelayMs)
+			if (generation !== this.#generation) return
 			this.#pendingReadCorrelationId = this.client.oneWireWriteAndRead(this.pin, DS18B20.READ_SCRATCHPAD_CMD, DS18B20.SCRATCHPAD_SIZE, this.#address)
 		} finally {
 			this.#reading = false

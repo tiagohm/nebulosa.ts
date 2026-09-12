@@ -2044,6 +2044,37 @@ test('DS18B20 configures one-wire reads and emits temperature updates', async ()
 	expect(client.handlers.size).toBe(0)
 })
 
+test('DS18B20 cancels a conversion when stopped and restarts cleanly', async () => {
+	const client = new MockFirmataClient()
+	const address = Buffer.from([DS18B20.FAMILY_CODE, 0x1a, 0xbc, 0x4d, 0x2f, 0x00, 0x00, 0xc1])
+	const ds18b20 = new DS18B20(client as never, 6, 1000, { address, resolution: 9 })
+
+	ds18b20.start()
+	ds18b20.stop()
+
+	await Bun.sleep(110)
+	expect(client.messages).toEqual([
+		['oneWireConfig', 6, 'normal'],
+		['oneWireWrite', 6, Buffer.from([DS18B20.WRITE_SCRATCHPAD_CMD, DS18B20.DEFAULT_TH, DS18B20.DEFAULT_TL, 0x1f]), address],
+		['oneWireWrite', 6, Buffer.from(DS18B20.CONVERT_T_CMD), address],
+	])
+
+	ds18b20.start()
+	await Bun.sleep(110)
+
+	expect(client.messages).toEqual([
+		['oneWireConfig', 6, 'normal'],
+		['oneWireWrite', 6, Buffer.from([DS18B20.WRITE_SCRATCHPAD_CMD, DS18B20.DEFAULT_TH, DS18B20.DEFAULT_TL, 0x1f]), address],
+		['oneWireWrite', 6, Buffer.from(DS18B20.CONVERT_T_CMD), address],
+		['oneWireConfig', 6, 'normal'],
+		['oneWireWrite', 6, Buffer.from([DS18B20.WRITE_SCRATCHPAD_CMD, DS18B20.DEFAULT_TH, DS18B20.DEFAULT_TL, 0x1f]), address],
+		['oneWireWrite', 6, Buffer.from(DS18B20.CONVERT_T_CMD), address],
+		['oneWireWriteAndRead', 6, Buffer.from(DS18B20.READ_SCRATCHPAD_CMD), DS18B20.SCRATCHPAD_SIZE, address, 0x4000],
+	])
+
+	ds18b20.stop()
+})
+
 function createDS18B20Scratchpad(temperature: number) {
 	const scratchpad = Buffer.from([0, 0, DS18B20.DEFAULT_TH, DS18B20.DEFAULT_TL, 0x1f, 0xff, 0x0c, 0x10, 0])
 	scratchpad.writeInt16LE(Math.round(temperature * 16), 0)
