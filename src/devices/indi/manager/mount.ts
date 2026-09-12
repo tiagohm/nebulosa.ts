@@ -118,13 +118,13 @@ export class MountManager extends DeviceManager<Mount> {
 		const equatorial: [number, number] = [typeof x === 'string' ? parseAngle(x, type === 'JNOW' || type === 'J2000' ? true : undefined)! : x, typeof y === 'string' ? parseAngle(y)! : y]
 
 		if (type === 'J2000') {
-			Object.assign(equatorial, equatorialFromJ2000(...equatorial))
+			Object.assign(equatorial, equatorialFromJ2000(...equatorial, time ?? timeNow(true)))
 		} else if (type === 'ALTAZ') {
 			Object.assign(equatorial, observedToCirs(...equatorial, time ?? timeNow(true), undefined, mount.geographicCoordinate))
 		} else if (type === 'ECLIPTIC') {
 			Object.assign(equatorial, eclipticToEquatorial(...equatorial, time ?? timeNow(true)))
 		} else if (type === 'GALACTIC') {
-			Object.assign(equatorial, equatorialFromJ2000(...galacticToEquatorial(...equatorial)))
+			Object.assign(equatorial, equatorialFromJ2000(...galacticToEquatorial(...equatorial), time ?? timeNow(true)))
 		}
 
 		if (mode === 'goto') this.goTo(mount, ...equatorial, client)

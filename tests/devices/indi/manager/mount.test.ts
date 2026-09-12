@@ -1,10 +1,43 @@
 import { describe, expect, test } from 'bun:test'
+import { equatorialFromJ2000, galacticToEquatorial } from '../../../../src/astronomy/coordinates/coordinate'
+import { timeJulianYear } from '../../../../src/astronomy/time/time'
 import { CLIENT, DEFAULT_MOUNT } from '../../../../src/devices/indi/device'
 import { MountManager } from '../../../../src/devices/indi/manager/mount'
 import type { DefNumberVector, DefSwitchVector } from '../../../../src/devices/indi/types'
+import { deg, hour, normalizeAngle, toDeg, toHour } from '../../../../src/math/units/angle'
 import { client, createRecordingClient, defNumber, defSwitch, setupDevice } from './util'
 
 const { recordingClient, numberCommands, switchCommands, commands } = createRecordingClient()
+
+function setupTestMount(manager: MountManager) {
+	const mount = setupDevice(structuredClone(DEFAULT_MOUNT), recordingClient)
+	manager.add(mount)
+	numberCommands.length = 0
+	switchCommands.length = 0
+	commands.length = 0
+	return mount
+}
+
+test('uses the requested epoch for J2000 and galactic target conversions', () => {
+	const manager = new MountManager()
+	const mount = setupTestMount(manager)
+	mount.canGoTo = true
+	const time = timeJulianYear(2000)
+
+	manager.moveTo(mount, 'goto', { type: 'J2000', J2000: { x: hour(5), y: deg(23) } }, recordingClient, time)
+	const [j2000RightAscension, j2000Declination] = equatorialFromJ2000(hour(5), deg(23), time)
+
+	expect(numberCommands[0].elements.RA).toBeCloseTo(toHour(normalizeAngle(j2000RightAscension)), 10)
+	expect(numberCommands[0].elements.DEC).toBeCloseTo(toDeg(j2000Declination), 10)
+
+	numberCommands.length = 0
+	const galactic = { x: deg(120), y: deg(30) }
+	manager.moveTo(mount, 'goto', { type: 'GALACTIC', GALACTIC: galactic }, recordingClient, time)
+	const [galacticRightAscension, galacticDeclination] = equatorialFromJ2000(...galacticToEquatorial(galactic.x, galactic.y), time)
+
+	expect(numberCommands[0].elements.RA).toBeCloseTo(toHour(normalizeAngle(galacticRightAscension)), 10)
+	expect(numberCommands[0].elements.DEC).toBeCloseTo(toDeg(galacticDeclination), 10)
+})
 
 test('resets deleted INDI properties to defaults', () => {
 	const manager = new MountManager()
