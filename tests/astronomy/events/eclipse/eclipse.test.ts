@@ -144,6 +144,31 @@ describe('circle-ellipse intersection multiplicity and tangency', () => {
 		expect(crossings).toHaveLength(1)
 		expect(Math.hypot(crossings[0][0] - px, crossings[0][1] - py)).toBeLessThan(0.02)
 	})
+
+	// A circle slightly secant to the limb with the contact off the 2-degree grid puts both simple
+	// roots in one scan step: samples never change sign, and |g| at the extremum is far above the
+	// tangency residual, so only explicit two-root recovery from the extremum finds the chord.
+	test('earthLimbCircleIntersections recovers two nearby off-grid secant roots in one scan step', () => {
+		const omega = earthLimbOmega(0)
+		const theta0 = 0.05
+		const px = Math.cos(theta0)
+		const py = Math.sin(theta0) / omega
+		const gradientX = 2 * px
+		const gradientY = 2 * omega * omega * py
+		const gradientLength = Math.hypot(gradientX, gradientY)
+		const radius = 0.54
+		const overlap = 1e-4
+		const cx = px + ((radius - overlap) * gradientX) / gradientLength
+		const cy = py + ((radius - overlap) * gradientY) / gradientLength
+
+		const crossings = earthLimbCircleIntersections(cx, cy, omega, radius)
+		expect(crossings).toHaveLength(2)
+		expect(crossings[0][1]).toBeGreaterThanOrEqual(crossings[1][1])
+		for (const [x, y] of crossings) {
+			expect(x * x + (omega * y) ** 2).toBeCloseTo(1, 6)
+			expect(Math.hypot(x - cx, y - cy)).toBeCloseTo(radius, 6)
+		}
+	})
 })
 
 test('pointsToSvgPathData emits one M..L.. subpath per piece and closes polygons', () => {
