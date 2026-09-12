@@ -1244,7 +1244,8 @@ export class AlpacaServer {
 	}
 
 	#cameraGetReadoutMode(id: number) {
-		return makeAlpacaResponse(this.#camera(id).device.frameFormat)
+		const { device } = this.#camera(id)
+		return makeAlpacaResponse(device.frameFormats.findIndex(({ name }) => name === device.frameFormat))
 	}
 
 	#cameraSetReadoutMode(id: number, data: { ReadoutMode: string }) {
@@ -1261,7 +1262,7 @@ export class AlpacaServer {
 	}
 
 	#cameraGetReadoutModes(id: number) {
-		return makeAlpacaResponse(this.#camera(id).device.frameFormats)
+		return makeAlpacaResponse(this.#camera(id).device.frameFormats.map(({ label }) => label))
 	}
 
 	#cameraGetSensorName() {

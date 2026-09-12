@@ -667,3 +667,14 @@ test('mount UTCDate follows the mount clock', async () => {
 
 	expect((await fixture.get(fixture.path + '/utcdate')).Value).toBe(new Date(utc).toISOString())
 })
+
+test('camera exposes readout modes as indexed strings', async () => {
+	await using fixture = await startAlpacaServer(ALPACA_CAMERA)
+
+	expect((await fixture.get(fixture.path + '/readoutmodes')).Value).toEqual(['Mono', 'RGB'])
+	expect((await fixture.get(fixture.path + '/readoutmode')).Value).toBe(0)
+
+	await fixture.put(fixture.path + '/readoutmode', { ReadoutMode: '1' })
+	await waitUntil(() => fixture.device.frameFormat === 'RGB')
+	expect((await fixture.get(fixture.path + '/readoutmode')).Value).toBe(1)
+})
