@@ -359,6 +359,28 @@ describe('generate astronomical image noise', () => {
 		expect(result.stats.saturatedPixels).toBe(1)
 	})
 
+	test('dead pixels attenuate already-drawn stars', () => {
+		const width = 16
+		const height = 16
+		const stars: readonly AstronomicalImageStar[] = [{ x: 0, y: 0, hfd: 2, snr: 40, flux: 8 }]
+		const alive = new Float64Array(width * height)
+		const dead = new Float64Array(width * height)
+		const aliveRgb = new Float64Array(width * height * 3)
+		const deadRgb = new Float64Array(width * height * 3)
+
+		generateStarImage(alive, width, height, 1, stars, 0.8, baseConfig())
+		generateStarImage(dead, width, height, 1, stars, 0.8, baseConfig({ artifacts: { deadPixelRate: 1, deadPixelResidual: 0 } }))
+		generateStarImage(aliveRgb, width, height, 3, stars, 0.8, baseConfig())
+		generateStarImage(deadRgb, width, height, 3, stars, 0.8, baseConfig({ artifacts: { deadPixelRate: 1, deadPixelResidual: 0 } }))
+
+		expect(alive[0]).toBeGreaterThan(0)
+		expect(dead[0]).toBe(0)
+		expect(aliveRgb[0]).toBeGreaterThan(0)
+		expect(deadRgb[0]).toBe(0)
+		expect(deadRgb[1]).toBe(0)
+		expect(deadRgb[2]).toBe(0)
+	})
+
 	test('generates star images through the same normalization path as the noise model', () => {
 		const width = 64
 		const height = 64

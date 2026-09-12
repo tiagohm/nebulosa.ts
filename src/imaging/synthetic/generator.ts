@@ -395,6 +395,7 @@ export const DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG: Readonly<DeepRequired<Astr
 }
 
 // Adds realistic sky background and camera noise into a normalized image buffer in place.
+// Dead pixels also scale any pre-existing samples so already-drawn stars at that site are attenuated.
 export function generateNoiseImage(raw: ImageRawType, width: number, height: number, channels: 1 | 3, config: AstronomicalImageNoiseConfig = DEFAULT_ASTRONOMICAL_IMAGE_NOISE_CONFIG): AstronomicalImageNoiseResult {
 	const resolved = resolveAstronomicalImageNoiseConfig(raw, width, height, channels, config)
 	const { expectedLength, height: imageHeight, width: imageWidth, seed } = resolved
@@ -461,7 +462,7 @@ export function generateNoiseImage(raw: ImageRawType, width: number, height: num
 				const signalElectrons = sampleSignalElectrons(channelSkyElectrons * resolved.channelGain[0], random, gaussianState, resolved.poissonThreshold) * fixedPatternGain
 				const darkSignalElectrons = sampleSignalElectrons(darkElectrons, random, gaussianState, resolved.poissonThreshold)
 				const totalElectrons = (signalElectrons + darkSignalElectrons + ampGlowTintedElectrons + defect.extraSignalElectrons) * defect.signalScale + resolved.biasElectrons + resolved.blackLevelElectrons + resolved.channelBiasElectrons[0] + rowStructuredElectrons + columnStructuredElectrons + readNoiseElectrons
-				const next = raw[pixelIndex] + totalElectrons * resolved.normalizedPerElectron
+				const next = raw[pixelIndex] * defect.signalScale + totalElectrons * resolved.normalizedPerElectron
 				raw[pixelIndex] = next
 				if (next > maxValueBeforeOutput) maxValueBeforeOutput = next
 				if (next >= 1) saturatedPixels++
@@ -478,7 +479,7 @@ export function generateNoiseImage(raw: ImageRawType, width: number, height: num
 					const ampGlowTintedElectrons = ampGlowElectrons * resolved.ampGlowTint[channel]
 					const totalElectrons =
 						(signalElectrons + darkSignalElectrons + ampGlowTintedElectrons + defect.extraSignalElectrons) * defect.signalScale + resolved.biasElectrons + resolved.blackLevelElectrons + resolved.channelBiasElectrons[channel] + rowStructuredElectrons + columnStructuredElectrons + readNoiseElectrons
-					const next = raw[baseIndex + channel] + totalElectrons * resolved.normalizedPerElectron
+					const next = raw[baseIndex + channel] * defect.signalScale + totalElectrons * resolved.normalizedPerElectron
 					raw[baseIndex + channel] = next
 					if (next > maxValueBeforeOutput) maxValueBeforeOutput = next
 					pixelSaturated ||= next >= 1
