@@ -1170,7 +1170,7 @@ test('TSL2561 calculates lux from channel data', () => {
 	expect(tsl2561.calculateLux(65535, 12)).toBe(TSL2561.SATURATED_LUX)
 })
 
-test('TSL2561 configures i2c reads and emits lux updates', () => {
+test('TSL2561 configures i2c reads and emits lux updates', async () => {
 	const client = new MockFirmataClient()
 	const tsl2561 = new TSL2561(client as never, TSL2561.ADDRESS, 1000)
 	let updates = 0
@@ -1180,6 +1180,14 @@ test('TSL2561 configures i2c reads and emits lux updates', () => {
 	})
 
 	tsl2561.start()
+
+	expect(client.messages).toEqual([
+		['config', 0],
+		['write', TSL2561.ADDRESS, Buffer.from([TSL2561.COMMAND_BIT | TSL2561.CONTROL_REG, TSL2561.POWER_UP])],
+		['write', TSL2561.ADDRESS, Buffer.from([TSL2561.COMMAND_BIT | TSL2561.TIMING_REG, 0x02])],
+	])
+
+	await Bun.sleep(420)
 
 	expect(client.messages).toEqual([
 		['config', 0],

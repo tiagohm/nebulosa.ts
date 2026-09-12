@@ -267,15 +267,17 @@ export class TSL2561 extends PeripheralBase<TSL2561> implements Luxmeter {
 		this.#minimumPollingInterval = Math.ceil(integrationTime)
 	}
 
-	// Powers up the device, configures timing, and starts reading both ADC channels.
+	// Powers up the device, configures timing, and starts reading both ADC channels after integration.
 	start() {
 		if (this.#timer === undefined) {
 			this.client.addHandler(this)
 			this.client.twoWireConfig(0)
 			this.client.twoWireWrite(this.address, [TSL2561.COMMAND_BIT | TSL2561.CONTROL_REG, TSL2561.POWER_UP])
 			this.client.twoWireWrite(this.address, [TSL2561.COMMAND_BIT | TSL2561.TIMING_REG, this.#timing])
-			this.#readMeasurement()
-			this.#timer = setInterval(this.#readMeasurement.bind(this), Math.max(this.#minimumPollingInterval, this.pollingInterval))
+			this.#timer = setTimeout(() => {
+				this.#readMeasurement()
+				this.#timer = setInterval(this.#readMeasurement.bind(this), Math.max(this.#minimumPollingInterval, this.pollingInterval))
+			}, this.#minimumPollingInterval)
 		}
 	}
 
