@@ -134,12 +134,15 @@ export const CIRS: Frame = {
 
 // The Terrestrial Intermediate Reference System (TIRS): Earth-fixed apart from
 // polar motion (true equator and equinox of date rotated by GAST about the
-// pole). ITRS adds the polar-motion wobble on top of this.
+// pole). ITRS adds the polar-motion wobble on top of this. Uses the same mean
+// Earth-rotation velocity operator as ITRS so a crust-fixed state has near-zero
+// TIRS velocity (only polar-motion rate remains).
 export const TIRS: Frame = {
 	rotationAt: (time) => {
 		const m = matRotZ(greenwichApparentSiderealTime(time))
 		return matMul(m, precessionNutationMatrix(time), m)
 	},
+	dRdtTimesRtAt: () => EARTH_DRDT_TIMES_RT_MATRIX,
 }
 
 // The True Equator, Mean Equinox (TEME) frame used by the SGP4 satellite model.
