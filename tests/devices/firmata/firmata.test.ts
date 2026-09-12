@@ -1447,6 +1447,32 @@ test('HD44780 initializes a 16x2 display through the PCF8574 backpack mapping', 
 	expect(client.messages.filter((message) => message[0] === 'read')).toHaveLength(writes.length)
 })
 
+test('HD44780 inherits the default backlight pin for partial options', () => {
+	const client = new MockFirmataClient()
+	using expander = new PCF8574(client as never, PCF8574.ADDRESS, 0)
+	const lcd = new HD44780(expander, { backlight: true })
+	const writes: number[] = []
+
+	lcd.begin(16, 2)
+
+	for (const message of client.messages) {
+		if (message[0] === 'write') writes.push(message[2][0])
+	}
+
+	expect(writes[0]).toBe(0x08)
+
+	client.messages.length = 0
+	lcd.noBacklight()
+	lcd.backlight()
+
+	writes.length = 0
+	for (const message of client.messages) {
+		if (message[0] === 'write') writes.push(message[2][0])
+	}
+
+	expect(writes).toEqual([0x60, 0x68])
+})
+
 test('HD44780 sets the cursor and prints text through the expander', () => {
 	const client = new MockFirmataClient()
 	using expander = new PCF8574(client as never, PCF8574.ADDRESS, 1000)
