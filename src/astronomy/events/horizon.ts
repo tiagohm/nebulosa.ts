@@ -1,5 +1,6 @@
 import { DEG2RAD, ONE_SECOND } from '../../core/constants'
 import type { Vec3 } from '../../math/linear-algebra/vec3'
+import { brentMinimize } from '../../math/numerical/optimization'
 import type { Angle } from '../../math/units/angle'
 import { equatorial } from '../coordinates/astrometry'
 import { equatorialFromJ2000, equatorialToHorizontal } from '../coordinates/coordinate'
@@ -94,6 +95,36 @@ export function riseTransitSet(directionAt: (time: Time) => Vec3, location: Geog
 		if (e.kind === 'maximum' && e.value > transitAltitude) {
 			transit = e.time
 			transitAltitude = e.value
+		}
+	}
+
+	// searchExtrema needs an interior triple, so a culmination on or within ~step/2 of either
+	// window end is missed and would otherwise leave the -Infinity sentinel in the public result.
+	if (transit === undefined) {
+		const stepDays = step ?? 1 / 24
+		const span = timeSubtract(stop, time)
+		const altitudeAtOffset = (x: number) => altAt(timeShift(time, x))
+		const refineTolerance = tolerance ?? 1e-6
+
+		for (const left of [0, Math.max(0, span - stepDays)]) {
+			const right = Math.min(span, left + stepDays)
+			if (!(right > left)) continue
+
+			const result = brentMinimize((x: number) => -altitudeAtOffset(x), left, right, { tolerance: refineTolerance })
+			const value = -result.value
+			// A true local maximum is no lower than both one-second neighbours, including a
+			// neighbour just outside the window. A monotonic run toward an endpoint fails that test.
+			if (value >= altitudeAtOffset(result.minimum - ONE_SECOND) && value >= altitudeAtOffset(result.minimum + ONE_SECOND) && value > transitAltitude) {
+				transit = timeShift(time, result.minimum)
+				transitAltitude = value
+			}
+		}
+
+		if (transit === undefined) {
+			const startAltitude = altitudeAtOffset(0)
+			const stopAltitude = altitudeAtOffset(span)
+			if (startAltitude > transitAltitude) transitAltitude = startAltitude
+			if (stopAltitude > transitAltitude) transitAltitude = stopAltitude
 		}
 	}
 
