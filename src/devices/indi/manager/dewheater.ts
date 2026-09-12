@@ -11,7 +11,8 @@ export class DewHeaterManager extends DeviceManager<DewHeater> {
 	}
 
 	dutyCycle(heater: DewHeater, value: number, client = heater[CLIENT]!) {
-		const property = this.#pwm.get(heater)
+		const device = this.get(heater[CLIENT], heater.name) ?? heater
+		const property = this.#pwm.get(device)
 
 		if (property) {
 			const [name, element] = property
