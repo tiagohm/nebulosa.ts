@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, spyOn, test } from 'bun:test'
 import { Jpeg } from '../../../src/bindings/imaging/libturbojpeg'
 import { makeImageBytesFromFits } from '../../../src/devices/alpaca/server'
 import { type AlpacaConfiguredDevice, AlpacaException, AlpacaImageElementType, type AlpacaStateItem } from '../../../src/devices/alpaca/types'
@@ -6,6 +6,7 @@ import type { Device } from '../../../src/devices/indi/device'
 import type { DeviceManager } from '../../../src/devices/indi/manager/device'
 import type { DeviceSimulator } from '../../../src/devices/indi/simulator/device'
 import { bitpixInBytes } from '../../../src/io/formats/fits/util'
+import { deg, hour } from '../../../src/math/units/angle'
 import { downloadPerTag } from '../../download'
 import { saveAndCompareHash } from '../../imaging/util'
 import { waitUntil } from '../../util'
@@ -570,3 +571,26 @@ test('the alpaca fixtures stand up every simulated device type', async () => {
 	await expectFixtureServesDevice(ALPACA_SAFETY_MONITOR)
 	await expectFixtureServesDevice(ALPACA_WEATHER)
 }, 30000)
+
+test('mount target slews and sync preserve radians and coordinate slews update the target', async () => {
+	await using fixture = await startAlpacaServer(ALPACA_MOUNT)
+	using goTo = spyOn(fixture.manager, 'goTo')
+	using syncTo = spyOn(fixture.manager, 'syncTo')
+	const initial = { ...fixture.device.equatorialCoordinate }
+	await fixture.put(fixture.path + '/slewtotargetasync')
+	expect(goTo).toHaveBeenLastCalledWith(fixture.device, initial.rightAscension, initial.declination)
+	await fixture.put(fixture.path + '/targetrightascension', { TargetRightAscension: '5' })
+	await fixture.put(fixture.path + '/targetdeclination', { TargetDeclination: '45' })
+	for (const command of ['slewtotarget', 'slewtotargetasync']) {
+		expect((await fixture.put(fixture.path + '/' + command)).ErrorNumber).toBe(0)
+		expect(goTo).toHaveBeenLastCalledWith(fixture.device, hour(5), deg(45))
+	}
+	await fixture.put(fixture.path + '/synctotarget')
+	expect(syncTo).toHaveBeenLastCalledWith(fixture.device, hour(5), deg(45))
+	for (const command of ['slewtocoordinates', 'slewtocoordinatesasync']) {
+		await fixture.put(fixture.path + '/' + command, { RightAscension: '9', Declination: '-20' })
+		expect((await fixture.get(fixture.path + '/targetrightascension')).Value).toBeCloseTo(9, 12)
+		expect((await fixture.get(fixture.path + '/targetdeclination')).Value).toBeCloseTo(-20, 12)
+		expect(goTo).toHaveBeenLastCalledWith(fixture.device, hour(9), deg(-20))
+	}
+})

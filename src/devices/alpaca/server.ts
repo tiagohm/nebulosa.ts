@@ -1754,8 +1754,10 @@ export class AlpacaServer {
 	}
 
 	#mountSlewToCoordinatesAsync(id: number, data: { RightAscension: string | number; Declination: string | number }) {
-		this.options.mount?.goTo(this.#telescope(id).device, hour(+data.RightAscension), deg(+data.Declination))
-		return makeAlpacaResponse(undefined)
+		const { state } = this.#telescope(id)
+		state.rightAscension = hour(+data.RightAscension)
+		state.declination = deg(+data.Declination)
+		return this.#mountSlewToTargetAsync(id)
 	}
 
 	#mountSlewToTarget(id: number) {
@@ -1763,8 +1765,9 @@ export class AlpacaServer {
 	}
 
 	#mountSlewToTargetAsync(id: number) {
-		const { state } = this.#telescope(id)
-		return this.#mountSlewToCoordinatesAsync(id, { RightAscension: state.rightAscension, Declination: state.declination })
+		const { state, device } = this.#telescope(id)
+		this.options.mount?.goTo(device, state.rightAscension, state.declination)
+		return makeAlpacaResponse(undefined)
 	}
 
 	#mountSyncToAltAz(id: number, data: { Azimuth: string; Altitude: string }) {
@@ -1777,8 +1780,9 @@ export class AlpacaServer {
 	}
 
 	#mountSyncToTarget(id: number) {
-		const { state } = this.#telescope(id)
-		return this.#mountSyncToCoordinates(id, { RightAscension: state.rightAscension, Declination: state.declination })
+		const { state, device } = this.#telescope(id)
+		this.options.mount?.syncTo(device, state.rightAscension, state.declination)
+		return makeAlpacaResponse(undefined)
 	}
 
 	#mountUnpark(id: number) {
