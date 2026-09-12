@@ -393,6 +393,29 @@ test('latitude options clamp to the configured maximum latitude', () => {
 	expect(clamped.y).toBeCloseTo(Math.asinh(Math.tan(maxLatitude)), 12)
 })
 
+test('ellipsoidal mercator honors constructor plane options', () => {
+	const longitude = deg(45)
+	const latitude = deg(10)
+	const eccentricity = 0.08181919084262149
+	const constructorOptions = { eccentricity, scale: 100, centralMeridian: deg(30) }
+	const fromConstructor = new EllipsoidalMercator(constructorOptions).project(longitude, latitude)
+	const fromCall = new EllipsoidalMercator({ eccentricity }).project(longitude, latitude, undefined, { scale: 100, centralMeridian: deg(30) })
+
+	expect(fromConstructor).toBeDefined()
+	expect(fromCall).toBeDefined()
+	if (fromConstructor === undefined || fromCall === undefined) return
+
+	expect(fromConstructor.x).toBeCloseTo(fromCall.x, 12)
+	expect(fromConstructor.y).toBeCloseTo(fromCall.y, 12)
+	expect(fromConstructor.x).toBeCloseTo(deg(15) * 100, 12)
+
+	const unprojected = new EllipsoidalMercator(constructorOptions).unproject(fromConstructor.x, fromConstructor.y)
+	expect(unprojected).toBeDefined()
+	if (unprojected === undefined) return
+	expect(normalizePI(unprojected.x - longitude)).toBeCloseTo(0, 12)
+	expect(unprojected.y).toBeCloseTo(latitude, 12)
+})
+
 test('ellipsoidal projection options select the eccentricity model and inverse tolerance', () => {
 	const latitude = deg(45)
 	const eccentricity = 0.08181919084262149

@@ -281,7 +281,7 @@ export class EllipsoidalMercator extends CylindricalProjection {
 	private readonly eccentricity: number
 
 	constructor(options?: ProjectionOptions) {
-		super()
+		super(options)
 		this.eccentricity = eccentricityFrom(options, this.options) ?? 0
 	}
 
