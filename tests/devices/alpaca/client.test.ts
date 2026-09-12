@@ -268,6 +268,77 @@ test.each([true, false])(
 	10000,
 )
 
+test.each([true, false])(
+	'focuser manager can request relative moves with Absolute=%s',
+	async (absolute) => {
+		const manager = new FocuserManager()
+		const state = [
+			{ Name: 'Position', Value: 10000 },
+			{ Name: 'IsMoving', Value: false },
+		]
+		const values = { absolute, maxstep: 20000, position: 12000, devicestate: state }
+		await using remote = await scriptedClient('focuser', values, {
+			textVector: manager.textVector.bind(manager),
+			numberVector: manager.numberVector.bind(manager),
+			switchVector: manager.switchVector.bind(manager),
+		})
+		const name = 'Scripted (Focuser 0)'
+		await waitUntil(() => manager.get(remote.client, name)?.canRelativeMove === true, 8000)
+		const focuser = manager.get(remote.client, name)!
+		expect(focuser.canAbsoluteMove).toBe(absolute)
+		manager.moveOut(focuser, 50)
+		await waitUntil(() => remote.commands.length === 1, 1000)
+		expect(Number(remote.commands[0].body.get('Position'))).toBe(absolute ? 12050 : 50)
+		manager.moveIn(focuser, 50)
+		await waitUntil(() => remote.commands.length === 2, 1000)
+		expect(Number(remote.commands[1].body.get('Position'))).toBe(absolute ? 11950 : -50)
+		if (absolute) {
+			values.position = 19990
+			manager.moveOut(focuser, 50)
+			await waitUntil(() => remote.commands.length === 3, 1000)
+			expect(Number(remote.commands[2].body.get('Position'))).toBe(20000)
+			values.position = 10
+			manager.moveIn(focuser, 50)
+			await waitUntil(() => remote.commands.length === 4, 1000)
+			expect(Number(remote.commands[3].body.get('Position'))).toBe(0)
+		}
+		state[1].Value = true
+		await waitUntil(() => remote.numbers.get('REL_FOCUS_POSITION')?.state === 'Busy', 3000)
+		state[1].Value = false
+		await waitUntil(() => remote.numbers.get('REL_FOCUS_POSITION')?.state === 'Idle', 3000)
+		expect(focuser.moving).toBeFalse()
+	},
+	15000,
+)
+
+test.each([false, true])(
+	'relative focuser position read cannot move after failure or halt (halt=%s)',
+	async (halt) => {
+		const response = Promise.withResolvers<Response>()
+		let reading = false
+		await using remote = await scriptedClient('focuser', { absolute: true, maxstep: 20000 }, undefined, (req) => {
+			if (!new URL(req.url).pathname.endsWith('/position')) return undefined
+			reading = true
+			return response.promise
+		})
+		await waitUntil(() => remote.numbers.has('REL_FOCUS_POSITION'), 8000)
+		const relative = remote.numbers.get('REL_FOCUS_POSITION')!
+		remote.client.sendNumber({ device: relative.device, name: relative.name, elements: { FOCUS_RELATIVE_POSITION: 50 } })
+		await waitUntil(() => reading, 1000)
+		if (halt) {
+			remote.client.sendSwitch({ device: relative.device, name: 'FOCUS_ABORT_MOTION', elements: { ABORT: true } })
+			await waitUntil(() => remote.commands.some((e) => e.endpoint === 'halt'), 1000)
+			response.resolve(Response.json({ Value: 10000, ErrorNumber: 0, ErrorMessage: '' }))
+			await Bun.sleep(100)
+		} else {
+			response.resolve(new Response('position unavailable', { status: 500 }))
+			await waitUntil(() => remote.numbers.get(relative.name)?.state === 'Alert', 1000)
+		}
+		expect(remote.commands.some((e) => e.endpoint === 'move')).toBeFalse()
+	},
+	10000,
+)
+
 describe('make fits from image bytes', () => {
 	test('converts a 10 by 10 byte ROI smaller than 176 bytes', async () => {
 		const data = new ArrayBuffer(144)

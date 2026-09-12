@@ -1686,6 +1686,8 @@ class AlpacaFocuser extends AlpacaDevice {
 	readonly #direction = makeSwitchVector('', 'FOCUS_MOTION', 'Direction', MAIN_CONTROL, 'OneOfMany', 'rw', ['FOCUS_INWARD', 'In', true], ['FOCUS_OUTWARD', 'Out', false])
 
 	#position = this.#absolutePosition
+	// Invalidates a position read when a newer move or halt supersedes the relative command.
+	#moveSequence = 0
 
 	protected readonly api: AlpacaFocuserApi
 	// https://ascom-standards.org/newdocs/focuser.html#Focuser.DeviceState
@@ -1728,8 +1730,8 @@ class AlpacaFocuser extends AlpacaDevice {
 		return this.#direction.elements.FOCUS_OUTWARD.value === true
 	}
 
-	// Defines the position/direction/temperature/abort properties (choosing absolute vs relative from the
-	// device's capability) at step 1, then publishes position (Busy while moving) and temperature each
+	// Defines relative motion and, when supported, absolute position at step 1, then publishes motion
+	// state (Busy while moving), absolute position in steps, and temperature each
 	// tick. Returns false until initialized.
 	protected handleEndpointsAfterRun() {
 		if (!super.handleEndpointsAfterRun()) return false
@@ -1739,15 +1741,16 @@ class AlpacaFocuser extends AlpacaDevice {
 		// Initial
 		if (Step === 1) {
 			if (MaxStep) {
+				this.#relativePosition.elements.FOCUS_RELATIVE_POSITION.max = MaxStep
 				if (IsAbsolute) {
 					this.#absolutePosition.elements.FOCUS_ABSOLUTE_POSITION.max = MaxStep
 					this.#position = this.#absolutePosition
+					this.sendDefProperty(this.#absolutePosition)
 				} else {
-					this.#relativePosition.elements.FOCUS_RELATIVE_POSITION.max = MaxStep
 					this.#position = this.#relativePosition
 				}
 
-				this.sendDefProperty(this.#position)
+				this.sendDefProperty(this.#relativePosition)
 			}
 
 			if (Temperature !== undefined) {
@@ -1767,6 +1770,7 @@ class AlpacaFocuser extends AlpacaDevice {
 			let updated = this.updatePropertyState(this.#position, IsMoving ? 'Busy' : 'Idle')
 			if (IsAbsolute) updated = this.updatePropertyValue(this.#position, 'FOCUS_ABSOLUTE_POSITION', Position) || updated
 			updated && this.sendSetProperty(this.#position)
+			if (IsAbsolute && this.updatePropertyState(this.#relativePosition, IsMoving ? 'Busy' : 'Idle')) this.sendSetProperty(this.#relativePosition)
 
 			if (Temperature !== undefined) {
 				this.updatePropertyValue(this.#temperature, 'TEMPERATURE', Math.trunc(Temperature)) && this.sendSetProperty(this.#temperature)
@@ -1782,7 +1786,10 @@ class AlpacaFocuser extends AlpacaDevice {
 
 		switch (vector.name) {
 			case 'FOCUS_ABORT_MOTION':
-				if (vector.elements.ABORT === true) void this.api.halt(this.id)
+				if (vector.elements.ABORT === true) {
+					this.#moveSequence++
+					void this.api.halt(this.id)
+				}
 				break
 			case 'FOCUS_MOTION':
 				if (vector.elements.FOCUS_INWARD === true) this.updatePropertyValue(this.#direction, 'FOCUS_INWARD', true)
@@ -1791,19 +1798,39 @@ class AlpacaFocuser extends AlpacaDevice {
 		}
 	}
 
-	// Handles focuser move commands: relative steps (signed by direction) on relative focusers, or an
-	// absolute target on absolute focusers.
+	// Handles relative steps on either focuser type, or an absolute target on absolute focusers.
 	sendNumber(vector: NewNumberVector) {
 		super.sendNumber(vector)
 
 		switch (vector.name) {
 			case 'REL_FOCUS_POSITION':
-				if (!this.isAbsolute) void this.api.move(this.id, this.isFocusOut ? vector.elements.FOCUS_RELATIVE_POSITION : -vector.elements.FOCUS_RELATIVE_POSITION)
+				void this.#moveRelative(this.isFocusOut ? vector.elements.FOCUS_RELATIVE_POSITION : -vector.elements.FOCUS_RELATIVE_POSITION)
 				break
 			case 'ABS_FOCUS_POSITION':
-				if (this.isAbsolute) void this.api.move(this.id, vector.elements.FOCUS_ABSOLUTE_POSITION)
+				if (this.isAbsolute) {
+					this.#moveSequence++
+					void this.api.move(this.id, vector.elements.FOCUS_ABSOLUTE_POSITION)
+				}
 				break
 		}
+	}
+
+	// Moves by signed steps (positive outward). Absolute focusers read the current position before
+	// computing a target clamped to [0, MaxStep], avoiding a stale polling position between moves.
+	// A failed read issues no movement; answers from an ended session are ignored.
+	async #moveRelative(steps: number) {
+		const session = this.session
+		const sequence = ++this.#moveSequence
+		if (this.isAbsolute) {
+			const position = await this.api.getPosition(this.id)
+			if (session !== this.session || sequence !== this.#moveSequence) return
+			if (!position.ok) {
+				this.updatePropertyState(this.#relativePosition, 'Alert') && this.sendSetProperty(this.#relativePosition)
+				return
+			}
+			steps = Math.max(0, Math.min(this.state.MaxStep, position.value + steps))
+		}
+		await this.api.move(this.id, steps)
 	}
 }
 
