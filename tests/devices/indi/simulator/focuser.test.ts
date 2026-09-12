@@ -154,4 +154,29 @@ describe.skipIf(SKIP)('focuser simulator', () => {
 		await Bun.sleep(250)
 		expect(simulator.position).toBe(current)
 	})
+
+	test('keeps idle position vectors idle when aborting without motion', async () => {
+		const handler = new IndiClientHandlerSet()
+		const focuserManager = new FocuserManager()
+		handler.add(focuserManager)
+
+		using client = new ClientSimulator('focuser', handler)
+		using simulator = new FocuserSimulator('Focuser Simulator', client)
+		const focuser = focuserManager.get(client, simulator.name)!
+
+		focuserManager.connect(focuser)
+		await waitUntil(() => focuser.connected)
+		const properties = focuserManager.properties.get(focuser)!
+
+		simulator.stop()
+		expect(properties.ABS_FOCUS_POSITION.state).toBe('Idle')
+		expect(properties.REL_FOCUS_POSITION.state).toBe('Idle')
+
+		focuserManager.moveTo(focuser, simulator.position + 40000)
+		await waitUntil(() => focuser.moving)
+		focuserManager.stop(focuser)
+		await waitUntil(() => !focuser.moving)
+		expect(properties.ABS_FOCUS_POSITION.state).toBe('Alert')
+		expect(properties.REL_FOCUS_POSITION.state).toBe('Alert')
+	})
 })

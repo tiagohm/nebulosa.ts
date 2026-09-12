@@ -229,7 +229,7 @@ export class FocuserSimulator extends DeviceSimulator {
 		const wasMoving = this.isMoving
 		this.#targetPosition = undefined
 		this.#relativePosition.elements.FOCUS_RELATIVE_POSITION.value = 0
-		this.#setMoving(false, alert)
+		this.#setMoving(false, alert && wasMoving)
 
 		if (alert && wasMoving) {
 			this.#abort.elements.ABORT.value = true
