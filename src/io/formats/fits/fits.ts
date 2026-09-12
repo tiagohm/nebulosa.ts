@@ -1063,9 +1063,21 @@ export class FitsKeywordWriter {
 			let from = this.#appendQuotedValue(output, value, comment, 0, position)
 
 			while (from < value.length) {
+				// CONTINUE cards are extra 80-byte records; without this check a full buffer
+				// lets #appendQuotedValue consume 0 characters and this loop never advances.
+				if (output.byteLength - position.offset < FITS_HEADER_CARD_SIZE) {
+					throw new RangeError(FITS_HEADER_BUFFER_TOO_SMALL)
+				}
+
 				this.#pad(output, position)
 				this.#appendText(output, 'CONTINUE  ', position)
-				from += this.#appendQuotedValue(output, value, comment, from, position)
+				const consumed = this.#appendQuotedValue(output, value, comment, from, position)
+
+				if (consumed === 0) {
+					throw new RangeError(FITS_HEADER_BUFFER_TOO_SMALL)
+				}
+
+				from += consumed
 			}
 		} else if (typeof value === 'boolean') {
 			this.#appendText(output, value ? 'T' : 'F', position)

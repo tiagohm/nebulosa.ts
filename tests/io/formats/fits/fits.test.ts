@@ -501,6 +501,24 @@ test('continue keyword', () => {
 	expect(sink).toEqual(source)
 })
 
+test('write keyword throws when CONTINUE cards do not fit the buffer', () => {
+	const writer = new FitsKeywordWriter()
+	const buffer = Buffer.alloc(FITS_HEADER_CARD_SIZE * 2)
+
+	expect(() => writer.write(['OBJECT', 'x'.repeat(200)], buffer)).toThrow(new RangeError('FITS header buffer too small'))
+})
+
+test('writeFits grows the header buffer for a long OBJECT string', async () => {
+	const object = 'x'.repeat(20000)
+	const header: FitsHeader = { SIMPLE: true, BITPIX: 8, NAXIS: 2, NAXIS1: 1, NAXIS2: 1, OBJECT: object }
+	const buffer = Buffer.alloc(FITS_BLOCK_SIZE * 20)
+
+	await writeFits(bufferSink(buffer), [{ header, raw: new Float32Array([0]) }])
+
+	const fits = await readFits(bufferSource(buffer))
+	expect(fits!.hdus[0].header.OBJECT).toBe(object)
+})
+
 test('escape keyword', () => {
 	FitsKeywordWriter.keywords = {}
 
