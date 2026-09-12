@@ -206,6 +206,23 @@ test('keeps per-second drift unknown for missing or non-monotonic timestamps', (
 	expect(overflowingResult.assessment.verdict).toBe('inconclusive')
 })
 
+test('rejects exposure spread against the set amplitude independent of frame order', () => {
+	const options = { exposureTolerance: 0.5 }
+	const make = (exposures: readonly number[]) => asSequence(exposures.map((exposure, index) => completeFrame(index, {}, { exposure })))
+	for (const exposures of [
+		[10, 10.5, 11],
+		[10.5, 10, 11],
+		[11, 10.5, 10],
+	] as const) {
+		expect(() => analyzeFlatSequence({ frames: make(exposures) }, options)).toThrow('exposure')
+	}
+
+	expect(analyzeFlatSequence({ frames: make([1, 1, 1.5]) }, options).frames).toHaveLength(3)
+	expect(analyzeFlatSequence({ frames: make([1.5, 1, 1]) }, options).frames).toHaveLength(3)
+	expect(() => analyzeFlatSequence({ frames: make([1, 1, 1.5 + 1e-9]) }, options)).toThrow('exposure')
+	expect(() => analyzeFlatSequence({ frames: make([1.5 + 1e-9, 1, 1]) }, options)).toThrow('exposure')
+})
+
 test('throws on known heterogeneous metadata and reports absent compatibility metadata', () => {
 	const base = completeFrame(0)
 	const wrongExposure = completeFrame(1, {}, { exposure: 1.1 })

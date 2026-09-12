@@ -201,11 +201,21 @@ function validateSequenceCompatibility(frames: readonly FlatFrame[], options: Pa
 	return { metadataUnknown }
 }
 
-// Compares every known numeric value and returns true when at least one frame lacks the field.
+// Compares the spread of known numeric values against tolerance and returns true when at least one frame lacks the field.
 function validateOptionalNumericCompatibility(values: readonly (number | undefined)[], tolerance: number, mismatchMessage: string): boolean {
-	const known = values.find((value) => value !== undefined)
-	if (known !== undefined) for (const value of values) if (value !== undefined && !(Math.abs(value - known) <= tolerance)) throw new RangeError(mismatchMessage)
-	return values.some((value) => value === undefined)
+	let minimum = Number.POSITIVE_INFINITY
+	let maximum = Number.NEGATIVE_INFINITY
+	let missing = false
+	for (const value of values) {
+		if (value === undefined) {
+			missing = true
+			continue
+		}
+		minimum = Math.min(minimum, value)
+		maximum = Math.max(maximum, value)
+	}
+	if (!(maximum - minimum <= tolerance)) throw new RangeError(mismatchMessage)
+	return missing
 }
 
 // Compares every known string value and returns true when at least one frame lacks the field.
