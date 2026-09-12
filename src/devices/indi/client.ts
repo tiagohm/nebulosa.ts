@@ -183,7 +183,7 @@ export class IndiClient implements Client {
 					break
 				}
 				case 'defNumber': {
-					const element = { name: child.attributes.name, label: child.attributes.label, format: child.attributes.format, min: +child.attributes.min, max: +child.attributes.max, step: +child.attributes.step, value: +nodeText(child) } as DefNumber
+					const element = { name: child.attributes.name, label: child.attributes.label, format: child.attributes.format, min: +child.attributes.min, max: +child.attributes.max, step: +child.attributes.step, value: parseIndiNumber(nodeText(child)) } as DefNumber
 					;(message as DefNumberVector).elements[element.name] = element
 					break
 				}
@@ -230,7 +230,7 @@ export class IndiClient implements Client {
 				}
 				case 'oneNumber': {
 					const a = child.attributes
-					const element: OneNumber = { name: a.name, value: +nodeText(child) }
+					const element: OneNumber = { name: a.name, value: parseIndiNumber(nodeText(child)) }
 					// INDI's IUUpdateMinMax updates a number's range through a set vector; keep it.
 					if (a.min !== undefined) element.min = +a.min
 					if (a.max !== undefined) element.max = +a.max
@@ -623,4 +623,24 @@ const TEXT_DECODER = new TextDecoder()
 
 function nodeText(node: XmlNode) {
 	return TEXT_DECODER.decode(node.text).trim()
+}
+
+// Parses an INDI numberValue as a decimal or sexagesimal scalar without applying an angle unit
+// conversion. Missing minute or second components are zero; a leading sign applies to the whole value.
+function parseIndiNumber(value: string) {
+	const numeric = Number(value)
+	if (!Number.isNaN(numeric)) return numeric
+
+	const fields = (value.includes(':') || value.includes(';') ? value.split(/[:;]/) : value.split(/\s+/)).map((field) => field.trim())
+	if (fields.length > 3 || fields[0] === '') return Number.NaN
+
+	const first = fields[0]
+	const sign = first.startsWith('-') ? -1 : 1
+	const degrees = Math.abs(Number(first))
+	const minutes = fields.length > 1 && fields[1] !== '' ? Number(fields[1]) : 0
+	const seconds = fields.length > 2 && fields[2] !== '' ? Number(fields[2]) : 0
+
+	if (fields.slice(1).some((field) => field.startsWith('+') || field.startsWith('-')) || Number.isNaN(degrees) || Number.isNaN(minutes) || Number.isNaN(seconds)) return Number.NaN
+
+	return sign * (degrees + minutes / 60 + seconds / 3600)
 }
