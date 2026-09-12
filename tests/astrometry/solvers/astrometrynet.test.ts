@@ -114,6 +114,32 @@ test.skipIf(isLinuxSkipped())('local', async () => {
 	expect(solution!.CTYPE1).toBe(RA_TAN_SIP)
 })
 
+test('radius-only solve-field hint does not force RA 0 Dec 90', async () => {
+	const calls: string[][] = []
+	const original = Bun.spawn
+	Bun.spawn = ((cmd: string[]) => {
+		calls.push([...cmd])
+		return { exited: Promise.resolve(1) }
+	}) as typeof Bun.spawn
+
+	try {
+		await localAstrometryNetPlateSolve('img.fit', { executable: 'solve-field', radius: deg(5) })
+		expect(calls).toHaveLength(1)
+		expect(calls[0]).not.toContain('--ra')
+		expect(calls[0]).not.toContain('--dec')
+		expect(calls[0]).not.toContain('--radius')
+
+		await localAstrometryNetPlateSolve('img.fit', { executable: 'solve-field', rightAscension: deg(83.8), declination: deg(-5.4), radius: deg(5) })
+		expect(calls).toHaveLength(2)
+		const args = calls[1]
+		expect(+args[args.indexOf('--ra') + 1]).toBeCloseTo(83.8, 4)
+		expect(+args[args.indexOf('--dec') + 1]).toBeCloseTo(-5.4, 4)
+		expect(args[args.indexOf('--radius') + 1]).toBe('5')
+	} finally {
+		Bun.spawn = original
+	}
+})
+
 test('upload converts scale bounds into scaleUnits', async () => {
 	const arcsecPerPix = await captureUploadJson({ scaleUnits: 'arcsecperpix', scaleLower: arcsec(1), scaleUpper: arcsec(5) })
 	expect(arcsecPerPix.scale_units).toBe('arcsecperpix')

@@ -227,15 +227,11 @@ export async function novaAstrometryNetPlateSolve(input: string | Blob, options?
 
 // Plate-solves an image with the local `solve-field` CLI into a temporary directory, optionally
 // constrained by an RA/Dec/radius and FOV hint, then parses the produced .wcs into a PlateSolution.
-// Cleans up the temp directory afterward; returns undefined when solving fails. Declination defaults to
-// the pole only when no hint is given (0 is a valid equator hint).
+// Cleans up the temp directory afterward; returns undefined when solving fails. --ra/--dec/--radius
+// are emitted only when the caller supplies all three; a radius alone is not a north-polar window.
 export async function localAstrometryNetPlateSolve(input: string, options: RequiredOnly<LocalAstrometryNetPlateSolveOptions, 'executable'>, signal?: AbortSignal) {
 	const timeout = options.timeout ?? 0
 	const downsample = options.downsample ?? 2
-	const r = options?.radius ? Math.max(0, Math.min(Math.ceil(toDeg(options.radius)), 180)) : 0
-	const ra = options?.rightAscension !== undefined ? toDeg(normalizeAngle(options.rightAscension)) : 0
-	// declination 0 is the celestial equator, a valid hint; only fall back to the pole when it is absent.
-	const dec = options?.declination !== undefined ? toDeg(options.declination) : 90
 	const fov = Math.max(0, Math.min(toDeg(options?.fov ?? 0), 360))
 	const outDir = join(tmpdir(), Bun.randomUUIDv7())
 	const wcs = join(outDir, 'nebulosa.wcs')
@@ -268,10 +264,13 @@ export async function localAstrometryNetPlateSolve(input: string, options: Requi
 		commands.push('--guess-scale')
 	}
 
-	if (r) {
-		commands.push('--ra', `${ra}`)
-		commands.push('--dec', `${dec}`)
-		commands.push('--radius', `${r}`)
+	if (options.rightAscension !== undefined && options.declination !== undefined && options.radius !== undefined) {
+		const radiusDeg = Math.max(0, Math.min(Math.ceil(toDeg(options.radius)), 180))
+		if (radiusDeg > 0) {
+			commands.push('--ra', `${toDeg(normalizeAngle(options.rightAscension))}`)
+			commands.push('--dec', `${toDeg(options.declination)}`)
+			commands.push('--radius', `${radiusDeg}`)
+		}
 	}
 
 	commands.push(input)
