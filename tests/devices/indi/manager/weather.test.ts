@@ -329,6 +329,23 @@ test('does not date a failed report as an observation', async () => {
 	expect(manager.updatedAt(weather, 'temperature')!).toBeGreaterThan(first)
 })
 
+test('does not date a Busy report as an observation', async () => {
+	const manager = new WeatherManager()
+	const weather = weatherDevice(manager)
+	const parameters = weatherParameters(weather.name, { WEATHER_TEMPERATURE: defNumber('WEATHER_TEMPERATURE', 10, -60, 60) })
+
+	manager.numberVector(recordingClient, parameters, 'defNumberVector')
+	const first = manager.updatedAt(weather, 'temperature')!
+
+	await Bun.sleep(5)
+	parameters.state = 'Busy'
+	manager.numberVector(recordingClient, parameters, 'setNumberVector')
+
+	expect(weather.temperature).toBe(10)
+	expect(manager.updatedAt(weather, 'temperature')).toBe(first)
+	expect(manager.elapsedSince(weather, 'temperature')!).toBeGreaterThanOrEqual(5)
+})
+
 test('measures sensor age on the monotonic clock', async () => {
 	const manager = new WeatherManager()
 	const weather = weatherDevice(manager)

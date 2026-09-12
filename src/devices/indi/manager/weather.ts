@@ -267,14 +267,13 @@ export class WeatherManager extends DeviceManager<Weather> {
 			if (message.state === 'Busy') return
 		}
 
-		// An Alert vector is the driver reporting that its hardware read failed. The INDI Weather
-		// interface applies WEATHER_PARAMETERS unchanged in that case and retries every five seconds, so
-		// its elements are the previous readings restated rather than new observations - the alarm status
-		// of a reading lives in WEATHER_STATUS, not in this state. The values are still applied, because a
-		// driver that sampled part of them before failing did observe those, but their freshness must not
-		// advance: a station whose sensor died would otherwise keep reporting a near-zero
-		// TimeSinceLastUpdate for the whole outage and hide it from every safety check.
-		const stamps = message.state === 'Alert' ? undefined : this.#stamps(device)
+		// Alert means the driver's hardware read failed, while Busy means the read is still in progress.
+		// The INDI Weather interface applies WEATHER_PARAMETERS in both states, but neither is a completed
+		// observation: Alert restates the previous readings and Busy may carry defaults or an in-progress
+		// result. The values are still applied, because a driver may have sampled part of them, but their
+		// freshness must not advance: a station whose sensor died or is still reading would otherwise report
+		// a near-zero TimeSinceLastUpdate and hide the outage or pending read from every safety check.
+		const stamps = message.state === 'Alert' || message.state === 'Busy' ? undefined : this.#stamps(device)
 		// Both clocks are read once per vector: the wall-clock stamp is what a timestamp reports, the
 		// monotonic one is what every age is measured from.
 		const now = Date.now()
