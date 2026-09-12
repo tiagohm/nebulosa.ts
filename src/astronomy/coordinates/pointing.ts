@@ -30,8 +30,10 @@ export interface EquatorialPointingModel {
 	readonly axisNonPerpendicularity: Angle
 	// MA — polar axis misalignment in the horizontal plane (azimuth), positive towards east.
 	readonly polarAzimuthError: Angle
-	// ME — polar axis misalignment in the vertical plane (elevation), positive when the axis points
-	// above the true pole.
+	// ME — polar axis misalignment in the vertical plane (elevation). This is the TPoint ME coefficient:
+	// positive when the pole of the mounting is below the true pole. A polar axis pointed above the
+	// true pole is a positive `altitudeError` to `polarAlignmentPointingModel`, which stores ME as
+	// −altitude.
 	readonly polarAltitudeError: Angle
 }
 

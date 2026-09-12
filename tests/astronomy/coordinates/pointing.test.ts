@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 // oxfmt-ignore
-import { applyEquatorialPointingError, applyTubeFlexureError, equatorialPointingError, type EquatorialPointingModel, IDENTITY_EQUATORIAL_POINTING_MODEL, isIdentityEquatorialPointingModel, MAX_POINTING_DECLINATION, tubeFlexureError } from '../../../src/astronomy/coordinates/pointing'
+import { applyEquatorialPointingError, applyTubeFlexureError, equatorialPointingError, type EquatorialPointingModel, IDENTITY_EQUATORIAL_POINTING_MODEL, isIdentityEquatorialPointingModel, MAX_POINTING_DECLINATION, polarAlignmentPointingModel, tubeFlexureError } from '../../../src/astronomy/coordinates/pointing'
 import { angularDistance } from '../../../src/astronomy/coordinates/coordinate'
 import { PIOVERTWO } from '../../../src/core/constants'
 import { arcsec, deg, hour, normalizePI, toArcsec } from '../../../src/math/units/angle'
@@ -66,6 +66,16 @@ describe('equatorial pointing error', () => {
 		expect(toArcsec(equatorialPointingError(hour(-2), deg(45), axisModel)[0])).toBeCloseTo(90, 6)
 
 		expect(equatorialPointingError(hour(-2), deg(45), axisModel)[1]).toBe(0)
+	})
+
+	test('polarAlignmentPointingModel stores TPoint ME, opposite the altitude knob', () => {
+		// Pass altitude is positive when the polar axis points above the true pole. TPoint ME is the
+		// opposite sign: at H = 0, Δδ = ME, and an axis that is too high places the mechanical equator
+		// south of the true equator, so declination decreases.
+		const altitudeError = arcsec(60)
+		const aligned = polarAlignmentPointingModel(0, altitudeError, deg(40))
+		expect(toArcsec(aligned.polarAltitudeError)).toBeCloseTo(-60, 9)
+		expect(toArcsec(equatorialPointingError(0, deg(45), aligned)[1])).toBeCloseTo(-60, 9)
 	})
 
 	test('polar axis errors follow the classic MA/ME dependency', () => {
