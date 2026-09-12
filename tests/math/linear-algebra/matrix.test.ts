@@ -331,6 +331,11 @@ describe('LU decomposition', () => {
 		expect(x[4]).toBeCloseTo(0.3808955223880599, 12)
 	})
 
+	test('0x0 determinant is 1 and invert is empty', () => {
+		expect(new LuDecomposition(new Matrix(0, 0)).determinant).toBe(1)
+		expect(new Matrix(0, 0).invert().size).toBe(0)
+	})
+
 	test('singular matrix rejects solve and invert', () => {
 		const decomposition = new LuDecomposition(Matrix.square(2, [1, 2, 2, 4]))
 

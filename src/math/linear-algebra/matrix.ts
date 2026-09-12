@@ -644,8 +644,11 @@ export class LuDecomposition {
 	}
 
 	// Determinant as the product of the U pivots, sign-corrected by the parity of the pivot swaps.
+	// The empty product for a 0×0 matrix is 1 (det I₀).
 	get determinant() {
 		const n = this.#A.rows
+		if (n === 0) return 1
+
 		const data = this.#A.data
 		let det = data[0]
 		for (let i = 1; i < n; i++) det *= data[i * n + i]
