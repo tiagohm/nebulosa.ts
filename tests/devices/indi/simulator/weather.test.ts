@@ -227,6 +227,12 @@ describe('weather simulator', () => {
 		const handler = new IndiClientHandlerSet()
 		const manager = new WeatherManager()
 		handler.add(manager)
+		const configStates: string[] = []
+		handler.add({
+			setSwitchVector: (_, message) => {
+				if (message.name === 'CONFIG' && message.state !== undefined) configStates.push(message.state)
+			},
+		})
 
 		using client = new ClientSimulator('weather-persistence', handler)
 		using simulator = new WeatherSimulator('Weather Simulator', client, {
@@ -244,6 +250,7 @@ describe('weather simulator', () => {
 		simulator.setParameter('WEATHER_PRESSURE', 990.5)
 		client.sendSwitch({ device: simulator.name, name: 'CONFIG', elements: { SAVE: true } })
 
+		expect(configStates).toEqual(['Ok'])
 		expect(saved.some((e) => e.name === 'SIMULATOR_WEATHER')).toBeTrue()
 		expect(saved.some((e) => e.name === 'WEATHER_UPDATE')).toBeTrue()
 		// Derived properties are excluded from persistence.
@@ -255,7 +262,29 @@ describe('weather simulator', () => {
 
 		client.sendSwitch({ device: simulator.name, name: 'CONFIG', elements: { LOAD: true } })
 		await waitUntil(() => weather.pressure === 990.5)
+		expect(configStates.slice(-2)).toEqual(['Busy', 'Ok'])
 		expect(manager.properties.get(weather)!.WEATHER_PARAMETERS.elements.WEATHER_PRESSURE.value).toBe(990.5)
+	})
+
+	test('reports a failed config load', async () => {
+		const handler = new IndiClientHandlerSet()
+		const configStates: string[] = []
+		handler.add({
+			setSwitchVector: (_, message) => {
+				if (message.name === 'CONFIG' && message.state !== undefined) configStates.push(message.state)
+			},
+		})
+
+		using client = new ClientSimulator('weather-config-error', handler)
+		using simulator = new WeatherSimulator('Weather Simulator', client, {
+			load: () => Promise.reject(new Error('load failed')),
+		})
+
+		client.sendSwitch({ device: simulator.name, name: 'CONFIG', elements: { LOAD: true } })
+
+		expect(configStates).toEqual(['Busy'])
+		await waitUntil(() => configStates.at(-1) === 'Alert')
+		expect(configStates).toEqual(['Busy', 'Alert'])
 	})
 
 	test('removes every property on disconnect and the device on dispose', async () => {

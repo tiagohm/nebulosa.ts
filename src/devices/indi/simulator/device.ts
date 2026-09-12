@@ -1,6 +1,6 @@
 import { handleDefSwitchVector, handleDefTextVector, handleDelProperty, handleSetLightVector, handleSetNumberVector, handleSetSwitchVector, handleSetTextVector, type IndiClientHandler } from '../client'
 import { DeviceInterfaceType, type DeviceType } from '../device'
-import { type EnableBlob, makeSwitchVector, makeTextVector, type NewNumberVector, type NewSwitchVector, type NewTextVector, selectOnSwitch } from '../types'
+import { type EnableBlob, makeSwitchVector, makeTextVector, type NewNumberVector, type NewSwitchVector, type NewTextVector, type PropertyState, selectOnSwitch } from '../types'
 import type { ClientSimulator } from './client'
 import { GENERAL_INFO, MAIN_CONTROL } from './constants'
 import type { DeviceSimulatorOptions, SimulatorProperty } from './types'
@@ -29,6 +29,8 @@ export abstract class DeviceSimulator implements Disposable {
 	#lifecycleVersion = 0
 	// Prevents late asynchronous work from publishing after disposal.
 	#disposed = false
+	// Identifies the latest CONFIG operation so stale load completions cannot change its state.
+	#configOperation = 0
 
 	constructor(
 		readonly name: string,
@@ -72,10 +74,34 @@ export abstract class DeviceSimulator implements Disposable {
 	// Base switch handling: the CONFIG load/save action. Subclasses override and call super.
 	sendSwitch(vector: NewSwitchVector) {
 		switch (vector.name) {
-			case 'CONFIG':
-				if (vector.elements.LOAD === true) void this.loadProperties()
-				else if (vector.elements.SAVE === true) this.saveProperties()
+			case 'CONFIG': {
+				if (vector.elements.LOAD === true) {
+					const operation = ++this.#configOperation
+					this.notifyConfig('Busy')
+					void this.loadProperties().then(
+						() => operation === this.#configOperation && this.notifyConfig('Ok'),
+						() => operation === this.#configOperation && this.notifyConfig('Alert'),
+					)
+				} else if (vector.elements.SAVE === true) {
+					++this.#configOperation
+					try {
+						this.saveProperties()
+						this.notifyConfig('Ok')
+					} catch {
+						this.notifyConfig('Alert')
+					}
+				}
+				break
+			}
 		}
+	}
+
+	// Updates the momentary CONFIG switches and publishes their operation state while registered.
+	private notifyConfig(state: PropertyState) {
+		this.config.state = state
+		this.config.elements.LOAD.value = false
+		this.config.elements.SAVE.value = false
+		if (!this.#disposed && this.client.get(this.name) === this) this.notify(this.config)
 	}
 
 	// Deletes the device's properties and unregisters from the client.
