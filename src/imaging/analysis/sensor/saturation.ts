@@ -1,7 +1,7 @@
 import type { PhotonTransferPoint, SensorGain, SensorReadNoise } from './ptc'
 
 // Saturation-capacity and dynamic-range analysis for a characterized sensor plane. Detection uses
-// measured PTC behavior in acquisition order and treats digital range only as a low-confidence output
+// measured PTC behavior versus stimulus and treats digital range only as a low-confidence output
 // limit. Capacity is observable charge at output saturation, not an assertion of physical full well.
 
 // Dark-corrected output saturation estimate.
@@ -71,7 +71,11 @@ function isArrayClipped(fraction: number | undefined): boolean {
 
 // Detects output saturation from substantial digital clipping, PTC variance collapse, response plateau, or digital limit.
 export function detectSensorSaturation(points: readonly PhotonTransferPoint[], gain?: SensorGain, digitalSignalLimit?: number): SensorSaturation | undefined {
-	const ordered = points.toSorted((a, b) => a.level - b.level)
+	const ordered = points.toSorted((a, b) => {
+		const stimulusA = a.stimulus ?? a.exposure
+		const stimulusB = b.stimulus ?? b.exposure
+		return stimulusA !== stimulusB ? stimulusA - stimulusB : a.signal - b.signal
+	})
 	const valid = ordered.filter((point) => point.valid && !isArrayClipped(point.clippedFraction) && !isArrayClipped(point.darkClippedFraction))
 	for (let i = 0; i < ordered.length; i++) {
 		if (!isArrayClipped(ordered[i].clippedFraction)) continue

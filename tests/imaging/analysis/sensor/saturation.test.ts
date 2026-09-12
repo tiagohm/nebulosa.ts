@@ -22,6 +22,11 @@ test('uses the last unbiased level before digital clipping as saturation capacit
 	expect(result).toEqual({ signal: 500, capacity: 1000, index: 2, method: 'unclippedLevel', confidence: 0.95 })
 })
 
+test('walks saturation heuristics in stimulus order rather than acquisition index', () => {
+	const result = detectSensorSaturation([point(0, 1000, 400, 0, 10), point(1, 100, 40, 0, 1), point(2, 1800, 200, 0.2, 20)], GAIN)
+	expect(result).toEqual({ signal: 1000, capacity: 2000, index: 0, method: 'unclippedLevel', confidence: 0.95 })
+})
+
 test('ignores residual digital clip below the array-saturation fraction', () => {
 	const linear = detectSensorSaturation([point(0, 100, 50), point(1, 300, 150), point(2, 500, 250), point(3, 700, 350, 1e-6)], GAIN)
 	expect(linear).toBeUndefined()
