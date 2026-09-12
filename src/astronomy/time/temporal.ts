@@ -226,7 +226,7 @@ export function temporalSet(temporal: Temporal, value: number, unit: TemporalUni
 
 // Formats a timestamp with either a custom pattern or Intl.DateTimeFormat.
 export function formatTemporal(temporal: Temporal | ReturnType<typeof temporalToDate>, format: Intl.DateTimeFormat | string = DATE_TIME_FORMAT, timezone: number | true = 0) {
-	return typeof format === 'string' ? formatTemporalFromPattern(temporal, format, timezone === true ? TIMEZONE : timezone) : format.format(typeof temporal === 'number' ? temporal : Date.UTC(...temporal))
+	return typeof format === 'string' ? formatTemporalFromPattern(temporal, format, timezone === true ? TIMEZONE : timezone) : format.format(typeof temporal === 'number' ? temporal : temporalFromDate(...temporal))
 }
 
 // Month and weekday display names (and lowercase short month names for case-insensitive parsing), plus

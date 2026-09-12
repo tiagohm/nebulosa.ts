@@ -282,6 +282,20 @@ describe('format', () => {
 		expect(formatTemporal(1756510498123, format, 0)).toEqual('sexta-feira, 29 de agosto de 2025 às 20:34 BRT')
 	})
 
+	test('intl date array uses 1-based months and astronomical years', () => {
+		const format = new Intl.DateTimeFormat('en-CA', {
+			timeZone: 'UTC',
+			year: 'numeric',
+			month: '2-digit',
+			day: '2-digit',
+		})
+
+		expect(formatTemporal([2025, 8, 29, 0, 0, 0, 0], format)).toBe(format.format(temporalFromDate(2025, 8, 29)))
+		expect(formatTemporal([99, 6, 15, 0, 0, 0, 0], format)).toBe(format.format(temporalFromDate(99, 6, 15)))
+		expect(formatTemporal([2025, 8, 29, 0, 0, 0, 0], format)).toBe('2025-08-29')
+		expect(formatTemporal([99, 6, 15, 0, 0, 0, 0], format)).not.toContain('1999')
+	})
+
 	test('timezone', () => {
 		expect(formatTemporal(1756510498123, 'YYYY-MM-DD HH:mm:ss', 180)).toEqual('2025-08-30 02:34:58')
 		expect(formatTemporal(1756510498123, 'YYYY-MM-DD HH:mm:ss', -180)).toEqual('2025-08-29 20:34:58')
