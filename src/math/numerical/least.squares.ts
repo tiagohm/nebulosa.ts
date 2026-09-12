@@ -427,9 +427,10 @@ function estimateLeastSquaresConditionNumber(design: readonly Readonly<NumberArr
 		return Number.POSITIVE_INFINITY
 	}
 
-	// Eigenvalues at or below this relative threshold are numerically indistinguishable from zero
-	// (the Jacobi noise floor), so a smallest eigenvalue under it signals a rank-deficient matrix.
-	const threshold = maxEigenvalue * 1e-12
+	// λ_i = σ_i² of W^{1/2} X. Values at or below n ε λ_max are Gram-matrix rounding noise, not a
+	// resolved singular value. A 1e-12 relative cut on λ would flag κ₂(X) ≳ 1e6 as singular and hide
+	// the public 1e12 cutoff on κ(X) = σ_max / σ_min.
+	const threshold = eigenvalues.length * Number.EPSILON * maxEigenvalue
 	let minEigenvalue = Number.POSITIVE_INFINITY
 
 	for (let i = 0; i < eigenvalues.length; i++) {
@@ -439,7 +440,7 @@ function estimateLeastSquaresConditionNumber(design: readonly Readonly<NumberArr
 	}
 
 	// A near-zero (or negative-noise) smallest eigenvalue means an effectively infinite condition number.
-	if (minEigenvalue <= threshold) return Number.POSITIVE_INFINITY
+	if (!(minEigenvalue > threshold)) return Number.POSITIVE_INFINITY
 
 	return Math.sqrt(maxEigenvalue / minEigenvalue)
 }
@@ -455,12 +456,16 @@ function symmetricEigenvalues(matrix: Matrix) {
 		let p = 0
 		let q = 1
 		let maxOffDiagonal = 0
+		let maxAbs = 0
 
 		for (let i = 0; i < n; i++) {
 			const rowOffset = i * n
+			const diag = Math.abs(data[rowOffset + i])
+			if (diag > maxAbs) maxAbs = diag
 
 			for (let j = i + 1; j < n; j++) {
 				const value = Math.abs(data[rowOffset + j])
+				if (value > maxAbs) maxAbs = value
 
 				if (value > maxOffDiagonal) {
 					maxOffDiagonal = value
@@ -470,7 +475,8 @@ function symmetricEigenvalues(matrix: Matrix) {
 			}
 		}
 
-		if (maxOffDiagonal <= 1e-14) {
+		// Relative to the matrix scale so λ_min ≪ 1e-14 is still visible when λ_max is O(1).
+		if (maxOffDiagonal <= Number.EPSILON * maxAbs) {
 			break
 		}
 

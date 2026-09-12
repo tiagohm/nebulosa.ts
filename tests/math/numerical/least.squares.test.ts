@@ -23,6 +23,41 @@ test('flags a rank-deficient design as singular', () => {
 	expect(Number.isFinite(fit.conditionNumber)).toBeFalse()
 	// A regularized fallback still returns finite coefficients that reproduce the target.
 	expect(predictLinearLeastSquares(fit.coefficients, new Float64Array([5, 5]))).toBeCloseTo(10, 6)
+
+	// Linear dependence among three columns is also singular; Gram-matrix rounding must not
+	// report a finite κ below the public 1e12 cutoff.
+	const dependent = [new Float64Array([1, 0, 1]), new Float64Array([0, 1, 1]), new Float64Array([1, 1, 2]), new Float64Array([2, 3, 5])]
+	const dependentFit = linearLeastSquares(dependent, new Float64Array([1, 1, 2, 5]))
+	expect(dependentFit.rankDeficient).toBeTrue()
+	expect(Number.isFinite(dependentFit.conditionNumber)).toBeFalse()
+})
+
+test('a poorly scaled full-rank design keeps a finite condition number', () => {
+	// xs = k * 5e-7, k = 0..4, columns [1, x]. XᵀX has λ_max ≈ 5, λ_min = 10 s² = 2.5e-12,
+	// so κ₂(X) = sqrt(λ_max/λ_min) ≈ 1.41e6, well below the public 1e12 rank-deficiency cut.
+	const s = 5e-7
+	const xs = [0, s, 2 * s, 3 * s, 4 * s]
+	const design = xs.map((x) => new Float64Array([1, x]))
+	const target = new Float64Array(xs.map((x) => 1 + 2 * x))
+	const fit = linearLeastSquares(design, target)
+
+	expect(fit.coefficients[0]).toBeCloseTo(1, 8)
+	expect(fit.coefficients[1]).toBeCloseTo(2, 8)
+	expect(fit.rankDeficient).toBeFalse()
+	expect(fit.conditionNumber).toBeCloseTo(Math.SQRT2 * 1e6, 0)
+
+	// Unnormalized quadratic Vandermonde: columns [1, x, x²] with x ∈ {0, 400, …, 4000}.
+	// Recovered coefficients stay accurate; a 1e-12 floor on λ of XᵀX would have called this singular.
+	const xv: number[] = []
+	for (let i = 0; i <= 10; i++) xv.push(i * 400)
+	const vandermonde = xv.map((x) => new Float64Array([1, x, x * x]))
+	const quadratic = linearLeastSquares(vandermonde, new Float64Array(xv.map((x) => 1.5 - 0.002 * x + 3e-7 * x * x)))
+	expect(quadratic.coefficients[0]).toBeCloseTo(1.5, 8)
+	expect(quadratic.coefficients[1]).toBeCloseTo(-0.002, 8)
+	expect(quadratic.coefficients[2]).toBeCloseTo(3e-7, 8)
+	expect(quadratic.rankDeficient).toBeFalse()
+	expect(quadratic.conditionNumber).toBeGreaterThan(1e6)
+	expect(quadratic.conditionNumber).toBeLessThan(1e12)
 })
 
 test('leverage reproduces leave-one-out residuals without refitting', () => {
