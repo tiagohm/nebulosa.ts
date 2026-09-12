@@ -2,12 +2,13 @@ import { expect, test } from 'bun:test'
 import type { Socket } from 'bun'
 import { PHD2Client, type PHD2ClientOptions } from '../../../src/devices/guiding/phd2'
 
-async function withPHD2Server(onCommand: (socket: Socket<unknown>, command: Record<string, unknown>) => void, action: (client: PHD2Client) => Promise<void>, options?: PHD2ClientOptions) {
+async function withPHD2Server(onCommand: (socket: Socket<unknown>, command: Record<string, unknown>) => void, action: (client: PHD2Client) => Promise<void>, options?: PHD2ClientOptions, onOpen?: (socket: Socket<unknown>) => void) {
 	let input = ''
 	const server = Bun.listen({
 		hostname: '127.0.0.1',
 		port: 0,
 		socket: {
+			open: onOpen,
 			data: (socket, data) => {
 				input += data.toString()
 				let end = input.indexOf('\n')
@@ -144,6 +145,66 @@ test('timeout ignores late replies', async () => {
 		},
 		{ handler: { command: () => commandCallbacks++ } },
 	)
+})
+
+test('parser skips malformed lines and continues with later events', async () => {
+	const eventReceived = Promise.withResolvers<string>()
+	const version = JSON.stringify({ Event: 'Version' })
+
+	await withPHD2Server(
+		() => {},
+		async () => {
+			expect(await eventReceived.promise).toBe('Version')
+		},
+		{ handler: { event: (_, event) => eventReceived.resolve(event.Event) } },
+		(socket) => socket.write(`not-json\r\n${version}\r\n`),
+	)
+})
+
+test('reconnect discards a partial message from the previous socket', async () => {
+	const eventReceived = Promise.withResolvers<string>()
+	const firstClosed = Promise.withResolvers<void>()
+	const connections = new Map<Socket<unknown>, number>()
+	let connectionCount = 0
+	const server = Bun.listen({
+		hostname: '127.0.0.1',
+		port: 0,
+		socket: {
+			open: (socket) => {
+				const connection = ++connectionCount
+				connections.set(socket, connection)
+				if (connection === 2) socket.write(`${JSON.stringify({ Event: 'Version' })}\r\n`)
+			},
+			data: (socket) => {
+				if (connections.get(socket) === 1) {
+					socket.write('{"Event":"Ver')
+					setTimeout(() => socket.close(), 10)
+				}
+			},
+			close: (socket) => {
+				connections.delete(socket)
+				firstClosed.resolve()
+			},
+		},
+	})
+	const client = new PHD2Client({
+		handler: {
+			close: () => firstClosed.resolve(),
+			event: (_, event) => eventReceived.resolve(event.Event),
+		},
+	})
+
+	try {
+		expect(await client.connect('127.0.0.1', server.port)).toBeTrue()
+		const pending = client.send('get_app_state', undefined, 1000)
+		await firstClosed.promise
+		expect(await pending).toEqual({ success: false, error: 'socketUnavailable' })
+		expect(await client.connect('127.0.0.1', server.port)).toBeTrue()
+		expect(await eventReceived.promise).toBe('Version')
+	} finally {
+		client.close()
+		server.stop(true)
+	}
 })
 
 test('close resolves pending commands', async () => {

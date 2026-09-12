@@ -436,6 +436,7 @@ export class PHD2Client implements Disposable {
 	// Connects to the PHD2 server, wiring socket events into the line parser. Returns false if already connected.
 	async connect(hostname: string, port: number = DEFAULT_PHD2_PORT) {
 		if (this.#socket) return false
+		this.#buffer = undefined
 
 		this.#socket = await Bun.connect({
 			hostname,
@@ -474,6 +475,7 @@ export class PHD2Client implements Disposable {
 		}
 
 		this.#commands.clear()
+		this.#buffer = undefined
 	}
 
 	[Symbol.dispose]() {
@@ -718,20 +720,37 @@ export class PHD2Client implements Disposable {
 	// Buffers incoming bytes and parses complete JSON lines (PHD2 sends newline-delimited JSON), keeping
 	// any partial trailing line for the next chunk.
 	#processData(data: Buffer) {
-		const buffer = this.#buffer === undefined ? data : Buffer.concat([this.#buffer, data])
+		let buffer = this.#buffer === undefined ? data : Buffer.concat([this.#buffer, data])
 
-		const result = Bun.JSONL.parseChunk(buffer)
+		while (buffer.length > 0) {
+			const result = Bun.JSONL.parseChunk(buffer)
 
-		for (const event of result.values) {
-			this.#processEvent(event as never)
+			for (const event of result.values) {
+				this.#processEvent(event as never)
+			}
+
+			if (result.error) {
+				const newline = buffer.indexOf(10, result.read)
+				if (newline < 0) {
+					this.#buffer = undefined
+					return
+				}
+
+				buffer = buffer.subarray(newline + 1)
+				continue
+			}
+
+			if (result.done) {
+				this.#buffer = undefined
+			} else {
+				// Keep only the unconsumed portion
+				this.#buffer = buffer.subarray(result.read)
+			}
+
+			return
 		}
 
-		if (result.done) {
-			this.#buffer = undefined
-		} else {
-			// Keep only the unconsumed portion
-			this.#buffer = buffer.subarray(result.read)
-		}
+		this.#buffer = undefined
 	}
 
 	// Routes a parsed message: a JSON-RPC reply resolves the matching pending command (and fires the
