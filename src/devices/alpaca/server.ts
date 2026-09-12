@@ -1038,11 +1038,11 @@ export class AlpacaServer {
 	}
 
 	#cameraGetXSize(id: number) {
-		return makeAlpacaResponse(this.#camera(id).device.frame.width.value)
+		return makeAlpacaResponse(this.#camera(id).device.frame.width.max)
 	}
 
 	#cameraGetYSize(id: number) {
-		return makeAlpacaResponse(this.#camera(id).device.frame.height.value)
+		return makeAlpacaResponse(this.#camera(id).device.frame.height.max)
 	}
 
 	#cameraCanStopExposure(id: number) {

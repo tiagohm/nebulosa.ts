@@ -610,3 +610,16 @@ test('destination pier side follows query coordinates independently of the curre
 	}
 	expect((await fixture.get(fixture.path + '/destinationsideofpier?RightAscension=5&Declination=90')).Value).toBe(-1)
 })
+
+test('camera sensor dimensions remain unbinned and full size after cropping', async () => {
+	await using fixture = await startAlpacaServer(ALPACA_CAMERA)
+	const width = fixture.device.frame.width.max
+	const height = fixture.device.frame.height.max
+	await fixture.put(fixture.path + '/numx', { NumX: '100' })
+	await fixture.put(fixture.path + '/numy', { NumY: '80' })
+	expect(fixture.device.frame.width.value).toBe(100)
+	expect(fixture.device.frame.height.value).toBe(80)
+	await fixture.put(fixture.path + '/binx', { BinX: '2' })
+	expect((await fixture.get(fixture.path + '/cameraxsize')).Value).toBe(width)
+	expect((await fixture.get(fixture.path + '/cameraysize')).Value).toBe(height)
+})
