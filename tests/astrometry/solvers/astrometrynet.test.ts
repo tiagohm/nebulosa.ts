@@ -165,6 +165,31 @@ test('respects downsample 1 instead of clamping to 2', async () => {
 	}
 })
 
+test('nova solve timeout aborts hanging HTTP instead of waiting on poll sleep', async () => {
+	const restore = globalThis.fetch
+	globalThis.fetch = hangingAbortableFetch()
+
+	try {
+		const started = performance.now()
+		const solution = await novaAstrometryNetPlateSolve('https://example.com/img.fits', { session: { status: 'success', session: 'tok' }, timeout: 40 })
+		expect(solution).toBeUndefined()
+		expect(performance.now() - started).toBeLessThan(1000)
+
+		const ac = new AbortController()
+		const pending = novaAstrometryNetPlateSolve('https://example.com/img.fits', { session: { status: 'success', session: 'tok' }, timeout: 300000 }, ac.signal)
+		ac.abort()
+		let aborted = false
+		try {
+			await pending
+		} catch {
+			aborted = true
+		}
+		expect(aborted).toBe(true)
+	} finally {
+		globalThis.fetch = restore
+	}
+})
+
 test('upload converts scale bounds into scaleUnits', async () => {
 	const arcsecPerPix = await captureUploadJson({ scaleUnits: 'arcsecperpix', scaleLower: arcsec(1), scaleUpper: arcsec(5) })
 	expect(arcsecPerPix.scale_units).toBe('arcsecperpix')
@@ -208,6 +233,18 @@ async function captureUploadJson(options: Omit<Upload<string>, 'input'>) {
 	} finally {
 		globalThis.fetch = restore
 	}
+}
+
+function hangingAbortableFetch(): typeof fetch {
+	return ((_input, init) =>
+		new Promise<Response>((_resolve, reject) => {
+			const onAbort = () => {
+				reject(init?.signal?.reason instanceof Error ? init.signal.reason : new DOMException('The operation was aborted.', 'AbortError'))
+			}
+
+			if (init?.signal?.aborted) onAbort()
+			else init?.signal?.addEventListener('abort', onAbort, { once: true })
+		})) as typeof fetch
 }
 
 function uploadRequestJson(body: BodyInit | undefined | null) {

@@ -174,53 +174,59 @@ export function wcsFile(jobId: number, options: RequiredOnly<Omit<RequestOptions
 
 // End-to-end nova solve: logs in (unless a session is supplied), uploads the image, polls the
 // submission/job until a job succeeds or the timeout aborts, then parses the downloaded WCS into a
-// PlateSolution. Returns undefined on failure, timeout, or job failure.
+// PlateSolution. Returns undefined on failure, timeout, or job failure. A caller AbortSignal still
+// throws; only the solve timeout is mapped to undefined.
 export async function novaAstrometryNetPlateSolve(input: string | Blob, options?: Omit<Upload<never>, 'input'>, signal?: AbortSignal): Promise<PlateSolution | undefined> {
-	const session = options?.session || (await login(options, signal))
+	const timeout = AbortSignal.timeout(options?.timeout || 300000)
+	// Bound every HTTP call and the inter-poll wait by the solve timeout, plus the caller's signal.
+	const wait = signal ? AbortSignal.any([timeout, signal]) : timeout
 
-	if (session) {
-		const submission = await upload({ ...options, input, session }, signal)
+	try {
+		const session = options?.session || (await login(options, wait))
 
-		if (submission?.status === 'success') {
-			const timeout = AbortSignal.timeout(options?.timeout || 300000)
-			// Wake the inter-poll wait as soon as the overall timeout or the caller's signal aborts.
-			const wait = signal ? AbortSignal.any([timeout, signal]) : timeout
+		if (session) {
+			const submission = await upload({ ...options, input, session }, wait)
 
-			while (!timeout.aborted) {
-				const status = await submissionStatus(submission, { session }, signal)
+			if (submission?.status === 'success') {
+				while (!timeout.aborted) {
+					const status = await submissionStatus(submission, { session }, wait)
 
-				// A job slot is null until created and a created job stays 'solving' until it finishes,
-				// so wait for a real job id and poll its status instead of grabbing the WCS too early.
-				const jobId = status?.jobs.find((id) => typeof id === 'number')
+					// A job slot is null until created and a created job stays 'solving' until it finishes,
+					// so wait for a real job id and poll its status instead of grabbing the WCS too early.
+					const jobId = status?.jobs.find((id) => typeof id === 'number')
 
-				if (jobId !== undefined) {
-					const job = await jobStatus(jobId, { session }, signal)
+					if (jobId !== undefined) {
+						const job = await jobStatus(jobId, { session }, wait)
 
-					if (job?.status === 'success') {
-						const blob = await wcsFile(jobId, { session }, signal)
+						if (job?.status === 'success') {
+							const blob = await wcsFile(jobId, { session }, wait)
 
-						if (blob) {
-							const buffer = Buffer.from(await blob.arrayBuffer())
-							const fits = await readFits(bufferSource(buffer))
+							if (blob) {
+								const buffer = Buffer.from(await blob.arrayBuffer())
+								const fits = await readFits(bufferSource(buffer))
 
-							if (fits?.hdus.length) {
-								return plateSolutionFrom(fits.hdus[0].header)
+								if (fits?.hdus.length) {
+									return plateSolutionFrom(fits.hdus[0].header)
+								}
 							}
+
+							break
+						} else if (job?.status === 'failure') {
+							break
 						}
-
-						break
-					} else if (job?.status === 'failure') {
-						break
+						// Otherwise the job is still solving; keep polling until it resolves or times out.
 					}
-					// Otherwise the job is still solving; keep polling until it resolves or times out.
-				}
 
-				await abortableSleep(15000, wait)
+					await abortableSleep(15000, wait)
+				}
 			}
 		}
-	}
 
-	return undefined
+		return undefined
+	} catch (error) {
+		if (timeout.aborted && !signal?.aborted) return undefined
+		throw error
+	}
 }
 
 // https://astrometry.net/doc/readme.html
