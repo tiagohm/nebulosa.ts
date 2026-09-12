@@ -6,6 +6,7 @@ import { FocuserManager } from '../../../../src/devices/indi/manager/focuser'
 import { PowerManager } from '../../../../src/devices/indi/manager/power'
 import { RotatorManager } from '../../../../src/devices/indi/manager/rotator'
 import { WheelManager } from '../../../../src/devices/indi/manager/wheel'
+import type { DefNumberVector, DefSwitchVector, SetNumberVector, SetSwitchVector } from '../../../../src/devices/indi/types'
 import { client, defNumber, defSwitch, setupDevice } from './util'
 
 test('device managers reset deleted device-specific properties to defaults', () => {
@@ -72,6 +73,51 @@ test('device managers reset deleted device-specific properties to defaults', () 
 	expect(power.dc).toEqual(DEFAULT_POWER.dc)
 	expect(power.hasPowerCycle).toBe(DEFAULT_POWER.hasPowerCycle)
 	expect(power.voltage).toEqual(DEFAULT_POWER.voltage)
+})
+
+test('rotator moving follows angle and home vector states', () => {
+	const manager = new RotatorManager()
+	const rotator = setupDevice<Rotator>(structuredClone(DEFAULT_ROTATOR))
+	manager.add(rotator)
+
+	const home: DefSwitchVector = {
+		device: rotator.name,
+		name: 'ROTATOR_HOME',
+		permission: 'rw',
+		rule: 'AtMostOne',
+		state: 'Idle',
+		elements: { HOME: defSwitch('HOME', false) },
+	}
+	const angle: DefNumberVector = {
+		device: rotator.name,
+		name: 'ABS_ROTATOR_ANGLE',
+		permission: 'rw',
+		state: 'Idle',
+		elements: { ANGLE: defNumber('ANGLE', 0) },
+	}
+
+	manager.switchVector(client, home, 'defSwitchVector')
+	manager.vector(client, home, 'defSwitchVector')
+	manager.numberVector(client, angle, 'defNumberVector')
+	manager.vector(client, angle, 'defNumberVector')
+
+	const busyHome: SetSwitchVector = { device: rotator.name, name: 'ROTATOR_HOME', state: 'Busy', elements: { HOME: defSwitch('HOME', true) } }
+	manager.switchVector(client, busyHome, 'setSwitchVector')
+	manager.vector(client, busyHome, 'setSwitchVector')
+	expect(rotator.moving).toBeTrue()
+
+	const busyAngle: SetNumberVector = { device: rotator.name, name: 'ABS_ROTATOR_ANGLE', state: 'Busy', elements: { ANGLE: { name: 'ANGLE', value: 0 } } }
+	manager.numberVector(client, busyAngle, 'setNumberVector')
+	manager.vector(client, busyAngle, 'setNumberVector')
+	const idleHome: SetSwitchVector = { device: rotator.name, name: 'ROTATOR_HOME', state: 'Idle', elements: { HOME: defSwitch('HOME', false) } }
+	manager.switchVector(client, idleHome, 'setSwitchVector')
+	manager.vector(client, idleHome, 'setSwitchVector')
+	expect(rotator.moving).toBeTrue()
+
+	const idleAngle: SetNumberVector = { device: rotator.name, name: 'ABS_ROTATOR_ANGLE', state: 'Idle', elements: { ANGLE: { name: 'ANGLE', value: 0 } } }
+	manager.numberVector(client, idleAngle, 'setNumberVector')
+	manager.vector(client, idleAngle, 'setNumberVector')
+	expect(rotator.moving).toBeFalse()
 })
 
 test('power cycle capability follows the POWER_CYCLE vector', () => {
