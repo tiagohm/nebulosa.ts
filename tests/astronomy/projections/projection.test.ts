@@ -194,6 +194,33 @@ describe('cylindrical projections round-trip', () => {
 	}
 })
 
+test('mercator and web mercator round-trip with a non-zero central meridian', () => {
+	const longitude = deg(45)
+	const latitude = deg(10)
+	const options = { centralMeridian: deg(30) } as const
+	const westOptions = { centralMeridian: deg(30), raAxisDirection: 'west' } as const
+
+	for (const { projection, callOptions } of [
+		{ projection: new Mercator(options), callOptions: undefined },
+		{ projection: new Mercator(), callOptions: options },
+		{ projection: new Mercator(westOptions), callOptions: undefined },
+		{ projection: new Mercator(), callOptions: westOptions },
+		{ projection: new WebMercator(), callOptions: options },
+		{ projection: new WebMercator(), callOptions: westOptions },
+	]) {
+		const projected = projection.project(longitude, latitude, undefined, callOptions)
+		expect(projected).toBeDefined()
+		if (projected === undefined) continue
+
+		const unprojected = projection.unproject(projected.x, projected.y, undefined, callOptions)
+		expect(unprojected).toBeDefined()
+		if (unprojected === undefined) continue
+
+		expect(normalizePI(unprojected.x - longitude)).toBeCloseTo(0, 12)
+		expect(unprojected.y).toBeCloseTo(latitude, 12)
+	}
+})
+
 test('standard-parallel projections round-trip with a non-zero central meridian', () => {
 	// These previously failed: the equal-area and stereographic projects scaled the longitude by
 	// cos(standardParallel) before subtracting the central meridian, and the stereographic inverse

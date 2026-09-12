@@ -234,7 +234,7 @@ export class Mercator extends CylindricalProjection {
 	unproject(x: number, y: number, out?: Point, options?: ProjectionOptions) {
 		out = unprojectPoint(out, x, y, options, this.options)
 		if (out === undefined) return undefined
-		const longitude = longitudeFromLambda(out.x, options, this.options)
+		const longitude = longitudeFromDelta(out.x, options, this.options)
 		const latitude = latitudeInRange(Math.atan(Math.sinh(out.y)), options, this.options, DEFAULT_MAX_MERCATOR_LATITUDE)
 		return longitude === undefined || latitude === undefined ? undefined : fillPoint(out, longitude, latitude)
 	}
