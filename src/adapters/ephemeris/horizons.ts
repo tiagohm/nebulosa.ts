@@ -1,5 +1,5 @@
 import { formatTemporal, temporalGet, type Temporal } from '../../astronomy/time/temporal'
-import { toJulianDay, type Time } from '../../astronomy/time/time'
+import { tdb, timeUnix, toJulianDay, utc, type Time } from '../../astronomy/time/time'
 import { type ReadCsvOptions, readCsv } from '../../io/csv'
 import { type Angle, toDeg } from '../../math/units/angle'
 import { type Distance, toKilometer } from '../../math/units/distance'
@@ -478,17 +478,22 @@ function makeParametersFromInput(parameters: HorizonsQueryParameters, input: str
 
 // https://ssd.jpl.nasa.gov/horizons/manual.html#time
 function makeParametersFromStartAndStopTime(parameters: HorizonsQueryParameters, startTime: Temporal | Time, endTime: Temporal | Time) {
-	if (typeof startTime === 'number') {
-		parameters.START_TIME = formatTemporal(startTime)
-	} else {
-		parameters.START_TIME = `JD ${startTime.day + startTime.fraction}`
+	const isObserver = parameters.EPHEM_TYPE === 'OBSERVER'
+	const timeType = isObserver ? 'UT' : 'TDB'
+	if (parameters.EPHEM_TYPE !== 'SPK') parameters.TIME_TYPE = timeType
+	parameters.START_TIME = formatHorizonsTime(startTime, timeType, parameters.EPHEM_TYPE === 'SPK')
+	parameters.STOP_TIME = formatHorizonsTime(endTime, timeType, parameters.EPHEM_TYPE === 'SPK')
+}
+
+// Converts a project time to the scale accepted by the requested Horizons ephemeris type.
+function formatHorizonsTime(time: Temporal | Time, timeType: TimeType, includeScale: boolean) {
+	if (typeof time === 'number') {
+		if (timeType === 'UT') return formatTemporal(time)
+		time = timeUnix(time / 1000)
 	}
 
-	if (typeof endTime === 'number') {
-		parameters.STOP_TIME = formatTemporal(endTime)
-	} else {
-		parameters.STOP_TIME = `JD ${endTime.day + endTime.fraction}`
-	}
+	const converted = timeType === 'UT' ? utc(time) : tdb(time)
+	return `JD ${toJulianDay(converted)}${includeScale ? ` ${timeType}` : ''}`
 }
 
 // Sets the CENTER and, for coordinate centers, the SITE_COORD/COORD_TYPE parameters.

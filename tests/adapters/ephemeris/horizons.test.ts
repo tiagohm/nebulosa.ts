@@ -4,7 +4,7 @@ import { readDaf } from '../../../src/astronomy/ephemeris/kernels/daf'
 import { extendedPermanentAsteroidNumber } from '../../../src/astronomy/ephemeris/kernels/naif'
 import { readSpk } from '../../../src/astronomy/ephemeris/kernels/spk'
 import { temporalAdd, temporalFromDate } from '../../../src/astronomy/time/temporal'
-import { Timescale, timeYMDHMS } from '../../../src/astronomy/time/time'
+import { tdb, timeUnix, Timescale, timeYMDHMS } from '../../../src/astronomy/time/time'
 import type { CsvRow } from '../../../src/io/csv'
 import { bufferSource } from '../../../src/io/io'
 import { deg } from '../../../src/math/units/angle'
@@ -237,6 +237,17 @@ test('elements defaults to the ecliptic reference plane', async () => {
 	const requests = await captureHorizonsRequests(() => elements('3517;', '500@10', START_TIME, END_TIME))
 
 	expect(queryValue(requests[0], 'REF_PLANE')).toBe('ECLIPTIC')
+})
+
+test('vector normalizes input times to TDB', async () => {
+	const temporalRequests = await captureHorizonsRequests(() => vector('3517;', '500@10', false, START_TIME, END_TIME, { stepSize: 5 }))
+	const startTime = tdb(timeUnix(START_TIME / 1000))
+	const endTime = tdb(timeUnix(END_TIME / 1000))
+	const timeRequests = await captureHorizonsRequests(() => vector('3517;', '500@10', false, startTime, endTime, { stepSize: 5 }))
+
+	expect(queryValue(temporalRequests[0], 'TIME_TYPE')).toBe('TDB')
+	expect(queryValue(temporalRequests[0], 'START_TIME')).toBe(queryValue(timeRequests[0], 'START_TIME'))
+	expect(queryValue(temporalRequests[0], 'STOP_TIME')).toBe(queryValue(timeRequests[0], 'STOP_TIME'))
 })
 
 async function captureHorizonsRequests(callback: () => Promise<unknown>, responses: readonly string[] = ['']) {
