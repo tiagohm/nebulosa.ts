@@ -1018,7 +1018,7 @@ export class FirmataClient implements Disposable {
 		message[0] = START_SYSEX
 		message[1] = TWO_WIRE_REQUEST
 		message[2] = address & 0x7f
-		message[3] = ((address >>> 7) & 0x7) | (operationMode === 'write' ? TWO_WIRE_WRITE : operationMode === 'read' ? TWO_WIRE_READ : operationMode === 'readContinuously' ? TWO_WIRE_READ_CONTINUOUS : TWO_WIRE_STOP_READ) | (addressMode === 7 ? 0 : 0x20) | (autoRestart === 'stop' ? 0x40 : 0)
+		message[3] = ((address >>> 7) & 0x7) | (operationMode === 'write' ? TWO_WIRE_WRITE : operationMode === 'read' ? TWO_WIRE_READ : operationMode === 'readContinuously' ? TWO_WIRE_READ_CONTINUOUS : TWO_WIRE_STOP_READ) | (addressMode === 7 ? 0 : 0x20) | (autoRestart === 'restart' ? 0x40 : 0)
 
 		if (data !== undefined) {
 			for (let i = 0, offset = 4; i < data.length; i++, offset += 2) {
