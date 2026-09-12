@@ -159,6 +159,8 @@ export class BMP180 extends PeripheralBase<BMP180> implements Barometer, Altimet
 		this.client.removeHandler(this)
 		clearInterval(this.#timer)
 		this.#timer = undefined
+		this.#initialized = false
+		this.#command = BMP180.READ_TEMP_CMD
 	}
 
 	// Requests the 22-byte factory calibration block.
@@ -290,6 +292,7 @@ export class BMP280 extends PeripheralBase<BMP280> implements Barometer, Altimet
 		this.client.removeHandler(this)
 		clearInterval(this.#timer)
 		this.#timer = undefined
+		this.#initialized = false
 	}
 
 	// Ingests the 24-byte calibration block (starting polling once valid), then decodes each 6-byte data

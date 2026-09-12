@@ -586,6 +586,39 @@ test('BMP180 reads high unsigned raw temperatures', () => {
 	bmp180.stop()
 })
 
+test('BMP180 reinitializes after stopping', () => {
+	const client = new MockFirmataClient()
+	const bmp180 = new BMP180(client as never, 0)
+	const calibration = Buffer.alloc(22)
+
+	bmp180.start()
+	bmp180.twoWireMessage(client as never, BMP180.ADDRESS, 0xaa, calibration)
+	bmp180.stop()
+	bmp180.start()
+	bmp180.twoWireMessage(client as never, BMP180.ADDRESS, 0xaa, calibration)
+
+	expect(client.messages.filter((message) => message[0] === 'read' && message[2] === 0xaa)).toHaveLength(2)
+	expect(client.messages.filter((message) => message[0] === 'write')).toHaveLength(2)
+	bmp180.stop()
+})
+
+test('BMP280 reinitializes after stopping', () => {
+	const client = new MockFirmataClient()
+	const bmp280 = new BMP280(client as never, BMP280.ADDRESS, 100)
+	const calibration = Buffer.alloc(24)
+	calibration.writeUInt16LE(36477, 6)
+
+	bmp280.start()
+	bmp280.twoWireMessage(client as never, BMP280.ADDRESS, 0x88, calibration)
+	bmp280.stop()
+	bmp280.start()
+	bmp280.twoWireMessage(client as never, BMP280.ADDRESS, 0x88, calibration)
+
+	expect(client.messages.filter((message) => message[0] === 'read' && message[2] === 0x88)).toHaveLength(2)
+	expect(client.messages.filter((message) => message[0] === 'read' && message[2] === 0xf7)).toHaveLength(2)
+	bmp280.stop()
+})
+
 test('BMP280 compensate temperature & pressure', () => {
 	const bmp280 = new BMP280(undefined as never, 0)
 	expect(bmp280.compensateTemperature(519888)).toBeCloseTo(25.08, 2)
