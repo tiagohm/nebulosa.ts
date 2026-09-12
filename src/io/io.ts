@@ -250,6 +250,9 @@ export class RangeHttpSource implements Source, Seekable {
 		if (size === 0) return 0
 
 		const response = await fetch(this.uri, { headers: { 'Accept-Encoding': 'identity', Range: `bytes=${this.position}-${this.position + size - 1}` } })
+		// RFC 9110: a first-byte-pos at or past the resource length is 416.
+		// Source.read must return 0 at EOF, matching FileHandleSource and BufferSource.
+		if (response.status === 416) return 0
 		// A successful range is 206 Partial Content. 200 OK is the full representation
 		// (Range ignored or lost on redirect/proxy/cache); copying from the start of
 		// that body would return the wrong bytes when position > 0.

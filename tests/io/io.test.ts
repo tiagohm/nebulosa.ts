@@ -3,7 +3,7 @@ import fs from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { FitsKeywordReader, FitsKeywordWriter } from '../../src/io/formats/fits/fits'
-import { type Base64Alphabet, base64Sink, base64Source, bufferSink, bufferSource, fileHandleSink, fileHandleSource, GrowableBuffer, rangeHttpSource, readableStreamSource, readLines, readUntil, type Source } from '../../src/io/io'
+import { type Base64Alphabet, base64Sink, base64Source, bufferSink, bufferSource, fileHandleSink, fileHandleSource, GrowableBuffer, rangeHttpSource, readableStreamSource, readLines, readRemaining, readUntil, type Source } from '../../src/io/io'
 
 test('bufferSink', () => {
 	const buffer = Buffer.allocUnsafe(16)
@@ -551,6 +551,49 @@ describe('rangeHttpSource', () => {
 			globalThis.fetch = restore
 		}
 	})
+
+	test('returns 0 at EOF instead of throwing HTTP 416', async () => {
+		const restore = mockRangeFetch(Buffer.from('abcdefghijklmnopqrstuvwxyz'))
+
+		try {
+			const source = rangeHttpSource('https://example.test/data')
+			const all = Buffer.allocUnsafe(26)
+			expect(await source.read(all)).toBe(26)
+			expect(all.toString('ascii')).toBe('abcdefghijklmnopqrstuvwxyz')
+
+			const extra = Buffer.alloc(5, 0)
+			expect(await source.read(extra)).toBe(0)
+			expect(source.position).toBe(26)
+		} finally {
+			globalThis.fetch = restore
+		}
+	})
+
+	test('readUntil past the resource length returns the body without throwing', async () => {
+		const data = Buffer.from('abcdefghijklmnopqrstuvwxyz')
+		const restore = mockRangeFetch(data)
+
+		try {
+			const source = rangeHttpSource('https://example.test/data')
+			const output = Buffer.alloc(100, 0)
+			expect(await readUntil(source, output, 100)).toBe(26)
+			expect(output.subarray(0, 26)).toEqual(data)
+		} finally {
+			globalThis.fetch = restore
+		}
+	})
+
+	test('readRemaining downloads the entire ranged resource', async () => {
+		const data = Buffer.from('abcdefghijklmnopqrstuvwxyz')
+		const restore = mockRangeFetch(data)
+
+		try {
+			const source = rangeHttpSource('https://example.test/data')
+			expect(await readRemaining(source)).toEqual(data)
+		} finally {
+			globalThis.fetch = restore
+		}
+	})
 })
 
 function randomBase64(n: number, alphabet: Base64Alphabet) {
@@ -573,6 +616,7 @@ function mockRangeFetch(data: Buffer, chunkSize?: number) {
 
 		const start = Math.trunc(Number(match[1]))
 		const end = Math.trunc(Number(match[2]))
+		if (!(start >= 0 && start < data.byteLength)) return new Response(null, { status: 416 })
 		const slice = data.subarray(start, Math.min(end + 1, data.byteLength))
 		const body = new Uint8Array(slice.buffer, slice.byteOffset, slice.byteLength)
 
