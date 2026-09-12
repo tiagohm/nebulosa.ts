@@ -649,8 +649,10 @@ export class MountSimulator extends DeviceSimulator {
 		switch (vector.name) {
 			case 'TIME_UTC':
 				if (vector.elements.UTC) {
-					const utc = Date.parse(`${vector.elements.UTC}Z`)
-					const offset = Math.trunc(+vector.elements.OFFSET * 60)
+					const utcText = vector.elements.UTC
+					const hasTimezone = /[zZ]$|[+-]\d{2}(?::?\d{2})?$/.test(utcText)
+					const utc = Date.parse(hasTimezone ? utcText : `${utcText}Z`)
+					const offset = vector.elements.OFFSET === undefined ? this.#utcOffset : Math.trunc(+vector.elements.OFFSET * 60)
 					if (!Number.isNaN(utc)) this.setTime({ utc, offset })
 				}
 		}
