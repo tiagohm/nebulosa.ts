@@ -1167,6 +1167,7 @@ test('TSL2561 calculates lux from channel data', () => {
 	const tsl2561 = new TSL2561(undefined as never)
 	expect(tsl2561.calculateLux(67, 12)).toBeCloseTo(26.605572786225, 6)
 	expect(tsl2561.calculateLux(0, 0)).toBe(0)
+	expect(tsl2561.calculateLux(65535, 12)).toBe(TSL2561.SATURATED_LUX)
 })
 
 test('TSL2561 configures i2c reads and emits lux updates', () => {
@@ -1195,6 +1196,10 @@ test('TSL2561 configures i2c reads and emits lux updates', () => {
 
 	tsl2561.twoWireMessage(client as never, TSL2561.ADDRESS, TSL2561.COMMAND_BIT | TSL2561.BLOCK_BIT | TSL2561.DATA0LOW_REG, Buffer.from([0x43, 0x00, 0x0c, 0x00]))
 	expect(updates).toBe(1)
+
+	tsl2561.twoWireMessage(client as never, TSL2561.ADDRESS, TSL2561.COMMAND_BIT | TSL2561.BLOCK_BIT | TSL2561.DATA0LOW_REG, Buffer.from([0xff, 0xff, 0x0c, 0x00]))
+	expect(tsl2561.lux).toBe(TSL2561.SATURATED_LUX)
+	expect(updates).toBe(2)
 
 	tsl2561.stop()
 	expect(client.handlers.size).toBe(0)

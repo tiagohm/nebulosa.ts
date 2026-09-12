@@ -235,6 +235,8 @@ export class TSL2561 extends PeripheralBase<TSL2561> implements Luxmeter {
 	static readonly CLIP_13_7_MS = 5047
 	static readonly CLIP_101_MS = 37177
 	static readonly CLIP_402_MS = 65535
+	// Lux sentinel returned when an ADC channel exceeds its configured full-scale threshold.
+	static readonly SATURATED_LUX = 65536
 
 	#timer?: NodeJS.Timeout
 	// Timing-register byte and the precomputed gain/integration scales, clip threshold, and minimum poll.
@@ -306,7 +308,7 @@ export class TSL2561 extends PeripheralBase<TSL2561> implements Luxmeter {
 	// Converts raw channel counts into lux using the T package coefficients from the datasheet.
 	calculateLux(broadband: number, infrared: number) {
 		if (broadband <= 0 || infrared < 0) return 0
-		if (broadband >= this.#clipThreshold || infrared >= this.#clipThreshold) return this.lux
+		if (broadband >= this.#clipThreshold || infrared >= this.#clipThreshold) return TSL2561.SATURATED_LUX
 
 		const scaledBroadband = broadband * this.#gainScale * this.#integrationScale
 		const scaledInfrared = infrared * this.#gainScale * this.#integrationScale
