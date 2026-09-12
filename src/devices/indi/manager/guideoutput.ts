@@ -106,7 +106,15 @@ export class GuideOutputManager extends DeviceManager<GuideOutput> {
 				return
 			}
 			case 'GUIDE_RATE': {
-				const device = this.get(client, message.device)
+				let device = this.get(client, message.device)
+
+				if (device === undefined && tag[0] === 'd') {
+					const parent = this.provider.get(client, message.device, 'mount') ?? this.provider.get(client, message.device, 'camera')
+
+					if (parent !== undefined && handleSwitchValue(parent, 'canPulseGuide', true)) {
+						device = this.#addProxy(client, parent)
+					}
+				}
 
 				if (device !== undefined) {
 					if (tag[0] === 'd') {

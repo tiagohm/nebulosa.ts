@@ -3,7 +3,7 @@ import { CLIENT, DEFAULT_MOUNT } from '../../../../src/devices/indi/device'
 import { GuideOutputManager } from '../../../../src/devices/indi/manager/guideoutput'
 import { MountManager } from '../../../../src/devices/indi/manager/mount'
 import type { DefNumberVector } from '../../../../src/devices/indi/types'
-import { client, createRecordingClient } from './util'
+import { client, createRecordingClient, defNumber } from './util'
 
 test('clears the opposite timed-guide element for each pulse', () => {
 	const { recordingClient, numberCommands } = createRecordingClient()
@@ -25,6 +25,37 @@ test('clears the opposite timed-guide element for each pulse', () => {
 		{ name: 'TELESCOPE_TIMED_GUIDE_WE', elements: { TIMED_GUIDE_W: 150, TIMED_GUIDE_E: 0 } },
 		{ name: 'TELESCOPE_TIMED_GUIDE_WE', elements: { TIMED_GUIDE_W: 0, TIMED_GUIDE_E: 100 } },
 	])
+})
+
+test('handles guide-rate definitions before timed-guide definitions', () => {
+	const mountManager = new MountManager()
+	const mount = structuredClone(DEFAULT_MOUNT)
+	mount.id = Bun.randomUUIDv7()
+	mount.name = 'Mount'
+	Object.defineProperty(mount, CLIENT, { value: client })
+	mountManager.add(mount)
+
+	const manager = new GuideOutputManager(mountManager)
+	const guideRate: DefNumberVector = {
+		device: mount.name,
+		name: 'GUIDE_RATE',
+		permission: 'rw',
+		state: 'Ok',
+		elements: {
+			GUIDE_RATE_WE: defNumber('GUIDE_RATE_WE', 0.5),
+			GUIDE_RATE_NS: defNumber('GUIDE_RATE_NS', 0.3),
+		},
+	}
+
+	manager.numberVector(client, guideRate, 'defNumberVector')
+	manager.numberVector(client, { device: mount.name, name: 'TELESCOPE_TIMED_GUIDE_NS', permission: 'rw', state: 'Ok', elements: {} }, 'defNumberVector')
+	manager.numberVector(client, { device: mount.name, name: 'TELESCOPE_TIMED_GUIDE_WE', permission: 'rw', state: 'Ok', elements: {} }, 'defNumberVector')
+
+	const guideOutput = manager.get(client, mount.name)!
+	expect(guideOutput.canPulseGuide).toBeTrue()
+	expect(guideOutput.hasGuideRate).toBeTrue()
+	expect(guideOutput.canSetGuideRate).toBeTrue()
+	expect(guideOutput.guideRate).toEqual({ rightAscension: 0.5, declination: 0.3 })
 })
 
 test('remains pulsing until both timed-guide axes finish', () => {
