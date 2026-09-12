@@ -214,7 +214,7 @@ export async function identify(dateTime: Temporal | Time, longitude: Angle, lati
 // (a date or a relative `${n}d` span, default 7 days), within `distance` lunar distances (default 10).
 // Performs a network request.
 export async function closeApproaches(dateMin?: Temporal | 'now', dateMax: Temporal | `${number}d` = '7d', distance: number = 10) {
-	dateMin = !dateMin || dateMin === 'now' ? temporalNow() : dateMin
+	dateMin = dateMin === undefined || dateMin === 'now' ? temporalNow() : dateMin
 	const maxDate = typeof dateMax === 'string' ? temporalAdd(dateMin, Number(dateMax.slice(0, dateMax.length - 1)), 'd') : dateMax
 	const uri = `${SBD_BASE_URL}${CLOSE_APPROACHES_PATH}&date-min=${formatTemporal(dateMin, DATE_FORMAT)}&date-max=${formatTemporal(maxDate, DATE_FORMAT)}&dist-max=${distance}LD`
 	const response = await fetch(uri)

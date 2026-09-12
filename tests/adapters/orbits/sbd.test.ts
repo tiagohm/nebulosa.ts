@@ -149,6 +149,12 @@ test('relative close-approach end date starts at the requested minimum', async (
 	expect(request.searchParams.get('date-max')).toBe('2024-03-20')
 })
 
+test('preserves the Unix epoch as the close-approach minimum', async () => {
+	const request = await captureCloseApproachRequest(() => closeApproaches(temporalFromDate(1970, 1, 1), temporalFromDate(1970, 1, 2)))
+
+	expect(request.searchParams.get('date-min')).toBe('1970-01-01')
+})
+
 async function captureCloseApproachRequest(callback: () => Promise<unknown>) {
 	const restore = globalThis.fetch
 	let request = ''
