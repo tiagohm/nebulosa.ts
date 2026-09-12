@@ -594,7 +594,7 @@ function areaAndBoundaries(geometry: TiledSkyGeometry, rightAscension: Angle, de
 	const northBoundary = decBoundaries[band + 1]
 
 	if (count === 1) {
-		return { area: band === 0 ? 1 : areaCount, spaceEast: TAU, spaceWest: TAU, spaceNorth: northBoundary - declination, spaceSouth: declination - southBoundary }
+		return { area: areaOffsets[band] + 1, spaceEast: TAU, spaceWest: TAU, spaceNorth: northBoundary - declination, spaceSouth: declination - southBoundary }
 	}
 
 	const rotation = (normalizeAngle(rightAscension) * count) / TAU
