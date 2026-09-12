@@ -133,4 +133,25 @@ describe.skipIf(SKIP)('focuser simulator', () => {
 		await waitUntil(() => !simulator.isMoving)
 		expect(simulator.effectivePosition).toBeCloseTo(29950, 6)
 	})
+
+	test('retargets an active move to the current position', async () => {
+		using client = new ClientSimulator('focuser', new IndiClientHandlerSet())
+		using simulator = new FocuserSimulator('Focuser Simulator', client)
+
+		simulator.connect()
+		const initial = simulator.position
+		simulator.moveTo(initial + 40000)
+		expect(simulator.isMoving).toBeTrue()
+		simulator.moveTo(initial)
+		expect(simulator.isMoving).toBeFalse()
+		expect(simulator.position).toBe(initial)
+
+		simulator.moveTo(initial + 30000)
+		await waitUntil(() => simulator.position > initial)
+		const current = simulator.position
+		simulator.moveTo(current)
+		expect(simulator.isMoving).toBeFalse()
+		await Bun.sleep(250)
+		expect(simulator.position).toBe(current)
+	})
 })
