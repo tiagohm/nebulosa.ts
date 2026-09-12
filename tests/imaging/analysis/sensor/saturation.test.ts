@@ -63,6 +63,13 @@ test('detects variance collapse and uses digital range only as low-confidence fa
 	expect(fallback).toEqual({ signal: 1000, capacity: 2000, index: -1, method: 'digitalRange', confidence: 0.2 })
 })
 
+test('uses the global PTC variance maximum after a local dip', () => {
+	const result = detectSensorSaturation([point(0, 100, 50), point(1, 200, 100), point(2, 300, 88), point(3, 500, 200), point(4, 700, 250), point(5, 800, 100)], GAIN)
+	expect(result?.method).toBe('variance')
+	expect(result?.signal).toBe(700)
+	expect(result?.index).toBe(4)
+})
+
 test('requires an earlier valid variance sample before reporting collapse', () => {
 	const result = detectSensorSaturation([invalid(point(0, 100, 20)), point(1, 300, 160), point(2, 500, 100)], GAIN)
 	expect(result).toBeUndefined()

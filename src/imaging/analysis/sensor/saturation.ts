@@ -86,14 +86,18 @@ export function detectSensorSaturation(points: readonly PhotonTransferPoint[], g
 	let peak = -1
 	let peakVariance = Number.NEGATIVE_INFINITY
 	for (let i = 0; i < valid.length; i++) {
-		const point = valid[i]
-		if (point.variance > peakVariance) {
-			peakVariance = point.variance
+		if (valid[i].variance > peakVariance) {
+			peakVariance = valid[i].variance
 			peak = i
-		} else if (peak >= 1 && point.variance < peakVariance * 0.9 && point.signal >= valid[peak].signal) {
-			const selected = valid[peak]
-			const result = saturation(selected, selected.signal, 'variance', 0.75, gain)
-			if (result) return result
+		}
+	}
+	if (peak >= 1) {
+		const selected = valid[peak]
+		for (let i = peak + 1; i < valid.length; i++) {
+			if (valid[i].variance < peakVariance * 0.9 && valid[i].signal >= selected.signal) {
+				const result = saturation(selected, selected.signal, 'variance', 0.75, gain)
+				if (result) return result
+			}
 		}
 	}
 
