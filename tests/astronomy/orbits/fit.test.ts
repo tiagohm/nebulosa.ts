@@ -105,6 +105,17 @@ test('recovers a noiseless orbit to near machine precision', () => {
 	expect(result.rms).toBeLessThan(1e-9)
 })
 
+test('continues when a short-arc correction is dominated by velocity', () => {
+	const observations = makeSyntheticObservations({ count: 3, spacingDays: 0.05, noiseSigma: 0 })
+	const velocity: MutVec3 = [TRUE_ORBIT.velocity[0] + 3e-7, TRUE_ORBIT.velocity[1], TRUE_ORBIT.velocity[2]]
+	const result = fitOrbit(observations, EPOCH, TRUE_ORBIT.position, velocity)
+
+	expect(result.converged).toBeTrue()
+	expect(result.iterations).toBeGreaterThan(1)
+	expect(vecDistance(result.state.velocity, TRUE_ORBIT.velocity)).toBeLessThan(1e-11)
+	expect(result.chi2).toBeLessThan(1e-18)
+})
+
 test('uses the short residual across the RA wrap boundary', () => {
 	const p: MutVec3 = [1, 1e-6, 0]
 	const v: MutVec3 = [0, 0.017, 0.001]
