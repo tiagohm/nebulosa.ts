@@ -132,6 +132,41 @@ describe.skipIf(SKIP)('dome simulator', () => {
 		expect(manager.properties.length).toBe(0)
 	}, 15000)
 
+	test('keeps home and park states exclusive', async () => {
+		const handler = new IndiClientHandlerSet()
+		const manager = new DomeManager()
+		handler.add(manager)
+
+		using client = new ClientSimulator('dome.state', handler)
+		using simulator = new DomeSimulator('Dome Simulator', client)
+		const dome = manager.get(client, simulator.name)!
+
+		manager.connect(dome)
+		await waitUntil(() => dome.connected)
+		manager.speed(dome, 12)
+		await waitUntil(() => dome.speed.value === 12)
+
+		manager.home(dome)
+		await waitUntil(() => dome.atHome)
+		manager.unpark(dome)
+		expect(dome.atHome).toBeTrue()
+
+		manager.park(dome)
+		await waitUntil(() => dome.parking)
+		manager.unpark(dome)
+		expect(dome.moving).toBeFalse()
+		expect(dome.parking).toBeFalse()
+		expect(dome.parked).toBeFalse()
+		await Bun.sleep(250)
+		expect(dome.parked).toBeFalse()
+
+		manager.park(dome)
+		await waitUntil(() => dome.parked)
+		manager.home(dome)
+		await waitUntil(() => dome.homing)
+		expect(dome.parking).toBeFalse()
+	}, 10000)
+
 	test('persists dome configuration but excludes transient operations', () => {
 		const saved: string[] = []
 		const handler = new IndiClientHandlerSet()

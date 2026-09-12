@@ -273,8 +273,13 @@ export class DomeSimulator extends DeviceSimulator {
 	unpark() {
 		if (!this.isConnected) return
 
+		if (this.#operation === 'park' || this.#park.state === 'Busy') this.stopMotion(false)
 		this.clearParkState('Ok')
-		this.clearHomeState('Ok')
+		if (this.#goto.elements.DOME_PARK.value) {
+			this.#goto.elements.DOME_PARK.value = false
+			this.#goto.state = 'Ok'
+			this.notify(this.#goto)
+		}
 	}
 
 	// Stores the current azimuth as the park position in both supported number vectors.
@@ -406,9 +411,11 @@ export class DomeSimulator extends DeviceSimulator {
 		} else if (operation === 'home') {
 			this.#goto.state = 'Busy'
 			this.#goto.elements.DOME_HOME.value = true
+			this.#goto.elements.DOME_PARK.value = false
 			this.notify(this.#goto)
 		} else if (operation === 'park') {
 			this.#goto.state = 'Busy'
+			this.#goto.elements.DOME_HOME.value = false
 			this.#goto.elements.DOME_PARK.value = true
 			this.#park.state = 'Busy'
 			this.#park.elements.PARK.value = true
