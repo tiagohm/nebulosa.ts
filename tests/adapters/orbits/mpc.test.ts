@@ -401,6 +401,10 @@ describe('packed designations', () => {
 		expect(packMPCDesignation('P/2023 BA')).toBe('PK23B00A')
 		expect(unpackMPCDesignation('J013S')).toBe('J 13')
 		expect(packMPCDesignation('J 13')).toBe('J013S')
+		expect(unpackMPCDesignation('SJ99U030')).toBe('S/1999 U 3')
+		expect(packMPCDesignation('S/1999 U 3')).toBe('SJ99U030')
+		expect(unpackMPCDesignation('SK20J010')).toBe('S/2020 J 1')
+		expect(packMPCDesignation('S/2020 J 1')).toBe('SK20J010')
 	})
 })
 
@@ -414,6 +418,13 @@ describe('MPC80', () => {
 		expect(observation.rightAscension).toBeCloseTo(0, 10)
 		expect(observation.declination).toBeCloseTo(0, 10)
 		expect(observation.station).toBe('500')
+		expect(writeMPC80(observation)).toBe(line)
+	})
+
+	test('provisional natural satellite ids use columns 5-12', () => {
+		const line = mpc80('    SJ99U030  C2000 01 01.00000000 00 00.000+00 00 00.00                     500')
+		const observation = parseMPC80(line)
+		expect(observation.provisionalId).toBe('S/1999 U 3')
 		expect(writeMPC80(observation)).toBe(line)
 	})
 

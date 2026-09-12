@@ -1745,7 +1745,7 @@ export function packMPCDesignation(value: string): string {
 	throw new RangeError(`designation "${value}" cannot be packed`)
 }
 
-const PACKED_PCDXAI_12_REGEX = /^[\d ]{4}[PCDXAI]/
+const PACKED_PCDXAI_12_REGEX = /^[\d ]{4}[PCDXAIS]/
 
 // Unpacks a 5/7/8/12-character MPC packed designation, including the extended `_YHxxxx` scheme.
 export function unpackMPCDesignation(value: string): string {
@@ -1760,13 +1760,14 @@ export function unpackMPCDesignation(value: string): string {
 		if (/^\d{4}[PCDXAI]$/.test(trimmed)) return `${+trimmed.slice(0, 4)}${trimmed[4]}`
 	}
 
+	if (trimmed.length === 8 && trimmed.startsWith('S')) return `S/${unpackMPCNaturalSatellite(trimmed.slice(1))}`
 	if (trimmed.length === 8 && /^[PCDXAI]_/.test(trimmed)) return `${trimmed[0]}/${unpackMPCDesignation(trimmed.slice(1))}`
 	if (trimmed.length === 8 && /^[PCDXAI][IJKL_]/.test(trimmed)) return `${trimmed[0]}/${unpackMPCDesignation(trimmed.slice(1))}`
 
 	if (trimmed.length === 12 && PACKED_PCDXAI_12_REGEX.test(trimmed)) {
 		const number = trimmed.slice(0, 4).trim()
 		const type = trimmed[4]
-		const rest = unpackMPCDesignation(trimmed.slice(5))
+		const rest = type === 'S' ? unpackMPCNaturalSatellite(trimmed.slice(5)) : unpackMPCDesignation(trimmed.slice(5))
 		return number ? `${+number}${type}/${rest}` : `${type}/${rest}`
 	}
 
@@ -1786,10 +1787,18 @@ export function unpackMPCDesignation(value: string): string {
 	throw new RangeError(`packed designation "${value}" cannot be unpacked`)
 }
 
+// Unpacks the seven-character provisional tail used after the `S` natural-satellite prefix.
+function unpackMPCNaturalSatellite(value: string) {
+	const unpacked = unpackMPCDesignation(value)
+	const match = /^(\S+)\s+([JSUN])(\d+)$/.exec(unpacked)
+	if (!match) throw new RangeError(`packed natural-satellite designation "${value}" cannot be unpacked`)
+	return `${match[1]} ${match[2]} ${match[3]}`
+}
+
 const PACKED_PERMANENT_REGEX = /^(\d{5}|[A-Za-z]\d{4}|~[0-9A-Za-z]{4}|[JSUN]\d{3}S|\d{4}[PCDXAI])$/
 const PACKED_PROVISIONAL_PLST_REGEX = /^(PLS|T[123]S)\d{4}$/
 const PACKED_PROVISIONAL_IL_REGEX = /^[I-L]\d{2}/
-const PACKED_PCDXAI_8_REGEX = /^[PCDXAI]/
+const PACKED_PCDXAI_8_REGEX = /^[PCDXAIS]/
 
 function looksPacked(value: string) {
 	if (value.length === PACKED_PERMANENT_LENGTH) {
@@ -1831,6 +1840,11 @@ function parseSatelliteDesignation(value: string) {
 	if (packed) return `${packed[1]}${packed[2].padStart(3, '0')}S`
 	const readable = READABLE_SATELLITE_DESIGNATION_REGEX.exec(value)
 	if (readable) return `${readable[1]}${readable[2].padStart(3, '0')}S`
+	const provisional = /^S\/(A?\d{3,4})\s+([JSUN])\s+(\d+)$/.exec(value)
+	if (provisional) {
+		const packedProvisional = packCometProvisional(`${provisional[1]} ${provisional[2]}${provisional[3]}`)
+		if (packedProvisional) return `S${packedProvisional}`
+	}
 	return undefined
 }
 
@@ -2186,8 +2200,9 @@ function parseRadarPair(first: string, second: string): MPCRadarObservation {
 }
 
 function parseMpc80Ids(line: string) {
-	const packedPermanent = emptyToUndefined(line.slice(0, 5).trim())
-	const packedProvisional = emptyToUndefined(line.slice(5, 12).trim())
+	const packedNaturalSatellite = line.slice(0, 4).trim() === '' && line[4] === 'S' ? line.slice(4, 12).trim() : undefined
+	const packedPermanent = packedNaturalSatellite ? undefined : emptyToUndefined(line.slice(0, 5).trim())
+	const packedProvisional = packedNaturalSatellite ?? emptyToUndefined(line.slice(5, 12).trim())
 	let permanentId: string | undefined
 	let provisionalId: string | undefined
 	let temporaryId: string | undefined
@@ -2315,15 +2330,22 @@ function formatMpc80Ids(observation: MPCObservation) {
 	const permanent = observation.permanentId ? packMPCDesignation(observation.permanentId).padEnd(5).slice(0, 5) : '     '
 	const packedPermanent = permanent.length === 5 ? permanent : permanent.padStart(5, ' ')
 	let provisional = '       '
+	let naturalSatellite: string | undefined
 	const source = observation.provisionalId ?? observation.trackletSubmissionId
 
 	if (source) {
 		try {
 			const packed = packMPCDesignation(source)
-			provisional = packed.length === 7 ? packed : source.padEnd(7).slice(0, 7)
+			if (packed.length === 8 && packed.startsWith('S')) naturalSatellite = packed
+			else provisional = packed.length === 7 ? packed : source.padEnd(7).slice(0, 7)
 		} catch {
 			provisional = source.padEnd(7).slice(0, 7)
 		}
+	}
+
+	if (naturalSatellite) {
+		if (packedPermanent.trim()) throw new RangeError('natural-satellite provisional designation cannot have a permanent id')
+		return `${packedPermanent.slice(0, 4)}${naturalSatellite}`
 	}
 
 	const ids = `${packedPermanent}${provisional}`
