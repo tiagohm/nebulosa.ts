@@ -75,6 +75,17 @@ describe.skipIf(SKIP)('search', () => {
 		}
 	})
 
+	test('alternate designations', async () => {
+		const data = await search('Eros')
+		expect('object' in data).toBeTrue()
+
+		if ('object' in data) {
+			expect(data.object.prefix).toBeNull()
+			expect(data.object.des_alt[0].des).toBe('1956 PC')
+			expect(data.object.des_alt[1].pri).toBe('A898 PA')
+		}
+	})
+
 	test('failed', async () => {
 		const data = await search('ggdgdfgdfgdg')
 

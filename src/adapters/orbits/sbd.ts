@@ -35,6 +35,20 @@ export interface Signature {
 
 // https://ssd-api.jpl.nasa.gov/doc/sbdb.html
 
+// One alternate designation entry returned by SBDB, with one designation kind per object.
+export interface SmallBodySearchAlternateDesignation {
+	// Standard designation for the body.
+	readonly des?: string
+	// Primary designation for the body.
+	readonly pri?: string
+	// Component designation for the body.
+	readonly com?: string
+	// Related name for the body.
+	readonly rn?: string
+	// Year-letter designation for the body.
+	readonly yl?: string
+}
+
 // Object-identity block of an SBDB search result.
 export interface SmallBodySearchObject {
 	readonly orbit_id: string
@@ -46,12 +60,12 @@ export interface SmallBodySearchObject {
 	readonly neo: boolean
 	// True if a potentially hazardous asteroid.
 	readonly pha: boolean
-	readonly des_alt: string[]
+	readonly des_alt: SmallBodySearchAlternateDesignation[]
 	// Object kind: 'a' asteroid / 'c' comet, suffixed 'n' numbered / 'u' unnumbered.
 	readonly kind: 'an' | 'au' | 'cn' | 'cu'
 	readonly fullname: string
 	readonly shortname: string
-	readonly prefix: string
+	readonly prefix: string | null
 	readonly des: string
 	// SPICE kernel ID of the body.
 	readonly spkid: string
