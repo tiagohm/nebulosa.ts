@@ -16,6 +16,11 @@ import { DeviceManager, handleNumberValue, handleParkable, handleSwitchValue, ha
 // keeps the last selection, so every commit must be preceded by its own action.
 type AlignmentPointSetAction = 'DELETE' | 'CLEAR' | 'LOAD DATABASE' | 'SAVE DATABASE'
 
+// Coordinate-set capability remembered from the driver's ON_COORD_SET definition.
+type CoordinateSetOptions = {
+	track: boolean
+}
+
 // Element name of the ALIGNMENT_SUBSYSTEM_ACTIVE switch. INDI declares it with spaces, unlike every
 // other alignment element, so it must be spelled exactly like this.
 const ALIGNMENT_SUBSYSTEM_ACTIVE = 'ALIGNMENT SUBSYSTEM ACTIVE'
@@ -29,6 +34,8 @@ export class MountManager extends DeviceManager<Mount> {
 	// tolerates a driver that renamed it, so the write path must target the name really defined instead of
 	// the INDI constant, which such a driver would ignore.
 	readonly #alignmentActiveElements = new WeakMap<Mount, string>()
+	// Tracks whether each mount advertises TRACK as a coordinate-set mode.
+	readonly #coordinateSetOptions = new WeakMap<Mount, CoordinateSetOptions>()
 
 	tracking(mount: Mount, enable: boolean, client = mount[CLIENT]!) {
 		client.sendSwitch({ device: mount.name, name: 'TELESCOPE_TRACK_STATE', elements: { [enable ? 'TRACK_ON' : 'TRACK_OFF']: true } })
@@ -100,7 +107,8 @@ export class MountManager extends DeviceManager<Mount> {
 
 	goTo(mount: Mount, rightAscension: Angle, declination: Angle, client = mount[CLIENT]!) {
 		if (mount.canGoTo) {
-			client.sendSwitch({ device: mount.name, name: 'ON_COORD_SET', elements: { SLEW: true } })
+			const mode = this.#coordinateSetOptions.get(mount)?.track === true ? 'TRACK' : 'SLEW'
+			client.sendSwitch({ device: mount.name, name: 'ON_COORD_SET', elements: { [mode]: true } })
 			this.equatorialCoordinate(mount, rightAscension, declination, client)
 		}
 	}
@@ -460,11 +468,13 @@ export class MountManager extends DeviceManager<Mount> {
 				return
 			case 'ON_COORD_SET':
 				if (tag[0] === 'd') {
+					this.#coordinateSetOptions.set(device, { track: 'TRACK' in elements })
+
 					if (handleSwitchValue(device, 'canSync', 'SYNC' in elements)) {
 						this.updated(device, 'canSync', message.state)
 					}
 
-					if (handleSwitchValue(device, 'canGoTo', 'SLEW' in elements)) {
+					if (handleSwitchValue(device, 'canGoTo', 'SLEW' in elements || 'TRACK' in elements)) {
 						this.updated(device, 'canGoTo', message.state)
 					}
 
@@ -642,6 +652,7 @@ export class MountManager extends DeviceManager<Mount> {
 			resetDeviceValue(this, device, 'homing', DEFAULT_MOUNT.homing)
 		}
 		if (full || name === 'ON_COORD_SET') {
+			this.#coordinateSetOptions.delete(device)
 			resetDeviceValue(this, device, 'canSync', DEFAULT_MOUNT.canSync)
 			resetDeviceValue(this, device, 'canGoTo', DEFAULT_MOUNT.canGoTo)
 			resetDeviceValue(this, device, 'canFlip', DEFAULT_MOUNT.canFlip)

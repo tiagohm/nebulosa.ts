@@ -39,6 +39,53 @@ test('uses the requested epoch for J2000 and galactic target conversions', () =>
 	expect(numberCommands[0].elements.DEC).toBeCloseTo(toDeg(galacticDeclination), 10)
 })
 
+test('selects tracking for goto when the driver advertises it', () => {
+	const manager = new MountManager()
+	const mount = setupTestMount(manager)
+
+	manager.switchVector(
+		recordingClient,
+		{
+			device: mount.name,
+			name: 'ON_COORD_SET',
+			permission: 'rw',
+			rule: 'OneOfMany',
+			state: 'Ok',
+			elements: {
+				SLEW: defSwitch('SLEW', false),
+				TRACK: defSwitch('TRACK', false),
+			},
+		},
+		'defSwitchVector',
+	)
+
+	manager.goTo(mount, hour(5), deg(23))
+
+	expect(switchCommands).toEqual([{ device: mount.name, name: 'ON_COORD_SET', elements: { TRACK: true } }])
+})
+
+test('falls back to slew for goto when tracking is unavailable', () => {
+	const manager = new MountManager()
+	const mount = setupTestMount(manager)
+
+	manager.switchVector(
+		recordingClient,
+		{
+			device: mount.name,
+			name: 'ON_COORD_SET',
+			permission: 'rw',
+			rule: 'OneOfMany',
+			state: 'Ok',
+			elements: { SLEW: defSwitch('SLEW', false) },
+		},
+		'defSwitchVector',
+	)
+
+	manager.goTo(mount, hour(5), deg(23))
+
+	expect(switchCommands).toEqual([{ device: mount.name, name: 'ON_COORD_SET', elements: { SLEW: true } }])
+})
+
 test('resets deleted INDI properties to defaults', () => {
 	const manager = new MountManager()
 	const device = setupDevice(structuredClone(DEFAULT_MOUNT))
