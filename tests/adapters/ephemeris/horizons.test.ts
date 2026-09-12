@@ -233,6 +233,36 @@ test.skipIf(SKIP)('spkFile', async () => {
 	expect(vz).toBeCloseTo(-3.234414083822303e-3, 10)
 })
 
+test('elements defaults to the ecliptic reference plane', async () => {
+	const requests = await captureHorizonsRequests(() => elements('3517;', '500@10', START_TIME, END_TIME))
+
+	expect(queryValue(requests[0], 'REF_PLANE')).toBe('ECLIPTIC')
+})
+
+async function captureHorizonsRequests(callback: () => Promise<unknown>, responses: readonly string[] = ['']) {
+	const restore = globalThis.fetch
+	const requests: string[] = []
+	let responseIndex = 0
+
+	globalThis.fetch = ((input) => {
+		requests.push(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url)
+		const response = responses[Math.min(responseIndex++, responses.length - 1)] ?? ''
+		return Promise.resolve(new Response(response))
+	}) as typeof fetch
+
+	try {
+		await callback()
+	} finally {
+		globalThis.fetch = restore
+	}
+
+	return requests
+}
+
+function queryValue(request: string, name: string) {
+	return new URL(request).searchParams.get(name)?.replaceAll(/^'|'$/g, '')
+}
+
 function expectCsvRow(row: CsvRow, expected: readonly (string | number | null)[]) {
 	for (let i = 0; i < expected.length; i++) {
 		const a = row[i]

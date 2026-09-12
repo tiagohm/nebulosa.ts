@@ -379,7 +379,7 @@ export async function vector(input: string | ObserverWithOsculatingElements | Ob
 }
 
 // Requests an osculating-elements ephemeris for `input` over [startTime, endTime] and returns the parsed CSV rows.
-export async function elements(input: string | ObserverWithOsculatingElements | ObserverWithTLE, center: BodyCenter, startTime: Temporal | Time, endTime: Temporal | Time, options: ObserverVectorElementsOptions = DEFAULT_OVE_OPTIONS, signal?: AbortSignal) {
+export async function elements(input: string | ObserverWithOsculatingElements | ObserverWithTLE, center: BodyCenter, startTime: Temporal | Time, endTime: Temporal | Time, options: ObserverVectorElementsOptions = {}, signal?: AbortSignal) {
 	const parameters = structuredClone(DEFAULT_ELEMENTS_PARAMETERS) as HorizonsQueryParameters
 	makeParametersFromInput(parameters, input)
 	makeParametersFromCenterAndCoordinates(parameters, center, undefined, options)
