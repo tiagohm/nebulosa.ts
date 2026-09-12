@@ -371,8 +371,9 @@ export class AlpacaCameraApi extends AlpacaDeviceApi {
 		return request<number>(this.url, `${id}/lastexposureduration`, 'GET')
 	}
 
+	// Returns device id's last exposure start as the unchanged FITS UTC string CCYY-MM-DDThh:mm:ss[.sss...].
 	getLastExposureStartTime(id: number) {
-		return request<number>(this.url, `${id}/lastexposurestarttime`, 'GET')
+		return request<string>(this.url, `${id}/lastexposurestarttime`, 'GET')
 	}
 
 	getMaxAdu(id: number) {
