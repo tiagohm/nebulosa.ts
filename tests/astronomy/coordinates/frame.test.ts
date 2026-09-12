@@ -108,9 +108,13 @@ test('frame convenience wrappers delegate to their matching frames', () => {
 	] as const
 
 	for (const { wrapper, frame } of timeDependentCases) {
-		const direct = wrapper(XYZ)
-		const generic = frameAt(XYZ, frame, NO_TIME)
+		const direct = wrapper(XYZ, TIME)
+		const generic = frameAt(XYZ, frame, TIME)
 		for (let i = 0; i < 3; i++) expect(direct[i]).toBeCloseTo(generic[i], 15)
+
+		const atJd0 = frameAt(XYZ, frame, NO_TIME)
+		const separation = Math.abs(direct[0] - atJd0[0]) + Math.abs(direct[1] - atJd0[1]) + Math.abs(direct[2] - atJd0[2])
+		expect(separation).toBeGreaterThan(1e-3)
 	}
 })
 
