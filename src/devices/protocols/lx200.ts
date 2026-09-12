@@ -207,7 +207,7 @@ export class Lx200ProtocolServer {
 			// Synchronizes the telescope's position with the currently selected database object's coordinates
 			case ':CM#':
 				this.options.handler.sync?.(this, ...this.#coordinates)
-				return this.#zero(socket)
+				return this.#text(socket, '#')
 			// Slew to Target Object
 			case ':MS#':
 				this.options.handler.goto?.(this, ...this.#coordinates)

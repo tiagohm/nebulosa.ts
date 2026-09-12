@@ -68,11 +68,11 @@ test('sets target coordinates and uses them for sync and goto', async () => {
 
 	await withLx200Server(
 		async (client) => {
-			const response = readUntil(client, (value) => value === '1100')
+			const response = readUntil(client, (value) => value === '11#0')
 
 			client.write('#:Sr01:02:03##:Sd-04*05:06##:CM##:MS#', 'ascii')
 
-			expect(await response).toBe('1100')
+			expect(await response).toBe('11#0')
 		},
 		makeHandler({
 			sync: (server, rightAscension, declination) => {
@@ -121,11 +121,11 @@ test('keeps the previous target coordinates after invalid coordinate writes', as
 
 	await withLx200Server(
 		async (client) => {
-			const response = readUntil(client, (value) => value === '111100')
+			const response = readUntil(client, (value) => value === '1111#0')
 
 			client.write('#:Sr01:02:03##:Sd-04*05:06##:Srxx##:Sdxx##:CM##:MS#', 'ascii')
 
-			expect(await response).toBe('111100')
+			expect(await response).toBe('1111#0')
 		},
 		makeHandler({
 			sync: (server, rightAscension, declination) => {
