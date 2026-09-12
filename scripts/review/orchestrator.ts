@@ -70,12 +70,11 @@ export class ReviewOrchestrator {
 				if (controller.signal.aborted) break
 
 				const file = files[i]
-				const prefix = `[${i + 1}/${files.length}]`
-				const report = options.mode === 'fix' ? this.reports?.get(file) : undefined
+				const prefix = `[${(i + 1).toFixed(0).padStart(3, '0')}/${files.length.toFixed(0).padStart(3, '0')}]`
 				const existingArtifact = existing.get(file)
 
-				if (!options.force && existingArtifact) {
-					console.info(`${prefix} SKIP existing ${existingArtifact === this.state.reportPath(file) ? 'report' : 'artifact'}: ${file} | ${existingArtifact}`)
+				if (!options.force && existingArtifact === this.state.reportPath(file)) {
+					console.info(`${prefix} SKIP existing report: ${file}`)
 					skipped++
 					continue
 				}
@@ -87,6 +86,8 @@ export class ReviewOrchestrator {
 				}
 
 				if (options.limit > 0 && ran >= options.limit) break
+
+				const report = options.mode === 'fix' ? this.reports?.get(file) : undefined
 
 				if (options.mode === 'fix') {
 					const reason = this.reportSkipReason(file)
