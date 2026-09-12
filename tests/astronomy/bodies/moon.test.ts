@@ -3,7 +3,7 @@ import { describe, expect, test } from 'bun:test'
 import { crescentWidth, lunarSaros, lunation, moonParallax, moonSemidiameter, nearestLunarApsis, nearestLunarEclipse, nearestLunarPhase, nearestLunarStandstill, nearestMaxDeclination, nearestMeanLunarApsis, nearestLunarNode, moonMeanAscendingNode, moonTopocentricSemidiameter, moonTopocentricSemidiameterApprox } from '../../../src/astronomy/bodies/moon'
 import { Julian, MoonPosition } from '../../../src/astronomy/ephemeris/meeus'
 import { type Time, time, timeToDate, timeYMD, timeYMDHMS, timeShift, Timescale, toJulianDay, utc } from '../../../src/astronomy/time/time'
-import { PI } from '../../../src/core/constants'
+import { MOON_SYNODIC_DAYS, PI } from '../../../src/core/constants'
 import { deg, normalizeAngle, toArcsec, toDeg } from '../../../src/math/units/angle'
 import { kilometer, toKilometer } from '../../../src/math/units/distance'
 
@@ -42,6 +42,19 @@ test('saros', () => {
 	expect(lunarSaros(timeYMD(2016, 9, 16))).toBe(147)
 	expect(lunarSaros(timeYMD(2031, 10, 30))).toBe(117)
 	expect(lunarSaros(time(2276890.5))).toBe(138)
+	// LN = -52: JS remainder of 192+38*LN-1 is -1, which must wrap to series 223, not 0.
+	expect(lunarSaros(nearestLunarPhase(timeYMDHMS(1998, 11, 1), 'FULL', true))).toBe(223)
+	expect(lunarSaros(timeYMD(1998, 11, 4))).toBe(223)
+	expect(lunarSaros(timeYMD(1980, 11, 1))).toBe(223)
+	expect(lunarSaros(timeYMD(1908, 9, 1))).toBe(223)
+
+	const full1998 = nearestLunarPhase(timeYMDHMS(1998, 11, 1), 'FULL', true)
+	for (let n = 0; n < 6; n++) {
+		const series = lunarSaros(timeShift(full1998, -n * 223 * MOON_SYNODIC_DAYS))
+		expect(series).toBeGreaterThanOrEqual(1)
+		expect(series).toBeLessThanOrEqual(223)
+		expect(series).toBe(223)
+	}
 })
 
 describe('nearest lunar phase', () => {
