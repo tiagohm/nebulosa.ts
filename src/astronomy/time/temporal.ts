@@ -175,15 +175,15 @@ export function zellersCongruence(year: number | readonly [number, number, numbe
 		year -= 1
 	}
 
-	// Extract year part (k) and century (j)
-	const k = year % 100
+	// Century (j) and year-of-century (k) use Euclidean remainder so year <= 0 stays in 0..99.
 	const j = Math.floor(year / 100)
+	const k = year - 100 * j
 
 	// Gregorian calendar formula
 	// 0=Saturday, 1=Sunday, ..., 6=Friday
-	const h = (day + Math.floor((13 * (month + 1)) / 5) + k + Math.floor(k / 4) + Math.floor(j / 4) + 5 * j) % 7
+	const h = pmod(day + Math.floor((13 * (month + 1)) / 5) + k + Math.floor(k / 4) + Math.floor(j / 4) + 5 * j, 7)
 
-	return (h + 6) % 7
+	return pmod(h + 6, 7)
 }
 
 // Reads a single UTC calendar or time field.

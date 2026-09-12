@@ -219,6 +219,11 @@ test('day of week using zellersCongruence', () => {
 	expect(zellersCongruence(2017, 10, 22)).toBe(0)
 	expect(zellersCongruence(2026, 6, 26)).toBe(5)
 	expect(zellersCongruence([2000, 1, 1])).toBe(6)
+	expect(zellersCongruence(0, 1, 1)).toBe(temporalDayOfWeek(temporalFromDate(0, 1, 1)))
+	expect(zellersCongruence(0, 1, 1)).toBe(6)
+	expect(zellersCongruence(-1, 12, 31)).toBe(temporalDayOfWeek(temporalFromDate(-1, 12, 31)))
+	expect(zellersCongruence(0, 3, 1)).toBe(temporalDayOfWeek(temporalFromDate(0, 3, 1)))
+	expect(formatTemporalFromPattern([0, 1, 1, 0, 0, 0, 0], 'W', 0)).toBe('Sat')
 })
 
 test('get', () => {
