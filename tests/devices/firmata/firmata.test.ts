@@ -16,6 +16,7 @@ import { HMC5883L } from '../../../src/devices/firmata/sensors/magnetometer'
 import { DS18B20, LM35 } from '../../../src/devices/firmata/sensors/thermometer'
 import { CRC } from '../../../src/io/crc'
 import { deg } from '../../../src/math/units/angle'
+import { fromPressure } from '../../../src/math/units/distance'
 
 type MockFirmataMessage =
 	| readonly ['mode', number, PinMode]
@@ -639,6 +640,35 @@ test('BMP280 retriggers forced measurements before polling', async () => {
 	await Bun.sleep(110)
 	expect(controlWrites()).toHaveLength(3)
 	expect(dataReads()).toHaveLength(2)
+	bmp280.stop()
+})
+
+test('BMP180 derives altitude from the standard sea-level temperature', () => {
+	const client = new MockFirmataClient()
+	const bmp180 = new BMP180(client as never, 0)
+	const calibration = Buffer.from([0x01, 0x98, 0xff, 0xb8, 0xc7, 0xd1, 0x7f, 0xe5, 0x7f, 0xf5, 0x5a, 0x71, 0x18, 0x2e, 0x00, 0x04, 0x80, 0x00, 0xdd, 0xf9, 0x0b, 0x34])
+
+	bmp180.start()
+	bmp180.twoWireMessage(client as never, BMP180.ADDRESS, 0xaa, calibration)
+	bmp180.twoWireMessage(client as never, BMP180.ADDRESS, 0xf6, Buffer.from([0x75, 0x30]))
+	bmp180.twoWireMessage(client as never, BMP180.ADDRESS, 0xf6, Buffer.from([0x00, 0x5d, 0x23]))
+
+	expect(bmp180.temperature).toBe(31.3)
+	expect(bmp180.altitude).toBe(fromPressure(bmp180.pressure))
+	bmp180.stop()
+})
+
+test('BMP280 derives altitude from the standard sea-level temperature', () => {
+	const client = new MockFirmataClient()
+	const bmp280 = new BMP280(client as never, BMP280.ADDRESS, 100)
+	const calibration = Buffer.from([0x70, 0x6b, 0x43, 0x67, 0x18, 0xfc, 0x7d, 0x8e, 0x43, 0xd6, 0xd0, 0x0b, 0x27, 0x0b, 0x8c, 0x00, 0xf9, 0xff, 0x8c, 0x3c, 0xf8, 0xc6, 0x70, 0x17])
+
+	bmp280.start()
+	bmp280.twoWireMessage(client as never, BMP280.ADDRESS, 0x88, calibration)
+	bmp280.twoWireMessage(client as never, BMP280.ADDRESS, 0xf7, Buffer.from([101, 90, 192, 126, 237, 0]))
+
+	expect(bmp280.temperature).toBeCloseTo(25.08, 2)
+	expect(bmp280.altitude).toBe(fromPressure(bmp280.pressure))
 	bmp280.stop()
 })
 

@@ -138,7 +138,7 @@ export class BMP180 extends PeripheralBase<BMP180> implements Barometer, Altimet
 
 			const UP = ((data.readUint8(0) << 16) | data.readUint16BE(1)) >> (8 - this.mode)
 			this.pressure = pascal(this.calculateTruePressure(UP))
-			this.altitude = fromPressure(this.pressure, this.temperature)
+			this.altitude = fromPressure(this.pressure)
 			this.#command = BMP180.READ_TEMP_CMD
 			this.fire()
 		}
@@ -337,7 +337,7 @@ export class BMP280 extends PeripheralBase<BMP280> implements Barometer, Altimet
 
 		const temperature = this.compensateTemperature(adcT)
 		const pressure = pascal(this.compensatePressure(adcP))
-		const altitude = fromPressure(pressure, temperature)
+		const altitude = fromPressure(pressure)
 
 		const changed = temperature !== this.temperature || pressure !== this.pressure || altitude !== this.altitude
 
