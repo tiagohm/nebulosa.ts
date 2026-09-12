@@ -234,7 +234,8 @@ export class AstrometryNet implements Disposable {
 		if (!field) throw new Error('failed to create astrometry.net star field')
 
 		this.#lib.solver_set_field(this.#pointer!, field)
-		this.#lib.solver_set_field_bounds(this.#pointer!, 1, width, 1, height)
+		// Native field sizes are max - min; FITS star coordinates remain 1-based.
+		this.#lib.solver_set_field_bounds(this.#pointer!, 0, width, 0, height)
 
 		const [scaleLow, scaleHigh] = scaleRange(width, options)
 

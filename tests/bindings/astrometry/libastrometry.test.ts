@@ -72,13 +72,17 @@ test.skipIf(SKIP)(
 		})
 
 		// https://nova.astrometry.net/status/14909666
-		// Orientation/FOV compare to 0.005 deg: flux-weighted centroids move stars by a fraction
-		// of a pixel, about 9 arcsec at this plate scale, versus integer-peak positions.
+		// FOV compares to 0.005 deg because flux-weighted centroids differ from integer peaks.
+		// Center and orientation: Astropy 8.0.1 evaluated the previous SIP WCS at FITS (360, 254),
+		// origin=1, then recentered its gnomonic plane there (0.01-pixel central-difference Jacobian).
+		// Recentring preserves the celestial frame; tolerances allow the native SIP refit.
 		expect(solution).toBeDefined()
-		expect(toDeg(solution!.orientation)).toBeCloseTo(58.4507, 2)
+		expect(solution!.CRPIX1).toBe((image.metadata.width + 1) / 2)
+		expect(solution!.CRPIX2).toBe((image.metadata.height + 1) / 2)
+		expect(toDeg(solution!.orientation)).toBeCloseTo(58.5039782352, 2)
 		expect(toArcsec(solution!.scale)).toBeCloseTo(170.85, 1)
-		expect(toHour(solution!.rightAscension)).toBeCloseTo(12.474879, 3)
-		expect(toDeg(solution!.declination)).toBeCloseTo(56.7205, 3)
+		expect(toHour(solution!.rightAscension)).toBeCloseTo(12.478627009, 3)
+		expect(toDeg(solution!.declination)).toBeCloseTo(56.7124022211, 3)
 		expect(toDeg(solution!.width)).toBeCloseTo(34.092, 2)
 		expect(toDeg(solution!.height)).toBeCloseTo(24.0842, 3)
 		expect(toDeg(solution!.radius)).toBeCloseTo(20.8705, 2)
