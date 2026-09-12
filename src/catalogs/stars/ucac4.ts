@@ -18,7 +18,8 @@ import { BaseStarCatalog, type NormalizedStarCatalogQuery, type StarCatalogEntry
 // 78-byte records from the per-declination zone files, optionally using the u4index.unf quarter-degree
 // RA index to narrow each zone to the candidate record ranges, and exposes them through the generic
 // BaseStarCatalog contract. Proper motion is stored as μα·cosδ and converted to ERFA's dα/dt; angles
-// are J2000 radians (positions stored as milliarcseconds internally).
+// are J2000 radians (positions stored as milliarcseconds internally). The optional u4hpm.dat supplement
+// supplies overflowing proper motions; these remain undefined when the supplement has no matching row.
 
 // Bytes per UCAC4 star record.
 const UCAC4_RECORD_SIZE = 78
@@ -40,7 +41,7 @@ const UCAC4_SPD_OFFSET_MAS = 324000000
 const UCAC4_MISSING_MAG_MMAG = 20000
 // Sentinel marking a missing magnitude error.
 const UCAC4_MISSING_MAG_ERROR = 99
-// Tenths-of-mas/yr sentinel marking a missing proper-motion component.
+// Tenths-of-mas/yr sentinel requiring a lookup in u4hpm.dat (USNO readme_u4, note 8).
 const UCAC4_PM_SENTINEL = 32767
 // Byte value marking missing proper-motion error data.
 const UCAC4_PM_NO_DATA = 255
@@ -110,6 +111,14 @@ interface Ucac4Index {
 	readonly base: 0 | 1
 }
 
+// Actual proper motion from u4hpm.dat, before conversion to the generic catalog convention.
+interface Ucac4ProperMotion {
+	// μα·cosδ in tenths of milliarcseconds per year.
+	readonly raCosDec: number
+	// μδ in tenths of milliarcseconds per year.
+	readonly dec: number
+}
+
 // Converts a declination to its native UCAC4 zone number.
 export function ucac4ZoneForDec(dec: Angle) {
 	if (dec >= PIOVERTWO) return UCAC4_ZONE_COUNT
@@ -131,6 +140,8 @@ export class Ucac4Catalog extends BaseStarCatalog<Ucac4CatalogEntry> {
 
 	#root = ''
 	#index?: Ucac4Index
+	// The small native HPM supplement keyed by the unique star number at record byte offset 68.
+	#highProperMotions: ReadonlyMap<number, Ucac4ProperMotion> = new Map()
 	#opened = false
 
 	constructor() {
@@ -142,7 +153,7 @@ export class Ucac4Catalog extends BaseStarCatalog<Ucac4CatalogEntry> {
 		return this.#root
 	}
 
-	// Opens a UCAC4 storage root and eagerly loads the optional native index when available.
+	// Opens a UCAC4 storage root and eagerly loads the optional native index and HPM supplement.
 	async open(root: string) {
 		if (!root) {
 			throw new Error('missing UCAC4 root directory')
@@ -163,6 +174,7 @@ export class Ucac4Catalog extends BaseStarCatalog<Ucac4CatalogEntry> {
 		}
 
 		this.#index = await this.#loadNativeIndex()
+		this.#highProperMotions = await this.#loadHighProperMotions()
 
 		return this
 	}
@@ -175,6 +187,7 @@ export class Ucac4Catalog extends BaseStarCatalog<Ucac4CatalogEntry> {
 		this.#zonePaths.clear()
 		this.#zoneRecordCounts.fill(-1)
 		this.#index = undefined
+		this.#highProperMotions = new Map()
 		this.#opened = false
 
 		for (const handle of handles) {
@@ -216,7 +229,7 @@ export class Ucac4Catalog extends BaseStarCatalog<Ucac4CatalogEntry> {
 			throw new Error(`unable to read UCAC4 zone ${zone}, record ${recordNumber}`, { cause })
 		}
 
-		return parseUcac4Record(buffer, zone, recordNumber)
+		return parseUcac4Record(buffer, zone, recordNumber, this.#highProperMotions)
 	}
 
 	// Streams candidate entries from the zone files touched by the coarse preselection boxes. Records are
@@ -314,6 +327,38 @@ export class Ucac4Catalog extends BaseStarCatalog<Ucac4CatalogEntry> {
 		}
 
 		return undefined
+	}
+
+	// Loads the optional ASCII u4hpm.dat from the root or u4i, keyed by unique star number. Missing files
+	// yield an empty map; unreadable files and malformed rows throw instead of supplying incorrect motion.
+	async #loadHighProperMotions(): Promise<ReadonlyMap<number, Ucac4ProperMotion>> {
+		for (const candidate of [join(this.#root, 'u4hpm.dat'), join(this.#root, 'u4i', 'u4hpm.dat')]) {
+			let data: string
+
+			try {
+				data = await fs.readFile(candidate, 'utf8')
+			} catch (cause) {
+				if (cause instanceof Error && 'code' in cause && cause.code === 'ENOENT') continue
+				throw new Error(`unable to read UCAC4 high proper motion file: ${candidate}`, { cause })
+			}
+
+			const motions = new Map<number, Ucac4ProperMotion>()
+
+			// USNO readme_u4 section 5c: rnm, zn, rnz, pmrc, pmd, RA, SPD, maga (eight integer columns).
+			for (const line of data.split('\n')) {
+				const trimmed = line.trim()
+				if (trimmed.length === 0) continue
+				const fields = trimmed.split(/\s+/).map(Number)
+				if (fields.length !== 8 || !fields.every(Number.isSafeInteger) || !(fields[0] > 0) || motions.has(fields[0])) {
+					throw new Error(`corrupt UCAC4 high proper motion file: ${candidate}`)
+				}
+				motions.set(fields[0], { raCosDec: fields[3], dec: fields[4] })
+			}
+
+			return motions
+		}
+
+		return new Map()
 	}
 
 	// Resolves a zone file path across the common UCAC4 directory layouts.
@@ -488,7 +533,7 @@ export class Ucac4Catalog extends BaseStarCatalog<Ucac4CatalogEntry> {
 				validateUcac4Coordinates(raMas, southPoleDistanceMas, zone, startRecord)
 
 				if (matchesMasBoxes(raMas, southPoleDistanceMas, masBoxes)) {
-					yield parseUcac4Record(block, zone, startRecord, offset)
+					yield parseUcac4Record(block, zone, startRecord, this.#highProperMotions, offset)
 				}
 
 				startRecord++
@@ -497,16 +542,26 @@ export class Ucac4Catalog extends BaseStarCatalog<Ucac4CatalogEntry> {
 	}
 }
 
-// Parses a fixed-length native UCAC4 record from a block buffer.
-function parseUcac4Record(buffer: Buffer, zone: number, recordNumber: number, offset: number = 0): Ucac4CatalogEntry {
+// Parses the 78-byte record at offset in buffer, tagged with its 1-based zone and record number, into a
+// fresh entry. Resolves overflowing motion by unique ID using highProperMotions; a missing row leaves
+// both components undefined. Returned motions are radians/year, with RA converted from μα·cosδ to dα/dt.
+function parseUcac4Record(buffer: Buffer, zone: number, recordNumber: number, highProperMotions: ReadonlyMap<number, Ucac4ProperMotion>, offset: number = 0): Ucac4CatalogEntry {
 	const raMas = buffer.readInt32LE(offset)
 	const southPoleDistanceMas = buffer.readInt32LE(offset + 4)
 	validateUcac4Coordinates(raMas, southPoleDistanceMas, zone, recordNumber)
 
 	// const mergedCatalogFlags = decodeMergedCatalogFlags(buffer.readInt32LE(offset + 62))
 	const declination = mas(southPoleDistanceMas - UCAC4_SPD_OFFSET_MAS)
-	const pmRaCosDecMasYrTenth = buffer.readInt16LE(offset + 24)
-	const pmDecMasYrTenth = buffer.readInt16LE(offset + 26)
+	let pmRaCosDecMasYrTenth = buffer.readInt16LE(offset + 24)
+	let pmDecMasYrTenth = buffer.readInt16LE(offset + 26)
+
+	if (pmRaCosDecMasYrTenth === UCAC4_PM_SENTINEL || pmDecMasYrTenth === UCAC4_PM_SENTINEL) {
+		const motion = highProperMotions.get(buffer.readInt32LE(offset + 68))
+		if (motion) {
+			pmRaCosDecMasYrTenth = motion.raCosDec
+			pmDecMasYrTenth = motion.dec
+		}
+	}
 
 	// Proper motion is present only when both components and both error bytes hold real data. The error
 	// bytes are offset-encoded (value-128), so the raw no-data byte is 127. The errors themselves are not
