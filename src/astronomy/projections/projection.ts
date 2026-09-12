@@ -248,13 +248,6 @@ export class WebMercator extends Mercator {
 	constructor(options?: ProjectionOptions) {
 		super({ ...options, clampLatitude: true, maxLatitude: WEB_MERCATOR_MAX_LATITUDE })
 	}
-
-	project(lambda: Angle, phi: Angle, out?: Point, options?: ProjectionOptions) {
-		const longitude = longitudeFromLambda(lambda, options, this.options)
-		const latitude = latitudeFromPhi(phi, options, this.options, WEB_MERCATOR_MAX_LATITUDE, true)
-		if (longitude === undefined || latitude === undefined) return undefined
-		return super.project(longitude, latitude, out)
-	}
 }
 
 // Inverts the ellipsoidal Mercator northing `y` to geodetic latitude (radians) by Newton iteration on

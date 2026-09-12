@@ -205,7 +205,9 @@ test('mercator and web mercator round-trip with a non-zero central meridian', ()
 		{ projection: new Mercator(), callOptions: options },
 		{ projection: new Mercator(westOptions), callOptions: undefined },
 		{ projection: new Mercator(), callOptions: westOptions },
+		{ projection: new WebMercator(options), callOptions: undefined },
 		{ projection: new WebMercator(), callOptions: options },
+		{ projection: new WebMercator(westOptions), callOptions: undefined },
 		{ projection: new WebMercator(), callOptions: westOptions },
 	]) {
 		const projected = projection.project(longitude, latitude, undefined, callOptions)
@@ -219,6 +221,27 @@ test('mercator and web mercator round-trip with a non-zero central meridian', ()
 		expect(normalizePI(unprojected.x - longitude)).toBeCloseTo(0, 12)
 		expect(unprojected.y).toBeCloseTo(latitude, 12)
 	}
+})
+
+test('web mercator honors constructor and per-call plane options', () => {
+	const longitude = deg(45)
+	const latitude = deg(10)
+	const web = new WebMercator({ centralMeridian: deg(30) })
+	const projected = web.project(longitude, latitude)
+	expect(projected).toBeDefined()
+	if (projected === undefined) return
+
+	expect(projected.x).toBeCloseTo(deg(15), 12)
+	expect(projected.y).toBeCloseTo(new Mercator().project(0, latitude)!.y, 12)
+
+	const scale = { scale: 100 } as const
+	expect(new WebMercator().project(deg(10), 0, undefined, scale)?.x).toBeCloseTo(new Mercator().project(deg(10), 0, undefined, scale)!.x, 12)
+
+	const unprojected = web.unproject(projected.x, projected.y)
+	expect(unprojected).toBeDefined()
+	if (unprojected === undefined) return
+	expect(normalizePI(unprojected.x - longitude)).toBeCloseTo(0, 12)
+	expect(unprojected.y).toBeCloseTo(latitude, 12)
 })
 
 test('standard-parallel projections round-trip with a non-zero central meridian', () => {
