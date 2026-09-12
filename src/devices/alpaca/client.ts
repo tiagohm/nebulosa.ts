@@ -1128,6 +1128,7 @@ interface AlpacaClientTelescopeState extends AlpacaClientDeviceState {
 	readonly CanMoveAxis: boolean
 	readonly CanPulseGuide: boolean
 	readonly CanTrack: boolean
+	// Whether SlewToCoordinatesAsync is supported; synchronous slew capability is irrelevant here.
 	readonly CanSlew: boolean
 	readonly CanSync: boolean
 	readonly CanSetGuideRate: boolean
@@ -1227,7 +1228,7 @@ class AlpacaTelescope extends AlpacaDevice {
 		this.registerEndpoint('CanMoveAxis', () => canMoveAxis(this.id), false)
 		this.registerEndpoint('CanPulseGuide', () => api.canPulseGuide(this.id), false)
 		this.registerEndpoint('CanTrack', () => api.canSetTracking(this.id), false)
-		this.registerEndpoint('CanSlew', () => api.canSlew(this.id), false)
+		this.registerEndpoint('CanSlew', () => api.canSlewAsync(this.id), false)
 		this.registerEndpoint('CanSync', () => api.canSync(this.id), false)
 		this.registerEndpoint('CanSetGuideRate', () => api.canSetGuideRates(this.id), false)
 		this.registerEndpoint('SlewRates', () => api.getAxisRates(this.id, 0), false)

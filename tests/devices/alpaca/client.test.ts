@@ -249,6 +249,25 @@ test.each([0, 0.001])(
 	10000,
 )
 
+test.each([true, false])(
+	'telescope exposes slew according to its asynchronous capability (%s)',
+	async (canSlewAsync) => {
+		await using remote = await scriptedClient('telescope', { canslew: !canSlewAsync, canslewasync: canSlewAsync, cansync: true, equatorialsystem: 1 })
+		await waitUntil(() => remote.switches.has('ON_COORD_SET'), 8000)
+		const mode = remote.switches.get('ON_COORD_SET')!
+		expect('SLEW' in mode.elements).toBe(canSlewAsync)
+		if (canSlewAsync) {
+			remote.client.sendSwitch({ device: mode.device, name: mode.name, elements: { SLEW: true } })
+			remote.client.sendNumber({ device: mode.device, name: 'EQUATORIAL_EOD_COORD', elements: { RA: 12, DEC: 45 } })
+			await waitUntil(() => remote.commands.length === 1, 1000)
+			expect(remote.commands[0].endpoint).toBe('slewtocoordinatesasync')
+			expect(Number(remote.commands[0].body.get('RightAscension'))).toBe(12)
+			expect(Number(remote.commands[0].body.get('Declination'))).toBe(45)
+		}
+	},
+	10000,
+)
+
 describe('make fits from image bytes', () => {
 	test('converts a 10 by 10 byte ROI smaller than 176 bytes', async () => {
 		const data = new ArrayBuffer(144)
