@@ -1,4 +1,4 @@
-import { TAU } from '../../../../core/constants'
+import { DAYSPERJY, TAU } from '../../../../core/constants'
 import { matMulVec } from '../../../../math/linear-algebra/mat3'
 import type { MutVec3 } from '../../../../math/linear-algebra/vec3'
 import { pmod } from '../../../../math/numerical/math'
@@ -13,7 +13,8 @@ import { type Time, tt } from '../../../time/time'
 
 // L1.2 theory of the four Galilean satellites: Jovicentric position (AU) and velocity (AU/day).
 // Per body, trigonometric series build the equinoctial elements (semi-major axis, mean longitude,
-// k/h eccentricity vector, q/p inclination vector); Kepler's equation is solved and the result
+// k/h eccentricity vector, q/p inclination vector); degree-8 Chebyshev polynomials then add the
+// official long-period corrections to L, k, h, q, and p. Kepler's equation is solved and the result
 // rotated into the J2000 equatorial frame. Time argument is days from JD 2433282.5 (TT).
 
 // One periodic term as [amplitude, phase, frequency]; phase in radians, frequency in rad/day.
@@ -581,6 +582,58 @@ const CALLISTO: L12Body = {
 // The four satellites in index order, matching the public io/europa/ganymede/callisto wrappers.
 const BODIES = [IO, EUROPA, GANYMEDE, CALLISTO] as const
 
+// Validity window of the long-period Chebyshev corrections, in years from J1950 (BisL1.2.dat T1, T2).
+const CHEBYSHEV_WINDOW = [-819.727638594856, 812.72180699036] as const
+
+// Degree-8 Chebyshev coefficients for [L, Re(z), Im(z), Re(ζ), Im(ζ)] per satellite (Io…Callisto).
+// Units are radians. Semi-major axis has no Chebyshev term. Source: BisL1.2.dat / GalileanL1.2.dat.
+const CHEBYSHEV = [
+	[
+		[0.826698820334074e-4, -0.133581115495368e-6, -0.447550080805276e-7, -0.291234929817703e-6, -0.317117027043262e-6],
+		[-0.546986318473484e-5, -0.758579668623469e-8, -0.578177122641661e-9, -0.162905002759586e-6, -0.126321744097649e-6],
+		[0.594965634346142e-4, -0.173800453537518e-8, -0.535142525086474e-8, -0.36843102023409e-8, 0.651758518535435e-8],
+		[-0.110076009434021e-4, -0.302381800276162e-8, 0.102942385189608e-9, 0.777164290527916e-9, 0.262070675646012e-8],
+		[-0.575048718532862e-5, -0.721047445746571e-8, -0.849040607452073e-8, 0.159932283427177e-8, 0.25923837083214e-8],
+		[0.574994024502453e-5, -0.392259073275152e-9, -0.25284067045637e-8, -0.228491296590504e-8, -0.726318061740534e-9],
+		[0.178506935927118e-5, -0.416879673796892e-8, -0.613405545173217e-8, 0.70303394434213e-9, -0.118191642174809e-8],
+		[-0.240677412003469e-5, -0.329083173926104e-8, -0.343800069555589e-8, -0.2892891908603e-10, 0.590816038543625e-9],
+		[-0.138513209122323e-5, 0.288537255009037e-8, -0.35998419189844e-8, 0.486451562749639e-9, 0.123053999757825e-8],
+	],
+	[
+		[-0.234691437046728e-3, -0.100355398526925e-5, -0.26102496021582e-6, -0.274704767394256e-5, -0.298415696654187e-5],
+		[0.259036121717763e-4, -0.58043834369124e-7, -0.182656275716032e-6, -0.154365304913777e-5, -0.119708851225481e-5],
+		[-0.173835841495123e-3, 0.380875695145265e-7, 0.278016374834476e-7, -0.349546762061882e-7, 0.567146658521585e-7],
+		[0.380673357683932e-4, -0.210657418625019e-6, -0.158858363289506e-6, 0.28678941486413e-8, 0.268814727457189e-7],
+		[-0.10348588827012e-6, 0.312238251072476e-6, 0.23185074681533e-7, 0.175452766852069e-7, 0.261897719058852e-7],
+		[0.117376776995138e-4, -0.17244407220313e-6, -0.110691155968765e-6, -0.197744662243578e-7, -0.511649608698392e-8],
+		[0.319509608989603e-5, 0.235985832098386e-6, -0.369048459423356e-7, 0.343169676541053e-8, -0.12784177740032e-7],
+		[-0.483167496026174e-5, 0.613727340553035e-7, 0.67863106958726e-8, -0.13092495069316e-9, 0.119534263567129e-7],
+		[0.447094431509368e-6, -0.158131098756712e-6, 0.190777145516695e-7, 0.135338072425105e-7, 0.115749543781328e-7],
+	],
+	[
+		[-0.402499890223698e-3, -0.111797459279082e-6, -0.107044201697345e-6, -0.141968295962213e-4, -0.153976109321613e-4],
+		[0.422870514937427e-4, -0.278967292638245e-6, -0.223668695371038e-6, -0.79399549398202e-5, -0.612022141299496e-5],
+		[-0.288258753042082e-3, -0.704645336679784e-7, -0.218527598721759e-6, -0.208882224662785e-6, 0.315217558237908e-6],
+		[0.623338370193608e-4, -0.238693040681653e-6, -0.200040954734845e-6, 0.209762683478441e-7, 0.148179418616661e-6],
+		[0.178692873660163e-5, 0.12286999271393e-7, -0.319586844323525e-6, 0.835070484335148e-7, 0.141150094231365e-6],
+		[0.144147643545141e-4, -0.153370399783488e-6, -0.22208668344349e-6, -0.10772967035446e-6, -0.224063936978287e-7],
+		[0.658944353306297e-5, 0.447318789843126e-7, -0.298609138042077e-6, 0.306301230195125e-7, -0.333311708439601e-7],
+		[-0.619139500170464e-5, -0.16580212425289e-7, -0.129217448782639e-6, 0.112449433356374e-7, 0.107863442857316e-7],
+		[0.78295461540554e-6, -0.828946056921499e-7, -0.150654590880644e-6, 0.708786417409988e-8, 0.662499119729457e-7],
+	],
+	[
+		[0.306204347064615e-3, -0.181310025984216e-6, -0.140782617429892e-5, -0.64093665517245e-4, -0.696069435911693e-4],
+		[-0.168321429486551e-3, -0.126014618556329e-5, -0.1353941374987e-5, -0.357948862513955e-4, -0.27663639767275e-4],
+		[0.202182016979082e-3, -0.382306332383069e-6, -0.320084097458594e-6, -0.887261624128964e-6, 0.138328020437413e-5],
+		[-0.137641833741129e-3, -0.667102945644653e-6, -0.620618627039507e-6, 0.164506004407617e-6, 0.651631405812798e-6],
+		[-0.530404402536766e-4, -0.505214970641581e-7, -0.611742588608485e-6, 0.477415826267116e-6, 0.620307849865976e-6],
+		[-0.110474926063654e-4, 0.153918794369926e-6, -0.276537195728238e-6, -0.359030239515192e-6, -0.266081185506962e-6],
+		[-0.105634674903822e-4, 0.928279781805284e-7, -0.133810977431205e-6, 0.117406290303369e-6, -0.209003718083271e-6],
+		[0.311526543050599e-4, 0.366048038576706e-6, 0.289677483700145e-6, 0.895051737231057e-7, -0.146372661194868e-6],
+		[0.466495863544146e-5, 0.568038769950531e-7, 0.470713328715423e-7, 0.971875658565188e-8, -0.122390974721364e-6],
+	],
+] as const
+
 // const VSOP87 = [9.994327815023905713e-1, 3.039550993390781261e-2, -1.449924943755843383e-2, -3.08977044222367188e-2, 9.988822846893227815e-1, -3.577028369016394015e-2, 1.339578739122566807e-2, 3.619798764705610479e-2, 9.992548516622136737e-1] as const
 // Row-major 3x3 rotation from the L1.2 Jovicentric frame to the J2000 equatorial frame.
 const J2000 = [0.9994327730319685, 0.030395736820722188, -0.01449935766698494, -0.033676879155137895, 0.9020579145791894, -0.43029918261067407, -3.689877119128493e-10, 0.43054339842595357, 0.9025698765590566] as const
@@ -605,9 +658,33 @@ export function callisto(time: Time) {
 	return compute(time, 3)
 }
 
+// Adds the official L1.2 degree-8 Chebyshev long-period corrections to L, k, h, q, p in `elem`.
+// `t` is days from JD 2433282.5 TT; `index` is 0 Io … 3 Callisto. Semi-major axis is unchanged.
+// Outside the validity window (|x| > 1, about years 1140–2760) the corrections are omitted, matching
+// the official approximate-ephemeris path. The T0 term is halved, as in L1.2.f.
+function applyLongPeriodChebyshev(t: number, index: number, elem: Float64Array) {
+	const [t1, t2] = CHEBYSHEV_WINDOW
+	const x = (t / DAYSPERJY - 0.5 * (t2 + t1)) / (0.5 * (t2 - t1))
+	if (!(x >= -1 && x <= 1)) return
+
+	const coeff = CHEBYSHEV[index]
+	for (let nv = 0; nv < 5; nv++) elem[nv + 1] += 0.5 * coeff[0][nv]
+
+	let prev = 1
+	let curr = x
+	for (let n = 1; n <= 8; n++) {
+		for (let nv = 0; nv < 5; nv++) elem[nv + 1] += coeff[n][nv] * curr
+		const next = 2 * x * curr - prev
+		prev = curr
+		curr = next
+	}
+}
+
 // Computes the J2000-equatorial position (AU) and velocity (AU/day) of a Galilean satellite using
-// L1.2. `index` selects the body (0 Io, 1 Europa, 2 Ganymede, 3 Callisto). Solves Kepler's equation
-// to a 1e-12 tolerance. Returned vectors alias the internal conversion buffers.
+// L1.2. `index` selects the body (0 Io, 1 Europa, 2 Ganymede, 3 Callisto). After the trigonometric
+// series, degree-8 Chebyshev polynomials correct L, k, h, q, p for very long-period terms inside
+// the theory's validity window. Solves Kepler's equation to a 1e-12 tolerance. Returned vectors
+// alias the internal conversion buffers.
 export function compute(time: Time, index: number): PositionAndVelocity {
 	time = tt(time)
 	const t = time.day - 2433282 + (time.fraction - 0.5)
@@ -626,8 +703,6 @@ export function compute(time: Time, index: number): PositionAndVelocity {
 		elem[1] += amplitude * Math.sin(arg)
 	}
 
-	elem[1] = pmod(elem[1], TAU)
-
 	for (const [amplitude, phase, frequency] of sat.z) {
 		const arg = phase + frequency * t
 		elem[2] += amplitude * Math.cos(arg)
@@ -639,6 +714,9 @@ export function compute(time: Time, index: number): PositionAndVelocity {
 		elem[4] += amplitude * Math.cos(arg)
 		elem[5] += amplitude * Math.sin(arg)
 	}
+
+	applyLongPeriodChebyshev(t, index, elem)
+	elem[1] = pmod(elem[1], TAU)
 
 	const [a, al, k, h, q, p] = elem
 
