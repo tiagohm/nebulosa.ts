@@ -9,7 +9,7 @@ import type { AlpacaConfiguredDevice } from './types'
 
 // UDP port on which Alpaca discovery probes and responses are exchanged.
 export const ALPACA_DISCOVERY_PORT = 32227
-// Fixed probe payload a client broadcasts; servers reply only to this exact string.
+// ASCII v1 probe prefix; servers ignore reserved trailing bytes after this prefix.
 export const ALPACA_DISCOVERY_DATA = 'alpacadiscovery1'
 // Link-scoped IPv6 multicast group reserved for Alpaca discovery.
 export const ALPACA_DISCOVERY_IPV6_GROUP = 'ff12::a1:9aca'
@@ -70,7 +70,7 @@ export class AlpacaDiscoveryServer {
 
 		socket.on('message', (data: Buffer, remote: RemoteInfo) => {
 			if (ignoreLocalhost && isLoopbackAddress(remote.address)) return
-			if (data.toString('utf-8') === ALPACA_DISCOVERY_DATA) this.#send(socket, remote.port, remote.address)
+			if (data.toString('utf-8', 0, ALPACA_DISCOVERY_DATA.length) === ALPACA_DISCOVERY_DATA) this.#send(socket, remote.port, remote.address)
 		})
 
 		socket.on('error', (error: Error) => {

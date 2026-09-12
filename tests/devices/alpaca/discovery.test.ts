@@ -154,7 +154,7 @@ test('AlpacaDiscoveryServer reports lifecycle state and refuses a second start',
 	expect(server.ip).toBeUndefined()
 })
 
-test('AlpacaDiscoveryServer ignores invalid discovery request payloads', async () => {
+test.each(['alpacadiscovery0', ALPACA_DISCOVERY_DATA.slice(0, -1)])('AlpacaDiscoveryServer ignores invalid discovery request payload %s', async (payload: string) => {
 	const server = new AlpacaDiscoveryServer({ ignoreLocalhost: false })
 	const client = await bindUdpClient('127.0.0.1')
 
@@ -164,9 +164,25 @@ test('AlpacaDiscoveryServer ignores invalid discovery request payloads', async (
 		expect(await server.start('127.0.0.1', 0, false)).toBe(true)
 
 		const messagesPromise = readUdpMessages(client, 1, 150)
-		await sendUdpMessage(client, 'alpacadiscovery0', server.port, '127.0.0.1')
+		await sendUdpMessage(client, payload, server.port, '127.0.0.1')
 
 		expect(await messagesPromise).toEqual([])
+	} finally {
+		server.stop()
+		client.close()
+	}
+})
+
+test.each([ALPACA_DISCOVERY_DATA, `${ALPACA_DISCOVERY_DATA}\0`, ALPACA_DISCOVERY_DATA.padEnd(64, '\0')])('AlpacaDiscoveryServer accepts a v1 probe with reserved trailing bytes: %j', async (payload: string) => {
+	const server = new AlpacaDiscoveryServer({ ignoreLocalhost: false })
+	const client = await bindUdpClient('127.0.0.1')
+	server.addPort(12345)
+
+	try {
+		await server.start('127.0.0.1', 0, false)
+		const messagesPromise = readUdpMessages(client, 1, 250)
+		await sendUdpMessage(client, payload, server.port, '127.0.0.1')
+		expect(await messagesPromise).toEqual(['{"AlpacaPort":12345}'])
 	} finally {
 		server.stop()
 		client.close()
