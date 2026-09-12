@@ -1,3 +1,4 @@
+import { CRC } from '../../../io/crc'
 import type { FirmataClient } from '../firmata'
 import { DEFAULT_POLLING_INTERVAL, type Hygrometer, PeripheralBase, type Thermometer } from '../peripheral'
 
@@ -70,10 +71,11 @@ export class AM2320 extends PeripheralBase<AM2320> implements Hygrometer, Thermo
 		}
 	}
 
-	// Decodes the AM2320 reply frame: humidity (0.1%/LSB) and signed temperature (0.1 °C/LSB), then commits.
+	// Decodes the AM2320 reply frame after validating its CRC-16: humidity (0.1%/LSB) and signed temperature (0.1 °C/LSB), then commits.
 	twoWireMessage(client: FirmataClient, address: number, register: number, data: Buffer) {
 		if (client !== this.client || address !== AM2320.ADDRESS || data.byteLength !== AM2320.FRAME_SIZE) return
 		if (data[0] !== AM2320.READ_HOLDING_REGISTERS_CMD || data[1] !== AM2320.REGISTER_COUNT) return
+		if (CRC.crc16modbus.compute(data, undefined, 0, 6) !== data.readUInt16LE(6)) return
 
 		const humidity = data.readUint16BE(2) / 10
 		const rawTemperature = data.readUint16BE(4) & 0x7fff

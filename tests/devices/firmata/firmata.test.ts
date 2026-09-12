@@ -1059,13 +1059,22 @@ test('AM2320 configures i2c reads and emits humidity and temperature updates', a
 	expect(client.messages[2]).toEqual(['write', AM2320.ADDRESS, Buffer.from([AM2320.READ_HOLDING_REGISTERS_CMD, AM2320.START_REGISTER, AM2320.REGISTER_COUNT])])
 	expect(client.messages[3]).toEqual(['read', AM2320.ADDRESS, -1, AM2320.FRAME_SIZE, false, 7, 'stop'])
 
+	const validFrame = Buffer.from([AM2320.READ_HOLDING_REGISTERS_CMD, AM2320.REGISTER_COUNT, 0x02, 0x2b, 0x80, 0x7b, 0xa1, 0xbb])
+	am2320.twoWireMessage(client as never, AM2320.ADDRESS, -1, validFrame)
+	expect(am2320.humidity).toBeCloseTo(55.5, 6)
+	expect(am2320.temperature).toBeCloseTo(-12.3, 6)
+	expect(updates).toBe(1)
+	expect(am2320.samples).toBe(1)
+
 	am2320.twoWireMessage(client as never, AM2320.ADDRESS, -1, Buffer.from([AM2320.READ_HOLDING_REGISTERS_CMD, AM2320.REGISTER_COUNT, 0x02, 0x2b, 0x80, 0x7b, 0x00, 0x00]))
 	expect(am2320.humidity).toBeCloseTo(55.5, 6)
 	expect(am2320.temperature).toBeCloseTo(-12.3, 6)
 	expect(updates).toBe(1)
+	expect(am2320.samples).toBe(1)
 
-	am2320.twoWireMessage(client as never, AM2320.ADDRESS, -1, Buffer.from([AM2320.READ_HOLDING_REGISTERS_CMD, AM2320.REGISTER_COUNT, 0x02, 0x2b, 0x80, 0x7b, 0x00, 0x00]))
+	am2320.twoWireMessage(client as never, AM2320.ADDRESS, -1, validFrame)
 	expect(updates).toBe(1)
+	expect(am2320.samples).toBe(2)
 
 	am2320.stop()
 	expect(client.handlers.size).toBe(0)
