@@ -41,4 +41,25 @@ describe.skipIf(SKIP)('wheel simulator', () => {
 		expect(manager.has(client, wheel.name)).toBeFalse()
 		expect(manager.properties.length).toBe(0)
 	}, 3000)
+
+	test('cancels a pending move when returning to the current slot', async () => {
+		const handler = new IndiClientHandlerSet()
+		const manager = new WheelManager()
+		handler.add(manager)
+
+		using client = new ClientSimulator('wheel', handler)
+		using simulator = new WheelSimulator('Wheel Simulator', client)
+		const wheel = manager.get(client, simulator.name)!
+
+		manager.connect(wheel)
+		await waitUntil(() => wheel.connected)
+
+		manager.moveTo(wheel, 4)
+		await waitUntil(() => wheel.moving)
+		expect(wheel.position).toBe(0)
+
+		manager.moveTo(wheel, 0)
+		await waitUntil(() => !wheel.moving)
+		expect(wheel.position).toBe(0)
+	}, 3000)
 })
