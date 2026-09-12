@@ -419,7 +419,7 @@ function writeShuffledXisfSamples(input: ImageRawType, output: Buffer, bitpix: B
 			output[total + stored] = little ? b1 : b2
 			output[total * 2 + stored] = little ? b2 : b1
 			output[total * 3 + stored] = little ? b3 : b0
-		} else if (pixelInBytes === 8) {
+		} else if (pixelInBytes === 8 && bitpix < 0) {
 			bits.setFloat64(0, input[source], little)
 			output[stored] = bits.getUint8(0)
 			output[total + stored] = bits.getUint8(1)
@@ -430,7 +430,7 @@ function writeShuffledXisfSamples(input: ImageRawType, output: Buffer, bitpix: B
 			output[total * 6 + stored] = bits.getUint8(6)
 			output[total * 7 + stored] = bits.getUint8(7)
 		} else {
-			throw new Error('invalid XISF image buffer size')
+			throw new Error(`unsupported XISF BITPIX: ${bitpix}`)
 		}
 
 		if (planar) {
@@ -444,7 +444,8 @@ function writeShuffledXisfSamples(input: ImageRawType, output: Buffer, bitpix: B
 	}
 }
 
-// Maps a FITS BITPIX code to the corresponding XISF sample format (unsigned integers / IEEE floats).
+// Maps a supported FITS BITPIX code to the corresponding XISF sample format (UInt8/16/32 or
+// Float32/64). BITPIX 64 is XISF UInt64, which this writer does not encode.
 function sampleFormatFromBitpix(bitpix: Bitpix): XisfSampleFormat {
 	switch (bitpix) {
 		case 8:
@@ -453,8 +454,6 @@ function sampleFormatFromBitpix(bitpix: Bitpix): XisfSampleFormat {
 			return 'UInt16'
 		case 32:
 			return 'UInt32'
-		case 64:
-			return 'UInt64'
 		case -32:
 			return 'Float32'
 		case -64:

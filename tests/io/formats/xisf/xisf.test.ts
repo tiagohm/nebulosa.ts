@@ -312,6 +312,18 @@ describe('write', () => {
 		expect(buffer.readUInt32LE(12)).toBe(0)
 	})
 
+	test('rejects BITPIX 64 without emitting UInt64', () => {
+		const image = { header: { SIMPLE: true, BITPIX: 64, NAXIS: 2, NAXIS1: 2, NAXIS2: 1 }, raw: new Float64Array([0, 1]) }
+		const cases = [false, { format: 'zstd' as const }, { format: 'zstd' as const, shuffled: true }] as const
+
+		for (const compression of cases) {
+			const buffer = Buffer.alloc(4096)
+			expect(writeXisf(bufferSink(buffer), [image], { compression })).rejects.toThrow('unsupported XISF BITPIX: 64')
+			expect(buffer.toString('ascii')).not.toContain('UInt64')
+			expect(buffer.subarray(0, 8).toString('ascii')).not.toBe(XISF_SIGNATURE)
+		}
+	})
+
 	test('completes partial sink writes', async () => {
 		const raw = new Float64Array([0, 0.5, 1])
 		const buffer = Buffer.alloc(4096)
