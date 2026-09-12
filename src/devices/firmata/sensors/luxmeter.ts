@@ -160,7 +160,7 @@ export class BH1750 extends PeripheralBase<BH1750> implements Luxmeter {
 
 	// Decodes the 16-bit sensor output into lux.
 	twoWireMessage(client: FirmataClient, address: number, register: number, data: Buffer) {
-		if (client !== this.client || address !== this.address || register !== -1 || data.byteLength !== 2) return
+		if (client !== this.client || address !== this.address || data.byteLength !== 2) return
 
 		const raw = data.readUInt16BE(0)
 		const lux = this.calculateLux(raw)

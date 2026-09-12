@@ -1150,7 +1150,7 @@ test('BH1750 configures i2c measurements and emits lux updates', async () => {
 
 	expect(client.messages[5]).toEqual(['read', BH1750.ADDRESS, -1, 2, false, 7, 'stop'])
 
-	bh1750.twoWireMessage(client as never, BH1750.ADDRESS, -1, Buffer.from([0x00, 0x78]))
+	bh1750.twoWireMessage(client as never, BH1750.ADDRESS, 0, Buffer.from([0x00, 0x78]))
 	expect(bh1750.raw).toBe(120)
 	expect(bh1750.lux).toBeCloseTo(222.58064516129, 6)
 	expect(updates).toBe(1)
