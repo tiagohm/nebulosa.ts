@@ -289,6 +289,46 @@ test('reports saturated samples connected across the initial core boundary', () 
 	}
 })
 
+test('accepts a compact saturated core larger than the initial core radius', () => {
+	const width = 64
+	const height = 64
+	const raw = new Float32Array(width * height)
+	raw.fill(0.01)
+	plotBahtinovSpikes(raw, width, height, 1, 32, 32, 80, 2, undefined, { halfLength: 24, taperLength: 4, fwhm: 2 })
+	for (let y = 0; y < height; y++) {
+		for (let x = 0; x < width; x++) {
+			const dx = x - 32
+			const dy = y - 32
+			if (dx * dx + dy * dy < 49) raw[y * width + x] = 1
+		}
+	}
+	const result = preprocessBahtinov({ image: image(raw, width, height), area: { left: 0, top: 0, right: width, bottom: height }, center: { x: 32, y: 32 } }, { saturationLevel: 0.9, coreRadius: 6 })
+	expect(result.success).toBeTrue()
+	if (result.success) {
+		expect(result.coreSaturated).toBeTrue()
+		expect(result.ridgePoints.count).toBeGreaterThan(30)
+	}
+})
+
+test('rejects saturated support elongated along a spike', () => {
+	const width = 96
+	const height = 64
+	const raw = new Float32Array(width * height)
+	raw.fill(0.01)
+	plotBahtinovSpikes(raw, width, height, 1, 32, 32, 80, 2, undefined, { halfLength: 24, taperLength: 4, fwhm: 2 })
+	for (let y = 0; y < height; y++) {
+		for (let x = 0; x < width; x++) {
+			const dx = x - 32
+			const dy = y - 32
+			if (dx * dx + dy * dy < 9) raw[y * width + x] = 1
+		}
+	}
+	for (let x = 35; x < 77; x++) raw[32 * width + x] = 1
+	const result = preprocessBahtinov({ image: image(raw, width, height), area: { left: 0, top: 0, right: width, bottom: height }, center: { x: 32, y: 32 } }, { saturationLevel: 0.9, coreRadius: 6 })
+	expect(result.success).toBeFalse()
+	if (!result.success) expect(result.reason).toBe('saturated')
+})
+
 test('preserves saturation from either native CFA green lattice', () => {
 	const width = 64
 	const height = 64
