@@ -805,7 +805,7 @@ export class AlpacaServer {
 
 		if (isFocuser(device)) {
 			return makeAlpacaResponse(SUPPORTED_FOCUSER_ACTIONS)
-		} else if (isWheel(device)) {
+		} else if (isWheel(device) && device.canSetNames) {
 			return makeAlpacaResponse(SUPPORTED_WHEEL_ACTIONS)
 		}
 
@@ -819,6 +819,14 @@ export class AlpacaServer {
 
 		if (isFocuser(device)) {
 			if (action === 'togglereverse') return this.#focuserToggleReverse(device)
+		} else if (isWheel(device) && action === 'setnames') {
+			if (!device.canSetNames) return makeAlpacaErrorResponse(AlpacaException.ActionNotImplemented, 'Filter wheel does not support setting names')
+
+			const names = parseWheelNames(data.Parameters, device.count)
+			if (names === undefined) return makeAlpacaErrorResponse(AlpacaException.InvalidValue, 'Parameters must be a JSON array with one name per filter')
+
+			this.options.wheel?.slots(device, names)
+			return makeAlpacaResponse('OK')
 		}
 
 		return makeAlpacaErrorResponse(AlpacaException.ActionNotImplemented, 'Unknown action')
@@ -1366,8 +1374,9 @@ export class AlpacaServer {
 	}
 
 	#wheelGetNames(id: number) {
-		const names = new Array<string>(this.#wheel(id).device.count)
-		for (let i = 0; i < names.length; i++) names[i] = `Filter ${i + 1}`
+		const { device } = this.#wheel(id)
+		const names = new Array<string>(device.count)
+		for (let i = 0; i < names.length; i++) names[i] = device.names[i] ?? `Filter ${i + 1}`
 		return makeAlpacaResponse(names)
 	}
 
@@ -2482,6 +2491,21 @@ function weatherSensorElapsedSince(manager: WeatherManager | undefined, device: 
 // Case-insensitive boolean parse of an Alpaca 'True'/'False' form value.
 function isTrue(value: string | undefined | null) {
 	return value?.toLowerCase() === 'true'
+}
+
+// Parses the JSON array used by the filter-wheel SetNames action, requiring one string per slot.
+function parseWheelNames(value: string, count: number): readonly string[] | undefined {
+	let parsed: unknown
+
+	try {
+		parsed = JSON.parse(value)
+	} catch {
+		return undefined
+	}
+
+	if (!Array.isArray(parsed) || parsed.length !== count || !parsed.every((name: unknown): name is string => typeof name === 'string')) return undefined
+
+	return parsed
 }
 
 // Wraps a value in the Alpaca JSON response envelope.

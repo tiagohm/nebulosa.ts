@@ -726,3 +726,18 @@ test('image bytes respect FITS buffer views and their response bounds', async ()
 
 	expect(body.byteLength).toBe(makeImageBytesFromFits(compact).byteLength)
 })
+
+test('filter wheel exposes and updates its real slot names', async () => {
+	await using fixture = await startAlpacaServer(ALPACA_WHEEL)
+	const names = fixture.device.names.map((name, index) => `${name} ${index + 1}`)
+
+	expect((await fixture.get(fixture.path + '/names')).Value).toEqual(fixture.device.names)
+	expect((await fixture.get(fixture.path + '/supportedactions')).Value).toEqual(['SetNames'])
+
+	const response = await fixture.put(fixture.path + '/action', { Action: 'SetNames', Parameters: JSON.stringify(names) })
+	await waitUntil(() => fixture.device.names.every((name, index) => name === names[index]))
+
+	expect(response.ErrorNumber).toBe(0)
+	expect(response.Value).toBe('OK')
+	expect((await fixture.get(fixture.path + '/names')).Value).toEqual(names)
+})
