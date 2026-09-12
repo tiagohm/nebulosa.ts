@@ -237,6 +237,24 @@ describe('generate astronomical image noise', () => {
 		expect(rgbTinted[1]).toBeGreaterThan(rgbSky[1])
 	})
 
+	test('moon and light pollution remain visible when natural sky is disabled', () => {
+		const width = 32
+		const height = 32
+		const dark = new Float64Array(width * height)
+		const moonlit = new Float64Array(width * height)
+		const polluted = new Float64Array(width * height)
+		const sky = { enabled: false, baseRate: 10000 }
+		const exposure = { exposureTime: 1 }
+
+		generateNoiseImage(dark, width, height, 1, baseConfig({ exposure, sky }))
+		generateNoiseImage(moonlit, width, height, 1, baseConfig({ exposure, sky, moon: { enabled: true, illuminationFraction: 1, altitude: 0.9, angularDistance: 0.35, strength: 1 } }))
+		generateNoiseImage(polluted, width, height, 1, baseConfig({ exposure, sky, lightPollution: { enabled: true, strength: 1, direction: 0, gradientStrength: 0.2, domeSharpness: 1.2 } }))
+
+		expect(meanOf(dark)).toBe(0)
+		expect(meanOf(moonlit)).toBeGreaterThan(0)
+		expect(meanOf(polluted)).toBeGreaterThan(0)
+	})
+
 	test('applies moonlight and first-channel sky scaling in monochrome mode', () => {
 		const width = 192
 		const height = 128
