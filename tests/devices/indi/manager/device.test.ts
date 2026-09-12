@@ -31,6 +31,14 @@ test('dome interface bit is rediscovered as a dome device type after interface b
 
 	updated = false
 
+	DRIVER_INTERFACE.value = (DeviceInterfaceType.CCD | DeviceInterfaceType.FOCUSER).toFixed(0)
+	manager.textVector(client, message, 'setTextVector')
+
+	expect(camera!.interfaces).toEqual(['camera', 'focuser'])
+	expect(updated).toBeTrue()
+
+	updated = false
+
 	DRIVER_INTERFACE.value = (DeviceInterfaceType.CCD | DeviceInterfaceType.FILTER | DeviceInterfaceType.FOCUSER).toFixed(0)
 	manager.textVector(client, message, 'setTextVector')
 

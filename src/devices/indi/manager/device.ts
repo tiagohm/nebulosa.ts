@@ -400,7 +400,7 @@ export abstract class DeviceManager<D extends Device> implements IndiClientHandl
 
 				this.add(device)
 				this.ask(device)
-			} else if (device.interfaces.length !== interfaces.length) {
+			} else if (device.interfaces.length !== interfaces.length || device.interfaces.some((type, index) => type !== interfaces[index])) {
 				device.interfaces = interfaces
 				this.updated(device, 'interfaces', undefined)
 			}
