@@ -161,6 +161,35 @@ test('to date', () => {
 	expect(timeToDate(timeJulianYear(2000))).toEqual([2000, 1, 1, 12, 0, 0, 0])
 })
 
+test('UTC civil times on a leap-second day stay 36 s behind TAI', () => {
+	function secondsBetween(a: Time, b: Time) {
+		return Math.abs(toJulianDay(a) - toJulianDay(b)) * DAYSEC
+	}
+
+	for (let hour = 0; hour < 24; hour++) {
+		const u = timeYMDHMS(2016, 12, 31, hour, 0, 0, Timescale.UTC)
+		expect(timeToDate(u)).toEqual([2016, 12, 31, hour, 0, 0, 0])
+		expect(secondsBetween(tai(u), timeYMDHMS(2016, 12, 31, hour, 0, 36, Timescale.TAI))).toBeLessThan(1e-3)
+	}
+
+	expect(secondsBetween(tai(timeYMDHMS(2017, 1, 1, 12, 0, 0, Timescale.UTC)), timeYMDHMS(2017, 1, 1, 12, 0, 37, Timescale.TAI))).toBeLessThan(1e-3)
+	expect(secondsBetween(tai(timeYMD(2016, 12, 31, 0.5, Timescale.UTC)), timeYMDHMS(2016, 12, 31, 12, 0, 36, Timescale.TAI))).toBeLessThan(1e-3)
+})
+
+test('TAI 12:00:36 on a leap-second day is 12:00:00 UTC', () => {
+	const utcNoon = timeYMDHMS(2016, 12, 31, 12, 0, 0, Timescale.UTC)
+	const fromTai = utc(timeYMDHMS(2016, 12, 31, 12, 0, 36, Timescale.TAI))
+	expect(Math.abs(toJulianDay(fromTai) - toJulianDay(utcNoon)) * DAYSEC).toBeLessThan(1e-3)
+	expect(timeToDate(fromTai)).toEqual([2016, 12, 31, 12, 0, 0, 0])
+})
+
+test('UTC leap second 23:59:60 stays on that civil date', () => {
+	const u = timeYMDHMS(2016, 12, 31, 23, 59, 60, Timescale.UTC)
+	expect(timeToDate(u)).toEqual([2016, 12, 31, 23, 59, 60, 0])
+	expect(Math.abs(toJulianDay(tai(u)) - toJulianDay(timeYMDHMS(2017, 1, 1, 0, 0, 36, Timescale.TAI))) * DAYSEC).toBeLessThan(1e-3)
+	expect(Math.abs(toJulianDay(tai(timeYMDHMS(2016, 12, 31, 23, 59, 60.5, Timescale.UTC))) - toJulianDay(timeYMDHMS(2017, 1, 1, 0, 0, 36.5, Timescale.TAI))) * DAYSEC).toBeLessThan(1e-3)
+})
+
 test('to unix', () => {
 	expect(timeToUnix(timeYMDHMS(2020, 1, 1, 12, 0, 0))).toBe(1577880000)
 })
