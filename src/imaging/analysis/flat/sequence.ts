@@ -593,11 +593,17 @@ function assessSignalStability(planes: readonly FlatSequencePlaneAnalysis[], tim
 function assessMetric(values: readonly (number | undefined)[], limit: number | undefined): FlatCheck {
 	if (limit === undefined) return { status: 'unknown' }
 	let worst = 0
+	let missing = false
 	for (const value of values) {
-		if (value === undefined || !Number.isFinite(value)) return { status: 'unknown', value: worst, limits: [0, limit] }
+		if (value === undefined || !Number.isFinite(value)) {
+			missing = true
+			continue
+		}
 		worst = Math.max(worst, value)
 	}
-	return { status: worst > limit ? 'fail' : 'pass', value: worst, limits: [0, limit] }
+	if (worst > limit) return { status: 'fail', value: worst, limits: [0, limit] }
+	if (missing) return { status: 'unknown', value: worst, limits: [0, limit] }
+	return { status: 'pass', value: worst, limits: [0, limit] }
 }
 
 // Aggregates multiple configured checks without comparing values that use different rates.

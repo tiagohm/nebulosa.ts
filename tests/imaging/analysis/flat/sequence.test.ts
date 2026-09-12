@@ -102,6 +102,53 @@ test('measures and rejects robust global drift without inventing spatial variati
 	expect(result.assessment.reasons).toContain('sequenceDrift')
 })
 
+test('fails a profile check when a finite axis exceeds its limit despite a missing axis', () => {
+	const width = 32
+	const height = 24
+	const mask = new Uint8Array(width * height)
+	mask.fill(1, 0, width)
+	const frames = asSequence(
+		[0, 1, 2, 3, 4].map((index) =>
+			completeFrame(index, {
+				width,
+				height,
+				vignetting: 0,
+				columnBanding: { amplitude: index * 0.05, period: 12 },
+			}),
+		),
+	)
+	const result = analyzeFlatSequence({ frames, mask }, { maximumProfileVariation: 0.001 })
+
+	expect(result.planes[0].rowVariation).toBeUndefined()
+	expect(result.planes[0].columnVariation).toBeGreaterThan(0.001)
+	expect(result.assessment.profileStability).toMatchObject({ status: 'fail', value: result.planes[0].columnVariation, limits: [0, 0.001] })
+	expect(result.assessment.verdict).toBe('rejected')
+})
+
+test('fails a spatial check when one plane exceeds its limit and another lacks a positive median', () => {
+	const frames = asSequence(
+		[0, 1, 2, 3, 4].map((index) =>
+			completeFrame(index, {
+				channels: 3,
+				channelResponse: [1, 0, 1],
+				bias: 0,
+				vignetting: 0,
+				gradient: { x: index * 0.02, y: 0 },
+			}),
+		),
+	)
+	const result = analyzeFlatSequence({ frames }, { maximumSpatialVariation: 0.001 })
+	const green = result.planes.find((plane) => plane.plane === 'green')
+	const exceeding = result.planes.map((plane) => plane.spatialVariation).filter((value): value is number => value !== undefined && value > 0.001)
+
+	expect(green?.medianSignal).toBeUndefined()
+	expect(green?.spatialVariation).toBeUndefined()
+	expect(exceeding.length).toBeGreaterThan(0)
+	expect(result.assessment.spatialStability.status).toBe('fail')
+	expect(result.assessment.spatialStability.value).toBe(Math.max(...exceeding))
+	expect(result.assessment.verdict).toBe('rejected')
+})
+
 test('detects temporal tile and axis-profile variation independently of global level', () => {
 	const spatialFrames = asSequence([0, 1, 2, 3, 4].map((index) => completeFrame(index, { gradient: { x: index * 0.02, y: 0 } })))
 	const spatial = analyzeFlatSequence({ frames: spatialFrames }, sequenceOptions({ maximumSignalVariation: 1, maximumSpatialVariation: 0.001, maximumProfileVariation: 1, maximumDriftPerFrame: 1, maximumDriftPerSecond: undefined }))
