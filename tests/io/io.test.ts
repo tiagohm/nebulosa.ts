@@ -424,6 +424,25 @@ describe('base64', () => {
 		expect(buffer.toString('ascii')).toBe('  abcdef')
 	})
 
+	test('string seek skips whitespace wrapping', async () => {
+		const raw = Buffer.from('0123456789abcdef')
+		const packed = raw.toString('base64')
+		let wrapped = ''
+		for (let i = 0; i < packed.length; i += 8) wrapped += `${packed.slice(i, i + 8)}\n`
+
+		const packedSource = base64Source(packed)
+		const wrappedSource = base64Source(wrapped)
+		const packedOut = Buffer.allocUnsafe(4)
+		const wrappedOut = Buffer.allocUnsafe(4)
+
+		expect(packedSource.seek(12)).toBeTrue()
+		expect(wrappedSource.seek(12)).toBeTrue()
+		expect(await packedSource.read(packedOut)).toBe(4)
+		expect(await wrappedSource.read(wrappedOut)).toBe(4)
+		expect(packedOut.toString('ascii')).toBe('cdef')
+		expect(wrappedOut.toString('ascii')).toBe('cdef')
+	})
+
 	test('string source seek is in decoded bytes', async () => {
 		const source = base64Source('YWJjZGVm')
 		const buffer = Buffer.alloc(4)

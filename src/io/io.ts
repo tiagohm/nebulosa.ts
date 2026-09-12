@@ -289,7 +289,8 @@ export type Base64Alphabet = 'base64' | 'base64url'
 
 // A seekable source that streams Base64-decoded bytes from an underlying byte Source or string. Decodes
 // incrementally, tolerating whitespace and either alphabet, and keeps a partial 4-char group across reads;
-// seeks align to 3-byte/4-char group boundaries and discard the intra-group remainder.
+// seeks align to 3-byte/4-char group boundaries and discard the intra-group remainder. String seeks skip
+// whitespace; Source-backed seeks use packed 4-char offsets and require an unwrapped encoded stream.
 export class Base64Source implements Source, Seekable {
 	readonly #buffer = Buffer.allocUnsafe(1024)
 	readonly #decoded = [-1, -1, -1] // current decoded base64 bytes
@@ -317,8 +318,15 @@ export class Base64Source implements Source, Seekable {
 		let ok = false
 
 		if (typeof this.source === 'string') {
-			if (encodedPosition > this.source.length) return false
-			this.#spos = encodedPosition
+			let i = 0
+			let n = 0
+			const max = this.source.length
+			while (i < max && n < encodedPosition) {
+				const c = this.source.charCodeAt(i++)
+				if ((c >= 65 && c <= 90) || (c >= 97 && c <= 122) || (c >= 48 && c <= 57) || c === 43 || c === 45 || c === 47 || c === 95) n++
+			}
+			if (n < encodedPosition) return false
+			this.#spos = i
 			ok = true
 		} else if (isSeekable(this.source)) {
 			ok = this.source.seek(encodedPosition)
