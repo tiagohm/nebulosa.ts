@@ -2096,8 +2096,8 @@ export class AlpacaServer {
 			this.options.focuser?.moveTo(device, position)
 		} else if (position > 0) {
 			this.options.focuser?.moveIn(device, position)
-		} else {
-			this.options.focuser?.moveOut(device, position)
+		} else if (position < 0) {
+			this.options.focuser?.moveOut(device, -position)
 		}
 
 		return makeAlpacaResponse(undefined)

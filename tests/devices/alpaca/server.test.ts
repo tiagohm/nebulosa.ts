@@ -784,3 +784,16 @@ test('cover calibrator reports missing halves without throwing', async () => {
 		expect((await fixture.put(fixture.path + '/calibratoron', { Brightness: '10' })).ErrorNumber).toBe(0)
 	}
 })
+
+test('relative focuser moves send a positive step magnitude', async () => {
+	await using fixture = await startAlpacaServer(ALPACA_FOCUSER)
+	fixture.device.canAbsoluteMove = false
+	using moveIn = spyOn(fixture.manager, 'moveIn')
+	using moveOut = spyOn(fixture.manager, 'moveOut')
+
+	const response = await fixture.put(fixture.path + '/move', { Position: '-50' })
+
+	expect(response.ErrorNumber).toBe(0)
+	expect(moveIn).not.toHaveBeenCalled()
+	expect(moveOut).toHaveBeenCalledWith(fixture.device, 50)
+})
