@@ -27,9 +27,14 @@ test('pmod', () => {
 	expect(pmod(-1.6868146928204135, TAU)).toBeCloseTo(4.596370614359173, 15)
 	expect(pmod(-5, -3)).toBe(1)
 	expect(Object.is(pmod(-6, -3), 0)).toBeTrue()
+	expect(pmod(-1, 4)).toBe(3)
 	expect(pmod(-1, 360)).toBe(359)
 	expect(pmod(360, 360)).toBe(0)
 	expect(pmod(-0, 360)).toBe(0)
+	expect(pmod(-1e-16, TAU)).toBe(0)
+	expect(pmod(-Number.EPSILON, TAU)).toBe(0)
+	expect(pmod(-1e-20, 1)).toBe(0)
+	expect(pmod(-1e-16, TAU) < TAU).toBe(true)
 })
 
 test('amod', () => {
@@ -62,6 +67,11 @@ test('divmod', () => {
 			expect(r).toBeLessThan(Math.abs(den))
 		}
 	}
+
+	const [qTiny, rTiny] = divmod(-1e-20, 1)
+	expect(qTiny * 1 + rTiny).toBeCloseTo(-1e-20, 15)
+	expect(rTiny).toBeGreaterThanOrEqual(0)
+	expect(rTiny).toBeLessThan(1)
 })
 
 test('floorDiv', () => {

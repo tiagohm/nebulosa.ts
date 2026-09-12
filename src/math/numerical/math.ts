@@ -65,11 +65,14 @@ export function twoProduct(a: number, b: number, out?: NumberArray) {
 	return out
 }
 
-// Computes the Euclidean modulo where the result is always non-negative.
+// Computes the Euclidean remainder in [0, |other|).
 export function pmod(num: number, other: number) {
 	const modulo = Math.abs(other)
-	const rem = num % modulo
-	return rem < 0 ? rem + modulo : rem + 0
+	let rem = num % modulo
+	if (rem < 0) rem += modulo
+	// Tiny negative residuals can round rem + |other| back to |other|.
+	if (rem >= modulo) rem = 0
+	return rem + 0
 }
 
 // Computes the Euclidean modulo where the result is always positive.
