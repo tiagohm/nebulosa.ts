@@ -163,20 +163,26 @@ function mergeArray(a: Uint8Array, b: Uint8Array) {
 }
 
 // Incremental XML parser. Feed bytes/strings via parse(); it returns any top-level nodes that completed
-// during that call and retains partial state between calls. Throws on malformed input (and resets).
+// during that call and retains partial state between calls. Throws on malformed input or when element
+// text exceeds the buffer cap, and resets in both cases.
 // The array returned by parse() is reused on the next call; retain the XmlNode objects, not the array.
 export class SimpleXmlParser {
 	#state = XmlState.START
 	readonly #tag = new InternalBuffer(256)
 	readonly #name = new InternalBuffer(256)
 	readonly #value = new InternalBuffer(1024)
-	readonly #text = new InternalBuffer(256, 1024 * 1024 * 256)
+	readonly #text: InternalBuffer
 	#attributes: XmlNodeAttributes = {}
 	#tree: XmlNode[] = []
 	#prevCode?: number
 	#closeTagSealed = false
 	readonly #encoder = new TextEncoder()
 	readonly #nodes: XmlNode[] = []
+
+	// `maxTextBytes` caps concatenated character data for the current element (default 256 MiB).
+	constructor(maxTextBytes: number = 1024 * 1024 * 256) {
+		this.#text = new InternalBuffer(256, maxTextBytes)
+	}
 
 	// Feeds a chunk of XML (string or bytes) and returns the top-level nodes that completed in this chunk.
 	// The returned array is cleared and reused on the next parse(); node objects remain valid.
@@ -186,7 +192,14 @@ export class SimpleXmlParser {
 		}
 
 		this.#nodes.length = 0
-		this.#processChunk(input, this.#nodes)
+		try {
+			this.#processChunk(input, this.#nodes)
+		} catch (error) {
+			// RangeError from the text-buffer cap (and any other unexpected throw) must not leave TEXT
+			// state and the open-element stack in place; the next parse() would resume the truncated node.
+			this.reset()
+			throw error
+		}
 		return this.#nodes
 	}
 
