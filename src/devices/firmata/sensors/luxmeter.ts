@@ -385,9 +385,9 @@ export class MAX44009 extends PeripheralBase<MAX44009> implements Luxmeter {
 
 	// Decodes the high/low lux registers and commits the new reading.
 	twoWireMessage(client: FirmataClient, address: number, register: number, data: Buffer) {
-		if (client !== this.client || address !== this.address || register !== MAX44009.LUX_HIGH_REG || data.byteLength !== 2) return
+		if (client !== this.client || address !== this.address || register !== MAX44009.LUX_HIGH_REG || data.byteLength !== 1) return
 
-		const lux = this.calculateLux(data[0], data[1])
+		const lux = this.calculateLux(data[0])
 		const changed = lux !== this.lux
 
 		if (changed) this.lux = lux
@@ -395,8 +395,8 @@ export class MAX44009 extends PeripheralBase<MAX44009> implements Luxmeter {
 		this.commit(changed)
 	}
 
-	// Decodes the exponent and mantissa registers into the ambient light level in lux.
-	calculateLux(highByte: number, lowByte: number) {
+	// Decodes the exponent and mantissa registers into lux; an omitted low byte leaves its nibble at zero.
+	calculateLux(highByte: number, lowByte: number = 0) {
 		const exponent = (highByte >>> 4) & 0x0f
 
 		if (exponent === 0x0f) return MAX44009.MAX_LUX
@@ -405,9 +405,9 @@ export class MAX44009 extends PeripheralBase<MAX44009> implements Luxmeter {
 		return 2 ** exponent * mantissa * 0.045
 	}
 
-	// Reads the high+low lux registers in one transaction (repeated start, no register auto-increment).
+	// Reads the high lux register; the device does not auto-increment its register pointer for burst reads.
 	#readMeasurement() {
-		this.client.twoWireRead(this.address, MAX44009.LUX_HIGH_REG, 2, false, 7, 'restart')
+		this.client.twoWireRead(this.address, MAX44009.LUX_HIGH_REG, 1, false, 7, 'restart')
 	}
 }
 

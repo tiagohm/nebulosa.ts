@@ -1228,14 +1228,14 @@ test('MAX44009 configures i2c reads and emits lux updates', () => {
 	expect(client.messages).toEqual([
 		['config', 0],
 		['write', MAX44009.ADDRESS, Buffer.from([MAX44009.CONFIGURATION_REG, MAX44009.DEFAULT_CONFIGURATION])],
-		['read', MAX44009.ADDRESS, MAX44009.LUX_HIGH_REG, 2, false, 7, 'restart'],
+		['read', MAX44009.ADDRESS, MAX44009.LUX_HIGH_REG, 1, false, 7, 'restart'],
 	])
 
-	max44009.twoWireMessage(client as never, MAX44009.ADDRESS, MAX44009.LUX_HIGH_REG, Buffer.from([0x10, 0x01]))
-	expect(max44009.lux).toBeCloseTo(0.09, 6)
+	max44009.twoWireMessage(client as never, MAX44009.ADDRESS, MAX44009.LUX_HIGH_REG, Buffer.from([0x12]))
+	expect(max44009.lux).toBeCloseTo(2.88, 6)
 	expect(updates).toBe(1)
 
-	max44009.twoWireMessage(client as never, MAX44009.ADDRESS, MAX44009.LUX_HIGH_REG, Buffer.from([0x10, 0x01]))
+	max44009.twoWireMessage(client as never, MAX44009.ADDRESS, MAX44009.LUX_HIGH_REG, Buffer.from([0x12]))
 	expect(updates).toBe(1)
 
 	max44009.stop()
