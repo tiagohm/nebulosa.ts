@@ -468,8 +468,9 @@ export class PHD2Client implements Disposable {
 		this.#socket?.close()
 		this.#socket = undefined
 
-		for (const { timer } of this.#commands.values()) {
-			clearTimeout(timer)
+		for (const command of this.#commands.values()) {
+			clearTimeout(command.timer)
+			command.promise.resolve({ success: false, error: 'socketUnavailable' })
 		}
 
 		this.#commands.clear()

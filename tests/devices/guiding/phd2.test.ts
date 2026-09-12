@@ -124,3 +124,20 @@ test('setConnected sends a boolean parameter', async () => {
 
 	expect(params).toEqual([[true], [false]])
 })
+
+test('close resolves pending commands', async () => {
+	const requestReceived = Promise.withResolvers<void>()
+
+	await withPHD2Server(
+		() => {
+			requestReceived.resolve()
+		},
+		async (client) => {
+			const pending = client.send('get_app_state', undefined, 1000)
+			await requestReceived.promise
+			client.close()
+
+			expect(await pending).toEqual({ success: false, error: 'socketUnavailable' })
+		},
+	)
+})
