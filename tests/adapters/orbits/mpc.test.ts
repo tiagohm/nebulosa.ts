@@ -347,6 +347,15 @@ permID |trkSub |mode|stn |obsTime                |ra         |dec        |rmsRA|
 			expect(copy.raError).toBeCloseTo(original.raError ?? Number.NaN, 12)
 		}
 	})
+
+	test('ADES time rounding carries into the next day', () => {
+		const document = parseADESPSV(SAMPLE)
+		const block = document.blocks[0]
+		if (!block) throw new Error('expected an ADES block')
+		const observation = { ...block.observations[0], time: timeYMDHMS(2000, 1, 1, 23, 59, 59.9996, Timescale.UTC) }
+		const written = writeADESPSV({ ...document, blocks: [{ ...block, observations: [observation] }] })
+		expect(written).toContain('2000-01-02T00:00:00.000Z')
+	})
 })
 
 describe('packed designations', () => {

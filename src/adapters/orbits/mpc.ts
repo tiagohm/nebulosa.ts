@@ -1262,19 +1262,24 @@ function parseADESTime(value: string): Time {
 }
 
 function formatADESTime(time: Time): string {
-	const [year, month, day, fraction] = eraJdToCal(time.day, time.fraction)
-	let seconds = fraction * 86400
-	if (seconds < 0) seconds = 0
-	if (seconds >= 86400) seconds = 86399.999
-	const hour = Math.floor(seconds / 3600)
-	const minute = Math.floor((seconds - hour * 3600) / 60)
-	const second = seconds - hour * 3600 - minute * 60
-	const whole = Math.floor(second)
-	const milli = Math.round((second - whole) * 1000)
-	const carry = milli === 1000
-	const s = carry ? whole + 1 : whole
-	const ms = carry ? 0 : milli
-	return `${pad4(year)}-${pad2(month)}-${pad2(day)}T${pad2(hour)}:${pad2(minute)}:${pad2(s)}.${String(ms).padStart(3, '0')}Z`
+	const date = eraJdToCal(time.day, time.fraction)
+	let [year, month, day] = date
+	const fraction = date[3]
+	let milliseconds = Math.round(Math.max(0, fraction) * 86400000)
+	if (milliseconds >= 86400000) {
+		const nextDate = eraJdToCal(time.day + 1, 0)
+		year = nextDate[0]
+		month = nextDate[1]
+		day = nextDate[2]
+		milliseconds = 0
+	}
+	const hour = Math.floor(milliseconds / 3600000)
+	milliseconds -= hour * 3600000
+	const minute = Math.floor(milliseconds / 60000)
+	milliseconds -= minute * 60000
+	const second = Math.floor(milliseconds / 1000)
+	const milli = milliseconds - second * 1000
+	return `${pad4(year)}-${pad2(month)}-${pad2(day)}T${pad2(hour)}:${pad2(minute)}:${pad2(second)}.${String(milli).padStart(3, '0')}Z`
 }
 
 // Canonicalizes one ADES JSON or PSV record and converts units to radians/AU/UTC.
