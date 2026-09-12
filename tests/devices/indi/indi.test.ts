@@ -253,6 +253,17 @@ describe('parse', () => {
 		expect(setVector.elements.EXPONENT.value).toBe(1e-6)
 	})
 
+	test('resets an incomplete document before parsing the next connection', () => {
+		let received: DefTextVector | undefined
+		const reconnectingClient = new IndiClient({ handler: { defTextVector: (_, vector) => (received = vector) } })
+
+		reconnectingClient.parse(Buffer.from('<defTextVector device="Device" name="PROPERTY">'))
+		reconnectingClient.close()
+		reconnectingClient.parse(Buffer.from('<defTextVector device="Device" name="PROPERTY"><defText name="VALUE">ready</defText></defTextVector>'))
+
+		expect(received?.elements.VALUE.value).toBe('ready')
+	})
+
 	test('keeps element names that collide with object prototype keys', () => {
 		const vector = client.parseDefVector({
 			name: 'defTextVector',

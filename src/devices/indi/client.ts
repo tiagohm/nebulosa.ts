@@ -93,6 +93,7 @@ export class IndiClient implements Client {
 	async connect(hostname: string, port: number = DEFAULT_INDI_PORT, options?: Omit<Bun.TCPSocketConnectOptions, 'hostname' | 'port' | 'socket' | 'data'>) {
 		if (this.#socket) return false
 
+		this.#parser.reset()
 		this.#socket = await Bun.connect({
 			...options,
 			hostname,
@@ -108,6 +109,7 @@ export class IndiClient implements Client {
 				},
 				close: () => {
 					console.warn('connection closed by client')
+					this.#parser.reset()
 					this.#socket = undefined
 					this.options?.handler?.close?.(this, false)
 				},
@@ -119,6 +121,7 @@ export class IndiClient implements Client {
 				},
 				end: () => {
 					console.warn('connection closed by server')
+					this.#parser.reset()
 					this.#socket = undefined
 					this.options?.handler?.close?.(this, true)
 				},
@@ -140,6 +143,7 @@ export class IndiClient implements Client {
 
 	// Terminates the connection.
 	close() {
+		this.#parser.reset()
 		this.#socket?.terminate()
 		this.#socket = undefined
 	}
