@@ -316,6 +316,33 @@ describe('parse', () => {
 })
 
 describe('write', () => {
+	test('does not overlap connection attempts', async () => {
+		let connections = 0
+		const server = Bun.listen({
+			hostname: '127.0.0.1',
+			port: 0,
+			socket: {
+				data: () => {},
+				open: () => {
+					connections++
+				},
+			},
+		})
+
+		const client = new IndiClient()
+
+		try {
+			const [first, second] = await Promise.all([client.connect('127.0.0.1', server.port), client.connect('127.0.0.1', server.port)])
+
+			expect(first).toBeTrue()
+			expect(second).toBeFalse()
+			expect(connections).toBe(1)
+		} finally {
+			client.close()
+			server.stop(true)
+		}
+	})
+
 	test('escapes XML attributes and text in outbound commands', async () => {
 		const payload = await captureClientWrites('</newTextVector>', (client) => {
 			client.sendText({

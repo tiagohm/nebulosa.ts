@@ -53,6 +53,8 @@ export class IndiClient implements Client {
 
 	readonly #parser = new SimpleXmlParser()
 	#socket?: Bun.Socket
+	// Prevents overlapping connection attempts from creating multiple sockets.
+	#connecting = false
 	// Cached [id, remoteHost, remotePort] populated on connect.
 	readonly #metadata: [string?, string?, number?] = []
 
@@ -91,54 +93,59 @@ export class IndiClient implements Client {
 	// Connects to the INDI server, wiring socket events into the parser and requesting all properties on
 	// open. Returns false if already connected.
 	async connect(hostname: string, port: number = DEFAULT_INDI_PORT, options?: Omit<Bun.TCPSocketConnectOptions, 'hostname' | 'port' | 'socket' | 'data'>) {
-		if (this.#socket) return false
+		if (this.#socket || this.#connecting) return false
 
+		this.#connecting = true
 		this.#parser.reset()
-		this.#socket = await Bun.connect({
-			...options,
-			hostname,
-			port,
-			socket: {
-				data: (_, data) => {
-					this.parse(data)
+		try {
+			this.#socket = await Bun.connect({
+				...options,
+				hostname,
+				port,
+				socket: {
+					data: (_, data) => {
+						this.parse(data)
+					},
+					open: (socket) => {
+						console.info('connection open')
+						this.#socket = socket
+						this.getProperties()
+					},
+					close: () => {
+						console.warn('connection closed by client')
+						this.#parser.reset()
+						this.#socket = undefined
+						this.options?.handler?.close?.(this, false)
+					},
+					error: (_, error) => {
+						console.error('socket error:', error)
+					},
+					connectError: (_, error) => {
+						console.error('connection failed:', error)
+					},
+					end: () => {
+						console.warn('connection closed by server')
+						this.#parser.reset()
+						this.#socket = undefined
+						this.options?.handler?.close?.(this, true)
+					},
+					timeout: () => {
+						console.warn('connection timed out')
+					},
 				},
-				open: (socket) => {
-					console.info('connection open')
-					this.#socket = socket
-					this.getProperties()
-				},
-				close: () => {
-					console.warn('connection closed by client')
-					this.#parser.reset()
-					this.#socket = undefined
-					this.options?.handler?.close?.(this, false)
-				},
-				error: (_, error) => {
-					console.error('socket error:', error)
-				},
-				connectError: (_, error) => {
-					console.error('connection failed:', error)
-				},
-				end: () => {
-					console.warn('connection closed by server')
-					this.#parser.reset()
-					this.#socket = undefined
-					this.options?.handler?.close?.(this, true)
-				},
-				timeout: () => {
-					console.warn('connection timed out')
-				},
-			},
-		})
+			})
 
-		const { remoteAddress, remotePort } = this.#socket
-		this.#metadata[0] = Bun.MD5.hash(`${remoteAddress}:${remotePort}:INDI`, 'hex')
-		this.#metadata[1] = hostname
-		this.#metadata[2] = remotePort
+			const { remoteAddress, remotePort } = this.#socket
+			this.#metadata[0] = Bun.MD5.hash(`${remoteAddress}:${remotePort}:INDI`, 'hex')
+			this.#metadata[1] = hostname
+			this.#metadata[2] = remotePort
 
-		this.description = `INDI Client at ${remoteAddress}:${remotePort}`
+			this.description = `INDI Client at ${remoteAddress}:${remotePort}`
 
-		return true
+			return true
+		} finally {
+			this.#connecting = false
+		}
 	}
 
 	// Terminates the connection.
