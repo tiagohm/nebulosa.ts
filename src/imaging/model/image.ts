@@ -142,6 +142,7 @@ export function readImageFromXisf(xisf: Xisf | XisfImage, source: Source & Seeka
 
 export async function readImageFromXisf(xisf: Xisf | XisfImage, source: Source & Seekable, argument: ImageReadArgument = 'auto'): Promise<Image | DigitalImage | undefined> {
 	const image = 'images' in xisf ? xisf.images[0] : xisf
+	if (image === undefined) return undefined
 	const { bitpix, geometry, header } = image
 	const { width, height, channels } = geometry
 

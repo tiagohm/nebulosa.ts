@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { Jpeg } from '../../../src/bindings/imaging/libturbojpeg'
-import { readImageFromFits, readImageFromJpeg, readImageFromPath, readImageFromSource, writeImageToFits, writeImageToXisf } from '../../../src/imaging/model/image'
+import { readImageFromFits, readImageFromJpeg, readImageFromPath, readImageFromSource, readImageFromXisf, writeImageToFits, writeImageToXisf } from '../../../src/imaging/model/image'
 import { approximateArcsinhStretchParameters, arcsinhStretch } from '../../../src/imaging/processing/arcsinh'
 import { clone } from '../../../src/imaging/processing/arithmetic'
 import { calibrate } from '../../../src/imaging/processing/calibration'
@@ -181,6 +181,10 @@ test('returns undefined for a non-Rice ZIMAGE HDU', async () => {
 
 	expect(await readImageFromFits({ hdus: [hdu] }, bufferSource(Buffer.alloc(16)))).toBeUndefined()
 	expect(await readImageFromFits(hdu, bufferSource(Buffer.alloc(16)))).toBeUndefined()
+})
+
+test('returns undefined when XISF has no supported images', async () => {
+	expect(await readImageFromXisf({ images: [] }, bufferSource(Buffer.alloc(1)))).toBeUndefined()
 })
 
 describe('read image from fits', () => {
