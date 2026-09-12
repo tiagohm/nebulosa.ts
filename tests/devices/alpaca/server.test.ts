@@ -658,3 +658,12 @@ test('camera forwards zero-duration bias exposures', async () => {
 	expect(enableBlob).toHaveBeenCalledWith(fixture.device)
 	expect(startExposure).toHaveBeenCalledWith(fixture.device, 0)
 })
+
+test('mount UTCDate follows the mount clock', async () => {
+	await using fixture = await startAlpacaServer(ALPACA_MOUNT)
+	const utc = Date.UTC(2020, 0, 1)
+	fixture.simulator.setTime({ utc, offset: 0 })
+	await waitUntil(() => fixture.device.time.utc === utc)
+
+	expect((await fixture.get(fixture.path + '/utcdate')).Value).toBe(new Date(utc).toISOString())
+})

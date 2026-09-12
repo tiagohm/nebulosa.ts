@@ -1665,7 +1665,7 @@ export class AlpacaServer {
 	}
 
 	#mountGetUTCDate(id: number) {
-		return makeAlpacaResponse(new Date().toISOString())
+		return makeAlpacaResponse(new Date(this.#telescope(id).device.time.utc).toISOString())
 	}
 
 	#mountSetUTCDate(id: number, data: { UTCDate: string }) {
