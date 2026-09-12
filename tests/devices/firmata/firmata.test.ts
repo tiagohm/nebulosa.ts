@@ -5,7 +5,7 @@ import { MCP4725 } from '../../../src/devices/firmata/components/dac'
 import { HD44780 } from '../../../src/devices/firmata/components/display'
 import { KT0803L, RDA5807, TEA5767 } from '../../../src/devices/firmata/components/radio'
 import { DS1307, DS3231 } from '../../../src/devices/firmata/components/rtc'
-import { type AnalogMapping, decodePacked7Bit, encodePacked7Bit, FirmataClient, type FirmataClientHandler, type OneWirePowerMode, type OneWireSearchMode, type Pin, PinMode, type Transport, type TwoWireAddressMode, type TwoWireAutoRestartMode } from '../../../src/devices/firmata/firmata'
+import { type AnalogMapping, decodePacked7Bit, encodePacked7Bit, FirmataClient, FirmataClientOverTcp, type FirmataClientHandler, type OneWirePowerMode, type OneWireSearchMode, type Pin, PinMode, type Transport, type TwoWireAddressMode, type TwoWireAutoRestartMode } from '../../../src/devices/firmata/firmata'
 import { PCF8574 } from '../../../src/devices/firmata/io'
 import { MPU6050 } from '../../../src/devices/firmata/sensors/accelerometer'
 import { ACS712 } from '../../../src/devices/firmata/sensors/ammeter'
@@ -303,6 +303,34 @@ test('a reconnect handshake does not inherit pins from the previous one', () => 
 
 	expect(client.pinCount).toBe(1)
 	expect(client.pinAt(1)).toBeUndefined()
+})
+
+test('a TCP client can reconnect after a remote socket close', async () => {
+	let connections = 0
+	const clientClosed = Promise.withResolvers<void>()
+	const server = Bun.listen({
+		hostname: '127.0.0.1',
+		port: 0,
+		socket: {
+			open: (socket) => {
+				connections++
+				if (connections === 1) socket.close()
+			},
+			data: () => {},
+		},
+	})
+	const client = new FirmataClientOverTcp(new ESP8266())
+	client.addHandler({ close: () => clientClosed.resolve() })
+
+	try {
+		expect(await client.connect('127.0.0.1', server.port)).toBeTrue()
+		await clientClosed.promise
+		expect(await client.connect('127.0.0.1', server.port)).toBeTrue()
+		expect(connections).toBe(2)
+	} finally {
+		client.disconnect()
+		server.stop()
+	}
 })
 
 describe('command encoding', () => {
