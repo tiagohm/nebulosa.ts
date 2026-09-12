@@ -665,7 +665,7 @@ export class PHD2Client implements Disposable {
 		return this.send<number>('set_algo_param', [axis, name, value])
 	}
 
-	setConnected(connected: number) {
+	setConnected(connected: boolean) {
 		return this.send<number>('set_connected', [connected])
 	}
 

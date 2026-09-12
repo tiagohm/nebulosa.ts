@@ -107,3 +107,20 @@ test('setPaused omits the type for a partial pause', async () => {
 
 	expect(params).toEqual([[true], [true, 'full']])
 })
+
+test('setConnected sends a boolean parameter', async () => {
+	const params: unknown[] = []
+
+	await withPHD2Server(
+		(socket, command) => {
+			params.push(command.params)
+			socket.write(`${JSON.stringify({ jsonrpc: '2.0', id: command.id, result: 0 })}\r\n`)
+		},
+		async (client) => {
+			expect(await client.setConnected(true)).toEqual({ success: true, result: 0 })
+			expect(await client.setConnected(false)).toEqual({ success: true, result: 0 })
+		},
+	)
+
+	expect(params).toEqual([[true], [false]])
+})
