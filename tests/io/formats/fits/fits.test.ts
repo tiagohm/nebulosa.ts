@@ -565,6 +565,28 @@ test('escape keyword', () => {
 	expect(sink).toEqual(source)
 })
 
+test('rejects a non-Rice compressed image HDU', () => {
+	const header: FitsHeader = {
+		XTENSION: 'BINTABLE',
+		BITPIX: 8,
+		NAXIS: 2,
+		NAXIS1: 8,
+		NAXIS2: 100,
+		PCOUNT: 0,
+		GCOUNT: 1,
+		ZIMAGE: true,
+		ZCMPTYPE: 'GZIP_1',
+		ZBITPIX: 16,
+		ZNAXIS: 2,
+		ZNAXIS1: 8,
+		ZNAXIS2: 100,
+	}
+	const hdu: FitsHdu = { header, data: { offset: 0, size: 800 } }
+	const output = new Float64Array(8 * 100)
+
+	expect(new FitsImageReader(hdu).read(bufferSource(Buffer.alloc(800)), output)).rejects.toThrow('unsupported FITS compression')
+})
+
 test('fits image reader and writer honor non-zero backing buffer offsets', async () => {
 	const header: FitsHeader = { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: 2, NAXIS2: 1, BSCALE: 1, BZERO: 32768 }
 	const writeBuffer = Buffer.alloc(16, 99)

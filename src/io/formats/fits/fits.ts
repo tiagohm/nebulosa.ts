@@ -1,6 +1,6 @@
 import { type FitsKeyword, KEYWORDS } from './headers'
 // oxfmt-ignore
-import { bitpixInBytes, bitpixKeyword, computeHduDataSize, escapeQuotedText, heightKeyword, isCommentKeyword, isCommentStyleCard, isRiceCompressedImageHeader, numberOfChannelsKeyword, numericKeyword, RICE_1_COMPRESSION_TYPE, textKeyword, uncompressedBitpixKeyword, uncompressedHeightKeyword, uncompressedNumberOfChannelsKeyword, uncompressedScaleKeyword, uncompressedWidthKeyword, uncompressedZeroKeyword, unescapeQuotedText, widthKeyword } from './util'
+import { bitpixInBytes, bitpixKeyword, computeHduDataSize, escapeQuotedText, heightKeyword, isCommentKeyword, isCommentStyleCard, isCompressedImageHeader, isRiceCompressedImageHeader, numberOfChannelsKeyword, numericKeyword, RICE_1_COMPRESSION_TYPE, textKeyword, uncompressedBitpixKeyword, uncompressedHeightKeyword, uncompressedNumberOfChannelsKeyword, uncompressedScaleKeyword, uncompressedWidthKeyword, uncompressedZeroKeyword, unescapeQuotedText, widthKeyword } from './util'
 import type { Writable } from '../../../core/types'
 import { validatePositiveInteger } from '../../../core/validation'
 import type { Image, ImageRawType, ImageSampleScale } from '../../../imaging/model/types'
@@ -1318,7 +1318,8 @@ function writePlanarTileToInterleaved(tile: NumberArray, output: ImageRawType, w
 }
 
 // Reads an image HDU's pixels into a channel-interleaved buffer, transparently handling both plain
-// big-endian images and Rice-compressed tile (ZIMAGE) extensions.
+// big-endian images and Rice-compressed tile (ZIMAGE) extensions. Other ZIMAGE compression types are
+// not implemented and throw rather than being decoded as an 8-bit table image.
 export class FitsImageReader {
 	readonly #compressed: boolean
 	readonly #buffer: Buffer
@@ -1341,10 +1342,13 @@ export class FitsImageReader {
 	}
 
 	// Reads FITS image samples into an interleaved buffer using the requested sample scale.
+	// Throws when the HDU is a tile-compressed image that is not RICE_1.
 	async read(source: Source & Seekable, output: ImageRawType, sampleScale: ImageSampleScale = 'normalized') {
 		if (this.#compressed) return await this.#readRiceCompressed(source, output, sampleScale)
 
 		const { header } = this.hdu
+		if (isCompressedImageHeader(header)) throw new Error('unsupported FITS compression')
+
 		const bitpix = bitpixKeyword(header, 0)
 		const pixelInBytes = bitpixInBytes(bitpix)
 		const width = widthKeyword(header, 0)
