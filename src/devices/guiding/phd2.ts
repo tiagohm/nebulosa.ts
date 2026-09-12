@@ -695,7 +695,7 @@ export class PHD2Client implements Disposable {
 	}
 
 	setPaused(paused: boolean, full: boolean = true) {
-		return this.send<number>('set_paused', [paused, full ? 'full' : null])
+		return this.send<number>('set_paused', full ? [paused, 'full'] : [paused])
 	}
 
 	setProfile(profile: number | PHD2Profile) {

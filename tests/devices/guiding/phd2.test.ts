@@ -90,3 +90,20 @@ test('findStar sends a named ROI parameter', async () => {
 
 	expect(command).toEqual({ method: 'find_star', params: { roi: [100, 80, 200, 200] }, id: expect.any(String) })
 })
+
+test('setPaused omits the type for a partial pause', async () => {
+	const params: unknown[] = []
+
+	await withPHD2Server(
+		(socket, command) => {
+			params.push(command.params)
+			socket.write(`${JSON.stringify({ jsonrpc: '2.0', id: command.id, result: 0 })}\r\n`)
+		},
+		async (client) => {
+			expect(await client.setPaused(true, false)).toEqual({ success: true, result: 0 })
+			expect(await client.setPaused(true)).toEqual({ success: true, result: 0 })
+		},
+	)
+
+	expect(params).toEqual([[true], [true, 'full']])
+})
