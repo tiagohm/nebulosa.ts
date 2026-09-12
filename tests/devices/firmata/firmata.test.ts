@@ -672,6 +672,21 @@ test('BMP280 derives altitude from the standard sea-level temperature', () => {
 	bmp280.stop()
 })
 
+test('BMP180 recovers when a pressure reply is lost', () => {
+	const client = new MockFirmataClient()
+	const bmp180 = new BMP180(client as never, 0)
+	const calibration = Buffer.alloc(22)
+
+	bmp180.start()
+	bmp180.twoWireMessage(client as never, BMP180.ADDRESS, 0xaa, calibration)
+	bmp180.twoWireMessage(client as never, BMP180.ADDRESS, 0xf6, Buffer.from([0x6d, 0x60]))
+	bmp180.twoWireMessage(client as never, BMP180.ADDRESS, 0xf6, Buffer.from([0x6d, 0x61]))
+
+	const pressureWrites = client.messages.filter((message) => message[0] === 'write' && message[2][1] === BMP180.READ_PRES_CMD)
+	expect(pressureWrites).toHaveLength(2)
+	bmp180.stop()
+})
+
 test('BMP280 compensate temperature & pressure', () => {
 	const bmp280 = new BMP280(undefined as never, 0)
 	expect(bmp280.compensateTemperature(519888)).toBeCloseTo(25.08, 2)

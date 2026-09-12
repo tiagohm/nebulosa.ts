@@ -126,6 +126,11 @@ export class BMP180 extends PeripheralBase<BMP180> implements Barometer, Altimet
 			return
 		}
 
+		// A temperature frame from the next polling cycle also re-arms the state after a lost pressure reply.
+		if (this.#command === BMP180.READ_PRES_CMD && register === BMP180.TEMP_DATA_REG && data.byteLength === 2) {
+			this.#command = BMP180.READ_TEMP_CMD
+		}
+
 		if (this.#command === BMP180.READ_TEMP_CMD) {
 			if (register !== BMP180.TEMP_DATA_REG || data.byteLength !== 2) return
 
