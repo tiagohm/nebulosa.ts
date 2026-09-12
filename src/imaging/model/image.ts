@@ -173,14 +173,13 @@ export async function readImageFromXisf(xisf: Xisf | XisfImage, source: Source &
 	return { header, raw, metadata }
 }
 
-// Decodes a JPEG buffer into a single-channel (luminance) normalized Image, or undefined if not JPEG.
+// Decodes a JPEG buffer into a single-channel (luminance) normalized Image.
+// Returns undefined when the buffer is not JPEG or `format` is present and not GRAY.
 export function readImageFromJpeg(buffer: Buffer, raw: ImageRawType | ImageRawPrecision = 'auto', format?: PixelFormat): Image | undefined {
 	if (!isJpeg(buffer)) return undefined
+	if (format !== undefined && format !== 'GRAY') return undefined
 
-	// The output is a single-channel image, so decode as luminance. Without this a color
-	// JPEG would decode to interleaved RGB and the mono-sized copy below would read
-	// R,G,B,... as a raster, producing a garbled frame.
-	const image = new Jpeg().decompress(buffer, format ?? 'GRAY')
+	const image = new Jpeg().decompress(buffer, 'GRAY')
 	if (!image) return undefined
 
 	const { data, width, height } = image

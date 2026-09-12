@@ -187,6 +187,18 @@ test('returns undefined when XISF has no supported images', async () => {
 	expect(await readImageFromXisf({ images: [] }, bufferSource(Buffer.alloc(1)))).toBeUndefined()
 })
 
+test('returns undefined when JPEG pixel format is not GRAY', () => {
+	const width = 2
+	const height = 2
+	const rgb = new Uint8Array([255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 0])
+	const jpeg = new Jpeg().compress(rgb, width, height, 'RGB', 100, '4:4:4')!
+
+	expect(readImageFromJpeg(jpeg, 'auto', 'RGB')).toBeUndefined()
+	expect(readImageFromJpeg(jpeg, 'auto', 'BGR')).toBeUndefined()
+	expect(readImageFromJpeg(jpeg, 'auto', 'CMYK')).toBeUndefined()
+	expect(readImageFromJpeg(jpeg, 'auto', 'GRAY')?.metadata.channels).toBe(1)
+})
+
 describe('read image from fits', () => {
 	for (const bitpix of BITPIXES) {
 		for (const channel of CHANNELS) {
