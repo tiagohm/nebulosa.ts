@@ -337,8 +337,10 @@ export function atmosphericExtinction(extinctionCoefficientMagPerAirmass: number
 	return extinctionCoefficientMagPerAirmass * airmass
 }
 
-// Atmospheric Refraction. Approximate planning formula R = 1.02 / tan(h + 10.3 / (h + 5.11)) arcmin.
-// Parameters: altitude is an apparent altitude in (0, pi/2] radians; h and the tangent argument are converted through degrees.
+// Atmospheric Refraction. Sæmundsson's planning formula R = 1.02 / tan(h + 10.3 / (h + 5.11)) arcmin
+// (Meeus AA ch. 16). Add R to the true (airless) altitude to obtain the apparent altitude.
+// Parameters: altitude is a true geometric altitude in (0, pi/2] radians; h and the tangent argument
+// are converted through degrees. This is not Bennett's apparent-altitude formula.
 // Returns: refraction correction in arcminutes.
 export function atmosphericRefraction(altitude: Angle) {
 	const altitudeDeg = altitude * RAD2DEG

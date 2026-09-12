@@ -569,7 +569,7 @@ function apparentToObservedPlace() {
 // Atmospheric Refraction: raise the apparent altitude of a low object.
 function atmosphericRefractionComputation() {
 	const trueAltitude = deg(10)
-	// atmosphericRefraction returns the refraction in arcminutes (Bennett's formula).
+	// atmosphericRefraction returns the refraction in arcminutes (Sæmundsson; true altitude).
 	console.info('Refraction at 10deg altitude (arcmin):', atmosphericRefraction(trueAltitude))
 	console.info('Refracted altitude (deg):', toDeg(refractedAltitude(trueAltitude)))
 }
