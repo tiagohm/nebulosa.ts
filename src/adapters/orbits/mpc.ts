@@ -2325,11 +2325,16 @@ function formatMpc80Ids(observation: MPCObservation) {
 }
 
 function formatMpc80Date(time: Time) {
-	const [year, month, day, fraction] = eraJdToCal(time.day, time.fraction)
-	let frac = fraction
-	const d = frac >= 1 ? day + 1 : day
-	if (frac >= 1) frac -= 1
-	return `${pad4(year)} ${pad2(month)} ${pad2(d)}${frac.toFixed(6).slice(1)}`
+	let [year, month, day, fraction] = eraJdToCal(time.day, time.fraction)
+	const roundedFraction = fraction.toFixed(6)
+	if (roundedFraction === '1.000000') {
+		const nextDate = eraJdToCal(time.day + 1, 0)
+		year = nextDate[0]
+		month = nextDate[1]
+		day = nextDate[2]
+		fraction = 0
+	}
+	return `${pad4(year)} ${pad2(month)} ${pad2(day)}${fraction.toFixed(6).slice(1)}`
 }
 
 function formatMagnitude(magnitude?: number, band?: string) {

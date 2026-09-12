@@ -447,6 +447,18 @@ describe('MPC80', () => {
 		expect(written).toBe('00001         C2000 01 01.00000000 00 00.000+00 00 00.00                     500')
 	})
 
+	test('MPC80 date rounding carries into the next day', () => {
+		const observation: MPCObservation = {
+			type: 'optical',
+			time: timeYMDHMS(2000, 1, 1, 23, 59, 59.96, Timescale.UTC),
+			station: '500',
+			rightAscension: 0,
+			declination: 0,
+		}
+		const line = writeMPC80(observation)
+		expect(line.slice(15, 32)).toBe('2000 01 02.000000')
+	})
+
 	test('Hubble two-line satellite example', () => {
 		const text = `${mpc80('     T1S1222  S1995 10 19.53839 23 45 35.737+09 09 38.13                     250')}
 ${mpc80('     T1S1222  s1995 10 19.53839 1 + 5530.3041 - 4255.1515 -  550.2319        250')}`
