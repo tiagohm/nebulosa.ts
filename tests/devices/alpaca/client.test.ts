@@ -156,7 +156,47 @@ test('camera opens the shutter for light and flat frames only', async () => {
 	}
 }, 10000)
 
+test.each([43, 44])(
+	'camera reports Alert when downloaded ImageBytes is malformed (%i bytes)',
+	async (length) => {
+		const state = [{ Name: 'ImageReady', Value: false }]
+		const data = new ArrayBuffer(length)
+		if (length === 44) new Int32Array(data).set([1, 0, 1, 2, 44, 1, 6, 2, 10, 10, 0])
+		await using remote = await scriptedClient('camera', { exposuremax: 60, devicestate: state }, undefined, (req) => (new URL(req.url).pathname.endsWith('/imagearray') ? new Response(data, { headers: { 'Content-Type': 'application/imagebytes' } }) : undefined))
+		await waitUntil(() => remote.numbers.has('CCD_EXPOSURE'), 8000)
+		const exposure = remote.numbers.get('CCD_EXPOSURE')!
+		remote.client.sendNumber({ device: exposure.device, name: exposure.name, elements: { CCD_EXPOSURE_VALUE: 1 } })
+		await waitUntil(() => remote.numbers.get('CCD_EXPOSURE')?.state === 'Busy', 1000)
+		state[0].Value = true
+		await waitUntil(() => remote.numbers.get('CCD_EXPOSURE')?.state === 'Alert', 3000)
+		expect(remote.numbers.get('CCD_EXPOSURE')!.elements.CCD_EXPOSURE_VALUE.value).toBe(0)
+	},
+	12000,
+)
+
 describe('make fits from image bytes', () => {
+	test('converts a 10 by 10 byte ROI smaller than 176 bytes', async () => {
+		const data = new ArrayBuffer(144)
+		new Int32Array(data, 0, 11).set([1, 0, 1, 2, 44, 1, 6, 2, 10, 10, 0])
+		new Uint8Array(data, 44).fill(255)
+		const image = await readImageFromBuffer(makeFitsFromImageBytes(data))
+		expectNaxis(image!.header, 2, 10, 10, undefined)
+		expect(image!.header.BITPIX).toBe(8)
+		expect(image!.raw.length).toBe(100)
+		expect(image!.raw.every((pixel) => pixel === 1)).toBeTrue()
+	})
+
+	test('rejects incomplete headers, error responses and out-of-buffer offsets', () => {
+		expect(() => makeFitsFromImageBytes(new ArrayBuffer(43))).toThrow('incomplete ImageBytes header')
+		const data = new ArrayBuffer(44)
+		const header = new Int32Array(data)
+		header.set([1, 1025, 0, 0, 44, 1, 6, 2, 1, 1, 0])
+		expect(() => makeFitsFromImageBytes(data)).toThrow('ImageBytes error 1025')
+		header[1] = 0
+		header[4] = 45
+		expect(() => makeFitsFromImageBytes(data)).toThrow('invalid ImageBytes data offset')
+	})
+
 	const camera = structuredClone(DEFAULT_CAMERA)
 	const mount = structuredClone(DEFAULT_MOUNT)
 

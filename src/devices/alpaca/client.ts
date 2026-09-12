@@ -1076,21 +1076,27 @@ class AlpacaCamera extends AlpacaDevice {
 		}
 	}
 
-	// Called when an exposure completes: downloads the image, emits it, and returns the exposure to Ok.
+	// Downloads and emits a completed exposure, returning Ok or Alert if ImageBytes conversion fails.
 	async #handleImageReady() {
 		this.#exposure.state = 'Busy'
 		this.#exposure.elements.CCD_EXPOSURE_VALUE.value = 0
 		this.sendSetProperty(this.#exposure)
 
 		this.state.ExposureStarted = false
-		await this.#readImageDataAsFits()
-
-		this.#exposure.state = 'Ok'
+		try {
+			this.#exposure.state = (await this.#readImageDataAsFits()) ? 'Ok' : 'Alert'
+		} catch (error) {
+			console.error(error)
+			this.#image.state = 'Alert'
+			this.#image.elements.CCD1.value = undefined
+			handleSetBlobVector(this.client, this.handler, this.#image)
+			this.#exposure.state = 'Alert'
+		}
 		this.sendSetProperty(this.#exposure)
 	}
 
 	// Downloads the ImageBytes buffer, converts it to FITS (stamping camera/mount/etc. metadata), and
-	// publishes it through the CCD1 BLOB property.
+	// publishes it through the CCD1 BLOB property. Returns whether the download succeeded.
 	async #readImageDataAsFits() {
 		const buffer = await this.api.getImageArray(this.id)
 
@@ -1106,6 +1112,7 @@ class AlpacaCamera extends AlpacaDevice {
 		}
 
 		handleSetBlobVector(this.client, this.handler, this.#image)
+		return buffer.ok
 	}
 }
 
@@ -2822,9 +2829,12 @@ function normalizeLongitude(angle: number) {
 // Converts an Alpaca ImageBytes binary buffer into an in-memory FITS, stamping observation metadata
 // (J2000 coordinates from the mount, filter, focuser, rotator, exposure). `time` is used for the JNOW→
 // J2000 conversion and `lastExposureDuration` is in seconds. Disconnected devices are ignored.
+// Throws for an incomplete header, an Alpaca error response, or an invalid data offset.
 // https://github.com/ASCOMInitiative/ASCOMRemote/blob/main/Documentation/AlpacaImageBytes.pdf
 export function makeFitsFromImageBytes(data: ArrayBuffer, time?: Time, camera?: Camera, mount?: Mount, wheel?: Wheel, focuser?: Focuser, rotator?: Rotator, lastExposureDuration: number = 0) {
-	const metadataArray = new Int32Array(data, 0, 44)
+	// ImageBytes has eleven int32 fields, totaling 44 bytes even for a tiny ROI.
+	if (data.byteLength < 44) throw new Error('incomplete ImageBytes header')
+	const metadataArray = new Int32Array(data, 0, 11)
 	const metadata: ImageBytesMetadata = {
 		MetadataVersion: metadataArray[0],
 		ErrorNumber: metadataArray[1],
@@ -2838,6 +2848,8 @@ export function makeFitsFromImageBytes(data: ArrayBuffer, time?: Time, camera?: 
 		Dimension2: metadataArray[9],
 		Dimension3: metadataArray[10],
 	}
+	if (metadata.ErrorNumber !== 0) throw new Error(`ImageBytes error ${metadata.ErrorNumber}`)
+	if (!(metadata.DataStart >= 44 && metadata.DataStart <= data.byteLength)) throw new Error('invalid ImageBytes data offset')
 
 	const NumX = metadata.Dimension1
 	const NumY = metadata.Dimension2
