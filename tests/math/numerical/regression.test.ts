@@ -36,9 +36,22 @@ test('simple linear stays accurate for large-x offsets', () => {
 	const x = [1e8, 1e8 + 1, 1e8 + 2, 1e8 + 3]
 	const y = x.map((xi) => 2 * xi + 5)
 	const regression = simpleLinearRegression(x, y)
+	const score = regressionScore(regression)
 
 	expect(regression.slope).toBeCloseTo(2, 9)
 	expect(regression.predict(1e8 + 10)).toBeCloseTo(2 * (1e8 + 10) + 5, 3)
+	expect(score.r).toBeCloseTo(1, 12)
+	expect(score.r2).toBeCloseTo(1, 12)
+	expect(score.rss).toBeCloseTo(0, 12)
+})
+
+test('regression score matches centered Pearson for large-x noisy samples', () => {
+	const x = [1e8, 1e8 + 1, 1e8 + 2, 1e8 + 3]
+	const y = [20, 40, 30, 50]
+	const score = regressionScore(simpleLinearRegression(x, y))
+
+	expect(score.r).toBeCloseTo(0.8, 12)
+	expect(score.r2).toBeCloseTo(0.64, 12)
 })
 
 test('weighted linear regression remains centered and reports parameter uncertainty', () => {

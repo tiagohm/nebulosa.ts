@@ -642,35 +642,42 @@ export function hyperbolicRegression(x: Readonly<NumberArray>, y: Readonly<Numbe
 	}
 }
 
-// Computes the score of a regression against a set of x and y values
-// Returns the correlation coefficient (r), coefficient of determination (r²), residual sum of squares (RSS), and root mean square deviation (RMSD)
+// Computes goodness-of-fit metrics of a regression against a set of x and y values.
+// r is Pearson's correlation of the sample (x, y). It uses mean-subtracted sums so a large mean
+// with small variance does not cancel the way the textbook nΣx² − (Σx)² form does. r² is r·r.
+// RSS and RMSD use the model residuals, not the Pearson sums.
 export function regressionScore(regression: Regression, x: Readonly<NumberArray> = regression.xPoints, y: Readonly<NumberArray> = regression.yPoints): RegressionScore {
 	const n = Math.min(x.length, y.length)
 
-	let sx = 0
-	let sx2 = 0
-	let sy = 0
-	let sy2 = 0
-	let sxy = 0
+	let xMean = 0
+	let yMean = 0
 	let rss = 0
 
 	for (let i = 0; i < n; i++) {
-		const xi = x[i]
 		const yi = y[i]
-		const p = regression.predict(xi)
-
-		sx += xi
-		sx2 += xi * xi
-		sy += yi
-		sy2 += yi * yi
-		sxy += xi * yi
-
-		const d = yi - p
+		xMean += x[i]
+		yMean += yi
+		const d = yi - regression.predict(x[i])
 		rss += d * d
 	}
 
-	const denom = Math.sqrt((n * sx2 - sx * sx) * (n * sy2 - sy * sy))
-	const r = denom === 0 ? Number.NaN : (n * sxy - sx * sy) / denom
+	xMean /= n
+	yMean /= n
+
+	let sxx = 0
+	let syy = 0
+	let sxy = 0
+
+	for (let i = 0; i < n; i++) {
+		const dx = x[i] - xMean
+		const dy = y[i] - yMean
+		sxx += dx * dx
+		syy += dy * dy
+		sxy += dx * dy
+	}
+
+	const denom = Math.sqrt(sxx * syy)
+	const r = denom > 0 ? sxy / denom : Number.NaN
 	const r2 = r * r
 	const rmsd = Math.sqrt(rss / n)
 
