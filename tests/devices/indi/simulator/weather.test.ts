@@ -6,6 +6,7 @@ import { WeatherManager } from '../../../../src/devices/indi/manager/weather'
 import { ClientSimulator } from '../../../../src/devices/indi/simulator/client'
 import type { SimulatorProperty } from '../../../../src/devices/indi/simulator/types'
 import { WeatherSimulator } from '../../../../src/devices/indi/simulator/weather'
+import { makeNumberVector } from '../../../../src/devices/indi/types'
 import { waitUntil } from '../../../util'
 
 function permissionOf(property: DeviceProperty) {
@@ -168,6 +169,35 @@ describe('weather simulator', () => {
 
 		simulator.dispose()
 		client[Symbol.dispose]()
+	})
+
+	test('does not publish a load that completes after disconnect', async () => {
+		let finishLoad!: (properties: readonly SimulatorProperty[]) => void
+		const handler = new IndiClientHandlerSet()
+		const manager = new WeatherManager()
+		handler.add(manager)
+
+		using client = new ClientSimulator('weather-late-load', handler)
+		using simulator = new WeatherSimulator('Weather Simulator', client, {
+			load: () =>
+				new Promise<readonly SimulatorProperty[]>((resolve) => {
+					finishLoad = resolve
+				}),
+		})
+
+		const emitted: string[] = []
+		handler.add({ setNumberVector: (_, message) => emitted.push(message.name) })
+
+		simulator.connect()
+		const weather = manager.get(client, simulator.name)!
+		emitted.length = 0
+		simulator.disconnect()
+		finishLoad([makeNumberVector('', 'SIMULATOR_WEATHER', '', '', 'rw', ['WEATHER_TEMPERATURE', '', 21.5, -60, 60, 0.1, '%.1f'])])
+		await Promise.resolve()
+		await Promise.resolve()
+
+		expect(manager.properties.get(weather)?.WEATHER_PARAMETERS).toBeUndefined()
+		expect(emitted).toEqual([])
 	})
 
 	test('stores the update period without scheduling a timer', async () => {

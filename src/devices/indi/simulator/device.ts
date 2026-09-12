@@ -25,6 +25,11 @@ export abstract class DeviceSimulator implements Disposable {
 	protected abstract readonly propertiesToNotSave: readonly SimulatorProperty[]
 	protected abstract readonly options?: DeviceSimulatorOptions
 
+	// Identifies the connection cycle that an asynchronous load belongs to.
+	#lifecycleVersion = 0
+	// Prevents late asynchronous work from publishing after disposal.
+	#disposed = false
+
 	constructor(
 		readonly name: string,
 		readonly client: ClientSimulator,
@@ -73,26 +78,31 @@ export abstract class DeviceSimulator implements Disposable {
 
 	// Deletes the device's properties and unregisters from the client.
 	dispose() {
+		if (this.#disposed) return
+		this.#disposed = true
+		this.#lifecycleVersion++
 		this.handler.delProperty?.(this.client, { device: this.name })
 		this.client.unregister(this)
 	}
 
 	// Connects the simulated device.
 	connect() {
-		if (this.isConnected) return
+		if (this.#disposed || this.client.get(this.name) !== this || this.isConnected) return
 		selectOnSwitch(this.connection, 'CONNECT') && handleSetSwitchVector(this.client, this.handler, this.connection)
 		if (!this.isConnected) return
+		this.#lifecycleVersion++
 
 		for (const property of this.properties) {
 			sendDefinition(this.client, this.handler, property)
 		}
 
-		void this.loadProperties()
+		void this.loadProperties().catch(() => undefined)
 	}
 
 	// Disconnects the simulated device.
 	disconnect() {
 		if (!this.isConnected) return
+		this.#lifecycleVersion++
 		selectOnSwitch(this.connection, 'DISCONNECT') && handleSetSwitchVector(this.client, this.handler, this.connection)
 
 		for (const property of this.properties) {
@@ -122,7 +132,9 @@ export abstract class DeviceSimulator implements Disposable {
 	// non-persisted properties.
 	async loadProperties() {
 		if (this.options?.load) {
+			const lifecycleVersion = this.#lifecycleVersion
 			const properties = await this.options.load(this.name)
+			if (this.#disposed || this.client.get(this.name) !== this || lifecycleVersion !== this.#lifecycleVersion) return
 
 			for (const property of properties) {
 				const actual = this.properties.find((e) => e.name === property.name)
@@ -142,10 +154,10 @@ export abstract class DeviceSimulator implements Disposable {
 					}
 				}
 
-				updated && this.notify(actual)
+				updated && this.isConnected && this.notify(actual)
 			}
 
-			this.onPropertiesLoaded()
+			if (this.isConnected) this.onPropertiesLoaded()
 		}
 	}
 
