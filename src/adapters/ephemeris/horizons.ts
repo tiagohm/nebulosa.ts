@@ -35,7 +35,7 @@ export type ObserverSiteCoord = readonly [Angle, Angle, Distance] | `${number},$
 export type ReferencePlane = 'ECLIPTIC' | 'FRAME' | 'BODY_EQUATOR'
 
 // User coordinate type for the observing site.
-export type CoordinateType = 'GEODETIC' | 'CILINDRICAL'
+export type CoordinateType = 'GEODETIC' | 'CYLINDRICAL'
 
 // Kind of ephemeris to generate.
 export type EphemerisType = 'OBSERVER' | 'VECTOR' | 'ELEMENTS' | 'SPK'

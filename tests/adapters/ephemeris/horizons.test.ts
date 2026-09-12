@@ -258,6 +258,12 @@ test('CAP retry uses the temporal Julian date', async () => {
 	expect(retryCommand).not.toContain('CAP<2025;')
 })
 
+test('uses the Horizons cylindrical coordinate token', async () => {
+	const requests = await captureHorizonsRequests(() => observer('3517;', 'coord', false, START_TIME, END_TIME, [], { coordinateType: 'CYLINDRICAL' }))
+
+	expect(queryValue(requests[0], 'COORD_TYPE')).toBe('CYLINDRICAL')
+})
+
 async function captureHorizonsRequests(callback: () => Promise<unknown>, responses: readonly string[] = ['']) {
 	const restore = globalThis.fetch
 	const requests: string[] = []
