@@ -4,7 +4,7 @@ import { join } from 'path'
 import type { RequiredOnly } from '../../core/types'
 import { readFits } from '../../io/formats/fits/fits'
 import { bufferSource, fileHandleSource } from '../../io/io'
-import { type Angle, normalizeAngle, toDeg } from '../../math/units/angle'
+import { type Angle, normalizeAngle, toArcmin, toArcsec, toDeg } from '../../math/units/angle'
 import { type PlateSolution, type PlateSolveOptions, plateSolutionFrom } from './platesolver'
 
 // astrometry.net plate-solving integration, both the nova.astrometry.net web API (login → upload →
@@ -53,13 +53,13 @@ export interface Upload<T> extends NovaAstrometryNetPlateSolveOptions {
 	publiclyVisible?: boolean
 	// Unit for the scale bounds (default 'degwidth').
 	scaleUnits?: ScaleUnit
-	// Lower scale bound (radians, converted to degrees).
+	// Lower scale bound (radians, converted into `scaleUnits`).
 	scaleLower?: Angle
-	// Upper scale bound (radians, converted to degrees).
+	// Upper scale bound (radians, converted into `scaleUnits`).
 	scaleUpper?: Angle
 	// Scale-hint style (default 'ul').
 	scaleType?: ScaleType
-	// Estimated scale for 'ev' hints (radians).
+	// Estimated scale for 'ev' hints (radians, converted into `scaleUnits`).
 	scaleEstimated?: Angle
 	// Fractional scale error for 'ev' hints.
 	scaleError?: number
@@ -122,19 +122,23 @@ export function login(options?: Omit<RequestOptions, 'session'>, signal?: AbortS
 }
 
 // Submits an image to the nova API for solving, choosing URL upload for a string input or multipart
-// upload for a Blob, and applying scale/parity/center hints (angles converted to degrees).
+// upload for a Blob, and applying scale/parity/center hints. Sky-position angles are converted to
+// degrees; scale bounds are converted into `scaleUnits` (default degwidth).
 export function upload(upload: Upload<string | Blob>, signal?: AbortSignal) {
+	const scaleUnits = upload.scaleUnits || 'degwidth'
 	const data = {
 		session: typeof upload.session === 'string' ? upload.session : upload.session?.session,
 		url: typeof upload.input === 'string' ? upload.input : '',
 		allow_commercial_use: upload.allowCommercialUse ? 'y' : 'n',
 		allow_modifications: upload.allowModifications ? 'y' : 'n',
 		publicly_visible: upload.publiclyVisible ? 'y' : 'n',
-		scale_units: upload.scaleUnits || 'degwidth',
-		scale_lower: upload.scaleLower === undefined ? 0.1 : toDeg(upload.scaleLower),
-		scale_upper: upload.scaleUpper === undefined ? 180 : toDeg(upload.scaleUpper),
+		scale_units: scaleUnits,
+		// Nova's 0.1–180 defaults are degwidth numbers; other units omit the bound so the server
+		// does not interpret 0.1°/180° as arcmin or arcsec/pixel.
+		scale_lower: upload.scaleLower === undefined ? (scaleUnits === 'degwidth' ? 0.1 : undefined) : scaleInUnits(upload.scaleLower, scaleUnits),
+		scale_upper: upload.scaleUpper === undefined ? (scaleUnits === 'degwidth' ? 180 : undefined) : scaleInUnits(upload.scaleUpper, scaleUnits),
 		scale_type: upload.scaleType ?? 'ul',
-		scale_est: upload.scaleEstimated === undefined ? undefined : toDeg(upload.scaleEstimated),
+		scale_est: upload.scaleEstimated === undefined ? undefined : scaleInUnits(upload.scaleEstimated, scaleUnits),
 		scale_err: upload.scaleError,
 		center_ra: upload.rightAscension !== undefined ? toDeg(normalizeAngle(upload.rightAscension)) : undefined,
 		center_dec: upload.declination !== undefined ? toDeg(upload.declination) : undefined,
@@ -291,6 +295,13 @@ export async function localAstrometryNetPlateSolve(input: string, options: Requi
 	}
 
 	return undefined
+}
+
+// Converts a scale hint from radians into the numeric value nova expects for `units`.
+function scaleInUnits(angle: Angle, units: ScaleUnit): number {
+	if (units === 'arcminwidth') return toArcmin(angle)
+	if (units === 'arcsecperpix') return toArcsec(angle)
+	return toDeg(angle)
 }
 
 // Resolves after the given delay, or earlier if the signal aborts. Never rejects.

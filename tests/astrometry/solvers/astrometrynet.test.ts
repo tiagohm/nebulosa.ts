@@ -1,10 +1,10 @@
 import { describe, expect, test } from 'bun:test'
 import { dirname, join } from 'path'
-import { localAstrometryNetPlateSolve, login, novaAstrometryNetPlateSolve, submissionStatus, upload, wcsFile } from '../../../src/astrometry/solvers/astrometrynet'
+import { localAstrometryNetPlateSolve, login, novaAstrometryNetPlateSolve, submissionStatus, type Upload, upload, wcsFile } from '../../../src/astrometry/solvers/astrometrynet'
 import { RA_TAN_SIP, tanUnproject } from '../../../src/astrometry/wcs/fits.wcs'
 import { readFits } from '../../../src/io/formats/fits/fits'
 import { bufferSource } from '../../../src/io/io'
-import { toArcsec, toDeg, toHour } from '../../../src/math/units/angle'
+import { arcmin, arcsec, deg, toArcsec, toDeg, toHour } from '../../../src/math/units/angle'
 import { isLinuxSkipped, isNetworkTestSkipped } from '../../util'
 
 const SKIP = isNetworkTestSkipped()
@@ -113,3 +113,54 @@ test.skipIf(isLinuxSkipped())('local', async () => {
 
 	expect(solution!.CTYPE1).toBe(RA_TAN_SIP)
 })
+
+test('upload converts scale bounds into scaleUnits', async () => {
+	const arcsecPerPix = await captureUploadJson({ scaleUnits: 'arcsecperpix', scaleLower: arcsec(1), scaleUpper: arcsec(5) })
+	expect(arcsecPerPix.scale_units).toBe('arcsecperpix')
+	expect(arcsecPerPix.scale_lower).toBeCloseTo(1, 12)
+	expect(arcsecPerPix.scale_upper).toBeCloseTo(5, 12)
+
+	const arcminWidth = await captureUploadJson({ scaleUnits: 'arcminwidth', scaleLower: arcmin(30), scaleUpper: arcmin(90), scaleType: 'ev', scaleEstimated: arcmin(60) })
+	expect(arcminWidth.scale_units).toBe('arcminwidth')
+	expect(arcminWidth.scale_lower).toBeCloseTo(30, 12)
+	expect(arcminWidth.scale_upper).toBeCloseTo(90, 12)
+	expect(arcminWidth.scale_est).toBeCloseTo(60, 12)
+
+	const degWidth = await captureUploadJson({ scaleLower: deg(2), scaleUpper: deg(10) })
+	expect(degWidth.scale_units).toBe('degwidth')
+	expect(degWidth.scale_lower).toBeCloseTo(2, 12)
+	expect(degWidth.scale_upper).toBeCloseTo(10, 12)
+
+	const degDefaults = await captureUploadJson({})
+	expect(degDefaults.scale_units).toBe('degwidth')
+	expect(degDefaults.scale_lower).toBe(0.1)
+	expect(degDefaults.scale_upper).toBe(180)
+
+	const arcsecDefaults = await captureUploadJson({ scaleUnits: 'arcsecperpix' })
+	expect(arcsecDefaults.scale_units).toBe('arcsecperpix')
+	expect(arcsecDefaults.scale_lower).toBeUndefined()
+	expect(arcsecDefaults.scale_upper).toBeUndefined()
+})
+
+async function captureUploadJson(options: Omit<Upload<string>, 'input'>) {
+	const restore = globalThis.fetch
+	let payload: Record<string, unknown> | undefined
+
+	globalThis.fetch = ((_input, init) => {
+		payload = uploadRequestJson(init?.body)
+		return Promise.resolve(new Response(JSON.stringify({ status: 'success', subid: 1 }), { status: 200 }))
+	}) as typeof fetch
+
+	try {
+		await upload({ input: 'https://example.com/img.fits', session: 'tok', ...options })
+		return payload!
+	} finally {
+		globalThis.fetch = restore
+	}
+}
+
+function uploadRequestJson(body: BodyInit | undefined | null) {
+	if (body instanceof URLSearchParams) return JSON.parse(body.get('request-json') ?? '{}') as Record<string, unknown>
+	if (typeof body === 'string') return JSON.parse(new URLSearchParams(body).get('request-json') ?? '{}') as Record<string, unknown>
+	throw new Error('expected url-encoded nova request-json')
+}
