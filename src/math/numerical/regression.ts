@@ -39,9 +39,9 @@ export interface MinimumPointRegression {
 
 // Goodness-of-fit metrics for a regression against a sample set.
 export interface RegressionScore {
-	// Pearson correlation coefficient.
+	// Pearson correlation of the observed y values with the model predictions ŷ.
 	readonly r: number
-	// Coefficient of determination (r²).
+	// Coefficient of determination 1 − RSS/TSS. NaN when the sample y variance is zero.
 	readonly r2: number
 	// Residual sum of squares.
 	readonly rss: number
@@ -687,42 +687,45 @@ export function hyperbolicRegression(x: Readonly<NumberArray>, y: Readonly<Numbe
 }
 
 // Computes goodness-of-fit metrics of a regression against a set of x and y values.
-// r is Pearson's correlation of the sample (x, y). It uses mean-subtracted sums so a large mean
-// with small variance does not cancel the way the textbook nΣx² − (Σx)² form does. r² is r·r.
-// RSS and RMSD use the model residuals, not the Pearson sums.
+// r is Pearson's correlation of y with the model predictions ŷ, using mean-subtracted sums.
+// r² is the coefficient of determination 1 − RSS/TSS and is NaN when TSS is zero.
+// RSS and RMSD use the same model residuals.
 export function regressionScore(regression: Regression, x: Readonly<NumberArray> = regression.xPoints, y: Readonly<NumberArray> = regression.yPoints): RegressionScore {
 	const n = Math.min(x.length, y.length)
+	const predicted = new Float64Array(n)
 
-	let xMean = 0
 	let yMean = 0
+	let predictedMean = 0
 	let rss = 0
 
 	for (let i = 0; i < n; i++) {
 		const yi = y[i]
-		xMean += x[i]
+		const yHat = regression.predict(x[i])
+		predicted[i] = yHat
 		yMean += yi
-		const d = yi - regression.predict(x[i])
+		predictedMean += yHat
+		const d = yi - yHat
 		rss += d * d
 	}
 
-	xMean /= n
 	yMean /= n
+	predictedMean /= n
 
-	let sxx = 0
-	let syy = 0
-	let sxy = 0
+	let tss = 0
+	let syyHat = 0
+	let sHatHat = 0
 
 	for (let i = 0; i < n; i++) {
-		const dx = x[i] - xMean
 		const dy = y[i] - yMean
-		sxx += dx * dx
-		syy += dy * dy
-		sxy += dx * dy
+		const dHat = predicted[i] - predictedMean
+		tss += dy * dy
+		syyHat += dy * dHat
+		sHatHat += dHat * dHat
 	}
 
-	const denom = Math.sqrt(sxx * syy)
-	const r = denom > 0 ? sxy / denom : Number.NaN
-	const r2 = r * r
+	const denom = Math.sqrt(tss * sHatHat)
+	const r = denom > 0 ? syyHat / denom : Number.NaN
+	const r2 = tss > 0 ? 1 - rss / tss : Number.NaN
 	const rmsd = Math.sqrt(rss / n)
 
 	return { r, r2, rss, rmsd }

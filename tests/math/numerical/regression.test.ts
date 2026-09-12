@@ -366,7 +366,7 @@ test('regression score', () => {
 
 	const score = regressionScore(regression)
 	expect(score.r).toBeCloseTo(0.9946, 3)
-	expect(score.r2).toBe(score.r * score.r)
+	expect(score.r2).toBeCloseTo(score.r * score.r, 12)
 	// expect(score.rss).toBeLessThan(1)
 	expect(score.rmsd).toBeLessThan(1)
 })
@@ -380,6 +380,29 @@ test('regression score is perfect for an exact linear fit', () => {
 	expect(score.r).toBeCloseTo(1, 12)
 	expect(score.r2).toBeCloseTo(1, 12)
 	expect(score.rmsd).toBeCloseTo(0, 12)
+})
+
+test('regression score uses the model predictions, not Pearson of x and y', () => {
+	const x = [-2, -1, 0, 1, 2]
+	const y = x.map((xi) => xi * xi)
+	const score = regressionScore(quadraticRegression(x, y))
+
+	expect(score.rss).toBeCloseTo(0, 12)
+	expect(score.r).toBeCloseTo(1, 12)
+	expect(score.r2).toBeCloseTo(1, 12)
+})
+
+test('regression score distinguishes an exponential fit from a linear fit', () => {
+	const x = [0, 1, 2, 3, 4, 5]
+	const y = x.map((xi) => Math.exp(xi))
+	const exponential = regressionScore(exponentialRegression(x, y))
+	const linear = regressionScore(simpleLinearRegression(x, y))
+
+	expect(exponential.rss).toBeCloseTo(0, 10)
+	expect(exponential.r2).toBeCloseTo(1, 12)
+	expect(linear.r2).toBeLessThan(exponential.r2)
+	expect(linear.r2).not.toBeCloseTo(exponential.r2, 2)
+	expect(linear.rss).toBeGreaterThan(exponential.rss)
 })
 
 test('chebyshev least squares fits basis coefficients', () => {
