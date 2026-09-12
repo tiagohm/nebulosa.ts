@@ -485,6 +485,33 @@ describe('stacker batch mode', () => {
 		expect(result.diagnostics.find((entry) => entry.accepted === false)?.reason).toBe('too-few-stars')
 	})
 
+	test('does not accept a starless batch reference when allowStarlessReference is false', () => {
+		const image = makeImage(18, 18, 1, 0.4)
+		const starless = makeFrame(image, [])
+		const starred = makeFrame(image, makeStars())
+		const options = { ...DEFAULT_STACK_OPTIONS, allowStarlessReference: false } as const satisfies StackingOptions
+
+		const both = stackFrames([starless, starless], options)
+		expect(both.acceptedFrames).toBe(0)
+		expect(both.finalImage).toBeUndefined()
+		expect(both.diagnostics[0].reason).toBe('too-few-stars')
+
+		const live = new LiveStacker(options)
+		expect(live.add(starless).reason).toBe('too-few-stars')
+		expect(live.add(starless).reason).toBe('too-few-stars')
+		expect(live.snapshot()).toBeUndefined()
+
+		const indexed = stackFrames([starless, starred], { ...options, batchReference: { mode: 'index', index: 0 } })
+		expect(indexed.acceptedFrames).toBe(0)
+		expect(indexed.referenceFrameIndex).toBe(0)
+		expect(indexed.diagnostics[0].reason).toBe('too-few-stars')
+		expect(indexed.finalImage).toBeUndefined()
+
+		const first = stackFrames([starless, starred], options)
+		expect(first.referenceFrameIndex).toBe(1)
+		expect(first.acceptedFrames).toBe(1)
+	})
+
 	test('preserves RGB channel values consistently after alignment', () => {
 		const reference = makeImage(16, 16, 3, (x, y, channel) => (channel === 0 ? x / 16 : channel === 1 ? y / 16 : (x + y) / 32))
 		const current = translateImage(reference, -1, 2)

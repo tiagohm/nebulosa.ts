@@ -600,6 +600,10 @@ export function stackFrames(frames: readonly StackingFrame[], options: StackingO
 		return emptyStackResult(resolved, referenceIndex, [{ accepted: false, frameIndex: referenceIndex, frameId: referenceFrame.id, overlapFraction: 0, quality: qualities[referenceIndex], reason: 'invalid-image-shape' }])
 	}
 
+	if (!resolved.allowStarlessReference && referenceFrame.stars.length < resolved.minAcceptedStars) {
+		return emptyStackResult(resolved, referenceIndex, [{ accepted: false, frameIndex: referenceIndex, frameId: referenceFrame.id, overlapFraction: 0, quality: qualities[referenceIndex], reason: 'too-few-stars' }])
+	}
+
 	const accepted: AlignedFrame[] = []
 	const diagnostics: FrameAcceptanceResult[] = []
 	const pixelCount = referenceFrame.image.metadata.pixelCount
