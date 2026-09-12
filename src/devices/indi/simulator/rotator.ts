@@ -121,7 +121,7 @@ export class RotatorSimulator extends DeviceSimulator {
 	moveTo(angle: number) {
 		if (!this.isConnected) return
 
-		angle = clamp(angle, this.#angle.elements.ANGLE.min, this.#angle.elements.ANGLE.max)
+		angle = wrapRotatorAngle(clamp(angle, this.#angle.elements.ANGLE.min, this.#angle.elements.ANGLE.max))
 		if (angle === this.angle) {
 			this.stop(false)
 			return
@@ -136,7 +136,7 @@ export class RotatorSimulator extends DeviceSimulator {
 	syncTo(angle: number) {
 		if (!this.isConnected) return
 
-		angle = clamp(angle, this.#angle.elements.ANGLE.min, this.#angle.elements.ANGLE.max)
+		angle = wrapRotatorAngle(clamp(angle, this.#angle.elements.ANGLE.min, this.#angle.elements.ANGLE.max))
 		this.#sync.elements.ANGLE.value = angle
 		this.#angle.elements.ANGLE.value = angle
 		this.stop(false)
@@ -179,7 +179,7 @@ export class RotatorSimulator extends DeviceSimulator {
 		const step = ROTATOR_MOVE_RATE * dtSeconds
 
 		if (Math.abs(delta) <= step) {
-			this.#angle.elements.ANGLE.value = this.#targetAngle
+			this.#angle.elements.ANGLE.value = wrapRotatorAngle(this.#targetAngle)
 			this.notify(this.#angle)
 			this.#targetAngle = undefined
 			this.#homing = false

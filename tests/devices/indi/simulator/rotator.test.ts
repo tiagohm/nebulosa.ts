@@ -73,4 +73,32 @@ describe.skipIf(SKIP)('rotator simulator', () => {
 
 		expect(rotator.angle.value).toBeCloseTo(current, 12)
 	}, 3000)
+
+	test('normalizes the 360-degree boundary', async () => {
+		const handler = new IndiClientHandlerSet()
+		const manager = new RotatorManager()
+		handler.add(manager)
+
+		using client = new ClientSimulator('rotator', handler)
+		using simulator = new RotatorSimulator('Rotator Simulator', client)
+		const rotator = manager.get(client, simulator.name)!
+
+		manager.connect(rotator)
+		await waitUntil(() => rotator.connected)
+
+		manager.syncTo(rotator, 360)
+		await waitUntil(() => rotator.angle.value === 0)
+		expect(rotator.moving).toBeFalse()
+
+		manager.syncTo(rotator, 90)
+		manager.moveTo(rotator, 360)
+		await waitUntil(() => rotator.moving)
+		await waitUntil(() => !rotator.moving, 2000)
+		expect(rotator.angle.value).toBeCloseTo(0, 12)
+
+		manager.moveTo(rotator, 360)
+		await Bun.sleep(200)
+		expect(rotator.moving).toBeFalse()
+		expect(rotator.angle.value).toBeCloseTo(0, 12)
+	}, 4000)
 })
