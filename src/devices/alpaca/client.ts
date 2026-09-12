@@ -1947,7 +1947,7 @@ class AlpacaCoverCalibrator extends AlpacaDevice {
 		else if (Step === 2) {
 			if (CoverState !== 0) {
 				let updated = this.updatePropertyState(this.#park, CoverState === 2 || CoverMoving ? 'Busy' : 'Idle')
-				if (CoverState === 1 || CoverState === 2) updated = this.updatePropertyValue(this.#park, CoverState === 1 ? 'PARK' : 'UNPARK', true) || updated
+				if (CoverState === 1 || CoverState === 3) updated = this.updatePropertyValue(this.#park, CoverState === 1 ? 'PARK' : 'UNPARK', true) || updated
 				updated && this.sendSetProperty(this.#park)
 			}
 

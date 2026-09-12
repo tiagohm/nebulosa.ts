@@ -393,6 +393,28 @@ test('a delayed camera abort reply cannot clear a newer exposure', async () => {
 	expect(remote.numbers.get(exposure.name)!.elements.CCD_EXPOSURE_VALUE.value).toBe(10)
 }, 10000)
 
+test('cover preserves its last position while moving and explicitly publishes open', async () => {
+	const cover = { Name: 'CoverState', Value: 1 }
+	await using remote = await scriptedClient('covercalibrator', { devicestate: [cover] })
+	await waitUntil(() => remote.switches.get('CAP_PARK')?.elements.PARK.value === true, 8000)
+	cover.Value = 2
+	await waitUntil(() => remote.switches.get('CAP_PARK')?.state === 'Busy', 3000)
+	expect(remote.switches.get('CAP_PARK')!.elements.PARK.value).toBeTrue()
+	cover.Value = 3
+	await waitUntil(() => remote.switches.get('CAP_PARK')?.state === 'Idle', 3000)
+	expect(remote.switches.get('CAP_PARK')!.elements.UNPARK.value).toBeTrue()
+	cover.Value = 2
+	await waitUntil(() => remote.switches.get('CAP_PARK')?.state === 'Busy', 3000)
+	expect(remote.switches.get('CAP_PARK')!.elements.UNPARK.value).toBeTrue()
+	cover.Value = 1
+	await waitUntil(() => remote.switches.get('CAP_PARK')?.state === 'Idle', 3000)
+	expect(remote.switches.get('CAP_PARK')!.elements.PARK.value).toBeTrue()
+	// A poll can miss the moving state entirely.
+	cover.Value = 3
+	await waitUntil(() => remote.switches.get('CAP_PARK')?.elements.UNPARK.value === true, 3000)
+	expect(remote.switches.get('CAP_PARK')!.elements.PARK.value).toBeFalse()
+}, 16000)
+
 describe('make fits from image bytes', () => {
 	test('converts a 10 by 10 byte ROI smaller than 176 bytes', async () => {
 		const data = new ArrayBuffer(144)
