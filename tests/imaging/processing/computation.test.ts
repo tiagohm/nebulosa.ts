@@ -67,6 +67,22 @@ test('adaptive display function validates and reuses histogram storage', () => {
 	expect(() => adf(image, { bits: 25 })).toThrow()
 })
 
+test('adaptive display function is identity for a constant dark image', () => {
+	const [midtone, shadow, highlight] = adf(makeImage(8, 8, 1, new Float32Array(64).fill(0.25)))
+
+	expect(midtone).toBeCloseTo(0.5, 4)
+	expect(shadow).toBe(0)
+	expect(highlight).toBe(1)
+})
+
+test('adaptive display function uses the zero-MAD clipping path for a constant bright image', () => {
+	const [midtone, shadow, highlight] = adf(makeImage(8, 8, 1, new Float32Array(64).fill(0.9)))
+
+	expect(shadow).toBe(0)
+	expect(highlight).toBe(1)
+	expect(midtone).toBeCloseTo(0.75, 3)
+})
+
 test('sigma clip preserves caller-provided seed rejections', () => {
 	const image = makeImage(3, 1, 1, [0.2, 0.2, 0.2])
 	const seed = new Int8Array([1, 0, 0])

@@ -438,8 +438,8 @@ test('sigma clip excludes rejected pixels from the iteration statistics', () => 
 test('adf honors explicit zero options', () => {
 	const image = {
 		header: {},
-		metadata: { width: 1, height: 1, channels: 1, stride: 1, pixelCount: 1, strideInBytes: 4, pixelSizeInBytes: 4, bitpix: Bitpix.FLOAT, bayer: undefined },
-		raw: new Float32Array([0.25]),
+		metadata: { width: 3, height: 1, channels: 1, stride: 3, pixelCount: 3, strideInBytes: 12, pixelSizeInBytes: 4, bitpix: Bitpix.FLOAT, bayer: undefined },
+		raw: new Float32Array([0.1, 0.25, 0.4]),
 	}
 	const median = histogram(image).median
 

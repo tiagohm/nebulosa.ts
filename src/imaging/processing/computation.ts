@@ -234,9 +234,12 @@ export function adf(image: Image, options: Partial<AdaptiveDisplayFunctionOption
 	const clippingPoint = options.clippingPoint ?? DEFAULT_ADAPTIVE_DISPLAY_FUNCTION_OPTIONS.clippingPoint
 	const med = median(image, options)
 	const mad = medianAbsoluteDeviation(image, med, true, options)
+	const max = bits.length - 1
+	// Histogram quantiles interpolate within a bin, so a constant image has MAD of about half a bin, not 0.
+	const flat = !(mad * max > 0.5 * STANDARD_DEVIATION_SCALE)
 	const upperHalf = med > 0.5
-	const shadow = upperHalf || mad === 0 ? 0 : Math.min(1, Math.max(0, med + clippingPoint * mad))
-	const highlight = !upperHalf || mad === 0 ? 1 : Math.min(1, Math.max(0, med - clippingPoint * mad))
+	const shadow = upperHalf || flat ? 0 : Math.min(1, Math.max(0, med + clippingPoint * mad))
+	const highlight = !upperHalf || flat ? 1 : Math.min(1, Math.max(0, med - clippingPoint * mad))
 	const x = upperHalf ? meanBackground : med - shadow
 	const m = upperHalf ? highlight - med : meanBackground
 	const midtone = x === 0 ? 0 : x === m ? 0.5 : x === 1 ? 1 : ((m - 1) * x) / ((2 * m - 1) * x - m)
