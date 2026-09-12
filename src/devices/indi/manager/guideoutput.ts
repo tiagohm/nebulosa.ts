@@ -12,25 +12,25 @@ export class GuideOutputManager extends DeviceManager<GuideOutput> {
 	// Issues a timed pulse-guide in one direction; duration is milliseconds. No-op without the capability.
 	pulseNorth(device: GuideOutput, duration: number, client = device[CLIENT]!) {
 		if (device.canPulseGuide) {
-			client.sendNumber({ device: device.name, name: 'TELESCOPE_TIMED_GUIDE_NS', elements: { TIMED_GUIDE_N: duration } })
+			client.sendNumber({ device: device.name, name: 'TELESCOPE_TIMED_GUIDE_NS', elements: { TIMED_GUIDE_N: duration, TIMED_GUIDE_S: 0 } })
 		}
 	}
 
 	pulseSouth(device: GuideOutput, duration: number, client = device[CLIENT]!) {
 		if (device.canPulseGuide) {
-			client.sendNumber({ device: device.name, name: 'TELESCOPE_TIMED_GUIDE_NS', elements: { TIMED_GUIDE_S: duration } })
+			client.sendNumber({ device: device.name, name: 'TELESCOPE_TIMED_GUIDE_NS', elements: { TIMED_GUIDE_N: 0, TIMED_GUIDE_S: duration } })
 		}
 	}
 
 	pulseWest(device: GuideOutput, duration: number, client = device[CLIENT]!) {
 		if (device.canPulseGuide) {
-			client.sendNumber({ device: device.name, name: 'TELESCOPE_TIMED_GUIDE_WE', elements: { TIMED_GUIDE_W: duration } })
+			client.sendNumber({ device: device.name, name: 'TELESCOPE_TIMED_GUIDE_WE', elements: { TIMED_GUIDE_W: duration, TIMED_GUIDE_E: 0 } })
 		}
 	}
 
 	pulseEast(device: GuideOutput, duration: number, client = device[CLIENT]!) {
 		if (device.canPulseGuide) {
-			client.sendNumber({ device: device.name, name: 'TELESCOPE_TIMED_GUIDE_WE', elements: { TIMED_GUIDE_E: duration } })
+			client.sendNumber({ device: device.name, name: 'TELESCOPE_TIMED_GUIDE_WE', elements: { TIMED_GUIDE_W: 0, TIMED_GUIDE_E: duration } })
 		}
 	}
 
