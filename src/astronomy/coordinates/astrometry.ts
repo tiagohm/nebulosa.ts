@@ -7,7 +7,7 @@ import type { Temperature } from '../../math/units/temperature'
 import type { GeographicCoordinate } from '../observer/location'
 import { pmAngles, type Time, timeShift, tt, ut1 } from '../time/time'
 import type { CartesianCoordinate, EquatorialCoordinate, SphericalCoordinate } from './coordinate'
-import { type EraAstrom, eraApci13, eraApco13, eraApio13, eraAtciqz, eraAticq, eraAtioq, eraAtoiq, eraC2s, eraP2s, eraRefco } from './erfa/erfa'
+import { type EraAstrom, eraApci13, eraApco13, eraApio13, eraAtciqz, eraAticq, eraAtioq, eraAtoiq, eraC2s, eraEo06a, eraP2s, eraRefco } from './erfa/erfa'
 
 // High-level astrometric place transforms built on the ERFA "apc/atio" pipeline: ICRS<->CIRS,
 // CIRS<->observed (azimuth/altitude), and ICRS->observed, plus the scalar helpers (distance,
@@ -168,6 +168,8 @@ export function cirsToObserved(cirs: Vec3 | readonly [Angle, Angle], time: Time,
 
 		// First set up the astrometry context for ICRS<->observed
 		astrom = eraApio13(a.day, a.fraction, b.day, b.fraction, longitude, latitude, elevation, xp, yp, sp, pressure, temperature, relativeHumidity, wl)
+		// eraApio13 never writes the CIRS-to-equinox equation of the origins.
+		astrom.eo = eraEo06a(a.day, a.fraction)
 	}
 
 	const [ri, di] = cirs.length === 2 ? cirs : eraC2s(...cirs)
