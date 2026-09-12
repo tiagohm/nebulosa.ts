@@ -1,5 +1,5 @@
 import { clamp, type NumberArray } from '../../math/numerical/math'
-import { medianOf, STANDARD_DEVIATION_SCALE, standardDeviationOf } from '../../math/numerical/statistics'
+import { medianOf, STANDARD_DEVIATION_SCALE } from '../../math/numerical/statistics'
 import { DEFAULT_GRAYSCALE, type Image, type ImageRawType } from '../model/types'
 import type { DetectedStar } from '../stars/detector'
 // oxfmt-ignore
@@ -390,12 +390,11 @@ function collectSamples(raw: ImageRawType, width: number, height: number, channe
 	return set
 }
 
-// Below this ratio of (normalized) MAD to standard deviation, the box medians are treated as a flat
-// background plus a distinct outlier mode — a saturated / flat-topped object filling boxes — rather than
-// smooth structure. Smooth light pollution (a broad dome) or a gradient keeps MAD/std ~ 0.8-1.3; a flat
-// frame with an object collapses it toward 0. Below the threshold the outlier mode is rejected so the TPS
-// does not model the object as background; above it, domes and gradients are preserved untouched.
-const TPS_BIMODAL_MAD_RATIO = 0.3
+// Below this ratio of the largest consecutive gap in the sorted box medians to their total range, the
+// samples are treated as a continuous distribution (a smooth dome or gradient) rather than two modes.
+// A saturated object jumps from the sky value to the plateau with a gap that is a large fraction of the
+// range; a compact Gaussian fills the interval even when most boxes sit on the floor and MAD/std collapses.
+const TPS_BIMODAL_GAP_RATIO = 0.4
 
 // Iteration cap for the flat-topped-structure rejection; it converges in one pass in the common case.
 const FLAT_TOP_REJECTION_MAX_ITERATIONS = 4
@@ -403,34 +402,43 @@ const FLAT_TOP_REJECTION_MAX_ITERATIONS = 4
 // Rejects box medians that form a distinct bright/dark outlier mode on an otherwise flat background,
 // marking those samples inactive in place. A compact saturated object has near-zero internal dispersion,
 // so the box-dispersion prefilter and the smoothing TPS both accept it and would model it as background,
-// then subtract it away. Detection is gated on the box-median MAD collapsing relative to their spread:
-// smooth structure (a broad dome, a gradient) keeps a healthy ratio and is left untouched, while a
-// flat-plus-object distribution collapses it. Rejection is asymmetric like the polynomial path (tight on
-// the bright side, loose on the dark). `buffer`/`scratch` are reusable arrays sized to the sample count.
+// then subtract it away. Detection is gated on a real gap in the sorted medians: a two-mode mixture
+// (sky plus a flat-topped object) jumps across a large fraction of the value range, while a smooth
+// localized dome is continuous even when it occupies a minority of the grid. Asymmetry of the 1D
+// histogram (collapsed MAD/std) is not enough, because that also fires on compact light-pollution
+// domes. Rejection is asymmetric like the polynomial path (tight on the bright side, loose on the
+// dark). `buffer`/`scratch` are reusable arrays sized to the sample count.
 function rejectFlatToppedStructure(set: SurfaceSampleSet, buffer: Float64Array, scratch: Float64Array, rejectionHigh: number, rejectionLow: number) {
 	for (let iteration = 0; iteration < FLAT_TOP_REJECTION_MAX_ITERATIONS; iteration++) {
 		let count = 0
 		for (let i = 0; i < set.count; i++) if (set.active[i] !== 0) buffer[count++] = set.value[i]
 		if (count < 4) return
 
-		// Robust center and scale of the active box medians (scratch holds the sorted values / deviations).
+		// Sorted active medians: the robust center, the total range, and the largest consecutive gap.
 		scratch.set(buffer.subarray(0, count))
 		scratch.subarray(0, count).sort()
 		const center = medianOf(scratch, count)
+		const range = scratch[count - 1] - scratch[0]
+		let maxGap = 0
+		for (let i = 1; i < count; i++) {
+			const gap = scratch[i] - scratch[i - 1]
+			if (gap > maxGap) maxGap = gap
+		}
+
+		// Only reject when the sorted medians show a genuine two-mode gap, never for a continuous but
+		// asymmetric dome that also collapses MAD relative to the ordinary standard deviation.
+		if (!(range > 0) || !(maxGap > TPS_BIMODAL_GAP_RATIO * range)) return
+
 		for (let i = 0; i < count; i++) scratch[i] = Math.abs(buffer[i] - center)
 		scratch.subarray(0, count).sort()
 		const mad = STANDARD_DEVIATION_SCALE * medianOf(scratch, count)
-		const spread = standardDeviationOf(buffer, count)
-
-		// Only reject when the distribution is flat-plus-outliers (collapsed MAD), never for smooth structure.
-		if (!(spread > 0) || mad > TPS_BIMODAL_MAD_RATIO * spread) return
 
 		// Scale the limits by the collapsed robust scale (MAD of the flat mode), not the ordinary standard
-		// deviation: the outlier mode itself inflates `spread`, so once a saturated object fills enough boxes
-		// (roughly a quarter of the frame) a spread-scaled bright limit outruns the object and rejects nothing.
-		// The MAD reflects the flat mode's dispersion regardless of how many outlier boxes exist, keeping the
-		// threshold anchored to the background. When the flat mode is noise-free MAD is 0 and the limit
-		// collapses to `center`, which still separates the two modes cleanly.
+		// deviation: the outlier mode itself inflates the sample spread, so once a saturated object fills
+		// enough boxes (roughly a quarter of the frame) a spread-scaled bright limit outruns the object and
+		// rejects nothing. The MAD reflects the flat mode's dispersion regardless of how many outlier boxes
+		// exist, keeping the threshold anchored to the background. When the flat mode is noise-free MAD is 0
+		// and the limit collapses to `center`, which still separates the two modes cleanly.
 		const highLimit = rejectionHigh > 0 ? center + rejectionHigh * mad : Infinity
 		const lowLimit = rejectionLow > 0 ? center - rejectionLow * mad : -Infinity
 		let rejected = 0
@@ -555,8 +563,9 @@ function fitChannelSurface(raw: ImageRawType, width: number, height: number, cha
 		//
 		// A saturated flat-topped object fills whole boxes with a near-constant value, so it has near-zero
 		// internal dispersion and slips past that prefilter; without rejection the TPS would model it as
-		// background and subtract it away. Reject such a distinct outlier mode first, but only when the box
-		// medians are flat-plus-outliers rather than smoothly varying, so genuine domes/gradients survive.
+		// background and subtract it away. Reject such a distinct outlier mode first, but only when the
+		// sorted box medians show a two-mode gap rather than a continuous ramp, so genuine (even compact)
+		// light-pollution domes and gradients survive.
 		rejectFlatToppedStructure(set, residuals, residualScratch, rejectionHigh, rejectionLow)
 
 		// Rejection (and the dedup above) can deactivate the only off-strip samples — e.g. a masked horizontal

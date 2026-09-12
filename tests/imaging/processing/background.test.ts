@@ -993,6 +993,50 @@ test('thin-plate spline preserves a smooth localized dome through rejection', ()
 	expect(maxError).toBeLessThan(0.015)
 })
 
+test('thin-plate spline preserves a compact localized dome that occupies a minority of the grid', () => {
+	// Same Gaussian as the broad-dome test but σ = 40/256, so most boxes sit on the floor. A MAD/std
+	// bimodality gate treats that asymmetry as a flat-plus-object mixture, rejects ~190 dome samples, and
+	// leaves the peak ~0.33 too low. A real two-mode gap is required so the spline still follows the peak.
+	const width = 256
+	const height = 256
+	const cx = width / 2
+	const cy = height / 2
+	const sigma = 40
+	const dome = (x: number, y: number) => {
+		const dx = x - cx
+		const dy = y - cy
+		return 0.1 + 0.4 * Math.exp(-(dx * dx + dy * dy) / (2 * sigma * sigma))
+	}
+	const image = makeImage(width, height, 1, (x, y) => dome(x, y))
+
+	const model = fitBackgroundSurface(image, { model: 'thinPlateSpline', gridSize: 24 })
+	// The MAD/std gate rejected ~190 samples; flank boxes may still fail the dispersion prefilter.
+	expect(model.surfaces[0].acceptedSamples).toBeGreaterThan(500)
+
+	const background = evaluateBackgroundModel(model, image).raw
+	// Default smoothing 0.1 regularizes ~0.05 off this compact peak; the MAD/std gate left ~0.33.
+	expect(Math.abs(dome(cx, cy) - background[cy * width + cx])).toBeLessThan(0.08)
+})
+
+test('thin-plate spline preserves a corner light-pollution dome', () => {
+	// Horizon glow: a Gaussian centered on a corner. The bright tail is a minority of the grid, so a 1D
+	// MAD/std gate rejects it as an object. Isolate that gate from the box-dispersion prefilter (which
+	// collapses when most boxes are perfectly flat) and from default smoothing (which regularizes a
+	// handful of corner samples onto the floor) by interpolating every sample.
+	const width = 256
+	const height = 256
+	const sigma = 50
+	const dome = (x: number, y: number) => 0.1 + 0.4 * Math.exp(-(x * x + y * y) / (2 * sigma * sigma))
+	const image = makeImage(width, height, 1, (x, y) => dome(x, y))
+
+	const model = fitBackgroundSurface(image, { model: 'thinPlateSpline', gridSize: 24, smoothing: 0, tolerance: 0 })
+	expect(model.surfaces[0].acceptedSamples).toBe(model.surfaces[0].samples.length)
+
+	const background = evaluateBackgroundModel(model, image).raw
+	expect(Math.abs(dome(0, 0) - background[0])).toBeLessThan(0.02)
+	expect(Math.abs(dome(width - 1, height - 1) - background[(height - 1) * width + (width - 1)])).toBeLessThan(0.02)
+}, 4000)
+
 test('thin-plate spline preserves a bright flat-topped object instead of subtracting it', () => {
 	// A saturated flat-topped object (0.8 square) on a flat 0.2 frame. Its boxes have near-zero internal
 	// dispersion, so the box-dispersion prefilter accepts them and the TPS would model the object as
