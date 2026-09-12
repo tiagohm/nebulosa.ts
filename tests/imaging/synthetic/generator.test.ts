@@ -215,6 +215,28 @@ describe('generate astronomical image noise', () => {
 		expect(Math.abs(green - blue)).toBeLessThan(4e-4)
 	})
 
+	test('applies light pollution once and does not leak gradientStrength into the DC level', () => {
+		const skyOnly = new Float64Array(1)
+		const lpFlat = new Float64Array(1)
+		const lpGradient = new Float64Array(1)
+		const rgbSky = new Float64Array(3)
+		const rgbTinted = new Float64Array(3)
+		const sky = { enabled: true, baseRate: 10000, perChannelMultipliers: [1, 1, 1] as const, colorBias: [1, 1, 1] as const, filterTransmission: [1, 1, 1] as const }
+		const exposure = { exposureTime: 1 }
+
+		generateNoiseImage(skyOnly, 1, 1, 1, baseConfig({ exposure, sky }))
+		generateNoiseImage(lpFlat, 1, 1, 1, baseConfig({ exposure, sky, lightPollution: { enabled: true, strength: 1, direction: 0, gradientStrength: 0, domeSharpness: 1.2, tint: [1, 1, 1] } }))
+		generateNoiseImage(lpGradient, 1, 1, 1, baseConfig({ exposure, sky, lightPollution: { enabled: true, strength: 1, direction: 0, gradientStrength: 1, domeSharpness: 1.2, tint: [1, 1, 1] } }))
+		generateNoiseImage(rgbSky, 1, 1, 3, baseConfig({ exposure, sky }))
+		generateNoiseImage(rgbTinted, 1, 1, 3, baseConfig({ exposure, sky, lightPollution: { enabled: true, strength: 1, direction: 0, gradientStrength: 0, domeSharpness: 1.2, tint: [2, 1, 0] } }))
+
+		expect(lpGradient[0]).toBe(lpFlat[0])
+		expect(lpFlat[0]).toBeGreaterThan(skyOnly[0])
+		expect(rgbTinted[2]).toBeCloseTo(rgbSky[2], 12)
+		expect(rgbTinted[0]).toBeGreaterThan(rgbSky[0])
+		expect(rgbTinted[1]).toBeGreaterThan(rgbSky[1])
+	})
+
 	test('applies moonlight and first-channel sky scaling in monochrome mode', () => {
 		const width = 192
 		const height = 128
@@ -379,7 +401,7 @@ describe('generate image', () => {
 		{
 			name: 'mono urban light dome',
 			channels: 1,
-			hash: '82e2607417e8007d01023e5efe121e99',
+			hash: '105c3d261236d1fef2ba66bce970dc27',
 			config: baseConfig({
 				sky: { enabled: true, baseRate: 0.16, gradientStrength: 0.06 },
 				lightPollution: { enabled: true, strength: 0.55, direction: -1.2, gradientStrength: 0.55, domeSharpness: 1.4 },
@@ -417,7 +439,7 @@ describe('generate image', () => {
 		{
 			name: 'mono realistic cooled camera',
 			channels: 1,
-			hash: '2657a5a1bcbb48ff34900d633f66c64e',
+			hash: '452c080c08e58c46a415cd8663a8c636',
 			config: baseConfig({
 				quality: 'high-realism',
 				exposure: { exposureTime: 180, electronsPerAdu: 0.75 },
@@ -449,7 +471,7 @@ describe('generate image', () => {
 		{
 			name: 'rgb urban sodium cast',
 			channels: 3,
-			hash: '60946f21bdb83548a040ce48aa2d4801',
+			hash: 'ad1fe28e3868155e594112fc8672e56c',
 			config: baseConfig({
 				sky: { enabled: true, baseRate: 0.15, perChannelMultipliers: [1.05, 1, 0.88], colorBias: [1.06, 1, 0.9] },
 				lightPollution: { enabled: true, strength: 0.62, direction: -1.15, gradientStrength: 0.62, domeSharpness: 1.45, tint: [1.2, 1, 0.68] },
@@ -459,7 +481,7 @@ describe('generate image', () => {
 		{
 			name: 'rgb broadband realistic',
 			channels: 3,
-			hash: '245e9541f853ed355ac989ca50a4670b',
+			hash: '3e27876a1795268b664582a6e9b733ec',
 			config: baseConfig({
 				quality: 'high-realism',
 				exposure: { exposureTime: 180, electronsPerAdu: 0.8 },
@@ -474,7 +496,7 @@ describe('generate image', () => {
 		{
 			name: 'rgb narrowband-like filtered background',
 			channels: 3,
-			hash: 'db18c0dcd4ef2ce0e65afb596bf0278a',
+			hash: 'e60b1e739e8b9a7fb896c436274718cc',
 			config: baseConfig({
 				sky: { enabled: true, baseRate: 0.09, perChannelMultipliers: [0.38, 1.18, 0.42], colorBias: [0.86, 1.08, 0.88], filterTransmission: [0.34, 1, 0.36] },
 				moon: { enabled: true, illuminationFraction: 0.18, altitude: 0.4, angularDistance: 1.4, positionAngle: 0.2, tint: [0.9, 1, 1.04], strength: 0.25 },
@@ -498,7 +520,7 @@ describe('generate image', () => {
 		{
 			name: 'rgb warm noisy one shot color',
 			channels: 3,
-			hash: '786a8da0cf84caaa124b00b44b1f2b37',
+			hash: '23f049df8e121f15938da568fe186f96',
 			config: baseConfig({
 				exposure: { exposureTime: 90, analogGain: 1.6, digitalGain: 1.15, electronsPerAdu: 0.9 },
 				sky: { enabled: true, baseRate: 0.22, gradientStrength: 0.08, radialGradientStrength: 0.05, lowFrequencyVariationStrength: 0.03, perChannelMultipliers: [1.04, 1, 0.94], colorBias: [1.02, 1, 0.96] },
@@ -559,7 +581,7 @@ describe('generate image with stars', () => {
 
 		generateStarImage(raw, width, height, 1, stars, 0.2, config, { psfModel: 'gaussian', jitterX: 0.18, jitterY: -0.22, softCore: 1.8, additiveNoiseHint: 1.5, haloStrength: 0.2 })
 		const image: Image = { raw, header: {}, metadata: { width, height, channels: 1, pixelCount: width * height, pixelSizeInBytes: 8, bitpix: -64, stride: width * 1, strideInBytes: width * 1 * 8, bayer: undefined } }
-		await saveImageAndCompareHash(stf(image, ...adf(image)), 'generate-image-with-stars-mono', '0fd451a354b0de58721515c6108537fa')
+		await saveImageAndCompareHash(stf(image, ...adf(image)), 'generate-image-with-stars-mono', 'a01d48134d9f11efc295a1f13a4c16aa')
 	})
 
 	test('color', async () => {
@@ -569,6 +591,6 @@ describe('generate image with stars', () => {
 
 		generateStarImage(raw, width, height, 3, stars, 0.2, config, { psfModel: 'gaussian', jitterX: 0.18, jitterY: -0.22, softCore: 1.8, additiveNoiseHint: 1.5, haloStrength: 0.2 })
 		const image: Image = { raw, header: {}, metadata: { width, height, channels: 3, pixelCount: width * height, pixelSizeInBytes: 8, bitpix: -64, stride: width * 3, strideInBytes: width * 3 * 8, bayer: undefined } }
-		await saveImageAndCompareHash(stf(image, ...adf(image)), 'generate-image-with-stars-color', 'cb310e5dc1c5fb3a8ce4049e51def4ad')
+		await saveImageAndCompareHash(stf(image, ...adf(image)), 'generate-image-with-stars-color', '25679179bb023696302ecbf75928a201')
 	})
 })

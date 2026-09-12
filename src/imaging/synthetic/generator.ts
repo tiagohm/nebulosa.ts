@@ -668,7 +668,8 @@ function evaluateSkySpatialFields(xc: number, yc: number, config: ResolvedAstron
 	const twilightElectrons = baseSkyElectrons * config.twilightContribution * 18 * horizonFactor
 	const horizonGlowElectrons = baseSkyElectrons * config.horizonGlow * (0.45 + 0.55 * horizonFactor) * diffuseBoost
 	out.ampGlowElectrons = config.ampGlowEnabled ? evaluateAmpGlowElectrons(xc, yc, config) : 0
-	out.sharedSkyElectrons = sharedNaturalSkyElectrons + twilightElectrons + horizonGlowElectrons + out.lightPollutionElectrons * (0.3 + 0.7 * config.lightPollutionGradientStrength)
+	// Light pollution and moonlight stay out of the shared sky so each is applied once, with its tint.
+	out.sharedSkyElectrons = sharedNaturalSkyElectrons + twilightElectrons + horizonGlowElectrons
 
 	return out
 }
