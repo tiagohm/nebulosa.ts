@@ -160,7 +160,7 @@ export class SHT21 extends PeripheralBase<SHT21> implements Hygrometer, Thermome
 			}
 		} else if (register === SHT21.#READ_HUM_HOLD_CMD) {
 			const raw = data.readUInt16BE(0) & 0xfffc
-			const humidity = -6 + (125 * raw) / 65536
+			const humidity = Math.max(0, Math.min(100, -6 + (125 * raw) / 65536))
 			const changed = humidity !== this.humidity || this.#temperatureChanged
 
 			if (changed) {

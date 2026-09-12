@@ -728,6 +728,17 @@ test('SHT21 configures i2c reads and emits temperature and humidity updates', ()
 	expect(client.handlers.size).toBe(0)
 })
 
+test('SHT21 clamps relative humidity to the Hygrometer domain', () => {
+	const client = new MockFirmataClient()
+	const sht21 = new SHT21(client as never, 1000)
+
+	sht21.twoWireMessage(client as never, SHT21.ADDRESS, 0xe5, Buffer.from([0xd9, 0x30]))
+	expect(sht21.humidity).toBe(100)
+
+	sht21.twoWireMessage(client as never, SHT21.ADDRESS, 0xe5, Buffer.from([0x00, 0x00]))
+	expect(sht21.humidity).toBe(0)
+})
+
 test('LM35 converts ADC counts to temperature', () => {
 	const lm35 = new LM35(undefined as never, 0)
 	expect(lm35.calculate(51.15)).toBeTrue()
