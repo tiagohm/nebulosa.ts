@@ -143,7 +143,7 @@ export function upload(upload: Upload<string | Blob>, signal?: AbortSignal) {
 		center_ra: upload.rightAscension !== undefined ? toDeg(normalizeAngle(upload.rightAscension)) : undefined,
 		center_dec: upload.declination !== undefined ? toDeg(upload.declination) : undefined,
 		radius: upload.radius !== undefined ? toDeg(upload.radius) : undefined,
-		downsample_factor: Math.max(2, upload.downsample ?? 2),
+		downsample_factor: Math.max(1, upload.downsample ?? 2),
 		tweak_order: upload.tweakOrder ?? 2,
 		crpix_center: upload.crpixCenter ?? true,
 		parity: upload.parity ?? 2,
@@ -231,30 +231,12 @@ export async function novaAstrometryNetPlateSolve(input: string | Blob, options?
 // are emitted only when the caller supplies all three; a radius alone is not a north-polar window.
 export async function localAstrometryNetPlateSolve(input: string, options: RequiredOnly<LocalAstrometryNetPlateSolveOptions, 'executable'>, signal?: AbortSignal) {
 	const timeout = options.timeout ?? 0
-	const downsample = options.downsample ?? 2
+	const downsample = Math.max(1, options.downsample ?? 2)
 	const fov = Math.max(0, Math.min(toDeg(options?.fov ?? 0), 360))
 	const outDir = join(tmpdir(), Bun.randomUUIDv7())
 	const wcs = join(outDir, 'nebulosa.wcs')
 
-	const commands = [
-		options.executable,
-		'--out',
-		'nebulosa',
-		'--overwrite',
-		'--dir',
-		outDir,
-		'--cpulimit',
-		timeout >= 1000 ? Math.trunc(timeout / 1000).toFixed(0) : '300',
-		'--crpix-center',
-		'--downsample',
-		Math.max(downsample, 2).toFixed(0),
-		'--no-verify',
-		'--no-plots',
-		'--skip-solved',
-		'--no-remove-lines',
-		'--uniformize',
-		'0',
-	]
+	const commands = [options.executable, '--out', 'nebulosa', '--overwrite', '--dir', outDir, '--cpulimit', timeout >= 1000 ? Math.trunc(timeout / 1000).toFixed(0) : '300', '--crpix-center', '--downsample', downsample.toFixed(0), '--no-verify', '--no-plots', '--skip-solved', '--no-remove-lines', '--uniformize', '0']
 
 	if (fov > 0) {
 		commands.push('--scale-units', 'degwidth')

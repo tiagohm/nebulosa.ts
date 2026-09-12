@@ -140,6 +140,31 @@ test('radius-only solve-field hint does not force RA 0 Dec 90', async () => {
 	}
 })
 
+test('respects downsample 1 instead of clamping to 2', async () => {
+	const novaDefault = await captureUploadJson({})
+	expect(novaDefault.downsample_factor).toBe(2)
+
+	const novaOff = await captureUploadJson({ downsample: 1 })
+	expect(novaOff.downsample_factor).toBe(1)
+
+	const calls: string[][] = []
+	const original = Bun.spawn
+	Bun.spawn = ((cmd: string[]) => {
+		calls.push([...cmd])
+		return { exited: Promise.resolve(1) }
+	}) as typeof Bun.spawn
+
+	try {
+		await localAstrometryNetPlateSolve('img.fit', { executable: 'solve-field', downsample: 1 })
+		expect(calls[0][calls[0].indexOf('--downsample') + 1]).toBe('1')
+
+		await localAstrometryNetPlateSolve('img.fit', { executable: 'solve-field' })
+		expect(calls[1][calls[1].indexOf('--downsample') + 1]).toBe('2')
+	} finally {
+		Bun.spawn = original
+	}
+})
+
 test('upload converts scale bounds into scaleUnits', async () => {
 	const arcsecPerPix = await captureUploadJson({ scaleUnits: 'arcsecperpix', scaleLower: arcsec(1), scaleUpper: arcsec(5) })
 	expect(arcsecPerPix.scale_units).toBe('arcsecperpix')
