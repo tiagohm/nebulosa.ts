@@ -159,7 +159,7 @@ export abstract class AzimuthalProjection implements Projection {
 // Gnomonic projection: great circles map to straight lines; shows less than one hemisphere.
 export class Gnomonic extends AzimuthalProjection {
 	protected radialDistance(sinC: number, cosC: number) {
-		return cosC <= 0 ? false : sinC / cosC
+		return cosC <= GEOMETRY_EPSILON ? false : sinC / cosC
 	}
 
 	protected angularDistance(rho: number) {

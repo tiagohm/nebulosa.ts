@@ -77,6 +77,7 @@ test('azimuthal equidistant preserves the center angular distance as plane radiu
 
 test('azimuthal projection singularities and inverse domains are rejected', () => {
 	expect(new Gnomonic(0, 0).project(PI, 0)).toBeUndefined()
+	expect(new Gnomonic(0, 0).project(PIOVERTWO, 0)).toBeUndefined()
 	expect(new Orthographic(0, 0).project(PI, 0)).toBeUndefined()
 	expect(new Stereographic(0, 0).project(PI, 0)).toBeUndefined()
 	expect(new LambertAzimuthalEqualArea(0, 0).project(PI, 0)).toBeUndefined()
