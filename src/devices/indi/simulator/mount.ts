@@ -987,12 +987,14 @@ export class MountSimulator extends DeviceSimulator {
 				else if (vector.elements.SET === true) this.setHome()
 				return
 			case 'TELESCOPE_MOTION_NS':
-				if (vector.elements.MOTION_NORTH !== undefined) this.moveNorth(vector.elements.MOTION_NORTH)
-				if (vector.elements.MOTION_SOUTH !== undefined) this.moveSouth(vector.elements.MOTION_SOUTH)
+				if (vector.elements.MOTION_NORTH === true) this.moveNorth(true)
+				else if (vector.elements.MOTION_SOUTH === true) this.moveSouth(true)
+				else this.moveNorth(false)
 				return
 			case 'TELESCOPE_MOTION_WE':
-				if (vector.elements.MOTION_WEST !== undefined) this.moveWest(vector.elements.MOTION_WEST)
-				if (vector.elements.MOTION_EAST !== undefined) this.moveEast(vector.elements.MOTION_EAST)
+				if (vector.elements.MOTION_WEST === true) this.moveWest(true)
+				else if (vector.elements.MOTION_EAST === true) this.moveEast(true)
+				else this.moveWest(false)
 				return
 			case 'TELESCOPE_PARK':
 				if (vector.elements.PARK === true) this.park()

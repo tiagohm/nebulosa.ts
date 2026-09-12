@@ -2157,6 +2157,48 @@ describe('mount simulator pointing errors', () => {
 		}
 	})
 
+	test('accepts full manual-motion vectors for every direction', () => {
+		const { client, mount } = makeMount('mount.motion.full-vector')
+
+		try {
+			mount.setTrackingEnabled(true)
+
+			const northStart = mount.mechanical.declination
+			client.sendSwitch({ device: mount.name, name: 'TELESCOPE_MOTION_NS', elements: { MOTION_NORTH: true, MOTION_SOUTH: false } })
+			expect(mount.isSlewing).toBeTrue()
+			mount.advance(0.1)
+			client.sendSwitch({ device: mount.name, name: 'TELESCOPE_MOTION_NS', elements: { MOTION_NORTH: false, MOTION_SOUTH: false } })
+			expect(mount.isSlewing).toBeFalse()
+			expect(mount.mechanical.declination).toBeGreaterThan(northStart)
+
+			const southStart = mount.mechanical.declination
+			client.sendSwitch({ device: mount.name, name: 'TELESCOPE_MOTION_NS', elements: { MOTION_NORTH: false, MOTION_SOUTH: true } })
+			expect(mount.isSlewing).toBeTrue()
+			mount.advance(0.1)
+			client.sendSwitch({ device: mount.name, name: 'TELESCOPE_MOTION_NS', elements: { MOTION_NORTH: false, MOTION_SOUTH: false } })
+			expect(mount.isSlewing).toBeFalse()
+			expect(mount.mechanical.declination).toBeLessThan(southStart)
+
+			const westStart = mount.mechanical.rightAscension
+			client.sendSwitch({ device: mount.name, name: 'TELESCOPE_MOTION_WE', elements: { MOTION_WEST: true, MOTION_EAST: false } })
+			expect(mount.isSlewing).toBeTrue()
+			mount.advance(0.1)
+			client.sendSwitch({ device: mount.name, name: 'TELESCOPE_MOTION_WE', elements: { MOTION_WEST: false, MOTION_EAST: false } })
+			expect(mount.isSlewing).toBeFalse()
+			expect(normalizePI(mount.mechanical.rightAscension - westStart)).toBeLessThan(0)
+
+			const eastStart = mount.mechanical.rightAscension
+			client.sendSwitch({ device: mount.name, name: 'TELESCOPE_MOTION_WE', elements: { MOTION_WEST: false, MOTION_EAST: true } })
+			expect(mount.isSlewing).toBeTrue()
+			mount.advance(0.1)
+			client.sendSwitch({ device: mount.name, name: 'TELESCOPE_MOTION_WE', elements: { MOTION_WEST: false, MOTION_EAST: false } })
+			expect(mount.isSlewing).toBeFalse()
+			expect(normalizePI(mount.mechanical.rightAscension - eastStart)).toBeGreaterThan(0)
+		} finally {
+			mount.dispose()
+		}
+	})
+
 	test('brings in a whole family at its defaults when switched on', () => {
 		const { client, mount } = makeMount('mount.features.on')
 
