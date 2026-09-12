@@ -51,6 +51,12 @@ describe('nearest lunar phase', () => {
 		expect(timeToDate(utc(time)).slice(0, 5)).toEqual([1977, 2, 18, 3, 36])
 	})
 
+	// Meeus, Astronomical Algorithms, example 49.a (TD = TT).
+	test('new moon Meeus example 49.a is 1977-02-18 3h37m42s TT', () => {
+		const time = nearestLunarPhase(timeYMDHMS(1977, 2, 15, 0, 0, 0, Timescale.TT), 'NEW', true)
+		expect(timeToDate(time).slice(0, 6)).toEqual([1977, 2, 18, 3, 37, 42])
+	})
+
 	// https://www.timeanddate.com/moon/phases/?year=2044
 	test('last quarter', () => {
 		const time = nearestLunarPhase(timeYMDHMS(2044, 2, 1), 'LAST_QUARTER', true)
@@ -514,6 +520,8 @@ describe('lunar event selection boundaries', () => {
 test('lunar phases retain the secular powers centuries from J2000', () => {
 	// PyMeeus 0.5.12, Moon.moon_phase(Epoch(year,1,1), target), TT. One-second tolerance.
 	const fixtures = [
+		// Year 0: |T| ~ 20, so a T vs T^2 swap in Meeus 49.1 shifts the epoch by ~1.5 h.
+		['NEW', 1721052.289317138],
 		['NEW', 2305462.7136972747],
 		['FIRST_QUARTER', 2305469.502773242],
 		['FULL', 2305476.7750151046],
