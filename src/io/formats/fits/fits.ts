@@ -1392,8 +1392,9 @@ export class FitsImageReader {
 		const rowSize = widthKeyword(header, 0)
 		const rowCount = heightKeyword(header, 0)
 		const heapOffset = Math.trunc(numericKeyword(header, 'THEAP', rowSize * rowCount))
+		// Spec default tiling is row-by-row: ZTILE1 = ZNAXIS1, and ZTILEn = 1 for n > 1.
 		const tileWidth = Math.trunc(numericKeyword(header, 'ZTILE1', width))
-		const tileHeight = Math.trunc(numericKeyword(header, 'ZTILE2', height))
+		const tileHeight = Math.trunc(numericKeyword(header, 'ZTILE2', 1))
 		const tileDepth = Math.trunc(numericKeyword(header, 'ZTILE3', 1))
 		const blockSize = riceBlockSizeFromHeader(header)
 

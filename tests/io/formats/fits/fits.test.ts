@@ -241,6 +241,25 @@ test('write/read RICE compressed', async () => {
 	await saveImageAndCompareHash(output, 'write-fits-rice-16-1', 'c754bf834dc1bb3948ec3cf8b9aca303')
 }, 5000)
 
+test('reads Rice tiles using the spec default ZTILE2 of 1 when the card is omitted', async () => {
+	const width = 8
+	const height = 4
+	const header: FitsHeader = { SIMPLE: true, BITPIX: 16, NAXIS: 2, NAXIS1: width, NAXIS2: height, BSCALE: 1, BZERO: 32768 }
+	const raw = new Float64Array(width * height)
+	for (let i = 0; i < raw.length; i++) raw[i] = i / (raw.length - 1)
+	const buffer = Buffer.alloc(FITS_BLOCK_SIZE * 4)
+
+	await writeFits(bufferSink(buffer), [{ header, raw }], { type: 'RICE_1', tileHeight: 1 })
+
+	const ztile2 = buffer.indexOf('ZTILE2  ', 0, 'ascii')
+	expect(ztile2).toBeGreaterThan(-1)
+	buffer.fill(32, ztile2, ztile2 + FITS_HEADER_CARD_SIZE)
+
+	const output = await readImageFromBuffer(buffer, { raw: 64 })
+	expect(output).toBeDefined()
+	for (let i = 0; i < raw.length; i++) expect(output!.raw[i]).toBeCloseTo(raw[i], 4)
+})
+
 test('writes and reads interleaved channels directly from Rice tiles', async () => {
 	const width = 3
 	const height = 3
