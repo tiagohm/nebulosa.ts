@@ -622,7 +622,8 @@ const XML_PARSER = new XMLParser(XML_PARSE_OPTIONS)
 
 // Parses the XISF XML header buffer into the list of supported images, skipping any image whose location
 // is not an attachment, whose color space is not Gray/RGB, whose sample format is unsupported, or whose
-// geometry/location/compression metadata is invalid.
+// geometry/location/compression metadata is invalid. A missing colorSpace attribute is treated as Gray
+// (XISF 1.0 §11.5.2); CIELab and unknown values remain skipped.
 export function parseXisfHeader(data: Buffer) {
 	const parsedHeader = XML_PARSER.parse(data)?.xisf as XisfParsedHeader | undefined
 	if (!parsedHeader?.Image) return []
@@ -633,7 +634,8 @@ export function parseXisfHeader(data: Buffer) {
 	for (const image of parsedImages) {
 		if (typeof image.location !== 'string' || !image.location.startsWith('attachment:')) continue
 		if (typeof image.geometry !== 'string') continue
-		if (image.colorSpace !== 'Gray' && image.colorSpace !== 'RGB') continue
+		const colorSpace = image.colorSpace ?? 'Gray'
+		if (colorSpace !== 'Gray' && colorSpace !== 'RGB') continue
 		if (!isSupportedSampleFormat(image.sampleFormat) || image.sampleFormat === 'UInt64') continue
 
 		const geometry = parseGeometry(image.geometry)
@@ -644,7 +646,6 @@ export function parseXisfHeader(data: Buffer) {
 		if (image.compression && !compression) continue
 
 		const header = makeFitsHeaderFromParsedImage(image, geometry)
-		const colorSpace = image.colorSpace
 		const sampleFormat = image.sampleFormat
 		const byteOrder = image.byteOrder === 'big' ? 'big' : 'little'
 		const imageType = image.imageType ?? 'Light'

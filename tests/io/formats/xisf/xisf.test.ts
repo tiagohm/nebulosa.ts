@@ -87,6 +87,17 @@ describe('parse header', () => {
 		expect(hdus[0].location).toEqual({ offset: 24, size: 4 })
 	})
 
+	test('omitted colorSpace defaults to Gray', () => {
+		const XML = `<xisf version="1.0"><Image geometry="2:1:1" sampleFormat="UInt16" location="attachment:24:4"></Image><Image geometry="1:1:3" sampleFormat="UInt8" colorSpace="CIELab" location="attachment:28:3"></Image></xisf>`
+		const hdus = parseXisfHeader(Buffer.from(XML))
+
+		expect(hdus).toHaveLength(1)
+		expect(hdus[0].colorSpace).toBe('Gray')
+		expect(hdus[0].sampleFormat).toBe('UInt16')
+		expect(hdus[0].geometry).toEqual({ width: 2, height: 1, channels: 1 })
+		expect(hdus[0].location).toEqual({ offset: 24, size: 4 })
+	})
+
 	test('skips images with unimplemented compression codecs without aborting the header', () => {
 		const XML = `<xisf version="1.0"><Image geometry="1:1:1" sampleFormat="UInt16" colorSpace="Gray" location="attachment:16:4" compression="lz4:2"></Image><Image geometry="1:1:1" sampleFormat="UInt16" colorSpace="Gray" location="attachment:20:4" compression="lz4hc:2"></Image><Image geometry="2:1:1" sampleFormat="UInt16" colorSpace="Gray" location="attachment:24:4"></Image></xisf>`
 		const hdus = parseXisfHeader(Buffer.from(XML))
