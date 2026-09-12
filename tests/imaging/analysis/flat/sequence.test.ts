@@ -31,7 +31,7 @@ function completeFrame(index: number, model: Partial<SyntheticFlatModel> = {}, o
 		timestamp: 1_000_000 + index * 1000,
 		filter: 'L',
 		illumination: { source: 'panel', brightness: 50 },
-		operatingPoint: { gain: 100, offset: 20, temperature: -10 + index * 0.05, readoutMode: 'low-noise', binning: [1, 1], sensorOrigin: [0, 0] },
+		operatingPoint: { gain: 100, offset: 20, temperature: -10 + index * 0.05, readoutMode: 'low-noise', binning: [1, 1], sensorOrigin: [0, 0], camera: 'ASI2600', bitDepth: 16 },
 		...overrides,
 	}
 }
@@ -231,8 +231,17 @@ test('throws on known heterogeneous metadata and reports absent compatibility me
 	expect(() => analyzeFlatSequence({ frames: [base, completeFrame(1, {}, { filter: 'R' }), last] })).toThrow('filter')
 	expect(() => analyzeFlatSequence({ frames: [base, completeFrame(1, {}, { operatingPoint: { ...base.operatingPoint!, gain: 200 } }), last] })).toThrow('gain')
 	expect(() => analyzeFlatSequence({ frames: [base, completeFrame(1, {}, { operatingPoint: { ...base.operatingPoint!, sensorOrigin: [2, 0] } }), last] })).toThrow('sensor origins')
+	expect(() => analyzeFlatSequence({ frames: [completeFrame(0, {}, { operatingPoint: { ...base.operatingPoint!, camera: 'A' } }), completeFrame(1, {}, { operatingPoint: { ...base.operatingPoint!, camera: 'B' } }), completeFrame(2, {}, { operatingPoint: { ...base.operatingPoint!, camera: 'A' } })] })).toThrow(
+		'cameras',
+	)
+	expect(() => analyzeFlatSequence({ frames: [completeFrame(0, {}, { operatingPoint: { ...base.operatingPoint!, bitDepth: 16 } }), completeFrame(1, {}, { operatingPoint: { ...base.operatingPoint!, bitDepth: 12 } }), completeFrame(2, {}, { operatingPoint: { ...base.operatingPoint!, bitDepth: 16 } })] })).toThrow(
+		'bit depths',
+	)
 	const firstWithoutGain = completeFrame(0, {}, { operatingPoint: { offset: 20, temperature: -10, readoutMode: 'low-noise', binning: [1, 1], sensorOrigin: [0, 0] } })
 	expect(() => analyzeFlatSequence({ frames: [firstWithoutGain, completeFrame(1), completeFrame(2, {}, { operatingPoint: { ...base.operatingPoint!, gain: 200 } })] })).toThrow('gains')
+	const cameraOnlyOnFirst = analyzeFlatSequence({ frames: [completeFrame(0), completeFrame(1, {}, { operatingPoint: { ...base.operatingPoint!, camera: undefined } }), completeFrame(2, {}, { operatingPoint: { ...base.operatingPoint!, camera: undefined } })] }, { maximumSignalVariation: 0 })
+	expect(cameraOnlyOnFirst.assessment.verdict).toBe('inconclusive')
+	expect(cameraOnlyOnFirst.assessment.reasons).toContain('sequenceMetadataUnknown')
 
 	const unknownFrames = asSequence([0, 1, 2].map((index) => ({ id: `unknown-${index}`, image: generateSyntheticFlatImage({ width: 32, height: 24, bias: 0, signal: 1000, vignetting: 0 }) })))
 	const unknown = analyzeFlatSequence({ frames: unknownFrames }, { maximumSignalVariation: 0 })

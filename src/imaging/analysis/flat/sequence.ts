@@ -171,6 +171,17 @@ function validateSequenceCompatibility(frames: readonly FlatFrame[], options: Pa
 			metadata.map((value) => value.sensorOrigin),
 			'flat sequence sensor origins must match when known',
 		) || metadataUnknown
+	metadataUnknown =
+		validateOptionalStringCompatibility(
+			metadata.map((value) => value.camera),
+			'flat sequence cameras must match when known',
+		) || metadataUnknown
+	metadataUnknown =
+		validateOptionalNumericCompatibility(
+			metadata.map((value) => value.bitDepth),
+			0,
+			'flat sequence bit depths must match when known',
+		) || metadataUnknown
 	metadataUnknown = validateOptionalStringCompatibility(frames.map(resolveFrameFilter), 'flat sequence filters must match when known') || metadataUnknown
 	metadataUnknown =
 		validateOptionalStringCompatibility(
