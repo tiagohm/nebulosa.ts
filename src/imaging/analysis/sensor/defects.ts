@@ -227,7 +227,8 @@ export function measureSensorDefects(dark: SensorFrameSet, flat: SensorFrameSet,
 				cold++
 			}
 			if (flatStatistics[2] !== 0) activeMask[index] |= SENSOR_DEFECT_SATURATED
-			if (Number.isFinite(response)) {
+			// Structural density already counts point defects; the profile must not let one outlier shift a row/column mean.
+			if (Number.isFinite(response) && (activeMask[index] & 0x0f) === 0) {
 				rowProfiles[y] += response
 				columnProfiles[x] += response
 				rowCounts[y]++

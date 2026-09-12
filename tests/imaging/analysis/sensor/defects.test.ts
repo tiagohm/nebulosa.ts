@@ -103,6 +103,51 @@ test('does not promote one isolated cold pixel to a structural row or column whe
 	expect(result.columns).toHaveLength(0)
 })
 
+test('does not promote one isolated cold pixel to a structural row when row-profile MAD is positive', () => {
+	const width = 32
+	const height = 24
+	const darkRaw = new Float64Array(width * height).fill(100)
+	const flatRaw = new Float64Array(width * height)
+	for (let y = 0; y < height; y++) {
+		for (let x = 0; x < width; x++) flatRaw[y * width + x] = 1100 + 0.02 * y
+	}
+	flatRaw[12 * width + 16] = 0
+	const result = measureSensorDefects(stack([darkRaw, darkRaw], width), stack([flatRaw, flatRaw], width), { maps: 'defects' })!
+	expect(result.cold).toBe(1)
+	expect(result.rows).toHaveLength(0)
+	expect(result.columns).toHaveLength(0)
+})
+
+test('does not promote one isolated hot pixel to a structural column when column-profile MAD is positive', () => {
+	const width = 32
+	const height = 24
+	const darkRaw = new Float64Array(width * height).fill(100)
+	const flatRaw = new Float64Array(width * height)
+	for (let y = 0; y < height; y++) {
+		for (let x = 0; x < width; x++) flatRaw[y * width + x] = 1100 + 0.02 * x
+	}
+	darkRaw[12 * width + 16] = 500
+	const result = measureSensorDefects(stack([darkRaw, darkRaw], width), stack([flatRaw, flatRaw], width), { maps: 'defects' })!
+	expect(result.hot).toBe(1)
+	expect(result.rows).toHaveLength(0)
+	expect(result.columns).toHaveLength(0)
+})
+
+test('still marks a row when a quarter of its pixels are cold', () => {
+	const width = 32
+	const height = 24
+	const darkRaw = new Float64Array(width * height).fill(100)
+	const flatRaw = new Float64Array(width * height)
+	for (let y = 0; y < height; y++) {
+		for (let x = 0; x < width; x++) flatRaw[y * width + x] = 1100 + 0.02 * y
+	}
+	for (let x = 0; x < 8; x++) flatRaw[12 * width + x] = 0
+	const result = measureSensorDefects(stack([darkRaw, darkRaw], width), stack([flatRaw, flatRaw], width), { maps: 'defects' })!
+	expect(result.cold).toBe(8)
+	expect(result.rows).toEqual([12])
+	expect(result.columns).toHaveLength(0)
+})
+
 test('marks a pixel saturated when any flat frame reaches the digital clip', () => {
 	const width = 4
 	const darkRaw = new Float64Array(width * width).fill(100)
