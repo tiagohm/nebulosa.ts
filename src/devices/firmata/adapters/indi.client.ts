@@ -434,7 +434,7 @@ class FirmataVirtualDevice<D extends ListenablePeripheral<D>> {
 			for (const measurement of this.measurements) {
 				if (name && name !== measurement.vector.name) continue
 				handleDefNumberVector(this.client, this.handler, measurement.vector)
-				handleSetNumberVector(this.client, this.handler, measurement.vector)
+				if (measurement.vector.state !== 'Busy') handleSetNumberVector(this.client, this.handler, measurement.vector)
 			}
 
 			this.sendExtraProperties(name)
