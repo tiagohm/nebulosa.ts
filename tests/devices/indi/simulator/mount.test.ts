@@ -2127,6 +2127,36 @@ describe('mount simulator pointing errors', () => {
 		}
 	})
 
+	test('accepts full timed-guide vectors for every direction', () => {
+		const { client, mount } = makeMount('mount.guiding.full-vector')
+
+		try {
+			mount.setTrackingEnabled(true)
+
+			const northStart = mount.mechanical.declination
+			client.sendNumber({ device: mount.name, name: 'TELESCOPE_TIMED_GUIDE_NS', elements: { TIMED_GUIDE_N: 1000, TIMED_GUIDE_S: 0 } })
+			mount.advance(1)
+			expect(mount.mechanical.declination).toBeGreaterThan(northStart)
+
+			const southStart = mount.mechanical.declination
+			client.sendNumber({ device: mount.name, name: 'TELESCOPE_TIMED_GUIDE_NS', elements: { TIMED_GUIDE_N: 0, TIMED_GUIDE_S: 1000 } })
+			mount.advance(1)
+			expect(mount.mechanical.declination).toBeLessThan(southStart)
+
+			const westStart = mount.mechanical.rightAscension
+			client.sendNumber({ device: mount.name, name: 'TELESCOPE_TIMED_GUIDE_WE', elements: { TIMED_GUIDE_W: 1000, TIMED_GUIDE_E: 0 } })
+			mount.advance(1)
+			expect(normalizePI(mount.mechanical.rightAscension - westStart)).toBeLessThan(0)
+
+			const eastStart = mount.mechanical.rightAscension
+			client.sendNumber({ device: mount.name, name: 'TELESCOPE_TIMED_GUIDE_WE', elements: { TIMED_GUIDE_W: 0, TIMED_GUIDE_E: 1000 } })
+			mount.advance(1)
+			expect(normalizePI(mount.mechanical.rightAscension - eastStart)).toBeGreaterThan(0)
+		} finally {
+			mount.dispose()
+		}
+	})
+
 	test('brings in a whole family at its defaults when switched on', () => {
 		const { client, mount } = makeMount('mount.features.on')
 

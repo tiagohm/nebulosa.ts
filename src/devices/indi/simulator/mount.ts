@@ -687,14 +687,22 @@ export class MountSimulator extends DeviceSimulator {
 			case 'GUIDE_RATE':
 				this.setGuideRate(vector.elements.GUIDE_RATE_WE ?? this.guideRateRightAscension, vector.elements.GUIDE_RATE_NS ?? this.guideRateDeclination)
 				return
-			case 'TELESCOPE_TIMED_GUIDE_NS':
-				if (vector.elements.TIMED_GUIDE_N !== undefined && vector.elements.TIMED_GUIDE_N >= 0) this.pulse('NORTH', vector.elements.TIMED_GUIDE_N)
-				else if (vector.elements.TIMED_GUIDE_S !== undefined && vector.elements.TIMED_GUIDE_S >= 0) this.pulse('SOUTH', vector.elements.TIMED_GUIDE_S)
+			case 'TELESCOPE_TIMED_GUIDE_NS': {
+				const north = vector.elements.TIMED_GUIDE_N
+				const south = vector.elements.TIMED_GUIDE_S
+				if (north !== undefined && north > 0) this.pulse('NORTH', north)
+				else if (south !== undefined && south > 0) this.pulse('SOUTH', south)
+				else if (north === 0 || south === 0) this.pulse(north === 0 ? 'NORTH' : 'SOUTH', 0)
 				return
-			case 'TELESCOPE_TIMED_GUIDE_WE':
-				if (vector.elements.TIMED_GUIDE_W !== undefined && vector.elements.TIMED_GUIDE_W >= 0) this.pulse('WEST', vector.elements.TIMED_GUIDE_W)
-				else if (vector.elements.TIMED_GUIDE_E !== undefined && vector.elements.TIMED_GUIDE_E >= 0) this.pulse('EAST', vector.elements.TIMED_GUIDE_E)
+			}
+			case 'TELESCOPE_TIMED_GUIDE_WE': {
+				const west = vector.elements.TIMED_GUIDE_W
+				const east = vector.elements.TIMED_GUIDE_E
+				if (west !== undefined && west > 0) this.pulse('WEST', west)
+				else if (east !== undefined && east > 0) this.pulse('EAST', east)
+				else if (west === 0 || east === 0) this.pulse(west === 0 ? 'WEST' : 'EAST', 0)
 				return
+			}
 			case 'MOUNT_ALIGNMENT': {
 				const hourAngle = normalizePI(this.#siderealTime() - this.rightAscension)
 				if (applyNumberVectorValues(this.#alignment, vector.elements)) {
