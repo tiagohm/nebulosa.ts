@@ -140,3 +140,29 @@ describe.skipIf(SKIP)('close approaches', () => {
 		// expect(response.data.map((e) => e[0])).toContainValues(asteroids)
 	})
 })
+
+test('relative close-approach end date starts at the requested minimum', async () => {
+	const from = temporalFromDate(2024, 3, 13)
+	const request = await captureCloseApproachRequest(() => closeApproaches(from, '7d'))
+
+	expect(request.searchParams.get('date-min')).toBe('2024-03-13')
+	expect(request.searchParams.get('date-max')).toBe('2024-03-20')
+})
+
+async function captureCloseApproachRequest(callback: () => Promise<unknown>) {
+	const restore = globalThis.fetch
+	let request = ''
+
+	globalThis.fetch = ((input) => {
+		request = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+		return Promise.resolve(new Response('{"signature":{"version":"test","source":"test"},"count":0}'))
+	}) as typeof fetch
+
+	try {
+		await callback()
+	} finally {
+		globalThis.fetch = restore
+	}
+
+	return new URL(request)
+}
