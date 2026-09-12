@@ -288,7 +288,7 @@ export class EllipsoidalMercator extends CylindricalProjection {
 	project(lambda: Angle, phi: Angle, out?: Point, options?: ProjectionOptions) {
 		const longitude = longitudeFromLambda(lambda, options, this.options)
 		if (longitude === undefined) return undefined
-		const latitude = latitudeFromPhi(phi, options, this.options, WEB_MERCATOR_MAX_LATITUDE)
+		const latitude = latitudeFromPhi(phi, options, this.options, DEFAULT_MAX_MERCATOR_LATITUDE)
 		if (latitude === undefined) return undefined
 		const sinLatitude = Math.sin(latitude)
 		return projectPoint(out, longitude, Math.atanh(sinLatitude) - this.eccentricity * Math.atanh(this.eccentricity * sinLatitude), options, this.options)
@@ -309,7 +309,7 @@ export class EllipsoidalMercator extends CylindricalProjection {
 export class Miller extends CylindricalProjection {
 	project(lambda: Angle, phi: Angle, out?: Point, options?: ProjectionOptions) {
 		const longitude = longitudeFromLambda(lambda, options, this.options)
-		const latitude = latitudeFromPhi(phi, options, this.options, WEB_MERCATOR_MAX_LATITUDE)
+		const latitude = latitudeFromPhi(phi, options, this.options)
 		return longitude === undefined || latitude === undefined ? undefined : projectPoint(out, longitude, 1.25 * Math.log(Math.tan(PIOVERFOUR + 0.4 * latitude)), options, this.options)
 	}
 
@@ -423,7 +423,7 @@ export class CylindricalStereographic extends CylindricalProjection {
 		// Wrap the longitude delta first, then apply the standard-parallel scale, so a non-zero
 		// central meridian round-trips (scaling lambda before subtracting it does not).
 		const longitude = longitudeFromLambda(lambda, options, this.options)
-		const latitude = latitudeFromPhi(phi, options, this.options, WEB_MERCATOR_MAX_LATITUDE)
+		const latitude = latitudeFromPhi(phi, options, this.options)
 		if (latitude === undefined) return undefined
 		return longitude === undefined || latitude === undefined ? undefined : projectPoint(out, longitude * this.cosStandardParallel, (1 + this.cosStandardParallel) * Math.tan(latitude / 2), options, this.options)
 	}
@@ -476,7 +476,7 @@ export class CylindricalEquidistant extends CylindricalProjection {
 
 	project(lambda: Angle, phi: Angle, out?: Point, options?: ProjectionOptions) {
 		const longitude = longitudeFromLambda(lambda, options, this.options)
-		const latitude = latitudeFromPhi(phi, options, this.options, WEB_MERCATOR_MAX_LATITUDE)
+		const latitude = latitudeFromPhi(phi, options, this.options)
 		if (latitude === undefined) return undefined
 		return longitude === undefined || latitude === undefined ? undefined : projectPoint(out, longitude * this.cosStandardParallel, latitude - this.latitudeOfOrigin, options, this.options)
 	}

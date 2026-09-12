@@ -301,6 +301,34 @@ describe('cylindrical projections match expected known values', () => {
 	}
 })
 
+test('pole-finite cylindrical projections accept the poles by default', () => {
+	const poles = [PIOVERTWO, -PIOVERTWO] as const
+	const projections = [new PlateCarree(), new Miller(), new CylindricalEquidistant(), new CylindricalStereographic(), new Gall(), new Braun()] as const
+
+	for (const projection of projections) {
+		for (const latitude of poles) {
+			const projected = projection.project(0, latitude)
+			expect(projected).toBeDefined()
+			if (projected === undefined) continue
+			expect(Number.isFinite(projected.y)).toBe(true)
+		}
+	}
+
+	const millerPole = new Miller().project(0, PIOVERTWO)
+	expect(millerPole).toBeDefined()
+	if (millerPole !== undefined) {
+		expect(millerPole.y).toBeCloseTo(1.25 * Math.log(Math.tan(Math.PI / 4 + 0.4 * PIOVERTWO)), 12)
+	}
+
+	const highLatitude = deg(87)
+	const sphericalEllipsoidal = new EllipsoidalMercator({ sphericalOnly: true }).project(0, highLatitude)
+	const mercator = new Mercator().project(0, highLatitude)
+	expect(sphericalEllipsoidal).toBeDefined()
+	expect(mercator).toBeDefined()
+	if (sphericalEllipsoidal === undefined || mercator === undefined) return
+	expect(sphericalEllipsoidal.y).toBeCloseTo(mercator.y, 12)
+})
+
 test('projection options validate domains and parameters', () => {
 	expect(new PlateCarree().project(0, PIOVERTWO + 1e-6)).toBeUndefined()
 	expect(new PlateCarree(0, { radius: 0 }).project(0, 0)).toBeUndefined()
