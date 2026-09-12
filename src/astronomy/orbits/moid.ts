@@ -10,12 +10,12 @@ import { KeplerOrbit } from './asteroid'
 // geometrically possible). Distances are AU, angles radians.
 //
 // The distance |r1(nu1) - r2(nu2)| is sampled on a coarse grid over both true anomalies, its local minima
-// on the torus are located (two orbits admit up to four), and each is refined with two-dimensional
-// Gauss-Newton on the separation vector. The smallest refined minimum is the global MOID. The grid only
-// needs to place a sample in each minimum's basin, since the Gauss-Newton step follows the (often narrow
-// and diagonal) distance valley to its bottom; the default of 180 samples per orbit (2 deg) resolves even
-// near-tangent hazardous-asteroid geometries. Both orbits must be bound (eccentricity < 1) and expressed
-// in the same frame.
+// on the torus are located (two orbits admit up to four), and each is refined by Newton on the squared
+// separation, falling back to Gauss-Newton when the Hessian is indefinite. The smallest refined minimum
+// is the global MOID. The grid only needs to place a sample in each minimum's basin; the refiner follows
+// the (often narrow and diagonal) distance valley to its bottom. The default of 180 samples per orbit
+// (2 deg) resolves even near-tangent hazardous-asteroid geometries. Both orbits must be bound
+// (eccentricity < 1) and expressed in the same frame.
 
 // The MOID of two orbits and where on each it occurs.
 export interface Moid {
@@ -32,12 +32,15 @@ export interface MoidOptions {
 	// Grid resolution per orbit for the coarse search. Defaults to 180 (2 deg). Increase it for orbits
 	// whose closest-approach valley is narrow.
 	readonly samples?: number
-	// Convergence tolerance in radians for the Gauss-Newton refinement. Defaults to 1e-10.
+	// Convergence tolerance in radians for the Newton refinement. Defaults to 1e-10.
 	readonly tolerance?: number
 }
 
-// Finite-difference step (radians) for the orbit tangents used in the Gauss-Newton refinement.
+// Finite-difference step (radians) for the orbit tangents and curvatures used in the Newton refinement.
 const DERIVATIVE_STEP = 1e-5
+// Halvings of a Newton step that increased the distance. 64 reaches below the 1e-10 rad
+// default tolerance from a one-cell cap, and bounds the backtrack so a non-finite trial cannot hang.
+const MAX_BACKTRACKS = 64
 
 // Computes the minimum orbit intersection distance between two bound orbits.
 //
@@ -106,12 +109,14 @@ function isLocalMinimum(grid: Float64Array, samples: number, i: number, j: numbe
 	)
 }
 
-// Refines a grid-cell minimum with Gauss-Newton on the separation vector D = r1(nu1) - r2(nu2). The
-// Jacobian columns are the orbit tangents (t1, -t2), so the normal equations (JtJ) delta = -(Jt D) give a
-// full two-dimensional step that follows a diagonal distance valley, where alternating one-dimensional
-// minimizations stall. Each anomaly increment is capped to one grid cell (L∞) so a diagonal step still
-// advances a full cell along both axes while staying in the flagged basin. The iteration budget is one
-// step per grid sample, enough to traverse a valley of length π√2 on the torus. The closest point seen,
+// Refines a grid-cell minimum of |D| where D = r1(nu1) - r2(nu2). Newton uses the Hessian of ½||D||²,
+// which includes the orbital curvature D·d²r/dν² that Gauss-Newton (JtJ) drops; without it the step
+// oscillates when the residual is a large fraction of the Hessian, and coplanar parallel tangents make
+// JtJ singular. If that Hessian is not positive definite, the update falls back to Gauss-Newton, then
+// to independent 1-D steps along each tangent. Each anomaly increment is capped to one grid cell (L∞)
+// so a diagonal step still advances a full cell along both axes while staying in the flagged basin.
+// The iteration budget is one step per grid sample, enough to traverse a valley of length π√2 on the
+// torus. A step that increases the distance is halved until it descends. The closest point seen,
 // including the grid start, is returned if the last iterate is not the minimum.
 function refine(first: KeplerOrbit, second: KeplerOrbit, initialNu1: number, initialNu2: number, step: number, tolerance: number): Moid {
 	let nu1 = initialNu1
@@ -121,53 +126,96 @@ function refine(first: KeplerOrbit, second: KeplerOrbit, initialNu1: number, ini
 	let bestDistance = Math.hypot(p1[0] - p2[0], p1[1] - p2[1], p1[2] - p2[2])
 	let bestNu1 = nu1
 	let bestNu2 = nu2
+	let currentDistance = bestDistance
 	const maxIterations = Math.ceil(TAU / step)
 
 	for (let iteration = 0; iteration < maxIterations; iteration++) {
 		const separation: Vec3 = [p1[0] - p2[0], p1[1] - p2[1], p1[2] - p2[2]]
+		const d1 = derivatives(first, nu1, p1)
+		const d2 = derivatives(second, nu2, p2)
 
-		const t1 = tangent(first, nu1)
-		const t2 = tangent(second, nu2)
+		const a = vecDot(d1.tangent, d1.tangent)
+		const c = vecDot(d2.tangent, d2.tangent)
+		const b = -vecDot(d1.tangent, d2.tangent)
+		const g1 = vecDot(d1.tangent, separation)
+		const g2 = -vecDot(d2.tangent, separation)
+		const h11 = a + vecDot(separation, d1.curvature)
+		const h22 = c - vecDot(separation, d2.curvature)
+		const detH = h11 * h22 - b * b
+		const detJ = a * c - b * b
 
-		const a = vecDot(t1, t1)
-		const c = vecDot(t2, t2)
-		const b = -vecDot(t1, t2)
-		const determinant = a * c - b * b
-		if (determinant <= 0) break // parallel tangents: degenerate step, keep the best point seen
+		let accepted = false
+		for (let mode = 0; mode < 3; mode++) {
+			let delta1: number
+			let delta2: number
+			if (mode === 0) {
+				if (!(h11 > 0 && detH > 0)) continue
+				delta1 = -(h22 * g1 - b * g2) / detH
+				delta2 = -(-b * g1 + h11 * g2) / detH
+			} else if (mode === 1) {
+				if (!(detJ > 0)) continue
+				delta1 = -(c * g1 - b * g2) / detJ
+				delta2 = -(-b * g1 + a * g2) / detJ
+			} else if (a > 0 || c > 0) {
+				delta1 = a > 0 ? -g1 / a : 0
+				delta2 = c > 0 ? -g2 / c : 0
+			} else {
+				break
+			}
 
-		const g1 = vecDot(t1, separation)
-		const g2 = -vecDot(t2, separation)
-		let delta1 = -(c * g1 - b * g2) / determinant
-		let delta2 = -(-b * g1 + a * g2) / determinant
+			// L∞ cap: a diagonal step then advances one grid cell along each anomaly.
+			const maxAbs = Math.max(Math.abs(delta1), Math.abs(delta2))
+			if (maxAbs > step) {
+				delta1 *= step / maxAbs
+				delta2 *= step / maxAbs
+			}
 
-		// L∞ cap: a diagonal Gauss-Newton step then advances one grid cell along each anomaly.
-		const maxAbs = Math.max(Math.abs(delta1), Math.abs(delta2))
-		if (maxAbs > step) {
-			delta1 *= step / maxAbs
-			delta2 *= step / maxAbs
+			for (let backtrack = 0; backtrack < MAX_BACKTRACKS; backtrack++) {
+				const trialNu1 = nu1 + delta1
+				const trialNu2 = nu2 + delta2
+				const trialP1 = first.positionAtTrueAnomaly(trialNu1)
+				const trialP2 = second.positionAtTrueAnomaly(trialNu2)
+				const trialDistance = Math.hypot(trialP1[0] - trialP2[0], trialP1[1] - trialP2[1], trialP1[2] - trialP2[2])
+				if (trialDistance < currentDistance) {
+					nu1 = trialNu1
+					nu2 = trialNu2
+					p1 = trialP1
+					p2 = trialP2
+					currentDistance = trialDistance
+					if (trialDistance < bestDistance) {
+						bestDistance = trialDistance
+						bestNu1 = nu1
+						bestNu2 = nu2
+					}
+					accepted = true
+					break
+				}
+				delta1 *= 0.5
+				delta2 *= 0.5
+				if (Math.abs(delta1) < tolerance && Math.abs(delta2) < tolerance) break
+			}
+			if (accepted) {
+				if (Math.abs(delta1) < tolerance && Math.abs(delta2) < tolerance) {
+					return { distance: bestDistance, trueAnomaly1: normalizeAngle(bestNu1), trueAnomaly2: normalizeAngle(bestNu2) }
+				}
+				break
+			}
 		}
-
-		nu1 += delta1
-		nu2 += delta2
-		p1 = first.positionAtTrueAnomaly(nu1)
-		p2 = second.positionAtTrueAnomaly(nu2)
-		const distance = Math.hypot(p1[0] - p2[0], p1[1] - p2[1], p1[2] - p2[2])
-		if (distance < bestDistance) {
-			bestDistance = distance
-			bestNu1 = nu1
-			bestNu2 = nu2
-		}
-
-		if (Math.abs(delta1) < tolerance && Math.abs(delta2) < tolerance) break
+		if (!accepted) break
 	}
 
 	return { distance: bestDistance, trueAnomaly1: normalizeAngle(bestNu1), trueAnomaly2: normalizeAngle(bestNu2) }
 }
 
-// Orbit position tangent dr/dnu (AU per radian) at a true anomaly, by central difference.
-function tangent(orbit: KeplerOrbit, nu: number): Vec3 {
+// Orbit tangent dr/dν (AU/rad) and curvature d²r/dν² (AU/rad²) at a true anomaly, by central
+// difference about the already evaluated position.
+function derivatives(orbit: KeplerOrbit, nu: number, position: Vec3): { tangent: Vec3; curvature: Vec3 } {
 	const plus = orbit.positionAtTrueAnomaly(nu + DERIVATIVE_STEP)
 	const minus = orbit.positionAtTrueAnomaly(nu - DERIVATIVE_STEP)
-	const scale = 1 / (2 * DERIVATIVE_STEP)
-	return [(plus[0] - minus[0]) * scale, (plus[1] - minus[1]) * scale, (plus[2] - minus[2]) * scale]
+	const invTwo = 1 / (2 * DERIVATIVE_STEP)
+	const invSq = 1 / (DERIVATIVE_STEP * DERIVATIVE_STEP)
+	return {
+		tangent: [(plus[0] - minus[0]) * invTwo, (plus[1] - minus[1]) * invTwo, (plus[2] - minus[2]) * invTwo],
+		curvature: [(plus[0] - 2 * position[0] + minus[0]) * invSq, (plus[1] - 2 * position[1] + minus[1]) * invSq, (plus[2] - 2 * position[2] + minus[2]) * invSq],
+	}
 }
