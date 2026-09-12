@@ -1010,7 +1010,7 @@ class AlpacaCamera extends AlpacaDevice {
 
 		switch (vector.name) {
 			case 'CCD_EXPOSURE':
-				if (vector.elements.CCD_EXPOSURE_VALUE) {
+				if (vector.elements.CCD_EXPOSURE_VALUE !== undefined) {
 					this.state.ExposureStarted = true
 					this.state.ExposureDuration = Math.max(this.#exposure.elements.CCD_EXPOSURE_VALUE.min, Math.min(vector.elements.CCD_EXPOSURE_VALUE, this.#exposure.elements.CCD_EXPOSURE_VALUE.max))
 

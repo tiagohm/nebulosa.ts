@@ -233,6 +233,22 @@ test('a failed Connected poll preserves other devices and recovers on the next t
 	expect(closes).toBe(0)
 }, 18000)
 
+test.each([0, 0.001])(
+	'camera sends zero-second bias requests through the exposure limits (min=%f)',
+	async (minimum) => {
+		await using remote = await scriptedClient('camera', { exposuremin: minimum, exposuremax: 60 })
+		await waitUntil(() => remote.numbers.has('CCD_EXPOSURE'), 8000)
+		const exposure = remote.numbers.get('CCD_EXPOSURE')!
+		remote.client.sendSwitch({ device: exposure.device, name: 'CCD_FRAME_TYPE', elements: { FRAME_BIAS: true } })
+		remote.client.sendNumber({ device: exposure.device, name: exposure.name, elements: { CCD_EXPOSURE_VALUE: 0 } })
+		await waitUntil(() => remote.commands.length === 1, 1000)
+		expect(remote.commands[0].endpoint).toBe('startexposure')
+		expect(Number(remote.commands[0].body.get('Duration'))).toBe(minimum)
+		expect(remote.commands[0].body.get('Light')).toBe('False')
+	},
+	10000,
+)
+
 describe('make fits from image bytes', () => {
 	test('converts a 10 by 10 byte ROI smaller than 176 bytes', async () => {
 		const data = new ArrayBuffer(144)
