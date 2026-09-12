@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'bun:test'
 import { DEFAULT_CAMERA, type Camera, type Client, type Device, DeviceInterfaceType } from '../../../../src/devices/indi/device'
 import { CameraManager } from '../../../../src/devices/indi/manager/camera'
-import type { DefText, DefTextVector } from '../../../../src/devices/indi/types'
+import { handleMinMaxValue } from '../../../../src/devices/indi/manager/device'
+import type { DefText, DefTextVector, OneNumber } from '../../../../src/devices/indi/types'
 import { client, setupDevice } from './util'
 
 test('dome interface bit is rediscovered as a dome device type after interface bitmask be updated', () => {
@@ -52,6 +53,14 @@ test('dome interface bit is rediscovered as a dome device type after interface b
 
 	expect(camera!.interfaces).toEqual(['camera', 'rotator'])
 	expect(updated).toBeTrue()
+})
+
+test('clamps a value when an updated range changes without changing the value', () => {
+	const property = { value: 80, min: 0, max: 100, step: 1 }
+	const element = { name: 'Gain', value: 80, min: 0, max: 50, step: 1 } satisfies OneNumber
+
+	expect(handleMinMaxValue(property, element, 'setNumberVector')).toBeTrue()
+	expect(property).toEqual({ value: 50, min: 0, max: 50, step: 1 })
 })
 
 describe('del property', () => {

@@ -520,10 +520,12 @@ export function handleMinMaxValue(property: MinMaxValueProperty, element: DefNum
 		}
 	}
 
-	if (property.value !== element.value) {
-		// Clamp only when a real range is known; otherwise keep the reported value as-is so a
-		// still-unbounded property (max === 0) is not forced to zero.
-		property.value = property.max > property.min ? Math.max(property.min, Math.min(element.value, property.max)) : element.value
+	// Clamp only when a real range is known; otherwise keep the reported value as-is so a
+	// still-unbounded property (max === 0) is not forced to zero.
+	const value = property.max > property.min ? Math.max(property.min, Math.min(element.value, property.max)) : element.value
+
+	if (property.value !== value) {
+		property.value = value
 		update = true
 	}
 
