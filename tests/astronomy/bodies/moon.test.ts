@@ -467,6 +467,15 @@ describe('Meeus lunar event examples', () => {
 		expect(toDeg(dec)).toBeCloseTo(-28.25989030189065, 9)
 	})
 
+	test('southern monthly maximum at k=139 follows Meeus table 52.B', () => {
+		// Meeus table 52.B at k=139 (2010-05-28 22:09 TT, -25.0288 deg). Reusing the northern
+		// periodic series with F shifted by 180 deg misses this extremum by ~0.05 d (~1.2 h).
+		const [t, dec] = nearestMaxDeclination(time(2455344, 0, Timescale.TT), 'SOUTH', true)
+		expect(toJulianDay(t)).toBeCloseTo(2455345.4235335686, 8)
+		expect(toDeg(dec)).toBeCloseTo(-25.028843843252513, 9)
+		expect(timeToDate(t).slice(0, 5)).toEqual([2010, 5, 28, 22, 9])
+	})
+
 	test('previous perigee is not skipped when the index estimate is too early', () => {
 		// Meeus chapter 50 series at k=-1288; independent legacy implementation before consolidation.
 		const jde = 2416042.578635584
