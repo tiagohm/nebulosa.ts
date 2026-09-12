@@ -179,11 +179,11 @@ test('keeps the previous target coordinates after invalid coordinate writes', as
 
 	await withLx200Server(
 		async (client) => {
-			const response = readUntil(client, (value) => value === '1111#0')
+			const response = readUntil(client, (value) => value === '1100#0')
 
 			client.write('#:Sr01:02:03##:Sd-04*05:06##:Srxx##:Sdxx##:CM##:MS#', 'ascii')
 
-			expect(await response).toBe('1111#0')
+			expect(await response).toBe('1100#0')
 		},
 		makeHandler({
 			sync: (server, rightAscension, declination) => {
@@ -199,6 +199,39 @@ test('keeps the previous target coordinates after invalid coordinate writes', as
 	expect(synced[0][1]).toBeCloseTo(dms(-4, 5, 6), 12)
 	expect(slewed[0][0]).toBeCloseTo(hms(1, 2, 3), 12)
 	expect(slewed[0][1]).toBeCloseTo(dms(-4, 5, 6), 12)
+})
+
+test('rejects invalid LX200 setter payloads', async () => {
+	const updates: Array<readonly [number, number]> = []
+	const longitudes: number[] = []
+	const latitudes: number[] = []
+
+	await withLx200Server(
+		async (client) => {
+			const invalidResponse = readUntil(client, (value) => value === '0000000')
+
+			client.write('#:Srxx##:Sdxx##:Sgxx##:Stxx##:SG+abc##:SLxx##:SC02/30/26#', 'ascii')
+
+			expect(await invalidResponse).toBe('0000000')
+			expect(updates).toHaveLength(0)
+			expect(longitudes).toHaveLength(0)
+			expect(latitudes).toHaveLength(0)
+		},
+		makeHandler({
+			dateTime: (server, date) => {
+				if (date !== undefined) updates.push(date)
+				return updates.at(-1) ?? [temporalFromDate(2026, 1, 1), 0]
+			},
+			longitude: (server, longitude) => {
+				if (longitude !== undefined) longitudes.push(longitude)
+				return longitudes.at(-1) ?? 0
+			},
+			latitude: (server, latitude) => {
+				if (latitude !== undefined) latitudes.push(latitude)
+				return latitudes.at(-1) ?? 0
+			},
+		}),
+	)
 })
 
 test('sets site longitude and latitude', async () => {

@@ -1,5 +1,5 @@
 import type { Socket, TCPSocketListener } from 'bun'
-import { formatTemporal, type Temporal, type TemporalDate, temporalAdd, temporalFromDate } from '../../astronomy/time/temporal'
+import { daysInMonth, formatTemporal, type Temporal, type TemporalDate, temporalAdd, temporalFromDate } from '../../astronomy/time/temporal'
 import { type Angle, parseAngle, toDms, toHms } from '../../math/units/angle'
 
 // Server implementing the Meade LX200 serial command protocol over TCP, so LX200-speaking clients (e.g.
@@ -240,50 +240,62 @@ export class Lx200ProtocolServer {
 			default:
 				// Set target object RA
 				if (command.startsWith(':Sr')) {
-					const ra = parseAngle(command.slice(3), true)
-					if (ra !== undefined) this.#coordinates[0] = ra
+					const ra = parseAngle(command.slice(3, command.length - 1), true)
+					if (ra === undefined) return this.#zero(socket)
+					this.#coordinates[0] = ra
 					return this.#one(socket)
 				}
 				// Set target object declination
 				else if (command.startsWith(':Sd')) {
-					const dec = parseAngle(command.slice(3))
-					if (dec !== undefined) this.#coordinates[1] = dec
+					const dec = parseAngle(command.slice(3, command.length - 1))
+					if (dec === undefined) return this.#zero(socket)
+					this.#coordinates[1] = dec
 					return this.#one(socket)
 				}
 				// Set current site’s longitude
 				else if (command.startsWith(':Sg')) {
-					const longitude = parseAngle(command.slice(3))
-					if (longitude !== undefined) this.options.handler.longitude(this, -longitude)
+					const longitude = parseAngle(command.slice(3, command.length - 1))
+					if (longitude === undefined) return this.#zero(socket)
+					this.options.handler.longitude(this, -longitude)
 					return this.#one(socket)
 				}
 				// Sets the current site latitude
 				else if (command.startsWith(':St')) {
-					const latitude = parseAngle(command.slice(3))
-					if (latitude !== undefined) this.options.handler.latitude(this, latitude)
+					const latitude = parseAngle(command.slice(3, command.length - 1))
+					if (latitude === undefined) return this.#zero(socket)
+					this.options.handler.latitude(this, latitude)
 					return this.#one(socket)
 				}
 				// Set the number of hours added to local time to yield UTC
 				else if (command.startsWith(':SG')) {
-					const hours = -Number(command.slice(3, command.length - 1))
-					this.#utcOffset = Math.trunc(hours * 60)
+					const value = command.slice(3, command.length - 1)
+					const hours = Number(value)
+					if (value.length === 0 || !Number.isFinite(hours)) return this.#zero(socket)
+					this.#utcOffset = Math.trunc(-hours * 60)
 					this.#handleDateTimeAndOffset()
 					return this.#one(socket)
 				}
 				// Set the local Time
 				else if (command.startsWith(':SL')) {
-					const [h, m, s] = command.slice(3, command.length - 1).split(':')
-					this.#utc[3] = +h
-					this.#utc[4] = +m
-					this.#utc[5] = +s
+					const values = command.slice(3, command.length - 1).split(':')
+					if (values.length !== 3 || values.some((value) => value.length === 0)) return this.#zero(socket)
+					const [h, m, s] = values.map(Number)
+					if (!Number.isInteger(h) || !Number.isInteger(m) || !Number.isInteger(s) || !(h >= 0 && h <= 23) || !(m >= 0 && m <= 59) || !(s >= 0 && s <= 59)) return this.#zero(socket)
+					this.#utc[3] = h
+					this.#utc[4] = m
+					this.#utc[5] = s
 					this.#handleDateTimeAndOffset()
 					return this.#one(socket)
 				}
 				// Change Handbox Date to MM/DD/YY
 				else if (command.startsWith(':SC')) {
-					const [m, d, y] = command.slice(3, command.length - 1).split('/')
-					this.#utc[0] = 2000 + +y
-					this.#utc[1] = +m
-					this.#utc[2] = +d
+					const values = command.slice(3, command.length - 1).split('/')
+					if (values.length !== 3 || values.some((value) => value.length === 0)) return this.#zero(socket)
+					const [m, d, y] = values.map(Number)
+					if (!Number.isInteger(m) || !Number.isInteger(d) || !Number.isInteger(y) || !(m >= 1 && m <= 12) || !(y >= 0 && y <= 99) || !(d >= 1 && d <= daysInMonth(2000 + y, m))) return this.#zero(socket)
+					this.#utc[0] = 2000 + y
+					this.#utc[1] = m
+					this.#utc[2] = d
 					this.#handleDateTimeAndOffset()
 					return this.#text(socket, '1Updating planetary data       #                              #')
 				}
