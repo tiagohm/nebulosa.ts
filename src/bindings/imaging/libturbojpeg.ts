@@ -236,7 +236,7 @@ export class Jpeg {
 	}
 
 	// Decodes a JPEG stream to raw pixels. When `format` is omitted it is chosen from the stream
-	// colorspace (GRAY/CMYK preserved, everything else to RGB). Returns the decoded pixels and geometry,
+	// colorspace (GRAY preserved, CMYK/YCCK to CMYK, everything else to RGB). Returns the decoded pixels and geometry,
 	// or undefined if the header or decode fails. Throws if the decompressor cannot be initialized.
 	decompress(jpeg: NodeJS.TypedArray | DataView, format?: PixelFormat): DecodedJpeg | undefined {
 		const pointer = this.#lib.tjInitDecompress()
@@ -249,7 +249,7 @@ export class Jpeg {
 			if (!header) return undefined
 
 			const { width, height, colorspace } = header
-			format ??= colorspace === 'GRAY' ? 'GRAY' : colorspace === 'CMYK' ? 'CMYK' : 'RGB'
+			format ??= colorspace === 'GRAY' ? 'GRAY' : colorspace === 'CMYK' || colorspace === 'YCCK' ? 'CMYK' : 'RGB'
 			const pitch = width * PIXEL_FORMAT_MAP[format][1]
 			const data = Buffer.allocUnsafe(pitch * height)
 			const decompressed = this.#lib.tjDecompress2(pointer, jpeg, jpeg.byteLength, data, width, pitch, height, PIXEL_FORMAT_MAP[format][0], FASTDCT)

@@ -96,6 +96,26 @@ describe('read header', () => {
 describe('decompress', () => {
 	const jpeg = new Jpeg()
 
+	test('defaults to CMYK for a YCCK stream', () => {
+		const width = 8
+		const height = 8
+		const cmyk = Buffer.alloc(width * height * 4, 64)
+		const bytes = jpeg.compress(cmyk, width, height, 'CMYK', 90)
+
+		expect(bytes).toBeDefined()
+		expect(jpeg.readHeader(bytes!)?.colorspace).toBe('YCCK')
+		const explicit = jpeg.decompress(bytes!, 'CMYK')
+		expect(explicit).toBeDefined()
+
+		const decoded = jpeg.decompress(bytes!)
+		expect(decoded).toBeDefined()
+		expect(decoded!.width).toBe(width)
+		expect(decoded!.height).toBe(height)
+		expect(decoded!.format).toBe('CMYK')
+		expect(decoded!.data.length).toBe(cmyk.length)
+		expect(decoded!.data).toEqual(explicit!.data)
+	})
+
 	test('grayscale', () => {
 		const width = 16
 		const height = 8
