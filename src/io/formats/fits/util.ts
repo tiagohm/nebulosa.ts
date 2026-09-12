@@ -1,4 +1,4 @@
-import { parseTemporal } from '../../../astronomy/time/temporal'
+import { daysInMonth, temporalFromDate } from '../../../astronomy/time/temporal'
 import type { CfaPattern } from '../../../imaging/model/types'
 import { type Angle, deg, parseAngle } from '../../../math/units/angle'
 import type { BitpixOrZero, FitsCompressionType, FitsHeader, FitsHeaderCard, FitsHeaderKey, FitsHeaderValue } from './fits'
@@ -125,11 +125,43 @@ export function declinationKeyword<T extends Angle = Angle, D extends T | undefi
 	return defaultValue
 }
 
-// Parses the observation timestamp from DATE-OBS, DATE-END, or DATE, or undefined if none is present.
+// FITS 4.0 §4.4.2.1 date or date-time: `CCYY-MM-DD` or `CCYY-MM-DDThh:mm:ss[.sss...]` with optional trailing `Z`.
+const FITS_DATE_TIME = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2}):(\d{2})(\.\d+)?Z?)?$/
+
+// Parses a FITS DATE/DATE-OBS/DATE-END value to Unix milliseconds. Fractional seconds may have 1 or
+// more digits and are rounded to milliseconds. A trailing `Z` is accepted but ignored (FITS times are UTC).
+// Returns undefined when the string is not a FITS date-time.
+function parseFitsDateTime(value: string) {
+	const match = FITS_DATE_TIME.exec(value.trim())
+	if (!match) return undefined
+
+	const year = Number(match[1])
+	const month = Number(match[2])
+	const day = Number(match[3])
+	const hour = match[4] === undefined ? 0 : Number(match[4])
+	const minute = match[5] === undefined ? 0 : Number(match[5])
+	const second = match[6] === undefined ? 0 : Number(match[6])
+	const millisecond = match[7] === undefined ? 0 : Math.round(Number(match[7]) * 1000)
+
+	if (!(month >= 1 && month <= 12)) return undefined
+	if (!(day >= 1 && day <= daysInMonth(year, month))) return undefined
+	if (!(hour >= 0 && hour <= 23)) return undefined
+	if (!(minute >= 0 && minute <= 59)) return undefined
+	if (!(second >= 0 && second <= 60)) return undefined
+
+	return temporalFromDate(year, month, day, hour, minute, second, millisecond)
+}
+
+// Parses the observation timestamp from DATE-OBS, DATE-END, or DATE in FITS date-time syntax.
+// A present but unreadable keyword is skipped so a later date card can still be used. Returns
+// undefined when none of the keywords is a valid FITS date-time.
 export function observationDateKeyword(header: FitsHeader) {
-	const date = textKeyword(header, 'DATE-OBS') || textKeyword(header, 'DATE-END') || textKeyword(header, 'DATE')
-	if (!date) return undefined
-	return parseTemporal(date, 'YYYY-MM-DDTHH:mm:ss.SSS')
+	for (const key of ['DATE-OBS', 'DATE-END', 'DATE'] as const) {
+		if (!hasKeyword(header, key)) continue
+		const parsed = parseFitsDateTime(textKeyword(header, key))
+		if (parsed !== undefined) return parsed
+	}
+	return undefined
 }
 
 // Converts a BITPIX code to the number of bytes per pixel (|bitpix| / 8).
