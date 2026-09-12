@@ -5,7 +5,7 @@ import { approximateArcsinhStretchParameters, arcsinhStretch } from '../../../sr
 import { clone } from '../../../src/imaging/processing/arithmetic'
 import { calibrate } from '../../../src/imaging/processing/calibration'
 import { adf, estimateBackground, estimateBackgroundUsingMode, histogram, sigmaClip } from '../../../src/imaging/processing/computation'
-import { Bitpix, FITS_BLOCK_SIZE, readFits, writeFits } from '../../../src/io/formats/fits/fits'
+import { Bitpix, FITS_BLOCK_SIZE, type FitsHdu, type FitsHeaderCard, FitsKeywordWriter, readFits, writeFits } from '../../../src/io/formats/fits/fits'
 // oxfmt-ignore
 import { blur3x3, blur5x5, blur7x7, blurConvolutionKernel, convolution, convolutionKernel, edges, emboss, gaussianBlur, mean3x3, mean5x5, mean7x7, meanConvolutionKernel, sharpen } from '../../../src/imaging/processing/convolution'
 import type { Image } from '../../../src/imaging/model/types'
@@ -101,6 +101,86 @@ test('drops leftover samples past a JPEG image', () => {
 		expect(value).toBeGreaterThanOrEqual(0)
 		expect(value).toBeLessThanOrEqual(1)
 	}
+})
+
+function fitsHeaderBlock(cards: readonly FitsHeaderCard[]) {
+	const writer = new FitsKeywordWriter()
+	const header = Buffer.alloc(FITS_BLOCK_SIZE, 32)
+	let offset = writer.writeAll(cards, header)
+	offset += writer.writeEnd(header, offset)
+	header.fill(32, offset)
+	return header
+}
+
+test('reads the IMAGE HDU after a preceding BINTABLE', async () => {
+	const primary = fitsHeaderBlock([
+		['SIMPLE', true],
+		['BITPIX', 8],
+		['NAXIS', 0],
+		['EXTEND', true],
+	])
+	const table = Buffer.concat([
+		fitsHeaderBlock([
+			['XTENSION', 'BINTABLE'],
+			['BITPIX', 8],
+			['NAXIS', 2],
+			['NAXIS1', 4],
+			['NAXIS2', 1],
+			['PCOUNT', 0],
+			['GCOUNT', 1],
+			['TFIELDS', 1],
+		]),
+		Buffer.alloc(FITS_BLOCK_SIZE, 0),
+	])
+	const imageData = Buffer.alloc(FITS_BLOCK_SIZE, 0)
+	imageData.writeInt16BE(0, 0)
+	imageData.writeInt16BE(1000, 2)
+	const imageHdu = Buffer.concat([
+		fitsHeaderBlock([
+			['XTENSION', 'IMAGE'],
+			['BITPIX', 16],
+			['NAXIS', 2],
+			['NAXIS1', 2],
+			['NAXIS2', 1],
+			['PCOUNT', 0],
+			['GCOUNT', 1],
+			['BZERO', 32768],
+			['BSCALE', 1],
+		]),
+		imageData,
+	])
+	const file = Buffer.concat([primary, table, imageHdu])
+	const fits = (await readFits(bufferSource(file)))!
+	const image = await readImageFromFits(fits, bufferSource(file))
+
+	expect(image).toBeDefined()
+	expect(image!.metadata).toMatchObject({ width: 2, height: 1, channels: 1, bitpix: 16 })
+	expect(image!.raw[0]).toBeCloseTo(32768 / 65535, 6)
+	expect(image!.raw[1]).toBeCloseTo((1000 + 32768) / 65535, 6)
+})
+
+test('returns undefined for a non-Rice ZIMAGE HDU', async () => {
+	const hdu: FitsHdu = {
+		header: {
+			XTENSION: 'BINTABLE',
+			BITPIX: 8,
+			NAXIS: 2,
+			NAXIS1: 8,
+			NAXIS2: 1,
+			PCOUNT: 0,
+			GCOUNT: 1,
+			ZIMAGE: true,
+			ZCMPTYPE: 'GZIP_1',
+			ZBITPIX: 16,
+			ZNAXIS: 2,
+			ZNAXIS1: 2,
+			ZNAXIS2: 1,
+		},
+		data: { offset: 0, size: 8 },
+	}
+
+	expect(await readImageFromFits({ hdus: [hdu] }, bufferSource(Buffer.alloc(16)))).toBeUndefined()
+	expect(await readImageFromFits(hdu, bufferSource(Buffer.alloc(16)))).toBeUndefined()
 })
 
 describe('read image from fits', () => {

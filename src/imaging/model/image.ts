@@ -2,7 +2,22 @@ import type { PathLike } from 'fs'
 import fs, { type FileHandle } from 'fs/promises'
 import { isJpeg, Jpeg, type PixelFormat } from '../../bindings/imaging/libturbojpeg'
 import { type Bitpix, type Fits, type FitsHdu, FitsImageReader, readFits, writeFits } from '../../io/formats/fits/fits'
-import { bitpixInBytes, cfaPatternKeyword, heightKeyword, isRiceCompressedImageHeader, uncompressedBitpixKeyword, uncompressedHeightKeyword, uncompressedNumberOfChannelsKeyword, uncompressedScaleKeyword, uncompressedWidthKeyword, uncompressedZeroKeyword, widthKeyword } from '../../io/formats/fits/util'
+import {
+	bitpixInBytes,
+	cfaPatternKeyword,
+	heightKeyword,
+	isCompressedImageHeader,
+	isRiceCompressedImageHeader,
+	numberOfAxesKeyword,
+	textKeyword,
+	uncompressedBitpixKeyword,
+	uncompressedHeightKeyword,
+	uncompressedNumberOfChannelsKeyword,
+	uncompressedScaleKeyword,
+	uncompressedWidthKeyword,
+	uncompressedZeroKeyword,
+	widthKeyword,
+} from '../../io/formats/fits/util'
 import { readXisf, writeXisf, type Xisf, type XisfImage, XisfImageReader, type XisfWriteFormat } from '../../io/formats/xisf/xisf'
 import { bufferSink, bufferSource, fileHandleSource, readRemaining, readUntil, type Seekable, type Sink, type Source } from '../../io/io'
 import { clamp } from '../../math/numerical/math'
@@ -21,9 +36,19 @@ function findCompressedImageHdu(hdu: FitsHdu) {
 	return isRiceCompressedImageHeader(hdu.header)
 }
 
-// Predicate selecting an uncompressed image HDU with positive dimensions.
+// Predicate selecting a primary or IMAGE HDU with at least two positive axes and no ZIMAGE table.
 function findUncompressedImageHdu(hdu: FitsHdu) {
-	return widthKeyword(hdu.header, 0) > 0 && heightKeyword(hdu.header, 0) > 0
+	const { header } = hdu
+	if (isCompressedImageHeader(header)) return false
+	if (!(numberOfAxesKeyword(header, 0) >= 2)) return false
+	if (!(widthKeyword(header, 0) > 0 && heightKeyword(header, 0) > 0)) return false
+	const extension = textKeyword(header, 'XTENSION', '').trim().toUpperCase()
+	return extension === '' || extension === 'IMAGE'
+}
+
+// True when the HDU is a Rice-compressed image or an uncompressed 2-D IMAGE/primary raster.
+function isReadableImageHdu(hdu: FitsHdu) {
+	return findCompressedImageHdu(hdu) || findUncompressedImageHdu(hdu)
 }
 
 // Resolves legacy raw arguments and discriminated reader options.
@@ -70,7 +95,8 @@ export function readImageFromFits(fits: Fits | FitsHdu, source: Source & Seekabl
 export function readImageFromFits(fits: Fits | FitsHdu, source: Source & Seekable, options: ImageReadOptions): Promise<Image | DigitalImage | undefined>
 
 export async function readImageFromFits(fits: Fits | FitsHdu, source: Source & Seekable, argument: ImageReadArgument = 'auto'): Promise<Image | DigitalImage | undefined> {
-	const hdu = 'hdus' in fits ? (fits.hdus.find(findCompressedImageHdu) ?? fits.hdus.find(findUncompressedImageHdu) ?? fits.hdus[0]) : fits
+	const hdu = 'hdus' in fits ? (fits.hdus.find(findCompressedImageHdu) ?? fits.hdus.find(findUncompressedImageHdu)) : fits
+	if (!hdu || !isReadableImageHdu(hdu)) return undefined
 	const { header } = hdu
 
 	const bitpix: Bitpix = uncompressedBitpixKeyword(header, 8)
