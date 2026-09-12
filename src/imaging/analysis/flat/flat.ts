@@ -370,7 +370,12 @@ function assessmentReasons(assessment: FlatAssessment, diagnostics: readonly Fla
 	const relevant = new Set<FlatDiagnosticCode>()
 	for (const diagnostic of diagnostics) {
 		if (options.criteria?.targets && assessment.target.status !== 'pass' && (diagnostic.code === 'targetUnavailable' || diagnostic.code === 'targetBelowRange' || diagnostic.code === 'targetAboveRange' || diagnostic.code === 'insufficientSamples')) relevant.add(diagnostic.code)
-		if (options.criteria?.maximumClippedFraction !== undefined && assessment.clipping.status !== 'pass' && (diagnostic.code === 'effectiveClipUnknown' || diagnostic.code === 'effectiveClipping' || diagnostic.code === 'storageClipping')) relevant.add(diagnostic.code)
+		if (
+			options.criteria?.maximumClippedFraction !== undefined &&
+			assessment.clipping.status !== 'pass' &&
+			(diagnostic.code === 'effectiveClipUnknown' || diagnostic.code === 'effectiveClipping' || diagnostic.code === 'storageClipping' || diagnostic.code === 'nonFiniteSamples' || diagnostic.code === 'insufficientSamples')
+		)
+			relevant.add(diagnostic.code)
 		if (options.criteria?.maximumNonFiniteFraction !== undefined && assessment.finiteSamples.status !== 'pass' && (diagnostic.code === 'nonFiniteSamples' || diagnostic.code === 'insufficientSamples')) relevant.add(diagnostic.code)
 	}
 	return Array.from(relevant)

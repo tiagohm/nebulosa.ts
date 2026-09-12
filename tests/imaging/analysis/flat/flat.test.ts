@@ -49,6 +49,35 @@ test('does not let conclusive RGB planes hide missing clipping evidence', () => 
 	expect(result.assessment.verdict).toBe('inconclusive')
 })
 
+test('explains inconclusive clipping when a plane has no finite samples', () => {
+	const image = generateSyntheticFlatImage({ width: 4, height: 4, bias: 0, signal: 100, vignetting: 0 })
+	image.raw.fill(Number.NaN)
+	const result = analyzeFlat({ frame: { image } }, { effectiveClip: { lower: 0, upper: 4095 }, criteria: { maximumClippedFraction: 0 } })
+
+	expect(result.assessment.clipping.status).toBe('unknown')
+	expect(result.assessment.verdict).toBe('inconclusive')
+	expect(result.assessment.reasons).toContain('nonFiniteSamples')
+	expect(result.assessment.reasons).toContain('insufficientSamples')
+})
+
+test('explains inconclusive clipping from a localized non-finite tile', () => {
+	const image = generateSyntheticFlatImage({ width: 64, height: 64, bias: 0, signal: 100, vignetting: 0 })
+	for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) image.raw[y * 64 + x] = Number.NaN
+	const result = analyzeFlat(
+		{ frame: { image } },
+		{
+			tile: { width: 16, height: 16 },
+			effectiveClip: { lower: 0, upper: 4095 },
+			criteria: { maximumClippedFraction: 0 },
+		},
+	)
+
+	expect(result.planes[0].spatial.tiles).toHaveLength(15)
+	expect(result.assessment.clipping.status).toBe('unknown')
+	expect(result.assessment.verdict).toBe('inconclusive')
+	expect(result.assessment.reasons).toContain('nonFiniteSamples')
+})
+
 test('evaluates RGB targets independently without hiding weak channels', () => {
 	const image = generateSyntheticFlatImage({ width: 2, height: 2, channels: 3, bias: 0, signal: 100, vignetting: 0, channelResponse: [1, 0.5, 0.25] })
 	const result = analyzeFlat(
