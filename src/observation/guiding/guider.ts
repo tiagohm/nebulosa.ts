@@ -1047,7 +1047,11 @@ export class Guider {
 
 		if (badFrame) {
 			this.state.consecutiveBadFrames++
-			if (this.state.consecutiveBadFrames >= this.config.lostStarFrameCount) this.state.state = 'lost'
+			if (this.state.consecutiveBadFrames >= this.config.lostStarFrameCount) {
+				this.state.state = 'lost'
+				this.#clearRaControlState()
+				this.#clearDecControlState()
+			}
 			this.#updateDiagnostics(frame, quality, undefined, droppedFrame, true, notes)
 			return { state: this.state.state, ra: NO_PULSE, dec: NO_PULSE, diagnostics: this.state.lastDiagnostics, stars: filtered.accepted }
 		}

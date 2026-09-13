@@ -671,6 +671,32 @@ describe('quality, loss state machine, and processFrame diagnostics', () => {
 		expect(reacquired.diagnostics.axisErrorDEC).toBeDefined()
 	})
 
+	test('loss clears controller memory before centered reacquisition', () => {
+		const g = guider({ lostStarFrameCount: 2, hysteresisRA: 0.5, hysteresisDEC: 0.5 })
+		g.processFrame(guideFrame(BASE_STARS, 0))
+		const correction = g.processFrame(guideFrame(shiftStars(BASE_STARS, 0.8, 0.6), 1000))
+		expect(correction.ra.duration).toBeGreaterThan(0)
+		expect(correction.dec.duration).toBeGreaterThan(0)
+		expect(g.currentState.filteredRA).not.toBe(0)
+		expect(g.currentState.filteredDEC).not.toBe(0)
+		expect(g.currentState.lastDecDirection).toBeDefined()
+
+		g.processFrame(guideFrame([], 2000))
+		const lost = g.processFrame(guideFrame([], 3000))
+		expect(lost.state).toBe('lost')
+		expect(g.currentState.filteredRA).toBe(0)
+		expect(g.currentState.filteredDEC).toBe(0)
+		expect(g.currentState.lastDecDirection).toBeUndefined()
+		expect(g.currentState.oppositeDecErrorAccum).toBe(0)
+
+		const reacquired = g.processFrame(guideFrame(BASE_STARS, 4000))
+		expect(reacquired.state).toBe('guiding')
+		expect(reacquired.ra.duration).toBe(0)
+		expect(reacquired.dec.duration).toBe(0)
+		expect(reacquired.diagnostics.dx).toBeCloseTo(0, 6)
+		expect(reacquired.diagnostics.dy).toBeCloseTo(0, 6)
+	})
+
 	test('end-to-end x/y drifts map to axis pulses and no-pulse when centered', () => {
 		const g = guider()
 		g.processFrame(guideFrame(BASE_STARS, 0))
