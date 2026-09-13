@@ -602,6 +602,8 @@ export class GuiderClient {
 			multiStar: this.#guider.config.mode === 'multi-star',
 			suspectCalibration: this.#calibration === undefined,
 			decPositiveDirection: this.#calibration?.dec.direction ?? 'NORTH',
+			raRatePxPerMs: this.#calibration?.ra.ratePxPerMs,
+			decRatePxPerMs: this.#calibration?.dec.ratePxPerMs,
 			...config,
 		})
 

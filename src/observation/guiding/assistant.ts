@@ -58,6 +58,10 @@ export interface GuidingAssistantConfig {
 	readonly minSampling: number
 	// Current guide exposure in seconds; used for exposure recommendations and filter cadence.
 	readonly exposure: number
+	// Calibrated RA axis motion rate in pixels per millisecond; converts calibrated axis errors back to pixels.
+	readonly raRatePxPerMs?: number
+	// Calibrated DEC axis motion rate in pixels per millisecond; converts calibrated axis errors back to pixels.
+	readonly decRatePxPerMs?: number
 	// Image scale in arc-seconds per pixel; when omitted, arc-second values are returned as undefined.
 	readonly imageScale?: number
 	// Current pointing declination in radians; required for polar alignment error estimates.
@@ -329,7 +333,7 @@ export class GuidingAssistant {
 
 		if (this.#status === 'idle') this.start(frame.timestamp ?? Date.now())
 
-		const sample = makeSample(frame, command, this.#startTime)
+		const sample = makeSample(frame, command, this.#startTime, this.config)
 
 		let pulse: CalibrationPulseCommand | undefined
 
@@ -374,7 +378,7 @@ export class GuidingAssistant {
 			return { result: this.result(timestamp), aligned: false }
 		}
 
-		const sample = makeSample(frame, command, this.#startTime)
+		const sample = makeSample(frame, command, this.#startTime, this.config)
 		if (sample === undefined) return { result: this.result(timestamp), aligned: false }
 
 		this.#backlash.originDec = sample.decPx
@@ -540,7 +544,7 @@ export class GuidingAssistant {
 
 // Normalizes one accepted guide frame/command into an assistant sample, preferring calibrated axis
 // errors and falling back to raw image deltas. Returns undefined for non-guiding, bad, or unusable frames.
-function makeSample(frame: GuideFrame, command: GuideCommand, startTime: number): GuidingAssistantSample | undefined {
+function makeSample(frame: GuideFrame, command: GuideCommand, startTime: number, config: GuidingAssistantConfig): GuidingAssistantSample | undefined {
 	if (command.state !== 'guiding' || command.diagnostics.badFrame) return undefined
 
 	const timestamp = frame.timestamp ?? Date.now()
@@ -550,8 +554,8 @@ function makeSample(frame: GuideFrame, command: GuideCommand, startTime: number)
 
 	if (!hasAxisErrors && !hasImageDeltas) return undefined
 
-	const raPx = hasAxisErrors ? command.diagnostics.axisErrorRA! : command.diagnostics.dx!
-	const decPx = hasAxisErrors ? command.diagnostics.axisErrorDEC! : command.diagnostics.dy!
+	const raPx = hasAxisErrors ? axisErrorToPixels(command.diagnostics.axisErrorRA!, config.raRatePxPerMs) : command.diagnostics.dx!
+	const decPx = hasAxisErrors ? axisErrorToPixels(command.diagnostics.axisErrorDEC!, config.decRatePxPerMs) : command.diagnostics.dy!
 
 	return {
 		frameId: frame.frameId,
@@ -567,6 +571,12 @@ function makeSample(frame: GuideFrame, command: GuideCommand, startTime: number)
 		badFrame: command.diagnostics.badFrame,
 		modeUsed: command.diagnostics.modeUsed,
 	}
+}
+
+// Converts a calibrated axis error into pixels when its solved axis rate is available; an undefined
+// rate denotes the uncalibrated identity controller, whose axis errors are already pixel values.
+function axisErrorToPixels(axisError: number, ratePxPerMs: number | undefined) {
+	return ratePxPerMs !== undefined && Number.isFinite(ratePxPerMs) && ratePxPerMs > 0 ? axisError * ratePxPerMs : axisError
 }
 
 // Derives passive motion metrics. `decCorrectedRmsPx` is the precomputed drift-removed DEC

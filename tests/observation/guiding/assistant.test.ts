@@ -81,17 +81,17 @@ test('computes guide-assistant motion metrics and arc-second conversions', () =>
 })
 
 test('uses calibrated axis errors when image motion is in a rotated frame', () => {
-	const assistant = new GuidingAssistant({ imageScale: 2 })
+	const assistant = new GuidingAssistant({ imageScale: 2, raRatePxPerMs: 0.01, decRatePxPerMs: 0.01 })
 	assistant.start(0)
 	assistant.addSample(frame(0, 1), command(0, 0, { axisErrorRA: 0, axisErrorDEC: 0, dx: 0, dy: 0 }))
-	assistant.addSample(frame(1000, 2), command(0, 1, { axisErrorRA: 0, axisErrorDEC: 1, dx: 1, dy: 0 }))
+	assistant.addSample(frame(1000, 2), command(0, 1, { axisErrorRA: 100, axisErrorDEC: 0, dx: 1, dy: 0 }))
 
 	const result = assistant.complete(1000)
 
-	expect(result.motion.ra.peakPx).toBeCloseTo(0, 8)
-	expect(result.motion.dec.peakPx).toBeCloseTo(1, 8)
-	expect(result.motion.ra.peakArcsec).toBeCloseTo(0, 8)
-	expect(result.motion.dec.peakArcsec).toBeCloseTo(2, 8)
+	expect(result.motion.ra.peakPx).toBeCloseTo(1, 8)
+	expect(result.motion.dec.peakPx).toBeCloseTo(0, 8)
+	expect(result.motion.ra.peakArcsec).toBeCloseTo(2, 8)
+	expect(result.motion.dec.peakArcsec).toBeCloseTo(0, 8)
 })
 
 test('normalizes non-finite guide-star photometry in sample means', () => {
