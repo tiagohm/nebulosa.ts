@@ -428,9 +428,11 @@ function evaluatePostFlipPierSide(resolved: ResolvedMeridianFlipPolicy, snapshot
 // Evaluates terminal FAILED state retry availability.
 function evaluateFailedState(resolved: ResolvedMeridianFlipPolicy, snapshot: MeridianFlipSnapshot, state: MeridianFlipState, hourAngle: Angle, untilFlip: Angle, untilLatest: Angle, isOverdue: boolean, isAlreadyFlipped: boolean): MeridianFlipDecision {
 	if (state.attempts >= 1 && state.attempts <= resolved.maxRetries) {
-		if (isAtOrAfterThreshold(hourAngle, resolved.flipAt) && snapshot.isExposing !== true && !isAlreadyFlipped) {
+		if (isAtOrAfterThreshold(hourAngle, resolved.flipAt) && !isAlreadyFlipped) {
 			const pierSideFailure = evaluatePreFlipPierSide(resolved, snapshot, state, hourAngle, untilFlip, untilLatest, isOverdue, isAlreadyFlipped)
 			if (pierSideFailure) return pierSideFailure
+			if (isOverdue && snapshot.isExposing === true) return decision('FAILED', 'ABORT_EXPOSURE', 'LATEST_THRESHOLD_REACHED', hourAngle, untilFlip, untilLatest, isOverdue, isAlreadyFlipped, state)
+			if (snapshot.isExposing === true) return decision('FAILED', 'NONE', 'EXECUTION_FAILED', hourAngle, untilFlip, untilLatest, isOverdue, isAlreadyFlipped, state)
 			if (snapshot.isGuiding === true) return decision('FAILED', 'PAUSE_GUIDING', 'RETRY_AVAILABLE', hourAngle, untilFlip, untilLatest, isOverdue, isAlreadyFlipped, state)
 			if (!isMountReadyForFlip(snapshot)) return decision('FAILED', 'NONE', 'EXECUTION_FAILED', hourAngle, untilFlip, untilLatest, isOverdue, isAlreadyFlipped, state)
 			return decision('FAILED', 'START_FLIP', 'RETRY_AVAILABLE', hourAngle, untilFlip, untilLatest, isOverdue, isAlreadyFlipped, state)
