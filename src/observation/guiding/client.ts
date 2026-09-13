@@ -386,7 +386,7 @@ export class GuiderClient {
 	findStar() {
 		const tracking = this.#frame?.tracking ?? this.#tracker.lastResult
 		const starResult = starTrackingOf(tracking)
-		const selected = starResult?.primary ?? tracking?.measurement
+		const selected = starResult?.selectionPrimary ?? (starResult === undefined ? tracking?.measurement : undefined)
 		if (selected === undefined) return undefined
 
 		this.#abortGuidingAssistantForTransition('guide star changed')

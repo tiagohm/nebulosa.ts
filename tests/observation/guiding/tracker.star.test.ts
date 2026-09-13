@@ -258,3 +258,24 @@ test('keeps the last accepted stellar identity after an uncommitted frame', () =
 	expect(recovered.measurement?.x).toBeCloseTo(100, 0)
 	expect(recovered.measurement?.y).toBeCloseTo(100, 0)
 })
+
+test('exposes a quality-approved primary separately from the nearest raw detection', () => {
+	const tracker = new StarTracker()
+	const result = tracker.track(
+		{
+			image: imageWithStars([
+				[100, 100, 0.5],
+				[120, 120, 10],
+			]),
+			width: WIDTH,
+			height: HEIGHT,
+			timestamp: 0,
+			frameId: 1,
+		},
+		{ phase: 'looping', searchPosition: [100, 100], searchRegion: 64, allowAcquisition: true, preserveIdentity: false },
+	)
+
+	expect(result.primary?.x).toBeCloseTo(100, 0)
+	expect(result.selectionPrimary?.x).toBeCloseTo(120, 0)
+	expect(result.rejectedReasons.low_snr).toBe(1)
+})

@@ -1279,6 +1279,25 @@ describe('frame-driven behavior', () => {
 		harness.client.stopCapture()
 	})
 
+	test('findStar ignores a rejected nearest detection inside the search box', async () => {
+		connect(harness)
+		harness.client.loop()
+		expect(harness.client.setLockPosition(70, 70, true)).toBeTrue()
+		await feedBuffer(
+			harness,
+			await buildFrameBufferAt([
+				[70, 70, 0.5],
+				[100, 100, STAR_FLUX],
+			]),
+		)
+
+		const lock = harness.client.findStar()
+		expect(lock).toBeDefined()
+		expect(lock![0]).toBeCloseTo(100, 0)
+		expect(lock![1]).toBeCloseTo(100, 0)
+		harness.client.stopCapture()
+	})
+
 	test('findStar rejects a double star instead of promoting either component', async () => {
 		connect(harness)
 		harness.client.loop()

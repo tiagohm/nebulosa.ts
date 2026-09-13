@@ -508,6 +508,8 @@ export interface StarTrackerResult extends GuideTrackerResult {
 	readonly accepted: readonly GuideStar[]
 	// Primary detection used for overlay and stellar telemetry.
 	readonly primary?: GuideStar
+	// Quality-approved primary used for explicit lock selection.
+	readonly selectionPrimary?: SelectedGuideStar
 	// Whether the primary is inside the active search region.
 	readonly primaryInsideSearchRegion: boolean
 	// Configured mode used by this tracker.
@@ -609,7 +611,8 @@ export class StarTracker implements GuideTracker {
 		}
 		const quality = filterQualityGuideStars(frameForFilter, this.config.filter)
 		const filtered = filterGuideStars({ stars: orderedDetections, width: frame.width, height: frame.height }, this.config.filter)
-		const selection = selectGuideStar(orderedDetections, frame.width, frame.height, undefined, { ...this.config.selection, filter: { ...this.config.selection.filter, ...this.config.filter } })
+		const selectionStars = searchPosition === undefined || searchRegion === undefined ? orderedDetections : qualityStarsOf(frameForFilter)
+		const selection = selectGuideStar(selectionStars, frame.width, frame.height, undefined, { ...this.config.selection, filter: { ...this.config.selection.filter, ...this.config.filter } })
 		const primary = searchPosition === undefined || searchRegion === undefined ? selection.primary : searchPrimary
 		const notes: string[] = []
 
@@ -675,6 +678,7 @@ export class StarTracker implements GuideTracker {
 			detections: orderedDetections,
 			accepted,
 			primary,
+			selectionPrimary: selection.primary,
 			primaryInsideSearchRegion,
 			usedMode: measurementMode,
 			matches,
