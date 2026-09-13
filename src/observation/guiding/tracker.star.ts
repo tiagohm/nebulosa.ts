@@ -496,6 +496,10 @@ export const DEFAULT_STAR_TRACKER_CONFIG: Readonly<StarTrackerConfig> = {
 	selection: DEFAULT_GUIDE_STAR_SELECTION_CONFIG,
 }
 
+// Fallback calibration association radius, in pixels, matching the default calibrator jump budget
+// when a tracker is called without the guide-client context.
+const DEFAULT_CALIBRATION_MATCH_DISTANCE_PX = 12
+
 // Result of stellar tracking, including the current frame's detections and quality subsets.
 export interface StarTrackerResult extends GuideTrackerResult {
 	// All detector results in current-frame overlay order.
@@ -599,6 +603,7 @@ export class StarTracker implements GuideTracker {
 		let measurementMode: GuidingMode | undefined
 		let matches = 0
 		const accepted = primaryInsideSearchRegion ? filtered.accepted : []
+		const maxMatchDistancePx = context.phase === 'calibrating' ? Math.max(this.config.maxMatchDistancePx, context.maxMeasurementJumpPx ?? DEFAULT_CALIBRATION_MATCH_DISTANCE_PX) : this.config.maxMatchDistancePx
 
 		if (primaryInsideSearchRegion && accepted.length > 0 && (this.#measurementOrigin === undefined || !context.preserveIdentity)) {
 			const acquired = searchPosition === undefined || searchRegion === undefined ? selection.primary : pickAcquisition(quality.accepted, context.initialPosition)
@@ -612,7 +617,7 @@ export class StarTracker implements GuideTracker {
 				notes.push('acquired')
 			}
 		} else if (primaryInsideSearchRegion && accepted.length > 0 && this.#measurementOrigin !== undefined) {
-			const translation = this.#measureTranslation(accepted)
+			const translation = this.#measureTranslation(accepted, maxMatchDistancePx)
 			if (translation !== undefined) {
 				measurement = { x: translation.x, y: translation.y, confidence: confidenceOf(quality.qualityScore) }
 				this.#lastMeasurement = measurement
@@ -622,7 +627,7 @@ export class StarTracker implements GuideTracker {
 		}
 
 		if (measurement === undefined && primaryInsideSearchRegion && accepted.length > 0 && context.allowAcquisition && this.#measurementOrigin !== undefined) {
-			const fallback = nearestWithin(accepted, this.#measurementOrigin, this.config.maxMatchDistancePx)
+			const fallback = nearestWithin(accepted, this.#measurementOrigin, maxMatchDistancePx)
 			if (fallback !== undefined) {
 				measurement = { x: fallback.x, y: fallback.y, confidence: confidenceOf(quality.qualityScore) }
 				this.#lastMeasurement = measurement
@@ -657,15 +662,15 @@ export class StarTracker implements GuideTracker {
 	}
 
 	// Estimates current translation from the stored identity, falling back to one-star association.
-	#measureTranslation(stars: readonly GuideStar[]) {
+	#measureTranslation(stars: readonly GuideStar[], maxMatchDistancePx: number) {
 		if (this.#measurementOrigin === undefined) return undefined
 
 		if (this.config.mode === 'multiStar' && this.#referenceStars.length > 1 && stars.length > 1) {
-			const translation = estimateTranslation(this.#referenceStars, stars, this.config.maxMatchDistancePx, this.config.outlierSigma)
+			const translation = estimateTranslation(this.#referenceStars, stars, maxMatchDistancePx, this.config.outlierSigma)
 			if (translation !== undefined) return { x: this.#measurementOrigin[0] + translation.dx, y: this.#measurementOrigin[1] + translation.dy, mode: 'multiStar' as const, matches: translation.matches }
 		}
 
-		const nearest = nearestWithin(stars, this.#measurementOrigin, this.config.maxMatchDistancePx)
+		const nearest = nearestWithin(stars, this.#measurementOrigin, maxMatchDistancePx)
 		return nearest === undefined ? undefined : { x: nearest.x, y: nearest.y, mode: 'singleStar' as const, matches: 1 }
 	}
 

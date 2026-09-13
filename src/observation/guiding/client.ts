@@ -1094,6 +1094,7 @@ export class GuiderClient {
 		const trackerFrame = { image, width, height, timestamp: Date.now(), frameId: ++this.#frameId, cadenceMs: this.#inFlightExposureMs } as const
 		const tracking = this.#tracker.track(trackerFrame, {
 			phase,
+			maxMeasurementJumpPx: this.#calibrator.config.maxFrameJumpPx,
 			searchPosition: lockSearchPosition,
 			searchRegion: lockSearchPosition === undefined ? undefined : this.#searchRegion,
 			initialPosition: this.#lockSearchPosition,

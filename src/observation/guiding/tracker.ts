@@ -28,6 +28,10 @@ export interface GuideTrackerFrame {
 export interface GuideTrackerContext {
 	// Current guide-client phase.
 	readonly phase: GuideTrackingPhase
+	// Maximum per-frame movement that calibration is prepared to classify, in pixels. Stellar
+	// trackers may use this as an association radius so a valid calibration pulse is measured before
+	// the calibrator applies its jump policy.
+	readonly maxMeasurementJumpPx?: number
 	// Search-box center in image pixels, when a lock/search target exists.
 	readonly searchPosition?: readonly [number, number]
 	// Search-box side in pixels.
