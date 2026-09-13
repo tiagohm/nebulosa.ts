@@ -88,6 +88,21 @@ test('star filtering rejects low quality detections', () => {
 	expect(filtered.rejectedReasons.high_fwhm).toBe(1)
 })
 
+test('star filtering rejects detector eccentricity as elongation', () => {
+	const filtered = filterGuideStars(guideFrame([{ x: 100, y: 100, snr: 20, flux: 1000, hfd: 2, eccentricity: 0.9 }]), {
+		minStarSnr: 8,
+		minFlux: 100,
+		maxHfd: 8,
+		borderMarginPx: 10,
+		maxEllipticity: 0.5,
+		maxFwhm: 10,
+		saturationPeak: 65000,
+	})
+
+	expect(filtered.accepted).toHaveLength(0)
+	expect(filtered.rejectedReasons.elongated).toBe(1)
+})
+
 test('single-star tracking fallback computes correction pulses', () => {
 	const guider = new Guider({ mode: 'single-star', lockAveragingFrames: 2, minMoveRA: 0.01, minMoveDEC: 0.01, msPerRAUnit: 1000, msPerDECUnit: 1000 })
 	guider.processFrame(guideFrame(BASE_STARS, 0))

@@ -600,7 +600,8 @@ function rejectStarReason(star: GuideStar, config: StarFilterConfig, borderRight
 	if (star.hfd > config.maxHfd) return 'high_hfd'
 	if (star.saturated === true) return 'saturated'
 	if (config.saturationPeak !== undefined && star.peak !== undefined && star.peak >= config.saturationPeak) return 'saturated_peak'
-	if (star.ellipticity !== undefined && star.ellipticity > config.maxEllipticity) return 'elongated'
+	const ellipticity = star.ellipticity ?? star.eccentricity
+	if (ellipticity !== undefined && ellipticity > config.maxEllipticity) return 'elongated'
 	if (config.maxFwhm !== undefined && star.fwhm !== undefined && star.fwhm > config.maxFwhm) return 'high_fwhm'
 	if (star.x < borderLeft || star.y < borderLeft || star.x >= borderRight || star.y >= borderBottom) return 'border'
 	return undefined
