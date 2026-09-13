@@ -2,7 +2,6 @@ import type { Writable } from '../../core/types'
 import { Matrix } from '../../math/linear-algebra/matrix'
 import { clamp } from '../../math/numerical/math'
 import { type GuideFrame, type GuideTrackerResult, trackingOf } from './tracker'
-import type { GuidingMode } from './tracker.star'
 
 // Generic autoguiding controller. Given a stream of tracker results and a calibration matrix mapping
 // image pixels to mount RA/DEC axes, the Guider averages a lock reference, rejects bad/dropped
@@ -56,7 +55,7 @@ export interface GuideDiagnostics {
 	// Accepted/total ratio in [0, 1].
 	readonly qualityScore: number
 	// Informational measurement mode actually used, or undefined when no measurement was made.
-	readonly usedMode?: GuidingMode
+	readonly usedMode?: string
 	// Informational tracker mode, including non-stellar values.
 	readonly measurementMode?: string
 	// Measured target X, in pixels.
@@ -200,7 +199,7 @@ export interface DiagnosticMeasurement {
 	dy: number
 	axisErrorRA: number
 	axisErrorDEC: number
-	usedMode?: GuidingMode
+	usedMode?: string
 	measurementMode?: string
 	targetX: number
 	targetY: number

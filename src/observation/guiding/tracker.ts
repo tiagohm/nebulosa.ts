@@ -1,5 +1,4 @@
 import type { Image } from '../../imaging/model/types'
-import type { GuidingMode } from './tracker.star'
 
 // Generic synchronous tracking contracts. Frames use image pixels for coordinates, Unix epoch
 // milliseconds for timestamps, and optional images so a failed decode can still advance the guide
@@ -81,7 +80,7 @@ export interface GuideTrackerResult {
 	// Target-relative tracker offset in image pixels, excluding dither and lock shift.
 	readonly targetOffset?: readonly [number, number]
 	// Informational measurement mode; controllers must not depend on a particular value.
-	readonly measurementMode?: GuidingMode
+	readonly measurementMode?: string
 	// Optional tracker-specific telemetry.
 	readonly telemetry?: GuideTrackerTelemetry
 }

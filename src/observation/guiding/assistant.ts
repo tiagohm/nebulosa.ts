@@ -1,7 +1,6 @@
 import type { CalibrationPulseCommand } from './calibrator'
 import { type GuideCommand, type GuideDirectionDEC, NO_PULSE, oppositeDEC } from './guider'
 import { type GuideFrame, trackingOf } from './tracker'
-import type { GuidingMode } from './tracker.star'
 
 // PHD2-style "guiding assistant": passively analyzes a stream of accepted tracker frames to characterize
 // mount/seeing behavior and produce actionable recommendations (exposure range, RA/DEC min-move,
@@ -141,7 +140,7 @@ export interface GuidingAssistantSample {
 	// Whether the guider considered this a bad frame.
 	readonly badFrame: boolean
 	// Actual guide mode used by the guider for this accepted sample.
-	readonly usedMode?: GuidingMode
+	readonly usedMode?: string
 }
 
 // RMS and peak motion statistics for one axis.

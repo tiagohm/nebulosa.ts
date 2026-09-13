@@ -621,6 +621,7 @@ export class StarTracker implements GuideTracker {
 			if (translation !== undefined) {
 				measurement = { x: translation.x, y: translation.y, confidence: confidenceOf(quality.qualityScore) }
 				this.#lastMeasurement = measurement
+				this.#rememberMeasurement(accepted, measurement)
 				measurementMode = translation.mode
 				matches = translation.matches
 			}
@@ -631,6 +632,7 @@ export class StarTracker implements GuideTracker {
 			if (fallback !== undefined) {
 				measurement = { x: fallback.x, y: fallback.y, confidence: confidenceOf(quality.qualityScore) }
 				this.#lastMeasurement = measurement
+				this.#rememberMeasurement(accepted, measurement)
 				measurementMode = 'singleStar'
 				matches = 1
 			}
@@ -672,6 +674,13 @@ export class StarTracker implements GuideTracker {
 
 		const nearest = nearestWithin(stars, this.#measurementOrigin, maxMatchDistancePx)
 		return nearest === undefined ? undefined : { x: nearest.x, y: nearest.y, mode: 'singleStar' as const, matches: 1 }
+	}
+
+	// Advances the association reference to the latest accepted frame while keeping measurements in
+	// the original image coordinate frame. Failed frames leave the last good reference untouched.
+	#rememberMeasurement(stars: readonly GuideStar[], measurement: GuideMeasurement) {
+		this.#referenceStars = stars
+		this.#measurementOrigin = [measurement.x, measurement.y]
 	}
 
 	// Stores a fresh result while keeping no per-frame result history.
