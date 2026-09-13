@@ -1,7 +1,8 @@
 import type { CalibrationPulseCommand } from './calibrator'
 import { type GuideCommand, type GuideDirectionDEC, type GuideFrame, type GuidingMode, NO_PULSE, oppositeDEC } from './guider'
+import { trackingOf } from './tracker'
 
-// PHD2-style "guiding assistant": passively analyzes a stream of accepted guide frames to characterize
+// PHD2-style "guiding assistant": passively analyzes a stream of accepted tracker frames to characterize
 // mount/seeing behavior and produce actionable recommendations (exposure range, RA/DEC min-move,
 // polar-alignment error, focus/star advice) without any UI or device coupling. It estimates per-axis
 // high-frequency RMS and drift via linear fits, derives seeing from drift-corrected DEC windows, and
@@ -554,7 +555,7 @@ function makeSample(frame: GuideFrame, command: GuideCommand, startTime: number,
 	if (command.state !== 'guiding' || command.diagnostics.badFrame) return undefined
 
 	const timestamp = frame.timestamp ?? Date.now()
-	const star = frame.stars?.[0]
+	const telemetry = command.tracking?.telemetry ?? trackingOf(frame).telemetry
 	const hasAxisErrors = isFiniteNumber(command.diagnostics.axisErrorRA) && isFiniteNumber(command.diagnostics.axisErrorDEC)
 	const hasImageDeltas = isFiniteNumber(command.diagnostics.dx) && isFiniteNumber(command.diagnostics.dy)
 
@@ -571,9 +572,9 @@ function makeSample(frame: GuideFrame, command: GuideCommand, startTime: number,
 		decPx,
 		dx: command.diagnostics.dx,
 		dy: command.diagnostics.dy,
-		snr: finiteOrZero(star?.snr),
-		starMass: finiteOrZero(star?.flux),
-		hfd: finiteOrZero(star?.hfd),
+		snr: finiteOrZero(telemetry?.signalToNoise),
+		starMass: finiteOrZero(telemetry?.mass),
+		hfd: finiteOrZero(telemetry?.hfdPx),
 		badFrame: command.diagnostics.badFrame,
 		modeUsed: command.diagnostics.modeUsed,
 	}

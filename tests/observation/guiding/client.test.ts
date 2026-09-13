@@ -13,6 +13,7 @@ import type { GuidingCalibrationResult } from '../../../src/observation/guiding/
 import { GuiderClient, type GuideFrameImage, type GuiderClientConnectOptions, type GuiderClientOptions, type GuiderEvents } from '../../../src/observation/guiding/client'
 import { ditherPulsePlanFromCalibration } from '../../../src/observation/guiding/dither.pulse'
 import type { GuideDirectionDEC, GuideDirectionRA } from '../../../src/observation/guiding/guider'
+import type { GuideTracker, GuideTrackerResult } from '../../../src/observation/guiding/tracker'
 import { isTimeConsumingTestSkipped } from '../../util'
 
 // One recorded pulse issued through the fake guide-output manager.
@@ -1163,6 +1164,52 @@ describe('frame-driven behavior', () => {
 		expect(looping.StarMass).toBeGreaterThan(0)
 		expect(Number.isFinite(looping.SNR)).toBeTrue()
 		expect(looping.SNR).toBeGreaterThanOrEqual(0)
+	})
+
+	test('an injected generic tracker is called once per frame and feeds the overlay without stars', async () => {
+		const frames: GuideFrameImage[] = []
+		let calls = 0
+		let resets = 0
+		let lastResult: GuideTrackerResult | undefined
+		const tracker: GuideTracker = {
+			get lastResult() {
+				return lastResult
+			},
+			reset() {
+				resets++
+				lastResult = undefined
+			},
+			track(frame) {
+				calls++
+				lastResult = {
+					measurement: { x: 120 + calls, y: 120, confidence: 1 },
+					candidateCount: 1,
+					acceptedCount: 1,
+					qualityScore: 1,
+					rejectedReasons: {},
+					notes: [`frame_${frame.frameId}`],
+				}
+				return lastResult
+			},
+		}
+		const local = makeHarness({ tracker, trackerConfig: { mode: 'single-star' }, handler: { frame: (_client, frame) => frames.push(frame) } })
+		connect(local)
+		local.client.loop()
+		const resetsAfterConnect = resets
+
+		await feedBuffer(local, FRAME_BUFFER)
+		expect(calls).toBe(1)
+		expect(frames.at(-1)?.tracking).toBe(lastResult)
+		expect(frames.at(-1)?.stars).toEqual([])
+		expect(frames.at(-1)?.acceptedStars).toBeUndefined()
+		expect(frames.at(-1)?.star).toBeUndefined()
+
+		local.client.findStar()
+		expect(calls).toBe(1)
+		expect(resets).toBe(resetsAfterConnect + 1)
+		local.client.deselectStar()
+		expect(resets).toBe(resetsAfterConnect + 2)
+		local.client.stopCapture()
 	})
 
 	test('accepted looping frames use a strictly increasing frame id', async () => {

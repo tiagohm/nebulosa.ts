@@ -9,14 +9,14 @@ import type { GuideOutputManager } from '../../devices/indi/manager/guideoutput'
 import type { BlobEncoding } from '../../devices/indi/types'
 import { readImageFromBuffer, readImageFromSource } from '../../imaging/model/image'
 import { type Image, type ImageRawType, makeImageRawTypedArray } from '../../imaging/model/types'
-import { detectStars } from '../../imaging/stars/detector'
 import { base64Source, bufferSource } from '../../io/io'
 import { clamp } from '../../math/numerical/math'
 import { GuidingAssistant, type GuidingAssistantConfig, type GuidingAssistantResult } from './assistant'
 import { type CalibrationPulseCommand, flipGuidingCalibration, type GuidingCalibrationConfig, type GuidingCalibrationDiagnostics, type GuidingCalibrationResult, GuidingCalibrator } from './calibrator'
 import { DitherGenerator, type DitherMode } from './dither'
-import { type AxisPulse, type DeclinationGuideMode, DEFAULT_GUIDER_CONFIG, type GuideCommand, type GuideFrame, Guider, type GuideStar, selectGuideStar, starInsideSearchRegion } from './guider'
-import { type GuideTrackerResult, trackingOf } from './tracker'
+import { type AxisPulse, type DeclinationGuideMode, DEFAULT_GUIDER_CONFIG, type GuideCommand, type GuideFrame, Guider, type GuideStar } from './guider'
+import type { GuideTracker, GuideTrackerResult } from './tracker'
+import { StarTracker, type StarTrackerConfig, type StarTrackerResult } from './tracker.star'
 
 // Local autoguiding orchestrator exposing a PHD2-compatible API over INDI camera and guide-output
 // devices. It decodes each camera BLOB, detects stars, drives the GuidingCalibrator and Guider state
@@ -162,6 +162,10 @@ export interface GuiderClientOptions {
 	readonly stickyLockPosition?: boolean
 	// Dither pattern used by dither().
 	readonly ditherMode?: DitherMode
+	// Optional synchronous tracker implementation. When provided, trackerConfig is ignored.
+	readonly tracker?: GuideTracker
+	// Partial configuration for the default StarTracker.
+	readonly trackerConfig?: Partial<StarTrackerConfig>
 	// Overrides for the calibration state machine, merged over DEFAULT_GUIDING_CALIBRATOR_CONFIG. Pulse
 	// durations are milliseconds and distances are pixels; an invalid combination throws at
 	// construction. Mounts with a fast guide rate usually only need shorter raPulse/decPulse.
@@ -193,6 +197,7 @@ export class GuiderClient {
 	#guideOutput?: GuideOutput
 	#id?: string
 	readonly #calibrator: GuidingCalibrator
+	readonly #tracker: GuideTracker
 	#calibration?: GuidingCalibrationResult
 	#frame?: GuideFrame
 	#image?: Image
@@ -235,7 +240,7 @@ export class GuiderClient {
 	#inFlightExposureMs = DEFAULT_GUIDER_EXPOSURE
 	// Constructed after #exposure: #makeGuider reads the cadence so the uncalibrated guider matches
 	// the default loop instead of Guider's own 1000 ms default (which happens to be the same today).
-	#guider = this.#makeGuider(undefined)
+	#guider: Guider
 	#guideOutputEnabled = true
 	#guidingAssistant?: GuidingAssistant
 	#guidingAssistantPendingPulse?: CalibrationPulseCommand
@@ -267,7 +272,6 @@ export class GuiderClient {
 	// True when a lock/search position exists and no detection falls inside the PHD2 search box.
 	// The published frame still carries every detection so multi-star and the overlay can use
 	// them; the calibrator/guider receive an empty star list so they report the primary lost.
-	#primaryOutsideSearchRegion = false
 	readonly #searchRegion: number
 	readonly #lockShiftParams = { ...DEFAULT_LOCK_SHIFT_PARAMS }
 	readonly #eventHandler?: GuiderClientHandler['event']
@@ -300,6 +304,8 @@ export class GuiderClient {
 		readonly options?: GuiderClientOptions,
 	) {
 		this.#calibrator = new GuidingCalibrator(options?.calibrator)
+		this.#tracker = options?.tracker ?? new StarTracker(options?.trackerConfig)
+		this.#guider = this.#makeGuider(undefined)
 		this.#searchRegion = clamp(options?.searchRegion || DEFAULT_SEARCH_REGION, 16, 128)
 		this.#stickyLockPosition = options?.stickyLockPosition === true
 		this.#dither = new DitherGenerator({ mode: options?.ditherMode })
@@ -382,9 +388,9 @@ export class GuiderClient {
 
 	// Finds the best star in the most recent frame and stores it as the preferred lock position.
 	findStar() {
-		if (this.#frame === undefined) return undefined
-
-		const selected = selectGuideStar(this.#frame.stars ?? [], this.#frame.width, this.#frame.height).primary
+		const tracking = this.#tracker.lastResult
+		const starResult = starTrackingOf(tracking)
+		const selected = starResult?.primary ?? tracking?.measurement
 		if (selected === undefined) return undefined
 
 		this.#abortGuidingAssistantForTransition('guide star changed')
@@ -401,6 +407,9 @@ export class GuiderClient {
 		this.#avgDistanceNeedReset = true
 		this.emitEvent('StarSelected', { X: selected.x, Y: selected.y })
 		this.emitEvent('LockPositionSet', { X: selected.x, Y: selected.y })
+		// The explicit selection becomes the identity seed for the next frame. The current tracker
+		// result was already consumed above, so resetting here cannot cause a second detection.
+		this.#tracker.reset()
 
 		if (this.#appState === 'Guiding' || this.#appState === 'LostLock' || this.#appState === 'Paused') {
 			this.#guider = this.#makeGuider(this.#calibration)
@@ -472,6 +481,7 @@ export class GuiderClient {
 
 		this.#calibration = undefined
 		this.#calibrator.reset()
+		this.#tracker.reset()
 		this.#guider = this.#makeGuider(undefined)
 		this.#ditherOffsetX = 0
 		this.#ditherOffsetY = 0
@@ -506,6 +516,7 @@ export class GuiderClient {
 		this.#abortSettling('guide star deselected')
 		this.#guider.reset()
 		this.#guider.stopDither()
+		this.#tracker.reset()
 
 		if (this.#appState !== 'Stopped') {
 			this.#resumeState = 'Looping'
@@ -617,7 +628,7 @@ export class GuiderClient {
 		const assistant = new GuidingAssistant({
 			imageScale: imageScale > 0 ? imageScale : undefined,
 			exposure: exposure > 0 && Number.isFinite(exposure) ? exposure / 1000 : undefined,
-			multiStar: this.#guider.config.mode === 'multi-star',
+			multiStar: this.#tracker instanceof StarTracker && this.#tracker.config.mode === 'multi-star',
 			suspectCalibration: this.#calibration === undefined,
 			decPositiveDirection: this.#calibration?.dec.direction ?? 'NORTH',
 			raRatePxPerMs: this.#calibration?.ra.ratePxPerMs,
@@ -702,7 +713,8 @@ export class GuiderClient {
 	getStarImage(): PHD2StarImage<ImageRawType> | undefined {
 		if (this.#image === undefined) return undefined
 
-		const star = this.#frame?.stars?.[0]
+		const tracking = starTrackingOf(this.#frame?.tracking)
+		const star = tracking?.primary ?? this.#frame?.tracking?.measurement
 		// Uses the current lock target when available, otherwise the latest measured star centroid or [0, 0].
 		const [x, y] = this.#lockPosition ?? [star?.x ?? 0, star?.y ?? 0]
 		return cropStarImage(this.#image, this.#frame?.frameId ?? 0, x, y, this.#searchRegion)
@@ -759,6 +771,7 @@ export class GuiderClient {
 
 		if (recalibrate || this.#calibration === undefined) {
 			if (recalibrate) this.#calibration = undefined
+			this.#tracker.reset()
 			this.#calibrator.reset()
 			this.emitEvent('StartCalibration', { Mount: this.#guideOutput.name })
 			this.#setAppState('Calibrating')
@@ -850,8 +863,9 @@ export class GuiderClient {
 
 		this.#abortGuidingAssistantForTransition('lock position changed')
 
-		if (this.#frame !== undefined && (this.#frame.stars?.length ?? 0) > 0) {
-			const nearest = nearestGuideStar(this.#frame.stars ?? [], x, y)
+		const detections = starTrackingOf(this.#frame?.tracking)?.detections
+		if (detections !== undefined && detections.length > 0) {
+			const nearest = nearestGuideStar(detections, x, y)
 			this.#lockSearchPosition = nearest === undefined ? ([x, y] as const) : ([nearest.x, nearest.y] as const)
 		} else {
 			this.#lockSearchPosition = [x, y] as const
@@ -869,6 +883,7 @@ export class GuiderClient {
 		this.#lockShiftTimestamp = 0
 		this.#lockShiftLimitReached = false
 		this.#avgDistanceNeedReset = true
+		this.#tracker.reset()
 		this.emitEvent('LockPositionSet', { X: lockX, Y: lockY })
 
 		if (this.#appState === 'Guiding' || this.#appState === 'LostLock' || this.#appState === 'Paused') {
@@ -1018,7 +1033,6 @@ export class GuiderClient {
 		this.#processingBlob = true
 		this.#awaitingBlob = false
 		this.#acceptedStars = undefined
-		this.#primaryOutsideSearchRegion = false
 		// Drop the missing-BLOB timer as soon as this exposure is in hand. Leaving it armed until
 		// the next startExposure lets a slow decode or pulse wait trip a false timeout and start an
 		// overlapping exposure.
@@ -1074,35 +1088,30 @@ export class GuiderClient {
 		}
 	}
 
-	// Converts a decoded image into a guide frame and prioritizes the selected lock star.
+	// Converts a decoded image into a guide frame and executes exactly one tracker pass.
 	#makeGuideFrame(image?: Image): GuideFrame {
-		const detections = image === undefined ? [] : detectStars(image)
 		const lockSearchPosition = this.#lockSearchPosition ?? this.#lockPosition
-		let stars = detections
-
-		if (lockSearchPosition !== undefined && detections.length > 0) {
-			const primary = nearestGuideStarInSearchRegion(detections, lockSearchPosition, this.#searchRegion)
-			if (primary !== undefined) {
-				// PHD2 only acquires the primary inside the search box. Neighbors elsewhere must stay
-				// in the list: the default multi-star estimator matches them against the full-frame
-				// reference, and GuideFrameImage.stars is every detection. The globally nearest star
-				// can sit just outside an edge while a farther detection is still inside a corner.
-				stars = detections.slice()
-				moveGuideStarToFront(stars, primary)
-			} else {
-				this.#primaryOutsideSearchRegion = true
-			}
-		}
-
-		return {
-			stars,
-			width: image?.metadata.width ?? this.#camera?.frame.width.value ?? 0,
-			height: image?.metadata.height ?? this.#camera?.frame.height.value ?? 0,
-			timestamp: Date.now(),
-			frameId: ++this.#frameId,
-			cadenceMs: this.#inFlightExposureMs,
+		const appState = this.#appState === 'Paused' && !this.#fullPause ? this.#resumeState : this.#appState
+		const phase = this.#guidingAssistant !== undefined ? 'assistant' : appState === 'Calibrating' ? 'calibrating' : appState === 'Guiding' ? 'guiding' : appState === 'LostLock' ? 'lostLock' : appState === 'Selected' ? 'selected' : 'looping'
+		const width = image?.metadata.width ?? this.#camera?.frame.width.value ?? 0
+		const height = image?.metadata.height ?? this.#camera?.frame.height.value ?? 0
+		const trackerFrame = { image, width, height, timestamp: Date.now(), frameId: ++this.#frameId, cadenceMs: this.#inFlightExposureMs } as const
+		const tracking = this.#tracker.track(trackerFrame, {
+			phase,
 			searchPosition: lockSearchPosition,
 			searchRegion: lockSearchPosition === undefined ? undefined : this.#searchRegion,
+			initialPosition: this.#lockSearchPosition,
+			allowAcquisition: appState !== 'Stopped' && !(appState === 'Paused' && this.#fullPause),
+			preserveIdentity: lockSearchPosition !== undefined || appState === 'Guiding' || appState === 'LostLock' || this.#guidingAssistant !== undefined,
+		})
+
+		return {
+			tracking,
+			width,
+			height,
+			timestamp: trackerFrame.timestamp,
+			frameId: trackerFrame.frameId,
+			cadenceMs: this.#inFlightExposureMs,
 		}
 	}
 
@@ -1119,10 +1128,10 @@ export class GuiderClient {
 				timestamp: frame.timestamp ?? Date.now(),
 				state: this.#appState,
 				image,
-				tracking: trackingOf(frame),
-				stars: frame.stars ?? [],
+				tracking: frame.tracking,
+				stars: starTrackingOf(frame.tracking)?.detections ?? [],
 				acceptedStars: this.#acceptedStars,
-				star: this.#primaryOutsideSearchRegion ? undefined : (frame.stars ?? [])[0],
+				star: starTrackingOf(frame.tracking)?.primary,
 				lockPosition: this.#lockPosition,
 				searchPosition: this.#lockSearchPosition ?? this.#lockPosition,
 				searchRegion: this.#searchRegion,
@@ -1135,11 +1144,10 @@ export class GuiderClient {
 	// Routes the current frame to calibration, guiding, or passive looping.
 	#processFrame(frame: GuideFrame) {
 		const appState = this.#appState === 'Paused' && !this.#fullPause ? this.#resumeState : this.#appState
-		const input = this.#primaryOutsideSearchRegion ? { ...frame, stars: [] } : frame
 
-		if (appState === 'Calibrating') return this.#processCalibrationFrame(input)
-		if (appState === 'Guiding' || appState === 'LostLock') return this.#processGuidingFrame(input)
-		if (appState === 'Looping' || appState === 'Selected') this.#emitLoopingExposuresEvent(input)
+		if (appState === 'Calibrating') return this.#processCalibrationFrame(frame)
+		if (appState === 'Guiding' || appState === 'LostLock') return this.#processGuidingFrame(frame)
+		if (appState === 'Looping' || appState === 'Selected') this.#emitLoopingExposuresEvent(frame)
 
 		return 0
 	}
@@ -1148,7 +1156,7 @@ export class GuiderClient {
 	#processCalibrationFrame(frame: GuideFrame) {
 		const step = this.#calibrator.processFrame(frame)
 		// Retained for #emitFrameImage, which runs after this frame has been fully processed.
-		this.#acceptedStars = undefined
+		this.#acceptedStars = starTrackingOf(frame.tracking)?.accepted
 
 		this.#updateLockPositionFromCalibration(step.diagnostics)
 		this.#emitCalibratingEvent(step.diagnostics)
@@ -1188,7 +1196,7 @@ export class GuiderClient {
 	#processGuidingFrame(frame: GuideFrame) {
 		const command = this.#guider.processFrame(frame)
 		// Retained for #emitFrameImage, which runs after this frame has been fully processed.
-		this.#acceptedStars = command.stars
+		this.#acceptedStars = starTrackingOf(command.tracking)?.accepted
 		const timestamp = frame.timestamp ?? Date.now()
 
 		this.#updateLockPositionFromGuider(command.diagnostics.targetX, command.diagnostics.targetY)
@@ -1631,7 +1639,6 @@ export class GuiderClient {
 		this.#frame = undefined
 		this.#image = undefined
 		this.#acceptedStars = undefined
-		this.#primaryOutsideSearchRegion = false
 		this.#frameId = 0
 		this.#lockPosition = undefined
 		this.#lockSearchPosition = undefined
@@ -1668,6 +1675,7 @@ export class GuiderClient {
 		this.#lockShiftParams.units = 'pixels/hr'
 		this.#lockShiftParams.axes = 'X/Y'
 		this.#calibrator.reset()
+		this.#tracker.reset()
 		if (clearCalibration) this.#calibration = undefined
 		this.#guider = this.#makeGuider(this.#calibration)
 	}
@@ -1742,14 +1750,14 @@ export class GuiderClient {
 
 	// Emits one passive frame event while exposures are looping.
 	#emitLoopingExposuresEvent(frame: GuideFrame) {
-		const star = frame.stars?.[0]
+		const telemetry = frame.tracking?.telemetry
 
 		this.emitEvent('LoopingExposures', {
 			Frame: frame.frameId ?? 0,
 			// Uses zero defaults when no star survives filtering in the current frame.
-			StarMass: star?.flux ?? 0,
-			SNR: star?.snr ?? 0,
-			HFD: star?.hfd ?? 0,
+			StarMass: telemetry?.mass ?? 0,
+			SNR: telemetry?.signalToNoise ?? 0,
+			HFD: telemetry?.hfdPx ?? 0,
 		})
 	}
 
@@ -1777,7 +1785,7 @@ export class GuiderClient {
 	// Emits one guide-step event using the latest guider command and diagnostics.
 	#emitGuideStepEvent(frame: GuideFrame, command: GuideCommand, avgDistance: number) {
 		const { diagnostics, ra, dec } = command
-		const star = frame.stars?.[0]
+		const telemetry = command.tracking?.telemetry ?? frame.tracking?.telemetry
 		const dx = diagnostics.dx ?? 0
 		const dy = diagnostics.dy ?? 0
 		const outputActive = !this.#paused && this.#guideOutputActive
@@ -1810,9 +1818,9 @@ export class GuiderClient {
 			DECDuration: decDuration,
 			DECDirection: toPHD2GuideDirection(dec.direction, 'North'),
 			// Uses zero defaults when the guide frame has no measurable star metadata.
-			StarMass: star?.flux ?? 0,
-			SNR: star?.snr ?? 0,
-			HFD: star?.hfd ?? 0,
+			StarMass: telemetry?.mass ?? 0,
+			SNR: telemetry?.signalToNoise ?? 0,
+			HFD: telemetry?.hfdPx ?? 0,
 			// PHD2 reports the smoothed guide distance here, not the raw current-frame distance.
 			AvgDist: avgDistance,
 			ErrorCode: 0,
@@ -1828,15 +1836,15 @@ export class GuiderClient {
 
 	// Emits a star-lost event for the current frame.
 	#emitStarLostEvent(frame: GuideFrame, command: GuideCommand) {
-		const star = frame.stars?.[0]
+		const telemetry = command.tracking?.telemetry ?? frame.tracking?.telemetry
 
 		this.emitEvent('StarLost', {
 			Frame: frame.frameId ?? 0,
 			// Seconds since guiding started, matching GuideStep.Time and PHD2's convention.
 			Time: this.#guidingElapsedTime(frame.timestamp ?? 0),
 			// Uses zero defaults when the lost-lock frame has no guide star measurement.
-			StarMass: star?.flux ?? 0,
-			SNR: star?.snr ?? 0,
+			StarMass: telemetry?.mass ?? 0,
+			SNR: telemetry?.signalToNoise ?? 0,
 			// PHD2 reports the smoothed distance from the last successfully measured frames; a lost
 			// frame has no usable error of its own, so the running average is left untouched.
 			AvgDist: this.#avgDistance,
@@ -1950,35 +1958,9 @@ function ditherImageOffset(calibration: GuidingCalibrationResult, dRa: number, d
 	return [calibration.ra.unitX * dRa + calibration.dec.unitX * dDec, calibration.ra.unitY * dRa + calibration.dec.unitY * dDec] as const
 }
 
-// Moves `star` to the first slot so Guider/GuidingCalibrator lock onto the requested target.
-function moveGuideStarToFront(stars: GuideStar[], star: GuideStar) {
-	const index = stars.indexOf(star)
-	if (index > 0) {
-		stars[index] = stars[0]
-		stars[0] = star
-	}
-}
-
-// Finds the nearest detection inside the square search box centered on `position`. Stars outside
-// the box are ignored even if they are radially closer than an inside-corner candidate.
-function nearestGuideStarInSearchRegion(stars: readonly GuideStar[], position: readonly [number, number], searchRegion: number): GuideStar | undefined {
-	let selected: GuideStar | undefined
-	let distanceSq = Number.POSITIVE_INFINITY
-
-	for (const star of stars) {
-		if (!starInsideSearchRegion(star, position, searchRegion)) continue
-
-		const dx = star.x - position[0]
-		const dy = star.y - position[1]
-		const candidateDistanceSq = dx * dx + dy * dy
-
-		if (candidateDistanceSq < distanceSq) {
-			distanceSq = candidateDistanceSq
-			selected = star
-		}
-	}
-
-	return selected
+// Narrows generic tracker output to the stellar result used by the legacy overlay and PHD2 fields.
+function starTrackingOf(result: GuideTrackerResult | undefined): StarTrackerResult | undefined {
+	return result !== undefined && 'detections' in result && Array.isArray(result.detections) ? (result as StarTrackerResult) : undefined
 }
 
 // Finds the nearest detected guide star to a requested image coordinate.

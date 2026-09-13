@@ -160,7 +160,7 @@ export class StarTracker implements GuideTracker {
 		const accepted = primaryInsideSearchRegion ? filtered.accepted : []
 
 		if (primaryInsideSearchRegion && accepted.length > 0 && (this.#measurementOrigin === undefined || !context.preserveIdentity)) {
-			const acquired = pickAcquisition(quality.accepted, context.initialPosition)
+			const acquired = searchPosition === undefined || searchRegion === undefined ? selection.primary : pickAcquisition(quality.accepted, context.initialPosition)
 			if (acquired !== undefined && context.allowAcquisition) {
 				this.#measurementOrigin = [acquired.x, acquired.y]
 				this.#referenceStars = accepted
