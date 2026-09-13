@@ -88,7 +88,7 @@ export interface GuidingCalibrationConfig {
 	readonly maxClearingOffsetPx: number
 	// Minimum RA/DEC axis separation angle to accept the solve, in radians.
 	readonly minAxisSeparation: Angle
-	// Minimum acceptable image-motion matrix determinant.
+	// Minimum acceptable normalized image-motion matrix determinant, dimensionless.
 	readonly minDeterminant: number
 	// Maximum nearest-star match distance during tracking, in pixels. Tracking actually uses
 	// max(maxMatchDistancePx, maxFrameJumpPx) so a jump that exceeds the jump threshold can still
@@ -208,6 +208,7 @@ export interface GuidingCalibrationResult {
 }
 
 // Applies a 180-degree image flip and an optional DEC output reversal to a solved calibration.
+// `minDeterminant` is the minimum normalized determinant, independent of pixel rate.
 export function flipGuidingCalibration(calibration: GuidingCalibrationResult, reverseDecOutput: boolean = false, minDeterminant: number = DEFAULT_GUIDING_CALIBRATOR_CONFIG.minDeterminant): GuidingCalibrationResult {
 	const raImageScale = -1
 	const decImageScale = reverseDecOutput ? 1 : -1
@@ -217,8 +218,10 @@ export function flipGuidingCalibration(calibration: GuidingCalibrationResult, re
 	const flippedM10 = m10 * raImageScale
 	const flippedM11 = m11 * decImageScale
 	const determinant = flippedM00 * flippedM11 - flippedM01 * flippedM10
+	const columnNormProduct = Math.hypot(flippedM00, flippedM10) * Math.hypot(flippedM01, flippedM11)
+	const normalizedDeterminant = Math.abs(determinant) / columnNormProduct
 
-	if (!Number.isFinite(determinant) || !(Math.abs(determinant) > minDeterminant)) {
+	if (!Number.isFinite(determinant) || !Number.isFinite(normalizedDeterminant) || normalizedDeterminant < minDeterminant) {
 		throw new Error(`invalid flipped calibration matrix: determinant=${determinant}`)
 	}
 
@@ -790,9 +793,16 @@ export class GuidingCalibrator {
 		const m01 = decSolution.unitX * decSolution.ratePxPerMs
 		const m11 = decSolution.unitY * decSolution.ratePxPerMs
 		const determinant = m00 * m11 - m01 * m10
+		// Normalize by the column norms so the conditioning threshold is independent of pixel rate.
+		const normalizedDeterminant = Math.abs(raSolution.unitX * decSolution.unitY - raSolution.unitY * decSolution.unitX)
 
-		if (!Number.isFinite(determinant) || Math.abs(determinant) <= this.config.minDeterminant) {
+		if (!Number.isFinite(determinant) || !Number.isFinite(normalizedDeterminant) || normalizedDeterminant < this.config.minDeterminant) {
 			return this.#fail('matrix_singular', 'calibration image-motion matrix is singular or ill-conditioned', frame, ['matrix_singular'], filtered)
+		}
+
+		const imageToAxis: CalibrationMatrix = [m11 / determinant, -m01 / determinant, -m10 / determinant, m00 / determinant]
+		if (!imageToAxis.every(Number.isFinite)) {
+			return this.#fail('matrix_singular', 'calibration image-motion matrix inverse is not finite', frame, ['matrix_singular'], filtered)
 		}
 
 		this.#transitionTo('validating')
@@ -806,7 +816,7 @@ export class GuidingCalibrator {
 			ra: { ...raSolution, direction: this.config.raDirection },
 			dec: { ...decSolution, direction: this.config.decDirection },
 			imageMotion: [m00, m01, m10, m11],
-			imageToAxis: [m11 / determinant, -m01 / determinant, -m10 / determinant, m00 / determinant],
+			imageToAxis,
 			determinant,
 			backlash: this.state.decBacklashMs,
 			startX: this.state.startX,
