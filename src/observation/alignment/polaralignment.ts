@@ -59,7 +59,7 @@ function referencePoleAltitude(location: GeographicPosition, refraction: Refract
 // and `altitudeAdjustment` are the last inferred knob deltas in radians, and stay 0 on the
 // initial estimate and when no base adjustment is detected.
 function observedPolarAlignment(pole: Vec3, time: Time, refraction: RefractionParameters | false, location: GeographicPosition, azimuthAdjustment: Angle = 0, altitudeAdjustment: Angle = 0): ThreePointPolarAlignmentResult {
-	const isNorthern = location.latitude > 0
+	const isNorthern = location.latitude >= 0
 	const { azimuth, altitude } = cirsToObserved(matMulVec(cirsRotationMatrix(time), pole), time, refraction, location)
 	const latitude = referencePoleAltitude(location, refraction)
 	const azimuthError = isNorthern ? normalizePI(azimuth) : normalizePI(azimuth + PI)
@@ -102,7 +102,7 @@ export function threePointPolarAlignmentError(p1: ThreePointPolarAlignmentInput,
 	vecDivScalarMut(pole, length)
 
 	// Compute pole ⋅ Z to ensure the mount pole is pointing "up" (above the horizon)
-	const isNorthern = location.latitude > 0
+	const isNorthern = location.latitude >= 0
 	if ((pole[2] < 0 && isNorthern) || (pole[2] > 0 && !isNorthern)) vecNegateMut(pole)
 
 	return observedPolarAlignment(pole, time, refraction, location)
@@ -137,7 +137,7 @@ export function threePointPolarAlignmentAfterAdjustment(
 	const transportedFrom = transportEarthFixed(eraS2c(from[0], from[1]), result.time, time) as MutVec3
 	// Tracking turns the boresight westwards in ITRS about a north-pointing RA axis. The reported pole points
 	// south in the southern hemisphere, which reverses the Rodrigues angle, not the motor rate.
-	const trackingAngle = (location.latitude > 0 ? -1 : 1) * trackingRate * elapsedSeconds
+	const trackingAngle = (location.latitude >= 0 ? -1 : 1) * trackingRate * elapsedSeconds
 	const fromVec = trackingAngle === 0 ? transportedFrom : vecRotateByRodrigues(transportedFrom, transportedPole, trackingAngle, transportedFrom)
 	const toVec = eraS2c(to[0], to[1])
 

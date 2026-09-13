@@ -8,7 +8,7 @@ import { vecAngle, vecRotateByRodrigues } from '../../../src/math/linear-algebra
 import { arcmin, deg, hour, normalizePI, parseAngle, toArcmin, toArcsec, toDeg } from '../../../src/math/units/angle'
 import { meter } from '../../../src/math/units/distance'
 import { mountAdjustmentAxes, polarAlignmentError, ThreePointPolarAlignment, threePointPolarAlignmentAfterAdjustment, threePointPolarAlignmentError } from '../../../src/observation/alignment/polaralignment'
-import { applyMountAdjustment } from '../../../src/observation/alignment/polaralignment.util'
+import { applyMountAdjustment, celestialPoleVector } from '../../../src/observation/alignment/polaralignment.util'
 
 test('matches Ralph Pass two-star polar alignment reference example', () => {
 	const latitude = deg(42 + 40 / 60)
@@ -126,6 +126,26 @@ describe('computed polar alignment error', () => {
 			}
 		}
 	})
+})
+
+test('uses the northern celestial pole at the equator', () => {
+	const time = timeYMDHMS(2000, 1, 1, 0, 0, 0)
+	const location = geodeticLocation(deg(-45), 0, meter(250))
+	time.location = location
+
+	const targetPole = celestialPoleVector(time, location, false)
+	const points = [0, 0.8, 1.6].map((angle) => {
+		const [rightAscension, declination] = eraC2s(...vecRotateByRodrigues([1, 0, 0], targetPole, angle))
+		return [rightAscension, declination, time] as const
+	})
+	const result = threePointPolarAlignmentError(points[0], points[1], points[2], false, location)
+
+	expect(result).not.toBeFalse()
+	if (!result) return
+
+	expect(toArcsec(vecAngle(result.pole, targetPole))).toBeLessThan(0.001)
+	expect(toArcsec(result.azimuthError)).toBeLessThan(0.001)
+	expect(toArcsec(result.altitudeError)).toBeLessThan(0.001)
 })
 
 // https://bitbucket.org/Isbeorn/nina.plugin.polaralignment/src/master/NINA.Plugins.PolarAlignment.Test/PolarErrorDeterminationTest.cs
