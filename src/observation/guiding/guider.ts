@@ -608,7 +608,9 @@ function mergeGuideStarSelectionConfig(options?: GuideStarSelectionOptions): Gui
 }
 
 // Samples image peaks when the caller only provides detector photometry.
-function enrichGuideStars(stars: readonly GuideStar[], image?: Image) {
+// Enriches detector results with local peak values once so every tracker consumer shares the same
+// photometry and no overlay, filter, or selector needs to resample the image.
+export function enrichGuideStars(stars: readonly GuideStar[], image?: Image) {
 	if (image === undefined) return stars
 
 	const enriched = new Array<GuideStar>(stars.length)
