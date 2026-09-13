@@ -522,6 +522,8 @@ export class StarTracker implements GuideTracker {
 	#lastResult?: StarTrackerResult
 	#referenceStars: readonly GuideStar[] = []
 	#measurementOrigin?: readonly [number, number]
+	#pendingReferenceStars?: readonly GuideStar[]
+	#pendingMeasurementOrigin?: readonly [number, number]
 	#lastMeasurement?: GuideMeasurement
 	#width = 0
 	#height = 0
@@ -541,6 +543,8 @@ export class StarTracker implements GuideTracker {
 		this.#lastResult = undefined
 		this.#referenceStars = []
 		this.#measurementOrigin = undefined
+		this.#pendingReferenceStars = undefined
+		this.#pendingMeasurementOrigin = undefined
 		this.#lastMeasurement = undefined
 		this.#width = 0
 		this.#height = 0
@@ -551,11 +555,23 @@ export class StarTracker implements GuideTracker {
 		return this.#lastResult
 	}
 
+	// Commits the latest associated frame after the guide controller accepts it.
+	commit() {
+		if (this.#pendingReferenceStars === undefined || this.#pendingMeasurementOrigin === undefined) return
+
+		this.#referenceStars = this.#pendingReferenceStars
+		this.#measurementOrigin = this.#pendingMeasurementOrigin
+		this.#pendingReferenceStars = undefined
+		this.#pendingMeasurementOrigin = undefined
+	}
+
 	// Detects and tracks exactly one image frame synchronously.
 	track(frame: GuideTrackerFrame, context: GuideTrackerContext): StarTrackerResult {
 		if (frame.width !== this.#width || frame.height !== this.#height) {
 			this.#referenceStars = []
 			this.#measurementOrigin = undefined
+			this.#pendingReferenceStars = undefined
+			this.#pendingMeasurementOrigin = undefined
 			this.#lastMeasurement = undefined
 			this.#width = frame.width
 			this.#height = frame.height
@@ -679,10 +695,11 @@ export class StarTracker implements GuideTracker {
 	}
 
 	// Advances the association reference to the latest accepted frame while keeping measurements in
-	// the original image coordinate frame. Failed frames leave the last good reference untouched.
+	// the original image coordinate frame. The guide consumer confirms this candidate through commit;
+	// rejected frames leave the last good reference untouched.
 	#rememberMeasurement(stars: readonly GuideStar[], measurement: GuideMeasurement) {
-		this.#referenceStars = stars
-		this.#measurementOrigin = [measurement.x, measurement.y]
+		this.#pendingReferenceStars = stars
+		this.#pendingMeasurementOrigin = [measurement.x, measurement.y]
 	}
 
 	// Stores a fresh result while keeping no per-frame result history.

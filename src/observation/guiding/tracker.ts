@@ -94,6 +94,9 @@ export interface GuideTracker {
 	readonly lastResult?: GuideTrackerResult
 	// Tracks one frame synchronously; it must not return a Promise or perform I/O.
 	readonly track: (frame: GuideTrackerFrame, context: GuideTrackerContext) => GuideTrackerResult
+	// Commits the latest candidate state after the consuming state machine accepts its frame.
+	// Trackers that do not stage state may omit this callback.
+	readonly commit?: () => void
 }
 
 // DTO consumed by the calibrator, controller, assistant, and overlay pipeline.

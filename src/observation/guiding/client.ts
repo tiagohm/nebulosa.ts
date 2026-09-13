@@ -1152,6 +1152,7 @@ export class GuiderClient {
 	// Advances the calibration state machine and stores the solved matrix when complete.
 	#processCalibrationFrame(frame: GuideFrame) {
 		const step = this.#calibrator.processFrame(frame)
+		if (step.failure === undefined && !step.diagnostics.notes.includes('bad_frame') && !step.diagnostics.notes.includes('jump_rejected') && !step.diagnostics.notes.includes('settling')) this.#tracker.commit?.()
 		// Retained for #emitFrameImage, which runs after this frame has been fully processed.
 		this.#acceptedStars = starTrackingOf(frame.tracking)?.accepted
 
@@ -1192,6 +1193,7 @@ export class GuiderClient {
 	// Runs the guide controller, applies settle tracking, and returns the max pulse delay.
 	#processGuidingFrame(frame: GuideFrame) {
 		const command = this.#guider.processFrame(frame)
+		if (!command.diagnostics.badFrame) this.#tracker.commit?.()
 		// Retained for #emitFrameImage, which runs after this frame has been fully processed.
 		this.#acceptedStars = starTrackingOf(command.tracking)?.accepted
 		const timestamp = frame.timestamp ?? Date.now()

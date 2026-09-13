@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { Image } from '../../../src/imaging/model/types'
+import { plotStar } from '../../../src/imaging/stars/generator'
 import { estimateTranslation, filterGuideStars, type GuideStar, selectGuideStar, type StarDetectionFrame, StarTracker } from '../../../src/observation/guiding/tracker.star'
 
 const WIDTH = 800
@@ -21,6 +22,23 @@ function shiftStars(stars: readonly GuideStar[], dx: number, dy: number, mutate?
 		const shifted: GuideStar = { ...star, x: star.x + dx, y: star.y + dy }
 		return mutate ? mutate(shifted, index) : shifted
 	})
+}
+
+// Builds a detector image with a flat normalized background and configurable stellar fluxes.
+function imageWithStars(stars: readonly (readonly [number, number, number])[]): Image {
+	const width = WIDTH
+	const height = HEIGHT
+	const background = 0.005
+	const raw = new Float32Array(width * height).fill(background)
+	const options = { background, saturationLevel: 1 }
+
+	for (const [x, y, flux] of stars) plotStar(raw, width, height, 1, x, y, flux, 3, 80, 0, undefined, options)
+
+	return {
+		header: {},
+		raw,
+		metadata: { width, height, channels: 1, pixelCount: width * height, pixelSizeInBytes: 4, stride: width, strideInBytes: width * 4, bitpix: -32, bayer: undefined },
+	}
 }
 
 test('star filtering rejects low quality detections', () => {
@@ -189,4 +207,54 @@ test('multi-star translation rejects outlier and keeps weighted estimate', () =>
 	expect(translation!.matches).toBe(4)
 	expect(translation!.dx).toBeCloseTo(1.5, 1)
 	expect(translation!.dy).toBeCloseTo(-0.8, 1)
+})
+
+test('keeps the last accepted stellar identity after an uncommitted frame', () => {
+	const tracker = new StarTracker()
+	const context = { phase: 'guiding' as const, searchPosition: [100, 100] as const, searchRegion: 64, allowAcquisition: true, preserveIdentity: true }
+	const initial = tracker.track(
+		{
+			image: imageWithStars([
+				[100, 100, 10],
+				[200, 200, 10],
+			]),
+			width: WIDTH,
+			height: HEIGHT,
+			timestamp: 0,
+			frameId: 1,
+		},
+		context,
+	)
+
+	expect(initial.measurement?.x).toBeCloseTo(100, 0)
+	const rejected = tracker.track(
+		{
+			image: imageWithStars([
+				[100, 100, 0.5],
+				[200, 200, 10],
+			]),
+			width: WIDTH,
+			height: HEIGHT,
+			timestamp: 1,
+			frameId: 2,
+		},
+		context,
+	)
+	expect(rejected.measurement?.x).toBeCloseTo(200, 0)
+
+	const recovered = tracker.track(
+		{
+			image: imageWithStars([
+				[100, 100, 10],
+				[200, 200, 10],
+			]),
+			width: WIDTH,
+			height: HEIGHT,
+			timestamp: 2,
+			frameId: 3,
+		},
+		context,
+	)
+	expect(recovered.measurement?.x).toBeCloseTo(100, 0)
+	expect(recovered.measurement?.y).toBeCloseTo(100, 0)
 })
