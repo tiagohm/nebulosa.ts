@@ -15,7 +15,7 @@ import { clamp } from '../../math/numerical/math'
 import { GuidingAssistant, type GuidingAssistantConfig, type GuidingAssistantResult } from './assistant'
 import { type CalibrationPulseCommand, flipGuidingCalibration, type GuidingCalibrationConfig, type GuidingCalibrationDiagnostics, type GuidingCalibrationResult, GuidingCalibrator } from './calibrator'
 import { DitherGenerator, type DitherMode } from './dither'
-import { type AxisPulse, type DeclinationGuideMode, DEFAULT_GUIDER_CONFIG, type GuideCommand, type GuideFrame, Guider, type GuideStar, starInsideSearchRegion } from './guider'
+import { type AxisPulse, type DeclinationGuideMode, DEFAULT_GUIDER_CONFIG, type GuideCommand, type GuideFrame, Guider, type GuideStar, selectGuideStar, starInsideSearchRegion } from './guider'
 import { type GuideTrackerResult, trackingOf } from './tracker'
 
 // Local autoguiding orchestrator exposing a PHD2-compatible API over INDI camera and guide-output
@@ -384,7 +384,7 @@ export class GuiderClient {
 	findStar() {
 		if (this.#frame === undefined) return undefined
 
-		const selected = this.#guider.selectGuideStar(this.#frame).primary
+		const selected = selectGuideStar(this.#frame.stars ?? [], this.#frame.width, this.#frame.height).primary
 		if (selected === undefined) return undefined
 
 		this.#abortGuidingAssistantForTransition('guide star changed')

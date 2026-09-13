@@ -145,8 +145,9 @@ export interface GuideTrackerStarLike {
 // used by the production client and intentionally exposes only generic measurement/telemetry.
 export function trackingResultFromStars(stars: readonly GuideTrackerStarLike[] = []): GuideTrackerResult {
 	const primary = stars[0]
+	const hasFiniteMeasurement = primary !== undefined && Number.isFinite(primary.x) && Number.isFinite(primary.y)
 	return {
-		measurement: primary === undefined ? undefined : { x: primary.x, y: primary.y, confidence: 1 },
+		measurement: hasFiniteMeasurement ? { x: primary.x, y: primary.y, confidence: 1 } : undefined,
 		candidateCount: stars.length,
 		acceptedCount: stars.length,
 		qualityScore: stars.length > 0 ? 1 : 0,

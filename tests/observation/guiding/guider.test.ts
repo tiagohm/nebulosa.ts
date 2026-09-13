@@ -182,6 +182,29 @@ test('setTargetOffset shifts the lock without marking dither active', () => {
 	expect(cmd.diagnostics.ditherActive).toBeFalse()
 })
 
+test('adds tracker target offset once to the generic lock target', () => {
+	const g = guider({ lockAveragingFrames: 1 })
+	const tracking = (x: number, y: number, targetOffset?: readonly [number, number]) => ({
+		measurement: { x, y, confidence: 1 },
+		candidateCount: 1,
+		acceptedCount: 1,
+		qualityScore: 1,
+		rejectedReasons: {},
+		notes: [],
+		targetOffset,
+		measurementMode: 'synthetic',
+	})
+
+	g.processFrame({ tracking: tracking(100, 100), width: WIDTH, height: HEIGHT })
+	g.setTargetOffset(2, -1)
+	const command = g.processFrame({ tracking: tracking(102.5, 98.75, [0.5, 0.25]), width: WIDTH, height: HEIGHT })
+
+	expect(command.diagnostics.targetX).toBe(102.5)
+	expect(command.diagnostics.targetY).toBe(99.25)
+	expect(command.diagnostics.dx).toBe(0)
+	expect(command.diagnostics.dy).toBe(-0.5)
+})
+
 test('dither offset shifts target and settles after stop', () => {
 	const guider = new Guider({ lockAveragingFrames: 1, minMoveRA: 0.01, minMoveDEC: 0.01, hysteresisRA: 0, hysteresisDEC: 0 })
 	guider.processFrame(guideFrame(BASE_STARS, 0))

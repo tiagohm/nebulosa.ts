@@ -8,12 +8,12 @@ import { type GuideFrame, type GuideTrackerResult, trackingOf } from './tracker'
 
 export type { GuideFrame, GuideMeasurement, GuideTrackerContext, GuideTrackerFrame, GuideTrackerResult, GuideTrackerTelemetry, GuideTrackingPhase } from './tracker'
 
-// Self-contained autoguiding controller. Given a stream of star-detection frames and a calibration
-// matrix mapping image pixels to mount RA/DEC axes, the Guider averages a lock reference, measures
-// per-frame translation (single- or multi-star with robust outlier rejection), rejects bad/dropped
-// frames, and emits RA/DEC pulse commands using deadband, hysteresis smoothing, cadence-aware gain,
-// and DEC backlash/reversal handling. Also provides standalone star filtering and guide-star selection.
-// Image coordinates are pixels; pulse durations are milliseconds; calibration is dimensionless.
+// Generic autoguiding controller. Given a stream of tracker results and a calibration matrix mapping
+// image pixels to mount RA/DEC axes, the Guider averages a lock reference, rejects bad/dropped
+// measurements, and emits RA/DEC pulse commands using deadband, hysteresis smoothing, cadence-aware
+// gain, and DEC backlash/reversal handling. Stellar helpers remain below as explicit compatibility
+// exports during migration. Image coordinates are pixels; pulse durations are milliseconds;
+// calibration is dimensionless.
 
 // RA correction direction.
 export type GuideDirectionRA = 'WEST' | 'EAST'
@@ -85,6 +85,8 @@ export interface GuideDiagnostics {
 	readonly qualityScore: number
 	// Measurement mode actually used, or undefined when no measurement was made.
 	readonly modeUsed?: GuidingMode
+	// Informational tracker mode, including non-stellar values.
+	readonly measurementMode?: string
 	// Measured guide-star X, in pixels.
 	readonly measurementX?: number
 	// Measured guide-star Y, in pixels.
@@ -242,11 +244,10 @@ export interface TranslationMeasurement {
 // High-level guider lifecycle state.
 export type GuiderState = 'idle' | 'initializing' | 'guiding' | 'lost'
 
-// One averaged lock-acquisition sample.
+// One averaged lock-acquisition measurement.
 interface LockSample {
 	readonly x: number
 	readonly y: number
-	readonly stars: readonly GuideStar[]
 }
 
 // Internal mutable runtime state of the guider.
@@ -255,9 +256,6 @@ interface GuiderInternalState {
 	lockSamples: LockSample[]
 	referenceX: number
 	referenceY: number
-	measurementOriginX: number
-	measurementOriginY: number
-	referenceStars: readonly GuideStar[]
 	ditherOffsetX: number
 	ditherOffsetY: number
 	ditherActive: boolean
@@ -281,7 +279,8 @@ export interface DiagnosticMeasurement {
 	dy: number
 	axisErrorRA: number
 	axisErrorDEC: number
-	modeUsed: GuidingMode
+	modeUsed?: GuidingMode
+	measurementMode?: string
 	targetX: number
 	targetY: number
 	notes: readonly string[]
@@ -839,9 +838,6 @@ const EMPTY_STATE: Readonly<GuiderInternalState> = {
 	lockSamples: [],
 	referenceX: 0,
 	referenceY: 0,
-	measurementOriginX: 0,
-	measurementOriginY: 0,
-	referenceStars: [],
 	ditherOffsetX: 0,
 	ditherOffsetY: 0,
 	ditherActive: false,
@@ -1004,32 +1000,22 @@ export class Guider {
 		if (this.state.state === 'idle') {
 			this.state.state = 'initializing'
 			this.state.lockSamples.length = 0
-			this.state.referenceStars = []
 		}
 
 		if (this.state.state === 'initializing') {
-			const stars = this.#processInitializationFrame(frame)
-			return { state: this.state.state, ra: NO_PULSE, dec: NO_PULSE, diagnostics: this.state.lastDiagnostics, tracking: trackingOf(frame), stars }
+			this.#processInitializationFrame(frame)
+			return { state: this.state.state, ra: NO_PULSE, dec: NO_PULSE, diagnostics: this.state.lastDiagnostics, tracking: trackingOf(frame) }
 		}
 
-		const quality = filterQualityGuideStars(frame, this.config.filter)
-		const filtered = filterGuideStars(frame, this.config.filter)
+		const tracking = trackingOf(frame)
 		const droppedFrame = this.#isDroppedFrame(frame)
-		const notes: string[] = []
+		const notes = [...tracking.notes]
 
 		if (droppedFrame) notes.push('dropped_frame')
 
-		let badFrame = quality.accepted.length === 0 || quality.qualityScore < this.config.minFrameQuality
-		let measurement: TranslationMeasurement | undefined
-
-		if (!badFrame) {
-			measurement = this.#measureTranslation(filtered.accepted)
-
-			if (measurement === undefined) {
-				badFrame = true
-				notes.push('measurement_failed')
-			}
-		}
+		const measurement = tracking.measurement
+		let badFrame = measurement === undefined || tracking.qualityScore < this.config.minFrameQuality
+		if (measurement === undefined && !notes.includes('measurement_lost')) notes.push('measurement_failed')
 
 		// A commanded dither walk can exceed maxFrameJumpPx in one pulse; that motion is expected,
 		// not a meteor or wrong-star swap.
@@ -1045,36 +1031,35 @@ export class Guider {
 				this.#clearRaControlState()
 				this.#clearDecControlState()
 			}
-			this.#updateDiagnostics(frame, quality, undefined, droppedFrame, true, notes)
-			return { state: this.state.state, ra: NO_PULSE, dec: NO_PULSE, diagnostics: this.state.lastDiagnostics, tracking: trackingOf(frame), stars: filtered.accepted }
+			this.#updateDiagnostics(frame, tracking, undefined, droppedFrame, true, notes)
+			return { state: this.state.state, ra: NO_PULSE, dec: NO_PULSE, diagnostics: this.state.lastDiagnostics, tracking }
 		}
+		if (measurement === undefined) throw new Error('missing guide measurement after quality check')
 
 		this.state.consecutiveBadFrames = 0
 		this.state.state = 'guiding'
-		this.state.lastGoodMeasurementX = measurement!.x
-		this.state.lastGoodMeasurementY = measurement!.y
-		this.state.measurementOriginX = measurement!.x
-		this.state.measurementOriginY = measurement!.y
-		this.state.referenceStars = filtered.accepted
-		const targetX = this.state.referenceX + this.state.ditherOffsetX
-		const targetY = this.state.referenceY + this.state.ditherOffsetY
-		const dx = measurement!.x - targetX
-		const dy = measurement!.y - targetY
+		this.state.lastGoodMeasurementX = measurement.x
+		this.state.lastGoodMeasurementY = measurement.y
+		const targetX = this.state.referenceX + this.state.ditherOffsetX + (tracking.targetOffset?.[0] ?? 0)
+		const targetY = this.state.referenceY + this.state.ditherOffsetY + (tracking.targetOffset?.[1] ?? 0)
+		const dx = measurement.x - targetX
+		const dy = measurement.y - targetY
 		const axisError = applyCalibration(this.config.calibration, dx, dy)
 		const cadenceScale = this.#cadenceScale(frame)
 		const ra = this.#computeRA(axisError.ra, cadenceScale)
 		const dec = this.#computeDEC(axisError.dec, cadenceScale)
 		this.#updateDiagnostics(
 			frame,
-			quality,
+			tracking,
 			{
-				measurementX: measurement!.x,
-				measurementY: measurement!.y,
+				measurementX: measurement.x,
+				measurementY: measurement.y,
 				dx,
 				dy,
 				axisErrorRA: axisError.ra,
 				axisErrorDEC: axisError.dec,
-				modeUsed: measurement!.usedMode,
+				modeUsed: guidingModeOf(tracking.measurementMode),
+				measurementMode: tracking.measurementMode,
 				targetX,
 				targetY,
 				notes,
@@ -1084,7 +1069,7 @@ export class Guider {
 			notes,
 		)
 
-		return { state: this.state.state, ra, dec, diagnostics: this.state.lastDiagnostics, tracking: trackingOf(frame), stars: filtered.accepted }
+		return { state: this.state.state, ra, dec, diagnostics: this.state.lastDiagnostics, tracking }
 	}
 
 	// Returns a public snapshot of current guider runtime state.
@@ -1109,131 +1094,75 @@ export class Guider {
 		return this.state.lastDiagnostics
 	}
 
-	// Selects the best guide star and spaced alternatives using this guider's filter defaults.
-	selectGuideStar(frame: GuideFrame, options?: GuideStarSelectionOptions): GuideStarSelection {
-		return selectGuideStar(frame.stars ?? [], frame.width, frame.height, undefined, { ...options, filter: { ...this.config.filter, ...options?.filter } })
-	}
-
-	// Consumes frame while the lock reference is being averaged. Returns the stars accepted by the
-	// quality filter on this frame so callers can surface them even before the lock is acquired.
-	#processInitializationFrame(frame: GuideFrame): readonly GuideStar[] {
-		const quality = filterQualityGuideStars(frame, this.config.filter)
-		const filtered = filterGuideStars(frame, this.config.filter)
-
-		if (quality.accepted.length === 0) {
-			this.#updateDiagnostics(frame, quality, undefined, false, true, ['init_waiting'])
-			return filtered.accepted
+	// Consumes tracker measurements while averaging the generic lock reference.
+	#processInitializationFrame(frame: GuideFrame) {
+		const tracking = trackingOf(frame)
+		const measurement = tracking.measurement
+		const notes = [...tracking.notes]
+		if (measurement === undefined || tracking.qualityScore < this.config.minFrameQuality) {
+			if (!notes.includes('init_waiting')) notes.push('init_waiting')
+			this.#updateDiagnostics(frame, tracking, undefined, false, true, notes)
+			return
 		}
 
 		const previous = this.state.lockSamples.at(-1)
-		const preferred = previous === undefined ? pickInitialLockStar(quality.accepted, this.config.initialPosition) : pickNearestGuideStar(quality.accepted, previous.x, previous.y)
-
-		if (preferred === undefined) {
-			this.#updateDiagnostics(frame, quality, undefined, false, true, ['init_no_star'])
-			return filtered.accepted
-		}
-
 		if (previous !== undefined) {
-			const maxLockSampleDistance = Math.min(this.config.maxMatchDistancePx, this.config.maxFrameJumpPx)
-			const dx = preferred.x - previous.x
-			const dy = preferred.y - previous.y
+			const dx = measurement.x - previous.x
+			const dy = measurement.y - previous.y
+			const maxLockSampleDistance = this.config.maxFrameJumpPx
 			if (dx * dx + dy * dy > maxLockSampleDistance * maxLockSampleDistance) {
-				this.#updateDiagnostics(frame, quality, undefined, false, true, ['init_waiting'])
-				return filtered.accepted
+				notes.push('init_waiting')
+				this.#updateDiagnostics(frame, tracking, undefined, false, true, notes)
+				return
 			}
 		}
 
-		this.state.lockSamples.push({ x: preferred.x, y: preferred.y, stars: filtered.accepted })
-
-		const [targetX, targetY] = this.config.referencePosition ?? [preferred.x, preferred.y]
-		const dx = preferred.x - targetX
-		const dy = preferred.y - targetY
+		this.state.lockSamples.push({ x: measurement.x, y: measurement.y })
+		const [targetX, targetY] = this.config.referencePosition ?? [measurement.x, measurement.y]
+		const dx = measurement.x - targetX
+		const dy = measurement.y - targetY
 
 		if (this.state.lockSamples.length < this.config.lockAveragingFrames) {
-			this.#updateDiagnostics(
-				frame,
-				quality,
-				{
-					measurementX: preferred.x,
-					measurementY: preferred.y,
-					dx,
-					dy,
-					axisErrorRA: 0,
-					axisErrorDEC: 0,
-					modeUsed: 'single-star',
-					targetX,
-					targetY,
-					notes: ['init_collecting'],
-				},
-				false,
-				true,
-				['init_collecting'],
-			)
-
-			return filtered.accepted
+			notes.push('init_collecting')
+			this.#updateDiagnostics(frame, tracking, { measurementX: measurement.x, measurementY: measurement.y, dx, dy, axisErrorRA: 0, axisErrorDEC: 0, modeUsed: guidingModeOf(tracking.measurementMode), measurementMode: tracking.measurementMode, targetX, targetY, notes }, false, true, notes)
+			return
 		}
 
 		let sumX = 0
 		let sumY = 0
-
 		for (const sample of this.state.lockSamples) {
 			sumX += sample.x
 			sumY += sample.y
 		}
 
-		const referenceX = sumX / this.state.lockSamples.length
-		const referenceY = sumY / this.state.lockSamples.length
-		this.state.referenceX = this.config.referencePosition?.[0] ?? referenceX
-		this.state.referenceY = this.config.referencePosition?.[1] ?? referenceY
-		this.state.measurementOriginX = preferred.x
-		this.state.measurementOriginY = preferred.y
-		this.state.referenceStars = this.state.lockSamples.at(-1)!.stars
+		this.state.referenceX = this.config.referencePosition?.[0] ?? sumX / this.state.lockSamples.length
+		this.state.referenceY = this.config.referencePosition?.[1] ?? sumY / this.state.lockSamples.length
 		this.state.state = 'guiding'
+		notes.push('lock_acquired')
 		this.#updateDiagnostics(
 			frame,
-			quality,
+			tracking,
 			{
-				measurementX: preferred.x,
-				measurementY: preferred.y,
-				dx: preferred.x - this.state.referenceX,
-				dy: preferred.y - this.state.referenceY,
+				measurementX: measurement.x,
+				measurementY: measurement.y,
+				dx: measurement.x - this.state.referenceX,
+				dy: measurement.y - this.state.referenceY,
 				axisErrorRA: 0,
 				axisErrorDEC: 0,
-				modeUsed: this.config.mode,
+				modeUsed: guidingModeOf(tracking.measurementMode),
+				measurementMode: tracking.measurementMode,
 				targetX: this.state.referenceX,
 				targetY: this.state.referenceY,
-				notes: ['lock_acquired'],
+				notes,
 			},
 			false,
 			false,
-			['lock_acquired'],
+			notes,
 		)
-
-		return filtered.accepted
-	}
-
-	// Measures current guide position using configured mode with fallback.
-	#measureTranslation(stars: readonly GuideStar[]): TranslationMeasurement | undefined {
-		if (this.config.mode === 'multi-star' && this.state.referenceStars.length > 1 && stars.length > 1) {
-			const translation = estimateTranslation(this.state.referenceStars, stars, this.config.maxMatchDistancePx, this.config.outlierSigma)
-
-			if (translation !== undefined) {
-				return {
-					x: this.state.measurementOriginX + translation.dx,
-					y: this.state.measurementOriginY + translation.dy,
-					usedMode: 'multi-star',
-					matches: translation.matches,
-				}
-			}
-		}
-
-		const single = pickNearestGuideStar(stars, this.state.measurementOriginX, this.state.measurementOriginY)
-		if (single === undefined) return undefined
-		return { x: single.x, y: single.y, usedMode: 'single-star', matches: 1 }
 	}
 
 	// Detects impossible centroid jumps to avoid runaway corrections.
-	#isImpossibleJump(measurement: TranslationMeasurement) {
+	#isImpossibleJump(measurement: { x: number; y: number }) {
 		if (this.state.lastGoodMeasurementX === undefined || this.state.lastGoodMeasurementY === undefined) return false
 		const dx = measurement.x - this.state.lastGoodMeasurementX
 		const dy = measurement.y - this.state.lastGoodMeasurementY
@@ -1317,15 +1246,18 @@ export class Guider {
 	}
 
 	// Updates diagnostics payload for telemetry and testing.
-	#updateDiagnostics(frame: GuideFrame, filtered: FilteredStars, measurement: DiagnosticMeasurement | undefined, droppedFrame: boolean, badFrame: boolean, notes: readonly string[]) {
+	#updateDiagnostics(frame: GuideFrame, tracking: GuideTrackerResult, measurement: DiagnosticMeasurement | undefined, droppedFrame: boolean, badFrame: boolean, notes: readonly string[]) {
 		this.state.lastDiagnostics = {
 			frameId: frame.frameId,
-			totalStars: qualityStarsOf(frame).length,
-			acceptedStars: filtered.accepted.length,
-			candidateCount: trackingOf(frame).candidateCount,
-			acceptedCount: trackingOf(frame).acceptedCount,
-			qualityScore: filtered.qualityScore,
+			// Generic controllers cannot infer a stellar count from candidate counts. The deprecated
+			// aliases stay zero here; the client maps StarTrackerResult arrays for PHD2 overlays/events.
+			totalStars: 0,
+			acceptedStars: 0,
+			candidateCount: tracking.candidateCount,
+			acceptedCount: tracking.acceptedCount,
+			qualityScore: tracking.qualityScore,
 			modeUsed: measurement?.modeUsed,
+			measurementMode: measurement?.measurementMode ?? tracking.measurementMode,
 			measurementX: measurement?.measurementX,
 			measurementY: measurement?.measurementY,
 			referenceX: this.state.referenceX,
@@ -1338,22 +1270,22 @@ export class Guider {
 			axisErrorDEC: measurement?.axisErrorDEC,
 			filteredRA: this.state.filteredRA,
 			filteredDEC: this.state.filteredDEC,
-			rejectedReasons: filtered.rejectedReasons,
+			rejectedReasons: tracking.rejectedReasons,
 			badFrame,
 			lostFrames: this.state.consecutiveBadFrames,
 			lost: this.state.state === 'lost',
 			ditherActive: this.state.ditherActive,
 			droppedFrame,
 			notes,
-			tracking: trackingOf(frame),
+			tracking,
 		}
 	}
 }
 
-// Picks the initial lock star from an explicit reference point when provided.
-function pickInitialLockStar(stars: readonly GuideStar[], referencePosition?: readonly [number, number]) {
-	if (referencePosition !== undefined) return pickNearestGuideStar(stars, referencePosition[0], referencePosition[1])
-	return pickInitialGuideStar(stars)
+// Maps the optional tracker mode to the legacy diagnostic union without making the controller depend
+// on any tracker implementation's private mode vocabulary.
+function guidingModeOf(mode: string | undefined): GuidingMode | undefined {
+	return mode === 'single-star' || mode === 'multi-star' ? mode : undefined
 }
 
 // Gets opposite RA guide direction.
