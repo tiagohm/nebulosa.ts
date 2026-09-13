@@ -526,7 +526,6 @@ export class StarTracker implements GuideTracker {
 	#measurementOrigin?: readonly [number, number]
 	#pendingReferenceStars?: readonly GuideStar[]
 	#pendingMeasurementOrigin?: readonly [number, number]
-	#lastMeasurement?: GuideMeasurement
 	#width = 0
 	#height = 0
 
@@ -547,7 +546,6 @@ export class StarTracker implements GuideTracker {
 		this.#measurementOrigin = undefined
 		this.#pendingReferenceStars = undefined
 		this.#pendingMeasurementOrigin = undefined
-		this.#lastMeasurement = undefined
 		this.#width = 0
 		this.#height = 0
 	}
@@ -574,7 +572,6 @@ export class StarTracker implements GuideTracker {
 			this.#measurementOrigin = undefined
 			this.#pendingReferenceStars = undefined
 			this.#pendingMeasurementOrigin = undefined
-			this.#lastMeasurement = undefined
 			this.#width = frame.width
 			this.#height = frame.height
 		}
@@ -627,10 +624,8 @@ export class StarTracker implements GuideTracker {
 		if (primaryInsideSearchRegion && accepted.length > 0 && (this.#measurementOrigin === undefined || !context.preserveIdentity)) {
 			const acquired = searchPosition === undefined || searchRegion === undefined ? selection.primary : pickAcquisition(quality.accepted, context.initialPosition)
 			if (acquired !== undefined && context.allowAcquisition) {
-				this.#measurementOrigin = [acquired.x, acquired.y]
-				this.#referenceStars = accepted
-				this.#lastMeasurement = { x: acquired.x, y: acquired.y, confidence: confidenceOf(quality.qualityScore) }
-				measurement = this.#lastMeasurement
+				measurement = { x: acquired.x, y: acquired.y, confidence: confidenceOf(quality.qualityScore) }
+				this.#rememberMeasurement(accepted, measurement)
 				measurementMode = 'singleStar'
 				matches = 1
 				notes.push('acquired')
@@ -639,7 +634,6 @@ export class StarTracker implements GuideTracker {
 			const translation = this.#measureTranslation(accepted, maxMatchDistancePx)
 			if (translation !== undefined) {
 				measurement = { x: translation.x, y: translation.y, confidence: confidenceOf(quality.qualityScore) }
-				this.#lastMeasurement = measurement
 				this.#rememberMeasurement(accepted, measurement)
 				measurementMode = translation.mode
 				matches = translation.matches
@@ -652,7 +646,6 @@ export class StarTracker implements GuideTracker {
 			const fallback = nearestWithin(accepted, this.#measurementOrigin, Number.POSITIVE_INFINITY)
 			if (fallback !== undefined) {
 				measurement = { x: fallback.x, y: fallback.y, confidence: confidenceOf(quality.qualityScore) }
-				this.#lastMeasurement = measurement
 				this.#rememberMeasurement(accepted, measurement)
 				measurementMode = 'singleStar'
 				matches = 1

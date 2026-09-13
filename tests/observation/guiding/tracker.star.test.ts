@@ -227,6 +227,7 @@ test('keeps the last accepted stellar identity after an uncommitted frame', () =
 	)
 
 	expect(initial.measurement?.x).toBeCloseTo(100, 0)
+	tracker.commit()
 	const rejected = tracker.track(
 		{
 			image: imageWithStars([
@@ -257,6 +258,42 @@ test('keeps the last accepted stellar identity after an uncommitted frame', () =
 	)
 	expect(recovered.measurement?.x).toBeCloseTo(100, 0)
 	expect(recovered.measurement?.y).toBeCloseTo(100, 0)
+})
+
+test('does not commit an initial acquisition before consumer acceptance', () => {
+	const tracker = new StarTracker()
+	const context = { phase: 'guiding' as const, searchPosition: [100, 100] as const, searchRegion: 64, initialPosition: [100, 100] as const, allowAcquisition: true, preserveIdentity: true }
+	const initial = tracker.track(
+		{
+			image: imageWithStars([
+				[100, 100, 10],
+				[120, 120, 0.5],
+				[200, 200, 10],
+			]),
+			width: WIDTH,
+			height: HEIGHT,
+			timestamp: 0,
+			frameId: 1,
+		},
+		context,
+	)
+
+	expect(initial.notes).toContain('acquired')
+	const next = tracker.track(
+		{
+			image: imageWithStars([
+				[100, 100, 10],
+				[200, 200, 10],
+			]),
+			width: WIDTH,
+			height: HEIGHT,
+			timestamp: 1,
+			frameId: 2,
+		},
+		context,
+	)
+
+	expect(next.notes).toContain('acquired')
 })
 
 test('exposes a quality-approved primary separately from the nearest raw detection', () => {
