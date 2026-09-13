@@ -60,6 +60,21 @@ test('applying an offset across the right ascension wrap stays in 0..TAU and inv
 	}
 })
 
+test('correcting across the right ascension wrap returns a normalized command', () => {
+	const featureConfiguration = { includeBias: true, includeHourAngleTerms: false, includeDeclinationTerms: false, includeAltitudeTerms: false, includeCrossTerms: false, includePierSideTerms: false, includePolynomialTerms: false } as const satisfies PointingFeatureConfiguration
+	const featureNames = buildEmpiricalPointingFeatureNames(featureConfiguration)
+	const samples = generateSyntheticPointingSamples({ count: 24, strategy: 'empirical', featureConfiguration, empiricalCoefficientsDx: coefficientsByName(featureNames, { bias: deg(0.5) }), empiricalCoefficientsDy: coefficientsByName(featureNames, { bias: 0 }), noiseStd: 0 })
+	const model = fitPointingModel(samples, { strategy: 'empirical', featureConfiguration, robust: { method: 'none' } })
+	const input = { rightAscension: 0.002, declination: deg(10) } as const
+	const corrected = correctPointingCoordinate(model, input)
+
+	expect(model.usable).toBeTrue()
+	expect(corrected.converged).toBeTrue()
+	expect(corrected.rightAscension).toBeGreaterThanOrEqual(0)
+	expect(corrected.rightAscension).toBeLessThan(TAU)
+	expect(landingError(model, corrected, input)).toBeLessThan(1e-9)
+})
+
 test('feature extraction computes HA altitude and pier side', () => {
 	const lst = localSiderealTime(TIME, LONGITUDE, true)
 	const ra = normalizeAngle(lst - hour(2))
