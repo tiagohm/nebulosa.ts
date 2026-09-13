@@ -38,6 +38,7 @@ interface CalibrationSimulation {
 	readonly decVector: readonly [number, number]
 	readonly decBacklashSteps?: number
 	readonly reverseRaScale?: number
+	readonly reverseRaVector?: readonly [number, number]
 	readonly reverseRaBacklashSteps?: number
 	readonly maxFrames?: number
 }
@@ -100,12 +101,13 @@ function runCalibration(config: Partial<GuidingCalibrationConfig>, simulation: C
 		if (pulse?.ra.duration !== undefined && pulse.ra.duration > 0) {
 			const sign = pulse.ra.direction === calibrator.config.raDirection ? 1 : -1
 			const scale = sign < 0 ? (simulation.reverseRaScale ?? 1) : 1
+			const vector = sign < 0 ? (simulation.reverseRaVector ?? simulation.raVector) : simulation.raVector
 
 			if (sign < 0 && reverseRaBacklashRemaining > 0) {
 				reverseRaBacklashRemaining--
 			} else {
-				offsetX += simulation.raVector[0] * sign * scale * (pulse.ra.duration / calibrator.config.raPulse)
-				offsetY += simulation.raVector[1] * sign * scale * (pulse.ra.duration / calibrator.config.raPulse)
+				offsetX += vector[0] * sign * scale * (pulse.ra.duration / calibrator.config.raPulse)
+				offsetY += vector[1] * sign * scale * (pulse.ra.duration / calibrator.config.raPulse)
 			}
 		}
 
@@ -274,6 +276,23 @@ test('accepts an RA clearing step that overshoots the origin', () => {
 	expect(simulation.step.failure).toBeUndefined()
 	expect(simulation.step.completed).toBeDefined()
 	expect(simulation.phases).toContain('decForwardPulse')
+})
+
+test('accepts an RA clearing step that passes the closest approach with perpendicular drift', () => {
+	const simulation = runCalibration(
+		{ maxClearingOffsetPx: 0.8, maxClearingSteps: 10, maxFrameJumpPx: 4 },
+		{
+			raVector: [0.8, 1.5],
+			decVector: [-0.15, 0.75],
+			reverseRaScale: 5,
+			reverseRaVector: [0.8, 0],
+		},
+	)
+
+	expect(simulation.step.failure).toBeUndefined()
+	expect(simulation.step.completed).toBeDefined()
+	expect(simulation.phases).toContain('decForwardPulse')
+	expect(simulation.step.diagnostics.clearingSteps).toBe(1)
 })
 
 test('warns when RA clearing stops near the residual offset', () => {

@@ -1086,11 +1086,15 @@ function hasDecOrigin(phase: GuidingCalibrationPhase, decSteps: number) {
 	return decSteps > 0 || phase === 'decForwardPulse' || phase === 'decBacklashClearing' || phase === 'decForwardMeasure' || phase === 'decForwardComplete' || phase === 'solving' || phase === 'validating' || phase === 'completed'
 }
 
-// Returns whether a reverse clearing step passed through the calibration origin. `previousNet` is the
-// origin offset before the step and `(netX, netY)` is the offset after, both in pixels. A step below
-// `minMovePx` is ignored so RA-reversal backlash cannot look like a crossing.
+// Returns whether a reverse clearing step passed the closest approach to the calibration origin.
+// `previousNet` is the origin offset before the step and `(netX, netY)` is the offset after, both in
+// pixels. A step below `minMovePx` is ignored so RA-reversal backlash cannot look like a crossing.
 function crossedCalibrationOrigin(previousNetX: number, previousNetY: number, netX: number, netY: number, stepDistance: number, minMovePx: number) {
-	return stepDistance >= minMovePx && previousNetX * netX + previousNetY * netY <= 0
+	if (stepDistance < minMovePx) return false
+
+	const deltaX = netX - previousNetX
+	const deltaY = netY - previousNetY
+	return dot2(previousNetX, previousNetY, deltaX, deltaY) < 0 && dot2(netX, netY, deltaX, deltaY) >= 0
 }
 
 // Computes a 2D dot product.
