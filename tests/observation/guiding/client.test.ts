@@ -3169,7 +3169,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 			for (let i = 0; i < 4; i++) await feedFrame(harness)
 			const atTwoSeconds = eventsOf(harness.events, 'GuideStep').at(-1)!.RADuration
 
-			// cadenceMs tracks the requested exposure, so a 2 s cadence must not apply the old
+			// cadence tracks the requested exposure, so a 2 s cadence must not apply the old
 			// lastCadence/1000 scale cap of 2x. The two pulses chase the same per-frame drift.
 			expect(atTwoSeconds).toBeGreaterThan(0)
 			expect(atTwoSeconds).toBeLessThan(atOneSecond * 1.6 + 1)

@@ -622,14 +622,14 @@ export class Guider {
 
 	// Detects dropped frames. When the frame reports the exposure that produced it, classify from
 	// that cadence rather than the wall-clock gap so an ST4 pulse wait is not a drop. Frames
-	// without `cadenceMs` still use timestamp deltas.
+	// without `cadence` still use timestamp deltas.
 	#isDroppedFrame(frame: GuideFrame) {
-		const { timestamp, cadenceMs } = frame
+		const { timestamp, cadence } = frame
 
-		if (cadenceMs !== undefined) {
+		if (cadence !== undefined) {
 			if (timestamp !== undefined) this.state.lastTimestamp = timestamp
-			if (cadenceMs > 0) this.state.lastCadence = cadenceMs
-			return cadenceMs > this.config.nominalCadence * this.config.droppedFrameFactor
+			if (cadence > 0) this.state.lastCadence = cadence
+			return cadence > this.config.nominalCadence * this.config.droppedFrameFactor
 		}
 
 		if (timestamp === undefined) return false
@@ -650,7 +650,7 @@ export class Guider {
 
 	// Computes frame cadence scale to keep pulse gain stable across variable cadence.
 	#cadenceScale(frame: GuideFrame) {
-		const cadence = frame.cadenceMs ?? (frame.timestamp === undefined ? this.config.nominalCadence : this.state.lastCadence)
+		const cadence = frame.cadence ?? (frame.timestamp === undefined ? this.config.nominalCadence : this.state.lastCadence)
 		if (cadence <= 0 || this.config.nominalCadence <= 0) return 1
 		return clamp(cadence / this.config.nominalCadence, 0.5, 2)
 	}

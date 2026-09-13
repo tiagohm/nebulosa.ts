@@ -20,7 +20,7 @@ export interface GuideTrackerFrame {
 	// Monotonic logical frame identifier.
 	readonly frameId: number
 	// Exposure cadence that produced the image, in milliseconds.
-	readonly cadenceMs?: number
+	readonly cadence?: number
 }
 
 // Context supplied by the guide-client for one tracking operation.
@@ -113,7 +113,7 @@ export interface GuideFrame {
 	// Monotonic logical frame identifier.
 	readonly frameId?: number
 	// Exposure cadence that produced this frame, in milliseconds.
-	readonly cadenceMs?: number
+	readonly cadence?: number
 }
 
 // Minimal structural star shape accepted by the temporary fixture adapter.

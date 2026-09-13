@@ -234,7 +234,7 @@ export class GuiderClient {
 	// Duration of the currently outstanding camera capture, in milliseconds. `setExposure` may
 	// change `#exposure` while a BLOB is still in flight; the arriving frame must keep the cadence
 	// that actually produced its pixels so gain scaling and dropped-frame checks stay consistent.
-	#inFlightExposureMs = DEFAULT_GUIDER_EXPOSURE
+	#inFlightExposure = DEFAULT_GUIDER_EXPOSURE
 	// Constructed after #exposure: #makeGuider reads the cadence so the uncalibrated guider matches
 	// the default loop instead of Guider's own 1000 ms default (which happens to be the same today).
 	#guider: Guider
@@ -1091,7 +1091,7 @@ export class GuiderClient {
 		const phase = this.#guidingAssistant !== undefined ? 'assistant' : appState === 'Calibrating' ? 'calibrating' : appState === 'Guiding' ? 'guiding' : appState === 'LostLock' ? 'lostLock' : appState === 'Selected' ? 'selected' : 'looping'
 		const width = image?.metadata.width ?? this.#camera?.frame.width.value ?? 0
 		const height = image?.metadata.height ?? this.#camera?.frame.height.value ?? 0
-		const trackerFrame = { image, width, height, timestamp: Date.now(), frameId: ++this.#frameId, cadenceMs: this.#inFlightExposureMs } as const
+		const trackerFrame = { image, width, height, timestamp: Date.now(), frameId: ++this.#frameId, cadence: this.#inFlightExposure } as const
 		const tracking = this.#tracker.track(trackerFrame, {
 			phase,
 			maxMeasurementJumpPx: this.#calibrator.config.maxFrameJumpPx,
@@ -1108,7 +1108,7 @@ export class GuiderClient {
 			height,
 			timestamp: trackerFrame.timestamp,
 			frameId: trackerFrame.frameId,
-			cadenceMs: this.#inFlightExposureMs,
+			cadence: this.#inFlightExposure,
 		}
 	}
 
@@ -1566,15 +1566,15 @@ export class GuiderClient {
 	// arms only while capture is active.
 	#beginExposure() {
 		if (!this.#connected || this.#camera === undefined || this.#camera.connected !== true) return
-		const previousExposureMs = this.#inFlightExposureMs
+		const previousExposureMs = this.#inFlightExposure
 		this.#exposureAttempt++
-		this.#inFlightExposureMs = this.#exposure
+		this.#inFlightExposure = this.#exposure
 		this.#awaitingBlob = true
 
 		try {
 			this.cameraManager.startExposure(this.#camera, this.#exposure / 1000)
 		} catch (error) {
-			this.#inFlightExposureMs = previousExposureMs
+			this.#inFlightExposure = previousExposureMs
 			this.#awaitingBlob = false
 			this.#clearExposureWatchdog()
 			throw error
