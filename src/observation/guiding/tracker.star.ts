@@ -637,7 +637,7 @@ export class StarTracker implements GuideTracker {
 		const maxMatchDistancePx = context.phase === 'calibrating' ? Math.max(this.config.maxMatchDistancePx, context.maxMeasurementJumpPx ?? DEFAULT_CALIBRATION_MATCH_DISTANCE_PX) : this.config.maxMatchDistancePx
 
 		if (hasAcceptableSearchCandidate && primaryInsideSearchRegion && accepted.length > 0 && (this.#measurementOrigin === undefined || !context.preserveIdentity)) {
-			const acquired = searchPosition === undefined || searchRegion === undefined ? selection.primary : pickAcquisition(quality.accepted, context.initialPosition)
+			const acquired = context.initialPosition === undefined ? selection.primary : pickAcquisition(quality.accepted, context.initialPosition)
 			if (acquired !== undefined && context.allowAcquisition) {
 				measurement = { x: acquired.x, y: acquired.y, confidence: confidenceOf(quality.qualityScore) }
 				this.#rememberMeasurement(accepted, measurement)

@@ -339,6 +339,26 @@ test('keeps the raw primary for telemetry when no search region is active', () =
 	expect(result.rejectedReasons.saturated_peak).toBe(1)
 })
 
+test('uses initialPosition to seed unbounded acquisition', () => {
+	const tracker = new StarTracker()
+	const result = tracker.track(
+		{
+			image: imageWithStars([
+				[180, 180, 20],
+				[500, 400, 10],
+			]),
+			width: WIDTH,
+			height: HEIGHT,
+			timestamp: 0,
+			frameId: 1,
+		},
+		{ phase: 'looping', initialPosition: [500, 400], allowAcquisition: true, preserveIdentity: false },
+	)
+
+	expect(result.measurement?.x).toBeCloseTo(500, 0)
+	expect(result.measurement?.y).toBeCloseTo(400, 0)
+})
+
 test('does not measure a field star when the search box has no acceptable candidate', () => {
 	const tracker = new StarTracker()
 	const context = { phase: 'guiding' as const, searchPosition: [100, 100] as const, searchRegion: 64, allowAcquisition: true, preserveIdentity: true }
