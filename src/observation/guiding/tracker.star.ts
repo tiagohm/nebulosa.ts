@@ -628,7 +628,9 @@ export class StarTracker implements GuideTracker {
 		}
 
 		if (measurement === undefined && primaryInsideSearchRegion && accepted.length > 0 && context.allowAcquisition && this.#measurementOrigin !== undefined) {
-			const fallback = nearestWithin(accepted, this.#measurementOrigin, maxMatchDistancePx)
+			// Preserve the controller's legacy single-star fallback: the generic jump guard, rather
+			// than identity association, decides whether a larger measured displacement is safe.
+			const fallback = nearestWithin(accepted, this.#measurementOrigin, Number.POSITIVE_INFINITY)
 			if (fallback !== undefined) {
 				measurement = { x: fallback.x, y: fallback.y, confidence: confidenceOf(quality.qualityScore) }
 				this.#lastMeasurement = measurement
@@ -672,7 +674,7 @@ export class StarTracker implements GuideTracker {
 			if (translation !== undefined) return { x: this.#measurementOrigin[0] + translation.dx, y: this.#measurementOrigin[1] + translation.dy, mode: 'multiStar' as const, matches: translation.matches }
 		}
 
-		const nearest = nearestWithin(stars, this.#measurementOrigin, maxMatchDistancePx)
+		const nearest = nearestWithin(stars, this.#measurementOrigin, Number.POSITIVE_INFINITY)
 		return nearest === undefined ? undefined : { x: nearest.x, y: nearest.y, mode: 'singleStar' as const, matches: 1 }
 	}
 
