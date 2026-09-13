@@ -18,6 +18,20 @@ test('generic tracking result preserves measurements, quality, notes, and offset
 	expect(result.notes).toEqual(['reacquired'])
 })
 
+test('generic tracking result accepts non-stellar measurement modes', () => {
+	const result: GuideTrackerResult = {
+		measurement: { x: 12.5, y: 8.25, confidence: 0.75 },
+		candidateCount: 1,
+		acceptedCount: 1,
+		qualityScore: 1,
+		rejectedReasons: {},
+		notes: [],
+		measurementMode: 'correlation',
+	}
+
+	expect(result.measurementMode).toBe('correlation')
+})
+
 test('failed decode is represented without carrying pixels from another frame', () => {
 	const tracker: GuideTracker = {
 		reset: () => {},

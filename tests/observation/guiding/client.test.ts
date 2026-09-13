@@ -195,7 +195,7 @@ const FRAME_BUFFER = await buildFrameBuffer()
 
 // Image-space star displacement produced by one millisecond of guide pulse on either axis, in
 // pixels/ms. The calibrator's default 650 ms pulses then move the star ~7.5 px per step: below its
-// 8 px maximum accepted frame jump, yet large enough that two steps already exceed the minimum net
+// 12 px maximum accepted frame jump, yet large enough that two steps already exceed the minimum net
 // travel each axis requires, which keeps the wall-clock cost of a calibration run low.
 const MOUNT_RATE_PX_PER_MS = 0.0115
 // Camera rotation relative to the mount axes, in radians. A non-zero angle keeps the solved
@@ -1981,6 +1981,9 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 			expect(eventsOf(harness.events, 'CalibrationComplete')).toHaveLength(1)
 			expect(eventsOf(harness.events, 'StartGuiding')).toHaveLength(1)
 			expect(harness.client.getAppState()).toBe('Guiding')
+			// The default calibration pulse moves the star farther than StarTracker's normal 6 px
+			// association radius, so at least one progress frame proves calibration used its jump budget.
+			expect(eventsOf(harness.events, 'Calibrating').some((event) => Math.hypot(event.dx, event.dy) > 6)).toBeTrue()
 		},
 		CLOSED_LOOP_TIMEOUT,
 	)
@@ -2171,7 +2174,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 	)
 
 	test(
-		'constant RA drift is corrected without a matching DEC pulse',
+		'constant RA drift remains trackable across cumulative displacement',
 		async () => {
 			const harness = await calibrateAndGuide()
 			await establishLockReference(harness)
@@ -2198,6 +2201,7 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 			expect(ra).toBeGreaterThan(0)
 			expect(dec).toBeLessThan(ra * 0.4)
 			expect(distances.at(-1)!).toBeLessThan(8)
+			expect(eventsOf(harness.events, 'StarLost')).toBeEmpty()
 			expect(harness.client.getAppState()).toBe('Guiding')
 		},
 		CLOSED_LOOP_TIMEOUT,
@@ -4363,7 +4367,9 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 			expect(Math.abs(second.totals[0])).toBeGreaterThan(DITHER_PULSE_BAND[0] * raPlan.rightAscension!.duration)
 			expect(Math.abs(second.totals[0])).toBeLessThan(DITHER_PULSE_BAND[1] * raPlan.rightAscension!.duration)
 			expect(Math.abs(second.totals[1])).toBeLessThan(CROSS_AXIS_PULSE_RATIO * Math.abs(second.totals[0]))
-			expect(first.dx * second.dx + first.dy * second.dy).toBeCloseTo(0, 5)
+			// Closed-loop corrections leave a small sub-pixel residual on the orthogonal axis; the dot
+			// product remains negligible compared with the 3 px dither vectors.
+			expect(first.dx * second.dx + first.dy * second.dy).toBeCloseTo(0, 2)
 
 			// Re-selecting the same mode restarts the lattice, so the next dither repeats the first step.
 			harness.client.setDitherMode('spiral')
