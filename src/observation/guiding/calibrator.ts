@@ -4,6 +4,7 @@ import { clamp } from '../../math/numerical/math'
 import type { Angle } from '../../math/units/angle'
 import { type AxisPulse, type CalibrationMatrix, type GuideDirectionDEC, type GuideDirectionRA, NO_PULSE, oppositeDEC, oppositeRA } from './guider'
 import { type GuideFrame, type GuideTrackerResult, trackingOf } from './tracker'
+import { starTrackingOf } from './tracker.star'
 
 // Frame-by-frame autoguider calibration. The GuidingCalibrator state machine issues RA and DEC pulses,
 // tracks the resulting target displacement across frames, and solves the image-motion and inverse
@@ -908,13 +909,12 @@ export class GuidingCalibrator {
 		const raNet = this.state.raSamples.length > 0 ? this.state.raSamples.at(-1)!.netDistance : 0
 		const decNet = computeDecTravel(this.state.decSamples)
 		const clearingDistance = Math.hypot(this.state.currentX - this.state.startX, this.state.currentY - this.state.startY)
+		const stellar = starTrackingOf(filtered)
 		this.state.lastDiagnostics = {
 			phase: this.state.phase,
 			frameId: frame.frameId,
-			// The calibrator is tracker-agnostic; stellar aliases remain zero and are populated by the
-			// client from StarTrackerResult for legacy PHD2 consumers.
-			totalStars: 0,
-			acceptedStars: 0,
+			totalStars: stellar?.detections.length ?? 0,
+			acceptedStars: stellar?.accepted.length ?? 0,
 			candidateCount: filtered.candidateCount,
 			acceptedCount: filtered.acceptedCount,
 			qualityScore: filtered.qualityScore,

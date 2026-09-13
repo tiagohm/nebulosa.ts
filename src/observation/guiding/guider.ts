@@ -2,6 +2,7 @@ import type { Writable } from '../../core/types'
 import { Matrix } from '../../math/linear-algebra/matrix'
 import { clamp } from '../../math/numerical/math'
 import { type GuideFrame, type GuideTrackerResult, trackingOf } from './tracker'
+import { starTrackingOf } from './tracker.star'
 
 // Generic autoguiding controller. Given a stream of tracker results and a calibration matrix mapping
 // image pixels to mount RA/DEC axes, the Guider averages a lock reference, rejects bad/dropped
@@ -697,12 +698,11 @@ export class Guider {
 
 	// Updates diagnostics payload for telemetry and testing.
 	#updateDiagnostics(frame: GuideFrame, tracking: GuideTrackerResult, measurement: DiagnosticMeasurement | undefined, droppedFrame: boolean, badFrame: boolean, notes: readonly string[]) {
+		const stellar = starTrackingOf(tracking)
 		this.state.lastDiagnostics = {
 			frameId: frame.frameId,
-			// Generic controllers cannot infer a stellar count from candidate counts. The deprecated
-			// aliases stay zero here; the client maps StarTrackerResult arrays for PHD2 overlays/events.
-			totalStars: 0,
-			acceptedStars: 0,
+			totalStars: stellar?.detections.length ?? 0,
+			acceptedStars: stellar?.accepted.length ?? 0,
 			candidateCount: tracking.candidateCount,
 			acceptedCount: tracking.acceptedCount,
 			qualityScore: tracking.qualityScore,

@@ -1,7 +1,10 @@
 import { describe, expect, test } from 'bun:test'
+import type { Image } from '../../../src/imaging/model/types'
+import { plotStar } from '../../../src/imaging/stars/generator'
+import { GuidingCalibrator } from '../../../src/observation/guiding/calibrator'
 import { applyCalibration, applyDeadband, type GuiderConfig, Guider, invertCalibration, validateCalibration } from '../../../src/observation/guiding/guider'
 import { trackingResultFromStars, type GuideFrame, type GuideTrackerResult } from '../../../src/observation/guiding/tracker'
-import type { GuideStar } from '../../../src/observation/guiding/tracker.star'
+import { StarTracker, type GuideStar } from '../../../src/observation/guiding/tracker.star'
 
 const WIDTH = 800
 const HEIGHT = 600
@@ -36,12 +39,54 @@ function shiftStars(stars: readonly GuideStar[], dx: number, dy: number, mutate?
 	})
 }
 
+// Builds a detector image containing bright synthetic stars for tracker integration tests.
+function imageWithStars(stars: readonly (readonly [number, number, number])[]): Image {
+	const background = 0.005
+	const raw = new Float32Array(WIDTH * HEIGHT).fill(background)
+	const options = { background, saturationLevel: 1 }
+
+	for (const [x, y, flux] of stars) plotStar(raw, WIDTH, HEIGHT, 1, x, y, flux, 3, 80, 0, undefined, options)
+
+	return {
+		header: {},
+		raw,
+		metadata: { width: WIDTH, height: HEIGHT, channels: 1, pixelCount: WIDTH * HEIGHT, pixelSizeInBytes: 4, stride: WIDTH, strideInBytes: WIDTH * 4, bitpix: -32, bayer: undefined },
+	}
+}
+
 // Creates a guider tuned for deterministic pulse assertions.
 function guider(config: Partial<GuiderConfig> = {}) {
 	return new Guider({ lockAveragingFrames: 1, hysteresisRA: 0, hysteresisDEC: 0, minMoveRA: 0.01, minMoveDEC: 0.01, aggressivenessRA: 1, aggressivenessDEC: 1, msPerRAUnit: 100, msPerDECUnit: 100, minPulseMsRA: 5, minPulseMsDEC: 7, maxPulseMsRA: 1000, maxPulseMsDEC: 1200, ...config })
 }
 
 const BASE_STARS = starList(5)
+
+test('reports stellar counts in guider and calibrator compatibility diagnostics', () => {
+	const tracker = new StarTracker()
+	const tracking = tracker.track(
+		{
+			image: imageWithStars([
+				[180, 180, 10],
+				[500, 400, 10],
+			]),
+			width: WIDTH,
+			height: HEIGHT,
+			timestamp: 0,
+			frameId: 1,
+		},
+		{ phase: 'guiding', allowAcquisition: true, preserveIdentity: false },
+	)
+	const frame = { tracking, width: WIDTH, height: HEIGHT, timestamp: 0, frameId: 1 } satisfies GuideFrame
+
+	const command = new Guider({ lockAveragingFrames: 1 }).processFrame(frame)
+	const step = new GuidingCalibrator().processFrame(frame)
+
+	expect(tracking.detections).toHaveLength(2)
+	expect(command.diagnostics.totalStars).toBe(2)
+	expect(command.diagnostics.acceptedStars).toBe(2)
+	expect(step.diagnostics.totalStars).toBe(2)
+	expect(step.diagnostics.acceptedStars).toBe(2)
+})
 
 test('search-box quality ignores out-of-box field stars', () => {
 	const lock = star(0, { x: 120, y: 140, snr: 20, flux: 2400 })

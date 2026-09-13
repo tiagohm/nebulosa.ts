@@ -526,6 +526,12 @@ export interface StarTrackerResult extends GuideTrackerResult {
 	readonly matches: number
 }
 
+// Returns the built-in stellar result when a generic result carries stellar frame arrays.
+export function starTrackingOf(result: GuideTrackerResult | undefined): StarTrackerResult | undefined {
+	if (result === undefined || !('detections' in result) || !Array.isArray(result.detections) || !('accepted' in result) || !Array.isArray(result.accepted)) return undefined
+	return result as StarTrackerResult
+}
+
 // Stateful stellar tracker that replaces repeated client-side detection and matching.
 export class StarTracker implements GuideTracker {
 	readonly config: StarTrackerConfig

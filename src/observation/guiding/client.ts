@@ -16,7 +16,7 @@ import { type CalibrationPulseCommand, flipGuidingCalibration, type GuidingCalib
 import { DitherGenerator, type DitherMode } from './dither'
 import { type AxisPulse, type DeclinationGuideMode, DEFAULT_GUIDER_CONFIG, type GuideCommand, Guider } from './guider'
 import type { GuideFrame, GuideTracker, GuideTrackerResult } from './tracker'
-import { StarTracker, type GuideStar, type StarTrackerConfigOverrides, type StarTrackerResult } from './tracker.star'
+import { StarTracker, starTrackingOf, type GuideStar, type StarTrackerConfigOverrides } from './tracker.star'
 
 // Local autoguiding orchestrator exposing a PHD2-compatible API over INDI camera and guide-output
 // devices. It decodes each camera BLOB, delegates one frame to the configured tracker, drives the
@@ -1956,11 +1956,6 @@ function calibrationResultToPHD2Data(calibration: GuidingCalibrationResult): PHD
 // Rotates a mount-axis RA/DEC dither offset (pixels) into image X/Y with the calibrated axis unit vectors.
 function ditherImageOffset(calibration: GuidingCalibrationResult, dRa: number, dDec: number) {
 	return [calibration.ra.unitX * dRa + calibration.dec.unitX * dDec, calibration.ra.unitY * dRa + calibration.dec.unitY * dDec] as const
-}
-
-// Narrows generic tracker output to the stellar result used by the legacy overlay and PHD2 fields.
-function starTrackingOf(result: GuideTrackerResult | undefined): StarTrackerResult | undefined {
-	return result !== undefined && 'detections' in result && Array.isArray(result.detections) ? (result as StarTrackerResult) : undefined
 }
 
 // Finds the nearest detected guide star to a requested image coordinate.
