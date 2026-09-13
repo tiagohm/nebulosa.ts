@@ -3963,6 +3963,24 @@ describe.skipIf(isTimeConsumingTestSkipped())('closed-loop calibration and guidi
 	)
 
 	test(
+		'a zero-duration settle completes on the first in-tolerance frame',
+		async () => {
+			const harness = await calibrateAndGuide()
+			await establishLockReference(harness)
+
+			expect(harness.client.guide(false, { pixels: 5, time: 0, timeout: 8 })).toBeTrue()
+			expect(harness.client.getSettling()).toBeTrue()
+
+			await feedFrame(harness)
+
+			const done = eventsOf(harness.events, 'SettleDone').at(-1)!
+			expect(done.Status).toBe(0)
+			expect(harness.client.getSettling()).toBeFalse()
+		},
+		CLOSED_LOOP_TIMEOUT,
+	)
+
+	test(
 		'a bad frame during settle resets the stability clock',
 		async () => {
 			const harness = await calibrateAndGuide()

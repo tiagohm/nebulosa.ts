@@ -1341,6 +1341,10 @@ export class GuiderClient {
 		if (this.#settleStableSince === 0) {
 			this.#settleStableSince = timestamp
 			this.#emitSettlingEvent(distance, timestamp, true)
+			if (this.#settle.time <= 0) {
+				this.#settling = false
+				this.#emitSettleDoneEvent(0)
+			}
 			return
 		}
 
