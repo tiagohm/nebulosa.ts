@@ -71,8 +71,8 @@ test('computes guide-assistant motion metrics and arc-second conversions', () =>
 	expect(result.sampleCount).toBe(4)
 	expect(result.motion.ra.peakPx).toBeCloseTo(1.1, 8)
 	expect(result.motion.ra.peakArcsec).toBeCloseTo(2.2, 8)
-	expect(result.motion.raPeakPeakPx).toBeCloseTo(1.7, 8)
-	expect(result.motion.raPeakPeakArcsec).toBeCloseTo(3.4, 8)
+	expect(result.motion.raPeakPeakPx).toBeCloseTo(0.16763848396501466, 8)
+	expect(result.motion.raPeakPeakArcsec).toBeCloseTo(0.3352769679300293, 8)
 	expect(result.motion.totalRmsPx).toBeGreaterThan(0)
 	expect(result.motion.totalRmsArcsec).toBeCloseTo(result.motion.totalRmsPx * 2, 8)
 	expect(result.meanSnr).toBeCloseTo(20, 8)
@@ -182,13 +182,15 @@ test('uses the high-precision exposure ceiling when RA drift is absent', () => {
 	expect(result.recommendedMaxExposure).toBe(8)
 })
 
+test('filters high-frequency RA seeing before low-frequency metrics', () => {
+	const result = run(Array.from({ length: 120 }, (_, i) => [i * 1000, i % 2 === 0 ? 0.4 : -0.4, 0] as [number, number, number]))
+
+	expect(result.motion.raMaxDriftRatePxPerSecond).toBeLessThan(0.2)
+	expect(result.motion.raPeakPeakPx).toBeLessThan(0.7)
+})
+
 test('bases drift-limited exposure on RA min-move instead of residual RMS', () => {
-	const result = run([
-		[0, 0, 0],
-		[1000, 0.01, 0],
-		[2000, 0.02, 0],
-		[3000, 0.03, 0],
-	])
+	const result = run(Array.from({ length: 120 }, (_, i) => [i * 1000, i * 0.01, 0] as [number, number, number]))
 
 	expect(result.motion.ra.rmsPx).toBeCloseTo(0, 8)
 	expect(result.motion.raMaxDriftRatePxPerSecond).toBeCloseTo(0.01, 8)
@@ -198,29 +200,21 @@ test('bases drift-limited exposure on RA min-move instead of residual RMS', () =
 })
 
 test('caps exposure recommendations at the RA drift limit', () => {
-	const result = run([
-		[0, 0, 0],
-		[1000, 0.05, 0],
-		[2000, 0.1, 0],
-	])
+	const result = run(Array.from({ length: 120 }, (_, i) => [i * 1000, i * 0.05, 0] as [number, number, number]))
 
 	expect(result.motion.raMaxDriftRatePxPerSecond).toBeCloseTo(0.05, 8)
 	expect(result.recommendedRaMinMove).toBeCloseTo(0.1, 8)
-	expect(result.motion.driftLimitingExposure).toBeCloseTo(2, 8)
+	expect(result.motion.driftLimitingExposure).toBeCloseTo(2, 6)
 	expect(result.recommendedMinExposure).toBe(2)
 	expect(result.recommendedMaxExposure).toBe(2)
 })
 
 test('rounds drift-limited exposure down to the supported cadence step', () => {
-	const result = run([
-		[0, 0, 0],
-		[1000, 0.047, 0],
-		[2000, 0.094, 0],
-	])
+	const result = run(Array.from({ length: 120 }, (_, i) => [i * 1000, i * 0.047, 0] as [number, number, number]))
 
 	expect(result.recommendedRaMinMove).toBeCloseTo(0.1, 8)
 	expect(result.motion.raMaxDriftRatePxPerSecond).toBeCloseTo(0.047, 8)
-	expect(result.motion.driftLimitingExposure).toBeCloseTo(0.1 / 0.047, 8)
+	expect(result.motion.driftLimitingExposure).toBeCloseTo(0.1 / 0.047, 6)
 	expect(result.recommendedMaxExposure).toBeLessThanOrEqual(result.motion.driftLimitingExposure!)
 	expect(result.recommendedMinExposure).toBe(2)
 	expect(result.recommendedMaxExposure).toBe(2)
@@ -599,12 +593,7 @@ test('flags short sampling intervals and clears the flag once satisfied', () => 
 })
 
 test('reports drift-limited exposure from RA min-move and clears it without drift', () => {
-	const drifting = run([
-		[0, 0, 0],
-		[1000, 0.01, 0],
-		[2000, 0.02, 0],
-		[3000, 0.03, 0],
-	])
+	const drifting = run(Array.from({ length: 120 }, (_, i) => [i * 1000, i * 0.01, 0] as [number, number, number]))
 	// recommended RA min-move 0.10 px / max adjacent RA rate 0.01 px/s = 10 s.
 	expect(drifting.motion.driftLimitingExposure).toBeCloseTo(10, 6)
 

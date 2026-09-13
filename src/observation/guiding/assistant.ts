@@ -14,6 +14,12 @@ const DEFAULT_MIN_SAMPLING_SECONDS = 120
 // Long-run seeing windows use two-minute spans with one-minute overlap, matching PHD2's guiding assistant.
 const SEEING_WINDOW_SECONDS = 120
 
+// RA low-pass filtering uses PHD2's minimum cutoff period, in seconds.
+const RA_LOW_PASS_MIN_CUTOFF_SECONDS = 6
+
+// RA low-pass cutoff is also scaled to three guide exposures, matching PHD2's cadence filter.
+const RA_LOW_PASS_EXPOSURE_FACTOR = 3
+
 // Seeing windows covering less than this span are ignored to avoid unstable RMS estimates.
 // A discrete [start, start+120] window can only reach a full 120 s span when samples land
 // exactly on both edges, so this floor lets interior windows qualify like the trailing one.
@@ -585,11 +591,12 @@ function axisErrorToPixels(axisError: number, ratePxPerMs: number | undefined) {
 function computeMotionMetrics(samples: readonly GuidingAssistantSample[], config: GuidingAssistantConfig, decCorrectedRmsPx: number, raMinMovePx: number): GuidingAssistantMotionMetrics {
 	const raFit = linearFit(samples, 'raPx')
 	const decFit = linearFit(samples, 'decPx')
-	const maxRateRA = maxAdjacentRate(samples, 'raPx')
+	const lowPassRa = lowPassRaValues(samples, config.exposure)
+	const maxRateRA = maxAdjacentRate(samples, lowPassRa)
 	const scale = scaleOrNull(config)
 	const raPeakPx = peakFromOrigin(samples, 'raPx')
 	const decPeakPx = peakFromOrigin(samples, 'decPx')
-	const raPeakPeakPx = peakToPeak(samples, 'raPx')
+	const raPeakPeakPx = peakToPeak(lowPassRa)
 	const polarAlignmentErrorArcmin = computePolarAlignmentError(decFit.slope * 60, config)
 
 	return {
@@ -778,28 +785,43 @@ function peakFromOrigin(samples: readonly GuidingAssistantSample[], key: 'raPx' 
 	return peak
 }
 
-// Peak-to-peak (max minus min) excursion of one axis, in pixels.
-function peakToPeak(samples: readonly GuidingAssistantSample[], key: 'raPx' | 'decPx') {
-	if (samples.length === 0) return 0
+// Applies PHD2's first-order RA low-pass filter to guide samples. The cutoff is max(6 s, three
+// guide exposures), and the recursive filter uses the configured exposure as its sample period.
+function lowPassRaValues(samples: readonly GuidingAssistantSample[], exposure: number) {
+	if (samples.length === 0) return []
 
-	let min = samples[0][key]
+	const cutoff = Math.max(RA_LOW_PASS_MIN_CUTOFF_SECONDS, RA_LOW_PASS_EXPOSURE_FACTOR * exposure)
+	const alpha = 1 - cutoff / (cutoff + Math.max(1, exposure))
+	const values = new Array<number>(samples.length)
+	values[0] = samples[0].raPx
+
+	for (let i = 1; i < samples.length; i++) values[i] = values[i - 1] + alpha * (samples[i].raPx - values[i - 1])
+
+	return values
+}
+
+// Peak-to-peak (max minus min) excursion of filtered RA values, in pixels.
+function peakToPeak(values: readonly number[]) {
+	if (values.length === 0) return 0
+
+	let min = values[0]
 	let max = min
 
-	for (const sample of samples) {
-		min = Math.min(min, sample[key])
-		max = Math.max(max, sample[key])
+	for (let i = 1; i < values.length; i++) {
+		min = Math.min(min, values[i])
+		max = Math.max(max, values[i])
 	}
 
 	return max - min
 }
 
-// Largest absolute rate of change between consecutive samples for one axis, in pixels per second.
-function maxAdjacentRate(samples: readonly GuidingAssistantSample[], key: 'raPx' | 'decPx') {
+// Largest absolute rate of change between consecutive filtered RA samples, in pixels per second.
+function maxAdjacentRate(samples: readonly GuidingAssistantSample[], values: readonly number[]) {
 	let maxRate = 0
 
 	for (let i = 1; i < samples.length; i++) {
 		const dt = samples[i].elapsed - samples[i - 1].elapsed
-		if (dt > 0) maxRate = Math.max(maxRate, Math.abs(samples[i][key] - samples[i - 1][key]) / dt)
+		if (dt > 0) maxRate = Math.max(maxRate, Math.abs(values[i] - values[i - 1]) / dt)
 	}
 
 	return maxRate
